@@ -57,7 +57,7 @@ sleep 1
 echo "== 2/4 enroll the AIK (credential activation) =="
 sudo "$agent" --enroll \
 	--ca-server "${CA_ADDR%%:*}" --ca-port "${CA_ADDR##*:}" \
-	--ca-cert "$CA_DIR/tls.crt"
+	--ca-cert "$CA_DIR/ca.crt"
 echo "AIK certificate stored in the publisher profile the CA anchor names," \
 	"under /var/lib/lota/profiles/"
 

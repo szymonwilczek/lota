@@ -61,6 +61,13 @@ caught at the next boot. Two mechanisms satisfy this, and the agent accepts
     sudo fsverity enable /usr/bin/lota-agent
     sudo fsverity measure /usr/bin/lota-agent
 
+Verity is enabled once per inode and cannot be enabled twice, so on a binary
+that already carries it ``enable`` exits non-zero with
+``FS_IOC_ENABLE_VERITY failed on '/usr/bin/lota-agent': File exists``. That is
+the armed state, not a failure; ``measure`` printing a digest is the check.
+A re-install replaces the inode and the bit with it, which is why bring-up
+runs ``enable`` on every pass.
+
 If ``fsverity enable`` returns ``EOPNOTSUPP``, the filesystem has no verity
 support. Production lays this down at install time via dracut + an
 fs-verity-enabled rootfs.
@@ -97,9 +104,16 @@ The agent parses ``/proc/cmdline`` and refuses to start unless
 ``ima_appraise=enforce`` (block on integrity failure) or ``ima_appraise=fix``
 (block on signature failure, write missing xattrs) is present.
 ``ima_appraise=log`` and the default ``off`` are non-blocking and do not satisfy
-the kernel-floor. The check does not read
-``/sys/kernel/security/ima/policy`` because that file is write-only on kernels
-built without ``CONFIG_IMA_READ_POLICY`` (Fedora 44's default).
+the kernel-floor.
+
+Appraisal applies only to the ``func=`` rules the loaded policy contains, so a host
+booted ``ima_appraise=enforce`` whose policy carries no ``appraise func=BPRM_CHECK``
+rule appraises no executable at all.
+The agent reads ``/sys/kernel/security/ima/policy`` as well and refuses to
+start when the scope is empty, naming the rule it did not find. Where the
+kernel was built without ``CONFIG_IMA_READ_POLICY`` that file cannot be read;
+there the mode decides on its own and the agent logs, at startup, that the
+scope went unverified.
 
 .. code-block:: sh
 
@@ -110,7 +124,8 @@ The cmdline only sets the appraisal mode; the kernel still needs a loaded IMA
 policy with ``appraise`` rules for anything to be checked. **The appraisal
 content -- the signatures on disk and the rule set -- is distribution or
 operator-supplied. LOTA ships neither an xattr-signing pipeline nor a production
-appraisal policy**, and the kernel-floor check in the agent pins only the mode.
+appraisal policy**; what the agent checks is that the rule set in force reaches
+executables at all, not where the signatures behind it came from.
 On a verity-capable rootfs LOTA's own binary is integrity-bound through
 fs-verity and the PCR14 boot commitment independently of IMA appraisal; on a
 filesystem without verity (XFS, ZFS) the signed ``security.ima`` route from
@@ -155,15 +170,20 @@ device-add. After ``make install``:
     sudo udevadm trigger /dev/tpmrm0 /dev/tpm0
     ls -lZ /dev/tpm0 /dev/tpmrm0                # expect lota_tpm_device_t
 
+The **type** is the check: ``lota_tpm_device_t`` is what the agent's gate looks
+for. The SELinux user in front of it follows from how the file arrived --
+``system_u`` on a device the policy labelled, ``unconfined_u`` on a file an
+unconfined session installed -- and neither the gate nor ``restorecon`` treats
+it as wrong.
+
 5. AIK + PCR14 reset
 ====================
 
-The initramfs helper first pins PCR14 with a counter-stable LOTA lock, then the
-agent binds PCR14 against ``(self_hash, resetCount, restartCount)`` once per
-boot. The counters are obtained through a TPM2_Quote with an empty PCR selection
-so the value extended into PCR14 matches the clockInfo carried by the later
-attestation quote even on TPM 2.0 simulators (swtpm) whose ``Esys_ReadClock``
-and ``Quote.clockInfo`` disagree.
+The initramfs helper first pins PCR14 with the LOTA lock, then the agent binds
+PCR14 against its own ``self_hash`` once per boot. The TPM's clock counters
+take no part in either digest: a TPM obfuscates them per signing key, so a
+commitment that folded them in could only ever be rederived by one
+publisher's AIK, and they are in every token the agent hands out anyway.
 
 PCR14 is not pristine on every platform. On UEFI Secure Boot, shim measures
 the MOK state (``MokList``, ``SbatLevel``, ``MokListRT``) into PCR14 before the
@@ -185,11 +205,24 @@ touching the TPM: the initramfs helper exits non-zero (which aborts the boot
 transition, its unit is ordered before ``initrd-root-fs.target``) and the agent
 returns ``ENOTSUP`` from its self-measurement, each naming the absent
 ``/sys/firmware/efi``. Legacy BIOS/CSM is unsupported -- see
-:doc:`../platform-support`. If PCR14 still holds the bare baseline when the
-agent runs, the initramfs lock did not run: install the ``90lota`` dracut
-module, ``dracut -f --add lota``, and cold reboot. The agent refuses to extend
-a commitment onto an unlocked register, because the verifier validates only the
-lock-then-commit chain.
+:doc:`../platform-support`. When the lock did not run this boot the agent says
+so and names the fix: install the ``90lota`` dracut module, rebuild the
+initramfs (``dracut -f --add lota`` for the booted kernel, or
+``dracut -f --regenerate-all`` for every installed one) and cold reboot. It
+recognises that case by the absence of the handoff file above, not by the
+register's value -- on a shim host PCR14 holds the MOK measurement whether or
+not the lock ran, so the value alone cannot tell a machine that needs its
+initramfs rebuilt from one that was tampered with. The agent refuses to extend
+a commitment onto an unlocked register either way, because the verifier
+validates only the lock-then-commit chain.
+
+The lock belongs in **every** installed kernel's initramfs, not only the
+running one. The kernel command-line floor is armed on every boot entry, so a
+kernel that can be selected from the boot menu without the lock boots a host
+with no commitment; ``lota-install`` regenerates them all and reports the stage
+unsatisfied while any installed kernel is missing the helper. A kernel
+installed later picks the helper up from the packaged dracut module without
+further action.
 
 A MOK change (enrolling a key with ``mokutil``, a shim/SBAT update) shifts the
 baseline and therefore the final PCR14, so an enrolled host reports an
@@ -200,12 +233,17 @@ key is a security-relevant boot-chain change. The agent therefore provisions its
 the unauthenticated clock and must be rebound on the next start. A re-install
 that changes either the initramfs helper or the agent binary without rebuilding
 initramfs and cold-rebooting reports a PCR14 derivation mismatch or
-``PCR14 holds a boot commitment from a different agent binary``. Wipe the
-witness file and the persistent AIK, then reboot:
+``This is not the lota-agent build PCR 14 committed to when the host booted``.
+Wipe the witness file and the persistent AIK, then reboot. **Stop every unit
+that runs an agent, not only the daemon**: ``lota-attest.service`` runs
+``lota-agent --attest`` and keeps the TPM clock witness current, so a wipe that
+leaves it running deletes a file the next attestation round rewrites seconds
+later.
 
 .. code-block:: sh
 
-    sudo systemctl stop lota-agent.service lota-agent.socket
+    sudo systemctl stop lota-agent.service lota-agent.socket \
+        lota-attest.service
     sudo find /var/lib/lota -mindepth 1 -maxdepth 1 \
         \( -name 'aik*' -o -name 'clock*' -o -name 'boot_commit*' \
            -o -name 'snapshot*' \) -delete

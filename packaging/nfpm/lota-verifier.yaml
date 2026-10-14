@@ -16,8 +16,8 @@ license: MIT
 description: |
   LOTA remote attestation verifier
   Relying-party service that verifies TPM attestation reports against a signed
-  PCR policy and issues short-lived session tokens. Backs onto SQLite or a
-  shared Postgres for the HA topology.
+  PCR policy and answers with a verdict and its validity deadline. Backs onto
+  SQLite or a shared Postgres for the HA topology.
 changelog: ./build/changelog.gen.yaml
 
 contents:

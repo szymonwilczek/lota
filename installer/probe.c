@@ -898,6 +898,58 @@ int probe_conf_has_key(const char *conf_path, const char *key)
 	return probe_conf_buf_has_key(buf, key);
 }
 
+int probe_conf_buf_profile_count(const char *buf)
+{
+	const char *line;
+	int count = 0;
+
+	if (!buf)
+		return 0;
+
+	for (line = buf; line && *line;) {
+		const char *p = line;
+		const char *eol = strchr(line, '\n');
+
+		while (*p == ' ' || *p == '\t')
+			p++;
+		if (*p != '#' && strncmp(p, "[profile", 8) == 0) {
+			p += 8;
+			/* the section name is quoted and follows the keyword */
+			while (*p == ' ' || *p == '\t')
+				p++;
+			if (*p == '"')
+				count++;
+		}
+		line = eol ? eol + 1 : NULL;
+	}
+	return count;
+}
+
+int probe_conf_profile_count(const char *conf_path)
+{
+	char buf[16384] = { 0 };
+	int ret = probe_read_text(conf_path, buf, sizeof(buf));
+
+	if (ret < 0)
+		return ret;
+	return probe_conf_buf_profile_count(buf);
+}
+
+enum probe_selfcheck_plan probe_selfcheck_plan(const char *verifier,
+					       int profile_count)
+{
+	/*
+	 * Publishers first: they are the agent's target list, so they decide
+	 * where this host reports whether or not a verifier was named.
+	 * A round that named one as well is the combination the agent refuses.
+	 */
+	if (profile_count > 0)
+		return SELFCHECK_PUBLISHERS_REPORT;
+	if (!verifier || !verifier[0])
+		return SELFCHECK_SKIP_NO_VERIFIER;
+	return SELFCHECK_ONE_ROUND;
+}
+
 /* 1 when an ESRT System Firmware entry (fw_type == 1) exists, else 0. */
 int probe_esrt_system_firmware_present_at(const char *base)
 {
@@ -936,4 +988,200 @@ int probe_esrt_system_firmware_present(void)
 {
 	return probe_esrt_system_firmware_present_at(
 		"/sys/firmware/efi/esrt/entries");
+}
+
+enum stage_state probe_agent_service_stage(const struct probe_service_state *s,
+					   char *note, size_t cap)
+{
+	if (!s) {
+		snprintf(note, cap,
+			 "The agent's unit state could not be read.");
+		return STAGE_ERROR;
+	}
+
+	if (!s->agent_active) {
+		snprintf(note, cap, "lota-agent.service is NOT RUNNING.");
+		return STAGE_PENDING;
+	}
+
+	/*
+	 * Running is not installed.
+	 * A unit that is not enabled does not come back after a reboot,
+	 * and a host that stops enforcing at its next boot must not be
+	 * reported as satisfied.
+	 */
+	if (!s->agent_enabled || !s->socket_enabled || !s->attest_enabled) {
+		char units[160];
+		size_t used = 0;
+
+		units[0] = '\0';
+		if (!s->agent_enabled)
+			used += (size_t)snprintf(units + used,
+						 sizeof(units) - used,
+						 "lota-agent.service");
+		if (!s->socket_enabled)
+			used += (size_t)snprintf(units + used,
+						 sizeof(units) - used,
+						 "%slota-agent.socket",
+						 used ? ", " : "");
+		if (!s->attest_enabled)
+			snprintf(units + used, sizeof(units) - used,
+				 "%slota-attest.service", used ? ", " : "");
+
+		snprintf(note, cap,
+			 "lota-agent.service is running, but these units are "
+			 "not enabled and will not start after a reboot: %s.",
+			 units);
+		return STAGE_PENDING;
+	}
+
+	snprintf(note, cap, "lota-agent.service is ACTIVE and enabled.");
+	return STAGE_DONE;
+}
+
+/*
+ * Kernels installed on this host.
+ *
+ * /lib/modules is the register of what is installed -- the package manager
+ * creates a tree per kernel and removes it with the kernel -- and /boot holds
+ * the image each one boots with.
+ * A tree with no image cannot be locked (a half-removed kernel), and an image
+ * with no tree is the rescue entry, which dracut does not regenerate,
+ * so neither is a kernel this stage can act on.
+ */
+int probe_installed_kernels_at(const char *modules_dir, const char *boot_dir,
+			       struct probe_kernel_image *out, size_t max,
+			       size_t *count)
+{
+	DIR *d;
+	struct dirent *de;
+	size_t n = 0;
+
+	if (!modules_dir || !boot_dir || !out || !count)
+		return -EINVAL;
+
+	*count = 0;
+
+	d = opendir(modules_dir);
+	if (!d)
+		return 0; /* no modules tree: nothing installed to lock */
+
+	while (n < max && (de = readdir(d)) != NULL) {
+		char image[PROBE_KERNEL_IMAGE_MAX];
+
+		if (de->d_name[0] == '.')
+			continue;
+		if (strlen(de->d_name) >= PROBE_KERNEL_RELEASE_MAX)
+			continue;
+
+		if (snprintf(image, sizeof(image), "%s/initramfs-%s.img",
+			     boot_dir, de->d_name) >= (int)sizeof(image))
+			continue;
+		if (access(image, F_OK) != 0)
+			continue;
+
+		snprintf(out[n].release, sizeof(out[n].release), "%s",
+			 de->d_name);
+		snprintf(out[n].image, sizeof(out[n].image), "%s", image);
+		n++;
+	}
+
+	closedir(d);
+	*count = n;
+	return 0;
+}
+
+int probe_installed_kernels(struct probe_kernel_image *out, size_t max,
+			    size_t *count)
+{
+	return probe_installed_kernels_at("/lib/modules", "/boot", out, max,
+					  count);
+}
+
+int probe_pcr14_lock_ran_at(const char *baseline_path)
+{
+	if (!baseline_path)
+		return 0;
+	return access(baseline_path, F_OK) == 0;
+}
+
+int probe_pcr14_lock_ran(void)
+{
+	return probe_pcr14_lock_ran_at(PCR14_BASELINE_PATH);
+}
+
+/*
+ * Verdict for the reboot barrier.
+ *
+ * A register the installer cannot derive means one of two things, and they need
+ * the same reboot but not the same sentence: either an agent ran earlier this
+ * boot and left its commitment, or the platform extended PCR 14 before LOTA
+ * was ever installed -- which every Secure Boot host does, because shim measures
+ * the MOK variables there.
+ * Whether the lock ran this boot is what tells them apart.
+ */
+enum stage_state probe_pcr14_barrier_stage(int pcr_state, int lock_ran,
+					   int agent_active, char *note,
+					   size_t cap)
+{
+	switch (pcr_state) {
+	case PROBE_PCR14_LOCK_ONLY:
+		snprintf(note, cap,
+			 "PCR14 carries the initramfs lock from this boot.");
+		return STAGE_DONE;
+	case PROBE_PCR14_OTHER:
+		if (agent_active) {
+			snprintf(note, cap,
+				 "PCR14 carries this boot's agent commitment.");
+			return STAGE_DONE;
+		}
+		if (!lock_ran) {
+			snprintf(note, cap,
+				 "PCR14 was extended by the platform before "
+				 "LOTA ran (on a Secure Boot host, shim's MOK "
+				 "measurement) and the initramfs lock has not "
+				 "run this boot. A reboot puts the lock in "
+				 "place; nothing here is left over from an "
+				 "earlier install.");
+			return STAGE_REBOOT;
+		}
+		snprintf(note, cap,
+			 "PCR14 holds a stale value from an earlier agent run. "
+			 "PCR14 only resets on a hardware reset.");
+		return STAGE_REBOOT;
+	default:
+		snprintf(note, cap,
+			 "The initramfs PCR14 lock has not run during this "
+			 "boot.");
+		return STAGE_REBOOT;
+	}
+}
+
+int probe_named_files(const struct probe_named_file *files, size_t count,
+		      char *note, size_t cap)
+{
+	size_t i;
+
+	for (i = 0; i < count; i++) {
+		int err;
+
+		if (!files[i].path)
+			continue;
+		if (access(files[i].path, R_OK) == 0)
+			continue;
+
+		err = errno;
+		if (err == EACCES && geteuid() != 0)
+			snprintf(note, cap,
+				 "Cannot read %s %s (%s). Run as root, or "
+				 "name a file this user can read.",
+				 files[i].flag, files[i].path, strerror(err));
+		else
+			snprintf(note, cap, "Cannot read %s %s (%s)",
+				 files[i].flag, files[i].path, strerror(err));
+
+		return -err;
+	}
+
+	return 0;
 }

@@ -168,9 +168,9 @@ static void test_pin_stored_in_context(void)
 {
 	struct net_context ctx;
 	int ret;
-	uint8_t pin[NET_PIN_SHA256_LEN];
+	uint8_t pin[LOTA_PIN_SHA256_LEN];
 
-	memset(pin, 0xAB, NET_PIN_SHA256_LEN);
+	memset(pin, 0xAB, LOTA_PIN_SHA256_LEN);
 	ret = net_context_init(&ctx, "localhost", TEST_PORT, NULL, 0, pin);
 	if (ret < 0) {
 		test_result("pin stored: init", 0);
@@ -178,7 +178,7 @@ static void test_pin_stored_in_context(void)
 	}
 	test_result("pin_sha256 stored: has_pin set", ctx.has_pin == 1);
 	test_result("pin_sha256 stored: data matches",
-		    memcmp(ctx.pin_sha256, pin, NET_PIN_SHA256_LEN) == 0);
+		    memcmp(ctx.pin_sha256, pin, LOTA_PIN_SHA256_LEN) == 0);
 	net_context_cleanup(&ctx);
 }
 
@@ -198,12 +198,12 @@ static void test_null_pin_no_pinning(void)
 
 static void test_parse_pin_valid_hex(void)
 {
-	uint8_t out[NET_PIN_SHA256_LEN];
+	uint8_t out[LOTA_PIN_SHA256_LEN];
 	int ret;
 	const char *hex = "a1b2c3d4e5f60718293a4b5c6d7e8f90"
 			  "0011223344556677889900aabbccddee";
 
-	ret = net_parse_pin_sha256(hex, out);
+	ret = lota_pin_sha256_parse(hex, out);
 	test_result("parse pin: valid 64-char hex succeeds", ret == 0);
 	test_result("parse pin: first byte correct", out[0] == 0xa1);
 	test_result("parse pin: last byte correct", out[31] == 0xee);
@@ -211,24 +211,24 @@ static void test_parse_pin_valid_hex(void)
 
 static void test_parse_pin_uppercase(void)
 {
-	uint8_t out[NET_PIN_SHA256_LEN];
+	uint8_t out[LOTA_PIN_SHA256_LEN];
 	int ret;
 	const char *hex = "A1B2C3D4E5F60718293A4B5C6D7E8F90"
 			  "0011223344556677889900AABBCCDDEE";
 
-	ret = net_parse_pin_sha256(hex, out);
+	ret = lota_pin_sha256_parse(hex, out);
 	test_result("parse pin: uppercase hex succeeds", ret == 0);
 	test_result("parse pin: uppercase first byte", out[0] == 0xa1);
 }
 
 static void test_parse_pin_with_colons(void)
 {
-	uint8_t out[NET_PIN_SHA256_LEN];
+	uint8_t out[LOTA_PIN_SHA256_LEN];
 	int ret;
 	const char *hex = "A1:B2:C3:D4:E5:F6:07:18:29:3A:4B:5C:6D:7E:8F:90:"
 			  "00:11:22:33:44:55:66:77:88:99:00:AA:BB:CC:DD:EE";
 
-	ret = net_parse_pin_sha256(hex, out);
+	ret = lota_pin_sha256_parse(hex, out);
 	test_result("parse pin: colon-separated hex succeeds", ret == 0);
 	test_result("parse pin: colon format first byte", out[0] == 0xa1);
 	test_result("parse pin: colon format last byte", out[31] == 0xee);
@@ -236,48 +236,48 @@ static void test_parse_pin_with_colons(void)
 
 static void test_parse_pin_invalid(void)
 {
-	uint8_t out[NET_PIN_SHA256_LEN];
+	uint8_t out[LOTA_PIN_SHA256_LEN];
 	int ret;
 
 	/* too short */
-	ret = net_parse_pin_sha256("a1b2c3", out);
+	ret = lota_pin_sha256_parse("a1b2c3", out);
 	test_result("parse pin: too short rejected", ret == -EINVAL);
 
 	/* invalid character */
-	ret = net_parse_pin_sha256("g1b2c3d4e5f60718293a4b5c6d7e8f90"
-				   "0011223344556677889900aabbccddeeff",
-				   out);
+	ret = lota_pin_sha256_parse("g1b2c3d4e5f60718293a4b5c6d7e8f90"
+				    "0011223344556677889900aabbccddeeff",
+				    out);
 	test_result("parse pin: invalid hex char rejected", ret == -EINVAL);
 
 	/* too long (extra byte) */
-	ret = net_parse_pin_sha256("a1b2c3d4e5f60718293a4b5c6d7e8f90"
-				   "0011223344556677889900aabbccddeeffaa",
-				   out);
+	ret = lota_pin_sha256_parse("a1b2c3d4e5f60718293a4b5c6d7e8f90"
+				    "0011223344556677889900aabbccddeeffaa",
+				    out);
 	test_result("parse pin: too long rejected", ret == -EINVAL);
 
 	/* NULL input */
-	ret = net_parse_pin_sha256(NULL, out);
+	ret = lota_pin_sha256_parse(NULL, out);
 	test_result("parse pin: NULL hex rejected", ret == -EINVAL);
 
 	/* NULL output */
-	ret = net_parse_pin_sha256("a1b2c3d4e5f60718293a4b5c6d7e8f90"
-				   "0011223344556677889900aabbccddeeff",
-				   NULL);
+	ret = lota_pin_sha256_parse("a1b2c3d4e5f60718293a4b5c6d7e8f90"
+				    "0011223344556677889900aabbccddeeff",
+				    NULL);
 	test_result("parse pin: NULL output rejected", ret == -EINVAL);
 
 	/* empty string */
-	ret = net_parse_pin_sha256("", out);
+	ret = lota_pin_sha256_parse("", out);
 	test_result("parse pin: empty string rejected", ret == -EINVAL);
 }
 
 static void test_parse_pin_with_spaces(void)
 {
-	uint8_t out[NET_PIN_SHA256_LEN];
+	uint8_t out[LOTA_PIN_SHA256_LEN];
 	int ret;
 	const char *hex = "A1 B2 C3 D4 E5 F6 07 18 29 3A 4B 5C 6D 7E 8F 90 "
 			  "00 11 22 33 44 55 66 77 88 99 00 AA BB CC DD EE";
 
-	ret = net_parse_pin_sha256(hex, out);
+	ret = lota_pin_sha256_parse(hex, out);
 	test_result("parse pin: space-separated hex succeeds", ret == 0);
 	test_result("parse pin: space format first byte", out[0] == 0xa1);
 }

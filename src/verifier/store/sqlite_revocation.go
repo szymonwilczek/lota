@@ -81,7 +81,7 @@ func (s *SQLiteRevocationStore) IsRevoked(clientID string) (*RevocationEntry, bo
 	return &entry, true
 }
 
-func (s *SQLiteRevocationStore) Unrevoke(clientID string) error {
+func (s *SQLiteRevocationStore) Unrevoke(clientID, reason, actor, note string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -108,7 +108,7 @@ func (s *SQLiteRevocationStore) Unrevoke(clientID string) error {
 	}
 
 	if s.auditLog != nil {
-		if err := s.auditLog.Log(tenant, "unrevoke", clientID, "", "", ""); err != nil {
+		if err := s.auditLog.Log(tenant, "unrevoke", clientID, reason, actor, note); err != nil {
 			return err
 		}
 	}
@@ -201,7 +201,7 @@ func (s *SQLiteBanStore) IsBanned(tenant string, hardwareID [32]byte) (*BanEntry
 	return &entry, true
 }
 
-func (s *SQLiteBanStore) UnbanHardware(tenant string, hardwareID [32]byte) error {
+func (s *SQLiteBanStore) UnbanHardware(tenant string, hardwareID [32]byte, reason, actor, note string) error {
 	result, err := s.db.Exec("DELETE FROM hardware_bans WHERE tenant = ? AND hardware_id = ?",
 		tenant, hardwareID[:])
 	if err != nil {
@@ -217,7 +217,7 @@ func (s *SQLiteBanStore) UnbanHardware(tenant string, hardwareID [32]byte) error
 	}
 
 	if s.auditLog != nil {
-		if err := s.auditLog.Log(tenant, "unban", FormatHardwareID(hardwareID), "", "", ""); err != nil {
+		if err := s.auditLog.Log(tenant, "unban", FormatHardwareID(hardwareID), reason, actor, note); err != nil {
 			return err
 		}
 	}
@@ -418,10 +418,11 @@ func (l *SQLiteAttestationLog) Record(entry AttestationRecord) error {
 
 	_, err := l.db.Exec(
 		`INSERT INTO attestation_log
-		 (timestamp, tenant, client_id, hardware_id, result, duration_ms, pcr14, details, remote_addr)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		 (timestamp, tenant, client_id, hardware_id, result, duration_ms, pcr14, details, remote_addr, kernel_hash)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		ts, entry.Tenant, entry.ClientID, entry.HardwareID, entry.Result,
 		entry.DurationMs, entry.PCR14, entry.Details, entry.RemoteAddr,
+		entry.KernelHash,
 	)
 	return err
 }
@@ -441,8 +442,8 @@ func (l *SQLiteAttestationLog) RecordBatch(entries []AttestationRecord) error {
 
 	stmt, err := tx.Prepare(
 		`INSERT INTO attestation_log
-		 (timestamp, tenant, client_id, hardware_id, result, duration_ms, pcr14, details, remote_addr)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+		 (timestamp, tenant, client_id, hardware_id, result, duration_ms, pcr14, details, remote_addr, kernel_hash)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
 	if err != nil {
 		return rollbackOnErr(tx, err)
 	}
@@ -457,7 +458,7 @@ func (l *SQLiteAttestationLog) RecordBatch(entries []AttestationRecord) error {
 		if _, err := stmt.Exec(
 			ts, entries[i].Tenant, entries[i].ClientID, entries[i].HardwareID,
 			entries[i].Result, entries[i].DurationMs, entries[i].PCR14,
-			entries[i].Details, entries[i].RemoteAddr,
+			entries[i].Details, entries[i].RemoteAddr, entries[i].KernelHash,
 		); err != nil {
 			return rollbackOnErr(tx, err)
 		}
@@ -469,7 +470,7 @@ func (l *SQLiteAttestationLog) QueryAttestations(limit int) []AttestationRecord 
 	l.mu.Lock()
 	defer l.mu.Unlock()
 
-	query := `SELECT id, timestamp, tenant, client_id, hardware_id, result, duration_ms, pcr14, details, remote_addr
+	query := `SELECT id, timestamp, tenant, client_id, hardware_id, result, duration_ms, pcr14, details, remote_addr, kernel_hash
 	          FROM attestation_log ORDER BY id DESC`
 	if limit > 0 {
 		query += " LIMIT ?"
@@ -491,7 +492,8 @@ func (l *SQLiteAttestationLog) QueryAttestations(limit int) []AttestationRecord 
 	for rows.Next() {
 		var e AttestationRecord
 		if err := rows.Scan(&e.ID, &e.Timestamp, &e.Tenant, &e.ClientID, &e.HardwareID,
-			&e.Result, &e.DurationMs, &e.PCR14, &e.Details, &e.RemoteAddr); err == nil {
+			&e.Result, &e.DurationMs, &e.PCR14, &e.Details, &e.RemoteAddr,
+			&e.KernelHash); err == nil {
 			entries = append(entries, e)
 		}
 	}

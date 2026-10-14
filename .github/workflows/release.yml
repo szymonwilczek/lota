@@ -60,7 +60,8 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version-file: src/verifier/go.mod
+          go-version: '1.26.x'
+          check-latest: true
           # a release builds the shipped artifacts; disable the module cache so
           # a poisoned cache entry cannot influence the signed output
           cache: false
@@ -106,10 +107,24 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ github.ref_name }}
+          TAG_SHA: ${{ github.sha }}
+          REPO_URL: ${{ github.server_url }}/${{ github.repository }}
         run: |
           set -eu
-          notes="Reproducible build of $TAG. Verify the artifacts with cosign"
-          notes="$notes against SHA256SUMS.cosign.bundle; see Documentation/security/reproducible-builds.rst."
+          doc="Documentation/security/reproducible-builds.rst"
+
+          body="$(git log -1 --format=%b "$TAG_SHA" | grep -viE \
+            '^(signed-off-by|co-authored-by|acked-by|reviewed-by|tested-by|reported-by|suggested-by|docs-not-needed|cc):' \
+            || true)"
+
+          notes="Reproducible build of $TAG."
+          if [ -n "$body" ]; then
+            notes="$notes"$'\n\n'"$body"
+          fi
+          # link is pinned to this tag, so it resolves to the document
+          # as it stood for this release
+          notes="$notes"$'\n\n'"Verify the artifacts with cosign against"
+          notes="$notes SHA256SUMS.cosign.bundle - see [$doc]($REPO_URL/blob/$TAG/$doc)."
           # marking anything that is not a final >=1.0.0 release as a pre-release:
           # 0.x version (no stability promise yet) or a semver pre-release
           # suffix (vX.Y.Z-rc.N).
@@ -144,7 +159,8 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version-file: src/verifier/go.mod
+          go-version: '1.26.x'
+          check-latest: true
           cache: false
 
       - name: Install ko

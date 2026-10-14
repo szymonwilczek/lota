@@ -34,6 +34,28 @@ struct agent_startup_policy {
 	bool allow_mutable_rootfs;
 };
 
+/*
+ * agent_validate_startup_policy - refuse a policy before anything is spent
+ * @policy: the policy agent_apply_startup_policy() will be given
+ *
+ * Runs every check in the apply path that can fail on the policy's own
+ * contents rather than on the state of a BPF map: the protected-PID
+ * capacity, the kernel's anti-tamper prerequisites, whether each
+ * fs-verity path can be measured, whether each trusted-library path
+ * resolves, and the strict-exec-without-allowlist combination.
+ *
+ * It exists because the boot commitment is irreversible.
+ * PCR 14 can be extended once per boot, so a policy that is going to be
+ * refused has to be refused before the extend: otherwise a mistyped path
+ * costs the host its agent until the next reboot rather than costing
+ * a failed start. Every refusal here is one the apply path would raise anyway.
+ *
+ * Touches no map and needs no loaded BPF context.
+ *
+ * Returns: 0 when the policy will apply, negative errno otherwise
+ */
+int agent_validate_startup_policy(const struct agent_startup_policy *policy);
+
 int agent_apply_startup_policy(const struct agent_startup_policy *policy);
 
 int agent_compute_policy_digest_for_protect_pids(const uint32_t *protect_pids,

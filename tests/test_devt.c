@@ -2,9 +2,8 @@
 /*
  * Unit tests for the canonical dev_t encoding helpers (include/lota_devt.h).
  *
- * They pin the kernel MKDEV layout the BPF programs rely on and the
- * stat(2) -> kernel conversion the loader uses to build trusted-library
- * map keys.
+ * They pin the kernel MKDEV layout the BPF programs rely on,
+ * which the loader has to compose its trusted-library map keys in.
  *
  * Copyright (C) 2026 Szymon Wilczek
  */
@@ -75,36 +74,19 @@ static void test_mkdev_round_trip(void)
 }
 
 /*
- * loader feeds stat(2) st_dev through lota_devt_from_st()
- * the result must equal the kernel layout the BPF side builds from s_dev.
- * For a non-zero major the raw glibc st_dev differs, which is exactly
- * the mismatch the conversion removes
+ * stat(2) is not a source for these keys, and the glibc layout it hands back
+ * is why: for a non-zero major it is a different number from the kernel's,
+ * while for a major-0 anonymous device the two coincide -- which is how a key
+ * taken from st_dev looked right on every filesystem the project met before
+ * btrfs, where the device itself is the wrong one.
+ * tests/test_sb_dev.c holds the key derivation the loader actually uses
  */
-static void test_st_dev_conversion(void)
+static void test_glibc_layout_is_not_the_kernel_one(void)
 {
-	dev_t st = makedev(8, 1);
-
-	CHECK(lota_devt_from_st(st) == LOTA_DEVT_MKDEV(8, 1),
-	      "from_st(makedev(8,1)) yields the kernel layout");
-	CHECK(lota_devt_from_st(st) == 0x800001ULL,
-	      "from_st(makedev(8,1)) is 0x800001");
-	CHECK(lota_devt_from_st(st) != (unsigned long long)st,
-	      "conversion changes a non-zero-major st_dev");
-	CHECK(lota_devt_from_st(makedev(1, 291)) == LOTA_DEVT_MKDEV(1, 291),
-	      "from_st preserves minor bits above 0xFF");
-}
-
-/*
- * Document why the mismatch hid in development:
- * for a major-0 (anon-bdev) device the glibc and kernel layouts coincide,
- * so st_dev already matched the BPF-side key before the conversion existed
- */
-static void test_major_zero_coincidence(void)
-{
-	dev_t st = makedev(0, 37);
-
-	CHECK(lota_devt_from_st(st) == (unsigned long long)st,
-	      "major-0 st_dev is unchanged by the conversion");
+	CHECK(LOTA_DEVT_MKDEV(8, 1) != (unsigned long long)makedev(8, 1),
+	      "a non-zero-major st_dev is not the kernel layout");
+	CHECK(LOTA_DEVT_MKDEV(0, 37) == (unsigned long long)makedev(0, 37),
+	      "a major-0 st_dev coincides with the kernel layout");
 }
 
 int main(void)
@@ -112,8 +94,7 @@ int main(void)
 	printf("=== dev_t encoding tests ===\n");
 	test_kernel_mkdev_layout();
 	test_mkdev_round_trip();
-	test_st_dev_conversion();
-	test_major_zero_coincidence();
+	test_glibc_layout_is_not_the_kernel_one();
 
 	if (g_failures) {
 		fprintf(stderr, "\n%d test(s) failed\n", g_failures);

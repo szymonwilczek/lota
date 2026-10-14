@@ -74,7 +74,10 @@ The shape of the integration
    against the AIK it has on record for that client.
 4. **Your backend decides.** LOTA reports what the host is; the gameplay
    consequence -- kick, queue separation, flag for review -- is yours and
-   is deliberately not in this repository.
+   is deliberately not in this repository. A packet that verifies is called
+   trusted only if the signed status word says the host is attested; a backend
+   that wants more than attestation reads ``info.lota_flags``, which carries
+   that same word, and judges it.
 
 Build against the package, not the tree
 =======================================
@@ -126,8 +129,93 @@ an integration:
      - The demo trusts one key from a file. Yours comes from enrolment
        records -- see ``examples/enrollment/README.rst`` -- so the
        backend knows which TPM belongs to which account.
+   * - Publisher selection
+     - ``--publisher <hex>`` in the demo; ``publisher_profile`` in
+       ``struct lota_ac_config`` for you, and not optional. Naming the
+       publisher is what opens a session for them, and a session-gated
+       host -- the consumer default -- reports only while one is open.
+       A producer that names nobody is never attested for anybody and
+       every beat reads ``NOT_ATTESTED``. The id is the hex SHA-256 of
+       your CA anchor's SubjectPublicKeyInfo, which your installer
+       already knows because ``--add-publisher`` prints it.
+   * - Token directory
+     - ``token_dir`` in ``struct lota_ac_config``, or ``NULL`` to
+       auto-detect. Auto-detection follows the producer exactly:
+       ``$LOTA_HOOK_TOKEN_DIR``, then ``$XDG_RUNTIME_DIR/lota-hook``,
+       then ``/tmp/lota-<uid>``. It is never ``$XDG_RUNTIME_DIR/lota``,
+       which the agent owns as ``root:lota`` for the container socket --
+       a directory the player cannot write, so no producer puts a token
+       there. If your launcher sets the directory itself, set it on both
+       sides or export ``LOTA_HOOK_TOKEN_DIR`` before the title starts,
+       and remember a pressure-vessel container has to have that
+       directory bind-mounted into it.
    * - Verdict handling
      - The demo prints. Yours is your anti-cheat policy.
+   * - Heartbeat interval
+     - The demo beats every 5 seconds, which is a measured choice rather
+       than a round number: see below.
+
+What a heartbeat costs
+======================
+
+Every heartbeat mints a token, and every token is a fresh ``TPM2_Quote`` --
+a blocking operation on a device the whole machine shares. On the validation
+host, an Intel PTT firmware TPM, ``lota_get_token()`` measured **48 ms
+median** end to end through the SDK against the running daemon. Treat that as
+the order of magnitude for a consumer laptop; an earlier measurement on the
+same host recorded roughly three times more, and no hardware is promised to
+be fast. :doc:`../Documentation/operator/platform-support` carries the
+numbers and the method.
+
+Three rules follow, and they are the reason the reference beats at 5 seconds:
+
+* **Never call it from a frame loop, a render thread or anything with a
+  deadline.** Tens of milliseconds is several frames. Beat from your own
+  thread or your existing network tick.
+* **Hold the token you have.** A token is valid for a window; fetching a new
+  one per request wastes the device and buys nothing, since the nonce is what
+  binds a token to a challenge.
+* **Beat no faster than you need.** The agent enforces 20 token requests per
+  session per minute and 60 per uid per minute; at 5 seconds a title uses 12
+  of its 20, which leaves room for a second title of yours on the same
+  machine. ``LOTA_AC_ERR_RATE_LIMITED`` means the producer is beating faster
+  than the agent issues, and the fix is the interval, not a retry loop.
+
+Telling your bug from the player's state
+========================================
+
+``lota_ac_init()`` returns ``NULL`` and ``lota_ac_heartbeat()`` returns a
+negative errno for a dozen unrelated reasons, and the errno alone does not
+separate them: ten distinct refusals in the heartbeat path share
+``-EIO``. ``lota_ac_last_error()`` names the one that happened, on the
+calling thread, and ``lota_ac_strerror()`` renders it.
+
+``lota_ac_strerror()`` renders either space. ``LOTA_AC_ERR_*`` codes sit past
+any errno value, so the function can tell one of its own verdicts from a
+``-EIO`` a file read produced and describes each in its own terms -- printing
+its output for whatever a call returned is always right, including for the
+measure helpers, which answer in errno.
+
+.. code:: c
+
+   struct lota_ac_session *s = lota_ac_init(&cfg);
+   if (!s)
+           log("cannot start: %s", lota_ac_strerror(lota_ac_last_error()));
+
+The split to build on is which side the cause is on. ``CONFIG_SIZE``,
+``GAME_ID``, ``PROVIDER`` and ``INVALID_ARG`` are your code: they cannot be
+fixed by anything the player does, and a shipped build should never produce
+them. ``NO_AGENT``, ``CONSENT_REQUIRED``, ``UNKNOWN_PROFILE``,
+``NOT_ATTESTED`` and ``TOKEN_DIR`` are the state of that machine, and each
+has a different thing to tell the player -- install the agent, agree to your
+publisher, wait for the first verdict. ``RATE_LIMITED`` is neither: it means
+the producer is beating faster than the agent issues tokens, and the fix is
+the interval.
+
+A session whose agent is unreachable is **returned**, not refused, in
+``LOTA_AC_STATE_ERROR``: the title has something to show and can beat again
+once the host is ready. ``lota_ac_last_error()`` names that case too, so
+"not ready yet" is never mistaken for a configuration the library rejected.
 
 What the token actually proves
 ==============================

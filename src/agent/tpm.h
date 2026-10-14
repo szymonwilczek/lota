@@ -95,6 +95,19 @@ const char *tpm_strerror(int err);
 #define TPM_EK_CERT_HANDLE 0x01c00002
 
 /*
+ * EK certificate chain handle.
+ *
+ * A manufacturer whose EK certificate sits several levels below its root
+ * stores the intervening intermediates here, as one blob with the certificates
+ * laid end to end.
+ * On such a platform -- Intel PTT among them -- these certificates are published
+ * nowhere else, so the device is the only party that can hand them to a CA.
+ * Index is optional: a TPM whose leaf is issued directly by a published root
+ * does not populate it.
+ */
+#define TPM_EK_CERT_CHAIN_HANDLE 0x01c00100
+
+/*
  * Default AIK persistent handle for a host with no publisher profile.
  * Configurable via lota.conf
  *
@@ -153,6 +166,10 @@ const char *tpm_strerror(int err);
 #define TPM_AIK_META_MAGIC 0x4D4B4941 /* "AIKM" */
 #define TPM_AIK_META_VERSION 1
 
+/* How the key this record describes was derived */
+#define TPM_AIK_KEY_DERIVATION_SHARED 0
+#define TPM_AIK_KEY_DERIVATION_PER_PUBLISHER 2
+
 /* Default metadata path (install target creates /var/lib/lota/aiks/) */
 #define TPM_AIK_META_PATH "/var/lib/lota/aik_meta.dat"
 #define TPM_AIK_AUTH_PATH "/var/lib/lota/aik_auth.dat"
@@ -194,6 +211,16 @@ const char *tpm_strerror(int err);
  * observed", which is the correct interpretation for those hosts).
  */
 #define LOTA_CLOCK_STATE_FLAG_INITRAMFS_LOCK (1U << 0)
+
+/*
+ * Set on the snapshot the agent writes as it poisons PCR14 during
+ * an operator-requested shutdown.
+ * Next start reads it to tell its own deliberate act apart from a writer it
+ * did not authorise.
+ * It changes only which refusal is reported: a spent commitment is refused
+ * either way, so a forged flag buys nothing.
+ */
+#define LOTA_CLOCK_STATE_FLAG_SHUTDOWN_POISON (1U << 1)
 
 /*
  * PCR14 boot-commitment snapshot persisted across agent restarts.
@@ -243,8 +270,45 @@ struct aik_metadata {
 	uint64_t generation; /* monotonic rotation counter */
 	int64_t provisioned_at; /* time_t: current AIK creation */
 	int64_t last_rotated_at; /* time_t: last rotation (0 if never) */
-	uint8_t _reserved[64];
+	uint8_t key_derivation; /* TPM_AIK_KEY_DERIVATION_* */
+	uint8_t _reserved[63];
 } __attribute__((packed));
+
+/*
+ * What the PCR14 register observed at agent startup means.
+ *
+ * The verdict is separated from the extend that acts on it so
+ * the attribution rules can be exercised without a TPM: every input is
+ * a value the caller already read, and the classifier performs no I/O.
+ */
+enum tpm_pcr14_state {
+	/* Initramfs lock ran, the agent has not committed yet: extend */
+	TPM_PCR14_AWAITING_EXTEND = 0,
+	/* Both extends already happened in this boot: nothing to do */
+	TPM_PCR14_ALREADY_COMMITTED,
+	/* Register still holds the bare baseline: the lock never ran */
+	TPM_PCR14_LOCK_MISSING,
+	/*
+	 * This host spent its own commitment: the agent poisoned PCR14
+	 * during an operator-requested shutdown earlier in this boot.
+	 * Refused like any spent commitment; a reboot restores it.
+	 */
+	TPM_PCR14_SPENT_BY_SHUTDOWN,
+	/*
+	 * PCR14 carries this agent's own commitment but a different
+	 * binary is running now.
+	 * Non-resettable register, so the way out is to install and cold reboot.
+	 */
+	TPM_PCR14_BINARY_CHANGED,
+	/* resetCount advanced and PCR14 was dirty before the agent ran */
+	TPM_PCR14_TAMPERED_BEFORE_START,
+	/* Something extended PCR14 after this agent's last commitment */
+	TPM_PCR14_MUTATED_IN_SESSION,
+	/* Unexpected value and no snapshot to attribute it with */
+	TPM_PCR14_UNATTRIBUTABLE,
+	/* TPM reports an older resetCount than the snapshot recorded */
+	TPM_PCR14_STATE_ROLLBACK,
+};
 
 /*
  * TPM context - holds ESYS context and session state.
@@ -265,7 +329,22 @@ struct tpm_context {
 	/* AIK rotation state */
 	struct aik_metadata aik_meta;
 	bool aik_meta_loaded;
+
+	/*
+	 * Identity of the publisher whose AIK this context is bound to,
+	 * empty on a host with no publisher.  It is a creation input,
+	 * so the key a publisher holds is theirs and no other publisher's.
+	 */
+	char aik_profile_id[LOTA_PROFILE_ID_LEN];
+
+	/*
+	 * Set by the enrollment path, which is the one command that can
+	 * replace a publisher's key and come back with a certificate for
+	 * the new one.
+	 */
+	bool aik_allow_shared_key_replace;
 	char aik_meta_path[256];
+
 	/* set when LOTA_AIK_META_PATH chose the path above,
 	 * so binding publisher profile leaves developer's explicit override alone */
 	bool aik_meta_path_from_env;
@@ -327,6 +406,13 @@ struct tpm_context {
 	 * single agent lifecycle.
 	 */
 	bool boot_commitment_locked;
+
+	/*
+	 * Verdict from the last tpm_extend_boot_commitment() call,
+	 * so a caller that only sees -EBADMSG can still tell the operator
+	 * which of the refusals it was. Meaningless before the first call.
+	 */
+	enum tpm_pcr14_state boot_commitment_state;
 
 	/*
 	 * AIK userAuth at-rest hardening (default off). When seal_aik_auth is
@@ -466,6 +552,92 @@ int tpm_bind_profile(struct tpm_context *ctx,
 		     const struct profile_paths *paths);
 
 /*
+ * tpm_aik_profile_unique - creation input that separates publishers' keys
+ * @profile_id: the profile's identity, the SHA-256 of its CA anchor's
+ *              SubjectPublicKeyInfo as lowercase hex, or NULL/"" for
+ *              a host with no publisher
+ * @out:        LOTA_HASH_SIZE bytes, receives the value
+ * @out_len:    receives how many of them are meaningful,
+ *              0 when the caller has no publisher to separate from
+ *
+ * A TPM primary key is derived from the hierarchy seed and the creation
+ * template, so two profiles that pass the same template get the same
+ * key however many handles they occupy. This is what makes the template
+ * differ per publisher.
+ *
+ * Returns: 0 on success, negative errno when the identity is malformed.
+ */
+int tpm_aik_profile_unique(const char *profile_id, uint8_t out[LOTA_HASH_SIZE],
+			   uint16_t *out_len);
+
+/*
+ * tpm_aik_key_is_shared - does this profile hold a key every publisher has
+ * @ctx: context bound to a publisher profile, with metadata loaded
+ *
+ * True when the record describes a key created before the publisher's
+ * identity entered the creation template.  Such a key is byte for byte
+ * the key every other publisher on this host holds, so a relying party
+ * comparing certificates can link them.
+ * A TPM key cannot be rewritten in place: the way out is an enrollment,
+ * which creates the profile's own key.
+ *
+ * False on a host with no publisher, whose derivation did not change.
+ */
+bool tpm_aik_key_is_shared(const struct tpm_context *ctx);
+
+/*
+ * tpm_aik_key_present - does the TPM hold a key at this profile's handle
+ *
+ * Returns 1 when a key is there, 0 when it is not (including when there is
+ * no TPM connection to ask), negative errno when the TPM could not answer.
+ */
+int tpm_aik_key_present(struct tpm_context *ctx);
+
+/*
+ * tpm_aik_replacing_shared_key - is enrollment about to replace a key that
+ * every publisher on this host shares
+ *
+ * @key_present: what tpm_aik_key_present() answered
+ *
+ * A record is not a key. Every profile an older build ever read carries
+ * a record saying shared, including profiles that never enrolled,
+ * so the answer takes both: a key that is there, and a record saying it
+ * predates per-publisher keys.
+ */
+bool tpm_aik_replacing_shared_key(const struct tpm_context *ctx,
+				  int key_present);
+
+/*
+ * tpm_aik_provisioning_orphans_cert - will provisioning leave this
+ * publisher's certificate naming a key the TPM no longer holds?
+ *
+ * @key_present: what tpm_aik_key_present() answered
+ * @cert_stored: whether an enrollment certificate is on disk for this profile
+ *
+ * TPM2_Clear removes the keys but not the profile directory, so the handle,
+ * the consent and the certificate all survive it. Provisioning would mint
+ * a new key at the recorded handle, and every verifier refuses a key
+ * the certificate does not name.
+ *
+ * Returns true only when the key is absent and a certificate is stored.
+ * A first enrollment has no certificate; a TPM that could not answer
+ * (negative @key_present) is not taken as absent.
+ */
+bool tpm_aik_provisioning_orphans_cert(int key_present, bool cert_stored);
+
+/*
+ * tpm_aik_allow_shared_key_replace - let provisioning replace such a key
+ * @ctx:   initialized context
+ * @allow: true on the enrollment path, false everywhere else
+ *
+ * Replacing the key invalidates the CA certificate that names it,
+ * so it belongs to the command that will fetch a new one.
+ * Every other caller refuses the shared key instead, and says which command
+ * to run.
+ */
+void tpm_aik_allow_shared_key_replace(struct tpm_context *ctx, bool allow);
+
+/*
  * tpm_hash_fd - Calculate SHA-256 hash from an open regular file descriptor
  * @fd: Open regular file descriptor (read position should be at start)
  * @hash: Output buffer (LOTA_HASH_SIZE bytes)
@@ -500,6 +672,16 @@ int tpm_hash_file(const char *path, uint8_t *hash);
  * Returns: 0 on success, negative errno on failure
  */
 int tpm_set_kernel_path(struct tpm_context *ctx, const char *path);
+
+/*
+ * tpm_kernel_path_is_overridden - has a configuration named the kernel image?
+ *
+ * The override tells the agent where to find the running kernel on a distribution
+ * that ships no /proc/self/exe-style path for it.
+ * It selects nothing about a measured-boot PCR, so a caller that reports on one
+ * asks this in order to say so.
+ */
+bool tpm_kernel_path_is_overridden(const struct tpm_context *ctx);
 
 /*
  * tpm_get_current_kernel_path - Find current running kernel image
@@ -537,42 +719,126 @@ int tpm_pcr_extend(struct tpm_context *ctx, uint32_t pcr_index,
 		   const uint8_t *digest);
 
 /*
- * tpm_boot_commitment_digest - Compute the boot-bound PCR14 commit
- * @self_hash:     SHA-256 of the running agent binary (LOTA_HASH_SIZE bytes)
- * @reset_count:   TPM clockInfo.resetCount  (big-endian wire layout)
- * @restart_count: TPM clockInfo.restartCount (big-endian wire layout)
- * @out_digest:    LOTA_HASH_SIZE bytes
+ * tpm_boot_commitment_digest - Compute the boot commitment for PCR14
+ * @self_hash:  SHA-256 of the running agent binary (LOTA_HASH_SIZE bytes)
+ * @out_digest: LOTA_HASH_SIZE bytes
  *
- * Domain-separated digest used by tpm_extend_boot_commitment(). The
- * verifier mirrors the same construction to derive the expected PCR14
- * value from the pinned baseline agent hash plus the ClockInfo
- * recovered from the TPMS_ATTEST quote.
+ * Domain-separated digest used by tpm_extend_boot_commitment().
+ * It names the agent binary and nothing else, so every relying party derives
+ * the same value: the TPM obfuscates clockInfo per signing key,
+ * and a commitment that folded those counters in could only ever be rederived
+ * by the one key whose quote the agent happened to read at startup.
+ *
+ * What the register still binds, and where it comes from,
+ * is in Documentation/security/threat-model.rst.
  *
  * Returns: 0 on success, negative errno on failure
  */
-int tpm_boot_commitment_digest(const uint8_t self_hash[], uint32_t reset_count,
-			       uint32_t restart_count, uint8_t out_digest[]);
+int tpm_boot_commitment_digest(const uint8_t self_hash[], uint8_t out_digest[]);
 
 /*
  * tpm_initramfs_lock_digest - reproduce the digest the initramfs lock
  *                             helper (src/initramfs/lota-pcr14-lock.c)
  *                             extends PCR14 with before the agent runs
- * @reset_count, @restart_count: accepted for API symmetry; intentionally
- *                               ignored by the lock digest
  * @out_digest: LOTA_HASH_SIZE bytes, receives the SHA-256 digest
  *
  * The helper extends with
  *     SHA256("LOTA-PCR14-INITRAMFS-LOCK-v1")
- * and PCR14 ends up at SHA256(0^32 || that_digest). The agent calls
- * this function so it can recognise when PCR14 already carries the
- * lock value and chain its own boot commitment on top deterministically.
- * The verifier mirrors the derivation via
- * verifier/verify/baseline.go::DeriveInitramfsLockPCR14.
+ * and PCR14 ends up at SHA256(baseline || that_digest), where the baseline is
+ * whatever the platform had already measured there. The agent uses this to
+ * recognise the lock value and chain its boot commitment on top.
+ *
+ * The digest binds nothing about the boot: for one baseline, every boot leaves
+ * the same PCR14 here regardless of TPM reset count. Freshness comes from
+ * the boot commitment chained on top (tpm_boot_commitment_digest()) and from
+ * the ClockInfo in the quote. The constant lets a verifier derive the expected
+ * register from the event-log baseline alone.
+ *
+ * Three implementations must stay in step, none of them taking a counter:
+ * this one, the installer's probe_pcr14_lock_value_at() (installer/probe.c)
+ * and the verifier's DeriveInitramfsLockPCR14()
+ * (src/verifier/verify/baseline.go).
  *
  * Returns: 0 on success, negative errno on failure.
  */
-int tpm_initramfs_lock_digest(uint32_t reset_count, uint32_t restart_count,
-			      uint8_t out_digest[]);
+int tpm_initramfs_lock_digest(uint8_t out_digest[]);
+
+/*
+ * tpm_derive_locked_pcr14 - PCR14 after the lock-then-extend chain
+ * @self_hash: SHA-256 of the agent binary that commits
+ * @baseline:  pre-LOTA PCR14 content the initramfs lock extended on
+ * @out:       LOTA_HASH_SIZE bytes
+ *
+ * SHA-256(SHA-256(baseline || lock_commit) || boot_commit).
+ * Pure: no TPM and no file access.  The value depends on the platform baseline
+ * and the agent binary, so it is the same for every relying party and stable
+ * across a suspend, which is why neither side scans candidates any more.
+ * The verifier mirrors it in verifier/verify/baseline.go.
+ *
+ * Returns: 0 on success, negative errno on failure.
+ */
+int tpm_derive_locked_pcr14(const uint8_t self_hash[],
+			    const uint8_t baseline[LOTA_HASH_SIZE],
+			    uint8_t out[LOTA_HASH_SIZE]);
+
+/*
+ * Everything tpm_classify_pcr14() needs, all of it already read by
+ * the caller.
+ * Pointers are LOTA_HASH_SIZE buffers;
+ * @prev is NULL when the host has no usable snapshot from an earlier run.
+ */
+struct tpm_pcr14_observation {
+	const uint8_t *current; /* PCR14 as the TPM reports it now */
+	const uint8_t *baseline; /* pre-LOTA platform value */
+	const uint8_t *lock_value; /* baseline + initramfs lock extend */
+	const uint8_t *expected_locked; /* lock value + boot commitment */
+	const uint8_t *self_hash; /* hash of the running binary */
+	/*
+	 * TPM's counters for this run.
+	 * Classifier compares reset_count against the snapshot to tell a restart
+	 * within this boot from a register that was already committed when
+	 * the agent started after a cold boot.
+	 */
+	uint32_t reset_count;
+	uint32_t restart_count;
+	const struct lota_clock_state *prev;
+	/*
+	 * Whether the initramfs lock helper ran this boot, which the caller
+	 * answers by the presence of the baseline handoff the helper writes.
+	 *
+	 * Without it a boot with no lock is only recognisable where the register
+	 * still equals the baseline -- true on a host that measures nothing into
+	 * PCR 14, false on every shim host, where PCR 14 carries the MOK
+	 * measurement and the absent handoff reads as 0^32.
+	 * The benign case then arrives as suspected tamper.
+	 *
+	 * Not trust input: it can only route a refusal to a better sentence.
+	 * Both readings refuse, and the accepting branches are decided by
+	 * derivations against the live register before this is consulted.
+	 */
+	int lock_ran;
+};
+
+/*
+ * tpm_classify_pcr14 - decide what the observed PCR14 value means
+ * @obs: fully populated observation
+ *
+ * Pure function: no TPM access, no file access, no logging.
+ * The caller renders the operator message and performs the extend.
+ *
+ * The accepted values are derived, so no on-disk state can promote a register
+ * another writer extended into an accepted one.  A suspend leaves the register
+ * untouched and the derivation does not move with the counters, so a resume
+ * is simply a committed register; a commitment already present when the agent
+ * starts after a cold boot is refused, because on an honest cold boot
+ * the register holds the initramfs lock value at that point.
+ *
+ * Returns: the verdict, or TPM_PCR14_UNATTRIBUTABLE for a malformed
+ * observation, which is the conservative reading of "cannot explain
+ * this register".
+ */
+enum tpm_pcr14_state
+tpm_classify_pcr14(const struct tpm_pcr14_observation *obs);
 
 /*
  * tpm_extend_boot_commitment - Bind PCR14 to the agent binary and the
@@ -721,6 +987,23 @@ int tpm_activate_credential(struct tpm_context *ctx, const uint8_t *cred_blob,
  */
 int tpm_get_ek_cert(struct tpm_context *ctx, uint8_t *buf, size_t buf_size,
 		    size_t *out_size);
+
+/*
+ * tpm_get_ek_cert_chain - Read the EK certificate chain from NVRAM
+ * @ctx: Initialized TPM context
+ * @buf: Output buffer for the concatenated DER certificates
+ * @buf_size: Size of output buffer
+ * @out_size: Actual size of the blob read
+ *
+ * Reads NV index 0x01c00100, where a manufacturer stores the intermediates
+ * between its EK certificates and a published root. The blob holds the
+ * certificates end to end with no framing of its own.
+ *
+ * Returns: 0 on success, -ENOENT when the platform stores no chain,
+ * negative errno on failure
+ */
+int tpm_get_ek_cert_chain(struct tpm_context *ctx, uint8_t *buf,
+			  size_t buf_size, size_t *out_size);
 
 /*
  * tpm_get_hardware_id - Compute unique hardware identifier
@@ -984,6 +1267,41 @@ int tpm_seal_persist_primary(struct tpm_context *ctx, bool *already);
 int tpm_seal_evict_primary(struct tpm_context *ctx);
 
 /*
+ * tpm_handle_holds_object - Does this TPM have an object at @handle
+ * @ctx: Initialized TPM context
+ * @handle: A persistent handle
+ *
+ * The TPM is the authority on what lives at a handle; a profile's recorded
+ * handle is only a claim about it. Callers that are about to act on the
+ * difference ask here first.
+ *
+ * Returns 1 when the handle holds an object, 0 when it is free, negative errno
+ * when the TPM could not be asked.
+ */
+int tpm_handle_holds_object(struct tpm_context *ctx, uint32_t handle);
+
+/*
+ * tpm_persistent_slots - How many persistent objects this TPM holds and can hold
+ * @ctx: Initialized TPM context
+ * @used: receives the objects resident now, LOTA's and everyone else's
+ * @total: receives that plus what the TPM says it has room for
+ *
+ * Each publisher's attestation key occupies one of these, so the count is
+ * the real ceiling on publishers this machine can answer to -- lower than
+ * LOTA_PROFILE_MAX_AIK_HANDLES on a firmware TPM with little NV memory,
+ * and lowered further by any other software that persists objects here.
+ *
+ * The available figure is the TPM's own estimate (TPM2_PT_HR_PERSISTENT_AVAIL),
+ * so it is reported as such and never used to refuse anything: the authority on
+ * whether one more key fits is the TPM refusing to make it.
+ *
+ * Returns 0, -ENOTSUP when the TPM does not answer for these properties,
+ * or negative errno.
+ */
+int tpm_persistent_slots(struct tpm_context *ctx, uint32_t *used,
+			 uint32_t *total);
+
+/*
  * tpm_evict_profile_aik - Destroy the AIK a publisher's profile holds
  * @ctx: Initialized TPM context
  * @handle: The persistent handle recorded in that profile
@@ -1064,15 +1382,6 @@ int tpm_test_call_with_backoff_array(struct tpm_context *ctx,
 				     uint32_t *out_rc, void **slots[],
 				     size_t out_slot_count);
 
-/*
- * Parse the TPMS_ATTEST blob produced by the signed-clock probe and
- * return clockInfo.resetCount/restartCount. Exposed for unit tests so
- * the parsing layer can be exercised without driving a live TPM.
- */
-int tpm_test_parse_signed_clockinfo(const uint8_t *attest_buf,
-				    size_t attest_len,
-				    uint32_t *reset_count_out,
-				    uint32_t *restart_count_out);
 #endif
 
 #endif /* LOTA_TPM_H */

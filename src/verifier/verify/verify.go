@@ -13,10 +13,6 @@ package verify
 
 import (
 	"crypto/ed25519"
-	"crypto/hmac"
-	"crypto/rand"
-	"crypto/sha256"
-	"encoding/binary"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -30,8 +26,6 @@ import (
 	"github.com/szymonwilczek/lota/verifier/store"
 	"github.com/szymonwilczek/lota/verifier/types"
 )
-
-const sessionTokenDomain = "lota-session-token:v1"
 
 func wipeBytes(b []byte) {
 	if len(b) == 0 {
@@ -76,7 +70,7 @@ func unixTimestamp(t time.Time) uint64 {
 // decodeDevicePseudonym parses the CA-assigned device identifier from an
 // AIK certificate subject. The CA encodes it as the hex of a 32-byte
 // keyed hash of the EK, so it decodes to a fixed-width identity that the
-// ban store and session token reuse in place of the former hardware_id.
+// ban store reuses in place of the former hardware_id.
 func decodeDevicePseudonym(cn string) ([types.HardwareIDSize]byte, error) {
 	var out [types.HardwareIDSize]byte
 	if len(cn) != hex.EncodedLen(types.HardwareIDSize) {
@@ -108,16 +102,8 @@ type Verifier struct {
 	attestationLog store.AttestationLog
 
 	// configuration
-	nonceLifetime    time.Duration
-	sessionTokenLife time.Duration
-
-	// stateless session-token signer key (process-local secret)
-	sessionTokenKey      [32]byte
-	sessionTokenKeyReady bool
-
-	// store for issued session tokens; in-memory by default (single node),
-	// Postgres for multi-instance validation behind a load balancer
-	sessionTokenStore SessionTokenStore
+	nonceLifetime  time.Duration
+	resultValidity time.Duration
 
 	// monitoring
 	startTime      time.Time
@@ -131,31 +117,6 @@ type Verifier struct {
 	requireEventLog       bool
 	requireBootEnrollment bool
 	selfServiceReanchor   *bool
-	maxRestartCountSkew   uint32
-}
-
-type sessionTokenRecord struct {
-	ClientID   string
-	Tenant     string
-	HardwareID [types.HardwareIDSize]byte
-	ValidUntil uint64
-	ResultCode uint32
-	Flags      uint32
-	PCRMask    uint32
-	Consumed   bool
-}
-
-type SessionTokenStatus struct {
-	ClientID   string
-	Tenant     string
-	HardwareID [types.HardwareIDSize]byte
-	ValidUntil uint64
-	ResultCode uint32
-	Flags      uint32
-	PCRMask    uint32
-	Consumed   bool
-	Exists     bool
-	Expired    bool
 }
 
 func validateTPMFieldSizes(report *types.AttestationReport) error {
@@ -182,19 +143,15 @@ type VerifierConfig struct {
 	// how long a challenge nonce is valid
 	NonceLifetime time.Duration
 
-	// how long issued tokens are valid
-	SessionTokenLife time.Duration
+	// how long a successful verdict holds, reported to the host
+	// as ValidUntil
+	ResultValidity time.Duration
 
 	// optional: persistent baseline store (nil = in-memory)
 	BaselineStore BaselineStorer
 
 	// optional: persistent used nonce backend (nil = in-memory)
 	UsedNonceBackend UsedNonceBackend
-
-	// optional: shared session-token store (nil = in-memory, single node).
-	// Postgres-backed store lets several instances behind a load balancer
-	// validate each other's tokens.
-	SessionTokenStore SessionTokenStore
 
 	// optional: revocation enforcement (nil = no revocation checks)
 	RevocationStore store.RevocationStore
@@ -246,26 +203,6 @@ type VerifierConfig struct {
 	// anchor before anything moves (see reanchorDecision).
 	EnableSelfServiceReanchor *bool
 
-	// MaxRestartCountSkew bounds how many TPM2_Startup(STATE) cycles
-	// the verifier tolerates when matching the PCR14 boot-commitment
-	// digest. The agent extends PCR14 once at startup with the
-	// restartCount in effect at that moment; the quote's ClockInfo
-	// reports the current restartCount, which advances on every
-	// suspend/resume. Without a window any laptop that suspends
-	// between attestations drops offline with integrity_mismatch.
-	// 0 = exact match only.
-	//
-	// The default of 64 covers around sixty suspend/resume cycles
-	// between two attestations - well past any realistic operator
-	// cadence on a laptop fleet (continuous attestation at a few-
-	// minute interval, or operator-driven probes after a workstation
-	// returns from sleep). Keeping the window narrow shrinks the
-	// brute-force surface the matcher exposes to a caller that
-	// controls PCR14 contents but not the agent_hash baseline: every
-	// additional unit of skew is one extra SHA-256 candidate the
-	// matcher tries before giving up.
-	MaxRestartCountSkew uint32
-
 	// if true, allow policies that define no measurement allowlists
 	// (no PCR values and no kernel/agent hash allowlists)
 	// This is insecure and should be enabled only explicitly!
@@ -282,10 +219,9 @@ type VerifierConfig struct {
 func DefaultConfig() VerifierConfig {
 	return VerifierConfig{
 		NonceLifetime:         5 * time.Minute,
-		SessionTokenLife:      1 * time.Hour,
+		ResultValidity:        1 * time.Hour,
 		RequireEventLog:       true,
 		RequireBootEnrollment: true,
-		MaxRestartCountSkew:   64,
 		AllowPermissivePolicy: false,
 	}
 }
@@ -326,107 +262,16 @@ func NewVerifier(cfg VerifierConfig, aikStore store.AIKStore) *Verifier {
 		metrics:               m,
 		attestationLog:        cfg.AttestationLog,
 		nonceLifetime:         cfg.NonceLifetime,
-		sessionTokenLife:      cfg.SessionTokenLife,
+		resultValidity:        cfg.ResultValidity,
 		requireEventLog:       cfg.RequireEventLog,
 		requireBootEnrollment: cfg.RequireBootEnrollment,
 		selfServiceReanchor:   cfg.EnableSelfServiceReanchor,
-		maxRestartCountSkew:   cfg.MaxRestartCountSkew,
 		startTime:             time.Now(),
-		sessionTokenStore:     cfg.SessionTokenStore,
-	}
-
-	// default to the in-memory store (single node) when none is configured
-	if v.sessionTokenStore == nil {
-		v.sessionTokenStore = newMemorySessionTokenStore()
-	}
-
-	if _, err := rand.Read(v.sessionTokenKey[:]); err != nil {
-		logger.Error("failed to initialize session token signing key", "error", err)
-		v.sessionTokenKeyReady = false
-	} else {
-		v.sessionTokenKeyReady = true
 	}
 
 	return v
 }
 
-func (v *Verifier) rememberSessionToken(token [32]byte, report *types.AttestationReport, clientID, tenant string,
-	identity [types.HardwareIDSize]byte, validUntil uint64, resultCode uint32,
-) {
-	if v == nil || report == nil {
-		return
-	}
-
-	v.sessionTokenStore.Remember(token, sessionTokenRecord{
-		ClientID:   clientID,
-		Tenant:     tenant,
-		HardwareID: identity,
-		ValidUntil: validUntil,
-		ResultCode: resultCode,
-		Flags:      report.Header.Flags,
-		PCRMask:    report.TPM.PCRMask,
-		Consumed:   false,
-	})
-}
-
-func (v *Verifier) ValidateSessionToken(token [32]byte, consume bool) SessionTokenStatus {
-	if v == nil {
-		return SessionTokenStatus{}
-	}
-	return v.sessionTokenStore.Validate(token, consume, unixTimestamp(time.Now()))
-}
-
-func (v *Verifier) deriveSessionToken(report *types.AttestationReport, clientID string,
-	identity [types.HardwareIDSize]byte, validUntil uint64, resultCode uint32,
-) ([32]byte, error) {
-	var out [32]byte
-	if v == nil || report == nil {
-		return out, errors.New("nil verifier/report")
-	}
-	if !v.sessionTokenKeyReady {
-		return out, errors.New("session token signing key unavailable")
-	}
-
-	mac := hmac.New(sha256.New, v.sessionTokenKey[:])
-	writeU32 := func(x uint32) {
-		var b [4]byte
-		binary.LittleEndian.PutUint32(b[:], x)
-		_, _ = mac.Write(b[:])
-	}
-	writeU64 := func(x uint64) {
-		var b [8]byte
-		binary.LittleEndian.PutUint64(b[:], x)
-		_, _ = mac.Write(b[:])
-	}
-
-	_, _ = mac.Write([]byte(sessionTokenDomain))
-	_, _ = mac.Write(identity[:])
-	_, _ = mac.Write(report.TPM.Nonce[:])
-	_, _ = mac.Write([]byte(clientID))
-
-	writeU64(validUntil)
-	writeU32(resultCode)
-	writeU32(report.Header.Flags)
-	writeU32(report.TPM.PCRMask)
-	writeU16 := func(x uint16) {
-		var b [2]byte
-		binary.LittleEndian.PutUint16(b[:], x)
-		_, _ = mac.Write(b[:])
-	}
-	writeU16(report.TPM.AttestSize)
-
-	if report.TPM.AttestSize > 0 {
-		att := report.TPM.AttestData[:report.TPM.AttestSize]
-		sum := sha256.Sum256(att)
-		_, _ = mac.Write(sum[:])
-	}
-
-	copy(out[:], mac.Sum(nil))
-	return out, nil
-}
-
-// releases resources held by the Verifier, including the
-// background cleanup goroutine in the nonce store
 func (v *Verifier) Close() {
 	v.nonceStore.Close()
 }
@@ -437,6 +282,18 @@ func (v *Verifier) GenerateChallenge(clientID string) (*types.Challenge, error) 
 	// of every selectable policy's PCRs
 	pcrMask := v.pcrVerifier.GetChallengePolicyMask()
 	return v.nonceStore.GenerateChallenge(clientID, pcrMask)
+}
+
+// certificateVerdict maps an AIK certificate failure to the verdict the agent
+// is told. A certificate naming a key other than the one that signed the quote
+// is VerifyIdentityFail, which re-enrolling fixes (a TPM clear leaves this).
+// Expiry, chain and configuration failures stay VerifySigFail:
+// their fix lies with the operator or the CA.
+func certificateVerdict(err error) uint32 {
+	if errors.Is(err, store.ErrCertificateKeyMatch) {
+		return types.VerifyIdentityFail
+	}
+	return types.VerifySigFail
 }
 
 // performs full verification of attestation report
@@ -461,6 +318,7 @@ func (v *Verifier) VerifyReport(challengeID string, reportData []byte) (_ *types
 	clientID := challengeID
 	clog := logging.WithClient(v.log, clientID)
 	var pcr14Hex string
+	var kernelHashHex string
 	var hwID string
 	// tenant stays empty until the AIK certificate authenticates it.
 	// attestation record without a tenant is one that never proved
@@ -493,6 +351,7 @@ func (v *Verifier) VerifyReport(challengeID string, reportData []byte) (_ *types
 				Result:     resultStr,
 				DurationMs: float64(duration.Milliseconds()),
 				PCR14:      pcr14Hex,
+				KernelHash: kernelHashHex,
 			}); err != nil {
 				clog.Warn("failed to record attestation decision", "error", err)
 			}
@@ -557,8 +416,9 @@ func (v *Verifier) VerifyReport(challengeID string, reportData []byte) (_ *types
 	aikLeaf, err := certVerifier.VerifyAIKCertificate(reportAIK, aikCert)
 	if err != nil {
 		logging.Security(clog, "AIK certificate verification failed", "error", err)
-		v.metrics.Rejections.Inc("sig_fail")
-		result.Result = types.VerifySigFail
+		verdict := certificateVerdict(err)
+		v.metrics.Rejections.Inc(types.VerifyResultString(verdict))
+		result.Result = verdict
 		return result, fmt.Errorf("AIK certificate verification failed: %w", err)
 	}
 
@@ -710,6 +570,13 @@ func (v *Verifier) VerifyReport(challengeID string, reportData []byte) (_ *types
 	// check agent self-measurement against baseline
 	pcr14 := report.TPM.PCRValues[14]
 	pcr14Hex = FormatPCR14(pcr14)
+	recordedKernelHash := RecordedKernelHash(report, bootFacts)
+	kernelHashHex = hex.EncodeToString(recordedKernelHash[:])
+	if bootFacts != nil && bootFacts.KernelImageTrusted &&
+		bootFacts.KernelImage.Found {
+		clog.Debug("kernel hash taken from the measured kernel image",
+			"path", bootFacts.KernelImage.Path)
+	}
 
 	// PCR14 carries exactly one construction:
 	// the initramfs lock value the 90lota dracut helper extends before
@@ -795,29 +662,18 @@ func (v *Verifier) VerifyReport(challengeID string, reportData []byte) (_ *types
 	if bootFacts != nil {
 		pcr14Baseline = PCR14BaselineFromEventLog(bootFacts.Parsed)
 	}
-	expected, restartDrift, matched := MatchLockedBootCommitmentPCR14(
-		pcr14Baseline,
-		report.System.AgentHash,
-		parsedAttest.ClockInfo.ResetCount,
-		parsedAttest.ClockInfo.RestartCount,
-		pcr14, v.maxRestartCountSkew)
+	expected, _, matched := MatchLockedBootCommitmentPCR14(
+		pcr14Baseline, report.System.AgentHash, pcr14)
 	if !matched {
 		logging.Security(clog, "PCR14 boot-commitment derivation mismatch",
 			"actual_pcr14", pcr14Hex,
 			"expected_pcr14", FormatPCR14(expected),
 			"reset_count", parsedAttest.ClockInfo.ResetCount,
 			"restart_count", parsedAttest.ClockInfo.RestartCount,
-			"max_restart_skew", v.maxRestartCountSkew,
 			"hint", "rebuild initramfs with the current lota-pcr14-lock helper, cold reboot, and run the same agent binary that extended PCR14")
 		v.metrics.Rejections.Inc("integrity_mismatch")
 		result.Result = types.VerifyIntegrityMismatch
 		return result, errors.New("FAIL_INTEGRITY_MISMATCH: PCR14 does not match boot-commitment derivation")
-	}
-	if restartDrift > 0 {
-		clog.Info("PCR14 boot-commitment matched within restart_count skew window",
-			"restart_drift", restartDrift,
-			"quote_restart_count", parsedAttest.ClockInfo.RestartCount,
-			"max_restart_skew", v.maxRestartCountSkew)
 	}
 
 	// mask gate above rejected a report without PCR0/1/7 and the store gate
@@ -1009,6 +865,23 @@ func (v *Verifier) VerifyReport(challengeID string, reportData []byte) (_ *types
 
 	clog.Info("verification successful")
 
+	// Record which kernel image this device reported, and log once when it
+	// changes.
+	// Advisory: the hash is of a file the agent read, so nothing gates on it.
+	// It is carried in the digest the TPM signs, so the stored value is attested.
+	if kr, ok := v.baselineStore.(KernelHashRecorder); ok {
+		prev, had, err := kr.RecordKernelHash(clientID, recordedKernelHash)
+		switch {
+		case err != nil:
+			clog.Warn("failed to record the reported kernel hash", "error", err)
+		case had && prev != recordedKernelHash:
+			clog.Info("kernel_hash changed",
+				"previous_kernel_hash", hex.EncodeToString(prev[:]),
+				"reported_kernel_hash", kernelHashHex,
+				"note", "advisory: this device booted a different kernel image than the one it booted before. The digest is the bootloader's own measurement of the image, taken from the quote-authenticated event log, so a rebooted host reports the same value until the kernel it loads changes. Hosts that measure no kernel image under a name the verifier recognises fall back to the register the agent reports, which covers everything the bootloader read and moves on an ordinary reboot")
+		}
+	}
+
 	// stamp the CA-assigned tenant on the baseline row so the operator
 	// surface can scope this client.
 	// Fail closed rather than let tenant-owned device linger unscoped
@@ -1022,14 +895,7 @@ func (v *Verifier) VerifyReport(challengeID string, reportData []byte) (_ *types
 	}
 
 	result.Result = types.VerifyOK
-	result.ValidUntil = unixTimestamp(time.Now().Add(v.sessionTokenLife))
-	sessionToken, err := v.deriveSessionToken(report, clientID, identity, result.ValidUntil, result.Result)
-	if err != nil {
-		result.Result = types.VerifyInternalError
-		return result, fmt.Errorf("failed to derive session token: %w", err)
-	}
-	result.SessionToken = sessionToken
-	v.rememberSessionToken(sessionToken, report, clientID, tenant, identity, result.ValidUntil, result.Result)
+	result.ValidUntil = unixTimestamp(time.Now().Add(v.resultValidity))
 
 	return result, nil
 }
@@ -1369,8 +1235,30 @@ func (v *Verifier) tryAgentHashRepin(clog *slog.Logger, clientID, tenant string,
 	}
 
 	now := time.Now()
-	if agentHashDecision(report.System.AgentHash, policy.AgentHashes,
-		st.LastRepinAt, now) != AgentHashRepin {
+	verdict, refusal := agentHashDecision(report.System.AgentHash,
+		policy.AgentHashes, st.LastRepinAt, now)
+
+	if verdict != AgentHashRepin {
+		/*
+		 * The other two refusals are already named: an unlisted build is
+		 * refused by the policy gate before this path runs, and an empty
+		 * allow-list is the enterprise profile, where the pin standing is
+		 * the whole arrangement.
+		 * This one had no voice at all, and it is the one that looks exactly
+		 * like tampering while being an update arriving early.
+		 */
+		if refusal == AgentHashTooSoon {
+			logging.Security(clog,
+				"agent_hash re-pin refused by the per-client interval, not by the allow-list",
+				"reported_agent_hash",
+				hex.EncodeToString(report.System.AgentHash[:]),
+				"last_repin_at", st.LastRepinAt.UTC().Format(time.RFC3339),
+				"interval_elapses_at",
+				st.LastRepinAt.Add(AgentHashRepinMinInterval).UTC().Format(time.RFC3339),
+				"note",
+				"the reported build is on this policy's allow-list; wait for the interval or re-anchor this client")
+			v.metrics.Reanchors.Inc("agent_hash_escalate")
+		}
 		return false
 	}
 

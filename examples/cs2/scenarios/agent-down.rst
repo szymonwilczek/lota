@@ -7,7 +7,8 @@ Scenario: hook reacts when the agent goes down
 This walk-through exercises the LOTA hook's "graceful degradation" contract.
 The hook is designed to never wedge the game, and the agent is allowed to
 disappear out from under a live session without taking the game with it. The
-visible signal is the ``lota-status`` file under ``$XDG_RUNTIME_DIR/lota/``:
+visible signal is the ``lota-status`` file under
+``$XDG_RUNTIME_DIR/lota-hook/``:
 the hook keeps the file in sync with the agent's last known attestation state
 and unlinks it on a clean detach.
 

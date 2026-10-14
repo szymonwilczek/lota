@@ -22,6 +22,7 @@
 #include <time.h>
 
 #include "config.h"
+#include "pin.h"
 #include "profile.h"
 
 struct attest_target {
@@ -65,6 +66,37 @@ struct attest_target {
 	 */
 	bool session_gated;
 	int sessions;
+
+	/*
+	 * Whether this target has already said it is waiting for a title of
+	 * this publisher's to start.
+	 * Said once: a loop that repeats it every round is the same silence
+	 * with more lines.
+	 */
+	bool wait_announced;
+
+	/*
+	 * Whether this target has already said that the key at its handle is
+	 * not the key its certificate names. Said once for the same reason,
+	 * and cleared the moment they agree again, so a publisher re-enrolled
+	 * out of band resumes without a restart and a later mismatch is
+	 * announced afresh.
+	 */
+	bool key_mismatch_announced;
+
+	/*
+	 * Whether this target has already said the TPM refused to authorize
+	 * its quote. Same reason, and the same clearing rule: a round that
+	 * succeeds puts it back.
+	 */
+	bool auth_fail_announced;
+
+	/*
+	 * SHA-256 of the certificate this target's verifier must present,
+	 * taken from the publisher profile that names it.
+	 */
+	uint8_t pin_sha256[LOTA_PIN_SHA256_LEN];
+	bool has_pin;
 
 	struct profile_paths paths;
 	bool has_profile;
@@ -118,8 +150,51 @@ static inline bool attest_target_reports(const struct attest_target *t)
 {
 	if (!t || t->token_only)
 		return false;
+
 	return !t->session_gated || t->sessions > 0;
 }
+
+/*
+ * Re-read @config_path and rebuild the list while the loop is running.
+ *
+ * A publisher registered by a game's installer has to be reported to without
+ * a restart, and a publisher that is still configured has to come through
+ * the rebuild as the loop left it: same schedule, same failure state,
+ * same session count, since those live in this list and nowhere else.
+ *
+ * A config that does not load leaves the list untouched -- reporting from
+ * the previous list beats reporting to nobody -- and is returned as a negative
+ * errno.
+ * A file that loads and names no publisher at all empties the list, which is
+ * a state an operator can legitimately configure.
+ *
+ * The loaded configuration is this call's own: nothing outside the target list
+ * survives it, because nothing else in the loop reads the config after
+ * the list is built.
+ *
+ * The single-verifier arguments are the CLI's and do not change across
+ * a reload; they are passed through to attest_targets_build()
+ */
+int attest_targets_reload(const char *config_path, const char *server, int port,
+			  const char *ca_cert, int interval_sec,
+			  struct attest_target *targets, size_t max,
+			  size_t *count);
+
+/*
+ * attest_target_should_announce_wait - is this the moment to say that this
+ * publisher is waiting for a title of theirs to start?
+ *
+ * A session-gated target reports nothing until a title runs, and a caller
+ * that never says so looks stopped. The end of a session is already
+ * announced; this is the beginning of waiting for the first one, and it is
+ * true once per target.
+ *
+ * A publisher who runs no verifier is not waiting to report to one.
+ *
+ * Not pure: it records having answered, so the caller is not asked to keep
+ * that state itself at every site that could say it.
+ */
+bool attest_target_should_announce_wait(struct attest_target *t);
 
 /*
  * Build the target list.
@@ -128,7 +203,7 @@ static inline bool attest_target_reports(const struct attest_target *t)
  * each publisher names its own verifier, its own trust anchor and optionally
  * its own cadence, inheriting @interval_sec when it states none.
  * With no profiles configured the single @server / @port / @ca_cert is the only
- * target, which is the enterprise fleet the agent has always served.
+ * target, as on an enterprise fleet host.
  *
  * Returns 0, -EINVAL on a missing single-target server or bad argument,
  * or E2BIG when @max cannot hold every configured profile.

@@ -137,7 +137,7 @@ func TestTenantForDefaultAndStrict(t *testing.T) {
 func enrollWith(t *testing.T, svc *Service, ek tpmtest.EK, token []byte) (*x509.Certificate, string) {
 	t.Helper()
 	aikTPMT, aikName := tpmtest.AIKTemplate(t)
-	ch, err := svc.Begin(ek.CertDER, aikTPMT, token)
+	ch, err := svc.Begin(ek.CertDER, aikTPMT, token, nil)
 	if err != nil {
 		t.Fatalf("Begin: %v", err)
 	}
@@ -213,7 +213,7 @@ func TestEnrollStrictManifestRejectsUnlistedEK(t *testing.T) {
 
 	unlisted := tpmtest.NewEKCert(t, root)
 	aikTPMT, _ := tpmtest.AIKTemplate(t)
-	if _, err := svc.Begin(unlisted.CertDER, aikTPMT, nil); err == nil {
+	if _, err := svc.Begin(unlisted.CertDER, aikTPMT, nil, nil); err == nil {
 		t.Fatal("strict manifest enrolled an unlisted EK")
 	}
 	// strict rejection must not spend a session

@@ -12,6 +12,7 @@
 #define LOTA_AGENT_AIK_CERT_H
 
 #include <stdbool.h>
+#include <stddef.h>
 #include <stdint.h>
 
 /*
@@ -23,6 +24,27 @@
  */
 int aik_cert_lifetime_path(const char *path, int64_t *remaining_sec,
 			   int64_t *total_sec);
+
+/*
+ * Whether @spki_der is the key the certificate at @path was issued over.
+ *
+ * A profile holds the persistent handle, the AIK auth beside it and the
+ * certificate the CA issued, and the three must agree.
+ * If the key at the handle is replaced, the first quote fails TPM authorization
+ * and spends a dictionary-attack attempt.
+ * Checking the key against the certificate first needs no authorization
+ * and spends nothing, so a caller may do it before every quote.
+ *
+ * @spki_der is a DER SubjectPublicKeyInfo, the form tpm_get_aik_public() exports.
+ * It is compared byte for byte with the certificate's own SPKI; no signature
+ * is verified.
+ *
+ * Returns 0 when they are the same key, -EKEYREJECTED when they are not,
+ * -ENOENT when no certificate is stored, or another negative errno if
+ * the certificate cannot be read or parsed.
+ */
+int aik_cert_matches_key(const char *path, const uint8_t *spki_der,
+			 size_t spki_len);
 
 /*
  * Renewal is due once the certificate has entered its final third

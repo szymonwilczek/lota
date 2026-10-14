@@ -20,8 +20,10 @@
 
 #include "lota_anticheat.h"
 #include "lota_gaming.h"
-#include "lota_server.h"
 #include "lota_snapshot.h"
+#include "lota_server.h"
+#include "lota_token.h"
+#include "token_forge.h"
 
 static int tests_run;
 static int tests_passed;
@@ -228,7 +230,7 @@ static int rt_path_collect_cb(const char *path, void *user)
 
 static int expected_runtime_measure_test(uint8_t out[32])
 {
-	struct rt_path_collect c = { 0 };
+	struct rt_path_collect c = {};
 	const char **vec;
 	int ret;
 
@@ -581,7 +583,7 @@ static void test_get_info_null_info(void)
 
 static void test_get_info_fields(void)
 {
-	TEST("get_info returns local telemetry only");
+	TEST("get_info returns the session's own telemetry");
 	write_mock_snapshot(test_dir, 0x07);
 
 	struct lota_ac_config cfg = {
@@ -607,7 +609,8 @@ static void test_get_info_fields(void)
 		ok = 0;
 		printf("(provider) ");
 	}
-	if (info.state != LOTA_AC_STATE_RUNNING) {
+	/* 0x07 carries ATTESTED, so the session is trusted and says so */
+	if (info.state != LOTA_AC_STATE_TRUSTED) {
 		ok = 0;
 		printf("(state) ");
 	}
@@ -619,7 +622,7 @@ static void test_get_info_fields(void)
 		ok = 0;
 		printf("(flags) ");
 	}
-	if (info.trusted != 0) {
+	if (info.trusted != 1) {
 		ok = 0;
 		printf("(trusted) ");
 	}
@@ -1033,8 +1036,8 @@ static void test_verify_roundtrip(void)
 	ret = lota_ac_verify_heartbeat(buf, written, NULL, 0,
 				       expected_game_hash, expected_rm,
 				       &verified);
-	if (ret != LOTA_SERVER_ERR_INVALID_ARG) {
-		FAIL("expected LOTA_SERVER_ERR_INVALID_ARG");
+	if (ret != LOTA_AC_ERR_INVALID_ARG) {
+		FAIL("expected LOTA_AC_ERR_INVALID_ARG");
 		return;
 	}
 
@@ -1067,8 +1070,8 @@ static void test_verify_battleye_roundtrip(void)
 	struct lota_ac_info info;
 	int ret = lota_ac_verify_heartbeat(
 		buf, written, NULL, 0, expected_game_hash, expected_rm, &info);
-	if (ret != LOTA_SERVER_ERR_INVALID_ARG) {
-		FAIL("expected LOTA_SERVER_ERR_INVALID_ARG");
+	if (ret != LOTA_AC_ERR_INVALID_ARG) {
+		FAIL("expected LOTA_AC_ERR_INVALID_ARG");
 		return;
 	}
 	PASS();
@@ -1076,7 +1079,7 @@ static void test_verify_battleye_roundtrip(void)
 
 static void test_verify_rejects_game_hash_mismatch(void)
 {
-	TEST("verify: wrong expected game hash -> BAD_TOKEN");
+	TEST("verify: wrong expected game hash -> MALFORMED");
 	uint8_t buf[LOTA_AC_MAX_HEARTBEAT];
 	uint8_t wrong_hash[LOTA_AC_GAME_HASH_SIZE] = { 0 };
 	size_t written = 0;
@@ -1092,8 +1095,8 @@ static void test_verify_rejects_game_hash_mismatch(void)
 	struct lota_ac_info info;
 	int ret = lota_ac_verify_heartbeat(buf, written, NULL, 0, wrong_hash,
 					   any_rm, &info);
-	if (ret != LOTA_SERVER_ERR_BAD_TOKEN) {
-		FAIL("expected LOTA_SERVER_ERR_BAD_TOKEN");
+	if (ret != LOTA_AC_ERR_MALFORMED) {
+		FAIL("expected LOTA_AC_ERR_MALFORMED");
 		return;
 	}
 
@@ -1132,15 +1135,15 @@ static void test_verify_null_info(void)
 
 static void test_verify_truncated(void)
 {
-	TEST("verify: truncated data -> BAD_TOKEN");
+	TEST("verify: truncated data -> MALFORMED");
 	uint8_t data[32] = { 0 };
 	uint8_t expected_game_hash[LOTA_AC_GAME_HASH_SIZE] = { 0 };
 	uint8_t any_rm[LOTA_AC_RUNTIME_MEASURE_SIZE] = { 0 };
 	struct lota_ac_info info;
 	if (lota_ac_verify_heartbeat(data, sizeof(data), NULL, 0,
 				     expected_game_hash, any_rm,
-				     &info) != LOTA_SERVER_ERR_BAD_TOKEN) {
-		FAIL("expected LOTA_SERVER_ERR_BAD_TOKEN");
+				     &info) != LOTA_AC_ERR_MALFORMED) {
+		FAIL("expected LOTA_AC_ERR_MALFORMED");
 		return;
 	}
 	PASS();
@@ -1148,7 +1151,7 @@ static void test_verify_truncated(void)
 
 static void test_verify_bad_magic(void)
 {
-	TEST("verify: bad magic -> BAD_TOKEN");
+	TEST("verify: bad magic -> MALFORMED");
 	uint8_t data[LOTA_AC_HEADER_SIZE + 96];
 	memset(data, 0, sizeof(data));
 
@@ -1165,8 +1168,8 @@ static void test_verify_bad_magic(void)
 	struct lota_ac_info info;
 	if (lota_ac_verify_heartbeat(data, sizeof(data), NULL, 0,
 				     expected_game_hash, any_rm,
-				     &info) != LOTA_SERVER_ERR_BAD_TOKEN) {
-		FAIL("expected LOTA_SERVER_ERR_BAD_TOKEN");
+				     &info) != LOTA_AC_ERR_MALFORMED) {
+		FAIL("expected LOTA_AC_ERR_MALFORMED");
 		return;
 	}
 	PASS();
@@ -1174,7 +1177,7 @@ static void test_verify_bad_magic(void)
 
 static void test_verify_bad_version(void)
 {
-	TEST("verify: bad version -> BAD_VERSION");
+	TEST("verify: bad version -> VERSION");
 	uint8_t data[LOTA_AC_HEADER_SIZE + 96];
 	memset(data, 0, sizeof(data));
 
@@ -1200,7 +1203,7 @@ static void test_verify_bad_version(void)
 
 static void test_verify_bad_provider(void)
 {
-	TEST("verify: bad provider -> BAD_TOKEN");
+	TEST("verify: bad provider -> MALFORMED");
 	uint8_t data[LOTA_AC_HEADER_SIZE + 96];
 	memset(data, 0, sizeof(data));
 
@@ -1217,8 +1220,8 @@ static void test_verify_bad_provider(void)
 	struct lota_ac_info info;
 	if (lota_ac_verify_heartbeat(data, sizeof(data), NULL, 0,
 				     expected_game_hash, any_rm,
-				     &info) != LOTA_SERVER_ERR_BAD_TOKEN) {
-		FAIL("expected LOTA_SERVER_ERR_BAD_TOKEN");
+				     &info) != LOTA_AC_ERR_MALFORMED) {
+		FAIL("expected LOTA_AC_ERR_MALFORMED");
 		return;
 	}
 	PASS();
@@ -1226,7 +1229,7 @@ static void test_verify_bad_provider(void)
 
 static void test_verify_size_mismatch(void)
 {
-	TEST("verify: total_size > actual len -> BAD_TOKEN");
+	TEST("verify: total_size > actual len -> MALFORMED");
 	uint8_t data[LOTA_AC_HEADER_SIZE + 96];
 	memset(data, 0, sizeof(data));
 
@@ -1243,8 +1246,8 @@ static void test_verify_size_mismatch(void)
 	struct lota_ac_info info;
 	if (lota_ac_verify_heartbeat(data, sizeof(data), NULL, 0,
 				     expected_game_hash, any_rm,
-				     &info) != LOTA_SERVER_ERR_BAD_TOKEN) {
-		FAIL("expected LOTA_SERVER_ERR_BAD_TOKEN");
+				     &info) != LOTA_AC_ERR_MALFORMED) {
+		FAIL("expected LOTA_AC_ERR_MALFORMED");
 		return;
 	}
 	PASS();
@@ -1280,8 +1283,8 @@ static void test_verify_header_flags_tamper_rejected(void)
 	struct lota_ac_info info;
 	if (lota_ac_verify_heartbeat(buf, written, NULL, 0, expected_game_hash,
 				     expected_rm,
-				     &info) != LOTA_SERVER_ERR_INVALID_ARG) {
-		FAIL("expected LOTA_SERVER_ERR_INVALID_ARG");
+				     &info) != LOTA_AC_ERR_INVALID_ARG) {
+		FAIL("expected LOTA_AC_ERR_INVALID_ARG");
 		return;
 	}
 
@@ -1290,7 +1293,7 @@ static void test_verify_header_flags_tamper_rejected(void)
 
 static void test_verify_rejects_unknown_domain_version(void)
 {
-	TEST("verify: unknown domain_version -> BAD_VERSION");
+	TEST("verify: unknown domain_version -> VERSION");
 	uint8_t buf[LOTA_AC_MAX_HEARTBEAT];
 	uint8_t expected_game_hash[LOTA_AC_GAME_HASH_SIZE];
 	size_t written = 0;
@@ -1313,9 +1316,8 @@ static void test_verify_rejects_unknown_domain_version(void)
 	uint8_t any_rm[LOTA_AC_RUNTIME_MEASURE_SIZE] = { 0 };
 	struct lota_ac_info info;
 	if (lota_ac_verify_heartbeat(buf, written, NULL, 0, expected_game_hash,
-				     any_rm,
-				     &info) != LOTA_SERVER_ERR_BAD_VERSION) {
-		FAIL("expected LOTA_SERVER_ERR_BAD_VERSION");
+				     any_rm, &info) != LOTA_AC_ERR_VERSION) {
+		FAIL("expected LOTA_AC_ERR_VERSION");
 		return;
 	}
 	PASS();
@@ -1323,7 +1325,7 @@ static void test_verify_rejects_unknown_domain_version(void)
 
 static void test_verify_rejects_runtime_measure_mismatch(void)
 {
-	TEST("verify: wrong expected runtime measure -> BAD_TOKEN");
+	TEST("verify: wrong expected runtime measure -> RUNTIME_IMAGE");
 	uint8_t buf[LOTA_AC_MAX_HEARTBEAT];
 	uint8_t expected_game_hash[LOTA_AC_GAME_HASH_SIZE];
 	uint8_t wrong_rm[LOTA_AC_RUNTIME_MEASURE_SIZE];
@@ -1350,8 +1352,8 @@ static void test_verify_rejects_runtime_measure_mismatch(void)
 	struct lota_ac_info info;
 	if (lota_ac_verify_heartbeat(buf, written, NULL, 0, expected_game_hash,
 				     wrong_rm,
-				     &info) != LOTA_SERVER_ERR_BAD_TOKEN) {
-		FAIL("expected LOTA_SERVER_ERR_BAD_TOKEN");
+				     &info) != LOTA_AC_ERR_RUNTIME_IMAGE) {
+		FAIL("expected LOTA_AC_ERR_RUNTIME_IMAGE");
 		return;
 	}
 	PASS();
@@ -1359,7 +1361,7 @@ static void test_verify_rejects_runtime_measure_mismatch(void)
 
 static void test_verify_rejects_runtime_field_tamper(void)
 {
-	TEST("verify: tampered runtime_measure field -> BAD_TOKEN");
+	TEST("verify: tampered runtime_measure field -> RUNTIME_IMAGE");
 	uint8_t buf[LOTA_AC_MAX_HEARTBEAT];
 	uint8_t expected_game_hash[LOTA_AC_GAME_HASH_SIZE];
 	uint8_t expected_rm[LOTA_AC_RUNTIME_MEASURE_SIZE];
@@ -1387,8 +1389,8 @@ static void test_verify_rejects_runtime_field_tamper(void)
 	struct lota_ac_info info;
 	if (lota_ac_verify_heartbeat(buf, written, NULL, 0, expected_game_hash,
 				     expected_rm,
-				     &info) != LOTA_SERVER_ERR_BAD_TOKEN) {
-		FAIL("expected LOTA_SERVER_ERR_BAD_TOKEN");
+				     &info) != LOTA_AC_ERR_RUNTIME_IMAGE) {
+		FAIL("expected LOTA_AC_ERR_RUNTIME_IMAGE");
 		return;
 	}
 	PASS();
@@ -1415,6 +1417,210 @@ static void test_direct_mode_no_agent(void)
 		return;
 	}
 	lota_ac_shutdown(s);
+	PASS();
+}
+
+/*
+ * Why a session refused to start.
+ *
+ * lota_ac_init() returns NULL for reasons an integrator has to tell apart
+ * -- a configuration they got wrong is their bug, an agent that is not there
+ * or a publisher nobody has consented to is a state the player acts on
+ * -- and it returned the same NULL for all of them.
+ * Bringing a client up against the installed SDK on the hardware host took
+ * four blind attempts for exactly this reason.
+ */
+static void test_last_error_init_causes(void)
+{
+	struct lota_ac_config cfg;
+
+	TEST("last_error: a NULL configuration is an invalid argument");
+	lota_ac_init(NULL);
+	if (lota_ac_last_error() != LOTA_AC_ERR_INVALID_ARG) {
+		FAIL("expected LOTA_AC_ERR_INVALID_ARG");
+		return;
+	}
+	PASS();
+
+	TEST("last_error: an unset struct_size names the struct size");
+	memset(&cfg, 0, sizeof(cfg));
+	cfg.provider = LOTA_AC_PROVIDER_EAC;
+	cfg.game_id = "test-game";
+	lota_ac_init(&cfg);
+	if (lota_ac_last_error() != LOTA_AC_ERR_CONFIG_SIZE) {
+		FAIL("expected LOTA_AC_ERR_CONFIG_SIZE");
+		return;
+	}
+	PASS();
+
+	TEST("last_error: a missing game_id names the game_id");
+	memset(&cfg, 0, sizeof(cfg));
+	cfg.struct_size = sizeof(cfg);
+	cfg.provider = LOTA_AC_PROVIDER_EAC;
+	cfg.game_id = "";
+	lota_ac_init(&cfg);
+	if (lota_ac_last_error() != LOTA_AC_ERR_GAME_ID) {
+		FAIL("expected LOTA_AC_ERR_GAME_ID");
+		return;
+	}
+	PASS();
+
+	/* the cause that cost the four attempts: a zeroed provider */
+	TEST("last_error: a provider nobody set names the provider");
+	memset(&cfg, 0, sizeof(cfg));
+	cfg.struct_size = sizeof(cfg);
+	cfg.game_id = "test-game";
+	lota_ac_init(&cfg);
+	if (lota_ac_last_error() != LOTA_AC_ERR_PROVIDER) {
+		FAIL("expected LOTA_AC_ERR_PROVIDER");
+		return;
+	}
+	PASS();
+
+	TEST("last_error: a session that started says nothing failed");
+	memset(&cfg, 0, sizeof(cfg));
+	cfg.struct_size = sizeof(cfg);
+	cfg.provider = LOTA_AC_PROVIDER_EAC;
+	cfg.game_id = "test-game";
+	cfg.token_dir = test_dir;
+	{
+		struct lota_ac_session *s = lota_ac_init(&cfg);
+
+		if (!s) {
+			FAIL("init refused a valid file-mode configuration");
+			return;
+		}
+		if (lota_ac_last_error() != LOTA_AC_ERR_OK) {
+			FAIL("expected LOTA_AC_ERR_OK");
+			lota_ac_shutdown(s);
+			return;
+		}
+		lota_ac_shutdown(s);
+	}
+	PASS();
+}
+
+/*
+ * "The host is not ready" has to be distinguishable from "you called this wrong":
+ * one is a screen the player acts on, the other is the integrator's bug.
+ */
+static void test_last_error_no_agent(void)
+{
+	TEST("last_error: no agent on the socket is named as such");
+	struct lota_ac_config cfg = {
+		.struct_size = sizeof(cfg),
+		.provider = LOTA_AC_PROVIDER_EAC,
+		.game_id = "test-direct",
+		.direct = 1,
+		.socket_path = "/tmp/lota_nonexistent_socket_for_test",
+	};
+	struct lota_ac_session *s = lota_ac_init(&cfg);
+
+	if (!s) {
+		FAIL("init returned NULL");
+		return;
+	}
+	if (lota_ac_last_error() != LOTA_AC_ERR_NO_AGENT) {
+		FAIL("expected LOTA_AC_ERR_NO_AGENT");
+		lota_ac_shutdown(s);
+		return;
+	}
+	lota_ac_shutdown(s);
+	PASS();
+}
+
+/*
+ * A beat that cannot be produced says which half failed.
+ * The heartbeat path has ten distinct -EIO returns, and the one word
+ * "Input/output error" is what the anti-cheat reference reported
+ * on the hardware host for all of them.
+ */
+static void test_last_error_heartbeat_causes(void)
+{
+	struct lota_ac_config cfg = {
+		.struct_size = sizeof(cfg),
+		.provider = LOTA_AC_PROVIDER_EAC,
+		.game_id = "test-direct",
+		.direct = 1,
+		.socket_path = "/tmp/lota_nonexistent_socket_for_test",
+	};
+	struct lota_ac_session *s = lota_ac_init(&cfg);
+	uint8_t buf[LOTA_AC_MAX_HEARTBEAT];
+	size_t written = 0;
+
+	TEST("last_error: a beat without a session is an invalid argument");
+	lota_ac_heartbeat(NULL, buf, sizeof(buf), &written);
+	if (lota_ac_last_error() != LOTA_AC_ERR_INVALID_ARG) {
+		FAIL("expected LOTA_AC_ERR_INVALID_ARG");
+		lota_ac_shutdown(s);
+		return;
+	}
+	PASS();
+
+	TEST("last_error: a beat with no agent behind it names the agent");
+	if (!s) {
+		FAIL("init returned NULL");
+		return;
+	}
+	lota_ac_heartbeat(s, buf, sizeof(buf), &written);
+	if (lota_ac_last_error() != LOTA_AC_ERR_NO_AGENT) {
+		FAIL("expected LOTA_AC_ERR_NO_AGENT");
+		lota_ac_shutdown(s);
+		return;
+	}
+	PASS();
+
+	lota_ac_shutdown(s);
+}
+
+/* a code an integrator logs is worth a sentence; a number is not one */
+static void test_last_error_strings(void)
+{
+	static const int codes[] = {
+		LOTA_AC_ERR_OK,
+		LOTA_AC_ERR_INVALID_ARG,
+		LOTA_AC_ERR_CONFIG_SIZE,
+		LOTA_AC_ERR_GAME_ID,
+		LOTA_AC_ERR_PROVIDER,
+		LOTA_AC_ERR_NO_MEMORY,
+		LOTA_AC_ERR_INTERNAL,
+		LOTA_AC_ERR_NO_AGENT,
+		LOTA_AC_ERR_CONSENT_REQUIRED,
+		LOTA_AC_ERR_UNKNOWN_PROFILE,
+		LOTA_AC_ERR_ACCESS_DENIED,
+		LOTA_AC_ERR_TOKEN_DIR,
+		LOTA_AC_ERR_NOT_ATTESTED,
+		LOTA_AC_ERR_RATE_LIMITED,
+		LOTA_AC_ERR_STATUS,
+		LOTA_AC_ERR_TOKEN,
+		LOTA_AC_ERR_MEASURE,
+		LOTA_AC_ERR_SERIALIZE,
+	};
+	const char *unknown = lota_ac_strerror(-9999);
+	size_t i, j;
+
+	TEST("strerror: every code has a sentence of its own");
+	for (i = 0; i < sizeof(codes) / sizeof(codes[0]); i++) {
+		const char *si = lota_ac_strerror(codes[i]);
+
+		if (!si || !si[0] || strcmp(si, unknown) == 0) {
+			FAIL("a code renders as the fallback");
+			return;
+		}
+		for (j = i + 1; j < sizeof(codes) / sizeof(codes[0]); j++) {
+			if (strcmp(si, lota_ac_strerror(codes[j])) == 0) {
+				FAIL("two codes share a sentence");
+				return;
+			}
+		}
+	}
+	PASS();
+
+	TEST("strerror: a code from a newer library still prints");
+	if (!unknown || !unknown[0]) {
+		FAIL("no fallback string");
+		return;
+	}
 	PASS();
 }
 
@@ -1552,6 +1758,64 @@ static void test_integration_wine_artifacts_consumed_by_eac(void)
 	PASS();
 }
 
+/*
+ * With no token_dir configured the SDK has to look where the hook actually
+ * writes -- $XDG_RUNTIME_DIR/lota-hook -- and not in $XDG_RUNTIME_DIR/lota,
+ * which belongs to the daemon and holds the container socket.
+ */
+static void test_auto_token_dir_is_the_hooks_dir(void)
+{
+	TEST("auto-detected token dir is the hook's, not the daemon's");
+	char xdg[512];
+	char hookdir[600];
+	char daemondir[600];
+	const char *saved_xdg = getenv("XDG_RUNTIME_DIR");
+	char saved[512] = { 0 };
+
+	if (saved_xdg)
+		snprintf(saved, sizeof(saved), "%s", saved_xdg);
+
+	snprintf(xdg, sizeof(xdg), "%s/auto_xdg", test_dir);
+	mkdir(xdg, 0700);
+	snprintf(hookdir, sizeof(hookdir), "%s/lota-hook", xdg);
+	mkdir(hookdir, 0700);
+	snprintf(daemondir, sizeof(daemondir), "%s/lota", xdg);
+	mkdir(daemondir, 0700);
+
+	const uint32_t attested_flags = 0x07;
+	write_wine_status_file(hookdir, attested_flags,
+			       (uint64_t)time(NULL) + 3600);
+	write_mock_snapshot(hookdir, attested_flags);
+
+	setenv("XDG_RUNTIME_DIR", xdg, 1);
+	unsetenv("LOTA_HOOK_TOKEN_DIR");
+
+	struct lota_ac_config cfg = {
+		.struct_size = sizeof(cfg),
+		.provider = LOTA_AC_PROVIDER_EAC,
+		.game_id = "auto-token-dir",
+		.token_dir = NULL,
+	};
+	struct lota_ac_session *s = lota_ac_init(&cfg);
+
+	if (saved[0])
+		setenv("XDG_RUNTIME_DIR", saved, 1);
+	else
+		unsetenv("XDG_RUNTIME_DIR");
+
+	if (!s) {
+		FAIL("init failed");
+		return;
+	}
+	if (lota_ac_get_state(s) != LOTA_AC_STATE_TRUSTED) {
+		FAIL("did not read the hook's directory");
+		lota_ac_shutdown(s);
+		return;
+	}
+	lota_ac_shutdown(s);
+	PASS();
+}
+
 static void test_integration_eac_detects_agent_death(void)
 {
 	TEST("integration: snapshot disappears mid-session -> ERROR");
@@ -1684,6 +1948,393 @@ static void test_session_id_unique(void)
 		FAIL("same session_id");
 }
 
+/*
+ * TRUSTED is documented as "attested", so a host that has never completed a round
+ * must not reach it -- least of all under the permissive configuration a first
+ * integration reaches for.
+ * A status word is non-zero as soon as the agent has a TPM handle, which is not
+ * a verdict from anybody.
+ */
+static void test_unattested_host_is_not_trusted(void)
+{
+	char dir[512];
+
+	TEST("no ATTESTED flag -> UNTRUSTED even with no requirement");
+	snprintf(dir, sizeof(dir), "%s/unattested", test_dir);
+	mkdir(dir, 0700);
+
+	/* TPM_OK | IOMMU_OK: the agent is up, nobody has attested it */
+	write_mock_snapshot(dir, LOTA_FLAG_TPM_OK | LOTA_FLAG_IOMMU_OK);
+
+	struct lota_ac_config cfg = {
+		.struct_size = sizeof(cfg),
+		.provider = LOTA_AC_PROVIDER_EAC,
+		.game_id = "unattested",
+		.token_dir = dir,
+		.required_flags = 0,
+	};
+	struct lota_ac_session *s = lota_ac_init(&cfg);
+	if (!s) {
+		FAIL("init failed");
+		return;
+	}
+
+	if (lota_ac_get_state(s) == LOTA_AC_STATE_TRUSTED)
+		FAIL("a host that never attested is called trusted");
+	else if (lota_ac_get_state(s) != LOTA_AC_STATE_UNTRUSTED)
+		FAIL("expected UNTRUSTED");
+	else
+		PASS();
+
+	lota_ac_shutdown(s);
+}
+
+/* required_flags raises the bar; it cannot lower it below attestation */
+static void test_required_flags_cannot_drop_attested(void)
+{
+	char dir[512];
+
+	TEST("required_flags without ATTESTED still needs ATTESTED");
+	snprintf(dir, sizeof(dir), "%s/req_no_att", test_dir);
+	mkdir(dir, 0700);
+
+	write_mock_snapshot(dir, LOTA_FLAG_TPM_OK | LOTA_FLAG_IOMMU_OK);
+
+	struct lota_ac_config cfg = {
+		.struct_size = sizeof(cfg),
+		.provider = LOTA_AC_PROVIDER_EAC,
+		.game_id = "req-no-att",
+		.token_dir = dir,
+		.required_flags = LOTA_FLAG_TPM_OK,
+	};
+	struct lota_ac_session *s = lota_ac_init(&cfg);
+	if (!s) {
+		FAIL("init failed");
+		return;
+	}
+
+	if (lota_ac_get_state(s) != LOTA_AC_STATE_UNTRUSTED)
+		FAIL("a requirement that omits ATTESTED trusted the host");
+	else
+		PASS();
+
+	lota_ac_shutdown(s);
+}
+
+/*
+ * The two roads out of one session have to answer the same thing.
+ * Both are local telemetry and neither is authoritative -- that is what
+ * the header says about the info road -- so disagreeing buys nothing
+ * and costs an integrator the bug.
+ */
+static void test_info_agrees_with_state(void)
+{
+	struct lota_ac_info info;
+	char dir[512];
+
+	TEST("get_info reports the state get_state reports");
+	snprintf(dir, sizeof(dir), "%s/info_agree", test_dir);
+	mkdir(dir, 0700);
+
+	write_mock_snapshot(dir, LOTA_FLAG_ATTESTED | LOTA_FLAG_TPM_OK);
+
+	struct lota_ac_config cfg = {
+		.struct_size = sizeof(cfg),
+		.provider = LOTA_AC_PROVIDER_EAC,
+		.game_id = "info-agree",
+		.token_dir = dir,
+	};
+	struct lota_ac_session *s = lota_ac_init(&cfg);
+	if (!s) {
+		FAIL("init failed");
+		return;
+	}
+
+	if (lota_ac_get_state(s) != LOTA_AC_STATE_TRUSTED) {
+		FAIL("preconditions: expected TRUSTED");
+		lota_ac_shutdown(s);
+		return;
+	}
+
+	if (lota_ac_get_info(s, &info) != 0) {
+		FAIL("get_info failed");
+		lota_ac_shutdown(s);
+		return;
+	}
+
+	if (info.state != LOTA_AC_STATE_TRUSTED)
+		FAIL("info.state disagrees with get_state");
+	else if (!info.trusted)
+		FAIL("info.trusted is clear on a trusted session");
+	else
+		PASS();
+
+	lota_ac_shutdown(s);
+}
+
+/* Every code this library defines, for the checks that must cover all of them */
+static const int ac_error_codes[] = {
+	LOTA_AC_ERR_INVALID_ARG,     LOTA_AC_ERR_MALFORMED,
+	LOTA_AC_ERR_VERSION,	     LOTA_AC_ERR_SIG_FAIL,
+	LOTA_AC_ERR_NONCE_FAIL,	     LOTA_AC_ERR_EXPIRED,
+	LOTA_AC_ERR_CRYPTO,	     LOTA_AC_ERR_CONFIG_SIZE,
+	LOTA_AC_ERR_GAME_ID,	     LOTA_AC_ERR_PROVIDER,
+	LOTA_AC_ERR_NO_MEMORY,	     LOTA_AC_ERR_INTERNAL,
+	LOTA_AC_ERR_NO_AGENT,	     LOTA_AC_ERR_CONSENT_REQUIRED,
+	LOTA_AC_ERR_UNKNOWN_PROFILE, LOTA_AC_ERR_ACCESS_DENIED,
+	LOTA_AC_ERR_TOKEN_DIR,	     LOTA_AC_ERR_NOT_ATTESTED,
+	LOTA_AC_ERR_RATE_LIMITED,    LOTA_AC_ERR_STATUS,
+	LOTA_AC_ERR_TOKEN,	     LOTA_AC_ERR_MEASURE,
+	LOTA_AC_ERR_SERIALIZE,
+};
+
+/* The errno values the measure helpers are documented to return */
+static const int helper_errnos[] = {
+	EPERM, ENOENT, EIO, E2BIG, ENOEXEC, ENOMEM, EINVAL,
+};
+
+static int renders_as_a_verdict(int err)
+{
+	const char *s = lota_ac_strerror(err);
+	size_t i;
+
+	for (i = 0; i < sizeof(ac_error_codes) / sizeof(ac_error_codes[0]);
+	     i++) {
+		if (strcmp(s, lota_ac_strerror(ac_error_codes[i])) == 0)
+			return 1;
+	}
+	return 0;
+}
+
+/*
+ * Two numbering spaces must not share a range.
+ * The measure helpers return negative errno by their documented contract,
+ * so an integrator printing this library's own message for one of them was
+ * told about heartbeat nonces and signature failures that never happened.
+ */
+static void test_errno_is_not_rendered_as_a_verdict(void)
+{
+	size_t i;
+
+	TEST("strerror: an errno does not render as a verdict");
+
+	for (i = 0; i < sizeof(helper_errnos) / sizeof(helper_errnos[0]); i++) {
+		if (renders_as_a_verdict(-helper_errnos[i])) {
+			printf("(errno %d) ", helper_errnos[i]);
+			FAIL("an errno renders as one of this library's codes");
+			return;
+		}
+	}
+
+	PASS();
+}
+
+/* The guard: no code may occupy a number an errno could occupy */
+static void test_error_codes_sit_outside_the_errno_range(void)
+{
+	size_t i;
+
+	TEST("codes: none of them can collide with an errno");
+
+	for (i = 0; i < sizeof(ac_error_codes) / sizeof(ac_error_codes[0]);
+	     i++) {
+		if (ac_error_codes[i] > -256) {
+			printf("(%d) ", ac_error_codes[i]);
+			FAIL("a code sits where an errno sits");
+			return;
+		}
+	}
+
+	PASS();
+}
+
+/*
+ * The trigger, as an integrator meets it: a file that is not an ELF object
+ * fails the precompute helper, and the natural next line is to print this
+ * library's message for what came back.
+ */
+static void test_measure_failure_does_not_render_as_a_verdict(void)
+{
+	uint8_t out[LOTA_AC_RUNTIME_MEASURE_SIZE];
+	char path[512];
+	const char *vec[1];
+	int rc;
+
+	TEST("a failed measurement does not render as a verdict");
+
+	snprintf(path, sizeof(path), "%s/not-an-elf", test_dir);
+	write_test_file(test_dir, "not-an-elf", "no", 2);
+
+	vec[0] = path;
+	rc = lota_ac_compute_expected_runtime_measure_set(vec, 1, out);
+	if (rc == 0) {
+		FAIL("preconditions: a non-ELF file was measured");
+		return;
+	}
+
+	if (renders_as_a_verdict(rc)) {
+		printf("(%s) ", lota_ac_strerror(rc));
+		FAIL("the failure is reported as a heartbeat verdict");
+		return;
+	}
+
+	PASS();
+}
+
+/*
+ * A heartbeat that survives verification: the same packet the bound builder makes,
+ * but carrying a token signed by @key over the nonce this packet binds.
+ * Nothing short of this reaches the verdict lota_ac_verify_heartbeat() renders,
+ * because everything before it refuses first.
+ */
+static int
+build_signed_heartbeat_packet(EVP_PKEY *key, uint8_t *out, size_t out_cap,
+			      size_t *out_len, uint8_t provider,
+			      const char *game_id, uint32_t flags,
+			      uint8_t out_game_hash[LOTA_AC_GAME_HASH_SIZE],
+			      uint8_t out_rm[LOTA_AC_RUNTIME_MEASURE_SIZE])
+{
+	uint8_t session_id[LOTA_AC_SESSION_ID_SIZE];
+	uint8_t nonce[32];
+	uint8_t token[2048];
+	uint64_t timestamp = (uint64_t)time(NULL);
+	size_t token_len = 0;
+	size_t total;
+
+	for (int i = 0; i < (int)sizeof(session_id); i++)
+		session_id[i] = (uint8_t)(0xA0 + i);
+
+	if (compute_game_id_hash_test(game_id, out_game_hash) != 0)
+		return -EIO;
+	if (lota_ac_compute_runtime_measure(out_rm) != 0)
+		return -EIO;
+	if (compute_hb_nonce_test(nonce, session_id, provider, 0, flags,
+				  timestamp, out_game_hash, out_rm,
+				  LOTA_AC_DOMAIN_VERSION_CURRENT) != 0)
+		return -EIO;
+
+	if (forge_token_sha256(key, timestamp + LOTA_SERVER_MAX_TOKEN_AGE_SEC,
+			       flags, nonce, token, sizeof(token),
+			       &token_len) != LOTA_OK)
+		return -EIO;
+
+	total = LOTA_AC_HEADER_SIZE + token_len;
+	if (total > out_cap)
+		return -ENOSPC;
+
+	write_le32(out + 0, LOTA_AC_MAGIC);
+	out[4] = LOTA_AC_VERSION;
+	out[5] = provider;
+	write_le16(out + 6, (uint16_t)total);
+	memcpy(out + 8, session_id, sizeof(session_id));
+	write_le32(out + 24, 0);
+	write_le32(out + 28, flags);
+	for (int i = 0; i < 8; i++)
+		out[32 + i] = (uint8_t)((timestamp >> (8 * i)) & 0xFF);
+	memcpy(out + 40, out_game_hash, LOTA_AC_GAME_HASH_SIZE);
+	write_le16(out + 72, (uint16_t)token_len);
+	write_le32(out + 74, LOTA_AC_DOMAIN_VERSION_CURRENT);
+	memcpy(out + 78, out_rm, LOTA_AC_RUNTIME_MEASURE_SIZE);
+	memcpy(out + LOTA_AC_HEADER_SIZE, token, token_len);
+
+	*out_len = total;
+	return 0;
+}
+
+/*
+ * The verdict a backend acts on, over a packet with nothing wrong with it.
+ *
+ * @flags is the status word the token carries. TRUSTED is documented as attested,
+ * so a word without LOTA_FLAG_ATTESTED must not reach it however genuine
+ * the packet around it is.
+ */
+static int verified_state(uint32_t flags, enum lota_ac_state *state,
+			  int *trusted)
+{
+	uint8_t buf[LOTA_AC_MAX_HEARTBEAT];
+	uint8_t game_hash[LOTA_AC_GAME_HASH_SIZE];
+	uint8_t rm[LOTA_AC_RUNTIME_MEASURE_SIZE];
+	struct lota_ac_info info;
+	EVP_PKEY *key = forge_rsa_key();
+	uint8_t *aik_der = NULL;
+	size_t aik_len = 0;
+	size_t written = 0;
+	int ret;
+
+	if (!key)
+		return -EIO;
+
+	aik_der = forge_pubkey_der(key, &aik_len);
+	if (!aik_der) {
+		EVP_PKEY_free(key);
+		return -EIO;
+	}
+
+	ret = build_signed_heartbeat_packet(key, buf, sizeof(buf), &written,
+					    LOTA_AC_PROVIDER_EAC,
+					    "verified-trust", flags, game_hash,
+					    rm);
+	if (ret == 0) {
+		ret = lota_ac_verify_heartbeat(buf, written, aik_der, aik_len,
+					       game_hash, rm, &info);
+		if (ret == LOTA_AC_ERR_OK) {
+			*state = info.state;
+			*trusted = info.trusted;
+		}
+	}
+
+	free(aik_der);
+	EVP_PKEY_free(key);
+	return ret;
+}
+
+static void test_verified_unattested_host_is_not_trusted(void)
+{
+	enum lota_ac_state state = LOTA_AC_STATE_IDLE;
+	int trusted = -1;
+	int ret;
+
+	TEST("verify: a genuine packet from an unattested host is untrusted");
+
+	/* TPM_OK | IOMMU_OK: the agent is up, nobody has attested it */
+	ret = verified_state(LOTA_FLAG_TPM_OK | LOTA_FLAG_IOMMU_OK, &state,
+			     &trusted);
+	if (ret != LOTA_AC_ERR_OK) {
+		printf("(rc=%d) ", ret);
+		FAIL("preconditions: the packet did not verify");
+		return;
+	}
+
+	if (trusted || state == LOTA_AC_STATE_TRUSTED)
+		FAIL("a host that never attested verified as trusted");
+	else if (state != LOTA_AC_STATE_UNTRUSTED)
+		FAIL("expected UNTRUSTED");
+	else
+		PASS();
+}
+
+static void test_verified_attested_host_is_trusted(void)
+{
+	enum lota_ac_state state = LOTA_AC_STATE_IDLE;
+	int trusted = -1;
+	int ret;
+
+	TEST("verify: a genuine packet from an attested host is trusted");
+
+	ret = verified_state(LOTA_FLAG_ATTESTED | LOTA_FLAG_TPM_OK, &state,
+			     &trusted);
+	if (ret != LOTA_AC_ERR_OK) {
+		printf("(rc=%d) ", ret);
+		FAIL("preconditions: the packet did not verify");
+		return;
+	}
+
+	if (!trusted || state != LOTA_AC_STATE_TRUSTED)
+		FAIL("an attested host did not verify as trusted");
+	else
+		PASS();
+}
+
 int main(void)
 {
 	printf("=== LOTA Anti-Cheat Compatibility Tests ===\n\n");
@@ -1745,8 +2396,15 @@ int main(void)
 	printf("\nDirect Mode:\n");
 	test_direct_mode_no_agent();
 
+	printf("\nWhy a call failed:\n");
+	test_last_error_init_causes();
+	test_last_error_no_agent();
+	test_last_error_heartbeat_causes();
+	test_last_error_strings();
+
 	printf("\nIntegration:\n");
 	test_integration_wine_artifacts_consumed_by_eac();
+	test_auto_token_dir_is_the_hooks_dir();
 	test_integration_eac_detects_agent_death();
 	test_integration_eac_detects_attestation_loss();
 
@@ -1754,6 +2412,14 @@ int main(void)
 	test_state_str();
 	test_provider_str();
 	test_tick_null();
+	test_verified_unattested_host_is_not_trusted();
+	test_verified_attested_host_is_trusted();
+	test_errno_is_not_rendered_as_a_verdict();
+	test_error_codes_sit_outside_the_errno_range();
+	test_measure_failure_does_not_render_as_a_verdict();
+	test_unattested_host_is_not_trusted();
+	test_required_flags_cannot_drop_attested();
+	test_info_agrees_with_state();
 	test_session_id_unique();
 
 	cleanup_test_dir();

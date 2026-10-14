@@ -18,13 +18,17 @@
 /*
  * Version 1 frames carry no enrollment token;
  * Version 2 appends one to BeginRequest.
+ * Version 3 appends the manufacturer intermediates the device holds,
+ * and carries the token field even when it is empty.
  * Version states what the frame carries, not how old the peer is:
  * untenanted enrollment sends version 1, tenant enrollment sends
- * version 2, and the CA answers in the version it received.
- * Both are current modes.
+ * version 2, a device presenting an EK chain sends version 3,
+ * and the CA answers in the version it received.
+ * All three are current modes.
  */
 #define LOTA_ENROLL_VERSION 1u
 #define LOTA_ENROLL_VERSION_TOKEN 2u
+#define LOTA_ENROLL_VERSION_EK_CHAIN 3u
 
 /* Field bounds, identical to the Go wire caps. */
 /* see (src/attestcta/wire/wire.go) */
@@ -38,18 +42,32 @@
 #define LOTA_ENROLL_MAX_DEVICE_ID 128u
 #define LOTA_ENROLL_MAX_TOKEN 128u
 
+/*
+ * Manufacturer intermediates a device presents with its EK leaf.
+ *
+ * TPM whose EK certificate sits several levels below its manufacturer root
+ * stores the intermediates the CA cannot obtain anywhere else in its own NV,
+ * so the device is the only party that can supply them.
+ * Both caps are frame budget: eight certificates and 8 KB of them still leave
+ * the leaf, the AIK template and the token inside LOTA_ENROLL_MAX_FRAME.
+ */
+#define LOTA_ENROLL_MAX_EK_CHAIN_CERTS 8u
+#define LOTA_ENROLL_MAX_EK_CHAIN_BYTES 8192u
+
 /* Bound on a single decoded frame body. */
 #define LOTA_ENROLL_MAX_FRAME (16u * 1024u)
 
 /* Reply status codes. */
-#define LOTA_ENROLL_STATUS_OK 0u
-#define LOTA_ENROLL_STATUS_BAD_REQUEST 1u
-#define LOTA_ENROLL_STATUS_EK_REJECTED 2u
-#define LOTA_ENROLL_STATUS_AIK_REJECTED 3u
-#define LOTA_ENROLL_STATUS_ACTIVATION_FAIL 4u
-#define LOTA_ENROLL_STATUS_UNKNOWN_SESSION 5u
-#define LOTA_ENROLL_STATUS_INTERNAL_ERROR 6u
-#define LOTA_ENROLL_STATUS_RATE_LIMITED 7u
-#define LOTA_ENROLL_STATUS_TOKEN_REJECTED 8u
+enum lota_enroll_status {
+	LOTA_ENROLL_STATUS_OK = 0,
+	LOTA_ENROLL_STATUS_BAD_REQUEST = 1,
+	LOTA_ENROLL_STATUS_EK_REJECTED = 2,
+	LOTA_ENROLL_STATUS_AIK_REJECTED = 3,
+	LOTA_ENROLL_STATUS_ACTIVATION_FAIL = 4,
+	LOTA_ENROLL_STATUS_UNKNOWN_SESSION = 5,
+	LOTA_ENROLL_STATUS_INTERNAL_ERROR = 6,
+	LOTA_ENROLL_STATUS_RATE_LIMITED = 7,
+	LOTA_ENROLL_STATUS_TOKEN_REJECTED = 8,
+};
 
 #endif /* LOTA_ENROLL_H */

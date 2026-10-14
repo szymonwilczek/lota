@@ -48,9 +48,16 @@ static const char *tmp_path(void)
 /*
  * Mint a self-signed P-256 certificate whose validity runs from now+before to
  * now+after (seconds), store it as DER at path.
+ *
+ * When spki_out is given, the DER SubjectPublicKeyInfo of the key the certificate
+ * was issued over is written there too -- the form tpm_get_aik_public() hands
+ * back, so a test can ask whether a certificate names a given key without a TPM.
+ *
  * Returns 0 on success.
  */
-static int write_test_cert(const char *path, long before, long after)
+static int write_test_cert_ex(const char *path, long before, long after,
+			      uint8_t *spki_out, size_t spki_cap,
+			      size_t *spki_len)
 {
 	EVP_PKEY *pkey = NULL;
 	X509 *x = NULL;
@@ -62,6 +69,18 @@ static int write_test_cert(const char *path, long before, long after)
 	pkey = EVP_EC_gen("P-256");
 	if (!pkey)
 		goto out;
+
+	if (spki_out) {
+		unsigned char *p = spki_out;
+		int spki_der_len = i2d_PUBKEY(pkey, NULL);
+
+		if (spki_der_len <= 0 || (size_t)spki_der_len > spki_cap)
+			goto out;
+		spki_der_len = i2d_PUBKEY(pkey, &p);
+		if (spki_der_len <= 0)
+			goto out;
+		*spki_len = (size_t)spki_der_len;
+	}
 	x = X509_new();
 	if (!x)
 		goto out;
@@ -102,6 +121,11 @@ out:
 	X509_free(x);
 	EVP_PKEY_free(pkey);
 	return ret;
+}
+
+static int write_test_cert(const char *path, long before, long after)
+{
+	return write_test_cert_ex(path, before, after, NULL, 0, NULL);
 }
 
 static void test_renew_due_decision(void)
@@ -182,6 +206,76 @@ static void test_null_args(void)
 	      "NULL remaining rejected");
 }
 
+/*
+ * A profile's handle, its AIK auth and its certificate must agree.
+ * When the key at the handle has been replaced, the only thing that noticed
+ * was the TPM refusing to sign -- which costs a dictionary-attack attempt to
+ * learn, every round, forever.
+ * This is the free question that answers it instead.
+ */
+static void test_certificate_names_the_key(void)
+{
+	const char *path = tmp_path();
+	uint8_t spki[512];
+	size_t spki_len = 0;
+
+	CHECK(write_test_cert_ex(path, -60, 3600, spki, sizeof(spki),
+				 &spki_len) == 0,
+	      "mint a cert and keep the key it was issued over");
+	CHECK(spki_len > 0, "the minted key exported an SPKI");
+	CHECK(aik_cert_matches_key(path, spki, spki_len) == 0,
+	      "a certificate matches the key it was issued over");
+	unlink(path);
+}
+
+static void test_a_replaced_key_is_rejected(void)
+{
+	const char *path = tmp_path();
+	uint8_t spki_a[512], spki_b[512];
+	size_t len_a = 0, len_b = 0;
+
+	/* two certificates, two keys: B's key against A's certificate */
+	CHECK(write_test_cert_ex(path, -60, 3600, spki_a, sizeof(spki_a),
+				 &len_a) == 0,
+	      "mint publisher A's certificate");
+	CHECK(write_test_cert_ex(path, -60, 3600, spki_b, sizeof(spki_b),
+				 &len_b) == 0,
+	      "mint a second certificate over a different key");
+
+	/* path now holds B's certificate, so A's key is the stranger */
+	CHECK(aik_cert_matches_key(path, spki_b, len_b) == 0,
+	      "the second certificate matches its own key");
+	CHECK(aik_cert_matches_key(path, spki_a, len_a) == -EKEYREJECTED,
+	      "a key the certificate does not name is refused");
+
+	/* a truncated key is not a match either, and must not read past it */
+	CHECK(aik_cert_matches_key(path, spki_b, len_b - 1) == -EKEYREJECTED,
+	      "a truncated key is refused rather than matched short");
+	unlink(path);
+}
+
+static void test_match_arguments_and_missing_cert(void)
+{
+	const char *path = tmp_path();
+	uint8_t spki[512];
+	size_t spki_len = 0;
+
+	CHECK(write_test_cert_ex(path, -60, 3600, spki, sizeof(spki),
+				 &spki_len) == 0,
+	      "mint a cert for the argument checks");
+
+	CHECK(aik_cert_matches_key(NULL, spki, spki_len) == -EINVAL,
+	      "NULL certificate path rejected");
+	CHECK(aik_cert_matches_key(path, NULL, spki_len) == -EINVAL,
+	      "NULL key rejected");
+	CHECK(aik_cert_matches_key(path, spki, 0) == -EINVAL,
+	      "empty key rejected");
+	unlink(path);
+
+	CHECK(aik_cert_matches_key(path, spki, spki_len) == -ENOENT,
+	      "a profile with no certificate stored is -ENOENT, not a match");
+}
+
 int main(void)
 {
 	test_renew_due_decision();
@@ -190,6 +284,9 @@ int main(void)
 	test_missing_is_enoent();
 	test_garbage_is_einval();
 	test_null_args();
+	test_certificate_names_the_key();
+	test_a_replaced_key_is_rejected();
+	test_match_arguments_and_missing_cert();
 
 	if (g_failures) {
 		fprintf(stderr, "\n%d test(s) FAILED\n", g_failures);

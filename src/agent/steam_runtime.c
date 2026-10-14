@@ -29,7 +29,9 @@
 
 #include "journal.h"
 
+#ifndef LOTA_GROUP_NAME
 #define LOTA_GROUP_NAME "lota"
+#endif
 
 /*
  * Classify the runtime version from PRESSURE_VESSEL_RUNTIME or
@@ -257,6 +259,25 @@ const char *steam_runtime_type_str(enum steam_runtime_type type)
 	return "invalid";
 }
 
+int steam_runtime_runtime_dir(char *buf, size_t bufsz)
+{
+	const char *xdg;
+	int n;
+
+	if (!buf || bufsz == 0)
+		return -EINVAL;
+
+	xdg = get_env_safe("XDG_RUNTIME_DIR", PATH_MAX);
+	if (!xdg)
+		return -ENOENT;
+
+	n = snprintf(buf, bufsz, "%s", xdg);
+	if (n < 0 || (size_t)n >= bufsz)
+		return -ENAMETOOLONG;
+
+	return 0;
+}
+
 int steam_runtime_container_socket_dir(char *buf, size_t bufsz)
 {
 	const char *xdg;
@@ -304,12 +325,23 @@ int steam_runtime_ensure_socket_dir(const char *dir)
 		return -EINVAL;
 
 	if (stat(dir, &st) == 0) {
-		if (S_ISDIR(st.st_mode))
-			return 0;
-		return -ENOTDIR;
+		if (!S_ISDIR(st.st_mode))
+			return -ENOTDIR;
+	} else if (mkdir(dir, 0750) < 0 && errno != EEXIST) {
+		return -errno;
 	}
 
-	if (mkdir(dir, 0750) < 0 && errno != EEXIST)
+	/*
+	 * A directory that is already there is repaired:
+	 * one left by an older agent carries that agent's mode and group,
+	 * and a title cannot reach a socket inside it.
+	 *
+	 * mkdir(2) masks the mode, and the daemon's unit sets UMask=0077,
+	 * which leaves 0700: a directory the lota group cannot enter,
+	 * so the socket inside it is one no title can reach.
+	 * Say the mode outright rather than let the caller's umask decide it.
+	 */
+	if (chmod(dir, 0750) < 0)
 		return -errno;
 
 	/*
@@ -328,19 +360,37 @@ int steam_runtime_ensure_socket_dir(const char *dir)
 		return -ENOTDIR;
 
 	/*
+	 * Only the daemon owns this directory, and only it can hand the group
+	 * away. An unprivileged caller -- the tooling, the tests -- has nothing
+	 * to give and must not fail for that.
+	 */
+	if (geteuid() != 0)
+		return 0;
+
+	struct group *grp = getgrnam(LOTA_GROUP_NAME);
+	if (!grp) {
+		lota_err("steam_runtime: no '%s' group, so %s stays root-only "
+			 "and no title can reach the socket in it",
+			 LOTA_GROUP_NAME, dir);
+		return -ENOENT;
+	}
+
+	/*
 	 * Group ownership: lota so members of the group can connect to the
 	 * socket once the agent binds it. AT_SYMLINK_NOFOLLOW keeps the
 	 * race-window guard (mkdir + lstat + fchownat are still distinct
 	 * syscalls, but the symlink check pins the inode the chown lands
 	 * on to the one lstat saw).
 	 */
-	struct group *grp = getgrnam(LOTA_GROUP_NAME);
-	if (grp) {
-		if (fchownat(AT_FDCWD, dir, (uid_t)-1, grp->gr_gid,
-			     AT_SYMLINK_NOFOLLOW) < 0) {
-			lota_warn("steam_runtime: chown(%s, -1, %d): %s", dir,
-				  grp->gr_gid, strerror(errno));
-		}
+	if (fchownat(AT_FDCWD, dir, (uid_t)-1, grp->gr_gid,
+		     AT_SYMLINK_NOFOLLOW) < 0) {
+		int ret = -errno;
+
+		lota_err("steam_runtime: chown(%s, -1, %d): %s -- the "
+			 "directory stays root-only, so no title can reach "
+			 "the socket in it",
+			 dir, grp->gr_gid, strerror(-ret));
+		return ret;
 	}
 
 	return 0;

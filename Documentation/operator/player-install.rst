@@ -37,7 +37,7 @@ Running it
 .. code-block:: sh
 
     sudo lota-install \
-        --ca-server ca.example --ca-port 8444 --ca-cert /path/to/ca-tls.crt \
+        --ca-server ca.example --ca-port 8444 --ca-cert /path/to/ca.crt \
         --verifier verifier.example
 
 CA/verifier endpoints and the trust material paths come from the operator's
@@ -133,8 +133,10 @@ What the stages do
    (ext4/btrfs/f2fs). On filesystems without verity (XFS, ZFS) it instead
    accepts a signed ``security.ima`` xattr enforced by IMA appraisal, which
    gives the same guarantee.
-#. **Initramfs PCR14 lock** -- regenerates the initramfs so the PCR14 lock
-   helper runs before any regular userspace. Requires a reboot.
+#. **Initramfs PCR14 lock** -- regenerates the initramfs of every installed
+   kernel so the PCR14 lock helper runs before any regular userspace, whichever
+   kernel is selected at boot. It reports work to do while any installed kernel
+   is missing the helper. Requires a reboot.
 #. **Kernel integrity floor** -- appends ``ima=on ima_appraise=fix`` (plus
    ``module.sig_enforce=1`` / ``lockdown=integrity`` where the running kernel
    lacks them) to the boot entries via grubby. The floor pins the appraisal
@@ -144,7 +146,10 @@ What the stages do
    udev so ``/dev/tpm*`` carries the LOTA-only label.
 #. **Reboot checkpoint** -- stops with exit 10 until the boot-chain changes are
    live and PCR 14 carries this boot's initramfs lock. PCR 14 only resets on a
-   hardware reset, so this cannot be skipped.
+   hardware reset, so this cannot be skipped. On a Secure Boot machine PCR 14 is
+   already non-zero before any of this -- shim measures the MOK variables into
+   it -- and the checkpoint says so rather than reporting state from an earlier
+   install.
 #. **Agent service** -- enables and starts ``lota-agent.service`` and its
    socket.
 #. **Enrollment** -- the TPM proves itself to a publisher's attestation CA
@@ -158,9 +163,33 @@ What the stages do
    the profile, and ``lota-agent --reenroll --ca-cert ...`` stays as a manual
    fallback.
 
+   Each publisher's key is derived from that publisher's identity, so the
+   certificates they hold carry different public keys and no two of them can
+   name this machine from what their own CA issued. That is the whole of the
+   guarantee, and it is worth being precise about the rest: a publisher who
+   runs a **verifier** also receives this host's boot evidence -- the firmware
+   and Secure Boot measurements, and the event log, which names the disk the
+   host boots from. Two publishers who both run verifiers can compare what
+   they each legitimately received and conclude it is one machine. A publisher
+   whose titles only check tokens receives none of that, and for them the
+   separation is complete. Choosing between the two is the privacy decision
+   in this design; ``lota-agent --list-publishers`` says which of them this
+   machine answers to and ``--forget-publisher`` takes one back.
+
 Run ends with a self-check (integrity floor, fs-verity, service, certificate,
-and -- when ``--verifier`` is given -- a full attestation round-trip) and a
-plain-language summary of exactly what telemetry leaves the machine.
+and an attestation round-trip) and a plain-language summary of exactly what
+telemetry leaves the machine.
+
+Who performs that round-trip depends on whether the host answers to
+publishers. On a machine with no publisher profiles, ``--verifier`` names the
+one verifier and the self-check runs a round against it; with no
+``--verifier``, the first title launch performs it. **On a machine that has
+publisher profiles, the publishers are the agent's target list** -- each with
+its own trust anchor, verifier and cadence -- so no single verifier stands for
+them and the self-check says so instead of naming one. That is not a host
+failing to attest: a ``--verifier`` passed alongside profiles is reported as
+unused, and a publisher whose titles gate on a session is reported to when one
+of their titles runs.
 
 What the operator must ship
 ===========================
@@ -184,6 +213,22 @@ A player install needs these inputs, all fail-closed:
   ``/usr/share/lota/selinux/lota.pp``, override with ``--selinux-module``) on
   SELinux-enforcing distributions.
 
+Every one of those options names a file, and a path reaches the installer only
+by being typed. One that cannot be read is refused before any stage runs,
+naming the option, the path and the reason::
+
+    lota-install: Cannot read --policy-pubkey /etc/lota/ploicy.pub (No such file or directory)
+
+The refusal is the same for ``--ca-cert``, ``--policy-pubkey``,
+``--selinux-module`` and ``--verity-manifest``, in ``--status`` as well as in a
+real run, so a typo never turns into a report about the host. It applies to
+what the operator typed and not to the built-in defaults: a packaged SELinux
+module that is not installed is a fact about the machine, and the stage that
+wants it says so.
+
+A run that finds the SELinux labels already in place says that the module named
+on the command line was not loaded.
+
 The RPM and DEB post-install hook drives this same stage engine
 (``lota-install --unattended``), so installing the package leaves the
 host-local half of bring-up already done and this command finishes the boot
@@ -199,6 +244,20 @@ host socket. Steam has to be told to preload it, which is one line pasted into
 that title's launch options -- ``lota-steam-setup`` prints the exact string,
 including the ``PRESSURE_VESSEL_FILESYSTEMS_RW`` entry the container manager
 needs to see the socket at all.
+
+A title running inside a Proton container reaches the agent through a
+per-user socket, and ``lota-steam-setup --register-uid`` records the account
+that needs one. The agent reads that setting when it starts, so it takes
+effect at the **next boot**: the command says so before it edits anything.
+Nothing stops the running agent to force it -- stopping the agent spends this
+boot's attestation and would cost a reboot regardless.
+
+After that boot the socket follows the login rather than the agent: it is
+created when the registered account logs in and released when its last
+session ends. ``lota-steam-setup --verify``, run from that account, is the
+check -- it reports the socket as ready only when this account can open it,
+and prints the ownership when it cannot, which is the case an account
+outside the ``lota`` group lands in.
 
 It is the only step in this document that asks anyone to type something, and
 it stays until Steam supports a compatibility-tool layer that composes with

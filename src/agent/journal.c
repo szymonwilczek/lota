@@ -67,6 +67,11 @@ _Bool journal_use_journal(void)
 	return g_use_journal;
 }
 
+void journal_detached_from_terminal(void)
+{
+	g_use_journal = true;
+}
+
 void journal_print(const char *file, int line, const char *func, int priority,
 		   const char *fmt, ...)
 {

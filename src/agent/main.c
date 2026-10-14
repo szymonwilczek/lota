@@ -36,6 +36,7 @@
 #include "dbus.h"
 #include "diagnostics.h"
 #include "event.h"
+#include "exit_status.h"
 #include "hardening.h"
 #include "hash_verify.h"
 #include "ipc.h"
@@ -45,6 +46,7 @@
 #include "sdnotify.h"
 #include "selftest.h"
 #include "shutdown.h"
+#include "startup_hint.h"
 #include "startup_policy.h"
 #include "status_flags.h"
 #include "tpm.h"
@@ -202,6 +204,76 @@ static int run_daemon(const struct run_daemon_params *params)
 		}
 	}
 
+	/*
+	 * Enforcement policy is built and checked here, before anything
+	 * this process does can cost something.
+	 *
+	 * The boot commitment can be spent once per boot: the register is not
+	 * resettable from userspace, so an instance that extends it and then
+	 * dies leaves every later instance unable to commit until the host
+	 * reboots.
+	 * A policy naming a path this process cannot see is an ordinary
+	 * configuration mistake and has to cost a failed start, not the boot.
+	 *
+	 * Everything that can refuse on the policy's own contents therefore
+	 * refuses before the extend, and agent_apply_startup_policy() below
+	 * still performs the same checks against the live maps.
+	 */
+	struct agent_startup_policy startup_policy = {
+		.mode = g_agent.mode,
+		.strict_mmap = strict_mmap,
+		.strict_exec = strict_exec,
+		.block_ptrace = block_ptrace,
+		.strict_modules = strict_modules,
+		.block_anon_exec = block_anon_exec,
+		.protect_pids = *cli_runtime_protect_pids(),
+		.protect_pid_count = *cli_runtime_protect_pid_count(),
+		.trust_libs = cli_runtime_trust_libs(),
+		.trust_lib_count = *cli_runtime_trust_lib_count(),
+		.allow_verity = cli_runtime_allow_verity(),
+		.allow_verity_count = *cli_runtime_allow_verity_count(),
+		.allow_mutable_rootfs = params->allow_mutable_rootfs,
+	};
+
+	ret = agent_validate_startup_policy(&startup_policy);
+	if (ret < 0) {
+		lota_err("Startup policy refused before the boot commitment "
+			 "was spent; the host keeps the agent it is running "
+			 "and PCR 14 is untouched. Correct the policy and "
+			 "start again.");
+		return ret;
+	}
+
+	/*
+	 * A mis-signed enforcement object is the same kind of refusal:
+	 * it needs only files on disk, so it is caught before the extend.
+	 * bpf_loader_load() still verifies the bytes it hands the kernel.
+	 */
+	ret = bpf_loader_verify_object(bpf_path, bpf_pubkey_path);
+	if (ret < 0) {
+		lota_err("Enforcement object %s refused before the boot "
+			 "commitment was spent: %s. The host keeps the agent "
+			 "it is running and PCR 14 is untouched. Re-sign the "
+			 "object for the configured key and start again.",
+			 bpf_path, strerror(-ret));
+		return ret;
+	}
+
+	/*
+	 * The object's integrity map is checked here, on the same side of
+	 * the extend as its signature: what the map holds is a property of
+	 * the file, and a file this build cannot read is a mistake an operator
+	 * makes, not a boot to spend.
+	 */
+	ret = bpf_loader_check_object_integrity_layout(bpf_path);
+	if (ret < 0) {
+		lota_err("Enforcement object %s refused before the boot "
+			 "commitment was spent. The host keeps the agent it is "
+			 "running and PCR 14 is untouched.",
+			 bpf_path);
+		return ret;
+	}
+
 	/* detect watchdog interval */
 	wd_enabled = sdnotify_watchdog_enabled(&wd_usec);
 	if (wd_enabled)
@@ -265,6 +337,27 @@ static int run_daemon(const struct run_daemon_params *params)
 	ipc_set_profiles(&g_agent.ipc_ctx, targets, target_count);
 	setup_container_listener(&g_agent.ipc_ctx, cfg);
 	setup_dbus(&g_agent.ipc_ctx);
+
+	/*
+	 * Logins happen after this point, and each one may carry a listener.
+	 * Two things say a login became bindable:
+	 * the runtime directory appearing (inotify) and the tmpfs logind mounts
+	 * over it landing (a mount-table change, which fires no inotify event
+	 * and is reported as EPOLLPRI on /proc/self/mountinfo).
+	 */
+	int watch_fd = container_watch_fd(&g_agent.container_watch);
+	if (watch_fd >= 0) {
+		ev.events = EPOLLIN;
+		ev.data.fd = watch_fd;
+		epoll_ctl(epoll_fd, EPOLL_CTL_ADD, watch_fd, &ev);
+	}
+
+	int mount_fd = container_watch_mount_fd(&g_agent.container_watch);
+	if (mount_fd >= 0) {
+		ev.events = EPOLLPRI | EPOLLERR;
+		ev.data.fd = mount_fd;
+		epoll_ctl(epoll_fd, EPOLL_CTL_ADD, mount_fd, &ev);
+	}
 
 	/* IPC epoll fd to main loop */
 	int ipc_fd = ipc_get_fd(&g_agent.ipc_ctx);
@@ -336,7 +429,7 @@ static int run_daemon(const struct run_daemon_params *params)
 					  "under %s (%s): enforcing without a "
 					  "publisher, tokens are signed with "
 					  "the host AIK",
-					  profile->dir, strerror(-ret));
+					  profile->dir, tpm_strerror(ret));
 				lota_warn("Enroll with the publisher to bind "
 					  "it: lota-agent --enroll --ca-cert "
 					  "%s",
@@ -367,6 +460,29 @@ static int run_daemon(const struct run_daemon_params *params)
 				 tpm_strerror(ret));
 			goto cleanup_tpm;
 		}
+
+		/*
+		 * The record predates per-publisher key derivation,
+		 * so the key it names is the one every publisher enrolled here
+		 * holds.
+		 * The daemon does not replace it: doing so would invalidate
+		 * the certificate that names it and leave the host unable to
+		 * attest without saying why.
+		 */
+		if (tpm_aik_key_is_shared(&g_agent.tpm_ctx)) {
+			lota_err("This publisher's attestation key was created "
+				 "before each publisher got a key of its own, "
+				 "so it is byte for byte the key every other "
+				 "publisher enrolled here holds. Run "
+				 "lota-agent --reenroll --ca-cert <their "
+				 "anchor> to replace it; the device pseudonym "
+				 "is derived from the key and moves with it.");
+			ret = -ENOTSUP;
+			goto cleanup_tpm;
+		}
+
+		attest_warn_cert_orphaned(profile,
+					  profile ? profile->id : NULL);
 
 		lota_info("Provisioning AIK");
 		ret = tpm_provision_aik(&g_agent.tpm_ctx);
@@ -435,22 +551,6 @@ static int run_daemon(const struct run_daemon_params *params)
 		  "applied)");
 	boot_state.bpf_loaded = true;
 
-	struct agent_startup_policy startup_policy = {
-		.mode = g_agent.mode,
-		.strict_mmap = strict_mmap,
-		.strict_exec = strict_exec,
-		.block_ptrace = block_ptrace,
-		.strict_modules = strict_modules,
-		.block_anon_exec = block_anon_exec,
-		.protect_pids = *cli_runtime_protect_pids(),
-		.protect_pid_count = *cli_runtime_protect_pid_count(),
-		.trust_libs = cli_runtime_trust_libs(),
-		.trust_lib_count = *cli_runtime_trust_lib_count(),
-		.allow_verity = cli_runtime_allow_verity(),
-		.allow_verity_count = *cli_runtime_allow_verity_count(),
-		.allow_mutable_rootfs = params->allow_mutable_rootfs,
-	};
-
 	/*
 	 * Write the full enforcement policy (mode + strict_* + block_* +
 	 * protected pids + verity allowlist) into lota_config / aux maps
@@ -492,6 +592,7 @@ static int run_daemon(const struct run_daemon_params *params)
 	ipc_update_status(&g_agent.ipc_ctx, agent_status_flags(&boot_state), 0);
 
 	sdnotify_ready();
+	daemon_notify_started(0);
 	sdnotify_status("Monitoring, mode=%s", mode_to_string(g_agent.mode));
 	lota_info("Monitoring binary executions (event-driven)");
 
@@ -518,6 +619,7 @@ static int run_daemon(const struct run_daemon_params *params)
 		.ipc_ctx = &g_agent.ipc_ctx,
 		.dbus_ctx = g_agent.dbus_ctx,
 		.bpf_ctx = &g_agent.bpf_ctx,
+		.container_watch = &g_agent.container_watch,
 		.running = &g_agent.running,
 	};
 	ret = agent_run_event_loop(&loop_ctx);
@@ -533,12 +635,13 @@ static int run_daemon(const struct run_daemon_params *params)
 		lota_info(
 			"Shutdown statistics: exec=%lu sent=%lu err=%lu drops=%lu "
 			"mod_blocked=%lu mmap_exec=%lu mmap_blocked=%lu "
-			"ptrace=%lu ptrace_blocked=%lu setuid=%lu bpf_blocked=%lu",
+			"ptrace=%lu ptrace_blocked=%lu setuid=%lu bpf_blocked=%lu "
+			"mount_blocked=%lu",
 			stats.total_execs, stats.events_sent, stats.errors,
 			stats.drops, stats.modules_blocked, stats.mmap_execs,
 			stats.mmap_blocked, stats.ptrace_attempts,
 			stats.ptrace_blocked, stats.setuid_events,
-			stats.bpf_syscall_blocked);
+			stats.bpf_syscall_blocked, stats.mounts_blocked);
 	}
 
 	{
@@ -589,6 +692,7 @@ cleanup_bpf:
 cleanup_tpm:
 	tpm_cleanup(&g_agent.tpm_ctx);
 	dbus_cleanup(g_agent.dbus_ctx);
+	container_watch_cleanup(&g_agent.container_watch);
 	ipc_cleanup(&g_agent.ipc_ctx);
 cleanup_epoll:
 	hash_verify_cleanup(&g_agent.hash_ctx);
@@ -600,7 +704,8 @@ cleanup_epoll:
 int main(int argc, char *argv[])
 {
 	struct cli_options opts;
-	struct lota_config cfg;
+	struct lota_config *cfg;
+	int pid_fd = -1;
 	int rc;
 
 	if (daemon_install_signals(&g_agent.running, &g_reload) < 0) {
@@ -618,21 +723,31 @@ int main(int argc, char *argv[])
 		return 1;
 	}
 
-	config_init(&cfg);
+	/*
+	 * The config is over a megabyte, so it is allocated, not held in this frame.
+	 * Every exit below runs through the cleanup at the bottom.
+	 */
+	cfg = config_new();
+	if (!cfg) {
+		fprintf(stderr, "Failed to allocate configuration\n");
+		return 1;
+	}
 
-	rc = cli_parse(argc, argv, &opts, &cfg);
-	if (rc == -1)
-		return 0; /* --help */
+	rc = cli_parse(argc, argv, &opts, cfg);
+	if (rc == -1) {
+		rc = 0; /* --help */
+		goto out;
+	}
 	if (rc != 0)
-		return rc;
+		goto out;
 
 	rc = cli_finalize_pin(&opts);
 	if (rc != 0)
-		return rc;
+		goto out;
 
-	rc = diagnostics_dispatch(&opts, &cfg);
+	rc = diagnostics_dispatch(&opts, cfg);
 	if (rc >= 0)
-		return rc;
+		goto out;
 
 	/*
 	 * Mode downgrade guard.
@@ -656,7 +771,8 @@ int main(int argc, char *argv[])
 			"the\n"
 			"downgrade explicitly.\n",
 			mode_to_string(g_agent.mode));
-		return 1;
+		rc = 1;
+		goto out;
 	}
 
 	if (opts.daemon_flag) {
@@ -664,24 +780,38 @@ int main(int argc, char *argv[])
 		if (dret < 0) {
 			fprintf(stderr, "Failed to daemonize: %s\n",
 				strerror(-dret));
-			return 1;
+			rc = 1;
+			goto out;
 		}
+		/*
+		 * stderr is /dev/null from here, and every refusal below is
+		 * one an operator has to read
+		 */
+		journal_detached_from_terminal();
 	}
 
-	int pid_fd = pidfile_create(opts.pid_file_path);
+	/*
+	 * every refusal from here down can be reached after --daemon
+	 * has detached stderr, so they go through the journal
+	 */
+	pid_fd = pidfile_create(opts.pid_file_path);
 	if (pid_fd == -EEXIST) {
-		fprintf(stderr,
-			"Another instance is already running (PID file locked)\n");
-		return 1;
+		char busy[512];
+
+		startup_busy_message(*cli_runtime_protect_pid_count() > 0, busy,
+				     sizeof(busy));
+		lota_err("%s", busy);
+		rc = 1;
+		goto out;
 	}
 	if (pid_fd < 0) {
-		fprintf(stderr, "Warning: Failed to create PID file: %s\n",
-			strerror(-pid_fd));
+		lota_warn("Warning: Failed to create PID file: %s",
+			  strerror(-pid_fd));
 		pid_fd = -1; /* non-fatal */
 	}
 
 	if (!opts.policy_pubkey_path || opts.policy_pubkey_path[0] == '\0') {
-		fprintf(stderr,
+		lota_err(
 			"ERROR: no key to verify the enforcement object "
 			"against.\n"
 			"The agent package ships one at " LOTA_ENFORCEMENT_PUBKEY_PATH
@@ -689,9 +819,9 @@ int main(int argc, char *argv[])
 			"a fleet that signs enforcement itself puts its key at " LOTA_POLICY_PUBKEY_OVERRIDE
 			"\n"
 			"or names one with policy_pubkey / "
-			"--policy-pubkey PATH.\n");
-		pidfile_remove(opts.pid_file_path, pid_fd);
-		return 1;
+			"--policy-pubkey PATH.");
+		rc = 1;
+		goto out_pidfile;
 	}
 
 	struct run_daemon_params run_params = {
@@ -705,9 +835,25 @@ int main(int argc, char *argv[])
 		.block_anon_exec = opts.block_anon_exec,
 		.allow_mutable_rootfs = opts.insecure_allow_mutable_rootfs != 0,
 		.config_path = opts.config_path,
-		.cfg = &cfg,
+		.cfg = cfg,
 	};
 	rc = run_daemon(&run_params);
+	/*
+	 * supervisor learns from the status alone whether starting again can
+	 * succeed, so the whole answer is produced in one place
+	 */
+	rc = lota_daemon_exit_status(rc, g_agent.tpm_ctx.boot_commitment_state);
+
+out_pidfile:
 	pidfile_remove(opts.pid_file_path, pid_fd);
+out:
+	config_free(cfg);
+	/*
+	 * Reached with a refusal before the daemon ever served,
+	 * and with the shutdown status after it did.
+	 * The first report is the one that counts, so a daemon that started
+	 * carries its own 0 and this call changes nothing.
+	 */
+	daemon_notify_started(rc);
 	return rc;
 }

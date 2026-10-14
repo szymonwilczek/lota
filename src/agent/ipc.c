@@ -8,8 +8,10 @@
 #include "attest_aggregate.h"
 #include "enroll.h"
 #include "ipc.h"
+#include "ipc_privilege.h"
 #include "ipc_payload.h"
 #include "protect_pids.h"
+#include "status_flags.h"
 #include "terminate_policy.h"
 
 #include <errno.h>
@@ -36,6 +38,8 @@
 #include "dbus.h"
 #include "journal.h"
 #include "quote.h"
+#include "attest.h"
+#include "token_gate.h"
 #include "tpm.h"
 #include "agent.h"
 #include "runtime_image_measure.h"
@@ -51,6 +55,17 @@
 #define IPC_CLIENT_FD_TOMB (-2)
 #define SOCKET_DIR "/run/lota"
 #define LOTA_GROUP_NAME "lota"
+
+/*
+ * Events any connected client may subscribe to.
+ *
+ * STATUS, ATTEST and MODE carry only what GET_STATUS returns to any caller,
+ * so pushing them exposes nothing new.
+ * PROFILE is left out: it says which titles hold a session with which publisher.
+ * Only the attestation loop needs it, and SYNC_ATTEST subscribes it implicitly.
+ */
+#define IPC_EVENT_PUBLIC \
+	(LOTA_IPC_EVENT_STATUS | LOTA_IPC_EVENT_ATTEST | LOTA_IPC_EVENT_MODE)
 
 /* Rate limiting: cap privileged PROTECT_PID updates per UID per window */
 #define PROTECT_PID_RATE_LIMIT 60 /* requests */
@@ -214,11 +229,20 @@ struct ipc_client {
 
 	/*
 	 * The publisher this connection speaks for, set by SET_PROFILE.
-	 * Borrowed from ctx->profiles, which the attestation loop owns for
-	 * longer than any connection lives.
+	 * Borrowed from ctx->profiles, which the attestation loop rebuilds
+	 * under a running connection whenever the list is reloaded.
 	 * Not const: binding and unbinding maintain that publisher's session count.
 	 */
 	struct attest_target *profile;
+
+	/*
+	 * The same publisher, named.
+	 * A title sends SET_PROFILE once, at connect time, so the pointer above
+	 * is the only thing a reload could restore it from -- and that pointer
+	 * is into the list being replaced. The identity outlives the list.
+	 * Empty when this connection named no publisher.
+	 */
+	char profile_id[LOTA_PROFILE_ID_LEN];
 
 	/*
 	 * This connection is the agent's own attestation loop, established by
@@ -652,6 +676,7 @@ static void client_destroy(struct ipc_context *ctx, struct ipc_client *client)
 		client->profile = NULL;
 		ctx->profiles_changed = true;
 	}
+	client->profile_id[0] = '\0';
 
 	while (*pp) {
 		if (*pp == client) {
@@ -690,35 +715,37 @@ static void build_error_response(struct ipc_client *client, uint32_t result)
 }
 
 /*
- * Privileged IPC commands require all of the following:
- * - same UID as the agent process (SO_PEERCRED authenticated),
- * - stable PID identity (pid + start_time_ticks still matches),
- * - executable fs-verity digest present in current policy allowlist.
+ * Gather the inputs the privileged-IPC rule decides on;
+ * the rule itself is ipc_privilege_granted() in ipc_privilege.h
  */
 static int ipc_client_is_privileged(struct ipc_context *ctx,
 				    const struct ipc_client *client)
 {
 	uint64_t current_ticks = 0;
+	bool pid_identity_ok;
 
 	if (!ctx || !client)
 		return 0;
 
-	if (client->peer_uid != geteuid())
+	pid_identity_ok = client->peer_start_time_ticks != 0 &&
+			  read_pid_start_time_ticks(client->peer_pid,
+						    &current_ticks) >= 0 &&
+			  current_ticks == client->peer_start_time_ticks;
+
+	/*
+	 * Settle the cheap checks before measuring the peer's executable:
+	 * that reads /proc and hashes a file, and a caller the uid check
+	 * already refused must not be able to make the agent do it.
+	 */
+	if (!ipc_privilege_granted(client->peer_uid == geteuid(),
+				   pid_identity_ok, 0, true))
 		return 0;
 
-	if (client->peer_start_time_ticks == 0)
-		return 0;
-
-	if (read_pid_start_time_ticks(client->peer_pid, &current_ticks) < 0)
-		return 0;
-
-	if (current_ticks != client->peer_start_time_ticks)
-		return 0;
-
-	if (!ipc_client_has_trusted_executable(client))
-		return 0;
-
-	return 1;
+	return ipc_privilege_granted(
+		       true, true, g_agent.policy_verity_digest_count,
+		       ipc_client_has_trusted_executable(client) != 0) ?
+		       1 :
+		       0;
 }
 
 /*
@@ -746,9 +773,6 @@ static int ipc_client_is_privileged(struct ipc_context *ctx,
  * it asks whether the peer's executable is on the operator's verity allowlist,
  * which is empty on default install, so it would refuse the attestation loop
  * on every stock host.
- *
- * ipc_client_is_agent_self() asks for one process, which the two units are not
- * by design.
  */
 static int ipc_client_is_agent_peer(const struct ipc_client *client)
 {
@@ -770,20 +794,24 @@ static int ipc_client_is_agent_peer(const struct ipc_client *client)
 }
 
 /*
- * SUBSCRIBE is restricted to the exact agent process identity.
+ * Ask the event loop to write what this client now has queued.
  *
- * Same-UID authorization is too broad when the agent runs as root because it
- * allows any root peer to passively monitor enforcement transitions.
+ * Nothing leaves the daemon without EPOLLOUT, and a client's interest is EPOLLIN
+ * alone between frames. A response is armed by the pass that built it;
+ * a notification is built outside that pass -- by another connection opening
+ * a session. The attestation loop, which sleeps on exactly that frame,
+ * read the silence as an interval with nothing to do.
  */
-static int ipc_client_is_agent_self(const struct ipc_client *client)
+static void client_arm_send(struct ipc_context *ctx, struct ipc_client *client)
 {
-	if (!client)
-		return 0;
+	struct epoll_event ev;
 
-	if (client->peer_uid != geteuid())
-		return 0;
+	if (!ctx || !client || ctx->epoll_fd < 0 || client->send_len == 0)
+		return;
 
-	return client->peer_pid == getpid();
+	ev.events = EPOLLIN | EPOLLOUT;
+	ev.data.fd = client->fd;
+	epoll_ctl(ctx->epoll_fd, EPOLL_CTL_MOD, client->fd, &ev);
 }
 
 static void build_notification(struct ipc_context *ctx,
@@ -809,6 +837,8 @@ static void build_notification(struct ipc_context *ctx,
 
 	client->send_len = LOTA_IPC_RESPONSE_SIZE + sizeof(*notify);
 	client->send_offset = 0;
+
+	client_arm_send(ctx, client);
 }
 
 static void push_notify(struct ipc_context *ctx, struct ipc_client *client,
@@ -938,6 +968,15 @@ static bool runtime_coverage_is_full(void)
 	return true;
 }
 
+uint32_t ipc_host_status_flags(const struct ipc_context *ctx)
+{
+	if (!ctx)
+		return 0;
+
+	return lota_status_fold_coverage(ctx->status_flags,
+					 runtime_coverage_is_full());
+}
+
 static void handle_get_status(struct ipc_context *ctx,
 			      struct ipc_client *client)
 {
@@ -952,10 +991,7 @@ static void handle_get_status(struct ipc_context *ctx,
 	resp->payload_len = sizeof(*status);
 
 	client_attestation_view(ctx, client, &flags, &valid_until);
-	if (runtime_coverage_is_full())
-		flags |= LOTA_STATUS_IMAGE_FULLY_MEASURED;
-	else
-		flags &= ~(uint32_t)LOTA_STATUS_IMAGE_FULLY_MEASURED;
+	flags = lota_status_fold_coverage(flags, runtime_coverage_is_full());
 
 	status = (void *)(client->send_buf + LOTA_IPC_RESPONSE_SIZE);
 	status->flags = flags;
@@ -1010,7 +1046,8 @@ static void handle_get_token(struct ipc_context *ctx, struct ipc_client *client,
 
 	client_attestation_view(ctx, client, &view_flags, &view_valid_until);
 
-	if (!(view_flags & LOTA_STATUS_ATTESTED)) {
+	if (token_gate_needs_attested(view_flags) &&
+	    !(view_flags & LOTA_STATUS_ATTESTED)) {
 		fail = true;
 		fail_code = LOTA_IPC_ERR_NOT_ATTESTED;
 		goto out;
@@ -1052,6 +1089,25 @@ static void handle_get_token(struct ipc_context *ctx, struct ipc_client *client,
 		goto out;
 	}
 
+	/*
+	 * Signing is the whole of a token, so a server with no TPM has nothing
+	 * to give: an unsigned token is not evidence and is never issued.
+	 * Said here, before the protected set is reaped and every protected
+	 * process measured, because none of that work can change the answer.
+	 * It is reported as its own code and not as a TPM failure: nothing
+	 * failed, and no retry will help.
+	 *
+	 * After the rate limiters, so a caller that asks in a loop is throttled.
+	 */
+	if (!ipc_can_issue_tokens(ctx)) {
+		lota_err(
+			"Refusing GET_TOKEN for pid=%d: no TPM on this agent, and an unsigned token is not evidence",
+			client->peer_pid);
+		fail = true;
+		fail_code = LOTA_IPC_ERR_NO_TPM;
+		goto out;
+	}
+
 	if (payload_len >= sizeof(req_local)) {
 		memcpy(&req_local, payload, sizeof(req_local));
 		has_req = true;
@@ -1063,6 +1119,16 @@ static void handle_get_token(struct ipc_context *ctx, struct ipc_client *client,
 	 * not the host's aggregate,
 	 * so a relying party reads its own answer */
 	token->valid_until = view_valid_until;
+
+	/*
+	 * A publisher who runs no verifier has no round to take a window from,
+	 * and a zero one reads as expired to every relying party.
+	 * The agent bounds its own freshness instead; the status word still
+	 * answers zero, because that is a verdict window and there is no verdict.
+	 */
+	if (view_flags & LOTA_STATUS_TOKEN_ONLY)
+		token->valid_until =
+			(uint64_t)time(NULL) + TOKEN_ONLY_VALIDITY_SEC;
 	token->flags = view_flags;
 	token->pcr_mask = ctx->quote_pcr_mask;
 
@@ -1079,7 +1145,7 @@ static void handle_get_token(struct ipc_context *ctx, struct ipc_client *client,
 		if (ret < 0) {
 			lota_err(
 				"cannot bind publisher profile for GET_TOKEN: %s",
-				strerror(-ret));
+				tpm_strerror(ret));
 			fail = true;
 			fail_code = LOTA_IPC_ERR_INTERNAL;
 			goto out;
@@ -1171,12 +1237,46 @@ static void handle_get_token(struct ipc_context *ctx, struct ipc_client *client,
 			if (ret < 0) {
 				lota_rt_failure_reason(&mfail, ret, reason,
 						       sizeof(reason));
-				lota_err("runtime image measurement failed for "
-					 "pid=%u: %s",
-					 runtime_pids[i], reason);
-				fail = true;
-				fail_code = LOTA_IPC_ERR_INTERNAL;
-				goto out;
+
+				/*
+				 * Only the caller's own executable decides
+				 * the caller's token.
+				 * Any local program may protect itself,
+				 * so folding somebody else's unmeasurable
+				 * binary into this refusal stops every title
+				 * on the machine until that program exits.
+				 */
+				if (token_gate_failure_is_fatal(
+					    (pid_t)runtime_pids[i],
+					    client->peer_pid)) {
+					lota_err(
+						"runtime image measurement failed for "
+						"the requesting pid=%u: %s",
+						runtime_pids[i], reason);
+					fail = true;
+					fail_code =
+						LOTA_IPC_ERR_UNMEASURABLE_SELF;
+					goto out;
+				}
+
+				/*
+				 * Absent from the fold:
+				 * the digest stays a zero for that process,
+				 * the coverage flag carries the gap,
+				 * and a publisher who requires full coverage
+				 * refuses the token on that flag.
+				 */
+				memset(image_digests[i], 0,
+				       sizeof(image_digests[i]));
+				lota_warn(
+					"runtime image measurement failed for pid=%u, "
+					"which is not the caller (pid=%d): the token "
+					"reports partial coverage rather than "
+					"refusing every title on this host: %s",
+					runtime_pids[i], client->peer_pid,
+					reason);
+				image_fully_measured = false;
+				continue;
 			}
 			if (cov.unmeasurable > 0) {
 				lota_rt_failure_reason(&mfail, mfail.err,
@@ -1210,10 +1310,8 @@ static void handle_get_token(struct ipc_context *ctx, struct ipc_client *client,
 	 * Host with no protected process has nothing left unmeasured,
 	 * which is the empty case of the same statement.
 	 */
-	if (image_fully_measured)
-		token->flags |= LOTA_STATUS_IMAGE_FULLY_MEASURED;
-	else
-		token->flags &= ~(uint32_t)LOTA_STATUS_IMAGE_FULLY_MEASURED;
+	token->flags =
+		lota_status_fold_coverage(token->flags, image_fully_measured);
 
 	memcpy(token->runtime_protect_digest, runtime_protect_digest,
 	       sizeof(token->runtime_protect_digest));
@@ -1226,13 +1324,6 @@ static void handle_get_token(struct ipc_context *ctx, struct ipc_client *client,
 		memcpy(token->client_nonce, req_local.nonce, 32);
 	else
 		memset(token->client_nonce, 0, 32);
-
-	/* TPM context is required - refuse to issue unsigned tokens */
-	if (!ctx->tpm) {
-		fail = true;
-		fail_code = LOTA_IPC_ERR_TPM_FAILURE;
-		goto out;
-	}
 
 	ret = lota_compute_token_quote_nonce(
 		token->valid_until, token->flags, token->pcr_mask,
@@ -1329,7 +1420,7 @@ out:
 		if (rb < 0)
 			lota_warn("cannot restore the default publisher "
 				  "binding: %s",
-				  strerror(-rb));
+				  tpm_strerror(rb));
 	}
 	ipc_secure_bzero(binding_nonce, sizeof(binding_nonce));
 	ipc_secure_bzero(runtime_protect_digest,
@@ -1407,6 +1498,8 @@ static void handle_set_profile(struct ipc_context *ctx,
 		}
 
 		client->profile = &ctx->profiles[i];
+		snprintf(client->profile_id, sizeof(client->profile_id), "%s",
+			 ctx->profiles[i].paths.id);
 		ctx->profiles[i].sessions++;
 		ctx->profiles[i].session_changed = true;
 		ctx->profiles_changed = true;
@@ -1554,6 +1647,37 @@ static void recompute_host_attestation(struct ipc_context *ctx)
 }
 
 /*
+ * Adopt the attestation loop's counters and announce any round they show.
+ *
+ * The loop sends running totals, not events, so a round is seen as a counter
+ * going up. That raises the ATTEST event for subscribers and the AttestationResult
+ * D-Bus signal. Both counters can rise in one sync when the loop reports several
+ * publishers, so pass and fail are signalled separately.
+ * A counter that drops, as after a loop restart, is adopted silently.
+ */
+static void adopt_attest_counters(struct ipc_context *ctx,
+				  const struct lota_ipc_attest_sync *hdr)
+{
+	bool passed = hdr->attest_count > ctx->attest_count;
+	bool failed = hdr->fail_count > ctx->fail_count;
+
+	ctx->attest_count = hdr->attest_count;
+	ctx->fail_count = hdr->fail_count;
+	if (hdr->last_attest_time)
+		ctx->last_attest_time = hdr->last_attest_time;
+
+	if (!passed && !failed)
+		return;
+
+	notify_subscribers(ctx, LOTA_IPC_EVENT_ATTEST);
+
+	if (passed)
+		dbus_emit_attestation_result(ctx->dbus, true);
+	if (failed)
+		dbus_emit_attestation_result(ctx->dbus, false);
+}
+
+/*
  * Handle SYNC_ATTEST -- the state exchange with the agent's attestation loop.
  *
  * One round trip, both directions:
@@ -1663,11 +1787,7 @@ static void handle_sync_attest(struct ipc_context *ctx,
 	client->event_mask = LOTA_IPC_EVENT_PROFILE;
 
 	recompute_host_attestation(ctx);
-
-	ctx->attest_count = hdr.attest_count;
-	ctx->fail_count = hdr.fail_count;
-	if (hdr.last_attest_time)
-		ctx->last_attest_time = hdr.last_attest_time;
+	adopt_attest_counters(ctx, &hdr);
 
 	if (ctx->on_attest_sync)
 		ctx->on_attest_sync(ctx->on_attest_sync_user);
@@ -1678,6 +1798,10 @@ static void handle_sync_attest(struct ipc_context *ctx,
  *
  * Registers or cancels per-connection push notifications.
  * event_mask = 0 cancels any existing subscription.
+ *
+ * Any connected client may subscribe. Bits the caller may not have are dropped,
+ * so a title asking for everything gets what is meant for it;
+ * the request fails only if nothing is left.
  */
 static void handle_subscribe(struct ipc_context *ctx, struct ipc_client *client,
 			     const uint8_t *payload, uint32_t payload_len)
@@ -1685,13 +1809,6 @@ static void handle_subscribe(struct ipc_context *ctx, struct ipc_client *client,
 	struct lota_ipc_response *resp = (void *)client->send_buf;
 	struct lota_ipc_subscribe_request sub;
 	(void)ctx;
-
-	if (!ipc_client_is_agent_self(client)) {
-		lota_warn("SUBSCRIBE denied for uid=%d pid=%d",
-			  client->peer_uid, client->peer_pid);
-		build_error_response(client, LOTA_IPC_ERR_ACCESS_DENIED);
-		return;
-	}
 
 	if (payload_len < sizeof(sub)) {
 		build_error_response(client, LOTA_IPC_ERR_BAD_REQUEST);
@@ -1706,8 +1823,18 @@ static void handle_subscribe(struct ipc_context *ctx, struct ipc_client *client,
 		client->notify_pending = false;
 		client->pending_events = 0;
 	} else {
+		uint32_t mask = sub.event_mask;
+
+		if (!client->attest_peer)
+			mask &= IPC_EVENT_PUBLIC;
+
+		if (mask == 0) {
+			build_error_response(client, LOTA_IPC_ERR_BAD_REQUEST);
+			return;
+		}
+
 		client->subscribed = true;
-		client->event_mask = sub.event_mask;
+		client->event_mask = mask;
 	}
 
 	resp->magic = LOTA_IPC_MAGIC;
@@ -2041,7 +2168,24 @@ static void handle_protect_pid_update(struct ipc_context *ctx,
 		return;
 	}
 
-	if (!g_agent.policy_snapshot_set || !g_agent.policy_digest_set) {
+	/*
+	 * Runtime PID policy is a change to what the enforcement object holds,
+	 * and it is judged against the snapshot the startup policy left behind.
+	 * An agent that applied none has nothing to change and nothing to judge
+	 * against, which is its ordinary state and not a broken daemon.
+	 */
+	if (!g_agent.policy_snapshot_set) {
+		lota_warn(
+			"Refusing PROTECT_PID for uid=%d pid=%d target=%u: this agent applied no startup policy, so it enforces nothing and has no runtime PID policy to change",
+			client->peer_uid, client->peer_pid, pid);
+		build_error_response(client, LOTA_IPC_ERR_NO_ENFORCEMENT);
+		return;
+	}
+
+	if (!g_agent.policy_digest_set) {
+		lota_err(
+			"Refusing PROTECT_PID for uid=%d pid=%d target=%u: the startup policy is applied but its digest is unset, which nothing should be able to produce",
+			client->peer_uid, client->peer_pid, pid);
 		build_error_response(client, LOTA_IPC_ERR_INTERNAL);
 		return;
 	}
@@ -2540,12 +2684,7 @@ have_request:
 	process_request(ctx, client);
 
 	/* arm EPOLLOUT so the event loop will drive the send */
-	if (client->send_len > 0) {
-		struct epoll_event ev;
-		ev.events = EPOLLIN | EPOLLOUT;
-		ev.data.fd = client->fd;
-		epoll_ctl(ctx->epoll_fd, EPOLL_CTL_MOD, client->fd, &ev);
-	}
+	client_arm_send(ctx, client);
 
 	/* preserve any leftover bytes from the next pipelined request */
 	{
@@ -2604,6 +2743,22 @@ static int handle_client_write(struct ipc_context *ctx,
 			client->pending_events = 0;
 			build_notification(ctx, client, pending);
 		}
+
+		/*
+		 * A request that arrived while the previous frame was going out.
+		 *
+		 * handle_client_read() defers it, and this is the only place
+		 * that can take it up again: the bytes are already in the receive
+		 * buffer, so no further EPOLLIN is coming to announce them.
+		 * Left there, the peer waits for an answer to a request this
+		 * process has already read -- which is what made the attestation
+		 * loop time out and drop a connection the daemon still
+		 * considered live.
+		 */
+		if (client->send_len == 0 &&
+		    client->recv_len >= LOTA_IPC_REQUEST_SIZE &&
+		    handle_client_read(ctx, client) < 0)
+			return -1;
 
 		/* disarm EPOLLOUT if nothing left to send */
 		if (client->send_len == 0) {
@@ -3064,6 +3219,19 @@ void ipc_set_tpm(struct ipc_context *ctx, struct tpm_context *tpm,
 	ctx->quote_pcr_mask = pcr_mask;
 }
 
+bool ipc_can_issue_tokens(const struct ipc_context *ctx)
+{
+	return ctx && ctx->tpm;
+}
+
+const char *ipc_token_capability_str(const struct ipc_context *ctx)
+{
+	if (ipc_can_issue_tokens(ctx))
+		return "Tokens are signed by the TPM AIK.";
+
+	return "GET_TOKEN is refused: signing needs a TPM, and an unsigned token is never issued. Use --test-signed for tokens.";
+}
+
 void ipc_set_attest_sync_hook(struct ipc_context *ctx, void (*fn)(void *),
 			      void *user)
 {
@@ -3084,15 +3252,56 @@ void ipc_set_profiles(struct ipc_context *ctx, struct attest_target *profiles,
 	ctx->profile_count = profiles ? count : 0;
 
 	/*
-	 * connection outlives reload of this list only in theory today
-	 * (the loop sets it once), but client holding a pointer into a list that
-	 * has gone away would be use-after-free, so drop the bindings rather than
-	 * trusting the caller never re-registers
+	 * Every binding points into the list being replaced, so all of them
+	 * are dropped first: keeping one would be a use-after-free the moment
+	 * the caller frees what it rebuilt. Session counts go with them,
+	 * and are rebuilt below from the connections that survive.
 	 */
 	for (struct ipc_client *c = ctx->client_list; c; c = c->next)
 		c->profile = NULL;
 	for (size_t i = 0; i < ctx->profile_count; i++)
 		ctx->profiles[i].sessions = 0;
+
+	/*
+	 * A title sends SET_PROFILE once and is playing by the time the list is
+	 * reloaded, so nothing re-binds it: the connection is re-resolved here
+	 * by the publisher it named, or it is left unbound because that
+	 * publisher is no longer configured -- which is a change somebody made
+	 * on this machine, and is said out loud.
+	 */
+	for (struct ipc_client *c = ctx->client_list; c; c = c->next) {
+		if (!c->profile_id[0])
+			continue;
+
+		for (size_t i = 0; i < ctx->profile_count; i++) {
+			if (!ctx->profiles[i].has_profile)
+				continue;
+			if (strcmp(ctx->profiles[i].paths.id, c->profile_id) !=
+			    0)
+				continue;
+
+			c->profile = &ctx->profiles[i];
+			ctx->profiles[i].sessions++;
+			break;
+		}
+
+		if (!c->profile) {
+			lota_info(
+				"connection pid=%d named publisher %s, which the "
+				"reloaded configuration no longer holds; it is "
+				"unbound and nothing is reported for them",
+				c->peer_pid, c->profile_id);
+			c->profile_id[0] = '\0';
+		}
+	}
+
+	/*
+	 * The loop learns the session counts on its next sync,
+	 * and the counts it is holding are the ones from before the rebuild.
+	 */
+	for (size_t i = 0; i < ctx->profile_count; i++)
+		ctx->profiles[i].session_changed = true;
+	ctx->profiles_changed = true;
 }
 
 /*
@@ -3128,6 +3337,18 @@ int ipc_add_listener(struct ipc_context *ctx, const char *socket_path)
 	if (slot < 0)
 		return -ENOSPC;
 
+	/*
+	 * Same check as the primary socket: a path another agent still serves
+	 * is not ours to take.
+	 * One nothing answers on is a leftover from an unclean stop and is safe
+	 * to unlink.
+	 */
+	if (socket_has_live_listener(socket_path)) {
+		lota_err("%s already has a listener; refusing to take it over",
+			 socket_path);
+		return -EADDRINUSE;
+	}
+
 	unlink(socket_path);
 
 	fd = socket(AF_UNIX, SOCK_STREAM, 0);
@@ -3159,12 +3380,34 @@ int ipc_add_listener(struct ipc_context *ctx, const char *socket_path)
 		close(fd);
 		return ret;
 	}
+
+	/*
+	 * The socket is bound 0660, so its group is what lets a title connect
+	 * at all. A socket nobody but root can open is not a listener a caller
+	 * can use, so a failure here refuses.
+	 * The daemon needs CAP_CHOWN for this; without it the chown returns
+	 * EPERM and the message says so.
+	 */
 	{
 		struct group *grp = getgrnam(LOTA_GROUP_NAME);
-		if (grp) {
-			if (chown(socket_path, 0, grp->gr_gid) < 0)
-				lota_warn("chown(%s) failed: %s", socket_path,
-					  strerror(errno));
+
+		if (!grp) {
+			lota_err(
+				"no '%s' group: %s would be reachable by root alone",
+				LOTA_GROUP_NAME, socket_path);
+			close(fd);
+			unlink(socket_path);
+			return -ENOENT;
+		}
+
+		if (chown(socket_path, 0, grp->gr_gid) < 0) {
+			ret = -errno;
+			lota_err(
+				"chown(%s) failed: %s -- the socket would be reachable by root alone",
+				socket_path, strerror(-ret));
+			close(fd);
+			unlink(socket_path);
+			return ret;
 		}
 	}
 
@@ -3191,6 +3434,33 @@ int ipc_add_listener(struct ipc_context *ctx, const char *socket_path)
 
 	lota_info("IPC extra listener on %s", socket_path);
 	return 0;
+}
+
+int ipc_remove_listener(struct ipc_context *ctx, const char *socket_path)
+{
+	if (!ctx || !socket_path || !socket_path[0])
+		return -EINVAL;
+
+	for (int i = 0; i < IPC_MAX_EXTRA_LISTENERS; i++) {
+		if (ctx->extra[i].fd < 0 ||
+		    strcmp(ctx->extra[i].path, socket_path) != 0)
+			continue;
+
+		if (ctx->epoll_fd >= 0)
+			epoll_ctl(ctx->epoll_fd, EPOLL_CTL_DEL,
+				  ctx->extra[i].fd, NULL);
+		close(ctx->extra[i].fd);
+		ctx->extra[i].fd = -1;
+		unlink(ctx->extra[i].path);
+		ctx->extra[i].path[0] = '\0';
+		if (ctx->extra_count > 0)
+			ctx->extra_count--;
+
+		lota_info("IPC extra listener %s removed", socket_path);
+		return 0;
+	}
+
+	return -ENOENT;
 }
 
 int ipc_is_listener(struct ipc_context *ctx, int fd)

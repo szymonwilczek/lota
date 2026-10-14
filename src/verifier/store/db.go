@@ -133,7 +133,8 @@ var migrations = []migration{
 				lfa_review_pending       INTEGER DEFAULT 0,
 				tenant                   TEXT NOT NULL DEFAULT 'default',
 				agent_hash_repin_count   INTEGER DEFAULT 0,
-				last_agent_hash_repin_at TIMESTAMP
+				last_agent_hash_repin_at TIMESTAMP,
+				kernel_hash              BLOB
 			);
 
 			CREATE INDEX idx_baselines_tenant ON baselines(tenant);
@@ -193,7 +194,8 @@ var migrations = []migration{
 				pcr14       TEXT NOT NULL DEFAULT '',
 				details     TEXT NOT NULL DEFAULT '',
 				remote_addr TEXT NOT NULL DEFAULT '',
-				tenant      TEXT NOT NULL DEFAULT 'default'
+				tenant      TEXT NOT NULL DEFAULT 'default',
+				kernel_hash TEXT NOT NULL DEFAULT ''
 			);
 
 			CREATE INDEX idx_attestation_log_timestamp ON attestation_log(timestamp);

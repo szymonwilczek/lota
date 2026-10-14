@@ -127,7 +127,15 @@ func run(listen string, cfg *runConfig, log *slog.Logger) error {
 	// -ca-key is required only when no token is configured
 	if cfg.pkcs11.requested() {
 		if cfg.caKeyPath != "" {
-			return fmt.Errorf("specify either -ca-key or -ca-key-pkcs11-*, not both")
+			return fmt.Errorf("specify either -ca-key or -ca-key-pkcs11-*, not both (given: -ca-key, %s)",
+				cfg.pkcs11.flagsGiven())
+		}
+
+		// A selector names a key on a token nothing has been told to open,
+		// so it is a typo or a forgotten flag. Say which.
+		if cfg.pkcs11.module == "" {
+			return fmt.Errorf("-ca-key-pkcs11-module is required with %s",
+				cfg.pkcs11.flagsGiven())
 		}
 	} else {
 		required["ca-key"] = cfg.caKeyPath
@@ -179,15 +187,16 @@ func run(listen string, cfg *runConfig, log *slog.Logger) error {
 			"flag", "-ca-key", "doc", "Documentation/operator/production-bringup/index.rst")
 	}
 
-	var ekRootPEMs [][]byte
+	var ekRootPEMs, ekIntermediatePEMs [][]byte
 	// operator-provisioned, pin-enforced bundle is the trust baseline
 	// -ek-root adds operator-supplied roots (e.g. a swtpm CA in the demo tor) on top
 	if cfg.ekRootBundle != "" {
-		bundlePEMs, err := ca.LoadEKRootBundle(cfg.ekRootBundle)
+		bundle, err := ca.LoadEKRootBundle(cfg.ekRootBundle)
 		if err != nil {
 			return fmt.Errorf("load ek-root-bundle %s: %w", cfg.ekRootBundle, err)
 		}
-		ekRootPEMs = append(ekRootPEMs, bundlePEMs...)
+		ekRootPEMs = append(ekRootPEMs, bundle.Roots...)
+		ekIntermediatePEMs = append(ekIntermediatePEMs, bundle.Intermediates...)
 	}
 	for _, path := range cfg.ekRoots {
 		data, err := os.ReadFile(path)
@@ -203,12 +212,13 @@ func run(listen string, cfg *runConfig, log *slog.Logger) error {
 	}
 
 	issuer, err := ca.NewIssuer(ca.IssuerConfig{
-		CACertPEM:  caCertPEM,
-		CAKeyPEM:   caKeyPEM,
-		CASigner:   caSigner,
-		EKRootPEMs: ekRootPEMs,
-		EKCRLPaths: cfg.ekCRLs,
-		AIKCertTTL: cfg.aikCertTTL,
+		CACertPEM:          caCertPEM,
+		CAKeyPEM:           caKeyPEM,
+		CASigner:           caSigner,
+		EKRootPEMs:         ekRootPEMs,
+		EKIntermediatePEMs: ekIntermediatePEMs,
+		EKCRLPaths:         cfg.ekCRLs,
+		AIKCertTTL:         cfg.aikCertTTL,
 	})
 	if err != nil {
 		return fmt.Errorf("issuer: %w", err)
@@ -296,7 +306,8 @@ func run(listen string, cfg *runConfig, log *slog.Logger) error {
 	}()
 
 	log.Info("lota-attest-ca listening", "address", ln.Addr().String(),
-		"ek_roots", len(ekRootPEMs), "ek_crls", issuer.EKCRLCount(),
+		"ek_roots", len(ekRootPEMs), "ek_intermediates", len(ekIntermediatePEMs),
+		"ek_crls", issuer.EKCRLCount(),
 		"aik_cert_ttl", cfg.aikCertTTL.String())
 	return srv.Serve(ctx, ln)
 }

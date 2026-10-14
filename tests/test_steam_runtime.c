@@ -591,6 +591,40 @@ static void test_ensure_dir_creates(void)
 	PASS();
 }
 
+/*
+ * Daemon runs under a unit that sets UMask=0077,
+ * and a directory the group cannot enter is a socket no title can reach.
+ */
+static void test_ensure_dir_mode_under_restrictive_umask(void)
+{
+	char dir[PATH_MAX];
+	struct stat st;
+	mode_t old_umask;
+	int ret;
+
+	TEST("ensure_socket_dir: mode 0750 even under umask 0077");
+
+	snprintf(dir, sizeof(dir), "%s/lota_test_umask_dir", tmpdir);
+
+	old_umask = umask(0077);
+	ret = steam_runtime_ensure_socket_dir(dir);
+	umask(old_umask);
+
+	if (ret != 0) {
+		FAIL("returned error");
+		return;
+	}
+	if (stat(dir, &st) != 0) {
+		FAIL("dir does not exist");
+		return;
+	}
+	if ((st.st_mode & 0777) != 0750) {
+		FAIL("umask decided the mode, so the group is locked out");
+		return;
+	}
+	PASS();
+}
+
 static void test_ensure_dir_exists(void)
 {
 	TEST("ensure_socket_dir: succeeds if directory already exists");
@@ -721,6 +755,7 @@ int main(void)
 
 	/* ensure_socket_dir */
 	test_ensure_dir_creates();
+	test_ensure_dir_mode_under_restrictive_umask();
 	test_ensure_dir_exists();
 	test_ensure_dir_not_a_dir();
 	test_ensure_dir_null();

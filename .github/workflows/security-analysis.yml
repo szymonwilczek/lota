@@ -61,7 +61,8 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version-file: src/verifier/go.mod
+          go-version: '1.26.x'
+          check-latest: true
           cache-dependency-path: |
             src/verifier/go.sum
             src/attestca/go.sum
@@ -108,7 +109,8 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version: '1.25.x'
+          go-version: '1.26.x'
+          check-latest: true
           cache-dependency-path: src/verifier/go.sum
 
       - name: Install actionlint
@@ -152,7 +154,8 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version-file: src/verifier/go.mod
+          go-version: '1.26.x'
+          check-latest: true
           cache-dependency-path: |
             src/verifier/go.sum
             src/attestca/go.sum
@@ -243,7 +246,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version: '1.25.x'
+          go-version: '1.26.x'
           check-latest: true
           cache-dependency-path: |
             src/verifier/go.sum

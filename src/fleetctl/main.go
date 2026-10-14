@@ -6,8 +6,7 @@
 //
 // One binary covers the fleet lifecycle operator otherwise drives with
 // curl: device inventory, revocations, hardware bans, forced re-anchor,
-// client removal, LFA re-anchor review, audit and attestation logs,
-// and session-token validation.
+// client removal, LFA re-anchor review, and the audit and attestation logs.
 //
 // Connection:
 //
@@ -72,7 +71,6 @@ Commands:
   reanchor-review ack <client-id>         acknowledge an LFA re-anchor
   audit [-limit N] [-tenant T]            operator audit log
   attests [-limit N] [-tenant T]          attestation decision log
-  session validate <token> [-consume]     validate a session token
 
 Revocation and ban reasons: cheating, compromised, hardware_change, admin.
 
@@ -188,7 +186,7 @@ func dispatch(ctx *cmdContext, stderr io.Writer, cmd string, args []string) (int
 	case "revoke":
 		err = cmdRevoke(ctx, stderr, args)
 	case "unrevoke":
-		err = cmdUnrevoke(ctx, args)
+		err = cmdUnrevoke(ctx, stderr, args)
 	case "revocations":
 		err = cmdRevocations(ctx, stderr, args)
 	case "ban":
@@ -207,8 +205,6 @@ func dispatch(ctx *cmdContext, stderr io.Writer, cmd string, args []string) (int
 		err = cmdAudit(ctx, stderr, args)
 	case "attests":
 		err = cmdAttests(ctx, stderr, args)
-	case "session":
-		return cmdSession(ctx, stderr, args)
 	default:
 		return exitUsage, fmt.Errorf("unknown command %q (see lota-fleet -h)", cmd)
 	}
@@ -400,14 +396,15 @@ func cmdRevoke(ctx *cmdContext, stderr io.Writer, args []string) error {
 	return nil
 }
 
-func cmdUnrevoke(ctx *cmdContext, args []string) error {
-	if len(args) != 1 {
-		return fmt.Errorf("%w: unrevoke needs exactly one client ID", errUsage)
-	}
-	if err := ctx.api.Unrevoke(args[0]); err != nil {
+func cmdUnrevoke(ctx *cmdContext, stderr io.Writer, args []string) error {
+	id, reason, actor, note, err := parseActionArgs("unrevoke", stderr, args, true, true)
+	if err != nil {
 		return err
 	}
-	fmt.Fprintf(ctx.stdout, "unrevoked %s\n", args[0])
+	if err := ctx.api.Unrevoke(id, reason, actor, note); err != nil {
+		return err
+	}
+	fmt.Fprintf(ctx.stdout, "unrevoked %s (%s)\n", id, reason)
 	return nil
 }
 
@@ -491,6 +488,9 @@ func cmdUnban(ctx *cmdContext, stderr io.Writer, args []string) error {
 	fs := flag.NewFlagSet("unban", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	tenant := fs.String("tenant", "", "tenant the ban lives in (default tenant when omitted)")
+	reason := fs.String("reason", "", "why the ban is being lifted")
+	actor := fs.String("actor", "", "administrator identifier for the audit log")
+	note := fs.String("note", "", "free-form justification")
 
 	if len(args) == 0 {
 		return fmt.Errorf("%w: unban needs a hardware ID argument", errUsage)
@@ -501,11 +501,17 @@ func cmdUnban(ctx *cmdContext, stderr io.Writer, args []string) error {
 	if fs.NArg() != 0 {
 		return fmt.Errorf("%w: unban takes one hardware ID argument", errUsage)
 	}
+	if *reason == "" {
+		return fmt.Errorf("%w: unban requires -reason", errUsage)
+	}
+	if *actor == "" {
+		return fmt.Errorf("%w: unban requires -actor", errUsage)
+	}
 
-	if err := ctx.api.Unban(args[0], *tenant); err != nil {
+	if err := ctx.api.Unban(args[0], *tenant, *reason, *actor, *note); err != nil {
 		return err
 	}
-	fmt.Fprintf(ctx.stdout, "unbanned %s in %s\n", args[0], tenantLabel(*tenant))
+	fmt.Fprintf(ctx.stdout, "unbanned %s in %s (%s)\n", args[0], tenantLabel(*tenant), *reason)
 	return nil
 }
 
@@ -556,11 +562,11 @@ func cmdBans(ctx *cmdContext, stderr io.Writer, args []string) error {
 }
 
 func cmdReanchor(ctx *cmdContext, stderr io.Writer, args []string) error {
-	id, _, actor, note, err := parseActionArgs("reanchor", stderr, args, false, true)
+	id, reason, actor, note, err := parseActionArgs("reanchor", stderr, args, true, true)
 	if err != nil {
 		return err
 	}
-	if err := ctx.api.Reanchor(id, actor, note); err != nil {
+	if err := ctx.api.Reanchor(id, reason, actor, note); err != nil {
 		return err
 	}
 	fmt.Fprintf(ctx.stdout, "reanchored %s: baselines cleared, next attestation re-establishes trust\n", id)
@@ -568,11 +574,11 @@ func cmdReanchor(ctx *cmdContext, stderr io.Writer, args []string) error {
 }
 
 func cmdDelete(ctx *cmdContext, stderr io.Writer, args []string) error {
-	id, _, actor, note, err := parseActionArgs("delete", stderr, args, false, false)
+	id, reason, actor, note, err := parseActionArgs("delete", stderr, args, true, true)
 	if err != nil {
 		return err
 	}
-	if err := ctx.api.DeleteClient(id, actor, note); err != nil {
+	if err := ctx.api.DeleteClient(id, reason, actor, note); err != nil {
 		return err
 	}
 	fmt.Fprintf(ctx.stdout, "deleted %s: trust state removed, revocations and bans kept\n", id)
@@ -680,47 +686,4 @@ func cmdAttests(ctx *cmdContext, stderr io.Writer, args []string) error {
 			e.Timestamp, e.Tenant, e.ClientID, e.Result, e.DurationMs, e.Details)
 	}
 	return tw.Flush()
-}
-
-func cmdSession(ctx *cmdContext, stderr io.Writer, args []string) (int, error) {
-	if len(args) == 0 || args[0] != "validate" {
-		return exitUsage, fmt.Errorf("%w: session needs the validate subcommand", errUsage)
-	}
-
-	fs := flag.NewFlagSet("session validate", flag.ContinueOnError)
-	fs.SetOutput(stderr)
-	consume := fs.Bool("consume", false, "mark the token used so it cannot validate again")
-	if len(args) < 2 {
-		return exitUsage, fmt.Errorf("%w: session validate needs a token argument", errUsage)
-	}
-	if err := fs.Parse(args[2:]); err != nil {
-		return exitUsage, errUsage
-	}
-	if fs.NArg() != 0 {
-		return exitUsage, fmt.Errorf(
-			"%w: session validate takes one token argument (flags go after it)", errUsage)
-	}
-
-	status, err := ctx.api.ValidateSessionToken(args[1], *consume)
-	if err != nil {
-		return exitError, err
-	}
-
-	if ctx.asJSON {
-		if err := printJSON(ctx.stdout, status); err != nil {
-			return exitError, err
-		}
-	} else {
-		kv(ctx.stdout, "valid", status.Valid)
-		kv(ctx.stdout, "consumed", status.Consumed)
-		kv(ctx.stdout, "client", status.ClientID)
-		kv(ctx.stdout, "tenant", status.Tenant)
-		kv(ctx.stdout, "hardware id", status.HardwareID)
-	}
-
-	// invalid token is failed check for scripts
-	if !status.Valid {
-		return exitError, nil
-	}
-	return exitOK, nil
 }

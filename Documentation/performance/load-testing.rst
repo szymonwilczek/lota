@@ -16,7 +16,9 @@ verifier: each attestation walks the production verification path --
 AIK certificate chain to a rig CA, RSA quote signature over a
 ``TPMS_ATTEST`` blob, the report binding nonce, PCR digest, event-log
 parsing, and the PCR14 boot-commitment derivation (initramfs lock +
-boot commitment). The synthetic event log carries the firmware's
+boot commitment, over the fleet's agent hash -- the derivation takes no
+clock counters, so the synthetic quote's ClockInfo is free to be a
+constant). The synthetic event log carries the firmware's
 ``SecureBoot`` variable measurement on PCR 7, which is what proves a
 UEFI boot, and no PCR 14 event, so the chain anchors on a zero
 baseline -- the shape of a UEFI host that boots without shim. The
@@ -32,8 +34,8 @@ What a run measures and what it cannot
 ======================================
 
 The harness measures the **verifier tier**: connection handling, the
-cryptographic verification path, policy evaluation, baseline/nonce/
-session state commits, and the store backend behind them. Client-side
+cryptographic verification path, policy evaluation, baseline and nonce
+state commits, and the store backend behind them. Client-side
 work (TPM quote latency, agent scheduling) is out of scope -- the
 numbers here bound how many agents a verifier deployment sustains, not
 how long one agent's attestation takes end to end on real hardware.
@@ -99,10 +101,9 @@ Useful flags:
    Drive a subset of the rig (defaults to the setup size).
 ``-timeout D``
    Per-attestation deadline covering dial through result (default 15s).
-``-session-log FILE``
-   Append one JSONL record per ``VERIFY_OK`` (agent, unix time, session
-   token, ``valid_until``). The soak's zero-loss check replays these
-   tokens against ``POST /api/v1/session/validate`` after a failover.
+``-attest-log FILE``
+   Append one JSONL record per ``VERIFY_OK`` (agent, unix time,
+   ``valid_until``).
 ``-insecure``
    Skip verifier TLS certificate verification. Load rigs only.
 

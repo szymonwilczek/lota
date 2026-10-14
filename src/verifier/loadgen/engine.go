@@ -21,7 +21,6 @@ import (
 	"context"
 	"crypto/tls"
 	"encoding/binary"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -38,18 +37,18 @@ import (
 
 // runConfig is everything one load run needs
 type runConfig struct {
-	Server    string // host:port of the verifier attestation listener
-	TLS       *tls.Config
-	Fleet     *synth.Fleet
-	Agents    int
-	Mode      string // "steady" or "storm"
-	Interval  time.Duration
-	Duration  time.Duration
-	InFlight  int           // storm concurrency cap
-	Timeout   time.Duration // per-attestation deadline (dial to result)
-	Progress  time.Duration // progress line period, 0 = quiet
-	SessionsW io.Writer     // optional JSONL session-token log
-	Logf      func(format string, args ...any)
+	Server   string // host:port of the verifier attestation listener
+	TLS      *tls.Config
+	Fleet    *synth.Fleet
+	Agents   int
+	Mode     string // "steady" or "storm"
+	Interval time.Duration
+	Duration time.Duration
+	InFlight int           // storm concurrency cap
+	Timeout  time.Duration // per-attestation deadline (dial to result)
+	Progress time.Duration // progress line period, 0 = quiet
+	AttestW  io.Writer     // optional JSONL accepted-attestation log
+	Logf     func(format string, args ...any)
 }
 
 // secondBucket is one second of run timeline;
@@ -220,12 +219,10 @@ const (
 	modeStorm  = "storm"
 )
 
-// sessionRecord is one JSONL line of the session-token log;
-// soak's zero-loss check validates these against the session API after failover
-type sessionRecord struct {
+// attestRecord is one JSONL line of the accepted-attestation log
+type attestRecord struct {
 	Agent      string `json:"agent"`
 	Unix       int64  `json:"unix"`
-	Token      string `json:"token"`
 	ValidUntil uint64 `json:"valid_until"`
 }
 
@@ -235,7 +232,7 @@ func run(ctx context.Context, cfg *runConfig) (*summary, error) {
 		return nil, fmt.Errorf("agent count %d outside fleet size %d", cfg.Agents, len(cfg.Fleet.Agents))
 	}
 	col := newCollector(cfg.Agents)
-	var sessionMu sync.Mutex
+	var attestMu sync.Mutex
 
 	attest := func(agent int) {
 		a := cfg.Fleet.Agents[agent]
@@ -247,17 +244,16 @@ func run(ctx context.Context, cfg *runConfig) (*summary, error) {
 			col.recordTransport(errorKind(err))
 		case result.Result == types.VerifyOK:
 			col.recordOK(agent, latency)
-			if cfg.SessionsW != nil {
-				line, merr := json.Marshal(sessionRecord{
+			if cfg.AttestW != nil {
+				line, merr := json.Marshal(attestRecord{
 					Agent:      a.Name,
 					Unix:       time.Now().Unix(),
-					Token:      hex.EncodeToString(result.SessionToken[:]),
 					ValidUntil: result.ValidUntil,
 				})
 				if merr == nil {
-					sessionMu.Lock()
-					fmt.Fprintf(cfg.SessionsW, "%s\n", line)
-					sessionMu.Unlock()
+					attestMu.Lock()
+					fmt.Fprintf(cfg.AttestW, "%s\n", line)
+					attestMu.Unlock()
 				}
 			}
 		default:
@@ -383,7 +379,7 @@ func attestOnce(cfg *runConfig, a *synth.Agent) (*types.VerifyResult, error) {
 	}
 
 	// result (56 bytes)
-	resBuf := make([]byte, 56)
+	resBuf := make([]byte, 24)
 	if _, err := io.ReadFull(conn, resBuf); err != nil {
 		return nil, fmt.Errorf("read result: %w", err)
 	}
@@ -394,7 +390,6 @@ func attestOnce(cfg *runConfig, a *synth.Agent) (*types.VerifyResult, error) {
 		Flags:      binary.LittleEndian.Uint32(resBuf[12:16]),
 		ValidUntil: binary.LittleEndian.Uint64(resBuf[16:24]),
 	}
-	copy(result.SessionToken[:], resBuf[24:56])
 	return result, nil
 }
 

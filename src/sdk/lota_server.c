@@ -488,7 +488,7 @@ int lota_server_verify_token(const uint8_t *token_data, size_t token_len,
 	}
 	if (CRYPTO_memcmp(runtime_protect_digest, hdr.runtime_protect_digest,
 			  32) != 0)
-		ret = LOTA_SERVER_ERR_NONCE_FAIL;
+		ret = LOTA_SERVER_ERR_RUNTIME_IMAGE;
 	else
 		ret = LOTA_SERVER_OK;
 
@@ -685,6 +685,8 @@ const char *lota_server_strerror(int error)
 		return "Buffer too small";
 	case LOTA_SERVER_ERR_FUTURE:
 		return "Token valid_until too far in the future";
+	case LOTA_SERVER_ERR_RUNTIME_IMAGE:
+		return "Runtime image measurement does not match the quote";
 
 	default:
 		return "Unknown error";

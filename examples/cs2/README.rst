@@ -82,10 +82,14 @@ One-time host setup
       sudo lota-steam-setup --install-systemd-dropin
 
    The helper reads ``$SUDO_UID`` to recover the operator UID, refuses to run
-   when ``$SUDO_UID`` is missing (direct root login or ``su -``), writes the
-   drop-in at ``/etc/systemd/system/lota-agent.service.d/10-xdg-runtime.conf``
-   with ``Environment=XDG_RUNTIME_DIR=/run/user/<uid>``, and restarts
-   ``lota-agent.socket`` so the listener is live. The same file can be
+   when ``$SUDO_UID`` is missing (direct root login or ``su -``), and writes
+   the drop-in at
+   ``/etc/systemd/system/lota-agent.service.d/10-xdg-runtime.conf`` with
+   ``Environment=XDG_RUNTIME_DIR=/run/user/<uid>``. The agent reads it when it
+   starts, so **reboot to get the listener**: the helper restarts nothing,
+   because ``lota-agent.socket`` triggers the service and stopping either
+   spends the boot's PCR 14 commitment, which takes the host out of
+   attestation until it reboots anyway. The same file can be
    installed manually from the in-tree template at
    ```systemd/lota-agent.service.d/10-xdg-runtime.conf.example`` <../../systemd/lota-agent.service.d/10-xdg-runtime.conf.example>`__
    (``make install`` deploys it to ``/usr/share/lota/systemd/`` as a
@@ -102,9 +106,10 @@ One-time host setup
 
       sudo lota-steam-setup --register-uid
 
-   from each operator's login shell to append their ``$SUDO_UID`` to the config
-   and restart ``lota-agent.service``. The drop-in is then redundant on the
-   multi-user path and can be left out.
+   from each operator's login shell to append their ``$SUDO_UID`` to the
+   config. That setting is read at startup too, so it lands at the next boot
+   and nothing is restarted. The drop-in is then redundant on the multi-user
+   path and can be left out.
 
    With the drop-in in place start the agent via systemd:
 
@@ -129,13 +134,18 @@ One-time host setup
       sudo env XDG_RUNTIME_DIR=/run/user/"$(id -u)" \
           /usr/bin/lota-agent --test-signed
 
-   ``--test-signed`` provisions the TPM AIK at startup, runs the IPC +
-   container listener under the operator's ``XDG_RUNTIME_DIR``, and signs
-   ``GET_TOKEN`` responses with a real TPM Quote. The fixture policy digest
-   (0xA5 x 32) is applied automatically; the banner prints
-   ``Tokens will be SIGNED by TPM AIK!`` plus the digest line. ``--test-ipc``
-   exists for the IPC bridge alone (status only, no token); the Wine hook needs
-   the signed-token path to produce ``lota-token.bin``.
+   ``--test-signed`` claims the socket first, then opens the TPM and readies
+   the AIK, runs the IPC + container listener under the operator's
+   ``XDG_RUNTIME_DIR``, and signs ``GET_TOKEN`` responses with a real TPM
+   Quote. A run whose socket is already held by the daemon exits there and
+   changes nothing. The banner names the attestation key it is about to use,
+   and says so plainly when there is none at the handle and it is about to
+   create one that outlives the command. The fixture policy digest (0xA5 x 32)
+   is applied automatically; the banner prints
+   ``Tokens are signed by the TPM AIK.`` plus the digest line. ``--test-ipc``
+   exists for the IPC bridge alone (status only: an agent with no TPM refuses
+   ``GET_TOKEN``); the Wine hook needs the signed-token path to produce
+   ``lota-token.bin``.
 
    The full systemd daemon path (``systemctl start lota-agent.service`` against
    the live ``lota-agent.service`` unit) is the eventual production target. It
@@ -241,7 +251,7 @@ wiring is reachable from the command line:
 
    LOTA_HOOK_LOG_LEVEL=info \
    LOTA_HOOK_SOCKET=/run/user/"$(id -u)"/lota/lota.sock \
-   PRESSURE_VESSEL_FILESYSTEMS_RW=/run/user/"$(id -u)"/lota \
+   PRESSURE_VESSEL_FILESYSTEMS_RW=/run/user/"$(id -u)"/lota:/run/user/"$(id -u)"/lota-hook \
    lota-proton-hook steam-runtime-launch-client -- steam://rungameid/730
 
 What the hook produces at runtime
@@ -249,7 +259,12 @@ What the hook produces at runtime
 
 Constructor-side (in the Wine/Proton process), the hook connects to the LOTA
 agent, asks for a freshly attested gaming token, and atomically writes three
-files under ``$XDG_RUNTIME_DIR/lota/``:
+files under ``$XDG_RUNTIME_DIR/lota-hook/``. That directory is the player's
+own: ``$XDG_RUNTIME_DIR/lota`` belongs to the agent, which creates it
+``root:lota`` for the container socket, and the hook refuses to write a signed
+token into a directory somebody else owns.
+
+The files are:
 
 ===================== ====== ================================
 File                  Format Owner
@@ -270,8 +285,8 @@ Verify after launching CS2 (run from the operator account, not root, so
 
 .. code:: sh
 
-   ls -l   "$XDG_RUNTIME_DIR/lota/"
-   cat     "$XDG_RUNTIME_DIR/lota/lota-status"
+   ls -l   "$XDG_RUNTIME_DIR/lota-hook/"
+   cat     "$XDG_RUNTIME_DIR/lota-hook/lota-status"
 
 A healthy run prints ``LOTA_ATTESTED=1``, ``LOTA_OFFLINE=0``, a non-zero
 ``LOTA_VALID_UNTIL`` timestamp, and ``LOTA_PID`` matching the game process. The
@@ -283,7 +298,7 @@ by the wire header, the TPM Quote bytes, and the AIK signature.
 
 .. code:: sh
 
-   xxd "$XDG_RUNTIME_DIR/lota/lota-token.bin" | head -3
+   xxd "$XDG_RUNTIME_DIR/lota-hook/lota-token.bin" | head -3
    # 00000000: 4c4f 544b ...    LOTK...
 
 ``--test-ipc`` (the no-TPM IPC bridge) writes only the status file because
@@ -338,7 +353,7 @@ Set them on Steam's launch line, e.g.:
 ::
 
    LOTA_HOOK_LOG_LEVEL=debug LOTA_HOOK_SOCKET=/run/user/1000/lota/lota.sock \
-   PRESSURE_VESSEL_FILESYSTEMS_RW=/run/user/1000/lota \
+   PRESSURE_VESSEL_FILESYSTEMS_RW=/run/user/1000/lota:/run/user/1000/lota-hook \
    lota-proton-hook %command%
 
 Logs are written to the game's stderr, which Steam captures under
@@ -375,7 +390,8 @@ exercise the integration end-to- end and demonstrate the contracts the hook
 claims:
 
 - ```scenarios/verify-attested.sh`` <scenarios/verify-attested.sh>`__ watches
-  ``$XDG_RUNTIME_DIR/lota/lota-status`` and prints ``TRUSTED`` / ``UNTRUSTED``
+  ``$XDG_RUNTIME_DIR/lota-hook/lota-status`` and prints ``TRUSTED`` /
+  ``UNTRUSTED``
   / ``OFFLINE`` transitions in real time.
 - ```scenarios/agent-down.rst`` <scenarios/agent-down.rst>`__ drives agent
   disconnect and recovery against a live CS2 session, showing the hook degrades
@@ -425,17 +441,18 @@ attempt and match against this table:
 |                                              | does not include the LOTA socket directory.                     |
 +----------------------------------------------+-----------------------------------------------------------------+
 | ``connected to agent`` followed by           | Agent reachable but refusing token issuance. Under              |
-| ``get_token: Agent returned error``          | ``--test-ipc`` this is expected (``policy_digest is not set``   |
-|                                              | plus                                                            |
-|                                              | ``TPM context is required - refuse to issue unsigned tokens``). |
+| ``get_token: The agent on this machine has`` | ``--test-ipc`` this is expected: there is no TPM context, and   |
+| ``no TPM and will not issue an unsigned``    | the agent will not sign a token it cannot back.                 |
+| ``token``                                    |                                                                 |
 |                                              | Switch to ``--test-signed`` to provision a real TPM Quote; the  |
 |                                              | in-tree fixture policy digest is applied automatically on the   |
 |                                              | test paths.                                                     |
 +----------------------------------------------+-----------------------------------------------------------------+
-| No files appear under                        | The token directory was created by the agent (root-owned)       |
-| ``$XDG_RUNTIME_DIR/lota`` (only              | before the hook tried to write. Remove the directory and let    |
-| ``lota.sock``)                               | the hook recreate it as the operator user, or ``chown`` it to   |
-|                                              | ``$USER:lota``.                                                 |
+| No files appear under                        | Check the hook's stderr: a candidate directory it cannot own is |
+| ``$XDG_RUNTIME_DIR/lota-hook``               | named, and the hook falls back to ``/tmp/lota-<uid>``, so look  |
+|                                              | there before assuming it did nothing. Never expect artifacts in |
+|                                              | ``$XDG_RUNTIME_DIR/lota``: that directory is the agent's and    |
+|                                              | holds only ``lota.sock``.                                       |
 +----------------------------------------------+-----------------------------------------------------------------+
 | Game window never appears, Steam shows       | Older hook revisions (before the ``should_activate()`` filter)  |
 | "Running"                                    | ran the constructor inside every launcher utility and stalled   |

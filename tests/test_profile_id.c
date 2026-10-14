@@ -25,6 +25,7 @@
 #include <openssl/pem.h>
 #include <openssl/types.h>
 #include <openssl/x509.h>
+#include <openssl/x509v3.h>
 
 #include "../src/agent/profile.h"
 #include "../src/agent/publishers.h"
@@ -81,6 +82,33 @@ static X509 *mint_cert(EVP_PKEY *pkey, const char *cn, long serial)
 				   (const unsigned char *)cn, -1, -1, 0);
 	X509_set_issuer_name(x, name);
 
+	if (!X509_sign(x, pkey, EVP_sha256())) {
+		X509_free(x);
+		return NULL;
+	}
+	return x;
+}
+
+/* Self-signed certificate carrying basicConstraints CA:TRUE,
+ * which is what a publisher's trust anchor is and a listener certificate is not */
+static X509 *mint_ca_cert(EVP_PKEY *pkey, const char *cn, long serial)
+{
+	X509_EXTENSION *ext;
+	X509 *x = mint_cert(pkey, cn, serial);
+
+	if (!x)
+		return NULL;
+
+	ext = X509V3_EXT_conf_nid(NULL, NULL, NID_basic_constraints,
+				  "critical,CA:TRUE");
+	if (!ext || !X509_add_ext(x, ext, -1)) {
+		X509_EXTENSION_free(ext);
+		X509_free(x);
+		return NULL;
+	}
+	X509_EXTENSION_free(ext);
+
+	/* the signature covers the extensions, so re-sign after adding one */
 	if (!X509_sign(x, pkey, EVP_sha256())) {
 		X509_free(x);
 		return NULL;
@@ -591,6 +619,61 @@ out:
 }
 
 /*
+ * A publisher's identity may not be pinned to a certificate that is meant to
+ * rotate.
+ *
+ * The agent takes one --ca-cert and uses it for two things: verifying the CA
+ * server's TLS chain, and naming the publisher. A CA anchor serves both.
+ * A TLS listener certificate serves the first and is rotated on a schedule
+ * -- so naming it moves every host of that publisher onto a new profile,
+ * a new AIK and a fresh consent prompt on the day the certificate is re-keyed,
+ * with nothing reporting it.
+ *
+ * The anchor cannot be refused outright: a self-signed leaf is a legitimate pin
+ * for a deployment that wants one. What the agent can do is know the difference,
+ * which is what this pins.
+ */
+static void test_anchor_is_ca(void)
+{
+	EVP_PKEY *key = EVP_EC_gen("P-256");
+	X509 *ca = NULL;
+	X509 *leaf = NULL;
+	char ca_path[256];
+	char leaf_path[256];
+
+	snprintf(ca_path, sizeof(ca_path), "/tmp/lota-anchor-ca.%d.pem",
+		 (int)getpid());
+	snprintf(leaf_path, sizeof(leaf_path), "/tmp/lota-anchor-leaf.%d.pem",
+		 (int)getpid());
+
+	if (!key) {
+		CHECK(0, "key generation");
+		return;
+	}
+	ca = mint_ca_cert(key, "publisher anchor", 1);
+	leaf = mint_cert(key, "lota-attest-ca listener", 2);
+	if (!ca || !leaf || write_cert_pem(ca_path, ca) != 0 ||
+	    write_cert_pem(leaf_path, leaf) != 0) {
+		CHECK(0, "certificate fixtures");
+		goto out;
+	}
+
+	CHECK(profile_anchor_is_ca(ca_path) == 1,
+	      "a CA anchor is recognised as one");
+	CHECK(profile_anchor_is_ca(leaf_path) == 0,
+	      "a listener certificate is not a CA anchor");
+	CHECK(profile_anchor_is_ca("/nonexistent/anchor.pem") < 0,
+	      "an anchor that cannot be read is an error, not an answer");
+
+out:
+	unlink(ca_path);
+	unlink(leaf_path);
+	X509_free(ca);
+	X509_free(leaf);
+	EVP_PKEY_free(key);
+}
+
+/*
  * The inventory is what a player checks and what revocation acts on,
  * so what matters is that a half-finished profile is still listed
  * -- "agreed to, not enrolled" is the state between accepting and title running,
@@ -641,6 +724,57 @@ static void test_publisher_inventory(void)
 	CHECK(!entries[0].enrolled && !entries[0].has_cert,
 	      "agreed to but not enrolled is a state, not an omission");
 
+	/*
+	 * One key is one TPM persistent slot, and running out of them is what
+	 * reported "Input/output error" to a player whose machine was merely
+	 * full. The count is what the ceiling is stated against, so a publisher
+	 * that holds no key must not be counted as using a slot.
+	 */
+	CHECK(publishers_keys_held(entries, count) == 1,
+	      "a publisher holding a key counts against the TPM's slots");
+
+	CHECK(profile_paths_from_id(base, id_b, &paths) == 0 &&
+		      profile_consent_record(&paths, 0) == 0,
+	      "publisher B agreed to, with no key yet");
+	CHECK(publishers_list(base, entries, LOTA_PROFILE_MAX_AIK_HANDLES,
+			      &count) == 0 &&
+		      count == 2 && publishers_keys_held(entries, count) == 1,
+	      "a publisher with no key holds no slot");
+	CHECK(publishers_forget(&paths) == 0, "publisher B forgotten");
+	CHECK(publishers_list(base, entries, LOTA_PROFILE_MAX_AIK_HANDLES,
+			      &count) == 0 &&
+		      count == 1,
+	      "the inventory is back to one publisher");
+	CHECK(profile_paths_from_id(base, id_a, &paths) == 0,
+	      "paths derive from publisher A again");
+
+	/*
+	 * A handle is recorded before its key exists, so it can be given back
+	 * without the key ever having been made. Giving back a handle that is
+	 * already gone succeeds, and the profile stays listed with its consent
+	 * but holds no key.
+	 */
+	{
+		uint32_t handle = 0;
+
+		CHECK(profile_aik_handle_forget(&paths) == 0 &&
+			      profile_aik_handle_load(&paths, &handle) ==
+				      -ENOENT,
+		      "a reserved handle can be given back");
+		CHECK(profile_aik_handle_forget(&paths) == 0,
+		      "giving back a handle twice is not a failure");
+		CHECK(publishers_list(base, entries,
+				      LOTA_PROFILE_MAX_AIK_HANDLES,
+				      &count) == 0 &&
+			      count == 1 &&
+			      publishers_keys_held(entries, count) == 0,
+		      "a profile that gave its handle back holds no key");
+		CHECK(entries[0].consented,
+		      "and is still listed, with the consent it was given");
+		CHECK(profile_aik_handle_save(&paths, 0x81010010) == 0,
+		      "publisher A holds a key again");
+	}
+
 	CHECK(publishers_forget(&paths) == 0, "a publisher can be forgotten");
 	CHECK(stat(paths.dir, &st) != 0,
 	      "forgetting leaves no directory behind");
@@ -662,6 +796,133 @@ static void test_publisher_inventory(void)
 	rmdir(base);
 }
 
+/*
+ * How many attestation keys a host-wide verb has to act on.
+ *
+ * --seal-aik-auth and --reprovision-aik act on one key per publisher, each with
+ * its own authorization, and on the pre-profile default only when the host has
+ * no publishers.
+ *
+ * Three publishers, two of them holding a key: the expected count of two
+ * differs from the publisher count (three) and from acting on a single key
+ * (one), so a count that stands for either fails here.
+ */
+static void test_host_wide_verbs_count_every_key(void)
+{
+	struct publisher_entry entries[LOTA_PROFILE_MAX_AIK_HANDLES];
+	const char *ids[3] = {
+		"3333333333333333333333333333333333333333333333333333333333333333",
+		"4444444444444444444444444444444444444444444444444444444444444444",
+		"5555555555555555555555555555555555555555555555555555555555555555",
+	};
+	struct profile_paths paths[3];
+	char base[256];
+	size_t count = 0;
+
+	snprintf(base, sizeof(base), "/tmp/lota-profile-seal.%d", getpid());
+
+	CHECK(publishers_list(base, entries, LOTA_PROFILE_MAX_AIK_HANDLES,
+			      &count) == 0 &&
+		      count == 0,
+	      "a host with no publishers offers no per-publisher key");
+
+	for (int i = 0; i < 3; i++)
+		CHECK(profile_paths_from_id(base, ids[i], &paths[i]) == 0 &&
+			      profile_consent_record(&paths[i], 0) == 0,
+		      "three publishers agreed to");
+
+	/* two of the three hold a key; the third consented and stopped there */
+	CHECK(profile_aik_handle_save(&paths[0], 0x81010010) == 0 &&
+		      profile_aik_handle_save(&paths[1], 0x81010011) == 0,
+	      "two of the three hold an attestation key");
+
+	CHECK(publishers_list(base, entries, LOTA_PROFILE_MAX_AIK_HANDLES,
+			      &count) == 0 &&
+		      count == 3,
+	      "all three publishers are listed");
+	CHECK(publishers_keys_held(entries, count) == 2,
+	      "a host-wide verb has two keys to act on, not one and not three");
+
+	/* the default key is in use only on a host with no publishers */
+	CHECK(!publishers_default_key_in_use(count),
+	      "a host with publishers does not attest with the default key");
+	CHECK(publishers_default_key_in_use(0),
+	      "a host with no publisher does attest with the default key");
+
+	for (int i = 0; i < 3; i++)
+		publishers_forget(&paths[i]);
+	rmdir(base);
+}
+
+/*
+ * How the AIK authorization is kept at rest: none, plaintext, sealed, or both.
+ *
+ * It decides whether a captured disk yields the key's authorization.
+ * SEALED and BOTH both hold a sealed copy, but only SEALED has no plaintext
+ * beside it, so only SEALED counts as protected.
+ */
+static void test_aik_auth_at_rest_state(void)
+{
+	const char *id =
+		"6666666666666666666666666666666666666666666666666666666666666666";
+	struct profile_paths paths;
+	char base[256];
+	/* room for dir + '/' + the longest of the two names */
+	char plain[PATH_MAX + 32], sealed[PATH_MAX + 32];
+
+	snprintf(base, sizeof(base), "/tmp/lota-profile-auth.%d", getpid());
+
+	CHECK(profile_paths_from_id(base, id, &paths) == 0 &&
+		      profile_consent_record(&paths, 0) == 0,
+	      "a publisher to hold an authorization");
+
+	snprintf(plain, sizeof(plain), "%s/%s", paths.dir,
+		 LOTA_PROFILE_AIK_AUTH_FILE);
+	snprintf(sealed, sizeof(sealed), "%s/%s", paths.dir,
+		 LOTA_PROFILE_AIK_AUTH_SEALED_FILE);
+
+	CHECK(profile_aik_auth_state(&paths) == PROFILE_AIK_AUTH_NONE,
+	      "a publisher holding no authorization reports none");
+	CHECK(!profile_aik_auth_exposed(PROFILE_AIK_AUTH_NONE),
+	      "no authorization is not an exposed one");
+
+	CHECK(write_all(plain, (const uint8_t *)"auth", 4) == 0,
+	      "sidecar written");
+	CHECK(profile_aik_auth_state(&paths) == PROFILE_AIK_AUTH_PLAINTEXT,
+	      "the shipped default reports plaintext on disk");
+	CHECK(profile_aik_auth_exposed(PROFILE_AIK_AUTH_PLAINTEXT),
+	      "plaintext is readable from a captured disk");
+
+	CHECK(write_all(sealed, (const uint8_t *)"blob", 4) == 0,
+	      "sealed written");
+	CHECK(profile_aik_auth_state(&paths) == PROFILE_AIK_AUTH_BOTH,
+	      "adopting sealing without strict reports both copies");
+	CHECK(profile_aik_auth_exposed(PROFILE_AIK_AUTH_BOTH),
+	      "sealing a second copy protects nothing while the first remains");
+
+	unlink(plain);
+	CHECK(profile_aik_auth_state(&paths) == PROFILE_AIK_AUTH_SEALED,
+	      "strict reports sealed with no plaintext copy");
+	CHECK(!profile_aik_auth_exposed(PROFILE_AIK_AUTH_SEALED),
+	      "sealed alone is the state that is not exposed");
+
+	/* empty file is not a copy of anything */
+	CHECK(write_all(plain, (const uint8_t *)"", 0) == 0, "empty sidecar");
+	CHECK(profile_aik_auth_state(&paths) == PROFILE_AIK_AUTH_SEALED,
+	      "an interrupted write is not counted as a stored authorization");
+
+	CHECK(profile_aik_auth_state(NULL) == PROFILE_AIK_AUTH_NONE,
+	      "no profile reports no authorization");
+	CHECK(profile_aik_auth_state_str(PROFILE_AIK_AUTH_SEALED) != NULL &&
+		      profile_aik_auth_state_str(PROFILE_AIK_AUTH_NONE) != NULL,
+	      "every state names itself");
+
+	unlink(plain);
+	unlink(sealed);
+	publishers_forget(&paths);
+	rmdir(base);
+}
+
 int main(void)
 {
 	printf("=== Publisher profile identity tests ===\n\n");
@@ -673,7 +934,10 @@ int main(void)
 	test_handle_record_first_use();
 	test_handle_candidates();
 	test_consent_record();
+	test_anchor_is_ca();
 	test_publisher_inventory();
+	test_host_wide_verbs_count_every_key();
+	test_aik_auth_at_rest_state();
 
 	printf("\n%s\n", g_failures ? "FAILURES" : "All tests passed");
 	return g_failures ? 1 : 0;

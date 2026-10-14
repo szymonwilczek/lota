@@ -22,7 +22,7 @@ Authentication
 Two Bearer-token tiers, configured through the verifier's environment:
 
 * **reader** (``LOTA_READER_API_KEY``) -- read-only endpoints: statistics,
-  listings, logs, metrics, session-token validation.
+  listings, logs, metrics.
 * **admin** (``LOTA_ADMIN_API_KEY``) -- mutating endpoints. The admin key
   also satisfies every reader endpoint.
 
@@ -86,7 +86,6 @@ Endpoint                                                   Tier    Purpose
 ``POST /api/v1/clients/{id}/reanchor-review-ack``          admin   acknowledge an LFA re-anchor
 ``GET /api/v1/audit``                                      reader  operator audit log
 ``GET /api/v1/attestations``                               reader  attestation decision log
-``POST /api/v1/session/validate``                          reader  validate a session token
 =========================================================  ======  ===========================================
 
 Health and statistics
@@ -195,9 +194,11 @@ Admin. Body: ``reason`` and ``actor`` required, ``note`` optional.
 DELETE /api/v1/clients/{id}/revoke
 ----------------------------------
 
-Admin. No body. **200**
-``{"status": "unrevoked", "client_id": ...}``; **404** when the client
-is not revoked.
+Admin. Body: ``reason`` and ``actor`` required, ``note`` optional --
+lifting a restriction is attributed on the same terms as imposing one.
+The reason is free text rather than the revocation vocabulary. **200**
+``{"status": "unrevoked", "client_id": ...}``; **400** missing actor or
+reason, **404** when the client is not revoked.
 
 GET /api/v1/revocations
 -----------------------
@@ -236,9 +237,10 @@ identity), ``reason`` and ``actor`` required, ``note`` optional.
 DELETE /api/v1/bans/{hwid}
 --------------------------
 
-Admin. No body. **200**
+Admin. Body: ``reason`` and ``actor`` required, ``note`` optional --
+lifting a ban is attributed on the same terms as imposing one. **200**
 ``{"status": "unbanned", "hardware_id": ...}``; **400** malformed
-hardware ID, **404** not banned.
+hardware ID or missing actor or reason, **404** not banned.
 
 GET /api/v1/bans
 ----------------
@@ -272,12 +274,12 @@ POST /api/v1/clients/{id}/reanchor
 
 Admin. The operator-forced re-baseline: drops the client's stored PCR14
 and boot baselines so the next attestation re-establishes trust. The
-AIK registration is untouched. Body: ``actor`` required, ``note``
-optional. **200**::
+AIK registration is untouched. Body: ``reason`` and ``actor`` required,
+``note`` optional. **200**::
 
    {"status": "reanchored", "client_id": "host-0001"}
 
-**400** missing actor, **404** unknown client. Writes an audit entry
+**400** missing actor or reason, **404** unknown client. Writes an audit entry
 with action ``reanchor`` and counts toward the forced re-anchor metric.
 
 DELETE /api/v1/clients/{id}
@@ -286,13 +288,13 @@ DELETE /api/v1/clients/{id}
 Admin. Removes the client's verifier-side trust state (baselines and,
 where the store carries one, the AIK registration), forcing a fresh
 enrollment. Revocations and hardware bans are keyed separately and
-survive the delete. Body optional: ``actor`` and ``note`` as audit
-metadata. **200**::
+survive the delete. Body: ``reason`` and ``actor`` required, ``note``
+optional. **200**::
 
    {"status": "deleted", "client_id": "host-0001"}
 
-**400** invalid client ID, **404** unknown client. Writes an audit
-entry with action ``delete_client``.
+**400** invalid client ID or missing actor or reason, **404** unknown
+client. Writes an audit entry with action ``delete_client``.
 
 GET /api/v1/reanchor/review
 ---------------------------
@@ -366,37 +368,5 @@ The decision log is written asynchronously in batches so a busy fleet does
 not pay one database commit per report. Records become durable within
 about one second; this endpoint forces a flush first, so it always returns
 the records it has accepted, but an ungraceful verifier crash can lose up
-to the last second of *audit* entries. No attestation verdict, session
-token or replay-protection state is affected -- those writes are
-synchronous.
-
-Session tokens
-==============
-
-POST /api/v1/session/validate
------------------------------
-
-Reader. Checks a session token issued to an attested client (game or
-service back ends validating a client-presented token). Body::
-
-   {"session_token": "<64 hex characters>", "consume": false}
-
-``consume: true`` additionally marks the token used, so it cannot
-validate again. **400** when the token is not 64 hex characters.
-**200** always for a well-formed request; an unknown token is
-``{"valid": false, "consumed": false}`` with every other field
-omitted::
-
-   {
-     "valid": true,
-     "consumed": false,
-     "client_id": "host-0001",
-     "hardware_id": "ab12...",
-     "result_code": 1,
-     "flags": 7,
-     "pcr_mask": 16787,
-     "valid_until": 1782730800
-   }
-
-``valid`` is false for an expired token even though it still resolves;
-``valid_until`` is a Unix timestamp.
+to the last second of *audit* entries. No attestation verdict or
+replay-protection state is affected -- those writes are synchronous.

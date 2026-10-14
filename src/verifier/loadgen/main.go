@@ -10,7 +10,7 @@
 //	lota-loadgen run   -dir RIG -server HOST:PORT (-tls-ca FILE | -insecure)
 //	                   [-agents N] [-mode steady|storm] [-interval D]
 //	                   [-duration D] [-in-flight N] [-timeout D]
-//	                   [-out FILE] [-session-log FILE]
+//	                   [-out FILE] [-attest-log FILE]
 //
 // Rig directory carries the throwaway attestation CA and the AIK key pool;
 // hand ca.crt to the verifier as --aik-ca-cert and policy.yaml as --policy
@@ -118,7 +118,7 @@ func cmdRun(args []string) (code int) {
 	timeout := fs.Duration("timeout", 15*time.Second, "per-attestation deadline (dial to result)")
 	progress := fs.Duration("progress", 10*time.Second, "progress line period (0 = quiet)")
 	out := fs.String("out", "", "write the JSON summary to this file ('-' = stdout)")
-	sessionLog := fs.String("session-log", "", "append per-OK session tokens as JSONL to this file")
+	attestLog := fs.String("attest-log", "", "append one JSONL line per accepted attestation to this file")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
@@ -161,25 +161,25 @@ func cmdRun(args []string) (code int) {
 			fmt.Fprintf(os.Stderr, format+"\n", args...)
 		},
 	}
-	if *sessionLog != "" {
-		f, err := os.OpenFile(*sessionLog, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
+	if *attestLog != "" {
+		f, err := os.OpenFile(*attestLog, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "run: open session log: %v\n", err)
+			fmt.Fprintf(os.Stderr, "run: open attestation log: %v\n", err)
 			return 1
 		}
 
 		// close can surface a short write the writes themselves did not report
-		// soak's zero-loss replay reads truncated log as missing tokens,
+		// truncated log silently drops accepted attestations,
 		// so failed close fails the run
 		defer func() {
 			if cerr := f.Close(); cerr != nil {
-				fmt.Fprintf(os.Stderr, "run: close session log: %v\n", cerr)
+				fmt.Fprintf(os.Stderr, "run: close attestation log: %v\n", cerr)
 				if code == 0 {
 					code = 1
 				}
 			}
 		}()
-		cfg.SessionsW = f
+		cfg.AttestW = f
 	}
 
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)

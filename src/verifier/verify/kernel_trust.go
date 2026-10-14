@@ -16,6 +16,7 @@
 package verify
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -176,6 +177,89 @@ func MatchCmdlineDeny(cmdline string, deny []string) []string {
 	return hits
 }
 
+// KernelImage is the bootloader's measurement of the kernel it loaded,
+// taken from the event log.
+// PCR 9 also covers grubenv, which changes every boot; the image digest does not.
+type KernelImage struct {
+	Found  bool
+	Path   string // as the bootloader named it, ie (hd0,gpt4)/vmlinuz-...
+	Digest []byte
+}
+
+// last path element of a measured kernel image starts with one of these
+var kernelImagePrefixes = []string{"vmlinuz", "kernel", "bzImage"}
+
+func namesKernelImage(path string) bool {
+	base := path
+	if i := strings.LastIndexAny(base, "/\\"); i >= 0 {
+		base = base[i+1:]
+	}
+	for _, p := range kernelImagePrefixes {
+		if strings.HasPrefix(base, p) {
+			return true
+		}
+	}
+	return false
+}
+
+// ExtractKernelImageDigest returns the kernel image digest from the PCR 9
+// EV_IPL events.
+// Found is false when no image is measured. A log naming two different images
+// is refused: it does not say which one booted.
+func ExtractKernelImageDigest(parsed *ParsedEventLog) (KernelImage, error) {
+	var out KernelImage
+	if parsed == nil {
+		return out, errors.New("nil event log")
+	}
+
+	for _, e := range parsed.Entries {
+		if e.PCRIndex != 9 || e.EventType != EvIPL {
+			continue
+		}
+		path := parseIPLEventString(e.EventData)
+		if !namesKernelImage(path) {
+			continue
+		}
+		digest, ok := e.Digests[AlgSHA256]
+		if !ok || len(digest) != types.HashSize {
+			return KernelImage{}, fmt.Errorf(
+				"kernel image %q carries no SHA-256 measurement", path)
+		}
+
+		if out.Found {
+			if out.Path == path && bytes.Equal(out.Digest, digest) {
+				continue
+			}
+			return KernelImage{}, fmt.Errorf(
+				"event log measures two different kernel images: %q and %q",
+				out.Path, path)
+		}
+		out = KernelImage{
+			Found:  true,
+			Path:   path,
+			Digest: append([]byte(nil), digest...),
+		}
+	}
+
+	return out, nil
+}
+
+// RecordedKernelHash returns the kernel digest the verifier records
+// and kernel_hashes pins, so a pinned value matches its source.
+// The image digest is used when PCR 9 is quoted and replays; otherwise
+// the reported register, which names a boot rather than a kernel.
+func RecordedKernelHash(report *types.AttestationReport, facts *BootFacts) [types.HashSize]byte {
+	var out [types.HashSize]byte
+	if facts != nil && facts.KernelImageTrusted && facts.KernelImage.Found {
+		copy(out[:], facts.KernelImage.Digest)
+		return out
+	}
+	if report == nil {
+		return out
+	}
+	return report.System.KernelHash
+}
+
 // BootFacts carries the event-log-derived boot state the policy gates
 // consume.
 // *Trusted field is set only when the source PCR is covered by the quote
@@ -190,6 +274,10 @@ type BootFacts struct {
 	PCR8Quoted     bool
 	PCR8Reported   [types.HashSize]byte
 	PCR8EventsSeen bool
+
+	// recorded, not gated: a log naming two kernels leaves it unset
+	KernelImage        KernelImage
+	KernelImageTrusted bool // PCR 9 quoted + replay-consistent
 
 	// Parsed is the event log already parsed for this verification, so
 	// downstream consumers (re-anchor) reuse it instead of parsing the
@@ -256,14 +344,23 @@ func ExtractBootFacts(report *types.AttestationReport, parsed *ParsedEventLog, r
 		return nil, err
 	}
 
+	// two kernel images: unknown, not fatal -- nothing gates on it
+	img, err := ExtractKernelImageDigest(parsed)
+	if err != nil {
+		slog.Warn("kernel image measurement unusable", "error", err)
+		img = KernelImage{}
+	}
+
 	return &BootFacts{
-		SecureBoot:        sb,
-		SecureBootTrusted: pcrReplayAuthenticated(report, replay, 7),
-		Cmdlines:          ExtractKernelCmdlines(parsed),
-		CmdlineTrusted:    pcrReplayAuthenticated(report, replay, 8),
-		PCR8Quoted:        report.TPM.PCRMask&(1<<8) != 0,
-		PCR8Reported:      report.TPM.PCRValues[8],
-		PCR8EventsSeen:    replay.ExtendCounts[8] > 0,
+		SecureBoot:         sb,
+		SecureBootTrusted:  pcrReplayAuthenticated(report, replay, 7),
+		Cmdlines:           ExtractKernelCmdlines(parsed),
+		CmdlineTrusted:     pcrReplayAuthenticated(report, replay, 8),
+		PCR8Quoted:         report.TPM.PCRMask&(1<<8) != 0,
+		PCR8Reported:       report.TPM.PCRValues[8],
+		PCR8EventsSeen:     replay.ExtendCounts[8] > 0,
+		KernelImage:        img,
+		KernelImageTrusted: pcrReplayAuthenticated(report, replay, 9),
 	}, nil
 }
 

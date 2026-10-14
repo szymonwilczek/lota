@@ -101,8 +101,8 @@ func TestFleetPassesProductionVerification(t *testing.T) {
 				t.Fatalf("round %d agent %s: got %s, want ok",
 					round, a.Name, types.VerifyResultString(result.Result))
 			}
-			if round == 1 && result.SessionToken == [32]byte{} {
-				t.Errorf("agent %s: no session token on steady-state attestation", a.Name)
+			if round == 1 && result.ValidUntil == 0 {
+				t.Errorf("agent %s: no validity deadline on steady-state attestation", a.Name)
 			}
 		}
 	}

@@ -45,66 +45,16 @@ func init() {
 	}
 }
 
-func TestSessionValidateEndpoint_SuccessAndConsume(t *testing.T) {
-	mux, v := setupTestAPI(t)
-
-	challengeID := "api-session-validate"
-	challenge, err := v.GenerateChallenge(challengeID)
-	if err != nil {
-		t.Fatalf("GenerateChallenge failed: %v", err)
-	}
-
-	pcr14 := serverFixturePCR14()
-
-	clientID := persistentClientID(challengeID)
-	key := getClientTestAIK(clientID)
-	report := buildSignedReport(t, challengeID, challenge.Nonce, pcr14, key)
-	result, err := v.VerifyReport(challengeID, report)
-	if err != nil {
-		t.Fatalf("VerifyReport failed: %v", err)
-	}
-
-	body := fmt.Sprintf(`{"session_token":"%x","consume":true}`, result.SessionToken)
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/session/validate", strings.NewReader(body))
-	req.Header.Set("Content-Type", "application/json")
-	rr := httptest.NewRecorder()
-
-	mux.ServeHTTP(rr, req)
-	if rr.Code != http.StatusOK {
-		t.Fatalf("expected 200, got %d body=%s", rr.Code, rr.Body.String())
-	}
-
-	var resp map[string]any
-	if err := json.Unmarshal(rr.Body.Bytes(), &resp); err != nil {
-		t.Fatalf("invalid JSON response: %v", err)
-	}
-	if valid, _ := resp["valid"].(bool); !valid {
-		t.Fatalf("expected valid=true, got %v", resp["valid"])
-	}
-	if consumed, _ := resp["consumed"].(bool); !consumed {
-		t.Fatalf("expected consumed=true, got %v", resp["consumed"])
-	}
-
-	// token remains known but marked as consumed
-	req2 := httptest.NewRequest(http.MethodPost, "/api/v1/session/validate",
-		strings.NewReader(fmt.Sprintf(`{"session_token":"%x"}`, result.SessionToken)))
-	req2.Header.Set("Content-Type", "application/json")
-	rr2 := httptest.NewRecorder()
-	mux.ServeHTTP(rr2, req2)
-	if rr2.Code != http.StatusOK {
-		t.Fatalf("expected 200, got %d body=%s", rr2.Code, rr2.Body.String())
-	}
-
-	resp = map[string]any{}
-	if err := json.Unmarshal(rr2.Body.Bytes(), &resp); err != nil {
-		t.Fatalf("invalid JSON response: %v", err)
-	}
-	if consumed, _ := resp["consumed"].(bool); !consumed {
-		t.Fatalf("expected consumed=true on second check, got %v", resp["consumed"])
-	}
-}
-
-func TestSessionValidateEndpoint_BadToken(t *testing.T) {
+/*
+ * The verifier used to mint a session token on every successful attestation
+ * and answer for it here.
+ * Nothing could ever present one: the agent parsed the field off the wire
+ * and dropped it, so no title, SDK or verb ever held a token, and the endpoint's
+ * only reachable answer was that the token did not exist.
+ * The credential was withdrawn rather than half-wired, and this asserts
+ * the route is gone.
+ */
+func TestSessionValidateEndpointIsWithdrawn(t *testing.T) {
 	mux, _ := setupTestAPI(t)
 
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/session/validate",
@@ -113,8 +63,9 @@ func TestSessionValidateEndpoint_BadToken(t *testing.T) {
 	rr := httptest.NewRecorder()
 
 	mux.ServeHTTP(rr, req)
-	if rr.Code != http.StatusBadRequest {
-		t.Fatalf("expected 400, got %d body=%s", rr.Code, rr.Body.String())
+	if rr.Code != http.StatusNotFound {
+		t.Fatalf("expected 404 for a withdrawn endpoint, got %d body=%s",
+			rr.Code, rr.Body.String())
 	}
 }
 
@@ -178,12 +129,17 @@ func TestAttestationLogEndpoint_SanitizesDetails(t *testing.T) {
 	}
 }
 
-func TestSessionValidateEndpoint_RejectsDeepJSONNesting(t *testing.T) {
-	mux, _ := setupTestAPI(t)
+/*
+ * The nesting guard is a property of every POST body the API decodes,
+ * so it moved here when the session-validate endpoint was withdrawn.
+ */
+func TestPostBodyRejectsDeepJSONNesting(t *testing.T) {
+	mux, _ := setupTestAPIWithKey(t, "admin-key")
 
 	deep := strings.Repeat("[", 80) + strings.Repeat("]", 80)
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/session/validate", strings.NewReader(deep))
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/bans", strings.NewReader(deep))
 	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer admin-key")
 	rr := httptest.NewRecorder()
 
 	mux.ServeHTTP(rr, req)
@@ -363,7 +319,7 @@ func serverFixturePCR14() [32]byte {
 	for i := range agentHash {
 		agentHash[i] = byte(0xBB ^ i)
 	}
-	return verify.DeriveLockedBootCommitmentPCR14([32]byte{}, agentHash, 0, 0)
+	return verify.DeriveLockedBootCommitmentPCR14([32]byte{}, agentHash)
 }
 
 // builds a complete attestation report with valid TPM quote signature
@@ -1707,7 +1663,7 @@ func TestForceReanchor_ClearsBaselineAndAudits(t *testing.T) {
 
 	req := httptest.NewRequest(http.MethodPost,
 		"/api/v1/clients/"+clientID+"/reanchor",
-		strings.NewReader(`{"actor":"ops@example","note":"planned firmware update"}`))
+		strings.NewReader(`{"actor":"ops@example","reason":"planned firmware update","note":"board swap"}`))
 	req.Header.Set("Authorization", "Bearer test-admin-key")
 	rr := httptest.NewRecorder()
 	mux.ServeHTTP(rr, req)
@@ -1752,7 +1708,7 @@ func TestForceReanchor_UnknownClient(t *testing.T) {
 
 	req := httptest.NewRequest(http.MethodPost,
 		"/api/v1/clients/no-such-client/reanchor",
-		strings.NewReader(`{"actor":"ops@example"}`))
+		strings.NewReader(`{"actor":"ops@example","reason":"admin"}`))
 	req.Header.Set("Authorization", "Bearer test-admin-key")
 	rr := httptest.NewRecorder()
 	mux.ServeHTTP(rr, req)
@@ -1768,7 +1724,7 @@ func TestForceReanchor_RequiresAdminKey(t *testing.T) {
 	post := func(token string) *httptest.ResponseRecorder {
 		req := httptest.NewRequest(http.MethodPost,
 			"/api/v1/clients/some-client/reanchor",
-			strings.NewReader(`{"actor":"ops@example"}`))
+			strings.NewReader(`{"actor":"ops@example","reason":"admin"}`))
 		if token != "" {
 			req.Header.Set("Authorization", "Bearer "+token)
 		}
@@ -1796,7 +1752,7 @@ func TestDeleteClient_RemovesTrustState(t *testing.T) {
 	clientID := attestTestClient(t, v, "delete-client")
 
 	req := httptest.NewRequest(http.MethodDelete, "/api/v1/clients/"+clientID,
-		strings.NewReader(`{"actor":"ops@example","note":"decommissioned"}`))
+		strings.NewReader(`{"actor":"ops@example","reason":"decommissioned","note":"returned to vendor"}`))
 	req.Header.Set("Authorization", "Bearer test-admin-key")
 	rr := httptest.NewRecorder()
 	mux.ServeHTTP(rr, req)
@@ -1815,7 +1771,8 @@ func TestDeleteClient_RemovesTrustState(t *testing.T) {
 	}
 
 	// second delete: no trust state left
-	req = httptest.NewRequest(http.MethodDelete, "/api/v1/clients/"+clientID, nil)
+	req = httptest.NewRequest(http.MethodDelete, "/api/v1/clients/"+clientID,
+		strings.NewReader(`{"actor":"ops@example","reason":"decommissioned"}`))
 	req.Header.Set("Authorization", "Bearer test-admin-key")
 	rr = httptest.NewRecorder()
 	mux.ServeHTTP(rr, req)
@@ -1839,7 +1796,8 @@ func TestDeleteClient_RevocationSurvives(t *testing.T) {
 		t.Fatalf("Revoke failed: %v", err)
 	}
 
-	req := httptest.NewRequest(http.MethodDelete, "/api/v1/clients/"+clientID, nil)
+	req := httptest.NewRequest(http.MethodDelete, "/api/v1/clients/"+clientID,
+		strings.NewReader(`{"actor":"ops@example","reason":"decommissioned"}`))
 	req.Header.Set("Authorization", "Bearer test-admin-key")
 	rr := httptest.NewRecorder()
 	mux.ServeHTTP(rr, req)

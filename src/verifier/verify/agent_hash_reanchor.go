@@ -51,6 +51,27 @@ func (v AgentHashVerdict) String() string {
 	return "escalate"
 }
 
+// AgentHashRefusal is why a re-pin was refused, which the verdict alone cannot
+// carry: "this build is not one you trust" and "this build is one you trust,
+// but this client moved too recently" are the same escalation and completely
+// different situations for whoever has to act on it.
+type AgentHashRefusal int
+
+const (
+	// AgentHashNoRefusal: the re-pin was allowed.
+	AgentHashNoRefusal AgentHashRefusal = iota
+	// AgentHashNoAllowList: the policy blesses no build, so there is no
+	// trust root to appeal to and the pin stands. The enterprise profile.
+	AgentHashNoAllowList
+	// AgentHashNotAllowed: the reported build is not one the policy lists.
+	// This is the drift the pin exists to catch, and the policy gate has
+	// already refused it by name before this path runs.
+	AgentHashNotAllowed
+	// AgentHashTooSoon: the reported build is listed, and this client
+	// re-pinned less than AgentHashRepinMinInterval ago.
+	AgentHashTooSoon
+)
+
 // agentHashDecision answers whether a client whose reported agent hash differs
 // from its pinned baseline may re-pin to the reported one.
 //
@@ -85,20 +106,20 @@ func agentHashDecision(
 	allowedHashes []string,
 	lastRepin time.Time,
 	now time.Time,
-) AgentHashVerdict {
+) (AgentHashVerdict, AgentHashRefusal) {
 	if len(allowedHashes) == 0 {
-		return AgentHashEscalate
+		return AgentHashEscalate, AgentHashNoAllowList
 	}
 
 	if !agentHashAllowed(reported, allowedHashes) {
-		return AgentHashEscalate
+		return AgentHashEscalate, AgentHashNotAllowed
 	}
 
 	// client that has never re-pinned carries the zero time, which is older
 	// than any interval, so first update is never rate limited
 	if !lastRepin.IsZero() && now.Sub(lastRepin) < AgentHashRepinMinInterval {
-		return AgentHashEscalate
+		return AgentHashEscalate, AgentHashTooSoon
 	}
 
-	return AgentHashRepin
+	return AgentHashRepin, AgentHashNoRefusal
 }

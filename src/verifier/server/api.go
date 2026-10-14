@@ -55,6 +55,8 @@ type APIHandler struct {
 	readerAPIKey   string // if non-empty, required for sensitive read-only endpoints
 	adminKeyHash   [32]byte
 	readerKeyHash  [32]byte
+	routes         []string // patterns handed to the mux, in order
+	endpoints      []string // what those patterns serve, as an operator calls it
 }
 
 // creates a new API handler and registers routes on the given mux
@@ -95,45 +97,79 @@ func NewAPIHandler(mux *http.ServeMux, verifier *verify.Verifier, srv *Server, a
 	}
 
 	// public monitoring endpoints (no auth required)
-	mux.HandleFunc("GET /health", h.handleHealth)
+	h.handle(mux, "GET /health", h.handleHealth)
 
 	// operational intelligence endpoints (reader or admin auth required)
-	mux.HandleFunc("GET /api/v1/stats", h.requireReader(h.handleStats))
-	mux.HandleFunc("GET /metrics", h.requireReader(h.handleMetrics))
+	h.handle(mux, "GET /api/v1/stats", h.requireReader(h.handleStats))
+	h.handle(mux, "GET /metrics", h.requireReader(h.handleMetrics))
 
 	// sensitive read-only endpoints (reader or admin auth required)
-	mux.HandleFunc("GET /api/v1/clients", h.requireReader(h.handleListClients))
-	mux.HandleFunc("GET /api/v1/clients/", h.requireReader(h.handleClientInfo))
-	mux.HandleFunc("POST /api/v1/session/validate", h.requireReader(h.handleValidateSessionToken))
-	mux.HandleFunc("GET /api/v1/revocations", h.requireReader(h.handleListRevocations))
-	mux.HandleFunc("GET /api/v1/bans", h.requireReader(h.handleListBans))
-	mux.HandleFunc("GET /api/v1/audit", h.requireReader(h.handleAuditLog))
-	mux.HandleFunc("GET /api/v1/attestations", h.requireReader(h.handleAttestationLog))
+	h.handle(mux, "GET /api/v1/clients", h.requireReader(h.handleListClients))
+	h.handle(mux, "GET /api/v1/clients/", h.requireReader(h.handleClientInfo),
+		"GET /api/v1/clients/{id}")
+	h.handle(mux, "GET /api/v1/revocations", h.requireReader(h.handleListRevocations))
+	h.handle(mux, "GET /api/v1/bans", h.requireReader(h.handleListBans))
+	h.handle(mux, "GET /api/v1/audit", h.requireReader(h.handleAuditLog))
+	h.handle(mux, "GET /api/v1/attestations", h.requireReader(h.handleAttestationLog))
 
 	// revocation management (admin auth required)
-	mux.HandleFunc("POST /api/v1/clients/", h.requireAdmin(h.handleClientAction))
-	mux.HandleFunc("DELETE /api/v1/clients/", h.requireAdmin(h.handleClientAction))
+	h.handle(mux, "POST /api/v1/clients/", h.requireAdmin(h.handleClientAction),
+		"POST /api/v1/clients/{id}/revoke")
+	h.handle(mux, "DELETE /api/v1/clients/", h.requireAdmin(h.handleClientAction),
+		"DELETE /api/v1/clients/{id}/revoke", "DELETE /api/v1/clients/{id}")
 
 	// post-fact review of Low-Firmware-Assurance re-anchors.
 	// LFA re-anchors apply automatically; these endpoints let an operator see
 	// which clients took that path and acknowledge having reviewed them.
 	// Acknowledge route is more specific than the POST /clients/ pattern
 	// above, so Go's mux routes it here.
-	mux.HandleFunc("GET /api/v1/reanchor/review",
+	h.handle(mux, "GET /api/v1/reanchor/review",
 		h.requireReader(h.handleReanchorReviewList))
-	mux.HandleFunc("POST /api/v1/clients/{clientID}/reanchor-review-ack",
-		h.requireAdmin(h.handleReanchorReviewAck))
+	h.handle(mux, "POST /api/v1/clients/{clientID}/reanchor-review-ack",
+		h.requireAdmin(h.handleReanchorReviewAck),
+		"POST /api/v1/clients/{id}/reanchor-review-ack")
 
 	// operator-forced re-baseline;
 	// deliberate counterpart of the self-service re-anchor above (admin auth required)
-	mux.HandleFunc("POST /api/v1/clients/{clientID}/reanchor",
-		h.requireAdmin(h.handleForceReanchor))
+	h.handle(mux, "POST /api/v1/clients/{clientID}/reanchor",
+		h.requireAdmin(h.handleForceReanchor),
+		"POST /api/v1/clients/{id}/reanchor")
 
 	// hardware ban management (admin auth required)
-	mux.HandleFunc("POST /api/v1/bans", h.requireAdmin(h.handleBanHardware))
-	mux.HandleFunc("DELETE /api/v1/bans/", h.requireAdmin(h.handleUnbanHardware))
+	h.handle(mux, "POST /api/v1/bans", h.requireAdmin(h.handleBanHardware))
+	h.handle(mux, "DELETE /api/v1/bans/", h.requireAdmin(h.handleUnbanHardware),
+		"DELETE /api/v1/bans/{id}")
 
 	return h
+}
+
+// handle registers a route and records both the pattern the mux matches on
+// and the endpoints an operator can call. They differ where one pattern
+// dispatches several actions by path: the pattern is what routing needs,
+// the endpoints are what an inventory has to name.
+// Given no endpoints, a route advertises itself.
+func (h *APIHandler) handle(mux *http.ServeMux, pattern string,
+	handler http.HandlerFunc, endpoints ...string,
+) {
+	h.routes = append(h.routes, pattern)
+	if len(endpoints) == 0 {
+		endpoints = []string{pattern}
+	}
+	h.endpoints = append(h.endpoints, endpoints...)
+	mux.HandleFunc(pattern, handler)
+}
+
+// RegisteredRoutes is every pattern handed to the mux, in registration order.
+// Its counterpart is AdvertisedRoutes(), which is what an operator is told.
+func (h *APIHandler) RegisteredRoutes() []string {
+	return h.routes
+}
+
+// AdvertisedRoutes is what the instance tells an operator it exposes.
+// It is what the routes above registered, so the banner cannot name an endpoint
+// nothing serves or omit one that is served.
+func (h *APIHandler) AdvertisedRoutes() []string {
+	return h.endpoints
 }
 
 // principalCtxKey carries the authenticated Principal through the
@@ -220,8 +256,9 @@ func (h *APIHandler) requireAdmin(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if !h.adminConfigured() {
 			h.log.Warn("admin endpoint called but no API key configured",
-				"method", r.Method, "path", r.URL.Path,
-				"remote_addr", r.RemoteAddr)
+				"method", logging.SanitizeField(r.Method),
+				"path", logging.SanitizeField(r.URL.Path),
+				"remote_addr", logging.SanitizeField(r.RemoteAddr))
 			writeJSONStatus(w, http.StatusForbidden, errorResponse{Error: "admin API key not configured"})
 			return
 		}
@@ -359,23 +396,6 @@ type clientInfoResponse struct {
 
 type errorResponse struct {
 	Error string `json:"error"`
-}
-
-type validateSessionTokenRequest struct {
-	SessionToken string `json:"session_token"`
-	Consume      bool   `json:"consume"`
-}
-
-type validateSessionTokenResponse struct {
-	Valid      bool   `json:"valid"`
-	Consumed   bool   `json:"consumed"`
-	ClientID   string `json:"client_id,omitempty"`
-	Tenant     string `json:"tenant,omitempty"`
-	HardwareID string `json:"hardware_id,omitempty"`
-	ResultCode uint32 `json:"result_code,omitempty"`
-	Flags      uint32 `json:"flags,omitempty"`
-	PCRMask    uint32 `json:"pcr_mask,omitempty"`
-	ValidUntil uint64 `json:"valid_until,omitempty"`
 }
 
 // health check for load balancers
@@ -687,93 +707,6 @@ func (h *APIHandler) handleClientInfo(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, resp)
 }
 
-// POST /api/v1/session/validate - verify issued session token
-func (h *APIHandler) handleValidateSessionToken(w http.ResponseWriter, r *http.Request) {
-	var req validateSessionTokenRequest
-	if err := decodeJSONRequest(w, r, &req); err != nil {
-		writeJSONStatus(w, http.StatusBadRequest, errorResponse{Error: "invalid JSON: " + err.Error()})
-		return
-	}
-
-	req.SessionToken = strings.TrimSpace(req.SessionToken)
-	if len(req.SessionToken) != 64 {
-		writeJSONStatus(w, http.StatusBadRequest, errorResponse{Error: "session_token must be 64 hex characters"})
-		return
-	}
-
-	tokBytes, err := hexDecodeFixed32(req.SessionToken)
-	if err != nil {
-		writeJSONStatus(w, http.StatusBadRequest, errorResponse{Error: "invalid session_token hex"})
-		return
-	}
-
-	// resolve without consuming first so a token outside the key's
-	// tenant set is reported as not found and, crucially, is NOT
-	// consumed by a foreign caller
-	if scopedToTenants(requestPrincipal(r)) {
-		peek := h.verifier.ValidateSessionToken(tokBytes, false)
-		if !peek.Exists || !principalAllowsTenant(requestPrincipal(r), peek.Tenant) {
-			writeJSON(w, validateSessionTokenResponse{Valid: false})
-			return
-		}
-	}
-
-	status := h.verifier.ValidateSessionToken(tokBytes, req.Consume)
-	if !status.Exists {
-		writeJSON(w, validateSessionTokenResponse{Valid: false})
-		return
-	}
-
-	writeJSON(w, validateSessionTokenResponse{
-		Valid:      !status.Expired,
-		Consumed:   status.Consumed,
-		ClientID:   status.ClientID,
-		Tenant:     status.Tenant,
-		HardwareID: fmt.Sprintf("%x", status.HardwareID[:]),
-		ResultCode: status.ResultCode,
-		Flags:      status.Flags,
-		PCRMask:    status.PCRMask,
-		ValidUntil: status.ValidUntil,
-	})
-}
-
-func hexDecodeFixed32(s string) ([32]byte, error) {
-	var out [32]byte
-	for i := 0; i < 32; i++ {
-		v, ok := fromHexByte(s[i*2], s[i*2+1])
-		if !ok {
-			return out, fmt.Errorf("invalid hex")
-		}
-		out[i] = v
-	}
-	return out, nil
-}
-
-func fromHexNibble(c byte) (byte, bool) {
-	switch {
-	case c >= '0' && c <= '9':
-		return c - '0', true
-	case c >= 'a' && c <= 'f':
-		return c - 'a' + 10, true
-	case c >= 'A' && c <= 'F':
-		return c - 'A' + 10, true
-	default:
-		return 0, false
-	}
-}
-
-func fromHexByte(hi, lo byte) (byte, bool) {
-	h, ok := fromHexNibble(hi)
-	if !ok {
-		return 0, false
-	}
-	l, ok := fromHexNibble(lo)
-	if !ok {
-		return 0, false
-	}
-	return (h << 4) | l, true
-}
-
 // GET /metrics - Prometheus text exposition format
 func (h *APIHandler) handleMetrics(w http.ResponseWriter, r *http.Request) {
 	// exposition is fleet-wide and carries no tenant dimension,
@@ -887,7 +820,8 @@ func (h *APIHandler) handleRevokeClient(w http.ResponseWriter, r *http.Request, 
 			writeJSONStatus(w, http.StatusConflict, errorResponse{Error: "client is already revoked"})
 			return
 		}
-		h.log.Error("revocation failed", "client_id", clientID, "error", err)
+		h.log.Error("revocation failed",
+			"client_id", logging.SanitizeField(clientID), "error", err)
 		writeJSONStatus(w, http.StatusInternalServerError, errorResponse{Error: "internal error"})
 		return
 	}
@@ -913,6 +847,24 @@ func (h *APIHandler) handleUnrevokeClient(w http.ResponseWriter, r *http.Request
 		return
 	}
 
+	// Restoring access is the act a fleet most wants signed, so the lift carries
+	// the same attribution its inverse does.
+	var req lifecycleRequest
+	if r.ContentLength != 0 {
+		if err := decodeJSONRequest(w, r, &req); err != nil {
+			writeJSONStatus(w, http.StatusBadRequest, errorResponse{Error: "invalid JSON: " + err.Error()})
+			return
+		}
+	}
+	if req.Actor == "" {
+		writeJSONStatus(w, http.StatusBadRequest, errorResponse{Error: "actor is required"})
+		return
+	}
+	if req.Reason == "" {
+		writeJSONStatus(w, http.StatusBadRequest, errorResponse{Error: "reason is required"})
+		return
+	}
+
 	// scope on the revocation's recorded tenant;
 	// foreign-tenant revocation is reported as "not revoked"
 	// so a key cannot probe another tenant's revocation state
@@ -924,19 +876,22 @@ func (h *APIHandler) handleUnrevokeClient(w http.ResponseWriter, r *http.Request
 		}
 	}
 
-	err := revStore.Unrevoke(clientID)
+	err := revStore.Unrevoke(clientID, req.Reason, req.Actor, req.Note)
 	if err != nil {
 		if err == store.ErrNotRevoked {
 			writeJSONStatus(w, http.StatusNotFound, errorResponse{Error: "client is not revoked"})
 			return
 		}
-		h.log.Error("unrevoke failed", "client_id", clientID, "error", err)
+		h.log.Error("unrevoke failed",
+			"client_id", logging.SanitizeField(clientID), "error", err)
 		writeJSONStatus(w, http.StatusInternalServerError, errorResponse{Error: "internal error"})
 		return
 	}
 
 	logging.Security(h.log, "client unrevoked",
-		"client_id", logging.SanitizeField(clientID))
+		"client_id", logging.SanitizeField(clientID),
+		"actor", logging.SanitizeField(req.Actor),
+		"reason", logging.SanitizeField(req.Reason))
 
 	writeJSON(w, map[string]string{
 		"status":    "unrevoked",
@@ -1109,6 +1064,24 @@ func (h *APIHandler) handleUnbanHardware(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
+	// Letting a banned machine back in is the act a fleet most wants signed;
+	// the lift carries the same attribution the ban does.
+	var req lifecycleRequest
+	if r.ContentLength != 0 {
+		if err := decodeJSONRequest(w, r, &req); err != nil {
+			writeJSONStatus(w, http.StatusBadRequest, errorResponse{Error: "invalid JSON: " + err.Error()})
+			return
+		}
+	}
+	if req.Actor == "" {
+		writeJSONStatus(w, http.StatusBadRequest, errorResponse{Error: "actor is required"})
+		return
+	}
+	if req.Reason == "" {
+		writeJSONStatus(w, http.StatusBadRequest, errorResponse{Error: "reason is required"})
+		return
+	}
+
 	hwidHex := strings.TrimPrefix(r.URL.Path, "/api/v1/bans/")
 	hwidHex = strings.TrimRight(hwidHex, "/")
 
@@ -1139,7 +1112,7 @@ func (h *APIHandler) handleUnbanHardware(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	err = banStr.UnbanHardware(tenant, hwid)
+	err = banStr.UnbanHardware(tenant, hwid, req.Reason, req.Actor, req.Note)
 	if err != nil {
 		if err == store.ErrNotBanned {
 			writeJSONStatus(w, http.StatusNotFound, errorResponse{Error: "hardware ID is not banned"})
@@ -1378,6 +1351,7 @@ type attestationResponse struct {
 	Result     string  `json:"result"`
 	DurationMs float64 `json:"duration_ms"`
 	PCR14      string  `json:"pcr14,omitempty"`
+	KernelHash string  `json:"kernel_hash,omitempty"`
 	Details    string  `json:"details,omitempty"`
 	RemoteAddr string  `json:"remote_addr,omitempty"`
 }
@@ -1416,6 +1390,7 @@ func (h *APIHandler) handleAttestationLog(w http.ResponseWriter, r *http.Request
 			Result:     e.Result,
 			DurationMs: e.DurationMs,
 			PCR14:      e.PCR14,
+			KernelHash: e.KernelHash,
 			Details:    sanitizeAttestationDetail(e.Details),
 			RemoteAddr: e.RemoteAddr,
 		})
@@ -1614,8 +1589,9 @@ func (h *APIHandler) handleReanchorReviewAck(w http.ResponseWriter, r *http.Requ
 // JSON request for operator lifecycle actions
 // (forced re-anchor, delete)
 type lifecycleRequest struct {
-	Actor string `json:"actor"` // administrator identifier
-	Note  string `json:"note"`  // free-form justification
+	Actor  string `json:"actor"`  // administrator identifier
+	Reason string `json:"reason"` // why this was done
+	Note   string `json:"note"`   // free-form justification
 }
 
 // POST /api/v1/clients/{clientID}/reanchor
@@ -1640,6 +1616,10 @@ func (h *APIHandler) handleForceReanchor(w http.ResponseWriter, r *http.Request)
 		writeJSONStatus(w, http.StatusBadRequest, errorResponse{Error: "actor is required"})
 		return
 	}
+	if req.Reason == "" {
+		writeJSONStatus(w, http.StatusBadRequest, errorResponse{Error: "reason is required"})
+		return
+	}
 
 	logID := sanitizeLogField(clientID)
 
@@ -1661,7 +1641,7 @@ func (h *APIHandler) handleForceReanchor(w http.ResponseWriter, r *http.Request)
 	}
 
 	if h.auditLog != nil {
-		if err := h.auditLog.Log(tenant, "reanchor", clientID, "", req.Actor, req.Note); err != nil {
+		if err := h.auditLog.Log(tenant, "reanchor", clientID, req.Reason, req.Actor, req.Note); err != nil {
 			h.log.Error("audit log write failed",
 				"action", "reanchor", "client_id", logID, "error", err)
 		}
@@ -1681,8 +1661,8 @@ func (h *APIHandler) handleForceReanchor(w http.ResponseWriter, r *http.Request)
 // Remove the client's AIK registration and baselines, forcing fresh
 // enrollment (admin only).
 // Revocations and hardware bans survive the delete.
-// Body is optional audit metadata ({"actor","note"}).
-// DELETE has no required payload.
+// Body names who removed the client and why ({"actor", "reason"}),
+// both required.
 func (h *APIHandler) handleDeleteClient(w http.ResponseWriter, r *http.Request, clientID string) {
 	var req lifecycleRequest
 	if r.ContentLength != 0 {
@@ -1690,6 +1670,15 @@ func (h *APIHandler) handleDeleteClient(w http.ResponseWriter, r *http.Request, 
 			writeJSONStatus(w, http.StatusBadRequest, errorResponse{Error: "invalid JSON: " + err.Error()})
 			return
 		}
+	}
+
+	if req.Actor == "" {
+		writeJSONStatus(w, http.StatusBadRequest, errorResponse{Error: "actor is required"})
+		return
+	}
+	if req.Reason == "" {
+		writeJSONStatus(w, http.StatusBadRequest, errorResponse{Error: "reason is required"})
+		return
 	}
 
 	logID := sanitizeLogField(clientID)
@@ -1715,7 +1704,7 @@ func (h *APIHandler) handleDeleteClient(w http.ResponseWriter, r *http.Request, 
 	}
 
 	if h.auditLog != nil {
-		if err := h.auditLog.Log(tenant, "delete_client", clientID, "", req.Actor, req.Note); err != nil {
+		if err := h.auditLog.Log(tenant, "delete_client", clientID, req.Reason, req.Actor, req.Note); err != nil {
 			h.log.Error("audit log write failed",
 				"action", "delete_client", "client_id", logID, "error", err)
 		}

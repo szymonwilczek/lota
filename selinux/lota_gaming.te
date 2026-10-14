@@ -38,6 +38,29 @@ gen_require(`
 ')
 
 #
+# Per-user container listener
+#
+# A title inside a Proton container connects to a socket under the launching
+# user's runtime directory, /run/user/<uid>/lota/lota.sock.
+# The agent creates that directory and binds the socket, and watches /run/user
+# so it can do so when the user logs in -- which is always after the agent started.
+# Every path involved is user_tmp_t, so without these three the agent is refused
+# at the mkdir, at the bind, and at the inotify watch in turn, each as a bare EACCES.
+#
+userdom_manage_tmp_dirs(lota_agent_t)
+userdom_manage_tmp_sockets(lota_agent_t)
+userdom_watch_tmp_dirs(lota_agent_t)
+
+#
+# The directory and the socket are handed to the lota group, which is what lets
+# a title open them at all -- they are bound 0750 and 0660 and created by root.
+# That is a chown, so SELinux wants the capability named as well as the unit's
+# bounding set carrying it; without this rule the change fails with EPERM
+# and the listener answers nobody.
+#
+allow lota_agent_t self:capability chown;
+
+#
 # Steam
 #
 optional_policy(`

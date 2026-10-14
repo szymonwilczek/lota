@@ -23,7 +23,7 @@ import (
 // Oracle invariants, independent of the policy implementation:
 //   - result is always returned (never nil-without-error),
 //   - error and the result code agree (err==nil iff VerifyOK),
-//   - acceptance yields session token with a future expiry,
+//   - acceptance yields a validity deadline in the future,
 //   - accept/reject decision is deterministic for a fixed spec
 func FuzzVerifyReport(f *testing.F) {
 	aikStore := newFuzzCertStore(f)
@@ -68,9 +68,6 @@ func FuzzVerifyReport(f *testing.F) {
 			t.Fatalf("error/result disagree: err=%v result=%d", err, result.Result)
 		}
 		if accepted {
-			if len(result.SessionToken) == 0 {
-				t.Fatalf("accepted report produced no session token")
-			}
 			if result.ValidUntil <= uint64(time.Now().Unix()) {
 				t.Fatalf("accepted report has non-future expiry %d", result.ValidUntil)
 			}

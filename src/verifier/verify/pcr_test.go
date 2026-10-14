@@ -7,6 +7,7 @@ package verify
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/szymonwilczek/lota/verifier/types"
@@ -306,6 +307,70 @@ func TestPCRVerifier_VerifyReport_PCRNotInQuote(t *testing.T) {
 	}
 
 	t.Logf("Missing PCR in quote correctly detected: %v", err)
+}
+
+func TestPCRVerifier_VerifyReport_NamesEveryMismatchingPCR(t *testing.T) {
+	t.Log("SECURITY TEST: a stale boot chain names every register it moved, in one order")
+
+	const zeroHex = "0000000000000000000000000000000000000000000000000000000000000000"
+
+	verifier := NewPCRVerifier()
+
+	// three pinned registers, of which two will be stale:
+	// one mismatch cannot catch this, because the defect is the choice between
+	// several
+	policy := &PCRPolicy{
+		Name: "two-stale-registers",
+		PCRs: map[int]string{
+			0: zeroHex,
+			8: zeroHex,
+			9: zeroHex,
+		},
+	}
+	if err := verifier.AddPolicy(policy); err != nil {
+		t.Fatalf("AddPolicy(policy) failed: %v", err)
+	}
+
+	report := &types.AttestationReport{}
+	report.TPM.PCRMask = (1 << 0) | (1 << 8) | (1 << 9)
+	for i := 0; i < types.HashSize; i++ {
+		report.TPM.PCRValues[8][i] = 0x11
+		report.TPM.PCRValues[9][i] = 0x22
+	}
+
+	err := verifier.VerifyReport(report)
+	if err == nil {
+		t.Fatal("Expected error when two pinned PCRs are stale")
+	}
+	first := err.Error()
+
+	// the operator has to be told about both, or fixing one uncovers the other
+	for _, want := range []string{"PCR 8 mismatch", "PCR 9 mismatch"} {
+		if !strings.Contains(first, want) {
+			t.Errorf("Expected %q in the failure, got: %s", want, first)
+		}
+	}
+	if strings.Contains(first, "PCR 0 mismatch") {
+		t.Errorf("A matching PCR must not be reported as stale, got: %s", first)
+	}
+	if i8, i9 := strings.Index(first, "PCR 8"), strings.Index(first, "PCR 9"); i8 > i9 {
+		t.Errorf("Expected the registers named in index order, got: %s", first)
+	}
+
+	// map iteration is randomised per call, so the same fault must not read
+	// as a different fault on the next round
+	for round := 0; round < 64; round++ {
+		again := verifier.VerifyReport(report)
+		if again == nil {
+			t.Fatalf("Round %d unexpectedly passed", round)
+		}
+		if again.Error() != first {
+			t.Fatalf("Round %d reported a different failure for the same state:\n  %s\n  %s",
+				round, first, again.Error())
+		}
+	}
+
+	t.Logf("Every stale register named, stably: %v", err)
 }
 
 func TestPCRVerifier_VerifyReport_CmdlinePCR8(t *testing.T) {

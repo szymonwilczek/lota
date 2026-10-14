@@ -4,7 +4,7 @@
 #
 # Operator-facing watcher for the LOTA Wine/Proton hook.
 #
-# Polls $XDG_RUNTIME_DIR/lota/lota-status at a fixed cadence and
+# Polls $XDG_RUNTIME_DIR/lota-hook/lota-status at a fixed cadence and
 # prints one timestamped line per state transition: TRUSTED <->
 # UNTRUSTED <-> OFFLINE. The watcher does not interpret the rest of
 # the status payload; it only translates LOTA_ATTESTED and the
@@ -25,8 +25,10 @@ Polls the LOTA hook status file and prints state transitions.
 
   --interval SEC     polling cadence in seconds (default 1; min 1)
   --status-path PATH explicit status-file path. Defaults to
-                     \$XDG_RUNTIME_DIR/lota/lota-status with a
-                     /run/user/<uid>/lota/lota-status fallback.
+                     \$XDG_RUNTIME_DIR/lota-hook/lota-status, then
+                     /run/user/<uid>/lota-hook/lota-status, then
+                     /tmp/lota-<uid>/lota-status -- the order the hook
+                     settles its token directory in.
   --once             print the current verdict once and exit (CI mode)
 
 Verdict mapping:
@@ -96,8 +98,9 @@ esac
 if [ -z "$STATUS_PATH" ]; then
 	uid="$(id -u)"
 	for cand in \
-		"${XDG_RUNTIME_DIR:-/run/user/$uid}/lota/lota-status" \
-		"/run/user/$uid/lota/lota-status"; do
+		"${XDG_RUNTIME_DIR:-/run/user/$uid}/lota-hook/lota-status" \
+		"/run/user/$uid/lota-hook/lota-status" \
+		"/tmp/lota-$uid/lota-status"; do
 		STATUS_PATH="$cand"
 		[ -e "$cand" ] && break
 	done

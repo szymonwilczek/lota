@@ -289,6 +289,16 @@ void ipc_update_rotation(struct ipc_context *ctx, uint64_t generation,
 void ipc_set_mode(struct ipc_context *ctx, uint8_t mode);
 
 /*
+ * ipc_host_status_flags - the status word a caller that names no publisher sees
+ *
+ * The stored word plus the facts that are answered at the moment of the answer.
+ * A bus connection names no publisher, so the host-wide view is the only one
+ * there is -- but runtime-measurement coverage is a fact about the host,
+ * and every road out has to carry it.
+ */
+uint32_t ipc_host_status_flags(const struct ipc_context *ctx);
+
+/*
  * ipc_set_profiles - Hand the IPC layer the publisher profiles
  * @ctx: Server context
  * @profiles: Targets owned by the attestation loop, borrowed for the run
@@ -321,11 +331,31 @@ void ipc_set_attest_sync_hook(struct ipc_context *ctx, void (*fn)(void *),
  * @pcr_mask: PCRs to include in token quotes
  *
  * When TPM context is set, GET_TOKEN will generate fresh
- * TPM quotes signed by the AIK. Without TPM context,
- * GET_TOKEN returns unsigned tokens for development/testing.
+ * TPM quotes signed by the AIK. Without TPM context, GET_TOKEN is refused:
+ * a token nobody signed is not evidence, so it is never issued.
  */
 void ipc_set_tpm(struct ipc_context *ctx, struct tpm_context *tpm,
 		 uint32_t pcr_mask);
+
+/*
+ * ipc_can_issue_tokens - whether this server can answer GET_TOKEN at all
+ * @ctx: Server context, or NULL
+ *
+ * Signing is the whole of a token, so a server with no TPM bound has no
+ * token to give and refuses every request. Callers that announce what
+ * a server does ask here, so a banner cannot promise what GET_TOKEN goes
+ * on to refuse.
+ */
+bool ipc_can_issue_tokens(const struct ipc_context *ctx);
+
+/*
+ * ipc_token_capability_str - one line saying what GET_TOKEN will answer
+ * @ctx: Server context, or NULL
+ *
+ * Derived from ipc_can_issue_tokens(), for the diagnostic servers to print.
+ * Never NULL.
+ */
+const char *ipc_token_capability_str(const struct ipc_context *ctx);
 
 /*
  * ipc_add_listener - Add an extra listener socket.
@@ -340,6 +370,21 @@ void ipc_set_tpm(struct ipc_context *ctx, struct tpm_context *tpm,
  * Returns: 0 on success, negative errno on failure.
  */
 int ipc_add_listener(struct ipc_context *ctx, const char *socket_path);
+
+/*
+ * ipc_remove_listener - Drop an extra listener socket.
+ * @ctx: Initialized IPC context.
+ * @socket_path: Path the listener was added under.
+ *
+ * Unregisters the socket from the epoll set, closes it and unlinks the path,
+ * freeing the slot for another listener. A per-user socket outlives the login
+ * it was created for -- the runtime directory goes with the session
+ * and the socket file with it, leaving a listener nothing can connect to
+ * and a slot that cannot be reused.
+ *
+ * Returns: 0 on success, -ENOENT when no listener holds that path.
+ */
+int ipc_remove_listener(struct ipc_context *ctx, const char *socket_path);
 
 /*
  * ipc_is_listener - Check if an fd is any listener socket.

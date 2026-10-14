@@ -696,8 +696,55 @@ func TestVerifyToken_V2_TamperedImageDigest(t *testing.T) {
 	// from the quote-bound value
 	tok[TokenHeaderSize+4] ^= 0xFF
 
-	if _, err := VerifyToken(tok, &key.PublicKey, nonce[:]); err == nil {
+	_, err = VerifyToken(tok, &key.PublicKey, nonce[:])
+	if err == nil {
 		t.Fatalf("VerifyToken accepted a tampered image digest")
+	}
+
+	// The refusal is right either way; what it is called decides where
+	// a publisher's backend looks. This is the one signal a relying party
+	// has that a protected process's live code did not reconcile,
+	// and an anti-cheat backend is expected to alert on it -- filed under
+	// the nonce error it reads as a replay or a protocol bug.
+	//
+	// The C SDK separates the two (LOTA_SERVER_ERR_RUNTIME_IMAGE, -11),
+	// so a backend must not get a different answer for one event depending
+	// on which SDK it links.
+	if !errors.Is(err, ErrRuntimeImage) {
+		t.Fatalf("tampered image digest reported as %v, want ErrRuntimeImage",
+			err)
+	}
+	if errors.Is(err, ErrNonceFail) {
+		t.Fatalf("a runtime image mismatch must not read as a nonce failure")
+	}
+}
+
+// The guard on the above: the nonce checks keep their own error,
+// so "stop calling an image mismatch a nonce failure" cannot be satisfied
+// by renaming every refusal.
+func TestVerifyToken_NonceMismatchStaysNonceFail(t *testing.T) {
+	key := generateTestKey(t)
+
+	nonce := [32]byte{}
+	rand.Read(nonce[:])
+	validUntil := uint64(time.Now().Add(2 * time.Minute).Unix())
+	pcrDigest := make([]byte, 32)
+	rand.Read(pcrDigest)
+
+	tok := buildTestToken(t, key, validUntil, 0x07, nonce, 0x4001, pcrDigest)
+
+	other := [32]byte{}
+	rand.Read(other[:])
+
+	_, err := VerifyToken(tok, &key.PublicKey, other[:])
+	if err == nil {
+		t.Fatalf("VerifyToken accepted a token minted for another nonce")
+	}
+	if !errors.Is(err, ErrNonceFail) {
+		t.Fatalf("a challenge mismatch reported as %v, want ErrNonceFail", err)
+	}
+	if errors.Is(err, ErrRuntimeImage) {
+		t.Fatalf("a nonce failure must not read as a runtime image mismatch")
 	}
 }
 

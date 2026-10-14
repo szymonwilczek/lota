@@ -139,7 +139,7 @@ func TestVerifyEKCertificateAcceptsPolicyOID(t *testing.T) {
 	is := newTestIssuer(t, root)
 
 	ekDER, _ := makeEKCert(t, root, nil)
-	if _, err := is.VerifyEKCertificate(ekDER, time.Now()); err != nil {
+	if _, err := is.VerifyEKCertificate(ekDER, nil, time.Now()); err != nil {
 		t.Fatalf("rejected valid EK certificate: %v", err)
 	}
 }
@@ -153,7 +153,7 @@ func TestVerifyEKCertificateAcceptsEKUOID(t *testing.T) {
 		c.Policies = nil
 		c.UnknownExtKeyUsage = []asn1.ObjectIdentifier{oidTCGEKCertificate}
 	})
-	if _, err := is.VerifyEKCertificate(ekDER, time.Now()); err != nil {
+	if _, err := is.VerifyEKCertificate(ekDER, nil, time.Now()); err != nil {
 		t.Fatalf("rejected EK certificate with EKU-placed OID: %v", err)
 	}
 }
@@ -185,7 +185,7 @@ func TestVerifyEKCertificateRejectsECCKey(t *testing.T) {
 		t.Fatalf("ECC EK cert: %v", err)
 	}
 
-	_, err = is.VerifyEKCertificate(ekDER, time.Now())
+	_, err = is.VerifyEKCertificate(ekDER, nil, time.Now())
 	if !errors.Is(err, ErrEKKeyType) {
 		t.Fatalf("expected ErrEKKeyType for ECC EK, got %v", err)
 	}
@@ -197,7 +197,7 @@ func TestVerifyEKCertificateRejectsUntrustedRoot(t *testing.T) {
 	is := newTestIssuer(t, trusted)
 
 	ekDER, _ := makeEKCert(t, rogue, nil)
-	if _, err := is.VerifyEKCertificate(ekDER, time.Now()); err == nil {
+	if _, err := is.VerifyEKCertificate(ekDER, nil, time.Now()); err == nil {
 		t.Fatal("accepted EK certificate from an untrusted root")
 	}
 }
@@ -207,7 +207,7 @@ func TestVerifyEKCertificateRejectsMissingOID(t *testing.T) {
 	is := newTestIssuer(t, root)
 
 	ekDER, _ := makeEKCert(t, root, func(c *x509.Certificate) { c.Policies = nil })
-	if _, err := is.VerifyEKCertificate(ekDER, time.Now()); err == nil {
+	if _, err := is.VerifyEKCertificate(ekDER, nil, time.Now()); err == nil {
 		t.Fatal("accepted EK certificate without the TCG OID")
 	}
 }
@@ -220,7 +220,7 @@ func TestVerifyEKCertificateRejectsExpired(t *testing.T) {
 		c.NotBefore = time.Now().Add(-48 * time.Hour)
 		c.NotAfter = time.Now().Add(-24 * time.Hour)
 	})
-	if _, err := is.VerifyEKCertificate(ekDER, time.Now()); err == nil {
+	if _, err := is.VerifyEKCertificate(ekDER, nil, time.Now()); err == nil {
 		t.Fatal("accepted expired EK certificate")
 	}
 }
@@ -389,7 +389,7 @@ func TestVerifyEKCertificateIgnoresTPMCriticalExtensions(t *testing.T) {
 			{Id: asn1.ObjectIdentifier{2, 5, 29, 9}, Critical: true, Value: []byte{0x30, 0x00}},
 		}
 	})
-	if _, err := is.VerifyEKCertificate(ekDER, time.Now()); err != nil {
+	if _, err := is.VerifyEKCertificate(ekDER, nil, time.Now()); err != nil {
 		t.Fatalf("rejected EK cert with a critical TPM extension: %v", err)
 	}
 }
@@ -453,7 +453,7 @@ func TestVerifyEKCertificateRejectsRevokedEK(t *testing.T) {
 	path := writeEKCRL(t, dir, root, time.Now().Add(time.Hour), ekCert.SerialNumber)
 	is := newTestIssuerWithCRLs(t, root, []string{path})
 
-	if _, err := is.VerifyEKCertificate(ekDER, time.Now()); !errors.Is(err, crl.ErrCertificateRevoked) {
+	if _, err := is.VerifyEKCertificate(ekDER, nil, time.Now()); !errors.Is(err, crl.ErrCertificateRevoked) {
 		t.Fatalf("expected crl.ErrCertificateRevoked, got %v", err)
 	}
 }
@@ -466,7 +466,7 @@ func TestVerifyEKCertificateAcceptsUnrevokedEK(t *testing.T) {
 	path := writeEKCRL(t, dir, root, time.Now().Add(time.Hour), mustSerial(t))
 	is := newTestIssuerWithCRLs(t, root, []string{path})
 
-	if _, err := is.VerifyEKCertificate(ekDER, time.Now()); err != nil {
+	if _, err := is.VerifyEKCertificate(ekDER, nil, time.Now()); err != nil {
 		t.Fatalf("unrevoked EK must verify, got %v", err)
 	}
 }
@@ -479,7 +479,7 @@ func TestVerifyEKCertificateStaleCRLFailsClosed(t *testing.T) {
 	path := writeEKCRL(t, dir, root, time.Now().Add(-time.Minute), mustSerial(t))
 	is := newTestIssuerWithCRLs(t, root, []string{path})
 
-	if _, err := is.VerifyEKCertificate(ekDER, time.Now()); !errors.Is(err, crl.ErrCRLStale) {
+	if _, err := is.VerifyEKCertificate(ekDER, nil, time.Now()); !errors.Is(err, crl.ErrCRLStale) {
 		t.Fatalf("expected crl.ErrCRLStale, got %v", err)
 	}
 }
@@ -519,7 +519,7 @@ func TestReloadEKCRLsHotSwap(t *testing.T) {
 	// initial feed does not list the EK
 	path := writeEKCRL(t, dir, root, time.Now().Add(time.Hour), mustSerial(t))
 	is := newTestIssuerWithCRLs(t, root, []string{path})
-	if _, err := is.VerifyEKCertificate(ekDER, time.Now()); err != nil {
+	if _, err := is.VerifyEKCertificate(ekDER, nil, time.Now()); err != nil {
 		t.Fatalf("pre-reload: EK must verify, got %v", err)
 	}
 
@@ -531,7 +531,7 @@ func TestReloadEKCRLsHotSwap(t *testing.T) {
 	if is.EKCRLCount() != 1 {
 		t.Fatalf("expected 1 CRL after reload, got %d", is.EKCRLCount())
 	}
-	if _, err := is.VerifyEKCertificate(ekDER, time.Now()); !errors.Is(err, crl.ErrCertificateRevoked) {
+	if _, err := is.VerifyEKCertificate(ekDER, nil, time.Now()); !errors.Is(err, crl.ErrCertificateRevoked) {
 		t.Fatalf("post-reload: expected crl.ErrCertificateRevoked, got %v", err)
 	}
 
@@ -541,7 +541,7 @@ func TestReloadEKCRLsHotSwap(t *testing.T) {
 	if err := is.ReloadEKCRLs(); err == nil {
 		t.Fatal("expected ReloadEKCRLs to reject feed signed outside the EK bundle")
 	}
-	if _, err := is.VerifyEKCertificate(ekDER, time.Now()); !errors.Is(err, crl.ErrCertificateRevoked) {
+	if _, err := is.VerifyEKCertificate(ekDER, nil, time.Now()); !errors.Is(err, crl.ErrCertificateRevoked) {
 		t.Fatalf("after failed reload: expected preserved revocation, got %v", err)
 	}
 }
@@ -592,12 +592,12 @@ func TestVerifyEKCertificateChainsThroughBundledIntermediate(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewIssuer (root+intermediate): %v", err)
 	}
-	if _, err := full.VerifyEKCertificate(ekDER, time.Now()); err != nil {
+	if _, err := full.VerifyEKCertificate(ekDER, nil, time.Now()); err != nil {
 		t.Fatalf("two-level chain with bundled intermediate must verify, got %v", err)
 	}
 
 	rootOnly := newTestIssuer(t, root)
-	if _, err := rootOnly.VerifyEKCertificate(ekDER, time.Now()); !errors.Is(err, ErrEKChain) {
+	if _, err := rootOnly.VerifyEKCertificate(ekDER, nil, time.Now()); !errors.Is(err, ErrEKChain) {
 		t.Fatalf("missing intermediate must fail the chain, got %v", err)
 	}
 }
@@ -612,7 +612,7 @@ func TestVerifyEKCertificateAcceptsIntermediateOnlyAnchor(t *testing.T) {
 	ekDER, _ := makeEKCert(t, inter, nil)
 
 	is := newTestIssuer(t, inter)
-	if _, err := is.VerifyEKCertificate(ekDER, time.Now()); err != nil {
+	if _, err := is.VerifyEKCertificate(ekDER, nil, time.Now()); err != nil {
 		t.Fatalf("intermediate-only anchor must verify the leaf, got %v", err)
 	}
 }
@@ -644,7 +644,7 @@ func TestVerifyEKCertificateIntermediateSignedCRL(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewIssuer: %v", err)
 	}
-	if _, err := is.VerifyEKCertificate(ekDER, time.Now()); !errors.Is(err, crl.ErrCertificateRevoked) {
+	if _, err := is.VerifyEKCertificate(ekDER, nil, time.Now()); !errors.Is(err, crl.ErrCertificateRevoked) {
 		t.Fatalf("expected crl.ErrCertificateRevoked via intermediate-signed CRL, got %v", err)
 	}
 }

@@ -7,11 +7,10 @@ Where the checks run
 
 * **Every pull request** (the ``pull_request`` trigger has no branch filter, so
   it covers PRs aimed at ``lota-next``): build, unit tests, linters, Go static
-  analysis, C static analysis (Sparse, Smatch and Coccinelle), cross-arch
-  build, the reproducible-build gate and security analysis.
-* **Cross-architecture build**: the arm64 workflow starts on every pull
-  request, but skips QEMU and the arm64 container when the commit range does
-  not change source, build, BPF, policy, or deployment inputs.
+  analysis, C static analysis (Sparse, Smatch and Coccinelle), the
+  reproducible-build gate and security analysis.
+* **Architecture**: every job builds and tests ``x86_64`` only, the one
+  architecture the project targets.
 * **Packaging**: the ``Packages`` workflow proves the RPMs build and install
   across the RPM/dracut family the nfpm configs and the 90lota module target,
   not Fedora alone. It builds the RPMs on Fedora; on a RHEL-family (el9)

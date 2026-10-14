@@ -70,6 +70,39 @@ int tpm_pcr_extend(struct tpm_context *ctx, uint32_t pcr_index,
 	return 0;
 }
 
+/*
+ * The poison path records that this host spent its own commitment,
+ * so the next start can name a pause instead of accusing a writer.
+ * The note is best effort and this test is about the extend,
+ * so the three calls it makes are stubbed to the "no state on disk" answer.
+ */
+int tpm_clock_state_load(const struct tpm_context *ctx,
+			 struct lota_clock_state *out)
+{
+	(void)ctx;
+	(void)out;
+	return -ENOENT;
+}
+
+int tpm_clock_state_save(const struct tpm_context *ctx,
+			 const struct lota_clock_state *in)
+{
+	(void)ctx;
+	(void)in;
+	return 0;
+}
+
+int tpm_read_pcr(struct tpm_context *ctx, uint32_t pcr_index, uint16_t hash_alg,
+		 uint8_t *out)
+{
+	(void)ctx;
+	(void)pcr_index;
+	(void)hash_alg;
+	if (out)
+		memset(out, 0xAB, LOTA_HASH_SIZE);
+	return 0;
+}
+
 void journal_print(const char *file, int line, const char *func, int priority,
 		   const char *fmt, ...)
 {

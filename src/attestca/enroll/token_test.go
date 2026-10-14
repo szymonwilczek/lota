@@ -105,7 +105,7 @@ func TestEnrollRejectsUnknownToken(t *testing.T) {
 	ek := tpmtest.NewEKCert(t, root)
 	aikTPMT, _ := tpmtest.AIKTemplate(t)
 
-	if _, err := svc.Begin(ek.CertDER, aikTPMT, []byte("wrong-token")); !errors.Is(err, ErrTokenUnknown) {
+	if _, err := svc.Begin(ek.CertDER, aikTPMT, []byte("wrong-token"), nil); !errors.Is(err, ErrTokenUnknown) {
 		t.Fatalf("Begin(unknown token) = %v, want ErrTokenUnknown", err)
 	}
 	// token rejection must not spend a session
@@ -116,7 +116,7 @@ func TestEnrollRejectsUnknownToken(t *testing.T) {
 	// CA with no token set rejects every presented token instead of silently ignoring it
 	plain, root2 := newTestService(t)
 	ek2 := tpmtest.NewEKCert(t, root2)
-	if _, err := plain.Begin(ek2.CertDER, aikTPMT, []byte("beta-token")); !errors.Is(err, ErrTokenUnknown) {
+	if _, err := plain.Begin(ek2.CertDER, aikTPMT, []byte("beta-token"), nil); !errors.Is(err, ErrTokenUnknown) {
 		t.Fatalf("token against token-less CA = %v, want ErrTokenUnknown", err)
 	}
 }
@@ -127,7 +127,7 @@ func TestEnrollRequireToken(t *testing.T) {
 	ek := tpmtest.NewEKCert(t, root)
 	aikTPMT, _ := tpmtest.AIKTemplate(t)
 
-	if _, err := svc.Begin(ek.CertDER, aikTPMT, nil); !errors.Is(err, ErrTokenRequired) {
+	if _, err := svc.Begin(ek.CertDER, aikTPMT, nil, nil); !errors.Is(err, ErrTokenRequired) {
 		t.Fatalf("token-less Begin = %v, want ErrTokenRequired", err)
 	}
 	if svc.PendingCount() != 0 {
@@ -163,7 +163,7 @@ func TestTokenOverridesEKManifest(t *testing.T) {
 
 	// without the token the strict manifest still bars the unlisted EK
 	aikTPMT, _ := tpmtest.AIKTemplate(t)
-	if _, err := svc.Begin(ek.CertDER, aikTPMT, nil); err == nil {
+	if _, err := svc.Begin(ek.CertDER, aikTPMT, nil, nil); err == nil {
 		t.Fatal("strict manifest enrolled an unlisted EK without a token")
 	}
 }

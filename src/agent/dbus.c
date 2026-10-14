@@ -7,6 +7,10 @@
 
 #include "dbus.h"
 
+#ifndef LOTA_BUILD_VERSION_STRING
+#error "LOTA_BUILD_VERSION_STRING must be defined at build time"
+#endif
+
 #include <errno.h>
 #include <stdlib.h>
 #include <string.h>
@@ -41,6 +45,19 @@ static const char *mode_string(uint8_t mode)
 	}
 }
 
+uint32_t dbus_status_word(const struct ipc_context *ipc)
+{
+	if (!ipc)
+		return 0;
+
+	/*
+	 * A bus connection names no publisher, so the host-wide view is the only
+	 * one there is -- but it is the daemon's to produce, not this file's to
+	 * assemble out of stored fields.
+	 */
+	return ipc_host_status_flags(ipc);
+}
+
 static int prop_get_status_flags(sd_bus *bus, const char *path,
 				 const char *interface, const char *property,
 				 sd_bus_message *reply, void *userdata,
@@ -52,7 +69,7 @@ static int prop_get_status_flags(sd_bus *bus, const char *path,
 	(void)interface;
 	(void)property;
 	(void)error;
-	return sd_bus_message_append(reply, "u", ctx->ipc->status_flags);
+	return sd_bus_message_append(reply, "u", dbus_status_word(ctx->ipc));
 }
 
 static int prop_get_mode(sd_bus *bus, const char *path, const char *interface,
@@ -216,6 +233,11 @@ static int prop_get_reenroll_required(sd_bus *bus, const char *path,
 				     (int)ctx->ipc->aik_reenroll_required);
 }
 
+const char *dbus_version_string(void)
+{
+	return LOTA_BUILD_VERSION_STRING;
+}
+
 static int prop_get_version(sd_bus *bus, const char *path,
 			    const char *interface, const char *property,
 			    sd_bus_message *reply, void *userdata,
@@ -227,7 +249,7 @@ static int prop_get_version(sd_bus *bus, const char *path,
 	(void)property;
 	(void)userdata;
 	(void)error;
-	return sd_bus_message_append(reply, "s", "1.0.0");
+	return sd_bus_message_append(reply, "s", dbus_version_string());
 }
 
 static int method_ping(sd_bus_message *msg, void *userdata, sd_bus_error *error)
@@ -258,12 +280,11 @@ static int method_get_status(sd_bus_message *msg, void *userdata,
 	struct dbus_context *ctx = userdata;
 	(void)error;
 
-	return sd_bus_reply_method_return(msg, "usttuu", ctx->ipc->status_flags,
-					  mode_string(ctx->ipc->mode),
-					  ctx->ipc->last_attest_time,
-					  ctx->ipc->valid_until,
-					  ctx->ipc->attest_count,
-					  ctx->ipc->fail_count);
+	return sd_bus_reply_method_return(
+		msg, "usttuu", dbus_status_word(ctx->ipc),
+		mode_string(ctx->ipc->mode), ctx->ipc->last_attest_time,
+		ctx->ipc->valid_until, ctx->ipc->attest_count,
+		ctx->ipc->fail_count);
 }
 
 /*
@@ -451,31 +472,66 @@ int dbus_process(struct dbus_context *ctx, uint64_t timeout_us)
 	return 0;
 }
 
+/*
+ * Put what was emitted on the wire, and say so when it did not go.
+ *
+ * sd_bus_emit_signal() hands the message to the connection, which writes it
+ * only as far as the socket takes without blocking, and queues the rest.
+ * The daemon drives this connection from epoll, which reports the fd readable.
+ * Flushing here is what makes an emit an emit.
+ */
+static void emit_flush(struct dbus_context *ctx, const char *what, int ret)
+{
+	if (ret < 0) {
+		lota_warn("D-Bus: %s not emitted: %s", what, strerror(-ret));
+		return;
+	}
+
+	ret = sd_bus_flush(ctx->bus);
+	if (ret < 0)
+		lota_warn("D-Bus: %s emitted but not flushed: %s", what,
+			  strerror(-ret));
+}
+
 void dbus_emit_status_changed(struct dbus_context *ctx, uint32_t flags)
 {
 	if (!ctx || !ctx->bus)
 		return;
 
-	sd_bus_emit_signal(ctx->bus, LOTA_DBUS_OBJECT_PATH, LOTA_DBUS_INTERFACE,
-			   "StatusChanged", "u", flags);
+	emit_flush(ctx, "StatusChanged",
+		   sd_bus_emit_signal(ctx->bus, LOTA_DBUS_OBJECT_PATH,
+				      LOTA_DBUS_INTERFACE, "StatusChanged", "u",
+				      flags));
 
-	sd_bus_emit_properties_changed(ctx->bus, LOTA_DBUS_OBJECT_PATH,
-				       LOTA_DBUS_INTERFACE, "StatusFlags",
-				       "LastAttestTime", "ValidUntil",
-				       "AttestCount", "FailCount", NULL);
+	emit_flush(ctx, "StatusFlags properties",
+		   sd_bus_emit_properties_changed(
+			   ctx->bus, LOTA_DBUS_OBJECT_PATH, LOTA_DBUS_INTERFACE,
+			   "StatusFlags", "LastAttestTime", "ValidUntil",
+			   "AttestCount", "FailCount", NULL));
 }
 
+/*
+ * A round is when the tallies move, and it is also when the host last attested
+ * and how long that answer holds, so all four properties are announced with
+ * the signal.
+ * Nothing else moves LastAttestTime or ValidUntil on a host whose status word
+ * is steady, and both are declared emits-change.
+ */
 void dbus_emit_attestation_result(struct dbus_context *ctx, bool success)
 {
 	if (!ctx || !ctx->bus)
 		return;
 
-	sd_bus_emit_signal(ctx->bus, LOTA_DBUS_OBJECT_PATH, LOTA_DBUS_INTERFACE,
-			   "AttestationResult", "b", (int)success);
+	emit_flush(ctx, "AttestationResult",
+		   sd_bus_emit_signal(ctx->bus, LOTA_DBUS_OBJECT_PATH,
+				      LOTA_DBUS_INTERFACE, "AttestationResult",
+				      "b", (int)success));
 
-	sd_bus_emit_properties_changed(ctx->bus, LOTA_DBUS_OBJECT_PATH,
-				       LOTA_DBUS_INTERFACE, "AttestCount",
-				       "FailCount", NULL);
+	emit_flush(ctx, "AttestCount properties",
+		   sd_bus_emit_properties_changed(
+			   ctx->bus, LOTA_DBUS_OBJECT_PATH, LOTA_DBUS_INTERFACE,
+			   "AttestCount", "FailCount", "LastAttestTime",
+			   "ValidUntil", NULL));
 }
 
 void dbus_emit_mode_changed(struct dbus_context *ctx, uint8_t mode)
@@ -483,11 +539,15 @@ void dbus_emit_mode_changed(struct dbus_context *ctx, uint8_t mode)
 	if (!ctx || !ctx->bus)
 		return;
 
-	sd_bus_emit_signal(ctx->bus, LOTA_DBUS_OBJECT_PATH, LOTA_DBUS_INTERFACE,
-			   "ModeChanged", "s", mode_string(mode));
+	emit_flush(ctx, "ModeChanged",
+		   sd_bus_emit_signal(ctx->bus, LOTA_DBUS_OBJECT_PATH,
+				      LOTA_DBUS_INTERFACE, "ModeChanged", "s",
+				      mode_string(mode)));
 
-	sd_bus_emit_properties_changed(ctx->bus, LOTA_DBUS_OBJECT_PATH,
-				       LOTA_DBUS_INTERFACE, "Mode", NULL);
+	emit_flush(ctx, "Mode property",
+		   sd_bus_emit_properties_changed(
+			   ctx->bus, LOTA_DBUS_OBJECT_PATH, LOTA_DBUS_INTERFACE,
+			   "Mode", NULL));
 }
 
 void dbus_emit_rotation_changed(struct dbus_context *ctx)
@@ -495,12 +555,12 @@ void dbus_emit_rotation_changed(struct dbus_context *ctx)
 	if (!ctx || !ctx->bus)
 		return;
 
-	sd_bus_emit_properties_changed(ctx->bus, LOTA_DBUS_OBJECT_PATH,
-				       LOTA_DBUS_INTERFACE, "AikGeneration",
-				       "AikProvisionedAt", "AikLastRotatedAt",
-				       "AikRotationDeadline",
-				       "AikGraceDeadline", "ReenrollRequired",
-				       NULL);
+	emit_flush(ctx, "AIK rotation properties",
+		   sd_bus_emit_properties_changed(
+			   ctx->bus, LOTA_DBUS_OBJECT_PATH, LOTA_DBUS_INTERFACE,
+			   "AikGeneration", "AikProvisionedAt",
+			   "AikLastRotatedAt", "AikRotationDeadline",
+			   "AikGraceDeadline", "ReenrollRequired", NULL));
 }
 
 void dbus_cleanup(struct dbus_context *ctx)

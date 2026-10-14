@@ -14,8 +14,10 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"maps"
 	"os"
 	"slices"
+	"strings"
 	"sync"
 
 	"gopkg.in/yaml.v3"
@@ -216,6 +218,36 @@ func IsMeasurementEmptyPolicy(policy *PCRPolicy) bool {
 	return len(policy.PCRs) == 0 && len(policy.KernelHashes) == 0 && len(policy.AgentHashes) == 0
 }
 
+// isAllZeroHex reports whether a hex digest is nothing but zeros, which is what
+// a host sends when the register the agent read carries no measurement.
+func isAllZeroHex(hexDigest string) bool {
+	if hexDigest == "" {
+		return false
+	}
+	for i := 0; i < len(hexDigest); i++ {
+		if hexDigest[i] != '0' {
+			return false
+		}
+	}
+	return true
+}
+
+// validateKernelPins refuses a kernel allow-list entry that pins nothing.
+//
+// A host whose boot path measures no kernel into the register the agent reads
+// reports an all-zero digest, and every such host reports the same one.
+func validateKernelPins(policy *PCRPolicy) error {
+	if policy == nil {
+		return nil
+	}
+	for _, allowed := range policy.KernelHashes {
+		if isAllZeroHex(strings.TrimSpace(allowed)) {
+			return fmt.Errorf("refusing to load policy '%s': kernel_hashes pins an all-zero kernel hash, which every host with no kernel measurement reports -- the list would admit any kernel on any such machine. Pin the digest the device actually reports, or drop kernel_hashes and rely on the PCR pins", policy.Name)
+		}
+	}
+	return nil
+}
+
 func validatePolicyPCRIndices(policy *PCRPolicy) error {
 	if policy == nil {
 		return errors.New("nil policy")
@@ -255,6 +287,9 @@ func (v *PCRVerifier) LoadPolicy(path string) error {
 	if err := validatePolicyPCRIndices(&policy); err != nil {
 		return err
 	}
+	if err := validateKernelPins(&policy); err != nil {
+		return err
+	}
 
 	v.mu.RLock()
 	allowPermissive := v.allowPermissivePolicy
@@ -280,6 +315,9 @@ func (v *PCRVerifier) AddPolicy(policy *PCRPolicy) error {
 		return err
 	}
 	if err := validateProfile(policy); err != nil {
+		return err
+	}
+	if err := validateKernelPins(policy); err != nil {
 		return err
 	}
 	for _, w := range ValidatePolicy(policy) {
@@ -469,7 +507,16 @@ func agentHashAllowed(reported [types.HashSize]byte, allowedHashes []string) boo
 
 func (v *PCRVerifier) verifyAgainstPolicy(report *types.AttestationReport, policy *PCRPolicy, facts *BootFacts) error {
 	// check pcr values
-	for pcrIdx, expectedHex := range policy.PCRs {
+	//
+	// collect every mismatch in index order: a boot chain moves several
+	// registers at once, and map iteration is random, so the failure must name
+	// all of them and read the same on every round
+	var stale []string
+	for _, pcrIdx := range slices.Sorted(maps.Keys(policy.PCRs)) {
+		expectedHex := policy.PCRs[pcrIdx]
+
+		// policy faults, not host state: stop here, since nothing
+		// the reports can answer them
 		if pcrIdx < 0 || pcrIdx >= types.PCRCount {
 			return fmt.Errorf("invalid PCR index in policy '%s': %d", policy.Name, pcrIdx)
 		}
@@ -486,14 +533,18 @@ func (v *PCRVerifier) verifyAgainstPolicy(report *types.AttestationReport, polic
 
 		actual := report.TPM.PCRValues[pcrIdx][:]
 		if !bytes.Equal(actual, expected) {
-			return fmt.Errorf("PCR %d mismatch: got %s, expected %s",
-				pcrIdx, hex.EncodeToString(actual), expectedHex)
+			stale = append(stale, fmt.Sprintf("PCR %d mismatch: got %s, expected %s",
+				pcrIdx, hex.EncodeToString(actual), expectedHex))
 		}
+	}
+	if len(stale) > 0 {
+		return errors.New(strings.Join(stale, "; "))
 	}
 
 	// check kernel hash
 	if len(policy.KernelHashes) > 0 {
-		kernelHashHex := hex.EncodeToString(report.System.KernelHash[:])
+		recorded := RecordedKernelHash(report, facts)
+		kernelHashHex := hex.EncodeToString(recorded[:])
 		found := false
 		for _, allowed := range policy.KernelHashes {
 			if kernelHashHex == allowed {
@@ -702,6 +753,12 @@ func (p *PCRPolicy) GetRequiredMask() uint32 {
 	if p.RequireCmdlinePolicy {
 		mask |= 1 << 8
 	}
+
+	// PCR 9: bootloader per-file measurements, source of the recorded kernel
+	// image digest.
+	// Unconditional -- the digest is recorded whether or not a policy pins
+	// a kernel, and is trusted only when the quote covers PCR
+	mask |= 1 << 9
 
 	return mask
 }

@@ -15,11 +15,16 @@
  */
 
 #include <errno.h>
+#include <signal.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
+#include <systemd/sd-bus.h>
 #include <time.h>
 #include <stdbool.h>
 #include <stdint.h>
+#include <sys/types.h>
+#include <unistd.h>
 
 #include "../src/agent/dbus.h"
 #include "../src/agent/ipc.h"
@@ -31,6 +36,22 @@ void ipc_set_dbus(struct ipc_context *ctx, struct dbus_context *dbus)
 {
 	if (ctx)
 		ctx->dbus = dbus;
+}
+
+/*
+ * Stub for ipc_host_status_flags(); ipc.c is not linked into this test.
+ * Returns a value that differs from the status_flags set in setup_ipc(),
+ * so a test can tell whether D-Bus answered with the host-wide word
+ * or with the stored one, and counts how often it was asked.
+ */
+#define TEST_HOST_STATUS_FLAGS 0x21Au
+static int host_status_calls;
+
+uint32_t ipc_host_status_flags(const struct ipc_context *ctx)
+{
+	(void)ctx;
+	host_status_calls++;
+	return TEST_HOST_STATUS_FLAGS;
 }
 
 #define TEST(name)                                        \
@@ -71,6 +92,58 @@ static void setup_ipc(void)
 	test_ipc.attest_count = 5;
 	test_ipc.fail_count = 1;
 	test_ipc.mode = 0; /* monitor */
+}
+
+/*
+ * A bus client and a socket client ask the same daemon the same question.
+ * The socket reply folds runtime-measurement coverage into the word it hands
+ * over; the bus returned the stored word, which never carries that bit,
+ * so a fully measured host and a partially measured one looked identical
+ * on the bus and a launcher reporting coverage from there told the player
+ * the wrong thing.
+ */
+static void test_bus_answers_the_daemons_word(void)
+{
+	struct dbus_context *ctx;
+	uint32_t word;
+
+	TEST("status word: the bus answers what the daemon publishes");
+
+	setup_ipc();
+	ctx = dbus_init(&test_ipc);
+
+	host_status_calls = 0;
+	word = dbus_status_word(&test_ipc);
+
+	if (word != TEST_HOST_STATUS_FLAGS)
+		FAIL("the bus answered a word the daemon did not produce");
+	else if (host_status_calls == 0)
+		FAIL("the bus never asked the daemon for the word");
+	else
+		PASS();
+
+	dbus_cleanup(ctx);
+}
+
+/*
+ * A version property exists so a client can tell which agent it is talking to.
+ * A literal that no build step touches answers for every build ever made,
+ * and because the property is const a client may cache it across an agent update
+ * and never re-read it -- so the number that would have gated an interface change
+ * has already been spent on a value that was never true.
+ */
+static void test_version_names_this_build(void)
+{
+	const char *reported = dbus_version_string();
+
+	TEST("version: the bus names the build this agent came from");
+
+	if (!reported)
+		FAIL("the bus answers no version at all");
+	else if (strcmp(reported, LOTA_BUILD_VERSION_STRING) != 0)
+		FAIL("the bus names a version this build does not have");
+	else
+		PASS();
 }
 
 static void test_init_null_ipc(void)
@@ -156,6 +229,163 @@ static void test_init_system_bus(void)
 
 	dbus_process(ctx, 0);
 	dbus_cleanup(ctx);
+	PASS();
+}
+
+/*
+ * A bus of our own, so a signal can be watched arriving without touching
+ * the bus the machine runs on.
+ * dbus_init() opens the system bus, and sd-bus reads DBUS_SYSTEM_BUS_ADDRESS
+ * before falling back to the machine's own socket.
+ */
+static pid_t private_bus_pid;
+static char private_bus_address[256];
+
+static int private_bus_start(void)
+{
+	char line[64];
+	FILE *fp;
+
+	fp = popen("dbus-daemon --session --fork --print-address --print-pid "
+		   "2>/dev/null",
+		   "r");
+	if (!fp)
+		return -1;
+
+	if (!fgets(private_bus_address, sizeof(private_bus_address), fp) ||
+	    !fgets(line, sizeof(line), fp)) {
+		pclose(fp);
+		return -1;
+	}
+	pclose(fp);
+
+	private_bus_address[strcspn(private_bus_address, "\n")] = '\0';
+	private_bus_pid = (pid_t)atoi(line);
+
+	if (private_bus_pid <= 0 || private_bus_address[0] == '\0')
+		return -1;
+
+	setenv("DBUS_SYSTEM_BUS_ADDRESS", private_bus_address, 1);
+	return 0;
+}
+
+static void private_bus_stop(void)
+{
+	if (private_bus_pid > 0)
+		kill(private_bus_pid, SIGTERM);
+	private_bus_pid = 0;
+	unsetenv("DBUS_SYSTEM_BUS_ADDRESS");
+}
+
+/* What the watching connection took off the bus */
+struct bus_witness {
+	bool attestation_result;
+	bool properties_changed;
+	bool success;
+};
+
+static int on_agent_signal(sd_bus_message *m, void *userdata,
+			   sd_bus_error *error)
+{
+	struct bus_witness *seen = userdata;
+	const char *member = sd_bus_message_get_member(m);
+
+	(void)error;
+
+	if (!member)
+		return 0;
+
+	if (strcmp(member, "AttestationResult") == 0) {
+		int value = 0;
+
+		if (sd_bus_message_read(m, "b", &value) >= 0)
+			seen->success = value != 0;
+		seen->attestation_result = true;
+	} else if (strcmp(member, "PropertiesChanged") == 0) {
+		seen->properties_changed = true;
+	}
+
+	return 0;
+}
+
+/*
+ * The emit road, end to end on a bus.
+ *
+ * sd_bus_emit_signal() hands the message to the connection, not to the bus:
+ * whether it leaves the process depends on what drives that connection
+ * afterwards, and the daemon drives it from epoll, which reports the fd
+ * readable and never writable.
+ * So the only honest check is a second connection watching for the message
+ * to arrive.
+ */
+static void test_signal_reaches_a_real_bus(void)
+{
+	struct bus_witness seen = { false, false, false };
+	struct dbus_context *ctx;
+	sd_bus *watcher = NULL;
+	int ret;
+
+	TEST("an emitted signal reaches a watcher on a real bus");
+
+	if (private_bus_start() < 0) {
+		printf("SKIP (no dbus-daemon)\n");
+		tests_passed++;
+		return;
+	}
+
+	ret = sd_bus_open_system(&watcher);
+	if (ret < 0) {
+		private_bus_stop();
+		printf("SKIP (cannot open the private bus)\n");
+		tests_passed++;
+		return;
+	}
+
+	ret = sd_bus_add_match(watcher, NULL,
+			       "type='signal',path='" LOTA_DBUS_OBJECT_PATH "'",
+			       on_agent_signal, &seen);
+	if (ret < 0) {
+		sd_bus_flush_close_unref(watcher);
+		private_bus_stop();
+		FAIL("cannot watch the object path");
+		return;
+	}
+
+	ctx = dbus_init(&test_ipc);
+	if (!ctx) {
+		sd_bus_flush_close_unref(watcher);
+		private_bus_stop();
+		FAIL("dbus_init on the private bus");
+		return;
+	}
+
+	dbus_emit_attestation_result(ctx, true);
+
+	for (int i = 0; i < 200; i++) {
+		if (seen.attestation_result && seen.properties_changed)
+			break;
+		if (sd_bus_process(watcher, NULL) > 0)
+			continue;
+		sd_bus_wait(watcher, 10 * 1000);
+	}
+
+	dbus_cleanup(ctx);
+	sd_bus_flush_close_unref(watcher);
+	private_bus_stop();
+
+	if (!seen.attestation_result) {
+		FAIL("no AttestationResult arrived");
+		return;
+	}
+	if (!seen.success) {
+		FAIL("the signal does not carry the result that happened");
+		return;
+	}
+	if (!seen.properties_changed) {
+		FAIL("the counters moved with no PropertiesChanged");
+		return;
+	}
+
 	PASS();
 }
 
@@ -252,9 +482,12 @@ int main(void)
 	test_ipc_set_dbus_null();
 	test_ipc_set_dbus_attach();
 	test_dbus_constants();
+	test_version_names_this_build();
+	test_bus_answers_the_daemons_word();
 
 	/* may skip if unavailable */
 	test_init_system_bus();
+	test_signal_reaches_a_real_bus();
 	test_double_cleanup();
 
 	printf("\n=== Results: %d/%d passed ===\n", tests_passed, tests_run);

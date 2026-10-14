@@ -25,11 +25,21 @@ descriptor carries ``present = 0`` where the firmware exposes no System
 Firmware entry.
 
 A breaking layout change -- adding, removing or reordering a field, or adding a
-section -- bumps ``LOTA_VERSION_MAJOR`` in ``include/lota.h`` and
-``ReportVersion`` in ``types/report.go`` together. That is a flag-day: roll the
-verifier tier first, then the agents. Version 2 dropped the always-empty
-``ek_certificate`` field (the Privacy CA model means the verifier never sees an
-EK) and made the ESRT section mandatory.
+section -- bumps the version in ``include/lota.h`` and ``ReportVersion`` in
+``types/report.go`` together, the major for the report and the minor for the
+verifier's result. That is a flag-day either way: roll the verifier tier first,
+then the agents. Version 2 dropped the always-empty ``ek_certificate`` field
+(the Privacy CA model means the verifier never sees an EK) and made the ESRT
+section mandatory; 2.1 shortened the result from 56 bytes to 24 by removing the
+session token, which was issued to every attested host and could be presented
+by none.
+
+The result travels the same way as the report and under the same version. It is
+``struct verifier_result`` in ``src/agent/net.h``, serialized by
+``VerifyResult.Serialize``, and its length is pinned on the C side by the same
+``_Static_assert`` discipline -- the agent reads exactly that many bytes before
+it parses, so a length change on one side is a hang on the other rather than a
+parse error.
 
 Nothing links the C serializer and the Go parser at build time: the serializer
 ``memcpy``\ s a packed struct, the parser walks hand-computed offsets. Three
@@ -48,6 +58,44 @@ three:
   report whose every field carries a position-derived pattern, Go parses it
   with the production parser and checks each field against the same patterns.
   The patterns are restated in both files on purpose.
+
+Runtime image measurement: which numbers identify a mapping
+===========================================================
+
+Measuring a protected process's executable images means enumerating its
+mappings from ``/proc/<pid>/maps``, opening each through
+``/proc/<pid>/map_files/<range>``, and confirming the handle still describes
+what was enumerated. That confirmation is the contract, and it is easy to get
+wrong in a way that only shows on some filesystems.
+
+**A device number from ``/proc/<pid>/maps`` and one from ``stat()`` are not the
+same quantity.** ``maps`` prints the filesystem's ``s_dev``; ``stat()`` returns
+whatever the filesystem chooses to report, and btrfs reports a separate
+anonymous device per subvolume. For one live mapping on a btrfs root the two
+differ, so code that compares one against the other rejects every mapping on
+that host -- silently, since the rejection looks like a mapping that moved.
+
+The identity is therefore built from numbers of one kind:
+
+* the device and inode of the enumerated range, and the device and inode of the
+  range re-read from ``/proc/<pid>/maps`` after the handle was opened, are
+  compared with each other -- same API, same meaning;
+* the opened handle's own inode is compared against the enumerated inode, which
+  is what ties the file being measured to the range that was enumerated.
+
+Both halves are load-bearing. Dropping the device comparison would accept the
+same inode number appearing on another filesystem; dropping the handle's inode
+would accept a measurement of whatever the range points at now.
+
+The same rule decides **which mapping is the process's own executable**, and
+that decision is not cosmetic: an executable that cannot be measured fails the
+measurement, while a library that cannot be measured is coverage the relying
+party judges. The measurement therefore reports the identity of the handle it
+opened (``struct lota_rt_open_identity``, a ``stat()`` device and inode) and
+the caller compares that against a ``stat()`` of ``/proc/<pid>/exe``. Comparing
+either against a number parsed out of ``maps`` recognises no executable at all
+on a per-subvolume-device filesystem, which downgrades the fatal case to a
+coverage note and makes the refusal name whichever object was recorded last.
 
 Baseline store migrations
 =========================
@@ -146,9 +194,9 @@ When a deployment runs with ``--pg-shard-dsn`` the per-client write stores
 are partitioned across N databases (``verify/shard.go``,
 ``verify/shard_baseline.go``). The contract every shard router upholds:
 
-- **Shard by the operation's own key.** The baseline routes by client ID,
-  a nonce by its key, a session token by its bytes. No operation needs
-  data from two shards, so there is never a cross-shard transaction.
+- **Shard by the operation's own key.** The baseline routes by client ID
+  and a nonce by its key. No operation needs data from two shards, so there
+  is never a cross-shard transaction.
 - **Deterministic, process-independent routing.** The index is
   ``FNV-1a(key) mod N``. Two verifier instances given the same shard list
   in the same order route every key identically -- this is what preserves
@@ -316,6 +364,13 @@ honest: the session budget must exceed the reference heartbeat rate, the uid
 ceiling must cover at least two sessions, and the session budget must stay
 the tighter of the two. Changing either constant without the other fails the
 build rather than starving a title at runtime.
+
+At the uid ceiling of one token a second, tokens occupy the TPM about 5% of
+the time at the 48 ms per token measured on the validation host, and about
+17% at the ~171 ms per quote also recorded there. The reference 5-second
+heartbeat costs about 1%. The limits are sized against the slower figure.
+:doc:`../../operator/platform-support` carries both measurements and the
+method.
 
 Attestation token quote binding
 ===============================

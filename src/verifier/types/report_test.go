@@ -500,14 +500,10 @@ func TestVerifyResult_Serialize(t *testing.T) {
 		Flags:      0,
 		ValidUntil: 1700003600,
 	}
-	for i := range result.SessionToken {
-		result.SessionToken[i] = byte(0xFF - i)
-	}
-
 	data := result.Serialize()
 
-	if len(data) != 56 {
-		t.Errorf("Result size: got %d, want 56", len(data))
+	if len(data) != 24 {
+		t.Errorf("Result size: got %d, want 24", len(data))
 	}
 
 	resultCode := binary.LittleEndian.Uint32(data[8:12])

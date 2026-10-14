@@ -68,6 +68,35 @@ enum lota_error {
 	 * learn and let them accept, then connect again.
 	 */
 	LOTA_ERR_CONSENT_REQUIRED = -13,
+	/*
+	 * This process's own executable carries no measurable identity,
+	 * so the agent cannot state what is running and will not issue
+	 * a token for it.
+	 * Enable fs-verity on the binary, or stop asking to be protected.
+	 *
+	 * It is about this process and no other.  A different protected
+	 * process being unmeasurable never produces this code:
+	 * the token is issued with LOTA_FLAG_IMAGE_FULLY_MEASURED clear
+	 * instead, and how much coverage a publisher requires is theirs
+	 * to decide.
+	 */
+	LOTA_ERR_UNMEASURABLE_SELF = -14,
+	/*
+	 * The agent on this machine holds no TPM, so it cannot sign a token
+	 * and will not issue an unsigned one. Nothing the caller does changes
+	 * that: retrying, waiting or asking again for a different publisher
+	 * all end here.
+	 * It is not LOTA_ERR_AGENT_ERROR and not a TPM that failed
+	 * -- there is no TPM.
+	 */
+	LOTA_ERR_NO_TPM = -15,
+	/*
+	 * The agent on the other end enforces nothing: it applied no policy
+	 * and loaded no LSM object, which is what a diagnostic server is.
+	 * A call that asks it to change runtime enforcement is refused by
+	 * design and no retry changes that.
+	 */
+	LOTA_ERR_NO_ENFORCEMENT = -16,
 };
 
 /*
@@ -451,6 +480,13 @@ typedef void (*lota_status_callback_fn)(const struct lota_status *status,
  * After subscribing, the agent pushes notifications whenever
  * a subscribed event occurs.  Call lota_poll_events() to receive
  * them, or they are dispatched transparently during other SDK calls.
+ *
+ * event_mask is narrowed to the events the agent publishes to titles,
+ * which are the three LOTA_EVENT_* above; LOTA_EVENT_ALL therefore
+ * subscribes to all three and never fails for naming more.
+ *
+ * A subscription lasts as long as the connection.  It does not survive
+ * a reconnect, so resubscribe after LOTA_ERR_NOT_CONNECTED.
  *
  * Returns LOTA_OK on success.
  */

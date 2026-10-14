@@ -17,6 +17,8 @@
 
 package main
 
+import "strings"
+
 // pkcs11KeyConfig selects a CA signing key held in a PKCS#11 token.
 // The PIN is taken from the environment, never a flag, so it does not
 // land in the process argument list.
@@ -29,4 +31,32 @@ type pkcs11KeyConfig struct {
 }
 
 // requested reports whether a PKCS#11 key source was asked for.
-func (c pkcs11KeyConfig) requested() bool { return c.module != "" }
+//
+// Any of the four flags counts, not only the module.
+// Three of them name *which* key to sign with, so an operator who gives one
+// has asked for a token as plainly as one who gives the module.
+func (c pkcs11KeyConfig) requested() bool {
+	return c.module != "" || c.token != "" || c.label != "" || c.id != ""
+}
+
+// flagsGiven names the PKCS#11 flags this configuration carries, in the order
+// they are documented, for an error message that can point at what was typed.
+func (c pkcs11KeyConfig) flagsGiven() string {
+	var given []string
+
+	for _, f := range []struct {
+		name  string
+		value string
+	}{
+		{"-ca-key-pkcs11-module", c.module},
+		{"-ca-key-pkcs11-token", c.token},
+		{"-ca-key-pkcs11-label", c.label},
+		{"-ca-key-pkcs11-id", c.id},
+	} {
+		if f.value != "" {
+			given = append(given, f.name)
+		}
+	}
+
+	return strings.Join(given, ", ")
+}

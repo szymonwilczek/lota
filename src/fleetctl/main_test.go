@@ -254,61 +254,76 @@ func TestRevokeRequiresReasonAndActor(t *testing.T) {
 	}
 }
 
-func TestReanchorRequiresActor(t *testing.T) {
-	f := newFakeAPI(t, nil)
-
-	code, _, _ := runCLI(t, noEnv, "-server", f.srv.URL, "reanchor", "host1")
-	if code != exitUsage || f.requests != 0 {
-		t.Fatalf("exit = %d, requests = %d, want usage error before any request",
-			code, f.requests)
+func TestReanchorRequiresAttribution(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		args []string
+	}{
+		{"bare", []string{"reanchor", "host1"}},
+		{"actor only", []string{"reanchor", "host1", "-actor", "ops"}},
+		{"reason only", []string{"reanchor", "host1", "-reason", "BIOS rollout"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newFakeAPI(t, nil)
+			args := append([]string{"-server", f.srv.URL}, tc.args...)
+			code, _, _ := runCLI(t, noEnv, args...)
+			if code != exitUsage || f.requests != 0 {
+				t.Fatalf("exit = %d, requests = %d, want a usage error before any request",
+					code, f.requests)
+			}
+		})
 	}
 }
 
-func TestDeleteWorksWithoutMetadata(t *testing.T) {
+// delete removes a client's trust state entirely; it is never unattributed
+func TestDeleteRequiresAttribution(t *testing.T) {
 	f := newFakeAPI(t, map[string]string{
 		"DELETE /api/v1/clients/host1": `{"status":"deleted","client_id":"host1"}`,
 	})
 
-	code, out, _ := runCLI(t, noEnv, "-server", f.srv.URL, "delete", "host1")
-	if code != exitOK {
-		t.Fatalf("exit = %d", code)
+	for _, tc := range []struct {
+		name string
+		args []string
+	}{
+		{"bare", []string{"delete", "host1"}},
+		{"actor only", []string{"delete", "host1", "-actor", "ops"}},
+		{"reason only", []string{"delete", "host1", "-reason", "decommissioned"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			args := append([]string{"-server", f.srv.URL}, tc.args...)
+			code, out, _ := runCLI(t, noEnv, args...)
+			if code == exitOK {
+				t.Fatalf("%s was accepted; output = %q", tc.name, out)
+			}
+		})
 	}
-	if !strings.Contains(out, "deleted host1") {
-		t.Fatalf("output = %q", out)
+
+	code, out, _ := runCLI(t, noEnv, "-server", f.srv.URL, "delete", "host1",
+		"-reason", "decommissioned", "-actor", "ops")
+	if code != exitOK || !strings.Contains(out, "deleted host1") {
+		t.Fatalf("attributed delete: exit = %d, output = %q", code, out)
 	}
 }
 
-func TestSessionValidateInvalidExitsNonzero(t *testing.T) {
-	f := newFakeAPI(t, map[string]string{
-		"POST /api/v1/session/validate": `{"valid":false}`,
-	})
-
-	code, out, _ := runCLI(t, noEnv, "-server", f.srv.URL,
-		"session", "validate", strings.Repeat("00", 32))
-	if code != exitError {
-		t.Fatalf("exit = %d, want 1 for an invalid token", code)
-	}
-	if !strings.Contains(out, "valid: false") {
-		t.Fatalf("output = %q", out)
-	}
-}
-
-func TestSessionValidateRejectsMisplacedFlags(t *testing.T) {
+/*
+ * The session-validate verb was withdrawn with the credential it presented:
+ * nothing could ever hold a token to pass it. An unknown subcommand is a usage
+ * error, and asserting that keeps a caller's script from failing silently if
+ * it still carries the old invocation.
+ */
+func TestSessionSubcommandIsWithdrawn(t *testing.T) {
 	f := newFakeAPI(t, nil)
 
-	// -consume before the token would silently validate the literal string
-	// "-consume" as the token
-	// reject it before any request
 	code, _, errOut := runCLI(t, noEnv, "-server", f.srv.URL,
-		"session", "validate", "-consume", strings.Repeat("00", 32))
+		"session", "validate", strings.Repeat("00", 32))
 	if code != exitUsage {
-		t.Fatalf("exit = %d, want 2 for flags before the token", code)
+		t.Fatalf("exit = %d, want 2 for a withdrawn subcommand", code)
 	}
-	if !strings.Contains(errOut, "token argument") {
+	if !strings.Contains(errOut, "unknown command") {
 		t.Fatalf("stderr = %q", errOut)
 	}
 	if f.requests != 0 {
-		t.Fatalf("request sent despite the usage error")
+		t.Fatalf("request sent for a withdrawn subcommand")
 	}
 }
 
@@ -373,9 +388,57 @@ func TestUnrevoke(t *testing.T) {
 			"client_id":"host1"}`,
 	})
 
-	code, out, _ := runCLI(t, noEnv, "-server", f.srv.URL, "unrevoke", "host1")
+	code, out, _ := runCLI(t, noEnv, "-server", f.srv.URL, "unrevoke", "host1",
+		"-reason", "appeal upheld", "-actor", "ops")
 	if code != exitOK || !strings.Contains(out, "unrevoked host1") {
 		t.Fatalf("exit = %d, output = %q", code, out)
+	}
+}
+
+// Lifting a restriction is the act a fleet most wants signed, so it is refused
+// unattributed on the same terms its inverse is.
+// Asserted beside the ban that records an actor, because the pair is the property:
+// the trail attributed the restriction and not the restoration.
+func TestLiftsRequireAttribution(t *testing.T) {
+	hwid := strings.Repeat("ab", 32)
+	f := newFakeAPI(t, map[string]string{
+		"POST /api/v1/bans":                   `{"status":"banned"}`,
+		"DELETE /api/v1/bans/" + hwid:         `{"status":"unbanned"}`,
+		"DELETE /api/v1/clients/host1/revoke": `{"status":"unrevoked"}`,
+	})
+
+	// the inverse still records one
+	code, _, _ := runCLI(t, noEnv, "-server", f.srv.URL,
+		"ban", hwid, "-reason", "cheating", "-actor", "ops")
+	if code != exitOK {
+		t.Fatalf("ban with an actor should succeed, exit = %d", code)
+	}
+
+	for _, tc := range []struct {
+		name string
+		args []string
+	}{
+		{"unban without an actor", []string{"unban", hwid, "-reason", "appeal upheld"}},
+		{"unban without a reason", []string{"unban", hwid, "-actor", "ops"}},
+		{"unban bare", []string{"unban", hwid}},
+		{"unrevoke without an actor", []string{"unrevoke", "host1", "-reason", "appeal upheld"}},
+		{"unrevoke without a reason", []string{"unrevoke", "host1", "-actor", "ops"}},
+		{"unrevoke bare", []string{"unrevoke", "host1"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			args := append([]string{"-server", f.srv.URL}, tc.args...)
+			code, out, _ := runCLI(t, noEnv, args...)
+			if code == exitOK {
+				t.Fatalf("%s was accepted; output = %q", tc.name, out)
+			}
+		})
+	}
+
+	// and with both it goes through
+	code, out, _ := runCLI(t, noEnv, "-server", f.srv.URL,
+		"unban", hwid, "-reason", "appeal upheld", "-actor", "ops")
+	if code != exitOK || !strings.Contains(out, "unbanned "+hwid) {
+		t.Fatalf("attributed unban: exit = %d, output = %q", code, out)
 	}
 }
 
@@ -408,7 +471,8 @@ func TestBanAndUnban(t *testing.T) {
 		t.Fatalf("ban: exit = %d, output = %q", code, out)
 	}
 
-	code, out, _ = runCLI(t, noEnv, "-server", f.srv.URL, "unban", hwid)
+	code, out, _ = runCLI(t, noEnv, "-server", f.srv.URL, "unban", hwid,
+		"-reason", "appeal upheld", "-actor", "ops")
 	if code != exitOK || !strings.Contains(out, "unbanned "+hwid) {
 		t.Fatalf("unban: exit = %d, output = %q", code, out)
 	}
@@ -441,7 +505,8 @@ func TestReanchorHappyPath(t *testing.T) {
 	})
 
 	code, out, _ := runCLI(t, noEnv, "-server", f.srv.URL,
-		"reanchor", "host1", "-actor", "ops", "-note", "board swap")
+		"reanchor", "host1", "-reason", "BIOS rollout", "-actor", "ops",
+		"-note", "board swap")
 	if code != exitOK || !strings.Contains(out, "reanchored host1") {
 		t.Fatalf("exit = %d, output = %q", code, out)
 	}
@@ -459,22 +524,6 @@ func TestAttestsTable(t *testing.T) {
 		t.Fatalf("exit = %d", code)
 	}
 	if !strings.Contains(out, "RESULT") || !strings.Contains(out, "success") {
-		t.Fatalf("output = %q", out)
-	}
-}
-
-func TestSessionValidateValidToken(t *testing.T) {
-	f := newFakeAPI(t, map[string]string{
-		"POST /api/v1/session/validate": `{"valid":true,"consumed":true,
-			"client_id":"host1","hardware_id":"ab"}`,
-	})
-
-	code, out, _ := runCLI(t, noEnv, "-server", f.srv.URL,
-		"session", "validate", strings.Repeat("00", 32), "-consume")
-	if code != exitOK {
-		t.Fatalf("exit = %d, want 0 for a valid token", code)
-	}
-	if !strings.Contains(out, "valid: true") || !strings.Contains(out, "client: host1") {
 		t.Fatalf("output = %q", out)
 	}
 }
@@ -531,7 +580,7 @@ func TestBanUnbanTenantForwarded(t *testing.T) {
 		t.Fatalf("ban body tenant = %v, want acme", body["tenant"])
 	}
 
-	code, out, _ = runCLI(t, noEnv, "-server", srv.URL, "unban", hwid, "-tenant", "acme")
+	code, out, _ = runCLI(t, noEnv, "-server", srv.URL, "unban", hwid, "-tenant", "acme", "-reason", "appeal upheld", "-actor", "ops")
 	if code != exitOK || !strings.Contains(out, "tenant acme") {
 		t.Fatalf("unban: exit = %d, out = %q", code, out)
 	}

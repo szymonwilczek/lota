@@ -21,6 +21,7 @@
 
 #include "config.h"
 #include "net.h"
+#include "pin.h"
 
 #define LOTA_CLI_DEFAULT_BPF_PATH "/usr/lib/lota/lota_lsm.bpf.o"
 #define LOTA_CLI_DEFAULT_AIK_TTL 0 /* 0 -> use TPM_AIK_DEFAULT_TTL_SEC */
@@ -112,7 +113,7 @@ struct cli_options {
 	int insecure_allow_mode_downgrade;
 	int insecure_allow_mutable_rootfs;
 	const char *pin_sha256_hex;
-	uint8_t pin_sha256_bin[NET_PIN_SHA256_LEN];
+	uint8_t pin_sha256_bin[LOTA_PIN_SHA256_LEN];
 	int has_pin;
 
 	/* mode tracking */
@@ -155,5 +156,40 @@ char (*cli_runtime_trust_libs(void))[PATH_MAX];
 int *cli_runtime_trust_lib_count(void);
 char (*cli_runtime_allow_verity(void))[PATH_MAX];
 int *cli_runtime_allow_verity_count(void);
+
+/*
+ * Which enforcement switches the command line turned on.
+ *
+ * All five are enabling flags, and a reload re-applies the switches from
+ * the configuration file -- whose defaults leave strict_exec and strict_modules off.
+ * Without a record of what was asked for, a reload withdraws an enforcement
+ * setting the operator passed to this daemon, and the agent cannot be restarted
+ * to re-read its own command line.
+ */
+#define LOTA_CLI_SWITCH_STRICT_MMAP (1U << 0)
+#define LOTA_CLI_SWITCH_STRICT_EXEC (1U << 1)
+#define LOTA_CLI_SWITCH_BLOCK_PTRACE (1U << 2)
+#define LOTA_CLI_SWITCH_STRICT_MODULES (1U << 3)
+#define LOTA_CLI_SWITCH_BLOCK_ANON_EXEC (1U << 4)
+
+uint32_t cli_startup_switch_mask(void);
+
+/*
+ * What the command line itself asked for, kept apart from the runtime lists
+ * above.
+ *
+ * Those lists start as the config file's contents plus the flags
+ * and are rewritten in place on every reload, so after the first one there is
+ * nothing left to say which entries the operator passed as arguments.
+ * A reload re-reads the file, which need never mention them: without this
+ * record it would revoke them, and --protect-pid has no runtime verb to put
+ * them back with.
+ *
+ * Empty on a daemon started without the flags.
+ */
+const char (*cli_startup_trust_libs(void))[PATH_MAX];
+int cli_startup_trust_lib_count(void);
+const uint32_t *cli_startup_protect_pids(void);
+int cli_startup_protect_pid_count(void);
 
 #endif /* LOTA_AGENT_CLI_H */

@@ -472,6 +472,80 @@ out:
 	return ret;
 }
 
+int agent_validate_startup_policy(const struct agent_startup_policy *policy)
+{
+	int ret;
+
+	if (!policy)
+		return -EINVAL;
+
+	ret = validate_protected_pid_capacity(policy);
+	if (ret < 0)
+		return ret;
+
+	/*
+	 * Probe each pid here, before self_measure().
+	 * The apply path runs after it, so a pid that names no process would
+	 * fail there with PCR 14 already spent, and the host could not attest
+	 * until reboot.
+	 * Same probe the protected-set update makes.
+	 */
+	for (int i = 0; i < policy->protect_pid_count; i++) {
+		ret = bpf_loader_probe_protect_pid(policy->protect_pids[i]);
+		if (ret == -ENOENT) {
+			lota_err(
+				"No process is running under PID %u, so there is nothing to protect. The protected set is seeded at startup from processes that are already up, and a process that starts later protects itself through the SDK, with lota_protect_self()",
+				policy->protect_pids[i]);
+			return ret;
+		}
+		if (ret < 0) {
+			lota_err("Cannot protect PID %u: %s",
+				 policy->protect_pids[i], strerror(-ret));
+			return ret;
+		}
+	}
+
+	ret = bpf_loader_verify_kernel_runtime_hardening(
+		policy->allow_mutable_rootfs);
+	if (ret < 0) {
+		lota_err(
+			"Kernel anti-tamper prerequisites are not satisfied: %s",
+			strerror(-ret));
+		return ret;
+	}
+
+	if (policy->allow_verity_count == 0 &&
+	    (policy->strict_exec || policy->strict_modules)) {
+		lota_err(
+			"Strict exec/modules requested but no allow_verity entries are configured");
+		return -EINVAL;
+	}
+
+	for (int i = 0; i < policy->allow_verity_count; i++) {
+		struct lota_verity_digest_key d;
+
+		ret = bpf_loader_measure_verity_digest(policy->allow_verity[i],
+						       &d);
+		OPENSSL_cleanse(&d, sizeof(d));
+		if (ret < 0) {
+			lota_err("Cannot measure fs-verity path %s: %s",
+				 policy->allow_verity[i], strerror(-ret));
+			return ret;
+		}
+	}
+
+	for (int i = 0; i < policy->trust_lib_count; i++) {
+		ret = bpf_loader_probe_trusted_lib(policy->trust_libs[i]);
+		if (ret < 0) {
+			lota_err("Cannot trust lib %s: %s",
+				 policy->trust_libs[i], strerror(-ret));
+			return ret;
+		}
+	}
+
+	return 0;
+}
+
 int agent_apply_startup_policy(const struct agent_startup_policy *policy)
 {
 	int ret;
@@ -690,8 +764,15 @@ allowlist_done:
 		ret = bpf_loader_protect_pid(&g_agent.bpf_ctx,
 					     policy->protect_pids[i]);
 		if (ret < 0) {
-			lota_err("Failed to protect PID %u at startup: %s",
-				 policy->protect_pids[i], strerror(-ret));
+			if (ret == -ENOENT)
+				lota_err(
+					"PID %u was running when the policy was checked and has ended since, so the protected set cannot be seeded with it. Reboot and start again with the process up.",
+					policy->protect_pids[i]);
+			else
+				lota_err(
+					"Failed to protect PID %u at startup: %s",
+					policy->protect_pids[i],
+					strerror(-ret));
 			goto out_fail;
 		}
 		applied_pids++;

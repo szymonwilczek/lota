@@ -12,8 +12,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
-/* SHA-256 digest size for certificate fingerprint pinning */
-#define NET_PIN_SHA256_LEN 32
+#include "pin.h"
 
 typedef struct ssl_st SSL;
 typedef struct ssl_ctx_st SSL_CTX;
@@ -29,7 +28,7 @@ struct net_context {
 	char server_addr[256];
 	int server_port;
 	int skip_verify;
-	uint8_t pin_sha256[NET_PIN_SHA256_LEN];
+	uint8_t pin_sha256[LOTA_PIN_SHA256_LEN];
 	int has_pin; /* nonzero if pin_sha256 is set */
 };
 
@@ -53,10 +52,13 @@ struct verifier_result {
 	uint32_t result;
 	uint32_t flags;
 	uint64_t valid_until;
-	uint8_t session_token[32];
 };
 
-/* Result codes */
+/* Result codes.
+ * One enumeration with the verifier's (src/verifier/types/report.go):
+ * a code this list is missing reaches the host as an unknown error,
+ * which is the only account it has of why it stopped attesting.
+ * The pair is compared in the build -- see verify_codes_test.go */
 #define VERIFY_OK 0
 #define VERIFY_NONCE_FAIL 1
 #define VERIFY_SIG_FAIL 2
@@ -64,7 +66,27 @@ struct verifier_result {
 #define VERIFY_IOMMU_FAIL 4
 #define VERIFY_OLD_VERSION 5
 #define VERIFY_INTEGRITY_MISMATCH 6
+#define VERIFY_REVOKED 7
+#define VERIFY_BANNED 8
 #define VERIFY_INTERNAL_ERROR 9
+#define VERIFY_IDENTITY_FAIL 10
+
+/*
+ * The likely cause of a connect(2) that was refused, as a sentence the operator
+ * can act on, or NULL when there is nothing better to say than the errno.
+ *
+ * The confined agent may reach only ports labelled lota_port_t, and the policy
+ * dontaudits the denial: an unlabelled port answers EACCES with no AVC anywhere,
+ * against a server that is running.
+ * That is worth naming, and only where SELinux is enforcing -- @enforce_path
+ * is the state node the answer depends on, so a caller passes the real one
+ * and a test passes its own.
+ *
+ * @buf holds the sentence; the returned pointer is @buf or NULL.
+ */
+const char *net_connect_refusal_hint(int err, int port,
+				     const char *enforce_path, char *buf,
+				     size_t cap);
 
 /*
  * Initialize network subsystem.
@@ -103,16 +125,6 @@ void net_cleanup(void);
 int net_context_init(struct net_context *ctx, const char *server, int port,
 		     const char *ca_cert_path, int skip_verify,
 		     const uint8_t *pin_sha256);
-
-/*
- * Parse hex-encoded SHA-256 fingerprint into binary.
- *
- * @hex: 64-character hex string. colons (':') and spaces are silently skipped.
- * @out: Output buffer, must be at least NET_PIN_SHA256_LEN bytes
- *
- * Returns: 0 on success, -EINVAL on bad input
- */
-int net_parse_pin_sha256(const char *hex, uint8_t *out);
 
 void net_context_cleanup(struct net_context *ctx);
 

@@ -204,6 +204,11 @@ int handle_exec_event(void *ctx, void *data, size_t len)
 		has_file = 1;
 		is_blocked = true;
 		break;
+	case LOTA_EVENT_MOUNT_BLOCKED:
+		event_type_str = "MOUNT_BLOCKED";
+		has_file = 1;
+		is_blocked = true;
+		break;
 	case LOTA_EVENT_MMAP_EXEC:
 		event_type_str = "MMAP_EXEC";
 		has_file = 1;
@@ -230,6 +235,11 @@ int handle_exec_event(void *ctx, void *data, size_t len)
 			  (unsigned long long)event->timestamp_ns,
 			  event_type_str, comm_safe, event->target_pid,
 			  filename_safe, event->pid, event->uid);
+		return 0;
+	case LOTA_EVENT_KILL:
+		lota_info("[%llu] KILL %s -> pid=%u (pid=%u, uid=%u)",
+			  (unsigned long long)event->timestamp_ns, comm_safe,
+			  event->target_pid, event->pid, event->uid);
 		return 0;
 	case LOTA_EVENT_KILL_BLOCKED:
 		lota_info("[%llu] KILL_BLOCKED %s -> pid=%u (pid=%u, uid=%u)",

@@ -48,8 +48,10 @@ int main(void)
 	int ret;
 
 	printf("=== LOTA SDK Integration Test ===\n\n");
-	printf("Ensure lota-agent is running with --test-ipc or "
-	       "--test-signed\n\n");
+	printf("Ensure lota-agent is running with --test-signed, or with "
+	       "--test-ipc\n");
+	printf("for every test but the token: an agent with no TPM refuses "
+	       "GET_TOKEN\n\n");
 
 	printf("--- Test 1: Connection ---\n");
 	client = lota_connect();
@@ -57,7 +59,8 @@ int main(void)
 
 	if (!client) {
 		printf("\nCannot continue without connection.\n");
-		printf("Start agent: sudo ./build/lota-agent --test-ipc\n");
+		printf("Start agent: sudo ./build/lota-agent "
+		       "--test-signed\n");
 		return 1;
 	}
 
@@ -136,7 +139,7 @@ int main(void)
 				    token.attest_size > 100,
 				    "expected ~145 byte TPMS_ATTEST");
 		} else {
-			printf("  Token is UNSIGNED (--test-ipc mode)\n");
+			printf("  Token carries no signature\n");
 		}
 
 		lota_token_free(&token);

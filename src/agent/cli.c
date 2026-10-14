@@ -20,9 +20,9 @@
 #include "attest.h"
 #include "config.h"
 #include "main_utils.h"
-#include "net.h"
 #include "parse_utils.h"
 #include "path_validate.h"
+#include "pin.h"
 #include "tpm.h"
 
 /* Runtime config populated by --protect-pid / --trust-lib / --allow-verity. */
@@ -30,6 +30,11 @@ static uint32_t *g_protect_pids = NULL;
 static int g_protect_pid_count = 0;
 static char g_trust_libs[LOTA_CONFIG_MAX_LIBS][PATH_MAX];
 static int g_trust_lib_count;
+static uint32_t g_cli_switch_mask;
+static char (*g_cli_trust_libs)[PATH_MAX];
+static int g_cli_trust_lib_count;
+static uint32_t *g_cli_protect_pids;
+static int g_cli_protect_pid_count;
 static char g_allow_verity[LOTA_CONFIG_MAX_VERITY][PATH_MAX];
 static int g_allow_verity_count;
 
@@ -48,6 +53,29 @@ char (*cli_runtime_trust_libs(void)) [PATH_MAX] { return g_trust_libs; }
 int *cli_runtime_trust_lib_count(void)
 {
 	return &g_trust_lib_count;
+}
+
+const char (*cli_startup_trust_libs(void))
+	[PATH_MAX] { return (const char (*)[PATH_MAX])g_cli_trust_libs; }
+
+uint32_t cli_startup_switch_mask(void)
+{
+	return g_cli_switch_mask;
+}
+
+int cli_startup_trust_lib_count(void)
+{
+	return g_cli_trust_lib_count;
+}
+
+const uint32_t *cli_startup_protect_pids(void)
+{
+	return g_cli_protect_pids;
+}
+
+int cli_startup_protect_pid_count(void)
+{
+	return g_cli_protect_pid_count;
 }
 
 char (*cli_runtime_allow_verity(void)) [PATH_MAX] { return g_allow_verity; }
@@ -155,7 +183,7 @@ static int load_config_into_options(struct cli_options *opts,
 							     NULL);
 	if (kret < 0) {
 		fprintf(stderr, "Invalid kernel_path in config: %s\n",
-			strerror(-kret));
+			tpm_strerror(kret));
 		return 1;
 	}
 
@@ -204,69 +232,104 @@ static int load_config_into_options(struct cli_options *opts,
 	return 0;
 }
 
+/*
+ * Parse --attest-interval value
+ * 0 disables the loop, a nonzero value below the minimum is raised to it,
+ * one above the maximum is refused.
+ */
+static int parse_attest_interval(const char *arg, int *interval)
+{
+	long v;
+
+	if (safe_parse_long(arg, &v) < 0 || v < 0 || v > INT_MAX) {
+		fprintf(stderr, "Invalid interval: %s\n", arg);
+		return -EINVAL;
+	}
+	if (v != 0 && v < MIN_ATTEST_INTERVAL) {
+		fprintf(stderr,
+			"Warning: interval %ld too low, using "
+			"minimum %d seconds\n",
+			v, MIN_ATTEST_INTERVAL);
+		v = MIN_ATTEST_INTERVAL;
+	}
+	if (v > MAX_ATTEST_INTERVAL) {
+		fprintf(stderr,
+			"Invalid interval: %ld exceeds the "
+			"maximum of %d seconds; beyond it "
+			"every minted token outlives the "
+			"freshness window a relying party "
+			"accepts\n",
+			v, MAX_ATTEST_INTERVAL);
+		return -EINVAL;
+	}
+
+	*interval = (int)v;
+	return 0;
+}
+
 int cli_parse(int argc, char **argv, struct cli_options *opts,
 	      struct lota_config *cfg)
 {
 	int opt;
 
 	static struct option long_options[] = {
-		{ "config", required_argument, 0, 'f' },
-		{ "dump-config", no_argument, 0, 'Z' },
-		{ "test-tpm", no_argument, 0, 't' },
-		{ "test-iommu", no_argument, 0, 'i' },
-		{ "test-ipc", no_argument, 0, 'c' },
-		{ "test-signed", no_argument, 0, 'S' },
-		{ "shutdown", no_argument, 0, 1001 },
-		{ "terminate-protected", required_argument, 0, 1042 },
-		{ "force", no_argument, 0, 1043 },
-		{ "export-policy", no_argument, 0, 'E' },
-		{ "attest", no_argument, 0, 'a' },
-		{ "attest-interval", required_argument, 0, 'I' },
-		{ "enroll", no_argument, 0, 1004 },
-		{ "reenroll", no_argument, 0, 1014 },
-		{ "enroll-token-file", required_argument, 0, 1015 },
-		{ "allow-publisher", required_argument, 0, 1016 },
-		{ "add-publisher", required_argument, 0, 1040 },
-		{ "publisher-name", required_argument, 0, 1041 },
-		{ "list-publishers", no_argument, 0, 1017 },
-		{ "forget-publisher", required_argument, 0, 1018 },
-		{ "seal", no_argument, 0, 1007 },
-		{ "unseal", no_argument, 0, 1008 },
-		{ "seal-pcrs", required_argument, 0, 1009 },
-		{ "seal-aik-auth", no_argument, 0, 1010 },
-		{ "reprovision-aik", no_argument, 0, 1011 },
-		{ "seal-persist-primary", no_argument, 0, 1012 },
-		{ "seal-evict-primary", no_argument, 0, 1013 },
-		{ "ca-server", required_argument, 0, 1005 },
-		{ "ca-port", required_argument, 0, 1006 },
-		{ "server", required_argument, 0, 's' },
-		{ "port", required_argument, 0, 'p' },
-		{ "ca-cert", required_argument, 0, 'C' },
-		{ "no-verify-tls", no_argument, 0, 'K' },
-		{ "insecure-allow-no-verify-tls", no_argument, 0, 1000 },
-		{ "insecure-allow-mode-downgrade", no_argument, 0, 1002 },
-		{ "insecure-allow-mutable-rootfs", no_argument, 0, 1003 },
-		{ "pin-sha256", required_argument, 0, 'F' },
-		{ "bpf", required_argument, 0, 'b' },
-		{ "mode", required_argument, 0, 'm' },
-		{ "strict-mmap", no_argument, 0, 'M' },
-		{ "strict-exec", no_argument, 0, 'Y' },
-		{ "block-ptrace", no_argument, 0, 'P' },
-		{ "strict-modules", no_argument, 0, 'J' },
-		{ "block-anon-exec", no_argument, 0, 'X' },
-		{ "protect-pid", required_argument, 0, 'R' },
-		{ "trust-lib", required_argument, 0, 'L' },
-		{ "allow-verity", required_argument, 0, 'A' },
-		{ "daemon", no_argument, 0, 'd' },
-		{ "pid-file", required_argument, 0, 'D' },
-		{ "aik-ttl", required_argument, 0, 'T' },
-		{ "gen-signing-key", required_argument, 0, 'G' },
-		{ "sign-policy", required_argument, 0, 'g' },
-		{ "verify-policy", required_argument, 0, 'V' },
-		{ "signing-key", required_argument, 0, 'k' },
-		{ "policy-pubkey", required_argument, 0, 'Q' },
-		{ "help", no_argument, 0, 'h' },
-		{ 0, 0, 0, 0 }
+		{ "config", required_argument, NULL, 'f' },
+		{ "dump-config", no_argument, NULL, 'Z' },
+		{ "test-tpm", no_argument, NULL, 't' },
+		{ "test-iommu", no_argument, NULL, 'i' },
+		{ "test-ipc", no_argument, NULL, 'c' },
+		{ "test-signed", no_argument, NULL, 'S' },
+		{ "shutdown", no_argument, NULL, 1001 },
+		{ "terminate-protected", required_argument, NULL, 1042 },
+		{ "force", no_argument, NULL, 1043 },
+		{ "export-policy", no_argument, NULL, 'E' },
+		{ "attest", no_argument, NULL, 'a' },
+		{ "attest-interval", required_argument, NULL, 'I' },
+		{ "enroll", no_argument, NULL, 1004 },
+		{ "reenroll", no_argument, NULL, 1014 },
+		{ "enroll-token-file", required_argument, NULL, 1015 },
+		{ "allow-publisher", required_argument, NULL, 1016 },
+		{ "add-publisher", required_argument, NULL, 1040 },
+		{ "publisher-name", required_argument, NULL, 1041 },
+		{ "list-publishers", no_argument, NULL, 1017 },
+		{ "forget-publisher", required_argument, NULL, 1018 },
+		{ "seal", no_argument, NULL, 1007 },
+		{ "unseal", no_argument, NULL, 1008 },
+		{ "seal-pcrs", required_argument, NULL, 1009 },
+		{ "seal-aik-auth", no_argument, NULL, 1010 },
+		{ "reprovision-aik", no_argument, NULL, 1011 },
+		{ "seal-persist-primary", no_argument, NULL, 1012 },
+		{ "seal-evict-primary", no_argument, NULL, 1013 },
+		{ "ca-server", required_argument, NULL, 1005 },
+		{ "ca-port", required_argument, NULL, 1006 },
+		{ "server", required_argument, NULL, 's' },
+		{ "port", required_argument, NULL, 'p' },
+		{ "ca-cert", required_argument, NULL, 'C' },
+		{ "no-verify-tls", no_argument, NULL, 'K' },
+		{ "insecure-allow-no-verify-tls", no_argument, NULL, 1000 },
+		{ "insecure-allow-mode-downgrade", no_argument, NULL, 1002 },
+		{ "insecure-allow-mutable-rootfs", no_argument, NULL, 1003 },
+		{ "pin-sha256", required_argument, NULL, 'F' },
+		{ "bpf", required_argument, NULL, 'b' },
+		{ "mode", required_argument, NULL, 'm' },
+		{ "strict-mmap", no_argument, NULL, 'M' },
+		{ "strict-exec", no_argument, NULL, 'Y' },
+		{ "block-ptrace", no_argument, NULL, 'P' },
+		{ "strict-modules", no_argument, NULL, 'J' },
+		{ "block-anon-exec", no_argument, NULL, 'X' },
+		{ "protect-pid", required_argument, NULL, 'R' },
+		{ "trust-lib", required_argument, NULL, 'L' },
+		{ "allow-verity", required_argument, NULL, 'A' },
+		{ "daemon", no_argument, NULL, 'd' },
+		{ "pid-file", required_argument, NULL, 'D' },
+		{ "aik-ttl", required_argument, NULL, 'T' },
+		{ "gen-signing-key", required_argument, NULL, 'G' },
+		{ "sign-policy", required_argument, NULL, 'g' },
+		{ "verify-policy", required_argument, NULL, 'V' },
+		{ "signing-key", required_argument, NULL, 'k' },
+		{ "policy-pubkey", required_argument, NULL, 'Q' },
+		{ "help", no_argument, NULL, 'h' },
+		{ NULL, 0, NULL, 0 }
 	};
 
 	memset(opts, 0, sizeof(*opts));
@@ -319,37 +382,9 @@ int cli_parse(int argc, char **argv, struct cli_options *opts,
 			break;
 		case 'I':
 			opts->attest_flag = 1;
-			{
-				long v;
-				if (safe_parse_long(optarg, &v) < 0 || v < 0 ||
-				    v > INT_MAX) {
-					fprintf(stderr,
-						"Invalid interval: %s\n",
-						optarg);
-					return 1;
-				}
-				opts->attest_interval = (int)v;
-			}
-			if (opts->attest_interval != 0 &&
-			    opts->attest_interval < MIN_ATTEST_INTERVAL) {
-				fprintf(stderr,
-					"Warning: interval %d too low, using "
-					"minimum %d seconds\n",
-					opts->attest_interval,
-					MIN_ATTEST_INTERVAL);
-				opts->attest_interval = MIN_ATTEST_INTERVAL;
-			}
-			if (opts->attest_interval > MAX_ATTEST_INTERVAL) {
-				fprintf(stderr,
-					"Invalid interval: %d exceeds the "
-					"maximum of %d seconds; beyond it "
-					"every minted token outlives the "
-					"freshness window a relying party "
-					"accepts\n",
-					opts->attest_interval,
-					MAX_ATTEST_INTERVAL);
+			if (parse_attest_interval(optarg,
+						  &opts->attest_interval) < 0)
 				return 1;
-			}
 			break;
 		case 's':
 			opts->server_addr = optarg;
@@ -472,18 +507,23 @@ int cli_parse(int argc, char **argv, struct cli_options *opts,
 		}
 		case 'M':
 			opts->strict_mmap = true;
+			g_cli_switch_mask |= LOTA_CLI_SWITCH_STRICT_MMAP;
 			break;
 		case 'Y':
 			opts->strict_exec = true;
+			g_cli_switch_mask |= LOTA_CLI_SWITCH_STRICT_EXEC;
 			break;
 		case 'P':
 			opts->block_ptrace = true;
+			g_cli_switch_mask |= LOTA_CLI_SWITCH_BLOCK_PTRACE;
 			break;
 		case 'J':
 			opts->strict_modules = true;
+			g_cli_switch_mask |= LOTA_CLI_SWITCH_STRICT_MODULES;
 			break;
 		case 'X':
 			opts->block_anon_exec = true;
+			g_cli_switch_mask |= LOTA_CLI_SWITCH_BLOCK_ANON_EXEC;
 			break;
 		case 'R': {
 			uint32_t v;
@@ -507,6 +547,17 @@ int cli_parse(int argc, char **argv, struct cli_options *opts,
 			}
 			g_protect_pids = new_pids;
 			g_protect_pids[g_protect_pid_count++] = v;
+
+			uint32_t *cli_pids = realloc(g_cli_protect_pids,
+						     (g_cli_protect_pid_count +
+						      1) * sizeof(uint32_t));
+			if (!cli_pids) {
+				fprintf(stderr, "Memory allocation failed for "
+						"protected PID\n");
+				return 1;
+			}
+			g_cli_protect_pids = cli_pids;
+			g_cli_protect_pids[g_cli_protect_pid_count++] = v;
 		} break;
 		case 'L':
 			if (g_trust_lib_count < LOTA_CONFIG_MAX_LIBS) {
@@ -519,6 +570,26 @@ int cli_parse(int argc, char **argv, struct cli_options *opts,
 					return 1;
 				}
 				g_trust_lib_count++;
+
+				char (*cli_libs)[PATH_MAX] = realloc(
+					g_cli_trust_libs,
+					(size_t)(g_cli_trust_lib_count + 1) *
+						PATH_MAX);
+				if (!cli_libs) {
+					fprintf(stderr,
+						"Memory allocation failed for "
+						"trusted library\n");
+					return 1;
+				}
+				g_cli_trust_libs = cli_libs;
+				if (copy_string_checked(
+					    "trust-lib",
+					    g_cli_trust_libs
+						    [g_cli_trust_lib_count],
+					    PATH_MAX, optarg) < 0) {
+					return 1;
+				}
+				g_cli_trust_lib_count++;
 			} else {
 				fprintf(stderr,
 					"Too many --trust-lib entries (max %d)\n",
@@ -559,15 +630,7 @@ int cli_parse(int argc, char **argv, struct cli_options *opts,
 				return 1;
 			}
 			opts->aik_ttl = v;
-		}
-			if (opts->aik_ttl > 0 && opts->aik_ttl < 3600) {
-				fprintf(stderr,
-					"Warning: AIK TTL %u too low, using "
-					"3600s (1 hour)\n",
-					opts->aik_ttl);
-				opts->aik_ttl = 3600;
-			}
-			break;
+		} break;
 		case 'G':
 			opts->gen_signing_key_prefix = optarg;
 			break;
@@ -597,6 +660,14 @@ int cli_parse(int argc, char **argv, struct cli_options *opts,
 		}
 	}
 
+	/*
+	 * The flag has overwritten the file by now, so this is where the TTL
+	 * is settled and the only place the floor covers both roads.
+	 * The parser has already lifted a value that came from the file,
+	 * naming it, so a file-only TTL reaches this clamped and passes through.
+	 */
+	opts->aik_ttl = config_clamp_aik_ttl(opts->aik_ttl, NULL, 0);
+
 	return 0;
 }
 
@@ -604,7 +675,7 @@ int cli_finalize_pin(struct cli_options *opts)
 {
 	if (!opts->pin_sha256_hex)
 		return 0;
-	if (net_parse_pin_sha256(opts->pin_sha256_hex, opts->pin_sha256_bin) <
+	if (lota_pin_sha256_parse(opts->pin_sha256_hex, opts->pin_sha256_bin) <
 	    0) {
 		fprintf(stderr,
 			"Invalid --pin-sha256 value: '%s'\n"

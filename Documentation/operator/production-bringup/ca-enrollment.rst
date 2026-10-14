@@ -17,8 +17,8 @@ Stand up the CA with your CA key, the trusted manufacturer EK roots and a server
 TLS keypair (:ghsrc:`examples/enrollment/gen-ca.sh` generates the CA material).
 Production fleets span several TPM manufacturers, so trust a pin-enforced
 multi-vendor bundle with ``-ek-root-bundle``; the CA fails closed if any pinned
-root is missing, mismatched, or unpinned (see :ghsrc:`configs/ek-roots/README.rst`
-for how to materialize one):
+certificate is missing, mismatched, unpinned, or classed as something it is not
+(see :ghsrc:`configs/ek-roots/README.rst` for how to materialize one):
 
 .. code-block:: sh
 
@@ -28,9 +28,17 @@ for how to materialize one):
         -pseudonym-key pseudonym.key \
         -ek-root-bundle /var/lib/lota/ek-roots
 
-``-ek-root <file>`` is still accepted and adds operator-supplied roots (for
-example a swtpm CA in the enrollment demo) on top of the bundle; pass either or
-both.
+``-ek-root <file>`` adds operator-supplied anchors (for example a swtpm CA in
+the enrollment demo) on top of the bundle; pass either or both.
+
+A bundle entry is either a trust anchor or path material, and the manifest says
+which. A firmware TPM sends the certificates its chip carries with the
+enrollment request, but the ones above those are published only by the vendor,
+so the operator pins them as intermediates: they complete the route to an
+anchored root without becoming anchors themselves. The startup line reports
+both counts (``ek_roots``, ``ek_intermediates``); a platform that enrols with
+``ek_intermediates=0`` and fails once its bundle is drafted properly is
+generally missing exactly those links.
 
 Pair the bundle with the manufacturers' EK revocation feeds: ``-ek-crl <file>``
 (repeatable) loads a manufacturer CRL, enrollment rejects a revoked EK, and
@@ -84,8 +92,16 @@ environment, never a flag, so it stays out of the process argument list:
 Select the key by ``-ca-key-pkcs11-label`` (CKA_LABEL) or ``-ca-key-pkcs11-id``
 (CKA_ID, hex). The CA checks the token key's public key against ``ca.crt`` at
 startup and refuses to run on a mismatch, the same check applied to an on-disk
-key, so a wrong token or label cannot sign under the CA identity. ``-ca-key``
-and the ``-ca-key-pkcs11-*`` flags are mutually exclusive.
+key, so a wrong token or label cannot sign under the CA identity.
+
+``-ca-key`` and the ``-ca-key-pkcs11-*`` flags are mutually exclusive, and that
+is answered on **any** of the four: passing ``-ca-key`` beside a token, label or
+id is refused just as it is beside the module, and the error names the flags it
+found. A selector given without ``-ca-key-pkcs11-module`` is refused by name as
+well, because nothing has been told which module to open -- the CA never falls
+back to an on-disk key when a token was asked for, since that failure would
+hand the fleet's trust root to a file the operator believed they had
+overridden.
 
 The CA key ceremony, rotation, and the offline-root / online-intermediate
 topology are covered in :doc:`../../security/ca-key <../../security/ca-key>`.
@@ -113,6 +129,13 @@ then materialize the bundle:
 does not vouch for it, so confirm the pin against the vendor before the line
 enters ``sources``.
 
+The bundle does not have to cover the whole path. A TPM that stores
+manufacturer intermediates of its own presents them with the enrollment
+request, and the CA uses them to complete a route to a pinned root -- never to
+anchor one. What the bundle must carry is every certificate on the path the
+device does not: on Intel PTT that is the root and the two OnDie intermediates
+below it, with the three nearest the leaf coming off the chip.
+
 See :ghsrc:`configs/ek-roots/README.rst` for the full flow.
 
 Enrolling a host
@@ -124,17 +147,47 @@ own before the TTL, default 24h, expires):
 .. code-block:: sh
 
     sudo lota-agent --enroll --ca-server ca.example --ca-port 8444 \
-        --ca-cert tls.crt
+        --ca-cert ca.crt
     # stores the issued certificate and the CA endpoint in the publisher
     # profile the trust anchor names, under /var/lib/lota/profiles/
 
-``--ca-cert`` is required. Beyond verifying the TLS peer, the trust anchor is
-what names the publisher: the profile directory is the SHA-256 of the anchor's
+``--ca-cert`` is required, and it must be the **CA anchor** -- the certificate
+whose key signs AIK certificates -- not the listener certificate the CA serves
+TLS with. Beyond verifying the TLS peer, the trust anchor is what names the
+publisher: the profile directory is the SHA-256 of the anchor's
 SubjectPublicKeyInfo, so a host answering to several publishers keeps one AIK,
 one certificate and one enrollment record per publisher and no publisher can
 correlate the host through a shared identity. The endpoint is deliberately not
 the identity -- an address is mutable and two publishers can share a hostname,
 while reissuing the CA certificate over the same key keeps the profile.
+
+A CA that refuses the enrollment says why in the agent's own output.
+Each refusal prints the status the CA sent and the sentence
+that goes with it -- an endorsement key that is not accepted here, an
+attestation key template that is not, a challenge the CA no longer holds, a
+CA that is at its concurrency limit, a token that was not recognised -- along
+with whether the answer is worth retrying. Two of them are worth separating:
+an internal error is a fault at the CA and a later attempt may succeed, while
+a rejected endorsement key is a decision about this machine that will be made
+the same way every time. A status the agent has no name for is printed as a
+number and said to be one, which is what an older agent meeting a newer CA
+looks like.
+
+The agent says so when it can tell. Both ``--enroll`` and ``--add-publisher``
+warn when the file named is not a CA certificate, naming what a re-key of it
+would cost; an anchor produces no such line. It is a warning rather than a
+refusal, because a self-signed leaf is a legitimate pin for a deployment that
+wants one and nothing in the file says which was meant.
+
+Naming the listener certificate here instead is the mistake with the quietest
+consequences. It is the one certificate in a deployment that is rotated on a
+schedule, and a rotation that generates a new key changes the SPKI: every host
+of that publisher becomes a new device at once. Each one enrolls again,
+provisions another AIK in another TPM persistent slot, and needs consent again,
+while its previous enrollment record and certificate sit in a profile directory
+nothing reads. Nothing reports that this has happened -- the hosts look new,
+because to that publisher they are. Issue the listener from the CA and pass the
+CA, which is what :ghsrc:`examples/enrollment/gen-ca.sh` generates.
 
 The AIK is part of the profile, not shared across it. Each publisher's
 enrollment provisions its own key, in its own TPM persistent slot, with its own
@@ -158,7 +211,16 @@ selects the profile:
 
 .. code-block:: sh
 
-    sudo lota-agent --reenroll --ca-cert tls.crt
+    sudo lota-agent --reenroll --ca-cert ca.crt
+
+It is also the command that moves a host onto per-publisher keys. An AIK
+created before the publisher's identity entered the TPM creation template is
+one key shared by every publisher enrolled on that host, and a TPM key cannot
+be rewritten in place, so the agent refuses such a record instead of carrying
+it forward and says which publisher it belongs to. Re-enrolling that profile
+creates its own key; the device pseudonym is derived from the key and moves
+with it, so the publisher sees a device it has not met before and its verifier
+re-establishes the baseline.
 
 Point every verifier at the CA root:
 
@@ -233,6 +295,63 @@ Revocations and hardware bans are keyed separately and survive the delete,
 so removing a client cannot be used to shed either -- a revoked identity
 that re-enrolls is still revoked.
 
+When a publisher's key stops matching its certificate
+=====================================================
+
+A publisher profile holds three things that have to agree: the persistent
+handle its attestation key occupies, the authorization stored beside it, and
+the certificate the CA issued over that key. A TPM clear replaces the key, and
+so does any verb pointed at a handle a profile already owns.
+
+When they disagree, the TPM refuses to sign and **each refusal spends a
+dictionary-attack attempt**. The counter drains slowly -- one attempt every two
+hours on a typical firmware TPM, against a ceiling of 32 -- so a host that
+retried a wrong credential could walk itself into a lockout that needs a
+``lockoutAuth`` the machine does not hold.
+
+The agent therefore compares the key at the handle against the certificate
+before it quotes, which costs no authorization and no attempt, and refuses the
+round when they differ:
+
+.. code-block:: text
+
+    ERR: The attestation key at this publisher's handle is not the key their
+         certificate was issued over, so every quote would be refused by the
+         TPM and each refusal spends a dictionary-attack attempt. No round is
+         attempted until they issue a certificate for the key that is here
+         now: lota-agent --reenroll --ca-cert <their anchor>. Publisher: ...
+
+``--list-publishers`` reports the same state, since it is the surface to check
+first -- everything else it prints survives the key being replaced:
+
+.. code-block:: text
+
+    1feba674...
+      attestation key at TPM handle 0x81010010
+      certificate    39566 s of validity left
+      BROKEN         the key at that handle is not the key this certificate
+                     was issued over, so every quote is refused. Re-enroll
+                     this publisher: lota-agent --reenroll --ca-cert <anchor>
+
+The remedy is the one both messages name: re-enroll that publisher, which
+issues a certificate for the key the TPM holds now. The agent picks the change
+up on its next round, with no restart.
+
+Both this refusal and a TPM authorization failure are said **once** and do not
+shorten the interval. A credential that is wrong is wrong on the next attempt
+too, so a backoff would only raise the rate at which nothing can happen -- and
+where the TPM is the one refusing, raise the rate at which the host spends
+attempts. The target keeps its ordinary cadence, the publisher stays listed as
+not attested, and the agent says so again only when the state changes: when the
+key and the certificate agree once more, or when a round succeeds. A
+configuration reload does not re-announce either, because the configuration
+file is not what changed.
+
+Other publishers are unaffected. Each has its own key, schedule and failure
+state, so one publisher standing still does not slow, stop or silence the
+rest -- which the log shows by continuing to report their enrollment, rotation
+and renewal work as usual.
+
 AIK rotation status over D-Bus
 ==============================
 
@@ -256,6 +375,15 @@ When ``ReenrollRequired`` is true, the host rotated its AIK and the issued
 certificate is stale; clear it with the guided ``sudo lota-agent --reenroll``
 above. The same properties emit ``PropertiesChanged``, so a subscriber is
 notified the moment a rotation happens rather than having to poll.
+
+The schedule has a floor of 3600 seconds, and it applies wherever the value is
+set: ``--aik-ttl`` and the ``aik_ttl`` key in ``lota.conf`` both meet it. Below
+an hour a host rotates its attestation key faster than an enrolment completes,
+so every rotation invalidates the certificate that names the old key and the
+host spends its time on TPM key creation and CA round trips -- on a firmware
+TPM, the slow operations. A smaller value is lifted to the floor, and the agent
+says so on stderr; when it came from the file, the warning names the file and
+the line. ``aik_ttl = 0`` is not a cadence -- it selects the built-in default.
 
 Assigning tenants at enrollment
 ===============================
@@ -299,6 +427,15 @@ single-tenant deployments keep issuing byte-identical subjects. Add
 absent from the manifest; the manifest then doubles as an EK allowlist. A
 strict rejection happens before the credential challenge is wrapped, so a
 barred device never consumes an enrollment session.
+
+A barred device is told its endorsement key was rejected, as is a key that
+does not chain to a pinned root, one its manufacturer's CRL revokes and one
+whose modulus carries the ROCA fingerprint. Each is a verdict on the key that
+a retry does not change; the CA log names which one applied, and for a chain
+that could not be built, the certificate the path needed next -- on a firmware
+TPM usually a vendor intermediate the bundle does not pin. An internal-error
+status means the CA could not serve the request and a later attempt may
+succeed, as with an unverifiable or expired CRL feed.
 
 The device pseudonym in the certificate ``CommonName`` mixes in a named
 tenant, so one TPM enrolling into two tenants yields two distinct device IDs
@@ -360,7 +497,7 @@ at it:
     sudo install -m 600 /dev/null /etc/lota/enroll.token
     printf %s "$TOKEN" | sudo tee /etc/lota/enroll.token >/dev/null
     sudo lota-agent --enroll --ca-server ca.example --ca-port 8444 \
-        --ca-cert /etc/lota/ca-tls.crt \
+        --ca-cert /etc/lota/ca.crt \
         --enroll-token-file /etc/lota/enroll.token
 
 The token must be 1 to 128 printable, non-whitespace ASCII characters; a

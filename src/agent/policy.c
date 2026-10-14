@@ -215,11 +215,24 @@ int policy_emit(const struct policy_snapshot *snap, FILE *out)
 
 	/*
 	 * Measured-boot digest from a kernel-relevant PCR.
+	 *
+	 * The provenance names the register and the running kernel, not a file:
+	 * the value is what that PCR held at boot, and nothing on disk is read
+	 * to produce it.
 	 */
 	fprintf(out,
 		"# Allowed measured-boot digests (kernel-relevant PCR, SHA-256)\n");
-	if (snap->kernel_path[0])
-		emit_yaml_comment(out, "Source", snap->kernel_path);
+	if (snap->kernel_hash_valid) {
+		char origin[96];
+
+		snprintf(origin, sizeof(origin),
+			 "PCR %d as this host booted, not a file hash",
+			 snap->kernel_hash_pcr);
+		emit_yaml_comment(out, "Source", origin);
+		if (snap->kernel_release[0])
+			emit_yaml_comment(out, "Booted kernel",
+					  snap->kernel_release);
+	}
 
 	if (snap->kernel_hash_valid) {
 		fprintf(out, "kernel_hashes:\n");

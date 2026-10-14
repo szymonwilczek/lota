@@ -83,15 +83,16 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size)
 	}
 
 	/*
-	 * lota_devt_from_st converts a glibc-encoded st_dev into the kernel layout;
-	 * for a value glibc itself composed, the result must equal the kernel-layout
-	 * encoding of the same major/minor
+	 * glibc-encoded st_dev is not this layout: for a non-zero major the two
+	 * numbers differ, which is one of the two reasons map keys are not taken
+	 * from stat(2) -- the other being btrfs, whose st_dev names a device
+	 * the superblock never had
 	*/
 	{
-		unsigned gmaj = maj & 0xFFFu; // 12-bit major, glibc-safe range
+		unsigned gmaj = (maj & 0xFFFu) | 1u; // 12-bit non-zero major
 		unsigned gmin = min & 0xFFFFFu; // 20-bit minor
 		dev_t st = makedev(gmaj, gmin);
-		FZ_CHECK(lota_devt_from_st(st) == LOTA_DEVT_MKDEV(gmaj, gmin));
+		FZ_CHECK((unsigned long long)st != LOTA_DEVT_MKDEV(gmaj, gmin));
 	}
 
 	return 0;

@@ -28,6 +28,7 @@
 #include <openssl/evp.h>
 #include <openssl/pem.h>
 #include <openssl/x509.h>
+#include <openssl/x509v3.h>
 
 #include "profile.h"
 
@@ -113,6 +114,31 @@ static int anchor_spki_sha256(const char *path, uint8_t out[32])
 	OPENSSL_free(der);
 	X509_free(cert);
 	return ret;
+}
+
+int profile_anchor_is_ca(const char *ca_cert_path)
+{
+	X509 *cert;
+	int is_ca;
+
+	if (!ca_cert_path)
+		return -EINVAL;
+
+	if (access(ca_cert_path, R_OK) != 0)
+		return -errno;
+
+	cert = anchor_read(ca_cert_path);
+	if (!cert)
+		return -EINVAL;
+
+	/*
+	 * X509_check_ca() answers 0 for a plain end-entity certificate
+	 * and non-zero for anything the library will let sign
+	 * -- basicConstraints CA:TRUE, and the older shapes it still honours.
+	 */
+	is_ca = X509_check_ca(cert) > 0 ? 1 : 0;
+	X509_free(cert);
+	return is_ca;
 }
 
 int profile_id_from_anchor(const char *ca_cert_path, char *out, size_t out_len)
@@ -333,6 +359,17 @@ int profile_aik_handle_save(const struct profile_paths *paths, uint32_t handle)
 	return 0;
 }
 
+int profile_aik_handle_forget(const struct profile_paths *paths)
+{
+	if (!paths || paths->aik_handle[0] == '\0')
+		return -EINVAL;
+
+	if (unlink(paths->aik_handle) != 0 && errno != ENOENT)
+		return -errno;
+
+	return 0;
+}
+
 int profile_aik_handle_candidates(const char *base_dir, uint32_t base,
 				  uint32_t count, uint32_t *out, size_t out_max,
 				  size_t *out_count)
@@ -392,6 +429,91 @@ emit:
 
 	*out_count = written;
 	return 0;
+}
+
+bool profile_aik_cert_stored(const struct profile_paths *paths)
+{
+	struct stat st;
+
+	if (!paths || !paths->aik_cert[0])
+		return false;
+
+	/*
+	 * Empty file is not a certificate.
+	 * A write interrupted between create and content leaves one,
+	 * and treating that as an enrollment would name a key nothing was
+	 * ever issued against.
+	 */
+	if (stat(paths->aik_cert, &st) != 0)
+		return false;
+
+	return S_ISREG(st.st_mode) && st.st_size > 0;
+}
+
+/* A non-empty regular file at path, which is what "this copy exists" means */
+static bool profile_file_present(const char *dir, const char *name)
+{
+	char path[PATH_MAX];
+	struct stat st;
+
+	if (!dir || !dir[0])
+		return false;
+	if (snprintf(path, sizeof(path), "%s/%s", dir, name) >=
+	    (int)sizeof(path))
+		return false;
+	if (stat(path, &st) != 0)
+		return false;
+
+	/*
+	 * An empty file is not a copy of anything.
+	 * A write interrupted between create and content leaves one,
+	 * and counting it would report an authorization protected that is not
+	 * there at all.
+	 */
+	return S_ISREG(st.st_mode) && st.st_size > 0;
+}
+
+enum profile_aik_auth_state
+profile_aik_auth_state(const struct profile_paths *paths)
+{
+	bool plaintext, sealed;
+
+	if (!paths)
+		return PROFILE_AIK_AUTH_NONE;
+
+	plaintext =
+		profile_file_present(paths->dir, LOTA_PROFILE_AIK_AUTH_FILE);
+	sealed = profile_file_present(paths->dir,
+				      LOTA_PROFILE_AIK_AUTH_SEALED_FILE);
+
+	if (plaintext && sealed)
+		return PROFILE_AIK_AUTH_BOTH;
+	if (sealed)
+		return PROFILE_AIK_AUTH_SEALED;
+	if (plaintext)
+		return PROFILE_AIK_AUTH_PLAINTEXT;
+	return PROFILE_AIK_AUTH_NONE;
+}
+
+const char *profile_aik_auth_state_str(enum profile_aik_auth_state state)
+{
+	switch (state) {
+	case PROFILE_AIK_AUTH_SEALED:
+		return "sealed to the platform state, no plaintext copy";
+	case PROFILE_AIK_AUTH_BOTH:
+		return "sealed, and a plaintext copy is kept beside it";
+	case PROFILE_AIK_AUTH_PLAINTEXT:
+		return "plaintext on disk, not sealed";
+	case PROFILE_AIK_AUTH_NONE:
+	default:
+		return "none stored";
+	}
+}
+
+bool profile_aik_auth_exposed(enum profile_aik_auth_state state)
+{
+	return state == PROFILE_AIK_AUTH_PLAINTEXT ||
+	       state == PROFILE_AIK_AUTH_BOTH;
 }
 
 int profile_consent_record(const struct profile_paths *paths, uid_t by)

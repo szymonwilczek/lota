@@ -101,6 +101,28 @@ PCR   Measured By Description
 16-23 Apps        Application use
 ===== =========== =========================================
 
+What a pinned register reports when it goes stale
+-------------------------------------------------
+
+The verifier compares every register in the ``pcrs:`` map and reports all of
+the mismatches in one failure, ordered by index and separated by ``; `` (one
+line; the digests are full 64-character hex, abbreviated here)::
+
+    PCR 8 mismatch: got 91bfde0f..., expected cf26d0a2...;
+    PCR 9 mismatch: got 4bb322db..., expected 7e010772...
+
+The text is the same on every round for the same host state, so a fleet
+dedupes one stale policy as one incident and an operator sees the whole delta
+without re-attesting. A register that matches is not named. How many moved is
+the first clue about what happened: several at once is a reboot into a
+different boot chain, one alone is a narrower change such as a cmdline edit.
+
+Three failures in the same comparison are faults in the policy file rather
+than in the host, keep their own wording, and stop the comparison because no
+report can answer them: an index outside 0-23, a register the client's quote
+did not carry (``PCR 8 not included in quote``), and an expected value that is
+not hex.
+
 Security Requirements
 ---------------------
 
@@ -307,10 +329,21 @@ the agent reports about itself:
   ``module.sig_enforce=0``). The cmdline rarely changes, so this stays
   low-maintenance. On systemd-boot/UKI the cmdline is measured into PCR 12 -
   pin 12 there instead of 8.
-- **kernel_hashes is advisory only, not a trust control.** The value is the
-  agent's userspace ``sha256(/boot/vmlinuz)``, self-reported by code running on
-  the kernel, so a compromised kernel can spoof it. Leave it empty and rely on
-  PCR 7 + PCR 8. A mismatch is at most a weak cross-check, never the boundary.
+- **kernel_hashes is advisory only, not a trust control.** The value an
+  ``--export-policy`` run writes there is a measured-boot register read at
+  export time -- the exported document names which one, and the kernel the
+  exporting host had booted -- and it is reported by code running on that
+  kernel, so a compromised kernel can misreport it. On a GRUB host the
+  register it comes from also moves when nothing about the kernel has, because
+  ``grubenv`` is measured into it and GRUB rewrites that file every boot.
+  Leave the list empty and rely on PCR 7 + PCR 8. A mismatch is at most a weak
+  cross-check, never the boundary.
+
+  No configuration key selects which kernel that digest describes.
+  ``kernel_path`` tells the agent where the kernel image lives on a
+  distribution that ships no ``/boot/vmlinuz-<release>``, which is what
+  ``--test-tpm`` hashes; it has no effect on an export. A policy for a kernel
+  is exported from a host booted into it.
 - **Exact-image (PCR 4/9) and a kernel-version floor are optional and not in
   the default templates.** Pinning the exact kernel image or initrd (PCR 4/9)
   adds anti-rollback at the cost of a per-kernel hash treadmill; a sound
@@ -341,6 +374,15 @@ When software is updated:
    policy does not list - a listed build needs no operator action. A client
    re-pins at most once per 24 hours, so a host that has just re-pinned and
    then changes again within that window is refused until the window elapses.
+   That refusal names itself, and is not the same event as an unlisted build::
+
+       agent_hash re-pin refused by the per-client interval, not by the allow-list
+         reported_agent_hash=... last_repin_at=... interval_elapses_at=...
+
+   Wait for the stated time, or re-anchor that client to accept the build now.
+   A refusal reading ``agent hash not in allowed list`` is the other case: the
+   build is not in the policy, and re-anchoring would accept a binary nobody
+   listed.
 
 .. code:: bash
 

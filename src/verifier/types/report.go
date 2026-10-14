@@ -22,7 +22,7 @@ const (
 	//
 	// Major 2 dropped the always-empty ek_certificate field and made
 	// the trailing ESRT section mandatory.
-	ReportVersion uint32 = 0x00020000 // 2.0.0
+	ReportVersion uint32 = 0x00020100 // 2.1.0
 
 	HashSize        = 32   // SHA-256
 	NonceSize       = 32   // Challenge nonce
@@ -94,6 +94,11 @@ const (
 	VerifyRevoked           uint32 = 7 // AIK revoked by administrator
 	VerifyBanned            uint32 = 8 // hardware ID banned
 	VerifyInternalError     uint32 = 9 // verifier internal error / unset failure path
+
+	// VerifyIdentityFail: the quote's signature verified, but the AIK
+	// certificate names another key. Kept apart from VerifySigFail
+	// because only this one is fixed by re-enrolling.
+	VerifyIdentityFail uint32 = 10
 )
 
 // returns a deterministic string for a result code
@@ -119,6 +124,8 @@ func VerifyResultString(code uint32) string {
 		return "banned"
 	case VerifyInternalError:
 		return "internal_error"
+	case VerifyIdentityFail:
+		return "identity_fail"
 	default:
 		return fmt.Sprintf("unknown_%d", code)
 	}
@@ -235,14 +242,13 @@ type Challenge struct {
 	Flags   uint32
 }
 
-// VerifyResult returned to agent (56 bytes)
+// VerifyResult returned to agent (24 bytes)
 type VerifyResult struct {
-	Magic        uint32
-	Version      uint32
-	Result       uint32
-	Flags        uint32
-	ValidUntil   uint64
-	SessionToken [32]byte
+	Magic      uint32
+	Version    uint32
+	Result     uint32
+	Flags      uint32
+	ValidUntil uint64
 }
 
 // errors
@@ -437,13 +443,12 @@ func (c *Challenge) Serialize() []byte {
 
 // creates binary result for agent
 func (r *VerifyResult) Serialize() []byte {
-	data := make([]byte, 56) // 4+4+4+4+8+32
+	data := make([]byte, 24) // 4+4+4+4+8
 	binary.LittleEndian.PutUint32(data[0:4], r.Magic)
 	binary.LittleEndian.PutUint32(data[4:8], r.Version)
 	binary.LittleEndian.PutUint32(data[8:12], r.Result)
 	binary.LittleEndian.PutUint32(data[12:16], r.Flags)
 	binary.LittleEndian.PutUint64(data[16:24], r.ValidUntil)
-	copy(data[24:56], r.SessionToken[:])
 	return data
 }
 

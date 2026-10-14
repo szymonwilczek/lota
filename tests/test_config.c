@@ -354,12 +354,14 @@ static void test_config_load_string_fields(void)
 	int ret;
 
 	TEST("config_load parses string fields correctly");
-	write_config("strings.conf", "ca_cert = /etc/lota/ca.pem\n"
-				     "pin_sha256 = aabb1122\n"
-				     "bpf_path = /opt/lota/custom.bpf.o\n"
-				     "pid_file = /var/run/lota.pid\n"
-				     "signing_key = /etc/lota/sign.key\n"
-				     "policy_pubkey = /etc/lota/sign.pub\n");
+	write_config(
+		"strings.conf",
+		"ca_cert = /etc/lota/ca.pem\n"
+		"pin_sha256 = aabb112200000000000000000000000000000000000000000000000000000000\n"
+		"bpf_path = /opt/lota/custom.bpf.o\n"
+		"pid_file = /var/run/lota.pid\n"
+		"signing_key = /etc/lota/sign.key\n"
+		"policy_pubkey = /etc/lota/sign.pub\n");
 	config_path("strings.conf", path, sizeof(path));
 	config_init(&cfg);
 	ret = config_load(&cfg, path);
@@ -371,7 +373,9 @@ static void test_config_load_string_fields(void)
 		FAIL("ca_cert mismatch");
 		return;
 	}
-	if (strcmp(cfg.pin_sha256, "aabb1122") != 0) {
+	if (strcmp(cfg.pin_sha256,
+		   "aabb112200000000000000000000000000000000000000000000000000000000") !=
+	    0) {
 		FAIL("pin_sha256 mismatch");
 		return;
 	}
@@ -401,20 +405,22 @@ static void test_config_load_hyphen_keys(void)
 	int ret;
 
 	TEST("config_load accepts hyphen-form keys");
-	write_config("hyphen.conf", "ca-cert = /etc/ca.pem\n"
-				    "pin-sha256 = deadbeef\n"
-				    "bpf-path = /opt/bpf.o\n"
-				    "strict-mmap = true\n"
-				    "block-ptrace = true\n"
-				    "attest-interval = 120\n"
-				    "aik-ttl = 3600\n"
-				    "aik-handle = 0x81020001\n"
-				    "pid-file = /tmp/test.pid\n"
-				    "signing-key = /tmp/sign.key\n"
-				    "policy-pubkey = /tmp/sign.pub\n"
-				    "trust-lib = /usr/lib/libfoo.so\n"
-				    "protect-pid = 42\n"
-				    "log-level = warn\n");
+	write_config(
+		"hyphen.conf",
+		"ca-cert = /etc/ca.pem\n"
+		"pin-sha256 = deadbeef11111111111111111111111111111111111111111111111111111111\n"
+		"bpf-path = /opt/bpf.o\n"
+		"strict-mmap = true\n"
+		"block-ptrace = true\n"
+		"attest-interval = 120\n"
+		"aik-ttl = 3600\n"
+		"aik-handle = 0x81020001\n"
+		"pid-file = /tmp/test.pid\n"
+		"signing-key = /tmp/sign.key\n"
+		"policy-pubkey = /tmp/sign.pub\n"
+		"trust-lib = /usr/lib/libfoo.so\n"
+		"protect-pid = 42\n"
+		"log-level = warn\n");
 	config_path("hyphen.conf", path, sizeof(path));
 	config_init(&cfg);
 	ret = config_load(&cfg, path);
@@ -426,7 +432,9 @@ static void test_config_load_hyphen_keys(void)
 		FAIL("ca-cert");
 		return;
 	}
-	if (strcmp(cfg.pin_sha256, "deadbeef") != 0) {
+	if (strcmp(cfg.pin_sha256,
+		   "deadbeef11111111111111111111111111111111111111111111111111111111") !=
+	    0) {
 		FAIL("pin-sha256");
 		return;
 	}
@@ -995,6 +1003,104 @@ static void test_config_load_attest_interval_bounds(void)
 	PASS();
 }
 
+static void test_config_load_aik_ttl_floor(void)
+{
+	struct lota_config cfg;
+	char path[PATH_MAX];
+	char content[64];
+	int ret;
+
+	TEST("config_load lifts aik_ttl below the floor");
+	snprintf(content, sizeof(content), "aik_ttl = %d\n", MIN_AIK_TTL - 1);
+	write_config("ttl_low.conf", content);
+	config_path("ttl_low.conf", path, sizeof(path));
+	config_init(&cfg);
+	ret = config_load(&cfg, path);
+	if (ret != 0) {
+		char msg[64];
+		snprintf(msg, sizeof(msg), "expected 0, got %d", ret);
+		FAIL(msg);
+		return;
+	}
+	if (cfg.aik_ttl != MIN_AIK_TTL) {
+		char msg[64];
+		snprintf(msg, sizeof(msg), "expected %d, got %u", MIN_AIK_TTL,
+			 cfg.aik_ttl);
+		FAIL(msg);
+		return;
+	}
+	PASS();
+
+	TEST("config_load keeps aik_ttl at the floor");
+	snprintf(content, sizeof(content), "aik_ttl = %d\n", MIN_AIK_TTL);
+	write_config("ttl_floor.conf", content);
+	config_path("ttl_floor.conf", path, sizeof(path));
+	config_init(&cfg);
+	ret = config_load(&cfg, path);
+	if (ret != 0 || cfg.aik_ttl != MIN_AIK_TTL) {
+		FAIL("floor value not applied");
+		return;
+	}
+	PASS();
+
+	/* 0 selects the built-in default and is not a rotation cadence,
+	 * so the floor must leave it alone */
+	TEST("config_load keeps aik_ttl = 0 (the default)");
+	write_config("ttl_zero.conf", "aik_ttl = 0\n");
+	config_path("ttl_zero.conf", path, sizeof(path));
+	config_init(&cfg);
+	ret = config_load(&cfg, path);
+	if (ret != 0 || cfg.aik_ttl != 0) {
+		FAIL("zero was clamped");
+		return;
+	}
+	PASS();
+
+	/* The dump is what --add-publisher rewrites lota.conf from,
+	 * so a clamped value has to survive the round trip as the clamped one */
+	TEST("config_dump writes the lifted aik_ttl back");
+	{
+		struct lota_config reloaded;
+		char dump_path[PATH_MAX];
+		FILE *f;
+		int fd;
+
+		snprintf(content, sizeof(content), "aik_ttl = %d\n",
+			 MIN_AIK_TTL - 1);
+		write_config("ttl_dump_src.conf", content);
+		config_path("ttl_dump_src.conf", path, sizeof(path));
+		config_init(&cfg);
+		if (config_load(&cfg, path) != 0) {
+			FAIL("load source");
+			return;
+		}
+
+		snprintf(dump_path, sizeof(dump_path), "%s/ttl_dumped.conf",
+			 tmpdir);
+		fd = open(dump_path, O_WRONLY | O_CREAT | O_TRUNC, 0600);
+		f = fd >= 0 ? fdopen(fd, "w") : NULL;
+		if (fd >= 0 && !f)
+			close(fd);
+		if (!f) {
+			FAIL("fopen dump");
+			return;
+		}
+		config_dump(&cfg, f);
+		fclose(f);
+
+		config_init(&reloaded);
+		if (config_load(&reloaded, dump_path) != 0) {
+			FAIL("reload dump");
+			return;
+		}
+		if (reloaded.aik_ttl != MIN_AIK_TTL) {
+			FAIL("dump did not carry the lifted value");
+			return;
+		}
+	}
+	PASS();
+}
+
 static void test_config_load_profiles(void)
 {
 	struct lota_config cfg;
@@ -1384,6 +1490,163 @@ static void test_config_load_rejects_symlink(void)
 	PASS();
 }
 
+/*
+ * Certificate pinning belongs to the publisher, not to the host: each publisher
+ * runs its own verifier with its own certificate, so one fingerprint can match
+ * at most one of them.
+ *
+ * The pin is checked through the file rather than the struct, because what
+ * an operator writes and what a writer emits are the two ways it gets in.
+ */
+static void test_config_profile_pin_sha256(void)
+{
+	static const char pin_a[] = "4fd24ead1c6c1c0d2e5f0a9b8c7d6e5f"
+				    "4a3b2c1d0e9f8a7b6c5d4e3f2a1b0c9d";
+	static const char pin_b[] = "0123456789abcdef0123456789abcdef"
+				    "fedcba9876543210fedcba9876543210";
+	struct lota_config cfg;
+	char path[PATH_MAX];
+	char dump_path[PATH_MAX];
+	char body[1024];
+	char dumped[8192];
+	FILE *f;
+	int fd;
+	int ret;
+
+	TEST("a profile pins its own verifier certificate");
+	snprintf(body, sizeof(body),
+		 "[profile \"alpha\"]\n"
+		 "ca = ca.alpha.example\n"
+		 "ca_cert = /etc/lota/alpha.pem\n"
+		 "verifier = v.alpha.example\n"
+		 "pin_sha256 = %s\n"
+		 "\n"
+		 "[profile \"beta\"]\n"
+		 "ca = ca.beta.example\n"
+		 "ca_cert = /etc/lota/beta.pem\n"
+		 "verifier = v.beta.example\n"
+		 "pin-sha256 = %s\n",
+		 pin_a, pin_b);
+	write_config("profile-pin.conf", body);
+	config_path("profile-pin.conf", path, sizeof(path));
+	config_init(&cfg);
+	ret = config_load(&cfg, path);
+	if (ret != 0) {
+		char msg[64];
+		snprintf(msg, sizeof(msg), "expected 0, got %d", ret);
+		FAIL(msg);
+		return;
+	}
+	PASS();
+
+	/* a writer that cannot say the pin writes a host that stops pinning */
+	TEST("config_dump writes each profile's own pin");
+	snprintf(dump_path, sizeof(dump_path), "%s/profile-pin-dump.conf",
+		 tmpdir);
+	fd = open(dump_path, O_WRONLY | O_CREAT | O_TRUNC, 0600);
+	f = fd >= 0 ? fdopen(fd, "w") : NULL;
+	if (fd >= 0 && !f)
+		close(fd);
+	if (!f) {
+		FAIL("fopen dump");
+		return;
+	}
+	config_dump(&cfg, f);
+	fclose(f);
+
+	fd = open(dump_path, O_RDONLY);
+	if (fd < 0) {
+		FAIL("reopen dump");
+		return;
+	}
+	{
+		ssize_t n = read(fd, dumped, sizeof(dumped) - 1);
+
+		close(fd);
+		if (n < 0) {
+			FAIL("read dump");
+			return;
+		}
+		dumped[n] = '\0';
+	}
+	if (!strstr(dumped, pin_a) || !strstr(dumped, pin_b)) {
+		FAIL("the dump dropped the profile pins");
+		return;
+	}
+	PASS();
+
+	TEST("the dumped profile pins parse back");
+	config_init(&cfg);
+	if (config_load(&cfg, dump_path) != 0) {
+		FAIL("the dump does not parse back");
+		return;
+	}
+	PASS();
+
+	/* a pin that is not 32 bytes of hex would pin nothing at all */
+	TEST("a malformed profile pin is refused");
+	write_config("profile-pin-bad.conf", "[profile \"alpha\"]\n"
+					     "ca = ca.alpha.example\n"
+					     "ca_cert = /etc/lota/alpha.pem\n"
+					     "verifier = v.alpha.example\n"
+					     "pin_sha256 = not-a-digest\n");
+	config_path("profile-pin-bad.conf", path, sizeof(path));
+	config_init(&cfg);
+	if (config_load(&cfg, path) == 0) {
+		FAIL("a malformed pin was accepted");
+		return;
+	}
+	PASS();
+}
+
+/*
+ * The host-level key stays the single-verifier deployment's, because one
+ * fingerprint applied to several publishers matches at most one of them
+ * and fails the rest at TLS time, before any verdict.
+ */
+static void test_config_host_pin_beside_profiles(void)
+{
+	static const char pin_a[] = "4fd24ead1c6c1c0d2e5f0a9b8c7d6e5f"
+				    "4a3b2c1d0e9f8a7b6c5d4e3f2a1b0c9d";
+	struct lota_config cfg;
+	char path[PATH_MAX];
+	char body[1024];
+
+	TEST("a host-level pin beside publisher profiles is refused");
+	snprintf(body, sizeof(body),
+		 "pin_sha256 = %s\n"
+		 "\n"
+		 "[profile \"alpha\"]\n"
+		 "ca = ca.alpha.example\n"
+		 "ca_cert = /etc/lota/alpha.pem\n"
+		 "verifier = v.alpha.example\n",
+		 pin_a);
+	write_config("profile-pin-toplevel.conf", body);
+	config_path("profile-pin-toplevel.conf", path, sizeof(path));
+	config_init(&cfg);
+	if (config_load(&cfg, path) == 0) {
+		FAIL("a host-level pin was accepted beside profiles");
+		return;
+	}
+	PASS();
+
+	/* the single-verifier deployment keeps the key it always had */
+	TEST("a host-level pin without profiles still loads");
+	snprintf(body, sizeof(body),
+		 "server = v.example\n"
+		 "pin_sha256 = %s\n",
+		 pin_a);
+	write_config("pin-toplevel-only.conf", body);
+	config_path("pin-toplevel-only.conf", path, sizeof(path));
+	config_init(&cfg);
+	if (config_load(&cfg, path) != 0 ||
+	    strcmp(cfg.pin_sha256, pin_a) != 0) {
+		FAIL("the single-verifier pin stopped working");
+		return;
+	}
+	PASS();
+}
+
 static void test_config_dump_roundtrip(void)
 {
 	struct lota_config cfg1, cfg2;
@@ -1542,28 +1805,30 @@ static void test_config_load_all_known_keys(void)
 	int ret;
 
 	TEST("config_load with every known key returns 0");
-	write_config("all.conf", "server = allhost\n"
-				 "port = 5555\n"
-				 "ca_cert = /all/ca.pem\n"
-				 "pin_sha256 = abcdef0123456789\n"
-				 "bpf_path = /all/lota.bpf.o\n"
-				 "mode = maintenance\n"
-				 "strict_mmap = true\n"
-				 "block_ptrace = true\n"
-				 "attest_interval = 240\n"
-				 "aik_ttl = 86400\n"
-				 "aik_handle = 0x81010005\n"
-				 "daemon = true\n"
-				 "pid_file = /all/pid\n"
-				 "signing_key = /all/sign.key\n"
-				 "policy_pubkey = /all/sign.pub\n"
-				 "trust_lib = /all/lib1.so\n"
-				 "trust_lib = /all/lib2.so\n"
-				 "protect_pid = 1\n"
-				 "protect_pid = 2\n"
-				 "container_listener_uid = 1000\n"
-				 "container_listener_uid = 1001\n"
-				 "log_level = error\n");
+	write_config(
+		"all.conf",
+		"server = allhost\n"
+		"port = 5555\n"
+		"ca_cert = /all/ca.pem\n"
+		"pin_sha256 = abcdef0123456789222222222222222222222222222222222222222222222222\n"
+		"bpf_path = /all/lota.bpf.o\n"
+		"mode = maintenance\n"
+		"strict_mmap = true\n"
+		"block_ptrace = true\n"
+		"attest_interval = 240\n"
+		"aik_ttl = 86400\n"
+		"aik_handle = 0x81010005\n"
+		"daemon = true\n"
+		"pid_file = /all/pid\n"
+		"signing_key = /all/sign.key\n"
+		"policy_pubkey = /all/sign.pub\n"
+		"trust_lib = /all/lib1.so\n"
+		"trust_lib = /all/lib2.so\n"
+		"protect_pid = 1\n"
+		"protect_pid = 2\n"
+		"container_listener_uid = 1000\n"
+		"container_listener_uid = 1001\n"
+		"log_level = error\n");
 	config_path("all.conf", path, sizeof(path));
 	config_init(&cfg);
 	ret = config_load(&cfg, path);
@@ -1585,7 +1850,9 @@ static void test_config_load_all_known_keys(void)
 		FAIL("ca_cert");
 		return;
 	}
-	if (strcmp(cfg.pin_sha256, "abcdef0123456789") != 0) {
+	if (strcmp(cfg.pin_sha256,
+		   "abcdef0123456789222222222222222222222222222222222222222222222222") !=
+	    0) {
 		FAIL("pin_sha256");
 		return;
 	}
@@ -1855,11 +2122,14 @@ int main(void)
 		test_config_load_empty_value,
 		test_config_load_port_bounds,
 		test_config_load_attest_interval_bounds,
+		test_config_load_aik_ttl_floor,
 		test_config_load_profiles,
 		test_config_profile_reporting,
 		test_config_load_profile_incomplete,
 		test_config_load_profile_malformed,
 		test_config_load_profile_overflow,
+		test_config_profile_pin_sha256,
+		test_config_host_pin_beside_profiles,
 		test_config_load_rejects_group_writable,
 		test_config_load_rejects_symlink,
 		test_config_dump_roundtrip,

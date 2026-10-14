@@ -239,8 +239,8 @@ strict policy):
 
 An 18-minute dual-instance soak (2 x 5 000 agents at 60 s, one shared
 Postgres) held the same rate through a ``kill -9`` of one instance
-(only its agents affected; recovered next interval; 20/20 of its
-session tokens validated on the survivor) and a ~2 s Postgres restart
+(only its agents affected; recovered next interval, their shared state
+served by the survivor) and a ~2 s Postgres restart
 (fail-closed rejections inside the window only; all 10 000
 registrations intact). Operator-facing conclusions from these runs are
 in :doc:`the sizing guide <../operator/sizing>`.

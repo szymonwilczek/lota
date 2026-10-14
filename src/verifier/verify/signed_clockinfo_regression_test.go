@@ -11,17 +11,6 @@
 // rederived the expected PCR14 from the quote-carried counters and
 // reported a mismatch because no agent_hash + counter combination it
 // scanned reproduced the actual PCR14.
-//
-// The fix (commit "agent: bind PCR14 to AIK-signed clockInfo") makes
-// the agent capture counters through an AIK-signed TPM2_Quote with an
-// empty PCR selection so the value extended into PCR14 matches the
-// clockInfo of the later attestation quote. The verifier side is
-// unchanged: it parses TPMS_ATTEST.clockInfo and runs
-// MatchLockedBootCommitmentPCR14 against the agent_hash baseline.
-//
-// These tests pin the contract on the verifier side so any future
-// regression that changes the derivation, the counter parsing, or the
-// matching logic surfaces immediately.
 
 package verify
 
@@ -66,82 +55,42 @@ func hexDigit(c byte) byte {
 	panic("bad hex")
 }
 
-// TestRegression_LockedDerivation_SwtpmCounters pins the exact PCR14
-// the verifier expects when the agent extended with the swtpm-observed
-// (signed) clockInfo counters. The expected_pcr14 emitted by the
-// verifier in the failing log run was
-// 69b35748b79e3bc3d3db72cc90364750c258d9da36c022ae729107dde3df7e4d -
-// the post-fix derivation must reproduce that value byte for byte.
-func TestRegression_LockedDerivation_SwtpmCounters(t *testing.T) {
+// TestRegression_LockedDerivation_DoesNotDrift pins the exact PCR14 the verifier
+// expects for a known agent hash on a zero baseline.  Any change to the tag,
+// the chain order or the hashed inputs shows up here as a byte-level diff.
+func TestRegression_LockedDerivation_DoesNotDrift(t *testing.T) {
 	ah := referenceAgentHash()
-	got := DeriveLockedBootCommitmentPCR14(zeroBaseline, ah, regressionResetCount,
-		regressionRestartCount)
-	const want = "69b35748b79e3bc3d3db72cc90364750c258d9da36c022ae729107dde3df7e4d"
+	got := DeriveLockedBootCommitmentPCR14(zeroBaseline, ah)
+	const want = "15111fb4be027e4e33d17811d8cc6da9cf1aec30038c4342b081cfef3151e2ba"
 	if FormatPCR14(got) != want {
 		t.Fatalf("locked derivation drifted: got %s want %s",
 			FormatPCR14(got), want)
 	}
 }
 
-// TestRegression_LockedDerivation_ReadClockCountersDiverge confirms
-// that the two counter sources (Esys_ReadClock vs Quote.clockInfo)
-// produce different PCR14 derivations. This is the failure mode the
-// fix removes: if the agent extended with ReadClock counters but the
-// quote carried Quote counters, the verifier could never match.
-func TestRegression_LockedDerivation_ReadClockCountersDiverge(t *testing.T) {
+// TestRegression_LockedDerivation_IgnoresEveryCounterSource is the original
+// failure stated as a property.  Neither counter source can influence
+// the register, so an agent and a verifier reading different counters
+// -- which is what per-publisher keys guarantee -- agree on the value.
+func TestRegression_LockedDerivation_IgnoresEveryCounterSource(t *testing.T) {
 	ah := referenceAgentHash()
-	signed := DeriveLockedBootCommitmentPCR14(zeroBaseline, ah, regressionResetCount,
-		regressionRestartCount)
-	// the helper reported resetCount=9, restartCount=0 in the failing
-	// run; using those values would yield a different PCR14 (and did,
-	// 938aae...).
-	readclock := DeriveLockedBootCommitmentPCR14(zeroBaseline, ah, 9, 0)
-	if signed == readclock {
-		t.Fatal("PCR14 derivation collapsed to a counter-free value")
-	}
-	const wantReadClock = "938aaeb5093dedd13ae61e92cc309b0f5cba7de35879a14aeef8a778284d89dc"
-	if FormatPCR14(readclock) != wantReadClock {
-		t.Fatalf("ReadClock-style derivation drifted: got %s want %s",
-			FormatPCR14(readclock), wantReadClock)
-	}
-}
+	pcr14 := DeriveLockedBootCommitmentPCR14(zeroBaseline, ah)
 
-// TestRegression_MatchLockedBootCommitment_AcceptsSignedQuote walks
-// the verifier's accept path end-to-end against a TPMS_ATTEST built
-// with the swtpm counters. After the fix the agent extends PCR14 with
-// the same counters the quote carries, so the matcher returns matched
-// = true on the exact derivation (no skew burn).
-func TestRegression_MatchLockedBootCommitment_AcceptsSignedQuote(t *testing.T) {
-	ah := referenceAgentHash()
-	pcr14 := DeriveLockedBootCommitmentPCR14(zeroBaseline, ah, regressionResetCount,
-		regressionRestartCount)
-
-	exp, drift, ok := MatchLockedBootCommitmentPCR14(zeroBaseline, ah,
-		regressionResetCount, regressionRestartCount, pcr14, 1024)
-	if !ok {
-		t.Fatalf("matcher rejected the signed-quote derivation; "+
-			"expected accept, got expected=%s", FormatPCR14(exp))
-	}
-	if drift != 0 {
-		t.Fatalf("matcher burned %d restart skew on exact derivation",
-			drift)
-	}
-}
-
-// TestRegression_MatchLockedBootCommitment_RejectsCounterDrift mirrors
-// the pre-fix failure: the agent extended PCR14 with ReadClock counters
-// (9, 0) but the verifier sees Quote.clockInfo (swtpm counters). The
-// matcher must refuse the report. Confirms the skew window does not
-// silently absorb the bug.
-func TestRegression_MatchLockedBootCommitment_RejectsCounterDrift(t *testing.T) {
-	ah := referenceAgentHash()
-	pcr14ExtendedWithReadClock := DeriveLockedBootCommitmentPCR14(zeroBaseline, ah, 9, 0)
-
-	_, _, ok := MatchLockedBootCommitmentPCR14(zeroBaseline, ah, regressionResetCount,
-		regressionRestartCount, pcr14ExtendedWithReadClock, 1024)
-	if ok {
-		t.Fatal("matcher accepted a PCR14 extended with the wrong " +
-			"counters; the swtpm regression would resurface silently")
+	for _, counters := range [][2]uint32{
+		{regressionResetCount, regressionRestartCount},
+		{9, 0},
+		{0, 0},
+	} {
+		blob := buildAttestWithClockInfo(counters[0], counters[1])
+		attest, err := ParseTPMSAttest(blob)
+		if err != nil {
+			t.Fatalf("parse failed: %v", err)
+		}
+		_ = attest
+		if _, _, ok := MatchLockedBootCommitmentPCR14(zeroBaseline, ah, pcr14); !ok {
+			t.Fatalf("matcher refused a host whose quote reported counters %v",
+				counters)
+		}
 	}
 }
 

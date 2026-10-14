@@ -31,7 +31,7 @@ import (
 var pgMigrations = []migration{
 	{
 		version:     1,
-		description: "consolidated schema: clients, baselines, nonces, revocations, bans, audit, attestation log, sessions, sharding",
+		description: "consolidated schema: clients, baselines, nonces, revocations, bans, audit, attestation log, sharding",
 		sql: `
 			CREATE TABLE clients (
 				id          TEXT PRIMARY KEY,
@@ -63,7 +63,8 @@ var pgMigrations = []migration{
 				lfa_review_pending       BOOLEAN NOT NULL DEFAULT FALSE,
 				tenant                   TEXT NOT NULL DEFAULT 'default',
 				agent_hash_repin_count   BIGINT NOT NULL DEFAULT 0,
-				last_agent_hash_repin_at TIMESTAMPTZ
+				last_agent_hash_repin_at TIMESTAMPTZ,
+				kernel_hash              BYTEA
 			);
 
 			CREATE INDEX idx_baselines_tenant ON baselines(tenant);
@@ -121,27 +122,14 @@ var pgMigrations = []migration{
 				pcr14       TEXT NOT NULL DEFAULT '',
 				details     TEXT NOT NULL DEFAULT '',
 				remote_addr TEXT NOT NULL DEFAULT '',
-				tenant      TEXT NOT NULL DEFAULT 'default'
+				tenant      TEXT NOT NULL DEFAULT 'default',
+				kernel_hash TEXT NOT NULL DEFAULT ''
 			);
 
 			CREATE INDEX idx_attestation_log_timestamp ON attestation_log(timestamp);
 			CREATE INDEX idx_attestation_log_client ON attestation_log(client_id);
 			CREATE INDEX idx_attestation_log_result ON attestation_log(result);
 			CREATE INDEX idx_attestation_log_tenant ON attestation_log(tenant);
-
-			CREATE TABLE session_tokens (
-				token_hash  BYTEA PRIMARY KEY CHECK(octet_length(token_hash) = 32),
-				client_id   TEXT NOT NULL,
-				hardware_id BYTEA NOT NULL,
-				valid_until BIGINT NOT NULL,
-				result_code BIGINT NOT NULL,
-				flags       BIGINT NOT NULL,
-				pcr_mask    BIGINT NOT NULL,
-				consumed    BOOLEAN NOT NULL DEFAULT FALSE,
-				tenant      TEXT NOT NULL DEFAULT 'default'
-			);
-
-			CREATE INDEX idx_session_tokens_valid_until ON session_tokens(valid_until);
 
 			CREATE TABLE baseline_archive (
 				id           BIGSERIAL PRIMARY KEY,

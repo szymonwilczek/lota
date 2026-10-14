@@ -8,7 +8,6 @@
 package verify
 
 import (
-	"bytes"
 	"crypto"
 	"crypto/rand"
 	"crypto/rsa"
@@ -100,7 +99,7 @@ func fixtureAgentHashSeed(seed byte) [types.HashSize]byte {
 // fixturePCR14Seed is the PCR14 a report carrying the seeded agent hash must present:
 // the register content is derived from the agent hash, so the two move together.
 func fixturePCR14Seed(seed byte) [types.HashSize]byte {
-	return DeriveLockedBootCommitmentPCR14(zeroBaseline, fixtureAgentHashSeed(seed), 0, 0)
+	return DeriveLockedBootCommitmentPCR14(zeroBaseline, fixtureAgentHashSeed(seed))
 }
 
 // fixturePCR14 is the only PCR14 a fixture report can carry and still verify:
@@ -108,7 +107,7 @@ func fixturePCR14Seed(seed byte) [types.HashSize]byte {
 // the fixture event log replays to (0^32, it holds no PCR14 events)
 // and the zero reset/restart counters in the fixture TPMS_ATTEST ClockInfo
 func fixturePCR14() [types.HashSize]byte {
-	return DeriveLockedBootCommitmentPCR14(zeroBaseline, fixtureAgentHash(), 0, 0)
+	return DeriveLockedBootCommitmentPCR14(zeroBaseline, fixtureAgentHash())
 }
 
 func createValidReport(t *testing.T, clientID string, nonce [32]byte, pcr14 [32]byte) []byte {
@@ -415,9 +414,6 @@ func TestIntegration_FullAttestationFlow_TOFU(t *testing.T) {
 	if result.Result != types.VerifyOK {
 		t.Errorf("Expected VerifyOK, got result code %d", result.Result)
 	}
-	if bytes.Equal(result.SessionToken[:], make([]byte, len(result.SessionToken))) {
-		t.Error("session token must not be all zeros")
-	}
 
 	t.Log("✓ Full attestation flow completed successfully")
 }
@@ -448,79 +444,7 @@ func TestIntegration_SubsequentAttestation(t *testing.T) {
 	if err != nil || result2.Result != types.VerifyOK {
 		t.Fatalf("Second attestation failed: %v (result=%d)", err, result2.Result)
 	}
-	if bytes.Equal(result1.SessionToken[:], result2.SessionToken[:]) {
-		t.Fatal("session tokens for distinct attestations must differ")
-	}
 	t.Log("✓ Subsequent attestation matched baseline")
-}
-
-func TestIntegration_SessionTokenValidation(t *testing.T) {
-	t.Log("INTEGRATION TEST: Session token can be validated via verifier API")
-
-	aikStore := newCertStore(t)
-	verifier := createTestVerifier(t, aikStore)
-
-	clientID := "session-validate-client"
-	challenge, err := verifier.GenerateChallenge(clientID)
-	if err != nil {
-		t.Fatalf("GenerateChallenge failed: %v", err)
-	}
-
-	pcr14 := fixturePCR14()
-
-	report := createValidReport(t, clientID, challenge.Nonce, pcr14)
-	res, err := verifier.VerifyReport(clientID, report)
-	if err != nil {
-		t.Fatalf("VerifyReport failed: %v", err)
-	}
-	if res.Result != types.VerifyOK {
-		t.Fatalf("unexpected result code: %d", res.Result)
-	}
-
-	st := verifier.ValidateSessionToken(res.SessionToken, false)
-	if !st.Exists {
-		t.Fatal("session token should exist")
-	}
-	if st.Consumed {
-		t.Fatal("session token should not be consumed by read-only validation")
-	}
-	if st.ResultCode != types.VerifyOK {
-		t.Fatalf("unexpected token result code: %d", st.ResultCode)
-	}
-	if st.ClientID != testPseudonym(clientID) {
-		t.Fatalf("unexpected client id binding: %s", st.ClientID)
-	}
-}
-
-func TestIntegration_SessionTokenConsume(t *testing.T) {
-	t.Log("INTEGRATION TEST: Session token can be consumed once")
-
-	aikStore := newCertStore(t)
-	verifier := createTestVerifier(t, aikStore)
-
-	clientID := "session-consume-client"
-	challenge, err := verifier.GenerateChallenge(clientID)
-	if err != nil {
-		t.Fatalf("GenerateChallenge failed: %v", err)
-	}
-
-	pcr14 := fixturePCR14()
-
-	report := createValidReport(t, clientID, challenge.Nonce, pcr14)
-	res, err := verifier.VerifyReport(clientID, report)
-	if err != nil {
-		t.Fatalf("VerifyReport failed: %v", err)
-	}
-
-	st1 := verifier.ValidateSessionToken(res.SessionToken, true)
-	if !st1.Exists || !st1.Consumed {
-		t.Fatal("consume validation should mark token as consumed")
-	}
-
-	st2 := verifier.ValidateSessionToken(res.SessionToken, false)
-	if !st2.Exists || !st2.Consumed {
-		t.Fatal("subsequent validation should report consumed token")
-	}
 }
 
 func TestIntegration_PCR14BaselineViolation(t *testing.T) {
@@ -907,13 +831,14 @@ func TestIntegration_ChallengePCRMask(t *testing.T) {
 		t.Fatalf("Failed to generate challenge: %v", err)
 	}
 
-	// should request PCRs 0, 1, 7, 14
-	expectedMask := uint32((1 << 0) | (1 << 1) | (1 << 7) | (1 << 14))
+	// should request PCRs 0, 1, 7, 14 for the boot baseline,
+	// and 9 for the kernel image measurement the verifier records per attestation
+	expectedMask := uint32((1 << 0) | (1 << 1) | (1 << 7) | (1 << 9) | (1 << 14))
 	if challenge.PCRMask != expectedMask {
 		t.Errorf("PCR mask: got 0x%08X, want 0x%08X", challenge.PCRMask, expectedMask)
 	}
 
-	t.Logf("✓ Challenge PCR mask correct: 0x%08X (PCR 0,1,7,14)", challenge.PCRMask)
+	t.Logf("✓ Challenge PCR mask correct: 0x%08X (PCR 0,1,7,9,14)", challenge.PCRMask)
 }
 
 // TestVerify_RejectsMissingBootPCRs asserts that the verifier refuses any attestation

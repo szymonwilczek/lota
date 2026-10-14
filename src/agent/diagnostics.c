@@ -9,6 +9,7 @@
 
 #include <errno.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <signal.h>
 #include <sys/socket.h>
@@ -304,6 +305,25 @@ int diagnostics_dispatch(struct cli_options *opts, struct lota_config *cfg)
 	if (opts->test_signed_flag)
 		return diagnostic_exit_code(run_signed_ipc_test_server(cfg));
 
+	/*
+	 * The verbs a player runs and reads the output of.
+	 *
+	 * The TSS library logs its own WARNING/ERROR lines, with a source path
+	 * and a hex code, to the same stderr these verbs write their answer to
+	 * Everything these paths can go wrong with is reported by LOTA in LOTA's
+	 * words through tpm_strerror(), so the library's copy is noise here
+	 * and nothing else.
+	 *
+	 * The daemon and the attestation loop are deliberately not included:
+	 * their stderr is the journal, where an operator debugging a TPM wants
+	 * every layer's account.
+	 * overwrite=0 leaves an operator-set TSS2_LOG alone for the same reason.
+	 */
+	if (opts->list_publishers_flag || opts->forget_publisher ||
+	    opts->allow_publisher || opts->add_publisher ||
+	    opts->reenroll_flag || opts->enroll_flag)
+		setenv("TSS2_LOG", "all+none", 0);
+
 	if (opts->list_publishers_flag)
 		return diagnostic_exit_code(do_list_publishers());
 
@@ -315,12 +335,20 @@ int diagnostics_dispatch(struct cli_options *opts, struct lota_config *cfg)
 		return diagnostic_exit_code(
 			do_allow_publisher(opts->allow_publisher));
 
+	/*
+	 * --server is the only thing that names this publisher's verifier.
+	 * opts->server_addr always holds one -- the single-verifier default,
+	 * or the top-level `server` key -- and neither is a choice anybody
+	 * made about the publisher being added.
+	 * A publisher who runs no verifier is a supported arrangement,
+	 * so the writer has to be told "not given".
+	 */
 	if (opts->add_publisher)
 		return diagnostic_exit_code(do_add_publisher(
 			opts->config_path, opts->publisher_name,
 			opts->add_publisher, opts->ca_port, opts->ca_cert_path,
-			opts->server_addr, opts->server_port,
-			opts->attest_interval, true));
+			opts->server_overridden ? opts->server_addr : NULL,
+			opts->server_port, opts->attest_interval, true));
 
 	if (opts->reenroll_flag)
 		return diagnostic_exit_code(do_reenroll(opts->ca_cert_path));
@@ -387,8 +415,10 @@ int diagnostics_dispatch(struct cli_options *opts, struct lota_config *cfg)
 					"ERROR: --pin-sha256 pins one "
 					"verifier's certificate, but %d "
 					"publisher profile(s) are "
-					"configured.\nEach profile is anchored "
-					"by its own ca_cert instead.\n",
+					"configured.\nEach publisher runs its "
+					"own verifier: write pin_sha256 inside "
+					"the profile whose verifier presents "
+					"that certificate.\n",
 					cfg->profile_count);
 				return 1;
 			}
@@ -408,8 +438,9 @@ int diagnostics_dispatch(struct cli_options *opts, struct lota_config *cfg)
 
 		if (interval > 0)
 			return diagnostic_exit_code(do_continuous_attest(
-				cfg, opts->server_addr, opts->server_port,
-				opts->ca_cert_path, opts->no_verify_tls,
+				cfg, opts->config_path, opts->server_addr,
+				opts->server_port, opts->ca_cert_path,
+				opts->no_verify_tls,
 				opts->has_pin ? opts->pin_sha256_bin : NULL,
 				interval, opts->aik_ttl));
 		return diagnostic_exit_code(

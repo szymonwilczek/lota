@@ -19,6 +19,7 @@
 
 #include "../../include/lota_enroll.h"
 #include "net.h"
+#include "pin.h"
 #include "profile.h"
 
 struct tpm_context;
@@ -51,7 +52,7 @@ struct enroll_state {
 	int32_t ca_port;
 	int32_t no_verify_tls;
 	int32_t has_pin;
-	uint8_t pin_sha256[NET_PIN_SHA256_LEN];
+	uint8_t pin_sha256[LOTA_PIN_SHA256_LEN];
 	char ca_server[256];
 	char ca_cert[PATH_MAX];
 	uint8_t _reserved[64];
@@ -79,6 +80,34 @@ struct enroll_result {
 };
 
 /*
+ * One certificate inside a chain the platform hands over:
+ * a view into the caller's buffer, so a chain costs no second allocation
+ */
+struct enroll_cert_ref {
+	const uint8_t *der;
+	size_t len;
+};
+
+/*
+ * Split a concatenated DER certificate blob into its elements.
+ *
+ * TPM stores its manufacturer intermediates as one NV blob with the certificates
+ * laid end to end and no framing of its own, so the elements are found by walking
+ * the ASN.1 SEQUENCE headers.
+ *
+ * The blob is vendor data the host does not control, so the walk is lenient:
+ * it ends at the first bytes that do not begin a certificate this wire can carry,
+ * which is what turns trailing NV padding into the end of the list instead of
+ * a failed read. A blob that yields nothing is not an error -- the enrollment
+ * proceeds on the leaf alone.
+ *
+ * Returns 0 and the element count, or -EINVAL on a NULL argument.
+ */
+int enroll_split_cert_chain(const uint8_t *blob, size_t len,
+			    struct enroll_cert_ref *out, size_t out_max,
+			    size_t *out_count);
+
+/*
  * Wire codec. Encoders return the body length written or negative errno;
  * decoders return 0 or negative errno. The encoded body excludes the
  * outer u32 frame length, which the transport adds.
@@ -87,11 +116,20 @@ struct enroll_result {
  * NULL or empty means none.
  * Token-less begin is version-1 frame an old CA accepts;
  * Token upgrades the frame to version 2.
+ *
+ * ek_chain carries the manufacturer intermediates between the leaf and a root
+ * the CA pins, for a platform that stores them on the chip; it upgrades the frame
+ * to version 3 and is what lets a leaf several levels below its root be verified
+ * at all.
+ * NULL or empty leaves the frame at the version the token selects,
+ * so a host with nothing to present speaks to a CA that predates the field.
  */
 ssize_t enroll_encode_begin(uint8_t *out, size_t out_max,
 			    const uint8_t *ek_cert, size_t ek_cert_len,
 			    const uint8_t *aik_public, size_t aik_public_len,
-			    const uint8_t *token, size_t token_len);
+			    const uint8_t *token, size_t token_len,
+			    const struct enroll_cert_ref *ek_chain,
+			    size_t ek_chain_len);
 
 /*
  * Read an enrollment token from a file into out (NUL-terminated).
@@ -109,6 +147,16 @@ int enroll_decode_challenge(const uint8_t *body, size_t len,
 			    struct enroll_challenge *out);
 int enroll_decode_result(const uint8_t *body, size_t len,
 			 struct enroll_result *out);
+
+/*
+ * lota_enroll_status_text - the operator-facing sentence for a reply status
+ * @status: the status a CA sent on the challenge or the completion reply
+ *
+ * Returns a sentence naming what was refused and what to do,
+ * or NULL for a status this build does not know -- a CA newer than this agent.
+ * The caller prints the number in that case, and says that is what it is.
+ */
+const char *lota_enroll_status_text(unsigned int status);
 
 /*
  * Run one enrollment against the CA at server:port and write the issued
@@ -158,7 +206,26 @@ int do_reenroll(const char *ca_cert);
  * auto-renewal.
  */
 int enroll_renew_cert(struct tpm_context *tpm,
-		      const struct profile_paths *paths);
+		      const struct profile_paths *paths,
+		      const char *configured_ca_cert);
+
+/*
+ * Which CA trust anchor a renewal presents.
+ *
+ * configured is the anchor this profile is configured with and recorded is
+ * the one stored when it enrolled.  Both name the same publisher, since the
+ * profile is derived from the anchor, so the choice is about which path is
+ * still openable: the daemon's sandbox gives it its own /tmp and /var/tmp,
+ * and an enrollment driven from a staging directory records a path that is
+ * not there for it.
+ *
+ * Returns 0 and points *out at the anchor to use, or -ENOENT when neither is
+ * set, or -EINVAL for a NULL out.
+ *
+ * *out points into one of the arguments and lives as long as it does.
+ */
+int enroll_renew_anchor(const char *configured, const char *recorded,
+			const char **out);
 
 /*
  * Record that somebody on this machine agreed to answer to a publisher,
@@ -176,6 +243,9 @@ int do_allow_publisher(const char *profile_id);
 /*
  * Write a publisher's [profile] section into lota.conf.
  * Records no consent -- that stays a separate act by the person at the machine.
+ *
+ * @verifier NULL or empty writes the publisher who runs none, so the caller
+ * has to pass what was named.
  */
 int do_add_publisher(const char *config_path, const char *name,
 		     const char *ca_server, int ca_port, const char *ca_cert,

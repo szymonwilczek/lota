@@ -117,6 +117,208 @@ static void make_ctx(struct tpm_context *ctx)
 		 "%s/aik_meta.dat", tmp_dir);
 }
 
+/*
+ * The record says how the key it describes was derived, and that answer
+ * decides whether the daemon will attest with the key at all.
+ * A field the writer forgets is not a missing feature here: every byte
+ * of the struct reaches the disk, so an unassigned one reads back as
+ * a derivation nobody chose.
+ */
+static void test_metadata_key_derivation_round_trip(void)
+{
+	struct tpm_context ctx;
+	struct tpm_context ctx2;
+
+	TEST("the key-derivation marker survives save -> load");
+	make_ctx(&ctx);
+	make_ctx(&ctx2);
+
+	ctx.aik_meta.magic = TPM_AIK_META_MAGIC;
+	ctx.aik_meta.version = TPM_AIK_META_VERSION;
+	ctx.aik_meta.generation = 7;
+	ctx.aik_meta.key_derivation = TPM_AIK_KEY_DERIVATION_PER_PUBLISHER;
+	ctx.aik_meta_loaded = true;
+
+	if (tpm_aik_save_metadata(&ctx) != 0) {
+		FAIL("save returned error");
+		return;
+	}
+	if (tpm_aik_load_metadata(&ctx2) != 0) {
+		FAIL("load returned error");
+		return;
+	}
+	if (ctx2.aik_meta.key_derivation !=
+	    TPM_AIK_KEY_DERIVATION_PER_PUBLISHER) {
+		FAIL("the marker did not survive the round-trip");
+		return;
+	}
+
+	/* and a key with no publisher stays marked as such */
+	snprintf(ctx2.aik_profile_id, sizeof(ctx2.aik_profile_id), "%s", "");
+	if (tpm_aik_key_is_shared(&ctx2)) {
+		FAIL("a host with no publisher was called shared");
+		return;
+	}
+	PASS();
+}
+
+/*
+ * A publisher enrolling for the first time has no record, and reading one
+ * that is not there must not invent an answer about a key that does not exist.
+ * The shared derivation belongs to keys created before publishers had keys of
+ * their own; a zeroed struct is not evidence of one, and the enrollment path
+ * prints "replacing the key this publisher shares" when it believes it.
+ */
+static void test_absent_metadata_claims_nothing(void)
+{
+	char path[512];
+	struct tpm_context ctx;
+	struct stat st;
+
+	TEST("a key that does not exist yet is not called shared");
+	make_ctx(&ctx);
+	snprintf(path, sizeof(path), "%s", ctx.aik_meta_path);
+	unlink(path);
+	snprintf(
+		ctx.aik_profile_id, sizeof(ctx.aik_profile_id), "%s",
+		"0d96137b233ee2743da7d4a676b8734b51035598a0bf2a429c805b730ee22a43");
+
+	if (tpm_aik_load_metadata(&ctx) != 0) {
+		FAIL("load of an absent record returned error");
+		return;
+	}
+
+	if (tpm_aik_key_is_shared(&ctx)) {
+		FAIL("a publisher with no key was called shared");
+		return;
+	}
+
+	if (stat(path, &st) == 0) {
+		FAIL("reading an absent record wrote one");
+		return;
+	}
+
+	PASS();
+}
+
+/*
+ * The other half: a host upgraded from a build where every publisher used
+ * one key still has that record, and it still has to mean what it says,
+ * or the enrollment path stops replacing a key it must replace.
+ */
+static void test_recorded_shared_key_still_reads_shared(void)
+{
+	struct tpm_context ctx;
+	struct tpm_context ctx2;
+
+	TEST("a recorded shared key still reads as shared");
+	make_ctx(&ctx);
+	make_ctx(&ctx2);
+
+	ctx.aik_meta.magic = TPM_AIK_META_MAGIC;
+	ctx.aik_meta.version = TPM_AIK_META_VERSION;
+	ctx.aik_meta.generation = 1;
+	ctx.aik_meta.key_derivation = TPM_AIK_KEY_DERIVATION_SHARED;
+	ctx.aik_meta_loaded = true;
+
+	if (tpm_aik_save_metadata(&ctx) != 0) {
+		FAIL("save returned error");
+		return;
+	}
+
+	snprintf(
+		ctx2.aik_profile_id, sizeof(ctx2.aik_profile_id), "%s",
+		"0d96137b233ee2743da7d4a676b8734b51035598a0bf2a429c805b730ee22a43");
+	if (tpm_aik_load_metadata(&ctx2) != 0) {
+		FAIL("load returned error");
+		return;
+	}
+
+	if (!tpm_aik_key_is_shared(&ctx2)) {
+		FAIL("a recorded shared key stopped reading as shared");
+		return;
+	}
+
+	PASS();
+}
+
+/*
+ * A cleared TPM keeps none of the keys and the profile directory keeps all of
+ * the files, so the handle, the consent and the certificate outlive the key
+ * the certificate names.
+ * Provisioning then mints a replacement at the recorded handle, the certificate
+ * binds a key the TPM no longer holds, and every round is refused until
+ * the publisher re-enrolls.
+ *
+ * After a TPM2_Clear through the firmware's PPI, all four publishers came back
+ * with certificates whose SPKI did not match the key at their handle,
+ * four out of four, while the agent logged "AIK ready, signed tokens enabled".
+ *
+ * A first enrollment has no key and no certificate, and must not be confused
+ * with this.
+ */
+static void test_provisioning_names_an_orphaned_cert(void)
+{
+	TEST("a replacement key that orphans a stored certificate is named");
+
+	if (tpm_aik_provisioning_orphans_cert(0, true) != true) {
+		FAIL("an absent key under a stored certificate was not named");
+		return;
+	}
+
+	if (tpm_aik_provisioning_orphans_cert(0, false) != false) {
+		FAIL("a first enrollment was called an orphaned certificate");
+		return;
+	}
+
+	if (tpm_aik_provisioning_orphans_cert(1, true) != false) {
+		FAIL("a key that is there was called missing");
+		return;
+	}
+
+	PASS();
+}
+
+/*
+ * A record is not a key.
+ * An upgraded host carries a record saying shared in every profile an older
+ * build ever read, including profiles that never enrolled, so the question
+ * the enrollment path asks -- am I about to replace the key this publisher
+ * shares -- has to be answered by the key, not by the file describing one.
+ */
+static void test_shared_replacement_needs_a_key(void)
+{
+	struct tpm_context ctx;
+
+	TEST("replacing a shared key takes a key, not just a record");
+	make_ctx(&ctx);
+	snprintf(
+		ctx.aik_profile_id, sizeof(ctx.aik_profile_id), "%s",
+		"0d96137b233ee2743da7d4a676b8734b51035598a0bf2a429c805b730ee22a43");
+	ctx.aik_meta.magic = TPM_AIK_META_MAGIC;
+	ctx.aik_meta.version = TPM_AIK_META_VERSION;
+	ctx.aik_meta.key_derivation = TPM_AIK_KEY_DERIVATION_SHARED;
+	ctx.aik_meta_loaded = true;
+
+	if (tpm_aik_replacing_shared_key(&ctx, 0)) {
+		FAIL("a record with no key behind it was called a replacement");
+		return;
+	}
+
+	if (!tpm_aik_replacing_shared_key(&ctx, 1)) {
+		FAIL("a shared key that is there was not called a replacement");
+		return;
+	}
+
+	ctx.aik_meta.key_derivation = TPM_AIK_KEY_DERIVATION_PER_PUBLISHER;
+	if (tpm_aik_replacing_shared_key(&ctx, 1)) {
+		FAIL("a per-publisher key was called a shared one");
+		return;
+	}
+
+	PASS();
+}
+
 static void test_metadata_save_load(void)
 {
 	struct tpm_context ctx;
@@ -169,7 +371,7 @@ static void test_metadata_default_creation(void)
 	int ret;
 	time_t before, after;
 
-	TEST("load creates default metadata if missing");
+	TEST("load fills defaults without writing a record");
 	make_ctx(&ctx);
 	/* make sure file does not exist */
 	unlink(ctx.aik_meta_path);
@@ -201,9 +403,13 @@ static void test_metadata_default_creation(void)
 		return;
 	}
 
-	/* verify file was persisted */
-	if (access(ctx.aik_meta_path, F_OK) != 0) {
-		FAIL("metadata file not created");
+	/*
+	 * Nothing is written.
+	 * The defaults describe a key that does not exist;
+	 * the record is written when the key is created.
+	 */
+	if (access(ctx.aik_meta_path, F_OK) == 0) {
+		FAIL("metadata file created for a key that does not exist");
 		return;
 	}
 
@@ -830,6 +1036,28 @@ static void test_rc_value_and_handle(void)
 	PASS();
 }
 
+/*
+ * A TPM with no room for another persistent object is a full machine,
+ * not a broken one.
+ * Reported as -EIO it printed "Input/output error" to a player adding
+ * a publisher, which names failing hardware and nothing they can act on.
+ */
+static void test_rc_nv_space(void)
+{
+	TEST("tpm_test_rc_to_errno: NV_SPACE -> ENOSPC");
+
+	if (tpm_test_rc_to_errno(TPM2_RC_NV_SPACE) != -ENOSPC) {
+		FAIL("NV_SPACE != -ENOSPC");
+		return;
+	}
+	if (tpm_test_rc_is_transient(TPM2_RC_NV_SPACE)) {
+		FAIL("a full TPM must not be retried as transient");
+		return;
+	}
+
+	PASS();
+}
+
 static void test_rc_tcti_layer(void)
 {
 	TEST("tpm_test_rc_to_errno: TCTI layer codes");
@@ -905,7 +1133,7 @@ static void test_lockout_flag_lifecycle(void)
  */
 static void test_tpm_strerror_maps_lota_private(void)
 {
-	TEST("tpm_strerror covers LOTA_ERR_TPM_LOCKED + POSIX fallback");
+	TEST("tpm_strerror names every LOTA code, POSIX falls through");
 
 	const char *neg = tpm_strerror(-LOTA_ERR_TPM_LOCKED);
 	const char *pos = tpm_strerror(LOTA_ERR_TPM_LOCKED);
@@ -922,6 +1150,22 @@ static void test_tpm_strerror_maps_lota_private(void)
 	if (!auth || strstr(auth, "DA") == NULL) {
 		FAIL("AUTH_FAIL description must call out the DA-counter "
 		     "implication");
+		return;
+	}
+
+	/*
+	 * The code an operator meets when a sealed secret will not open:
+	 * the host is not in the state the blob was sealed against.
+	 * It says which state, because "policy not satisfied" alone sends
+	 * a reader to the TPM specification.
+	 */
+	const char *policy = tpm_strerror(-LOTA_ERR_TPM_POLICY_FAIL);
+	if (!policy || strstr(policy, "PCR") == NULL) {
+		FAIL("POLICY_FAIL description must name the boot/PCR state");
+		return;
+	}
+	if (strcmp(policy, strerror(LOTA_ERR_TPM_POLICY_FAIL)) == 0) {
+		FAIL("POLICY_FAIL is left to strerror");
 		return;
 	}
 
@@ -1086,7 +1330,7 @@ static void test_initramfs_lock_digest_matches_reference(void)
 	memset(got, 0, sizeof(got));
 	memset(want, 0, sizeof(want));
 
-	if (tpm_initramfs_lock_digest(0x01020304U, 0xA0B0C0D0U, got) != 0) {
+	if (tpm_initramfs_lock_digest(got) != 0) {
 		FAIL("digest helper failed");
 		return;
 	}
@@ -1095,16 +1339,7 @@ static void test_initramfs_lock_digest_matches_reference(void)
 		FAIL("digest mismatch");
 		return;
 	}
-	uint8_t drifted[LOTA_HASH_SIZE];
-	if (tpm_initramfs_lock_digest(0xFFFFFFFFU, 0x00000001U, drifted) != 0) {
-		FAIL("drifted digest helper failed");
-		return;
-	}
-	if (memcmp(got, drifted, LOTA_HASH_SIZE) != 0) {
-		FAIL("initramfs lock digest must ignore TPM clock counters");
-		return;
-	}
-	if (tpm_initramfs_lock_digest(1, 2, NULL) != -EINVAL) {
+	if (tpm_initramfs_lock_digest(NULL) != -EINVAL) {
 		FAIL("NULL output must be rejected");
 		return;
 	}
@@ -1441,6 +1676,61 @@ static void test_call_with_backoff_gives_up_without_leak(void)
 	PASS();
 }
 
+/*
+ * Each publisher is promised its own attestation key.
+ * A TPM primary is derived from the hierarchy seed and the creation template,
+ * so the template is the only place that promise can be kept:
+ * two profiles whose template is identical get one key at two handles,
+ * which is what a publisher can see by comparing the certificate it already holds.
+ */
+static void test_aik_unique_separates_publishers(void)
+{
+	const char *id_a =
+		"ea34ead0000000000000000000000000000000000000000000000000"
+		"3ceacdd1";
+	const char *id_b =
+		"1feba674000000000000000000000000000000000000000000000000"
+		"3ceacdd1";
+	uint8_t a[LOTA_HASH_SIZE];
+	uint8_t b[LOTA_HASH_SIZE];
+	uint8_t again[LOTA_HASH_SIZE];
+	uint16_t len_a = 0, len_b = 0, len_again = 0;
+
+	TEST("the AIK creation input differs per publisher profile");
+
+	if (tpm_aik_profile_unique(id_a, a, &len_a) != 0 ||
+	    tpm_aik_profile_unique(id_b, b, &len_b) != 0) {
+		FAIL("the helper refused a well-formed profile identity");
+		return;
+	}
+
+	if (len_a == 0 || len_b == 0) {
+		FAIL("a bound publisher contributes nothing to the key");
+		return;
+	}
+	if (len_a == len_b && memcmp(a, b, len_a) == 0) {
+		FAIL("two publishers share one creation input, so one key");
+		return;
+	}
+
+	/* re-enrolment has to reproduce the same key, not a new one */
+	if (tpm_aik_profile_unique(id_a, again, &len_again) != 0 ||
+	    len_again != len_a || memcmp(a, again, len_a) != 0) {
+		FAIL("the same publisher did not reproduce its own input");
+		return;
+	}
+
+	/* a host with no publisher keeps the profile-less derivation */
+	uint8_t none[LOTA_HASH_SIZE];
+	uint16_t len_none = 1;
+
+	if (tpm_aik_profile_unique("", none, &len_none) != 0 || len_none != 0) {
+		FAIL("a host with no publisher must contribute nothing");
+		return;
+	}
+	PASS();
+}
+
 int main(void)
 {
 	printf("\n=== AIK Rotation Tests ===\n\n");
@@ -1448,6 +1738,11 @@ int main(void)
 	setup_tmp_dir();
 
 	test_metadata_save_load();
+	test_metadata_key_derivation_round_trip();
+	test_absent_metadata_claims_nothing();
+	test_recorded_shared_key_still_reads_shared();
+	test_shared_replacement_needs_a_key();
+	test_provisioning_names_an_orphaned_cert();
 	test_metadata_default_creation();
 	test_new_key_metadata_persisted();
 	test_metadata_bad_magic();
@@ -1473,6 +1768,7 @@ int main(void)
 	test_rc_transient_codes();
 	test_rc_auth_fail_with_session_bits();
 	test_rc_value_and_handle();
+	test_rc_nv_space();
 	test_rc_tcti_layer();
 	test_lockout_flag_lifecycle();
 	test_self_hash_pin_round_trip();
@@ -1480,6 +1776,7 @@ int main(void)
 	test_clock_state_save_load_round_trip();
 	test_clock_state_legacy_reserved_maps_to_no_lock();
 	test_initramfs_lock_digest_matches_reference();
+	test_aik_unique_separates_publishers();
 	test_clock_state_load_missing_is_enoent();
 	test_clock_state_load_rejects_corrupt();
 	test_call_with_backoff_no_leak_on_retry();

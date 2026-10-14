@@ -278,14 +278,41 @@ full coverage is the publisher's policy call:
 The two are different statements. ``--require-full-image`` on the producer
 sets ``required_flags``, so the *client's* own session state reads
 ``UNTRUSTED`` -- useful for a launcher that wants to say so before a round
-starts. The verdict a backend acts on is the server's, so a publisher that
+starts. That field only adds to the bar: ``LOTA_AC_STATE_TRUSTED`` means the
+host is attested, so a session that names no extra flag still needs
+``LOTA_FLAG_ATTESTED`` and a host with a live agent and no verdict from anybody
+reads ``UNTRUSTED``. ``lota_ac_get_info()`` reports the same state and a
+``trusted`` field derived from it; both are local telemetry, and neither is the
+verdict a backend acts on. The verdict a backend acts on is the server's, so a publisher that
 means it sets the flag on the server: the token carries the coverage bit, the
 signature covers it, and the reason names the missing flag.
 
 Two properties are not a policy choice, and the agent refuses a token when
 either fails: something has to have been measured, and the producer's **own
 executable** has to be one of the objects measured -- that binary is the one
-a publisher ships and can make measurable.
+a publisher ships and can make measurable. The refusal names that case,
+``LOTA_ERR_UNMEASURABLE_SELF``.
+
+A machine whose agent holds no TPM is refused for a different reason and says
+so: ``LOTA_ERR_NO_TPM``. Signing is the whole of a token, so there is nothing
+to hand back and an unsigned one is never issued. It is not a TPM that failed
+and not a generic agent error, and it is the one refusal no retry improves --
+the answer is the same until the title runs against an agent that has a TPM.
+
+The refusal stops there. A *different* protected process that cannot be
+measured never refuses this caller: any program on the machine may ask to be
+protected, so folding somebody else's packaging into this answer would let one
+unmeasurable binary stop token issuance for every title on the host. Such a
+process is reported instead -- its digest is absent from the fold and the token
+carries ``LOTA_FLAG_IMAGE_FULLY_MEASURED`` clear -- which leaves the decision
+with the publisher who has to make it.
+
+On the backend side, ``lota_server_verify_token()`` recomputes the runtime
+measurement from the token's own protected-PID list and image digests and
+compares it against the value inside the TPM signature. A mismatch is
+``LOTA_SERVER_ERR_RUNTIME_IMAGE`` -- its own code, distinct from the two nonce
+checks, because it is the signal that a protected process's code did not
+reconcile and it is the one an anti-cheat backend alerts on.
 
 Making your own objects measurable
 ----------------------------------

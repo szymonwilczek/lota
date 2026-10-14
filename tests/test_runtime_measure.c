@@ -182,7 +182,7 @@ static int collect_path_cb(const char *path, void *user)
 
 static void test_list_objects_self_first(void)
 {
-	struct path_collector c = { 0 };
+	struct path_collector c = {};
 	char self[LOTA_AC_RUNTIME_PATH_MAX];
 	ssize_t n;
 
@@ -221,7 +221,7 @@ static void test_live_matches_object_set(void)
 {
 	uint8_t live[LOTA_AC_RUNTIME_MEASURE_SIZE];
 	uint8_t set[LOTA_AC_RUNTIME_MEASURE_SIZE];
-	struct path_collector c = { 0 };
+	struct path_collector c = {};
 
 	TEST("live image equals the set measure of its loaded objects");
 	c.paths = calloc(COLLECT_MAX_OBJS, LOTA_AC_RUNTIME_PATH_MAX);

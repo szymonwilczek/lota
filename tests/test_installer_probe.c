@@ -763,6 +763,320 @@ static void test_manifest_line(void)
 	}
 }
 
+/*
+ * Every installed kernel has to be covered, not just the running one.
+ *
+ * Stage 6 arms the cmdline with `grubby --update-kernel=ALL` while stage 5 ran
+ * a bare `dracut -f`, which rebuilds one image.
+ * On a Fedora host keeping three kernels that left two of them without the PCR 14
+ * lock, and selecting either from the GRUB menu -- which is the reason more
+ * than one is kept -- produces a boot with no commitment on a machine
+ * the operator was told is installed.
+ *
+ * The enumeration is what the coverage is stated against: a kernel counts when
+ * /lib/modules holds it and /boot holds its initramfs.
+ */
+static void test_installed_kernels(void)
+{
+	char root[64];
+	char cmd[512];
+	char path[128];
+	struct probe_kernel_image images[PROBE_MAX_KERNELS];
+	size_t count = 0;
+	int rc;
+
+	snprintf(root, sizeof(root), "/tmp/lota-inst-kernels.%d",
+		 (int)getpid());
+	snprintf(cmd, sizeof(cmd), "rm -rf '%s'", root);
+	if (system(cmd) != 0)
+		fprintf(stderr, "warning: fixture reset failed\n");
+
+	snprintf(cmd, sizeof(cmd),
+		 "mkdir -p '%s/lib/modules/7.0.13-200.fc44.x86_64' "
+		 "'%s/lib/modules/7.0.12-201.fc44.x86_64' "
+		 "'%s/lib/modules/7.0.9-205.fc44.x86_64' '%s/boot'",
+		 root, root, root, root);
+	if (system(cmd) != 0) {
+		fprintf(stderr, "warning: fixture setup failed\n");
+		return;
+	}
+
+	/* two kernels have an image; the third is a modules tree with none,
+	 * which is what a half-removed kernel leaves behind */
+	snprintf(path, sizeof(path), "%s/boot", root);
+	write_text_file(path, "initramfs-7.0.13-200.fc44.x86_64.img", "image");
+	write_text_file(path, "initramfs-7.0.12-201.fc44.x86_64.img", "image");
+	/* a rescue image belongs to no /lib/modules entry of its own */
+	write_text_file(path, "initramfs-0-rescue-abc.img", "image");
+
+	TEST("every installed kernel with an initramfs is enumerated");
+	{
+		char modules[96];
+		char boot[96];
+
+		snprintf(modules, sizeof(modules), "%s/lib/modules", root);
+		snprintf(boot, sizeof(boot), "%s/boot", root);
+		rc = probe_installed_kernels_at(modules, boot, images,
+						PROBE_MAX_KERNELS, &count);
+	}
+	if (rc != 0 || count != 2) {
+		FAIL("expected the two kernels that have an image");
+		goto cleanup;
+	}
+	PASS();
+
+	TEST("each entry names the image the lock has to be in");
+	{
+		int seen13 = 0;
+		int seen12 = 0;
+
+		for (size_t i = 0; i < count; i++) {
+			if (strcmp(images[i].release,
+				   "7.0.13-200.fc44.x86_64") == 0 &&
+			    strstr(images[i].image,
+				   "initramfs-7.0.13-200.fc44.x86_64.img"))
+				seen13 = 1;
+			if (strcmp(images[i].release,
+				   "7.0.12-201.fc44.x86_64") == 0 &&
+			    strstr(images[i].image,
+				   "initramfs-7.0.12-201.fc44.x86_64.img"))
+				seen12 = 1;
+		}
+		if (!seen13 || !seen12) {
+			FAIL("an entry does not name its own image");
+			goto cleanup;
+		}
+	}
+	PASS();
+
+	TEST("a host with no modules tree enumerates nothing, not an error");
+	rc = probe_installed_kernels_at("/nonexistent/modules",
+					"/nonexistent/boot", images,
+					PROBE_MAX_KERNELS, &count);
+	if (rc != 0 || count != 0) {
+		FAIL("absence should read as no kernels");
+		goto cleanup;
+	}
+	PASS();
+
+cleanup:
+	snprintf(cmd, sizeof(cmd), "rm -rf '%s'", root);
+	if (system(cmd) != 0)
+		fprintf(stderr, "warning: cleanup failed\n");
+}
+
+/*
+ * A first install is not leftover state from an install that never happened.
+ *
+ * PCR 14 is non-zero on every Secure Boot host before LOTA exists:
+ * shim measures the MOK variables into it. The stage classified any non-zero
+ * value it could not derive as residue from an earlier agent run, so the first
+ * thing a new operator or player was told on the default consumer host was
+ * to go looking for state to clean up, of which there is none.
+ *
+ * The absence of the lock helper's baseline handoff is the available signal:
+ * no lock ran this boot, so nothing in PCR 14 is LOTA's, whatever it holds.
+ */
+static void test_barrier_stage_verdicts(void)
+{
+	char note[256];
+
+	TEST("a platform-extended PCR14 before any lock is not stale state");
+	if (probe_pcr14_barrier_stage(PROBE_PCR14_OTHER, 0, 0, note,
+				      sizeof(note)) != STAGE_REBOOT) {
+		FAIL("a first install still needs a reboot");
+		return;
+	}
+	if (strstr(note, "earlier agent run") || strstr(note, "stale")) {
+		FAIL("the note blames LOTA state that does not exist");
+		return;
+	}
+	PASS();
+
+	TEST("a genuinely stale commitment keeps its wording");
+	if (probe_pcr14_barrier_stage(PROBE_PCR14_OTHER, 1, 0, note,
+				      sizeof(note)) != STAGE_REBOOT) {
+		FAIL("stale state still needs a reboot");
+		return;
+	}
+	if (!strstr(note, "earlier agent run")) {
+		FAIL("the stale case lost its explanation");
+		return;
+	}
+	PASS();
+
+	TEST("a running agent's own commitment is satisfied");
+	if (probe_pcr14_barrier_stage(PROBE_PCR14_OTHER, 1, 1, note,
+				      sizeof(note)) != STAGE_DONE) {
+		FAIL("this boot's commitment is the satisfied state");
+		return;
+	}
+	PASS();
+
+	TEST("the lock value alone is satisfied");
+	if (probe_pcr14_barrier_stage(PROBE_PCR14_LOCK_ONLY, 1, 0, note,
+				      sizeof(note)) != STAGE_DONE) {
+		FAIL("a locked register is what this stage waits for");
+		return;
+	}
+	PASS();
+
+	TEST("a pristine register still says the lock has not run");
+	if (probe_pcr14_barrier_stage(PROBE_PCR14_ZERO, 0, 0, note,
+				      sizeof(note)) != STAGE_REBOOT) {
+		FAIL("no lock this boot needs a reboot");
+		return;
+	}
+	PASS();
+}
+
+/*
+ * Publisher profiles are the agent's target list, and a configuration that
+ * carries them is the ordinary state of a machine that has been used:
+ * the agent enrolls with each publisher the first time a title of theirs asks.
+ */
+static void test_conf_profile_count(void)
+{
+	TEST("profile sections are counted, comments are not");
+	if (probe_conf_buf_profile_count("log_level = debug\n"
+					 "[profile \"pubA\"]\n"
+					 "ca = 10.0.0.1\n"
+					 "# [profile \"commented\"]\n"
+					 "[profile \"pubB\"]\n") != 2) {
+		FAIL("wrong count");
+		return;
+	}
+	PASS();
+
+	TEST("a configuration naming no publisher counts none");
+	if (probe_conf_buf_profile_count("log_level = debug\n") != 0 ||
+	    probe_conf_buf_profile_count("[verifier]\n") != 0 ||
+	    probe_conf_buf_profile_count(NULL) != 0) {
+		FAIL("false positive");
+		return;
+	}
+	PASS();
+}
+
+/*
+ * The self-check proves the host attests. It did that by spawning the agent
+ * with --server, which names one verifier -- a combination the agent refuses
+ * whenever profiles are configured, because the profiles name several and
+ * there is then no single answer to where the host reports.
+ *
+ * So on any machine that has met a publisher, the self-check asked for
+ * something that cannot be given and reported the refusal as the host failing
+ * to attest: "Self-check failed. Install is laid down but the host is not
+ * attesting yet", exit 1, on a host that was installed, enrolled and
+ * attesting. Re-running, which is what that message advises, repeats it.
+ */
+static void test_selfcheck_plan(void)
+{
+	TEST("a verifier and no publishers is one round against it");
+	if (probe_selfcheck_plan("verifier.example", 0) !=
+	    SELFCHECK_ONE_ROUND) {
+		FAIL("named verifier did not produce a round");
+		return;
+	}
+	PASS();
+
+	TEST("no verifier named leaves the round to the first title");
+	if (probe_selfcheck_plan(NULL, 0) != SELFCHECK_SKIP_NO_VERIFIER ||
+	    probe_selfcheck_plan("", 0) != SELFCHECK_SKIP_NO_VERIFIER) {
+		FAIL("an unnamed verifier was treated as named");
+		return;
+	}
+	PASS();
+
+	TEST("configured publishers are the target list, so no verifier is named");
+	if (probe_selfcheck_plan("verifier.example", 5) !=
+	    SELFCHECK_PUBLISHERS_REPORT) {
+		FAIL("the self-check still names one verifier");
+		return;
+	}
+	PASS();
+
+	TEST("publishers decide even when no verifier was given");
+	if (probe_selfcheck_plan(NULL, 5) != SELFCHECK_PUBLISHERS_REPORT) {
+		FAIL("a host with publishers was told a title would do it");
+		return;
+	}
+	PASS();
+}
+
+/*
+ * A path the operator typed, checked before anything runs.
+ *
+ * The three cases the option table produces: an option nobody used, one whose
+ * file is there, and one whose file is not. Only the last is a mistake,
+ * and the refusal has to carry both the flag and the path, since an operator
+ * with four file-taking options and one message needs to know which of them
+ * it is about.
+ */
+static void test_named_files(void)
+{
+	char note[STAGE_NOTE_CAP];
+	char tmp[] = "/tmp/lota_named_XXXXXX";
+	int fd;
+
+	TEST("an option the operator did not use is not checked");
+	{
+		const struct probe_named_file files[] = {
+			{ "--ca-cert", NULL },
+			{ "--policy-pubkey", NULL },
+		};
+
+		note[0] = '\0';
+		if (probe_named_files(files, 2, note, sizeof(note)) != 0)
+			FAIL("a NULL path was treated as a missing file");
+		else
+			PASS();
+	}
+
+	fd = mkstemp(tmp);
+	if (fd >= 0)
+		close(fd);
+
+	TEST("a file that is there is accepted");
+	{
+		const struct probe_named_file files[] = {
+			{ "--ca-cert", tmp },
+		};
+
+		if (fd < 0) {
+			FAIL("cannot create a temporary file");
+		} else if (probe_named_files(files, 1, note, sizeof(note)) !=
+			   0) {
+			FAIL("a readable file was refused");
+		} else {
+			PASS();
+		}
+	}
+
+	TEST("a file that is not there is refused by flag and path");
+	{
+		const struct probe_named_file files[] = {
+			{ "--ca-cert", tmp },
+			{ "--policy-pubkey", "/nonexistent/lota-key.pub" },
+		};
+		int rc;
+
+		note[0] = '\0';
+		rc = probe_named_files(files, 2, note, sizeof(note));
+		if (rc != -ENOENT)
+			FAIL("a missing file did not report ENOENT");
+		else if (!strstr(note, "--policy-pubkey"))
+			FAIL("the refusal does not name the flag");
+		else if (!strstr(note, "/nonexistent/lota-key.pub"))
+			FAIL("the refusal does not name the path");
+		else
+			PASS();
+	}
+
+	if (fd >= 0)
+		unlink(tmp);
+}
+
 int main(void)
 {
 	printf("installer probe helpers:\n");
@@ -773,6 +1087,8 @@ int main(void)
 	test_cmdline_ima();
 	test_cmdline_token();
 	test_conf_key();
+	test_conf_profile_count();
+	test_selfcheck_plan();
 	test_esrt_present();
 	test_fstype_magic_mapping();
 	test_fs_verity_capability();
@@ -782,6 +1098,9 @@ int main(void)
 	test_secureboot_remediation();
 	test_auto_bringup_opt_in();
 	test_manifest_line();
+	test_installed_kernels();
+	test_barrier_stage_verdicts();
+	test_named_files();
 
 	printf("%d/%d tests passed\n", tests_passed, tests_run);
 	return tests_passed == tests_run ? 0 : 1;

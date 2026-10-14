@@ -13,6 +13,7 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
 #include <sys/xattr.h>
@@ -383,46 +384,123 @@ static int st_verity_apply(struct install_ctx *ctx)
 
 /* stage 5: initramfs PCR14 lock module */
 
-static int initrd_has_lock_module(void)
-{
-	char out[65536];
-	const char *const argv[] = { "lsinitrd", NULL };
-	int rc = run_capture(argv, out, sizeof(out));
+/* lsinitrd lists every file in the image, so the capture buffer is 64 KB */
+#define INITRD_LIST_CAP 65536
 
-	if (rc != 0)
+/* @image NULL asks about the running kernel's own image */
+static int initrd_has_lock_module(const char *image)
+{
+	const char *const argv[] = { "lsinitrd", image, NULL };
+	char *out = malloc(INITRD_LIST_CAP);
+	int rc;
+
+	if (!out)
+		return -ENOMEM;
+
+	rc = run_capture(argv, out, INITRD_LIST_CAP);
+	if (rc != 0) {
+		free(out);
 		return -EIO;
-	return strstr(out, "lota-pcr14-lock") != NULL;
+	}
+
+	rc = strstr(out, "lota-pcr14-lock") != NULL;
+	free(out);
+	return rc;
 }
 
+/*
+ * The stage is satisfied only when every installed kernel carries the lock.
+ *
+ * Stage 6 arms the cmdline on every boot entry, so a lock missing from any
+ * image leaves those entries booting unlocked.
+ * The kernels a player falls back to are exactly the older ones.
+ */
 static enum stage_state st_initrd_probe(struct install_ctx *ctx, char *note,
 					size_t cap)
 {
-	int has = initrd_has_lock_module();
+	struct probe_kernel_image kernels[PROBE_MAX_KERNELS];
+	size_t count = 0;
+	size_t missing = 0;
+	char missing_names[256] = { 0 };
+	size_t used = 0;
 
 	(void)ctx;
 
-	if (has < 0) {
+	if (probe_installed_kernels(kernels, PROBE_MAX_KERNELS, &count) < 0 ||
+	    count == 0) {
+		/*
+		 * Nothing enumerable (no /lib/modules, or no image beside
+		 * any tree): fall back to the running kernel, which is
+		 * the one question that can always be asked.
+		 */
+		int has = initrd_has_lock_module(NULL);
+
+		if (has < 0) {
+			snprintf(note, cap,
+				 "lsinitrd failed. Cannot inspect the "
+				 "current initramfs.");
+			return STAGE_ERROR;
+		}
+		if (has) {
+			snprintf(note, cap,
+				 "lota-pcr14-lock is inside the current "
+				 "kernel's initramfs.");
+			return STAGE_DONE;
+		}
 		snprintf(note, cap,
-			 "lsinitrd failed. Cannot inspect the "
-			 "current initramfs.");
-		return STAGE_ERROR;
+			 "Current initramfs does not contain the "
+			 "PCR14 lock helper.");
+		return STAGE_PENDING;
 	}
-	if (has) {
+
+	for (size_t i = 0; i < count; i++) {
+		int has = initrd_has_lock_module(kernels[i].image);
+
+		if (has < 0) {
+			snprintf(note, cap,
+				 "lsinitrd failed on %s. Cannot inspect that "
+				 "kernel's initramfs.",
+				 kernels[i].image);
+			return STAGE_ERROR;
+		}
+		if (has)
+			continue;
+
+		missing++;
+		if (used < sizeof(missing_names) - 1)
+			used += (size_t)snprintf(missing_names + used,
+						 sizeof(missing_names) - used,
+						 "%s%s", used ? ", " : "",
+						 kernels[i].release);
+	}
+
+	if (missing == 0) {
 		snprintf(note, cap,
-			 "lota-pcr14-lock is inside the current "
-			 "kernel's initramfs.");
+			 "lota-pcr14-lock is inside the initramfs of all %zu "
+			 "installed kernel(s).",
+			 count);
 		return STAGE_DONE;
 	}
+
 	snprintf(note, cap,
-		 "Current initramfs does not contain the "
-		 "PCR14 lock helper.");
+		 "%zu of %zu installed kernel(s) have no PCR14 lock helper in "
+		 "their initramfs: %s. Booting one of them leaves this machine "
+		 "with no boot commitment.",
+		 missing, count, missing_names);
 	return STAGE_PENDING;
 }
 
 static int st_initrd_apply(struct install_ctx *ctx)
 {
-	const char *const argv[] = { "dracut", "-f", NULL };
-	int rc = run_cmd(&ctx->ui, "Regenerating the initramfs (dracut -f)",
+	/*
+	 * --regenerate-all, to match stage 6's --update-kernel=ALL.
+	 * It costs one dracut run per installed kernel, which is the price of
+	 * the machine being installed.
+	 */
+	const char *const argv[] = { "dracut", "-f", "--regenerate-all", NULL };
+	int rc = run_cmd(&ctx->ui,
+			 "Regenerating every kernel's initramfs "
+			 "(dracut -f --regenerate-all)",
 			 argv);
 
 	if (rc != 0)
@@ -616,8 +694,13 @@ static enum stage_state st_selinux_probe(struct install_ctx *ctx, char *note,
 
 	if (dev == 0 && agent_label_ok() && lota_state_label_ok()) {
 		snprintf(note, cap,
-			 "TPM device, agent binary and state directory "
-			 "carry the LOTA SELinux labels.");
+			 "TPM device, agent binary and state directory carry "
+			 "the LOTA SELinux labels.%s",
+			 ctx->opts.selinux_module_named ?
+				 " The policy was already in place, so the "
+				 "module named by --selinux-module was not "
+				 "loaded." :
+				 "");
 		return STAGE_DONE;
 	}
 	if (dev == -ENOENT) {
@@ -734,6 +817,23 @@ static int agent_service_active(void)
 	return run_capture(argv, out, sizeof(out)) == 0;
 }
 
+static int unit_enabled(const char *unit)
+{
+	char out[256];
+	const char *const argv[] = { "systemctl", "is-enabled", unit, NULL };
+
+	return run_capture(argv, out, sizeof(out)) == 0;
+}
+
+/* what the stage decides on: running now, and running again after a reboot */
+static void read_service_state(struct probe_service_state *s)
+{
+	s->agent_active = agent_service_active();
+	s->agent_enabled = unit_enabled("lota-agent.service");
+	s->socket_enabled = unit_enabled("lota-agent.socket");
+	s->attest_enabled = unit_enabled("lota-attest.service");
+}
+
 static enum stage_state st_barrier_probe(struct install_ctx *ctx, char *note,
 					 size_t cap)
 {
@@ -747,34 +847,14 @@ static enum stage_state st_barrier_probe(struct install_ctx *ctx, char *note,
 	}
 
 	pcr = probe_pcr14_state();
-	switch (pcr) {
-	case PROBE_PCR14_LOCK_ONLY:
-		snprintf(note, cap,
-			 "PCR14 carries the initramfs lock from "
-			 "this boot.");
-		return STAGE_DONE;
-	case PROBE_PCR14_OTHER:
-		if (agent_service_active()) {
-			snprintf(note, cap,
-				 "PCR14 carries this boot's agent "
-				 "commitment.");
-			return STAGE_DONE;
-		}
-		snprintf(note, cap,
-			 "PCR14 holds a stale value from an "
-			 "earlier agent run. PCR14 only resets on "
-			 "a hardware reset.");
-		return STAGE_REBOOT;
-	case PROBE_PCR14_ZERO:
-		snprintf(note, cap,
-			 "The initramfs PCR14 lock has not run "
-			 "during this boot.");
-		return STAGE_REBOOT;
-	default:
+	if (pcr < 0) {
 		snprintf(note, cap, "Cannot read PCR14 from sysfs (%s).",
 			 strerror(-pcr));
 		return STAGE_ERROR;
 	}
+
+	return probe_pcr14_barrier_stage(pcr, probe_pcr14_lock_ran(),
+					 agent_service_active(), note, cap);
 }
 
 /* stage 9: agent service */
@@ -782,14 +862,12 @@ static enum stage_state st_barrier_probe(struct install_ctx *ctx, char *note,
 static enum stage_state st_agent_probe(struct install_ctx *ctx, char *note,
 				       size_t cap)
 {
+	struct probe_service_state state;
+
 	(void)ctx;
 
-	if (agent_service_active()) {
-		snprintf(note, cap, "lota-agent.service is ACTIVE.");
-		return STAGE_DONE;
-	}
-	snprintf(note, cap, "lota-agent.service is NOT RUNNING.");
-	return STAGE_PENDING;
+	read_service_state(&state);
+	return probe_agent_service_stage(&state, note, cap);
 }
 
 static int st_agent_apply(struct install_ctx *ctx)
@@ -1005,6 +1083,7 @@ int install_self_check(struct install_ctx *ctx)
 	struct profile_paths paths;
 	int days = 0;
 	int ok = 1;
+	int profiles;
 	int rc_cert;
 
 	ui_stage_begin(&ctx->ui, install_stage_count + 1,
@@ -1077,7 +1156,12 @@ after_cert:
 		      "absent (firmware re-anchor is low-assurance; the first "
 		      "one needs operator approval)");
 
-	if (ctx->opts.verifier) {
+	profiles = probe_conf_profile_count(PATH_LOTA_CONF);
+	if (profiles < 0)
+		profiles = 0;
+
+	switch (probe_selfcheck_plan(ctx->opts.verifier, profiles)) {
+	case SELFCHECK_ONE_ROUND: {
 		const char *argv[10];
 		int n = 0;
 		int rc;
@@ -1102,10 +1186,34 @@ after_cert:
 			     argv);
 		if (rc != 0)
 			ok = 0;
-	} else {
+		break;
+	}
+	case SELFCHECK_PUBLISHERS_REPORT:
+		/*
+		 * The host answers to publishers, so they are who it reports to,
+		 * each on their own cadence and their own trust anchor.
+		 * Naming one verifier as well is what the agent refuses,
+		 * and that refusal is not this host failing to attest.
+		 */
+		ui_text(&ctx->ui,
+			"Attestation round-trip belongs to the %d publisher(s) "
+			"this host answers to: they are the agent's target "
+			"list, each with its own verifier and cadence, so no "
+			"single verifier stands for them. A publisher whose "
+			"titles gate on a session is reported to when one of "
+			"their titles runs. %slota-agent --list-publishers "
+			"says who they are.",
+			profiles,
+			ctx->opts.verifier ?
+				"The --verifier given here is not used for "
+				"that reason. " :
+				"");
+		break;
+	case SELFCHECK_SKIP_NO_VERIFIER:
 		ui_text(&ctx->ui, "Attestation round-trip skipped (no "
 				  "--verifier given). First game launch "
 				  "performs it.");
+		break;
 	}
 
 	ui_explain(&ctx->ui, telemetry_summary);
@@ -1185,10 +1293,14 @@ const struct stage install_stages[] = {
 			"LOTA pins TPM PCR 14 very early in boot (inside the "
 			"initramfs, before any regular userspace runs) so nothing "
 			"can pre-poison the agent's measurement slot."
-			"This step regenerates the initramfs with dracut to include "
-			"the lock helper. It rewrites /boot/initramfs-*.img - the standard "
-			"file every kernel update also rewrites - and requires a reboot to "
-			"take effect.",
+			"This step regenerates the initramfs of every installed kernel "
+			"with dracut to include the lock helper, matching the next "
+			"step's scope: a kernel you can select in the boot menu and that "
+			"has no lock boots a machine with no commitment. It rewrites "
+			"/boot/initramfs-*.img - the standard file every kernel update "
+			"also rewrites - and requires a reboot to take effect. A kernel "
+			"installed later picks the helper up from the packaged dracut "
+			"module on its own.",
 		.probe = st_initrd_probe,
 		.apply = st_initrd_apply,
 		.boot_path = 1,

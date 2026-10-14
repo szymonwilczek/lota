@@ -44,9 +44,9 @@ once every piece is in tree.
 |                     | after the state changes.                              |
 +---------------------+-------------------------------------------------------+
 | ``ha-postgres/``    | Multi-instance verifier on a shared Postgres backend: |
-|                     | two instances share enforcement and session-token     |
-|                     | state via ``--pg-dsn``, so a token issued by one      |
-|                     | validates on the other.                               |
+|                     | two instances share enforcement state via             |
+|                     | ``--pg-dsn``, so a client enrolled on one is known    |
+|                     | to the other.                                         |
 +---------------------+-------------------------------------------------------+
 
 ``anticheat-integration.rst`` is the map for a studio forking the

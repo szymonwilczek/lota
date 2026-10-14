@@ -83,23 +83,23 @@ static void usage(FILE *out)
 static int parse_args(int argc, char **argv, struct install_opts *opts)
 {
 	static const struct option longopts[] = {
-		{ "ca-server", required_argument, 0, 1 },
-		{ "ca-port", required_argument, 0, 2 },
-		{ "ca-cert", required_argument, 0, 3 },
-		{ "verifier", required_argument, 0, 4 },
-		{ "verifier-port", required_argument, 0, 5 },
-		{ "policy-pubkey", required_argument, 0, 6 },
-		{ "selinux-module", required_argument, 0, 7 },
-		{ "status", no_argument, 0, 8 },
-		{ "yes", no_argument, 0, 'y' },
-		{ "plain", no_argument, 0, 9 },
-		{ "help", no_argument, 0, 'h' },
-		{ "version", no_argument, 0, 10 },
-		{ "pause", no_argument, 0, 11 },
-		{ "resume", no_argument, 0, 12 },
-		{ "unattended", no_argument, 0, 13 },
-		{ "verity-manifest", required_argument, 0, 14 },
-		{ 0, 0, 0, 0 },
+		{ "ca-server", required_argument, NULL, 1 },
+		{ "ca-port", required_argument, NULL, 2 },
+		{ "ca-cert", required_argument, NULL, 3 },
+		{ "verifier", required_argument, NULL, 4 },
+		{ "verifier-port", required_argument, NULL, 5 },
+		{ "policy-pubkey", required_argument, NULL, 6 },
+		{ "selinux-module", required_argument, NULL, 7 },
+		{ "status", no_argument, NULL, 8 },
+		{ "yes", no_argument, NULL, 'y' },
+		{ "plain", no_argument, NULL, 9 },
+		{ "help", no_argument, NULL, 'h' },
+		{ "version", no_argument, NULL, 10 },
+		{ "pause", no_argument, NULL, 11 },
+		{ "resume", no_argument, NULL, 12 },
+		{ "unattended", no_argument, NULL, 13 },
+		{ "verity-manifest", required_argument, NULL, 14 },
+		{ NULL, 0, NULL, 0 },
 	};
 	int c;
 
@@ -129,6 +129,7 @@ static int parse_args(int argc, char **argv, struct install_opts *opts)
 			break;
 		case 7:
 			opts->selinux_module = optarg;
+			opts->selinux_module_named = 1;
 			break;
 		case 8:
 			opts->status_only = 1;
@@ -193,6 +194,34 @@ static int parse_args(int argc, char **argv, struct install_opts *opts)
 		usage(stderr);
 		exit(EXIT_INSTALL_USAGE);
 	}
+
+	/*
+	 * Every file the operator named, before any stage runs.
+	 *
+	 * A path arrives here only by being typed, so one that does not resolve
+	 * is a mistake in the command line and belongs beside the other
+	 * command-line refusals.
+	 * Reported the same way for all four.
+	 * The SELinux module is passed only when it was named.
+	 */
+	{
+		const struct probe_named_file named[] = {
+			{ "--ca-cert", opts->ca_cert },
+			{ "--policy-pubkey", opts->policy_pubkey },
+			{ "--selinux-module", opts->selinux_module_named ?
+						      opts->selinux_module :
+						      NULL },
+			{ "--verity-manifest", opts->verity_manifest },
+		};
+		char note[STAGE_NOTE_CAP];
+
+		if (probe_named_files(named, sizeof(named) / sizeof(named[0]),
+				      note, sizeof(note)) < 0) {
+			fprintf(stderr, "lota-install: %s\n", note);
+			exit(EXIT_INSTALL_USAGE);
+		}
+	}
+
 	return 0;
 }
 

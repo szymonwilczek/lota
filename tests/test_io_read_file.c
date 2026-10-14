@@ -77,6 +77,29 @@ static void test_missing_file_is_absent(void)
 	      "read_file_bounded reports zero length for a missing file");
 }
 
+/* A file that exists and holds nothing has no content to hand back,
+ * which is what every caller means by absent -- and it is not the
+ * "larger than the bound" the other rejection reports */
+static void test_empty_file_is_absent(void)
+{
+	char path[64];
+	uint8_t buf[16];
+	size_t out = 123;
+
+	if (write_tmp(path, sizeof(path), "", 0) < 0) {
+		fprintf(stderr, "FAIL: could not create temp file\n");
+		g_failures++;
+		return;
+	}
+
+	CHECK(lota_read_file_bounded(path, buf, sizeof(buf), &out) == 0,
+	      "read_file_bounded treats an empty file as success");
+	CHECK(out == 0,
+	      "read_file_bounded reports zero length for an empty file");
+
+	unlink(path);
+}
+
 static void test_oversize_rejected(void)
 {
 	char path[64];
@@ -118,6 +141,7 @@ int main(void)
 	printf("=== io_read_file_bounded tests ===\n");
 	test_reads_full_file();
 	test_missing_file_is_absent();
+	test_empty_file_is_absent();
 	test_oversize_rejected();
 	test_argument_validation();
 

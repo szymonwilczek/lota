@@ -242,7 +242,7 @@ func TestUnrevoke(t *testing.T) {
 	c, rec := fakeVerifier(t, http.StatusOK,
 		`{"status":"unrevoked","client_id":"host1"}`)
 
-	if err := c.Unrevoke("host1"); err != nil {
+	if err := c.Unrevoke("host1", "appeal upheld", "ops", ""); err != nil {
 		t.Fatalf("Unrevoke: %v", err)
 	}
 	if rec.method != http.MethodDelete || rec.path != "/api/v1/clients/host1/revoke" {
@@ -310,7 +310,7 @@ func TestUnbanWithTenant(t *testing.T) {
 	c, rec := fakeVerifier(t, http.StatusOK,
 		`{"status":"unbanned","hardware_id":"`+hwid+`","tenant":"acme"}`)
 
-	if err := c.Unban(hwid, "acme"); err != nil {
+	if err := c.Unban(hwid, "acme", "appeal upheld", "ops", ""); err != nil {
 		t.Fatalf("Unban: %v", err)
 	}
 	if rec.method != http.MethodDelete || rec.path != "/api/v1/bans/"+hwid {
@@ -325,7 +325,7 @@ func TestUnbanDefaultTenantOmitsQuery(t *testing.T) {
 	hwid := strings.Repeat("cd", 32)
 	c, rec := fakeVerifier(t, http.StatusOK, `{"status":"unbanned"}`)
 
-	if err := c.Unban(hwid, ""); err != nil {
+	if err := c.Unban(hwid, "", "appeal upheld", "ops", ""); err != nil {
 		t.Fatalf("Unban: %v", err)
 	}
 	if rec.query != "" {
@@ -358,7 +358,7 @@ func TestReanchor(t *testing.T) {
 	c, rec := fakeVerifier(t, http.StatusOK,
 		`{"status":"reanchored","client_id":"host1"}`)
 
-	if err := c.Reanchor("host1", "ops", "board swap"); err != nil {
+	if err := c.Reanchor("host1", "BIOS rollout", "ops", "board swap"); err != nil {
 		t.Fatalf("Reanchor: %v", err)
 	}
 	if rec.method != http.MethodPost || rec.path != "/api/v1/clients/host1/reanchor" {
@@ -377,7 +377,7 @@ func TestReanchor(t *testing.T) {
 func TestReanchorUnknownClient(t *testing.T) {
 	c, _ := fakeVerifier(t, http.StatusNotFound, `{"error":"client not found"}`)
 
-	err := c.Reanchor("ghost", "ops", "")
+	err := c.Reanchor("ghost", "BIOS rollout", "ops", "")
 	var apiErr *APIError
 	if !errors.As(err, &apiErr) || apiErr.StatusCode != http.StatusNotFound {
 		t.Fatalf("error = %v, want 404 *APIError", err)
@@ -388,7 +388,7 @@ func TestDeleteClientWithMetadata(t *testing.T) {
 	c, rec := fakeVerifier(t, http.StatusOK,
 		`{"status":"deleted","client_id":"host1"}`)
 
-	if err := c.DeleteClient("host1", "ops", "decommissioned"); err != nil {
+	if err := c.DeleteClient("host1", "decommissioned", "ops", "decommissioned"); err != nil {
 		t.Fatalf("DeleteClient: %v", err)
 	}
 	if rec.method != http.MethodDelete || rec.path != "/api/v1/clients/host1" {
@@ -404,15 +404,16 @@ func TestDeleteClientWithMetadata(t *testing.T) {
 	}
 }
 
-func TestDeleteClientOmitsEmptyBody(t *testing.T) {
+func TestDeleteClientSendsAttribution(t *testing.T) {
 	c, rec := fakeVerifier(t, http.StatusOK,
 		`{"status":"deleted","client_id":"host1"}`)
 
-	if err := c.DeleteClient("host1", "", ""); err != nil {
+	if err := c.DeleteClient("host1", "decommissioned", "ops", ""); err != nil {
 		t.Fatalf("DeleteClient: %v", err)
 	}
-	if len(rec.body) != 0 {
-		t.Fatalf("body = %q, want empty (DELETE without metadata)", rec.body)
+	if !strings.Contains(string(rec.body), `"actor":"ops"`) ||
+		!strings.Contains(string(rec.body), `"reason":"decommissioned"`) {
+		t.Fatalf("body = %q, want the actor and reason", rec.body)
 	}
 }
 
@@ -476,35 +477,6 @@ func TestAttestations(t *testing.T) {
 	}
 	if len(entries) != 1 || entries[0].Result != "success" || entries[0].Tenant != "acme" {
 		t.Fatalf("entries = %+v", entries)
-	}
-}
-
-func TestValidateSessionToken(t *testing.T) {
-	token := strings.Repeat("00", 32)
-	c, rec := fakeVerifier(t, http.StatusOK,
-		`{"valid":true,"consumed":true,"client_id":"host1","tenant":"acme",
-		  "hardware_id":"ab","result_code":1}`)
-
-	status, err := c.ValidateSessionToken(token, true)
-	if err != nil {
-		t.Fatalf("ValidateSessionToken: %v", err)
-	}
-	if rec.method != http.MethodPost || rec.path != "/api/v1/session/validate" {
-		t.Fatalf("request = %s %s", rec.method, rec.path)
-	}
-
-	var got struct {
-		SessionToken string `json:"session_token"`
-		Consume      bool   `json:"consume"`
-	}
-	if err := json.Unmarshal(rec.body, &got); err != nil {
-		t.Fatalf("request body: %v", err)
-	}
-	if got.SessionToken != token || !got.Consume {
-		t.Fatalf("body = %+v", got)
-	}
-	if !status.Valid || status.ClientID != "host1" || status.Tenant != "acme" {
-		t.Fatalf("status = %+v", status)
 	}
 }
 

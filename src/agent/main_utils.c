@@ -17,6 +17,7 @@
 #include "agent.h"
 #include "attest.h"
 #include "config.h"
+#include "container_watch.h"
 #include "daemon.h"
 #include "dbus.h"
 #include "journal.h"
@@ -62,7 +63,11 @@ void print_usage(const char *prog, const char *default_bpf_path,
 	printf("  --config PATH     Configuration file path\n");
 	printf("                    (default: %s)\n", LOTA_CONFIG_DEFAULT_PATH);
 	printf("  --dump-config     Print loaded configuration and exit\n");
-	printf("  --test-tpm        Test TPM operations and exit\n");
+	printf("  --test-tpm        Report on TPM operations and exit.\n"
+	       "                    Creates no persistent key: the quote is\n"
+	       "                    skipped when the attestation handle is\n"
+	       "                    free, since a key made here would\n"
+	       "                    outlive the command\n");
 	printf("  --test-iommu      Test IOMMU verification and exit\n");
 	printf("  --seal            Seal a secret read from stdin to the PCR "
 	       "state;\n");
@@ -99,7 +104,11 @@ void print_usage(const char *prog, const char *default_bpf_path,
 	printf("                    blobs stay valid)\n");
 	printf("  --test-ipc        Run IPC server with simulated attested "
 	       "state\n");
-	printf("                    (unsigned tokens, for protocol testing)\n");
+	printf("                    (no TPM: status, D-Bus and profile "
+	       "binding only,\n");
+	printf("                    GET_TOKEN is refused -- use --test-signed "
+	       "for\n");
+	printf("                    tokens)\n");
 	printf("  --test-signed     Run IPC server with TPM-signed tokens\n");
 	printf("                    (requires TPM, for token verification "
 	       "testing)\n");
@@ -118,7 +127,13 @@ void print_usage(const char *prog, const char *default_bpf_path,
 	printf("  --export-policy   Export complete YAML policy from live "
 	       "system\n");
 	printf("                    (verifier-ready, pipe to file)\n");
-	printf("  --attest          Perform remote attestation and exit\n");
+	printf("  --attest          Attest to the configured verifier.\n");
+	printf("                    With publisher profiles in the config this\n");
+	printf("                    reports to every one of them on their own\n");
+	printf("                    cadence and keeps running, because a single\n");
+	printf("                    round against one verifier would leave the\n");
+	printf("                    others unattested. With no profiles it is\n");
+	printf("                    one round and exit\n");
 	printf("  --enroll          Enroll the AIK with the attestation CA via\n");
 	printf("                    credential activation and store the issued\n");
 	printf("                    certificate, then exit\n");
@@ -136,8 +151,9 @@ void print_usage(const char *prog, const char *default_bpf_path,
 	       "their\n");
 	printf("                    attestation CA; --ca-cert gives their "
 	       "trust\n");
-	printf("                    anchor, --server/--port their verifier, "
-	       "and\n");
+	printf("                    anchor, --server/--port their verifier "
+	       "(omit them\n");
+	printf("                    for a publisher who runs none), and\n");
 	printf("                    --publisher-name the label. Records no "
 	       "consent:\n");
 	printf("                    somebody at this machine still has to "
@@ -210,6 +226,17 @@ void print_usage(const char *prog, const char *default_bpf_path,
 	printf("                    A CLI --mode that weakens the configured\n");
 	printf("                    'enforce' mode requires:\n");
 	printf("                      --insecure-allow-mode-downgrade\n");
+	printf("                    An enforce agent refuses every signal that\n");
+	printf("                    could end it, including from root, so\n");
+	printf("                    --shutdown is the way to stop one -- and it\n");
+	printf("                    spends the PCR 14 boot commitment, which\n");
+	printf("                    means a reboot before the host attests\n");
+	printf("                    again. In monitor and maintenance the agent\n");
+	printf("                    reports the signal and takes it -- but a\n");
+	printf("                    delivered SIGTERM is the same clean stop as\n");
+	printf("                    --shutdown and spends PCR 14 too, while\n");
+	printf("                    SIGKILL leaves it and another agent may\n");
+	printf("                    start in the same boot.\n");
 	printf("  --insecure-allow-mode-downgrade\n");
 	printf("                    Acknowledge that --mode weakens cfg.mode\n"
 	       "                    'enforce' to monitor/maintenance.\n");
@@ -234,7 +261,21 @@ void print_usage(const char *prog, const char *default_bpf_path,
 	printf("                    (requires --mode enforce)\n");
 	printf("  --block-anon-exec Block anonymous executable mappings\n");
 	printf("                    (requires --mode enforce)\n");
-	printf("  --protect-pid PID Add PID to protected set (ptrace blocked)\n");
+	printf("  --protect-pid PID Seed this daemon's protected set with PID "
+	       "(ptrace\n");
+	printf("                    blocked). A startup option, not a request "
+	       "to a\n");
+	printf("                    daemon that is already running: on a host "
+	       "with\n");
+	printf("                    one up it does nothing. The process has to "
+	       "be\n");
+	printf("                    running when the agent starts, and a pid "
+	       "that\n");
+	printf("                    names none is refused before the boot "
+	       "commitment\n");
+	printf("                    is spent. A process protects itself "
+	       "through the\n");
+	printf("                    SDK, with lota_protect_self()\n");
 	printf("  --trust-lib PATH  Add library path to trusted whitelist\n");
 	printf("  --allow-verity PATH\n");
 	printf("                    Allow a fs-verity protected file by digest\n");
@@ -244,7 +285,8 @@ void print_usage(const char *prog, const char *default_bpf_path,
 	printf("                    (default: %s)\n", DAEMON_DEFAULT_PID_FILE);
 	printf("  --aik-ttl SECS    AIK key lifetime in seconds before "
 	       "rotation\n");
-	printf("                    (default: 30 days, min: 3600)\n");
+	printf("                    (default: 30 days, min: %d)\n",
+	       MIN_AIK_TTL);
 	printf("\nPolicy signing:\n");
 	printf("  --gen-signing-key PREFIX\n");
 	printf("                    Generate Ed25519 keypair: PREFIX.key + "
@@ -369,23 +411,36 @@ void setup_dbus(struct ipc_context *ctx)
 _Static_assert(LOTA_CONFIG_MAX_CONTAINER_LISTENERS <= IPC_MAX_EXTRA_LISTENERS,
 	       "container listener cap exceeds ipc extra-listener slots");
 
-static int add_listener_for_uid(struct ipc_context *ctx, uint32_t uid)
+static int container_socket_paths(uint32_t uid, char *dir, size_t dirsz,
+				  char *path, size_t pathsz)
 {
-	char dir[PATH_MAX];
-	char path[PATH_MAX];
-	int n, ret;
+	int n;
 
-	n = snprintf(dir, sizeof(dir), "/run/user/%u/%s", uid,
+	n = snprintf(dir, dirsz, "%s/%u/%s", CONTAINER_WATCH_RUNTIME_ROOT, uid,
 		     STEAM_RT_SOCKET_DIR_SUFFIX);
-	if (n < 0 || (size_t)n >= sizeof(dir))
+	if (n < 0 || (size_t)n >= dirsz)
 		return -ENAMETOOLONG;
 
-	n = snprintf(path, sizeof(path), "%s/%s", dir, STEAM_RT_SOCKET_NAME);
-	if (n < 0 || (size_t)n >= sizeof(path))
+	n = snprintf(path, pathsz, "%s/%s", dir, STEAM_RT_SOCKET_NAME);
+	if (n < 0 || (size_t)n >= pathsz)
 		return -ENAMETOOLONG;
 
 	if (strcmp(path, LOTA_IPC_SOCKET_PATH) == 0)
 		return -EINVAL;
+
+	return 0;
+}
+
+static int add_listener_for_uid(uint32_t uid, void *user)
+{
+	struct ipc_context *ctx = user;
+	char dir[PATH_MAX];
+	char path[PATH_MAX];
+	int ret;
+
+	ret = container_socket_paths(uid, dir, sizeof(dir), path, sizeof(path));
+	if (ret < 0)
+		return ret;
 
 	ret = steam_runtime_ensure_socket_dir(dir);
 	if (ret < 0) {
@@ -396,27 +451,93 @@ static int add_listener_for_uid(struct ipc_context *ctx, uint32_t uid)
 	}
 
 	ret = ipc_add_listener(ctx, path);
+	if (ret == -EADDRINUSE) {
+		/*
+		 * Another agent is serving uid's titles there.
+		 * Say which process kept the socket.
+		 */
+		fprintf(stderr,
+			"Warning: %s is already served by another agent, so uid %u keeps that listener and this server has none\n",
+			path, uid);
+		return ret;
+	}
 	if (ret < 0) {
 		fprintf(stderr, "Warning: container listener %s: %s\n", path,
 			strerror(-ret));
 		return ret;
 	}
 
+	lota_info("Container listener ready for uid %u at %s", uid, path);
 	return 0;
+}
+
+/*
+ * The socket file goes with the runtime directory logind removed,
+ * so this releases the slot rather than the file.
+ */
+static void drop_listener_for_uid(uint32_t uid, void *user)
+{
+	struct ipc_context *ctx = user;
+	char dir[PATH_MAX];
+	char path[PATH_MAX];
+
+	if (container_socket_paths(uid, dir, sizeof(dir), path, sizeof(path)) <
+	    0)
+		return;
+
+	if (ipc_remove_listener(ctx, path) == 0)
+		lota_info(
+			"Container listener for uid %u released, session over",
+			uid);
 }
 
 void setup_container_listener(struct ipc_context *ctx,
 			      const struct lota_config *cfg)
 {
 	struct steam_runtime_info rt_info;
+	uint32_t watch_uids[LOTA_CONFIG_MAX_CONTAINER_LISTENERS];
+	char runtime_dir[PATH_MAX];
 	char dir[PATH_MAX];
 	char path[PATH_MAX];
+	int watch_count;
 	int ret;
 
-	if (cfg && cfg->container_listener_uid_count > 0) {
-		for (int i = 0; i < cfg->container_listener_uid_count; i++)
-			(void)add_listener_for_uid(
-				ctx, cfg->container_listener_uids[i]);
+	if (steam_runtime_runtime_dir(runtime_dir, sizeof(runtime_dir)) < 0)
+		runtime_dir[0] = '\0';
+
+	watch_count = container_watch_plan(
+		cfg ? cfg->container_listener_uids : NULL,
+		cfg ? cfg->container_listener_uid_count : 0,
+		runtime_dir[0] ? runtime_dir : NULL, watch_uids,
+		LOTA_CONFIG_MAX_CONTAINER_LISTENERS);
+
+	if (watch_count < 0) {
+		lota_err(
+			"Cannot decide which logins get a container listener (%s); no container socket will be served",
+			strerror(-watch_count));
+		return;
+	}
+
+	if (watch_count > 0) {
+		struct container_watch_ops ops = {
+			.bind = add_listener_for_uid,
+			.unbind = drop_listener_for_uid,
+			.user = ctx,
+		};
+
+		/*
+		 * The listener a Proton title connects to belongs to a login,
+		 * and no one has logged in yet when the daemon starts.
+		 * The watch outlives this call so the socket is laid down when
+		 * the runtime directory appears.
+		 */
+		ret = container_watch_init(&g_agent.container_watch, NULL,
+					   watch_uids, watch_count, &ops);
+		if (ret < 0)
+			lota_warn(
+				"Cannot watch %s for logins (%s): a container socket "
+				"will only appear for a user already logged in",
+				CONTAINER_WATCH_RUNTIME_ROOT, strerror(-ret));
 
 		ret = steam_runtime_detect(&rt_info);
 		if (ret == 0 && (rt_info.env_flags & STEAM_ENV_STEAM_ACTIVE))
@@ -424,6 +545,12 @@ void setup_container_listener(struct ipc_context *ctx,
 		return;
 	}
 
+	/*
+	 * Reached only for a runtime directory that names no login:
+	 * a container's own, or a path an operator chose.
+	 * There is nothing to watch for, so this binds once
+	 * and says so if it cannot.
+	 */
 	ret = steam_runtime_container_socket_dir(dir, sizeof(dir));
 	if (ret < 0)
 		return; /* XDG_RUNTIME_DIR not set, nothing to do */
@@ -437,9 +564,9 @@ void setup_container_listener(struct ipc_context *ctx,
 
 	ret = steam_runtime_ensure_socket_dir(dir);
 	if (ret < 0) {
-		fprintf(stderr,
-			"Warning: cannot create container socket dir %s: %s\n",
-			dir, strerror(-ret));
+		lota_err(
+			"Cannot create the container socket dir %s (%s), and this runtime directory names no login to wait for, so no container socket will appear until the agent is started again with the directory in place. A host whose runtime directory is %s/<uid> gets one when its user logs in; name the uid with container_listener_uid to have that watched explicitly",
+			dir, strerror(-ret), CONTAINER_WATCH_RUNTIME_ROOT);
 		return;
 	}
 
@@ -506,10 +633,43 @@ int self_measure(struct tpm_context *ctx)
 	 */
 	ret = tpm_extend_boot_commitment(ctx, self_hash);
 	if (ret < 0) {
+		/*
+		 * -EBADMSG covers every refusal the commitment can produce,
+		 * so name which one it was.
+		 * A refusal an operator caused by running a build the register
+		 * does not commit to reads identically to a TPM fault otherwise.
+		 */
 		if (ret == -EBADMSG) {
-			lota_err(
-				"PCR14 boot-commitment refused; see the preceding "
-				"SECURITY log for the exact recovery path.");
+			switch (ctx->boot_commitment_state) {
+			case TPM_PCR14_BINARY_CHANGED:
+				lota_err(
+					"This is not the lota-agent build PCR 14 "
+					"committed to when the host booted, so it "
+					"cannot attest in this boot. Install this "
+					"build and reboot; the register is not "
+					"rewritable while the host is up.");
+				break;
+			case TPM_PCR14_SPENT_BY_SHUTDOWN:
+				lota_err(
+					"The agent is paused on this host: its "
+					"boot commitment was spent by a "
+					"shutdown requested here. Reboot to "
+					"attest again.");
+				break;
+			case TPM_PCR14_LOCK_MISSING:
+				lota_err(
+					"PCR 14 never received the initramfs lock "
+					"this boot, so there is nothing for the "
+					"boot commitment to chain onto. See the "
+					"preceding log for the dracut step.");
+				break;
+			default:
+				lota_err(
+					"PCR14 boot-commitment refused; see the "
+					"preceding SECURITY log for the exact "
+					"recovery path.");
+				break;
+			}
 		}
 		return ret;
 	}

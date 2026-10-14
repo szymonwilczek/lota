@@ -22,6 +22,7 @@
 #include <unistd.h>
 #include <openssl/types.h>
 #include <sys/types.h>
+#include <sys/utsname.h>
 #include <tss2/tss2_tpm2_types.h>
 
 #include "../../include/attestation.h"
@@ -34,6 +35,7 @@
 #include "attest_peer.h"
 #include "attest_targets.h"
 #include "bpf_loader.h"
+#include "daemon.h"
 #include "enroll.h"
 #include "esrt.h"
 #include "hardening.h"
@@ -41,6 +43,7 @@
 #include "io_utils.h"
 #include "ipc.h"
 #include "journal.h"
+#include "kernel_measure.h"
 #include "net.h"
 #include "policy.h"
 #include "quote.h"
@@ -50,36 +53,43 @@
 #include "iommu_types.h"
 
 /*
- * Select a boot measurement PCR that best represents the booted kernel path.
- * Priority reflects common Linux boot flows:
- *   - PCR 11: UKI / systemd-stub
- *   - PCR 9:  initrd + kernel-related GRUB measurements
- *   - PCR 8:  GRUB command line / boot config flow
- *   - PCR 4:  boot manager/loader stage
+ * Read one PCR for kernel_measurement_select(), which decides which register
+ * actually carries the booted kernel.
  */
+static int read_pcr_for_kernel_measurement(void *ctx, int pcr,
+					   uint8_t out[LOTA_HASH_SIZE])
+{
+	return tpm_read_pcr((struct tpm_context *)ctx, pcr, TPM2_ALG_SHA256,
+			    out);
+}
+
 static int read_kernel_measurement_digest(struct tpm_context *ctx,
 					  uint8_t out_hash[LOTA_HASH_SIZE],
 					  int *selected_pcr)
 {
-	static const int candidates[] = { 11, 9, 8, 4 };
-
-	if (!ctx || !out_hash)
+	if (!ctx)
 		return -EINVAL;
 
-	for (size_t i = 0; i < sizeof(candidates) / sizeof(candidates[0]);
-	     i++) {
-		int ret = tpm_read_pcr(ctx, candidates[i], TPM2_ALG_SHA256,
-				       out_hash);
-		if (ret == 0) {
-			if (selected_pcr)
-				*selected_pcr = candidates[i];
-			return 0;
-		}
-	}
+	return kernel_measurement_select(read_pcr_for_kernel_measurement, ctx,
+					 out_hash, selected_pcr);
+}
 
-	if (selected_pcr)
-		*selected_pcr = -1;
-	return -ENOENT;
+void attest_warn_cert_orphaned(const struct profile_paths *paths,
+			       const char *label)
+{
+	if (!tpm_aik_provisioning_orphans_cert(
+		    tpm_aik_key_present(&g_agent.tpm_ctx),
+		    paths ? profile_aik_cert_stored(paths) : false))
+		return;
+
+	/* label goes last: on some targets it is a sentence of its own */
+	lota_err("This TPM no longer holds the attestation key that was "
+		 "enrolled, and a new one takes its place. The certificate "
+		 "stored for this publisher names the key that is gone, so "
+		 "every round will be refused until they issue one for the key "
+		 "that is here now: lota-agent --reenroll --ca-cert <their "
+		 "anchor>. A TPM clear does this. Publisher: %s",
+		 label ? label : "unnamed");
 }
 
 static uint32_t rand_u32_best_effort(void)
@@ -101,11 +111,13 @@ static void collect_kernel_security_features(bool *module_sig, bool *secureboot,
 					     bool *lockdown)
 {
 	if (module_sig)
-		*module_sig = bpf_loader_kernel_module_sig_enforced() == 0;
+		*module_sig = bpf_loader_kernel_module_sig_enforced(
+				      LOTA_MODULE_SIG_ENFORCE_PATH) == 0;
 	if (secureboot)
 		*secureboot = bpf_loader_secure_boot_enabled() == 0;
 	if (lockdown)
-		*lockdown = bpf_loader_kernel_lockdown_restrictive() == 0;
+		*lockdown = bpf_loader_kernel_lockdown_restrictive(
+				    LOTA_KERNEL_LOCKDOWN_PATH) == 0;
 }
 
 /*
@@ -161,7 +173,7 @@ int export_policy(int mode)
 	ret = tpm_init(&g_agent.tpm_ctx);
 	if (ret < 0) {
 		fprintf(stderr, "Failed to initialize TPM: %s\n",
-			strerror(-ret));
+			attest_failure_reason(ret));
 		return ret;
 	}
 
@@ -169,7 +181,7 @@ int export_policy(int mode)
 	ret = self_measure(&g_agent.tpm_ctx);
 	if (ret < 0) {
 		fprintf(stderr, "Warning: Self-measurement failed: %s\n",
-			strerror(-ret));
+			attest_failure_reason(ret));
 		fprintf(stderr, "PCR 14 may not contain agent measurement.\n");
 	}
 
@@ -187,13 +199,33 @@ int export_policy(int mode)
 		}
 	}
 
-	/* Boot-chain measurement digest (kernel-relevant PCR selection) */
-	ret = tpm_get_current_kernel_path(&g_agent.tpm_ctx, snap.kernel_path,
-					  sizeof(snap.kernel_path));
-	if (ret < 0) {
+	/*
+	 * Boot-chain measurement digest (kernel-relevant PCR selection).
+	 *
+	 * No file is read for it, so the exported document is given the register
+	 * it came from and the kernel this host is running.
+	 * A configured kernel_path tells the agent where to find the kernel image
+	 * on a distribution that does not ship /boot/vmlinuz-<release>;
+	 * it selects nothing about this digest.
+	 */
+	{
+		struct utsname uts;
+
+		if (uname(&uts) == 0)
+			snprintf(snap.kernel_release,
+				 sizeof(snap.kernel_release), "%s",
+				 uts.release);
+		else
+			fprintf(stderr,
+				"Warning: Failed to read the running kernel release: %s\n",
+				strerror(errno));
+	}
+
+	if (tpm_kernel_path_is_overridden(&g_agent.tpm_ctx)) {
 		fprintf(stderr,
-			"Warning: Failed to find kernel path metadata: %s\n",
-			tpm_strerror(ret));
+			"Note: kernel_path does not affect this policy. The "
+			"measured-boot digest below is the value of a PCR as "
+			"this host booted, not a hash of any file.\n");
 	}
 
 	{
@@ -202,6 +234,7 @@ int export_policy(int mode)
 			&g_agent.tpm_ctx, snap.kernel_hash, &selected_pcr);
 		if (ret == 0) {
 			snap.kernel_hash_valid = true;
+			snap.kernel_hash_pcr = selected_pcr;
 			fprintf(stderr,
 				"Kernel measurement digest source: PCR %d "
 				"(measured boot)\n",
@@ -335,9 +368,17 @@ static int build_attestation_report(const struct verifier_challenge *challenge,
 		/* continue with zero hardware ID - verifier may reject */
 		memset(report->tpm.hardware_id, 0,
 		       sizeof(report->tpm.hardware_id));
+	} else if (ret == 1) {
+		/*
+		 * The identity is derived from a different key than usual,
+		 * and a verifier comparing it against what this host reported
+		 * before sees it move.
+		 * That is not a debug detail.
+		 */
+		lota_notice(
+			"Hardware ID derived from the AIK: this TPM yielded no endorsement key");
 	} else {
-		lota_dbg("Hardware ID derived from %s",
-			 ret == 1 ? "AIK (EK not available)" : "EK");
+		lota_dbg("Hardware ID derived from the EK");
 	}
 
 	/* system info: kernel path metadata + measured-boot digest */
@@ -621,6 +662,7 @@ static int attest_once(const char *server, int port, const char *ca_cert,
 	uint8_t *wire_buf = NULL;
 	size_t wire_buf_size = 0;
 	ssize_t wire_size = 0;
+	enum attest_stage stage = ATTEST_STAGE_COUNT;
 	int ret;
 
 	memset(&net_ctx, 0, sizeof(net_ctx));
@@ -634,18 +676,14 @@ static int attest_once(const char *server, int port, const char *ca_cert,
 	ret = net_context_init(&net_ctx, server, port, ca_cert, skip_verify,
 			       pin_sha256);
 	if (ret < 0) {
-		if (verbose)
-			fprintf(stderr, "Failed to initialize connection: %s\n",
-				strerror(-ret));
+		stage = ATTEST_STAGE_TLS_SETUP;
 		goto cleanup;
 	}
 	net_ctx_inited = 1;
 
 	ret = net_connect(&net_ctx);
 	if (ret < 0) {
-		if (verbose)
-			fprintf(stderr, "Failed to connect to verifier: %s\n",
-				strerror(-ret));
+		stage = ATTEST_STAGE_CONNECT;
 		goto cleanup;
 	}
 
@@ -654,9 +692,7 @@ static int attest_once(const char *server, int port, const char *ca_cert,
 
 	ret = net_recv_challenge(&net_ctx, &challenge);
 	if (ret < 0) {
-		if (verbose)
-			fprintf(stderr, "Failed to receive challenge: %s\n",
-				strerror(-ret));
+		stage = ATTEST_STAGE_CHALLENGE;
 		goto cleanup;
 	}
 
@@ -669,9 +705,7 @@ static int attest_once(const char *server, int port, const char *ca_cert,
 	ret = build_attestation_report(&challenge, &report,
 				       paths ? paths->aik_cert : NULL);
 	if (ret < 0) {
-		if (verbose)
-			fprintf(stderr, "Failed to build report: %s\n",
-				strerror(-ret));
+		stage = ATTEST_STAGE_BUILD_REPORT;
 		goto cleanup;
 	}
 
@@ -685,7 +719,7 @@ static int attest_once(const char *server, int port, const char *ca_cert,
 				fprintf(stderr,
 					"Warning: Failed to read TPM event "
 					"log: %s\n",
-					strerror(-ret));
+					attest_failure_reason(ret));
 			event_log_size = 0;
 		} else if (verbose) {
 			printf("TPM event log read (%zu bytes)\n",
@@ -707,9 +741,8 @@ static int attest_once(const char *server, int port, const char *ca_cert,
 		wire_buf_size = total;
 		wire_buf = malloc(total);
 		if (!wire_buf) {
-			fprintf(stderr,
-				"Failed to allocate serialization buffer\n");
 			ret = -ENOMEM;
+			stage = ATTEST_STAGE_SERIALIZE;
 			goto cleanup;
 		}
 
@@ -718,9 +751,8 @@ static int attest_once(const char *server, int port, const char *ca_cert,
 					     (uint32_t)event_log_size, &esrt,
 					     wire_buf, total);
 		if (wire_size < 0) {
-			fprintf(stderr, "Failed to serialize report: %s\n",
-				strerror((int)-wire_size));
 			ret = (int)wire_size;
+			stage = ATTEST_STAGE_SERIALIZE;
 			goto cleanup;
 		}
 	}
@@ -731,17 +763,13 @@ static int attest_once(const char *server, int port, const char *ca_cert,
 
 	ret = net_send_report(&net_ctx, wire_buf, (size_t)wire_size);
 	if (ret < 0) {
-		if (verbose)
-			fprintf(stderr, "Failed to send report: %s\n",
-				strerror(-ret));
+		stage = ATTEST_STAGE_SEND;
 		goto cleanup;
 	}
 
 	ret = net_recv_result(&net_ctx, &result);
 	if (ret < 0) {
-		if (verbose)
-			fprintf(stderr, "Failed to receive result: %s\n",
-				strerror(-ret));
+		stage = ATTEST_STAGE_RESULT;
 		goto cleanup;
 	}
 
@@ -753,9 +781,24 @@ static int attest_once(const char *server, int port, const char *ca_cert,
 		}
 	}
 
-	ret = (result.result == VERIFY_OK) ? 0 : 1;
+	if (result.result != VERIFY_OK) {
+		lota_err("Attestation round failed at %s: %s",
+			 attest_stage_str(ATTEST_STAGE_VERDICT),
+			 net_result_str(result.result));
+		ret = 1;
+		goto cleanup;
+	}
+	ret = 0;
 
 cleanup:
+	/*
+	 * Report where the round failed whatever the caller's narration setting:
+	 * the continuous loop runs with nobody reading its progress output,
+	 * so this is the only account of the failure it will ever get.
+	 */
+	if (ret < 0 && stage != ATTEST_STAGE_COUNT)
+		lota_err("Attestation round failed at %s: %s",
+			 attest_stage_str(stage), attest_failure_reason(ret));
 	OPENSSL_cleanse(&challenge, sizeof(challenge));
 	OPENSSL_cleanse(&result, sizeof(result));
 	OPENSSL_cleanse(&report, sizeof(report));
@@ -850,7 +893,7 @@ int do_attest(const char *server, int port, const char *ca_cert,
 		if (ret < 0) {
 			fprintf(stderr,
 				"Failed to bind the publisher profile: %s\n",
-				strerror(-ret));
+				tpm_strerror(ret));
 			tpm_cleanup(&g_agent.tpm_ctx);
 			net_cleanup();
 			return 1;
@@ -858,6 +901,7 @@ int do_attest(const char *server, int port, const char *ca_cert,
 	}
 
 	printf("Checking AIK...\n");
+	attest_warn_cert_orphaned(paths, paths ? paths->id : NULL);
 	ret = tpm_provision_aik(&g_agent.tpm_ctx);
 	if (ret < 0) {
 		fprintf(stderr, "Failed to provision AIK: %s\n",
@@ -868,12 +912,9 @@ int do_attest(const char *server, int port, const char *ca_cert,
 	}
 
 	/*
-	 * Self-measurement extends PCR14 with clockInfo captured through
-	 * the AIK signing path (see tpm_read_signed_clockinfo). AIK must
-	 * therefore be provisioned before this call or the agent will fall
-	 * back to Esys_ReadClock and produce a PCR14 value the verifier
-	 * cannot rederive on simulators that diverge between ReadClock and
-	 * Quote.clockInfo.
+	 * Self-measurement extends PCR14 with a commitment over the agent
+	 * binary alone: no key takes part, so the order below is about
+	 * the quote that follows rather than about the register.
 	 */
 	printf("Performing self-measurement...\n");
 	ret = self_measure(&g_agent.tpm_ctx);
@@ -987,12 +1028,10 @@ void publish_rotation_state(uint32_t aik_ttl, const struct profile_paths *paths)
 }
 
 /*
- * The loop's attestation tallies.
+ * The loop's attestation tallies, sent to the socket owner with each sync.
  *
- * They used to live on the IPC context this process served;
- * it serves none now, so they live here and travel to the socket owner with each sync.
- * File scope for the same reason g_agent is: one loop per process, and every writer
- * below is on its single thread.
+ * File scope for the same reason g_agent is: one loop per process,
+ * and every writer below runs on its single thread.
  */
 static struct attest_peer_counters g_attest_counters;
 
@@ -1002,6 +1041,69 @@ static uint64_t monotonic_ms(void)
 
 	clock_gettime(CLOCK_MONOTONIC, &ts);
 	return (uint64_t)ts.tv_sec * 1000 + (uint64_t)ts.tv_nsec / 1000000;
+}
+
+/*
+ * Is the key now at this profile's handle the key its certificate names?
+ *
+ * The handle, the auth beside it and the certificate are stored separately.
+ * If the key at the handle is replaced -- a TPM clear, or a default-path verb
+ * pointed at a handle a profile already owns -- the auth no longer opens it
+ * and the TPM refuses to sign.
+ * Each refusal spends a dictionary-attack attempt, every retry spends another,
+ * and the agent holds no lockoutAuth to clear the lockout they lead to.
+ *
+ * Reading the public area needs no authorization and spends no attempt,
+ * so the check runs before every quote.
+ */
+static int target_key_matches_cert(struct attest_target *t)
+{
+	uint8_t spki[LOTA_MAX_AIK_PUB_SIZE];
+	size_t spki_len = 0;
+	int ret;
+
+	if (!profile_aik_cert_stored(&t->paths))
+		return 0;
+
+	ret = tpm_get_aik_public(&g_agent.tpm_ctx, spki, sizeof(spki),
+				 &spki_len);
+	if (ret < 0) {
+		/*
+		 * The key could not be read at all.
+		 * Later steps report that themselves; refusing here would blame
+		 * the certificate.
+		 */
+		return 0;
+	}
+
+	ret = aik_cert_matches_key(t->paths.aik_cert, spki, spki_len);
+	if (ret == -EKEYREJECTED) {
+		if (!t->key_mismatch_announced) {
+			lota_err("The attestation key at this publisher's "
+				 "handle is not the key their certificate was "
+				 "issued over, so every quote would be refused "
+				 "by the TPM and each refusal spends a "
+				 "dictionary-attack attempt. No round is "
+				 "attempted until they issue a certificate for "
+				 "the key that is here now: lota-agent "
+				 "--reenroll --ca-cert <their anchor>. "
+				 "Publisher: %s",
+				 t->label);
+			t->key_mismatch_announced = true;
+		}
+		return ret;
+	}
+
+	/* any other error is an unreadable certificate; renewal reports it */
+	if (t->key_mismatch_announced) {
+		lota_info("The attestation key at this publisher's handle "
+			  "matches their certificate again; rounds resume. "
+			  "Publisher: %s",
+			  t->label);
+		t->key_mismatch_announced = false;
+	}
+
+	return 0;
 }
 
 /*
@@ -1019,9 +1121,11 @@ static int bind_target(struct attest_target *t)
 	ret = tpm_bind_profile(&g_agent.tpm_ctx, &t->paths);
 	if (ret < 0) {
 		lota_err("Cannot bind the publisher profile for %s: %s",
-			 t->label, strerror(-ret));
+			 t->label, tpm_strerror(ret));
 		return ret;
 	}
+
+	attest_warn_cert_orphaned(&t->paths, t->label);
 
 	ret = tpm_provision_aik(&g_agent.tpm_ctx);
 	if (ret < 0) {
@@ -1036,6 +1140,11 @@ static int bind_target(struct attest_target *t)
 			 tpm_strerror(ret));
 		return ret;
 	}
+
+	ret = target_key_matches_cert(t);
+	if (ret < 0)
+		return ret;
+
 	return 0;
 }
 
@@ -1179,7 +1288,8 @@ static void renew_target_cert_if_due(struct attest_target *t)
 	lota_info("AIK certificate renewal due for %s (%lld s left of %lld s)",
 		  t->label, (long long)remaining, (long long)total);
 
-	ret = enroll_renew_cert(&g_agent.tpm_ctx, &t->paths);
+	ret = enroll_renew_cert(&g_agent.tpm_ctx, &t->paths,
+				t->ca_cert[0] ? t->ca_cert : NULL);
 	if (ret == 0) {
 		t->renew_backoff = 0;
 		lota_info("AIK certificate renewed for %s", t->label);
@@ -1224,6 +1334,18 @@ static bool target_reporting_now(struct attest_target *t)
 	if (t->token_only)
 		return false;
 
+	/*
+	 * The end of a session is announced below.
+	 * A target that has never had one reports to nobody,
+	 * and a caller watching the loop has nothing to tell
+	 * that apart from a stall.
+	 */
+	if (attest_target_should_announce_wait(t))
+		lota_info("Nothing is reported to %s until a title of theirs "
+			  "runs; enrollment, key rotation and certificate "
+			  "renewal continue meanwhile",
+			  t->label);
+
 	if (t->attested) {
 		lota_info("No session left for %s; reporting stops until a "
 			  "title of theirs runs again",
@@ -1259,10 +1381,10 @@ static int attest_target_round(struct attest_target *t, int skip_verify,
 	 * who is playing.
 	 */
 	if (!enroll_target_if_needed(t)) {
-		/* Nothing to report with:
-		 * no certificate, so every verifier refuses.
-		 * Wait for the enrollment backoff instead of sending evidence
-		 * nobody can chain. */
+		/*
+		 * No certificate yet, so every verifier would refuse the evidence;
+		 * enrollment retries on its own backoff.
+		 */
 		t->attested = false;
 		t->valid_until = 0;
 		return t->interval;
@@ -1274,14 +1396,34 @@ static int attest_target_round(struct attest_target *t, int skip_verify,
 		renew_target_cert_if_due(t);
 	}
 
+	/*
+	 * A key the certificate does not name stays wrong on retry,
+	 * so no backoff: the target keeps its ordinary interval
+	 * and resumes once the profile is re-enrolled.
+	 */
+	if (ret == -EKEYREJECTED) {
+		t->attested = false;
+		t->valid_until = 0;
+		return t->interval;
+	}
+
 	if (!target_reporting_now(t))
 		return t->interval;
 
 	if (ret == 0) {
+		/*
+		 * The publisher's own pin answers for the publisher's own verifier.
+		 * @pin_sha256 is the single-verifier deployment's and is only
+		 * ever set when there are no profiles at all -- the configuration
+		 * and the command line both refuse it beside them -- so this is
+		 * a choice between two pins that never coexist.
+		 */
+		const uint8_t *pin = t->has_pin ? t->pin_sha256 : pin_sha256;
+
 		lota_dbg("Attestation round starting for %s", t->label);
 		ret = attest_once(t->server, t->port,
 				  t->ca_cert[0] ? t->ca_cert : NULL,
-				  skip_verify, pin_sha256,
+				  skip_verify, pin,
 				  t->has_profile ? &t->paths : NULL, 0);
 	}
 
@@ -1289,12 +1431,37 @@ static int attest_target_round(struct attest_target *t, int skip_verify,
 		lota_info("Attestation successful (%s)", t->label);
 		t->consecutive_failures = 0;
 		t->backoff_sec = 0;
+		t->auth_fail_announced = false;
 		t->last_success = now;
 		t->attested = true;
 		t->valid_until = (uint64_t)(now + t->interval +
 					    ATTEST_TOKEN_VALIDITY_SLACK_SEC);
 		g_attest_counters.attest_count++;
 		g_attest_counters.last_attest_time = (uint64_t)now;
+		return t->interval;
+	}
+
+	/*
+	 * A refused quote authorization stays refused on retry, and each retry
+	 * spends a dictionary-attack attempt.
+	 * The backoff would retry sooner than the ordinary interval,
+	 * so the target keeps that interval and reports the refusal once.
+	 */
+	if (ret == -LOTA_ERR_TPM_AUTH_FAIL) {
+		if (!t->auth_fail_announced) {
+			lota_err("The TPM refused to authorize a quote for "
+				 "%s. The attestation key or its stored "
+				 "authorization is not the one this publisher "
+				 "enrolled, and every retry spends a "
+				 "dictionary-attack attempt, so no round is "
+				 "attempted until this publisher is "
+				 "re-enrolled: lota-agent --reenroll "
+				 "--ca-cert <their anchor>.",
+				 t->label);
+			t->auth_fail_announced = true;
+		}
+		t->attested = false;
+		t->valid_until = 0;
 		return t->interval;
 	}
 
@@ -1371,38 +1538,11 @@ static void publish_aggregate_status(const struct attest_target *targets,
 		sdnotify_status("Attestation incomplete");
 }
 
-/*
- * Continuous attestation loop.
- * Re-attests every target on its own interval, with exponential backoff on failure.
- */
-int do_continuous_attest(const struct lota_config *cfg, const char *server,
-			 int port, const char *ca_cert, int skip_verify,
-			 const uint8_t *pin_sha256, int interval_sec,
-			 uint32_t aik_ttl)
+/* Who this host reports to, said once at startup and again after a reload,
+ * because a list that changed under the operator is a list worth restating */
+static void announce_targets(const struct attest_target *targets, size_t count)
 {
-	struct attest_target targets[LOTA_CONFIG_MAX_PROFILES];
-	struct attest_peer peer;
-	size_t target_count = 0;
-	uint32_t status_flags = 0;
-	uint64_t wd_usec = 0;
-	bool wd_enabled;
-	int ret;
-
-	lota_info("Continuous attestation starting");
-
-	attest_peer_init(&peer);
-
-	ret = attest_targets_build(cfg, server, port, ca_cert, interval_sec,
-				   targets,
-				   sizeof(targets) / sizeof(targets[0]),
-				   &target_count);
-	if (ret < 0) {
-		lota_err("Cannot build the attestation target list: %s",
-			 strerror(-ret));
-		return 1;
-	}
-
-	for (size_t i = 0; i < target_count; i++) {
+	for (size_t i = 0; i < count; i++) {
 		if (targets[i].token_only)
 			lota_info("Target %zu: %s -- nothing is reported to "
 				  "them; their backend verifies the tokens "
@@ -1437,10 +1577,83 @@ int do_continuous_attest(const struct lota_config *cfg, const char *server,
 	 * One that names none gets the first profile's token and the host-wide
 	 * verdict, which is every publisher agreeing.
 	 */
-	if (target_count > 1)
+	if (count > 1)
 		lota_info("A title that does not select a publisher is "
-			  "answered for %s:%d and with the host-wide verdict",
+			  "answered for %s:%d and with the host-wide verdict, "
+			  "but opens no session for them -- on a session-gated "
+			  "publisher it reads not-attested until a title that "
+			  "names one is running",
 			  targets[0].server, targets[0].port);
+}
+
+/*
+ * Whether each publisher's AIK certificate can be renewed without an operator.
+ *
+ * It is short-lived and would otherwise lapse a day after install.
+ * Enabled per publisher, whenever that profile recorded a CA endpoint at enroll
+ * time; manual --reenroll stays the fallback when no endpoint is on disk.
+ * Re-run after a reload, since a publisher added since has none of this resolved.
+ */
+static void resolve_auto_renew(struct attest_target *targets, size_t count)
+{
+	for (size_t i = 0; i < count; i++) {
+		struct enroll_state est;
+		bool was = targets[i].auto_renew;
+
+		targets[i].auto_renew =
+			targets[i].has_profile &&
+			enroll_state_load_path(targets[i].paths.enroll_state,
+					       &est) == 0;
+		if (targets[i].auto_renew == was && was)
+			continue;
+		if (targets[i].auto_renew)
+			lota_info("AIK certificate auto-renewal enabled for %s",
+				  targets[i].label);
+		else
+			lota_info(
+				"AIK certificate auto-renewal off for %s: no "
+				"recorded CA endpoint (run --enroll to record "
+				"one)",
+				targets[i].label);
+	}
+}
+
+/*
+ * The loop itself.
+ * @targets is the caller's array, LOTA_CONFIG_MAX_PROFILES long;
+ * do_continuous_attest owns it so that every exit below can keep the cleanup
+ * it already had.
+ * The list never outlives this call -- everything it is handed to reads it
+ * synchronously -- so it is the wrapper's to free.
+ */
+static int continuous_attest_run(const struct lota_config *cfg,
+				 const char *config_path, const char *server,
+				 int port, const char *ca_cert, int skip_verify,
+				 const uint8_t *pin_sha256, int interval_sec,
+				 uint32_t aik_ttl,
+				 struct attest_target *targets)
+{
+	struct attest_peer peer;
+	size_t target_count = 0;
+	uint32_t status_flags = 0;
+	uint64_t wd_usec = 0;
+	bool wd_enabled;
+	int ret;
+
+	lota_info("Continuous attestation starting");
+
+	attest_peer_init(&peer);
+
+	ret = attest_targets_build(cfg, server, port, ca_cert, interval_sec,
+				   targets, LOTA_CONFIG_MAX_PROFILES,
+				   &target_count);
+	if (ret < 0) {
+		lota_err("Cannot build the attestation target list: %s",
+			 strerror(-ret));
+		return 1;
+	}
+
+	announce_targets(targets, target_count);
 
 	/*
 	 * Long-running attestation loop: install tracer refusal and the
@@ -1487,7 +1700,7 @@ int do_continuous_attest(const struct lota_config *cfg, const char *server,
 		ret = tpm_bind_profile(&g_agent.tpm_ctx, &targets[0].paths);
 		if (ret < 0) {
 			lota_err("Failed to bind the publisher profile: %s",
-				 strerror(-ret));
+				 tpm_strerror(ret));
 			tpm_cleanup(&g_agent.tpm_ctx);
 			net_cleanup();
 			return 1;
@@ -1495,6 +1708,8 @@ int do_continuous_attest(const struct lota_config *cfg, const char *server,
 	}
 
 	lota_info("Checking AIK");
+	if (targets[0].has_profile)
+		attest_warn_cert_orphaned(&targets[0].paths, targets[0].label);
 	ret = tpm_provision_aik(&g_agent.tpm_ctx);
 	if (ret < 0) {
 		lota_err("Failed to provision AIK: %s", tpm_strerror(ret));
@@ -1504,12 +1719,10 @@ int do_continuous_attest(const struct lota_config *cfg, const char *server,
 	}
 
 	/*
-	 * Self-measurement extends PCR14 using clockInfo captured through
-	 * the AIK signing path (tpm_read_signed_clockinfo). Provision AIK
-	 * first so the signed-clock path is available; without it the
-	 * fallback to Esys_ReadClock can produce a PCR14 value the
-	 * verifier cannot rederive on simulators whose ReadClock and
-	 * Quote.clockInfo disagree.
+	 * Self-measurement extends PCR14 with a commitment over the agent
+	 * binary alone, so it needs no key and no counters.
+	 * The AIK is provisioned first because everything after it does:
+	 * the quote this round sends is signed with the publisher's key.
 	 */
 	lota_info("Performing self-measurement");
 	ret = self_measure(&g_agent.tpm_ctx);
@@ -1559,23 +1772,7 @@ int do_continuous_attest(const struct lota_config *cfg, const char *server,
 	 * at enroll time.
 	 * Manual --reenroll stays the fallback when no endpoint is on disk.
 	 */
-	for (size_t i = 0; i < target_count; i++) {
-		struct enroll_state est;
-
-		targets[i].auto_renew =
-			targets[i].has_profile &&
-			enroll_state_load_path(targets[i].paths.enroll_state,
-					       &est) == 0;
-		if (targets[i].auto_renew)
-			lota_info("AIK certificate auto-renewal enabled for %s",
-				  targets[i].label);
-		else
-			lota_info(
-				"AIK certificate auto-renewal off for %s: no "
-				"recorded CA endpoint (run --enroll to record "
-				"one)",
-				targets[i].label);
-	}
+	resolve_auto_renew(targets, target_count);
 
 	sdnotify_ready();
 	lota_info("Starting attestation loop");
@@ -1583,6 +1780,45 @@ int do_continuous_attest(const struct lota_config *cfg, const char *server,
 	while (g_agent.running) {
 		uint64_t now_ms = monotonic_ms();
 		uint64_t wake_ms = 0;
+
+		/*
+		 * A publisher registered while this host runs -- which is what
+		 * a game's installer does -- is reported to from here on,
+		 * without the restart that would spend a boot's PCR 14 commitment
+		 * to pick it up.
+		 */
+		if (daemon_reload_taken()) {
+			size_t before = target_count;
+			int rret = attest_targets_reload(
+				config_path, server, port, ca_cert,
+				interval_sec, targets, LOTA_CONFIG_MAX_PROFILES,
+				&target_count);
+
+			if (rret < 0) {
+				lota_warn("Reload failed (%s); still reporting "
+					  "to the %zu publisher(s) this loop "
+					  "started with",
+					  strerror(-rret), before);
+			} else {
+				lota_info("Publisher list reloaded: %zu "
+					  "target(s)",
+					  target_count);
+				announce_targets(targets, target_count);
+				resolve_auto_renew(targets, target_count);
+				/*
+				 * A token is answered with the first publisher's
+				 * AIK, and the reload may have changed which
+				 * publisher that is.
+				 */
+				if (target_count > 0 &&
+				    targets[0].has_profile &&
+				    bind_target(&targets[0]) < 0)
+					lota_warn("Tokens will keep the "
+						  "previous publisher's AIK "
+						  "until the next round");
+			}
+			now_ms = monotonic_ms();
+		}
 
 		/*
 		 * Every target that has come due, then the earliest deadline left.
@@ -1640,6 +1876,11 @@ int do_continuous_attest(const struct lota_config *cfg, const char *server,
 			int timeout_ms;
 
 			if (current_ms >= wake_ms)
+				break;
+
+			/* a reload waits at most until the next pass,
+			 * not until the next round */
+			if (daemon_reload_pending())
 				break;
 
 			/*
@@ -1712,4 +1953,42 @@ int do_continuous_attest(const struct lota_config *cfg, const char *server,
 	tpm_cleanup(&g_agent.tpm_ctx);
 	net_cleanup();
 	return 0;
+}
+
+/*
+ * Continuous attestation loop.
+ * Re-attests every target on its own interval, with exponential backoff on failure.
+ *
+ * The target list is 8 entries of 29648 bytes, so it is allocated, not held
+ * in a frame.
+ * It lives here, outside the loop, because the loop has 9 exits with 3 different
+ * amounts of unwinding behind them.
+ * 1 owner, 1 free, and the loop keeps the cleanup it already had.
+ */
+int do_continuous_attest(const struct lota_config *cfg, const char *config_path,
+			 const char *server, int port, const char *ca_cert,
+			 int skip_verify, const uint8_t *pin_sha256,
+			 int interval_sec, uint32_t aik_ttl)
+{
+	struct attest_target *targets;
+	int ret;
+
+	targets = calloc(LOTA_CONFIG_MAX_PROFILES, sizeof(*targets));
+	if (!targets) {
+		lota_err("Cannot allocate the attestation target list");
+		return 1;
+	}
+
+	/*
+	 * The packaged unit runs `lota-agent --attest` with no --config,
+	 * so the path is only ever explicit when an operator names one.
+	 * Resolve it here: a reload has to know which file to re-read,
+	 * and "the default one" is an answer the loop cannot act on.
+	 */
+	ret = continuous_attest_run(
+		cfg, config_path ? config_path : LOTA_CONFIG_DEFAULT_PATH,
+		server, port, ca_cert, skip_verify, pin_sha256, interval_sec,
+		aik_ttl, targets);
+	free(targets);
+	return ret;
 }

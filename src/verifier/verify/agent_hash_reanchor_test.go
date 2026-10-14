@@ -31,7 +31,7 @@ func TestAgentHashDecision_AllowsBlessedBuild(t *testing.T) {
 	now := time.Now()
 	allowed := []string{testAgentHashHex(0xAA), testAgentHashHex(0xBB)}
 
-	got := agentHashDecision(testAgentHash(0xBB), allowed, time.Time{}, now)
+	got, _ := agentHashDecision(testAgentHash(0xBB), allowed, time.Time{}, now)
 	if got != AgentHashRepin {
 		t.Fatalf("expected %v, got %v", AgentHashRepin, got)
 	}
@@ -41,12 +41,12 @@ func TestAgentHashDecision_AllowsBlessedBuild(t *testing.T) {
 // nobody has said which agent builds are trusted,
 // so the TOFU pin is the only such statement and it stands.
 func TestAgentHashDecision_EscalatesWithoutAllowList(t *testing.T) {
-	got := agentHashDecision(testAgentHash(0xBB), nil, time.Time{}, time.Now())
+	got, _ := agentHashDecision(testAgentHash(0xBB), nil, time.Time{}, time.Now())
 	if got != AgentHashEscalate {
 		t.Fatalf("expected %v, got %v", AgentHashEscalate, got)
 	}
 
-	got = agentHashDecision(testAgentHash(0xBB), []string{}, time.Time{}, time.Now())
+	got, _ = agentHashDecision(testAgentHash(0xBB), []string{}, time.Time{}, time.Now())
 	if got != AgentHashEscalate {
 		t.Fatalf("empty slice: expected %v, got %v", AgentHashEscalate, got)
 	}
@@ -56,7 +56,7 @@ func TestAgentHashDecision_EscalatesWithoutAllowList(t *testing.T) {
 func TestAgentHashDecision_EscalatesUnlistedHash(t *testing.T) {
 	allowed := []string{testAgentHashHex(0xAA)}
 
-	got := agentHashDecision(testAgentHash(0xCC), allowed, time.Time{}, time.Now())
+	got, _ := agentHashDecision(testAgentHash(0xCC), allowed, time.Time{}, time.Now())
 	if got != AgentHashEscalate {
 		t.Fatalf("expected %v, got %v", AgentHashEscalate, got)
 	}
@@ -68,12 +68,12 @@ func TestAgentHashDecision_RateLimitsRepeatedRepins(t *testing.T) {
 	reported := testAgentHash(0xBB)
 
 	recent := now.Add(-AgentHashRepinMinInterval + time.Minute)
-	if got := agentHashDecision(reported, allowed, recent, now); got != AgentHashEscalate {
+	if got, _ := agentHashDecision(reported, allowed, recent, now); got != AgentHashEscalate {
 		t.Fatalf("inside the window: expected %v, got %v", AgentHashEscalate, got)
 	}
 
 	elapsed := now.Add(-AgentHashRepinMinInterval - time.Minute)
-	if got := agentHashDecision(reported, allowed, elapsed, now); got != AgentHashRepin {
+	if got, _ := agentHashDecision(reported, allowed, elapsed, now); got != AgentHashRepin {
 		t.Fatalf("past the window: expected %v, got %v", AgentHashRepin, got)
 	}
 }
@@ -111,8 +111,8 @@ func TestAgentHashAllowed_ComparesLowerCaseHex(t *testing.T) {
 	}
 
 	// and the discriminator must inherit exactly that
-	if agentHashDecision(reported, []string{strings.ToUpper(lower)},
-		time.Time{}, time.Now()) != AgentHashEscalate {
+	if got, _ := agentHashDecision(reported, []string{strings.ToUpper(lower)},
+		time.Time{}, time.Now()); got != AgentHashEscalate {
 		t.Fatal("discriminator accepted what the predicate rejects")
 	}
 }

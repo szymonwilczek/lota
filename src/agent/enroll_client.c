@@ -13,12 +13,14 @@
 #include <limits.h>
 #include <openssl/crypto.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
 #include <stdint.h>
 #include <sys/types.h>
 
 #include "agent.h"
+#include "aik_cert.h"
 #include "enroll.h"
 #include "net.h"
 #include "profile.h"
@@ -128,8 +130,12 @@ int enroll_to_ca(struct tpm_context *tpm, const char *server, int port,
 	size_t ek_len = 0;
 	uint8_t aik_pub[LOTA_ENROLL_MAX_AIK_PUBLIC];
 	size_t aik_len = 0;
-	uint8_t body[LOTA_ENROLL_MAX_FRAME];
-	uint8_t rbuf[LOTA_ENROLL_MAX_FRAME];
+	uint8_t *body = NULL;
+	uint8_t *rbuf = NULL;
+	uint8_t *ek_chain_blob = NULL;
+	size_t ek_chain_blob_len = 0;
+	struct enroll_cert_ref ek_chain[LOTA_ENROLL_MAX_EK_CHAIN_CERTS];
+	size_t ek_chain_len = 0;
 	uint8_t secret[LOTA_ENROLL_MAX_SECRET];
 	size_t secret_len = 0;
 	size_t rlen = 0;
@@ -143,19 +149,47 @@ int enroll_to_ca(struct tpm_context *tpm, const char *server, int port,
 
 	memset(secret, 0, sizeof(secret));
 
+	body = malloc(LOTA_ENROLL_MAX_FRAME);
+	rbuf = malloc(LOTA_ENROLL_MAX_FRAME);
+	ek_chain_blob = malloc(LOTA_ENROLL_MAX_EK_CHAIN_BYTES);
+	if (!body || !rbuf || !ek_chain_blob) {
+		fprintf(stderr, "Failed to allocate the enrollment buffers\n");
+		ret = -ENOMEM;
+		goto out;
+	}
+
 	ret = tpm_get_ek_cert(tpm, ek_cert, sizeof(ek_cert), &ek_len);
 	if (ret < 0) {
 		fprintf(stderr,
 			"EK certificate unavailable; the CA cannot anchor "
 			"this TPM: %s\n",
-			strerror(-ret));
-		return ret;
+			tpm_strerror(ret));
+		goto out;
 	}
+
+	/*
+	 * Manufacturer intermediates, where the platform keeps them.
+	 * A TPM whose EK certificate is issued directly by a published root
+	 * stores none, and one that does store them is the only party that
+	 * has them -- so this is presented when it exists and passed over
+	 * when it does not.
+	 */
+	ret = tpm_get_ek_cert_chain(tpm, ek_chain_blob,
+				    LOTA_ENROLL_MAX_EK_CHAIN_BYTES,
+				    &ek_chain_blob_len);
+	if (ret == 0)
+		enroll_split_cert_chain(ek_chain_blob, ek_chain_blob_len,
+					ek_chain,
+					LOTA_ENROLL_MAX_EK_CHAIN_CERTS,
+					&ek_chain_len);
+	printf("EK certificate chain: %zu manufacturer intermediate(s) from the TPM\n",
+	       ek_chain_len);
+
 	ret = tpm_get_aik_tpmt_public(tpm, aik_pub, sizeof(aik_pub), &aik_len);
 	if (ret < 0) {
 		fprintf(stderr, "AIK public area unavailable: %s\n",
-			strerror(-ret));
-		return ret;
+			tpm_strerror(ret));
+		goto out;
 	}
 
 	memset(&net, 0, sizeof(net));
@@ -177,9 +211,11 @@ int enroll_to_ca(struct tpm_context *tpm, const char *server, int port,
 		goto out;
 	}
 
-	blen = enroll_encode_begin(body, sizeof(body), ek_cert, ek_len, aik_pub,
-				   aik_len, (const uint8_t *)token,
-				   token ? strlen(token) : 0);
+	blen = enroll_encode_begin(body, LOTA_ENROLL_MAX_FRAME, ek_cert, ek_len,
+				   aik_pub, aik_len, (const uint8_t *)token,
+				   token ? strlen(token) : 0,
+				   ek_chain_len ? ek_chain : NULL,
+				   ek_chain_len);
 	if (blen < 0) {
 		ret = (int)blen;
 		fprintf(stderr, "Failed to encode the enrollment request: %s\n",
@@ -194,7 +230,7 @@ int enroll_to_ca(struct tpm_context *tpm, const char *server, int port,
 		goto out;
 	}
 
-	ret = recv_frame(&net, rbuf, sizeof(rbuf), &rlen);
+	ret = recv_frame(&net, rbuf, LOTA_ENROLL_MAX_FRAME, &rlen);
 	if (ret < 0) {
 		fprintf(stderr,
 			"No challenge received from the CA (connection "
@@ -209,18 +245,23 @@ int enroll_to_ca(struct tpm_context *tpm, const char *server, int port,
 		goto out;
 	}
 	if (ch.status != LOTA_ENROLL_STATUS_OK) {
-		if (ch.status == LOTA_ENROLL_STATUS_TOKEN_REJECTED)
-			fprintf(stderr,
-				"CA rejected the enrollment token (status "
-				"%u). Check the token file against the "
-				"CA's configured token set%s.\n",
-				ch.status,
-				token ? "" :
-					"; this CA requires --enroll-token-file");
-		else
+		const char *why = lota_enroll_status_text(ch.status);
+
+		if (why)
 			fprintf(stderr,
 				"CA refused enrollment at challenge (status "
-				"%u)\n",
+				"%u): %s%s.\n",
+				ch.status, why,
+				(ch.status ==
+					 LOTA_ENROLL_STATUS_TOKEN_REJECTED &&
+				 !token) ?
+					"; this CA requires --enroll-token-file" :
+					"");
+		else
+			fprintf(stderr,
+				"CA refused enrollment at challenge with "
+				"status %u, which this agent has no name for; "
+				"the CA is newer than this build.\n",
 				ch.status);
 		ret = -EACCES;
 		goto out;
@@ -231,18 +272,18 @@ int enroll_to_ca(struct tpm_context *tpm, const char *server, int port,
 				      sizeof(secret), &secret_len);
 	if (ret < 0) {
 		fprintf(stderr, "Credential activation failed: %s\n",
-			strerror(-ret));
+			tpm_strerror(ret));
 		goto out;
 	}
 
-	blen = enroll_encode_complete(body, sizeof(body), ch.session_id, secret,
-				      secret_len);
+	blen = enroll_encode_complete(body, LOTA_ENROLL_MAX_FRAME,
+				      ch.session_id, secret, secret_len);
 	OPENSSL_cleanse(secret, sizeof(secret));
 	if (blen < 0) {
 		ret = (int)blen;
 		fprintf(stderr,
 			"Failed to encode the credential response: %s\n",
-			strerror(-ret));
+			tpm_strerror(ret));
 		goto out;
 	}
 	ret = send_frame(&net, body, (size_t)blen);
@@ -253,7 +294,7 @@ int enroll_to_ca(struct tpm_context *tpm, const char *server, int port,
 		goto out;
 	}
 
-	ret = recv_frame(&net, rbuf, sizeof(rbuf), &rlen);
+	ret = recv_frame(&net, rbuf, LOTA_ENROLL_MAX_FRAME, &rlen);
 	if (ret < 0) {
 		fprintf(stderr,
 			"No completion response from the CA (connection "
@@ -269,9 +310,19 @@ int enroll_to_ca(struct tpm_context *tpm, const char *server, int port,
 		goto out;
 	}
 	if (res.status != LOTA_ENROLL_STATUS_OK) {
-		fprintf(stderr,
-			"CA refused enrollment at completion (status %u)\n",
-			res.status);
+		const char *why = lota_enroll_status_text(res.status);
+
+		if (why)
+			fprintf(stderr,
+				"CA refused enrollment at completion (status "
+				"%u): %s.\n",
+				res.status, why);
+		else
+			fprintf(stderr,
+				"CA refused enrollment at completion with "
+				"status %u, which this agent has no name for; "
+				"the CA is newer than this build.\n",
+				res.status);
 		ret = -EACCES;
 		goto out;
 	}
@@ -290,6 +341,11 @@ int enroll_to_ca(struct tpm_context *tpm, const char *server, int port,
 
 out:
 	OPENSSL_cleanse(secret, sizeof(secret));
+	if (body)
+		OPENSSL_cleanse(body, LOTA_ENROLL_MAX_FRAME);
+	free(body);
+	free(rbuf);
+	free(ek_chain_blob);
 	if (net_inited)
 		net_context_cleanup(&net);
 	return ret;
@@ -331,6 +387,92 @@ static void persist_enroll_state(const struct profile_paths *paths,
 			"--reenroll will need the CA endpoint again\n",
 			paths->enroll_state);
 	OPENSSL_cleanse(&st, sizeof(st));
+}
+
+/*
+ * Forget the handle a profile reserved for a key that never reached the TPM.
+ *
+ * Binding a profile records the key's handle before the key is created,
+ * and both --list-publishers and the count of keys held against the TPM's
+ * capacity read that record. The record is dropped only when the TPM holds
+ * nothing at the handle: a failure after the key is in place (a certificate
+ * that would not issue, say) keeps it.
+ */
+static void release_unfilled_handle(struct tpm_context *tpm,
+				    const struct profile_paths *paths)
+{
+	uint32_t handle = 0;
+
+	if (profile_aik_handle_load(paths, &handle) != 0)
+		return;
+
+	if (tpm_handle_holds_object(tpm, handle) != 0)
+		return;
+
+	profile_aik_handle_forget(paths);
+}
+
+/*
+ * Say that the TPM is full, in the terms the player can act in.
+ *
+ * The machine is not broken and the limit is not LOTA's to raise:
+ * every publisher's attestation key takes one persistent slot, a firmware TPM
+ * has few of them, and other software may hold some.
+ * Counting them is what turns "your TPM has no room" into a number and a way out,
+ * so the numbers come from the TPM and the profile inventory.
+ * Neither is essential to the message, so a TPM that will not answer for its
+ * capacity still produces the sentence and the two verbs.
+ */
+static void report_no_room_for_a_key(struct tpm_context *tpm)
+{
+	struct publisher_entry entries[LOTA_PROFILE_MAX_AIK_HANDLES];
+	uint32_t used = 0;
+	uint32_t total = 0;
+	size_t count = 0;
+	size_t held = 0;
+
+	fprintf(stderr, "This TPM has no room for another attestation key.\n");
+
+	if (tpm_persistent_slots(tpm, &used, &total) == 0) {
+		if (used >= total)
+			fprintf(stderr,
+				"It holds %u persistent objects, which is "
+				"every one it has room for.\n",
+				used);
+		else
+			fprintf(stderr,
+				"It holds %u persistent object%s and has room "
+				"for about %u.\n",
+				used, used == 1 ? "" : "s", total);
+	}
+
+	if (publishers_list(LOTA_PROFILE_BASE_DIR, entries,
+			    sizeof(entries) / sizeof(entries[0]), &count) == 0)
+		held = publishers_keys_held(entries, count);
+
+	if (held == 1)
+		fprintf(stderr,
+			"One of them is an attestation key this machine put "
+			"there. Taking that publisher back frees its slot:\n"
+			"  lota-agent --list-publishers\n"
+			"  lota-agent --forget-publisher <id>\n");
+	else if (held > 1)
+		fprintf(stderr,
+			"%zu of them are attestation keys this machine put "
+			"there, one for each publisher it answers to. Taking "
+			"one back frees its slot:\n"
+			"  lota-agent --list-publishers\n"
+			"  lota-agent --forget-publisher <id>\n",
+			held);
+	else
+		fprintf(stderr,
+			"None of them is this machine's: every slot belongs to "
+			"other software, and freeing one is that software's to "
+			"do.\n"
+			"  lota-agent --list-publishers\n");
+
+	fprintf(stderr,
+		"This publisher holds no key here, so nothing was enrolled.\n");
 }
 
 /*
@@ -377,17 +519,31 @@ static int run_enrollment(const struct profile_paths *paths, const char *server,
 				"No TPM persistent handle left for another "
 				"publisher: %s\n" :
 				"Failed to bind the publisher profile: %s\n",
-			strerror(-ret));
+			tpm_strerror(ret));
 		tpm_cleanup(&g_agent.tpm_ctx);
 		net_cleanup();
 		return ret;
 	}
 
 	printf("Checking AIK...\n");
+
+	/* this is the command that comes back with a certificate */
+	if (tpm_aik_load_metadata(&g_agent.tpm_ctx) == 0 &&
+	    tpm_aik_replacing_shared_key(&g_agent.tpm_ctx,
+					 tpm_aik_key_present(&g_agent.tpm_ctx)))
+		printf("Replacing the attestation key this publisher shares "
+		       "with every other one enrolled here.\n");
+
+	tpm_aik_allow_shared_key_replace(&g_agent.tpm_ctx, true);
 	ret = tpm_provision_aik(&g_agent.tpm_ctx);
+	tpm_aik_allow_shared_key_replace(&g_agent.tpm_ctx, false);
 	if (ret < 0) {
-		fprintf(stderr, "Failed to provision AIK: %s\n",
-			tpm_strerror(ret));
+		release_unfilled_handle(&g_agent.tpm_ctx, paths);
+		if (ret == -ENOSPC)
+			report_no_room_for_a_key(&g_agent.tpm_ctx);
+		else
+			fprintf(stderr, "Failed to provision AIK: %s\n",
+				tpm_strerror(ret));
 		tpm_cleanup(&g_agent.tpm_ctx);
 		net_cleanup();
 		return ret;
@@ -427,10 +583,32 @@ static int resolve_profile(const char *ca_cert, struct profile_paths *paths)
 	}
 
 	ret = profile_paths_from_anchor(ca_cert, paths);
-	if (ret < 0)
+	if (ret < 0) {
 		fprintf(stderr, "Failed to read the CA trust anchor %s: %s\n",
 			ca_cert, strerror(-ret));
-	return ret;
+		return ret;
+	}
+
+	/*
+	 * The anchor is also this publisher's identity, so naming a certificate
+	 * that is meant to rotate spends the identity with it.
+	 * Not refused: a self-signed leaf is a legitimate pin, and nothing in
+	 * the file says whether that is what somebody meant.
+	 * Said once, where the decision is being made.
+	 */
+	if (profile_anchor_is_ca(ca_cert) == 0)
+		fprintf(stderr,
+			"Warning: %s is not a CA certificate, so this "
+			"publisher's identity on this host is pinned to it.\n"
+			"If it is the server's TLS certificate, re-issuing it "
+			"with a new key makes this host a new device to that "
+			"publisher: a new profile, a new attestation key in a "
+			"new TPM slot, and consent asked again.\n"
+			"Name the CA certificate that signs it instead, if "
+			"there is one.\n",
+			ca_cert);
+
+	return 0;
 }
 
 int do_enroll(const char *server, int port, const char *ca_cert,
@@ -573,7 +751,12 @@ int do_allow_publisher(const char *profile_id)
 
 	printf("Publisher %s may now enroll with this machine.\n", paths.id);
 	printf("They will hold one attestation key here, unlinkable to the "
-	       "one any other publisher holds.\n");
+	       "one any other\npublisher holds.\n");
+	printf("If they run a verifier, they also receive this host's boot "
+	       "evidence, which\nis the same evidence every other such "
+	       "publisher receives -- comparing it\ntells them they are "
+	       "looking at one machine. Take it back at any time with:\n");
+	printf("  lota-agent --forget-publisher %s\n", paths.id);
 	return 0;
 }
 
@@ -622,6 +805,17 @@ int do_add_publisher(const char *config_path, const char *name,
 		return 1;
 	}
 
+	/* Same warning as the enrollment path: this is the other place
+	 * a publisher's identity is chosen from a file somebody named. */
+	if (profile_anchor_is_ca(ca_cert) == 0)
+		fprintf(stderr,
+			"Warning: %s is not a CA certificate, so this "
+			"publisher's identity on this host is pinned to it. "
+			"If it is the server's TLS certificate, re-issuing it "
+			"with a new key makes this host a new device to that "
+			"publisher.\n",
+			ca_cert);
+
 	/*
 	 * Text-level check in the writer compares anchor paths, which misses
 	 * the same key reached by a second path -- copied PEM, symlink,
@@ -630,46 +824,83 @@ int do_add_publisher(const char *config_path, const char *name,
 	 * that against what the file configures before adding anything.
 	 */
 	{
-		struct lota_config existing;
+		struct lota_config *existing = config_new();
+		struct profile_paths *other = malloc(sizeof(*other));
+		bool already_configured = false;
 		int i;
 
-		config_init(&existing);
-		if (config_load(&existing,
+		if (!existing || !other) {
+			fprintf(stderr, "Failed to allocate configuration\n");
+			config_free(existing);
+			free(other);
+			return 1;
+		}
+
+		if (config_load(existing,
 				config_path ? config_path :
 					      LOTA_CONFIG_DEFAULT_PATH) == 0) {
-			for (i = 0; i < existing.profile_count; i++) {
-				struct profile_paths other;
-
+			for (i = 0; i < existing->profile_count; i++) {
 				if (profile_paths_from_anchor(
-					    existing.profiles[i].ca_cert,
-					    &other) < 0)
+					    existing->profiles[i].ca_cert,
+					    other) < 0)
 					continue;
-				if (strcmp(other.id, paths.id) != 0)
+				if (strcmp(other->id, paths.id) != 0)
 					continue;
 
 				printf("Publisher %s is already configured as "
 				       "\"%s\"; nothing to do.\n",
-				       paths.id, existing.profiles[i].name);
-				return 0;
+				       paths.id, existing->profiles[i].name);
+				already_configured = true;
+				break;
 			}
 		}
+
+		config_free(existing);
+		free(other);
+		if (already_configured)
+			return 0;
 	}
 
 	memset(&p, 0, sizeof(p));
 	/* Identity is 64 hex characters and the label field is shorter,
 	 * so unnamed publisher is labelled by a readable prefix of it rather
 	 * than a silently cut one */
-	if (name && name[0])
+	if (name && name[0]) {
+		/*
+		 * checked before the copy, because the copy is what would hide it:
+		 * a label longer than the field is a label the operator would
+		 * never see again, silently shortened into one that may already
+		 * belong to another publisher
+		 */
+		char why[160];
+
+		if (config_profile_name_defect(name, why, sizeof(why))) {
+			fprintf(stderr,
+				"ERROR: the label given to --publisher-name "
+				"%s.\nNothing was written.\n",
+				why);
+			return 1;
+		}
 		snprintf(p.name, sizeof(p.name), "%s", name);
-	else
+	} else
 		snprintf(p.name, sizeof(p.name), "publisher-%.16s", paths.id);
 	snprintf(p.ca, sizeof(p.ca), "%s", ca_server);
 	p.ca_port = ca_port > 0 ? ca_port : LOTA_DEFAULT_CA_PORT;
 	snprintf(p.ca_cert, sizeof(p.ca_cert), "%s", ca_cert);
-	if (verifier && verifier[0])
+	/*
+	 * No verifier named is the publisher who runs none:
+	 * their backend checks the tokens their titles fetch and nothing is
+	 * reported from this machine.
+	 * The port goes with the verifier, since a port for a verifier declared
+	 * absent is a contradiction the parser refuses.
+	 */
+	p.token_only = !(verifier && verifier[0]);
+	if (!p.token_only) {
 		snprintf(p.verifier, sizeof(p.verifier), "%s", verifier);
-	p.verifier_port = verifier_port > 0 ? verifier_port :
-					      LOTA_DEFAULT_VERIFIER_PORT;
+		p.verifier_port = verifier_port > 0 ?
+					  verifier_port :
+					  LOTA_DEFAULT_VERIFIER_PORT;
+	}
 	p.attest_interval = interval;
 	p.session_gated = session_gated;
 
@@ -680,11 +911,23 @@ int do_add_publisher(const char *config_path, const char *name,
 		printf("Publisher %s added to %s as \"%s\".\n", paths.id,
 		       config_path ? config_path : LOTA_CONFIG_DEFAULT_PATH,
 		       p.name);
+		/* Which of the two arrangements was written,
+		 * since the difference is whether anything leaves this machine */
+		if (p.token_only)
+			printf("They run no verifier, so nothing is reported "
+			       "from this machine: their\nbackend checks the "
+			       "tokens their titles fetch. Name one with "
+			       "--server\nif that is wrong.\n");
+		else
+			printf("Reports go to %s:%d, signed with the key this "
+			       "publisher holds here.\n",
+			       p.verifier, p.verifier_port);
 		printf("Nothing enrols with them until somebody at this "
 		       "machine agrees:\n");
 		printf("  lota-agent --allow-publisher %s\n", paths.id);
-		printf("A running agent picks the publisher up on reload:\n");
-		printf("  systemctl reload lota-agent\n");
+		printf("A running host picks the publisher up on reload:\n");
+		printf("  systemctl try-reload-or-restart lota-agent "
+		       "lota-attest\n");
 		return 0;
 	case 0:
 		printf("Publisher %s is already configured as \"%s\"; "
@@ -697,6 +940,20 @@ int do_add_publisher(const char *config_path, const char *name,
 			"as \"%s\". Pass --publisher-name to choose another "
 			"label.\n",
 			p.name);
+		return 1;
+	case -EBADMSG:
+		fprintf(stderr,
+			"ERROR: nothing was written. %s does not parse as it "
+			"stands, so adding to it would leave a host with no "
+			"configuration. Repair the file -- 'lota-agent "
+			"--dump-config' names the line -- and run this again.\n",
+			config_path ? config_path : LOTA_CONFIG_DEFAULT_PATH);
+		return 1;
+	case -EILSEQ:
+		fprintf(stderr,
+			"ERROR: nothing was written. Pass --publisher-name "
+			"with a label the configuration can hold, or correct "
+			"the value the writer named above.\n");
 		return 1;
 	case -E2BIG:
 		fprintf(stderr,
@@ -713,7 +970,57 @@ int do_add_publisher(const char *config_path, const char *name,
 	}
 }
 
-static void print_publisher(const struct publisher_entry *e)
+/*
+ * Whether the key at a publisher's handle is still the key its certificate
+ * names, for the one surface an operator checks first.
+ *
+ * Everything else this listing prints -- the consent, the enrollment, the handle,
+ * the certificate's validity -- survives the key at that handle being replaced,
+ * so a publisher whose evidence the TPM will refuse to sign reads exactly like
+ * a healthy one. The answer costs a TPM_ReadPublic, which needs no authorization
+ * and spends no dictionary-attack attempt.
+ *
+ * UNKNOWN is the honest answer whenever the question could not be put:
+ * no certificate, no key, or a TPM that would not open. It prints nothing,
+ * since the listing already says which of those it is.
+ */
+enum publisher_key_status {
+	PUBLISHER_KEY_UNKNOWN = 0,
+	PUBLISHER_KEY_MATCHES,
+	PUBLISHER_KEY_MISMATCH,
+};
+
+static enum publisher_key_status publisher_key_status(const char *id)
+{
+	struct profile_paths paths;
+	uint8_t spki[LOTA_MAX_AIK_PUB_SIZE];
+	size_t spki_len = 0;
+
+	if (paths_from_id(id, &paths) < 0)
+		return PUBLISHER_KEY_UNKNOWN;
+
+	if (tpm_bind_profile(&g_agent.tpm_ctx, &paths) < 0)
+		return PUBLISHER_KEY_UNKNOWN;
+
+	if (tpm_aik_load_metadata(&g_agent.tpm_ctx) < 0)
+		return PUBLISHER_KEY_UNKNOWN;
+
+	if (tpm_get_aik_public(&g_agent.tpm_ctx, spki, sizeof(spki),
+			       &spki_len) < 0)
+		return PUBLISHER_KEY_UNKNOWN;
+
+	switch (aik_cert_matches_key(paths.aik_cert, spki, spki_len)) {
+	case 0:
+		return PUBLISHER_KEY_MATCHES;
+	case -EKEYREJECTED:
+		return PUBLISHER_KEY_MISMATCH;
+	default:
+		return PUBLISHER_KEY_UNKNOWN;
+	}
+}
+
+static void print_publisher(const struct publisher_entry *e,
+			    enum publisher_key_status key_status)
 {
 	printf("%s\n", e->id);
 
@@ -744,6 +1051,69 @@ static void print_publisher(const struct publisher_entry *e)
 		       (long long)e->cert_remaining_sec);
 	else
 		printf("  certificate    none stored\n");
+
+	/*
+	 * Whether the authorization that opens this key is on disk in the clear.
+	 * It is the question at-rest sealing exists to answer: the sealing verb
+	 * reports what it attempted, this line reports what it stored.
+	 */
+	{
+		struct profile_paths paths;
+		enum profile_aik_auth_state st = PROFILE_AIK_AUTH_NONE;
+
+		if (paths_from_id(e->id, &paths) == 0)
+			st = profile_aik_auth_state(&paths);
+
+		printf("  key auth       %s\n", profile_aik_auth_state_str(st));
+	}
+
+	if (key_status == PUBLISHER_KEY_MISMATCH)
+		printf("  BROKEN         the key at that handle is not the "
+		       "key this certificate\n                 was issued "
+		       "over, so every quote is refused. Re-enroll this\n"
+		       "                 publisher: lota-agent --reenroll "
+		       "--ca-cert <their anchor>\n");
+}
+
+/*
+ * What this machine has room for, said before it runs out.
+ *
+ * The 17th title a player buys is the one that finds the ceiling.
+ * The TPM is asked: LOTA's own maximum is a constant, but the binding number
+ * is how many persistent objects this chip holds, which is smaller on firmware
+ * TPMs and shared with whatever else persists keys here.
+ *
+ * A TPM that is not there, or does not answer for its capacity, costs the line
+ * and nothing else -- reading the inventory is deliberately not a TPM operation.
+ */
+static void print_key_capacity(const struct publisher_entry *entries,
+			       size_t count)
+{
+	size_t held = publishers_keys_held(entries, count);
+	uint32_t used = 0;
+	uint32_t total = 0;
+	bool have_slots = false;
+
+	if (tpm_init(&g_agent.tpm_ctx) == 0) {
+		have_slots = tpm_persistent_slots(&g_agent.tpm_ctx, &used,
+						  &total) == 0;
+		tpm_cleanup(&g_agent.tpm_ctx);
+	}
+
+	printf("Attestation keys: %zu held, one per publisher enrolled with.\n",
+	       held);
+	if (have_slots)
+		printf("This TPM holds %u persistent object%s of about %u, and "
+		       "each key needs one;\nthis build answers to at most %d "
+		       "publishers.\n",
+		       used, used == 1 ? "" : "s", total,
+		       LOTA_PROFILE_MAX_AIK_HANDLES);
+	else
+		printf("This build answers to at most %d publishers; the TPM's "
+		       "own capacity for keys\nis the lower limit on machines "
+		       "with little non-volatile memory.\n",
+		       LOTA_PROFILE_MAX_AIK_HANDLES);
+	printf("\n");
 }
 
 int do_list_publishers(void)
@@ -765,15 +1135,41 @@ int do_list_publishers(void)
 		return 0;
 	}
 
+	/*
+	 * One TPM open for the whole listing, and only to read public areas.
+	 * A host whose TPM will not open still gets the listing: every line
+	 * above comes off the disk, and the key check is the one that would
+	 * have been missing anyway.
+	 */
+	bool tpm_open = tpm_init(&g_agent.tpm_ctx) == 0;
+
 	printf("Publishers this machine answers to:\n\n");
 	for (size_t i = 0; i < count; i++) {
-		print_publisher(&entries[i]);
+		enum publisher_key_status ks = PUBLISHER_KEY_UNKNOWN;
+
+		if (tpm_open && entries[i].has_aik_handle &&
+		    entries[i].has_cert)
+			ks = publisher_key_status(entries[i].id);
+
+		print_publisher(&entries[i], ks);
 		printf("\n");
 	}
-	printf("Each holds its own attestation key, so none of them can tell "
-	       "from the evidence\nthat this is the same machine another one "
-	       "sees. What every report contains is\nthe same for all of "
-	       "them and is listed in the operator documentation.\n");
+	if (tpm_open)
+		tpm_cleanup(&g_agent.tpm_ctx);
+
+	print_key_capacity(entries, count);
+
+	printf("Each holds its own attestation key, so none of them can name "
+	       "this machine\nfrom the certificate it was issued, and nothing "
+	       "ties one publisher's\nidentity for this machine to another's."
+	       "\n\n");
+	printf("A publisher who runs a verifier receives more than that: the "
+	       "boot evidence,\nincluding the firmware measurements and the "
+	       "event log, which names this\nhost's disk. Two such publishers "
+	       "who compare what they each received can\ntell they are looking "
+	       "at one machine. A publisher whose titles only check\ntokens "
+	       "receives none of it. What a report contains is listed in the "
+	       "operator\ndocumentation.\n");
 	printf("\nTake one back with: lota-agent --forget-publisher <id>\n");
 	return 0;
 }
@@ -789,6 +1185,22 @@ int do_forget_publisher(const char *profile_id)
 	if (ret < 0) {
 		fprintf(stderr, "ERROR: '%s' is not a publisher identity.\n",
 			profile_id ? profile_id : "");
+		return 1;
+	}
+
+	/*
+	 * A publisher this machine never answered to has nothing to take back,
+	 * and reporting one forgotten would tell somebody checking that they
+	 * had removed a publisher they had not.
+	 * The directory is the record of the relationship, so its absence is
+	 * the answer.
+	 */
+	if (access(paths.dir, F_OK) != 0) {
+		fprintf(stderr,
+			"This machine does not answer to publisher %s, so "
+			"there is nothing to take back.\nSee lota-agent "
+			"--list-publishers for the ones it does.\n",
+			paths.id);
 		return 1;
 	}
 
@@ -863,9 +1275,11 @@ int enroll_profile_now(struct tpm_context *tpm,
 }
 
 int enroll_renew_cert(struct tpm_context *tpm,
-		      const struct profile_paths *paths)
+		      const struct profile_paths *paths,
+		      const char *configured_ca_cert)
 {
 	struct enroll_state st;
+	const char *anchor = NULL;
 	int ret;
 
 	if (!tpm || !paths)
@@ -875,16 +1289,24 @@ int enroll_renew_cert(struct tpm_context *tpm,
 	if (ret < 0)
 		return ret; /* -ENOENT: never enrolled, caller disables renew */
 
-	ret = enroll_to_ca(tpm, st.ca_server, st.ca_port,
-			   st.ca_cert[0] ? st.ca_cert : NULL, st.no_verify_tls,
-			   st.has_pin ? st.pin_sha256 : NULL,
+	/*
+	 * endpoint comes from the record, which is the promise --reenroll makes
+	 * the anchor does not: see enroll_renew_anchor()
+	 */
+	ret = enroll_renew_anchor(configured_ca_cert, st.ca_cert, &anchor);
+	if (ret < 0) {
+		OPENSSL_cleanse(&st, sizeof(st));
+		return ret;
+	}
+
+	ret = enroll_to_ca(tpm, st.ca_server, st.ca_port, anchor,
+			   st.no_verify_tls, st.has_pin ? st.pin_sha256 : NULL,
 			   st.enroll_token[0] ? st.enroll_token : NULL,
 			   paths->aik_cert);
 	if (ret == 0)
 		persist_enroll_state(
-			paths, st.ca_server, st.ca_port,
-			st.ca_cert[0] ? st.ca_cert : NULL, st.no_verify_tls,
-			st.has_pin ? st.pin_sha256 : NULL,
+			paths, st.ca_server, st.ca_port, anchor,
+			st.no_verify_tls, st.has_pin ? st.pin_sha256 : NULL,
 			st.enroll_token[0] ? st.enroll_token : NULL);
 	OPENSSL_cleanse(&st, sizeof(st));
 	return ret;

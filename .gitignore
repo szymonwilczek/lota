@@ -37,3 +37,8 @@ benchmarks/results/*
 compile_commands.json
 .clangd
 .cache/
+
+# `go build` inside a module directory names its output after the directory
+# and writes it beside the sources; the tree's own builds go to BUILD_DIR.
+/examples/ci-gate/gate/gate
+/examples/demo_server/demo_server

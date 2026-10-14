@@ -87,7 +87,7 @@ int main(void)
 	if (!client) {
 		printf("ERROR: Could not connect to LOTA agent.\n");
 		printf("Make sure the agent is running:\n");
-		printf("  sudo lota-agent --test-ipc\n");
+		printf("  sudo lota-agent --test-signed\n");
 		return 1;
 	}
 	printf("Connected!\n\n");
@@ -125,6 +125,10 @@ int main(void)
 		printf("No token available - system not attested.\n");
 		printf("This is expected if running with --test-ipc without\n");
 		printf("simulated attestation state.\n");
+	} else if (ret == LOTA_ERR_NO_TPM) {
+		printf("No token available - this agent has no TPM and will\n");
+		printf("not issue an unsigned one. Run it with --test-signed\n");
+		printf("on a machine that has one.\n");
 	} else {
 		printf("ERROR: Get token failed: %s\n", lota_strerror(ret));
 	}

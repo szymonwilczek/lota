@@ -38,6 +38,21 @@ jobs:
             libssl-dev libsystemd-dev libseccomp-dev \
             libdbus-1-dev
 
+      - name: Install clang 22 from apt.llvm.org
+        run: |
+          set -eu
+          sudo apt-get install -y --no-install-recommends \
+            wget gnupg ca-certificates lsb-release
+          wget -qO- https://apt.llvm.org/llvm-snapshot.gpg.key \
+            | sudo gpg --dearmor -o /usr/share/keyrings/llvm.gpg
+          codename="$(lsb_release -cs)"
+          echo "deb [signed-by=/usr/share/keyrings/llvm.gpg] \
+          http://apt.llvm.org/${codename}/ llvm-toolchain-${codename}-22 main" \
+            | sudo tee /etc/apt/sources.list.d/llvm.list
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends clang-22
+          clang-22 --version
+
       - name: Install libbpf >= 1.0
         # Ubuntu 22.04 ships libbpf 0.5; 24.04 ships 1.3. The agent's
         # bpf_loader requires the libbpf 1.x API surface (kernel_log_level,
@@ -60,14 +75,15 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version-file: src/verifier/go.mod
+          go-version: '1.26.x'
+          check-latest: true
           cache-dependency-path: src/verifier/go.sum
 
       - name: Build all
-        run: make all
+        run: make CLANG=clang-22 all
 
       - name: Run unit tests
-        run: make test-unit
+        run: make CLANG=clang-22 test-unit
 
   format:
     name: clang-format
@@ -147,7 +163,8 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version-file: src/verifier/go.mod
+          go-version: '1.26.x'
+          check-latest: true
           cache-dependency-path: src/verifier/go.sum
 
       - name: Build SDK libraries
@@ -247,6 +264,27 @@ jobs:
         # runner does not have)
         run: make check-includes
 
+  el9-decls:
+    name: declarations against el9 headers
+    runs-on: ubuntu-24.04
+    container:
+      image: quay.io/rockylinux/rockylinux:9@sha256:8101994123cf3d0a8fee517bee7f39e555c7d92bd2d9eb3303cc988a0eeed00f
+    steps:
+      - name: Install git for checkout
+        run: dnf -y install git tar
+
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Compile every C unit -fsyntax-only against el9 headers
+        # the job already runs inside the image the gate would spawn
+        env:
+          LOTA_DECLS_IN_CONTAINER: '1'
+          LOTA_DECLS_SRC: ${{ github.workspace }}
+        run: sh scripts/check-el9-decls.sh
+
   abi:
     name: abi
     runs-on: ubuntu-24.04
@@ -286,7 +324,8 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version-file: src/verifier/go.mod
+          go-version: '1.26.x'
+          check-latest: true
           cache-dependency-path: src/verifier/go.sum
 
       - name: Run C micro-benchmarks (smoke)
@@ -337,6 +376,7 @@ jobs:
             scripts/lota-dev-bringup.sh \
             scripts/check-go-coverage.sh \
             scripts/check-license-boundary.sh \
+            scripts/check-doc-diagnostics.sh \
             scripts/check-abi.sh \
             scripts/check-package-manifests.sh \
             examples/demo/setup.sh \
@@ -346,8 +386,10 @@ jobs:
             examples/block-demo/run.sh \
             examples/cs2/scenarios/verify-attested.sh \
             tests/integration/test_bpf_gates.sh \
+            tests/integration/test_add_publisher_profile.sh \
             src/initramfs/90lota/module-setup.sh
           shellcheck -s sh -S error \
+            scripts/check-el9-decls.sh \
             packaging/nfpm/scripts/agent-postinstall.sh
 
   package-manifests:
@@ -373,6 +415,18 @@ jobs:
 
       - name: Check the license boundary
         run: make check-license-boundary
+
+  doc-diagnostics:
+    name: doc-diagnostics
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Check the documentation quotes messages the tree prints
+        run: make check-doc-diagnostics
 
   yamllint:
     name: yamllint
@@ -433,7 +487,8 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version-file: src/verifier/go.mod
+          go-version: '1.26.x'
+          check-latest: true
           cache-dependency-path: src/verifier/go.sum
 
       - name: Run clang static analyzer
@@ -649,7 +704,8 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version-file: src/verifier/go.mod
+          go-version: '1.26.x'
+          check-latest: true
           cache-dependency-path: src/verifier/go.sum
 
       - name: Build and run unit tests under ASan + UBSan
@@ -697,7 +753,8 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version-file: src/verifier/go.mod
+          go-version: '1.26.x'
+          check-latest: true
           cache-dependency-path: src/verifier/go.sum
 
       - name: Build and run unit tests under ThreadSanitizer
@@ -745,7 +802,8 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version-file: src/verifier/go.mod
+          go-version: '1.26.x'
+          check-latest: true
           cache-dependency-path: src/verifier/go.sum
 
       - name: Build all
@@ -835,7 +893,8 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version-file: src/verifier/go.mod
+          go-version: '1.26.x'
+          check-latest: true
           cache-dependency-path: src/verifier/go.sum
 
       - name: Build and run unit tests under clang ASan + UBSan
@@ -880,7 +939,8 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version-file: src/verifier/go.mod
+          go-version: '1.26.x'
+          check-latest: true
           cache-dependency-path: src/verifier/go.sum
 
       - name: Build CI-safe userspace artifacts under ASan + UBSan
@@ -929,7 +989,8 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version-file: src/verifier/go.mod
+          go-version: '1.26.x'
+          check-latest: true
           cache-dependency-path: src/verifier/go.sum
 
       - name: Memcheck CLI smoke paths

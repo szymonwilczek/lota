@@ -36,7 +36,6 @@ struct bpf_loader_ctx {
 	int integrity_fd; /* 'integrity_config' map fd */
 	int task_auth_fd; /* 'lota_task_auth' map fd */
 	int trusted_libs_fd; /* 'trusted_libs' map fd */
-	int trusted_lib_mnt_fd; /* 'trusted_lib_mnt' map fd */
 	int protected_pids_fd; /* Protected PIDs map fd */
 	int allow_verity_digest_fd; /* 'allow_verity_digest' map fd */
 	bool loaded; /* BPF object loaded into the kernel and maps resolved */
@@ -90,6 +89,27 @@ typedef int (*bpf_event_handler_t)(void *ctx, void *data, size_t len);
  * Returns: 0 on success, negative errno on failure
  */
 int bpf_loader_init(struct bpf_loader_ctx *ctx);
+
+/*
+ * bpf_loader_verify_object - Answer whether the object would be refused
+ * @bpf_obj_path: Path to compiled BPF object file (.bpf.o)
+ * @bpf_pubkey_pem_path: Path to PEM-encoded Ed25519 public key used to verify
+ *      the detached signature at <bpf_obj_path>.sig.
+ *
+ * The same check bpf_loader_load() makes, asked early and without the kernel:
+ * it reads the object, the signature beside it and the public key, and reports
+ * whether the three agree. Nothing is loaded and no context is needed.
+ *
+ * Exists so a refusal decided entirely by files on disk is discovered before
+ * the boot commitment is spent. A caller that reaches bpf_loader_load() is
+ * still authoritative -- this does not stand in for it, and the load verifies
+ * the bytes it hands the kernel.
+ *
+ * Returns: 0 when the object would be accepted, negative errno otherwise;
+ * -EINVAL when no object path or public key is configured.
+ */
+int bpf_loader_verify_object(const char *bpf_obj_path,
+			     const char *bpf_pubkey_pem_path);
 
 /*
  * bpf_loader_load - Load BPF object into the kernel and resolve maps
@@ -223,28 +243,102 @@ int bpf_loader_set_config(struct bpf_loader_ctx *ctx, uint32_t key,
  * bpf_loader_verify_integrity_config - Verify integrity_config map contents
  * @ctx: Loaded context
  *
- * Re-resolves kernel symbol addresses and checks they match current
- * integrity_config map values.
+ * Re-reads the kernel integrity baseline and checks it matches the current
+ * integrity_config map value.
  *
  * Returns: 0 on success, negative errno on mismatch/failure
  */
 int bpf_loader_verify_integrity_config(struct bpf_loader_ctx *ctx);
 
+/* Where the kernel publishes the two properties the module gate stands on */
+#define LOTA_MODULE_SIG_ENFORCE_PATH "/sys/module/module/parameters/sig_enforce"
+#define LOTA_KERNEL_LOCKDOWN_PATH "/sys/kernel/security/lockdown"
+
 /*
  * bpf_loader_kernel_module_sig_enforced - Check module signature enforcement
+ * @sig_enforce_path: sysfs file carrying the module.sig_enforce parameter
  *
  * Returns: 0 when the running kernel enforces module signatures, negative
  * errno otherwise.
  */
-int bpf_loader_kernel_module_sig_enforced(void);
+int bpf_loader_kernel_module_sig_enforced(const char *sig_enforce_path);
 
 /*
  * bpf_loader_kernel_lockdown_restrictive - Check Linux lockdown state
+ * @lockdown_path: securityfs file carrying the lockdown state
  *
  * Returns: 0 when lockdown is in integrity/confidentiality mode, negative
  * errno otherwise.
  */
-int bpf_loader_kernel_lockdown_restrictive(void);
+int bpf_loader_kernel_lockdown_restrictive(const char *lockdown_path);
+
+/*
+ * bpf_loader_build_integrity_config - Fill the value the module gate reads
+ * @cfg: value written into the integrity_cfg map
+ * @sig_enforce_path: sysfs file carrying the module.sig_enforce parameter
+ * @lockdown_path: securityfs file carrying the lockdown state
+ *
+ * The same two readers the hardening gate runs, so the gate and the module
+ * branch of the BPF program cannot answer the question differently.
+ *
+ * Returns: 0 on success, negative errno when @cfg is missing.
+ */
+int bpf_loader_build_integrity_config(struct integrity_data *cfg,
+				      const char *sig_enforce_path,
+				      const char *lockdown_path);
+
+/*
+ * bpf_loader_object_integrity_layout - The integrity map an object carries
+ * @bpf_obj_path: enforcement object on disk
+ * @key_size: filled with the map's key size
+ * @value_size: filled with the map's value size
+ *
+ * The map's layout belongs to the object the kernel loads, and the struct
+ * the agent reads it into belongs to the build. The kernel copies the map's
+ * value_size on every lookup, so the two have to be compared before either
+ * direction touches the map, and this is the half that can be read from disk
+ * -- before the boot commitment is spent.
+ *
+ * Returns: 0 with both sizes filled, or a negative errno when the object
+ * cannot be opened or carries no integrity map.
+ */
+int bpf_loader_object_integrity_layout(const char *bpf_obj_path,
+				       uint32_t *key_size,
+				       uint32_t *value_size);
+
+/*
+ * bpf_loader_check_object_integrity_layout - Can this agent read that map?
+ * @bpf_obj_path: enforcement object on disk
+ *
+ * Asked before the object is loaded, and before the boot commitment is spent:
+ * what the object carries is a property of the file, and a file this build
+ * cannot read is an operator's mistake rather than a boot to spend.
+ *
+ * Returns: 0 when the object can be read, a negative errno otherwise.
+ */
+int bpf_loader_check_object_integrity_layout(const char *bpf_obj_path);
+
+/*
+ * bpf_loader_integrity_config_satisfied - Would this value let a module load?
+ * @cfg: value written into the integrity_cfg map
+ *
+ * The userspace mirror of integrity_baseline_ok() in the BPF program.
+ *
+ * Returns: true when the module and firmware branches of
+ * lota_kernel_read_file() accept @cfg.
+ */
+bool bpf_loader_integrity_config_satisfied(const struct integrity_data *cfg);
+
+/*
+ * bpf_loader_ima_appraisal_active - Is IMA appraising an executable here?
+ * @cmdline_path: kernel cmdline carrying ima_appraise= (the mode)
+ * @policy_path: loaded IMA policy carrying the func= rules (the scope)
+ *
+ * Returns: 0 when appraisal blocks on an integrity failure, negative errno
+ * otherwise.
+ */
+int bpf_loader_ima_appraisal_active(const char *cmdline_path,
+				    const char *policy_path);
 
 /*
  * bpf_loader_secure_boot_enabled - Check UEFI Secure Boot state
@@ -259,7 +353,8 @@ int bpf_loader_secure_boot_enabled(void);
  *
  * Ensures runtime prerequisites expected by LOTA self-protection are active:
  *   - Linux lockdown mode is restrictive (integrity or confidentiality)
- *   - IMA policy is present and contains appraisal rules
+ *   - kernel module signatures are enforced
+ *   - IMA appraisal blocks on failure and its policy reaches executables
  *
  * Returns: 0 on success, negative errno on failure
  */
@@ -291,6 +386,23 @@ int bpf_loader_verify_kernel_runtime_hardening(bool allow_mutable_rootfs);
 int bpf_loader_protect_pid(struct bpf_loader_ctx *ctx, uint32_t pid);
 
 /*
+ * bpf_loader_probe_protect_pid - Ask whether a PID could be protected
+ * @pid: Process ID a startup policy names
+ *
+ * Makes exactly the read bpf_loader_protect_pid() makes -- the same
+ * /proc/<pid>/stat, the same start time, the same PID-namespace
+ * requirement -- and stops before touching a map, so it needs no loaded
+ * context. A caller that must know whether a startup policy will be
+ * accepted asks here first; anything this refuses, protect_pid refuses
+ * for the same reason.
+ *
+ * -ENOENT means no process is running under that pid.
+ *
+ * Returns: 0 if the PID can be protected, negative errno otherwise
+ */
+int bpf_loader_probe_protect_pid(uint32_t pid);
+
+/*
  * bpf_loader_unprotect_pid - Remove a PID from the protected set
  * @ctx: Loaded context
  * @pid: Process ID to unprotect
@@ -312,6 +424,21 @@ int bpf_loader_unprotect_pid(struct bpf_loader_ctx *ctx, uint32_t pid);
 int bpf_loader_trust_lib(struct bpf_loader_ctx *ctx, const char *path);
 
 /*
+ * bpf_loader_probe_trusted_lib - Ask whether a path could be trusted
+ * @path: Full path to the shared library
+ *
+ * Applies exactly the resolution bpf_loader_trust_lib() applies
+ * -- same open, same regular-file requirement, same device/inode rejection --
+ * and stops before touching a map, so it needs no loaded context.
+ * A caller that must know whether a startup policy will be accepted asks
+ * here first; anything this refuses, trust_lib refuses for the same
+ * reason.
+ *
+ * Returns: 0 if the path resolves, negative errno otherwise
+ */
+int bpf_loader_probe_trusted_lib(const char *path);
+
+/*
  * bpf_loader_untrust_lib - Remove a library path from the trusted whitelist
  * @ctx: Loaded context
  * @path: Full path to the shared library
@@ -319,8 +446,6 @@ int bpf_loader_trust_lib(struct bpf_loader_ctx *ctx, const char *path);
  * Returns: 0 on success, negative errno on failure
  */
 int bpf_loader_untrust_lib(struct bpf_loader_ctx *ctx, const char *path);
-
-unsigned long resolve_kernel_symbol(const char *name);
 
 struct bpf_extended_stats {
 	uint64_t total_execs;
@@ -334,6 +459,7 @@ struct bpf_extended_stats {
 	uint64_t ptrace_blocked;
 	uint64_t setuid_events;
 	uint64_t bpf_syscall_blocked;
+	uint64_t mounts_blocked;
 };
 
 /*

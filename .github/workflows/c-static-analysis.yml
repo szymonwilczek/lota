@@ -52,8 +52,11 @@ jobs:
             PREFIX=/usr LIBDIR=/usr/lib/x86_64-linux-gnu
           sudo ldconfig
 
-      - name: Run sparse (advisory)
+      - name: Run sparse
         run: make sparse
+
+      - name: Run the stack-frame ceiling
+        run: make check-stack-frames
 
   coccinelle:
     name: coccinelle
@@ -139,5 +142,5 @@ jobs:
           mkdir -p /opt/smatch
           cp -a /tmp/smatch/. /opt/smatch/
 
-      - name: Run smatch (advisory)
+      - name: Run smatch
         run: make smatch SMATCH=/opt/smatch/smatch

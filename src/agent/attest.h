@@ -21,6 +21,16 @@
 #define MAX_BACKOFF_SECONDS 300 /* Max retry delay */
 
 /*
+ * Operator-facing floor on the AIK rotation TTL.
+ *
+ * Below it a host rotates its attestation key faster than an enrolment completes:
+ * every rotation invalidates the certificate that names the old key, so the host
+ * churns TPM key creation and CA round trips.
+ * Shared so the command line and the configuration file enforce the same floor.
+ */
+#define MIN_AIK_TTL 3600 /* seconds */
+
+/*
  * Slack added to the interval when the attestation loop sets token's valid_until,
  * so token outlives the round that minted it.
  */
@@ -45,12 +55,28 @@
 #define DEFAULT_ATTEST_INTERVAL 300
 
 /*
+ * How long a token issued to a publisher who runs no verifier is good for.
+ *
+ * There is no round to take the window from: nothing is reported to that
+ * publisher, so the agent mints the bound itself.  It matches the default
+ * cadence, which keeps a token-only publisher's freshness the same as
+ * everybody else's and leaves the slack below the window every relying
+ * party accepts.
+ */
+#define TOKEN_ONLY_VALIDITY_SEC DEFAULT_ATTEST_INTERVAL
+
+/*
  * Ceiling on the continuous-attestation interval.
  * Above it the loop mints tokens no relying party accepts, which is running agent
  * whose every token is refused.
  */
 #define MAX_ATTEST_INTERVAL \
 	(RELYING_PARTY_TOKEN_WINDOW_SEC - ATTEST_TOKEN_VALIDITY_SLACK_SEC)
+
+/* A token nobody reports on still has to land inside that window */
+_Static_assert(TOKEN_ONLY_VALIDITY_SEC + ATTEST_TOKEN_VALIDITY_SLACK_SEC <=
+		       RELYING_PARTY_TOKEN_WINDOW_SEC,
+	       "a token-only token must stay verifiable by every relying party");
 
 /* Interval the operator can set has to exist between the two bounds */
 _Static_assert(MIN_ATTEST_INTERVAL < MAX_ATTEST_INTERVAL,
@@ -87,6 +113,59 @@ static inline int attest_effective_interval(int configured, int profile_count)
 	return 0;
 }
 
+/*
+ * Stages an attestation round can fail at.
+ *
+ * The round reports its failure by stage, because the continuous loop runs
+ * with nobody reading its progress output: the stage name plus an errno is
+ * the whole of what an operator gets.
+ */
+enum attest_stage {
+	ATTEST_STAGE_TLS_SETUP,
+	ATTEST_STAGE_CONNECT,
+	ATTEST_STAGE_CHALLENGE,
+	ATTEST_STAGE_BUILD_REPORT,
+	ATTEST_STAGE_SERIALIZE,
+	ATTEST_STAGE_SEND,
+	ATTEST_STAGE_RESULT,
+	ATTEST_STAGE_VERDICT,
+	ATTEST_STAGE_COUNT,
+};
+
+/*
+ * Name of a stage, for a log line.
+ * Never NULL, including for a value the table does not cover.
+ */
+const char *attest_stage_str(enum attest_stage stage);
+
+/*
+ * Why a round failed, for the line the loop logs.
+ *
+ * Takes a return value from the round, negative errno or LOTA-private
+ * TPM code, and yields a printable reason. Never NULL.
+ */
+const char *attest_failure_reason(int ret);
+
+/*
+ * attest_warn_cert_orphaned - say it when provisioning is about to replace
+ * a key this publisher's stored certificate names
+ *
+ * @paths: the profile just bound, or NULL when the caller has none
+ * @label: how this publisher is named in log lines
+ *
+ * Called immediately before provisioning, because provisioning is what makes
+ * the answer stop being true. Every path that binds a profile and provisions
+ * goes through this: the daemon's own, the continuous loop's per-target
+ * binding, and the one-shot round. A cleared TPM strands all of them at once,
+ * and one that stayed quiet would be a publisher whose refusals had no cause
+ * on the host.
+ *
+ * Only logs. The verifier refuses those rounds on its own, and one
+ * publisher's enrollment never takes the host's enforcement down.
+ */
+void attest_warn_cert_orphaned(const struct profile_paths *paths,
+			       const char *label);
+
 int export_policy(int mode);
 int do_attest(const char *server, int port, const char *ca_cert,
 	      int skip_verify, const uint8_t *pin_sha256);
@@ -99,11 +178,16 @@ int do_attest(const char *server, int port, const char *ca_cert,
  * With no profiles (or no config) the single server/port/ca_cert the caller
  * resolved is the only target.
  * @interval_sec is the cadence a profile that states none inherits.
+ *
+ * @config_path is where that list is re-read from on SIGHUP, so a publisher
+ * a game's installer registers while the host runs is reported to without
+ * a restart. NULL means the default file, which is what the packaged unit
+ * leaves it as.
  */
-int do_continuous_attest(const struct lota_config *cfg, const char *server,
-			 int port, const char *ca_cert, int skip_verify,
-			 const uint8_t *pin_sha256, int interval_sec,
-			 uint32_t aik_ttl);
+int do_continuous_attest(const struct lota_config *cfg, const char *config_path,
+			 const char *server, int port, const char *ca_cert,
+			 int skip_verify, const uint8_t *pin_sha256,
+			 int interval_sec, uint32_t aik_ttl);
 
 /*
  * Publish the current AIK rotation state (generation, provisioned time,

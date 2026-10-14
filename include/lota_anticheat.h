@@ -68,21 +68,80 @@ enum lota_ac_provider {
 enum lota_ac_state {
 	LOTA_AC_STATE_IDLE = 0, /* not initialised */
 	LOTA_AC_STATE_RUNNING = 1, /* active, agent reachable */
-	LOTA_AC_STATE_TRUSTED = 2, /* attested: all required flags set */
+	LOTA_AC_STATE_TRUSTED = 2, /* attested, and every required flag set */
 	LOTA_AC_STATE_UNTRUSTED = 3, /* agent reachable but not attested */
 	LOTA_AC_STATE_ERROR = 4, /* cannot reach agent / internal fault */
 };
 
-/* error codes */
+/*
+ * Error codes.
+ *
+ * Every code sits below LOTA_AC_ERR_BASE, so none collides with the negative
+ * errno the measure helpers return; lota_ac_strerror() renders both.
+ *
+ * The verification group says why a server refused a heartbeat.
+ * The rest say why a producer-side call failed and are read with
+ * lota_ac_last_error(): a refused configuration is the integrator's bug,
+ * while a missing agent, a publisher nobody agreed to or an unattested host
+ * is a state the player acts on.
+ */
+#define LOTA_AC_ERR_BASE (-1000)
+
 enum {
 	LOTA_AC_ERR_OK = 0,
-	LOTA_AC_ERR_INVALID_ARG = -1,
-	LOTA_AC_ERR_MALFORMED = -2,
-	LOTA_AC_ERR_VERSION = -3,
-	LOTA_AC_ERR_SIG_FAIL = -4,
-	LOTA_AC_ERR_NONCE_FAIL = -5,
-	LOTA_AC_ERR_EXPIRED = -6,
-	LOTA_AC_ERR_CRYPTO = -7,
+
+	/* the verification vocabulary */
+	LOTA_AC_ERR_INVALID_ARG = LOTA_AC_ERR_BASE - 1,
+	LOTA_AC_ERR_MALFORMED = LOTA_AC_ERR_BASE - 2,
+	LOTA_AC_ERR_VERSION = LOTA_AC_ERR_BASE - 3,
+	LOTA_AC_ERR_SIG_FAIL = LOTA_AC_ERR_BASE - 4,
+	LOTA_AC_ERR_NONCE_FAIL = LOTA_AC_ERR_BASE - 5,
+	LOTA_AC_ERR_EXPIRED = LOTA_AC_ERR_BASE - 6,
+	LOTA_AC_ERR_CRYPTO = LOTA_AC_ERR_BASE - 7,
+	LOTA_AC_ERR_RUNTIME_IMAGE = LOTA_AC_ERR_BASE - 24, /* the runtime
+							    * measurement is
+							    * not the one
+							    * expected */
+
+	/* the caller's own configuration */
+	LOTA_AC_ERR_CONFIG_SIZE = LOTA_AC_ERR_BASE - 8, /* struct_size unset
+							 * or too small */
+	LOTA_AC_ERR_GAME_ID = LOTA_AC_ERR_BASE - 9, /* game_id missing, empty
+						     * or too long */
+	LOTA_AC_ERR_PROVIDER = LOTA_AC_ERR_BASE - 10, /* provider is neither
+						       * EAC nor BattlEye */
+
+	/* this library */
+	LOTA_AC_ERR_NO_MEMORY = LOTA_AC_ERR_BASE - 11,
+	LOTA_AC_ERR_INTERNAL = LOTA_AC_ERR_BASE - 12, /* session id or game-id
+						       * hash failed */
+
+	/* the host, which is what a player acts on */
+	LOTA_AC_ERR_NO_AGENT = LOTA_AC_ERR_BASE - 13, /* no agent answering the
+						       * socket */
+	LOTA_AC_ERR_CONSENT_REQUIRED = LOTA_AC_ERR_BASE - 14, /* nobody has
+							       * agreed to this
+							       * publisher */
+	LOTA_AC_ERR_UNKNOWN_PROFILE = LOTA_AC_ERR_BASE - 15, /* not enrolled
+							      * with that
+							      * publisher */
+	LOTA_AC_ERR_ACCESS_DENIED = LOTA_AC_ERR_BASE - 16,
+	LOTA_AC_ERR_TOKEN_DIR = LOTA_AC_ERR_BASE - 17, /* file mode: no hook
+							* output directory */
+	LOTA_AC_ERR_NOT_ATTESTED = LOTA_AC_ERR_BASE - 18, /* no verdict yet */
+	LOTA_AC_ERR_RATE_LIMITED = LOTA_AC_ERR_BASE - 19, /* beating faster
+							   * than the agent
+							   * issues tokens */
+
+	/* the beat itself */
+	LOTA_AC_ERR_STATUS = LOTA_AC_ERR_BASE - 20, /* the agent would not
+						     * report its state */
+	LOTA_AC_ERR_TOKEN = LOTA_AC_ERR_BASE - 21, /* the agent would not issue
+						    * a token */
+	LOTA_AC_ERR_MEASURE = LOTA_AC_ERR_BASE - 22, /* this process could not
+						      * be measured */
+	LOTA_AC_ERR_SERIALIZE = LOTA_AC_ERR_BASE - 23, /* the token would not
+							* serialise */
 };
 
 struct lota_ac_config {
@@ -100,9 +159,15 @@ struct lota_ac_config {
 	uint32_t heartbeat_interval_sec; /* 0 -> default (30 s) */
 
 	/*
-	 * Required attestation flags. Heartbeat state is TRUSTED only if
-	 * (lota_flags & required_flags) == required_flags.
-	 * Use 0 to accept any non-zero flags.
+	 * Extra attestation flags this title insists on.
+	 *
+	 * Heartbeat state is TRUSTED only if every one of them is set,
+	 * and only if LOTA_FLAG_ATTESTED is set: this field raises the bar
+	 * and cannot lower it.
+	 * Leaving it 0 asks for attestation alone, which is what TRUSTED means
+	 * -- it does not accept any status word that happens to be non-zero,
+	 * because a word is non-zero as soon as the agent holds a TPM handle
+	 * and nobody has attested anything.
 	 */
 	uint32_t required_flags;
 
@@ -115,7 +180,10 @@ struct lota_ac_config {
 
 	/*
 	 * For file mode: directory containing lota-status and lota-token.bin.
-	 * NULL -> auto-detect ($LOTA_HOOK_TOKEN_DIR / $XDG_RUNTIME_DIR/lota).
+	 * NULL -> auto-detect, in the order the hook resolves:
+	 * $LOTA_HOOK_TOKEN_DIR, then $XDG_RUNTIME_DIR/lota-hook, then
+	 * /tmp/lota-<uid>. Never $XDG_RUNTIME_DIR/lota, which belongs to
+	 * the agent.
 	 */
 	const char *token_dir;
 
@@ -192,8 +260,7 @@ struct lota_ac_heartbeat_wire {
 
 struct lota_ac_info {
 	enum lota_ac_provider provider;
-	enum lota_ac_state
-		state; /* authoritative only for verify_heartbeat output */
+	enum lota_ac_state state;
 	uint8_t session_id[LOTA_AC_SESSION_ID_SIZE];
 	uint64_t session_start; /* epoch */
 	uint64_t last_heartbeat; /* epoch */
@@ -211,9 +278,8 @@ struct lota_ac_info {
 	uint32_t lota_flags;
 	uint8_t game_id_hash[LOTA_AC_GAME_HASH_SIZE]; /* verified game identity
 							 binding */
-	int trusted; /* set only by lota_ac_verify_heartbeat(); always 0 from
-		      * get_info
-		      */
+	int trusted; /* state == LOTA_AC_STATE_TRUSTED, in the same terms the
+		      * state field is in: attested, whatever else was asked for */
 };
 
 struct lota_ac_session;
@@ -224,9 +290,37 @@ struct lota_ac_session;
  * In direct mode, opens a connection to the LOTA agent.
  * In file mode, locates the Wine hook output directory.
  *
- * Returns NULL on error.
+ * Returns NULL on error; lota_ac_last_error() says which one.
+ * A session whose agent could not be reached is returned, in LOTA_AC_STATE_ERROR,
+ * so a title can show the player something and try again -- the accessor names
+ * that case too.
  */
 struct lota_ac_session *lota_ac_init(const struct lota_ac_config *cfg);
+
+/*
+ * lota_ac_last_error - Why the last call on this thread failed
+ *
+ * Every entry point that can refuse sets it, including on success
+ * (LOTA_AC_ERR_OK), so reading it after anything else is meaningless.
+ * Thread-local, because a title and its launcher in one process must
+ * not read each other's answer.
+ *
+ * It exists because the alternative is what this SDK used to do:
+ * return NULL or -EIO for a dozen unrelated causes and leave an integrator
+ * to guess. The one distinction to build on is whether the code names
+ * the caller's own configuration or the state of the host.
+ */
+int lota_ac_last_error(void);
+
+/*
+ * lota_ac_strerror - The error code as a sentence
+ *
+ * Accepts any value a call returned: a LOTA_AC_ERR_* code or a negative
+ * errno from the measure helpers, which gets the system's description.
+ * Stable English, no trailing punctuation, never NULL, even for a code
+ * from a newer library.
+ */
+const char *lota_ac_strerror(int err);
 
 /*
  * Destroy session and release resources.
@@ -236,6 +330,11 @@ void lota_ac_shutdown(struct lota_ac_session *session);
 
 /*
  * Get current session state.
+ *
+ * Local telemetry, not an authority: client-side memory can be hooked,
+ * and a server's trust must come from lota_ac_verify_heartbeat() over the packets
+ * it received. Useful for what a launcher shows a player before a round starts.
+ *
  * Returns LOTA_AC_STATE_IDLE if session is NULL.
  */
 enum lota_ac_state lota_ac_get_state(const struct lota_ac_session *session);
@@ -247,6 +346,10 @@ enum lota_ac_state lota_ac_get_state(const struct lota_ac_session *session);
  * Treat it as local diagnostics only. Client-side memory can be hooked; server
  * trust must come from lota_ac_verify_heartbeat() over received heartbeat
  * packets.
+ *
+ * The state and trusted fields carry what lota_ac_get_state() carries.
+ * Both roads out of a session are local telemetry, so they answer the same thing;
+ * neither becomes an authority by agreeing with the other.
  *
  * Returns 0 on success, -EINVAL if session or info is NULL.
  */
@@ -418,7 +521,14 @@ int lota_ac_compute_expected_runtime_measure(
  *
  * max_age_sec: maximum acceptable token age (0 -> 300 s default).
  *
- * Returns 0 on success, negative error code on failure.
+ * A packet that verifies is reported LOTA_AC_STATE_TRUSTED only if the status
+ * word the signature covers carries LOTA_FLAG_ATTESTED. Everything else about
+ * the packet can be perfect on a host no verifier has ever answered,
+ * and this is the verdict a backend acts on.
+ * A server wanting more than attestation reads info->lota_flags, which carries
+ * that same signed word.
+ *
+ * Returns 0 on success, a LOTA_AC_ERR_* code on failure.
  */
 int lota_ac_verify_heartbeat(
 	const uint8_t *data, size_t len, const uint8_t *aik_pub_der,

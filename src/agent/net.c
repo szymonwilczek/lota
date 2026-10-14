@@ -35,6 +35,10 @@
 /* TLS socket I/O timeout */
 #define NET_IO_TIMEOUT_SEC 30
 
+/* Where the kernel reports whether SELinux is enforcing.
+ * Read directly, so the agent needs no libselinux at link time */
+#define NET_SELINUX_ENFORCE_PATH "/sys/fs/selinux/enforce"
+
 /*
  * Wire-format size assertions.
  * Protocol sends these structures as flat byte arrays; any compiler
@@ -42,8 +46,8 @@
  */
 _Static_assert(sizeof(struct verifier_challenge) == 48,
 	       "verifier_challenge must be 48 bytes on wire");
-_Static_assert(sizeof(struct verifier_result) == 56,
-	       "verifier_result must be 56 bytes on wire");
+_Static_assert(sizeof(struct verifier_result) == 24,
+	       "verifier_result must be 24 bytes on wire");
 
 static int ssl_initialized = 0;
 
@@ -142,7 +146,7 @@ int net_context_init(struct net_context *ctx, const char *server, int port,
 	ctx->skip_verify = skip_verify;
 
 	if (pin_sha256) {
-		memcpy(ctx->pin_sha256, pin_sha256, NET_PIN_SHA256_LEN);
+		memcpy(ctx->pin_sha256, pin_sha256, LOTA_PIN_SHA256_LEN);
 		ctx->has_pin = 1;
 	}
 
@@ -312,6 +316,18 @@ int net_connect(struct net_context *ctx)
 	freeaddrinfo(result);
 
 	if (sock < 0) {
+		char hint[512];
+		const char *cause = net_connect_refusal_hint(
+			last_errno, ctx->server_port, NULL, hint, sizeof(hint));
+
+		/*
+		 * Caller renders the errno, which for a refusal by the policy
+		 * is "Permission denied" against a server that is running.
+		 * Say the rest here, where the port is known.
+		 */
+		if (cause)
+			lota_err("Cannot reach %s:%d. %s", ctx->server_addr,
+				 ctx->server_port, cause);
 		return last_errno ? -last_errno : -ECONNREFUSED;
 	}
 
@@ -433,12 +449,12 @@ int net_connect(struct net_context *ctx)
 			return -EACCES;
 		}
 
-		unsigned char digest[NET_PIN_SHA256_LEN];
+		unsigned char digest[LOTA_PIN_SHA256_LEN];
 		unsigned int digest_len = 0;
 
 		if (X509_digest(peer_cert, EVP_sha256(), digest, &digest_len) !=
 			    1 ||
-		    digest_len != NET_PIN_SHA256_LEN) {
+		    digest_len != LOTA_PIN_SHA256_LEN) {
 			lota_err("Certificate pinning failed: unable to "
 				 "compute SHA-256 fingerprint");
 			X509_free(peer_cert);
@@ -455,11 +471,11 @@ int net_connect(struct net_context *ctx)
 		 * CRYPTO_memcmp returns 0 on match.
 		 */
 		if (CRYPTO_memcmp(digest, ctx->pin_sha256,
-				  NET_PIN_SHA256_LEN) != 0) {
+				  LOTA_PIN_SHA256_LEN) != 0) {
 			{
-				char expected_hex[NET_PIN_SHA256_LEN * 2 + 1];
-				char got_hex[NET_PIN_SHA256_LEN * 2 + 1];
-				for (int i = 0; i < NET_PIN_SHA256_LEN; i++) {
+				char expected_hex[LOTA_PIN_SHA256_LEN * 2 + 1];
+				char got_hex[LOTA_PIN_SHA256_LEN * 2 + 1];
+				for (int i = 0; i < LOTA_PIN_SHA256_LEN; i++) {
 					snprintf(expected_hex + i * 2, 3,
 						 "%02x", ctx->pin_sha256[i]);
 					snprintf(got_hex + i * 2, 3, "%02x",
@@ -610,7 +626,6 @@ int net_recv_result(struct net_context *ctx, struct verifier_result *result)
 	memcpy(&result->result, buf + 8, 4);
 	memcpy(&result->flags, buf + 12, 4);
 	memcpy(&result->valid_until, buf + 16, 8);
-	memcpy(result->session_token, buf + 24, 32);
 
 	result->magic = le32toh(result->magic);
 	result->version = le32toh(result->version);
@@ -718,60 +733,49 @@ out:
 	return ret;
 }
 
-int net_parse_pin_sha256(const char *hex, uint8_t *out)
+const char *net_connect_refusal_hint(int err, int port,
+				     const char *enforce_path, char *buf,
+				     size_t cap)
 {
-	size_t i = 0;
-	size_t out_idx = 0;
-	uint8_t byte;
-	int high;
+	char state[8];
+	ssize_t got;
+	int fd, n;
 
-	if (!hex || !out)
-		return -EINVAL;
+	if (err != EACCES || !buf || cap == 0)
+		return NULL;
+	if (port <= 0 || port > 65535)
+		return NULL;
 
-	while (hex[i] != '\0' && out_idx < NET_PIN_SHA256_LEN) {
-		/* skip colons and spaces */
-		if (hex[i] == ':' || hex[i] == ' ') {
-			i++;
-			continue;
-		}
+	/*
+	 * Read the state.
+	 * Where SELinux is absent or permissive the denial did not happen,
+	 * so this EACCES came from somewhere else and the port label is
+	 * the wrong thing to name.
+	 */
+	fd = open(enforce_path ? enforce_path : NET_SELINUX_ENFORCE_PATH,
+		  O_RDONLY | O_CLOEXEC);
+	if (fd < 0)
+		return NULL;
+	got = read(fd, state, sizeof(state) - 1);
+	close(fd);
+	if (got <= 0)
+		return NULL;
+	state[got] = '\0';
+	if (state[0] != '1')
+		return NULL;
 
-		/* need two hex nibbles */
-		if (hex[i + 1] == '\0')
-			return -EINVAL;
+	n = snprintf(buf, cap,
+		     "SELinux is enforcing and TCP port %d carries no LOTA "
+		     "label, which is what refuses this connect; the policy "
+		     "dontaudits it, so no AVC is logged anywhere. Label the "
+		     "port and the next round goes through:\n"
+		     "  sudo semanage port -a -t lota_port_t -p tcp %d",
+		     port, port);
+	/* half a command is worse than none -- an operator would run it */
+	if (n < 0 || (size_t)n >= cap)
+		return NULL;
 
-		high = 0;
-		byte = 0;
-
-		for (int n = 0; n < 2; n++) {
-			char c = hex[i + n];
-			uint8_t nibble;
-
-			if (c >= '0' && c <= '9')
-				nibble = (uint8_t)(c - '0');
-			else if (c >= 'a' && c <= 'f')
-				nibble = (uint8_t)(c - 'a' + 10);
-			else if (c >= 'A' && c <= 'F')
-				nibble = (uint8_t)(c - 'A' + 10);
-			else
-				return -EINVAL;
-
-			if (n == 0)
-				high = nibble;
-			else
-				byte = (uint8_t)((high << 4) | nibble);
-		}
-
-		out[out_idx++] = byte;
-		i += 2;
-	}
-
-	while (hex[i] == ':' || hex[i] == ' ')
-		i++;
-
-	if (out_idx != NET_PIN_SHA256_LEN || hex[i] != '\0')
-		return -EINVAL;
-
-	return 0;
+	return buf;
 }
 
 const char *net_result_str(uint32_t result)
@@ -791,8 +795,21 @@ const char *net_result_str(uint32_t result)
 		return "FAIL - Protocol version mismatch";
 	case VERIFY_INTEGRITY_MISMATCH:
 		return "FAIL - Integrity mismatch (agent binary changed!)";
+	case VERIFY_REVOKED:
+		return "FAIL - This host's attestation key was revoked by the "
+		       "publisher's administrator; re-enrollment is their "
+		       "decision, not this machine's";
+	case VERIFY_BANNED:
+		return "FAIL - This machine is banned by the publisher's "
+		       "administrator; nothing on it changes that answer";
 	case VERIFY_INTERNAL_ERROR:
 		return "FAIL - Verifier internal error";
+	case VERIFY_IDENTITY_FAIL:
+		return "FAIL - The certificate this host presented does not "
+		       "certify the key it signed with, so the publisher "
+		       "cannot tell which machine this is. A TPM clear leaves "
+		       "exactly this. Run lota-agent --reenroll --ca-cert "
+		       "<their anchor>";
 	default:
 		return "FAIL - Unknown error";
 	}

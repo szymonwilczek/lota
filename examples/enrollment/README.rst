@@ -61,6 +61,18 @@ is the local swtpm CA issuer certificate; for real hardware it is your vendor's
 root bundle. A ``VERIFY_OK`` at the end means the AIK was activation-bound to
 the EK and the verifier trusted it through the certificate chain alone.
 
+swTPM mints an EK one level under a root the demo itself generates, so the
+request it sends carries the leaf and nothing else. Real hardware is rarely
+that shallow: a firmware TPM puts its EK several levels below the vendor root
+and stores the certificates nearest the leaf in its own NV. The agent presents
+those with the request and reports how many it found::
+
+   EK certificate chain: 3 manufacturer intermediate(s) from the TPM
+
+A zero there is normal for swTPM and for a TPM whose EK is issued directly by a
+published root. Where the count is not zero, it is the part of the path the
+operator's bundle does not have to carry.
+
 This demo passes a single ``-ek-root`` because swTPM mints one local CA. A
 production fleet instead trusts a pin-enforced multi-vendor bundle. The bundle
 ships empty: the supported hardware set is every TPM whose EK certificate
@@ -109,8 +121,26 @@ Notes for production
 - The CA holds no TPM and stores no per-host secret beyond the in-flight
   challenge. Run one per fleet (or per region); every verifier that should
   trust it gets ``--aik-ca-cert ca.crt``.
+- ``--ca-cert`` on the agent is that same ``ca.crt``, never the listener
+  certificate. One file serves two roles -- the TLS trust anchor and the
+  publisher's identity, which is the SHA-256 of its SubjectPublicKeyInfo -- so
+  ``gen-ca.sh`` issues the listener from the CA and an operator names the CA.
+  Binding the identity to the listener instead would move every enrolled host
+  onto a new profile, a new AIK and a fresh consent prompt on each TLS
+  rotation, with nothing reporting it; the listener is meant to rotate, and
+  because it chains to the anchor, rotating it moves nobody.
 - AIK certificates are short-lived (``--aik-cert-ttl``, default 24h); a host
   refreshes before expiry. The first enrollment records the CA endpoint in the
   publisher profile, so a refresh is a single ``lota-agent --reenroll
   --ca-cert ...`` naming the same trust anchor -- the same guided path the
   agent points operators to after an AIK rotation.
+- The daemon's own renewal reuses that recorded **endpoint**, but presents the
+  trust anchor the profile is **configured** with, falling back to the
+  recorded path only for a target that has none. The two name the same
+  publisher, since the profile is derived from the anchor; the difference is
+  that the daemon runs sandboxed with its own ``/tmp`` and ``/var/tmp``, so an
+  anchor kept in a staging directory is readable when an operator enrolls by
+  hand and gone when the daemon later renews. Keep the anchor somewhere the
+  daemon can read for the life of the profile -- ``/etc/lota`` is the obvious
+  place -- and give ``--ca-cert`` that path rather than a build or unpack
+  directory.

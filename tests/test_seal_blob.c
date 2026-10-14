@@ -76,15 +76,62 @@ static void test_mask_validation(void)
 	PASS();
 }
 
+/*
+ * The default mask describes the machine, not the software running on it.
+ * PCRs 0-7 are the firmware and Secure Boot set: they cannot be reproduced on
+ * other hardware, which is the binding at-rest sealing wants, and they survive
+ * both a reboot and an agent upgrade.
+ */
 static void test_default_mask_contents(void)
 {
-	TEST("default mask is PCR 0-7 plus PCR14");
+	TEST("default mask is the platform set, PCR 0-7");
 	uint32_t want = 0;
 	for (int i = 0; i <= 7; i++)
 		want |= (1u << i);
-	want |= (1u << 14);
 	if (LOTA_SEAL_DEFAULT_PCR_MASK != want) {
 		FAIL("mask mismatch");
+		return;
+	}
+	PASS();
+}
+
+/*
+ * PCR 14 is LOTA's boot commitment, and its value is a function of the agent
+ * binary. Binding it in the default would make every agent upgrade destroy
+ * every sealed secret on the host -- including the AIK authorization, whose
+ * loss costs a re-enrollment with every publisher.
+ */
+static void test_default_mask_excludes_the_boot_commitment(void)
+{
+	TEST("default mask does not bind PCR14 (the agent binary)");
+	if (LOTA_SEAL_DEFAULT_PCR_MASK &
+	    (1u << LOTA_SEAL_BOOT_COMMITMENT_PCR)) {
+		FAIL("default mask binds the agent-identity register");
+		return;
+	}
+	PASS();
+}
+
+/*
+ * Binding the agent is still expressible -- it is a different mask with its
+ * own name, for a caller who wants a secret that a swapped agent cannot read
+ * and who accepts losing it at every upgrade.
+ */
+static void test_agent_bound_mask_is_separate_and_named(void)
+{
+	TEST("the agent-bound mask is the platform set plus PCR14");
+	if (LOTA_SEAL_AGENT_BOUND_PCR_MASK !=
+	    (LOTA_SEAL_DEFAULT_PCR_MASK |
+	     (1u << LOTA_SEAL_BOOT_COMMITMENT_PCR))) {
+		FAIL("agent-bound mask is not the default plus PCR14");
+		return;
+	}
+	if (LOTA_SEAL_AGENT_BOUND_PCR_MASK == LOTA_SEAL_DEFAULT_PCR_MASK) {
+		FAIL("agent-bound mask is the default");
+		return;
+	}
+	if (lota_seal_validate_pcr_mask(LOTA_SEAL_AGENT_BOUND_PCR_MASK) != 0) {
+		FAIL("agent-bound mask rejected");
 		return;
 	}
 	PASS();
@@ -312,6 +359,8 @@ int main(void)
 
 	test_mask_validation();
 	test_default_mask_contents();
+	test_default_mask_excludes_the_boot_commitment();
+	test_agent_bound_mask_is_separate_and_named();
 	test_serialize_roundtrip();
 	test_serialize_rejects_bad_fields();
 	test_parse_rejects_truncated();

@@ -6,8 +6,8 @@
 // in the AIK certificate subject (OrganizationalUnit).
 //
 // Tenant partitions all verifier-side trust state:
-// baselines, revocations, hardware bans, logs and session tokens are scoped to
-// the tenant carried by the certificate, so one verifier can serve multiple
+// baselines, revocations, hardware bans and logs are scoped to the tenant
+// carried by the certificate, so one verifier can serve multiple
 // isolated organisations or titles.
 //
 // Certificate carrying no OU falls into the default tenant, which is how deployment

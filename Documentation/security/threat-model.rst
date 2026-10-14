@@ -66,6 +66,39 @@ CA and stops there: the attestation report carries no EK certificate field at
 all, so an attestation cannot be linked back to the hardware even by the party
 verifying it.
 
+The enrollment request also carries the manufacturer intermediates the device
+read out of its own TPM, because a firmware TPM stores certificates that exist
+nowhere else. They arrive from a peer that has proved nothing yet, and the CA
+treats them accordingly: the frame bounds their count and size before a single
+one is allocated, an element that does not parse is dropped, and they are used
+as path material only. A supplied certificate can complete a route to a root
+the operator pinned; it can never become one, so a host that presents its own
+self-signed root is refused exactly as a host presenting nothing is.
+
+One key per publisher, and it is the template that makes it so. A TPM primary
+is derived from the hierarchy seed and the creation template, so two profiles
+that present the same template receive the same key however many persistent
+handles they occupy -- and the per-profile ``userAuth`` takes no part in that
+derivation. The agent therefore puts the publisher's own identity, the SHA-256
+of its CA anchor's SubjectPublicKeyInfo, into the template's ``unique`` field.
+Distinct per publisher, reproduced exactly when that publisher re-enrols, and
+absent on a host that answers to nobody, whose key is unchanged.
+
+What that separation does not cover is the evidence. Two publishers who each
+run a verifier receive the same firmware and Secure Boot measurements and the
+same event log, and the log names the disk this host boots from, so comparing
+what they each legitimately received tells them it is one machine. Identity is
+unlinkable; evidence is not, and the product says so where a player can act on
+it -- at the consent prompt, in ``--list-publishers`` and in the player
+documentation.
+
+The fork the design already had is the answer to it. A publisher whose titles
+only check tokens receives no report, no PCR values and no event log, so for
+them the separation is complete; a publisher who runs a verifier trades that
+away for a verifier's judgement. Nothing in the protocol can give two verifiers
+a per-publisher view of PCR 14 while both still verify it, so this is a
+disclosure to state plainly.
+
 That is the only AIK trust model. A report with no AIK certificate is rejected
 at verification, and the certificate-backed AIK store refuses to record a bare
 public key at all, so an AIK cannot become trusted by being seen first. The
@@ -87,9 +120,9 @@ ban state.
 
 The default store is SQLite for single-node deployments. A Postgres backend
 (selected with ``--pg-dsn``) holds the baseline, used-nonce, revocation, ban,
-audit, attestation and session-token state in a shared database, so several
-verifier instances behind a load balancer share enforcement state and any
-instance validates a session token issued by any peer. See
+audit and attestation state in a shared database, so several verifier
+instances behind a load balancer share enforcement state and any instance
+answers for a client enrolled by any peer. See
 :doc:`../operator/ha-deployment <../operator/ha-deployment>` for the
 supported topologies.
 
@@ -100,9 +133,36 @@ The game, anti-cheat service, or relying server consumes LOTA status and token
 verification results. It remains responsible for gameplay policy and behavioral
 detection.
 
+The relying party's evidence is that token and nothing else. The verifier
+answers an attesting host with a verdict and a deadline, and issues no bearer
+credential a backend could check in place of the signature: a service asking
+whether a client is trustworthy verifies the TPM-signed token the client
+presents, so what it accepts is bound to the hardware rather than to a string
+that can be copied.
+
 Server SDK's ``VerifyToken`` enforces token freshness: a token whose ``validUntil``
 is more than ``DefaultMaxTokenAge`` (plus ``MaxClockSkew``) in the future is rejected,
 so a misconfigured or compromised agent cannot mint an effectively immortal token.
+
+A client on the local socket may subscribe to status, attestation and mode
+events. The subscription widens no boundary: those events carry the fields
+``GET_STATUS`` already answers to whoever the socket lets connect, so a subscriber
+learns nothing it could not have learned by asking again -- it saves the asking.
+Publisher events are the exception and stay with the agent's own attestation loop,
+which the daemon knows by the state exchange only that loop performs; they name
+which titles hold a session with which publisher, and a mask that asks for them
+alone is refused as a bad request. A subscription lives on its connection and ends
+with it.
+
+The desktop sees the same changes over ``org.lota.Agent1``, whose signals and
+``emits-change`` properties are the bus-side view of what the socket pushes.
+Its status word is the daemon's own: a bus connection names no publisher, so
+it carries the host-wide view, including whether the runtime measurement
+covers every object of every protected process -- that is a fact about the
+host, and both roads have to report it the same way or a launcher reading
+coverage from the bus contradicts the socket. Its ``Version`` property names
+the build the agent came from -- the same identity the SDKs report -- so a client
+can check it against the package the host has installed.
 
 The token carries no issued-at field, so issuers must size ``validUntil`` within that
 window. The agent enforces this where the interval is read: an ``attest_interval``
@@ -174,6 +234,12 @@ Active threats
      - | The verifier reads the firmware-measured ``SecureBoot`` variable from the
          event log (PCR 7) and accepts it only when the log replay reproduces the
          TPM-quoted PCR, so the value cannot be fabricated or stripped.
+       | The replay follows what the TPM did:
+         ``EV_NO_ACTION`` records are informational and are not extended, and
+         where the log records that firmware started the TPM above locality 0 --
+         a measured static root of trust does -- PCR 0 begins at that locality.
+         A log that misdescribes either still has to reproduce the quote-signed
+         PCR values, so neither is a place to hide.
        | The agent-reported Secure Boot flag is telemetry only.
      - | Kernels signed for Secure Boot (including operator/MOK-signed) pass.
        | Control rejects unsigned boots, not signed-but-malicious kernels.
@@ -232,6 +298,9 @@ Active threats
    * - Runtime image substitution
      - | BPF LSM gates executable mmap and mprotect for protected processes
          against the fs-verity allow-list.
+       | A bind or move mount that would shadow a trusted file is refused
+         through both mount APIs, and the refusal is emitted on the event
+         stream and counted like every other blocked hook.
        | The agent re-measures file-backed executable mappings from the kernel side.
        | A digest read from an inode is cached against that inode's device,
          number, size and modification time, all read from the descriptor the
@@ -242,10 +311,19 @@ Active threats
        | An object the kernel holds no fs-verity digest for is absent from the
          measurement and reported as missing coverage, never folded in.
    * - ptrace or process mutation
-     - BPF LSM hooks protect the agent and protected PIDs, including
-       ``__ptrace_may_access`` where available.
-     - Hook availability and verifier behavior must be validated on the target
-       kernel.
+     - | BPF LSM hooks protect the agent and protected PIDs, including
+         ``__ptrace_may_access`` where available. Both refuse a read and an
+         attach alike, so nothing reads a protected process's ``/proc`` or
+         attaches a debugger to it.
+       | ``block_ptrace``, on by default, extends the refusal to an attach on
+         any other task.
+     - | Reading another process's ``/proc`` is left to the kernel outside the
+         protected set. Same-uid access to it is ordinary, ``yama``'s
+         ``ptrace_scope`` covers the attach case, and refusing it for every
+         task denies ``lsof``, ``ps``, profilers and crash handlers without
+         protecting anything this project owns.
+       | Hook availability and verifier behavior must be validated on the
+         target kernel.
    * - Ending a protected process
      - | ``lota-agent --terminate-protected`` is the only route: the LSM passes
          no signal to a protected task from anything but itself, the agent or
@@ -265,8 +343,21 @@ Active threats
        | Ending the agent is not this path: ``--shutdown`` poisons PCR 14, and
          resuming is a reboot.
    * - Kernel module or memory-only load
-     - Kernel lockdown, module signature enforcement, and BPF LSM gates reject
-       unsafe load paths.
+     - | Kernel lockdown, module signature enforcement, and BPF LSM gates reject
+         unsafe load paths.
+       | In enforce mode a module or firmware load also stands on the kernel
+         integrity baseline: module signatures enforced and lockdown at
+         integrity or above. The startup hardening gate reads both out of
+         sysfs and refuses to start the agent without them, and neither can
+         fall while the kernel runs, so a running agent has already
+         established the baseline and the hook reads its verdict.
+       | With ``strict_modules``, a module load has to name a file in the
+         fs-verity allowlist, in either form the kernel accepts: the image
+         itself, and the compressed file ``modprobe`` hands the kernel on a
+         distribution that ships ``.ko.xz`` or ``.ko.zst``. The allowlist
+         therefore has to name the compressed files, since that is what such a
+         host presents. A purpose the object does not recognise -- what a later
+         kernel adds -- is refused.
      - Kernel vulnerability or disabled production gate is outside LOTA's
        software boundary.
    * - DMA attack
@@ -368,6 +459,16 @@ anchor for "a trusted kernel booted" is PCR 7: it reflects the Secure Boot
 signing chain and stays constant across kernel updates, so a fleet trusts the
 distribution's signing key without maintaining a per-kernel hash.
 
+The ``kernel_hashes`` value an ``--export-policy`` run writes comes from one of
+those same registers, read at export time; the exported document names which
+register it was, and which kernel the exporting host had booted. It is not a
+hash of a kernel image, and no configuration key redirects it at one, so a
+policy that is to describe a kernel is exported from a host booted into that
+kernel. It stays advisory either way: the register is read and reported by code
+running on the kernel it describes, and on a GRUB host it moves when nothing
+about the kernel has, because ``grubenv`` is measured into it and rewritten
+every boot.
+
 Pinning these registers is not optional. A report whose ``pcr_mask`` omits
 PCR 0, 1 or 7 is refused before any baseline is consulted or written, and no
 configuration accepts one. This closes the downgrade an attacker would
@@ -395,6 +496,43 @@ OS-writable between the kernel handoff and the agent's first extend, and any
 code running in that window could seed the value the baseline would pin. The
 agent refuses to build such a report locally, so the missing module is named
 on the host rather than surfacing as a remote rejection.
+
+What the commitment binds, and what it does not
+-----------------------------------------------
+
+The commitment is ``SHA-256(tag || agent_hash)``, chained onto the initramfs
+lock value. It names the agent binary that took the boot and the platform
+baseline that binary chained onto, and nothing else.
+
+* **Within a boot**, PCR 14 cannot be reset from userspace. The agent extends
+  the commitment once; a second agent, a different build, or any other writer
+  moves the register away from the value the reported hash derives, and the
+  verifier refuses. The agent refuses locally on the same comparison, and an
+  operator-requested shutdown poisons the register deliberately so a pause is
+  visible rather than silent.
+* **Across a boot**, the register is cleared by the hardware reset and rebuilt
+  in a fixed order: the firmware measures its own state, the initramfs lock
+  helper extends before any userspace, and the agent extends next. A
+  commitment already present when the agent starts after a cold boot means
+  something ran before it, which the agent refuses by name.
+* **Freshness** is the verifier's nonce over a quote signed in that session,
+  not the register's contents. A recorded PCR 14 value proves nothing on its
+  own, because there is no way to present it without a fresh signature over
+  it, and the value is expected to repeat: the same host running the same
+  agent build has the same commitment every boot, which is what makes a
+  per-client baseline comparable at all.
+* **What is out of scope** is a local root that runs *before* the agent in the
+  same boot. Such an attacker can extend the commitment themselves and, having
+  reached the boot state the AIK auth is sealed to, quote it -- and that was
+  equally true when the counters were in the digest, since they could be
+  predicted. The layers that address that attacker are Secure Boot, the IMA
+  appraisal floor, fs-verity on the agent binary and the ordering that puts
+  the agent ahead of every login-capable target; PCR 14 records which binary
+  committed, it does not prove that a process is still alive.
+
+A TPM that restarts across S3 restores every PCR unchanged, and the derivation
+does not move with the counters, so the register matches on both sides with
+no candidate scan and no skew window to configure.
 
 Dynamic Root of Trust for Measurement (DRTM) -- Intel TXT, AMD SKINIT, driven
 on Linux by the TrenchBoot / Secure Launch project -- would re-measure the
@@ -458,6 +596,28 @@ which is per device regardless of tenant:
   binding travels inside the signed policy document, so a signed policy
   authenticates its own scope.
 
+What the audit trail can account for
+====================================
+
+Every operator action that changes a client's trust state -- revoke, unrevoke,
+ban, unban, reanchor, delete -- requires an actor and a reason, at the CLI and
+again at the API, and both reach the audit row. One rule, six verbs. An action
+that could be taken anonymously is one the trail cannot account for, so there
+is no verb that takes trust away or gives it back without naming who did it
+and why.
+
+The direction is the point. Imposing a restriction is the reversible,
+conservative act; **lifting** one is what a fleet most wants signed, and so is
+``delete``, which removes a client's trust state outright and for a long time
+asked for the least of any verb. A trail that attributed a ban but not the
+unban, or a revoke but not the deletion, would name the cautious half of every
+pair and leave the consequential half to a row that names nobody.
+
+This is an accountability property and not an access control: an admin key can
+still take every one of these actions. What the requirement buys is that the
+log stays evidence -- a reader can tell an operator-initiated change from any
+other, and can name the operator.
+
 The monitoring API enforces the same boundary. API keys are scoped: an
 operator key names a role (``reader`` or ``admin``, admin implies reader) and a
 tenant set (or ``*`` for every tenant), loaded from a file of key hashes and
@@ -471,7 +631,9 @@ is refused. Environment keys (``LOTA_ADMIN_API_KEY`` /
 ``LOTA_READER_API_KEY``) are global-scope by construction: the variable carries
 a key and nothing else, so there is nowhere to express a tenant list and the
 principal it authenticates is unscoped. Delegating a tenant therefore means
-issuing a key in the key file, not narrowing an environment key. See
+issuing a key in the key file, not narrowing an environment key. The endpoint
+list the instance logs at startup is built from the routes it registers, so it
+can be read as the API surface that instance exposes. See
 :doc:`../operator/multi-tenancy <../operator/multi-tenancy>` for configuration.
 
 Operational requirements

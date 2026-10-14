@@ -26,7 +26,9 @@ port = 8443
 # ca_cert = /etc/lota/ca.pem
 
 # Pin verifier certificate by SHA-256 fingerprint (64 hex chars)
-# pin_sha256 = aabbccdd...
+# This key is for the single-verifier deployment above; a host with publisher
+# profiles pins inside each profile instead, and setting both is refused.
+# pin_sha256 = 4fd24ead1c6c1c0d2e5f0a9b8c7d6e5f4a3b2c1d0e9f8a7b6c5d4e3f2a1b0c9d
 
 # ---- BPF / enforcement --------------------------------------------------
 
@@ -41,11 +43,23 @@ bpf_path = /usr/lib/lota/lota_lsm.bpf.o
 #   strict_mmap, block_ptrace, block_anon_exec   -- on by default.
 #   strict_exec, strict_modules                  -- off by default.
 #
+# block_ptrace refuses a ptrace attach on any task.
+# Reading another process's /proc is not an attach and is left to the kernel;
+# a process that opted into protection refuses both.
+#
 # strict_exec and strict_modules require at least one allow_verity entry
 # below. Enabling either without populating allow_verity makes the agent
 # refuse to start. A fresh install has no fs-verity allowlist by design,
 # so both flags default to off; the operator opts in once the
 # allow_verity list is provisioned.
+#
+# strict_modules covers a module in either of the forms the kernel accepts:
+# the image itself, and the compressed file modprobe hands the kernel on
+# a distribution that ships .ko.xz or .ko.zst.
+# On such a host every module load arrives in the compressed form, so the allowlist
+# has to name the compressed files -- fs-verity is enabled on the .ko.xz, not on
+# the module it expands to.
+# A host that arms the flag without them loads no further modules.
 # strict_mmap = true
 # strict_exec = true
 # block_ptrace = true
@@ -79,19 +93,24 @@ bpf_path = /usr/lib/lota/lota_lsm.bpf.o
 # profile under /var/lib/lota/profiles/
 attest_interval = 300
 
-# AIK key lifetime in seconds before rotation (0 = default 30 days)
+# AIK key lifetime in seconds before rotation (0 = default 30 days).
+# The floor is 3600: below it a host rotates its attestation key faster than
+# an enrolment completes. The same floor applies to --aik-ttl.
 aik_ttl = 0
 
 # ---- Sealed AIK auth (at-rest hardening) ---------------------------------
-# Keep a copy of the AIK userAuth sealed to the boot/PCR state (PCRs 0-7 +
-# PCR14) so it is only usable when the host booted as expected. Both keys
-# default to false, which preserves the plaintext-sidecar behaviour exactly.
+# Keep a copy of the AIK userAuth sealed to the platform state (PCRs 0-7,
+# the firmware and Secure Boot set) so it is only usable on this machine booted
+# as expected. Those registers describe the hardware, so the sealed copy survives
+# a reboot and an agent upgrade; PCR 14 is not bound, because it tracks the agent
+# binary and binding it would cost every host its AIK authorization at each update.
+# Both keys default to false, which preserves the plaintext-sidecar behaviour.
 #
 #   seal_aik_auth         also write a sealed copy and prefer it on load;
 #                         falls back to the plaintext sidecar if the sealed
 #                         copy is missing or the boot state changed.
 #   seal_aik_auth_strict  store ONLY the sealed copy (no plaintext on disk)
-#                         and never fall back. A firmware/kernel/agent change
+#                         and never fall back. A firmware or Secure Boot change
 #                         then forces AIK re-provisioning instead of exposing
 #                         the auth.
 # seal_aik_auth = false
@@ -110,6 +129,10 @@ aik_ttl = 0
 
 # Optional absolute path to currently booted kernel image.
 # Use this on distros that do not expose /boot/vmlinuz-<release>.
+# It tells the agent where to find the image -- `--test-tpm` hashes it.
+# It does not select what `--export-policy` exports: the measured-boot digest
+# in an exported policy is the value of a PCR as this host booted,
+# so the document names that register and the running kernel.
 # kernel_path = /efi/EFI/Linux/linux.efi
 
 # ---- Daemon --------------------------------------------------------------
@@ -188,7 +211,9 @@ log_level = info
 # signing each report with that publisher's own AIK, and one unreachable verifier
 # backs off only its own reporting.
 # Because the list replaces the single verifier above, --server and --pin-sha256
-# are refused while profiles are configured.
+# are refused while profiles are configured, as is the top-level pin_sha256:
+# every publisher's verifier presents its own certificate, so a pin belongs to
+# the profile whose verifier it was measured against.
 #
 # verifier = none is for a publisher who runs no verifier and checks the tokens
 # their titles fetch in their own backend instead. Nothing is reported to them:
@@ -212,6 +237,7 @@ log_level = info
 # ca_cert = /etc/lota/publisher-b.pem
 # verifier = verifier.publisher-b.example
 # verifier_port = 9443
+# pin_sha256 = 0123456789abcdef0123456789abcdeffedcba9876543210fedcba9876543210
 # interval = 120
 #
 # [profile "publisher-c"]

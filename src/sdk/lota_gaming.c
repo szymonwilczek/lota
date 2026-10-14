@@ -285,6 +285,12 @@ static int ipc_result_to_error(uint32_t result)
 		return LOTA_ERR_UNKNOWN_PROFILE;
 	case LOTA_IPC_ERR_CONSENT_REQUIRED:
 		return LOTA_ERR_CONSENT_REQUIRED;
+	case LOTA_IPC_ERR_UNMEASURABLE_SELF:
+		return LOTA_ERR_UNMEASURABLE_SELF;
+	case LOTA_IPC_ERR_NO_TPM:
+		return LOTA_ERR_NO_TPM;
+	case LOTA_IPC_ERR_NO_ENFORCEMENT:
+		return LOTA_ERR_NO_ENFORCEMENT;
 	case LOTA_IPC_ERR_TPM_FAILURE:
 	case LOTA_IPC_ERR_INTERNAL:
 	default:
@@ -1266,6 +1272,12 @@ const char *lota_strerror(int error)
 		return "This machine holds no enrollment for that publisher";
 	case LOTA_ERR_CONSENT_REQUIRED:
 		return "Nobody on this machine has agreed to answer to that publisher";
+	case LOTA_ERR_UNMEASURABLE_SELF:
+		return "This program's own executable carries no measurable identity (enable fs-verity on it)";
+	case LOTA_ERR_NO_TPM:
+		return "The agent on this machine has no TPM and will not issue an unsigned token";
+	case LOTA_ERR_NO_ENFORCEMENT:
+		return "The agent on this machine enforces nothing, so there is no runtime policy to change";
 	default:
 		return "Unknown error";
 	}

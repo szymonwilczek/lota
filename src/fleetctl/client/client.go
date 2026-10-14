@@ -312,9 +312,10 @@ func (c *Client) Revoke(clientID, reason, actor, note string) error {
 }
 
 // Unrevoke lifts a client's revocation.
-func (c *Client) Unrevoke(clientID string) error {
+func (c *Client) Unrevoke(clientID, reason, actor, note string) error {
 	return c.do(http.MethodDelete, "/api/v1/clients/"+url.PathEscape(clientID)+"/revoke",
-		nil, nil, nil, http.StatusOK)
+		nil, actionRequest{Reason: reason, Actor: actor, Note: note}, nil,
+		http.StatusOK)
 }
 
 // Revocation is one entry of the GET /api/v1/revocations listing.
@@ -350,13 +351,14 @@ func (c *Client) Ban(hardwareID, tenant, reason, actor, note string) error {
 // Unban lifts a hardware ban within a tenant.
 // Empty tenant defaults to the server's default tenant;
 // Tenant selects which (tenant, hardware) ban row is lifted.
-func (c *Client) Unban(hardwareID, tenant string) error {
+func (c *Client) Unban(hardwareID, tenant, reason, actor, note string) error {
 	q := url.Values{}
 	if tenant != "" {
 		q.Set("tenant", tenant)
 	}
 	return c.do(http.MethodDelete, "/api/v1/bans/"+url.PathEscape(hardwareID),
-		q, nil, nil, http.StatusOK)
+		q, actionRequest{Reason: reason, Actor: actor, Note: note}, nil,
+		http.StatusOK)
 }
 
 // Ban is one entry of the GET /api/v1/bans listing.
@@ -400,21 +402,19 @@ func (c *Client) ListBans(limit int, nextID string) (*BanPage, error) {
 
 // Reanchor drops a client's stored baselines so its next attestation
 // re-establishes trust (the operator-forced re-baseline).
-func (c *Client) Reanchor(clientID, actor, note string) error {
+func (c *Client) Reanchor(clientID, reason, actor, note string) error {
 	return c.do(http.MethodPost, "/api/v1/clients/"+url.PathEscape(clientID)+"/reanchor",
-		nil, actionRequest{Actor: actor, Note: note}, nil, http.StatusOK)
+		nil, actionRequest{Reason: reason, Actor: actor, Note: note}, nil,
+		http.StatusOK)
 }
 
 // DeleteClient removes a client's registration and baselines, forcing fresh enrollment.
 // Revocations and hardware bans survive.
 // Actor and note are optional audit metadata.
-func (c *Client) DeleteClient(clientID, actor, note string) error {
-	var body any
-	if actor != "" || note != "" {
-		body = actionRequest{Actor: actor, Note: note}
-	}
+func (c *Client) DeleteClient(clientID, reason, actor, note string) error {
 	return c.do(http.MethodDelete, "/api/v1/clients/"+url.PathEscape(clientID),
-		nil, body, nil, http.StatusOK)
+		nil, actionRequest{Reason: reason, Actor: actor, Note: note}, nil,
+		http.StatusOK)
 }
 
 // ReanchorReviewList fetches the clients that re-anchored on the
@@ -496,36 +496,4 @@ func (c *Client) Attestations(limit int) ([]Attestation, error) {
 		return nil, err
 	}
 	return resp.Attestations, nil
-}
-
-// sessionTokenRequest is the POST /api/v1/session/validate payload.
-type sessionTokenRequest struct {
-	SessionToken string `json:"session_token"`
-	Consume      bool   `json:"consume"`
-}
-
-// SessionTokenStatus is the POST /api/v1/session/validate response.
-type SessionTokenStatus struct {
-	Valid      bool   `json:"valid"`
-	Consumed   bool   `json:"consumed"`
-	ClientID   string `json:"client_id,omitempty"`
-	Tenant     string `json:"tenant,omitempty"`
-	HardwareID string `json:"hardware_id,omitempty"`
-	ResultCode uint32 `json:"result_code,omitempty"`
-	Flags      uint32 `json:"flags,omitempty"`
-	PCRMask    uint32 `json:"pcr_mask,omitempty"`
-	ValidUntil uint64 `json:"valid_until,omitempty"`
-}
-
-// ValidateSessionToken checks an issued session token (64 hex characters);
-// consume additionally marks it used so it cannot validate again.
-func (c *Client) ValidateSessionToken(token string, consume bool) (*SessionTokenStatus, error) {
-	var status SessionTokenStatus
-	err := c.do(http.MethodPost, "/api/v1/session/validate", nil,
-		sessionTokenRequest{SessionToken: token, Consume: consume},
-		&status, http.StatusOK)
-	if err != nil {
-		return nil, err
-	}
-	return &status, nil
 }

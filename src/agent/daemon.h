@@ -12,6 +12,7 @@
 #define LOTA_DAEMON_H
 
 #include <signal.h>
+#include <stdbool.h>
 #include <sys/types.h>
 
 /* Default PID file path */
@@ -31,11 +32,29 @@
  *   umask(0)    -> clear file creation mask
  *   Close stdin/stdout/stderr, redirect to /dev/null
  *
- * Returns: 0 in the daemon process, does not return in parent
- *          (parent calls _exit(0)).
+ * The launching process does not exit at the fork. It waits on a pipe until
+ * the daemon reports how its startup ended, and exits with that status,
+ * so a caller that gets its shell back has been told something true.
+ * See daemon_notify_started().
+ *
+ * Returns: 0 in the daemon process, does not return in the launching process.
  *          Negative errno on failure.
  */
 int daemonize(void);
+
+/*
+ * Report the startup verdict to the process that launched a daemon.
+ *
+ * Called once with 0 when the daemon is serving, and once with the exit status
+ * on any path that gives up before that. The first call wins and the rest are
+ * ignored, so an exit path may call it without knowing whether startup already
+ * succeeded.
+ *
+ * A no-op when the process was not daemonised.
+ *
+ * @status: exit status the launching process should carry.
+ */
+void daemon_notify_started(int status);
 
 /*
  * Create and lock PID file.
@@ -60,6 +79,22 @@ int pidfile_create(const char *path);
  * @fd:   file descriptor returned by pidfile_create (-1 to skip close)
  */
 void pidfile_remove(const char *path, int fd);
+
+/*
+ * Whether a SIGHUP has been taken since the last time this was asked,
+ * and clearing it in the same call.
+ *
+ * The enforcement daemon reads its own flag off a signalfd inside its event
+ * loop. The attestation loop has no event loop to hang one on and only needs
+ * to know, between rounds, whether the publisher list has to be re-read
+ * -- so it asks the handler that daemon_install_signals() already put in place.
+ */
+bool daemon_reload_taken(void);
+
+/* Whether a SIGHUP is waiting, without taking it.
+ * Lets a loop stop sleeping for a reload it will act on at the top of its
+ * next pass. */
+bool daemon_reload_pending(void);
 
 /*
  * Install signal handlers for daemon operation.

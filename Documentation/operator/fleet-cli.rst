@@ -9,7 +9,7 @@ Fleet CLI (lota-fleet)
 REST monitoring API. It covers the fleet lifecycle that otherwise requires
 hand-written ``curl``: device inventory, AIK revocations, hardware bans,
 operator-forced re-anchor, client removal, review of Low-Firmware-Assurance
-re-anchors, the audit and attestation logs, and session-token validation.
+re-anchors, and the audit and attestation logs.
 
 The CLI is a pure API client. It shares no code with the verifier, so any
 ``lota-fleet`` build works against any verifier that speaks the documented
@@ -35,7 +35,7 @@ environment variable (default ``http://127.0.0.1:8080``).
 
 The API has two Bearer-token tiers, matching the verifier's
 ``LOTA_READER_API_KEY`` and ``LOTA_ADMIN_API_KEY``: a reader key covers
-the read-only endpoints (stats, listings, logs, session validation), the
+the read-only endpoints (stats, listings, logs), the
 admin key additionally unlocks the mutating ones (revoke, ban, re-anchor,
 delete, review acknowledgement). Give the CLI whichever tier the task
 needs:
@@ -59,39 +59,51 @@ Commands
 
    lota-fleet [global flags] <command> [command flags] [args]
 
-===================================================  =====================
-Command                                              API tier
-===================================================  =====================
-``health``                                           none
-``stats``                                            reader
-``devices list [-limit N] [-offset N]``              reader
-``devices show <client-id>``                         reader
-``revoke <client-id> -reason R -actor A [-note S]``  admin
-``unrevoke <client-id>``                             admin
-``revocations``                                      reader
-``ban <hardware-id> -reason R -actor A [-note S]``   admin
-``unban <hardware-id>``                              admin
-``bans [-limit N] [-next-id CURSOR]``                reader
-``reanchor <client-id> -actor A [-note S]``          admin
-``delete <client-id> [-actor A] [-note S]``          admin
-``reanchor-review list``                             reader
-``reanchor-review ack <client-id>``                  admin
-``audit [-limit N]``                                 reader
-``attests [-limit N]``                               reader
-``session validate <token> [-consume]``              reader
-===================================================  =====================
+=====================================================  ========
+Command                                                API tier
+=====================================================  ========
+``health``                                             none
+``stats``                                              reader
+``devices list [-limit N] [-offset N]``                reader
+``devices show <client-id>``                           reader
+``revoke <client-id> -reason R -actor A [-note S]``    admin
+``unrevoke <client-id> -reason R -actor A [-note S]``  admin
+``revocations``                                        reader
+``ban <hardware-id> -reason R -actor A [-note S]``     admin
+``unban <hardware-id> -reason R -actor A [-note S]``   admin
+``bans [-limit N] [-next-id CURSOR]``                  reader
+``reanchor <client-id> -reason R -actor A [-note S]``  admin
+``delete <client-id> -reason R -actor A [-note S]``    admin
+``reanchor-review list``                               reader
+``reanchor-review ack <client-id>``                    admin
+``audit [-limit N]``                                   reader
+``attests [-limit N]``                                 reader
+=====================================================  ========
 
-``-reason`` must be one of the server's revocation reasons: ``cheating``,
-``compromised``, ``hardware_change`` or ``admin``. ``-actor`` is the
-administrator identity recorded in the audit log and is required for every
-mutating action except ``delete``, where it is optional audit metadata.
+``-reason`` on ``revoke`` must be one of the server's revocation reasons:
+``cheating``, ``compromised``, ``hardware_change`` or ``admin``. ``-actor`` is
+the administrator identity recorded in the audit log.
+
+**Every command that changes a client's trust state requires ``-actor`` and
+``-reason``**, and the audit row carries both. There is one rule rather than
+one per verb.
+
+Lifting a restriction is attributed on the same terms as imposing one:
+restoring a machine that was banned for cheating is the act a fleet most wants
+signed -- banning one is the reversible, conservative direction -- so a trail
+that names who imposed a restriction must also name who lifted it. And
+``delete``, which removes a client's trust state entirely, is the last action
+to leave unattributed.
+
+Only ``revoke`` takes a fixed vocabulary. Everywhere else ``-reason`` is free
+text, because "why was this machine let back in" and "why was this one
+removed" have no enumerable answer.
 
 Global ``--json`` prints the raw API response instead of the human
 rendering, for scripting against the full field set.
 
 Exit codes: 0 on success, 1 when the operation fails **or reports a
-negative result** (a degraded ``health``, an invalid ``session validate``
-token), 2 on a usage error. ``devices list`` and ``reanchor-review list``
+negative result** (a degraded ``health``), 2 on a usage error. ``devices list`` and ``reanchor-review list``
 print bare IDs on stdout (page summaries go to stderr), so their output
 pipes cleanly into further tooling.
 
@@ -127,15 +139,30 @@ Revoke a compromised host and confirm::
        -note "IR ticket 8841"
    lota-fleet --key-file /etc/lota/fleet-reader.key revocations
 
+The revoked host says so itself. Its next round fails at the verifier's
+verdict, and ``journalctl -u lota-attest`` on the machine reads::
+
+   Attestation round failed at the verifier's verdict: FAIL - This host's
+   attestation key was revoked by the publisher's administrator;
+   re-enrollment is their decision, not this machine's
+
+A banned hardware ID reads the same way, naming the ban. Both are worth
+knowing before a support call: the machine is obeying an administrative
+decision, and nothing done locally to it changes the answer.
+The reason recorded with the revocation (``compromised`` above)
+stays on the verifier -- the host is told the state, not the case for it.
+
 Re-baseline a host after a planned firmware update::
 
    lota-fleet --key-file /etc/lota/fleet-admin.key \
-       reanchor host-0142 -actor alice@ops -note "BIOS 2.4 rollout"
+       reanchor host-0142 -reason "BIOS 2.4 rollout" -actor alice@ops \
+             -note "fleet-wide firmware update"
 
 Decommission a host::
 
    lota-fleet --key-file /etc/lota/fleet-admin.key \
-       delete host-0142 -actor alice@ops -note "decommissioned"
+       delete host-0142 -reason decommissioned -actor alice@ops \
+             -note "returned to vendor"
 
 Check the fleet from a script::
 
@@ -155,18 +182,18 @@ the ban's identity::
    lota-fleet --key-file /etc/lota/fleet-admin.key \
        ban <hardware-id> -tenant acme -reason cheating -actor alice@ops
    lota-fleet --key-file /etc/lota/fleet-admin.key \
-       unban <hardware-id> -tenant acme
+       unban <hardware-id> -tenant acme -reason "appeal upheld" \
+             -actor alice@ops
 
 The listing commands (``revocations``, ``bans``, ``audit``, ``attests``) print
-a ``TENANT`` column, and ``devices show``, ``session validate`` and ``stats``
-report the tenant. Those listings also accept a ``-tenant`` flag that filters
+a ``TENANT`` column, and ``devices show`` and ``stats`` report the tenant. Those listings also accept a ``-tenant`` flag that filters
 the displayed rows to one tenant, in the table and the ``--json`` rendering
 alike. This filter is applied client-side, for an
 operator holding a broad key who wants to narrow the view: the verifier
 already scopes every response to the tenants the API key is allowed to see, so
 a tenant-scoped key needs no ``-tenant`` flag to stay within its bounds. A
-request that names a client, ban, or session outside the key's tenant set is
-answered as not found.
+request that names a client or ban outside the key's tenant set is answered as
+not found.
 
 ``stats`` from a tenant-scoped key reports ``tenant scoped: true`` and the
 tenant list, and narrows the client, revocation, and ban counts to those

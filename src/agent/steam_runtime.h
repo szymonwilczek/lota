@@ -102,6 +102,21 @@ int steam_runtime_detect(struct steam_runtime_info *info);
 const char *steam_runtime_type_str(enum steam_runtime_type type);
 
 /*
+ * steam_runtime_runtime_dir - The agent's own runtime directory.
+ * @buf: Destination buffer (important: should be PATH_MAX).
+ * @bufsz: Size of buf.
+ *
+ * Writes the value of XDG_RUNTIME_DIR, checked the same way every other
+ * environment input here is. The single-operator drop-in is what puts it in
+ * the daemon's environment, and it is the only thing in that environment that
+ * names the login the container listener belongs to.
+ *
+ * Returns: 0 on success, -ENOENT if XDG_RUNTIME_DIR is unset or rejected,
+ *          -ENAMETOOLONG if it does not fit.
+ */
+int steam_runtime_runtime_dir(char *buf, size_t bufsz);
+
+/*
  * steam_runtime_container_socket_dir - Build the container-accessible
  *   socket directory path.
  * @buf: Destination buffer (important: should be PATH_MAX).

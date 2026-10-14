@@ -28,14 +28,21 @@
 #include <linux/openat2.h>
 
 #include "../../include/lota.h"
-#include "../../include/lota_devt.h"
 #include "../../include/lota_ima_xattr.h"
 #include "bpf_loader.h"
 #include "journal.h"
 #include "policy_sign.h"
+#include "sb_dev.h"
 
 #ifndef EAUTH
 #define EAUTH 80
+
+/* Where the kernel publishes the boot parameters and the loaded IMA policy */
+#define IMA_CMDLINE_PATH "/proc/cmdline"
+#define IMA_POLICY_PATH "/sys/kernel/security/ima/policy"
+
+/* The rule set this package ships, named in the refusal that needs it */
+#define LOTA_IMA_POLICY_ASSET "/usr/share/lota/ima/lota-ima-policy"
 #endif
 
 /* Stats map indices - must match BPF program */
@@ -50,6 +57,7 @@
 #define STAT_PTRACE_BLOCKED 8
 #define STAT_SETUID_EVENTS 9
 #define STAT_BPF_SYSCALL_BLOCKED 13
+#define STAT_MOUNTS_BLOCKED 16
 
 struct protected_pid_entry {
 	uint64_t start_time_ticks;
@@ -229,62 +237,92 @@ static int libbpf_print_fn(enum libbpf_print_level level, const char *format,
 	return n;
 }
 
-/*
- * Resolve kernel symbol address from /proc/kallsyms.
- * Returns 0 on failure.
- */
-unsigned long resolve_kernel_symbol(const char *name)
+int bpf_loader_build_integrity_config(struct integrity_data *cfg,
+				      const char *sig_enforce_path,
+				      const char *lockdown_path)
 {
-	FILE *f;
-	char line[512];
-	unsigned long addr = 0;
+	int sig_ret;
+	int lockdown_ret;
 
-	f = fopen("/proc/kallsyms", "r");
-	if (!f) {
-		lota_warn("Failed to open /proc/kallsyms: %s", strerror(errno));
-		return 0;
-	}
-
-	while (fgets(line, sizeof(line), f)) {
-		char sym_name[512];
-		char type;
-		unsigned long a;
-
-		if (sscanf(line, "%lx %c %511s", &a, &type, sym_name) == 3) {
-			if (strcmp(name, sym_name) == 0) {
-				addr = a;
-				break;
-			}
-		}
-	}
-
-	fclose(f);
-	return addr;
-}
-
-static unsigned long resolve_lockdown_symbol(void)
-{
-	unsigned long lockdown = resolve_kernel_symbol("lockdown_state");
-
-	if (!lockdown) {
-		lockdown = resolve_kernel_symbol("kernel_locked_down");
-	}
-
-	if (!lockdown) {
-		lockdown = resolve_kernel_symbol("security_lockdown_enabled");
-	}
-
-	return lockdown;
-}
-
-static void build_expected_integrity_config(struct integrity_data *cfg)
-{
 	if (!cfg)
-		return;
+		return -EINVAL;
+
+	sig_ret = bpf_loader_kernel_module_sig_enforced(sig_enforce_path);
+	lockdown_ret = bpf_loader_kernel_lockdown_restrictive(lockdown_path);
 
 	memset(cfg, 0, sizeof(*cfg));
-	cfg->sig_enforce_addr = resolve_kernel_symbol("sig_enforce");
-	cfg->lockdown_addr = resolve_lockdown_symbol();
+	cfg->sig_enforce = sig_ret == 0;
+	cfg->lockdown = lockdown_ret == 0;
+
+	return 0;
+}
+
+int bpf_loader_object_integrity_layout(const char *bpf_obj_path,
+				       uint32_t *key_size, uint32_t *value_size)
+{
+	struct bpf_object *obj;
+	struct bpf_map *map;
+
+	if (!bpf_obj_path || !key_size || !value_size)
+		return -EINVAL;
+
+	/*
+	 * Opening parses the ELF and its BTF without asking the kernel for
+	 * anything, so this costs no privilege and can be answered before
+	 * the agent has committed to anything.
+	 */
+	obj = bpf_object__open_file(bpf_obj_path, NULL);
+	if (!obj)
+		return -EIO;
+
+	map = bpf_object__find_map_by_name(obj, "integrity_cfg");
+	if (!map) {
+		bpf_object__close(obj);
+		return -ENOENT;
+	}
+
+	*key_size = bpf_map__key_size(map);
+	*value_size = bpf_map__value_size(map);
+	bpf_object__close(obj);
+	return 0;
+}
+
+int bpf_loader_check_object_integrity_layout(const char *bpf_obj_path)
+{
+	uint32_t key_size = 0;
+	uint32_t value_size = 0;
+	int ret;
+
+	ret = bpf_loader_object_integrity_layout(bpf_obj_path, &key_size,
+						 &value_size);
+	if (ret < 0) {
+		lota_err("Cannot read the integrity map of %s: %s",
+			 bpf_obj_path ? bpf_obj_path : "(none)",
+			 strerror(-ret));
+		return ret;
+	}
+
+	if (key_size != sizeof(uint32_t) ||
+	    value_size != sizeof(struct integrity_data)) {
+		lota_err(
+			"Enforcement object %s carries an integrity map this agent cannot read: key %u bytes, value %u bytes, where this build reads key %zu, value %zu. The kernel copies the map's own value size on every lookup, so the object and the agent have to come from the same release",
+			bpf_obj_path, key_size, value_size, sizeof(uint32_t),
+			sizeof(struct integrity_data));
+		return -ENOTSUP;
+	}
+
+	lota_info(
+		"Enforcement object integrity map: key %u bytes, value %u bytes",
+		key_size, value_size);
+	return 0;
+}
+
+bool bpf_loader_integrity_config_satisfied(const struct integrity_data *cfg)
+{
+	if (!cfg)
+		return false;
+
+	return cfg->sig_enforce && cfg->lockdown;
 }
 
 static int read_text_file(const char *path, char *buf, size_t buf_size,
@@ -314,15 +352,14 @@ static int read_text_file(const char *path, char *buf, size_t buf_size,
 	return 0;
 }
 
-int bpf_loader_kernel_lockdown_restrictive(void)
+int bpf_loader_kernel_lockdown_restrictive(const char *lockdown_path)
 {
 	char buf[256];
 	size_t len = 0;
 	char *lb;
 	char *rb;
 
-	int ret = read_text_file("/sys/kernel/security/lockdown", buf,
-				 sizeof(buf), &len);
+	int ret = read_text_file(lockdown_path, buf, sizeof(buf), &len);
 	if (ret < 0)
 		return ret;
 
@@ -343,25 +380,84 @@ int bpf_loader_kernel_lockdown_restrictive(void)
 }
 
 /*
- * /sys/kernel/security/ima/policy is write-only on stock kernels
- * built without CONFIG_IMA_READ_POLICY (Fedora 44's default), so a
- * runtime read of the policy file is not a portable signal that
- * appraisal is enforcing. The authoritative knob is the kernel
- * boot parameter ima_appraise= on /proc/cmdline: only "enforce"
- * (block on integrity failure) and "fix" (write missing xattrs,
- * still blocks on signature failure) constitute the kernel-floor
- * the agent demands. "log" and the default "off" measure or do
- * nothing and therefore leave the integrity gate unenforced.
+ * Does the loaded IMA policy appraise an executable?
+ *
+ * Appraisal applies only to the func= rules the policy contains, so the mode
+ * on the cmdline is half the answer: a policy of measure rules under
+ * ima_appraise=enforce blocks on nothing. A rule that names no func= applies
+ * to every hook, exec included; dont_appraise is an exclusion list and is not
+ * appraisal however it reads to a substring match.
+ *
+ * Returns 0 when an executable is appraised, -ENOENT when the policy is readable
+ * and appraises none, and -EACCES when it could not be read at all,
+ * with @read_err carrying why: a kernel built without CONFIG_IMA_READ_POLICY
+ * and a caller without the privilege to read the file are both scopes nobody
+ * can see rather than scopes that are empty, and the two are told apart by
+ * errno rather than guessed at.
  */
-static int kernel_ima_appraise_enforcing(void)
+static int ima_policy_appraises_exec(const char *policy_path, int *read_err)
+{
+	char line[512];
+	FILE *fp;
+	int found = 0;
+
+	*read_err = 0;
+
+	fp = fopen(policy_path, "re");
+	if (!fp) {
+		*read_err = -errno;
+		return -EACCES;
+	}
+
+	while (fgets(line, sizeof(line), fp)) {
+		char *save = NULL;
+		char *tok = strtok_r(line, " \t\n", &save);
+		bool covers_exec = true;
+
+		if (!tok || strcmp(tok, "appraise") != 0)
+			continue;
+
+		while ((tok = strtok_r(NULL, " \t\n", &save))) {
+			if (strncmp(tok, "func=", 5) != 0)
+				continue;
+			covers_exec = strcmp(tok + 5, "BPRM_CHECK") == 0;
+			break;
+		}
+
+		if (covers_exec) {
+			found = 1;
+			break;
+		}
+	}
+
+	fclose(fp);
+	return found ? 0 : -ENOENT;
+}
+
+/*
+ * The appraisal mode the kernel was booted in, read from ima_appraise=
+ * on the cmdline: only "enforce" (block on integrity failure) and "fix"
+ * (write missing xattrs, still blocks on signature failure) constitute
+ * the kernel-floor the agent demands. "log" and the default "off" measure
+ * or do nothing and therefore leave the integrity gate unenforced.
+ *
+ * Both files the question has behind it are parameters, so the answer can be
+ * checked against something other than the machine the check runs on: the mode
+ * lives on the kernel cmdline, and the scope -- which func= rules the loaded
+ * policy actually appraises -- lives in the policy file.
+ * Neither half is the answer on its own.
+ */
+int bpf_loader_ima_appraisal_active(const char *cmdline_path,
+				    const char *policy_path)
 {
 	char buf[4096];
 	size_t len = 0;
 	char *tok;
 	char *save = NULL;
+	int read_err = 0;
 	int ret;
 
-	ret = read_text_file("/proc/cmdline", buf, sizeof(buf), &len);
+	ret = read_text_file(cmdline_path, buf, sizeof(buf), &len);
 	if (ret < 0)
 		return ret;
 	if (len == 0)
@@ -376,9 +472,25 @@ static int kernel_ima_appraise_enforcing(void)
 		if (strncmp(tok, "ima_appraise=", 13) != 0)
 			continue;
 		val = tok + 13;
-		if (strcmp(val, "enforce") == 0 || strcmp(val, "fix") == 0)
+		if (strcmp(val, "enforce") != 0 && strcmp(val, "fix") != 0)
+			return -EPERM;
+
+		ret = ima_policy_appraises_exec(policy_path, &read_err);
+		if (ret == -EACCES) {
+			/*
+			 * Nothing published what the kernel loaded, so the mode
+			 * is all there is.
+			 * Said out loud, because "enforcing" here means the mode
+			 * alone and an operator reading the startup log is entitled
+			 * to know which of the two was checked.
+			 */
+			lota_warn("IMA appraisal mode is %s but %s could not "
+				  "be read (%s): whether any executable is "
+				  "appraised is unverified",
+				  val, policy_path, strerror(-read_err));
 			return 0;
-		return -EPERM;
+		}
+		return ret;
 	}
 	return -EPERM;
 }
@@ -393,12 +505,11 @@ static int kernel_ima_appraise_enforcing(void)
  * during the boot -> agent window and survive every later
  * enforcement gate the agent installs.
  */
-int bpf_loader_kernel_module_sig_enforced(void)
+int bpf_loader_kernel_module_sig_enforced(const char *sig_enforce_path)
 {
 	char buf[16];
 	size_t len = 0;
-	int ret = read_text_file("/sys/module/module/parameters/sig_enforce",
-				 buf, sizeof(buf), &len);
+	int ret = read_text_file(sig_enforce_path, buf, sizeof(buf), &len);
 	if (ret < 0)
 		return ret;
 	if (len == 0)
@@ -613,14 +724,15 @@ int bpf_loader_verify_kernel_runtime_hardening(bool allow_mutable_rootfs)
 {
 	int ret;
 
-	ret = bpf_loader_kernel_lockdown_restrictive();
+	ret = bpf_loader_kernel_lockdown_restrictive(LOTA_KERNEL_LOCKDOWN_PATH);
 	if (ret < 0) {
 		lota_err("Kernel lockdown is not in restrictive mode "
 			 "(integrity/confidentiality required)");
 		return ret;
 	}
 
-	ret = bpf_loader_kernel_module_sig_enforced();
+	ret = bpf_loader_kernel_module_sig_enforced(
+		LOTA_MODULE_SIG_ENFORCE_PATH);
 	if (ret < 0) {
 		lota_err(
 			"Kernel module signature enforcement is not active "
@@ -629,7 +741,17 @@ int bpf_loader_verify_kernel_runtime_hardening(bool allow_mutable_rootfs)
 		return ret;
 	}
 
-	ret = kernel_ima_appraise_enforcing();
+	ret = bpf_loader_ima_appraisal_active(IMA_CMDLINE_PATH,
+					      IMA_POLICY_PATH);
+	if (ret == -ENOENT) {
+		lota_err("IMA appraisal is in a blocking mode but %s carries "
+			 "no appraise rule for func=BPRM_CHECK, so no "
+			 "executable on this host is appraised; the rules are "
+			 "in %s and the routes that supply the signatures they "
+			 "verify are in the production bringup guide",
+			 IMA_POLICY_PATH, LOTA_IMA_POLICY_ASSET);
+		return ret;
+	}
 	if (ret < 0) {
 		lota_err("IMA appraisal is not in an enforcing mode "
 			 "(ima_appraise=enforce or fix required on the kernel "
@@ -717,7 +839,6 @@ int bpf_loader_init(struct bpf_loader_ctx *ctx)
 	ctx->config_fd = -1;
 	ctx->task_auth_fd = -1;
 	ctx->trusted_libs_fd = -1;
-	ctx->trusted_lib_mnt_fd = -1;
 	ctx->protected_pids_fd = -1;
 	ctx->allow_verity_digest_fd = -1;
 
@@ -833,6 +954,57 @@ out:
 	free(sig_path);
 	free(obj_data);
 	return ret;
+}
+
+int bpf_loader_verify_object(const char *bpf_obj_path,
+			     const char *bpf_pubkey_pem_path)
+{
+	uint8_t *obj_data = NULL;
+	size_t obj_len = 0;
+	int ret;
+
+	if (!bpf_obj_path)
+		return -EINVAL;
+
+	if (!bpf_pubkey_pem_path || bpf_pubkey_pem_path[0] == '\0')
+		return -EINVAL;
+
+	ret = verify_bpf_object_signature(bpf_obj_path, bpf_pubkey_pem_path,
+					  &obj_data, &obj_len);
+
+	/*
+	 * The bytes are of no use here: the load reads and verifies them again
+	 * against the kernel it hands them to, so holding this copy across
+	 * everything between here and there would buy nothing.
+	 */
+	free(obj_data);
+	return ret;
+}
+
+/*
+ * The kernel copies the map's own value_size into the caller's buffer,
+ * so a map wider than the struct it is read into writes past that struct.
+ * The object is checked before it is loaded; this is the same question asked
+ * of the map the kernel actually holds, because the buffer is on this stack.
+ */
+static int integrity_map_fits(int map_fd)
+{
+	struct bpf_map_info info = { 0 };
+	uint32_t len = sizeof(info);
+
+	if (bpf_map_get_info_by_fd(map_fd, &info, &len) < 0)
+		return -errno;
+
+	if (info.key_size != sizeof(uint32_t) ||
+	    info.value_size != sizeof(struct integrity_data)) {
+		lota_err(
+			"Loaded integrity map is key %u bytes, value %u bytes, where this build reads key %zu, value %zu",
+			info.key_size, info.value_size, sizeof(uint32_t),
+			sizeof(struct integrity_data));
+		return -ENOTSUP;
+	}
+
+	return 0;
 }
 
 int bpf_loader_load(struct bpf_loader_ctx *ctx, const char *bpf_obj_path,
@@ -1006,14 +1178,41 @@ int bpf_loader_load(struct bpf_loader_ctx *ctx, const char *bpf_obj_path,
 
 		struct integrity_data cfg = { 0 };
 
-		build_expected_integrity_config(&cfg);
+		bpf_loader_build_integrity_config(&cfg,
+						  LOTA_MODULE_SIG_ENFORCE_PATH,
+						  LOTA_KERNEL_LOCKDOWN_PATH);
 
-		lota_info("Resolved kernel symbols: sig_enforce=0x%lx, "
-			  "lockdown=0x%lx",
-			  (unsigned long)cfg.sig_enforce_addr,
-			  (unsigned long)cfg.lockdown_addr);
+		if (bpf_loader_integrity_config_satisfied(&cfg)) {
+			lota_info(
+				"Kernel integrity baseline: module signatures enforced, lockdown at integrity or above");
+		} else {
+			/*
+			 * hardening gate refuses to start on this a moment later,
+			 * but it is this value the module and firmware branches
+			 * read, so what it costs is said here
+			 */
+			lota_err(
+				"Kernel integrity baseline not met (module signatures enforced: %s, lockdown at integrity or above: %s); module and firmware loads are refused in enforce mode",
+				cfg.sig_enforce ? "yes" : "no",
+				cfg.lockdown ? "yes" : "no");
+		}
 
 		uint32_t key = 0;
+
+		/*
+		 * The kernel reads the map's own value_size out of the buffer
+		 * handed to it, so a wider map reads past cfg.
+		 * The pre-flight refuses such an object before the daemon gets
+		 * here; the map the kernel holds is asked again because the buffer
+		 * is on this stack.
+		 */
+		err = integrity_map_fits(ctx->integrity_fd);
+		if (err < 0) {
+			lota_err("Refusing to write the integrity map of %s",
+				 bpf_obj_path);
+			goto err_close;
+		}
+
 		if (bpf_map_update_elem(ctx->integrity_fd, &key, &cfg,
 					BPF_ANY) < 0) {
 			lota_err("Failed to update integrity_config map: %s",
@@ -1033,21 +1232,6 @@ int bpf_loader_load(struct bpf_loader_ctx *ctx, const char *bpf_obj_path,
 					"trusted_libs map");
 		if (err < 0) {
 			lota_err("Failed to harden trusted_libs map fd: %s",
-				 strerror(-err));
-			goto err_close;
-		}
-	}
-
-	/* Get trusted parent mountpoint map fd */
-	ctx->trusted_lib_mnt_fd =
-		bpf_object__find_map_fd_by_name(ctx->obj, "trusted_lib_mnt");
-	if (ctx->trusted_lib_mnt_fd < 0) {
-		ctx->trusted_lib_mnt_fd = -1; /* optional map */
-	} else {
-		err = harden_fd_cloexec(ctx->trusted_lib_mnt_fd,
-					"trusted_lib_mnt map");
-		if (err < 0) {
-			lota_err("Failed to harden trusted_lib_mnt map fd: %s",
 				 strerror(-err));
 			goto err_close;
 		}
@@ -1308,7 +1492,6 @@ void bpf_loader_cleanup(struct bpf_loader_ctx *ctx)
 	ctx->task_auth_fd = -1;
 	ctx->integrity_fd = -1;
 	ctx->trusted_libs_fd = -1;
-	ctx->trusted_lib_mnt_fd = -1;
 	ctx->protected_pids_fd = -1;
 	ctx->allow_verity_digest_fd = -1;
 }
@@ -1564,6 +1747,7 @@ int bpf_loader_verify_integrity_config(struct bpf_loader_ctx *ctx)
 	uint32_t key = 0;
 	struct integrity_data current = { 0 };
 	struct integrity_data expected = { 0 };
+	int ret;
 
 	if (!ctx || !ctx->loaded)
 		return -EINVAL;
@@ -1571,20 +1755,23 @@ int bpf_loader_verify_integrity_config(struct bpf_loader_ctx *ctx)
 	if (ctx->integrity_fd < 0)
 		return -ENOTSUP;
 
+	ret = integrity_map_fits(ctx->integrity_fd);
+	if (ret < 0)
+		return ret;
+
 	if (bpf_map_lookup_elem(ctx->integrity_fd, &key, &current) < 0)
 		return -errno;
 
-	build_expected_integrity_config(&expected);
+	bpf_loader_build_integrity_config(&expected,
+					  LOTA_MODULE_SIG_ENFORCE_PATH,
+					  LOTA_KERNEL_LOCKDOWN_PATH);
 
-	if (current.sig_enforce_addr != expected.sig_enforce_addr ||
-	    current.lockdown_addr != expected.lockdown_addr) {
-		lota_err("integrity_config mismatch: map(sig_enforce=0x%llx "
-			 "lockdown=0x%llx) "
-			 "expected(sig_enforce=0x%llx lockdown=0x%llx)",
-			 (unsigned long long)current.sig_enforce_addr,
-			 (unsigned long long)current.lockdown_addr,
-			 (unsigned long long)expected.sig_enforce_addr,
-			 (unsigned long long)expected.lockdown_addr);
+	if (current.sig_enforce != expected.sig_enforce ||
+	    current.lockdown != expected.lockdown) {
+		lota_err("integrity_config mismatch: map(sig_enforce=%u "
+			 "lockdown=%u) expected(sig_enforce=%u lockdown=%u)",
+			 current.sig_enforce, current.lockdown,
+			 expected.sig_enforce, expected.lockdown);
 		return -EPERM;
 	}
 
@@ -1616,6 +1803,21 @@ int bpf_loader_protect_pid(struct bpf_loader_ctx *ctx, uint32_t pid)
 	return 0;
 }
 
+int bpf_loader_probe_protect_pid(uint32_t pid)
+{
+	uint64_t start_time_ticks = 0;
+	int ret;
+
+	ret = read_pid_start_time_ticks(pid, &start_time_ticks);
+	if (ret < 0)
+		return ret;
+
+	if (start_time_ticks == 0)
+		return -EINVAL;
+
+	return 0;
+}
+
 int bpf_loader_unprotect_pid(struct bpf_loader_ctx *ctx, uint32_t pid)
 {
 	if (!ctx || !ctx->loaded)
@@ -1630,7 +1832,8 @@ int bpf_loader_unprotect_pid(struct bpf_loader_ctx *ctx, uint32_t pid)
 	return 0;
 }
 
-static int stat_regular_file_nofollow(const char *path, struct stat *st)
+static int stat_regular_file_nofollow(const char *path, struct stat *st,
+				      unsigned long long *sb_dev)
 {
 	int fd = -1;
 	int ret = 0;
@@ -1651,6 +1854,14 @@ static int stat_regular_file_nofollow(const char *path, struct stat *st)
 		return ret;
 	}
 
+	if (sb_dev) {
+		ret = sb_dev_from_fd(fd, sb_dev);
+		if (ret < 0) {
+			close(fd);
+			return ret;
+		}
+	}
+
 	close(fd);
 	if (!S_ISREG(st->st_mode))
 		return -EINVAL;
@@ -1658,283 +1869,51 @@ static int stat_regular_file_nofollow(const char *path, struct stat *st)
 	return 0;
 }
 
-static int stat_dir_nofollow(const char *path, struct stat *st)
+/*
+ * BPF side looks these keys up with inode->i_sb->s_dev, so the loader has to
+ * write that device and not the one stat(2) reports: on btrfs a subvolume has
+ * its own anonymous device, and a key built from stat(2) is a key no hook can
+ * find. A path whose superblock device cannot be resolved is refused -- arming
+ * a lookup that can never hit is what left the hooks inert.
+ */
+static int trusted_lib_key_for_file(const char *path,
+				    struct trusted_lib_key *key)
 {
-	int fd = -1;
-	int ret = 0;
-
-	if (!path || !st)
-		return -EINVAL;
-
-	if (path[0] != '/')
-		return -EINVAL;
-
-	{
-		struct open_how how = {
-			.flags = O_PATH | O_DIRECTORY | O_CLOEXEC,
-			.resolve = RESOLVE_NO_SYMLINKS | RESOLVE_NO_MAGICLINKS,
-		};
-
-		fd = (int)syscall(SYS_openat2, AT_FDCWD, path, &how,
-				  sizeof(how));
-		if (fd < 0 && errno != ENOSYS && errno != EINVAL)
-			return -errno;
-	}
-
-	if (fd < 0) {
-		int dirfd = -1;
-		const char *p = path;
-
-		dirfd = open("/", O_PATH | O_DIRECTORY | O_CLOEXEC);
-		if (dirfd < 0)
-			return -errno;
-
-		while (*p == '/')
-			p++;
-
-		if (*p == '\0') {
-			fd = dirfd;
-			dirfd = -1;
-		}
-
-		while (fd < 0 && *p != '\0') {
-			char name[NAME_MAX + 1];
-			const char *slash = strchr(p, '/');
-			size_t n = slash ? (size_t)(slash - p) : strlen(p);
-			int nextfd;
-
-			if (n == 0) {
-				p++;
-				continue;
-			}
-			if (n > NAME_MAX) {
-				close(dirfd);
-				return -ENAMETOOLONG;
-			}
-
-			memcpy(name, p, n);
-			name[n] = '\0';
-
-			nextfd = openat(dirfd, name,
-					O_PATH | O_DIRECTORY | O_NOFOLLOW |
-						O_CLOEXEC);
-			close(dirfd);
-			if (nextfd < 0)
-				return -errno;
-			dirfd = nextfd;
-
-			if (!slash) {
-				fd = dirfd;
-				dirfd = -1;
-				break;
-			}
-
-			p = slash + 1;
-			while (*p == '/')
-				p++;
-		}
-
-		if (dirfd >= 0)
-			close(dirfd);
-
-		if (fd < 0)
-			return -EINVAL;
-	}
-
-	if (fstat(fd, st) != 0) {
-		ret = -errno;
-		close(fd);
-		return ret;
-	}
-
-	close(fd);
-	if (!S_ISDIR(st->st_mode))
-		return -EINVAL;
-
-	return 0;
-}
-
-static int update_trusted_mountpoint_ref(struct bpf_loader_ctx *ctx,
-					 const char *dir_path, int add)
-{
-	struct trusted_lib_key key = { 0 };
+	unsigned long long sb_dev = 0;
 	struct stat st = { 0 };
-	uint32_t refcnt = 0;
 	int ret;
 
-	if (!ctx || !dir_path)
-		return -EINVAL;
-
-	if (ctx->trusted_lib_mnt_fd < 0)
-		return 0;
-
-	ret = stat_dir_nofollow(dir_path, &st);
-	if (ret < 0)
+	ret = stat_regular_file_nofollow(path, &st, &sb_dev);
+	if (ret < 0) {
+		if (ret == -ENOTSUP || ret == -ENODEV)
+			lota_err(
+				"Cannot read the superblock device of %s: %s; "
+				"the kernel would never match a trusted-library key for it",
+				path, strerror(-ret));
 		return ret;
+	}
 
-	key.dev = lota_devt_from_st(st.st_dev);
-	key.ino = (uint64_t)st.st_ino;
-	if (key.dev == 0 || key.ino == 0)
+	key->dev = sb_dev;
+	key->ino = (uint64_t)st.st_ino;
+	if (key->dev == 0 || key->ino == 0)
 		return -EINVAL;
-
-	if (bpf_map_lookup_elem(ctx->trusted_lib_mnt_fd, &key, &refcnt) < 0) {
-		if (errno != ENOENT)
-			return -errno;
-		refcnt = 0;
-	}
-
-	if (add) {
-		if (refcnt == UINT32_MAX)
-			return -EOVERFLOW;
-		refcnt++;
-		if (bpf_map_update_elem(ctx->trusted_lib_mnt_fd, &key, &refcnt,
-					BPF_ANY) < 0)
-			return -errno;
-		return 0;
-	}
-
-	if (refcnt == 0)
-		return 0;
-
-	if (refcnt == 1) {
-		if (bpf_map_delete_elem(ctx->trusted_lib_mnt_fd, &key) < 0 &&
-		    errno != ENOENT)
-			return -errno;
-		return 0;
-	}
-
-	refcnt--;
-	if (bpf_map_update_elem(ctx->trusted_lib_mnt_fd, &key, &refcnt,
-				BPF_ANY) < 0)
-		return -errno;
 
 	return 0;
 }
 
-static int update_trusted_parent_mountpoints(struct bpf_loader_ctx *ctx,
-					     const char *lib_path, int add)
+int bpf_loader_probe_trusted_lib(const char *path)
 {
-	char dir_path[PATH_MAX];
-	char prefix[PATH_MAX];
-	size_t len;
-	size_t prefix_len = 0;
-	char *slash;
-	char *p;
-	uint32_t applied = 0;
+	struct trusted_lib_key key = { 0 };
 
-	if (!ctx || !lib_path)
+	if (!path)
 		return -EINVAL;
 
-	if (ctx->trusted_lib_mnt_fd < 0)
-		return 0;
-
-	len = strnlen(lib_path, sizeof(dir_path));
-	if (len == 0 || len >= sizeof(dir_path))
-		return -EINVAL;
-
-	memcpy(dir_path, lib_path, len + 1);
-
-	while (len > 1 && dir_path[len - 1] == '/') {
-		dir_path[len - 1] = '\0';
-		len--;
-	}
-
-	slash = strrchr(dir_path, '/');
-	if (!slash)
-		return -EINVAL;
-	if (slash == dir_path)
-		return 0; /* parent is /, skip global mountpoint lock */
-	*slash = '\0';
-
-	p = dir_path + 1; /* skip leading slash */
-	while (*p != '\0') {
-		const char *next = strchr(p, '/');
-		size_t comp_len = next ? (size_t)(next - p) : strlen(p);
-
-		if (comp_len == 0) {
-			p++;
-			continue;
-		}
-
-		if (prefix_len == 0) {
-			if (1 + comp_len >= sizeof(prefix))
-				return -ENAMETOOLONG;
-			prefix[0] = '/';
-			memcpy(prefix + 1, p, comp_len);
-			prefix_len = 1 + comp_len;
-		} else {
-			if (prefix_len + 1 + comp_len >= sizeof(prefix))
-				return -ENAMETOOLONG;
-			prefix[prefix_len] = '/';
-			memcpy(prefix + prefix_len + 1, p, comp_len);
-			prefix_len += 1 + comp_len;
-		}
-
-		prefix[prefix_len] = '\0';
-
-		int ret = update_trusted_mountpoint_ref(ctx, prefix, add);
-		if (ret < 0) {
-			if (add && applied > 0) {
-				size_t rollback_prefix_len = 0;
-				char rollback_prefix[PATH_MAX];
-				char *rp = dir_path + 1;
-				uint32_t remaining = applied;
-
-				while (remaining > 0 && *rp != '\0') {
-					const char *rnext = strchr(rp, '/');
-					size_t rlen =
-						rnext ? (size_t)(rnext - rp) :
-							strlen(rp);
-
-					if (rlen == 0) {
-						rp++;
-						continue;
-					}
-
-					if (rollback_prefix_len == 0) {
-						rollback_prefix[0] = '/';
-						memcpy(rollback_prefix + 1, rp,
-						       rlen);
-						rollback_prefix_len = 1 + rlen;
-					} else {
-						rollback_prefix
-							[rollback_prefix_len] =
-								'/';
-						memcpy(rollback_prefix +
-							       rollback_prefix_len +
-							       1,
-						       rp, rlen);
-						rollback_prefix_len += 1 + rlen;
-					}
-
-					rollback_prefix[rollback_prefix_len] =
-						'\0';
-					(void)update_trusted_mountpoint_ref(
-						ctx, rollback_prefix, 0);
-					remaining--;
-
-					if (!rnext)
-						break;
-					rp = (char *)rnext + 1;
-				}
-			}
-			return ret;
-		}
-
-		applied++;
-
-		if (!next)
-			break;
-		p = (char *)next + 1;
-	}
-
-	return 0;
+	return trusted_lib_key_for_file(path, &key);
 }
 
 int bpf_loader_trust_lib(struct bpf_loader_ctx *ctx, const char *path)
 {
 	struct trusted_lib_key key = { 0 };
-	struct stat st = { 0 };
 	uint32_t value = 1;
 	int ret;
 
@@ -1944,24 +1923,13 @@ int bpf_loader_trust_lib(struct bpf_loader_ctx *ctx, const char *path)
 	if (ctx->trusted_libs_fd < 0)
 		return -ENOTSUP;
 
-	ret = stat_regular_file_nofollow(path, &st);
+	ret = trusted_lib_key_for_file(path, &key);
 	if (ret < 0)
 		return ret;
-
-	key.dev = lota_devt_from_st(st.st_dev);
-	key.ino = (uint64_t)st.st_ino;
-	if (key.dev == 0 || key.ino == 0)
-		return -EINVAL;
 
 	if (bpf_map_update_elem(ctx->trusted_libs_fd, &key, &value, BPF_ANY) <
 	    0)
 		return -errno;
-
-	ret = update_trusted_parent_mountpoints(ctx, path, 1);
-	if (ret < 0) {
-		(void)bpf_map_delete_elem(ctx->trusted_libs_fd, &key);
-		return ret;
-	}
 
 	return 0;
 }
@@ -1969,7 +1937,6 @@ int bpf_loader_trust_lib(struct bpf_loader_ctx *ctx, const char *path)
 int bpf_loader_untrust_lib(struct bpf_loader_ctx *ctx, const char *path)
 {
 	struct trusted_lib_key key = { 0 };
-	struct stat st = { 0 };
 	int ret;
 
 	if (!ctx || !ctx->loaded || !path)
@@ -1978,22 +1945,13 @@ int bpf_loader_untrust_lib(struct bpf_loader_ctx *ctx, const char *path)
 	if (ctx->trusted_libs_fd < 0)
 		return -ENOTSUP;
 
-	ret = stat_regular_file_nofollow(path, &st);
+	ret = trusted_lib_key_for_file(path, &key);
 	if (ret < 0)
 		return ret;
-
-	key.dev = lota_devt_from_st(st.st_dev);
-	key.ino = (uint64_t)st.st_ino;
-	if (key.dev == 0 || key.ino == 0)
-		return -EINVAL;
 
 	if (bpf_map_delete_elem(ctx->trusted_libs_fd, &key) < 0 &&
 	    errno != ENOENT)
 		return -errno;
-
-	ret = update_trusted_parent_mountpoints(ctx, path, 0);
-	if (ret < 0)
-		return ret;
 
 	return 0;
 }
@@ -2026,6 +1984,7 @@ int bpf_loader_get_extended_stats(struct bpf_loader_ctx *ctx,
 	read_stat(ctx->stats_fd, STAT_SETUID_EVENTS, &stats->setuid_events);
 	read_stat(ctx->stats_fd, STAT_BPF_SYSCALL_BLOCKED,
 		  &stats->bpf_syscall_blocked);
+	read_stat(ctx->stats_fd, STAT_MOUNTS_BLOCKED, &stats->mounts_blocked);
 
 	return 0;
 }

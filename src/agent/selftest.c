@@ -20,6 +20,8 @@
 #include "../../include/lota_seal.h"
 #include "agent.h"
 #include "iommu.h"
+#include "profile.h"
+#include "publishers.h"
 #include "quote.h"
 #include "selftest.h"
 #include "tpm.h"
@@ -38,6 +40,7 @@ void print_hex(const char *label, const uint8_t *data, size_t len)
 
 int test_tpm(void)
 {
+	struct selftest_tally tally = { 0 };
 	int ret;
 	uint8_t pcr_value[LOTA_HASH_SIZE];
 	uint8_t kernel_hash[LOTA_HASH_SIZE];
@@ -52,15 +55,17 @@ int test_tpm(void)
 	ret = tpm_init(&g_agent.tpm_ctx);
 	if (ret < 0) {
 		fprintf(stderr, "Failed to initialize TPM: %s\n",
-			strerror(-ret));
+			tpm_strerror(ret));
 		return ret;
 	}
 	printf("TPM initialized successfully\n\n");
 
 	printf("Running TPM self-test...\n");
 	ret = tpm_self_test(&g_agent.tpm_ctx);
+	selftest_record(&tally, ret);
 	if (ret < 0) {
-		fprintf(stderr, "TPM self-test failed: %s\n", strerror(-ret));
+		fprintf(stderr, "TPM self-test failed: %s\n",
+			tpm_strerror(ret));
 	} else {
 		printf("TPM self-test passed\n");
 	}
@@ -68,24 +73,30 @@ int test_tpm(void)
 
 	printf("Reading PCR 0 (SRTM)...\n");
 	ret = tpm_read_pcr(&g_agent.tpm_ctx, 0, TPM2_ALG_SHA256, pcr_value);
+	selftest_record(&tally, ret);
 	if (ret < 0) {
-		fprintf(stderr, "Failed to read PCR 0: %s\n", strerror(-ret));
+		fprintf(stderr, "Failed to read PCR 0: %s\n",
+			tpm_strerror(ret));
 	} else {
 		print_hex("PCR 0", pcr_value, LOTA_HASH_SIZE);
 	}
 
 	printf("\nReading PCR 1 (BIOS config/IOMMU)...\n");
 	ret = tpm_read_pcr(&g_agent.tpm_ctx, 1, TPM2_ALG_SHA256, pcr_value);
+	selftest_record(&tally, ret);
 	if (ret < 0) {
-		fprintf(stderr, "Failed to read PCR 1: %s\n", strerror(-ret));
+		fprintf(stderr, "Failed to read PCR 1: %s\n",
+			tpm_strerror(ret));
 	} else {
 		print_hex("PCR 1", pcr_value, LOTA_HASH_SIZE);
 	}
 
 	printf("\nReading PCR 10 (IMA)...\n");
 	ret = tpm_read_pcr(&g_agent.tpm_ctx, 10, TPM2_ALG_SHA256, pcr_value);
+	selftest_record(&tally, ret);
 	if (ret < 0) {
-		fprintf(stderr, "Failed to read PCR 10: %s\n", strerror(-ret));
+		fprintf(stderr, "Failed to read PCR 10: %s\n",
+			tpm_strerror(ret));
 	} else {
 		print_hex("PCR 10", pcr_value, LOTA_HASH_SIZE);
 	}
@@ -95,16 +106,18 @@ int test_tpm(void)
 	{
 		int k_err = tpm_get_current_kernel_path(
 			&g_agent.tpm_ctx, kernel_path, sizeof(kernel_path));
+		selftest_record(&tally, k_err);
 		if (k_err < 0) {
 			fprintf(stderr, "Failed to find kernel: %s\n",
-				strerror(-k_err));
+				tpm_strerror(k_err));
 		} else {
 			printf("Kernel: %s\n", kernel_path);
 			printf("Hashing kernel image...\n");
 			k_err = tpm_hash_file(kernel_path, kernel_hash);
+			selftest_record(&tally, k_err);
 			if (k_err < 0) {
 				fprintf(stderr, "Failed to hash kernel: %s\n",
-					strerror(-k_err));
+					tpm_strerror(k_err));
 			} else {
 				print_hex("Kernel SHA-256", kernel_hash,
 					  LOTA_HASH_SIZE);
@@ -127,7 +140,7 @@ int test_tpm(void)
 		s_err = tpm_hash_file(exe_path, self_hash);
 		if (s_err < 0) {
 			fprintf(stderr, "Failed to hash agent: %s\n",
-				strerror(-s_err));
+				tpm_strerror(s_err));
 		} else {
 			print_hex("Agent SHA-256", self_hash, LOTA_HASH_SIZE);
 		}
@@ -136,15 +149,17 @@ int test_tpm(void)
 	printf("\nReading PCR %d before extend...\n", LOTA_PCR_SELF);
 	ret = tpm_read_pcr(&g_agent.tpm_ctx, LOTA_PCR_SELF, TPM2_ALG_SHA256,
 			   pcr_value);
+	selftest_record(&tally, ret);
 	if (ret < 0) {
 		fprintf(stderr, "Failed to read PCR %d: %s\n", LOTA_PCR_SELF,
-			strerror(-ret));
+			tpm_strerror(ret));
 	} else {
 		print_hex("PCR 14 (before)", pcr_value, LOTA_HASH_SIZE);
 	}
 
 	printf("\nExtending self-hash into PCR %d...\n", LOTA_PCR_SELF);
 	ret = self_measure(&g_agent.tpm_ctx);
+	selftest_record(&tally, ret);
 	if (ret < 0) {
 		fprintf(stderr, "Self-measurement failed: %s\n",
 			strerror(-ret));
@@ -155,30 +170,57 @@ int test_tpm(void)
 	printf("\nReading PCR %d after extend...\n", LOTA_PCR_SELF);
 	ret = tpm_read_pcr(&g_agent.tpm_ctx, LOTA_PCR_SELF, TPM2_ALG_SHA256,
 			   pcr_value);
+	selftest_record(&tally, ret);
 	if (ret < 0) {
 		fprintf(stderr, "Failed to read PCR %d: %s\n", LOTA_PCR_SELF,
-			strerror(-ret));
+			tpm_strerror(ret));
 	} else {
 		print_hex("PCR 14 (after)", pcr_value, LOTA_HASH_SIZE);
 	}
 
-	/* AIK provisioning test */
-	printf("\n=== AIK Provisioning Test ===\n\n");
+	/* AIK test.
+	 *
+	 * A probe reports state, it does not create it: provisioning here
+	 * would persist a key that outlives the command and take one of
+	 * the TPM's persistent objects, which is the ceiling on how many
+	 * publishers this host can answer to.
+	 */
+	printf("\n=== AIK Test ===\n\n");
 
-	printf("Checking/provisioning AIK at handle 0x%08X...\n",
-	       g_agent.tpm_ctx.aik_handle);
-	ret = tpm_provision_aik(&g_agent.tpm_ctx);
-	if (ret < 0) {
-		fprintf(stderr, "AIK provisioning failed: %s\n",
-			strerror(-ret));
-		fprintf(stderr,
-			"Note: May require owner hierarchy authorization\n");
+	if (selftest_aik_plan(tpm_handle_holds_object(
+		    &g_agent.tpm_ctx, g_agent.tpm_ctx.aik_handle)) ==
+	    SELFTEST_AIK_SKIP) {
+		selftest_skip(&tally);
+		printf("No attestation key at handle 0x%08X, and this "
+		       "command does not create one: a key provisioned here "
+		       "would outlive it and hold one of the TPM's "
+		       "persistent objects.\n"
+		       "Start lota-agent.service, or enroll with a publisher, "
+		       "to provision one.\n",
+		       g_agent.tpm_ctx.aik_handle);
+		ret = -ENOENT;
 	} else {
-		printf("AIK ready\n");
+		printf("Using the attestation key at handle 0x%08X...\n",
+		       g_agent.tpm_ctx.aik_handle);
+		ret = tpm_provision_aik(&g_agent.tpm_ctx);
+		selftest_record(&tally, ret);
+		if (ret < 0) {
+			fprintf(stderr, "AIK could not be loaded: %s\n",
+				tpm_strerror(ret));
+			fprintf(stderr,
+				"Note: May require owner hierarchy authorization\n");
+		} else {
+			printf("AIK ready\n");
+		}
 	}
 
-	/* TPM Quote test */
+	/* Needs the key above, so it follows its verdict. */
 	printf("\n=== TPM Quote Test ===\n\n");
+
+	if (ret != 0) {
+		printf("Skipped: there is no attestation key to quote with.\n");
+		selftest_skip(&tally);
+	}
 
 	if (ret == 0) {
 		struct tpm_quote_response quote_resp;
@@ -201,12 +243,16 @@ int test_tpm(void)
 		quote_pcr_mask = (1U << 0) | (1U << 1) | (1U << LOTA_PCR_SELF);
 		printf("\nRequesting quote for PCRs 0, 1, %d...\n",
 		       LOTA_PCR_SELF);
+		printf("An authorization the TPM refuses here spends one "
+		       "dictionary-attack attempt, which the chip forgives on "
+		       "its own schedule.\n");
 
 		ret = tpm_quote(&g_agent.tpm_ctx, test_nonce, quote_pcr_mask,
 				&quote_resp);
+		selftest_record(&tally, ret);
 		if (ret < 0) {
 			fprintf(stderr, "TPM Quote failed: %s\n",
-				strerror(-ret));
+				tpm_strerror(ret));
 		} else {
 			printf("Quote generated successfully!\n\n");
 			printf("Attestation data size: %u bytes\n",
@@ -229,8 +275,9 @@ int test_tpm(void)
 	}
 
 	tpm_cleanup(&g_agent.tpm_ctx);
-	printf("\nTPM test complete\n");
-	return 0;
+	printf("\nTPM test complete: %d passed, %d failed, %d skipped\n",
+	       tally.passed, tally.failed, tally.skipped);
+	return selftest_verdict(&tally);
 }
 
 int test_iommu(void)
@@ -514,6 +561,27 @@ out:
 }
 
 /*
+ * How many of these publishers still keep the authorization in the clear.
+ * Read from disk after the verb has run, so the report shows what is stored.
+ */
+static unsigned aik_auth_exposed_count(const struct publisher_entry *entries,
+				       size_t count)
+{
+	unsigned exposed = 0;
+
+	for (size_t i = 0; i < count; i++) {
+		struct profile_paths paths;
+
+		if (profile_paths_from_id(LOTA_PROFILE_BASE_DIR, entries[i].id,
+					  &paths) < 0)
+			continue;
+		if (profile_aik_auth_exposed(profile_aik_auth_state(&paths)))
+			exposed++;
+	}
+	return exposed;
+}
+
+/*
  * do_seal_aik_auth - adopt at-rest sealing of the AIK userAuth on an
  * already-enrolled host, without re-enrolling. Seals the current auth to
  * the current PCR state (and, with seal_aik_auth_strict in lota.conf, drops
@@ -521,9 +589,21 @@ out:
  */
 int do_seal_aik_auth(void)
 {
+	struct publisher_entry entries[LOTA_PROFILE_MAX_AIK_HANDLES];
+	size_t count = 0;
+	unsigned sealed = 0;
+	unsigned failed = 0;
 	int ret;
 
 	setenv("TSS2_LOG", "all+none", 0);
+
+	ret = publishers_list(LOTA_PROFILE_BASE_DIR, entries,
+			      sizeof(entries) / sizeof(entries[0]), &count);
+	if (ret < 0) {
+		fprintf(stderr, "Failed to read %s: %s\n",
+			LOTA_PROFILE_BASE_DIR, strerror(-ret));
+		return 1;
+	}
 
 	ret = tpm_init(&g_agent.tpm_ctx);
 	if (ret < 0) {
@@ -532,22 +612,89 @@ int do_seal_aik_auth(void)
 		return 1;
 	}
 
-	ret = tpm_aik_reseal_auth(&g_agent.tpm_ctx);
-	tpm_cleanup(&g_agent.tpm_ctx);
-	if (ret < 0) {
-		fprintf(stderr, "Could not seal AIK auth: %s\n",
-			tpm_strerror(ret));
-		return 1;
+	/*
+	 * Every key this host attests with, not the one the context happens to
+	 * start on.
+	 * Each publisher holds its own AIK with its own auth, and sealing only
+	 * the pre-profile default left every key in use with its authorization
+	 * in plaintext while reporting success.
+	 */
+	for (size_t i = 0; i < count; i++) {
+		struct profile_paths paths;
+
+		if (!entries[i].has_aik_handle)
+			continue;
+
+		if (profile_paths_from_id(LOTA_PROFILE_BASE_DIR, entries[i].id,
+					  &paths) < 0 ||
+		    tpm_bind_profile(&g_agent.tpm_ctx, &paths) < 0) {
+			fprintf(stderr, "  %s: could not open the profile\n",
+				entries[i].id);
+			failed++;
+			continue;
+		}
+
+		ret = tpm_aik_reseal_auth(&g_agent.tpm_ctx);
+		if (ret < 0) {
+			fprintf(stderr, "  %s: %s\n", entries[i].id,
+				tpm_strerror(ret));
+			failed++;
+			continue;
+		}
+		sealed++;
 	}
 
-	if (g_agent.tpm_ctx.seal_aik_auth_strict)
+	/*
+	 * Only a host with no publishers attests with the default key.
+	 * With publishers present, sealing it would protect an unused key
+	 * and add it to the sealed count.
+	 */
+	if (publishers_default_key_in_use(count)) {
+		ret = tpm_aik_reseal_auth(&g_agent.tpm_ctx);
+		if (ret < 0) {
+			fprintf(stderr, "Could not seal AIK auth: %s\n",
+				tpm_strerror(ret));
+			tpm_cleanup(&g_agent.tpm_ctx);
+			return 1;
+		}
+		sealed++;
+	}
+
+	tpm_cleanup(&g_agent.tpm_ctx);
+
+	if (sealed == 0) {
 		fprintf(stderr,
-			"AIK auth sealed to the current boot state; plaintext "
-			"sidecar removed (strict).\n");
-	else
+			"No attestation key to seal: this host holds none "
+			"yet. Enroll with a publisher first.\n");
+		return failed ? 1 : 0;
+	}
+
+	fprintf(stderr,
+		"Sealed the authorization of %u attestation key%s to the "
+		"platform state.\n",
+		sealed, sealed == 1 ? "" : "s");
+
+	/* report the plaintext copies still on disk, not the configured intent */
+	{
+		unsigned exposed = aik_auth_exposed_count(entries, count);
+
+		if (exposed)
+			fprintf(stderr,
+				"%u still keep a plaintext copy beside the "
+				"sealed one; set seal_aik_auth_strict to drop "
+				"it.\n",
+				exposed);
+		else
+			fprintf(stderr, "No plaintext copy remains on disk.\n");
+	}
+
+	if (failed) {
 		fprintf(stderr,
-			"AIK auth sealed to the current boot state (plaintext "
-			"sidecar kept; set seal_aik_auth_strict to drop it).\n");
+			"%u could not be sealed and still hold their "
+			"authorization in plaintext.\n",
+			failed);
+		return 1;
+	}
 	return 0;
 }
 
@@ -558,9 +705,21 @@ int do_seal_aik_auth(void)
  */
 int do_reprovision_aik(void)
 {
+	struct publisher_entry entries[LOTA_PROFILE_MAX_AIK_HANDLES];
+	size_t count = 0;
+	unsigned rotated = 0;
+	unsigned failed = 0;
 	int ret;
 
 	setenv("TSS2_LOG", "all+none", 0);
+
+	ret = publishers_list(LOTA_PROFILE_BASE_DIR, entries,
+			      sizeof(entries) / sizeof(entries[0]), &count);
+	if (ret < 0) {
+		fprintf(stderr, "Failed to read %s: %s\n",
+			LOTA_PROFILE_BASE_DIR, strerror(-ret));
+		return 1;
+	}
 
 	ret = tpm_init(&g_agent.tpm_ctx);
 	if (ret < 0) {
@@ -569,19 +728,106 @@ int do_reprovision_aik(void)
 		return 1;
 	}
 
-	ret = tpm_reprovision_aik(&g_agent.tpm_ctx);
-	tpm_cleanup(&g_agent.tpm_ctx);
-	if (ret < 0) {
-		fprintf(stderr, "AIK re-provisioning failed: %s\n",
-			tpm_strerror(ret));
-		return 1;
+	/*
+	 * Every key this host attests with, for the same reason the adopt verb
+	 * walks them: an operator rotating "the machine's attestation identity"
+	 * on a host with publishers means theirs, and rotating the pre-profile
+	 * default rotates the one key no publisher uses.
+	 */
+	for (size_t i = 0; i < count; i++) {
+		struct profile_paths paths;
+
+		if (!entries[i].has_aik_handle)
+			continue;
+
+		if (profile_paths_from_id(LOTA_PROFILE_BASE_DIR, entries[i].id,
+					  &paths) < 0 ||
+		    tpm_bind_profile(&g_agent.tpm_ctx, &paths) < 0) {
+			fprintf(stderr, "  %s: could not open the profile\n",
+				entries[i].id);
+			failed++;
+			continue;
+		}
+
+		ret = tpm_reprovision_aik(&g_agent.tpm_ctx);
+		if (ret < 0) {
+			fprintf(stderr, "  %s: %s\n", entries[i].id,
+				tpm_strerror(ret));
+			failed++;
+			continue;
+		}
+		rotated++;
 	}
 
-	fprintf(stderr,
-		"AIK rotated and its auth re-sealed to the current boot "
-		"state.\n"
-		"The previous AIK certificate is now stale -- re-enroll:\n"
-		"  lota-agent --enroll --ca-server <host> ...\n");
+	if (publishers_default_key_in_use(count)) {
+		ret = tpm_reprovision_aik(&g_agent.tpm_ctx);
+		if (ret < 0) {
+			fprintf(stderr, "AIK re-provisioning failed: %s\n",
+				tpm_strerror(ret));
+			tpm_cleanup(&g_agent.tpm_ctx);
+			return 1;
+		}
+		rotated++;
+	}
+
+	tpm_cleanup(&g_agent.tpm_ctx);
+
+	if (rotated == 0) {
+		fprintf(stderr,
+			"No attestation key to rotate: this host holds none "
+			"yet.\n");
+		return failed ? 1 : 0;
+	}
+
+	fprintf(stderr, "Rotated %u attestation key%s.\n", rotated,
+		rotated == 1 ? "" : "s");
+
+	/*
+	 * Say how the new authorizations are kept:
+	 * tpm_aik_save_auth() seals only when seal_aik_auth is set
+	 */
+	{
+		unsigned exposed = aik_auth_exposed_count(entries, count);
+
+		if (count == 0)
+			fprintf(stderr,
+				"Set seal_aik_auth in lota.conf and run "
+				"--seal-aik-auth to seal the new "
+				"authorization at rest.\n");
+		else if (exposed == 0)
+			fprintf(stderr,
+				"Every new authorization is sealed to the "
+				"platform state, with no plaintext copy.\n");
+		else
+			fprintf(stderr,
+				"%u of the new authorization%s on disk in the "
+				"clear; run --seal-aik-auth to seal %s.\n",
+				exposed, exposed == 1 ? " is" : "s are",
+				exposed == 1 ? "it" : "them");
+	}
+
+	/* name the publishers whose certificates the rotation just invalidated */
+	if (count > 0) {
+		fprintf(stderr,
+			"Their certificates are now stale -- re-enroll each:\n");
+		for (size_t i = 0; i < count; i++)
+			if (entries[i].has_aik_handle && entries[i].enrolled)
+				fprintf(stderr,
+					"  lota-agent --reenroll --ca-cert "
+					"<anchor for %s:%d>\n",
+					entries[i].ca_server,
+					entries[i].ca_port);
+	} else {
+		fprintf(stderr,
+			"The previous AIK certificate is now stale -- "
+			"re-enroll:\n"
+			"  lota-agent --enroll --ca-server <host> ...\n");
+	}
+
+	if (failed) {
+		fprintf(stderr, "%u could not be rotated.\n", failed);
+		return 1;
+	}
 	return 0;
 }
 

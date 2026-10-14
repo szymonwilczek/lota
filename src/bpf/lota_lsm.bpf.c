@@ -12,7 +12,8 @@
  *   - Kernel module loading (kernel_module_request, kernel_read_file,
  *     kernel_load_data)
  *   - Library loading / executable mmap (security_mmap_file)
- *   - Bind-mount overwrite on trusted library paths/parents (security_sb_mount)
+ *   - Bind-mount overwrite on trusted library paths, on both mount APIs
+ *     (security_sb_mount, security_move_mount)
  *   - In-place write/truncate on trusted library inodes (security_file_open)
  *   - Direct kernel memory device access (/dev/mem, /dev/kmem, /dev/port)
  *   - Debugger attachment (security_ptrace_access_check)
@@ -49,14 +50,6 @@ char LICENSE[] SEC("license") = "GPL";
 #define EPERM 1
 #endif
 
-/* signal numbers */
-#ifndef SIGTERM
-#define SIGTERM 15
-#endif
-#ifndef SIGKILL
-#define SIGKILL 9
-#endif
-
 #ifndef FMODE_WRITE
 #define FMODE_WRITE ((fmode_t)(1U << 1))
 #endif
@@ -64,13 +57,6 @@ char LICENSE[] SEC("license") = "GPL";
 #ifndef BINPRM_FLAGS_PATH_INACCESSIBLE
 #define BINPRM_FLAGS_PATH_INACCESSIBLE (1U << 2)
 #endif
-#ifndef SIGSTOP
-#define SIGSTOP 19
-#endif
-#ifndef SIGHUP
-#define SIGHUP 1
-#endif
-
 /* siginfo.si_code value for kernel-generated signals */
 #ifndef SI_KERNEL
 #define SI_KERNEL 0x80
@@ -135,7 +121,7 @@ struct {
  */
 struct {
 	__uint(type, BPF_MAP_TYPE_ARRAY);
-	__uint(max_entries, 16);
+	__uint(max_entries, 17);
 	__type(key, u32);
 	__type(value, u64);
 } stats SEC(".maps");
@@ -174,6 +160,7 @@ struct {
 #define STAT_BPF_SYSCALL_BLOCKED 13
 #define STAT_ALLOW_EVENTS_SUPPRESSED 14
 #define STAT_BLOCKED_EVENTS_SUPPRESSED 15
+#define STAT_MOUNTS_BLOCKED 16
 
 /*
  * One rate-limit window per event class (see lota_event_budget.h).
@@ -214,6 +201,16 @@ struct {
 } lota_task_auth SEC(".maps");
 
 /*
+ * Scratch holds what the kernel writes and the key built from it.
+ * The kernel fills a struct fsverity_digest -- header, then digest
+ * -- so the raw buffer is not itself a key.
+ */
+struct lota_verity_scratch {
+	__u8 buf[LOTA_FSVERITY_DIGEST_BUF_SIZE];
+	struct lota_verity_digest_key key;
+};
+
+/*
  * Per-CPU scratch map for the fs-verity digest key passed to
  * bpf_dynptr_from_mem(). The kernel BPF verifier on 6.6+ refuses
  * PTR_TO_STACK as the data argument of bpf_dynptr_from_mem and
@@ -227,7 +224,7 @@ struct {
 	__uint(type, BPF_MAP_TYPE_PERCPU_ARRAY);
 	__uint(max_entries, 1);
 	__type(key, u32);
-	__type(value, struct lota_verity_digest_key);
+	__type(value, struct lota_verity_scratch);
 } verity_scratch SEC(".maps");
 
 /*
@@ -266,19 +263,6 @@ struct {
 	__type(key, struct trusted_lib_key);
 	__type(value, u32);
 } trusted_libs SEC(".maps");
-
-/*
- * Trusted mountpoint directories protecting trusted libraries.
- *
- * Keys are inode identities (device + inode) for parent directories of
- * trusted libraries. Value is a refcount managed by user-space loader.
- */
-struct {
-	__uint(type, BPF_MAP_TYPE_HASH);
-	__uint(max_entries, LOTA_MAX_TRUSTED_LIB_MOUNTPOINTS);
-	__type(key, struct trusted_lib_key);
-	__type(value, u32);
-} trusted_lib_mnt SEC(".maps");
 
 /*
  * fs-verity digest allowlist.
@@ -320,43 +304,30 @@ static __always_inline u32 get_mode(void)
 }
 
 /*
- * Verify kernel integrity baseline directly from kernel memory.
+ * Verify the kernel integrity baseline the agent's startup gate established.
+ *
+ * The gate reads both properties out of sysfs and refuses to start without them,
+ * and neither can fall while the kernel runs, so the verdict in the map is the
+ * same answer a read of kernel memory would give -- from the one producer,
+ * on a road that exists whatever the daemon's mount namespace hides.
+ * A zero value is the map before the agent has written it.
+ *
  * Returns 1 if baseline is satisfied, 0 otherwise.
  */
 static __always_inline int integrity_baseline_ok(struct integrity_data *cfg)
 {
-	int sig_enforce = 0;
-	int lockdown = 0;
-
 	if (!cfg)
 		return 0;
 
-	if (!cfg->sig_enforce_addr)
-		return 0;
-
-	if (bpf_probe_read_kernel(&sig_enforce, sizeof(sig_enforce),
-				  (void *)cfg->sig_enforce_addr) < 0)
-		return 0;
-
-	if (sig_enforce != 1) {
+	if (!cfg->sig_enforce) {
 		lota_bpf_debug("LOTA: BLOCKING module load: sig_enforce=%d",
-			       sig_enforce);
+			       cfg->sig_enforce);
 		return 0;
 	}
 
-	if (!cfg->lockdown_addr) {
-		lota_bpf_debug(
-			"LOTA: BLOCKING module load: lockdown symbol unavailable");
-		return 0;
-	}
-
-	if (bpf_probe_read_kernel(&lockdown, sizeof(lockdown),
-				  (void *)cfg->lockdown_addr) < 0)
-		return 0;
-
-	if (lockdown <= 0) {
+	if (!cfg->lockdown) {
 		lota_bpf_debug("LOTA: BLOCKING module load: lockdown=%d",
-			       lockdown);
+			       cfg->lockdown);
 		return 0;
 	}
 
@@ -547,13 +518,6 @@ static __always_inline int is_protected_current_task(void)
 	return is_protected_task(task);
 }
 
-/*
- * PTRACE_MODE_ATTACH from include/linux/ptrace.h.
- * Mirrored rather than included: this object builds against vmlinux.h,
- * which carries types and not the uapi-adjacent flag definitions.
- */
-#define LOTA_PTRACE_MODE_ATTACH 0x02
-
 static __always_inline int is_current_lota_agent_task(void)
 {
 	struct task_struct *task;
@@ -588,9 +552,6 @@ static __always_inline int is_lota_managed_map(struct bpf_map *map)
 			     sizeof("protected_pids")) == 0)
 		return 1;
 	if (__builtin_memcmp(name, "trusted_libs", sizeof("trusted_libs")) == 0)
-		return 1;
-	if (__builtin_memcmp(name, "trusted_lib_mnt",
-			     sizeof("trusted_lib_mnt")) == 0)
 		return 1;
 	if (__builtin_memcmp(name, "trusted_inodes",
 			     sizeof("trusted_inodes")) == 0)
@@ -644,7 +605,7 @@ static __always_inline int in_non_init_userns(void)
 
 static __noinline int is_verity_allowed(struct file *file)
 {
-	struct lota_verity_digest_key *key;
+	struct lota_verity_scratch *scratch;
 	struct bpf_dynptr digest_ptr;
 	u32 zero = 0;
 	u32 *allowed;
@@ -657,27 +618,28 @@ static __noinline int is_verity_allowed(struct file *file)
 		return 0;
 
 	/*
-	 * Per-CPU scratch for the digest key. See the comment on
-	 * verity_scratch above: the verifier refuses
-	 * PTR_TO_STACK as the data argument of bpf_dynptr_from_mem
-	 * on 6.6+ kernels, so the key has to live in a map value.
+	 * Per-CPU scratch.
+	 * See the comment on verity_scratch above: the verifier accepts only
+	 * a map value as the data argument of bpf_dynptr_from_mem,
+	 * so the buffer has to live in one.
 	 */
-	key = bpf_map_lookup_elem(&verity_scratch, &zero);
-	if (!key)
+	scratch = bpf_map_lookup_elem(&verity_scratch, &zero);
+	if (!scratch)
 		return 0;
-	__builtin_memset(key, 0, sizeof(*key));
+	__builtin_memset(scratch, 0, sizeof(*scratch));
 
-	ret = bpf_dynptr_from_mem(key->digest, sizeof(key->digest), 0,
+	ret = bpf_dynptr_from_mem(scratch->buf, sizeof(scratch->buf), 0,
 				  &digest_ptr);
 	if (ret < 0)
 		return 0;
 
-	ret = bpf_get_fsverity_digest(file, &digest_ptr);
-	if (ret < 0 || !LOTA_VERITY_DIGEST_LEN_SUPPORTED((u32)ret))
+	/* success is 0, and the digest is what the header points past */
+	if (bpf_get_fsverity_digest(file, &digest_ptr) != 0)
 		return 0;
-	key->len = (u32)ret;
+	if (lota_verity_key_from_digest_buf(scratch->buf, &scratch->key) != 0)
+		return 0;
 
-	allowed = bpf_map_lookup_elem(&allow_verity, key);
+	allowed = bpf_map_lookup_elem(&allow_verity, &scratch->key);
 	return (allowed && *allowed) ? 1 : 0;
 }
 
@@ -728,28 +690,6 @@ static __always_inline int is_trusted_inode(struct inode *inode)
 
 	allowed = bpf_map_lookup_elem(&trusted_libs, &key);
 	return (allowed && *allowed) ? 1 : 0;
-}
-
-static __always_inline int is_trusted_mountpoint_inode(struct inode *inode)
-{
-	struct super_block *sb;
-	struct trusted_lib_key key = {};
-	u32 *refcnt;
-
-	if (!inode)
-		return 0;
-
-	sb = BPF_CORE_READ(inode, i_sb);
-	if (!sb)
-		return 0;
-
-	key.dev = (u64)BPF_CORE_READ(sb, s_dev);
-	key.ino = (u64)BPF_CORE_READ(inode, i_ino);
-	if (key.dev == 0 || key.ino == 0)
-		return 0;
-
-	refcnt = bpf_map_lookup_elem(&trusted_lib_mnt, &key);
-	return (refcnt && *refcnt) ? 1 : 0;
 }
 
 static __always_inline int is_write_open_flags(int flags)
@@ -833,6 +773,45 @@ static __always_inline int is_inaccessible_exec_path(struct linux_binprm *bprm)
 }
 
 /*
+ * A mount refusal, reported.
+ *
+ * The refusal is the point of these hooks and the caller only learns
+ * "permission denied", so the record an operator reads afterwards is
+ * the event.
+ * @what names which mount API asked, since the two take the same privilege
+ * and have the same effect.
+ */
+static __always_inline void report_blocked_mount(const char *what, u32 len)
+{
+	struct lota_exec_event *event;
+
+	inc_stat(STAT_MOUNTS_BLOCKED);
+
+	if (!should_emit_event(LOTA_MODE_ENFORCE, 1))
+		return;
+
+	event = bpf_ringbuf_reserve(&events, sizeof(*event), 0);
+	if (!event) {
+		inc_stat(STAT_RINGBUF_DROPS);
+		return;
+	}
+
+	__builtin_memset(event, 0, sizeof(*event));
+	event->timestamp_ns = bpf_ktime_get_ns();
+	event->event_type = LOTA_EVENT_MOUNT_BLOCKED;
+	event->tgid = bpf_get_current_pid_tgid() >> 32;
+	event->pid = bpf_get_current_pid_tgid() & 0xFFFFFFFF;
+	event->uid = (u32)(bpf_get_current_uid_gid() & 0xFFFFFFFF);
+	event->gid = (u32)(bpf_get_current_uid_gid() >> 32);
+	bpf_get_current_comm(event->comm, sizeof(event->comm));
+	if (len > 0 && len < sizeof(event->filename))
+		bpf_probe_read_kernel(event->filename, len, what);
+
+	bpf_ringbuf_submit(event, 0);
+	inc_stat(STAT_EVENTS_SENT);
+}
+
+/*
  * Block bind mounts over trusted-library inodes and parent mountpoints.
  */
 SEC("lsm/sb_mount")
@@ -871,9 +850,56 @@ int BPF_PROG(lota_sb_mount, const char *dev_name, const struct path *path,
 	if (!inode)
 		return 0;
 
-	if (!is_trusted_inode(inode) && !is_trusted_mountpoint_inode(inode))
+	if (!is_trusted_inode(inode))
 		return 0;
 
+	report_blocked_mount("bind mount over a trusted file", 31);
+	return -EPERM;
+}
+
+/*
+ * The other mount API.
+ * open_tree(2) clones a mount and move_mount(2) puts it somewhere, which shadows
+ * the destination exactly as MS_BIND does and takes the same privilege,
+ * so the same predicate has to hold here.
+ * There is no MS_BIND to gate on: every move_mount lands a mount over
+ * the destination.
+ */
+SEC("lsm/move_mount")
+int BPF_PROG(lota_move_mount, const struct path *from_path,
+	     const struct path *to_path, int ret)
+{
+	struct dentry *dentry;
+	struct inode *inode;
+	u32 mode;
+
+	(void)from_path;
+
+	if (ret != 0)
+		return -EPERM;
+
+	mode = get_mode();
+	if (mode != LOTA_MODE_ENFORCE)
+		return 0;
+
+	if (!get_config(LOTA_CFG_STRICT_MMAP))
+		return 0;
+
+	if (!to_path)
+		return 0;
+
+	dentry = BPF_CORE_READ(to_path, dentry);
+	if (!dentry)
+		return 0;
+
+	inode = BPF_CORE_READ(dentry, d_inode);
+	if (!inode)
+		return 0;
+
+	if (!is_trusted_inode(inode))
+		return 0;
+
+	report_blocked_mount("move_mount over a trusted file", 31);
 	return -EPERM;
 }
 
@@ -925,7 +951,7 @@ int BPF_PROG(lota_bprm_check_security, struct linux_binprm *bprm)
 {
 	struct file *file;
 	struct lota_exec_event *event = NULL;
-	struct lota_verity_digest_key *verity_key;
+	struct lota_verity_scratch *scratch;
 	u32 zero = 0;
 	u32 mode;
 	int blocked = 0;
@@ -948,17 +974,16 @@ int BPF_PROG(lota_bprm_check_security, struct linux_binprm *bprm)
 	 */
 	file = bprm->file;
 
-	verity_key = bpf_map_lookup_elem(&verity_scratch, &zero);
-	if (!verity_key)
+	scratch = bpf_map_lookup_elem(&verity_scratch, &zero);
+	if (!scratch)
 		return 0;
-	__builtin_memset(verity_key, 0, sizeof(*verity_key));
+	__builtin_memset(scratch, 0, sizeof(*scratch));
 
 	/* fetch fs-verity digest once (if supported) and reuse it below */
 	if (bpf_get_fsverity_digest && file) {
 		struct bpf_dynptr digest_ptr;
-		int ret = bpf_dynptr_from_mem(verity_key->digest,
-					      sizeof(verity_key->digest), 0,
-					      &digest_ptr);
+		int ret = bpf_dynptr_from_mem(
+			scratch->buf, sizeof(scratch->buf), 0, &digest_ptr);
 		if (ret == 0) {
 			/*
 			 * Note on TOCTOU:
@@ -969,13 +994,18 @@ int BPF_PROG(lota_bprm_check_security, struct linux_binprm *bprm)
 			 * verity makes the inode content immutable and the
 			 * helper returns an error if verity is not enabled for
 			 * this file.
+			 *
+			 * The kernel reports success as 0, not as a length,
+			 * and writes a header before the digest. Reading the
+			 * return value as a length leaves every file without
+			 * a digest, which under STRICT_EXEC blocks even the
+			 * files the allowlist names.
 			 */
 			ret = bpf_get_fsverity_digest(file, &digest_ptr);
-			if (ret > 0 &&
-			    LOTA_VERITY_DIGEST_LEN_SUPPORTED((u32)ret)) {
-				verity_key->len = (u32)ret;
+			if (ret == 0 &&
+			    lota_verity_key_from_digest_buf(scratch->buf,
+							    &scratch->key) == 0)
 				have_digest = 1;
-			}
 		}
 	}
 
@@ -987,8 +1017,8 @@ int BPF_PROG(lota_bprm_check_security, struct linux_binprm *bprm)
 		} else if (!have_digest) {
 			blocked = 1;
 		} else {
-			u8 *allowed =
-				bpf_map_lookup_elem(&allow_verity, verity_key);
+			u8 *allowed = bpf_map_lookup_elem(&allow_verity,
+							  &scratch->key);
 			if (!(allowed && *allowed))
 				blocked = 1;
 		}
@@ -1036,7 +1066,7 @@ int BPF_PROG(lota_bprm_check_security, struct linux_binprm *bprm)
 			 * bytes in event hash */
 			if (have_digest)
 				__builtin_memcpy(event->hash,
-						 verity_key->digest,
+						 scratch->key.digest,
 						 LOTA_HASH_SIZE);
 
 			bpf_ringbuf_submit(event, 0);
@@ -1072,48 +1102,57 @@ int BPF_PROG(lota_kernel_read_file, struct file *file,
 	struct lota_exec_event *event = NULL;
 	int blocked = 0;
 	int emit_event = 0;
+	int strict_unknown;
 	uint32_t key = 0;
 	uint32_t mode = get_mode();
 
 	lota_bpf_debug("LOTA: kernel_read_file id=%d mode=%d", id, mode);
 
 	/*
-	 * Filter relevant IDs.
-	 * - MODULE (2)
-	 * - FIRMWARE (1)
-	 * - KEXEC_IMAGE (3)
+	 * A purpose this object has no rule for is refused while strict module
+	 * loading is armed, and ignored otherwise.
+	 * Everything else is filtered out here.
 	 */
+	strict_unknown = mode == LOTA_MODE_ENFORCE &&
+			 !lota_kread_is_known(id) &&
+			 get_config(LOTA_CFG_STRICT_MODULES);
 
-	/* check if LOTA should ignore this read id early */
-	if (id != READING_MODULE && id != READING_FIRMWARE &&
-	    id != READING_KEXEC_IMAGE && id != READING_KEXEC_INITRAMFS &&
-	    id != READING_POLICY) {
+	if (!strict_unknown && !lota_kread_is_module(id) &&
+	    id != LOTA_KREAD_FIRMWARE && id != LOTA_KREAD_KEXEC_IMAGE &&
+	    id != LOTA_KREAD_KEXEC_INITRAMFS && id != LOTA_KREAD_POLICY) {
 		return 0;
 	}
 
 	if (mode == LOTA_MODE_ENFORCE) {
-		if (id == READING_KEXEC_IMAGE || id == READING_KEXEC_INITRAMFS)
+		if (strict_unknown) {
+			lota_bpf_debug("LOTA: BLOCKING kernel file read: "
+				       "unrecognised purpose");
+			blocked = 1;
+		}
+
+		if (id == LOTA_KREAD_KEXEC_IMAGE ||
+		    id == LOTA_KREAD_KEXEC_INITRAMFS)
 			blocked = 1;
 
 		if (in_non_init_userns())
 			blocked = 1;
 
 		/* always allow policy files */
-		if (id == READING_POLICY)
+		if (id == LOTA_KREAD_POLICY)
 			return 0;
 
 		/* kernel integrity config */
 		struct integrity_data *integrity;
 		integrity = bpf_map_lookup_elem(&integrity_cfg, &key);
 
-		if (id == READING_MODULE || id == READING_FIRMWARE) {
+		if (lota_kread_is_module(id) || id == LOTA_KREAD_FIRMWARE) {
 			if (!integrity_baseline_ok(integrity))
 				blocked = 1;
 		}
 
 		/* firmware is always strict in ENFORCE: require fs-verity
 		 * allowlist */
-		if (id == READING_FIRMWARE) {
+		if (id == LOTA_KREAD_FIRMWARE) {
 			if (!is_verity_allowed(file)) {
 				lota_bpf_debug("LOTA: BLOCKING firmware load: "
 					       "no allowed fs-verity digest");
@@ -1121,7 +1160,7 @@ int BPF_PROG(lota_kernel_read_file, struct file *file,
 			}
 		}
 
-		if (id == READING_MODULE &&
+		if (lota_kread_is_module(id) &&
 		    get_config(LOTA_CFG_STRICT_MODULES)) {
 			if (!is_verity_allowed(file)) {
 				lota_bpf_debug("LOTA: BLOCKING module load: no "
@@ -1160,13 +1199,13 @@ int BPF_PROG(lota_kernel_read_file, struct file *file,
 		}
 
 		if (ret_path < 0) {
-			if (id == READING_MODULE)
+			if (lota_kread_is_module(id))
 				__builtin_memcpy(event->filename,
 						 "kernel_module", 13);
-			else if (id == READING_FIRMWARE)
+			else if (id == LOTA_KREAD_FIRMWARE)
 				__builtin_memcpy(event->filename, "firmware",
 						 8);
-			else if (id == READING_KEXEC_IMAGE)
+			else if (id == LOTA_KREAD_KEXEC_IMAGE)
 				__builtin_memcpy(event->filename, "kexec_image",
 						 11);
 			else
@@ -1207,18 +1246,33 @@ int BPF_PROG(lota_kernel_load_data, enum kernel_load_data_id id)
 	u32 mode;
 	int blocked = 0;
 	int emit_event = 0;
+	int strict_unknown;
 
 	lota_bpf_debug("LOTA: kernel_load_data id=%d", id);
 
-	if (id != LOADING_FIRMWARE && id != LOADING_MODULE &&
-	    id != LOADING_KEXEC_IMAGE && id != LOADING_KEXEC_INITRAMFS &&
-	    id != LOADING_POLICY && id != LOADING_X509_CERTIFICATE)
-		return 0;
-
 	mode = get_mode();
 
+	/* the same rule as kernel_read_file: an unrecognised purpose is refused
+	 * while strict module loading is armed */
+	strict_unknown = mode == LOTA_MODE_ENFORCE &&
+			 !lota_kread_is_known(id) &&
+			 get_config(LOTA_CFG_STRICT_MODULES);
+
+	if (!strict_unknown && id != LOTA_KREAD_FIRMWARE &&
+	    !lota_kread_is_module(id) && id != LOTA_KREAD_KEXEC_IMAGE &&
+	    id != LOTA_KREAD_KEXEC_INITRAMFS && id != LOTA_KREAD_POLICY &&
+	    id != LOTA_KREAD_X509_CERTIFICATE)
+		return 0;
+
 	if (mode == LOTA_MODE_ENFORCE) {
-		if (id == LOADING_KEXEC_IMAGE || id == LOADING_KEXEC_INITRAMFS)
+		if (strict_unknown) {
+			lota_bpf_debug("LOTA: BLOCKING kernel data load: "
+				       "unrecognised purpose");
+			blocked = 1;
+		}
+
+		if (id == LOTA_KREAD_KEXEC_IMAGE ||
+		    id == LOTA_KREAD_KEXEC_INITRAMFS)
 			blocked = 1;
 
 		if (in_non_init_userns())
@@ -1228,26 +1282,27 @@ int BPF_PROG(lota_kernel_load_data, enum kernel_load_data_id id)
 		struct integrity_data *integrity;
 
 		integrity = bpf_map_lookup_elem(&integrity_cfg, &key);
-		if (id == LOADING_MODULE || id == LOADING_FIRMWARE) {
+		if (lota_kread_is_module(id) || id == LOTA_KREAD_FIRMWARE) {
 			if (!integrity_baseline_ok(integrity))
 				blocked = 1;
 		}
 
 		/* memory-only firmware loads cannot be fs-verity validated ->
 		 * deny */
-		if (id == LOADING_FIRMWARE)
+		if (id == LOTA_KREAD_FIRMWARE)
 			blocked = 1;
 
 		/* memory-only module loads bypass file fs-verity checks -> deny
 		 * in strict
 		 */
-		if (id == LOADING_MODULE && get_config(LOTA_CFG_STRICT_MODULES))
+		if (lota_kread_is_module(id) &&
+		    get_config(LOTA_CFG_STRICT_MODULES))
 			blocked = 1;
 
 		/* align with kernel_read_file: strict-modules must not block
 		 * policy load */
-		if (id == LOADING_KEXEC_IMAGE ||
-		    id == LOADING_KEXEC_INITRAMFS) {
+		if (id == LOTA_KREAD_KEXEC_IMAGE ||
+		    id == LOTA_KREAD_KEXEC_INITRAMFS) {
 			if (get_config(LOTA_CFG_STRICT_MODULES))
 				blocked = 1;
 		}
@@ -1268,15 +1323,15 @@ int BPF_PROG(lota_kernel_load_data, enum kernel_load_data_id id)
 
 		bpf_get_current_comm(event->comm, sizeof(event->comm));
 
-		if (id == LOADING_MODULE)
+		if (lota_kread_is_module(id))
 			__builtin_memcpy(event->filename, "kernel_module_mem",
 					 17);
-		else if (id == LOADING_FIRMWARE)
+		else if (id == LOTA_KREAD_FIRMWARE)
 			__builtin_memcpy(event->filename, "firmware_mem", 12);
-		else if (id == LOADING_KEXEC_IMAGE)
+		else if (id == LOTA_KREAD_KEXEC_IMAGE)
 			__builtin_memcpy(event->filename, "kexec_image_mem",
 					 16);
-		else if (id == LOADING_POLICY)
+		else if (id == LOTA_KREAD_POLICY)
 			__builtin_memcpy(event->filename, "policy_mem", 10);
 		else
 			__builtin_memcpy(event->filename, "kernel_data_mem",
@@ -1624,9 +1679,11 @@ int BPF_PROG(lota_file_mprotect, struct vm_area_struct *vma,
 /* ======================================================================
  * LSM hook: security_ptrace_access_check
  *
- * Called when one process attempts to trace/debug another via ptrace.
+ * Called when one process attempts to trace/debug another via ptrace,
+ * and by procfs for a read of another process's /proc.
  *
- * In ENFORCE mode, ptrace on protected PIDs is blocked entirely.
+ * In ENFORCE mode, ptrace on protected PIDs is blocked entirely,
+ * and an attach on any other task is blocked while block_ptrace is set.
  * In MONITOR mode, all ptrace attempts are logged for forensic review.
  *
  * @child: The process being traced (target)
@@ -1652,43 +1709,16 @@ int BPF_PROG(lota_ptrace_access_check, struct task_struct *child,
 
 	child_pid = BPF_CORE_READ(child, pid);
 
-	/*
-	 * Agent measures protected process's live code from the kernel side,
-	 * and procfs authorises that read through this hook:
-	 * reading /proc/<pid>/exe or /proc/<pid>/maps costs PTRACE_MODE_READ check.
-	 *
-	 * Denying it to the agent makes protecting a process and issuing token for
-	 * it mutually exclusive -- measurement cannot be taken, and measurement that
-	 * is missing must never be issued as trusted one, so GET_TOKEN fails closed.
-	 * On the shipped defaults, enforce mode with global ptrace blocking on,
-	 * that is every host.
-	 *
-	 * Read access only.
-	 * PTRACE_MODE_ATTACH stays denied to everyone including the agent, so nothing
-	 * here opens debugger onto protected task; and the agent is identified by
-	 * the same task auth flag the rest of this file trusts, not by pid a caller
-	 * could claim.
-	 */
-	if ((mode & LOTA_PTRACE_MODE_ATTACH) == 0 &&
-	    is_current_lota_agent_task()) {
+	/* the agent's own read exemption; see lota_ptrace_agent_read_exempt() */
+	if (lota_ptrace_agent_read_exempt(mode, is_current_lota_agent_task())) {
 		inc_stat(STAT_PTRACE_ATTEMPTS);
 		return 0;
 	}
 
-	if (is_lota_agent_task(child)) {
-		blocked = 1;
-	}
-
-	if (!blocked && lota_mode != LOTA_MODE_MAINTENANCE &&
-	    is_protected_task(child)) {
-		blocked = 1;
-	}
-
-	/* global ptrace blocking remains ENFORCE-only */
-	if (!blocked && lota_mode == LOTA_MODE_ENFORCE &&
-	    get_config(LOTA_CFG_BLOCK_PTRACE)) {
-		blocked = 1;
-	}
+	blocked = lota_ptrace_denied(mode, lota_mode,
+				     get_config(LOTA_CFG_BLOCK_PTRACE),
+				     is_lota_agent_task(child),
+				     is_protected_task(child));
 
 	/* for logging */
 	emit_event = should_emit_event(lota_mode, blocked);
@@ -1747,7 +1777,9 @@ int BPF_PROG(lota_task_kill, struct task_struct *p, struct kernel_siginfo *info,
 	u32 lota_mode;
 	int target_is_agent;
 	int target_is_protected = 0;
-	struct lota_exec_event *event;
+	int blocked;
+	int emit_event;
+	struct lota_exec_event *event = NULL;
 
 	(void)cred;
 
@@ -1756,7 +1788,7 @@ int BPF_PROG(lota_task_kill, struct task_struct *p, struct kernel_siginfo *info,
 
 	lota_mode = get_mode();
 	target_is_agent = is_lota_agent_task(p);
-	if (!target_is_agent && lota_mode != LOTA_MODE_MAINTENANCE)
+	if (!target_is_agent)
 		target_is_protected = is_protected_task(p);
 
 	if (!target_is_agent && !target_is_protected)
@@ -1776,19 +1808,6 @@ int BPF_PROG(lota_task_kill, struct task_struct *p, struct kernel_siginfo *info,
 	if (is_lota_agent_task(current) || is_bpf_admin_task())
 		return 0;
 
-	/*
-	 * Allow only safe signals from foreign tasks:
-	 * - sig=0: existence/permission probe
-	 * - SIGHUP: configuration reload trigger (agent only)
-	 *
-	 * All other signals are blocked for protected targets to prevent forced
-	 * termination or crash-signaling from local privileged attackers.
-	 */
-	if (sig == 0)
-		return 0;
-	if (target_is_agent && sig == SIGHUP)
-		return 0;
-
 	/* allow kernel-generated signals */
 	if (!info)
 		return 0;
@@ -1798,12 +1817,30 @@ int BPF_PROG(lota_task_kill, struct task_struct *p, struct kernel_siginfo *info,
 			return 0;
 	}
 
-	/* audit trail for blocked kill attempts */
-	event = bpf_ringbuf_reserve(&events, sizeof(*event), 0);
+	/*
+	 * Which signals a protected target takes from a foreign task is stated
+	 * in include/lota.h, so this hook and the tests answer it with one
+	 * function: only enforce refuses, a probe and the agent's own reload
+	 * signal are delivered, and everything that could end the target is
+	 * refused for the agent and the protected set.
+	 */
+	blocked = lota_signal_denied(sig, lota_mode, target_is_agent,
+				     target_is_protected);
+
+	/*
+	 * The signal is reported whether or not it was refused.
+	 * Outside enforce that report is the whole of the hook's job,
+	 * and a refusal that names the sender is what makes a supervisor
+	 * that cannot stop the agent diagnosable.
+	 */
+	emit_event = should_emit_event(lota_mode, blocked);
+	if (emit_event)
+		event = bpf_ringbuf_reserve(&events, sizeof(*event), 0);
 	if (event) {
 		__builtin_memset(event, 0, sizeof(*event));
 		event->timestamp_ns = bpf_ktime_get_ns();
-		event->event_type = LOTA_EVENT_KILL_BLOCKED;
+		event->event_type = blocked ? LOTA_EVENT_KILL_BLOCKED :
+					      LOTA_EVENT_KILL;
 		event->tgid = sender_tgid;
 		event->pid = (u32)(bpf_get_current_pid_tgid() & 0xFFFFFFFF);
 		event->uid = (u32)(bpf_get_current_uid_gid() & 0xFFFFFFFF);
@@ -1814,11 +1851,14 @@ int BPF_PROG(lota_task_kill, struct task_struct *p, struct kernel_siginfo *info,
 
 		bpf_ringbuf_submit(event, 0);
 		inc_stat(STAT_EVENTS_SENT);
-	} else {
+	} else if (emit_event) {
 		inc_stat(STAT_RINGBUF_DROPS);
 	}
 
-	return -EPERM;
+	if (blocked)
+		return -EPERM;
+
+	return 0;
 }
 
 /* ======================================================================

@@ -17,14 +17,57 @@
 #include "ipc.h"
 #include "main_utils.h"
 #include "sdnotify.h"
+#include "selftest.h"
 #include "tpm.h"
+#include "attest_targets.h"
 #include "config.h"
+
+/*
+ * Hand the IPC layer the publishers the configuration names.
+ *
+ * A diagnostic server is started with the same file the daemon reads,
+ * and a SET_PROFILE is resolved against the list the IPC layer holds.
+ * Without this the list is empty for the life of the process, so every publisher
+ * the configuration names is answered as one this host has never heard of,
+ * and every profile-scoped answer -- the per-publisher view, TOKEN_ONLY,
+ * CONSENT_REQUIRED -- is unreachable.
+ *
+ * @targets outlives the serving loop, so the IPC layer may keep the pointer.
+ */
+static void bind_configured_profiles(const struct lota_config *cfg,
+				     struct attest_target *targets, size_t max,
+				     size_t *count, uint64_t valid_until)
+{
+	int ret;
+
+	*count = 0;
+	ret = attest_targets_build(cfg, NULL, 0, NULL, 0, targets, max, count);
+	if (ret < 0 || *count == 0) {
+		*count = 0;
+		printf("No publisher configured: SET_PROFILE has nothing to resolve against.\n");
+		return;
+	}
+
+	for (size_t i = 0; i < *count; i++) {
+		targets[i].attested = true;
+		targets[i].valid_until = valid_until;
+	}
+	printf("Publishers bound: %zu.\n", *count);
+
+	ipc_set_profiles(&g_agent.ipc_ctx, targets, *count);
+}
 
 int run_ipc_test_server(const struct lota_config *cfg)
 {
+	/*
+	 * IPC context keeps this list for as long as it serves,
+	 * so it cannot be one the frame owns -- and it is far too large for one
+	 */
+	static struct attest_target targets[LOTA_CONFIG_MAX_PROFILES];
+	size_t target_count;
 	int ret;
 	uint64_t valid_until;
-	printf("=== IPC Test Server (Unsigned) ===\n\n");
+	printf("=== IPC Test Server (No TPM) ===\n\n");
 	printf("Starting IPC server for testing...\n");
 	ret = ipc_init_or_activate(&g_agent.ipc_ctx);
 	if (ret < 0) {
@@ -41,6 +84,8 @@ int run_ipc_test_server(const struct lota_config *cfg)
 	 * living implausibly long.
 	 */
 	valid_until = (uint64_t)(time(NULL) + LOTA_SERVER_MAX_TOKEN_AGE_SEC);
+	bind_configured_profiles(cfg, targets, LOTA_CONFIG_MAX_PROFILES,
+				 &target_count, valid_until);
 	ipc_update_status(&g_agent.ipc_ctx,
 			  LOTA_STATUS_ATTESTED | LOTA_STATUS_TPM_OK |
 				  LOTA_STATUS_IOMMU_OK | LOTA_STATUS_BPF_LOADED,
@@ -61,7 +106,7 @@ int run_ipc_test_server(const struct lota_config *cfg)
 	agent_globals_unlock(&g_agent);
 
 	printf("IPC server running (simulated ATTESTED state, no TPM).\n");
-	printf("Tokens will be UNSIGNED.\n");
+	printf("%s\n", ipc_token_capability_str(&g_agent.ipc_ctx));
 	printf("Policy digest: synthetic test fixture (0xA5 x 32).\n");
 	printf("Press Ctrl+C to stop.\n\n");
 
@@ -81,37 +126,60 @@ int run_ipc_test_server(const struct lota_config *cfg)
 
 int run_signed_ipc_test_server(const struct lota_config *cfg)
 {
+	/* kept for the life of the server, as in the plain one above */
+	static struct attest_target targets[LOTA_CONFIG_MAX_PROFILES];
+	size_t target_count;
 	int ret;
 	uint64_t valid_until;
 	printf("=== IPC Test Server (Signed Tokens) ===\n\n");
 
-	printf("Initializing TPM...\n");
-	ret = tpm_init(&g_agent.tpm_ctx);
-	if (ret < 0) {
-		fprintf(stderr, "Failed to initialize TPM: %s\n",
-			strerror(-ret));
-		return 1;
-	}
-	printf("TPM initialized\n");
-
-	printf("Provisioning AIK...\n");
-	ret = tpm_provision_aik(&g_agent.tpm_ctx);
-	if (ret < 0) {
-		fprintf(stderr, "Failed to provision AIK: %s\n",
-			strerror(-ret));
-		tpm_cleanup(&g_agent.tpm_ctx);
-		return 1;
-	}
-	printf("AIK ready\n\n");
-
+	/* socket first, because it is the only thing here that can refuse */
 	printf("Starting IPC server...\n");
 	ret = ipc_init_or_activate(&g_agent.ipc_ctx);
 	if (ret < 0) {
 		fprintf(stderr, "Failed to initialize IPC: %s\n",
 			strerror(-ret));
+		return 1;
+	}
+
+	printf("Initializing TPM...\n");
+	ret = tpm_init(&g_agent.tpm_ctx);
+	if (ret < 0) {
+		fprintf(stderr, "Failed to initialize TPM: %s\n",
+			tpm_strerror(ret));
+		ipc_cleanup(&g_agent.ipc_ctx);
+		return 1;
+	}
+	printf("TPM initialized\n");
+
+	/*
+	 * Unlike --test-tpm, this verb must sign, so it cannot skip provisioning.
+	 * A new AIK is persistent: it outlives the server and takes one of the
+	 * slots that cap how many publishers the host can answer to, so say so
+	 * before creating it. An AIK already at the handle is reused for free.
+	 */
+	if (selftest_aik_plan(tpm_handle_holds_object(
+		    &g_agent.tpm_ctx, g_agent.tpm_ctx.aik_handle)) ==
+	    SELFTEST_AIK_SKIP)
+		printf("No attestation key at handle 0x%08X: this server signs "
+		       "tokens, so it creates one, and that key stays after "
+		       "the server exits.\n",
+		       g_agent.tpm_ctx.aik_handle);
+	else
+		printf("Using the attestation key already at handle 0x%08X.\n",
+		       g_agent.tpm_ctx.aik_handle);
+
+	printf("Provisioning AIK...\n");
+	ret = tpm_provision_aik(&g_agent.tpm_ctx);
+	if (ret < 0) {
+		fprintf(stderr, "Failed to provision AIK: %s\n",
+			tpm_strerror(ret));
+		ipc_cleanup(&g_agent.ipc_ctx);
 		tpm_cleanup(&g_agent.tpm_ctx);
 		return 1;
 	}
+	printf("AIK ready\n\n");
+
 	setup_container_listener(&g_agent.ipc_ctx, cfg);
 	setup_dbus(&g_agent.ipc_ctx);
 
@@ -124,6 +192,8 @@ int run_signed_ipc_test_server(const struct lota_config *cfg)
 	 * living implausibly long
 	 */
 	valid_until = (uint64_t)(time(NULL) + LOTA_SERVER_MAX_TOKEN_AGE_SEC);
+	bind_configured_profiles(cfg, targets, LOTA_CONFIG_MAX_PROFILES,
+				 &target_count, valid_until);
 	ipc_update_status(&g_agent.ipc_ctx,
 			  LOTA_STATUS_ATTESTED | LOTA_STATUS_TPM_OK |
 				  LOTA_STATUS_IOMMU_OK | LOTA_STATUS_BPF_LOADED,
@@ -142,7 +212,7 @@ int run_signed_ipc_test_server(const struct lota_config *cfg)
 	agent_globals_unlock(&g_agent);
 
 	printf("IPC server running (simulated ATTESTED state).\n");
-	printf("Tokens will be SIGNED by TPM AIK!\n");
+	printf("%s\n", ipc_token_capability_str(&g_agent.ipc_ctx));
 	printf("Policy digest: synthetic test fixture (0xA5 x 32).\n");
 	printf("Press Ctrl+C to stop.\n\n");
 

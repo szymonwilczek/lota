@@ -13,6 +13,7 @@
 #include <fcntl.h>
 #include <limits.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
 #include <unistd.h>
@@ -22,6 +23,7 @@
 #include "lota.h"
 #include "parse_utils.h"
 #include "path_validate.h"
+#include "pin.h"
 #include "tpm.h"
 
 /*
@@ -234,6 +236,28 @@ void config_init(struct lota_config *cfg)
 }
 
 /*
+ * calloc not malloc: config_init zeroes the struct anyway, but the allocation
+ * is over a megabyte and the kernel hands back zeroed pages for one that size,
+ * so the memset walks pages that are already clean instead of pages full of
+ * whatever the allocator last held.
+ */
+struct lota_config *config_new(void)
+{
+	struct lota_config *cfg = calloc(1, sizeof(*cfg));
+
+	if (!cfg)
+		return NULL;
+
+	config_init(cfg);
+	return cfg;
+}
+
+void config_free(struct lota_config *cfg)
+{
+	free(cfg);
+}
+
+/*
  * Shared by the top-level attest_interval and the per-profile interval:
  * 0 has a meaning at each level, anything else has to sit between the bounds
  * the attestation loop can actually mint verifiable tokens within.
@@ -250,6 +274,27 @@ static int check_attest_interval(long v, const char *key, const char *filepath,
 		filepath, lineno, key, v, MIN_ATTEST_INTERVAL,
 		MAX_ATTEST_INTERVAL, MAX_ATTEST_INTERVAL);
 	return -1;
+}
+
+/* The default a host falls back to has to be one an operator could have set. */
+_Static_assert(TPM_AIK_DEFAULT_TTL_SEC >= MIN_AIK_TTL,
+	       "the default AIK TTL must not sit below the floor");
+
+/* One sentence, so the two roads cannot drift into two answers. */
+#define AIK_TTL_LIFTED_MSG "Warning: AIK TTL %u too low, using %ds (1 hour)\n"
+
+uint32_t config_clamp_aik_ttl(uint32_t ttl, const char *filepath, int lineno)
+{
+	if (ttl == 0 || ttl >= MIN_AIK_TTL)
+		return ttl;
+
+	if (filepath)
+		fprintf(stderr, "%s:%d: " AIK_TTL_LIFTED_MSG, filepath, lineno,
+			ttl, MIN_AIK_TTL);
+	else
+		fprintf(stderr, AIK_TTL_LIFTED_MSG, ttl, MIN_AIK_TTL);
+
+	return MIN_AIK_TTL;
 }
 
 /*
@@ -316,6 +361,23 @@ static int apply_profile_key(struct lota_profile *p, const char *key,
 		p->verifier_port = (int)v;
 		return 0;
 	}
+	if (strcmp(key, "pin_sha256") == 0 || strcmp(key, "pin-sha256") == 0) {
+		uint8_t bin[LOTA_PIN_SHA256_LEN];
+
+		/*
+		 * Parsed here only to reject it: a pin the connection cannot
+		 * read would start the profile unpinned
+		 */
+		if (lota_pin_sha256_parse(value, bin) != 0) {
+			fprintf(stderr,
+				"%s:%d: invalid pin_sha256 '%s' (expected 64 "
+				"hex characters; colons and spaces allowed)\n",
+				filepath, lineno, value);
+			return -1;
+		}
+		set_str(p->pin_sha256, sizeof(p->pin_sha256), value);
+		return 0;
+	}
 	if (strcmp(key, "reporting") == 0) {
 		if (strcmp(value, "session") == 0) {
 			p->session_gated = true;
@@ -345,6 +407,162 @@ static int apply_profile_key(struct lota_profile *p, const char *key,
 	}
 
 	return 1;
+}
+
+int config_profile_name_defect(const char *name, char *why, size_t why_cap)
+{
+	const unsigned char *p;
+
+	if (!why || why_cap == 0)
+		return -EINVAL;
+
+	if (!name || name[0] == '\0') {
+		snprintf(why, why_cap, "is empty");
+		return -EINVAL;
+	}
+
+	if (strlen(name) >= LOTA_CONFIG_MAX_PROFILE_NAME) {
+		snprintf(why, why_cap,
+			 "is %zu characters; the parser reads at most %d",
+			 strlen(name), LOTA_CONFIG_MAX_PROFILE_NAME - 1);
+		return -EILSEQ;
+	}
+
+	for (p = (const unsigned char *)name; *p; p++) {
+		/* the quote is not a control character, but it is what closes
+		 * the header, so a label carrying one names a section that
+		 * ends where the label does */
+		if (*p == '"') {
+			snprintf(why, why_cap,
+				 "contains a quote (0x22), which is what ends "
+				 "the section header");
+			return -EILSEQ;
+		}
+		if (iscntrl(*p)) {
+			snprintf(why, why_cap,
+				 "contains a control character (0x%02x)", *p);
+			return -EILSEQ;
+		}
+	}
+
+	return 0;
+}
+
+/*
+ * Why the parser would read @value back as something other than what
+ * the writer put on a key's line, or 0 for one it reads back as written.
+ *
+ * @key is named only to size the line the value has to fit on.
+ */
+static int value_defect(const char *key, const char *value, char *why,
+			size_t why_cap)
+{
+	const unsigned char *p;
+	size_t line;
+
+	for (p = (const unsigned char *)value; *p; p++) {
+		if (iscntrl(*p)) {
+			snprintf(why, why_cap,
+				 "contains a control character (0x%02x), which "
+				 "would start a line of its own",
+				 *p);
+			return -EILSEQ;
+		}
+	}
+
+	/* the parser trims a value, so a value with an edge of whitespace
+	 * is not the value the host would read */
+	if (isspace((unsigned char)value[0]) ||
+	    isspace((unsigned char)value[strlen(value) - 1])) {
+		snprintf(why, why_cap,
+			 "begins or ends with whitespace, which the parser "
+			 "trims away");
+		return -EILSEQ;
+	}
+
+	/* an over-long line is skipped with an error,
+	 * so the key never reaches the profile at all */
+	line = strlen(key) + strlen(" = ") + strlen(value) + 1;
+	if (line >= LOTA_CONFIG_MAX_LINE) {
+		snprintf(why, why_cap,
+			 "needs a %zu-character line; the parser reads at most "
+			 "%d",
+			 line, LOTA_CONFIG_MAX_LINE - 1);
+		return -EILSEQ;
+	}
+
+	return 0;
+}
+
+int config_profile_defect(const struct lota_profile *p, char *why,
+			  size_t why_cap)
+{
+	char sub[160];
+	int ret;
+
+	if (!p || !why || why_cap == 0)
+		return -EINVAL;
+
+	ret = config_profile_name_defect(p->name, sub, sizeof(sub));
+	if (ret) {
+		snprintf(why, why_cap, "the label %s", sub);
+		return ret;
+	}
+
+	if (!p->ca[0]) {
+		snprintf(why, why_cap, "no CA host is named");
+		return -EINVAL;
+	}
+	if (!p->ca_cert[0]) {
+		snprintf(why, why_cap, "no trust anchor is named");
+		return -EINVAL;
+	}
+
+	if (value_defect("ca", p->ca, sub, sizeof(sub))) {
+		snprintf(why, why_cap, "the CA host %s", sub);
+		return -EILSEQ;
+	}
+
+	if (value_defect("ca_cert", p->ca_cert, sub, sizeof(sub))) {
+		snprintf(why, why_cap, "the trust anchor %s", sub);
+		return -EILSEQ;
+	}
+	if (!lota_path_is_abs(p->ca_cert)) {
+		snprintf(why, why_cap,
+			 "the trust anchor is not an absolute path, which the "
+			 "parser requires");
+		return -EILSEQ;
+	}
+	if (lota_path_has_dotdot_segment(p->ca_cert)) {
+		snprintf(why, why_cap,
+			 "the trust anchor traverses '..', which the parser "
+			 "refuses");
+		return -EILSEQ;
+	}
+
+	if (p->pin_sha256[0]) {
+		uint8_t bin[LOTA_PIN_SHA256_LEN];
+
+		if (value_defect("pin_sha256", p->pin_sha256, sub,
+				 sizeof(sub))) {
+			snprintf(why, why_cap, "the certificate pin %s", sub);
+			return -EILSEQ;
+		}
+		if (lota_pin_sha256_parse(p->pin_sha256, bin) != 0) {
+			snprintf(why, why_cap,
+				 "the certificate pin is not 64 hex "
+				 "characters, which the parser requires");
+			return -EILSEQ;
+		}
+	}
+
+	if (!p->token_only && p->verifier[0] &&
+	    value_defect("verifier", p->verifier, sub, sizeof(sub))) {
+		snprintf(why, why_cap, "the verifier host %s", sub);
+		return -EILSEQ;
+	}
+
+	return 0;
 }
 
 /*
@@ -402,16 +620,14 @@ static int open_profile_section(struct lota_config *cfg, char *line,
 		return -1;
 	}
 
-	if (name[0] == '\0' || strlen(name) >= LOTA_CONFIG_MAX_PROFILE_NAME) {
-		fprintf(stderr, "%s:%d: profile name must be 1-%d characters\n",
-			filepath, lineno, LOTA_CONFIG_MAX_PROFILE_NAME - 1);
-		return -1;
-	}
-	if (lota_str_has_control(name)) {
-		fprintf(stderr,
-			"%s:%d: profile name contains control characters\n",
-			filepath, lineno);
-		return -1;
+	{
+		char why[160];
+
+		if (config_profile_name_defect(name, why, sizeof(why))) {
+			fprintf(stderr, "%s:%d: profile name %s\n", filepath,
+				lineno, why);
+			return -1;
+		}
 	}
 
 	for (int i = 0; i < cfg->profile_count; i++) {
@@ -448,6 +664,21 @@ static int validate_profiles(const struct lota_config *cfg,
 			     const char *filepath)
 {
 	int errors = 0;
+
+	/*
+	 * A pin matches one certificate and each publisher runs its own verifier:
+	 * a host-level pin would fail every other profile at TLS time, where
+	 * it looks like a network fault. Refuse it here.
+	 */
+	if (cfg->profile_count > 0 && cfg->pin_sha256[0]) {
+		fprintf(stderr,
+			"%s: pin_sha256 outside a profile pins one verifier's "
+			"certificate, but %d publisher profile(s) are "
+			"configured.\nMove it into the profile whose verifier "
+			"presents that certificate.\n",
+			filepath, cfg->profile_count);
+		errors++;
+	}
 
 	for (int i = 0; i < cfg->profile_count; i++) {
 		const struct lota_profile *p = &cfg->profiles[i];
@@ -528,6 +759,15 @@ static int apply_key(struct lota_config *cfg, const char *key,
 		return -1;
 	}
 	if (strcmp(key, "pin_sha256") == 0 || strcmp(key, "pin-sha256") == 0) {
+		uint8_t bin[LOTA_PIN_SHA256_LEN];
+
+		if (lota_pin_sha256_parse(value, bin) != 0) {
+			fprintf(stderr,
+				"%s:%d: invalid pin_sha256 '%s' (expected 64 "
+				"hex characters; colons and spaces allowed)\n",
+				filepath, lineno, value);
+			return -1;
+		}
 		set_str(cfg->pin_sha256, sizeof(cfg->pin_sha256), value);
 		return 0;
 	}
@@ -697,7 +937,8 @@ static int apply_key(struct lota_config *cfg, const char *key,
 				filepath, lineno, value);
 			return -1;
 		}
-		cfg->aik_ttl = (uint32_t)v;
+		cfg->aik_ttl =
+			config_clamp_aik_ttl((uint32_t)v, filepath, lineno);
 		return 0;
 	}
 	if (strcmp(key, "aik_handle") == 0 || strcmp(key, "aik-handle") == 0) {
@@ -1108,6 +1349,8 @@ void config_dump(const struct lota_config *cfg, FILE *fp)
 			fprintf(fp, "verifier = %s\n", p->verifier);
 			fprintf(fp, "verifier_port = %d\n", p->verifier_port);
 		}
+		if (p->pin_sha256[0])
+			fprintf(fp, "pin_sha256 = %s\n", p->pin_sha256);
 		fprintf(fp, "reporting = %s\n",
 			p->session_gated ? "session" : "continuous");
 		if (p->attest_interval)
@@ -1183,21 +1426,45 @@ static int profile_section_scan(const char *text, const char *name,
 static int profile_section_render(const struct lota_profile *p, char *buf,
 				  size_t cap)
 {
+	/* Publisher who runs none, said the way validate_profiles() requires:
+	 * the key is present and the port is absent, because the parser refuses
+	 * a port for a verifier declared absent */
+	bool no_verifier = p->token_only || p->verifier[0] == '\0';
 	int n;
 
-	n = snprintf(buf, cap,
-		     "\n[profile \"%s\"]\n"
-		     "ca = %s\n"
-		     "ca_port = %d\n"
-		     "ca_cert = %s\n"
-		     "verifier = %s\n"
-		     "verifier_port = %d\n"
-		     "reporting = %s\n",
-		     p->name, p->ca, p->ca_port, p->ca_cert,
-		     p->verifier[0] ? p->verifier : "none", p->verifier_port,
-		     p->session_gated ? "session" : "continuous");
+	if (no_verifier)
+		n = snprintf(buf, cap,
+			     "\n[profile \"%s\"]\n"
+			     "ca = %s\n"
+			     "ca_port = %d\n"
+			     "ca_cert = %s\n"
+			     "verifier = none\n"
+			     "reporting = %s\n",
+			     p->name, p->ca, p->ca_port, p->ca_cert,
+			     p->session_gated ? "session" : "continuous");
+	else
+		n = snprintf(buf, cap,
+			     "\n[profile \"%s\"]\n"
+			     "ca = %s\n"
+			     "ca_port = %d\n"
+			     "ca_cert = %s\n"
+			     "verifier = %s\n"
+			     "verifier_port = %d\n"
+			     "reporting = %s\n",
+			     p->name, p->ca, p->ca_port, p->ca_cert,
+			     p->verifier, p->verifier_port,
+			     p->session_gated ? "session" : "continuous");
 	if (n < 0 || (size_t)n >= cap)
 		return -EOVERFLOW;
+
+	if (p->pin_sha256[0]) {
+		int m = snprintf(buf + n, cap - (size_t)n, "pin_sha256 = %s\n",
+				 p->pin_sha256);
+
+		if (m < 0 || (size_t)(n + m) >= cap)
+			return -EOVERFLOW;
+		n += m;
+	}
 
 	if (p->attest_interval > 0) {
 		int m = snprintf(buf + n, cap - (size_t)n, "interval = %d\n",
@@ -1223,9 +1490,24 @@ int config_profile_append_text(const char *existing,
 	if (!existing || !p || !out || out_cap == 0)
 		return -EINVAL;
 
-	/* parser refuses a profile without these, so refuse to write one */
-	if (!p->name[0] || !p->ca[0] || !p->ca_cert[0])
-		return -EINVAL;
+	/*
+	 * Every field below is interpolated into text the parser reads back at
+	 * the next start, and the values arrive from a command line:
+	 * a label carrying a quote closes the header being built, a host carrying
+	 * a newline forges a key.
+	 * So the writer applies the parser's own rules first and refuses
+	 * -- or a file that does not load at all.
+	 */
+	{
+		char why[192];
+		int defect = config_profile_defect(p, why, sizeof(why));
+
+		if (defect) {
+			fprintf(stderr,
+				"Refusing to write this publisher: %s\n", why);
+			return defect;
+		}
+	}
 
 	/*
 	 * A publisher is its trust anchor, not its label.
@@ -1358,6 +1640,62 @@ int config_profile_append(const char *path, const struct lota_profile *p)
 	}
 	close(fd);
 	free(updated);
+
+	/*
+	 * Parse the replacement before renaming it into place.
+	 * The field rules cover only what this writer added; the rest of
+	 * the file is copied through as is, and if that no longer parses
+	 * -- a hand edit, a package that half-replaced it -- the host would
+	 * start with no configuration.
+	 * On refusal the live file stays untouched.
+	 */
+	{
+		struct lota_config *readback = config_new();
+		int lret;
+
+		if (!readback) {
+			unlink(tmp_path);
+			return -ENOMEM;
+		}
+
+		lret = config_load(readback, tmp_path);
+		config_free(readback);
+		if (lret < 0) {
+			fprintf(stderr,
+				"Refusing to replace %s: the result does not "
+				"parse, so the host would start with no "
+				"configuration.\n"
+				"%s is unchanged; the errors above are from "
+				"reading the replacement back.\n",
+				path, path);
+			unlink(tmp_path);
+			return -EBADMSG;
+		}
+	}
+
+	/*
+	 * Temporary file took its SELinux type from this directory,
+	 * not from the file it is about to replace.
+	 * Where the two differ -- a packaged lota.conf under an unlabelled
+	 * /etc/lota -- the rename would hand the agent a config it may not
+	 * read, and the policy dontaudits that denial, so the host would
+	 * simply not come up.
+	 *
+	 * A destination that refuses the attribute is not a reason to throw
+	 * away a correct config: the writer says so and the operator can
+	 * restorecon.
+	 */
+	{
+		int lret = lota_copy_xattr(path, tmp_path, "security.selinux");
+
+		if (lret < 0 && lret != -ENOENT)
+			fprintf(stderr,
+				"Warning: could not carry the SELinux label of "
+				"%s onto its replacement: %s\n"
+				"Run 'restorecon %s' if this host is "
+				"enforcing.\n",
+				path, strerror(-lret), path);
+	}
 
 	if (rename(tmp_path, path) < 0) {
 		ret = -errno;

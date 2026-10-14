@@ -16,10 +16,18 @@ import (
 	"crypto/rsa"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"os"
 	"strings"
 )
+
+// ErrEKNotListed is the refusal a strict tenant manifest makes for a device
+// it does not list.
+// It is a policy outcome, not a fault: the CA must answer with a status
+// the device can tell apart from an internal error, or the device retries
+// forever against a decision that will not change.
+var ErrEKNotListed = errors.New("endorsement key not listed in the tenant manifest")
 
 // DefaultTenant is the tenant of device with no manifest entry
 // (when the manifest is non-strict) and the reserved name the verifier
@@ -137,7 +145,7 @@ func (m *TenantManifest) TenantFor(ekPub *rsa.PublicKey) (string, error) {
 		return tenant, nil
 	}
 	if m.strict {
-		return "", fmt.Errorf("endorsement key not listed in the tenant manifest")
+		return "", ErrEKNotListed
 	}
 	return DefaultTenant, nil
 }
