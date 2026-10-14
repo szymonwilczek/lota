@@ -86,6 +86,11 @@ const (
 	// MaxPCRDigestSize caps a TPM2B_DIGEST length.
 	// Widest TPM hash (SHA-512) is 64 bytes.
 	MaxPCRDigestSize = 64
+
+	// maxTPMHASize is sizeof(TPMT_HA): hash algorithm (2) + SHA-512 digest (64).
+	// It bounds both TPM2B_NAME (a TPMU_NAME is at most a TPMT_HA) and TPM2B_DATA,
+	// whose buffer is sized to a TPMT_HA.
+	maxTPMHASize = 2 + 64
 )
 
 // Errors returned by verification functions
@@ -720,6 +725,9 @@ func parseTPMSAttest(data []byte) (extraData []byte, pcrMask uint32, pcrDigest [
 	if err := binary.Read(r, binary.BigEndian, &signerSize); err != nil {
 		return nil, 0, nil, fmt.Errorf("read signer size: %w", err)
 	}
+	if signerSize > maxTPMHASize {
+		return nil, 0, nil, fmt.Errorf("qualifiedSigner too large: %d > %d", signerSize, maxTPMHASize)
+	}
 	if int(signerSize) > r.Len() {
 		return nil, 0, nil, fmt.Errorf("qualifiedSigner truncated: need %d bytes, have %d", signerSize, r.Len())
 	}
@@ -732,6 +740,9 @@ func parseTPMSAttest(data []byte) (extraData []byte, pcrMask uint32, pcrDigest [
 	var extraSize uint16
 	if err := binary.Read(r, binary.BigEndian, &extraSize); err != nil {
 		return nil, 0, nil, fmt.Errorf("read extraData size: %w", err)
+	}
+	if extraSize > maxTPMHASize {
+		return nil, 0, nil, fmt.Errorf("extraData too large: %d > %d", extraSize, maxTPMHASize)
 	}
 	if int(extraSize) > r.Len() {
 		return nil, 0, nil, fmt.Errorf("extraData truncated: need %d bytes, have %d", extraSize, r.Len())
