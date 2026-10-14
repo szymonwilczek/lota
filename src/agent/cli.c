@@ -232,6 +232,41 @@ static int load_config_into_options(struct cli_options *opts,
 	return 0;
 }
 
+/*
+ * Parse --attest-interval value
+ * 0 disables the loop, a nonzero value below the minimum is raised to it,
+ * one above the maximum is refused.
+ */
+static int parse_attest_interval(const char *arg, int *interval)
+{
+	long v;
+
+	if (safe_parse_long(arg, &v) < 0 || v < 0 || v > INT_MAX) {
+		fprintf(stderr, "Invalid interval: %s\n", arg);
+		return -EINVAL;
+	}
+	if (v != 0 && v < MIN_ATTEST_INTERVAL) {
+		fprintf(stderr,
+			"Warning: interval %ld too low, using "
+			"minimum %d seconds\n",
+			v, MIN_ATTEST_INTERVAL);
+		v = MIN_ATTEST_INTERVAL;
+	}
+	if (v > MAX_ATTEST_INTERVAL) {
+		fprintf(stderr,
+			"Invalid interval: %ld exceeds the "
+			"maximum of %d seconds; beyond it "
+			"every minted token outlives the "
+			"freshness window a relying party "
+			"accepts\n",
+			v, MAX_ATTEST_INTERVAL);
+		return -EINVAL;
+	}
+
+	*interval = (int)v;
+	return 0;
+}
+
 int cli_parse(int argc, char **argv, struct cli_options *opts,
 	      struct lota_config *cfg)
 {
@@ -347,37 +382,9 @@ int cli_parse(int argc, char **argv, struct cli_options *opts,
 			break;
 		case 'I':
 			opts->attest_flag = 1;
-			{
-				long v;
-				if (safe_parse_long(optarg, &v) < 0 || v < 0 ||
-				    v > INT_MAX) {
-					fprintf(stderr,
-						"Invalid interval: %s\n",
-						optarg);
-					return 1;
-				}
-				opts->attest_interval = (int)v;
-			}
-			if (opts->attest_interval != 0 &&
-			    opts->attest_interval < MIN_ATTEST_INTERVAL) {
-				fprintf(stderr,
-					"Warning: interval %d too low, using "
-					"minimum %d seconds\n",
-					opts->attest_interval,
-					MIN_ATTEST_INTERVAL);
-				opts->attest_interval = MIN_ATTEST_INTERVAL;
-			}
-			if (opts->attest_interval > MAX_ATTEST_INTERVAL) {
-				fprintf(stderr,
-					"Invalid interval: %d exceeds the "
-					"maximum of %d seconds; beyond it "
-					"every minted token outlives the "
-					"freshness window a relying party "
-					"accepts\n",
-					opts->attest_interval,
-					MAX_ATTEST_INTERVAL);
+			if (parse_attest_interval(optarg,
+						  &opts->attest_interval) < 0)
 				return 1;
-			}
 			break;
 		case 's':
 			opts->server_addr = optarg;
