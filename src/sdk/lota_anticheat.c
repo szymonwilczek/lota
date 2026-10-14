@@ -879,7 +879,7 @@ static int hash_file_sha256(const char *path,
 	uint8_t buf[4096];
 	EVP_MD_CTX *ctx = NULL;
 	unsigned int out_len = LOTA_AC_GAME_HASH_SIZE;
-	int fd = -1;
+	int fd;
 	int ret = -EIO;
 
 	if (!path || !out)
@@ -926,8 +926,7 @@ static int hash_file_sha256(const char *path,
 out:
 	if (ctx)
 		EVP_MD_CTX_free(ctx);
-	if (fd >= 0)
-		close(fd);
+	close(fd);
 	return ret;
 }
 
