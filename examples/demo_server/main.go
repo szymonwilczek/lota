@@ -99,8 +99,10 @@ func main() {
 			"LOTA_FLAG_IMAGE_FULLY_MEASURED: the runtime measurement "+
 			"has to have covered every object the producer maps. On a "+
 			"host whose distribution ships libraries without fs-verity "+
-			"that refuses every heartbeat, which is the publisher "+
-			"policy choice this flag exists to make explicit.")
+			"that refuses every heartbeat, and so does a host with an "+
+			"empty protected set, whose round measured nothing at all. "+
+			"That is the publisher policy choice this flag exists to "+
+			"make explicit.")
 	maxAgeSec := flag.Uint("max-age", 300,
 		"maximum heartbeat age in seconds")
 	tlsCert := flag.String("tls-cert", "",

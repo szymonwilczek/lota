@@ -949,23 +949,30 @@ static bool runtime_coverage_is_full(void)
 {
 	int count;
 
+	/*
+	 * Reap here, not in each caller. An exited PID is unmeasurable,
+	 * so a stale entry would report partial coverage.
+	 * Reaping in one place keeps the status word and the token in agreement.
+	 */
+	runtime_protect_reap_exited();
+
 	agent_globals_lock(&g_agent);
 	count = g_agent.policy_protect_pid_count;
 	agent_globals_unlock(&g_agent);
 
 	if (count <= 0 || !g_agent.policy_protect_pids)
-		return true; /* nothing to leave out */
+		return lota_coverage_is_full(0, true);
 
 	for (int i = 0; i < count; i++) {
 		struct lota_runtime_measure_coverage cov;
 
 		if (lota_runtime_coverage_pid(
 			    (pid_t)g_agent.policy_protect_pids[i], &cov) != 0)
-			return false;
+			return lota_coverage_is_full((size_t)count, false);
 		if (cov.unmeasurable > 0)
-			return false;
+			return lota_coverage_is_full((size_t)count, false);
 	}
-	return true;
+	return lota_coverage_is_full((size_t)count, true);
 }
 
 uint32_t ipc_host_status_flags(const struct ipc_context *ctx)
@@ -1305,13 +1312,12 @@ static void handle_get_token(struct ipc_context *ctx, struct ipc_client *client,
 	}
 
 	/*
-	 * Coverage is a property of this measurement round, not of the host,
-	 * so it is set on the token and never on the status word.
-	 * Host with no protected process has nothing left unmeasured,
-	 * which is the empty case of the same statement.
+	 * Same rule as the status word: a round with no protected process
+	 * measured nothing, so it is not full coverage.
 	 */
-	token->flags =
-		lota_status_fold_coverage(token->flags, image_fully_measured);
+	token->flags = lota_status_fold_coverage(
+		token->flags,
+		lota_coverage_is_full(runtime_pid_count, image_fully_measured));
 
 	memcpy(token->runtime_protect_digest, runtime_protect_digest,
 	       sizeof(token->runtime_protect_digest));
@@ -1890,7 +1896,8 @@ static bool protect_pid_is_alive(uint32_t pid, void *ctx)
  * Run before every read of the set rather than on timer, because the read is
  * the only place stale entry does harm -- and it does it to every title at once,
  * since PID that no longer resolves cannot be measured and the measurement fails
- * closed.
+ * closed. The coverage answer runs it itself, which is what keeps a read path
+ * that folds coverage from forgetting.
  *
  * The mutation epoch moves whenever the set does, so relying party comparing epochs
  * never sees the same one with different set.

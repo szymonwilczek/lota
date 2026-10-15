@@ -42,17 +42,34 @@ static void bind_configured_profiles(const struct lota_config *cfg,
 
 	*count = 0;
 	ret = attest_targets_build(cfg, NULL, 0, NULL, 0, targets, max, count);
-	if (ret < 0 || *count == 0) {
+	if (ret < 0) {
 		*count = 0;
 		printf("No publisher configured: SET_PROFILE has nothing to resolve against.\n");
-		return;
+	} else {
+		printf("Publishers bound: %zu.\n", *count);
 	}
 
+	/*
+	 * No attestation loop runs here, so give every publisher the fixture
+	 * verdict. The host-wide fold counts only publishers with a verdict,
+	 * so with none configured add one synthetic publisher.
+	 * It has no profile, server or CA: no client can select it and nothing
+	 * is dialled.
+	 */
 	for (size_t i = 0; i < *count; i++) {
 		targets[i].attested = true;
 		targets[i].valid_until = valid_until;
 	}
-	printf("Publishers bound: %zu.\n", *count);
+
+	if (*count == 0 && max > 0) {
+		memset(&targets[0], 0, sizeof(targets[0]));
+		snprintf(targets[0].label, sizeof(targets[0].label),
+			 "diagnostic fixture");
+		targets[0].attested = true;
+		targets[0].valid_until = valid_until;
+		*count = 1;
+		printf("Serving the simulated verdict under one synthetic publisher.\n");
+	}
 
 	ipc_set_profiles(&g_agent.ipc_ctx, targets, *count);
 }
@@ -75,17 +92,18 @@ int run_ipc_test_server(const struct lota_config *cfg)
 			strerror(-ret));
 		return 1;
 	}
-	setup_container_listener(&g_agent.ipc_ctx, cfg);
-	setup_dbus(&g_agent.ipc_ctx);
-
 	/*
 	 * Size the token the way the attestation loop does, so relying party
 	 * verifies what the test server hands out instead of refusing it as
 	 * living implausibly long.
 	 */
 	valid_until = (uint64_t)(time(NULL) + LOTA_SERVER_MAX_TOKEN_AGE_SEC);
+
 	bind_configured_profiles(cfg, targets, LOTA_CONFIG_MAX_PROFILES,
 				 &target_count, valid_until);
+	setup_container_listener(&g_agent.ipc_ctx, cfg);
+	setup_dbus(&g_agent.ipc_ctx);
+
 	ipc_update_status(&g_agent.ipc_ctx,
 			  LOTA_STATUS_ATTESTED | LOTA_STATUS_TPM_OK |
 				  LOTA_STATUS_IOMMU_OK | LOTA_STATUS_BPF_LOADED,
@@ -180,20 +198,21 @@ int run_signed_ipc_test_server(const struct lota_config *cfg)
 	}
 	printf("AIK ready\n\n");
 
-	setup_container_listener(&g_agent.ipc_ctx, cfg);
-	setup_dbus(&g_agent.ipc_ctx);
-
-	ipc_set_tpm(&g_agent.ipc_ctx, &g_agent.tpm_ctx,
-		    (1U << 0) | (1U << 1) | (1U << LOTA_PCR_SELF));
-
 	/*
 	 * size the token the way the attestation loop does, so relying party
 	 * verifies what the test server hands out instead of refusing it as
 	 * living implausibly long
 	 */
 	valid_until = (uint64_t)(time(NULL) + LOTA_SERVER_MAX_TOKEN_AGE_SEC);
+
 	bind_configured_profiles(cfg, targets, LOTA_CONFIG_MAX_PROFILES,
 				 &target_count, valid_until);
+	setup_container_listener(&g_agent.ipc_ctx, cfg);
+	setup_dbus(&g_agent.ipc_ctx);
+
+	ipc_set_tpm(&g_agent.ipc_ctx, &g_agent.tpm_ctx,
+		    (1U << 0) | (1U << 1) | (1U << LOTA_PCR_SELF));
+
 	ipc_update_status(&g_agent.ipc_ctx,
 			  LOTA_STATUS_ATTESTED | LOTA_STATUS_TPM_OK |
 				  LOTA_STATUS_IOMMU_OK | LOTA_STATUS_BPF_LOADED,

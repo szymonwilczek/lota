@@ -73,7 +73,12 @@ The most common failures, with the gate that produced them:
   status, D-Bus and profile binding on a machine with no TPM -- both servers
   resolve ``SET_PROFILE`` against the publishers the configuration they were
   started with names, and say how many they bound -- and a title that needs a
-  token there uses ``--test-signed`` instead. Neither server enforces anything,
+  token there uses ``--test-signed`` instead. Both serve the simulated
+  attested verdict they announce: the publishers they bound carry it, and a
+  host that configures none is answered under one synthetic publisher no
+  client can select. Neither reads the host's configuration to do it, so a
+  ``/etc/lota/lota.conf`` this user cannot open is reported and stepped over;
+  ``--config`` names a file that must load. Neither server enforces anything,
   so ``PROTECT_PID`` and ``UNPROTECT_PID`` are refused there with
   ``LOTA_IPC_ERR_NO_ENFORCEMENT`` (``LOTA_ERR_NO_ENFORCEMENT`` in the SDK):
   runtime PID policy is a change to what the enforcement object holds, and only
