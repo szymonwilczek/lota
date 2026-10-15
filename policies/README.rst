@@ -78,6 +78,14 @@ The exported policy is ready to use as-is. Optionally edit to:
    # Start verifier with custom policy
    lota-verifier --policy /path/to/my-policy.yaml
 
+``--policy`` may be repeated. The first document given is the active policy,
+the one every client whose tenant binds no policy of its own is verified
+against; each further document must bind a tenant with a ``tenant:`` key, and
+the verifier warns at startup about a policy that is neither active nor bound,
+because no client can reach it. Two documents may not share a ``name:``: the
+second would replace the first, silently changing what the fleet verifies
+against when the name is the active one.
+
 PCR Meanings (SHA-256 Bank)
 ---------------------------
 
@@ -306,7 +314,9 @@ remains as an override in both directions for an operator who has to
 contradict a policy they cannot immediately re-sign; left unset, each policy
 decides for itself. An unknown value is refused at load rather than read as
 "not consumer", so a typo cannot silently leave a diverse fleet on the
-enterprise handling.
+enterprise handling. The refusal names the value and the two the verifier
+accepts, and it applies to a policy file and a programmatically added policy
+alike: both register through one validation set.
 
 Whatever turns it on, the discriminator still requires ``require_secureboot``
 and a quote-authenticated Secure Boot anchor before anything moves.

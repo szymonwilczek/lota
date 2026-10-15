@@ -31,10 +31,11 @@ type rigMeta struct {
 	Version int `json:"version"`
 	Agents  int `json:"agents"`
 	KeyPool int `json:"key_pool"`
+	Tenant string `json:"tenant,omitempty"`
 }
 
 // writeRig materializes new rig directory
-func writeRig(dir string, agents, keyPool int) error {
+func writeRig(dir string, agents, keyPool int, tenant string) error {
 	if keyPool <= 0 {
 		keyPool = synth.DefaultKeyPool
 	}
@@ -54,7 +55,7 @@ func writeRig(dir string, agents, keyPool int) error {
 	}
 	// fleet only validates the profile and renders the policy here;
 	// certificates are re-issued from the pool on every load
-	fleet, err := synth.NewFleetWithKeys(ca, agents, keys)
+	fleet, err := synth.NewFleetWithKeys(ca, agents, keys, tenant)
 	if err != nil {
 		return err
 	}
@@ -66,7 +67,7 @@ func writeRig(dir string, agents, keyPool int) error {
 	if err != nil {
 		return err
 	}
-	meta, err := json.MarshalIndent(rigMeta{Version: 1, Agents: agents, KeyPool: keyPool}, "", "  ")
+	meta, err := json.MarshalIndent(rigMeta{Version: 1, Agents: agents, KeyPool: keyPool, Tenant: tenant}, "", "  ")
 	if err != nil {
 		return fmt.Errorf("marshal rig meta: %w", err)
 	}
@@ -131,7 +132,7 @@ func loadRig(dir string, agents int) (*synth.Fleet, *rigMeta, error) {
 		return nil, nil, err
 	}
 
-	fleet, err := synth.NewFleetWithKeys(ca, agents, keys)
+	fleet, err := synth.NewFleetWithKeys(ca, agents, keys, meta.Tenant)
 	if err != nil {
 		return nil, nil, err
 	}

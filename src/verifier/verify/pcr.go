@@ -292,10 +292,7 @@ func (v *PCRVerifier) LoadPolicy(path string) error {
 	if err := yaml.Unmarshal(data, &policy); err != nil {
 		return fmt.Errorf("failed to parse policy: %w", err)
 	}
-	if err := validatePolicyPCRIndices(&policy); err != nil {
-		return err
-	}
-	if err := validateKernelPins(&policy); err != nil {
+	if err := validatePolicyDocument(&policy); err != nil {
 		return err
 	}
 
@@ -310,37 +307,43 @@ func (v *PCRVerifier) LoadPolicy(path string) error {
 		return fmt.Errorf("refusing to load diverse-fleet policy '%s' (require_secureboot, no raw PCR pins) with empty agent_hashes: the agent self-hash would be TOFU and a modified non-enforcing agent could pin its own hash. Pin the official agent hash in agent_hashes (from the signed release), or pass --allow-unpinned-agent to accept the risk", policy.Name)
 	}
 
-	for _, w := range ValidatePolicy(&policy) {
-		slog.Warn(w)
-	}
-
 	return v.registerPolicy(&policy)
 }
 
-// adds a policy programmatically
+// adds a policy programmatically, through the same validation the file road runs
 func (v *PCRVerifier) AddPolicy(policy *PCRPolicy) error {
+	return v.registerPolicy(policy)
+}
+
+// validatePolicyDocument runs every check that judges the document itself.
+// registerPolicy, the only way into the policy map, calls it, so a check
+// added here covers both the file and the programmatic road.
+func validatePolicyDocument(policy *PCRPolicy) error {
 	if err := validatePolicyPCRIndices(policy); err != nil {
 		return err
 	}
 	if err := validateProfile(policy); err != nil {
 		return err
 	}
-	if err := validateKernelPins(policy); err != nil {
-		return err
-	}
-	for _, w := range ValidatePolicy(policy) {
-		slog.Warn(w)
-	}
-
-	return v.registerPolicy(policy)
+	return validateKernelPins(policy)
 }
 
-// registerPolicy stores validated policy and maintains the tenant binding index.
+// registerPolicy validates a policy document and stores it, maintaining the
+// tenant binding index.
 // Tenant binds to at most one policy.
 // Re-registering the same policy name refreshes its binding.
+// It is the only way into the policy map, so no road can register a document
+// that has not been through validatePolicyDocument.
 func (v *PCRVerifier) registerPolicy(policy *PCRPolicy) error {
+	if err := validatePolicyDocument(policy); err != nil {
+		return err
+	}
 	if policy.Tenant != "" && !ValidTenantName(policy.Tenant) {
 		return fmt.Errorf("policy '%s' declares an invalid tenant %q", policy.Name, policy.Tenant)
+	}
+
+	for _, w := range ValidatePolicy(policy) {
+		slog.Warn(w)
 	}
 
 	v.mu.Lock()
@@ -703,6 +706,19 @@ func (v *PCRVerifier) ListPolicies() []string {
 		names = append(names, name)
 	}
 	return names
+}
+
+// TenantBindings reports which policy each tenant is verified against.
+// A tenant absent from the map falls back to the active policy.
+func (v *PCRVerifier) TenantBindings() map[string]string {
+	v.mu.RLock()
+	defer v.mu.RUnlock()
+
+	bindings := make(map[string]string, len(v.tenantPolicy))
+	for tenant, name := range v.tenantPolicy {
+		bindings[tenant] = name
+	}
+	return bindings
 }
 
 // creates the built-in permissive policy used only for explicit insecure fallback.
