@@ -662,14 +662,14 @@ func (v *Verifier) VerifyReport(challengeID string, reportData []byte) (_ *types
 	if bootFacts != nil {
 		pcr14Baseline = PCR14BaselineFromEventLog(bootFacts.Parsed)
 	}
-	expected, _, matched := MatchLockedBootCommitmentPCR14(
+	expected, matched := MatchLockedBootCommitmentPCR14(
 		pcr14Baseline, report.System.AgentHash, pcr14)
 	if !matched {
 		logging.Security(clog, "PCR14 boot-commitment derivation mismatch",
 			"actual_pcr14", pcr14Hex,
 			"expected_pcr14", FormatPCR14(expected),
-			"reset_count", parsedAttest.ClockInfo.ResetCount,
-			"restart_count", parsedAttest.ClockInfo.RestartCount,
+			"eventlog_baseline", FormatPCR14(pcr14Baseline),
+			"agent_hash", hex.EncodeToString(report.System.AgentHash[:]),
 			"hint", "rebuild initramfs with the current lota-pcr14-lock helper, cold reboot, and run the same agent binary that extended PCR14")
 		v.metrics.Rejections.Inc("integrity_mismatch")
 		result.Result = types.VerifyIntegrityMismatch
@@ -783,6 +783,41 @@ func (v *Verifier) VerifyReport(challengeID string, reportData []byte) (_ *types
 		v.metrics.Rejections.Inc("baseline_error")
 		result.Result = types.VerifyIntegrityMismatch
 		return result, errors.New("FAIL_BASELINE_ERROR: agent_hash baseline store unavailable")
+	}
+
+	// The register the boot chain rests on is pinned.
+	// Every check above agrees with the report in hand: the commitment is rederived
+	// from the event log that report carries, so a host whose pre-lock baseline
+	// moved -- a MOK enrollment, a shim or SBAT update, a rebuilt initramfs lock
+	// -- presents a log and a register that agree with each other and derives
+	// clean. Comparing the register the client pinned is what makes that change
+	// visible; it is a boot-chain change, so it takes the same operator re-anchor
+	// a firmware change does.
+	// An agent update moves the register legitimately, and the agent_hash re-pin
+	// above moves the pin with it in one statement.
+	switch outcome.PCR14Result {
+	case TOFUFirstUse:
+		clog.Info("TOFU: PCR14 baseline established", "pcr14", pcr14Hex)
+	case TOFUMatch:
+		clog.Debug("PCR14 matches the pinned register")
+	case TOFUMismatch:
+		pinned := pcr14
+		if outcome.AgentHashBaseline != nil {
+			pinned = outcome.AgentHashBaseline.PCR14
+		}
+		logging.Security(clog, "PCR14 moved from the pinned register",
+			"actual_pcr14", pcr14Hex,
+			"pinned_pcr14", FormatPCR14(pinned),
+			"agent_hash", hex.EncodeToString(report.System.AgentHash[:]),
+			"hint", "the pre-lock PCR14 baseline changed (MOK enrollment, shim/SBAT update, rebuilt initramfs lock); re-anchor the client once the change is accounted for")
+		v.metrics.Rejections.Inc("integrity_mismatch")
+		result.Result = types.VerifyIntegrityMismatch
+		return result, errors.New("FAIL_INTEGRITY_MISMATCH: PCR14 changed from the pinned baseline")
+	case TOFUError:
+		clog.Error("PCR14 baseline store error, refusing attestation")
+		v.metrics.Rejections.Inc("baseline_error")
+		result.Result = types.VerifyIntegrityMismatch
+		return result, errors.New("FAIL_BASELINE_ERROR: PCR14 baseline store unavailable")
 	}
 
 	if outcome.BootProvided {

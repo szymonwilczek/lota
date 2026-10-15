@@ -49,11 +49,14 @@ const (
 	FlagEnforce      uint32 = 1 << 7 // LSM enforce mode active
 
 	// FlagBootCommitmentV1 indicates the agent extended PCR14 with
-	// SHA256(magic || agent_hash || resetCount_be || restartCount_be).
-	// The verifier derives the expected PCR14 from the pinned baseline
-	// agent hash plus the TPMS_ATTEST ClockInfo before comparing.
+	// SHA256(tag || agent_hash), chained onto the value the initramfs lock
+	// helper left. The verifier rederives that chain from the reported agent
+	// hash and the pre-lock baseline the report's event log replays to,
+	// and compares the result against the register the quote signed and against
+	// the one the client pinned.
+	// The register is per-binary, not per-boot.
 	// Every agent sets it and the verifier requires it:
-	// the bit names the v1 construction specifically, so future v2
+	// the bit names the v1 wire contract specifically, so a future
 	// derivation gets its own flag rather than reusing this one.
 	FlagBootCommitmentV1 uint32 = 1 << 8
 

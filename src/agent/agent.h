@@ -131,6 +131,18 @@ static inline void agent_globals_unlock(struct agent_globals *agent)
 	(void)agent;
 }
 
+/*
+ * self_measure - hash the running binary into the boot commitment
+ * @ctx: initialized TPM context
+ *
+ * Returns a member of enum tpm_boot_commitment_outcome on success
+ * -- TPM_BOOT_COMMITMENT_EXTENDED when this call extended PCR 14,
+ * TPM_BOOT_COMMITMENT_ALREADY_HELD when the register already carried this
+ * boot's commitment -- or a negative errno.
+ * Both successes leave the register holding the same value; they differ
+ * in whether this process is the one that put it there, which is what a reader
+ * has to know before budgeting a reboot.
+ */
 int self_measure(struct tpm_context *ctx);
 struct lota_config;
 void setup_container_listener(struct ipc_context *ctx,

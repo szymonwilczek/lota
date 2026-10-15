@@ -529,6 +529,10 @@ static int run_daemon(const struct run_daemon_params *params)
 			lota_err("Self-measurement failed: %s",
 				 tpm_strerror(ret));
 			goto cleanup_tpm;
+		} else if (ret == TPM_BOOT_COMMITMENT_ALREADY_HELD) {
+			lota_info(
+				"Self-measurement complete (PCR %d already held this boot's commitment; the restart did not spend it)",
+				LOTA_PCR_SELF);
 		} else {
 			lota_info("Self-measurement complete (PCR %d extended)",
 				  LOTA_PCR_SELF);

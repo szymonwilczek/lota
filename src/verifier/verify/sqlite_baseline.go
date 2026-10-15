@@ -114,10 +114,9 @@ func (s *SQLiteBaselineStore) CheckAndUpdate(clientID string, pcr14 [types.HashS
 }
 
 // CheckAndUpdateAgentHash pins agent_hash with TOFU semantics. The
-// pcr14 column is filled on first use from currentPCR14 so the schema
-// NOT NULL constraint is satisfied; the column carries no security
-// meaning for boot-commitment clients - the verifier derives the
-// expected PCR14 dynamically from agent_hash + ClockInfo.
+// pcr14 column is filled on first use from currentPCR14 and compared on every
+// later round by CheckAndUpdateAttestation, which is what makes a moved pre-lock
+// baseline visible.
 func (s *SQLiteBaselineStore) CheckAndUpdateAgentHash(clientID string,
 	currentPCR14, agentHash [types.HashSize]byte,
 ) (TOFUResult, *ClientBaseline) {
@@ -479,7 +478,7 @@ func (s *SQLiteBaselineStore) CheckAndUpdateAttestation(clientID string,
 	defer s.mu.Unlock()
 
 	ctx := context.Background()
-	outcome := AttestationOutcome{BootProvided: boot != nil}
+	outcome := AttestationOutcome{BootProvided: boot != nil, PCR14Result: TOFUError}
 
 	conn, err := s.db.Conn(ctx)
 	if err != nil {
@@ -552,6 +551,7 @@ func (s *SQLiteBaselineStore) CheckAndUpdateAttestation(clientID string,
 				PCR14: pcr14, AgentHash: agentHash,
 				FirstSeen: now, LastSeen: now, AttestCount: 1,
 			}
+			outcome.PCR14Result = TOFUFirstUse
 			outcome.BootResult = TOFUFirstUse
 			bb := *boot
 			bb.FirstSeen, bb.LastSeen = now, now
@@ -573,6 +573,7 @@ func (s *SQLiteBaselineStore) CheckAndUpdateAttestation(clientID string,
 				PCR14: pcr14, AgentHash: agentHash,
 				FirstSeen: now, LastSeen: now, AttestCount: 1,
 			}
+			outcome.PCR14Result = TOFUFirstUse
 		}
 		if _, err := conn.ExecContext(ctx, "COMMIT"); err != nil {
 			slog.Error("attestation tx: COMMIT failed",
@@ -624,6 +625,27 @@ func (s *SQLiteBaselineStore) CheckAndUpdateAttestation(clientID string,
 		outcome.AgentHashResult = TOFUMatch
 	}
 
+	// --- decide PCR14 branch ---
+	//
+	// Every road that inserts a row writes the register with it, and the column
+	// is NOT NULL, so an existing row always has one to compare against.
+	// A mismatch terminates the transaction without writes.
+	switch {
+	case pcr14Stored != pcr14:
+		outcome.PCR14Result = TOFUMismatch
+		outcome.AgentHashBaseline = &ClientBaseline{
+			PCR14: pcr14Stored, AgentHash: stored,
+			FirstSeen: firstSeen, LastSeen: lastSeen,
+			AttestCount: attestCount,
+		}
+		if boot != nil {
+			outcome.BootResult = TOFUError
+		}
+		return outcome
+	default:
+		outcome.PCR14Result = TOFUMatch
+	}
+
 	// --- decide boot branch ---
 	bootZero := len(storedPCR0) == 0 && len(storedPCR1) == 0 && len(storedPCR7) == 0
 	if boot != nil {
@@ -662,7 +684,7 @@ func (s *SQLiteBaselineStore) CheckAndUpdateAttestation(clientID string,
 		}
 	}
 
-	// --- commit phase: both halves passed; build a single UPDATE ---
+	// --- commit phase: every half passed; build a single UPDATE ---
 	newCount := attestCount + 1
 	if boot != nil {
 		switch outcome.BootResult {

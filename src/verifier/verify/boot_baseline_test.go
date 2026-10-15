@@ -674,3 +674,67 @@ func TestLFAReview_MemoryAndSQLite(t *testing.T) {
 		t.Error("review should be cleared after acknowledge (SQLite)")
 	}
 }
+
+// TestPinnedRegister_MemoryRefusesAMovedPCR14 and its SQLite twin cover the
+// register itself.
+// Nothing about the round changes except PCR 14: the same client, the same
+// agent binary, the same firmware PCRs -- which is what a MOK enrollment
+// or a shim update leaves behind, since both move the pre-lock baseline
+// the boot commitment chains onto.
+func TestPinnedRegister_MemoryRefusesAMovedPCR14(t *testing.T) {
+	bs := NewBaselineStore()
+	pcr14 := [types.HashSize]byte{0x14}
+	agentHash := [types.HashSize]byte{0xA1}
+	boot := &BootBaseline{PCR0: [types.HashSize]byte{0}, PCR1: [types.HashSize]byte{1}, PCR7: [types.HashSize]byte{7}}
+
+	if o := bs.CheckAndUpdateAttestation("c", pcr14, agentHash, boot); o.PCR14Result != TOFUFirstUse {
+		t.Fatalf("first use: pcr14 = %v", o.PCR14Result)
+	}
+	if o := bs.CheckAndUpdateAttestation("c", pcr14, agentHash, boot); o.PCR14Result != TOFUMatch {
+		t.Fatalf("match: pcr14 = %v", o.PCR14Result)
+	}
+
+	moved := [types.HashSize]byte{0x15}
+	o := bs.CheckAndUpdateAttestation("c", moved, agentHash, boot)
+	if o.PCR14Result != TOFUMismatch {
+		t.Fatalf("moved register: pcr14 = %v, want TOFUMismatch", o.PCR14Result)
+	}
+	if o.AgentHashBaseline == nil || o.AgentHashBaseline.PCR14 != pcr14 {
+		t.Fatal("a refusal has to carry the register the client pinned")
+	}
+	if b := bs.GetBaseline("c"); b == nil || b.PCR14 != pcr14 || b.AttestCount != 2 {
+		t.Fatalf("refused round wrote state: %+v", b)
+	}
+}
+
+func TestPinnedRegister_SQLiteRefusesAMovedPCR14(t *testing.T) {
+	db, err := store.OpenDB(":memory:")
+	if err != nil {
+		t.Fatalf("OpenDB failed: %v", err)
+	}
+	defer db.Close()
+
+	bs := NewSQLiteBaselineStore(db)
+	pcr14 := [types.HashSize]byte{0x14}
+	agentHash := [types.HashSize]byte{0xA1}
+	boot := &BootBaseline{PCR0: [types.HashSize]byte{0}, PCR1: [types.HashSize]byte{1}, PCR7: [types.HashSize]byte{7}}
+
+	if o := bs.CheckAndUpdateAttestation("c", pcr14, agentHash, boot); o.PCR14Result != TOFUFirstUse {
+		t.Fatalf("first use: pcr14 = %v", o.PCR14Result)
+	}
+	if o := bs.CheckAndUpdateAttestation("c", pcr14, agentHash, boot); o.PCR14Result != TOFUMatch {
+		t.Fatalf("match: pcr14 = %v", o.PCR14Result)
+	}
+
+	moved := [types.HashSize]byte{0x15}
+	o := bs.CheckAndUpdateAttestation("c", moved, agentHash, boot)
+	if o.PCR14Result != TOFUMismatch {
+		t.Fatalf("moved register: pcr14 = %v, want TOFUMismatch", o.PCR14Result)
+	}
+	if o.AgentHashBaseline == nil || o.AgentHashBaseline.PCR14 != pcr14 {
+		t.Fatal("a refusal has to carry the register the client pinned")
+	}
+	if b := bs.GetBaseline("c"); b == nil || b.PCR14 != pcr14 || b.AttestCount != 2 {
+		t.Fatalf("refused round wrote state: %+v", b)
+	}
+}

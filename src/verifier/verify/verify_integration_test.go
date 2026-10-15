@@ -128,11 +128,21 @@ func createValidReportWithFlags(t *testing.T, clientID string, nonce [32]byte, p
 		fixtureAgentHash())
 }
 
-// createValidReportWithAgentHash is the builder the others delegate to.
-// Agent hash is a parameter because it is bound into the quote nonce and written
-// into the report body, so test that varies it must vary both.
 func createValidReportWithAgentHash(t *testing.T, clientID string, nonce [32]byte, pcr14 [32]byte,
 	pcrMask, flags uint32, agentHash [types.HashSize]byte,
+) []byte {
+	t.Helper()
+	return createValidReportWithEventLog(t, clientID, nonce, pcr14, pcrMask, flags,
+		agentHash, uefiEventLog())
+}
+
+// createValidReportWithEventLog is the builder the others delegate to.
+// Agent hash is a parameter because it is bound into the quote nonce and written
+// into the report body, so test that varies it must vary both.
+// The firmware log is a parameter because the verifier replays it for the PCR14
+// baseline the lock chain anchors on, so a test that moves that baseline moves the log.
+func createValidReportWithEventLog(t *testing.T, clientID string, nonce [32]byte, pcr14 [32]byte,
+	pcrMask, flags uint32, agentHash [types.HashSize]byte, eventLog []byte,
 ) []byte {
 	t.Helper()
 	hwID := sha256.Sum256([]byte(clientID))
@@ -283,10 +293,9 @@ func createValidReportWithAgentHash(t *testing.T, clientID string, nonce [32]byt
 	binary.LittleEndian.PutUint32(buf[offset:], 0)
 	offset += 4
 
-	// append the fixture firmware log
+	// append the caller's firmware log
 	// (Spec ID header + the PCR 7 SecureBoot variable measurement
 	// the UEFI gate requires)
-	eventLog := uefiEventLog()
 	binary.LittleEndian.PutUint32(buf[offset:], uint32(len(eventLog)))
 	buf = append(buf, eventLog...)
 
@@ -1064,5 +1073,96 @@ func TestClientInfo_BaselineOnlyClientIsFound(t *testing.T) {
 	}
 	if info.PCR14Baseline == "" {
 		t.Fatal("baseline missing from client info")
+	}
+}
+
+// mokEventLog is the firmware log of a shim host that measured a MOK list:
+// the PCR 7 SecureBoot variable every fixture carries, plus shim's own
+// EV_IPL "MokList" measurement on PCR 14.
+// Enrolling or deleting a key with mokutil changes the measured variable,
+// which is what moves the register.
+func mokEventLog(mok []byte) []byte {
+	sbPayload := encodeUEFIVariableData(efiGlobalVariableGUID, "SecureBoot", []byte{0x01})
+	sbDigest := sha256.Sum256(sbPayload)
+	mokDigest := sha256.Sum256(mok)
+
+	return buildTestEventLog([]EventLogEntry{
+		{
+			PCRIndex:  7,
+			EventType: EvEFIVariableDriverConfig,
+			Digests:   map[uint16][]byte{AlgSHA256: sbDigest[:]},
+			EventData: sbPayload,
+		},
+		{
+			PCRIndex:  14,
+			EventType: EvIPL,
+			Digests:   map[uint16][]byte{AlgSHA256: mokDigest[:]},
+			EventData: []byte("MokList"),
+		},
+	})
+}
+
+// mokPCR14Baseline is the PCR 14 content mokEventLog replays to:
+// the pre-lock baseline the initramfs helper and the agent chain onto.
+func mokPCR14Baseline(mok []byte) [types.HashSize]byte {
+	mokDigest := sha256.Sum256(mok)
+
+	var pcr14 [types.HashSize]byte
+	h := sha256.New()
+	h.Write(pcr14[:])
+	h.Write(mokDigest[:])
+	copy(pcr14[:], h.Sum(nil))
+	return pcr14
+}
+
+// TestVerify_MOKChangeIsRefusedAgainstThePinnedRegister covers the boot-chain
+// change nothing else does. The MOK list is the set of certificates shim accepts
+// signatures from, so changing it changes what the host will boot; on this shim
+// it is measured into PCR 14, the register the lock chain anchors on.
+// Both the report and its event log move together, so every derivation still
+// agrees with itself -- the only thing that can catch the change is the register
+// the client pinned on the round before.
+func TestVerify_MOKChangeIsRefusedAgainstThePinnedRegister(t *testing.T) {
+	aikStore := newCertStore(t)
+	verifier := createTestVerifier(t, aikStore)
+
+	clientID := "mok-client"
+
+	challenge1, err := verifier.GenerateChallenge(clientID)
+	if err != nil {
+		t.Fatalf("GenerateChallenge failed: %v", err)
+	}
+	report1 := createValidReport(t, clientID, challenge1.Nonce, fixturePCR14())
+	result1, err := verifier.VerifyReport(clientID, report1)
+	if err != nil || result1.Result != types.VerifyOK {
+		t.Fatalf("first attestation failed: %v (result=%d)", err, result1.Result)
+	}
+
+	// the same agent binary, on the same firmware, after a mokutil enrollment
+	mok := []byte("operator-enrolled MOK certificate")
+	moved := DeriveLockedBootCommitmentPCR14(mokPCR14Baseline(mok), fixtureAgentHash())
+	if moved == fixturePCR14() {
+		t.Fatal("fixture MOK does not move PCR 14; the test proves nothing")
+	}
+
+	challenge2, err := verifier.GenerateChallenge(clientID)
+	if err != nil {
+		t.Fatalf("GenerateChallenge failed: %v", err)
+	}
+	report2 := createValidReportWithEventLog(t, clientID, challenge2.Nonce, moved,
+		productionPCRMask, productionFlags, fixtureAgentHash(), mokEventLog(mok))
+
+	result2, err := verifier.VerifyReport(clientID, report2)
+	if result2.Result != types.VerifyIntegrityMismatch {
+		t.Fatalf("SECURITY: a MOK change was accepted\n"+
+			"  expected: FAIL_INTEGRITY_MISMATCH (%d)\n"+
+			"  got:      %d (err=%v)\n"+
+			"  pinned PCR14: %x\n"+
+			"  moved PCR14:  %x",
+			types.VerifyIntegrityMismatch, result2.Result, err,
+			fixturePCR14(), moved)
+	}
+	if err == nil {
+		t.Error("a refused round has to name its reason")
 	}
 }

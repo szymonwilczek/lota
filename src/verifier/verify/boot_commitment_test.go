@@ -123,13 +123,10 @@ func TestMatchLockedBootCommitmentPCR14_ResumeNeedsNoSkewWindow(t *testing.T) {
 
 	target := DeriveLockedBootCommitmentPCR14(zeroBaseline, agentHash)
 
-	expected, drift, matched := MatchLockedBootCommitmentPCR14(
+	expected, matched := MatchLockedBootCommitmentPCR14(
 		zeroBaseline, agentHash, target)
 	if !matched {
 		t.Fatalf("a resumed host was refused: expected %x target %x", expected, target)
-	}
-	if drift != 0 {
-		t.Fatalf("no drift can be reported when the counters do not bind: got %d", drift)
 	}
 }
 
@@ -316,12 +313,9 @@ func TestMatchLockedBootCommitmentPCR14_ExactMatch(t *testing.T) {
 
 	target := DeriveLockedBootCommitmentPCR14(zeroBaseline, agentHash)
 
-	expected, drift, ok := MatchLockedBootCommitmentPCR14(zeroBaseline, agentHash, target)
+	expected, ok := MatchLockedBootCommitmentPCR14(zeroBaseline, agentHash, target)
 	if !ok {
 		t.Fatal("expected exact-match acceptance")
-	}
-	if drift != 0 {
-		t.Fatalf("exact match must report zero drift, got %d", drift)
 	}
 	if expected != target {
 		t.Fatal("matched expected value diverged from target")
@@ -341,12 +335,9 @@ func TestMatchLockedBootCommitmentPCR14_RejectsForeignRegister(t *testing.T) {
 
 	target := DeriveLockedBootCommitmentPCR14(zeroBaseline, otherHash)
 
-	expected, drift, ok := MatchLockedBootCommitmentPCR14(zeroBaseline, agentHash, target)
+	expected, ok := MatchLockedBootCommitmentPCR14(zeroBaseline, agentHash, target)
 	if ok {
 		t.Fatal("a register another binary committed was accepted")
-	}
-	if drift != 0 {
-		t.Fatalf("rejection must report zero drift, got %d", drift)
 	}
 	if expected != DeriveLockedBootCommitmentPCR14(zeroBaseline, agentHash) {
 		t.Fatal("on no match, expected must be the reported hash's derivation for logging")
@@ -367,7 +358,7 @@ func TestMatchLockedBootCommitmentPCR14_RejectsForeignBaseline(t *testing.T) {
 
 	target := DeriveLockedBootCommitmentPCR14(shimBaseline, agentHash)
 
-	if _, _, ok := MatchLockedBootCommitmentPCR14(zeroBaseline, agentHash, target); ok {
+	if _, ok := MatchLockedBootCommitmentPCR14(zeroBaseline, agentHash, target); ok {
 		t.Fatal("a register anchored on another baseline was accepted")
 	}
 }
@@ -407,10 +398,10 @@ func TestDerivePCR14_BaselineAware(t *testing.T) {
 	// matcher must accept a target derived with the same baseline
 	// and reject one derived against the wrong (zero) baseline
 	target := DeriveLockedBootCommitmentPCR14(shim, agentHash)
-	if _, _, ok := MatchLockedBootCommitmentPCR14(shim, agentHash, target); !ok {
+	if _, ok := MatchLockedBootCommitmentPCR14(shim, agentHash, target); !ok {
 		t.Fatal("matcher must accept a target derived with the same baseline")
 	}
-	if _, _, ok := MatchLockedBootCommitmentPCR14(zeroBaseline, agentHash, target); ok {
+	if _, ok := MatchLockedBootCommitmentPCR14(zeroBaseline, agentHash, target); ok {
 		t.Fatal("matcher must reject a target derived against a different baseline")
 	}
 }
