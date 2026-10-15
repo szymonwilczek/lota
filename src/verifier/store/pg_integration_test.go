@@ -15,6 +15,14 @@
 //	LOTA_TEST_PG_DSN="postgres://lota:lota@127.0.0.1:55432/lota?sslmode=disable" \
 //	  go test -tags pg_integration -p 1 ./store/ ./verify/ -v
 //
+// The sharded tests need more than one database, because what they check is which
+// database an answer came from. Create two on the same server and name
+// both in LOTA_TEST_PG_SHARD_DSNS, comma separated; without it they skip:
+//
+//	psql "$LOTA_TEST_PG_DSN" -c 'CREATE DATABASE s0' -c 'CREATE DATABASE s1'
+//	LOTA_TEST_PG_SHARD_DSNS="postgres://lota:lota@127.0.0.1:55432/s0?sslmode=disable,\
+//	postgres://lota:lota@127.0.0.1:55432/s1?sslmode=disable"
+//
 // Use -p 1 when running both packages: they share one database, so parallel
 // package execution would let one package's TRUNCATE stomp the other's rows.
 
@@ -28,6 +36,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"strings"
 	"testing"
 )
 
@@ -47,6 +56,51 @@ func pgTestDB(t *testing.T) *sql.DB {
 		t.Fatalf("truncate: %v", err)
 	}
 	return db
+}
+
+// pgTestShards opens the databases named by LOTA_TEST_PG_SHARD_DSNS, which is
+// the only way to drive a check whose whole subject is which database an answer
+// is read from. One database cannot stand in for two: the shard set is pinned
+// per database, and the defect this covers was that a reordering moved the
+// database holding the pin.
+func pgTestShards(t *testing.T, want int) []*sql.DB {
+	t.Helper()
+	raw := os.Getenv("LOTA_TEST_PG_SHARD_DSNS")
+	if raw == "" {
+		t.Skip("LOTA_TEST_PG_SHARD_DSNS not set; skipping sharded Postgres test")
+	}
+	dsns := strings.Split(raw, ",")
+	if len(dsns) < want {
+		t.Skipf("LOTA_TEST_PG_SHARD_DSNS names %d database(s), need %d", len(dsns), want)
+	}
+
+	dbs := make([]*sql.DB, want)
+	for i := range want {
+		db, err := OpenPostgresDB(strings.TrimSpace(dsns[i]))
+		if err != nil {
+			t.Fatalf("OpenPostgresDB(shard %d): %v", i, err)
+		}
+		t.Cleanup(func() { db.Close() })
+		if _, err := db.Exec("DELETE FROM shard_set"); err != nil {
+			t.Fatalf("clear shard_set on shard %d: %v", i, err)
+		}
+		dbs[i] = db
+	}
+	return dbs
+}
+
+// pinnedFingerprint reads what a shard holds, or "" where it holds nothing
+func pinnedFingerprint(t *testing.T, db *sql.DB) string {
+	t.Helper()
+	var fp string
+	err := db.QueryRow("SELECT fingerprint FROM shard_set WHERE singleton").Scan(&fp)
+	if errors.Is(err, sql.ErrNoRows) {
+		return ""
+	}
+	if err != nil {
+		t.Fatalf("read shard_set: %v", err)
+	}
+	return fp
 }
 
 func TestPostgresDBPoolCeiling(t *testing.T) {
@@ -356,36 +410,76 @@ func TestPostgresShardIdentityStable(t *testing.T) {
 	}
 }
 
-// control database pins the shard set on first use and refuses a later start
-// whose list differs -- reorder, different member, or changed shard count all
-// route clients to databases the peers disagree with.
+// Every shard pins the set on first use and refuses a later start whose list
+// differs -- reorder, different member, or changed shard count all route clients
+// to databases the peers disagree with.
 func TestPostgresAssertShardSet(t *testing.T) {
-	db := pgTestDB(t)
-	if _, err := db.Exec("DELETE FROM shard_set"); err != nil {
-		t.Fatalf("clear shard_set: %v", err)
-	}
+	dbs := pgTestShards(t, 2)
 	ctx := context.Background()
 
-	pinned := []string{"shard-a", "shard-b", "shard-c"}
-	if err := AssertShardSet(ctx, db, pinned); err != nil {
+	idA, err := ShardIdentity(ctx, dbs[0])
+	if err != nil {
+		t.Fatalf("ShardIdentity(shard 0): %v", err)
+	}
+	idB, err := ShardIdentity(ctx, dbs[1])
+	if err != nil {
+		t.Fatalf("ShardIdentity(shard 1): %v", err)
+	}
+	if idA == idB {
+		t.Fatal("LOTA_TEST_PG_SHARD_DSNS names the same database twice")
+	}
+
+	pinned := []string{idA, idB}
+	if err := AssertShardSet(ctx, dbs, pinned); err != nil {
 		t.Fatalf("first pin: %v", err)
 	}
+
+	// the pin lands on every shard, not only the one listed first
+	want := ShardSetFingerprint(pinned)
+	for i, db := range dbs {
+		if got := pinnedFingerprint(t, db); got != want {
+			t.Errorf("shard %d pinned %q, want %q", i, got, want)
+		}
+	}
 	// the same list on every later start is the healthy case
-	if err := AssertShardSet(ctx, db, pinned); err != nil {
+	if err := AssertShardSet(ctx, dbs, pinned); err != nil {
 		t.Fatalf("re-asserting the pinned list: %v", err)
 	}
 
-	divergent := map[string][]string{
-		"reordered":       {"shard-b", "shard-a", "shard-c"},
-		"shard added":     {"shard-a", "shard-b", "shard-c", "shard-d"},
-		"shard removed":   {"shard-a", "shard-b"},
-		"member replaced": {"shard-a", "shard-b", "shard-z"},
+	// The case the file exists for: the same databases in the other order.
+	// It is the reordering that moves the first database, so the answer must
+	// not come from whichever database that is.
+	reordered := []*sql.DB{dbs[1], dbs[0]}
+	err = AssertShardSet(ctx, reordered, []string{idB, idA})
+	if err == nil {
+		t.Fatal("a reordered shard list was accepted")
 	}
-	for name, ids := range divergent {
+	if !errors.Is(err, ErrShardSetMismatch) {
+		t.Errorf("error = %v, want ErrShardSetMismatch", err)
+	}
+
+	// and it left no second, contradictory pin behind
+	for i, db := range dbs {
+		if got := pinnedFingerprint(t, db); got != want {
+			t.Errorf("after the refusal shard %d holds %q, want %q", i, got, want)
+		}
+	}
+
+	// Each divergent case is given as many databases as it names,
+	// so what refuses it is the fingerprint and not the length check below.
+	divergent := map[string]struct {
+		dbs []*sql.DB
+		ids []string
+	}{
+		"shard removed":         {dbs[:1], []string{idA}},
+		"member replaced":       {dbs, []string{idA, "shard-z"}},
+		"first member replaced": {dbs, []string{"shard-z", idB}},
+	}
+	for name, tc := range divergent {
 		t.Run(name, func(t *testing.T) {
-			err := AssertShardSet(ctx, db, ids)
+			err := AssertShardSet(ctx, tc.dbs, tc.ids)
 			if err == nil {
-				t.Fatalf("%v accepted against the pinned set", ids)
+				t.Fatalf("%v accepted against the pinned set", tc.ids)
 			}
 			if !errors.Is(err, ErrShardSetMismatch) {
 				t.Errorf("error = %v, want ErrShardSetMismatch", err)
@@ -394,15 +488,36 @@ func TestPostgresAssertShardSet(t *testing.T) {
 	}
 
 	// the same database listed twice would collapse routing onto it
-	if err := AssertShardSet(ctx, db, []string{"shard-a", "shard-a"}); err == nil {
+	if err := AssertShardSet(ctx, dbs, []string{idA, idA}); err == nil {
 		t.Error("duplicate shard accepted")
 	}
 
-	// clearing the pin is the documented way to change the set on purpose
-	if _, err := db.Exec("DELETE FROM shard_set"); err != nil {
-		t.Fatalf("clear shard_set: %v", err)
+	// one identity per database, or the check is comparing lists of
+	// different things
+	if err := AssertShardSet(ctx, dbs, []string{idA}); err == nil {
+		t.Error("a shard list shorter than the database list was accepted")
 	}
-	if err := AssertShardSet(ctx, db, []string{"shard-a", "shard-b"}); err != nil {
+
+	// a shard that already names another fleet stops the run
+	if _, err := dbs[1].Exec("DELETE FROM shard_set"); err != nil {
+		t.Fatalf("clear shard_set on shard 1: %v", err)
+	}
+	if _, err := dbs[1].Exec(
+		`INSERT INTO shard_set (singleton, fingerprint, shard_count) VALUES (TRUE, $1, $2)`,
+		ShardSetFingerprint([]string{"other-fleet-a", "other-fleet-b"}), 2); err != nil {
+		t.Fatalf("plant a foreign pin: %v", err)
+	}
+	if err := AssertShardSet(ctx, dbs, pinned); err == nil {
+		t.Error("a shard pinned to another fleet was accepted")
+	}
+
+	// clearing the pin everywhere is the documented way to change the set
+	for i, db := range dbs {
+		if _, err := db.Exec("DELETE FROM shard_set"); err != nil {
+			t.Fatalf("clear shard_set on shard %d: %v", i, err)
+		}
+	}
+	if err := AssertShardSet(ctx, dbs, []string{idA, idB}); err != nil {
 		t.Fatalf("re-pin after clearing: %v", err)
 	}
 }
