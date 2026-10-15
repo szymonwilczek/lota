@@ -26,6 +26,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/epoll.h>
+#include <sys/inotify.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
 #include <sys/un.h>
@@ -560,6 +561,89 @@ static int set_nonblocking(int fd)
 	if (fcntl(fd, F_SETFL, flags | O_NONBLOCK) < 0)
 		return -errno;
 	return 0;
+}
+
+/*
+ * Bind a fresh listener at the primary socket path, at startup and again when
+ * the file is replaced. The caller decides whether taking the path over is
+ * legitimate.
+ */
+static int open_primary_listener(int *out_fd)
+{
+	struct sockaddr_un addr;
+	struct group *grp;
+	int fd, ret;
+
+	fd = socket(AF_UNIX, SOCK_STREAM, 0);
+	if (fd < 0)
+		return -errno;
+
+	ret = set_nonblocking(fd);
+	if (ret < 0)
+		goto err_close;
+
+	memset(&addr, 0, sizeof(addr));
+	addr.sun_family = AF_UNIX;
+	strncpy(addr.sun_path, LOTA_IPC_SOCKET_PATH, sizeof(addr.sun_path) - 1);
+
+	unlink(LOTA_IPC_SOCKET_PATH);
+
+	/* restrict socket access to owner (root) and the 'lota' group */
+	{
+		mode_t old_umask = umask(0117);
+		ret = bind(fd, (struct sockaddr *)&addr, sizeof(addr));
+		umask(old_umask);
+	}
+	if (ret < 0) {
+		ret = -errno;
+		lota_err("bind(%s) failed: %s", LOTA_IPC_SOCKET_PATH,
+			 strerror(-ret));
+		goto err_close;
+	}
+
+	grp = getgrnam(LOTA_GROUP_NAME);
+	if (grp) {
+		if (chown(LOTA_IPC_SOCKET_PATH, 0, grp->gr_gid) < 0)
+			lota_warn("chown(%s, 0, %d) failed: %s",
+				  LOTA_IPC_SOCKET_PATH, grp->gr_gid,
+				  strerror(errno));
+	} else {
+		lota_warn("group '%s' not found, socket accessible to "
+			  "current group only",
+			  LOTA_GROUP_NAME);
+	}
+
+	if (listen(fd, 16) < 0) {
+		ret = -errno;
+		lota_err("listen() failed: %s", strerror(-ret));
+		unlink(LOTA_IPC_SOCKET_PATH);
+		goto err_close;
+	}
+
+	*out_fd = fd;
+	return 0;
+
+err_close:
+	close(fd);
+	return ret;
+}
+
+/*
+ * Record the (device, inode) at the socket path. The fd outlives an unlink,
+ * so only a changed pair shows that clients now connect somewhere else.
+ */
+static void record_listen_identity(struct ipc_context *ctx)
+{
+	struct stat st;
+
+	if (stat(LOTA_IPC_SOCKET_PATH, &st) < 0) {
+		ctx->listen_dev = 0;
+		ctx->listen_ino = 0;
+		return;
+	}
+
+	ctx->listen_dev = st.st_dev;
+	ctx->listen_ino = st.st_ino;
 }
 
 static int ensure_socket_dir(void)
@@ -2848,13 +2932,13 @@ static int accept_client(struct ipc_context *ctx, int listen_fd)
 
 int ipc_init(struct ipc_context *ctx)
 {
-	struct sockaddr_un addr;
 	struct epoll_event ev;
 	int ret;
 
 	memset(ctx, 0, sizeof(*ctx));
 	ctx->listen_fd = -1;
 	ctx->epoll_fd = -1;
+	ctx->sock_watch_fd = -1;
 	ctx->start_time_sec = monotonic_now_sec();
 
 	client_map_init(ctx);
@@ -2884,65 +2968,15 @@ int ipc_init(struct ipc_context *ctx)
 		return -EADDRINUSE;
 	}
 
-	unlink(LOTA_IPC_SOCKET_PATH);
-
-	ctx->listen_fd = socket(AF_UNIX, SOCK_STREAM, 0);
-	if (ctx->listen_fd < 0) {
-		ret = -errno;
-		lota_err("socket() failed: %s", strerror(-ret));
+	ret = open_primary_listener(&ctx->listen_fd);
+	if (ret < 0)
 		return ret;
-	}
-
-	ret = set_nonblocking(ctx->listen_fd);
-	if (ret < 0) {
-		lota_err("set_nonblocking() failed: %s", strerror(-ret));
-		goto err_close;
-	}
-
-	memset(&addr, 0, sizeof(addr));
-	addr.sun_family = AF_UNIX;
-	strncpy(addr.sun_path, LOTA_IPC_SOCKET_PATH, sizeof(addr.sun_path) - 1);
-
-	/*
-	 * Restrict socket access to owner (root) and 'lota' group
-	 */
-	{
-		mode_t old_umask = umask(0117);
-		ret = bind(ctx->listen_fd, (struct sockaddr *)&addr,
-			   sizeof(addr));
-		umask(old_umask);
-	}
-	if (ret < 0) {
-		ret = -errno;
-		lota_err("bind(%s) failed: %s", LOTA_IPC_SOCKET_PATH,
-			 strerror(-ret));
-		goto err_close;
-	}
-	{
-		struct group *grp = getgrnam(LOTA_GROUP_NAME);
-		if (grp) {
-			if (chown(LOTA_IPC_SOCKET_PATH, 0, grp->gr_gid) < 0)
-				lota_warn("chown(%s, 0, %d) failed: %s",
-					  LOTA_IPC_SOCKET_PATH, grp->gr_gid,
-					  strerror(errno));
-		} else {
-			lota_warn("group '%s' not found, socket accessible to "
-				  "current group only",
-				  LOTA_GROUP_NAME);
-		}
-	}
-
-	if (listen(ctx->listen_fd, 16) < 0) {
-		ret = -errno;
-		lota_err("listen() failed: %s", strerror(-ret));
-		goto err_unlink;
-	}
 
 	ctx->epoll_fd = epoll_create1(EPOLL_CLOEXEC);
 	if (ctx->epoll_fd < 0) {
 		ret = -errno;
 		lota_err("epoll_create1() failed: %s", strerror(-ret));
-		goto err_unlink;
+		goto err_listener;
 	}
 
 	ev.events = EPOLLIN;
@@ -2950,25 +2984,155 @@ int ipc_init(struct ipc_context *ctx)
 	if (epoll_ctl(ctx->epoll_fd, EPOLL_CTL_ADD, ctx->listen_fd, &ev) < 0) {
 		ret = -errno;
 		lota_err("epoll_ctl() failed: %s", strerror(-ret));
-		goto err_epoll;
+		close(ctx->epoll_fd);
+		ctx->epoll_fd = -1;
+		goto err_listener;
 	}
 
 	ctx->running = true;
 	ctx->status_flags = 0;
 	ctx->dbus_fd = -1;
+	record_listen_identity(ctx);
 
 	lota_info("IPC listening on %s", LOTA_IPC_SOCKET_PATH);
 	return 0;
 
-err_epoll:
-	close(ctx->epoll_fd);
-err_unlink:
+err_listener:
 	unlink(LOTA_IPC_SOCKET_PATH);
-err_close:
 	close(ctx->listen_fd);
 	ctx->listen_fd = -1;
-	ctx->epoll_fd = -1;
 	return ret;
+}
+
+/*
+ * Watch the directory the primary socket lives in.
+ *
+ * Restarting a socket unit with RemoveOnStop=yes binds a new inode at the path,
+ * and titles connect to it while this daemon keeps accepting on the old one.
+ * Its LSM refuses PID 1's signals, so unnoticed the host stays enforcing
+ * and unreachable until reboot.
+ *
+ * Failing to watch is not fatal; the daemon just cannot rebind on its own.
+ */
+int ipc_watch_socket_path(struct ipc_context *ctx)
+{
+	int fd, ret;
+
+	if (!ctx)
+		return -EINVAL;
+	if (ctx->sock_watch_fd >= 0)
+		return ctx->sock_watch_fd;
+
+	fd = inotify_init1(IN_NONBLOCK | IN_CLOEXEC);
+	if (fd < 0)
+		return -errno;
+
+	if (inotify_add_watch(fd, SOCKET_DIR,
+			      IN_CREATE | IN_DELETE | IN_MOVED_FROM |
+				      IN_MOVED_TO | IN_ATTRIB) < 0) {
+		ret = -errno;
+		close(fd);
+		return ret;
+	}
+
+	ctx->sock_watch_fd = fd;
+	return fd;
+}
+
+int ipc_socket_watch_fd(const struct ipc_context *ctx)
+{
+	return ctx ? ctx->sock_watch_fd : -1;
+}
+
+/*
+ * Take the socket path back after something replaced the file.
+ *
+ * Unlike ipc_init, which refuses a path with a live listener, this takes
+ * the path over: the name belongs to this running daemon, and refusing leaves
+ * a host only a reboot fixes.
+ */
+static int ipc_rebind_primary(struct ipc_context *ctx)
+{
+	struct epoll_event ev;
+	int fd = -1, ret;
+
+	ret = ensure_socket_dir();
+	if (ret < 0) {
+		lota_err("cannot recreate %s: %s", SOCKET_DIR, strerror(-ret));
+		return ret;
+	}
+
+	ret = open_primary_listener(&fd);
+	if (ret < 0)
+		return ret;
+
+	ev.events = EPOLLIN;
+	ev.data.fd = fd;
+	if (epoll_ctl(ctx->epoll_fd, EPOLL_CTL_ADD, fd, &ev) < 0) {
+		ret = -errno;
+		lota_err("epoll_ctl(new listener) failed: %s", strerror(-ret));
+		close(fd);
+		return ret;
+	}
+
+	if (ctx->listen_fd >= 0) {
+		epoll_ctl(ctx->epoll_fd, EPOLL_CTL_DEL, ctx->listen_fd, NULL);
+		close(ctx->listen_fd);
+	}
+
+	ctx->listen_fd = fd;
+	/* The socket is this process's own from here */
+	ctx->activated = false;
+	record_listen_identity(ctx);
+
+	lota_warn("IPC socket %s was replaced; rebound, titles can reach the "
+		  "agent again",
+		  LOTA_IPC_SOCKET_PATH);
+	return 1;
+}
+
+int ipc_socket_was_replaced(const char *path, dev_t dev, ino_t ino)
+{
+	struct stat st;
+
+	if (!path)
+		return 0;
+
+	/*
+	 * Zero: the path was gone when the listener was armed.
+	 * Nothing to compare against.
+	 */
+	if (ino == 0)
+		return 0;
+
+	if (stat(path, &st) < 0)
+		return 1;
+
+	return (st.st_dev != dev || st.st_ino != ino) ? 1 : 0;
+}
+
+int ipc_recheck_socket(struct ipc_context *ctx)
+{
+	char buf[4096]
+		__attribute__((aligned(__alignof__(struct inotify_event))));
+	ssize_t len;
+
+	if (!ctx || ctx->listen_fd < 0)
+		return -EINVAL;
+
+	if (ctx->sock_watch_fd >= 0) {
+		while ((len = read(ctx->sock_watch_fd, buf, sizeof(buf))) > 0)
+			;
+		if (len < 0 && errno != EAGAIN && errno != EWOULDBLOCK)
+			lota_warn("socket watch read failed: %s",
+				  strerror(errno));
+	}
+
+	if (!ipc_socket_was_replaced(LOTA_IPC_SOCKET_PATH, ctx->listen_dev,
+				     ctx->listen_ino))
+		return 0;
+
+	return ipc_rebind_primary(ctx);
 }
 
 int ipc_init_activated(struct ipc_context *ctx, int fd)
@@ -2982,6 +3146,7 @@ int ipc_init_activated(struct ipc_context *ctx, int fd)
 	memset(ctx, 0, sizeof(*ctx));
 	ctx->listen_fd = -1;
 	ctx->epoll_fd = -1;
+	ctx->sock_watch_fd = -1;
 	ctx->start_time_sec = monotonic_now_sec();
 
 	client_map_init(ctx);
@@ -3022,6 +3187,7 @@ int ipc_init_activated(struct ipc_context *ctx, int fd)
 	ctx->running = true;
 	ctx->status_flags = 0;
 	ctx->dbus_fd = -1;
+	record_listen_identity(ctx);
 
 	lota_info("IPC using socket-activated fd %d", fd);
 	return 0;
@@ -3047,6 +3213,11 @@ void ipc_cleanup(struct ipc_context *ctx)
 	if (ctx->listen_fd >= 0) {
 		close(ctx->listen_fd);
 		ctx->listen_fd = -1;
+	}
+
+	if (ctx->sock_watch_fd >= 0) {
+		close(ctx->sock_watch_fd);
+		ctx->sock_watch_fd = -1;
 	}
 
 	if (!ctx->activated)

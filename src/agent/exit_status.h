@@ -16,6 +16,15 @@
 #define LOTA_EXIT_OPERATOR_ACTION 78
 
 /*
+ * Another instance already holds the PID file.
+ *
+ * systemd hits this when it starts the unit under a running agent it cannot
+ * kill, e.g. after a socket-unit restart. Retrying changes nothing while that
+ * instance lives, so the packaged unit lists it in RestartPreventExitStatus.
+ */
+#define LOTA_EXIT_ALREADY_RUNNING 3
+
+/*
  * What the daemon's return value becomes as a process exit status.
  *
  * @rc:         what run_daemon() returned: 0 or a negative errno.

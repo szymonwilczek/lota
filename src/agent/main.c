@@ -359,6 +359,18 @@ static int run_daemon(const struct run_daemon_params *params)
 		epoll_ctl(epoll_fd, EPOLL_CTL_ADD, mount_fd, &ev);
 	}
 
+	/* Rebind after a socket-unit restart, see ipc_watch_socket_path */
+	int sock_watch_fd = ipc_watch_socket_path(&g_agent.ipc_ctx);
+	if (sock_watch_fd >= 0) {
+		ev.events = EPOLLIN;
+		ev.data.fd = sock_watch_fd;
+		epoll_ctl(epoll_fd, EPOLL_CTL_ADD, sock_watch_fd, &ev);
+	} else {
+		lota_warn("cannot watch %s: %s; a socket-unit restart will "
+			  "need the agent restarted too",
+			  LOTA_IPC_SOCKET_PATH, strerror(-sock_watch_fd));
+	}
+
 	/* IPC epoll fd to main loop */
 	int ipc_fd = ipc_get_fd(&g_agent.ipc_ctx);
 	if (ipc_fd >= 0) {
@@ -810,7 +822,7 @@ int main(int argc, char *argv[])
 		startup_busy_message(*cli_runtime_protect_pid_count() > 0, busy,
 				     sizeof(busy));
 		lota_err("%s", busy);
-		rc = 1;
+		rc = LOTA_EXIT_ALREADY_RUNNING;
 		goto out;
 	}
 	if (pid_fd < 0) {
