@@ -103,6 +103,14 @@ func main() {
 			"empty protected set, whose round measured nothing at all. "+
 			"That is the publisher policy choice this flag exists to "+
 			"make explicit.")
+	requireAppraisal := flag.Bool("require-kernel-appraisal", false,
+		"refuse a heartbeat whose token does not carry "+
+			"LOTA_FLAG_KERNEL_APPRAISAL: the host's kernel has to "+
+			"appraise the executables it runs. A stock distribution "+
+			"host carries no IMA signatures and cannot have that, so "+
+			"this refuses every such machine -- the agent still binds "+
+			"its own binary with fs-verity and the PCR 14 commitment. "+
+			"Turn it on for a fleet whose images are signed.")
 	maxAgeSec := flag.Uint("max-age", 300,
 		"maximum heartbeat age in seconds")
 	tlsCert := flag.String("tls-cert", "",
@@ -190,12 +198,19 @@ func main() {
 		os.Exit(2)
 	}
 
-	// LOTA_FLAG_IMAGE_FULLY_MEASURED, from include/lota_gaming.h
-	const flagImageFullyMeasured uint32 = 1 << 9
+	// LOTA_FLAG_IMAGE_FULLY_MEASURED and LOTA_FLAG_KERNEL_APPRAISAL,
+	// from include/lota_gaming.h
+	const (
+		flagImageFullyMeasured uint32 = 1 << 9
+		flagKernelAppraisal    uint32 = 1 << 11
+	)
 
 	var requiredFlags uint32
 	if *requireFullImage {
 		requiredFlags |= flagImageFullyMeasured
+	}
+	if *requireAppraisal {
+		requiredFlags |= flagKernelAppraisal
 	}
 
 	// #nosec G115 -- bounded by maxHeartbeatAgeSecCap above

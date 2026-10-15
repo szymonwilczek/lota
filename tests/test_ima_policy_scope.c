@@ -246,6 +246,29 @@ static void test_secureboot_ignores_the_cmdline_mode(void)
 		PASS();
 }
 
+/*
+ * What an unappraised kernel costs, which is not the same on every host.
+ * The agent starts on one that binds its binary in the kernel and says so in
+ * the token; on a host where the binary's only claim is a signature nobody
+ * appraises, the same policy is fatal.
+ */
+static void test_scope_advisory_rule(void)
+{
+	TEST("an unappraised kernel is advisory where verity binds the agent");
+	if (!lota_ima_scope_is_advisory(1))
+		FAIL("a host bound by the kernel was refused for coverage it "
+		     "cannot have");
+	else
+		PASS();
+
+	TEST("without verity an unappraised kernel is fatal");
+	if (lota_ima_scope_is_advisory(0))
+		FAIL("a signed xattr nobody appraises was accepted as a "
+		     "binding");
+	else
+		PASS();
+}
+
 int main(void)
 {
 	printf("=== IMA appraisal scope tests ===\n\n");
@@ -264,6 +287,7 @@ int main(void)
 	test_unreadable_policy_falls_back_to_the_mode();
 	test_secureboot_ignores_the_cmdline_mode();
 	test_rule_shapes();
+	test_scope_advisory_rule();
 
 	unlink(cmdline_path);
 	unlink(policy_path);

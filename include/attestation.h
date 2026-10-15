@@ -76,6 +76,12 @@ struct lota_report_header {
 #define LOTA_REPORT_FLAG_INITRAMFS_LOCK_V1 (1U << 9)
 
 /*
+ * IMA appraises every exec on this host. Clear on a stock host; the agent is
+ * still bound by fs-verity and PCR 14. Policy knob: require_ima_appraisal.
+ */
+#define LOTA_REPORT_FLAG_IMA_APPRAISAL (1U << 10)
+
+/*
  * Maximum size of TPMS_ATTEST structure returned by TPM2_Quote.
  * Contains: magic, type, qualifiedSigner, extraData (nonce),
  * clockInfo, firmwareVersion, and quote info (PCR selection + digest).

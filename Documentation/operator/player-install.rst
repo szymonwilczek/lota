@@ -151,25 +151,29 @@ What the stages do
    operator-supplied (see the production bring-up guide). Requires a reboot.
 #. **IMA appraisal scope** -- the previous stage sets the appraisal *mode*, and
    the kernel applies that mode only to the rules its loaded policy carries. A
-   policy whose ``appraise`` rules reach no executable appraises nothing, and
-   the agent refuses to start on such a host, so this stage reads
-   ``/sys/kernel/security/ima/policy`` for the scope the agent's gate demands
-   and stops the install where it is missing. It loads no rules of its own. An
-   IMA rule cannot name a path, so the rule that appraises the agent appraises
-   every executable it matches, and on a Secure Boot host that happens in
-   ``enforce`` -- the kernel discards ``ima_appraise=`` there whatever the
-   cmdline asks for -- which on a root filesystem without IMA signatures means
-   refusing every executable at the next boot. What such a host is missing is
-   the signatures, not a rule set: IMA-signed distribution packages with the
-   distribution's certificate on the ``.ima`` keyring, or an operator image
-   pipeline that signs the executable closure and enrols its certificate. The
-   stage names the route, whether this host already signs its executables, and
-   whether its policy also appraises policy writes (``appraise
-   func=POLICY_CHECK appraise_type=imasig``), which is what makes an unsigned
-   rule set unloadable on a stock Secure Boot machine. A kernel built without
-   ``CONFIG_IMA_READ_POLICY`` publishes no policy at all: the scope cannot be
-   read, the agent starts on the mode alone, and both say the scope went
-   unverified.
+   policy whose ``appraise`` rules reach no executable appraises nothing, so
+   this stage reads ``/sys/kernel/security/ima/policy`` and reports what the
+   kernel covers. It loads no rules of its own. An IMA rule cannot name a path,
+   so the rule that appraises the agent appraises every executable it matches,
+   and on a Secure Boot host that happens in ``enforce`` -- the kernel discards
+   ``ima_appraise=`` there whatever the cmdline asks for -- which on a root
+   filesystem without IMA signatures means refusing every executable at the
+   next boot. What such a host is missing is the signatures, not a rule set:
+   IMA-signed distribution packages with the distribution's certificate on the
+   ``.ima`` keyring, or an operator image pipeline that signs the executable
+   closure and enrols its certificate.
+
+   **A host that appraises nothing still finishes the install**, as long as the
+   agent binary carries fs-verity: the kernel refuses a modified read of it and
+   PCR 14 commits the running build, so the agent's own footing does not rest
+   on IMA. The stage says what the machine gives up, and every token it hands
+   out carries ``LOTA_FLAG_KERNEL_APPRAISAL`` clear, which is what a publisher
+   or a verifier policy (``require_ima_appraisal``) reads. On a filesystem
+   without verity, where the agent's only claim is a signed ``security.ima``
+   xattr, appraisal is what makes that claim real: there the agent refuses to
+   start and the stage is blocked. A kernel built without
+   ``CONFIG_IMA_READ_POLICY`` publishes no policy at all, so the scope cannot
+   be read and both the stage and the agent say it went unverified.
 #. **SELinux fence** -- loads the LOTA policy module if needed and re-triggers
    udev so ``/dev/tpm*`` carries the LOTA-only label.
 #. **Reboot checkpoint** -- stops with exit 10 until the boot-chain changes are

@@ -53,6 +53,10 @@ int main(void)
 	CHECK(agent_status_flags(&st) == LOTA_STATUS_BPF_LOADED,
 	      "the BPF bit comes from the loader");
 
+	st = (struct agent_boot_state){ .kernel_appraisal = true };
+	CHECK(agent_status_flags(&st) == LOTA_STATUS_KERNEL_APPRAISAL,
+	      "the appraisal bit comes from the IMA scope probe");
+
 	/* the one this file exists for */
 	st = (struct agent_boot_state){ .secure_boot = true };
 	CHECK(agent_status_flags(&st) == LOTA_STATUS_SECURE_BOOT,
