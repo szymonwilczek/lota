@@ -541,6 +541,25 @@ Forgetting is about the identity, not about refusing the publisher. A profile
 still in ``lota.conf`` can be agreed to again, and enrolls with a **new** key
 that the old evidence cannot be linked to.
 
+**Forgetting and provisioning are safe to do under a running agent.** The
+handle number a forgotten publisher used is free again, so the next publisher
+provisioned takes it -- the number is a slot, not an identity. A running agent
+reads the key at a slot by its TPM Name, so nothing one publisher had cached is
+carried across to another that takes their slot.
+Where the key at a bound slot is genuinely a different one -- another
+publisher's, or the same publisher's after a TPM clear rebases the seed their
+key derives from -- the agent drops what it cached for the old key and writes
+``The attestation key for <title> is not the one bound earlier`` to the
+journal. Re-enrolling the same publisher is silent, and that is right: their
+key is derived, so it comes back identical. No restart is needed for any of
+it, and none should be spent: the agent's PCR 14 commitment is made once per
+boot, so restarting the daemon puts the host out of attestation until it
+reboots. Should the agent's own TPM session refuse the handle after such a
+change -- the session caches what stood there, and the cache is process
+state -- the agent opens a new session over the same device and asks again,
+which is why a key swapped underneath a running agent shows up as one journal
+line.
+
 **Enrollment with a profile's publisher is a runtime action.** A profile that
 names a CA (``ca``, ``ca_port``, ``ca_cert``) and has never enrolled is
 enrolled by the agent itself: when the loop first reaches that publisher, and
