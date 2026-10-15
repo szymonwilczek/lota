@@ -49,6 +49,11 @@ ban. A ban issued through the API names its tenant explicitly (defaulting to
 ``default``), and attestation rejects a client only for a ban recorded in that
 client's own tenant.
 
+Both verbs name the tenant the same way, in the request body: a ban is
+identified by ``(tenant, hardware_id)``, so an administrator scoped to one
+tenant lifts what it imposed by sending the same field back. ``tenant`` is not
+a query parameter on either verb, and passing it as one is refused.
+
 Per-tenant PCR policy
 ---------------------
 
@@ -138,7 +143,11 @@ A scoped key sees only its tenants' resources:
 * a ban or unban into a tenant outside the key's set is refused;
 * ``/api/v1/stats`` returns tenant-narrowed counts and flags itself
   ``tenant_scoped``; the fleet-wide attestation counters, which are not
-  attributable per tenant, are omitted from a scoped response;
+  attributable per tenant, are absent from a scoped response --
+  ``total_attestations``, ``successful_attestations``, ``failed_attestations``,
+  ``revoked_attestations``, ``banned_attestations``, ``used_nonces`` and
+  ``pending_challenges`` are not keys in the JSON object at all, so a parser
+  reads "not reported" instead of "none";
 * ``/metrics`` is refused (403) for a tenant-scoped key: the Prometheus
   exposition is fleet-wide and carries no tenant dimension, so only a
   global-scope key (environment key or ``tenants: ["*"]``) can scrape it.

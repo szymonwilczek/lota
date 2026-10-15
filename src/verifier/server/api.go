@@ -346,17 +346,21 @@ type healthResponse struct {
 	} `json:"tls"`
 }
 
+// statsResponse is the /api/v1/stats body.
+//
+// Fleet-wide counters are pointers so a tenant-scoped response omits them
+// instead of reporting zero.
 type statsResponse struct {
-	PendingChallenges int      `json:"pending_challenges"`
-	UsedNonces        int      `json:"used_nonces"`
+	PendingChallenges *int     `json:"pending_challenges,omitempty"`
+	UsedNonces        *int     `json:"used_nonces,omitempty"`
 	RegisteredClients int      `json:"registered_clients"`
 	ActivePolicy      string   `json:"active_policy"`
 	LoadedPolicies    []string `json:"loaded_policies"`
-	TotalAttestations int64    `json:"total_attestations"`
-	SuccessfulAttests int64    `json:"successful_attestations"`
-	FailedAttests     int64    `json:"failed_attestations"`
-	RevokedAttests    int64    `json:"revoked_attestations"`
-	BannedAttests     int64    `json:"banned_attestations"`
+	TotalAttestations *int64   `json:"total_attestations,omitempty"`
+	SuccessfulAttests *int64   `json:"successful_attestations,omitempty"`
+	FailedAttests     *int64   `json:"failed_attestations,omitempty"`
+	RevokedAttests    *int64   `json:"revoked_attestations,omitempty"`
+	BannedAttests     *int64   `json:"banned_attestations,omitempty"`
 	ActiveRevocations int      `json:"active_revocations"`
 	ActiveBans        int      `json:"active_bans"`
 	Uptime            string   `json:"uptime"`
@@ -424,16 +428,16 @@ func (h *APIHandler) handleStats(w http.ResponseWriter, r *http.Request) {
 	stats := h.verifier.Stats()
 
 	resp := statsResponse{
-		PendingChallenges: stats.PendingChallenges,
-		UsedNonces:        stats.UsedNonces,
+		PendingChallenges: &stats.PendingChallenges,
+		UsedNonces:        &stats.UsedNonces,
 		RegisteredClients: stats.RegisteredClients,
 		ActivePolicy:      stats.ActivePolicy,
 		LoadedPolicies:    stats.LoadedPolicies,
-		TotalAttestations: stats.TotalAttestations,
-		SuccessfulAttests: stats.SuccessAttests,
-		FailedAttests:     stats.FailedAttests,
-		RevokedAttests:    stats.RevokedAttests,
-		BannedAttests:     stats.BannedAttests,
+		TotalAttestations: &stats.TotalAttestations,
+		SuccessfulAttests: &stats.SuccessAttests,
+		FailedAttests:     &stats.FailedAttests,
+		RevokedAttests:    &stats.RevokedAttests,
+		BannedAttests:     &stats.BannedAttests,
 		ActiveRevocations: stats.ActiveRevocations,
 		ActiveBans:        stats.ActiveBans,
 		Uptime:            stats.Uptime.Truncate(time.Second).String(),
@@ -477,13 +481,13 @@ func (h *APIHandler) handleStats(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 
-		resp.PendingChallenges = 0
-		resp.UsedNonces = 0
-		resp.TotalAttestations = 0
-		resp.SuccessfulAttests = 0
-		resp.FailedAttests = 0
-		resp.RevokedAttests = 0
-		resp.BannedAttests = 0
+		resp.PendingChallenges = nil
+		resp.UsedNonces = nil
+		resp.TotalAttestations = nil
+		resp.SuccessfulAttests = nil
+		resp.FailedAttests = nil
+		resp.RevokedAttests = nil
+		resp.BannedAttests = nil
 	}
 
 	writeJSON(w, resp)
@@ -1063,7 +1067,7 @@ func (h *APIHandler) handleUnbanHardware(w http.ResponseWriter, r *http.Request)
 
 	// Letting a banned machine back in is the act a fleet most wants signed;
 	// the lift carries the same attribution the ban does.
-	var req lifecycleRequest
+	var req unbanRequest
 	if r.ContentLength != 0 {
 		if err := decodeJSONRequest(w, r, &req); err != nil {
 			writeJSONStatus(w, http.StatusBadRequest, errorResponse{Error: "invalid JSON: " + err.Error()})
@@ -1094,10 +1098,19 @@ func (h *APIHandler) handleUnbanHardware(w http.ResponseWriter, r *http.Request)
 	}
 	canonicalHWID := store.FormatHardwareID(hwid)
 
+	// The tenant used to be read off the URL while the ban read it from the body,
+	// so a request naming it there would otherwise go on lifting in the default
+	// tenant without saying so.
+	if r.URL.Query().Has("tenant") {
+		writeJSONStatus(w, http.StatusBadRequest, errorResponse{
+			Error: "tenant is a body field on this endpoint, not a query parameter"})
+		return
+	}
+
 	// ban to lift is identified by (tenant, hardware_id);
-	// tenant comes from the ?tenant= query parameter,
+	// tenant comes from the body field the ban was imposed through,
 	// default when omitted, and must be within the key's tenant set
-	tenant := r.URL.Query().Get("tenant")
+	tenant := req.Tenant
 	if tenant == "" {
 		tenant = verify.DefaultTenant
 	} else if !verify.ValidTenantName(tenant) {
@@ -1445,7 +1458,9 @@ func decodeJSONRequest(w http.ResponseWriter, r *http.Request, dst any) error {
 		return err
 	}
 
+	// refuse unknown fields
 	dec := json.NewDecoder(bytes.NewReader(body))
+	dec.DisallowUnknownFields()
 	if err := dec.Decode(dst); err != nil {
 		return err
 	}
@@ -1589,6 +1604,19 @@ type lifecycleRequest struct {
 	Actor  string `json:"actor"`  // administrator identifier
 	Reason string `json:"reason"` // why this was done
 	Note   string `json:"note"`   // free-form justification
+}
+
+// JSON request for lifting a ban.
+//
+// It carries the tenant the ban lives in, in the field the ban was imposed
+// through: a ban is identified by (tenant, hardware_id), so the two verbs have
+// to name the tenant the same way or an administrator can impose one it cannot
+// lift.
+type unbanRequest struct {
+	Tenant string `json:"tenant,omitempty"` // ban scope; default tenant when empty
+	Actor  string `json:"actor"`            // administrator identifier
+	Reason string `json:"reason"`           // why this was done
+	Note   string `json:"note"`             // free-form justification
 }
 
 // POST /api/v1/clients/{clientID}/reanchor
