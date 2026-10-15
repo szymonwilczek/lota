@@ -120,6 +120,16 @@ scope went unverified.
     sudo grubby --update-kernel=ALL --args="ima=on ima_appraise=enforce"
     sudo reboot
 
+**On a Secure Boot host the kernel discards that parameter.**
+``default_appraise_setup()`` refuses to be told the mode where
+``arch_ima_get_secureboot()`` is true, logging ``ima: Secure boot enabled:
+ignoring ima_appraise=... option``, and leaves its built-in default, which
+blocks. Since LOTA requires Secure Boot, that is the mode every supported host
+appraises in: setting ``ima_appraise=fix`` there stages nothing, and the agent's
+startup gate reads the loaded policy rather than the parameter for exactly that
+reason. The staging advice below applies to a host booted without Secure Boot,
+where the parameter is honoured.
+
 The cmdline only sets the appraisal mode; the kernel still needs a loaded IMA
 policy with ``appraise`` rules for anything to be checked. **The appraisal
 content -- the signatures on disk and the rule set -- is distribution or
@@ -150,6 +160,19 @@ blocks every execution the rules match that lacks a valid signature -- on a
 rootfs without signatures that bricks the host at the next boot. Stage with
 ``ima_appraise=fix`` for one boot (the kernel writes missing xattrs as it walks
 matched files) before switching to ``enforce``.
+
+A host whose loaded policy carries ``appraise func=POLICY_CHECK
+appraise_type=imasig`` -- the arch policy a Secure Boot machine boots with --
+appraises the policy buffer itself, so writing any unsigned rule set to
+``/sys/kernel/security/ima/policy`` fails with ``Permission denied``: on such a
+host the rule set has to be signed by a key on the ``.ima`` keyring. The
+kernel's built-in ``ima_policy=appraise_tcb`` needs no policy write, but it is
+not a way around the missing signatures either -- it appraises every root-owned
+file, and on a Secure Boot host that runs in ``enforce`` (see below), so a
+machine whose executables carry none stops booting.
+
+``lota-install`` therefore reports the missing scope and stops; it never widens
+one. A rule set is loaded here by whoever owns the signatures.
 
 The shipped :ghsrc:`configs/ima/lota-ima-policy` is the **developer baseline** that
 ``scripts/lota-dev-bringup.sh`` loads on a dev host running ``ima_appraise=log``:

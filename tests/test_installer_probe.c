@@ -882,7 +882,7 @@ static void test_barrier_stage_verdicts(void)
 	char note[256];
 
 	TEST("a platform-extended PCR14 before any lock is not stale state");
-	if (probe_pcr14_barrier_stage(PROBE_PCR14_OTHER, 0, 0, note,
+	if (probe_pcr14_barrier_stage(PROBE_PCR14_OTHER, 0, 0, 0, note,
 				      sizeof(note)) != STAGE_REBOOT) {
 		FAIL("a first install still needs a reboot");
 		return;
@@ -894,7 +894,7 @@ static void test_barrier_stage_verdicts(void)
 	PASS();
 
 	TEST("a genuinely stale commitment keeps its wording");
-	if (probe_pcr14_barrier_stage(PROBE_PCR14_OTHER, 1, 0, note,
+	if (probe_pcr14_barrier_stage(PROBE_PCR14_OTHER, 1, 0, 0, note,
 				      sizeof(note)) != STAGE_REBOOT) {
 		FAIL("stale state still needs a reboot");
 		return;
@@ -906,7 +906,7 @@ static void test_barrier_stage_verdicts(void)
 	PASS();
 
 	TEST("a running agent's own commitment is satisfied");
-	if (probe_pcr14_barrier_stage(PROBE_PCR14_OTHER, 1, 1, note,
+	if (probe_pcr14_barrier_stage(PROBE_PCR14_OTHER, 1, 1, 0, note,
 				      sizeof(note)) != STAGE_DONE) {
 		FAIL("this boot's commitment is the satisfied state");
 		return;
@@ -914,15 +914,35 @@ static void test_barrier_stage_verdicts(void)
 	PASS();
 
 	TEST("the lock value alone is satisfied");
-	if (probe_pcr14_barrier_stage(PROBE_PCR14_LOCK_ONLY, 1, 0, note,
+	if (probe_pcr14_barrier_stage(PROBE_PCR14_LOCK_ONLY, 1, 0, 0, note,
 				      sizeof(note)) != STAGE_DONE) {
 		FAIL("a locked register is what this stage waits for");
 		return;
 	}
 	PASS();
 
+	TEST("an agent that already refused is not sent to another reboot");
+	if (probe_pcr14_barrier_stage(PROBE_PCR14_OTHER, 1, 0, 1, note,
+				      sizeof(note)) != STAGE_BLOCKED) {
+		FAIL("a reboot cannot satisfy a refused startup gate");
+		return;
+	}
+	if (!strstr(note, "journalctl")) {
+		FAIL("the note does not say where the refusal is written");
+		return;
+	}
+	PASS();
+
+	TEST("a running agent is not read as a failed one");
+	if (probe_pcr14_barrier_stage(PROBE_PCR14_OTHER, 1, 1, 1, note,
+				      sizeof(note)) != STAGE_DONE) {
+		FAIL("an earlier failed start outweighed the running agent");
+		return;
+	}
+	PASS();
+
 	TEST("a pristine register still says the lock has not run");
-	if (probe_pcr14_barrier_stage(PROBE_PCR14_ZERO, 0, 0, note,
+	if (probe_pcr14_barrier_stage(PROBE_PCR14_ZERO, 0, 0, 0, note,
 				      sizeof(note)) != STAGE_REBOOT) {
 		FAIL("no lock this boot needs a reboot");
 		return;
@@ -1077,6 +1097,194 @@ static void test_named_files(void)
 		unlink(tmp);
 }
 
+/*
+ * The mode half of the floor. A Secure Boot kernel refuses to be told the mode,
+ * so on the hosts LOTA supports the parameter describes nothing and the installer
+ * has no business writing it.
+ */
+static void test_ima_mode_blocking(void)
+{
+	TEST("a Secure Boot host appraises whatever the cmdline says");
+	if (!probe_ima_mode_blocking(1, "ro quiet ima_appraise=off"))
+		FAIL("the discarded parameter decided the mode");
+	else
+		PASS();
+
+	TEST("a Secure Boot host with no parameter still appraises");
+	if (!probe_ima_mode_blocking(1, "ro quiet"))
+		FAIL("the kernel's own default was read as absent");
+	else
+		PASS();
+
+	TEST("without Secure Boot the parameter is the answer");
+	if (!probe_ima_mode_blocking(0, "ro quiet ima_appraise=fix"))
+		FAIL("a honoured fix mode was refused");
+	else if (probe_ima_mode_blocking(0, "ro quiet ima_appraise=log"))
+		FAIL("a non-blocking mode passed");
+	else
+		PASS();
+}
+
+/*
+ * The scope stage, which exists because the agent's startup gate reads the loaded
+ * policy and the installer used to read only the cmdline. The unknown case
+ * matters as much as the missing one: a kernel that publishes no policy is a host
+ * the agent starts on, so the stage must not stop the install there.
+ */
+static void test_ima_scope_stage_verdicts(void)
+{
+	struct probe_ima_scope scope;
+	char note[STAGE_NOTE_CAP];
+
+	TEST("a policy that appraises an executable satisfies the stage");
+	scope = (struct probe_ima_scope){ .scope = PROBE_IMA_SCOPE_EXEC,
+					  .is_root = 1 };
+	if (probe_ima_scope_stage(&scope, note, sizeof(note)) != STAGE_DONE)
+		FAIL("the scope the gate asks for was reported as work");
+	else
+		PASS();
+
+	TEST("a policy appraising no executable stops the install");
+	scope = (struct probe_ima_scope){ .scope = PROBE_IMA_SCOPE_NONE,
+					  .is_root = 1 };
+	if (probe_ima_scope_stage(&scope, note, sizeof(note)) != STAGE_BLOCKED)
+		FAIL("the host the agent refuses was walked past");
+	else if (!strstr(note, "refuses to start"))
+		FAIL("the note does not say what the host cannot do");
+	else if (!strstr(note, "signatures"))
+		FAIL("the note does not name what the host is missing");
+	else
+		PASS();
+
+	TEST("an unsigned host is told a rule set would refuse everything");
+	scope = (struct probe_ima_scope){ .scope = PROBE_IMA_SCOPE_NONE,
+					  .secureboot = 1,
+					  .is_root = 1 };
+	if (probe_ima_scope_stage(&scope, note, sizeof(note)) != STAGE_BLOCKED)
+		FAIL("the verdict changed with the reason");
+	else if (!strstr(note, "enforce"))
+		FAIL("the note does not say which mode a Secure Boot host "
+		     "appraises in");
+	else if (!strstr(note, "next boot would refuse them"))
+		FAIL("the note does not say what widening the scope costs");
+	else
+		PASS();
+
+	TEST("a host that already signs its executables is told so");
+	scope = (struct probe_ima_scope){ .scope = PROBE_IMA_SCOPE_NONE,
+					  .agent_signed = 1,
+					  .is_root = 1 };
+	if (probe_ima_scope_stage(&scope, note, sizeof(note)) != STAGE_BLOCKED)
+		FAIL("a signed host still needs the rules");
+	else if (strstr(note, "carry no signature"))
+		FAIL("a signing host was told it signs nothing");
+	else
+		PASS();
+
+	TEST("the longest refusal still fits the note");
+	scope = (struct probe_ima_scope){ .scope = PROBE_IMA_SCOPE_NONE,
+					  .policy_signed = 1,
+					  .secureboot = 1,
+					  .is_root = 1 };
+	probe_ima_scope_stage(&scope, note, sizeof(note));
+	if (strlen(note) >= sizeof(note) - 1)
+		FAIL("the note was truncated, losing its last clause");
+	else if (!strstr(note, ".ima keyring"))
+		FAIL("the route out did not survive to the end of the note");
+	else
+		PASS();
+
+	TEST("a signed-policy host is told why a rule set cannot be loaded");
+	scope = (struct probe_ima_scope){ .scope = PROBE_IMA_SCOPE_NONE,
+					  .policy_signed = 1,
+					  .is_root = 1 };
+	if (probe_ima_scope_stage(&scope, note, sizeof(note)) != STAGE_BLOCKED)
+		FAIL("the verdict changed with the reason");
+	else if (!strstr(note, "POLICY_CHECK"))
+		FAIL("the note does not name the rule that refuses the write");
+	else
+		PASS();
+
+	TEST("a kernel publishing no policy leaves the mode deciding");
+	scope = (struct probe_ima_scope){ .scope = -ENOTSUP, .is_root = 1 };
+	if (probe_ima_scope_stage(&scope, note, sizeof(note)) != STAGE_DONE)
+		FAIL("a host the agent starts on was blocked by the installer");
+	else if (!strstr(note, "unverified"))
+		FAIL("the note does not say the scope went unchecked");
+	else
+		PASS();
+
+	TEST("an unprivileged read is a caller problem, not a host verdict");
+	scope = (struct probe_ima_scope){ .scope = -EACCES, .is_root = 0 };
+	if (probe_ima_scope_stage(&scope, note, sizeof(note)) != STAGE_ERROR)
+		FAIL("a probe that could not look reported about the host");
+	else if (!strstr(note, "root"))
+		FAIL("the note does not say how to get an answer");
+	else
+		PASS();
+}
+
+/* The reader behind that verdict, over the two policies a host actually loads */
+static void test_ima_policy_scope_reader(void)
+{
+	static const char arch_policy[] =
+		"measure func=KEXEC_KERNEL_CHECK \n"
+		"appraise func=POLICY_CHECK appraise_type=imasig \n"
+		"measure func=MODULE_CHECK\n";
+	static const char builtin_appraise[] = "dont_appraise fsmagic=0x9fa0\n"
+					       "appraise fowner=0\n";
+	char path[64];
+	int signed_policy = -1;
+	int fd;
+
+	snprintf(path, sizeof(path), "/tmp/lota-inst-ima-%d", (int)getpid());
+
+	TEST("the stock policy appraises no executable and signs its writes");
+	fd = open(path, O_WRONLY | O_CREAT | O_TRUNC, 0600);
+	if (fd < 0 || write(fd, arch_policy, sizeof(arch_policy) - 1) < 0) {
+		FAIL("could not write the fixture");
+		if (fd >= 0)
+			close(fd);
+		return;
+	}
+	close(fd);
+	if (probe_ima_policy_scope(path, &signed_policy) !=
+	    PROBE_IMA_SCOPE_NONE)
+		FAIL("a measure-only policy was read as appraising exec");
+	else if (signed_policy != 1)
+		FAIL("the POLICY_CHECK rule was not seen");
+	else
+		PASS();
+
+	TEST("the built-in appraisal policy answers the scope question");
+	fd = open(path, O_WRONLY | O_CREAT | O_TRUNC, 0600);
+	if (fd < 0 ||
+	    write(fd, builtin_appraise, sizeof(builtin_appraise) - 1) < 0) {
+		FAIL("could not write the fixture");
+		if (fd >= 0)
+			close(fd);
+		unlink(path);
+		return;
+	}
+	close(fd);
+	if (probe_ima_policy_scope(path, &signed_policy) !=
+	    PROBE_IMA_SCOPE_EXEC)
+		FAIL("a rule naming no hook was not counted for exec");
+	else if (signed_policy != 0)
+		FAIL("a policy that signs nothing was reported as signing");
+	else
+		PASS();
+
+	TEST("a policy nothing publishes is told apart from an empty one");
+	if (probe_ima_policy_scope("/nonexistent/ima/policy", &signed_policy) !=
+	    -ENOENT)
+		FAIL("the read failure was not passed up as an errno");
+	else
+		PASS();
+
+	unlink(path);
+}
+
 int main(void)
 {
 	printf("installer probe helpers:\n");
@@ -1100,6 +1308,9 @@ int main(void)
 	test_manifest_line();
 	test_installed_kernels();
 	test_barrier_stage_verdicts();
+	test_ima_mode_blocking();
+	test_ima_scope_stage_verdicts();
+	test_ima_policy_scope_reader();
 	test_named_files();
 
 	printf("%d/%d tests passed\n", tests_passed, tests_run);

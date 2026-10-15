@@ -266,6 +266,9 @@ static const char *result_glyph(const struct ui *ui, enum ui_result r,
 	case UI_PENDING:
 		*sgr = col(ui, SGR_YELLOW);
 		return "●";
+	case UI_BLOCKED:
+		*sgr = col(ui, SGR_RED);
+		return "✖";
 	case UI_SKIP:
 	default:
 		*sgr = col(ui, SGR_DIM);
@@ -286,6 +289,8 @@ static const char *result_word(enum ui_result r)
 		return "needs reboot";
 	case UI_PENDING:
 		return "pending";
+	case UI_BLOCKED:
+		return "BLOCKED";
 	case UI_SKIP:
 	default:
 		return "skipped";

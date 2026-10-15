@@ -334,11 +334,15 @@ bool bpf_loader_integrity_config_satisfied(const struct integrity_data *cfg);
  * @cmdline_path: kernel cmdline carrying ima_appraise= (the mode)
  * @policy_path: loaded IMA policy carrying the func= rules (the scope)
  *
+ * @secureboot: non-zero when this host booted with Secure Boot on, in which
+ * case the kernel discarded ima_appraise= and the mode is its built-in
+ * default, which blocks.
+ *
  * Returns: 0 when appraisal blocks on an integrity failure, negative errno
  * otherwise.
  */
 int bpf_loader_ima_appraisal_active(const char *cmdline_path,
-				    const char *policy_path);
+				    const char *policy_path, int secureboot);
 
 /*
  * bpf_loader_secure_boot_enabled - Check UEFI Secure Boot state

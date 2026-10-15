@@ -90,6 +90,9 @@ struct install_ctx {
 	struct install_opts opts;
 	struct ui ui;
 	int reboot_needed; /* finished stage requires a reboot */
+	/* a stage changed this host during this run, so state read from before it
+	 * no longer describes what the host would do now */
+	int applied;
 };
 
 /* Probe verdict for one stage */

@@ -20,6 +20,7 @@
 #include <string.h>
 #include <unistd.h>
 
+#include "../include/lota_ima_policy_scope.h"
 #include "../src/agent/bpf_loader.h"
 
 static int tests_run;
@@ -79,7 +80,7 @@ static void test_mode_off_is_refused(void)
 	write_file(cmdline_path, "ro quiet ima=on ima_appraise=off\n");
 	write_file(policy_path, policy_appraises_exec);
 
-	if (bpf_loader_ima_appraisal_active(cmdline_path, policy_path) == 0)
+	if (bpf_loader_ima_appraisal_active(cmdline_path, policy_path, 0) == 0)
 		FAIL("a non-blocking mode passed the gate");
 	else
 		PASS();
@@ -92,7 +93,7 @@ static void test_mode_absent_is_refused(void)
 	write_file(cmdline_path, "ro quiet\n");
 	write_file(policy_path, policy_appraises_exec);
 
-	if (bpf_loader_ima_appraisal_active(cmdline_path, policy_path) == 0)
+	if (bpf_loader_ima_appraisal_active(cmdline_path, policy_path, 0) == 0)
 		FAIL("a kernel booted without the parameter passed");
 	else
 		PASS();
@@ -109,7 +110,7 @@ static void test_blocking_mode_with_empty_scope_is_refused(void)
 	write_file(cmdline_path, "ro quiet ima=on ima_appraise=fix\n");
 	write_file(policy_path, policy_measure_only);
 
-	if (bpf_loader_ima_appraisal_active(cmdline_path, policy_path) == 0)
+	if (bpf_loader_ima_appraisal_active(cmdline_path, policy_path, 0) == 0)
 		FAIL("a policy appraising no executable passed the gate");
 	else
 		PASS();
@@ -122,7 +123,7 @@ static void test_blocking_mode_with_exec_scope_passes(void)
 	write_file(cmdline_path, "ro quiet ima=on ima_appraise=enforce\n");
 	write_file(policy_path, policy_appraises_exec);
 
-	if (bpf_loader_ima_appraisal_active(cmdline_path, policy_path) != 0)
+	if (bpf_loader_ima_appraisal_active(cmdline_path, policy_path, 0) != 0)
 		FAIL("a host with the floor in place was refused");
 	else
 		PASS();
@@ -136,7 +137,7 @@ static void test_appraise_without_func_covers_exec(void)
 	write_file(cmdline_path, "ro quiet ima_appraise=enforce\n");
 	write_file(policy_path, "appraise fowner=0 appraise_type=imasig\n");
 
-	if (bpf_loader_ima_appraisal_active(cmdline_path, policy_path) != 0)
+	if (bpf_loader_ima_appraisal_active(cmdline_path, policy_path, 0) != 0)
 		FAIL("a policy-wide appraise rule was not counted");
 	else
 		PASS();
@@ -151,7 +152,7 @@ static void test_dont_appraise_is_not_appraise(void)
 	write_file(policy_path, "dont_appraise func=BPRM_CHECK\n"
 				"measure func=BPRM_CHECK\n");
 
-	if (bpf_loader_ima_appraisal_active(cmdline_path, policy_path) == 0)
+	if (bpf_loader_ima_appraisal_active(cmdline_path, policy_path, 0) == 0)
 		FAIL("an exclusion rule was read as appraisal");
 	else
 		PASS();
@@ -171,8 +172,76 @@ static void test_unreadable_policy_falls_back_to_the_mode(void)
 	unlink(policy_path);
 
 	if (bpf_loader_ima_appraisal_active(cmdline_path,
-					    "/nonexistent/ima/policy") != 0)
+					    "/nonexistent/ima/policy", 0) != 0)
 		FAIL("a kernel that cannot publish its policy was refused");
+	else
+		PASS();
+}
+
+/*
+ * The rule itself, without a file around it.
+ * The installer stage that has to satisfy this gate decides on the same predicate,
+ * so the shapes a loaded policy prints are asserted where both callers can see
+ * them: the built-in appraise_tcb rule names no hook, the arch policy's rule
+ * names one that is not exec, and the kernel pads what it prints with trailing
+ * blanks.
+ */
+static void test_rule_shapes(void)
+{
+	static const struct {
+		const char *rule;
+		int appraises_exec;
+		const char *what;
+	} cases[] = {
+		{ "appraise fowner=0\n", 1,
+		  "the built-in appraise_tcb rule covers exec" },
+		{ "appraise func=POLICY_CHECK appraise_type=imasig \n", 0,
+		  "a rule naming another hook does not cover exec" },
+		{ "appraise func=BPRM_CHECK appraise_type=imasig\n", 1,
+		  "the rule the gate asks for covers exec" },
+		{ "measure func=BPRM_CHECK\n", 0,
+		  "measurement is not appraisal" },
+		{ "dont_appraise func=BPRM_CHECK\n", 0,
+		  "an exclusion is not appraisal" },
+		{ "", 0, "an empty line appraises nothing" },
+	};
+	size_t i;
+
+	for (i = 0; i < sizeof(cases) / sizeof(cases[0]); i++) {
+		TEST(cases[i].what);
+		if (lota_ima_policy_rule_appraises_exec(cases[i].rule) !=
+		    cases[i].appraises_exec)
+			FAIL("the rule was read the other way round");
+		else
+			PASS();
+	}
+}
+
+/*
+ * The mode half is not on the cmdline at all where LOTA runs. A Secure Boot
+ * kernel drops ima_appraise= and keeps its own blocking default, so the gate
+ * reads the parameter only on a host whose kernel honours it -- and the scope
+ * is then the whole question.
+ */
+static void test_secureboot_ignores_the_cmdline_mode(void)
+{
+	TEST("a Secure Boot host appraises whatever the cmdline asked for");
+
+	write_file(cmdline_path, "ro quiet ima_appraise=off\n");
+	write_file(policy_path, policy_appraises_exec);
+
+	if (bpf_loader_ima_appraisal_active(cmdline_path, policy_path, 1) != 0)
+		FAIL("a host the kernel appraises in enforce was refused");
+	else
+		PASS();
+
+	TEST("a Secure Boot host still needs the scope");
+
+	write_file(cmdline_path, "ro quiet ima_appraise=enforce\n");
+	write_file(policy_path, policy_measure_only);
+
+	if (bpf_loader_ima_appraisal_active(cmdline_path, policy_path, 1) == 0)
+		FAIL("a blocking mode over an empty scope passed");
 	else
 		PASS();
 }
@@ -193,6 +262,8 @@ int main(void)
 	test_appraise_without_func_covers_exec();
 	test_dont_appraise_is_not_appraise();
 	test_unreadable_policy_falls_back_to_the_mode();
+	test_secureboot_ignores_the_cmdline_mode();
+	test_rule_shapes();
 
 	unlink(cmdline_path);
 	unlink(policy_path);
