@@ -1062,6 +1062,128 @@ static void test_write_status_payload_offline_marker(void)
 	PASS();
 }
 
+/*
+ * The disconnect episode. A lost agent reaches the sink through
+ * hook_offline_publish(): the status file states OFFLINE, the token
+ * and the snapshot go away, and a second refusal inside the same episode
+ * rewrites nothing. hook_offline_clear() ends the episode, which is what
+ * a reconnect does.
+ */
+
+static int touch_file(const char *path, const char *body)
+{
+	int fd = open(path, O_WRONLY | O_CREAT | O_TRUNC, 0600);
+
+	if (fd < 0)
+		return -errno;
+	if (write(fd, body, strlen(body)) < 0) {
+		close(fd);
+		return -errno;
+	}
+	close(fd);
+	return 0;
+}
+
+static void offline_paths(const char *tag)
+{
+	snprintf(g_hook.status_path, sizeof(g_hook.status_path), "%s/status_%s",
+		 tmpdir, tag);
+	snprintf(g_hook.token_path, sizeof(g_hook.token_path), "%s/token_%s",
+		 tmpdir, tag);
+	snprintf(g_hook.snapshot_path, sizeof(g_hook.snapshot_path),
+		 "%s/snap_%s", tmpdir, tag);
+}
+
+static void test_offline_publish_replaces_the_last_good_status(void)
+{
+	char buf[1024];
+	struct lota_status status;
+
+	TEST("offline publish: a lost agent clears the attested sink");
+
+	offline_paths("lost");
+	hook_offline_clear();
+
+	memset(&status, 0, sizeof(status));
+	status.flags = LOTA_FLAG_ATTESTED | LOTA_FLAG_TPM_OK;
+	if (write_status(&status) != 0 ||
+	    touch_file(g_hook.token_path, "token") != 0 ||
+	    touch_file(g_hook.snapshot_path, "snap") != 0) {
+		FAIL("setup failed");
+		return;
+	}
+
+	hook_offline_publish();
+
+	if (read_file_contents(g_hook.status_path, buf, sizeof(buf)) <= 0) {
+		FAIL("read failed");
+		return;
+	}
+	if (!strstr(buf, "LOTA_OFFLINE=1")) {
+		FAIL("status still reports the agent as reachable");
+		return;
+	}
+	if (!strstr(buf, "LOTA_ATTESTED=0")) {
+		FAIL("attested verdict outlived the agent");
+		return;
+	}
+	if (access(g_hook.token_path, F_OK) == 0) {
+		FAIL("token survived the disconnect");
+		return;
+	}
+	if (access(g_hook.snapshot_path, F_OK) == 0) {
+		FAIL("snapshot survived the disconnect");
+		return;
+	}
+	PASS();
+}
+
+static void test_offline_publish_writes_once_per_episode(void)
+{
+	TEST("offline publish: a second refusal rewrites nothing");
+
+	offline_paths("repeat");
+	hook_offline_clear();
+
+	hook_offline_publish();
+	if (touch_file(g_hook.token_path, "token") != 0) {
+		FAIL("setup failed");
+		return;
+	}
+
+	hook_offline_publish();
+
+	if (access(g_hook.token_path, F_OK) != 0) {
+		FAIL("the same episode published twice");
+		return;
+	}
+	PASS();
+}
+
+static void test_offline_clear_arms_the_next_disconnect(void)
+{
+	TEST("offline publish: a reconnect arms the next disconnect");
+
+	offline_paths("rearm");
+	hook_offline_clear();
+
+	hook_offline_publish();
+	if (touch_file(g_hook.token_path, "token") != 0) {
+		FAIL("setup failed");
+		return;
+	}
+
+	/* what a successful connect does */
+	hook_offline_clear();
+	hook_offline_publish();
+
+	if (access(g_hook.token_path, F_OK) == 0) {
+		FAIL("the second disconnect never reached the sink");
+		return;
+	}
+	PASS();
+}
+
 static void test_hook_active_when_not_started(void)
 {
 	TEST("lota_hook_active() returns 0 when not initialized");
@@ -1178,6 +1300,11 @@ int main(void)
 	test_write_status_zero_flags();
 	test_write_status_marks_online_branch();
 	test_write_status_payload_offline_marker();
+
+	/* offline publication */
+	test_offline_publish_replaces_the_last_good_status();
+	test_offline_publish_writes_once_per_episode();
+	test_offline_clear_arms_the_next_disconnect();
 
 	/* process activation policy */
 	test_policy_default_skips_usr_bin();
