@@ -918,6 +918,14 @@ static void test_aik_auth_at_rest_state(void)
 		      profile_aik_auth_state_str(PROFILE_AIK_AUTH_NONE) != NULL,
 	      "every state names itself");
 
+	CHECK(profile_aik_auth_needs_sealing(PROFILE_AIK_AUTH_PLAINTEXT) &&
+		      profile_aik_auth_needs_sealing(PROFILE_AIK_AUTH_BOTH),
+	      "a key with a plaintext copy has something to seal");
+	CHECK(!profile_aik_auth_needs_sealing(PROFILE_AIK_AUTH_SEALED),
+	      "a key already sealed with no plaintext copy has not");
+	CHECK(!profile_aik_auth_needs_sealing(PROFILE_AIK_AUTH_NONE),
+	      "and neither has one holding no authorization at all");
+
 	unlink(plain);
 	unlink(sealed);
 	publishers_forget(&paths);
