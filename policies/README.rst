@@ -354,14 +354,26 @@ the agent reports about itself:
   low-maintenance. On systemd-boot/UKI the cmdline is measured into PCR 12 -
   pin 12 there instead of 8.
 - **kernel_hashes is advisory only, not a trust control.** The value an
-  ``--export-policy`` run writes there is a measured-boot register read at
-  export time -- the exported document names which one, and the kernel the
-  exporting host had booted -- and it is reported by code running on that
-  kernel, so a compromised kernel can misreport it. On a GRUB host the
-  register it comes from also moves when nothing about the kernel has, because
-  ``grubenv`` is measured into it and GRUB rewrites that file every boot.
-  Leave the list empty and rely on PCR 7 + PCR 8. A mismatch is at most a weak
-  cross-check, never the boundary.
+  ``--export-policy`` run writes there is the bootloader's own measurement of
+  the kernel image, taken from the event log the host booted with (the PCR 9
+  ``EV_IPL`` record naming ``vmlinuz``), and the exported document names the
+  image and the kernel release beside it. It identifies the kernel rather than
+  the boot -- but it has to be replaced at every kernel update, which is the
+  treadmill PCR 7 exists to avoid. Leave
+  the list empty and rely on PCR 7 + PCR 8; a match is a cross-check, never the
+  boundary.
+
+  A register is never written there. PCR 9 aggregates every file the
+  bootloader read, ``grubenv`` among them, so it answers for a whole boot
+  -- and the gate does not compare it, so a policy pinning it is refused
+  by the host it was exported from, as a kernel mismatch. Where the log
+  offers no kernel image, or cannot be parsed, the export writes
+  ``kernel_hashes: []`` and a comment saying which of the two happened.
+
+  The gate reads the same one value. A host that records no kernel image, or
+  whose PCR 9 the quote does not cover, is refused with that as the reason --
+  the pin cannot be evaluated there, and the answer is to quote PCR 9 or to
+  stop pinning the kernel.
 
   No configuration key selects which kernel that digest describes.
   ``kernel_path`` tells the agent where the kernel image lives on a

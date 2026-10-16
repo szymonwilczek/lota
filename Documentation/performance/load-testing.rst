@@ -20,7 +20,9 @@ boot commitment, over the fleet's agent hash -- the derivation takes no
 clock counters, so the synthetic quote's ClockInfo is free to be a
 constant). The synthetic event log carries the firmware's
 ``SecureBoot`` variable measurement on PCR 7, which is what proves a
-UEFI boot, and no PCR 14 event, so the chain anchors on a zero
+UEFI boot, the bootloader's ``EV_IPL`` measurement of the kernel image
+on PCR 9, which is what makes the fleet's kernel pin evaluable the way
+a booted host's is, and no PCR 14 event, so the chain anchors on a zero
 baseline -- the shape of a UEFI host that boots without shim. The
 verifier under test runs its strict production configuration; no TOFU
 opt-out flags are involved.
@@ -60,8 +62,10 @@ tenant, verified against the verifier's active policy.
 
 Point the verifier under test at the rig's trust material. The
 generated ``policy.yaml`` pins the fleet's PCR 0/1/7 values and its
-kernel/agent hashes, so the strict first-attestation boot-enrollment
-gate passes without any TOFU opt-out::
+kernel/agent hashes -- the kernel hash being the digest of the image the
+synthetic bootloader measured, which is the value the verifier's gate
+compares -- so the strict first-attestation boot-enrollment gate passes
+without any TOFU opt-out::
 
    lota-verifier -addr :8443 -generate-cert \
      -aik-ca-cert rig/ca.crt -policy rig/policy.yaml \

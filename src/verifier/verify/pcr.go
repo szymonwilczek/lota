@@ -516,6 +516,32 @@ func agentHashAllowed(reported [types.HashSize]byte, allowedHashes []string) boo
 	return slices.Contains(allowedHashes, hex.EncodeToString(reported[:]))
 }
 
+// kernelPinValue returns the quote-bound kernel image digest the
+// kernel_hashes gate compares, or why there is none.
+// Unlike RecordedKernelHash it never falls back to the reported register:
+// a whole-boot aggregate never matches an image-digest pin, and the refusal
+// would blame the kernel instead of the missing PCR 9 coverage.
+func kernelPinValue(facts *BootFacts) ([types.HashSize]byte, error) {
+	var out [types.HashSize]byte
+
+	if facts == nil || !facts.KernelImage.Found {
+		return out, errors.New(
+			"kernel_hashes is pinned and this host's event log records no kernel image, " +
+				"so the pin cannot be evaluated: attest with PCR 9 in the quote from a host " +
+				"whose bootloader measures the kernel, or drop kernel_hashes and pin PCR 7")
+	}
+	if !facts.KernelImageTrusted {
+		return out, errors.New(
+			"kernel_hashes is pinned and this host's kernel image is not quote-bound " +
+				"(PCR 9 outside the quote, or the event log does not replay to it), " +
+				"so the pin cannot be evaluated: include PCR 9 in the quote, " +
+				"or drop kernel_hashes and pin PCR 7")
+	}
+
+	copy(out[:], facts.KernelImage.Digest)
+	return out, nil
+}
+
 func (v *PCRVerifier) verifyAgainstPolicy(report *types.AttestationReport, policy *PCRPolicy, facts *BootFacts) error {
 	// check pcr values
 	//
@@ -554,8 +580,11 @@ func (v *PCRVerifier) verifyAgainstPolicy(report *types.AttestationReport, polic
 
 	// check kernel hash
 	if len(policy.KernelHashes) > 0 {
-		recorded := RecordedKernelHash(report, facts)
-		kernelHashHex := hex.EncodeToString(recorded[:])
+		pinned, err := kernelPinValue(facts)
+		if err != nil {
+			return err
+		}
+		kernelHashHex := hex.EncodeToString(pinned[:])
 		found := false
 		for _, allowed := range policy.KernelHashes {
 			if kernelHashHex == allowed {
