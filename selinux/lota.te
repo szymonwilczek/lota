@@ -86,21 +86,16 @@ corenet_port(lota_port_t)
 #
 # Dedicated TPM character-device type.
 #
-# TPM 2.0 PC Client Platform TPM Profile p3.3 leaves PCR8-15
-# (including PCR14, used by lota-agent's boot commitment) auth-free
-# and Locality-0 writable. The TPM exposes no on-chip mechanism that
-# could gate the extend operation, so the only enforceable barrier
-# against a local-root attacker touching PCR14 before lota-agent
-# reaches self_measure() lives at the MAC layer.
+# PCR 8-15, PCR 14 included, are auth-free and Locality-0 writable (TPM 2.0
+# PC Client Platform TPM Profile p3.3), so the TPM itself gates no extend.
 #
-# The shipped udev rule (configs/udev/99-lota-tpm.rules) relabels
-# /dev/tpm[0-9]* and /dev/tpmrm[0-9]* with lota_tpm_device_t at
-# device-add time. This module is the only policy that allows rw on
-# the type and grants it only to lota_agent_t. Stock refpolicy
-# interfaces such as dev_rw_tpm() bind to the generic tpm_device_t
-# label and therefore no longer apply once the rule has run;
-# even an unconfined_t domain loses /dev/tpm* access under SELinux
-# enforcing.
+# configs/udev/99-lota-tpm.rules relabels /dev/tpm[0-9]* and
+# /dev/tpmrm[0-9]* at device-add time. Interfaces such as dev_rw_tpm()
+# grant tpm_device_t, so the label cuts the rw holders from fifteen to eight.
+#
+# It does not fence root: devices_unconfined_type is one of the eight,
+# unconfined_t is a member, and it may relabel the node back. A module cannot
+# revoke base-policy grants; against root, src/agent/tpm.c attributes the extend.
 #
 type lota_tpm_device_t;
 dev_node(lota_tpm_device_t)
