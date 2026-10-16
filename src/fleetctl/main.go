@@ -58,15 +58,19 @@ Commands:
   devices show <client-id>                per-client details
   revoke <client-id> -reason R -actor A [-note S]
                                           revoke a client's AIK
-  unrevoke <client-id>                    lift a revocation
+  unrevoke <client-id> -reason R -actor A [-note S]
+                                          lift a revocation
   revocations [-tenant T]                 list active revocations
   ban <hardware-id> -reason R -actor A [-tenant T] [-note S]
                                           ban a hardware identity (per tenant)
-  unban <hardware-id> [-tenant T]         lift a hardware ban (per tenant)
+  unban <hardware-id> -reason R -actor A [-tenant T] [-note S]
+                                          lift a hardware ban (per tenant)
   bans [-limit N] [-next-id CURSOR] [-tenant T]
                                           list active hardware bans
-  reanchor <client-id> -actor A [-note S] force a baseline re-anchor
-  delete <client-id> [-actor A] [-note S] remove a client's trust state
+  reanchor <client-id> -reason R -actor A [-note S]
+                                          force a baseline re-anchor
+  delete <client-id> -reason R -actor A [-note S]
+                                          remove a client's trust state
   reanchor-review list                    clients awaiting LFA review
   reanchor-review ack <client-id>         acknowledge an LFA re-anchor
   audit [-limit N] [-tenant T]            operator audit log
