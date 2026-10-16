@@ -754,6 +754,203 @@ static void test_documented_tpm_relabel_reaches_both_nodes(void)
 	PASS();
 }
 
+/*
+ * The monitoring API reads one credential header, Authorization: Bearer
+ * (src/verifier/server/api.go::extractBearerToken), so a page that hands
+ * a reader an API key in any other header hands them a request that authenticates
+ * nothing. On an instance with no key configured the reader endpoints are public,
+ * so the wrong header still answers 200 and hides that it was never read;
+ * the moment a key is configured every copy of it is a 401.
+ */
+static void lowercase(const char *src, char *dst, size_t dst_size)
+{
+	size_t i;
+
+	for (i = 0; src[i] && i < dst_size - 1; i++)
+		dst[i] = (char)tolower((unsigned char)src[i]);
+	dst[i] = '\0';
+}
+
+static void test_documented_api_calls_use_the_bearer_header(void)
+{
+	static const char *const pages[] = {
+		"examples/ha-postgres/README.rst",
+		"Documentation/operator/production-bringup/ca-enrollment.rst",
+		"Documentation/operator/observability.rst",
+	};
+
+	TEST("docs: every documented API call sends Authorization: Bearer");
+
+	for (size_t i = 0; i < sizeof(pages) / sizeof(pages[0]); i++) {
+		FILE *fp = open_shipped(pages[i]);
+		char line[1024];
+		char lower[1024];
+		bool saw = false;
+
+		if (!fp) {
+			FAIL("could not open a page that calls the API");
+			return;
+		}
+		while (fgets(line, sizeof(line), fp)) {
+			/* a header carrying a credential, whichever name it was given */
+			if (!strstr(line, "-H \""))
+				continue;
+			lowercase(line, lower, sizeof(lower));
+			if (!strstr(lower, "key") && !strstr(lower, "token") &&
+			    !strstr(lower, "bearer"))
+				continue;
+			saw = true;
+			if (!strstr(line, "Authorization: Bearer")) {
+				fclose(fp);
+				FAIL("a documented call authenticates with a header the API never reads");
+				return;
+			}
+		}
+		fclose(fp);
+		if (!saw) {
+			FAIL("a page that calls the API sends no credential at all");
+			return;
+		}
+	}
+	PASS();
+}
+
+/*
+ * Reads one shipped command per call, joining the backslash continuations a script
+ * or a code block wraps a long invocation over.
+ * Returns false at end of file.
+ */
+static bool next_command(FILE *fp, char *cmd, size_t cmd_size)
+{
+	char line[1024];
+	char *cont;
+
+	if (!fgets(cmd, (int)cmd_size, fp))
+		return false;
+
+	cont = strrchr(cmd, '\\');
+	while (cont && cont[1] == '\n' && fgets(line, sizeof(line), fp)) {
+		snprintf(cont, cmd_size - (size_t)(cont - cmd), " %s", line);
+		cont = strrchr(cmd, '\\');
+	}
+	return true;
+}
+
+/*
+ * The enrollment example runs on a host with a real TPM. A firmware TPM's EK
+ * chains through intermediates to the vendor root, so its trust material is a
+ * bundle directory; passed as a single anchor, the CA refuses the host's EK.
+ * The agent refuses --server while publisher profiles are configured, so the
+ * attest step brings its own config.
+ */
+static void test_enrollment_example_runs_on_a_provisioned_host(void)
+{
+	FILE *fp = open_shipped("examples/enrollment/run.sh");
+	char cmd[4096];
+	bool classes_ek_material = false;
+	bool bundle_flag = false;
+	bool saw_attest = false;
+
+	TEST("examples: the enrollment demo runs on a host with a TPM chain");
+
+	if (!fp) {
+		FAIL("could not open the enrollment example");
+		return;
+	}
+	while (next_command(fp, cmd, sizeof(cmd))) {
+		if (strstr(cmd, "-ek-root-bundle"))
+			bundle_flag = true;
+		/* whichever flag the material gets, the script picks it by asking */
+		if (strstr(cmd, "-d \"$EK_ROOT\""))
+			classes_ek_material = true;
+		if (!strstr(cmd, "--attest"))
+			continue;
+		saw_attest = true;
+		if (!strstr(cmd, "--config")) {
+			fclose(fp);
+			FAIL("the attest step is refused on any host that configured a publisher");
+			return;
+		}
+	}
+	fclose(fp);
+
+	if (!bundle_flag || !classes_ek_material) {
+		FAIL("a vendor EK chain has no way to reach the CA");
+		return;
+	}
+	if (!saw_attest) {
+		FAIL("the example no longer attests");
+		return;
+	}
+	PASS();
+}
+
+/* Whether a shipped file names @needle anywhere */
+static bool shipped_file_names(const char *rel, const char *needle)
+{
+	FILE *fp = open_shipped(rel);
+	char line[2048];
+	bool found = false;
+
+	if (!fp)
+		return false;
+	while (!found && fgets(line, sizeof(line), fp))
+		found = strstr(line, needle) != NULL;
+	fclose(fp);
+	return found;
+}
+
+/*
+ * Both packages ship the enforcement object with its signature and key.
+ * A page saying the object ships unsigned has the operator mint a key on
+ * the host and leave it at /etc/lota/policy.pub, which the agent prefers
+ * over the packaged key; local malware with that key can re-sign a tampered
+ * object. The installer refuses to create that state.
+ */
+static void test_bringup_reference_matches_the_packaged_object(void)
+{
+	static const char *const manifests[] = {
+		"packaging/nfpm/lota-agent.yaml",
+		"packaging/rpm/lota.spec",
+	};
+	static const char *const page =
+		"Documentation/operator/production-bringup/manual-reference.rst";
+	FILE *fp;
+	char line[2048];
+	char lower[2048];
+
+	TEST("docs: the bring-up reference matches what the packages ship");
+
+	for (size_t i = 0; i < sizeof(manifests) / sizeof(manifests[0]); i++) {
+		if (!shipped_file_names(manifests[i], "lota_lsm.bpf.o.sig") ||
+		    !shipped_file_names(manifests[i], "enforcement.pub")) {
+			FAIL("a package no longer ships the signature or the key");
+			return;
+		}
+	}
+
+	fp = open_shipped(page);
+	if (!fp) {
+		FAIL("could not open the bring-up reference");
+		return;
+	}
+	while (fgets(line, sizeof(line), fp)) {
+		lowercase(line, lower, sizeof(lower));
+		if (strstr(lower, "ship") && strstr(lower, "unsigned")) {
+			fclose(fp);
+			FAIL("the reference says the package ships the object unsigned");
+			return;
+		}
+	}
+	fclose(fp);
+
+	if (!shipped_file_names(page, "/usr/lib/lota/enforcement.pub")) {
+		FAIL("the reference never names the key the package brought");
+		return;
+	}
+	PASS();
+}
+
 int main(void)
 {
 	printf("=== LOTA Packaging Tests ===\n\n");
@@ -771,6 +968,9 @@ int main(void)
 	test_installer_labels_the_config_directory();
 	test_installer_relabel_reapplies_the_device_labels();
 	test_documented_tpm_relabel_reaches_both_nodes();
+	test_documented_api_calls_use_the_bearer_header();
+	test_enrollment_example_runs_on_a_provisioned_host();
+	test_bringup_reference_matches_the_packaged_object();
 
 	printf("\n=== Results: %d/%d passed ===\n", tests_passed, tests_run);
 	return (tests_passed == tests_run) ? 0 : 1;
