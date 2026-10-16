@@ -34,6 +34,7 @@
 #define PATH_AGENT_SOCKET "/usr/lib/systemd/system/lota-agent.socket"
 #define PATH_UDEV_RULE "/usr/lib/udev/rules.d/99-lota-tpm.rules"
 #define PATH_DRACUT_MODULE "/usr/lib/dracut/modules.d/90lota/module-setup.sh"
+#define PATH_LOTA_CONF_DIR "/etc/lota"
 #define PATH_LOTA_CONF "/etc/lota/lota.conf"
 
 /*

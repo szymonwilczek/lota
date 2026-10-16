@@ -344,8 +344,18 @@ Common Issues
    sudo install -m 644 ../configs/udev/99-lota-tpm.rules \
        /usr/lib/udev/rules.d/99-lota-tpm.rules
    sudo udevadm control --reload-rules
-   sudo udevadm trigger --subsystem-match=tpm
+   sudo udevadm trigger --action=add --subsystem-match=tpm \
+       --subsystem-match=tpmrm
    ls -Z /dev/tpm*
+
+The resource manager is in subsystem ``tpmrm``, not ``tpm``, and it is the
+node the agent's hardening gate reads first, so a trigger naming ``tpm``
+alone brings ``/dev/tpm0`` back, exits 0 and leaves ``/dev/tpmrm0`` where it
+was. ``--action=add`` is what re-applies the label at all: udev evaluates
+``SECLABEL{selinux}`` when it adds a device, and the default ``change`` event
+re-runs the rules without moving it. Naming the two device paths
+(``udevadm trigger --action=add /dev/tpm0 /dev/tpmrm0``) does the same job,
+and a reboot does it unprompted, because udev creates both nodes then.
 
 .. _tpm-device-carries-selinux-label--expected-lota_tpm_device_t:
 
