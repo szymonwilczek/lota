@@ -17,6 +17,7 @@
 #include <fcntl.h>
 #include <stdint.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
 #include <unistd.h>
@@ -923,6 +924,68 @@ static void test_aik_auth_at_rest_state(void)
 	rmdir(base);
 }
 
+/*
+ * profile_consent_record() creates a directory before enrollment and nothing
+ * prunes, so a host can hold more profiles than the array a caller sizes.
+ * publishers_list() must then return -ENOBUFS and the real count,
+ * not a silent readdir-order prefix that may drop the active profile.
+ */
+static void test_a_listing_that_does_not_fit_is_refused(void)
+{
+	const size_t bound = LOTA_PROFILE_MAX_AIK_HANDLES;
+	const size_t extra = 2;
+	struct publisher_entry entries[LOTA_PROFILE_MAX_AIK_HANDLES];
+	struct profile_paths paths;
+	char base[256];
+	char id[LOTA_PROFILE_ID_LEN];
+	size_t count = 0;
+
+	snprintf(base, sizeof(base), "/tmp/lota-profile-full.%d", getpid());
+
+	for (size_t i = 0; i < bound + extra; i++) {
+		memset(id, (int)('0' + (i % 10)), sizeof(id) - 1);
+		id[sizeof(id) - 1] = '\0';
+		CHECK(profile_paths_from_id(base, id, &paths) == 0 &&
+			      profile_consent_record(&paths, 0) == 0,
+		      "a publisher is agreed to");
+	}
+
+	CHECK(publishers_list(base, entries, bound, &count) == -ENOBUFS,
+	      "a listing that cannot hold every profile is refused, not cut short");
+	CHECK(count == bound + extra,
+	      "and the refusal says how many profiles there are");
+
+	{
+		struct publisher_entry *all = NULL;
+		size_t seen = 0;
+
+		CHECK(publishers_list_alloc(base, &all, &seen) == 0 &&
+			      seen == bound + extra && all != NULL,
+		      "the allocating listing holds every profile there is");
+		free(all);
+	}
+
+	{
+		struct publisher_entry *none = (void *)-1;
+		size_t seen = 1;
+		char empty[256];
+
+		snprintf(empty, sizeof(empty), "/tmp/lota-profile-none.%d",
+			 getpid());
+		CHECK(publishers_list_alloc(empty, &none, &seen) == 0 &&
+			      none == NULL && seen == 0,
+		      "a host that answered to nobody allocates nothing");
+	}
+
+	for (size_t i = 0; i < bound + extra; i++) {
+		memset(id, (int)('0' + (i % 10)), sizeof(id) - 1);
+		id[sizeof(id) - 1] = '\0';
+		if (profile_paths_from_id(base, id, &paths) == 0)
+			publishers_forget(&paths);
+	}
+	rmdir(base);
+}
+
 int main(void)
 {
 	printf("=== Publisher profile identity tests ===\n\n");
@@ -937,6 +1000,7 @@ int main(void)
 	test_anchor_is_ca();
 	test_publisher_inventory();
 	test_host_wide_verbs_count_every_key();
+	test_a_listing_that_does_not_fit_is_refused();
 	test_aik_auth_at_rest_state();
 
 	printf("\n%s\n", g_failures ? "FAILURES" : "All tests passed");
