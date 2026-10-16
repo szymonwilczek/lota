@@ -951,6 +951,136 @@ static void test_bringup_reference_matches_the_packaged_object(void)
 	PASS();
 }
 
+/*
+ * Reads the reStructuredText section @title into @buf as one line with
+ * whitespace collapsed, so a claim matches across line wraps. The buffer ends
+ * with the next section's title: fit to show a claim is absent, not present.
+ */
+static bool read_rst_section(const char *rel, const char *title, char *buf,
+			     size_t buf_size)
+{
+	FILE *fp = open_shipped(rel);
+	char line[1024];
+	size_t used = 0;
+	bool in_section = false;
+
+	if (!fp)
+		return false;
+	buf[0] = '\0';
+	while (fgets(line, sizeof(line), fp)) {
+		size_t i;
+		bool underline;
+
+		line[strcspn(line, "\n")] = '\0';
+		underline = line[0] == '-' || line[0] == '=';
+		for (i = 0; underline && line[i]; i++)
+			underline = line[i] == line[0];
+		underline = underline && i >= 3;
+
+		if (!in_section) {
+			in_section = strcmp(line, title) == 0;
+			continue;
+		}
+		if (underline && used > 0)
+			break;
+		for (i = 0; line[i]; i++) {
+			char c = line[i] == '\t' ? ' ' : line[i];
+
+			if (c == ' ' && (used == 0 || buf[used - 1] == ' '))
+				continue;
+			if (used + 2 >= buf_size)
+				break;
+			buf[used++] = c;
+		}
+		if (used > 0 && buf[used - 1] != ' ')
+			buf[used++] = ' ';
+		buf[used] = '\0';
+	}
+	fclose(fp);
+	return in_section && used > 0;
+}
+
+/*
+ * TPM2_Clear deletes every owner-hierarchy NV index and keeps the platform-created
+ * ones, so the EK certificates survive but indexes other consumers on the host
+ * created do not. It also restarts the TPM clock and resetCount, which the agent's
+ * PCR 14 rollback verdict reads as going back.
+ */
+static void test_tpm_clear_section_says_what_nv_costs(void)
+{
+	static const char *const page =
+		"Documentation/operator/platform-support.rst";
+	char section[8192];
+
+	TEST("docs: what a TPM clear costs names NV and the counters");
+
+	if (!read_rst_section(page, "What clearing a TPM costs", section,
+			      sizeof(section))) {
+		FAIL("could not read the section a clear is planned from");
+		return;
+	}
+	if (strstr(section, "NV storage** alone") ||
+	    strstr(section, "NV storage alone")) {
+		FAIL("the section says a clear leaves NV storage alone");
+		return;
+	}
+	if (!strstr(section, "owner") || !strstr(section, "platform-created")) {
+		FAIL("the section does not separate the two NV populations");
+		return;
+	}
+	if (!strstr(section, "resetCount") || !strstr(section, "clock")) {
+		FAIL("the section is silent on the counters a clear rebases");
+		return;
+	}
+	PASS();
+}
+
+/* Whether @sentence-shaped span appears in a normalised section */
+static bool section_claims(const char *section, const char *claim)
+{
+	return strstr(section, claim) != NULL;
+}
+
+/*
+ * After a clear the key at each publisher's handle no longer matches its
+ * certificate, so the agent refuses before quoting; a quote would fail in
+ * the TPM and spend a dictionary-attack attempt.
+ * No round opens, so the verifier sees nothing to alert on.
+ */
+static void test_tpm_clear_section_names_what_refuses(void)
+{
+	static const char *const page =
+		"Documentation/operator/platform-support.rst";
+	char section[8192];
+
+	TEST("docs: what a TPM clear costs names the side that refuses");
+
+	if (!read_rst_section(page, "What clearing a TPM costs", section,
+			      sizeof(section))) {
+		FAIL("could not read the section a clear is planned from");
+		return;
+	}
+	if (section_claims(section, "a verifier holding the old certificate")) {
+		FAIL("the section promises a verifier refusal that never happens");
+		return;
+	}
+	if (!section_claims(section, "--reenroll")) {
+		FAIL("the section does not name the remedy");
+		return;
+	}
+	if (!section_claims(section, "no round") &&
+	    !section_claims(section, "No round")) {
+		FAIL("the section does not say the round never opens");
+		return;
+	}
+	if (!section_claims(section, "verifier") ||
+	    !section_claims(section, "agent refuses")) {
+		FAIL("the section does not say which side refuses");
+		return;
+	}
+	PASS();
+}
+
 int main(void)
 {
 	printf("=== LOTA Packaging Tests ===\n\n");
@@ -971,6 +1101,8 @@ int main(void)
 	test_documented_api_calls_use_the_bearer_header();
 	test_enrollment_example_runs_on_a_provisioned_host();
 	test_bringup_reference_matches_the_packaged_object();
+	test_tpm_clear_section_says_what_nv_costs();
+	test_tpm_clear_section_names_what_refuses();
 
 	printf("\n=== Results: %d/%d passed ===\n", tests_passed, tests_run);
 	return (tests_passed == tests_run) ? 0 : 1;
