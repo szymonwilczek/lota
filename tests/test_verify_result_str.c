@@ -35,7 +35,7 @@ static int g_failures;
 /* Every code the verifier can send, by the number it sends it as.
  * Written as literals rather than through the macros so a code the agent
  * has not learned yet is a failing test rather than a build error. */
-#define FIRST_UNKNOWN_CODE 11
+#define FIRST_UNKNOWN_CODE 12
 
 static const char *g_default;
 
@@ -78,6 +78,16 @@ int main(void)
 			      msg);
 		}
 	}
+
+	/*
+	 * Verdict 6 covers the agent binary, the PCR 14 boot commitment
+	 * and the firmware/Secure Boot baseline, and the host cannot tell
+	 * which, so the sentence must name all three.
+	 */
+	CHECK(strstr(net_result_str(6), "agent") != NULL &&
+		      strstr(net_result_str(6), "PCR 14") != NULL &&
+		      strstr(net_result_str(6), "firmware") != NULL,
+	      "verdict 6 names every measurement it is sent for");
 
 	/* the two an administrator causes on purpose say so,
 	 * so the machine is not read as broken when it is obeying */

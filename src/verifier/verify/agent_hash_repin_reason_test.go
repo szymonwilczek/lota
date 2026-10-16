@@ -102,8 +102,10 @@ func TestVerify_UnlistedBuildIsNotBlamedOnTheInterval(t *testing.T) {
 
 	// policy gate refuses an unlisted build before the pin is consulted,
 	// and it already names the allow-list, so this case is not the silent one
-	if result.Result != types.VerifyPCRFail {
-		t.Fatalf("expected VerifyPCRFail from the policy gate, got %d",
+	// the verdict is the one the agent binary owns either way: which gate saw
+	// the build first is not something the host can act on.
+	if result.Result != types.VerifyIntegrityMismatch {
+		t.Fatalf("expected VerifyIntegrityMismatch from the policy gate, got %d",
 			result.Result)
 	}
 	if !strings.Contains(err.Error(), "agent hash not in allowed list") {
