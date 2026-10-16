@@ -67,7 +67,9 @@ sides -- rpm needs a ``%dir`` line where nfpm creates the directory along the
 way -- so a directory a package deliberately ships empty is still compared.
 Modes and ownership are not: the two manifests express them too differently,
 so a path that carries permissions worth having still needs a human to read
-both entries.
+both entries. The spec's ``Version`` and the head of its ``%changelog`` must
+be the ``@VERSION@`` and ``@CHANGELOG@`` placeholders ``make srpm`` fills from
+``VERSION``, so a version bump changes ``VERSION`` alone.
 
 Adding a file to a package therefore means adding it in three places: the
 install rule in the ``Makefile``, the nfpm config for its package, and the
