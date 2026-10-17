@@ -890,6 +890,34 @@ check_helm_chart() {
     fi
 }
 
+# Published images must offer the key road their documentation claims.
+# Only run when the ko configs, Makefile, the release or the check changed.
+check_container_images() {
+    local path touched=1 output
+
+    for path in "$@"; do
+        case "$path" in
+        src/attestca/.ko.yaml | src/verifier/.ko.yaml | packaging/ko/* | \
+            Makefile | .github/workflows/release.yml | \
+            scripts/check-container-images.sh)
+            touched=0
+            ;;
+        esac
+    done
+    if ((touched != 0)); then
+        pass "container-images"
+        return
+    fi
+
+    if output="$(scripts/check-container-images.sh 2>&1)"; then
+        pass "container-images"
+    else
+        printf '%s\n' "$output" | sed 's/^/  /' >&2
+        fail "container-images" \
+            "a published image has to offer the key road its documentation claims."
+    fi
+}
+
 # Package-manifest parity:
 # nfpm configs and the RPM spec must ship the same files per package,
 # since a host gets whichever one built its package.
@@ -983,6 +1011,7 @@ main() {
     check_bpf_mirror "${changed_files[@]}"
     check_package_manifests "${changed_files[@]}"
     check_helm_chart "${changed_files[@]}"
+    check_container_images "${changed_files[@]}"
 
     if ((FAILURES != 0)); then
         printf 'FAIL patch quality checks completed with %d failure(s).\n' "$FAILURES"

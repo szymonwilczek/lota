@@ -190,6 +190,8 @@ jobs:
           for image in verifier attestca; do
             cosign sign --yes "${KO_DOCKER_REPO}/${image}:${TAG#v}"
           done
+          # HSM-capable CA: a variant tag of the same repository
+          cosign sign --yes "${KO_DOCKER_REPO}/attestca:${TAG#v}-hsm"
 
   helm:
     name: package and push Helm chart
