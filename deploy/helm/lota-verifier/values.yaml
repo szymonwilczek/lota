@@ -105,6 +105,11 @@ probes:
   initialDelaySeconds: 5
   periodSeconds: 10
 
+# Time the monitoring API keeps answering (/health: 503 degraded) after
+# the attestation listener closes on shutdown; empty stops it once idle.
+# Set >= probes.periodSeconds and < terminationGracePeriodSeconds.
+shutdownDrain: ""
+
 resources: {}
 
 # distroless nonroot runs as uid/gid 65532

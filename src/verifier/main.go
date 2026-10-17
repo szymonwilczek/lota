@@ -82,7 +82,9 @@ var (
 	addr           = flag.String("addr", ":8443", "Listen address for TLS attestation protocol")
 	maxConnections = flag.Int("max-connections", server.DefaultMaxConnections,
 		"Maximum concurrent attestation connections. Each one costs a TLS handshake and a full report verification, so this bounds what a client stampede can spend; connections past the cap are refused at accept. -1 disables the cap (load rigs only).")
-	httpAddr     = flag.String("http-addr", "", "Listen address for HTTP monitoring API (e.g. :8080)")
+	httpAddr      = flag.String("http-addr", "", "Listen address for HTTP monitoring API (e.g. :8080)")
+	shutdownDrain = flag.Duration("shutdown-drain", 0,
+		"How long the monitoring API keeps answering after the attestation listener has closed on shutdown. /health answers 503 degraded for that window, which is what a load balancer reads to stop routing here before the process goes; set it to at least one health-check interval behind one. Zero shuts the API down as soon as it is idle.")
 	certFile     = flag.String("cert", "", "TLS certificate file")
 	keyFile      = flag.String("key", "", "TLS private key file")
 	aikStorePath = flag.String("aik-store", "/var/lib/lota/aiks",
@@ -105,9 +107,9 @@ var (
 	pgShardDSNs         stringSliceFlag
 	pgDSN               = flag.String("pg-dsn", "", "PostgreSQL DSN for shared multi-instance storage (or LOTA_PG_DSN env); selects the Postgres backend for baseline, nonce, revocation, ban, audit and attestation state. The database must be writable: the verifier applies its schema at startup, so a hot standby is refused. Mutually exclusive with --db.")
 	pgMaxOpenConns      = flag.Int("pg-max-open-conns", store.DefaultPGMaxOpenConns, "Maximum open Postgres connections per instance (per shard when sharded). Postgres group-commits concurrent transactions, so a wider pool raises enrollment/attestation burst throughput; keep the value times the instance count under the database's max_connections.")
-	nonceDBPath         = flag.String("nonce-db", "", "SQLite database path for used nonce history (defaults to <aik-store>/used_nonces.sqlite); set --allow-insecure-memory-nonces to disable persistence")
+	stateDBPath         = flag.String("state-db", "", "SQLite database an instance without --db or --pg-dsn keeps its durable state in: used nonce history, revocations, hardware bans, the audit log and the attestation decision log (defaults to <aik-store>/verifier-state.sqlite); set --allow-insecure-memory-state to keep none of it")
 	scopedKeysFile      = flag.String("api-keys-file", "", "YAML file of scoped monitoring-API keys (entries of key_sha256, role: reader|admin, tenants list or * for all); reloaded on SIGHUP. Environment keys keep working with global scope.")
-	allowMemNonces      = flag.Bool("allow-insecure-memory-nonces", false, "INSECURE: allow memory-only used nonce history (replay window after verifier restart)")
+	allowMemState       = flag.Bool("allow-insecure-memory-state", false, "INSECURE: keep no durable state without a database. The used nonce history lives in memory, so a restart re-opens a replay window, and this instance holds no revocations, bans, audit log or decision log at all -- those endpoints answer 503.")
 	printVersions       = flag.Bool("print-versions", false, "Print the attestation report wire version this binary implements, the schema version it builds each backend up to, and its TLS floor, then exit. The report wire must match the agent fleet's exactly.")
 )
 
@@ -170,6 +172,63 @@ func logAIKStore(logger *slog.Logger, cs *store.CertificateStore, p aikStorePara
 		"loaded_crls", cs.CRLCount(),
 		"require_cert", p.RequireCert,
 		"registered_clients", cs.CountClients())
+}
+
+// enforcementStores holds operator decisions: revocations, bans, the audit
+// log they write, and the attestation decision log.
+// The API answers 503 for each one that is absent.
+type enforcementStores struct {
+	audit        store.AuditLog
+	revocations  store.RevocationStore
+	bans         store.BanStore
+	attestations store.AttestationLog
+}
+
+// sqliteEnforcementStores keeps the group in a SQLite database.
+func sqliteEnforcementStores(db *sql.DB, logger *slog.Logger) enforcementStores {
+	audit := store.NewSQLiteAuditLog(db)
+	return enforcementStores{
+		audit:       audit,
+		revocations: store.NewSQLiteRevocationStore(db, audit),
+		bans:        store.NewSQLiteBanStore(db, audit),
+		attestations: store.NewBatchedAttestationLog(
+			store.NewSQLiteAttestationLog(db),
+			store.BatchedAttestationLogConfig{Logger: logger}),
+	}
+}
+
+// postgresEnforcementStores keeps the group in Postgres, shared by every
+// instance; sharded deployments keep it on the control shard.
+func postgresEnforcementStores(db *sql.DB, logger *slog.Logger) enforcementStores {
+	audit := store.NewPostgresAuditLog(db)
+	return enforcementStores{
+		audit:       audit,
+		revocations: store.NewPostgresRevocationStore(db, audit),
+		bans:        store.NewPostgresBanStore(db, audit),
+		attestations: store.NewBatchedAttestationLog(
+			store.NewPostgresAttestationLog(db),
+			store.BatchedAttestationLogConfig{Logger: logger}),
+	}
+}
+
+// memoryEnforcementStores keeps the group in process memory;
+// it is lost on exit.
+func memoryEnforcementStores() enforcementStores {
+	audit := store.NewMemoryAuditLog()
+	return enforcementStores{
+		audit:        audit,
+		revocations:  store.NewMemoryRevocationStore(audit),
+		bans:         store.NewMemoryBanStore(audit),
+		attestations: store.NewMemoryAttestationLog(),
+	}
+}
+
+// install sets the revocation, ban and attestation stores on cfg.
+// A nil store stays nil, which the API reports as absent.
+func (e enforcementStores) install(cfg *verify.VerifierConfig) {
+	cfg.RevocationStore = e.revocations
+	cfg.BanStore = e.bans
+	cfg.AttestationLog = e.attestations
 }
 
 // loadPolicies registers every --policy document in the order it was given.
@@ -435,14 +494,10 @@ func main() {
 				"note", "per-client baseline/nonce partitioned; enforcement and audit on shard 0")
 		}
 
-		auditLog = store.NewPostgresAuditLog(db)
-		verifierCfg.RevocationStore = store.NewPostgresRevocationStore(db, auditLog)
-		verifierCfg.BanStore = store.NewPostgresBanStore(db, auditLog)
-
-		attestLog = store.NewBatchedAttestationLog(
-			store.NewPostgresAttestationLog(db),
-			store.BatchedAttestationLogConfig{Logger: logger})
-		verifierCfg.AttestationLog = attestLog
+		enforcement := postgresEnforcementStores(db, logger)
+		enforcement.install(&verifierCfg)
+		auditLog = enforcement.audit
+		attestLog = enforcement.attestations
 
 		// AIK store: certificate-backed when the deployment verifies chains
 		// (the production default), otherwise a shared TOFU store in Postgres
@@ -497,16 +552,10 @@ func main() {
 		verifierCfg.BaselineStore = verify.NewSQLiteBaselineStore(db)
 		verifierCfg.UsedNonceBackend = verify.NewSQLiteUsedNonceBackend(db)
 
-		// enforcement stores - revocation, bans, audit log
-		auditLog = store.NewSQLiteAuditLog(db)
-		verifierCfg.RevocationStore = store.NewSQLiteRevocationStore(db, auditLog)
-		verifierCfg.BanStore = store.NewSQLiteBanStore(db, auditLog)
-
-		// attestation decision log
-		attestLog = store.NewBatchedAttestationLog(
-			store.NewSQLiteAttestationLog(db),
-			store.BatchedAttestationLogConfig{Logger: logger})
-		verifierCfg.AttestationLog = attestLog
+		enforcement := sqliteEnforcementStores(db, logger)
+		enforcement.install(&verifierCfg)
+		auditLog = enforcement.audit
+		attestLog = enforcement.attestations
 
 		ver, err := store.SchemaVersion(db)
 		if err != nil {
@@ -515,28 +564,37 @@ func main() {
 			logger.Info("SQLite store initialized", "path", *dbPath, "schema_version", ver)
 		}
 	} else {
-		// persist used nonce history even without --db
-		// otherwise, a verifier restart re-opens a replay window within nonce TTL
-		if !*allowMemNonces {
-			path := *nonceDBPath
+		// no database: used nonces and enforcement state still go to one
+		// SQLite file, so a restart neither re-opens a replay window nor
+		// forgets a ban
+		if !*allowMemState {
+			path := *stateDBPath
 			if path == "" {
-				path = filepath.Join(*aikStorePath, "used_nonces.sqlite")
+				path = filepath.Join(*aikStorePath, "verifier-state.sqlite")
 			}
 			db, err := store.OpenDB(path)
 			if err != nil {
-				logger.Error("failed to open nonce DB (required for anti-replay persistence)",
+				logger.Error("failed to open the state database (required for anti-replay and enforcement persistence)",
 					"path", path,
 					"error", err,
-					"hint", "use --nonce-db to set a writable path, or (INSECURE) pass --allow-insecure-memory-nonces")
+					"hint", "use --state-db to set a writable path, or (INSECURE) pass --allow-insecure-memory-state")
 				os.Exit(1)
 			}
 			defer db.Close()
 			verifierCfg.UsedNonceBackend = verify.NewSQLiteUsedNonceBackend(db)
-			logger.Info("persistent used nonce backend enabled",
-				"path", path)
+
+			enforcement := sqliteEnforcementStores(db, logger)
+			enforcement.install(&verifierCfg)
+			auditLog = enforcement.audit
+			attestLog = enforcement.attestations
+
+			logger.Info("state database opened", "path", path,
+				"holds", "used nonces, revocations, hardware bans, audit log, attestation log")
 		} else {
-			logger.Warn("INSECURE: using memory-only used nonce backend; verifier restart re-opens replay window",
-				"nonce_lifetime", verifierCfg.NonceLifetime)
+			// enforcement stores stay nil, so their endpoints answer 503
+			logger.Warn("INSECURE: no durable state; verifier restart re-opens a replay window and this instance holds no revocations, bans, audit log or decision log",
+				"nonce_lifetime", verifierCfg.NonceLifetime,
+				"api", "revocation, ban, audit and attestation endpoints answer 503")
 		}
 
 		// file-based AIK store (optionally certificate-backed)
@@ -555,15 +613,6 @@ func main() {
 			logger.Info("file-based AIK store initialized",
 				"path", *aikStorePath, "registered_clients", len(selected.ListClients()))
 		}
-
-		// in-memory enforcement stores
-		auditLog = store.NewMemoryAuditLog()
-		verifierCfg.RevocationStore = store.NewMemoryRevocationStore(auditLog)
-		verifierCfg.BanStore = store.NewMemoryBanStore(auditLog)
-
-		// in-memory attestation decision log
-		attestLog = store.NewMemoryAttestationLog()
-		verifierCfg.AttestationLog = attestLog
 
 	}
 
@@ -635,6 +684,7 @@ func main() {
 		ReadTimeout:    30 * time.Second,
 		WriteTimeout:   10 * time.Second,
 		MaxConnections: *maxConnections,
+		ShutdownDrain:  *shutdownDrain,
 	}
 
 	if *httpAddr != "" && adminKey == "" && *scopedKeysFile == "" {

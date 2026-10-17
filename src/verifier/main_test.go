@@ -8,12 +8,15 @@ import (
 	"crypto/x509"
 	"encoding/pem"
 	"errors"
+	"io"
+	"log/slog"
 	"net"
 	"os"
 	"path/filepath"
 	"testing"
 
 	"github.com/szymonwilczek/lota/verifier/store"
+	"github.com/szymonwilczek/lota/verifier/verify"
 )
 
 func TestGenerateTestCertIncludesLoopbackSAN(t *testing.T) {
@@ -227,5 +230,58 @@ func TestSelectAIKStoreServesTheDeploymentsRegistry(t *testing.T) {
 
 	if got, err := aik.GetAIK(registered); err != nil || got == nil {
 		t.Fatalf("the client another instance registered must be readable here: %v", err)
+	}
+}
+
+// Without a database, a ban survives reopening the state file.
+func TestEnforcementStoresOutliveTheProcessThatWroteThem(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "verifier-state.sqlite")
+	hwid := [32]byte{0xab, 0xcd}
+
+	db, err := store.OpenDB(path)
+	if err != nil {
+		t.Fatalf("OpenDB: %v", err)
+	}
+	first := sqliteEnforcementStores(db, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if err := first.bans.BanHardware("default", hwid, store.RevocationCheating, "ops", ""); err != nil {
+		t.Fatalf("BanHardware: %v", err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	reopened, err := store.OpenDB(path)
+	if err != nil {
+		t.Fatalf("OpenDB(reopen): %v", err)
+	}
+	defer reopened.Close()
+	second := sqliteEnforcementStores(reopened, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if _, banned := second.bans.IsBanned("default", hwid); !banned {
+		t.Error("the ban did not survive a reopen of the state database")
+	}
+	if entries := second.audit.Query(10); len(entries) != 1 || entries[0].Action != "ban" {
+		t.Errorf("audit entries after a reopen = %+v, want the ban", entries)
+	}
+}
+
+// With no durable state, no enforcement store is installed,
+// so the API answers 503.
+func TestNoDurableStateInstallsNoEnforcementStore(t *testing.T) {
+	cfg := verify.DefaultConfig()
+
+	var none enforcementStores
+	none.install(&cfg)
+
+	if cfg.RevocationStore != nil {
+		t.Error("revocation store installed for an instance keeping no durable state")
+	}
+	if cfg.BanStore != nil {
+		t.Error("ban store installed for an instance keeping no durable state")
+	}
+	if cfg.AttestationLog != nil {
+		t.Error("attestation log installed for an instance keeping no durable state")
+	}
+	if none.audit != nil {
+		t.Error("audit log installed for an instance keeping no durable state")
 	}
 }
