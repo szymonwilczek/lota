@@ -397,6 +397,26 @@ func (s *PostgresBaselineStore) ListClients() []string {
 	return clients
 }
 
+// ListClientsPage returns one page of client IDs, ordered by client ID.
+func (s *PostgresBaselineStore) ListClientsPage(limit, offset int) ([]string, error) {
+	rows, err := s.db.Query(
+		"SELECT client_id FROM baselines ORDER BY client_id LIMIT $1 OFFSET $2", limit, offset)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	clients := []string{}
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		clients = append(clients, id)
+	}
+	return clients, rows.Err()
+}
+
 func (s *PostgresBaselineStore) Stats() BaselineStats {
 	stats := BaselineStats{}
 

@@ -54,6 +54,10 @@ Each instance is stateless and identical apart from its listen ports. Both take
 ``--pg-dsn`` (here via ``LOTA_PG_DSN``), the same CA root, and the same policy,
 so they enforce the same rules over the same shared state.
 
+Neither passes ``--aik-store``: with a database configured, the client registry
+is in the database like the rest of the state, so nothing is written under the
+default store directory and both commands run as an ordinary user.
+
 .. code:: sh
 
    # the monitoring API's two key tiers; both instances take the same pair,
@@ -84,9 +88,11 @@ already present.
 
 Drive one full attestation through **instance A** (port 8443) using the
 enrollment example, then read the result back through **instance B** (port
-8081). Because the client registration and baseline live in Postgres, instance
-B reports the client it never spoke to. Both keys ride in
-``Authorization: Bearer``, which is the only credential header the API reads:
+8081). The client's record -- its baseline, its tenant, its attestation count
+and when it last attested -- is in Postgres, so instance B reports the client
+it never spoke to, and would still report it after both instances restarted.
+Both keys ride in ``Authorization: Bearer``, which is the only credential
+header the API reads:
 
 .. code:: sh
 
@@ -101,6 +107,12 @@ B reports the client it never spoke to. Both keys ride in
 
 The revocation is committed to Postgres, so the client's next attestation is
 refused by **either** instance -- enforcement is fleet-wide, not per process.
+
+Two fields of ``GET /api/v1/clients/{id}`` are the answering instance's own and
+differ between the two on purpose: ``pending_challenges``, which counts the
+challenges that instance is holding, and ``monotonic_counter``, the nonce
+sequence it has seen. Everything else is the fleet's answer. See
+`Documentation/operator/monitoring-api.rst <../../Documentation/operator/monitoring-api.rst>`_.
 
 Production deltas
 -----------------
