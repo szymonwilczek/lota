@@ -205,6 +205,13 @@ register anything with the verifier. ::
 
 String fields are omitted when empty.
 
+``hardware_id`` is the 32-byte hardware identity as 64 hex characters -- the
+value ``POST /api/v1/bans`` takes, unedited. Under the Privacy CA flow it is
+the device pseudonym the attestation CA put in the certificate subject, so it
+reads the same as ``client_id``; a deployment that provisions its clients
+out of band carries the registered identity there instead, beside whatever
+client id it chose.
+
 Everything above is read from the state the deployment shares -- the durable
 per-client record -- except two fields, which are this instance's own:
 
@@ -282,8 +289,10 @@ optional. ``tenant`` is the scope the ban is imposed in and defaults to
 
 **400** malformed hardware ID, invalid reason, invalid tenant or missing
 actor, **403** tenant outside the key's set, **409** already banned,
-**503** bans not configured. The returned ``hardware_id`` is the
-canonical lower-case form.
+**503** bans not configured. The identity may be given in either case;
+the returned ``hardware_id`` is the canonical lower-case form, and it is
+the form a ban is recorded, listed and matched in -- so the same identity
+in upper case answers **409** against its own ban.
 
 DELETE /api/v1/bans/{hwid}
 --------------------------
@@ -295,9 +304,11 @@ one, and names the tenant the same way, because a ban is identified by
 
    {"status": "unbanned", "hardware_id": "ab12...", "tenant": "default"}
 
-**400** malformed hardware ID, missing actor or reason, invalid tenant,
-or ``tenant`` passed as a query parameter instead of a body field;
-**403** tenant outside the key's set, **404** not banned in that tenant.
+The identity in the path is canonicalised the same way, so a ban lifts
+in whichever case it is named. **400** malformed hardware ID, missing
+actor or reason, invalid tenant, or ``tenant`` passed as a query
+parameter instead of a body field; **403** tenant outside the key's set,
+**404** not banned in that tenant.
 
 GET /api/v1/bans
 ----------------
@@ -411,9 +422,10 @@ Reader. Query: ``limit`` (default 100, maximum 10000). **200**::
          "tenant": "default",
          "client_id": "host-0001",
          "hardware_id": "ab12...",
-         "result": "success",
+         "result": "ok",
          "duration_ms": 12.5,
          "pcr14": "cafe...",
+         "kernel_hash": "5b97...",
          "details": "",
          "remote_addr": "192.0.2.10:39412"
        }
@@ -421,8 +433,25 @@ Reader. Query: ``limit`` (default 100, maximum 10000). **200**::
      "count": 1
    }
 
+``result`` is the verdict the verifier reached, and an accepted round reads
+``ok``. The refusals are ``nonce_fail``, ``sig_fail``, ``identity_fail``,
+``pcr_fail``, ``iommu_fail``, ``policy_requirement``, ``integrity_mismatch``,
+``old_version``, ``revoked``, ``banned`` and ``internal_error`` -- the same
+vocabulary the agent is answered with, so a round an operator reads here and
+a round a host reports are named the same thing.
+
+``kernel_hash`` is the kernel image hash the agent reported. It is covered by
+the quote, so it is attested, and it is advisory: nothing is gated on it,
+and it is what an operator reads to answer whether a device's kernel changed.
+
 ``details`` is HTML-escaped and truncated to 2048 characters. **503**
 when no attestation log is configured.
+
+``hardware_id`` is the same 64-hex hardware identity as on the client record,
+and it is the field this endpoint exists to hand an operator: the hardware
+behind a refused round is banned by pasting it into ``POST /api/v1/bans``. It
+is present once the round authenticated its AIK certificate, which is where
+the identity comes from; a report refused before that names no hardware.
 
 The decision log is written asynchronously in batches so a busy fleet does
 not pay one database commit per report. Records become durable within

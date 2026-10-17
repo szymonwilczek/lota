@@ -152,6 +152,20 @@ decision, and nothing done locally to it changes the answer.
 The reason recorded with the revocation (``compromised`` above)
 stays on the verifier -- the host is told the state, not the case for it.
 
+Ban the hardware behind a refused round. The decision log names the hardware
+identity of every round that got as far as authenticating its certificate, and
+that value is what ``ban`` takes::
+
+   lota-fleet --key-file /etc/lota/fleet-reader.key --json attests -limit 50 \
+       | jq -r '.[] | select(.result != "ok") | "\(.result) \(.hardware_id)"'
+   lota-fleet --key-file /etc/lota/fleet-admin.key \
+       ban 924a27af...41fa7 -reason cheating -actor alice@ops
+
+``devices show`` prints the same identity as ``hardware id`` for a single host.
+The table ``attests`` prints without ``--json`` names the client; under the
+Privacy CA flow the client id *is* the hardware identity, because the pseudonym
+the CA issues is that identity.
+
 Re-baseline a host after a planned firmware update::
 
    lota-fleet --key-file /etc/lota/fleet-admin.key \
