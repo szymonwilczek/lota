@@ -138,6 +138,35 @@ The additive rule is what lets a multi-instance deployment share one database
 The SQLite and Postgres histories are versioned independently -- each number
 counts its own backend's entries. There is no parity requirement between the two.
 
+What identifies a schema
+------------------------
+
+The version number identifies a schema only while the schema it names does not
+change, and before 1.0 the consolidated entry is still being rewritten in
+place. Two builds can therefore create different databases that both report
+version 1. The verifier records a second marker beside the number: the
+**fingerprint** of the migration text it applied, printed by
+``--print-versions`` next to each target.
+
+At startup the verifier holds the database it opened to both markers, and
+refuses when either disagrees:
+
+* **a version this build has never applied** -- the database was written by a
+  newer build. Run that build, or restore a backup taken at this one's
+  version. This is the rollback case, and refusing it at startup is the point:
+  a binary that starts and fails at the first statement against a table it
+  does not have has already passed its health check.
+* **a fingerprint that is not this build's** -- the two builds' migrations
+  differ at the same version number, so the columns underneath are not the
+  ones this binary writes.
+* **tables that are not the ones these migrations create** -- the same check
+  for a database written before fingerprints were recorded, naming what is
+  missing and what is there in addition.
+
+A database created by an older build that recorded no fingerprint has one
+written for it on the first open, with a warning saying so; its shape is
+verified against this build's tables in the same pass.
+
 Reading the versions a binary reports
 =====================================
 
@@ -147,17 +176,19 @@ Every version an operator needs is printed by the verifier itself:
 
    $ lota-verifier --print-versions
    attestation report wire:  2.1.0
-   postgres schema target:   1
-   sqlite schema target:     1
+   postgres schema target:   1 (4b3645b29d8a)
+   sqlite schema target:     1 (c43317ff56f1)
    minimum TLS:              1.3
 
 * **attestation report wire** is the number that must match the agent fleet's
   report wire; compare it across an agent and a verifier release before assuming
   they attest.
 * **postgres schema target** and **sqlite schema target** are the schema this
-  binary builds a database up to. Compare against the live database (logged as
+  binary builds a database up to, followed by the fingerprint of the migration
+  text that reaches it. Compare the number against the live database (logged as
   ``schema_version`` at startup) to see whether starting this binary runs a
-  migration.
+  migration, and the fingerprint against the one a refusal names to see which
+  build wrote the database in front of you.
 
 Release numbering
 =================

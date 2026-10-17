@@ -284,10 +284,21 @@ func runMigrations(db *sql.DB) error {
 		return fmt.Errorf("failed to create schema_version table: %w", err)
 	}
 
+	if err := ensureSQLiteFingerprintColumn(db); err != nil {
+		return err
+	}
+
 	var current int
 	if err := db.QueryRow("SELECT COALESCE(MAX(version), 0) FROM schema_version").Scan(&current); err != nil {
 		return fmt.Errorf("failed to query schema version: %w", err)
 	}
+
+	// refuse a version this build never applied: a newer build wrote it
+	if target := maxMigrationVersion(migrations); current > target {
+		return schemaVersionError(current, target)
+	}
+
+	existing := current > 0
 
 	for _, m := range migrations {
 		if m.version <= current {
@@ -323,7 +334,96 @@ func runMigrations(db *sql.DB) error {
 		slog.Info("applied database migration", "version", m.version, "description", m.description)
 	}
 
+	return verifySQLiteSchemaIdentity(db, existing)
+}
+
+// ensureSQLiteFingerprintColumn adds schema_version.fingerprint to a table
+// created without it. SQLite has no ADD COLUMN IF NOT EXISTS.
+func ensureSQLiteFingerprintColumn(db *sql.DB) error {
+	rows, err := db.Query("PRAGMA table_info(schema_version)")
+	if err != nil {
+		return fmt.Errorf("failed to read the schema_version columns: %w", err)
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var (
+			cid, notNull, pk int
+			name, colType    string
+			dflt             sql.NullString
+		)
+		if err := rows.Scan(&cid, &name, &colType, &notNull, &dflt, &pk); err != nil {
+			return fmt.Errorf("failed to read the schema_version columns: %w", err)
+		}
+		if name == "fingerprint" {
+			return rows.Err()
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("failed to read the schema_version columns: %w", err)
+	}
+
+	if _, err := db.Exec("ALTER TABLE schema_version ADD COLUMN fingerprint TEXT"); err != nil {
+		return fmt.Errorf("failed to add the schema fingerprint column: %w", err)
+	}
 	return nil
+}
+
+// verifySQLiteSchemaIdentity checks the recorded fingerprint and the table set
+// against this build's migrations. A pre-existing database with no fingerprint
+// predates fingerprinting: it is stamped, and only the shape check applies.
+func verifySQLiteSchemaIdentity(db *sql.DB, existing bool) error {
+	expected := schemaFingerprint(migrations)
+
+	var stored sql.NullString
+	err := db.QueryRow(
+		"SELECT fingerprint FROM schema_version ORDER BY version DESC LIMIT 1").Scan(&stored)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return fmt.Errorf("failed to read the schema fingerprint: %w", err)
+	}
+
+	switch {
+	case !stored.Valid || stored.String == "":
+		if _, err := db.Exec(
+			"UPDATE schema_version SET fingerprint = ? WHERE version = (SELECT MAX(version) FROM schema_version)",
+			expected); err != nil {
+			return fmt.Errorf("failed to record the schema fingerprint: %w", err)
+		}
+		if existing {
+			slog.Warn("recorded a schema fingerprint for a database that carried none",
+				"fingerprint", shortFingerprint(expected),
+				"note", "the database predates fingerprinting; its shape is verified against this build's tables")
+		}
+	case stored.String != expected:
+		return schemaFingerprintError(stored.String, expected)
+	}
+
+	tables, err := sqliteTableNames(db)
+	if err != nil {
+		return err
+	}
+	return schemaShapeError(schemaTables(migrations), tables)
+}
+
+// sqliteTableNames lists the database's tables, excluding SQLite's own
+// and schema_version.
+func sqliteTableNames(db *sql.DB) ([]string, error) {
+	rows, err := db.Query(
+		"SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' AND name <> 'schema_version'")
+	if err != nil {
+		return nil, fmt.Errorf("failed to list the database's tables: %w", err)
+	}
+	defer rows.Close()
+
+	var names []string
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			return nil, fmt.Errorf("failed to list the database's tables: %w", err)
+		}
+		names = append(names, name)
+	}
+	return names, rows.Err()
 }
 
 // returns the current database schema version
