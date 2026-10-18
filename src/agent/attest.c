@@ -75,11 +75,27 @@ static int read_kernel_measurement_digest(struct tpm_context *ctx,
 }
 
 void attest_warn_cert_orphaned(const struct profile_paths *paths,
-			       const char *label)
+			       const char *label, int key_present)
 {
-	if (!tpm_aik_provisioning_orphans_cert(
-		    tpm_aik_key_present(&g_agent.tpm_ctx),
-		    paths ? profile_aik_cert_stored(paths) : false))
+	uint8_t spki[LOTA_MAX_AIK_PUB_SIZE];
+	size_t spki_len = 0;
+	int cert_match = 0;
+
+	if (!paths || !profile_aik_cert_stored(paths))
+		return;
+
+	/*
+	 * Read after provisioning: the key the certificate has to be compared
+	 * against is the one that is at the handle now, and before provisioning
+	 * there may be none.
+	 */
+	if (tpm_get_aik_public(&g_agent.tpm_ctx, spki, sizeof(spki),
+			       &spki_len) < 0)
+		return;
+
+	cert_match = aik_cert_matches_key(paths->aik_cert, spki, spki_len);
+
+	if (!tpm_aik_provisioning_orphans_cert(key_present, true, cert_match))
 		return;
 
 	/* label goes last: on some targets it is a sentence of its own */
@@ -889,6 +905,7 @@ int do_attest(const char *server, int port, const char *ca_cert,
 {
 	struct profile_paths storage;
 	const struct profile_paths *paths;
+	int key_present;
 	int ret;
 
 	printf("=== Remote Attestation ===\n\n");
@@ -936,7 +953,7 @@ int do_attest(const char *server, int port, const char *ca_cert,
 	}
 
 	printf("Checking AIK...\n");
-	attest_warn_cert_orphaned(paths, paths ? paths->id : NULL);
+	key_present = tpm_aik_key_present(&g_agent.tpm_ctx);
 	ret = tpm_provision_aik(&g_agent.tpm_ctx);
 	if (ret < 0) {
 		fprintf(stderr, "Failed to provision AIK: %s\n",
@@ -945,6 +962,7 @@ int do_attest(const char *server, int port, const char *ca_cert,
 		net_cleanup();
 		return 1;
 	}
+	attest_warn_cert_orphaned(paths, paths ? paths->id : NULL, key_present);
 
 	/*
 	 * Self-measurement extends PCR14 with a commitment over the agent
@@ -1159,8 +1177,6 @@ static int bind_target(struct attest_target *t)
 			 t->label, tpm_strerror(ret));
 		return ret;
 	}
-
-	attest_warn_cert_orphaned(&t->paths, t->label);
 
 	ret = tpm_provision_aik(&g_agent.tpm_ctx);
 	if (ret < 0) {
@@ -1684,6 +1700,7 @@ static int continuous_attest_run(const struct lota_config *cfg,
 	uint32_t status_flags = 0;
 	uint64_t wd_usec = 0;
 	bool wd_enabled;
+	int key_present;
 	int ret;
 
 	lota_info("Continuous attestation starting");
@@ -1754,8 +1771,7 @@ static int continuous_attest_run(const struct lota_config *cfg,
 	}
 
 	lota_info("Checking AIK");
-	if (targets[0].has_profile)
-		attest_warn_cert_orphaned(&targets[0].paths, targets[0].label);
+	key_present = tpm_aik_key_present(&g_agent.tpm_ctx);
 	ret = tpm_provision_aik(&g_agent.tpm_ctx);
 	if (ret < 0) {
 		lota_err("Failed to provision AIK: %s", tpm_strerror(ret));
@@ -1763,6 +1779,9 @@ static int continuous_attest_run(const struct lota_config *cfg,
 		net_cleanup();
 		return 1;
 	}
+	if (targets[0].has_profile)
+		attest_warn_cert_orphaned(&targets[0].paths, targets[0].label,
+					  key_present);
 
 	/*
 	 * Self-measurement extends PCR14 with a commitment over the agent

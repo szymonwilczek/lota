@@ -261,17 +261,28 @@ static void test_provisioning_names_an_orphaned_cert(void)
 {
 	TEST("a replacement key that orphans a stored certificate is named");
 
-	if (tpm_aik_provisioning_orphans_cert(0, true) != true) {
-		FAIL("an absent key under a stored certificate was not named");
+	if (tpm_aik_provisioning_orphans_cert(0, true, -EKEYREJECTED) != true) {
+		FAIL("a certificate naming another key was not named");
 		return;
 	}
 
-	if (tpm_aik_provisioning_orphans_cert(0, false) != false) {
+	if (tpm_aik_provisioning_orphans_cert(0, true, 0) != false) {
+		FAIL("a key that came back matching was called orphaned");
+		return;
+	}
+
+	if (tpm_aik_provisioning_orphans_cert(0, true, -ENOENT) != false) {
+		FAIL("an unreadable certificate was called orphaned");
+		return;
+	}
+
+	if (tpm_aik_provisioning_orphans_cert(0, false, 0) != false) {
 		FAIL("a first enrollment was called an orphaned certificate");
 		return;
 	}
 
-	if (tpm_aik_provisioning_orphans_cert(1, true) != false) {
+	if (tpm_aik_provisioning_orphans_cert(1, true, -EKEYREJECTED) !=
+	    false) {
 		FAIL("a key that is there was called missing");
 		return;
 	}

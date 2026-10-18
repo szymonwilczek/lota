@@ -1312,7 +1312,8 @@ bool tpm_aik_replacing_shared_key(const struct tpm_context *ctx,
 	return tpm_aik_key_is_shared(ctx);
 }
 
-bool tpm_aik_provisioning_orphans_cert(int key_present, bool cert_stored)
+bool tpm_aik_provisioning_orphans_cert(int key_present, bool cert_stored,
+				       int cert_match)
 {
 	/*
 	 * key_present is negative when the TPM could not answer,
@@ -1321,7 +1322,16 @@ bool tpm_aik_provisioning_orphans_cert(int key_present, bool cert_stored)
 	if (key_present != 0)
 		return false;
 
-	return cert_stored;
+	if (!cert_stored)
+		return false;
+
+	/*
+	 * The key that came back decides. Anything other than a certificate
+	 * naming a different key is somebody else's report: a match is a
+	 * publisher that is fine, and a certificate that cannot be read
+	 * at all is the renewal path's to describe.
+	 */
+	return cert_match == -EKEYREJECTED;
 }
 
 void tpm_aik_allow_shared_key_replace(struct tpm_context *ctx, bool allow)
