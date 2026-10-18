@@ -49,6 +49,15 @@ repeatable and re-attesting clients keep their server-side baselines::
 
    lota-loadgen setup -dir rig -agents 10000
 
+``-tenant`` issues the rig's AIK certificates into a tenant and binds the
+generated policy to it, which is what a multi-tenant verifier needs to route a
+fleet to a policy of its own::
+
+   lota-loadgen setup -dir rig-acme -agents 1000 -tenant acme
+
+Left out, the certificates carry no tenant and the fleet lands in the default
+tenant, verified against the verifier's active policy.
+
 Point the verifier under test at the rig's trust material. The
 generated ``policy.yaml`` pins the fleet's PCR 0/1/7 values and its
 kernel/agent hashes, so the strict first-attestation boot-enrollment

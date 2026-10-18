@@ -4,6 +4,9 @@
 package verify
 
 import (
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -104,5 +107,69 @@ func TestAddPolicy_AcceptsKnownProfiles(t *testing.T) {
 		if err := v.AddPolicy(policy); err != nil {
 			t.Fatalf("AddPolicy(profile=%q): %v", profile, err)
 		}
+	}
+}
+
+// writeProfilePolicy drops a policy file carrying pins, so the profile line is
+// the only thing under test and no deployment gate can refuse the document first.
+func writeProfilePolicy(t *testing.T, profile string) string {
+	t.Helper()
+
+	body := "name: profile-road\n" +
+		"pcrs:\n" +
+		"  7: \"" + strings.Repeat("aa", 32) + "\"\n"
+	if profile != "" {
+		body += "profile: " + profile + "\n"
+	}
+
+	path := filepath.Join(t.TempDir(), "policy.yaml")
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatalf("write policy: %v", err)
+	}
+	return path
+}
+
+// The file road is the only one an operator drives, and it was the road that did
+// not run the profile check: `profile: consumr` registered, read as "not consumer",
+// and left a consumer fleet refusing every host whose firmware had been updated.
+func TestLoadPolicy_RejectsUnknownProfile(t *testing.T) {
+	err := NewPCRVerifier().LoadPolicy(writeProfilePolicy(t, "consumr"))
+	if err == nil {
+		t.Fatal("expected LoadPolicy to refuse an unknown profile")
+	}
+	for _, want := range []string{"consumr", ProfileEnterprise, ProfileConsumer} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("refusal %q must name %q", err, want)
+		}
+	}
+}
+
+func TestLoadPolicy_AcceptsKnownProfiles(t *testing.T) {
+	for _, profile := range []string{"", ProfileEnterprise, ProfileConsumer} {
+		v := NewPCRVerifier()
+		if err := v.LoadPolicy(writeProfilePolicy(t, profile)); err != nil {
+			t.Fatalf("LoadPolicy(profile=%q): %v", profile, err)
+		}
+		if !v.PolicyEnablesSelfServiceReanchorForTenant("") != (profile != ProfileConsumer) {
+			t.Fatalf("profile %q was not carried into the registered policy", profile)
+		}
+	}
+}
+
+// Both roads register through one gate, so a document check cannot cover one
+// of them and miss the other again.
+func TestBothPolicyRoadsShareOneValidationSet(t *testing.T) {
+	badPCR := &PCRPolicy{Name: "bad-index", PCRs: map[int]string{99: strings.Repeat("bb", 32)}}
+	if err := NewPCRVerifier().AddPolicy(badPCR); err == nil {
+		t.Fatal("AddPolicy must refuse an out-of-range PCR index")
+	}
+
+	zeroKernel := &PCRPolicy{
+		Name:         "zero-kernel",
+		PCRs:         map[int]string{7: strings.Repeat("cc", 32)},
+		KernelHashes: []string{strings.Repeat("00", 32)},
+	}
+	if err := NewPCRVerifier().AddPolicy(zeroKernel); err == nil {
+		t.Fatal("AddPolicy must refuse an all-zero kernel pin")
 	}
 }

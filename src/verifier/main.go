@@ -14,7 +14,7 @@
 //   --db PATH          SQLite database for persistent storage (default: disabled)
 //   --pg-dsn DSN       PostgreSQL DSN for shared multi-instance storage
 //                      (or LOTA_PG_DSN); mutually exclusive with --db
-//   --policy FILE      PCR policy file (YAML)
+//   --policy FILE      PCR policy file (YAML); may be repeated, first is active
 //   --policy-pubkey FILE Ed25519 public key for policy signature verification
 //   --max-connections N Max concurrent attestation connections (default: 256;
 //                      -1 disables the cap)
@@ -87,7 +87,7 @@ var (
 	keyFile      = flag.String("key", "", "TLS private key file")
 	aikStorePath = flag.String("aik-store", "/var/lib/lota/aiks", "AIK key store directory")
 	dbPath       = flag.String("db", "", "SQLite database path for persistent storage (empty = file/memory stores)")
-	policyFile   = flag.String("policy", "", "PCR policy file (YAML)")
+	policyFiles  stringSliceFlag
 	policyPubKey = flag.String("policy-pubkey", "", "Ed25519 public key for policy signature verification (PEM)")
 
 	generateCert        = flag.Bool("generate-cert", false, "Generate self-signed certificate")
@@ -172,8 +172,54 @@ func logAIKStore(logger *slog.Logger, cs *store.CertificateStore, p aikStorePara
 		"registered_clients", len(cs.ListClients()))
 }
 
+// loadPolicies registers every --policy document in the order it was given.
+//
+// The first one becomes the active policy, used for clients whose tenant binds
+// none. A reused `name:` would silently replace a loaded document and is refused;
+// a further document that binds no tenant is unreachable and is reported.
+func loadPolicies(logger *slog.Logger, verifier *verify.Verifier, paths []string) error {
+	for i, path := range paths {
+		if err := verifier.LoadPolicy(path); err != nil {
+			logger.Error("failed to load policy", "path", path, "error", err)
+			return err
+		}
+		if len(verifier.ListPolicies()) != i+1 {
+			logger.Error("policy file reuses the name of one already loaded, which would replace it",
+				"path", path,
+				"hint", "give each policy document its own name:")
+			return errors.New("duplicate policy name")
+		}
+		logger.Info("loaded custom policy", "path", path)
+	}
+
+	active := ""
+	if policy, ok := verifier.ActivePolicyConfig(); ok {
+		active = policy.Name
+		logger.Info("active policy", "policy", active,
+			"hint", "clients whose tenant binds no policy of its own verify against this one")
+	}
+
+	bound := make(map[string]bool)
+	for tenant, name := range verifier.TenantBindings() {
+		bound[name] = true
+		logger.Info("tenant bound to policy", "tenant", tenant, "policy", name)
+	}
+
+	for _, name := range verifier.ListPolicies() {
+		if name == active || bound[name] {
+			continue
+		}
+		logger.Warn("policy is loaded but no client can reach it: it is neither the active policy nor bound to a tenant",
+			"policy", name,
+			"hint", "give it a tenant: key, or pass it as the first --policy so it becomes the active one")
+	}
+
+	return nil
+}
+
 func main() {
 	flag.Var(&pgShardDSNs, "pg-shard-dsn", "PostgreSQL shard DSN (or LOTA_PG_SHARD_DSNS as a comma-separated list); may be repeated. Partitions per-client baseline, nonce and session state across the given databases by a stable hash of the key, so the durable write tier scales past one database host. Mutually exclusive with --pg-dsn and --db. Every instance must be given the same shard list in the same order. Enforcement, audit and attestation-log state lives on the first shard.")
+	flag.Var(&policyFiles, "policy", "PCR policy file (YAML); may be repeated. The first one given is the active policy, which every client whose tenant binds no policy of its own is verified against; each further file must bind itself to a tenant with a `tenant:` key, and clients in that tenant are verified against it.")
 	flag.Var(&aikCACerts, "aik-ca-cert", "Trusted attestation-CA root (PEM) the AIK certificate must chain to; may be repeated")
 	flag.Var(&aikCRLs, "aik-crl", "CRL file (PEM or DER) used to revoke compromised AIK certificates; may be repeated. Each CRL must be signed by one of the --aik-ca-cert roots.")
 	flag.Parse()
@@ -537,13 +583,11 @@ func main() {
 		logger.Info("policy signature verification enabled", "pubkey", *policyPubKey)
 	}
 
-	// custom policy if specified
-	if *policyFile != "" {
-		if err := verifier.LoadPolicy(*policyFile); err != nil {
-			logger.Error("failed to load policy", "path", *policyFile, "error", err)
+	// custom policies if specified
+	if len(policyFiles) > 0 {
+		if err := loadPolicies(logger, verifier, policyFiles); err != nil {
 			os.Exit(1)
 		}
-		logger.Info("loaded custom policy", "path", *policyFile)
 	} else if *allowPermissive {
 		if err := verifier.AddPolicy(verify.DefaultPolicy()); err != nil {
 			logger.Error("failed to add permissive default PCR policy", "error", err)
