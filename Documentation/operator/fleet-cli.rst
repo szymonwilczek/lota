@@ -185,6 +185,10 @@ the ban's identity::
        unban <hardware-id> -tenant acme -reason "appeal upheld" \
              -actor alice@ops
 
+Both verbs send the tenant in the request body, which is where the API takes
+it on either one, so an administrator whose key is scoped to a single tenant
+lifts what it imposed.
+
 The listing commands (``revocations``, ``bans``, ``audit``, ``attests``) print
 a ``TENANT`` column, and ``devices show`` and ``stats`` report the tenant. Those listings also accept a ``-tenant`` flag that filters
 the displayed rows to one tenant, in the table and the ``--json`` rendering
@@ -198,7 +202,8 @@ not found.
 ``stats`` from a tenant-scoped key reports ``tenant scoped: true`` and the
 tenant list, and narrows the client, revocation, and ban counts to those
 tenants; the fleet-wide attestation counters, which are not attributable per
-tenant, are omitted.
+tenant, are omitted -- the verifier leaves them out of the response, so
+``--json`` prints an object without those keys.
 
 Tenants are assigned by the attestation CA at enrollment and written into the
 device certificate; see :doc:`production-bringup/ca-enrollment` for the

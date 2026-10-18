@@ -43,16 +43,25 @@ envelope on every endpoint::
 
 Request bodies are limited to 1 MiB, 64 levels of nesting and 32768 JSON
 tokens; a violated limit, an empty body where one is required, or
-trailing data after the JSON value is a **400**. Timestamps are RFC 3339
-UTC. Endpoints backed by an optional subsystem (revocations, bans, the
-audit and attestation logs) answer **503** when that store is not
-configured. Unexpected server failures are **500** with a generic
-message; details go to the verifier log, not the client.
+trailing data after the JSON value is a **400**. A field the endpoint
+does not read is a **400** naming it: a request that carries a field the
+handler ignores did not do what its author wrote, and a caller has to hear
+that. Timestamps are RFC 3339 UTC. Endpoints backed by an optional subsystem
+(revocations, bans, the audit and attestation logs) answer **503** when
+that store is not configured. Unexpected server failures are **500** with
+a generic message; details go to the verifier log, not the client.
 
 Mutation payloads share three fields: ``reason`` (one of ``cheating``,
 ``compromised``, ``hardware_change``, ``admin``), ``actor`` (the
 administrator identity recorded in the audit log; required where noted)
 and ``note`` (free-form justification, optional).
+
+Every record that belongs to a device -- client details, revocations,
+bans, audit entries, attestation records, and the results of the ban and
+unban verbs -- carries a ``tenant``. A deployment that assigns no tenants
+reads ``default`` there on every record, which is the tenant an
+unassigned device belongs to, not a missing value. See
+:doc:`multi-tenancy`.
 
 Pagination
 ----------
@@ -128,6 +137,14 @@ Reader. **200**::
      "uptime_sec": 7200
    }
 
+A tenant-scoped key gets a narrower body: ``registered_clients``,
+``active_revocations`` and ``active_bans`` count the key's tenants only,
+``tenant_scoped`` is ``true`` beside a ``tenants`` list, and the counters
+that cannot be attributed to a tenant -- ``total_attestations``,
+``successful_attestations``, ``failed_attestations``,
+``revoked_attestations``, ``banned_attestations``, ``used_nonces`` and
+``pending_challenges`` -- are absent from the object.
+
 GET /metrics
 ------------
 
@@ -162,6 +179,7 @@ register anything with the verifier. ::
 
    {
      "client_id": "host-0001",
+     "tenant": "default",
      "hardware_id": "ab12...",
      "revoked": false,
      "revocation_reason": "",
@@ -209,6 +227,7 @@ Reader. **200**::
      "revocations": [
        {
          "client_id": "host-0001",
+         "tenant": "default",
          "reason": "cheating",
          "revoked_at": "2026-07-02T10:00:00Z",
          "revoked_by": "alice@ops",
@@ -225,22 +244,31 @@ POST /api/v1/bans
 -----------------
 
 Admin. Body: ``hardware_id`` (64 hex characters, the 32-byte hardware
-identity), ``reason`` and ``actor`` required, ``note`` optional.
-**201**::
+identity), ``reason`` and ``actor`` required, ``tenant`` and ``note``
+optional. ``tenant`` is the scope the ban is imposed in and defaults to
+``default``; it must be within the calling key's tenant set. **201**::
 
-   {"status": "banned", "hardware_id": "ab12...", "reason": "cheating"}
+   {"status": "banned", "hardware_id": "ab12...", "tenant": "default",
+    "reason": "cheating"}
 
-**400** malformed hardware ID, invalid reason or missing actor,
-**409** already banned, **503** bans not configured. The returned
-``hardware_id`` is the canonical lower-case form.
+**400** malformed hardware ID, invalid reason, invalid tenant or missing
+actor, **403** tenant outside the key's set, **409** already banned,
+**503** bans not configured. The returned ``hardware_id`` is the
+canonical lower-case form.
 
 DELETE /api/v1/bans/{hwid}
 --------------------------
 
-Admin. Body: ``reason`` and ``actor`` required, ``note`` optional --
-lifting a ban is attributed on the same terms as imposing one. **200**
-``{"status": "unbanned", "hardware_id": ...}``; **400** malformed
-hardware ID or missing actor or reason, **404** not banned.
+Admin. Body: ``reason`` and ``actor`` required, ``tenant`` and ``note``
+optional -- lifting a ban is attributed on the same terms as imposing
+one, and names the tenant the same way, because a ban is identified by
+``(tenant, hardware_id)``. **200**::
+
+   {"status": "unbanned", "hardware_id": "ab12...", "tenant": "default"}
+
+**400** malformed hardware ID, missing actor or reason, invalid tenant,
+or ``tenant`` passed as a query parameter instead of a body field;
+**403** tenant outside the key's set, **404** not banned in that tenant.
 
 GET /api/v1/bans
 ----------------
@@ -251,6 +279,7 @@ Reader. Query: ``limit`` and ``next_id`` (see Pagination). **200**::
      "bans": [
        {
          "hardware_id": "ab12...",
+         "tenant": "default",
          "reason": "cheating",
          "banned_at": "2026-07-02T10:00:00Z",
          "banned_by": "alice@ops",
@@ -325,6 +354,7 @@ first. **200**::
        {
          "id": 17,
          "timestamp": "2026-07-02T10:00:00Z",
+         "tenant": "default",
          "action": "revoke",
          "target_id": "host-0001",
          "reason": "cheating",
@@ -349,6 +379,7 @@ Reader. Query: ``limit`` (default 100, maximum 10000). **200**::
        {
          "id": 9,
          "timestamp": "2026-07-02T10:00:00Z",
+         "tenant": "default",
          "client_id": "host-0001",
          "hardware_id": "ab12...",
          "result": "success",

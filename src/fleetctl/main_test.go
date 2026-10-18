@@ -544,12 +544,13 @@ func TestAuditTable(t *testing.T) {
 	}
 }
 
-// TestBanUnbanTenantForwarded checks the CLI forwards -tenant into the ban
-// request body and the unban query string.
+// TestBanUnbanTenantForwarded checks the CLI forwards -tenant into the body of
+// both verbs, which is the only way an administrator scoped to one tenant can
+// lift the ban it imposed.
 func TestBanUnbanTenantForwarded(t *testing.T) {
 	hwid := strings.Repeat("ab", 32)
 
-	var banBody []byte
+	var banBody, unbanBody []byte
 	var unbanQuery string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -560,6 +561,7 @@ func TestBanUnbanTenantForwarded(t *testing.T) {
 			_, _ = w.Write([]byte(`{"status":"banned"}`))
 		case r.Method == http.MethodDelete && r.URL.Path == "/api/v1/bans/"+hwid:
 			unbanQuery = r.URL.RawQuery
+			unbanBody, _ = io.ReadAll(r.Body)
 			_, _ = w.Write([]byte(`{"status":"unbanned"}`))
 		default:
 			w.WriteHeader(http.StatusNotFound)
@@ -584,8 +586,14 @@ func TestBanUnbanTenantForwarded(t *testing.T) {
 	if code != exitOK || !strings.Contains(out, "tenant acme") {
 		t.Fatalf("unban: exit = %d, out = %q", code, out)
 	}
-	if unbanQuery != "tenant=acme" {
-		t.Fatalf("unban query = %q, want tenant=acme", unbanQuery)
+	if unbanQuery != "" {
+		t.Fatalf("unban query = %q, want the tenant in the body instead", unbanQuery)
+	}
+	if err := json.Unmarshal(unbanBody, &body); err != nil {
+		t.Fatalf("unban body: %v", err)
+	}
+	if body["tenant"] != "acme" {
+		t.Fatalf("unban body tenant = %v, want acme", body["tenant"])
 	}
 }
 
