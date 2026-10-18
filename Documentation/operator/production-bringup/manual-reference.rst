@@ -14,34 +14,50 @@ enrollment and sealed keys are covered in their own documents
 1. Operator key + signed BPF object
 ===================================
 
+**A packaged host has this gate already.** The agent package installs
+``lota_lsm.bpf.o``, its detached ``.sig`` and the key that signed it at
+``/usr/lib/lota/enforcement.pub``, and an upgrade replaces all three together,
+so the object on disk and the signature over it never disagree. Nothing below
+is needed to start the agent; the rest of this section is the road a fleet
+takes when it wants enforcement signed by its own key instead of the
+packager's.
+
+The signing key is generated and kept on the fleet's signing host -- never on
+the host that runs the agent -- and only the public half travels:
+
 .. code-block:: sh
 
+    # on the signing host, once per fleet
+    lota-agent --gen-signing-key ./enforcement        # enforcement.key + .pub
+    lota-agent --sign-policy ./lota_lsm.bpf.o \
+        --signing-key ./enforcement.key           # writes lota_lsm.bpf.o.sig
+
+    # on each agent host: the public half, the object and the signature
     sudo install -d -m 0700 /etc/lota
-    sudo /usr/bin/lota-agent --gen-signing-key /etc/lota/policy
-    sudo chmod 0600 /etc/lota/policy.key
-    sudo chmod 0644 /etc/lota/policy.pub
-    sudo /usr/bin/lota-agent --sign-policy /usr/lib/lota/lota_lsm.bpf.o \
-        --signing-key /etc/lota/policy.key
+    sudo install -m 0644 enforcement.pub /etc/lota/policy.pub
+    sudo install -m 0644 lota_lsm.bpf.o /usr/lib/lota/lota_lsm.bpf.o
+    sudo install -m 0644 lota_lsm.bpf.o.sig /usr/lib/lota/lota_lsm.bpf.o.sig
 
 A key at ``/etc/lota/policy.pub`` is used without being named: the agent
 prefers it over the key the package shipped, and no package owns that path, so
-it survives every upgrade. ``policy_pubkey`` in ``/etc/lota/lota.conf`` (copy
-:ghsrc:`configs/lota.conf.example` and edit) is only needed to name a key
-somewhere else. The agent reads that file by default; pass ``--config /path``
-if the operator policy lives elsewhere.
+it survives every upgrade -- which also means putting a key there moves the
+host off the packaged trust root, and the object must be re-signed with that
+key after every agent upgrade that replaces it. ``policy_pubkey`` in
+``/etc/lota/lota.conf`` (copy :ghsrc:`configs/lota.conf.example` and edit) is
+only needed to name a key somewhere else. The agent reads that file by default;
+pass ``--config /path`` if the operator policy lives elsewhere.
 
-The ``make sign-bpf SIGNING_KEY=/etc/lota/policy.key`` target wires the sign
-call into the build system for CI / packaging.
+The ``make sign-bpf SIGNING_KEY=/path/to/enforcement.key`` target wires the
+sign call into the build system for CI / packaging.
 
 .. note::
 
-   The agent package ships ``lota_lsm.bpf.o`` **unsigned** on purpose, so each
-   operator signs it with their own key. **Upgrading the package replaces the
-   object and invalidates the previous signature** -- re-run the
-   ``--sign-policy`` step above after every ``lota-agent`` package upgrade, then
-   re-run ``lota-install`` to confirm the operator-trust stage. ``lota-install``
-   only verifies the signature; it never signs on the host (a locally generated
-   key would let local malware re-sign a tampered object).
+   ``lota-install`` only verifies the signature; it never signs on the host,
+   and it generates no key there either -- a signing key on the machine it
+   protects lets local malware re-sign a tampered object, which is the whole
+   reason the fleet key stays off it. The developer bring-up script
+   :ghsrc:`scripts/lota-dev-bringup.sh` does generate one on the host: that is
+   a development convenience and not a production path.
 
 2. Kernel-enforced immutability of the agent binary
 ===================================================
