@@ -103,6 +103,18 @@ of its CA anchor's SubjectPublicKeyInfo, into the template's ``unique`` field.
 Distinct per publisher, reproduced exactly when that publisher re-enrols, and
 absent on a host that answers to nobody, whose key is unchanged.
 
+The AIK metadata record carries the derivation in its ``key_derivation`` byte:
+``PER_PUBLISHER`` for a key derived from a publisher's identity, ``SHARED`` for
+the key of a host with no publisher profile. The daemon reads that byte before
+it uses a profile's key, and a profile holding a shared key is refused by name,
+with the re-enrollment that replaces it. The device pseudonym is derived from
+the key and moves with it.
+
+The record's version takes no part in that decision: every build writes
+version 1. A record at any other version is refused outright -- the build
+cannot know what a version it does not define means -- and the agent reports
+that as a failure to load the AIK metadata.
+
 What that separation does not cover is the evidence. Two publishers who each
 run a verifier receive the same firmware and Secure Boot measurements and the
 same event log, and the log names the disk this host boots from, so comparing
