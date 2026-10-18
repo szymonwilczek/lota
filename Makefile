@@ -542,15 +542,27 @@ examples-clean:
 # Usage:
 #   sudo make sign-bpf SIGNING_KEY=/etc/lota/policy.key
 #
+# Public half defaults to where --gen-signing-key writes it. It is copied into
+# the build directory for both packaging roads; no pubkey, no signature.
 SIGNING_KEY ?= /etc/lota/policy.key
+SIGNING_PUBKEY ?= $(SIGNING_KEY:.key=.pub)
+PKG_ENFORCEMENT_PUB := $(BUILD_DIR)/lota-enforcement.pub
+
 sign-bpf: $(BPF_OBJ) $(AGENT_BIN)
 	@test -r $(SIGNING_KEY) || { \
 		echo "sign-bpf: signing key not readable: $(SIGNING_KEY)" >&2; \
 		echo "Generate one with: sudo $(AGENT_BIN) --gen-signing-key /etc/lota/policy" >&2; \
 		exit 1; \
 	}
+	@test -r $(SIGNING_PUBKEY) || { \
+		echo "sign-bpf: public half not readable: $(SIGNING_PUBKEY)" >&2; \
+		echo "The host verifies the object against it, so it ships beside" >&2; \
+		echo "the signature; pass SIGNING_PUBKEY=<path>." >&2; \
+		exit 1; \
+	}
 	$(AGENT_BIN) --sign-policy $(BPF_OBJ) --signing-key $(SIGNING_KEY)
 	@test -r $(BPF_OBJ).sig
+	$(Q)cp $(SIGNING_PUBKEY) $(PKG_ENFORCEMENT_PUB)
 	@echo "Signed: $(BPF_OBJ).sig"
 
 # Go verifier
@@ -636,9 +648,6 @@ selinux-pp: $(SELINUX_PP)
 # the distribution, or this project for its own releases.
 # Package built without that step installs an object the agent refuses to load,
 # so the machine stops enforcing for reason nobody chose; refuse to build it instead.
-SIGNING_PUBKEY ?= $(SIGNING_KEY:.key=.pub)
-PKG_ENFORCEMENT_PUB := $(BUILD_DIR)/lota-enforcement.pub
-
 packages: all selinux-pp
 	$(Q)test -r $(BPF_OBJ).sig || { \
 		echo "packages: $(BPF_OBJ).sig is missing." >&2; \
@@ -740,17 +749,43 @@ observability-lint:
 # Source RPM (COPR / rpmbuild from source)
 # Archives HEAD into a tarball and builds an SRPM into OUTDIR.
 # COPR drives this through .copr/Makefile; locally run `make srpm`.
-# Spec Version uses ~ for the prerelease, so the project version is normalised the same way.
+# The spec carries @VERSION@ and @CHANGELOG@: both are filled from VERSION here
+# (rpm spells the prerelease ~), so a version bump touches VERSION alone.
+# An entry is added unless the spec already holds one for this version.
 SRPM_VERSION := $(subst -,~,$(PROJECT_VERSION))
 SRPM_TREE := $(BUILD_DIR)/srpmtree
+SRPM_SPEC := $(SRPM_TREE)/SPECS/lota.spec
 OUTDIR ?= $(BUILD_DIR)/srpm
 
-srpm:
+srpm: check-package-manifests
 	$(Q)rm -rf $(SRPM_TREE)
-	$(Q)mkdir -p $(SRPM_TREE)/SOURCES $(OUTDIR)
+	$(Q)mkdir -p $(SRPM_TREE)/SOURCES $(SRPM_TREE)/SPECS $(OUTDIR)
 	$(Q)git archive --format=tar.gz --prefix=lota-$(SRPM_VERSION)/ \
 		-o $(SRPM_TREE)/SOURCES/lota-$(SRPM_VERSION).tar.gz HEAD
-	$(Q)rpmbuild -bs packaging/rpm/lota.spec \
+	$(Q)awk -v ver='$(SRPM_VERSION)' -v src='$(PROJECT_VERSION)' \
+		-v date="$$(LC_ALL=C git log -1 --format=%cd --date=format:'%a %b %d %Y')" ' \
+	NR == FNR { \
+		if ($$1 == "Release:") { rel = $$2; sub(/%.*/, "", rel) } \
+		if (inlog && /^\* / && !who) { \
+			who = $$0; \
+			sub(/^\* [^ ]+ [^ ]+ [^ ]+ [^ ]+ /, "", who); \
+			sub(/ - [^ ]+$$/, "", who); \
+		} \
+		if (inlog && /^\* / && $$NF == ver "-" rel) released = 1; \
+		if (/^%changelog/) inlog = 1; \
+		next; \
+	} \
+	{ gsub(/@VERSION@/, ver) } \
+	$$0 == "@CHANGELOG@" { \
+		if (!released) { \
+			print "* " date " " who " - " ver "-" rel; \
+			print "- Packaged from the tree at " src "."; \
+			print ""; \
+		} \
+		next; \
+	} \
+	{ print }' packaging/rpm/lota.spec packaging/rpm/lota.spec > $(SRPM_SPEC)
+	$(Q)rpmbuild -bs $(SRPM_SPEC) \
 		--define "_topdir $(abspath $(SRPM_TREE))" \
 		--define "_srcrpmdir $(abspath $(OUTDIR))" \
 		--define "_sourcedir $(abspath $(SRPM_TREE)/SOURCES)"
@@ -820,7 +855,7 @@ check-version-tag:
 # Package-manifest parity gate
 # nfpm configs and the RPM spec describe the same packages;
 # host gets whichever one built the package it installed,
-# so they must ship the same files.
+# so they must ship the same files; the spec takes its version from VERSION.
 # See scripts/check-package-manifests.sh
 check-package-manifests:
 	@scripts/check-package-manifests.sh
