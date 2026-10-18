@@ -119,6 +119,9 @@ build a proprietary product on top.
 # make install does not place the SELinux module;
 # install it where lota-install expects it (GPL-2.0-only, like the BPF object)
 install -Dpm 0644 selinux/lota.pp %{buildroot}%{_datadir}/lota/selinux/lota.pp
+# The documented interfaces are callable only from a file the SELinux devel
+# Makefile can see; ship the source so a caller has something to copy.
+install -Dpm 0644 selinux/lota.if %{buildroot}%{_datadir}/lota/selinux/lota.if
 
 %post agent
 # lota-agent.socket sets SocketGroup=lota on the IPC socket, which resolves only
@@ -162,6 +165,7 @@ EOF
 %{_datadir}/lota/ima/lota-ima-policy
 %dir %{_datadir}/lota/selinux
 %{_datadir}/lota/selinux/lota.pp
+%{_datadir}/lota/selinux/lota.if
 %dir %{_datadir}/lota/systemd
 %{_datadir}/lota/systemd/10-xdg-runtime.conf.example
 %dir %attr(0700,root,root) %{_sharedstatedir}/lota/aiks

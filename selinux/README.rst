@@ -103,8 +103,32 @@ Build and Install
    # Install (requires root)
    sudo make install
 
+   # Install and label one endpoint's port while at it
+   sudo make install LOTA_PORT=8573
+
    # Verify installation
    sudo make verify
+
+``make install`` labels no port of its own. A port worth labelling is one this
+fleet's CA or verifier answers on, and the Makefile cannot know which that is:
+``lota-install`` labels the endpoints it is given, and ``LOTA_PORT`` is there
+for labelling one by hand at install time. A port the base policy already
+defines is reported and left alone -- relabelling one takes it from every
+domain on the host, not only from LOTA.
+
+Removing the Policy
+~~~~~~~~~~~~~~~~~~~
+
+.. code:: bash
+
+   sudo make uninstall
+
+``uninstall`` deletes every local port record naming ``lota_port_t`` before it
+removes the module that defines the type -- ``lota-install`` writes one per
+endpoint and an operator adds the rest, and a record naming a type that no
+longer exists comes back into force if the module is ever reinstalled. The
+compiled modules and the interface file that ``install`` placed are removed
+too.
 
 Post-Installation
 ~~~~~~~~~~~~~~~~~
@@ -152,6 +176,10 @@ Boolean                     Default Description
 ``lota_wine_attest``        on      Wine/Proton attestation integration
 ``lota_anticheat_extended`` on      Extended anti-cheat access
 =========================== ======= ======================================
+
+``sudo make verify`` prints the live value of every one of them, and the list
+it walks is read out of the policy sources, so a boolean added to the policy
+is reported without this table and that target drifting apart.
 
 Modify Tunables
 ~~~~~~~~~~~~~~~
@@ -379,8 +407,10 @@ Network attestation blocked
    # Verify port definition
    sudo semanage port -l | grep lota
 
-The policy allows ``lota_agent_t`` to reach ``lota_port_t``, and a loadable
-module cannot carry port contexts, so the type is assigned at bring-up:
+The policy declares ``lota_port_t`` and labels nothing with it: a loadable
+module cannot carry port contexts, because ``portcon`` is base policy. It
+allows ``lota_agent_t`` to reach the type, and every assignment happens at
+bring-up:
 ``lota-install`` labels the CA and verifier ports it was given. An endpoint
 added later has to be labelled too, or the agent is refused at connect and the
 operator sees a connection error against a server that is running:
@@ -418,7 +448,19 @@ for the ones it is given and the message above names for the ones added later.
 Interface Reference
 -------------------
 
-Other SELinux policies can use LOTA interfaces:
+Other SELinux policies can use LOTA interfaces. The interfaces live in
+``lota.if``, and a caller's ``checkmodule`` run resolves them only from
+``/usr/share/selinux/devel/include/contrib/``. Installing from this tree with
+``sudo make install`` puts the file there. A host that installed the packages
+has the source at ``/usr/share/lota/selinux/lota.if`` instead -- the include
+directory belongs to ``selinux-policy-devel``, which a fleet host has no reason
+to carry -- so a machine that builds policy copies it once::
+
+   sudo install -m 0644 /usr/share/lota/selinux/lota.if \
+       /usr/share/selinux/devel/include/contrib/lota.if
+
+Without that copy, a module calling any of the four fails at ``checkmodule``
+with the interface name as an unknown token.
 
 For Gaming Applications
 ~~~~~~~~~~~~~~~~~~~~~~~
