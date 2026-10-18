@@ -82,9 +82,16 @@ void print_usage(const char *prog, const char *default_bpf_path,
 	printf("                    to stdout and exit (fails closed if the "
 	       "boot\n");
 	printf("                    state differs from seal time)\n");
-	printf("  --seal-pcrs MASK  PCR bitmask for --seal (e.g. 0x4001); "
-	       "default\n");
-	printf("                    is PCRs 0-7 plus PCR14\n");
+	printf("  --seal-pcrs MASK  PCR bitmask for --seal; default is 0xFF, "
+	       "the\n");
+	printf("                    platform set, PCRs 0-7. PCR 14 is not in "
+	       "it:\n");
+	printf("                    it is the agent's own boot commitment, so "
+	       "0x40FF\n");
+	printf("                    additionally binds the secret to this "
+	       "agent\n");
+	printf("                    binary and every upgrade then destroys "
+	       "it\n");
 	printf("  --seal-aik-auth   Seal the AIK userAuth to the current boot "
 	       "state\n");
 	printf("                    (adopt at-rest sealing without "

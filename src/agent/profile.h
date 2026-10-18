@@ -231,6 +231,12 @@ const char *profile_aik_auth_state_str(enum profile_aik_auth_state state);
 bool profile_aik_auth_exposed(enum profile_aik_auth_state state);
 
 /*
+ * Whether sealing would take a copy out of the clear: true for PLAINTEXT
+ * and BOTH. False for SEALED (nothing to do) and NONE (a broken profile).
+ */
+bool profile_aik_auth_needs_sealing(enum profile_aik_auth_state state);
+
+/*
  * Consent to answer to a publisher.
  *
  * Minting AIK for publisher gives them stable handle on this machine,
