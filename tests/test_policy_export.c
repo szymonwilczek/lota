@@ -87,6 +87,7 @@ static void build_full_snapshot(struct policy_snapshot *snap)
 	snap->module_sig = true;
 	snap->secureboot = false;
 	snap->lockdown = false;
+	snap->ima_appraisal = false;
 }
 
 static char *emit_to_string(const struct policy_snapshot *snap, size_t *out_len)
@@ -337,6 +338,10 @@ static void test_emit_security_flags(void)
 	}
 	if (!has_yaml_line(yaml, "require_lockdown: false")) {
 		FAIL("require_lockdown should be false");
+		return;
+	}
+	if (!has_yaml_line(yaml, "require_ima_appraisal: false")) {
+		FAIL("require_ima_appraisal should follow the host");
 		return;
 	}
 

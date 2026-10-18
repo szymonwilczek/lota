@@ -21,6 +21,7 @@
 #include <sys/types.h>
 
 #include "install.h"
+#include "../include/lota_ima_policy_scope.h"
 #include "probe.h"
 #include "run.h"
 #include "ui.h"
@@ -542,19 +543,29 @@ struct floor_state {
 	int ima_ok; /* appraisal blocks on an integrity failure */
 	int sig_ok; /* module signature enforcement */
 	int lockdown_ok; /* lockdown integrity/confidentiality */
-	int scope_ok; /* the loaded policy appraises an executable */
+	int scope_ok; /* the agent's appraisal gate is satisfied here */
+	int appraised; /* the loaded policy appraises an executable */
 	int secureboot; /* the kernel decides the appraisal mode itself */
 };
 
 /*
  * The scope half, decided the way the agent's gate decides it: a policy that
- * cannot be read leaves the mode deciding on both sides, and only a policy
- * that is readable and reaches no executable is a host the agent refuses.
+ * cannot be read leaves the mode deciding on both sides, and a policy that
+ * reaches no executable stops the agent only where fs-verity is not holding
+ * its binary -- elsewhere the agent starts and the token carries the state.
  */
-static int booted_ima_scope_ok(void)
+static int booted_ima_appraised(void)
 {
 	return probe_ima_policy_scope(PROBE_IMA_POLICY_PATH, NULL) !=
 	       PROBE_IMA_SCOPE_NONE;
+}
+
+static int booted_ima_scope_ok(int appraised)
+{
+	if (appraised)
+		return 1;
+	return lota_ima_scope_is_advisory(
+		probe_fsverity_state(PATH_AGENT_BIN) == PROBE_VERITY_ENABLED);
 }
 
 static void booted_floor(struct floor_state *st)
@@ -567,7 +578,8 @@ static void booted_floor(struct floor_state *st)
 	st->ima_ok = probe_ima_mode_blocking(st->secureboot, cmdline);
 	st->sig_ok = probe_module_sig_enforced() == 0;
 	st->lockdown_ok = probe_lockdown_restrictive() == 0;
-	st->scope_ok = booted_ima_scope_ok();
+	st->appraised = booted_ima_appraised();
+	st->scope_ok = booted_ima_scope_ok(st->appraised);
 }
 
 static enum stage_state st_cmdline_probe(struct install_ctx *ctx, char *note,
@@ -665,6 +677,8 @@ static enum stage_state st_ima_scope_probe(struct install_ctx *ctx, char *note,
 					     &scope.policy_signed);
 	scope.secureboot = probe_secureboot() == 1;
 	scope.agent_signed = probe_file_ima_signed(PATH_AGENT_BIN) == 1;
+	scope.agent_verity = probe_fsverity_state(PATH_AGENT_BIN) ==
+			     PROBE_VERITY_ENABLED;
 
 	return probe_ima_scope_stage(&scope, note, cap);
 }
@@ -1167,8 +1181,12 @@ int install_self_check(struct install_ctx *ctx)
 			       st.scope_ok;
 
 		ui_kv(&ctx->ui, "Kernel integrity floor",
+		      floor_ok && !st.appraised ?
+			      "Satisfied (the kernel appraises nothing; every "
+			      "token says so)" :
 		      floor_ok	   ? "Satisfied" :
-		      !st.scope_ok ? "NOT satisfied (nothing appraised)" :
+		      !st.scope_ok ? "NOT satisfied (nothing appraised, and no "
+				     "fs-verity on the agent binary)" :
 				     "NOT satisfied");
 		if (!floor_ok)
 			ok = 0;
@@ -1408,8 +1426,16 @@ const struct stage install_stages[] = {
 			"rule reaching an executable appraises nothing, and "
 			"the agent refuses to start on such a host.\n"
 			"This step reads the loaded policy and reports "
-			"whether the scope the agent's gate demands is "
-			"there. It loads no rules: an IMA rule cannot name a "
+			"whether the kernel appraises anything. A host whose "
+			"agent binary carries fs-verity runs without it -- the "
+			"kernel refuses a modified read of the agent and "
+			"PCR 14 commits the running build -- and every token "
+			"it hands out says so, which is what a publisher "
+			"reads. On a filesystem without verity, where the "
+			"agent's only claim is a signed security.ima xattr, "
+			"appraisal is what makes that claim real and the "
+			"agent will not start without it.\n"
+			"It loads no rules: an IMA rule cannot name a "
 			"path, so the rule that appraises the agent appraises "
 			"every executable it matches, and on a Secure Boot "
 			"host that happens in enforce whatever the cmdline "

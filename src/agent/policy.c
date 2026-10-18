@@ -20,6 +20,7 @@
  *   require_module_sig: <bool>
  *   require_secureboot: <bool>
  *   require_lockdown: <bool>
+ *   require_ima_appraisal: <bool>
  *
  * Copyright (C) 2026 Szymon Wilczek
  */
@@ -281,6 +282,8 @@ int policy_emit(const struct policy_snapshot *snap, FILE *out)
 		snap->secureboot ? "true" : "false");
 	fprintf(out, "require_lockdown: %s\n",
 		snap->lockdown ? "true" : "false");
+	fprintf(out, "require_ima_appraisal: %s\n",
+		snap->ima_appraisal ? "true" : "false");
 
 	if (ferror(out))
 		return -EIO;

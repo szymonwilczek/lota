@@ -43,15 +43,34 @@ Host
 
 The host runs a TPM 2.0 device, Linux with BPF LSM support, SELinux enforcing
 mode for the packaged policy, kernel lockdown, module signature enforcement,
-IMA appraisal, fs-verity, and the LOTA agent.
+fs-verity, and the LOTA agent. IMA appraisal of the host's executables is
+reported, not required.
 
-The IMA appraisal requirement pins the kernel's appraisal *mode*
-(``ima_appraise=enforce|fix`` on the command line); the appraisal *content* --
-file signatures and the rule set -- is distribution or operator-supplied (see
-:doc:`../operator/production-bringup/index <../operator/production-bringup/index>`).
+**Why it is reported, not required.** The appraisal *content* -- the
+file signatures and the rule set the kernel checks them against -- is
+distribution or operator-supplied; LOTA ships no xattr-signing pipeline, and an
+IMA rule cannot name a path, so a rule that reaches the agent reaches every
+executable it matches. A stock distribution host carries no IMA signatures, and
+loading rules over it would refuse its own executables at the next boot. On a
+Secure Boot machine the kernel also discards ``ima_appraise=`` and appraises in
+its built-in blocking mode, so the staging road (``fix`` for one boot) does not
+exist there either. A player cannot sign a root filesystem, and a requirement
+nobody on the consumer road can satisfy is a requirement that only stops
+installs.
 
-LOTA ships no xattr-signing pipeline, and its own binaries are integrity-bound through
-fs-verity and the PCR14 boot commitment independent of IMA.
+What binds the agent itself does not depend on IMA: fs-verity makes the kernel
+refuse a modified read of the agent binary, and the PCR 14 boot commitment ties
+the running build to the boot the verifier sees. So where the agent binary
+carries fs-verity, a kernel appraising nothing is an **advisory** state -- the
+agent starts, and ``LOTA_FLAG_KERNEL_APPRAISAL`` is clear in the status word,
+in the TPM-signed token and in the attestation report, where a publisher or an
+operator policy (``require_ima_appraisal``) refuses it if they want it.
+
+Where the agent binary carries **no** fs-verity -- a filesystem without it,
+where the binary's only claim is a signed ``security.ima`` xattr -- appraisal is
+the thing that makes that xattr mean anything, and the agent refuses to start
+without it. That is the one host on which the requirement is load-bearing, and
+there it is kept.
 
 The agent is privileged. It owns TPM interaction, BPF LSM loading, runtime
 measurement, local IPC, D-Bus status, and attestation report construction.
@@ -117,6 +136,16 @@ Verifier
 The verifier validates AIK certificates, TPM quotes, PCR policy, event logs,
 boot commitments, runtime protection digests, token nonces, revocations, and
 ban state.
+
+Kernel security state the agent observes -- module signature enforcement,
+lockdown, Secure Boot and whether the kernel appraises the host's executables
+-- travels in the report's flags, which the TPM quote signs, and each has a
+policy knob. ``require_ima_appraisal`` is the appraisal one, off in every
+template but ``strict``: the signatures it demands come from a distribution or
+an image pipeline, so a fleet of stock hosts turning it on refuses every
+client. Secure Boot is the exception to reading these flags as evidence -- it
+is checked against the firmware-measured event log, because a compromised
+kernel sets its own flag freely.
 
 The default store is SQLite for single-node deployments. A Postgres backend
 (selected with ``--pg-dsn``) holds the baseline, used-nonce, revocation, ban,

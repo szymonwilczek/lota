@@ -1168,18 +1168,25 @@ enum stage_state probe_ima_scope_stage(const struct probe_ima_scope *s,
 
 	/*
 	 * Four sentences at most, because STAGE_NOTE_CAP is the whole budget
-	 * and a refusal that runs past it loses its last clause
+	 * and a report that runs past it loses its last clause
 	 */
 	snprintf(note, cap,
 		 "The loaded IMA policy carries no appraise rule that reaches "
-		 "an executable, so nothing here is appraised and the agent "
-		 "refuses to start. The installer does not widen the scope: an "
-		 "IMA rule cannot name a path, so a rule reaching the agent "
-		 "reaches every executable it matches%s, and this host's %s "
-		 "The scope arrives with the signatures -- IMA-signed "
-		 "distribution packages, or an image pipeline that signs "
-		 "executables and enrols its certificate (production bring-up "
-		 "guide, \"IMA appraisal policy\").%s",
+		 "an executable, so the kernel appraises nothing here%s. The "
+		 "installer does not widen the scope: an IMA rule cannot name "
+		 "a path, so a rule reaching the agent reaches every "
+		 "executable it matches%s, and this host's %s The scope "
+		 "arrives with the signatures -- IMA-signed distribution "
+		 "packages, or an image pipeline that signs executables and "
+		 "enrols its certificate (production bring-up guide, \"IMA "
+		 "appraisal policy\").%s",
+		 s->agent_verity ?
+			 ", which the agent reports: "
+			 "fs-verity holds its own binary and the token says "
+			 "KERNEL_APPRAISAL is clear" :
+			 " -- and the agent refuses to start, because without "
+			 "fs-verity on its binary an unappraised signature is "
+			 "the only thing holding it",
 		 s->secureboot ? ", in enforce, since Secure Boot makes the "
 				 "kernel discard ima_appraise=" :
 				 "",
@@ -1193,7 +1200,8 @@ enum stage_state probe_ima_scope_stage(const struct probe_ima_scope *s,
 			 "func=POLICY_CHECK appraise_type=imasig), so any rule "
 			 "set has to be signed by a key on the .ima keyring." :
 			 "");
-	return STAGE_BLOCKED;
+	return lota_ima_scope_is_advisory(s->agent_verity) ? STAGE_DONE :
+							     STAGE_BLOCKED;
 }
 
 /*

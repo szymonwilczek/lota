@@ -62,6 +62,9 @@ struct probe_ima_scope {
 	/* the agent binary carries a signature the kernel can appraise,
 	 * which is the evidence that this host has a signing route at all */
 	int agent_signed;
+	/* fs-verity holds the agent binary;
+	 * decides if missing scope stops the install */
+	int agent_verity;
 	/* the probe ran privileged, which decides whether an unreadable policy
 	 * is a kernel that publishes none or a caller that may not look */
 	int is_root;
@@ -76,12 +79,15 @@ struct probe_ima_scope {
  * deciding on both sides, so the installer never blocks a host the agent would
  * have started on.
  *
- * Where the scope is missing the stage stops and says so. Every rule that
- * reaches an executable appraises every executable the rule matches, appraisal
- * on a Secure Boot host runs in enforce whatever the cmdline asked for,
- * and a host whose files carry no signature would refuse them all at the next
- * boot. What is missing is a signing route, and that is the distribution's
- * or the operator's to supply.
+ * Where the scope is missing the stage reports it; it does not widen it. Every
+ * rule that reaches an executable appraises every executable the rule matches,
+ * appraisal on a Secure Boot host runs in enforce whatever the cmdline asked
+ * for, and a host whose files carry no signature would refuse them all at the
+ * next boot. What is missing is a signing route, and that is the
+ * distribution's or the operator's to supply.
+ *
+ * Whether that stops the install is lota_ima_scope_is_advisory(), the rule
+ * the agent starts on.
  */
 enum stage_state probe_ima_scope_stage(const struct probe_ima_scope *s,
 				       char *note, size_t cap);

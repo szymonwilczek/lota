@@ -717,8 +717,17 @@ static int agent_self_immutability_enforced(void)
 	return ret;
 }
 
+int bpf_loader_kernel_appraises_exec(void)
+{
+	return bpf_loader_ima_appraisal_active(
+		IMA_CMDLINE_PATH, IMA_POLICY_PATH,
+		bpf_loader_secure_boot_enabled() == 0);
+}
+
 int bpf_loader_verify_kernel_runtime_hardening(bool allow_mutable_rootfs)
 {
+	/* read first: verity decides whether the appraisal gate is advisory */
+	int verity = agent_self_fsverity_enabled();
 	int ret;
 
 	ret = bpf_loader_kernel_lockdown_restrictive(LOTA_KERNEL_LOCKDOWN_PATH);
@@ -738,13 +747,31 @@ int bpf_loader_verify_kernel_runtime_hardening(bool allow_mutable_rootfs)
 		return ret;
 	}
 
-	ret = bpf_loader_ima_appraisal_active(
-		IMA_CMDLINE_PATH, IMA_POLICY_PATH,
-		bpf_loader_secure_boot_enabled() == 0);
-	if (ret == -ENOENT) {
+	ret = bpf_loader_kernel_appraises_exec();
+	if (ret < 0 &&
+	    (lota_ima_scope_is_advisory(verity == 0) || allow_mutable_rootfs)) {
+		lota_warn(
+			"The kernel appraises no executable on this host "
+			"(%s), so nothing but LOTA's own bindings covers what "
+			"this machine runs: the agent binary is held by "
+			"fs-verity and the PCR 14 boot commitment, and every "
+			"token says KERNEL_APPRAISAL is clear. IMA-signed "
+			"distribution packages, or an image pipeline that "
+			"signs the executables and enrols its certificate, "
+			"are what set it",
+			ret == -ENOENT ? "the loaded policy carries no "
+					 "appraise rule that reaches an exec" :
+					 "IMA appraisal is not in a blocking "
+					 "mode");
+		ret = 0;
+	} else if (ret == -ENOENT) {
 		lota_err("IMA appraisal is in a blocking mode but %s carries "
 			 "no appraise rule that reaches an executable, so no "
-			 "executable on this host is appraised. The scope "
+			 "executable on this host is appraised -- and this "
+			 "agent has no fs-verity of its own, so a signed "
+			 "security.ima xattr nothing appraises is all that "
+			 "stands between its binary and an offline swap. The "
+			 "scope "
 			 "comes with the signatures the rules verify: "
 			 "IMA-signed distribution packages with the "
 			 "distribution's certificate on the .ima keyring, or "
@@ -764,7 +791,9 @@ int bpf_loader_verify_kernel_runtime_hardening(bool allow_mutable_rootfs)
 			 "(ima_appraise=enforce or fix required on the kernel "
 			 "cmdline; log and the default off do not block on "
 			 "integrity failures). This host booted without Secure "
-			 "Boot, where the parameter is the whole answer");
+			 "Boot, where the parameter is the whole answer, and "
+			 "its agent binary carries no fs-verity, so appraisal "
+			 "is the only thing that could bind it");
 		return ret;
 	}
 

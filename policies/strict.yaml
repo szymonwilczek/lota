@@ -56,5 +56,8 @@ require_enforce: true
 require_module_sig: true
 require_secureboot: true # event-log enforced (firmware-measured SecureBoot variable)
 require_lockdown: true
+# needs IMA-signed executables on the host, from distribution packages
+# or the operator's image pipeline; a stock host cannot satisfy it
+require_ima_appraisal: true
 require_cmdline_policy: true # event-log enforced kernel cmdline denylist (PCR 8)
 cmdline_deny: []

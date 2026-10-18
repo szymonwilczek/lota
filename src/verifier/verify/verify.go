@@ -892,6 +892,9 @@ func (v *Verifier) VerifyReport(challengeID string, reportData []byte) (_ *types
 	if report.Header.Flags&types.FlagSecureBoot != 0 {
 		secFlags = append(secFlags, "SECUREBOOT")
 	}
+	if report.Header.Flags&types.FlagIMAAppraisal != 0 {
+		secFlags = append(secFlags, "IMA_APPRAISAL")
+	}
 	if len(secFlags) > 0 {
 		clog.Info("security features detected", "flags", secFlags)
 	} else {

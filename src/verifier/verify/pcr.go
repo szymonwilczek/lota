@@ -81,6 +81,13 @@ type PCRPolicy struct {
 	// if true, fails if kernel lockdown not enabled
 	RequireLockdown bool `yaml:"require_lockdown"`
 
+	// if true, fails when the host's kernel appraises no executable.
+	// Off by default: appraisal content is distribution or operator supplied,
+	// so a stock host cannot have it, and the agent reports the state.
+	// A fleet whose image pipeline signs its executables turns this on
+	// and the flag becomes a gate.
+	RequireIMAAppraisal bool `yaml:"require_ima_appraisal"`
+
 	// if true, fails when the event-log-measured kernel command line
 	// carries a denylisted parameter (builtin denylist + cmdline_deny).
 	// GRUB-only in v1: hosts with no PCR 8 cmdline measurement and a
@@ -196,7 +203,8 @@ func ValidatePolicy(policy *PCRPolicy) []string {
 
 	hasAnyRequirement := policy.RequireIOMMU || policy.RequireEnforce ||
 		policy.RequireModuleSig || policy.RequireSecureBoot ||
-		policy.RequireLockdown || policy.RequireCmdlinePolicy
+		policy.RequireLockdown || policy.RequireCmdlinePolicy ||
+		policy.RequireIMAAppraisal
 	if !hasAnyRequirement && len(policy.PCRs) == 0 {
 		warnings = append(warnings, fmt.Sprintf(
 			"policy '%s': no security requirements enabled -> effectively permissive",
@@ -615,6 +623,13 @@ func (v *PCRVerifier) verifyAgainstPolicy(report *types.AttestationReport, polic
 		}
 	}
 
+	// check that the kernel appraises the host's executables
+	if policy.RequireIMAAppraisal {
+		if report.Header.Flags&types.FlagIMAAppraisal == 0 {
+			return errors.New("kernel appraises no executable on this host (IMA appraisal scope absent)")
+		}
+	}
+
 	return nil
 }
 
@@ -700,14 +715,15 @@ func DefaultPolicy() *PCRPolicy {
 		Description: "Built-in baseline policy - enforces security requirements without specific PCR values",
 		// PCR values intentionally empty - use TOFU for PCR14!
 		// Site-specific PCR0/PCR7 values should be defined in custom YAML policies
-		PCRs:              map[int]string{},
-		KernelHashes:      []string{}, // defined in site-specific policy
-		AgentHashes:       []string{}, // defined in site-specific policy
-		RequireIOMMU:      true,       // baseline: DMA remapping should be enabled
-		RequireEnforce:    true,       // LSM must be in enforce mode
-		RequireModuleSig:  true,       // baseline: module signature enforcement should be enabled
-		RequireSecureBoot: false,      // optional hardware feature
-		RequireLockdown:   false,      // optional kernel feature
+		PCRs:                map[int]string{},
+		KernelHashes:        []string{}, // defined in site-specific policy
+		AgentHashes:         []string{}, // defined in site-specific policy
+		RequireIOMMU:        true,       // baseline: DMA remapping should be enabled
+		RequireEnforce:      true,       // LSM must be in enforce mode
+		RequireModuleSig:    true,       // baseline: module signature enforcement should be enabled
+		RequireSecureBoot:   false,      // optional hardware feature
+		RequireLockdown:     false,      // optional kernel feature
+		RequireIMAAppraisal: false,      // stock hosts carry no IMA signatures
 	}
 }
 
@@ -726,6 +742,7 @@ func StrictPolicy() *PCRPolicy {
 		RequireSecureBoot:    true,
 		RequireLockdown:      true,
 		RequireCmdlinePolicy: true,
+		RequireIMAAppraisal:  true,
 	}
 }
 
