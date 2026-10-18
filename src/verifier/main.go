@@ -359,11 +359,11 @@ func main() {
 			}
 			shardIDs[i] = id
 		}
-		if err := store.AssertShardSet(context.Background(), dbs[0], shardIDs); err != nil {
+		if err := store.AssertShardSet(context.Background(), dbs, shardIDs); err != nil {
 			logger.Error("shard set check failed", "error", err,
 				"hint", "give every instance the same databases in the same order; "+
 					"to change the set deliberately, migrate or re-enrol the fleet and "+
-					"clear the pin with DELETE FROM shard_set on the control database")
+					"clear the pin with DELETE FROM shard_set on every shard")
 			closeShards()
 			os.Exit(1)
 		}

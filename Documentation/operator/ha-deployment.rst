@@ -127,9 +127,12 @@ comma-separated list), mutually exclusive with ``--pg-dsn``::
      --pg-shard-dsn "postgres://…@pg-shard-1/lota?sslmode=verify-full" \
      --pg-shard-dsn "postgres://…@pg-shard-2/lota?sslmode=verify-full"
 
-Each per-client baseline and nonce is routed to one shard by a stable,
-process-independent hash of its key, so a given client's writes
-always land on the same shard and every instance agrees on that mapping.
+Each per-client baseline and used-nonce record is routed to one shard by a
+stable, process-independent hash of **the client it belongs to**, so a given
+client's writes always land on the same shard and every instance agrees on
+that mapping. Routing on the client is what makes a shard a failure domain:
+a client's baseline and its replay history live together, so losing a shard
+costs that shard's clients and leaves the rest attesting.
 Because independent databases commit in parallel, aggregate durable-write
 throughput scales with the number of shards **when each shard has
 independent storage** (separate database hosts or volumes); shards packed
@@ -140,11 +143,14 @@ Rules for a sharded deployment:
 * **Give every instance the same shard list in the same order.** The shard
   index is positional; a divergent list would route the same client to
   different databases on different instances and break replay protection. The verifier enforces this: each shard
-  database carries its own identity and the control database pins the
+  database carries its own identity and **every shard** pins the
   fingerprint of the ordered list, so an instance whose list does not
   reproduce it refuses to start instead of serving a routing its peers
-  disagree with. Listing the same database twice is refused for the same
-  reason.
+  disagree with. The pin is read from every shard and all of them must
+  agree, which is what makes a reordering visible: the pin cannot live only
+  in whichever database is listed first, because that is the database a
+  reordering moves. A shard already pinned to another set stops the run.
+  Listing the same database twice is refused for the same reason.
 * **The first shard is the control database.** Fleet-global, read-mostly
   state -- revocations, hardware bans, the audit trail and the attestation
   decision log -- lives on shard 0, not on the per-report path.
@@ -154,7 +160,13 @@ Rules for a sharded deployment:
 * **A shard is a failure domain.** Losing one shard fails closed only for the
   clients it owns (their next attestation errors and retries); the other
   shards keep serving. Run each shard with its own HA (primary/replica) as
-  you would the single database.
+  you would the single database. A challenge can still be issued while a
+  shard is down -- the used-nonce history is consulted when the client
+  presents itself, which is the first moment its shard is known -- so the
+  refusal an affected client sees names the round, not the challenge. The
+  round is refused: a replay history that cannot be read is not the same
+  as one that holds nothing, and attesting on the local pending map alone
+  would drop the cross-instance guarantee for as long as the shard is away.
 * **Fix the shard count before you enrol the fleet.** The index is
   ``FNV-1a(key) mod N``, so changing ``N`` re-routes nearly every key.
   After adding or removing a shard, a client's baseline and its used-nonce
@@ -168,7 +180,7 @@ Rules for a sharded deployment:
   the fleet -- not as a rolling capacity step. Size the shard count for the
   fleet you expect, not the one you have. The pinned shard set makes this
   explicit: a changed list is refused at startup until you clear the pin
-  with ``DELETE FROM shard_set;`` on the control database, which is the
+  with ``DELETE FROM shard_set;`` on **every** shard, which is the
   point at which you confirm the migration is done. The same pin is
   recorded for a single ``--pg-dsn`` database, so switching an existing
   deployment to a sharded list is caught rather than silently re-routing

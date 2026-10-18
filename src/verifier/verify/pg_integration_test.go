@@ -138,7 +138,7 @@ func TestPostgresUsedNonce(t *testing.T) {
 		t.Fatalf("truncate: %v", err)
 	}
 	b := NewPostgresUsedNonceBackend(db)
-	if b.Contains("n1") {
+	if usedNonce(t, b, "n1") {
 		t.Fatal("nonce should be absent")
 	}
 	if err := b.Record("n1", time.Now()); err != nil {
@@ -147,7 +147,7 @@ func TestPostgresUsedNonce(t *testing.T) {
 	if err := b.Record("n1", time.Now()); err != nil {
 		t.Fatalf("Record idempotent: %v", err)
 	}
-	if !b.Contains("n1") {
+	if !usedNonce(t, b, "n1") {
 		t.Fatal("nonce should be present")
 	}
 	if b.Count() != 1 {
@@ -155,10 +155,10 @@ func TestPostgresUsedNonce(t *testing.T) {
 	}
 	b.Record("old", time.Now().Add(-2*time.Hour))
 	b.Cleanup(time.Now().Add(-1 * time.Hour))
-	if b.Contains("old") {
+	if usedNonce(t, b, "old") {
 		t.Fatal("stale nonce should be cleaned up")
 	}
-	if !b.Contains("n1") {
+	if !usedNonce(t, b, "n1") {
 		t.Fatal("live nonce should survive cleanup")
 	}
 }

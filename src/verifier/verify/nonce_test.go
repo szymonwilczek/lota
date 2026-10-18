@@ -12,6 +12,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -610,11 +611,11 @@ type usedNonceBackendFirstCollision struct {
 	calls int
 }
 
-func (b *usedNonceBackendFirstCollision) Contains(nonceKey string) bool {
+func (b *usedNonceBackendFirstCollision) Contains(nonceKey string) (bool, error) {
 	b.calls++
 	// force collisions for the full first generation attempt budget,
 	// then allow success on subsequent GenerateChallenge calls
-	return b.calls <= maxNonceGenerationAttempts
+	return b.calls <= maxNonceGenerationAttempts, nil
 }
 
 func (b *usedNonceBackendFirstCollision) Record(nonceKey string, usedAt time.Time) error {
@@ -866,7 +867,7 @@ type blockingUsedBackend struct {
 	once     sync.Once
 }
 
-func (b *blockingUsedBackend) Contains(key string) bool { return b.inner.Contains(key) }
+func (b *blockingUsedBackend) Contains(key string) (bool, error) { return b.inner.Contains(key) }
 
 func (b *blockingUsedBackend) Record(key string, at time.Time) error {
 	if key == b.blockKey {
@@ -950,7 +951,7 @@ type blockingCountBackend struct {
 	release chan struct{}
 }
 
-func (b *blockingCountBackend) Contains(key string) bool { return b.inner.Contains(key) }
+func (b *blockingCountBackend) Contains(key string) (bool, error) { return b.inner.Contains(key) }
 
 func (b *blockingCountBackend) Record(key string, at time.Time) error {
 	return b.inner.Record(key, at)
@@ -1002,4 +1003,64 @@ func TestNonceStore_UsedCountDoesNotBlockChallenges(t *testing.T) {
 
 	close(backend.release)
 	<-countDone
+}
+
+// A used-nonce backend that cannot be reached must stop the round, not be read
+// as "this nonce was never used". Folding a connection error into false answers
+// fresh for every nonce during an outage, which suspends the cross-instance
+// replay guarantee exactly when instances are least likely to agree -- and says
+// nothing while it does.
+type unreachableUsedBackend struct {
+	inner UsedNonceBackend
+	down  bool
+}
+
+func (b *unreachableUsedBackend) Record(key string, t time.Time) error {
+	if b.down {
+		return errors.New("database unreachable")
+	}
+	return b.inner.Record(key, t)
+}
+
+func (b *unreachableUsedBackend) Contains(key string) (bool, error) {
+	if b.down {
+		return false, errors.New("database unreachable")
+	}
+	return b.inner.Contains(key)
+}
+
+func (b *unreachableUsedBackend) Count() int          { return b.inner.Count() }
+func (b *unreachableUsedBackend) Cleanup(o time.Time) { b.inner.Cleanup(o) }
+
+func TestNonceStoreRefusesWhenUsedHistoryIsUnreachable(t *testing.T) {
+	backend := &unreachableUsedBackend{inner: newMemoryUsedNonceBackend(128)}
+	cfg := DefaultNonceStoreConfig()
+	cfg.Lifetime = time.Minute
+	cfg.UsedBackend = backend
+	store := NewNonceStoreFromConfig(cfg)
+	defer store.Close()
+
+	ch, err := store.GenerateChallenge("binding", 0x00004003)
+	if err != nil {
+		t.Fatalf("GenerateChallenge: %v", err)
+	}
+
+	// the history goes away between the challenge and the report
+	backend.down = true
+
+	report := &types.AttestationReport{}
+	copy(report.TPM.Nonce[:], ch.Nonce[:])
+	err = store.VerifyNonce(report, "binding", "client-1")
+	if err == nil {
+		t.Fatal("a round was admitted while the used-nonce history was unreachable")
+	}
+	if !strings.Contains(err.Error(), "unavailable") {
+		t.Errorf("error = %v, want it to name the unreachable history", err)
+	}
+
+	// and a challenge cannot be issued against a history nobody can read
+	backend.down = true
+	if _, err := store.GenerateChallenge("binding-2", 0x00004003); err == nil {
+		t.Error("a challenge was issued while the used-nonce history was unreachable")
+	}
 }

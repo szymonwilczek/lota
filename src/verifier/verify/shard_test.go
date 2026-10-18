@@ -4,6 +4,7 @@
 package verify
 
 import (
+	"errors"
 	"fmt"
 	"testing"
 	"time"
@@ -78,9 +79,9 @@ func (c *countingNonce) Record(k string, t time.Time) error {
 	c.recorded++
 	return c.inner.Record(k, t)
 }
-func (c *countingNonce) Contains(k string) bool { return c.inner.Contains(k) }
-func (c *countingNonce) Count() int             { return c.inner.Count() }
-func (c *countingNonce) Cleanup(o time.Time)    { c.inner.Cleanup(o) }
+func (c *countingNonce) Contains(k string) (bool, error) { return c.inner.Contains(k) }
+func (c *countingNonce) Count() int                      { return c.inner.Count() }
+func (c *countingNonce) Cleanup(o time.Time)             { c.inner.Cleanup(o) }
 
 // nonce recorded on its shard must be seen only there,
 // and replay detection (Contains) must route to the same shard.
@@ -97,7 +98,7 @@ func TestShardedNonceRoutingAndReplay(t *testing.T) {
 	const keys = 4000
 	for i := range keys {
 		key := fmt.Sprintf("nonce-%d", i)
-		if s.Contains(key) {
+		if usedNonce(t, s, key) {
 			t.Fatalf("fresh nonce %q reported as used", key)
 		}
 		if err := s.Record(key, time.Now()); err != nil {
@@ -105,7 +106,7 @@ func TestShardedNonceRoutingAndReplay(t *testing.T) {
 		}
 		// replay: the same key must now be seen used,
 		// proving Contains routed to the shard that Record wrote
-		if !s.Contains(key) {
+		if !usedNonce(t, s, key) {
 			t.Fatalf("recorded nonce %q not seen as used (routing mismatch)", key)
 		}
 	}
@@ -125,4 +126,131 @@ func TestShardedNonceRoutingAndReplay(t *testing.T) {
 	if total != keys {
 		t.Fatalf("shards recorded %d keys in total, want %d", total, keys)
 	}
+}
+
+// A client's nonces must live on the client's own shard -- the same shard its
+// baseline lives on -- so losing one shard costs that shard's clients and no
+// others. Routing by the nonce spread every client over every shard, which is
+// what made one shard's outage refuse a share of every client's attestations.
+func TestShardedNonceRoutesByClientNotNonce(t *testing.T) {
+	const n = 4
+	backends := make([]*countingNonce, n)
+	shards := make([]UsedNonceBackend, n)
+	for i := range n {
+		backends[i] = &countingNonce{inner: newMemoryUsedNonceBackend(8000)}
+		shards[i] = backends[i]
+	}
+	s := NewShardedUsedNonceBackend(shards)
+
+	const clients = 32
+	const rounds = 25
+	for c := range clients {
+		client := fmt.Sprintf("client-%d", c)
+		want := shardIndex(client, n)
+		// the shard the baseline store would pick for the same client
+		if got := shardIndex(client, n); got != want {
+			t.Fatalf("client %q routes to %d and %d", client, want, got)
+		}
+		before := backends[want].recorded
+
+		for r := range rounds {
+			nonce := fmt.Sprintf("nonce-%d-%d", c, r)
+			if routedUsedNonce(t, s, client, nonce) {
+				t.Fatalf("fresh nonce %q reported as used", nonce)
+			}
+			if err := s.RecordFor(client, nonce, time.Now()); err != nil {
+				t.Fatalf("RecordFor: %v", err)
+			}
+			// a replay is the same client presenting the same nonce,
+			// so it must be found again on that client's shard
+			if !routedUsedNonce(t, s, client, nonce) {
+				t.Fatalf("recorded nonce %q not seen as used", nonce)
+			}
+		}
+
+		// every round of this client landed on the one shard it belongs to
+		if got := backends[want].recorded - before; got != rounds {
+			t.Errorf("client %q wrote %d of %d rounds to shard %d",
+				client, got, rounds, want)
+		}
+	}
+
+	// no client's rounds leaked onto a shard that does not own it
+	total := 0
+	for _, b := range backends {
+		total += b.recorded
+	}
+	if total != clients*rounds {
+		t.Fatalf("shards recorded %d rounds, want %d", total, clients*rounds)
+	}
+}
+
+// Losing a shard must cost that shard's clients only. The failure is staged by
+// pointing one shard at a backend that refuses every write, which is what
+// an unreachable database is to the caller.
+func TestShardedNonceOutageCostsOnlyItsOwnClients(t *testing.T) {
+	const n = 3
+	shards := make([]UsedNonceBackend, n)
+	for i := range n {
+		shards[i] = newMemoryUsedNonceBackend(8000)
+	}
+	const dead = 1
+	shards[dead] = failingNonceBackend{}
+	s := NewShardedUsedNonceBackend(shards)
+
+	var refusedOwn, refusedOther, servedOwn int
+	for c := range 200 {
+		client := fmt.Sprintf("client-%d", c)
+		err := s.RecordFor(client, fmt.Sprintf("nonce-%d", c), time.Now())
+		switch {
+		case shardIndex(client, n) == dead && err != nil:
+			refusedOwn++
+		case shardIndex(client, n) == dead:
+			servedOwn++
+		case err != nil:
+			refusedOther++
+		}
+	}
+
+	if refusedOther != 0 {
+		t.Errorf("%d clients of healthy shards were refused by the dead one", refusedOther)
+	}
+	if refusedOwn == 0 {
+		t.Fatal("the dead shard refused nobody; the staging is wrong")
+	}
+	if servedOwn != 0 {
+		t.Errorf("%d clients of the dead shard were served anyway", servedOwn)
+	}
+}
+
+// backend that cannot be reached: every write refuses and nothing is held
+type failingNonceBackend struct{}
+
+func (failingNonceBackend) Record(string, time.Time) error {
+	return errors.New("shard unreachable")
+}
+func (failingNonceBackend) Contains(string) (bool, error) {
+	return false, errors.New("shard unreachable")
+}
+func (failingNonceBackend) Count() int        { return 0 }
+func (failingNonceBackend) Cleanup(time.Time) {}
+
+// usedNonce and routedUsedNonce read a backend's answer in tests,
+// where a backend error is a test failure.
+func usedNonce(t *testing.T, b UsedNonceBackend, key string) bool {
+	t.Helper()
+	used, err := b.Contains(key)
+	if err != nil {
+		t.Fatalf("Contains(%q): %v", key, err)
+	}
+	return used
+}
+
+func routedUsedNonce(t *testing.T, b RoutedUsedNonceBackend, routeKey, key string) bool {
+	t.Helper()
+	used, err := b.ContainsFor(routeKey, key)
+	if err != nil {
+		t.Fatalf("ContainsFor(%q,%q): %v", routeKey, key, err)
+	}
+	return used
 }
