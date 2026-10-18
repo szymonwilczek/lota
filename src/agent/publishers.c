@@ -10,6 +10,7 @@
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <sys/types.h>
 #include <unistd.h>
@@ -76,6 +77,7 @@ int publishers_list(const char *base_dir, struct publisher_entry *out,
 		    size_t max, size_t *count)
 {
 	struct dirent *ent;
+	size_t seen = 0;
 	size_t n = 0;
 	DIR *dir;
 
@@ -92,15 +94,66 @@ int publishers_list(const char *base_dir, struct publisher_entry *out,
 		return -errno;
 	}
 
-	while ((ent = readdir(dir)) != NULL && n < max) {
+	/*
+	 * Count every profile, store at most @max.
+	 * *count is the total either way, so a truncated walk is -ENOBUFS,
+	 * never a silent prefix.
+	 */
+	while ((ent = readdir(dir)) != NULL) {
 		if (!name_is_identity(ent->d_name))
 			continue;
-		read_entry(base_dir, ent->d_name, &out[n]);
-		n++;
+		seen++;
+		if (n < max) {
+			read_entry(base_dir, ent->d_name, &out[n]);
+			n++;
+		}
 	}
 	closedir(dir);
 
-	*count = n;
+	*count = seen;
+	return seen > n ? -ENOBUFS : 0;
+}
+
+int publishers_list_alloc(const char *base_dir, struct publisher_entry **out,
+			  size_t *count)
+{
+	struct publisher_entry probe;
+	struct publisher_entry *list;
+	size_t total = 0;
+	int ret;
+
+	if (!base_dir || !out || !count)
+		return -EINVAL;
+
+	*out = NULL;
+	*count = 0;
+
+	/*
+	 * One entry is enough to learn how many there are:
+	 * a bounded listing reports the total whether or not it fitted.
+	 */
+	ret = publishers_list(base_dir, &probe, 1, &total);
+	if (ret < 0 && ret != -ENOBUFS)
+		return ret;
+	if (total == 0)
+		return 0;
+
+	list = calloc(total, sizeof(*list));
+	if (!list)
+		return -ENOMEM;
+
+	/*
+	 * A profile created since the count makes this -ENOBUFS;
+	 * fail rather than return a short list.
+	 */
+	ret = publishers_list(base_dir, list, total, count);
+	if (ret < 0) {
+		free(list);
+		*count = 0;
+		return ret;
+	}
+
+	*out = list;
 	return 0;
 }
 

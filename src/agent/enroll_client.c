@@ -413,54 +413,73 @@ static void release_unfilled_handle(struct tpm_context *tpm,
 }
 
 /*
- * Say that the TPM is full, in the terms the player can act in.
+ * Which limit an enrollment ran into.
  *
- * The machine is not broken and the limit is not LOTA's to raise:
- * every publisher's attestation key takes one persistent slot, a firmware TPM
- * has few of them, and other software may hold some.
- * Counting them is what turns "your TPM has no room" into a number and a way out,
- * so the numbers come from the TPM and the profile inventory.
- * Neither is essential to the message, so a TPM that will not answer for its
- * capacity still produces the sentence and the two verbs.
+ * Both are -ENOSPC, but the operator looks in different places:
+ * the TPM is shared with other software, the build's handle range may run
+ * out first.
  */
-static void report_no_room_for_a_key(struct tpm_context *tpm)
+enum no_room_reason {
+	NO_ROOM_IN_THE_TPM, /* no persistent object left, for anyone */
+	NO_ROOM_IN_THE_BUILD, /* every publisher handle is claimed */
+};
+
+/*
+ * Report that no slot is left for another attestation key, and how to free
+ * one. Counts come from the TPM and the profile inventory; a count that cannot
+ * be read is left out, not the message.
+ */
+static void report_no_room_for_a_key(struct tpm_context *tpm,
+				     enum no_room_reason why)
 {
-	struct publisher_entry entries[LOTA_PROFILE_MAX_AIK_HANDLES];
+	struct publisher_entry *entries = NULL;
 	uint32_t used = 0;
 	uint32_t total = 0;
 	size_t count = 0;
 	size_t held = 0;
 
-	fprintf(stderr, "This TPM has no room for another attestation key.\n");
+	if (publishers_list_alloc(LOTA_PROFILE_BASE_DIR, &entries, &count) == 0)
+		held = publishers_keys_held(entries, count);
+	free(entries);
+
+	if (why == NO_ROOM_IN_THE_BUILD)
+		fprintf(stderr,
+			"There is no room for another publisher on this "
+			"machine: all %d of the attestation-key handles this "
+			"build reserves are claimed.\n",
+			LOTA_PROFILE_MAX_AIK_HANDLES);
+	else
+		fprintf(stderr,
+			"This TPM has no room for another attestation key.\n");
 
 	if (tpm_persistent_slots(tpm, &used, &total) == 0) {
 		if (used >= total)
 			fprintf(stderr,
-				"It holds %u persistent objects, which is "
+				"The TPM holds %u persistent objects, which is "
 				"every one it has room for.\n",
 				used);
 		else
 			fprintf(stderr,
-				"It holds %u persistent object%s and has room "
-				"for about %u.\n",
+				"The TPM holds %u persistent object%s and has "
+				"room for about %u.\n",
 				used, used == 1 ? "" : "s", total);
 	}
 
-	if (publishers_list(LOTA_PROFILE_BASE_DIR, entries,
-			    sizeof(entries) / sizeof(entries[0]), &count) == 0)
-		held = publishers_keys_held(entries, count);
-
+	/*
+	 * From the profile inventory, not the TPM: a reserved handle outlives
+	 * its object across a TPM clear, so this need not be a share of used.
+	 */
 	if (held == 1)
 		fprintf(stderr,
-			"One of them is an attestation key this machine put "
-			"there. Taking that publisher back frees its slot:\n"
+			"This machine holds one attestation key of its own. "
+			"Taking that publisher back frees its slot:\n"
 			"  lota-agent --list-publishers\n"
 			"  lota-agent --forget-publisher <id>\n");
 	else if (held > 1)
 		fprintf(stderr,
-			"%zu of them are attestation keys this machine put "
-			"there, one for each publisher it answers to. Taking "
-			"one back frees its slot:\n"
+			"This machine holds %zu attestation keys of its own, "
+			"one for each publisher it answers to. Taking one back "
+			"frees its slot:\n"
 			"  lota-agent --list-publishers\n"
 			"  lota-agent --forget-publisher <id>\n",
 			held);
@@ -514,12 +533,14 @@ static int run_enrollment(const struct profile_paths *paths, const char *server,
 
 	ret = tpm_bind_profile(&g_agent.tpm_ctx, paths);
 	if (ret < 0) {
-		fprintf(stderr,
-			ret == -ENOSPC ?
-				"No TPM persistent handle left for another "
-				"publisher: %s\n" :
+		/* no free handle in the range; a bare errno reads as broken */
+		if (ret == -ENOSPC)
+			report_no_room_for_a_key(&g_agent.tpm_ctx,
+						 NO_ROOM_IN_THE_BUILD);
+		else
+			fprintf(stderr,
 				"Failed to bind the publisher profile: %s\n",
-			tpm_strerror(ret));
+				tpm_strerror(ret));
 		tpm_cleanup(&g_agent.tpm_ctx);
 		net_cleanup();
 		return ret;
@@ -540,7 +561,8 @@ static int run_enrollment(const struct profile_paths *paths, const char *server,
 	if (ret < 0) {
 		release_unfilled_handle(&g_agent.tpm_ctx, paths);
 		if (ret == -ENOSPC)
-			report_no_room_for_a_key(&g_agent.tpm_ctx);
+			report_no_room_for_a_key(&g_agent.tpm_ctx,
+						 NO_ROOM_IN_THE_TPM);
 		else
 			fprintf(stderr, "Failed to provision AIK: %s\n",
 				tpm_strerror(ret));
@@ -617,6 +639,9 @@ int do_enroll(const char *server, int port, const char *ca_cert,
 	char token[LOTA_ENROLL_MAX_TOKEN + 1];
 	struct profile_paths paths;
 	int ret;
+
+	/* keep stdout progress and stderr errors in order when redirected */
+	setvbuf(stdout, NULL, _IOLBF, 0);
 
 	printf("=== Attestation CA Enrollment ===\n\n");
 
@@ -1118,12 +1143,16 @@ static void print_key_capacity(const struct publisher_entry *entries,
 
 int do_list_publishers(void)
 {
-	struct publisher_entry entries[LOTA_PROFILE_MAX_AIK_HANDLES];
+	struct publisher_entry *entries = NULL;
 	size_t count = 0;
 	int ret;
 
-	ret = publishers_list(LOTA_PROFILE_BASE_DIR, entries,
-			      sizeof(entries) / sizeof(entries[0]), &count);
+	/*
+	 * Consent creates a profile before enrollment and nothing prunes,
+	 * so the directory can exceed LOTA_PROFILE_MAX_AIK_HANDLES;
+	 * list them all, or --forget-publisher has no id to take.
+	 */
+	ret = publishers_list_alloc(LOTA_PROFILE_BASE_DIR, &entries, &count);
 	if (ret < 0) {
 		fprintf(stderr, "Failed to read %s: %s\n",
 			LOTA_PROFILE_BASE_DIR, strerror(-ret));
@@ -1132,14 +1161,14 @@ int do_list_publishers(void)
 
 	if (count == 0) {
 		printf("This machine answers to no publisher.\n");
+		free(entries);
 		return 0;
 	}
 
 	/*
 	 * One TPM open for the whole listing, and only to read public areas.
-	 * A host whose TPM will not open still gets the listing: every line
-	 * above comes off the disk, and the key check is the one that would
-	 * have been missing anyway.
+	 * A host whose TPM will not open still gets the listing: only the
+	 * key check needs the TPM.
 	 */
 	bool tpm_open = tpm_init(&g_agent.tpm_ctx) == 0;
 
@@ -1171,6 +1200,7 @@ int do_list_publishers(void)
 	       "receives none of it. What a report contains is listed in the "
 	       "operator\ndocumentation.\n");
 	printf("\nTake one back with: lota-agent --forget-publisher <id>\n");
+	free(entries);
 	return 0;
 }
 
