@@ -217,6 +217,32 @@ A session whose agent is unreachable is **returned**, not refused, in
 once the host is ready. ``lota_ac_last_error()`` names that case too, so
 "not ready yet" is never mistaken for a configuration the library rejected.
 
+An agent that goes away mid-session
+===================================
+
+An integrator reading the hook's file sink sees the same event through
+``lota-status``, and the field that carries it is ``LOTA_OFFLINE``, not
+``LOTA_ATTESTED``. When the hook loses the agent it rewrites the file with
+``LOTA_OFFLINE=1`` and a zeroed payload, and unlinks ``lota-token.bin`` and
+``lota-attestation.bin``, which cannot be trusted past the disconnect.
+The write happens once per disconnect: the hook retries the connection for
+as long as the process lives, and a reconnect that succeeds publishes live
+state again, so a file that stops changing is not a signal.
+
+Two rules follow for anything that polls the sink:
+
+* **Read ``LOTA_OFFLINE`` before ``LOTA_ATTESTED``.** The offline payload is
+  zeroed, so a reader that looks only at ``LOTA_ATTESTED`` reads a lost agent
+  as a refusal the agent never issued. OFFLINE ("the hook cannot reach the
+  agent") and UNTRUSTED ("the agent says no") call for different treatment,
+  and the marker is the only thing that separates them.
+* **Treat a missing file as OFFLINE too.** The hook never ran, the container
+  view does not include the sink, or the session detached cleanly.
+
+``examples/cs2/scenarios/verify-attested.sh`` is the minimal consumer of both
+signals and ships with the demo; the ``agent-down`` walk-through beside it
+drives the transition and asserts what lands on disk.
+
 What the token actually proves
 ==============================
 

@@ -387,6 +387,7 @@ jobs:
             examples/cs2/scenarios/verify-attested.sh \
             tests/integration/test_bpf_gates.sh \
             tests/integration/test_add_publisher_profile.sh \
+            tests/integration/test_proton_hook_disable.sh \
             src/initramfs/90lota/module-setup.sh
           shellcheck -s sh -S error \
             scripts/check-el9-decls.sh \
