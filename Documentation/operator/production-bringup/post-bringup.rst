@@ -186,6 +186,23 @@ So the two supported paths are:
    an attack surface for an init-domain compromise. Operators planning updates
    therefore schedule them alongside a regular maintenance reboot.
 
+Restarting ``lota-agent.socket`` is not one of those paths and does not need
+to be. The socket unit carries ``RemoveOnStop=yes``, so a restart unlinks the
+socket the running agent is bound to and binds a new one at the same name --
+and a listening file descriptor outlives its path, so the agent goes on
+accepting on a socket no title can reach while every other signal stays green.
+The agent watches the directory for exactly this and rebinds the path itself,
+logging ``IPC socket ... was replaced; rebound``. systemd also tries to start
+the service while the running agent still holds it -- it cannot kill that agent
+either -- and the start refuses on the PID file with exit status 3, which the
+unit lists in ``RestartPreventExitStatus``: the unit lands failed with one line
+saying an instance is already running, instead of retrying every five seconds
+for the rest of the boot. The daemon that is serving is unaffected, and
+``systemctl reset-failed lota-agent`` clears the state once the socket work is
+done. An operator who changes
+``SocketMode``, ``SocketGroup`` or ``Backlog`` therefore gets the new settings
+at the next agent start and a working IPC path in the meantime.
+
 A configuration change that only the daemon's own state depends on does not
 need either path: ``systemctl try-reload-or-restart lota-agent lota-attest``
 picks up a newly added publisher without stopping anything. Settings the agent reads once at startup,
