@@ -488,15 +488,20 @@ anchor for "a trusted kernel booted" is PCR 7: it reflects the Secure Boot
 signing chain and stays constant across kernel updates, so a fleet trusts the
 distribution's signing key without maintaining a per-kernel hash.
 
-The ``kernel_hashes`` value an ``--export-policy`` run writes comes from one of
-those same registers, read at export time; the exported document names which
-register it was, and which kernel the exporting host had booted. It is not a
-hash of a kernel image, and no configuration key redirects it at one, so a
-policy that is to describe a kernel is exported from a host booted into that
-kernel. It stays advisory either way: the register is read and reported by code
-running on the kernel it describes, and on a GRUB host it moves when nothing
-about the kernel has, because ``grubenv`` is measured into it and rewritten
-every boot.
+The ``kernel_hashes`` value an ``--export-policy`` run writes is the
+bootloader's own measurement of the kernel image, taken from the ``EV_IPL``
+record on PCR 9; the exported document names the image as the bootloader wrote
+it and the kernel the exporting host had booted. No configuration key redirects
+it at a file, so a policy that is to describe a kernel is exported from a host
+booted into that kernel. A register is never written there: PCR 9 aggregates
+every file the bootloader read, ``grubenv`` among them, so it answers for a
+boot rather than for a kernel.
+
+The gate reads the same measurement, and only where the quote covers PCR 9 and
+the event log replays to it. Where it does not, a policy pinning
+``kernel_hashes`` is refused with that as the reason. The pin stays advisory:
+PCR 7 is the anchor for "a trusted kernel booted", and a kernel pin buys
+anti-rollback at the cost of an entry per kernel.
 
 Pinning these registers is not optional. A report whose ``pcr_mask`` omits
 PCR 0, 1 or 7 is refused before any baseline is consulted or written, and no
