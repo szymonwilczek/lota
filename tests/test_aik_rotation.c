@@ -1731,6 +1731,108 @@ static void test_aik_unique_separates_publishers(void)
 	PASS();
 }
 
+static void test_stale_object_record_is_told_from_a_tpm_refusal(void)
+{
+	TEST("a poisoned session is told from a TPM refusal");
+
+	if (!tpm_test_rc_is_stale_object_record(TSS2_ESYS_RC_GENERAL_FAILURE)) {
+		FAIL("the session ESYS refuses to reuse was not recognised");
+		return;
+	}
+
+	if (tpm_test_rc_is_stale_object_record(TPM2_RC_HANDLE)) {
+		FAIL("an empty handle would have reopened the session");
+		return;
+	}
+
+	if (tpm_test_rc_is_stale_object_record(TSS2_RC_SUCCESS) ||
+	    tpm_test_rc_is_stale_object_record(TPM2_RC_LOCKOUT) ||
+	    tpm_test_rc_is_stale_object_record(TSS2_TCTI_RC_TRY_AGAIN)) {
+		FAIL("success, lockout or a retry would have reopened it");
+		return;
+	}
+	PASS();
+}
+
+static void test_binding_does_not_survive_a_reused_handle(void)
+{
+	const char *forgotten =
+		"01f58f72000000000000000000000000000000000000000000000000"
+		"3ceacdd1";
+	const char *next =
+		"eb69693e000000000000000000000000000000000000000000000000"
+		"3ceacdd1";
+
+	TEST("a reused handle number does not carry the old key's cache");
+
+	/* Same publisher, same handle: the cached key is still that key */
+	if (!tpm_test_aik_binding_survives(forgotten, 0x81010017, forgotten,
+					   0x81010017)) {
+		FAIL("re-binding one publisher dropped its own key");
+		return;
+	}
+
+	/*
+	 * The shape this was driven on: a publisher is forgotten, the next one
+	 * provisioned takes the number it freed, and the numbers match while
+	 * the keys do not.
+	 */
+	if (tpm_test_aik_binding_survives(forgotten, 0x81010017, next,
+					  0x81010017)) {
+		FAIL("two publishers at one number were read as one key");
+		return;
+	}
+
+	if (tpm_test_aik_binding_survives(forgotten, 0x81010017, forgotten,
+					  0x81010010)) {
+		FAIL("a moved handle kept the cache of the old one");
+		return;
+	}
+
+	/* Nothing bound yet is nothing to carry across */
+	if (tpm_test_aik_binding_survives("", 0, next, 0x81010010)) {
+		FAIL("an unbound context claimed to hold this key");
+		return;
+	}
+	PASS();
+}
+
+static void test_object_change_is_read_from_the_name(void)
+{
+	const uint8_t name_a[] = { 0x00, 0x0b, 0x11, 0x22, 0x33 };
+	const uint8_t name_b[] = { 0x00, 0x0b, 0x11, 0x22, 0x34 };
+
+	TEST("the AIK object is compared by Name, not by handle number");
+
+	if (tpm_test_aik_object_changed(name_a, sizeof(name_a), name_a,
+					sizeof(name_a))) {
+		FAIL("the same object read as a different one");
+		return;
+	}
+
+	if (!tpm_test_aik_object_changed(name_a, sizeof(name_a), name_b,
+					 sizeof(name_b))) {
+		FAIL("a different key at the same handle read as the same key");
+		return;
+	}
+
+	if (!tpm_test_aik_object_changed(name_a, sizeof(name_a), name_a,
+					 sizeof(name_a) - 1)) {
+		FAIL("a shorter Name read as the same key");
+		return;
+	}
+
+	/*
+	 * The first look is what records the Name the rest are compared
+	 * against, so nothing seen yet is not a change
+	 */
+	if (tpm_test_aik_object_changed(NULL, 0, name_a, sizeof(name_a))) {
+		FAIL("the first look reported the key as replaced");
+		return;
+	}
+	PASS();
+}
+
 int main(void)
 {
 	printf("\n=== AIK Rotation Tests ===\n\n");
@@ -1782,6 +1884,9 @@ int main(void)
 	test_call_with_backoff_no_leak_on_retry();
 	test_call_with_backoff_gives_up_without_leak();
 	test_call_with_backoff_respects_wallclock_budget();
+	test_binding_does_not_survive_a_reused_handle();
+	test_stale_object_record_is_told_from_a_tpm_refusal();
+	test_object_change_is_read_from_the_name();
 
 	cleanup_tmp_dir();
 

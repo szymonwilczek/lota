@@ -355,6 +355,14 @@ struct tpm_context {
 	 */
 	char clock_state_path[256];
 
+	/*
+	 * Name last seen at aik_handle. Handle numbers are reused across
+	 * publishers, so only the Name ties the cached auth to the key.
+	 */
+	uint8_t aik_object_name[sizeof(TPMU_NAME)];
+	uint16_t aik_object_name_size;
+	bool aik_object_replaced; /* Name changed since the last read */
+
 	/* AIK userAuth loaded from root-only sidecar file */
 	uint8_t aik_auth[TPM_AIK_AUTH_SIZE];
 	bool aik_auth_loaded;
@@ -550,6 +558,19 @@ int tpm_provision_aik(struct tpm_context *ctx);
  */
 int tpm_bind_profile(struct tpm_context *ctx,
 		     const struct profile_paths *paths);
+
+/*
+ * tpm_aik_object_replaced - did the key behind the AIK handle change?
+ * @ctx: TPM context
+ *
+ * Set when an open of the AIK handle finds a different object (handle
+ * reused by another publisher, or re-provisioned elsewhere).
+ * The stale cache is already dropped, so this is diagnostic only.
+ * Reading it clears it.
+ *
+ * Returns: true when the object changed since the last read.
+ */
+bool tpm_aik_object_replaced(struct tpm_context *ctx);
 
 /*
  * tpm_aik_profile_unique - creation input that separates publishers' keys
@@ -1367,6 +1388,17 @@ int tpm_aik_strict_blocks_reprovision(int strict, int load_rc);
 #ifdef LOTA_TPM_TESTING
 typedef int (*tpm_test_prop_reader_fn)(struct tpm_context *ctx, TPM2_PT prop,
 				       uint32_t *out_val);
+
+/*
+ * Pure helpers: the Name comparison that decides whether the object behind
+ * the AIK handle is still the one the context bound, and the profile-identity
+ * comparison that decides whether a bind carries a cached key across.
+ */
+int tpm_test_rc_is_stale_object_record(uint32_t rc);
+int tpm_test_aik_object_changed(const uint8_t *seen, uint16_t seen_len,
+				const uint8_t *live, uint16_t live_len);
+int tpm_test_aik_binding_survives(const char *bound_id, uint32_t bound_handle,
+				  const char *new_id, uint32_t new_handle);
 
 /* Pure helper: expose the PCR-mask -> selection bitmap for unit tests. */
 int tpm_test_pcr_mask_to_selection(uint32_t pcr_mask, uint8_t out_select[3],
