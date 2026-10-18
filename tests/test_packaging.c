@@ -10,6 +10,7 @@
  *
  */
 
+#include <ctype.h>
 #include <stdbool.h>
 #include <stdio.h>
 #include <string.h>
@@ -244,14 +245,14 @@ static void test_installer_enables_the_units(void)
  */
 static void test_documented_selinux_interfaces_exist(void)
 {
-	static const char *const documented[] = { "lota_query_status",
-						  "lota_gaming_client",
-						  "lota_anticheat_client",
-						  "lota_admin" };
-	enum {
-		DOCUMENTED_COUNT = 4
+	static const char *const documented[] = {
+		"lota_query_status", "lota_query_status_container",
+		"lota_gaming_client", "lota_anticheat_client", "lota_admin"
 	};
-	bool found[DOCUMENTED_COUNT] = { false, false, false, false };
+	enum {
+		DOCUMENTED_COUNT = 5
+	};
+	bool found[DOCUMENTED_COUNT] = { false, false, false, false, false };
 	char line[1024];
 	FILE *fp;
 
@@ -466,6 +467,125 @@ static void test_selinux_policy_carries_no_portcon(void)
 	}
 	PASS();
 }
+
+/*
+ * A title in a Proton container reaches the agent through the socket under
+ * /run/user/<uid>/lota, user_tmp_t throughout. Every client interface must
+ * pull in access to it, not only to the system socket under /var/lib/lota.
+ */
+static bool iface_body(const char *policy, const char *name, const char **body,
+		       size_t *len)
+{
+	char want[64];
+	const char *start, *end;
+
+	snprintf(want, sizeof(want), "interface(`%.40s'", name);
+	start = strstr(policy, want);
+	if (!start)
+		return false;
+	start += strlen(want);
+	end = strstr(start, "\n')");
+	if (!end)
+		return false;
+
+	*body = start;
+	*len = (size_t)(end - start);
+	return true;
+}
+
+static bool body_grants_user_tmp(const char *body, size_t len)
+{
+	for (size_t i = 0; i + 8 <= len; i++) {
+		if (strncmp(body + i, "user_tmp", 8) == 0)
+			return true;
+	}
+	return false;
+}
+
+/* append the lota_* interfaces this body calls to the walk list */
+static size_t iface_calls(const char *body, size_t len, char out[][64],
+			  size_t max, size_t count)
+{
+	for (size_t i = 0; i + 5 < len; i++) {
+		const char *p = body + i;
+		size_t n = 0;
+
+		if (i &&
+		    (isalnum((unsigned char)body[i - 1]) || body[i - 1] == '_'))
+			continue;
+		if (strncmp(p, "lota_", 5) != 0)
+			continue;
+		while (n + 1 < 64 && i + n < len &&
+		       (isalnum((unsigned char)p[n]) || p[n] == '_'))
+			n++;
+		if (i + n >= len || p[n] != '(')
+			continue;
+		if (count == max)
+			break;
+		memcpy(out[count], p, n);
+		out[count][n] = '\0';
+		count++;
+	}
+	return count;
+}
+
+static void test_selinux_gaming_client_reaches_container_socket(void)
+{
+	static const char *const road[] = { "lota_gaming_client",
+					    "lota_anticheat_client" };
+	enum {
+		WALK_MAX = 16
+	};
+	static char policy[65536];
+	static char walk[WALK_MAX][64];
+	FILE *fp;
+	size_t got;
+
+	TEST("selinux: the client interfaces reach the container socket");
+
+	fp = open_shipped("selinux/lota.if");
+	if (!fp) {
+		FAIL("could not open selinux/lota.if");
+		return;
+	}
+	got = fread(policy, 1, sizeof(policy) - 1, fp);
+	fclose(fp);
+	policy[got] = '\0';
+
+	for (size_t i = 0; i < sizeof(road) / sizeof(road[0]); i++) {
+		size_t seen = 1;
+		bool reaches = false;
+
+		snprintf(walk[0], sizeof(walk[0]), "%s", road[i]);
+
+		for (size_t j = 0; j < seen && !reaches; j++) {
+			const char *body;
+			size_t len;
+
+			if (!iface_body(policy, walk[j], &body, &len)) {
+				FAIL("an interface the reference names is not defined");
+				return;
+			}
+			if (body_grants_user_tmp(body, len)) {
+				reaches = true;
+				break;
+			}
+			seen = iface_calls(body, len, walk, WALK_MAX, seen);
+		}
+
+		if (!reaches) {
+			char msg[128];
+
+			snprintf(msg, sizeof(msg),
+				 "%s grants no access to the per-user socket",
+				 road[i]);
+			FAIL(msg);
+			return;
+		}
+	}
+	PASS();
+}
+
 int main(void)
 {
 	printf("=== LOTA Packaging Tests ===\n\n");
@@ -479,6 +599,7 @@ int main(void)
 	test_selinux_interfaces_are_installed();
 	test_selinux_reports_every_tunable();
 	test_selinux_policy_carries_no_portcon();
+	test_selinux_gaming_client_reaches_container_socket();
 
 	printf("\n=== Results: %d/%d passed ===\n", tests_passed, tests_run);
 	return (tests_passed == tests_run) ? 0 : 1;
