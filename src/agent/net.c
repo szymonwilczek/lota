@@ -35,9 +35,12 @@
 /* TLS socket I/O timeout */
 #define NET_IO_TIMEOUT_SEC 30
 
-/* Where the kernel reports whether SELinux is enforcing.
+/* Where the kernel publishes SELinux state.
  * Read directly, so the agent needs no libselinux at link time */
-#define NET_SELINUX_ENFORCE_PATH "/sys/fs/selinux/enforce"
+#define NET_SELINUX_ROOT "/sys/fs/selinux"
+/* The tunable that decides whether the agent's domain may reach the network
+ * at all; selinux/README.rst documents it as an operator's switch */
+#define NET_ATTEST_BOOLEAN "lota_network_attest"
 
 /*
  * Wire-format size assertions.
@@ -733,13 +736,35 @@ out:
 	return ret;
 }
 
-const char *net_connect_refusal_hint(int err, int port,
-				     const char *enforce_path, char *buf,
-				     size_t cap)
+/* First byte of a selinuxfs node under @root, or -1 when it cannot be read */
+static int selinux_node_state(const char *root, const char *rel)
 {
-	char state[8];
+	char path[256], state[8];
 	ssize_t got;
 	int fd, n;
+
+	n = snprintf(path, sizeof(path), "%s/%s", root, rel);
+	if (n < 0 || (size_t)n >= sizeof(path))
+		return -1;
+	fd = open(path, O_RDONLY | O_CLOEXEC);
+	if (fd < 0)
+		return -1;
+	got = read(fd, state, sizeof(state) - 1);
+	close(fd);
+	if (got <= 0)
+		return -1;
+	state[got] = '\0';
+	if (state[0] != '0' && state[0] != '1')
+		return -1;
+	return state[0] - '0';
+}
+
+const char *net_connect_refusal_hint(int err, int port,
+				     const char *selinux_root, char *buf,
+				     size_t cap)
+{
+	const char *root = selinux_root ? selinux_root : NET_SELINUX_ROOT;
+	int tunable, n;
 
 	if (err != EACCES || !buf || cap == 0)
 		return NULL;
@@ -752,25 +777,47 @@ const char *net_connect_refusal_hint(int err, int port,
 	 * so this EACCES came from somewhere else and the port label is
 	 * the wrong thing to name.
 	 */
-	fd = open(enforce_path ? enforce_path : NET_SELINUX_ENFORCE_PATH,
-		  O_RDONLY | O_CLOEXEC);
-	if (fd < 0)
-		return NULL;
-	got = read(fd, state, sizeof(state) - 1);
-	close(fd);
-	if (got <= 0)
-		return NULL;
-	state[got] = '\0';
-	if (state[0] != '1')
+	if (selinux_node_state(root, "enforce") != 1)
 		return NULL;
 
-	n = snprintf(buf, cap,
-		     "SELinux is enforcing and TCP port %d carries no LOTA "
-		     "label, which is what refuses this connect; the policy "
-		     "dontaudits it, so no AVC is logged anywhere. Label the "
-		     "port and the next round goes through:\n"
-		     "  sudo semanage port -a -t lota_port_t -p tcp %d",
-		     port, port);
+	/*
+	 * Name only the cause that was read. The node holds "<active> <pending>";
+	 * without the module there is no node and either applies.
+	 */
+	tunable = selinux_node_state(root, "booleans/" NET_ATTEST_BOOLEAN);
+
+	if (tunable == 0)
+		n = snprintf(buf, cap,
+			     "SELinux is enforcing and the " NET_ATTEST_BOOLEAN
+			     " boolean is off, which is "
+			     "what refuses this connect; the policy dontaudits "
+			     "it, so no AVC is logged anywhere. Labelling the "
+			     "port changes nothing while the boolean is off -- "
+			     "semanage would answer 'already defined' and exit "
+			     "0. Turn it back on:\n"
+			     "  sudo setsebool -P " NET_ATTEST_BOOLEAN " on");
+	else if (tunable == 1)
+		n = snprintf(buf, cap,
+			     "SELinux is enforcing and TCP port %d carries no "
+			     "LOTA label, which is what refuses this connect; "
+			     "the policy dontaudits it, so no AVC is logged "
+			     "anywhere. Label the port and the next round goes "
+			     "through:\n"
+			     "  sudo semanage port -a -t lota_port_t -p tcp %d",
+			     port, port);
+	else
+		n = snprintf(buf, cap,
+			     "SELinux is enforcing and refused this connect; "
+			     "the policy dontaudits it, so no AVC is logged "
+			     "anywhere. Two rules refuse it and this host "
+			     "cannot read which one did: TCP port %d carrying "
+			     "no LOTA label, and the " NET_ATTEST_BOOLEAN
+			     " boolean being off.\n"
+			     "  sudo semanage port -a -t lota_port_t -p tcp "
+			     "%d\n"
+			     "  sudo setsebool -P " NET_ATTEST_BOOLEAN " on",
+			     port, port);
+
 	/* half a command is worse than none -- an operator would run it */
 	if (n < 0 || (size_t)n >= cap)
 		return NULL;
@@ -794,7 +841,13 @@ const char *net_result_str(uint32_t result)
 	case VERIFY_OLD_VERSION:
 		return "FAIL - Protocol version mismatch";
 	case VERIFY_INTEGRITY_MISMATCH:
-		return "FAIL - Integrity mismatch (agent binary changed!)";
+		return "FAIL - Integrity mismatch: a measurement this host is "
+		       "pinned to no longer matches. It is the agent binary, "
+		       "the PCR 14 boot commitment or the firmware/Secure Boot "
+		       "baseline, and the publisher's verifier log names "
+		       "which. An updated agent needs its build allowed there; "
+		       "a firmware or boot-chain change needs this host "
+		       "re-anchored";
 	case VERIFY_REVOKED:
 		return "FAIL - This host's attestation key was revoked by the "
 		       "publisher's administrator; re-enrollment is their "
@@ -804,6 +857,12 @@ const char *net_result_str(uint32_t result)
 		       "administrator; nothing on it changes that answer";
 	case VERIFY_INTERNAL_ERROR:
 		return "FAIL - Verifier internal error";
+	case VERIFY_POLICY_REQUIREMENT:
+		return "FAIL - This host does not meet a requirement the "
+		       "publisher's policy states about it (the kernel image "
+		       "allow-list, Secure Boot, kernel lockdown, module "
+		       "signing or appraisal scope). The verifier's log names "
+		       "which one; the verdict alone does not";
 	case VERIFY_IDENTITY_FAIL:
 		return "FAIL - The certificate this host presented does not "
 		       "certify the key it signed with, so the publisher "

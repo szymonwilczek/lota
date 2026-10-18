@@ -111,6 +111,12 @@ const (
 	// certificate names another key. Kept apart from VerifySigFail
 	// because only this one is fixed by re-enrolling.
 	VerifyIdentityFail uint32 = 10
+
+	// VerifyPolicyRequirement: the host misses a policy requirement other
+	// than IOMMU (kernel allow-list, Secure Boot, lockdown, module signing,
+	// appraisal scope). Kept apart from VerifyPCRFail because the fix is
+	// host configuration, not the boot chain.
+	VerifyPolicyRequirement uint32 = 11
 )
 
 // returns a deterministic string for a result code
@@ -138,6 +144,8 @@ func VerifyResultString(code uint32) string {
 		return "internal_error"
 	case VerifyIdentityFail:
 		return "identity_fail"
+	case VerifyPolicyRequirement:
+		return "policy_requirement"
 	default:
 		return fmt.Sprintf("unknown_%d", code)
 	}

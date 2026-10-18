@@ -547,9 +547,12 @@ func (v *Verifier) VerifyReport(challengeID string, reportData []byte) (_ *types
 	}
 
 	if err := v.pcrVerifier.VerifyReportForTenant(report, tenant, bootFacts); err != nil {
-		clog.Error("PCR verification failed", "error", err)
-		v.metrics.Rejections.Inc("pcr_fail")
-		result.Result = types.VerifyPCRFail
+		// the host sees only the verdict, so send the refusal's own class
+		verdict := policyVerdict(err)
+		clog.Error("policy verification failed", "error", err,
+			"verdict", types.VerifyResultString(verdict))
+		v.metrics.Rejections.Inc(types.VerifyResultString(verdict))
+		result.Result = verdict
 		return result, err
 	}
 
@@ -619,7 +622,7 @@ func (v *Verifier) VerifyReport(challengeID string, reportData []byte) (_ *types
 	if _, bootStoreOK := v.baselineStore.(BootBaselineStorer); !bootStoreOK {
 		clog.Error("baseline store does not support boot PCR pinning; refusing attestation")
 		v.metrics.Rejections.Inc("baseline_error")
-		result.Result = types.VerifyIntegrityMismatch
+		result.Result = types.VerifyInternalError
 		return result, errors.New("FAIL_BASELINE_ERROR: store missing boot PCR support")
 	}
 
@@ -634,7 +637,7 @@ func (v *Verifier) VerifyReport(challengeID string, reportData []byte) (_ *types
 	if !atomicOK {
 		clog.Error("baseline store does not implement AtomicBaselineStorer; refusing FlagBootCommitment attestation")
 		v.metrics.Rejections.Inc("baseline_error")
-		result.Result = types.VerifyIntegrityMismatch
+		result.Result = types.VerifyInternalError
 		return result, errors.New("FAIL_BASELINE_ERROR: store missing atomic agent_hash/boot pinning")
 	}
 
@@ -724,7 +727,7 @@ func (v *Verifier) VerifyReport(challengeID string, reportData []byte) (_ *types
 					"policy", v.pcrVerifier.PolicyNameForTenant(tenant),
 					"hint", "load a signed policy that pins PCR0/PCR1/PCR7 for this fleet, enable require_secureboot for diverse fleets, or run with --allow-tofu-boot-baseline")
 				v.metrics.Rejections.Inc("baseline_error")
-				result.Result = types.VerifyIntegrityMismatch
+				result.Result = types.VerifyPolicyRequirement
 				return result, errors.New("FAIL_BASELINE_ERROR: boot baseline not enrolled (TOFU first-use refused under RequireBootEnrollment)")
 			}
 		}
@@ -781,7 +784,7 @@ func (v *Verifier) VerifyReport(challengeID string, reportData []byte) (_ *types
 	case TOFUError:
 		clog.Error("agent_hash baseline store error, refusing attestation")
 		v.metrics.Rejections.Inc("baseline_error")
-		result.Result = types.VerifyIntegrityMismatch
+		result.Result = types.VerifyInternalError
 		return result, errors.New("FAIL_BASELINE_ERROR: agent_hash baseline store unavailable")
 	}
 
@@ -816,7 +819,7 @@ func (v *Verifier) VerifyReport(challengeID string, reportData []byte) (_ *types
 	case TOFUError:
 		clog.Error("PCR14 baseline store error, refusing attestation")
 		v.metrics.Rejections.Inc("baseline_error")
-		result.Result = types.VerifyIntegrityMismatch
+		result.Result = types.VerifyInternalError
 		return result, errors.New("FAIL_BASELINE_ERROR: PCR14 baseline store unavailable")
 	}
 
@@ -872,7 +875,7 @@ func (v *Verifier) VerifyReport(challengeID string, reportData []byte) (_ *types
 		case TOFUError:
 			clog.Error("boot baseline store error, refusing attestation")
 			v.metrics.Rejections.Inc("baseline_error")
-			result.Result = types.VerifyIntegrityMismatch
+			result.Result = types.VerifyInternalError
 			return result, fmt.Errorf("FAIL_BASELINE_ERROR: boot baseline store unavailable")
 		}
 	}

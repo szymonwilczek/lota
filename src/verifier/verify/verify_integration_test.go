@@ -1006,8 +1006,11 @@ func TestVerify_BootEnrollmentGateRefusesTOFUFirstUse(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected rejection: boot baseline not enrolled")
 	}
-	if result.Result != types.VerifyIntegrityMismatch {
-		t.Fatalf("expected VerifyIntegrityMismatch, got result=%d err=%v", result.Result, err)
+	// Nothing about this host changed -- it has never attested -- so the refusal
+	// is a requirement the operator states here, not the host's own integrity
+	// failing.
+	if result.Result != types.VerifyPolicyRequirement {
+		t.Fatalf("expected VerifyPolicyRequirement, got result=%d err=%v", result.Result, err)
 	}
 	if !strings.Contains(err.Error(), "boot baseline not enrolled") {
 		t.Fatalf("expected the enrollment-gate error, got: %v", err)

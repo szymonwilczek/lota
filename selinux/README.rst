@@ -467,6 +467,23 @@ next to the plain errno::
 The state is read from ``/sys/fs/selinux/enforce``, so a permissive or SELinux-less
 host is not told to label a port for an ``EACCES`` that came from somewhere else.
 
+Two rules refuse that connect, and the message names the one it read. Turning
+``lota_network_attest`` off refuses every attestation endpoint whatever its
+label, and it is dontaudit\ ed the same way, so the agent reads the boolean
+before blaming the port -- relabelling would change nothing there, and
+``semanage`` answers ``already defined, modifying instead`` and exits 0, which
+reads as success::
+
+   Cannot reach 192.168.0.165:8444. SELinux is enforcing and the
+   lota_network_attest boolean is off, which is what refuses this connect; the
+   policy dontaudits it, so no AVC is logged anywhere. Labelling the port
+   changes nothing while the boolean is off -- semanage would answer 'already
+   defined' and exit 0. Turn it back on:
+     sudo setsebool -P lota_network_attest on
+
+On a host where the module is not loaded there is no boolean node to read, so
+neither cause is established and both commands are printed.
+
 **Ports are labelled one at a time, and a range is deliberately not offered.**
 Each publisher runs its own CA and verifier, so a fleet of them spans arbitrary
 ports and a range wide enough to cover them would be wide enough to cover
