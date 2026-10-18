@@ -820,6 +820,34 @@ struct tpm_pcr14_observation {
 };
 
 /*
+ * What a boot-commitment call left behind. PCR 14 receives the commitment once
+ * per boot: the first agent start of a boot extends it, and every later start
+ * in the same boot finds it already there. Both are success, and worth telling
+ * apart -- a restart that finds the commitment has not spent the boot,
+ * so it costs no reboot.
+ */
+enum tpm_boot_commitment_outcome {
+	/* This call extended PCR14 with the commitment */
+	TPM_BOOT_COMMITMENT_EXTENDED = 0,
+	/* The register already carried it when this process started */
+	TPM_BOOT_COMMITMENT_ALREADY_HELD,
+};
+
+/*
+ * tpm_boot_commitment_outcome - what a successful extend call did
+ * @state: verdict tpm_extend_boot_commitment() left on the context
+ *
+ * Pure function. Only the two accepting verdicts reach it; every other
+ * state fails the call, so a caller asking about one it never got reads
+ * the answer that claims the least.
+ *
+ * Returns: TPM_BOOT_COMMITMENT_ALREADY_HELD for a warm restart on a locked
+ * host, TPM_BOOT_COMMITMENT_EXTENDED otherwise.
+ */
+enum tpm_boot_commitment_outcome
+tpm_boot_commitment_outcome(enum tpm_pcr14_state state);
+
+/*
  * tpm_classify_pcr14 - decide what the observed PCR14 value means
  * @obs: fully populated observation
  *
@@ -841,27 +869,24 @@ enum tpm_pcr14_state
 tpm_classify_pcr14(const struct tpm_pcr14_observation *obs);
 
 /*
- * tpm_extend_boot_commitment - Bind PCR14 to the agent binary and the
- *                              current TPM reset/restart counter
+ * tpm_extend_boot_commitment - Bind PCR14 to the agent binary
  * @ctx:       Initialized TPM context
  * @self_hash: SHA-256 of the running agent binary
  *
- * Captures clockInfo through an AIK-signed TPM2_Quote so the counters
- * folded into the boot-commitment digest match the clockInfo the
- * later attestation quote carries. Esys_ReadClock returns counters
- * through a separate unauthenticated path and may diverge on TPM 2.0
- * simulators; the signed path keeps the verifier-side derivation
- * deterministic. Falls back to Esys_ReadClock with a security warning
- * only when no AIK has been provisioned yet (pre-enrollment boots);
- * callers that quote afterwards MUST ensure tpm_provision_aik() ran
- * first. Extends PCR14 with the boot-commitment digest defined by
- * tpm_boot_commitment_digest().
- * Re-entrancy across agent restarts without TPM reset is handled by
- * inspecting PCR14: zeros mean a fresh unlocked boot (extend), the
- * initramfs-lock value means a fresh locked boot (extend on top), an
- * expected post-extend value means a warm agent restart (skip),
- * anything else means the runtime PCR14 has been tampered with and
- * the call fails with -EBADMSG so attestation refuses to proceed.
+ * Extends PCR14 with the boot-commitment digest defined by
+ * tpm_boot_commitment_digest(), which folds in the agent hash and no counter.
+ * The TPM's reset and restart counters are read alongside it through
+ * TPM2_ReadClock, for attribution only: they tell a restart within one boot
+ * from a hardware reset and enter no digest.
+ * The reading is deliberately the unsigned one, because a quote obfuscates
+ * clockInfo per signing key and a snapshot taken under one publisher's AIK
+ * would read as an attack under the next.
+ * Re-entrancy across agent restarts without TPM reset is handled by inspecting
+ * PCR14: zeros mean a fresh unlocked boot (extend), the initramfs-lock value
+ * means a fresh locked boot (extend on top), an expected post-extend value
+ * means a warm agent restart (skip), anything else means the runtime PCR14
+ * has been tampered with and the call fails with -EBADMSG so attestation
+ * refuses to proceed.
  *
  * Returns: 0 on success, negative errno on failure
  */

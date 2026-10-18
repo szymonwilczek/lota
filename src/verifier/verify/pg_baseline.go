@@ -156,10 +156,9 @@ func (s *PostgresBaselineStore) CheckAndUpdate(clientID string, pcr14 [types.Has
 }
 
 // CheckAndUpdateAgentHash pins agent_hash with TOFU semantics.
-// pcr14 column is filled on first use from currentPCR14 so the schema
-// NOT NULL constraint is satisfied; it carries no security meaning for
-// boot-commitment clients (the verifier derives the expected PCR14
-// dynamically from agent_hash + ClockInfo)
+// pcr14 column is filled on first use from currentPCR14 and compared on every
+// later round by CheckAndUpdateAttestation, which is what makes a moved pre-lock
+// baseline visible.
 func (s *PostgresBaselineStore) CheckAndUpdateAgentHash(clientID string,
 	currentPCR14, agentHash [types.HashSize]byte,
 ) (TOFUResult, *ClientBaseline) {
@@ -542,7 +541,10 @@ func (s *PostgresBaselineStore) CheckAndUpdateAttestation(clientID string,
 	boot *BootBaseline,
 ) AttestationOutcome {
 	ctx := context.Background()
-	outcome := AttestationOutcome{BootProvided: boot != nil}
+	// every result starts at TOFUError: a component the transaction never
+	// reached carries no decision, and a caller that reads one anyway
+	// refuses the round
+	outcome := AttestationOutcome{BootProvided: boot != nil, PCR14Result: TOFUError}
 
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -611,6 +613,7 @@ func (s *PostgresBaselineStore) CheckAndUpdateAttestation(clientID string,
 				PCR14: pcr14, AgentHash: agentHash,
 				FirstSeen: now, LastSeen: now, AttestCount: 1,
 			}
+			outcome.PCR14Result = TOFUFirstUse
 			outcome.BootResult = TOFUFirstUse
 			bb := *boot
 			bb.FirstSeen, bb.LastSeen = now, now
@@ -632,6 +635,7 @@ func (s *PostgresBaselineStore) CheckAndUpdateAttestation(clientID string,
 				PCR14: pcr14, AgentHash: agentHash,
 				FirstSeen: now, LastSeen: now, AttestCount: 1,
 			}
+			outcome.PCR14Result = TOFUFirstUse
 		}
 		if err := tx.Commit(); err != nil {
 			slog.Error("attestation tx: COMMIT failed", "client_id", clientID, "error", err)
@@ -681,6 +685,27 @@ func (s *PostgresBaselineStore) CheckAndUpdateAttestation(clientID string,
 		outcome.AgentHashResult = TOFUMatch
 	}
 
+	// decide PCR14 branch
+	//
+	// Every road that inserts a row writes the register with it, and the column
+	// is NOT NULL, so an existing row always has one to compare against.
+	// A mismatch terminates the transaction without writes.
+	switch {
+	case pcr14Stored != pcr14:
+		outcome.PCR14Result = TOFUMismatch
+		outcome.AgentHashBaseline = &ClientBaseline{
+			PCR14: pcr14Stored, AgentHash: stored,
+			FirstSeen: firstSeen, LastSeen: lastSeen,
+			AttestCount: attestCount,
+		}
+		if boot != nil {
+			outcome.BootResult = TOFUError
+		}
+		return outcome
+	default:
+		outcome.PCR14Result = TOFUMatch
+	}
+
 	// decide boot branch
 	bootZero := len(storedPCR0) == 0 && len(storedPCR1) == 0 && len(storedPCR7) == 0
 	if boot != nil {
@@ -719,7 +744,7 @@ func (s *PostgresBaselineStore) CheckAndUpdateAttestation(clientID string,
 		}
 	}
 
-	// commit phase: both halves passed; build a single UPDATE
+	// commit phase: every half passed; build a single UPDATE
 	newCount := attestCount + 1
 	if boot != nil {
 		switch outcome.BootResult {

@@ -2115,6 +2115,14 @@ int tpm_pcr_extend(struct tpm_context *ctx, uint32_t pcr_index,
  * the unit-test build (tpm.c is also linked from test_aik_rotation). */
 #define TPM_BOOT_COMMITMENT_PCR 14
 
+enum tpm_boot_commitment_outcome
+tpm_boot_commitment_outcome(enum tpm_pcr14_state state)
+{
+	if (state == TPM_PCR14_ALREADY_COMMITTED)
+		return TPM_BOOT_COMMITMENT_ALREADY_HELD;
+	return TPM_BOOT_COMMITMENT_EXTENDED;
+}
+
 int tpm_boot_commitment_digest(const uint8_t self_hash[], uint8_t out_digest[])
 {
 	if (!self_hash || !out_digest)
