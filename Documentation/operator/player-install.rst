@@ -44,7 +44,10 @@ CA/verifier endpoints and the trust material paths come from the operator's
 install instructions (see "What the operator must ship" below).
 
 ``lota-install --status`` prints a read-only report of every stage without
-changing anything.
+changing anything. A stage the installer can satisfy reads ``pending``; one
+that needs an action the installer must not take -- Secure Boot enabled in
+firmware, an operator's SELinux module, IMA signatures -- reads ``BLOCKED``,
+because a report that calls both "pending" reads as work about to happen.
 
 * ``--yes`` skips the per-stage prompts,
 * ``--plain`` disables the TUI for logs and scripting,
@@ -137,19 +140,46 @@ What the stages do
    kernel so the PCR14 lock helper runs before any regular userspace, whichever
    kernel is selected at boot. It reports work to do while any installed kernel
    is missing the helper. Requires a reboot.
-#. **Kernel integrity floor** -- appends ``ima=on ima_appraise=fix`` (plus
-   ``module.sig_enforce=1`` / ``lockdown=integrity`` where the running kernel
-   lacks them) to the boot entries via grubby. The floor pins the appraisal
-   *mode*. Signature content stays distribution or operator-supplied (see the
-   production bring-up guide). Requires a reboot.
+#. **Kernel integrity floor** -- appends the missing ones of
+   ``ima_appraise=fix``, ``module.sig_enforce=1`` and ``lockdown=integrity`` to
+   the boot entries via grubby. It reports those parameters and nothing more:
+   the appraisal *mode* is not the floor on its own, and the rules it applies
+   to are the next stage. On a Secure Boot host the appraisal parameter is left
+   out, because the kernel discards ``ima_appraise=`` there and appraises in
+   its own built-in blocking mode -- writing it would describe a mode that is
+   not the machine's. Signature content stays distribution or
+   operator-supplied (see the production bring-up guide). Requires a reboot.
+#. **IMA appraisal scope** -- the previous stage sets the appraisal *mode*, and
+   the kernel applies that mode only to the rules its loaded policy carries. A
+   policy whose ``appraise`` rules reach no executable appraises nothing, and
+   the agent refuses to start on such a host, so this stage reads
+   ``/sys/kernel/security/ima/policy`` for the scope the agent's gate demands
+   and stops the install where it is missing. It loads no rules of its own. An
+   IMA rule cannot name a path, so the rule that appraises the agent appraises
+   every executable it matches, and on a Secure Boot host that happens in
+   ``enforce`` -- the kernel discards ``ima_appraise=`` there whatever the
+   cmdline asks for -- which on a root filesystem without IMA signatures means
+   refusing every executable at the next boot. What such a host is missing is
+   the signatures, not a rule set: IMA-signed distribution packages with the
+   distribution's certificate on the ``.ima`` keyring, or an operator image
+   pipeline that signs the executable closure and enrols its certificate. The
+   stage names the route, whether this host already signs its executables, and
+   whether its policy also appraises policy writes (``appraise
+   func=POLICY_CHECK appraise_type=imasig``), which is what makes an unsigned
+   rule set unloadable on a stock Secure Boot machine. A kernel built without
+   ``CONFIG_IMA_READ_POLICY`` publishes no policy at all: the scope cannot be
+   read, the agent starts on the mode alone, and both say the scope went
+   unverified.
 #. **SELinux fence** -- loads the LOTA policy module if needed and re-triggers
    udev so ``/dev/tpm*`` carries the LOTA-only label.
 #. **Reboot checkpoint** -- stops with exit 10 until the boot-chain changes are
-   live and PCR 14 carries this boot's initramfs lock. PCR 14 only resets on a
-   hardware reset, so this cannot be skipped. On a Secure Boot machine PCR 14 is
-   already non-zero before any of this -- shim measures the MOK variables into
-   it -- and the checkpoint says so rather than reporting state from an earlier
-   install.
+   live and PCR 14 carries this boot's initramfs lock. A host whose agent has
+   already run and refused to start this boot is told that instead: the
+   register carries the extend of that attempt, and the next boot meets the
+   same refusal, so the checkpoint names ``journalctl -u lota-agent -b``.
+   PCR 14 only resets on a hardware reset, so this cannot be skipped. On a
+   Secure Boot machine PCR 14 is already non-zero before any of this -- shim
+   measures the MOK variables into it -- and the checkpoint says.
 #. **Agent service** -- enables and starts ``lota-agent.service`` and its
    socket.
 #. **Enrollment** -- the TPM proves itself to a publisher's attestation CA

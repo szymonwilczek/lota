@@ -24,6 +24,7 @@
 
 #include <linux/fsverity.h>
 
+#include "../include/lota_ima_policy_scope.h"
 #include "../include/lota_ima_xattr.h"
 
 #include <openssl/evp.h>
@@ -578,6 +579,72 @@ int probe_cmdline_ima_ok(const char *cmdline)
 	return -EPERM;
 }
 
+/*
+ * Return 1 if @rule requires a signed IMA policy (func=POLICY_CHECK with
+ * appraise_type=imasig). Such a host refuses any unsigned policy write,
+ * the shipped developer baseline included, so the installer reports that
+ * instead of suggesting a file the kernel will reject.
+ */
+static int rule_demands_signed_policy(const char *rule)
+{
+	char buf[LOTA_IMA_POLICY_RULE_MAX];
+	char *save = NULL;
+	char *tok;
+	int policy_check = 0;
+	int imasig = 0;
+	size_t len;
+
+	if (!rule)
+		return 0;
+	len = strlen(rule);
+	if (len >= sizeof(buf))
+		return 0;
+	memcpy(buf, rule, len + 1);
+
+	tok = strtok_r(buf, " \t\n", &save);
+	if (!tok || strcmp(tok, "appraise") != 0)
+		return 0;
+
+	while ((tok = strtok_r(NULL, " \t\n", &save))) {
+		if (strcmp(tok, "func=POLICY_CHECK") == 0)
+			policy_check = 1;
+		else if (strcmp(tok, "appraise_type=imasig") == 0)
+			imasig = 1;
+	}
+	return policy_check && imasig;
+}
+
+int probe_ima_policy_scope(const char *policy_path, int *policy_signed)
+{
+	char line[LOTA_IMA_POLICY_RULE_MAX];
+	FILE *fp;
+	int found = 0;
+
+	if (policy_signed)
+		*policy_signed = 0;
+	if (!policy_path)
+		return -EINVAL;
+
+	fp = fopen(policy_path, "re");
+	if (!fp)
+		return -errno;
+
+	/*
+	 * Read to the end whatever the first rule says: the scope answer and
+	 * the signed-policy answer are two different rules, and the second is
+	 * what turns a remedy into a route the host would refuse.
+	 */
+	while (fgets(line, sizeof(line), fp)) {
+		if (lota_ima_policy_rule_appraises_exec(line))
+			found = 1;
+		if (policy_signed && rule_demands_signed_policy(line))
+			*policy_signed = 1;
+	}
+
+	fclose(fp);
+	return found ? PROBE_IMA_SCOPE_EXEC : PROBE_IMA_SCOPE_NONE;
+}
+
 int probe_cmdline_has_token(const char *cmdline, const char *token)
 {
 	char buf[4096];
@@ -608,6 +675,13 @@ int probe_booted_ima_ok(void)
 	if (ret < 0)
 		return ret;
 	return probe_cmdline_ima_ok(buf);
+}
+
+int probe_ima_mode_blocking(int secureboot, const char *cmdline)
+{
+	if (secureboot)
+		return 1;
+	return probe_cmdline_ima_ok(cmdline) == 0;
 }
 
 int probe_module_sig_enforced(void)
@@ -1040,6 +1114,89 @@ enum stage_state probe_agent_service_stage(const struct probe_service_state *s,
 }
 
 /*
+ * Stage verdict for the IMA appraisal scope.
+ *
+ * The previous stage checks the cmdline mode; this one checks the loaded
+ * rules. If no rule appraises executables, nothing is appraised and the
+ * agent refuses to start.
+ *
+ * The installer never widens the scope. IMA rules cannot match by path,
+ * so a wider rule appraises every matching executable, and Secure Boot
+ * kernels ignore ima_appraise= and always enforce.
+ * On an unsigned rootfs that stops the next boot. The missing piece is
+ * signatures, which come from the distribution or the operator's image
+ * pipeline.
+ */
+enum stage_state probe_ima_scope_stage(const struct probe_ima_scope *s,
+				       char *note, size_t cap)
+{
+	if (!s) {
+		snprintf(note, cap, "The loaded IMA policy could not be read.");
+		return STAGE_ERROR;
+	}
+
+	if (s->scope == PROBE_IMA_SCOPE_EXEC) {
+		snprintf(note, cap,
+			 "The loaded IMA policy appraises executables, which "
+			 "is the scope the agent's startup gate requires.");
+		return STAGE_DONE;
+	}
+
+	if (s->scope != PROBE_IMA_SCOPE_NONE) {
+		if (!s->is_root && s->scope == -EACCES) {
+			snprintf(note, cap,
+				 "Cannot read %s (%s). Run as root to check "
+				 "the appraisal scope.",
+				 PROBE_IMA_POLICY_PATH, strerror(-s->scope));
+			return STAGE_ERROR;
+		}
+		/*
+		 * A kernel built without CONFIG_IMA_READ_POLICY publishes no
+		 * policy, and the agent's gate lets the mode decide alone on
+		 * exactly that host.
+		 * Refusing here would block a machine the agent starts on,
+		 * so the stage reports what it could not see.
+		 */
+		snprintf(note, cap,
+			 "This kernel does not publish its loaded IMA policy "
+			 "(%s: %s), so the scope cannot be checked. The agent "
+			 "starts on the appraisal mode alone and records that "
+			 "the scope is unverified.",
+			 PROBE_IMA_POLICY_PATH, strerror(-s->scope));
+		return STAGE_DONE;
+	}
+
+	/*
+	 * Four sentences at most, because STAGE_NOTE_CAP is the whole budget
+	 * and a refusal that runs past it loses its last clause
+	 */
+	snprintf(note, cap,
+		 "The loaded IMA policy carries no appraise rule that reaches "
+		 "an executable, so nothing here is appraised and the agent "
+		 "refuses to start. The installer does not widen the scope: an "
+		 "IMA rule cannot name a path, so a rule reaching the agent "
+		 "reaches every executable it matches%s, and this host's %s "
+		 "The scope arrives with the signatures -- IMA-signed "
+		 "distribution packages, or an image pipeline that signs "
+		 "executables and enrols its certificate (production bring-up "
+		 "guide, \"IMA appraisal policy\").%s",
+		 s->secureboot ? ", in enforce, since Secure Boot makes the "
+				 "kernel discard ima_appraise=" :
+				 "",
+		 s->agent_signed ?
+			 "executables are signed, so a rule set covering them "
+			 "is the remaining step." :
+			 "executables carry no signature (its agent binary "
+			 "carries none), so the next boot would refuse them.",
+		 s->policy_signed ?
+			 " Policy writes are appraised here too (appraise "
+			 "func=POLICY_CHECK appraise_type=imasig), so any rule "
+			 "set has to be signed by a key on the .ima keyring." :
+			 "");
+	return STAGE_BLOCKED;
+}
+
+/*
  * Kernels installed on this host.
  *
  * /lib/modules is the register of what is installed -- the package manager
@@ -1113,17 +1270,35 @@ int probe_pcr14_lock_ran(void)
 /*
  * Verdict for the reboot barrier.
  *
- * A register the installer cannot derive means one of two things, and they need
- * the same reboot but not the same sentence: either an agent ran earlier this
- * boot and left its commitment, or the platform extended PCR 14 before LOTA
- * was ever installed -- which every Secure Boot host does, because shim measures
- * the MOK variables there.
- * Whether the lock ran this boot is what tells them apart.
+ * A register the installer cannot derive means one of three things, and they
+ * do not need the same sentence -- or, in one case, the same reboot: an agent
+ * ran earlier this boot and left its commitment, an agent ran this boot
+ * and refused to start, or the platform extended PCR 14 before LOTA was ever
+ * installed, which every Secure Boot host does because shim measures the MOK
+ * variables there.
+ * Whether the lock ran this boot separates the last from the others,
+ * and whether the unit has failed separates the first two.
  */
 enum stage_state probe_pcr14_barrier_stage(int pcr_state, int lock_ran,
-					   int agent_active, char *note,
-					   size_t cap)
+					   int agent_active, int agent_failed,
+					   char *note, size_t cap)
 {
+	/*
+	 * A reboot is what this stage asks for, and it is the one thing that
+	 * cannot help here: the agent refused a gate that will refuse it again
+	 * on the next boot, and the register carries the extend of the attempt.
+	 * Say that instead, whatever the register holds.
+	 */
+	if (agent_failed && !agent_active) {
+		snprintf(note, cap,
+			 "lota-agent has already run and refused to start this "
+			 "boot, so rebooting does not clear the refusal. What "
+			 "it refused is in its own log "
+			 "('journalctl -u lota-agent -b'); fix that and run "
+			 "the installer again.");
+		return STAGE_BLOCKED;
+	}
+
 	switch (pcr_state) {
 	case PROBE_PCR14_LOCK_ONLY:
 		snprintf(note, cap,

@@ -235,12 +235,22 @@ static enum ui_result state_result(enum stage_state st)
 	case STAGE_SKIP:
 		return UI_SKIP;
 	case STAGE_PENDING:
-	case STAGE_BLOCKED:
 		return UI_PENDING;
+	case STAGE_BLOCKED:
+		return UI_BLOCKED;
 	case STAGE_ERROR:
 	default:
 		return UI_FAIL;
 	}
+}
+
+/* Does a stage note punctuate itself? */
+static int ends_in_stop(const char *note)
+{
+	size_t len = note ? strlen(note) : 0;
+
+	return len && (note[len - 1] == '.' || note[len - 1] == '!' ||
+		       note[len - 1] == '?');
 }
 
 /* Probe-only report.
@@ -249,6 +259,7 @@ static int run_status(struct install_ctx *ctx)
 {
 	char note[STAGE_NOTE_CAP];
 	int pending = 0;
+	int blocked = 0;
 	int i;
 
 	if (geteuid() != 0)
@@ -265,13 +276,18 @@ static int run_status(struct install_ctx *ctx)
 		ui_stage_result(&ctx->ui, state_result(st), s->title, note);
 		if (st != STAGE_DONE && st != STAGE_SKIP)
 			pending++;
+		if (st == STAGE_BLOCKED)
+			blocked++;
 		/* let later probes account for boot-chain stages */
 		if (st == STAGE_REBOOT)
 			ctx->reboot_needed = 1;
 	}
 
-	ui_text(&ctx->ui, "\n%d of %d stages need work.", pending,
-		install_stage_count);
+	ui_text(&ctx->ui, "\n%d of %d stages need work%s.", pending,
+		install_stage_count,
+		blocked ? ", and the ones marked BLOCKED need it from someone "
+			  "other than the installer" :
+			  "");
 	return pending == 0 ? EXIT_INSTALL_OK : EXIT_INSTALL_FAIL;
 }
 
@@ -564,8 +580,9 @@ int main(int argc, char **argv)
 			ui_text(&ctx.ui,
 				"Host-local setup is done. What is left "
 				"changes how this machine boots -- the "
-				"initramfs PCR 14 lock and the kernel "
-				"integrity floor -- so it waits for a person: "
+				"initramfs PCR 14 lock, the kernel integrity "
+				"floor and the IMA appraisal scope -- so it "
+				"waits for a person: "
 				"run 'sudo lota-install'. To have a package "
 				"install do it too, create %s (or set "
 				"LOTA_AUTO_BRINGUP=1) before installing.",
@@ -599,6 +616,7 @@ int main(int argc, char **argv)
 						"output above");
 				return EXIT_INSTALL_FAIL;
 			}
+			ctx.applied = 1;
 			st = s->probe(&ctx, note, sizeof(note));
 			/* boot-chain stages stay un-probeable until the reboot
 			 * reboot_needed records their success */
@@ -621,8 +639,9 @@ int main(int argc, char **argv)
 			ctx.reboot_needed = 1;
 			break;
 		case STAGE_BLOCKED:
-			ui_stage_result(&ctx.ui, UI_FAIL, s->title, NULL);
-			ui_text(&ctx.ui, "%s.", note);
+			ui_stage_result(&ctx.ui, UI_BLOCKED, s->title, NULL);
+			ui_text(&ctx.ui, "%s%s", note,
+				ends_in_stop(note) ? "" : ".");
 			if (ctx.opts.unattended)
 				ui_text(&ctx.ui,
 					"Package install itself succeeded. "

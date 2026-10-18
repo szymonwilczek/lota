@@ -34,6 +34,8 @@ enum ui_result {
 	UI_REBOOT, /* Yellow: needs a reboot to take effect */
 	UI_SKIP, /* Dim circle: not applicable on this host */
 	UI_PENDING, /* Yellow dot: work or input still needed */
+	/* Red cross: work this machine needs and the installer must not do */
+	UI_BLOCKED,
 };
 
 /* Output sink:

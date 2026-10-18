@@ -539,16 +539,35 @@ static int grubby_default_args(char *buf, size_t cap)
 
 /* the floor the agent's startup gates demand from the booted kernel */
 struct floor_state {
-	int ima_ok; /* ima_appraise=enforce|fix */
+	int ima_ok; /* appraisal blocks on an integrity failure */
 	int sig_ok; /* module signature enforcement */
 	int lockdown_ok; /* lockdown integrity/confidentiality */
+	int scope_ok; /* the loaded policy appraises an executable */
+	int secureboot; /* the kernel decides the appraisal mode itself */
 };
+
+/*
+ * The scope half, decided the way the agent's gate decides it: a policy that
+ * cannot be read leaves the mode deciding on both sides, and only a policy
+ * that is readable and reaches no executable is a host the agent refuses.
+ */
+static int booted_ima_scope_ok(void)
+{
+	return probe_ima_policy_scope(PROBE_IMA_POLICY_PATH, NULL) !=
+	       PROBE_IMA_SCOPE_NONE;
+}
 
 static void booted_floor(struct floor_state *st)
 {
-	st->ima_ok = probe_booted_ima_ok() == 0;
+	char cmdline[4096];
+
+	st->secureboot = probe_secureboot() == 1;
+	if (probe_read_text("/proc/cmdline", cmdline, sizeof(cmdline)) < 0)
+		cmdline[0] = '\0';
+	st->ima_ok = probe_ima_mode_blocking(st->secureboot, cmdline);
 	st->sig_ok = probe_module_sig_enforced() == 0;
 	st->lockdown_ok = probe_lockdown_restrictive() == 0;
+	st->scope_ok = booted_ima_scope_ok();
 }
 
 static enum stage_state st_cmdline_probe(struct install_ctx *ctx, char *note,
@@ -562,9 +581,13 @@ static enum stage_state st_cmdline_probe(struct install_ctx *ctx, char *note,
 	booted_floor(&st);
 	if (st.ima_ok && st.sig_ok && st.lockdown_ok) {
 		snprintf(note, cap,
-			 "Booted kernel satisfies the integrity "
-			 "floor (IMA appraisal, signed modules, "
-			 "lockdown).");
+			 "Booted kernel appraises in a blocking mode%s, and "
+			 "carries signed modules and lockdown. The rules that "
+			 "mode applies to are the next stage.",
+			 st.secureboot ? " (its own built-in one: Secure Boot "
+					 "makes the kernel ignore "
+					 "ima_appraise=)" :
+					 "");
 		return STAGE_DONE;
 	}
 
@@ -602,8 +625,9 @@ static int st_cmdline_apply(struct install_ctx *ctx)
 	int rc;
 
 	booted_floor(&st);
+
 	if (!st.ima_ok)
-		strcat(args, "ima=on ima_appraise=fix ");
+		strcat(args, "ima_appraise=fix ");
 	if (!st.sig_ok)
 		strcat(args, "module.sig_enforce=1 ");
 	if (!st.lockdown_ok)
@@ -627,7 +651,25 @@ static int st_cmdline_apply(struct install_ctx *ctx)
 	return 0;
 }
 
-/* stage 7: SELinux TPM device fence */
+/* stage 7: IMA appraisal scope */
+
+static enum stage_state st_ima_scope_probe(struct install_ctx *ctx, char *note,
+					   size_t cap)
+{
+	struct probe_ima_scope scope = { 0 };
+
+	(void)ctx;
+
+	scope.is_root = geteuid() == 0;
+	scope.scope = probe_ima_policy_scope(PROBE_IMA_POLICY_PATH,
+					     &scope.policy_signed);
+	scope.secureboot = probe_secureboot() == 1;
+	scope.agent_signed = probe_file_ima_signed(PATH_AGENT_BIN) == 1;
+
+	return probe_ima_scope_stage(&scope, note, cap);
+}
+
+/* stage 8: SELinux TPM device fence */
 
 /* Label check for the agent binary.
  * Mirrors the device-label pattern. */
@@ -806,7 +848,7 @@ static int st_selinux_apply(struct install_ctx *ctx)
 	return 0;
 }
 
-/* stage 8: reboot checkpoint */
+/* stage 9: reboot checkpoint */
 
 static int agent_service_active(void)
 {
@@ -823,6 +865,27 @@ static int unit_enabled(const char *unit)
 	const char *const argv[] = { "systemctl", "is-enabled", unit, NULL };
 
 	return run_capture(argv, out, sizeof(out)) == 0;
+}
+
+/*
+ * Has the agent already run and refused this boot?
+ * A crash loop shows up as restarts, a unit that gave up shows up as failed,
+ * and either answers the question the barrier needs: this host is not waiting
+ * for a reboot.
+ */
+static int agent_start_failed(void)
+{
+	char out[64];
+	const char *const restarts[] = { "systemctl", "show",
+					 "--value",   "-p",
+					 "NRestarts", "lota-agent.service",
+					 NULL };
+	const char *const failed[] = { "systemctl", "is-failed",
+				       "lota-agent.service", NULL };
+
+	if (run_capture(restarts, out, sizeof(out)) == 0 && atoi(out) > 0)
+		return 1;
+	return run_capture(failed, out, sizeof(out)) == 0;
 }
 
 /* what the stage decides on: running now, and running again after a reboot */
@@ -853,11 +916,18 @@ static enum stage_state st_barrier_probe(struct install_ctx *ctx, char *note,
 		return STAGE_ERROR;
 	}
 
+	/*
+	 * A start that failed before this run says nothing about a host this
+	 * run has since changed. Only an unchanged host is held on the strength
+	 * of that failure.
+	 */
 	return probe_pcr14_barrier_stage(pcr, probe_pcr14_lock_ran(),
-					 agent_service_active(), note, cap);
+					 agent_service_active(),
+					 !ctx->applied && agent_start_failed(),
+					 note, cap);
 }
 
-/* stage 9: agent service */
+/* stage 10: agent service */
 
 static enum stage_state st_agent_probe(struct install_ctx *ctx, char *note,
 				       size_t cap)
@@ -922,7 +992,7 @@ static int st_agent_apply(struct install_ctx *ctx)
 	return 0;
 }
 
-/* stage 10: enrollment */
+/* stage 11: enrollment */
 
 /*
  * Locate the publisher profile this host enrolls into.
@@ -1090,11 +1160,19 @@ int install_self_check(struct install_ctx *ctx)
 		       install_stage_count + 1, "Self-check");
 
 	booted_floor(&st);
-	ui_kv(&ctx->ui, "Kernel integrity floor",
-	      st.ima_ok && st.sig_ok && st.lockdown_ok ? "Satisfied" :
-							 "NOT satisfied");
-	if (!(st.ima_ok && st.sig_ok && st.lockdown_ok))
-		ok = 0;
+	{
+		/* the whole floor, scope included: this line stands for what
+		 * the agent's startup gates read, not for one stage's args */
+		int floor_ok = st.ima_ok && st.sig_ok && st.lockdown_ok &&
+			       st.scope_ok;
+
+		ui_kv(&ctx->ui, "Kernel integrity floor",
+		      floor_ok	   ? "Satisfied" :
+		      !st.scope_ok ? "NOT satisfied (nothing appraised)" :
+				     "NOT satisfied");
+		if (!floor_ok)
+			ok = 0;
+	}
 
 	ui_kv(&ctx->ui, "agent binary immutability",
 	      probe_fsverity_state(PATH_AGENT_BIN) == PROBE_VERITY_ENABLED ?
@@ -1320,6 +1398,27 @@ const struct stage install_stages[] = {
 		.probe = st_cmdline_probe,
 		.apply = st_cmdline_apply,
 		.boot_path = 1,
+	},
+	{
+		.title = "IMA appraisal scope",
+		.explain =
+			"The previous step set the appraisal *mode*; the "
+			"kernel applies that mode only to the rules its "
+			"loaded IMA policy carries. A policy with no appraise "
+			"rule reaching an executable appraises nothing, and "
+			"the agent refuses to start on such a host.\n"
+			"This step reads the loaded policy and reports "
+			"whether the scope the agent's gate demands is "
+			"there. It loads no rules: an IMA rule cannot name a "
+			"path, so the rule that appraises the agent appraises "
+			"every executable it matches, and on a Secure Boot "
+			"host that happens in enforce whatever the cmdline "
+			"asked for -- a host whose files carry no signature "
+			"would refuse them all at the next boot. The scope "
+			"arrives with the signatures, from IMA-signed "
+			"distribution packages or an operator image "
+			"pipeline.",
+		.probe = st_ima_scope_probe,
 	},
 	{
 		.title = "SELinux fence on the TPM device",
