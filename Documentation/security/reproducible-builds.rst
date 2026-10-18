@@ -22,7 +22,9 @@ built:
   ``__FILE__``.
 * **Go** (``lota-verifier``, ``lota-attest-ca``) is built with ``-trimpath``,
   which strips the module and build paths the toolchain would otherwise bake
-  in.
+  in. ``lota-fleet`` adds ``CGO_ENABLED=0``, which removes the build host's
+  libc from the result as well: the operator reference calls that binary
+  static, and a cgo build links whatever glibc the builder happened to have.
 * ``make reproducible-build`` pins the remaining environmental inputs:
   ``SOURCE_DATE_EPOCH`` (default: the HEAD commit time), ``TZ=UTC`` and
   ``LC_ALL=C``.
