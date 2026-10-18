@@ -66,10 +66,12 @@ Run the end-to-end proof
    make all examples
    ./examples/ci-gate/run.sh
 
-``run.sh`` needs no root and no real TPM. It starts a throwaway swTPM,
-runs ``lota-agent`` under ``systemd-socket-activate`` so the agent listens
-on a path in ``/tmp`` instead of ``/run/lota``, and then asserts the two
-outcomes that matter:
+``run.sh`` needs no root and no real TPM, and no LOTA configuration: the
+agent it starts serves its own simulated verdict, and the root-only
+``/etc/lota/lota.conf`` of a host that does run LOTA is stepped over with a
+line saying so. It starts a throwaway swTPM, runs ``lota-agent`` under
+``systemd-socket-activate`` so the agent listens on a path in ``/tmp``
+instead of ``/run/lota``, and then asserts the two outcomes that matter:
 
 * an attested host receives the secret, byte for byte, written ``0600``;
 * a host the gate does not trust exits non-zero, writes **no** file, and

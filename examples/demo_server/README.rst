@@ -204,11 +204,13 @@ Runtime coverage as a policy
 A token states whether the agent's runtime measurement covered every object
 the producer maps (``LOTA_FLAG_IMAGE_FULLY_MEASURED``) or only those the
 kernel holds an fs-verity digest for. The bit is inside the signed token, so
-it cannot be claimed by a client that did not earn it.
+it cannot be claimed by a client that did not earn it, and a host that
+measured nothing does not carry it: an empty protected set is a round that
+measured no object, which is not a round that measured every object.
 
 ``--require-full-image`` makes this server demand it: a heartbeat without the
 bit is ``UNTRUSTED`` with the missing flags named. On a host whose
 distribution ships libraries without fs-verity that refuses every heartbeat,
-which is the point -- the choice belongs to the publisher, and this is what
-choosing it looks like. Left off, partial coverage is accepted and the bit is
+and so does a host that protects no process at all, which is the point -- the
+choice belongs to the publisher, and this is what choosing it looks like. Left off, partial coverage is accepted and the bit is
 still reported, so a backend can log or score it instead.

@@ -83,6 +83,28 @@ int main(void)
 	CHECK(!(flags & LOTA_STATUS_ATTESTED),
 	      "the attested bit is not produced from local state");
 
+	/*
+	 * Runtime coverage.
+	 * Host protecting nothing has measured nothing, and the publisher
+	 * control this bit serves asks for the opposite.
+	 */
+	CHECK(!lota_coverage_is_full(0, true),
+	      "a round with nothing to measure is not full coverage");
+	CHECK(!lota_coverage_is_full(0, false),
+	      "an empty round stays false however it is asked");
+	CHECK(lota_coverage_is_full(1, true),
+	      "one protected process with every object measured is full");
+	CHECK(!lota_coverage_is_full(3, false),
+	      "an object left unmeasured is not full coverage");
+
+	/* the fold puts that answer in the word both roads hand out */
+	CHECK(lota_status_fold_coverage(0, lota_coverage_is_full(1, true)) ==
+		      LOTA_STATUS_IMAGE_FULLY_MEASURED,
+	      "full coverage sets the bit");
+	CHECK(lota_status_fold_coverage(LOTA_STATUS_IMAGE_FULLY_MEASURED,
+					lota_coverage_is_full(0, true)) == 0,
+	      "an empty round clears a bit an earlier round set");
+
 	printf("\n%s\n", g_failures ? "FAILURES" : "All tests passed");
 	return g_failures ? 1 : 0;
 }

@@ -261,7 +261,9 @@ runtime unmeasurable, and that is the common case on a stock host today.
 
 The measurement does not paper over it. Objects with no digest are left out of
 the fold and counted, and the token carries
-``LOTA_FLAG_IMAGE_FULLY_MEASURED`` only when nothing was left out. Requiring
+``LOTA_FLAG_IMAGE_FULLY_MEASURED`` only when the round had a process to
+measure and nothing was left out -- a host protecting nothing measured
+nothing, and that is not full coverage. Requiring
 full coverage is the publisher's policy call:
 
 .. code:: sh
