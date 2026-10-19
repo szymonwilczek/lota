@@ -211,18 +211,6 @@ func postgresEnforcementStores(db *sql.DB, logger *slog.Logger) enforcementStore
 	}
 }
 
-// memoryEnforcementStores keeps the group in process memory;
-// it is lost on exit.
-func memoryEnforcementStores() enforcementStores {
-	audit := store.NewMemoryAuditLog()
-	return enforcementStores{
-		audit:        audit,
-		revocations:  store.NewMemoryRevocationStore(audit),
-		bans:         store.NewMemoryBanStore(audit),
-		attestations: store.NewMemoryAttestationLog(),
-	}
-}
-
 // install sets the revocation, ban and attestation stores on cfg.
 // A nil store stays nil, which the API reports as absent.
 func (e enforcementStores) install(cfg *verify.VerifierConfig) {
