@@ -459,7 +459,7 @@ $(INC_DIR)/vmlinux.h:
 	$(Q)bpftool btf dump file /sys/kernel/btf/vmlinux format c > $@
 
 # Phony targets
-.PHONY: help all bpf agent initramfs-lock installer verifier attest-ca fleet-cli loadgen packages container-images container-image-verifier container-image-attest-ca helm-package helm-lint helm-template observability-lint srpm rpm-sign dnf-repo sdk server-sdk wine-hook anticheat pkgconfig sdk-stage clean htmldocs docs-lint docs-linkcheck docs-serve cleandocs install check-version-tag check-includes check-el9-decls check-license-boundary check-doc-diagnostics check-stack-frames check-tpm-strerror check-package-manifests check-helm-chart lint lint-c lint-go sparse smatch coccicheck reproducible-build test test-unit test-bins test-hardware test-sdk sanitizer-build valgrind-unit valgrind-smoke fuzz-agent fuzz-config fuzz-enroll fuzz-seal-envelope fuzz-tpm-attest fuzz-policy-sign fuzz-server-sdk fuzz-tpm-resp fuzz-bpf-devt fuzz-bpf-open-flags fuzz-bpf-kmem-device fuzz-bpf-event-budget fuzz-bpf-inaccessible-exec fuzz-bpf-shebang fuzz-bpf-all fuzz-all syzkaller-fuzz-loader examples examples-clean sign-bpf check-abi abi-baseline
+.PHONY: help all bpf agent initramfs-lock installer verifier attest-ca fleet-cli loadgen packages container-images container-image-verifier container-image-attest-ca container-image-attest-ca-hsm helm-package helm-lint helm-template observability-lint srpm rpm-sign dnf-repo sdk server-sdk wine-hook anticheat pkgconfig sdk-stage clean htmldocs docs-lint docs-linkcheck docs-serve cleandocs install check-version-tag check-includes check-el9-decls check-license-boundary check-doc-diagnostics check-stack-frames check-tpm-strerror check-package-manifests check-helm-chart check-container-images lint lint-c lint-go sparse smatch coccicheck reproducible-build test test-unit test-bins test-hardware test-sdk sanitizer-build valgrind-unit valgrind-smoke fuzz-agent fuzz-config fuzz-enroll fuzz-seal-envelope fuzz-tpm-attest fuzz-policy-sign fuzz-server-sdk fuzz-tpm-resp fuzz-bpf-devt fuzz-bpf-open-flags fuzz-bpf-kmem-device fuzz-bpf-event-budget fuzz-bpf-inaccessible-exec fuzz-bpf-shebang fuzz-bpf-all fuzz-all syzkaller-fuzz-loader examples examples-clean sign-bpf check-abi abi-baseline
 
 bpf: $(BPF_OBJ)
 
@@ -573,8 +573,19 @@ $(VERIFIER_BIN): $(wildcard $(SRC_DIR)/verifier/*.go $(SRC_DIR)/verifier/**/*.go
 # Go attestation CA
 # GO_TAGS optionally selects build tags, e.g. GO_TAGS=pkcs11 to compile the
 # HSM-backed signing-key support (needs cgo and a PKCS#11 module at runtime).
+#
+# The stamp holds GO_TAGS and is rewritten only when it changes, so a new tag
+# set rebuilds the CA.
 GO_TAGS ?=
-$(ATTESTCA_BIN): $(wildcard $(SRC_DIR)/attestca/*.go $(SRC_DIR)/attestca/**/*.go $(SRC_DIR)/crl/*.go) | $(BUILD_DIR)
+ATTESTCA_TAGS_STAMP := $(BUILD_DIR)/.attestca-tags
+$(ATTESTCA_TAGS_STAMP): FORCE | $(BUILD_DIR)
+	$(Q)printf '%s\n' '$(GO_TAGS)' | cmp -s - $@ 2>/dev/null || printf '%s\n' '$(GO_TAGS)' >$@
+
+# Always out of date: the stamp recipe runs every time and compares itself
+.PHONY: FORCE
+FORCE:
+
+$(ATTESTCA_BIN): $(wildcard $(SRC_DIR)/attestca/*.go $(SRC_DIR)/attestca/**/*.go $(SRC_DIR)/crl/*.go) $(ATTESTCA_TAGS_STAMP) | $(BUILD_DIR)
 	$(QUIET_GO)
 	$(Q)cd $(SRC_DIR)/attestca && env GOCACHE=$(GOCACHE) go build -trimpath $(if $(GO_TAGS),-tags $(GO_TAGS),) -o $(abspath $@) .
 
@@ -706,13 +717,27 @@ KO_LABELS := \
 KO_BUILD = env KO_DOCKER_REPO=$(KO_DOCKER_REPO) SOURCE_DATE_EPOCH=$(REPRO_SOURCE_DATE_EPOCH) \
 	$(KO) build -B --sbom=spdx --platform=$(KO_PLATFORMS) --tags=$(KO_IMAGE_TAGS) $(KO_LABELS)
 
-container-images: container-image-verifier container-image-attest-ca
+# HSM-capable CA image: a variant tag of the attestca repository, built from
+# packaging/ko/attestca-hsm; amd64 only, as cgo does not cross-compile here
+KO_HSM_CONFIG := $(CURDIR)/packaging/ko/attestca-hsm
+KO_HSM_PLATFORMS ?= linux/amd64
+KO_HSM_TAG_SUFFIX ?= -hsm
+KO_COMMA := ,
+KO_HSM_IMAGE_TAGS ?= $(subst $(KO_COMMA),$(KO_HSM_TAG_SUFFIX)$(KO_COMMA),$(KO_IMAGE_TAGS))$(KO_HSM_TAG_SUFFIX)
+KO_BUILD_HSM = env KO_CONFIG_PATH=$(KO_HSM_CONFIG) KO_DOCKER_REPO=$(KO_DOCKER_REPO) \
+	SOURCE_DATE_EPOCH=$(REPRO_SOURCE_DATE_EPOCH) \
+	$(KO) build -B --sbom=spdx --platform=$(KO_HSM_PLATFORMS) --tags=$(KO_HSM_IMAGE_TAGS) $(KO_LABELS)
+
+container-images: container-image-verifier container-image-attest-ca container-image-attest-ca-hsm
 
 container-image-verifier:
 	$(Q)cd $(SRC_DIR)/verifier && $(KO_BUILD) .
 
 container-image-attest-ca:
 	$(Q)cd $(SRC_DIR)/attestca && $(KO_BUILD) .
+
+container-image-attest-ca-hsm:
+	$(Q)cd $(SRC_DIR)/attestca && $(KO_BUILD_HSM) .
 
 # Helm chart validation (no Kubernetes cluster required)
 # helm-lint checks chart structure; helm-template renders the manifests
@@ -727,10 +752,15 @@ HELM_CHECK_VALUES := \
 	--set policy.enabled=true \
 	--set policy.existingSecret=example-policy
 
-# Chart-behaviour gate: Chart.yaml carries the @VERSION@ placeholder,
-# so the chart deploys the version the tree builds
+# Chart-behaviour gate: Chart.yaml carries @VERSION@ and rendered pods can
+# start; neither is caught by helm-lint or kubeconform
 check-helm-chart:
 	@scripts/check-helm-chart.sh
+
+# Image-behaviour gate: pure-Go images hold the CA key on disk;
+# the HSM image (tag, cgo, loader) is the production key road
+check-container-images:
+	@scripts/check-container-images.sh
 
 # Chart version and appVersion come from VERSION
 HELM_PACKAGE_DIR ?= $(BUILD_DIR)/helm
@@ -1882,6 +1912,17 @@ test-unit: all $(TEST_BINS)
 	fi
 	@tests/integration/test_steam_setup_dropin.sh
 	@tests/integration/test_proton_hook_disable.sh
+	@if command -v go >/dev/null 2>&1 && command -v cc >/dev/null 2>&1; then \
+		tests/integration/test_attestca_build_tags.sh; \
+	else \
+		echo "SKIP: test_attestca_build_tags.sh (no go or C compiler)"; \
+	fi
+	@if command -v softhsm2-util >/dev/null 2>&1 && command -v pkcs11-tool >/dev/null 2>&1 && \
+		command -v openssl >/dev/null 2>&1; then \
+		tests/integration/test_hsm_ca_example.sh; \
+	else \
+		echo "SKIP: test_hsm_ca_example.sh (no softhsm2-util, pkcs11-tool or openssl)"; \
+	fi
 	@if [ -S /run/lota/lota.sock ]; then \
 		$(BUILD_DIR)/test_sdk_ipc; \
 		$(BUILD_DIR)/test_ipc_client status; \
@@ -2234,6 +2275,7 @@ help:
 	@echo "  packages         Build native RPMs (agent, verifier, attest-ca, sdk-devel) via nfpm"
 	@echo "  rhel-package-smoke Build+install the RPMs on Rocky 9 (podman); no attestation"
 	@echo "  container-images Build distroless OCI images for verifier + attest-CA (ko)"
+	@echo "  container-image-attest-ca-hsm  Build the PKCS#11 (HSM) attest-CA image"
 	@echo "  srpm             Build a source RPM from HEAD (COPR / rpmbuild)"
 	@echo "  rpm-sign         GPG-sign the RPMs in PKG_DIR (LOTA_RPM_GPG_NAME)"
 	@echo "  dnf-repo         Build a signed createrepo_c dnf repository under REPO_DIR"
@@ -2259,7 +2301,8 @@ help:
 	@echo "  sparse           sparse semantic check over C sources"
 	@echo "  smatch           smatch flow analysis over C sources"
 	@echo "  coccicheck       Coccinelle semantic-patch rules over C sources"
-	@echo "  check-helm-chart Hold the chart to the version the tree builds"
+	@echo "  check-helm-chart Hold the chart to the version and the pod it deploys"
+	@echo "  check-container-images Hold the images to the key roads they offer"
 	@echo "  helm-package     Package the verifier Helm chart at the tree's version"
 	@echo "  helm-lint        Lint the verifier Helm chart"
 	@echo "  helm-template    Render the Helm chart and schema-check with kubeconform"

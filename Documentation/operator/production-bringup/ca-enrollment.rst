@@ -74,6 +74,11 @@ build of the CA -- the default binary is pure-Go and has no PKCS#11 support:
 
     make BUILD_DIR=/var/tmp/lota-build attest-ca GO_TAGS=pkcs11   # cgo + PKCS#11
 
+A containerised CA takes the same road through the ``-hsm`` variant of the
+published image, which is that build on a base with a loader under it; the
+default image tag has no PKCS#11 support and refuses the flags below. See
+:doc:`../container-images`.
+
 Point the CA at the token instead of ``-ca-key``. The PIN is read from the
 environment, never a flag, so it stays out of the process argument list:
 
@@ -93,6 +98,10 @@ Select the key by ``-ca-key-pkcs11-label`` (CKA_LABEL) or ``-ca-key-pkcs11-id``
 (CKA_ID, hex). The CA checks the token key's public key against ``ca.crt`` at
 startup and refuses to run on a mismatch, the same check applied to an on-disk
 key, so a wrong token or label cannot sign under the CA identity.
+
+A CA without PKCS#11 compiled in refuses a token key at key setup, and names both
+roads to a build that has it: ``make attest-ca GO_TAGS=pkcs11`` on a host, and the
+``-hsm`` image tag in a container.
 
 ``-ca-key`` and the ``-ca-key-pkcs11-*`` flags are mutually exclusive, and that
 is answered on **any** of the four: passing ``-ca-key`` beside a token, label or
