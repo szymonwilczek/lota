@@ -172,6 +172,12 @@ type BaselineStorer interface {
 	Stats() BaselineStats
 }
 
+// PagedClientLister is implemented by baseline stores that can page
+// the client listing in one query.
+type PagedClientLister interface {
+	ListClientsPage(limit, offset int) ([]string, error)
+}
+
 // stores known-good measurements for a client
 type ClientBaseline struct {
 	// agent self-measurement hash

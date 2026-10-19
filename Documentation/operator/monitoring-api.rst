@@ -172,8 +172,12 @@ Reader. Query: ``limit``, ``offset`` (see Pagination). **200**::
      "offset": 0
    }
 
-``total`` counts durable clients plus active in-memory sessions not yet
-persisted.
+The list is the durable per-client record -- the baseline every instance of a
+deployment shares -- so behind a load balancer every instance answers it the
+same way, and the answer survives a restart. ``total`` counts that record plus
+the sessions this instance is holding that have no baseline pinned yet; those
+are appended after the record, so a client mid-handshake is listed once and
+only until its first baseline is written.
 
 GET /api/v1/clients/{id}
 ------------------------
@@ -200,6 +204,25 @@ register anything with the verifier. ::
    }
 
 String fields are omitted when empty.
+
+Everything above is read from the state the deployment shares -- the durable
+per-client record -- except two fields, which are this instance's own:
+
+``monotonic_counter``
+   the nonce sequence this process has seen from the client. It is not
+   compared against anything, so it gates nothing; it resets when the instance
+   restarts and differs between instances at the same moment. It is not a
+   replay or reordering indicator for a fleet.
+
+``pending_challenges``
+   the challenges this instance is holding for the client right now. A
+   challenge lives where the connection is, so an instance the client is not
+   talking to reports none.
+
+Behind a load balancer, read either of those from one pinned instance or not
+at all. ``last_attestation``, ``attestation_count``, ``first_seen``,
+``tenant``, ``revoked`` and ``pcr14_baseline`` are the fleet's answer and are
+the same on every instance.
 
 Revocations
 ===========

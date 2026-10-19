@@ -25,16 +25,15 @@ One verifier process owns its state. Two equivalent storage layouts exist:
   are in-memory. A restart therefore drops the baselines and the next report
   from each device re-pins them.
 * **SQLite (production default).** ``--db`` persists all of the above to one
-  SQLite file. The certificate-backed AIK store sits beside it under
-  ``--aik-store`` exactly as above, so ``--require-cert`` belongs here: this is
-  the single-node layout that both verifies AIK certificate chains and keeps
-  its baselines across a restart.
+  SQLite file, the client registry included, so ``--require-cert`` belongs
+  here: this is the single-node layout that both verifies AIK certificate
+  chains and keeps its baselines and its inventory across a restart.
 
-The AIK store and the state backend are separate choices. ``--require-cert``
-and ``--aik-ca-cert`` select the certificate-verifying AIK store, which is
-file-backed under ``--aik-store`` on every backend; ``--db`` and ``--pg-dsn``
-decide where the baseline, nonce and enforcement state lives. Neither
-constrains the other.
+Verification and storage remain separate choices. ``--require-cert`` and
+``--aik-ca-cert`` select the certificate-verifying AIK store on every backend;
+``--db`` and ``--pg-dsn`` decide where state lives, and the store registers
+into that state -- into ``--aik-store`` only when no database is configured.
+Neither choice constrains the other.
 
 Single node is the simplest topology and needs no external database. Its
 ceiling is one process: there is no failover, and the in-memory enforcement
@@ -59,7 +58,8 @@ check.
     (2) - shared enforcement state
 
 With ``--pg-dsn`` the shared database holds the baseline, used-nonce,
-revocation, ban, audit and attestation state. The consequences:
+revocation, ban, audit and attestation state, and the client registry itself.
+The consequences:
 
 * A baseline pinned, a client revoked, or hardware banned on one instance is
   enforced by every instance. The per-client baseline pin is committed under a
@@ -67,11 +67,26 @@ revocation, ban, audit and attestation state. The consequences:
   holds across instances exactly as it does within one SQLite process.
 * A used nonce recorded on one instance is rejected as replayed on all
   instances.
+* A client registered through one instance is listed by every instance, so
+  ``GET /api/v1/clients`` is a fleet inventory, and it survives a restart.
+  The certificate-backed store verifies the AIK certificate chain and it
+  remembers the result.
+* ``GET /api/v1/clients/{id}`` answers from the same shared record, including
+  when the client last attested. Two fields stay this instance's --
+  ``monotonic_counter`` and ``pending_challenges`` -- and
+  :doc:`monitoring-api` says what each of them is worth.
 
 What Postgres adds over ``--db`` is the shared state above, not certificate
 verification: every backend selects the certificate-backed AIK store the same
-way. Run each instance with identical policy, CA roots and storage
-configuration.
+way, and each persists into the registry its own state lives in -- the database
+where one is configured, ``--aik-store`` where none is. Run each instance with
+identical policy, CA roots and storage configuration.
+
+An instance moved onto a shared database brings no registry with it: the
+clients in its ``--aik-store`` directory are not imported, and each one
+re-registers on its next attestation through the same certificate chain
+verification it passed the first time. The baseline it is held to was already
+in the database and is enforced throughout.
 
 Shared-state requirements
 -------------------------
