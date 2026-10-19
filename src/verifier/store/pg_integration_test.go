@@ -544,3 +544,94 @@ func TestPostgresServerMaxConnections(t *testing.T) {
 		t.Errorf("ServerMaxConnections = %d, server reports %d", got, want)
 	}
 }
+
+// Postgres refuses at open what SQLite does: a newer version, another build's
+// fingerprint, and a table set these migrations do not create.
+func TestPostgresRefusesADatabaseThisBuildDidNotWrite(t *testing.T) {
+	dsn := os.Getenv("LOTA_TEST_PG_DSN")
+	if dsn == "" {
+		t.Skip("LOTA_TEST_PG_DSN not set; skipping Postgres integration test")
+	}
+
+	// the pool this test opens is the production one, so it runs the
+	// migrations and the checks under the same advisory lock
+	prepared, err := OpenPostgresDB(dsn)
+	if err != nil {
+		t.Fatalf("OpenPostgresDB: %v", err)
+	}
+	t.Cleanup(func() { prepared.Close() })
+
+	restore := func(t *testing.T, statements ...string) {
+		t.Helper()
+		for _, stmt := range statements {
+			if _, err := prepared.Exec(stmt); err != nil {
+				t.Fatalf("restore %q: %v", stmt, err)
+			}
+		}
+		if db, err := OpenPostgresDB(dsn); err != nil {
+			t.Fatalf("the database must open again after the test undoes its damage: %v", err)
+		} else {
+			db.Close()
+		}
+	}
+
+	t.Run("a version this build has never applied", func(t *testing.T) {
+		target := PgTargetSchemaVersion()
+		if _, err := prepared.Exec(
+			"INSERT INTO schema_version (version, fingerprint) VALUES ($1, 'later-build')", target+1); err != nil {
+			t.Fatalf("stamp a newer version: %v", err)
+		}
+		defer restore(t, fmt.Sprintf("DELETE FROM schema_version WHERE version = %d", target+1))
+
+		db, err := OpenPostgresDB(dsn)
+		if err == nil {
+			db.Close()
+			t.Fatal("a database written by a newer build must be refused")
+		}
+		if !errors.Is(err, ErrSchemaNewerThanBuild) {
+			t.Fatalf("refusal = %v, want ErrSchemaNewerThanBuild", err)
+		}
+	})
+
+	t.Run("migration text that is not this build's", func(t *testing.T) {
+		var original sql.NullString
+		if err := prepared.QueryRow(
+			"SELECT fingerprint FROM schema_version ORDER BY version DESC LIMIT 1").Scan(&original); err != nil {
+			t.Fatalf("read the recorded fingerprint: %v", err)
+		}
+		if _, err := prepared.Exec(
+			"UPDATE schema_version SET fingerprint = 'another-builds-schema'"); err != nil {
+			t.Fatalf("stamp another build's fingerprint: %v", err)
+		}
+		defer restore(t, fmt.Sprintf("UPDATE schema_version SET fingerprint = '%s'", original.String))
+
+		db, err := OpenPostgresDB(dsn)
+		if err == nil {
+			db.Close()
+			t.Fatal("a database written by a build with different migrations must be refused")
+		}
+		if !errors.Is(err, ErrSchemaFingerprintMismatch) {
+			t.Fatalf("refusal = %v, want ErrSchemaFingerprintMismatch", err)
+		}
+	})
+
+	t.Run("a table these migrations do not create", func(t *testing.T) {
+		if _, err := prepared.Exec(
+			"CREATE TABLE session_tokens (token_hash BYTEA PRIMARY KEY, consumed BOOLEAN NOT NULL DEFAULT FALSE)"); err != nil {
+			t.Fatalf("create the other build's table: %v", err)
+		}
+		defer restore(t, "DROP TABLE session_tokens")
+
+		db, err := OpenPostgresDB(dsn)
+		if err == nil {
+			db.Close()
+			t.Fatal("a database whose shape this build did not write must be refused")
+		}
+		if !errors.Is(err, ErrSchemaShapeMismatch) {
+			t.Fatalf("refusal = %v, want ErrSchemaShapeMismatch", err)
+		}
+		if !strings.Contains(err.Error(), "session_tokens") {
+			t.Fatalf("the refusal must name what differs: %s", err.Error())
+		}
+	})
+}

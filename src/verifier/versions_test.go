@@ -28,8 +28,10 @@ func TestWriteVersionsReportsProtocols(t *testing.T) {
 
 	for _, want := range []string{
 		"attestation report wire:  " + reportWireString(),
-		"postgres schema target:   " + itoa(store.PgTargetSchemaVersion()),
-		"sqlite schema target:     " + itoa(store.SQLiteTargetSchemaVersion()),
+		"postgres schema target:   " + itoa(store.PgTargetSchemaVersion()) +
+			" (" + store.PgSchemaFingerprint() + ")",
+		"sqlite schema target:     " + itoa(store.SQLiteTargetSchemaVersion()) +
+			" (" + store.SQLiteSchemaFingerprint() + ")",
 		"minimum TLS:              1.3",
 	} {
 		if !strings.Contains(out, want) {
