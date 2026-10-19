@@ -1,4 +1,7 @@
 # SPDX-License-Identifier: MIT
+{{- if eq .Chart.AppVersion "@VERSION@" }}
+{{- fail "appVersion is the @VERSION@ placeholder: install the chart make helm-package writes, or a released one." }}
+{{- end }}
 {{- if and .Values.requireCert (not .Values.aikCA.existingSecret) }}
 {{- fail "requireCert is true but aikCA.existingSecret is unset: the verifier refuses to start without a trusted attestation-CA root. Set aikCA.existingSecret to a Secret holding the Privacy CA PEM root(s), or set requireCert=false (INSECURE)." }}
 {{- end }}
@@ -7,6 +10,17 @@
 {{- end }}
 {{- if and .Values.policy.enabled .Values.allowPermissivePolicy }}
 {{- fail "policy.enabled and allowPermissivePolicy are mutually exclusive: choose a real policy or the permissive built-in, not both." }}
+{{- end }}
+{{- if and .Values.httpApi.enabled (not .Values.httpApi.auth.existingSecret) }}
+{{- fail "httpApi.enabled is set but httpApi.auth.existingSecret is unset: every bind in a pod is non-loopback, and the verifier refuses a non-loopback monitoring API with no key -- which aborts startup and takes the attestation listener down with it. Set httpApi.auth.existingSecret to a Secret holding the API key(s), or leave httpApi.enabled false." }}
+{{- end }}
+{{- if and .Values.httpApi.auth.existingSecret (not (or .Values.httpApi.auth.readerKey .Values.httpApi.auth.adminKey)) }}
+{{- fail "httpApi.auth.existingSecret names a Secret but neither httpApi.auth.readerKey nor httpApi.auth.adminKey names an entry in it, so no key would reach the verifier. Name at least one." }}
+{{- end }}
+{{- $sharedBackend := or .Values.postgres.existingSecret .Values.postgres.dsn }}
+{{- $apiAuth := and .Values.httpApi.enabled .Values.httpApi.auth.existingSecret }}
+{{- if and (gt (int .Values.replicaCount) 1) (not $sharedBackend) }}
+{{- fail "replicaCount is greater than 1 with no shared backend: each replica would keep its own enforcement state, so a ban imposed on one is unknown to the others. Set postgres.existingSecret to a Secret holding the DSN (or postgres.dsn to have the chart create one), or set replicaCount=1 for a single instance." }}
 {{- end }}
 apiVersion: apps/v1
 kind: Deployment
@@ -65,7 +79,9 @@ spec:
             {{- with .Values.extraArgs }}
             {{- toYaml . | nindent 12 }}
             {{- end }}
+          {{- if or $sharedBackend $apiAuth }}
           env:
+            {{- if $sharedBackend }}
             # DSN carries the Postgres password, so it comes from Secret
             # and never appears in the pod's argv
             - name: LOTA_PG_DSN
@@ -73,6 +89,24 @@ spec:
                 secretKeyRef:
                   name: {{ include "lota-verifier.pgSecretName" . }}
                   key: {{ .Values.postgres.dsnKey }}
+            {{- end }}
+            {{- if $apiAuth }}
+            {{- if .Values.httpApi.auth.readerKey }}
+            - name: LOTA_READER_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.httpApi.auth.existingSecret }}
+                  key: {{ .Values.httpApi.auth.readerKey }}
+            {{- end }}
+            {{- if .Values.httpApi.auth.adminKey }}
+            - name: LOTA_ADMIN_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.httpApi.auth.existingSecret }}
+                  key: {{ .Values.httpApi.auth.adminKey }}
+            {{- end }}
+            {{- end }}
+          {{- end }}
           ports:
             - name: attest
               containerPort: {{ .Values.service.port }}
@@ -83,14 +117,29 @@ spec:
               protocol: TCP
             {{- end }}
           {{- if .Values.probes.enabled }}
+          {{- /* /health needs no key; without the API only a TCP open is left */}}
           readinessProbe:
+            {{- if .Values.httpApi.enabled }}
+            httpGet:
+              path: /health
+              port: http-api
+              scheme: HTTPS
+            {{- else }}
             tcpSocket:
               port: attest
+            {{- end }}
             initialDelaySeconds: {{ .Values.probes.initialDelaySeconds }}
             periodSeconds: {{ .Values.probes.periodSeconds }}
           livenessProbe:
+            {{- if .Values.httpApi.enabled }}
+            httpGet:
+              path: /health
+              port: http-api
+              scheme: HTTPS
+            {{- else }}
             tcpSocket:
               port: attest
+            {{- end }}
             initialDelaySeconds: {{ .Values.probes.initialDelaySeconds }}
             periodSeconds: {{ .Values.probes.periodSeconds }}
           {{- end }}

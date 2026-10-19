@@ -210,13 +210,7 @@ jobs:
         uses: azure/setup-helm@1a275c3b69536ee54be43f2070a358922e12c8d4 # v4
 
       - name: Package the chart
-        env:
-          TAG: ${{ github.ref_name }}
-        run: |
-          set -eu
-          mkdir -p dist
-          helm package deploy/helm/lota-verifier \
-            --version "${TAG#v}" --app-version "${TAG#v}" -d dist
+        run: make helm-package HELM_PACKAGE_DIR=dist
 
       - name: Push the chart to ghcr.io
         env:

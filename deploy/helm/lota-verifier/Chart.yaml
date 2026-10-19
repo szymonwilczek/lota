@@ -4,8 +4,10 @@ apiVersion: v2
 name: lota-verifier
 description: LOTA remote-attestation verifier, HA and Postgres-backed.
 type: application
+# version and appVersion are set from the top-level VERSION file by
+# make helm-package; install the packaged chart, not this directory.
 version: 0.1.0
-appVersion: "0.4.0"
+appVersion: "@VERSION@"
 kubeVersion: ">=1.25.0-0"
 home: https://github.com/szymonwilczek/lota
 sources:
