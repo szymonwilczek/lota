@@ -76,6 +76,9 @@ spec:
             {{- if .Values.allowPermissivePolicy }}
             - --allow-permissive-policy
             {{- end }}
+            {{- if .Values.shutdownDrain }}
+            - --shutdown-drain={{ .Values.shutdownDrain }}
+            {{- end }}
             {{- with .Values.extraArgs }}
             {{- toYaml . | nindent 12 }}
             {{- end }}

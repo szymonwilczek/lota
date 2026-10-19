@@ -92,7 +92,7 @@ port. A minimal rootless Podman invocation::
        -v lota-verifier-state:/var/lib/lota \
        -p 8443:8443 \
        ghcr.io/szymonwilczek/lota/verifier:latest \
-       --aik-store /var/lib/lota/aik --nonce-db /var/lib/lota/nonce.db
+       --aik-store /var/lib/lota/aik --state-db /var/lib/lota/verifier-state.sqlite
 
 Run the service under systemd with a Quadlet ``.container`` unit so it is
 managed the same way as the host-native agent. The CA image follows the same

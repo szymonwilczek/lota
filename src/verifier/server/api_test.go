@@ -271,6 +271,8 @@ func setupTestAPIListeningWithKeys(t *testing.T, adminKey, readerKey string) (*h
 		listener: ln,
 		addr:     ":8443",
 	}
+	// attestation listener is up
+	srv.serving.Store(true)
 
 	mux := http.NewServeMux()
 	NewAPIHandler(mux, v, srv, auditLog, nil, m, nil, adminKey, readerKey)

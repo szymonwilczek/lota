@@ -23,6 +23,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -140,7 +141,49 @@ func NewAPIHandler(mux *http.ServeMux, verifier *verify.Verifier, srv *Server, a
 	h.handle(mux, "DELETE /api/v1/bans/", h.requireAdmin(h.handleUnbanHardware),
 		"DELETE /api/v1/bans/{id}")
 
+	// catch-all, so 404/405 use the error envelope instead of the mux's
+	// plain text; not via handle(), as it is no endpoint to list
+	mux.HandleFunc("/", h.handleUnmatched(mux))
+
 	return h
+}
+
+// probeMethods are tried against the mux to build Allow. HEAD is left out:
+// the mux serves it from the GET route, and it is added whenever GET is allowed.
+var probeMethods = []string{
+	http.MethodGet, http.MethodPost, http.MethodPut,
+	http.MethodPatch, http.MethodDelete, http.MethodOptions,
+}
+
+// handleUnmatched answers 405 with Allow when another method serves the path,
+// 404 otherwise. Neither echoes the caller's path or method.
+func (h *APIHandler) handleUnmatched(mux *http.ServeMux) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		var allowed []string
+		for _, method := range probeMethods {
+			if method == r.Method {
+				continue
+			}
+			probe := r.Clone(r.Context())
+			probe.Method = method
+			if _, pattern := mux.Handler(probe); pattern != "" && pattern != "/" {
+				allowed = append(allowed, method)
+			}
+		}
+
+		if len(allowed) > 0 {
+			if slices.Contains(allowed, http.MethodGet) {
+				allowed = append(allowed, http.MethodHead)
+			}
+			w.Header().Set("Allow", strings.Join(allowed, ", "))
+			writeJSONStatus(w, http.StatusMethodNotAllowed,
+				errorResponse{Error: "method not allowed on this endpoint; see the Allow header"})
+			return
+		}
+
+		writeJSONStatus(w, http.StatusNotFound,
+			errorResponse{Error: "no such endpoint"})
+	}
 }
 
 // handle registers a route and records both the pattern the mux matches on
