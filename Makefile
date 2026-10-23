@@ -213,6 +213,7 @@ AGENT_SRCS := $(AGENT_DIR)/main.c \
               $(AGENT_DIR)/kernel_image.c \
               $(AGENT_DIR)/bpf_loader.c \
               $(AGENT_DIR)/net.c \
+              $(AGENT_DIR)/net_errno.c \
               $(AGENT_DIR)/pin.c \
               $(AGENT_DIR)/ipc.c \
               $(AGENT_DIR)/runtime_image_measure.c \
@@ -462,7 +463,7 @@ $(INC_DIR)/vmlinux.h:
 
 # Phony targets
 .PHONY: check-docs-strict
-.PHONY: help all bpf agent initramfs-lock installer verifier attest-ca fleet-cli loadgen packages container-images container-image-verifier container-image-attest-ca container-image-attest-ca-hsm helm-package helm-lint helm-template observability-lint srpm rpm-sign dnf-repo sdk server-sdk wine-hook anticheat pkgconfig sdk-stage clean htmldocs docs-lint docs-linkcheck docs-serve cleandocs install check-version-tag check-includes check-el9-decls check-license-boundary check-doc-diagnostics check-stack-frames check-tpm-strerror check-package-manifests check-helm-chart check-container-images lint lint-c lint-go sparse smatch coccicheck reproducible-build test test-unit test-bins test-hardware test-sdk sanitizer-build valgrind-unit valgrind-smoke fuzz-agent fuzz-config fuzz-enroll fuzz-seal-envelope fuzz-tpm-attest fuzz-policy-sign fuzz-server-sdk fuzz-tpm-resp fuzz-bpf-devt fuzz-bpf-open-flags fuzz-bpf-kmem-device fuzz-bpf-event-budget fuzz-bpf-inaccessible-exec fuzz-bpf-shebang fuzz-bpf-all fuzz-all syzkaller-fuzz-loader examples examples-clean sign-bpf check-abi abi-baseline
+.PHONY: help all bpf agent initramfs-lock installer verifier attest-ca fleet-cli loadgen packages container-images container-image-verifier container-image-attest-ca container-image-attest-ca-hsm helm-package helm-lint helm-template observability-lint srpm rpm-sign dnf-repo sdk server-sdk wine-hook anticheat pkgconfig sdk-stage clean htmldocs docs-lint docs-linkcheck docs-serve cleandocs install check-version-tag check-includes check-el9-decls check-license-boundary check-doc-diagnostics check-stack-frames check-private-errno check-package-manifests check-helm-chart check-container-images lint lint-c lint-go sparse smatch coccicheck reproducible-build test test-unit test-bins test-hardware test-sdk sanitizer-build valgrind-unit valgrind-smoke fuzz-agent fuzz-config fuzz-enroll fuzz-seal-envelope fuzz-tpm-attest fuzz-policy-sign fuzz-server-sdk fuzz-tpm-resp fuzz-bpf-devt fuzz-bpf-open-flags fuzz-bpf-kmem-device fuzz-bpf-event-budget fuzz-bpf-inaccessible-exec fuzz-bpf-shebang fuzz-bpf-all fuzz-all syzkaller-fuzz-loader examples examples-clean sign-bpf check-abi abi-baseline
 
 bpf: $(BPF_OBJ)
 
@@ -951,11 +952,11 @@ check-doc-diagnostics:
 check-stack-frames:
 	@scripts/check-stack-frames.sh
 
-# TPM codes must reach an operator through tpm_strerror(), which knows the
-# private range above POSIX.
+# TPM and network codes must reach an operator through tpm_strerror()
+# and net_strerror(), which know the private ranges above POSIX.
 # strerror() renders those as "Unknown error 4098".
-check-tpm-strerror:
-	@scripts/check-tpm-strerror.sh
+check-private-errno:
+	@scripts/check-private-errno.sh
 
 # Public API/ABI gate
 # Compares the SDK's exported symbols, sonames and installed header set against
@@ -1272,6 +1273,8 @@ TEST_BINS := \
 	$(TEST_BIN_DIR)/test_tls_verify \
 	$(TEST_BIN_DIR)/test_verify_result_str \
 	$(TEST_BIN_DIR)/test_connect_hint \
+	$(TEST_BIN_DIR)/test_net_errors \
+	$(TEST_BIN_DIR)/test_tls_anchor \
 	$(TEST_BIN_DIR)/test_xattr_carry \
 	$(TEST_BIN_DIR)/test_config \
 	$(TEST_BIN_DIR)/test_config_alloc \
@@ -1461,6 +1464,14 @@ $(TEST_BIN_DIR)/test_connect_hint: tests/test_connect_hint.c $(AGENT_DIR)/net.c 
 	$(QUIET_CC)
 	$(Q)$(CC) $(CFLAGS) -o $@ $^ -lssl -lcrypto -lsystemd
 
+$(TEST_BIN_DIR)/test_net_errors: tests/test_net_errors.c $(AGENT_DIR)/net.c $(AGENT_DIR)/net_errno.c $(AGENT_DIR)/journal.c $(AGENT_DIR)/pin.c $(AGENT_DIR)/attest_stage.c $(AGENT_DIR)/tpm_errno.c | $(BUILD_DIR)
+	$(QUIET_CC)
+	$(Q)$(CC) $(CFLAGS) -o $@ $^ -lssl -lcrypto -lsystemd
+
+$(TEST_BIN_DIR)/test_tls_anchor: tests/test_tls_anchor.c $(AGENT_DIR)/net.c $(AGENT_DIR)/net_errno.c $(AGENT_DIR)/journal.c $(AGENT_DIR)/pin.c | $(BUILD_DIR)
+	$(QUIET_CC)
+	$(Q)$(CC) $(CFLAGS) -o $@ $^ -lssl -lcrypto -lsystemd
+
 $(TEST_BIN_DIR)/test_config: tests/test_config.c $(AGENT_DIR)/config.c $(AGENT_DIR)/io_utils.c $(AGENT_DIR)/pin.c $(AGENT_DIR)/policy_pubkey.c | $(BUILD_DIR)
 	$(QUIET_CC)
 	$(Q)$(CC) $(CFLAGS) -o $@ $^
@@ -1529,7 +1540,7 @@ $(TEST_BIN_DIR)/test_attest_reload: tests/test_attest_reload.c $(AGENT_DIR)/atte
 	$(QUIET_CC)
 	$(Q)$(CC) $(CFLAGS) -o $@ $^ -lcrypto
 
-$(TEST_BIN_DIR)/test_attest_stage: tests/test_attest_stage.c $(AGENT_DIR)/attest_stage.c $(AGENT_DIR)/tpm_errno.c | $(BUILD_DIR)
+$(TEST_BIN_DIR)/test_attest_stage: tests/test_attest_stage.c $(AGENT_DIR)/attest_stage.c $(AGENT_DIR)/net_errno.c $(AGENT_DIR)/tpm_errno.c | $(BUILD_DIR)
 	$(QUIET_CC)
 	$(Q)$(CC) $(CFLAGS) -o $@ $^
 
@@ -1917,6 +1928,8 @@ test-unit: all $(TEST_BINS)
 	@$(BUILD_DIR)/test_flag_names
 	@$(BUILD_DIR)/test_verify_result_str
 	@$(BUILD_DIR)/test_connect_hint
+	@$(BUILD_DIR)/test_net_errors
+	@$(BUILD_DIR)/test_tls_anchor
 	@$(BUILD_DIR)/test_xattr_carry
 	@$(BUILD_DIR)/test_runtime_measure
 	@$(BUILD_DIR)/test_runtime_image_measure
@@ -2079,6 +2092,7 @@ VALGRIND_UNIT_BINS := \
 	test_profile_id test_attest_targets test_attest_reload test_attest_aggregate \
 	test_status_flags test_iommu_evidence test_terminate_policy \
 	test_publisher_profile test_verify_result_str test_connect_hint \
+	test_net_errors test_tls_anchor \
 	test_xattr_carry test_ima_policy_scope test_integrity_baseline \
 	test_daemon_exit_status test_integrity_map_layout
 

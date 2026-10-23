@@ -11,6 +11,7 @@
  */
 
 #include "attest.h"
+#include "net.h"
 #include "tpm.h"
 
 static const char *const stage_names[ATTEST_STAGE_COUNT] = {
@@ -31,8 +32,10 @@ const char *attest_stage_str(enum attest_stage stage)
 	return stage_names[stage] ? stage_names[stage] : "an unnamed stage";
 }
 
-/* tpm_strerror() lives in tpm_errno.c, which links without a TPM */
+/* transport codes first: tpm_strerror() hands unknown codes to strerror() */
 const char *attest_failure_reason(int ret)
 {
-	return tpm_strerror(ret);
+	const char *transport = net_err_name(ret);
+
+	return transport ? transport : tpm_strerror(ret);
 }

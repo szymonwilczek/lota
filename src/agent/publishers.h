@@ -100,6 +100,32 @@ static inline bool publishers_default_key_in_use(size_t publisher_count)
 }
 
 /*
+ * Whether the anchor file profile @id enrolled with now names another profile,
+ * as after a pinned listener certificate is re-issued over a new key.
+ *
+ * @now_id (at least LOTA_PROFILE_ID_LEN, or NULL) receives the identity the
+ * file names.
+ *
+ * Returns 1 if it names another, 0 if still @id, -ENOENT if not enrolled
+ * or no anchor recorded, or negative errno.
+ */
+int publisher_anchor_names_another(const char *base_dir, const char *id,
+				   char *now_id, size_t cap);
+
+/*
+ * Another enrolled profile, not @self_id, at the same CA endpoint: what
+ * a rotated pin leaves behind, two slots for one device at the publisher.
+ *
+ * @other_id (at least LOTA_PROFILE_ID_LEN) receives the first in directory
+ * order.
+ *
+ * Returns 1 with @other_id filled, 0 if none, or negative errno.
+ */
+int publishers_endpoint_shared(const char *base_dir, const char *self_id,
+			       const char *ca_server, int ca_port,
+			       char *other_id, size_t cap);
+
+/*
  * Delete everything stored for one publisher.
  *
  * TPM key is not this function's business -- the caller evicts it first,

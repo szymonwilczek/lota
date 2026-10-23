@@ -74,6 +74,33 @@ struct verifier_result {
 #define VERIFY_CERTIFICATE_VALIDITY 12
 
 /*
+ * LOTA-private transport error codes: POSIX has none for a peer going away.
+ * Above glibc's 1..133 and disjoint from the TPM block at 4097; render with
+ * net_strerror(). A socket errno, when there is one, is returned instead.
+ */
+#define LOTA_ERR_NET_PEER_CLOSED 4353 /* TLS shutdown mid-exchange */
+#define LOTA_ERR_NET_PEER_GONE 4354 /* EOF with no shutdown and no errno */
+#define LOTA_ERR_NET_TLS 4355 /* TLS refused a record on a live connection */
+#define LOTA_ERR_NET_TLS_HANDSHAKE 4356 /* handshake did not complete */
+#define LOTA_ERR_NET_TLS_CERT 4357 /* peer certificate failed verification */
+#define LOTA_ERR_NET_TLS_PIN 4358 /* peer certificate is not the pinned one */
+
+/* name of a LOTA-private transport code, NULL for anything else */
+const char *net_err_name(int err);
+
+/* TLS refused (certificates) rather than peer unreachable (address/port) */
+int net_err_is_tls(int err);
+
+/* net_err_name(), falling back to strerror() */
+const char *net_strerror(int err);
+
+/*
+ * net_transport_error - negative errno for a TLS read or write that moved no
+ * bytes, from SSL_get_error() @ssl_err and the socket's @sock_errno. Pure.
+ */
+int net_transport_error(int ssl_err, int sock_errno);
+
+/*
  * The likely cause of a connect(2) that was refused, as a sentence the operator
  * can act on, or NULL when there is nothing better to say than the errno.
  *

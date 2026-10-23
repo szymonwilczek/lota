@@ -179,6 +179,75 @@ size_t publishers_keys_held(const struct publisher_entry *list, size_t count)
 	return held;
 }
 
+int publisher_anchor_names_another(const char *base_dir, const char *id,
+				   char *now_id, size_t cap)
+{
+	struct profile_paths paths;
+	struct enroll_state st;
+	char derived[LOTA_PROFILE_ID_LEN];
+	int rc;
+
+	if (!base_dir || !id || (now_id && cap < sizeof(derived)))
+		return -EINVAL;
+	if (profile_paths_from_id(base_dir, id, &paths) < 0)
+		return -EINVAL;
+
+	rc = enroll_state_load_path(paths.enroll_state, &st);
+	if (rc < 0)
+		return rc;
+	if (st.ca_cert[0] == '\0') {
+		/* no anchor recorded: nothing to compare */
+		OPENSSL_cleanse(&st, sizeof(st));
+		return -ENOENT;
+	}
+
+	rc = profile_id_from_anchor(st.ca_cert, derived, sizeof(derived));
+	OPENSSL_cleanse(&st, sizeof(st));
+	if (rc < 0)
+		return rc;
+
+	if (strcmp(derived, id) == 0)
+		return 0;
+
+	if (now_id)
+		snprintf(now_id, cap, "%s", derived);
+	return 1;
+}
+
+int publishers_endpoint_shared(const char *base_dir, const char *self_id,
+			       const char *ca_server, int ca_port,
+			       char *other_id, size_t cap)
+{
+	struct publisher_entry *entries = NULL;
+	size_t count = 0;
+	int found = 0;
+	int rc;
+
+	if (!base_dir || !ca_server || !other_id || cap < LOTA_PROFILE_ID_LEN)
+		return -EINVAL;
+
+	rc = publishers_list_alloc(base_dir, &entries, &count);
+	if (rc < 0)
+		return rc;
+
+	for (size_t i = 0; i < count && !found; i++) {
+		if (!entries[i].enrolled)
+			continue;
+		if (self_id && strcmp(entries[i].id, self_id) == 0)
+			continue;
+		if (entries[i].ca_port != ca_port)
+			continue;
+		if (strcmp(entries[i].ca_server, ca_server) != 0)
+			continue;
+
+		snprintf(other_id, cap, "%s", entries[i].id);
+		found = 1;
+	}
+
+	free(entries);
+	return found;
+}
+
 int publishers_forget(const struct profile_paths *paths)
 {
 	static const char *const leaves[] = {
