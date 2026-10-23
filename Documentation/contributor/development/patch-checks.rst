@@ -29,6 +29,11 @@ a markup defect is introduced by whoever writes the markup and met by whoever
 next builds the docs. A contributor without Sphinx installed skips it; CI has
 it and decides.
 
+The shipped-configuration check (``make check-config-commands``) requires every
+option a file under ``policies/`` or ``configs/`` passes to a ``lota-*`` command
+to be in that command's option table in the source. A command with no table in
+the gate fails it.
+
 The private-errno check (``make check-private-errno``) refuses a ``tpm_*`` or
 ``net_*`` return code rendered through ``strerror()``. Both families answer
 above the POSIX range (TPM at 4097, transport at 4353), which ``strerror()``

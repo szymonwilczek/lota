@@ -254,20 +254,26 @@ void print_usage(const char *prog, const char *default_bpf_path,
 	       "                    security.ima xattr; the\n"
 	       "                    dirty-shutdown (panic/power-loss/SIGKILL)\n"
 	       "                    coverage gap stays open on that host.\n");
+	/* accepted in any mode, applied in enforce only */
 	printf("  --strict-mmap     Block mmap(PROT_EXEC) of untrusted "
 	       "libraries\n");
-	printf("                    (requires --mode enforce)\n");
+	printf("                    (no effect unless --mode enforce)\n");
 	printf("  --strict-exec     Enforce strict executable policy (fs-verity "
 	       "allowlist)\n");
-	printf("                    (requires --mode enforce and "
+	printf("                    (no effect unless --mode enforce; the "
+	       "agent\n");
+	printf("                    refuses to start without "
 	       "--allow-verity)\n");
 	printf("  --block-ptrace    Block all ptrace attach attempts\n");
-	printf("                    (requires --mode enforce)\n");
+	printf("                    (no effect unless --mode enforce)\n");
 	printf("  --strict-modules  Enforce strict module/firmware loading "
 	       "policy\n");
-	printf("                    (requires --mode enforce)\n");
+	printf("                    (no effect unless --mode enforce; the "
+	       "agent\n");
+	printf("                    refuses to start without "
+	       "--allow-verity)\n");
 	printf("  --block-anon-exec Block anonymous executable mappings\n");
-	printf("                    (requires --mode enforce)\n");
+	printf("                    (no effect unless --mode enforce)\n");
 	printf("  --protect-pid PID Seed this daemon's protected set with PID "
 	       "(ptrace\n");
 	printf("                    blocked). A startup option, not a request "
@@ -451,9 +457,11 @@ static int add_listener_for_uid(uint32_t uid, void *user)
 
 	ret = steam_runtime_ensure_socket_dir(dir);
 	if (ret < 0) {
-		fprintf(stderr,
-			"Warning: cannot create container socket dir %s: %s\n",
-			dir, strerror(-ret));
+		/* no login yet, or logind still mounting: the watch retries */
+		if (!container_watch_bind_pending(ret))
+			fprintf(stderr,
+				"Warning: cannot create container socket dir %s: %s\n",
+				dir, strerror(-ret));
 		return ret;
 	}
 

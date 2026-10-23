@@ -312,6 +312,35 @@ uint32_t config_clamp_aik_ttl(uint32_t ttl, const char *filepath, int lineno);
  */
 int config_load_from_fd(struct lota_config *cfg, int fd, const char *filepath);
 
+/* strict flags, applied in enforce mode only */
+#define LOTA_STRICT_FLAG_COUNT 5
+
+/*
+ * config_inert_strict_flags - strict flags set but ignored outside enforce
+ *
+ * @cfg:   Configuration to read.
+ * @names: Receives the key names, in the order config_dump prints them.
+ * @max:   Capacity of @names.
+ *
+ * Returns the number of names written, or a negative errno.
+ */
+int config_inert_strict_flags(const struct lota_config *cfg,
+			      const char *names[], int max);
+
+/*
+ * config_inert_strict_flags_of - config_inert_strict_flags() on bare flags
+ *
+ * @mode_is_enforce: whether the mode being applied is enforce.
+ * @flags:           the five flags, in the order config_dump prints them.
+ * @names:           receives the key names of those that are on and inert.
+ * @max:             capacity of @names.
+ *
+ * Returns the number of names written, or a negative errno.
+ */
+int config_inert_strict_flags_of(bool mode_is_enforce,
+				 const bool flags[LOTA_STRICT_FLAG_COUNT],
+				 const char *names[], int max);
+
 /*
  * config_dump - Print current configuration to FILE.
  *

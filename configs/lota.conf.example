@@ -43,6 +43,9 @@ bpf_path = /usr/lib/lota/lota_lsm.bpf.o
 #   strict_mmap, block_ptrace, block_anon_exec   -- on by default.
 #   strict_exec, strict_modules                  -- off by default.
 #
+# All five apply in enforce mode only; in monitor and maintenance they are
+# inert, as `lota-agent --dump-config` and the startup log say.
+#
 # block_ptrace refuses a ptrace attach on any task.
 # Reading another process's /proc is not an attach and is left to the kernel;
 # a process that opted into protection refuses both.

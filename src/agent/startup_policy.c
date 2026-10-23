@@ -35,6 +35,7 @@ static void hex_encode_upper(const uint8_t *in, size_t in_len, char *out,
 
 #include "agent.h"
 #include "bpf_loader.h"
+#include "config.h"
 #include "journal.h"
 #include "main_utils.h"
 
@@ -561,6 +562,41 @@ int agent_validate_startup_policy(const struct agent_startup_policy *policy)
 	return 0;
 }
 
+/*
+ * Outside enforce each strict gate is armed but its hook returns early;
+ * name them, since the arming lines read as protection in force.
+ */
+static void warn_about_inert_gates(const struct agent_startup_policy *policy,
+				   int mode)
+{
+	const bool flags[LOTA_STRICT_FLAG_COUNT] = {
+		policy->strict_mmap, policy->strict_exec, policy->block_ptrace,
+		policy->strict_modules, policy->block_anon_exec
+	};
+	const char *inert[LOTA_STRICT_FLAG_COUNT];
+	char list[160];
+	size_t used = 0;
+	int n;
+
+	n = config_inert_strict_flags_of(mode == LOTA_MODE_ENFORCE, flags,
+					 inert, LOTA_STRICT_FLAG_COUNT);
+	if (n <= 0)
+		return;
+
+	for (int i = 0; i < n; i++) {
+		int w = snprintf(list + used, sizeof(list) - used, "%s%s",
+				 used ? ", " : "", inert[i]);
+
+		if (w < 0 || (size_t)w >= sizeof(list) - used)
+			break;
+		used += (size_t)w;
+	}
+
+	lota_warn(
+		"Armed and inert in %s mode: %s -- each gate returns before it is reached, so this host applies none of them. --mode enforce is what runs them",
+		mode_to_string(mode), list);
+}
+
 int agent_apply_startup_policy(const struct agent_startup_policy *policy)
 {
 	int ret;
@@ -763,6 +799,7 @@ allowlist_done:
 	}
 	mode_applied = 1;
 	lota_info("Mode: %s", mode_to_string(mode));
+	warn_about_inert_gates(policy, mode);
 
 	agent_globals_lock(&g_agent);
 	g_agent.mode = mode;
