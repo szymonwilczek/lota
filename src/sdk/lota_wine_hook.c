@@ -22,6 +22,7 @@
 #define _GNU_SOURCE
 #endif
 
+#include <dlfcn.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <limits.h>
@@ -66,9 +67,24 @@ static struct {
 	char token_path[PATH_MAX];
 	char snapshot_path[PATH_MAX]; /* atomic snapshot file (flags + token) */
 	pid_t init_pid;
+	time_t init_time; /* when the loader started bringing us up */
+	int protect_delay_sec; /* wait before joining protected_pids */
+	char refused_object[256]; /* last object that would not load */
+	time_t refused_at;
+	struct lota_status last_status; /* the last one the agent gave */
+	atomic_int have_status;
 	atomic_int self_protected;
 	atomic_int offline_published;
 } g_hook;
+
+/* Guards last_status against the loader thread reading it. */
+static pthread_mutex_t g_status_lock;
+static pthread_once_t g_status_lock_once = PTHREAD_ONCE_INIT;
+
+static void status_lock_init(void)
+{
+	pthread_mutex_init(&g_status_lock, NULL);
+}
 
 #define HOOK_PREFIX "lota-hook"
 
@@ -468,7 +484,7 @@ static int atomic_write(const char *path, const void *data, size_t len)
  */
 static int write_status_payload(const struct lota_status *status, int offline)
 {
-	char buf[512];
+	char buf[1024];
 	int len;
 
 	len = snprintf(buf, sizeof(buf),
@@ -479,14 +495,28 @@ static int write_status_payload(const struct lota_status *status, int offline)
 		       "LOTA_ATTEST_COUNT=%u\n"
 		       "LOTA_FAIL_COUNT=%u\n"
 		       "LOTA_UPDATED=%lu\n"
-		       "LOTA_PID=%d\n",
+		       "LOTA_PID=%d\n"
+		       "LOTA_PROTECTED=%d\n",
 		       (status->flags & LOTA_FLAG_ATTESTED) ? 1 : 0, offline,
 		       status->flags, (unsigned long)status->valid_until,
 		       status->attest_count, status->fail_count,
-		       (unsigned long)time(NULL), (int)getpid());
+		       (unsigned long)time(NULL), (int)getpid(),
+		       atomic_load(&g_hook.self_protected) ? 1 : 0);
 
 	if (len < 0 || (size_t)len >= sizeof(buf))
 		return -ENOMEM;
+
+	if (g_hook.refused_object[0]) {
+		int add = snprintf(buf + len, sizeof(buf) - (size_t)len,
+				   "LOTA_REFUSED_OBJECT=%s\n"
+				   "LOTA_REFUSED_AT=%lu\n",
+				   g_hook.refused_object,
+				   (unsigned long)g_hook.refused_at);
+
+		if (add < 0 || (size_t)(len + add) >= sizeof(buf))
+			return -ENOMEM;
+		len += add;
+	}
 
 	return atomic_write(g_hook.status_path, buf, (size_t)len);
 }
@@ -494,6 +524,35 @@ static int write_status_payload(const struct lota_status *status, int offline)
 static int write_status(const struct lota_status *status)
 {
 	return write_status_payload(status, 0);
+}
+
+/* lets the hook republish its own state without asking the agent */
+static void hook_cache_status(const struct lota_status *status)
+{
+	pthread_once(&g_status_lock_once, status_lock_init);
+	pthread_mutex_lock(&g_status_lock);
+	g_hook.last_status = *status;
+	pthread_mutex_unlock(&g_status_lock);
+	atomic_store(&g_hook.have_status, 1);
+}
+
+/* rewrite the status file from the cache; no-op before the first status */
+static void hook_publish_state(void)
+{
+	struct lota_status status;
+	int ret;
+
+	if (!atomic_load(&g_hook.have_status))
+		return;
+
+	pthread_once(&g_status_lock_once, status_lock_init);
+	pthread_mutex_lock(&g_status_lock);
+	status = g_hook.last_status;
+	pthread_mutex_unlock(&g_status_lock);
+
+	ret = write_status(&status);
+	if (ret < 0)
+		LOG_DBG("write_status: %s", strerror(-ret));
 }
 
 /*
@@ -587,9 +646,6 @@ static int LOTA_UNUSED fetch_token_wire(struct lota_client *client,
 
 #undef LOTA_UNUSED
 
-/* Runtime-only: refresh, thread, fork safety, constructor/destructor */
-#ifndef LOTA_HOOK_TESTING
-
 /*
  * Fetch and write the binary token file.
  *
@@ -635,6 +691,115 @@ static struct lota_client *hook_connect(void)
 }
 
 /*
+ * Seconds to wait before joining the protected set. Unset or invalid is the
+ * default; 0 registers on the first connect (objects carry fs-verity).
+ */
+static int hook_protect_delay(const char *env)
+{
+	char *end;
+	long val;
+
+	if (!env || !*env)
+		return LOTA_HOOK_DEFAULT_PROTECT_DELAY_SEC;
+
+	errno = 0;
+	val = strtol(env, &end, 10);
+	if (errno || end == env || *end || val < 0 || val > INT_MAX)
+		return LOTA_HOOK_DEFAULT_PROTECT_DELAY_SEC;
+
+	return (int)val;
+}
+
+/* Has the loader been given its @delay_sec seconds yet? */
+static bool hook_protect_due(time_t init_time, int delay_sec, time_t now)
+{
+	if (delay_sec <= 0)
+		return true;
+
+	return now >= init_time + delay_sec;
+}
+
+/*
+ * Add this process to protected_pids, which scopes every runtime gate.
+ * Called after each connect, since the launch path connects before
+ * refresh_once(). Once per process; the fork handler clears the latch.
+ */
+static void hook_register_self(void)
+{
+	int ret;
+
+	if (!g_hook.client || atomic_load(&g_hook.self_protected))
+		return;
+
+	/* let the loader map its libraries first */
+	if (!hook_protect_due(g_hook.init_time, g_hook.protect_delay_sec,
+			      time(NULL)))
+		return;
+
+	ret = lota_protect_self(g_hook.client);
+	if (ret != LOTA_OK) {
+		LOG_WRN("lota_protect_self: %s", lota_strerror(ret));
+		return;
+	}
+
+	atomic_store(&g_hook.self_protected, 1);
+	LOG_INF("registered pid=%d for runtime enforcement", (int)getpid());
+	hook_publish_state();
+}
+
+/*
+ * Was a failed load the gate's refusal? Reading dlerror() would consume
+ * the title's message, so judge the object: an existing readable path
+ * was refused, a bare name never found is just missing.
+ */
+static bool hook_refusal_is_gate(const char *path)
+{
+	if (!path || !strchr(path, '/'))
+		return false;
+
+	return access(path, R_OK) == 0;
+}
+
+/* Keep the refusal where the player's launcher already reads. */
+static void hook_record_refusal(const char *path)
+{
+	snprintf(g_hook.refused_object, sizeof(g_hook.refused_object), "%s",
+		 path);
+	g_hook.refused_at = time(NULL);
+}
+
+/*
+ * Report a gate refusal on stderr and in the status file;
+ * the handle and the pending dlerror() are the real dlopen()'s, untouched.
+ */
+LOTA_HOOK_EXPORT void *dlopen(const char *file, int mode)
+{
+	static void *(*real_dlopen)(const char *, int);
+	void *handle;
+
+	if (!real_dlopen) {
+		real_dlopen = dlsym(RTLD_NEXT, "dlopen");
+		if (!real_dlopen) {
+			LOG_ERR("no dlopen underneath the hook");
+			return NULL;
+		}
+	}
+
+	handle = real_dlopen(file, mode);
+	if (handle || !atomic_load(&g_hook.self_protected))
+		return handle;
+
+	if (hook_refusal_is_gate(file)) {
+		hook_record_refusal(file);
+		hook_publish_state();
+		LOG_ERR("%s did not load while this process is in LOTA's protected set -- a protected process may map only objects the agent allows, so cover this one (fs-verity digest or trusted_libs) or start the title with %s longer than it takes to reach this load",
+			file, LOTA_HOOK_ENV_PROTECT_DELAY);
+	}
+
+	return handle;
+}
+
+/*
  * Perform one refresh cycle.
  *
  * Reconnects to the agent if needed, queries status, writes files.
@@ -655,30 +820,9 @@ static void refresh_once(void)
 		}
 		hook_offline_clear();
 		LOG_DBG("connected to agent");
-
-		/*
-		 * Opt this process into the BPF strict_mmap and
-		 * block_anon_exec gates. The agent's hooks are scoped
-		 * to protected_pids; without the call the game process
-		 * is invisible to the runtime enforcement layer and any
-		 * LD_PRELOAD-style injection would slip through. One
-		 * shot per process: a successful response sets
-		 * self_protected so a later reconnect (post agent
-		 * restart) does not re-issue the request.
-		 */
-		if (!atomic_load(&g_hook.self_protected)) {
-			ret = lota_protect_self(g_hook.client);
-			if (ret == LOTA_OK) {
-				atomic_store(&g_hook.self_protected, 1);
-				LOG_INF("registered pid=%d for runtime "
-					"enforcement",
-					(int)getpid());
-			} else {
-				LOG_WRN("lota_protect_self: %s",
-					lota_strerror(ret));
-			}
-		}
 	}
+
+	hook_register_self();
 
 	ret = lota_get_status(g_hook.client, &status);
 	if (ret != LOTA_OK) {
@@ -688,6 +832,8 @@ static void refresh_once(void)
 		hook_offline_publish();
 		return;
 	}
+
+	hook_cache_status(&status);
 
 	ret = write_status(&status);
 	if (ret < 0)
@@ -702,6 +848,9 @@ static void refresh_once(void)
 		unlink(g_hook.snapshot_path);
 	}
 }
+
+/* load-time only; the tests drive the connect and refresh path above */
+#ifndef LOTA_HOOK_TESTING
 
 static void hook_status_cb(const struct lota_status *status, uint32_t events,
 			   void *user_data)
@@ -767,6 +916,9 @@ static void *refresh_thread_fn(void *arg)
 					lota_strerror(ret), g_hook.refresh_sec);
 		}
 
+		/* usually too early on the first cycle; no-op once latched */
+		hook_register_self();
+
 		if (subscribed) {
 			ret = lota_poll_events(g_hook.client, 5000);
 		} else {
@@ -807,6 +959,9 @@ static void hook_child_after_fork(void)
 	 * lota_protect_self() against the child PID.
 	 */
 	atomic_store(&g_hook.self_protected, 0);
+
+	/* the child is bringing up its own image: give it the same wait */
+	g_hook.init_time = time(NULL);
 	hook_offline_clear();
 }
 
@@ -843,6 +998,11 @@ __attribute__((constructor)) static void lota_wine_hook_init(void)
 				     atoi(env) :
 				     LOTA_HOOK_DEFAULT_REFRESH_SEC;
 
+	/* the registration delay counts from here */
+	g_hook.init_time = time(NULL);
+	g_hook.protect_delay_sec =
+		hook_protect_delay(getenv(LOTA_HOOK_ENV_PROTECT_DELAY));
+
 	/* settle on a token directory the player owns */
 	if (setup_token_dir() < 0)
 		return;
@@ -857,8 +1017,8 @@ __attribute__((constructor)) static void lota_wine_hook_init(void)
 	/* export token directory for wine-side discovery */
 	setenv(LOTA_HOOK_ENV_TOKEN_DIR, g_hook.token_dir, 0);
 
-	LOG_INF("initializing (token_dir=%s, refresh=%ds)", g_hook.token_dir,
-		g_hook.refresh_sec);
+	LOG_INF("initializing (token_dir=%s, refresh=%ds, protect_delay=%ds)",
+		g_hook.token_dir, g_hook.refresh_sec, g_hook.protect_delay_sec);
 
 	g_hook.init_pid = getpid();
 	pthread_atfork(NULL, NULL, hook_child_after_fork);
@@ -930,19 +1090,19 @@ __attribute__((destructor)) static void lota_wine_hook_fini(void)
 
 /* exported query functions */
 
-int lota_hook_active(void)
+LOTA_HOOK_EXPORT int lota_hook_active(void)
 {
 	return g_hook.thread_started && g_hook.running;
 }
 
-const char *lota_hook_status_path(void)
+LOTA_HOOK_EXPORT const char *lota_hook_status_path(void)
 {
 	if (!g_hook.status_path[0])
 		return NULL;
 	return g_hook.status_path;
 }
 
-const char *lota_hook_token_path(void)
+LOTA_HOOK_EXPORT const char *lota_hook_token_path(void)
 {
 	if (!g_hook.token_path[0])
 		return NULL;

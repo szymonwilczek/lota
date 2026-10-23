@@ -21,17 +21,23 @@
 #endif
 #include <dirent.h>
 #include <sys/stat.h>
+#include <dlfcn.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <limits.h>
+#include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/socket.h>
 #include <sys/types.h>
+#include <sys/un.h>
+#include <sys/wait.h>
 #include <unistd.h>
 
 #include "../src/sdk/lota_wine_hook.c"
 #include "lota_gaming.h"
+#include "lota_ipc.h"
 
 static int tests_run;
 static int tests_passed;
@@ -52,6 +58,12 @@ static int tests_passed;
 	do {                               \
 		printf("FAIL: %s\n", msg); \
 	} while (0)
+
+static void SKIP(const char *msg)
+{
+	tests_passed++;
+	printf("SKIP (%s)\n", msg);
+}
 
 /* temp directory for test artifacts */
 static char tmpdir[64];
@@ -1263,6 +1275,697 @@ static void test_hook_token_path_when_empty(void)
 	PASS();
 }
 
+/* mock agent: a child answers the SDK and logs each command id it gets */
+static char mock_socket[104];
+static char mock_cmdlog[PATH_MAX];
+static int mock_agent_errno;
+
+static int mock_errno_is_sandbox(int err)
+{
+	return err == EPERM || err == EACCES || err == EROFS;
+}
+
+static int mock_send_response(int fd, uint32_t result, const void *payload,
+			      uint32_t payload_len)
+{
+	struct lota_ipc_response resp;
+
+	resp.magic = LOTA_IPC_MAGIC;
+	resp.version = LOTA_IPC_VERSION;
+	resp.result = result;
+	resp.payload_len = payload_len;
+
+	if (send(fd, &resp, sizeof(resp), MSG_NOSIGNAL) != sizeof(resp))
+		return -1;
+
+	if (payload_len > 0 && payload) {
+		if (send(fd, payload, payload_len, MSG_NOSIGNAL) !=
+		    (ssize_t)payload_len)
+			return -1;
+	}
+
+	return 0;
+}
+
+static int mock_recv_request(int fd, struct lota_ipc_request *req,
+			     void *payload, size_t max_payload)
+{
+	ssize_t n;
+
+	n = recv(fd, req, sizeof(*req), MSG_WAITALL);
+	if (n != sizeof(*req))
+		return -1;
+
+	if (req->payload_len > 0) {
+		size_t want = req->payload_len;
+
+		if (want > max_payload)
+			want = max_payload;
+		n = recv(fd, payload, want, MSG_WAITALL);
+		if (n != (ssize_t)want)
+			return -1;
+	}
+
+	return 0;
+}
+
+/* Serve one client until it hangs up, recording each command id. */
+static void mock_agent_serve(int client_fd)
+{
+	struct lota_ipc_request req;
+	uint8_t payload[256];
+	FILE *log;
+	int fd;
+
+	fd = open(mock_cmdlog, O_WRONLY | O_CREAT | O_APPEND | O_CLOEXEC, 0600);
+	if (fd < 0)
+		_exit(90);
+	log = fdopen(fd, "a");
+	if (!log)
+		_exit(90);
+
+	while (mock_recv_request(client_fd, &req, payload, sizeof(payload)) ==
+	       0) {
+		fprintf(log, "%u\n", req.cmd);
+		fflush(log);
+
+		if (req.cmd == LOTA_IPC_CMD_GET_STATUS) {
+			struct lota_ipc_status status;
+
+			memset(&status, 0, sizeof(status));
+			if (mock_send_response(client_fd, LOTA_IPC_OK, &status,
+					       sizeof(status)) < 0)
+				break;
+			continue;
+		}
+
+		if (mock_send_response(client_fd, LOTA_IPC_OK, NULL, 0) < 0)
+			break;
+	}
+
+	fclose(log);
+}
+
+static pid_t start_mock_agent(void)
+{
+	struct sockaddr_un addr;
+	int listen_fd;
+	pid_t pid;
+
+	mock_agent_errno = 0;
+	snprintf(mock_socket, sizeof(mock_socket), "%s/agent.sock", tmpdir);
+	snprintf(mock_cmdlog, sizeof(mock_cmdlog), "%s/agent.cmds", tmpdir);
+	unlink(mock_socket);
+	unlink(mock_cmdlog);
+
+	listen_fd = socket(AF_UNIX, SOCK_STREAM, 0);
+	if (listen_fd < 0) {
+		mock_agent_errno = errno;
+		return -1;
+	}
+
+	memset(&addr, 0, sizeof(addr));
+	addr.sun_family = AF_UNIX;
+	strncpy(addr.sun_path, mock_socket, sizeof(addr.sun_path) - 1);
+
+	if (bind(listen_fd, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
+		mock_agent_errno = errno;
+		close(listen_fd);
+		return -1;
+	}
+
+	if (listen(listen_fd, 4) < 0) {
+		mock_agent_errno = errno;
+		close(listen_fd);
+		unlink(mock_socket);
+		return -1;
+	}
+
+	pid = fork();
+	if (pid < 0) {
+		mock_agent_errno = errno;
+		close(listen_fd);
+		unlink(mock_socket);
+		return -1;
+	}
+
+	if (pid == 0) {
+		/* child: serve clients until the parent kills us */
+		for (;;) {
+			int client_fd = accept(listen_fd, NULL, NULL);
+
+			if (client_fd < 0)
+				_exit(99);
+			mock_agent_serve(client_fd);
+			close(client_fd);
+		}
+	}
+
+	close(listen_fd);
+	usleep(30000); /* let the child reach accept() */
+	return pid;
+}
+
+static void stop_mock_agent(pid_t pid)
+{
+	int status;
+
+	kill(pid, SIGKILL);
+	waitpid(pid, &status, 0);
+	unlink(mock_socket);
+}
+
+/* How many times @cmd appears in the mock agent's command log. */
+static int mock_cmd_count(uint32_t cmd)
+{
+	char line[32];
+	FILE *log;
+	int count = 0;
+
+	log = fopen(mock_cmdlog, "r");
+	if (!log)
+		return -1;
+
+	while (fgets(line, sizeof(line), log)) {
+		if ((uint32_t)strtoul(line, NULL, 10) == cmd)
+			count++;
+	}
+
+	fclose(log);
+	return count;
+}
+
+/* Point the hook's files and socket at the test directory. */
+static void hook_state_for_mock_agent(const char *tag)
+{
+	snprintf(g_hook.socket_path, sizeof(g_hook.socket_path), "%s",
+		 mock_socket);
+	snprintf(g_hook.token_dir, sizeof(g_hook.token_dir), "%s", tmpdir);
+	snprintf(g_hook.status_path, sizeof(g_hook.status_path), "%s/%s.status",
+		 tmpdir, tag);
+	snprintf(g_hook.token_path, sizeof(g_hook.token_path), "%s/%s.token",
+		 tmpdir, tag);
+	snprintf(g_hook.snapshot_path, sizeof(g_hook.snapshot_path),
+		 "%s/%s.snapshot", tmpdir, tag);
+	g_hook.refresh_sec = 1;
+	atomic_store(&g_hook.self_protected, 0);
+	atomic_store(&g_hook.offline_published, 0);
+}
+
+/*
+ * The refresh thread connects before calling refresh_once(),
+ * so registering only on its NULL-client branch never runs.
+ */
+static void test_the_launch_path_registers_the_title(void)
+{
+	pid_t agent;
+	int count;
+
+	TEST("the launch path registers the title it hooks");
+
+	agent = start_mock_agent();
+	if (agent < 0) {
+		if (mock_errno_is_sandbox(mock_agent_errno)) {
+			SKIP("no unix socket in this sandbox");
+			return;
+		}
+		FAIL("mock agent did not start");
+		return;
+	}
+
+	hook_state_for_mock_agent("launch");
+
+	/* exactly what refresh_thread_fn() does when it comes up */
+	g_hook.client = hook_connect();
+	if (!g_hook.client) {
+		stop_mock_agent(agent);
+		FAIL("hook did not connect to the mock agent");
+		return;
+	}
+	refresh_once();
+
+	lota_disconnect(g_hook.client);
+	g_hook.client = NULL;
+	stop_mock_agent(agent);
+
+	count = mock_cmd_count(LOTA_IPC_CMD_PROTECT_PID);
+	if (count < 0) {
+		FAIL("no command log from the mock agent");
+		return;
+	}
+	if (count == 0) {
+		FAIL("PROTECT_PID never sent, the title is not protected");
+		return;
+	}
+
+	PASS();
+}
+
+/* The latch holds: a later refresh does not re-register the process. */
+static void test_the_registration_is_not_repeated(void)
+{
+	pid_t agent;
+	int count;
+
+	TEST("a later refresh does not register twice");
+
+	agent = start_mock_agent();
+	if (agent < 0) {
+		if (mock_errno_is_sandbox(mock_agent_errno)) {
+			SKIP("no unix socket in this sandbox");
+			return;
+		}
+		FAIL("mock agent did not start");
+		return;
+	}
+
+	hook_state_for_mock_agent("repeat");
+
+	g_hook.client = hook_connect();
+	if (!g_hook.client) {
+		stop_mock_agent(agent);
+		FAIL("hook did not connect to the mock agent");
+		return;
+	}
+	refresh_once();
+	refresh_once();
+
+	/* a reconnect takes the other branch and must not re-register */
+	lota_disconnect(g_hook.client);
+	g_hook.client = NULL;
+	refresh_once();
+
+	if (g_hook.client) {
+		lota_disconnect(g_hook.client);
+		g_hook.client = NULL;
+	}
+	stop_mock_agent(agent);
+
+	count = mock_cmd_count(LOTA_IPC_CMD_PROTECT_PID);
+	if (count < 0) {
+		FAIL("no command log from the mock agent");
+		return;
+	}
+	if (count == 0) {
+		FAIL("PROTECT_PID never sent, the title is not protected");
+		return;
+	}
+	if (count > 1) {
+		FAIL("registration repeated after the first success");
+		return;
+	}
+
+	PASS();
+}
+
+/*
+ * A protected task maps only allowlisted or trusted libraries, so a title
+ * registered mid-load is refused its own. Registration waits a grace period.
+ */
+static void test_the_loader_grace_period_holds_the_registration(void)
+{
+	TEST("the grace period holds the registration until the loader is done");
+
+	if (hook_protect_due(1000, 20, 1000)) {
+		FAIL("registered at init, before the loader has mapped a thing");
+		return;
+	}
+	if (hook_protect_due(1000, 20, 1019)) {
+		FAIL("registered one second before the grace period ends");
+		return;
+	}
+	if (!hook_protect_due(1000, 20, 1020)) {
+		FAIL("the grace period elapsed and the title is still not registered");
+		return;
+	}
+	if (!hook_protect_due(1000, 0, 1000)) {
+		FAIL("a zero delay must register on the first connect");
+		return;
+	}
+
+	PASS();
+}
+
+/* A host whose objects carry verity digests can ask for no wait at all. */
+static void test_the_grace_period_is_configurable(void)
+{
+	TEST("the grace period reads its length from the environment");
+
+	if (hook_protect_delay(NULL) != LOTA_HOOK_DEFAULT_PROTECT_DELAY_SEC) {
+		FAIL("unset must fall back to the default grace period");
+		return;
+	}
+	if (hook_protect_delay("0") != 0) {
+		FAIL("0 must disable the wait");
+		return;
+	}
+	if (hook_protect_delay("45") != 45) {
+		FAIL("an explicit length must be honoured");
+		return;
+	}
+	if (hook_protect_delay("-5") != LOTA_HOOK_DEFAULT_PROTECT_DELAY_SEC) {
+		FAIL("a negative length must fall back to the default");
+		return;
+	}
+	if (hook_protect_delay("later") !=
+	    LOTA_HOOK_DEFAULT_PROTECT_DELAY_SEC) {
+		FAIL("a value that is not a number must fall back");
+		return;
+	}
+
+	PASS();
+}
+
+/* The same rule on the wire: nothing is sent until the grace period ends. */
+static void test_a_refresh_inside_the_grace_period_does_not_register(void)
+{
+	pid_t agent;
+	int count;
+
+	TEST("a refresh inside the grace period does not register");
+
+	agent = start_mock_agent();
+	if (agent < 0) {
+		if (mock_errno_is_sandbox(mock_agent_errno)) {
+			SKIP("no unix socket in this sandbox");
+			return;
+		}
+		FAIL("mock agent did not start");
+		return;
+	}
+
+	hook_state_for_mock_agent("grace");
+	g_hook.init_time = time(NULL);
+	g_hook.protect_delay_sec = 30;
+
+	g_hook.client = hook_connect();
+	if (!g_hook.client) {
+		stop_mock_agent(agent);
+		FAIL("hook did not connect to the mock agent");
+		return;
+	}
+	refresh_once();
+
+	count = mock_cmd_count(LOTA_IPC_CMD_PROTECT_PID);
+	if (count != 0) {
+		lota_disconnect(g_hook.client);
+		g_hook.client = NULL;
+		stop_mock_agent(agent);
+		FAIL("registered while the loader is still mapping libraries");
+		return;
+	}
+
+	/* the title is up: the grace period has passed */
+	g_hook.init_time -= 31;
+	refresh_once();
+
+	lota_disconnect(g_hook.client);
+	g_hook.client = NULL;
+	stop_mock_agent(agent);
+
+	count = mock_cmd_count(LOTA_IPC_CMD_PROTECT_PID);
+	if (count != 1) {
+		FAIL("the title is never registered once its loader is done");
+		return;
+	}
+
+	PASS();
+}
+
+/*
+ * Reading dlerror() would consume the caller's message, so the hook judges
+ * the object: an existing readable path was refused, an absent one is missing.
+ */
+static void test_a_gate_refusal_is_told_apart_from_a_missing_file(void)
+{
+	char present[PATH_MAX];
+	char absent[PATH_MAX];
+
+	TEST("a gate refusal is told apart from a missing file");
+
+	snprintf(present, sizeof(present), "%s/libpresent.so", tmpdir);
+	snprintf(absent, sizeof(absent), "%s/libabsent.so", tmpdir);
+	if (touch_file(present, "not really an ELF") != 0) {
+		FAIL("could not create the test object");
+		return;
+	}
+
+	if (!hook_refusal_is_gate(present)) {
+		FAIL("an object that is there was refused, not missing");
+		return;
+	}
+	if (hook_refusal_is_gate(absent)) {
+		FAIL("a file that is not there must not be blamed on the gate");
+		return;
+	}
+	if (hook_refusal_is_gate("libfoo.so.1")) {
+		FAIL("a soname the loader never found is not a refusal");
+		return;
+	}
+	if (hook_refusal_is_gate(NULL)) {
+		FAIL("a load of nothing is not a refusal");
+		return;
+	}
+
+	unlink(present);
+	PASS();
+}
+
+/* The player's file sink says it happened, not only the agent journal. */
+static void test_the_status_file_names_the_refused_object(void)
+{
+	struct lota_status status;
+	char path[PATH_MAX];
+	char buf[1024];
+	ssize_t n;
+
+	TEST("the status file names the object the gate refused");
+
+	snprintf(path, sizeof(path), "%s/status_refused", tmpdir);
+	snprintf(g_hook.status_path, sizeof(g_hook.status_path), "%s", path);
+	atomic_store(&g_hook.self_protected, 1);
+	hook_record_refusal("/opt/game/lib/libcodec.so");
+
+	memset(&status, 0, sizeof(status));
+	status.flags = LOTA_FLAG_ATTESTED;
+	if (write_status(&status) != 0) {
+		FAIL("write_status failed");
+		return;
+	}
+
+	n = read_file_contents(path, buf, sizeof(buf));
+	if (n <= 0) {
+		FAIL("read failed");
+		return;
+	}
+	if (!strstr(buf, "LOTA_PROTECTED=1")) {
+		FAIL("the sink does not say the title is in the protected set");
+		return;
+	}
+	if (!strstr(buf, "LOTA_REFUSED_OBJECT=/opt/game/lib/libcodec.so")) {
+		FAIL("the sink does not name the refused object");
+		return;
+	}
+	if (!strstr(buf, "LOTA_REFUSED_AT=")) {
+		FAIL("the sink does not say when it happened");
+		return;
+	}
+
+	atomic_store(&g_hook.self_protected, 0);
+	g_hook.refused_object[0] = '\0';
+	PASS();
+}
+
+/* Nothing the hook does to explain a refusal may change what loads. */
+static void test_the_loader_wrapper_hands_back_what_it_got(void)
+{
+	char broken[PATH_MAX];
+	void *handle;
+
+	TEST("the dlopen wrapper hands back what the loader returned");
+
+	g_hook.log_level = HOOK_LOG_SILENT;
+	atomic_store(&g_hook.self_protected, 1);
+	g_hook.refused_object[0] = '\0';
+
+	handle = dlopen("libm.so.6", RTLD_NOW);
+	if (!handle) {
+		atomic_store(&g_hook.self_protected, 0);
+		SKIP("libm.so.6 is not loadable here");
+		return;
+	}
+	dlclose(handle);
+	if (g_hook.refused_object[0]) {
+		atomic_store(&g_hook.self_protected, 0);
+		FAIL("a load that succeeded was recorded as a refusal");
+		return;
+	}
+
+	handle = dlopen("/nonexistent/lota-no-such-object.so", RTLD_NOW);
+	if (handle) {
+		dlclose(handle);
+		atomic_store(&g_hook.self_protected, 0);
+		FAIL("a load of nothing returned a handle");
+		return;
+	}
+	if (g_hook.refused_object[0]) {
+		atomic_store(&g_hook.self_protected, 0);
+		FAIL("a missing file was recorded as a gate refusal");
+		return;
+	}
+
+	/* an object that is there and did not load: what a refusal is */
+	snprintf(broken, sizeof(broken), "%s/libbroken.so", tmpdir);
+	if (touch_file(broken, "not really an ELF") != 0) {
+		atomic_store(&g_hook.self_protected, 0);
+		FAIL("could not create the test object");
+		return;
+	}
+	handle = dlopen(broken, RTLD_NOW);
+	atomic_store(&g_hook.self_protected, 0);
+	if (handle) {
+		dlclose(handle);
+		FAIL("a file that is not an object returned a handle");
+		return;
+	}
+	if (strcmp(g_hook.refused_object, broken) != 0) {
+		FAIL("a failed load of an object that is there went unrecorded");
+		return;
+	}
+
+	unlink(broken);
+	g_hook.refused_object[0] = '\0';
+	PASS();
+}
+
+/*
+ * The file is rewritten only on an agent status event, so a registration
+ * made between events leaves LOTA_PROTECTED=0 on disk indefinitely.
+ */
+static void test_a_registration_publishes_itself(void)
+{
+	pid_t agent;
+	char path[PATH_MAX];
+	char buf[1024];
+	ssize_t n;
+
+	TEST("a registration reaches the status file when it is made");
+
+	agent = start_mock_agent();
+	if (agent < 0) {
+		if (mock_errno_is_sandbox(mock_agent_errno)) {
+			SKIP("no unix socket in this sandbox");
+			return;
+		}
+		FAIL("mock agent did not start");
+		return;
+	}
+
+	hook_state_for_mock_agent("publish");
+	snprintf(path, sizeof(path), "%s/publish.status", tmpdir);
+	g_hook.init_time = time(NULL);
+	g_hook.protect_delay_sec = 3600; /* the loader is still running */
+
+	g_hook.client = hook_connect();
+	if (!g_hook.client) {
+		stop_mock_agent(agent);
+		FAIL("hook did not connect to the mock agent");
+		return;
+	}
+	refresh_once();
+
+	/* the loader is done: what every cycle of the thread loop does */
+	g_hook.protect_delay_sec = 0;
+	hook_register_self();
+
+	lota_disconnect(g_hook.client);
+	g_hook.client = NULL;
+	stop_mock_agent(agent);
+	atomic_store(&g_hook.self_protected, 0);
+
+	n = read_file_contents(path, buf, sizeof(buf));
+	if (n <= 0) {
+		FAIL("no status file to read");
+		return;
+	}
+	if (!strstr(buf, "LOTA_PROTECTED=1")) {
+		FAIL("the sink still says the title is not in the gates");
+		return;
+	}
+
+	PASS();
+}
+
+/* likewise a refusal: no agent event follows it */
+static void test_a_refusal_publishes_itself(void)
+{
+	pid_t agent;
+	char path[PATH_MAX];
+	char broken[PATH_MAX];
+	char buf[1024];
+	void *handle;
+	ssize_t n;
+
+	TEST("a refusal reaches the status file when the load fails");
+
+	agent = start_mock_agent();
+	if (agent < 0) {
+		if (mock_errno_is_sandbox(mock_agent_errno)) {
+			SKIP("no unix socket in this sandbox");
+			return;
+		}
+		FAIL("mock agent did not start");
+		return;
+	}
+
+	hook_state_for_mock_agent("refused_publish");
+	snprintf(path, sizeof(path), "%s/refused_publish.status", tmpdir);
+	g_hook.init_time = time(NULL);
+	g_hook.protect_delay_sec = 0;
+
+	g_hook.client = hook_connect();
+	if (!g_hook.client) {
+		stop_mock_agent(agent);
+		FAIL("hook did not connect to the mock agent");
+		return;
+	}
+	refresh_once();
+	lota_disconnect(g_hook.client);
+	g_hook.client = NULL;
+	stop_mock_agent(agent);
+
+	snprintf(broken, sizeof(broken), "%s/libpublish.so", tmpdir);
+	if (touch_file(broken, "not really an ELF") != 0) {
+		atomic_store(&g_hook.self_protected, 0);
+		FAIL("could not create the test object");
+		return;
+	}
+
+	atomic_store(&g_hook.self_protected, 1);
+	handle = dlopen(broken, RTLD_NOW);
+	atomic_store(&g_hook.self_protected, 0);
+	if (handle) {
+		dlclose(handle);
+		unlink(broken);
+		FAIL("a file that is not an object returned a handle");
+		return;
+	}
+
+	n = read_file_contents(path, buf, sizeof(buf));
+	unlink(broken);
+	g_hook.refused_object[0] = '\0';
+	if (n <= 0) {
+		FAIL("no status file to read");
+		return;
+	}
+	if (!strstr(buf, "LOTA_REFUSED_OBJECT=")) {
+		FAIL("the sink does not carry the refusal the title just met");
+		return;
+	}
+
+	PASS();
+}
+
 int main(void)
 {
 	printf("=== LOTA Wine Hook Unit Tests ===\n\n");
@@ -1331,6 +2034,18 @@ int main(void)
 	test_policy_empty_env_strings_ignored();
 	test_policy_prefix_must_match_at_start();
 	test_policy_whitespace_tolerant();
+
+	/* connect-then-register sequence */
+	test_the_launch_path_registers_the_title();
+	test_the_registration_is_not_repeated();
+	test_the_loader_grace_period_holds_the_registration();
+	test_the_grace_period_is_configurable();
+	test_a_refresh_inside_the_grace_period_does_not_register();
+	test_a_gate_refusal_is_told_apart_from_a_missing_file();
+	test_the_status_file_names_the_refused_object();
+	test_the_loader_wrapper_hands_back_what_it_got();
+	test_a_registration_publishes_itself();
+	test_a_refusal_publishes_itself();
 
 	/* exported query functions */
 	test_hook_active_when_not_started();

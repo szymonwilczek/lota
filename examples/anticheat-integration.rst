@@ -246,6 +246,31 @@ Two rules follow for anything that polls the sink:
 signals and ships with the demo; the ``agent-down`` walk-through beside it
 drives the transition and asserts what lands on disk.
 
+When your producer joins the protected set
+==========================================
+
+A token says the producer was in the protected set only if the producer put
+itself there: ``lota_ac_init()`` does not register the process; the reference
+calls ``lota_protect_self()`` behind ``--protect-self``.
+
+Once registered, the process may map an executable file only if its fs-verity
+digest is allowed or its inode is in ``trusted_libs``; anything else is
+``-EPERM``, its own libraries included. Registering before the loader is done
+kills the title. Two points are safe:
+
+* **After startup**, as the Wine hook does (``LOTA_HOOK_PROTECT_DELAY``, 20
+  seconds by default). A library loaded later meets the same rule.
+* **Any time**, once the game's libraries carry allowed fs-verity digests
+  (``LOTA_FLAG_IMAGE_FULLY_MEASURED`` on the far side).
+
+A refusal surfaces as ``dlopen()`` failing with "failed to map segment from
+shared object"; the agent journal has the matching ``MMAP_BLOCKED`` line. The
+Wine hook also reports it on the title's stderr and as ``LOTA_REFUSED_OBJECT``
+in its status file. A producer registering itself should read a load failure
+after registering the same way, not as a corrupt install.
+``LOTA_REFUSED_OBJECT`` and ``LOTA_PROTECTED`` are written when they happen,
+not on the next agent status event, which a steady host never sends.
+
 What the token actually proves
 ==============================
 

@@ -261,7 +261,9 @@ SERVER_SDK_OBJS := $(patsubst $(SRC_DIR)/%.c,$(BUILD_DIR)/%.o,$(SERVER_SDK_SRCS)
 # Wine/Proton hook
 WINE_HOOK_LIB := $(BUILD_DIR)/liblota_wine_hook.so
 WINE_HOOK_SRCS := $(SDK_DIR)/lota_wine_hook.c
-WINE_HOOK_OBJS := $(patsubst $(SRC_DIR)/%.c,$(BUILD_DIR)/%.o,$(WINE_HOOK_SRCS))
+# own SDK objects: the hook is built with hidden visibility
+WINE_HOOK_OBJS := $(patsubst $(SDK_DIR)/%.c,$(BUILD_DIR)/hook/%.o,\
+	$(WINE_HOOK_SRCS) $(SDK_SRCS))
 
 # Anti-cheat compatibility layer
 ANTICHEAT_LIB := $(BUILD_DIR)/liblota_anticheat.so
@@ -345,6 +347,13 @@ $(BUILD_DIR)/sdk/%.o: $(SDK_DIR)/%.c | $(BUILD_DIR)
 	$(Q)mkdir -p $(dir $@)
 	$(Q)$(CC) $(CFLAGS) $(DEPFLAGS) -fPIC -c -o $@ $<
 
+# compile the hook and its SDK copy hidden; a version script would hide
+# the dlopen wrapper behind dlopen@GLIBC_2.x
+$(BUILD_DIR)/hook/%.o: $(SDK_DIR)/%.c | $(BUILD_DIR)
+	$(QUIET_CC)
+	$(Q)mkdir -p $(dir $@)
+	$(Q)$(CC) $(CFLAGS) $(DEPFLAGS) -fPIC -fvisibility=hidden -c -o $@ $<
+
 # build identity (both SDKs report it; see lota_sdk_version)
 $(BUILD_DIR)/agent/dbus.o: CFLAGS += $(SDK_VERSION_CFLAGS)
 $(BUILD_DIR)/agent/dbus.o: $(VERSION_FILE)
@@ -352,6 +361,8 @@ $(BUILD_DIR)/sdk/lota_server.o: CFLAGS += $(SDK_VERSION_CFLAGS)
 $(BUILD_DIR)/sdk/lota_server.o: $(VERSION_FILE)
 $(BUILD_DIR)/sdk/lota_gaming.o: CFLAGS += $(SDK_VERSION_CFLAGS)
 $(BUILD_DIR)/sdk/lota_gaming.o: $(VERSION_FILE)
+$(BUILD_DIR)/hook/lota_gaming.o: CFLAGS += $(SDK_VERSION_CFLAGS)
+$(BUILD_DIR)/hook/lota_gaming.o: $(VERSION_FILE)
 
 # build SDK shared library (versioned: real file + soname/linker symlinks)
 $(SDK_LIB): $(SDK_OBJS) $(call SDK_VERSION_SCRIPT,$(SDK_LIB)) Makefile | $(BUILD_DIR)
@@ -423,14 +434,12 @@ $(SERVER_SDK_STATIC): $(SERVER_SDK_OBJS) | $(BUILD_DIR)
 	$(Q)$(AR) rcs $@ $^
 
 # build Wine/Proton hook (self-contained: includes gaming SDK; versioned)
-$(WINE_HOOK_LIB): $(WINE_HOOK_OBJS) $(SDK_OBJS) \
-		$(call SDK_VERSION_SCRIPT,$(WINE_HOOK_LIB)) Makefile | $(BUILD_DIR)
+$(WINE_HOOK_LIB): $(WINE_HOOK_OBJS) Makefile | $(BUILD_DIR)
 	$(QUIET_LD)
 	$(Q)rm -f $@ $@.*
 	$(Q)$(CC) -shared -Wl,-soname,$(notdir $@).$(LOTA_ABI_MAJOR) \
-		$(call VERSION_SCRIPT_LDFLAGS,$@) \
 		$(HARDENING_LDFLAGS) -o $@.$(LOTA_ABI_VERSION) \
-		$(WINE_HOOK_OBJS) $(SDK_OBJS) -lpthread
+		$(WINE_HOOK_OBJS) -lpthread
 	$(Q)ln -sf $(notdir $@).$(LOTA_ABI_VERSION) $@.$(LOTA_ABI_MAJOR)
 	$(Q)ln -sf $(notdir $@).$(LOTA_ABI_VERSION) $@
 
@@ -1441,10 +1450,13 @@ $(TEST_BIN_DIR)/test_token_gate: tests/test_token_gate.c $(AGENT_DIR)/token_gate
 	$(QUIET_CC)
 	$(Q)$(CC) $(CFLAGS) -o $@ $^
 
-$(TEST_BIN_DIR)/test_wine_hook: tests/test_wine_hook.c $(SDK_DIR)/lota_gaming.c $(VERSION_FILE) | $(BUILD_DIR)
+# the test #includes lota_wine_hook.c; list it so a hook edit rebuilds
+$(TEST_BIN_DIR)/test_wine_hook: tests/test_wine_hook.c $(SDK_DIR)/lota_gaming.c \
+		$(SDK_DIR)/lota_wine_hook.c $(VERSION_FILE) | $(BUILD_DIR)
 	$(QUIET_CC)
 	$(Q)$(CC) $(CFLAGS) $(SDK_VERSION_CFLAGS) -DLOTA_HOOK_TESTING \
-		-o $@ $(filter-out $(VERSION_FILE),$^) -lpthread
+		-o $@ $(filter-out $(VERSION_FILE) $(SDK_DIR)/lota_wine_hook.c,$^) \
+		-lpthread
 
 $(TEST_BIN_DIR)/test_daemon: tests/test_daemon.c $(AGENT_DIR)/daemon.c | $(BUILD_DIR)
 	$(QUIET_CC)
