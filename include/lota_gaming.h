@@ -104,6 +104,13 @@ enum lota_error {
 	 * another program left in the range.
 	 */
 	LOTA_ERR_NO_KEY_SLOT = -17,
+
+	/*
+	 * The TPM is in dictionary-attack lockout and signs nothing until
+	 * the lockout lapses or somebody at the machine clears it.
+	 * Unlike LOTA_ERR_NOT_ATTESTED, retrying next round does not help.
+	 */
+	LOTA_ERR_TPM_LOCKED = -18,
 };
 
 /*

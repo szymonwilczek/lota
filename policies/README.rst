@@ -147,7 +147,11 @@ which kind of thing failed, because the kinds take different investigations.
     baseline. The code does not say which, so the agent's message names all
     three.
 ``iommu_fail``
-    ``require_iommu`` on a host with no DMA remapping.
+    ``require_iommu`` on a host with no DMA remapping, read from the domain
+    type of each IOMMU group: ``DMA`` or ``DMA-FQ`` is translated,
+    ``identity`` is passthrough, and no groups means no IOMMU driver. A host
+    with every device in an identity domain (``iommu=pt``, or firmware that
+    hands out passthrough) is refused: nothing on it is remapped.
 ``policy_requirement``
     everything else the policy demands of the host: ``kernel_hashes``,
     ``require_enforce``, ``require_module_sig``, ``require_secureboot``,
