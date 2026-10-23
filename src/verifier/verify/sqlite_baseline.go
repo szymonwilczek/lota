@@ -923,16 +923,18 @@ func (s *SQLiteBaselineStore) GetAgentHashRepinState(clientID string) AgentHashR
 	defer s.mu.RUnlock()
 
 	var (
-		count    sql.NullInt64
-		lastPin  sql.NullTime
-		state    AgentHashRepinState
-		clientPK string
+		count     sql.NullInt64
+		lastPin   sql.NullTime
+		state     AgentHashRepinState
+		clientPK  string
+		agentHash []byte
 	)
 	if err := s.db.QueryRow(
-		`SELECT client_id, agent_hash_repin_count, last_agent_hash_repin_at
+		`SELECT client_id, agent_hash, agent_hash_repin_count,
+		        last_agent_hash_repin_at
 		   FROM baselines WHERE client_id = ?`,
 		clientID,
-	).Scan(&clientPK, &count, &lastPin); err != nil {
+	).Scan(&clientPK, &agentHash, &count, &lastPin); err != nil {
 		// missing row is Present=false,
 		// which the caller treats as "no pin to move";
 		// store error is reported the same way so the decision fails
@@ -944,6 +946,7 @@ func (s *SQLiteBaselineStore) GetAgentHashRepinState(clientID string) AgentHashR
 		return AgentHashRepinState{}
 	}
 	state.Present = true
+	state.Pinned = len(agentHash) == types.HashSize
 	state.RepinCount = int(count.Int64)
 	if lastPin.Valid {
 		state.LastRepinAt = lastPin.Time.UTC()
@@ -989,6 +992,10 @@ func (s *SQLiteBaselineStore) ArchiveAndRepinAgentHash(clientID string,
 		clientID,
 	).Scan(&oldAgentHash, &lastRepin); err != nil {
 		return err
+	}
+	// no pin to move, and no predecessor to archive
+	if len(oldAgentHash) != types.HashSize {
+		return ErrAgentHashNotPinned
 	}
 	if lastRepin.Valid &&
 		now.Sub(lastRepin.Time.UTC()) < AgentHashRepinMinInterval {
