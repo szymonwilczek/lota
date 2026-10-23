@@ -38,6 +38,7 @@
 #include "daemon.h"
 #include "enroll.h"
 #include "esrt.h"
+#include "exit_status.h"
 #include "hardening.h"
 #include "iommu.h"
 #include "io_utils.h"
@@ -900,6 +901,24 @@ resolve_attest_profile(const char *ca_cert, struct profile_paths *storage)
 	return storage;
 }
 
+/*
+ * Exit status for a refused self-measurement: LOTA_EXIT_OPERATOR_ACTION
+ * when lota_daemon_exit_status() says a restart cannot clear it, else 1.
+ */
+static int self_measure_exit_status(int ret)
+{
+	int status = lota_daemon_exit_status(
+		ret, g_agent.tpm_ctx.boot_commitment_state);
+
+	if (status != LOTA_EXIT_OPERATOR_ACTION)
+		return 1;
+
+	lota_err(
+		"Starting the loop again cannot clear this: PCR 14 is written once per boot, so the register refuses this build for as long as the host stays up. The unit stops here and stays failed; the recovery is the reboot named above.");
+
+	return LOTA_EXIT_OPERATOR_ACTION;
+}
+
 int do_attest(const char *server, int port, const char *ca_cert,
 	      int skip_verify, const uint8_t *pin_sha256)
 {
@@ -976,11 +995,14 @@ int do_attest(const char *server, int port, const char *ca_cert,
 	printf("Performing self-measurement...\n");
 	ret = self_measure(&g_agent.tpm_ctx);
 	if (ret < 0) {
+		int status;
+
 		fprintf(stderr, "Self-measurement failed: %s\n",
 			tpm_strerror(ret));
+		status = self_measure_exit_status(ret);
 		tpm_cleanup(&g_agent.tpm_ctx);
 		net_cleanup();
-		return 1;
+		return status;
 	}
 
 	ret = tpm_aik_load_metadata(&g_agent.tpm_ctx);
@@ -1862,10 +1884,13 @@ static int continuous_attest_run(const struct lota_config *cfg,
 		 * (typically a cold reboot after a live binary upgrade) before
 		 * traffic resumes.
 		 */
+		int status;
+
 		lota_err("Self-measurement failed: %s", tpm_strerror(ret));
+		status = self_measure_exit_status(ret);
 		tpm_cleanup(&g_agent.tpm_ctx);
 		net_cleanup();
-		return 1;
+		return status;
 	}
 
 	ret = tpm_aik_load_metadata(&g_agent.tpm_ctx);

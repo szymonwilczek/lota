@@ -89,6 +89,12 @@ On each host, once the new hash is pinned in the verifier tier:
    the player a restart is coming rather than letting them meet it as a launch
    failure. Attestation is unaffected until the reboot: PCR 14 commits to the
    build still running and the token names that build.
+
+   Do not restart the units before the reboot. Restarting ``lota-agent`` or
+   ``lota-attest`` starts the **new** binary against a PCR 14 that commits to
+   the old one, and it is refused for the rest of the boot.
+   Both units then stay ``failed`` with the reason in the journal until the
+   reboot.
 #. **Stop the running daemon.** ``lota-agent --shutdown`` -- ``systemctl stop``
    cannot, because the LSM hook blocks the kill.
 #. **Cold-reboot the host.** A full power cycle, not a warm reboot: PCR 14 only
