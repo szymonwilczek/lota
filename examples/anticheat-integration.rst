@@ -190,6 +190,9 @@ separate them: ten distinct refusals in the heartbeat path share
 ``-EIO``. ``lota_ac_last_error()`` names the one that happened, on the
 calling thread, and ``lota_ac_strerror()`` renders it.
 
+Every call that returns a value to check sets it, success included, so it
+always describes the call just made.
+
 ``lota_ac_strerror()`` renders either space. ``LOTA_AC_ERR_*`` codes sit past
 any errno value, so the function can tell one of its own verdicts from a
 ``-EIO`` a file read produced and describes each in its own terms -- printing
