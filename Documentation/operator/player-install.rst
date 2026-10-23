@@ -300,6 +300,10 @@ check -- it reports the socket as ready only when this account can open it,
 and prints the ownership when it cannot, which is the case an account
 outside the ``lota`` group lands in.
 
+An account with no login session (a service account, ``sudo -u``, cron) has
+no ``$XDG_RUNTIME_DIR``. Each check that needs it reports that, and the run
+still reaches its verdict.
+
 It is the only step in this document that asks anyone to type something, and
 it stays until Steam supports a compatibility-tool layer that composes with
 the player's Proton choice rather than replacing it. A publisher shipping
