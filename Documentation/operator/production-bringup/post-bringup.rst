@@ -204,11 +204,34 @@ So the two supported paths are:
    boot and not before. This is the intended way to pause a host. The route is
    ``ExecStop``, not a signal and not a cgroup kill, so it is unaffected by
    either refusal above.
-#. **Cold reboot.** If the IPC path is unreachable (agent hang, socket gone,
-   kernel deadlock) the only remaining recovery is to reboot the host. There is
-   no kill-bypass for PID 1 and there never will be: every grace window would be
-   an attack surface for an init-domain compromise. Operators planning updates
-   therefore schedule them alongside a regular maintenance reboot.
+#. **Cold reboot.** If the IPC path is unreachable and the process is not
+   merely wedged (socket gone, kernel deadlock), reboot the host. PID 1 has no
+   kill bypass, since any grace window would be attack surface for an
+   init-domain compromise; schedule updates with a maintenance reboot.
+
+A wedged agent ends itself
+--------------------------
+
+The kill refusal applies to systemd's watchdog too, so the remedy runs inside
+the process. ``lota-agent.service`` arms a 60 s watchdog, and a supervisor
+thread pings it while the main loop advances. After half the interval with no
+progress it holds the ping, so systemd records the stall too, and after a full
+interval it ends the process::
+
+  Watchdog: the main loop has not advanced in 30000 ms, holding the ping
+  Watchdog: the main loop has not advanced in 60000 ms, past the 60000 ms
+  interval. Ending the process from inside: the signal systemd sends is
+  refused by this agent's own kill guard.
+
+The agent sends itself ``SIGKILL``: ``lota_task_kill`` delivers a signal to
+the sender's own thread group, and a kill is a dirty stop that keeps the PCR 14
+boot commitment, so ``Restart=on-failure`` brings enforcement back in the same
+boot instead of the paused state a clean shutdown leaves.
+
+systemd's own escalation is refused at both ``SIGABRT`` and ``SIGKILL``, so no
+``WatchdogSignal=`` is set. A journal showing the unit ``failed`` with
+``Unit process N remains running after unit stopped`` means the supervisor is
+wedged too: cold reboot.
 
 Restarting ``lota-agent.socket`` is not one of those paths and does not need
 to be. The socket unit carries ``RemoveOnStop=yes``, so a restart unlinks the

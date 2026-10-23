@@ -30,3 +30,6 @@ Could not find private key from pkcs11:...
 
 # strerror() text for a socket errno; not a literal in this tree.
 Connection reset by peer
+
+# systemd's line after a refused watchdog kill; not a literal in this tree.
+Unit process N remains running after unit stopped
