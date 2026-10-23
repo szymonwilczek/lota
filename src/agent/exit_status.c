@@ -30,6 +30,7 @@ static bool commitment_refused(enum tpm_pcr14_state state)
 	case TPM_PCR14_BINARY_CHANGED:
 	case TPM_PCR14_TAMPERED_BEFORE_START:
 	case TPM_PCR14_MUTATED_IN_SESSION:
+	case TPM_PCR14_HANDOFF_CHANGED:
 	case TPM_PCR14_UNATTRIBUTABLE:
 	case TPM_PCR14_STATE_ROLLBACK:
 		return true;

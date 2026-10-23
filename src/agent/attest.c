@@ -910,6 +910,10 @@ int do_attest(const char *server, int port, const char *ca_cert,
 
 	printf("=== Remote Attestation ===\n\n");
 
+	/* reads a path, not the chip: refuse before the TPM is opened */
+	if (tpm_firmware_refuses_attestation(&g_agent.tpm_ctx))
+		return 1;
+
 	paths = resolve_attest_profile(ca_cert, &storage);
 
 	/*
@@ -1751,6 +1755,12 @@ static int continuous_attest_run(const struct lota_config *cfg,
 	int ret;
 
 	lota_info("Continuous attestation starting");
+
+	/* reads a path, not the chip: refuse before the TPM is opened */
+	if (tpm_firmware_refuses_attestation(&g_agent.tpm_ctx)) {
+		lota_err("This host cannot attest: it did not boot via UEFI.");
+		return 1;
+	}
 
 	attest_peer_init(&peer);
 
