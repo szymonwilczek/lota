@@ -382,7 +382,7 @@ static void test_ensure_token_dir_creates(void)
 	snprintf(g_hook.token_dir, sizeof(g_hook.token_dir), "%s/subdir",
 		 tmpdir);
 
-	if (ensure_token_dir() != 0) {
+	if (ensure_token_dir(NULL) != 0) {
 		FAIL("ensure_token_dir failed");
 		return;
 	}
@@ -408,7 +408,7 @@ static void test_ensure_token_dir_exists(void)
 	/* tmpdir already exists */
 	snprintf(g_hook.token_dir, sizeof(g_hook.token_dir), "%s", tmpdir);
 
-	if (ensure_token_dir() != 0) {
+	if (ensure_token_dir(NULL) != 0) {
 		FAIL("ensure_token_dir failed");
 		return;
 	}
@@ -431,7 +431,7 @@ static void test_ensure_token_dir_not_a_dir(void)
 
 	/* suppress stderr for this test */
 	g_hook.log_level = HOOK_LOG_SILENT;
-	int ret = ensure_token_dir();
+	int ret = ensure_token_dir(NULL);
 	g_hook.log_level = HOOK_LOG_WARN;
 
 	if (ret != -ENOTDIR) {
@@ -463,7 +463,7 @@ static void test_ensure_token_dir_rejects_symlink(void)
 	snprintf(g_hook.token_dir, sizeof(g_hook.token_dir), "%s", linkpath);
 
 	g_hook.log_level = HOOK_LOG_SILENT;
-	int ret = ensure_token_dir();
+	int ret = ensure_token_dir(NULL);
 	g_hook.log_level = HOOK_LOG_WARN;
 
 	if (ret != -ELOOP && ret != -ENOTDIR) {
@@ -489,7 +489,7 @@ static void test_ensure_token_dir_existing_mode_tightened(void)
 
 	snprintf(g_hook.token_dir, sizeof(g_hook.token_dir), "%s", path);
 
-	if (ensure_token_dir() != 0) {
+	if (ensure_token_dir(NULL) != 0) {
 		FAIL("ensure_token_dir failed");
 		return;
 	}
@@ -1966,6 +1966,153 @@ static void test_a_refusal_publishes_itself(void)
 	PASS();
 }
 
+/* a token directory repaired to 0700 must log the mode it had */
+static void test_a_repaired_token_dir_mode_is_reported(void)
+{
+	mode_t repaired;
+	struct stat st;
+
+	TEST("a token directory repaired to 0700 says what it was");
+
+	snprintf(g_hook.token_dir, sizeof(g_hook.token_dir), "%s/loose",
+		 tmpdir);
+	if (mkdir(g_hook.token_dir, 0777) != 0 && errno != EEXIST) {
+		FAIL("could not create the test directory");
+		return;
+	}
+	if (chmod(g_hook.token_dir, 0777) != 0) {
+		FAIL("could not set the test mode");
+		return;
+	}
+
+	repaired = 0;
+	if (ensure_token_dir(&repaired) != 0) {
+		FAIL("ensure_token_dir refused a directory it owns");
+		return;
+	}
+	if (stat(g_hook.token_dir, &st) != 0 || (st.st_mode & 0777) != 0700) {
+		FAIL("the directory was not tightened to 0700");
+		return;
+	}
+	if (repaired != 0777) {
+		FAIL("the repair does not name the mode it found");
+		return;
+	}
+
+	PASS();
+}
+
+/* A directory that was already 0700 was not repaired and says nothing. */
+static void test_an_untouched_token_dir_reports_no_repair(void)
+{
+	mode_t repaired;
+
+	TEST("a token directory already at 0700 reports no repair");
+
+	snprintf(g_hook.token_dir, sizeof(g_hook.token_dir), "%s/tight",
+		 tmpdir);
+	if (mkdir(g_hook.token_dir, 0700) != 0 && errno != EEXIST) {
+		FAIL("could not create the test directory");
+		return;
+	}
+
+	repaired = 0777;
+	if (ensure_token_dir(&repaired) != 0) {
+		FAIL("ensure_token_dir refused a directory it owns");
+		return;
+	}
+	if (repaired != 0) {
+		FAIL("a directory that was not repaired reports a repair");
+		return;
+	}
+
+	PASS();
+}
+
+/*
+ * Each connect failure needs its own line: a session without the lota group
+ * and a socket never created must not read the same.
+ */
+static void test_an_unreachable_socket_is_classified(void)
+{
+	char judged[PATH_MAX];
+	char sock[PATH_MAX];
+	int fd;
+	int ret;
+
+	TEST("the hook names why the agent socket could not be opened");
+
+	snprintf(sock, sizeof(sock), "%s/absent.sock", tmpdir);
+	snprintf(g_hook.socket_path, sizeof(g_hook.socket_path), "%s", sock);
+
+	ret = hook_probe_socket(judged, sizeof(judged));
+	if (ret != -ENOENT) {
+		g_hook.socket_path[0] = '\0';
+		FAIL("a socket that is not there is not reported as absent");
+		return;
+	}
+	if (strcmp(judged, sock) != 0) {
+		g_hook.socket_path[0] = '\0';
+		FAIL("the probe does not name the path it judged");
+		return;
+	}
+
+	snprintf(sock, sizeof(sock), "%s/closed.sock", tmpdir);
+	snprintf(g_hook.socket_path, sizeof(g_hook.socket_path), "%s", sock);
+	fd = open(sock, O_CREAT | O_WRONLY | O_TRUNC, 0000);
+	if (fd < 0) {
+		g_hook.socket_path[0] = '\0';
+		FAIL("could not create the test socket path");
+		return;
+	}
+	close(fd);
+
+	if (getuid() == 0) {
+		unlink(sock);
+		g_hook.socket_path[0] = '\0';
+		SKIP("root opens a mode 0000 path");
+		return;
+	}
+
+	ret = hook_probe_socket(judged, sizeof(judged));
+	unlink(sock);
+	g_hook.socket_path[0] = '\0';
+	if (ret != -EACCES) {
+		FAIL("a socket this process may not open is not reported as refused");
+		return;
+	}
+
+	PASS();
+}
+
+/* The reason a player can act on, not the errno alone. */
+static void test_a_refused_socket_names_the_group(void)
+{
+	const char *denied;
+	const char *absent;
+
+	TEST("a refused socket names the group a player is missing");
+
+	denied = hook_connect_reason(-EACCES);
+	if (!denied || !strstr(denied, "lota group")) {
+		FAIL("permission denied does not name the group");
+		return;
+	}
+
+	absent = hook_connect_reason(-ENOENT);
+	if (!absent || strstr(absent, "lota group")) {
+		FAIL("an absent socket is explained as a group problem");
+		return;
+	}
+
+	if (hook_connect_reason(-EPROTO)) {
+		FAIL("an errno with nothing to say invents a reason");
+		return;
+	}
+
+	PASS();
+}
+
 int main(void)
 {
 	printf("=== LOTA Wine Hook Unit Tests ===\n\n");
@@ -1998,6 +2145,10 @@ int main(void)
 	test_ensure_token_dir_not_a_dir();
 	test_ensure_token_dir_rejects_symlink();
 	test_ensure_token_dir_existing_mode_tightened();
+	test_a_repaired_token_dir_mode_is_reported();
+	test_an_untouched_token_dir_reports_no_repair();
+	test_an_unreachable_socket_is_classified();
+	test_a_refused_socket_names_the_group();
 
 	/* atomic_write */
 	test_atomic_write_creates_file();
