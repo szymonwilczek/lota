@@ -121,7 +121,7 @@ struct {
  */
 struct {
 	__uint(type, BPF_MAP_TYPE_ARRAY);
-	__uint(max_entries, 18);
+	__uint(max_entries, 19);
 	__type(key, u32);
 	__type(value, u64);
 } stats SEC(".maps");
@@ -162,11 +162,11 @@ struct {
 #define STAT_BLOCKED_EVENTS_SUPPRESSED 15
 #define STAT_MOUNTS_BLOCKED 16
 #define STAT_KILL_GUARD_BLOCKED 17
+#define STAT_EVENTS_YIELDED 18
 
 /*
- * One rate-limit window per event class (see lota_event_budget.h).
- * Classes are counted separately so a blocked-event flood cannot consume
- * the allowed budget and vice versa; each is independently bounded.
+ * Rate-limit window per enum lota_event_type (see lota_event_budget.h):
+ * a class-wide window would let one flooding type silence the rest of its class.
  */
 struct event_budget_window {
 	u64 window_start_ns;
@@ -174,16 +174,11 @@ struct event_budget_window {
 	u32 pad;
 };
 
-struct event_budget_state {
-	struct event_budget_window allow;
-	struct event_budget_window blocked;
-};
-
 struct {
 	__uint(type, BPF_MAP_TYPE_ARRAY);
-	__uint(max_entries, 1);
+	__uint(max_entries, LOTA_EVENT_TYPE_COUNT);
 	__type(key, u32);
-	__type(value, struct event_budget_state);
+	__type(value, struct event_budget_window);
 } event_budget SEC(".maps");
 
 struct lota_task_auth_entry {
@@ -362,34 +357,34 @@ static __always_inline u32 get_config(u32 key)
 }
 
 /*
- * Event emission policy under ring buffer pressure:
+ * Event emission policy:
  * - outside ENFORCE mode nothing is budgeted
- * - in ENFORCE mode both allowed and blocked events are budgeted per second,
- *   each in its own window, so an attacker-generated flood of either class
- *   cannot starve the other by exhausting the ring buffer. Blocked events get
- *   the larger budget (lota_event_budget.h); their counts are still tallied in
- *   the stats map regardless of emission, so only per-event detail is dropped.
+ * - in ENFORCE mode each event type has a per-second window; blocked events
+ *   get the larger cap and are tallied in stats regardless, so only per-event
+ *   detail is dropped
+ * - past the ring pressure watermark a type that spent its share of the
+ *   window yields the rest of the ring to quieter types
  */
-static __always_inline int should_emit_event(u32 mode, int blocked)
+static __always_inline int should_emit_event(u32 mode, int blocked, u32 type)
 {
-	struct event_budget_state *state;
 	struct event_budget_window *win;
-	u64 now_ns, window;
-	u32 key = 0, limit;
+	u64 now_ns, window, avail;
+	u32 limit, count;
 
 	limit = lota_event_budget_limit(mode == LOTA_MODE_ENFORCE, blocked);
 	if (limit == 0)
 		return 1;
 
-	state = bpf_map_lookup_elem(&event_budget, &key);
-	if (!state)
+	if (type >= LOTA_EVENT_TYPE_COUNT)
 		return 0;
 
-	win = blocked ? &state->blocked : &state->allow;
+	win = bpf_map_lookup_elem(&event_budget, &type);
+	if (!win)
+		return 0;
 
 	/*
-	 * Map is a shared single-entry ARRAY, so the window rotation
-	 * and the counter must be atomic across CPUs.
+	 * Map entry is shared by every CPU emitting this type, so the window
+	 * rotation and the counter must be atomic across CPUs.
 	 * One CPU wins the CMPXCHG and zeroes the counter; every caller
 	 * then claims a slot with fetch-and-add and emits only when the
 	 * old value was under the budget.
@@ -406,10 +401,17 @@ static __always_inline int should_emit_event(u32 mode, int blocked)
 			(void)__sync_lock_test_and_set(&win->emitted, 0);
 	}
 
-	if (lota_event_budget_exhausted(__sync_fetch_and_add(&win->emitted, 1),
-					limit)) {
+	count = __sync_fetch_and_add(&win->emitted, 1);
+
+	if (lota_event_budget_exhausted(count, limit)) {
 		inc_stat(blocked ? STAT_BLOCKED_EVENTS_SUPPRESSED :
 				   STAT_ALLOW_EVENTS_SUPPRESSED);
+		return 0;
+	}
+
+	avail = bpf_ringbuf_query(&events, BPF_RB_AVAIL_DATA);
+	if (lota_event_type_yields(count, avail, LOTA_RINGBUF_SIZE)) {
+		inc_stat(STAT_EVENTS_YIELDED);
 		return 0;
 	}
 
@@ -836,7 +838,7 @@ static __always_inline void report_blocked_mount(const char *what, u32 len)
 
 	inc_stat(STAT_MOUNTS_BLOCKED);
 
-	if (!should_emit_event(LOTA_MODE_ENFORCE, 1))
+	if (!should_emit_event(LOTA_MODE_ENFORCE, 1, LOTA_EVENT_MOUNT_BLOCKED))
 		return;
 
 	event = bpf_ringbuf_reserve(&events, sizeof(*event), 0);
@@ -980,7 +982,8 @@ static __always_inline void report_blocked_kill_guard(const char *what, u32 len)
 
 	inc_stat(STAT_KILL_GUARD_BLOCKED);
 
-	if (!should_emit_event(LOTA_MODE_ENFORCE, 1))
+	if (!should_emit_event(LOTA_MODE_ENFORCE, 1,
+			       LOTA_EVENT_KILL_GUARD_BLOCKED))
 		return;
 
 	event = bpf_ringbuf_reserve(&events, sizeof(*event), 0);
@@ -1150,7 +1153,9 @@ int BPF_PROG(lota_bprm_check_security, struct linux_binprm *bprm)
 		}
 	}
 
-	if (should_emit_event(mode, blocked)) {
+	if (should_emit_event(mode, blocked,
+			      blocked ? LOTA_EVENT_EXEC_BLOCKED :
+					LOTA_EVENT_EXEC)) {
 		event = bpf_ringbuf_reserve(&events, sizeof(*event), 0);
 		if (event) {
 			__builtin_memset(event, 0, sizeof(*event));
@@ -1296,7 +1301,9 @@ int BPF_PROG(lota_kernel_read_file, struct file *file,
 		}
 	}
 
-	emit_event = should_emit_event(mode, blocked);
+	emit_event = should_emit_event(mode, blocked,
+				       blocked ? LOTA_EVENT_MODULE_BLOCKED :
+						 LOTA_EVENT_MODULE_LOAD);
 	if (emit_event) {
 		event = bpf_ringbuf_reserve(&events, sizeof(*event), 0);
 	}
@@ -1434,7 +1441,9 @@ int BPF_PROG(lota_kernel_load_data, enum kernel_load_data_id id)
 		}
 	}
 
-	emit_event = should_emit_event(mode, blocked);
+	emit_event = should_emit_event(mode, blocked,
+				       blocked ? LOTA_EVENT_MODULE_BLOCKED :
+						 LOTA_EVENT_MODULE_LOAD);
 	if (emit_event) {
 		event = bpf_ringbuf_reserve(&events, sizeof(*event), 0);
 	}
@@ -1538,7 +1547,10 @@ int BPF_PROG(lota_mmap_file, struct file *file, unsigned long reqprot,
 			anon_blocked = 1;
 		}
 
-		emit_event = should_emit_event(mode, anon_blocked);
+		emit_event = should_emit_event(
+			mode, anon_blocked,
+			anon_blocked ? LOTA_EVENT_ANON_EXEC_BLOCKED :
+				       LOTA_EVENT_ANON_EXEC);
 		if (emit_event) {
 			event = bpf_ringbuf_reserve(&events, sizeof(*event), 0);
 		}
@@ -1593,7 +1605,9 @@ int BPF_PROG(lota_mmap_file, struct file *file, unsigned long reqprot,
 
 	/* for logging */
 	struct lota_exec_event *event;
-	int emit_event = should_emit_event(mode, blocked);
+	int emit_event = should_emit_event(mode, blocked,
+					   blocked ? LOTA_EVENT_MMAP_BLOCKED :
+						     LOTA_EVENT_MMAP_EXEC);
 	if (emit_event) {
 		event = bpf_ringbuf_reserve(&events, sizeof(*event), 0);
 	} else {
@@ -1696,7 +1710,10 @@ int BPF_PROG(lota_file_mprotect, struct vm_area_struct *vma,
 		    is_protected_current_task())
 			anon_blocked = 1;
 
-		emit_event = should_emit_event(mode, anon_blocked);
+		emit_event = should_emit_event(
+			mode, anon_blocked,
+			anon_blocked ? LOTA_EVENT_ANON_EXEC_BLOCKED :
+				       LOTA_EVENT_ANON_EXEC);
 		if (emit_event) {
 			event = bpf_ringbuf_reserve(&events, sizeof(*event), 0);
 		}
@@ -1748,7 +1765,10 @@ int BPF_PROG(lota_file_mprotect, struct vm_area_struct *vma,
 	}
 
 	{
-		int emit_event = should_emit_event(mode, blocked);
+		int emit_event =
+			should_emit_event(mode, blocked,
+					  blocked ? LOTA_EVENT_MMAP_BLOCKED :
+						    LOTA_EVENT_MMAP_EXEC);
 		if (emit_event) {
 			event = bpf_ringbuf_reserve(&events, sizeof(*event), 0);
 		}
@@ -1847,7 +1867,9 @@ int BPF_PROG(lota_ptrace_access_check, struct task_struct *child,
 				     is_protected_task(child));
 
 	/* for logging */
-	emit_event = should_emit_event(lota_mode, blocked);
+	emit_event = should_emit_event(lota_mode, blocked,
+				       blocked ? LOTA_EVENT_PTRACE_BLOCKED :
+						 LOTA_EVENT_PTRACE);
 	if (emit_event) {
 		event = bpf_ringbuf_reserve(&events, sizeof(*event), 0);
 	}
@@ -1959,7 +1981,9 @@ int BPF_PROG(lota_task_kill, struct task_struct *p, struct kernel_siginfo *info,
 	 * and a refusal that names the sender is what makes a supervisor
 	 * that cannot stop the agent diagnosable.
 	 */
-	emit_event = should_emit_event(lota_mode, blocked);
+	emit_event = should_emit_event(lota_mode, blocked,
+				       blocked ? LOTA_EVENT_KILL_BLOCKED :
+						 LOTA_EVENT_KILL);
 	if (emit_event)
 		event = bpf_ringbuf_reserve(&events, sizeof(*event), 0);
 	if (event) {

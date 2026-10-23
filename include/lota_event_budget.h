@@ -3,9 +3,9 @@
 /*
  * Ring-buffer emission budget shared by the BPF LSM and its unit tests.
  *
- * In ENFORCE mode every event class is rate-limited per one-second window so an
+ * In ENFORCE mode every event type is rate-limited per one-second window so an
  * attacker-driven flood cannot exhaust the ring buffer and starve the other
- * class.
+ * types.
  *
  * Allowed (benign) events get the tighter budget; blocked (security-relevant)
  * events get a larger one but are still bounded, so a flood of self-induced
@@ -15,6 +15,11 @@
  * Block counts themselves are never lost: they are tallied in the stats map
  * independently of ring-buffer emission, so suppressing a blocked event drops
  * only its per-event detail.
+ *
+ * The class sets the cap, the window is per type, so one flooding type cannot
+ * spend another's budget. All types share one ring, so past the pressure
+ * watermark a type that spent its share of the window yields to quieter ones;
+ * that rule bounds the ring as a whole.
  *
  * Decision arithmetic lives here as pure helpers (no BPF maps, no atomics)
  * so it can be unit-tested in user space.
@@ -71,6 +76,30 @@ LOTA_EB_INLINE int lota_event_budget_exhausted(unsigned int count_before,
 					       unsigned int limit)
 {
 	return count_before >= limit;
+}
+
+#define LOTA_EVENT_RING_PRESSURE_PCT 75U /* ring % full where yielding starts */
+#define LOTA_EVENT_PRESSURE_SHARE 8U /* events per type per window under it */
+
+/* whether the ring is past the pressure watermark; ring_bytes 0 is unknown */
+LOTA_EB_INLINE int
+lota_event_ring_under_pressure(unsigned long long avail_bytes,
+			       unsigned long long ring_bytes)
+{
+	if (ring_bytes == 0)
+		return 0;
+	return avail_bytes * 100ULL >=
+	       ring_bytes * (unsigned long long)LOTA_EVENT_RING_PRESSURE_PCT;
+}
+
+/* whether a type with type_count_before events this window must yield */
+LOTA_EB_INLINE int lota_event_type_yields(unsigned int type_count_before,
+					  unsigned long long avail_bytes,
+					  unsigned long long ring_bytes)
+{
+	if (!lota_event_ring_under_pressure(avail_bytes, ring_bytes))
+		return 0;
+	return type_count_before >= LOTA_EVENT_PRESSURE_SHARE;
 }
 
 #endif /* LOTA_EVENT_BUDGET_H */
