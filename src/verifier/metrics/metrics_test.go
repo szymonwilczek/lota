@@ -219,3 +219,34 @@ func TestExport_ReanchorOutcomes(t *testing.T) {
 		}
 	}
 }
+
+func TestExport_AttestationLogLoss(t *testing.T) {
+	m := New()
+
+	output := m.Export()
+	for _, want := range []string{
+		"lota_attestation_log_dropped_total 0",
+		"lota_attestation_log_failed_total 0",
+	} {
+		if !strings.Contains(output, want) {
+			t.Errorf("expected zero-value %q in output", want)
+		}
+	}
+
+	m.AttestationRecordsDropped(3)
+	m.AttestationRecordsDropped(2)
+	m.AttestationRecordsFailed(4)
+
+	output = m.Export()
+	checks := []string{
+		"# TYPE lota_attestation_log_dropped_total counter",
+		"lota_attestation_log_dropped_total 5",
+		"# TYPE lota_attestation_log_failed_total counter",
+		"lota_attestation_log_failed_total 4",
+	}
+	for _, check := range checks {
+		if !strings.Contains(output, check) {
+			t.Errorf("expected %q in output, not found.\nFull output:\n%s", check, output)
+		}
+	}
+}

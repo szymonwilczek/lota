@@ -178,10 +178,19 @@ The contract this creates:
 - **Crash-loss bound.** An ungraceful stop loses at most the records
   buffered since the last flush. This is acceptable precisely because the
   log gates nothing; the anti-replay nonce, baseline and session writes
-  that *do* gate stay synchronous. A graceful shutdown flushes the tail.
+  that *do* gate stay synchronous. A graceful shutdown flushes the tail,
+  bounded: a backend that has stopped answering does not hold the process
+  open, and what is still buffered at the deadline is counted as lost.
 - **Bounded memory.** Under a stalled database the buffer drops its oldest
-  records past ``MaxBuffer`` rather than growing without limit, counting
-  the loss. The hot path is never blocked and never sees the error.
+  records past ``MaxBuffer``. The hot path is never blocked and never sees
+  the error.
+- **Reported loss.** What the writer could not keep reaches somebody: a
+  rate-limited warning naming the running total, the
+  ``lota_attestation_log_dropped_total`` and
+  ``lota_attestation_log_failed_total`` counters, and one summary line at
+  shutdown. A deployment that lost part of its decision log has to look
+  different from one that did not, so a counter with no reader is not
+  counting.
 
 Any new attestation-log backend implements ``BatchRecorder`` so a batch
 costs one round trip; a backend that does not is still correct through the

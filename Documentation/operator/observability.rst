@@ -73,6 +73,15 @@ Metric                                          Type      Meaning
                                                           A peer that connects and leaves without
                                                           speaking -- a health check, a scanner -- is
                                                           not one of them and is not counted.
+``lota_attestation_log_dropped_total``          counter   Decision records dropped because the log
+                                                          buffer was full. Non-zero means the decision
+                                                          log is missing rounds this verifier served:
+                                                          the backend stopped keeping up and the oldest
+                                                          buffered records went so the verify path
+                                                          would not wait. Not recoverable.
+``lota_attestation_log_failed_total``           counter   Decision records lost to a failed log write.
+                                                          Same consequence, different cause: the write
+                                                          reached the backend and did not land.
 ``lota_verification_duration_seconds``          histogram Attestation verification latency.
 ``lota_pending_challenges``                     gauge     Outstanding attestation challenges. A peer
                                                           that leaves without answering releases its
@@ -101,7 +110,7 @@ a firing alert say the same thing.
 Alerts and runbooks
 ===================
 
-:ghsrc:`deploy/observability/alerts/lota-verifier-alerts.yaml` ships 11
+:ghsrc:`deploy/observability/alerts/lota-verifier-alerts.yaml` ships 12
 rules. Severity encodes the escalation tier:
 
 * **warning = L2**: operator triage. The fleet's integrity verdicts are
@@ -322,6 +331,32 @@ health-checking the TLS port with plain HTTP.
 1. The verifier log records the offending source and the parse error.
 2. If the onset matches an agent or verifier rollout, suspect a version
    mismatch and finish or roll back the rollout.
+
+.. _alert-lotadecisionlogloss:
+
+LotaDecisionLogLoss (warning)
+-----------------------------
+
+The verifier is losing attestation decision records. Verdicts are
+unaffected -- the decision log never gates attestation, and the verify path
+never waits on it -- but the audit trail has holes for this window, and the
+records that went are not recoverable.
+
+Which counter moved says which half it is. ``lota_attestation_log_dropped_total``
+means the backend stopped keeping up: the writer's buffer filled and the
+oldest records went so the verify path would not block. ``lota_attestation_log_failed_total``
+means the write reached the backend and did not land.
+
+1. The verifier log carries the running total beside each event
+   (``attestation-log buffer full; oldest decision records dropped``, or
+   ``attestation-log flush failed``), and one summary line at shutdown.
+2. Both point at the database: check its latency, its connection count,
+   and whether anything holds a lock on ``attestation_log``. Enforcement
+   writes -- revocations, bans, baselines -- are synchronous and unaffected,
+   so a healthy verdict rate beside this alert is the expected picture.
+3. Note the window in the incident record. The API cannot serve what was
+   dropped, so an operator reading ``GET /api/v1/attestations`` for that
+   period is reading an incomplete log.
 
 Forced integrity-loss drill
 ===========================

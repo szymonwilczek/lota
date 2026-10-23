@@ -459,7 +459,6 @@ Reader. Query: ``limit`` (default 100, maximum 10000). **200**::
          "duration_ms": 12.5,
          "pcr14": "cafe...",
          "kernel_hash": "5b97...",
-         "details": "",
          "remote_addr": "192.0.2.10:39412"
        }
      ],
@@ -477,8 +476,25 @@ a round a host reports are named the same thing.
 the quote, so it is attested, and it is advisory: nothing is gated on it,
 and it is what an operator reads to answer whether a device's kernel changed.
 
-``details`` is HTML-escaped and truncated to 2048 characters. **503**
-when no attestation log is configured.
+The record above is an accepted round, which has nothing to explain, so it
+carries no ``details``. A refused one does::
+
+   {
+     "id": 10,
+     "result": "pcr_fail",
+     "details": "PCR 0 mismatch: got 6b90c371..., expected 000...001",
+     "remote_addr": "192.0.2.10:39412",
+     ...
+   }
+
+``details`` is the reason the round ended as it did -- which register drifted,
+which check refused it -- written by the verifier and bounded to 2048
+characters where it is recorded. It is HTML-escaped on the way out, and a
+value that met the bound ends in ``...[truncated]``. The key is absent when
+there is no reason, so a reader can tell "nothing went wrong".
+``remote_addr`` is the address the report arrived from: it answers
+*which host*, where ``client_id`` answers which key. **503** when no
+attestation log is configured.
 
 ``hardware_id`` is the same 64-hex hardware identity as on the client record,
 and it is the field this endpoint exists to hand an operator: the hardware
