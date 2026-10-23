@@ -431,6 +431,94 @@ emit:
 	return 0;
 }
 
+int profile_aik_handles_recorded(const char *base_dir, uint32_t *out,
+				 size_t out_max, size_t *out_count)
+{
+	struct dirent *ent;
+	size_t written = 0;
+	DIR *dir;
+
+	if (!base_dir || !out || !out_count)
+		return -EINVAL;
+
+	*out_count = 0;
+
+	dir = opendir(base_dir);
+	if (!dir) {
+		/* no profile has ever been created, so nothing is recorded */
+		if (errno == ENOENT)
+			return 0;
+		return -errno;
+	}
+
+	while ((ent = readdir(dir)) != NULL) {
+		char path[PATH_MAX];
+		uint32_t handle = 0;
+
+		if (ent->d_name[0] == '.')
+			continue;
+		if (snprintf(path, sizeof(path), "%s/%s/%s", base_dir,
+			     ent->d_name,
+			     LOTA_PROFILE_AIK_HANDLE_FILE) >= (int)sizeof(path))
+			continue;
+		/* profile that has not provisioned records nothing */
+		if (handle_read(path, &handle) < 0)
+			continue;
+		if (written < out_max)
+			out[written++] = handle;
+	}
+	closedir(dir);
+
+	*out_count = written;
+	return 0;
+}
+
+int profile_aik_slot_tally(uint32_t base, uint32_t count,
+			   const uint32_t *recorded, size_t recorded_count,
+			   const uint32_t *in_use, size_t in_use_count,
+			   struct profile_aik_slots *out)
+{
+	if (!out || count == 0 || count > LOTA_PROFILE_MAX_AIK_HANDLES)
+		return -EINVAL;
+	if ((recorded_count && !recorded) || (in_use_count && !in_use))
+		return -EINVAL;
+
+	memset(out, 0, sizeof(*out));
+	out->total = count;
+
+	for (uint32_t i = 0; i < count; i++) {
+		uint32_t handle = base + i;
+		bool is_recorded = false;
+		bool is_held = false;
+
+		for (size_t j = 0; j < recorded_count; j++) {
+			if (recorded[j] == handle) {
+				is_recorded = true;
+				break;
+			}
+		}
+		for (size_t j = 0; j < in_use_count; j++) {
+			if (in_use[j] == handle) {
+				is_held = true;
+				break;
+			}
+		}
+
+		if (is_recorded) {
+			out->recorded++;
+			continue;
+		}
+		/* the allocator never evicts it; lost until removed by hand */
+		if (is_held) {
+			out->unrecorded_handles[out->unrecorded++] = handle;
+			continue;
+		}
+		out->free_slots++;
+	}
+
+	return 0;
+}
+
 bool profile_aik_cert_stored(const struct profile_paths *paths)
 {
 	struct stat st;

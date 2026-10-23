@@ -1166,6 +1166,8 @@ static void print_key_capacity(const struct publisher_entry *entries,
 			       size_t count)
 {
 	size_t held = publishers_keys_held(entries, count);
+	struct profile_aik_slots slots;
+	bool have_census = false;
 	uint32_t used = 0;
 	uint32_t total = 0;
 	bool have_slots = false;
@@ -1173,6 +1175,8 @@ static void print_key_capacity(const struct publisher_entry *entries,
 	if (tpm_init(&g_agent.tpm_ctx) == 0) {
 		have_slots = tpm_persistent_slots(&g_agent.tpm_ctx, &used,
 						  &total) == 0;
+		have_census = tpm_aik_slot_census(&g_agent.tpm_ctx, NULL,
+						  &slots) == 0;
 		tpm_cleanup(&g_agent.tpm_ctx);
 	}
 
@@ -1201,6 +1205,31 @@ static void print_key_capacity(const struct publisher_entry *entries,
 		       "own capacity for keys\nis the lower limit on machines "
 		       "with little non-volatile memory.\n",
 		       LOTA_PROFILE_MAX_AIK_HANDLES);
+
+	/* what is left of the range, and which handles nothing records */
+	if (have_census) {
+		printf("Handle range %#010x-%#010x: %u of %u free",
+		       TPM_AIK_PROFILE_HANDLE_BASE,
+		       TPM_AIK_PROFILE_HANDLE_BASE +
+			       TPM_AIK_PROFILE_HANDLE_COUNT - 1,
+		       slots.free_slots, slots.total);
+		if (slots.recorded)
+			printf(", %u recorded here", slots.recorded);
+		printf(".\n");
+		if (slots.unrecorded) {
+			printf("%u handle%s in that range hold%s a key no "
+			       "publisher here records:\n ",
+			       slots.unrecorded,
+			       slots.unrecorded == 1 ? "" : "s",
+			       slots.unrecorded == 1 ? "s" : "");
+			for (uint32_t i = 0; i < slots.unrecorded; i++)
+				printf(" %#010x", slots.unrecorded_handles[i]);
+			printf("\nEach costs a publisher slot. LOTA will not "
+			       "evict what it did not put there;\nremove one "
+			       "with tpm2_evictcontrol -c <handle> once you "
+			       "know what it is.\n");
+		}
+	}
 	printf("\n");
 }
 
@@ -1271,6 +1300,7 @@ int do_forget_publisher(const char *profile_id)
 {
 	struct profile_paths paths;
 	uint32_t handle = 0;
+	bool foreign_key = false;
 	bool had_key = false;
 	int ret;
 
@@ -1298,6 +1328,8 @@ int do_forget_publisher(const char *profile_id)
 	}
 
 	if (profile_aik_handle_load(&paths, &handle) == 0) {
+		int owns;
+
 		ret = tpm_init(&g_agent.tpm_ctx);
 		if (ret < 0) {
 			fprintf(stderr,
@@ -1307,6 +1339,31 @@ int do_forget_publisher(const char *profile_id)
 				tpm_strerror(ret));
 			return 1;
 		}
+
+		/*
+		 * Evict only this publisher's own key: an object that replaced
+		 * it at the handle belongs to whoever put it there.
+		 */
+		owns = tpm_bind_profile(&g_agent.tpm_ctx, &paths) == 0 ?
+			       tpm_aik_handle_holds_profile_key(
+				       &g_agent.tpm_ctx) :
+			       -EIO;
+		if (owns < 0) {
+			fprintf(stderr,
+				"Could not check what the key at 0x%08X is "
+				"(%s).\nNothing was deleted: destroying an "
+				"object this publisher may not own cannot be "
+				"undone.\n",
+				handle, tpm_strerror(owns));
+			tpm_cleanup(&g_agent.tpm_ctx);
+			return 1;
+		}
+		if (owns == 0) {
+			foreign_key = true;
+			tpm_cleanup(&g_agent.tpm_ctx);
+			goto forget;
+		}
+
 		ret = tpm_evict_profile_aik(&g_agent.tpm_ctx, handle);
 		tpm_cleanup(&g_agent.tpm_ctx);
 		if (ret == 0) {
@@ -1322,6 +1379,7 @@ int do_forget_publisher(const char *profile_id)
 		}
 	}
 
+forget:
 	ret = publishers_forget(&paths);
 	if (ret < 0) {
 		fprintf(stderr, "Failed to remove %s: %s\n", paths.dir,
@@ -1333,6 +1391,12 @@ int do_forget_publisher(const char *profile_id)
 	if (had_key)
 		printf("Its attestation key is destroyed; that identity "
 		       "cannot be handed back.\n");
+	if (foreign_key)
+		printf("The key at 0x%08X is not this publisher's, so it was "
+		       "left alone.\nThat slot stays claimed by whatever "
+		       "holds it; lota-agent --list-publishers names the "
+		       "handles\nin the range nothing here records.\n",
+		       handle);
 	printf("A title of theirs can ask again, and will need consent and a "
 	       "new key.\n");
 	return 0;

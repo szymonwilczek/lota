@@ -745,7 +745,9 @@ int do_reprovision_aik(void)
 	struct publisher_entry *entries = NULL;
 	size_t count = 0;
 	unsigned rotated = 0;
+	unsigned keys_moved = 0;
 	unsigned failed = 0;
+	bool key_changed = false;
 	int rc = 1;
 	int ret;
 
@@ -787,7 +789,7 @@ int do_reprovision_aik(void)
 			continue;
 		}
 
-		ret = tpm_reprovision_aik(&g_agent.tpm_ctx);
+		ret = tpm_reprovision_aik(&g_agent.tpm_ctx, &key_changed);
 		if (ret < 0) {
 			fprintf(stderr, "  %s: %s\n", entries[i].id,
 				tpm_strerror(ret));
@@ -795,10 +797,12 @@ int do_reprovision_aik(void)
 			continue;
 		}
 		rotated++;
+		if (key_changed)
+			keys_moved++;
 	}
 
 	if (publishers_default_key_in_use(count)) {
-		ret = tpm_reprovision_aik(&g_agent.tpm_ctx);
+		ret = tpm_reprovision_aik(&g_agent.tpm_ctx, &key_changed);
 		if (ret < 0) {
 			fprintf(stderr, "AIK re-provisioning failed: %s\n",
 				tpm_strerror(ret));
@@ -806,6 +810,8 @@ int do_reprovision_aik(void)
 			goto out;
 		}
 		rotated++;
+		if (key_changed)
+			keys_moved++;
 	}
 
 	tpm_cleanup(&g_agent.tpm_ctx);
@@ -818,8 +824,26 @@ int do_reprovision_aik(void)
 		goto out;
 	}
 
-	fprintf(stderr, "Rotated %u attestation key%s.\n", rotated,
-		rotated == 1 ? "" : "s");
+	/* usually only the auth moved: userAuth does not derive the key */
+	if (keys_moved == rotated)
+		fprintf(stderr, "Rotated %u attestation key%s.\n", rotated,
+			rotated == 1 ? "" : "s");
+	else if (keys_moved == 0)
+		fprintf(stderr,
+			"Rotated the authorization of %u attestation key%s. "
+			"The key%s did not move: %s derive%s from this TPM's "
+			"seed\nand the publisher's template, and the "
+			"authorization is not part of that\nderivation.\n",
+			rotated, rotated == 1 ? "" : "s",
+			rotated == 1 ? "" : "s", rotated == 1 ? "it" : "they",
+			rotated == 1 ? "s" : "");
+	else
+		fprintf(stderr,
+			"Rotated %u attestation key%s and the authorization "
+			"of %u more, whose key\nderives to the same object on "
+			"this TPM.\n",
+			keys_moved, keys_moved == 1 ? "" : "s",
+			rotated - keys_moved);
 
 	/*
 	 * Say how the new authorizations are kept:
@@ -845,8 +869,12 @@ int do_reprovision_aik(void)
 				exposed == 1 ? "it" : "them");
 	}
 
-	/* name the publishers whose certificates the rotation just invalidated */
-	if (count > 0) {
+	/* a certificate names a key: it is stale only where the key moved */
+	if (keys_moved == 0) {
+		fprintf(stderr,
+			"No certificate is stale: each still names the key it "
+			"was issued over.\n");
+	} else if (count > 0) {
 		fprintf(stderr,
 			"Their certificates are now stale -- re-enroll each:\n");
 		for (size_t i = 0; i < count; i++)

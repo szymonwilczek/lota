@@ -97,6 +97,13 @@ enum lota_error {
 	 * design and no retry changes that.
 	 */
 	LOTA_ERR_NO_ENFORCEMENT = -16,
+	/*
+	 * The publisher is known and consented to, but the agent's
+	 * attestation-key handle range is full. No retry helps: somebody
+	 * at the machine must forget a publisher or reclaim a handle
+	 * another program left in the range.
+	 */
+	LOTA_ERR_NO_KEY_SLOT = -17,
 };
 
 /*

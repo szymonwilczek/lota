@@ -66,6 +66,8 @@ static int tpm_aik_save_auth_sealed(struct tpm_context *ctx,
 				    const uint8_t auth[TPM_AIK_AUTH_SIZE]);
 static int tpm_aik_load_auth_sealed(struct tpm_context *ctx);
 static int tpm_aik_auth_record_exists(struct tpm_context *ctx);
+static int tpm_object_name(struct tpm_context *ctx, ESYS_TR object,
+			   uint8_t *out, size_t out_max, uint16_t *out_len);
 static void tpm_aik_report_auth_load_failure(struct tpm_context *ctx,
 					     int load_rc);
 static int tpm_aik_generate_auth(uint8_t auth[TPM_AIK_AUTH_SIZE]);
@@ -1863,25 +1865,84 @@ int tpm_provision_aik(struct tpm_context *ctx)
 	return tpm_aik_save_new_key_metadata(ctx);
 }
 
-int tpm_reprovision_aik(struct tpm_context *ctx)
+/*
+ * Auth moved, key did not: leave the generation alone,
+ * since a bump marks every certificate over the key stale.
+ */
+static int tpm_aik_save_auth_rotation_metadata(struct tpm_context *ctx)
 {
+	if (!ctx || !ctx->initialized)
+		return -EINVAL;
+
+	if (!ctx->aik_meta_loaded)
+		return tpm_aik_save_new_key_metadata(ctx);
+	if (ctx->aik_meta.magic != TPM_AIK_META_MAGIC ||
+	    ctx->aik_meta.version != TPM_AIK_META_VERSION)
+		return -EINVAL;
+
+	ctx->aik_meta.auth_rotated_at = (int64_t)time(NULL);
+	return tpm_aik_save_metadata(ctx);
+}
+
+int tpm_reprovision_aik(struct tpm_context *ctx, bool *out_key_changed)
+{
+	uint8_t before[sizeof(((TPM2B_NAME *)0)->name)];
+	uint8_t after[sizeof(before)];
+	uint16_t before_len = 0;
+	uint16_t after_len = 0;
+	ESYS_TR key_handle = ESYS_TR_NONE;
+	bool key_changed = true;
+	bool had_name = false;
 	int had;
 	int ret;
 
 	if (!ctx || !ctx->initialized)
 		return -EINVAL;
 
-	had = aik_exists(ctx, NULL);
+	if (out_key_changed)
+		*out_key_changed = false;
+
+	had = aik_exists(ctx, &key_handle);
 	if (had < 0)
 		return had;
+	if (had == 1) {
+		ret = tpm_object_name(ctx, key_handle, before, sizeof(before),
+				      &before_len);
+		tpm_tr_close(ctx, &key_handle);
+		if (ret < 0)
+			return ret;
+		had_name = true;
+	}
 
-	/* rotate the AIK and its userAuth, sealing the new auth to the
-	 * current PCR state */
+	/* rotate the userAuth, sealing the new auth to the current PCR state */
 	ret = tpm_aik_reprovision_with_auth(ctx, had == 1 ? 1 : 0);
 	if (ret < 0)
 		return ret;
 
-	return tpm_aik_save_new_key_metadata(ctx);
+	/* same seed and template give the same key: compare Names */
+	if (had_name) {
+		key_handle = ESYS_TR_NONE;
+		ret = aik_exists(ctx, &key_handle);
+		if (ret < 0)
+			return ret;
+		if (ret == 1) {
+			ret = tpm_object_name(ctx, key_handle, after,
+					      sizeof(after), &after_len);
+			tpm_tr_close(ctx, &key_handle);
+			if (ret < 0)
+				return ret;
+			key_changed = before_len != after_len ||
+				      memcmp(before, after, before_len) != 0;
+		}
+	}
+
+	if (out_key_changed)
+		*out_key_changed = key_changed;
+
+	if (key_changed)
+		return tpm_aik_save_new_key_metadata(ctx);
+
+	return tpm_aik_save_auth_rotation_metadata(ctx);
 }
 
 int tpm_quote(struct tpm_context *ctx, const uint8_t *nonce, uint32_t pcr_mask,
@@ -4150,6 +4211,126 @@ int tpm_aik_load_failure_blocks_reprovision(int load_rc)
 		return 0;
 
 	return load_rc == -ENOENT ? 0 : 1;
+}
+
+/* copy @object's TPM Name into @out; 0 or negative errno */
+static int tpm_object_name(struct tpm_context *ctx, ESYS_TR object,
+			   uint8_t *out, size_t out_max, uint16_t *out_len)
+{
+	TPM2B_PUBLIC *out_public = NULL;
+	TPM2B_NAME *qualified = NULL;
+	TPM2B_NAME *name = NULL;
+	TSS2_RC rc;
+	int ret;
+
+	struct esys_read_public_args args = {
+		.esys_ctx = ctx->esys_ctx,
+		.object_handle = object,
+		.out_public_out = &out_public,
+		.name_out = &name,
+		.qualified_name_out = &qualified,
+	};
+
+	ret = tpm_call_with_backoff(ctx, esys_read_public_thunk, &args, &rc, 3,
+				    (void **)&out_public, (void **)&name,
+				    (void **)&qualified);
+	if (ret < 0)
+		return ret;
+
+	if (!name || name->size == 0 || name->size > out_max) {
+		ret = -EIO;
+	} else {
+		memcpy(out, name->name, name->size);
+		*out_len = name->size;
+		ret = 0;
+	}
+
+	Esys_Free(out_public);
+	Esys_Free(name);
+	Esys_Free(qualified);
+	return ret;
+}
+
+/*
+ * The AIK is a primary derived from the hierarchy seed and the publisher's
+ * template, so re-derive it and compare Names; nothing on disk records which
+ * object was put at the handle.
+ */
+int tpm_aik_handle_holds_profile_key(struct tpm_context *ctx)
+{
+	uint8_t at_handle[sizeof(((TPM2B_NAME *)0)->name)];
+	uint8_t derived[sizeof(at_handle)];
+	uint16_t at_handle_len = 0;
+	uint16_t derived_len = 0;
+	uint8_t zero_auth[TPM_AIK_AUTH_SIZE] = { 0 };
+	ESYS_TR key_handle = ESYS_TR_NONE;
+	ESYS_TR transient = ESYS_TR_NONE;
+	int ret;
+
+	if (!ctx || !ctx->initialized)
+		return -EINVAL;
+
+	ret = aik_exists(ctx, &key_handle);
+	if (ret < 0)
+		return ret;
+	if (ret == 0)
+		return 0; /* nothing at the handle */
+
+	ret = tpm_object_name(ctx, key_handle, at_handle, sizeof(at_handle),
+			      &at_handle_len);
+	tpm_tr_close(ctx, &key_handle);
+	if (ret < 0)
+		return ret;
+
+	/* userAuth is not part of the Name, so any auth will do */
+	ret = create_aik_primary(ctx, &transient, zero_auth);
+	if (ret < 0)
+		return ret;
+
+	ret = tpm_object_name(ctx, transient, derived, sizeof(derived),
+			      &derived_len);
+	Esys_FlushContext(ctx->esys_ctx, transient);
+	if (ret < 0)
+		return ret;
+
+	if (at_handle_len != derived_len)
+		return 0;
+
+	return memcmp(at_handle, derived, at_handle_len) == 0 ? 1 : 0;
+}
+
+int tpm_aik_slot_census(struct tpm_context *ctx, const char *base_dir,
+			struct profile_aik_slots *out)
+{
+	uint32_t recorded[LOTA_PROFILE_MAX_AIK_HANDLES];
+	uint32_t in_use[LOTA_PROFILE_MAX_AIK_HANDLES];
+	size_t recorded_count = 0;
+	size_t in_use_count = 0;
+	int ret;
+
+	if (!ctx || !ctx->initialized || !out)
+		return -EINVAL;
+
+	ret = profile_aik_handles_recorded(
+		base_dir ? base_dir : LOTA_PROFILE_BASE_DIR, recorded,
+		sizeof(recorded) / sizeof(*recorded), &recorded_count);
+	if (ret < 0)
+		return ret;
+
+	for (uint32_t i = 0; i < TPM_AIK_PROFILE_HANDLE_COUNT; i++) {
+		uint32_t handle = TPM_AIK_PROFILE_HANDLE_BASE + i;
+
+		ret = tpm_handle_in_use(ctx, handle);
+		if (ret < 0)
+			return ret;
+		if (ret == 1)
+			in_use[in_use_count++] = handle;
+	}
+
+	return profile_aik_slot_tally(TPM_AIK_PROFILE_HANDLE_BASE,
+				      TPM_AIK_PROFILE_HANDLE_COUNT, recorded,
+				      recorded_count, in_use, in_use_count,
+				      out);
 }
 
 /*

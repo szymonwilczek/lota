@@ -81,10 +81,19 @@ there was nothing left to seal, which is the hardened state, so it is reported
 as such and does not take the exit status with it. Re-running the verb on a fleet
 that is already strict therefore succeeds.
 
-``--reprovision-aik`` walks the same set: it rotates every publisher's key,
-names the publishers whose certificates the rotation just invalidated -- each
-has to be re-enrolled against its own CA -- and reports whether the new
-authorizations were sealed or written in the clear, again read back.
+``--reprovision-aik`` walks the same set: it rotates every publisher's
+authorization, and reports whether the new authorizations were sealed or
+written in the clear, read back.
+
+The *key* usually does not move. It is a primary derived from the hierarchy
+seed and a template carrying the publisher's identity; ``userAuth`` is not an
+input, so the same chip and publisher give the same key back. The verb compares
+the object's TPM Name before and after and reports which happened. An unmoved
+key leaves every certificate valid. A key that did change (a different
+template, as when moving a host onto per-publisher keys) is named with its
+publisher, to be re-enrolled against that publisher's CA. The rotation counter
+behind the D-Bus surface advances only for a moved key; an authorization
+rotation is recorded separately.
 
 Auditing a fleet
 ================

@@ -675,6 +675,63 @@ out:
 	EVP_PKEY_free(key);
 }
 
+static void test_aik_slot_tally(void)
+{
+	const uint32_t base = 0x81010010;
+	struct profile_aik_slots slots;
+
+	/* nothing recorded, nothing on the chip: the whole range is free */
+	CHECK(profile_aik_slot_tally(base, 8, NULL, 0, NULL, 0, &slots) == 0 &&
+		      slots.total == 8 && slots.free_slots == 8 &&
+		      slots.recorded == 0 && slots.unrecorded == 0,
+	      "an untouched range is entirely free");
+
+	{
+		const uint32_t recorded[] = { base, base + 1 };
+		const uint32_t in_use[] = { base, base + 1 };
+
+		CHECK(profile_aik_slot_tally(base, 8, recorded, 2, in_use, 2,
+					     &slots) == 0 &&
+			      slots.recorded == 2 && slots.unrecorded == 0 &&
+			      slots.free_slots == 6,
+		      "a slot a profile records is not an orphan");
+	}
+
+	{
+		/* 3 unrecorded objects, 2 recorded keys gone from the chip */
+		const uint32_t recorded[] = { base, base + 1, base + 5,
+					      base + 6, base + 7 };
+		const uint32_t in_use[] = { base,     base + 1, base + 2,
+					    base + 3, base + 4, base + 6 };
+
+		CHECK(profile_aik_slot_tally(base, 8, recorded, 5, in_use, 6,
+					     &slots) == 0 &&
+			      slots.recorded == 5 && slots.unrecorded == 3 &&
+			      slots.free_slots == 0,
+		      "objects nothing records fill the rest of the range");
+		CHECK(slots.unrecorded_handles[0] == base + 2 &&
+			      slots.unrecorded_handles[1] == base + 3 &&
+			      slots.unrecorded_handles[2] == base + 4,
+		      "the orphaned handles are named, lowest first");
+	}
+
+	{
+		/* an object outside the range costs this build nothing */
+		const uint32_t in_use[] = { 0x81010002, base + 9 };
+
+		CHECK(profile_aik_slot_tally(base, 8, NULL, 0, in_use, 2,
+					     &slots) == 0 &&
+			      slots.unrecorded == 0 && slots.free_slots == 8,
+		      "handles outside the range are not this build's");
+	}
+
+	CHECK(profile_aik_slot_tally(base, 8, NULL, 0, NULL, 0, NULL) ==
+			      -EINVAL &&
+		      profile_aik_slot_tally(base, 0, NULL, 0, NULL, 0,
+					     &slots) == -EINVAL,
+	      "the tally rejects a missing result and an empty range");
+}
+
 /*
  * The inventory is what a player checks and what revocation acts on,
  * so what matters is that a half-finished profile is still listed
@@ -1045,6 +1102,7 @@ int main(void)
 	test_handle_candidates();
 	test_consent_record();
 	test_anchor_is_ca();
+	test_aik_slot_tally();
 	test_publisher_inventory();
 	test_host_wide_verbs_count_every_key();
 	test_a_listing_that_does_not_fit_is_refused();

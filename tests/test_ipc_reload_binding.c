@@ -74,6 +74,16 @@ int tpm_bind_profile(struct tpm_context *ctx, const struct profile_paths *paths)
 	return -ENOTSUP;
 }
 
+/* no TPM: the census refuses, so the bind goes ahead */
+int tpm_aik_slot_census(struct tpm_context *ctx, const char *base_dir,
+			struct profile_aik_slots *out)
+{
+	(void)ctx;
+	(void)base_dir;
+	(void)out;
+	return -ENOTSUP;
+}
+
 int bpf_loader_measure_verity_digest(const char *path,
 				     struct lota_verity_digest_key *out)
 {

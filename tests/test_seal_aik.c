@@ -535,8 +535,8 @@ static void test_reseal_reprovision_arg_guards(void)
 		FAIL("reseal guard");
 		return;
 	}
-	if (tpm_reprovision_aik(NULL) != -EINVAL ||
-	    tpm_reprovision_aik(&ctx) != -EINVAL) {
+	if (tpm_reprovision_aik(NULL, NULL) != -EINVAL ||
+	    tpm_reprovision_aik(&ctx, NULL) != -EINVAL) {
 		FAIL("reprovision guard");
 		return;
 	}
