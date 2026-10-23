@@ -1351,6 +1351,7 @@ TEST_BINS := \
 	$(TEST_BIN_DIR)/test_ipc_dos \
 	$(TEST_BIN_DIR)/test_loader_attach \
 	$(TEST_BIN_DIR)/test_bpf_loader_load_source \
+	$(TEST_BIN_DIR)/test_bpf_loader_open_fails_closed \
 	$(TEST_BIN_DIR)/test_bpf_object_preflight \
 	$(TEST_BIN_DIR)/test_ima_policy_scope \
 	$(TEST_BIN_DIR)/test_integrity_baseline \
@@ -1819,6 +1820,18 @@ $(TEST_BIN_DIR)/test_bpf_loader_load_source: tests/test_bpf_loader_load_source.c
 		-Wl,--wrap=bpf_object__open_file \
 		-Wl,--wrap=bpf_object__open_mem
 
+# wraps return NULL with errno clear: refusal path without a kernel
+$(TEST_BIN_DIR)/test_bpf_loader_open_fails_closed: tests/test_bpf_loader_open_fails_closed.c $(AGENT_DIR)/bpf_loader.c $(AGENT_DIR)/journal.c $(AGENT_DIR)/policy_sign.c $(AGENT_DIR)/sb_dev.c $(AGENT_DIR)/cgroup_guard.c | $(BUILD_DIR)
+	$(QUIET_CC)
+	$(Q)$(CC) $(CFLAGS) -o $@ $^ -lbpf -lsystemd -lcrypto \
+		-Wl,--wrap=policy_verify_buffer \
+		-Wl,--wrap=bpf_object__open_mem \
+		-Wl,--wrap=bpf_object__next_program \
+		-Wl,--wrap=bpf_program__type \
+		-Wl,--wrap=bpf_program__name \
+		-Wl,--wrap=bpf_program__attach \
+		-Wl,--wrap=ring_buffer__new
+
 $(TEST_BIN_DIR)/test_protect_pid_validation: tests/test_protect_pid_validation.c \
 		$(AGENT_DIR)/startup_policy.c $(AGENT_DIR)/bpf_loader.c \
 		$(AGENT_DIR)/journal.c $(AGENT_DIR)/policy_sign.c \
@@ -1961,6 +1974,7 @@ test-unit: all $(TEST_BINS)
 	@$(BUILD_DIR)/test_seal_aik
 	@$(BUILD_DIR)/test_loader_attach
 	@$(BUILD_DIR)/test_bpf_loader_load_source
+	@$(BUILD_DIR)/test_bpf_loader_open_fails_closed
 	@$(BUILD_DIR)/test_bpf_object_preflight
 	@$(BUILD_DIR)/test_ima_policy_scope
 	@$(BUILD_DIR)/test_integrity_baseline

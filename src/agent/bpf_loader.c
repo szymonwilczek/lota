@@ -240,6 +240,18 @@ static int libbpf_print_fn(enum libbpf_print_level level, const char *format,
 	return n;
 }
 
+/*
+ * libbpf_refusal - -errno for a libbpf call that returned NULL, or @fallback
+ * when it set none; never 0, which callers read as loaded.
+ * Call sites clear errno first.
+ */
+static int libbpf_refusal(int fallback)
+{
+	int err = errno;
+
+	return err > 0 ? -err : fallback;
+}
+
 int bpf_loader_build_integrity_config(struct integrity_data *cfg,
 				      const char *sig_enforce_path,
 				      const char *lockdown_path)
@@ -1152,13 +1164,16 @@ int bpf_loader_load(struct bpf_loader_ctx *ctx, const char *bpf_obj_path,
 	 * swapped between verify and load.
 	 * libbpf duplicates obj_data, so it is freed right after
 	 */
+	errno = 0;
 	ctx->obj = bpf_object__open_mem(obj_data, obj_len, &opts);
 	free(obj_data);
 	obj_data = NULL;
 	if (!ctx->obj) {
+		int open_err = libbpf_refusal(-ENOEXEC);
+
 		lota_err("Failed to open BPF object %s: %s", bpf_obj_path,
-			 strerror(errno));
-		return -errno;
+			 strerror(-open_err));
+		return open_err;
 	}
 
 	bpf_object__for_each_program(prog, ctx->obj) {
@@ -1448,11 +1463,12 @@ int bpf_loader_attach(struct bpf_loader_ctx *ctx)
 		    prog_type != BPF_PROG_TYPE_TRACING)
 			continue;
 
+		errno = 0;
 		link = bpf_program__attach(prog);
 		if (!link) {
-			err = -errno;
-			lota_err("Failed to attach program %s: %d",
-				 bpf_program__name(prog), err);
+			err = libbpf_refusal(-EIO);
+			lota_err("Failed to attach program %s: %s",
+				 bpf_program__name(prog), strerror(-err));
 			goto err_detach;
 		}
 
@@ -1513,12 +1529,15 @@ int bpf_loader_setup_ringbuf(struct bpf_loader_ctx *ctx,
 	 * Create ring buffer manager.
 	 * The handler will be called for each event.
 	 */
+	errno = 0;
 	ctx->ringbuf = ring_buffer__new(ctx->ringbuf_fd,
 					(ring_buffer_sample_fn)handler,
 					handler_ctx, NULL);
 	if (!ctx->ringbuf) {
-		lota_err("Failed to create ring buffer");
-		return -errno;
+		int rb_err = libbpf_refusal(-EIO);
+
+		lota_err("Failed to create ring buffer: %s", strerror(-rb_err));
+		return rb_err;
 	}
 
 	return 0;

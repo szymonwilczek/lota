@@ -69,6 +69,12 @@ current tree.
 Every gate maps to a ``lota_err()`` line in the journal when it fails, so
 ``journalctl -u lota-agent`` is the canonical debugging surface.
 
+If the BPF library refuses to open the object, attach a program or set up the
+event ring, the agent stops without recording enforcement as loaded. The
+journal holds the library's message above the agent's line naming the call; a
+refusal that leaves ``errno`` unset is reported as a fixed error, never as a
+load.
+
 A kernel floor gate (lockdown, module signatures, appraisal scope) is a state
 of the host, so the agent exits with a status listed in
 ``RestartPreventExitStatus`` and ``lota-agent.service`` stays ``failed``, with
