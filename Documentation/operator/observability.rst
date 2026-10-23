@@ -74,7 +74,11 @@ Metric                                          Type      Meaning
                                                           ``certificate_missing`` (the host
                                                           presented none; its enrolment is
                                                           unfinished), ``revoked``,
-                                                          ``banned``, ``old_version``,
+                                                          ``banned``, ``old_version`` (an
+                                                          agent built for a report wire this
+                                                          verifier does not implement),
+                                                          ``report_malformed`` (a frame that
+                                                          did not arrive whole),
                                                           ``internal_error`` and
                                                           ``baseline_error`` (verifier store
                                                           failure) complete the set. Every

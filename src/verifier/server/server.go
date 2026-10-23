@@ -534,7 +534,8 @@ func (s *Server) handleConnection(conn net.Conn) {
 	if magic != types.ReportMagic {
 		clog.Warn("invalid report magic", "magic", fmt.Sprintf("0x%08X", magic))
 		s.metrics.ConnectionErrors.Inc()
-		s.sendErrorResult(conn, types.VerifyOldVersion)
+		// foreign magic is a damaged frame, not an old wire
+		s.sendErrorResult(conn, types.VerifyReportMalformed)
 		return
 	}
 
@@ -543,7 +544,7 @@ func (s *Server) handleConnection(conn net.Conn) {
 	if totalSize < 32 || totalSize > 64*1024 { // 64KB max
 		clog.Warn("invalid report size", "size", totalSize)
 		s.metrics.ConnectionErrors.Inc()
-		s.sendErrorResult(conn, types.VerifyOldVersion)
+		s.sendErrorResult(conn, types.VerifyReportMalformed)
 		return
 	}
 

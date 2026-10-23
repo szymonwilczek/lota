@@ -131,6 +131,10 @@ const (
 	VerifyIMAAppraisalRequired uint32 = 18
 	VerifyKernelImageRequired  uint32 = 19
 	VerifyCmdlineRequired      uint32 = 20
+
+	// unparsable for a reason other than the version field (truncated,
+	// foreign magic). Not VerifyOldVersion: an upgrade does not fix it
+	VerifyReportMalformed uint32 = 21
 )
 
 // returns a deterministic string for a result code
@@ -178,6 +182,8 @@ func VerifyResultString(code uint32) string {
 		return "kernel_image_required"
 	case VerifyCmdlineRequired:
 		return "cmdline_required"
+	case VerifyReportMalformed:
+		return "report_malformed"
 	default:
 		return fmt.Sprintf("unknown_%d", code)
 	}
@@ -207,6 +213,7 @@ func RejectionReasons() []string {
 		VerifyResultString(VerifyIMAAppraisalRequired),
 		VerifyResultString(VerifyKernelImageRequired),
 		VerifyResultString(VerifyCmdlineRequired),
+		VerifyResultString(VerifyReportMalformed),
 	}
 }
 

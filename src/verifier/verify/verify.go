@@ -420,7 +420,14 @@ func (v *Verifier) VerifyReportFrom(challengeID, remoteAddr string, reportData [
 	report, err := types.ParseReport(reportBuf)
 	if err != nil {
 		clog.Error("report parse failed", "error", err)
-		result.Result = types.VerifyOldVersion
+		// only a version mismatch means upgrade the agent;
+		// any other parse failure is a damaged frame
+		verdict := types.VerifyReportMalformed
+		if errors.Is(err, types.ErrInvalidVersion) {
+			verdict = types.VerifyOldVersion
+		}
+		v.metrics.Rejections.Inc(types.VerifyResultString(verdict))
+		result.Result = verdict
 		return result, err
 	}
 	defer wipeReportSensitive(report)
@@ -1014,6 +1021,7 @@ func (v *Verifier) VerifyReportFrom(challengeID, remoteAddr string, reportData [
 	if ts, ok := v.baselineStore.(TenantStorer); ok {
 		if err := ts.SetClientTenant(clientID, tenant); err != nil {
 			clog.Error("failed to persist the client tenant", "error", err)
+			v.metrics.Rejections.Inc(types.VerifyResultString(types.VerifyInternalError))
 			result.Result = types.VerifyInternalError
 			return result, fmt.Errorf("failed to persist client tenant: %w", err)
 		}
