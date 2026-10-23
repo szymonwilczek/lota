@@ -254,6 +254,10 @@ certificate is outside the window it is valid in``, counted as
 valid *yet* gets the same verdict and means the host clock is behind the
 publisher's: check the clock before re-enrolling.
 
+A host that never finished enrolling presents no certificate and is refused
+as ``certificate_missing``, not as a signature failure: the TPM is not at
+fault. The fix is the same ``--reenroll`` run.
+
 It is also the command that moves a host onto per-publisher keys. An AIK
 created before the publisher's identity entered the TPM creation template is
 one key shared by every publisher enrolled on that host, and a TPM key cannot

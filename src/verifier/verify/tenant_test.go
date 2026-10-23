@@ -233,8 +233,9 @@ func TestIntegration_InvalidTenantCertRejected(t *testing.T) {
 	if err == nil {
 		t.Fatal("attestation with a malformed tenant OU was accepted")
 	}
-	if result.Result != types.VerifySigFail {
-		t.Fatalf("result = %d, want VerifySigFail (fail-closed)", result.Result)
+	// unparseable tenant in a verified cert: re-enroll, not a TPM fault
+	if result.Result != types.VerifyIdentityFail {
+		t.Fatalf("result = %d, want VerifyIdentityFail (fail-closed)", result.Result)
 	}
 }
 
@@ -243,8 +244,9 @@ func TestIntegration_AmbiguousTenantCertRejected(t *testing.T) {
 	if err == nil {
 		t.Fatal("attestation with two tenant OUs was accepted")
 	}
-	if result.Result != types.VerifySigFail {
-		t.Fatalf("result = %d, want VerifySigFail (fail-closed)", result.Result)
+	// unparseable tenant in a verified cert: re-enroll, not a TPM fault
+	if result.Result != types.VerifyIdentityFail {
+		t.Fatalf("result = %d, want VerifyIdentityFail (fail-closed)", result.Result)
 	}
 }
 
@@ -489,8 +491,9 @@ func TestIntegration_TenantBoundPolicySelected(t *testing.T) {
 		t.Fatal("tenant-bound strict policy was not applied")
 	}
 
-	if result.Result != types.VerifyPolicyRequirement {
-		t.Fatalf("result = %d, want VerifyPolicyRequirement", result.Result)
+	// the bound policy refuses on lockdown
+	if result.Result != types.VerifyLockdownRequired {
+		t.Fatalf("result = %d, want VerifyLockdownRequired", result.Result)
 	}
 
 	// client outside the bound tenant falls back to the active policy

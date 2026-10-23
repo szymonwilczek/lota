@@ -152,10 +152,16 @@ which kind of thing failed, because the kinds take different investigations.
     ``identity`` is passthrough, and no groups means no IOMMU driver. A host
     with every device in an identity domain (``iommu=pt``, or firmware that
     hands out passthrough) is refused: nothing on it is remapped.
+``secureboot_required``, ``lockdown_required``, ``module_sig_required``,
+``enforce_required``, ``ima_appraisal_required``, ``kernel_image_required``,
+``cmdline_required``
+    one verdict per host requirement: ``require_secureboot``,
+    ``require_lockdown``, ``require_module_sig``, ``require_enforce``,
+    ``require_ima_appraisal``, ``kernel_hashes`` and the cmdline denylist, in
+    that order. Each has its own remedy, which the host is shown.
 ``policy_requirement``
-    everything else the policy demands of the host: ``kernel_hashes``,
-    ``require_enforce``, ``require_module_sig``, ``require_secureboot``,
-    ``require_lockdown``, the cmdline denylist and ``require_ima_appraisal``.
+    a requirement none of those covers, such as a host whose firmware
+    baseline nobody enrolled.
 
 ``pcr_fail`` sends an operator to the boot chain and the event log, which is
 where the fix is for exactly one of these. A refusal nobody classified stays

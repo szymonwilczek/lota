@@ -457,17 +457,19 @@ func (v *Verifier) VerifyReportFrom(challengeID, remoteAddr string, reportData [
 
 	certVerifier, ok := v.aikStore.(store.AIKCertVerifier)
 	if !ok {
+		// verifier misconfiguration; nothing the host can change
 		logging.Security(clog, "AIK store cannot verify certificates; refusing attestation",
 			"store_type", fmt.Sprintf("%T", v.aikStore))
-		v.metrics.Rejections.Inc("sig_fail")
-		result.Result = types.VerifySigFail
+		v.metrics.Rejections.Inc(types.VerifyResultString(types.VerifyInternalError))
+		result.Result = types.VerifyInternalError
 		return result, errors.New("configured AIK store does not support AIK certificate verification")
 	}
 	if report.TPM.AIKCertSize == 0 {
+		// an unfinished enrolment, not a bad signature
 		logging.Security(clog, "attestation rejected: AIK certificate required",
 			"challenge_id", challengeID)
-		v.metrics.Rejections.Inc("sig_fail")
-		result.Result = types.VerifySigFail
+		v.metrics.Rejections.Inc(types.VerifyResultString(types.VerifyCertificateMissing))
+		result.Result = types.VerifyCertificateMissing
 		return result, errors.New("AIK certificate required")
 	}
 	aikCert := cloneSensitive(report.TPM.AIKCertificate[:report.TPM.AIKCertSize])
@@ -483,18 +485,20 @@ func (v *Verifier) VerifyReportFrom(challengeID, remoteAddr string, reportData [
 
 	identity, err := decodeDevicePseudonym(aikLeaf.Subject.CommonName)
 	if err != nil {
+		// verified cert, unreadable pseudonym: re-enroll, not a TPM fault
 		logging.Security(clog, "AIK certificate carries an invalid device identity",
 			"subject", aikLeaf.Subject.CommonName, "error", err)
-		v.metrics.Rejections.Inc("sig_fail")
-		result.Result = types.VerifySigFail
+		v.metrics.Rejections.Inc(types.VerifyResultString(types.VerifyIdentityFail))
+		result.Result = types.VerifyIdentityFail
 		return result, fmt.Errorf("invalid device identity in AIK certificate: %w", err)
 	}
 	tenant, err = TenantFromCertificate(aikLeaf)
 	if err != nil {
+		// same for a missing or ambiguous tenant
 		logging.Security(clog, "AIK certificate carries an invalid tenant",
 			"subject", aikLeaf.Subject.CommonName, "error", err)
-		v.metrics.Rejections.Inc("sig_fail")
-		result.Result = types.VerifySigFail
+		v.metrics.Rejections.Inc(types.VerifyResultString(types.VerifyIdentityFail))
+		result.Result = types.VerifyIdentityFail
 		return result, fmt.Errorf("invalid tenant in AIK certificate: %w", err)
 	}
 	clientID = aikLeaf.Subject.CommonName
