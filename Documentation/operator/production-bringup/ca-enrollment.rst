@@ -222,6 +222,17 @@ selects the profile:
 
     sudo lota-agent --reenroll --ca-cert ca.crt
 
+``--reenroll`` needs the endpoint the first enrollment recorded. With no
+record it points at ``--enroll``; with an unreadable one it names the file,
+its magic and version against the build's, and the way out: restore the file,
+or enroll again naming the endpoint. The attestation key is kept either way;
+enrollment reissues only its certificate.
+
+The running agent draws the same line: an unreadable record refuses the round
+with ``Enrollment record for publisher <id> is unreadable``, naming the file
+and the way out, instead of enrolling over it, and the renewal line says the
+endpoint is inside that record.
+
 A certificate that expires anyway (CA unreachable through the final third,
 or agent not running) is refused with ``FAIL - This host's attestation
 certificate is outside the window it is valid in``, counted as

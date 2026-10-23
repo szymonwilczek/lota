@@ -173,12 +173,13 @@ static int run_daemon(const struct run_daemon_params *params)
 
 	for (size_t i = 0; i < target_count; i++) {
 		if (targets[i].profile_error)
+			/* label, not verifier: token-only has none */
 			lota_warn("Cannot read the CA trust anchor %s (%s): "
-				  "answering for %s:%d without a publisher "
+				  "answering for %s without a publisher "
 				  "profile",
 				  targets[i].ca_cert,
 				  strerror(-targets[i].profile_error),
-				  targets[i].server, targets[i].port);
+				  targets[i].label);
 	}
 
 	/*

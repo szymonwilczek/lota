@@ -86,9 +86,7 @@ static void test_missing_is_enoent(void)
 static void test_rejects_v1_record(void)
 {
 	/* record written before the token field existed:
-	 * version 1, ending where enroll_token begins
-	 * loader requires the current record,
-	 * so the host re-enrolls instead of running on state it cannot fully read */
+	 * version 1, ending where enroll_token begins */
 	const size_t v1_size = offsetof(struct enroll_state, enroll_token);
 	const char *path = tmp_path();
 	struct enroll_state in, out;
@@ -109,8 +107,9 @@ static void test_rejects_v1_record(void)
 	}
 
 	memset(&out, 0xFF, sizeof(out));
-	CHECK(enroll_state_load_path(path, &out) == -EINVAL,
-	      "v1 record rejected");
+	/* -ENOTSUP, not -ENOENT: re-enrolling would overwrite the certificate */
+	CHECK(enroll_state_load_path(path, &out) == -ENOTSUP,
+	      "a record at a version this build does not read says so");
 
 	/* short record claiming the current version is refused too */
 	fd = open(path, O_WRONLY | O_CREAT | O_TRUNC, 0600);
@@ -121,10 +120,25 @@ static void test_rejects_v1_record(void)
 		      "write truncated current record");
 		close(fd);
 	}
-	CHECK(enroll_state_load_path(path, &out) == -EINVAL,
-	      "truncated current record rejected");
+	CHECK(enroll_state_load_path(path, &out) == -EIO,
+	      "a record shorter than the record says so");
 
 	unlink(path);
+}
+
+static void test_record_presence(void)
+{
+	/* a missing file is the only answer that means "nothing is there" */
+	CHECK(enroll_state_record_present(-ENOENT) == 0,
+	      "no file means no record");
+	CHECK(enroll_state_record_present(0) == 1,
+	      "a record that loads is one");
+	CHECK(enroll_state_record_present(-ENOTSUP) == 1,
+	      "a version this build cannot read is still a record");
+	CHECK(enroll_state_record_present(-EIO) == 1,
+	      "a short record is still a record");
+	CHECK(enroll_state_record_present(-EINVAL) == 1,
+	      "bytes that are not the record are still on disk");
 }
 
 static void test_rejects_bad_magic(void)
@@ -225,6 +239,7 @@ int main(void)
 	test_roundtrip();
 	test_rejects_v1_record();
 	test_missing_is_enoent();
+	test_record_presence();
 	test_rejects_bad_magic();
 	test_rejects_truncated();
 	test_null_args();

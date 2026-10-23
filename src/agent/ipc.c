@@ -1628,9 +1628,37 @@ static void handle_set_profile(struct ipc_context *ctx,
 		return;
 	}
 
-	lota_warn("connection pid=%d asked for publisher %s, which this host "
-		  "has no profile for",
-		  client->peer_pid, want);
+	/*
+	 * A publisher with an unreadable anchor has no identity to match,
+	 * so it may be the one asked for.
+	 */
+	{
+		const struct attest_target *first = NULL;
+		size_t unreadable = 0;
+
+		for (size_t i = 0; i < ctx->profile_count; i++) {
+			if (!ctx->profiles[i].profile_error)
+				continue;
+			if (!first)
+				first = &ctx->profiles[i];
+			unreadable++;
+		}
+
+		if (first)
+			lota_warn("connection pid=%d asked for publisher %s, "
+				  "which this host has no profile bound to. "
+				  "%zu configured publisher%s cannot be "
+				  "identified here because the trust anchor "
+				  "could not be read (%s: %s); one of them may "
+				  "be the publisher asked for",
+				  client->peer_pid, want, unreadable,
+				  unreadable == 1 ? "" : "s", first->ca_cert,
+				  strerror(-first->profile_error));
+		else
+			lota_warn("connection pid=%d asked for publisher %s, "
+				  "which this host has no profile for",
+				  client->peer_pid, want);
+	}
 	build_error_response(client, LOTA_IPC_ERR_UNKNOWN_PROFILE);
 }
 

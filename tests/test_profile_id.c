@@ -28,6 +28,7 @@
 #include <openssl/x509.h>
 #include <openssl/x509v3.h>
 
+#include "../src/agent/enroll.h"
 #include "../src/agent/profile.h"
 #include "../src/agent/publishers.h"
 
@@ -724,6 +725,44 @@ static void test_publisher_inventory(void)
 	      "the entry says what is stored for that publisher");
 	CHECK(!entries[0].enrolled && !entries[0].has_cert,
 	      "agreed to but not enrolled is a state, not an omission");
+	CHECK(!entries[0].enroll_unreadable,
+	      "no record on disk is not an unreadable one");
+
+	/* an unreadable record is held, not "never enrolled" */
+	{
+		struct enroll_state old_rec;
+		int fd;
+
+		memset(&old_rec, 0, sizeof(old_rec));
+		old_rec.magic = LOTA_ENROLL_STATE_MAGIC;
+		old_rec.version = LOTA_ENROLL_STATE_VERSION + 1;
+		fd = open(paths.enroll_state, O_WRONLY | O_CREAT | O_TRUNC,
+			  0600);
+		CHECK(fd >= 0, "an enrollment record can be planted");
+		if (fd >= 0) {
+			CHECK(write(fd, &old_rec, sizeof(old_rec)) ==
+				      (ssize_t)sizeof(old_rec),
+			      "the planted record is a whole record");
+			close(fd);
+		}
+
+		CHECK(publishers_list(base, entries,
+				      LOTA_PROFILE_MAX_AIK_HANDLES,
+				      &count) == 0 &&
+			      count == 1,
+		      "the profile is still one publisher");
+		CHECK(!entries[0].enrolled && entries[0].enroll_unreadable &&
+			      entries[0].enroll_rc == -ENOTSUP,
+		      "a record this build cannot read is held, not absent");
+
+		CHECK(unlink(paths.enroll_state) == 0,
+		      "the planted record is removed again");
+		CHECK(publishers_list(base, entries,
+				      LOTA_PROFILE_MAX_AIK_HANDLES,
+				      &count) == 0 &&
+			      !entries[0].enroll_unreadable,
+		      "removing it makes the profile unenrolled again");
+	}
 
 	/*
 	 * One key is one TPM persistent slot, and running out of them is what
