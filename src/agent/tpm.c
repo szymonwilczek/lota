@@ -5565,15 +5565,16 @@ int tpm_unseal_secret(struct tpm_context *ctx, const uint8_t *blob,
 	if (ret < 0)
 		return ret;
 
+	/* a body that does not unmarshal is a bad file: -EBADMSG, not -EINVAL */
 	off = body_off;
 	rc = Tss2_MU_TPM2B_PUBLIC_Unmarshal(blob, blob_len, &off,
 					    &sealed_public);
 	if (rc != TSS2_RC_SUCCESS || off != body_off + meta.pub_len)
-		return -EINVAL;
+		return -EBADMSG;
 	rc = Tss2_MU_TPM2B_PRIVATE_Unmarshal(blob, blob_len, &off,
 					     &sealed_private);
 	if (rc != TSS2_RC_SUCCESS || off != blob_len)
-		return -EINVAL;
+		return -EBADMSG;
 
 	seal_mask_to_selection(meta.pcr_mask, &sel);
 

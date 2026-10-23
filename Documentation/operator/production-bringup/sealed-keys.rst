@@ -95,6 +95,44 @@ publisher, to be re-enrolled against that publisher's CA. The rotation counter
 behind the D-Bus surface advances only for a moved key; an authorization
 rotation is recorded separately.
 
+What a refused unseal is about
+==============================
+
+An unseal is refused either by the file or by the TPM, with opposite remedies.
+
+The blob's framing is checked before the TPM is opened, and a refusal names
+the field: a blob opens with ``LSEL`` and an envelope with ``LENV``, then a
+version, a PCR selection and the two body lengths, which must fill the file
+exactly.
+
+.. code-block:: text
+
+    $ sudo lota-agent --unseal < truncated.sealed
+    Not a sealed blob this build can read: the declared bodies do not fill
+    the file exactly (1300, expected 1301).
+
+Look at the file, not the host: a truncated transfer, a copy cut from a larger
+archive, or a blob from a build with different framing.
+
+Key material behind the header that does not decode is the file's fault too:
+
+.. code-block:: text
+
+    $ sudo lota-agent --unseal < damaged.sealed
+    Unseal failed: Bad message
+
+A TPM refusal is what sealing exists for:
+
+.. code-block:: text
+
+    $ sudo lota-agent --unseal < title.sealed
+    Unseal failed: TPM policy not satisfied (host not in the sealed boot/PCR state)
+
+The sealed PCRs no longer hold their seal-time values: a firmware update, a
+Secure Boot change or, under the agent-bound mask, an agent upgrade. When the
+TPM refuses without naming a cause, the command prints a separate line pointing
+at the boot state.
+
 Auditing a fleet
 ================
 
