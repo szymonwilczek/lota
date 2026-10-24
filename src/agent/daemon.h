@@ -57,6 +57,16 @@ int daemonize(void);
 void daemon_notify_started(int status);
 
 /*
+ * Resolve the PID file path a caller means.
+ *
+ * @path: PID file path, or NULL for the shipped default
+ *
+ * Returns: @path when it is set, DAEMON_DEFAULT_PID_FILE otherwise.
+ *          Never returns NULL.
+ */
+const char *daemon_pidfile_path(const char *path);
+
+/*
  * Create and lock PID file.
  *
  * Creates the parent directory if needed, writes the current PID,
