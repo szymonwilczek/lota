@@ -33,6 +33,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"log/slog"
 	"sort"
 )
 
@@ -64,6 +65,21 @@ func ShardIdentity(ctx context.Context, db *sql.DB) (string, error) {
 	return id, nil
 }
 
+// ReadShardIdentity returns the identity a database carries, minting none.
+func ReadShardIdentity(ctx context.Context, db *sql.DB) (string, error) {
+	var id string
+	err := db.QueryRowContext(ctx,
+		"SELECT id FROM shard_identity WHERE singleton").Scan(&id)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", fmt.Errorf("database carries no shard identity: " +
+			"a verifier on the primary mints it, so start one there first")
+	}
+	if err != nil {
+		return "", fmt.Errorf("read shard identity: %w", err)
+	}
+	return id, nil
+}
+
 // ShardSetFingerprint hashes the ordered shard identities.
 // Length prefixes keep the encoding unambiguous, so no reordering
 // or regrouping of identities can collide with another list.
@@ -87,6 +103,16 @@ func ShardSetFingerprint(ids []string) string {
 // so it is deliberately not silent: an operator who really means it clears the
 // pin (DELETE FROM shard_set) on every shard after migrating or re-enrolling.
 func AssertShardSet(ctx context.Context, shards []*sql.DB, ids []string) error {
+	return assertShardSet(ctx, shards, ids, false)
+}
+
+// CheckShardSet is AssertShardSet without writes: existing pins must agree,
+// unpinned shards are left to the attesting side.
+func CheckShardSet(ctx context.Context, shards []*sql.DB, ids []string) error {
+	return assertShardSet(ctx, shards, ids, true)
+}
+
+func assertShardSet(ctx context.Context, shards []*sql.DB, ids []string, readOnly bool) error {
 	if len(ids) == 0 {
 		return errors.New("shard set is empty")
 	}
@@ -123,6 +149,16 @@ func AssertShardSet(ctx context.Context, shards []*sql.DB, ids []string) error {
 				"in the same order, and that this database belongs to this fleet",
 				ErrShardSetMismatch, describeMismatch(i, len(ids), count))
 		}
+	}
+
+	// read-only: existing pins agree; unpinned ones are not ours to write
+	if readOnly {
+		if len(unpinned) > 0 {
+			slog.Warn("shard set is not pinned on every database",
+				"unpinned_shards", len(unpinned),
+				"note", "a verifier on the primary pins it; this instance reads and pins nothing")
+		}
+		return nil
 	}
 
 	// Every shard that had an opinion shares it, so the ones that had none

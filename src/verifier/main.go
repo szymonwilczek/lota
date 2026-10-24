@@ -110,6 +110,7 @@ var (
 	stateDBPath         = flag.String("state-db", "", "SQLite database an instance without --db or --pg-dsn keeps its durable state in: used nonce history, revocations, hardware bans, the audit log and the attestation decision log (defaults to <aik-store>/verifier-state.sqlite); set --allow-insecure-memory-state to keep none of it")
 	scopedKeysFile      = flag.String("api-keys-file", "", "YAML file of scoped monitoring-API keys (entries of key_sha256, role: reader|admin, tenants list or * for all); reloaded on SIGHUP. Environment keys keep working with global scope.")
 	allowMemState       = flag.Bool("allow-insecure-memory-state", false, "INSECURE: keep no durable state without a database. The used nonce history lives in memory, so a restart re-opens a replay window, and this instance holds no revocations, bans, audit log or decision log at all -- those endpoints answer 503.")
+	reportOnly          = flag.Bool("report-only", false, "Serve the monitoring API from a database this instance never writes -- a Postgres hot standby or the primary -- with no attestation listener bound and every state-changing endpoint refused. Requires --http-addr and a Postgres DSN; the schema is verified but never applied, so the reporting load that is not the verifier's can be taken off the primary.")
 	printVersions       = flag.Bool("print-versions", false, "Print the attestation report wire version this binary implements, the schema version it builds each backend up to, and its TLS floor, then exit. The report wire must match the agent fleet's exactly.")
 )
 
@@ -303,8 +304,8 @@ func main() {
 		}
 	}
 
-	// validate tls config
-	if *certFile == "" || *keyFile == "" {
+	// validate tls config; report-only binds no attestation listener
+	if (*certFile == "" || *keyFile == "") && !*reportOnly {
 		logger.Error("TLS certificate and key required (use --generate-cert for testing)")
 		os.Exit(1)
 	}
@@ -314,10 +315,11 @@ func main() {
 	var auditLog store.AuditLog
 	var attestLog store.AttestationLog
 	aikParams := aikStoreParams{
-		StorePath:   *aikStorePath,
-		CACerts:     []string(aikCACerts),
-		CRLs:        []string(aikCRLs),
-		RequireCert: *requireCert,
+		StorePath: *aikStorePath,
+		CACerts:   []string(aikCACerts),
+		CRLs:      []string(aikCRLs),
+		// report-only verifies no AIK chain; the store is only read
+		RequireCert: *requireCert && !*reportOnly,
 	}
 	verifierCfg := verify.DefaultConfig()
 	verifierCfg.Logger = logger
@@ -380,6 +382,22 @@ func main() {
 		os.Exit(1)
 	}
 
+	// report-only: monitoring API off Postgres it never writes; needs both
+	if *reportOnly {
+		if !usePostgres {
+			logger.Error("--report-only reads a Postgres database",
+				"hint", "give --pg-dsn (or --pg-shard-dsn) pointing at a standby or the primary")
+			os.Exit(1)
+		}
+		if *httpAddr == "" {
+			logger.Error("--report-only serves only the monitoring API",
+				"hint", "give --http-addr the address to serve it on")
+			os.Exit(1)
+		}
+		logger.Info("reporting mode: no attestation listener, no writes",
+			"note", "the schema is verified but never applied, and every state-changing endpoint answers 503")
+	}
+
 	// mistyped pool is a silent misconfiguration otherwise:
 	// database/sql reads 0 as "unlimited" and the store's own fallback would
 	// quietly hand back the default, so neither reaches the operator
@@ -409,7 +427,11 @@ func main() {
 		}
 		dbs := make([]*sql.DB, 0, len(shardDSNs))
 		for i, d := range shardDSNs {
-			sdb, err := store.OpenPostgresDBPool(d, *pgMaxOpenConns)
+			open := store.OpenPostgresDBPool
+			if *reportOnly {
+				open = store.OpenPostgresDBReadOnly
+			}
+			sdb, err := open(d, *pgMaxOpenConns)
 			if err != nil {
 				logger.Error("failed to open Postgres database", "shard", i, "error", err)
 				os.Exit(1)
@@ -443,8 +465,15 @@ func main() {
 		// pin the shard set against the control database before anything
 		// takes dependency on the pools
 		shardIDs := make([]string, len(dbs))
+		identity := store.ShardIdentity
+		assertShards := store.AssertShardSet
+		if *reportOnly {
+			// pinning writes on first use; leave it to the attesting side
+			identity = store.ReadShardIdentity
+			assertShards = store.CheckShardSet
+		}
 		for i, sdb := range dbs {
-			id, err := store.ShardIdentity(context.Background(), sdb)
+			id, err := identity(context.Background(), sdb)
 			if err != nil {
 				logger.Error("failed to read shard identity", "shard", i, "error", err)
 				closeShards()
@@ -452,7 +481,7 @@ func main() {
 			}
 			shardIDs[i] = id
 		}
-		if err := store.AssertShardSet(context.Background(), dbs, shardIDs); err != nil {
+		if err := assertShards(context.Background(), dbs, shardIDs); err != nil {
 			logger.Error("shard set check failed", "error", err,
 				"hint", "give every instance the same databases in the same order; "+
 					"to change the set deliberately, migrate or re-enrol the fleet and "+
@@ -617,19 +646,27 @@ func main() {
 		logger.Info("policy signature verification enabled", "pubkey", *policyPubKey)
 	}
 
-	// custom policies if specified
-	if len(policyFiles) > 0 {
+	// custom policies if specified; report-only verifies nothing
+	// and ignores them
+	switch {
+	case *reportOnly:
+		if len(policyFiles) > 0 {
+			logger.Warn("policy files are not read in reporting mode",
+				"files", len(policyFiles),
+				"note", "this instance verifies nothing; the policy belongs on the instances that attest")
+		}
+	case len(policyFiles) > 0:
 		if err := loadPolicies(logger, verifier, policyFiles); err != nil {
 			os.Exit(1)
 		}
-	} else if *allowPermissive {
+	case *allowPermissive:
 		if err := verifier.AddPolicy(verify.DefaultPolicy()); err != nil {
 			logger.Error("failed to add permissive default PCR policy", "error", err)
 			os.Exit(1)
 		}
 		logger.Warn("INSECURE: loaded permissive built-in PCR policy",
 			"hint", "configure --policy with explicit pcrs and/or kernel_hashes/agent_hashes for production")
-	} else {
+	default:
 		logger.Error("no PCR policy configured",
 			"hint", "provide --policy with explicit measurements, or pass --allow-permissive-policy (INSECURE)")
 		os.Exit(1)
@@ -673,6 +710,7 @@ func main() {
 		WriteTimeout:   10 * time.Second,
 		MaxConnections: *maxConnections,
 		ShutdownDrain:  *shutdownDrain,
+		ReportOnly:     *reportOnly,
 	}
 
 	if *httpAddr != "" && adminKey == "" && *scopedKeysFile == "" {
