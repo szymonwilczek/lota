@@ -203,6 +203,7 @@ AGENT_SRCS := $(AGENT_DIR)/main.c \
 			  $(AGENT_DIR)/reload.c \
 			  $(AGENT_DIR)/test_servers.c \
 			  $(AGENT_DIR)/startup_policy.c \
+              $(AGENT_DIR)/policy_pubkey.c \
               $(AGENT_DIR)/tpm.c \
               $(AGENT_DIR)/tpm_errno.c \
               $(AGENT_DIR)/seal_envelope.c \
@@ -312,7 +313,7 @@ $(INITRAMFS_LOCK_BIN): src/initramfs/lota-pcr14-lock.c | $(BUILD_DIR)
 # into, and second copy of that rule would be second answer to it.
 INSTALLER_SRCS := installer/main.c installer/stages.c installer/tui.c \
 	installer/ui.c installer/run.c installer/probe.c \
-	$(AGENT_DIR)/profile.c
+	$(AGENT_DIR)/policy_pubkey.c $(AGENT_DIR)/profile.c
 $(INSTALLER_BIN): $(INSTALLER_SRCS) installer/install.h installer/probe.h \
 		installer/run.h installer/tui.h installer/ui.h \
 		$(AGENT_DIR)/profile.h | $(BUILD_DIR)
@@ -1335,6 +1336,7 @@ TEST_BINS := \
 	$(TEST_BIN_DIR)/test_protect_pid_validation \
 	$(TEST_BIN_DIR)/test_installer_probe \
 	$(TEST_BIN_DIR)/test_installer_named_paths \
+	$(TEST_BIN_DIR)/test_installer_trust_key \
 	$(TEST_BIN_DIR)/test_installer_service \
 	$(TEST_BIN_DIR)/test_selftest_plan \
 	$(TEST_BIN_DIR)/test_ima_xattr \
@@ -1348,6 +1350,13 @@ $(TEST_SDK_BIN): tests/test_sdk_ipc.c $(SDK_LIB) | $(BUILD_DIR)
 $(TEST_BIN_DIR)/test_hash_verify: tests/test_hash_verify.c $(AGENT_DIR)/hash_verify.c | $(BUILD_DIR)
 	$(QUIET_CC)
 	$(Q)$(CC) $(CFLAGS) -o $@ $^ -lcrypto
+
+$(TEST_BIN_DIR)/test_installer_trust_key: tests/test_installer_trust_key.c \
+		installer/stages.c installer/probe.c installer/run.c \
+		installer/ui.c $(AGENT_DIR)/policy_pubkey.c \
+		$(AGENT_DIR)/profile.c | $(BUILD_DIR)
+	$(QUIET_CC)
+	$(Q)$(CC) $(CFLAGS) -o $@ $(filter %.c,$^) -lcrypto
 
 $(TEST_BIN_DIR)/test_installer_probe: tests/test_installer_probe.c installer/probe.c | $(BUILD_DIR)
 	$(QUIET_CC)
@@ -1432,7 +1441,7 @@ $(TEST_BIN_DIR)/test_connect_hint: tests/test_connect_hint.c $(AGENT_DIR)/net.c 
 	$(QUIET_CC)
 	$(Q)$(CC) $(CFLAGS) -o $@ $^ -lssl -lcrypto -lsystemd
 
-$(TEST_BIN_DIR)/test_config: tests/test_config.c $(AGENT_DIR)/config.c $(AGENT_DIR)/io_utils.c $(AGENT_DIR)/pin.c | $(BUILD_DIR)
+$(TEST_BIN_DIR)/test_config: tests/test_config.c $(AGENT_DIR)/config.c $(AGENT_DIR)/io_utils.c $(AGENT_DIR)/pin.c $(AGENT_DIR)/policy_pubkey.c | $(BUILD_DIR)
 	$(QUIET_CC)
 	$(Q)$(CC) $(CFLAGS) -o $@ $^
 
@@ -1848,6 +1857,7 @@ test-unit: all $(TEST_BINS)
 	@$(BUILD_DIR)/test_initramfs_lock
 	@$(BUILD_DIR)/test_installer_probe
 	@$(BUILD_DIR)/test_installer_named_paths
+	@$(BUILD_DIR)/test_installer_trust_key
 	@$(BUILD_DIR)/test_installer_service
 	@$(BUILD_DIR)/test_selftest_plan
 	@$(BUILD_DIR)/test_ima_xattr
@@ -1914,6 +1924,7 @@ test-unit: all $(TEST_BINS)
 	@tests/integration/test_steam_setup_dropin.sh
 	@tests/integration/test_proton_hook_disable.sh
 	@tests/integration/test_dev_bringup_idempotent.sh
+	@tests/integration/test_installer_status_stages.sh
 	@if command -v go >/dev/null 2>&1 && command -v cc >/dev/null 2>&1; then \
 		tests/integration/test_attestca_build_tags.sh; \
 	else \

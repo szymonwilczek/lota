@@ -56,7 +56,6 @@ struct cell {
 	uint8_t attr;
 };
 
-#define TUI_MAX_STAGES 32
 #define OUT_LINES 512
 #define OUT_CAP 240
 
@@ -82,8 +81,8 @@ struct tui {
 	/* Probed stage states;
 	 * index install_stage_count = self-check */
 	int n;
-	enum stage_state st[TUI_MAX_STAGES];
-	char note[TUI_MAX_STAGES][STAGE_NOTE_CAP];
+	enum stage_state st[INSTALL_MAX_TUI_STAGES];
+	char note[INSTALL_MAX_TUI_STAGES][STAGE_NOTE_CAP];
 	int selfcheck_done;
 	int selfcheck_ok;
 
@@ -615,7 +614,8 @@ static void render_stage_list(struct tui *t, int x, int y, int w, int h)
 			gattr = t->selfcheck_done ?
 					C_GREEN :
 					(first_unmet(t) < 0 ? C_CYAN : A_DIM);
-			snprintf(label, sizeof(label), "Self-check & summary");
+			snprintf(label, sizeof(label), "%s",
+				 install_selfcheck_title);
 		} else {
 			glyph = state_glyph(t->st[i], &gattr);
 			snprintf(label, sizeof(label), "%s",
@@ -638,7 +638,7 @@ static void render_stage_list(struct tui *t, int x, int y, int w, int h)
  * border+pad (4) + glyph cell (2) + "NN " (3) + longest title + pad */
 static int stage_list_width(struct tui *t)
 {
-	int max = ui_disp_len("Self-check & summary");
+	int max = ui_disp_len(install_selfcheck_title);
 	int i;
 
 	for (i = 0; i < t->n; i++) {
@@ -677,7 +677,7 @@ static void render_details(struct tui *t, int x, int y, int w, int h)
 	}
 
 	if (t->sel == t->n) {
-		put_clip(t, x, y, w, A_BOLD, "Self-check & summary");
+		put_clip(t, x, y, w, A_BOLD, install_selfcheck_title);
 		used = 2;
 		if (t->selfcheck_done) {
 			draw_wrapped(t, x, y + used, w, h - used, 0,
@@ -1255,9 +1255,8 @@ int tui_run(struct install_ctx *ctx)
 	}
 
 	t->ctx = ctx;
+	/* fits: stages.c asserts it at build time */
 	t->n = install_stage_count;
-	if (t->n > TUI_MAX_STAGES)
-		t->n = TUI_MAX_STAGES;
 
 	bound.ud = t;
 

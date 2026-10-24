@@ -43,11 +43,18 @@ Running it
 CA/verifier endpoints and the trust material paths come from the operator's
 install instructions (see "What the operator must ship" below).
 
-``lota-install --status`` prints a read-only report of every stage without
-changing anything. A stage the installer can satisfy reads ``pending``; one
-that needs an action the installer must not take -- Secure Boot enabled in
-firmware, an operator's SELinux module, IMA signatures -- reads ``BLOCKED``,
-because a report that calls both "pending" reads as work about to happen.
+``lota-install --status`` prints a read-only report of every step without
+changing anything, and its step numbers are the ones the guided install shows.
+A stage the installer can satisfy reads ``pending``; one that needs an action
+the installer must not take -- Secure Boot enabled in firmware, an operator's
+SELinux module, IMA signatures -- reads ``BLOCKED``, because a report that
+calls both "pending" reads as work about to happen.
+
+The last step is the self-check, which is where an install answers "did this
+work". The report says what it can see without acting -- the kernel integrity
+floor, the agent binary's immutability, the service, and the AIK certificate
+-- and stops there: the attestation round-trip is an action and belongs to an
+install, so no report sends one.
 
 * ``--yes`` skips the per-stage prompts,
 * ``--plain`` disables the TUI for logs and scripting,

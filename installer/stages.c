@@ -12,6 +12,7 @@
 
 #include <errno.h>
 #include <fcntl.h>
+#include <limits.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -25,6 +26,7 @@
 #include "probe.h"
 #include "run.h"
 #include "ui.h"
+#include "../src/agent/policy_pubkey.h"
 #include "../src/agent/profile.h"
 
 static int file_exists(const char *path)
@@ -194,30 +196,85 @@ static enum stage_state st_artifacts_probe(struct install_ctx *ctx, char *note,
 
 /*
  * Which key the agent will verify the enforcement object against.
- *
- * Reported, not decided: the agent owns the order, and this only says which
- * file the operator should look at when the signature does not verify.
+ * Reported only: the agent owns the order; this names the file to check
+ * when the signature does not verify.
  */
-static const char *trust_key_in_use(const struct install_ctx *ctx)
+const char *installer_trust_key(const char *named, const char *conf_pubkey,
+				const char *override_path,
+				const char *packaged_path,
+				enum trust_key_source *src)
 {
-	if (ctx->opts.policy_pubkey)
-		return ctx->opts.policy_pubkey;
-	if (file_exists(PATH_POLICY_PUB_OVERRIDE))
-		return PATH_POLICY_PUB_OVERRIDE;
-	return PATH_ENFORCEMENT_PUB;
+	enum trust_key_source got = TRUST_KEY_NONE;
+	const char *key;
+
+	/* --policy-pubkey is returned even if unreadable; the agent gets it too */
+	if (named) {
+		if (src)
+			*src = TRUST_KEY_NAMED;
+		return named;
+	}
+
+	/* the agent's own order */
+	key = policy_pubkey_resolve(conf_pubkey, override_path, packaged_path);
+	if (key == conf_pubkey)
+		got = TRUST_KEY_CONFIGURED;
+	else if (key == override_path)
+		got = TRUST_KEY_OVERRIDE;
+	else if (key == packaged_path)
+		got = TRUST_KEY_PACKAGED;
+
+	if (src)
+		*src = got;
+	return key;
+}
+
+const char *installer_trust_key_source_says(enum trust_key_source src)
+{
+	switch (src) {
+	case TRUST_KEY_NAMED:
+		return "named with --policy-pubkey";
+	case TRUST_KEY_CONFIGURED:
+		return "named by policy_pubkey in " PATH_LOTA_CONF;
+	case TRUST_KEY_OVERRIDE:
+		return "this host's own operator key";
+	case TRUST_KEY_PACKAGED:
+		return "the key the agent package shipped";
+	case TRUST_KEY_NONE:
+		break;
+	}
+	return "nowhere -- no readable key was found";
+}
+
+/* policy_pubkey read fresh from lota.conf, not cached */
+static const char *trust_key_in_use(const struct install_ctx *ctx,
+				    char *conf_buf, size_t conf_cap,
+				    enum trust_key_source *src)
+{
+	const char *configured = NULL;
+
+	if (probe_conf_value(PATH_LOTA_CONF, "policy_pubkey", conf_buf,
+			     conf_cap) == 1)
+		configured = conf_buf;
+
+	return installer_trust_key(ctx->opts.policy_pubkey, configured,
+				   PATH_POLICY_PUB_OVERRIDE,
+				   PATH_ENFORCEMENT_PUB, src);
 }
 
 static enum stage_state st_trust_probe(struct install_ctx *ctx, char *note,
 				       size_t cap)
 {
-	const char *key = trust_key_in_use(ctx);
+	enum trust_key_source src = TRUST_KEY_NONE;
+	char conf_key[PATH_MAX];
+	const char *key =
+		trust_key_in_use(ctx, conf_key, sizeof(conf_key), &src);
 	char sig[512];
 	char out[4096];
 	int rc;
 
 	snprintf(sig, sizeof(sig), "%s.sig", PATH_BPF_OBJ);
 
-	if (!file_exists(key)) {
+	if (!key || !file_exists(key)) {
 		snprintf(note, cap,
 			 "No key to verify the enforcement object against. "
 			 "One ships with the agent package at %s, beside the "
@@ -259,21 +316,24 @@ static enum stage_state st_trust_probe(struct install_ctx *ctx, char *note,
 	if (rc != 0) {
 		snprintf(note, cap,
 			 "The BPF object signature does not verify against "
-			 "%s. The package ships object, signature and key "
-			 "together and replaces all three on an upgrade, so "
-			 "this means they no longer belong to each other: "
-			 "either this host carries an operator key at %s that "
-			 "did not sign the shipped object - move it aside to "
-			 "fall back to the packaged one - or the fleet signs "
+			 "%s, which is %s and is the key the agent resolves "
+			 "for this host. The package ships object, signature "
+			 "and key together and replaces all three on an "
+			 "upgrade, so this means they no longer belong to each "
+			 "other: either the key above did not sign the shipped "
+			 "object - take it out of the way and the agent falls "
+			 "through to the packaged %s - or the fleet signs "
 			 "enforcement itself and has to re-sign this object "
 			 "(lota-agent --sign-policy %s --signing-key <key>). "
 			 "The installer never signs on this host by design.",
-			 key, PATH_POLICY_PUB_OVERRIDE, PATH_BPF_OBJ);
+			 key, installer_trust_key_source_says(src),
+			 PATH_ENFORCEMENT_PUB, PATH_BPF_OBJ);
 		return STAGE_BLOCKED;
 	}
 
 	if (!ctx->opts.policy_pubkey) {
-		snprintf(note, cap, "Signature verifies against %s.", key);
+		snprintf(note, cap, "Signature verifies against %s (%s).", key,
+			 installer_trust_key_source_says(src));
 		return STAGE_DONE;
 	}
 	rc = probe_conf_has_key(PATH_LOTA_CONF, "policy_pubkey");
@@ -1177,6 +1237,68 @@ static const char telemetry_summary[] =
 	"No file contents, no browsing or account data leave this "
 	"machine.";
 
+enum stage_state install_selfcheck_probe(struct install_ctx *ctx, char *note,
+					 size_t cap)
+{
+	struct floor_state st;
+	struct profile_paths paths;
+	int days = 0;
+	int rc;
+
+	/* reads only; the attestation round-trip is left to the install */
+	booted_floor(&st);
+	if (!(st.ima_ok && st.sig_ok && st.lockdown_ok && st.scope_ok)) {
+		snprintf(note, cap,
+			 "Not ready: the kernel integrity floor is not "
+			 "satisfied, so the self-check would fail. The floor "
+			 "stages above say which part of it.");
+		return STAGE_PENDING;
+	}
+	if (probe_fsverity_state(PATH_AGENT_BIN) != PROBE_VERITY_ENABLED &&
+	    probe_file_ima_signed(PATH_AGENT_BIN) != 1) {
+		snprintf(note, cap,
+			 "Not ready: %s is neither under fs-verity nor "
+			 "carrying a signed IMA xattr, so a modified read of "
+			 "it would go unnoticed.",
+			 PATH_AGENT_BIN);
+		return STAGE_PENDING;
+	}
+	if (!agent_service_active()) {
+		snprintf(note, cap,
+			 "Not ready: lota-agent.service is not running, so "
+			 "this host is not attesting.");
+		return STAGE_PENDING;
+	}
+
+	rc = enroll_profile(ctx, &paths);
+	if (rc == -EINVAL) {
+		snprintf(note, cap,
+			 "Ready: floor satisfied, agent binary immutable, "
+			 "service running, and no publisher named yet - the "
+			 "certificate arrives when a title first asks. The "
+			 "attestation round-trip runs during an install; this "
+			 "report performs nothing.");
+		return STAGE_DONE;
+	}
+	if (rc == 0)
+		rc = probe_cert_days_left(paths.aik_cert, &days);
+	if (rc != 0) {
+		snprintf(note, cap,
+			 "Not ready: no valid AIK certificate for the CA "
+			 "anchor named here, so the round-trip the self-check "
+			 "runs would have nothing to present.");
+		return STAGE_PENDING;
+	}
+
+	snprintf(note, cap,
+		 "Ready: floor satisfied, agent binary immutable, service "
+		 "running, AIK certificate valid (%s). The attestation "
+		 "round-trip runs during an install; this report performs "
+		 "nothing.",
+		 days > 0 ? "a day or more left" : "less than a day left");
+	return STAGE_DONE;
+}
+
 int install_self_check(struct install_ctx *ctx)
 {
 	struct floor_state st;
@@ -1186,8 +1308,8 @@ int install_self_check(struct install_ctx *ctx)
 	int profiles;
 	int rc_cert;
 
-	ui_stage_begin(&ctx->ui, install_stage_count + 1,
-		       install_stage_count + 1, "Self-check");
+	ui_stage_begin(&ctx->ui, install_step_count, install_step_count,
+		       install_selfcheck_title);
 
 	booted_floor(&st);
 	{
@@ -1529,3 +1651,14 @@ const struct stage install_stages[] = {
 
 const int install_stage_count =
 	(int)(sizeof(install_stages) / sizeof(install_stages[0]));
+
+/* the TUI must show every stage the other surfaces walk */
+_Static_assert(sizeof(install_stages) / sizeof(install_stages[0]) <=
+		       INSTALL_MAX_TUI_STAGES,
+	       "the stage table outgrew the interactive view's rows");
+
+const char install_selfcheck_title[] = "Self-check & summary";
+
+/* The table plus the self-check: what every surface counts up to. */
+const int install_step_count =
+	(int)(sizeof(install_stages) / sizeof(install_stages[0])) + 1;

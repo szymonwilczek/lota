@@ -395,22 +395,4 @@ int config_profile_append_text(const char *existing,
  */
 int config_profile_append(const char *path, const struct lota_profile *p);
 
-/*
- * config_resolve_policy_pubkey - Which key verifies the enforcement object.
- *
- * @configured:    policy_pubkey from the config file or the CLI, or NULL.
- * @override_path: operator-owned key, used when it exists (no package owns it).
- * @packaged_path: key the agent package shipped beside the object.
- *
- * Returns the path to use, or NULL when nothing readable was found
- * -- which the caller must treat as fatal, since an object nobody can verify
- *  is an object the agent refuses to load.
- *
- * The paths are arguments rather than constants so the order can be tested
- * without writing to /usr or /etc.
- */
-const char *config_resolve_policy_pubkey(const char *configured,
-					 const char *override_path,
-					 const char *packaged_path);
-
 #endif /* LOTA_CONFIG_H */

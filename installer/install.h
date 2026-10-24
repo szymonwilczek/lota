@@ -135,9 +135,50 @@ struct stage {
 	int boot_path;
 };
 
+/* where the enforcement object's verification key comes from */
+enum trust_key_source {
+	TRUST_KEY_NONE = 0, /* nothing readable anywhere */
+	TRUST_KEY_NAMED, /* --policy-pubkey */
+	TRUST_KEY_CONFIGURED, /* policy_pubkey in lota.conf */
+	TRUST_KEY_OVERRIDE, /* the operator's own key on disk */
+	TRUST_KEY_PACKAGED, /* the key the agent package shipped */
+};
+
+/*
+ * installer_trust_key - which key the enforcement check will name
+ *
+ * @named:         --policy-pubkey path, or NULL.
+ * @conf_pubkey:   policy_pubkey from the configuration, or NULL.
+ * @override_path: operator-owned key no package owns.
+ * @packaged_path: key shipped beside the object.
+ * @src:           set to the source of the returned path; may be NULL.
+ *
+ * Paths are parameters so tests need not touch /usr or /etc.
+ */
+const char *installer_trust_key(const char *named, const char *conf_pubkey,
+				const char *override_path,
+				const char *packaged_path,
+				enum trust_key_source *src);
+
+/* human-readable @src */
+const char *installer_trust_key_source_says(enum trust_key_source src);
+
 /* Stage table (stages.c); barrier_index marks the reboot checkpoint */
 extern const struct stage install_stages[];
 extern const int install_stage_count;
+
+/* stage rows the TUI can show; stages.c asserts the table fits */
+#define INSTALL_MAX_TUI_STAGES 32
+
+/* Self-check: the last step of every run, outside the stage table;
+ * install_step_count includes it */
+extern const char install_selfcheck_title[];
+extern const int install_step_count;
+
+/* Read-only self-check for --status: floor, agent binary,
+ * service and certificate; no attestation round-trip */
+enum stage_state install_selfcheck_probe(struct install_ctx *ctx, char *note,
+					 size_t cap);
 
 /* Final acceptance run + "what leaves this machine" summary.
  * Returns 0 or -1. */
