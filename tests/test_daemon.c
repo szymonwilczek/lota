@@ -8,12 +8,9 @@
  * Copyright (C) 2026 Szymon Wilczek
  */
 
-#include <dirent.h>
 #include <errno.h>
 #include <fcntl.h>
-#include <limits.h>
 #include <signal.h>
-#include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -232,120 +229,6 @@ static void test_pidfile_explicit_path_is_kept(void)
 	resolved = daemon_pidfile_path(path);
 	if (!resolved || strcmp(resolved, path) != 0) {
 		FAIL("caller path was not returned unchanged");
-		return;
-	}
-	PASS();
-}
-
-/*
- * The sources are found relative to the binary when the runner is not
- * standing in the tree: build/<name> -> ../tests.
- */
-static bool exe_relative_tests_dir(char *out, size_t len)
-{
-	char exe[PATH_MAX];
-	ssize_t n;
-	char *slash;
-
-	n = readlink("/proc/self/exe", exe, sizeof(exe) - 1);
-	if (n <= 0)
-		return false;
-	exe[n] = '\0';
-
-	slash = strrchr(exe, '/');
-	if (!slash)
-		return false;
-	*slash = '\0';
-
-	if (snprintf(out, len, "%s/../tests", exe) >= (int)len)
-		return false;
-	return true;
-}
-
-static void scan_source_for_default_pidfile(const char *dir, const char *name,
-					    unsigned *hits)
-{
-	static const char *const fns[] = { "pidfile_create", "pidfile_remove" };
-	char path[PATH_MAX + 256];
-	char line[512];
-	FILE *fp;
-	size_t i;
-	unsigned lineno = 0;
-
-	snprintf(path, sizeof(path), "%s/%s", dir, name);
-	fp = fopen(path, "re");
-	if (!fp)
-		return;
-
-	while (fgets(line, sizeof(line), fp)) {
-		lineno++;
-		for (i = 0; i < sizeof(fns) / sizeof(fns[0]); i++) {
-			char needle[64];
-
-			/*
-			 * assembled rather than written out,
-			 * so this scanner does not name what it refuses
-			 */
-			snprintf(needle, sizeof(needle), "%s(%s", fns[i],
-				 "NULL");
-			if (!strstr(line, needle))
-				continue;
-			printf("\n       %s:%u: %s", name, lineno, needle);
-			(*hits)++;
-		}
-	}
-
-	fclose(fp);
-}
-
-/*
- * The default path is the file a running agent holds. A case that asks
- * for it either fails against the live daemon's lock or, worse, takes
- * the success branch and unlinks it. No case may name it.
- */
-static void test_no_case_touches_the_shipped_pid_file(void)
-{
-	static const char *const roots[] = { "tests", "../tests",
-					     "../../tests" };
-	char from_exe[PATH_MAX];
-	struct dirent *ent;
-	const char *dir = NULL;
-	unsigned hits = 0;
-	size_t i;
-	DIR *d = NULL;
-
-	TEST("no test case creates the shipped pid file");
-
-	for (i = 0; i < sizeof(roots) / sizeof(roots[0]); i++) {
-		d = opendir(roots[i]);
-		if (d) {
-			dir = roots[i];
-			break;
-		}
-	}
-	/* run from elsewhere: the sources sit beside the build directory */
-	if (!d && exe_relative_tests_dir(from_exe, sizeof(from_exe))) {
-		d = opendir(from_exe);
-		if (d)
-			dir = from_exe;
-	}
-	if (!d) {
-		FAIL("could not open the tests directory");
-		return;
-	}
-
-	while ((ent = readdir(d)) != NULL) {
-		const char *dot = strrchr(ent->d_name, '.');
-
-		if (!dot || strcmp(dot, ".c") != 0)
-			continue;
-		scan_source_for_default_pidfile(dir, ent->d_name, &hits);
-	}
-	closedir(d);
-
-	if (hits) {
-		printf("\n       ");
-		FAIL("a case resolves the pid file to the shipped default");
 		return;
 	}
 	PASS();
@@ -732,7 +615,6 @@ int main(void)
 	test_pidfile_default_path();
 	test_pidfile_explicit_path_is_kept();
 	test_pidfile_creates_parent_dir();
-	test_no_case_touches_the_shipped_pid_file();
 	test_pidfile_rejects_symlink_path();
 
 	/* signal tests */

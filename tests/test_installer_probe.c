@@ -50,19 +50,31 @@ static int tests_passed;
 static const char lock_kat_hex[] =
 	"d550fa44ab2d1ee9227a3502fcf44698681ab13dfb6cd468da488f01fbbda8bb";
 
-static void test_pcr14_lock_constant_kat(void)
+/*
+ * Resolve only: as root on a host with an agent,
+ * the fixed-path wrapper reads that host's real PCR 14 baseline
+ */
+static void test_pcr14_baseline_path_is_the_shipped_one(void)
 {
-	uint8_t expect[PROBE_HASH_SIZE];
-	uint8_t got[PROBE_HASH_SIZE];
+	const char *path;
 
-	TEST("PCR14 lock constant matches the cross-component KAT");
-	if (probe_hex_to_bytes(lock_kat_hex, expect, sizeof(expect)) != 0) {
-		FAIL("KAT hex did not parse");
+	TEST("the fixed-path helpers read the shipped baseline path");
+
+	path = probe_pcr14_baseline_path();
+	if (!path) {
+		FAIL("no baseline path is named");
 		return;
 	}
-	probe_pcr14_lock_value(got);
-	if (memcmp(got, expect, sizeof(expect)) != 0) {
-		FAIL("derived constant differs from KAT");
+	if (strcmp(path, "/run/lota/pcr14_baseline") != 0) {
+		char msg[256];
+
+		snprintf(msg, sizeof(msg), "baseline path is %s", path);
+		FAIL(msg);
+		return;
+	}
+	/* a relative path would follow whichever directory started us */
+	if (path[0] != '/') {
+		FAIL("the baseline path is not absolute");
 		return;
 	}
 	PASS();
@@ -1302,7 +1314,7 @@ int main(void)
 {
 	printf("installer probe helpers:\n");
 
-	test_pcr14_lock_constant_kat();
+	test_pcr14_baseline_path_is_the_shipped_one();
 	test_pcr14_lock_value_baseline_aware();
 	test_hex_to_bytes();
 	test_cmdline_ima();

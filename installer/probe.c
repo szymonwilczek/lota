@@ -790,9 +790,14 @@ void probe_pcr14_lock_value_at(const char *baseline_path,
 	EVP_MD_CTX_free(md);
 }
 
+const char *probe_pcr14_baseline_path(void)
+{
+	return PCR14_BASELINE_PATH;
+}
+
 void probe_pcr14_lock_value(uint8_t out[PROBE_HASH_SIZE])
 {
-	probe_pcr14_lock_value_at(PCR14_BASELINE_PATH, out);
+	probe_pcr14_lock_value_at(probe_pcr14_baseline_path(), out);
 }
 
 static int hex_nibble(char c)
@@ -1334,7 +1339,7 @@ int probe_pcr14_lock_ran_at(const char *baseline_path)
 
 int probe_pcr14_lock_ran(void)
 {
-	return probe_pcr14_lock_ran_at(PCR14_BASELINE_PATH);
+	return probe_pcr14_lock_ran_at(probe_pcr14_baseline_path());
 }
 
 /*
