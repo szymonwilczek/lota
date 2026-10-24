@@ -157,3 +157,21 @@ Notes for production
   daemon can read for the life of the profile -- ``/etc/lota`` is the obvious
   place -- and give ``--ca-cert`` that path rather than a build or unpack
   directory.
+- Because the endpoint comes from the record, every line the agent writes
+  about a renewal names the address it will dial rather than the ``ca`` and
+  ``ca_port`` the profile is configured with, and a profile whose keys name
+  somewhere else is reported once::
+
+     verifier.example:8443: the enrollment records old-ca.example:8444,
+     which is where renewal dials, not the CA this profile is configured
+     with; run --enroll --ca-server ca.example --ca-port 8444 --ca-cert
+     /etc/lota/ca.crt to move it
+
+  ``--reenroll`` will not move it: it reuses the recorded endpoint by design,
+  which is what makes it safe to run unattended. Moving a CA is an ``--enroll``
+  naming the new address.
+- The record also carries the enrollment token the first enrollment presented,
+  and both ``--reenroll`` and the daemon's renewal replay it, so a CA that
+  admits on tokens keeps admitting the host with no operator step. The token
+  therefore lives at rest in the profile's ``enroll_state.dat`` (root-owned,
+  ``0600``) for as long as the profile does.

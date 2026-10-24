@@ -241,6 +241,9 @@ static void test_token_only_publisher(void)
 	      "not stop");
 	CHECK(strstr(targets[0].label, "ca.light.example:8444") != NULL,
 	      "its log lines name the CA, there being no verifier to name");
+	CHECK(strstr(targets[0].label, "enrolled") == NULL,
+	      "the label names the configured CA without claiming the host "
+	      "enrolled there");
 }
 
 static void test_more_profiles_than_room(void)
@@ -372,6 +375,126 @@ static void test_wait_for_a_first_session_is_announced(void)
 	      "no target is waiting");
 }
 
+/* an enrollment record that appears at runtime enables renewal */
+static void test_renewal_follows_the_record(void)
+{
+	struct attest_target t;
+
+	memset(&t, 0, sizeof(t));
+	t.has_profile = true;
+
+	CHECK(attest_target_resolve_renew(&t, NULL, 0) == ATTEST_RENEW_OFF &&
+		      !t.auto_renew,
+	      "a publisher with no enrollment record cannot renew unattended");
+	CHECK(attest_target_resolve_renew(&t, NULL, 0) == ATTEST_RENEW_SILENT,
+	      "and is told so once, not on every pass");
+
+	CHECK(attest_target_resolve_renew(&t, "ca.example", 8444) ==
+			      ATTEST_RENEW_ENABLED &&
+		      t.auto_renew,
+	      "a record that appears while the loop runs enables renewal with "
+	      "no reload");
+	CHECK(strcmp(t.renew_ca, "ca.example") == 0 && t.renew_ca_port == 8444,
+	      "the target carries the endpoint that renewal will dial");
+	CHECK(attest_target_resolve_renew(&t, "ca.example", 8444) ==
+		      ATTEST_RENEW_SILENT,
+	      "a decision that has not changed says nothing");
+
+	CHECK(attest_target_resolve_renew(&t, NULL, 0) == ATTEST_RENEW_OFF &&
+		      !t.auto_renew && t.renew_ca[0] == '\0',
+	      "a record that goes away disables renewal and leaves no address "
+	      "behind");
+
+	memset(&t, 0, sizeof(t));
+	CHECK(attest_target_resolve_renew(&t, "ca.example", 8444) ==
+			      ATTEST_RENEW_OFF &&
+		      !t.auto_renew,
+	      "a target with no publisher profile has no certificate to renew");
+
+	CHECK(attest_target_resolve_renew(NULL, "ca.example", 8444) ==
+		      ATTEST_RENEW_SILENT,
+	      "no target, nothing to decide");
+}
+
+/* a configured CA that differs from the recorded endpoint is reported once */
+static void test_a_moved_ca_is_reported(void)
+{
+	struct attest_target t;
+
+	memset(&t, 0, sizeof(t));
+	t.has_profile = true;
+	snprintf(t.ca, sizeof(t.ca), "%s", "ca.example");
+	t.ca_port = 8444;
+
+	attest_target_resolve_renew(&t, "ca.example", 8444);
+	CHECK(!attest_target_should_announce_renew_move(&t),
+	      "a profile enrolled where it is configured has nothing to say");
+
+	attest_target_resolve_renew(&t, "old-ca.example", 8444);
+	CHECK(attest_target_should_announce_renew_move(&t),
+	      "a record naming another host is reported");
+	CHECK(!attest_target_should_announce_renew_move(&t),
+	      "and reported once, not on every pass");
+
+	attest_target_resolve_renew(&t, "ca.example", 8599);
+	CHECK(attest_target_should_announce_renew_move(&t),
+	      "the port is half of the endpoint, so a moved port is reported "
+	      "too");
+
+	attest_target_resolve_renew(&t, "ca.example", 8444);
+	CHECK(!attest_target_should_announce_renew_move(&t),
+	      "an endpoint that agrees again is silent");
+	attest_target_resolve_renew(&t, "old-ca.example", 8444);
+	CHECK(attest_target_should_announce_renew_move(&t),
+	      "and a later divergence is reported afresh");
+
+	attest_target_resolve_renew(&t, NULL, 0);
+	CHECK(!attest_target_should_announce_renew_move(&t),
+	      "a publisher that cannot renew has no endpoint to disagree with");
+
+	CHECK(!attest_target_should_announce_renew_move(NULL),
+	      "no target, nothing to compare");
+}
+
+/* no renewal clause when a token-only label already names the endpoint */
+static void test_the_renewal_endpoint_is_said_once(void)
+{
+	struct attest_target t;
+	char at[LOTA_RENEW_AT_LEN];
+
+	memset(&t, 0, sizeof(t));
+	t.has_profile = true;
+	t.token_only = true;
+	snprintf(t.ca, sizeof(t.ca), "%s", "ca.example");
+	t.ca_port = 8444;
+
+	attest_target_resolve_renew(&t, "ca.example", 8444);
+	CHECK(attest_target_renew_at(&t, at, sizeof(at))[0] == '\0',
+	      "a token-only label that already names the endpoint gets no "
+	      "second copy of it");
+
+	attest_target_resolve_renew(&t, "old-ca.example", 8444);
+	CHECK(strcmp(attest_target_renew_at(&t, at, sizeof(at)),
+		     ", renewing at old-ca.example:8444") == 0,
+	      "an endpoint the label does not name is written out");
+
+	t.token_only = false;
+	attest_target_resolve_renew(&t, "ca.example", 8444);
+	CHECK(strcmp(attest_target_renew_at(&t, at, sizeof(at)),
+		     ", renewing at ca.example:8444") == 0,
+	      "a publisher with a verifier is labelled by it, so the CA is "
+	      "always written out");
+
+	attest_target_resolve_renew(&t, NULL, 0);
+	CHECK(attest_target_renew_at(&t, at, sizeof(at))[0] == '\0',
+	      "a target that cannot renew names no endpoint");
+
+	CHECK(attest_target_renew_at(NULL, at, sizeof(at))[0] == '\0',
+	      "no target, no endpoint");
+	CHECK(attest_target_renew_at(&t, NULL, 0)[0] == '\0',
+	      "no room, no endpoint");
+}
+
 /*
  * Pinning is per publisher because the certificate is: each publisher runs its
  * own verifier, so a fingerprint measured against one is refused by every other.
@@ -474,6 +597,9 @@ int main(void)
 	test_effective_interval();
 	test_target_reports();
 	test_wait_for_a_first_session_is_announced();
+	test_renewal_follows_the_record();
+	test_a_moved_ca_is_reported();
+	test_the_renewal_endpoint_is_said_once();
 	test_each_profile_pins_its_own_verifier();
 
 	printf("\n%s\n", g_failures ? "FAILURES" : "All tests passed");
