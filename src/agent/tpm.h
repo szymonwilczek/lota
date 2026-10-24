@@ -267,11 +267,12 @@ struct aik_auth_record {
 struct aik_metadata {
 	uint32_t magic;
 	uint32_t version;
-	uint64_t generation; /* monotonic rotation counter */
+	uint64_t generation; /* monotonic key rotation counter */
 	int64_t provisioned_at; /* time_t: current AIK creation */
-	int64_t last_rotated_at; /* time_t: last rotation (0 if never) */
+	int64_t last_rotated_at; /* time_t: last key rotation (0 if never) */
 	uint8_t key_derivation; /* TPM_AIK_KEY_DERIVATION_* */
-	uint8_t _reserved[63];
+	int64_t auth_rotated_at; /* time_t: last auth rotation (0 if never) */
+	uint8_t _reserved[55];
 } __attribute__((packed));
 
 /*
@@ -1379,19 +1380,37 @@ int tpm_evict_profile_aik(struct tpm_context *ctx, uint32_t handle);
 int tpm_aik_reseal_auth(struct tpm_context *ctx);
 
 /*
- * tpm_reprovision_aik - rotate the AIK and its userAuth, sealing the new
- * auth to the current PCR state. Recovery for strict at-rest sealing after
- * a boot-state change made the sealed auth unrecoverable. The previous AIK
- * certificate becomes stale, so the caller must re-enroll.
+ * tpm_reprovision_aik - rotate the AIK userAuth, sealing the new auth to the
+ * current PCR state. Recovery for strict at-rest sealing after a boot-state
+ * change made the sealed auth unrecoverable.
+ *
+ * The key is a primary, so it usually comes back unchanged;
+ * @out_key_changed reports whether its TPM Name differs.
  * Returns 0 / negative errno.
  */
-int tpm_reprovision_aik(struct tpm_context *ctx);
+int tpm_reprovision_aik(struct tpm_context *ctx, bool *out_key_changed);
 
 /*
  * tpm_aik_load_failure_blocks_reprovision - returns 1 when an AIK-auth
  * load failure must not rotate the key, i.e. any failure other than -ENOENT.
  */
 int tpm_aik_load_failure_blocks_reprovision(int load_rc);
+
+/*
+ * tpm_aik_slot_census - profile_aik_slot_tally() over the profiles under
+ * @base_dir (NULL for the default) and the handles the TPM holds.
+ * Returns 0 / negative errno.
+ */
+int tpm_aik_slot_census(struct tpm_context *ctx, const char *base_dir,
+			struct profile_aik_slots *out);
+
+/*
+ * tpm_aik_handle_holds_profile_key - does the bound profile's handle hold the
+ * key that profile derives?
+ * Returns 1 if so, 0 if the handle is empty or holds another object,
+ * or a negative errno.
+ */
+int tpm_aik_handle_holds_profile_key(struct tpm_context *ctx);
 
 #ifdef LOTA_TPM_TESTING
 typedef int (*tpm_test_prop_reader_fn)(struct tpm_context *ctx, TPM2_PT prop,

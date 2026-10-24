@@ -98,6 +98,9 @@ enum {
 	LOTA_AC_ERR_NONCE_FAIL = LOTA_AC_ERR_BASE - 5,
 	LOTA_AC_ERR_EXPIRED = LOTA_AC_ERR_BASE - 6,
 	LOTA_AC_ERR_CRYPTO = LOTA_AC_ERR_BASE - 7,
+	/* agent answered: no attestation-key slot left for this publisher;
+	   no retry helps, show it to the player */
+	LOTA_AC_ERR_NO_KEY_SLOT = LOTA_AC_ERR_BASE - 25,
 	LOTA_AC_ERR_RUNTIME_IMAGE = LOTA_AC_ERR_BASE - 24, /* the runtime
 							    * measurement is
 							    * not the one

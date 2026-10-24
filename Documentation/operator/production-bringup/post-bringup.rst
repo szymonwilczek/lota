@@ -562,6 +562,14 @@ identity everything else uses. ``lota-agent --enroll`` records it too: somebody
 with root named that CA and asked for the key, which is the same decision made
 a different way, and it keeps one rule for the agent to enforce.
 
+A title that names a publisher this machine has no attestation-key slot for is
+refused at connect too, with ``LOTA_IPC_ERR_NO_KEY_SLOT``
+(``LOTA_ERR_NO_KEY_SLOT`` in the SDK). The publisher is known here and somebody
+agreed to it; what is exhausted is the handle range, so no retry frees one and
+somebody at the machine has to forget a publisher or reclaim a handle. It is
+answered at connect, because every token in such a session would fail the same
+way.
+
 A title that selects a publisher nobody has agreed to is refused with a
 distinct error (``LOTA_ERR_CONSENT_REQUIRED``, readable through
 ``lota_connect_last_error()``) rather than a generic failure, because it is a
@@ -598,11 +606,31 @@ nothing prunes it, so a host that has been used carries more directories than
 it holds keys -- and the listing walks all of them, including the ones that
 hold a consent record and nothing else. The counts under it are over the same
 full set, which is what makes them worth reading on a host near its capacity.
+The listing also says how much of the attestation-key handle range is left.
+This build hands out eight handles, ``0x81010010`` to ``0x81010017``, and a
+slot goes two ways: a profile here records it, or the TPM holds an object at it
+that no profile records -- left by a wiped profile, a failed eviction, an
+earlier build or another program. The allocator steps over the second kind, so
+those slots are gone until somebody reclaims them, and the listing names each
+handle and says what it costs. Without that line a host with five keys and eight
+handles reads as having three slots free while having none, and the first symptom
+is the next publisher failing to bind. :doc:`../platform-support` covers the TPM's
+own capacity, which is the other half of the ceiling.
+
 ``lota-agent --forget-publisher <hex>`` destroys that key and deletes the rest,
 in that order -- a key with no directory left to name it would be worse than
 either state alone, so nothing is deleted if the eviction fails. An identity
 this machine never answered to is refused: a mistyped identity would otherwise
 confirm a removal that did not happen while the real publisher stayed enrolled.
+
+The key it destroys is the one it can show belongs to that publisher. The
+attestation key is derived from the TPM's hierarchy seed and a template
+carrying the publisher's identity, so the agent derives it again and compares
+TPM Names before evicting anything. A handle holding something else -- another
+program's key, an object left by an earlier build -- is left alone: the
+publisher is still forgotten, and the command says the slot stays claimed by
+whatever holds it. Destroying a persistent object cannot be undone, and the
+handle is a slot, not an identity.
 
 Forgetting is about the identity, not about refusing the publisher. A profile
 still in ``lota.conf`` can be agreed to again, and enrolls with a **new** key

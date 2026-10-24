@@ -104,6 +104,10 @@ enum lota_ipc_result {
 
 	/* this agent enforces nothing */
 	LOTA_IPC_ERR_NO_ENFORCEMENT = 0x11,
+
+	/* known, consented publisher, but the AIK handle range is full;
+	   freeing a slot is an operator action */
+	LOTA_IPC_ERR_NO_KEY_SLOT = 0x12,
 	LOTA_IPC_NOTIFY = 0x80,
 };
 
