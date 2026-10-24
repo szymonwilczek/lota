@@ -92,6 +92,13 @@ The most common failures, with the gate that produced them:
 * ``PCR14 no longer holds the value lota-agent extended in this boot session``.
   Something outside the agent extended PCR 14. Cold reboot, then audit what
   reached ``/dev/tpmrm0``.
+* ``the baseline handoff at /run/lota/pcr14_baseline is not the one this
+  commitment was built on``. PCR 14 and the binary match the record; the
+  handoff the ``90lota`` initramfs lock writes once per boot was replaced. Cold
+  reboot to have it written again. If the refusal survives the reboot, PCR 14
+  was extended and ``/var/lib/lota/clock_state.dat`` rewritten to match (the
+  evidence is identical): audit what can write ``/run/lota`` and
+  ``/var/lib/lota``.
 * ``This publisher's attestation key was created before each publisher got a
   key of its own``. The host was enrolled by a build that gave every publisher
   the same TPM key. A key cannot be rewritten in place, so the agent refuses

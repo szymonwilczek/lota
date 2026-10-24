@@ -671,6 +671,17 @@ int self_measure(struct tpm_context *ctx)
 					"boot commitment to chain onto. See the "
 					"preceding log for the dracut step.");
 				break;
+			case TPM_PCR14_HANDOFF_CHANGED:
+				lota_err(
+					"The initramfs baseline handoff on /run "
+					"is not the one this boot's commitment "
+					"was built on, so the derivation misses "
+					"while PCR 14 itself agrees with what "
+					"the agent recorded. Reboot to have the "
+					"helper write the handoff again; see the "
+					"preceding SECURITY log for the state "
+					"that leaves the same evidence.");
+				break;
 			default:
 				lota_err(
 					"PCR14 boot-commitment refused; see the "
