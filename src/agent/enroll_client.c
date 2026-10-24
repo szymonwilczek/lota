@@ -710,8 +710,27 @@ int do_reenroll(const char *ca_cert)
 		return 1;
 	}
 	if (ret < 0) {
-		fprintf(stderr, "Failed to read enrollment state: %s\n",
-			strerror(-ret));
+		uint32_t magic = 0;
+		uint32_t version = 0;
+
+		/* unreadable, not absent: the endpoint to reuse is inside it */
+		fprintf(stderr,
+			"The enrollment record at %s could not be read (%s).\n",
+			paths.enroll_state, strerror(-ret));
+		if (enroll_state_peek(paths.enroll_state, &magic, &version) ==
+		    0)
+			fprintf(stderr,
+				"It holds magic 0x%08X version %u; this build "
+				"reads magic 0x%08X version %u.\n",
+				magic, version, LOTA_ENROLL_STATE_MAGIC,
+				LOTA_ENROLL_STATE_VERSION);
+		fprintf(stderr,
+			"Restore that file, or enroll again naming the "
+			"endpoint yourself:\n"
+			"  lota-agent --enroll --ca-server <host> --ca-port "
+			"<port> --ca-cert <their anchor>\n"
+			"The attestation key is kept either way; what is "
+			"reissued is the certificate over it.\n");
 		return 1;
 	}
 
@@ -783,6 +802,16 @@ int do_allow_publisher(const char *profile_id)
 	       "looking at one machine. Take it back at any time with:\n");
 	printf("  lota-agent --forget-publisher %s\n", paths.id);
 	return 0;
+}
+
+/* both units run with PrivateTmp=yes: their /tmp and /var/tmp are empty */
+static bool anchor_is_hidden_from_the_units(const char *path)
+{
+	if (!path)
+		return false;
+
+	return strncmp(path, "/tmp/", 5) == 0 ||
+	       strncmp(path, "/var/tmp/", 9) == 0;
 }
 
 /*
@@ -950,6 +979,15 @@ int do_add_publisher(const char *config_path, const char *name,
 		printf("Nothing enrols with them until somebody at this "
 		       "machine agrees:\n");
 		printf("  lota-agent --allow-publisher %s\n", paths.id);
+		/* before the reload hint: reloading would not fix this */
+		if (anchor_is_hidden_from_the_units(ca_cert))
+			printf("Warning: %s is under a private-tmp path. The "
+			       "agent units cannot read it, so this publisher "
+			       "would load\nwithout a profile and a title "
+			       "naming them would be refused. Put the anchor "
+			       "somewhere\nthe units read, such as "
+			       "/etc/lota/, and add it again from there.\n",
+			       ca_cert);
 		printf("A running host picks the publisher up on reload:\n");
 		printf("  systemctl try-reload-or-restart lota-agent "
 		       "lota-attest\n");
@@ -1060,10 +1098,23 @@ static void print_publisher(const struct publisher_entry *e,
 		printf("  agreed to      no (nothing enrolls until it is)\n");
 	}
 
-	if (e->enrolled)
+	if (e->enrolled) {
 		printf("  enrolled with  %s:%d\n", e->ca_server, e->ca_port);
-	else
+	} else if (e->enroll_unreadable) {
+		struct profile_paths ep;
+
+		printf("  enrolled with  yes -- but the record cannot be "
+		       "read (%s)\n",
+		       strerror(-e->enroll_rc));
+		if (paths_from_id(e->id, &ep) == 0)
+			printf("                 %s\n", ep.enroll_state);
+		printf("                 the key and certificate below were "
+		       "issued against it;\n"
+		       "                 restore it, or re-enroll: lota-agent "
+		       "--reenroll --ca-cert <their anchor>\n");
+	} else {
 		printf("  enrolled with  not yet\n");
+	}
 
 	if (e->has_aik_handle)
 		printf("  attestation key at TPM handle 0x%08X\n",
@@ -1127,6 +1178,18 @@ static void print_key_capacity(const struct publisher_entry *entries,
 
 	printf("Attestation keys: %zu held, one per publisher enrolled with.\n",
 	       held);
+	{
+		size_t unreadable = 0;
+
+		for (size_t i = 0; i < count; i++)
+			if (entries[i].enroll_unreadable)
+				unreadable++;
+		if (unreadable)
+			printf("%zu of them %s an enrollment record this "
+			       "build cannot read, so the count above is\n"
+			       "what is stored, not what has been enrolled.\n",
+			       unreadable, unreadable == 1 ? "holds" : "hold");
+	}
 	if (have_slots)
 		printf("This TPM holds %u persistent object%s of about %u, and "
 		       "each key needs one;\nthis build answers to at most %d "

@@ -48,12 +48,20 @@ static void read_entry(const char *base_dir, const char *id,
 		e->consented_at = agreed;
 	}
 
-	if (enroll_state_load_path(paths.enroll_state, &st) == 0) {
-		e->enrolled = true;
-		snprintf(e->ca_server, sizeof(e->ca_server), "%s",
-			 st.ca_server);
-		e->ca_port = st.ca_port;
-		OPENSSL_cleanse(&st, sizeof(st));
+	{
+		int rc = enroll_state_load_path(paths.enroll_state, &st);
+
+		if (rc == 0) {
+			e->enrolled = true;
+			snprintf(e->ca_server, sizeof(e->ca_server), "%s",
+				 st.ca_server);
+			e->ca_port = st.ca_port;
+			OPENSSL_cleanse(&st, sizeof(st));
+		} else if (enroll_state_record_present(rc)) {
+			/* held but unreadable, not "never enrolled" */
+			e->enroll_unreadable = true;
+			e->enroll_rc = rc;
+		}
 	}
 
 	if (profile_aik_handle_load(&paths, &handle) == 0) {

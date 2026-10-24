@@ -1210,23 +1210,18 @@ static int bind_target(struct attest_target *t)
 	return 0;
 }
 
-/*
- * Has this publisher ever enrolled?
- *
- * Record is written by the enrollment ceremony, whether that ran as -enroll
- * at install time or on demand here, so its absence is what "never enrolled" means.
- */
-static bool target_is_enrolled(const struct attest_target *t)
+/* enroll_state_load_path() result; -ENOENT without a profile */
+static int target_enrollment_rc(const struct attest_target *t)
 {
 	struct enroll_state st;
-	bool ok;
+	int rc;
 
 	if (!t->has_profile)
-		return false;
+		return -ENOENT;
 
-	ok = enroll_state_load_path(t->paths.enroll_state, &st) == 0;
+	rc = enroll_state_load_path(t->paths.enroll_state, &st);
 	OPENSSL_cleanse(&st, sizeof(st));
-	return ok;
+	return rc;
 }
 
 /*
@@ -1245,10 +1240,25 @@ static bool target_is_enrolled(const struct attest_target *t)
 static bool enroll_target_if_needed(struct attest_target *t)
 {
 	uint64_t now_ms = monotonic_ms();
+	int enroll_rc;
 	int ret;
 
-	if (!t->has_profile || target_is_enrolled(t))
+	if (!t->has_profile)
 		return true;
+
+	enroll_rc = target_enrollment_rc(t);
+	if (enroll_rc == 0)
+		return true;
+
+	/* enrolling over it would reissue the cert and lose its endpoint */
+	if (enroll_state_record_present(enroll_rc)) {
+		lota_warn("Enrollment record for publisher %s is unreadable "
+			  "(%s); refusing to enroll over it. Restore %s, or "
+			  "re-enroll deliberately with --reenroll",
+			  t->paths.id, strerror(-enroll_rc),
+			  t->paths.enroll_state);
+		return false;
+	}
 
 	t->enroll_pending = false;
 
@@ -1344,14 +1354,25 @@ static void resolve_target_renew(struct attest_target *t)
 	struct enroll_state est;
 	enum attest_renew_say say;
 	bool enrolled;
+	int load_rc = -ENOENT;
 
 	memset(&est, 0, sizeof(est));
-	enrolled = t->has_profile &&
-		   enroll_state_load_path(t->paths.enroll_state, &est) == 0;
+	if (t->has_profile)
+		load_rc = enroll_state_load_path(t->paths.enroll_state, &est);
+	enrolled = load_rc == 0;
 
 	say = attest_target_resolve_renew(t, enrolled ? est.ca_server : NULL,
 					  enrolled ? est.ca_port : 0);
 	OPENSSL_cleanse(&est, sizeof(est));
+
+	/* off either way; but the endpoint exists, inside the refused record */
+	if (say == ATTEST_RENEW_OFF && enroll_state_record_present(load_rc)) {
+		lota_info("AIK certificate auto-renewal off for %s: its "
+			  "enrollment record could not be read (%s); the "
+			  "recorded endpoint is inside it",
+			  t->label, strerror(-load_rc));
+		return;
+	}
 
 	switch (say) {
 	case ATTEST_RENEW_ENABLED:
