@@ -293,16 +293,20 @@ func (v *Verifier) DiscardChallenge(challenge *types.Challenge, clientID string)
 	v.nonceStore.DiscardChallenge(challenge.Nonce, clientID)
 }
 
-// certificateVerdict maps an AIK certificate failure to the verdict the agent
-// is told. A certificate naming a key other than the one that signed the quote
-// is VerifyIdentityFail, which re-enrolling fixes (a TPM clear leaves this).
-// Expiry, chain and configuration failures stay VerifySigFail:
-// their fix lies with the operator or the CA.
+// certificateVerdict maps an AIK certificate failure to the agent's verdict:
+//   - names another key: VerifyIdentityFail (re-enroll; a TPM clear does it);
+//   - outside its validity window: VerifyCertificateValidity (expiry, clock);
+//   - unparseable, untrusted chain or no anchors: VerifySigFail.
 func certificateVerdict(err error) uint32 {
-	if errors.Is(err, store.ErrCertificateKeyMatch) {
+	switch {
+	case errors.Is(err, store.ErrCertificateKeyMatch):
 		return types.VerifyIdentityFail
+	case errors.Is(err, store.ErrCertificateExpired),
+		errors.Is(err, store.ErrCertificateNotYet):
+		return types.VerifyCertificateValidity
+	default:
+		return types.VerifySigFail
 	}
-	return types.VerifySigFail
 }
 
 // MaxRecordedDetail caps the refusal reason in an attestation record.

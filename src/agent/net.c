@@ -863,6 +863,14 @@ const char *net_result_str(uint32_t result)
 		       "allow-list, Secure Boot, kernel lockdown, module "
 		       "signing or appraisal scope). The verifier's log names "
 		       "which one; the verdict alone does not";
+	case VERIFY_CERTIFICATE_VALIDITY:
+		return "FAIL - This host's attestation certificate is outside "
+		       "the window it is valid in. Either it has expired, "
+		       "which is what a certificate lifetime running out looks "
+		       "like, or this machine's clock is behind the "
+		       "publisher's and the certificate is not valid yet. The "
+		       "quote itself is not in question. Check the clock, then "
+		       "run lota-agent --reenroll --ca-cert <their anchor>";
 	case VERIFY_IDENTITY_FAIL:
 		return "FAIL - The certificate this host presented does not "
 		       "certify the key it signed with, so the publisher "

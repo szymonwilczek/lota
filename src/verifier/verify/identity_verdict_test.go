@@ -27,16 +27,36 @@ func TestCertificateVerdict_KeyMismatchIsNotASignatureFailure(t *testing.T) {
 	}
 }
 
-// Everything else that stops a report before its key is authenticated keeps
-// the verdict it had.
-// Widening the new one would trade one collapsed bucket for another.
-func TestCertificateVerdict_OtherCertificateFailuresStay(t *testing.T) {
+// Nor is a certificate outside its validity window: AIK certificates carry
+// a TTL, so every long-lived host expires, and the answer is re-enrolment,
+// not distrust.
+func TestCertificateVerdict_ValidityWindowIsNotASignatureFailure(t *testing.T) {
 	for _, tc := range []struct {
 		name string
 		err  error
 	}{
 		{"expired", store.ErrCertificateExpired},
 		{"not yet valid", store.ErrCertificateNotYet},
+	} {
+		err := fmt.Errorf("AIK certificate verification failed: %w",
+			tc.err)
+
+		if got := certificateVerdict(err); got == types.VerifySigFail {
+			t.Errorf("%s: reported as %s, which names a corrupt or forged quote",
+				tc.name, types.VerifyResultString(got))
+		}
+	}
+}
+
+// Only signature, parse and trust-configuration failures stay sig_fail.
+// Widening either verdict above to cover them would trade one collapsed
+// bucket for another.
+func TestCertificateVerdict_OtherCertificateFailuresStay(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		err  error
+	}{
+		{"unparseable certificate", store.ErrInvalidCertificate},
 		{"chain does not verify", store.ErrCertificateChain},
 		{"no trusted anchors", store.ErrNoTrustedCAs},
 	} {
@@ -44,6 +64,14 @@ func TestCertificateVerdict_OtherCertificateFailuresStay(t *testing.T) {
 			t.Errorf("%s: reported as %s, expected sig_fail",
 				tc.name, types.VerifyResultString(got))
 		}
+	}
+}
+
+// The verdict's name is all the host sees; the verifier's log is not its own.
+func TestCertificateValidity_IsNamed(t *testing.T) {
+	s := types.VerifyResultString(types.VerifyCertificateValidity)
+	if s == "" || s == fmt.Sprintf("unknown_%d", types.VerifyCertificateValidity) {
+		t.Errorf("the certificate-validity verdict has no name: %q", s)
 	}
 }
 

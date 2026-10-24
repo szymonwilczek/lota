@@ -59,6 +59,9 @@ Metric                                          Type      Meaning
                                                           ``iommu_fail`` are host configuration the
                                                           policy demands; ``sig_fail``,
                                                           ``nonce_fail``, ``identity_fail``,
+                                                          ``certificate_validity`` (the AIK
+                                                          certificate has expired or is not
+                                                          yet valid; the host re-enrolls),
                                                           ``revoked``, ``banned``,
                                                           ``baseline_error`` (verifier store
                                                           failure).

@@ -478,8 +478,9 @@ Reader. Query: ``limit`` (default 100, maximum 10000). **200**::
 
 ``result`` is the verdict the verifier reached, and an accepted round reads
 ``ok``. The refusals are ``nonce_fail``, ``sig_fail``, ``identity_fail``,
-``pcr_fail``, ``iommu_fail``, ``policy_requirement``, ``integrity_mismatch``,
-``old_version``, ``revoked``, ``banned`` and ``internal_error`` -- the same
+``certificate_validity``, ``pcr_fail``, ``iommu_fail``,
+``policy_requirement``, ``integrity_mismatch``, ``old_version``, ``revoked``,
+``banned`` and ``internal_error`` -- the same
 vocabulary the agent is answered with, so a round an operator reads here and
 a round a host reports are named the same thing.
 

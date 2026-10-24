@@ -222,6 +222,13 @@ selects the profile:
 
     sudo lota-agent --reenroll --ca-cert ca.crt
 
+A certificate that expires anyway (CA unreachable through the final third,
+or agent not running) is refused with ``FAIL - This host's attestation
+certificate is outside the window it is valid in``, counted as
+``certificate_validity``; the quote is not in question. A certificate not
+valid *yet* gets the same verdict and means the host clock is behind the
+publisher's: check the clock before re-enrolling.
+
 It is also the command that moves a host onto per-publisher keys. An AIK
 created before the publisher's identity entered the TPM creation template is
 one key shared by every publisher enrolled on that host, and a TPM key cannot
