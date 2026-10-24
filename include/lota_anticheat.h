@@ -101,6 +101,9 @@ enum {
 	/* agent answered: no attestation-key slot left for this publisher;
 	   no retry helps, show it to the player */
 	LOTA_AC_ERR_NO_KEY_SLOT = LOTA_AC_ERR_BASE - 25,
+	/* TPM in dictionary-attack lockout: signs nothing until cleared;
+	   no retry helps, unlike NOT_ATTESTED */
+	LOTA_AC_ERR_TPM_LOCKOUT = LOTA_AC_ERR_BASE - 26,
 	LOTA_AC_ERR_RUNTIME_IMAGE = LOTA_AC_ERR_BASE - 24, /* the runtime
 							    * measurement is
 							    * not the one

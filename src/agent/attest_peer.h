@@ -39,6 +39,7 @@ struct attest_peer_counters {
 	uint32_t attest_count;
 	uint32_t fail_count;
 	uint64_t last_attest_time;
+	uint32_t host_flags; /* LOTA_IPC_SYNC_HOST_FLAGS observed here */
 };
 
 void attest_peer_init(struct attest_peer *peer);

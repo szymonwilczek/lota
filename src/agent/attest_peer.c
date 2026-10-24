@@ -304,7 +304,7 @@ int attest_peer_sync(struct attest_peer *peer, struct attest_target *targets,
 	sync->count = emitted;
 	sync->attest_count = counters->attest_count;
 	sync->fail_count = counters->fail_count;
-	sync->_reserved1 = 0;
+	sync->host_flags = counters->host_flags & LOTA_IPC_SYNC_HOST_FLAGS;
 	sync->last_attest_time = counters->last_attest_time;
 
 	body = sizeof(*sync) + (size_t)emitted * sizeof(*verdict);

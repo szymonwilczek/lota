@@ -1654,6 +1654,7 @@ static void publish_aggregate_status(const struct attest_target *targets,
 				     size_t count, uint32_t *status_flags)
 {
 	struct attest_aggregate agg;
+	uint32_t flags;
 
 	attest_aggregate_compute(targets, count, &agg);
 
@@ -1662,9 +1663,11 @@ static void publish_aggregate_status(const struct attest_target *targets,
 	else
 		*status_flags &= ~LOTA_STATUS_ATTESTED;
 
-	ipc_update_status(&g_agent.ipc_ctx,
-			  reconcile_tpm_lockout(*status_flags),
-			  agg.valid_until);
+	flags = reconcile_tpm_lockout(*status_flags);
+
+	g_attest_counters.host_flags = flags & LOTA_IPC_SYNC_HOST_FLAGS;
+
+	ipc_update_status(&g_agent.ipc_ctx, flags, agg.valid_until);
 
 	if (agg.attested)
 		sdnotify_status("Attested (%zu publisher%s), valid until %lu",

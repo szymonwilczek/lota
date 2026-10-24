@@ -62,6 +62,12 @@ bool tpm_is_locked_out(const struct tpm_context *ctx)
 	return false;
 }
 
+/* nothing here latches a lockout; linked only */
+void tpm_reset_lockout_state(struct tpm_context *ctx)
+{
+	(void)ctx;
+}
+
 int tpm_quote(struct tpm_context *ctx, const uint8_t *nonce, uint32_t pcr_mask,
 	      struct tpm_quote_response *response)
 {
