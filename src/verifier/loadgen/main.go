@@ -251,12 +251,22 @@ func printHuman(s *summary) {
 	for _, k := range sortedKeys(s.TransportError) {
 		fmt.Fprintf(os.Stderr, "transport_err  %s=%d\n", k, s.TransportError[k])
 	}
-	fmt.Fprintf(os.Stderr, "rate           %.1f/s\n", s.RatePerSec)
+	fmt.Fprintf(os.Stderr, "rate           %s\n", rateLine(s))
 	fmt.Fprintf(os.Stderr, "latency ms     p50=%.1f p90=%.1f p99=%.1f max=%.1f mean=%.1f\n",
 		s.Latency.P50, s.Latency.P90, s.Latency.P99, s.Latency.Max, s.Latency.Mean)
 	if s.AgentsNeverOK > 0 {
 		fmt.Fprintf(os.Stderr, "agents_never_ok %d\n", s.AgentsNeverOK)
 	}
+}
+
+// rateLine renders the verified and attempted rates, flagging unverified attempts
+func rateLine(s *summary) string {
+	line := fmt.Sprintf("%.1f/s verified (%.1f/s attempted", s.RatePerSec, s.AttemptRatePerSec)
+	if s.OK < s.Attempts {
+		return fmt.Sprintf("%s; only %d of %d attempts verified, so this is not a throughput ceiling)",
+			line, s.OK, s.Attempts)
+	}
+	return line + ")"
 }
 
 func sortedKeys(m map[string]uint64) []string {

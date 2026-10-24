@@ -128,11 +128,24 @@ Reading the output
 The human summary prints attempts, ``VERIFY_OK`` count, rejections by
 verifier result code, transport errors by phase (``dial``, ``read
 challenge``, ``write report``, ``read result``, ``timeout``), the
-achieved rate and latency percentiles (p50/p90/p99/max/mean, measured
-from dial to result). The ``-out`` JSON adds a per-second timeline of
+rate and latency percentiles (p50/p90/p99/max/mean, measured from dial
+to result). The ``-out`` JSON adds a per-second timeline of
 ok/rejected/error counts -- failover drills read the outage dip and
 recovery window straight off that series -- plus ``agents_never_ok``,
 which must be zero in a healthy run.
+
+The rate line carries two figures. The headline one counts
+attestations the verifier accepted (``achieved_rate_per_sec``), and it
+is the only one that is throughput; ``attempted_rate_per_sec`` beside
+it counts everything the generator started. They diverge when
+attestations fail, and the failures that cost the least time are the
+ones the verifier refuses at the door, so a run whose fleet is being
+refused has the higher attempted rate of the two. When a run leaves
+attempts unverified the line says how many verified and that the
+figure is not a ceiling; a figure worth quoting as capacity comes from
+a run that prints no such shortfall. The live progress line counts the
+same way, so a run that speeds up as it degrades shows up while it is
+still going.
 
 Interpreting failures:
 
@@ -146,6 +159,16 @@ Interpreting failures:
   listener refuses connections past ``--max-connections``, 256 by
   default, so a storm run with ``-in-flight`` above that measures the
   cap rather than the verifier).
+
+A rate that does not move when ``-in-flight`` rises is a ceiling, but
+not necessarily the verifier's: building and signing synthetic reports
+costs the generator several times what verifying them costs the
+verifier, so one load host saturates first. Measure both processes'
+CPU across the run (``/proc/<pid>/stat``, or ``systemd-cgtop`` per
+unit) before recording a figure: if ``lota-loadgen`` is the one
+burning cores, the number describes the load host. Drive the fleet
+from more than one host, or from more rigs, until the verifier is the
+process at its limit.
 
 Repeatability
 =============

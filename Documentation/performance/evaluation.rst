@@ -210,7 +210,13 @@ L2 fleet scale (synthetic, measured)
 Measured with :doc:`lota-loadgen <load-testing>` on the L1 host (8c/16t
 Ryzen 7 5700X, NVMe, Postgres 16 in a local container, TLS loopback),
 10 000-agent rig, production verifier configuration (certificate chain,
-strict policy):
+strict policy). Every rate below counts attestations the verifier
+accepted, over runs in which the whole fleet verified; a run that
+leaves attempts unverified measures a refusal and is not quoted here.
+Generator and verifier share this host, and building synthetic reports
+costs several times what verifying them costs, so these numbers are a
+floor under the verifier rather than its ceiling -- see
+:doc:`load-testing` on separating the two.
 
 .. list-table::
    :header-rows: 1
