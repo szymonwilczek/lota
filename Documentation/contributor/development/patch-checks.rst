@@ -29,6 +29,15 @@ a markup defect is introduced by whoever writes the markup and met by whoever
 next builds the docs. A contributor without Sphinx installed skips it; CI has
 it and decides.
 
+The private-errno check (``make check-private-errno``) refuses a ``tpm_*`` or
+``net_*`` return code rendered through ``strerror()``. Both families answer
+above the POSIX range (TPM at 4097, transport at 4353), which ``strerror()``
+prints as ``Unknown error 4098``; 4098 is the authorization failure that warns
+of a dictionary-attack lockout. ``tpm_strerror()`` and ``net_strerror()`` fall
+through to ``strerror()`` for ordinary errnos, so each is always safe on a value
+from its own layer. The check is syntactic and per function: a value passed
+through a second variable is left to review.
+
 Every commit in ``base..head`` must carry a good GPG or SSH signature; the
 check fails on any commit whose signature is missing, bad, or unverifiable.
 Set ``commit.gpgsign true`` with a configured signing key, or commit with

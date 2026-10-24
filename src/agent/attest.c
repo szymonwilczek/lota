@@ -931,7 +931,7 @@ int do_attest(const char *server, int port, const char *ca_cert,
 	ret = net_init();
 	if (ret < 0) {
 		fprintf(stderr, "Failed to initialize network: %s\n",
-			strerror(-ret));
+			net_strerror(ret));
 		return 1;
 	}
 
@@ -1806,7 +1806,7 @@ static int continuous_attest_run(const struct lota_config *cfg,
 	 */
 	ret = net_init();
 	if (ret < 0) {
-		lota_err("Failed to initialize network: %s", strerror(-ret));
+		lota_err("Failed to initialize network: %s", net_strerror(ret));
 		return 1;
 	}
 

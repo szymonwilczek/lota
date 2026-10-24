@@ -170,6 +170,12 @@ correlate the host through a shared identity. The endpoint is deliberately not
 the identity -- an address is mutable and two publishers can share a hostname,
 while reissuing the CA certificate over the same key keeps the profile.
 
+When the TLS layer refuses the connection -- the ``--ca-cert`` anchor does not
+verify the listener's certificate, or that certificate is not the pinned one --
+the agent says the CA answered, this host refused it, and names the
+``--ca-cert`` file. Only a CA that could not be reached gets the advice to
+confirm ``lota-attest-ca`` is running and reachable.
+
 A CA that refuses the enrollment says why in the agent's own output.
 Each refusal prints the status the CA sent and the sentence
 that goes with it -- an endorsement key that is not accepted here, an
@@ -182,21 +188,29 @@ the same way every time. A status the agent has no name for is printed as a
 number and said to be one, which is what an older agent meeting a newer CA
 looks like.
 
+An enrollment that fails at the CA keeps its profile directory, recorded handle
+and attestation key; enrolling again with the same anchor reuses them. Publisher
+slots are limited, so the failure names the profile it holds and the verb that
+frees it. A different certificate is a different publisher and takes another
+slot.
+
 The agent says so when it can tell. Both ``--enroll`` and ``--add-publisher``
 warn when the file named is not a CA certificate, naming what a re-key of it
 would cost; an anchor produces no such line. It is a warning rather than a
 refusal, because a self-signed leaf is a legitimate pin for a deployment that
 wants one and nothing in the file says which was meant.
 
-Naming the listener certificate here instead is the mistake with the quietest
-consequences. It is the one certificate in a deployment that is rotated on a
-schedule, and a rotation that generates a new key changes the SPKI: every host
-of that publisher becomes a new device at once. Each one enrolls again,
-provisions another AIK in another TPM persistent slot, and needs consent again,
-while its previous enrollment record and certificate sit in a profile directory
-nothing reads. Nothing reports that this has happened -- the hosts look new,
-because to that publisher they are. Issue the listener from the CA and pass the
-CA, which is what :ghsrc:`examples/enrollment/gen-ca.sh` generates.
+Pinning the listener certificate costs slots silently. It is rotated on a
+schedule, and a rotation with a new key changes the SPKI, so every host starts a
+second profile: another AIK in another TPM persistent slot, consent recorded
+again, the old profile left unread. The publisher's CA names a device by its
+endorsement key and sees one device with two live attestation certificates;
+the host spends two of its eight slots on one publisher, and seven rotations
+fill them all. ``--forget-publisher`` returns a slot. An enrollment that finds
+another profile at the same CA host and port says so, naming it when its anchor
+path is the certificate now pinned, and ``--list-publishers`` marks a profile
+whose pinned certificate now names another publisher. Issue the listener from
+the CA and pass the CA, as :ghsrc:`examples/enrollment/gen-ca.sh` does.
 
 The AIK is part of the profile, not shared across it. Each publisher's
 enrollment provisions its own key, in its own TPM persistent slot, with its own

@@ -198,16 +198,28 @@ int enroll_to_ca(struct tpm_context *tpm, const char *server, int port,
 		fprintf(stderr,
 			"Failed to set up the TLS channel to the CA at %s:%d "
 			"(check --ca-cert): %s\n",
-			server, port, strerror(-ret));
+			server, port, net_strerror(ret));
 		goto out;
 	}
 	net_inited = 1;
 	ret = net_connect(&net);
 	if (ret < 0) {
-		fprintf(stderr,
-			"Could not reach the attestation CA at %s:%d: %s. "
-			"Confirm lota-attest-ca is running and reachable.\n",
-			server, port, strerror(-ret));
+		/* refused here: the remedy is --ca-cert, not the CA */
+		if (net_err_is_tls(ret))
+			fprintf(stderr,
+				"The attestation CA at %s:%d answered, and "
+				"this host refused the TLS connection: %s.\n"
+				"What decides that is the certificate named by "
+				"--ca-cert%s%s%s.\n",
+				server, port, net_strerror(ret),
+				ca_cert ? " (" : "", ca_cert ? ca_cert : "",
+				ca_cert ? ")" : "");
+		else
+			fprintf(stderr,
+				"Could not reach the attestation CA at %s:%d: "
+				"%s. Confirm lota-attest-ca is running and "
+				"reachable.\n",
+				server, port, net_strerror(ret));
 		goto out;
 	}
 
@@ -226,7 +238,7 @@ int enroll_to_ca(struct tpm_context *tpm, const char *server, int port,
 	if (ret < 0) {
 		fprintf(stderr,
 			"Failed to send the enrollment request to the CA: %s\n",
-			strerror(-ret));
+			net_strerror(ret));
 		goto out;
 	}
 
@@ -235,7 +247,7 @@ int enroll_to_ca(struct tpm_context *tpm, const char *server, int port,
 		fprintf(stderr,
 			"No challenge received from the CA (connection "
 			"dropped?): %s\n",
-			strerror(-ret));
+			net_strerror(ret));
 		goto out;
 	}
 	ret = enroll_decode_challenge(rbuf, rlen, &ch);
@@ -290,7 +302,7 @@ int enroll_to_ca(struct tpm_context *tpm, const char *server, int port,
 	if (ret < 0) {
 		fprintf(stderr,
 			"Failed to send the credential response to the CA: %s\n",
-			strerror(-ret));
+			net_strerror(ret));
 		goto out;
 	}
 
@@ -299,7 +311,7 @@ int enroll_to_ca(struct tpm_context *tpm, const char *server, int port,
 		fprintf(stderr,
 			"No completion response from the CA (connection "
 			"dropped?): %s\n",
-			strerror(-ret));
+			net_strerror(ret));
 		goto out;
 	}
 	ret = enroll_decode_result(rbuf, rlen, &res);
@@ -495,6 +507,34 @@ static void report_no_room_for_a_key(struct tpm_context *tpm,
 }
 
 /*
+ * A failure at the CA leaves the profile, handle and key in place for a retry
+ * with the same anchor; name the slot it holds and how to free it.
+ */
+static void report_slot_the_attempt_took(const struct profile_paths *paths)
+{
+	uint32_t handle = 0;
+
+	if (profile_aik_handle_load(paths, &handle) == 0)
+		fprintf(stderr,
+			"This attempt holds a publisher slot on this machine: "
+			"profile %s, attestation key at TPM handle 0x%08X.\n",
+			paths->id, handle);
+	else
+		fprintf(stderr,
+			"This attempt holds a publisher slot on this machine: "
+			"profile %s.\n",
+			paths->id);
+	fprintf(stderr,
+		"Enrolling again with the same --ca-cert reuses it and costs "
+		"nothing more; a different certificate is a different "
+		"publisher and takes another of the %d slots this build "
+		"answers to.\n"
+		"Give this one back with:\n"
+		"  lota-agent --forget-publisher %s\n",
+		LOTA_PROFILE_MAX_AIK_HANDLES, paths->id);
+}
+
+/*
  * Bring up the TPM, provision the AIK, run one enrollment against the CA,
  * store the certificate, and record the endpoint. Returns 0 on success,
  * negative errno on failure.
@@ -518,7 +558,7 @@ static int run_enrollment(const struct profile_paths *paths, const char *server,
 	ret = net_init();
 	if (ret < 0) {
 		fprintf(stderr, "Failed to initialize network: %s\n",
-			strerror(-ret));
+			net_strerror(ret));
 		return ret;
 	}
 
@@ -576,6 +616,8 @@ static int run_enrollment(const struct profile_paths *paths, const char *server,
 	if (ret == 0)
 		persist_enroll_state(paths, server, port, ca_cert, skip_verify,
 				     pin, token);
+	else
+		report_slot_the_attempt_took(paths);
 
 	tpm_cleanup(&g_agent.tpm_ctx);
 	net_cleanup();
@@ -623,14 +665,55 @@ static int resolve_profile(const char *ca_cert, struct profile_paths *paths)
 			"Warning: %s is not a CA certificate, so this "
 			"publisher's identity on this host is pinned to it.\n"
 			"If it is the server's TLS certificate, re-issuing it "
-			"with a new key makes this host a new device to that "
-			"publisher: a new profile, a new attestation key in a "
+			"with a new key starts a second publisher on this "
+			"machine: a new profile, a new attestation key in a "
 			"new TPM slot, and consent asked again.\n"
+			"The publisher is not told, and sees one device either "
+			"way: their CA names a device by its endorsement key, "
+			"which no certificate on this side changes.\n"
+			"The first profile keeps its slot until it is taken "
+			"back with --forget-publisher.\n"
 			"Name the CA certificate that signs it instead, if "
 			"there is one.\n",
 			ca_cert);
 
 	return 0;
+}
+
+/*
+ * Report another profile at this CA endpoint; not a refusal, as one CA may
+ * serve several publishers. When that profile's anchor path now names this
+ * one, it is a rotated pin and the older profile is orphaned.
+ */
+static void report_endpoint_already_enrolled(const struct profile_paths *paths,
+					     const char *server, int port)
+{
+	char other[LOTA_PROFILE_ID_LEN];
+	char names_now[LOTA_PROFILE_ID_LEN];
+
+	if (publishers_endpoint_shared(LOTA_PROFILE_BASE_DIR, paths->id, server,
+				       port, other, sizeof(other)) != 1)
+		return;
+
+	if (publisher_anchor_names_another(LOTA_PROFILE_BASE_DIR, other,
+					   names_now, sizeof(names_now)) == 1 &&
+	    strcmp(names_now, paths->id) == 0) {
+		printf("This machine already enrolled with %s:%d as publisher "
+		       "%s, against the same\ncertificate before it was "
+		       "re-issued. This enrollment is that publisher again, "
+		       "as a\nsecond publisher here: another attestation key "
+		       "in another TPM slot.\n",
+		       server, port, other);
+		printf("The older profile is reached by nothing now. Give its "
+		       "slot back with:\n  lota-agent --forget-publisher %s\n",
+		       other);
+		return;
+	}
+
+	printf("This machine already enrolled with %s:%d as publisher %s, "
+	       "under a different\ntrust anchor. Both keep their own key and "
+	       "their own slot.\n",
+	       server, port, other);
 }
 
 int do_enroll(const char *server, int port, const char *ca_cert,
@@ -650,6 +733,7 @@ int do_enroll(const char *server, int port, const char *ca_cert,
 		return 1;
 	}
 	printf("Publisher profile: %s\n", paths.id);
+	report_endpoint_already_enrolled(&paths, server, port);
 
 	/*
 	 * Running --enroll is the consent:
@@ -866,8 +950,9 @@ int do_add_publisher(const char *config_path, const char *name,
 			"Warning: %s is not a CA certificate, so this "
 			"publisher's identity on this host is pinned to it. "
 			"If it is the server's TLS certificate, re-issuing it "
-			"with a new key makes this host a new device to that "
-			"publisher.\n",
+			"with a new key starts a second publisher on this "
+			"machine, and the first keeps its TPM slot until it is "
+			"taken back.\n",
 			ca_cert);
 
 	/*
@@ -1149,6 +1234,22 @@ static void print_publisher(const struct publisher_entry *e,
 		       "over, so every quote is refused. Re-enroll this\n"
 		       "                 publisher: lota-agent --reenroll "
 		       "--ca-cert <their anchor>\n");
+
+	/* a re-keyed pin names another profile; this one holds a dead slot */
+	{
+		char names_now[LOTA_PROFILE_ID_LEN];
+
+		if (publisher_anchor_names_another(LOTA_PROFILE_BASE_DIR, e->id,
+						   names_now,
+						   sizeof(names_now)) == 1)
+			printf("  SUPERSEDED     the certificate this profile "
+			       "pinned names %s now,\n"
+			       "                 so nothing reaches this "
+			       "profile again. It holds its key\n"
+			       "                 and its slot until: "
+			       "lota-agent --forget-publisher %s\n",
+			       names_now, e->id);
+	}
 }
 
 /*

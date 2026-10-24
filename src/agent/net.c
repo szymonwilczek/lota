@@ -14,6 +14,7 @@
 #include <fcntl.h>
 #include <netdb.h>
 #include <poll.h>
+#include <signal.h>
 #include <string.h>
 #include <sys/epoll.h>
 #include <sys/socket.h>
@@ -26,6 +27,7 @@
 #include <openssl/prov_ssl.h>
 #include <openssl/types.h>
 #include <openssl/x509.h>
+#include <openssl/x509_vfy.h>
 #include <stdio.h>
 #include <stdlib.h>
 
@@ -83,6 +85,26 @@ static int normalize_socket_fd(int fd)
 	return fd;
 }
 
+int net_transport_error(int ssl_err, int sock_errno)
+{
+	switch (ssl_err) {
+	case SSL_ERROR_ZERO_RETURN:
+		return -LOTA_ERR_NET_PEER_CLOSED;
+	case SSL_ERROR_SYSCALL:
+		/* SO_RCVTIMEO/SO_SNDTIMEO expiry arrives as EAGAIN */
+		if (sock_errno == EAGAIN || sock_errno == EWOULDBLOCK)
+			return -ETIMEDOUT;
+		if (sock_errno)
+			return -sock_errno;
+		/* no errno, no close_notify: the peer was killed */
+		return -LOTA_ERR_NET_PEER_GONE;
+	case SSL_ERROR_SSL:
+		return -LOTA_ERR_NET_TLS;
+	default:
+		return -EIO;
+	}
+}
+
 /*
  * Wait for SSL socket to become ready using poll().
  * Prevents busy-waiting on SSL_ERROR_WANT_READ/WRITE.
@@ -119,8 +141,20 @@ static int ssl_wait(SSL *ssl, int event)
 
 int net_init(void)
 {
+	struct sigaction sa;
+
 	if (ssl_initialized)
 		return 0;
+
+	/*
+	 * A write to a closed peer must fail with EPIPE, not kill the process;
+	 * one-shot verbs never run the daemon's signal setup.
+	 */
+	memset(&sa, 0, sizeof(sa));
+	sa.sa_handler = SIG_IGN;
+	sigemptyset(&sa.sa_mask);
+	if (sigaction(SIGPIPE, &sa, NULL) < 0)
+		return -errno;
 
 	ssl_initialized = 1;
 	return 0;
@@ -177,7 +211,7 @@ int net_context_init(struct net_context *ctx, const char *server, int port,
 		lota_warn("Do NOT use in production.");
 		SSL_CTX_set_verify(ssl_ctx, SSL_VERIFY_NONE, NULL);
 	} else if (ca_cert_path) {
-		/* custom CA certificate provided */
+		/* pinned anchor: a CA or the listener's own certificate */
 		if (SSL_CTX_load_verify_locations(ssl_ctx, ca_cert_path,
 						  NULL) != 1) {
 			lota_err("Failed to load CA certificate: %s",
@@ -185,6 +219,12 @@ int net_context_init(struct net_context *ctx, const char *server, int port,
 			SSL_CTX_free(ssl_ctx);
 			return -EINVAL;
 		}
+		/*
+		 * Let the chain end at the pinned certificate even when it is
+		 * a CA-issued leaf whose issuer is not in the store.
+		 */
+		X509_VERIFY_PARAM_set_flags(SSL_CTX_get0_param(ssl_ctx),
+					    X509_V_FLAG_PARTIAL_CHAIN);
 		SSL_CTX_set_verify(ssl_ctx, SSL_VERIFY_PEER, NULL);
 	} else {
 		/*
@@ -385,7 +425,8 @@ int net_connect(struct net_context *ctx)
 		SSL_free(ssl);
 		close(sock);
 		ctx->socket_fd = -1;
-		return -ECONNABORTED;
+		/* the socket connected: TLS refused, the host was reachable */
+		return -LOTA_ERR_NET_TLS_HANDSHAKE;
 	}
 
 	if (ctx->skip_verify) {
@@ -420,7 +461,7 @@ int net_connect(struct net_context *ctx)
 			SSL_free(ssl);
 			close(sock);
 			ctx->socket_fd = -1;
-			return -EACCES;
+			return -LOTA_ERR_NET_TLS_CERT;
 		}
 
 		/* verify server presented a certificate */
@@ -431,7 +472,7 @@ int net_connect(struct net_context *ctx)
 			SSL_free(ssl);
 			close(sock);
 			ctx->socket_fd = -1;
-			return -EACCES;
+			return -LOTA_ERR_NET_TLS_CERT;
 		}
 		X509_free(peer_cert);
 	}
@@ -449,7 +490,7 @@ int net_connect(struct net_context *ctx)
 			SSL_free(ssl);
 			close(sock);
 			ctx->socket_fd = -1;
-			return -EACCES;
+			return -LOTA_ERR_NET_TLS_PIN;
 		}
 
 		unsigned char digest[LOTA_PIN_SHA256_LEN];
@@ -465,7 +506,7 @@ int net_connect(struct net_context *ctx)
 			SSL_free(ssl);
 			close(sock);
 			ctx->socket_fd = -1;
-			return -EACCES;
+			return -LOTA_ERR_NET_TLS_PIN;
 		}
 		X509_free(peer_cert);
 
@@ -495,7 +536,7 @@ int net_connect(struct net_context *ctx)
 			SSL_free(ssl);
 			close(sock);
 			ctx->socket_fd = -1;
-			return -EACCES;
+			return -LOTA_ERR_NET_TLS_PIN;
 		}
 	}
 
@@ -545,7 +586,7 @@ int net_recv_challenge(struct net_context *ctx,
 					return wait_ret;
 				continue;
 			}
-			return -EIO;
+			return net_transport_error(ssl_err, errno);
 		}
 		total += ret;
 	}
@@ -590,7 +631,7 @@ int net_send_report(struct net_context *ctx, const void *report,
 					return wait_ret;
 				continue;
 			}
-			return -EIO;
+			return net_transport_error(ssl_err, errno);
 		}
 		total += ret;
 	}
@@ -618,7 +659,7 @@ int net_recv_result(struct net_context *ctx, struct verifier_result *result)
 					return wait_ret;
 				continue;
 			}
-			return -EIO;
+			return net_transport_error(ssl_err, errno);
 		}
 		total += ret;
 	}
@@ -664,7 +705,7 @@ int net_write_all(struct net_context *ctx, const void *buf, size_t len)
 					return wait_ret;
 				continue;
 			}
-			return -EIO;
+			return net_transport_error(ssl_err, errno);
 		}
 		total += (size_t)ret;
 	}
@@ -693,7 +734,7 @@ int net_read_full(struct net_context *ctx, void *buf, size_t len)
 					return wait_ret;
 				continue;
 			}
-			return -EIO;
+			return net_transport_error(ssl_err, errno);
 		}
 		total += (size_t)ret;
 	}

@@ -314,6 +314,13 @@ The stage is what separates a host that cannot reach its verifier from one the
 verifier is refusing, and it is reported whether or not anything is reading the
 loop's progress output.
 
+After the stage comes the condition. A failure the socket reported keeps its
+errno (``Connection refused``, ``Connection reset by peer``, ``Broken pipe``);
+the rest are named by the agent: a peer that closed the connection before the
+exchange finished, a peer that went away without closing it, a TLS protocol
+failure on an established connection. None is reported as
+``Input/output error``.
+
 Which unit a title talks to
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
@@ -599,6 +606,11 @@ attestation key and how much validity that key's certificate has left. It ends
 with what the machine has room for -- the keys held, the TPM's own persistent
 capacity and this build's maximum -- so the ceiling is readable before it is
 met; :doc:`../platform-support` covers what sets it.
+
+A profile whose pinned certificate now names another publisher, as after a TLS
+listener certificate is re-issued over a new key, is marked ``SUPERSEDED`` with
+that publisher. Nothing reaches it, yet it holds its attestation key and a slot
+until ``--forget-publisher`` frees them.
 
 A profile whose enrollment record cannot be read is reported as holding one,
 not as never having enrolled. The record is what says where a publisher

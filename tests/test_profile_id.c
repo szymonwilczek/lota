@@ -1090,6 +1090,124 @@ static void test_a_listing_that_does_not_fit_is_refused(void)
 	rmdir(base);
 }
 
+/*
+ * A listener certificate re-issued over a new key is a second profile here
+ * while the CA, keyed on the EK, sees one device; both queries must spot it.
+ */
+static void test_a_rotated_pin_is_visible(void)
+{
+	EVP_PKEY *gen1 = EVP_RSA_gen(2048);
+	EVP_PKEY *gen2 = EVP_RSA_gen(2048);
+	X509 *cert1 = NULL, *cert2 = NULL;
+	char anchor_path[256];
+	char base[256];
+	char id1[LOTA_PROFILE_ID_LEN] = { 0 };
+	char id2[LOTA_PROFILE_ID_LEN] = { 0 };
+	char named[LOTA_PROFILE_ID_LEN] = { 0 };
+	struct profile_paths paths;
+	struct enroll_state rec;
+
+	snprintf(base, sizeof(base), "/tmp/lota-profile-rot.%d", getpid());
+	tmp_path(anchor_path, sizeof(anchor_path), "listener.pem");
+
+	if (!gen1 || !gen2) {
+		CHECK(0, "two listener keys are generated");
+		goto out;
+	}
+	cert1 = mint_cert(gen1, "verifier.example", 41);
+	cert2 = mint_cert(gen2, "verifier.example", 42);
+	if (!cert1 || !cert2 || write_cert_pem(anchor_path, cert1) != 0) {
+		CHECK(0, "the first listener certificate is written");
+		goto out;
+	}
+
+	CHECK(profile_id_from_anchor(anchor_path, id1, sizeof(id1)) == 0,
+	      "the first generation names a publisher");
+	CHECK(profile_paths_from_id(base, id1, &paths) == 0 &&
+		      profile_dir_ensure(&paths) == 0,
+	      "the first generation gets a profile");
+
+	memset(&rec, 0, sizeof(rec));
+	rec.magic = LOTA_ENROLL_STATE_MAGIC;
+	rec.version = LOTA_ENROLL_STATE_VERSION;
+	rec.ca_port = 18703;
+	snprintf(rec.ca_server, sizeof(rec.ca_server), "%s", "127.0.0.1");
+	snprintf(rec.ca_cert, sizeof(rec.ca_cert), "%s", anchor_path);
+	CHECK(enroll_state_save_path(paths.enroll_state, &rec) == 0,
+	      "the first generation records where it enrolled");
+
+	CHECK(publisher_anchor_names_another(base, id1, named, sizeof(named)) ==
+		      0,
+	      "before the rotation the anchor still names its own profile");
+
+	/* the publisher re-issues the listener certificate over a new key */
+	CHECK(write_cert_pem(anchor_path, cert2) == 0,
+	      "the listener certificate is re-issued in place");
+	CHECK(profile_id_from_anchor(anchor_path, id2, sizeof(id2)) == 0 &&
+		      strcmp(id1, id2) != 0,
+	      "the re-issued certificate is a different publisher here");
+
+	CHECK(publisher_anchor_names_another(base, id1, named, sizeof(named)) ==
+			      1 &&
+		      strcmp(named, id2) == 0,
+	      "the first profile is named as one its own anchor left behind");
+
+	/* the second enrollment, at the same endpoint */
+	CHECK(profile_paths_from_id(base, id2, &paths) == 0 &&
+		      profile_dir_ensure(&paths) == 0,
+	      "the second generation gets a profile of its own");
+	snprintf(rec.ca_cert, sizeof(rec.ca_cert), "%s", anchor_path);
+	CHECK(enroll_state_save_path(paths.enroll_state, &rec) == 0,
+	      "the second generation records the same endpoint");
+
+	CHECK(publishers_endpoint_shared(base, id2, "127.0.0.1", 18703, named,
+					 sizeof(named)) == 1 &&
+		      strcmp(named, id1) == 0,
+	      "the second enrollment finds the first at the same endpoint");
+	CHECK(publisher_anchor_names_another(base, id2, named, sizeof(named)) ==
+		      0,
+	      "the profile the anchor names now is not left behind");
+	CHECK(publishers_endpoint_shared(base, id2, "127.0.0.1", 18704, named,
+					 sizeof(named)) == 0,
+	      "a different port at the same host is a different endpoint");
+
+	/* a publisher that never enrolled has no anchor to compare */
+	{
+		char never[LOTA_PROFILE_ID_LEN];
+
+		memset(never, '7', sizeof(never) - 1);
+		never[sizeof(never) - 1] = '\0';
+		CHECK(publisher_anchor_names_another(base, never, named,
+						     sizeof(named)) < 0,
+		      "a profile with no record is not called left behind");
+	}
+
+	remove_profile_dir(base, id1);
+	remove_profile_dir(base, id2);
+	{
+		char path[PATH_MAX + 64];
+
+		snprintf(path, sizeof(path), "%s/%s/%s", base, id1,
+			 LOTA_PROFILE_ENROLL_STATE_FILE);
+		unlink(path);
+		snprintf(path, sizeof(path), "%s/%s/%s", base, id2,
+			 LOTA_PROFILE_ENROLL_STATE_FILE);
+		unlink(path);
+		snprintf(path, sizeof(path), "%s/%s", base, id1);
+		rmdir(path);
+		snprintf(path, sizeof(path), "%s/%s", base, id2);
+		rmdir(path);
+	}
+	rmdir(base);
+	unlink(anchor_path);
+
+out:
+	X509_free(cert1);
+	X509_free(cert2);
+	EVP_PKEY_free(gen1);
+	EVP_PKEY_free(gen2);
+}
+
 int main(void)
 {
 	printf("=== Publisher profile identity tests ===\n\n");
@@ -1107,6 +1225,7 @@ int main(void)
 	test_host_wide_verbs_count_every_key();
 	test_a_listing_that_does_not_fit_is_refused();
 	test_aik_auth_at_rest_state();
+	test_a_rotated_pin_is_visible();
 
 	printf("\n%s\n", g_failures ? "FAILURES" : "All tests passed");
 	return g_failures ? 1 : 0;
