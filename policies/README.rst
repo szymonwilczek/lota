@@ -358,10 +358,18 @@ and a quote-authenticated Secure Boot anchor before anything moves.
 A short-lived ``--allow-tofu-boot-baseline`` switch on the verifier exists for
 closed test fixtures. It explicitly weakens the contract above by accepting
 whatever PCR 0/1/7 the first attestation reports regardless of policy or
-event-log state; the verifier emits a warning-level log line on every accept
-under that switch and the operator must turn it back off before the deployment
+event-log state, and the operator must turn it back off before the deployment
 is considered production. A diverse fleet does not need it - path 3 covers that
 case with the Secure Boot anchor intact.
+
+The switch says so twice in the log: a warning naming it once at startup, and
+a security-level line on every first-use accept it allows, carrying
+``allowed_by=--allow-tofu-boot-baseline``. Every first-use pin is recorded that
+way whatever authenticated it -- the policy pins, an out-of-band baseline row,
+the event-log anchor or this switch -- so the roads are told apart by the
+``allowed_by`` field on one record rather than by its level, and a fleet
+alerting on security lines sees the unauthenticated accepts along with the
+rest.
 
 PCR 14 (LOTA agent self-measurement) is not TOFU. It is derived
 deterministically from the boot-commitment chain
