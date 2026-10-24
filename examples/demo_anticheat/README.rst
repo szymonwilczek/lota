@@ -31,6 +31,10 @@ carries the gaming and server SDK inside it, so a producer that only calls
 ``lota_ac_*`` links one thing. Add ``lota-gaming`` or ``lota-server`` when
 the same binary also calls those APIs directly.
 
+``libcurl`` is not LOTA's own and a host is not expected to have it. Without
+``libcurl-devel`` ``make examples`` prints ``SKIP: demo_anticheat (install
+libcurl-devel)`` and builds the rest of the tree.
+
 Which half of the evidence you run
 ----------------------------------
 

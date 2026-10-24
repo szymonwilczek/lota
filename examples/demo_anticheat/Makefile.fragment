@@ -12,6 +12,9 @@ CC ?= gcc
 STAGE_DIR ?= $(TOP_DIR)/build/stage
 export PKG_CONFIG_PATH := $(STAGE_DIR)/lib64/pkgconfig
 
+LOTA_OPTIONAL_PKGS := libcurl
+include ../optional-deps.mk
+
 CFLAGS := -Wall -Wextra -Werror -O2 -g
 CFLAGS += $(shell PKG_CONFIG_PATH=$(PKG_CONFIG_PATH) pkg-config --cflags lota-anticheat lota-gaming)
 CFLAGS += -D_GNU_SOURCE
@@ -26,7 +29,9 @@ ifdef SANITIZE
 CFLAGS += -fsanitize=$(SANITIZE) -fno-omit-frame-pointer
 CFLAGS += -fno-sanitize-recover=all
 endif
+ifeq ($(LOTA_OPTIONAL_OK),yes)
 CFLAGS += $(shell PKG_CONFIG_PATH=$(PKG_CONFIG_PATH) pkg-config --cflags libcurl)
+endif
 
 LDFLAGS := -pie -Wl,-z,relro,-z,now -Wl,-z,noexecstack -Wl,-z,separate-code
 ifdef SANITIZE
@@ -34,11 +39,18 @@ LDFLAGS += -fsanitize=$(SANITIZE)
 endif
 LDLIBS := $(shell PKG_CONFIG_PATH=$(PKG_CONFIG_PATH) pkg-config --libs lota-anticheat lota-gaming)
 LDLIBS += -Wl,-rpath,$(STAGE_DIR)/lib64
+ifeq ($(LOTA_OPTIONAL_OK),yes)
 LDLIBS += $(shell PKG_CONFIG_PATH=$(PKG_CONFIG_PATH) pkg-config --libs libcurl)
+endif
 
 .PHONY: all clean
 
+ifeq ($(LOTA_OPTIONAL_OK),yes)
 all: $(TARGET)
+else
+all:
+	@echo "SKIP: demo_anticheat (install libcurl-devel)"
+endif
 
 $(TARGET): $(SRCS) $(STAGE_DIR)/lib64/liblota_anticheat.so
 	$(CC) $(CFLAGS) -o $@ $(SRCS) $(LDFLAGS) $(LDLIBS)
