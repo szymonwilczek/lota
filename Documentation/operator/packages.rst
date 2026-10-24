@@ -101,3 +101,21 @@ Package upgrades follow the same rule and do not rewrite the boot path. An
 agent upgrade still needs the initramfs and the PCR 14 commitment refreshed,
 since the binary is measured; ``sudo lota-install`` after the upgrade does
 that.
+
+State the packages own, and state they leave alone
+==================================================
+
+``lota-agent`` owns ``/var/lib/lota`` and ``/var/lib/lota/profiles``, both
+``0700``; ``lota-verifier`` owns ``/var/lib/lota`` and its default
+``--aik-store`` at ``/var/lib/lota/aiks``, also ``0700``, so ``rpm -V``
+reports a changed mode.
+
+The files inside are **not** owned: the AIK authorisation value and its
+sealed form, the AIK metadata, the monotonic clock state and the publisher
+profiles. They are the machine's identity and survive removal and reinstall,
+as do ``/etc/lota`` and the TPM's persistent objects. To hand the machine
+on or re-enrol from scratch, remove them by hand.
+
+Removing ``lota-agent`` first stops the daemon, its socket and the
+attestation loop. Stopping the daemon extends PCR 14, so the host fails
+attestation until it reboots.

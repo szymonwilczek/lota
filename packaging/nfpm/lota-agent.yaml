@@ -125,7 +125,8 @@ contents:
     type: dir
     file_info:
       mode: 0755
-  - dst: /var/lib/lota/aiks
+  # agent state; the files inside are machine identity, unowned, kept on removal
+  - dst: /var/lib/lota
     type: dir
     file_info:
       mode: 0700

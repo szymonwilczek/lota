@@ -1173,8 +1173,9 @@ install: check-version-tag all
 	install -d $(DESTDIR)/usr/lib64
 	install -d $(DESTDIR)/usr/include/lota
 	install -d $(DESTDIR)/usr/share/lota
-	install -d $(DESTDIR)/var/lib/lota/aiks
-	install -d $(DESTDIR)/var/lib/lota/profiles
+	install -d -m 700 $(DESTDIR)/var/lib/lota
+	install -d -m 700 $(DESTDIR)/var/lib/lota/aiks
+	install -d -m 700 $(DESTDIR)/var/lib/lota/profiles
 	install -m 755 $(AGENT_BIN) $(DESTDIR)/usr/bin/
 	install -m 755 $(INSTALLER_BIN) $(DESTDIR)/usr/bin/
 	install -m 755 $(INITRAMFS_LOCK_BIN) $(DESTDIR)/usr/lib/lota/

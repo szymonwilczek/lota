@@ -212,12 +212,15 @@ EOF
 %{_datadir}/lota/selinux/lota.if
 %dir %{_datadir}/lota/systemd
 %{_datadir}/lota/systemd/10-xdg-runtime.conf.example
-%dir %attr(0700,root,root) %{_sharedstatedir}/lota/aiks
+# agent state; the files inside are machine identity, unowned, kept on removal
+%dir %attr(0700,root,root) %{_sharedstatedir}/lota
 %dir %attr(0700,root,root) %{_sharedstatedir}/lota/profiles
 
 %files verifier
 %license LICENSE
 %{_bindir}/lota-verifier
+%dir %attr(0700,root,root) %{_sharedstatedir}/lota
+%dir %attr(0700,root,root) %{_sharedstatedir}/lota/aiks
 
 %files attest-ca
 %license LICENSE
