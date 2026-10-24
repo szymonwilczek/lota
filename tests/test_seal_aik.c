@@ -10,13 +10,16 @@
  * Copyright (C) 2026 Szymon Wilczek
  */
 
+#include <endian.h>
 #include <errno.h>
+#include <fcntl.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
 #include <stdbool.h>
 #include <stdint.h>
+#include <unistd.h>
 
 #include "../src/agent/agent_internal.h" // IWYU pragma: keep (defines LOTA_TPM_TESTING)
 
@@ -204,33 +207,318 @@ static void test_strict_load_no_plaintext_fallback(void)
 	PASS();
 }
 
+/*
+ * An auth record this build cannot read still authorizes the enrolled key;
+ * rotating over it destroys the identity and its certificate.
+ * Only a missing record may reprovision.
+ */
+static int blocks_reprovision(int load_rc)
+{
+	return tpm_aik_load_failure_blocks_reprovision(load_rc);
+}
+
+enum record_damage {
+	DAMAGE_VERSION,
+	DAMAGE_MAGIC,
+	DAMAGE_TRUNCATE,
+	DAMAGE_ZERO_AUTH,
+	DAMAGE_ABSENT,
+};
+
+static int seed_damaged_record(struct tpm_context *ctx, enum record_damage what)
+{
+	uint8_t auth[TPM_AIK_AUTH_SIZE];
+	struct aik_auth_record rec;
+	char path[512];
+	size_t want;
+	FILE *f;
+	int fd;
+
+	init_ctx(ctx);
+	for (unsigned i = 0; i < TPM_AIK_AUTH_SIZE; i++)
+		auth[i] = (uint8_t)(0x70 + i);
+	if (tpm_test_aik_save_auth(ctx, auth) != 0)
+		return -1;
+	if (tpm_test_aik_plaintext_path(ctx, path, sizeof(path)) != 0)
+		return -1;
+
+	if (what == DAMAGE_ABSENT)
+		return unlink(path) == 0 ? 0 : -1;
+
+	f = fopen(path, "rb");
+	if (!f)
+		return -1;
+	if (fread(&rec, 1, sizeof(rec), f) != sizeof(rec)) {
+		fclose(f);
+		return -1;
+	}
+	fclose(f);
+
+	switch (what) {
+	case DAMAGE_VERSION:
+		rec.version = htole32(le32toh(rec.version) + 1);
+		break;
+	case DAMAGE_MAGIC:
+		rec.magic = htole32(le32toh(rec.magic) ^ 0xFFu);
+		break;
+	case DAMAGE_ZERO_AUTH:
+		memset(rec.auth, 0, sizeof(rec.auth));
+		break;
+	default:
+		break;
+	}
+
+	want = (what == DAMAGE_TRUNCATE) ? 8 : sizeof(rec);
+	fd = open(path, O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0600);
+	if (fd < 0)
+		return -1;
+	f = fdopen(fd, "wb");
+	if (!f) {
+		close(fd);
+		return -1;
+	}
+	if (fwrite(&rec, 1, want, f) != want) {
+		fclose(f);
+		return -1;
+	}
+	fclose(f);
+	return 0;
+}
+
+static void test_unreadable_record_is_not_a_missing_one(void)
+{
+	static const struct {
+		enum record_damage what;
+		int want_rc;
+		int want_block;
+		const char *name;
+	} cases[] = {
+		{ DAMAGE_VERSION, -ENOTSUP, 1,
+		  "version this build cannot read" },
+		{ DAMAGE_MAGIC, -EINVAL, 1, "magic that is not the record's" },
+		{ DAMAGE_TRUNCATE, -EIO, 1, "record shorter than the record" },
+		{ DAMAGE_ZERO_AUTH, -EKEYREVOKED, 1, "all-zero secret" },
+		{ DAMAGE_ABSENT, -ENOENT, 0, "no record at all" },
+	};
+	struct tpm_context ctx;
+	char reason[160];
+
+	TEST("only an absent auth record may rotate the AIK");
+	for (size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); i++) {
+		int rc;
+
+		if (seed_damaged_record(&ctx, cases[i].what) != 0) {
+			FAIL("seed");
+			return;
+		}
+		memset(ctx.aik_auth, 0, sizeof(ctx.aik_auth));
+		ctx.aik_auth_loaded = false;
+
+		rc = tpm_test_aik_load_auth(&ctx);
+		if (rc != cases[i].want_rc) {
+			snprintf(reason, sizeof(reason),
+				 "%s: load returned %d, want %d", cases[i].name,
+				 rc, cases[i].want_rc);
+			FAIL(reason);
+			return;
+		}
+		if (ctx.aik_auth_loaded && rc != 0) {
+			snprintf(reason, sizeof(reason),
+				 "%s: auth marked loaded after a failed load",
+				 cases[i].name);
+			FAIL(reason);
+			return;
+		}
+		if (blocks_reprovision(rc) != cases[i].want_block) {
+			snprintf(reason, sizeof(reason),
+				 "%s: reprovision decision is %d, want %d",
+				 cases[i].name, blocks_reprovision(rc),
+				 cases[i].want_block);
+			FAIL(reason);
+			return;
+		}
+	}
+	PASS();
+}
+
 static void test_recovery_decision(void)
 {
-	TEST("strict-mode reprovision-block decision is correct");
-	/* non-strict: a load failure always allows reprovision */
-	if (tpm_aik_strict_blocks_reprovision(0, -LOTA_ERR_TPM_POLICY_FAIL) !=
-	    0) {
-		FAIL("non-strict blocked");
-		return;
-	}
-	/* strict + boot-state mismatch: must block silent AIK rotation */
-	if (tpm_aik_strict_blocks_reprovision(1, -LOTA_ERR_TPM_POLICY_FAIL) !=
-	    1) {
+	TEST("reprovision-block decision is correct");
+	/* sealed auth no longer unseals; the record exists in either mode */
+	if (blocks_reprovision(-LOTA_ERR_TPM_POLICY_FAIL) != 1) {
 		FAIL("strict policy-fail not blocked");
 		return;
 	}
-	/* strict but a genuinely missing/corrupt auth: reprovision is fine */
-	if (tpm_aik_strict_blocks_reprovision(1, -ENOENT) != 0) {
-		FAIL("strict missing-auth blocked");
-		return;
-	}
-	if (tpm_aik_strict_blocks_reprovision(1, -EIO) != 0) {
-		FAIL("strict io-error blocked");
+	/* a genuinely missing auth leaves a key nothing can drive again */
+	if (blocks_reprovision(-ENOENT) != 0) {
+		FAIL("missing auth blocked");
 		return;
 	}
 	/* a successful load is never a reprovision trigger */
-	if (tpm_aik_strict_blocks_reprovision(1, 0) != 0) {
-		FAIL("strict success blocked");
+	if (blocks_reprovision(0) != 0) {
+		FAIL("success blocked");
+		return;
+	}
+	PASS();
+}
+
+/*
+ * Hardened mode reports -ENOENT when only the plaintext sidecar exists;
+ * the key is still authorized and must not rotate.
+ */
+static void test_leftover_sidecar_is_still_a_record(void)
+{
+	struct tpm_context ctx;
+	uint8_t auth[TPM_AIK_AUTH_SIZE];
+
+	TEST("hardened mode with only a sidecar left does not rotate");
+	init_ctx(&ctx);
+	for (unsigned i = 0; i < TPM_AIK_AUTH_SIZE; i++)
+		auth[i] = (uint8_t)(0x21 + i);
+	if (tpm_test_aik_save_auth(&ctx, auth) != 0) {
+		FAIL("seed plaintext");
+		return;
+	}
+
+	ctx.seal_aik_auth_strict = true;
+	memset(ctx.aik_auth, 0, sizeof(ctx.aik_auth));
+	ctx.aik_auth_loaded = false;
+	if (tpm_test_aik_load_auth(&ctx) != -ENOENT) {
+		FAIL("expected a missing sealed copy");
+		return;
+	}
+	/* the load code alone would rotate here */
+	if (blocks_reprovision(-ENOENT) != 0) {
+		FAIL("absent record blocked");
+		return;
+	}
+	/* the disk says the authorization is right there */
+	if (tpm_test_aik_auth_record_exists(&ctx) != 1) {
+		FAIL("sidecar not seen");
+		return;
+	}
+	PASS();
+}
+
+/* write @len bytes of @magic with @version + 1 */
+static int write_bumped_record(const char *path, uint32_t magic,
+			       uint32_t version, size_t len)
+{
+	uint8_t buf[512];
+	uint32_t le_magic = htole32(magic);
+	uint32_t le_version = htole32(version + 1);
+	FILE *f;
+	int fd;
+
+	if (len > sizeof(buf))
+		return -1;
+	memset(buf, 0, sizeof(buf));
+	memcpy(buf, &le_magic, sizeof(le_magic));
+	memcpy(buf + sizeof(le_magic), &le_version, sizeof(le_version));
+
+	fd = open(path, O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0600);
+	if (fd < 0)
+		return -1;
+	f = fdopen(fd, "wb");
+	if (!f) {
+		close(fd);
+		return -1;
+	}
+	if (fwrite(buf, 1, len, f) != len) {
+		fclose(f);
+		return -1;
+	}
+	fclose(f);
+	return 0;
+}
+
+/*
+ * Every version-guarded state file refuses an unknown version:
+ * the clock snapshot is discarded, metadata and auth records stop the run.
+ */
+static void test_state_files_at_an_unknown_version(void)
+{
+	struct tpm_context ctx;
+	struct lota_clock_state clock_out;
+	char path[512];
+	int rc;
+
+	TEST("every version-guarded state file refuses a version it cannot read");
+	init_ctx(&ctx);
+
+	/* clock_state.dat: refused, and the caller carries on without it */
+	snprintf(ctx.clock_state_path, sizeof(ctx.clock_state_path),
+		 "%s/clock_state.dat", test_dir);
+	if (write_bumped_record(ctx.clock_state_path, TPM_CLOCK_STATE_MAGIC,
+				TPM_CLOCK_STATE_VERSION,
+				sizeof(struct lota_clock_state)) != 0) {
+		FAIL("seed clock state");
+		return;
+	}
+	memset(&clock_out, 0, sizeof(clock_out));
+	rc = tpm_clock_state_load(&ctx, &clock_out);
+	if (rc == 0) {
+		FAIL("clock state accepted an unknown version");
+		return;
+	}
+	if (clock_out.version != 0) {
+		FAIL("clock state handed back a record it refused");
+		return;
+	}
+
+	/* aik_meta.dat: refused, and the run stops */
+	if (write_bumped_record(ctx.aik_meta_path, TPM_AIK_META_MAGIC,
+				TPM_AIK_META_VERSION,
+				sizeof(struct aik_metadata)) != 0) {
+		FAIL("seed metadata");
+		return;
+	}
+	ctx.initialized = true; /* no esys_ctx: this path is pure file I/O */
+	rc = tpm_aik_load_metadata(&ctx);
+	ctx.initialized = false;
+	if (rc != -ENOTSUP) {
+		FAIL("metadata did not refuse an unknown version");
+		return;
+	}
+	if (ctx.aik_meta_loaded) {
+		FAIL("metadata marked loaded after a refusal");
+		return;
+	}
+
+	/* aik_auth.dat: refused, and the key it names is left alone */
+	if (tpm_test_aik_plaintext_path(&ctx, path, sizeof(path)) != 0 ||
+	    write_bumped_record(path, TPM_AIK_AUTH_MAGIC, TPM_AIK_AUTH_VERSION,
+				sizeof(struct aik_auth_record)) != 0) {
+		FAIL("seed auth record");
+		return;
+	}
+	rc = tpm_test_aik_load_auth(&ctx);
+	if (rc != -ENOTSUP || blocks_reprovision(rc) != 1) {
+		FAIL("auth record did not refuse an unknown version");
+		return;
+	}
+
+	/*
+	 * aik_auth.sealed: unsealing needs a TPM, so check only that a copy
+	 * that fails to load still counts as a record and blocks rotation
+	 */
+	if (tpm_test_aik_sealed_path(&ctx, path, sizeof(path)) != 0 ||
+	    write_bumped_record(path, TPM_AIK_AUTH_MAGIC, TPM_AIK_AUTH_VERSION,
+				64) != 0) {
+		FAIL("seed sealed copy");
+		return;
+	}
+	ctx.seal_aik_auth_strict = true;
+	memset(ctx.aik_auth, 0, sizeof(ctx.aik_auth));
+	ctx.aik_auth_loaded = false;
+	rc = tpm_test_aik_load_auth(&ctx);
+	if (rc == 0) {
+		FAIL("sealed copy unsealed without a TPM");
+		return;
+	}
+	if (blocks_reprovision(rc) != 1 ||
+	    tpm_test_aik_auth_record_exists(&ctx) != 1) {
+		FAIL("an unreadable sealed copy would rotate the key");
 		return;
 	}
 	PASS();
@@ -264,7 +552,10 @@ int main(void)
 	test_sealed_path_derivation();
 	test_sealing_on_without_tpm_fails_cleanly();
 	test_strict_load_no_plaintext_fallback();
+	test_unreadable_record_is_not_a_missing_one();
 	test_recovery_decision();
+	test_leftover_sidecar_is_still_a_record();
+	test_state_files_at_an_unknown_version();
 	test_reseal_reprovision_arg_guards();
 
 	cleanup_dir();
