@@ -82,5 +82,17 @@ Automated developer bring-up
     sudo systemctl start lota-agent.socket lota-agent.service
     sudo systemctl status lota-agent.service --no-pager
 
-The script is idempotent and prints which step it ran or skipped so re-runs
-after a partial failure are safe. Read it before running.
+Every step checks for the artefact it would produce and prints whether it ran
+or skipped, so a re-run on a host that is already gated changes nothing. What
+a run writes it keeps: nothing here rolls back, and a run that fails part-way
+leaves what it had already done for the next run to pick up from.
+
+Clearing the agent state under ``/var/lib/lota`` and the persistent handles in
+the TPM is the one step that is not repeatable, because it destroys the host's
+attestation identity -- the agent provisions a fresh key on the next start, and
+anything holding a certificate for the old one is talking about a key that no
+longer exists. It happens only under ``--reset``, and ``--reset`` refuses while an agent is
+running -- either because ``lota-agent.service`` is active, or because the pid
+file under ``/run/lota`` names a process that is still alive, which is the
+state a host is left in when the agent refuses the stop. Read the script
+before running it.
