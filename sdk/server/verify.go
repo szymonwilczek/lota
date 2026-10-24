@@ -43,11 +43,19 @@ const (
 	TokenMagic      uint32 = 0x4B544F4C // "LOTK" in memory (little-endian)
 	TokenVersion    uint16 = 0x0003
 	TokenHeaderSize        = 144
-	TokenMaxSize           = TokenHeaderSize + (1024 * 4) + 1024 + 512 // 5776 bytes
 
-	MaxAttestSize  = 1024
-	MaxSigSize     = 512
-	MaxProtectPIDs = 1024
+	MaxAttestSize = 1024
+	MaxSigSize    = 512
+
+	ImageDigestSize = 32 // per protected PID in a v2 token
+
+	// LOTA_TOKEN_MAX_PROTECT_PIDS in include/lota_token.h
+	MaxProtectPIDs = 181
+
+	// largest token an agent can produce: header, full PID list with v2
+	// digests, maximum quote and signature
+	TokenMaxSize = TokenHeaderSize + (MaxProtectPIDs * 4) +
+		(MaxProtectPIDs * ImageDigestSize) + MaxAttestSize + MaxSigSize
 )
 
 // Token freshness policy defaults (see: include/lota_server.h)
