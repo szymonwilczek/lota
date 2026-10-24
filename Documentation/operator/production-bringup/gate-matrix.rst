@@ -69,6 +69,12 @@ current tree.
 Every gate maps to a ``lota_err()`` line in the journal when it fails, so
 ``journalctl -u lota-agent`` is the canonical debugging surface.
 
+A kernel floor gate (lockdown, module signatures, appraisal scope) is a state
+of the host, so the agent exits with a status listed in
+``RestartPreventExitStatus`` and ``lota-agent.service`` stays ``failed``, with
+the line naming the missing gate last in the journal. Fix the host (often a
+firmware setting) before restarting the unit.
+
 Automated developer bring-up
 ============================
 

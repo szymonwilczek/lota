@@ -65,6 +65,11 @@ ExecReload=/bin/kill -HUP $MAINPID
 Restart=on-failure
 # host that is reachable but not yet fully enrolled should back off
 RestartSec=30s
+#
+# Exit 78 (EX_CONFIG): no attestation this boot, e.g. PCR 14 committed to
+# another agent build between an upgrade and its reboot; retrying changes
+# nothing, so the unit stays failed.
+RestartPreventExitStatus=78
 
 # Continuous loop pings the watchdog every WatchdogSec/2
 # (cadence is decoupled from attest_interval), so loop wedged on the TPM

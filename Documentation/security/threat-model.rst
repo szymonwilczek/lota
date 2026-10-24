@@ -304,6 +304,9 @@ Active threats
          flag exists to announce. An offline swap of the on-disk file is a
          different question and is answered by fs-verity plus the boot
          commitment, not by this flag.
+       | Restarting a unit in that window runs the new binary against a PCR 14
+         committing to the old one; it is refused until reboot, and both units
+         stay failed rather than looping.
      - Replacing the agent binary requires cold reboot, fs-verity re-enable,
        policy update, and re-attestation.
    * - Modified, non-enforcing agent (self-compiled client)

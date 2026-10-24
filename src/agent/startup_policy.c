@@ -472,6 +472,26 @@ out:
 	return ret;
 }
 
+/*
+ * Kernel floor check for both startup paths. A refusal is a state of the
+ * host, so it returns -ENOTSUP, which the unit does not restart on;
+ * the kernel's errno goes to the log, as it names the missing gate.
+ */
+static int verify_kernel_floor(const struct agent_startup_policy *policy)
+{
+	int ret = bpf_loader_verify_kernel_runtime_hardening(
+		policy->allow_mutable_rootfs);
+
+	if (ret < 0) {
+		lota_err(
+			"Kernel anti-tamper prerequisites are not satisfied: %s",
+			strerror(-ret));
+		return -ENOTSUP;
+	}
+
+	return 0;
+}
+
 int agent_validate_startup_policy(const struct agent_startup_policy *policy)
 {
 	int ret;
@@ -505,14 +525,9 @@ int agent_validate_startup_policy(const struct agent_startup_policy *policy)
 		}
 	}
 
-	ret = bpf_loader_verify_kernel_runtime_hardening(
-		policy->allow_mutable_rootfs);
-	if (ret < 0) {
-		lota_err(
-			"Kernel anti-tamper prerequisites are not satisfied: %s",
-			strerror(-ret));
+	ret = verify_kernel_floor(policy);
+	if (ret < 0)
 		return ret;
-	}
 
 	if (policy->allow_verity_count == 0 &&
 	    (policy->strict_exec || policy->strict_modules)) {
@@ -574,14 +589,9 @@ int agent_apply_startup_policy(const struct agent_startup_policy *policy)
 	if (ret < 0)
 		return ret;
 
-	ret = bpf_loader_verify_kernel_runtime_hardening(
-		policy->allow_mutable_rootfs);
-	if (ret < 0) {
-		lota_err(
-			"Kernel anti-tamper prerequisites are not satisfied: %s",
-			strerror(-ret));
+	ret = verify_kernel_floor(policy);
+	if (ret < 0)
 		return ret;
-	}
 
 	if (bpf_loader_get_mode(&g_agent.bpf_ctx, &prev_mode) == 0)
 		have_prev_mode = 1;
