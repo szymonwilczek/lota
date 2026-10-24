@@ -63,8 +63,15 @@ Metric                                          Type      Meaning
                                                           certificate has expired or is not
                                                           yet valid; the host re-enrolls),
                                                           ``revoked``, ``banned``,
+                                                          ``old_version``,
+                                                          ``internal_error`` and
                                                           ``baseline_error`` (verifier store
-                                                          failure).
+                                                          failure) complete the set. Every
+                                                          reason carries a zero series
+                                                          before it first fires, so an
+                                                          alert expression naming one
+                                                          matches on a verifier that has
+                                                          refused nothing yet.
 ``lota_reanchors_total{outcome}``               counter   Boot-baseline re-anchors by outcome:
                                                           ``strong`` and ``lfa`` (self-service,
                                                           auto-applied; ``lfa`` also lands in the

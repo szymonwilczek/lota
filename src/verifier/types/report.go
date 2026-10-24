@@ -157,6 +157,25 @@ func VerifyResultString(code uint32) string {
 	}
 }
 
+// RejectionReasons returns every refusing verdict by its exported name.
+// The exporter seeds a zero series for each, so alerts read 0.
+func RejectionReasons() []string {
+	return []string{
+		VerifyResultString(VerifyNonceFail),
+		VerifyResultString(VerifySigFail),
+		VerifyResultString(VerifyPCRFail),
+		VerifyResultString(VerifyIOMMUFail),
+		VerifyResultString(VerifyOldVersion),
+		VerifyResultString(VerifyIntegrityMismatch),
+		VerifyResultString(VerifyRevoked),
+		VerifyResultString(VerifyBanned),
+		VerifyResultString(VerifyInternalError),
+		VerifyResultString(VerifyIdentityFail),
+		VerifyResultString(VerifyPolicyRequirement),
+		VerifyResultString(VerifyCertificateValidity),
+	}
+}
+
 // struct lota_report_header (see: include/attestation.h)
 type ReportHeader struct {
 	Magic      uint32 // offset 0

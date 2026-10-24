@@ -72,6 +72,36 @@ func TestVerdictCodesAgreeWithTheAgent(t *testing.T) {
 	}
 }
 
+// Every refusing verdict must be in RejectionReasons,
+// or its series is missing until it first fires.
+func TestRejectionReasonsCoverEveryRefusal(t *testing.T) {
+	named := make(map[string]bool)
+	for _, reason := range RejectionReasons() {
+		named[reason] = true
+	}
+
+	for value, name := range codes(t, verifierCodesPath, verifierCodeRe) {
+		if value == VerifyOK {
+			continue
+		}
+		if !named[VerifyResultString(value)] {
+			t.Errorf("%s = %d can refuse a round and is not in RejectionReasons, so its series is missing until it first fires",
+				name, value)
+		}
+	}
+
+	// and nothing in the list is a name no code renders as
+	rendered := make(map[string]bool)
+	for value := range codes(t, verifierCodesPath, verifierCodeRe) {
+		rendered[VerifyResultString(value)] = true
+	}
+	for _, reason := range RejectionReasons() {
+		if !rendered[reason] {
+			t.Errorf("RejectionReasons names %q, which no verdict renders as", reason)
+		}
+	}
+}
+
 // Every code this side can send needs a string on this side too:
 // the verifier's own logs and its operator API are where a support call starts
 func TestVerdictCodesAreNamedHere(t *testing.T) {
