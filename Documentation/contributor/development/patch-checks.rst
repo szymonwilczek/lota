@@ -14,10 +14,20 @@ suggested fix for failures. It validates commit message shape, DCO trailers,
 commit signatures, message and patch whitespace, clang-format, gofmt, the full
 build, include hygiene, the license boundary
 (:doc:`license-boundary`), the public API and ABI surface
-(:doc:`api-stability`), the diagnostics the documentation quotes, the same
-hotpath documentation policy enforced by CI, and -- when the patch touches C
--- the Sparse, Smatch and Coccinelle analyzers and the stack-frame ceiling
-described below.
+(:doc:`api-stability`), the diagnostics the documentation quotes, the strict
+documentation build, the same hotpath documentation policy enforced by CI, and
+-- when the patch touches C -- the Sparse, Smatch and Coccinelle analyzers and
+the stack-frame ceiling described below.
+
+The strict documentation build (``make check-docs-strict``) is the build
+``docs.yml`` runs, with every warning promoted to an error, into a scratch
+output tree. It builds from nothing on purpose: Sphinx re-reads only the
+sources that changed, so an incremental build is silent about a problem in a
+file the patch did not touch, which is the case a gate exists for. It runs on
+every patch rather than only on the ones that touch ``Documentation/``, because
+a markup defect is introduced by whoever writes the markup and met by whoever
+next builds the docs. A contributor without Sphinx installed skips it; CI has
+it and decides.
 
 Every commit in ``base..head`` must carry a good GPG or SSH signature; the
 check fails on any commit whose signature is missing, bad, or unverifiable.

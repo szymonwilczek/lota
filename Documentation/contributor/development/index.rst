@@ -9,7 +9,7 @@ All new work lands on the ``lota-next`` integration branch first.
 
 ``main`` carries only stable, released code.
 
-See :doc:`../branching <../branching>` for the full model and the release flow.
+See :doc:`../branching` for the full model and the release flow.
 
 Contents
 ========

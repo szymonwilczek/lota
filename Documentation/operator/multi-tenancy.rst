@@ -12,7 +12,7 @@ assigned, what it scopes, and how an operator configures scoped access to the
 monitoring API.
 
 The security rationale is in the
-:doc:`threat model <../../security/threat-model>`; this page is the operator
+:doc:`threat model <../security/threat-model>`; this page is the operator
 configuration reference.
 
 How a tenant is assigned
@@ -166,5 +166,5 @@ Enrollment
 Assigning tenants at enrollment is a property of the attestation CA: the
 enterprise path adds a tenant column to the EK pin manifest, and the gaming
 path issues a per-tenant enrollment token. See
-:doc:`production-bringup/ca-enrollment <production-bringup/ca-enrollment>` for
+:doc:`production-bringup/ca-enrollment` for
 the enrollment ceremony these hook into.
