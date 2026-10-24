@@ -200,6 +200,7 @@ AGENT_SRCS := $(AGENT_DIR)/main.c \
 			  $(AGENT_DIR)/io_utils.c \
 			  $(AGENT_DIR)/exit_status.c \
 			  $(AGENT_DIR)/sb_dev.c \
+			  $(AGENT_DIR)/cgroup_guard.c \
 			  $(AGENT_DIR)/reload.c \
 			  $(AGENT_DIR)/test_servers.c \
 			  $(AGENT_DIR)/startup_policy.c \
@@ -1304,9 +1305,11 @@ TEST_BINS := \
 	$(TEST_BIN_DIR)/test_io_read_file \
 	$(TEST_BIN_DIR)/test_devt \
 	$(TEST_BIN_DIR)/test_sb_dev \
+	$(TEST_BIN_DIR)/test_cgroup_guard \
 	$(TEST_BIN_DIR)/test_kernel_measure \
 	$(TEST_BIN_DIR)/test_kernel_image \
 	$(TEST_BIN_DIR)/test_bpf_mount_hooks \
+	$(TEST_BIN_DIR)/test_bpf_kill_guard \
 	$(TEST_BIN_DIR)/test_path_sanitize \
 	$(TEST_BIN_DIR)/test_event_budget \
 	$(TEST_BIN_DIR)/test_tpm_nv_chunk \
@@ -1560,9 +1563,17 @@ $(TEST_BIN_DIR)/test_sb_dev: tests/test_sb_dev.c $(AGENT_DIR)/sb_dev.c $(INC_DIR
 	$(QUIET_CC)
 	$(Q)$(CC) $(CFLAGS) -o $@ tests/test_sb_dev.c $(AGENT_DIR)/sb_dev.c
 
+$(TEST_BIN_DIR)/test_cgroup_guard: tests/test_cgroup_guard.c $(AGENT_DIR)/cgroup_guard.c $(AGENT_DIR)/sb_dev.c | $(BUILD_DIR)
+	$(QUIET_CC)
+	$(Q)$(CC) $(CFLAGS) -o $@ tests/test_cgroup_guard.c $(AGENT_DIR)/cgroup_guard.c $(AGENT_DIR)/sb_dev.c
+
 $(TEST_BIN_DIR)/test_bpf_mount_hooks: tests/test_bpf_mount_hooks.c $(BPF_OBJ) | $(BUILD_DIR)
 	$(QUIET_CC)
 	$(Q)$(CC) $(CFLAGS) -DBPF_OBJ_PATH='"$(BPF_OBJ)"' -o $@ $< -lelf
+
+$(TEST_BIN_DIR)/test_bpf_kill_guard: tests/test_bpf_kill_guard.c $(BPF_OBJ) | $(BUILD_DIR)
+	$(QUIET_CC)
+	$(Q)$(CC) $(CFLAGS) -DBPF_OBJ_PATH='"$(BPF_OBJ)"' -o $@ $< -lbpf
 
 $(TEST_BIN_DIR)/test_kernel_measure: tests/test_kernel_measure.c $(AGENT_DIR)/kernel_measure.c | $(BUILD_DIR)
 	$(QUIET_CC)
@@ -1765,13 +1776,13 @@ $(TEST_BIN_DIR)/test_ipc_dos: tests/test_ipc_dos.c $(SDK_LIB) | $(BUILD_DIR)
 	$(QUIET_CC)
 	$(Q)$(CC) $(CFLAGS) -o $@ $< -L$(BUILD_DIR) -llotagaming -Wl,-rpath,$(abspath $(BUILD_DIR))
 
-$(TEST_BIN_DIR)/test_loader_attach: tests/test_loader_attach.c $(AGENT_DIR)/bpf_loader.c $(AGENT_DIR)/journal.c $(AGENT_DIR)/policy_sign.c $(AGENT_DIR)/sb_dev.c | $(BUILD_DIR)
+$(TEST_BIN_DIR)/test_loader_attach: tests/test_loader_attach.c $(AGENT_DIR)/bpf_loader.c $(AGENT_DIR)/journal.c $(AGENT_DIR)/policy_sign.c $(AGENT_DIR)/sb_dev.c $(AGENT_DIR)/cgroup_guard.c | $(BUILD_DIR)
 	$(QUIET_CC)
 	$(Q)$(CC) $(CFLAGS) -o $@ $^ -lbpf -lsystemd -lcrypto
 
 # Interpose libbpf's open calls and the signature verify so the loader's
 # verify-then-load path is testable without a key or a live kernel
-$(TEST_BIN_DIR)/test_bpf_loader_load_source: tests/test_bpf_loader_load_source.c $(AGENT_DIR)/bpf_loader.c $(AGENT_DIR)/journal.c $(AGENT_DIR)/policy_sign.c $(AGENT_DIR)/sb_dev.c | $(BUILD_DIR)
+$(TEST_BIN_DIR)/test_bpf_loader_load_source: tests/test_bpf_loader_load_source.c $(AGENT_DIR)/bpf_loader.c $(AGENT_DIR)/journal.c $(AGENT_DIR)/policy_sign.c $(AGENT_DIR)/sb_dev.c $(AGENT_DIR)/cgroup_guard.c | $(BUILD_DIR)
 	$(QUIET_CC)
 	$(Q)$(CC) $(CFLAGS) -o $@ $^ -lbpf -lsystemd -lcrypto \
 		-Wl,--wrap=policy_verify_buffer \
@@ -1781,21 +1792,22 @@ $(TEST_BIN_DIR)/test_bpf_loader_load_source: tests/test_bpf_loader_load_source.c
 $(TEST_BIN_DIR)/test_protect_pid_validation: tests/test_protect_pid_validation.c \
 		$(AGENT_DIR)/startup_policy.c $(AGENT_DIR)/bpf_loader.c \
 		$(AGENT_DIR)/journal.c $(AGENT_DIR)/policy_sign.c \
-		$(AGENT_DIR)/sb_dev.c | $(BUILD_DIR)
+		$(AGENT_DIR)/sb_dev.c $(AGENT_DIR)/cgroup_guard.c \
+		| $(BUILD_DIR)
 	$(QUIET_CC)
 	$(Q)$(CC) $(CFLAGS) -o $@ $^ -lbpf -lsystemd -lcrypto \
 		-Wl,--wrap=bpf_loader_verify_kernel_runtime_hardening
 
-$(TEST_BIN_DIR)/test_bpf_object_preflight: tests/test_bpf_object_preflight.c $(AGENT_DIR)/bpf_loader.c $(AGENT_DIR)/journal.c $(AGENT_DIR)/policy_sign.c $(AGENT_DIR)/sb_dev.c | $(BUILD_DIR)
+$(TEST_BIN_DIR)/test_bpf_object_preflight: tests/test_bpf_object_preflight.c $(AGENT_DIR)/bpf_loader.c $(AGENT_DIR)/journal.c $(AGENT_DIR)/policy_sign.c $(AGENT_DIR)/sb_dev.c $(AGENT_DIR)/cgroup_guard.c | $(BUILD_DIR)
 	$(QUIET_CC)
 	$(Q)$(CC) $(CFLAGS) -o $@ $^ -lbpf -lsystemd -lcrypto \
 		-Wl,--wrap=policy_verify_buffer
 
-$(TEST_BIN_DIR)/test_ima_policy_scope: tests/test_ima_policy_scope.c $(AGENT_DIR)/bpf_loader.c $(AGENT_DIR)/journal.c $(AGENT_DIR)/policy_sign.c $(AGENT_DIR)/sb_dev.c | $(BUILD_DIR)
+$(TEST_BIN_DIR)/test_ima_policy_scope: tests/test_ima_policy_scope.c $(AGENT_DIR)/bpf_loader.c $(AGENT_DIR)/journal.c $(AGENT_DIR)/policy_sign.c $(AGENT_DIR)/sb_dev.c $(AGENT_DIR)/cgroup_guard.c | $(BUILD_DIR)
 	$(QUIET_CC)
 	$(Q)$(CC) $(CFLAGS) -o $@ $^ -lbpf -lsystemd -lcrypto
 
-$(TEST_BIN_DIR)/test_integrity_baseline: tests/test_integrity_baseline.c $(AGENT_DIR)/bpf_loader.c $(AGENT_DIR)/journal.c $(AGENT_DIR)/policy_sign.c $(AGENT_DIR)/sb_dev.c | $(BUILD_DIR)
+$(TEST_BIN_DIR)/test_integrity_baseline: tests/test_integrity_baseline.c $(AGENT_DIR)/bpf_loader.c $(AGENT_DIR)/journal.c $(AGENT_DIR)/policy_sign.c $(AGENT_DIR)/sb_dev.c $(AGENT_DIR)/cgroup_guard.c | $(BUILD_DIR)
 	$(QUIET_CC)
 	$(Q)$(CC) $(CFLAGS) -o $@ $^ -lbpf -lsystemd -lcrypto
 
@@ -1803,7 +1815,7 @@ $(TEST_BIN_DIR)/test_daemon_exit_status: tests/test_daemon_exit_status.c $(AGENT
 	$(QUIET_CC)
 	$(Q)$(CC) $(CFLAGS) -o $@ $^
 
-$(TEST_BIN_DIR)/test_integrity_map_layout: tests/test_integrity_map_layout.c $(AGENT_DIR)/bpf_loader.c $(AGENT_DIR)/journal.c $(AGENT_DIR)/policy_sign.c $(AGENT_DIR)/sb_dev.c $(BPF_OBJ) $(LEGACY_BPF_OBJ) | $(BUILD_DIR)
+$(TEST_BIN_DIR)/test_integrity_map_layout: tests/test_integrity_map_layout.c $(AGENT_DIR)/bpf_loader.c $(AGENT_DIR)/journal.c $(AGENT_DIR)/policy_sign.c $(AGENT_DIR)/sb_dev.c $(AGENT_DIR)/cgroup_guard.c $(BPF_OBJ) $(LEGACY_BPF_OBJ) | $(BUILD_DIR)
 	$(QUIET_CC)
 	$(Q)$(CC) $(CFLAGS) -DTREE_BPF_OBJ='"$(BPF_OBJ)"' \
 		-DLEGACY_BPF_OBJ='"$(LEGACY_BPF_OBJ)"' \
@@ -1861,9 +1873,11 @@ test-unit: all $(TEST_BINS)
 	@$(BUILD_DIR)/test_io_read_file
 	@$(BUILD_DIR)/test_devt
 	@$(BUILD_DIR)/test_sb_dev
+	@$(BUILD_DIR)/test_cgroup_guard
 	@$(BUILD_DIR)/test_kernel_measure
 	@$(BUILD_DIR)/test_kernel_image
 	@$(BUILD_DIR)/test_bpf_mount_hooks
+	@$(BUILD_DIR)/test_bpf_kill_guard
 	@$(BUILD_DIR)/test_path_sanitize
 	@$(BUILD_DIR)/test_event_budget
 	@$(BUILD_DIR)/test_tpm_nv_chunk
@@ -2032,7 +2046,7 @@ VALGRIND_UNIT_BINS := \
 	test_daemon_loop test_config test_config_alloc test_subscribe \
 	test_policy_sign \
 	test_policy_export test_aik_rotation test_initramfs_lock \
-	test_installer_probe test_devt test_sb_dev test_kernel_measure test_kernel_image test_event_budget \
+	test_installer_probe test_devt test_sb_dev test_cgroup_guard test_kernel_measure test_kernel_image test_event_budget \
 	test_ptrace_policy test_signal_policy test_module_purpose \
 	test_server_sdk test_anticheat test_loader_attach test_enroll_state \
 	test_profile_id test_attest_targets test_attest_reload test_attest_aggregate \

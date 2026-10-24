@@ -36,6 +36,7 @@ struct bpf_loader_ctx {
 	int integrity_fd; /* 'integrity_config' map fd */
 	int task_auth_fd; /* 'lota_task_auth' map fd */
 	int trusted_libs_fd; /* 'trusted_libs' map fd */
+	int guarded_files_fd; /* 'guarded_files' map fd */
 	int protected_pids_fd; /* Protected PIDs map fd */
 	int allow_verity_digest_fd; /* 'allow_verity_digest' map fd */
 	bool loaded; /* BPF object loaded into the kernel and maps resolved */
@@ -475,6 +476,7 @@ struct bpf_extended_stats {
 	uint64_t setuid_events;
 	uint64_t bpf_syscall_blocked;
 	uint64_t mounts_blocked;
+	uint64_t kill_guard_blocked;
 };
 
 /*

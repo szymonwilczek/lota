@@ -310,6 +310,14 @@ kernel; that flag is set on the agent's PID before the map is frozen, so
 nothing else on the machine holds it and root is no exception. Without the
 command a hung title costs a reboot.
 
+That hook covers signals only. A write to ``cgroup.kill`` kills a whole
+cgroup from cgroup code, past every security hook, so ``lota_file_open``
+refuses write opens of the files in ``guarded_files``. The loader arms it at
+startup with the agent's cgroup and its ancestors: an agent killed that way
+drops enforcement for the rest of the boot while PCR 14 still holds the boot
+commitment. A protected process's cgroup is not armed: killing it ends only
+its own session, and its owner can end it through the command above anyway.
+
 The handler applies ``kill(2)``'s own rule -- the owner of the target, or root
 -- and nothing wider. It deliberately does **not** call
 ``ipc_client_is_privileged()``, which ``UNPROTECT_PID`` and ``SHUTDOWN`` do:

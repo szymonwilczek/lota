@@ -31,6 +31,7 @@
 #include "../../include/lota_ima_policy_scope.h"
 #include "../../include/lota_ima_xattr.h"
 #include "bpf_loader.h"
+#include "cgroup_guard.h"
 #include "journal.h"
 #include "policy_sign.h"
 #include "sb_dev.h"
@@ -59,6 +60,7 @@
 #define STAT_SETUID_EVENTS 9
 #define STAT_BPF_SYSCALL_BLOCKED 13
 #define STAT_MOUNTS_BLOCKED 16
+#define STAT_KILL_GUARD_BLOCKED 17
 
 struct protected_pid_entry {
 	uint64_t start_time_ticks;
@@ -864,6 +866,70 @@ int bpf_loader_verify_kernel_runtime_hardening(bool allow_mutable_rootfs)
 	return 0;
 }
 
+/*
+ * Arm guarded_files with the agent's cgroup.kill and each ancestor's:
+ * a write there SIGKILLs the agent past lota_task_kill.
+ * No unified hierarchy is not a failure; any other error is.
+ */
+static int arm_kill_guard(struct bpf_loader_ctx *ctx)
+{
+	struct cgroup_guard_file files[LOTA_CGROUP_GUARD_MAX];
+	char cgroup_path[PATH_MAX];
+	uint32_t kind = LOTA_GUARD_CGROUP_KILL;
+	int count;
+	int ret;
+
+	ret = cgroup_guard_self_path("/proc/self/cgroup", cgroup_path,
+				     sizeof(cgroup_path));
+	if (ret == -ENOENT) {
+		lota_info(
+			"No unified cgroup hierarchy: no cgroup.kill road to guard");
+		return 0;
+	}
+	if (ret < 0) {
+		lota_err("Failed to read the agent's own cgroup: %s",
+			 strerror(-ret));
+		return ret;
+	}
+
+	count = cgroup_guard_collect(LOTA_CGROUP_MOUNT_ROOT, cgroup_path, files,
+				     LOTA_CGROUP_GUARD_MAX);
+	if (count < 0) {
+		lota_err("Failed to resolve the cgroup.kill files of %s: %s",
+			 cgroup_path, strerror(-count));
+		return count;
+	}
+	if (count == 0) {
+		lota_info("cgroup %s carries no cgroup.kill file", cgroup_path);
+		return 0;
+	}
+
+	for (int i = 0; i < count; i++) {
+		struct trusted_lib_key key = { .dev = files[i].dev,
+					       .ino = files[i].ino };
+
+		if (bpf_map_update_elem(ctx->guarded_files_fd, &key, &kind,
+					BPF_ANY) < 0) {
+			ret = -errno;
+			lota_err("Failed to guard a cgroup.kill file: %s",
+				 strerror(-ret));
+			return ret;
+		}
+	}
+
+	/* the set is complete; left writable, a reload could drop it */
+	if (bpf_map_freeze(ctx->guarded_files_fd) < 0) {
+		ret = -errno;
+		lota_err("Failed to freeze guarded_files map: %s",
+			 strerror(-ret));
+		return ret;
+	}
+
+	lota_info("Kill guard armed on %d cgroup.kill file(s) above %s", count,
+		  cgroup_path);
+	return 0;
+}
+
 int bpf_loader_init(struct bpf_loader_ctx *ctx)
 {
 	if (!ctx)
@@ -875,6 +941,7 @@ int bpf_loader_init(struct bpf_loader_ctx *ctx)
 	ctx->config_fd = -1;
 	ctx->task_auth_fd = -1;
 	ctx->trusted_libs_fd = -1;
+	ctx->guarded_files_fd = -1;
 	ctx->protected_pids_fd = -1;
 	ctx->allow_verity_digest_fd = -1;
 
@@ -1288,6 +1355,24 @@ int bpf_loader_load(struct bpf_loader_ctx *ctx, const char *bpf_obj_path,
 		}
 	}
 
+	/* required: without it cgroup.kill ends the agent past the signal gate */
+	ctx->guarded_files_fd =
+		bpf_object__find_map_fd_by_name(ctx->obj, "guarded_files");
+	if (ctx->guarded_files_fd < 0) {
+		err = ctx->guarded_files_fd;
+		lota_err("Failed to find guarded_files map");
+		goto err_close;
+	}
+	err = harden_fd_cloexec(ctx->guarded_files_fd, "guarded_files map");
+	if (err < 0) {
+		lota_err("Failed to harden guarded_files map fd: %s",
+			 strerror(-err));
+		goto err_close;
+	}
+	err = arm_kill_guard(ctx);
+	if (err < 0)
+		goto err_close;
+
 	/* Get fs-verity allowlist map fd */
 	ctx->allow_verity_digest_fd =
 		bpf_object__find_map_fd_by_name(ctx->obj, "allow_verity");
@@ -1528,6 +1613,7 @@ void bpf_loader_cleanup(struct bpf_loader_ctx *ctx)
 	ctx->task_auth_fd = -1;
 	ctx->integrity_fd = -1;
 	ctx->trusted_libs_fd = -1;
+	ctx->guarded_files_fd = -1;
 	ctx->protected_pids_fd = -1;
 	ctx->allow_verity_digest_fd = -1;
 }
@@ -2021,6 +2107,8 @@ int bpf_loader_get_extended_stats(struct bpf_loader_ctx *ctx,
 	read_stat(ctx->stats_fd, STAT_BPF_SYSCALL_BLOCKED,
 		  &stats->bpf_syscall_blocked);
 	read_stat(ctx->stats_fd, STAT_MOUNTS_BLOCKED, &stats->mounts_blocked);
+	read_stat(ctx->stats_fd, STAT_KILL_GUARD_BLOCKED,
+		  &stats->kill_guard_blocked);
 
 	return 0;
 }
