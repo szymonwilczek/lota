@@ -39,10 +39,10 @@ else
     RED='' GREEN='' YELLOW='' BLUE='' NC=''
 fi
 
-info()  { echo -e "${BLUE}[INFO]${NC} $*"; }
-ok()    { echo -e "${GREEN}[OK]${NC}   $*"; }
-warn()  { echo -e "${YELLOW}[WARN]${NC} $*"; }
-fail()  { echo -e "${RED}[FAIL]${NC} $*"; }
+info() { echo -e "${BLUE}[INFO]${NC} $*"; }
+ok() { echo -e "${GREEN}[OK]${NC}   $*"; }
+warn() { echo -e "${YELLOW}[WARN]${NC} $*"; }
+fail() { echo -e "${RED}[FAIL]${NC} $*"; }
 
 usage() {
     cat <<EOF
@@ -77,7 +77,10 @@ Options:
   --help                      Show this help message
 
 Environment:
-  XDG_RUNTIME_DIR   Base directory for user runtime files (required)
+  XDG_RUNTIME_DIR   Base directory for user runtime files. A login
+                    session sets it; an account without one has no
+                    container socket and no token directory, which
+                    the checks that read it report as such.
   LOTA_SETUP_DROPIN_DIR
                     Write the --install-systemd-dropin file under this
                     directory instead of /etc/systemd/system. For
@@ -142,9 +145,9 @@ check_hook_library() {
 
     for candidate in \
         /usr/lib64/${HOOK_LIB} \
-                  /usr/lib/${HOOK_LIB} \
-                  /usr/local/lib64/${HOOK_LIB} \
-                  /usr/local/lib/${HOOK_LIB}; do
+        /usr/lib/${HOOK_LIB} \
+        /usr/local/lib64/${HOOK_LIB} \
+        /usr/local/lib/${HOOK_LIB}; do
         if [[ -f "$candidate" ]]; then
             found="$candidate"
             break
@@ -159,8 +162,24 @@ check_hook_library() {
     fi
 }
 
+# no login session, no XDG_RUNTIME_DIR: report it, never expand it bare (set -u)
+no_session_runtime_dir() {
+    warn "$1: this account has no session runtime directory"
+    echo "  XDG_RUNTIME_DIR is unset, so there is no /run/user/<uid> to use."
+    echo "  Run this from the account that starts Steam, in its own login"
+    echo "  session."
+    return 1
+}
+
 setup_container_socket_dir() {
-    local dir="${XDG_RUNTIME_DIR}/lota"
+    local dir
+
+    if [[ -z "${XDG_RUNTIME_DIR:-}" ]]; then
+        no_session_runtime_dir "Cannot create the container socket directory"
+        return 1
+    fi
+
+    dir="${XDG_RUNTIME_DIR}/lota"
 
     if [[ -d "$dir" ]]; then
         ok "Container socket directory exists: $dir"
@@ -180,7 +199,14 @@ setup_container_socket_dir() {
 }
 
 check_container_socket() {
-    local container_socket="${XDG_RUNTIME_DIR}/lota/${SOCKET_NAME}"
+    local container_socket
+
+    if [[ -z "${XDG_RUNTIME_DIR:-}" ]]; then
+        no_session_runtime_dir "No container socket to check"
+        return 1
+    fi
+
+    container_socket="${XDG_RUNTIME_DIR}/lota/${SOCKET_NAME}"
 
     if [[ -S "$container_socket" ]]; then
         # a socket this user cannot open is not a working one,
@@ -216,7 +242,14 @@ check_container_socket() {
 # a leftover the player cannot use, which is the case that reads as
 # "the hook does nothing".
 check_hook_token_dir() {
-    local dir="${XDG_RUNTIME_DIR}/${HOOK_TOKEN_DIR_NAME}"
+    local dir
+
+    if [[ -z "${XDG_RUNTIME_DIR:-}" ]]; then
+        no_session_runtime_dir "No hook token directory to check"
+        return 1
+    fi
+
+    dir="${XDG_RUNTIME_DIR}/${HOOK_TOKEN_DIR_NAME}"
 
     if [[ ! -e "$dir" ]]; then
         ok "Hook token directory will be created at first launch: $dir"
@@ -250,27 +283,27 @@ register_uid=false
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
-        --verify)
-            verify_only=true
-            shift
-            ;;
-        --install-systemd-dropin)
-            install_dropin=true
-            shift
-            ;;
-        --register-uid)
-            register_uid=true
-            shift
-            ;;
-        --help|-h)
-            usage
-            exit 0
-            ;;
-        *)
-            echo "Unknown option: $1" >&2
-            usage >&2
-            exit 1
-            ;;
+    --verify)
+        verify_only=true
+        shift
+        ;;
+    --install-systemd-dropin)
+        install_dropin=true
+        shift
+        ;;
+    --register-uid)
+        register_uid=true
+        shift
+        ;;
+    --help | -h)
+        usage
+        exit 0
+        ;;
+    *)
+        echo "Unknown option: $1" >&2
+        usage >&2
+        exit 1
+        ;;
     esac
 done
 
@@ -309,10 +342,10 @@ install_systemd_dropin() {
 
     uid="$SUDO_UID"
     case "$uid" in
-        ''|*[!0-9]*)
-            fail "SUDO_UID=${SUDO_UID} is not a positive integer"
-            return 1
-            ;;
+    '' | *[!0-9]*)
+        fail "SUDO_UID=${SUDO_UID} is not a positive integer"
+        return 1
+        ;;
     esac
     if [[ "$uid" -eq 0 ]]; then
         fail "SUDO_UID=0; rerun from a non-root login shell"
@@ -384,10 +417,10 @@ register_container_listener_uid() {
 
     uid="$SUDO_UID"
     case "$uid" in
-        ''|*[!0-9]*)
-            fail "SUDO_UID=${SUDO_UID} is not a positive integer"
-            return 1
-            ;;
+    '' | *[!0-9]*)
+        fail "SUDO_UID=${SUDO_UID} is not a positive integer"
+        return 1
+        ;;
     esac
     if [[ "$uid" -eq 0 ]]; then
         fail "SUDO_UID=0; rerun from a non-root login shell"
@@ -433,7 +466,7 @@ register_container_listener_uid() {
         ' "$backup" >"$LOTA_CONF"
     else
         printf '\n# Added by lota-steam-setup --register-uid\n%s\n' \
-               "$line" >>"$LOTA_CONF"
+            "$line" >>"$LOTA_CONF"
     fi
 
     # Read back what was written.
@@ -472,8 +505,8 @@ echo ""
 errors=0
 
 check_xdg_runtime_dir || errors=$((errors + 1))
-check_agent_running   || errors=$((errors + 1))
-check_lota_group      || errors=$((errors + 1))
+check_agent_running || errors=$((errors + 1))
+check_lota_group || errors=$((errors + 1))
 check_hook_library
 
 echo ""
@@ -484,7 +517,7 @@ if ! $verify_only; then
 fi
 
 check_container_socket || errors=$((errors + 1))
-check_hook_token_dir   || errors=$((errors + 1))
+check_hook_token_dir || errors=$((errors + 1))
 
 echo ""
 echo "=== Steam Launch Options ==="
@@ -499,6 +532,13 @@ echo "  given.  Paste this string into the game's Properties ->"
 echo "  General -> Launch options:"
 echo ""
 runtime_dir="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
+# no session: the path below is a guess for this account, not Steam's
+if [[ -z "${XDG_RUNTIME_DIR:-}" ]]; then
+    warn "No session here, so the paths below are this account's own."
+    echo "  Run this from the account that starts Steam for the string"
+    echo "  to paste."
+    echo ""
+fi
 echo "    PRESSURE_VESSEL_FILESYSTEMS_RW=${runtime_dir}/lota:${runtime_dir}/${HOOK_TOKEN_DIR_NAME} \\"
 echo "    LOTA_HOOK_SOCKET=${runtime_dir}/lota/lota.sock \\"
 echo "    LOTA_HOOK_LOG_LEVEL=info \\"
