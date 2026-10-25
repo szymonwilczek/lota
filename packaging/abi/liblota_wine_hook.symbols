@@ -1,3 +1,4 @@
-lota_hook_active@@LOTA_WINE_HOOK_1.0
-lota_hook_status_path@@LOTA_WINE_HOOK_1.0
-lota_hook_token_path@@LOTA_WINE_HOOK_1.0
+dlopen
+lota_hook_active
+lota_hook_status_path
+lota_hook_token_path

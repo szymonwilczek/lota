@@ -289,7 +289,11 @@ Verify after launching CS2 (run from the operator account, not root, so
    cat     "$XDG_RUNTIME_DIR/lota-hook/lota-status"
 
 A healthy run prints ``LOTA_ATTESTED=1``, ``LOTA_OFFLINE=0``, a non-zero
-``LOTA_VALID_UNTIL`` timestamp, and ``LOTA_PID`` matching the game process. The
+``LOTA_VALID_UNTIL`` timestamp, and ``LOTA_PID`` matching the game process.
+``LOTA_PROTECTED=1`` appears once the title registers,
+``LOTA_HOOK_PROTECT_DELAY`` seconds into the launch. An object the gates
+refuse is named in ``LOTA_REFUSED_OBJECT`` (with ``LOTA_REFUSED_AT``) and on
+the game's stderr. The
 ``lota-token.bin`` file size matches the ``LOTA_GAMING_MAX_TOKEN`` budget
 exposed by the gaming SDK; the first four bytes are the ``LOTK`` magic followed
 by the wire header, the TPM Quote bytes, and the AIK signature.
@@ -322,6 +326,21 @@ out to do not. The filter is overridable through
 ``LOTA_HOOK_SKIP_PATH=<prefix-list>`` (extend the skip set for distros that
 keep utilities outside FHS, e.g. ``/nix/store/``).
 
+What registration costs the title
+---------------------------------
+
+The hook puts the title's PID in the protected set, which scopes
+``strict_mmap``, ``block_anon_exec``, the ptrace gate and the kill guard to it.
+From then on the title may map an executable file only if its fs-verity digest
+is allowed or its inode is in ``trusted_libs``. A Proton tree's libraries are
+ordinary files, so a title registered mid-load is refused ``ntdll.so``.
+
+The hook therefore registers ``LOTA_HOOK_PROTECT_DELAY`` seconds (default 20)
+after it loads, logging ``registered pid=<pid> for runtime enforcement`` at
+``info``. With verity-covered objects, ``LOTA_HOOK_PROTECT_DELAY=0`` registers
+on the first connect. A library first loaded after the wait is refused unless
+covered; a late loader needs a longer wait or a ``trusted_libs`` entry.
+
 Hook environment overrides
 --------------------------
 
@@ -346,6 +365,10 @@ The hook honours a small set of environment variables, all documented in
 | ``LOTA_HOOK_ACTIVATE_PATH`` | positive ``/proc/self/exe`` prefix pin        |
 +-----------------------------+-----------------------------------------------+
 | ``LOTA_HOOK_SKIP_PATH``     | extend the FHS system-path skip list          |
++-----------------------------+-----------------------------------------------+
+| ``LOTA_HOOK_PROTECT_DELAY`` | seconds to wait before the title joins the    |
+|                             | protected set (default 20; ``0`` registers on |
+|                             | the first connect)                            |
 +-----------------------------+-----------------------------------------------+
 
 Set them on Steam's launch line, e.g.:

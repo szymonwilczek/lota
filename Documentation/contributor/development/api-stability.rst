@@ -97,7 +97,7 @@ sources it filters:
      - ``src/sdk/liblota_anticheat.map``
    * - ``liblota_wine_hook.so``
      - ``include/lota_wine_hook.h``
-     - ``src/sdk/liblota_wine_hook.map``
+     - hidden visibility (``LOTA_HOOK_EXPORT``)
 
 Without a version script every non-static symbol is exported, which makes the
 public surface an accident of which helpers happened to need external linkage.
@@ -109,6 +109,15 @@ that also loads ``liblotagaming.so`` would hold two definitions of
 The Wine hook is worse, because it is ``LD_PRELOAD``\ ed and therefore resolves
 before the game's own libraries. An integrator that wants the gaming or the
 token-verification API links that library directly and gets it from there.
+
+``liblota_wine_hook.so`` interposes ``dlopen``, which callers reference through
+glibc's version node (``dlopen@GLIBC_2.34``); a definition under a version
+node of its own would never be reached. It is therefore built with
+``-fvisibility=hidden``, keeping the bundled SDK objects local, and marks each
+export ``LOTA_HOOK_EXPORT``.
+
+The exported ``dlopen`` is not part of the SDK contract: it reports an object
+a runtime gate refused and returns what the real ``dlopen`` returned.
 
 The filter applies to the shared libraries only, and ``liblotagaming.a`` and
 ``liblotaserver.a`` need none of it: every function in those sources that no
