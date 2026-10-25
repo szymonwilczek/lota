@@ -35,7 +35,7 @@ static int g_failures;
 /* Every code the verifier can send, by the number it sends it as.
  * Written as literals rather than through the macros so a code the agent
  * has not learned yet is a failing test rather than a build error. */
-#define FIRST_UNKNOWN_CODE 13
+#define FIRST_UNKNOWN_CODE 21
 
 static const char *g_default;
 
@@ -95,6 +95,25 @@ int main(void)
 	      "verdict 7 names the revocation");
 	CHECK(strstr(net_result_str(8), "banned") != NULL,
 	      "verdict 8 names the ban");
+
+	/* each requirement has its own remedy, so its verdict names it */
+	CHECK(strstr(net_result_str(13), "certificate") != NULL,
+	      "verdict 13 names the missing certificate");
+	CHECK(strstr(net_result_str(14), "Secure Boot") != NULL &&
+		      strstr(net_result_str(14), "firmware") != NULL,
+	      "verdict 14 names Secure Boot and where it is turned on");
+	CHECK(strstr(net_result_str(15), "lockdown") != NULL,
+	      "verdict 15 names kernel lockdown");
+	CHECK(strstr(net_result_str(16), "module") != NULL,
+	      "verdict 16 names module signature enforcement");
+	CHECK(strstr(net_result_str(17), "enforc") != NULL,
+	      "verdict 17 names the LSM enforce mode");
+	CHECK(strstr(net_result_str(18), "IMA") != NULL,
+	      "verdict 18 names IMA appraisal");
+	CHECK(strstr(net_result_str(19), "kernel") != NULL,
+	      "verdict 19 names the kernel image");
+	CHECK(strstr(net_result_str(20), "command line") != NULL,
+	      "verdict 20 names the kernel command line");
 
 	/* the default still exists for a code from a newer verifier */
 	CHECK(!is_named(FIRST_UNKNOWN_CODE),

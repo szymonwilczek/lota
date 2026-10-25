@@ -13,9 +13,9 @@ import (
 
 // The verdict is all the host learns of a refusal; the verifier's log is out
 // of its reach. A refusal unrelated to a register (an unlisted agent build,
-// a kernel image outside the allow-list, no IOMMU) must carry its own class,
-// not "PCR values don't match policy", which points at the boot chain.
-// Asserted on the verdict mapping alone, not through a full attestation.
+// no IOMMU) must carry its own class, not "PCR values don't match policy",
+// which points at the boot chain.
+// Single requirements are in requirement_verdict_test.go.
 func TestPolicyRefusalCarriesItsOwnVerdict(t *testing.T) {
 	unlisted := [types.HashSize]byte{0xAB}
 	listed := [types.HashSize]byte{0xCD}
@@ -42,32 +42,6 @@ func TestPolicyRefusalCarriesItsOwnVerdict(t *testing.T) {
 			names:   "agent hash not in allowed list",
 		},
 		{
-			name: "a kernel image outside the allow-list",
-			policy: &PCRPolicy{Name: "p", KernelHashes: []string{
-				hex.EncodeToString(listed[:]),
-			}},
-			report: func() *types.AttestationReport {
-				return &types.AttestationReport{}
-			},
-			facts: &BootFacts{
-				KernelImage:        KernelImage{Found: true, Digest: unlisted[:]},
-				KernelImageTrusted: true,
-			},
-			verdict: types.VerifyPolicyRequirement,
-			names:   "kernel hash not in allowed list",
-		},
-		{
-			name: "a kernel pin this host cannot be judged against",
-			policy: &PCRPolicy{Name: "p", KernelHashes: []string{
-				hex.EncodeToString(listed[:]),
-			}},
-			report: func() *types.AttestationReport {
-				return &types.AttestationReport{}
-			},
-			verdict: types.VerifyPolicyRequirement,
-			names:   "records no kernel image",
-		},
-		{
 			name:   "a host with DMA remapping off",
 			policy: &PCRPolicy{Name: "p", RequireIOMMU: true},
 			report: func() *types.AttestationReport {
@@ -75,51 +49,6 @@ func TestPolicyRefusalCarriesItsOwnVerdict(t *testing.T) {
 			},
 			verdict: types.VerifyIOMMUFail,
 			names:   "IOMMU DMA remapping not enabled",
-		},
-		{
-			name:   "an LSM that is not enforcing",
-			policy: &PCRPolicy{Name: "p", RequireEnforce: true},
-			report: func() *types.AttestationReport {
-				return &types.AttestationReport{}
-			},
-			verdict: types.VerifyPolicyRequirement,
-			names:   "LSM enforce mode not active",
-		},
-		{
-			name:   "a kernel that loads unsigned modules",
-			policy: &PCRPolicy{Name: "p", RequireModuleSig: true},
-			report: func() *types.AttestationReport {
-				return &types.AttestationReport{}
-			},
-			verdict: types.VerifyPolicyRequirement,
-			names:   "module signature enforcement not enabled",
-		},
-		{
-			name:   "a boot the event log does not authenticate",
-			policy: &PCRPolicy{Name: "p", RequireSecureBoot: true},
-			report: func() *types.AttestationReport {
-				return &types.AttestationReport{}
-			},
-			verdict: types.VerifyPolicyRequirement,
-			names:   "Secure Boot state not authenticated",
-		},
-		{
-			name:   "a kernel with lockdown off",
-			policy: &PCRPolicy{Name: "p", RequireLockdown: true},
-			report: func() *types.AttestationReport {
-				return &types.AttestationReport{}
-			},
-			verdict: types.VerifyPolicyRequirement,
-			names:   "kernel lockdown not active",
-		},
-		{
-			name:   "a kernel that appraises nothing",
-			policy: &PCRPolicy{Name: "p", RequireIMAAppraisal: true},
-			report: func() *types.AttestationReport {
-				return &types.AttestationReport{}
-			},
-			verdict: types.VerifyPolicyRequirement,
-			names:   "appraises no executable",
 		},
 		{
 			name: "a register that moved, which is what the PCR verdict is for",

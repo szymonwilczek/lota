@@ -112,15 +112,25 @@ const (
 	// because only this one is fixed by re-enrolling.
 	VerifyIdentityFail uint32 = 10
 
-	// VerifyPolicyRequirement: the host misses a policy requirement other
-	// than IOMMU (kernel allow-list, Secure Boot, lockdown, module signing,
-	// appraisal scope). Kept apart from VerifyPCRFail because the fix is
-	// host configuration, not the boot chain.
+	// policy requirement with no code below; not VerifyPCRFail,
+	// the fix is not in the boot chain
 	VerifyPolicyRequirement uint32 = 11
 
 	// the AIK certificate has expired or is not yet valid (host clock behind).
 	// Kept apart from VerifySigFail: the fix is re-enrolment, not distrust.
 	VerifyCertificateValidity uint32 = 12
+
+	// no AIK certificate in the report: unfinished enrolment
+	VerifyCertificateMissing uint32 = 13
+
+	// one per policy requirement, each with its own remedy
+	VerifySecureBootRequired   uint32 = 14
+	VerifyLockdownRequired     uint32 = 15
+	VerifyModuleSigRequired    uint32 = 16
+	VerifyEnforceRequired      uint32 = 17
+	VerifyIMAAppraisalRequired uint32 = 18
+	VerifyKernelImageRequired  uint32 = 19
+	VerifyCmdlineRequired      uint32 = 20
 )
 
 // returns a deterministic string for a result code
@@ -152,6 +162,22 @@ func VerifyResultString(code uint32) string {
 		return "policy_requirement"
 	case VerifyCertificateValidity:
 		return "certificate_validity"
+	case VerifyCertificateMissing:
+		return "certificate_missing"
+	case VerifySecureBootRequired:
+		return "secureboot_required"
+	case VerifyLockdownRequired:
+		return "lockdown_required"
+	case VerifyModuleSigRequired:
+		return "module_sig_required"
+	case VerifyEnforceRequired:
+		return "enforce_required"
+	case VerifyIMAAppraisalRequired:
+		return "ima_appraisal_required"
+	case VerifyKernelImageRequired:
+		return "kernel_image_required"
+	case VerifyCmdlineRequired:
+		return "cmdline_required"
 	default:
 		return fmt.Sprintf("unknown_%d", code)
 	}
@@ -173,6 +199,14 @@ func RejectionReasons() []string {
 		VerifyResultString(VerifyIdentityFail),
 		VerifyResultString(VerifyPolicyRequirement),
 		VerifyResultString(VerifyCertificateValidity),
+		VerifyResultString(VerifyCertificateMissing),
+		VerifyResultString(VerifySecureBootRequired),
+		VerifyResultString(VerifyLockdownRequired),
+		VerifyResultString(VerifyModuleSigRequired),
+		VerifyResultString(VerifyEnforceRequired),
+		VerifyResultString(VerifyIMAAppraisalRequired),
+		VerifyResultString(VerifyKernelImageRequired),
+		VerifyResultString(VerifyCmdlineRequired),
 	}
 }
 

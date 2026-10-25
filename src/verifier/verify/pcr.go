@@ -542,10 +542,7 @@ func kernelPinValue(facts *BootFacts) ([types.HashSize]byte, error) {
 	return out, nil
 }
 
-// policyError is a refusal out of verifyAgainstPolicy together with the
-// verdict class it belongs to.
-// Register values, the agent measurement and host requirements each have
-// their own verdict; only the first is fixed in the boot chain.
+// policyError pairs a verifyAgainstPolicy refusal with its verdict.
 type policyError struct {
 	verdict uint32
 	err     error
@@ -611,7 +608,7 @@ func (v *PCRVerifier) verifyAgainstPolicy(report *types.AttestationReport, polic
 	if len(policy.KernelHashes) > 0 {
 		pinned, err := kernelPinValue(facts)
 		if err != nil {
-			return refuse(types.VerifyPolicyRequirement, err)
+			return refuse(types.VerifyKernelImageRequired, err)
 		}
 		kernelHashHex := hex.EncodeToString(pinned[:])
 		found := false
@@ -622,7 +619,7 @@ func (v *PCRVerifier) verifyAgainstPolicy(report *types.AttestationReport, polic
 			}
 		}
 		if !found {
-			return refuse(types.VerifyPolicyRequirement,
+			return refuse(types.VerifyKernelImageRequired,
 				fmt.Errorf("kernel hash not in allowed list: %s", kernelHashHex))
 		}
 	}
@@ -647,7 +644,7 @@ func (v *PCRVerifier) verifyAgainstPolicy(report *types.AttestationReport, polic
 	// check LSM enforce mode
 	if policy.RequireEnforce {
 		if report.Header.Flags&types.FlagEnforce == 0 {
-			return refuse(types.VerifyPolicyRequirement,
+			return refuse(types.VerifyEnforceRequired,
 				errors.New("LSM enforce mode not active"))
 		}
 	}
@@ -655,7 +652,7 @@ func (v *PCRVerifier) verifyAgainstPolicy(report *types.AttestationReport, polic
 	// check module signing enforcement
 	if policy.RequireModuleSig {
 		if report.Header.Flags&types.FlagModuleSig == 0 {
-			return refuse(types.VerifyPolicyRequirement,
+			return refuse(types.VerifyModuleSigRequired,
 				errors.New("kernel module signature enforcement not enabled"))
 		}
 	}
@@ -665,15 +662,15 @@ func (v *PCRVerifier) verifyAgainstPolicy(report *types.AttestationReport, polic
 	// compromised kernel sets it freely)
 	if policy.RequireSecureBoot {
 		if facts == nil || !facts.SecureBootTrusted {
-			return refuse(types.VerifyPolicyRequirement,
+			return refuse(types.VerifySecureBootRequired,
 				errors.New("Secure Boot state not authenticated by event log"))
 		}
 		if !facts.SecureBoot.Found {
-			return refuse(types.VerifyPolicyRequirement,
+			return refuse(types.VerifySecureBootRequired,
 				errors.New("event log carries no SecureBoot measurement"))
 		}
 		if !facts.SecureBoot.Enabled {
-			return refuse(types.VerifyPolicyRequirement,
+			return refuse(types.VerifySecureBootRequired,
 				errors.New("Secure Boot disabled per firmware measurement"))
 		}
 	}
@@ -681,14 +678,14 @@ func (v *PCRVerifier) verifyAgainstPolicy(report *types.AttestationReport, polic
 	// check the measured kernel cmdline against the parameter denylist
 	if policy.RequireCmdlinePolicy {
 		if err := verifyCmdlinePolicy(policy, facts); err != nil {
-			return refuse(types.VerifyPolicyRequirement, err)
+			return refuse(types.VerifyCmdlineRequired, err)
 		}
 	}
 
 	// check kernel lockdown
 	if policy.RequireLockdown {
 		if report.Header.Flags&types.FlagLockdown == 0 {
-			return refuse(types.VerifyPolicyRequirement,
+			return refuse(types.VerifyLockdownRequired,
 				errors.New("kernel lockdown not active"))
 		}
 	}
@@ -696,7 +693,7 @@ func (v *PCRVerifier) verifyAgainstPolicy(report *types.AttestationReport, polic
 	// check that the kernel appraises the host's executables
 	if policy.RequireIMAAppraisal {
 		if report.Header.Flags&types.FlagIMAAppraisal == 0 {
-			return refuse(types.VerifyPolicyRequirement,
+			return refuse(types.VerifyIMAAppraisalRequired,
 				errors.New("kernel appraises no executable on this host (IMA appraisal scope absent)"))
 		}
 	}
