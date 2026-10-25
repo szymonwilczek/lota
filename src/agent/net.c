@@ -880,7 +880,18 @@ const char *net_result_str(uint32_t result)
 	case VERIFY_IOMMU_FAIL:
 		return "FAIL - IOMMU requirement not met";
 	case VERIFY_OLD_VERSION:
-		return "FAIL - Protocol version mismatch";
+		return "FAIL - Protocol version mismatch: this agent speaks a "
+		       "report wire the publisher's verifier does not "
+		       "implement. Update the agent to the build the "
+		       "publisher runs its fleet on";
+	case VERIFY_REPORT_MALFORMED:
+		/* a damaged frame, not an old build: no upgrade advice */
+		return "FAIL - The publisher's verifier could not read the "
+		       "report this host sent: it arrived incomplete or "
+		       "altered on the way. Nothing on this machine is in "
+		       "question yet. Attest again, and if it keeps "
+		       "happening, the network path between this host and "
+		       "the verifier is what to look at";
 	case VERIFY_INTEGRITY_MISMATCH:
 		return "FAIL - Integrity mismatch: a measurement this host is "
 		       "pinned to no longer matches. It is the agent binary, "

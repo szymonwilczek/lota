@@ -80,6 +80,7 @@ struct verifier_result {
 #define VERIFY_IMA_APPRAISAL_REQUIRED 18
 #define VERIFY_KERNEL_IMAGE_REQUIRED 19
 #define VERIFY_CMDLINE_REQUIRED 20
+#define VERIFY_REPORT_MALFORMED 21
 
 /*
  * LOTA-private transport error codes: POSIX has none for a peer going away.

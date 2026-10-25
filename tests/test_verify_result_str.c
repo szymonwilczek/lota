@@ -35,7 +35,7 @@ static int g_failures;
 /* Every code the verifier can send, by the number it sends it as.
  * Written as literals rather than through the macros so a code the agent
  * has not learned yet is a failing test rather than a build error. */
-#define FIRST_UNKNOWN_CODE 21
+#define FIRST_UNKNOWN_CODE 22
 
 static const char *g_default;
 
@@ -114,6 +114,13 @@ int main(void)
 	      "verdict 19 names the kernel image");
 	CHECK(strstr(net_result_str(20), "command line") != NULL,
 	      "verdict 20 names the kernel command line");
+
+	/* an unreadable report is not an old wire: no upgrade advice */
+	CHECK(strstr(net_result_str(5), "version") != NULL,
+	      "verdict 5 names the protocol version");
+	CHECK(strstr(net_result_str(21), "read") != NULL &&
+		      strstr(net_result_str(21), "version") == NULL,
+	      "verdict 21 says the report could not be read and does not advise an upgrade");
 
 	/* the default still exists for a code from a newer verifier */
 	CHECK(!is_named(FIRST_UNKNOWN_CODE),
