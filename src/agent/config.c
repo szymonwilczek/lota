@@ -1256,8 +1256,53 @@ int config_load(struct lota_config *cfg, const char *path)
 	return ret;
 }
 
+int config_inert_strict_flags_of(bool mode_is_enforce,
+				 const bool flags[LOTA_STRICT_FLAG_COUNT],
+				 const char *names[], int max)
+{
+	static const char *const keys[LOTA_STRICT_FLAG_COUNT] = {
+		"strict_mmap", "strict_exec", "block_ptrace", "strict_modules",
+		"block_anon_exec"
+	};
+	int n = 0;
+
+	if (!flags || !names || max < 0)
+		return -EINVAL;
+
+	if (mode_is_enforce)
+		return 0;
+
+	for (int i = 0; i < LOTA_STRICT_FLAG_COUNT; i++) {
+		if (!flags[i])
+			continue;
+		if (n >= max)
+			return -ENOSPC;
+		names[n++] = keys[i];
+	}
+
+	return n;
+}
+
+int config_inert_strict_flags(const struct lota_config *cfg,
+			      const char *names[], int max)
+{
+	if (!cfg)
+		return -EINVAL;
+
+	const bool flags[LOTA_STRICT_FLAG_COUNT] = {
+		cfg->strict_mmap, cfg->strict_exec, cfg->block_ptrace,
+		cfg->strict_modules, cfg->block_anon_exec
+	};
+
+	return config_inert_strict_flags_of(strcmp(cfg->mode, "enforce") == 0,
+					    flags, names, max);
+}
+
 void config_dump(const struct lota_config *cfg, FILE *fp)
 {
+	const char *inert[LOTA_STRICT_FLAG_COUNT];
+	int inert_count;
+
 	if (!cfg || !fp)
 		return;
 
@@ -1274,6 +1319,20 @@ void config_dump(const struct lota_config *cfg, FILE *fp)
 	fprintf(fp, "\n# BPF / enforcement\n");
 	fprintf(fp, "bpf_path = %s\n", cfg->bpf_path);
 	fprintf(fp, "mode = %s\n", cfg->mode);
+
+	/* name the strict keys this mode ignores */
+	inert_count =
+		config_inert_strict_flags(cfg, inert, LOTA_STRICT_FLAG_COUNT);
+	if (inert_count > 0) {
+		fprintf(fp, "# mode = %s leaves inert:", cfg->mode);
+		for (int i = 0; i < inert_count; i++)
+			fprintf(fp, "%s %s", i ? "," : "", inert[i]);
+		fprintf(fp, "\n# each of those gates returns early outside "
+			    "enforce mode, so the\n");
+		fprintf(fp, "# key records a protection this host is not "
+			    "applying\n");
+	}
+
 	fprintf(fp, "strict_mmap = %s\n", cfg->strict_mmap ? "true" : "false");
 	fprintf(fp, "strict_exec = %s\n", cfg->strict_exec ? "true" : "false");
 	fprintf(fp, "block_ptrace = %s\n",

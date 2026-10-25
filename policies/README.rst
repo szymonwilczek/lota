@@ -211,6 +211,20 @@ attestation report -- which is what this knob turns into a refusal. Turn it on
 for a fleet whose images are signed; leave it off for one that runs stock
 distribution hosts, where it would refuse every client.
 
+Before a strict deployment
+--------------------------
+
+``strict.yaml`` demands IOMMU, a MAC in enforcing mode, module signatures,
+Secure Boot and kernel lockdown of every client. Check a host before enrolling
+it::
+
+   sudo lota-agent --export-policy | grep '^require_'
+
+``require_iommu``, ``require_module_sig``, ``require_secureboot`` and
+``require_lockdown`` must read ``true``. ``require_enforce`` is the agent's
+mode, not the MAC's; check the MAC with ``getenforce`` (SELinux) or
+``aa-status`` (AppArmor).
+
 .. _kernel-trust-event-log-secure-boot--cmdline-policy:
 
 Kernel trust: event-log Secure Boot + cmdline policy

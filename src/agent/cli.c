@@ -755,6 +755,7 @@ int cli_dump_config(struct cli_options *opts, struct lota_config *cfg)
 		snprintf(cfg->mode, sizeof(cfg->mode), "monitor");
 
 	cfg->strict_mmap = opts->strict_mmap;
+	cfg->strict_exec = opts->strict_exec;
 	cfg->block_ptrace = opts->block_ptrace;
 	cfg->strict_modules = opts->strict_modules;
 	cfg->block_anon_exec = opts->block_anon_exec;

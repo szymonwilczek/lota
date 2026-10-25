@@ -751,6 +751,17 @@ check_doc_diagnostics() {
     fi
 }
 
+check_config_commands() {
+    local output
+    if output="$(scripts/check-config-commands.sh 2>&1)"; then
+        pass "config-commands"
+    else
+        printf '%s\n' "$output" | sed 's/^/  /' >&2
+        fail "config-commands" \
+            "a shipped policy or configuration file names a command the program cannot run; name the verb it has."
+    fi
+}
+
 # Strict docs build:
 # docs.yml only fires on Documentation/ changes, so a markup defect landing
 # from elsewhere goes unseen; run on every patch, only when sphinx-build
@@ -1021,6 +1032,7 @@ main() {
     check_el9_decls "${changed_files[@]}"
     check_license_boundary
     check_doc_diagnostics
+    check_config_commands
     check_docs_strict
     check_stack_frames "${changed_files[@]}"
     check_private_errno "${changed_files[@]}"

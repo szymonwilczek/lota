@@ -81,6 +81,24 @@ of the host, so the agent exits with a status listed in
 the line naming the missing gate last in the journal. Fix the host (often a
 firmware setting) before restarting the unit.
 
+What the mode decides
+=====================
+
+The strict flags (``strict_mmap``, ``strict_exec``, ``block_ptrace``,
+``strict_modules``, ``block_anon_exec`` and their command-line forms) apply in
+``mode = enforce`` only. In ``monitor`` and ``maintenance`` each gate returns
+early: the agent starts, reports the flag as on and blocks nothing.
+
+``lota-agent --dump-config`` lists the keys the mode leaves inert::
+
+   mode = monitor
+   # mode = monitor leaves inert: strict_mmap, block_ptrace, block_anon_exec
+   # each of those gates returns early outside enforce mode, so the
+   # key records a protection this host is not applying
+
+and the agent logs the same list at startup, beside its ``Mode:`` line. A host
+meant to enforce that shows either is in the wrong mode.
+
 Automated developer bring-up
 ============================
 

@@ -1945,6 +1945,190 @@ static void test_dump_prints_every_key_the_parser_takes(void)
 	PASS();
 }
 
+/* join a dump's comment lines so checks ignore where they wrapped */
+static int collect_dump_comments(const char *path, char *out, size_t outsz)
+{
+	char line[512];
+	size_t used = 0;
+	FILE *fp;
+
+	out[0] = '\0';
+	fp = fopen(path, "re");
+	if (!fp)
+		return -1;
+
+	while (fgets(line, sizeof(line), fp)) {
+		size_t len;
+
+		if (line[0] != '#')
+			continue;
+		len = strlen(line);
+		if (used + len + 1 >= outsz)
+			break;
+		memcpy(out + used, line, len);
+		used += len;
+		out[used] = '\0';
+	}
+	fclose(fp);
+	return 0;
+}
+
+/*
+ * The strict flags apply only in enforce mode; outside it the dump must say
+ * which ones set are inert, or it reads as protection in force.
+ */
+static void test_a_weaker_mode_names_the_flags_it_ignores(void)
+{
+	struct lota_config cfg;
+	const char *inert[LOTA_STRICT_FLAG_COUNT];
+	int n;
+
+	TEST("a mode below enforce names every strict flag it ignores");
+	config_init(&cfg);
+	snprintf(cfg.mode, sizeof(cfg.mode), "monitor");
+	cfg.strict_mmap = true;
+	cfg.strict_exec = true;
+	cfg.block_ptrace = true;
+	cfg.strict_modules = true;
+	cfg.block_anon_exec = true;
+
+	n = config_inert_strict_flags(&cfg, inert, LOTA_STRICT_FLAG_COUNT);
+	if (n != LOTA_STRICT_FLAG_COUNT) {
+		FAIL("monitor mode reported a gate it does not run as live");
+		return;
+	}
+	if (strcmp(inert[0], "strict_mmap") != 0 ||
+	    strcmp(inert[1], "strict_exec") != 0 ||
+	    strcmp(inert[2], "block_ptrace") != 0 ||
+	    strcmp(inert[3], "strict_modules") != 0 ||
+	    strcmp(inert[4], "block_anon_exec") != 0) {
+		FAIL("the inert keys are not named in the order they print");
+		return;
+	}
+
+	snprintf(cfg.mode, sizeof(cfg.mode), "maintenance");
+	if (config_inert_strict_flags(&cfg, inert, LOTA_STRICT_FLAG_COUNT) !=
+	    LOTA_STRICT_FLAG_COUNT) {
+		FAIL("maintenance mode runs no gate either");
+		return;
+	}
+
+	snprintf(cfg.mode, sizeof(cfg.mode), "enforce");
+	if (config_inert_strict_flags(&cfg, inert, LOTA_STRICT_FLAG_COUNT) !=
+	    0) {
+		FAIL("enforce mode runs every gate, so nothing is inert");
+		return;
+	}
+	PASS();
+}
+
+/* a flag that is off is not named */
+static void test_only_the_flags_that_are_on_are_named(void)
+{
+	struct lota_config cfg;
+	const char *inert[LOTA_STRICT_FLAG_COUNT];
+	int n;
+
+	TEST("only a strict flag that is on is reported as inert");
+	config_init(&cfg);
+	snprintf(cfg.mode, sizeof(cfg.mode), "monitor");
+	cfg.strict_mmap = false;
+	cfg.strict_exec = false;
+	cfg.block_ptrace = false;
+	cfg.strict_modules = true;
+	cfg.block_anon_exec = false;
+
+	n = config_inert_strict_flags(&cfg, inert, LOTA_STRICT_FLAG_COUNT);
+	if (n != 1 || strcmp(inert[0], "strict_modules") != 0) {
+		FAIL("the one flag that is on was not the one reported");
+		return;
+	}
+	PASS();
+}
+
+/* the note must appear in --dump-config and the dump must still parse */
+static void test_the_dump_marks_the_keys_the_mode_ignores(void)
+{
+	struct lota_config cfg1, cfg2;
+	char dump_path[PATH_MAX];
+	char comments[4096];
+	FILE *f;
+	int fd;
+
+	TEST("config_dump marks the keys the mode leaves inert");
+	config_init(&cfg1);
+	snprintf(cfg1.mode, sizeof(cfg1.mode), "monitor");
+	cfg1.strict_mmap = true;
+	cfg1.strict_exec = true;
+	cfg1.block_ptrace = true;
+	cfg1.strict_modules = true;
+	cfg1.block_anon_exec = true;
+
+	snprintf(dump_path, sizeof(dump_path), "%s/inert.conf", tmpdir);
+	fd = open(dump_path, O_WRONLY | O_CREAT | O_TRUNC, 0600);
+	f = fd >= 0 ? fdopen(fd, "w") : NULL;
+	if (fd >= 0 && !f)
+		close(fd);
+	if (!f) {
+		FAIL("fopen dump");
+		return;
+	}
+	config_dump(&cfg1, f);
+	fclose(f);
+
+	if (collect_dump_comments(dump_path, comments, sizeof(comments)) != 0) {
+		FAIL("could not read the dump back");
+		return;
+	}
+	for (int i = 0; i < LOTA_STRICT_FLAG_COUNT; i++) {
+		static const char *const keys[LOTA_STRICT_FLAG_COUNT] = {
+			"strict_mmap", "strict_exec", "block_ptrace",
+			"strict_modules", "block_anon_exec"
+		};
+
+		if (!strstr(comments, keys[i])) {
+			printf("\n    the dump never says %s is inert ",
+			       keys[i]);
+			FAIL("an inert key is printed as if it were applied");
+			return;
+		}
+	}
+
+	config_init(&cfg2);
+	if (config_load(&cfg2, dump_path) != 0) {
+		FAIL("the marked dump no longer parses");
+		return;
+	}
+	if (strcmp(cfg2.mode, "monitor") != 0 || !cfg2.strict_mmap ||
+	    !cfg2.strict_exec || !cfg2.block_ptrace || !cfg2.strict_modules ||
+	    !cfg2.block_anon_exec) {
+		FAIL("the marking cost the dump its values");
+		return;
+	}
+
+	/* enforce runs every gate, so nothing is marked */
+	snprintf(cfg1.mode, sizeof(cfg1.mode), "enforce");
+	fd = open(dump_path, O_WRONLY | O_CREAT | O_TRUNC, 0600);
+	f = fd >= 0 ? fdopen(fd, "w") : NULL;
+	if (fd >= 0 && !f)
+		close(fd);
+	if (!f) {
+		FAIL("fopen dump");
+		return;
+	}
+	config_dump(&cfg1, f);
+	fclose(f);
+	if (collect_dump_comments(dump_path, comments, sizeof(comments)) != 0) {
+		FAIL("could not read the dump back");
+		return;
+	}
+	if (strstr(comments, "inert")) {
+		FAIL("enforce mode marked a gate it does run");
+		return;
+	}
+	PASS();
+}
+
 static void test_config_dump_null(void)
 {
 	struct lota_config cfg;
@@ -2293,6 +2477,9 @@ int main(void)
 		test_config_dump_roundtrip,
 		test_config_dump_keeps_the_sealing_keys,
 		test_dump_prints_every_key_the_parser_takes,
+		test_a_weaker_mode_names_the_flags_it_ignores,
+		test_only_the_flags_that_are_on_are_named,
+		test_the_dump_marks_the_keys_the_mode_ignores,
 		test_config_dump_null,
 		test_config_load_all_known_keys,
 		test_config_load_override_order,
