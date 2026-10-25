@@ -834,6 +834,19 @@ func (v *Verifier) VerifyReportFrom(challengeID, remoteAddr string, reportData [
 		if outcome.AgentHashBaseline != nil {
 			stored = outcome.AgentHashBaseline.AgentHash
 		}
+		if stored == ([types.HashSize]byte{}) {
+			// Not drift: no hash was ever pinned,
+			// so do not report a change from baseline.
+			logging.Security(clog,
+				"baseline carries no pinned agent_hash; refusing to adopt the reported one",
+				"reported_agent_hash",
+				hex.EncodeToString(report.System.AgentHash[:]),
+				"note",
+				"out-of-band PCR 14 pin; pin this client's agent hash or clear the baseline to re-enroll it")
+			v.metrics.Rejections.Inc("integrity_mismatch")
+			result.Result = types.VerifyIntegrityMismatch
+			return result, errors.New("FAIL_INTEGRITY_MISMATCH: baseline has no pinned agent_hash to compare against")
+		}
 		logging.Security(clog, "agent_hash drift detected",
 			"expected_agent_hash", hex.EncodeToString(stored[:]),
 			"actual_agent_hash", hex.EncodeToString(report.System.AgentHash[:]))
@@ -1389,6 +1402,21 @@ func (v *Verifier) tryAgentHashRepin(clog *slog.Logger, clientID, tenant string,
 		// No row to move.
 		// TOFU establishes a pin;
 		// this path only replaces one
+		return false
+	}
+	if !st.Pinned {
+		/*
+		 * Out-of-band PCR 14 pin, no agent hash.
+		 * Allow-list and interval both pass here, so refuse explicitly:
+		 * re-pinning would adopt the reported hash and replace the pinned PCR 14.
+		 */
+		logging.Security(clog,
+			"agent_hash re-pin refused: the baseline carries no pinned hash to move",
+			"reported_agent_hash",
+			hex.EncodeToString(report.System.AgentHash[:]),
+			"note",
+			"the row comes from an out-of-band PCR 14 pin; pin this client's agent hash or clear the baseline to re-enroll it")
+		v.metrics.Reanchors.Inc("agent_hash_escalate")
 		return false
 	}
 

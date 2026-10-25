@@ -187,10 +187,7 @@ type ClientBaseline struct {
 	// so a report that carries a register the pinned hash cannot produce is
 	// rejected, and so an allow-listed agent update can move both pins in
 	// one statement.
-	//
-	// Zero array means the baseline was created by an older verifier
-	// that did not pin agent_hash; subsequent attestations from the
-	// same client backfill the field on success.
+	// Zero means out-of-band PCR 14 pin; refused, never filled from a report.
 	AgentHash [types.HashSize]byte
 
 	// when baseline was established
@@ -390,8 +387,11 @@ type ReanchorStorer interface {
 // AgentHashRepinState is the per-client bookkeeping behind the agent-hash
 // re-pin rate limit.
 // Present is false when the client has no baseline row.
+// Pinned is false when the row has no agent_hash (out-of-band PCR 14 pin);
+// such a row has no pin to move.
 type AgentHashRepinState struct {
 	Present     bool
+	Pinned      bool
 	RepinCount  int
 	LastRepinAt time.Time
 }
@@ -600,6 +600,7 @@ func (s *BaselineStore) GetAgentHashRepinState(clientID string) AgentHashRepinSt
 	}
 	return AgentHashRepinState{
 		Present:     true,
+		Pinned:      b.AgentHash != [types.HashSize]byte{},
 		RepinCount:  b.AgentHashRepinCount,
 		LastRepinAt: b.LastAgentHashRepinAt,
 	}
@@ -611,6 +612,8 @@ func (s *BaselineStore) GetAgentHashRepinState(clientID string) AgentHashRepinSt
 // the outgoing hash is simply overwritten (durable backends persist it).
 // Refuses when the client has no baseline row:
 // re-pin replaces a pin, and establishing one is TOFU's job, not this path's.
+// Refuses a row with no agent_hash for the same reason;
+// moving it would also replace the out-of-band PCR 14 pin.
 func (s *BaselineStore) ArchiveAndRepinAgentHash(clientID string,
 	agentHash, pcr14 [types.HashSize]byte, now time.Time,
 ) error {
@@ -620,6 +623,9 @@ func (s *BaselineStore) ArchiveAndRepinAgentHash(clientID string,
 	b, ok := s.baselines[clientID]
 	if !ok {
 		return errors.New("agent-hash re-pin: no baseline row for client")
+	}
+	if b.AgentHash == ([types.HashSize]byte{}) {
+		return ErrAgentHashNotPinned
 	}
 	if !b.LastAgentHashRepinAt.IsZero() &&
 		now.Sub(b.LastAgentHashRepinAt) < AgentHashRepinMinInterval {

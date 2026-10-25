@@ -18,6 +18,11 @@ import (
 // agentHashDecision.
 var ErrAgentHashRepinRateLimited = errors.New("agent-hash re-pin: rate limit not elapsed")
 
+// ErrAgentHashNotPinned is returned by store's ArchiveAndRepinAgentHash
+// when the row carries no agent hash (out-of-band PCR 14 pin).
+// Re-pinning it would adopt the reported hash and replace the pinned PCR 14.
+var ErrAgentHashNotPinned = errors.New("agent-hash re-pin: row has no pinned agent_hash to replace")
+
 // Minimum spacing between agent-hash re-pins for one client.
 //
 // Deliberately far shorter than the boot re-anchor intervals, because the two

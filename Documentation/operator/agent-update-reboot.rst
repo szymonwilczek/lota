@@ -68,6 +68,17 @@ that instead reads ``agent hash not in allowed list`` is the other case
 entirely: that build is not in the policy, and re-anchoring it would accept a
 binary nobody blessed.
 
+A third refusal hits devices whose PCR 14 was pinned out of band. Their row has
+no agent hash, so there is no pin for an update to move::
+
+    baseline carries no pinned agent_hash; refusing to adopt the reported one
+      reported_agent_hash=...
+
+Adopting the reported hash would also replace the pinned PCR 14, so the round
+is refused whatever the policy lists. Pin the device's agent hash, or clear its
+baseline (``lota-fleet reanchor <client-id> -reason <why> -actor <you>``) to
+enroll it from its own report.
+
 Per-host update
 ===============
 

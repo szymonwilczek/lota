@@ -320,7 +320,9 @@ Active threats
          is set.
        | The per-device pin is established once, on the client's first
          attestation: a stored baseline whose ``agent_hash`` is absent is
-         refused rather than adopted from the report presenting it.
+         refused rather than adopted from the report presenting it. Only an
+         out-of-band PCR 14 pin leaves that column empty, and an update may
+         not move it either: the pinned register would move with it.
        | It re-opens for one reason only, a package update, and only toward a
          build ``agent_hashes`` already names. The reported hash is not taken
          on trust: PCR 14 is rederived from it and matched against the quoted
