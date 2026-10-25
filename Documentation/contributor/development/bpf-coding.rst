@@ -37,16 +37,24 @@ Ring-buffer emission budget
 
 Under ``LOTA_MODE_ENFORCE`` every event is rate-limited per one-second window
 before it claims a ``bpf_ringbuf_reserve`` slot, so an attacker-driven flood
-cannot fill the ring buffer faster than user space drains it. Allowed (benign)
-and blocked (security-relevant) events are counted in separate windows, so a
-flood of one class cannot consume the other's budget; blocked events get the
-larger budget but are still bounded. Suppressing an event drops only its
-per-event detail -- the block counts are tallied in the ``stats`` map
-independently of ring-buffer emission, so an operator never loses the tally.
+cannot fill the ring buffer faster than user space drains it. Each
+``enum lota_event_type`` has its own window in ``event_budget``, so one flooding
+type cannot spend another's budget; the class sets the cap, tighter for allowed
+events than for blocked ones. A suppressed event loses only its detail: block
+counts are tallied in the ``stats`` map regardless of emission.
+
+All types still share one ring, so emission is gated a second time: once
+``bpf_ringbuf_query`` reports occupancy past ``LOTA_EVENT_RING_PRESSURE_PCT``,
+a type that has emitted ``LOTA_EVENT_PRESSURE_SHARE`` events this window yields
+the rest. This rule bounds the ring as a whole; a type firing at a human rate
+never reaches its share. Yields are counted in ``STAT_EVENTS_YIELDED``
+(``yielded=`` in the shutdown statistics); ``STAT_RINGBUF_DROPS`` counts detail
+lost to a full ring, which may belong to a type that was not the loud one.
 
 The budget arithmetic lives in ``include/lota_event_budget.h`` as pure helpers
 (``lota_event_budget_limit``, ``lota_event_budget_window_expired``,
-``lota_event_budget_exhausted``) with no map lookups or atomics, so it is
+``lota_event_budget_exhausted``, ``lota_event_ring_under_pressure``,
+``lota_event_type_yields``) with no map lookups or atomics, so it is
 unit-tested in user space (``tests/test_event_budget.c``); the BPF program wraps
 those helpers with the shared-map lookup and the cross-CPU atomics above. Change
 the budgets or the window only through the header so the program and the test
