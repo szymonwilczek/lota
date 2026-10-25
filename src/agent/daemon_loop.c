@@ -18,6 +18,7 @@
 #include "bpf_loader.h"
 #include "dbus.h"
 #include "ipc.h"
+#include "watchdog.h"
 
 /*
  * Ringbuf drop telemetry.
@@ -162,7 +163,7 @@ int agent_run_event_loop(struct agent_loop_ctx *ctx)
 		poll_ringbuf_drops(ctx, &last_drops, &last_drop_poll_ns);
 
 		if (nfds == 0 && ctx->wd_enabled) {
-			sdnotify_watchdog_ping();
+			watchdog_beat();
 			continue;
 		}
 
@@ -224,8 +225,9 @@ int agent_run_event_loop(struct agent_loop_ctx *ctx)
 			}
 		}
 
+		/* the supervisor thread pings; the loop only reports progress */
 		if (ctx->wd_enabled)
-			sdnotify_watchdog_ping();
+			watchdog_beat();
 	}
 
 	return 0;

@@ -3,8 +3,11 @@
 # LOTA Agent - systemd Service Unit
 #
 # Type=notify: agent calls sd_notify(READY=1) when fully initialized.
-# WatchdogSec: agent sends WATCHDOG=1 periodically; systemd restarts
-#              if the ping is missed.
+# WatchdogSec: an in-agent supervisor pings while the main loop advances
+#              and kills the process after a full interval without
+#              progress; Restart= brings it back. The task_kill hook
+#              refuses systemd's own SIGABRT/SIGKILL, so WatchdogSignal=
+#              is not set.
 #
 # Installation:
 #   install -m 644 lota-agent.service /usr/lib/systemd/system/
