@@ -306,8 +306,9 @@ struct lota_ac_session *lota_ac_init(const struct lota_ac_config *cfg);
 /*
  * lota_ac_last_error - Why the last call on this thread failed
  *
- * Every entry point that can refuse sets it, including on success
- * (LOTA_AC_ERR_OK), so reading it after anything else is meaningless.
+ * Set by every call that returns a value to check, LOTA_AC_ERR_OK on success:
+ * errno for the measure helpers, LOTA_AC_ERR_* otherwise. The renderers,
+ * lota_ac_get_state() and lota_ac_shutdown() leave it alone.
  * Thread-local, because a title and its launcher in one process must
  * not read each other's answer.
  *

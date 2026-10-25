@@ -75,6 +75,27 @@ lota_ac_domain_lookup(uint32_t version)
 	return NULL;
 }
 
+/* last call's answer on this thread; every entry point writes it */
+static _Thread_local int g_ac_error = LOTA_AC_ERR_OK;
+
+int lota_ac_last_error(void)
+{
+	return g_ac_error;
+}
+
+/* record @err for lota_ac_last_error() and return it */
+static int ac_ret(int ret)
+{
+	g_ac_error = ret;
+	return ret;
+}
+
+/* The refusal half of ac_ret(), for call sites that return their own value */
+static int ac_fail(int err)
+{
+	return ac_ret(err);
+}
+
 static int compute_heartbeat_nonce(
 	uint8_t out_nonce[LOTA_NONCE_SIZE],
 	const uint8_t session_id[LOTA_AC_SESSION_ID_SIZE], uint8_t provider,
@@ -175,20 +196,20 @@ int lota_ac_compute_game_binding_hash(const char *game_id, const char *exe_path,
 	int ok;
 
 	if (!game_id || !exe_path || !out)
-		return -EINVAL;
+		return ac_ret(-EINVAL);
 	if (game_id[0] == '\0')
-		return -EINVAL;
+		return ac_ret(-EINVAL);
 
 	dom = lota_ac_domain_lookup(LOTA_AC_DOMAIN_VERSION_CURRENT);
 	if (!dom)
-		return -EINVAL;
+		return ac_ret(-EINVAL);
 
 	if (hash_file_sha256(exe_path, exe_digest) < 0)
-		return -EIO;
+		return ac_ret(-EIO);
 
 	ctx = EVP_MD_CTX_new();
 	if (!ctx)
-		return -ENOMEM;
+		return ac_ret(-ENOMEM);
 
 	ok = EVP_DigestInit_ex(ctx, EVP_sha256(), NULL) &&
 	     EVP_DigestUpdate(ctx, dom->game_binding,
@@ -198,7 +219,7 @@ int lota_ac_compute_game_binding_hash(const char *game_id, const char *exe_path,
 	     EVP_DigestFinal_ex(ctx, out, &out_len);
 
 	EVP_MD_CTX_free(ctx);
-	return ok ? 0 : -EIO;
+	return ac_ret(ok ? 0 : -EIO);
 }
 
 static int compute_game_id_hash(const char *game_id,
@@ -492,16 +513,16 @@ int lota_ac_compute_runtime_measure(uint8_t out[LOTA_AC_RUNTIME_MEASURE_SIZE])
 	int ret;
 
 	if (!out)
-		return -EINVAL;
+		return ac_ret(-EINVAL);
 
 	ret = rt_resolve_self_exe(self_exe, sizeof(self_exe));
 	if (ret < 0)
-		return ret;
+		return ac_ret(ret);
 
 	memset(&ctx, 0, sizeof(ctx));
 	ctx.objs = calloc(LOTA_AC_RUNTIME_MAX_OBJS, sizeof(*ctx.objs));
 	if (!ctx.objs)
-		return -ENOMEM;
+		return ac_ret(-ENOMEM);
 	ctx.self_exe = self_exe;
 
 	dl_iterate_phdr(rt_collect_cb, &ctx);
@@ -513,7 +534,7 @@ int lota_ac_compute_runtime_measure(uint8_t out[LOTA_AC_RUNTIME_MEASURE_SIZE])
 	ret = rt_finalize_combined(ctx.objs, ctx.count, out);
 out:
 	free(ctx.objs);
-	return ret;
+	return ac_ret(ret);
 }
 
 struct rt_list_ctx {
@@ -552,11 +573,11 @@ int lota_ac_list_runtime_objects(lota_ac_runtime_object_fn fn, void *user)
 	int ret;
 
 	if (!fn)
-		return -EINVAL;
+		return ac_ret(-EINVAL);
 
 	ret = rt_resolve_self_exe(self_exe, sizeof(self_exe));
 	if (ret < 0)
-		return ret;
+		return ac_ret(ret);
 
 	memset(&ctx, 0, sizeof(ctx));
 	ctx.fn = fn;
@@ -564,7 +585,7 @@ int lota_ac_list_runtime_objects(lota_ac_runtime_object_fn fn, void *user)
 	ctx.self_exe = self_exe;
 
 	dl_iterate_phdr(rt_list_cb, &ctx);
-	return 0;
+	return ac_ret(0);
 }
 
 static int pread_full(int fd, void *buf, size_t len, off_t off)
@@ -740,11 +761,11 @@ int lota_ac_compute_expected_runtime_measure_set(
 	int ret;
 
 	if (!paths || !out)
-		return -EINVAL;
+		return ac_ret(-EINVAL);
 
 	objs = calloc(LOTA_AC_RUNTIME_MAX_OBJS, sizeof(*objs));
 	if (!objs)
-		return -ENOMEM;
+		return ac_ret(-ENOMEM);
 
 	for (size_t i = 0; i < count; i++) {
 		uint8_t digest[LOTA_AC_RUNTIME_MEASURE_SIZE];
@@ -767,14 +788,14 @@ int lota_ac_compute_expected_runtime_measure_set(
 	ret = rt_finalize_combined(objs, nobj, out);
 out:
 	free(objs);
-	return ret;
+	return ac_ret(ret);
 }
 
 int lota_ac_compute_expected_runtime_measure(
 	const char *exe_path, uint8_t out[LOTA_AC_RUNTIME_MEASURE_SIZE])
 {
 	if (!exe_path || !out)
-		return -EINVAL;
+		return ac_ret(-EINVAL);
 	return lota_ac_compute_expected_runtime_measure_set(&exe_path, 1, out);
 }
 
@@ -1088,25 +1109,6 @@ const char *lota_ac_strerror(int err)
 }
 
 /*
- * Why the last call on this thread failed.
- * Thread-local for the reason the gaming SDK's is:
- * a title and its launcher in one process must not read each other's answer.
- */
-static _Thread_local int g_ac_error = LOTA_AC_ERR_OK;
-
-int lota_ac_last_error(void)
-{
-	return g_ac_error;
-}
-
-/* Set and return, so every refusal is one line and none can forget */
-static int ac_fail(int err)
-{
-	g_ac_error = err;
-	return err;
-}
-
-/*
  * The connect refusal in this SDK's vocabulary.
  *
  * The gaming SDK already tells "no agent" from "nobody has consented" from
@@ -1260,7 +1262,7 @@ int lota_ac_get_info(const struct lota_ac_session *session,
 		     struct lota_ac_info *info)
 {
 	if (!session || !info)
-		return -EINVAL;
+		return ac_ret(-EINVAL);
 
 	info->provider = session->provider;
 	info->state = session->state;
@@ -1271,15 +1273,15 @@ int lota_ac_get_info(const struct lota_ac_session *session,
 	info->lota_flags = session->lota_flags;
 	info->trusted = session->state == LOTA_AC_STATE_TRUSTED;
 
-	return 0;
+	return ac_ret(0);
 }
 
 int lota_ac_tick(struct lota_ac_session *session)
 {
 	if (!session)
-		return -EINVAL;
+		return ac_ret(-EINVAL);
 	if (session->state == LOTA_AC_STATE_IDLE)
-		return -EINVAL;
+		return ac_ret(-EINVAL);
 
 	if (session->direct) {
 		/* direct SDK mode */
@@ -1295,6 +1297,9 @@ int lota_ac_tick(struct lota_ac_session *session)
 		int ret = lota_get_status(session->client, &status);
 		if (ret != LOTA_OK) {
 			session->state = LOTA_AC_STATE_ERROR;
+			ac_fail(ret == LOTA_ERR_CONNECTION_FAILED ?
+					LOTA_AC_ERR_NO_AGENT :
+					LOTA_AC_ERR_STATUS);
 			return -EIO;
 		}
 		session->lota_flags = status.flags;
@@ -1335,7 +1340,7 @@ int lota_ac_tick(struct lota_ac_session *session)
 	else
 		session->state = LOTA_AC_STATE_ERROR;
 
-	return 0;
+	return ac_ret(0);
 }
 
 int lota_ac_heartbeat(struct lota_ac_session *session, uint8_t *buf,
@@ -1545,10 +1550,10 @@ int lota_ac_verify_heartbeat(
 {
 	if (!data || !expected_game_id_hash || !expected_runtime_measure ||
 	    !info)
-		return LOTA_AC_ERR_INVALID_ARG;
+		return ac_ret(LOTA_AC_ERR_INVALID_ARG);
 
 	if (len < LOTA_AC_HEADER_SIZE)
-		return LOTA_AC_ERR_MALFORMED;
+		return ac_ret(LOTA_AC_ERR_MALFORMED);
 
 	uint32_t magic = read_le32_u(data + 0);
 	uint8_t version = data[4];
@@ -1564,25 +1569,25 @@ int lota_ac_verify_heartbeat(
 	int ret = LOTA_SERVER_OK;
 
 	if (magic != LOTA_AC_MAGIC)
-		return LOTA_AC_ERR_MALFORMED;
+		return ac_ret(LOTA_AC_ERR_MALFORMED);
 	if (version != LOTA_AC_VERSION)
-		return LOTA_AC_ERR_VERSION;
+		return ac_ret(LOTA_AC_ERR_VERSION);
 	if ((size_t)total_size > len)
-		return LOTA_AC_ERR_MALFORMED;
+		return ac_ret(LOTA_AC_ERR_MALFORMED);
 	if ((size_t)total_size != LOTA_AC_HEADER_SIZE + (size_t)token_size)
-		return LOTA_AC_ERR_MALFORMED;
+		return ac_ret(LOTA_AC_ERR_MALFORMED);
 	if (token_size == 0 || token_size > LOTA_AC_MAX_TOKEN)
-		return LOTA_AC_ERR_MALFORMED;
+		return ac_ret(LOTA_AC_ERR_MALFORMED);
 	if (provider != LOTA_AC_PROVIDER_EAC &&
 	    provider != LOTA_AC_PROVIDER_BATTLEYE)
-		return LOTA_AC_ERR_MALFORMED;
+		return ac_ret(LOTA_AC_ERR_MALFORMED);
 
 	if (!lota_ac_domain_lookup(domain_version))
-		return LOTA_AC_ERR_VERSION;
+		return ac_ret(LOTA_AC_ERR_VERSION);
 
 	if (CRYPTO_memcmp(data + 40, expected_game_id_hash,
 			  LOTA_AC_GAME_HASH_SIZE) != 0)
-		return LOTA_AC_ERR_MALFORMED;
+		return ac_ret(LOTA_AC_ERR_MALFORMED);
 
 	/*
 	 * Runtime measurement must match the value an honest producer of this
@@ -1593,34 +1598,34 @@ int lota_ac_verify_heartbeat(
 	 */
 	if (CRYPTO_memcmp(data + 78, expected_runtime_measure,
 			  LOTA_AC_RUNTIME_MEASURE_SIZE) != 0)
-		return LOTA_AC_ERR_RUNTIME_IMAGE;
+		return ac_ret(LOTA_AC_ERR_RUNTIME_IMAGE);
 
 	if (timestamp > now + LOTA_AC_MAX_HEARTBEAT_AGE_SEC)
-		return LOTA_AC_ERR_MALFORMED;
+		return ac_ret(LOTA_AC_ERR_MALFORMED);
 	if (timestamp + LOTA_AC_MAX_HEARTBEAT_AGE_SEC < now)
-		return LOTA_AC_ERR_MALFORMED;
+		return ac_ret(LOTA_AC_ERR_MALFORMED);
 
 	ret = compute_heartbeat_nonce(expected_nonce, data + 8, provider,
 				      sequence, heartbeat_lota_flags, timestamp,
 				      data + 40, data + 78, domain_version);
 	if (ret < 0)
-		return LOTA_AC_ERR_CRYPTO;
+		return ac_ret(LOTA_AC_ERR_CRYPTO);
 
 	const uint8_t *token = data + LOTA_AC_HEADER_SIZE;
 
 	struct lota_server_claims claims;
 
 	if (!aik_pub_der || aik_pub_len == 0)
-		return LOTA_AC_ERR_INVALID_ARG;
+		return ac_ret(LOTA_AC_ERR_INVALID_ARG);
 
 	ret = lota_server_verify_token(token, token_size, aik_pub_der,
 				       aik_pub_len, expected_nonce, &claims);
 
 	if (ret != LOTA_SERVER_OK)
-		return ac_error_from_server(ret);
+		return ac_ret(ac_error_from_server(ret));
 
 	if (CRYPTO_memcmp(claims.nonce, expected_nonce, LOTA_NONCE_SIZE) != 0)
-		return LOTA_AC_ERR_NONCE_FAIL;
+		return ac_ret(LOTA_AC_ERR_NONCE_FAIL);
 
 	/*
 	 * lota_flags in heartbeat header are plaintext transport metadata only.
@@ -1628,7 +1633,7 @@ int lota_ac_verify_heartbeat(
 	 * set) and fail closed if header/token disagree
 	 */
 	if (heartbeat_lota_flags != claims.flags)
-		return LOTA_AC_ERR_MALFORMED;
+		return ac_ret(LOTA_AC_ERR_MALFORMED);
 
 	info->provider = (enum lota_ac_provider)provider;
 	memcpy(info->session_id, data + 8, LOTA_AC_SESSION_ID_SIZE);
@@ -1641,7 +1646,7 @@ int lota_ac_verify_heartbeat(
 	info->state = info->trusted ? LOTA_AC_STATE_TRUSTED :
 				      LOTA_AC_STATE_UNTRUSTED;
 
-	return 0;
+	return ac_ret(0);
 }
 
 const char *lota_ac_state_str(enum lota_ac_state state)
