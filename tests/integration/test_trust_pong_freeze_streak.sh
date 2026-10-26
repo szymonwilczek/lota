@@ -9,7 +9,8 @@
 # Driven through the binary: the rule lives in the render loop.
 #
 # Requires:
-#   - bash, python3, and build/examples/trust_pong (make examples)
+#   - bash, python3, and ${LOTA_BUILD_DIR}/examples/trust_pong
+#     (make examples)
 #
 # Runs unprivileged, needs no agent and no display (SDL's dummy video
 # driver), and listens on the loopback only.
@@ -19,7 +20,7 @@ set -uo pipefail
 export LC_ALL=C
 
 REPO_DIR=$(cd "$(dirname "$0")/../.." && pwd)
-BUILD_DIR="${BUILD_DIR:-$REPO_DIR/build}"
+BUILD_DIR="${BUILD_DIR:-${LOTA_BUILD_DIR:-$REPO_DIR/build}}"
 GAME_BIN="${LOTA_TRUST_PONG:-$BUILD_DIR/examples/trust_pong}"
 
 if ! command -v python3 >/dev/null 2>&1; then

@@ -26,7 +26,8 @@
 set -euo pipefail
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
-BIN="${BIN:-$HERE/../../build}"
+BUILD_DIR="${LOTA_BUILD_DIR:-$HERE/../../build}"
+BIN="${BIN:-$BUILD_DIR}"
 CA_DIR="${CA_DIR:-$HERE/ca}"
 EK_ROOT="${EK_ROOT:?set it to a manufacturer root, or a pinned bundle dir}"
 RUN_DIR="${RUN_DIR:-$(mktemp -d "${TMPDIR:-/tmp}/lota-enrollment.XXXXXX")}"

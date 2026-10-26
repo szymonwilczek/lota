@@ -33,6 +33,13 @@ executable, a shared library, an object file or an archive. Such files usually
 come from ``go build`` or ``make`` run inside a source directory, whose default
 output lands beside the sources; list those outputs in ``.gitignore``.
 
+The test build-directory check (``make check-test-build-dir``) fails on a test
+or example script that names the default build directory. C and Go tests take
+the path as a ``-D`` from their recipe; shell scripts read ``$LOTA_BUILD_DIR``
+and may name the default only as its fallback. A ``build`` directory that is
+not the tree's goes in ``scripts/test-build-dir-exemptions.txt``. The check
+runs on every patch.
+
 The strict documentation build (``make check-docs-strict``) is the build
 ``docs.yml`` runs, with every warning promoted to an error, into a scratch
 output tree. It builds from nothing on purpose: Sphinx re-reads only the

@@ -38,7 +38,7 @@ func main() {
 	data, err := os.ReadFile(reportPath)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "report_verify: cannot read %s: %v\n", reportPath, err)
-		fmt.Fprintf(os.Stderr, "report_verify: run build/test_cross_lang_report_gen first\n")
+		fmt.Fprintf(os.Stderr, "report_verify: run test_cross_lang_report_gen from this build first\n")
 		os.Exit(1)
 	}
 

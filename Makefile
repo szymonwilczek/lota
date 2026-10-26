@@ -54,6 +54,7 @@ BPF_DIR := $(SRC_DIR)/bpf
 AGENT_DIR := $(SRC_DIR)/agent
 INC_DIR := include
 BUILD_DIR := build
+export LOTA_BUILD_DIR := $(abspath $(BUILD_DIR))
 VERSION_FILE := VERSION
 PROJECT_VERSION := $(strip $(shell sed -n '1p' $(VERSION_FILE) 2>/dev/null))
 GOCACHE ?= $(abspath $(BUILD_DIR)/.gocache)
@@ -474,7 +475,7 @@ $(INC_DIR)/vmlinux.h:
 
 # Phony targets
 .PHONY: check-docs-strict
-.PHONY: help all bpf agent initramfs-lock installer verifier attest-ca fleet-cli loadgen packages container-images container-image-verifier container-image-attest-ca container-image-attest-ca-hsm helm-package helm-lint helm-template observability-lint srpm rpm-sign dnf-repo sdk server-sdk wine-hook anticheat pkgconfig sdk-stage clean htmldocs docs-lint docs-linkcheck docs-serve cleandocs install check-version-tag check-includes check-el9-decls check-license-boundary check-doc-diagnostics check-config-commands check-stack-frames check-private-errno check-package-manifests check-helm-chart check-container-images lint lint-c lint-go print-lint-go-modules sparse smatch coccicheck reproducible-build test test-unit test-bins test-hardware test-sdk sanitizer-build valgrind-unit valgrind-smoke fuzz-agent fuzz-config fuzz-enroll fuzz-seal-envelope fuzz-tpm-attest fuzz-policy-sign fuzz-server-sdk fuzz-tpm-resp fuzz-bpf-devt fuzz-bpf-open-flags fuzz-bpf-kmem-device fuzz-bpf-event-budget fuzz-bpf-inaccessible-exec fuzz-bpf-shebang fuzz-bpf-all fuzz-all syzkaller-fuzz-loader examples examples-clean sign-bpf check-abi abi-baseline
+.PHONY: help all bpf agent initramfs-lock installer verifier attest-ca fleet-cli loadgen packages container-images container-image-verifier container-image-attest-ca container-image-attest-ca-hsm helm-package helm-lint helm-template observability-lint srpm rpm-sign dnf-repo sdk server-sdk wine-hook anticheat pkgconfig sdk-stage clean htmldocs docs-lint docs-linkcheck docs-serve cleandocs install check-version-tag check-includes check-el9-decls check-license-boundary check-test-build-dir check-doc-diagnostics check-config-commands check-stack-frames check-private-errno check-package-manifests check-helm-chart check-container-images lint lint-c lint-go print-lint-go-modules sparse smatch coccicheck reproducible-build test test-unit test-bins test-hardware test-sdk sanitizer-build valgrind-unit valgrind-smoke fuzz-agent fuzz-config fuzz-enroll fuzz-seal-envelope fuzz-tpm-attest fuzz-policy-sign fuzz-server-sdk fuzz-tpm-resp fuzz-bpf-devt fuzz-bpf-open-flags fuzz-bpf-kmem-device fuzz-bpf-event-budget fuzz-bpf-inaccessible-exec fuzz-bpf-shebang fuzz-bpf-all fuzz-all syzkaller-fuzz-loader examples examples-clean sign-bpf check-abi abi-baseline
 
 bpf: $(BPF_OBJ)
 
@@ -985,6 +986,13 @@ check-el9-decls:
 check-license-boundary:
 	@scripts/check-license-boundary.sh
 
+# Test build-directory gate
+# Fails when a test or example script names the default build directory
+# instead of $(BUILD_DIR).
+# See scripts/check-test-build-dir.sh
+check-test-build-dir:
+	@scripts/check-test-build-dir.sh
+
 # Doc-quoted diagnostic gate
 # Fails when documentation quotes a message no source string can print,
 # which is what an operator searching for the text on their screen hits.
@@ -1431,7 +1439,8 @@ TEST_BINS := \
 
 $(TEST_SDK_BIN): tests/test_sdk_ipc.c $(SDK_LIB) | $(BUILD_DIR)
 	$(QUIET_CC)
-	$(Q)$(CC) $(CFLAGS) -o $@ $< -L$(BUILD_DIR) -llotagaming -Wl,-rpath,$(abspath $(BUILD_DIR))
+	$(Q)$(CC) $(CFLAGS) -DAGENT_BIN_PATH='"$(AGENT_BIN)"' -o $@ $< \
+		-L$(BUILD_DIR) -llotagaming -Wl,-rpath,$(abspath $(BUILD_DIR))
 
 $(TEST_BIN_DIR)/test_hash_verify: tests/test_hash_verify.c $(AGENT_DIR)/hash_verify.c | $(BUILD_DIR)
 	$(QUIET_CC)
@@ -2489,6 +2498,7 @@ help:
 	@echo "  check-stack-frames  Fail on an oversized stack frame in a shipped binary"
 	@echo "  check-doc-diagnostics  Fail on a quoted message the program cannot print"
 	@echo "  check-config-commands  Fail on a shipped config naming a command that does not resolve"
+	@echo "  check-test-build-dir  Fail on a test or demo naming the default build directory"
 	@echo "  abi-baseline     Rewrite packaging/abi after a deliberate API change"
 	@echo "  sdk-stage        Lay out the installed SDK prefix under build/stage"
 	@echo "  lint             clang-format (C) + golangci-lint (Go) checks"

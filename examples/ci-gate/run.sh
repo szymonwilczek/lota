@@ -23,8 +23,9 @@ set -euo pipefail
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$(cd "$HERE/../.." && pwd)"
-BIN="${BIN:-$ROOT/build}"
-EXAMPLES_BIN="${EXAMPLES_BIN:-$ROOT/build/examples}"
+BUILD_DIR="${LOTA_BUILD_DIR:-$ROOT/build}"
+BIN="${BIN:-$BUILD_DIR}"
+EXAMPLES_BIN="${EXAMPLES_BIN:-$BUILD_DIR/examples}"
 
 agent="$BIN/lota-agent"
 gate="$EXAMPLES_BIN/lota-release-gate"

@@ -380,6 +380,7 @@ jobs:
             scripts/check-config-commands.sh \
             scripts/check-abi.sh \
             scripts/check-package-manifests.sh \
+            scripts/check-test-build-dir.sh \
             examples/demo/setup.sh \
             examples/ci-gate/run.sh \
             examples/demo_anticheat/run.sh \
@@ -411,6 +412,18 @@ jobs:
 
       - name: Compare the two package manifests
         run: make check-package-manifests
+
+  test-build-dir:
+    name: test build directory
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Check the tests read the build directory the build used
+        run: make check-test-build-dir
 
   license-boundary:
     name: license-boundary

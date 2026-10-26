@@ -19,14 +19,9 @@ set -euo pipefail
 export LC_ALL=C
 
 REPO_DIR=$(cd "$(dirname "$0")/../.." && pwd)
+BUILD_DIR="${BUILD_DIR:-${LOTA_BUILD_DIR:-$REPO_DIR/build}}"
+EXAMPLES_DIR="$BUILD_DIR/examples"
 REAL_PKG_CONFIG=$(command -v pkg-config || true)
-BUILD_DIR=${BUILD_DIR:-build}
-if [[ "$BUILD_DIR" == /* ]]; then
-    EXAMPLES_OUT="$BUILD_DIR/examples"
-else
-    EXAMPLES_OUT="$REPO_DIR/$BUILD_DIR/examples"
-fi
-MAKE_EXAMPLES=(make -C "$REPO_DIR" BUILD_DIR="$BUILD_DIR")
 
 if [[ -z "$REAL_PKG_CONFIG" ]]; then
     echo "[examples-deps] pkg-config not installed" >&2
@@ -72,9 +67,11 @@ has() { "$REAL_PKG_CONFIG" --exists "$1"; }
 # One run of `make examples` with $1 hidden; prints the combined output
 run_examples_without() {
     local pkg="$1"
-    "${MAKE_EXAMPLES[@]}" examples-clean >/dev/null 2>&1 || true
+    make -C "$REPO_DIR" BUILD_DIR="$BUILD_DIR" examples-clean \
+         >/dev/null 2>&1 || true
     LOTA_TEST_HIDDEN_PKG="$pkg" PATH="$SHIM_BIN:$PATH" \
-                        "${MAKE_EXAMPLES[@]}" examples 2>&1 || echo "MAKE-FAILED"
+                        make -C "$REPO_DIR" BUILD_DIR="$BUILD_DIR" examples 2>&1 ||
+        echo "MAKE-FAILED"
 }
 
 echo "=== make examples without libcurl ==="
@@ -86,12 +83,12 @@ check "the heartbeat producer says it is skipped" \
       says "$out" "SKIP: demo_anticheat"
 check "trust_pong says it is skipped" says "$out" "SKIP: trust_pong"
 check "the example that needs no libcurl is built" \
-      test -x "$EXAMPLES_OUT/runtime_remeasure"
-check "the block demo is built" test -x "$EXAMPLES_OUT/block_victim"
+      test -x "$EXAMPLES_DIR/runtime_remeasure"
+check "the block demo is built" test -x "$EXAMPLES_DIR/block_victim"
 check "the release gate is built" \
-      test -x "$EXAMPLES_OUT/lota-release-gate"
+      test -x "$EXAMPLES_DIR/lota-release-gate"
 check "no example that needs libcurl is left behind" \
-      test ! -e "$EXAMPLES_OUT/demo_anticheat"
+      test ! -e "$EXAMPLES_DIR/demo_anticheat"
 
 echo ""
 echo "=== make examples without sdl2 ==="
@@ -100,17 +97,18 @@ check "the target completes" lacks "$out" "MAKE-FAILED"
 check "trust_pong says it is skipped" says "$out" "SKIP: trust_pong"
 if has libcurl; then
     check "the CI attestation step is built" \
-          test -x "$EXAMPLES_OUT/lota-ci-attest"
+          test -x "$EXAMPLES_DIR/lota-ci-attest"
     check "the heartbeat producer is built" \
-          test -x "$EXAMPLES_OUT/demo_anticheat"
+          test -x "$EXAMPLES_DIR/demo_anticheat"
 fi
 check "trust_pong is not left behind" \
-      test ! -e "$EXAMPLES_OUT/trust_pong"
+      test ! -e "$EXAMPLES_DIR/trust_pong"
 
 echo ""
 echo "=== make examples with every dependency present ==="
-"${MAKE_EXAMPLES[@]}" examples-clean >/dev/null 2>&1 || true
-full=$("${MAKE_EXAMPLES[@]}" examples 2>&1 || echo "MAKE-FAILED")
+make -C "$REPO_DIR" BUILD_DIR="$BUILD_DIR" examples-clean >/dev/null 2>&1 || true
+full=$(make -C "$REPO_DIR" BUILD_DIR="$BUILD_DIR" examples 2>&1 ||
+           echo "MAKE-FAILED")
 
 # $1 is skipped exactly when the host lacks one of the packages after it
 skipped_iff_missing() {

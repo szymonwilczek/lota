@@ -18,7 +18,7 @@ set -uo pipefail
 export LC_ALL=C
 
 REPO_DIR=$(cd "$(dirname "$0")/../.." && pwd)
-BUILD_DIR="${BUILD_DIR:-$REPO_DIR/build}"
+BUILD_DIR="${BUILD_DIR:-${LOTA_BUILD_DIR:-$REPO_DIR/build}}"
 INSTALL_BIN="${LOTA_INSTALL_BIN:-$BUILD_DIR/lota-install}"
 
 if [[ ! -x "$INSTALL_BIN" ]]; then

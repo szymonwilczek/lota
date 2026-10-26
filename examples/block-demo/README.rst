@@ -74,8 +74,10 @@ alternate build root through the environment:
 
    BUILD_DIR=/var/tmp/lota-build sudo -E examples/block-demo/run.sh
 
-``BUILD_DIR`` defaults to ``$REPO_DIR/build`` to match the Makefile default;
-the same override works for ``tests/integration/test_bpf_gates.sh``.
+Unset, ``BUILD_DIR`` follows ``LOTA_BUILD_DIR`` -- the directory a make recipe
+exports as the one that build used -- and then ``$REPO_DIR/build`` to match the
+Makefile default. The same override works for
+``tests/integration/test_bpf_gates.sh``.
 
 Expected output on a successful block:
 
