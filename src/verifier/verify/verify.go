@@ -1501,6 +1501,12 @@ func (v *Verifier) AcknowledgeReanchorReview(clientID string) error {
 	if !ok {
 		return fmt.Errorf("baseline store does not support self-service re-anchor")
 	}
+	// unknown client check, same as forced re-anchor
+	if v.baselineStore.GetBaseline(clientID) == nil && !v.hasBootBaseline(clientID) {
+		if _, err := v.aikStore.GetAIK(clientID); err != nil {
+			return ErrUnknownClient
+		}
+	}
 	return rs.AcknowledgeLFAReview(clientID)
 }
 
@@ -1562,5 +1568,11 @@ func (v *Verifier) DeleteClient(clientID string) error {
 	if !known {
 		return ErrUnknownClient
 	}
-	return v.baselineStore.ClearBaseline(clientID)
+	if err := v.baselineStore.ClearBaseline(clientID); err != nil {
+		return err
+	}
+
+	// otherwise listed until the nonce store evicts it
+	v.nonceStore.ForgetClient(clientID)
+	return nil
 }

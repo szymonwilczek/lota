@@ -376,7 +376,8 @@ func TestReanchorReviewListAndAck(t *testing.T) {
 	}
 
 	code, out, _ = runCLI(t, noEnv, "-server", f.srv.URL,
-		"reanchor-review", "ack", "host1")
+		"reanchor-review", "ack", "host1",
+		"-reason", "reviewed the drift", "-actor", "alice@ops")
 	if code != exitOK || !strings.Contains(out, "reviewed host1") {
 		t.Fatalf("ack: exit = %d, output = %q", code, out)
 	}
@@ -807,5 +808,54 @@ func TestEveryTrustChangeRefusesWithoutTheFlags(t *testing.T) {
 		if code != exitUsage {
 			t.Errorf("%s with no flags: exit = %d, want usage error (stderr %q)", verb, code, stderr)
 		}
+	}
+}
+
+// An empty review queue still reports its count on stderr;
+// silence reads the same as a command that did nothing.
+func TestEmptyReanchorReviewQueueSaysSo(t *testing.T) {
+	f := newFakeAPI(t, map[string]string{
+		"GET /api/v1/reanchor/review": `{"pending_review":[],"count":0}`,
+	})
+
+	code, out, errOut := runCLI(t, noEnv, "-server", f.srv.URL, "reanchor-review", "list")
+	if code != exitOK {
+		t.Fatalf("exit = %d", code)
+	}
+	if out != "" {
+		t.Fatalf("stdout = %q, want nothing so the listing stays pipeable", out)
+	}
+	if !strings.Contains(errOut, "0 client") {
+		t.Fatalf("stderr = %q, want an empty queue to say so", errOut)
+	}
+}
+
+// A populated queue prints one client ID per line on stdout, count on stderr.
+func TestPopulatedReanchorReviewQueueStaysPipeable(t *testing.T) {
+	f := newFakeAPI(t, map[string]string{
+		"GET /api/v1/reanchor/review": `{"pending_review":["host1","host2"],"count":2}`,
+	})
+
+	code, out, errOut := runCLI(t, noEnv, "-server", f.srv.URL, "reanchor-review", "list")
+	if code != exitOK {
+		t.Fatalf("exit = %d", code)
+	}
+	if out != "host1\nhost2\n" {
+		t.Fatalf("stdout = %q, want bare IDs for scripting", out)
+	}
+	if !strings.Contains(errOut, "2 client") {
+		t.Fatalf("stderr = %q, want the queue summary", errOut)
+	}
+}
+
+// Two-word subcommand, so not in trustChangingVerbs; checked on its own.
+func TestReanchorReviewAckRefusesWithoutTheFlags(t *testing.T) {
+	code, _, stderr := runCLI(t, noEnv, "-server", "http://127.0.0.1:0",
+		"reanchor-review", "ack", "client-1")
+	if code != exitUsage {
+		t.Fatalf("ack with no flags: exit = %d, want usage error (stderr %q)", code, stderr)
+	}
+	if !strings.Contains(stderr, "-reason") {
+		t.Fatalf("stderr = %q, want the missing flag named", stderr)
 	}
 }

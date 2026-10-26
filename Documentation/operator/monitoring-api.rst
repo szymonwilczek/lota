@@ -16,6 +16,16 @@ covered in :doc:`production-bringup/ca-enrollment`.
 Conventions
 ===========
 
+Transport
+---------
+
+The transport follows the bind. On ``127.0.0.1`` the API is plain HTTP and
+requires no key, but enforces any key the verifier is configured with. On any
+other address it is **HTTPS** with the verifier's ``--cert``/``--key`` pair,
+and the verifier refuses to start without a reader or admin key. Remote
+clients use ``https://`` and the issuing CA, as in
+``deploy/observability/prometheus.yml``.
+
 Authentication
 --------------
 
@@ -405,11 +415,14 @@ with action ``reanchor`` and counts toward the forced re-anchor metric.
 DELETE /api/v1/clients/{id}
 ---------------------------
 
-Admin. Removes the client's verifier-side trust state (baselines and,
-where the store carries one, the AIK registration), forcing a fresh
-enrollment. Revocations and hardware bans are keyed separately and
-survive the delete. Body: ``reason`` and ``actor`` required, ``note``
-optional. **200**::
+Admin. Removes the client's verifier-side trust state: the baselines and
+the AIK registration, on every storage backend. The device keeps its
+certificate, so its next attestation is a first sight and becomes the new
+baseline; revoke or ban it first to keep it out. The per-identity attestation
+state (counter, last-attestation time, rate-limit window) goes too, so the
+client leaves ``GET /api/v1/clients`` at once; the used-nonce history stays.
+Revocations and hardware bans survive the delete. Body: ``reason`` and
+``actor`` required, ``note`` optional. **200**::
 
    {"status": "deleted", "client_id": "host-0001"}
 
@@ -428,8 +441,16 @@ await operator review (see :doc:`production-bringup/ca-enrollment`).
 POST /api/v1/clients/{id}/reanchor-review-ack
 ---------------------------------------------
 
-Admin. Clears the client's pending-review flag. No body. **200**
-``{"status": "reviewed", "client_id": ...}``.
+Admin. Clears the client's pending-review flag and writes a
+``reanchor_review_ack`` audit row. Body: ``actor`` and ``reason`` required,
+``note`` optional. **200** ``{"status": "reviewed", "client_id": ...}``;
+**400** when ``actor`` or ``reason`` is missing; **404** for an unknown
+client; **409** when no re-anchor awaits review::
+
+   curl -X POST -H "Authorization: Bearer $LOTA_ADMIN_API_KEY" \
+        -H 'Content-Type: application/json' \
+        -d '{"actor":"alice@ops","reason":"inspected the firmware update"}' \
+        https://verifier.internal:8080/api/v1/clients/host-0001/reanchor-review-ack
 
 Logs
 ====

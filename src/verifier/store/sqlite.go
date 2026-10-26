@@ -327,6 +327,25 @@ func (s *SQLiteAIKStore) GetRegisteredAt(clientID string) (time.Time, error) {
 	return t, nil
 }
 
+// DeleteClient removes the client row (AIK, hardware-ID binding and
+// registration timestamp); ErrAIKNotFound if no row matched.
+func (s *SQLiteAIKStore) DeleteClient(clientID string) error {
+	result, err := s.db.Exec("DELETE FROM clients WHERE id = ?", clientID)
+	if err != nil {
+		return fmt.Errorf("failed to delete client: %w", err)
+	}
+
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("failed to read affected rows after client delete: %w", err)
+	}
+	if rows == 0 {
+		return ErrAIKNotFound
+	}
+
+	return nil
+}
+
 // replaces expired AIK with a new key, preserving hardware ID binding
 func (s *SQLiteAIKStore) RotateAIK(clientID string, newKey *rsa.PublicKey) error {
 	derBytes, err := x509.MarshalPKIXPublicKey(newKey)

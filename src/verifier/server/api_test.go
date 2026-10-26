@@ -1610,8 +1610,10 @@ func TestReanchorReviewEndpoints(t *testing.T) {
 		t.Fatal("review must stay pending without admin auth")
 	}
 
-	// acknowledge with admin auth -> cleared
-	req = httptest.NewRequest(http.MethodPost, "/api/v1/clients/dev1/reanchor-review-ack", nil)
+	// acknowledge with admin auth and attribution -> cleared
+	req = httptest.NewRequest(http.MethodPost, "/api/v1/clients/dev1/reanchor-review-ack",
+		strings.NewReader(`{"actor":"alice@ops","reason":"reviewed the drift"}`))
+	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer admin-key")
 	rr = httptest.NewRecorder()
 	mux.ServeHTTP(rr, req)

@@ -23,20 +23,21 @@ disabled until the verifier is started with ``--http-addr``:
 
 The endpoint sits on the *reader* tier of the monitoring API:
 
-* On a **loopback** bind no key is required; a co-located Prometheus can
-  scrape ``127.0.0.1:8080`` directly.
+* On a **loopback** bind no key is required, but a configured key is still
+  enforced, so a co-located Prometheus carries the reader key whenever the
+  verifier has one.
 * On a **non-loopback** bind the API fails closed: the verifier refuses to
   start unless a reader or admin key is configured, and every scrape must
   present the reader key as a Bearer token
   (``LOTA_READER_API_KEY``; see the deployment page for the key tiers).
-* The monitoring API speaks plain HTTP. Scrape over loopback or a trusted
-  network, or terminate TLS in front of it; never expose the port to an
-  untrusted network.
+* The transport follows the bind: plain HTTP on loopback, **HTTPS** with
+  the verifier's certificate elsewhere. A remote scrape needs
+  ``scheme: https`` and the issuing CA.
 
 :ghsrc:`deploy/observability/prometheus.yml` is a complete reference
-configuration: it scrapes ``/metrics`` with the reader key read from a
-root-only credentials file and loads the alert rules from the ``alerts``
-directory next to it. On Kubernetes, the Helm chart exposes the same API
+configuration: an HTTPS job for a remote verifier, a commented loopback job,
+and the alert rules from the ``alerts`` directory next to it. On Kubernetes,
+the Helm chart exposes the same API
 through the ``httpApi`` values (off by default).
 
 Metrics reference

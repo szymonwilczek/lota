@@ -292,8 +292,9 @@ rather than a UEFI capsule) takes a Low-Firmware-Assurance path. The LFA
 re-anchor also applies automatically -- the player is never blocked waiting on
 the operator -- but it flags the device for post-fact review: list flagged
 devices with ``GET /api/v1/reanchor/review`` and clear one after inspecting it
-with ``POST /api/v1/clients/{clientID}/reanchor-review-ack`` (each LFA re-anchor
-is also logged at security level and counted in the ``lfa`` re-anchor metric).
+with ``POST /api/v1/clients/{clientID}/reanchor-review-ack`` (``actor`` and
+``reason`` required). Each LFA re-anchor is also logged at security level and
+counted in the ``lfa`` re-anchor metric.
 If a reviewed re-anchor looks wrong, revoke or ban the device through the
 existing endpoints.
 
@@ -318,23 +319,25 @@ re-establishes trust per the active TOFU/policy configuration:
 
     curl -X POST https://verifier:8080/api/v1/clients/{clientID}/reanchor \
         -H "Authorization: Bearer $ADMIN_KEY" \
-        -d '{"actor":"ops@example.com","note":"planned firmware update"}'
+        -d '{"actor":"ops@example.com","reason":"planned firmware update"}'
 
-``actor`` is required and lands in the audit log together with the ``note``;
+``actor`` and ``reason`` are required and land in the audit log together with
+the optional ``note``;
 the action is also logged at security level and counted in the ``forced``
 re-anchor metric. The enrollment is untouched -- the host keeps attesting
 with its enrolled AIK identity.
 
 To remove a device from the fleet entirely (decommissioned host, or trust
 state that must be rebuilt from scratch), delete the client. This drops the
-baselines and any AIK-store registration; the optional body is audit
-metadata:
+baselines and any AIK-store registration only; a running host keeps its
+certificate and is re-baselined at its next heartbeat. Revoke it first to keep
+it out. ``actor`` and ``reason`` are required, ``note`` is optional:
 
 .. code-block:: sh
 
     curl -X DELETE https://verifier:8080/api/v1/clients/{clientID} \
         -H "Authorization: Bearer $ADMIN_KEY" \
-        -d '{"actor":"ops@example.com","note":"decommissioned"}'
+        -d '{"actor":"ops@example.com","reason":"decommissioned"}'
 
 Revocations and hardware bans are keyed separately and survive the delete,
 so removing a client cannot be used to shed either -- a revoked identity

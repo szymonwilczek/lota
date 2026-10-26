@@ -332,9 +332,8 @@ func (s *PostgresAIKStore) GetRegisteredAt(clientID string) (time.Time, error) {
 	return t, nil
 }
 
-// DeleteClient removes the client row
-// (AIK, hardware-ID binding and registration timestamp) so the next enrollment
-// re-registers from scratch through the certificate chain verification.
+// DeleteClient removes the client row (AIK, hardware-ID binding and
+// registration timestamp); ErrAIKNotFound if no row matched.
 func (s *PostgresAIKStore) DeleteClient(clientID string) error {
 	result, err := s.db.Exec("DELETE FROM clients WHERE id = $1", clientID)
 	if err != nil {

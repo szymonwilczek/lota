@@ -59,26 +59,26 @@ Commands
 
    lota-fleet [global flags] <command> [command flags] [args]
 
-=====================================================  ========
-Command                                                API tier
-=====================================================  ========
-``health``                                             none
-``stats``                                              reader
-``devices list [-limit N] [-offset N]``                reader
-``devices show <client-id>``                           reader
-``revoke <client-id> -reason R -actor A [-note S]``    admin
-``unrevoke <client-id> -reason R -actor A [-note S]``  admin
-``revocations``                                        reader
-``ban <hardware-id> -reason R -actor A [-note S]``     admin
-``unban <hardware-id> -reason R -actor A [-note S]``   admin
-``bans [-limit N] [-next-id CURSOR]``                  reader
-``reanchor <client-id> -reason R -actor A [-note S]``  admin
-``delete <client-id> -reason R -actor A [-note S]``    admin
-``reanchor-review list``                               reader
-``reanchor-review ack <client-id>``                    admin
-``audit [-limit N]``                                   reader
-``attests [-limit N]``                                 reader
-=====================================================  ========
+================================================================  ========
+Command                                                           API tier
+================================================================  ========
+``health``                                                        none
+``stats``                                                         reader
+``devices list [-limit N] [-offset N]``                           reader
+``devices show <client-id>``                                      reader
+``revoke <client-id> -reason R -actor A [-note S]``               admin
+``unrevoke <client-id> -reason R -actor A [-note S]``             admin
+``revocations``                                                   reader
+``ban <hardware-id> -reason R -actor A [-note S]``                admin
+``unban <hardware-id> -reason R -actor A [-note S]``              admin
+``bans [-limit N] [-next-id CURSOR]``                             reader
+``reanchor <client-id> -reason R -actor A [-note S]``             admin
+``delete <client-id> -reason R -actor A [-note S]``               admin
+``reanchor-review list``                                          reader
+``reanchor-review ack <client-id> -reason R -actor A [-note S]``  admin
+``audit [-limit N]``                                              reader
+``attests [-limit N]``                                            reader
+================================================================  ========
 
 ``-reason`` on ``revoke`` must be one of the server's revocation reasons:
 ``cheating``, ``compromised``, ``hardware_change`` or ``admin``. ``-actor`` is
@@ -105,7 +105,9 @@ rendering, for scripting against the full field set.
 Exit codes: 0 on success, 1 when the operation fails **or reports a
 negative result** (a degraded ``health``), 2 on a usage error. ``devices list`` and ``reanchor-review list``
 print bare IDs on stdout (page summaries go to stderr), so their output
-pipes cleanly into further tooling.
+pipes cleanly into further tooling. An empty review queue therefore prints
+its count and nothing else: a queue with nothing in it and a command that
+did nothing are not the same answer.
 
 Lifecycle actions
 =================
@@ -117,16 +119,23 @@ update) that the self-service re-anchor refuses or is not enabled for.
 The action is audited (``reanchor``) and counted in the forced re-anchor
 metric.
 
-``delete`` removes the client's verifier-side trust state (baselines and,
-where the store carries one, the AIK registration), forcing a fresh
-enrollment. Revocations and hardware bans are keyed separately and
-**survive the delete**: removing a device cannot shed a ban. The action
-is audited (``delete_client``).
+``delete`` removes the client's verifier-side trust state: the baselines and
+the AIK registration, on every storage backend. The device keeps its
+certificate, so a running host returns at its next heartbeat and is
+re-baselined on what it measures then. Use ``revoke`` (or a hardware ban) to
+keep a host out. A deleted client leaves ``devices list`` immediately.
+Revocations and hardware bans are keyed separately and **survive the delete**:
+removing a device cannot shed a ban. The action is audited
+(``delete_client``).
 
 ``reanchor-review`` is the post-fact review queue for self-service
 re-anchors taken on the Low-Firmware-Assurance path; see the enrollment
 document (:doc:`production-bringup/ca-enrollment`) for when the verifier
-puts a client in that queue.
+puts a client in that queue. ``reanchor-review ack`` takes ``-reason`` and
+``-actor`` like the other trust changes, because it is the record that a
+person looked; a client with nothing queued is refused, so an
+acknowledgement cannot stand for a review that never happened. It is
+audited (``reanchor_review_ack``).
 
 Examples
 ========
