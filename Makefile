@@ -474,7 +474,7 @@ $(INC_DIR)/vmlinux.h:
 
 # Phony targets
 .PHONY: check-docs-strict
-.PHONY: help all bpf agent initramfs-lock installer verifier attest-ca fleet-cli loadgen packages container-images container-image-verifier container-image-attest-ca container-image-attest-ca-hsm helm-package helm-lint helm-template observability-lint srpm rpm-sign dnf-repo sdk server-sdk wine-hook anticheat pkgconfig sdk-stage clean htmldocs docs-lint docs-linkcheck docs-serve cleandocs install check-version-tag check-includes check-el9-decls check-license-boundary check-doc-diagnostics check-config-commands check-stack-frames check-private-errno check-package-manifests check-helm-chart check-container-images lint lint-c lint-go sparse smatch coccicheck reproducible-build test test-unit test-bins test-hardware test-sdk sanitizer-build valgrind-unit valgrind-smoke fuzz-agent fuzz-config fuzz-enroll fuzz-seal-envelope fuzz-tpm-attest fuzz-policy-sign fuzz-server-sdk fuzz-tpm-resp fuzz-bpf-devt fuzz-bpf-open-flags fuzz-bpf-kmem-device fuzz-bpf-event-budget fuzz-bpf-inaccessible-exec fuzz-bpf-shebang fuzz-bpf-all fuzz-all syzkaller-fuzz-loader examples examples-clean sign-bpf check-abi abi-baseline
+.PHONY: help all bpf agent initramfs-lock installer verifier attest-ca fleet-cli loadgen packages container-images container-image-verifier container-image-attest-ca container-image-attest-ca-hsm helm-package helm-lint helm-template observability-lint srpm rpm-sign dnf-repo sdk server-sdk wine-hook anticheat pkgconfig sdk-stage clean htmldocs docs-lint docs-linkcheck docs-serve cleandocs install check-version-tag check-includes check-el9-decls check-license-boundary check-doc-diagnostics check-config-commands check-stack-frames check-private-errno check-package-manifests check-helm-chart check-container-images lint lint-c lint-go print-lint-go-modules sparse smatch coccicheck reproducible-build test test-unit test-bins test-hardware test-sdk sanitizer-build valgrind-unit valgrind-smoke fuzz-agent fuzz-config fuzz-enroll fuzz-seal-envelope fuzz-tpm-attest fuzz-policy-sign fuzz-server-sdk fuzz-tpm-resp fuzz-bpf-devt fuzz-bpf-open-flags fuzz-bpf-kmem-device fuzz-bpf-event-budget fuzz-bpf-inaccessible-exec fuzz-bpf-shebang fuzz-bpf-all fuzz-all syzkaller-fuzz-loader examples examples-clean sign-bpf check-abi abi-baseline
 
 bpf: $(BPF_OBJ)
 
@@ -994,15 +994,14 @@ abi-baseline:
 CLANG_FORMAT ?= $(shell command -v clang-format-22 2>/dev/null || \
 	command -v clang-format 2>/dev/null)
 GOLANGCI_LINT ?= golangci-lint
+# Server SDK module: sdk/server once the public module moves there, else
+# src/sdk/server. Must precede LINT_GO_MODULES, which := expands in place.
+SERVER_SDK_MODULE := $(if $(wildcard sdk/server/go.mod),sdk/server,src/sdk/server)
 # Every Go module in the tree.
 # SDK and the examples are the code an integrator copies,
 # so they are linted at least as strictly as the rest.
 LINT_GO_MODULES := src/verifier src/attestca src/crl src/fleetctl \
-	$(SERVER_SDK_MODULE) examples/demo_server
-# Server SDK module is at src/sdk/server today and moves to sdk/server when
-# the public Go module lands where its import path points, so the list asks
-# the tree where it is rather than stating a path that goes stale.
-SERVER_SDK_MODULE := $(if $(wildcard sdk/server/go.mod),sdk/server,src/sdk/server)
+	$(SERVER_SDK_MODULE) examples/demo_server examples/ci-gate/gate
 
 lint: lint-c lint-go
 
@@ -1013,6 +1012,10 @@ lint-c:
 	@files=$$(git ls-files '*.c' '*.h' | grep -v '^include/vmlinux.h$$'); \
 		$(CLANG_FORMAT) --dry-run --Werror $$files
 	@echo "lint-c: clean"
+
+# Modules lint-go covers, one per line; check-patch reads this list.
+print-lint-go-modules:
+	@printf '%s\n' $(LINT_GO_MODULES)
 
 lint-go:
 	@command -v $(GOLANGCI_LINT) >/dev/null 2>&1 || { \
