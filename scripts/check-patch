@@ -56,6 +56,9 @@ Checks:
     spatch is missing),
   - stack-frame ceiling over the shipped C sources when C changes
     (blocking),
+  - every C fuzz target builds and passes its committed reproducers when
+    C, the Makefile or fuzz/ changes (blocking; skipped if clang is
+    missing, which CI never is),
   - BPF mirror drift guard when src/bpf/lota_lsm.bpf.c or fuzz/bpf_oracle
     changes (blocking).
 USAGE
@@ -1015,6 +1018,36 @@ check_coccinelle() {
     fi
 }
 
+# Fuzz targets link hand-picked agent sources, so any C change can break one.
+# Build them and replay fuzz/regressions/
+# Only run when C, the Makefile or fuzz/ changed.
+check_fuzz() {
+    local path touched=1 out
+    for path in "$@"; do
+        case "$path" in
+            *.c | *.h | Makefile | fuzz/*)
+                touched=0
+                ;;
+        esac
+    done
+    if ((touched != 0)); then
+        pass "fuzz"
+        return
+    fi
+    if ! command -v clang >/dev/null 2>&1; then
+        skip "fuzz" "install clang (with its libFuzzer runtime) to build the fuzz targets."
+        return
+    fi
+
+    if out=$(env GOCACHE="${GOCACHE:-/tmp/lota-gocache}" make BUILD_DIR="${BUILD_DIR:-/tmp/lota-build}" fuzz-regress 2>&1); then
+        pass "fuzz"
+    else
+        printf '%s\n' "$out" | grep -v '^make'
+        fail "fuzz" \
+             "run make BUILD_DIR=/tmp/lota-build fuzz-regress; fix the target that does not build or still fails its reproducer."
+    fi
+}
+
 # fuzz/bpf_oracle mirrors harnesses copy decision logic out of src/bpf/lota_lsm.bpf.c;
 # make check-bpf-mirror fails when that source drifts from the pinned lock.
 # Only run when the BPF source or the sandbox changed.
@@ -1191,6 +1224,7 @@ main() {
     check_sparse "${changed_files[@]}"
     check_smatch "${changed_files[@]}"
     check_coccinelle "${changed_files[@]}"
+    check_fuzz "${changed_files[@]}"
     check_bpf_mirror "${changed_files[@]}"
     check_package_manifests "${changed_files[@]}"
     check_helm_chart "${changed_files[@]}"

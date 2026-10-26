@@ -83,16 +83,18 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size)
 	}
 
 	/*
-	 * glibc-encoded st_dev is not this layout: for a non-zero major the two
-	 * numbers differ, which is one of the two reasons map keys are not taken
-	 * from stat(2) -- the other being btrfs, whose st_dev names a device
-	 * the superblock never had
-	*/
+	 * glibc st_dev puts the major in bits 8-19 and minor bits 8-19 in bits
+	 * 20-31, so map keys never come from stat(2) (nor does btrfs st_dev name
+	 * the superblock's device). The two layouts coincide only when the major
+	 * equals minor bits 8-19.
+	 */
 	{
 		unsigned gmaj = (maj & 0xFFFu) | 1u; // 12-bit non-zero major
 		unsigned gmin = min & 0xFFFFFu; // 20-bit minor
 		dev_t st = makedev(gmaj, gmin);
-		FZ_CHECK((unsigned long long)st != LOTA_DEVT_MKDEV(gmaj, gmin));
+		int same = (unsigned long long)st ==
+			   LOTA_DEVT_MKDEV(gmaj, gmin);
+		FZ_CHECK(same == (gmaj == ((gmin >> 8) & 0xFFFu)));
 	}
 
 	return 0;

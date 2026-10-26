@@ -475,7 +475,7 @@ $(INC_DIR)/vmlinux.h:
 
 # Phony targets
 .PHONY: check-docs-strict
-.PHONY: help all bpf agent initramfs-lock installer verifier attest-ca fleet-cli loadgen packages container-images container-image-verifier container-image-attest-ca container-image-attest-ca-hsm helm-package helm-lint helm-template observability-lint srpm rpm-sign dnf-repo sdk server-sdk wine-hook anticheat pkgconfig sdk-stage clean htmldocs docs-lint docs-linkcheck docs-serve cleandocs install check-version-tag check-includes check-el9-decls check-license-boundary check-test-build-dir check-doc-diagnostics check-config-commands check-stack-frames check-private-errno check-package-manifests check-helm-chart check-container-images lint lint-c lint-go print-lint-go-modules sparse smatch coccicheck reproducible-build test test-unit test-bins test-hardware test-sdk sanitizer-build valgrind-unit valgrind-smoke fuzz-agent fuzz-config fuzz-enroll fuzz-seal-envelope fuzz-tpm-attest fuzz-policy-sign fuzz-server-sdk fuzz-tpm-resp fuzz-bpf-devt fuzz-bpf-open-flags fuzz-bpf-kmem-device fuzz-bpf-event-budget fuzz-bpf-inaccessible-exec fuzz-bpf-shebang fuzz-bpf-all fuzz-all syzkaller-fuzz-loader examples examples-clean sign-bpf check-abi abi-baseline
+.PHONY: help all bpf agent initramfs-lock installer verifier attest-ca fleet-cli loadgen packages container-images container-image-verifier container-image-attest-ca container-image-attest-ca-hsm helm-package helm-lint helm-template observability-lint srpm rpm-sign dnf-repo sdk server-sdk wine-hook anticheat pkgconfig sdk-stage clean htmldocs docs-lint docs-linkcheck docs-serve cleandocs install check-version-tag check-includes check-el9-decls check-license-boundary check-test-build-dir check-doc-diagnostics check-config-commands check-stack-frames check-private-errno check-package-manifests check-helm-chart check-container-images lint lint-c lint-go print-lint-go-modules sparse smatch coccicheck reproducible-build test test-unit test-bins test-hardware test-sdk sanitizer-build valgrind-unit valgrind-smoke fuzz-agent fuzz-config fuzz-enroll fuzz-seal-envelope fuzz-tpm-attest fuzz-policy-sign fuzz-server-sdk fuzz-tpm-resp fuzz-bpf-devt fuzz-bpf-open-flags fuzz-bpf-kmem-device fuzz-bpf-event-budget fuzz-bpf-inaccessible-exec fuzz-bpf-shebang fuzz-bpf-all fuzz-all fuzz-regress syzkaller-fuzz-loader examples examples-clean sign-bpf check-abi abi-baseline
 
 bpf: $(BPF_OBJ)
 
@@ -2117,6 +2117,11 @@ test-unit: all $(TEST_BINS)
 	else \
 		echo "SKIP: test_attestca_build_tags.sh (no go or C compiler)"; \
 	fi
+	@if command -v clang >/dev/null 2>&1; then \
+		tests/integration/test_fuzz_leak_detection.sh; \
+	else \
+		echo "SKIP: test_fuzz_leak_detection.sh (no clang)"; \
+	fi
 	@if command -v go >/dev/null 2>&1; then \
 		tests/integration/test_bench_targets.sh; \
 	else \
@@ -2249,10 +2254,17 @@ valgrind-smoke: all examples
 FUZZ_CFLAGS := $(CFLAGS) -fsanitize=fuzzer,address -g -O1
 FUZZ_LDFLAGS := $(LDFLAGS) -fsanitize=fuzzer,address
 
+# Linked into every fuzz target: disables LSan where ptrace attach is refused
+FUZZ_LSAN_OBJ := $(BUILD_DIR)/fuzz/lsan_options.o
+
 # Every C libFuzzer harness lives under fuzz/ as fuzz_<name>.c;
 # the agent sources they exercise stay under src/agent/
 FUZZ_AGENT_OBJS := $(filter-out $(BUILD_DIR)/agent/main.o $(BUILD_DIR)/agent/ipc.o $(BUILD_DIR)/agent/reload.o $(BUILD_DIR)/agent/test_servers.o $(BUILD_DIR)/agent/startup_policy.o $(BUILD_DIR)/agent/daemon_loop.o, $(AGENT_OBJS))
-FUZZ_AGENT_OBJS += $(BUILD_DIR)/fuzz/fuzz_ipc.o
+FUZZ_AGENT_OBJS += $(BUILD_DIR)/fuzz/fuzz_ipc.o $(FUZZ_LSAN_OBJ)
+
+$(FUZZ_LSAN_OBJ): fuzz/lsan_options.c | $(BUILD_DIR)/fuzz
+	$(QUIET_CLANG)
+	$(Q)clang $(FUZZ_CFLAGS) -c $< -o $@
 
 $(BUILD_DIR)/fuzz/fuzz_ipc.o: fuzz/fuzz_ipc.c | $(BUILD_DIR)/fuzz
 	$(QUIET_CLANG)
@@ -2265,16 +2277,19 @@ fuzz-agent: $(FUZZ_AGENT_OBJS)
 	$(QUIET_CLANG)
 	$(Q)clang $(FUZZ_CFLAGS) -o $(BUILD_DIR)/fuzz-agent $(FUZZ_AGENT_OBJS) $(LDFLAGS)
 
-# Config parser fuzz (standalone, libc only)
+# Config parser fuzz (links config.c, pin.c, io_utils.c; tpm.h headers only)
+FUZZ_CONFIG_SRCS := src/agent/config.c src/agent/pin.c src/agent/io_utils.c
+FUZZ_CONFIG_OBJS := $(patsubst src/agent/%.c,$(BUILD_DIR)/fuzz/config_%.o,$(FUZZ_CONFIG_SRCS))
+
 $(BUILD_DIR)/fuzz/fuzz_config.o: fuzz/fuzz_config.c src/agent/config.h | $(BUILD_DIR)/fuzz
 	$(QUIET_CLANG)
 	$(Q)clang $(FUZZ_CFLAGS) -I$(INC_DIR) -c $< -o $@
 
-$(BUILD_DIR)/fuzz/config_obj.o: src/agent/config.c src/agent/config.h | $(BUILD_DIR)/fuzz
+$(BUILD_DIR)/fuzz/config_%.o: src/agent/%.c | $(BUILD_DIR)/fuzz
 	$(QUIET_CLANG)
-	$(Q)clang $(FUZZ_CFLAGS) -I$(INC_DIR) -DLOTA_TPM_H -DTPM_AIK_HANDLE=0x81010002 -c $< -o $@
+	$(Q)clang $(FUZZ_CFLAGS) -I$(INC_DIR) -MMD -MP -c $< -o $@
 
-fuzz-config: $(BUILD_DIR)/fuzz/fuzz_config.o $(BUILD_DIR)/fuzz/config_obj.o
+fuzz-config: $(BUILD_DIR)/fuzz/fuzz_config.o $(FUZZ_CONFIG_OBJS) $(FUZZ_LSAN_OBJ)
 	$(QUIET_CLANG)
 	$(Q)clang $(FUZZ_CFLAGS) -o $(BUILD_DIR)/fuzz-config $^
 
@@ -2283,7 +2298,7 @@ $(BUILD_DIR)/fuzz/fuzz_enroll.o: fuzz/fuzz_enroll.c src/agent/enroll.c src/agent
 	$(QUIET_CLANG)
 	$(Q)clang $(FUZZ_CFLAGS) -c $< -o $@
 
-fuzz-enroll: $(BUILD_DIR)/fuzz/fuzz_enroll.o
+fuzz-enroll: $(BUILD_DIR)/fuzz/fuzz_enroll.o $(FUZZ_LSAN_OBJ)
 	$(QUIET_CLANG)
 	$(Q)clang $(FUZZ_CFLAGS) -o $(BUILD_DIR)/fuzz-enroll $^
 
@@ -2296,7 +2311,7 @@ $(BUILD_DIR)/fuzz/seal_envelope_obj.o: src/agent/seal_envelope.c | $(BUILD_DIR)/
 	$(QUIET_CLANG)
 	$(Q)clang $(FUZZ_CFLAGS) -I$(INC_DIR) -c $< -o $@
 
-fuzz-seal-envelope: $(BUILD_DIR)/fuzz/fuzz_seal_envelope.o $(BUILD_DIR)/fuzz/seal_envelope_obj.o
+fuzz-seal-envelope: $(BUILD_DIR)/fuzz/fuzz_seal_envelope.o $(BUILD_DIR)/fuzz/seal_envelope_obj.o $(FUZZ_LSAN_OBJ)
 	$(QUIET_CLANG)
 	$(Q)clang $(FUZZ_CFLAGS) -o $(BUILD_DIR)/fuzz-seal-envelope $^ -lcrypto
 
@@ -2305,7 +2320,7 @@ $(BUILD_DIR)/fuzz/fuzz_tpm_attest.o: fuzz/fuzz_tpm_attest.c | $(BUILD_DIR)/fuzz
 	$(QUIET_CLANG)
 	$(Q)clang $(FUZZ_CFLAGS) -c $< -o $@
 
-fuzz-tpm-attest: $(BUILD_DIR)/fuzz/fuzz_tpm_attest.o
+fuzz-tpm-attest: $(BUILD_DIR)/fuzz/fuzz_tpm_attest.o $(FUZZ_LSAN_OBJ)
 	$(QUIET_CLANG)
 	$(Q)clang $(FUZZ_CFLAGS) -o $(BUILD_DIR)/fuzz-tpm-attest $^ -ltss2-mu
 
@@ -2318,7 +2333,7 @@ $(BUILD_DIR)/fuzz/policy_sign_obj.o: src/agent/policy_sign.c src/agent/policy_si
 	$(QUIET_CLANG)
 	$(Q)clang $(FUZZ_CFLAGS) -I$(INC_DIR) -c $< -o $@
 
-fuzz-policy-sign: $(BUILD_DIR)/fuzz/fuzz_policy_sign.o $(BUILD_DIR)/fuzz/policy_sign_obj.o
+fuzz-policy-sign: $(BUILD_DIR)/fuzz/fuzz_policy_sign.o $(BUILD_DIR)/fuzz/policy_sign_obj.o $(FUZZ_LSAN_OBJ)
 	$(QUIET_CLANG)
 	$(Q)clang $(FUZZ_CFLAGS) -o $(BUILD_DIR)/fuzz-policy-sign $^ -lcrypto
 
@@ -2331,7 +2346,7 @@ $(BUILD_DIR)/fuzz/server_sdk_obj.o: src/sdk/lota_server.c $(VERSION_FILE) | $(BU
 	$(QUIET_CLANG)
 	$(Q)clang $(FUZZ_CFLAGS) $(SDK_VERSION_CFLAGS) -I$(INC_DIR) -c $< -o $@
 
-fuzz-server-sdk: $(BUILD_DIR)/fuzz/fuzz_server_sdk.o $(BUILD_DIR)/fuzz/server_sdk_obj.o
+fuzz-server-sdk: $(BUILD_DIR)/fuzz/fuzz_server_sdk.o $(BUILD_DIR)/fuzz/server_sdk_obj.o $(FUZZ_LSAN_OBJ)
 	$(QUIET_CLANG)
 	$(Q)clang $(FUZZ_CFLAGS) -o $(BUILD_DIR)/fuzz-server-sdk $^ -lcrypto
 
@@ -2340,7 +2355,7 @@ $(BUILD_DIR)/fuzz/fuzz_tpm_resp.o: fuzz/fuzz_tpm_resp.c | $(BUILD_DIR)/fuzz
 	$(QUIET_CLANG)
 	$(Q)clang $(FUZZ_CFLAGS) -c $< -o $@
 
-fuzz-tpm-resp: $(BUILD_DIR)/fuzz/fuzz_tpm_resp.o
+fuzz-tpm-resp: $(BUILD_DIR)/fuzz/fuzz_tpm_resp.o $(FUZZ_LSAN_OBJ)
 	$(QUIET_CLANG)
 	$(Q)clang $(FUZZ_CFLAGS) -o $(BUILD_DIR)/fuzz-tpm-resp $^ -ltss2-mu
 
@@ -2357,7 +2372,7 @@ $(BUILD_DIR)/fuzz/fuzz_devt.o: fuzz/bpf_oracle/fuzz_devt.c include/lota_devt.h |
 	$(QUIET_CLANG)
 	$(Q)clang $(BPF_ORACLE_CFLAGS) -c $< -o $@
 
-fuzz-bpf-devt: $(BUILD_DIR)/fuzz/fuzz_devt.o
+fuzz-bpf-devt: $(BUILD_DIR)/fuzz/fuzz_devt.o $(FUZZ_LSAN_OBJ)
 	$(QUIET_CLANG)
 	$(Q)clang $(FUZZ_CFLAGS) -o $(BUILD_DIR)/fuzz-bpf-devt $^
 
@@ -2365,7 +2380,7 @@ $(BUILD_DIR)/fuzz/fuzz_open_flags.o: fuzz/bpf_oracle/fuzz_open_flags.c fuzz/bpf_
 	$(QUIET_CLANG)
 	$(Q)clang $(BPF_ORACLE_CFLAGS) -c $< -o $@
 
-fuzz-bpf-open-flags: $(BUILD_DIR)/fuzz/fuzz_open_flags.o
+fuzz-bpf-open-flags: $(BUILD_DIR)/fuzz/fuzz_open_flags.o $(FUZZ_LSAN_OBJ)
 	$(QUIET_CLANG)
 	$(Q)clang $(FUZZ_CFLAGS) -o $(BUILD_DIR)/fuzz-bpf-open-flags $^
 
@@ -2373,7 +2388,7 @@ $(BUILD_DIR)/fuzz/fuzz_kmem_device.o: fuzz/bpf_oracle/fuzz_kmem_device.c fuzz/bp
 	$(QUIET_CLANG)
 	$(Q)clang $(BPF_ORACLE_CFLAGS) -c $< -o $@
 
-fuzz-bpf-kmem-device: $(BUILD_DIR)/fuzz/fuzz_kmem_device.o
+fuzz-bpf-kmem-device: $(BUILD_DIR)/fuzz/fuzz_kmem_device.o $(FUZZ_LSAN_OBJ)
 	$(QUIET_CLANG)
 	$(Q)clang $(FUZZ_CFLAGS) -o $(BUILD_DIR)/fuzz-bpf-kmem-device $^
 
@@ -2381,7 +2396,7 @@ $(BUILD_DIR)/fuzz/fuzz_event_budget.o: fuzz/bpf_oracle/fuzz_event_budget.c inclu
 	$(QUIET_CLANG)
 	$(Q)clang $(BPF_ORACLE_CFLAGS) -c $< -o $@
 
-fuzz-bpf-event-budget: $(BUILD_DIR)/fuzz/fuzz_event_budget.o
+fuzz-bpf-event-budget: $(BUILD_DIR)/fuzz/fuzz_event_budget.o $(FUZZ_LSAN_OBJ)
 	$(QUIET_CLANG)
 	$(Q)clang $(FUZZ_CFLAGS) -o $(BUILD_DIR)/fuzz-bpf-event-budget $^
 
@@ -2389,7 +2404,7 @@ $(BUILD_DIR)/fuzz/fuzz_inaccessible_exec.o: fuzz/bpf_oracle/fuzz_inaccessible_ex
 	$(QUIET_CLANG)
 	$(Q)clang $(BPF_ORACLE_CFLAGS) -c $< -o $@
 
-fuzz-bpf-inaccessible-exec: $(BUILD_DIR)/fuzz/fuzz_inaccessible_exec.o
+fuzz-bpf-inaccessible-exec: $(BUILD_DIR)/fuzz/fuzz_inaccessible_exec.o $(FUZZ_LSAN_OBJ)
 	$(QUIET_CLANG)
 	$(Q)clang $(FUZZ_CFLAGS) -o $(BUILD_DIR)/fuzz-bpf-inaccessible-exec $^
 
@@ -2397,7 +2412,7 @@ $(BUILD_DIR)/fuzz/fuzz_shebang.o: fuzz/bpf_oracle/fuzz_shebang.c fuzz/bpf_oracle
 	$(QUIET_CLANG)
 	$(Q)clang $(BPF_ORACLE_CFLAGS) -c $< -o $@
 
-fuzz-bpf-shebang: $(BUILD_DIR)/fuzz/fuzz_shebang.o
+fuzz-bpf-shebang: $(BUILD_DIR)/fuzz/fuzz_shebang.o $(FUZZ_LSAN_OBJ)
 	$(QUIET_CLANG)
 	$(Q)clang $(FUZZ_CFLAGS) -o $(BUILD_DIR)/fuzz-bpf-shebang $^
 
@@ -2445,9 +2460,36 @@ update-bpf-mirror:
 	mv $(BPF_MIRROR_LOCK).new $(BPF_MIRROR_LOCK); \
 	echo "bpf-mirror: lock refreshed"
 
-fuzz-all: fuzz-agent fuzz-config fuzz-enroll \
+FUZZ_TARGETS := fuzz-agent fuzz-config fuzz-enroll \
 	fuzz-seal-envelope fuzz-tpm-attest fuzz-policy-sign fuzz-server-sdk \
-	fuzz-tpm-resp fuzz-bpf-all
+	fuzz-tpm-resp fuzz-bpf-devt fuzz-bpf-open-flags fuzz-bpf-kmem-device \
+	fuzz-bpf-event-budget fuzz-bpf-inaccessible-exec fuzz-bpf-shebang
+
+fuzz-all: $(FUZZ_TARGETS)
+
+# Replay fuzz/regressions/<target>/ against each target; any target that
+# still fails fails the run. New artifacts go to the build dir, not the tree.
+FUZZ_REGRESS_DIR := fuzz/regressions
+
+fuzz-regress: fuzz-all
+	@rc=0; \
+	for t in $(FUZZ_TARGETS); do \
+		d=$(FUZZ_REGRESS_DIR)/$$t; \
+		[ -d $$d ] || continue; \
+		set -- $$(find $$d -type f ! -name '*.rst' | sort); \
+		[ $$# -gt 0 ] || continue; \
+		echo "== $$t: $$# reproducer(s)"; \
+		if ! $(BUILD_DIR)/$$t \
+			-artifact_prefix=$(BUILD_DIR)/fuzz/regress-$$t- "$$@" \
+			>$(BUILD_DIR)/fuzz/regress-$$t.log 2>&1; then \
+			grep -E 'ERROR|SUMMARY|Running:|in LLVMFuzzerTestOneInput' \
+				$(BUILD_DIR)/fuzz/regress-$$t.log | tail -20 >&2; \
+			echo "fuzz-regress: $$t still fails on a committed reproducer," \
+				"log in $(BUILD_DIR)/fuzz/regress-$$t.log" >&2; \
+			rc=1; \
+		fi; \
+	done; \
+	exit $$rc
 
 # syzkaller bring-up harness: loads the production BPF LSM object,
 # attaches every hook in enforce mode, and idles so syz-executor's
@@ -2521,6 +2563,7 @@ help:
 	@echo ""
 	@echo "Fuzz targets:"
 	@echo "  fuzz-all         Build every fuzz target"
+	@echo "  fuzz-regress     Replay the committed C fuzz reproducers"
 	@echo "  fuzz-agent       Build IPC/agent fuzz target"
 	@echo "  fuzz-config      Build config parser fuzz target"
 	@echo "  fuzz-seal-envelope Build sealed-envelope parser/AEAD fuzz target"
@@ -2625,3 +2668,4 @@ bench-clean:
 -include $(SERVER_SDK_OBJS:.o=.d)
 -include $(WINE_HOOK_OBJS:.o=.d)
 -include $(ANTICHEAT_OBJS:.o=.d)
+-include $(FUZZ_CONFIG_OBJS:.o=.d)
