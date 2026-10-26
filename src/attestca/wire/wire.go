@@ -78,6 +78,7 @@ const (
 	StatusInternalError  uint16 = 6
 	StatusRateLimited    uint16 = 7
 	StatusTokenRejected  uint16 = 8
+	StatusCRLStale       uint16 = 9 // EK issuer's CRLs all past NextUpdate
 )
 
 var (

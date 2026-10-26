@@ -243,7 +243,9 @@ so the intermediate must be part of the bundle for the feed to load.
 
 The CA fails closed at startup on a CRL that does not verify, omits
 ``NextUpdate``, or uses a weak signature algorithm, and an issuer whose every
-loaded CRL is past ``NextUpdate`` is refused at enrollment time.
+loaded CRL is past ``NextUpdate`` is refused at enrollment time with its own
+status, distinct from a rejected endorsement key and from a CA fault: the host
+is told the feed needs refreshing.
 
 An issuer with no configured CRL is accepted (standard RFC 5280 semantics) --
 ship the feed for every manufacturer that publishes one.

@@ -45,6 +45,12 @@ Pair the bundle with the manufacturers' EK revocation feeds: ``-ek-crl <file>``
 SIGHUP reloads a rewritten feed in place. See the "Manufacturer CRLs" section of
 :ghsrc:`configs/ek-roots/README.rst`.
 
+Two ceilings bound what an unauthenticated peer can hold open: ``-max-pending``
+caps concurrent half-finished enrollments (default 4096, then the
+concurrency-limit status), ``-session-ttl`` how long one survives unanswered
+(default 2 minutes). Lower them on a public CA. A non-positive value stops the
+CA at startup. Both are logged on the startup line beside ``aik_cert_ttl``.
+
 CA signing key
 ==============
 
@@ -181,10 +187,10 @@ Each refusal prints the status the CA sent and the sentence
 that goes with it -- an endorsement key that is not accepted here, an
 attestation key template that is not, a challenge the CA no longer holds, a
 CA that is at its concurrency limit, a token that was not recognised -- along
-with whether the answer is worth retrying. Two of them are worth separating:
-an internal error is a fault at the CA and a later attempt may succeed, while
-a rejected endorsement key is a decision about this machine that will be made
-the same way every time. A status the agent has no name for is printed as a
+with whether the answer is worth retrying. An internal error is a CA fault a
+later attempt may clear; a rejected endorsement key is refused every time; a
+stale manufacturer CRL is neither, and lifts once an operator refreshes the
+feed and signals the CA. A status the agent has no name for is printed as a
 number and said to be one, which is what an older agent meeting a newer CA
 looks like.
 
@@ -483,7 +489,7 @@ a retry does not change; the CA log names which one applied, and for a chain
 that could not be built, the certificate the path needed next -- on a firmware
 TPM usually a vendor intermediate the bundle does not pin. An internal-error
 status means the CA could not serve the request and a later attempt may
-succeed, as with an unverifiable or expired CRL feed.
+succeed. A lapsed CRL feed has a status of its own.
 
 The device pseudonym in the certificate ``CommonName`` mixes in a named
 tenant, so one TPM enrolling into two tenants yields two distinct device IDs

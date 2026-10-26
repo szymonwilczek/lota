@@ -335,8 +335,10 @@ func (s *Server) writeFrame(conn net.Conn, body []byte) error {
 //
 // Besides the chain checks, the EK arm holds verdicts on the key itself:
 // not listed by a strict tenant manifest, revoked by its manufacturer's CRL,
-// or carrying the ROCA fingerprint. A stale or unverifiable CRL is CA
-// configuration, not a verdict, and stays in the default arm.
+// or carrying the ROCA fingerprint.
+//
+// A stale CRL has its own status; a CRL that does not verify stops the CA at
+// startup and never gets here.
 func beginStatus(err error) uint16 {
 	switch {
 	case errors.Is(err, ca.ErrEKChain), errors.Is(err, ca.ErrEKExpired),
@@ -346,6 +348,8 @@ func beginStatus(err error) uint16 {
 		errors.Is(err, ca.ErrEKWeakKey), errors.Is(err, crl.ErrCertificateRevoked),
 		errors.Is(err, enroll.ErrEKNotListed):
 		return wire.StatusEKRejected
+	case errors.Is(err, crl.ErrCRLStale):
+		return wire.StatusCRLStale
 	case errors.Is(err, credential.ErrAIKDecode), errors.Is(err, credential.ErrAIKTemplate),
 		errors.Is(err, credential.ErrAIKName), errors.Is(err, enroll.ErrAIKKeyType):
 		return wire.StatusAIKRejected

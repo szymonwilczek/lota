@@ -14,6 +14,9 @@ import (
 	"log/slog"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/szymonwilczek/lota/attestca/enroll"
 )
 
 // A configuration whose only defect is the one under test: every other
@@ -26,6 +29,8 @@ func hsmConfig(mutate func(*runConfig)) *runConfig {
 		tlsKeyPath:   "/nonexistent/tls.key",
 		pseudonymKey: "/nonexistent/pseudonym.key",
 		ekRootBundle: "/nonexistent/ek-roots",
+		sessionTTL:   enroll.DefaultSessionTTL,
+		maxPending:   enroll.DefaultMaxPending,
 	}
 	mutate(cfg)
 	return cfg
@@ -97,5 +102,71 @@ func TestNeitherKeySourceNamesCaKey(t *testing.T) {
 	got := runErr(t, hsmConfig(func(*runConfig) {}))
 	if !strings.Contains(got, "missing required -ca-key") {
 		t.Fatalf("a CA with no key source did not ask for -ca-key: %s", got)
+	}
+}
+
+// A non-positive -session-ttl or -max-pending is refused by flag name
+func TestNonPositiveCeilingIsRefusedByName(t *testing.T) {
+	cases := map[string]struct {
+		mutate func(*runConfig)
+		flag   string
+	}{
+		"-session-ttl 0": {
+			mutate: func(c *runConfig) { c.sessionTTL = 0 },
+			flag:   "-session-ttl",
+		},
+		"-session-ttl negative": {
+			mutate: func(c *runConfig) { c.sessionTTL = -time.Second },
+			flag:   "-session-ttl",
+		},
+		"-max-pending 0": {
+			mutate: func(c *runConfig) { c.maxPending = 0 },
+			flag:   "-max-pending",
+		},
+		"-max-pending negative": {
+			mutate: func(c *runConfig) { c.maxPending = -5 },
+			flag:   "-max-pending",
+		},
+	}
+
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			cfg := hsmConfig(func(c *runConfig) {
+				c.caKeyPath = "/nonexistent/ca.key"
+				tc.mutate(c)
+			})
+			got := runErr(t, cfg)
+			if !strings.Contains(got, tc.flag) {
+				t.Fatalf("a non-positive ceiling did not name %s: %s",
+					tc.flag, got)
+			}
+		})
+	}
+}
+
+// Both ceilings appear on the startup line beside the certificate TTL.
+func TestStartupLineCarriesBothCeilings(t *testing.T) {
+	cfg := hsmConfig(func(c *runConfig) {
+		c.sessionTTL = 45 * time.Second
+		c.maxPending = 32
+	})
+
+	fields := map[string]any{}
+	got := startupFields(cfg, "127.0.0.1:8444", 1, 2, 0)
+	for i := 0; i+1 < len(got); i += 2 {
+		key, ok := got[i].(string)
+		if !ok {
+			t.Fatalf("field %d is not a key: %v", i, got[i])
+		}
+		fields[key] = got[i+1]
+	}
+
+	if fields["session_ttl"] != "45s" {
+		t.Errorf("session_ttl on the startup line is %v, want the 45s that was passed",
+			fields["session_ttl"])
+	}
+	if fields["max_pending"] != 32 {
+		t.Errorf("max_pending on the startup line is %v, want the 32 that was passed",
+			fields["max_pending"])
 	}
 }
