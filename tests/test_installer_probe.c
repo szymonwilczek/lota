@@ -10,6 +10,7 @@
  * the reboot-resume logic depends on.
  */
 
+#include <endian.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <stdint.h>
@@ -21,6 +22,7 @@
 
 #include "../installer/install.h"
 #include "../installer/probe.h"
+#include "../src/agent/tpm.h"
 
 static int tests_run;
 static int tests_passed;
@@ -534,20 +536,70 @@ cleanup:
 		fprintf(stderr, "warning: cleanup failed\n");
 }
 
+/*
+ * The reboot-into-setup request is an EFI variable write, which a full store
+ * refuses even when the firmware supports it. The startup screen needs no
+ * write, so it follows the command.
+ */
+static void test_secureboot_remediation_when_the_request_fails(void)
+{
+	char msg[STAGE_NOTE_CAP];
+	const char *cmd;
+	const char *screen;
+
+	TEST("a refused request still leaves the startup screen");
+	probe_secureboot_remediation("Example Corp Example Board X1", 0, 0, 1,
+				     msg, sizeof(msg));
+	cmd = strstr(msg, "systemctl reboot --firmware-setup");
+	screen = strstr(msg, "startup screen");
+	if (!cmd || !screen || !strstr(msg, "vendor logo")) {
+		FAIL(msg);
+		return;
+	}
+	if (screen < cmd) {
+		FAIL("the keystroke is offered before the command");
+		return;
+	}
+	if (!strstr(msg, "Cannot allocate memory")) {
+		FAIL("the refusal a full store gives is not named");
+		return;
+	}
+	PASS();
+}
+
+/*
+ * Longest message: the longest DMI machine name, setup mode, request taken.
+ * Truncation drops the last instructions first.
+ */
+static void test_secureboot_remediation_fits_a_note(void)
+{
+	char msg[STAGE_NOTE_CAP];
+	char machine[192];
+	size_t len;
+
+	TEST("the longest Secure Boot route fits in a stage note");
+	memset(machine, 'M', sizeof(machine) - 1);
+	machine[sizeof(machine) - 1] = '\0';
+	probe_secureboot_remediation(machine, 0, 1, 1, msg, sizeof(msg));
+	len = strlen(msg);
+	if (len + 1 >= sizeof(msg) ||
+	    strcmp(msg + len - 19, "'mokutil --import'.") != 0) {
+		FAIL(msg + (len > 60 ? len - 60 : 0));
+		return;
+	}
+	PASS();
+}
+
 static void test_secureboot_remediation(void)
 {
 	char msg[STAGE_NOTE_CAP];
 	char small[64];
 
-	TEST("firmware that takes the request gets the command, not a key");
+	TEST("firmware that takes the request gets the command first");
 	probe_secureboot_remediation("Example Corp Example Board X1", 0, 0, 1,
 				     msg, sizeof(msg));
 	if (!strstr(msg, "systemctl reboot --firmware-setup")) {
 		FAIL("boot-to-setup command missing");
-		return;
-	}
-	if (strstr(msg, "vendor logo")) {
-		FAIL("a keystroke was offered where the command works");
 		return;
 	}
 	PASS();
@@ -894,7 +946,7 @@ static void test_barrier_stage_verdicts(void)
 	char note[256];
 
 	TEST("a platform-extended PCR14 before any lock is not stale state");
-	if (probe_pcr14_barrier_stage(PROBE_PCR14_OTHER, 0, 0, 0, note,
+	if (probe_pcr14_barrier_stage(PROBE_PCR14_OTHER, 0, 0, 0, 0, note,
 				      sizeof(note)) != STAGE_REBOOT) {
 		FAIL("a first install still needs a reboot");
 		return;
@@ -906,7 +958,7 @@ static void test_barrier_stage_verdicts(void)
 	PASS();
 
 	TEST("a genuinely stale commitment keeps its wording");
-	if (probe_pcr14_barrier_stage(PROBE_PCR14_OTHER, 1, 0, 0, note,
+	if (probe_pcr14_barrier_stage(PROBE_PCR14_OTHER, 1, 0, 0, 0, note,
 				      sizeof(note)) != STAGE_REBOOT) {
 		FAIL("stale state still needs a reboot");
 		return;
@@ -918,7 +970,7 @@ static void test_barrier_stage_verdicts(void)
 	PASS();
 
 	TEST("a running agent's own commitment is satisfied");
-	if (probe_pcr14_barrier_stage(PROBE_PCR14_OTHER, 1, 1, 0, note,
+	if (probe_pcr14_barrier_stage(PROBE_PCR14_OTHER, 1, 1, 0, 0, note,
 				      sizeof(note)) != STAGE_DONE) {
 		FAIL("this boot's commitment is the satisfied state");
 		return;
@@ -926,7 +978,7 @@ static void test_barrier_stage_verdicts(void)
 	PASS();
 
 	TEST("the lock value alone is satisfied");
-	if (probe_pcr14_barrier_stage(PROBE_PCR14_LOCK_ONLY, 1, 0, 0, note,
+	if (probe_pcr14_barrier_stage(PROBE_PCR14_LOCK_ONLY, 1, 0, 0, 0, note,
 				      sizeof(note)) != STAGE_DONE) {
 		FAIL("a locked register is what this stage waits for");
 		return;
@@ -934,7 +986,7 @@ static void test_barrier_stage_verdicts(void)
 	PASS();
 
 	TEST("an agent that already refused is not sent to another reboot");
-	if (probe_pcr14_barrier_stage(PROBE_PCR14_OTHER, 1, 0, 1, note,
+	if (probe_pcr14_barrier_stage(PROBE_PCR14_OTHER, 1, 0, 1, 0, note,
 				      sizeof(note)) != STAGE_BLOCKED) {
 		FAIL("a reboot cannot satisfy a refused startup gate");
 		return;
@@ -946,7 +998,7 @@ static void test_barrier_stage_verdicts(void)
 	PASS();
 
 	TEST("a running agent is not read as a failed one");
-	if (probe_pcr14_barrier_stage(PROBE_PCR14_OTHER, 1, 1, 1, note,
+	if (probe_pcr14_barrier_stage(PROBE_PCR14_OTHER, 1, 1, 1, 0, note,
 				      sizeof(note)) != STAGE_DONE) {
 		FAIL("an earlier failed start outweighed the running agent");
 		return;
@@ -954,12 +1006,138 @@ static void test_barrier_stage_verdicts(void)
 	PASS();
 
 	TEST("a pristine register still says the lock has not run");
-	if (probe_pcr14_barrier_stage(PROBE_PCR14_ZERO, 0, 0, 0, note,
+	if (probe_pcr14_barrier_stage(PROBE_PCR14_ZERO, 0, 0, 0, 0, note,
 				      sizeof(note)) != STAGE_REBOOT) {
 		FAIL("no lock this boot needs a reboot");
 		return;
 	}
 	PASS();
+}
+
+/*
+ * A pause is the one refusal a reboot clears: --pause spends PCR 14 and the
+ * agent refuses every later start that boot. The snapshot is written through
+ * the agent's struct, so the layout the installer reads cannot drift.
+ */
+_Static_assert(sizeof(struct lota_clock_state) == 120,
+	       "installer/probe.c reads the snapshot as 120 bytes");
+
+static int write_snapshot(const char *path, const uint8_t *pcr14, uint8_t flags)
+{
+	struct lota_clock_state snap = { 0 };
+	int fd;
+	ssize_t n;
+
+	snap.magic = htole32(TPM_CLOCK_STATE_MAGIC);
+	snap.version = htole32(TPM_CLOCK_STATE_VERSION);
+	snap.reset_count = htole32(7);
+	snap.restart_count = htole32(3);
+	memcpy(snap.pcr14, pcr14, sizeof(snap.pcr14));
+	memset(snap.self_hash, 0x5a, sizeof(snap.self_hash));
+	snap.saved_at = (int64_t)htole64(1700000000);
+	snap.flags = flags;
+
+	fd = open(path, O_WRONLY | O_CREAT | O_TRUNC, 0600);
+	if (fd < 0)
+		return -1;
+	n = write(fd, &snap, sizeof(snap));
+	close(fd);
+	return n == (ssize_t)sizeof(snap) ? 0 : -1;
+}
+
+static void test_agent_paused_reader(void)
+{
+	uint8_t spent[PROBE_HASH_SIZE];
+	uint8_t other[PROBE_HASH_SIZE];
+	char path[64];
+	int fd;
+
+	memset(spent, 0xa7, sizeof(spent));
+	memset(other, 0x3c, sizeof(other));
+	snprintf(path, sizeof(path), "/tmp/lota-inst-clock.%d", (int)getpid());
+
+	TEST("a pause the register still carries is read as one");
+	if (write_snapshot(path, spent,
+			   LOTA_CLOCK_STATE_FLAG_INITRAMFS_LOCK |
+				   LOTA_CLOCK_STATE_FLAG_SHUTDOWN_POISON) !=
+	    0) {
+		FAIL("cannot write the snapshot");
+		return;
+	}
+	if (probe_agent_paused_at(path, spent) != 1)
+		FAIL("the agent's own pause record is not recognised");
+	else
+		PASS();
+
+	TEST("a register moved on since the pause is not a pause");
+	if (probe_agent_paused_at(path, other) != 0)
+		FAIL("a later extend still reads as paused");
+	else
+		PASS();
+
+	TEST("a snapshot without the pause flag is not a pause");
+	if (write_snapshot(path, spent, LOTA_CLOCK_STATE_FLAG_INITRAMFS_LOCK) !=
+		    0 ||
+	    probe_agent_paused_at(path, spent) != 0)
+		FAIL("an ordinary commitment reads as paused");
+	else
+		PASS();
+
+	TEST("a short or missing snapshot is not a pause");
+	fd = open(path, O_WRONLY | O_TRUNC);
+	if (fd >= 0) {
+		if (write(fd, "LCLK", 4) != 4)
+			fd = -2;
+		close(fd);
+	}
+	if (fd < 0 || probe_agent_paused_at(path, spent) != 0) {
+		FAIL("a truncated snapshot reads as paused");
+		unlink(path);
+		return;
+	}
+	unlink(path);
+	if (probe_agent_paused_at(path, spent) != 0)
+		FAIL("no snapshot reads as paused");
+	else
+		PASS();
+}
+
+static int barrier_says(int agent_active, int agent_failed, int agent_paused,
+			enum stage_state want, const char *has,
+			const char *lacks)
+{
+	char note[512];
+
+	if (probe_pcr14_barrier_stage(PROBE_PCR14_OTHER, 1, agent_active,
+				      agent_failed, agent_paused, note,
+				      sizeof(note)) != want) {
+		FAIL(note);
+		return 0;
+	}
+	if ((has && !strstr(note, has)) || (lacks && strstr(note, lacks))) {
+		FAIL(note);
+		return 0;
+	}
+	return 1;
+}
+
+static void test_barrier_after_a_pause(void)
+{
+	TEST("a paused agent's refused start is cleared by a reboot");
+	if (barrier_says(0, 1, 1, STAGE_REBOOT, "--resume", "does not clear"))
+		PASS();
+
+	TEST("a paused agent nobody restarted is not stale state");
+	if (barrier_says(0, 0, 1, STAGE_REBOOT, "paused", "earlier agent run"))
+		PASS();
+
+	TEST("a refusal without a pause still names the log");
+	if (barrier_says(0, 1, 0, STAGE_BLOCKED, "journalctl", NULL))
+		PASS();
+
+	TEST("a running agent outweighs an old pause record");
+	if (barrier_says(1, 0, 1, STAGE_DONE, NULL, NULL))
+		PASS();
 }
 
 /*
@@ -1329,10 +1507,14 @@ int main(void)
 	test_machine_description();
 	test_efivar_payload();
 	test_secureboot_remediation();
+	test_secureboot_remediation_when_the_request_fails();
+	test_secureboot_remediation_fits_a_note();
 	test_auto_bringup_opt_in();
 	test_manifest_line();
 	test_installed_kernels();
 	test_barrier_stage_verdicts();
+	test_agent_paused_reader();
+	test_barrier_after_a_pause();
 	test_ima_mode_blocking();
 	test_ima_scope_stage_verdicts();
 	test_ima_policy_scope_reader();

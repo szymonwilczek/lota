@@ -62,12 +62,12 @@ install, so no report sends one.
   ``--yes --plain``, does nothing at all inside a container or image build (the
   host that eventually boots the image is the one bring-up belongs to), and
   **leaves the two boot-path stages alone** -- the initramfs PCR 14 lock and
-  the kernel integrity floor -- stopping at the reboot checkpoint with the one
-  command that finishes the job. A host that wants those unattended as well
-  says so before installing, with ``/etc/lota/auto-bringup`` or
-  ``LOTA_AUTO_BRINGUP=1``; exactly ``1``, since a hook inherits whatever
-  environment the transaction had and reading ``0`` as consent is how a
-  machine ends up with a boot path nobody chose.
+  the kernel integrity floor -- stopping at the reboot checkpoint, where it
+  names each boot-path stage still to run and the one command that runs them.
+  A host that wants them unattended too opts in before installing, with
+  ``/etc/lota/auto-bringup`` or ``LOTA_AUTO_BRINGUP=1``; exactly ``1``, since
+  a hook inherits whatever environment the transaction had and reading ``0``
+  as consent is how a machine ends up with a boot path nobody chose.
 
 On an interactive terminal ``lota-install`` is a full-screen application
 (alternate screen): a stage list on the left, a details pane explaining the selected
@@ -97,15 +97,27 @@ follows terminal resizes. Keys:
    * - ``q``, ``Ctrl-C``
      - Quit (``Ctrl-C`` first aborts a running command)
 
-The original scrollback is restored on exit and a one-line result (complete /
-reboot required / re-run to continue) is printed to the normal screen. Without a
-TTY, or with ``--plain``, the same stages run as a sequential prompted flow
-suitable for logs and scripts.
+The original scrollback is restored on exit and a one-line result is printed
+to the normal screen: complete (exit ``0``), reboot required (``10``) or
+re-run to continue (``1``). Without a TTY, or with ``--plain``, the same stages
+run as a sequential prompted flow suitable for logs and scripts. There a stage
+with work to do prints what it found after ``Before this stage:`` and ends
+``applied``; a stage with nothing to do reports ``already satisfied``. An
+upgrade that brings a binary without fs-verity thus shows that stage as
+``applied``.
 
-Exit codes: ``0`` complete, ``1`` failed or blocked on missing input, ``2``
-usage, ``10`` reboot required -- reboot and re-run the same command, the
-installer detects the finished stages from live system state and continues at
-the first unmet one.
+Exit codes:
+
+* ``0`` -- complete: every stage is satisfied, the same answer ``--status``
+  gives with exit ``0``;
+* ``1`` -- failed, blocked on missing input, or stopped before the end;
+* ``2`` -- usage;
+* ``10`` -- reboot required: reboot and re-run the same command, the installer
+  detects the finished stages from live system state and continues at the
+  first unmet one;
+* ``11`` -- ``--unattended`` only: host-local setup is done and the boot-path
+  stages it names are left to a person, so the host is not finished. Run
+  ``sudo lota-install`` to complete it.
 
 There is no state file to corrupt: every done-condition is probed from the
 system itself (installed files, the fs-verity bit, the initramfs content,
@@ -122,15 +134,17 @@ What the stages do
    kernels keep working). It is also the one requirement nobody but the person
    at the keyboard can satisfy, so the blocked stage prints a route instead of
    a rule: the machine as DMI names it, ``systemctl reboot --firmware-setup``
-   where the firmware advertises that it honours the request, the extra
-   "restore the factory keys" step when the firmware is in setup mode, and
-   that enabling Secure Boot leaves distribution kernels bootable. A guest is
-   sent to its VM definition instead, since a virtual machine has no firmware
-   menu of its own -- ``systemd-detect-virt`` decides that, so the installer
-   keeps no list of hypervisors. Everything in that message is read off the
-   machine; the installer names no per-vendor menu path or setup key, because
-   those differ between firmware revisions of a single model and a confidently
-   wrong instruction costs more than a general one.
+   where the firmware honours that request, then the startup screen's key for
+   when it is refused (the request is an EFI variable write, which a full store
+   answers with ``Cannot allocate memory``), the "restore the factory keys"
+   step in setup mode, and that enabling Secure Boot leaves distribution
+   kernels bootable. A guest is sent to its VM definition instead, since a
+   virtual machine has no firmware menu of its own -- ``systemd-detect-virt``
+   decides that, so the installer keeps no list of hypervisors. Everything in
+   that message is read off the machine; the installer names no per-vendor
+   menu path or setup key, because those differ between firmware revisions of
+   a single model and a confidently wrong instruction costs more than a
+   general one.
 #. **Package artifacts** -- agent binary, BPF object, systemd units, udev rule
    and dracut module are installed. The installer does not build or download
    anything. Missing artifacts mean the LOTA package has not been installed yet.
@@ -188,6 +202,12 @@ What the stages do
    already run and refused to start this boot is told that instead: the
    register carries the extend of that attempt, and the next boot meets the
    same refusal, so the checkpoint names ``journalctl -u lota-agent -b``.
+   A pause is the exception: an agent stopped with ``lota-install --pause`` or
+   ``lota-agent --shutdown`` spent the register on purpose and refuses to start
+   until the next boot, so the checkpoint asks for that reboot, as
+   ``--resume`` does. It reads the pause from the flag the agent records in
+   ``/var/lib/lota/clock_state.dat``, while PCR 14 still holds the value the
+   agent left.
    PCR 14 only resets on a hardware reset, so this cannot be skipped. On a
    Secure Boot machine PCR 14 is already non-zero before any of this -- shim
    measures the MOK variables into it -- and the checkpoint says.

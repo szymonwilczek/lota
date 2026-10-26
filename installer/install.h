@@ -25,6 +25,7 @@
 #define EXIT_INSTALL_FAIL 1
 #define EXIT_INSTALL_USAGE 2
 #define EXIT_INSTALL_REBOOT 10 /* re-run after reboot to resume */
+#define EXIT_INSTALL_DEFERRED 11 /* boot-path stages left to a person */
 
 /* Well-known artifact paths laid down by the LOTA package */
 #define PATH_AGENT_BIN "/usr/bin/lota-agent"
@@ -106,10 +107,8 @@ enum stage_state {
 	STAGE_ERROR, /* the probe itself failed */
 };
 
-/* Holds the longest note stage produces:
- * the Secure-Boot remediation, which names the setting, the route into this
- * machine's firmware setup and what enabling it does not break */
-#define STAGE_NOTE_CAP 1024
+/* Fits the longest stage note, the Secure Boot remediation */
+#define STAGE_NOTE_CAP 1536
 
 struct stage {
 	const char *title;
@@ -162,6 +161,59 @@ const char *installer_trust_key(const char *named, const char *conf_pubkey,
 
 /* human-readable @src */
 const char *installer_trust_key_source_says(enum trust_key_source src);
+
+/*
+ * installer_trust_fallback - the key the agent resolves once @key is gone
+ *
+ * @key:           the key installer_trust_key() returned.
+ * @src:           where it came from.
+ * @conf_pubkey, @override_path, @packaged_path: as for installer_trust_key().
+ *
+ * Returns NULL when nothing else would verify the object in its place.
+ */
+const char *installer_trust_fallback(const char *key, enum trust_key_source src,
+				     const char *conf_pubkey,
+				     const char *override_path,
+				     const char *packaged_path);
+
+/*
+ * installer_trust_refusal - the note for an object @key does not verify
+ *
+ * @fallback: what installer_trust_fallback() returned.
+ * @obj:      the enforcement object.
+ */
+void installer_trust_refusal(char *buf, size_t cap, const char *key,
+			     enum trust_key_source src, const char *fallback,
+			     const char *obj);
+
+/*
+ * install_unattended_checkpoint - an unattended run stops at the checkpoint
+ *
+ * @buf, @cap: filled with what the run prints there.
+ * @deferred:  indices into install_stages[] the run left to a person.
+ * @n:         how many.
+ *
+ * Returns the exit code the run ends with.
+ */
+int install_unattended_checkpoint(char *buf, size_t cap, const int *deferred,
+				  int n);
+
+/*
+ * install_reboot_required - the sentence a run that stops for a reboot opens
+ * with
+ *
+ * @buf, @cap: filled with the sentence.
+ * @note:      why, as the stage that asked for the reboot put it.
+ */
+void install_reboot_required(char *buf, size_t cap, const char *note);
+
+/*
+ * install_stage_result - the outcome a stage reports
+ *
+ * @st:      what the stage's probe says now.
+ * @applied: 1 when this run applied the stage just before that probe.
+ */
+enum ui_result install_stage_result(enum stage_state st, int applied);
 
 /* Stage table (stages.c); barrier_index marks the reboot checkpoint */
 extern const struct stage install_stages[];
