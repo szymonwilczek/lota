@@ -21,6 +21,9 @@
 # Every shipped unit must be stopped by both %systemd_preun and the nfpm
 # preremove script, or it outlives its deleted binary.
 #
+# Provides and Requires must match too: nfpm declares the pkgconfig(<name>)
+# rpmbuild derives from each shipped .pc, and pins every sibling the spec pins.
+#
 # Parent directories of other listed paths are dropped (rpm needs %dir, nfpm
 # does not); a directory shipped empty stays compared.
 
@@ -79,7 +82,7 @@ nfpm_paths() {
 			gsub(/^["'"'"']|["'"'"']$/, "")
 			src = $0
 			next
-		}
+	}
 		/^[ \t]*-?[ \t]*dst:[ \t]*/ {
 			sub(/^[^:]*:[ \t]*/, "")
 			gsub(/^["'"'"']|["'"'"']$/, "")
@@ -91,7 +94,7 @@ nfpm_paths() {
 				print
 			}
 			src = ""
-		}
+	}
 	' "$cfg" | sort -u | drop_parents | sort -u
 }
 
@@ -148,7 +151,7 @@ spec_paths() {
 				next
 			}
 			print line
-		}
+	}
 	' "$SPEC" | sort -u | drop_parents | sort -u
 }
 
@@ -311,7 +314,7 @@ owned_dirs() {
 				gsub(/^["'"'"']|["'"'"']$/, "")
 				dst = $0
 				next
-			}
+	    }
 			/^[ \t]*type:[ \t]*dir[ \t]*$/ { if (dst != "") print dst }
 		' "$cfg"
     done
@@ -332,7 +335,7 @@ owned_dirs() {
 				gsub(/%\{_includedir\}/, "/usr/include", line)
 				gsub(/%\{name\}/, "lota", line)
 				print line
-			}
+	}
 		' "$SPEC"
         break
     done < <(awk '/^%files[ \t]+/ { print }' "$SPEC")
@@ -348,8 +351,8 @@ check_declared_parents() {
 
         # /usr, /var/lib and the like belong to the distribution
         case "$parent" in
-        /var/lib/lota* | /etc/lota* | /usr/lib/lota* | /usr/share/lota*) ;;
-        *) continue ;;
+            /var/lib/lota* | /etc/lota* | /usr/lib/lota* | /usr/share/lota*) ;;
+            *) continue ;;
         esac
 
         grep -qxF "$parent" <<<"$dirs" && continue
@@ -359,9 +362,9 @@ check_declared_parents() {
         echo "  an unowned directory is created at whatever mode the umask gives it,"
         echo "  is not verified by rpm -V, and is neither restored nor removed"
     done < <({
-        for cfg in "$NFPM_DIR"/*.yaml; do nfpm_paths "$cfg"; done
-        echo "$dirs"
-    } | sort -u)
+             for cfg in "$NFPM_DIR"/*.yaml; do nfpm_paths "$cfg"; done
+             echo "$dirs"
+         } | sort -u)
 }
 
 check_declared_parents
@@ -438,11 +441,187 @@ check_removal_scriptlets() {
 
 check_removal_scriptlets
 
+# Print the overrides.rpm.$2 list of nfpm config $1.
+nfpm_rpm_list() {
+    local cfg=$1 field=$2
+
+    awk -v field="$field" '
+		$0 ~ "^[ \t]*" field ":[ \t]*$" { in_list = 1; next }
+		in_list && /^[ \t]*-[ \t]*/ {
+			sub(/^[ \t]*-[ \t]*/, "")
+			gsub(/^["'"'"']|["'"'"']$/, "")
+			print
+			next
+	}
+		in_list { in_list = 0 }
+	' "$cfg"
+}
+
+# Every .pc an nfpm package ships needs its pkgconfig(<name>) provide,
+# or BuildRequires: pkgconfig(<name>) resolves only against the COPR build.
+check_pkgconfig_provides() {
+    local cfg pkg pc name provides
+
+    for cfg in "$NFPM_DIR"/*.yaml; do
+        pkg=$(awk '/^name:[ \t]*/ { sub(/^name:[ \t]*/, ""); print; exit }' "$cfg")
+        [ -n "$pkg" ] || continue
+
+        provides=$(nfpm_rpm_list "$cfg" provides)
+        while read -r pc; do
+            [ -n "$pc" ] || continue
+            name=${pc##*/}
+            name=${name%.pc}
+
+            grep -qxF "pkgconfig(${name})" <<<"$provides" && continue
+
+            fail=1
+            echo "FAIL: ${pkg} ships ${pc} and declares no pkgconfig(${name})"
+            echo "  rpmbuild derives the provide from the file and nfpm does not,"
+            echo "  so the two channels hand an integrator different contracts;"
+            echo "  add it under overrides.rpm.provides in ${cfg}"
+        done < <(nfpm_paths "$cfg" | grep '^/usr/lib64/pkgconfig/.*\.pc$' || true)
+    done
+}
+
+check_pkgconfig_provides
+
+# Siblings the spec pins with `Requires: %{name}-<x> = %{version}-...`
+spec_locked_siblings() {
+    local section=$1
+
+    awk -v section="$section" '
+		$0 ~ "^%package[ \t]+" section "$" { in_pkg = 1; next }
+		/^%package[ \t]/ || /^%description[ \t]/ { in_pkg = 0 }
+		in_pkg && /^Requires:[ \t]*%\{name\}-/ {
+			line = $0
+			sub(/^Requires:[ \t]*/, "", line)
+			# a bare sibling requirement is no lock
+			if (line !~ /=[ \t]*%\{version\}/)
+				next
+			sub(/%\{name\}/, "lota", line)
+			sub(/%\{\?_isa\}.*/, "", line)
+			sub(/[ \t]*=.*/, "", line)
+			print line
+		}
+	' "$SPEC" | sort -u
+}
+
+check_sibling_version_locks() {
+    local cfg pkg section sibling depends
+
+    for cfg in "$NFPM_DIR"/*.yaml; do
+        pkg=$(awk '/^name:[ \t]*/ { sub(/^name:[ \t]*/, ""); print; exit }' "$cfg")
+        [ -n "$pkg" ] || continue
+        section=${pkg#lota-}
+
+        depends=$(nfpm_rpm_list "$cfg" depends)
+        while read -r sibling; do
+            [ -n "$sibling" ] || continue
+
+            # any version constraint; the release is spelled differently
+            grep -qE "^${sibling}(\(|[ \t]*[=<>])" <<<"$depends" && continue
+
+            fail=1
+            echo "FAIL: ${SPEC} locks ${pkg} to one build of ${sibling} and ${cfg} does not"
+            echo "  a bare dependency permits ${pkg} at one version beside"
+            echo "  ${sibling} at another, so the .so symlink points at a soname"
+            echo "  the installed headers were not written against"
+        done < <(spec_locked_siblings "$section")
+    done
+}
+
+check_sibling_version_locks
+
+# Paths the `install` target writes, one per line, with DESTDIR empty.
+# Variables are expanded as in guarded_installs; a destination ending in /
+# takes the source's name. Destinations built by a shell loop or a make
+# function stay unresolved, so compare only trees that spell each path out.
+make_install_paths() {
+    awk '
+		function expand(s,   rounds, name, val) {
+			for (rounds = 0; rounds < 8; rounds++) {
+				if (!match(s, /\$\([A-Za-z_][A-Za-z0-9_]*\)/))
+					break
+				name = substr(s, RSTART + 2, RLENGTH - 3)
+				val = (name in var) ? var[name] : ""
+				s = substr(s, 1, RSTART - 1) val \
+				    substr(s, RSTART + RLENGTH)
+			}
+			return s
+		}
+
+		NR == FNR {
+			if ($0 ~ /^[A-Za-z_][A-Za-z0-9_]*[ \t]*[:?]?=/) {
+				name = $0
+				sub(/[ \t]*[:?]?=.*$/, "", name)
+				value = $0
+				sub(/^[^=]*=[ \t]*/, "", value)
+				if (!(name in var))
+					var[name] = value
+			}
+			next
+		}
+
+		{
+			line = joined $0
+			if (line ~ /\\$/) {
+				sub(/[ \t]*\\$/, " ", line)
+				joined = line
+				next
+			}
+			joined = ""
+		}
+
+		line ~ /^install:/ { in_install = 1; next }
+		!in_install { next }
+		line !~ /^[ \t]/ { in_install = 0; next }
+
+		{
+			n = split(line, stmt, /;/)
+			for (i = 1; i <= n; i++) {
+				if (stmt[i] !~ /install[ \t]+-m/)
+					continue
+				m = split(stmt[i], word, /[ \t]+/)
+				dest = expand(word[m])
+				if (dest ~ /\/$/ && m > 1) {
+					name = expand(word[m - 1])
+					sub(/.*\//, "", name)
+					dest = dest name
+				}
+				sub(/^\$\(DESTDIR\)/, "", dest)
+				if (dest ~ /^\//)
+					print dest
+			}
+		}
+	' "$MAKEFILE" "$MAKEFILE" | sort -u
+}
+
+# Fail on a /usr/share/lota file the packages ship and `make install` does not
+# place; the installer stages read from there.
+check_source_install_data() {
+    local cfg pkg path packaged installed
+
+    installed=$(make_install_paths)
+    packaged=$(for cfg in "$NFPM_DIR"/*.yaml; do nfpm_paths "$cfg"; done | sort -u)
+
+    while read -r path; do
+	[ -n "$path" ] || continue
+	grep -qxF "$path" <<<"$installed" && continue
+
+	fail=1
+	echo "FAIL: the packages ship ${path} and \`make install\` does not place it"
+	echo "  a host built from source has nothing at the path the installer"
+	echo "  and the operator reference both name"
+    done < <(grep '^/usr/share/lota/' <<<"$packaged" || true)
+}
+
+check_source_install_data
+
 # Every path the spec ships, across its subpackages
 spec_installed=$(while read -r section; do
-    [ -n "$section" ] || continue
-    spec_paths "$section" "lota-${section}"
-done < <(awk '/^%files[ \t]+/ { sub(/^%files[ \t]+/, ""); print }' "$SPEC"))
+                     [ -n "$section" ] || continue
+                     spec_paths "$section" "lota-${section}"
+                 done < <(awk '/^%files[ \t]+/ { sub(/^%files[ \t]+/, ""); print }' "$SPEC"))
 
 # the other direction: subpackage the spec builds and nfpm does not
 while read -r section; do
@@ -467,9 +646,9 @@ done < <(guarded_installs)
 
 if [ "$fail" -ne 0 ]; then
     echo
-    echo "The two manifests must list the same installed paths per package,"
-    echo "the spec must take its version from ${VERSION_FILE}, and it must"
-    echo "produce every file it claims."
+    echo "The two manifests must list the same installed paths per package and"
+    echo "promise the same provides and dependencies, the spec must take its"
+    echo "version from ${VERSION_FILE}, and it must produce every file it claims."
     exit 1
 fi
 

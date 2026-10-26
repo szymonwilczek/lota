@@ -620,37 +620,53 @@ $(LOADGEN_BIN): $(wildcard $(SRC_DIR)/verifier/loadgen/*.go $(SRC_DIR)/verifier/
 
 # Canonical reproducible build
 # This target pins the remaining environmental inputs the toolchain reads
-# -- the build timestamp (SOURCE_DATE_EPOCH), the time zone and the local
-#  -- so the artifacts depend only on the source tree.
+# -- the build timestamp (SOURCE_DATE_EPOCH), the time zone and the locale
+# -- so the artifacts depend only on the source tree.
 # SOURCE_DATE_EPOCH defaults to the HEAD commit time, so a build from a
 # given commit (or tag) is deterministic.
-# Override REPRO_SOURCE_DATE_EPOCH for an out-of-tree source drop without
-# git.
+# Outside a git checkout there is none; stamping targets refuse.
+# Set REPRO_SOURCE_DATE_EPOCH to the release date instead.
 # See Documentation/security/reproducible-builds.rst for how to verify shipped == tag.
-REPRO_SOURCE_DATE_EPOCH ?= $(shell git -C $(CURDIR) log -1 --pretty=%ct 2>/dev/null || echo 1700000000)
+REPRO_SOURCE_DATE_EPOCH ?= $(shell git -C $(CURDIR) log -1 --pretty=%ct 2>/dev/null)
+
+# First step of every target that stamps the build timestamp.
+define require_source_date_epoch
+	@test -n "$(REPRO_SOURCE_DATE_EPOCH)" || { \
+		echo "$@: no commit time to read and REPRO_SOURCE_DATE_EPOCH is unset." >&2; \
+		echo "  This tree has no git checkout to take the timestamp from." >&2; \
+		echo "  Pass the source's own release date, in seconds:" >&2; \
+		echo "    make $@ REPRO_SOURCE_DATE_EPOCH=\$$(date -u -d 2026-01-31 +%s)" >&2; \
+		exit 1; \
+	}
+endef
+
 reproducible-build: export SOURCE_DATE_EPOCH = $(REPRO_SOURCE_DATE_EPOCH)
 reproducible-build: export TZ = UTC
 reproducible-build: export LC_ALL = C
-reproducible-build: all
+# Refuse before building; the sub-make inherits the pinned environment.
+reproducible-build:
+	$(require_source_date_epoch)
+	$(Q)$(MAKE) all
 	@echo "Reproducible build complete (SOURCE_DATE_EPOCH=$(REPRO_SOURCE_DATE_EPOCH), TZ=UTC, LC_ALL=C)"
 
 # Native packages (RPM via nfpm)
 # Builds one .rpm per config under packaging/nfpm/ into $(PKG_DIR).
 # Depends on the build artifacts (all), so the configs find the binaries and
 # libraries they reference.
-# Agent package ships the BPF object UNSIGNED on purpose:
-# each adopter signs it during bring-up.
+# Agent package ships the BPF object signed, with its .sig and public key;
+# a build missing either is refused.
 #
 # Changelog version tracks VERSION:
 # Template placeholder is substituted from PROJECT_VERSION into a generated file
 # the configs point at, so it never has to be bumped alongside VERSION.
 #
-# rpmlint runs over the built RPMs when installed (report only, non-fatal);
-# the release CI is the gating lint.
+# Ends in package-lint; an rpmlint error fails the build.
 #
 # .spec / COPR path layers on top for the Fedora build service.
 NFPM ?= nfpm
 RPMLINT ?= rpmlint
+# rpm spelling of the version (- as ~); exact sibling depends need it
+RPM_VERSION := $(subst -,~,$(PROJECT_VERSION))
 PKG_DIR ?= $(BUILD_DIR)/packages
 NFPM_CONFIGS := lota-agent lota-verifier lota-attest-ca lota-sdk lota-sdk-devel
 CHANGELOG_TMPL := packaging/nfpm/changelog.yaml
@@ -662,6 +678,9 @@ CHANGELOG_GEN := $(BUILD_DIR)/changelog.gen.yaml
 # lota-install's SELinux stage can load it without the operator
 # hand-compiling the module out of band.
 SELINUX_PP := selinux/lota.pp
+SELINUX_IF := selinux/lota.if
+# Must match both package manifests and lota-install's SELinux stage default.
+SELINUX_DATA_DIR := /usr/share/lota/selinux
 $(SELINUX_PP):
 	$(Q)$(MAKE) -C selinux lota.pp
 
@@ -692,14 +711,25 @@ packages: all selinux-pp
 	$(Q)sed 's/@LOTA_VERSION@/$(PROJECT_VERSION)/g' $(CHANGELOG_TMPL) > $(CHANGELOG_GEN)
 	$(Q)for c in $(NFPM_CONFIGS); do \
 		echo "  NFPM    $$c"; \
-		LOTA_VERSION=$(PROJECT_VERSION) $(NFPM) pkg \
+		LOTA_VERSION=$(PROJECT_VERSION) \
+		LOTA_RPM_VERSION=$(RPM_VERSION) $(NFPM) pkg \
 			-f packaging/nfpm/$$c.yaml -p rpm -t $(PKG_DIR)/ || exit 1; \
 	done
 	@echo "RPMs written to $(PKG_DIR)"
+	$(Q)$(MAKE) package-lint
+
+# rpmlint over the built RPMs, local and CI alike. Without lota.rpmlintrc
+# the deliberate findings bury new ones; skipped when rpmlint is missing.
+.PHONY: package-lint
+package-lint:
+	$(Q)ls $(PKG_DIR)/*.rpm >/dev/null 2>&1 || { \
+		echo "package-lint: no RPMs in $(PKG_DIR); run make packages first" >&2; \
+		exit 1; \
+	}
 	$(Q)if command -v $(RPMLINT) >/dev/null 2>&1; then \
 		echo "  RPMLINT $(PKG_DIR)"; \
 		$(RPMLINT) --ignore-unused-rpmlintrc \
-			-r packaging/nfpm/lota.rpmlintrc $(PKG_DIR)/*.rpm || true; \
+			-r packaging/nfpm/lota.rpmlintrc $(PKG_DIR)/*.rpm; \
 	else \
 		echo "  RPMLINT skipped ($(RPMLINT) not installed)"; \
 	fi
@@ -746,12 +776,15 @@ KO_BUILD_HSM = env KO_CONFIG_PATH=$(KO_HSM_CONFIG) KO_DOCKER_REPO=$(KO_DOCKER_RE
 container-images: container-image-verifier container-image-attest-ca container-image-attest-ca-hsm
 
 container-image-verifier:
+	$(require_source_date_epoch)
 	$(Q)cd $(SRC_DIR)/verifier && $(KO_BUILD) .
 
 container-image-attest-ca:
+	$(require_source_date_epoch)
 	$(Q)cd $(SRC_DIR)/attestca && $(KO_BUILD) .
 
 container-image-attest-ca-hsm:
+	$(require_source_date_epoch)
 	$(Q)cd $(SRC_DIR)/attestca && $(KO_BUILD_HSM) .
 
 # Helm chart validation (no Kubernetes cluster required)
@@ -808,9 +841,8 @@ observability-lint:
 # Archives HEAD into a tarball and builds an SRPM into OUTDIR.
 # COPR drives this through .copr/Makefile; locally run `make srpm`.
 # The spec carries @VERSION@ and @CHANGELOG@: both are filled from VERSION here
-# (rpm spells the prerelease ~), so a version bump touches VERSION alone.
+# (as RPM_VERSION), so a version bump touches VERSION alone.
 # An entry is added unless the spec already holds one for this version.
-SRPM_VERSION := $(subst -,~,$(PROJECT_VERSION))
 SRPM_TREE := $(BUILD_DIR)/srpmtree
 SRPM_SPEC := $(SRPM_TREE)/SPECS/lota.spec
 OUTDIR ?= $(BUILD_DIR)/srpm
@@ -818,9 +850,9 @@ OUTDIR ?= $(BUILD_DIR)/srpm
 srpm: check-package-manifests
 	$(Q)rm -rf $(SRPM_TREE)
 	$(Q)mkdir -p $(SRPM_TREE)/SOURCES $(SRPM_TREE)/SPECS $(OUTDIR)
-	$(Q)git archive --format=tar.gz --prefix=lota-$(SRPM_VERSION)/ \
-		-o $(SRPM_TREE)/SOURCES/lota-$(SRPM_VERSION).tar.gz HEAD
-	$(Q)awk -v ver='$(SRPM_VERSION)' -v src='$(PROJECT_VERSION)' \
+	$(Q)git archive --format=tar.gz --prefix=lota-$(RPM_VERSION)/ \
+		-o $(SRPM_TREE)/SOURCES/lota-$(RPM_VERSION).tar.gz HEAD
+	$(Q)awk -v ver='$(RPM_VERSION)' -v src='$(PROJECT_VERSION)' \
 		-v date="$$(LC_ALL=C git log -1 --format=%cd --date=format:'%a %b %d %Y')" ' \
 	NR == FNR { \
 		if ($$1 == "Release:") { rel = $$2; sub(/%.*/, "", rel) } \
@@ -1203,7 +1235,9 @@ coccicheck:
 	echo "coccicheck: clean"
 
 # Install to system (requires root)
-install: check-version-tag all
+# selinux-pp is required, not guarded: without the module lota-install's
+# SELinux stage has nothing to load.
+install: check-version-tag all selinux-pp
 	install -d $(DESTDIR)/usr/bin
 	install -d $(DESTDIR)/usr/lib/lota
 	install -d $(DESTDIR)/usr/lib/dracut/modules.d/90lota
@@ -1247,6 +1281,12 @@ install: check-version-tag all
 	install -d $(DESTDIR)/usr/share/lota/ima
 	install -m 644 configs/ima/lota-ima-policy \
 		$(DESTDIR)/usr/share/lota/ima/lota-ima-policy
+	install -d $(DESTDIR)$(SELINUX_DATA_DIR)
+	install -m 644 $(SELINUX_PP) $(DESTDIR)$(SELINUX_DATA_DIR)/lota.pp
+	@# The interfaces are callable only from a file the policy devel
+	@# Makefile can see, so the source ships beside the module for a
+	@# caller to copy.
+	install -m 644 $(SELINUX_IF) $(DESTDIR)$(SELINUX_DATA_DIR)/lota.if
 	install -d $(DESTDIR)/etc/dbus-1/system.d
 	install -m 644 dbus/org.lota.Agent1.conf $(DESTDIR)/etc/dbus-1/system.d/
 	install -d $(DESTDIR)/usr/lib/sysusers.d
@@ -2425,6 +2465,7 @@ help:
 	@echo "  wine-hook        Build Wine/Proton LD_PRELOAD hook"
 	@echo "  anticheat        Build anti-cheat compatibility layer"
 	@echo "  packages         Build native RPMs (agent, verifier, attest-ca, sdk-devel) via nfpm"
+	@echo "  package-lint     rpmlint the built RPMs with the project filter file (gating)"
 	@echo "  rhel-package-smoke Build+install the RPMs on Rocky 9 (podman); no attestation"
 	@echo "  container-images Build distroless OCI images for verifier + attest-CA (ko)"
 	@echo "  container-image-attest-ca-hsm  Build the PKCS#11 (HSM) attest-CA image"

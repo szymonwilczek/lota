@@ -68,14 +68,11 @@ jobs:
           ./build/lota-agent --gen-signing-key "$RUNNER_TEMP/ci-enforcement"
           make sign-bpf SIGNING_KEY="$RUNNER_TEMP/ci-enforcement.key"
 
-      - name: Build the RPMs
+      - name: Build and lint the RPMs
         run: |
           make packages \
             SIGNING_KEY="$RUNNER_TEMP/ci-enforcement.key" \
             SIGNING_PUBKEY="$RUNNER_TEMP/ci-enforcement.pub"
-
-      - name: Lint the RPMs (advisory)
-        run: rpmlint build/packages/*.rpm || true
 
       - name: Upload RPMs
         uses: actions/upload-artifact@v4

@@ -106,7 +106,7 @@ Automated developer bring-up
 
 .. code-block:: sh
 
-    sudo make install                                           # land agent + BPF + units
+    sudo make install                                           # land agent + BPF + units + SELinux module
     sudo scripts/lota-dev-bringup.sh                            # gate the host
     sudo reboot                                                 # PCR14 baseline rebind
     sudo systemctl start lota-agent.socket lota-agent.service

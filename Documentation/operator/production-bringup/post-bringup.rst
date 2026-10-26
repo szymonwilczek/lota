@@ -822,7 +822,9 @@ operator works around it.
       sudo make BUILD_DIR=/var/tmp/lota-build install
 
 * ``sudo make install`` **does not load the SELinux module.** The install rule
-  lands ``lota.pp`` under the source tree but does not call ``semodule -i``.
+  places ``lota.pp`` at ``/usr/share/lota/selinux/lota.pp``, where
+  ``lota-install``'s SELinux stage reads it from, but nothing calls
+  ``semodule -i`` on its own.
   After any change to :ghsrc:`selinux/lota.te`, rebuild the module on the host (the
   in-tree :ghsrc:`selinux/Makefile` writes to ``tmp/`` in the cwd, which the
   read-only virtiofs blocks), then load the package inside the guest:

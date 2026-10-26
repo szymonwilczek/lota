@@ -136,13 +136,8 @@ fi
 %make_build sign-bpf SIGNING_KEY=%{lota_signing_key} %{?lota_signing_pubkey:SIGNING_PUBKEY=%{lota_signing_pubkey}}
 
 %install
+# also installs lota.pp and lota.if under %{_datadir}/lota/selinux
 %make_install
-# make install does not place the SELinux module;
-# install it where lota-install expects it (GPL-2.0-only, like the BPF object)
-install -Dpm 0644 selinux/lota.pp %{buildroot}%{_datadir}/lota/selinux/lota.pp
-# The documented interfaces are callable only from a file the SELinux devel
-# Makefile can see; ship the source so a caller has something to copy.
-install -Dpm 0644 selinux/lota.if %{buildroot}%{_datadir}/lota/selinux/lota.if
 
 %check
 # rpm's strip BRPs rewrite ELF files after %install. The packaged object must

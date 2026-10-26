@@ -1,4 +1,4 @@
-# rpmlint filters for the LOTA RPMs (passed to rpmlint via `make packages`)
+# rpmlint filters for the LOTA RPMs (passed to rpmlint via `make package-lint`)
 #
 # Each filter below silences known, intentional finding so that a real regression
 # still stands out.
@@ -22,3 +22,6 @@ addFilter("explicit-lib-dependency")
 # entry version (e.g. 0.4.0) omits the -1 release the package carries.
 # Cosmetic nfpm limitation and not version mismatch.
 addFilter("incoherent-version-in-changelog")
+
+# "verifier" names a shipped binary; rpmlint's dictionary lacks it.
+addFilter("spelling-error .*verifier")
