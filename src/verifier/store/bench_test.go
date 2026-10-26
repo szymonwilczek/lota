@@ -6,9 +6,24 @@
 
 package store
 
-import "testing"
+import (
+	"io"
+	"log/slog"
+	"testing"
+)
+
+// quietLogs discards slog output for the benchmark: go test folds stderr into
+// the results file, and benchstat cannot parse log lines.
+func quietLogs(b *testing.B) {
+	b.Helper()
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(io.Discard, nil)))
+	b.Cleanup(func() { slog.SetDefault(prev) })
+}
 
 func BenchmarkSQLiteGetAIK(b *testing.B) {
+	quietLogs(b)
+
 	st, cleanup := createTestSQLiteAIKStore(b)
 	defer cleanup()
 

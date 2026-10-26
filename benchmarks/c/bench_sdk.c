@@ -25,6 +25,7 @@
 #include "lota_anticheat.h"
 #include "lota_gaming.h"
 #include "lota_server.h"
+#include "lota_token.h"
 
 struct sdk_ctx {
 	char exe_path[256];
@@ -115,6 +116,8 @@ static int build_token(struct sdk_ctx *x)
 	x->tok.runtime_protect_epoch = 42;
 	x->tok.protect_pid_count = 0;
 	x->tok.protected_pids = NULL;
+	/* Serializers refuse version 0 */
+	x->tok.runtime_protect_version = LOTA_RUNTIME_PROTECT_V2;
 
 	/* Representative TPMS_ATTEST blob (quote info ~ 100-130 bytes). */
 	x->tok.attest_size = 120;

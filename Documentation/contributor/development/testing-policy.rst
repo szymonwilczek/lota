@@ -48,6 +48,11 @@ Testing policy
    * - Packaging
      - the nfpm configs and the RPM spec ship the same files
      - ``make check-package-manifests``
+   * - Benchmarks
+     - every benchmark builds and runs; either target fails when its runner
+       does (numbers come from a pinned host, see
+       :ghsrc:`benchmarks/README.rst`)
+     - ``make bench-c``, ``make bench-go``; CI job ``benchmarks``
 
 A fuzz crash leaves a reproducer under ``testdata/fuzz/<Target>/``. Commit it
 so the regression is locked in.
