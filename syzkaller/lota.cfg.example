@@ -32,6 +32,7 @@
     "shutdown",
     "close",
 
+    "socket$lota_unix",
     "connect$lota",
     "write$lota_ping",
     "write$lota_status",
@@ -46,13 +47,12 @@
     "shutdown$lota",
     "close$lota",
 
+    "bpf$BPF_BTF_GET_NEXT_ID",
+    "bpf$BPF_BTF_GET_FD_BY_ID",
+    "bpf$TOKEN_CREATE",
     "bpf$MAP_CREATE",
     "bpf$MAP_LOOKUP_ELEM",
-    "bpf$MAP_UPDATE_ELEM",
     "bpf$MAP_DELETE_ELEM",
-    "bpf$BPF_PROG_ATTACH",
-    "bpf$BPF_PROG_DETACH",
-    "bpf$LINK_DETACH",
     "bpf$OBJ_PIN_MAP",
     "bpf$OBJ_GET_MAP",
 
@@ -67,6 +67,8 @@
 
     "kexec_load",
     "init_module",
+    "syz_create_resource$binfmt",
+    "openat$binfmt",
     "finit_module",
     "delete_module",
 
@@ -76,7 +78,9 @@
 
     "mount",
     "move_mount",
+    "open_tree",
     "fsopen",
+    "fsconfig$FSCONFIG_CMD_CREATE",
     "fsmount",
 
     "memfd_create",
@@ -85,6 +89,9 @@
     "execve",
     "execveat",
     "openat",
+    "openat$lota_mem",
+    "openat$lota_kmem",
+    "openat$lota_port",
     "faccessat"
   ],
 

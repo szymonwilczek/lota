@@ -1,0 +1,12 @@
+# SPDX-License-Identifier: MIT
+# Copyright (C) 2026 Szymon Wilczek
+#
+# LOTA hook-targeted calls -- MODE A (see syzkaller/README.rst).
+#
+# Kernel memory devices, which generic openat rarely names, so that
+# lota_file_open takes its enforce-mode refusal branch. Absolute path: the
+# directory fd is ignored.
+
+openat$lota_mem(fd fd_dir[opt], file ptr[in, string["/dev/mem"]], flags flags[open_flags], mode const[0]) fd
+openat$lota_kmem(fd fd_dir[opt], file ptr[in, string["/dev/kmem"]], flags flags[open_flags], mode const[0]) fd
+openat$lota_port(fd fd_dir[opt], file ptr[in, string["/dev/port"]], flags flags[open_flags], mode const[0]) fd
