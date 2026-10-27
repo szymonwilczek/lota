@@ -2574,6 +2574,66 @@ check-syzkaller-matrix:
 	fi; \
 	exit $$rc
 
+REPO_MAP_DOC := README.rst
+
+# README.rst's repository map must name every tracked top-level directory
+.PHONY: check-repo-map
+check-repo-map:
+	$(Q)rc=0; \
+	dirs=$$(git ls-files | sed -n 's,^\([^./][^/]*\)/.*,\1,p' | sort -u); \
+	mapped=$$(awk '/^Repository map$$/ { inmap = 1; next } \
+		/^Who are you\?$$/ { inmap = 0 } \
+		inmap && /^\* / { bullet = 1 } \
+		inmap && /^$$/ { bullet = 0 } \
+		inmap && bullet' $(REPO_MAP_DOC) | \
+		grep -o '``[^`]*/``' | tr -d '`' | cut -d/ -f1 | sort -u); \
+	if [ -z "$$dirs" ]; then \
+		echo "ERROR: no tracked directories - run from a git checkout"; \
+		exit 1; \
+	fi; \
+	if [ -z "$$mapped" ]; then \
+		echo "ERROR: no repository map in $(REPO_MAP_DOC)"; \
+		exit 1; \
+	fi; \
+	missing=$$(printf '%s\n' $$dirs | while read -r d; do \
+		printf '%s\n' $$mapped | grep -qx "$$d" || echo "$$d"; done); \
+	stale=$$(printf '%s\n' $$mapped | while read -r d; do \
+		printf '%s\n' $$dirs | grep -qx "$$d" || echo "$$d"; done); \
+	if [ -n "$$missing" ]; then \
+		echo "ERROR: $(REPO_MAP_DOC) repository map does not name:" $$missing; rc=1; \
+	fi; \
+	if [ -n "$$stale" ]; then \
+		echo "ERROR: $(REPO_MAP_DOC) repository map names directories the tree lacks:" $$stale; rc=1; \
+	fi; \
+	if [ $$rc = 0 ]; then \
+		echo "repo-map: $$(printf '%s\n' $$dirs | wc -l) tracked directories, each named"; \
+	fi; \
+	exit $$rc
+
+# Every tree path an installed header names must resolve;
+# include/linux/ paths name the kernel tree and are skipped
+.PHONY: check-header-paths
+check-header-paths:
+	$(Q)rc=0; \
+	dirs=$$(git ls-files | sed -n 's,^\([^./][^/]*\)/.*,\1,p' | sort -u | paste -sd'|'); \
+	if [ -z "$$dirs" ]; then \
+		echo "ERROR: no tracked directories - run from a git checkout"; \
+		exit 1; \
+	fi; \
+	refs=$$(grep -onE "($$dirs)/[A-Za-z0-9_./-]+" $(wildcard include/*.h) | \
+		sed 's/\.$$//' | grep -v ':include/linux/' | sort -u); \
+	for ref in $$refs; do \
+		path=$$(printf '%s' "$$ref" | cut -d: -f3-); \
+		[ -e "$$path" ] || { \
+			echo "ERROR: $$(printf '%s' "$$ref" | cut -d: -f1,2) points at $$path, which is not in the tree"; \
+			rc=1; \
+		}; \
+	done; \
+	if [ $$rc = 0 ]; then \
+		echo "header-paths: $$(printf '%s\n' $$refs | wc -l) pointers, each resolving"; \
+	fi; \
+	exit $$rc
+
 help:
 	@echo "LOTA $(PROJECT_VERSION)"
 	@echo ""
@@ -2619,6 +2679,8 @@ help:
 	@echo "  check-config-commands  Fail on a shipped config naming a command that does not resolve"
 	@echo "  check-test-build-dir  Fail on a test or demo naming the default build directory"
 	@echo "  check-syzkaller-matrix  Fail on an LSM program with no row in the syzkaller hook matrix"
+	@echo "  check-repo-map   Fail on a tracked directory the repository map does not name"
+	@echo "  check-header-paths  Fail on an installed header pointing at a path the tree lacks"
 	@echo "  abi-baseline     Rewrite packaging/abi after a deliberate API change"
 	@echo "  sdk-stage        Lay out the installed SDK prefix under build/stage"
 	@echo "  lint             clang-format (C) + golangci-lint (Go) checks"

@@ -1100,6 +1100,44 @@ check_syzkaller_matrix() {
     fi
 }
 
+# Runs on every patch: no single path marks a new directory
+check_repo_map() {
+    local out
+
+    if out=$(make check-repo-map 2>&1); then
+        pass "repo-map"
+    else
+        printf '%s\n' "$out" | grep -v '^make'
+        fail "repo-map" \
+             "give every tracked top-level directory a line in README.rst's repository map."
+    fi
+}
+
+# Only when a header, the Makefile or this script changed
+check_header_paths() {
+    local path touched=1 out
+
+    for path in "$@"; do
+        case "$path" in
+            include/* | Makefile | scripts/check-patch)
+                touched=0
+                ;;
+        esac
+    done
+    if ((touched != 0)); then
+        pass "header-paths"
+        return
+    fi
+
+    if out=$(make check-header-paths 2>&1); then
+        pass "header-paths"
+    else
+        printf '%s\n' "$out" | grep -v '^make'
+        fail "header-paths" \
+             "point every path in an installed header at a file or directory the tree has."
+    fi
+}
+
 # Helm chart must take its version from VERSION and render pods that start.
 # Only run when the chart or the check changed.
 check_helm_chart() {
@@ -1253,6 +1291,8 @@ main() {
     check_fuzz "${changed_files[@]}"
     check_bpf_mirror "${changed_files[@]}"
     check_syzkaller_matrix "${changed_files[@]}"
+    check_repo_map
+    check_header_paths "${changed_files[@]}"
     check_package_manifests "${changed_files[@]}"
     check_helm_chart "${changed_files[@]}"
     check_container_images "${changed_files[@]}"

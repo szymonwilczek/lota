@@ -31,7 +31,7 @@
 #define LOTA_ENROLL_VERSION_EK_CHAIN 3u
 
 /* Field bounds, identical to the Go wire caps. */
-/* see (src/attestcta/wire/wire.go) */
+/* see (src/attestca/wire/wire.go) */
 #define LOTA_ENROLL_MAX_EK_CERT 2048u
 #define LOTA_ENROLL_MAX_AIK_PUBLIC 1024u
 #define LOTA_ENROLL_MAX_CRED_BLOB 1024u

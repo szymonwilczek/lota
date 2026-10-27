@@ -116,10 +116,30 @@ Repository map
   integration headers.
 * ``policies/``, ``configs/``, ``systemd/``, ``selinux/``, and ``dbus/`` -
   production deployment policy and service material.
+* ``installer/`` - the guided installer: its own program, with the stages it
+  runs, the host probe behind them, and its terminal UI.
 * ``examples/`` - enrollment, demo server, anti-cheat heartbeat, game UI,
   sealed-key, mTLS, runtime remeasurement, and blocking scenarios.
+* ``sdk/`` - the Go server SDK module, ``github.com/szymonwilczek/lota/sdk/server``,
+  which verifies tokens on the service side.
+* ``tests/`` - the unit suite, the shell integration tests, the cross-language
+  report checks, and their fixtures.
+* ``scripts/`` - ``check-patch`` and every gate a patch has to pass, plus the
+  EK-root pinning and bring-up helpers an operator runs.
+* ``packaging/`` - the nfpm configs, the RPM spec, the pkg-config files, and the
+  ABI baseline the two release paths share.
+* ``fuzz/`` - the fuzz targets, their oracles, and the regression corpus.
+* ``helper/`` - the unit files and scripts that keep the long-running fuzzing
+  host fed.
+* ``deploy/`` - the Helm chart for the verifier and the observability assets
+  that watch it.
 * ``benchmarks/`` and ``syzkaller/`` - performance and kernel-surface validation
   material.
+* ``Documentation/`` - the documentation tree, organised by reader role.
+
+The tree also carries directories that are not tracked and so are not listed
+here: ``build/``, which every build writes into, and whatever working material
+a contributor keeps locally.
 
 Who are you?
 ============

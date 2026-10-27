@@ -189,8 +189,11 @@ intermediates is refused at load, because it anchors no chain. Deliberately
 trusting one branch instead of everything under a root is a different decision,
 made by pinning that branch's certificate as a ``root`` -- which the loader
 refuses unless the certificate really is self-signed. Pinning an intermediate
-the device also presents is harmless and costs one fetch less at enrollment
-time.
+the device also presents is harmless: the CA opens no connection while it
+verifies an EK, so the path costs the same however it is assembled. The fetch
+a pinned intermediate saves is one the AIA walk makes when the bundle is
+built, not one an enrollment makes. What pinning it does buy is a device that
+presents no intermediates at all: the path is already complete without them.
 
 Revocation of a bundled intermediate by its parent root is not evaluated during
 EK verification: the CA checks EK leaves against the manufacturer CRL feed,
