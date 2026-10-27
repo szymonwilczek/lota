@@ -111,7 +111,8 @@ FROZEN    ``INTEGRITY LOSS`` plus terminated overlay
 OFFLINE   ``OFFLINE`` with curl / startup detail on row two
 ========= ====================================================
 
-The second row in the header echoes whichever server response field is most
+The detail under the verdict echoes whichever server response field is most
 recently surfaced (``license=lota-demo-CS2-clone`` on TRUSTED, the verifier's
-free-form reason on UNTRUSTED, the curl error string on OFFLINE). The rest of
-the screen is intentionally plain.
+free-form reason on UNTRUSTED, the curl error string on OFFLINE), wrapped over
+two rows and ellipsized past them. The rest of the screen is intentionally
+plain.

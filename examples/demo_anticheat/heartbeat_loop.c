@@ -54,6 +54,7 @@ struct demo_options {
 	 * Naming it is what opens a session for that publisher,
 	 * and a session-gated host reports only while one is open
 	 * -- so a producer that names nobody is never attested for anybody.
+	 * A host that answers for several refuses its token requests.
 	 * A shipped producer knows its own publisher; this is a flag here
 	 * because the demo does not know which machine it is run on.
 	 */
@@ -108,7 +109,8 @@ static void print_usage(const char *argv0)
 		"'lota-agent --list-publishers' prints). Naming it opens a\n"
 		"session for that publisher; a session-gated host reports only\n"
 		"while one is open, so a producer that names nobody is never\n"
-		"attested for anybody.\n"
+		"attested for anybody. A host that answers for several\n"
+		"publishers refuses a request that names none.\n"
 		"\n"
 		"--print-runtime-objects prints, one path per line, the\n"
 		"file-backed objects (main binary + shared libraries) this\n"

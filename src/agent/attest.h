@@ -3,6 +3,7 @@
 #ifndef LOTA_ATTEST_H
 #define LOTA_ATTEST_H
 
+#include <stdbool.h>
 #include <stdint.h>
 
 #include "config.h"
@@ -111,6 +112,20 @@ static inline int attest_effective_interval(int configured, int profile_count)
 	if (profile_count > 0)
 		return DEFAULT_ATTEST_INTERVAL;
 	return 0;
+}
+
+/*
+ * LOTA_TCTI / LOTA_AIK_META_PATH may redirect the TPM and the AIK store only
+ * in an interactive one-shot (swtpm demo, tests), never in continuous
+ * attestation: lota-attest.service would quote the host against another TPM.
+ * Same inputs as the cadence, so the two cannot disagree.
+ */
+static inline bool attest_env_overrides_allowed(int attest_flag, int configured,
+						int profile_count)
+{
+	if (!attest_flag)
+		return true;
+	return attest_effective_interval(configured, profile_count) <= 0;
 }
 
 /*

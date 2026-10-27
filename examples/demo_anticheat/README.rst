@@ -117,6 +117,11 @@ publisher on the host agreeing. Leave it NULL on a single-publisher host. A
 machine that holds no enrollment for the named publisher fails the connection
 rather than answering with another publisher's evidence.
 
+A machine that answers for several publishers refuses a token to a session
+that named none with ``LOTA_ERR_UNKNOWN_PROFILE``, since a token is signed with
+one publisher's key. A build shipped to both kinds of machine names its
+publisher always.
+
 Nothing enrolls with a publisher until somebody on that machine agrees to it,
 so a first run there fails the connection with ``LOTA_ERR_CONSENT_REQUIRED``
 (read it with ``lota_connect_last_error()``; ``lota_ac_init()`` returns NULL

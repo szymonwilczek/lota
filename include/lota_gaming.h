@@ -312,7 +312,8 @@ struct lota_connect_opts {
 	 * publisher on the host agreeing.
 	 *
 	 * NULL on a single-publisher host, which is every enterprise fleet:
-	 * the agent then answers with its first profile and the host-wide verdict.
+	 * the agent then answers with its one profile and the host-wide verdict.
+	 * A host that answers for several refuses a connection that names none.
 	 * Naming a publisher the machine has no enrollment for fails
 	 * the connection rather than falling back to another publisher's evidence.
 	 */
@@ -446,7 +447,9 @@ int lota_is_attested(struct lota_client *client);
  * the game server for verification. The server must use the
  * LOTA verifier to validate the token.
  *
- * Returns LOTA_ERR_NOT_ATTESTED if no valid attestation exists.
+ * Returns LOTA_ERR_NOT_ATTESTED if no valid attestation exists, and
+ * LOTA_ERR_UNKNOWN_PROFILE when the connection named no publisher on a host
+ * that answers for several (see lota_connect_opts.publisher_profile).
  *
  * The caller must call lota_token_free() to free the token
  * when done.

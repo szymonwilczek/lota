@@ -288,6 +288,25 @@ static void test_effective_interval(void)
 }
 
 /*
+ * A deployment (continuous attestation, lota-attest.service) must not take
+ * the overrides: every round would quote against whatever the environment
+ * named.
+ */
+static void test_env_overrides_stop_at_the_deployment(void)
+{
+	CHECK(attest_env_overrides_allowed(0, 0, 0),
+	      "a verb that is not --attest is interactive");
+	CHECK(attest_env_overrides_allowed(1, 0, 0),
+	      "--attest with neither cadence nor publishers is a one-shot");
+	CHECK(!attest_env_overrides_allowed(1, 0, 1),
+	      "one publisher and no interval is the loop, so overrides stop");
+	CHECK(!attest_env_overrides_allowed(1, 45, 0),
+	      "a configured cadence is the loop without publishers too");
+	CHECK(!attest_env_overrides_allowed(1, 45, 3),
+	      "the deployed shape takes neither variable");
+}
+
+/*
  * The two gates that decide whether a round reports.
  * Neither may gate the round's enrollment: session-gated publisher that has
  * never enrolled cannot be selected by a title (SET_PROFILE refuses one),
@@ -595,6 +614,7 @@ int main(void)
 	test_token_only_publisher();
 	test_more_profiles_than_room();
 	test_effective_interval();
+	test_env_overrides_stop_at_the_deployment();
 	test_target_reports();
 	test_wait_for_a_first_session_is_announced();
 	test_renewal_follows_the_record();
