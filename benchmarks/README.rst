@@ -50,6 +50,10 @@ every push/PR as a **correctness gate** (``make bench-c`` with tiny reps,
 without crashing. Shared CI runners are too noisy for real timings, so quotable
 numbers come from a pinned host into ``Documentation/performance/evaluation.rst``.
 
+Both targets exit with the status of the runner they invoke, so a benchmark
+that fails to run fails the target. The results file is still written and holds
+the reason.
+
 Raw output is archived under ``benchmarks/results/``:
 
 - ``go-src-*.txt`` - ``go test -bench`` output, one file per module (benchstat

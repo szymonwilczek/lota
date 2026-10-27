@@ -97,7 +97,7 @@ sources it filters:
      - ``src/sdk/liblota_anticheat.map``
    * - ``liblota_wine_hook.so``
      - ``include/lota_wine_hook.h``
-     - ``src/sdk/liblota_wine_hook.map``
+     - hidden visibility (``LOTA_HOOK_EXPORT``)
 
 Without a version script every non-static symbol is exported, which makes the
 public surface an accident of which helpers happened to need external linkage.
@@ -110,10 +110,26 @@ The Wine hook is worse, because it is ``LD_PRELOAD``\ ed and therefore resolves
 before the game's own libraries. An integrator that wants the gaming or the
 token-verification API links that library directly and gets it from there.
 
-The filter applies to the shared libraries only. ``liblotagaming.a`` and
-``liblotaserver.a`` are static archives, so a program that links one pulls in
-whichever objects it references, including symbols that are not API. Static
-linking opts out of the ABI guarantee along with it.
+``liblota_wine_hook.so`` interposes ``dlopen``, which callers reference through
+glibc's version node (``dlopen@GLIBC_2.34``); a definition under a version
+node of its own would never be reached. It is therefore built with
+``-fvisibility=hidden``, keeping the bundled SDK objects local, and marks each
+export ``LOTA_HOOK_EXPORT``.
+
+The exported ``dlopen`` is not part of the SDK contract: it reports an object
+a runtime gate refused and returns what the real ``dlopen`` returned.
+
+The filter applies to the shared libraries only, and ``liblotagaming.a`` and
+``liblotaserver.a`` need none of it: every function in those sources that no
+header declares is ``static``, so ``nm`` on either archive reports exactly the
+symbols the matching header declares and there is nothing else to pull in. Each
+archive is also a single object file, so a program that calls one function
+links the whole API.
+
+What a static link opts out of is the version information. An archive carries
+no soname and no version node, so nothing in the resulting program records
+which surface it was built against and no later library can satisfy or refuse
+it. That is the ABI guarantee, and it is given up by the form of the link.
 
 Soname and ABI version
 ======================
@@ -143,7 +159,8 @@ struct it takes is an ABI break. It bumps ``LOTA_ABI_MAJOR``, which changes
 every soname, and the old library can no longer be replaced in place. Do not
 work around a break by leaving the symbol in the
 version script with different semantics behind it -- that is the one failure a
-version script cannot catch.
+version script cannot catch. A struct that moved under an unchanged symbol is
+caught by the layout baseline below.
 
 Status flags
 ============
@@ -151,7 +168,8 @@ Status flags
 ``LOTA_FLAG_*`` in ``lota_gaming.h`` is a bitmask, so a release may define a
 new bit and a program built against an older header keeps working: it reads
 the bits it knows and ignores the rest. The values already assigned never
-change meaning, which is what makes ignoring the unknown ones safe.
+change meaning, which is what makes ignoring the unknown ones safe; the layout
+baseline records every one.
 
 A caller must therefore test the bits it cares about rather than compare the
 word, and must not treat an unfamiliar bit as a failure. ``LOTA_FLAG_UPDATE_PENDING``
@@ -201,6 +219,23 @@ The gate
 carries against ``LOTA_ABI_MAJOR``, and the installed header set as stated in
 three places that must agree -- ``packaging/abi/public-headers.list``, the
 ``make install`` rule, and ``packaging/nfpm/lota-sdk-devel.yaml``.
+
+The layout of the types those headers declare is in the baseline too, in
+``packaging/abi/types.list``: every public struct's size, alignment and member
+offsets, every enumerator's value, and every ``LOTA_*`` constant, string
+constants included. An inserted member, a renumbered enumerator, a renamed
+environment variable or a reassigned ``LOTA_FLAG_*`` bit breaks a program
+without changing a symbol.
+
+The gate generates a program that prints ``sizeof``, ``_Alignof``, ``offsetof``
+and each constant's value, compiled against ``include/``, so padding, alignment
+and ``enum`` width are what the target gives them.
+
+It holds the two static archives to the same baseline, without the version
+nodes an archive cannot carry, and to one object each. The version script
+hides a helper that stops being ``static`` from the shared-library check and
+not from the archive, so this is where such a symbol surfaces -- and it is
+what keeps the account of the archives above true.
 
 It then stages a prefix holding exactly what the packages install and builds
 against it the way an integrator does: every public header on its own, and a
@@ -290,6 +325,16 @@ carries its version in the message:
 The report and enrollment wires are between LOTA's own programs, so their
 versions constrain which agent, verifier and CA builds interoperate rather
 than what an integrator may link against.
+
+Error codes are additive
+========================
+
+``lota_error`` in ``lota_gaming.h`` grows downward: a new condition takes the
+next unused value and the existing ones keep theirs, so a program built against
+an earlier header still reads every code it knew. A caller that switches on the
+enum has to keep a default arm, because a newer agent can return a code the
+program was not compiled against -- ``lota_strerror()`` has words for it either
+way.
 
 What a release promises
 =======================

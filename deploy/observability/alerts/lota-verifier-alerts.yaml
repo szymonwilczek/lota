@@ -175,3 +175,20 @@ groups:
             a protocol-version mismatch after a partial upgrade, or a
             broken load-balancer health check.
           runbook_url: https://lota.szymon-wilczek.me/operator/observability.html#alert-lotaconnectionerrorburst
+
+      - alert: LotaDecisionLogLoss
+        expr: >-
+          increase(lota_attestation_log_dropped_total[10m]) > 0
+          or increase(lota_attestation_log_failed_total[10m]) > 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Attestation decision records are being lost"
+          description: >-
+            {{ $labels.instance }} is losing decision records: its log
+            backend stopped keeping up and buffered records were dropped,
+            or a write did not land. Verdicts are unaffected -- the log
+            never gates attestation -- but the audit trail for this
+            window is incomplete and the loss is not recoverable.
+          runbook_url: https://lota.szymon-wilczek.me/operator/observability.html#alert-lotadecisionlogloss

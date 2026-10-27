@@ -156,10 +156,9 @@ func (s *PostgresBaselineStore) CheckAndUpdate(clientID string, pcr14 [types.Has
 }
 
 // CheckAndUpdateAgentHash pins agent_hash with TOFU semantics.
-// pcr14 column is filled on first use from currentPCR14 so the schema
-// NOT NULL constraint is satisfied; it carries no security meaning for
-// boot-commitment clients (the verifier derives the expected PCR14
-// dynamically from agent_hash + ClockInfo)
+// pcr14 column is filled on first use from currentPCR14 and compared on every
+// later round by CheckAndUpdateAttestation, which is what makes a moved pre-lock
+// baseline visible.
 func (s *PostgresBaselineStore) CheckAndUpdateAgentHash(clientID string,
 	currentPCR14, agentHash [types.HashSize]byte,
 ) (TOFUResult, *ClientBaseline) {
@@ -398,6 +397,26 @@ func (s *PostgresBaselineStore) ListClients() []string {
 	return clients
 }
 
+// ListClientsPage returns one page of client IDs, ordered by client ID.
+func (s *PostgresBaselineStore) ListClientsPage(limit, offset int) ([]string, error) {
+	rows, err := s.db.Query(
+		"SELECT client_id FROM baselines ORDER BY client_id LIMIT $1 OFFSET $2", limit, offset)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	clients := []string{}
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		clients = append(clients, id)
+	}
+	return clients, rows.Err()
+}
+
 func (s *PostgresBaselineStore) Stats() BaselineStats {
 	stats := BaselineStats{}
 
@@ -542,7 +561,10 @@ func (s *PostgresBaselineStore) CheckAndUpdateAttestation(clientID string,
 	boot *BootBaseline,
 ) AttestationOutcome {
 	ctx := context.Background()
-	outcome := AttestationOutcome{BootProvided: boot != nil}
+	// every result starts at TOFUError: a component the transaction never
+	// reached carries no decision, and a caller that reads one anyway
+	// refuses the round
+	outcome := AttestationOutcome{BootProvided: boot != nil, PCR14Result: TOFUError}
 
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -611,6 +633,7 @@ func (s *PostgresBaselineStore) CheckAndUpdateAttestation(clientID string,
 				PCR14: pcr14, AgentHash: agentHash,
 				FirstSeen: now, LastSeen: now, AttestCount: 1,
 			}
+			outcome.PCR14Result = TOFUFirstUse
 			outcome.BootResult = TOFUFirstUse
 			bb := *boot
 			bb.FirstSeen, bb.LastSeen = now, now
@@ -632,6 +655,7 @@ func (s *PostgresBaselineStore) CheckAndUpdateAttestation(clientID string,
 				PCR14: pcr14, AgentHash: agentHash,
 				FirstSeen: now, LastSeen: now, AttestCount: 1,
 			}
+			outcome.PCR14Result = TOFUFirstUse
 		}
 		if err := tx.Commit(); err != nil {
 			slog.Error("attestation tx: COMMIT failed", "client_id", clientID, "error", err)
@@ -681,6 +705,27 @@ func (s *PostgresBaselineStore) CheckAndUpdateAttestation(clientID string,
 		outcome.AgentHashResult = TOFUMatch
 	}
 
+	// decide PCR14 branch
+	//
+	// Every road that inserts a row writes the register with it, and the column
+	// is NOT NULL, so an existing row always has one to compare against.
+	// A mismatch terminates the transaction without writes.
+	switch {
+	case pcr14Stored != pcr14:
+		outcome.PCR14Result = TOFUMismatch
+		outcome.AgentHashBaseline = &ClientBaseline{
+			PCR14: pcr14Stored, AgentHash: stored,
+			FirstSeen: firstSeen, LastSeen: lastSeen,
+			AttestCount: attestCount,
+		}
+		if boot != nil {
+			outcome.BootResult = TOFUError
+		}
+		return outcome
+	default:
+		outcome.PCR14Result = TOFUMatch
+	}
+
 	// decide boot branch
 	bootZero := len(storedPCR0) == 0 && len(storedPCR1) == 0 && len(storedPCR7) == 0
 	if boot != nil {
@@ -719,7 +764,7 @@ func (s *PostgresBaselineStore) CheckAndUpdateAttestation(clientID string,
 		}
 	}
 
-	// commit phase: both halves passed; build a single UPDATE
+	// commit phase: every half passed; build a single UPDATE
 	newCount := attestCount + 1
 	if boot != nil {
 		switch outcome.BootResult {
@@ -930,12 +975,13 @@ func (s *PostgresBaselineStore) GetAgentHashRepinState(clientID string) AgentHas
 	var (
 		count     sql.NullInt64
 		lastRepin sql.NullTime
+		agentHash []byte
 	)
 	if err := s.db.QueryRowContext(ctx,
-		`SELECT agent_hash_repin_count, last_agent_hash_repin_at
+		`SELECT agent_hash, agent_hash_repin_count, last_agent_hash_repin_at
 		   FROM baselines WHERE client_id = $1`,
 		clientID,
-	).Scan(&count, &lastRepin); err != nil {
+	).Scan(&agentHash, &count, &lastRepin); err != nil {
 		// missing row is Present=false,
 		// which the caller treats as "no pin to move";
 		// store error is reported the same way so the decision fails
@@ -946,7 +992,11 @@ func (s *PostgresBaselineStore) GetAgentHashRepinState(clientID string) AgentHas
 		}
 		return AgentHashRepinState{}
 	}
-	st := AgentHashRepinState{Present: true, RepinCount: int(count.Int64)}
+	st := AgentHashRepinState{
+		Present:    true,
+		Pinned:     len(agentHash) == types.HashSize,
+		RepinCount: int(count.Int64),
+	}
 	if lastRepin.Valid {
 		st.LastRepinAt = lastRepin.Time.UTC()
 	}
@@ -996,6 +1046,10 @@ func (s *PostgresBaselineStore) ArchiveAndRepinAgentHash(clientID string,
 		clientID,
 	).Scan(&oldAgentHash, &lastRepin); err != nil {
 		return err
+	}
+	// no pin to move, and no predecessor to archive
+	if len(oldAgentHash) != types.HashSize {
+		return ErrAgentHashNotPinned
 	}
 	if lastRepin.Valid &&
 		now.Sub(lastRepin.Time.UTC()) < AgentHashRepinMinInterval {
@@ -1061,10 +1115,22 @@ func (s *PostgresBaselineStore) ListLFAReviewPending() []string {
 }
 
 // AcknowledgeLFAReview clears a client's pending-review flag (Postgres).
+// No matching row means nothing was queued.
 func (s *PostgresBaselineStore) AcknowledgeLFAReview(clientID string) error {
-	_, err := s.db.ExecContext(context.Background(),
-		"UPDATE baselines SET lfa_review_pending = FALSE WHERE client_id = $1", clientID)
-	return err
+	res, err := s.db.ExecContext(context.Background(),
+		"UPDATE baselines SET lfa_review_pending = FALSE WHERE client_id = $1 AND lfa_review_pending",
+		clientID)
+	if err != nil {
+		return err
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if n == 0 {
+		return ErrNoReviewPending
+	}
+	return nil
 }
 
 // RecordKernelHash implements KernelHashRecorder against Postgres.

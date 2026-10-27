@@ -35,7 +35,7 @@ static int g_failures;
 /* Every code the verifier can send, by the number it sends it as.
  * Written as literals rather than through the macros so a code the agent
  * has not learned yet is a failing test rather than a build error. */
-#define FIRST_UNKNOWN_CODE 11
+#define FIRST_UNKNOWN_CODE 22
 
 static const char *g_default;
 
@@ -79,12 +79,48 @@ int main(void)
 		}
 	}
 
+	/*
+	 * Verdict 6 covers the agent binary, the PCR 14 boot commitment
+	 * and the firmware/Secure Boot baseline, and the host cannot tell
+	 * which, so the sentence must name all three.
+	 */
+	CHECK(strstr(net_result_str(6), "agent") != NULL &&
+		      strstr(net_result_str(6), "PCR 14") != NULL &&
+		      strstr(net_result_str(6), "firmware") != NULL,
+	      "verdict 6 names every measurement it is sent for");
+
 	/* the two an administrator causes on purpose say so,
 	 * so the machine is not read as broken when it is obeying */
 	CHECK(strstr(net_result_str(7), "revoked") != NULL,
 	      "verdict 7 names the revocation");
 	CHECK(strstr(net_result_str(8), "banned") != NULL,
 	      "verdict 8 names the ban");
+
+	/* each requirement has its own remedy, so its verdict names it */
+	CHECK(strstr(net_result_str(13), "certificate") != NULL,
+	      "verdict 13 names the missing certificate");
+	CHECK(strstr(net_result_str(14), "Secure Boot") != NULL &&
+		      strstr(net_result_str(14), "firmware") != NULL,
+	      "verdict 14 names Secure Boot and where it is turned on");
+	CHECK(strstr(net_result_str(15), "lockdown") != NULL,
+	      "verdict 15 names kernel lockdown");
+	CHECK(strstr(net_result_str(16), "module") != NULL,
+	      "verdict 16 names module signature enforcement");
+	CHECK(strstr(net_result_str(17), "enforc") != NULL,
+	      "verdict 17 names the LSM enforce mode");
+	CHECK(strstr(net_result_str(18), "IMA") != NULL,
+	      "verdict 18 names IMA appraisal");
+	CHECK(strstr(net_result_str(19), "kernel") != NULL,
+	      "verdict 19 names the kernel image");
+	CHECK(strstr(net_result_str(20), "command line") != NULL,
+	      "verdict 20 names the kernel command line");
+
+	/* an unreadable report is not an old wire: no upgrade advice */
+	CHECK(strstr(net_result_str(5), "version") != NULL,
+	      "verdict 5 names the protocol version");
+	CHECK(strstr(net_result_str(21), "read") != NULL &&
+		      strstr(net_result_str(21), "version") == NULL,
+	      "verdict 21 says the report could not be read and does not advise an upgrade");
 
 	/* the default still exists for a code from a newer verifier */
 	CHECK(!is_named(FIRST_UNKNOWN_CODE),

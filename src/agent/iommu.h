@@ -17,48 +17,67 @@
 /*
  * iommu_check_sysfs - Check /sys/class/iommu/ for active IOMMU units
  * @status: Output structure to populate
+ * @root: Prefix the sysfs path is read under, NULL for the live machine
  *
  * Scans /sys/class/iommu/ for dmar* (Intel) or ivhd* (AMD) entries.
  * Sets IOMMU_FLAG_SYSFS_PRESENT and vendor type.
  *
  * Returns: Number of IOMMU units found, 0 if none
  */
-int iommu_check_sysfs(struct iommu_status *status);
+int iommu_check_sysfs(struct iommu_status *status, const char *root);
 
 /*
  * iommu_check_cmdline - Validate /proc/cmdline for IOMMU boot parameters
  * @status: Output structure to populate
+ * @root: Prefix /proc/cmdline is read under, NULL for the live machine
  *
  * Looks for: intel_iommu=on, amd_iommu=on/force, iommu.strict=1
  * Sets IOMMU_FLAG_CMDLINE_SET if found.
  *
  * Returns: 0 if IOMMU param found, -1 if missing
  */
-int iommu_check_cmdline(struct iommu_status *status);
+int iommu_check_cmdline(struct iommu_status *status, const char *root);
 
 /*
- * iommu_check_dmesg - Parse kernel ring buffer for IOMMU messages
+ * iommu_check_domains - Read the domain each IOMMU group is in
  * @status: Output structure to populate
+ * @root: Prefix the sysfs path is read under, NULL for the live machine
  *
- * Requires: CAP_SYSLOG capability or root privileges.
- * Uses klogctl(SYSLOG_ACTION_READ_ALL) to read kernel log.
- * Looks for "DMAR: IOMMU enabled", "AMD-Vi: Initialized", etc.
+ * Sets IOMMU_FLAG_DMA_REMAP when at least one group is in a translating
+ * (DMA or DMA-FQ) domain; identity (passthrough) does not count.
  *
- * Returns: 0 on success, -1 on error (permission denied, etc.)
+ * Returns: Number of translating groups, negative on error
  */
-int iommu_check_dmesg(struct iommu_status *status);
+int iommu_check_domains(struct iommu_status *status, const char *root);
+
+/*
+ * iommu_check_irq_remap - Look for a remapped interrupt chip
+ * @status: Output structure to populate
+ * @root: Prefix /proc/interrupts is read under, NULL for the live machine
+ *
+ * Sets IOMMU_FLAG_IRQ_REMAP when an interrupt chip is named IR-*.
+ *
+ * Returns: 0 on success, -1 if the table could not be read
+ */
+int iommu_check_irq_remap(struct iommu_status *status, const char *root);
 
 /*
  * iommu_verify_full - Complete IOMMU verification
  * @status: Output structure to populate
  *
- * Runs all three checks and aggregates results.
- * For attestation to pass, at minimum IOMMU_FLAG_SYSFS_PRESENT
- * should be set.
+ * Runs every check and aggregates results.
+ * For attestation to pass, IOMMU_FLAG_SYSFS_PRESENT and
+ * IOMMU_FLAG_DMA_REMAP must be set.
  *
  * Returns: true if IOMMU is properly enabled, false otherwise
  */
 bool iommu_verify_full(struct iommu_status *status);
+
+/*
+ * iommu_verify_full_at - iommu_verify_full() with every path read under @root
+ * (NULL for the live machine)
+ */
+bool iommu_verify_full_at(struct iommu_status *status, const char *root);
 
 /*
  * iommu_status_to_string - Convert status flags to human-readable string

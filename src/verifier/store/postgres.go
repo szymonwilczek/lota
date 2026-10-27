@@ -18,8 +18,10 @@ package store
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"log/slog"
+	"strings"
 	"time"
 
 	_ "github.com/jackc/pgx/v5/stdlib" // database/sql driver "pgx"
@@ -201,6 +203,46 @@ func ServerMaxConnections(db *sql.DB) (int, error) {
 // attestation concurrency, not the whole fleet, because every verifier
 // instance opens its own pool against the shared server.
 func OpenPostgresDBPool(dsn string, maxOpenConns int) (*sql.DB, error) {
+	db, err := openPostgresPool(dsn, maxOpenConns)
+	if err != nil {
+		return nil, err
+	}
+
+	// name a standby before migrating it fails with a bare read-only error
+	if err := refuseStandby(db); err != nil {
+		db.Close()
+		return nil, err
+	}
+
+	if err := runPgMigrations(db); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("postgres migration failed: %w", err)
+	}
+
+	return db, nil
+}
+
+// OpenPostgresDBReadOnly opens a database for a reporting instance,
+// e.g. on a hot standby, and applies no migration. The schema is verified
+// as for a writer (version, fingerprint, tables) so a mismatch fails at
+// startup, not at the first query. A missing fingerprint is warned about,
+// not recorded.
+func OpenPostgresDBReadOnly(dsn string, maxOpenConns int) (*sql.DB, error) {
+	db, err := openPostgresPool(dsn, maxOpenConns)
+	if err != nil {
+		return nil, err
+	}
+
+	if err := verifyPgSchemaReadOnly(context.Background(), db); err != nil {
+		db.Close()
+		return nil, err
+	}
+
+	return db, nil
+}
+
+// openPostgresPool opens and sizes the pool for both entry points.
+func openPostgresPool(dsn string, maxOpenConns int) (*sql.DB, error) {
 	if dsn == "" {
 		return nil, fmt.Errorf("postgres DSN is empty")
 	}
@@ -227,12 +269,88 @@ func OpenPostgresDBPool(dsn string, maxOpenConns int) (*sql.DB, error) {
 	db.SetConnMaxLifetime(30 * time.Minute)
 	db.SetConnMaxIdleTime(5 * time.Minute)
 
-	if err := runPgMigrations(db); err != nil {
-		db.Close()
-		return nil, fmt.Errorf("postgres migration failed: %w", err)
+	return db, nil
+}
+
+// ErrSchemaAbsent: a read-only open found no LOTA schema and creates none.
+var ErrSchemaAbsent = errors.New("database carries no LOTA schema")
+
+// verifyPgSchemaReadOnly checks the schema against this build without writing.
+// No advisory lock: it changes nothing, so nothing races with it.
+func verifyPgSchemaReadOnly(ctx context.Context, db *sql.DB) error {
+	conn, err := db.Conn(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to acquire a connection: %w", err)
+	}
+	defer conn.Close()
+
+	var version int
+	var stored sql.NullString
+	err = conn.QueryRowContext(ctx,
+		"SELECT COALESCE(MAX(version), 0), MAX(fingerprint) FROM schema_version").Scan(&version, &stored)
+	switch {
+	case err != nil && isMissingSchemaVersion(err):
+		return fmt.Errorf("%w: point this instance at a database a verifier has built, "+
+			"or start one on the primary to build it", ErrSchemaAbsent)
+	case err != nil:
+		return fmt.Errorf("failed to read the schema version: %w", err)
+	case version == 0:
+		return fmt.Errorf("%w: point this instance at a database a verifier has built, "+
+			"or start one on the primary to build it", ErrSchemaAbsent)
 	}
 
-	return db, nil
+	target := maxMigrationVersion(pgMigrations)
+	if version > target {
+		return schemaVersionError(version, target)
+	}
+	if version < target {
+		// a writer would migrate; a reader names who must
+		return fmt.Errorf("%w: the database is at schema version %d and this build reads %d; "+
+			"a verifier on the primary applies the missing migrations",
+			ErrSchemaShapeMismatch, version, target)
+	}
+
+	expected := schemaFingerprint(pgMigrations)
+	switch {
+	case !stored.Valid || stored.String == "":
+		slog.Warn("reading a database that records no schema fingerprint",
+			"fingerprint", shortFingerprint(expected),
+			"note", "it predates fingerprinting; its shape is verified against this build's tables and left as it is")
+	case stored.String != expected:
+		return schemaFingerprintError(stored.String, expected)
+	}
+
+	tables, err := pgTableNames(ctx, conn)
+	if err != nil {
+		return err
+	}
+	return schemaShapeError(schemaTables(pgMigrations), tables)
+}
+
+// isMissingSchemaVersion reports undefined_table (42P01):
+// no verifier built this database.
+func isMissingSchemaVersion(err error) bool {
+	return strings.Contains(err.Error(), "42P01") ||
+		strings.Contains(strings.ToLower(err.Error()), "does not exist")
+}
+
+// ErrDatabaseInRecovery is returned when the DSN points at a hot standby,
+// which cannot take the startup migration.
+var ErrDatabaseInRecovery = errors.New("database is a read-only standby")
+
+// refuseStandby returns ErrDatabaseInRecovery on a standby.
+// If pg_is_in_recovery() fails, the check is skipped and the migration decides.
+func refuseStandby(db *sql.DB) error {
+	var inRecovery bool
+	if err := db.QueryRow("SELECT pg_is_in_recovery()").Scan(&inRecovery); err != nil {
+		return nil
+	}
+	if !inRecovery {
+		return nil
+	}
+	return fmt.Errorf("%w: a verifier applies its schema at startup and needs the primary; "+
+		"point this instance at the writable database and leave the replica to reporting tools that read it directly",
+		ErrDatabaseInRecovery)
 }
 
 // runPgMigrations applies pending Postgres schema migrations, each inside its
@@ -269,11 +387,23 @@ func runPgMigrations(db *sql.DB) error {
 		return fmt.Errorf("failed to create schema_version table: %w", err)
 	}
 
+	if _, err := conn.ExecContext(ctx,
+		"ALTER TABLE schema_version ADD COLUMN IF NOT EXISTS fingerprint TEXT"); err != nil {
+		return fmt.Errorf("failed to add the schema fingerprint column: %w", err)
+	}
+
 	var current int
 	if err := conn.QueryRowContext(ctx,
 		"SELECT COALESCE(MAX(version), 0) FROM schema_version").Scan(&current); err != nil {
 		return fmt.Errorf("failed to query schema version: %w", err)
 	}
+
+	// refuse a version this build never applied: a newer build wrote it
+	if target := maxMigrationVersion(pgMigrations); current > target {
+		return schemaVersionError(current, target)
+	}
+
+	existing := current > 0
 
 	for _, m := range pgMigrations {
 		if m.version <= current {
@@ -309,5 +439,64 @@ func runPgMigrations(db *sql.DB) error {
 		slog.Info("applied postgres migration", "version", m.version, "description", m.description)
 	}
 
-	return nil
+	return verifyPgSchemaIdentity(ctx, conn, existing)
+}
+
+// verifyPgSchemaIdentity is verifySQLiteSchemaIdentity for Postgres.
+// Runs under the migration advisory lock, so concurrent starts agree.
+func verifyPgSchemaIdentity(ctx context.Context, conn *sql.Conn, existing bool) error {
+	expected := schemaFingerprint(pgMigrations)
+
+	var stored sql.NullString
+	err := conn.QueryRowContext(ctx,
+		"SELECT fingerprint FROM schema_version ORDER BY version DESC LIMIT 1").Scan(&stored)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return fmt.Errorf("failed to read the schema fingerprint: %w", err)
+	}
+
+	switch {
+	case !stored.Valid || stored.String == "":
+		if _, err := conn.ExecContext(ctx,
+			"UPDATE schema_version SET fingerprint = $1 WHERE version = (SELECT MAX(version) FROM schema_version)",
+			expected); err != nil {
+			return fmt.Errorf("failed to record the schema fingerprint: %w", err)
+		}
+		if existing {
+			slog.Warn("recorded a schema fingerprint for a database that carried none",
+				"fingerprint", shortFingerprint(expected),
+				"note", "the database predates fingerprinting; its shape is verified against this build's tables")
+		}
+	case stored.String != expected:
+		return schemaFingerprintError(stored.String, expected)
+	}
+
+	tables, err := pgTableNames(ctx, conn)
+	if err != nil {
+		return err
+	}
+	return schemaShapeError(schemaTables(pgMigrations), tables)
+}
+
+// pgTableNames lists the tables in the connection's current schema,
+// excluding schema_version.
+func pgTableNames(ctx context.Context, conn *sql.Conn) ([]string, error) {
+	rows, err := conn.QueryContext(ctx, `
+		SELECT table_name FROM information_schema.tables
+		WHERE table_schema = current_schema()
+		  AND table_type = 'BASE TABLE'
+		  AND table_name <> 'schema_version'`)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list the database's tables: %w", err)
+	}
+	defer rows.Close()
+
+	var names []string
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			return nil, fmt.Errorf("failed to list the database's tables: %w", err)
+		}
+		names = append(names, name)
+	}
+	return names, rows.Err()
 }

@@ -22,8 +22,7 @@
 #      independently of the victim exit code.
 #
 # BUILD_DIR can be overridden in the environment to point at an
-# out-of-tree build root; defaults to $REPO_DIR/build to match the
-# Makefile default.
+# out-of-tree build root; default $LOTA_BUILD_DIR, then $REPO_DIR/build.
 #
 # The script is non-destructive: it never touches the agent
 # config, the systemd units, or any policy files.
@@ -31,7 +30,7 @@
 set -euo pipefail
 
 REPO_DIR=$(cd "$(dirname "$0")/../.." && pwd)
-BUILD_DIR="${BUILD_DIR:-$REPO_DIR/build}"
+BUILD_DIR="${BUILD_DIR:-${LOTA_BUILD_DIR:-$REPO_DIR/build}}"
 EXAMPLES_BUILD="$BUILD_DIR/examples"
 VICTIM_BIN="$EXAMPLES_BUILD/block_victim"
 EVIL_SO="$EXAMPLES_BUILD/evil.so"

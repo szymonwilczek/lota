@@ -54,7 +54,16 @@ Each instance is stateless and identical apart from its listen ports. Both take
 ``--pg-dsn`` (here via ``LOTA_PG_DSN``), the same CA root, and the same policy,
 so they enforce the same rules over the same shared state.
 
+Neither passes ``--aik-store``: with a database configured, the client registry
+is in the database like the rest of the state, so nothing is written under the
+default store directory and both commands run as an ordinary user.
+
 .. code:: sh
+
+   # the monitoring API's two key tiers; both instances take the same pair,
+   # so a read or a revocation is answered the same way whichever one is asked
+   export LOTA_READER_API_KEY="$(openssl rand -hex 32)"
+   export LOTA_ADMIN_API_KEY="$(openssl rand -hex 32)"
 
    # instance A
    build/lota-verifier --generate-cert \
@@ -79,22 +88,31 @@ already present.
 
 Drive one full attestation through **instance A** (port 8443) using the
 enrollment example, then read the result back through **instance B** (port
-8081). Because the client registration and baseline live in Postgres, instance
-B reports the client it never spoke to:
+8081). The client's record -- its baseline, its tenant, its attestation count
+and when it last attested -- is in Postgres, so instance B reports the client
+it never spoke to, and would still report it after both instances restarted.
+Both keys ride in ``Authorization: Bearer``, which is the only credential
+header the API reads:
 
 .. code:: sh
 
    # the client enrolled + attested via instance A shows up on instance B
-   curl -s -H "X-API-Key: $LOTA_READER_API_KEY" \
+   curl -s -H "Authorization: Bearer $LOTA_READER_API_KEY" \
      http://127.0.0.1:8081/api/v1/clients
 
    # the revocation taken on instance B is enforced by instance A
-   curl -s -H "X-API-Key: $LOTA_ADMIN_API_KEY" \
+   curl -s -H "Authorization: Bearer $LOTA_ADMIN_API_KEY" \
      -X POST http://127.0.0.1:8081/api/v1/clients/<client-id>/revoke \
      -d '{"reason":"compromised","actor":"ops"}'
 
 The revocation is committed to Postgres, so the client's next attestation is
 refused by **either** instance -- enforcement is fleet-wide, not per process.
+
+Two fields of ``GET /api/v1/clients/{id}`` are the answering instance's own and
+differ between the two on purpose: ``pending_challenges``, which counts the
+challenges that instance is holding, and ``monotonic_counter``, the nonce
+sequence it has seen. Everything else is the fleet's answer. See
+`Documentation/operator/monitoring-api.rst <../../Documentation/operator/monitoring-api.rst>`_.
 
 Production deltas
 -----------------

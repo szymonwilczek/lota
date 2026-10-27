@@ -240,6 +240,11 @@ out:
 	return ret;
 }
 
+const char *daemon_pidfile_path(const char *path)
+{
+	return path ? path : DAEMON_DEFAULT_PID_FILE;
+}
+
 int pidfile_create(const char *path)
 {
 	int fd;
@@ -250,8 +255,7 @@ int pidfile_create(const char *path)
 	struct stat st;
 	uid_t euid = geteuid();
 
-	if (!path)
-		path = DAEMON_DEFAULT_PID_FILE;
+	path = daemon_pidfile_path(path);
 
 	ret = ensure_parent_dir(path);
 	if (ret < 0)
@@ -318,8 +322,7 @@ int pidfile_create(const char *path)
 
 void pidfile_remove(const char *path, int fd)
 {
-	if (!path)
-		path = DAEMON_DEFAULT_PID_FILE;
+	path = daemon_pidfile_path(path);
 
 	unlink(path);
 

@@ -44,6 +44,69 @@ struct probe_service_state {
 enum stage_state probe_agent_service_stage(const struct probe_service_state *s,
 					   char *note, size_t cap);
 
+/* Where the kernel publishes the policy it loaded */
+#define PROBE_IMA_POLICY_PATH "/sys/kernel/security/ima/policy"
+
+/* What the loaded IMA policy says about this host, as the scope stage reads it */
+struct probe_ima_scope {
+	/* PROBE_IMA_SCOPE_EXEC, PROBE_IMA_SCOPE_NONE, or -errno when the policy
+	 * could not be read at all */
+	int scope;
+	/* the policy appraises policy writes against a signature,
+	 * so an unsigned rule set cannot be loaded on this host at all */
+	int policy_signed;
+	/* Secure Boot is on, which is what decides the appraisal mode:
+	 * the kernel discards ima_appraise= on such a host and appraises in
+	 * enforce, so a rule set loaded here refuses whatever it cannot verify */
+	int secureboot;
+	/* the agent binary carries a signature the kernel can appraise,
+	 * which is the evidence that this host has a signing route at all */
+	int agent_signed;
+	/* fs-verity holds the agent binary;
+	 * decides if missing scope stops the install */
+	int agent_verity;
+	/* the probe ran privileged, which decides whether an unreadable policy
+	 * is a kernel that publishes none or a caller that may not look */
+	int is_root;
+};
+
+/*
+ * Verdict for the IMA appraisal-scope stage, and the sentence explaining it.
+ *
+ * Pure: the caller does the reading, this decides. The gate this stage exists
+ * to satisfy lives in the agent, and an unreadable policy is deliberately decided
+ * the way the agent decides it -- unknown scope leaves the appraisal mode
+ * deciding on both sides, so the installer never blocks a host the agent would
+ * have started on.
+ *
+ * Where the scope is missing the stage reports it; it does not widen it. Every
+ * rule that reaches an executable appraises every executable the rule matches,
+ * appraisal on a Secure Boot host runs in enforce whatever the cmdline asked
+ * for, and a host whose files carry no signature would refuse them all at the
+ * next boot. What is missing is a signing route, and that is the
+ * distribution's or the operator's to supply.
+ *
+ * Whether that stops the install is lota_ima_scope_is_advisory(), the rule
+ * the agent starts on.
+ */
+enum stage_state probe_ima_scope_stage(const struct probe_ima_scope *s,
+				       char *note, size_t cap);
+
+/* What the loaded policy appraises.
+ * Missing file is -ENOENT from the read */
+enum probe_ima_scope_state {
+	PROBE_IMA_SCOPE_EXEC = 0, /* a rule reaches an executable */
+	PROBE_IMA_SCOPE_NONE = 1, /* readable, and appraises no executable */
+};
+
+/*
+ * Reads the loaded IMA policy: PROBE_IMA_SCOPE_EXEC or PROBE_IMA_SCOPE_NONE,
+ * or -errno when the file could not be read (a kernel built without
+ * CONFIG_IMA_READ_POLICY publishes nothing).
+ * Sets @policy_signed when the policy appraises policy writes against a signature.
+ */
+int probe_ima_policy_scope(const char *policy_path, int *policy_signed);
+
 /* fs-verity state of one file */
 enum probe_verity {
 	PROBE_VERITY_ENABLED = 0,
@@ -213,11 +276,26 @@ int probe_cmdline_has_token(const char *cmdline, const char *token);
 /* 0 when the BOOTED kernel satisfies the agent's IMA floor */
 int probe_booted_ima_ok(void);
 
+/*
+ * Pure: 1 when IMA appraisal blocks on an integrity failure, 0 when it does
+ * not, mirroring the agent's bpf_loader_ima_appraisal_active() mode half.
+ *
+ * A Secure Boot kernel discards ima_appraise= and keeps its own blocking default,
+ * so on such a host the parameter says nothing about the mode and appending it
+ * changes nothing. Only where the kernel honours the parameter does the cmdline
+ * decide.
+ */
+int probe_ima_mode_blocking(int secureboot, const char *cmdline);
+
 /* 0 when the running kernel enforces module signatures */
 int probe_module_sig_enforced(void);
 
 /* 0 when lockdown is [integrity] or [confidentiality] */
 int probe_lockdown_restrictive(void);
+
+/* Where lota-pcr14-lock persists the pre-extend PCR14;
+ * read by the fixed-path helpers below */
+const char *probe_pcr14_baseline_path(void);
 
 /* Derives the post-lock PCR14 value installed by the initramfs lock:
  * SHA256(baseline || SHA256("LOTA-PCR14-INITRAMFS-LOCK-v1")), where baseline
@@ -256,6 +334,15 @@ int probe_cert_days_left(const char *der_path, int *days_left);
  * 1 when a "key = value" line for the exact key exists
  * (comments and leading whitespace skipped), 0 otherwise */
 int probe_conf_buf_has_key(const char *buf, const char *key);
+
+/* Pure parser: copy @key's value into @out and return 1;
+ * 0 with @out empty when absent, empty or too long */
+int probe_conf_buf_value(const char *buf, const char *key, char *out,
+			 size_t cap);
+
+/* File-backed wrapper for probe_conf_buf_value() */
+int probe_conf_value(const char *conf_path, const char *key, char *out,
+		     size_t cap);
 
 /* File-backed wrapper for probe_conf_buf_has_key().
  * 1/0 or -errno */
@@ -338,10 +425,22 @@ int probe_pcr14_lock_ran(void);
 int probe_pcr14_lock_ran_at(const char *baseline_path);
 
 /*
+ * 1 when the snapshot at @snapshot_path records a pause (PCR 14 spent on an
+ * operator-requested shutdown) and @live still holds the value it left, else 0.
+ * Mirrors tpm_classify_pcr14(); the result only picks the operator's sentence.
+ */
+int probe_agent_paused_at(const char *snapshot_path,
+			  const uint8_t live[PROBE_HASH_SIZE]);
+
+/* probe_agent_paused_at() on the agent's snapshot and the live PCR 14 */
+int probe_agent_paused(void);
+
+/*
  * Verdict for the reboot barrier, and the sentence explaining it.
  *
  * Pure: the caller reads PCR 14, the handoff and the service state; this decides.
- * @pcr_state is an enum probe_pcr14, @lock_ran and @agent_active are 1/0.
+ * @pcr_state is an enum probe_pcr14, @lock_ran, @agent_active, @agent_failed
+ * and @agent_paused are 1/0.
  *
  * A first install on a Secure Boot host and a host carrying a commitment from
  * an earlier agent run look identical in the register and need the same reboot;
@@ -349,7 +448,8 @@ int probe_pcr14_lock_ran_at(const char *baseline_path);
  * operator is told.
  */
 enum stage_state probe_pcr14_barrier_stage(int pcr_state, int lock_ran,
-					   int agent_active, char *note,
+					   int agent_active, int agent_failed,
+					   int agent_paused, char *note,
 					   size_t cap);
 
 /*

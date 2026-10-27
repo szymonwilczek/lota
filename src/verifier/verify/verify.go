@@ -18,6 +18,7 @@ import (
 	"fmt"
 	"log/slog"
 	"runtime"
+	"sort"
 	"sync/atomic"
 	"time"
 
@@ -284,20 +285,76 @@ func (v *Verifier) GenerateChallenge(clientID string) (*types.Challenge, error) 
 	return v.nonceStore.GenerateChallenge(clientID, pcrMask)
 }
 
-// certificateVerdict maps an AIK certificate failure to the verdict the agent
-// is told. A certificate naming a key other than the one that signed the quote
-// is VerifyIdentityFail, which re-enrolling fixes (a TPM clear leaves this).
-// Expiry, chain and configuration failures stay VerifySigFail:
-// their fix lies with the operator or the CA.
-func certificateVerdict(err error) uint32 {
-	if errors.Is(err, store.ErrCertificateKeyMatch) {
-		return types.VerifyIdentityFail
+// DiscardChallenge releases a challenge whose peer left without answering.
+func (v *Verifier) DiscardChallenge(challenge *types.Challenge, clientID string) {
+	if challenge == nil {
+		return
 	}
-	return types.VerifySigFail
+	v.nonceStore.DiscardChallenge(challenge.Nonce, clientID)
 }
 
-// performs full verification of attestation report
-// returns verification result ready to send back to client
+// certificateVerdict maps an AIK certificate failure to the agent's verdict:
+//   - names another key: VerifyIdentityFail (re-enroll; a TPM clear does it);
+//   - outside its validity window: VerifyCertificateValidity (expiry, clock);
+//   - unparseable, untrusted chain or no anchors: VerifySigFail.
+func certificateVerdict(err error) uint32 {
+	switch {
+	case errors.Is(err, store.ErrCertificateKeyMatch):
+		return types.VerifyIdentityFail
+	case errors.Is(err, store.ErrCertificateExpired),
+		errors.Is(err, store.ErrCertificateNotYet):
+		return types.VerifyCertificateValidity
+	default:
+		return types.VerifySigFail
+	}
+}
+
+// MaxRecordedDetail caps the refusal reason in an attestation record.
+// The reason quotes report data, so it is capped when written.
+const MaxRecordedDetail = 2048
+
+// recordedDetail returns err as one sanitized, bounded line for the decision
+// log. An accepted round (nil err) records an empty reason.
+func recordedDetail(err error) string {
+	if err == nil {
+		return ""
+	}
+	detail := logging.SanitizeField(err.Error())
+	if len(detail) > MaxRecordedDetail {
+		detail = detail[:MaxRecordedDetail]
+	}
+	return detail
+}
+
+// What authenticated a client's first-use PCR0/1/7 baseline
+type bootBaselineRoad struct {
+	allowedBy string // logged as allowed_by; empty = not authenticated yet
+	note      string // operator caveat, optional
+}
+
+// Policy-only roads; the baseline store is left to the caller.
+func (v *Verifier) bootBaselineRoad(tenant string, bootFacts *BootFacts) bootBaselineRoad {
+	if v.pcrVerifier.PolicyDeclaresBootPCRsForTenant(tenant) {
+		return bootBaselineRoad{allowedBy: "signed policy PCR0/1/7 pins"}
+	}
+	if v.pcrVerifier.PolicyRequiresSecureBootForTenant(tenant) &&
+		SecureBootAnchored(bootFacts) {
+		return bootBaselineRoad{
+			allowedBy: "event-log Secure Boot anchor",
+			note:      "PCR0/1/7 row is a per-device rollback anchor; firmware trust comes from the event-log Secure Boot gate",
+		}
+	}
+	return bootBaselineRoad{}
+}
+
+// VerifyReport verifies a report that arrived over an unnamed transport.
+func (v *Verifier) VerifyReport(challengeID string, reportData []byte) (*types.VerifyResult, error) {
+	return v.VerifyReportFrom(challengeID, "", reportData)
+}
+
+// VerifyReportFrom verifies a report and records the address it came from.
+// remoteAddr is what the decision log answers "which host" with; a caller
+// that has no address for the report passes an empty one.
 //
 // challengeID identifies the transport-level endpoint used when the
 // challenge was generated. It is used exclusively for nonce binding
@@ -305,7 +362,7 @@ func certificateVerdict(err error) uint32 {
 // baseline, revocation, bans) require a non-zero hardware-derived
 // clientID (hex-encoded HardwareID from the TPM report) so that
 // transport identity (e.g. NATed IP) is never used as durable identity.
-func (v *Verifier) VerifyReport(challengeID string, reportData []byte) (_ *types.VerifyResult, retErr error) {
+func (v *Verifier) VerifyReportFrom(challengeID, remoteAddr string, reportData []byte) (_ *types.VerifyResult, retErr error) {
 	reportBuf := cloneSensitive(reportData)
 	defer wipeBytes(reportBuf)
 
@@ -352,6 +409,8 @@ func (v *Verifier) VerifyReport(challengeID string, reportData []byte) (_ *types
 				DurationMs: float64(duration.Milliseconds()),
 				PCR14:      pcr14Hex,
 				KernelHash: kernelHashHex,
+				Details:    recordedDetail(retErr),
+				RemoteAddr: logging.SanitizeField(remoteAddr),
 			}); err != nil {
 				clog.Warn("failed to record attestation decision", "error", err)
 			}
@@ -361,7 +420,14 @@ func (v *Verifier) VerifyReport(challengeID string, reportData []byte) (_ *types
 	report, err := types.ParseReport(reportBuf)
 	if err != nil {
 		clog.Error("report parse failed", "error", err)
-		result.Result = types.VerifyOldVersion
+		// only a version mismatch means upgrade the agent;
+		// any other parse failure is a damaged frame
+		verdict := types.VerifyReportMalformed
+		if errors.Is(err, types.ErrInvalidVersion) {
+			verdict = types.VerifyOldVersion
+		}
+		v.metrics.Rejections.Inc(types.VerifyResultString(verdict))
+		result.Result = verdict
 		return result, err
 	}
 	defer wipeReportSensitive(report)
@@ -398,17 +464,19 @@ func (v *Verifier) VerifyReport(challengeID string, reportData []byte) (_ *types
 
 	certVerifier, ok := v.aikStore.(store.AIKCertVerifier)
 	if !ok {
+		// verifier misconfiguration; nothing the host can change
 		logging.Security(clog, "AIK store cannot verify certificates; refusing attestation",
 			"store_type", fmt.Sprintf("%T", v.aikStore))
-		v.metrics.Rejections.Inc("sig_fail")
-		result.Result = types.VerifySigFail
+		v.metrics.Rejections.Inc(types.VerifyResultString(types.VerifyInternalError))
+		result.Result = types.VerifyInternalError
 		return result, errors.New("configured AIK store does not support AIK certificate verification")
 	}
 	if report.TPM.AIKCertSize == 0 {
+		// an unfinished enrolment, not a bad signature
 		logging.Security(clog, "attestation rejected: AIK certificate required",
 			"challenge_id", challengeID)
-		v.metrics.Rejections.Inc("sig_fail")
-		result.Result = types.VerifySigFail
+		v.metrics.Rejections.Inc(types.VerifyResultString(types.VerifyCertificateMissing))
+		result.Result = types.VerifyCertificateMissing
 		return result, errors.New("AIK certificate required")
 	}
 	aikCert := cloneSensitive(report.TPM.AIKCertificate[:report.TPM.AIKCertSize])
@@ -424,25 +492,24 @@ func (v *Verifier) VerifyReport(challengeID string, reportData []byte) (_ *types
 
 	identity, err := decodeDevicePseudonym(aikLeaf.Subject.CommonName)
 	if err != nil {
+		// verified cert, unreadable pseudonym: re-enroll, not a TPM fault
 		logging.Security(clog, "AIK certificate carries an invalid device identity",
 			"subject", aikLeaf.Subject.CommonName, "error", err)
-		v.metrics.Rejections.Inc("sig_fail")
-		result.Result = types.VerifySigFail
+		v.metrics.Rejections.Inc(types.VerifyResultString(types.VerifyIdentityFail))
+		result.Result = types.VerifyIdentityFail
 		return result, fmt.Errorf("invalid device identity in AIK certificate: %w", err)
 	}
 	tenant, err = TenantFromCertificate(aikLeaf)
 	if err != nil {
+		// same for a missing or ambiguous tenant
 		logging.Security(clog, "AIK certificate carries an invalid tenant",
 			"subject", aikLeaf.Subject.CommonName, "error", err)
-		v.metrics.Rejections.Inc("sig_fail")
-		result.Result = types.VerifySigFail
+		v.metrics.Rejections.Inc(types.VerifyResultString(types.VerifyIdentityFail))
+		result.Result = types.VerifyIdentityFail
 		return result, fmt.Errorf("invalid tenant in AIK certificate: %w", err)
 	}
 	clientID = aikLeaf.Subject.CommonName
-	hwID = clientID
-	if len(hwID) > 16 {
-		hwID = hwID[:16]
-	}
+	hwID = store.FormatHardwareID(identity)
 	clog = logging.WithClient(v.log, clientID).With("tenant", tenant)
 	clog.Debug("client identity derived from AIK certificate", "challenge_id", challengeID)
 
@@ -547,9 +614,12 @@ func (v *Verifier) VerifyReport(challengeID string, reportData []byte) (_ *types
 	}
 
 	if err := v.pcrVerifier.VerifyReportForTenant(report, tenant, bootFacts); err != nil {
-		clog.Error("PCR verification failed", "error", err)
-		v.metrics.Rejections.Inc("pcr_fail")
-		result.Result = types.VerifyPCRFail
+		// the host sees only the verdict, so send the refusal's own class
+		verdict := policyVerdict(err)
+		clog.Error("policy verification failed", "error", err,
+			"verdict", types.VerifyResultString(verdict))
+		v.metrics.Rejections.Inc(types.VerifyResultString(verdict))
+		result.Result = verdict
 		return result, err
 	}
 
@@ -619,7 +689,7 @@ func (v *Verifier) VerifyReport(challengeID string, reportData []byte) (_ *types
 	if _, bootStoreOK := v.baselineStore.(BootBaselineStorer); !bootStoreOK {
 		clog.Error("baseline store does not support boot PCR pinning; refusing attestation")
 		v.metrics.Rejections.Inc("baseline_error")
-		result.Result = types.VerifyIntegrityMismatch
+		result.Result = types.VerifyInternalError
 		return result, errors.New("FAIL_BASELINE_ERROR: store missing boot PCR support")
 	}
 
@@ -634,7 +704,7 @@ func (v *Verifier) VerifyReport(challengeID string, reportData []byte) (_ *types
 	if !atomicOK {
 		clog.Error("baseline store does not implement AtomicBaselineStorer; refusing FlagBootCommitment attestation")
 		v.metrics.Rejections.Inc("baseline_error")
-		result.Result = types.VerifyIntegrityMismatch
+		result.Result = types.VerifyInternalError
 		return result, errors.New("FAIL_BASELINE_ERROR: store missing atomic agent_hash/boot pinning")
 	}
 
@@ -662,14 +732,14 @@ func (v *Verifier) VerifyReport(challengeID string, reportData []byte) (_ *types
 	if bootFacts != nil {
 		pcr14Baseline = PCR14BaselineFromEventLog(bootFacts.Parsed)
 	}
-	expected, _, matched := MatchLockedBootCommitmentPCR14(
+	expected, matched := MatchLockedBootCommitmentPCR14(
 		pcr14Baseline, report.System.AgentHash, pcr14)
 	if !matched {
 		logging.Security(clog, "PCR14 boot-commitment derivation mismatch",
 			"actual_pcr14", pcr14Hex,
 			"expected_pcr14", FormatPCR14(expected),
-			"reset_count", parsedAttest.ClockInfo.ResetCount,
-			"restart_count", parsedAttest.ClockInfo.RestartCount,
+			"eventlog_baseline", FormatPCR14(pcr14Baseline),
+			"agent_hash", hex.EncodeToString(report.System.AgentHash[:]),
 			"hint", "rebuild initramfs with the current lota-pcr14-lock helper, cold reboot, and run the same agent binary that extended PCR14")
 		v.metrics.Rejections.Inc("integrity_mismatch")
 		result.Result = types.VerifyIntegrityMismatch
@@ -708,25 +778,28 @@ func (v *Verifier) VerifyReport(challengeID string, reportData []byte) (_ *types
 	//	in policy; with the firmware boot-with-Secure-Boot-off path already
 	//	rejected machine-independently, the TOFU row serves as per-device
 	//	rollback/consistency anchor rather than the firmware trust control itself.
-	if v.requireBootEnrollment {
-		reader, readerOK := v.baselineStore.(BootBaselineReader)
-		enrolled := false
-		if readerOK && reader.GetBootBaseline(clientID) != nil {
-			enrolled = true
+	//
+	// The road is resolved even with the gate off: the pin logs it.
+	bootPin := v.bootBaselineRoad(tenant, bootFacts)
+	if bootPin.allowedBy == "" && v.requireBootEnrollment {
+		// store last: policy is in memory, the store is not
+		if reader, ok := v.baselineStore.(BootBaselineReader); ok &&
+			reader.GetBootBaseline(clientID) != nil {
+			bootPin.allowedBy = "baseline store enrollment"
 		}
-		if !enrolled && !v.pcrVerifier.PolicyDeclaresBootPCRsForTenant(tenant) {
-			if v.pcrVerifier.PolicyRequiresSecureBootForTenant(tenant) && SecureBootAnchored(bootFacts) {
-				logging.Security(clog, "boot baseline TOFU first-use accepted under event-log Secure Boot anchor",
-					"policy", v.pcrVerifier.PolicyNameForTenant(tenant),
-					"note", "PCR0/1/7 row is a per-device rollback anchor; firmware trust comes from the event-log Secure Boot gate")
-			} else {
-				logging.Security(clog, "boot baseline not enrolled; refusing TOFU first-use",
-					"policy", v.pcrVerifier.PolicyNameForTenant(tenant),
-					"hint", "load a signed policy that pins PCR0/PCR1/PCR7 for this fleet, enable require_secureboot for diverse fleets, or run with --allow-tofu-boot-baseline")
-				v.metrics.Rejections.Inc("baseline_error")
-				result.Result = types.VerifyIntegrityMismatch
-				return result, errors.New("FAIL_BASELINE_ERROR: boot baseline not enrolled (TOFU first-use refused under RequireBootEnrollment)")
-			}
+	}
+	if bootPin.allowedBy == "" {
+		if v.requireBootEnrollment {
+			logging.Security(clog, "boot baseline not enrolled; refusing TOFU first-use",
+				"policy", v.pcrVerifier.PolicyNameForTenant(tenant),
+				"hint", "load a signed policy that pins PCR0/PCR1/PCR7 for this fleet, enable require_secureboot for diverse fleets, or run with --allow-tofu-boot-baseline")
+			v.metrics.Rejections.Inc("baseline_error")
+			result.Result = types.VerifyPolicyRequirement
+			return result, errors.New("FAIL_BASELINE_ERROR: boot baseline not enrolled (TOFU first-use refused under RequireBootEnrollment)")
+		}
+		bootPin = bootBaselineRoad{
+			allowedBy: "--allow-tofu-boot-baseline",
+			note:      "nothing authenticated these values; the host pinned the firmware state it reported",
 		}
 	}
 
@@ -772,6 +845,19 @@ func (v *Verifier) VerifyReport(challengeID string, reportData []byte) (_ *types
 		if outcome.AgentHashBaseline != nil {
 			stored = outcome.AgentHashBaseline.AgentHash
 		}
+		if stored == ([types.HashSize]byte{}) {
+			// Not drift: no hash was ever pinned,
+			// so do not report a change from baseline.
+			logging.Security(clog,
+				"baseline carries no pinned agent_hash; refusing to adopt the reported one",
+				"reported_agent_hash",
+				hex.EncodeToString(report.System.AgentHash[:]),
+				"note",
+				"out-of-band PCR 14 pin; pin this client's agent hash or clear the baseline to re-enroll it")
+			v.metrics.Rejections.Inc("integrity_mismatch")
+			result.Result = types.VerifyIntegrityMismatch
+			return result, errors.New("FAIL_INTEGRITY_MISMATCH: baseline has no pinned agent_hash to compare against")
+		}
 		logging.Security(clog, "agent_hash drift detected",
 			"expected_agent_hash", hex.EncodeToString(stored[:]),
 			"actual_agent_hash", hex.EncodeToString(report.System.AgentHash[:]))
@@ -781,17 +867,60 @@ func (v *Verifier) VerifyReport(challengeID string, reportData []byte) (_ *types
 	case TOFUError:
 		clog.Error("agent_hash baseline store error, refusing attestation")
 		v.metrics.Rejections.Inc("baseline_error")
-		result.Result = types.VerifyIntegrityMismatch
+		result.Result = types.VerifyInternalError
 		return result, errors.New("FAIL_BASELINE_ERROR: agent_hash baseline store unavailable")
+	}
+
+	// The register the boot chain rests on is pinned.
+	// Every check above agrees with the report in hand: the commitment is rederived
+	// from the event log that report carries, so a host whose pre-lock baseline
+	// moved -- a MOK enrollment, a shim or SBAT update, a rebuilt initramfs lock
+	// -- presents a log and a register that agree with each other and derives
+	// clean. Comparing the register the client pinned is what makes that change
+	// visible; it is a boot-chain change, so it takes the same operator re-anchor
+	// a firmware change does.
+	// An agent update moves the register legitimately, and the agent_hash re-pin
+	// above moves the pin with it in one statement.
+	switch outcome.PCR14Result {
+	case TOFUFirstUse:
+		clog.Info("TOFU: PCR14 baseline established", "pcr14", pcr14Hex)
+	case TOFUMatch:
+		clog.Debug("PCR14 matches the pinned register")
+	case TOFUMismatch:
+		pinned := pcr14
+		if outcome.AgentHashBaseline != nil {
+			pinned = outcome.AgentHashBaseline.PCR14
+		}
+		logging.Security(clog, "PCR14 moved from the pinned register",
+			"actual_pcr14", pcr14Hex,
+			"pinned_pcr14", FormatPCR14(pinned),
+			"agent_hash", hex.EncodeToString(report.System.AgentHash[:]),
+			"hint", "the pre-lock PCR14 baseline changed (MOK enrollment, shim/SBAT update, rebuilt initramfs lock); re-anchor the client once the change is accounted for")
+		v.metrics.Rejections.Inc("integrity_mismatch")
+		result.Result = types.VerifyIntegrityMismatch
+		return result, errors.New("FAIL_INTEGRITY_MISMATCH: PCR14 changed from the pinned baseline")
+	case TOFUError:
+		clog.Error("PCR14 baseline store error, refusing attestation")
+		v.metrics.Rejections.Inc("baseline_error")
+		result.Result = types.VerifyInternalError
+		return result, errors.New("FAIL_BASELINE_ERROR: PCR14 baseline store unavailable")
 	}
 
 	if outcome.BootProvided {
 		switch outcome.BootResult {
 		case TOFUFirstUse:
-			clog.Info("TOFU: firmware/SecureBoot PCRs baseline established",
+			// every road logs at SECURITY; allowed_by tells them apart
+			pinArgs := []any{
 				"pcr0", hex.EncodeToString(bootPtr.PCR0[:]),
 				"pcr1", hex.EncodeToString(bootPtr.PCR1[:]),
-				"pcr7", hex.EncodeToString(bootPtr.PCR7[:]))
+				"pcr7", hex.EncodeToString(bootPtr.PCR7[:]),
+				"policy", v.pcrVerifier.PolicyNameForTenant(tenant),
+				"allowed_by", bootPin.allowedBy,
+			}
+			if bootPin.note != "" {
+				pinArgs = append(pinArgs, "note", bootPin.note)
+			}
+			logging.Security(clog, "boot baseline TOFU first-use accepted", pinArgs...)
 
 			// capture the event log + firmware version alongside the boot
 			// baseline so later self-service re-anchor can replay-diff
@@ -837,7 +966,7 @@ func (v *Verifier) VerifyReport(challengeID string, reportData []byte) (_ *types
 		case TOFUError:
 			clog.Error("boot baseline store error, refusing attestation")
 			v.metrics.Rejections.Inc("baseline_error")
-			result.Result = types.VerifyIntegrityMismatch
+			result.Result = types.VerifyInternalError
 			return result, fmt.Errorf("FAIL_BASELINE_ERROR: boot baseline store unavailable")
 		}
 	}
@@ -856,6 +985,9 @@ func (v *Verifier) VerifyReport(challengeID string, reportData []byte) (_ *types
 	}
 	if report.Header.Flags&types.FlagSecureBoot != 0 {
 		secFlags = append(secFlags, "SECUREBOOT")
+	}
+	if report.Header.Flags&types.FlagIMAAppraisal != 0 {
+		secFlags = append(secFlags, "IMA_APPRAISAL")
 	}
 	if len(secFlags) > 0 {
 		clog.Info("security features detected", "flags", secFlags)
@@ -889,6 +1021,7 @@ func (v *Verifier) VerifyReport(challengeID string, reportData []byte) (_ *types
 	if ts, ok := v.baselineStore.(TenantStorer); ok {
 		if err := ts.SetClientTenant(clientID, tenant); err != nil {
 			clog.Error("failed to persist the client tenant", "error", err)
+			v.metrics.Rejections.Inc(types.VerifyResultString(types.VerifyInternalError))
 			result.Result = types.VerifyInternalError
 			return result, fmt.Errorf("failed to persist client tenant: %w", err)
 		}
@@ -925,6 +1058,17 @@ func (v *Verifier) SetActivePolicy(name string) error {
 // returned pointer must be treated as read-only by callers
 func (v *Verifier) ActivePolicyConfig() (*PCRPolicy, bool) {
 	return v.pcrVerifier.GetActivePolicyConfig()
+}
+
+// returns the names of every loaded policy
+func (v *Verifier) ListPolicies() []string {
+	return v.pcrVerifier.ListPolicies()
+}
+
+// reports which policy each tenant is verified against; a tenant that binds
+// none falls back to the active policy
+func (v *Verifier) TenantBindings() map[string]string {
+	return v.pcrVerifier.TenantBindings()
 }
 
 // returns verifier statistics
@@ -996,9 +1140,12 @@ func (v *Verifier) ClientInfo(clientID string) (*ClientInfo, bool) {
 	_, err := v.aikStore.GetAIK(clientID)
 	hasAIK := err == nil
 
-	// hardware ID
+	// hardware ID: registered out of band, else the client ID itself
+	// (under the Privacy CA flow it is the hex device pseudonym)
 	if hwid, err := v.aikStore.GetHardwareID(clientID); err == nil {
 		info.HardwareID = hex.EncodeToString(hwid[:])
+	} else if hwid, err := store.ParseHardwareID(clientID); err == nil {
+		info.HardwareID = store.FormatHardwareID(hwid)
 	}
 
 	// revocation status
@@ -1009,18 +1156,22 @@ func (v *Verifier) ClientInfo(clientID string) (*ClientInfo, bool) {
 		}
 	}
 
-	// nonce store data
+	// per-instance nonce state, not comparable across instances
 	info.MonotonicCounter = v.nonceStore.ClientCounter(clientID)
 	info.PendingChallenges = v.nonceStore.ClientPendingCount(clientID)
-	info.LastAttestation = v.nonceStore.ClientLastAttestation(clientID)
 
-	// baseline store data
+	// baseline store data: shared durable record, including last attestation;
+	// without a record, fall back to this instance's nonce history
 	hasBaseline := false
 	if baseline := v.baselineStore.GetBaseline(clientID); baseline != nil {
 		hasBaseline = true
 		info.PCR14Baseline = hex.EncodeToString(baseline.PCR14[:])
 		info.AttestCount = baseline.AttestCount
 		info.FirstSeen = baseline.FirstSeen
+		info.LastAttestation = baseline.LastSeen
+	}
+	if info.LastAttestation.IsZero() {
+		info.LastAttestation = v.nonceStore.ClientLastAttestation(clientID)
 	}
 
 	// CA-assigned tenant from the baseline row;
@@ -1050,26 +1201,58 @@ func (v *Verifier) ClientInfo(clientID string) (*ClientInfo, bool) {
 	return info, true
 }
 
-// returns all known client IDs as a union of AIK store and nonce store
+// ListClients returns every known client: the durable baseline record first,
+// then AIK registrations and this process's challenge history.
+// Under the Privacy CA flow nothing registers into the AIK store at runtime,
+// so only the baseline record is shared and survives a restart.
 func (v *Verifier) ListClients() []string {
 	seen := make(map[string]struct{})
 	var clients []string
 
-	for _, id := range v.aikStore.ListClients() {
-		if _, ok := seen[id]; !ok {
+	add := func(ids []string) {
+		for _, id := range ids {
+			if _, ok := seen[id]; ok {
+				continue
+			}
 			seen[id] = struct{}{}
 			clients = append(clients, id)
 		}
 	}
 
-	for _, id := range v.nonceStore.ListActiveClients() {
-		if _, ok := seen[id]; !ok {
-			seen[id] = struct{}{}
-			clients = append(clients, id)
-		}
-	}
+	add(v.baselineStore.ListClients())
+	add(v.aikStore.ListClients())
+	add(v.nonceStore.ListActiveClients())
 
 	return clients
+}
+
+// DurableClientsPage returns one page of the durable client record,
+// ordered by client ID.
+func (v *Verifier) DurableClientsPage(limit, offset int) ([]string, error) {
+	if pager, ok := v.baselineStore.(PagedClientLister); ok {
+		return pager.ListClientsPage(limit, offset)
+	}
+
+	all := v.baselineStore.ListClients()
+	sort.Strings(all)
+	if offset >= len(all) {
+		return []string{}, nil
+	}
+	end := offset + limit
+	if end > len(all) {
+		end = len(all)
+	}
+	return all[offset:end], nil
+}
+
+// CountDurableClients returns the number of clients with a durable record.
+func (v *Verifier) CountDurableClients() int {
+	return v.baselineStore.Stats().TotalClients
+}
+
+// IsDurableClient reports whether the client has a durable record.
+func (v *Verifier) IsDurableClient(clientID string) bool {
+	return v.baselineStore.GetBaseline(clientID) != nil
 }
 
 // returns the configured revocation store
@@ -1233,6 +1416,21 @@ func (v *Verifier) tryAgentHashRepin(clog *slog.Logger, clientID, tenant string,
 		// this path only replaces one
 		return false
 	}
+	if !st.Pinned {
+		/*
+		 * Out-of-band PCR 14 pin, no agent hash.
+		 * Allow-list and interval both pass here, so refuse explicitly:
+		 * re-pinning would adopt the reported hash and replace the pinned PCR 14.
+		 */
+		logging.Security(clog,
+			"agent_hash re-pin refused: the baseline carries no pinned hash to move",
+			"reported_agent_hash",
+			hex.EncodeToString(report.System.AgentHash[:]),
+			"note",
+			"the row comes from an out-of-band PCR 14 pin; pin this client's agent hash or clear the baseline to re-enroll it")
+		v.metrics.Reanchors.Inc("agent_hash_escalate")
+		return false
+	}
 
 	now := time.Now()
 	verdict, refusal := agentHashDecision(report.System.AgentHash,
@@ -1303,6 +1501,12 @@ func (v *Verifier) AcknowledgeReanchorReview(clientID string) error {
 	if !ok {
 		return fmt.Errorf("baseline store does not support self-service re-anchor")
 	}
+	// unknown client check, same as forced re-anchor
+	if v.baselineStore.GetBaseline(clientID) == nil && !v.hasBootBaseline(clientID) {
+		if _, err := v.aikStore.GetAIK(clientID); err != nil {
+			return ErrUnknownClient
+		}
+	}
 	return rs.AcknowledgeLFAReview(clientID)
 }
 
@@ -1364,5 +1568,11 @@ func (v *Verifier) DeleteClient(clientID string) error {
 	if !known {
 		return ErrUnknownClient
 	}
-	return v.baselineStore.ClearBaseline(clientID)
+	if err := v.baselineStore.ClearBaseline(clientID); err != nil {
+		return err
+	}
+
+	// otherwise listed until the nonce store evicts it
+	v.nonceStore.ForgetClient(clientID)
+	return nil
 }

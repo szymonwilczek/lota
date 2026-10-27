@@ -32,7 +32,8 @@ Testing policy
      - IPC, config, TLS-pin, wire, enrollment-reply decoders,
        sealed-envelope parser/AEAD, TPM attest unmarshal, policy signature
        verify, server SDK token verify, TPM2B response/credential unmarshal
-     - ``make fuzz-all``
+     - ``make fuzz-all``, then run a target from the build directory;
+       ``make fuzz-regress`` replays the committed reproducers
    * - Kernel
      - BPF LSM live in a guest
      - Syzkaller harness ``lota_bpf_fuzz`` (see :ghsrc:`syzkaller/README.rst`)
@@ -48,9 +49,34 @@ Testing policy
    * - Packaging
      - the nfpm configs and the RPM spec ship the same files
      - ``make check-package-manifests``
+   * - Benchmarks
+     - every benchmark builds and runs; either target fails when its runner
+       does (numbers come from a pinned host, see
+       :ghsrc:`benchmarks/README.rst`)
+     - ``make bench-c``, ``make bench-go``; CI job ``benchmarks``
 
-A fuzz crash leaves a reproducer under ``testdata/fuzz/<Target>/``. Commit it
-so the regression is locked in.
+LeakSanitizer attaches to the process's threads with ptrace before it scans.
+On a host that refuses the attach (a LOTA agent enforcing ``block_ptrace``
+refuses it for every task) the scan aborts, and libFuzzer records the abort as
+a crash. Each C fuzz target probes the attach at start-up and, where it is
+refused, prints ``leak detection is off for this process`` and runs without
+it. Leaks are caught only on hosts that allow the attach.
+
+Commit a fuzz failure's reproducer in the commit before the fix, so that
+commit fails and the fix makes it pass:
+
+* **Go.** ``go test -fuzz`` writes the input to ``testdata/fuzz/<FuzzTarget>/``
+  in the package; plain ``go test`` replays it. Commit the file as written.
+* **C.** libFuzzer writes ``crash-<sha1>`` (or ``leak-``, ``timeout-``) into its
+  working directory. Copy it to ``fuzz/regressions/<make-target>/`` under a
+  name that says what it caught, and check that it fails the unfixed target.
+  ``make fuzz-regress`` replays them; the ``fuzz`` CI job and
+  ``scripts/check-patch`` run it.
+* **Kernel.** ``syz-manager`` keeps each crash, with a reproducer when it can
+  derive one, under ``crashes/`` in its work directory; nothing in tree replays
+  the BPF programs. Report the crash with that reproducer, and have the fix
+  carry a test that drives the same hook, such as
+  ``tests/integration/test_bpf_gates.sh``.
 
 Package manifests
 =================
@@ -67,7 +93,18 @@ sides -- rpm needs a ``%dir`` line where nfpm creates the directory along the
 way -- so a directory a package deliberately ships empty is still compared.
 Modes and ownership are not: the two manifests express them too differently,
 so a path that carries permissions worth having still needs a human to read
-both entries.
+both entries. The spec's ``Version`` and the head of its ``%changelog`` must
+be the ``@VERSION@`` and ``@CHANGELOG@`` placeholders ``make srpm`` fills from
+``VERSION``, so a version bump changes ``VERSION`` alone.
+
+Provides and Requires are compared too. rpmbuild derives
+``Provides: pkgconfig(<name>)`` from every shipped ``.pc`` file and nfpm does
+not, so the nfpm config declares it. A subpackage the spec pins to one build of
+a sibling, such as the devel package to its runtime, is pinned in nfpm as well.
+
+``make install`` is compared too, under ``/usr/share/lota`` only: the
+installer's stages read from there, so every file the packages ship under it
+must also be placed by ``make install``.
 
 Adding a file to a package therefore means adding it in three places: the
 install rule in the ``Makefile``, the nfpm config for its package, and the

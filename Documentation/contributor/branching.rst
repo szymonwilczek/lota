@@ -37,7 +37,7 @@ tag is built and signed.
 * The fuzzers and long-running CI (Syzkaller, configured separately) run
   against this branch.
 * The developer and testing policy lives in
-  :doc:`development/index <development/index>`; ``README-NEXT.rst`` is a
+  :doc:`development/index`; ``README-NEXT.rst`` is a
   short pointer to it, identical on both branches, so an integration merge
   never touches it.
 

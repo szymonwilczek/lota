@@ -40,6 +40,7 @@ static const struct {
 	{ LOTA_ENROLL_STATUS_INTERNAL_ERROR, "INTERNAL_ERROR" },
 	{ LOTA_ENROLL_STATUS_RATE_LIMITED, "RATE_LIMITED" },
 	{ LOTA_ENROLL_STATUS_TOKEN_REJECTED, "TOKEN_REJECTED" },
+	{ LOTA_ENROLL_STATUS_CRL_STALE, "CRL_STALE" },
 };
 
 int main(void)
@@ -89,7 +90,7 @@ int main(void)
 
 	/* a CA newer than this agent: the caller prints the number and says so,
 	 * which it can only do if it can tell the two apart */
-	CHECK(lota_enroll_status_text(9) == NULL,
+	CHECK(lota_enroll_status_text(10) == NULL,
 	      "a status this build does not know has no sentence");
 	CHECK(lota_enroll_status_text(65535) == NULL,
 	      "a status far outside the range has no sentence either");

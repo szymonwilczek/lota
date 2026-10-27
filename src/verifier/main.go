@@ -14,7 +14,7 @@
 //   --db PATH          SQLite database for persistent storage (default: disabled)
 //   --pg-dsn DSN       PostgreSQL DSN for shared multi-instance storage
 //                      (or LOTA_PG_DSN); mutually exclusive with --db
-//   --policy FILE      PCR policy file (YAML)
+//   --policy FILE      PCR policy file (YAML); may be repeated, first is active
 //   --policy-pubkey FILE Ed25519 public key for policy signature verification
 //   --max-connections N Max concurrent attestation connections (default: 256;
 //                      -1 disables the cap)
@@ -82,12 +82,15 @@ var (
 	addr           = flag.String("addr", ":8443", "Listen address for TLS attestation protocol")
 	maxConnections = flag.Int("max-connections", server.DefaultMaxConnections,
 		"Maximum concurrent attestation connections. Each one costs a TLS handshake and a full report verification, so this bounds what a client stampede can spend; connections past the cap are refused at accept. -1 disables the cap (load rigs only).")
-	httpAddr     = flag.String("http-addr", "", "Listen address for HTTP monitoring API (e.g. :8080)")
+	httpAddr      = flag.String("http-addr", "", "Listen address for HTTP monitoring API (e.g. :8080)")
+	shutdownDrain = flag.Duration("shutdown-drain", 0,
+		"How long the monitoring API keeps answering after the attestation listener has closed on shutdown. /health answers 503 degraded for that window, which is what a load balancer reads to stop routing here before the process goes; set it to at least one health-check interval behind one. Zero shuts the API down as soon as it is idle.")
 	certFile     = flag.String("cert", "", "TLS certificate file")
 	keyFile      = flag.String("key", "", "TLS private key file")
-	aikStorePath = flag.String("aik-store", "/var/lib/lota/aiks", "AIK key store directory")
+	aikStorePath = flag.String("aik-store", "/var/lib/lota/aiks",
+		"AIK key store directory; the client registry only when no database is configured")
 	dbPath       = flag.String("db", "", "SQLite database path for persistent storage (empty = file/memory stores)")
-	policyFile   = flag.String("policy", "", "PCR policy file (YAML)")
+	policyFiles  stringSliceFlag
 	policyPubKey = flag.String("policy-pubkey", "", "Ed25519 public key for policy signature verification (PEM)")
 
 	generateCert        = flag.Bool("generate-cert", false, "Generate self-signed certificate")
@@ -102,11 +105,12 @@ var (
 	aikCACerts          stringSliceFlag
 	aikCRLs             stringSliceFlag
 	pgShardDSNs         stringSliceFlag
-	pgDSN               = flag.String("pg-dsn", "", "PostgreSQL DSN for shared multi-instance storage (or LOTA_PG_DSN env); selects the Postgres backend for baseline, nonce, revocation, ban, audit and attestation state. Mutually exclusive with --db.")
+	pgDSN               = flag.String("pg-dsn", "", "PostgreSQL DSN for shared multi-instance storage (or LOTA_PG_DSN env); selects the Postgres backend for baseline, nonce, revocation, ban, audit and attestation state. The database must be writable: the verifier applies its schema at startup, so a hot standby is refused. Mutually exclusive with --db.")
 	pgMaxOpenConns      = flag.Int("pg-max-open-conns", store.DefaultPGMaxOpenConns, "Maximum open Postgres connections per instance (per shard when sharded). Postgres group-commits concurrent transactions, so a wider pool raises enrollment/attestation burst throughput; keep the value times the instance count under the database's max_connections.")
-	nonceDBPath         = flag.String("nonce-db", "", "SQLite database path for used nonce history (defaults to <aik-store>/used_nonces.sqlite); set --allow-insecure-memory-nonces to disable persistence")
+	stateDBPath         = flag.String("state-db", "", "SQLite database an instance without --db or --pg-dsn keeps its durable state in: used nonce history, revocations, hardware bans, the audit log and the attestation decision log (defaults to <aik-store>/verifier-state.sqlite); set --allow-insecure-memory-state to keep none of it")
 	scopedKeysFile      = flag.String("api-keys-file", "", "YAML file of scoped monitoring-API keys (entries of key_sha256, role: reader|admin, tenants list or * for all); reloaded on SIGHUP. Environment keys keep working with global scope.")
-	allowMemNonces      = flag.Bool("allow-insecure-memory-nonces", false, "INSECURE: allow memory-only used nonce history (replay window after verifier restart)")
+	allowMemState       = flag.Bool("allow-insecure-memory-state", false, "INSECURE: keep no durable state without a database. The used nonce history lives in memory, so a restart re-opens a replay window, and this instance holds no revocations, bans, audit log or decision log at all -- those endpoints answer 503.")
+	reportOnly          = flag.Bool("report-only", false, "Serve the monitoring API from a database this instance never writes -- a Postgres hot standby or the primary -- with no attestation listener bound and every state-changing endpoint refused. Requires --http-addr and a Postgres DSN; the schema is verified but never applied, so the reporting load that is not the verifier's can be taken off the primary.")
 	printVersions       = flag.Bool("print-versions", false, "Print the attestation report wire version this binary implements, the schema version it builds each backend up to, and its TLS floor, then exit. The report wire must match the agent fleet's exactly.")
 )
 
@@ -116,10 +120,7 @@ var (
 var errCRLWithoutCARoot = errors.New("--aik-crl requires at least one --aik-ca-cert to verify CRL signatures")
 
 // aikStoreParams is everything the AIK-store choice depends on.
-// It carries no storage backend on purpose: the certificate-verifying store is
-// file-backed under --aik-store and holds no baseline, nonce or enforcement state,
-// so which database holds those has no bearing on whether AIK certificate chains
-// can be verified.
+// StorePath is the registry only when no database is configured.
 type aikStoreParams struct {
 	StorePath   string
 	CACerts     []string
@@ -127,25 +128,18 @@ type aikStoreParams struct {
 	RequireCert bool
 }
 
-// selectAIKStore picks between the certificate-verifying AIK store and the backend's
-// own trust-on-first-use store, which tofu supplies.
-// TOFU is called only when no certificate verification was asked for, so backend
-// does not build a store it will not use.
+// selectAIKStore picks the AIK store.
+//
+// registry returns the backend's client store: the database when one is
+// configured, --aik-store otherwise. Without certificate verification it is
+// returned as is (TOFU); with it, the certificate store persists into it.
 //
 // Returned *store.CertificateStore is non-nil exactly when the certificate path
 // was taken; it is the same object on every backend, which is why the caller
 // logs it through one helper.
-func selectAIKStore(p aikStoreParams, tofu func() (store.AIKStore, error)) (store.AIKStore, *store.CertificateStore, error) {
+func selectAIKStore(p aikStoreParams, registry func() (store.AIKStore, error)) (store.AIKStore, *store.CertificateStore, error) {
 	if len(p.CRLs) > 0 && len(p.CACerts) == 0 {
 		return nil, nil, errCRLWithoutCARoot
-	}
-
-	if !p.RequireCert && len(p.CACerts) == 0 {
-		s, err := tofu()
-		if err != nil {
-			return nil, nil, err
-		}
-		return s, nil, nil
 	}
 
 	if p.RequireCert && len(p.CACerts) == 0 {
@@ -153,27 +147,127 @@ func selectAIKStore(p aikStoreParams, tofu func() (store.AIKStore, error)) (stor
 			store.ErrNoTrustedCAs)
 	}
 
-	cs, err := store.NewCertificateStoreWithCRL(p.StorePath, p.CACerts, p.CRLs, p.RequireCert)
+	backend, err := registry()
+	if err != nil {
+		return nil, nil, err
+	}
+
+	if !p.RequireCert && len(p.CACerts) == 0 {
+		return backend, nil, nil
+	}
+
+	cs, err := store.NewCertificateStoreWithBackend(backend, p.CACerts, p.CRLs, p.RequireCert)
 	if err != nil {
 		return nil, nil, err
 	}
 	return cs, cs, nil
 }
 
-// logAIKStore records the certificate-backed selection.
-// Each backend logs its own trust-on-first-use fallback from inside the callback,
-// where it knows what it built.
-func logAIKStore(logger *slog.Logger, cs *store.CertificateStore, p aikStoreParams) {
+// logAIKStore logs the certificate-backed selection and its registry,
+// so "registered_clients" reads as per-instance or fleet-wide.
+// The TOFU fallback is logged by the caller.
+func logAIKStore(logger *slog.Logger, cs *store.CertificateStore, p aikStoreParams, registry string) {
 	logger.Info("certificate-backed AIK store initialized",
-		"path", p.StorePath,
+		"registry", registry,
 		"trusted_cas", len(p.CACerts),
 		"loaded_crls", cs.CRLCount(),
 		"require_cert", p.RequireCert,
-		"registered_clients", len(cs.ListClients()))
+		"registered_clients", cs.CountClients())
+}
+
+// enforcementStores holds operator decisions: revocations, bans, the audit
+// log they write, and the attestation decision log.
+// The API answers 503 for each one that is absent.
+type enforcementStores struct {
+	audit        store.AuditLog
+	revocations  store.RevocationStore
+	bans         store.BanStore
+	attestations store.AttestationLog
+}
+
+// sqliteEnforcementStores keeps the group in a SQLite database.
+func sqliteEnforcementStores(db *sql.DB, logger *slog.Logger, m *metrics.Metrics) enforcementStores {
+	audit := store.NewSQLiteAuditLog(db)
+	return enforcementStores{
+		audit:       audit,
+		revocations: store.NewSQLiteRevocationStore(db, audit),
+		bans:        store.NewSQLiteBanStore(db, audit),
+		attestations: store.NewBatchedAttestationLog(
+			store.NewSQLiteAttestationLog(db),
+			store.BatchedAttestationLogConfig{Logger: logger, Loss: m}),
+	}
+}
+
+// postgresEnforcementStores keeps the group in Postgres, shared by every
+// instance; sharded deployments keep it on the control shard.
+func postgresEnforcementStores(db *sql.DB, logger *slog.Logger, m *metrics.Metrics) enforcementStores {
+	audit := store.NewPostgresAuditLog(db)
+	return enforcementStores{
+		audit:       audit,
+		revocations: store.NewPostgresRevocationStore(db, audit),
+		bans:        store.NewPostgresBanStore(db, audit),
+		attestations: store.NewBatchedAttestationLog(
+			store.NewPostgresAttestationLog(db),
+			store.BatchedAttestationLogConfig{Logger: logger, Loss: m}),
+	}
+}
+
+// install sets the revocation, ban and attestation stores on cfg.
+// A nil store stays nil, which the API reports as absent.
+func (e enforcementStores) install(cfg *verify.VerifierConfig) {
+	cfg.RevocationStore = e.revocations
+	cfg.BanStore = e.bans
+	cfg.AttestationLog = e.attestations
+}
+
+// loadPolicies registers every --policy document in the order it was given.
+//
+// The first one becomes the active policy, used for clients whose tenant binds
+// none. A reused `name:` would silently replace a loaded document and is refused;
+// a further document that binds no tenant is unreachable and is reported.
+func loadPolicies(logger *slog.Logger, verifier *verify.Verifier, paths []string) error {
+	for i, path := range paths {
+		if err := verifier.LoadPolicy(path); err != nil {
+			logger.Error("failed to load policy", "path", path, "error", err)
+			return err
+		}
+		if len(verifier.ListPolicies()) != i+1 {
+			logger.Error("policy file reuses the name of one already loaded, which would replace it",
+				"path", path,
+				"hint", "give each policy document its own name:")
+			return errors.New("duplicate policy name")
+		}
+		logger.Info("loaded custom policy", "path", path)
+	}
+
+	active := ""
+	if policy, ok := verifier.ActivePolicyConfig(); ok {
+		active = policy.Name
+		logger.Info("active policy", "policy", active,
+			"hint", "clients whose tenant binds no policy of its own verify against this one")
+	}
+
+	bound := make(map[string]bool)
+	for tenant, name := range verifier.TenantBindings() {
+		bound[name] = true
+		logger.Info("tenant bound to policy", "tenant", tenant, "policy", name)
+	}
+
+	for _, name := range verifier.ListPolicies() {
+		if name == active || bound[name] {
+			continue
+		}
+		logger.Warn("policy is loaded but no client can reach it: it is neither the active policy nor bound to a tenant",
+			"policy", name,
+			"hint", "give it a tenant: key, or pass it as the first --policy so it becomes the active one")
+	}
+
+	return nil
 }
 
 func main() {
 	flag.Var(&pgShardDSNs, "pg-shard-dsn", "PostgreSQL shard DSN (or LOTA_PG_SHARD_DSNS as a comma-separated list); may be repeated. Partitions per-client baseline, nonce and session state across the given databases by a stable hash of the key, so the durable write tier scales past one database host. Mutually exclusive with --pg-dsn and --db. Every instance must be given the same shard list in the same order. Enforcement, audit and attestation-log state lives on the first shard.")
+	flag.Var(&policyFiles, "policy", "PCR policy file (YAML); may be repeated. The first one given is the active policy, which every client whose tenant binds no policy of its own is verified against; each further file must bind itself to a tenant with a `tenant:` key, and clients in that tenant are verified against it.")
 	flag.Var(&aikCACerts, "aik-ca-cert", "Trusted attestation-CA root (PEM) the AIK certificate must chain to; may be repeated")
 	flag.Var(&aikCRLs, "aik-crl", "CRL file (PEM or DER) used to revoke compromised AIK certificates; may be repeated. Each CRL must be signed by one of the --aik-ca-cert roots.")
 	flag.Parse()
@@ -210,8 +304,8 @@ func main() {
 		}
 	}
 
-	// validate tls config
-	if *certFile == "" || *keyFile == "" {
+	// validate tls config; report-only binds no attestation listener
+	if (*certFile == "" || *keyFile == "") && !*reportOnly {
 		logger.Error("TLS certificate and key required (use --generate-cert for testing)")
 		os.Exit(1)
 	}
@@ -221,10 +315,11 @@ func main() {
 	var auditLog store.AuditLog
 	var attestLog store.AttestationLog
 	aikParams := aikStoreParams{
-		StorePath:   *aikStorePath,
-		CACerts:     []string(aikCACerts),
-		CRLs:        []string(aikCRLs),
-		RequireCert: *requireCert,
+		StorePath: *aikStorePath,
+		CACerts:   []string(aikCACerts),
+		CRLs:      []string(aikCRLs),
+		// report-only verifies no AIK chain; the store is only read
+		RequireCert: *requireCert && !*reportOnly,
 	}
 	verifierCfg := verify.DefaultConfig()
 	verifierCfg.Logger = logger
@@ -287,6 +382,22 @@ func main() {
 		os.Exit(1)
 	}
 
+	// report-only: monitoring API off Postgres it never writes; needs both
+	if *reportOnly {
+		if !usePostgres {
+			logger.Error("--report-only reads a Postgres database",
+				"hint", "give --pg-dsn (or --pg-shard-dsn) pointing at a standby or the primary")
+			os.Exit(1)
+		}
+		if *httpAddr == "" {
+			logger.Error("--report-only serves only the monitoring API",
+				"hint", "give --http-addr the address to serve it on")
+			os.Exit(1)
+		}
+		logger.Info("reporting mode: no attestation listener, no writes",
+			"note", "the schema is verified but never applied, and every state-changing endpoint answers 503")
+	}
+
 	// mistyped pool is a silent misconfiguration otherwise:
 	// database/sql reads 0 as "unlimited" and the store's own fallback would
 	// quietly hand back the default, so neither reaches the operator
@@ -316,7 +427,11 @@ func main() {
 		}
 		dbs := make([]*sql.DB, 0, len(shardDSNs))
 		for i, d := range shardDSNs {
-			sdb, err := store.OpenPostgresDBPool(d, *pgMaxOpenConns)
+			open := store.OpenPostgresDBPool
+			if *reportOnly {
+				open = store.OpenPostgresDBReadOnly
+			}
+			sdb, err := open(d, *pgMaxOpenConns)
 			if err != nil {
 				logger.Error("failed to open Postgres database", "shard", i, "error", err)
 				os.Exit(1)
@@ -350,8 +465,15 @@ func main() {
 		// pin the shard set against the control database before anything
 		// takes dependency on the pools
 		shardIDs := make([]string, len(dbs))
+		identity := store.ShardIdentity
+		assertShards := store.AssertShardSet
+		if *reportOnly {
+			// pinning writes on first use; leave it to the attesting side
+			identity = store.ReadShardIdentity
+			assertShards = store.CheckShardSet
+		}
 		for i, sdb := range dbs {
-			id, err := store.ShardIdentity(context.Background(), sdb)
+			id, err := identity(context.Background(), sdb)
 			if err != nil {
 				logger.Error("failed to read shard identity", "shard", i, "error", err)
 				closeShards()
@@ -359,11 +481,11 @@ func main() {
 			}
 			shardIDs[i] = id
 		}
-		if err := store.AssertShardSet(context.Background(), dbs[0], shardIDs); err != nil {
+		if err := assertShards(context.Background(), dbs, shardIDs); err != nil {
 			logger.Error("shard set check failed", "error", err,
 				"hint", "give every instance the same databases in the same order; "+
 					"to change the set deliberately, migrate or re-enrol the fleet and "+
-					"clear the pin with DELETE FROM shard_set on the control database")
+					"clear the pin with DELETE FROM shard_set on every shard")
 			closeShards()
 			os.Exit(1)
 		}
@@ -389,30 +511,27 @@ func main() {
 				"note", "per-client baseline/nonce partitioned; enforcement and audit on shard 0")
 		}
 
-		auditLog = store.NewPostgresAuditLog(db)
-		verifierCfg.RevocationStore = store.NewPostgresRevocationStore(db, auditLog)
-		verifierCfg.BanStore = store.NewPostgresBanStore(db, auditLog)
-
-		attestLog = store.NewBatchedAttestationLog(
-			store.NewPostgresAttestationLog(db),
-			store.BatchedAttestationLogConfig{Logger: logger})
-		verifierCfg.AttestationLog = attestLog
+		enforcement := postgresEnforcementStores(db, logger, m)
+		enforcement.install(&verifierCfg)
+		auditLog = enforcement.audit
+		attestLog = enforcement.attestations
 
 		// AIK store: certificate-backed when the deployment verifies chains
 		// (the production default), otherwise a shared TOFU store in Postgres
 		selected, aikCertStore, aikErr := selectAIKStore(aikParams, func() (store.AIKStore, error) {
-			logger.Warn("INSECURE: Postgres TOFU AIK store initialized without certificate verification",
-				"hint", "set --require-cert and --aik-ca-cert to verify AIK certificate chains")
 			return store.NewPostgresAIKStore(db), nil
 		})
 		if aikErr != nil {
-			logger.Error("failed to initialize the AIK store", "path", *aikStorePath, "error", aikErr)
+			logger.Error("failed to initialize the AIK store", "error", aikErr)
 			//nolint:gocritic // startup abort before any DB write; the OS reclaims the handle
 			os.Exit(1)
 		}
 		aikStore = selected
 		if aikCertStore != nil {
-			logAIKStore(logger, aikCertStore, aikParams)
+			logAIKStore(logger, aikCertStore, aikParams, "postgres")
+		} else {
+			logger.Warn("INSECURE: Postgres TOFU AIK store initialized without certificate verification",
+				"hint", "set --require-cert and --aik-ca-cert to verify AIK certificate chains")
 		}
 
 		ver, err := store.SchemaVersion(db)
@@ -429,38 +548,31 @@ func main() {
 		}
 		defer db.Close()
 
-		// same choice as every other backend:
-		// SQLite holds the baselines, nonces and enforcement state,
-		// and the certificate-verifying AIK store sits beside it under
-		// --aik-store
+		// AIK store: certificate-backed when the deployment verifies chains,
+		// otherwise TOFU; the registry is in SQLite either way
 		selected, aikCertStore, aikErr := selectAIKStore(aikParams, func() (store.AIKStore, error) {
-			logger.Warn("INSECURE: SQLite TOFU AIK store initialized without certificate verification",
-				"hint", "set --require-cert and --aik-ca-cert to verify AIK certificate chains")
 			return store.NewSQLiteAIKStore(db), nil
 		})
 		if aikErr != nil {
-			logger.Error("failed to initialize the AIK store", "path", *aikStorePath, "error", aikErr)
+			logger.Error("failed to initialize the AIK store", "error", aikErr)
 			//nolint:gocritic // startup abort before any attestation is served; the OS reclaims the handle
 			os.Exit(1)
 		}
 		aikStore = selected
 		if aikCertStore != nil {
-			logAIKStore(logger, aikCertStore, aikParams)
+			logAIKStore(logger, aikCertStore, aikParams, *dbPath)
+		} else {
+			logger.Warn("INSECURE: SQLite TOFU AIK store initialized without certificate verification",
+				"hint", "set --require-cert and --aik-ca-cert to verify AIK certificate chains")
 		}
 
 		verifierCfg.BaselineStore = verify.NewSQLiteBaselineStore(db)
 		verifierCfg.UsedNonceBackend = verify.NewSQLiteUsedNonceBackend(db)
 
-		// enforcement stores - revocation, bans, audit log
-		auditLog = store.NewSQLiteAuditLog(db)
-		verifierCfg.RevocationStore = store.NewSQLiteRevocationStore(db, auditLog)
-		verifierCfg.BanStore = store.NewSQLiteBanStore(db, auditLog)
-
-		// attestation decision log
-		attestLog = store.NewBatchedAttestationLog(
-			store.NewSQLiteAttestationLog(db),
-			store.BatchedAttestationLogConfig{Logger: logger})
-		verifierCfg.AttestationLog = attestLog
+		enforcement := sqliteEnforcementStores(db, logger, m)
+		enforcement.install(&verifierCfg)
+		auditLog = enforcement.audit
+		attestLog = enforcement.attestations
 
 		ver, err := store.SchemaVersion(db)
 		if err != nil {
@@ -469,39 +581,42 @@ func main() {
 			logger.Info("SQLite store initialized", "path", *dbPath, "schema_version", ver)
 		}
 	} else {
-		// persist used nonce history even without --db
-		// otherwise, a verifier restart re-opens a replay window within nonce TTL
-		if !*allowMemNonces {
-			path := *nonceDBPath
+		// no database: used nonces and enforcement state still go to one
+		// SQLite file, so a restart neither re-opens a replay window nor
+		// forgets a ban
+		if !*allowMemState {
+			path := *stateDBPath
 			if path == "" {
-				path = filepath.Join(*aikStorePath, "used_nonces.sqlite")
+				path = filepath.Join(*aikStorePath, "verifier-state.sqlite")
 			}
 			db, err := store.OpenDB(path)
 			if err != nil {
-				logger.Error("failed to open nonce DB (required for anti-replay persistence)",
+				logger.Error("failed to open the state database (required for anti-replay and enforcement persistence)",
 					"path", path,
 					"error", err,
-					"hint", "use --nonce-db to set a writable path, or (INSECURE) pass --allow-insecure-memory-nonces")
+					"hint", "use --state-db to set a writable path, or (INSECURE) pass --allow-insecure-memory-state")
 				os.Exit(1)
 			}
 			defer db.Close()
 			verifierCfg.UsedNonceBackend = verify.NewSQLiteUsedNonceBackend(db)
-			logger.Info("persistent used nonce backend enabled",
-				"path", path)
+
+			enforcement := sqliteEnforcementStores(db, logger, m)
+			enforcement.install(&verifierCfg)
+			auditLog = enforcement.audit
+			attestLog = enforcement.attestations
+
+			logger.Info("state database opened", "path", path,
+				"holds", "used nonces, revocations, hardware bans, audit log, attestation log")
 		} else {
-			logger.Warn("INSECURE: using memory-only used nonce backend; verifier restart re-opens replay window",
-				"nonce_lifetime", verifierCfg.NonceLifetime)
+			// enforcement stores stay nil, so their endpoints answer 503
+			logger.Warn("INSECURE: no durable state; verifier restart re-opens a replay window and this instance holds no revocations, bans, audit log or decision log",
+				"nonce_lifetime", verifierCfg.NonceLifetime,
+				"api", "revocation, ban, audit and attestation endpoints answer 503")
 		}
 
 		// file-based AIK store (optionally certificate-backed)
 		selected, aikCertStore, aikErr := selectAIKStore(aikParams, func() (store.AIKStore, error) {
-			fileStore, err := store.NewFileStore(*aikStorePath)
-			if err != nil {
-				return nil, err
-			}
-			logger.Info("file-based AIK store initialized",
-				"path", *aikStorePath, "registered_clients", len(fileStore.ListClients()))
-			return fileStore, nil
+			return store.NewFileStore(*aikStorePath)
 		})
 		if aikErr != nil {
 			logger.Error("failed to initialize the AIK store", "path", *aikStorePath, "error", aikErr)
@@ -510,17 +625,11 @@ func main() {
 		}
 		aikStore = selected
 		if aikCertStore != nil {
-			logAIKStore(logger, aikCertStore, aikParams)
+			logAIKStore(logger, aikCertStore, aikParams, *aikStorePath)
+		} else {
+			logger.Info("file-based AIK store initialized",
+				"path", *aikStorePath, "registered_clients", len(selected.ListClients()))
 		}
-
-		// in-memory enforcement stores
-		auditLog = store.NewMemoryAuditLog()
-		verifierCfg.RevocationStore = store.NewMemoryRevocationStore(auditLog)
-		verifierCfg.BanStore = store.NewMemoryBanStore(auditLog)
-
-		// in-memory attestation decision log
-		attestLog = store.NewMemoryAttestationLog()
-		verifierCfg.AttestationLog = attestLog
 
 	}
 
@@ -537,21 +646,27 @@ func main() {
 		logger.Info("policy signature verification enabled", "pubkey", *policyPubKey)
 	}
 
-	// custom policy if specified
-	if *policyFile != "" {
-		if err := verifier.LoadPolicy(*policyFile); err != nil {
-			logger.Error("failed to load policy", "path", *policyFile, "error", err)
+	// custom policies if specified; report-only verifies nothing
+	// and ignores them
+	switch {
+	case *reportOnly:
+		if len(policyFiles) > 0 {
+			logger.Warn("policy files are not read in reporting mode",
+				"files", len(policyFiles),
+				"note", "this instance verifies nothing; the policy belongs on the instances that attest")
+		}
+	case len(policyFiles) > 0:
+		if err := loadPolicies(logger, verifier, policyFiles); err != nil {
 			os.Exit(1)
 		}
-		logger.Info("loaded custom policy", "path", *policyFile)
-	} else if *allowPermissive {
+	case *allowPermissive:
 		if err := verifier.AddPolicy(verify.DefaultPolicy()); err != nil {
 			logger.Error("failed to add permissive default PCR policy", "error", err)
 			os.Exit(1)
 		}
 		logger.Warn("INSECURE: loaded permissive built-in PCR policy",
 			"hint", "configure --policy with explicit pcrs and/or kernel_hashes/agent_hashes for production")
-	} else {
+	default:
 		logger.Error("no PCR policy configured",
 			"hint", "provide --policy with explicit measurements, or pass --allow-permissive-policy (INSECURE)")
 		os.Exit(1)
@@ -594,6 +709,8 @@ func main() {
 		ReadTimeout:    30 * time.Second,
 		WriteTimeout:   10 * time.Second,
 		MaxConnections: *maxConnections,
+		ShutdownDrain:  *shutdownDrain,
+		ReportOnly:     *reportOnly,
 	}
 
 	if *httpAddr != "" && adminKey == "" && *scopedKeysFile == "" {
@@ -659,6 +776,19 @@ func main() {
 			if c, ok := attestLog.(interface{ Close() error }); ok {
 				if err := c.Close(); err != nil {
 					logger.Warn("attestation-log flush on shutdown failed", "error", err)
+				}
+			}
+
+			// what this run lost from the decision log, said once where an
+			// operator closing an incident will look: the counters are also
+			// on /metrics, which is gone with the process
+			if l, ok := attestLog.(interface {
+				DroppedCount() int64
+				FailedCount() int64
+			}); ok {
+				if dropped, failed := l.DroppedCount(), l.FailedCount(); dropped > 0 || failed > 0 {
+					logger.Warn("decision log incomplete for this run",
+						"dropped_buffer_full", dropped, "failed_writes", failed)
 				}
 			}
 			logger.Info("LOTA Verifier stopped")

@@ -81,6 +81,13 @@ type PCRPolicy struct {
 	// if true, fails if kernel lockdown not enabled
 	RequireLockdown bool `yaml:"require_lockdown"`
 
+	// if true, fails when the host's kernel appraises no executable.
+	// Off by default: appraisal content is distribution or operator supplied,
+	// so a stock host cannot have it, and the agent reports the state.
+	// A fleet whose image pipeline signs its executables turns this on
+	// and the flag becomes a gate.
+	RequireIMAAppraisal bool `yaml:"require_ima_appraisal"`
+
 	// if true, fails when the event-log-measured kernel command line
 	// carries a denylisted parameter (builtin denylist + cmdline_deny).
 	// GRUB-only in v1: hosts with no PCR 8 cmdline measurement and a
@@ -196,7 +203,8 @@ func ValidatePolicy(policy *PCRPolicy) []string {
 
 	hasAnyRequirement := policy.RequireIOMMU || policy.RequireEnforce ||
 		policy.RequireModuleSig || policy.RequireSecureBoot ||
-		policy.RequireLockdown || policy.RequireCmdlinePolicy
+		policy.RequireLockdown || policy.RequireCmdlinePolicy ||
+		policy.RequireIMAAppraisal
 	if !hasAnyRequirement && len(policy.PCRs) == 0 {
 		warnings = append(warnings, fmt.Sprintf(
 			"policy '%s': no security requirements enabled -> effectively permissive",
@@ -284,10 +292,7 @@ func (v *PCRVerifier) LoadPolicy(path string) error {
 	if err := yaml.Unmarshal(data, &policy); err != nil {
 		return fmt.Errorf("failed to parse policy: %w", err)
 	}
-	if err := validatePolicyPCRIndices(&policy); err != nil {
-		return err
-	}
-	if err := validateKernelPins(&policy); err != nil {
+	if err := validatePolicyDocument(&policy); err != nil {
 		return err
 	}
 
@@ -302,37 +307,43 @@ func (v *PCRVerifier) LoadPolicy(path string) error {
 		return fmt.Errorf("refusing to load diverse-fleet policy '%s' (require_secureboot, no raw PCR pins) with empty agent_hashes: the agent self-hash would be TOFU and a modified non-enforcing agent could pin its own hash. Pin the official agent hash in agent_hashes (from the signed release), or pass --allow-unpinned-agent to accept the risk", policy.Name)
 	}
 
-	for _, w := range ValidatePolicy(&policy) {
-		slog.Warn(w)
-	}
-
 	return v.registerPolicy(&policy)
 }
 
-// adds a policy programmatically
+// adds a policy programmatically, through the same validation the file road runs
 func (v *PCRVerifier) AddPolicy(policy *PCRPolicy) error {
+	return v.registerPolicy(policy)
+}
+
+// validatePolicyDocument runs every check that judges the document itself.
+// registerPolicy, the only way into the policy map, calls it, so a check
+// added here covers both the file and the programmatic road.
+func validatePolicyDocument(policy *PCRPolicy) error {
 	if err := validatePolicyPCRIndices(policy); err != nil {
 		return err
 	}
 	if err := validateProfile(policy); err != nil {
 		return err
 	}
-	if err := validateKernelPins(policy); err != nil {
-		return err
-	}
-	for _, w := range ValidatePolicy(policy) {
-		slog.Warn(w)
-	}
-
-	return v.registerPolicy(policy)
+	return validateKernelPins(policy)
 }
 
-// registerPolicy stores validated policy and maintains the tenant binding index.
+// registerPolicy validates a policy document and stores it, maintaining the
+// tenant binding index.
 // Tenant binds to at most one policy.
 // Re-registering the same policy name refreshes its binding.
+// It is the only way into the policy map, so no road can register a document
+// that has not been through validatePolicyDocument.
 func (v *PCRVerifier) registerPolicy(policy *PCRPolicy) error {
+	if err := validatePolicyDocument(policy); err != nil {
+		return err
+	}
 	if policy.Tenant != "" && !ValidTenantName(policy.Tenant) {
 		return fmt.Errorf("policy '%s' declares an invalid tenant %q", policy.Name, policy.Tenant)
+	}
+
+	for _, w := range ValidatePolicy(policy) {
+		slog.Warn(w)
 	}
 
 	v.mu.Lock()
@@ -505,6 +516,58 @@ func agentHashAllowed(reported [types.HashSize]byte, allowedHashes []string) boo
 	return slices.Contains(allowedHashes, hex.EncodeToString(reported[:]))
 }
 
+// kernelPinValue returns the quote-bound kernel image digest the
+// kernel_hashes gate compares, or why there is none.
+// Unlike RecordedKernelHash it never falls back to the reported register:
+// a whole-boot aggregate never matches an image-digest pin, and the refusal
+// would blame the kernel instead of the missing PCR 9 coverage.
+func kernelPinValue(facts *BootFacts) ([types.HashSize]byte, error) {
+	var out [types.HashSize]byte
+
+	if facts == nil || !facts.KernelImage.Found {
+		return out, errors.New(
+			"kernel_hashes is pinned and this host's event log records no kernel image, " +
+				"so the pin cannot be evaluated: attest with PCR 9 in the quote from a host " +
+				"whose bootloader measures the kernel, or drop kernel_hashes and pin PCR 7")
+	}
+	if !facts.KernelImageTrusted {
+		return out, errors.New(
+			"kernel_hashes is pinned and this host's kernel image is not quote-bound " +
+				"(PCR 9 outside the quote, or the event log does not replay to it), " +
+				"so the pin cannot be evaluated: include PCR 9 in the quote, " +
+				"or drop kernel_hashes and pin PCR 7")
+	}
+
+	copy(out[:], facts.KernelImage.Digest)
+	return out, nil
+}
+
+// policyError pairs a verifyAgainstPolicy refusal with its verdict.
+type policyError struct {
+	verdict uint32
+	err     error
+}
+
+func (e *policyError) Error() string { return e.err.Error() }
+
+func (e *policyError) Unwrap() error { return e.err }
+
+// refuse marks an error with the verdict class it belongs to
+func refuse(verdict uint32, err error) error {
+	return &policyError{verdict: verdict, err: err}
+}
+
+// policyVerdict is the class a verifyAgainstPolicy error belongs to;
+// an unmarked error stays VerifyPCRFail, the class that claims least.
+func policyVerdict(err error) uint32 {
+	var pe *policyError
+
+	if errors.As(err, &pe) {
+		return pe.verdict
+	}
+	return types.VerifyPCRFail
+}
+
 func (v *PCRVerifier) verifyAgainstPolicy(report *types.AttestationReport, policy *PCRPolicy, facts *BootFacts) error {
 	// check pcr values
 	//
@@ -543,8 +606,11 @@ func (v *PCRVerifier) verifyAgainstPolicy(report *types.AttestationReport, polic
 
 	// check kernel hash
 	if len(policy.KernelHashes) > 0 {
-		recorded := RecordedKernelHash(report, facts)
-		kernelHashHex := hex.EncodeToString(recorded[:])
+		pinned, err := kernelPinValue(facts)
+		if err != nil {
+			return refuse(types.VerifyKernelImageRequired, err)
+		}
+		kernelHashHex := hex.EncodeToString(pinned[:])
 		found := false
 		for _, allowed := range policy.KernelHashes {
 			if kernelHashHex == allowed {
@@ -553,36 +619,41 @@ func (v *PCRVerifier) verifyAgainstPolicy(report *types.AttestationReport, polic
 			}
 		}
 		if !found {
-			return fmt.Errorf("kernel hash not in allowed list: %s", kernelHashHex)
+			return refuse(types.VerifyKernelImageRequired,
+				fmt.Errorf("kernel hash not in allowed list: %s", kernelHashHex))
 		}
 	}
 
 	// verify agent binary hash if policy specifies allowed hashes
 	if len(policy.AgentHashes) > 0 {
 		if !agentHashAllowed(report.System.AgentHash, policy.AgentHashes) {
-			return fmt.Errorf("agent hash not in allowed list: %s",
-				hex.EncodeToString(report.System.AgentHash[:]))
+			return refuse(types.VerifyIntegrityMismatch,
+				fmt.Errorf("agent hash not in allowed list: %s",
+					hex.EncodeToString(report.System.AgentHash[:])))
 		}
 	}
 
 	// check iommu requirement
 	if policy.RequireIOMMU {
 		if report.System.IOMMU.Flags&0x04 == 0 {
-			return errors.New("IOMMU DMA remapping not enabled")
+			return refuse(types.VerifyIOMMUFail,
+				errors.New("IOMMU DMA remapping not enabled"))
 		}
 	}
 
 	// check LSM enforce mode
 	if policy.RequireEnforce {
 		if report.Header.Flags&types.FlagEnforce == 0 {
-			return errors.New("LSM enforce mode not active")
+			return refuse(types.VerifyEnforceRequired,
+				errors.New("LSM enforce mode not active"))
 		}
 	}
 
 	// check module signing enforcement
 	if policy.RequireModuleSig {
 		if report.Header.Flags&types.FlagModuleSig == 0 {
-			return errors.New("kernel module signature enforcement not enabled")
+			return refuse(types.VerifyModuleSigRequired,
+				errors.New("kernel module signature enforcement not enabled"))
 		}
 	}
 
@@ -591,27 +662,39 @@ func (v *PCRVerifier) verifyAgainstPolicy(report *types.AttestationReport, polic
 	// compromised kernel sets it freely)
 	if policy.RequireSecureBoot {
 		if facts == nil || !facts.SecureBootTrusted {
-			return errors.New("Secure Boot state not authenticated by event log")
+			return refuse(types.VerifySecureBootRequired,
+				errors.New("Secure Boot state not authenticated by event log"))
 		}
 		if !facts.SecureBoot.Found {
-			return errors.New("event log carries no SecureBoot measurement")
+			return refuse(types.VerifySecureBootRequired,
+				errors.New("event log carries no SecureBoot measurement"))
 		}
 		if !facts.SecureBoot.Enabled {
-			return errors.New("Secure Boot disabled per firmware measurement")
+			return refuse(types.VerifySecureBootRequired,
+				errors.New("Secure Boot disabled per firmware measurement"))
 		}
 	}
 
 	// check the measured kernel cmdline against the parameter denylist
 	if policy.RequireCmdlinePolicy {
 		if err := verifyCmdlinePolicy(policy, facts); err != nil {
-			return err
+			return refuse(types.VerifyCmdlineRequired, err)
 		}
 	}
 
 	// check kernel lockdown
 	if policy.RequireLockdown {
 		if report.Header.Flags&types.FlagLockdown == 0 {
-			return errors.New("kernel lockdown not active")
+			return refuse(types.VerifyLockdownRequired,
+				errors.New("kernel lockdown not active"))
+		}
+	}
+
+	// check that the kernel appraises the host's executables
+	if policy.RequireIMAAppraisal {
+		if report.Header.Flags&types.FlagIMAAppraisal == 0 {
+			return refuse(types.VerifyIMAAppraisalRequired,
+				errors.New("kernel appraises no executable on this host (IMA appraisal scope absent)"))
 		}
 	}
 
@@ -690,6 +773,19 @@ func (v *PCRVerifier) ListPolicies() []string {
 	return names
 }
 
+// TenantBindings reports which policy each tenant is verified against.
+// A tenant absent from the map falls back to the active policy.
+func (v *PCRVerifier) TenantBindings() map[string]string {
+	v.mu.RLock()
+	defer v.mu.RUnlock()
+
+	bindings := make(map[string]string, len(v.tenantPolicy))
+	for tenant, name := range v.tenantPolicy {
+		bindings[tenant] = name
+	}
+	return bindings
+}
+
 // creates the built-in permissive policy used only for explicit insecure fallback.
 // IMPORTANT: this policy has no measurement allowlists and MUST NOT be used by default
 // in production deployments. Provide a custom YAML policy with explicit PCR values
@@ -700,14 +796,15 @@ func DefaultPolicy() *PCRPolicy {
 		Description: "Built-in baseline policy - enforces security requirements without specific PCR values",
 		// PCR values intentionally empty - use TOFU for PCR14!
 		// Site-specific PCR0/PCR7 values should be defined in custom YAML policies
-		PCRs:              map[int]string{},
-		KernelHashes:      []string{}, // defined in site-specific policy
-		AgentHashes:       []string{}, // defined in site-specific policy
-		RequireIOMMU:      true,       // baseline: DMA remapping should be enabled
-		RequireEnforce:    true,       // LSM must be in enforce mode
-		RequireModuleSig:  true,       // baseline: module signature enforcement should be enabled
-		RequireSecureBoot: false,      // optional hardware feature
-		RequireLockdown:   false,      // optional kernel feature
+		PCRs:                map[int]string{},
+		KernelHashes:        []string{}, // defined in site-specific policy
+		AgentHashes:         []string{}, // defined in site-specific policy
+		RequireIOMMU:        true,       // baseline: DMA remapping should be enabled
+		RequireEnforce:      true,       // LSM must be in enforce mode
+		RequireModuleSig:    true,       // baseline: module signature enforcement should be enabled
+		RequireSecureBoot:   false,      // optional hardware feature
+		RequireLockdown:     false,      // optional kernel feature
+		RequireIMAAppraisal: false,      // stock hosts carry no IMA signatures
 	}
 }
 
@@ -726,6 +823,7 @@ func StrictPolicy() *PCRPolicy {
 		RequireSecureBoot:    true,
 		RequireLockdown:      true,
 		RequireCmdlinePolicy: true,
+		RequireIMAAppraisal:  true,
 	}
 }
 

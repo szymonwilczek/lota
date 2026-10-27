@@ -409,6 +409,33 @@ static void test_no_configuration_and_no_runtime_dir_plans_nothing(void)
 		PASS();
 }
 
+/*
+ * -ENOENT means logind has not made the runtime directory yet: the bind is
+ * retried, not reported. Any other error is a listener that is not coming.
+ */
+static void test_a_login_not_made_yet_is_not_a_failure(void)
+{
+	TEST("the login the watch waits for is not a failure to report");
+
+	if (!container_watch_bind_pending(-ENOENT)) {
+		FAIL("the absent runtime directory was called a failure");
+		return;
+	}
+	if (container_watch_bind_pending(-EACCES) ||
+	    container_watch_bind_pending(-EADDRINUSE) ||
+	    container_watch_bind_pending(-ENOTDIR) ||
+	    container_watch_bind_pending(-EPERM) ||
+	    container_watch_bind_pending(-EIO)) {
+		FAIL("a listener that is not coming was called pending");
+		return;
+	}
+	if (container_watch_bind_pending(0)) {
+		FAIL("a bind that worked was called pending");
+		return;
+	}
+	PASS();
+}
+
 int main(void)
 {
 	printf("=== LOTA container listener tracking tests ===\n\n");
@@ -424,6 +451,7 @@ int main(void)
 	test_configured_uids_win_over_the_runtime_dir();
 	test_a_foreign_runtime_dir_names_no_login();
 	test_no_configuration_and_no_runtime_dir_plans_nothing();
+	test_a_login_not_made_yet_is_not_a_failure();
 
 	cleanup_root();
 

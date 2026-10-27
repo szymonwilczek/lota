@@ -54,6 +54,7 @@ BPF_DIR := $(SRC_DIR)/bpf
 AGENT_DIR := $(SRC_DIR)/agent
 INC_DIR := include
 BUILD_DIR := build
+export LOTA_BUILD_DIR := $(abspath $(BUILD_DIR))
 VERSION_FILE := VERSION
 PROJECT_VERSION := $(strip $(shell sed -n '1p' $(VERSION_FILE) 2>/dev/null))
 GOCACHE ?= $(abspath $(BUILD_DIR)/.gocache)
@@ -146,7 +147,8 @@ SDK_VERSION_CFLAGS := -DLOTA_BUILD_VERSION_STRING=\"$(LOTA_VERSION_STRING)\"
 HARDENING_LDFLAGS := -Wl,-z,relro,-z,now -Wl,-z,noexecstack -Wl,-z,separate-code
 
 # Agent link flags
-LDFLAGS := -pie $(HARDENING_LDFLAGS)
+# -pthread: the watchdog supervisor runs on a thread of its own
+LDFLAGS := -pie -pthread $(HARDENING_LDFLAGS)
 LDFLAGS += -lbpf -ltss2-esys -ltss2-mu -ltss2-tcti-device -ltss2-tctildr -lcrypto -lssl -lsystemd -lseccomp
 
 ifdef SANITIZE
@@ -200,16 +202,20 @@ AGENT_SRCS := $(AGENT_DIR)/main.c \
 			  $(AGENT_DIR)/io_utils.c \
 			  $(AGENT_DIR)/exit_status.c \
 			  $(AGENT_DIR)/sb_dev.c \
+			  $(AGENT_DIR)/cgroup_guard.c \
 			  $(AGENT_DIR)/reload.c \
 			  $(AGENT_DIR)/test_servers.c \
 			  $(AGENT_DIR)/startup_policy.c \
+              $(AGENT_DIR)/policy_pubkey.c \
               $(AGENT_DIR)/tpm.c \
               $(AGENT_DIR)/tpm_errno.c \
               $(AGENT_DIR)/seal_envelope.c \
               $(AGENT_DIR)/iommu.c \
               $(AGENT_DIR)/kernel_measure.c \
+              $(AGENT_DIR)/kernel_image.c \
               $(AGENT_DIR)/bpf_loader.c \
               $(AGENT_DIR)/net.c \
+              $(AGENT_DIR)/net_errno.c \
               $(AGENT_DIR)/pin.c \
               $(AGENT_DIR)/ipc.c \
               $(AGENT_DIR)/runtime_image_measure.c \
@@ -226,6 +232,7 @@ AGENT_SRCS := $(AGENT_DIR)/main.c \
               $(AGENT_DIR)/token_gate.c \
               $(AGENT_DIR)/dbus.c \
               $(AGENT_DIR)/sdnotify.c \
+              $(AGENT_DIR)/watchdog.c \
               $(AGENT_DIR)/journal.c \
               $(AGENT_DIR)/selftest.c \
               $(AGENT_DIR)/event.c \
@@ -255,7 +262,9 @@ SERVER_SDK_OBJS := $(patsubst $(SRC_DIR)/%.c,$(BUILD_DIR)/%.o,$(SERVER_SDK_SRCS)
 # Wine/Proton hook
 WINE_HOOK_LIB := $(BUILD_DIR)/liblota_wine_hook.so
 WINE_HOOK_SRCS := $(SDK_DIR)/lota_wine_hook.c
-WINE_HOOK_OBJS := $(patsubst $(SRC_DIR)/%.c,$(BUILD_DIR)/%.o,$(WINE_HOOK_SRCS))
+# own SDK objects: the hook is built with hidden visibility
+WINE_HOOK_OBJS := $(patsubst $(SDK_DIR)/%.c,$(BUILD_DIR)/hook/%.o,\
+	$(WINE_HOOK_SRCS) $(SDK_SRCS))
 
 # Anti-cheat compatibility layer
 ANTICHEAT_LIB := $(BUILD_DIR)/liblota_anticheat.so
@@ -311,7 +320,7 @@ $(INITRAMFS_LOCK_BIN): src/initramfs/lota-pcr14-lock.c | $(BUILD_DIR)
 # into, and second copy of that rule would be second answer to it.
 INSTALLER_SRCS := installer/main.c installer/stages.c installer/tui.c \
 	installer/ui.c installer/run.c installer/probe.c \
-	$(AGENT_DIR)/profile.c
+	$(AGENT_DIR)/policy_pubkey.c $(AGENT_DIR)/profile.c
 $(INSTALLER_BIN): $(INSTALLER_SRCS) installer/install.h installer/probe.h \
 		installer/run.h installer/tui.h installer/ui.h \
 		$(AGENT_DIR)/profile.h | $(BUILD_DIR)
@@ -339,6 +348,13 @@ $(BUILD_DIR)/sdk/%.o: $(SDK_DIR)/%.c | $(BUILD_DIR)
 	$(Q)mkdir -p $(dir $@)
 	$(Q)$(CC) $(CFLAGS) $(DEPFLAGS) -fPIC -c -o $@ $<
 
+# compile the hook and its SDK copy hidden; a version script would hide
+# the dlopen wrapper behind dlopen@GLIBC_2.x
+$(BUILD_DIR)/hook/%.o: $(SDK_DIR)/%.c | $(BUILD_DIR)
+	$(QUIET_CC)
+	$(Q)mkdir -p $(dir $@)
+	$(Q)$(CC) $(CFLAGS) $(DEPFLAGS) -fPIC -fvisibility=hidden -c -o $@ $<
+
 # build identity (both SDKs report it; see lota_sdk_version)
 $(BUILD_DIR)/agent/dbus.o: CFLAGS += $(SDK_VERSION_CFLAGS)
 $(BUILD_DIR)/agent/dbus.o: $(VERSION_FILE)
@@ -346,6 +362,8 @@ $(BUILD_DIR)/sdk/lota_server.o: CFLAGS += $(SDK_VERSION_CFLAGS)
 $(BUILD_DIR)/sdk/lota_server.o: $(VERSION_FILE)
 $(BUILD_DIR)/sdk/lota_gaming.o: CFLAGS += $(SDK_VERSION_CFLAGS)
 $(BUILD_DIR)/sdk/lota_gaming.o: $(VERSION_FILE)
+$(BUILD_DIR)/hook/lota_gaming.o: CFLAGS += $(SDK_VERSION_CFLAGS)
+$(BUILD_DIR)/hook/lota_gaming.o: $(VERSION_FILE)
 
 # build SDK shared library (versioned: real file + soname/linker symlinks)
 $(SDK_LIB): $(SDK_OBJS) $(call SDK_VERSION_SCRIPT,$(SDK_LIB)) Makefile | $(BUILD_DIR)
@@ -417,14 +435,12 @@ $(SERVER_SDK_STATIC): $(SERVER_SDK_OBJS) | $(BUILD_DIR)
 	$(Q)$(AR) rcs $@ $^
 
 # build Wine/Proton hook (self-contained: includes gaming SDK; versioned)
-$(WINE_HOOK_LIB): $(WINE_HOOK_OBJS) $(SDK_OBJS) \
-		$(call SDK_VERSION_SCRIPT,$(WINE_HOOK_LIB)) Makefile | $(BUILD_DIR)
+$(WINE_HOOK_LIB): $(WINE_HOOK_OBJS) Makefile | $(BUILD_DIR)
 	$(QUIET_LD)
 	$(Q)rm -f $@ $@.*
 	$(Q)$(CC) -shared -Wl,-soname,$(notdir $@).$(LOTA_ABI_MAJOR) \
-		$(call VERSION_SCRIPT_LDFLAGS,$@) \
 		$(HARDENING_LDFLAGS) -o $@.$(LOTA_ABI_VERSION) \
-		$(WINE_HOOK_OBJS) $(SDK_OBJS) -lpthread
+		$(WINE_HOOK_OBJS) -lpthread
 	$(Q)ln -sf $(notdir $@).$(LOTA_ABI_VERSION) $@.$(LOTA_ABI_MAJOR)
 	$(Q)ln -sf $(notdir $@).$(LOTA_ABI_VERSION) $@
 
@@ -458,7 +474,8 @@ $(INC_DIR)/vmlinux.h:
 	$(Q)bpftool btf dump file /sys/kernel/btf/vmlinux format c > $@
 
 # Phony targets
-.PHONY: help all bpf agent initramfs-lock installer verifier attest-ca fleet-cli loadgen packages container-images container-image-verifier container-image-attest-ca helm-lint helm-template observability-lint srpm rpm-sign dnf-repo sdk server-sdk wine-hook anticheat pkgconfig sdk-stage clean htmldocs docs-lint docs-linkcheck docs-serve cleandocs install check-version-tag check-includes check-el9-decls check-license-boundary check-doc-diagnostics check-stack-frames check-tpm-strerror check-package-manifests lint lint-c lint-go sparse smatch coccicheck reproducible-build test test-unit test-bins test-hardware test-sdk sanitizer-build valgrind-unit valgrind-smoke fuzz-agent fuzz-config fuzz-enroll fuzz-seal-envelope fuzz-tpm-attest fuzz-policy-sign fuzz-server-sdk fuzz-tpm-resp fuzz-bpf-devt fuzz-bpf-open-flags fuzz-bpf-kmem-device fuzz-bpf-event-budget fuzz-bpf-inaccessible-exec fuzz-bpf-shebang fuzz-bpf-all fuzz-all syzkaller-fuzz-loader examples examples-clean sign-bpf check-abi abi-baseline
+.PHONY: check-docs-strict
+.PHONY: help all bpf agent initramfs-lock installer verifier attest-ca fleet-cli loadgen packages container-images container-image-verifier container-image-attest-ca container-image-attest-ca-hsm helm-package helm-lint helm-template observability-lint srpm rpm-sign dnf-repo sdk server-sdk wine-hook anticheat pkgconfig sdk-stage clean htmldocs docs-lint docs-linkcheck docs-serve cleandocs install check-version-tag check-includes check-el9-decls check-license-boundary check-test-build-dir check-doc-diagnostics check-config-commands check-stack-frames check-private-errno check-package-manifests check-helm-chart check-container-images lint lint-c lint-go print-lint-go-modules sparse smatch coccicheck reproducible-build test test-unit test-bins test-hardware test-sdk sanitizer-build valgrind-unit valgrind-smoke fuzz-agent fuzz-config fuzz-enroll fuzz-seal-envelope fuzz-tpm-attest fuzz-policy-sign fuzz-server-sdk fuzz-tpm-resp fuzz-bpf-devt fuzz-bpf-open-flags fuzz-bpf-kmem-device fuzz-bpf-event-budget fuzz-bpf-inaccessible-exec fuzz-bpf-shebang fuzz-bpf-all fuzz-all fuzz-regress syzkaller-fuzz-loader examples examples-clean sign-bpf check-abi abi-baseline
 
 bpf: $(BPF_OBJ)
 
@@ -541,15 +558,27 @@ examples-clean:
 # Usage:
 #   sudo make sign-bpf SIGNING_KEY=/etc/lota/policy.key
 #
+# Public half defaults to where --gen-signing-key writes it. It is copied into
+# the build directory for both packaging roads; no pubkey, no signature.
 SIGNING_KEY ?= /etc/lota/policy.key
+SIGNING_PUBKEY ?= $(SIGNING_KEY:.key=.pub)
+PKG_ENFORCEMENT_PUB := $(BUILD_DIR)/lota-enforcement.pub
+
 sign-bpf: $(BPF_OBJ) $(AGENT_BIN)
 	@test -r $(SIGNING_KEY) || { \
 		echo "sign-bpf: signing key not readable: $(SIGNING_KEY)" >&2; \
 		echo "Generate one with: sudo $(AGENT_BIN) --gen-signing-key /etc/lota/policy" >&2; \
 		exit 1; \
 	}
+	@test -r $(SIGNING_PUBKEY) || { \
+		echo "sign-bpf: public half not readable: $(SIGNING_PUBKEY)" >&2; \
+		echo "The host verifies the object against it, so it ships beside" >&2; \
+		echo "the signature; pass SIGNING_PUBKEY=<path>." >&2; \
+		exit 1; \
+	}
 	$(AGENT_BIN) --sign-policy $(BPF_OBJ) --signing-key $(SIGNING_KEY)
 	@test -r $(BPF_OBJ).sig
+	$(Q)cp $(SIGNING_PUBKEY) $(PKG_ENFORCEMENT_PUB)
 	@echo "Signed: $(BPF_OBJ).sig"
 
 # Go verifier
@@ -560,15 +589,30 @@ $(VERIFIER_BIN): $(wildcard $(SRC_DIR)/verifier/*.go $(SRC_DIR)/verifier/**/*.go
 # Go attestation CA
 # GO_TAGS optionally selects build tags, e.g. GO_TAGS=pkcs11 to compile the
 # HSM-backed signing-key support (needs cgo and a PKCS#11 module at runtime).
+#
+# The stamp holds GO_TAGS and is rewritten only when it changes, so a new tag
+# set rebuilds the CA.
 GO_TAGS ?=
-$(ATTESTCA_BIN): $(wildcard $(SRC_DIR)/attestca/*.go $(SRC_DIR)/attestca/**/*.go $(SRC_DIR)/crl/*.go) | $(BUILD_DIR)
+ATTESTCA_TAGS_STAMP := $(BUILD_DIR)/.attestca-tags
+$(ATTESTCA_TAGS_STAMP): FORCE | $(BUILD_DIR)
+	$(Q)printf '%s\n' '$(GO_TAGS)' | cmp -s - $@ 2>/dev/null || printf '%s\n' '$(GO_TAGS)' >$@
+
+# Always out of date: the stamp recipe runs every time and compares itself
+.PHONY: FORCE
+FORCE:
+
+$(ATTESTCA_BIN): $(wildcard $(SRC_DIR)/attestca/*.go $(SRC_DIR)/attestca/**/*.go $(SRC_DIR)/crl/*.go) $(ATTESTCA_TAGS_STAMP) | $(BUILD_DIR)
 	$(QUIET_GO)
 	$(Q)cd $(SRC_DIR)/attestca && env GOCACHE=$(GOCACHE) go build -trimpath $(if $(GO_TAGS),-tags $(GO_TAGS),) -o $(abspath $@) .
 
 # Go fleet CLI
+# CGO_ENABLED=0: the operator reference calls this binary static, and that is
+# what lets it run from a workstation with nothing on it but network access.
+# A plain go build takes the cgo net and os/user resolvers wherever a C
+# toolchain exists, and the result needs the build host's glibc.
 $(FLEETCTL_BIN): $(wildcard $(SRC_DIR)/fleetctl/*.go $(SRC_DIR)/fleetctl/**/*.go) | $(BUILD_DIR)
 	$(QUIET_GO)
-	$(Q)cd $(SRC_DIR)/fleetctl && env GOCACHE=$(GOCACHE) go build -trimpath -o $(abspath $@) .
+	$(Q)cd $(SRC_DIR)/fleetctl && env GOCACHE=$(GOCACHE) CGO_ENABLED=0 go build -trimpath -o $(abspath $@) .
 
 # Go synthetic-fleet load generator (lives in the verifier module)
 $(LOADGEN_BIN): $(wildcard $(SRC_DIR)/verifier/loadgen/*.go $(SRC_DIR)/verifier/loadgen/**/*.go $(SRC_DIR)/verifier/*.go $(SRC_DIR)/verifier/**/*.go) | $(BUILD_DIR)
@@ -577,37 +621,53 @@ $(LOADGEN_BIN): $(wildcard $(SRC_DIR)/verifier/loadgen/*.go $(SRC_DIR)/verifier/
 
 # Canonical reproducible build
 # This target pins the remaining environmental inputs the toolchain reads
-# -- the build timestamp (SOURCE_DATE_EPOCH), the time zone and the local
-#  -- so the artifacts depend only on the source tree.
+# -- the build timestamp (SOURCE_DATE_EPOCH), the time zone and the locale
+# -- so the artifacts depend only on the source tree.
 # SOURCE_DATE_EPOCH defaults to the HEAD commit time, so a build from a
 # given commit (or tag) is deterministic.
-# Override REPRO_SOURCE_DATE_EPOCH for an out-of-tree source drop without
-# git.
+# Outside a git checkout there is none; stamping targets refuse.
+# Set REPRO_SOURCE_DATE_EPOCH to the release date instead.
 # See Documentation/security/reproducible-builds.rst for how to verify shipped == tag.
-REPRO_SOURCE_DATE_EPOCH ?= $(shell git -C $(CURDIR) log -1 --pretty=%ct 2>/dev/null || echo 1700000000)
+REPRO_SOURCE_DATE_EPOCH ?= $(shell git -C $(CURDIR) log -1 --pretty=%ct 2>/dev/null)
+
+# First step of every target that stamps the build timestamp.
+define require_source_date_epoch
+	@test -n "$(REPRO_SOURCE_DATE_EPOCH)" || { \
+		echo "$@: no commit time to read and REPRO_SOURCE_DATE_EPOCH is unset." >&2; \
+		echo "  This tree has no git checkout to take the timestamp from." >&2; \
+		echo "  Pass the source's own release date, in seconds:" >&2; \
+		echo "    make $@ REPRO_SOURCE_DATE_EPOCH=\$$(date -u -d 2026-01-31 +%s)" >&2; \
+		exit 1; \
+	}
+endef
+
 reproducible-build: export SOURCE_DATE_EPOCH = $(REPRO_SOURCE_DATE_EPOCH)
 reproducible-build: export TZ = UTC
 reproducible-build: export LC_ALL = C
-reproducible-build: all
+# Refuse before building; the sub-make inherits the pinned environment.
+reproducible-build:
+	$(require_source_date_epoch)
+	$(Q)$(MAKE) all
 	@echo "Reproducible build complete (SOURCE_DATE_EPOCH=$(REPRO_SOURCE_DATE_EPOCH), TZ=UTC, LC_ALL=C)"
 
 # Native packages (RPM via nfpm)
 # Builds one .rpm per config under packaging/nfpm/ into $(PKG_DIR).
 # Depends on the build artifacts (all), so the configs find the binaries and
 # libraries they reference.
-# Agent package ships the BPF object UNSIGNED on purpose:
-# each adopter signs it during bring-up.
+# Agent package ships the BPF object signed, with its .sig and public key;
+# a build missing either is refused.
 #
 # Changelog version tracks VERSION:
 # Template placeholder is substituted from PROJECT_VERSION into a generated file
 # the configs point at, so it never has to be bumped alongside VERSION.
 #
-# rpmlint runs over the built RPMs when installed (report only, non-fatal);
-# the release CI is the gating lint.
+# Ends in package-lint; an rpmlint error fails the build.
 #
 # .spec / COPR path layers on top for the Fedora build service.
 NFPM ?= nfpm
 RPMLINT ?= rpmlint
+# rpm spelling of the version (- as ~); exact sibling depends need it
+RPM_VERSION := $(subst -,~,$(PROJECT_VERSION))
 PKG_DIR ?= $(BUILD_DIR)/packages
 NFPM_CONFIGS := lota-agent lota-verifier lota-attest-ca lota-sdk lota-sdk-devel
 CHANGELOG_TMPL := packaging/nfpm/changelog.yaml
@@ -619,6 +679,9 @@ CHANGELOG_GEN := $(BUILD_DIR)/changelog.gen.yaml
 # lota-install's SELinux stage can load it without the operator
 # hand-compiling the module out of band.
 SELINUX_PP := selinux/lota.pp
+SELINUX_IF := selinux/lota.if
+# Must match both package manifests and lota-install's SELinux stage default.
+SELINUX_DATA_DIR := /usr/share/lota/selinux
 $(SELINUX_PP):
 	$(Q)$(MAKE) -C selinux lota.pp
 
@@ -631,9 +694,6 @@ selinux-pp: $(SELINUX_PP)
 # the distribution, or this project for its own releases.
 # Package built without that step installs an object the agent refuses to load,
 # so the machine stops enforcing for reason nobody chose; refuse to build it instead.
-SIGNING_PUBKEY ?= $(SIGNING_KEY:.key=.pub)
-PKG_ENFORCEMENT_PUB := $(BUILD_DIR)/lota-enforcement.pub
-
 packages: all selinux-pp
 	$(Q)test -r $(BPF_OBJ).sig || { \
 		echo "packages: $(BPF_OBJ).sig is missing." >&2; \
@@ -652,14 +712,25 @@ packages: all selinux-pp
 	$(Q)sed 's/@LOTA_VERSION@/$(PROJECT_VERSION)/g' $(CHANGELOG_TMPL) > $(CHANGELOG_GEN)
 	$(Q)for c in $(NFPM_CONFIGS); do \
 		echo "  NFPM    $$c"; \
-		LOTA_VERSION=$(PROJECT_VERSION) $(NFPM) pkg \
+		LOTA_VERSION=$(PROJECT_VERSION) \
+		LOTA_RPM_VERSION=$(RPM_VERSION) $(NFPM) pkg \
 			-f packaging/nfpm/$$c.yaml -p rpm -t $(PKG_DIR)/ || exit 1; \
 	done
 	@echo "RPMs written to $(PKG_DIR)"
+	$(Q)$(MAKE) package-lint
+
+# rpmlint over the built RPMs, local and CI alike. Without lota.rpmlintrc
+# the deliberate findings bury new ones; skipped when rpmlint is missing.
+.PHONY: package-lint
+package-lint:
+	$(Q)ls $(PKG_DIR)/*.rpm >/dev/null 2>&1 || { \
+		echo "package-lint: no RPMs in $(PKG_DIR); run make packages first" >&2; \
+		exit 1; \
+	}
 	$(Q)if command -v $(RPMLINT) >/dev/null 2>&1; then \
 		echo "  RPMLINT $(PKG_DIR)"; \
 		$(RPMLINT) --ignore-unused-rpmlintrc \
-			-r packaging/nfpm/lota.rpmlintrc $(PKG_DIR)/*.rpm || true; \
+			-r packaging/nfpm/lota.rpmlintrc $(PKG_DIR)/*.rpm; \
 	else \
 		echo "  RPMLINT skipped ($(RPMLINT) not installed)"; \
 	fi
@@ -692,13 +763,30 @@ KO_LABELS := \
 KO_BUILD = env KO_DOCKER_REPO=$(KO_DOCKER_REPO) SOURCE_DATE_EPOCH=$(REPRO_SOURCE_DATE_EPOCH) \
 	$(KO) build -B --sbom=spdx --platform=$(KO_PLATFORMS) --tags=$(KO_IMAGE_TAGS) $(KO_LABELS)
 
-container-images: container-image-verifier container-image-attest-ca
+# HSM-capable CA image: a variant tag of the attestca repository, built from
+# packaging/ko/attestca-hsm; amd64 only, as cgo does not cross-compile here
+KO_HSM_CONFIG := $(CURDIR)/packaging/ko/attestca-hsm
+KO_HSM_PLATFORMS ?= linux/amd64
+KO_HSM_TAG_SUFFIX ?= -hsm
+KO_COMMA := ,
+KO_HSM_IMAGE_TAGS ?= $(subst $(KO_COMMA),$(KO_HSM_TAG_SUFFIX)$(KO_COMMA),$(KO_IMAGE_TAGS))$(KO_HSM_TAG_SUFFIX)
+KO_BUILD_HSM = env KO_CONFIG_PATH=$(KO_HSM_CONFIG) KO_DOCKER_REPO=$(KO_DOCKER_REPO) \
+	SOURCE_DATE_EPOCH=$(REPRO_SOURCE_DATE_EPOCH) \
+	$(KO) build -B --sbom=spdx --platform=$(KO_HSM_PLATFORMS) --tags=$(KO_HSM_IMAGE_TAGS) $(KO_LABELS)
+
+container-images: container-image-verifier container-image-attest-ca container-image-attest-ca-hsm
 
 container-image-verifier:
+	$(require_source_date_epoch)
 	$(Q)cd $(SRC_DIR)/verifier && $(KO_BUILD) .
 
 container-image-attest-ca:
+	$(require_source_date_epoch)
 	$(Q)cd $(SRC_DIR)/attestca && $(KO_BUILD) .
+
+container-image-attest-ca-hsm:
+	$(require_source_date_epoch)
+	$(Q)cd $(SRC_DIR)/attestca && $(KO_BUILD_HSM) .
 
 # Helm chart validation (no Kubernetes cluster required)
 # helm-lint checks chart structure; helm-template renders the manifests
@@ -713,11 +801,29 @@ HELM_CHECK_VALUES := \
 	--set policy.enabled=true \
 	--set policy.existingSecret=example-policy
 
+# Chart-behaviour gate: Chart.yaml carries @VERSION@ and rendered pods can
+# start; neither is caught by helm-lint or kubeconform
+check-helm-chart:
+	@scripts/check-helm-chart.sh
+
+# Image-behaviour gate: pure-Go images hold the CA key on disk;
+# the HSM image (tag, cgo, loader) is the production key road
+check-container-images:
+	@scripts/check-container-images.sh
+
+# Chart version and appVersion come from VERSION
+HELM_PACKAGE_DIR ?= $(BUILD_DIR)/helm
+HELM_PACKAGE := $(HELM_PACKAGE_DIR)/lota-verifier-$(PROJECT_VERSION).tgz
+
+helm-package: check-helm-chart
+	$(HELM) package $(HELM_CHART_DIR) --version $(PROJECT_VERSION) \
+		--app-version $(PROJECT_VERSION) -d $(HELM_PACKAGE_DIR)
+
 helm-lint:
 	$(HELM) lint $(HELM_CHART_DIR) $(HELM_CHECK_VALUES)
 
-helm-template:
-	$(HELM) template lota-verifier $(HELM_CHART_DIR) $(HELM_CHECK_VALUES) | $(KUBECONFORM) -strict -summary -
+helm-template: helm-package
+	$(HELM) template lota-verifier $(HELM_PACKAGE) $(HELM_CHECK_VALUES) | $(KUBECONFORM) -strict -summary -
 
 # Observability reference-config validation
 # check config runs --syntax-only because the scrape config names credentials
@@ -735,17 +841,42 @@ observability-lint:
 # Source RPM (COPR / rpmbuild from source)
 # Archives HEAD into a tarball and builds an SRPM into OUTDIR.
 # COPR drives this through .copr/Makefile; locally run `make srpm`.
-# Spec Version uses ~ for the prerelease, so the project version is normalised the same way.
-SRPM_VERSION := $(subst -,~,$(PROJECT_VERSION))
+# The spec carries @VERSION@ and @CHANGELOG@: both are filled from VERSION here
+# (as RPM_VERSION), so a version bump touches VERSION alone.
+# An entry is added unless the spec already holds one for this version.
 SRPM_TREE := $(BUILD_DIR)/srpmtree
+SRPM_SPEC := $(SRPM_TREE)/SPECS/lota.spec
 OUTDIR ?= $(BUILD_DIR)/srpm
 
-srpm:
+srpm: check-package-manifests
 	$(Q)rm -rf $(SRPM_TREE)
-	$(Q)mkdir -p $(SRPM_TREE)/SOURCES $(OUTDIR)
-	$(Q)git archive --format=tar.gz --prefix=lota-$(SRPM_VERSION)/ \
-		-o $(SRPM_TREE)/SOURCES/lota-$(SRPM_VERSION).tar.gz HEAD
-	$(Q)rpmbuild -bs packaging/rpm/lota.spec \
+	$(Q)mkdir -p $(SRPM_TREE)/SOURCES $(SRPM_TREE)/SPECS $(OUTDIR)
+	$(Q)git archive --format=tar.gz --prefix=lota-$(RPM_VERSION)/ \
+		-o $(SRPM_TREE)/SOURCES/lota-$(RPM_VERSION).tar.gz HEAD
+	$(Q)awk -v ver='$(RPM_VERSION)' -v src='$(PROJECT_VERSION)' \
+		-v date="$$(LC_ALL=C git log -1 --format=%cd --date=format:'%a %b %d %Y')" ' \
+	NR == FNR { \
+		if ($$1 == "Release:") { rel = $$2; sub(/%.*/, "", rel) } \
+		if (inlog && /^\* / && !who) { \
+			who = $$0; \
+			sub(/^\* [^ ]+ [^ ]+ [^ ]+ [^ ]+ /, "", who); \
+			sub(/ - [^ ]+$$/, "", who); \
+		} \
+		if (inlog && /^\* / && $$NF == ver "-" rel) released = 1; \
+		if (/^%changelog/) inlog = 1; \
+		next; \
+	} \
+	{ gsub(/@VERSION@/, ver) } \
+	$$0 == "@CHANGELOG@" { \
+		if (!released) { \
+			print "* " date " " who " - " ver "-" rel; \
+			print "- Packaged from the tree at " src "."; \
+			print ""; \
+		} \
+		next; \
+	} \
+	{ print }' packaging/rpm/lota.spec packaging/rpm/lota.spec > $(SRPM_SPEC)
+	$(Q)rpmbuild -bs $(SRPM_SPEC) \
 		--define "_topdir $(abspath $(SRPM_TREE))" \
 		--define "_srcrpmdir $(abspath $(OUTDIR))" \
 		--define "_sourcedir $(abspath $(SRPM_TREE)/SOURCES)"
@@ -800,6 +931,19 @@ docs-serve:
 cleandocs:
 	$(MAKE) -C Documentation clean
 
+# Strict docs gate:
+# full build into a scratch tree; an incremental one skips unchanged
+# sources and hides their problems, and _build/ stays untouched
+check-docs-strict:
+	$(Q)command -v sphinx-build >/dev/null 2>&1 || { \
+		echo "check-docs-strict: sphinx-build not found; install sphinx to build the documentation" >&2; \
+		exit 1; \
+	}
+	$(Q)tmp=$$(mktemp -d) && \
+	trap 'rm -rf "$$tmp"' EXIT && \
+	$(MAKE) -C Documentation html BUILDDIR="$$tmp" \
+		&& echo "check-docs-strict: clean"
+
 check-version-tag:
 	@if git rev-parse --is-inside-work-tree >/dev/null 2>&1; then \
 		tag="$$(git describe --tags --exact-match 2>/dev/null || true)"; \
@@ -815,7 +959,7 @@ check-version-tag:
 # Package-manifest parity gate
 # nfpm configs and the RPM spec describe the same packages;
 # host gets whichever one built the package it installed,
-# so they must ship the same files.
+# so they must ship the same files; the spec takes its version from VERSION.
 # See scripts/check-package-manifests.sh
 check-package-manifests:
 	@scripts/check-package-manifests.sh
@@ -842,6 +986,13 @@ check-el9-decls:
 check-license-boundary:
 	@scripts/check-license-boundary.sh
 
+# Test build-directory gate
+# Fails when a test or example script names the default build directory
+# instead of $(BUILD_DIR).
+# See scripts/check-test-build-dir.sh
+check-test-build-dir:
+	@scripts/check-test-build-dir.sh
+
 # Doc-quoted diagnostic gate
 # Fails when documentation quotes a message no source string can print,
 # which is what an operator searching for the text on their screen hits.
@@ -849,19 +1000,26 @@ check-license-boundary:
 check-doc-diagnostics:
 	@scripts/check-doc-diagnostics.sh
 
+# Shipped-configuration command gate
+# Fails when policies/ or configs/ names an option the command does not have.
+# See scripts/check-config-commands.sh
+check-config-commands:
+	@scripts/check-config-commands.sh
+
 check-stack-frames:
 	@scripts/check-stack-frames.sh
 
-# TPM codes must reach an operator through tpm_strerror(), which knows the
-# private range above POSIX.
+# TPM and network codes must reach an operator through tpm_strerror()
+# and net_strerror(), which know the private ranges above POSIX.
 # strerror() renders those as "Unknown error 4098".
-check-tpm-strerror:
-	@scripts/check-tpm-strerror.sh
+check-private-errno:
+	@scripts/check-private-errno.sh
 
 # Public API/ABI gate
-# Compares the SDK's exported symbols, sonames and installed header set against
-# the baseline in packaging/abi/, and compiles every public header against the installed set alone.
-# abi-baseline rewrites the symbol lists after deliberate surface change;
+# Compares the SDK's exported symbols, sonames, installed header set and type
+# layout against the baseline in packaging/abi/, and compiles every public
+# header against the installed set alone.
+# abi-baseline rewrites the baseline after deliberate surface change;
 # see Documentation/contributor/development/api-stability.rst
 check-abi:
 	@scripts/check-abi.sh
@@ -877,15 +1035,14 @@ abi-baseline:
 CLANG_FORMAT ?= $(shell command -v clang-format-22 2>/dev/null || \
 	command -v clang-format 2>/dev/null)
 GOLANGCI_LINT ?= golangci-lint
+# Server SDK module: sdk/server once the public module moves there, else
+# src/sdk/server. Must precede LINT_GO_MODULES, which := expands in place.
+SERVER_SDK_MODULE := $(if $(wildcard sdk/server/go.mod),sdk/server,src/sdk/server)
 # Every Go module in the tree.
 # SDK and the examples are the code an integrator copies,
 # so they are linted at least as strictly as the rest.
 LINT_GO_MODULES := src/verifier src/attestca src/crl src/fleetctl \
-	$(SERVER_SDK_MODULE) examples/demo_server
-# Server SDK module is at src/sdk/server today and moves to sdk/server when
-# the public Go module lands where its import path points, so the list asks
-# the tree where it is rather than stating a path that goes stale.
-SERVER_SDK_MODULE := $(if $(wildcard sdk/server/go.mod),sdk/server,src/sdk/server)
+	$(SERVER_SDK_MODULE) examples/demo_server examples/ci-gate/gate
 
 lint: lint-c lint-go
 
@@ -896,6 +1053,10 @@ lint-c:
 	@files=$$(git ls-files '*.c' '*.h' | grep -v '^include/vmlinux.h$$'); \
 		$(CLANG_FORMAT) --dry-run --Werror $$files
 	@echo "lint-c: clean"
+
+# Modules lint-go covers, one per line; check-patch reads this list.
+print-lint-go-modules:
+	@printf '%s\n' $(LINT_GO_MODULES)
 
 lint-go:
 	@command -v $(GOLANGCI_LINT) >/dev/null 2>&1 || { \
@@ -1083,15 +1244,18 @@ coccicheck:
 	echo "coccicheck: clean"
 
 # Install to system (requires root)
-install: check-version-tag all
+# selinux-pp is required, not guarded: without the module lota-install's
+# SELinux stage has nothing to load.
+install: check-version-tag all selinux-pp
 	install -d $(DESTDIR)/usr/bin
 	install -d $(DESTDIR)/usr/lib/lota
 	install -d $(DESTDIR)/usr/lib/dracut/modules.d/90lota
 	install -d $(DESTDIR)/usr/lib64
 	install -d $(DESTDIR)/usr/include/lota
 	install -d $(DESTDIR)/usr/share/lota
-	install -d $(DESTDIR)/var/lib/lota/aiks
-	install -d $(DESTDIR)/var/lib/lota/profiles
+	install -d -m 700 $(DESTDIR)/var/lib/lota
+	install -d -m 700 $(DESTDIR)/var/lib/lota/aiks
+	install -d -m 700 $(DESTDIR)/var/lib/lota/profiles
 	install -m 755 $(AGENT_BIN) $(DESTDIR)/usr/bin/
 	install -m 755 $(INSTALLER_BIN) $(DESTDIR)/usr/bin/
 	install -m 755 $(INITRAMFS_LOCK_BIN) $(DESTDIR)/usr/lib/lota/
@@ -1126,6 +1290,12 @@ install: check-version-tag all
 	install -d $(DESTDIR)/usr/share/lota/ima
 	install -m 644 configs/ima/lota-ima-policy \
 		$(DESTDIR)/usr/share/lota/ima/lota-ima-policy
+	install -d $(DESTDIR)$(SELINUX_DATA_DIR)
+	install -m 644 $(SELINUX_PP) $(DESTDIR)$(SELINUX_DATA_DIR)/lota.pp
+	@# The interfaces are callable only from a file the policy devel
+	@# Makefile can see, so the source ships beside the module for a
+	@# caller to copy.
+	install -m 644 $(SELINUX_IF) $(DESTDIR)$(SELINUX_DATA_DIR)/lota.if
 	install -d $(DESTDIR)/etc/dbus-1/system.d
 	install -m 644 dbus/org.lota.Agent1.conf $(DESTDIR)/etc/dbus-1/system.d/
 	install -d $(DESTDIR)/usr/lib/sysusers.d
@@ -1172,6 +1342,8 @@ TEST_BINS := \
 	$(TEST_BIN_DIR)/test_tls_verify \
 	$(TEST_BIN_DIR)/test_verify_result_str \
 	$(TEST_BIN_DIR)/test_connect_hint \
+	$(TEST_BIN_DIR)/test_net_errors \
+	$(TEST_BIN_DIR)/test_tls_anchor \
 	$(TEST_BIN_DIR)/test_xattr_carry \
 	$(TEST_BIN_DIR)/test_config \
 	$(TEST_BIN_DIR)/test_config_alloc \
@@ -1184,6 +1356,7 @@ TEST_BINS := \
 	$(TEST_BIN_DIR)/test_ipc_privilege \
 	$(TEST_BIN_DIR)/test_startup_hint \
 	$(TEST_BIN_DIR)/test_ipc_notify \
+	$(TEST_BIN_DIR)/test_ipc_lockout_sync \
 	$(TEST_BIN_DIR)/test_ipc_reload_binding \
 	$(TEST_BIN_DIR)/test_ipc_token_no_tpm \
 	$(TEST_BIN_DIR)/test_ipc_extra_listener \
@@ -1199,14 +1372,19 @@ TEST_BINS := \
 	$(TEST_BIN_DIR)/test_attest_stage \
 	$(TEST_BIN_DIR)/test_attest_aggregate \
 	$(TEST_BIN_DIR)/test_status_flags \
+	$(TEST_BIN_DIR)/test_iommu_evidence \
 	$(TEST_BIN_DIR)/test_publisher_profile \
 	$(TEST_BIN_DIR)/test_esrt \
 	$(TEST_BIN_DIR)/test_aik_cert_renew \
 	$(TEST_BIN_DIR)/test_io_read_file \
 	$(TEST_BIN_DIR)/test_devt \
+	$(TEST_BIN_DIR)/test_live_fixtures \
 	$(TEST_BIN_DIR)/test_sb_dev \
+	$(TEST_BIN_DIR)/test_cgroup_guard \
 	$(TEST_BIN_DIR)/test_kernel_measure \
+	$(TEST_BIN_DIR)/test_kernel_image \
 	$(TEST_BIN_DIR)/test_bpf_mount_hooks \
+	$(TEST_BIN_DIR)/test_bpf_kill_guard \
 	$(TEST_BIN_DIR)/test_path_sanitize \
 	$(TEST_BIN_DIR)/test_event_budget \
 	$(TEST_BIN_DIR)/test_tpm_nv_chunk \
@@ -1242,14 +1420,19 @@ TEST_BINS := \
 	$(TEST_BIN_DIR)/test_ipc_dos \
 	$(TEST_BIN_DIR)/test_loader_attach \
 	$(TEST_BIN_DIR)/test_bpf_loader_load_source \
+	$(TEST_BIN_DIR)/test_bpf_loader_open_fails_closed \
+	$(TEST_BIN_DIR)/test_watchdog_supervisor \
 	$(TEST_BIN_DIR)/test_bpf_object_preflight \
 	$(TEST_BIN_DIR)/test_ima_policy_scope \
 	$(TEST_BIN_DIR)/test_integrity_baseline \
 	$(TEST_BIN_DIR)/test_daemon_exit_status \
 	$(TEST_BIN_DIR)/test_integrity_map_layout \
 	$(TEST_BIN_DIR)/test_protect_pid_validation \
+	$(TEST_BIN_DIR)/test_startup_refusal_status \
 	$(TEST_BIN_DIR)/test_installer_probe \
 	$(TEST_BIN_DIR)/test_installer_named_paths \
+	$(TEST_BIN_DIR)/test_installer_trust_key \
+	$(TEST_BIN_DIR)/test_installer_checkpoint \
 	$(TEST_BIN_DIR)/test_installer_service \
 	$(TEST_BIN_DIR)/test_selftest_plan \
 	$(TEST_BIN_DIR)/test_ima_xattr \
@@ -1258,11 +1441,26 @@ TEST_BINS := \
 
 $(TEST_SDK_BIN): tests/test_sdk_ipc.c $(SDK_LIB) | $(BUILD_DIR)
 	$(QUIET_CC)
-	$(Q)$(CC) $(CFLAGS) -o $@ $< -L$(BUILD_DIR) -llotagaming -Wl,-rpath,$(abspath $(BUILD_DIR))
+	$(Q)$(CC) $(CFLAGS) -DAGENT_BIN_PATH='"$(AGENT_BIN)"' -o $@ $< \
+		-L$(BUILD_DIR) -llotagaming -Wl,-rpath,$(abspath $(BUILD_DIR))
 
 $(TEST_BIN_DIR)/test_hash_verify: tests/test_hash_verify.c $(AGENT_DIR)/hash_verify.c | $(BUILD_DIR)
 	$(QUIET_CC)
 	$(Q)$(CC) $(CFLAGS) -o $@ $^ -lcrypto
+
+$(TEST_BIN_DIR)/test_installer_trust_key: tests/test_installer_trust_key.c \
+		installer/stages.c installer/probe.c installer/run.c \
+		installer/ui.c $(AGENT_DIR)/policy_pubkey.c \
+		$(AGENT_DIR)/profile.c | $(BUILD_DIR)
+	$(QUIET_CC)
+	$(Q)$(CC) $(CFLAGS) -o $@ $(filter %.c,$^) -lcrypto
+
+$(TEST_BIN_DIR)/test_installer_checkpoint: tests/test_installer_checkpoint.c \
+		installer/stages.c installer/probe.c installer/run.c \
+		installer/ui.c $(AGENT_DIR)/policy_pubkey.c \
+		$(AGENT_DIR)/profile.c | $(BUILD_DIR)
+	$(QUIET_CC)
+	$(Q)$(CC) $(CFLAGS) -o $@ $(filter %.c,$^) -lcrypto
 
 $(TEST_BIN_DIR)/test_installer_probe: tests/test_installer_probe.c installer/probe.c | $(BUILD_DIR)
 	$(QUIET_CC)
@@ -1313,10 +1511,13 @@ $(TEST_BIN_DIR)/test_token_gate: tests/test_token_gate.c $(AGENT_DIR)/token_gate
 	$(QUIET_CC)
 	$(Q)$(CC) $(CFLAGS) -o $@ $^
 
-$(TEST_BIN_DIR)/test_wine_hook: tests/test_wine_hook.c $(SDK_DIR)/lota_gaming.c $(VERSION_FILE) | $(BUILD_DIR)
+# the test #includes lota_wine_hook.c; list it so a hook edit rebuilds
+$(TEST_BIN_DIR)/test_wine_hook: tests/test_wine_hook.c $(SDK_DIR)/lota_gaming.c \
+		$(SDK_DIR)/lota_wine_hook.c $(VERSION_FILE) | $(BUILD_DIR)
 	$(QUIET_CC)
 	$(Q)$(CC) $(CFLAGS) $(SDK_VERSION_CFLAGS) -DLOTA_HOOK_TESTING \
-		-o $@ $(filter-out $(VERSION_FILE),$^) -lpthread
+		-o $@ $(filter-out $(VERSION_FILE) $(SDK_DIR)/lota_wine_hook.c,$^) \
+		-lpthread
 
 $(TEST_BIN_DIR)/test_daemon: tests/test_daemon.c $(AGENT_DIR)/daemon.c | $(BUILD_DIR)
 	$(QUIET_CC)
@@ -1347,7 +1548,15 @@ $(TEST_BIN_DIR)/test_connect_hint: tests/test_connect_hint.c $(AGENT_DIR)/net.c 
 	$(QUIET_CC)
 	$(Q)$(CC) $(CFLAGS) -o $@ $^ -lssl -lcrypto -lsystemd
 
-$(TEST_BIN_DIR)/test_config: tests/test_config.c $(AGENT_DIR)/config.c $(AGENT_DIR)/io_utils.c $(AGENT_DIR)/pin.c | $(BUILD_DIR)
+$(TEST_BIN_DIR)/test_net_errors: tests/test_net_errors.c $(AGENT_DIR)/net.c $(AGENT_DIR)/net_errno.c $(AGENT_DIR)/journal.c $(AGENT_DIR)/pin.c $(AGENT_DIR)/attest_stage.c $(AGENT_DIR)/tpm_errno.c | $(BUILD_DIR)
+	$(QUIET_CC)
+	$(Q)$(CC) $(CFLAGS) -o $@ $^ -lssl -lcrypto -lsystemd
+
+$(TEST_BIN_DIR)/test_tls_anchor: tests/test_tls_anchor.c $(AGENT_DIR)/net.c $(AGENT_DIR)/net_errno.c $(AGENT_DIR)/journal.c $(AGENT_DIR)/pin.c | $(BUILD_DIR)
+	$(QUIET_CC)
+	$(Q)$(CC) $(CFLAGS) -o $@ $^ -lssl -lcrypto -lsystemd
+
+$(TEST_BIN_DIR)/test_config: tests/test_config.c $(AGENT_DIR)/config.c $(AGENT_DIR)/io_utils.c $(AGENT_DIR)/pin.c $(AGENT_DIR)/policy_pubkey.c | $(BUILD_DIR)
 	$(QUIET_CC)
 	$(Q)$(CC) $(CFLAGS) -o $@ $^
 
@@ -1415,7 +1624,7 @@ $(TEST_BIN_DIR)/test_attest_reload: tests/test_attest_reload.c $(AGENT_DIR)/atte
 	$(QUIET_CC)
 	$(Q)$(CC) $(CFLAGS) -o $@ $^ -lcrypto
 
-$(TEST_BIN_DIR)/test_attest_stage: tests/test_attest_stage.c $(AGENT_DIR)/attest_stage.c $(AGENT_DIR)/tpm_errno.c | $(BUILD_DIR)
+$(TEST_BIN_DIR)/test_attest_stage: tests/test_attest_stage.c $(AGENT_DIR)/attest_stage.c $(AGENT_DIR)/net_errno.c $(AGENT_DIR)/tpm_errno.c | $(BUILD_DIR)
 	$(QUIET_CC)
 	$(Q)$(CC) $(CFLAGS) -o $@ $^
 
@@ -1427,6 +1636,11 @@ $(TEST_BIN_DIR)/test_status_flags: tests/test_status_flags.c \
 		$(AGENT_DIR)/status_flags.h $(INC_DIR)/lota_ipc.h | $(BUILD_DIR)
 	$(QUIET_CC)
 	$(Q)$(CC) $(CFLAGS) -o $@ $<
+
+$(TEST_BIN_DIR)/test_iommu_evidence: tests/test_iommu_evidence.c \
+		$(AGENT_DIR)/iommu.c | $(BUILD_DIR)
+	$(QUIET_CC)
+	$(Q)$(CC) $(CFLAGS) -o $@ $^
 
 $(TEST_BIN_DIR)/test_esrt: tests/test_esrt.c $(AGENT_DIR)/esrt.c | $(BUILD_DIR)
 	$(QUIET_CC)
@@ -1448,15 +1662,31 @@ $(TEST_BIN_DIR)/test_devt: tests/test_devt.c $(INC_DIR)/lota_devt.h | $(BUILD_DI
 	$(QUIET_CC)
 	$(Q)$(CC) $(CFLAGS) -o $@ $<
 
+$(TEST_BIN_DIR)/test_live_fixtures: tests/test_live_fixtures.c | $(BUILD_DIR)
+	$(QUIET_CC)
+	$(Q)$(CC) $(CFLAGS) -o $@ $<
+
 $(TEST_BIN_DIR)/test_sb_dev: tests/test_sb_dev.c $(AGENT_DIR)/sb_dev.c $(INC_DIR)/lota_devt.h | $(BUILD_DIR)
 	$(QUIET_CC)
 	$(Q)$(CC) $(CFLAGS) -o $@ tests/test_sb_dev.c $(AGENT_DIR)/sb_dev.c
+
+$(TEST_BIN_DIR)/test_cgroup_guard: tests/test_cgroup_guard.c $(AGENT_DIR)/cgroup_guard.c $(AGENT_DIR)/sb_dev.c | $(BUILD_DIR)
+	$(QUIET_CC)
+	$(Q)$(CC) $(CFLAGS) -o $@ tests/test_cgroup_guard.c $(AGENT_DIR)/cgroup_guard.c $(AGENT_DIR)/sb_dev.c
 
 $(TEST_BIN_DIR)/test_bpf_mount_hooks: tests/test_bpf_mount_hooks.c $(BPF_OBJ) | $(BUILD_DIR)
 	$(QUIET_CC)
 	$(Q)$(CC) $(CFLAGS) -DBPF_OBJ_PATH='"$(BPF_OBJ)"' -o $@ $< -lelf
 
+$(TEST_BIN_DIR)/test_bpf_kill_guard: tests/test_bpf_kill_guard.c $(BPF_OBJ) | $(BUILD_DIR)
+	$(QUIET_CC)
+	$(Q)$(CC) $(CFLAGS) -DBPF_OBJ_PATH='"$(BPF_OBJ)"' -o $@ $< -lbpf
+
 $(TEST_BIN_DIR)/test_kernel_measure: tests/test_kernel_measure.c $(AGENT_DIR)/kernel_measure.c | $(BUILD_DIR)
+	$(QUIET_CC)
+	$(Q)$(CC) $(CFLAGS) -o $@ $^
+
+$(TEST_BIN_DIR)/test_kernel_image: tests/test_kernel_image.c $(AGENT_DIR)/kernel_image.c | $(BUILD_DIR)
 	$(QUIET_CC)
 	$(Q)$(CC) $(CFLAGS) -o $@ $^
 
@@ -1472,7 +1702,7 @@ $(TEST_BIN_DIR)/test_tpm_nv_chunk: tests/test_tpm_nv_chunk.c $(INC_DIR)/lota_tpm
 	$(QUIET_CC)
 	$(Q)$(CC) $(CFLAGS) -o $@ $<
 
-$(TEST_BIN_DIR)/test_ipc_token_cap: tests/test_ipc_token_cap.c $(INC_DIR)/lota_ipc.h | $(BUILD_DIR)
+$(TEST_BIN_DIR)/test_ipc_token_cap: tests/test_ipc_token_cap.c $(INC_DIR)/lota_ipc.h $(INC_DIR)/lota_token.h | $(BUILD_DIR)
 	$(QUIET_CC)
 	$(Q)$(CC) $(CFLAGS) -o $@ $<
 
@@ -1602,6 +1832,12 @@ $(TEST_BIN_DIR)/test_ipc_notify: tests/test_ipc_notify.c $(AGENT_DIR)/ipc.c \
 	$(QUIET_CC)
 	$(Q)$(CC) $(CFLAGS) -o $@ $^ -lcrypto -lsystemd
 
+$(TEST_BIN_DIR)/test_ipc_lockout_sync: tests/test_ipc_lockout_sync.c \
+		$(AGENT_DIR)/ipc.c $(AGENT_DIR)/journal.c \
+		$(AGENT_DIR)/profile.c $(AGENT_DIR)/token_gate.c | $(BUILD_DIR)
+	$(QUIET_CC)
+	$(Q)$(CC) $(CFLAGS) -o $@ $^ -lcrypto -lsystemd
+
 $(TEST_BIN_DIR)/test_ipc_reload_binding: tests/test_ipc_reload_binding.c \
 		$(AGENT_DIR)/ipc.c $(AGENT_DIR)/journal.c \
 		$(AGENT_DIR)/profile.c $(AGENT_DIR)/token_gate.c | $(BUILD_DIR)
@@ -1653,37 +1889,68 @@ $(TEST_BIN_DIR)/test_ipc_dos: tests/test_ipc_dos.c $(SDK_LIB) | $(BUILD_DIR)
 	$(QUIET_CC)
 	$(Q)$(CC) $(CFLAGS) -o $@ $< -L$(BUILD_DIR) -llotagaming -Wl,-rpath,$(abspath $(BUILD_DIR))
 
-$(TEST_BIN_DIR)/test_loader_attach: tests/test_loader_attach.c $(AGENT_DIR)/bpf_loader.c $(AGENT_DIR)/journal.c $(AGENT_DIR)/policy_sign.c $(AGENT_DIR)/sb_dev.c | $(BUILD_DIR)
+$(TEST_BIN_DIR)/test_loader_attach: tests/test_loader_attach.c $(AGENT_DIR)/bpf_loader.c $(AGENT_DIR)/journal.c $(AGENT_DIR)/policy_sign.c $(AGENT_DIR)/sb_dev.c $(AGENT_DIR)/cgroup_guard.c | $(BUILD_DIR)
 	$(QUIET_CC)
 	$(Q)$(CC) $(CFLAGS) -o $@ $^ -lbpf -lsystemd -lcrypto
 
 # Interpose libbpf's open calls and the signature verify so the loader's
 # verify-then-load path is testable without a key or a live kernel
-$(TEST_BIN_DIR)/test_bpf_loader_load_source: tests/test_bpf_loader_load_source.c $(AGENT_DIR)/bpf_loader.c $(AGENT_DIR)/journal.c $(AGENT_DIR)/policy_sign.c $(AGENT_DIR)/sb_dev.c | $(BUILD_DIR)
+$(TEST_BIN_DIR)/test_bpf_loader_load_source: tests/test_bpf_loader_load_source.c $(AGENT_DIR)/bpf_loader.c $(AGENT_DIR)/journal.c $(AGENT_DIR)/policy_sign.c $(AGENT_DIR)/sb_dev.c $(AGENT_DIR)/cgroup_guard.c | $(BUILD_DIR)
 	$(QUIET_CC)
 	$(Q)$(CC) $(CFLAGS) -o $@ $^ -lbpf -lsystemd -lcrypto \
 		-Wl,--wrap=policy_verify_buffer \
 		-Wl,--wrap=bpf_object__open_file \
 		-Wl,--wrap=bpf_object__open_mem
 
+# wraps return NULL with errno clear: refusal path without a kernel
+$(TEST_BIN_DIR)/test_bpf_loader_open_fails_closed: tests/test_bpf_loader_open_fails_closed.c $(AGENT_DIR)/bpf_loader.c $(AGENT_DIR)/journal.c $(AGENT_DIR)/policy_sign.c $(AGENT_DIR)/sb_dev.c $(AGENT_DIR)/cgroup_guard.c | $(BUILD_DIR)
+	$(QUIET_CC)
+	$(Q)$(CC) $(CFLAGS) -o $@ $^ -lbpf -lsystemd -lcrypto \
+		-Wl,--wrap=policy_verify_buffer \
+		-Wl,--wrap=bpf_object__open_mem \
+		-Wl,--wrap=bpf_object__next_program \
+		-Wl,--wrap=bpf_program__type \
+		-Wl,--wrap=bpf_program__name \
+		-Wl,--wrap=bpf_program__attach \
+		-Wl,--wrap=ring_buffer__new
+
+# forks a child that the supervisor really kills: thread and signal under test
+$(TEST_BIN_DIR)/test_watchdog_supervisor: tests/test_watchdog_supervisor.c $(AGENT_DIR)/watchdog.c $(AGENT_DIR)/sdnotify.c $(AGENT_DIR)/journal.c | $(BUILD_DIR)
+	$(QUIET_CC)
+	$(Q)$(CC) $(CFLAGS) -pthread -o $@ $^ -lsystemd
+
 $(TEST_BIN_DIR)/test_protect_pid_validation: tests/test_protect_pid_validation.c \
 		$(AGENT_DIR)/startup_policy.c $(AGENT_DIR)/bpf_loader.c \
 		$(AGENT_DIR)/journal.c $(AGENT_DIR)/policy_sign.c \
-		$(AGENT_DIR)/sb_dev.c | $(BUILD_DIR)
+		$(AGENT_DIR)/sb_dev.c $(AGENT_DIR)/cgroup_guard.c \
+		$(AGENT_DIR)/config.c $(AGENT_DIR)/io_utils.c \
+		$(AGENT_DIR)/pin.c $(AGENT_DIR)/policy_pubkey.c \
+		| $(BUILD_DIR)
 	$(QUIET_CC)
 	$(Q)$(CC) $(CFLAGS) -o $@ $^ -lbpf -lsystemd -lcrypto \
 		-Wl,--wrap=bpf_loader_verify_kernel_runtime_hardening
 
-$(TEST_BIN_DIR)/test_bpf_object_preflight: tests/test_bpf_object_preflight.c $(AGENT_DIR)/bpf_loader.c $(AGENT_DIR)/journal.c $(AGENT_DIR)/policy_sign.c $(AGENT_DIR)/sb_dev.c | $(BUILD_DIR)
+$(TEST_BIN_DIR)/test_startup_refusal_status: tests/test_startup_refusal_status.c \
+		$(AGENT_DIR)/startup_policy.c $(AGENT_DIR)/bpf_loader.c \
+		$(AGENT_DIR)/journal.c $(AGENT_DIR)/policy_sign.c \
+		$(AGENT_DIR)/sb_dev.c $(AGENT_DIR)/cgroup_guard.c \
+		$(AGENT_DIR)/config.c $(AGENT_DIR)/io_utils.c \
+		$(AGENT_DIR)/pin.c $(AGENT_DIR)/policy_pubkey.c \
+		| $(BUILD_DIR)
+	$(QUIET_CC)
+	$(Q)$(CC) $(CFLAGS) -o $@ $^ -lbpf -lsystemd -lcrypto \
+		-Wl,--wrap=bpf_loader_verify_kernel_runtime_hardening
+
+$(TEST_BIN_DIR)/test_bpf_object_preflight: tests/test_bpf_object_preflight.c $(AGENT_DIR)/bpf_loader.c $(AGENT_DIR)/journal.c $(AGENT_DIR)/policy_sign.c $(AGENT_DIR)/sb_dev.c $(AGENT_DIR)/cgroup_guard.c | $(BUILD_DIR)
 	$(QUIET_CC)
 	$(Q)$(CC) $(CFLAGS) -o $@ $^ -lbpf -lsystemd -lcrypto \
 		-Wl,--wrap=policy_verify_buffer
 
-$(TEST_BIN_DIR)/test_ima_policy_scope: tests/test_ima_policy_scope.c $(AGENT_DIR)/bpf_loader.c $(AGENT_DIR)/journal.c $(AGENT_DIR)/policy_sign.c $(AGENT_DIR)/sb_dev.c | $(BUILD_DIR)
+$(TEST_BIN_DIR)/test_ima_policy_scope: tests/test_ima_policy_scope.c $(AGENT_DIR)/bpf_loader.c $(AGENT_DIR)/journal.c $(AGENT_DIR)/policy_sign.c $(AGENT_DIR)/sb_dev.c $(AGENT_DIR)/cgroup_guard.c | $(BUILD_DIR)
 	$(QUIET_CC)
 	$(Q)$(CC) $(CFLAGS) -o $@ $^ -lbpf -lsystemd -lcrypto
 
-$(TEST_BIN_DIR)/test_integrity_baseline: tests/test_integrity_baseline.c $(AGENT_DIR)/bpf_loader.c $(AGENT_DIR)/journal.c $(AGENT_DIR)/policy_sign.c $(AGENT_DIR)/sb_dev.c | $(BUILD_DIR)
+$(TEST_BIN_DIR)/test_integrity_baseline: tests/test_integrity_baseline.c $(AGENT_DIR)/bpf_loader.c $(AGENT_DIR)/journal.c $(AGENT_DIR)/policy_sign.c $(AGENT_DIR)/sb_dev.c $(AGENT_DIR)/cgroup_guard.c | $(BUILD_DIR)
 	$(QUIET_CC)
 	$(Q)$(CC) $(CFLAGS) -o $@ $^ -lbpf -lsystemd -lcrypto
 
@@ -1691,7 +1958,7 @@ $(TEST_BIN_DIR)/test_daemon_exit_status: tests/test_daemon_exit_status.c $(AGENT
 	$(QUIET_CC)
 	$(Q)$(CC) $(CFLAGS) -o $@ $^
 
-$(TEST_BIN_DIR)/test_integrity_map_layout: tests/test_integrity_map_layout.c $(AGENT_DIR)/bpf_loader.c $(AGENT_DIR)/journal.c $(AGENT_DIR)/policy_sign.c $(AGENT_DIR)/sb_dev.c $(BPF_OBJ) $(LEGACY_BPF_OBJ) | $(BUILD_DIR)
+$(TEST_BIN_DIR)/test_integrity_map_layout: tests/test_integrity_map_layout.c $(AGENT_DIR)/bpf_loader.c $(AGENT_DIR)/journal.c $(AGENT_DIR)/policy_sign.c $(AGENT_DIR)/sb_dev.c $(AGENT_DIR)/cgroup_guard.c $(BPF_OBJ) $(LEGACY_BPF_OBJ) | $(BUILD_DIR)
 	$(QUIET_CC)
 	$(Q)$(CC) $(CFLAGS) -DTREE_BPF_OBJ='"$(BPF_OBJ)"' \
 		-DLEGACY_BPF_OBJ='"$(LEGACY_BPF_OBJ)"' \
@@ -1730,6 +1997,7 @@ test-unit: all $(TEST_BINS)
 	@$(BUILD_DIR)/test_ipc_privilege
 	@$(BUILD_DIR)/test_startup_hint
 	@$(BUILD_DIR)/test_ipc_notify
+	@$(BUILD_DIR)/test_ipc_lockout_sync
 	@$(BUILD_DIR)/test_ipc_reload_binding
 	@$(BUILD_DIR)/test_ipc_token_no_tpm
 	@$(BUILD_DIR)/test_ipc_extra_listener
@@ -1745,12 +2013,17 @@ test-unit: all $(TEST_BINS)
 	@$(BUILD_DIR)/test_attest_stage
 	@$(BUILD_DIR)/test_attest_aggregate
 	@$(BUILD_DIR)/test_status_flags
+	@$(BUILD_DIR)/test_iommu_evidence
 	@$(BUILD_DIR)/test_publisher_profile
 	@$(BUILD_DIR)/test_io_read_file
 	@$(BUILD_DIR)/test_devt
+	@$(BUILD_DIR)/test_live_fixtures
 	@$(BUILD_DIR)/test_sb_dev
+	@$(BUILD_DIR)/test_cgroup_guard
 	@$(BUILD_DIR)/test_kernel_measure
+	@$(BUILD_DIR)/test_kernel_image
 	@$(BUILD_DIR)/test_bpf_mount_hooks
+	@$(BUILD_DIR)/test_bpf_kill_guard
 	@$(BUILD_DIR)/test_path_sanitize
 	@$(BUILD_DIR)/test_event_budget
 	@$(BUILD_DIR)/test_tpm_nv_chunk
@@ -1758,6 +2031,8 @@ test-unit: all $(TEST_BINS)
 	@$(BUILD_DIR)/test_initramfs_lock
 	@$(BUILD_DIR)/test_installer_probe
 	@$(BUILD_DIR)/test_installer_named_paths
+	@$(BUILD_DIR)/test_installer_trust_key
+	@$(BUILD_DIR)/test_installer_checkpoint
 	@$(BUILD_DIR)/test_installer_service
 	@$(BUILD_DIR)/test_selftest_plan
 	@$(BUILD_DIR)/test_ima_xattr
@@ -1768,6 +2043,8 @@ test-unit: all $(TEST_BINS)
 	@$(BUILD_DIR)/test_flag_names
 	@$(BUILD_DIR)/test_verify_result_str
 	@$(BUILD_DIR)/test_connect_hint
+	@$(BUILD_DIR)/test_net_errors
+	@$(BUILD_DIR)/test_tls_anchor
 	@$(BUILD_DIR)/test_xattr_carry
 	@$(BUILD_DIR)/test_runtime_measure
 	@$(BUILD_DIR)/test_runtime_image_measure
@@ -1789,10 +2066,13 @@ test-unit: all $(TEST_BINS)
 	@$(BUILD_DIR)/test_seal_aik
 	@$(BUILD_DIR)/test_loader_attach
 	@$(BUILD_DIR)/test_bpf_loader_load_source
+	@$(BUILD_DIR)/test_bpf_loader_open_fails_closed
+	@$(BUILD_DIR)/test_watchdog_supervisor
 	@$(BUILD_DIR)/test_bpf_object_preflight
 	@$(BUILD_DIR)/test_ima_policy_scope
 	@$(BUILD_DIR)/test_integrity_baseline
 	@$(BUILD_DIR)/test_daemon_exit_status
+	@$(BUILD_DIR)/test_startup_refusal_status
 	@$(BUILD_DIR)/test_integrity_map_layout
 	@echo ""
 	@echo "=== Running integration tests (best effort) ==="
@@ -1805,6 +2085,12 @@ test-unit: all $(TEST_BINS)
 		tests/integration/test_enrollment_ca_material.sh; \
 	else \
 		echo "SKIP: test_enrollment_ca_material.sh (no openssl)"; \
+	fi
+	@tests/integration/test_enrollment_example_ports.sh
+	@if command -v openssl >/dev/null 2>&1; then \
+		tests/integration/test_enrollment_example_teardown.sh; \
+	else \
+		echo "SKIP: test_enrollment_example_teardown.sh (no openssl)"; \
 	fi
 	@if command -v openssl >/dev/null 2>&1; then \
 		tests/integration/test_ek_root_pin_nv_chain.sh; \
@@ -1822,6 +2108,42 @@ test-unit: all $(TEST_BINS)
 		echo "SKIP: test_ek_roots_update_bundle.sh (no openssl)"; \
 	fi
 	@tests/integration/test_steam_setup_dropin.sh
+	@tests/integration/test_steam_setup_no_session.sh
+	@tests/integration/test_proton_hook_disable.sh
+	@tests/integration/test_dev_bringup_idempotent.sh
+	@tests/integration/test_installer_status_stages.sh
+	@if command -v pkg-config >/dev/null 2>&1; then \
+		tests/integration/test_examples_optional_deps.sh; \
+	else \
+		echo "SKIP: test_examples_optional_deps.sh (no pkg-config)"; \
+	fi
+	@if [ -x $(EXAMPLES_BUILD_DIR)/trust_pong ] && command -v python3 >/dev/null 2>&1; then \
+		tests/integration/test_trust_pong_freeze_streak.sh; \
+	else \
+		echo "SKIP: test_trust_pong_freeze_streak.sh (run 'make examples', needs python3)"; \
+	fi
+	@if command -v go >/dev/null 2>&1 && command -v cc >/dev/null 2>&1; then \
+		tests/integration/test_attestca_build_tags.sh; \
+	else \
+		echo "SKIP: test_attestca_build_tags.sh (no go or C compiler)"; \
+	fi
+	@if command -v clang >/dev/null 2>&1; then \
+		tests/integration/test_fuzz_leak_detection.sh; \
+	else \
+		echo "SKIP: test_fuzz_leak_detection.sh (no clang)"; \
+	fi
+	@if command -v go >/dev/null 2>&1; then \
+		tests/integration/test_bench_targets.sh; \
+	else \
+		echo "SKIP: test_bench_targets.sh (no go)"; \
+	fi
+	@tests/integration/test_veristat_gate.sh
+	@if command -v softhsm2-util >/dev/null 2>&1 && command -v pkcs11-tool >/dev/null 2>&1 && \
+		command -v openssl >/dev/null 2>&1; then \
+		tests/integration/test_hsm_ca_example.sh; \
+	else \
+		echo "SKIP: test_hsm_ca_example.sh (no softhsm2-util, pkcs11-tool or openssl)"; \
+	fi
 	@if [ -S /run/lota/lota.sock ]; then \
 		$(BUILD_DIR)/test_sdk_ipc; \
 		$(BUILD_DIR)/test_ipc_client status; \
@@ -1894,12 +2216,13 @@ VALGRIND_UNIT_BINS := \
 	test_daemon_loop test_config test_config_alloc test_subscribe \
 	test_policy_sign \
 	test_policy_export test_aik_rotation test_initramfs_lock \
-	test_installer_probe test_devt test_sb_dev test_kernel_measure test_event_budget \
+	test_installer_probe test_devt test_live_fixtures test_sb_dev test_cgroup_guard test_kernel_measure test_kernel_image test_event_budget \
 	test_ptrace_policy test_signal_policy test_module_purpose \
 	test_server_sdk test_anticheat test_loader_attach test_enroll_state \
 	test_profile_id test_attest_targets test_attest_reload test_attest_aggregate \
-	test_status_flags test_terminate_policy \
+	test_status_flags test_iommu_evidence test_terminate_policy \
 	test_publisher_profile test_verify_result_str test_connect_hint \
+	test_net_errors test_tls_anchor \
 	test_xattr_carry test_ima_policy_scope test_integrity_baseline \
 	test_daemon_exit_status test_integrity_map_layout
 
@@ -1942,10 +2265,17 @@ valgrind-smoke: all examples
 FUZZ_CFLAGS := $(CFLAGS) -fsanitize=fuzzer,address -g -O1
 FUZZ_LDFLAGS := $(LDFLAGS) -fsanitize=fuzzer,address
 
+# Linked into every fuzz target: disables LSan where ptrace attach is refused
+FUZZ_LSAN_OBJ := $(BUILD_DIR)/fuzz/lsan_options.o
+
 # Every C libFuzzer harness lives under fuzz/ as fuzz_<name>.c;
 # the agent sources they exercise stay under src/agent/
 FUZZ_AGENT_OBJS := $(filter-out $(BUILD_DIR)/agent/main.o $(BUILD_DIR)/agent/ipc.o $(BUILD_DIR)/agent/reload.o $(BUILD_DIR)/agent/test_servers.o $(BUILD_DIR)/agent/startup_policy.o $(BUILD_DIR)/agent/daemon_loop.o, $(AGENT_OBJS))
-FUZZ_AGENT_OBJS += $(BUILD_DIR)/fuzz/fuzz_ipc.o
+FUZZ_AGENT_OBJS += $(BUILD_DIR)/fuzz/fuzz_ipc.o $(FUZZ_LSAN_OBJ)
+
+$(FUZZ_LSAN_OBJ): fuzz/lsan_options.c | $(BUILD_DIR)/fuzz
+	$(QUIET_CLANG)
+	$(Q)clang $(FUZZ_CFLAGS) -c $< -o $@
 
 $(BUILD_DIR)/fuzz/fuzz_ipc.o: fuzz/fuzz_ipc.c | $(BUILD_DIR)/fuzz
 	$(QUIET_CLANG)
@@ -1958,16 +2288,19 @@ fuzz-agent: $(FUZZ_AGENT_OBJS)
 	$(QUIET_CLANG)
 	$(Q)clang $(FUZZ_CFLAGS) -o $(BUILD_DIR)/fuzz-agent $(FUZZ_AGENT_OBJS) $(LDFLAGS)
 
-# Config parser fuzz (standalone, libc only)
+# Config parser fuzz (links config.c, pin.c, io_utils.c; tpm.h headers only)
+FUZZ_CONFIG_SRCS := src/agent/config.c src/agent/pin.c src/agent/io_utils.c
+FUZZ_CONFIG_OBJS := $(patsubst src/agent/%.c,$(BUILD_DIR)/fuzz/config_%.o,$(FUZZ_CONFIG_SRCS))
+
 $(BUILD_DIR)/fuzz/fuzz_config.o: fuzz/fuzz_config.c src/agent/config.h | $(BUILD_DIR)/fuzz
 	$(QUIET_CLANG)
 	$(Q)clang $(FUZZ_CFLAGS) -I$(INC_DIR) -c $< -o $@
 
-$(BUILD_DIR)/fuzz/config_obj.o: src/agent/config.c src/agent/config.h | $(BUILD_DIR)/fuzz
+$(BUILD_DIR)/fuzz/config_%.o: src/agent/%.c | $(BUILD_DIR)/fuzz
 	$(QUIET_CLANG)
-	$(Q)clang $(FUZZ_CFLAGS) -I$(INC_DIR) -DLOTA_TPM_H -DTPM_AIK_HANDLE=0x81010002 -c $< -o $@
+	$(Q)clang $(FUZZ_CFLAGS) -I$(INC_DIR) -MMD -MP -c $< -o $@
 
-fuzz-config: $(BUILD_DIR)/fuzz/fuzz_config.o $(BUILD_DIR)/fuzz/config_obj.o
+fuzz-config: $(BUILD_DIR)/fuzz/fuzz_config.o $(FUZZ_CONFIG_OBJS) $(FUZZ_LSAN_OBJ)
 	$(QUIET_CLANG)
 	$(Q)clang $(FUZZ_CFLAGS) -o $(BUILD_DIR)/fuzz-config $^
 
@@ -1976,7 +2309,7 @@ $(BUILD_DIR)/fuzz/fuzz_enroll.o: fuzz/fuzz_enroll.c src/agent/enroll.c src/agent
 	$(QUIET_CLANG)
 	$(Q)clang $(FUZZ_CFLAGS) -c $< -o $@
 
-fuzz-enroll: $(BUILD_DIR)/fuzz/fuzz_enroll.o
+fuzz-enroll: $(BUILD_DIR)/fuzz/fuzz_enroll.o $(FUZZ_LSAN_OBJ)
 	$(QUIET_CLANG)
 	$(Q)clang $(FUZZ_CFLAGS) -o $(BUILD_DIR)/fuzz-enroll $^
 
@@ -1989,7 +2322,7 @@ $(BUILD_DIR)/fuzz/seal_envelope_obj.o: src/agent/seal_envelope.c | $(BUILD_DIR)/
 	$(QUIET_CLANG)
 	$(Q)clang $(FUZZ_CFLAGS) -I$(INC_DIR) -c $< -o $@
 
-fuzz-seal-envelope: $(BUILD_DIR)/fuzz/fuzz_seal_envelope.o $(BUILD_DIR)/fuzz/seal_envelope_obj.o
+fuzz-seal-envelope: $(BUILD_DIR)/fuzz/fuzz_seal_envelope.o $(BUILD_DIR)/fuzz/seal_envelope_obj.o $(FUZZ_LSAN_OBJ)
 	$(QUIET_CLANG)
 	$(Q)clang $(FUZZ_CFLAGS) -o $(BUILD_DIR)/fuzz-seal-envelope $^ -lcrypto
 
@@ -1998,7 +2331,7 @@ $(BUILD_DIR)/fuzz/fuzz_tpm_attest.o: fuzz/fuzz_tpm_attest.c | $(BUILD_DIR)/fuzz
 	$(QUIET_CLANG)
 	$(Q)clang $(FUZZ_CFLAGS) -c $< -o $@
 
-fuzz-tpm-attest: $(BUILD_DIR)/fuzz/fuzz_tpm_attest.o
+fuzz-tpm-attest: $(BUILD_DIR)/fuzz/fuzz_tpm_attest.o $(FUZZ_LSAN_OBJ)
 	$(QUIET_CLANG)
 	$(Q)clang $(FUZZ_CFLAGS) -o $(BUILD_DIR)/fuzz-tpm-attest $^ -ltss2-mu
 
@@ -2011,7 +2344,7 @@ $(BUILD_DIR)/fuzz/policy_sign_obj.o: src/agent/policy_sign.c src/agent/policy_si
 	$(QUIET_CLANG)
 	$(Q)clang $(FUZZ_CFLAGS) -I$(INC_DIR) -c $< -o $@
 
-fuzz-policy-sign: $(BUILD_DIR)/fuzz/fuzz_policy_sign.o $(BUILD_DIR)/fuzz/policy_sign_obj.o
+fuzz-policy-sign: $(BUILD_DIR)/fuzz/fuzz_policy_sign.o $(BUILD_DIR)/fuzz/policy_sign_obj.o $(FUZZ_LSAN_OBJ)
 	$(QUIET_CLANG)
 	$(Q)clang $(FUZZ_CFLAGS) -o $(BUILD_DIR)/fuzz-policy-sign $^ -lcrypto
 
@@ -2024,7 +2357,7 @@ $(BUILD_DIR)/fuzz/server_sdk_obj.o: src/sdk/lota_server.c $(VERSION_FILE) | $(BU
 	$(QUIET_CLANG)
 	$(Q)clang $(FUZZ_CFLAGS) $(SDK_VERSION_CFLAGS) -I$(INC_DIR) -c $< -o $@
 
-fuzz-server-sdk: $(BUILD_DIR)/fuzz/fuzz_server_sdk.o $(BUILD_DIR)/fuzz/server_sdk_obj.o
+fuzz-server-sdk: $(BUILD_DIR)/fuzz/fuzz_server_sdk.o $(BUILD_DIR)/fuzz/server_sdk_obj.o $(FUZZ_LSAN_OBJ)
 	$(QUIET_CLANG)
 	$(Q)clang $(FUZZ_CFLAGS) -o $(BUILD_DIR)/fuzz-server-sdk $^ -lcrypto
 
@@ -2033,7 +2366,7 @@ $(BUILD_DIR)/fuzz/fuzz_tpm_resp.o: fuzz/fuzz_tpm_resp.c | $(BUILD_DIR)/fuzz
 	$(QUIET_CLANG)
 	$(Q)clang $(FUZZ_CFLAGS) -c $< -o $@
 
-fuzz-tpm-resp: $(BUILD_DIR)/fuzz/fuzz_tpm_resp.o
+fuzz-tpm-resp: $(BUILD_DIR)/fuzz/fuzz_tpm_resp.o $(FUZZ_LSAN_OBJ)
 	$(QUIET_CLANG)
 	$(Q)clang $(FUZZ_CFLAGS) -o $(BUILD_DIR)/fuzz-tpm-resp $^ -ltss2-mu
 
@@ -2050,7 +2383,7 @@ $(BUILD_DIR)/fuzz/fuzz_devt.o: fuzz/bpf_oracle/fuzz_devt.c include/lota_devt.h |
 	$(QUIET_CLANG)
 	$(Q)clang $(BPF_ORACLE_CFLAGS) -c $< -o $@
 
-fuzz-bpf-devt: $(BUILD_DIR)/fuzz/fuzz_devt.o
+fuzz-bpf-devt: $(BUILD_DIR)/fuzz/fuzz_devt.o $(FUZZ_LSAN_OBJ)
 	$(QUIET_CLANG)
 	$(Q)clang $(FUZZ_CFLAGS) -o $(BUILD_DIR)/fuzz-bpf-devt $^
 
@@ -2058,7 +2391,7 @@ $(BUILD_DIR)/fuzz/fuzz_open_flags.o: fuzz/bpf_oracle/fuzz_open_flags.c fuzz/bpf_
 	$(QUIET_CLANG)
 	$(Q)clang $(BPF_ORACLE_CFLAGS) -c $< -o $@
 
-fuzz-bpf-open-flags: $(BUILD_DIR)/fuzz/fuzz_open_flags.o
+fuzz-bpf-open-flags: $(BUILD_DIR)/fuzz/fuzz_open_flags.o $(FUZZ_LSAN_OBJ)
 	$(QUIET_CLANG)
 	$(Q)clang $(FUZZ_CFLAGS) -o $(BUILD_DIR)/fuzz-bpf-open-flags $^
 
@@ -2066,7 +2399,7 @@ $(BUILD_DIR)/fuzz/fuzz_kmem_device.o: fuzz/bpf_oracle/fuzz_kmem_device.c fuzz/bp
 	$(QUIET_CLANG)
 	$(Q)clang $(BPF_ORACLE_CFLAGS) -c $< -o $@
 
-fuzz-bpf-kmem-device: $(BUILD_DIR)/fuzz/fuzz_kmem_device.o
+fuzz-bpf-kmem-device: $(BUILD_DIR)/fuzz/fuzz_kmem_device.o $(FUZZ_LSAN_OBJ)
 	$(QUIET_CLANG)
 	$(Q)clang $(FUZZ_CFLAGS) -o $(BUILD_DIR)/fuzz-bpf-kmem-device $^
 
@@ -2074,7 +2407,7 @@ $(BUILD_DIR)/fuzz/fuzz_event_budget.o: fuzz/bpf_oracle/fuzz_event_budget.c inclu
 	$(QUIET_CLANG)
 	$(Q)clang $(BPF_ORACLE_CFLAGS) -c $< -o $@
 
-fuzz-bpf-event-budget: $(BUILD_DIR)/fuzz/fuzz_event_budget.o
+fuzz-bpf-event-budget: $(BUILD_DIR)/fuzz/fuzz_event_budget.o $(FUZZ_LSAN_OBJ)
 	$(QUIET_CLANG)
 	$(Q)clang $(FUZZ_CFLAGS) -o $(BUILD_DIR)/fuzz-bpf-event-budget $^
 
@@ -2082,7 +2415,7 @@ $(BUILD_DIR)/fuzz/fuzz_inaccessible_exec.o: fuzz/bpf_oracle/fuzz_inaccessible_ex
 	$(QUIET_CLANG)
 	$(Q)clang $(BPF_ORACLE_CFLAGS) -c $< -o $@
 
-fuzz-bpf-inaccessible-exec: $(BUILD_DIR)/fuzz/fuzz_inaccessible_exec.o
+fuzz-bpf-inaccessible-exec: $(BUILD_DIR)/fuzz/fuzz_inaccessible_exec.o $(FUZZ_LSAN_OBJ)
 	$(QUIET_CLANG)
 	$(Q)clang $(FUZZ_CFLAGS) -o $(BUILD_DIR)/fuzz-bpf-inaccessible-exec $^
 
@@ -2090,7 +2423,7 @@ $(BUILD_DIR)/fuzz/fuzz_shebang.o: fuzz/bpf_oracle/fuzz_shebang.c fuzz/bpf_oracle
 	$(QUIET_CLANG)
 	$(Q)clang $(BPF_ORACLE_CFLAGS) -c $< -o $@
 
-fuzz-bpf-shebang: $(BUILD_DIR)/fuzz/fuzz_shebang.o
+fuzz-bpf-shebang: $(BUILD_DIR)/fuzz/fuzz_shebang.o $(FUZZ_LSAN_OBJ)
 	$(QUIET_CLANG)
 	$(Q)clang $(FUZZ_CFLAGS) -o $(BUILD_DIR)/fuzz-bpf-shebang $^
 
@@ -2102,8 +2435,10 @@ fuzz-bpf-all: fuzz-bpf-devt fuzz-bpf-open-flags fuzz-bpf-kmem-device \
 # fuzz/bpf_oracle/mirror.lock pins that source by content hash.
 # check-bpf-mirror fails when production drifts from the lock,
 # so a change to a mirrored helper forces a re-verify of the copy.
+# Line references to the source also fail: the lock misses a moved helper.
 BPF_MIRROR_SRC := src/bpf/lota_lsm.bpf.c
-BPF_MIRROR_LOCK := fuzz/bpf_oracle/mirror.lock
+BPF_MIRROR_DIR := fuzz/bpf_oracle
+BPF_MIRROR_LOCK := $(BPF_MIRROR_DIR)/mirror.lock
 BPF_MIRROR_FUNCS := is_write_open_flags is_kernel_mem_device is_shebang_binprm is_inaccessible_exec_path
 BPF_MIRROR_MACROS := LOTA_O_ACCMODE LOTA_O_WRONLY LOTA_O_RDWR LOTA_O_TRUNC S_IFMT S_IFCHR BINPRM_FLAGS_PATH_INACCESSIBLE
 
@@ -2123,14 +2458,23 @@ check-bpf-mirror:
 	$(Q)cur=$$(mktemp); lck=$$(mktemp); \
 	{ $(BPF_MIRROR_GEN); } > $$cur; \
 	grep -vE '^#' $(BPF_MIRROR_LOCK) | grep -vE '^[[:space:]]*$$' > $$lck; \
-	if diff -u $$lck $$cur >/dev/null; then \
-		echo "bpf-mirror: in sync"; rm -f $$cur $$lck; \
-	else \
-		echo "ERROR: src/bpf/lota_lsm.bpf.c mirrored logic changed:"; \
+	rc=0; \
+	if ! diff -u $$lck $$cur >/dev/null; then \
+		echo "ERROR: $(BPF_MIRROR_SRC) mirrored logic changed:"; \
 		diff -u $$lck $$cur || true; \
-		echo "Re-verify fuzz/bpf_oracle/lota_lsm_logic.h, then: make update-bpf-mirror"; \
-		rm -f $$cur $$lck; exit 1; \
-	fi
+		echo "Re-verify $(BPF_MIRROR_DIR)/lota_lsm_logic.h, then: make update-bpf-mirror"; \
+		rc=1; \
+	fi; \
+	rm -f $$cur $$lck; \
+	lines=$$(grep -rnE 'lota_lsm\.bpf\.c:[0-9]' $(BPF_MIRROR_DIR) || true); \
+	if [ -n "$$lines" ]; then \
+		echo "ERROR: $(BPF_MIRROR_DIR) cites $(BPF_MIRROR_SRC) by line, which the lock does not pin:"; \
+		echo "$$lines"; \
+		echo "Name the helper or macro instead."; \
+		rc=1; \
+	fi; \
+	[ $$rc = 0 ] && echo "bpf-mirror: in sync"; \
+	exit $$rc
 
 update-bpf-mirror:
 	$(Q)sed -n '1,/do not hand-edit\./p' $(BPF_MIRROR_LOCK) > $(BPF_MIRROR_LOCK).new; \
@@ -2138,9 +2482,36 @@ update-bpf-mirror:
 	mv $(BPF_MIRROR_LOCK).new $(BPF_MIRROR_LOCK); \
 	echo "bpf-mirror: lock refreshed"
 
-fuzz-all: fuzz-agent fuzz-config fuzz-enroll \
+FUZZ_TARGETS := fuzz-agent fuzz-config fuzz-enroll \
 	fuzz-seal-envelope fuzz-tpm-attest fuzz-policy-sign fuzz-server-sdk \
-	fuzz-tpm-resp fuzz-bpf-all
+	fuzz-tpm-resp fuzz-bpf-devt fuzz-bpf-open-flags fuzz-bpf-kmem-device \
+	fuzz-bpf-event-budget fuzz-bpf-inaccessible-exec fuzz-bpf-shebang
+
+fuzz-all: $(FUZZ_TARGETS)
+
+# Replay fuzz/regressions/<target>/ against each target; any target that
+# still fails fails the run. New artifacts go to the build dir, not the tree.
+FUZZ_REGRESS_DIR := fuzz/regressions
+
+fuzz-regress: fuzz-all
+	@rc=0; \
+	for t in $(FUZZ_TARGETS); do \
+		d=$(FUZZ_REGRESS_DIR)/$$t; \
+		[ -d $$d ] || continue; \
+		set -- $$(find $$d -type f ! -name '*.rst' | sort); \
+		[ $$# -gt 0 ] || continue; \
+		echo "== $$t: $$# reproducer(s)"; \
+		if ! $(BUILD_DIR)/$$t \
+			-artifact_prefix=$(BUILD_DIR)/fuzz/regress-$$t- "$$@" \
+			>$(BUILD_DIR)/fuzz/regress-$$t.log 2>&1; then \
+			grep -E 'ERROR|SUMMARY|Running:|in LLVMFuzzerTestOneInput' \
+				$(BUILD_DIR)/fuzz/regress-$$t.log | tail -20 >&2; \
+			echo "fuzz-regress: $$t still fails on a committed reproducer," \
+				"log in $(BUILD_DIR)/fuzz/regress-$$t.log" >&2; \
+			rc=1; \
+		fi; \
+	done; \
+	exit $$rc
 
 # syzkaller bring-up harness: loads the production BPF LSM object,
 # attaches every hook in enforce mode, and idles so syz-executor's
@@ -2152,6 +2523,117 @@ syzkaller-fuzz-loader: $(SYZ_FUZZ_LOADER)
 $(SYZ_FUZZ_LOADER): syzkaller/lota_bpf_fuzz.c | $(BUILD_DIR)
 	$(QUIET_CC)
 	$(Q)$(CC) $(CFLAGS) -o $@ $< -lbpf
+
+# Hook matrix guard: one README row per LSM program, naming only programs the
+# object defines and syscalls lota.cfg.example enables, as ``literals``
+SYZ_MATRIX_DOC := syzkaller/README.rst
+SYZ_MATRIX_CFG := syzkaller/lota.cfg.example
+
+define SYZ_MATRIX_CELLS
+awk -v col=$(1) ' \
+	/^Hook coverage matrix$$/ { inm = 1; next } \
+	inm && /^[+|]/ { intab = 1 } \
+	inm && intab && !/^[+|]/ { exit } \
+	inm && /^\+=/ { body = 1 } \
+	body && /^\|/ { \
+		split($$0, c, "|"); cell = c[col + 1]; \
+		while (match(cell, /``[^`]+``/)) { \
+			print substr(cell, RSTART + 2, RLENGTH - 4); \
+			cell = substr(cell, RSTART + RLENGTH); \
+		} \
+	}' $(SYZ_MATRIX_DOC)
+endef
+
+.PHONY: check-syzkaller-matrix
+check-syzkaller-matrix:
+	$(Q)rc=0; \
+	progs=$$(sed -n 's/^SEC("lsm\(\.s\)\{0,1\}\/\([a-z_]*\)")$$/\2/p' $(BPF_MIRROR_SRC) | sort -u); \
+	rows=$$($(call SYZ_MATRIX_CELLS,1) | grep -E '^[a-z_]+$$' | sort -u); \
+	calls=$$($(call SYZ_MATRIX_CELLS,2) | grep -E '^[a-z0-9_]+(\$$[A-Za-z0-9_]+)?$$' | sort -u); \
+	enabled=$$(sed -n '/"enable_syscalls"/,/\]/s/^ *"\([^"]*\)",\{0,1\}$$/\1/p' $(SYZ_MATRIX_CFG) | sort -u); \
+	if [ -z "$$progs" ] || [ -z "$$rows" ]; then \
+		echo "ERROR: no LSM programs in $(BPF_MIRROR_SRC) or no matrix in $(SYZ_MATRIX_DOC)"; \
+		exit 1; \
+	fi; \
+	missing=$$(printf '%s\n' $$progs | while read -r p; do \
+		printf '%s\n' $$rows | grep -qx "$$p" || echo "$$p"; done); \
+	stale=$$(printf '%s\n' $$rows | while read -r p; do \
+		printf '%s\n' $$progs | grep -qx "$$p" || echo "$$p"; done); \
+	unlisted=$$(printf '%s\n' $$calls | while read -r c; do \
+		[ -z "$$c" ] || printf '%s\n' $$enabled | grep -qxF "$$c" || echo "$$c"; done); \
+	if [ -n "$$missing" ]; then \
+		echo "ERROR: $(SYZ_MATRIX_DOC) hook matrix has no row for:" $$missing; rc=1; \
+	fi; \
+	if [ -n "$$stale" ]; then \
+		echo "ERROR: $(SYZ_MATRIX_DOC) hook matrix names programs $(BPF_MIRROR_SRC) lacks:" $$stale; rc=1; \
+	fi; \
+	if [ -n "$$unlisted" ]; then \
+		echo "ERROR: $(SYZ_MATRIX_DOC) hook matrix names calls $(SYZ_MATRIX_CFG) does not enable:" $$unlisted; rc=1; \
+	fi; \
+	if [ $$rc = 0 ]; then \
+		echo "syzkaller-matrix: $$(printf '%s\n' $$progs | wc -l) programs, each with a row"; \
+	fi; \
+	exit $$rc
+
+REPO_MAP_DOC := README.rst
+
+# README.rst's repository map must name every tracked top-level directory
+.PHONY: check-repo-map
+check-repo-map:
+	$(Q)rc=0; \
+	dirs=$$(git ls-files | sed -n 's,^\([^./][^/]*\)/.*,\1,p' | sort -u); \
+	mapped=$$(awk '/^Repository map$$/ { inmap = 1; next } \
+		/^Who are you\?$$/ { inmap = 0 } \
+		inmap && /^\* / { bullet = 1 } \
+		inmap && /^$$/ { bullet = 0 } \
+		inmap && bullet' $(REPO_MAP_DOC) | \
+		grep -o '``[^`]*/``' | tr -d '`' | cut -d/ -f1 | sort -u); \
+	if [ -z "$$dirs" ]; then \
+		echo "ERROR: no tracked directories - run from a git checkout"; \
+		exit 1; \
+	fi; \
+	if [ -z "$$mapped" ]; then \
+		echo "ERROR: no repository map in $(REPO_MAP_DOC)"; \
+		exit 1; \
+	fi; \
+	missing=$$(printf '%s\n' $$dirs | while read -r d; do \
+		printf '%s\n' $$mapped | grep -qx "$$d" || echo "$$d"; done); \
+	stale=$$(printf '%s\n' $$mapped | while read -r d; do \
+		printf '%s\n' $$dirs | grep -qx "$$d" || echo "$$d"; done); \
+	if [ -n "$$missing" ]; then \
+		echo "ERROR: $(REPO_MAP_DOC) repository map does not name:" $$missing; rc=1; \
+	fi; \
+	if [ -n "$$stale" ]; then \
+		echo "ERROR: $(REPO_MAP_DOC) repository map names directories the tree lacks:" $$stale; rc=1; \
+	fi; \
+	if [ $$rc = 0 ]; then \
+		echo "repo-map: $$(printf '%s\n' $$dirs | wc -l) tracked directories, each named"; \
+	fi; \
+	exit $$rc
+
+# Every tree path an installed header names must resolve;
+# include/linux/ paths name the kernel tree and are skipped
+.PHONY: check-header-paths
+check-header-paths:
+	$(Q)rc=0; \
+	dirs=$$(git ls-files | sed -n 's,^\([^./][^/]*\)/.*,\1,p' | sort -u | paste -sd'|'); \
+	if [ -z "$$dirs" ]; then \
+		echo "ERROR: no tracked directories - run from a git checkout"; \
+		exit 1; \
+	fi; \
+	refs=$$(grep -onE "($$dirs)/[A-Za-z0-9_./-]+" $(wildcard include/*.h) | \
+		sed 's/\.$$//' | grep -v ':include/linux/' | sort -u); \
+	for ref in $$refs; do \
+		path=$$(printf '%s' "$$ref" | cut -d: -f3-); \
+		[ -e "$$path" ] || { \
+			echo "ERROR: $$(printf '%s' "$$ref" | cut -d: -f1,2) points at $$path, which is not in the tree"; \
+			rc=1; \
+		}; \
+	done; \
+	if [ $$rc = 0 ]; then \
+		echo "header-paths: $$(printf '%s\n' $$refs | wc -l) pointers, each resolving"; \
+	fi; \
+	exit $$rc
 
 help:
 	@echo "LOTA $(PROJECT_VERSION)"
@@ -2172,8 +2654,10 @@ help:
 	@echo "  wine-hook        Build Wine/Proton LD_PRELOAD hook"
 	@echo "  anticheat        Build anti-cheat compatibility layer"
 	@echo "  packages         Build native RPMs (agent, verifier, attest-ca, sdk-devel) via nfpm"
+	@echo "  package-lint     rpmlint the built RPMs with the project filter file (gating)"
 	@echo "  rhel-package-smoke Build+install the RPMs on Rocky 9 (podman); no attestation"
 	@echo "  container-images Build distroless OCI images for verifier + attest-CA (ko)"
+	@echo "  container-image-attest-ca-hsm  Build the PKCS#11 (HSM) attest-CA image"
 	@echo "  srpm             Build a source RPM from HEAD (COPR / rpmbuild)"
 	@echo "  rpm-sign         GPG-sign the RPMs in PKG_DIR (LOTA_RPM_GPG_NAME)"
 	@echo "  dnf-repo         Build a signed createrepo_c dnf repository under REPO_DIR"
@@ -2190,15 +2674,23 @@ help:
 	@echo "  valgrind-smoke   Run CLI smoke paths under valgrind memcheck"
 	@echo "  check-includes   Fail on transitive (unused-direct) #includes"
 	@echo "  check-el9-decls  Syntax-check the C tree against el9 headers"
-	@echo "  check-abi        Fail on drift in the public SDK symbols and headers"
+	@echo "  check-abi        Fail on drift in the public SDK symbols, headers and type layout"
 	@echo "  check-stack-frames  Fail on an oversized stack frame in a shipped binary"
 	@echo "  check-doc-diagnostics  Fail on a quoted message the program cannot print"
+	@echo "  check-config-commands  Fail on a shipped config naming a command that does not resolve"
+	@echo "  check-test-build-dir  Fail on a test or demo naming the default build directory"
+	@echo "  check-syzkaller-matrix  Fail on an LSM program with no row in the syzkaller hook matrix"
+	@echo "  check-repo-map   Fail on a tracked directory the repository map does not name"
+	@echo "  check-header-paths  Fail on an installed header pointing at a path the tree lacks"
 	@echo "  abi-baseline     Rewrite packaging/abi after a deliberate API change"
 	@echo "  sdk-stage        Lay out the installed SDK prefix under build/stage"
 	@echo "  lint             clang-format (C) + golangci-lint (Go) checks"
 	@echo "  sparse           sparse semantic check over C sources"
 	@echo "  smatch           smatch flow analysis over C sources"
 	@echo "  coccicheck       Coccinelle semantic-patch rules over C sources"
+	@echo "  check-helm-chart Hold the chart to the version and the pod it deploys"
+	@echo "  check-container-images Hold the images to the key roads they offer"
+	@echo "  helm-package     Package the verifier Helm chart at the tree's version"
 	@echo "  helm-lint        Lint the verifier Helm chart"
 	@echo "  helm-template    Render the Helm chart and schema-check with kubeconform"
 	@echo "  observability-lint  Validate the Prometheus/Grafana reference configs"
@@ -2207,6 +2699,7 @@ help:
 	@echo ""
 	@echo "Fuzz targets:"
 	@echo "  fuzz-all         Build every fuzz target"
+	@echo "  fuzz-regress     Replay the committed C fuzz reproducers"
 	@echo "  fuzz-agent       Build IPC/agent fuzz target"
 	@echo "  fuzz-config      Build config parser fuzz target"
 	@echo "  fuzz-seal-envelope Build sealed-envelope parser/AEAD fuzz target"
@@ -2263,21 +2756,37 @@ bench: bench-c bench-go
 	@echo "Benchmarks complete. Raw output under $(BENCH_RESULTS)/"
 	@echo "Render Documentation/performance/evaluation.rst with: benchmarks/scripts/run_all.sh"
 
+# /bin/sh has no pipefail: a pipe into tee reports tee's status,
+# so the runner's own status goes through a file.
 bench-go:
 	@mkdir -p $(BENCH_RESULTS)
-	@for m in $(GO_BENCH_MODULES); do \
+	@rc=0; \
+	for m in $(GO_BENCH_MODULES); do \
 		name=$$(echo $$m | tr '/' '-'); \
+		out=$(abspath $(BENCH_RESULTS))/go-$$name.txt; \
 		echo "== go bench: $$m =="; \
 		( cd $$m && go test -run '^$$' -bench=. -benchmem \
-			-count=$(BENCH_COUNT) -benchtime=$(BENCH_TIME) ./... ) \
-			| tee $(abspath $(BENCH_RESULTS))/go-$$name.txt; \
-	done
+			-count=$(BENCH_COUNT) -benchtime=$(BENCH_TIME) ./...; \
+			echo $$? >$$out.status ) | tee $$out; \
+		s=$$(cat $$out.status); rm -f $$out.status; \
+		if [ "$$s" != 0 ]; then \
+			echo "bench-go: $$m exited $$s, $$out is not a measurement" >&2; \
+			rc=$$s; \
+		fi; \
+	done; \
+	exit $$rc
 
 bench-c: $(BENCH_C_BIN)
 	@mkdir -p $(BENCH_RESULTS)
 	@rm -f $(BENCH_RESULTS)/c-sdk.json
-	@BENCH_JSON=$(abspath $(BENCH_RESULTS))/c-sdk.json $(BENCH_C_BIN) \
-		| tee $(BENCH_RESULTS)/c-sdk.txt
+	@out=$(BENCH_RESULTS)/c-sdk.txt; \
+	( BENCH_JSON=$(abspath $(BENCH_RESULTS))/c-sdk.json $(BENCH_C_BIN); \
+		echo $$? >$$out.status ) | tee $$out; \
+	s=$$(cat $$out.status); rm -f $$out.status; \
+	if [ "$$s" != 0 ]; then \
+		echo "bench-c: $(BENCH_C_BIN) exited $$s, $$out is not a measurement" >&2; \
+		exit $$s; \
+	fi
 
 $(BENCH_C_BIN): $(BENCH_DIR)/c/bench_sdk.c $(ANTICHEAT_SRCS) \
 		$(SDK_DIR)/lota_gaming.c $(SERVER_SDK_SRCS) $(VERSION_FILE) \
@@ -2295,3 +2804,4 @@ bench-clean:
 -include $(SERVER_SDK_OBJS:.o=.d)
 -include $(WINE_HOOK_OBJS:.o=.d)
 -include $(ANTICHEAT_OBJS:.o=.d)
+-include $(FUZZ_CONFIG_OBJS:.o=.d)

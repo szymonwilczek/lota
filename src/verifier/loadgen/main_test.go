@@ -5,10 +5,14 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
+	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
+	"time"
 )
 
 func TestRealMainUsageAndErrors(t *testing.T) {
@@ -112,5 +116,91 @@ func TestWriteSummaryStdout(t *testing.T) {
 	nested := filepath.Join(t.TempDir(), "no-such-dir", "out.json")
 	if err := writeSummary(nested, &summary{}); err == nil {
 		t.Error("writeSummary into a missing directory succeeded")
+	}
+}
+
+// captureStderr runs f with os.Stderr replaced by a pipe and returns what it wrote
+func captureStderr(t *testing.T, f func()) string {
+	t.Helper()
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("pipe: %v", err)
+	}
+	saved := os.Stderr
+	os.Stderr = w
+	done := make(chan string, 1)
+	go func() {
+		var buf bytes.Buffer
+		_, _ = io.Copy(&buf, r)
+		done <- buf.String()
+	}()
+	f()
+	os.Stderr = saved
+	if err := w.Close(); err != nil {
+		t.Fatalf("close pipe: %v", err)
+	}
+	out := <-done
+	if err := r.Close(); err != nil {
+		t.Fatalf("close pipe read end: %v", err)
+	}
+	return out
+}
+
+// rateLineOf returns the summary line that carries the headline rate
+func rateLineOf(t *testing.T, out string) string {
+	t.Helper()
+	for _, line := range strings.Split(out, "\n") {
+		if strings.HasPrefix(line, "rate ") {
+			return line
+		}
+	}
+	t.Fatalf("summary has no rate line:\n%s", out)
+	return ""
+}
+
+// The human rate line names the attempts that did not verify
+func TestHumanRateLineNamesWhatDidNotVerify(t *testing.T) {
+	degraded := &summary{
+		Mode: modeStorm, Server: "127.0.0.1:8443", Agents: 5000,
+		Started: time.Now(), Finished: time.Now().Add(time.Second),
+		Attempts: 5000, OK: 2267, RatePerSec: 2019.0,
+		TransportError: map[string]uint64{"dial": 2733},
+		AgentsNeverOK:  2733,
+	}
+	line := rateLineOf(t, captureStderr(t, func() { printHuman(degraded) }))
+	if !strings.Contains(line, "2019.0/s") {
+		t.Errorf("rate line lost the verified rate: %q", line)
+	}
+	if !strings.Contains(line, "2267") || !strings.Contains(line, "5000") {
+		t.Errorf("rate line does not say how much of the fleet verified: %q", line)
+	}
+
+	clean := &summary{
+		Mode: modeStorm, Server: "127.0.0.1:8443", Agents: 5000,
+		Started: time.Now(), Finished: time.Now().Add(time.Second),
+		Attempts: 5000, OK: 5000, RatePerSec: 3854.0,
+	}
+	cleanLine := rateLineOf(t, captureStderr(t, func() { printHuman(clean) }))
+	if !strings.Contains(cleanLine, "3854.0/s") {
+		t.Errorf("rate line lost the verified rate: %q", cleanLine)
+	}
+	if strings.Contains(cleanLine, "did not verify") {
+		t.Errorf("clean run reported a shortfall: %q", cleanLine)
+	}
+}
+
+// The human output prints the verified and attempted rates, each labelled
+func TestHumanRateLineNamesBothRates(t *testing.T) {
+	s := &summary{
+		Mode: modeStorm, Server: "127.0.0.1:8443", Agents: 5000,
+		Started: time.Now(), Finished: time.Now().Add(time.Second),
+		Attempts: 5000, OK: 2267, RatePerSec: 2019.0,
+	}
+	line := rateLineOf(t, captureStderr(t, func() { printHuman(s) }))
+	if !strings.Contains(line, "verified") {
+		t.Errorf("rate line does not name what the headline rate counts: %q", line)
+	}
+	if !strings.Contains(line, "attempted") {
+		t.Errorf("rate line does not name the attempted rate beside it: %q", line)
 	}
 }

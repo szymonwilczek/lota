@@ -28,14 +28,17 @@
 #include <linux/openat2.h>
 
 #include "../../include/lota.h"
+#include "../../include/lota_ima_policy_scope.h"
 #include "../../include/lota_ima_xattr.h"
 #include "bpf_loader.h"
+#include "cgroup_guard.h"
 #include "journal.h"
 #include "policy_sign.h"
 #include "sb_dev.h"
 
 #ifndef EAUTH
 #define EAUTH 80
+#endif
 
 /* Where the kernel publishes the boot parameters and the loaded IMA policy */
 #define IMA_CMDLINE_PATH "/proc/cmdline"
@@ -43,7 +46,6 @@
 
 /* The rule set this package ships, named in the refusal that needs it */
 #define LOTA_IMA_POLICY_ASSET "/usr/share/lota/ima/lota-ima-policy"
-#endif
 
 /* Stats map indices - must match BPF program */
 #define STAT_TOTAL_EXECS 0
@@ -58,6 +60,8 @@
 #define STAT_SETUID_EVENTS 9
 #define STAT_BPF_SYSCALL_BLOCKED 13
 #define STAT_MOUNTS_BLOCKED 16
+#define STAT_KILL_GUARD_BLOCKED 17
+#define STAT_EVENTS_YIELDED 18
 
 struct protected_pid_entry {
 	uint64_t start_time_ticks;
@@ -237,6 +241,18 @@ static int libbpf_print_fn(enum libbpf_print_level level, const char *format,
 	return n;
 }
 
+/*
+ * libbpf_refusal - -errno for a libbpf call that returned NULL, or @fallback
+ * when it set none; never 0, which callers read as loaded.
+ * Call sites clear errno first.
+ */
+static int libbpf_refusal(int fallback)
+{
+	int err = errno;
+
+	return err > 0 ? -err : fallback;
+}
+
 int bpf_loader_build_integrity_config(struct integrity_data *cfg,
 				      const char *sig_enforce_path,
 				      const char *lockdown_path)
@@ -382,11 +398,8 @@ int bpf_loader_kernel_lockdown_restrictive(const char *lockdown_path)
 /*
  * Does the loaded IMA policy appraise an executable?
  *
- * Appraisal applies only to the func= rules the policy contains, so the mode
- * on the cmdline is half the answer: a policy of measure rules under
- * ima_appraise=enforce blocks on nothing. A rule that names no func= applies
- * to every hook, exec included; dont_appraise is an exclusion list and is not
- * appraisal however it reads to a substring match.
+ * Which rule counts is lota_ima_policy_rule_appraises_exec(),
+ * shared with the installer stage whose job is to satisfy this gate.
  *
  * Returns 0 when an executable is appraised, -ENOENT when the policy is readable
  * and appraises none, and -EACCES when it could not be read at all,
@@ -397,7 +410,7 @@ int bpf_loader_kernel_lockdown_restrictive(const char *lockdown_path)
  */
 static int ima_policy_appraises_exec(const char *policy_path, int *read_err)
 {
-	char line[512];
+	char line[LOTA_IMA_POLICY_RULE_MAX];
 	FILE *fp;
 	int found = 0;
 
@@ -410,21 +423,7 @@ static int ima_policy_appraises_exec(const char *policy_path, int *read_err)
 	}
 
 	while (fgets(line, sizeof(line), fp)) {
-		char *save = NULL;
-		char *tok = strtok_r(line, " \t\n", &save);
-		bool covers_exec = true;
-
-		if (!tok || strcmp(tok, "appraise") != 0)
-			continue;
-
-		while ((tok = strtok_r(NULL, " \t\n", &save))) {
-			if (strncmp(tok, "func=", 5) != 0)
-				continue;
-			covers_exec = strcmp(tok + 5, "BPRM_CHECK") == 0;
-			break;
-		}
-
-		if (covers_exec) {
+		if (lota_ima_policy_rule_appraises_exec(line)) {
 			found = 1;
 			break;
 		}
@@ -448,7 +447,7 @@ static int ima_policy_appraises_exec(const char *policy_path, int *read_err)
  * Neither half is the answer on its own.
  */
 int bpf_loader_ima_appraisal_active(const char *cmdline_path,
-				    const char *policy_path)
+				    const char *policy_path, int secureboot)
 {
 	char buf[4096];
 	size_t len = 0;
@@ -456,6 +455,19 @@ int bpf_loader_ima_appraisal_active(const char *cmdline_path,
 	char *save = NULL;
 	int read_err = 0;
 	int ret;
+
+	if (secureboot) {
+		ret = ima_policy_appraises_exec(policy_path, &read_err);
+		if (ret == -EACCES) {
+			lota_warn("IMA appraisal blocks (Secure Boot leaves "
+				  "the kernel's built-in mode in force) but %s "
+				  "could not be read (%s): whether any "
+				  "executable is appraised is unverified",
+				  policy_path, strerror(-read_err));
+			return 0;
+		}
+		return ret;
+	}
 
 	ret = read_text_file(cmdline_path, buf, sizeof(buf), &len);
 	if (ret < 0)
@@ -720,8 +732,17 @@ static int agent_self_immutability_enforced(void)
 	return ret;
 }
 
+int bpf_loader_kernel_appraises_exec(void)
+{
+	return bpf_loader_ima_appraisal_active(
+		IMA_CMDLINE_PATH, IMA_POLICY_PATH,
+		bpf_loader_secure_boot_enabled() == 0);
+}
+
 int bpf_loader_verify_kernel_runtime_hardening(bool allow_mutable_rootfs)
 {
+	/* read first: verity decides whether the appraisal gate is advisory */
+	int verity = agent_self_fsverity_enabled();
 	int ret;
 
 	ret = bpf_loader_kernel_lockdown_restrictive(LOTA_KERNEL_LOCKDOWN_PATH);
@@ -741,23 +762,53 @@ int bpf_loader_verify_kernel_runtime_hardening(bool allow_mutable_rootfs)
 		return ret;
 	}
 
-	ret = bpf_loader_ima_appraisal_active(IMA_CMDLINE_PATH,
-					      IMA_POLICY_PATH);
-	if (ret == -ENOENT) {
+	ret = bpf_loader_kernel_appraises_exec();
+	if (ret < 0 &&
+	    (lota_ima_scope_is_advisory(verity == 0) || allow_mutable_rootfs)) {
+		lota_warn(
+			"The kernel appraises no executable on this host "
+			"(%s), so nothing but LOTA's own bindings covers what "
+			"this machine runs: the agent binary is held by "
+			"fs-verity and the PCR 14 boot commitment, and every "
+			"token says KERNEL_APPRAISAL is clear. IMA-signed "
+			"distribution packages, or an image pipeline that "
+			"signs the executables and enrols its certificate, "
+			"are what set it",
+			ret == -ENOENT ? "the loaded policy carries no "
+					 "appraise rule that reaches an exec" :
+					 "IMA appraisal is not in a blocking "
+					 "mode");
+		ret = 0;
+	} else if (ret == -ENOENT) {
 		lota_err("IMA appraisal is in a blocking mode but %s carries "
-			 "no appraise rule for func=BPRM_CHECK, so no "
-			 "executable on this host is appraised; the rules are "
-			 "in %s and the routes that supply the signatures they "
-			 "verify are in the production bringup guide",
+			 "no appraise rule that reaches an executable, so no "
+			 "executable on this host is appraised -- and this "
+			 "agent has no fs-verity of its own, so a signed "
+			 "security.ima xattr nothing appraises is all that "
+			 "stands between its binary and an offline swap. The "
+			 "scope "
+			 "comes with the signatures the rules verify: "
+			 "IMA-signed distribution packages with the "
+			 "distribution's certificate on the .ima keyring, or "
+			 "an image pipeline that signs the executables and "
+			 "enrols its certificate -- both are in the production "
+			 "bringup guide. Loading rules over unsigned "
+			 "executables refuses them instead, and the developer "
+			 "baseline at %s is not exempt from that; a host whose "
+			 "policy carries 'appraise func=POLICY_CHECK "
+			 "appraise_type=imasig' refuses to load it unsigned in "
+			 "the first place",
 			 IMA_POLICY_PATH, LOTA_IMA_POLICY_ASSET);
 		return ret;
 	}
 	if (ret < 0) {
 		lota_err("IMA appraisal is not in an enforcing mode "
 			 "(ima_appraise=enforce or fix required on the kernel "
-			 "cmdline; "
-			 "log and the default off do not block on integrity "
-			 "failures)");
+			 "cmdline; log and the default off do not block on "
+			 "integrity failures). This host booted without Secure "
+			 "Boot, where the parameter is the whole answer, and "
+			 "its agent binary carries no fs-verity, so appraisal "
+			 "is the only thing that could bind it");
 		return ret;
 	}
 
@@ -828,6 +879,70 @@ int bpf_loader_verify_kernel_runtime_hardening(bool allow_mutable_rootfs)
 	return 0;
 }
 
+/*
+ * Arm guarded_files with the agent's cgroup.kill and each ancestor's:
+ * a write there SIGKILLs the agent past lota_task_kill.
+ * No unified hierarchy is not a failure; any other error is.
+ */
+static int arm_kill_guard(struct bpf_loader_ctx *ctx)
+{
+	struct cgroup_guard_file files[LOTA_CGROUP_GUARD_MAX];
+	char cgroup_path[PATH_MAX];
+	uint32_t kind = LOTA_GUARD_CGROUP_KILL;
+	int count;
+	int ret;
+
+	ret = cgroup_guard_self_path("/proc/self/cgroup", cgroup_path,
+				     sizeof(cgroup_path));
+	if (ret == -ENOENT) {
+		lota_info(
+			"No unified cgroup hierarchy: no cgroup.kill road to guard");
+		return 0;
+	}
+	if (ret < 0) {
+		lota_err("Failed to read the agent's own cgroup: %s",
+			 strerror(-ret));
+		return ret;
+	}
+
+	count = cgroup_guard_collect(LOTA_CGROUP_MOUNT_ROOT, cgroup_path, files,
+				     LOTA_CGROUP_GUARD_MAX);
+	if (count < 0) {
+		lota_err("Failed to resolve the cgroup.kill files of %s: %s",
+			 cgroup_path, strerror(-count));
+		return count;
+	}
+	if (count == 0) {
+		lota_info("cgroup %s carries no cgroup.kill file", cgroup_path);
+		return 0;
+	}
+
+	for (int i = 0; i < count; i++) {
+		struct trusted_lib_key key = { .dev = files[i].dev,
+					       .ino = files[i].ino };
+
+		if (bpf_map_update_elem(ctx->guarded_files_fd, &key, &kind,
+					BPF_ANY) < 0) {
+			ret = -errno;
+			lota_err("Failed to guard a cgroup.kill file: %s",
+				 strerror(-ret));
+			return ret;
+		}
+	}
+
+	/* the set is complete; left writable, a reload could drop it */
+	if (bpf_map_freeze(ctx->guarded_files_fd) < 0) {
+		ret = -errno;
+		lota_err("Failed to freeze guarded_files map: %s",
+			 strerror(-ret));
+		return ret;
+	}
+
+	lota_info("Kill guard armed on %d cgroup.kill file(s) above %s", count,
+		  cgroup_path);
+	return 0;
+}
+
 int bpf_loader_init(struct bpf_loader_ctx *ctx)
 {
 	if (!ctx)
@@ -839,6 +954,7 @@ int bpf_loader_init(struct bpf_loader_ctx *ctx)
 	ctx->config_fd = -1;
 	ctx->task_auth_fd = -1;
 	ctx->trusted_libs_fd = -1;
+	ctx->guarded_files_fd = -1;
 	ctx->protected_pids_fd = -1;
 	ctx->allow_verity_digest_fd = -1;
 
@@ -1049,13 +1165,16 @@ int bpf_loader_load(struct bpf_loader_ctx *ctx, const char *bpf_obj_path,
 	 * swapped between verify and load.
 	 * libbpf duplicates obj_data, so it is freed right after
 	 */
+	errno = 0;
 	ctx->obj = bpf_object__open_mem(obj_data, obj_len, &opts);
 	free(obj_data);
 	obj_data = NULL;
 	if (!ctx->obj) {
+		int open_err = libbpf_refusal(-ENOEXEC);
+
 		lota_err("Failed to open BPF object %s: %s", bpf_obj_path,
-			 strerror(errno));
-		return -errno;
+			 strerror(-open_err));
+		return open_err;
 	}
 
 	bpf_object__for_each_program(prog, ctx->obj) {
@@ -1252,6 +1371,24 @@ int bpf_loader_load(struct bpf_loader_ctx *ctx, const char *bpf_obj_path,
 		}
 	}
 
+	/* required: without it cgroup.kill ends the agent past the signal gate */
+	ctx->guarded_files_fd =
+		bpf_object__find_map_fd_by_name(ctx->obj, "guarded_files");
+	if (ctx->guarded_files_fd < 0) {
+		err = ctx->guarded_files_fd;
+		lota_err("Failed to find guarded_files map");
+		goto err_close;
+	}
+	err = harden_fd_cloexec(ctx->guarded_files_fd, "guarded_files map");
+	if (err < 0) {
+		lota_err("Failed to harden guarded_files map fd: %s",
+			 strerror(-err));
+		goto err_close;
+	}
+	err = arm_kill_guard(ctx);
+	if (err < 0)
+		goto err_close;
+
 	/* Get fs-verity allowlist map fd */
 	ctx->allow_verity_digest_fd =
 		bpf_object__find_map_fd_by_name(ctx->obj, "allow_verity");
@@ -1327,11 +1464,12 @@ int bpf_loader_attach(struct bpf_loader_ctx *ctx)
 		    prog_type != BPF_PROG_TYPE_TRACING)
 			continue;
 
+		errno = 0;
 		link = bpf_program__attach(prog);
 		if (!link) {
-			err = -errno;
-			lota_err("Failed to attach program %s: %d",
-				 bpf_program__name(prog), err);
+			err = libbpf_refusal(-EIO);
+			lota_err("Failed to attach program %s: %s",
+				 bpf_program__name(prog), strerror(-err));
 			goto err_detach;
 		}
 
@@ -1392,12 +1530,15 @@ int bpf_loader_setup_ringbuf(struct bpf_loader_ctx *ctx,
 	 * Create ring buffer manager.
 	 * The handler will be called for each event.
 	 */
+	errno = 0;
 	ctx->ringbuf = ring_buffer__new(ctx->ringbuf_fd,
 					(ring_buffer_sample_fn)handler,
 					handler_ctx, NULL);
 	if (!ctx->ringbuf) {
-		lota_err("Failed to create ring buffer");
-		return -errno;
+		int rb_err = libbpf_refusal(-EIO);
+
+		lota_err("Failed to create ring buffer: %s", strerror(-rb_err));
+		return rb_err;
 	}
 
 	return 0;
@@ -1492,6 +1633,7 @@ void bpf_loader_cleanup(struct bpf_loader_ctx *ctx)
 	ctx->task_auth_fd = -1;
 	ctx->integrity_fd = -1;
 	ctx->trusted_libs_fd = -1;
+	ctx->guarded_files_fd = -1;
 	ctx->protected_pids_fd = -1;
 	ctx->allow_verity_digest_fd = -1;
 }
@@ -1985,6 +2127,9 @@ int bpf_loader_get_extended_stats(struct bpf_loader_ctx *ctx,
 	read_stat(ctx->stats_fd, STAT_BPF_SYSCALL_BLOCKED,
 		  &stats->bpf_syscall_blocked);
 	read_stat(ctx->stats_fd, STAT_MOUNTS_BLOCKED, &stats->mounts_blocked);
+	read_stat(ctx->stats_fd, STAT_KILL_GUARD_BLOCKED,
+		  &stats->kill_guard_blocked);
+	read_stat(ctx->stats_fd, STAT_EVENTS_YIELDED, &stats->events_yielded);
 
 	return 0;
 }

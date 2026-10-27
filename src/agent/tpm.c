@@ -65,6 +65,11 @@ static int tpm_aik_load_auth_plaintext(struct tpm_context *ctx);
 static int tpm_aik_save_auth_sealed(struct tpm_context *ctx,
 				    const uint8_t auth[TPM_AIK_AUTH_SIZE]);
 static int tpm_aik_load_auth_sealed(struct tpm_context *ctx);
+static int tpm_aik_auth_record_exists(struct tpm_context *ctx);
+static int tpm_object_name(struct tpm_context *ctx, ESYS_TR object,
+			   uint8_t *out, size_t out_max, uint16_t *out_len);
+static void tpm_aik_report_auth_load_failure(struct tpm_context *ctx,
+					     int load_rc);
 static int tpm_aik_generate_auth(uint8_t auth[TPM_AIK_AUTH_SIZE]);
 static int tpm_aik_reprovision_with_auth(struct tpm_context *ctx,
 					 int had_existing_aik);
@@ -75,9 +80,12 @@ static int aik_exists(struct tpm_context *ctx, ESYS_TR *handle_out);
 /*
  * Detach an ESYS handle, unless there is nothing to detach.
  *
- * Esys_EvictControl hands back ESYS_TR_NONE when the call removed a persistent
- * object, and closing that is an error the TSS library reports itself, on stderr,
- * in its own words.
+ * ESYS caches object metadata, Name included, per TPM handle number.
+ * A handle left open keeps a stale Name, and once the object is replaced every
+ * later open of that number fails. Detach when the operation ends.
+ *
+ * Esys_EvictControl returns ESYS_TR_NONE after removing an object;
+ * closing that makes the TSS print an error on stderr.
  */
 static void tpm_tr_close(struct tpm_context *ctx, ESYS_TR *handle)
 {
@@ -155,6 +163,18 @@ static bool tss2_rc_is_lockout(TSS2_RC rc)
 	if (!tpm_rc_layer_is_tpm(rc))
 		return false;
 	return tpm_rc_decode(rc) == TPM2_RC_LOCKOUT;
+}
+
+/*
+ * Return true if @rc may mean a stale ESYS object record for the handle.
+ *
+ * ESYS reports a Name mismatch only as TSS2_ESYS_RC_GENERAL_FAILURE.
+ * The code is broad, so the caller only reconnects once: a process-local reset,
+ * no TPM command.
+ */
+static bool tss2_rc_is_stale_object_record(TSS2_RC rc)
+{
+	return rc == TSS2_ESYS_RC_GENERAL_FAILURE;
 }
 
 static bool tss2_rc_is_transient(TSS2_RC rc)
@@ -711,6 +731,9 @@ int tpm_init(struct tpm_context *ctx)
 	ctx->aik_meta_loaded = false;
 	memset(ctx->aik_auth, 0, sizeof(ctx->aik_auth));
 	ctx->aik_auth_loaded = false;
+	memset(ctx->aik_object_name, 0, sizeof(ctx->aik_object_name));
+	ctx->aik_object_name_size = 0;
+	ctx->aik_object_replaced = false;
 	memset(ctx->prev_aik_public, 0, sizeof(ctx->prev_aik_public));
 	ctx->prev_aik_public_size = 0;
 	ctx->grace_deadline = 0;
@@ -836,6 +859,9 @@ void tpm_cleanup(struct tpm_context *ctx)
 
 	memset(ctx->aik_auth, 0, sizeof(ctx->aik_auth));
 	ctx->aik_auth_loaded = false;
+	memset(ctx->aik_object_name, 0, sizeof(ctx->aik_object_name));
+	ctx->aik_object_name_size = 0;
+	ctx->aik_object_replaced = false;
 
 	memset(ctx->self_hash, 0, sizeof(ctx->self_hash));
 	ctx->self_hash_ready = false;
@@ -1146,6 +1172,113 @@ static void tpm_forget_bound_aik(struct tpm_context *ctx)
 	ctx->aik_meta_loaded = false;
 	secure_bzero(ctx->aik_auth, sizeof(ctx->aik_auth));
 	ctx->aik_auth_loaded = false;
+	memset(ctx->aik_object_name, 0, sizeof(ctx->aik_object_name));
+	ctx->aik_object_name_size = 0;
+}
+
+/*
+ * Has the object behind the AIK handle changed since this context last looked?
+ * Nothing seen yet is not a change: the first look is what records the Name
+ * everything after it is compared against.
+ */
+static bool aik_object_changed(const uint8_t *seen, uint16_t seen_len,
+			       const uint8_t *live, uint16_t live_len)
+{
+	if (seen_len == 0 || live_len == 0)
+		return false;
+
+	if (seen_len != live_len)
+		return true;
+
+	return memcmp(seen, live, seen_len) != 0;
+}
+
+/*
+ * Keep the cached key only for the same publisher at the same handle.
+ * The handle alone is not an identity: --forget-publisher frees a number
+ * and the next publisher provisioned reuses it.
+ */
+static bool aik_binding_survives(const char *bound_id, uint32_t bound_handle,
+				 const char *new_id, uint32_t new_handle)
+{
+	if (!bound_id || !new_id)
+		return false;
+
+	if (bound_handle != new_handle)
+		return false;
+
+	return strcmp(bound_id, new_id) == 0;
+}
+
+/*
+ * Record the object standing at the AIK handle, and drop everything cached
+ * for the key when it is not the one this context last saw.
+ * The rotation record and the userAuth belong to one key; a replaced object
+ * leaves them describing a key the TPM no longer holds.
+ */
+static void aik_note_object(struct tpm_context *ctx, ESYS_TR object)
+{
+	TPM2B_NAME *name = NULL;
+
+	if (Esys_TR_GetName(ctx->esys_ctx, object, &name) != TSS2_RC_SUCCESS)
+		return;
+	if (!name)
+		return;
+	if (name->size > sizeof(ctx->aik_object_name)) {
+		Esys_Free(name);
+		return;
+	}
+
+	if (aik_object_changed(ctx->aik_object_name, ctx->aik_object_name_size,
+			       name->name, name->size)) {
+		tpm_forget_bound_aik(ctx);
+		ctx->aik_object_replaced = true;
+	}
+
+	memcpy(ctx->aik_object_name, name->name, name->size);
+	ctx->aik_object_name_size = name->size;
+	Esys_Free(name);
+}
+
+/*
+ * Open the ESYS session again over the same device connection.
+ *
+ * Only the ESYS object cache goes stale, so keep the TCTI and replace the session.
+ * The rest of the context (self-measurement, PCR 14 verdict, profile binding)
+ * survives; a restart would lose it, and PCR 14 cannot be committed twice in
+ * one boot.
+ */
+static int tpm_esys_reconnect(struct tpm_context *ctx)
+{
+	TSS2_RC rc;
+
+	if (!ctx || !ctx->initialized || !ctx->esys_ctx || !ctx->tcti_ctx)
+		return -EINVAL;
+
+	Esys_Finalize(&ctx->esys_ctx);
+	rc = Esys_Initialize(&ctx->esys_ctx, ctx->tcti_ctx, NULL);
+	if (rc != TSS2_RC_SUCCESS) {
+		/* The context has no session left. Say so */
+		ctx->esys_ctx = NULL;
+		ctx->initialized = false;
+		return tss2_rc_to_errno(rc);
+	}
+
+	/* The session that held what was cached for the key is gone */
+	tpm_forget_bound_aik(ctx);
+	return 0;
+}
+
+bool tpm_aik_object_replaced(struct tpm_context *ctx)
+{
+	bool replaced;
+
+	if (!ctx)
+		return false;
+
+	replaced = ctx->aik_object_replaced;
+	ctx->aik_object_replaced = false;
+	return replaced;
 }
 
 bool tpm_aik_key_is_shared(const struct tpm_context *ctx)
@@ -1184,7 +1317,8 @@ bool tpm_aik_replacing_shared_key(const struct tpm_context *ctx,
 	return tpm_aik_key_is_shared(ctx);
 }
 
-bool tpm_aik_provisioning_orphans_cert(int key_present, bool cert_stored)
+bool tpm_aik_provisioning_orphans_cert(int key_present, bool cert_stored,
+				       int cert_match)
 {
 	/*
 	 * key_present is negative when the TPM could not answer,
@@ -1193,7 +1327,16 @@ bool tpm_aik_provisioning_orphans_cert(int key_present, bool cert_stored)
 	if (key_present != 0)
 		return false;
 
-	return cert_stored;
+	if (!cert_stored)
+		return false;
+
+	/*
+	 * The key that came back decides. Anything other than a certificate
+	 * naming a different key is somebody else's report: a match is a
+	 * publisher that is fine, and a certificate that cannot be read
+	 * at all is the renewal path's to describe.
+	 */
+	return cert_match == -EKEYREJECTED;
 }
 
 void tpm_aik_allow_shared_key_replace(struct tpm_context *ctx, bool allow)
@@ -1241,6 +1384,7 @@ int tpm_bind_profile(struct tpm_context *ctx, const struct profile_paths *paths)
 {
 	uint32_t candidates[TPM_AIK_PROFILE_HANDLE_COUNT];
 	char previous_meta_path[sizeof(ctx->aik_meta_path)];
+	char previous_profile_id[sizeof(ctx->aik_profile_id)];
 	uint32_t previous_handle;
 	size_t candidate_count = 0;
 	uint32_t handle = 0;
@@ -1250,6 +1394,8 @@ int tpm_bind_profile(struct tpm_context *ctx, const struct profile_paths *paths)
 		return -EINVAL;
 
 	previous_handle = ctx->aik_handle;
+	snprintf(previous_profile_id, sizeof(previous_profile_id), "%s",
+		 ctx->aik_profile_id);
 	snprintf(previous_meta_path, sizeof(previous_meta_path), "%s",
 		 ctx->aik_meta_path);
 	snprintf(ctx->aik_profile_id, sizeof(ctx->aik_profile_id), "%s",
@@ -1268,7 +1414,8 @@ int tpm_bind_profile(struct tpm_context *ctx, const struct profile_paths *paths)
 
 	ret = profile_aik_handle_load(paths, &handle);
 	if (ret == 0) {
-		if (handle != previous_handle)
+		if (!aik_binding_survives(previous_profile_id, previous_handle,
+					  paths->id, handle))
 			tpm_forget_bound_aik(ctx);
 		ctx->aik_handle = handle;
 		return 0;
@@ -1300,7 +1447,8 @@ int tpm_bind_profile(struct tpm_context *ctx, const struct profile_paths *paths)
 		ret = profile_aik_handle_save(paths, candidates[i]);
 		if (ret < 0)
 			goto restore;
-		if (candidates[i] != previous_handle)
+		if (!aik_binding_survives(previous_profile_id, previous_handle,
+					  paths->id, candidates[i]))
 			tpm_forget_bound_aik(ctx);
 		ctx->aik_handle = candidates[i];
 		return 0;
@@ -1374,6 +1522,7 @@ static int aik_exists(struct tpm_context *ctx, ESYS_TR *handle_out)
 					     ESYS_TR_NONE, ESYS_TR_NONE,
 					     ESYS_TR_NONE, &key_handle));
 	if (rc == TSS2_RC_SUCCESS) {
+		aik_note_object(ctx, key_handle);
 		if (handle_out)
 			*handle_out = key_handle;
 		return 1;
@@ -1382,6 +1531,29 @@ static int aik_exists(struct tpm_context *ctx, ESYS_TR *handle_out)
 	/* TPM2_RC_HANDLE indicates the persistent object is absent */
 	if (tpm_rc_layer_is_tpm(rc) && tpm_rc_decode(rc) == TPM2_RC_HANDLE)
 		return 0;
+
+	/*
+	 * A session that still holds a record of an object this handle no longer
+	 * carries refuses every open of it, for the life of the process.
+	 * The TPM is not refusing anything -- another process opens the same
+	 * handle at the same moment -- so reopen the session once and ask again.
+	 */
+	if (tss2_rc_is_stale_object_record(rc)) {
+		ret = tpm_esys_reconnect(ctx);
+		if (ret < 0)
+			return ret;
+
+		TPM_CALL_RETRY(
+			ctx, rc,
+			Esys_TR_FromTPMPublic(ctx->esys_ctx, ctx->aik_handle,
+					      ESYS_TR_NONE, ESYS_TR_NONE,
+					      ESYS_TR_NONE, &key_handle));
+		if (rc == TSS2_RC_SUCCESS) {
+			aik_note_object(ctx, key_handle);
+			*handle_out = key_handle;
+			return 1;
+		}
+	}
 
 	return tss2_rc_to_errno(rc);
 }
@@ -1668,17 +1840,17 @@ int tpm_provision_aik(struct tpm_context *ctx)
 		}
 
 		/*
-		 * Strict at-rest sealing: if the sealed auth failed only
-		 * because the host is no longer in the sealed boot state, do
-		 * NOT silently rotate the enrolled AIK. Surface the policy
-		 * error so the operator runs the explicit recovery
-		 * (--reprovision-aik) and re-enrolls deliberately.
+		 * Rotate only when no record exists.
+		 * An unreadable record still authorizes a good key; replacing it
+		 * orphans the certificate, and no backup brings the key back.
 		 */
-		if (tpm_aik_strict_blocks_reprovision(ctx->seal_aik_auth_strict,
-						      load_rc))
+		if (tpm_aik_load_failure_blocks_reprovision(load_rc) ||
+		    tpm_aik_auth_record_exists(ctx) == 1) {
+			tpm_aik_report_auth_load_failure(ctx, load_rc);
 			return load_rc;
+		}
 
-		/* missing/corrupt auth means the key is not safely usable */
+		/* no record anywhere: the key can never be driven again */
 		ret = tpm_aik_reprovision_with_auth(ctx, 1);
 		if (ret < 0)
 			return ret;
@@ -1693,25 +1865,84 @@ int tpm_provision_aik(struct tpm_context *ctx)
 	return tpm_aik_save_new_key_metadata(ctx);
 }
 
-int tpm_reprovision_aik(struct tpm_context *ctx)
+/*
+ * Auth moved, key did not: leave the generation alone,
+ * since a bump marks every certificate over the key stale.
+ */
+static int tpm_aik_save_auth_rotation_metadata(struct tpm_context *ctx)
 {
+	if (!ctx || !ctx->initialized)
+		return -EINVAL;
+
+	if (!ctx->aik_meta_loaded)
+		return tpm_aik_save_new_key_metadata(ctx);
+	if (ctx->aik_meta.magic != TPM_AIK_META_MAGIC ||
+	    ctx->aik_meta.version != TPM_AIK_META_VERSION)
+		return -EINVAL;
+
+	ctx->aik_meta.auth_rotated_at = (int64_t)time(NULL);
+	return tpm_aik_save_metadata(ctx);
+}
+
+int tpm_reprovision_aik(struct tpm_context *ctx, bool *out_key_changed)
+{
+	uint8_t before[sizeof(((TPM2B_NAME *)0)->name)];
+	uint8_t after[sizeof(before)];
+	uint16_t before_len = 0;
+	uint16_t after_len = 0;
+	ESYS_TR key_handle = ESYS_TR_NONE;
+	bool key_changed = true;
+	bool had_name = false;
 	int had;
 	int ret;
 
 	if (!ctx || !ctx->initialized)
 		return -EINVAL;
 
-	had = aik_exists(ctx, NULL);
+	if (out_key_changed)
+		*out_key_changed = false;
+
+	had = aik_exists(ctx, &key_handle);
 	if (had < 0)
 		return had;
+	if (had == 1) {
+		ret = tpm_object_name(ctx, key_handle, before, sizeof(before),
+				      &before_len);
+		tpm_tr_close(ctx, &key_handle);
+		if (ret < 0)
+			return ret;
+		had_name = true;
+	}
 
-	/* rotate the AIK and its userAuth, sealing the new auth to the
-	 * current PCR state */
+	/* rotate the userAuth, sealing the new auth to the current PCR state */
 	ret = tpm_aik_reprovision_with_auth(ctx, had == 1 ? 1 : 0);
 	if (ret < 0)
 		return ret;
 
-	return tpm_aik_save_new_key_metadata(ctx);
+	/* same seed and template give the same key: compare Names */
+	if (had_name) {
+		key_handle = ESYS_TR_NONE;
+		ret = aik_exists(ctx, &key_handle);
+		if (ret < 0)
+			return ret;
+		if (ret == 1) {
+			ret = tpm_object_name(ctx, key_handle, after,
+					      sizeof(after), &after_len);
+			tpm_tr_close(ctx, &key_handle);
+			if (ret < 0)
+				return ret;
+			key_changed = before_len != after_len ||
+				      memcmp(before, after, before_len) != 0;
+		}
+	}
+
+	if (out_key_changed)
+		*out_key_changed = key_changed;
+
+	if (key_changed)
+		return tpm_aik_save_new_key_metadata(ctx);
+
+	return tpm_aik_save_auth_rotation_metadata(ctx);
 }
 
 int tpm_quote(struct tpm_context *ctx, const uint8_t *nonce, uint32_t pcr_mask,
@@ -1741,7 +1972,7 @@ int tpm_quote(struct tpm_context *ctx, const uint8_t *nonce, uint32_t pcr_mask,
 	if (!ctx->aik_auth_loaded) {
 		ret = tpm_aik_load_auth(ctx);
 		if (ret < 0)
-			return ret;
+			goto out;
 	}
 
 	{
@@ -1751,8 +1982,10 @@ int tpm_quote(struct tpm_context *ctx, const uint8_t *nonce, uint32_t pcr_mask,
 			       Esys_TR_SetAuth(ctx->esys_ctx, key_handle,
 					       &auth_value));
 		secure_bzero(auth_value.buffer, sizeof(auth_value.buffer));
-		if (rc != TSS2_RC_SUCCESS)
-			return tss2_rc_to_errno(rc);
+		if (rc != TSS2_RC_SUCCESS) {
+			ret = tss2_rc_to_errno(rc);
+			goto out;
+		}
 	}
 
 	memcpy(response->nonce, nonce, LOTA_NONCE_SIZE);
@@ -1761,7 +1994,7 @@ int tpm_quote(struct tpm_context *ctx, const uint8_t *nonce, uint32_t pcr_mask,
 
 	ret = tpm_read_pcrs_batch(ctx, pcr_mask, response->pcr_values);
 	if (ret < 0)
-		return ret;
+		goto out;
 
 	qualifying_data.size = LOTA_NONCE_SIZE;
 	memcpy(qualifying_data.buffer, nonce, LOTA_NONCE_SIZE);
@@ -1796,17 +2029,15 @@ int tpm_quote(struct tpm_context *ctx, const uint8_t *nonce, uint32_t pcr_mask,
 						     (void **)&signature);
 		secure_bzero(qualifying_data.buffer,
 			     sizeof(qualifying_data.buffer));
-		if (call_ret < 0)
-			return call_ret;
+		if (call_ret < 0) {
+			ret = call_ret;
+			goto out;
+		}
 	}
 
 	if (quoted->size > LOTA_MAX_ATTEST_SIZE) {
-		secure_bzero(quoted->attestationData,
-			     sizeof(quoted->attestationData));
-		secure_bzero(signature, sizeof(*signature));
-		Esys_Free(quoted);
-		Esys_Free(signature);
-		return -ENOSPC;
+		ret = -ENOSPC;
+		goto out;
 	}
 	memcpy(response->attest_data, quoted->attestationData, quoted->size);
 	response->attest_size = quoted->size;
@@ -1816,12 +2047,8 @@ int tpm_quote(struct tpm_context *ctx, const uint8_t *nonce, uint32_t pcr_mask,
 		size_t sig_size = signature->signature.rsassa.sig.size;
 		response->hash_alg = signature->signature.rsassa.hash;
 		if (sig_size > LOTA_MAX_SIG_SIZE) {
-			secure_bzero(quoted->attestationData,
-				     sizeof(quoted->attestationData));
-			secure_bzero(signature, sizeof(*signature));
-			Esys_Free(quoted);
-			Esys_Free(signature);
-			return -ENOSPC;
+			ret = -ENOSPC;
+			goto out;
 		}
 		memcpy(response->signature,
 		       signature->signature.rsassa.sig.buffer, sig_size);
@@ -1830,31 +2057,31 @@ int tpm_quote(struct tpm_context *ctx, const uint8_t *nonce, uint32_t pcr_mask,
 		size_t sig_size = signature->signature.rsapss.sig.size;
 		response->hash_alg = signature->signature.rsapss.hash;
 		if (sig_size > LOTA_MAX_SIG_SIZE) {
-			secure_bzero(quoted->attestationData,
-				     sizeof(quoted->attestationData));
-			secure_bzero(signature, sizeof(*signature));
-			Esys_Free(quoted);
-			Esys_Free(signature);
-			return -ENOSPC;
+			ret = -ENOSPC;
+			goto out;
 		}
 		memcpy(response->signature,
 		       signature->signature.rsapss.sig.buffer, sig_size);
 		response->signature_size = (uint16_t)sig_size;
 	} else {
-		secure_bzero(quoted->attestationData,
-			     sizeof(quoted->attestationData));
-		secure_bzero(signature, sizeof(*signature));
-		Esys_Free(quoted);
-		Esys_Free(signature);
-		return -ENOTSUP;
+		ret = -ENOTSUP;
+		goto out;
 	}
 
-	secure_bzero(quoted->attestationData, sizeof(quoted->attestationData));
-	secure_bzero(signature, sizeof(*signature));
-	Esys_Free(quoted);
-	Esys_Free(signature);
+	ret = 0;
 
-	return 0;
+out:
+	if (quoted) {
+		secure_bzero(quoted->attestationData,
+			     sizeof(quoted->attestationData));
+		Esys_Free(quoted);
+	}
+	if (signature) {
+		secure_bzero(signature, sizeof(*signature));
+		Esys_Free(signature);
+	}
+	tpm_tr_close(ctx, &key_handle);
+	return ret;
 }
 
 int tpm_hash_fd(int fd, uint8_t *hash)
@@ -2115,6 +2342,14 @@ int tpm_pcr_extend(struct tpm_context *ctx, uint32_t pcr_index,
  * the unit-test build (tpm.c is also linked from test_aik_rotation). */
 #define TPM_BOOT_COMMITMENT_PCR 14
 
+enum tpm_boot_commitment_outcome
+tpm_boot_commitment_outcome(enum tpm_pcr14_state state)
+{
+	if (state == TPM_PCR14_ALREADY_COMMITTED)
+		return TPM_BOOT_COMMITMENT_ALREADY_HELD;
+	return TPM_BOOT_COMMITMENT_EXTENDED;
+}
+
 int tpm_boot_commitment_digest(const uint8_t self_hash[], uint8_t out_digest[])
 {
 	if (!self_hash || !out_digest)
@@ -2302,7 +2537,7 @@ static int sha256_two_block(const uint8_t block_a[LOTA_HASH_SIZE],
  */
 static bool firmware_is_uefi(const struct tpm_context *ctx)
 {
-	const char *path = ctx->allow_env_tpm_overrides ?
+	const char *path = (ctx && ctx->allow_env_tpm_overrides) ?
 				   getenv("LOTA_UEFI_FIRMWARE_PATH") :
 				   NULL;
 
@@ -2310,6 +2545,29 @@ static bool firmware_is_uefi(const struct tpm_context *ctx)
 		path = UEFI_FIRMWARE_PATH;
 
 	return access(path, F_OK) == 0;
+}
+
+/* wording quoted by the platform-support page */
+static void report_non_uefi(void)
+{
+	fprintf(stderr,
+		"SECURITY: this host did not boot via UEFI (%s absent). "
+		"LOTA requires UEFI measured boot: legacy BIOS/CSM "
+		"measures neither the firmware and Secure Boot state "
+		"the verifier pins nor the PCR14 baseline the boot "
+		"commitment chains onto, so such a host cannot attest. "
+		"Switch the firmware out of legacy/CSM mode and "
+		"reinstall\n",
+		UEFI_FIRMWARE_PATH);
+}
+
+int tpm_firmware_refuses_attestation(const struct tpm_context *ctx)
+{
+	if (firmware_is_uefi(ctx))
+		return 0;
+
+	report_non_uefi();
+	return 1;
 }
 
 /*
@@ -2573,9 +2831,13 @@ enum tpm_pcr14_state tpm_classify_pcr14(const struct tpm_pcr14_observation *obs)
 		return TPM_PCR14_TAMPERED_BEFORE_START;
 
 	/* same boot session from here down */
-	if (memcmp(obs->current, obs->prev->pcr14, LOTA_HASH_SIZE) == 0 &&
-	    memcmp(obs->prev->self_hash, obs->self_hash, LOTA_HASH_SIZE) != 0)
-		return TPM_PCR14_BINARY_CHANGED;
+	if (memcmp(obs->current, obs->prev->pcr14, LOTA_HASH_SIZE) == 0) {
+		/* register untouched: the binary or the /run handoff moved */
+		if (memcmp(obs->prev->self_hash, obs->self_hash,
+			   LOTA_HASH_SIZE) != 0)
+			return TPM_PCR14_BINARY_CHANGED;
+		return TPM_PCR14_HANDOFF_CHANGED;
+	}
 
 	return TPM_PCR14_MUTATED_IN_SESSION;
 }
@@ -2595,16 +2857,9 @@ int tpm_extend_boot_commitment(struct tpm_context *ctx,
 	if (!ctx || !ctx->initialized || !self_hash)
 		return -EINVAL;
 
+	/* bring-up already asked; this covers direct callers */
 	if (!firmware_is_uefi(ctx)) {
-		fprintf(stderr,
-			"SECURITY: this host did not boot via UEFI (%s absent). "
-			"LOTA requires UEFI measured boot: legacy BIOS/CSM "
-			"measures neither the firmware and Secure Boot state "
-			"the verifier pins nor the PCR14 baseline the boot "
-			"commitment chains onto, so such a host cannot attest. "
-			"Switch the firmware out of legacy/CSM mode and "
-			"reinstall\n",
-			UEFI_FIRMWARE_PATH);
+		report_non_uefi();
 		return -ENOTSUP;
 	}
 
@@ -2827,6 +3082,33 @@ int tpm_extend_boot_commitment(struct tpm_context *ctx,
 		print_platform_clock(ctx, "PCR14 boot-commitment: TPM clock");
 		return -EBADMSG;
 
+	case TPM_PCR14_HANDOFF_CHANGED:
+		/*
+		 * An extended register with a rewritten snapshot looks the same;
+		 * name both, the reboot-fixable one first.
+		 */
+		fprintf(stderr,
+			"SECURITY: PCR14 holds exactly the value lota-agent "
+			"recorded for this boot session and the agent binary is "
+			"unchanged, but the boot commitment no longer derives "
+			"from the baseline handoff at %s: that handoff is not "
+			"the one this commitment was built on. The handoff is "
+			"written once per boot by the initramfs helper "
+			"(lota-pcr14-lock) and only read afterwards, so the "
+			"likely cause is that it was replaced after the helper "
+			"wrote it -- cold reboot to have the helper write it "
+			"again, and check what has write access to /run/lota. "
+			"One other cause leaves identical evidence and cannot "
+			"be told apart from here: PCR14 extended by another "
+			"writer and the snapshot at %s rewritten to match. If a "
+			"cold reboot does not clear this, treat it as that one "
+			"and audit both files' writers\n",
+			LOTA_PCR14_BASELINE_PATH,
+			ctx->clock_state_path[0] ? ctx->clock_state_path :
+						   TPM_CLOCK_STATE_PATH);
+		print_platform_clock(ctx, "PCR14 boot-commitment: TPM clock");
+		return -EBADMSG;
+
 	case TPM_PCR14_MUTATED_IN_SESSION:
 		fprintf(stderr,
 			"SECURITY: PCR14 no longer holds the value lota-agent "
@@ -3009,6 +3291,7 @@ cleanup:
 		Esys_Free(name);
 	if (qualified_name)
 		Esys_Free(qualified_name);
+	tpm_tr_close(ctx, &key_handle);
 
 	return ret;
 }
@@ -3147,6 +3430,8 @@ cleanup:
 		Esys_Free(ek_qualified_name);
 	if (ek_transient && ek_handle != ESYS_TR_NONE)
 		Esys_FlushContext(ctx->esys_ctx, ek_handle);
+	else if (!ek_transient)
+		tpm_tr_close(ctx, &ek_handle);
 
 	return ret;
 }
@@ -3211,6 +3496,7 @@ cleanup:
 		Esys_Free(name);
 	if (qualified_name)
 		Esys_Free(qualified_name);
+	tpm_tr_close(ctx, &key_handle);
 	return ret;
 }
 
@@ -3271,13 +3557,20 @@ static int tpm_load_ek(struct tpm_context *ctx, ESYS_TR *out_handle,
 	*out_handle = ESYS_TR_NONE;
 	*out_transient = false;
 
-	TPM_CALL_RETRY(ctx, rc,
-		       Esys_TR_FromTPMPublic(ctx->esys_ctx, TPM_EK_RSA_HANDLE,
-					     ESYS_TR_NONE, ESYS_TR_NONE,
-					     ESYS_TR_NONE, &ek_handle));
-	if (rc == TSS2_RC_SUCCESS) {
-		*out_handle = ek_handle;
-		return 0;
+	/*
+	 * Most hosts keep no persistent EK; anything short of a definite yes
+	 * falls back to the template, which derives the same key.
+	 */
+	if (tpm_handle_in_use(ctx, TPM_EK_RSA_HANDLE) == 1) {
+		TPM_CALL_RETRY(ctx, rc,
+			       Esys_TR_FromTPMPublic(ctx->esys_ctx,
+						     TPM_EK_RSA_HANDLE,
+						     ESYS_TR_NONE, ESYS_TR_NONE,
+						     ESYS_TR_NONE, &ek_handle));
+		if (rc == TSS2_RC_SUCCESS) {
+			*out_handle = ek_handle;
+			return 0;
+		}
 	}
 
 	{
@@ -3396,7 +3689,7 @@ int tpm_activate_credential(struct tpm_context *ctx, const uint8_t *cred_blob,
 	if (!ctx->aik_auth_loaded) {
 		ret = tpm_aik_load_auth(ctx);
 		if (ret < 0)
-			return ret;
+			goto cleanup;
 	}
 	{
 		TPM2B_AUTH auth = { .size = TPM_AIK_AUTH_SIZE };
@@ -3405,13 +3698,15 @@ int tpm_activate_credential(struct tpm_context *ctx, const uint8_t *cred_blob,
 			       Esys_TR_SetAuth(ctx->esys_ctx, aik_handle,
 					       &auth));
 		secure_bzero(auth.buffer, sizeof(auth.buffer));
-		if (rc != TSS2_RC_SUCCESS)
-			return tss2_rc_to_errno(rc);
+		if (rc != TSS2_RC_SUCCESS) {
+			ret = tss2_rc_to_errno(rc);
+			goto cleanup;
+		}
 	}
 
 	ret = tpm_load_ek(ctx, &ek_handle, &ek_transient);
 	if (ret < 0)
-		return ret;
+		goto cleanup;
 
 	TPM_CALL_RETRY(ctx, rc,
 		       Esys_StartAuthSession(ctx->esys_ctx, ESYS_TR_NONE,
@@ -3468,6 +3763,9 @@ cleanup:
 		Esys_FlushContext(ctx->esys_ctx, policy_session);
 	if (ek_transient && ek_handle != ESYS_TR_NONE)
 		Esys_FlushContext(ctx->esys_ctx, ek_handle);
+	else if (!ek_transient)
+		tpm_tr_close(ctx, &ek_handle);
+	tpm_tr_close(ctx, &aik_handle);
 	secure_bzero(&secret_2b, sizeof(secret_2b));
 	return ret;
 }
@@ -3950,19 +4248,222 @@ static int tpm_aik_load_auth(struct tpm_context *ctx)
 }
 
 /*
- * Pure recovery decision for a strict-mode AIK-auth load failure.
- *
- * Returns 1 when the agent must NOT silently reprovision (rotate) the AIK:
- * that is, in strict mode when the sealed auth failed specifically because
- * the host is no longer in the sealed boot state (PolicyPCR mismatch).
- * Silently rotating there would churn the enrolled AIK identity on every
- * legitimate firmware/kernel/agent change. In every other case (non-strict,
- * or a genuinely missing/corrupt auth) it returns 0 and the caller keeps
- * the existing reprovision-on-failure behaviour.
+ * Returns 1 unless load_rc is 0 or -ENOENT: unknown version, short record,
+ * bad magic, zero secret or a blob that no longer unseals all leave a working
+ * key. The caller still checks tpm_aik_auth_record_exists() on -ENOENT.
  */
-int tpm_aik_strict_blocks_reprovision(int strict, int load_rc)
+int tpm_aik_load_failure_blocks_reprovision(int load_rc)
 {
-	return (strict && load_rc == -LOTA_ERR_TPM_POLICY_FAIL) ? 1 : 0;
+	if (load_rc == 0)
+		return 0;
+
+	return load_rc == -ENOENT ? 0 : 1;
+}
+
+/* copy @object's TPM Name into @out; 0 or negative errno */
+static int tpm_object_name(struct tpm_context *ctx, ESYS_TR object,
+			   uint8_t *out, size_t out_max, uint16_t *out_len)
+{
+	TPM2B_PUBLIC *out_public = NULL;
+	TPM2B_NAME *qualified = NULL;
+	TPM2B_NAME *name = NULL;
+	TSS2_RC rc;
+	int ret;
+
+	struct esys_read_public_args args = {
+		.esys_ctx = ctx->esys_ctx,
+		.object_handle = object,
+		.out_public_out = &out_public,
+		.name_out = &name,
+		.qualified_name_out = &qualified,
+	};
+
+	ret = tpm_call_with_backoff(ctx, esys_read_public_thunk, &args, &rc, 3,
+				    (void **)&out_public, (void **)&name,
+				    (void **)&qualified);
+	if (ret < 0)
+		return ret;
+
+	if (!name || name->size == 0 || name->size > out_max) {
+		ret = -EIO;
+	} else {
+		memcpy(out, name->name, name->size);
+		*out_len = name->size;
+		ret = 0;
+	}
+
+	Esys_Free(out_public);
+	Esys_Free(name);
+	Esys_Free(qualified);
+	return ret;
+}
+
+/*
+ * The AIK is a primary derived from the hierarchy seed and the publisher's
+ * template, so re-derive it and compare Names; nothing on disk records which
+ * object was put at the handle.
+ */
+int tpm_aik_handle_holds_profile_key(struct tpm_context *ctx)
+{
+	uint8_t at_handle[sizeof(((TPM2B_NAME *)0)->name)];
+	uint8_t derived[sizeof(at_handle)];
+	uint16_t at_handle_len = 0;
+	uint16_t derived_len = 0;
+	uint8_t zero_auth[TPM_AIK_AUTH_SIZE] = { 0 };
+	ESYS_TR key_handle = ESYS_TR_NONE;
+	ESYS_TR transient = ESYS_TR_NONE;
+	int ret;
+
+	if (!ctx || !ctx->initialized)
+		return -EINVAL;
+
+	ret = aik_exists(ctx, &key_handle);
+	if (ret < 0)
+		return ret;
+	if (ret == 0)
+		return 0; /* nothing at the handle */
+
+	ret = tpm_object_name(ctx, key_handle, at_handle, sizeof(at_handle),
+			      &at_handle_len);
+	tpm_tr_close(ctx, &key_handle);
+	if (ret < 0)
+		return ret;
+
+	/* userAuth is not part of the Name, so any auth will do */
+	ret = create_aik_primary(ctx, &transient, zero_auth);
+	if (ret < 0)
+		return ret;
+
+	ret = tpm_object_name(ctx, transient, derived, sizeof(derived),
+			      &derived_len);
+	Esys_FlushContext(ctx->esys_ctx, transient);
+	if (ret < 0)
+		return ret;
+
+	if (at_handle_len != derived_len)
+		return 0;
+
+	return memcmp(at_handle, derived, at_handle_len) == 0 ? 1 : 0;
+}
+
+int tpm_aik_slot_census(struct tpm_context *ctx, const char *base_dir,
+			struct profile_aik_slots *out)
+{
+	uint32_t recorded[LOTA_PROFILE_MAX_AIK_HANDLES];
+	uint32_t in_use[LOTA_PROFILE_MAX_AIK_HANDLES];
+	size_t recorded_count = 0;
+	size_t in_use_count = 0;
+	int ret;
+
+	if (!ctx || !ctx->initialized || !out)
+		return -EINVAL;
+
+	ret = profile_aik_handles_recorded(
+		base_dir ? base_dir : LOTA_PROFILE_BASE_DIR, recorded,
+		sizeof(recorded) / sizeof(*recorded), &recorded_count);
+	if (ret < 0)
+		return ret;
+
+	for (uint32_t i = 0; i < TPM_AIK_PROFILE_HANDLE_COUNT; i++) {
+		uint32_t handle = TPM_AIK_PROFILE_HANDLE_BASE + i;
+
+		ret = tpm_handle_in_use(ctx, handle);
+		if (ret < 0)
+			return ret;
+		if (ret == 1)
+			in_use[in_use_count++] = handle;
+	}
+
+	return profile_aik_slot_tally(TPM_AIK_PROFILE_HANDLE_BASE,
+				      TPM_AIK_PROFILE_HANDLE_COUNT, recorded,
+				      recorded_count, in_use, in_use_count,
+				      out);
+}
+
+/*
+ * Returns 1 if either the plaintext or the sealed record is on disk.
+ * The hardened loader skips the sidecar and reports -ENOENT while it is present.
+ */
+static int tpm_aik_auth_record_exists(struct tpm_context *ctx)
+{
+	char path[PATH_MAX];
+
+	if (!ctx)
+		return -EINVAL;
+
+	if (tpm_aik_auth_path_for_ctx(ctx, path, sizeof(path)) == 0 &&
+	    access(path, F_OK) == 0)
+		return 1;
+	if (tpm_aik_auth_sealed_path_for_ctx(ctx, path, sizeof(path)) == 0 &&
+	    access(path, F_OK) == 0)
+		return 1;
+
+	return 0;
+}
+
+/*
+ * Report which record files exist and the version found,
+ * so a newer-format record can be told from a damaged disk.
+ */
+static void tpm_aik_report_auth_load_failure(struct tpm_context *ctx,
+					     int load_rc)
+{
+	struct aik_auth_record rec;
+	char plain[PATH_MAX];
+	char sealed[PATH_MAX];
+	int have_plain = 0;
+	int have_sealed = 0;
+	ssize_t n = -1;
+	int fd;
+
+	if (!ctx)
+		return;
+
+	if (tpm_aik_auth_path_for_ctx(ctx, plain, sizeof(plain)) == 0)
+		have_plain = access(plain, F_OK) == 0;
+	if (tpm_aik_auth_sealed_path_for_ctx(ctx, sealed, sizeof(sealed)) == 0)
+		have_sealed = access(sealed, F_OK) == 0;
+
+	fprintf(stderr,
+		"SECURITY: the attestation key's authorization could not be "
+		"read (%s). The key is left as it is.\n",
+		tpm_strerror(load_rc));
+
+	if (have_plain) {
+		fd = open(plain, O_RDONLY | O_CLOEXEC);
+		if (fd >= 0) {
+			n = read(fd, &rec, sizeof(rec));
+			close(fd);
+		}
+	}
+	if (n == (ssize_t)sizeof(rec)) {
+		fprintf(stderr,
+			"SECURITY: %s holds magic 0x%08X version %u; this "
+			"build reads magic 0x%08X version %u.\n",
+			plain, le32toh(rec.magic), le32toh(rec.version),
+			TPM_AIK_AUTH_MAGIC, TPM_AIK_AUTH_VERSION);
+		secure_bzero(&rec, sizeof(rec));
+	} else if (have_plain) {
+		fprintf(stderr,
+			"SECURITY: %s is shorter than the record it holds.\n",
+			plain);
+	}
+	if (have_sealed)
+		fprintf(stderr, "SECURITY: the sealed copy %s is present.\n",
+			sealed);
+
+	if (have_plain && !have_sealed &&
+	    (ctx->seal_aik_auth || ctx->seal_aik_auth_strict))
+		fprintf(stderr,
+			"SECURITY: run --seal-aik-auth to seal the record "
+			"this host already has.\n");
+	else
+		fprintf(stderr,
+			"SECURITY: restore the record, or replace the key "
+			"deliberately with --forget-publisher, "
+			"--allow-publisher and --enroll -- which issues a new "
+			"certificate, because the current one names the key "
+			"that is being replaced.\n");
 }
 
 /*
@@ -4026,8 +4527,10 @@ static int tpm_aik_reprovision_with_auth(struct tpm_context *ctx,
 					       ESYS_TR_NONE, ESYS_TR_NONE,
 					       ctx->aik_handle,
 					       &persistent_handle));
-			if (rc != TSS2_RC_SUCCESS)
+			if (rc != TSS2_RC_SUCCESS) {
+				tpm_tr_close(ctx, &old_handle);
 				return tss2_rc_to_errno(rc);
+			}
 			tpm_tr_close(ctx, &persistent_handle);
 		}
 	}
@@ -4445,11 +4948,19 @@ static int tpm_nv_read_index(struct tpm_context *ctx, uint32_t index,
 	TPM2B_NAME *nv_name = NULL;
 	uint32_t max_nv_size = 1024; /* conservative default */
 	uint32_t prop_val;
+	int ret;
 
 	if (!ctx || !ctx->initialized || !buf || !out_size)
 		return -EINVAL;
 
 	*out_size = 0;
+
+	/* many chips ship no EK certificate in NV; callers expect -ENOENT */
+	ret = tpm_handle_in_use(ctx, index);
+	if (ret < 0)
+		return ret;
+	if (ret == 0)
+		return -ENOENT;
 
 	/* query unlimited max NV buffer size */
 	if (tpm_get_prop(ctx, TPM2_PT_NV_BUFFER_MAX, &prop_val) == 0) {
@@ -4479,8 +4990,10 @@ static int tpm_nv_read_index(struct tpm_context *ctx, uint32_t index,
 		int call_ret = tpm_call_with_backoff(
 			ctx, esys_nv_read_public_thunk, &args, &rc, 2,
 			(void **)&nv_public, (void **)&nv_name);
-		if (call_ret < 0)
+		if (call_ret < 0) {
+			tpm_tr_close(ctx, &nv_handle);
 			return call_ret;
+		}
 	}
 
 	size_t data_size = nv_public->nvPublic.dataSize;
@@ -4488,6 +5001,7 @@ static int tpm_nv_read_index(struct tpm_context *ctx, uint32_t index,
 	Esys_Free(nv_name);
 
 	if (data_size > buf_size) {
+		tpm_tr_close(ctx, &nv_handle);
 		return -ENOSPC;
 	}
 
@@ -4513,14 +5027,17 @@ static int tpm_nv_read_index(struct tpm_context *ctx, uint32_t index,
 							     esys_nv_read_thunk,
 							     &args, &rc, 1,
 							     (void **)&nv_data);
-			if (call_ret < 0)
+			if (call_ret < 0) {
+				tpm_tr_close(ctx, &nv_handle);
 				return call_ret;
+			}
 		}
 
 		int chunk_ret =
 			lota_tpm_nv_chunk_check(nv_data->size, size_to_read);
 		if (chunk_ret < 0) {
 			Esys_Free(nv_data);
+			tpm_tr_close(ctx, &nv_handle);
 			return chunk_ret;
 		}
 
@@ -4529,6 +5046,7 @@ static int tpm_nv_read_index(struct tpm_context *ctx, uint32_t index,
 		Esys_Free(nv_data);
 	}
 
+	tpm_tr_close(ctx, &nv_handle);
 	*out_size = data_size;
 	return 0;
 }
@@ -4651,6 +5169,14 @@ static int seal_primary_lookup_persistent(struct tpm_context *ctx,
 {
 	ESYS_TR handle = ESYS_TR_NONE;
 	TSS2_RC rc;
+	int ret;
+
+	/* nothing persisted here is the default, and asking says so quietly */
+	ret = tpm_handle_in_use(ctx, TPM_SEAL_PRIMARY_HANDLE);
+	if (ret < 0)
+		return ret;
+	if (ret == 0)
+		return 0;
 
 	TPM_CALL_RETRY(ctx, rc,
 		       Esys_TR_FromTPMPublic(ctx->esys_ctx,
@@ -5039,15 +5565,16 @@ int tpm_unseal_secret(struct tpm_context *ctx, const uint8_t *blob,
 	if (ret < 0)
 		return ret;
 
+	/* a body that does not unmarshal is a bad file: -EBADMSG, not -EINVAL */
 	off = body_off;
 	rc = Tss2_MU_TPM2B_PUBLIC_Unmarshal(blob, blob_len, &off,
 					    &sealed_public);
 	if (rc != TSS2_RC_SUCCESS || off != body_off + meta.pub_len)
-		return -EINVAL;
+		return -EBADMSG;
 	rc = Tss2_MU_TPM2B_PRIVATE_Unmarshal(blob, blob_len, &off,
 					     &sealed_private);
 	if (rc != TSS2_RC_SUCCESS || off != blob_len)
-		return -EINVAL;
+		return -EBADMSG;
 
 	seal_mask_to_selection(meta.pcr_mask, &sel);
 
@@ -5333,8 +5860,10 @@ int tpm_evict_profile_aik(struct tpm_context *ctx, uint32_t handle)
 					 existing, ESYS_TR_PASSWORD,
 					 ESYS_TR_NONE, ESYS_TR_NONE, handle,
 					 &persistent));
-	if (rc != TSS2_RC_SUCCESS)
+	if (rc != TSS2_RC_SUCCESS) {
+		tpm_tr_close(ctx, &existing);
 		return tss2_rc_to_errno(rc);
+	}
 
 	tpm_tr_close(ctx, &persistent);
 	return 0;
@@ -5361,14 +5890,36 @@ int tpm_seal_evict_primary(struct tpm_context *ctx)
 					 existing, ESYS_TR_PASSWORD,
 					 ESYS_TR_NONE, ESYS_TR_NONE,
 					 TPM_SEAL_PRIMARY_HANDLE, &persistent));
-	if (rc != TSS2_RC_SUCCESS)
+	if (rc != TSS2_RC_SUCCESS) {
+		tpm_tr_close(ctx, &existing);
 		return tss2_rc_to_errno(rc);
+	}
 
 	tpm_tr_close(ctx, &persistent);
 	return 0;
 }
 
 #ifdef LOTA_TPM_TESTING
+int tpm_test_rc_is_stale_object_record(uint32_t rc)
+{
+	return tss2_rc_is_stale_object_record((TSS2_RC)rc) ? 1 : 0;
+}
+
+int tpm_test_aik_object_changed(const uint8_t *seen, uint16_t seen_len,
+				const uint8_t *live, uint16_t live_len)
+{
+	return aik_object_changed(seen, seen_len, live, live_len) ? 1 : 0;
+}
+
+int tpm_test_aik_binding_survives(const char *bound_id, uint32_t bound_handle,
+				  const char *new_id, uint32_t new_handle)
+{
+	return aik_binding_survives(bound_id, bound_handle, new_id,
+				    new_handle) ?
+		       1 :
+		       0;
+}
+
 int tpm_test_pcr_mask_to_selection(uint32_t pcr_mask, uint8_t out_select[3],
 				   uint32_t *out_count)
 {
@@ -5405,5 +5956,10 @@ int tpm_test_aik_plaintext_path(struct tpm_context *ctx, char *buf, size_t len)
 int tpm_test_aik_sealed_path(struct tpm_context *ctx, char *buf, size_t len)
 {
 	return tpm_aik_auth_sealed_path_for_ctx(ctx, buf, len);
+}
+
+int tpm_test_aik_auth_record_exists(struct tpm_context *ctx)
+{
+	return tpm_aik_auth_record_exists(ctx);
 }
 #endif /* LOTA_TPM_TESTING */

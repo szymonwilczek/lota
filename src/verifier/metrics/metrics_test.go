@@ -4,9 +4,13 @@
 package metrics
 
 import (
+	"fmt"
+	"regexp"
 	"strings"
 	"sync"
 	"testing"
+
+	"github.com/szymonwilczek/lota/verifier/types"
 )
 
 func TestCounter(t *testing.T) {
@@ -164,6 +168,26 @@ func TestExport_Format(t *testing.T) {
 	}
 }
 
+// Every verdict reason needs a zero series before it first fires, or alerts
+// on it read "no data" on a fresh verifier.
+// Seed from the verdict vocabulary, not a hand-kept list.
+func TestExport_SeedsEveryVerdictReason(t *testing.T) {
+	unknown := regexp.MustCompile(`^unknown_[0-9]+$`)
+	output := New().Export()
+
+	for code := uint32(1); code < 64; code++ {
+		reason := types.VerifyResultString(code)
+		if unknown.MatchString(reason) {
+			continue
+		}
+		want := fmt.Sprintf("lota_rejections_total{reason=%q} 0", reason)
+		if !strings.Contains(output, want) {
+			t.Errorf("verdict %d (%s) can refuse a round and has no series until it first fires",
+				code, reason)
+		}
+	}
+}
+
 func TestExport_EmptyRejections(t *testing.T) {
 	m := New()
 	output := m.Export()
@@ -212,6 +236,37 @@ func TestExport_ReanchorOutcomes(t *testing.T) {
 		`lota_reanchors_total{outcome="strong"} 1`,
 		`lota_reanchors_total{outcome="forced"} 1`,
 		`lota_reanchors_total{outcome="escalate"} 2`,
+	}
+	for _, check := range checks {
+		if !strings.Contains(output, check) {
+			t.Errorf("expected %q in output, not found.\nFull output:\n%s", check, output)
+		}
+	}
+}
+
+func TestExport_AttestationLogLoss(t *testing.T) {
+	m := New()
+
+	output := m.Export()
+	for _, want := range []string{
+		"lota_attestation_log_dropped_total 0",
+		"lota_attestation_log_failed_total 0",
+	} {
+		if !strings.Contains(output, want) {
+			t.Errorf("expected zero-value %q in output", want)
+		}
+	}
+
+	m.AttestationRecordsDropped(3)
+	m.AttestationRecordsDropped(2)
+	m.AttestationRecordsFailed(4)
+
+	output = m.Export()
+	checks := []string{
+		"# TYPE lota_attestation_log_dropped_total counter",
+		"lota_attestation_log_dropped_total 5",
+		"# TYPE lota_attestation_log_failed_total counter",
+		"lota_attestation_log_failed_total 4",
 	}
 	for _, check := range checks {
 		if !strings.Contains(output, check) {

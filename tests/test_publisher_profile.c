@@ -497,6 +497,65 @@ static void test_consent_required_is_distinguishable(void)
 	PASS();
 }
 
+/* a full key-slot range reaches the title as its own code, not AGENT_ERROR */
+static void server_no_key_slot(int client_fd)
+{
+	struct lota_ipc_set_profile payload;
+	struct lota_ipc_request req;
+
+	if (read_exact(client_fd, &req, sizeof(req)) < 0)
+		_exit(2);
+	if (read_exact(client_fd, &payload, sizeof(payload)) < 0)
+		_exit(3);
+	if (send_result(client_fd, LOTA_IPC_ERR_NO_KEY_SLOT) < 0)
+		_exit(4);
+
+	usleep(50000);
+}
+
+static void test_no_key_slot_is_distinguishable(void)
+{
+	struct lota_connect_opts opts = { 0 };
+	struct lota_client *client;
+	pid_t server;
+
+	TEST("a host with no key slot left says so, not \"agent error\"");
+
+	if (strcmp(lota_strerror(LOTA_ERR_NO_KEY_SLOT), "Unknown error") == 0) {
+		FAIL("the code has no words of its own");
+		return;
+	}
+
+	server = start_mock_agent(server_no_key_slot);
+	if (server < 0) {
+		if (socket_errno_is_sandbox(mock_errno)) {
+			SKIP("no unix sockets in this sandbox");
+			return;
+		}
+		FAIL("could not start the mock agent");
+		return;
+	}
+
+	opts.struct_size = sizeof(opts);
+	opts.socket_path = test_socket;
+	opts.timeout_ms = 2000;
+	opts.publisher_profile = PROFILE_HEX;
+
+	client = lota_connect_opts(&opts);
+	wait_agent(server);
+
+	if (client) {
+		FAIL("connected to a publisher with no slot for a key");
+		lota_disconnect(client);
+		return;
+	}
+	if (lota_connect_last_error() != LOTA_ERR_NO_KEY_SLOT) {
+		FAIL("the title cannot tell a full handle range from a fault");
+		return;
+	}
+	PASS();
+}
+
 /*
  * struct_size is what lets these options grow without second entry point,
  * so caller that never set it has to be refused rather than guessed at.
@@ -539,6 +598,77 @@ static void server_status_token_only(int client_fd)
 		_exit(8);
 
 	usleep(50000);
+}
+
+/* a TPM lockout reaches the title as its own code, not AGENT_ERROR */
+static void server_token_lockout(int client_fd)
+{
+	struct lota_ipc_request req;
+
+	if (read_exact(client_fd, &req, sizeof(req)) < 0)
+		_exit(2);
+	if (req.cmd != LOTA_IPC_CMD_GET_TOKEN)
+		_exit(3);
+	if (send_result(client_fd, LOTA_IPC_ERR_TPM_LOCKOUT) < 0)
+		_exit(4);
+
+	usleep(50000);
+}
+
+static void test_tpm_lockout_is_distinguishable(void)
+{
+	struct lota_connect_opts opts = { 0 };
+	struct lota_client *client;
+	struct lota_token token;
+	pid_t server;
+	int ret;
+
+	TEST("a locked TPM says so, not \"agent error\"");
+
+	if (strcmp(lota_strerror(LOTA_ERR_TPM_LOCKED), "Unknown error") == 0) {
+		FAIL("the code has no words of its own");
+		return;
+	}
+
+	server = start_mock_agent(server_token_lockout);
+	if (server < 0) {
+		if (socket_errno_is_sandbox(mock_errno)) {
+			SKIP("no unix sockets in this sandbox");
+			return;
+		}
+		FAIL("could not start the mock agent");
+		return;
+	}
+
+	opts.struct_size = sizeof(opts);
+	opts.socket_path = test_socket;
+	opts.timeout_ms = 2000;
+
+	client = lota_connect_opts(&opts);
+	if (!client) {
+		wait_agent(server);
+		FAIL("could not connect to the mock agent");
+		return;
+	}
+
+	memset(&token, 0, sizeof(token));
+	ret = lota_get_token(client, NULL, &token);
+	lota_disconnect(client);
+	wait_agent(server);
+
+	if (ret == LOTA_OK) {
+		FAIL("a locked chip issued a token");
+		return;
+	}
+	if (ret == LOTA_ERR_AGENT_ERROR) {
+		FAIL("the lockout arrives as a generic agent fault");
+		return;
+	}
+	if (ret != LOTA_ERR_TPM_LOCKED) {
+		FAIL("the refusal does not name the lockout");
+		return;
+	}
+	PASS();
 }
 
 typedef void (*scenario_fn)(int client_fd);
@@ -703,6 +833,8 @@ int main(void)
 	test_bad_request_is_not_an_unknown_publisher();
 	test_no_publisher_sends_nothing();
 	test_consent_required_is_distinguishable();
+	test_no_key_slot_is_distinguishable();
+	test_tpm_lockout_is_distinguishable();
 	test_connect_struct_size();
 	test_token_only_publisher_is_distinguishable();
 	test_flag_constants_agree();

@@ -18,6 +18,7 @@
 #include "bpf_loader.h"
 #include "dbus.h"
 #include "ipc.h"
+#include "watchdog.h"
 
 /*
  * Ringbuf drop telemetry.
@@ -125,6 +126,18 @@ static void agent_reload_publishers(struct agent_loop_ctx *ctx)
 	*ctx->target_count = count;
 	ipc_set_profiles(ctx->ipc_ctx, ctx->targets, count);
 	lota_info("Publisher list reloaded: %zu publisher(s)", count);
+
+	/* name unreadable anchors on reload, as startup does */
+	for (size_t i = 0; i < count; i++) {
+		if (!ctx->targets[i].profile_error)
+			continue;
+		lota_warn("Cannot read the CA trust anchor %s (%s): answering "
+			  "for %s without a publisher profile, so a title "
+			  "naming them is refused",
+			  ctx->targets[i].ca_cert,
+			  strerror(-ctx->targets[i].profile_error),
+			  ctx->targets[i].label);
+	}
 }
 
 int agent_run_event_loop(struct agent_loop_ctx *ctx)
@@ -150,7 +163,7 @@ int agent_run_event_loop(struct agent_loop_ctx *ctx)
 		poll_ringbuf_drops(ctx, &last_drops, &last_drop_poll_ns);
 
 		if (nfds == 0 && ctx->wd_enabled) {
-			sdnotify_watchdog_ping();
+			watchdog_beat();
 			continue;
 		}
 
@@ -196,6 +209,10 @@ int agent_run_event_loop(struct agent_loop_ctx *ctx)
 			} else if (events[i].data.fd ==
 				   bpf_loader_get_event_fd(ctx->bpf_ctx)) {
 				bpf_loader_consume(ctx->bpf_ctx);
+			} else if (ipc_socket_watch_fd(ctx->ipc_ctx) >= 0 &&
+				   events[i].data.fd ==
+					   ipc_socket_watch_fd(ctx->ipc_ctx)) {
+				(void)ipc_recheck_socket(ctx->ipc_ctx);
 			} else if (ctx->container_watch &&
 				   (events[i].data.fd ==
 					    container_watch_fd(
@@ -208,8 +225,9 @@ int agent_run_event_loop(struct agent_loop_ctx *ctx)
 			}
 		}
 
+		/* the supervisor thread pings; the loop only reports progress */
 		if (ctx->wd_enabled)
-			sdnotify_watchdog_ping();
+			watchdog_beat();
 	}
 
 	return 0;

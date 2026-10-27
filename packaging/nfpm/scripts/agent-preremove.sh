@@ -8,7 +8,9 @@ set -e
 
 case "$1" in
 0 | remove | purge)
-	systemctl --no-reload disable --now \
-		lota-agent.service lota-agent.socket >/dev/null 2>&1 || true
-	;;
+    # all shipped units; one left running outlives its deleted binary
+    systemctl --no-reload disable --now \
+        lota-agent.service lota-agent.socket lota-attest.service \
+        >/dev/null 2>&1 || true
+    ;;
 esac

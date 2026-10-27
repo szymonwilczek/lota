@@ -72,6 +72,10 @@ contents:
     dst: /usr/share/lota/selinux/lota.pp
     file_info:
       mode: 0644
+  - src: ./selinux/lota.if
+    dst: /usr/share/lota/selinux/lota.if
+    file_info:
+      mode: 0644
   - src: ./VERSION
     dst: /usr/share/lota/VERSION
     file_info:
@@ -121,7 +125,8 @@ contents:
     type: dir
     file_info:
       mode: 0755
-  - dst: /var/lib/lota/aiks
+  # agent state; the files inside are machine identity, unowned, kept on removal
+  - dst: /var/lib/lota
     type: dir
     file_info:
       mode: 0700

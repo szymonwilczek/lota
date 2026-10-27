@@ -6,16 +6,16 @@
  *
  * The register is the agent's boot commitment:
  * SHA-256 over the lock value the initramfs helper left, folded with
- * a digest of the agent binary and the TPM's resetCount and restartCount.
+ * a digest of the agent binary.
  * Every scenario below is built by deriving the register value the same
  * way the agent does, through tpm_derive_locked_pcr14(), so the states
  * under test are the states a real TPM produces.
  *
  * The case these tests exist for is a suspend/resume. A TPM that saves
- * and restores its state across S3 increments restartCount and leaves
- * resetCount and every PCR untouched, so the register still holds the
- * commitment the agent extended - derived with the restartCount that
- * was in effect then, not the one the next quote carries.
+ * and restores its state across S3 leaves every PCR untouched,
+ * so the register still holds the commitment the agent extended
+ * and the classifier has to read it as the same boot. The clock counters
+ * it carries are attribution material, not digest material.
  */
 
 #define LOTA_INTERNAL_TESTS 1
@@ -268,6 +268,40 @@ static void test_resume_does_not_license_a_new_binary(void)
 }
 
 /*
+ * A replaced /run baseline handoff makes the derivation miss (fail-closed),
+ * but the register is untouched: not a foreign writer.
+ */
+static void test_a_replaced_handoff_is_not_a_foreign_extend(void)
+{
+	static const uint8_t forged[LOTA_HASH_SIZE] = {
+		0xde, 0xad, 0xbe, 0xef, 0x01, 0x02, 0x03, 0x04,
+		0x05, 0x06, 0x07, 0x08, 0x09, 0x0a, 0x0b, 0x0c,
+		0x0d, 0x0e, 0x0f, 0x10, 0x11, 0x12, 0x13, 0x14,
+		0x15, 0x16, 0x17, 0x18, 0x19, 0x1a, 0x1b, 0x1c,
+	};
+	struct scenario s;
+	enum tpm_pcr14_state got;
+
+	TEST("a replaced baseline handoff is named, not called a foreign extend");
+
+	if (build_committed_boot(&s, RESTART_AT_EXTEND) < 0)
+		FAIL("failed to derive the register value");
+
+	/* same register, same binary; only the handoff file changed */
+	s.obs.baseline = forged;
+	if (tpm_derive_locked_pcr14(s.self_hash, forged, s.expected_locked) < 0)
+		FAIL("failed to derive from the forged handoff");
+
+	got = tpm_classify_pcr14(&s.obs);
+
+	if (got == TPM_PCR14_MUTATED_IN_SESSION)
+		FAIL("an untouched register reported as extended by somebody else");
+	if (got != TPM_PCR14_HANDOFF_CHANGED)
+		FAIL("the handoff is not named as what moved");
+	PASS();
+}
+
+/*
  * A cold boot advances resetCount, and a register that is already dirty
  * at that point was written before the agent ran.
  * That path must not be confused with a restart, whose resetCount never moves.
@@ -302,10 +336,14 @@ static void test_reset_count_advance_is_not_a_resume(void)
  * never read from the clock-state file. A local root who can rewrite that file
  * and who has extended PCR14 must not be able to dress the result up as
  * suspend/resume.
+ *
+ * A rewritten snapshot leaves the same evidence as a replaced handoff,
+ * so it lands in HANDOFF_CHANGED; what matters is that it still refuses.
  */
 static void test_forged_snapshot_cannot_fake_a_resume(void)
 {
 	struct scenario s;
+	enum tpm_pcr14_state got;
 
 	TEST("a forged clock-state snapshot cannot fake a resume");
 
@@ -317,8 +355,12 @@ static void test_forged_snapshot_cannot_fake_a_resume(void)
 	/* ... and wrote a snapshot that claims it is what we committed */
 	memcpy(s.prev.pcr14, s.current, LOTA_HASH_SIZE);
 
-	if (tpm_classify_pcr14(&s.obs) != TPM_PCR14_MUTATED_IN_SESSION)
+	got = tpm_classify_pcr14(&s.obs);
+
+	if (got == TPM_PCR14_ALREADY_COMMITTED)
 		FAIL("a forged snapshot was allowed to explain the register");
+	if (got != TPM_PCR14_HANDOFF_CHANGED)
+		FAIL("a forged snapshot must refuse through the verdict whose evidence it copies");
 	PASS();
 }
 
@@ -400,6 +442,29 @@ static void test_commitment_present_after_a_cold_boot_is_refused(void)
 	PASS();
 }
 
+/*
+ * The two accepting verdicts are not the same event. An operator reading
+ * "PCR 14 extended" after a restart budgets a reboot to get the register back;
+ * a restart that finds the commitment spent nothing.
+ */
+static void test_the_two_accepting_verdicts_are_told_apart(void)
+{
+	TEST("an extend and a commitment already held are named apart");
+
+	if (tpm_boot_commitment_outcome(TPM_PCR14_AWAITING_EXTEND) !=
+	    TPM_BOOT_COMMITMENT_EXTENDED)
+		FAIL("the state that extends must report an extend");
+
+	if (tpm_boot_commitment_outcome(TPM_PCR14_ALREADY_COMMITTED) !=
+	    TPM_BOOT_COMMITMENT_ALREADY_HELD)
+		FAIL("a warm restart must not report an extend");
+
+	if (tpm_boot_commitment_outcome(TPM_PCR14_UNATTRIBUTABLE) !=
+	    TPM_BOOT_COMMITMENT_EXTENDED)
+		FAIL("a refused state must not claim a commitment it never saw");
+	PASS();
+}
+
 int main(void)
 {
 	test_lock_missing_on_a_shim_host();
@@ -410,7 +475,9 @@ int main(void)
 	test_forged_snapshot_cannot_fake_a_resume();
 	test_foreign_extend_is_still_refused();
 	test_resume_does_not_license_a_new_binary();
+	test_a_replaced_handoff_is_not_a_foreign_extend();
 	test_reset_count_advance_is_not_a_resume();
+	test_the_two_accepting_verdicts_are_told_apart();
 
 	if (g_failures == 0) {
 		printf("\nAll tests passed.\n");

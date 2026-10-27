@@ -223,6 +223,44 @@ static void fit_text(enum text_role role, const char *src, int max_w, char *dst,
 	snprintf(dst, dst_cap, "...");
 }
 
+/*
+ * Split @src over two rows no wider than @max_w, at the last space that fits,
+ * or mid-run when there is none (a digest, a path).
+ * The caller ellipsizes what overflows the second row.
+ */
+static void wrap_two_rows(enum text_role role, const char *src, int max_w,
+			  char *row1, size_t cap1, char *row2, size_t cap2)
+{
+	int cw = 0, h = 0;
+	size_t per_row, len, brk;
+
+	row1[0] = '\0';
+	row2[0] = '\0';
+	if (!src || !*src)
+		return;
+
+	text_size(role, "x", &cw, &h);
+	per_row = (cw > 0 && max_w > cw) ? (size_t)(max_w / cw) : 0;
+	len = strlen(src);
+	if (per_row == 0 || len <= per_row) {
+		snprintf(row1, cap1, "%s", src);
+		return;
+	}
+
+	brk = per_row;
+	for (size_t i = per_row; i > 0; i--) {
+		if (src[i] == ' ') {
+			brk = i;
+			break;
+		}
+	}
+
+	snprintf(row1, cap1, "%.*s", (int)brk, src);
+	while (src[brk] == ' ')
+		brk++;
+	snprintf(row2, cap2, "%s", src + brk);
+}
+
 static void draw_text_fit(struct ui_context *ui, enum text_role role,
 			  const char *text, SDL_Color color, int x, int y,
 			  int max_w)
@@ -319,10 +357,15 @@ void ui_draw_banner(struct ui_context *ui, enum ui_verdict verdict,
 {
 	SDL_Color accent;
 	char reason_line[220];
+	char row1[220], row2[220];
+	int row_w = 0, row_h = 0;
 	const char *label = verdict_label(verdict);
 
 	verdict_palette(verdict, &accent);
 	snprintf(reason_line, sizeof(reason_line), "%s", reason ? reason : "");
+	wrap_two_rows(TEXT_SMALL, reason_line, UI_WINDOW_W - 32, row1,
+		      sizeof(row1), row2, sizeof(row2));
+	text_size(TEXT_SMALL, "x", &row_w, &row_h);
 
 	SDL_Rect banner = { 0, 0, UI_WINDOW_W, UI_BANNER_H };
 	fill_rect(ui, banner, color_bar());
@@ -331,7 +374,9 @@ void ui_draw_banner(struct ui_context *ui, enum ui_verdict verdict,
 	fill_rect(ui, strip, accent);
 
 	draw_text(ui, TEXT_STATUS, label, color_text(), 16, 10);
-	draw_text_fit(ui, TEXT_SMALL, reason_line, color_muted(), 16, 42,
+	draw_text_fit(ui, TEXT_SMALL, row1, color_muted(), 16, 42,
+		      UI_WINDOW_W - 32);
+	draw_text_fit(ui, TEXT_SMALL, row2, color_muted(), 16, 44 + row_h,
 		      UI_WINDOW_W - 32);
 }
 

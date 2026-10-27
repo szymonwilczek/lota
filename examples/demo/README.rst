@@ -135,10 +135,11 @@ reads ``LOTA_TCTI``. AIK metadata and AIK auth are redirected with
 
 ``LOTA_TCTI`` and ``LOTA_AIK_META_PATH`` are developer/demo hooks only. They
 are honored on the agent's interactive one-shot commands (the demo drives
-``--test-signed``), but the **persistent daemon ignores them**, so a stray
-environment cannot point the production root of trust at a different TPM or AIK
-key store. Production selects the TPM through ``/dev/tpmrm0`` and the
-compiled-in AIK paths.
+``--test-signed``), and **every deployed process ignores them**: the enforcing
+daemon, and the continuous attestation loop that ``lota-attest.service`` runs.
+``--attest`` counts as the loop once the host names publishers or an interval.
+Production selects the TPM through ``/dev/tpmrm0`` and the compiled-in AIK
+paths.
 
 .. _setupsh-reference:
 

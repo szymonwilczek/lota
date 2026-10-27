@@ -42,7 +42,8 @@ struct tpm_context;
  *
  * Version 2 appends the enrollment token so --reenroll and automatic certificate
  * renewal keep presenting it.
- * Loader requires the current record: short or older one is refused and the host re-enrolls.
+ * Loader requires the current record: a short or older one is refused, never
+ * re-enrolled over.
  * Record is root-only 0600: the token is tenant-admission secret.
  */
 struct enroll_state {
@@ -59,9 +60,26 @@ struct enroll_state {
 	char enroll_token[LOTA_ENROLL_MAX_TOKEN + 1];
 } __attribute__((packed));
 
-/* -ENOENT from the load when this profile has never enrolled */
 int enroll_state_save_path(const char *path, const struct enroll_state *st);
+
+/*
+ * Returns 0 or:
+ *   -ENOENT   no file: never enrolled
+ *   -ENOTSUP  unknown version
+ *   -EIO      short record
+ *   -EINVAL   not an enrollment record, or a bad argument
+ *
+ * Only -ENOENT means no record; check enroll_state_record_present() before
+ * enrolling, or a live certificate is overwritten.
+ */
 int enroll_state_load_path(const char *path, struct enroll_state *out);
+
+/* 1 if a record is on disk (readable or not) for this load result, else 0 */
+int enroll_state_record_present(int load_rc);
+
+/* magic + version of a refused record, for the refusal; 0 or -errno */
+int enroll_state_peek(const char *path, uint32_t *out_magic,
+		      uint32_t *out_version);
 
 struct enroll_challenge {
 	uint16_t status;

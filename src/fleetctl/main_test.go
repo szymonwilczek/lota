@@ -376,7 +376,8 @@ func TestReanchorReviewListAndAck(t *testing.T) {
 	}
 
 	code, out, _ = runCLI(t, noEnv, "-server", f.srv.URL,
-		"reanchor-review", "ack", "host1")
+		"reanchor-review", "ack", "host1",
+		"-reason", "reviewed the drift", "-actor", "alice@ops")
 	if code != exitOK || !strings.Contains(out, "reviewed host1") {
 		t.Fatalf("ack: exit = %d, output = %q", code, out)
 	}
@@ -544,12 +545,13 @@ func TestAuditTable(t *testing.T) {
 	}
 }
 
-// TestBanUnbanTenantForwarded checks the CLI forwards -tenant into the ban
-// request body and the unban query string.
+// TestBanUnbanTenantForwarded checks the CLI forwards -tenant into the body of
+// both verbs, which is the only way an administrator scoped to one tenant can
+// lift the ban it imposed.
 func TestBanUnbanTenantForwarded(t *testing.T) {
 	hwid := strings.Repeat("ab", 32)
 
-	var banBody []byte
+	var banBody, unbanBody []byte
 	var unbanQuery string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -560,6 +562,7 @@ func TestBanUnbanTenantForwarded(t *testing.T) {
 			_, _ = w.Write([]byte(`{"status":"banned"}`))
 		case r.Method == http.MethodDelete && r.URL.Path == "/api/v1/bans/"+hwid:
 			unbanQuery = r.URL.RawQuery
+			unbanBody, _ = io.ReadAll(r.Body)
 			_, _ = w.Write([]byte(`{"status":"unbanned"}`))
 		default:
 			w.WriteHeader(http.StatusNotFound)
@@ -584,8 +587,14 @@ func TestBanUnbanTenantForwarded(t *testing.T) {
 	if code != exitOK || !strings.Contains(out, "tenant acme") {
 		t.Fatalf("unban: exit = %d, out = %q", code, out)
 	}
-	if unbanQuery != "tenant=acme" {
-		t.Fatalf("unban query = %q, want tenant=acme", unbanQuery)
+	if unbanQuery != "" {
+		t.Fatalf("unban query = %q, want the tenant in the body instead", unbanQuery)
+	}
+	if err := json.Unmarshal(unbanBody, &body); err != nil {
+		t.Fatalf("unban body: %v", err)
+	}
+	if body["tenant"] != "acme" {
+		t.Fatalf("unban body tenant = %v, want acme", body["tenant"])
 	}
 }
 
@@ -758,5 +767,95 @@ func TestListTenantFlagRejectsPositional(t *testing.T) {
 		if code != exitUsage {
 			t.Fatalf("%s stray: exit = %d, want usage error", cmd, code)
 		}
+	}
+}
+
+// The verbs that change a client's or a machine's trust state. Four go through
+// parseActionArgs and two (ban, unban) check the same two flags themselves;
+// all six refuse without -reason and -actor.
+var trustChangingVerbs = []string{"revoke", "unrevoke", "ban", "unban", "reanchor", "delete"}
+
+// TestUsageShowsTheFlagsEveryTrustChangeRequires checks the built-in help against
+// the parser. Every verb that changes a client's trust state goes refuses without
+// both -reason and -actor, so an operator who types what -h prints gets a usage
+// error and exit 2 -- on unrevoke, in the middle of restoring a machine somebody
+// banned. On a host with no browser the help is the only interface documentation
+// there is.
+func TestUsageShowsTheFlagsEveryTrustChangeRequires(t *testing.T) {
+	for _, verb := range trustChangingVerbs {
+		var line string
+		for _, l := range strings.Split(usageText, "\n") {
+			if strings.HasPrefix(strings.TrimSpace(l), verb+" ") {
+				line = l
+				break
+			}
+		}
+		if line == "" {
+			t.Fatalf("usage text documents no %s command", verb)
+		}
+		if !strings.Contains(line, "-reason R") || !strings.Contains(line, "-actor A") {
+			t.Errorf("usage for %s = %q, want both -reason R and -actor A", verb, strings.TrimSpace(line))
+		}
+	}
+}
+
+// TestEveryTrustChangeRefusesWithoutTheFlags is the other half: the parser
+// really does require them, so the help above is not documenting a rule the
+// tool stopped enforcing.
+func TestEveryTrustChangeRefusesWithoutTheFlags(t *testing.T) {
+	for _, verb := range trustChangingVerbs {
+		code, _, stderr := runCLI(t, noEnv, "-server", "http://127.0.0.1:0", verb, "client-1")
+		if code != exitUsage {
+			t.Errorf("%s with no flags: exit = %d, want usage error (stderr %q)", verb, code, stderr)
+		}
+	}
+}
+
+// An empty review queue still reports its count on stderr;
+// silence reads the same as a command that did nothing.
+func TestEmptyReanchorReviewQueueSaysSo(t *testing.T) {
+	f := newFakeAPI(t, map[string]string{
+		"GET /api/v1/reanchor/review": `{"pending_review":[],"count":0}`,
+	})
+
+	code, out, errOut := runCLI(t, noEnv, "-server", f.srv.URL, "reanchor-review", "list")
+	if code != exitOK {
+		t.Fatalf("exit = %d", code)
+	}
+	if out != "" {
+		t.Fatalf("stdout = %q, want nothing so the listing stays pipeable", out)
+	}
+	if !strings.Contains(errOut, "0 client") {
+		t.Fatalf("stderr = %q, want an empty queue to say so", errOut)
+	}
+}
+
+// A populated queue prints one client ID per line on stdout, count on stderr.
+func TestPopulatedReanchorReviewQueueStaysPipeable(t *testing.T) {
+	f := newFakeAPI(t, map[string]string{
+		"GET /api/v1/reanchor/review": `{"pending_review":["host1","host2"],"count":2}`,
+	})
+
+	code, out, errOut := runCLI(t, noEnv, "-server", f.srv.URL, "reanchor-review", "list")
+	if code != exitOK {
+		t.Fatalf("exit = %d", code)
+	}
+	if out != "host1\nhost2\n" {
+		t.Fatalf("stdout = %q, want bare IDs for scripting", out)
+	}
+	if !strings.Contains(errOut, "2 client") {
+		t.Fatalf("stderr = %q, want the queue summary", errOut)
+	}
+}
+
+// Two-word subcommand, so not in trustChangingVerbs; checked on its own.
+func TestReanchorReviewAckRefusesWithoutTheFlags(t *testing.T) {
+	code, _, stderr := runCLI(t, noEnv, "-server", "http://127.0.0.1:0",
+		"reanchor-review", "ack", "client-1")
+	if code != exitUsage {
+		t.Fatalf("ack with no flags: exit = %d, want usage error (stderr %q)", code, stderr)
+	}
+	if !strings.Contains(stderr, "-reason") {
+		t.Fatalf("stderr = %q, want the missing flag named", stderr)
 	}
 }

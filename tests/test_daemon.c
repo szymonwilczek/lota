@@ -190,33 +190,48 @@ static void test_pidfile_lock_release_on_close(void)
 	PASS();
 }
 
+/* resolve only: creating the default would clobber a running agent's file */
 static void test_pidfile_default_path(void)
 {
-	int fd;
+	const char *resolved;
 
-	TEST("pidfile_create(NULL) uses default path");
+	TEST("a NULL pid file resolves to the shipped default");
 
-	fd = pidfile_create(NULL);
-	if (fd >= 0) {
-		/* running as root - clean up */
-		pidfile_remove(NULL, fd);
-		PASS();
+	resolved = daemon_pidfile_path(NULL);
+	if (!resolved) {
+		FAIL("daemon_pidfile_path(NULL) returned NULL");
 		return;
 	}
-
-	/*
-	 * non-root or sandboxed test runner: expect a permission/path error.
-	 * important thing is it does not crash
-	 */
-	if (fd == -EACCES || fd == -ENOENT || fd == -ENOTDIR || fd == -EPERM ||
-	    fd == -EROFS) {
-		PASS();
-	} else {
-		char msg[128];
-		snprintf(msg, sizeof(msg), "unexpected error: %d (%s)", fd,
-			 strerror(-fd));
+	if (strcmp(resolved, DAEMON_DEFAULT_PID_FILE) != 0) {
+		char msg[256];
+		snprintf(msg, sizeof(msg), "resolved to %s, expected %s",
+			 resolved, DAEMON_DEFAULT_PID_FILE);
 		FAIL(msg);
+		return;
 	}
+	/* a relative default would land in whatever directory started us */
+	if (resolved[0] != '/') {
+		FAIL("the default path is not absolute");
+		return;
+	}
+	PASS();
+}
+
+static void test_pidfile_explicit_path_is_kept(void)
+{
+	char path[256];
+	const char *resolved;
+
+	TEST("pidfile path given by the caller is used as given");
+
+	snprintf(path, sizeof(path), "%s/explicit.pid", tmp_dir);
+
+	resolved = daemon_pidfile_path(path);
+	if (!resolved || strcmp(resolved, path) != 0) {
+		FAIL("caller path was not returned unchanged");
+		return;
+	}
+	PASS();
 }
 
 static void test_pidfile_creates_parent_dir(void)
@@ -598,6 +613,7 @@ int main(void)
 	test_pidfile_double_lock();
 	test_pidfile_lock_release_on_close();
 	test_pidfile_default_path();
+	test_pidfile_explicit_path_is_kept();
 	test_pidfile_creates_parent_dir();
 	test_pidfile_rejects_symlink_path();
 

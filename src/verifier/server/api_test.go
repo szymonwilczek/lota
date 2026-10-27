@@ -271,6 +271,8 @@ func setupTestAPIListeningWithKeys(t *testing.T, adminKey, readerKey string) (*h
 		listener: ln,
 		addr:     ":8443",
 	}
+	// attestation listener is up
+	srv.serving.Store(true)
 
 	mux := http.NewServeMux()
 	NewAPIHandler(mux, v, srv, auditLog, nil, m, nil, adminKey, readerKey)
@@ -707,8 +709,8 @@ func TestStatsEndpoint(t *testing.T) {
 		t.Fatalf("Failed to decode response: %v", err)
 	}
 
-	if resp.PendingChallenges != 0 {
-		t.Errorf("Expected 0 pending challenges, got %d", resp.PendingChallenges)
+	if deref(resp.PendingChallenges) != 0 {
+		t.Errorf("Expected 0 pending challenges, got %d", deref(resp.PendingChallenges))
 	}
 	if resp.ActivePolicy != "default" {
 		t.Errorf("Expected active policy 'default', got '%s'", resp.ActivePolicy)
@@ -716,14 +718,25 @@ func TestStatsEndpoint(t *testing.T) {
 	if len(resp.LoadedPolicies) != 2 {
 		t.Errorf("Expected 2 loaded policies, got %d", len(resp.LoadedPolicies))
 	}
-	if resp.TotalAttestations != 0 {
-		t.Errorf("Expected 0 total attestations, got %d", resp.TotalAttestations)
+	if deref(resp.TotalAttestations) != 0 {
+		t.Errorf("Expected 0 total attestations, got %d", deref(resp.TotalAttestations))
 	}
 
 	ct := rec.Header().Get("Content-Type")
 	if ct != "application/json" {
 		t.Errorf("Expected Content-Type 'application/json', got '%s'", ct)
 	}
+}
+
+// deref reads a fleet-wide counter out of the stats body. They are pointers so
+// a tenant-scoped response can leave them out of the JSON entirely; an unscoped
+// response always carries them.
+func deref[T int | int64](p *T) T {
+	if p == nil {
+		var zero T
+		return zero
+	}
+	return *p
 }
 
 func TestStatsCounters(t *testing.T) {
@@ -739,8 +752,8 @@ func TestStatsCounters(t *testing.T) {
 	var resp statsResponse
 	json.NewDecoder(rec.Body).Decode(&resp)
 
-	if resp.PendingChallenges != 2 {
-		t.Errorf("Expected 2 pending challenges, got %d", resp.PendingChallenges)
+	if deref(resp.PendingChallenges) != 2 {
+		t.Errorf("Expected 2 pending challenges, got %d", deref(resp.PendingChallenges))
 	}
 }
 
@@ -973,14 +986,14 @@ func TestIntegrationAPI_AttestationCounters(t *testing.T) {
 	var resp statsResponse
 	json.NewDecoder(rec.Body).Decode(&resp)
 
-	if resp.TotalAttestations != 1 {
-		t.Errorf("total_attestations: got %d, want 1", resp.TotalAttestations)
+	if deref(resp.TotalAttestations) != 1 {
+		t.Errorf("total_attestations: got %d, want 1", deref(resp.TotalAttestations))
 	}
-	if resp.SuccessfulAttests != 1 {
-		t.Errorf("successful_attestations: got %d, want 1", resp.SuccessfulAttests)
+	if deref(resp.SuccessfulAttests) != 1 {
+		t.Errorf("successful_attestations: got %d, want 1", deref(resp.SuccessfulAttests))
 	}
-	if resp.FailedAttests != 0 {
-		t.Errorf("failed_attestations: got %d, want 0", resp.FailedAttests)
+	if deref(resp.FailedAttests) != 0 {
+		t.Errorf("failed_attestations: got %d, want 0", deref(resp.FailedAttests))
 	}
 	if resp.RegisteredClients != 1 {
 		t.Errorf("registered_clients: got %d, want 1", resp.RegisteredClients)
@@ -1012,14 +1025,14 @@ func TestIntegrationAPI_FailedAttestationCounter(t *testing.T) {
 	var resp statsResponse
 	json.NewDecoder(rec.Body).Decode(&resp)
 
-	if resp.TotalAttestations != 1 {
-		t.Errorf("total_attestations: got %d, want 1", resp.TotalAttestations)
+	if deref(resp.TotalAttestations) != 1 {
+		t.Errorf("total_attestations: got %d, want 1", deref(resp.TotalAttestations))
 	}
-	if resp.FailedAttests != 1 {
-		t.Errorf("failed_attestations: got %d, want 1", resp.FailedAttests)
+	if deref(resp.FailedAttests) != 1 {
+		t.Errorf("failed_attestations: got %d, want 1", deref(resp.FailedAttests))
 	}
-	if resp.SuccessfulAttests != 0 {
-		t.Errorf("successful_attestations: got %d, want 0", resp.SuccessfulAttests)
+	if deref(resp.SuccessfulAttests) != 0 {
+		t.Errorf("successful_attestations: got %d, want 0", deref(resp.SuccessfulAttests))
 	}
 
 	t.Log("✓ Failure counter correctly incremented for malformed report")
@@ -1035,19 +1048,19 @@ func TestIntegrationAPI_NonceConsumedVisibleInStats(t *testing.T) {
 
 	// before: 0 pending, 0 used
 	assertStats(t, mux, func(s statsResponse) {
-		if s.PendingChallenges != 0 {
-			t.Errorf("before: pending %d, want 0", s.PendingChallenges)
+		if deref(s.PendingChallenges) != 0 {
+			t.Errorf("before: pending %d, want 0", deref(s.PendingChallenges))
 		}
-		if s.UsedNonces != 0 {
-			t.Errorf("before: used %d, want 0", s.UsedNonces)
+		if deref(s.UsedNonces) != 0 {
+			t.Errorf("before: used %d, want 0", deref(s.UsedNonces))
 		}
 	})
 
 	// generate challenge: pending +1
 	challenge, _ := v.GenerateChallenge(clientID)
 	assertStats(t, mux, func(s statsResponse) {
-		if s.PendingChallenges != 1 {
-			t.Errorf("after challenge: pending %d, want 1", s.PendingChallenges)
+		if deref(s.PendingChallenges) != 1 {
+			t.Errorf("after challenge: pending %d, want 1", deref(s.PendingChallenges))
 		}
 	})
 
@@ -1059,11 +1072,11 @@ func TestIntegrationAPI_NonceConsumedVisibleInStats(t *testing.T) {
 	}
 
 	assertStats(t, mux, func(s statsResponse) {
-		if s.PendingChallenges != 0 {
-			t.Errorf("after verify: pending %d, want 0", s.PendingChallenges)
+		if deref(s.PendingChallenges) != 0 {
+			t.Errorf("after verify: pending %d, want 0", deref(s.PendingChallenges))
 		}
-		if s.UsedNonces != 1 {
-			t.Errorf("after verify: used %d, want 1", s.UsedNonces)
+		if deref(s.UsedNonces) != 1 {
+			t.Errorf("after verify: used %d, want 1", deref(s.UsedNonces))
 		}
 	})
 
@@ -1096,17 +1109,17 @@ func TestIntegrationAPI_ReplayAttackVisibleInStats(t *testing.T) {
 
 	// verify counters through API
 	assertStats(t, mux, func(s statsResponse) {
-		if s.TotalAttestations != 2 {
-			t.Errorf("total: %d, want 2", s.TotalAttestations)
+		if deref(s.TotalAttestations) != 2 {
+			t.Errorf("total: %d, want 2", deref(s.TotalAttestations))
 		}
-		if s.SuccessfulAttests != 1 {
-			t.Errorf("success: %d, want 1", s.SuccessfulAttests)
+		if deref(s.SuccessfulAttests) != 1 {
+			t.Errorf("success: %d, want 1", deref(s.SuccessfulAttests))
 		}
-		if s.FailedAttests != 1 {
-			t.Errorf("failed: %d, want 1 (replay)", s.FailedAttests)
+		if deref(s.FailedAttests) != 1 {
+			t.Errorf("failed: %d, want 1 (replay)", deref(s.FailedAttests))
 		}
-		if s.UsedNonces != 1 {
-			t.Errorf("used_nonces: %d, want 1", s.UsedNonces)
+		if deref(s.UsedNonces) != 1 {
+			t.Errorf("used_nonces: %d, want 1", deref(s.UsedNonces))
 		}
 	})
 
@@ -1200,11 +1213,11 @@ func TestIntegrationAPI_MultipleAttestationsSameClient(t *testing.T) {
 
 	// verify global stats
 	assertStats(t, mux, func(s statsResponse) {
-		if s.TotalAttestations != 5 {
-			t.Errorf("total: %d, want 5", s.TotalAttestations)
+		if deref(s.TotalAttestations) != 5 {
+			t.Errorf("total: %d, want 5", deref(s.TotalAttestations))
 		}
-		if s.SuccessfulAttests != 5 {
-			t.Errorf("success: %d, want 5", s.SuccessfulAttests)
+		if deref(s.SuccessfulAttests) != 5 {
+			t.Errorf("success: %d, want 5", deref(s.SuccessfulAttests))
 		}
 	})
 
@@ -1281,14 +1294,14 @@ func TestIntegrationAPI_InvalidSignatureVisibleInStats(t *testing.T) {
 	}
 
 	assertStats(t, mux, func(s statsResponse) {
-		if s.TotalAttestations != 2 {
-			t.Errorf("total: %d, want 2", s.TotalAttestations)
+		if deref(s.TotalAttestations) != 2 {
+			t.Errorf("total: %d, want 2", deref(s.TotalAttestations))
 		}
-		if s.SuccessfulAttests != 1 {
-			t.Errorf("success: %d, want 1 (TOFU only)", s.SuccessfulAttests)
+		if deref(s.SuccessfulAttests) != 1 {
+			t.Errorf("success: %d, want 1 (TOFU only)", deref(s.SuccessfulAttests))
 		}
-		if s.FailedAttests != 1 {
-			t.Errorf("failed: %d, want 1 (wrong sig)", s.FailedAttests)
+		if deref(s.FailedAttests) != 1 {
+			t.Errorf("failed: %d, want 1 (wrong sig)", deref(s.FailedAttests))
 		}
 	})
 
@@ -1321,8 +1334,8 @@ func TestIntegrationAPI_PCR14TamperingVisibleInStats(t *testing.T) {
 	}
 
 	assertStats(t, mux, func(s statsResponse) {
-		if s.FailedAttests != 1 {
-			t.Errorf("failed: %d, want 1 (integrity mismatch)", s.FailedAttests)
+		if deref(s.FailedAttests) != 1 {
+			t.Errorf("failed: %d, want 1 (integrity mismatch)", deref(s.FailedAttests))
 		}
 	})
 
@@ -1375,8 +1388,8 @@ func TestIntegrationAPI_PendingChallengesNotLeak(t *testing.T) {
 	}
 
 	assertStats(t, mux, func(s statsResponse) {
-		if s.PendingChallenges != 3 {
-			t.Errorf("after 3 challenges: pending %d, want 3", s.PendingChallenges)
+		if deref(s.PendingChallenges) != 3 {
+			t.Errorf("after 3 challenges: pending %d, want 3", deref(s.PendingChallenges))
 		}
 	})
 
@@ -1385,8 +1398,8 @@ func TestIntegrationAPI_PendingChallengesNotLeak(t *testing.T) {
 	v.VerifyReport(clientID, report)
 
 	assertStats(t, mux, func(s statsResponse) {
-		if s.PendingChallenges != 2 {
-			t.Errorf("after 1 verify: pending %d, want 2", s.PendingChallenges)
+		if deref(s.PendingChallenges) != 2 {
+			t.Errorf("after 1 verify: pending %d, want 2", deref(s.PendingChallenges))
 		}
 	})
 
@@ -1395,8 +1408,8 @@ func TestIntegrationAPI_PendingChallengesNotLeak(t *testing.T) {
 	v.VerifyReport(clientID, report2)
 
 	assertStats(t, mux, func(s statsResponse) {
-		if s.PendingChallenges != 1 {
-			t.Errorf("after 2 verify: pending %d, want 1", s.PendingChallenges)
+		if deref(s.PendingChallenges) != 1 {
+			t.Errorf("after 2 verify: pending %d, want 1", deref(s.PendingChallenges))
 		}
 	})
 
@@ -1432,11 +1445,11 @@ func TestIntegrationAPI_ConcurrentAttestationsTracked(t *testing.T) {
 	}
 
 	assertStats(t, mux, func(s statsResponse) {
-		if s.TotalAttestations != int64(numClients) {
-			t.Errorf("total: %d, want %d", s.TotalAttestations, numClients)
+		if deref(s.TotalAttestations) != int64(numClients) {
+			t.Errorf("total: %d, want %d", deref(s.TotalAttestations), numClients)
 		}
-		if s.SuccessfulAttests != int64(numClients) {
-			t.Errorf("success: %d, want %d", s.SuccessfulAttests, numClients)
+		if deref(s.SuccessfulAttests) != int64(numClients) {
+			t.Errorf("success: %d, want %d", deref(s.SuccessfulAttests), numClients)
 		}
 		if s.RegisteredClients != numClients {
 			t.Errorf("registered: %d, want %d", s.RegisteredClients, numClients)
@@ -1483,14 +1496,14 @@ func TestIntegrationAPI_MixedSuccessFailureRatio(t *testing.T) {
 
 	// check /api/v1/stats
 	assertStats(t, mux, func(s statsResponse) {
-		if s.TotalAttestations != 5 {
-			t.Errorf("total: %d, want 5", s.TotalAttestations)
+		if deref(s.TotalAttestations) != 5 {
+			t.Errorf("total: %d, want 5", deref(s.TotalAttestations))
 		}
-		if s.SuccessfulAttests != 3 {
-			t.Errorf("success: %d, want 3", s.SuccessfulAttests)
+		if deref(s.SuccessfulAttests) != 3 {
+			t.Errorf("success: %d, want 3", deref(s.SuccessfulAttests))
 		}
-		if s.FailedAttests != 2 {
-			t.Errorf("failed: %d, want 2", s.FailedAttests)
+		if deref(s.FailedAttests) != 2 {
+			t.Errorf("failed: %d, want 2", deref(s.FailedAttests))
 		}
 	})
 
@@ -1597,8 +1610,10 @@ func TestReanchorReviewEndpoints(t *testing.T) {
 		t.Fatal("review must stay pending without admin auth")
 	}
 
-	// acknowledge with admin auth -> cleared
-	req = httptest.NewRequest(http.MethodPost, "/api/v1/clients/dev1/reanchor-review-ack", nil)
+	// acknowledge with admin auth and attribution -> cleared
+	req = httptest.NewRequest(http.MethodPost, "/api/v1/clients/dev1/reanchor-review-ack",
+		strings.NewReader(`{"actor":"alice@ops","reason":"reviewed the drift"}`))
+	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer admin-key")
 	rr = httptest.NewRecorder()
 	mux.ServeHTTP(rr, req)

@@ -75,10 +75,17 @@ The gate is armed but has nothing to guard until at least one process opts in.
 Two paths feed the protected_pids map:
 
 - **Game-side auto-register.** ``liblota_wine_hook.so`` calls
-  ``lota_protect_self()`` on its first successful connect, so any CS2 / Proton
-  launch wired through ``lota-proton-hook`` registers itself without operator
+  ``lota_protect_self()`` ``LOTA_HOOK_PROTECT_DELAY`` seconds (default 20)
+  after it loads, so any CS2 / Proton launch wired through
+  ``lota-proton-hook`` registers itself without operator
   intervention. This is the production path; nothing else needs to happen on
-  the agent CLI.
+  the agent CLI. Confirm with the ``info`` line ``registered pid=<pid> for
+  runtime enforcement`` or ``bpftool map dump name protected_pids``.
+
+  The wait is required: once registered, a title maps only files with an
+  allowed fs-verity digest or a ``trusted_libs`` inode, so registering
+  mid-load refuses Proton its own ``ntdll.so``. Verity-covered titles can set
+  ``LOTA_HOOK_PROTECT_DELAY=0``; a codec dlopened later needs covering too.
 - **Manual register.** For out-of-game reproductions, or for a binary that does
   not link the hook, pass ``--protect-pid <pid>`` to the agent at startup. The
   PID must already be running when the agent starts: the agent reads it before

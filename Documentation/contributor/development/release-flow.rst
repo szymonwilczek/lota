@@ -28,5 +28,5 @@ When a candidate is stable, the maintainer -- ``@szymonwilczek`` -- promotes
 ``lota-next`` to ``main`` through a pull request merged as a **merge commit**
 (no squash, no rebase), then tags the stable release (``vX.Y.0``) on ``main``.
 
-See :doc:`../../security/reproducible-builds <../../security/reproducible-builds>` for how a tag is built and signed
+See :doc:`reproducible builds <../../security/reproducible-builds>` for how a tag is built and signed
 and how to verify it yourself.

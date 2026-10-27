@@ -52,8 +52,8 @@ static int tests_passed;
 static const enum tpm_pcr14_state refusing_verdicts[] = {
 	TPM_PCR14_LOCK_MISSING,	      TPM_PCR14_SPENT_BY_SHUTDOWN,
 	TPM_PCR14_BINARY_CHANGED,     TPM_PCR14_TAMPERED_BEFORE_START,
-	TPM_PCR14_MUTATED_IN_SESSION, TPM_PCR14_UNATTRIBUTABLE,
-	TPM_PCR14_STATE_ROLLBACK,
+	TPM_PCR14_MUTATED_IN_SESSION, TPM_PCR14_HANDOFF_CHANGED,
+	TPM_PCR14_UNATTRIBUTABLE,     TPM_PCR14_STATE_ROLLBACK,
 };
 
 static const char *verdict_name(enum tpm_pcr14_state state)
@@ -73,6 +73,8 @@ static const char *verdict_name(enum tpm_pcr14_state state)
 		return "tampered before start";
 	case TPM_PCR14_MUTATED_IN_SESSION:
 		return "mutated in session";
+	case TPM_PCR14_HANDOFF_CHANGED:
+		return "handoff changed";
 	case TPM_PCR14_UNATTRIBUTABLE:
 		return "unattributable";
 	case TPM_PCR14_STATE_ROLLBACK:
@@ -156,27 +158,25 @@ static void test_a_served_daemon_carries_its_own_status(void)
 		PASS();
 }
 
-/*
- * The unit file's behaviour depends on the number, not on the name,
- * so the two are compared here.
- */
-static void test_the_unit_prevents_restarting_on_that_status(void)
+/* whether @unit's RestartPreventExitStatus= lists @status */
+static bool unit_prevents_restart_on(const char *unit, int status)
 {
 	char line[512];
 	char wanted[64];
+	char path[256];
 	bool found = false;
-	FILE *fp = fopen("systemd/lota-agent.service", "re");
+	FILE *fp;
 
-	if (!fp)
-		fp = fopen("../systemd/lota-agent.service", "re");
-
-	TEST("the packaged unit prevents a restart on that status");
+	snprintf(path, sizeof(path), "systemd/%s", unit);
+	fp = fopen(path, "re");
 	if (!fp) {
-		FAIL("could not open lota-agent.service");
-		return;
+		snprintf(path, sizeof(path), "../systemd/%s", unit);
+		fp = fopen(path, "re");
 	}
+	if (!fp)
+		return false;
 
-	snprintf(wanted, sizeof(wanted), "%d", LOTA_EXIT_OPERATOR_ACTION);
+	snprintf(wanted, sizeof(wanted), "%d", status);
 	while (fgets(line, sizeof(line), fp)) {
 		if (strncmp(line, "RestartPreventExitStatus=", 25) != 0)
 			continue;
@@ -185,8 +185,67 @@ static void test_the_unit_prevents_restarting_on_that_status(void)
 	}
 	fclose(fp);
 
-	if (!found)
+	return found;
+}
+
+static void test_the_unit_prevents_restarting_on_that_status(void)
+{
+	TEST("the packaged unit prevents a restart on that status");
+
+	if (!unit_prevents_restart_on("lota-agent.service",
+				      LOTA_EXIT_OPERATOR_ACTION))
 		FAIL("RestartPreventExitStatus does not list the status");
+	else
+		PASS();
+}
+
+/*
+ * The second status the unit has to know about.
+ *
+ * A start under a running agent -- which is what systemd attempts every time
+ * something restarts lota-agent.socket, since it cannot kill the daemon that
+ * is already serving -- refuses on the PID file. On the generic failure status
+ * the unit retried it every five seconds for the rest of the boot while the
+ * real agent went on enforcing, so the number and the unit are held together
+ * here the same way.
+ */
+static void test_the_unit_does_not_retry_a_running_instance(void)
+{
+	TEST("the packaged unit does not retry under a running agent");
+
+	if (!unit_prevents_restart_on("lota-agent.service",
+				      LOTA_EXIT_ALREADY_RUNNING))
+		FAIL("RestartPreventExitStatus does not list the status");
+	else
+		PASS();
+}
+
+/*
+ * A restart between an agent upgrade and the reboot meets a PCR 14 committed
+ * to the old binary; without the status the attest unit retries every 30 s
+ * until reboot, stuck in activating.
+ */
+static void test_the_attest_unit_stops_on_a_spent_commitment(void)
+{
+	TEST("the attest unit prevents a restart on that status");
+
+	if (!unit_prevents_restart_on("lota-attest.service",
+				      LOTA_EXIT_OPERATOR_ACTION))
+		FAIL("RestartPreventExitStatus does not list the status");
+	else
+		PASS();
+}
+
+/*
+ * The two statuses have to stay distinct: one says an operator has to change
+ * the host, the other says nothing is wrong with it.
+ */
+static void test_the_two_no_retry_statuses_differ(void)
+{
+	TEST("a busy start and a refused host are told apart");
+
+	if (LOTA_EXIT_ALREADY_RUNNING == LOTA_EXIT_OPERATOR_ACTION)
+		FAIL("the two no-retry statuses collapsed into one");
 	else
 		PASS();
 }
@@ -201,6 +260,9 @@ int main(void)
 	test_refused_host_configuration_needs_an_operator();
 	test_a_served_daemon_carries_its_own_status();
 	test_the_unit_prevents_restarting_on_that_status();
+	test_the_unit_does_not_retry_a_running_instance();
+	test_the_attest_unit_stops_on_a_spent_commitment();
+	test_the_two_no_retry_statuses_differ();
 
 	printf("\n=== %d/%d passed ===\n", tests_passed, tests_run);
 	return tests_passed == tests_run ? 0 : 1;

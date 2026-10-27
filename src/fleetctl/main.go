@@ -58,17 +58,22 @@ Commands:
   devices show <client-id>                per-client details
   revoke <client-id> -reason R -actor A [-note S]
                                           revoke a client's AIK
-  unrevoke <client-id>                    lift a revocation
+  unrevoke <client-id> -reason R -actor A [-note S]
+                                          lift a revocation
   revocations [-tenant T]                 list active revocations
   ban <hardware-id> -reason R -actor A [-tenant T] [-note S]
                                           ban a hardware identity (per tenant)
-  unban <hardware-id> [-tenant T]         lift a hardware ban (per tenant)
+  unban <hardware-id> -reason R -actor A [-tenant T] [-note S]
+                                          lift a hardware ban (per tenant)
   bans [-limit N] [-next-id CURSOR] [-tenant T]
                                           list active hardware bans
-  reanchor <client-id> -actor A [-note S] force a baseline re-anchor
-  delete <client-id> [-actor A] [-note S] remove a client's trust state
+  reanchor <client-id> -reason R -actor A [-note S]
+                                          force a baseline re-anchor
+  delete <client-id> -reason R -actor A [-note S]
+                                          remove a client's trust state
   reanchor-review list                    clients awaiting LFA review
-  reanchor-review ack <client-id>         acknowledge an LFA re-anchor
+  reanchor-review ack <client-id> -reason R -actor A [-note S]
+                                          acknowledge an LFA re-anchor
   audit [-limit N] [-tenant T]            operator audit log
   attests [-limit N] [-tenant T]          attestation decision log
 
@@ -200,7 +205,7 @@ func dispatch(ctx *cmdContext, stderr io.Writer, cmd string, args []string) (int
 	case "delete":
 		err = cmdDelete(ctx, stderr, args)
 	case "reanchor-review":
-		err = cmdReanchorReview(ctx, args)
+		err = cmdReanchorReview(ctx, stderr, args)
 	case "audit":
 		err = cmdAudit(ctx, stderr, args)
 	case "attests":
@@ -232,6 +237,16 @@ func kv(w io.Writer, key string, value any) {
 		return
 	}
 	fmt.Fprintf(w, "%s: %v\n", key, value)
+}
+
+// kvCounter prints a counter the verifier may decline to report.
+// A tenant-scoped stats response omits the fleet-wide counters instead of
+// zeroing them, and the table says nothing.
+func kvCounter[T int | int64](w io.Writer, key string, value *T) {
+	if value == nil {
+		return
+	}
+	kv(w, key, *value)
 }
 
 func cmdHealth(ctx *cmdContext, args []string) (int, error) {
@@ -281,19 +296,15 @@ func cmdStats(ctx *cmdContext, args []string) error {
 	kv(ctx.stdout, "registered clients", s.RegisteredClients)
 	kv(ctx.stdout, "active policy", s.ActivePolicy)
 	kv(ctx.stdout, "loaded policies", strings.Join(s.LoadedPolicies, ", "))
-	if !s.TenantScoped {
-		kv(ctx.stdout, "total attestations", s.TotalAttestations)
-		kv(ctx.stdout, "successful", s.SuccessfulAttests)
-		kv(ctx.stdout, "failed", s.FailedAttests)
-		kv(ctx.stdout, "revoked", s.RevokedAttests)
-		kv(ctx.stdout, "banned", s.BannedAttests)
-	}
+	kvCounter(ctx.stdout, "total attestations", s.TotalAttestations)
+	kvCounter(ctx.stdout, "successful", s.SuccessfulAttests)
+	kvCounter(ctx.stdout, "failed", s.FailedAttests)
+	kvCounter(ctx.stdout, "revoked", s.RevokedAttests)
+	kvCounter(ctx.stdout, "banned", s.BannedAttests)
 	kv(ctx.stdout, "active revocations", s.ActiveRevocations)
 	kv(ctx.stdout, "active bans", s.ActiveBans)
-	if !s.TenantScoped {
-		kv(ctx.stdout, "pending challenges", s.PendingChallenges)
-		kv(ctx.stdout, "used nonces", s.UsedNonces)
-	}
+	kvCounter(ctx.stdout, "pending challenges", s.PendingChallenges)
+	kvCounter(ctx.stdout, "used nonces", s.UsedNonces)
 	kv(ctx.stdout, "uptime", s.Uptime)
 	return nil
 }
@@ -585,7 +596,7 @@ func cmdDelete(ctx *cmdContext, stderr io.Writer, args []string) error {
 	return nil
 }
 
-func cmdReanchorReview(ctx *cmdContext, args []string) error {
+func cmdReanchorReview(ctx *cmdContext, stderr io.Writer, args []string) error {
 	if len(args) == 0 {
 		return fmt.Errorf("%w: reanchor-review needs a subcommand (list, ack)", errUsage)
 	}
@@ -605,16 +616,22 @@ func cmdReanchorReview(ctx *cmdContext, args []string) error {
 		for _, id := range clients {
 			fmt.Fprintln(ctx.stdout, id)
 		}
+
+		// count on stderr keeps stdout pipeable and an empty queue visible
+		fmt.Fprintf(stderr, "%d client(s) awaiting re-anchor review\n", len(clients))
 		return nil
 
 	case "ack":
-		if len(args) != 2 {
-			return fmt.Errorf("%w: reanchor-review ack needs exactly one client ID", errUsage)
-		}
-		if err := ctx.api.ReanchorReviewAck(args[1]); err != nil {
+		// attributed like every other trust change
+		id, reason, actor, note, err := parseActionArgs("reanchor-review ack",
+			stderr, args[1:], true, true)
+		if err != nil {
 			return err
 		}
-		fmt.Fprintf(ctx.stdout, "reviewed %s\n", args[1])
+		if err := ctx.api.ReanchorReviewAck(id, reason, actor, note); err != nil {
+			return err
+		}
+		fmt.Fprintf(ctx.stdout, "reviewed %s\n", id)
 		return nil
 
 	default:

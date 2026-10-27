@@ -74,9 +74,11 @@ Typical rig bring-up:
   lota-loadgen run -dir rig -server 127.0.0.1:8443 -tls-ca lota-verifier.crt \
     -mode steady -interval 60s -duration 10m -out summary.json
 
-The rig needs the file-backed certificate AIK store: -db selects the SQLite
-store, which cannot verify certificate chains, and the verifier refuses to
-start with it under the default --require-cert.
+The rig needs certificate verification, which -aik-ca-cert selects: a verifier
+given -db or -pg-dsn and no CA root falls back to the trust-on-first-use store,
+which cannot verify certificate chains, and refuses to start under the default
+--require-cert. With a CA root the state backend is free -- -aik-store for a
+single run, a database when the run is against more than one instance.
 `)
 }
 
@@ -85,6 +87,7 @@ func cmdSetup(args []string) int {
 	dir := fs.String("dir", "", "rig directory to create (required)")
 	agents := fs.Int("agents", 1000, "fleet size the rig supports")
 	keyPool := fs.Int("key-pool", 0, "AIK RSA key pool size (default min(agents, 256))")
+	tenant := fs.String("tenant", "", "tenant the rig's AIK certificates are issued into (empty = the default tenant); the generated policy binds itself to it")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
@@ -94,7 +97,7 @@ func cmdSetup(args []string) int {
 		return 2
 	}
 	start := time.Now()
-	if err := writeRig(*dir, *agents, *keyPool); err != nil {
+	if err := writeRig(*dir, *agents, *keyPool, *tenant); err != nil {
 		fmt.Fprintf(os.Stderr, "setup: %v\n", err)
 		return 1
 	}
@@ -248,12 +251,22 @@ func printHuman(s *summary) {
 	for _, k := range sortedKeys(s.TransportError) {
 		fmt.Fprintf(os.Stderr, "transport_err  %s=%d\n", k, s.TransportError[k])
 	}
-	fmt.Fprintf(os.Stderr, "rate           %.1f/s\n", s.RatePerSec)
+	fmt.Fprintf(os.Stderr, "rate           %s\n", rateLine(s))
 	fmt.Fprintf(os.Stderr, "latency ms     p50=%.1f p90=%.1f p99=%.1f max=%.1f mean=%.1f\n",
 		s.Latency.P50, s.Latency.P90, s.Latency.P99, s.Latency.Max, s.Latency.Mean)
 	if s.AgentsNeverOK > 0 {
 		fmt.Fprintf(os.Stderr, "agents_never_ok %d\n", s.AgentsNeverOK)
 	}
+}
+
+// rateLine renders the verified and attempted rates, flagging unverified attempts
+func rateLine(s *summary) string {
+	line := fmt.Sprintf("%.1f/s verified (%.1f/s attempted", s.RatePerSec, s.AttemptRatePerSec)
+	if s.OK < s.Attempts {
+		return fmt.Sprintf("%s; only %d of %d attempts verified, so this is not a throughput ceiling)",
+			line, s.OK, s.Attempts)
+	}
+	return line + ")"
 }
 
 func sortedKeys(m map[string]uint64) []string {

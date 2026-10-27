@@ -7,7 +7,7 @@ LOTA player install (``lota-install``)
 
 ``lota-install`` is the player-side path onto a LOTA-attested host: one guided,
 reboot-resumable command instead of the operator checklist in
-:doc:`production-bringup/index <production-bringup/index>`. It drives the
+:doc:`production-bringup/index`. It drives the
 same hard requirements the agent enforces at startup, but it explains every
 change before making it, asks for consent, and survives the reboot the install
 inherently needs.
@@ -43,8 +43,18 @@ Running it
 CA/verifier endpoints and the trust material paths come from the operator's
 install instructions (see "What the operator must ship" below).
 
-``lota-install --status`` prints a read-only report of every stage without
-changing anything.
+``lota-install --status`` prints a read-only report of every step without
+changing anything, and its step numbers are the ones the guided install shows.
+A stage the installer can satisfy reads ``pending``; one that needs an action
+the installer must not take -- Secure Boot enabled in firmware, an operator's
+SELinux module, IMA signatures -- reads ``BLOCKED``, because a report that
+calls both "pending" reads as work about to happen.
+
+The last step is the self-check, which is where an install answers "did this
+work". The report says what it can see without acting -- the kernel integrity
+floor, the agent binary's immutability, the service, and the AIK certificate
+-- and stops there: the attestation round-trip is an action and belongs to an
+install, so no report sends one.
 
 * ``--yes`` skips the per-stage prompts,
 * ``--plain`` disables the TUI for logs and scripting,
@@ -52,12 +62,12 @@ changing anything.
   ``--yes --plain``, does nothing at all inside a container or image build (the
   host that eventually boots the image is the one bring-up belongs to), and
   **leaves the two boot-path stages alone** -- the initramfs PCR 14 lock and
-  the kernel integrity floor -- stopping at the reboot checkpoint with the one
-  command that finishes the job. A host that wants those unattended as well
-  says so before installing, with ``/etc/lota/auto-bringup`` or
-  ``LOTA_AUTO_BRINGUP=1``; exactly ``1``, since a hook inherits whatever
-  environment the transaction had and reading ``0`` as consent is how a
-  machine ends up with a boot path nobody chose.
+  the kernel integrity floor -- stopping at the reboot checkpoint, where it
+  names each boot-path stage still to run and the one command that runs them.
+  A host that wants them unattended too opts in before installing, with
+  ``/etc/lota/auto-bringup`` or ``LOTA_AUTO_BRINGUP=1``; exactly ``1``, since
+  a hook inherits whatever environment the transaction had and reading ``0``
+  as consent is how a machine ends up with a boot path nobody chose.
 
 On an interactive terminal ``lota-install`` is a full-screen application
 (alternate screen): a stage list on the left, a details pane explaining the selected
@@ -87,15 +97,27 @@ follows terminal resizes. Keys:
    * - ``q``, ``Ctrl-C``
      - Quit (``Ctrl-C`` first aborts a running command)
 
-The original scrollback is restored on exit and a one-line result (complete /
-reboot required / re-run to continue) is printed to the normal screen. Without a
-TTY, or with ``--plain``, the same stages run as a sequential prompted flow
-suitable for logs and scripts.
+The original scrollback is restored on exit and a one-line result is printed
+to the normal screen: complete (exit ``0``), reboot required (``10``) or
+re-run to continue (``1``). Without a TTY, or with ``--plain``, the same stages
+run as a sequential prompted flow suitable for logs and scripts. There a stage
+with work to do prints what it found after ``Before this stage:`` and ends
+``applied``; a stage with nothing to do reports ``already satisfied``. An
+upgrade that brings a binary without fs-verity thus shows that stage as
+``applied``.
 
-Exit codes: ``0`` complete, ``1`` failed or blocked on missing input, ``2``
-usage, ``10`` reboot required -- reboot and re-run the same command, the
-installer detects the finished stages from live system state and continues at
-the first unmet one.
+Exit codes:
+
+* ``0`` -- complete: every stage is satisfied, the same answer ``--status``
+  gives with exit ``0``;
+* ``1`` -- failed, blocked on missing input, or stopped before the end;
+* ``2`` -- usage;
+* ``10`` -- reboot required: reboot and re-run the same command, the installer
+  detects the finished stages from live system state and continues at the
+  first unmet one;
+* ``11`` -- ``--unattended`` only: host-local setup is done and the boot-path
+  stages it names are left to a person, so the host is not finished. Run
+  ``sudo lota-install`` to complete it.
 
 There is no state file to corrupt: every done-condition is probed from the
 system itself (installed files, the fs-verity bit, the initramfs content,
@@ -112,15 +134,17 @@ What the stages do
    kernels keep working). It is also the one requirement nobody but the person
    at the keyboard can satisfy, so the blocked stage prints a route instead of
    a rule: the machine as DMI names it, ``systemctl reboot --firmware-setup``
-   where the firmware advertises that it honours the request, the extra
-   "restore the factory keys" step when the firmware is in setup mode, and
-   that enabling Secure Boot leaves distribution kernels bootable. A guest is
-   sent to its VM definition instead, since a virtual machine has no firmware
-   menu of its own -- ``systemd-detect-virt`` decides that, so the installer
-   keeps no list of hypervisors. Everything in that message is read off the
-   machine; the installer names no per-vendor menu path or setup key, because
-   those differ between firmware revisions of a single model and a confidently
-   wrong instruction costs more than a general one.
+   where the firmware honours that request, then the startup screen's key for
+   when it is refused (the request is an EFI variable write, which a full store
+   answers with ``Cannot allocate memory``), the "restore the factory keys"
+   step in setup mode, and that enabling Secure Boot leaves distribution
+   kernels bootable. A guest is sent to its VM definition instead, since a
+   virtual machine has no firmware menu of its own -- ``systemd-detect-virt``
+   decides that, so the installer keeps no list of hypervisors. Everything in
+   that message is read off the machine; the installer names no per-vendor
+   menu path or setup key, because those differ between firmware revisions of
+   a single model and a confidently wrong instruction costs more than a
+   general one.
 #. **Package artifacts** -- agent binary, BPF object, systemd units, udev rule
    and dracut module are installed. The installer does not build or download
    anything. Missing artifacts mean the LOTA package has not been installed yet.
@@ -137,19 +161,56 @@ What the stages do
    kernel so the PCR14 lock helper runs before any regular userspace, whichever
    kernel is selected at boot. It reports work to do while any installed kernel
    is missing the helper. Requires a reboot.
-#. **Kernel integrity floor** -- appends ``ima=on ima_appraise=fix`` (plus
-   ``module.sig_enforce=1`` / ``lockdown=integrity`` where the running kernel
-   lacks them) to the boot entries via grubby. The floor pins the appraisal
-   *mode*. Signature content stays distribution or operator-supplied (see the
-   production bring-up guide). Requires a reboot.
+#. **Kernel integrity floor** -- appends the missing ones of
+   ``ima_appraise=fix``, ``module.sig_enforce=1`` and ``lockdown=integrity`` to
+   the boot entries via grubby. It reports those parameters and nothing more:
+   the appraisal *mode* is not the floor on its own, and the rules it applies
+   to are the next stage. On a Secure Boot host the appraisal parameter is left
+   out, because the kernel discards ``ima_appraise=`` there and appraises in
+   its own built-in blocking mode -- writing it would describe a mode that is
+   not the machine's. Signature content stays distribution or
+   operator-supplied (see the production bring-up guide). Requires a reboot.
+#. **IMA appraisal scope** -- the previous stage sets the appraisal *mode*, and
+   the kernel applies that mode only to the rules its loaded policy carries. A
+   policy whose ``appraise`` rules reach no executable appraises nothing, so
+   this stage reads ``/sys/kernel/security/ima/policy`` and reports what the
+   kernel covers. It loads no rules of its own. An IMA rule cannot name a path,
+   so the rule that appraises the agent appraises every executable it matches,
+   and on a Secure Boot host that happens in ``enforce`` -- the kernel discards
+   ``ima_appraise=`` there whatever the cmdline asks for -- which on a root
+   filesystem without IMA signatures means refusing every executable at the
+   next boot. What such a host is missing is the signatures, not a rule set:
+   IMA-signed distribution packages with the distribution's certificate on the
+   ``.ima`` keyring, or an operator image pipeline that signs the executable
+   closure and enrols its certificate.
+
+   **A host that appraises nothing still finishes the install**, as long as the
+   agent binary carries fs-verity: the kernel refuses a modified read of it and
+   PCR 14 commits the running build, so the agent's own footing does not rest
+   on IMA. The stage says what the machine gives up, and every token it hands
+   out carries ``LOTA_FLAG_KERNEL_APPRAISAL`` clear, which is what a publisher
+   or a verifier policy (``require_ima_appraisal``) reads. On a filesystem
+   without verity, where the agent's only claim is a signed ``security.ima``
+   xattr, appraisal is what makes that claim real: there the agent refuses to
+   start and the stage is blocked. A kernel built without
+   ``CONFIG_IMA_READ_POLICY`` publishes no policy at all, so the scope cannot
+   be read and both the stage and the agent say it went unverified.
 #. **SELinux fence** -- loads the LOTA policy module if needed and re-triggers
    udev so ``/dev/tpm*`` carries the LOTA-only label.
 #. **Reboot checkpoint** -- stops with exit 10 until the boot-chain changes are
-   live and PCR 14 carries this boot's initramfs lock. PCR 14 only resets on a
-   hardware reset, so this cannot be skipped. On a Secure Boot machine PCR 14 is
-   already non-zero before any of this -- shim measures the MOK variables into
-   it -- and the checkpoint says so rather than reporting state from an earlier
-   install.
+   live and PCR 14 carries this boot's initramfs lock. A host whose agent has
+   already run and refused to start this boot is told that instead: the
+   register carries the extend of that attempt, and the next boot meets the
+   same refusal, so the checkpoint names ``journalctl -u lota-agent -b``.
+   A pause is the exception: an agent stopped with ``lota-install --pause`` or
+   ``lota-agent --shutdown`` spent the register on purpose and refuses to start
+   until the next boot, so the checkpoint asks for that reboot, as
+   ``--resume`` does. It reads the pause from the flag the agent records in
+   ``/var/lib/lota/clock_state.dat``, while PCR 14 still holds the value the
+   agent left.
+   PCR 14 only resets on a hardware reset, so this cannot be skipped. On a
+   Secure Boot machine PCR 14 is already non-zero before any of this -- shim
+   measures the MOK variables into it -- and the checkpoint says.
 #. **Agent service** -- enables and starts ``lota-agent.service`` and its
    socket.
 #. **Enrollment** -- the TPM proves itself to a publisher's attestation CA
@@ -258,6 +319,10 @@ session ends. ``lota-steam-setup --verify``, run from that account, is the
 check -- it reports the socket as ready only when this account can open it,
 and prints the ownership when it cannot, which is the case an account
 outside the ``lota`` group lands in.
+
+An account with no login session (a service account, ``sudo -u``, cron) has
+no ``$XDG_RUNTIME_DIR``. Each check that needs it reports that, and the run
+still reaches its verdict.
 
 It is the only step in this document that asks anyone to type something, and
 it stays until Steam supports a compatibility-tool layer that composes with

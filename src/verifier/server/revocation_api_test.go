@@ -249,7 +249,6 @@ func TestAPI_BanInvalidHardwareID(t *testing.T) {
 	}{
 		{"too short", "deadbeef"},
 		{"invalid hex", "zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz"},
-		{"uppercase hex", "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"},
 		{"leading whitespace", " aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
 		{"trailing whitespace", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa "},
 	}
@@ -291,6 +290,54 @@ func TestAPI_UnbanHardware(t *testing.T) {
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("Expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
+// Ban endpoints accept a hardware ID in any case and answer in lower case.
+func TestAPI_BanCanonicalisesHardwareIDCase(t *testing.T) {
+	t.Log("TEST: an upper-case hardware ID is banned and lifted in canonical form")
+
+	mux, _ := setupTestAPIListening(t)
+
+	lower := "abababababababababababababababababababababababababababababababab"
+	upper := strings.ToUpper(lower)
+
+	body := fmt.Sprintf(`{"hardware_id":"%s","reason":"cheating","actor":"admin"}`, upper)
+	req := adminRequest("POST", "/api/v1/bans", body)
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("Expected 201, got %d: %s", rec.Code, rec.Body.String())
+	}
+
+	var resp map[string]string
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode ban response: %v", err)
+	}
+	if resp["hardware_id"] != lower {
+		t.Errorf("banned hardware_id = %q, want the canonical %q", resp["hardware_id"], lower)
+	}
+
+	// the same identity, upper case again, is the one already banned
+	req = adminRequest("POST", "/api/v1/bans", body)
+	rec = httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("Expected 409 for the same identity in upper case, got %d", rec.Code)
+	}
+
+	// and it lifts through the path in either case
+	req = adminRequest("DELETE", "/api/v1/bans/"+upper, `{"actor":"admin","reason":"appeal upheld"}`)
+	rec = httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("Expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode unban response: %v", err)
+	}
+	if resp["hardware_id"] != lower {
+		t.Errorf("unbanned hardware_id = %q, want the canonical %q", resp["hardware_id"], lower)
 	}
 }
 
@@ -551,8 +598,8 @@ func TestIntegrationAPI_RevokedClientBlockedFromAttestation(t *testing.T) {
 
 	// verify rejection is counted
 	assertStats(t, mux, func(s statsResponse) {
-		if s.RevokedAttests != 1 {
-			t.Errorf("revoked_attestations: got %d, want 1", s.RevokedAttests)
+		if deref(s.RevokedAttests) != 1 {
+			t.Errorf("revoked_attestations: got %d, want 1", deref(s.RevokedAttests))
 		}
 	})
 
@@ -656,8 +703,8 @@ func TestIntegrationAPI_BannedHardwareBlocksAttestation(t *testing.T) {
 
 	// verify counted in stats
 	assertStats(t, mux, func(s statsResponse) {
-		if s.BannedAttests != 1 {
-			t.Errorf("banned_attestations: got %d, want 1", s.BannedAttests)
+		if deref(s.BannedAttests) != 1 {
+			t.Errorf("banned_attestations: got %d, want 1", deref(s.BannedAttests))
 		}
 		if s.ActiveBans != 1 {
 			t.Errorf("active_bans: got %d, want 1", s.ActiveBans)

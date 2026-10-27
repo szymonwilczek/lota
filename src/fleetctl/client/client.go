@@ -203,17 +203,20 @@ func (c *Client) Health() (*Health, error) {
 }
 
 // Stats is the GET /api/v1/stats response.
+//
+// Fleet-wide counters are pointers: a tenant-scoped response omits them,
+// and nil keeps "withheld" from decoding as zero.
 type Stats struct {
-	PendingChallenges int      `json:"pending_challenges"`
-	UsedNonces        int      `json:"used_nonces"`
+	PendingChallenges *int     `json:"pending_challenges,omitempty"`
+	UsedNonces        *int     `json:"used_nonces,omitempty"`
 	RegisteredClients int      `json:"registered_clients"`
 	ActivePolicy      string   `json:"active_policy"`
 	LoadedPolicies    []string `json:"loaded_policies"`
-	TotalAttestations int64    `json:"total_attestations"`
-	SuccessfulAttests int64    `json:"successful_attestations"`
-	FailedAttests     int64    `json:"failed_attestations"`
-	RevokedAttests    int64    `json:"revoked_attestations"`
-	BannedAttests     int64    `json:"banned_attestations"`
+	TotalAttestations *int64   `json:"total_attestations,omitempty"`
+	SuccessfulAttests *int64   `json:"successful_attestations,omitempty"`
+	FailedAttests     *int64   `json:"failed_attestations,omitempty"`
+	RevokedAttests    *int64   `json:"revoked_attestations,omitempty"`
+	BannedAttests     *int64   `json:"banned_attestations,omitempty"`
 	ActiveRevocations int      `json:"active_revocations"`
 	ActiveBans        int      `json:"active_bans"`
 	Uptime            string   `json:"uptime"`
@@ -293,6 +296,15 @@ type actionRequest struct {
 	Note   string `json:"note,omitempty"`
 }
 
+// unbanRequest adds the ban's tenant to the mutation payload;
+// a ban is identified by (tenant, hardware_id) on both verbs.
+type unbanRequest struct {
+	Tenant string `json:"tenant,omitempty"`
+	Reason string `json:"reason,omitempty"`
+	Actor  string `json:"actor,omitempty"`
+	Note   string `json:"note,omitempty"`
+}
+
 // banRequest adds the hardware identity to the mutation payload.
 type banRequest struct {
 	HardwareID string `json:"hardware_id"`
@@ -350,14 +362,11 @@ func (c *Client) Ban(hardwareID, tenant, reason, actor, note string) error {
 
 // Unban lifts a hardware ban within a tenant.
 // Empty tenant defaults to the server's default tenant;
-// Tenant selects which (tenant, hardware) ban row is lifted.
+// Tenant selects which (tenant, hardware) ban row is lifted, and travels in
+// the body, where the ban put it.
 func (c *Client) Unban(hardwareID, tenant, reason, actor, note string) error {
-	q := url.Values{}
-	if tenant != "" {
-		q.Set("tenant", tenant)
-	}
 	return c.do(http.MethodDelete, "/api/v1/bans/"+url.PathEscape(hardwareID),
-		q, actionRequest{Reason: reason, Actor: actor, Note: note}, nil,
+		nil, unbanRequest{Tenant: tenant, Reason: reason, Actor: actor, Note: note}, nil,
 		http.StatusOK)
 }
 
@@ -430,11 +439,12 @@ func (c *Client) ReanchorReviewList() ([]string, error) {
 	return resp.PendingReview, nil
 }
 
-// ReanchorReviewAck clears a client's pending-review flag.
-func (c *Client) ReanchorReviewAck(clientID string) error {
+// ReanchorReviewAck clears a client's pending-review flag with attribution.
+func (c *Client) ReanchorReviewAck(clientID, reason, actor, note string) error {
 	return c.do(http.MethodPost,
 		"/api/v1/clients/"+url.PathEscape(clientID)+"/reanchor-review-ack",
-		nil, nil, nil, http.StatusOK)
+		nil, actionRequest{Reason: reason, Actor: actor, Note: note}, nil,
+		http.StatusOK)
 }
 
 // AuditEntry is one entry of the GET /api/v1/audit listing.

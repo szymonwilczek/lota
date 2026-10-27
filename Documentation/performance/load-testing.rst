@@ -20,7 +20,9 @@ boot commitment, over the fleet's agent hash -- the derivation takes no
 clock counters, so the synthetic quote's ClockInfo is free to be a
 constant). The synthetic event log carries the firmware's
 ``SecureBoot`` variable measurement on PCR 7, which is what proves a
-UEFI boot, and no PCR 14 event, so the chain anchors on a zero
+UEFI boot, the bootloader's ``EV_IPL`` measurement of the kernel image
+on PCR 9, which is what makes the fleet's kernel pin evaluable the way
+a booted host's is, and no PCR 14 event, so the chain anchors on a zero
 baseline -- the shape of a UEFI host that boots without shim. The
 verifier under test runs its strict production configuration; no TOFU
 opt-out flags are involved.
@@ -49,10 +51,21 @@ repeatable and re-attesting clients keep their server-side baselines::
 
    lota-loadgen setup -dir rig -agents 10000
 
+``-tenant`` issues the rig's AIK certificates into a tenant and binds the
+generated policy to it, which is what a multi-tenant verifier needs to route a
+fleet to a policy of its own::
+
+   lota-loadgen setup -dir rig-acme -agents 1000 -tenant acme
+
+Left out, the certificates carry no tenant and the fleet lands in the default
+tenant, verified against the verifier's active policy.
+
 Point the verifier under test at the rig's trust material. The
 generated ``policy.yaml`` pins the fleet's PCR 0/1/7 values and its
-kernel/agent hashes, so the strict first-attestation boot-enrollment
-gate passes without any TOFU opt-out::
+kernel/agent hashes -- the kernel hash being the digest of the image the
+synthetic bootloader measured, which is the value the verifier's gate
+compares -- so the strict first-attestation boot-enrollment gate passes
+without any TOFU opt-out::
 
    lota-verifier -addr :8443 -generate-cert \
      -aik-ca-cert rig/ca.crt -policy rig/policy.yaml \
@@ -74,7 +87,9 @@ gate passes without any TOFU opt-out::
    describe. Use the default file-backed stores as above, or
    ``--pg-dsn`` for the shared Postgres backend -- the Postgres rig is
    the configuration the scale and failover numbers are recorded
-   against.
+   against. With a database configured the client registry lives there
+   too, so a multi-instance rig reports one fleet through whichever
+   instance is asked, and ``--aik-store`` is not needed at all.
 
 Run modes
 =========
@@ -113,11 +128,24 @@ Reading the output
 The human summary prints attempts, ``VERIFY_OK`` count, rejections by
 verifier result code, transport errors by phase (``dial``, ``read
 challenge``, ``write report``, ``read result``, ``timeout``), the
-achieved rate and latency percentiles (p50/p90/p99/max/mean, measured
-from dial to result). The ``-out`` JSON adds a per-second timeline of
+rate and latency percentiles (p50/p90/p99/max/mean, measured from dial
+to result). The ``-out`` JSON adds a per-second timeline of
 ok/rejected/error counts -- failover drills read the outage dip and
 recovery window straight off that series -- plus ``agents_never_ok``,
 which must be zero in a healthy run.
+
+The rate line carries two figures. The headline one counts
+attestations the verifier accepted (``achieved_rate_per_sec``), and it
+is the only one that is throughput; ``attempted_rate_per_sec`` beside
+it counts everything the generator started. They diverge when
+attestations fail, and the failures that cost the least time are the
+ones the verifier refuses at the door, so a run whose fleet is being
+refused has the higher attempted rate of the two. When a run leaves
+attempts unverified the line says how many verified and that the
+figure is not a ceiling; a figure worth quoting as capacity comes from
+a run that prints no such shortfall. The live progress line counts the
+same way, so a run that speeds up as it degrades shows up while it is
+still going.
 
 Interpreting failures:
 
@@ -131,6 +159,16 @@ Interpreting failures:
   listener refuses connections past ``--max-connections``, 256 by
   default, so a storm run with ``-in-flight`` above that measures the
   cap rather than the verifier).
+
+A rate that does not move when ``-in-flight`` rises is a ceiling, but
+not necessarily the verifier's: building and signing synthetic reports
+costs the generator several times what verifying them costs the
+verifier, so one load host saturates first. Measure both processes'
+CPU across the run (``/proc/<pid>/stat``, or ``systemd-cgtop`` per
+unit) before recording a figure: if ``lota-loadgen`` is the one
+burning cores, the number describes the load host. Drive the fleet
+from more than one host, or from more rigs, until the verifier is the
+process at its limit.
 
 Repeatability
 =============

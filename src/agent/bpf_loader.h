@@ -36,6 +36,7 @@ struct bpf_loader_ctx {
 	int integrity_fd; /* 'integrity_config' map fd */
 	int task_auth_fd; /* 'lota_task_auth' map fd */
 	int trusted_libs_fd; /* 'trusted_libs' map fd */
+	int guarded_files_fd; /* 'guarded_files' map fd */
 	int protected_pids_fd; /* Protected PIDs map fd */
 	int allow_verity_digest_fd; /* 'allow_verity_digest' map fd */
 	bool loaded; /* BPF object loaded into the kernel and maps resolved */
@@ -334,11 +335,15 @@ bool bpf_loader_integrity_config_satisfied(const struct integrity_data *cfg);
  * @cmdline_path: kernel cmdline carrying ima_appraise= (the mode)
  * @policy_path: loaded IMA policy carrying the func= rules (the scope)
  *
+ * @secureboot: non-zero when this host booted with Secure Boot on, in which
+ * case the kernel discarded ima_appraise= and the mode is its built-in
+ * default, which blocks.
+ *
  * Returns: 0 when appraisal blocks on an integrity failure, negative errno
  * otherwise.
  */
 int bpf_loader_ima_appraisal_active(const char *cmdline_path,
-				    const char *policy_path);
+				    const char *policy_path, int secureboot);
 
 /*
  * bpf_loader_secure_boot_enabled - Check UEFI Secure Boot state
@@ -347,6 +352,17 @@ int bpf_loader_ima_appraisal_active(const char *cmdline_path,
  * errno otherwise.
  */
 int bpf_loader_secure_boot_enabled(void);
+
+/*
+ * bpf_loader_kernel_appraises_exec - Does the kernel appraise executables here?
+ *
+ * The live-path form of bpf_loader_ima_appraisal_active(): the booted mode,
+ * the loaded policy and this host's Secure Boot state.
+ *
+ * Returns: 0 when an executable on this host is appraised, negative errno
+ * otherwise (-ENOENT when the policy reaches no exec).
+ */
+int bpf_loader_kernel_appraises_exec(void);
 
 /*
  * bpf_loader_verify_kernel_runtime_hardening - Verify kernel anti-tamper base
@@ -460,6 +476,8 @@ struct bpf_extended_stats {
 	uint64_t setuid_events;
 	uint64_t bpf_syscall_blocked;
 	uint64_t mounts_blocked;
+	uint64_t kill_guard_blocked;
+	uint64_t events_yielded; /* dropped to leave ring room for quieter types */
 };
 
 /*

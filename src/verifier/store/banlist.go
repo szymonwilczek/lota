@@ -127,12 +127,15 @@ func FormatHardwareID(hwid [32]byte) string {
 func ParseHardwareID(hexStr string) ([32]byte, error) {
 	var hwid [32]byte
 	if len(hexStr) != 64 {
-		return hwid, errors.New("hardware ID must be exactly 64 lowercase hex characters")
+		return hwid, errors.New("hardware ID must be exactly 64 hex characters")
 	}
+
+	// accept either case (FormatHardwareID lower-cases); a bad digit gets
+	// the same error as a bad length, not the decoder's
 	for i := 0; i < len(hexStr); i++ {
 		c := hexStr[i]
-		if (c < '0' || c > '9') && (c < 'a' || c > 'f') {
-			return hwid, errors.New("hardware ID must be exactly 64 lowercase hex characters")
+		if (c < '0' || c > '9') && (c < 'a' || c > 'f') && (c < 'A' || c > 'F') {
+			return hwid, errors.New("hardware ID must be exactly 64 hex characters")
 		}
 	}
 	decoded, err := hex.DecodeString(hexStr)

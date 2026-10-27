@@ -23,6 +23,7 @@
 #include "parse_utils.h"
 #include "path_validate.h"
 #include "pin.h"
+#include "policy_pubkey.h"
 #include "tpm.h"
 
 /* Runtime config populated by --protect-pid / --trust-lib / --allow-verity. */
@@ -141,6 +142,16 @@ static int load_config_into_options(struct cli_options *opts,
 		fprintf(stderr, "Config file not found: %s\n",
 			opts->config_path);
 		return 1;
+	} else if (cfg_ret == -EACCES && !opts->config_path) {
+		/*
+		 * Default config is root-only, so unprivileged callers cannot
+		 * read it. Treat it as absent and warn. A file named with
+		 * --config still fails below
+		 */
+		fprintf(stderr,
+			"Cannot read %s: %s. Continuing with defaults; pass "
+			"--config to name a file this user can read.\n",
+			LOTA_CONFIG_DEFAULT_PATH, strerror(-cfg_ret));
 	} else if (cfg_ret < 0) {
 		fprintf(stderr, "Failed to load config %s: %s\n",
 			opts->config_path ? opts->config_path :
@@ -190,7 +201,7 @@ static int load_config_into_options(struct cli_options *opts,
 	opts->daemon_flag = cfg->daemon ? 1 : 0;
 	opts->pid_file_path = cfg->pid_file;
 	opts->signing_key_path = cfg->signing_key[0] ? cfg->signing_key : NULL;
-	opts->policy_pubkey_path = config_resolve_policy_pubkey(
+	opts->policy_pubkey_path = policy_pubkey_resolve(
 		cfg->policy_pubkey[0] ? cfg->policy_pubkey : NULL,
 		LOTA_POLICY_PUBKEY_OVERRIDE, LOTA_ENFORCEMENT_PUBKEY_PATH);
 
@@ -744,6 +755,7 @@ int cli_dump_config(struct cli_options *opts, struct lota_config *cfg)
 		snprintf(cfg->mode, sizeof(cfg->mode), "monitor");
 
 	cfg->strict_mmap = opts->strict_mmap;
+	cfg->strict_exec = opts->strict_exec;
 	cfg->block_ptrace = opts->block_ptrace;
 	cfg->strict_modules = opts->strict_modules;
 	cfg->block_anon_exec = opts->block_anon_exec;

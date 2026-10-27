@@ -1,0 +1,18 @@
+# ko build configuration for the HSM-capable attestation CA image.
+# pkcs11 tag and cgo on distroless cc (glibc, libstdc++, libcrypto),
+# so the operator's read-only mounted PKCS#11 module can be dlopen'd.
+# Debian 13: the module needs a glibc at least as new as the one it was
+# linked against (Fedora 44 SoftHSM needs 2.38, Debian 12 has 2.36).
+# linux/amd64 only: cgo does not cross-compile here.
+defaultBaseImage: gcr.io/distroless/cc-debian13:nonroot
+builds:
+  - id: lota-attest-ca-hsm
+    main: .
+    env:
+      - CGO_ENABLED=1
+    flags:
+      - -trimpath
+      - -tags=pkcs11
+    ldflags:
+      - -s
+      - -w

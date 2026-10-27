@@ -13,7 +13,19 @@ attention stays on the integration story:
 The banner across the top of the window mirrors the verdict the demo server
 publishes for the ``trust-pong`` game id, and the game freezes after two
 consecutive UNTRUSTED heartbeats with an overlay reading ``INTEGRITY LOSS``
-over ``session terminated after two UNTRUSTED heartbeats``.
+over ``session terminated after two UNTRUSTED heartbeats``. The same moment is
+printed to stderr, so an operator watching the terminal -- or a script driving
+the demo -- sees the session end without reading the window:
+
+.. code-block:: text
+
+   trust_pong: session terminated after 2 consecutive UNTRUSTED heartbeats
+
+The streak counts verdicts as they arrive, not the frames that observe one, so
+a single UNTRUSTED response between TRUSTED ones leaves the session running --
+which is the debounce a publisher copying this client inherits. A ``REJECT``
+counts as an UNTRUSTED heartbeat, and any other answer (``PENDING``, an
+unreachable server) neither adds to the streak nor clears it.
 
 trust_pong only **consumes** the verdict; it does not produce heartbeats
 itself. The heartbeats come from ``demo_anticheat``, which runs as a separate
@@ -99,7 +111,8 @@ FROZEN    ``INTEGRITY LOSS`` plus terminated overlay
 OFFLINE   ``OFFLINE`` with curl / startup detail on row two
 ========= ====================================================
 
-The second row in the header echoes whichever server response field is most
+The detail under the verdict echoes whichever server response field is most
 recently surfaced (``license=lota-demo-CS2-clone`` on TRUSTED, the verifier's
-free-form reason on UNTRUSTED, the curl error string on OFFLINE). The rest of
-the screen is intentionally plain.
+free-form reason on UNTRUSTED, the curl error string on OFFLINE), wrapped over
+two rows and ellipsized past them. The rest of the screen is intentionally
+plain.

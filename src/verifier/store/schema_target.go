@@ -29,6 +29,17 @@ func SQLiteTargetSchemaVersion() int {
 	return maxMigrationVersion(migrations)
 }
 
+// PgSchemaFingerprint and SQLiteSchemaFingerprint return the short fingerprint
+// of the migration SQL this binary applies; it tells apart two builds of one
+// schema version.
+func PgSchemaFingerprint() string {
+	return shortFingerprint(schemaFingerprint(pgMigrations))
+}
+
+func SQLiteSchemaFingerprint() string {
+	return shortFingerprint(schemaFingerprint(migrations))
+}
+
 // maxMigrationVersion returns the greatest version in migration history.
 func maxMigrationVersion(ms []migration) int {
 	highest := 0

@@ -135,9 +135,11 @@ an integration:
        publisher is what opens a session for them, and a session-gated
        host -- the consumer default -- reports only while one is open.
        A producer that names nobody is never attested for anybody and
-       every beat reads ``NOT_ATTESTED``. The id is the hex SHA-256 of
-       your CA anchor's SubjectPublicKeyInfo, which your installer
-       already knows because ``--add-publisher`` prints it.
+       every beat reads ``NOT_ATTESTED``; a host that answers for
+       several publishers refuses its token requests outright. The id is
+       the hex SHA-256 of your CA anchor's SubjectPublicKeyInfo, which
+       your installer already knows because ``--add-publisher`` prints
+       it.
    * - Token directory
      - ``token_dir`` in ``struct lota_ac_config``, or ``NULL`` to
        auto-detect. Auto-detection follows the producer exactly:
@@ -190,6 +192,9 @@ separate them: ten distinct refusals in the heartbeat path share
 ``-EIO``. ``lota_ac_last_error()`` names the one that happened, on the
 calling thread, and ``lota_ac_strerror()`` renders it.
 
+Every call that returns a value to check sets it, success included, so it
+always describes the call just made.
+
 ``lota_ac_strerror()`` renders either space. ``LOTA_AC_ERR_*`` codes sit past
 any errno value, so the function can tell one of its own verdicts from a
 ``-EIO`` a file read produced and describes each in its own terms -- printing
@@ -208,7 +213,10 @@ fixed by anything the player does, and a shipped build should never produce
 them. ``NO_AGENT``, ``CONSENT_REQUIRED``, ``UNKNOWN_PROFILE``,
 ``NOT_ATTESTED`` and ``TOKEN_DIR`` are the state of that machine, and each
 has a different thing to tell the player -- install the agent, agree to your
-publisher, wait for the first verdict. ``RATE_LIMITED`` is neither: it means
+publisher, wait for the first verdict. ``TPM_LOCKOUT`` is the machine too,
+but no retry clears it: the chip signs nothing until its dictionary-attack
+lockout lapses or somebody at the machine clears it, which is what to tell
+the player instead of beating again. ``RATE_LIMITED`` is neither: it means
 the producer is beating faster than the agent issues tokens, and the fix is
 the interval.
 
@@ -216,6 +224,57 @@ A session whose agent is unreachable is **returned**, not refused, in
 ``LOTA_AC_STATE_ERROR``: the title has something to show and can beat again
 once the host is ready. ``lota_ac_last_error()`` names that case too, so
 "not ready yet" is never mistaken for a configuration the library rejected.
+
+An agent that goes away mid-session
+===================================
+
+An integrator reading the hook's file sink sees the same event through
+``lota-status``, and the field that carries it is ``LOTA_OFFLINE``, not
+``LOTA_ATTESTED``. When the hook loses the agent it rewrites the file with
+``LOTA_OFFLINE=1`` and a zeroed payload, and unlinks ``lota-token.bin`` and
+``lota-attestation.bin``, which cannot be trusted past the disconnect.
+The write happens once per disconnect: the hook retries the connection for
+as long as the process lives, and a reconnect that succeeds publishes live
+state again, so a file that stops changing is not a signal.
+
+Two rules follow for anything that polls the sink:
+
+* **Read ``LOTA_OFFLINE`` before ``LOTA_ATTESTED``.** The offline payload is
+  zeroed, so a reader that looks only at ``LOTA_ATTESTED`` reads a lost agent
+  as a refusal the agent never issued. OFFLINE ("the hook cannot reach the
+  agent") and UNTRUSTED ("the agent says no") call for different treatment,
+  and the marker is the only thing that separates them.
+* **Treat a missing file as OFFLINE too.** The hook never ran, the container
+  view does not include the sink, or the session detached cleanly.
+
+``examples/cs2/scenarios/verify-attested.sh`` is the minimal consumer of both
+signals and ships with the demo; the ``agent-down`` walk-through beside it
+drives the transition and asserts what lands on disk.
+
+When your producer joins the protected set
+==========================================
+
+A token says the producer was in the protected set only if the producer put
+itself there: ``lota_ac_init()`` does not register the process; the reference
+calls ``lota_protect_self()`` behind ``--protect-self``.
+
+Once registered, the process may map an executable file only if its fs-verity
+digest is allowed or its inode is in ``trusted_libs``; anything else is
+``-EPERM``, its own libraries included. Registering before the loader is done
+kills the title. Two points are safe:
+
+* **After startup**, as the Wine hook does (``LOTA_HOOK_PROTECT_DELAY``, 20
+  seconds by default). A library loaded later meets the same rule.
+* **Any time**, once the game's libraries carry allowed fs-verity digests
+  (``LOTA_FLAG_IMAGE_FULLY_MEASURED`` on the far side).
+
+A refusal surfaces as ``dlopen()`` failing with "failed to map segment from
+shared object"; the agent journal has the matching ``MMAP_BLOCKED`` line. The
+Wine hook also reports it on the title's stderr and as ``LOTA_REFUSED_OBJECT``
+in its status file. A producer registering itself should read a load failure
+after registering the same way, not as a corrupt install.
+``LOTA_REFUSED_OBJECT`` and ``LOTA_PROTECTED`` are written when they happen,
+not on the next agent status event, which a steady host never sends.
 
 What the token actually proves
 ==============================
@@ -229,12 +288,13 @@ Worth being precise about, because it decides what you can build on it:
 * The producer process was in the protected set at the time, and the
   runtime measurement covers its loaded objects -- every one of them when
   the token carries ``LOTA_FLAG_IMAGE_FULLY_MEASURED``, and otherwise the
-  subset the kernel holds an fs-verity digest for. A stock distribution
-  ships its libraries without one, so partial coverage is the normal case
-  and full coverage is something a platform provides. Whether you require
-  it is your policy; what the agent guarantees either way is that the
-  producer's own executable was measured, and that nothing unmeasured was
-  folded in as if it had been.
+  subset the kernel holds an fs-verity digest for. The flag is never set by
+  a round with nothing to measure, so requiring it refuses a host with an
+  empty protected set. A stock distribution ships its libraries without one,
+  so partial coverage is the normal case and full coverage is something a
+  platform provides. Whether you require it is your policy; what the agent
+  guarantees either way is that the producer's own executable was measured,
+  and that nothing unmeasured was folded in as if it had been.
 
 * Whether a protected process was ended on that host since it booted. A
   protected process takes no signal except through the agent, and the agent

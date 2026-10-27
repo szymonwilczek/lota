@@ -85,6 +85,8 @@ enum lota_ipc_result {
 	LOTA_IPC_ERR_BAD_VERSION = 0x08,
 	LOTA_IPC_ERR_TPM_LOCKOUT = 0x09,
 	LOTA_IPC_ERR_TOO_MANY_PROTECTED_PIDS = 0x0A,
+	/* no profile for the named publisher, or none named on a host
+	   that answers for several */
 	LOTA_IPC_ERR_UNKNOWN_PROFILE = 0x0B,
 	/* nobody on this machine has agreed to answer to that publisher */
 	LOTA_IPC_ERR_CONSENT_REQUIRED = 0x0C,
@@ -104,6 +106,10 @@ enum lota_ipc_result {
 
 	/* this agent enforces nothing */
 	LOTA_IPC_ERR_NO_ENFORCEMENT = 0x11,
+
+	/* known, consented publisher, but the AIK handle range is full;
+	   freeing a slot is an operator action */
+	LOTA_IPC_ERR_NO_KEY_SLOT = 0x12,
 	LOTA_IPC_NOTIFY = 0x80,
 };
 
@@ -141,6 +147,10 @@ enum lota_ipc_result {
 		  measurement covers all of their code. Clear means some      \
 		  object could not be measured and is absent from the fold;   \
 		  what that is worth is the relying party's policy */
+
+#define LOTA_STATUS_KERNEL_APPRAISAL \
+	(1 << 11) /* IMA appraises every exec on this host. Clear on a stock \
+		   host; the agent is still bound by fs-verity and PCR 14 */
 
 #define LOTA_STATUS_PROTECTED_TERMINATED \
 	(1                               \
@@ -257,7 +267,7 @@ struct lota_ipc_token {
 	uint64_t runtime_protect_epoch; /* Monotonic runtime protection mutation
 					   id */
 	uint16_t pid_list_size; /* Bytes for protected_pids[] */
-	uint16_t runtime_protect_version; /* 0/1 = PID set, 2 = + image digests */
+	uint16_t runtime_protect_version; /* 1 = PID set, 2 = + image digests */
 
 	/*
 	 * Variable-length data follows:
@@ -393,10 +403,16 @@ struct lota_ipc_attest_sync {
 	uint32_t count; /* verdicts that follow */
 	uint32_t attest_count; /* successful rounds since the loop started */
 	uint32_t fail_count;
-	uint32_t _reserved1;
+	uint32_t host_flags; /* LOTA_IPC_SYNC_HOST_FLAGS the loop observed */
 	uint64_t last_attest_time;
 	/* struct lota_ipc_attest_verdict verdicts[count] follows */
 } __attribute__((packed));
+
+/*
+ * Status bits only the loop observes: it calls the TPM every round,
+ * the daemon may not for a long time. Bits the daemon can set itself stay out.
+ */
+#define LOTA_IPC_SYNC_HOST_FLAGS LOTA_STATUS_TPM_LOCKOUT
 
 /*
  * What a publisher is owed, as only the socket owner can know it:

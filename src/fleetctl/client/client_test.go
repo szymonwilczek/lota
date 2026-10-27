@@ -122,7 +122,7 @@ func TestHealthDegradedIsData(t *testing.T) {
 
 func TestStats(t *testing.T) {
 	c, rec := fakeVerifier(t, http.StatusOK,
-		`{"registered_clients":3,"total_attestations":42,"active_policy":"prod",
+		`{"registered_clients":3,"active_policy":"prod",
 		  "loaded_policies":["prod"],"uptime":"1m0s","uptime_sec":60,
 		  "tenant_scoped":true,"tenants":["acme","beta"]}`)
 
@@ -133,8 +133,11 @@ func TestStats(t *testing.T) {
 	if rec.method != http.MethodGet || rec.path != "/api/v1/stats" {
 		t.Fatalf("request = %s %s, want GET /api/v1/stats", rec.method, rec.path)
 	}
-	if s.RegisteredClients != 3 || s.TotalAttestations != 42 || s.ActivePolicy != "prod" {
+	if s.RegisteredClients != 3 || s.ActivePolicy != "prod" {
 		t.Fatalf("Stats = %+v", s)
+	}
+	if s.TotalAttestations != nil || s.UsedNonces != nil {
+		t.Fatalf("omitted counters decoded into values: %+v", s)
 	}
 	if !s.TenantScoped || len(s.Tenants) != 2 || s.Tenants[0] != "acme" {
 		t.Fatalf("tenant scoping = %+v", s)
@@ -305,6 +308,8 @@ func TestBanDefaultTenantOmitsField(t *testing.T) {
 	}
 }
 
+// The tenant travels in the body on both verbs, so an administrator scoped to
+// one tenant can lift what it imposed.
 func TestUnbanWithTenant(t *testing.T) {
 	hwid := strings.Repeat("cd", 32)
 	c, rec := fakeVerifier(t, http.StatusOK,
@@ -316,12 +321,19 @@ func TestUnbanWithTenant(t *testing.T) {
 	if rec.method != http.MethodDelete || rec.path != "/api/v1/bans/"+hwid {
 		t.Fatalf("request = %s %s", rec.method, rec.path)
 	}
-	if rec.query != "tenant=acme" {
-		t.Fatalf("query = %q, want tenant=acme", rec.query)
+	if rec.query != "" {
+		t.Fatalf("query = %q, want the tenant in the body instead", rec.query)
+	}
+	var got map[string]any
+	if err := json.Unmarshal(rec.body, &got); err != nil {
+		t.Fatalf("request body: %v", err)
+	}
+	if got["tenant"] != "acme" {
+		t.Fatalf("body tenant = %v, want acme", got["tenant"])
 	}
 }
 
-func TestUnbanDefaultTenantOmitsQuery(t *testing.T) {
+func TestUnbanDefaultTenantOmitsTheField(t *testing.T) {
 	hwid := strings.Repeat("cd", 32)
 	c, rec := fakeVerifier(t, http.StatusOK, `{"status":"unbanned"}`)
 
@@ -329,7 +341,14 @@ func TestUnbanDefaultTenantOmitsQuery(t *testing.T) {
 		t.Fatalf("Unban: %v", err)
 	}
 	if rec.query != "" {
-		t.Fatalf("query = %q, want empty for the default tenant", rec.query)
+		t.Fatalf("query = %q, want empty", rec.query)
+	}
+	var got map[string]any
+	if err := json.Unmarshal(rec.body, &got); err != nil {
+		t.Fatalf("request body: %v", err)
+	}
+	if _, present := got["tenant"]; present {
+		t.Fatalf("empty tenant should be omitted from the body: %v", got)
 	}
 }
 
@@ -437,12 +456,21 @@ func TestReanchorReviewAck(t *testing.T) {
 	c, rec := fakeVerifier(t, http.StatusOK,
 		`{"status":"reviewed","client_id":"host1"}`)
 
-	if err := c.ReanchorReviewAck("host1"); err != nil {
+	if err := c.ReanchorReviewAck("host1", "reviewed the drift", "alice@ops", ""); err != nil {
 		t.Fatalf("ReanchorReviewAck: %v", err)
 	}
 	if rec.method != http.MethodPost ||
 		rec.path != "/api/v1/clients/host1/reanchor-review-ack" {
 		t.Fatalf("request = %s %s", rec.method, rec.path)
+	}
+
+	// attribution reaches the audit row
+	var got map[string]string
+	if err := json.Unmarshal(rec.body, &got); err != nil {
+		t.Fatalf("body %q: %v", rec.body, err)
+	}
+	if got["actor"] != "alice@ops" || got["reason"] != "reviewed the drift" {
+		t.Fatalf("body = %v", got)
 	}
 }
 

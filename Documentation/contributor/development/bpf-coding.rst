@@ -20,6 +20,22 @@ program depending on how clang laid out the branches. ``veristat`` in CI
 catches acceptance regressions, but only for the kernel it runs on; the
 NULL-init rule keeps acceptance independent of compiler layout.
 
+Reading a veristat gate failure
+===============================
+
+The ``bpf-veristat`` CI job runs ``scripts/veristat-gate.sh`` in a VM booted on
+the deployment kernel. On a failure the gate loads the object with ``bpftool
+prog load`` and prints the verifier log of the first refused program; libbpf
+stops there, so the next one's log shows once it loads. A load that fails
+before the verifier (no root, or an enforcing ``lota-agent`` refusing map
+creation) is reported as a setup failure. To run it as the job does:
+
+.. code:: bash
+
+   make bpf
+   vng --run "$(uname -r)" --append "lsm=bpf" \
+       --exec "cd '$PWD' && sh scripts/veristat-gate.sh build/lota_lsm.bpf.o"
+
 Cross-CPU map updates
 =====================
 
@@ -37,16 +53,24 @@ Ring-buffer emission budget
 
 Under ``LOTA_MODE_ENFORCE`` every event is rate-limited per one-second window
 before it claims a ``bpf_ringbuf_reserve`` slot, so an attacker-driven flood
-cannot fill the ring buffer faster than user space drains it. Allowed (benign)
-and blocked (security-relevant) events are counted in separate windows, so a
-flood of one class cannot consume the other's budget; blocked events get the
-larger budget but are still bounded. Suppressing an event drops only its
-per-event detail -- the block counts are tallied in the ``stats`` map
-independently of ring-buffer emission, so an operator never loses the tally.
+cannot fill the ring buffer faster than user space drains it. Each
+``enum lota_event_type`` has its own window in ``event_budget``, so one flooding
+type cannot spend another's budget; the class sets the cap, tighter for allowed
+events than for blocked ones. A suppressed event loses only its detail: block
+counts are tallied in the ``stats`` map regardless of emission.
+
+All types still share one ring, so emission is gated a second time: once
+``bpf_ringbuf_query`` reports occupancy past ``LOTA_EVENT_RING_PRESSURE_PCT``,
+a type that has emitted ``LOTA_EVENT_PRESSURE_SHARE`` events this window yields
+the rest. This rule bounds the ring as a whole; a type firing at a human rate
+never reaches its share. Yields are counted in ``STAT_EVENTS_YIELDED``
+(``yielded=`` in the shutdown statistics); ``STAT_RINGBUF_DROPS`` counts detail
+lost to a full ring, which may belong to a type that was not the loud one.
 
 The budget arithmetic lives in ``include/lota_event_budget.h`` as pure helpers
 (``lota_event_budget_limit``, ``lota_event_budget_window_expired``,
-``lota_event_budget_exhausted``) with no map lookups or atomics, so it is
+``lota_event_budget_exhausted``, ``lota_event_ring_under_pressure``,
+``lota_event_type_yields``) with no map lookups or atomics, so it is
 unit-tested in user space (``tests/test_event_budget.c``); the BPF program wraps
 those helpers with the shared-map lookup and the cross-CPU atomics above. Change
 the budgets or the window only through the header so the program and the test

@@ -50,6 +50,7 @@
 #include "startup_policy.h"
 #include "status_flags.h"
 #include "tpm.h"
+#include "watchdog.h"
 
 /* Global state */
 struct agent_globals g_agent = {
@@ -173,12 +174,13 @@ static int run_daemon(const struct run_daemon_params *params)
 
 	for (size_t i = 0; i < target_count; i++) {
 		if (targets[i].profile_error)
+			/* label, not verifier: token-only has none */
 			lota_warn("Cannot read the CA trust anchor %s (%s): "
-				  "answering for %s:%d without a publisher "
+				  "answering for %s without a publisher "
 				  "profile",
 				  targets[i].ca_cert,
 				  strerror(-targets[i].profile_error),
-				  targets[i].server, targets[i].port);
+				  targets[i].label);
 	}
 
 	/*
@@ -359,6 +361,18 @@ static int run_daemon(const struct run_daemon_params *params)
 		epoll_ctl(epoll_fd, EPOLL_CTL_ADD, mount_fd, &ev);
 	}
 
+	/* Rebind after a socket-unit restart, see ipc_watch_socket_path */
+	int sock_watch_fd = ipc_watch_socket_path(&g_agent.ipc_ctx);
+	if (sock_watch_fd >= 0) {
+		ev.events = EPOLLIN;
+		ev.data.fd = sock_watch_fd;
+		epoll_ctl(epoll_fd, EPOLL_CTL_ADD, sock_watch_fd, &ev);
+	} else {
+		lota_warn("cannot watch %s: %s; a socket-unit restart will "
+			  "need the agent restarted too",
+			  LOTA_IPC_SOCKET_PATH, strerror(-sock_watch_fd));
+	}
+
 	/* IPC epoll fd to main loop */
 	int ipc_fd = ipc_get_fd(&g_agent.ipc_ctx);
 	if (ipc_fd >= 0) {
@@ -391,9 +405,21 @@ static int run_daemon(const struct run_daemon_params *params)
 	 * with the machine.
 	 */
 	boot_state.secure_boot = bpf_loader_secure_boot_enabled() == 0;
+	boot_state.kernel_appraisal = bpf_loader_kernel_appraises_exec() == 0;
+	lota_info("Kernel appraisal: %s",
+		  boot_state.kernel_appraisal ?
+			  "executables are appraised" :
+			  "nothing is appraised (advisory; tokens say so)");
 	lota_info("Secure Boot: %s", boot_state.secure_boot ?
 					     "enabled" :
 					     "disabled or unreadable");
+
+	/* reads a path, not the chip: refuse before the TPM is opened */
+	if (tpm_firmware_refuses_attestation(&g_agent.tpm_ctx)) {
+		lota_err("This host cannot attest: it did not boot via UEFI.");
+		ret = -ENOTSUP;
+		goto cleanup_tpm;
+	}
 
 	lota_info("Initializing TPM");
 	ret = tpm_init(&g_agent.tpm_ctx);
@@ -475,14 +501,14 @@ static int run_daemon(const struct run_daemon_params *params)
 				 "so it is byte for byte the key every other "
 				 "publisher enrolled here holds. Run "
 				 "lota-agent --reenroll --ca-cert <their "
-				 "anchor> to replace it; the device pseudonym "
-				 "is derived from the key and moves with it.");
+				 "anchor> to replace it; the CA certifies the "
+				 "new key under the device ID this host "
+				 "already has.");
 			ret = -ENOTSUP;
 			goto cleanup_tpm;
 		}
 
-		attest_warn_cert_orphaned(profile,
-					  profile ? profile->id : NULL);
+		int key_present = tpm_aik_key_present(&g_agent.tpm_ctx);
 
 		lota_info("Provisioning AIK");
 		ret = tpm_provision_aik(&g_agent.tpm_ctx);
@@ -491,6 +517,9 @@ static int run_daemon(const struct run_daemon_params *params)
 				 tpm_strerror(ret));
 			goto cleanup_tpm;
 		} else {
+			attest_warn_cert_orphaned(profile,
+						  profile ? profile->id : NULL,
+						  key_present);
 			ipc_set_tpm(&g_agent.ipc_ctx, &g_agent.tpm_ctx,
 				    LOTA_TOKEN_QUOTE_PCR_MASK);
 			lota_info("AIK ready, signed tokens enabled");
@@ -529,6 +558,10 @@ static int run_daemon(const struct run_daemon_params *params)
 			lota_err("Self-measurement failed: %s",
 				 tpm_strerror(ret));
 			goto cleanup_tpm;
+		} else if (ret == TPM_BOOT_COMMITMENT_ALREADY_HELD) {
+			lota_info(
+				"Self-measurement complete (PCR %d already held this boot's commitment; the restart did not spend it)",
+				LOTA_PCR_SELF);
 		} else {
 			lota_info("Self-measurement complete (PCR %d extended)",
 				  LOTA_PCR_SELF);
@@ -622,7 +655,22 @@ static int run_daemon(const struct run_daemon_params *params)
 		.container_watch = &g_agent.container_watch,
 		.running = &g_agent.running,
 	};
+	/* task_kill refuses systemd's watchdog kill; supervise from inside */
+	if (wd_enabled) {
+		ret = watchdog_start(wd_usec);
+		if (ret < 0) {
+			lota_err("Failed to start the watchdog supervisor: %s. "
+				 "The unit declares WatchdogSec= and nothing "
+				 "else can act on it, so the agent does not "
+				 "run without one.",
+				 strerror(-ret));
+			goto cleanup_bpf;
+		}
+	}
+
 	ret = agent_run_event_loop(&loop_ctx);
+
+	watchdog_stop();
 
 	/* clean shutdown via signal - do not propagate EINTR as failure */
 	if (!g_agent.running)
@@ -636,12 +684,14 @@ static int run_daemon(const struct run_daemon_params *params)
 			"Shutdown statistics: exec=%lu sent=%lu err=%lu drops=%lu "
 			"mod_blocked=%lu mmap_exec=%lu mmap_blocked=%lu "
 			"ptrace=%lu ptrace_blocked=%lu setuid=%lu bpf_blocked=%lu "
-			"mount_blocked=%lu",
+			"mount_blocked=%lu kill_guard_blocked=%lu "
+			"yielded=%lu",
 			stats.total_execs, stats.events_sent, stats.errors,
 			stats.drops, stats.modules_blocked, stats.mmap_execs,
 			stats.mmap_blocked, stats.ptrace_attempts,
 			stats.ptrace_blocked, stats.setuid_events,
-			stats.bpf_syscall_blocked, stats.mounts_blocked);
+			stats.bpf_syscall_blocked, stats.mounts_blocked,
+			stats.kill_guard_blocked, stats.events_yielded);
 	}
 
 	{
@@ -801,7 +851,7 @@ int main(int argc, char *argv[])
 		startup_busy_message(*cli_runtime_protect_pid_count() > 0, busy,
 				     sizeof(busy));
 		lota_err("%s", busy);
-		rc = 1;
+		rc = LOTA_EXIT_ALREADY_RUNNING;
 		goto out;
 	}
 	if (pid_fd < 0) {

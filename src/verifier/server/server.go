@@ -17,6 +17,7 @@ import (
 	"crypto/tls"
 	"encoding/binary"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -24,6 +25,7 @@ import (
 	"net/http"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"time"
 
 	"github.com/szymonwilczek/lota/verifier/logging"
@@ -51,17 +53,24 @@ func unixTimeFromUint64(ts uint64) time.Time {
 }
 
 type Server struct {
-	verifier   *verify.Verifier
-	auditLog   store.AuditLog
-	listener   net.Listener
-	tlsConfig  *tls.Config
-	addr       string
+	verifier  *verify.Verifier
+	auditLog  store.AuditLog
+	listener  net.Listener
+	tlsConfig *tls.Config
+	addr      string
+
+	// attestation listener still accepting; read by /health,
+	// cleared on drain or when the accept loop loses the listener
+	serving       atomic.Bool
+	shutdownDrain time.Duration
+
 	shutdownCh chan struct{}
 	wg         sync.WaitGroup
 	connSem    chan struct{} // limits concurrent connections
 
 	// http monitoring api
 	httpServer     *http.Server
+	reportOnly     bool
 	httpAddr       string
 	adminAPIKey    string
 	readerAPIKey   string
@@ -86,6 +95,10 @@ type ServerConfig struct {
 
 	// address for HTTP monitoring API (empty = disabled)
 	HTTPAddress string
+
+	// ReportOnly serves the monitoring API read-only off a hot standby:
+	// no attestation listener, mutating endpoints refused.
+	ReportOnly bool
 
 	// tls certificate and key paths
 	CertFile string
@@ -116,6 +129,11 @@ type ServerConfig struct {
 	// timeouts
 	ReadTimeout  time.Duration
 	WriteTimeout time.Duration
+
+	// how long the monitoring API keeps answering after the attestation
+	// listener closes, for a load balancer to read `degraded` off /health;
+	// zero stops the API once idle
+	ShutdownDrain time.Duration
 
 	// max concurrent attestation connections.
 	// 0 (the zero value) means DefaultMaxConnections, not "unlimited":
@@ -161,15 +179,18 @@ func DefaultServerConfig() ServerConfig {
 }
 
 func NewServer(cfg ServerConfig, verifier *verify.Verifier) (*Server, error) {
-	// load tls certificate
-	cert, err := tls.LoadX509KeyPair(cfg.CertFile, cfg.KeyFile)
-	if err != nil {
-		return nil, fmt.Errorf("failed to load TLS certificate: %w", err)
-	}
-
-	tlsConfig := &tls.Config{
-		Certificates: []tls.Certificate{cert},
-		MinVersion:   tls.VersionTLS13,
+	// load tls certificate; optional when report-only,
+	// but a non-loopback monitoring API still needs it
+	var tlsConfig *tls.Config
+	if cfg.CertFile != "" || cfg.KeyFile != "" || !cfg.ReportOnly {
+		cert, err := tls.LoadX509KeyPair(cfg.CertFile, cfg.KeyFile)
+		if err != nil {
+			return nil, fmt.Errorf("failed to load TLS certificate: %w", err)
+		}
+		tlsConfig = &tls.Config{
+			Certificates: []tls.Certificate{cert},
+			MinVersion:   tls.VersionTLS13,
+		}
 	}
 
 	logger := cfg.Logger
@@ -195,8 +216,10 @@ func NewServer(cfg ServerConfig, verifier *verify.Verifier) (*Server, error) {
 		metrics:        m,
 		attestationLog: cfg.AttestationLog,
 		shutdownCh:     make(chan struct{}),
+		shutdownDrain:  cfg.ShutdownDrain,
 		readTimeout:    cfg.ReadTimeout,
 		writeTimeout:   cfg.WriteTimeout,
+		reportOnly:     cfg.ReportOnly,
 	}
 
 	if cfg.ScopedKeysFile != "" {
@@ -219,12 +242,26 @@ func NewServer(cfg ServerConfig, verifier *verify.Verifier) (*Server, error) {
 }
 
 func (s *Server) Start() error {
+	// report-only: monitoring API only, no attestation listener
+	if s.reportOnly {
+		if s.httpAddr == "" {
+			return fmt.Errorf("a reporting instance serves only the monitoring API and needs an address to serve it on")
+		}
+		if err := s.startHTTP(); err != nil {
+			return fmt.Errorf("failed to start HTTP API: %w", err)
+		}
+		s.log.Info("LOTA Verifier serving reports only",
+			"note", "no attestation listener; every endpoint that changes fleet state is refused")
+		return nil
+	}
+
 	listener, err := tls.Listen("tcp", s.addr, s.tlsConfig)
 	if err != nil {
 		return fmt.Errorf("failed to start listener: %w", err)
 	}
 
 	s.listener = listener
+	s.serving.Store(true)
 	s.log.Info("LOTA Verifier listening", "addr", s.addr)
 
 	go s.acceptLoop()
@@ -316,12 +353,28 @@ func (s *Server) startHTTP() error {
 	return nil
 }
 
+// Stop closes the attestation listener first, so /health turns `degraded`
+// while the monitoring API still answers, then stops the API.
 func (s *Server) Stop() {
 	close(s.shutdownCh)
 
+	if s.listener != nil {
+		s.serving.Store(false)
+		if err := s.listener.Close(); err != nil {
+			s.log.Warn("listener close failed", "error", err)
+		}
+	}
+
+	// give a load balancer polling /health time to drop this instance
+	if s.shutdownDrain > 0 {
+		s.log.Info("draining", "for", s.shutdownDrain,
+			"health", "degraded while the API answers")
+		time.Sleep(s.shutdownDrain)
+	}
+
 	s.verifier.Close()
 
-	// graceful HTTP shutdown
+	// graceful HTTP shutdown, last
 	if s.httpServer != nil {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
@@ -330,11 +383,6 @@ func (s *Server) Stop() {
 		}
 	}
 
-	if s.listener != nil {
-		if err := s.listener.Close(); err != nil {
-			s.log.Warn("listener close failed", "error", err)
-		}
-	}
 	s.wg.Wait()
 }
 
@@ -346,10 +394,19 @@ func (s *Server) acceptLoop() {
 			case <-s.shutdownCh:
 				return
 			default:
-				s.log.Error("accept error", "error", err)
-				s.metrics.ConnectionErrors.Inc()
-				continue
 			}
+			// a closed listener never accepts again;
+			// stop instead of spinning, and report degraded
+			if errors.Is(err, net.ErrClosed) {
+				s.serving.Store(false)
+				s.log.Error("attestation listener closed; this instance serves no attestations",
+					"addr", s.addr, "health", "degraded")
+				s.metrics.ConnectionErrors.Inc()
+				return
+			}
+			s.log.Error("accept error", "error", err)
+			s.metrics.ConnectionErrors.Inc()
+			continue
 		}
 
 		// enforce connection limit
@@ -371,6 +428,16 @@ func (s *Server) acceptLoop() {
 	}
 }
 
+// peerLeftBeforeProtocol reports whether err is the peer hanging up.
+// Before any data arrives that is a health check or scanner,
+// not a connection error.
+func peerLeftBeforeProtocol(err error) bool {
+	return errors.Is(err, io.EOF) ||
+		errors.Is(err, syscall.ECONNRESET) ||
+		errors.Is(err, syscall.EPIPE) ||
+		errors.Is(err, net.ErrClosed)
+}
+
 func (s *Server) handleConnection(conn net.Conn) {
 	defer s.wg.Done()
 	defer conn.Close()
@@ -384,6 +451,25 @@ func (s *Server) handleConnection(conn net.Conn) {
 	clientIP, _, err := net.SplitHostPort(clientAddr)
 	if err != nil {
 		clientIP = clientAddr // fallback if no port
+	}
+
+	// Handshake before issuing a challenge, so a silent peer leaves none pending
+	if tlsConn, ok := conn.(*tls.Conn); ok {
+		ctx, cancel := context.WithTimeout(context.Background(), s.readTimeout)
+		err := tlsConn.HandshakeContext(ctx)
+		cancel()
+		if err != nil {
+			if peerLeftBeforeProtocol(err) {
+				s.log.Debug("connection closed before the protocol started",
+					"remote_addr", clientAddr, "client_ip", clientIP)
+				return
+			}
+			s.log.Warn("TLS handshake failed",
+				"remote_addr", clientAddr, "client_ip", clientIP,
+				"error", err)
+			s.metrics.ConnectionErrors.Inc()
+			return
+		}
 	}
 
 	// IMPORTANT: challengeID must be unique per connection!
@@ -410,6 +496,11 @@ func (s *Server) handleConnection(conn net.Conn) {
 	}
 	challengeData := challenge.Serialize()
 	if _, err := conn.Write(challengeData); err != nil {
+		if peerLeftBeforeProtocol(err) {
+			clog.Debug("peer left before the challenge was sent")
+			s.verifier.DiscardChallenge(challenge, challengeID)
+			return
+		}
 		clog.Error("failed to send challenge", "error", err)
 		s.metrics.ConnectionErrors.Inc()
 		return
@@ -426,7 +517,13 @@ func (s *Server) handleConnection(conn net.Conn) {
 
 	// read header to get total size
 	headerBuf := make([]byte, 32)
-	if _, err := io.ReadFull(conn, headerBuf); err != nil {
+	if n, err := io.ReadFull(conn, headerBuf); err != nil {
+		// nothing sent is a probe; a partial header is a protocol failure
+		if n == 0 && peerLeftBeforeProtocol(err) {
+			clog.Debug("peer left without sending a report")
+			s.verifier.DiscardChallenge(challenge, challengeID)
+			return
+		}
 		clog.Error("failed to read report header", "error", err)
 		s.metrics.ConnectionErrors.Inc()
 		return
@@ -437,7 +534,8 @@ func (s *Server) handleConnection(conn net.Conn) {
 	if magic != types.ReportMagic {
 		clog.Warn("invalid report magic", "magic", fmt.Sprintf("0x%08X", magic))
 		s.metrics.ConnectionErrors.Inc()
-		s.sendErrorResult(conn, types.VerifyOldVersion)
+		// foreign magic is a damaged frame, not an old wire
+		s.sendErrorResult(conn, types.VerifyReportMalformed)
 		return
 	}
 
@@ -446,7 +544,7 @@ func (s *Server) handleConnection(conn net.Conn) {
 	if totalSize < 32 || totalSize > 64*1024 { // 64KB max
 		clog.Warn("invalid report size", "size", totalSize)
 		s.metrics.ConnectionErrors.Inc()
-		s.sendErrorResult(conn, types.VerifyOldVersion)
+		s.sendErrorResult(conn, types.VerifyReportMalformed)
 		return
 	}
 
@@ -464,7 +562,7 @@ func (s *Server) handleConnection(conn net.Conn) {
 
 	clog.Debug("report received", "size", totalSize)
 
-	result, err := s.verifier.VerifyReport(challengeID, reportData)
+	result, err := s.verifier.VerifyReportFrom(challengeID, clientAddr, reportData)
 	if err != nil {
 		clog.Warn("verification failed", "error", err)
 	}
@@ -507,7 +605,7 @@ type HealthStatus struct {
 
 func (s *Server) HealthCheck() HealthStatus {
 	return HealthStatus{
-		Listening: s.listener != nil,
+		Listening: s.serving.Load(),
 		Address:   s.addr,
 		Stats:     s.verifier.Stats(),
 	}

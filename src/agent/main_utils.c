@@ -82,9 +82,16 @@ void print_usage(const char *prog, const char *default_bpf_path,
 	printf("                    to stdout and exit (fails closed if the "
 	       "boot\n");
 	printf("                    state differs from seal time)\n");
-	printf("  --seal-pcrs MASK  PCR bitmask for --seal (e.g. 0x4001); "
-	       "default\n");
-	printf("                    is PCRs 0-7 plus PCR14\n");
+	printf("  --seal-pcrs MASK  PCR bitmask for --seal; default is 0xFF, "
+	       "the\n");
+	printf("                    platform set, PCRs 0-7. PCR 14 is not in "
+	       "it:\n");
+	printf("                    it is the agent's own boot commitment, so "
+	       "0x40FF\n");
+	printf("                    additionally binds the secret to this "
+	       "agent\n");
+	printf("                    binary and every upgrade then destroys "
+	       "it\n");
 	printf("  --seal-aik-auth   Seal the AIK userAuth to the current boot "
 	       "state\n");
 	printf("                    (adopt at-rest sealing without "
@@ -247,20 +254,26 @@ void print_usage(const char *prog, const char *default_bpf_path,
 	       "                    security.ima xattr; the\n"
 	       "                    dirty-shutdown (panic/power-loss/SIGKILL)\n"
 	       "                    coverage gap stays open on that host.\n");
+	/* accepted in any mode, applied in enforce only */
 	printf("  --strict-mmap     Block mmap(PROT_EXEC) of untrusted "
 	       "libraries\n");
-	printf("                    (requires --mode enforce)\n");
+	printf("                    (no effect unless --mode enforce)\n");
 	printf("  --strict-exec     Enforce strict executable policy (fs-verity "
 	       "allowlist)\n");
-	printf("                    (requires --mode enforce and "
+	printf("                    (no effect unless --mode enforce; the "
+	       "agent\n");
+	printf("                    refuses to start without "
 	       "--allow-verity)\n");
 	printf("  --block-ptrace    Block all ptrace attach attempts\n");
-	printf("                    (requires --mode enforce)\n");
+	printf("                    (no effect unless --mode enforce)\n");
 	printf("  --strict-modules  Enforce strict module/firmware loading "
 	       "policy\n");
-	printf("                    (requires --mode enforce)\n");
+	printf("                    (no effect unless --mode enforce; the "
+	       "agent\n");
+	printf("                    refuses to start without "
+	       "--allow-verity)\n");
 	printf("  --block-anon-exec Block anonymous executable mappings\n");
-	printf("                    (requires --mode enforce)\n");
+	printf("                    (no effect unless --mode enforce)\n");
 	printf("  --protect-pid PID Seed this daemon's protected set with PID "
 	       "(ptrace\n");
 	printf("                    blocked). A startup option, not a request "
@@ -444,9 +457,11 @@ static int add_listener_for_uid(uint32_t uid, void *user)
 
 	ret = steam_runtime_ensure_socket_dir(dir);
 	if (ret < 0) {
-		fprintf(stderr,
-			"Warning: cannot create container socket dir %s: %s\n",
-			dir, strerror(-ret));
+		/* no login yet, or logind still mounting: the watch retries */
+		if (!container_watch_bind_pending(ret))
+			fprintf(stderr,
+				"Warning: cannot create container socket dir %s: %s\n",
+				dir, strerror(-ret));
 		return ret;
 	}
 
@@ -625,11 +640,12 @@ int self_measure(struct tpm_context *ctx)
 		return ret;
 
 	/*
-	 * Bind PCR14 to (self_hash, resetCount, restartCount). A dirty
-	 * shutdown that lets the platform reboot into a tampered userspace
-	 * cannot replay the previous baseline value because resetCount has
-	 * advanced; the verifier rederives the expected PCR14 from the
-	 * pinned agent hash plus the ClockInfo carried by the next quote.
+	 * Bind PCR14 to self_hash, chained onto the value the initramfs lock
+	 * helper left. The digest folds in no clock counter: a TPM obfuscates
+	 * resetCount and restartCount per signing key.
+	 * The verifier rederives the chain from the pinned agent hash and the
+	 * baseline the signed event log replays to, and compares the register
+	 * against the one the client pinned.
 	 */
 	ret = tpm_extend_boot_commitment(ctx, self_hash);
 	if (ret < 0) {
@@ -663,6 +679,17 @@ int self_measure(struct tpm_context *ctx)
 					"boot commitment to chain onto. See the "
 					"preceding log for the dracut step.");
 				break;
+			case TPM_PCR14_HANDOFF_CHANGED:
+				lota_err(
+					"The initramfs baseline handoff on /run "
+					"is not the one this boot's commitment "
+					"was built on, so the derivation misses "
+					"while PCR 14 itself agrees with what "
+					"the agent recorded. Reboot to have the "
+					"helper write the handoff again; see the "
+					"preceding SECURITY log for the state "
+					"that leaves the same evidence.");
+				break;
 			default:
 				lota_err(
 					"PCR14 boot-commitment refused; see the "
@@ -682,5 +709,11 @@ int self_measure(struct tpm_context *ctx)
 	 */
 	memcpy(ctx->self_hash, self_hash, LOTA_HASH_SIZE);
 	ctx->self_hash_ready = true;
-	return 0;
+
+	/*
+	 * Extend succeeded either way; say which way, because a warm restart
+	 * that found the commitment already in the register has spent no boot
+	 * and the caller's log line is the only place that shows.
+	 */
+	return (int)tpm_boot_commitment_outcome(ctx->boot_commitment_state);
 }

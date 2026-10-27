@@ -37,7 +37,7 @@ func TestRequireCert_RejectsReportWithoutAIKCertificate(t *testing.T) {
 	if verr == nil {
 		t.Fatal("expected verification to fail without an AIK certificate")
 	}
-	if result == nil || result.Result != types.VerifySigFail {
-		t.Fatalf("expected VerifySigFail, got %+v (err=%v)", result, verr)
+	if result == nil || result.Result != types.VerifyCertificateMissing {
+		t.Fatalf("expected VerifyCertificateMissing, got %+v (err=%v)", result, verr)
 	}
 }

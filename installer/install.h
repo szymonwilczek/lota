@@ -25,6 +25,7 @@
 #define EXIT_INSTALL_FAIL 1
 #define EXIT_INSTALL_USAGE 2
 #define EXIT_INSTALL_REBOOT 10 /* re-run after reboot to resume */
+#define EXIT_INSTALL_DEFERRED 11 /* boot-path stages left to a person */
 
 /* Well-known artifact paths laid down by the LOTA package */
 #define PATH_AGENT_BIN "/usr/bin/lota-agent"
@@ -34,6 +35,7 @@
 #define PATH_AGENT_SOCKET "/usr/lib/systemd/system/lota-agent.socket"
 #define PATH_UDEV_RULE "/usr/lib/udev/rules.d/99-lota-tpm.rules"
 #define PATH_DRACUT_MODULE "/usr/lib/dracut/modules.d/90lota/module-setup.sh"
+#define PATH_LOTA_CONF_DIR "/etc/lota"
 #define PATH_LOTA_CONF "/etc/lota/lota.conf"
 
 /*
@@ -90,6 +92,9 @@ struct install_ctx {
 	struct install_opts opts;
 	struct ui ui;
 	int reboot_needed; /* finished stage requires a reboot */
+	/* a stage changed this host during this run, so state read from before it
+	 * no longer describes what the host would do now */
+	int applied;
 };
 
 /* Probe verdict for one stage */
@@ -102,10 +107,8 @@ enum stage_state {
 	STAGE_ERROR, /* the probe itself failed */
 };
 
-/* Holds the longest note stage produces:
- * the Secure-Boot remediation, which names the setting, the route into this
- * machine's firmware setup and what enabling it does not break */
-#define STAGE_NOTE_CAP 1024
+/* Fits the longest stage note, the Secure Boot remediation */
+#define STAGE_NOTE_CAP 1536
 
 struct stage {
 	const char *title;
@@ -131,9 +134,103 @@ struct stage {
 	int boot_path;
 };
 
+/* where the enforcement object's verification key comes from */
+enum trust_key_source {
+	TRUST_KEY_NONE = 0, /* nothing readable anywhere */
+	TRUST_KEY_NAMED, /* --policy-pubkey */
+	TRUST_KEY_CONFIGURED, /* policy_pubkey in lota.conf */
+	TRUST_KEY_OVERRIDE, /* the operator's own key on disk */
+	TRUST_KEY_PACKAGED, /* the key the agent package shipped */
+};
+
+/*
+ * installer_trust_key - which key the enforcement check will name
+ *
+ * @named:         --policy-pubkey path, or NULL.
+ * @conf_pubkey:   policy_pubkey from the configuration, or NULL.
+ * @override_path: operator-owned key no package owns.
+ * @packaged_path: key shipped beside the object.
+ * @src:           set to the source of the returned path; may be NULL.
+ *
+ * Paths are parameters so tests need not touch /usr or /etc.
+ */
+const char *installer_trust_key(const char *named, const char *conf_pubkey,
+				const char *override_path,
+				const char *packaged_path,
+				enum trust_key_source *src);
+
+/* human-readable @src */
+const char *installer_trust_key_source_says(enum trust_key_source src);
+
+/*
+ * installer_trust_fallback - the key the agent resolves once @key is gone
+ *
+ * @key:           the key installer_trust_key() returned.
+ * @src:           where it came from.
+ * @conf_pubkey, @override_path, @packaged_path: as for installer_trust_key().
+ *
+ * Returns NULL when nothing else would verify the object in its place.
+ */
+const char *installer_trust_fallback(const char *key, enum trust_key_source src,
+				     const char *conf_pubkey,
+				     const char *override_path,
+				     const char *packaged_path);
+
+/*
+ * installer_trust_refusal - the note for an object @key does not verify
+ *
+ * @fallback: what installer_trust_fallback() returned.
+ * @obj:      the enforcement object.
+ */
+void installer_trust_refusal(char *buf, size_t cap, const char *key,
+			     enum trust_key_source src, const char *fallback,
+			     const char *obj);
+
+/*
+ * install_unattended_checkpoint - an unattended run stops at the checkpoint
+ *
+ * @buf, @cap: filled with what the run prints there.
+ * @deferred:  indices into install_stages[] the run left to a person.
+ * @n:         how many.
+ *
+ * Returns the exit code the run ends with.
+ */
+int install_unattended_checkpoint(char *buf, size_t cap, const int *deferred,
+				  int n);
+
+/*
+ * install_reboot_required - the sentence a run that stops for a reboot opens
+ * with
+ *
+ * @buf, @cap: filled with the sentence.
+ * @note:      why, as the stage that asked for the reboot put it.
+ */
+void install_reboot_required(char *buf, size_t cap, const char *note);
+
+/*
+ * install_stage_result - the outcome a stage reports
+ *
+ * @st:      what the stage's probe says now.
+ * @applied: 1 when this run applied the stage just before that probe.
+ */
+enum ui_result install_stage_result(enum stage_state st, int applied);
+
 /* Stage table (stages.c); barrier_index marks the reboot checkpoint */
 extern const struct stage install_stages[];
 extern const int install_stage_count;
+
+/* stage rows the TUI can show; stages.c asserts the table fits */
+#define INSTALL_MAX_TUI_STAGES 32
+
+/* Self-check: the last step of every run, outside the stage table;
+ * install_step_count includes it */
+extern const char install_selfcheck_title[];
+extern const int install_step_count;
+
+/* Read-only self-check for --status: floor, agent binary,
+ * service and certificate; no attestation round-trip */
+enum stage_state install_selfcheck_probe(struct install_ctx *ctx, char *note,
+					 size_t cap);
 
 /* Final acceptance run + "what leaves this machine" summary.
  * Returns 0 or -1. */

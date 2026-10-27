@@ -14,6 +14,7 @@
 #include <fcntl.h>
 #include <netdb.h>
 #include <poll.h>
+#include <signal.h>
 #include <string.h>
 #include <sys/epoll.h>
 #include <sys/socket.h>
@@ -26,6 +27,7 @@
 #include <openssl/prov_ssl.h>
 #include <openssl/types.h>
 #include <openssl/x509.h>
+#include <openssl/x509_vfy.h>
 #include <stdio.h>
 #include <stdlib.h>
 
@@ -35,9 +37,12 @@
 /* TLS socket I/O timeout */
 #define NET_IO_TIMEOUT_SEC 30
 
-/* Where the kernel reports whether SELinux is enforcing.
+/* Where the kernel publishes SELinux state.
  * Read directly, so the agent needs no libselinux at link time */
-#define NET_SELINUX_ENFORCE_PATH "/sys/fs/selinux/enforce"
+#define NET_SELINUX_ROOT "/sys/fs/selinux"
+/* The tunable that decides whether the agent's domain may reach the network
+ * at all; selinux/README.rst documents it as an operator's switch */
+#define NET_ATTEST_BOOLEAN "lota_network_attest"
 
 /*
  * Wire-format size assertions.
@@ -80,6 +85,26 @@ static int normalize_socket_fd(int fd)
 	return fd;
 }
 
+int net_transport_error(int ssl_err, int sock_errno)
+{
+	switch (ssl_err) {
+	case SSL_ERROR_ZERO_RETURN:
+		return -LOTA_ERR_NET_PEER_CLOSED;
+	case SSL_ERROR_SYSCALL:
+		/* SO_RCVTIMEO/SO_SNDTIMEO expiry arrives as EAGAIN */
+		if (sock_errno == EAGAIN || sock_errno == EWOULDBLOCK)
+			return -ETIMEDOUT;
+		if (sock_errno)
+			return -sock_errno;
+		/* no errno, no close_notify: the peer was killed */
+		return -LOTA_ERR_NET_PEER_GONE;
+	case SSL_ERROR_SSL:
+		return -LOTA_ERR_NET_TLS;
+	default:
+		return -EIO;
+	}
+}
+
 /*
  * Wait for SSL socket to become ready using poll().
  * Prevents busy-waiting on SSL_ERROR_WANT_READ/WRITE.
@@ -116,8 +141,20 @@ static int ssl_wait(SSL *ssl, int event)
 
 int net_init(void)
 {
+	struct sigaction sa;
+
 	if (ssl_initialized)
 		return 0;
+
+	/*
+	 * A write to a closed peer must fail with EPIPE, not kill the process;
+	 * one-shot verbs never run the daemon's signal setup.
+	 */
+	memset(&sa, 0, sizeof(sa));
+	sa.sa_handler = SIG_IGN;
+	sigemptyset(&sa.sa_mask);
+	if (sigaction(SIGPIPE, &sa, NULL) < 0)
+		return -errno;
 
 	ssl_initialized = 1;
 	return 0;
@@ -174,7 +211,7 @@ int net_context_init(struct net_context *ctx, const char *server, int port,
 		lota_warn("Do NOT use in production.");
 		SSL_CTX_set_verify(ssl_ctx, SSL_VERIFY_NONE, NULL);
 	} else if (ca_cert_path) {
-		/* custom CA certificate provided */
+		/* pinned anchor: a CA or the listener's own certificate */
 		if (SSL_CTX_load_verify_locations(ssl_ctx, ca_cert_path,
 						  NULL) != 1) {
 			lota_err("Failed to load CA certificate: %s",
@@ -182,6 +219,12 @@ int net_context_init(struct net_context *ctx, const char *server, int port,
 			SSL_CTX_free(ssl_ctx);
 			return -EINVAL;
 		}
+		/*
+		 * Let the chain end at the pinned certificate even when it is
+		 * a CA-issued leaf whose issuer is not in the store.
+		 */
+		X509_VERIFY_PARAM_set_flags(SSL_CTX_get0_param(ssl_ctx),
+					    X509_V_FLAG_PARTIAL_CHAIN);
 		SSL_CTX_set_verify(ssl_ctx, SSL_VERIFY_PEER, NULL);
 	} else {
 		/*
@@ -382,7 +425,8 @@ int net_connect(struct net_context *ctx)
 		SSL_free(ssl);
 		close(sock);
 		ctx->socket_fd = -1;
-		return -ECONNABORTED;
+		/* the socket connected: TLS refused, the host was reachable */
+		return -LOTA_ERR_NET_TLS_HANDSHAKE;
 	}
 
 	if (ctx->skip_verify) {
@@ -417,7 +461,7 @@ int net_connect(struct net_context *ctx)
 			SSL_free(ssl);
 			close(sock);
 			ctx->socket_fd = -1;
-			return -EACCES;
+			return -LOTA_ERR_NET_TLS_CERT;
 		}
 
 		/* verify server presented a certificate */
@@ -428,7 +472,7 @@ int net_connect(struct net_context *ctx)
 			SSL_free(ssl);
 			close(sock);
 			ctx->socket_fd = -1;
-			return -EACCES;
+			return -LOTA_ERR_NET_TLS_CERT;
 		}
 		X509_free(peer_cert);
 	}
@@ -446,7 +490,7 @@ int net_connect(struct net_context *ctx)
 			SSL_free(ssl);
 			close(sock);
 			ctx->socket_fd = -1;
-			return -EACCES;
+			return -LOTA_ERR_NET_TLS_PIN;
 		}
 
 		unsigned char digest[LOTA_PIN_SHA256_LEN];
@@ -462,7 +506,7 @@ int net_connect(struct net_context *ctx)
 			SSL_free(ssl);
 			close(sock);
 			ctx->socket_fd = -1;
-			return -EACCES;
+			return -LOTA_ERR_NET_TLS_PIN;
 		}
 		X509_free(peer_cert);
 
@@ -492,7 +536,7 @@ int net_connect(struct net_context *ctx)
 			SSL_free(ssl);
 			close(sock);
 			ctx->socket_fd = -1;
-			return -EACCES;
+			return -LOTA_ERR_NET_TLS_PIN;
 		}
 	}
 
@@ -542,7 +586,7 @@ int net_recv_challenge(struct net_context *ctx,
 					return wait_ret;
 				continue;
 			}
-			return -EIO;
+			return net_transport_error(ssl_err, errno);
 		}
 		total += ret;
 	}
@@ -587,7 +631,7 @@ int net_send_report(struct net_context *ctx, const void *report,
 					return wait_ret;
 				continue;
 			}
-			return -EIO;
+			return net_transport_error(ssl_err, errno);
 		}
 		total += ret;
 	}
@@ -615,7 +659,7 @@ int net_recv_result(struct net_context *ctx, struct verifier_result *result)
 					return wait_ret;
 				continue;
 			}
-			return -EIO;
+			return net_transport_error(ssl_err, errno);
 		}
 		total += ret;
 	}
@@ -661,7 +705,7 @@ int net_write_all(struct net_context *ctx, const void *buf, size_t len)
 					return wait_ret;
 				continue;
 			}
-			return -EIO;
+			return net_transport_error(ssl_err, errno);
 		}
 		total += (size_t)ret;
 	}
@@ -690,7 +734,7 @@ int net_read_full(struct net_context *ctx, void *buf, size_t len)
 					return wait_ret;
 				continue;
 			}
-			return -EIO;
+			return net_transport_error(ssl_err, errno);
 		}
 		total += (size_t)ret;
 	}
@@ -733,13 +777,35 @@ out:
 	return ret;
 }
 
-const char *net_connect_refusal_hint(int err, int port,
-				     const char *enforce_path, char *buf,
-				     size_t cap)
+/* First byte of a selinuxfs node under @root, or -1 when it cannot be read */
+static int selinux_node_state(const char *root, const char *rel)
 {
-	char state[8];
+	char path[256], state[8];
 	ssize_t got;
 	int fd, n;
+
+	n = snprintf(path, sizeof(path), "%s/%s", root, rel);
+	if (n < 0 || (size_t)n >= sizeof(path))
+		return -1;
+	fd = open(path, O_RDONLY | O_CLOEXEC);
+	if (fd < 0)
+		return -1;
+	got = read(fd, state, sizeof(state) - 1);
+	close(fd);
+	if (got <= 0)
+		return -1;
+	state[got] = '\0';
+	if (state[0] != '0' && state[0] != '1')
+		return -1;
+	return state[0] - '0';
+}
+
+const char *net_connect_refusal_hint(int err, int port,
+				     const char *selinux_root, char *buf,
+				     size_t cap)
+{
+	const char *root = selinux_root ? selinux_root : NET_SELINUX_ROOT;
+	int tunable, n;
 
 	if (err != EACCES || !buf || cap == 0)
 		return NULL;
@@ -752,25 +818,47 @@ const char *net_connect_refusal_hint(int err, int port,
 	 * so this EACCES came from somewhere else and the port label is
 	 * the wrong thing to name.
 	 */
-	fd = open(enforce_path ? enforce_path : NET_SELINUX_ENFORCE_PATH,
-		  O_RDONLY | O_CLOEXEC);
-	if (fd < 0)
-		return NULL;
-	got = read(fd, state, sizeof(state) - 1);
-	close(fd);
-	if (got <= 0)
-		return NULL;
-	state[got] = '\0';
-	if (state[0] != '1')
+	if (selinux_node_state(root, "enforce") != 1)
 		return NULL;
 
-	n = snprintf(buf, cap,
-		     "SELinux is enforcing and TCP port %d carries no LOTA "
-		     "label, which is what refuses this connect; the policy "
-		     "dontaudits it, so no AVC is logged anywhere. Label the "
-		     "port and the next round goes through:\n"
-		     "  sudo semanage port -a -t lota_port_t -p tcp %d",
-		     port, port);
+	/*
+	 * Name only the cause that was read. The node holds "<active> <pending>";
+	 * without the module there is no node and either applies.
+	 */
+	tunable = selinux_node_state(root, "booleans/" NET_ATTEST_BOOLEAN);
+
+	if (tunable == 0)
+		n = snprintf(buf, cap,
+			     "SELinux is enforcing and the " NET_ATTEST_BOOLEAN
+			     " boolean is off, which is "
+			     "what refuses this connect; the policy dontaudits "
+			     "it, so no AVC is logged anywhere. Labelling the "
+			     "port changes nothing while the boolean is off -- "
+			     "semanage would answer 'already defined' and exit "
+			     "0. Turn it back on:\n"
+			     "  sudo setsebool -P " NET_ATTEST_BOOLEAN " on");
+	else if (tunable == 1)
+		n = snprintf(buf, cap,
+			     "SELinux is enforcing and TCP port %d carries no "
+			     "LOTA label, which is what refuses this connect; "
+			     "the policy dontaudits it, so no AVC is logged "
+			     "anywhere. Label the port and the next round goes "
+			     "through:\n"
+			     "  sudo semanage port -a -t lota_port_t -p tcp %d",
+			     port, port);
+	else
+		n = snprintf(buf, cap,
+			     "SELinux is enforcing and refused this connect; "
+			     "the policy dontaudits it, so no AVC is logged "
+			     "anywhere. Two rules refuse it and this host "
+			     "cannot read which one did: TCP port %d carrying "
+			     "no LOTA label, and the " NET_ATTEST_BOOLEAN
+			     " boolean being off.\n"
+			     "  sudo semanage port -a -t lota_port_t -p tcp "
+			     "%d\n"
+			     "  sudo setsebool -P " NET_ATTEST_BOOLEAN " on",
+			     port, port);
+
 	/* half a command is worse than none -- an operator would run it */
 	if (n < 0 || (size_t)n >= cap)
 		return NULL;
@@ -792,9 +880,26 @@ const char *net_result_str(uint32_t result)
 	case VERIFY_IOMMU_FAIL:
 		return "FAIL - IOMMU requirement not met";
 	case VERIFY_OLD_VERSION:
-		return "FAIL - Protocol version mismatch";
+		return "FAIL - Protocol version mismatch: this agent speaks a "
+		       "report wire the publisher's verifier does not "
+		       "implement. Update the agent to the build the "
+		       "publisher runs its fleet on";
+	case VERIFY_REPORT_MALFORMED:
+		/* a damaged frame, not an old build: no upgrade advice */
+		return "FAIL - The publisher's verifier could not read the "
+		       "report this host sent: it arrived incomplete or "
+		       "altered on the way. Nothing on this machine is in "
+		       "question yet. Attest again, and if it keeps "
+		       "happening, the network path between this host and "
+		       "the verifier is what to look at";
 	case VERIFY_INTEGRITY_MISMATCH:
-		return "FAIL - Integrity mismatch (agent binary changed!)";
+		return "FAIL - Integrity mismatch: a measurement this host is "
+		       "pinned to no longer matches. It is the agent binary, "
+		       "the PCR 14 boot commitment or the firmware/Secure Boot "
+		       "baseline, and the publisher's verifier log names "
+		       "which. An updated agent needs its build allowed there; "
+		       "a firmware or boot-chain change needs this host "
+		       "re-anchored";
 	case VERIFY_REVOKED:
 		return "FAIL - This host's attestation key was revoked by the "
 		       "publisher's administrator; re-enrollment is their "
@@ -804,6 +909,69 @@ const char *net_result_str(uint32_t result)
 		       "administrator; nothing on it changes that answer";
 	case VERIFY_INTERNAL_ERROR:
 		return "FAIL - Verifier internal error";
+	case VERIFY_POLICY_REQUIREMENT:
+		/* unclassified requirement, e.g. an unenrolled firmware baseline */
+		return "FAIL - This host does not meet a requirement the "
+		       "publisher's policy states about it, and the verdict "
+		       "does not say which. The requirements this agent knows "
+		       "have a verdict of their own, so this is either one a "
+		       "newer verifier states -- update the agent and attest "
+		       "again -- or one only the publisher can settle, such "
+		       "as a host whose firmware baseline nobody has enrolled";
+	case VERIFY_SECUREBOOT_REQUIRED:
+		return "FAIL - Secure Boot is not on for this host and the "
+		       "publisher's policy requires it. The firmware's own "
+		       "measurement is what is read here, so the machine's "
+		       "own report cannot substitute for it: turn Secure Boot "
+		       "on in firmware setup, boot, then attest again";
+	case VERIFY_LOCKDOWN_REQUIRED:
+		return "FAIL - This host's kernel is not in lockdown and the "
+		       "publisher's policy requires it. Boot with "
+		       "lockdown=integrity on the kernel command line (Secure "
+		       "Boot turns it on by itself on most distributions)";
+	case VERIFY_MODULE_SIG_REQUIRED:
+		return "FAIL - This host's kernel loads unsigned modules and "
+		       "the publisher's policy requires signature "
+		       "enforcement. Boot with module.sig_enforce=1, or a "
+		       "kernel built with CONFIG_MODULE_SIG_FORCE";
+	case VERIFY_ENFORCE_REQUIRED:
+		return "FAIL - The LOTA LSM is loaded on this host but is not "
+		       "enforcing, and the publisher's policy requires it to "
+		       "be. Set enforce = true in /etc/lota/agent.conf and "
+		       "restart lota-agent";
+	case VERIFY_IMA_APPRAISAL_REQUIRED:
+		return "FAIL - This host's kernel appraises no executable and "
+		       "the publisher's policy requires IMA appraisal. It is "
+		       "a boot-time policy and a signed filesystem: see the "
+		       "publisher's bring-up instructions before turning it "
+		       "on, because a host that appraises what it cannot "
+		       "verify does not boot";
+	case VERIFY_KERNEL_IMAGE_REQUIRED:
+		return "FAIL - This host's kernel is not one the publisher's "
+		       "policy allows, or its boot did not measure a kernel "
+		       "image the policy could be checked against. Boot a "
+		       "kernel the publisher lists, from a bootloader that "
+		       "measures it into PCR 9";
+	case VERIFY_CMDLINE_REQUIRED:
+		return "FAIL - This host's kernel command line carries a "
+		       "parameter the publisher's policy denies, or its boot "
+		       "did not measure the command line at all. The "
+		       "verifier's log names the parameter; the usual ones "
+		       "are debug and kernel-integrity switches added by hand";
+	case VERIFY_CERTIFICATE_MISSING:
+		return "FAIL - This host presented no attestation "
+		       "certificate, so the publisher has nothing to identify "
+		       "it by. The enrolment did not finish or its "
+		       "certificate is not on disk. Run lota-agent --reenroll "
+		       "--ca-cert <their anchor>";
+	case VERIFY_CERTIFICATE_VALIDITY:
+		return "FAIL - This host's attestation certificate is outside "
+		       "the window it is valid in. Either it has expired, "
+		       "which is what a certificate lifetime running out looks "
+		       "like, or this machine's clock is behind the "
+		       "publisher's and the certificate is not valid yet. The "
+		       "quote itself is not in question. Check the clock, then "
+		       "run lota-agent --reenroll --ca-cert <their anchor>";
 	case VERIFY_IDENTITY_FAIL:
 		return "FAIL - The certificate this host presented does not "
 		       "certify the key it signed with, so the publisher "

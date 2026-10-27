@@ -25,6 +25,7 @@ func benchBegin() *BeginRequest {
 
 func benchResult() *ResultReply {
 	return &ResultReply{
+		Version:    Version, // EncodeResult refuses version 0
 		Status:     StatusOK,
 		AIKCertDER: randBytes(640), // issued AIK certificate
 		DeviceID:   hex.EncodeToString(randBytes(32)),

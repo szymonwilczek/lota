@@ -54,6 +54,7 @@ struct demo_options {
 	 * Naming it is what opens a session for that publisher,
 	 * and a session-gated host reports only while one is open
 	 * -- so a producer that names nobody is never attested for anybody.
+	 * A host that answers for several refuses its token requests.
 	 * A shipped producer knows its own publisher; this is a flag here
 	 * because the demo does not know which machine it is run on.
 	 */
@@ -108,7 +109,8 @@ static void print_usage(const char *argv0)
 		"'lota-agent --list-publishers' prints). Naming it opens a\n"
 		"session for that publisher; a session-gated host reports only\n"
 		"while one is open, so a producer that names nobody is never\n"
-		"attested for anybody.\n"
+		"attested for anybody. A host that answers for several\n"
+		"publishers refuses a request that names none.\n"
 		"\n"
 		"--print-runtime-objects prints, one path per line, the\n"
 		"file-backed objects (main binary + shared libraries) this\n"
@@ -125,8 +127,10 @@ static void print_usage(const char *argv0)
 		"--require-full-image demands LOTA_FLAG_IMAGE_FULLY_MEASURED,\n"
 		"so a heartbeat is TRUSTED only when the agent measured every\n"
 		"object the process maps. On a host whose libraries carry no\n"
-		"fs-verity digest that makes every heartbeat UNTRUSTED, which\n"
-		"is the publisher policy choice this flag exists to show.\n"
+		"fs-verity digest that makes every heartbeat UNTRUSTED, and so\n"
+		"does a host that protects nothing: a round with no process to\n"
+		"measure is not a complete one. That is the publisher policy\n"
+		"choice this flag exists to show.\n"
 		"\n"
 		"When --tamper-marker is set (or LOTA_DEMO_TAMPER_MARKER is\n"
 		"exported) and the named path exists at heartbeat time, the\n"

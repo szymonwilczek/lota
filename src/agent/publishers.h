@@ -29,10 +29,14 @@ struct publisher_entry {
 	bool consented;
 	time_t consented_at;
 
-	/* enrollment record exists, naming where it was made */
+	/* enrollment record read, naming where it was made */
 	bool enrolled;
 	char ca_server[256];
 	int ca_port;
+
+	/* record on disk this build cannot read; @enroll_rc says why */
+	bool enroll_unreadable;
+	int enroll_rc;
 
 	/* the AIK this publisher's evidence is signed with */
 	bool has_aik_handle;
@@ -44,18 +48,31 @@ struct publisher_entry {
 };
 
 /*
- * Read every profile under @base_dir into @out, in directory order.
+ * Read up to @max profiles under @base_dir into @out, in directory order.
  *
  * Directory that holds nothing readable is still listed: profile with consent
  * record and no enrollment is exactly the state between agreeing and title first
  * running, and hiding it would hide the answer to "why is this publisher not
  * working yet".
  *
- * Returns 0 (with *count set), or negative errno.
+ * *count is the total held, not the number stored.
+ *
+ * Returns 0 (with *count set), -ENOBUFS when more than @max exist
+ * (first @max filled), or negative errno.
  * Missing base directory is not an error: this host has answered to nobody.
  */
 int publishers_list(const char *base_dir, struct publisher_entry *out,
 		    size_t max, size_t *count);
+
+/*
+ * Read every profile under @base_dir into a buffer sized to hold them.
+ *
+ * *out is NULL when the host has answered to nobody; free() it otherwise.
+ *
+ * Returns 0 (with *out and *count set), or negative errno.
+ */
+int publishers_list_alloc(const char *base_dir, struct publisher_entry **out,
+			  size_t *count);
 
 /*
  * How many of the listed publishers hold an attestation key.
@@ -81,6 +98,32 @@ static inline bool publishers_default_key_in_use(size_t publisher_count)
 {
 	return publisher_count == 0;
 }
+
+/*
+ * Whether the anchor file profile @id enrolled with now names another profile,
+ * as after a pinned listener certificate is re-issued over a new key.
+ *
+ * @now_id (at least LOTA_PROFILE_ID_LEN, or NULL) receives the identity the
+ * file names.
+ *
+ * Returns 1 if it names another, 0 if still @id, -ENOENT if not enrolled
+ * or no anchor recorded, or negative errno.
+ */
+int publisher_anchor_names_another(const char *base_dir, const char *id,
+				   char *now_id, size_t cap);
+
+/*
+ * Another enrolled profile, not @self_id, at the same CA endpoint: what
+ * a rotated pin leaves behind, two slots for one device at the publisher.
+ *
+ * @other_id (at least LOTA_PROFILE_ID_LEN) receives the first in directory
+ * order.
+ *
+ * Returns 1 with @other_id filled, 0 if none, or negative errno.
+ */
+int publishers_endpoint_shared(const char *base_dir, const char *self_id,
+			       const char *ca_server, int ca_port,
+			       char *other_id, size_t cap);
 
 /*
  * Delete everything stored for one publisher.

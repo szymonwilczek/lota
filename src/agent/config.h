@@ -312,6 +312,35 @@ uint32_t config_clamp_aik_ttl(uint32_t ttl, const char *filepath, int lineno);
  */
 int config_load_from_fd(struct lota_config *cfg, int fd, const char *filepath);
 
+/* strict flags, applied in enforce mode only */
+#define LOTA_STRICT_FLAG_COUNT 5
+
+/*
+ * config_inert_strict_flags - strict flags set but ignored outside enforce
+ *
+ * @cfg:   Configuration to read.
+ * @names: Receives the key names, in the order config_dump prints them.
+ * @max:   Capacity of @names.
+ *
+ * Returns the number of names written, or a negative errno.
+ */
+int config_inert_strict_flags(const struct lota_config *cfg,
+			      const char *names[], int max);
+
+/*
+ * config_inert_strict_flags_of - config_inert_strict_flags() on bare flags
+ *
+ * @mode_is_enforce: whether the mode being applied is enforce.
+ * @flags:           the five flags, in the order config_dump prints them.
+ * @names:           receives the key names of those that are on and inert.
+ * @max:             capacity of @names.
+ *
+ * Returns the number of names written, or a negative errno.
+ */
+int config_inert_strict_flags_of(bool mode_is_enforce,
+				 const bool flags[LOTA_STRICT_FLAG_COUNT],
+				 const char *names[], int max);
+
 /*
  * config_dump - Print current configuration to FILE.
  *
@@ -394,23 +423,5 @@ int config_profile_append_text(const char *existing,
  * the result does not parse, in which case @path is left exactly as it was.
  */
 int config_profile_append(const char *path, const struct lota_profile *p);
-
-/*
- * config_resolve_policy_pubkey - Which key verifies the enforcement object.
- *
- * @configured:    policy_pubkey from the config file or the CLI, or NULL.
- * @override_path: operator-owned key, used when it exists (no package owns it).
- * @packaged_path: key the agent package shipped beside the object.
- *
- * Returns the path to use, or NULL when nothing readable was found
- * -- which the caller must treat as fatal, since an object nobody can verify
- *  is an object the agent refuses to load.
- *
- * The paths are arguments rather than constants so the order can be tested
- * without writing to /usr or /etc.
- */
-const char *config_resolve_policy_pubkey(const char *configured,
-					 const char *override_path,
-					 const char *packaged_path);
 
 #endif /* LOTA_CONFIG_H */

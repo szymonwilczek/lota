@@ -25,6 +25,8 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -154,7 +156,7 @@ func testFleet(t *testing.T, n int) *synth.Fleet {
 	if err != nil {
 		t.Fatalf("NewCA: %v", err)
 	}
-	fleet, err := synth.NewFleet(ca, n, 2)
+	fleet, err := synth.NewFleet(ca, n, 2, "")
 	if err != nil {
 		t.Fatalf("NewFleet: %v", err)
 	}
@@ -343,4 +345,132 @@ func TestErrorKind(t *testing.T) {
 	if got := errorKind(&net.DNSError{IsTimeout: true}); got != "timeout" {
 		t.Errorf("errorKind(timeout) = %q", got)
 	}
+}
+
+// The headline rate counts only verified attestations,
+// so a refused run rates below a clean one
+func TestRateCountsVerifiedAttestations(t *testing.T) {
+	cfg := &runConfig{Mode: modeStorm, Server: "127.0.0.1:1", Agents: 5}
+	started := time.Now()
+
+	// clean: 5 of 5 verified in one second
+	clean := newCollector(5)
+	for i := range 5 {
+		clean.recordOK(i, 10*time.Millisecond)
+	}
+	cleanSum := clean.summarize(cfg, started, started.Add(time.Second))
+
+	// degraded: refused at connect, so it finishes in half the time
+	degraded := newCollector(5)
+	degraded.recordOK(0, 10*time.Millisecond)
+	degraded.recordOK(1, 10*time.Millisecond)
+	for range 3 {
+		degraded.recordTransport("dial")
+	}
+	degradedSum := degraded.summarize(cfg, started, started.Add(500*time.Millisecond))
+
+	if cleanSum.RatePerSec != 5.0 {
+		t.Errorf("clean rate = %.1f/s, want 5.0/s (5 verified in 1s)", cleanSum.RatePerSec)
+	}
+	if degradedSum.RatePerSec != 4.0 {
+		t.Errorf("degraded rate = %.1f/s, want 4.0/s (2 verified in 0.5s)", degradedSum.RatePerSec)
+	}
+	if degradedSum.RatePerSec >= cleanSum.RatePerSec {
+		t.Errorf("rate rose as the fleet was refused: clean %.1f/s, degraded %.1f/s",
+			cleanSum.RatePerSec, degradedSum.RatePerSec)
+	}
+}
+
+// The summary carries the attempted rate beside the verified one
+func TestSummaryCarriesBothRates(t *testing.T) {
+	cfg := &runConfig{Mode: modeStorm, Server: "127.0.0.1:1", Agents: 5}
+	started := time.Now()
+	col := newCollector(5)
+	col.recordOK(0, 10*time.Millisecond)
+	col.recordOK(1, 10*time.Millisecond)
+	for range 3 {
+		col.recordTransport("dial")
+	}
+
+	raw, err := json.Marshal(col.summarize(cfg, started, started.Add(500*time.Millisecond)))
+	if err != nil {
+		t.Fatalf("marshal summary: %v", err)
+	}
+	var fields map[string]any
+	if err := json.Unmarshal(raw, &fields); err != nil {
+		t.Fatalf("parse summary: %v", err)
+	}
+	if got, ok := fields["achieved_rate_per_sec"].(float64); !ok || got != 4.0 {
+		t.Errorf("achieved_rate_per_sec = %v, want 4 (2 verified in 0.5s)", fields["achieved_rate_per_sec"])
+	}
+	if got, ok := fields["attempted_rate_per_sec"].(float64); !ok || got != 10.0 {
+		t.Errorf("attempted_rate_per_sec = %v, want 10 (5 attempts in 0.5s)", fields["attempted_rate_per_sec"])
+	}
+}
+
+// The progress line's rate counts verified attestations, as the summary's does
+func TestProgressLineCountsVerifiedAttestations(t *testing.T) {
+	clean := newCollector(5)
+	for i := range 5 {
+		clean.recordOK(i, 10*time.Millisecond)
+	}
+	degraded := newCollector(5)
+	degraded.recordOK(0, 10*time.Millisecond)
+	for range 4 {
+		degraded.recordTransport("dial")
+	}
+
+	cleanLine := firstProgressLine(t, clean)
+	degradedLine := firstProgressLine(t, degraded)
+	if !strings.Contains(degradedLine, "attempts=5") || !strings.Contains(degradedLine, "ok=1") {
+		t.Fatalf("progress line does not carry the counts it divides: %q", degradedLine)
+	}
+
+	cleanRate := progressRate(t, cleanLine)
+	degradedRate := progressRate(t, degradedLine)
+	if degradedRate >= cleanRate/2 {
+		t.Errorf("progress rate counts refused attestations: 5 of 5 verified reports %.1f/s and 1 of 5 reports %.1f/s\n  clean:    %s\n  degraded: %s",
+			cleanRate, degradedRate, cleanLine, degradedLine)
+	}
+}
+
+// firstProgressLine runs the progress ticker over col and returns its first line
+func firstProgressLine(t *testing.T, col *collector) string {
+	t.Helper()
+	lines := make(chan string, 4)
+	cfg := &runConfig{
+		Progress: 10 * time.Millisecond,
+		Logf: func(format string, args ...any) {
+			select {
+			case lines <- fmt.Sprintf(format, args...):
+			default:
+			}
+		},
+	}
+	stop := startProgress(cfg, col)
+	defer stop()
+	select {
+	case line := <-lines:
+		return line
+	case <-time.After(2 * time.Second):
+		t.Fatal("progress emitted no lines")
+		return ""
+	}
+}
+
+// progressRate reads the rate=N/s field out of a progress line
+func progressRate(t *testing.T, line string) float64 {
+	t.Helper()
+	for _, field := range strings.Fields(line) {
+		if !strings.HasPrefix(field, "rate=") {
+			continue
+		}
+		v, err := strconv.ParseFloat(strings.TrimSuffix(strings.TrimPrefix(field, "rate="), "/s"), 64)
+		if err != nil {
+			t.Fatalf("progress rate %q: %v", field, err)
+		}
+		return v
+	}
+	t.Fatalf("progress line carries no rate: %q", line)
+	return 0
 }

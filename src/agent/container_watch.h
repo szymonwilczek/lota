@@ -97,6 +97,14 @@ int container_watch_init(struct container_watch *w, const char *root,
 			 const struct container_watch_ops *ops);
 
 /*
+ * container_watch_bind_pending - whether a failed bind awaits the login
+ * @err: the negative errno a bind returned
+ *
+ * True for a runtime directory logind has not made yet; the watch retries it.
+ */
+bool container_watch_bind_pending(int err);
+
+/*
  * container_watch_fd - descriptor that reports a change under the root
  *
  * Returns a descriptor the event loop can wait on, or -1 when the root could

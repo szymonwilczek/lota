@@ -266,6 +266,12 @@ static const char *result_glyph(const struct ui *ui, enum ui_result r,
 	case UI_PENDING:
 		*sgr = col(ui, SGR_YELLOW);
 		return "●";
+	case UI_BLOCKED:
+		*sgr = col(ui, SGR_RED);
+		return "✖";
+	case UI_APPLIED:
+		*sgr = col(ui, SGR_GREEN);
+		return "✔";
 	case UI_SKIP:
 	default:
 		*sgr = col(ui, SGR_DIM);
@@ -273,7 +279,7 @@ static const char *result_glyph(const struct ui *ui, enum ui_result r,
 	}
 }
 
-static const char *result_word(enum ui_result r)
+const char *ui_result_word(enum ui_result r)
 {
 	switch (r) {
 	case UI_OK:
@@ -286,6 +292,10 @@ static const char *result_word(enum ui_result r)
 		return "needs reboot";
 	case UI_PENDING:
 		return "pending";
+	case UI_BLOCKED:
+		return "BLOCKED";
+	case UI_APPLIED:
+		return "applied";
 	case UI_SKIP:
 	default:
 		return "skipped";
@@ -301,20 +311,20 @@ void ui_stage_result(struct ui *ui, enum ui_result r, const char *title,
 	if (ui->sink) {
 		char buf[UI_LIVE_LINE_CAP];
 
-		snprintf(buf, sizeof(buf), "%s: %s%s%s", result_word(r), title,
-			 note ? " - " : "", note ? note : "");
+		snprintf(buf, sizeof(buf), "%s: %s%s%s", ui_result_word(r),
+			 title, note ? " - " : "", note ? note : "");
 		ui->sink->line(ui->sink->ud, buf);
 		return;
 	}
 	if (!ui->tty) {
-		printf("[lota-install]   %s: %s%s%s\n", result_word(r), title,
-		       note ? " - " : "", note ? note : "");
+		printf("[lota-install]   %s: %s%s%s\n", ui_result_word(r),
+		       title, note ? " - " : "", note ? note : "");
 		fflush(stdout);
 		return;
 	}
 	glyph = result_glyph(ui, r, &sgr);
 	if (!note)
-		note = result_word(r);
+		note = ui_result_word(r);
 
 	/* short notes ride the title line,
 	 * long ones wrap below it */
@@ -323,7 +333,7 @@ void ui_stage_result(struct ui *ui, enum ui_result r, const char *title,
 		       title, col(ui, SGR_DIM), note, col(ui, SGR_RESET));
 	} else {
 		printf("  %s%s%s %s %s(%s)%s\n", sgr, glyph, col(ui, SGR_RESET),
-		       title, col(ui, SGR_DIM), result_word(r),
+		       title, col(ui, SGR_DIM), ui_result_word(r),
 		       col(ui, SGR_RESET));
 		printf("%s", col(ui, SGR_DIM));
 		wrap_print(ui, "    ", note);
@@ -609,7 +619,7 @@ void ui_live_end(struct ui *ui, enum ui_result r)
 		return;
 	}
 	if (!ui->tty) {
-		printf("[lota-install]   %s: %s (%.1fs)\n", result_word(r),
+		printf("[lota-install]   %s: %s (%.1fs)\n", ui_result_word(r),
 		       ui->live_label, secs);
 		fflush(stdout);
 		return;
@@ -626,7 +636,7 @@ void ui_live_end(struct ui *ui, enum ui_result r)
 
 	glyph = result_glyph(ui, r, &sgr);
 	printf("  %s%s%s %s %s(%s, %.1fs)%s\n", sgr, glyph, col(ui, SGR_RESET),
-	       ui->live_label, col(ui, SGR_DIM), result_word(r), secs,
+	       ui->live_label, col(ui, SGR_DIM), ui_result_word(r), secs,
 	       col(ui, SGR_RESET));
 
 	if (r == UI_FAIL) {

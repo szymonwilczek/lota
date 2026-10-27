@@ -45,6 +45,12 @@ Pair the bundle with the manufacturers' EK revocation feeds: ``-ek-crl <file>``
 SIGHUP reloads a rewritten feed in place. See the "Manufacturer CRLs" section of
 :ghsrc:`configs/ek-roots/README.rst`.
 
+Two ceilings bound what an unauthenticated peer can hold open: ``-max-pending``
+caps concurrent half-finished enrollments (default 4096, then the
+concurrency-limit status), ``-session-ttl`` how long one survives unanswered
+(default 2 minutes). Lower them on a public CA. A non-positive value stops the
+CA at startup. Both are logged on the startup line beside ``aik_cert_ttl``.
+
 CA signing key
 ==============
 
@@ -74,6 +80,11 @@ build of the CA -- the default binary is pure-Go and has no PKCS#11 support:
 
     make BUILD_DIR=/var/tmp/lota-build attest-ca GO_TAGS=pkcs11   # cgo + PKCS#11
 
+A containerised CA takes the same road through the ``-hsm`` variant of the
+published image, which is that build on a base with a loader under it; the
+default image tag has no PKCS#11 support and refuses the flags below. See
+:doc:`../container-images`.
+
 Point the CA at the token instead of ``-ca-key``. The PIN is read from the
 environment, never a flag, so it stays out of the process argument list:
 
@@ -94,6 +105,10 @@ Select the key by ``-ca-key-pkcs11-label`` (CKA_LABEL) or ``-ca-key-pkcs11-id``
 startup and refuses to run on a mismatch, the same check applied to an on-disk
 key, so a wrong token or label cannot sign under the CA identity.
 
+A CA without PKCS#11 compiled in refuses a token key at key setup, and names both
+roads to a build that has it: ``make attest-ca GO_TAGS=pkcs11`` on a host, and the
+``-hsm`` image tag in a container.
+
 ``-ca-key`` and the ``-ca-key-pkcs11-*`` flags are mutually exclusive, and that
 is answered on **any** of the four: passing ``-ca-key`` beside a token, label or
 id is refused just as it is beside the module, and the error names the flags it
@@ -104,7 +119,7 @@ hand the fleet's trust root to a file the operator believed they had
 overridden.
 
 The CA key ceremony, rotation, and the offline-root / online-intermediate
-topology are covered in :doc:`../../security/ca-key <../../security/ca-key>`.
+topology are covered in :doc:`the CA key page <../../security/ca-key>`.
 
 Materializing the EK root bundle
 --------------------------------
@@ -118,16 +133,17 @@ then materialize the bundle:
 .. code-block:: sh
 
     # walk the EK cert's issuer chain to the self-signed root and draft a line
-    sudo tpm2_nvread 0x01c00002 -o ek.der
+    sudo tpm2_nvread 0x01c00002 > ek.der
     cp configs/ek-roots/sources.example sources
     scripts/lota-ek-root-pin.sh ek.der >>sources
 
     # after verifying each pin out of band, fetch and pin the roots
     scripts/lota-ek-roots-update.sh sources /var/lib/lota/ek-roots
 
-``lota-ek-root-pin.sh`` prints a fingerprint over what the network returned; it
-does not vouch for it, so confirm the pin against the vendor before the line
-enters ``sources``.
+The redirect leaves ``ek.der`` owned by the operator, so later steps need no
+``sudo``; ``sudo tpm2_nvread -o`` would leave a file only root can open.
+``lota-ek-root-pin.sh`` fingerprints what the network returned without
+vouching for it; confirm the pin with the vendor before it enters ``sources``.
 
 The bundle does not have to cover the whole path. A TPM that stores
 manufacturer intermediates of its own presents them with the enrollment
@@ -161,17 +177,29 @@ correlate the host through a shared identity. The endpoint is deliberately not
 the identity -- an address is mutable and two publishers can share a hostname,
 while reissuing the CA certificate over the same key keeps the profile.
 
+When the TLS layer refuses the connection -- the ``--ca-cert`` anchor does not
+verify the listener's certificate, or that certificate is not the pinned one --
+the agent says the CA answered, this host refused it, and names the
+``--ca-cert`` file. Only a CA that could not be reached gets the advice to
+confirm ``lota-attest-ca`` is running and reachable.
+
 A CA that refuses the enrollment says why in the agent's own output.
 Each refusal prints the status the CA sent and the sentence
 that goes with it -- an endorsement key that is not accepted here, an
 attestation key template that is not, a challenge the CA no longer holds, a
 CA that is at its concurrency limit, a token that was not recognised -- along
-with whether the answer is worth retrying. Two of them are worth separating:
-an internal error is a fault at the CA and a later attempt may succeed, while
-a rejected endorsement key is a decision about this machine that will be made
-the same way every time. A status the agent has no name for is printed as a
+with whether the answer is worth retrying. An internal error is a CA fault a
+later attempt may clear; a rejected endorsement key is refused every time; a
+stale manufacturer CRL is neither, and lifts once an operator refreshes the
+feed and signals the CA. A status the agent has no name for is printed as a
 number and said to be one, which is what an older agent meeting a newer CA
 looks like.
+
+An enrollment that fails at the CA keeps its profile directory, recorded handle
+and attestation key; enrolling again with the same anchor reuses them. Publisher
+slots are limited, so the failure names the profile it holds and the verb that
+frees it. A different certificate is a different publisher and takes another
+slot.
 
 The agent says so when it can tell. Both ``--enroll`` and ``--add-publisher``
 warn when the file named is not a CA certificate, naming what a re-key of it
@@ -179,15 +207,17 @@ would cost; an anchor produces no such line. It is a warning rather than a
 refusal, because a self-signed leaf is a legitimate pin for a deployment that
 wants one and nothing in the file says which was meant.
 
-Naming the listener certificate here instead is the mistake with the quietest
-consequences. It is the one certificate in a deployment that is rotated on a
-schedule, and a rotation that generates a new key changes the SPKI: every host
-of that publisher becomes a new device at once. Each one enrolls again,
-provisions another AIK in another TPM persistent slot, and needs consent again,
-while its previous enrollment record and certificate sit in a profile directory
-nothing reads. Nothing reports that this has happened -- the hosts look new,
-because to that publisher they are. Issue the listener from the CA and pass the
-CA, which is what :ghsrc:`examples/enrollment/gen-ca.sh` generates.
+Pinning the listener certificate costs slots silently. It is rotated on a
+schedule, and a rotation with a new key changes the SPKI, so every host starts a
+second profile: another AIK in another TPM persistent slot, consent recorded
+again, the old profile left unread. The publisher's CA names a device by its
+endorsement key and sees one device with two live attestation certificates;
+the host spends two of its eight slots on one publisher, and seven rotations
+fill them all. ``--forget-publisher`` returns a slot. An enrollment that finds
+another profile at the same CA host and port says so, naming it when its anchor
+path is the certificate now pinned, and ``--list-publishers`` marks a profile
+whose pinned certificate now names another publisher. Issue the listener from
+the CA and pass the CA, as :ghsrc:`examples/enrollment/gen-ca.sh` does.
 
 The AIK is part of the profile, not shared across it. Each publisher's
 enrollment provisions its own key, in its own TPM persistent slot, with its own
@@ -213,14 +243,39 @@ selects the profile:
 
     sudo lota-agent --reenroll --ca-cert ca.crt
 
+``--reenroll`` needs the endpoint the first enrollment recorded. With no
+record it points at ``--enroll``; with an unreadable one it names the file,
+its magic and version against the build's, and the way out: restore the file,
+or enroll again naming the endpoint. The attestation key is kept either way;
+enrollment reissues only its certificate.
+
+The running agent draws the same line: an unreadable record refuses the round
+with ``Enrollment record for publisher <id> is unreadable``, naming the file
+and the way out, instead of enrolling over it, and the renewal line says the
+endpoint is inside that record.
+
+A certificate that expires anyway (CA unreachable through the final third,
+or agent not running) is refused with ``FAIL - This host's attestation
+certificate is outside the window it is valid in``, counted as
+``certificate_validity``; the quote is not in question. A certificate not
+valid *yet* gets the same verdict and means the host clock is behind the
+publisher's: check the clock before re-enrolling.
+
+A host that never finished enrolling presents no certificate and is refused
+as ``certificate_missing``, not as a signature failure: the TPM is not at
+fault. The fix is the same ``--reenroll`` run.
+
 It is also the command that moves a host onto per-publisher keys. An AIK
 created before the publisher's identity entered the TPM creation template is
 one key shared by every publisher enrolled on that host, and a TPM key cannot
 be rewritten in place, so the agent refuses such a record instead of carrying
 it forward and says which publisher it belongs to. Re-enrolling that profile
-creates its own key; the device pseudonym is derived from the key and moves
-with it, so the publisher sees a device it has not met before and its verifier
-re-establishes the baseline.
+replaces the key with one of its own, certified under the same device ID:
+an HMAC over the endorsement key's modulus, keyed by the CA's pseudonym key,
+with the tenant mixed in when it is not ``default``. The attestation key is
+not an input, so the publisher's verifier checks the next report against the
+baseline it already holds. The ID changes only with another TPM, another
+tenant, or a replaced pseudonym key.
 
 Point every verifier at the CA root:
 
@@ -247,8 +302,9 @@ rather than a UEFI capsule) takes a Low-Firmware-Assurance path. The LFA
 re-anchor also applies automatically -- the player is never blocked waiting on
 the operator -- but it flags the device for post-fact review: list flagged
 devices with ``GET /api/v1/reanchor/review`` and clear one after inspecting it
-with ``POST /api/v1/clients/{clientID}/reanchor-review-ack`` (each LFA re-anchor
-is also logged at security level and counted in the ``lfa`` re-anchor metric).
+with ``POST /api/v1/clients/{clientID}/reanchor-review-ack`` (``actor`` and
+``reason`` required). Each LFA re-anchor is also logged at security level and
+counted in the ``lfa`` re-anchor metric.
 If a reviewed re-anchor looks wrong, revoke or ban the device through the
 existing endpoints.
 
@@ -267,29 +323,53 @@ Deliberate counterpart of the self-service path works on every profile
 and needs no verifier flag. When a platform change is legitimate but the
 self-service re-anchor refuses it (or the profile does not enable it), drop
 the device's pinned baselines through the admin API; the next attestation
-re-establishes trust per the active TOFU/policy configuration:
+re-establishes trust per the active TOFU/policy configuration.
+
+The commands below run from any host that reaches the verifier's monitoring
+API. Off the verifier's host that API is HTTPS under the verifier's
+``--cert``; ``--cacert`` names its issuing CA. ``LOTA_ADMIN_API_KEY`` holds
+the verifier's admin key and ``CLIENT_ID`` the device ID: ``Device ID`` from
+``lota-agent --enroll``, the AIK certificate's ``CommonName``, as
+``GET /api/v1/clients`` lists it. Do not write the ID into a ``{...}``
+placeholder: curl treats braces in a URL as a pattern.
 
 .. code-block:: sh
 
-    curl -X POST https://verifier:8080/api/v1/clients/{clientID}/reanchor \
-        -H "Authorization: Bearer $ADMIN_KEY" \
-        -d '{"actor":"ops@example.com","note":"planned firmware update"}'
+    curl --cacert verifier-ca.crt -X POST \
+        "https://verifier.example:8080/api/v1/clients/$CLIENT_ID/reanchor" \
+        -H "Authorization: Bearer $LOTA_ADMIN_API_KEY" \
+        -d '{"actor":"ops@example.com","reason":"planned firmware update"}'
 
-``actor`` is required and lands in the audit log together with the ``note``;
-the action is also logged at security level and counted in the ``forced``
-re-anchor metric. The enrollment is untouched -- the host keeps attesting
-with its enrolled AIK identity.
+The verifier answers:
+
+.. code-block:: json
+
+    {"status": "reanchored", "client_id": "<client-id>"}
+
+``actor`` and ``reason`` are required and land in the audit log with the
+optional ``note``; a request missing either gets **400** and changes nothing.
+The action is also logged at security level and counted in the ``forced``
+re-anchor metric. The enrollment is untouched -- the host keeps attesting with
+its enrolled AIK identity.
 
 To remove a device from the fleet entirely (decommissioned host, or trust
 state that must be rebuilt from scratch), delete the client. This drops the
-baselines and any AIK-store registration; the optional body is audit
-metadata:
+baselines and any AIK-store registration only; a running host keeps its
+certificate and is re-baselined at its next heartbeat. Revoke it first to keep
+it out. ``actor`` and ``reason`` are required, ``note`` is optional:
 
 .. code-block:: sh
 
-    curl -X DELETE https://verifier:8080/api/v1/clients/{clientID} \
-        -H "Authorization: Bearer $ADMIN_KEY" \
-        -d '{"actor":"ops@example.com","note":"decommissioned"}'
+    curl --cacert verifier-ca.crt -X DELETE \
+        "https://verifier.example:8080/api/v1/clients/$CLIENT_ID" \
+        -H "Authorization: Bearer $LOTA_ADMIN_API_KEY" \
+        -d '{"actor":"ops@example.com","reason":"decommissioned"}'
+
+The verifier answers:
+
+.. code-block:: json
+
+    {"status": "deleted", "client_id": "<client-id>"}
 
 Revocations and hardware bans are keyed separately and survive the delete,
 so removing a client cannot be used to shed either -- a revoked identity
@@ -406,13 +486,16 @@ ignored:
     3b1f...c7  acme
     9a20...4e  beta
 
-The fingerprint is the SHA-256 of the endorsement key's public modulus. For an
-EK certificate in ``ek.pem`` an operator computes it with:
+The fingerprint is the SHA-256 of the endorsement key's public modulus. For
+the ``ek.der`` read in `Materializing the EK root bundle`_:
 
 .. code-block:: sh
 
-    openssl x509 -in ek.pem -noout -modulus \
-      | sed 's/^Modulus=//' | xxd -r -p | sha256sum
+    modulus=$(openssl x509 -inform DER -in ek.der -noout -modulus) &&
+        printf '%s' "${modulus#Modulus=}" | xxd -r -p | sha256sum
+
+The ``&&`` stops a failed read; without it ``sha256sum`` hashes nothing and
+prints ``e3b0c442...``, a plausible fingerprint that matches no TPM.
 
 Point the CA at the manifest with ``--tenant-manifest``:
 
@@ -435,7 +518,7 @@ a retry does not change; the CA log names which one applied, and for a chain
 that could not be built, the certificate the path needed next -- on a firmware
 TPM usually a vendor intermediate the bundle does not pin. An internal-error
 status means the CA could not serve the request and a later attempt may
-succeed, as with an unverifiable or expired CRL feed.
+succeed. A lapsed CRL feed has a status of its own.
 
 The device pseudonym in the certificate ``CommonName`` mixes in a named
 tenant, so one TPM enrolling into two tenants yields two distinct device IDs
@@ -447,7 +530,7 @@ device ID and keep their verifier-side state.
 
 The verifier reads this tenant from the certificate and scopes the device's
 bans, revocations, PCR policy, and operator-API visibility to it. See
-:doc:`../multi-tenancy <../multi-tenancy>` for how tenancy scopes verifier
+:doc:`../multi-tenancy` for how tenancy scopes verifier
 state and how to configure scoped monitoring-API access.
 
 Assigning tenants with enrollment tokens

@@ -78,6 +78,14 @@ The exported policy is ready to use as-is. Optionally edit to:
    # Start verifier with custom policy
    lota-verifier --policy /path/to/my-policy.yaml
 
+``--policy`` may be repeated. The first document given is the active policy,
+the one every client whose tenant binds no policy of its own is verified
+against; each further document must bind a tenant with a ``tenant:`` key, and
+the verifier warns at startup about a policy that is neither active nor bound,
+because no client can reach it. Two documents may not share a ``name:``: the
+second would replace the first, silently changing what the fleet verifies
+against when the name is the active one.
+
 PCR Meanings (SHA-256 Bank)
 ---------------------------
 
@@ -123,6 +131,50 @@ report can answer them: an index outside 0-23, a register the client's quote
 did not carry (``PCR 8 not included in quote``), and an expected value that is
 not hex.
 
+What verdict a refusal carries
+------------------------------
+
+The host receives a verdict code and no detail: the verifier's log is on the
+publisher's server, and a player has no route to it at all. So a refusal says
+which kind of thing failed, because the kinds take different investigations.
+
+``pcr_fail``
+    a register in ``pcrs:`` holds another value, the quote did not carry it,
+    or the policy file is wrong about it.
+``integrity_mismatch``
+    a pinned measurement moved: the agent binary (outside ``agent_hashes`` or
+    off its baseline), the PCR 14 boot commitment, or the firmware/Secure Boot
+    baseline. The code does not say which, so the agent's message names all
+    three.
+``iommu_fail``
+    ``require_iommu`` on a host with no DMA remapping, read from the domain
+    type of each IOMMU group: ``DMA`` or ``DMA-FQ`` is translated,
+    ``identity`` is passthrough, and no groups means no IOMMU driver. A host
+    with every device in an identity domain (``iommu=pt``, or firmware that
+    hands out passthrough) is refused: nothing on it is remapped.
+``secureboot_required``, ``lockdown_required``, ``module_sig_required``,
+``enforce_required``, ``ima_appraisal_required``, ``kernel_image_required``,
+``cmdline_required``
+    one verdict per host requirement: ``require_secureboot``,
+    ``require_lockdown``, ``require_module_sig``, ``require_enforce``,
+    ``require_ima_appraisal``, ``kernel_hashes`` and the cmdline denylist, in
+    that order. Each has its own remedy, which the host is shown.
+``policy_requirement``
+    a requirement none of those covers, such as a host whose firmware
+    baseline nobody enrolled.
+
+``pcr_fail`` sends an operator to the boot chain and the event log, which is
+where the fix is for exactly one of these. A refusal nobody classified stays
+``pcr_fail``, because it is the verdict that claims least about a cause.
+
+Two refusals that are not the host's doing
+------------------------------------------
+
+A baseline store that cannot pin firmware PCRs is a verifier fault and
+carries ``internal_error``. A first-use host whose boot baseline nobody
+enrolled carries ``policy_requirement``. Neither is ``integrity_mismatch``,
+because the host did nothing wrong.
+
 Security Requirements
 ---------------------
 
@@ -147,9 +199,37 @@ Security Requirements
 | ``require_cmdline_policy`` | Kernel cmdline denylist  | ``true``             |
 |                            | (event-log enforced)     |                      |
 +----------------------------+--------------------------+----------------------+
+| ``require_ima_appraisal``  | Kernel appraises the     | ``false`` (needs     |
+|                            | host's executables       | signed images)       |
++----------------------------+--------------------------+----------------------+
 | ``cmdline_deny``           | Operator extensions to   | ``[]``               |
 |                            | the cmdline denylist     |                      |
 +----------------------------+--------------------------+----------------------+
+
+``require_ima_appraisal`` is off in every template but ``strict.yaml``.
+IMA appraisal needs signatures on the files and a certificate on the ``.ima``
+keyring, supplied by the distribution or by an image pipeline; a stock host has
+neither, and an IMA rule cannot name a path, so a rule loaded over such a host
+refuses its own executables at the next boot. The agent therefore starts on
+a host that appraises nothing, says so in its log, and reports the state
+-- ``LOTA_FLAG_KERNEL_APPRAISAL`` in the token and ``FlagIMAAppraisal`` in the
+attestation report -- which is what this knob turns into a refusal. Turn it on
+for a fleet whose images are signed; leave it off for one that runs stock
+distribution hosts, where it would refuse every client.
+
+Before a strict deployment
+--------------------------
+
+``strict.yaml`` demands IOMMU, a MAC in enforcing mode, module signatures,
+Secure Boot and kernel lockdown of every client. Check a host before enrolling
+it::
+
+   sudo lota-agent --export-policy | grep '^require_'
+
+``require_iommu``, ``require_module_sig``, ``require_secureboot`` and
+``require_lockdown`` must read ``true``. ``require_enforce`` is the agent's
+mode, not the MAC's; check the MAC with ``getenforce`` (SELinux) or
+``aa-status`` (AppArmor).
 
 .. _kernel-trust-event-log-secure-boot--cmdline-policy:
 
@@ -292,7 +372,9 @@ remains as an override in both directions for an operator who has to
 contradict a policy they cannot immediately re-sign; left unset, each policy
 decides for itself. An unknown value is refused at load rather than read as
 "not consumer", so a typo cannot silently leave a diverse fleet on the
-enterprise handling.
+enterprise handling. The refusal names the value and the two the verifier
+accepts, and it applies to a policy file and a programmatically added policy
+alike: both register through one validation set.
 
 Whatever turns it on, the discriminator still requires ``require_secureboot``
 and a quote-authenticated Secure Boot anchor before anything moves.
@@ -300,10 +382,18 @@ and a quote-authenticated Secure Boot anchor before anything moves.
 A short-lived ``--allow-tofu-boot-baseline`` switch on the verifier exists for
 closed test fixtures. It explicitly weakens the contract above by accepting
 whatever PCR 0/1/7 the first attestation reports regardless of policy or
-event-log state; the verifier emits a warning-level log line on every accept
-under that switch and the operator must turn it back off before the deployment
+event-log state, and the operator must turn it back off before the deployment
 is considered production. A diverse fleet does not need it - path 3 covers that
 case with the Secure Boot anchor intact.
+
+The switch says so twice in the log: a warning naming it once at startup, and
+a security-level line on every first-use accept it allows, carrying
+``allowed_by=--allow-tofu-boot-baseline``. Every first-use pin is recorded that
+way whatever authenticated it -- the policy pins, an out-of-band baseline row,
+the event-log anchor or this switch -- so the roads are told apart by the
+``allowed_by`` field on one record rather than by its level, and a fleet
+alerting on security lines sees the unauthenticated accepts along with the
+rest.
 
 PCR 14 (LOTA agent self-measurement) is not TOFU. It is derived
 deterministically from the boot-commitment chain
@@ -330,14 +420,26 @@ the agent reports about itself:
   low-maintenance. On systemd-boot/UKI the cmdline is measured into PCR 12 -
   pin 12 there instead of 8.
 - **kernel_hashes is advisory only, not a trust control.** The value an
-  ``--export-policy`` run writes there is a measured-boot register read at
-  export time -- the exported document names which one, and the kernel the
-  exporting host had booted -- and it is reported by code running on that
-  kernel, so a compromised kernel can misreport it. On a GRUB host the
-  register it comes from also moves when nothing about the kernel has, because
-  ``grubenv`` is measured into it and GRUB rewrites that file every boot.
-  Leave the list empty and rely on PCR 7 + PCR 8. A mismatch is at most a weak
-  cross-check, never the boundary.
+  ``--export-policy`` run writes there is the bootloader's own measurement of
+  the kernel image, taken from the event log the host booted with (the PCR 9
+  ``EV_IPL`` record naming ``vmlinuz``), and the exported document names the
+  image and the kernel release beside it. It identifies the kernel rather than
+  the boot -- but it has to be replaced at every kernel update, which is the
+  treadmill PCR 7 exists to avoid. Leave
+  the list empty and rely on PCR 7 + PCR 8; a match is a cross-check, never the
+  boundary.
+
+  A register is never written there. PCR 9 aggregates every file the
+  bootloader read, ``grubenv`` among them, so it answers for a whole boot
+  -- and the gate does not compare it, so a policy pinning it is refused
+  by the host it was exported from, as a kernel mismatch. Where the log
+  offers no kernel image, or cannot be parsed, the export writes
+  ``kernel_hashes: []`` and a comment saying which of the two happened.
+
+  The gate reads the same one value. A host that records no kernel image, or
+  whose PCR 9 the quote does not cover, is refused with that as the reason --
+  the pin cannot be evaluated there, and the answer is to quote PCR 9 or to
+  stop pinning the kernel.
 
   No configuration key selects which kernel that digest describes.
   ``kernel_path`` tells the agent where the kernel image lives on a

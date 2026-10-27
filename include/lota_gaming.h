@@ -97,6 +97,20 @@ enum lota_error {
 	 * design and no retry changes that.
 	 */
 	LOTA_ERR_NO_ENFORCEMENT = -16,
+	/*
+	 * The publisher is known and consented to, but the agent's
+	 * attestation-key handle range is full. No retry helps: somebody
+	 * at the machine must forget a publisher or reclaim a handle
+	 * another program left in the range.
+	 */
+	LOTA_ERR_NO_KEY_SLOT = -17,
+
+	/*
+	 * The TPM is in dictionary-attack lockout and signs nothing until
+	 * the lockout lapses or somebody at the machine clears it.
+	 * Unlike LOTA_ERR_NOT_ATTESTED, retrying next round does not help.
+	 */
+	LOTA_ERR_TPM_LOCKED = -18,
 };
 
 /*
@@ -178,6 +192,15 @@ enum lota_error {
 #define LOTA_FLAG_PROTECTED_TERMINATED (1 << 10)
 
 /*
+ * The kernel appraises the executables on this host: IMA is in a blocking
+ * mode and the loaded policy has an appraise rule that reaches exec.
+ *
+ * Clear on a stock host. The agent binary is still bound by fs-verity
+ * and PCR 14; this bit extends that to everything the host executes.
+ */
+#define LOTA_FLAG_KERNEL_APPRAISAL (1 << 11)
+
+/*
  * Subscription event types
  *
  * Bitmask selecting which status changes trigger push notifications.
@@ -240,7 +263,7 @@ struct lota_token {
 	/* SHA-256 over canonical runtime protected PID set. */
 	uint8_t runtime_protect_digest[32];
 	uint64_t runtime_protect_epoch; /* Monotonic runtime PID-set mutation id */
-	uint16_t runtime_protect_version; /* 0/1 = PID set, 2 = + image digests */
+	uint16_t runtime_protect_version; /* 1 = PID set, 2 = + image digests */
 	uint32_t protect_pid_count;
 	uint32_t *protected_pids; /* heap-allocated canonical list */
 
@@ -289,7 +312,8 @@ struct lota_connect_opts {
 	 * publisher on the host agreeing.
 	 *
 	 * NULL on a single-publisher host, which is every enterprise fleet:
-	 * the agent then answers with its first profile and the host-wide verdict.
+	 * the agent then answers with its one profile and the host-wide verdict.
+	 * A host that answers for several refuses a connection that names none.
 	 * Naming a publisher the machine has no enrollment for fails
 	 * the connection rather than falling back to another publisher's evidence.
 	 */
@@ -384,6 +408,11 @@ int lota_ping(struct lota_client *client, uint64_t *uptime_sec);
  * ptrace_access_check, and task_kill hooks gate every access into
  * or out of this process against the trust set.
  *
+ * Call it once the loader is done: a protected task maps only files with
+ * an allowed fs-verity digest or a trusted_libs inode, so registering
+ * earlier refuses the process its own libraries. Libraries loaded later
+ * need covering (see LOTA_HOOK_ENV_PROTECT_DELAY).
+ *
  * Returns LOTA_OK on success.
  *         LOTA_ERR_ACCESS_DENIED if the PID identity check fails.
  *         LOTA_ERR_RATE_LIMITED  if the caller's UID exceeded the
@@ -418,7 +447,9 @@ int lota_is_attested(struct lota_client *client);
  * the game server for verification. The server must use the
  * LOTA verifier to validate the token.
  *
- * Returns LOTA_ERR_NOT_ATTESTED if no valid attestation exists.
+ * Returns LOTA_ERR_NOT_ATTESTED if no valid attestation exists, and
+ * LOTA_ERR_UNKNOWN_PROFILE when the connection named no publisher on a host
+ * that answers for several (see lota_connect_opts.publisher_profile).
  *
  * The caller must call lota_token_free() to free the token
  * when done.

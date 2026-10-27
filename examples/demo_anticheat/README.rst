@@ -15,6 +15,9 @@ id, game id, socket path, heartbeat interval) is a flag.
 Build with ``make examples`` from the repository root. The binary lands at
 ``build/examples/demo_anticheat``.
 
+``run.sh`` looks for the binaries in ``BIN`` and ``EXAMPLES_BIN`` if set,
+else in ``$LOTA_BUILD_DIR``, else in ``build/``.
+
 It builds the way a studio's build does: through ``pkg-config`` against the
 **installed** SDK, never against the build tree. ``make examples`` first
 lays the package contents out under ``build/stage`` (the ``sdk-stage``
@@ -30,6 +33,10 @@ ships:
 carries the gaming and server SDK inside it, so a producer that only calls
 ``lota_ac_*`` links one thing. Add ``lota-gaming`` or ``lota-server`` when
 the same binary also calls those APIs directly.
+
+``libcurl`` is not LOTA's own and a host is not expected to have it. Without
+``libcurl-devel`` ``make examples`` prints ``SKIP: demo_anticheat (install
+libcurl-devel)`` and builds the rest of the tree.
 
 Which half of the evidence you run
 ----------------------------------
@@ -109,6 +116,11 @@ The session's tokens are then signed by the AIK that machine enrolled with
 publisher on the host agreeing. Leave it NULL on a single-publisher host. A
 machine that holds no enrollment for the named publisher fails the connection
 rather than answering with another publisher's evidence.
+
+A machine that answers for several publishers refuses a token to a session
+that named none with ``LOTA_ERR_UNKNOWN_PROFILE``, since a token is signed with
+one publisher's key. A build shipped to both kinds of machine names its
+publisher always.
 
 Nothing enrolls with a publisher until somebody on that machine agrees to it,
 so a first run there fails the connection with ``LOTA_ERR_CONSENT_REQUIRED``
@@ -261,7 +273,9 @@ runtime unmeasurable, and that is the common case on a stock host today.
 
 The measurement does not paper over it. Objects with no digest are left out of
 the fold and counted, and the token carries
-``LOTA_FLAG_IMAGE_FULLY_MEASURED`` only when nothing was left out. Requiring
+``LOTA_FLAG_IMAGE_FULLY_MEASURED`` only when the round had a process to
+measure and nothing was left out -- a host protecting nothing measured
+nothing, and that is not full coverage. Requiring
 full coverage is the publisher's policy call:
 
 .. code:: sh

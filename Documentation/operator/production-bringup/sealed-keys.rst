@@ -72,14 +72,66 @@ the fact, not stated from the configuration:
 
 A host with no publishers -- an operator-owned fleet reporting to a single
 verifier -- has one key, the pre-profile default, and seals that. On a host
-with publishers that key belongs to nobody and is left alone. Any key that
-could not be sealed is named, and the command exits non-zero, because the
-authorization of an unsealed key is still on disk in plaintext.
+with publishers that key belongs to nobody and is left alone.
 
-``--reprovision-aik`` walks the same set: it rotates every publisher's key,
-names the publishers whose certificates the rotation just invalidated -- each
-has to be re-enrolled against its own CA -- and reports whether the new
-authorizations were sealed or written in the clear, again read back.
+Any key that could not be sealed is named with the state its authorization is
+actually in, read off the disk before the attempt, and the command exits
+non-zero. A key that is already sealed with no plaintext copy is the exception:
+there was nothing left to seal, which is the hardened state, so it is reported
+as such and does not take the exit status with it. Re-running the verb on a fleet
+that is already strict therefore succeeds.
+
+``--reprovision-aik`` walks the same set: it rotates every publisher's
+authorization, and reports whether the new authorizations were sealed or
+written in the clear, read back.
+
+The *key* usually does not move. It is a primary derived from the hierarchy
+seed and a template carrying the publisher's identity; ``userAuth`` is not an
+input, so the same chip and publisher give the same key back. The verb compares
+the object's TPM Name before and after and reports which happened. An unmoved
+key leaves every certificate valid. A key that did change (a different
+template, as when moving a host onto per-publisher keys) is named with its
+publisher, to be re-enrolled against that publisher's CA. The rotation counter
+behind the D-Bus surface advances only for a moved key; an authorization
+rotation is recorded separately.
+
+What a refused unseal is about
+==============================
+
+An unseal is refused either by the file or by the TPM, with opposite remedies.
+
+The blob's framing is checked before the TPM is opened, and a refusal names
+the field: a blob opens with ``LSEL`` and an envelope with ``LENV``, then a
+version, a PCR selection and the two body lengths, which must fill the file
+exactly.
+
+.. code-block:: text
+
+    $ sudo lota-agent --unseal < truncated.sealed
+    Not a sealed blob this build can read: the declared bodies do not fill
+    the file exactly (1300, expected 1301).
+
+Look at the file, not the host: a truncated transfer, a copy cut from a larger
+archive, or a blob from a build with different framing.
+
+Key material behind the header that does not decode is the file's fault too:
+
+.. code-block:: text
+
+    $ sudo lota-agent --unseal < damaged.sealed
+    Unseal failed: Bad message
+
+A TPM refusal is what sealing exists for:
+
+.. code-block:: text
+
+    $ sudo lota-agent --unseal < title.sealed
+    Unseal failed: TPM policy not satisfied (host not in the sealed boot/PCR state)
+
+The sealed PCRs no longer hold their seal-time values: a firmware update, a
+Secure Boot change or, under the agent-bound mask, an agent upgrade. When the
+TPM refuses without naming a cause, the command prints a separate line pointing
+at the boot state.
 
 Auditing a fleet
 ================
@@ -111,10 +163,40 @@ the sealed auth unrecoverable. The agent will then **not** silently rotate the
 enrolled AIK; it reports the PolicyPCR mismatch and waits for an explicit
 recovery. Rotate and re-seal deliberately, then re-enroll:
 
+
 .. code-block:: sh
 
     sudo lota-agent --reprovision-aik
     sudo lota-agent --enroll --ca-server ca.example --ca-port 8444 --ca-cert ca.crt
+
+An authorization the agent cannot read is never a reason to replace the key
+===========================================================================
+
+The rule is wider than the sealed case. The only failure that provisions a new
+attestation key is a record that is *absent*: no ``aik_auth.dat`` and no
+``aik_auth.sealed``, which leaves the key on the chip with no authorization
+anywhere and no way to use it again. Every other failure -- a record at a
+version this build does not read, a short write, a wrong magic, an all-zero
+secret, a sealed blob that will not unseal -- describes a record that exists
+and a key that still works, so the agent reports it and stops:
+
+.. code-block:: text
+
+    SECURITY: the attestation key's authorization could not be read
+              (Operation not supported). The key is left as it is.
+    SECURITY: /var/lib/lota/profiles/<id>/aik_auth.dat holds magic 0x41545541
+              version 2; this build reads magic 0x41545541 version 1.
+
+Replacing the key there would destroy the enrolled identity and orphan the
+certificate issued over it, and no backup brings it back: what a backup holds
+is the authorization, and the key it authorized is gone from the chip. Restore
+the record, or replace the key deliberately with ``--forget-publisher``,
+``--allow-publisher`` and ``--enroll`` -- which issues a new certificate,
+because the current one names the key being replaced.
+
+With sealing on and no sealed copy yet, the same rule reads the plaintext
+sidecar as the record it is: the agent refuses rather than rotating, and names
+``--seal-aik-auth`` as the way to seal what the host already has.
 
 Anti-rollback: what sealing binds, and what it does not
 =======================================================

@@ -193,16 +193,57 @@ Scaling note
 ============
 
 Per-attestation verification (``VerifyToken`` / RSASSA verify) has no shared
-state, so it scales linearly across cores: ~41 k/sec/core x 16 cores giving
-about **~660 k attestations/sec** on this host, crypto-bound. Writes are the
-tier that does not scale with cores, and which backend bounds them differs:
-SQLite's single-writer model serialises every write in one file -- a property
-of that backend, suited to single-node deployments -- while the Postgres
-backend (``--pg-dsn``) commits independent clients concurrently under
-per-client advisory locks and is bounded by the database host's WAL fsync
-rate (measured below). The verifier itself holds no process-wide lock on the
-attestation path; the store-concurrency contract that keeps it that way is
-in the contributor documentation.
+state, so it scales with **physical** cores, not hardware threads: SMT
+siblings share the execution units RSA verification saturates.
+
+``BenchmarkRSASSAVerifyParallel`` runs the RSASSA verify over ``GOMAXPROCS``
+goroutines. Baseline host (AMD Ryzen 7 5700X, 8 cores / 16 threads, Linux 7.1,
+``performance`` governor, Go 1.26), 2026-09-16, median of six runs, benchstat
+spread 6 % or less:
+
+.. list-table::
+   :header-rows: 1
+   :widths: 20 20 25 35
+
+   * - ``-cpu``
+     - ns/op
+     - attestations/sec
+     - vs one thread
+   * - 1
+     - 24 230
+     - ~41 300
+     - 1.0x
+   * - 4
+     - 6 246
+     - ~160 100
+     - 3.9x
+   * - 8
+     - 3 425
+     - ~292 000
+     - 7.1x
+   * - 16
+     - 3 590
+     - ~278 600
+     - 6.7x
+
+Throughput peaks at the physical core count, **~290 k attestations/sec**, not
+the ~660 k that sixteen times the single-core rate suggests.
+
+A second host, an Intel Core i5-1135G7 laptop (4 cores / 8 threads, Linux 7.1,
+``powersave`` governor, ``balanced`` platform profile, Go 1.26), median of six
+runs: 26 170 ns/op on one thread, 2.0x on two, 3.5x on four. Eight threads give
+2.5x with a 26 % spread, as the package power limit throttles the part; the
+best eight-thread run reached 3.8x, within 10 % of the four-thread median.
+
+Reproduce in ``src/verifier``, with ``-cpu`` up to the host's thread count:
+``go test -run '^$' -bench=RSASSAVerifyParallel -cpu=1,4,8,16 -count=6 ./verify/``
+
+Writes do not scale with cores. SQLite serialises every write in one file,
+which suits single-node deployments; the Postgres backend (``--pg-dsn``)
+commits independent clients concurrently under per-client advisory locks and
+is bounded by the database host's WAL fsync rate (measured below). The verifier
+holds no process-wide lock on the attestation path; the store-concurrency
+contract that keeps it so is in the contributor documentation.
 
 L2 fleet scale (synthetic, measured)
 ====================================
@@ -210,7 +251,13 @@ L2 fleet scale (synthetic, measured)
 Measured with :doc:`lota-loadgen <load-testing>` on the L1 host (8c/16t
 Ryzen 7 5700X, NVMe, Postgres 16 in a local container, TLS loopback),
 10 000-agent rig, production verifier configuration (certificate chain,
-strict policy):
+strict policy). Every rate below counts attestations the verifier
+accepted, over runs in which the whole fleet verified; a run that
+leaves attempts unverified measures a refusal and is not quoted here.
+Generator and verifier share this host, and building synthetic reports
+costs several times what verifying them costs, so these numbers are a
+floor under the verifier rather than its ceiling -- see
+:doc:`load-testing` on separating the two.
 
 .. list-table::
    :header-rows: 1

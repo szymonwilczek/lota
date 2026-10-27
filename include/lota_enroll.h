@@ -31,7 +31,7 @@
 #define LOTA_ENROLL_VERSION_EK_CHAIN 3u
 
 /* Field bounds, identical to the Go wire caps. */
-/* see (src/attestcta/wire/wire.go) */
+/* see (src/attestca/wire/wire.go) */
 #define LOTA_ENROLL_MAX_EK_CERT 2048u
 #define LOTA_ENROLL_MAX_AIK_PUBLIC 1024u
 #define LOTA_ENROLL_MAX_CRED_BLOB 1024u
@@ -68,6 +68,7 @@ enum lota_enroll_status {
 	LOTA_ENROLL_STATUS_INTERNAL_ERROR = 6,
 	LOTA_ENROLL_STATUS_RATE_LIMITED = 7,
 	LOTA_ENROLL_STATUS_TOKEN_REJECTED = 8,
+	LOTA_ENROLL_STATUS_CRL_STALE = 9,
 };
 
 #endif /* LOTA_ENROLL_H */

@@ -53,6 +53,11 @@ Flags
 |                                  |                                    | the full-coverage flag  |
 |                                  |                                    | (see below)             |
 +----------------------------------+------------------------------------+-------------------------+
+| ``--require-kernel-appraisal``   | off                                | refuse a token from a   |
+|                                  |                                    | host whose kernel       |
+|                                  |                                    | appraises nothing       |
+|                                  |                                    | (see below)             |
++----------------------------------+------------------------------------+-------------------------+
 | ``--tls-cert`` / ``--tls-key``   | (none)                             | PEM server keypair;     |
 |                                  |                                    | enables HTTPS           |
 +----------------------------------+------------------------------------+-------------------------+
@@ -182,6 +187,16 @@ Returns the most recent verdict the server saw for a given game id, or
 endpoint to drive its banner so the SDL2 client itself never has to parse LACH
 packets.
 
+::
+
+   {"game_id":"trust-pong","state":"UNTRUSTED",
+    "license":"lota-demo-CS2-clone",
+    "reason":"token is missing required attestation flags 0x00000200",
+    "updated_at_unix":1750000000}
+
+``reason`` is the sentence the producer was answered with, so the polling
+client can explain the verdict; it is absent from a trusted one.
+
 Logging
 -------
 
@@ -204,11 +219,34 @@ Runtime coverage as a policy
 A token states whether the agent's runtime measurement covered every object
 the producer maps (``LOTA_FLAG_IMAGE_FULLY_MEASURED``) or only those the
 kernel holds an fs-verity digest for. The bit is inside the signed token, so
-it cannot be claimed by a client that did not earn it.
+it cannot be claimed by a client that did not earn it, and a host that
+measured nothing does not carry it: an empty protected set is a round that
+measured no object, which is not a round that measured every object.
 
 ``--require-full-image`` makes this server demand it: a heartbeat without the
 bit is ``UNTRUSTED`` with the missing flags named. On a host whose
 distribution ships libraries without fs-verity that refuses every heartbeat,
-which is the point -- the choice belongs to the publisher, and this is what
-choosing it looks like. Left off, partial coverage is accepted and the bit is
+and so does a host that protects no process at all, which is the point -- the
+choice belongs to the publisher, and this is what choosing it looks like. Left off, partial coverage is accepted and the bit is
 still reported, so a backend can log or score it instead.
+
+What the kernel appraises
+-------------------------
+
+``LOTA_FLAG_KERNEL_APPRAISAL`` says the host's kernel appraises the
+executables it runs: IMA in a blocking mode over a loaded policy that reaches
+an exec, so a file whose content does not match its signature is refused
+before it runs. That is a property of the whole machine and it arrives with
+the signatures -- IMA-signed distribution packages, or an operator image
+pipeline -- which a player cannot supply, so a stock host does not carry it.
+
+Clear does not mean the agent is unbound. Its binary carries fs-verity, so
+the kernel refuses a modified read of it, and PCR 14 commits the build that
+is running; what the bit adds is the same guarantee over everything else the
+machine executes.
+
+``--require-kernel-appraisal`` refuses a heartbeat without it, which refuses
+every stock host and admits a fleet whose images are signed. That is the same
+shape of decision as ``--require-full-image``: the flag is inside the signed
+token, the server states its policy, and a publisher who wants the host as it
+comes leaves it off and reads the bit.

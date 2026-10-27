@@ -12,7 +12,7 @@ assigned, what it scopes, and how an operator configures scoped access to the
 monitoring API.
 
 The security rationale is in the
-:doc:`threat model <../../security/threat-model>`; this page is the operator
+:doc:`threat model <../security/threat-model>`; this page is the operator
 configuration reference.
 
 How a tenant is assigned
@@ -49,6 +49,11 @@ ban. A ban issued through the API names its tenant explicitly (defaulting to
 ``default``), and attestation rejects a client only for a ban recorded in that
 client's own tenant.
 
+Both verbs name the tenant the same way, in the request body: a ban is
+identified by ``(tenant, hardware_id)``, so an administrator scoped to one
+tenant lifts what it imposed by sending the same field back. ``tenant`` is not
+a query parameter on either verb, and passing it as one is refused.
+
 Per-tenant PCR policy
 ---------------------
 
@@ -69,6 +74,20 @@ verifier's active policy. A tenant binds to at most one policy. Because the
 binding lives inside the signed policy document, a signed policy authenticates
 its own scope: an operator cannot silently re-point a tenant by editing an
 unsigned side file.
+
+One verifier process carries as many policies as ``--policy`` is given, and the
+flag may be repeated:
+
+.. code-block:: bash
+
+   lota-verifier --policy fleet-base.yaml \
+                 --policy acme-strict.yaml \
+                 --policy beta-relaxed.yaml
+
+The first document is the active policy and therefore the fallback; the rest
+are reachable only through the tenant they bind, so the verifier warns at
+startup about one that binds none. Every document is validated the same way
+whichever position it holds, and two of them may not share a ``name:``.
 
 Scoped state
 ------------
@@ -124,7 +143,11 @@ A scoped key sees only its tenants' resources:
 * a ban or unban into a tenant outside the key's set is refused;
 * ``/api/v1/stats`` returns tenant-narrowed counts and flags itself
   ``tenant_scoped``; the fleet-wide attestation counters, which are not
-  attributable per tenant, are omitted from a scoped response;
+  attributable per tenant, are absent from a scoped response --
+  ``total_attestations``, ``successful_attestations``, ``failed_attestations``,
+  ``revoked_attestations``, ``banned_attestations``, ``used_nonces`` and
+  ``pending_challenges`` are not keys in the JSON object at all, so a parser
+  reads "not reported" instead of "none";
 * ``/metrics`` is refused (403) for a tenant-scoped key: the Prometheus
   exposition is fleet-wide and carries no tenant dimension, so only a
   global-scope key (environment key or ``tenants: ["*"]``) can scrape it.
@@ -143,5 +166,5 @@ Enrollment
 Assigning tenants at enrollment is a property of the attestation CA: the
 enterprise path adds a tenant column to the EK pin manifest, and the gaming
 path issues a per-tenant enrollment token. See
-:doc:`production-bringup/ca-enrollment <production-bringup/ca-enrollment>` for
+:doc:`production-bringup/ca-enrollment` for
 the enrollment ceremony these hook into.

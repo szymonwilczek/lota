@@ -49,11 +49,14 @@ const (
 	FlagEnforce      uint32 = 1 << 7 // LSM enforce mode active
 
 	// FlagBootCommitmentV1 indicates the agent extended PCR14 with
-	// SHA256(magic || agent_hash || resetCount_be || restartCount_be).
-	// The verifier derives the expected PCR14 from the pinned baseline
-	// agent hash plus the TPMS_ATTEST ClockInfo before comparing.
+	// SHA256(tag || agent_hash), chained onto the value the initramfs lock
+	// helper left. The verifier rederives that chain from the reported agent
+	// hash and the pre-lock baseline the report's event log replays to,
+	// and compares the result against the register the quote signed and against
+	// the one the client pinned.
+	// The register is per-binary, not per-boot.
 	// Every agent sets it and the verifier requires it:
-	// the bit names the v1 construction specifically, so future v2
+	// the bit names the v1 wire contract specifically, so a future
 	// derivation gets its own flag rather than reusing this one.
 	FlagBootCommitmentV1 uint32 = 1 << 8
 
@@ -71,6 +74,15 @@ const (
 	// report without this bit alongside FlagBootCommitmentV1 carries
 	// a PCR14 the verifier cannot interpret and is rejected.
 	FlagInitramfsLockV1 uint32 = 1 << 9
+
+	// FlagIMAAppraisal is set when the kernel appraises the executables
+	// on the host: IMA in a blocking mode over a loaded policy carrying
+	// an appraise rule that reaches an exec. Clear is the ordinary state
+	// of a stock distribution host, whose packages carry no IMA signatures,
+	// and it says nothing about the agent's own binding -- fs-verity and the
+	// PCR 14 commitment in this report cover that.
+	// Telemetry with a policy knob (RequireIMAAppraisal), not a verdict.
+	FlagIMAAppraisal uint32 = 1 << 10
 )
 
 // challenge capability flags (see: include/attestation.h)
@@ -99,6 +111,30 @@ const (
 	// certificate names another key. Kept apart from VerifySigFail
 	// because only this one is fixed by re-enrolling.
 	VerifyIdentityFail uint32 = 10
+
+	// policy requirement with no code below; not VerifyPCRFail,
+	// the fix is not in the boot chain
+	VerifyPolicyRequirement uint32 = 11
+
+	// the AIK certificate has expired or is not yet valid (host clock behind).
+	// Kept apart from VerifySigFail: the fix is re-enrolment, not distrust.
+	VerifyCertificateValidity uint32 = 12
+
+	// no AIK certificate in the report: unfinished enrolment
+	VerifyCertificateMissing uint32 = 13
+
+	// one per policy requirement, each with its own remedy
+	VerifySecureBootRequired   uint32 = 14
+	VerifyLockdownRequired     uint32 = 15
+	VerifyModuleSigRequired    uint32 = 16
+	VerifyEnforceRequired      uint32 = 17
+	VerifyIMAAppraisalRequired uint32 = 18
+	VerifyKernelImageRequired  uint32 = 19
+	VerifyCmdlineRequired      uint32 = 20
+
+	// unparsable for a reason other than the version field (truncated,
+	// foreign magic). Not VerifyOldVersion: an upgrade does not fix it
+	VerifyReportMalformed uint32 = 21
 )
 
 // returns a deterministic string for a result code
@@ -126,8 +162,58 @@ func VerifyResultString(code uint32) string {
 		return "internal_error"
 	case VerifyIdentityFail:
 		return "identity_fail"
+	case VerifyPolicyRequirement:
+		return "policy_requirement"
+	case VerifyCertificateValidity:
+		return "certificate_validity"
+	case VerifyCertificateMissing:
+		return "certificate_missing"
+	case VerifySecureBootRequired:
+		return "secureboot_required"
+	case VerifyLockdownRequired:
+		return "lockdown_required"
+	case VerifyModuleSigRequired:
+		return "module_sig_required"
+	case VerifyEnforceRequired:
+		return "enforce_required"
+	case VerifyIMAAppraisalRequired:
+		return "ima_appraisal_required"
+	case VerifyKernelImageRequired:
+		return "kernel_image_required"
+	case VerifyCmdlineRequired:
+		return "cmdline_required"
+	case VerifyReportMalformed:
+		return "report_malformed"
 	default:
 		return fmt.Sprintf("unknown_%d", code)
+	}
+}
+
+// RejectionReasons returns every refusing verdict by its exported name.
+// The exporter seeds a zero series for each, so alerts read 0.
+func RejectionReasons() []string {
+	return []string{
+		VerifyResultString(VerifyNonceFail),
+		VerifyResultString(VerifySigFail),
+		VerifyResultString(VerifyPCRFail),
+		VerifyResultString(VerifyIOMMUFail),
+		VerifyResultString(VerifyOldVersion),
+		VerifyResultString(VerifyIntegrityMismatch),
+		VerifyResultString(VerifyRevoked),
+		VerifyResultString(VerifyBanned),
+		VerifyResultString(VerifyInternalError),
+		VerifyResultString(VerifyIdentityFail),
+		VerifyResultString(VerifyPolicyRequirement),
+		VerifyResultString(VerifyCertificateValidity),
+		VerifyResultString(VerifyCertificateMissing),
+		VerifyResultString(VerifySecureBootRequired),
+		VerifyResultString(VerifyLockdownRequired),
+		VerifyResultString(VerifyModuleSigRequired),
+		VerifyResultString(VerifyEnforceRequired),
+		VerifyResultString(VerifyIMAAppraisalRequired),
+		VerifyResultString(VerifyKernelImageRequired),
+		VerifyResultString(VerifyCmdlineRequired),
+		VerifyResultString(VerifyReportMalformed),
 	}
 }
 

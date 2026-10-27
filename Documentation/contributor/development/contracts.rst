@@ -178,10 +178,19 @@ The contract this creates:
 - **Crash-loss bound.** An ungraceful stop loses at most the records
   buffered since the last flush. This is acceptable precisely because the
   log gates nothing; the anti-replay nonce, baseline and session writes
-  that *do* gate stay synchronous. A graceful shutdown flushes the tail.
+  that *do* gate stay synchronous. A graceful shutdown flushes the tail,
+  bounded: a backend that has stopped answering does not hold the process
+  open, and what is still buffered at the deadline is counted as lost.
 - **Bounded memory.** Under a stalled database the buffer drops its oldest
-  records past ``MaxBuffer`` rather than growing without limit, counting
-  the loss. The hot path is never blocked and never sees the error.
+  records past ``MaxBuffer``. The hot path is never blocked and never sees
+  the error.
+- **Reported loss.** What the writer could not keep reaches somebody: a
+  rate-limited warning naming the running total, the
+  ``lota_attestation_log_dropped_total`` and
+  ``lota_attestation_log_failed_total`` counters, and one summary line at
+  shutdown. A deployment that lost part of its decision log has to look
+  different from one that did not, so a counter with no reader is not
+  counting.
 
 Any new attestation-log backend implements ``BatchRecorder`` so a batch
 costs one round trip; a backend that does not is still correct through the
@@ -301,6 +310,14 @@ kernel; that flag is set on the agent's PID before the map is frozen, so
 nothing else on the machine holds it and root is no exception. Without the
 command a hung title costs a reboot.
 
+That hook covers signals only. A write to ``cgroup.kill`` kills a whole
+cgroup from cgroup code, past every security hook, so ``lota_file_open``
+refuses write opens of the files in ``guarded_files``. The loader arms it at
+startup with the agent's cgroup and its ancestors: an agent killed that way
+drops enforcement for the rest of the boot while PCR 14 still holds the boot
+commitment. A protected process's cgroup is not armed: killing it ends only
+its own session, and its owner can end it through the command above anyway.
+
 The handler applies ``kill(2)``'s own rule -- the owner of the target, or root
 -- and nothing wider. It deliberately does **not** call
 ``ipc_client_is_privileged()``, which ``UNPROTECT_PID`` and ``SHUTDOWN`` do:
@@ -418,9 +435,26 @@ v2 token, so ``LOTA_IPC_TOKEN_MAX_PROTECT_PIDS`` is derived from the payload
 budget left after the header, a maximum quote and a maximum signature -- it is
 the real per-token limit, not a round number.
 
-Both sides take the cap from the shared header, so the agent and the SDK
-parser stay in lockstep; changing the payload size or the per-PID cost must
-keep the derived cap and that test in agreement.
+Both sides of the socket take the cap from that header, so the agent and the
+SDK parser stay in lockstep; changing the payload size or the per-PID cost
+must keep the derived cap and ``tests/test_ipc_token_cap`` in agreement.
+
+The same number bounds the token *wire* format, because an agent returning a
+token over the socket is the only thing that produces one.
+``include/lota_ipc.h`` is internal and is not installed, so the installed
+``include/lota_token.h`` writes the derived value out as
+``LOTA_TOKEN_MAX_PROTECT_PIDS`` for the side that has only the wire format,
+and ``src/sdk/lota_gaming.c`` -- the one translation unit that sees both
+headers -- fails the build when they disagree. ``MaxProtectPIDs`` in
+``sdk/server/verify.go`` is the Go SDK's copy of the same number and is held
+to the header by a test in that package. Raising the payload budget therefore
+raises one cap in one place, and the build says which other spellings have to
+follow.
+
+The maximum a relying party sizes a receive buffer from --
+``LOTA_TOKEN_MAX_SIZE``, ``TokenMaxSize`` in Go -- covers a full token at that
+cap *including* the per-PID image digests a v2 token carries. A maximum that
+counts only the PID list describes a token nobody sends.
 
 Installer probes and agent gates
 ================================

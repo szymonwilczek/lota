@@ -145,8 +145,10 @@ def message_table():
 			if len(message) < 8:
 				continue
 			table.append(message)
-	# shell script prints its text as it stands, so it needs no parsing
-	for path in tracked("scripts/*.sh", "scripts/lota-*"):
+	# shell scripts and makefile recipes print their text verbatim: no parsing
+	for path in tracked("scripts/*.sh", "scripts/lota-*",
+	                    "Makefile", "*/Makefile", "*/Makefile.fragment",
+	                    "*.mk", "*/*.mk"):
 		if os.path.isdir(path):
 			continue
 		table.append(open(path, encoding="utf-8", errors="replace").read())

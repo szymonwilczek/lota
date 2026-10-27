@@ -56,3 +56,8 @@ where the licence line falls.
 The whole tree is built with ``make examples`` from the repository root. The
 target is opt-in: ``make all`` does not depend on it, so the agent build stays
 the same speed it has always been.
+
+The demo dependencies that are not LOTA's own -- SDL2 and libcurl -- are
+optional. An example that needs a package the host does not have prints a
+``SKIP:`` line naming what to install, and the rest of the tree is built;
+``examples/optional-deps.mk`` is where a fragment declares what it needs.

@@ -12,6 +12,7 @@
 
 #include <errno.h>
 #include <fcntl.h>
+#include <limits.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -21,9 +22,11 @@
 #include <sys/types.h>
 
 #include "install.h"
+#include "../include/lota_ima_policy_scope.h"
 #include "probe.h"
 #include "run.h"
 #include "ui.h"
+#include "../src/agent/policy_pubkey.h"
 #include "../src/agent/profile.h"
 
 static int file_exists(const char *path)
@@ -193,30 +196,172 @@ static enum stage_state st_artifacts_probe(struct install_ctx *ctx, char *note,
 
 /*
  * Which key the agent will verify the enforcement object against.
- *
- * Reported, not decided: the agent owns the order, and this only says which
- * file the operator should look at when the signature does not verify.
+ * Reported only: the agent owns the order; this names the file to check
+ * when the signature does not verify.
  */
-static const char *trust_key_in_use(const struct install_ctx *ctx)
+const char *installer_trust_key(const char *named, const char *conf_pubkey,
+				const char *override_path,
+				const char *packaged_path,
+				enum trust_key_source *src)
 {
-	if (ctx->opts.policy_pubkey)
-		return ctx->opts.policy_pubkey;
-	if (file_exists(PATH_POLICY_PUB_OVERRIDE))
-		return PATH_POLICY_PUB_OVERRIDE;
-	return PATH_ENFORCEMENT_PUB;
+	enum trust_key_source got = TRUST_KEY_NONE;
+	const char *key;
+
+	/* --policy-pubkey is returned even if unreadable; the agent gets it too */
+	if (named) {
+		if (src)
+			*src = TRUST_KEY_NAMED;
+		return named;
+	}
+
+	/* the agent's own order */
+	key = policy_pubkey_resolve(conf_pubkey, override_path, packaged_path);
+	if (key == conf_pubkey)
+		got = TRUST_KEY_CONFIGURED;
+	else if (key == override_path)
+		got = TRUST_KEY_OVERRIDE;
+	else if (key == packaged_path)
+		got = TRUST_KEY_PACKAGED;
+
+	if (src)
+		*src = got;
+	return key;
+}
+
+const char *installer_trust_key_source_says(enum trust_key_source src)
+{
+	switch (src) {
+	case TRUST_KEY_NAMED:
+		return "named with --policy-pubkey";
+	case TRUST_KEY_CONFIGURED:
+		return "named by policy_pubkey in " PATH_LOTA_CONF;
+	case TRUST_KEY_OVERRIDE:
+		return "this host's own operator key";
+	case TRUST_KEY_PACKAGED:
+		return "the key the agent package shipped";
+	case TRUST_KEY_NONE:
+		break;
+	}
+	return "nowhere -- no readable key was found";
+}
+
+static int same_file(const char *a, const char *b)
+{
+	struct stat sa, sb;
+
+	if (stat(a, &sa) != 0 || stat(b, &sb) != 0)
+		return strcmp(a, b) == 0;
+	return sa.st_dev == sb.st_dev && sa.st_ino == sb.st_ino;
+}
+
+/*
+ * What the agent resolves with @src taken away, in its own order.
+ * Nothing when that is @key again: a setting that names the packaged file,
+ * or a link to it, has no key behind it.
+ */
+const char *installer_trust_fallback(const char *key, enum trust_key_source src,
+				     const char *conf_pubkey,
+				     const char *override_path,
+				     const char *packaged_path)
+{
+	const char *next;
+
+	switch (src) {
+	case TRUST_KEY_NAMED:
+		next = policy_pubkey_resolve(conf_pubkey, override_path,
+					     packaged_path);
+		break;
+	case TRUST_KEY_CONFIGURED:
+		next = policy_pubkey_resolve(NULL, override_path,
+					     packaged_path);
+		break;
+	case TRUST_KEY_OVERRIDE:
+		next = policy_pubkey_resolve(NULL, NULL, packaged_path);
+		break;
+	default:
+		return NULL;
+	}
+	if (!next || !key || same_file(key, next))
+		return NULL;
+	return next;
+}
+
+static const char *trust_fallback_step(enum trust_key_source src)
+{
+	switch (src) {
+	case TRUST_KEY_NAMED:
+		return "leave out --policy-pubkey and the agent uses";
+	case TRUST_KEY_CONFIGURED:
+		return "remove policy_pubkey from " PATH_LOTA_CONF
+		       " and the agent falls through to";
+	default:
+		return "move it out of the way and the agent falls through to";
+	}
+}
+
+void installer_trust_refusal(char *buf, size_t cap, const char *key,
+			     enum trust_key_source src, const char *fallback,
+			     const char *obj)
+{
+	char either[1024];
+
+	if (fallback)
+		snprintf(either, sizeof(either),
+			 "either this key did not sign the shipped object - "
+			 "%s %s -",
+			 trust_fallback_step(src), fallback);
+	else
+		snprintf(either, sizeof(either),
+			 "nothing else on this host would verify the object in "
+			 "its place, so moving this key aside leaves none. "
+			 "Either the object, signature or key changed after "
+			 "the package installed them - reinstall the agent "
+			 "package to put all three back -");
+
+	snprintf(buf, cap,
+		 "The BPF object signature does not verify against "
+		 "%s, which is %s and is the key the agent resolves "
+		 "for this host. The package ships object, signature "
+		 "and key together and replaces all three on an "
+		 "upgrade, so this means they no longer belong to each "
+		 "other: %s or the fleet signs enforcement itself and has to "
+		 "re-sign this object "
+		 "(lota-agent --sign-policy %s --signing-key <key>). "
+		 "The installer never signs on this host by design.",
+		 key, installer_trust_key_source_says(src), either, obj);
+}
+
+/* policy_pubkey read fresh from lota.conf, not cached */
+static const char *trust_key_in_use(const struct install_ctx *ctx,
+				    char *conf_buf, size_t conf_cap,
+				    enum trust_key_source *src,
+				    const char **configured)
+{
+	*configured = NULL;
+	if (probe_conf_value(PATH_LOTA_CONF, "policy_pubkey", conf_buf,
+			     conf_cap) == 1)
+		*configured = conf_buf;
+
+	return installer_trust_key(ctx->opts.policy_pubkey, *configured,
+				   PATH_POLICY_PUB_OVERRIDE,
+				   PATH_ENFORCEMENT_PUB, src);
 }
 
 static enum stage_state st_trust_probe(struct install_ctx *ctx, char *note,
 				       size_t cap)
 {
-	const char *key = trust_key_in_use(ctx);
+	enum trust_key_source src = TRUST_KEY_NONE;
+	char conf_key[PATH_MAX];
+	const char *configured;
+	const char *key = trust_key_in_use(ctx, conf_key, sizeof(conf_key),
+					   &src, &configured);
 	char sig[512];
 	char out[4096];
 	int rc;
 
 	snprintf(sig, sizeof(sig), "%s.sig", PATH_BPF_OBJ);
 
-	if (!file_exists(key)) {
+	if (!key || !file_exists(key)) {
 		snprintf(note, cap,
 			 "No key to verify the enforcement object against. "
 			 "One ships with the agent package at %s, beside the "
@@ -256,23 +401,18 @@ static enum stage_state st_trust_probe(struct install_ctx *ctx, char *note,
 		rc = run_capture(argv, out, sizeof(out));
 	}
 	if (rc != 0) {
-		snprintf(note, cap,
-			 "The BPF object signature does not verify against "
-			 "%s. The package ships object, signature and key "
-			 "together and replaces all three on an upgrade, so "
-			 "this means they no longer belong to each other: "
-			 "either this host carries an operator key at %s that "
-			 "did not sign the shipped object - move it aside to "
-			 "fall back to the packaged one - or the fleet signs "
-			 "enforcement itself and has to re-sign this object "
-			 "(lota-agent --sign-policy %s --signing-key <key>). "
-			 "The installer never signs on this host by design.",
-			 key, PATH_POLICY_PUB_OVERRIDE, PATH_BPF_OBJ);
+		installer_trust_refusal(
+			note, cap, key, src,
+			installer_trust_fallback(key, src, configured,
+						 PATH_POLICY_PUB_OVERRIDE,
+						 PATH_ENFORCEMENT_PUB),
+			PATH_BPF_OBJ);
 		return STAGE_BLOCKED;
 	}
 
 	if (!ctx->opts.policy_pubkey) {
-		snprintf(note, cap, "Signature verifies against %s.", key);
+		snprintf(note, cap, "Signature verifies against %s (%s).", key,
+			 installer_trust_key_source_says(src));
 		return STAGE_DONE;
 	}
 	rc = probe_conf_has_key(PATH_LOTA_CONF, "policy_pubkey");
@@ -304,7 +444,7 @@ static int st_trust_apply(struct install_ctx *ctx)
 	if (!ctx->opts.policy_pubkey)
 		return 0;
 
-	if (mkdir("/etc/lota", 0755) != 0 && errno != EEXIST)
+	if (mkdir(PATH_LOTA_CONF_DIR, 0755) != 0 && errno != EEXIST)
 		return -errno;
 
 	fresh = stat(PATH_LOTA_CONF, &sb) != 0 || sb.st_size == 0;
@@ -539,16 +679,46 @@ static int grubby_default_args(char *buf, size_t cap)
 
 /* the floor the agent's startup gates demand from the booted kernel */
 struct floor_state {
-	int ima_ok; /* ima_appraise=enforce|fix */
+	int ima_ok; /* appraisal blocks on an integrity failure */
 	int sig_ok; /* module signature enforcement */
 	int lockdown_ok; /* lockdown integrity/confidentiality */
+	int scope_ok; /* the agent's appraisal gate is satisfied here */
+	int appraised; /* the loaded policy appraises an executable */
+	int secureboot; /* the kernel decides the appraisal mode itself */
 };
+
+/*
+ * The scope half, decided the way the agent's gate decides it: a policy that
+ * cannot be read leaves the mode deciding on both sides, and a policy that
+ * reaches no executable stops the agent only where fs-verity is not holding
+ * its binary -- elsewhere the agent starts and the token carries the state.
+ */
+static int booted_ima_appraised(void)
+{
+	return probe_ima_policy_scope(PROBE_IMA_POLICY_PATH, NULL) !=
+	       PROBE_IMA_SCOPE_NONE;
+}
+
+static int booted_ima_scope_ok(int appraised)
+{
+	if (appraised)
+		return 1;
+	return lota_ima_scope_is_advisory(
+		probe_fsverity_state(PATH_AGENT_BIN) == PROBE_VERITY_ENABLED);
+}
 
 static void booted_floor(struct floor_state *st)
 {
-	st->ima_ok = probe_booted_ima_ok() == 0;
+	char cmdline[4096];
+
+	st->secureboot = probe_secureboot() == 1;
+	if (probe_read_text("/proc/cmdline", cmdline, sizeof(cmdline)) < 0)
+		cmdline[0] = '\0';
+	st->ima_ok = probe_ima_mode_blocking(st->secureboot, cmdline);
 	st->sig_ok = probe_module_sig_enforced() == 0;
 	st->lockdown_ok = probe_lockdown_restrictive() == 0;
+	st->appraised = booted_ima_appraised();
+	st->scope_ok = booted_ima_scope_ok(st->appraised);
 }
 
 static enum stage_state st_cmdline_probe(struct install_ctx *ctx, char *note,
@@ -562,9 +732,13 @@ static enum stage_state st_cmdline_probe(struct install_ctx *ctx, char *note,
 	booted_floor(&st);
 	if (st.ima_ok && st.sig_ok && st.lockdown_ok) {
 		snprintf(note, cap,
-			 "Booted kernel satisfies the integrity "
-			 "floor (IMA appraisal, signed modules, "
-			 "lockdown).");
+			 "Booted kernel appraises in a blocking mode%s, and "
+			 "carries signed modules and lockdown. The rules that "
+			 "mode applies to are the next stage.",
+			 st.secureboot ? " (its own built-in one: Secure Boot "
+					 "makes the kernel ignore "
+					 "ima_appraise=)" :
+					 "");
 		return STAGE_DONE;
 	}
 
@@ -602,8 +776,9 @@ static int st_cmdline_apply(struct install_ctx *ctx)
 	int rc;
 
 	booted_floor(&st);
+
 	if (!st.ima_ok)
-		strcat(args, "ima=on ima_appraise=fix ");
+		strcat(args, "ima_appraise=fix ");
 	if (!st.sig_ok)
 		strcat(args, "module.sig_enforce=1 ");
 	if (!st.lockdown_ok)
@@ -627,20 +802,40 @@ static int st_cmdline_apply(struct install_ctx *ctx)
 	return 0;
 }
 
-/* stage 7: SELinux TPM device fence */
+/* stage 7: IMA appraisal scope */
+
+static enum stage_state st_ima_scope_probe(struct install_ctx *ctx, char *note,
+					   size_t cap)
+{
+	struct probe_ima_scope scope = { 0 };
+
+	(void)ctx;
+
+	scope.is_root = geteuid() == 0;
+	scope.scope = probe_ima_policy_scope(PROBE_IMA_POLICY_PATH,
+					     &scope.policy_signed);
+	scope.secureboot = probe_secureboot() == 1;
+	scope.agent_signed = probe_file_ima_signed(PATH_AGENT_BIN) == 1;
+	scope.agent_verity = probe_fsverity_state(PATH_AGENT_BIN) ==
+			     PROBE_VERITY_ENABLED;
+
+	return probe_ima_scope_stage(&scope, note, cap);
+}
+
+/* stage 8: SELinux TPM device fence */
 
 /* Label check for the agent binary.
  * Mirrors the device-label pattern. */
-static int agent_label_ok(void)
+static int label_ok(const char *path, const char *want)
 {
 	char lctx[256];
-	ssize_t got = getxattr(PATH_AGENT_BIN, "security.selinux", lctx,
-			       sizeof(lctx) - 1);
+	ssize_t got =
+		getxattr(path, "security.selinux", lctx, sizeof(lctx) - 1);
 
 	if (got < 0)
 		return errno == ENOTSUP ? 1 : 0;
 	lctx[got] = '\0';
-	return strstr(lctx, "lota_agent_exec_t") != NULL;
+	return strstr(lctx, want) != NULL;
 }
 
 /* Confined lota_agent_t service reads its AIK witness from /var/lib/lota.
@@ -650,19 +845,11 @@ static int agent_label_ok(void)
  *
  * Treat missing dir or non-SELinux host as fine;
  * present dir must carry lota_var_t */
-static int lota_state_label_ok(void)
+static int label_ok_if_present(const char *path, const char *want)
 {
-	char lctx[256];
-	ssize_t got;
-
-	if (!file_exists(PATH_LOTA_STATE_DIR))
+	if (!file_exists(path))
 		return 1;
-	got = getxattr(PATH_LOTA_STATE_DIR, "security.selinux", lctx,
-		       sizeof(lctx) - 1);
-	if (got < 0)
-		return errno == ENOTSUP ? 1 : 0;
-	lctx[got] = '\0';
-	return strstr(lctx, "lota_var_t") != NULL;
+	return label_ok(path, want);
 }
 
 static int selinux_module_loaded(void)
@@ -692,10 +879,12 @@ static enum stage_state st_selinux_probe(struct install_ctx *ctx, char *note,
 {
 	int dev = probe_selinux_tpm_label();
 
-	if (dev == 0 && agent_label_ok() && lota_state_label_ok()) {
+	if (dev == 0 && label_ok(PATH_AGENT_BIN, "lota_agent_exec_t") &&
+	    label_ok_if_present(PATH_LOTA_STATE_DIR, "lota_var_t") &&
+	    label_ok_if_present(PATH_LOTA_CONF_DIR, "lota_etc_t")) {
 		snprintf(note, cap,
-			 "TPM device, agent binary and state directory carry "
-			 "the LOTA SELinux labels.%s",
+			 "TPM device, agent binary, state directory and config "
+			 "directory carry the LOTA SELinux labels.%s",
 			 ctx->opts.selinux_module_named ?
 				 " The policy was already in place, so the "
 				 "module named by --selinux-module was not "
@@ -751,9 +940,16 @@ static int st_selinux_apply(struct install_ctx *ctx)
 		if (rc != 0)
 			return rc > 0 ? -EIO : rc;
 	}
+
+	/*
+	 * SECLABEL{selinux} is applied when udev adds the device. The default
+	 * change event re-runs the rules and moves no label, so a step that
+	 * sends one reports success over whatever the nodes already carried.
+	 */
 	{
-		const char *const argv[] = { "udevadm", "trigger",
-					     "/dev/tpmrm0", "/dev/tpm0", NULL };
+		const char *const argv[] = { "udevadm",	     "trigger",
+					     "--action=add", "/dev/tpmrm0",
+					     "/dev/tpm0",    NULL };
 
 		rc = run_cmd(&ctx->ui, "Re-labeling the TPM device nodes",
 			     argv);
@@ -803,10 +999,25 @@ static int st_selinux_apply(struct install_ctx *ctx)
 		if (rc != 0)
 			return rc > 0 ? -EIO : rc;
 	}
+
+	/*
+	 * Nothing else relabels the config directory, and new files inherit
+	 * its type, so an etc_t directory makes every file written there etc_t.
+	 */
+	if (file_exists(PATH_LOTA_CONF_DIR)) {
+		const char *const argv[] = { "restorecon", "-R",
+					     PATH_LOTA_CONF_DIR, NULL };
+
+		rc = run_cmd(&ctx->ui,
+			     "Restoring the LOTA config directory labels",
+			     argv);
+		if (rc != 0)
+			return rc > 0 ? -EIO : rc;
+	}
 	return 0;
 }
 
-/* stage 8: reboot checkpoint */
+/* stage 9: reboot checkpoint */
 
 static int agent_service_active(void)
 {
@@ -823,6 +1034,27 @@ static int unit_enabled(const char *unit)
 	const char *const argv[] = { "systemctl", "is-enabled", unit, NULL };
 
 	return run_capture(argv, out, sizeof(out)) == 0;
+}
+
+/*
+ * Has the agent already run and refused this boot?
+ * A crash loop shows up as restarts, a unit that gave up shows up as failed,
+ * and either answers the question the barrier needs: this host is not waiting
+ * for a reboot.
+ */
+static int agent_start_failed(void)
+{
+	char out[64];
+	const char *const restarts[] = { "systemctl", "show",
+					 "--value",   "-p",
+					 "NRestarts", "lota-agent.service",
+					 NULL };
+	const char *const failed[] = { "systemctl", "is-failed",
+				       "lota-agent.service", NULL };
+
+	if (run_capture(restarts, out, sizeof(out)) == 0 && atoi(out) > 0)
+		return 1;
+	return run_capture(failed, out, sizeof(out)) == 0;
 }
 
 /* what the stage decides on: running now, and running again after a reboot */
@@ -853,11 +1085,18 @@ static enum stage_state st_barrier_probe(struct install_ctx *ctx, char *note,
 		return STAGE_ERROR;
 	}
 
+	/*
+	 * A start that failed before this run says nothing about a host this
+	 * run has since changed. Only an unchanged host is held on the strength
+	 * of that failure.
+	 */
 	return probe_pcr14_barrier_stage(pcr, probe_pcr14_lock_ran(),
-					 agent_service_active(), note, cap);
+					 agent_service_active(),
+					 !ctx->applied && agent_start_failed(),
+					 probe_agent_paused(), note, cap);
 }
 
-/* stage 9: agent service */
+/* stage 10: agent service */
 
 static enum stage_state st_agent_probe(struct install_ctx *ctx, char *note,
 				       size_t cap)
@@ -922,7 +1161,7 @@ static int st_agent_apply(struct install_ctx *ctx)
 	return 0;
 }
 
-/* stage 10: enrollment */
+/* stage 11: enrollment */
 
 /*
  * Locate the publisher profile this host enrolls into.
@@ -1077,6 +1316,68 @@ static const char telemetry_summary[] =
 	"No file contents, no browsing or account data leave this "
 	"machine.";
 
+enum stage_state install_selfcheck_probe(struct install_ctx *ctx, char *note,
+					 size_t cap)
+{
+	struct floor_state st;
+	struct profile_paths paths;
+	int days = 0;
+	int rc;
+
+	/* reads only; the attestation round-trip is left to the install */
+	booted_floor(&st);
+	if (!(st.ima_ok && st.sig_ok && st.lockdown_ok && st.scope_ok)) {
+		snprintf(note, cap,
+			 "Not ready: the kernel integrity floor is not "
+			 "satisfied, so the self-check would fail. The floor "
+			 "stages above say which part of it.");
+		return STAGE_PENDING;
+	}
+	if (probe_fsverity_state(PATH_AGENT_BIN) != PROBE_VERITY_ENABLED &&
+	    probe_file_ima_signed(PATH_AGENT_BIN) != 1) {
+		snprintf(note, cap,
+			 "Not ready: %s is neither under fs-verity nor "
+			 "carrying a signed IMA xattr, so a modified read of "
+			 "it would go unnoticed.",
+			 PATH_AGENT_BIN);
+		return STAGE_PENDING;
+	}
+	if (!agent_service_active()) {
+		snprintf(note, cap,
+			 "Not ready: lota-agent.service is not running, so "
+			 "this host is not attesting.");
+		return STAGE_PENDING;
+	}
+
+	rc = enroll_profile(ctx, &paths);
+	if (rc == -EINVAL) {
+		snprintf(note, cap,
+			 "Ready: floor satisfied, agent binary immutable, "
+			 "service running, and no publisher named yet - the "
+			 "certificate arrives when a title first asks. The "
+			 "attestation round-trip runs during an install; this "
+			 "report performs nothing.");
+		return STAGE_DONE;
+	}
+	if (rc == 0)
+		rc = probe_cert_days_left(paths.aik_cert, &days);
+	if (rc != 0) {
+		snprintf(note, cap,
+			 "Not ready: no valid AIK certificate for the CA "
+			 "anchor named here, so the round-trip the self-check "
+			 "runs would have nothing to present.");
+		return STAGE_PENDING;
+	}
+
+	snprintf(note, cap,
+		 "Ready: floor satisfied, agent binary immutable, service "
+		 "running, AIK certificate valid (%s). The attestation "
+		 "round-trip runs during an install; this report performs "
+		 "nothing.",
+		 days > 0 ? "a day or more left" : "less than a day left");
+	return STAGE_DONE;
+}
+
 int install_self_check(struct install_ctx *ctx)
 {
 	struct floor_state st;
@@ -1086,15 +1387,27 @@ int install_self_check(struct install_ctx *ctx)
 	int profiles;
 	int rc_cert;
 
-	ui_stage_begin(&ctx->ui, install_stage_count + 1,
-		       install_stage_count + 1, "Self-check");
+	ui_stage_begin(&ctx->ui, install_step_count, install_step_count,
+		       install_selfcheck_title);
 
 	booted_floor(&st);
-	ui_kv(&ctx->ui, "Kernel integrity floor",
-	      st.ima_ok && st.sig_ok && st.lockdown_ok ? "Satisfied" :
-							 "NOT satisfied");
-	if (!(st.ima_ok && st.sig_ok && st.lockdown_ok))
-		ok = 0;
+	{
+		/* the whole floor, scope included: this line stands for what
+		 * the agent's startup gates read, not for one stage's args */
+		int floor_ok = st.ima_ok && st.sig_ok && st.lockdown_ok &&
+			       st.scope_ok;
+
+		ui_kv(&ctx->ui, "Kernel integrity floor",
+		      floor_ok && !st.appraised ?
+			      "Satisfied (the kernel appraises nothing; every "
+			      "token says so)" :
+		      floor_ok	   ? "Satisfied" :
+		      !st.scope_ok ? "NOT satisfied (nothing appraised, and no "
+				     "fs-verity on the agent binary)" :
+				     "NOT satisfied");
+		if (!floor_ok)
+			ok = 0;
+	}
 
 	ui_kv(&ctx->ui, "agent binary immutability",
 	      probe_fsverity_state(PATH_AGENT_BIN) == PROBE_VERITY_ENABLED ?
@@ -1249,6 +1562,68 @@ static enum stage_state st_firmware_readiness_probe(struct install_ctx *ctx,
 	return STAGE_DONE;
 }
 
+/*
+ * Names what was deferred, by the titles the run printed a moment ago:
+ * a stage that reported itself satisfied is not work left.
+ */
+int install_unattended_checkpoint(char *buf, size_t cap, const int *deferred,
+				  int n)
+{
+	char left[1024] = "";
+	size_t used = 0;
+	int i;
+
+	for (i = 0; i < n && used < sizeof(left); i++) {
+		const char *sep = i == 0 ? "" : i == n - 1 ? " and " : ", ";
+		int w = snprintf(left + used, sizeof(left) - used, "%s'%s'",
+				 sep, install_stages[deferred[i]].title);
+
+		if (w < 0)
+			break;
+		used += (size_t)w;
+	}
+
+	snprintf(buf, cap,
+		 "Host-local setup is done. What is left changes how this "
+		 "machine boots, so it waits for a person: %s. Run "
+		 "'sudo lota-install' to finish %s. To have a package install "
+		 "do it too, create %s (or set LOTA_AUTO_BRINGUP=1) before "
+		 "installing.",
+		 left, n == 1 ? "it" : "them", PATH_AUTO_BRINGUP);
+	return EXIT_INSTALL_DEFERRED;
+}
+
+/* the stage's reason is quoted whole, and mostly brings its own full stop */
+void install_reboot_required(char *buf, size_t cap, const char *note)
+{
+	size_t len = note ? strlen(note) : 0;
+	int stop = len && strchr(".!?", note[len - 1]);
+
+	snprintf(buf, cap,
+		 "Reboot is required before the install can continue: %s%s",
+		 note ? note : "", stop ? "" : ".");
+}
+
+/* "already satisfied" means nothing ran; a stage this run fixed says so */
+enum ui_result install_stage_result(enum stage_state st, int applied)
+{
+	switch (st) {
+	case STAGE_DONE:
+		return applied ? UI_APPLIED : UI_DONE;
+	case STAGE_REBOOT:
+		return UI_REBOOT;
+	case STAGE_SKIP:
+		return UI_SKIP;
+	case STAGE_PENDING:
+		return UI_PENDING;
+	case STAGE_BLOCKED:
+		return UI_BLOCKED;
+	case STAGE_ERROR:
+	default:
+		return UI_FAIL;
+	}
+}
+
 const struct stage install_stages[] = {
 	{
 		.title = "Preflight: Hardware and Host Requirements",
@@ -1322,13 +1697,45 @@ const struct stage install_stages[] = {
 		.boot_path = 1,
 	},
 	{
+		.title = "IMA appraisal scope",
+		.explain =
+			"The previous step set the appraisal *mode*; the "
+			"kernel applies that mode only to the rules its "
+			"loaded IMA policy carries. A policy with no appraise "
+			"rule reaching an executable appraises nothing, and "
+			"the agent refuses to start on such a host.\n"
+			"This step reads the loaded policy and reports "
+			"whether the kernel appraises anything. A host whose "
+			"agent binary carries fs-verity runs without it -- the "
+			"kernel refuses a modified read of the agent and "
+			"PCR 14 commits the running build -- and every token "
+			"it hands out says so, which is what a publisher "
+			"reads. On a filesystem without verity, where the "
+			"agent's only claim is a signed security.ima xattr, "
+			"appraisal is what makes that claim real and the "
+			"agent will not start without it.\n"
+			"It loads no rules: an IMA rule cannot name a "
+			"path, so the rule that appraises the agent appraises "
+			"every executable it matches, and on a Secure Boot "
+			"host that happens in enforce whatever the cmdline "
+			"asked for -- a host whose files carry no signature "
+			"would refuse them all at the next boot. The scope "
+			"arrives with the signatures, from IMA-signed "
+			"distribution packages or an operator image "
+			"pipeline.",
+		.probe = st_ima_scope_probe,
+	},
+	{
 		.title = "SELinux fence on the TPM device",
 		.explain =
 			"udev rule labels /dev/tpm* with a LOTA-specific SELinux "
 			"type so only the agent's domain (and root tooling) can "
 			"talk to the TPM directly."
-			"This step loads the LOTA SELinux policy module if needed "
-			"and re-triggers udev. It does not change the SELinux mode "
+			"This step loads the LOTA SELinux policy module if needed, "
+			"re-triggers udev with an add event -- a change event "
+			"re-applies no SECLABEL -- and restores the labels on the "
+			"agent binary, the state directory and the config "
+			"directory. It does not change the SELinux mode "
 			"of the system.",
 		.probe = st_selinux_probe,
 		.apply = st_selinux_apply,
@@ -1385,3 +1792,14 @@ const struct stage install_stages[] = {
 
 const int install_stage_count =
 	(int)(sizeof(install_stages) / sizeof(install_stages[0]));
+
+/* the TUI must show every stage the other surfaces walk */
+_Static_assert(sizeof(install_stages) / sizeof(install_stages[0]) <=
+		       INSTALL_MAX_TUI_STAGES,
+	       "the stage table outgrew the interactive view's rows");
+
+const char install_selfcheck_title[] = "Self-check & summary";
+
+/* The table plus the self-check: what every surface counts up to. */
+const int install_step_count =
+	(int)(sizeof(install_stages) / sizeof(install_stages[0])) + 1;

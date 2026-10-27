@@ -22,10 +22,16 @@ built:
   ``__FILE__``.
 * **Go** (``lota-verifier``, ``lota-attest-ca``) is built with ``-trimpath``,
   which strips the module and build paths the toolchain would otherwise bake
-  in.
+  in. ``lota-fleet`` adds ``CGO_ENABLED=0``, which removes the build host's
+  libc from the result as well: the operator reference calls that binary
+  static, and a cgo build links whatever glibc the builder happened to have.
 * ``make reproducible-build`` pins the remaining environmental inputs:
   ``SOURCE_DATE_EPOCH`` (default: the HEAD commit time), ``TZ=UTC`` and
-  ``LC_ALL=C``.
+  ``LC_ALL=C``. Outside a git checkout, such as a release tarball, there is no
+  commit time, so this target and the container-image targets refuse to run.
+  Pass the source's release date::
+
+      make reproducible-build REPRO_SOURCE_DATE_EPOCH=$(date -u -d 2026-01-31 +%s)
 
 These flags are always ON for every build. ``make reproducible-build`` only
 adds the timestamp/timezone/locale pins. CI rebuilds the tree twice, from

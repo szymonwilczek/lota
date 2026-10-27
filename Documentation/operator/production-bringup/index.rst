@@ -20,7 +20,7 @@ kernel cmdline provisioned at install, IMA policy from
 This document is the operator/fleet reference. A player installing the agent on
 a single machine uses the guided, reboot-resumable ``lota-install`` instead --
 same gates, consent prompts and live-state probes -- see
-:doc:`../player-install <../player-install>`, including the list of inputs
+:doc:`../player-install`, including the list of inputs
 the operator must ship for it.
 
 Contents

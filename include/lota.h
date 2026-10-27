@@ -77,7 +77,11 @@ enum lota_event_type {
 	LOTA_EVENT_ANON_EXEC_BLOCKED, /* Anonymous executable mmap blocked */
 	LOTA_EVENT_KILL, /* signal delivery to protected task observed */
 	LOTA_EVENT_MOUNT_BLOCKED, /* mount that would shadow a trusted file */
+	LOTA_EVENT_KILL_GUARD_BLOCKED, /* write that would kill a guarded task */
 };
+
+/* One past the last event type, so a per-type array covers every one */
+#define LOTA_EVENT_TYPE_COUNT (LOTA_EVENT_KILL_GUARD_BLOCKED + 1)
 
 /*
  * Event flags (struct lota_exec_event.flags).
@@ -435,11 +439,13 @@ struct lota_exec_event {
 #define LOTA_MAX_TRUSTED_LIBS 512
 
 /*
- * Trusted parent-directory mountpoint entries.
- *
- * Each trusted library can contribute multiple parent directories, so this
- * limit is intentionally larger than LOTA_MAX_TRUSTED_LIBS.
+ * Files whose write kills a protected task past every signal hook:
+ * cgroup.kill of the agent's cgroup and its ancestors, so a cgroup depth.
  */
+#define LOTA_MAX_GUARDED_FILES 64
+
+/* guarded_files value: why the file is guarded */
+#define LOTA_GUARD_CGROUP_KILL 1
 
 /*
  * Kernel integrity baseline, as the agent's startup hardening gate read it.

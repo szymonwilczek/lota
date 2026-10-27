@@ -477,6 +477,20 @@ out:
 	return rc;
 }
 
+/* name the refused field; the errno cannot tell short from foreign */
+static void report_framing_refusal(const struct lota_blob_refusal *why)
+{
+	if (why->expected)
+		fprintf(stderr,
+			"Not a sealed blob this build can read: %s "
+			"(%u, expected %u).\n",
+			lota_blob_reason_str(why->reason), why->value,
+			why->expected);
+	else
+		fprintf(stderr, "Not a sealed blob this build can read: %s.\n",
+			lota_blob_reason_str(why->reason));
+}
+
 /*
  * do_unseal - read a sealed blob from stdin, unseal it, write the secret
  * to stdout. Fails closed when the host is not in the sealed PCR state.
@@ -486,6 +500,7 @@ int do_unseal(void)
 	uint8_t *blob = NULL;
 	uint8_t *secret = NULL;
 	size_t blob_len = 0, secret_len = 0;
+	struct lota_blob_refusal why;
 	bool envelope = false;
 	int ret;
 	int rc = 1;
@@ -511,6 +526,32 @@ int do_unseal(void)
 	/* leading magic selects the decoder: envelope vs direct seal */
 	envelope = lota_envelope_is_envelope(blob, blob_len) != 0;
 
+	/* framing is checked before the TPM opens: a refusal is the file's */
+	if (envelope) {
+		struct lota_envelope_meta emeta;
+		size_t kek_off = 0;
+
+		ret = lota_envelope_parse_header_why(blob, blob_len, &emeta,
+						     &kek_off, &why);
+		/* the sealed KEK inside is a blob too: check its framing */
+		if (ret == 0) {
+			struct lota_seal_meta kmeta;
+
+			ret = lota_seal_parse_header_why(blob + kek_off,
+							 emeta.kek_blob_len,
+							 &kmeta, NULL, &why);
+		}
+	} else {
+		struct lota_seal_meta smeta;
+
+		ret = lota_seal_parse_header_why(blob, blob_len, &smeta, NULL,
+						 &why);
+	}
+	if (ret < 0) {
+		report_framing_refusal(&why);
+		goto out;
+	}
+
 	/* PCR-policy mismatch is the expected unseal failure.
 	 * Keep its report clean by silencing the TSS library's own error
 	 * logging (overwrite=0 respects an operator-set TSS2_LOG). */
@@ -535,8 +576,7 @@ int do_unseal(void)
 	tpm_cleanup(&g_agent.tpm_ctx);
 	if (ret < 0) {
 		fprintf(stderr, "Unseal failed: %s\n", tpm_strerror(ret));
-		/* -EBADMSG is an envelope tamper, not a boot-state mismatch */
-		if (ret != -LOTA_ERR_TPM_POLICY_FAIL && ret != -EBADMSG)
+		if (tpm_unseal_boot_state_unknown(ret))
 			fprintf(stderr,
 				"(the host may not be in the sealed boot "
 				"state)\n");
@@ -589,16 +629,18 @@ static unsigned aik_auth_exposed_count(const struct publisher_entry *entries,
  */
 int do_seal_aik_auth(void)
 {
-	struct publisher_entry entries[LOTA_PROFILE_MAX_AIK_HANDLES];
+	struct publisher_entry *entries = NULL;
 	size_t count = 0;
 	unsigned sealed = 0;
+	unsigned strict = 0;
 	unsigned failed = 0;
+	int rc = 1;
 	int ret;
 
 	setenv("TSS2_LOG", "all+none", 0);
 
-	ret = publishers_list(LOTA_PROFILE_BASE_DIR, entries,
-			      sizeof(entries) / sizeof(entries[0]), &count);
+	/* Every profile: a key left out is neither sealed nor reported */
+	ret = publishers_list_alloc(LOTA_PROFILE_BASE_DIR, &entries, &count);
 	if (ret < 0) {
 		fprintf(stderr, "Failed to read %s: %s\n",
 			LOTA_PROFILE_BASE_DIR, strerror(-ret));
@@ -609,7 +651,7 @@ int do_seal_aik_auth(void)
 	if (ret < 0) {
 		fprintf(stderr, "Failed to initialize TPM: %s\n",
 			tpm_strerror(ret));
-		return 1;
+		goto out;
 	}
 
 	/*
@@ -620,6 +662,7 @@ int do_seal_aik_auth(void)
 	 * in plaintext while reporting success.
 	 */
 	for (size_t i = 0; i < count; i++) {
+		enum profile_aik_auth_state before;
 		struct profile_paths paths;
 
 		if (!entries[i].has_aik_handle)
@@ -634,10 +677,25 @@ int do_seal_aik_auth(void)
 			continue;
 		}
 
+		/* read first: a successful seal changes it */
+		before = profile_aik_auth_state(&paths);
+
 		ret = tpm_aik_reseal_auth(&g_agent.tpm_ctx);
 		if (ret < 0) {
-			fprintf(stderr, "  %s: %s\n", entries[i].id,
-				tpm_strerror(ret));
+			/* already strict: nothing to seal, so not a failure */
+			if (!profile_aik_auth_needs_sealing(before) &&
+			    before != PROFILE_AIK_AUTH_NONE) {
+				fprintf(stderr,
+					"  %s: already %s, so there was "
+					"nothing to seal\n",
+					entries[i].id,
+					profile_aik_auth_state_str(before));
+				strict++;
+				continue;
+			}
+			fprintf(stderr, "  %s: %s (its authorization is %s)\n",
+				entries[i].id, tpm_strerror(ret),
+				profile_aik_auth_state_str(before));
 			failed++;
 			continue;
 		}
@@ -655,18 +713,28 @@ int do_seal_aik_auth(void)
 			fprintf(stderr, "Could not seal AIK auth: %s\n",
 				tpm_strerror(ret));
 			tpm_cleanup(&g_agent.tpm_ctx);
-			return 1;
+			goto out;
 		}
 		sealed++;
 	}
 
 	tpm_cleanup(&g_agent.tpm_ctx);
 
+	if (sealed == 0 && strict > 0) {
+		fprintf(stderr,
+			"Nothing to seal: %u attestation key%s already hold "
+			"the authorization sealed with no plaintext copy.\n",
+			strict, strict == 1 ? "" : "s");
+		rc = failed ? 1 : 0;
+		goto out;
+	}
+
 	if (sealed == 0) {
 		fprintf(stderr,
 			"No attestation key to seal: this host holds none "
 			"yet. Enroll with a publisher first.\n");
-		return failed ? 1 : 0;
+		rc = failed ? 1 : 0;
+		goto out;
 	}
 
 	fprintf(stderr,
@@ -688,14 +756,23 @@ int do_seal_aik_auth(void)
 			fprintf(stderr, "No plaintext copy remains on disk.\n");
 	}
 
+	if (strict)
+		fprintf(stderr,
+			"%u already held the authorization sealed with no "
+			"plaintext copy, so there was nothing to seal.\n",
+			strict);
+
 	if (failed) {
 		fprintf(stderr,
-			"%u could not be sealed and still hold their "
-			"authorization in plaintext.\n",
+			"%u could not be sealed; the line for each names the "
+			"state its authorization is in.\n",
 			failed);
-		return 1;
+		goto out;
 	}
-	return 0;
+	rc = 0;
+out:
+	free(entries);
+	return rc;
 }
 
 /*
@@ -705,16 +782,19 @@ int do_seal_aik_auth(void)
  */
 int do_reprovision_aik(void)
 {
-	struct publisher_entry entries[LOTA_PROFILE_MAX_AIK_HANDLES];
+	struct publisher_entry *entries = NULL;
 	size_t count = 0;
 	unsigned rotated = 0;
+	unsigned keys_moved = 0;
 	unsigned failed = 0;
+	bool key_changed = false;
+	int rc = 1;
 	int ret;
 
 	setenv("TSS2_LOG", "all+none", 0);
 
-	ret = publishers_list(LOTA_PROFILE_BASE_DIR, entries,
-			      sizeof(entries) / sizeof(entries[0]), &count);
+	/* every profile: a key this walk never saw is a key that is not rotated */
+	ret = publishers_list_alloc(LOTA_PROFILE_BASE_DIR, &entries, &count);
 	if (ret < 0) {
 		fprintf(stderr, "Failed to read %s: %s\n",
 			LOTA_PROFILE_BASE_DIR, strerror(-ret));
@@ -725,7 +805,7 @@ int do_reprovision_aik(void)
 	if (ret < 0) {
 		fprintf(stderr, "Failed to initialize TPM: %s\n",
 			tpm_strerror(ret));
-		return 1;
+		goto out;
 	}
 
 	/*
@@ -749,7 +829,7 @@ int do_reprovision_aik(void)
 			continue;
 		}
 
-		ret = tpm_reprovision_aik(&g_agent.tpm_ctx);
+		ret = tpm_reprovision_aik(&g_agent.tpm_ctx, &key_changed);
 		if (ret < 0) {
 			fprintf(stderr, "  %s: %s\n", entries[i].id,
 				tpm_strerror(ret));
@@ -757,17 +837,21 @@ int do_reprovision_aik(void)
 			continue;
 		}
 		rotated++;
+		if (key_changed)
+			keys_moved++;
 	}
 
 	if (publishers_default_key_in_use(count)) {
-		ret = tpm_reprovision_aik(&g_agent.tpm_ctx);
+		ret = tpm_reprovision_aik(&g_agent.tpm_ctx, &key_changed);
 		if (ret < 0) {
 			fprintf(stderr, "AIK re-provisioning failed: %s\n",
 				tpm_strerror(ret));
 			tpm_cleanup(&g_agent.tpm_ctx);
-			return 1;
+			goto out;
 		}
 		rotated++;
+		if (key_changed)
+			keys_moved++;
 	}
 
 	tpm_cleanup(&g_agent.tpm_ctx);
@@ -776,11 +860,30 @@ int do_reprovision_aik(void)
 		fprintf(stderr,
 			"No attestation key to rotate: this host holds none "
 			"yet.\n");
-		return failed ? 1 : 0;
+		rc = failed ? 1 : 0;
+		goto out;
 	}
 
-	fprintf(stderr, "Rotated %u attestation key%s.\n", rotated,
-		rotated == 1 ? "" : "s");
+	/* usually only the auth moved: userAuth does not derive the key */
+	if (keys_moved == rotated)
+		fprintf(stderr, "Rotated %u attestation key%s.\n", rotated,
+			rotated == 1 ? "" : "s");
+	else if (keys_moved == 0)
+		fprintf(stderr,
+			"Rotated the authorization of %u attestation key%s. "
+			"The key%s did not move: %s derive%s from this TPM's "
+			"seed\nand the publisher's template, and the "
+			"authorization is not part of that\nderivation.\n",
+			rotated, rotated == 1 ? "" : "s",
+			rotated == 1 ? "" : "s", rotated == 1 ? "it" : "they",
+			rotated == 1 ? "s" : "");
+	else
+		fprintf(stderr,
+			"Rotated %u attestation key%s and the authorization "
+			"of %u more, whose key\nderives to the same object on "
+			"this TPM.\n",
+			keys_moved, keys_moved == 1 ? "" : "s",
+			rotated - keys_moved);
 
 	/*
 	 * Say how the new authorizations are kept:
@@ -806,8 +909,12 @@ int do_reprovision_aik(void)
 				exposed == 1 ? "it" : "them");
 	}
 
-	/* name the publishers whose certificates the rotation just invalidated */
-	if (count > 0) {
+	/* a certificate names a key: it is stale only where the key moved */
+	if (keys_moved == 0) {
+		fprintf(stderr,
+			"No certificate is stale: each still names the key it "
+			"was issued over.\n");
+	} else if (count > 0) {
 		fprintf(stderr,
 			"Their certificates are now stale -- re-enroll each:\n");
 		for (size_t i = 0; i < count; i++)
@@ -826,9 +933,12 @@ int do_reprovision_aik(void)
 
 	if (failed) {
 		fprintf(stderr, "%u could not be rotated.\n", failed);
-		return 1;
+		goto out;
 	}
-	return 0;
+	rc = 0;
+out:
+	free(entries);
+	return rc;
 }
 
 /*

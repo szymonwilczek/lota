@@ -441,7 +441,7 @@ func TestSQLiteNonce_RecordAndContains(t *testing.T) {
 
 	key := "test-nonce-key-12345"
 
-	if backend.Contains(key) {
+	if usedNonce(t, backend, key) {
 		t.Error("Should not contain unrecorded nonce")
 	}
 
@@ -449,7 +449,7 @@ func TestSQLiteNonce_RecordAndContains(t *testing.T) {
 		t.Fatalf("Record failed: %v", err)
 	}
 
-	if !backend.Contains(key) {
+	if !usedNonce(t, backend, key) {
 		t.Error("Should contain recorded nonce")
 	}
 
@@ -517,10 +517,10 @@ func TestSQLiteNonce_Cleanup(t *testing.T) {
 	}
 
 	// new nonces should still be there
-	if !backend.Contains("new-nonce-0") {
+	if !usedNonce(t, backend, "new-nonce-0") {
 		t.Error("Recent nonce should survive cleanup")
 	}
-	if backend.Contains("old-nonce-0") {
+	if usedNonce(t, backend, "old-nonce-0") {
 		t.Error("Old nonce should be cleaned up")
 	}
 
@@ -568,7 +568,7 @@ func TestSQLiteNonce_Persistence(t *testing.T) {
 	// second instance (simulates restart)
 	backend2 := NewSQLiteUsedNonceBackend(db)
 
-	if !backend2.Contains("replay-attempt-nonce") {
+	if !usedNonce(t, backend2, "replay-attempt-nonce") {
 		t.Fatal("SECURITY FAILURE: Used nonce lost after restart — replay attack possible!")
 	}
 

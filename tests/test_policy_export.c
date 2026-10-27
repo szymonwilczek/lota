@@ -68,10 +68,11 @@ static void build_full_snapshot(struct policy_snapshot *snap)
 	memset(snap->pcrs[3].value, 0x0E, LOTA_HASH_SIZE);
 	snap->pcrs[3].valid = true;
 
-	/* Kernel hash: all 0xAA, read from PCR 9 on a 6.14.0-other kernel */
-	snap->kernel_hash_pcr = 9;
+	/* Kernel image: all 0xAA bytes */
 	snprintf(snap->kernel_release, sizeof(snap->kernel_release),
 		 "6.14.0-other");
+	snprintf(snap->kernel_image_path, sizeof(snap->kernel_image_path),
+		 "(hd0,gpt2)/vmlinuz-6.14.0-other");
 	memset(snap->kernel_hash, 0xAA, LOTA_HASH_SIZE);
 	snap->kernel_hash_valid = true;
 
@@ -87,6 +88,7 @@ static void build_full_snapshot(struct policy_snapshot *snap)
 	snap->module_sig = true;
 	snap->secureboot = false;
 	snap->lockdown = false;
+	snap->ima_appraisal = false;
 }
 
 static char *emit_to_string(const struct policy_snapshot *snap, size_t *out_len)
@@ -254,20 +256,34 @@ static void test_emit_kernel_hash(void)
 		return;
 	}
 
-	/* The digest is a register's value, so the document has to say which
-	 * register and on which kernel -- not name a file that produced nothing */
-	if (!contains(yaml, "# Source: PCR 9")) {
-		FAIL("measured-boot digest does not name its PCR");
+	/*
+	 * The digest is the bootloader's measurement of the kernel image,
+	 * and that is what the verifier compares. The document says so,
+	 * names the image the way the bootloader wrote it, and says which
+	 * kernel booted.
+	 */
+	if (!contains(yaml, "# Source: the bootloader's measurement")) {
+		FAIL("the kernel digest does not name where it came from");
+		return;
+	}
+
+	if (contains(yaml, "# Source: PCR")) {
+		FAIL("a register is still offered as the kernel digest");
+		return;
+	}
+
+	if (!contains(yaml, "(hd0,gpt2)/vmlinuz-6.14.0-other")) {
+		FAIL("the kernel image is not named");
 		return;
 	}
 
 	if (!contains(yaml, "6.14.0-other")) {
-		FAIL("measured-boot digest does not name the booted kernel");
+		FAIL("the kernel digest does not name the booted kernel");
 		return;
 	}
 
 	if (contains(yaml, "/boot/vmlinuz")) {
-		FAIL("a file path is still attributed the PCR's digest");
+		FAIL("a file the agent read is attributed the digest");
 		return;
 	}
 
@@ -339,6 +355,10 @@ static void test_emit_security_flags(void)
 		FAIL("require_lockdown should be false");
 		return;
 	}
+	if (!has_yaml_line(yaml, "require_ima_appraisal: false")) {
+		FAIL("require_ima_appraisal should follow the host");
+		return;
+	}
 
 	PASS();
 }
@@ -380,6 +400,7 @@ static void test_emit_no_kernel_hash(void)
 	snprintf(snap.name, sizeof(snap.name), "no-kernel");
 	snprintf(snap.description, sizeof(snap.description), "no kernel hash");
 	snap.kernel_hash_valid = false;
+	snap.kernel_hash_error = -ENOENT;
 
 	char *yaml = emit_to_string(&snap, NULL);
 	if (!yaml) {
@@ -389,6 +410,62 @@ static void test_emit_no_kernel_hash(void)
 
 	if (!has_yaml_line(yaml, "kernel_hashes: []")) {
 		FAIL("expected 'kernel_hashes: []'");
+		return;
+	}
+
+	/*
+	 * Empty list is a decision, and the operator is owed the reason:
+	 * this host measured no kernel image, which is not the same as
+	 * the log being unreadable.
+	 */
+	if (!contains(yaml, "measures no kernel image")) {
+		FAIL("the empty list does not say why it is empty");
+		return;
+	}
+
+	PASS();
+}
+
+/*
+ * A register is never written into kernel_hashes, whatever happened. PCR 9
+ * folds in grubenv, so a policy pinning it refuses the host it came from at
+ * its next boot -- and refuses it as kernel drift, which sends the operator
+ * looking at the boot chain.
+ */
+static void test_emit_never_offers_a_register_as_the_kernel_pin(void)
+{
+	struct policy_snapshot snap;
+	char *yaml;
+
+	TEST("policy_emit - an unreadable log does not fall back to a register");
+
+	memset(&snap, 0, sizeof(snap));
+	snprintf(snap.name, sizeof(snap.name), "bad-log");
+	snprintf(snap.description, sizeof(snap.description), "log unparsable");
+	snap.kernel_hash_valid = false;
+	snap.kernel_hash_error = -EINVAL;
+
+	/* what a register-based exporter would have had to hand */
+	memset(snap.kernel_hash, 0xCC, LOTA_HASH_SIZE);
+
+	yaml = emit_to_string(&snap, NULL);
+	if (!yaml) {
+		FAIL("emit_to_buf returned error");
+		return;
+	}
+
+	if (!has_yaml_line(yaml, "kernel_hashes: []")) {
+		FAIL("expected 'kernel_hashes: []'");
+		return;
+	}
+
+	if (contains(yaml, "cccccccc")) {
+		FAIL("the unusable digest was written into the policy anyway");
+		return;
+	}
+
+	if (!contains(yaml, "could not be parsed")) {
+		FAIL("the empty list does not say the log could not be parsed");
 		return;
 	}
 
@@ -754,6 +831,7 @@ int main(void)
 	printf("\nEdge Cases:\n");
 	test_emit_no_pcrs();
 	test_emit_no_kernel_hash();
+	test_emit_never_offers_a_register_as_the_kernel_pin();
 	test_emit_no_agent_hash();
 	test_emit_partial_pcrs();
 	test_emit_all_security_disabled();

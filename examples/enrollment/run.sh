@@ -14,71 +14,173 @@
 #
 #   BIN=/usr/bin EK_ROOT=/var/lib/swtpm-localca/issuercert.pem ./run.sh
 #
-# For swTPM the EK certificate chains to the local swtpm CA; point EK_ROOT
-# at its issuer certificate. For real hardware, use your vendor's roots.
+# CA_ADDR and VERIFIER_ADDR default to the CA's and verifier's own ports;
+# move them on a host that already attests.
+#
+# EK_ROOT is a file or a directory. A file is one self-signed root, as the
+# swtpm local CA issues, and goes to -ek-root. A directory is a pinned bundle
+# for a vendor EK chain with intermediates, and goes to -ek-root-bundle.
+# Build it with scripts/lota-ek-root-pin.sh and scripts/lota-ek-roots-update.sh
+# (see README.rst).
 
 set -euo pipefail
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
-BIN="${BIN:-$HERE/../../build}"
+BUILD_DIR="${LOTA_BUILD_DIR:-$HERE/../../build}"
+BIN="${BIN:-$BUILD_DIR}"
 CA_DIR="${CA_DIR:-$HERE/ca}"
-EK_ROOT="${EK_ROOT:?set EK_ROOT to the TPM manufacturer / swtpm root certificate}"
+EK_ROOT="${EK_ROOT:?set it to a manufacturer root, or a pinned bundle dir}"
 RUN_DIR="${RUN_DIR:-$(mktemp -d "${TMPDIR:-/tmp}/lota-enrollment.XXXXXX")}"
 AIK_STORE="${AIK_STORE:-$RUN_DIR/aiks}"
-NONCE_DB="${NONCE_DB:-$AIK_STORE/nonces.sqlite}"
+STATE_DB="${STATE_DB:-$AIK_STORE/verifier-state.sqlite}"
 POLICY="${POLICY:-$HERE/../../policies/testing.yaml}"
 
-CA_ADDR="127.0.0.1:8444"
-VERIFIER_ADDR="127.0.0.1:9443"
+CA_ADDR="${CA_ADDR:-127.0.0.1:8444}"
+VERIFIER_ADDR="${VERIFIER_ADDR:-127.0.0.1:9443}"
+
+# refuse a taken port before starting anything
+addr_in_use() {
+    local host=${1%%:*} port=${1##*:}
+
+    if command -v ss >/dev/null 2>&1; then
+        ss -ltnH "sport = :$port" 2>/dev/null | grep -q .
+        return
+    fi
+    # no ss: a successful connect means somebody is listening
+    (exec 3<>"/dev/tcp/$host/$port") 2>/dev/null
+}
+
+refuse_if_taken() {
+    local var=$1 addr=$2
+
+    addr_in_use "$addr" || return 0
+    echo "$addr is already in use, and the demo will not take it from" \
+         "whatever holds it." >&2
+    echo "Give the demo an address of its own:" >&2
+    echo "  $var=127.0.0.1:1${addr##*:} ./$(basename "$0")" >&2
+    exit 1
+}
+
+refuse_if_taken CA_ADDR "$CA_ADDR"
+refuse_if_taken VERIFIER_ADDR "$VERIFIER_ADDR"
 
 agent="$BIN/lota-agent"
 ca="$BIN/lota-attest-ca"
 verifier="$BIN/lota-verifier"
 for b in "$agent" "$ca" "$verifier"; do
-	[ -x "$b" ] || { echo "missing binary: $b (run 'make all')" >&2; exit 1; }
+    [ -x "$b" ] || {
+        echo "missing binary: $b (run 'make all')" >&2
+        exit 1
+    }
 done
 
-[ -f "$CA_DIR/ca.crt" ] || { echo "no CA material; run ./gen-ca.sh $CA_DIR first" >&2; exit 1; }
-[ -f "$POLICY" ] || { echo "missing verifier policy: $POLICY" >&2; exit 1; }
+[ -f "$CA_DIR/ca.crt" ] || {
+    echo "no CA material; run ./gen-ca.sh $CA_DIR first" >&2
+    exit 1
+}
+[ -f "$POLICY" ] || {
+    echo "missing verifier policy: $POLICY" >&2
+    exit 1
+}
 mkdir -p "$RUN_DIR" "$AIK_STORE"
 
-cleanup() { kill "${CA_PID:-}" "${VERIFIER_PID:-}" 2>/dev/null || true; }
+# SHA-256 of the anchor's SPKI: known before enrollment,
+# as the slot is claimed at consent
+publisher_id() {
+    command -v openssl >/dev/null 2>&1 || return 1
+    openssl x509 -in "$CA_DIR/ca.crt" -noout -pubkey |
+        openssl pkey -pubin -outform DER |
+        openssl dgst -sha256 -r | cut -d' ' -f1
+}
+
+CONSENT_ATTEMPTED=0
+
+# on every exit past consent: a failed run keeps the slot too
+say_what_was_left() {
+    local id
+
+    [ "$CONSENT_ATTEMPTED" = 1 ] || return 0
+
+    echo
+    if id=$(publisher_id); then
+        echo "This run answered to publisher $id."
+        echo "That is one of this machine's publisher slots, and a failed" \
+            "run holds it exactly as a successful one does. Give it" \
+            "back with:"
+        echo "  sudo lota-agent --forget-publisher $id"
+    else
+        echo "This run claimed one of this machine's publisher slots," \
+            "which a failed run holds exactly as a successful one" \
+            "does. Find it and give it back with:"
+        echo "  sudo lota-agent --list-publishers"
+        echo "  sudo lota-agent --forget-publisher <id>"
+    fi
+    echo "Keeping $CA_DIR costs that one slot however often this runs;" \
+        "CA material generated elsewhere is another publisher and" \
+        "another slot."
+}
+
+cleanup() {
+    kill "${CA_PID:-}" "${VERIFIER_PID:-}" 2>/dev/null || true
+    say_what_was_left
+}
 trap cleanup EXIT
+
+# A bundle carries the intermediates a vendor chain needs;
+# a lone file is the self-signed anchor swTPM issues directly from.
+if [ -d "$EK_ROOT" ]; then
+    ek_material=(-ek-root-bundle "$EK_ROOT")
+else
+    ek_material=(-ek-root "$EK_ROOT")
+fi
 
 echo "== 1/4 start the attestation CA =="
 "$ca" -listen "$CA_ADDR" \
-	-ca-cert "$CA_DIR/ca.crt" -ca-key "$CA_DIR/ca.key" \
-	-tls-cert "$CA_DIR/tls.crt" -tls-key "$CA_DIR/tls.key" \
-	-pseudonym-key "$CA_DIR/pseudonym.key" \
-	-ek-root "$EK_ROOT" &
+      -ca-cert "$CA_DIR/ca.crt" -ca-key "$CA_DIR/ca.key" \
+      -tls-cert "$CA_DIR/tls.crt" -tls-key "$CA_DIR/tls.key" \
+      -pseudonym-key "$CA_DIR/pseudonym.key" \
+      "${ek_material[@]}" &
 CA_PID=$!
 sleep 1
 
 echo "== 2/4 enroll the AIK (credential activation) =="
+CONSENT_ATTEMPTED=1
 sudo "$agent" --enroll \
-	--ca-server "${CA_ADDR%%:*}" --ca-port "${CA_ADDR##*:}" \
-	--ca-cert "$CA_DIR/ca.crt"
+     --ca-server "${CA_ADDR%%:*}" --ca-port "${CA_ADDR##*:}" \
+     --ca-cert "$CA_DIR/ca.crt"
 echo "AIK certificate stored in the publisher profile the CA anchor names," \
-	"under /var/lib/lota/profiles/"
+     "under /var/lib/lota/profiles/"
 
+# The listener certificate gen-ca.sh issued serves this verifier too:
+# it chains to ca.crt and carries 127.0.0.1, so the agent verifies the handshake
+# against the same file that names the publisher it enrolled with.
 echo "== 3/4 start the verifier (trusts only the CA root) =="
 (
-	cd "$RUN_DIR"
-	"$verifier" -addr "$VERIFIER_ADDR" \
-		-aik-ca-cert "$CA_DIR/ca.crt" \
-		-aik-store "$AIK_STORE" \
-		-nonce-db "$NONCE_DB" \
-		-policy "$POLICY" \
-		-generate-cert -allow-permissive-policy \
-		-allow-tofu-boot-baseline
+    cd "$RUN_DIR"
+    "$verifier" -addr "$VERIFIER_ADDR" \
+                -aik-ca-cert "$CA_DIR/ca.crt" \
+                -cert "$CA_DIR/tls.crt" -key "$CA_DIR/tls.key" \
+                -aik-store "$AIK_STORE" \
+                -state-db "$STATE_DB" \
+                -policy "$POLICY" \
+                -allow-permissive-policy \
+                -allow-tofu-boot-baseline
 ) &
 VERIFIER_PID=$!
 sleep 1
 
+# The agent refuses --server while /etc/lota/lota.conf names publishers,
+# so the demo uses a config with none and leaves the host's publishers alone.
+# The agent requires a root-owned config.
+DEMO_CONF="$RUN_DIR/demo.conf"
+printf '%s\n' \
+       "# Enrollment demo: no profiles; attests once to the named verifier." |
+    sudo tee "$DEMO_CONF" >/dev/null
+
 echo "== 4/4 attest =="
-sudo "$agent" --attest \
-	--server "${VERIFIER_ADDR%%:*}" --port "${VERIFIER_ADDR##*:}" \
-	--ca-cert "$RUN_DIR/lota-verifier.crt"
+sudo "$agent" --attest --config "$DEMO_CONF" \
+     --server "${VERIFIER_ADDR%%:*}" --port "${VERIFIER_ADDR##*:}" \
+     --ca-cert "$CA_DIR/ca.crt"
 
 echo
 echo "Done. A VERIFY_OK above means the AIK was activation-bound to the EK"

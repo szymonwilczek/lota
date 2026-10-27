@@ -15,15 +15,28 @@ IF_FILES := $(addsuffix .if,$(filter lota,$(MODULES)))
 FC_FILES := $(addsuffix .fc,$(filter lota,$(MODULES)))
 PP_FILES := $(addsuffix .pp,$(MODULES))
 
+# Tunables read from the policy sources, so reports cannot fall behind.
+# '.' matches gen_tunable's '(': a bare one would close $(shell ...) early.
+TUNABLES := $(shell sed -n 's/^gen_tunable.\([a-z_]*\),.*/\1/p' $(TE_FILES))
+
 # SELinux development paths (Fedora/RHEL currently)
 SELINUX_DEVEL := /usr/share/selinux/devel
 SELINUX_MAKEFILE := $(SELINUX_DEVEL)/Makefile
 
-# Installation paths
+# Installation paths; lota.if goes where the devel Makefile resolves
+# interfaces for other modules
 SELINUX_MODULE_DIR := /usr/share/selinux/packages
+SELINUX_INTERFACE_DIR := $(SELINUX_DEVEL)/include/contrib
 
-# Port for attestation protocol
-LOTA_PORT := 8443
+# Port to label lota_port_t. Empty by default: only the fleet knows which
+# port its CA or verifier answers on. lota-install labels the endpoints it
+# is given, and the agent prints the semanage command for one added later.
+#
+#   sudo make install LOTA_PORT=8573
+#
+# A port the base policy names by number (8443 is http_port_t) is left
+# alone: a local record would take it from every confined service.
+LOTA_PORT :=
 LOTA_PORT_PROTO := tcp
 
 # File paths for restorecon
@@ -97,10 +110,46 @@ install: all
 	semodule -i lota.pp
 	semodule -i lota_gaming.pp
 
-	@echo "Configuring attestation port $(LOTA_PORT)/$(LOTA_PORT_PROTO)..."
-	-semanage port -a -t lota_port_t -p $(LOTA_PORT_PROTO) $(LOTA_PORT) 2>/dev/null || \
-		semanage port -m -t lota_port_t -p $(LOTA_PORT_PROTO) $(LOTA_PORT) 2>/dev/null || \
-		echo -e "$(YELLOW)Warning: Could not configure port (may already exist).$(NC)"
+	@echo "Installing policy packages and interfaces..."
+	install -d $(SELINUX_MODULE_DIR)
+	install -m 0644 $(PP_FILES) $(SELINUX_MODULE_DIR)/
+	@# The interfaces the reference documents are callable only from here.
+	@if [ -d $(SELINUX_DEVEL)/include ]; then \
+		install -d $(SELINUX_INTERFACE_DIR); \
+		install -m 0644 $(IF_FILES) $(SELINUX_INTERFACE_DIR)/; \
+		echo "  interfaces: $(SELINUX_INTERFACE_DIR)/$(IF_FILES)"; \
+	else \
+		echo -e "$(YELLOW)  interfaces: $(SELINUX_DEVEL)/include is absent, so lota.if was not installed. A module calling lota_query_status() and the other documented interfaces needs it: install selinux-policy-devel and re-run, or copy lota.if there by hand.$(NC)"; \
+	fi
+
+	@# semanage port -a accepts a port another type owns and shadows it for
+	@# every domain, so look up the owner first. A record naming this port
+	@# (8443 is http_port_t) is left alone; a span such as unreserved_port_t
+	@# is labelled out of, and the message names the span.
+	@if [ -z "$(LOTA_PORT)" ]; then \
+		echo "No port to label (pass LOTA_PORT=<port> to label one)."; \
+	else \
+		owner=$$(semanage port -l | awk -v p='$(LOTA_PORT)' -v pr='$(LOTA_PORT_PROTO)' \
+			'$$2 == pr { \
+				for (i = 3; i <= NF; i++) { \
+					gsub(/,/, "", $$i); \
+					if ($$i == p) { print "named", $$1; exit } \
+					n = split($$i, r, "-"); \
+					if (n == 2 && p >= r[1] && p <= r[2]) { \
+						span = "range " $$1; \
+					} \
+				} \
+			} \
+			END { if (span != "") print span }'); \
+		kind=$${owner%% *}; type=$${owner##* }; \
+		if [ "$$type" = "lota_port_t" ] && [ "$$kind" = "named" ]; then \
+			echo "Port $(LOTA_PORT)/$(LOTA_PORT_PROTO) already carries lota_port_t."; \
+		elif [ "$$kind" = "named" ]; then \
+			echo -e "$(YELLOW)Port $(LOTA_PORT)/$(LOTA_PORT_PROTO) is defined as $$type. Leaving it alone: a local record would shadow that for every domain on this host, not only for LOTA. lota_agent_t may be allowed to reach $$type already; where it may not, choose a port no type names.$(NC)"; \
+		elif semanage port -a -t lota_port_t -p $(LOTA_PORT_PROTO) $(LOTA_PORT); then \
+			echo "Labelled $(LOTA_PORT)/$(LOTA_PORT_PROTO) lota_port_t$${type:+ (out of the $$type range)}."; \
+		fi; \
+	fi
 
 	@echo "Creating directories..."
 	mkdir -p /etc/lota/policies
@@ -126,12 +175,10 @@ install: all
 	@echo "  3. Create config in /etc/lota/"
 	@echo "  4. Run: restorecon -Rv /usr/bin/lota-agent /usr/lib/lota /etc/lota"
 	@echo ""
-	@echo "Tunables (adjust with setsebool):"
-	@echo "  lota_network_attest   - Network attestation (default: on)"
-	@echo "  lota_bpf_load         - BPF program loading (default: on)"
-	@echo "  lota_module_enforce   - Module enforcement (default: off)"
-	@echo "  lota_steam_attest     - Steam integration (default: on)"
-	@echo "  lota_wine_attest      - Wine/Proton integration (default: on)"
+	@echo "Tunables (adjust with setsebool, current defaults shown):"
+	@for bool in $(TUNABLES); do \
+		echo "  $$bool"; \
+	done
 
 #
 # Uninstall policy modules
@@ -142,12 +189,31 @@ uninstall:
 	@test $$(id -u) -eq 0 || \
 		(echo -e "$(RED)Error: Must run as root.$(NC)"; exit 1)
 
+	@# Drop the local lota_port_t records while the type still exists:
+	@# left behind, they name a missing type and return on reinstall.
+	@if command -v semanage >/dev/null 2>&1; then \
+		semanage port -l -C 2>/dev/null | \
+		awk '$$1 == "lota_port_t" { \
+			proto = $$2; \
+			for (i = 3; i <= NF; i++) { \
+				gsub(/,/, "", $$i); \
+				if ($$i != "") print proto, $$i; \
+			} \
+		}' | \
+		while read -r proto port; do \
+			echo "  unlabelling $$port/$$proto"; \
+			semanage port -d -t lota_port_t -p "$$proto" "$$port" \
+				2>/dev/null || true; \
+		done; \
+	fi
+
 	@# modules
 	-semodule -r lota_gaming 2>/dev/null || true
 	-semodule -r lota 2>/dev/null || true
 
-	@# remove port definition
-	-semanage port -d -t lota_port_t -p $(LOTA_PORT_PROTO) $(LOTA_PORT) 2>/dev/null || true
+	@# the copies install put on the filesystem
+	rm -f $(addprefix $(SELINUX_MODULE_DIR)/,$(PP_FILES))
+	rm -f $(addprefix $(SELINUX_INTERFACE_DIR)/,$(IF_FILES))
 
 	@echo -e "$(GREEN)Uninstall complete.$(NC)"
 
@@ -163,10 +229,20 @@ reload: uninstall install
 .PHONY: check
 check: check-deps
 	@echo -e "$(BLUE)Checking policy syntax...$(NC)"
-	@for te in $(TE_FILES); do \
+	@# Build each .pp: asking for the .te is a no-op that always passes.
+	@# Output is captured first so the build's status, not tail's, decides.
+	@rc=0; \
+	for te in $(TE_FILES); do \
 		echo "  Checking $$te..."; \
-		$(MAKE) -f $(SELINUX_MAKEFILE) $$te 2>&1 | head -20 || exit 1; \
-	done
+		if ! out=$$($(MAKE) -f $(SELINUX_MAKEFILE) $${te%.te}.pp 2>&1); then \
+			printf '%s\n' "$$out" | tail -20; \
+			rc=1; \
+		fi; \
+	done; \
+	if [ $$rc -ne 0 ]; then \
+		echo -e "$(RED)Syntax check failed.$(NC)"; \
+		exit 1; \
+	fi
 	@echo -e "$(GREEN)Syntax check passed.$(NC)"
 
 #
@@ -186,11 +262,10 @@ verify:
 		echo -e "$(YELLOW)lota_port_t: not configured$(NC)"
 	@echo ""
 	@echo "Tunables status:"
-	@getsebool lota_network_attest 2>/dev/null || echo "  lota_network_attest: (not available)"
-	@getsebool lota_bpf_load 2>/dev/null || echo "  lota_bpf_load: (not available)"
-	@getsebool lota_module_enforce 2>/dev/null || echo "  lota_module_enforce: (not available)"
-	@getsebool lota_steam_attest 2>/dev/null || echo "  lota_steam_attest: (not available)"
-	@getsebool lota_wine_attest 2>/dev/null || echo "  lota_wine_attest: (not available)"
+	@for bool in $(TUNABLES); do \
+		getsebool $$bool 2>/dev/null || \
+			echo "  $$bool: (not available)"; \
+	done
 
 #
 # Show AVC denials related to LOTA
@@ -207,9 +282,14 @@ audit:
 .PHONY: suggest
 suggest:
 	@echo -e "$(BLUE)Generating policy suggestions from audit log...$(NC)"
-	@ausearch -m avc -ts today 2>/dev/null | grep -E 'lota|steam|wine|games' | \
-		audit2allow -m lota_local 2>/dev/null || \
-		echo "No suggestions (no denials found)."
+	@# Branch on the grep: audit2allow exits 0 even with nothing to suggest.
+	@denials=$$(ausearch -m avc -ts today 2>/dev/null | \
+		grep -E 'lota|steam|wine|games'); \
+	if [ -n "$$denials" ]; then \
+		printf '%s\n' "$$denials" | audit2allow -m lota_local; \
+	else \
+		echo "No suggestions (no denials found)."; \
+	fi
 
 #
 # Clean build artifacts
@@ -239,6 +319,9 @@ help:
 	@echo "  audit      - Show recent AVC denials"
 	@echo "  suggest    - Generate policy suggestions from audit"
 	@echo "  clean      - Remove build artifacts"
+	@echo ""
+	@echo "Variables:"
+	@echo "  LOTA_PORT  - port for install to label lota_port_t (default: none)"
 	@echo ""
 	@echo "Examples:"
 	@echo "  make                    # Build policy"

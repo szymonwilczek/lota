@@ -189,8 +189,11 @@ intermediates is refused at load, because it anchors no chain. Deliberately
 trusting one branch instead of everything under a root is a different decision,
 made by pinning that branch's certificate as a ``root`` -- which the loader
 refuses unless the certificate really is self-signed. Pinning an intermediate
-the device also presents is harmless and costs one fetch less at enrollment
-time.
+the device also presents is harmless: the CA opens no connection while it
+verifies an EK, so the path costs the same however it is assembled. The fetch
+a pinned intermediate saves is one the AIA walk makes when the bundle is
+built, not one an enrollment makes. What pinning it does buy is a device that
+presents no intermediates at all: the path is already complete without them.
 
 Revocation of a bundled intermediate by its parent root is not evaluated during
 EK verification: the CA checks EK leaves against the manufacturer CRL feed,
@@ -243,7 +246,9 @@ so the intermediate must be part of the bundle for the feed to load.
 
 The CA fails closed at startup on a CRL that does not verify, omits
 ``NextUpdate``, or uses a weak signature algorithm, and an issuer whose every
-loaded CRL is past ``NextUpdate`` is refused at enrollment time.
+loaded CRL is past ``NextUpdate`` is refused at enrollment time with its own
+status, distinct from a rejected endorsement key and from a CA fault: the host
+is told the feed needs refreshing.
 
 An issuer with no configured CRL is accepted (standard RFC 5280 semantics) --
 ship the feed for every manufacturer that publishes one.

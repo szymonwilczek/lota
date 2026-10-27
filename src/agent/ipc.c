@@ -26,6 +26,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/epoll.h>
+#include <sys/inotify.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
 #include <sys/un.h>
@@ -562,6 +563,89 @@ static int set_nonblocking(int fd)
 	return 0;
 }
 
+/*
+ * Bind a fresh listener at the primary socket path, at startup and again when
+ * the file is replaced. The caller decides whether taking the path over is
+ * legitimate.
+ */
+static int open_primary_listener(int *out_fd)
+{
+	struct sockaddr_un addr;
+	struct group *grp;
+	int fd, ret;
+
+	fd = socket(AF_UNIX, SOCK_STREAM, 0);
+	if (fd < 0)
+		return -errno;
+
+	ret = set_nonblocking(fd);
+	if (ret < 0)
+		goto err_close;
+
+	memset(&addr, 0, sizeof(addr));
+	addr.sun_family = AF_UNIX;
+	strncpy(addr.sun_path, LOTA_IPC_SOCKET_PATH, sizeof(addr.sun_path) - 1);
+
+	unlink(LOTA_IPC_SOCKET_PATH);
+
+	/* restrict socket access to owner (root) and the 'lota' group */
+	{
+		mode_t old_umask = umask(0117);
+		ret = bind(fd, (struct sockaddr *)&addr, sizeof(addr));
+		umask(old_umask);
+	}
+	if (ret < 0) {
+		ret = -errno;
+		lota_err("bind(%s) failed: %s", LOTA_IPC_SOCKET_PATH,
+			 strerror(-ret));
+		goto err_close;
+	}
+
+	grp = getgrnam(LOTA_GROUP_NAME);
+	if (grp) {
+		if (chown(LOTA_IPC_SOCKET_PATH, 0, grp->gr_gid) < 0)
+			lota_warn("chown(%s, 0, %d) failed: %s",
+				  LOTA_IPC_SOCKET_PATH, grp->gr_gid,
+				  strerror(errno));
+	} else {
+		lota_warn("group '%s' not found, socket accessible to "
+			  "current group only",
+			  LOTA_GROUP_NAME);
+	}
+
+	if (listen(fd, 16) < 0) {
+		ret = -errno;
+		lota_err("listen() failed: %s", strerror(-ret));
+		unlink(LOTA_IPC_SOCKET_PATH);
+		goto err_close;
+	}
+
+	*out_fd = fd;
+	return 0;
+
+err_close:
+	close(fd);
+	return ret;
+}
+
+/*
+ * Record the (device, inode) at the socket path. The fd outlives an unlink,
+ * so only a changed pair shows that clients now connect somewhere else.
+ */
+static void record_listen_identity(struct ipc_context *ctx)
+{
+	struct stat st;
+
+	if (stat(LOTA_IPC_SOCKET_PATH, &st) < 0) {
+		ctx->listen_dev = 0;
+		ctx->listen_ino = 0;
+		return;
+	}
+
+	ctx->listen_dev = st.st_dev;
+	ctx->listen_ino = st.st_ino;
+}
+
 static int ensure_socket_dir(void)
 {
 	int dirfd;
@@ -949,23 +1033,30 @@ static bool runtime_coverage_is_full(void)
 {
 	int count;
 
+	/*
+	 * Reap here, not in each caller. An exited PID is unmeasurable,
+	 * so a stale entry would report partial coverage.
+	 * Reaping in one place keeps the status word and the token in agreement.
+	 */
+	runtime_protect_reap_exited();
+
 	agent_globals_lock(&g_agent);
 	count = g_agent.policy_protect_pid_count;
 	agent_globals_unlock(&g_agent);
 
 	if (count <= 0 || !g_agent.policy_protect_pids)
-		return true; /* nothing to leave out */
+		return lota_coverage_is_full(0, true);
 
 	for (int i = 0; i < count; i++) {
 		struct lota_runtime_measure_coverage cov;
 
 		if (lota_runtime_coverage_pid(
 			    (pid_t)g_agent.policy_protect_pids[i], &cov) != 0)
-			return false;
+			return lota_coverage_is_full((size_t)count, false);
 		if (cov.unmeasurable > 0)
-			return false;
+			return lota_coverage_is_full((size_t)count, false);
 	}
-	return true;
+	return lota_coverage_is_full((size_t)count, true);
 }
 
 uint32_t ipc_host_status_flags(const struct ipc_context *ctx)
@@ -1046,23 +1137,26 @@ static void handle_get_token(struct ipc_context *ctx, struct ipc_client *client,
 
 	client_attestation_view(ctx, client, &view_flags, &view_valid_until);
 
-	if (token_gate_needs_attested(view_flags) &&
-	    !(view_flags & LOTA_STATUS_ATTESTED)) {
-		fail = true;
-		fail_code = LOTA_IPC_ERR_NOT_ATTESTED;
-		goto out;
-	}
-
 	/*
 	 * Refuse to issue tokens while the TPM is in DA lockout: a Quote
 	 * attempt would either hang the IPC thread on retry or surface a
 	 * second-class error to the client. Fail closed with a dedicated
 	 * status code so SDK consumers can back off coherently.
+	 *
+	 * Checked before the verdict: a lockout is why the verdict lapsed,
+	 * and NOT_ATTESTED would invite a retry that cannot succeed.
 	 */
 	if ((ctx->tpm && tpm_is_locked_out(ctx->tpm)) ||
 	    (ctx->status_flags & LOTA_STATUS_TPM_LOCKOUT)) {
 		fail = true;
 		fail_code = LOTA_IPC_ERR_TPM_LOCKOUT;
+		goto out;
+	}
+
+	if (token_gate_needs_attested(view_flags) &&
+	    !(view_flags & LOTA_STATUS_ATTESTED)) {
+		fail = true;
+		fail_code = LOTA_IPC_ERR_NOT_ATTESTED;
 		goto out;
 	}
 
@@ -1086,6 +1180,21 @@ static void handle_get_token(struct ipc_context *ctx, struct ipc_client *client,
 			  client->peer_uid, client->peer_pid);
 		fail = true;
 		fail_code = LOTA_IPC_ERR_RATE_LIMITED;
+		goto out;
+	}
+
+	/*
+	 * Nothing below picks a publisher: the quote would be signed by
+	 * whichever AIK the TPM is bound to. One publisher is no guess,
+	 * a title there names nobody. Before the TPM check, because the
+	 * omission is the caller's and no TPM would change the answer.
+	 */
+	if (!client->profile && ctx->profile_count > 1) {
+		lota_err(
+			"Refusing GET_TOKEN for pid=%d: this agent answers for %zu publishers and the connection named none. Send SET_PROFILE first",
+			client->peer_pid, ctx->profile_count);
+		fail = true;
+		fail_code = LOTA_IPC_ERR_UNKNOWN_PROFILE;
 		goto out;
 	}
 
@@ -1142,6 +1251,17 @@ static void handle_get_token(struct ipc_context *ctx, struct ipc_client *client,
 	 */
 	if (client->profile && ctx->tpm) {
 		ret = tpm_bind_profile(ctx->tpm, &client->profile->paths);
+		if (ret == -ENOSPC) {
+			/* a full handle range, not a full disk */
+			lota_err("no attestation-key slot left for publisher "
+				 "%s: every handle this build reserves is "
+				 "taken. lota-agent --list-publishers says "
+				 "which, and --forget-publisher frees one",
+				 client->profile->paths.id);
+			fail = true;
+			fail_code = LOTA_IPC_ERR_NO_KEY_SLOT;
+			goto out;
+		}
 		if (ret < 0) {
 			lota_err(
 				"cannot bind publisher profile for GET_TOKEN: %s",
@@ -1305,13 +1425,12 @@ static void handle_get_token(struct ipc_context *ctx, struct ipc_client *client,
 	}
 
 	/*
-	 * Coverage is a property of this measurement round, not of the host,
-	 * so it is set on the token and never on the status word.
-	 * Host with no protected process has nothing left unmeasured,
-	 * which is the empty case of the same statement.
+	 * Same rule as the status word: a round with no protected process
+	 * measured nothing, so it is not full coverage.
 	 */
-	token->flags =
-		lota_status_fold_coverage(token->flags, image_fully_measured);
+	token->flags = lota_status_fold_coverage(
+		token->flags,
+		lota_coverage_is_full(runtime_pid_count, image_fully_measured));
 
 	memcpy(token->runtime_protect_digest, runtime_protect_digest,
 	       sizeof(token->runtime_protect_digest));
@@ -1474,6 +1593,7 @@ static void handle_set_profile(struct ipc_context *ctx,
 		snprintf(want + i * 2, 3, "%02x", req.profile_id[i]);
 
 	for (size_t i = 0; i < ctx->profile_count; i++) {
+		uint32_t recorded_handle = 0;
 		time_t agreed = 0;
 
 		if (!ctx->profiles[i].has_profile)
@@ -1495,6 +1615,31 @@ static void handle_set_profile(struct ipc_context *ctx,
 			build_error_response(client,
 					     LOTA_IPC_ERR_CONSENT_REQUIRED);
 			return;
+		}
+
+		/*
+		 * A publisher with no key yet needs a free handle; refuse here
+		 * rather than let the session fail at the first GET_TOKEN.
+		 */
+		if (ctx->tpm &&
+		    profile_aik_handle_load(&ctx->profiles[i].paths,
+					    &recorded_handle) == -ENOENT) {
+			struct profile_aik_slots slots;
+
+			if (tpm_aik_slot_census(ctx->tpm, NULL, &slots) == 0 &&
+			    slots.free_slots == 0) {
+				lota_warn("connection pid=%d asked for "
+					  "publisher %s, which holds no "
+					  "attestation key yet and this host "
+					  "has no slot left for one: "
+					  "--list-publishers says what holds "
+					  "the range, --forget-publisher frees "
+					  "a slot",
+					  client->peer_pid, want);
+				build_error_response(client,
+						     LOTA_IPC_ERR_NO_KEY_SLOT);
+				return;
+			}
 		}
 
 		client->profile = &ctx->profiles[i];
@@ -1538,9 +1683,37 @@ static void handle_set_profile(struct ipc_context *ctx,
 		return;
 	}
 
-	lota_warn("connection pid=%d asked for publisher %s, which this host "
-		  "has no profile for",
-		  client->peer_pid, want);
+	/*
+	 * A publisher with an unreadable anchor has no identity to match,
+	 * so it may be the one asked for.
+	 */
+	{
+		const struct attest_target *first = NULL;
+		size_t unreadable = 0;
+
+		for (size_t i = 0; i < ctx->profile_count; i++) {
+			if (!ctx->profiles[i].profile_error)
+				continue;
+			if (!first)
+				first = &ctx->profiles[i];
+			unreadable++;
+		}
+
+		if (first)
+			lota_warn("connection pid=%d asked for publisher %s, "
+				  "which this host has no profile bound to. "
+				  "%zu configured publisher%s cannot be "
+				  "identified here because the trust anchor "
+				  "could not be read (%s: %s); one of them may "
+				  "be the publisher asked for",
+				  client->peer_pid, want, unreadable,
+				  unreadable == 1 ? "" : "s", first->ca_cert,
+				  strerror(-first->profile_error));
+		else
+			lota_warn("connection pid=%d asked for publisher %s, "
+				  "which this host has no profile for",
+				  client->peer_pid, want);
+	}
 	build_error_response(client, LOTA_IPC_ERR_UNKNOWN_PROFILE);
 }
 
@@ -1644,6 +1817,43 @@ static void recompute_host_attestation(struct ipc_context *ctx)
 		flags &= ~(uint32_t)LOTA_STATUS_UPDATE_PENDING;
 
 	ipc_update_status(ctx, flags, agg.valid_until);
+}
+
+/*
+ * Set LOTA_STATUS_TPM_LOCKOUT while the loop or this process sees a lockout,
+ * clear it when neither does, so clearing the chip needs no restart.
+ * Transitions are logged here: this is the journal an operator reads.
+ */
+static void adopt_loop_observations(struct ipc_context *ctx,
+				    const struct lota_ipc_attest_sync *hdr)
+{
+	bool reported = (hdr->host_flags & LOTA_STATUS_TPM_LOCKOUT) != 0;
+	bool was = (ctx->status_flags & LOTA_STATUS_TPM_LOCKOUT) != 0;
+	bool mine = ctx->tpm && tpm_is_locked_out(ctx->tpm);
+	bool locked;
+
+	/*
+	 * Our latch clears only on a successful call, which the gate never
+	 * makes; a round the loop completed proves the chip works again.
+	 */
+	if (mine && !reported && hdr->attest_count > ctx->attest_count) {
+		tpm_reset_lockout_state(ctx->tpm);
+		mine = false;
+	}
+
+	locked = reported || mine;
+
+	if (locked && !was)
+		lota_err("TPM DA lockout: the attestation loop cannot use the "
+			 "chip, so tokens are refused with "
+			 "LOTA_IPC_ERR_TPM_LOCKOUT until it is cleared");
+	else if (!locked && was)
+		lota_notice("TPM DA lockout cleared: token issuance resumes");
+
+	if (locked)
+		ctx->status_flags |= LOTA_STATUS_TPM_LOCKOUT;
+	else
+		ctx->status_flags &= ~(uint32_t)LOTA_STATUS_TPM_LOCKOUT;
 }
 
 /*
@@ -1786,6 +1996,7 @@ static void handle_sync_attest(struct ipc_context *ctx,
 	client->subscribed = true;
 	client->event_mask = LOTA_IPC_EVENT_PROFILE;
 
+	adopt_loop_observations(ctx, &hdr);
 	recompute_host_attestation(ctx);
 	adopt_attest_counters(ctx, &hdr);
 
@@ -1890,7 +2101,8 @@ static bool protect_pid_is_alive(uint32_t pid, void *ctx)
  * Run before every read of the set rather than on timer, because the read is
  * the only place stale entry does harm -- and it does it to every title at once,
  * since PID that no longer resolves cannot be measured and the measurement fails
- * closed.
+ * closed. The coverage answer runs it itself, which is what keeps a read path
+ * that folds coverage from forgetting.
  *
  * The mutation epoch moves whenever the set does, so relying party comparing epochs
  * never sees the same one with different set.
@@ -2841,13 +3053,13 @@ static int accept_client(struct ipc_context *ctx, int listen_fd)
 
 int ipc_init(struct ipc_context *ctx)
 {
-	struct sockaddr_un addr;
 	struct epoll_event ev;
 	int ret;
 
 	memset(ctx, 0, sizeof(*ctx));
 	ctx->listen_fd = -1;
 	ctx->epoll_fd = -1;
+	ctx->sock_watch_fd = -1;
 	ctx->start_time_sec = monotonic_now_sec();
 
 	client_map_init(ctx);
@@ -2877,65 +3089,15 @@ int ipc_init(struct ipc_context *ctx)
 		return -EADDRINUSE;
 	}
 
-	unlink(LOTA_IPC_SOCKET_PATH);
-
-	ctx->listen_fd = socket(AF_UNIX, SOCK_STREAM, 0);
-	if (ctx->listen_fd < 0) {
-		ret = -errno;
-		lota_err("socket() failed: %s", strerror(-ret));
+	ret = open_primary_listener(&ctx->listen_fd);
+	if (ret < 0)
 		return ret;
-	}
-
-	ret = set_nonblocking(ctx->listen_fd);
-	if (ret < 0) {
-		lota_err("set_nonblocking() failed: %s", strerror(-ret));
-		goto err_close;
-	}
-
-	memset(&addr, 0, sizeof(addr));
-	addr.sun_family = AF_UNIX;
-	strncpy(addr.sun_path, LOTA_IPC_SOCKET_PATH, sizeof(addr.sun_path) - 1);
-
-	/*
-	 * Restrict socket access to owner (root) and 'lota' group
-	 */
-	{
-		mode_t old_umask = umask(0117);
-		ret = bind(ctx->listen_fd, (struct sockaddr *)&addr,
-			   sizeof(addr));
-		umask(old_umask);
-	}
-	if (ret < 0) {
-		ret = -errno;
-		lota_err("bind(%s) failed: %s", LOTA_IPC_SOCKET_PATH,
-			 strerror(-ret));
-		goto err_close;
-	}
-	{
-		struct group *grp = getgrnam(LOTA_GROUP_NAME);
-		if (grp) {
-			if (chown(LOTA_IPC_SOCKET_PATH, 0, grp->gr_gid) < 0)
-				lota_warn("chown(%s, 0, %d) failed: %s",
-					  LOTA_IPC_SOCKET_PATH, grp->gr_gid,
-					  strerror(errno));
-		} else {
-			lota_warn("group '%s' not found, socket accessible to "
-				  "current group only",
-				  LOTA_GROUP_NAME);
-		}
-	}
-
-	if (listen(ctx->listen_fd, 16) < 0) {
-		ret = -errno;
-		lota_err("listen() failed: %s", strerror(-ret));
-		goto err_unlink;
-	}
 
 	ctx->epoll_fd = epoll_create1(EPOLL_CLOEXEC);
 	if (ctx->epoll_fd < 0) {
 		ret = -errno;
 		lota_err("epoll_create1() failed: %s", strerror(-ret));
-		goto err_unlink;
+		goto err_listener;
 	}
 
 	ev.events = EPOLLIN;
@@ -2943,25 +3105,155 @@ int ipc_init(struct ipc_context *ctx)
 	if (epoll_ctl(ctx->epoll_fd, EPOLL_CTL_ADD, ctx->listen_fd, &ev) < 0) {
 		ret = -errno;
 		lota_err("epoll_ctl() failed: %s", strerror(-ret));
-		goto err_epoll;
+		close(ctx->epoll_fd);
+		ctx->epoll_fd = -1;
+		goto err_listener;
 	}
 
 	ctx->running = true;
 	ctx->status_flags = 0;
 	ctx->dbus_fd = -1;
+	record_listen_identity(ctx);
 
 	lota_info("IPC listening on %s", LOTA_IPC_SOCKET_PATH);
 	return 0;
 
-err_epoll:
-	close(ctx->epoll_fd);
-err_unlink:
+err_listener:
 	unlink(LOTA_IPC_SOCKET_PATH);
-err_close:
 	close(ctx->listen_fd);
 	ctx->listen_fd = -1;
-	ctx->epoll_fd = -1;
 	return ret;
+}
+
+/*
+ * Watch the directory the primary socket lives in.
+ *
+ * Restarting a socket unit with RemoveOnStop=yes binds a new inode at the path,
+ * and titles connect to it while this daemon keeps accepting on the old one.
+ * Its LSM refuses PID 1's signals, so unnoticed the host stays enforcing
+ * and unreachable until reboot.
+ *
+ * Failing to watch is not fatal; the daemon just cannot rebind on its own.
+ */
+int ipc_watch_socket_path(struct ipc_context *ctx)
+{
+	int fd, ret;
+
+	if (!ctx)
+		return -EINVAL;
+	if (ctx->sock_watch_fd >= 0)
+		return ctx->sock_watch_fd;
+
+	fd = inotify_init1(IN_NONBLOCK | IN_CLOEXEC);
+	if (fd < 0)
+		return -errno;
+
+	if (inotify_add_watch(fd, SOCKET_DIR,
+			      IN_CREATE | IN_DELETE | IN_MOVED_FROM |
+				      IN_MOVED_TO | IN_ATTRIB) < 0) {
+		ret = -errno;
+		close(fd);
+		return ret;
+	}
+
+	ctx->sock_watch_fd = fd;
+	return fd;
+}
+
+int ipc_socket_watch_fd(const struct ipc_context *ctx)
+{
+	return ctx ? ctx->sock_watch_fd : -1;
+}
+
+/*
+ * Take the socket path back after something replaced the file.
+ *
+ * Unlike ipc_init, which refuses a path with a live listener, this takes
+ * the path over: the name belongs to this running daemon, and refusing leaves
+ * a host only a reboot fixes.
+ */
+static int ipc_rebind_primary(struct ipc_context *ctx)
+{
+	struct epoll_event ev;
+	int fd = -1, ret;
+
+	ret = ensure_socket_dir();
+	if (ret < 0) {
+		lota_err("cannot recreate %s: %s", SOCKET_DIR, strerror(-ret));
+		return ret;
+	}
+
+	ret = open_primary_listener(&fd);
+	if (ret < 0)
+		return ret;
+
+	ev.events = EPOLLIN;
+	ev.data.fd = fd;
+	if (epoll_ctl(ctx->epoll_fd, EPOLL_CTL_ADD, fd, &ev) < 0) {
+		ret = -errno;
+		lota_err("epoll_ctl(new listener) failed: %s", strerror(-ret));
+		close(fd);
+		return ret;
+	}
+
+	if (ctx->listen_fd >= 0) {
+		epoll_ctl(ctx->epoll_fd, EPOLL_CTL_DEL, ctx->listen_fd, NULL);
+		close(ctx->listen_fd);
+	}
+
+	ctx->listen_fd = fd;
+	/* The socket is this process's own from here */
+	ctx->activated = false;
+	record_listen_identity(ctx);
+
+	lota_warn("IPC socket %s was replaced; rebound, titles can reach the "
+		  "agent again",
+		  LOTA_IPC_SOCKET_PATH);
+	return 1;
+}
+
+int ipc_socket_was_replaced(const char *path, dev_t dev, ino_t ino)
+{
+	struct stat st;
+
+	if (!path)
+		return 0;
+
+	/*
+	 * Zero: the path was gone when the listener was armed.
+	 * Nothing to compare against.
+	 */
+	if (ino == 0)
+		return 0;
+
+	if (stat(path, &st) < 0)
+		return 1;
+
+	return (st.st_dev != dev || st.st_ino != ino) ? 1 : 0;
+}
+
+int ipc_recheck_socket(struct ipc_context *ctx)
+{
+	char buf[4096]
+		__attribute__((aligned(__alignof__(struct inotify_event))));
+	ssize_t len;
+
+	if (!ctx || ctx->listen_fd < 0)
+		return -EINVAL;
+
+	if (ctx->sock_watch_fd >= 0) {
+		while ((len = read(ctx->sock_watch_fd, buf, sizeof(buf))) > 0)
+			;
+		if (len < 0 && errno != EAGAIN && errno != EWOULDBLOCK)
+			lota_warn("socket watch read failed: %s",
+				  strerror(errno));
+	}
+
+	if (!ipc_socket_was_replaced(LOTA_IPC_SOCKET_PATH, ctx->listen_dev,
+				     ctx->listen_ino))
+		return 0;
+
+	return ipc_rebind_primary(ctx);
 }
 
 int ipc_init_activated(struct ipc_context *ctx, int fd)
@@ -2975,6 +3267,7 @@ int ipc_init_activated(struct ipc_context *ctx, int fd)
 	memset(ctx, 0, sizeof(*ctx));
 	ctx->listen_fd = -1;
 	ctx->epoll_fd = -1;
+	ctx->sock_watch_fd = -1;
 	ctx->start_time_sec = monotonic_now_sec();
 
 	client_map_init(ctx);
@@ -3015,6 +3308,7 @@ int ipc_init_activated(struct ipc_context *ctx, int fd)
 	ctx->running = true;
 	ctx->status_flags = 0;
 	ctx->dbus_fd = -1;
+	record_listen_identity(ctx);
 
 	lota_info("IPC using socket-activated fd %d", fd);
 	return 0;
@@ -3040,6 +3334,11 @@ void ipc_cleanup(struct ipc_context *ctx)
 	if (ctx->listen_fd >= 0) {
 		close(ctx->listen_fd);
 		ctx->listen_fd = -1;
+	}
+
+	if (ctx->sock_watch_fd >= 0) {
+		close(ctx->sock_watch_fd);
+		ctx->sock_watch_fd = -1;
 	}
 
 	if (!ctx->activated)

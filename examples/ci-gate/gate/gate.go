@@ -105,7 +105,7 @@ func (g *gate) handleNonce(w http.ResponseWriter, _ *http.Request) {
 		return
 	}
 
-	writeJSON(w, http.StatusOK, nonceResponse{
+	g.writeJSON(w, http.StatusOK, nonceResponse{
 		Nonce:     base64.StdEncoding.EncodeToString(nonce[:]),
 		ExpiresAt: expires.Unix(),
 	})
@@ -181,7 +181,7 @@ func (g *gate) handleRelease(w http.ResponseWriter, r *http.Request) {
 		shortNonce(req.Nonce), flagList(claims.Flags),
 		claims.ExpiresAt.UTC().Format(time.RFC3339))
 
-	writeJSON(w, http.StatusOK, releaseResponse{
+	g.writeJSON(w, http.StatusOK, releaseResponse{
 		Secret: base64.StdEncoding.EncodeToString(g.secret),
 	})
 }
@@ -190,13 +190,17 @@ func (g *gate) handleRelease(w http.ResponseWriter, r *http.Request) {
 // so every refusal is audited and none of them leaks the secret through a partial response.
 func (g *gate) deny(w http.ResponseWriter, nonce, reason string) {
 	g.audit.Printf("release refused nonce=%s reason=%q", shortNonce(nonce), reason)
-	writeJSON(w, http.StatusForbidden, releaseResponse{Reason: reason})
+	g.writeJSON(w, http.StatusForbidden, releaseResponse{Reason: reason})
 }
 
-func writeJSON(w http.ResponseWriter, status int, payload any) {
+// writeJSON sends status and payload. The status line is already out when the
+// body fails, so the failure goes to the audit log.
+func (g *gate) writeJSON(w http.ResponseWriter, status int, payload any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(payload)
+	if err := json.NewEncoder(w).Encode(payload); err != nil {
+		g.audit.Printf("response body not delivered status=%d error=%v", status, err)
+	}
 }
 
 // shortNonce keeps audit line readable and correlatable without writing the whole

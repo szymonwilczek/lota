@@ -1256,8 +1256,53 @@ int config_load(struct lota_config *cfg, const char *path)
 	return ret;
 }
 
+int config_inert_strict_flags_of(bool mode_is_enforce,
+				 const bool flags[LOTA_STRICT_FLAG_COUNT],
+				 const char *names[], int max)
+{
+	static const char *const keys[LOTA_STRICT_FLAG_COUNT] = {
+		"strict_mmap", "strict_exec", "block_ptrace", "strict_modules",
+		"block_anon_exec"
+	};
+	int n = 0;
+
+	if (!flags || !names || max < 0)
+		return -EINVAL;
+
+	if (mode_is_enforce)
+		return 0;
+
+	for (int i = 0; i < LOTA_STRICT_FLAG_COUNT; i++) {
+		if (!flags[i])
+			continue;
+		if (n >= max)
+			return -ENOSPC;
+		names[n++] = keys[i];
+	}
+
+	return n;
+}
+
+int config_inert_strict_flags(const struct lota_config *cfg,
+			      const char *names[], int max)
+{
+	if (!cfg)
+		return -EINVAL;
+
+	const bool flags[LOTA_STRICT_FLAG_COUNT] = {
+		cfg->strict_mmap, cfg->strict_exec, cfg->block_ptrace,
+		cfg->strict_modules, cfg->block_anon_exec
+	};
+
+	return config_inert_strict_flags_of(strcmp(cfg->mode, "enforce") == 0,
+					    flags, names, max);
+}
+
 void config_dump(const struct lota_config *cfg, FILE *fp)
 {
+	const char *inert[LOTA_STRICT_FLAG_COUNT];
+	int inert_count;
+
 	if (!cfg || !fp)
 		return;
 
@@ -1274,6 +1319,20 @@ void config_dump(const struct lota_config *cfg, FILE *fp)
 	fprintf(fp, "\n# BPF / enforcement\n");
 	fprintf(fp, "bpf_path = %s\n", cfg->bpf_path);
 	fprintf(fp, "mode = %s\n", cfg->mode);
+
+	/* name the strict keys this mode ignores */
+	inert_count =
+		config_inert_strict_flags(cfg, inert, LOTA_STRICT_FLAG_COUNT);
+	if (inert_count > 0) {
+		fprintf(fp, "# mode = %s leaves inert:", cfg->mode);
+		for (int i = 0; i < inert_count; i++)
+			fprintf(fp, "%s %s", i ? "," : "", inert[i]);
+		fprintf(fp, "\n# each of those gates returns early outside "
+			    "enforce mode, so the\n");
+		fprintf(fp, "# key records a protection this host is not "
+			    "applying\n");
+	}
+
 	fprintf(fp, "strict_mmap = %s\n", cfg->strict_mmap ? "true" : "false");
 	fprintf(fp, "strict_exec = %s\n", cfg->strict_exec ? "true" : "false");
 	fprintf(fp, "block_ptrace = %s\n",
@@ -1293,6 +1352,14 @@ void config_dump(const struct lota_config *cfg, FILE *fp)
 	fprintf(fp, "\n# Daemon\n");
 	fprintf(fp, "daemon = %s\n", cfg->daemon ? "true" : "false");
 	fprintf(fp, "pid_file = %s\n", cfg->pid_file);
+
+	fprintf(fp, "\n# At-rest sealing\n");
+	fprintf(fp, "seal_persistent_primary = %s\n",
+		cfg->seal_persistent_primary ? "true" : "false");
+	fprintf(fp, "seal_aik_auth = %s\n",
+		cfg->seal_aik_auth ? "true" : "false");
+	fprintf(fp, "seal_aik_auth_strict = %s\n",
+		cfg->seal_aik_auth_strict ? "true" : "false");
 
 	fprintf(fp, "\n# Policy signing\n");
 	if (cfg->signing_key[0])
@@ -1356,34 +1423,6 @@ void config_dump(const struct lota_config *cfg, FILE *fp)
 		if (p->attest_interval)
 			fprintf(fp, "interval = %d\n", p->attest_interval);
 	}
-}
-
-const char *config_resolve_policy_pubkey(const char *configured,
-					 const char *override_path,
-					 const char *packaged_path)
-{
-	/*
-	 * Named key wins -- but only while it is there.
-	 * Path that has stopped resolving is not an operator's choice any more,
-	 * it is leftover: the installer used to write this key into lota.conf,
-	 * and the file it named is one an upgrade can take away.
-	 * Treating that as "verify against nothing" would stop enforcement on
-	 * host whose package brought a perfectly good key with it.
-	 */
-	if (configured && configured[0] && access(configured, R_OK) == 0)
-		return configured;
-
-	/*
-	 * Operator's own key wins over the packaged one whenever it is there.
-	 * No package owns that path, so fleet that signs enforcement itself
-	 * keeps its answer across every upgrade, and host that never made that
-	 * choice follows the object the package installed.
-	 */
-	if (override_path && access(override_path, R_OK) == 0)
-		return override_path;
-	if (packaged_path && access(packaged_path, R_OK) == 0)
-		return packaged_path;
-	return NULL;
 }
 
 /*

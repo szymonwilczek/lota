@@ -41,7 +41,7 @@
 extern "C" {
 #endif
 
-#define LOTA_ENVELOPE_MAGIC 0x564E454Cu /* "LENV" little-endian */
+#define LOTA_ENVELOPE_MAGIC 0x564E454Cu /* "LENV" on disk, little-endian */
 #define LOTA_ENVELOPE_VERSION 1u
 
 /* AES-256-GCM parameters. */
@@ -121,41 +121,65 @@ lota_envelope_serialize_header(uint8_t *out, const struct lota_envelope_meta *m)
  * blob begins.
  * Verifies magic, version, reserved bytes, the length fields, and that
  * the declared bodies fit exactly within len.
+ *
+ * Fills *why, if non-NULL, with the refused field (enum lota_blob_reason).
+ *
  * Returns 0 on success, -EINVAL on a malformed header, -EMSGSIZE on
  * a length mismatch.
  */
-static inline int lota_envelope_parse_header(const uint8_t *buf, size_t len,
-					     struct lota_envelope_meta *m,
-					     size_t *body_off)
+static inline int lota_envelope_parse_header_why(const uint8_t *buf, size_t len,
+						 struct lota_envelope_meta *m,
+						 size_t *body_off,
+						 struct lota_blob_refusal *why)
 {
+	lota__blob_refuse(why, LOTA_BLOB_OK, 0, 0);
+
 	if (!buf || !m)
 		return -EINVAL;
-	if (len < LOTA_ENVELOPE_HEADER_SIZE)
+	if (len < LOTA_ENVELOPE_HEADER_SIZE) {
+		lota__blob_refuse(why, LOTA_BLOB_SHORT, (uint32_t)len,
+				  LOTA_ENVELOPE_HEADER_SIZE);
 		return -EMSGSIZE;
+	}
 
-	if (lota__seal_read_le32(buf + 0) != LOTA_ENVELOPE_MAGIC)
+	if (lota__seal_read_le32(buf + 0) != LOTA_ENVELOPE_MAGIC) {
+		lota__blob_refuse(why, LOTA_BLOB_MAGIC, 0, 0);
 		return -EINVAL;
-	if (lota__seal_read_le16(buf + 4) != (uint16_t)LOTA_ENVELOPE_VERSION)
+	}
+	uint16_t version = lota__seal_read_le16(buf + 4);
+	if (version != (uint16_t)LOTA_ENVELOPE_VERSION) {
+		lota__blob_refuse(why, LOTA_BLOB_VERSION, version,
+				  LOTA_ENVELOPE_VERSION);
 		return -EINVAL;
-	if (lota__seal_read_le16(buf + 6) != 0)
+	}
+	if (lota__seal_read_le16(buf + 6) != 0 ||
+	    lota__seal_read_le16(buf + 10) != 0 || buf[44] != 0 ||
+	    buf[45] != 0 || buf[46] != 0 || buf[47] != 0) {
+		lota__blob_refuse(why, LOTA_BLOB_RESERVED, 0, 0);
 		return -EINVAL;
-	if (lota__seal_read_le16(buf + 10) != 0)
-		return -EINVAL;
-	if (buf[44] != 0 || buf[45] != 0 || buf[46] != 0 || buf[47] != 0)
-		return -EINVAL;
+	}
 
 	uint16_t kek_blob_len = lota__seal_read_le16(buf + 8);
 	uint32_t payload_len = lota__seal_read_le32(buf + 12);
-	if (kek_blob_len == 0 || kek_blob_len > LOTA_SEAL_MAX_BLOB)
+	if (kek_blob_len == 0 || kek_blob_len > LOTA_SEAL_MAX_BLOB) {
+		lota__blob_refuse(why, LOTA_BLOB_KEK_LEN, kek_blob_len,
+				  (uint32_t)LOTA_SEAL_MAX_BLOB);
 		return -EINVAL;
-	if (payload_len == 0 || payload_len > LOTA_ENVELOPE_MAX_PAYLOAD)
+	}
+	if (payload_len == 0 || payload_len > LOTA_ENVELOPE_MAX_PAYLOAD) {
+		lota__blob_refuse(why, LOTA_BLOB_PAYLOAD_LEN, payload_len,
+				  LOTA_ENVELOPE_MAX_PAYLOAD);
 		return -EINVAL;
+	}
 
 	/* bodies must fit exactly: no trailing slack, no overflow */
 	size_t need = (size_t)LOTA_ENVELOPE_HEADER_SIZE + (size_t)kek_blob_len +
 		      (size_t)payload_len;
-	if (need != len)
+	if (need != len) {
+		lota__blob_refuse(why, LOTA_BLOB_BODY_LENGTH, (uint32_t)len,
+				  (uint32_t)need);
 		return -EMSGSIZE;
+	}
 
 	m->kek_blob_len = kek_blob_len;
 	m->payload_len = payload_len;
@@ -164,6 +188,14 @@ static inline int lota_envelope_parse_header(const uint8_t *buf, size_t len,
 	if (body_off)
 		*body_off = LOTA_ENVELOPE_HEADER_SIZE;
 	return 0;
+}
+
+/* The same parse for a caller that has nobody to explain the refusal to. */
+static inline int lota_envelope_parse_header(const uint8_t *buf, size_t len,
+					     struct lota_envelope_meta *m,
+					     size_t *body_off)
+{
+	return lota_envelope_parse_header_why(buf, len, m, body_off, NULL);
 }
 
 /*

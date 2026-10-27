@@ -23,6 +23,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -52,6 +53,7 @@ type APIHandler struct {
 	metrics        *metrics.Metrics
 	startTime      time.Time
 	adminAPIKey    string // if non-empty, required for mutating endpoints
+	reportOnly     bool   // instance reads a database it cannot write
 	readerAPIKey   string // if non-empty, required for sensitive read-only endpoints
 	adminKeyHash   [32]byte
 	readerKeyHash  [32]byte
@@ -80,6 +82,7 @@ func NewAPIHandler(mux *http.ServeMux, verifier *verify.Verifier, srv *Server, a
 	h := &APIHandler{
 		verifier:       verifier,
 		server:         srv,
+		reportOnly:     srv != nil && srv.reportOnly,
 		auditLog:       auditLog,
 		attestationLog: attestLog,
 		log:            logger.With("component", "api"),
@@ -140,7 +143,49 @@ func NewAPIHandler(mux *http.ServeMux, verifier *verify.Verifier, srv *Server, a
 	h.handle(mux, "DELETE /api/v1/bans/", h.requireAdmin(h.handleUnbanHardware),
 		"DELETE /api/v1/bans/{id}")
 
+	// catch-all, so 404/405 use the error envelope instead of the mux's
+	// plain text; not via handle(), as it is no endpoint to list
+	mux.HandleFunc("/", h.handleUnmatched(mux))
+
 	return h
+}
+
+// probeMethods are tried against the mux to build Allow. HEAD is left out:
+// the mux serves it from the GET route, and it is added whenever GET is allowed.
+var probeMethods = []string{
+	http.MethodGet, http.MethodPost, http.MethodPut,
+	http.MethodPatch, http.MethodDelete, http.MethodOptions,
+}
+
+// handleUnmatched answers 405 with Allow when another method serves the path,
+// 404 otherwise. Neither echoes the caller's path or method.
+func (h *APIHandler) handleUnmatched(mux *http.ServeMux) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		var allowed []string
+		for _, method := range probeMethods {
+			if method == r.Method {
+				continue
+			}
+			probe := r.Clone(r.Context())
+			probe.Method = method
+			if _, pattern := mux.Handler(probe); pattern != "" && pattern != "/" {
+				allowed = append(allowed, method)
+			}
+		}
+
+		if len(allowed) > 0 {
+			if slices.Contains(allowed, http.MethodGet) {
+				allowed = append(allowed, http.MethodHead)
+			}
+			w.Header().Set("Allow", strings.Join(allowed, ", "))
+			writeJSONStatus(w, http.StatusMethodNotAllowed,
+				errorResponse{Error: "method not allowed on this endpoint; see the Allow header"})
+			return
+		}
+
+		writeJSONStatus(w, http.StatusNotFound,
+			errorResponse{Error: "no such endpoint"})
+	}
 }
 
 // handle registers a route and records both the pattern the mux matches on
@@ -254,6 +299,19 @@ func (h *APIHandler) adminConfigured() bool {
 // if no admin-capable key is configured, all mutating requests are rejected
 func (h *APIHandler) requireAdmin(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		// read-only database: refuse before the key check and the write
+		if h.reportOnly {
+			h.log.Warn("state-changing endpoint called on a reporting instance",
+				"method", logging.SanitizeField(r.Method),
+				"path", logging.SanitizeField(r.URL.Path),
+				"remote_addr", logging.SanitizeField(r.RemoteAddr))
+			writeJSONStatus(w, http.StatusServiceUnavailable, errorResponse{
+				Error: "this instance serves reports from a read-only database; " +
+					"send state changes to an instance on the primary",
+			})
+			return
+		}
+
 		if !h.adminConfigured() {
 			h.log.Warn("admin endpoint called but no API key configured",
 				"method", logging.SanitizeField(r.Method),
@@ -339,6 +397,7 @@ func tokenMatchesHash(token string, expectedHash [32]byte) bool {
 // response structs (JSON serialization)
 type healthResponse struct {
 	Status    string `json:"status"`
+	Mode      string `json:"mode,omitempty"` // "reporting" when report-only
 	Uptime    string `json:"uptime"`
 	UptimeSec int64  `json:"uptime_sec"`
 	TLS       struct {
@@ -347,17 +406,21 @@ type healthResponse struct {
 	} `json:"tls"`
 }
 
+// statsResponse is the /api/v1/stats body.
+//
+// Fleet-wide counters are pointers so a tenant-scoped response omits them
+// instead of reporting zero.
 type statsResponse struct {
-	PendingChallenges int      `json:"pending_challenges"`
-	UsedNonces        int      `json:"used_nonces"`
+	PendingChallenges *int     `json:"pending_challenges,omitempty"`
+	UsedNonces        *int     `json:"used_nonces,omitempty"`
 	RegisteredClients int      `json:"registered_clients"`
 	ActivePolicy      string   `json:"active_policy"`
 	LoadedPolicies    []string `json:"loaded_policies"`
-	TotalAttestations int64    `json:"total_attestations"`
-	SuccessfulAttests int64    `json:"successful_attestations"`
-	FailedAttests     int64    `json:"failed_attestations"`
-	RevokedAttests    int64    `json:"revoked_attestations"`
-	BannedAttests     int64    `json:"banned_attestations"`
+	TotalAttestations *int64   `json:"total_attestations,omitempty"`
+	SuccessfulAttests *int64   `json:"successful_attestations,omitempty"`
+	FailedAttests     *int64   `json:"failed_attestations,omitempty"`
+	RevokedAttests    *int64   `json:"revoked_attestations,omitempty"`
+	BannedAttests     *int64   `json:"banned_attestations,omitempty"`
 	ActiveRevocations int      `json:"active_revocations"`
 	ActiveBans        int      `json:"active_bans"`
 	Uptime            string   `json:"uptime"`
@@ -411,6 +474,14 @@ func (h *APIHandler) handleHealth(w http.ResponseWriter, r *http.Request) {
 	resp.TLS.Listening = health.Listening
 	resp.TLS.Address = health.Address
 
+	// no attestation listener by design: report the mode, not a fault
+	if h.reportOnly {
+		resp.Mode = "reporting"
+		resp.TLS.Address = ""
+		writeJSON(w, resp)
+		return
+	}
+
 	if !health.Listening {
 		resp.Status = "degraded"
 		writeJSONStatus(w, http.StatusServiceUnavailable, resp)
@@ -425,16 +496,16 @@ func (h *APIHandler) handleStats(w http.ResponseWriter, r *http.Request) {
 	stats := h.verifier.Stats()
 
 	resp := statsResponse{
-		PendingChallenges: stats.PendingChallenges,
-		UsedNonces:        stats.UsedNonces,
+		PendingChallenges: &stats.PendingChallenges,
+		UsedNonces:        &stats.UsedNonces,
 		RegisteredClients: stats.RegisteredClients,
 		ActivePolicy:      stats.ActivePolicy,
 		LoadedPolicies:    stats.LoadedPolicies,
-		TotalAttestations: stats.TotalAttestations,
-		SuccessfulAttests: stats.SuccessAttests,
-		FailedAttests:     stats.FailedAttests,
-		RevokedAttests:    stats.RevokedAttests,
-		BannedAttests:     stats.BannedAttests,
+		TotalAttestations: &stats.TotalAttestations,
+		SuccessfulAttests: &stats.SuccessAttests,
+		FailedAttests:     &stats.FailedAttests,
+		RevokedAttests:    &stats.RevokedAttests,
+		BannedAttests:     &stats.BannedAttests,
 		ActiveRevocations: stats.ActiveRevocations,
 		ActiveBans:        stats.ActiveBans,
 		Uptime:            stats.Uptime.Truncate(time.Second).String(),
@@ -478,13 +549,13 @@ func (h *APIHandler) handleStats(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 
-		resp.PendingChallenges = 0
-		resp.UsedNonces = 0
-		resp.TotalAttestations = 0
-		resp.SuccessfulAttests = 0
-		resp.FailedAttests = 0
-		resp.RevokedAttests = 0
-		resp.BannedAttests = 0
+		resp.PendingChallenges = nil
+		resp.UsedNonces = nil
+		resp.TotalAttestations = nil
+		resp.SuccessfulAttests = nil
+		resp.FailedAttests = nil
+		resp.RevokedAttests = nil
+		resp.BannedAttests = nil
 	}
 
 	writeJSON(w, resp)
@@ -545,105 +616,39 @@ func (h *APIHandler) handleListClients(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var clients []string
-	total := 0
+	// durable baseline record first, then clients only this instance knows
+	// (out-of-band AIK registrations, sessions with no baseline yet)
+	total := h.verifier.CountDurableClients()
 
-	aikStore := h.verifier.AIKStore()
-	if lister, ok := aikStore.(store.PaginatedClientLister); ok {
-		if listerE, ok := aikStore.(store.PaginatedClientListerWithError); ok {
-			clients, err = listerE.ListClientsPageE(limit, offset)
-			if err != nil {
-				h.log.Error("failed to list clients page", "error", err)
-				writeJSONStatus(w, http.StatusInternalServerError, errorResponse{Error: "database unavailable"})
-				return
-			}
-		} else {
-			clients = lister.ListClientsPage(limit, offset)
+	clients, err := h.verifier.DurableClientsPage(limit, offset)
+	if err != nil {
+		h.log.Error("failed to list clients page", "error", err)
+		writeJSONStatus(w, http.StatusInternalServerError, errorResponse{Error: "database unavailable"})
+		return
+	}
+
+	instanceOnly := make([]string, 0)
+	for _, id := range h.verifier.ListClients() {
+		if !h.verifier.IsDurableClient(id) {
+			instanceOnly = append(instanceOnly, id)
+		}
+	}
+	sort.Strings(instanceOnly)
+	total += len(instanceOnly)
+
+	if len(clients) < limit {
+		instanceOffset := 0
+		if offset > total-len(instanceOnly) {
+			instanceOffset = offset - (total - len(instanceOnly))
 		}
 
-		dbTotal := 0
-		switch counter := aikStore.(type) {
-		case store.ClientCounterWithError:
-			var err error
-			dbTotal, err = counter.CountClientsE()
-			if err != nil {
-				h.log.Error("failed to count clients", "error", err)
-				writeJSONStatus(w, http.StatusInternalServerError, errorResponse{Error: "database unavailable"})
-				return
+		if instanceOffset < len(instanceOnly) {
+			need := limit - len(clients)
+			end := instanceOffset + need
+			if end > len(instanceOnly) {
+				end = len(instanceOnly)
 			}
-		case store.ClientCounter:
-			dbTotal = counter.CountClients()
-		}
-
-		active := h.verifier.ListActiveClients()
-		activeOnly := make([]string, 0, len(active))
-
-		switch checker := aikStore.(type) {
-		case store.ClientExistenceBatchChecker:
-			existing, err := checker.ExistingClients(active)
-			if err != nil {
-				h.log.Error("failed to check active client existence in batch", "error", err)
-				writeJSONStatus(w, http.StatusInternalServerError, errorResponse{Error: "database unavailable"})
-				return
-			}
-
-			for _, id := range active {
-				if _, exists := existing[id]; !exists {
-					activeOnly = append(activeOnly, id)
-				}
-			}
-		case store.ClientExistenceChecker:
-			for _, id := range active {
-				exists, err := checker.HasClient(id)
-				if err != nil {
-					h.log.Error("failed to check client existence", "client_id", id, "error", err)
-					writeJSONStatus(w, http.StatusInternalServerError, errorResponse{Error: "database unavailable"})
-					return
-				}
-				if !exists {
-					activeOnly = append(activeOnly, id)
-				}
-			}
-		default:
-			registered := make(map[string]struct{})
-			for _, id := range aikStore.ListClients() {
-				registered[id] = struct{}{}
-			}
-			for _, id := range active {
-				if _, ok := registered[id]; !ok {
-					activeOnly = append(activeOnly, id)
-				}
-			}
-		}
-
-		sort.Strings(activeOnly)
-
-		total = dbTotal + len(activeOnly)
-
-		if len(clients) < limit {
-			activeOffset := 0
-			if offset > dbTotal {
-				activeOffset = offset - dbTotal
-			}
-
-			if activeOffset < len(activeOnly) {
-				need := limit - len(clients)
-				end := activeOffset + need
-				if end > len(activeOnly) {
-					end = len(activeOnly)
-				}
-				clients = append(clients, activeOnly[activeOffset:end]...)
-			}
-		}
-	} else {
-		all := h.verifier.ListClients()
-		total = len(all)
-		if offset < len(all) {
-			end := offset + limit
-			if end > len(all) {
-				end = len(all)
-			}
-			clients = all[offset:end]
+			clients = append(clients, instanceOnly[instanceOffset:end]...)
 		}
 	}
 
@@ -1066,7 +1071,7 @@ func (h *APIHandler) handleUnbanHardware(w http.ResponseWriter, r *http.Request)
 
 	// Letting a banned machine back in is the act a fleet most wants signed;
 	// the lift carries the same attribution the ban does.
-	var req lifecycleRequest
+	var req unbanRequest
 	if r.ContentLength != 0 {
 		if err := decodeJSONRequest(w, r, &req); err != nil {
 			writeJSONStatus(w, http.StatusBadRequest, errorResponse{Error: "invalid JSON: " + err.Error()})
@@ -1097,10 +1102,20 @@ func (h *APIHandler) handleUnbanHardware(w http.ResponseWriter, r *http.Request)
 	}
 	canonicalHWID := store.FormatHardwareID(hwid)
 
+	// The tenant used to be read off the URL while the ban read it from the body,
+	// so a request naming it there would otherwise go on lifting in the default
+	// tenant without saying so.
+	if r.URL.Query().Has("tenant") {
+		writeJSONStatus(w, http.StatusBadRequest, errorResponse{
+			Error: "tenant is a body field on this endpoint, not a query parameter",
+		})
+		return
+	}
+
 	// ban to lift is identified by (tenant, hardware_id);
-	// tenant comes from the ?tenant= query parameter,
+	// tenant comes from the body field the ban was imposed through,
 	// default when omitted, and must be within the key's tenant set
-	tenant := r.URL.Query().Get("tenant")
+	tenant := req.Tenant
 	if tenant == "" {
 		tenant = verify.DefaultTenant
 	} else if !verify.ValidTenantName(tenant) {
@@ -1448,7 +1463,9 @@ func decodeJSONRequest(w http.ResponseWriter, r *http.Request, dst any) error {
 		return err
 	}
 
+	// refuse unknown fields
 	dec := json.NewDecoder(bytes.NewReader(body))
+	dec.DisallowUnknownFields()
 	if err := dec.Decode(dst); err != nil {
 		return err
 	}
@@ -1568,21 +1585,64 @@ func (h *APIHandler) handleReanchorReviewList(w http.ResponseWriter, r *http.Req
 
 // handleReanchorReviewAck clears a client's pending-review flag once an
 // operator has inspected its LFA re-anchor (admin only).
+// Requires actor and reason and writes an audit row; unknown clients and
+// clients with nothing queued are refused.
 func (h *APIHandler) handleReanchorReviewAck(w http.ResponseWriter, r *http.Request) {
 	clientID := r.PathValue("clientID")
 	if clientID == "" {
 		writeJSONStatus(w, http.StatusBadRequest, errorResponse{Error: "missing client id"})
 		return
 	}
-	if !principalAllowsTenant(requestPrincipal(r), h.clientTenant(clientID)) {
+
+	var req lifecycleRequest
+	if r.ContentLength != 0 {
+		if err := decodeJSONRequest(w, r, &req); err != nil {
+			writeJSONStatus(w, http.StatusBadRequest, errorResponse{Error: "invalid JSON: " + err.Error()})
+			return
+		}
+	}
+	if req.Actor == "" {
+		writeJSONStatus(w, http.StatusBadRequest, errorResponse{Error: "actor is required"})
+		return
+	}
+	if req.Reason == "" {
+		writeJSONStatus(w, http.StatusBadRequest, errorResponse{Error: "reason is required"})
+		return
+	}
+
+	logID := sanitizeLogField(clientID)
+
+	tenant := h.clientTenant(clientID)
+	if !principalAllowsTenant(requestPrincipal(r), tenant) {
 		writeJSONStatus(w, http.StatusNotFound, errorResponse{Error: "client not found"})
 		return
 	}
 	if err := h.verifier.AcknowledgeReanchorReview(clientID); err != nil {
-		writeJSONStatus(w, http.StatusInternalServerError, errorResponse{Error: err.Error()})
+		switch {
+		case errors.Is(err, verify.ErrUnknownClient):
+			writeJSONStatus(w, http.StatusNotFound, errorResponse{Error: "client not found"})
+		case errors.Is(err, verify.ErrNoReviewPending):
+			writeJSONStatus(w, http.StatusConflict,
+				errorResponse{Error: "no re-anchor review pending for this client"})
+		default:
+			h.log.Error("re-anchor review acknowledgement failed",
+				"client_id", logID, "error", err)
+			writeJSONStatus(w, http.StatusInternalServerError, errorResponse{Error: "internal error"})
+		}
 		return
 	}
-	h.log.Info("operator acknowledged LFA re-anchor review", "client_id", clientID)
+
+	if h.auditLog != nil {
+		if err := h.auditLog.Log(tenant, "reanchor_review_ack", clientID,
+			req.Reason, req.Actor, req.Note); err != nil {
+			h.log.Error("audit log write failed",
+				"action", "reanchor_review_ack", "client_id", logID, "error", err)
+		}
+	}
+	h.log.Info("operator acknowledged LFA re-anchor review",
+		"client_id", logID,
+		"actor", logging.SanitizeField(req.Actor),
+		"note", logging.SanitizeField(req.Note))
 	writeJSON(w, map[string]string{"status": "reviewed", "client_id": clientID})
 }
 
@@ -1592,6 +1652,19 @@ type lifecycleRequest struct {
 	Actor  string `json:"actor"`  // administrator identifier
 	Reason string `json:"reason"` // why this was done
 	Note   string `json:"note"`   // free-form justification
+}
+
+// JSON request for lifting a ban.
+//
+// It carries the tenant the ban lives in, in the field the ban was imposed
+// through: a ban is identified by (tenant, hardware_id), so the two verbs have
+// to name the tenant the same way or an administrator can impose one it cannot
+// lift.
+type unbanRequest struct {
+	Tenant string `json:"tenant,omitempty"` // ban scope; default tenant when empty
+	Actor  string `json:"actor"`            // administrator identifier
+	Reason string `json:"reason"`           // why this was done
+	Note   string `json:"note"`             // free-form justification
 }
 
 // POST /api/v1/clients/{clientID}/reanchor
@@ -1658,8 +1731,9 @@ func (h *APIHandler) handleForceReanchor(w http.ResponseWriter, r *http.Request)
 }
 
 // DELETE /api/v1/clients/{id}
-// Remove the client's AIK registration and baselines, forcing fresh
-// enrollment (admin only).
+// Remove the client's AIK registration and baselines (admin only).
+// The device keeps its certificate; its next attestation becomes the new
+// baseline. Revoke or ban first to keep it out.
 // Revocations and hardware bans survive the delete.
 // Body names who removed the client and why ({"actor", "reason"}),
 // both required.

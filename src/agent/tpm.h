@@ -14,6 +14,7 @@
 #define LOTA_TPM_TESTING 1
 #endif
 
+#include <errno.h>
 #include <limits.h>
 #include <stdbool.h>
 #include <stdint.h>
@@ -76,6 +77,18 @@ struct tpm_quote_response;
  * clearly instead of the misleading -EIO.
  */
 #define LOTA_ERR_TPM_POLICY_FAIL 4099
+
+/*
+ * Whether to print the boot-state hint after a failed unseal: only for a TPM
+ * refusal with no cause. PolicyPCR names the state itself, and -EBADMSG
+ * is a tampered envelope.
+ */
+static inline bool tpm_unseal_boot_state_unknown(int err)
+{
+	if (err >= 0)
+		return false;
+	return err != -LOTA_ERR_TPM_POLICY_FAIL && err != -EBADMSG;
+}
 
 /*
  * tpm_strerror - error-to-string helper that handles both POSIX
@@ -267,11 +280,12 @@ struct aik_auth_record {
 struct aik_metadata {
 	uint32_t magic;
 	uint32_t version;
-	uint64_t generation; /* monotonic rotation counter */
+	uint64_t generation; /* monotonic key rotation counter */
 	int64_t provisioned_at; /* time_t: current AIK creation */
-	int64_t last_rotated_at; /* time_t: last rotation (0 if never) */
+	int64_t last_rotated_at; /* time_t: last key rotation (0 if never) */
 	uint8_t key_derivation; /* TPM_AIK_KEY_DERIVATION_* */
-	uint8_t _reserved[63];
+	int64_t auth_rotated_at; /* time_t: last auth rotation (0 if never) */
+	uint8_t _reserved[55];
 } __attribute__((packed));
 
 /*
@@ -304,6 +318,11 @@ enum tpm_pcr14_state {
 	TPM_PCR14_TAMPERED_BEFORE_START,
 	/* Something extended PCR14 after this agent's last commitment */
 	TPM_PCR14_MUTATED_IN_SESSION,
+	/*
+	 * Register and binary match the snapshot, the derivation misses:
+	 * the /run baseline handoff moved (or the snapshot was forged)
+	 */
+	TPM_PCR14_HANDOFF_CHANGED,
 	/* Unexpected value and no snapshot to attribute it with */
 	TPM_PCR14_UNATTRIBUTABLE,
 	/* TPM reports an older resetCount than the snapshot recorded */
@@ -354,6 +373,14 @@ struct tpm_context {
 	 * TPM_CLOCK_STATE_PATH at runtime; tests override per fixture.
 	 */
 	char clock_state_path[256];
+
+	/*
+	 * Name last seen at aik_handle. Handle numbers are reused across
+	 * publishers, so only the Name ties the cached auth to the key.
+	 */
+	uint8_t aik_object_name[sizeof(TPMU_NAME)];
+	uint16_t aik_object_name_size;
+	bool aik_object_replaced; /* Name changed since the last read */
 
 	/* AIK userAuth loaded from root-only sidecar file */
 	uint8_t aik_auth[TPM_AIK_AUTH_SIZE];
@@ -552,6 +579,19 @@ int tpm_bind_profile(struct tpm_context *ctx,
 		     const struct profile_paths *paths);
 
 /*
+ * tpm_aik_object_replaced - did the key behind the AIK handle change?
+ * @ctx: TPM context
+ *
+ * Set when an open of the AIK handle finds a different object (handle
+ * reused by another publisher, or re-provisioned elsewhere).
+ * The stale cache is already dropped, so this is diagnostic only.
+ * Reading it clears it.
+ *
+ * Returns: true when the object changed since the last read.
+ */
+bool tpm_aik_object_replaced(struct tpm_context *ctx);
+
+/*
  * tpm_aik_profile_unique - creation input that separates publishers' keys
  * @profile_id: the profile's identity, the SHA-256 of its CA anchor's
  *              SubjectPublicKeyInfo as lowercase hex, or NULL/"" for
@@ -608,22 +648,31 @@ bool tpm_aik_replacing_shared_key(const struct tpm_context *ctx,
 				  int key_present);
 
 /*
- * tpm_aik_provisioning_orphans_cert - will provisioning leave this
- * publisher's certificate naming a key the TPM no longer holds?
+ * tpm_aik_provisioning_orphans_cert - is this publisher's stored certificate
+ * issued over a key the TPM no longer holds
  *
- * @key_present: what tpm_aik_key_present() answered
+ * @key_present: what tpm_aik_key_present() answered before provisioning
  * @cert_stored: whether an enrollment certificate is on disk for this profile
+ * @cert_match: what aik_cert_matches_key() answered for the key that is at
+ *              the handle now: 0 when the certificate names it,
+ *              -EKEYREJECTED when it names another, another negative errno
+ *              when the question could not be asked
  *
  * TPM2_Clear removes the keys but not the profile directory, so the handle,
  * the consent and the certificate all survive it. Provisioning would mint
  * a new key at the recorded handle, and every verifier refuses a key
  * the certificate does not name.
  *
- * Returns true only when the key is absent and a certificate is stored.
- * A first enrollment has no certificate; a TPM that could not answer
- * (negative @key_present) is not taken as absent.
+ * The AIK is derived, so a handle whose object was evicted comes back holding
+ * the same key, and the certificate still names it. An absent key alone
+ * orphans nothing.
+ *
+ * Returns true only when the key was absent, a certificate is stored,
+ * and @cert_match is -EKEYREJECTED. A first enrollment has no certificate;
+ * a TPM that could not answer (negative @key_present) is not taken as absent.
  */
-bool tpm_aik_provisioning_orphans_cert(int key_present, bool cert_stored);
+bool tpm_aik_provisioning_orphans_cert(int key_present, bool cert_stored,
+				       int cert_match);
 
 /*
  * tpm_aik_allow_shared_key_replace - let provisioning replace such a key
@@ -820,6 +869,34 @@ struct tpm_pcr14_observation {
 };
 
 /*
+ * What a boot-commitment call left behind. PCR 14 receives the commitment once
+ * per boot: the first agent start of a boot extends it, and every later start
+ * in the same boot finds it already there. Both are success, and worth telling
+ * apart -- a restart that finds the commitment has not spent the boot,
+ * so it costs no reboot.
+ */
+enum tpm_boot_commitment_outcome {
+	/* This call extended PCR14 with the commitment */
+	TPM_BOOT_COMMITMENT_EXTENDED = 0,
+	/* The register already carried it when this process started */
+	TPM_BOOT_COMMITMENT_ALREADY_HELD,
+};
+
+/*
+ * tpm_boot_commitment_outcome - what a successful extend call did
+ * @state: verdict tpm_extend_boot_commitment() left on the context
+ *
+ * Pure function. Only the two accepting verdicts reach it; every other
+ * state fails the call, so a caller asking about one it never got reads
+ * the answer that claims the least.
+ *
+ * Returns: TPM_BOOT_COMMITMENT_ALREADY_HELD for a warm restart on a locked
+ * host, TPM_BOOT_COMMITMENT_EXTENDED otherwise.
+ */
+enum tpm_boot_commitment_outcome
+tpm_boot_commitment_outcome(enum tpm_pcr14_state state);
+
+/*
  * tpm_classify_pcr14 - decide what the observed PCR14 value means
  * @obs: fully populated observation
  *
@@ -841,27 +918,24 @@ enum tpm_pcr14_state
 tpm_classify_pcr14(const struct tpm_pcr14_observation *obs);
 
 /*
- * tpm_extend_boot_commitment - Bind PCR14 to the agent binary and the
- *                              current TPM reset/restart counter
+ * tpm_extend_boot_commitment - Bind PCR14 to the agent binary
  * @ctx:       Initialized TPM context
  * @self_hash: SHA-256 of the running agent binary
  *
- * Captures clockInfo through an AIK-signed TPM2_Quote so the counters
- * folded into the boot-commitment digest match the clockInfo the
- * later attestation quote carries. Esys_ReadClock returns counters
- * through a separate unauthenticated path and may diverge on TPM 2.0
- * simulators; the signed path keeps the verifier-side derivation
- * deterministic. Falls back to Esys_ReadClock with a security warning
- * only when no AIK has been provisioned yet (pre-enrollment boots);
- * callers that quote afterwards MUST ensure tpm_provision_aik() ran
- * first. Extends PCR14 with the boot-commitment digest defined by
- * tpm_boot_commitment_digest().
- * Re-entrancy across agent restarts without TPM reset is handled by
- * inspecting PCR14: zeros mean a fresh unlocked boot (extend), the
- * initramfs-lock value means a fresh locked boot (extend on top), an
- * expected post-extend value means a warm agent restart (skip),
- * anything else means the runtime PCR14 has been tampered with and
- * the call fails with -EBADMSG so attestation refuses to proceed.
+ * Extends PCR14 with the boot-commitment digest defined by
+ * tpm_boot_commitment_digest(), which folds in the agent hash and no counter.
+ * The TPM's reset and restart counters are read alongside it through
+ * TPM2_ReadClock, for attribution only: they tell a restart within one boot
+ * from a hardware reset and enter no digest.
+ * The reading is deliberately the unsigned one, because a quote obfuscates
+ * clockInfo per signing key and a snapshot taken under one publisher's AIK
+ * would read as an attack under the next.
+ * Re-entrancy across agent restarts without TPM reset is handled by inspecting
+ * PCR14: zeros mean a fresh unlocked boot (extend), the initramfs-lock value
+ * means a fresh locked boot (extend on top), an expected post-extend value
+ * means a warm agent restart (skip), anything else means the runtime PCR14
+ * has been tampered with and the call fails with -EBADMSG so attestation
+ * refuses to proceed.
  *
  * Returns: 0 on success, negative errno on failure
  */
@@ -1185,20 +1259,13 @@ int tpm_seal_secret(struct tpm_context *ctx, const uint8_t *secret,
 		    size_t out_cap, size_t *out_len);
 
 /*
- * tpm_unseal_secret - Release a secret sealed by tpm_seal_secret().
- * @ctx:        initialised TPM context
- * @blob:       sealed blob
- * @blob_len:   length of @blob
- * @out_secret: buffer receiving the plaintext
- * @out_cap:    capacity of @out_secret
- * @out_len:    set to the plaintext length on success
+ * tpm_unseal_secret - Release a secret sealed by tpm_seal_secret() into
+ * @out_secret (@out_cap bytes), its length in @out_len, over an encrypted
+ * PolicyPCR session.
  *
- * Recreates the storage primary, loads the sealed object, and unseals it
- * over a primary-salted, response-encrypted policy session that satisfies
- * the blob's PolicyPCR. Fails (mapped TPM policy error) when the current
- * PCRs differ from the seal-time state. Returns 0 on success, -EINVAL on a
- * malformed blob or bad arguments, -ENOSPC if @out_secret is too small,
- * negative errno / LOTA_ERR_TPM_* on TPM failure.
+ * Returns 0, -EINVAL/-EMSGSIZE on a bad header, -EBADMSG on a body that does
+ * not unmarshal, -ENOSPC if @out_cap is too small, or a negative errno /
+ * LOTA_ERR_TPM_* (policy failure when the PCRs moved).
  */
 int tpm_unseal_secret(struct tpm_context *ctx, const uint8_t *blob,
 		      size_t blob_len, uint8_t *out_secret, size_t out_cap,
@@ -1324,24 +1391,60 @@ int tpm_evict_profile_aik(struct tpm_context *ctx, uint32_t handle);
 int tpm_aik_reseal_auth(struct tpm_context *ctx);
 
 /*
- * tpm_reprovision_aik - rotate the AIK and its userAuth, sealing the new
- * auth to the current PCR state. Recovery for strict at-rest sealing after
- * a boot-state change made the sealed auth unrecoverable. The previous AIK
- * certificate becomes stale, so the caller must re-enroll.
+ * tpm_reprovision_aik - rotate the AIK userAuth, sealing the new auth to the
+ * current PCR state. Recovery for strict at-rest sealing after a boot-state
+ * change made the sealed auth unrecoverable.
+ *
+ * The key is a primary, so it usually comes back unchanged;
+ * @out_key_changed reports whether its TPM Name differs.
  * Returns 0 / negative errno.
  */
-int tpm_reprovision_aik(struct tpm_context *ctx);
+int tpm_reprovision_aik(struct tpm_context *ctx, bool *out_key_changed);
 
 /*
- * tpm_aik_strict_blocks_reprovision - pure recovery decision. Returns 1
- * when a strict-mode AIK-auth load failure must NOT trigger a silent AIK
- * rotation (i.e. strict and the failure was a PolicyPCR mismatch), else 0.
+ * tpm_firmware_refuses_attestation - non-UEFI (BIOS/CSM) hosts cannot attest.
+ * Reads a path, no TPM state, so @ctx need not be initialized; only its
+ * env-override permission is used (LOTA_TCTI rule).
+ * Returns 1 if refused (reason printed), else 0.
  */
-int tpm_aik_strict_blocks_reprovision(int strict, int load_rc);
+int tpm_firmware_refuses_attestation(const struct tpm_context *ctx);
+
+/*
+ * tpm_aik_load_failure_blocks_reprovision - returns 1 when an AIK-auth
+ * load failure must not rotate the key, i.e. any failure other than -ENOENT.
+ */
+int tpm_aik_load_failure_blocks_reprovision(int load_rc);
+
+/*
+ * tpm_aik_slot_census - profile_aik_slot_tally() over the profiles under
+ * @base_dir (NULL for the default) and the handles the TPM holds.
+ * Returns 0 / negative errno.
+ */
+int tpm_aik_slot_census(struct tpm_context *ctx, const char *base_dir,
+			struct profile_aik_slots *out);
+
+/*
+ * tpm_aik_handle_holds_profile_key - does the bound profile's handle hold the
+ * key that profile derives?
+ * Returns 1 if so, 0 if the handle is empty or holds another object,
+ * or a negative errno.
+ */
+int tpm_aik_handle_holds_profile_key(struct tpm_context *ctx);
 
 #ifdef LOTA_TPM_TESTING
 typedef int (*tpm_test_prop_reader_fn)(struct tpm_context *ctx, TPM2_PT prop,
 				       uint32_t *out_val);
+
+/*
+ * Pure helpers: the Name comparison that decides whether the object behind
+ * the AIK handle is still the one the context bound, and the profile-identity
+ * comparison that decides whether a bind carries a cached key across.
+ */
+int tpm_test_rc_is_stale_object_record(uint32_t rc);
+int tpm_test_aik_object_changed(const uint8_t *seen, uint16_t seen_len,
+				const uint8_t *live, uint16_t live_len);
+int tpm_test_aik_binding_survives(const char *bound_id, uint32_t bound_handle,
+				  const char *new_id, uint32_t new_handle);
 
 /* Pure helper: expose the PCR-mask -> selection bitmap for unit tests. */
 int tpm_test_pcr_mask_to_selection(uint32_t pcr_mask, uint8_t out_select[3],
@@ -1353,6 +1456,7 @@ int tpm_test_aik_save_auth(struct tpm_context *ctx,
 int tpm_test_aik_load_auth(struct tpm_context *ctx);
 int tpm_test_aik_plaintext_path(struct tpm_context *ctx, char *buf, size_t len);
 int tpm_test_aik_sealed_path(struct tpm_context *ctx, char *buf, size_t len);
+int tpm_test_aik_auth_record_exists(struct tpm_context *ctx);
 
 void tpm_test_set_prop_reader(tpm_test_prop_reader_fn reader);
 void tpm_test_reset_prop_reader(void);

@@ -450,3 +450,70 @@ func TestHeartbeat_RequiredFlagPresentIsTrusted(t *testing.T) {
 		t.Fatalf("state = %q, want %q", got.State, verdictTrusted)
 	}
 }
+
+/*
+ * /state carries the reason the producer was given, so a client polling it
+ * can explain the verdict and the two never disagree.
+ */
+func TestState_CarriesTheReasonForTheVerdict(t *testing.T) {
+	const flagImageFullyMeasured uint32 = 1 << 9
+
+	key, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatalf("rsa: %v", err)
+	}
+	s := newTestServerFlags(t, key, flagImageFullyMeasured)
+
+	got := decodeVerdict(t, postHeartbeat(s, newSignedHeartbeat(t, key, nil)))
+	if got.State != verdictUntrust {
+		t.Fatalf("state = %q, want %q", got.State, verdictUntrust)
+	}
+
+	r := httptest.NewRequest(http.MethodGet, "/state?game_id="+testGameID, nil)
+	w := httptest.NewRecorder()
+	s.handleState(w, r)
+
+	var st struct {
+		State  string `json:"state"`
+		Reason string `json:"reason"`
+	}
+	if err := json.NewDecoder(w.Body).Decode(&st); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if st.State != verdictUntrust {
+		t.Fatalf("state = %q, want %q", st.State, verdictUntrust)
+	}
+	if st.Reason != got.Reason {
+		t.Fatalf("reason = %q, want the one the producer was given (%q)",
+			st.Reason, got.Reason)
+	}
+}
+
+/* a reason left on a trusted session would read as the current one */
+func TestState_TrustedCarriesNoReason(t *testing.T) {
+	key, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatalf("rsa: %v", err)
+	}
+	s := newTestServer(t, key)
+
+	_ = decodeVerdict(t, postHeartbeat(s, newSignedHeartbeat(t, key, nil)))
+
+	r := httptest.NewRequest(http.MethodGet, "/state?game_id="+testGameID, nil)
+	w := httptest.NewRecorder()
+	s.handleState(w, r)
+
+	var st struct {
+		State  string `json:"state"`
+		Reason string `json:"reason"`
+	}
+	if err := json.NewDecoder(w.Body).Decode(&st); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if st.State != verdictTrusted {
+		t.Fatalf("state = %q, want %q", st.State, verdictTrusted)
+	}
+	if st.Reason != "" {
+		t.Fatalf("reason = %q, want none on a trusted session", st.Reason)
+	}
+}

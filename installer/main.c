@@ -74,8 +74,10 @@ static void usage(FILE *out)
 		"  --resume               Explain that resuming needs a reboot,\n"
 		"                         and offer to reboot now\n"
 		"\n"
-		"Exit codes: 0 complete, 1 failed/blocked, 2 usage,\n"
-		"            10 reboot required (re-run to resume).\n",
+		"Exit codes: 0 complete, 1 failed/blocked/not finished,\n"
+		"            2 usage, 10 reboot required (re-run to resume),\n"
+		"            11 boot-path stages left to a person\n"
+		"            (--unattended).\n",
 		PATH_POLICY_PUB_OVERRIDE, PATH_ENFORCEMENT_PUB,
 		PATH_SELINUX_PP_DEFAULT, PATH_AUTO_BRINGUP);
 }
@@ -225,22 +227,13 @@ static int parse_args(int argc, char **argv, struct install_opts *opts)
 	return 0;
 }
 
-static enum ui_result state_result(enum stage_state st)
+/* Does a stage note punctuate itself? */
+static int ends_in_stop(const char *note)
 {
-	switch (st) {
-	case STAGE_DONE:
-		return UI_DONE;
-	case STAGE_REBOOT:
-		return UI_REBOOT;
-	case STAGE_SKIP:
-		return UI_SKIP;
-	case STAGE_PENDING:
-	case STAGE_BLOCKED:
-		return UI_PENDING;
-	case STAGE_ERROR:
-	default:
-		return UI_FAIL;
-	}
+	size_t len = note ? strlen(note) : 0;
+
+	return len && (note[len - 1] == '.' || note[len - 1] == '!' ||
+		       note[len - 1] == '?');
 }
 
 /* Probe-only report.
@@ -249,6 +242,7 @@ static int run_status(struct install_ctx *ctx)
 {
 	char note[STAGE_NOTE_CAP];
 	int pending = 0;
+	int blocked = 0;
 	int i;
 
 	if (geteuid() != 0)
@@ -261,26 +255,45 @@ static int run_status(struct install_ctx *ctx)
 		const struct stage *s = &install_stages[i];
 		enum stage_state st = s->probe(ctx, note, sizeof(note));
 
-		ui_stage_begin(&ctx->ui, i + 1, install_stage_count, s->title);
-		ui_stage_result(&ctx->ui, state_result(st), s->title, note);
+		ui_stage_begin(&ctx->ui, i + 1, install_step_count, s->title);
+		ui_stage_result(&ctx->ui, install_stage_result(st, 0), s->title,
+				note);
 		if (st != STAGE_DONE && st != STAGE_SKIP)
 			pending++;
+		if (st == STAGE_BLOCKED)
+			blocked++;
 		/* let later probes account for boot-chain stages */
 		if (st == STAGE_REBOOT)
 			ctx->reboot_needed = 1;
 	}
 
-	ui_text(&ctx->ui, "\n%d of %d stages need work.", pending,
-		install_stage_count);
+	/* self-check, probed only */
+	{
+		enum stage_state st =
+			install_selfcheck_probe(ctx, note, sizeof(note));
+
+		ui_stage_begin(&ctx->ui, install_step_count, install_step_count,
+			       install_selfcheck_title);
+		ui_stage_result(&ctx->ui, install_stage_result(st, 0),
+				install_selfcheck_title, note);
+		if (st != STAGE_DONE && st != STAGE_SKIP)
+			pending++;
+	}
+
+	ui_text(&ctx->ui, "\n%d of %d stages need work%s.", pending,
+		install_step_count,
+		blocked ? ", and the ones marked BLOCKED need it from someone "
+			  "other than the installer" :
+			  "");
 	return pending == 0 ? EXIT_INSTALL_OK : EXIT_INSTALL_FAIL;
 }
 
 static void print_reboot_box(struct install_ctx *ctx, const char *note)
 {
-	ui_text(&ctx->ui,
-		"\nReboot is required before the install can "
-		"continue: %s.",
-		note);
+	char why[STAGE_NOTE_CAP + 128];
+
+	install_reboot_required(why, sizeof(why), note);
+	ui_text(&ctx->ui, "\n%s", why);
 	ui_text(&ctx->ui, "PCR 14 - the TPM slot LOTA measures itself into - "
 			  "only resets on a hardware reset, so this cannot "
 			  "be skipped or faked in software.");
@@ -492,7 +505,8 @@ int main(int argc, char **argv)
 {
 	struct install_ctx ctx;
 	char note[STAGE_NOTE_CAP];
-	int deferred_boot_path = 0;
+	int deferred[16];
+	int n_deferred = 0;
 	int auto_bringup;
 	int i;
 
@@ -551,8 +565,9 @@ int main(int argc, char **argv)
 	for (i = 0; i < install_stage_count; i++) {
 		const struct stage *s = &install_stages[i];
 		enum stage_state st = s->probe(&ctx, note, sizeof(note));
+		int applied = 0;
 
-		ui_stage_begin(&ctx.ui, i + 1, install_stage_count, s->title);
+		ui_stage_begin(&ctx.ui, i + 1, install_step_count, s->title);
 
 		/*
 		 * Everything a package may do on its own is behind us;
@@ -560,17 +575,12 @@ int main(int argc, char **argv)
 		 * the boot-path change, so unattended run stops here rather than
 		 * reporting reboot nobody asked for.
 		 */
-		if (ctx.opts.unattended && deferred_boot_path && s->barrier) {
-			ui_text(&ctx.ui,
-				"Host-local setup is done. What is left "
-				"changes how this machine boots -- the "
-				"initramfs PCR 14 lock and the kernel "
-				"integrity floor -- so it waits for a person: "
-				"run 'sudo lota-install'. To have a package "
-				"install do it too, create %s (or set "
-				"LOTA_AUTO_BRINGUP=1) before installing.",
-				PATH_AUTO_BRINGUP);
-			return EXIT_INSTALL_OK;
+		if (ctx.opts.unattended && n_deferred && s->barrier) {
+			int rc = install_unattended_checkpoint(
+				note, sizeof(note), deferred, n_deferred);
+
+			ui_text(&ctx.ui, "%s", note);
+			return rc;
 		}
 
 		if (ctx.opts.unattended && s->boot_path && !auto_bringup &&
@@ -578,13 +588,16 @@ int main(int argc, char **argv)
 			ui_stage_result(&ctx.ui, UI_PENDING, s->title,
 					"left to a person: this changes how "
 					"the machine boots");
-			deferred_boot_path = 1;
+			if (n_deferred <
+			    (int)(sizeof(deferred) / sizeof(deferred[0])))
+				deferred[n_deferred++] = i;
 			continue;
 		}
 
 		if (st == STAGE_PENDING && s->apply) {
 			ui_explain(&ctx.ui, s->explain);
-			ui_text(&ctx.ui, "Current state: %s.", note);
+			ui_text(&ctx.ui, "Before this stage: %s%s", note,
+				ends_in_stop(note) ? "" : ".");
 			if (!ui_confirm(&ctx.ui, "Apply this stage?",
 					ctx.opts.yes)) {
 				ui_text(&ctx.ui, "Aborted at your request. "
@@ -599,6 +612,8 @@ int main(int argc, char **argv)
 						"output above");
 				return EXIT_INSTALL_FAIL;
 			}
+			ctx.applied = 1;
+			applied = 1;
 			st = s->probe(&ctx, note, sizeof(note));
 			/* boot-chain stages stay un-probeable until the reboot
 			 * reboot_needed records their success */
@@ -609,8 +624,9 @@ int main(int argc, char **argv)
 		switch (st) {
 		case STAGE_DONE:
 		case STAGE_SKIP:
-			ui_stage_result(&ctx.ui, state_result(st), s->title,
-					note);
+			ui_stage_result(&ctx.ui,
+					install_stage_result(st, applied),
+					s->title, note);
 			break;
 		case STAGE_REBOOT:
 			ui_stage_result(&ctx.ui, UI_REBOOT, s->title, note);
@@ -621,8 +637,9 @@ int main(int argc, char **argv)
 			ctx.reboot_needed = 1;
 			break;
 		case STAGE_BLOCKED:
-			ui_stage_result(&ctx.ui, UI_FAIL, s->title, NULL);
-			ui_text(&ctx.ui, "%s.", note);
+			ui_stage_result(&ctx.ui, UI_BLOCKED, s->title, NULL);
+			ui_text(&ctx.ui, "%s%s", note,
+				ends_in_stop(note) ? "" : ".");
 			if (ctx.opts.unattended)
 				ui_text(&ctx.ui,
 					"Package install itself succeeded. "

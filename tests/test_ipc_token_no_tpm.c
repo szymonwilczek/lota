@@ -2,7 +2,8 @@
 /*
  * Unit tests for what the IPC bridge answers when the agent holds nothing.
  *
- * Two refusals share that shape. GET_TOKEN on a host with no TPM is the first.
+ * Three refusals share that shape. GET_TOKEN on a host with no TPM is the
+ * first.
  *
  * A token nobody signed is not evidence, so the refusal itself is right and stays.
  * What a refusal owes the caller is a reason: every other branch of GET_TOKEN
@@ -13,6 +14,9 @@
  *
  * PROTECT_PID is the second: runtime PID policy stands on the startup snapshot,
  * which only the startup policy raises, and a diagnostic server applies none.
+ *
+ * GET_TOKEN naming no publisher on a host that serves several is the third:
+ * any key the agent picks signs another publisher's evidence.
  *
  * These tests drive the real ipc_process() loop over a real socket with no TPM
  * and no enforcement, which is the state --test-ipc runs in.
@@ -33,6 +37,7 @@
 
 #include "../include/lota_ipc.h"
 #include "../src/agent/agent.h"
+#include "../src/agent/attest_targets.h"
 #include "../src/agent/bpf_loader.h"
 #include "../src/agent/dbus.h"
 #include "../src/agent/enroll.h"
@@ -62,6 +67,12 @@ bool tpm_is_locked_out(const struct tpm_context *ctx)
 	return false;
 }
 
+/* nothing here latches a lockout; linked only */
+void tpm_reset_lockout_state(struct tpm_context *ctx)
+{
+	(void)ctx;
+}
+
 int tpm_quote(struct tpm_context *ctx, const uint8_t *nonce, uint32_t pcr_mask,
 	      struct tpm_quote_response *response)
 {
@@ -76,6 +87,16 @@ int tpm_bind_profile(struct tpm_context *ctx, const struct profile_paths *paths)
 {
 	(void)ctx;
 	(void)paths;
+	return -ENOTSUP;
+}
+
+/* no TPM: the census refuses, so the bind goes ahead */
+int tpm_aik_slot_census(struct tpm_context *ctx, const char *base_dir,
+			struct profile_aik_slots *out)
+{
+	(void)ctx;
+	(void)base_dir;
+	(void)out;
 	return -ENOTSUP;
 }
 
@@ -556,6 +577,115 @@ static void test_capability_line_promises_no_tokens(struct ipc_context *ctx)
 	PASS();
 }
 
+/*
+ * Publisher list handed over as the attestation loop does; the connection
+ * sends no SET_PROFILE, like a title built for a single-publisher machine.
+ */
+static struct attest_target unnamed_profiles[2];
+static uint32_t unnamed_result;
+static char unnamed_log[4096];
+
+static void unnamed_profiles_set(struct ipc_context *ctx, size_t count)
+{
+	memset(unnamed_profiles, 0, sizeof(unnamed_profiles));
+	for (size_t i = 0; i < count; i++) {
+		unnamed_profiles[i].has_profile = true;
+		/* attested, so only the choice of signer is under test */
+		unnamed_profiles[i].attested = true;
+		unnamed_profiles[i].valid_until = (uint64_t)time(NULL) + 300;
+		snprintf(unnamed_profiles[i].paths.id,
+			 sizeof(unnamed_profiles[i].paths.id), "%062zu%02zu", i,
+			 i);
+	}
+	ipc_set_profiles(ctx, count ? unnamed_profiles : NULL, count);
+}
+
+static int probe_unnamed(struct ipc_context *ctx)
+{
+	struct lota_ipc_response resp;
+	uint8_t payload[LOTA_IPC_MAX_PAYLOAD];
+	int fd, ret;
+
+	fd = client_open();
+	if (fd < 0)
+		return fd;
+
+	log_capture_begin();
+	ret = send_request(fd, LOTA_IPC_CMD_GET_TOKEN, NULL, 0);
+	if (ret >= 0)
+		ret = read_frame(ctx, fd, &resp, payload, sizeof(payload), 64);
+	log_capture_end(unnamed_log, sizeof(unnamed_log));
+	close(fd);
+
+	if (ret < 0)
+		return ret;
+
+	unnamed_result = resp.result;
+	return 0;
+}
+
+/*
+ * Any key picked for an unnamed request on a multi-publisher host signs
+ * another publisher's evidence, which the caller's verifier cannot check.
+ */
+static void test_unnamed_publisher_is_refused(void)
+{
+	TEST("a host serving several publishers refuses a request naming none");
+
+	if (unnamed_result == LOTA_IPC_OK) {
+		FAIL("a token was issued for a publisher nobody named");
+		return;
+	}
+
+	if (unnamed_result != LOTA_IPC_ERR_UNKNOWN_PROFILE) {
+		FAIL("the refusal does not name the missing publisher");
+		return;
+	}
+
+	PASS();
+}
+
+static void test_unnamed_publisher_refusal_is_logged(void)
+{
+	TEST("the refusal says which publisher is missing in the log");
+
+	if (unnamed_log[0] == '\0') {
+		FAIL("the agent refused silently");
+		return;
+	}
+
+	if (!strstr(unnamed_log, "GET_TOKEN")) {
+		FAIL("the log does not name the refused command");
+		return;
+	}
+
+	if (!strstr(unnamed_log, "SET_PROFILE")) {
+		FAIL("the log does not name what the caller has to send");
+		return;
+	}
+
+	PASS();
+}
+
+/* lota_anticheat.h: a title on a single-publisher machine names nobody */
+static void test_one_publisher_still_answers_an_unnamed_caller(void)
+{
+	TEST("a host serving one publisher still answers a request naming none");
+
+	if (unnamed_result == LOTA_IPC_ERR_UNKNOWN_PROFILE) {
+		FAIL("the only publisher on the host was treated as ambiguous");
+		return;
+	}
+
+	/* no TPM here, so the request gets that far and no further */
+	if (unnamed_result != LOTA_IPC_ERR_NO_TPM) {
+		FAIL("the request stopped somewhere other than the TPM");
+		return;
+	}
+
+	PASS();
+}
+
 int main(void)
 {
 	struct ipc_context ctx;
@@ -617,6 +747,27 @@ int main(void)
 		test_protect_pid_refusal_names_itself();
 		test_protect_pid_refusal_is_logged();
 	}
+
+	/* after the probes above, which need a host with no publishers */
+	unnamed_profiles_set(&ctx, 1);
+	ret = probe_unnamed(&ctx);
+	if (ret < 0)
+		printf("SKIP: no answer to GET_TOKEN with one publisher (%s)\n",
+		       strerror(-ret));
+	else
+		test_one_publisher_still_answers_an_unnamed_caller();
+
+	unnamed_profiles_set(&ctx, 2);
+	ret = probe_unnamed(&ctx);
+	if (ret < 0) {
+		printf("SKIP: no answer to GET_TOKEN with two publishers (%s)\n",
+		       strerror(-ret));
+	} else {
+		test_unnamed_publisher_is_refused();
+		test_unnamed_publisher_refusal_is_logged();
+	}
+
+	unnamed_profiles_set(&ctx, 0);
 
 	ipc_cleanup(&ctx);
 	unlink(test_socket);

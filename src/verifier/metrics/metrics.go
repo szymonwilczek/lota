@@ -16,6 +16,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/szymonwilczek/lota/verifier/types"
 )
 
 // holds all verifier metrics
@@ -25,6 +27,9 @@ type Metrics struct {
 	AttestationOK    Counter // successful attestations
 	AttestationFail  Counter // all failed attestations (parse errors + rejections)
 	ConnectionErrors Counter // protocol-level errors
+
+	AttestationLogDropped Counter // decision records dropped on a full writer buffer
+	AttestationLogFailed  Counter // decision records whose write failed
 
 	// rejection reason
 	Rejections *LabeledCounter
@@ -176,6 +181,10 @@ func (h *Histogram) Sum() float64 {
 	return float64(h.sum.Load()) / 1e9
 }
 
+// rejection reasons that are not wire verdicts: an unreadable or unpinnable
+// baseline is a verifier fault, the host only sees an internal error
+var internalRejectionReasons = []string{"baseline_error"}
+
 // writes all metrics in Prometheus text exposition format
 func (m *Metrics) Export() string {
 	var b strings.Builder
@@ -190,15 +199,11 @@ func (m *Metrics) Export() string {
 		"Total successful attestations",
 		m.AttestationOK.Value())
 
-	// labeled rejections
+	// labeled rejections: wire verdicts plus internal reasons
 	writeLabeledCounter(&b, "lota_rejections_total",
 		"Total rejected attestations by reason", "reason",
 		m.Rejections.Values(),
-		[]string{
-			"nonce_fail", "sig_fail", "pcr_fail",
-			"identity_fail", "integrity_mismatch", "revoked",
-			"banned", "baseline_error",
-		})
+		append(types.RejectionReasons(), internalRejectionReasons...))
 
 	// labeled re-anchor outcomes
 	writeLabeledCounter(&b, "lota_reanchors_total",
@@ -209,6 +214,14 @@ func (m *Metrics) Export() string {
 	writeCounter(&b, "lota_connection_errors_total",
 		"Total protocol-level connection errors",
 		m.ConnectionErrors.Value())
+
+	writeCounter(&b, "lota_attestation_log_dropped_total",
+		"Decision records dropped because the log buffer was full",
+		m.AttestationLogDropped.Value())
+
+	writeCounter(&b, "lota_attestation_log_failed_total",
+		"Decision records lost to a failed log write",
+		m.AttestationLogFailed.Value())
 
 	// derived counter: total failed attestations across all reasons
 	writeCounter(&b, "lota_attestations_failed_total",
@@ -308,3 +321,7 @@ func formatFloat(f float64) string {
 	}
 	return fmt.Sprintf("%g", f)
 }
+
+// implement store.AttestationLogLoss
+func (m *Metrics) AttestationRecordsDropped(n int64) { m.AttestationLogDropped.Add(n) }
+func (m *Metrics) AttestationRecordsFailed(n int64)  { m.AttestationLogFailed.Add(n) }

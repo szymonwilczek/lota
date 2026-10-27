@@ -20,21 +20,22 @@ Single node (default)
 One verifier process owns its state. Two equivalent storage layouts exist:
 
 * **File + SQLite.** The certificate-backed AIK store lives under
-  ``--aik-store``; used nonces persist to a SQLite database (``--nonce-db``);
-  the per-device boot baseline, revocation, ban, audit and attestation state
-  are in-memory. A restart therefore drops the baselines and the next report
-  from each device re-pins them.
+  ``--aik-store``; the used-nonce history and the enforcement state --
+  revocations, hardware bans, the audit log and the attestation decision log
+  -- persist to one SQLite database (``--state-db``, default
+  ``<aik-store>/verifier-state.sqlite``). The per-device boot baseline is
+  in-memory, so a restart drops the baselines and the next report from each
+  device re-pins them.
 * **SQLite (production default).** ``--db`` persists all of the above to one
-  SQLite file. The certificate-backed AIK store sits beside it under
-  ``--aik-store`` exactly as above, so ``--require-cert`` belongs here: this is
-  the single-node layout that both verifies AIK certificate chains and keeps
-  its baselines across a restart.
+  SQLite file, the client registry included, so ``--require-cert`` belongs
+  here: this is the single-node layout that both verifies AIK certificate
+  chains and keeps its baselines and its inventory across a restart.
 
-The AIK store and the state backend are separate choices. ``--require-cert``
-and ``--aik-ca-cert`` select the certificate-verifying AIK store, which is
-file-backed under ``--aik-store`` on every backend; ``--db`` and ``--pg-dsn``
-decide where the baseline, nonce and enforcement state lives. Neither
-constrains the other.
+Verification and storage remain separate choices. ``--require-cert`` and
+``--aik-ca-cert`` select the certificate-verifying AIK store on every backend;
+``--db`` and ``--pg-dsn`` decide where state lives, and the store registers
+into that state -- into ``--aik-store`` only when no database is configured.
+Neither choice constrains the other.
 
 Single node is the simplest topology and needs no external database. Its
 ceiling is one process: there is no failover, and the in-memory enforcement
@@ -59,7 +60,8 @@ check.
     (2) - shared enforcement state
 
 With ``--pg-dsn`` the shared database holds the baseline, used-nonce,
-revocation, ban, audit and attestation state. The consequences:
+revocation, ban, audit and attestation state, and the client registry itself.
+The consequences:
 
 * A baseline pinned, a client revoked, or hardware banned on one instance is
   enforced by every instance. The per-client baseline pin is committed under a
@@ -67,11 +69,26 @@ revocation, ban, audit and attestation state. The consequences:
   holds across instances exactly as it does within one SQLite process.
 * A used nonce recorded on one instance is rejected as replayed on all
   instances.
+* A client registered through one instance is listed by every instance, so
+  ``GET /api/v1/clients`` is a fleet inventory, and it survives a restart.
+  The certificate-backed store verifies the AIK certificate chain and it
+  remembers the result.
+* ``GET /api/v1/clients/{id}`` answers from the same shared record, including
+  when the client last attested. Two fields stay this instance's --
+  ``monotonic_counter`` and ``pending_challenges`` -- and
+  :doc:`monitoring-api` says what each of them is worth.
 
 What Postgres adds over ``--db`` is the shared state above, not certificate
 verification: every backend selects the certificate-backed AIK store the same
-way. Run each instance with identical policy, CA roots and storage
-configuration.
+way, and each persists into the registry its own state lives in -- the database
+where one is configured, ``--aik-store`` where none is. Run each instance with
+identical policy, CA roots and storage configuration.
+
+An instance moved onto a shared database brings no registry with it: the
+clients in its ``--aik-store`` directory are not imported, and each one
+re-registers on its next attestation through the same certificate chain
+verification it passed the first time. The baseline it is held to was already
+in the database and is enforced throughout.
 
 Shared-state requirements
 -------------------------
@@ -94,23 +111,59 @@ Shared-state requirements
   outright, since ``database/sql`` reads 0 as *unlimited*.
 * **Schema migrations are safe to race.** Every instance runs migrations at
   startup under a Postgres advisory lock, so the schema is created exactly once
-  regardless of start order.
+  regardless of start order. Under the same lock each instance checks that the
+  database is the schema its own build applies -- the version, the fingerprint
+  of the migration text, and the tables those migrations create -- and refuses
+  to serve one written by a different build. Run one build across the fleet;
+  :doc:`protocol-versions` says what each refusal means. An instance that only
+  reads (``--report-only``, below) checks the same three markers and applies
+  nothing: it takes no lock, records no fingerprint for a database that carries
+  none, and refuses a database whose schema is behind its own, since the
+  migrations that would close the gap belong to a verifier on the primary.
 * **AIK certificate roots and PCR policy are configuration, not shared state.**
   Distribute the same ``--aik-ca-cert``, ``--aik-crl``, ``--policy`` and
   ``--policy-pubkey`` material to every instance through the usual configuration
   channel; they are not stored in the database.
 * **CA signing key.** The attestation CA is a separate service; its key handling
   (HSM/PKCS#11 or the dev-only PEM) is covered in
-  :doc:`../security/ca-key <../security/ca-key>`.
+  :doc:`../security/ca-key`.
 
 Scaling the read path
 ---------------------
 
 The monitoring API's listings and lookups are single indexed reads, and their
 volume is far below the attestation path, so a single Postgres node serves them
-comfortably. If a deployment ever needs more read throughput, route reads to
-Postgres read replicas; nothing on the attestation wire depends on which
-replica answered.
+comfortably.
+
+**An attesting verifier needs a writable database.** It applies its schema at
+startup and writes on every round, so it refuses to start against a hot
+standby, saying the database is a read-only standby. Point every attesting
+instance at the primary.
+
+**A reporting instance takes the read load off it.** ``--report-only`` serves
+only the monitoring API, from a database it never writes::
+
+   lota-verifier --report-only \
+     --pg-dsn "postgres://…@pg-replica/lota?sslmode=verify-full" \
+     --http-addr 127.0.0.1:8081
+
+* No attestation listener: ``--cert``, ``--key`` and ``--addr`` are unused. A
+  non-loopback monitoring API still requires TLS and an API key.
+* The schema is verified, never applied, so the database may be a hot standby
+  or the primary.
+* Every ``admin`` endpoint (revoke, restore, ban, unban, force re-anchor,
+  acknowledge a re-anchor) answers **503** naming the read-only database,
+  before the key check. ``reader`` endpoints behave as on an attesting
+  instance.
+* ``/health`` answers **200** with ``"mode": "reporting"``.
+* ``--policy`` is ignored, with a warning.
+* With shards, it reads each shard's identity and the pinned shard set but
+  writes neither; pinning is left to attesting instances.
+
+Nothing on the attestation wire depends on which node answered, so a replica is
+a faithful source for these answers. Reporting tools that query Postgres
+directly -- a dashboard, an export, an audit report -- read the same replica
+beside it.
 
 Scaling the write path (database sharding)
 ------------------------------------------
@@ -127,9 +180,12 @@ comma-separated list), mutually exclusive with ``--pg-dsn``::
      --pg-shard-dsn "postgres://…@pg-shard-1/lota?sslmode=verify-full" \
      --pg-shard-dsn "postgres://…@pg-shard-2/lota?sslmode=verify-full"
 
-Each per-client baseline and nonce is routed to one shard by a stable,
-process-independent hash of its key, so a given client's writes
-always land on the same shard and every instance agrees on that mapping.
+Each per-client baseline and used-nonce record is routed to one shard by a
+stable, process-independent hash of **the client it belongs to**, so a given
+client's writes always land on the same shard and every instance agrees on
+that mapping. Routing on the client is what makes a shard a failure domain:
+a client's baseline and its replay history live together, so losing a shard
+costs that shard's clients and leaves the rest attesting.
 Because independent databases commit in parallel, aggregate durable-write
 throughput scales with the number of shards **when each shard has
 independent storage** (separate database hosts or volumes); shards packed
@@ -140,11 +196,14 @@ Rules for a sharded deployment:
 * **Give every instance the same shard list in the same order.** The shard
   index is positional; a divergent list would route the same client to
   different databases on different instances and break replay protection. The verifier enforces this: each shard
-  database carries its own identity and the control database pins the
+  database carries its own identity and **every shard** pins the
   fingerprint of the ordered list, so an instance whose list does not
   reproduce it refuses to start instead of serving a routing its peers
-  disagree with. Listing the same database twice is refused for the same
-  reason.
+  disagree with. The pin is read from every shard and all of them must
+  agree, which is what makes a reordering visible: the pin cannot live only
+  in whichever database is listed first, because that is the database a
+  reordering moves. A shard already pinned to another set stops the run.
+  Listing the same database twice is refused for the same reason.
 * **The first shard is the control database.** Fleet-global, read-mostly
   state -- revocations, hardware bans, the audit trail and the attestation
   decision log -- lives on shard 0, not on the per-report path.
@@ -154,7 +213,13 @@ Rules for a sharded deployment:
 * **A shard is a failure domain.** Losing one shard fails closed only for the
   clients it owns (their next attestation errors and retries); the other
   shards keep serving. Run each shard with its own HA (primary/replica) as
-  you would the single database.
+  you would the single database. A challenge can still be issued while a
+  shard is down -- the used-nonce history is consulted when the client
+  presents itself, which is the first moment its shard is known -- so the
+  refusal an affected client sees names the round, not the challenge. The
+  round is refused: a replay history that cannot be read is not the same
+  as one that holds nothing, and attesting on the local pending map alone
+  would drop the cross-instance guarantee for as long as the shard is away.
 * **Fix the shard count before you enrol the fleet.** The index is
   ``FNV-1a(key) mod N``, so changing ``N`` re-routes nearly every key.
   After adding or removing a shard, a client's baseline and its used-nonce
@@ -168,7 +233,7 @@ Rules for a sharded deployment:
   the fleet -- not as a rolling capacity step. Size the shard count for the
   fleet you expect, not the one you have. The pinned shard set makes this
   explicit: a changed list is refused at startup until you clear the pin
-  with ``DELETE FROM shard_set;`` on the control database, which is the
+  with ``DELETE FROM shard_set;`` on **every** shard, which is the
   point at which you confirm the migration is done. The same pin is
   recorded for a single ``--pg-dsn`` database, so switching an existing
   deployment to a sharded list is caught rather than silently re-routing

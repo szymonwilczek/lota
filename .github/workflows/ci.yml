@@ -264,6 +264,41 @@ jobs:
         # runner does not have)
         run: make check-includes
 
+  fuzz:
+    name: fuzz targets (C build + reproducers)
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential clang llvm pkg-config \
+            libelf-dev zlib1g-dev \
+            libtss2-dev \
+            libssl-dev libsystemd-dev libseccomp-dev \
+            libdbus-1-dev
+
+      - name: Install libbpf >= 1.0
+        env:
+          LIBBPF_VERSION: v1.4.6
+        run: |
+          set -eu
+          sudo apt-get install -y --no-install-recommends git
+          git clone --depth 1 --branch "$LIBBPF_VERSION" \
+            https://github.com/libbpf/libbpf.git /tmp/libbpf
+          make -C /tmp/libbpf/src -j"$(nproc)"
+          sudo make -C /tmp/libbpf/src install \
+            PREFIX=/usr LIBDIR=/usr/lib/x86_64-linux-gnu
+          sudo ldconfig
+
+      - name: Build every fuzz target and replay the committed reproducers
+        run: make -o include/vmlinux.h fuzz-regress
+
   el9-decls:
     name: declarations against el9 headers
     runs-on: ubuntu-24.04
@@ -377,19 +412,32 @@ jobs:
             scripts/check-go-coverage.sh \
             scripts/check-license-boundary.sh \
             scripts/check-doc-diagnostics.sh \
+            scripts/check-config-commands.sh \
             scripts/check-abi.sh \
             scripts/check-package-manifests.sh \
+            scripts/check-test-build-dir.sh \
             examples/demo/setup.sh \
             examples/ci-gate/run.sh \
             examples/demo_anticheat/run.sh \
             examples/demo/demo_tamper.sh \
             examples/block-demo/run.sh \
             examples/cs2/scenarios/verify-attested.sh \
+            examples/hsm-ca/setup-token.sh \
+            scripts/check-container-images.sh \
             tests/integration/test_bpf_gates.sh \
             tests/integration/test_add_publisher_profile.sh \
+            tests/integration/test_proton_hook_disable.sh \
+            tests/integration/test_dev_bringup_idempotent.sh \
+            tests/integration/test_installer_status_stages.sh \
+            tests/integration/test_attestca_build_tags.sh \
+            tests/integration/test_bench_targets.sh \
+            tests/integration/test_fuzz_leak_detection.sh \
+            tests/integration/test_veristat_gate.sh \
+            tests/integration/test_hsm_ca_example.sh \
             src/initramfs/90lota/module-setup.sh
           shellcheck -s sh -S error \
             scripts/check-el9-decls.sh \
+            scripts/veristat-gate.sh \
             packaging/nfpm/scripts/agent-postinstall.sh
 
   package-manifests:
@@ -403,6 +451,54 @@ jobs:
 
       - name: Compare the two package manifests
         run: make check-package-manifests
+
+  syzkaller-matrix:
+    name: syzkaller hook matrix
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Check every LSM program has a row and every row's calls are enabled
+        run: make check-syzkaller-matrix
+
+  repo-map:
+    name: repository map
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Check the repository map names every tracked directory
+        run: make check-repo-map
+
+  header-paths:
+    name: header tree pointers
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Check every path an installed header points at resolves
+        run: make check-header-paths
+
+  test-build-dir:
+    name: test build directory
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Check the tests read the build directory the build used
+        run: make check-test-build-dir
 
   license-boundary:
     name: license-boundary
@@ -427,6 +523,9 @@ jobs:
 
       - name: Check the documentation quotes messages the tree prints
         run: make check-doc-diagnostics
+
+      - name: Check shipped configuration names commands that resolve
+        run: make check-config-commands
 
   yamllint:
     name: yamllint
@@ -558,9 +657,8 @@ jobs:
         # the veristat gate inside it. veristat pushes every program through
         # that kernel's real verifier (instruction limit, pointer checks,
         # trusted-pointer rules, ...).
-        # Any rejection fails the job and the full verifier log for the program
-        # is dumped. VM shares this checkout over 9p, so the object built above
-        # and scripts/veristat-gate.sh are visible inside.
+        # Any rejection fails the job and prints the first rejected program's
+        # verifier log. The VM sees this checkout over 9p.
         # lsm=bpf is required on the guest command line so the BPF_PROG_TYPE_LSM
         # programs are loadable.
         # KVM is used when /dev/kvm is exposed (privileged container) and TCG is

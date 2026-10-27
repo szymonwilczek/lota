@@ -43,15 +43,34 @@ Host
 
 The host runs a TPM 2.0 device, Linux with BPF LSM support, SELinux enforcing
 mode for the packaged policy, kernel lockdown, module signature enforcement,
-IMA appraisal, fs-verity, and the LOTA agent.
+fs-verity, and the LOTA agent. IMA appraisal of the host's executables is
+reported, not required.
 
-The IMA appraisal requirement pins the kernel's appraisal *mode*
-(``ima_appraise=enforce|fix`` on the command line); the appraisal *content* --
-file signatures and the rule set -- is distribution or operator-supplied (see
-:doc:`../operator/production-bringup/index <../operator/production-bringup/index>`).
+**Why it is reported, not required.** The appraisal *content* -- the
+file signatures and the rule set the kernel checks them against -- is
+distribution or operator-supplied; LOTA ships no xattr-signing pipeline, and an
+IMA rule cannot name a path, so a rule that reaches the agent reaches every
+executable it matches. A stock distribution host carries no IMA signatures, and
+loading rules over it would refuse its own executables at the next boot. On a
+Secure Boot machine the kernel also discards ``ima_appraise=`` and appraises in
+its built-in blocking mode, so the staging road (``fix`` for one boot) does not
+exist there either. A player cannot sign a root filesystem, and a requirement
+nobody on the consumer road can satisfy is a requirement that only stops
+installs.
 
-LOTA ships no xattr-signing pipeline, and its own binaries are integrity-bound through
-fs-verity and the PCR14 boot commitment independent of IMA.
+What binds the agent itself does not depend on IMA: fs-verity makes the kernel
+refuse a modified read of the agent binary, and the PCR 14 boot commitment ties
+the running build to the boot the verifier sees. So where the agent binary
+carries fs-verity, a kernel appraising nothing is an **advisory** state -- the
+agent starts, and ``LOTA_FLAG_KERNEL_APPRAISAL`` is clear in the status word,
+in the TPM-signed token and in the attestation report, where a publisher or an
+operator policy (``require_ima_appraisal``) refuses it if they want it.
+
+Where the agent binary carries **no** fs-verity -- a filesystem without it,
+where the binary's only claim is a signed ``security.ima`` xattr -- appraisal is
+the thing that makes that xattr mean anything, and the agent refuses to start
+without it. That is the one host on which the requirement is load-bearing, and
+there it is kept.
 
 The agent is privileged. It owns TPM interaction, BPF LSM loading, runtime
 measurement, local IPC, D-Bus status, and attestation report construction.
@@ -84,6 +103,19 @@ of its CA anchor's SubjectPublicKeyInfo, into the template's ``unique`` field.
 Distinct per publisher, reproduced exactly when that publisher re-enrols, and
 absent on a host that answers to nobody, whose key is unchanged.
 
+The AIK metadata record carries the derivation in its ``key_derivation`` byte:
+``PER_PUBLISHER`` for a key derived from a publisher's identity, ``SHARED`` for
+the key of a host with no publisher profile. The daemon reads that byte before
+it uses a profile's key, and a profile holding a shared key is refused by name,
+with the re-enrollment that replaces it. That keeps the device pseudonym: the
+CA derives it from the endorsement key, its pseudonym key and a non-default
+tenant, never from the attestation key.
+
+The record's version takes no part in that decision: every build writes
+version 1. A record at any other version is refused outright -- the build
+cannot know what a version it does not define means -- and the agent reports
+that as a failure to load the AIK metadata.
+
 What that separation does not cover is the evidence. Two publishers who each
 run a verifier receive the same firmware and Secure Boot measurements and the
 same event log, and the log names the disk this host boots from, so comparing
@@ -109,7 +141,7 @@ The CA key is a high-value fleet secret. It is loaded as a ``crypto.Signer``,
 so both an on-disk PKCS#8 PEM (the explicit dev-only fallback) and a PKCS#11
 token (HSM or SoftHSM, built with the ``pkcs11`` tag) are supported. Production
 deployments hold the key in an HSM; the on-disk path is logged loudly and is
-never the production default. See :doc:`ca-key <ca-key>`.
+never the production default. See :doc:`ca-key`.
 
 Verifier
 --------
@@ -118,12 +150,22 @@ The verifier validates AIK certificates, TPM quotes, PCR policy, event logs,
 boot commitments, runtime protection digests, token nonces, revocations, and
 ban state.
 
+Kernel security state the agent observes -- module signature enforcement,
+lockdown, Secure Boot and whether the kernel appraises the host's executables
+-- travels in the report's flags, which the TPM quote signs, and each has a
+policy knob. ``require_ima_appraisal`` is the appraisal one, off in every
+template but ``strict``: the signatures it demands come from a distribution or
+an image pipeline, so a fleet of stock hosts turning it on refuses every
+client. Secure Boot is the exception to reading these flags as evidence -- it
+is checked against the firmware-measured event log, because a compromised
+kernel sets its own flag freely.
+
 The default store is SQLite for single-node deployments. A Postgres backend
 (selected with ``--pg-dsn``) holds the baseline, used-nonce, revocation, ban,
 audit and attestation state in a shared database, so several verifier
 instances behind a load balancer share enforcement state and any instance
 answers for a client enrolled by any peer. See
-:doc:`../operator/ha-deployment <../operator/ha-deployment>` for the
+:doc:`../operator/ha-deployment` for the
 supported topologies.
 
 SDK consumer
@@ -263,6 +305,9 @@ Active threats
          flag exists to announce. An offline swap of the on-disk file is a
          different question and is answered by fs-verity plus the boot
          commitment, not by this flag.
+       | Restarting a unit in that window runs the new binary against a PCR 14
+         committing to the old one; it is refused until reboot, and both units
+         stay failed rather than looping.
      - Replacing the agent binary requires cold reboot, fs-verity re-enable,
        policy update, and re-attestation.
    * - Modified, non-enforcing agent (self-compiled client)
@@ -276,7 +321,9 @@ Active threats
          is set.
        | The per-device pin is established once, on the client's first
          attestation: a stored baseline whose ``agent_hash`` is absent is
-         refused rather than adopted from the report presenting it.
+         refused rather than adopted from the report presenting it. Only an
+         out-of-band PCR 14 pin leaves that column empty, and an update may
+         not move it either: the pinned register would move with it.
        | It re-opens for one reason only, a package update, and only toward a
          build ``agent_hashes`` already names. The reported hash is not taken
          on trust: PCR 14 is rederived from it and matched against the quoted
@@ -459,15 +506,20 @@ anchor for "a trusted kernel booted" is PCR 7: it reflects the Secure Boot
 signing chain and stays constant across kernel updates, so a fleet trusts the
 distribution's signing key without maintaining a per-kernel hash.
 
-The ``kernel_hashes`` value an ``--export-policy`` run writes comes from one of
-those same registers, read at export time; the exported document names which
-register it was, and which kernel the exporting host had booted. It is not a
-hash of a kernel image, and no configuration key redirects it at one, so a
-policy that is to describe a kernel is exported from a host booted into that
-kernel. It stays advisory either way: the register is read and reported by code
-running on the kernel it describes, and on a GRUB host it moves when nothing
-about the kernel has, because ``grubenv`` is measured into it and rewritten
-every boot.
+The ``kernel_hashes`` value an ``--export-policy`` run writes is the
+bootloader's own measurement of the kernel image, taken from the ``EV_IPL``
+record on PCR 9; the exported document names the image as the bootloader wrote
+it and the kernel the exporting host had booted. No configuration key redirects
+it at a file, so a policy that is to describe a kernel is exported from a host
+booted into that kernel. A register is never written there: PCR 9 aggregates
+every file the bootloader read, ``grubenv`` among them, so it answers for a
+boot rather than for a kernel.
+
+The gate reads the same measurement, and only where the quote covers PCR 9 and
+the event log replays to it. Where it does not, a policy pinning
+``kernel_hashes`` is refused with that as the reason. The pin stays advisory:
+PCR 7 is the anchor for "a trusted kernel booted", and a kernel pin buys
+anti-rollback at the cost of an entry per kernel.
 
 Pinning these registers is not optional. A report whose ``pcr_mask`` omits
 PCR 0, 1 or 7 is refused before any baseline is consulted or written, and no
@@ -561,7 +613,7 @@ Validation status
 =================
 
 The software paths are covered by local build, unit, fuzz, and integration
-tests as documented in :doc:`../contributor/development/index <../contributor/development/index>`.
+tests as documented in :doc:`../contributor/development/index`.
 
 Hardware TPM validation remains required for release claims that depend on
 physical TPM behavior. swtpm validation is useful for protocol and regression
@@ -634,7 +686,7 @@ principal it authenticates is unscoped. Delegating a tenant therefore means
 issuing a key in the key file, not narrowing an environment key. The endpoint
 list the instance logs at startup is built from the routes it registers, so it
 can be read as the API surface that instance exposes. See
-:doc:`../operator/multi-tenancy <../operator/multi-tenancy>` for configuration.
+:doc:`../operator/multi-tenancy` for configuration.
 
 Operational requirements
 ========================
@@ -653,5 +705,5 @@ Production deployments must:
 * document operator recovery for AIK rotation, policy rotation, and legitimate
   binary updates.
 
-See :doc:`../operator/production-bringup/index <../operator/production-bringup/index>`, :ghsrc:`policies/README.rst`, and
+See :doc:`../operator/production-bringup/index`, :ghsrc:`policies/README.rst`, and
 :ghsrc:`selinux/README.rst` for the deployment details.

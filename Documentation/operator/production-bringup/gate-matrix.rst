@@ -34,7 +34,8 @@ current tree.
    * - ``/dev/tpm{rm,}0`` carries ``lota_tpm_device_t``
      - ``src/agent/bpf_loader.c::tpm_device_selinux_label_ok()``
      - Install the udev rule under :ghsrc:`configs/udev/99-lota-tpm.rules` (handled by
-       ``make install``) and run ``udevadm trigger``.
+       ``make install``) and run
+       ``udevadm trigger --action=add /dev/tpmrm0 /dev/tpm0``.
    * - Kernel-enforced immutability of ``/usr/bin/lota-agent``
      - ``src/agent/bpf_loader.c::agent_self_immutability_enforced()``
      - fs-verity OR a signed ``security.ima`` xattr. On ext4/btrfs/f2fs run
@@ -69,6 +70,36 @@ current tree.
 Every gate maps to a ``lota_err()`` line in the journal when it fails, so
 ``journalctl -u lota-agent`` is the canonical debugging surface.
 
+If the BPF library refuses to open the object, attach a program or set up the
+event ring, the agent stops without recording enforcement as loaded. The
+journal holds the library's message above the agent's line naming the call; a
+refusal that leaves ``errno`` unset is reported as a fixed error, never as a
+load.
+
+A kernel floor gate (lockdown, module signatures, appraisal scope) is a state
+of the host, so the agent exits with a status listed in
+``RestartPreventExitStatus`` and ``lota-agent.service`` stays ``failed``, with
+the line naming the missing gate last in the journal. Fix the host (often a
+firmware setting) before restarting the unit.
+
+What the mode decides
+=====================
+
+The strict flags (``strict_mmap``, ``strict_exec``, ``block_ptrace``,
+``strict_modules``, ``block_anon_exec`` and their command-line forms) apply in
+``mode = enforce`` only. In ``monitor`` and ``maintenance`` each gate returns
+early: the agent starts, reports the flag as on and blocks nothing.
+
+``lota-agent --dump-config`` lists the keys the mode leaves inert::
+
+   mode = monitor
+   # mode = monitor leaves inert: strict_mmap, block_ptrace, block_anon_exec
+   # each of those gates returns early outside enforce mode, so the
+   # key records a protection this host is not applying
+
+and the agent logs the same list at startup, beside its ``Mode:`` line. A host
+meant to enforce that shows either is in the wrong mode.
+
 Automated developer bring-up
 ============================
 
@@ -76,11 +107,23 @@ Automated developer bring-up
 
 .. code-block:: sh
 
-    sudo make install                                           # land agent + BPF + units
+    sudo make install                                           # land agent + BPF + units + SELinux module
     sudo scripts/lota-dev-bringup.sh                            # gate the host
     sudo reboot                                                 # PCR14 baseline rebind
     sudo systemctl start lota-agent.socket lota-agent.service
     sudo systemctl status lota-agent.service --no-pager
 
-The script is idempotent and prints which step it ran or skipped so re-runs
-after a partial failure are safe. Read it before running.
+Every step checks for the artefact it would produce and prints whether it ran
+or skipped, so a re-run on a host that is already gated changes nothing. What
+a run writes it keeps: nothing here rolls back, and a run that fails part-way
+leaves what it had already done for the next run to pick up from.
+
+Clearing the agent state under ``/var/lib/lota`` and the persistent handles in
+the TPM is the one step that is not repeatable, because it destroys the host's
+attestation identity -- the agent provisions a fresh key on the next start, and
+anything holding a certificate for the old one is talking about a key that no
+longer exists. It happens only under ``--reset``, and ``--reset`` refuses while an agent is
+running -- either because ``lota-agent.service`` is active, or because the pid
+file under ``/run/lota`` names a process that is still alive, which is the
+state a host is left in when the agent refuses the stop. Read the script
+before running it.

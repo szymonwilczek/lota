@@ -10,7 +10,9 @@
 package synth
 
 import (
+	"bytes"
 	"crypto/rsa"
+	"crypto/x509"
 	"os"
 	"path/filepath"
 	"testing"
@@ -63,7 +65,7 @@ func newTestFleet(t *testing.T, n, keyPool int) *Fleet {
 	if err != nil {
 		t.Fatalf("NewCA: %v", err)
 	}
-	fleet, err := NewFleet(ca, n, keyPool)
+	fleet, err := NewFleet(ca, n, keyPool, "")
 	if err != nil {
 		t.Fatalf("NewFleet: %v", err)
 	}
@@ -183,7 +185,7 @@ func TestFleetProfileSharedIdentitiesRigScoped(t *testing.T) {
 	for _, a := range f1.Agents {
 		keys = append(keys, a.Key)
 	}
-	f3, err := NewFleetWithKeys(f1.CA, len(f1.Agents), keys)
+	f3, err := NewFleetWithKeys(f1.CA, len(f1.Agents), keys, "")
 	if err != nil {
 		t.Fatalf("NewFleetWithKeys: %v", err)
 	}
@@ -256,5 +258,114 @@ func TestKeyPoolRejectsBadInput(t *testing.T) {
 	}
 	if _, err := LoadKeyPool(ca.CertPEM()); err == nil {
 		t.Error("certificate PEM accepted as a key pool")
+	}
+}
+
+// A rig that drives per-tenant policy needs its certificates to carry the tenant,
+// since that subject field is where the verifier reads one from.
+func TestTenantedFleetCarriesTheTenantInEveryCertificate(t *testing.T) {
+	ca, err := NewCA()
+	if err != nil {
+		t.Fatalf("NewCA: %v", err)
+	}
+	fleet, err := NewFleet(ca, 3, 2, "acme")
+	if err != nil {
+		t.Fatalf("NewFleet(tenant=acme): %v", err)
+	}
+
+	for _, a := range fleet.Agents {
+		cert, err := x509.ParseCertificate(a.CertDER)
+		if err != nil {
+			t.Fatalf("parse %s certificate: %v", a.Name, err)
+		}
+		if got := cert.Subject.OrganizationalUnit; len(got) != 1 || got[0] != "acme" {
+			t.Fatalf("agent %s OU = %v, want [acme]", a.Name, got)
+		}
+	}
+
+	policy := fleet.Policy()
+	if policy.Tenant != "acme" {
+		t.Fatalf("policy tenant = %q, want acme", policy.Tenant)
+	}
+	if policy.Name == PolicyName {
+		t.Fatal("a tenanted rig's policy must not reuse the untenanted policy name")
+	}
+}
+
+// The default tenant is the shape of a deployment that assigns none, and it is
+// what every rig produced before the flag existed.
+func TestUntenantedFleetIssuesCertificatesWithNoOU(t *testing.T) {
+	ca, err := NewCA()
+	if err != nil {
+		t.Fatalf("NewCA: %v", err)
+	}
+	fleet, err := NewFleet(ca, 2, 1, "")
+	if err != nil {
+		t.Fatalf("NewFleet: %v", err)
+	}
+
+	cert, err := x509.ParseCertificate(fleet.Agents[0].CertDER)
+	if err != nil {
+		t.Fatalf("parse certificate: %v", err)
+	}
+	if len(cert.Subject.OrganizationalUnit) != 0 {
+		t.Fatalf("OU = %v, want none", cert.Subject.OrganizationalUnit)
+	}
+	if fleet.Policy().Tenant != "" || fleet.Policy().Name != PolicyName {
+		t.Fatalf("untenanted policy = %+v", fleet.Policy())
+	}
+}
+
+// A tenant the verifier would refuse must not reach a certificate, where it
+// would fail every round instead of the one setup command.
+func TestFleetRefusesAnInvalidTenant(t *testing.T) {
+	ca, err := NewCA()
+	if err != nil {
+		t.Fatalf("NewCA: %v", err)
+	}
+	if _, err := NewFleet(ca, 1, 1, "Not A Tenant!"); err == nil {
+		t.Fatal("expected an invalid tenant name to be refused")
+	}
+}
+
+// The rig's kernel pin has to be evaluable the way a booted host's is:
+// the kernel image measured under its own name on PCR 9, the register quoted,
+// and the replay reproducing it. A fleet reporting a kernel hash no event
+// measures would satisfy a gate no real host satisfies, and the rig would
+// stop testing the thing it exists to test.
+func TestFleetMeasuresTheKernelImageItPins(t *testing.T) {
+	fleet := newTestFleet(t, 1, 1)
+
+	if ReportPCRMask&(1<<9) == 0 {
+		t.Fatal("the quote does not cover PCR 9, so no kernel image can be authenticated")
+	}
+
+	var nonce [types.NonceSize]byte
+	wire, err := fleet.BuildReport(fleet.Agents[0], nonce)
+	if err != nil {
+		t.Fatalf("BuildReport: %v", err)
+	}
+	report, err := types.ParseReport(wire)
+	if err != nil {
+		t.Fatalf("ParseReport: %v", err)
+	}
+
+	facts, err := verify.VerifyEventLogWithPolicy(report, false)
+	if err != nil {
+		t.Fatalf("the synthetic event log does not replay: %v", err)
+	}
+
+	if !facts.KernelImage.Found {
+		t.Fatal("the synthetic log measures no kernel image")
+	}
+	if !facts.KernelImageTrusted {
+		t.Fatal("the measured kernel image is not quote-bound")
+	}
+	if facts.KernelImage.Path != KernelImagePath {
+		t.Errorf("kernel image path %q, want %q", facts.KernelImage.Path, KernelImagePath)
+	}
+	if !bytes.Equal(facts.KernelImage.Digest, fleet.KernelHash[:]) {
+		t.Errorf("the measured image is %x and the policy pins %x",
+			facts.KernelImage.Digest, fleet.KernelHash)
 	}
 }

@@ -98,6 +98,12 @@ enum {
 	LOTA_AC_ERR_NONCE_FAIL = LOTA_AC_ERR_BASE - 5,
 	LOTA_AC_ERR_EXPIRED = LOTA_AC_ERR_BASE - 6,
 	LOTA_AC_ERR_CRYPTO = LOTA_AC_ERR_BASE - 7,
+	/* agent answered: no attestation-key slot left for this publisher;
+	   no retry helps, show it to the player */
+	LOTA_AC_ERR_NO_KEY_SLOT = LOTA_AC_ERR_BASE - 25,
+	/* TPM in dictionary-attack lockout: signs nothing until cleared;
+	   no retry helps, unlike NOT_ATTESTED */
+	LOTA_AC_ERR_TPM_LOCKOUT = LOTA_AC_ERR_BASE - 26,
 	LOTA_AC_ERR_RUNTIME_IMAGE = LOTA_AC_ERR_BASE - 24, /* the runtime
 							    * measurement is
 							    * not the one
@@ -199,7 +205,8 @@ struct lota_ac_config {
 	 * of that publisher's attestation-CA trust anchor SubjectPublicKeyInfo.
 	 * See struct lota_connect_opts, which this is passed through to.
 	 *
-	 * NULL on a single-publisher host.
+	 * NULL on a single-publisher host; one that answers for several
+	 * refuses a session that names none.
 	 * Ignored in file mode, where the Wine hook owns the agent connection.
 	 */
 	const char *publisher_profile;
@@ -300,8 +307,9 @@ struct lota_ac_session *lota_ac_init(const struct lota_ac_config *cfg);
 /*
  * lota_ac_last_error - Why the last call on this thread failed
  *
- * Every entry point that can refuse sets it, including on success
- * (LOTA_AC_ERR_OK), so reading it after anything else is meaningless.
+ * Set by every call that returns a value to check, LOTA_AC_ERR_OK on success:
+ * errno for the measure helpers, LOTA_AC_ERR_* otherwise. The renderers,
+ * lota_ac_get_state() and lota_ac_shutdown() leave it alone.
  * Thread-local, because a title and its launcher in one process must
  * not read each other's answer.
  *

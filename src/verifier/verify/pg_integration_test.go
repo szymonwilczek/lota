@@ -66,6 +66,12 @@ func TestPostgresBaselineAtomic(t *testing.T) {
 	if o = s.CheckAndUpdateAttestation("c1", pcr14, fill(0xBB), boot); o.AgentHashResult != TOFUMismatch {
 		t.Fatalf("agent_hash drift: got %v", o.AgentHashResult)
 	}
+
+	// a moved register leaves state unchanged: the pre-lock baseline changed
+	// under the same agent binary, which is what a MOK enrollment does
+	if o = s.CheckAndUpdateAttestation("c1", fill(0x15), ah, boot); o.PCR14Result != TOFUMismatch {
+		t.Fatalf("pcr14 drift: got %v", o.PCR14Result)
+	}
 	// boot drift leaves state unchanged
 	if o = s.CheckAndUpdateAttestation("c1", pcr14, ah,
 		&BootBaseline{PCR0: fill(9), PCR1: fill(1), PCR7: fill(7)}); o.BootResult != TOFUMismatch {
@@ -132,7 +138,7 @@ func TestPostgresUsedNonce(t *testing.T) {
 		t.Fatalf("truncate: %v", err)
 	}
 	b := NewPostgresUsedNonceBackend(db)
-	if b.Contains("n1") {
+	if usedNonce(t, b, "n1") {
 		t.Fatal("nonce should be absent")
 	}
 	if err := b.Record("n1", time.Now()); err != nil {
@@ -141,7 +147,7 @@ func TestPostgresUsedNonce(t *testing.T) {
 	if err := b.Record("n1", time.Now()); err != nil {
 		t.Fatalf("Record idempotent: %v", err)
 	}
-	if !b.Contains("n1") {
+	if !usedNonce(t, b, "n1") {
 		t.Fatal("nonce should be present")
 	}
 	if b.Count() != 1 {
@@ -149,10 +155,10 @@ func TestPostgresUsedNonce(t *testing.T) {
 	}
 	b.Record("old", time.Now().Add(-2*time.Hour))
 	b.Cleanup(time.Now().Add(-1 * time.Hour))
-	if b.Contains("old") {
+	if usedNonce(t, b, "old") {
 		t.Fatal("stale nonce should be cleaned up")
 	}
-	if !b.Contains("n1") {
+	if !usedNonce(t, b, "n1") {
 		t.Fatal("live nonce should survive cleanup")
 	}
 }
@@ -491,5 +497,31 @@ func TestPG_AgentHashRepinArchivesAndRateLimits(t *testing.T) {
 	if err := bs.ArchiveAndRepinAgentHash(clientID, fill(0xD3), fill(0x16),
 		now.Add(AgentHashRepinMinInterval-time.Minute)); !errors.Is(err, ErrAgentHashRepinRateLimited) {
 		t.Fatalf("expected ErrAgentHashRepinRateLimited, got %v", err)
+	}
+}
+
+// Postgres refuses a row with no agent hash and writes no archive row.
+func TestPG_AgentHashRepinRefusesRowWithNoPinnedHash(t *testing.T) {
+	bs := pgBaselineStore(t)
+	const clientID = "pg-unpinned"
+
+	operatorPCR14 := fill(0x14)
+	if res, _ := bs.CheckAndUpdate(clientID, operatorPCR14); res != TOFUFirstUse {
+		t.Fatalf("out-of-band pin: expected TOFUFirstUse, got %v", res)
+	}
+
+	st := bs.GetAgentHashRepinState(clientID)
+	if !st.Present || st.Pinned {
+		t.Fatalf("expected a present row with no pin, got present=%v pinned=%v",
+			st.Present, st.Pinned)
+	}
+
+	if err := bs.ArchiveAndRepinAgentHash(clientID, fill(0xC7), fill(0x15),
+		time.Now()); !errors.Is(err, ErrAgentHashNotPinned) {
+		t.Fatalf("expected ErrAgentHashNotPinned, got %v", err)
+	}
+
+	if b := bs.GetBaseline(clientID); b == nil || b.PCR14 != operatorPCR14 {
+		t.Fatal("the operator's PCR 14 pin was replaced by the refused re-pin")
 	}
 }

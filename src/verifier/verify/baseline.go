@@ -129,9 +129,10 @@ func PCR14BaselineFromEventLog(parsed *ParsedEventLog) [types.HashSize]byte {
 // MatchLockedBootCommitmentPCR14 rederives PCR14 for the agent_hash the report
 // carries and compares it against the register the quote signed.
 //
-// There is nothing to scan.  The derivation binds the platform baseline
-// and the agent binary, so the value a host presents is the same before
-// and after a suspend, and the same for every publisher that verifies it.
+// There is nothing to scan and nothing to tolerate. The derivation binds the
+// platform baseline and the agent binary, so the value a host presents is the
+// same before and after a suspend, and the same for every publisher that
+// verifies it.
 //
 // The signature parameters are kept as named returns so callers keep reading
 // one shape: restartDrift is always zero and exists so a caller that logs it
@@ -142,9 +143,9 @@ func PCR14BaselineFromEventLog(parsed *ParsedEventLog) [types.HashSize]byte {
 // cannot be reset from userspace within a boot.
 func MatchLockedBootCommitmentPCR14(baseline, agentHash [types.HashSize]byte,
 	target [types.HashSize]byte,
-) (expected [types.HashSize]byte, restartDrift uint32, matched bool) {
+) (expected [types.HashSize]byte, matched bool) {
 	expected = DeriveLockedBootCommitmentPCR14(baseline, agentHash)
-	return expected, 0, expected == target
+	return expected, expected == target
 }
 
 // ErrBaselineNotFound is returned by baseline-mutating helpers when the
@@ -171,19 +172,22 @@ type BaselineStorer interface {
 	Stats() BaselineStats
 }
 
+// PagedClientLister is implemented by baseline stores that can page
+// the client listing in one query.
+type PagedClientLister interface {
+	ListClientsPage(limit, offset int) ([]string, error)
+}
+
 // stores known-good measurements for a client
 type ClientBaseline struct {
 	// agent self-measurement hash
 	PCR14 [types.HashSize]byte
 
-	// SHA-256 of the agent binary; pinned independently of PCR14 so the
-	// expected PCR14 can be derived from (agent_hash, resetCount,
-	// restartCount) and replayed-but-stale PCR14 values are rejected
-	// after a dirty reboot.
-	//
-	// Zero array means the baseline was created by an older verifier
-	// that did not pin agent_hash; subsequent attestations from the
-	// same client backfill the field on success.
+	// SHA-256 of the agent binary; pinned independently of PCR14
+	// so a report that carries a register the pinned hash cannot produce is
+	// rejected, and so an allow-listed agent update can move both pins in
+	// one statement.
+	// Zero means out-of-band PCR 14 pin; refused, never filled from a report.
 	AgentHash [types.HashSize]byte
 
 	// when baseline was established
@@ -260,11 +264,11 @@ type TenantStorer interface {
 	ClientTenant(clientID string) (string, error)
 }
 
-// AgentHashStorer is optionally implemented by baseline stores that can
-// pin the agent self-hash alongside (or instead of) PCR14. The hash is
-// the SHA-256 of the agent binary as captured by the agent at startup;
-// the verifier uses it to derive the expected PCR14 from TPM ClockInfo,
-// defeating dirty-shutdown replay against the static PCR14 baseline.
+// AgentHashStorer is optionally implemented by baseline stores that can pin
+// the agent self-hash alongside PCR14. The hash is the SHA-256 of the agent
+// binary as captured by the agent at startup; the verifier rederives the
+// expected PCR14 from it and the event log's pre-lock baseline,
+// so a register that matches no build the client is pinned to is refused.
 type AgentHashStorer interface {
 	// CheckAndUpdateAgentHash pins the agent self-hash with TOFU
 	// semantics that mirror CheckAndUpdate(). currentPCR14 is recorded
@@ -275,14 +279,20 @@ type AgentHashStorer interface {
 }
 
 // AttestationOutcome is the result of a single AtomicBaselineStorer
-// transaction. The two TOFU results report the per-component decision;
+// transaction. The three TOFU results report the per-component decision;
 // the snapshots carry whichever baseline values the caller needs to
 // surface in security logs or pass back to the agent. BootProvided
 // mirrors the caller's intent so consumers can distinguish "boot
 // pin not supplied this round" from "boot pin succeeded silently".
+//
+// PCR14Result is the decision for the register itself. A component that
+// carries no decision because the transaction ended before it
+// -- an agent_hash mismatch writes nothing -- reads TOFUError,
+// so a caller that forgets a branch fails closed.
 type AttestationOutcome struct {
 	AgentHashResult   TOFUResult
 	AgentHashBaseline *ClientBaseline
+	PCR14Result       TOFUResult
 	BootProvided      bool
 	BootResult        TOFUResult
 	BootBaseline      *BootBaseline
@@ -371,14 +381,21 @@ type ReanchorStorer interface {
 	// operator has looked at its LFA re-anchor.
 	// It does not touch the baseline;
 	// it only takes the client off the review list.
+	// Returns ErrNoReviewPending when nothing is queued.
 	AcknowledgeLFAReview(clientID string) error
 }
+
+// ErrNoReviewPending: the client has no LFA re-anchor awaiting review.
+var ErrNoReviewPending = errors.New("no re-anchor review pending")
 
 // AgentHashRepinState is the per-client bookkeeping behind the agent-hash
 // re-pin rate limit.
 // Present is false when the client has no baseline row.
+// Pinned is false when the row has no agent_hash (out-of-band PCR 14 pin);
+// such a row has no pin to move.
 type AgentHashRepinState struct {
 	Present     bool
+	Pinned      bool
 	RepinCount  int
 	LastRepinAt time.Time
 }
@@ -587,6 +604,7 @@ func (s *BaselineStore) GetAgentHashRepinState(clientID string) AgentHashRepinSt
 	}
 	return AgentHashRepinState{
 		Present:     true,
+		Pinned:      b.AgentHash != [types.HashSize]byte{},
 		RepinCount:  b.AgentHashRepinCount,
 		LastRepinAt: b.LastAgentHashRepinAt,
 	}
@@ -598,6 +616,8 @@ func (s *BaselineStore) GetAgentHashRepinState(clientID string) AgentHashRepinSt
 // the outgoing hash is simply overwritten (durable backends persist it).
 // Refuses when the client has no baseline row:
 // re-pin replaces a pin, and establishing one is TOFU's job, not this path's.
+// Refuses a row with no agent_hash for the same reason;
+// moving it would also replace the out-of-band PCR 14 pin.
 func (s *BaselineStore) ArchiveAndRepinAgentHash(clientID string,
 	agentHash, pcr14 [types.HashSize]byte, now time.Time,
 ) error {
@@ -607,6 +627,9 @@ func (s *BaselineStore) ArchiveAndRepinAgentHash(clientID string,
 	b, ok := s.baselines[clientID]
 	if !ok {
 		return errors.New("agent-hash re-pin: no baseline row for client")
+	}
+	if b.AgentHash == ([types.HashSize]byte{}) {
+		return ErrAgentHashNotPinned
 	}
 	if !b.LastAgentHashRepinAt.IsZero() &&
 		now.Sub(b.LastAgentHashRepinAt) < AgentHashRepinMinInterval {
@@ -660,9 +683,11 @@ func (s *BaselineStore) ListLFAReviewPending() []string {
 func (s *BaselineStore) AcknowledgeLFAReview(clientID string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if st := s.reanchor[clientID]; st != nil {
-		st.LFAReviewPending = false
+	st := s.reanchor[clientID]
+	if st == nil || !st.LFAReviewPending {
+		return ErrNoReviewPending
 	}
+	st.LFAReviewPending = false
 	return nil
 }
 
@@ -833,7 +858,7 @@ func (s *BaselineStore) CheckAndUpdateAttestation(clientID string,
 	defer s.mu.Unlock()
 
 	now := time.Now()
-	outcome := AttestationOutcome{BootProvided: boot != nil}
+	outcome := AttestationOutcome{BootProvided: boot != nil, PCR14Result: TOFUError}
 
 	// --- agent_hash branch ---
 	existing, exists := s.baselines[clientID]
@@ -849,6 +874,7 @@ func (s *BaselineStore) CheckAndUpdateAttestation(clientID string,
 		snap := *b
 		outcome.AgentHashResult = TOFUFirstUse
 		outcome.AgentHashBaseline = &snap
+		outcome.PCR14Result = TOFUFirstUse
 
 		// boot branch on a fresh row mirrors the agent_hash decision:
 		// any incoming boot baseline becomes the canonical pin.
@@ -881,6 +907,22 @@ func (s *BaselineStore) CheckAndUpdateAttestation(clientID string,
 		outcome.AgentHashResult = TOFUMatch
 	}
 
+	// --- PCR14 branch ---
+	//
+	// Every road that creates a row writes the register with it,
+	// so an existing row always has one to compare against.
+	// A mismatch terminates the transaction without writes.
+	if existing.PCR14 != pcr14 {
+		snap := *existing
+		outcome.PCR14Result = TOFUMismatch
+		outcome.AgentHashBaseline = &snap
+		if boot != nil {
+			outcome.BootResult = TOFUError
+		}
+		return outcome
+	}
+	outcome.PCR14Result = TOFUMatch
+
 	// --- boot branch ---
 	if boot != nil {
 		existingBoot, hasBoot := s.bootBaselines[clientID]
@@ -901,7 +943,7 @@ func (s *BaselineStore) CheckAndUpdateAttestation(clientID string,
 		}
 	}
 
-	// --- commit phase: both components passed ---
+	// --- commit phase: every component passed ---
 	existing.LastSeen = now
 	existing.AttestCount++
 	snap := *existing

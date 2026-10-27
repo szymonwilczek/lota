@@ -56,10 +56,14 @@ the key type; there is no ECC activation path.
    # 2. run the full ceremony: CA -> enroll -> verifier -> attest
    EK_ROOT=/var/lib/swtpm-localca/issuercert.pem ./run.sh
 
-``EK_ROOT`` is the certificate the TPM's EK certificate chains to. For swTPM it
-is the local swtpm CA issuer certificate; for real hardware it is your vendor's
-root bundle. A ``VERIFY_OK`` at the end means the AIK was activation-bound to
-the EK and the verifier trusted it through the certificate chain alone.
+``EK_ROOT`` is the trust material the TPM's EK certificate chains to, and the
+script classes it: a directory is a pinned root bundle, passed as
+``-ek-root-bundle``, and a file is a single self-signed anchor, passed as
+``-ek-root``. For swTPM it is the local swtpm CA issuer certificate; for real
+hardware it is the bundle built below, since a vendor chain needs the
+intermediates a lone anchor cannot carry. A ``VERIFY_OK`` at the end means the
+AIK was activation-bound to the EK and the verifier trusted it through the
+certificate chain alone.
 
 swTPM mints an EK one level under a root the demo itself generates, so the
 request it sends carries the leaf and nothing else. Real hardware is rarely
@@ -73,11 +77,11 @@ A zero there is normal for swTPM and for a TPM whose EK is issued directly by a
 published root. Where the count is not zero, it is the part of the path the
 operator's bundle does not have to carry.
 
-This demo passes a single ``-ek-root`` because swTPM mints one local CA. A
-production fleet instead trusts a pin-enforced multi-vendor bundle. The bundle
-ships empty: the supported hardware set is every TPM whose EK certificate
-chains to a root you can verify and pin, not a fixed vendor list. Build a
-bundle from the platforms you actually attest:
+Pointing ``EK_ROOT`` at a single file is enough for swTPM, which mints one
+local CA. Real hardware, and every production fleet, needs a pin-enforced
+multi-vendor bundle instead. The bundle ships empty: the supported hardware set
+is every TPM whose EK certificate chains to a root you can verify and pin, not
+a fixed vendor list. Build a bundle from the platforms you actually attest:
 
 .. code:: sh
 
@@ -91,21 +95,60 @@ bundle from the platforms you actually attest:
    #    then materialize the bundle (re-checks every fingerprint, fails closed)
    scripts/lota-ek-roots-update.sh sources /var/lib/lota/ek-roots
 
-   # 3. point the CA at it
-   lota-attest-ca ... -ek-root-bundle /var/lib/lota/ek-roots
+   # 3. point the demo at it; a directory is passed as -ek-root-bundle
+   EK_ROOT=/var/lib/lota/ek-roots ./run.sh
 
 The CA fails closed if any pinned manufacturer root is missing, mismatched, or
 unpinned, and requires at least one root source to start at all. See
 `configs/ek-roots/README.rst <../../configs/ek-roots/README.rst>`__ for the
 full discovery and verification flow.
 
+``CA_ADDR`` (default ``127.0.0.1:8444``, the CA's own port) and
+``VERIFIER_ADDR`` (default ``127.0.0.1:9443``) are taken on a host that already
+attests. The script checks both before starting anything and names the
+variable to move a taken one:
+
+.. code:: sh
+
+   CA_ADDR=127.0.0.1:18444 VERIFIER_ADDR=127.0.0.1:19443 \
+     EK_ROOT=/var/lib/swtpm-localca/issuercert.pem ./run.sh
+
 The script starts ``lota-verifier`` from a writable runtime directory
 (``RUN_DIR``, default: a fresh ``/tmp/lota-enrollment.*``) and points
-``--aik-store`` / ``--nonce-db`` there. This keeps generated TLS material and
-nonce replay state out of the repository and avoids the production
-``/var/lib/lota/aiks`` default when the verifier is not running as root. The
-agent verifies the verifier TLS certificate generated in ``RUN_DIR``; the
-script does not use ``--no-verify-tls``.
+``--aik-store`` / ``--state-db`` there. This keeps the verifier's durable
+state -- nonce replay history and the enforcement decisions an operator makes
+-- out of the repository, and avoids the production ``/var/lib/lota/aiks``
+default when the verifier is not running as root. The verifier presents the listener
+certificate ``gen-ca.sh`` issued, so the agent verifies the handshake against
+``ca.crt`` -- the same file that names the publisher it enrolled with, which is
+where the AIK certificate it presents is kept. The script does not use
+``--no-verify-tls``.
+
+The last step attests with a configuration file of its own, holding no
+publisher profiles. On a host past bring-up the profile list is the target
+list, and the agent refuses a ``--server`` naming one verifier beside it; a
+demo configuration keeps this run pointed at the demo verifier and leaves the
+host's own publishers alone.
+
+What the run leaves on the machine
+----------------------------------
+
+The demo's ``ca.crt`` is a publisher: its identity is the SHA-256 of the
+certificate's SubjectPublicKeyInfo, and this machine answers to a bounded
+number of them. Keeping ``CA_DIR`` costs one slot however often the demo runs;
+CA material generated elsewhere is another publisher and another slot.
+
+The slot is claimed at consent, so a failed run holds it too; re-running is
+not a recovery. The script closes by naming the publisher and how to release
+it:
+
+.. code:: sh
+
+   sudo lota-agent --list-publishers
+   sudo lota-agent --forget-publisher <id>
+
+Nothing is released automatically: the demo enrolls through the host's real
+agent, and a wrong guess would drop a publisher the host answers to.
 
 Notes for production
 --------------------
@@ -144,3 +187,21 @@ Notes for production
   daemon can read for the life of the profile -- ``/etc/lota`` is the obvious
   place -- and give ``--ca-cert`` that path rather than a build or unpack
   directory.
+- Because the endpoint comes from the record, every line the agent writes
+  about a renewal names the address it will dial rather than the ``ca`` and
+  ``ca_port`` the profile is configured with, and a profile whose keys name
+  somewhere else is reported once::
+
+     verifier.example:8443: the enrollment records old-ca.example:8444,
+     which is where renewal dials, not the CA this profile is configured
+     with; run --enroll --ca-server ca.example --ca-port 8444 --ca-cert
+     /etc/lota/ca.crt to move it
+
+  ``--reenroll`` will not move it: it reuses the recorded endpoint by design,
+  which is what makes it safe to run unattended. Moving a CA is an ``--enroll``
+  naming the new address.
+- The record also carries the enrollment token the first enrollment presented,
+  and both ``--reenroll`` and the daemon's renewal replay it, so a CA that
+  admits on tokens keeps admitting the host with no operator step. The token
+  therefore lives at rest in the profile's ``enroll_state.dat`` (root-owned,
+  ``0600``) for as long as the profile does.

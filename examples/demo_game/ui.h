@@ -15,7 +15,7 @@
 
 #define UI_WINDOW_W 800
 #define UI_WINDOW_H 600
-#define UI_BANNER_H 68
+#define UI_BANNER_H 88
 #define UI_PADDLE_W 16
 #define UI_PADDLE_H 96
 #define UI_BALL_SIZE 16

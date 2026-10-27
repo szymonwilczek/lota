@@ -10,6 +10,7 @@
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <sys/types.h>
 #include <unistd.h>
@@ -47,12 +48,20 @@ static void read_entry(const char *base_dir, const char *id,
 		e->consented_at = agreed;
 	}
 
-	if (enroll_state_load_path(paths.enroll_state, &st) == 0) {
-		e->enrolled = true;
-		snprintf(e->ca_server, sizeof(e->ca_server), "%s",
-			 st.ca_server);
-		e->ca_port = st.ca_port;
-		OPENSSL_cleanse(&st, sizeof(st));
+	{
+		int rc = enroll_state_load_path(paths.enroll_state, &st);
+
+		if (rc == 0) {
+			e->enrolled = true;
+			snprintf(e->ca_server, sizeof(e->ca_server), "%s",
+				 st.ca_server);
+			e->ca_port = st.ca_port;
+			OPENSSL_cleanse(&st, sizeof(st));
+		} else if (enroll_state_record_present(rc)) {
+			/* held but unreadable, not "never enrolled" */
+			e->enroll_unreadable = true;
+			e->enroll_rc = rc;
+		}
 	}
 
 	if (profile_aik_handle_load(&paths, &handle) == 0) {
@@ -76,6 +85,7 @@ int publishers_list(const char *base_dir, struct publisher_entry *out,
 		    size_t max, size_t *count)
 {
 	struct dirent *ent;
+	size_t seen = 0;
 	size_t n = 0;
 	DIR *dir;
 
@@ -92,15 +102,66 @@ int publishers_list(const char *base_dir, struct publisher_entry *out,
 		return -errno;
 	}
 
-	while ((ent = readdir(dir)) != NULL && n < max) {
+	/*
+	 * Count every profile, store at most @max.
+	 * *count is the total either way, so a truncated walk is -ENOBUFS,
+	 * never a silent prefix.
+	 */
+	while ((ent = readdir(dir)) != NULL) {
 		if (!name_is_identity(ent->d_name))
 			continue;
-		read_entry(base_dir, ent->d_name, &out[n]);
-		n++;
+		seen++;
+		if (n < max) {
+			read_entry(base_dir, ent->d_name, &out[n]);
+			n++;
+		}
 	}
 	closedir(dir);
 
-	*count = n;
+	*count = seen;
+	return seen > n ? -ENOBUFS : 0;
+}
+
+int publishers_list_alloc(const char *base_dir, struct publisher_entry **out,
+			  size_t *count)
+{
+	struct publisher_entry probe;
+	struct publisher_entry *list;
+	size_t total = 0;
+	int ret;
+
+	if (!base_dir || !out || !count)
+		return -EINVAL;
+
+	*out = NULL;
+	*count = 0;
+
+	/*
+	 * One entry is enough to learn how many there are:
+	 * a bounded listing reports the total whether or not it fitted.
+	 */
+	ret = publishers_list(base_dir, &probe, 1, &total);
+	if (ret < 0 && ret != -ENOBUFS)
+		return ret;
+	if (total == 0)
+		return 0;
+
+	list = calloc(total, sizeof(*list));
+	if (!list)
+		return -ENOMEM;
+
+	/*
+	 * A profile created since the count makes this -ENOBUFS;
+	 * fail rather than return a short list.
+	 */
+	ret = publishers_list(base_dir, list, total, count);
+	if (ret < 0) {
+		free(list);
+		*count = 0;
+		return ret;
+	}
+
+	*out = list;
 	return 0;
 }
 
@@ -116,6 +177,75 @@ size_t publishers_keys_held(const struct publisher_entry *list, size_t count)
 			held++;
 
 	return held;
+}
+
+int publisher_anchor_names_another(const char *base_dir, const char *id,
+				   char *now_id, size_t cap)
+{
+	struct profile_paths paths;
+	struct enroll_state st;
+	char derived[LOTA_PROFILE_ID_LEN];
+	int rc;
+
+	if (!base_dir || !id || (now_id && cap < sizeof(derived)))
+		return -EINVAL;
+	if (profile_paths_from_id(base_dir, id, &paths) < 0)
+		return -EINVAL;
+
+	rc = enroll_state_load_path(paths.enroll_state, &st);
+	if (rc < 0)
+		return rc;
+	if (st.ca_cert[0] == '\0') {
+		/* no anchor recorded: nothing to compare */
+		OPENSSL_cleanse(&st, sizeof(st));
+		return -ENOENT;
+	}
+
+	rc = profile_id_from_anchor(st.ca_cert, derived, sizeof(derived));
+	OPENSSL_cleanse(&st, sizeof(st));
+	if (rc < 0)
+		return rc;
+
+	if (strcmp(derived, id) == 0)
+		return 0;
+
+	if (now_id)
+		snprintf(now_id, cap, "%s", derived);
+	return 1;
+}
+
+int publishers_endpoint_shared(const char *base_dir, const char *self_id,
+			       const char *ca_server, int ca_port,
+			       char *other_id, size_t cap)
+{
+	struct publisher_entry *entries = NULL;
+	size_t count = 0;
+	int found = 0;
+	int rc;
+
+	if (!base_dir || !ca_server || !other_id || cap < LOTA_PROFILE_ID_LEN)
+		return -EINVAL;
+
+	rc = publishers_list_alloc(base_dir, &entries, &count);
+	if (rc < 0)
+		return rc;
+
+	for (size_t i = 0; i < count && !found; i++) {
+		if (!entries[i].enrolled)
+			continue;
+		if (self_id && strcmp(entries[i].id, self_id) == 0)
+			continue;
+		if (entries[i].ca_port != ca_port)
+			continue;
+		if (strcmp(entries[i].ca_server, ca_server) != 0)
+			continue;
+
+		snprintf(other_id, cap, "%s", entries[i].id);
+		found = 1;
+	}
+
+	free(entries);
+	return found;
 }
 
 int publishers_forget(const struct profile_paths *paths)

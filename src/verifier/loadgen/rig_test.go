@@ -12,7 +12,7 @@ import (
 
 func TestRigRoundTrip(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "rig")
-	if err := writeRig(dir, 5, 2); err != nil {
+	if err := writeRig(dir, 5, 2, ""); err != nil {
 		t.Fatalf("writeRig: %v", err)
 	}
 	for _, name := range []string{rigCACertFile, rigCAKeyFile, rigKeysFile, rigPolicyFile, rigMetaFile} {
@@ -53,7 +53,7 @@ func TestRigRoundTrip(t *testing.T) {
 
 func TestLoadRigRejectsOversizedFleet(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "rig")
-	if err := writeRig(dir, 2, 1); err != nil {
+	if err := writeRig(dir, 2, 1, ""); err != nil {
 		t.Fatalf("writeRig: %v", err)
 	}
 	if _, _, err := loadRig(dir, 10); err == nil {

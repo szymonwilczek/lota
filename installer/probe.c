@@ -24,6 +24,7 @@
 
 #include <linux/fsverity.h>
 
+#include "../include/lota_ima_policy_scope.h"
 #include "../include/lota_ima_xattr.h"
 
 #include <openssl/evp.h>
@@ -485,19 +486,20 @@ void probe_secureboot_remediation(const char *machine, int is_virtual,
 	}
 
 	/*
-	 * reboot-to-setup request is the only route this can state with certainty,
-	 * and the firmware itself says whether it honours it.
-	 * Where it does not, the firmware's own splash screen names its key
-	 * -- which is a better source than a table here could be, since the menu
-	 * layout and the key differ between revisions of a single model.
+	 * Support is not room: the request is an EFI variable write, which a
+	 * full store refuses. The startup screen's own key is the fallback;
+	 * no table here, since the key differs between revisions of one model.
 	 */
 	if (firmware_setup_supported == 1) {
 		used += (size_t)snprintf(
 			out + used, cap - used,
 			"Run 'systemctl reboot --firmware-setup' to reboot "
-			"straight into firmware setup -- this firmware accepts "
-			"that request, so no key has to be caught at the right "
-			"moment. ");
+			"straight into firmware setup; this firmware accepts "
+			"that request. If it is refused ('Cannot allocate "
+			"memory' means the EFI variable store is full), reboot "
+			"and enter setup the way the startup screen says "
+			"instead (commonly Del, F2, F10 or Esc, held while the "
+			"vendor logo is up). ");
 	} else {
 		used += (size_t)snprintf(
 			out + used, cap - used,
@@ -578,6 +580,72 @@ int probe_cmdline_ima_ok(const char *cmdline)
 	return -EPERM;
 }
 
+/*
+ * Return 1 if @rule requires a signed IMA policy (func=POLICY_CHECK with
+ * appraise_type=imasig). Such a host refuses any unsigned policy write,
+ * the shipped developer baseline included, so the installer reports that
+ * instead of suggesting a file the kernel will reject.
+ */
+static int rule_demands_signed_policy(const char *rule)
+{
+	char buf[LOTA_IMA_POLICY_RULE_MAX];
+	char *save = NULL;
+	char *tok;
+	int policy_check = 0;
+	int imasig = 0;
+	size_t len;
+
+	if (!rule)
+		return 0;
+	len = strlen(rule);
+	if (len >= sizeof(buf))
+		return 0;
+	memcpy(buf, rule, len + 1);
+
+	tok = strtok_r(buf, " \t\n", &save);
+	if (!tok || strcmp(tok, "appraise") != 0)
+		return 0;
+
+	while ((tok = strtok_r(NULL, " \t\n", &save))) {
+		if (strcmp(tok, "func=POLICY_CHECK") == 0)
+			policy_check = 1;
+		else if (strcmp(tok, "appraise_type=imasig") == 0)
+			imasig = 1;
+	}
+	return policy_check && imasig;
+}
+
+int probe_ima_policy_scope(const char *policy_path, int *policy_signed)
+{
+	char line[LOTA_IMA_POLICY_RULE_MAX];
+	FILE *fp;
+	int found = 0;
+
+	if (policy_signed)
+		*policy_signed = 0;
+	if (!policy_path)
+		return -EINVAL;
+
+	fp = fopen(policy_path, "re");
+	if (!fp)
+		return -errno;
+
+	/*
+	 * Read to the end whatever the first rule says: the scope answer and
+	 * the signed-policy answer are two different rules, and the second is
+	 * what turns a remedy into a route the host would refuse.
+	 */
+	while (fgets(line, sizeof(line), fp)) {
+		if (lota_ima_policy_rule_appraises_exec(line))
+			found = 1;
+		if (policy_signed && rule_demands_signed_policy(line))
+			*policy_signed = 1;
+	}
+
+	fclose(fp);
+	return found ? PROBE_IMA_SCOPE_EXEC : PROBE_IMA_SCOPE_NONE;
+}
+
 int probe_cmdline_has_token(const char *cmdline, const char *token)
 {
 	char buf[4096];
@@ -608,6 +676,13 @@ int probe_booted_ima_ok(void)
 	if (ret < 0)
 		return ret;
 	return probe_cmdline_ima_ok(buf);
+}
+
+int probe_ima_mode_blocking(int secureboot, const char *cmdline)
+{
+	if (secureboot)
+		return 1;
+	return probe_cmdline_ima_ok(cmdline) == 0;
 }
 
 int probe_module_sig_enforced(void)
@@ -716,9 +791,14 @@ void probe_pcr14_lock_value_at(const char *baseline_path,
 	EVP_MD_CTX_free(md);
 }
 
+const char *probe_pcr14_baseline_path(void)
+{
+	return PCR14_BASELINE_PATH;
+}
+
 void probe_pcr14_lock_value(uint8_t out[PROBE_HASH_SIZE])
 {
-	probe_pcr14_lock_value_at(PCR14_BASELINE_PATH, out);
+	probe_pcr14_lock_value_at(probe_pcr14_baseline_path(), out);
 }
 
 static int hex_nibble(char c)
@@ -752,19 +832,28 @@ int probe_hex_to_bytes(const char *hex, uint8_t *out, size_t n)
 	return 0;
 }
 
-int probe_pcr14_state(void)
+static int read_live_pcr14(uint8_t live[PROBE_HASH_SIZE])
 {
-	uint8_t live[PROBE_HASH_SIZE];
-	uint8_t lock[PROBE_HASH_SIZE];
-	uint8_t zero[PROBE_HASH_SIZE] = { 0 };
 	char buf[2 * PROBE_HASH_SIZE + 8] = { 0 };
 	int ret = probe_read_text("/sys/class/tpm/tpm0/pcr-sha256/14", buf,
 				  sizeof(buf));
 
 	if (ret < 0)
 		return ret;
-	if (probe_hex_to_bytes(buf, live, sizeof(live)) < 0)
+	if (probe_hex_to_bytes(buf, live, PROBE_HASH_SIZE) < 0)
 		return -EBADMSG;
+	return 0;
+}
+
+int probe_pcr14_state(void)
+{
+	uint8_t live[PROBE_HASH_SIZE];
+	uint8_t lock[PROBE_HASH_SIZE];
+	uint8_t zero[PROBE_HASH_SIZE] = { 0 };
+	int ret = read_live_pcr14(live);
+
+	if (ret < 0)
+		return ret;
 
 	if (memcmp(live, zero, sizeof(zero)) == 0)
 		return PROBE_PCR14_ZERO;
@@ -886,6 +975,68 @@ int probe_auto_bringup_at(const char *path)
 	if (!path)
 		return 0;
 	return access(path, F_OK) == 0;
+}
+
+int probe_conf_buf_value(const char *buf, const char *key, char *out,
+			 size_t cap)
+{
+	size_t klen;
+	const char *line;
+
+	if (!out || cap == 0)
+		return 0;
+	out[0] = '\0';
+	if (!buf || !key)
+		return 0;
+	klen = strlen(key);
+
+	for (line = buf; line && *line;) {
+		const char *p = line;
+		const char *eol = strchr(line, '\n');
+
+		while (*p == ' ' || *p == '\t')
+			p++;
+		if (*p != '#' && strncmp(p, key, klen) == 0) {
+			const char *end;
+			size_t len;
+
+			p += klen;
+			while (*p == ' ' || *p == '\t')
+				p++;
+			if (*p != '=')
+				goto next;
+			p++;
+			while (*p == ' ' || *p == '\t')
+				p++;
+			end = eol ? eol : p + strlen(p);
+			/* a value is what is left after the trailing blanks;
+			 * a key with nothing after it is not a value */
+			while (end > p && (end[-1] == ' ' || end[-1] == '\t' ||
+					   end[-1] == '\r'))
+				end--;
+			len = (size_t)(end - p);
+			if (len == 0 || len >= cap)
+				return 0;
+			memcpy(out, p, len);
+			out[len] = '\0';
+			return 1;
+		}
+next:
+		line = eol ? eol + 1 : NULL;
+	}
+	return 0;
+}
+
+int probe_conf_value(const char *conf_path, const char *key, char *out,
+		     size_t cap)
+{
+	char buf[16384] = { 0 };
+
+	if (out && cap)
+		out[0] = '\0';
+	if (probe_read_text(conf_path, buf, sizeof(buf)) < 0)
+		return 0;
+	return probe_conf_buf_value(buf, key, out, cap);
 }
 
 int probe_conf_has_key(const char *conf_path, const char *key)
@@ -1040,6 +1191,97 @@ enum stage_state probe_agent_service_stage(const struct probe_service_state *s,
 }
 
 /*
+ * Stage verdict for the IMA appraisal scope.
+ *
+ * The previous stage checks the cmdline mode; this one checks the loaded
+ * rules. If no rule appraises executables, nothing is appraised and the
+ * agent refuses to start.
+ *
+ * The installer never widens the scope. IMA rules cannot match by path,
+ * so a wider rule appraises every matching executable, and Secure Boot
+ * kernels ignore ima_appraise= and always enforce.
+ * On an unsigned rootfs that stops the next boot. The missing piece is
+ * signatures, which come from the distribution or the operator's image
+ * pipeline.
+ */
+enum stage_state probe_ima_scope_stage(const struct probe_ima_scope *s,
+				       char *note, size_t cap)
+{
+	if (!s) {
+		snprintf(note, cap, "The loaded IMA policy could not be read.");
+		return STAGE_ERROR;
+	}
+
+	if (s->scope == PROBE_IMA_SCOPE_EXEC) {
+		snprintf(note, cap,
+			 "The loaded IMA policy appraises executables, which "
+			 "is the scope the agent's startup gate requires.");
+		return STAGE_DONE;
+	}
+
+	if (s->scope != PROBE_IMA_SCOPE_NONE) {
+		if (!s->is_root && s->scope == -EACCES) {
+			snprintf(note, cap,
+				 "Cannot read %s (%s). Run as root to check "
+				 "the appraisal scope.",
+				 PROBE_IMA_POLICY_PATH, strerror(-s->scope));
+			return STAGE_ERROR;
+		}
+		/*
+		 * A kernel built without CONFIG_IMA_READ_POLICY publishes no
+		 * policy, and the agent's gate lets the mode decide alone on
+		 * exactly that host.
+		 * Refusing here would block a machine the agent starts on,
+		 * so the stage reports what it could not see.
+		 */
+		snprintf(note, cap,
+			 "This kernel does not publish its loaded IMA policy "
+			 "(%s: %s), so the scope cannot be checked. The agent "
+			 "starts on the appraisal mode alone and records that "
+			 "the scope is unverified.",
+			 PROBE_IMA_POLICY_PATH, strerror(-s->scope));
+		return STAGE_DONE;
+	}
+
+	/*
+	 * Four sentences at most, because STAGE_NOTE_CAP is the whole budget
+	 * and a report that runs past it loses its last clause
+	 */
+	snprintf(note, cap,
+		 "The loaded IMA policy carries no appraise rule that reaches "
+		 "an executable, so the kernel appraises nothing here%s. The "
+		 "installer does not widen the scope: an IMA rule cannot name "
+		 "a path, so a rule reaching the agent reaches every "
+		 "executable it matches%s, and this host's %s The scope "
+		 "arrives with the signatures -- IMA-signed distribution "
+		 "packages, or an image pipeline that signs executables and "
+		 "enrols its certificate (production bring-up guide, \"IMA "
+		 "appraisal policy\").%s",
+		 s->agent_verity ?
+			 ", which the agent reports: "
+			 "fs-verity holds its own binary and the token says "
+			 "KERNEL_APPRAISAL is clear" :
+			 " -- and the agent refuses to start, because without "
+			 "fs-verity on its binary an unappraised signature is "
+			 "the only thing holding it",
+		 s->secureboot ? ", in enforce, since Secure Boot makes the "
+				 "kernel discard ima_appraise=" :
+				 "",
+		 s->agent_signed ?
+			 "executables are signed, so a rule set covering them "
+			 "is the remaining step." :
+			 "executables carry no signature (its agent binary "
+			 "carries none), so the next boot would refuse them.",
+		 s->policy_signed ?
+			 " Policy writes are appraised here too (appraise "
+			 "func=POLICY_CHECK appraise_type=imasig), so any rule "
+			 "set has to be signed by a key on the .ima keyring." :
+			 "");
+	return lota_ima_scope_is_advisory(s->agent_verity) ? STAGE_DONE :
+							     STAGE_BLOCKED;
+}
+
+/*
  * Kernels installed on this host.
  *
  * /lib/modules is the register of what is installed -- the package manager
@@ -1107,23 +1349,104 @@ int probe_pcr14_lock_ran_at(const char *baseline_path)
 
 int probe_pcr14_lock_ran(void)
 {
-	return probe_pcr14_lock_ran_at(PCR14_BASELINE_PATH);
+	return probe_pcr14_lock_ran_at(probe_pcr14_baseline_path());
+}
+
+/*
+ * Layout of struct lota_clock_state (src/agent/tpm.h), spelled out because the
+ * installer does not link the TPM stack. The probe tests write it through the
+ * agent's struct.
+ */
+#define CLOCK_STATE_PATH "/var/lib/lota/clock_state.dat"
+#define CLOCK_STATE_MAGIC 0x4C434C4BU /* "LCLK" */
+#define CLOCK_STATE_VERSION 1U
+#define CLOCK_STATE_SIZE 120
+#define CLOCK_STATE_PCR14_OFF 16
+#define CLOCK_STATE_FLAGS_OFF 88
+#define CLOCK_STATE_FLAG_SHUTDOWN_POISON 0x02U
+
+static uint32_t le32_at(const uint8_t *p)
+{
+	return (uint32_t)p[0] | (uint32_t)p[1] << 8 | (uint32_t)p[2] << 16 |
+	       (uint32_t)p[3] << 24;
+}
+
+int probe_agent_paused_at(const char *snapshot_path,
+			  const uint8_t live[PROBE_HASH_SIZE])
+{
+	uint8_t snap[CLOCK_STATE_SIZE];
+	ssize_t n;
+	int fd;
+
+	if (!snapshot_path || !live)
+		return 0;
+	fd = open(snapshot_path, O_RDONLY | O_CLOEXEC);
+	if (fd < 0)
+		return 0;
+	n = read(fd, snap, sizeof(snap));
+	close(fd);
+
+	if (n != (ssize_t)sizeof(snap) || le32_at(snap) != CLOCK_STATE_MAGIC ||
+	    le32_at(snap + 4) != CLOCK_STATE_VERSION)
+		return 0;
+	if (!(snap[CLOCK_STATE_FLAGS_OFF] & CLOCK_STATE_FLAG_SHUTDOWN_POISON))
+		return 0;
+	return memcmp(snap + CLOCK_STATE_PCR14_OFF, live, PROBE_HASH_SIZE) == 0;
+}
+
+int probe_agent_paused(void)
+{
+	uint8_t live[PROBE_HASH_SIZE];
+
+	if (read_live_pcr14(live) < 0)
+		return 0;
+	return probe_agent_paused_at(CLOCK_STATE_PATH, live);
 }
 
 /*
  * Verdict for the reboot barrier.
  *
- * A register the installer cannot derive means one of two things, and they need
- * the same reboot but not the same sentence: either an agent ran earlier this
- * boot and left its commitment, or the platform extended PCR 14 before LOTA
- * was ever installed -- which every Secure Boot host does, because shim measures
- * the MOK variables there.
- * Whether the lock ran this boot is what tells them apart.
+ * A register the installer cannot derive means one of three things, and they
+ * do not need the same sentence -- or, in one case, the same reboot: an agent
+ * ran earlier this boot and left its commitment, an agent ran this boot
+ * and refused to start, or the platform extended PCR 14 before LOTA was ever
+ * installed, which every Secure Boot host does because shim measures the MOK
+ * variables there.
+ * Whether the lock ran this boot separates the last from the others,
+ * and whether the unit has failed separates the first two.
+ * A pause is the one refusal the next boot clears.
  */
 enum stage_state probe_pcr14_barrier_stage(int pcr_state, int lock_ran,
-					   int agent_active, char *note,
+					   int agent_active, int agent_failed,
+					   int agent_paused, char *note,
 					   size_t cap)
 {
+	if (agent_paused && !agent_active) {
+		snprintf(note, cap,
+			 "lota-agent was paused this boot (lota-install "
+			 "--pause or lota-agent --shutdown), which spends its "
+			 "PCR14 commitment until the next boot, so it refuses "
+			 "to start again until then. A reboot resumes it; "
+			 "'lota-install --resume' offers one.");
+		return STAGE_REBOOT;
+	}
+
+	/*
+	 * A reboot is what this stage asks for, and it is the one thing that
+	 * cannot help here: the agent refused a gate that will refuse it again
+	 * on the next boot, and the register carries the extend of the attempt.
+	 * Say that instead, whatever the register holds.
+	 */
+	if (agent_failed && !agent_active) {
+		snprintf(note, cap,
+			 "lota-agent has already run and refused to start this "
+			 "boot, so rebooting does not clear the refusal. What "
+			 "it refused is in its own log "
+			 "('journalctl -u lota-agent -b'); fix that and run "
+			 "the installer again.");
+		return STAGE_BLOCKED;
+	}
+
 	switch (pcr_state) {
 	case PROBE_PCR14_LOCK_ONLY:
 		snprintf(note, cap,

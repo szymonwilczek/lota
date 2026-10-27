@@ -211,6 +211,29 @@ count and the two verbs that free a slot -- ``--list-publishers`` and
 ``--forget-publisher`` -- rather than an I/O error, because the machine is full,
 not broken and the space is reclaimable.
 
+Two different things take a slot, and the listing separates them. This build
+hands out eight handles, ``0x81010010`` to ``0x81010017``, and prints how many
+of them are free next to how many the profiles here record. A handle in that
+range that holds an object no profile records is the second kind: it is left
+behind by a wiped profile, a failed eviction, an earlier build or another
+program, and the allocator steps over it rather than evicting what it did not
+put there. The listing names each one::
+
+    Handle range 0x81010010-0x81010017: 0 of 8 free, 5 recorded here.
+    3 handles in that range hold a key no publisher here records:
+      0x81010012 0x81010013 0x81010014
+    Each costs a publisher slot. LOTA will not evict what it did not put there;
+    remove one with tpm2_evictcontrol -c <handle> once you know what it is.
+
+Without that line, a host with five keys and eight handles reads as having
+three slots left while having none, and the first symptom is the next
+publisher failing to bind.
+
+A title that names a publisher with no slot left is refused at connect:
+``LOTA_ERR_NO_KEY_SLOT`` through ``lota_connect_last_error()``. That is a screen
+for the player -- the machine answers to as many publishers as it has room for
+and this one is over the line.
+
 The diagnostic verbs take from the same pool, so they say what they cost
 before they cost it. ``--test-tpm`` reports state and never creates a key: it
 says when the handle is empty and tells the operator which command provisions
@@ -332,15 +355,47 @@ What clearing a TPM costs
 
 Clearing is the last resort behind an unrecoverable ``lockoutAuth``, and it is
 survivable but not free. It destroys **every persistent object**: each
-publisher's attestation key and any persisted EK. It leaves **NV storage
-alone**, so the manufacturer EK certificates stay on the chip, and it does not
-touch the PCRs.
+publisher's attestation key and any persisted EK. It does not touch the PCRs --
+every register the boot chain measures comes back byte for byte, and only
+PCR 10 differs, because IMA re-extends it each boot.
+
+NV storage is **not** left alone, and which half of it survives is what decides
+whether the host can be recovered. ``TPM2_Clear`` deletes every index created
+under the **owner** hierarchy and keeps the **platform-created** ones. The
+manufacturer EK certificates are platform-created, so they stay on the chip:
+the endorsement key still chains to the vendor root, and ``--reenroll`` issues
+a certificate over the same device pseudonym the host had before. Every
+owner-hierarchy index goes with the hierarchy -- another TPM consumer's state,
+a firmware feature's, a sealed blob keyed to an index -- and none of it is
+LOTA's to restore. Inventory them before clearing (``tpm2_nvreadpublic``
+prints each index and whether it carries ``platformcreate``).
+
+A clear also rebases the TPM's own counters: ``resetCount`` restarts at 1 and
+the TPM clock restarts near zero. Nothing in LOTA breaks because of it -- the
+PCR 14 classification reads both, and a cleared host reaches its
+``AWAITING_EXTEND`` state before the counters are consulted -- but a counter
+that has gone backwards is exactly what the agent's rollback verdict exists
+for, so a clear leaves a host one step from a verdict that means something
+else. Any fleet tooling that treats ``resetCount`` as monotonic reads a cleared
+host as a rolled-back one.
 
 For LOTA that means every publisher enrollment on the host is gone and each has
 to be re-established with ``lota-agent --reenroll --ca-cert <their anchor>``.
-The agent mints fresh keys on its next round, so a verifier holding the old
-certificate sees a host whose key no longer matches what it was issued and
-refuses it by name until the re-enrollment lands.
+The anchor is enough -- the profile is resolved from it -- and the next round
+after a re-enrollment verifies.
+
+**The agent refuses this state, and it does so before any quote.** The key at
+each publisher's handle is no longer the key their certificate was issued over,
+so the agent says once per publisher that ``No round is attempted until they
+issue a certificate for the key that is here now``, names that publisher, and
+sleeps. Quoting anyway would be refused by the TPM and would spend a
+dictionary-attack attempt on every interval, which is what the check exists to
+avoid.
+
+**Nothing reaches the verifier.** No round is opened, so there is no failed
+attestation, no connection and no metric to alert on: a cleared host is silent
+on the fleet side and loud in its own journal. A fleet-side signal for this
+state does not exist today; the place to watch is the agent's log on the host.
 
 Where the authorization to clear comes from is firmware-dependent. Both
 hierarchy-authorized routes need a value the fleet may not hold, and the

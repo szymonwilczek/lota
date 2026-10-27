@@ -17,6 +17,7 @@
 #include <fcntl.h>
 #include <stdint.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
 #include <unistd.h>
@@ -27,6 +28,7 @@
 #include <openssl/x509.h>
 #include <openssl/x509v3.h>
 
+#include "../src/agent/enroll.h"
 #include "../src/agent/profile.h"
 #include "../src/agent/publishers.h"
 
@@ -673,6 +675,63 @@ out:
 	EVP_PKEY_free(key);
 }
 
+static void test_aik_slot_tally(void)
+{
+	const uint32_t base = 0x81010010;
+	struct profile_aik_slots slots;
+
+	/* nothing recorded, nothing on the chip: the whole range is free */
+	CHECK(profile_aik_slot_tally(base, 8, NULL, 0, NULL, 0, &slots) == 0 &&
+		      slots.total == 8 && slots.free_slots == 8 &&
+		      slots.recorded == 0 && slots.unrecorded == 0,
+	      "an untouched range is entirely free");
+
+	{
+		const uint32_t recorded[] = { base, base + 1 };
+		const uint32_t in_use[] = { base, base + 1 };
+
+		CHECK(profile_aik_slot_tally(base, 8, recorded, 2, in_use, 2,
+					     &slots) == 0 &&
+			      slots.recorded == 2 && slots.unrecorded == 0 &&
+			      slots.free_slots == 6,
+		      "a slot a profile records is not an orphan");
+	}
+
+	{
+		/* 3 unrecorded objects, 2 recorded keys gone from the chip */
+		const uint32_t recorded[] = { base, base + 1, base + 5,
+					      base + 6, base + 7 };
+		const uint32_t in_use[] = { base,     base + 1, base + 2,
+					    base + 3, base + 4, base + 6 };
+
+		CHECK(profile_aik_slot_tally(base, 8, recorded, 5, in_use, 6,
+					     &slots) == 0 &&
+			      slots.recorded == 5 && slots.unrecorded == 3 &&
+			      slots.free_slots == 0,
+		      "objects nothing records fill the rest of the range");
+		CHECK(slots.unrecorded_handles[0] == base + 2 &&
+			      slots.unrecorded_handles[1] == base + 3 &&
+			      slots.unrecorded_handles[2] == base + 4,
+		      "the orphaned handles are named, lowest first");
+	}
+
+	{
+		/* an object outside the range costs this build nothing */
+		const uint32_t in_use[] = { 0x81010002, base + 9 };
+
+		CHECK(profile_aik_slot_tally(base, 8, NULL, 0, in_use, 2,
+					     &slots) == 0 &&
+			      slots.unrecorded == 0 && slots.free_slots == 8,
+		      "handles outside the range are not this build's");
+	}
+
+	CHECK(profile_aik_slot_tally(base, 8, NULL, 0, NULL, 0, NULL) ==
+			      -EINVAL &&
+		      profile_aik_slot_tally(base, 0, NULL, 0, NULL, 0,
+					     &slots) == -EINVAL,
+	      "the tally rejects a missing result and an empty range");
+}
+
 /*
  * The inventory is what a player checks and what revocation acts on,
  * so what matters is that a half-finished profile is still listed
@@ -723,6 +782,44 @@ static void test_publisher_inventory(void)
 	      "the entry says what is stored for that publisher");
 	CHECK(!entries[0].enrolled && !entries[0].has_cert,
 	      "agreed to but not enrolled is a state, not an omission");
+	CHECK(!entries[0].enroll_unreadable,
+	      "no record on disk is not an unreadable one");
+
+	/* an unreadable record is held, not "never enrolled" */
+	{
+		struct enroll_state old_rec;
+		int fd;
+
+		memset(&old_rec, 0, sizeof(old_rec));
+		old_rec.magic = LOTA_ENROLL_STATE_MAGIC;
+		old_rec.version = LOTA_ENROLL_STATE_VERSION + 1;
+		fd = open(paths.enroll_state, O_WRONLY | O_CREAT | O_TRUNC,
+			  0600);
+		CHECK(fd >= 0, "an enrollment record can be planted");
+		if (fd >= 0) {
+			CHECK(write(fd, &old_rec, sizeof(old_rec)) ==
+				      (ssize_t)sizeof(old_rec),
+			      "the planted record is a whole record");
+			close(fd);
+		}
+
+		CHECK(publishers_list(base, entries,
+				      LOTA_PROFILE_MAX_AIK_HANDLES,
+				      &count) == 0 &&
+			      count == 1,
+		      "the profile is still one publisher");
+		CHECK(!entries[0].enrolled && entries[0].enroll_unreadable &&
+			      entries[0].enroll_rc == -ENOTSUP,
+		      "a record this build cannot read is held, not absent");
+
+		CHECK(unlink(paths.enroll_state) == 0,
+		      "the planted record is removed again");
+		CHECK(publishers_list(base, entries,
+				      LOTA_PROFILE_MAX_AIK_HANDLES,
+				      &count) == 0 &&
+			      !entries[0].enroll_unreadable,
+		      "removing it makes the profile unenrolled again");
+	}
 
 	/*
 	 * One key is one TPM persistent slot, and running out of them is what
@@ -917,10 +1014,198 @@ static void test_aik_auth_at_rest_state(void)
 		      profile_aik_auth_state_str(PROFILE_AIK_AUTH_NONE) != NULL,
 	      "every state names itself");
 
+	CHECK(profile_aik_auth_needs_sealing(PROFILE_AIK_AUTH_PLAINTEXT) &&
+		      profile_aik_auth_needs_sealing(PROFILE_AIK_AUTH_BOTH),
+	      "a key with a plaintext copy has something to seal");
+	CHECK(!profile_aik_auth_needs_sealing(PROFILE_AIK_AUTH_SEALED),
+	      "a key already sealed with no plaintext copy has not");
+	CHECK(!profile_aik_auth_needs_sealing(PROFILE_AIK_AUTH_NONE),
+	      "and neither has one holding no authorization at all");
+
 	unlink(plain);
 	unlink(sealed);
 	publishers_forget(&paths);
 	rmdir(base);
+}
+
+/*
+ * profile_consent_record() creates a directory before enrollment and nothing
+ * prunes, so a host can hold more profiles than the array a caller sizes.
+ * publishers_list() must then return -ENOBUFS and the real count,
+ * not a silent readdir-order prefix that may drop the active profile.
+ */
+static void test_a_listing_that_does_not_fit_is_refused(void)
+{
+	const size_t bound = LOTA_PROFILE_MAX_AIK_HANDLES;
+	const size_t extra = 2;
+	struct publisher_entry entries[LOTA_PROFILE_MAX_AIK_HANDLES];
+	struct profile_paths paths;
+	char base[256];
+	char id[LOTA_PROFILE_ID_LEN];
+	size_t count = 0;
+
+	snprintf(base, sizeof(base), "/tmp/lota-profile-full.%d", getpid());
+
+	for (size_t i = 0; i < bound + extra; i++) {
+		memset(id, (int)('0' + (i % 10)), sizeof(id) - 1);
+		id[sizeof(id) - 1] = '\0';
+		CHECK(profile_paths_from_id(base, id, &paths) == 0 &&
+			      profile_consent_record(&paths, 0) == 0,
+		      "a publisher is agreed to");
+	}
+
+	CHECK(publishers_list(base, entries, bound, &count) == -ENOBUFS,
+	      "a listing that cannot hold every profile is refused, not cut short");
+	CHECK(count == bound + extra,
+	      "and the refusal says how many profiles there are");
+
+	{
+		struct publisher_entry *all = NULL;
+		size_t seen = 0;
+
+		CHECK(publishers_list_alloc(base, &all, &seen) == 0 &&
+			      seen == bound + extra && all != NULL,
+		      "the allocating listing holds every profile there is");
+		free(all);
+	}
+
+	{
+		struct publisher_entry *none = (void *)-1;
+		size_t seen = 1;
+		char empty[256];
+
+		snprintf(empty, sizeof(empty), "/tmp/lota-profile-none.%d",
+			 getpid());
+		CHECK(publishers_list_alloc(empty, &none, &seen) == 0 &&
+			      none == NULL && seen == 0,
+		      "a host that answered to nobody allocates nothing");
+	}
+
+	for (size_t i = 0; i < bound + extra; i++) {
+		memset(id, (int)('0' + (i % 10)), sizeof(id) - 1);
+		id[sizeof(id) - 1] = '\0';
+		if (profile_paths_from_id(base, id, &paths) == 0)
+			publishers_forget(&paths);
+	}
+	rmdir(base);
+}
+
+/*
+ * A listener certificate re-issued over a new key is a second profile here
+ * while the CA, keyed on the EK, sees one device; both queries must spot it.
+ */
+static void test_a_rotated_pin_is_visible(void)
+{
+	EVP_PKEY *gen1 = EVP_RSA_gen(2048);
+	EVP_PKEY *gen2 = EVP_RSA_gen(2048);
+	X509 *cert1 = NULL, *cert2 = NULL;
+	char anchor_path[256];
+	char base[256];
+	char id1[LOTA_PROFILE_ID_LEN] = { 0 };
+	char id2[LOTA_PROFILE_ID_LEN] = { 0 };
+	char named[LOTA_PROFILE_ID_LEN] = { 0 };
+	struct profile_paths paths;
+	struct enroll_state rec;
+
+	snprintf(base, sizeof(base), "/tmp/lota-profile-rot.%d", getpid());
+	tmp_path(anchor_path, sizeof(anchor_path), "listener.pem");
+
+	if (!gen1 || !gen2) {
+		CHECK(0, "two listener keys are generated");
+		goto out;
+	}
+	cert1 = mint_cert(gen1, "verifier.example", 41);
+	cert2 = mint_cert(gen2, "verifier.example", 42);
+	if (!cert1 || !cert2 || write_cert_pem(anchor_path, cert1) != 0) {
+		CHECK(0, "the first listener certificate is written");
+		goto out;
+	}
+
+	CHECK(profile_id_from_anchor(anchor_path, id1, sizeof(id1)) == 0,
+	      "the first generation names a publisher");
+	CHECK(profile_paths_from_id(base, id1, &paths) == 0 &&
+		      profile_dir_ensure(&paths) == 0,
+	      "the first generation gets a profile");
+
+	memset(&rec, 0, sizeof(rec));
+	rec.magic = LOTA_ENROLL_STATE_MAGIC;
+	rec.version = LOTA_ENROLL_STATE_VERSION;
+	rec.ca_port = 18703;
+	snprintf(rec.ca_server, sizeof(rec.ca_server), "%s", "127.0.0.1");
+	snprintf(rec.ca_cert, sizeof(rec.ca_cert), "%s", anchor_path);
+	CHECK(enroll_state_save_path(paths.enroll_state, &rec) == 0,
+	      "the first generation records where it enrolled");
+
+	CHECK(publisher_anchor_names_another(base, id1, named, sizeof(named)) ==
+		      0,
+	      "before the rotation the anchor still names its own profile");
+
+	/* the publisher re-issues the listener certificate over a new key */
+	CHECK(write_cert_pem(anchor_path, cert2) == 0,
+	      "the listener certificate is re-issued in place");
+	CHECK(profile_id_from_anchor(anchor_path, id2, sizeof(id2)) == 0 &&
+		      strcmp(id1, id2) != 0,
+	      "the re-issued certificate is a different publisher here");
+
+	CHECK(publisher_anchor_names_another(base, id1, named, sizeof(named)) ==
+			      1 &&
+		      strcmp(named, id2) == 0,
+	      "the first profile is named as one its own anchor left behind");
+
+	/* the second enrollment, at the same endpoint */
+	CHECK(profile_paths_from_id(base, id2, &paths) == 0 &&
+		      profile_dir_ensure(&paths) == 0,
+	      "the second generation gets a profile of its own");
+	snprintf(rec.ca_cert, sizeof(rec.ca_cert), "%s", anchor_path);
+	CHECK(enroll_state_save_path(paths.enroll_state, &rec) == 0,
+	      "the second generation records the same endpoint");
+
+	CHECK(publishers_endpoint_shared(base, id2, "127.0.0.1", 18703, named,
+					 sizeof(named)) == 1 &&
+		      strcmp(named, id1) == 0,
+	      "the second enrollment finds the first at the same endpoint");
+	CHECK(publisher_anchor_names_another(base, id2, named, sizeof(named)) ==
+		      0,
+	      "the profile the anchor names now is not left behind");
+	CHECK(publishers_endpoint_shared(base, id2, "127.0.0.1", 18704, named,
+					 sizeof(named)) == 0,
+	      "a different port at the same host is a different endpoint");
+
+	/* a publisher that never enrolled has no anchor to compare */
+	{
+		char never[LOTA_PROFILE_ID_LEN];
+
+		memset(never, '7', sizeof(never) - 1);
+		never[sizeof(never) - 1] = '\0';
+		CHECK(publisher_anchor_names_another(base, never, named,
+						     sizeof(named)) < 0,
+		      "a profile with no record is not called left behind");
+	}
+
+	remove_profile_dir(base, id1);
+	remove_profile_dir(base, id2);
+	{
+		char path[PATH_MAX + 64];
+
+		snprintf(path, sizeof(path), "%s/%s/%s", base, id1,
+			 LOTA_PROFILE_ENROLL_STATE_FILE);
+		unlink(path);
+		snprintf(path, sizeof(path), "%s/%s/%s", base, id2,
+			 LOTA_PROFILE_ENROLL_STATE_FILE);
+		unlink(path);
+		snprintf(path, sizeof(path), "%s/%s", base, id1);
+		rmdir(path);
+		snprintf(path, sizeof(path), "%s/%s", base, id2);
+		rmdir(path);
+	}
+	rmdir(base);
+	unlink(anchor_path);
+
+out:
+	X509_free(cert1);
+	X509_free(cert2);
+	EVP_PKEY_free(gen1);
+	EVP_PKEY_free(gen2);
 }
 
 int main(void)
@@ -935,9 +1220,12 @@ int main(void)
 	test_handle_candidates();
 	test_consent_record();
 	test_anchor_is_ca();
+	test_aik_slot_tally();
 	test_publisher_inventory();
 	test_host_wide_verbs_count_every_key();
+	test_a_listing_that_does_not_fit_is_refused();
 	test_aik_auth_at_rest_state();
+	test_a_rotated_pin_is_visible();
 
 	printf("\n%s\n", g_failures ? "FAILURES" : "All tests passed");
 	return g_failures ? 1 : 0;

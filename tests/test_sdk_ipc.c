@@ -5,14 +5,18 @@
  * Tests SDK functions against running lota-agent IPC server.
  *
  * Usage:
- *   1. Start agent: sudo ./build/lota-agent --test-ipc
- *   2. Run test:    ./build/test_sdk_ipc
+ *   1. Start the agent this build produced: sudo <build>/lota-agent --test-ipc
+ *   2. Run test:                            <build>/test_sdk_ipc
  */
 #include <stdio.h>
 #include <string.h>
 #include <stdint.h>
 
 #include "../include/lota_gaming.h"
+
+#ifndef AGENT_BIN_PATH
+#define AGENT_BIN_PATH "build/lota-agent"
+#endif
 
 #define TEST_PASS "\033[32m✓ PASS\033[0m"
 #define TEST_FAIL "\033[31m✗ FAIL\033[0m"
@@ -59,8 +63,7 @@ int main(void)
 
 	if (!client) {
 		printf("\nCannot continue without connection.\n");
-		printf("Start agent: sudo ./build/lota-agent "
-		       "--test-signed\n");
+		printf("Start agent: sudo %s --test-signed\n", AGENT_BIN_PATH);
 		return 1;
 	}
 

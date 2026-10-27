@@ -27,6 +27,12 @@
 #include "../../include/lota_ipc.h"
 #include "../../include/lota_token.h"
 
+/* the only unit that sees both headers */
+_Static_assert(LOTA_TOKEN_MAX_PROTECT_PIDS == LOTA_IPC_TOKEN_MAX_PROTECT_PIDS,
+	       "wire protected-PID cap must be the IPC-derived cap");
+_Static_assert(LOTA_TOKEN_MAX_PID_LIST_SIZE == LOTA_IPC_TOKEN_MAX_PID_LIST_SIZE,
+	       "wire and IPC PID-list bounds must agree");
+
 #define DEFAULT_TIMEOUT_MS 5000
 
 /*
@@ -291,6 +297,10 @@ static int ipc_result_to_error(uint32_t result)
 		return LOTA_ERR_NO_TPM;
 	case LOTA_IPC_ERR_NO_ENFORCEMENT:
 		return LOTA_ERR_NO_ENFORCEMENT;
+	case LOTA_IPC_ERR_NO_KEY_SLOT:
+		return LOTA_ERR_NO_KEY_SLOT;
+	case LOTA_IPC_ERR_TPM_LOCKOUT:
+		return LOTA_ERR_TPM_LOCKED;
 	case LOTA_IPC_ERR_TPM_FAILURE:
 	case LOTA_IPC_ERR_INTERNAL:
 	default:
@@ -509,6 +519,9 @@ static int select_publisher(struct lota_client *client, const char *hex)
 	 */
 	if (resp.result == LOTA_IPC_ERR_UNKNOWN_PROFILE)
 		return -ENOENT;
+	/* known publisher, no key slot left on this machine */
+	if (resp.result == LOTA_IPC_ERR_NO_KEY_SLOT)
+		return -ENOSPC;
 	if (resp.result != LOTA_IPC_OK)
 		return -EINVAL;
 
@@ -600,6 +613,7 @@ struct lota_client *lota_connect_opts(const struct lota_connect_opts *opts)
 		if (sel < 0) {
 			g_connect_error =
 				sel == -EACCES ? LOTA_ERR_CONSENT_REQUIRED :
+				sel == -ENOSPC ? LOTA_ERR_NO_KEY_SLOT :
 				sel == -EINVAL ? LOTA_ERR_INVALID_ARG :
 						 LOTA_ERR_UNKNOWN_PROFILE;
 			lota_disconnect(client);
@@ -1269,7 +1283,7 @@ const char *lota_strerror(int error)
 	case LOTA_ERR_ACCESS_DENIED:
 		return "Access denied";
 	case LOTA_ERR_UNKNOWN_PROFILE:
-		return "This machine holds no enrollment for that publisher";
+		return "This machine cannot tell which publisher that is for (none named, or no enrollment)";
 	case LOTA_ERR_CONSENT_REQUIRED:
 		return "Nobody on this machine has agreed to answer to that publisher";
 	case LOTA_ERR_UNMEASURABLE_SELF:
@@ -1278,6 +1292,10 @@ const char *lota_strerror(int error)
 		return "The agent on this machine has no TPM and will not issue an unsigned token";
 	case LOTA_ERR_NO_ENFORCEMENT:
 		return "The agent on this machine enforces nothing, so there is no runtime policy to change";
+	case LOTA_ERR_NO_KEY_SLOT:
+		return "This machine has no attestation-key slot left for that publisher";
+	case LOTA_ERR_TPM_LOCKED:
+		return "The TPM on this machine is locked out after too many failed authorizations and signs nothing until it is cleared";
 	default:
 		return "Unknown error";
 	}
@@ -1311,6 +1329,7 @@ int lota_flags_to_string(uint32_t flags, char *buf, size_t buflen)
 		{ LOTA_FLAG_TOKEN_ONLY, "TOKEN_ONLY" },
 		{ LOTA_FLAG_IMAGE_FULLY_MEASURED, "IMAGE_FULLY_MEASURED" },
 		{ LOTA_FLAG_PROTECTED_TERMINATED, "PROTECTED_TERMINATED" },
+		{ LOTA_FLAG_KERNEL_APPRAISAL, "KERNEL_APPRAISAL" },
 	};
 	size_t pos = 0;
 	int first = 1;

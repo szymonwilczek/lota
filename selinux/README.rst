@@ -38,16 +38,24 @@ OS-Loader-writable range (PCR8–15, Locality 0, auth-free ``TPM2_PCR_Extend``).
 The TPM exposes **no on-chip mechanism** that could gate the extend, so a
 local-root attacker with ``/dev/tpmrm0`` access can extend PCR14 between cold
 boot and the agent's first ``tpm_extend_boot_commitment()`` call. The defence
-has to live outside the TPM. LOTA stacks four layers:
+has to live outside the TPM. LOTA stacks four layers -- three that narrow who
+can reach the device and one that attributes an extend after the fact -- and
+none of the three fences binds against local root:
 
 1. **udev** (``configs/udev/99-lota-tpm.rules``) sets ``0600 root:root`` on
    ``/dev/tpm*`` at device-add time and assigns the ``lota_tpm_device_t``
-   SELinux label.
-2. **SELinux** (this module) is the only policy that allows
-   ``rw_chr_file_perms`` on ``lota_tpm_device_t``, and only to
-   ``lota_agent_t``. Stock refpolicy interfaces (``dev_rw_tpm()``, ...) bind to
-   the generic ``tpm_device_t`` label and no longer apply once the udev rule
-   has run — including for ``unconfined_t``.
+   SELinux label. The mode stops every uid but 0.
+2. **SELinux** (this module) narrows which *confined* domains may reach the
+   device. Stock refpolicy interfaces (``dev_rw_tpm()``, ...) bind to the
+   generic ``tpm_device_t`` label and no longer apply once the udev rule has
+   run, which takes the set of sources holding ``rw_chr_file_perms`` from the
+   fifteen that stock label carries down to eight. It does **not** take it
+   down to ``lota_agent_t``: the base policy's ``devices_unconfined_type``
+   attribute is one of the eight and ``unconfined_t`` -- the domain a root
+   login runs in -- is one of its members, and the same attribute holds
+   ``relabelfrom``/``relabelto``, so root can also move the node back to
+   ``tpm_device_t``. A loadable module cannot revoke either: the grant is in
+   the policy this one is loaded beside.
 3. **systemd ordering** (``systemd/lota-agent.service``
    ``Before=multi-user.target getty.target``) narrows the window in which any
    login-capable target could spawn a tool that races the agent's first extend.
@@ -56,10 +64,13 @@ has to live outside the TPM. LOTA stacks four layers:
    attributes it to one of cold-boot tamper, mid-session tamper, or live binary
    upgrade so the operator receives an actionable journal entry.
 
-**Operators MUST run SELinux in enforcing mode for the MAC layer to bind.** A
-permissive system trusts every uid-0 process equally and LOTA cannot offer
-protection against that operator decision; the clock-state attribution layer
-still records the tamper but cannot prevent it.
+**Operators MUST run SELinux in enforcing mode for the MAC layer to bind**, and
+enforcing mode is necessary: it holds the confined domains off the device and
+leaves the unconfined ones, root among them, where they were. A local-root
+attacker with ``/dev/tpmrm0`` open is outside what any of these layers can
+prevent, which is why the fourth exists -- the clock-state attribution records
+the tamper the first three did not stop, and an operator reading the journal
+learns it happened.
 
 Capabilities Granted
 ~~~~~~~~~~~~~~~~~~~~
@@ -103,8 +114,32 @@ Build and Install
    # Install (requires root)
    sudo make install
 
+   # Install and label one endpoint's port while at it
+   sudo make install LOTA_PORT=8573
+
    # Verify installation
    sudo make verify
+
+``make install`` labels no port of its own. A port worth labelling is one this
+fleet's CA or verifier answers on, and the Makefile cannot know which that is:
+``lota-install`` labels the endpoints it is given, and ``LOTA_PORT`` is there
+for labelling one by hand at install time. A port the base policy already
+defines is reported and left alone -- relabelling one takes it from every
+domain on the host, not only from LOTA.
+
+Removing the Policy
+~~~~~~~~~~~~~~~~~~~
+
+.. code:: bash
+
+   sudo make uninstall
+
+``uninstall`` deletes every local port record naming ``lota_port_t`` before it
+removes the module that defines the type -- ``lota-install`` writes one per
+endpoint and an operator adds the rest, and a record naming a type that no
+longer exists comes back into force if the module is ever reinstalled. The
+compiled modules and the interface file that ``install`` placed are removed
+too.
 
 Post-Installation
 ~~~~~~~~~~~~~~~~~
@@ -153,6 +188,10 @@ Boolean                     Default Description
 ``lota_anticheat_extended`` on      Extended anti-cheat access
 =========================== ======= ======================================
 
+``sudo make verify`` prints the live value of every one of them, and the list
+it walks is read out of the policy sources, so a boolean added to the policy
+is reported without this table and that target drifting apart.
+
 Modify Tunables
 ~~~~~~~~~~~~~~~
 
@@ -190,31 +229,79 @@ socket that never appears:
 .. code:: bash
 
    # what the agent is allowed under the player's runtime directory
-   sudo sesearch -A -s lota_agent_t -t user_tmp_t
+   sudo sesearch -A -s lota_agent_t -t user_tmp_t -ds -dt
 
 A host that runs no titles does not need this module, and an agent without
 it keeps every other function.
 
-Steam
-~~~~~
+The client side of that socket is granted separately, because the two ends
+are refused for different reasons: ``lota_query_status`` covers the socket
+under ``/var/lib/lota`` and says nothing about ``user_tmp_t``, so a confined
+title granted only that reaches the system socket and is denied at the
+container one. ``lota_query_status_container`` grants the caller the runtime
+path -- search on ``/run``, search on the user temporary directories and
+write on the socket -- and ``lota_gaming_client`` calls both, so a title
+following the Interface Reference below reaches the agent from either side.
 
-Steam and games launched through Steam can query LOTA attestation status:
+Reading the module back out of the policy
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Every search below matches its types literally (``-ds -dt``). Without them
+``sesearch`` expands attributes and answers with the base policy's rules for
+``domain`` and ``unconfined_domain_type``, which hold without this module.
+
+Each search also starts from ``lota_agent_t``, the module's own type. A search
+from a title's domain misleads:
+
+* **The domain need not exist.** The Steam, Wine and games blocks are
+  ``optional_policy`` and are dropped at build time where the policy does not
+  declare the type. ``sesearch`` then refuses the search with
+  ``steam_t is not a valid type attribute``: the block is absent, not broken.
+* **The rules need not survive linking.** A title domain with
+  ``unconfined_domain_type`` already reaches every domain, so the linker drops
+  the module's rules out of it as redundant.
+
+The installed module keeps every rule, linked or not:
 
 .. code:: bash
 
-   # Verify Steam can access LOTA
-   sudo sesearch -A -s steam_t -t lota_var_t
+   # writes lota_gaming.cil into the working directory
+   rm -f lota_gaming.cil
+   sudo semodule -c -E lota_gaming
+   grep -E 'steam|wine' lota_gaming.cil
+
+With the file still there the extract stops at ``lota_gaming is already
+extracted with extension cil``; the module is not missing.
+
+Steam
+~~~~~
+
+Steam and games launched through Steam can query LOTA attestation status
+where the policy declares a Steam domain:
+
+.. code:: bash
+
+   # is the domain the Steam block needs declared here at all
+   seinfo -t | grep -w steam_t
+
+   # what the agent is allowed towards it, where it is declared
+   sudo sesearch -A -s lota_agent_t -t steam_t -ds -dt
+
+An empty first answer means no Steam domain: the block was dropped and only
+the extracted module holds its rules. Such a title runs under whatever domain
+the policy gives it.
 
 Proton/Wine
 ~~~~~~~~~~~
 
-Windows games running via Proton have access to LOTA for anti-cheat
-verification:
+Windows games running via Proton reach LOTA for anti-cheat verification.
+A declared ``wine_t`` is usually unconfined, so only the agent's side of the
+rules survives linking:
 
 .. code:: bash
 
-   # Check Wine access
-   sudo sesearch -A -s wine_t -t lota_agent_t
+   # what the agent is allowed towards a Proton title
+   sudo sesearch -A -s lota_agent_t -t wine_t -ds -dt
 
 Anti-Cheat Systems
 ~~~~~~~~~~~~~~~~~~
@@ -296,8 +383,18 @@ Common Issues
    sudo install -m 644 ../configs/udev/99-lota-tpm.rules \
        /usr/lib/udev/rules.d/99-lota-tpm.rules
    sudo udevadm control --reload-rules
-   sudo udevadm trigger --subsystem-match=tpm
+   sudo udevadm trigger --action=add --subsystem-match=tpm \
+       --subsystem-match=tpmrm
    ls -Z /dev/tpm*
+
+The resource manager is in subsystem ``tpmrm``, not ``tpm``, and it is the
+node the agent's hardening gate reads first, so a trigger naming ``tpm``
+alone brings ``/dev/tpm0`` back, exits 0 and leaves ``/dev/tpmrm0`` where it
+was. ``--action=add`` is what re-applies the label at all: udev evaluates
+``SECLABEL{selinux}`` when it adds a device, and the default ``change`` event
+re-runs the rules without moving it. Naming the two device paths
+(``udevadm trigger --action=add /dev/tpm0 /dev/tpmrm0``) does the same job,
+and a reboot does it unprompted, because udev creates both nodes then.
 
 .. _tpm-device-carries-selinux-label--expected-lota_tpm_device_t:
 
@@ -321,12 +418,27 @@ TPM DoS / DA lockout runbook
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 When ``LOTA_STATUS_TPM_LOCKOUT`` shows up on ``lota-agent status`` or on the
-D-Bus ``StatusChanged`` signal:
+D-Bus ``StatusChanged`` signal, confirm the chip is in dictionary-attack
+lockout:
 
 .. code:: bash
 
-   # Confirm the TPM is currently in dictionary-attack lockout.
-   sudo tpm2_getcap properties-variable | grep -E "lockoutCounter|lockoutInterval"
+   sudo tpm2_getcap properties-variable \
+       | grep -E "inLockout|lockoutAuthSet|TPM2_PT_LOCKOUT_COUNTER"
+
+The pattern uses ``tpm2_getcap``'s own names; any other spelling matches
+nothing and reads as a healthy TPM. A chip not in lockout answers::
+
+     lockoutAuthSet:            0
+     inLockout:                 0
+   TPM2_PT_LOCKOUT_COUNTER: 0x0
+
+``inLockout`` says the lockout is engaged; the counter, how close a chip still
+answering is to it. With ``lockoutAuthSet`` and the authorization lost, the
+reset below is unavailable and the lockout can only be waited out. Then find
+what is spending the attempts, and reset:
+
+.. code:: bash
 
    # Identify other processes holding the TPM resource manager fd.
    sudo lsof /dev/tpmrm0 /dev/tpm0
@@ -355,7 +467,7 @@ BPF program loading fails
    getsebool lota_bpf_load
 
    # Check BPF capabilities
-   sudo sesearch -A -s lota_agent_t -c bpf
+   sudo sesearch -A -s lota_agent_t -c bpf -ds -dt
 
 Steam cannot connect to LOTA
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
@@ -365,8 +477,17 @@ Steam cannot connect to LOTA
    # Verify socket label
    ls -Z /run/lota/lota.sock
 
-   # Check Steam access
-   sudo sesearch -A -s steam_t -t lota_var_t -c sock_file
+   # what the title actually runs as -- the rules apply to that domain
+   ps -eZ | grep -i steam
+
+   # is a Steam domain declared here at all
+   seinfo -t | grep -w steam_t
+
+   # what the agent is allowed towards it, where it is declared
+   sudo sesearch -A -s lota_agent_t -t steam_t -ds -dt
+
+The policy refuses an unconfined title nothing; look elsewhere for the
+failure.
 
 Network attestation blocked
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^
@@ -379,8 +500,10 @@ Network attestation blocked
    # Verify port definition
    sudo semanage port -l | grep lota
 
-The policy allows ``lota_agent_t`` to reach ``lota_port_t``, and a loadable
-module cannot carry port contexts, so the type is assigned at bring-up:
+The policy declares ``lota_port_t`` and labels nothing with it: a loadable
+module cannot carry port contexts, because ``portcon`` is base policy. It
+allows ``lota_agent_t`` to reach the type, and every assignment happens at
+bring-up:
 ``lota-install`` labels the CA and verifier ports it was given. An endpoint
 added later has to be labelled too, or the agent is refused at connect and the
 operator sees a connection error against a server that is running:
@@ -407,6 +530,23 @@ next to the plain errno::
 The state is read from ``/sys/fs/selinux/enforce``, so a permissive or SELinux-less
 host is not told to label a port for an ``EACCES`` that came from somewhere else.
 
+Two rules refuse that connect, and the message names the one it read. Turning
+``lota_network_attest`` off refuses every attestation endpoint whatever its
+label, and it is dontaudit\ ed the same way, so the agent reads the boolean
+before blaming the port -- relabelling would change nothing there, and
+``semanage`` answers ``already defined, modifying instead`` and exits 0, which
+reads as success::
+
+   Cannot reach 192.168.0.165:8444. SELinux is enforcing and the
+   lota_network_attest boolean is off, which is what refuses this connect; the
+   policy dontaudits it, so no AVC is logged anywhere. Labelling the port
+   changes nothing while the boolean is off -- semanage would answer 'already
+   defined' and exit 0. Turn it back on:
+     sudo setsebool -P lota_network_attest on
+
+On a host where the module is not loaded there is no boolean node to read, so
+neither cause is established and both commands are printed.
+
 **Ports are labelled one at a time, and a range is deliberately not offered.**
 Each publisher runs its own CA and verifier, so a fleet of them spans arbitrary
 ports and a range wide enough to cover them would be wide enough to cover
@@ -418,17 +558,33 @@ for the ones it is given and the message above names for the ones added later.
 Interface Reference
 -------------------
 
-Other SELinux policies can use LOTA interfaces:
+Other SELinux policies can use LOTA interfaces. The interfaces live in
+``lota.if``, and a caller's ``checkmodule`` run resolves them only from
+``/usr/share/selinux/devel/include/contrib/``. Installing from this tree with
+``sudo make install`` puts the file there. A host that installed the packages
+has the source at ``/usr/share/lota/selinux/lota.if`` instead -- the include
+directory belongs to ``selinux-policy-devel``, which a fleet host has no reason
+to carry -- so a machine that builds policy copies it once::
+
+   sudo install -m 0644 /usr/share/lota/selinux/lota.if \
+       /usr/share/selinux/devel/include/contrib/lota.if
+
+Without that copy, a module calling any of them fails at ``checkmodule``
+with the interface name as an unknown token.
 
 For Gaming Applications
 ~~~~~~~~~~~~~~~~~~~~~~~
 
 .. code:: sh
 
-   # Allow querying attestation status
+   # Allow querying attestation status over /var/lib/lota/lota.sock
    lota_query_status(myapp_t)
 
-   # Full gaming client access
+   # Allow querying it over /run/user/<uid>/lota/lota.sock instead,
+   # which is the socket a title inside a Proton container reaches
+   lota_query_status_container(myapp_t)
+
+   # Full gaming client access, both sockets included
    lota_gaming_client(myapp_t)
 
 For Anti-Cheat

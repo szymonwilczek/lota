@@ -11,13 +11,77 @@ Local patch checks
 Contributors can run ``scripts/check-patch [<base> [<head>]]`` before pushing a
 branch. The script reports each check with ``PASS`` or ``FAIL`` and includes a
 suggested fix for failures. It validates commit message shape, DCO trailers,
-commit signatures, message and patch whitespace, clang-format, gofmt, the full
+commit signatures, message and patch whitespace, clang-format, gofmt,
+golangci-lint, the absence of compiled files in the index, the full
 build, include hygiene, the license boundary
 (:doc:`license-boundary`), the public API and ABI surface
-(:doc:`api-stability`), the diagnostics the documentation quotes, the same
-hotpath documentation policy enforced by CI, and -- when the patch touches C
--- the Sparse, Smatch and Coccinelle analyzers and the stack-frame ceiling
-described below.
+(:doc:`api-stability`), the diagnostics the documentation quotes, the strict
+documentation build, the same hotpath documentation policy enforced by CI, and
+-- when the patch touches C -- the Sparse, Smatch and Coccinelle analyzers and
+the stack-frame ceiling described below.
+
+The Go linter (``golangci-lint``, configured by ``.golangci.yml``) is
+**blocking**. It lints each module the patch touches as a whole, since
+``unused`` needs the full module; a change to ``.golangci.yml`` lints every
+module. The module list comes from ``make print-lint-go-modules``, the list
+``make lint-go`` uses, and a Go module missing from it fails the gate. Without
+``golangci-lint`` installed the check is skipped; the ``Go static analysis``
+workflow runs it on every pull request.
+
+The tracked-file type check fails on any compiled file in the index: an
+executable, a shared library, an object file or an archive. Such files usually
+come from ``go build`` or ``make`` run inside a source directory, whose default
+output lands beside the sources; list those outputs in ``.gitignore``.
+
+The test build-directory check (``make check-test-build-dir``) fails on a test
+or example script that names the default build directory. C and Go tests take
+the path as a ``-D`` from their recipe; shell scripts read ``$LOTA_BUILD_DIR``
+and may name the default only as its fallback. A ``build`` directory that is
+not the tree's goes in ``scripts/test-build-dir-exemptions.txt``. The check
+runs on every patch.
+
+The fuzz check (``make fuzz-regress``) builds every C fuzz target and replays
+``fuzz/regressions/`` whenever a patch touches C, the Makefile or ``fuzz/``;
+targets link agent sources, so a change outside ``fuzz/`` can break one. It is
+skipped without clang; the ``fuzz`` CI job always runs it.
+
+The BPF mirror check (``make check-bpf-mirror``) runs when a patch touches
+``src/bpf/lota_lsm.bpf.c`` or ``fuzz/bpf_oracle/``. The oracle fuzzers run
+copies of BPF helpers, pinned by content in ``fuzz/bpf_oracle/mirror.lock``;
+when an original changes, re-verify the copy and run ``make
+update-bpf-mirror``. A line-number reference to the BPF source under
+``fuzz/bpf_oracle/`` also fails, since the lock misses a moved helper.
+
+The syzkaller matrix check (``make check-syzkaller-matrix``) runs when a patch
+touches ``src/bpf/lota_lsm.bpf.c``, ``syzkaller/`` or the Makefile. It fails
+when an LSM program has no row in the hook matrix of ``syzkaller/README.rst``,
+when a row names a program the source lacks, or when it names a call
+``syzkaller/lota.cfg.example`` does not enable. Without it a new hook can go
+unfuzzed silently.
+
+The strict documentation build (``make check-docs-strict``) is the build
+``docs.yml`` runs, with every warning promoted to an error, into a scratch
+output tree. It builds from nothing on purpose: Sphinx re-reads only the
+sources that changed, so an incremental build is silent about a problem in a
+file the patch did not touch, which is the case a gate exists for. It runs on
+every patch rather than only on the ones that touch ``Documentation/``, because
+a markup defect is introduced by whoever writes the markup and met by whoever
+next builds the docs. A contributor without Sphinx installed skips it; CI has
+it and decides.
+
+The shipped-configuration check (``make check-config-commands``) requires every
+option a file under ``policies/`` or ``configs/`` passes to a ``lota-*`` command
+to be in that command's option table in the source. A command with no table in
+the gate fails it.
+
+The private-errno check (``make check-private-errno``) refuses a ``tpm_*`` or
+``net_*`` return code rendered through ``strerror()``. Both families answer
+above the POSIX range (TPM at 4097, transport at 4353), which ``strerror()``
+prints as ``Unknown error 4098``; 4098 is the authorization failure that warns
+of a dictionary-attack lockout. ``tpm_strerror()`` and ``net_strerror()`` fall
+through to ``strerror()`` for ordinary errnos, so each is always safe on a value
+from its own layer. The check is syntactic and per function: a value passed
+through a second variable is left to review.
 
 Every commit in ``base..head`` must carry a good GPG or SSH signature; the
 check fails on any commit whose signature is missing, bad, or unverifiable.

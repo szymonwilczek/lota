@@ -57,6 +57,12 @@ bool tpm_is_locked_out(const struct tpm_context *ctx)
 	return false;
 }
 
+/* nothing here latches a lockout; linked only */
+void tpm_reset_lockout_state(struct tpm_context *ctx)
+{
+	(void)ctx;
+}
+
 int tpm_quote(struct tpm_context *ctx, const uint8_t *nonce, uint32_t pcr_mask,
 	      struct tpm_quote_response *response)
 {
@@ -71,6 +77,16 @@ int tpm_bind_profile(struct tpm_context *ctx, const struct profile_paths *paths)
 {
 	(void)ctx;
 	(void)paths;
+	return -ENOTSUP;
+}
+
+/* no TPM: the census refuses, so the bind goes ahead */
+int tpm_aik_slot_census(struct tpm_context *ctx, const char *base_dir,
+			struct profile_aik_slots *out)
+{
+	(void)ctx;
+	(void)base_dir;
+	(void)out;
 	return -ENOTSUP;
 }
 

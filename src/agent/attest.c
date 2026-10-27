@@ -38,6 +38,7 @@
 #include "daemon.h"
 #include "enroll.h"
 #include "esrt.h"
+#include "exit_status.h"
 #include "hardening.h"
 #include "iommu.h"
 #include "io_utils.h"
@@ -75,11 +76,27 @@ static int read_kernel_measurement_digest(struct tpm_context *ctx,
 }
 
 void attest_warn_cert_orphaned(const struct profile_paths *paths,
-			       const char *label)
+			       const char *label, int key_present)
 {
-	if (!tpm_aik_provisioning_orphans_cert(
-		    tpm_aik_key_present(&g_agent.tpm_ctx),
-		    paths ? profile_aik_cert_stored(paths) : false))
+	uint8_t spki[LOTA_MAX_AIK_PUB_SIZE];
+	size_t spki_len = 0;
+	int cert_match = 0;
+
+	if (!paths || !profile_aik_cert_stored(paths))
+		return;
+
+	/*
+	 * Read after provisioning: the key the certificate has to be compared
+	 * against is the one that is at the handle now, and before provisioning
+	 * there may be none.
+	 */
+	if (tpm_get_aik_public(&g_agent.tpm_ctx, spki, sizeof(spki),
+			       &spki_len) < 0)
+		return;
+
+	cert_match = aik_cert_matches_key(paths->aik_cert, spki, spki_len);
+
+	if (!tpm_aik_provisioning_orphans_cert(key_present, true, cert_match))
 		return;
 
 	/* label goes last: on some targets it is a sentence of its own */
@@ -108,8 +125,10 @@ static uint32_t rand_u32_best_effort(void)
 }
 
 static void collect_kernel_security_features(bool *module_sig, bool *secureboot,
-					     bool *lockdown)
+					     bool *lockdown, bool *appraisal)
 {
+	if (appraisal)
+		*appraisal = bpf_loader_kernel_appraises_exec() == 0;
 	if (module_sig)
 		*module_sig = bpf_loader_kernel_module_sig_enforced(
 				      LOTA_MODULE_SIG_ENFORCE_PATH) == 0;
@@ -200,13 +219,11 @@ int export_policy(int mode)
 	}
 
 	/*
-	 * Boot-chain measurement digest (kernel-relevant PCR selection).
+	 * Kernel digest: the bootloader's measurement of the image.
 	 *
-	 * No file is read for it, so the exported document is given the register
-	 * it came from and the kernel this host is running.
-	 * A configured kernel_path tells the agent where to find the kernel image
-	 * on a distribution that does not ship /boot/vmlinuz-<release>;
-	 * it selects nothing about this digest.
+	 * No file is read for it, so the document also carries the running
+	 * kernel's release. kernel_path only locates the image on a distribution
+	 * without /boot/vmlinuz-<release>; it selects nothing about this digest.
 	 */
 	{
 		struct utsname uts;
@@ -224,28 +241,58 @@ int export_policy(int mode)
 	if (tpm_kernel_path_is_overridden(&g_agent.tpm_ctx)) {
 		fprintf(stderr,
 			"Note: kernel_path does not affect this policy. The "
-			"measured-boot digest below is the value of a PCR as "
-			"this host booted, not a hash of any file.\n");
+			"kernel digest below is the bootloader's measurement "
+			"of the image it loaded, not a hash of any file this "
+			"agent read.\n");
 	}
 
 	{
-		int selected_pcr = -1;
-		ret = read_kernel_measurement_digest(
-			&g_agent.tpm_ctx, snap.kernel_hash, &selected_pcr);
-		if (ret == 0) {
+		uint8_t *event_log = malloc(TPM_MAX_EVENT_LOG_SIZE);
+		size_t event_log_size = 0;
+		struct kernel_image image;
+
+		/*
+		 * The kernel_hashes gate compares the image digest, not PCR 9:
+		 * that register folds in every file the bootloader read,
+		 * so a pin on it refuses the host it was exported from.
+		 */
+		if (!event_log) {
+			snap.kernel_hash_error = -ENOMEM;
+		} else {
+			ret = tpm_read_event_log(event_log,
+						 TPM_MAX_EVENT_LOG_SIZE,
+						 &event_log_size);
+			if (ret < 0)
+				snap.kernel_hash_error = ret;
+			else
+				snap.kernel_hash_error =
+					kernel_image_from_event_log(
+						event_log, event_log_size,
+						&image);
+		}
+
+		if (snap.kernel_hash_error == 0) {
+			memcpy(snap.kernel_hash, image.digest, LOTA_HASH_SIZE);
+			snprintf(snap.kernel_image_path,
+				 sizeof(snap.kernel_image_path), "%s",
+				 image.path);
 			snap.kernel_hash_valid = true;
-			snap.kernel_hash_pcr = selected_pcr;
 			fprintf(stderr,
-				"Kernel measurement digest source: PCR %d "
-				"(measured boot)\n",
-				selected_pcr);
+				"Kernel measurement: the image the bootloader "
+				"loaded, %s\n",
+				snap.kernel_image_path);
 		} else {
 			fprintf(stderr,
-				"Warning: Failed to read kernel-relevant "
-				"measured boot PCR "
-				"(tried 11/9/8/4): %s\n",
-				tpm_strerror(ret));
+				"Warning: no kernel digest to export: %s\n",
+				policy_kernel_hash_reason(
+					snap.kernel_hash_error));
+			fprintf(stderr,
+				"The policy is written with an empty "
+				"kernel_hashes list; the other gates are "
+				"unaffected.\n");
 		}
+
+		free(event_log);
 	}
 
 	/* Agent binary hash */
@@ -281,8 +328,10 @@ int export_policy(int mode)
 
 		snap.iommu_enabled = iommu_verify_full(&iommu_status);
 		snap.enforce_mode = (mode == LOTA_MODE_ENFORCE);
-		collect_kernel_security_features(
-			&snap.module_sig, &snap.secureboot, &snap.lockdown);
+		collect_kernel_security_features(&snap.module_sig,
+						 &snap.secureboot,
+						 &snap.lockdown,
+						 &snap.ima_appraisal);
 	}
 
 	tpm_cleanup(&g_agent.tpm_ctx);
@@ -345,15 +394,18 @@ static int build_attestation_report(const struct verifier_challenge *challenge,
 		bool module_sig = false;
 		bool secureboot = false;
 		bool lockdown = false;
+		bool appraisal = false;
 
 		collect_kernel_security_features(&module_sig, &secureboot,
-						 &lockdown);
+						 &lockdown, &appraisal);
 		if (module_sig)
 			report->header.flags |= LOTA_REPORT_FLAG_MODULE_SIG;
 		if (secureboot)
 			report->header.flags |= LOTA_REPORT_FLAG_SECUREBOOT;
 		if (lockdown)
 			report->header.flags |= LOTA_REPORT_FLAG_LOCKDOWN;
+		if (appraisal)
+			report->header.flags |= LOTA_REPORT_FLAG_IMA_APPRAISAL;
 	}
 
 	/*
@@ -849,14 +901,37 @@ resolve_attest_profile(const char *ca_cert, struct profile_paths *storage)
 	return storage;
 }
 
+/*
+ * Exit status for a refused self-measurement: LOTA_EXIT_OPERATOR_ACTION
+ * when lota_daemon_exit_status() says a restart cannot clear it, else 1.
+ */
+static int self_measure_exit_status(int ret)
+{
+	int status = lota_daemon_exit_status(
+		ret, g_agent.tpm_ctx.boot_commitment_state);
+
+	if (status != LOTA_EXIT_OPERATOR_ACTION)
+		return 1;
+
+	lota_err(
+		"Starting the loop again cannot clear this: PCR 14 is written once per boot, so the register refuses this build for as long as the host stays up. The unit stops here and stays failed; the recovery is the reboot named above.");
+
+	return LOTA_EXIT_OPERATOR_ACTION;
+}
+
 int do_attest(const char *server, int port, const char *ca_cert,
 	      int skip_verify, const uint8_t *pin_sha256)
 {
 	struct profile_paths storage;
 	const struct profile_paths *paths;
+	int key_present;
 	int ret;
 
 	printf("=== Remote Attestation ===\n\n");
+
+	/* reads a path, not the chip: refuse before the TPM is opened */
+	if (tpm_firmware_refuses_attestation(&g_agent.tpm_ctx))
+		return 1;
 
 	paths = resolve_attest_profile(ca_cert, &storage);
 
@@ -875,7 +950,7 @@ int do_attest(const char *server, int port, const char *ca_cert,
 	ret = net_init();
 	if (ret < 0) {
 		fprintf(stderr, "Failed to initialize network: %s\n",
-			strerror(-ret));
+			net_strerror(ret));
 		return 1;
 	}
 
@@ -901,7 +976,7 @@ int do_attest(const char *server, int port, const char *ca_cert,
 	}
 
 	printf("Checking AIK...\n");
-	attest_warn_cert_orphaned(paths, paths ? paths->id : NULL);
+	key_present = tpm_aik_key_present(&g_agent.tpm_ctx);
 	ret = tpm_provision_aik(&g_agent.tpm_ctx);
 	if (ret < 0) {
 		fprintf(stderr, "Failed to provision AIK: %s\n",
@@ -910,6 +985,7 @@ int do_attest(const char *server, int port, const char *ca_cert,
 		net_cleanup();
 		return 1;
 	}
+	attest_warn_cert_orphaned(paths, paths ? paths->id : NULL, key_present);
 
 	/*
 	 * Self-measurement extends PCR14 with a commitment over the agent
@@ -919,11 +995,14 @@ int do_attest(const char *server, int port, const char *ca_cert,
 	printf("Performing self-measurement...\n");
 	ret = self_measure(&g_agent.tpm_ctx);
 	if (ret < 0) {
+		int status;
+
 		fprintf(stderr, "Self-measurement failed: %s\n",
 			tpm_strerror(ret));
+		status = self_measure_exit_status(ret);
 		tpm_cleanup(&g_agent.tpm_ctx);
 		net_cleanup();
-		return 1;
+		return status;
 	}
 
 	ret = tpm_aik_load_metadata(&g_agent.tpm_ctx);
@@ -1125,8 +1204,6 @@ static int bind_target(struct attest_target *t)
 		return ret;
 	}
 
-	attest_warn_cert_orphaned(&t->paths, t->label);
-
 	ret = tpm_provision_aik(&g_agent.tpm_ctx);
 	if (ret < 0) {
 		lota_err("AIK unavailable for %s: %s", t->label,
@@ -1145,26 +1222,32 @@ static int bind_target(struct attest_target *t)
 	if (ret < 0)
 		return ret;
 
+	/*
+	 * Only known after the key read above. Stale cache is already dropped;
+	 * the warning is for an operator who re-provisioned the handle
+	 */
+	if (tpm_aik_object_replaced(&g_agent.tpm_ctx))
+		lota_warn("The attestation key for %s is not the one bound "
+			  "earlier: another object stands at its persistent "
+			  "handle now. Nothing cached for the old key is kept, "
+			  "and this agent needs no restart to use the new one.",
+			  t->label);
+
 	return 0;
 }
 
-/*
- * Has this publisher ever enrolled?
- *
- * Record is written by the enrollment ceremony, whether that ran as -enroll
- * at install time or on demand here, so its absence is what "never enrolled" means.
- */
-static bool target_is_enrolled(const struct attest_target *t)
+/* enroll_state_load_path() result; -ENOENT without a profile */
+static int target_enrollment_rc(const struct attest_target *t)
 {
 	struct enroll_state st;
-	bool ok;
+	int rc;
 
 	if (!t->has_profile)
-		return false;
+		return -ENOENT;
 
-	ok = enroll_state_load_path(t->paths.enroll_state, &st) == 0;
+	rc = enroll_state_load_path(t->paths.enroll_state, &st);
 	OPENSSL_cleanse(&st, sizeof(st));
-	return ok;
+	return rc;
 }
 
 /*
@@ -1183,10 +1266,25 @@ static bool target_is_enrolled(const struct attest_target *t)
 static bool enroll_target_if_needed(struct attest_target *t)
 {
 	uint64_t now_ms = monotonic_ms();
+	int enroll_rc;
 	int ret;
 
-	if (!t->has_profile || target_is_enrolled(t))
+	if (!t->has_profile)
 		return true;
+
+	enroll_rc = target_enrollment_rc(t);
+	if (enroll_rc == 0)
+		return true;
+
+	/* enrolling over it would reissue the cert and lose its endpoint */
+	if (enroll_state_record_present(enroll_rc)) {
+		lota_warn("Enrollment record for publisher %s is unreadable "
+			  "(%s); refusing to enroll over it. Restore %s, or "
+			  "re-enroll deliberately with --reenroll",
+			  t->paths.id, strerror(-enroll_rc),
+			  t->paths.enroll_state);
+		return false;
+	}
 
 	t->enroll_pending = false;
 
@@ -1271,12 +1369,71 @@ static void rotate_bound_aik_if_due(uint32_t aik_ttl)
 			  (unsigned long)g_agent.tpm_ctx.aik_meta.generation);
 }
 
+/*
+ * Enable unattended AIK certificate renewal for @t when its enrollment record
+ * holds a CA endpoint; otherwise --reenroll is the fallback.
+ * Re-reads the record on every call.
+ */
+static void resolve_target_renew(struct attest_target *t)
+{
+	char at[LOTA_RENEW_AT_LEN];
+	struct enroll_state est;
+	enum attest_renew_say say;
+	bool enrolled;
+	int load_rc = -ENOENT;
+
+	memset(&est, 0, sizeof(est));
+	if (t->has_profile)
+		load_rc = enroll_state_load_path(t->paths.enroll_state, &est);
+	enrolled = load_rc == 0;
+
+	say = attest_target_resolve_renew(t, enrolled ? est.ca_server : NULL,
+					  enrolled ? est.ca_port : 0);
+	OPENSSL_cleanse(&est, sizeof(est));
+
+	/* off either way; but the endpoint exists, inside the refused record */
+	if (say == ATTEST_RENEW_OFF && enroll_state_record_present(load_rc)) {
+		lota_info("AIK certificate auto-renewal off for %s: its "
+			  "enrollment record could not be read (%s); the "
+			  "recorded endpoint is inside it",
+			  t->label, strerror(-load_rc));
+		return;
+	}
+
+	switch (say) {
+	case ATTEST_RENEW_ENABLED:
+		lota_info("AIK certificate auto-renewal enabled for %s%s",
+			  t->label, attest_target_renew_at(t, at, sizeof(at)));
+		break;
+	case ATTEST_RENEW_OFF:
+		lota_info("AIK certificate auto-renewal off for %s: no "
+			  "recorded CA endpoint (run --enroll to record one)",
+			  t->label);
+		break;
+	case ATTEST_RENEW_SILENT:
+		break;
+	}
+
+	/* renewal dials the recorded endpoint, not the configured CA */
+	if (attest_target_should_announce_renew_move(t))
+		lota_warn("%s: the enrollment records %s:%d, which is where "
+			  "renewal dials, not the CA this profile is "
+			  "configured with; run --enroll --ca-server %s "
+			  "--ca-port %d --ca-cert %s to move it",
+			  t->label, t->renew_ca, t->renew_ca_port, t->ca,
+			  t->ca_port, t->ca_cert);
+}
+
 /* Renew this target's CA-issued AIK certificate before it lapses */
 static void renew_target_cert_if_due(struct attest_target *t)
 {
+	char at[LOTA_RENEW_AT_LEN];
 	int64_t remaining = 0, total = 0;
 	uint64_t mono_ms = monotonic_ms();
 	int ret;
+
+	/* every pass: the loop may have just enrolled this publisher */
+	resolve_target_renew(t);
 
 	if (!t->auto_renew || mono_ms < t->next_renew_ms)
 		return;
@@ -1285,14 +1442,17 @@ static void renew_target_cert_if_due(struct attest_target *t)
 	if (!aik_cert_renew_due(remaining, total))
 		return;
 
-	lota_info("AIK certificate renewal due for %s (%lld s left of %lld s)",
-		  t->label, (long long)remaining, (long long)total);
+	lota_info("AIK certificate renewal due for %s%s (%lld s left of "
+		  "%lld s)",
+		  t->label, attest_target_renew_at(t, at, sizeof(at)),
+		  (long long)remaining, (long long)total);
 
 	ret = enroll_renew_cert(&g_agent.tpm_ctx, &t->paths,
 				t->ca_cert[0] ? t->ca_cert : NULL);
 	if (ret == 0) {
 		t->renew_backoff = 0;
-		lota_info("AIK certificate renewed for %s", t->label);
+		lota_info("AIK certificate renewed for %s%s", t->label,
+			  attest_target_renew_at(t, at, sizeof(at)));
 		return;
 	}
 
@@ -1307,10 +1467,10 @@ static void renew_target_cert_if_due(struct attest_target *t)
 		if (delay > MAX_BACKOFF_SECONDS)
 			delay = MAX_BACKOFF_SECONDS;
 		t->next_renew_ms = mono_ms + (uint64_t)delay * 1000;
-		lota_warn("AIK certificate renewal failed for %s (%s); "
+		lota_warn("AIK certificate renewal failed for %s%s (%s); "
 			  "retry in %ds, cert expires in %lld s",
-			  t->label, strerror(-ret), delay,
-			  (long long)remaining);
+			  t->label, attest_target_renew_at(t, at, sizeof(at)),
+			  strerror(-ret), delay, (long long)remaining);
 		sdnotify_status("AIK cert renewal failing for %s, expires in "
 				"%lld s",
 				t->label, (long long)remaining);
@@ -1516,6 +1676,7 @@ static void publish_aggregate_status(const struct attest_target *targets,
 				     size_t count, uint32_t *status_flags)
 {
 	struct attest_aggregate agg;
+	uint32_t flags;
 
 	attest_aggregate_compute(targets, count, &agg);
 
@@ -1524,9 +1685,11 @@ static void publish_aggregate_status(const struct attest_target *targets,
 	else
 		*status_flags &= ~LOTA_STATUS_ATTESTED;
 
-	ipc_update_status(&g_agent.ipc_ctx,
-			  reconcile_tpm_lockout(*status_flags),
-			  agg.valid_until);
+	flags = reconcile_tpm_lockout(*status_flags);
+
+	g_attest_counters.host_flags = flags & LOTA_IPC_SYNC_HOST_FLAGS;
+
+	ipc_update_status(&g_agent.ipc_ctx, flags, agg.valid_until);
 
 	if (agg.attested)
 		sdnotify_status("Attested (%zu publisher%s), valid until %lu",
@@ -1586,36 +1749,11 @@ static void announce_targets(const struct attest_target *targets, size_t count)
 			  targets[0].server, targets[0].port);
 }
 
-/*
- * Whether each publisher's AIK certificate can be renewed without an operator.
- *
- * It is short-lived and would otherwise lapse a day after install.
- * Enabled per publisher, whenever that profile recorded a CA endpoint at enroll
- * time; manual --reenroll stays the fallback when no endpoint is on disk.
- * Re-run after a reload, since a publisher added since has none of this resolved.
- */
+/* The same decision for the whole list, at startup and after a reload */
 static void resolve_auto_renew(struct attest_target *targets, size_t count)
 {
-	for (size_t i = 0; i < count; i++) {
-		struct enroll_state est;
-		bool was = targets[i].auto_renew;
-
-		targets[i].auto_renew =
-			targets[i].has_profile &&
-			enroll_state_load_path(targets[i].paths.enroll_state,
-					       &est) == 0;
-		if (targets[i].auto_renew == was && was)
-			continue;
-		if (targets[i].auto_renew)
-			lota_info("AIK certificate auto-renewal enabled for %s",
-				  targets[i].label);
-		else
-			lota_info(
-				"AIK certificate auto-renewal off for %s: no "
-				"recorded CA endpoint (run --enroll to record "
-				"one)",
-				targets[i].label);
-	}
+	for (size_t i = 0; i < count; i++)
+		resolve_target_renew(&targets[i]);
 }
 
 /*
@@ -1638,9 +1776,16 @@ static int continuous_attest_run(const struct lota_config *cfg,
 	uint32_t status_flags = 0;
 	uint64_t wd_usec = 0;
 	bool wd_enabled;
+	int key_present;
 	int ret;
 
 	lota_info("Continuous attestation starting");
+
+	/* reads a path, not the chip: refuse before the TPM is opened */
+	if (tpm_firmware_refuses_attestation(&g_agent.tpm_ctx)) {
+		lota_err("This host cannot attest: it did not boot via UEFI.");
+		return 1;
+	}
 
 	attest_peer_init(&peer);
 
@@ -1683,7 +1828,7 @@ static int continuous_attest_run(const struct lota_config *cfg,
 	 */
 	ret = net_init();
 	if (ret < 0) {
-		lota_err("Failed to initialize network: %s", strerror(-ret));
+		lota_err("Failed to initialize network: %s", net_strerror(ret));
 		return 1;
 	}
 
@@ -1708,8 +1853,7 @@ static int continuous_attest_run(const struct lota_config *cfg,
 	}
 
 	lota_info("Checking AIK");
-	if (targets[0].has_profile)
-		attest_warn_cert_orphaned(&targets[0].paths, targets[0].label);
+	key_present = tpm_aik_key_present(&g_agent.tpm_ctx);
 	ret = tpm_provision_aik(&g_agent.tpm_ctx);
 	if (ret < 0) {
 		lota_err("Failed to provision AIK: %s", tpm_strerror(ret));
@@ -1717,6 +1861,9 @@ static int continuous_attest_run(const struct lota_config *cfg,
 		net_cleanup();
 		return 1;
 	}
+	if (targets[0].has_profile)
+		attest_warn_cert_orphaned(&targets[0].paths, targets[0].label,
+					  key_present);
 
 	/*
 	 * Self-measurement extends PCR14 with a commitment over the agent
@@ -1737,10 +1884,13 @@ static int continuous_attest_run(const struct lota_config *cfg,
 		 * (typically a cold reboot after a live binary upgrade) before
 		 * traffic resumes.
 		 */
+		int status;
+
 		lota_err("Self-measurement failed: %s", tpm_strerror(ret));
+		status = self_measure_exit_status(ret);
 		tpm_cleanup(&g_agent.tpm_ctx);
 		net_cleanup();
-		return 1;
+		return status;
 	}
 
 	ret = tpm_aik_load_metadata(&g_agent.tpm_ctx);

@@ -11,8 +11,13 @@
 #   - UEFI Secure Boot enabled
 #   - Kernel lockdown mode active
 #
-# Before deployment, verify system meets requirements:
-#   lota-agent --verify-security-state
+# Check a host before deployment; require_iommu, require_module_sig,
+# require_secureboot and require_lockdown must be true:
+#
+#   sudo lota-agent --export-policy | grep '^require_'
+#
+# require_enforce is the agent's mode, not the MAC's: check the MAC with
+# getenforce (SELinux) or aa-status (AppArmor).
 
 name: strict
 description: "Strict security policy - all protections required"
@@ -56,5 +61,8 @@ require_enforce: true
 require_module_sig: true
 require_secureboot: true # event-log enforced (firmware-measured SecureBoot variable)
 require_lockdown: true
+# needs IMA-signed executables on the host, from distribution packages
+# or the operator's image pipeline; a stock host cannot satisfy it
+require_ima_appraisal: true
 require_cmdline_policy: true # event-log enforced kernel cmdline denylist (PCR 8)
 cmdline_deny: []

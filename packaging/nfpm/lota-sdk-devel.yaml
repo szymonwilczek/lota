@@ -23,8 +23,15 @@ changelog: ./build/changelog.gen.yaml
 
 overrides:
   rpm:
+    # rpmbuild derives these from the .pc files; nfpm does not
+    provides:
+      - pkgconfig(lota-gaming)
+      - pkgconfig(lota-server)
+      - pkgconfig(lota-anticheat)
+      - pkgconfig(lota-wine-hook)
+    # headers and .so symlink fit one lota-sdk build; pinned as in the spec
     depends:
-      - lota-sdk
+      - lota-sdk = ${LOTA_RPM_VERSION}
       - pkgconfig(libcrypto)
 
 contents:

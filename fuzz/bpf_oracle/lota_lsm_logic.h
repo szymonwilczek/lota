@@ -12,8 +12,7 @@
  *
  * The macro values match the BPF program's own definitions.
  *
- * This is a copy, so it can drift from production:
- * MIRROR.md records the source lines and a check guards against silent divergence.
+ * mirror.lock pins each original; make check-bpf-mirror fails on drift.
  *
  * Eventual production change ("lota_devt.h" both sides include) removes the copy.
  */
@@ -23,18 +22,18 @@
 
 #include "lota_devt.h"
 
-/* --- src/bpf/lota_lsm.bpf.c:83-94 --- */
+/* --- src/bpf/lota_lsm.bpf.c LOTA_O_* --- */
 #define LOTA_O_ACCMODE 00000003
 #define LOTA_O_WRONLY 00000001
 #define LOTA_O_RDWR 00000002
 #define LOTA_O_TRUNC 00001000
 
-/* --- src/bpf/lota_lsm.bpf.c:96-101 --- */
+/* --- src/bpf/lota_lsm.bpf.c S_IFMT, S_IFCHR --- */
 #define LOTA_S_IFMT 00170000
 #define LOTA_S_IFCHR 0020000
 
 /*
- * MIRROR of is_write_open_flags (src/bpf/lota_lsm.bpf.c:737)
+ * MIRROR of is_write_open_flags (src/bpf/lota_lsm.bpf.c)
  * body verbatim
  */
 static inline int mirror_is_write_open_flags(int flags)
@@ -51,7 +50,7 @@ static inline int mirror_is_write_open_flags(int flags)
 }
 
 /*
- * MIRROR of is_kernel_mem_device (src/bpf/lota_lsm.bpf.c:760), with the
+ * MIRROR of is_kernel_mem_device (src/bpf/lota_lsm.bpf.c), with the
  * BPF_CORE_READ(file -> inode -> {i_mode,i_rdev}) reads lifted to the caller.
  * Post-read body is verbatim, including the lota_dev_major/minor wrappers
  * over the real LOTA_DEVT_* macros.
@@ -75,11 +74,11 @@ static inline int mirror_is_kernel_mem_device(unsigned int i_mode,
 	return minor == 1 || minor == 2 || minor == 4;
 }
 
-/* --- src/bpf/lota_lsm.bpf.c:64-65 --- */
+/* --- src/bpf/lota_lsm.bpf.c BINPRM_FLAGS_PATH_INACCESSIBLE --- */
 #define LOTA_BINPRM_FLAGS_PATH_INACCESSIBLE (1U << 2)
 
 /*
- * MIRROR of is_inaccessible_exec_path (src/bpf/lota_lsm.bpf.c:801),
+ * MIRROR of is_inaccessible_exec_path (src/bpf/lota_lsm.bpf.c),
  * with the BPF_CORE_READ(bprm -> {interp_flags,fdpath}) reads lifted
  * to the caller.
  * fdpath_present is the truth of the original's non-NULL fdpath pointer.
@@ -94,7 +93,7 @@ static inline int mirror_is_inaccessible_exec(unsigned int interp_flags,
 }
 
 /*
- * MIRROR of is_shebang_binprm (src/bpf/lota_lsm.bpf.c:788),
+ * MIRROR of is_shebang_binprm (src/bpf/lota_lsm.bpf.c),
  * with the BPF_CORE_READ(bprm -> buf[0..1]) reads lifted to the caller.
  */
 static inline int mirror_is_shebang(char c0, char c1)

@@ -180,6 +180,101 @@ static void test_parse_rejects_malformed(void)
 	PASS();
 }
 
+/* same refusal vocabulary as the direct blob */
+static void test_parse_names_the_field_it_refused(void)
+{
+	uint8_t blob[LOTA_ENVELOPE_HEADER_SIZE + 320 + 4096];
+	struct lota_envelope_meta out;
+	struct lota_blob_refusal why;
+	size_t n;
+
+	TEST("a refused envelope names the field it was refused on");
+
+	n = build_blob(blob);
+	if (lota_envelope_parse_header_why(blob, n, &out, NULL, &why) != 0 ||
+	    why.reason != LOTA_BLOB_OK) {
+		FAIL("a good header did not parse cleanly");
+		return;
+	}
+
+	n = build_blob(blob);
+	blob[0] ^= 0xFF;
+	if (lota_envelope_parse_header_why(blob, n, &out, NULL, &why) !=
+		    -EINVAL ||
+	    why.reason != LOTA_BLOB_MAGIC) {
+		FAIL("magic");
+		return;
+	}
+
+	n = build_blob(blob);
+	blob[4] = 0x07;
+	if (lota_envelope_parse_header_why(blob, n, &out, NULL, &why) !=
+		    -EINVAL ||
+	    why.reason != LOTA_BLOB_VERSION || why.value != 7) {
+		FAIL("version");
+		return;
+	}
+
+	n = build_blob(blob);
+	blob[44] = 1;
+	if (lota_envelope_parse_header_why(blob, n, &out, NULL, &why) !=
+		    -EINVAL ||
+	    why.reason != LOTA_BLOB_RESERVED) {
+		FAIL("reserved");
+		return;
+	}
+
+	n = build_blob(blob);
+	lota__seal_write_le16(blob + 8, 0);
+	if (lota_envelope_parse_header_why(blob, n, &out, NULL, &why) !=
+		    -EINVAL ||
+	    why.reason != LOTA_BLOB_KEK_LEN) {
+		FAIL("kek_blob_len");
+		return;
+	}
+
+	n = build_blob(blob);
+	lota__seal_write_le32(blob + 12, LOTA_ENVELOPE_MAX_PAYLOAD + 1);
+	if (lota_envelope_parse_header_why(blob, n, &out, NULL, &why) !=
+		    -EINVAL ||
+	    why.reason != LOTA_BLOB_PAYLOAD_LEN ||
+	    why.expected != LOTA_ENVELOPE_MAX_PAYLOAD) {
+		FAIL("payload_len");
+		return;
+	}
+
+	n = build_blob(blob);
+	if (lota_envelope_parse_header_why(blob, LOTA_ENVELOPE_HEADER_SIZE - 1,
+					   &out, NULL, &why) != -EMSGSIZE ||
+	    why.reason != LOTA_BLOB_SHORT) {
+		FAIL("short header");
+		return;
+	}
+
+	if (lota_envelope_parse_header_why(blob, n + 1, &out, NULL, &why) !=
+		    -EMSGSIZE ||
+	    why.reason != LOTA_BLOB_BODY_LENGTH || why.expected != n) {
+		FAIL("trailing slack");
+		return;
+	}
+
+	PASS();
+}
+
+/* read off written bytes; LSEL twin in test_seal_blob.c */
+static void test_magic_is_the_four_bytes_the_header_names(void)
+{
+	uint8_t blob[LOTA_ENVELOPE_HEADER_SIZE + 320 + 4096];
+
+	TEST("an envelope opens with the four bytes LENV");
+	build_blob(blob);
+	if (memcmp(blob, "LENV", 4) != 0) {
+		FAIL("the blob does not start with LENV");
+		return;
+	}
+	PASS();
+}
+
 static void test_is_envelope(void)
 {
 	uint8_t env[LOTA_ENVELOPE_HEADER_SIZE + 320 + 4096];
@@ -350,6 +445,8 @@ int main(void)
 	test_serialize_roundtrip();
 	test_serialize_rejects_bad_fields();
 	test_parse_rejects_malformed();
+	test_parse_names_the_field_it_refused();
+	test_magic_is_the_four_bytes_the_header_names();
 	test_is_envelope();
 	test_aead_roundtrip();
 	test_aead_rejects_tamper();

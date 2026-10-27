@@ -149,6 +149,16 @@ func run(listen string, cfg *runConfig, log *slog.Logger) error {
 		return fmt.Errorf("at least one of -ek-root-bundle or -ek-root is required")
 	}
 
+	// enroll silently swaps a non-positive ceiling for its default
+	if cfg.sessionTTL <= 0 {
+		return fmt.Errorf("-session-ttl must be positive (got %s); omit the flag for the default of %s",
+			cfg.sessionTTL, enroll.DefaultSessionTTL)
+	}
+	if cfg.maxPending < 1 {
+		return fmt.Errorf("-max-pending must be at least 1 (got %d); omit the flag for the default of %d",
+			cfg.maxPending, enroll.DefaultMaxPending)
+	}
+
 	caCertPEM, err := os.ReadFile(cfg.caCertPath)
 	if err != nil {
 		return fmt.Errorf("read ca-cert: %w", err)
@@ -305,11 +315,23 @@ func run(listen string, cfg *runConfig, log *slog.Logger) error {
 		}
 	}()
 
-	log.Info("lota-attest-ca listening", "address", ln.Addr().String(),
-		"ek_roots", len(ekRootPEMs), "ek_intermediates", len(ekIntermediatePEMs),
-		"ek_crls", issuer.EKCRLCount(),
-		"aik_cert_ttl", cfg.aikCertTTL.String())
+	log.Info("lota-attest-ca listening",
+		startupFields(cfg, ln.Addr().String(), len(ekRootPEMs),
+			len(ekIntermediatePEMs), issuer.EKCRLCount())...)
 	return srv.Serve(ctx, ln)
+}
+
+// startupFields lists the running configuration, every enforced bound included.
+func startupFields(cfg *runConfig, addr string, roots, intermediates, crls int) []any {
+	return []any{
+		"address", addr,
+		"ek_roots", roots,
+		"ek_intermediates", intermediates,
+		"ek_crls", crls,
+		"aik_cert_ttl", cfg.aikCertTTL.String(),
+		"session_ttl", cfg.sessionTTL.String(),
+		"max_pending", cfg.maxPending,
+	}
 }
 
 // splitPEMCerts expands a PEM bundle into one []byte per CERTIFICATE block

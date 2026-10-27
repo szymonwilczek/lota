@@ -45,6 +45,9 @@ Build
 Both build from ``make examples`` at the repository root, into
 ``build/examples/``.
 
+``run.sh`` looks for them in ``BIN`` and ``EXAMPLES_BIN`` if set, else in
+``$LOTA_BUILD_DIR``, else in ``build/``.
+
 The C step builds the way an integrator's does: through ``pkg-config``
 against the **installed** SDK, never against the build tree. ``make
 examples`` first lays the package contents out under ``build/stage`` (the
@@ -58,6 +61,12 @@ examples`` first lays the package contents out under ``build/stage`` (the
 
 With the packages installed system-wide, that line is the whole build.
 
+``libcurl`` is the one dependency here that is not LOTA's own, and a host is
+not expected to have it. Without ``libcurl-devel`` ``make examples`` prints
+``SKIP: lota-ci-attest (install libcurl-devel)`` and carries on: the Go gate
+beside it still builds, and so does every other example. The gate can be
+driven against a step built elsewhere.
+
 Run the end-to-end proof
 ========================
 
@@ -66,10 +75,12 @@ Run the end-to-end proof
    make all examples
    ./examples/ci-gate/run.sh
 
-``run.sh`` needs no root and no real TPM. It starts a throwaway swTPM,
-runs ``lota-agent`` under ``systemd-socket-activate`` so the agent listens
-on a path in ``/tmp`` instead of ``/run/lota``, and then asserts the two
-outcomes that matter:
+``run.sh`` needs no root and no real TPM, and no LOTA configuration: the
+agent it starts serves its own simulated verdict, and the root-only
+``/etc/lota/lota.conf`` of a host that does run LOTA is stepped over with a
+line saying so. It starts a throwaway swTPM, runs ``lota-agent`` under
+``systemd-socket-activate`` so the agent listens on a path in ``/tmp``
+instead of ``/run/lota``, and then asserts the two outcomes that matter:
 
 * an attested host receives the secret, byte for byte, written ``0600``;
 * a host the gate does not trust exits non-zero, writes **no** file, and

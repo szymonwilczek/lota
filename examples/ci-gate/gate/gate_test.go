@@ -12,6 +12,7 @@ import (
 	"encoding/base64"
 	"encoding/binary"
 	"encoding/json"
+	"errors"
 	"io"
 	"log"
 	"net/http"
@@ -444,5 +445,48 @@ func TestParseFlags(t *testing.T) {
 	}
 	if got := flagList(flagAttested | flagBPFLoaded); got != "attested,bpf" {
 		t.Fatalf("flagList %q", got)
+	}
+}
+
+// brokenWriter takes the header and status but fails every body write.
+type brokenWriter struct {
+	header http.Header
+	status int
+}
+
+func (b *brokenWriter) Header() http.Header {
+	if b.header == nil {
+		b.header = http.Header{}
+	}
+	return b.header
+}
+
+func (b *brokenWriter) WriteHeader(status int) { b.status = status }
+
+func (b *brokenWriter) Write([]byte) (int, error) {
+	return 0, errors.New("connection reset by peer")
+}
+
+// A release whose body never arrived must not audit like a delivered one.
+func TestWriteJSON_AuditsABodyItCouldNotDeliver(t *testing.T) {
+	key, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatalf("key: %v", err)
+	}
+	var audit bytes.Buffer
+	g := newGate(t, key, flagAttested, 15*time.Minute)
+	g.audit = log.New(&audit, "", 0)
+
+	w := &brokenWriter{}
+	g.writeJSON(w, http.StatusOK, releaseResponse{Reason: "released"})
+
+	if w.status != http.StatusOK {
+		t.Fatalf("status %d, want %d", w.status, http.StatusOK)
+	}
+	if !strings.Contains(audit.String(), "response body not delivered") {
+		t.Fatalf("the undelivered body was not audited: %q", audit.String())
+	}
+	if !strings.Contains(audit.String(), "connection reset by peer") {
+		t.Fatalf("the audit line does not carry the reason: %q", audit.String())
 	}
 }

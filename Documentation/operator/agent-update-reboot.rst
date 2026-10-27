@@ -68,6 +68,17 @@ that instead reads ``agent hash not in allowed list`` is the other case
 entirely: that build is not in the policy, and re-anchoring it would accept a
 binary nobody blessed.
 
+A third refusal hits devices whose PCR 14 was pinned out of band. Their row has
+no agent hash, so there is no pin for an update to move::
+
+    baseline carries no pinned agent_hash; refusing to adopt the reported one
+      reported_agent_hash=...
+
+Adopting the reported hash would also replace the pinned PCR 14, so the round
+is refused whatever the policy lists. Pin the device's agent hash, or clear its
+baseline (``lota-fleet reanchor <client-id> -reason <why> -actor <you>``) to
+enroll it from its own report.
+
 Per-host update
 ===============
 
@@ -89,6 +100,12 @@ On each host, once the new hash is pinned in the verifier tier:
    the player a restart is coming rather than letting them meet it as a launch
    failure. Attestation is unaffected until the reboot: PCR 14 commits to the
    build still running and the token names that build.
+
+   Do not restart the units before the reboot. Restarting ``lota-agent`` or
+   ``lota-attest`` starts the **new** binary against a PCR 14 that commits to
+   the old one, and it is refused for the rest of the boot.
+   Both units then stay ``failed`` with the reason in the journal until the
+   reboot.
 #. **Stop the running daemon.** ``lota-agent --shutdown`` -- ``systemctl stop``
    cannot, because the LSM hook blocks the kill.
 #. **Cold-reboot the host.** A full power cycle, not a warm reboot: PCR 14 only

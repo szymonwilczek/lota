@@ -21,8 +21,9 @@ enum iommu_vendor {
 /* IOMMU status flags - bitmask */
 #define IOMMU_FLAG_SYSFS_PRESENT (1U << 0) /* /sys/class/iommu/ has entries */
 #define IOMMU_FLAG_CMDLINE_SET (1U << 1) /* Boot param explicitly set */
-#define IOMMU_FLAG_DMA_REMAP (1U << 2) /* DMA remapping active (dmesg) */
-#define IOMMU_FLAG_IRQ_REMAP (1U << 3) /* Interrupt remapping (dmesg) */
+#define IOMMU_FLAG_DMA_REMAP (1U << 2) /* A group is in a translating domain */
+#define IOMMU_FLAG_IRQ_REMAP \
+	(1U << 3) /* An interrupt goes through an IR- chip */
 #define IOMMU_FLAG_STRICT (1U << 4) /* Strict mode (no lazy unmap) */
 
 /* Maximum length for cmdline parameter storage */

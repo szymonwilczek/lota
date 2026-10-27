@@ -34,6 +34,11 @@ enum ui_result {
 	UI_REBOOT, /* Yellow: needs a reboot to take effect */
 	UI_SKIP, /* Dim circle: not applicable on this host */
 	UI_PENDING, /* Yellow dot: work or input still needed */
+	/* Red cross: work this machine needs and the installer must not do */
+	UI_BLOCKED,
+	/* Green check: the stage did its work in this run and it holds now --
+	 * told apart from done, which found nothing to do */
+	UI_APPLIED,
 };
 
 /* Output sink:
@@ -97,6 +102,9 @@ void ui_stage_begin(struct ui *ui, int idx, int total, const char *title);
  */
 void ui_stage_result(struct ui *ui, enum ui_result r, const char *title,
 		     const char *note);
+
+/* the word a plain transcript prints for @r */
+const char *ui_result_word(enum ui_result r);
 
 /* explanation block: dim vertical bar, word-wrapped body */
 void ui_explain(struct ui *ui, const char *body);

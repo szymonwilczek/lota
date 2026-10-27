@@ -20,6 +20,7 @@
  *   require_module_sig: <bool>
  *   require_secureboot: <bool>
  *   require_lockdown: <bool>
+ *   require_ima_appraisal: <bool>
  *
  * Copyright (C) 2026 Szymon Wilczek
  */
@@ -48,9 +49,11 @@
  * the kernel image by PCR 4 and kernel_hash, and the initramfs by the PCR 14
  * boot-commitment chain.
  *
- * PCR 14 (LOTA boot-commitment) is excluded for the same drift reason but stronger one:
- * its value changes on every boot (the commitment folds the TPM resetCount) and the
- * verifier validates it through the boot-commitment derivation, not a static pin.
+ * PCR 14 (LOTA boot-commitment) is excluded: an exported policy is fleet-wide
+ * and the register is per-host -- it chains onto whatever the platform measured
+ * into PCR 14 before the initramfs lock -- and the verifier validates it per
+ * client, through the boot-commitment derivation and the pinned baseline,
+ * not a static policy pin.
  * policy_emit() also drops it defensively at the emit stage so no snapshot can freeze
  * one boot's value into the policy.
  */
@@ -123,6 +126,32 @@ static void emit_yaml_string(FILE *out, const char *s)
 	fputc('"', out);
 }
 
+/*
+ * Why the exported document carries no kernel digest.
+ *
+ * Each of these leaves the operator a different next step, so the reason
+ * travels into the file rather than collapsing into "not available".
+ */
+const char *policy_kernel_hash_reason(int err)
+{
+	switch (err) {
+	case -ENOENT:
+		return "this host's event log measures no kernel image, so the bootloader recorded nothing to pin";
+	case -EEXIST:
+		return "the event log measures two different kernel images and does not say which one booted";
+	case -ENOMSG:
+		return "the kernel image is measured without a SHA-256 digest, which is the only one the verifier compares";
+	case -EINVAL:
+		return "the event log could not be parsed";
+	case -ENOMEM:
+		return "the event log could not be held in memory";
+	case 0:
+		return "there is a kernel digest";
+	default:
+		return "the event log could not be read from securityfs";
+	}
+}
+
 static void emit_yaml_comment(FILE *out, const char *prefix, const char *s)
 {
 	fprintf(out, "# %s: ", prefix);
@@ -181,9 +210,9 @@ int policy_emit(const struct policy_snapshot *snap, FILE *out)
 
 	/*
 	 * PCR14 is the LOTA boot-commitment register.
-	 * Its value changes every boot (the commitment folds the TPM resetCount),
-	 * and the verifier validates it through the boot-commitment derivation,
-	 * not a static pin
+	 * It is per-host, and the verifier validates it per client through
+	 * the boot-commitment derivation and the pinned baseline,
+	 * not a static policy pin
 	 * Skip it defensively here so even snapshot that carries it cannot freeze
 	 * one boot's value into the policy and reject the host on its next reboot
 	 */
@@ -214,24 +243,30 @@ int policy_emit(const struct policy_snapshot *snap, FILE *out)
 	fprintf(out, "\n");
 
 	/*
-	 * Measured-boot digest from a kernel-relevant PCR.
-	 *
-	 * The provenance names the register and the running kernel, not a file:
-	 * the value is what that PCR held at boot, and nothing on disk is read
-	 * to produce it.
+	 * Kernel image digest and path from the bootloader's EV_IPL record,
+	 * the value the verifier's kernel_hashes gate compares.
 	 */
-	fprintf(out,
-		"# Allowed measured-boot digests (kernel-relevant PCR, SHA-256)\n");
+	fprintf(out, "# Allowed kernel images (SHA-256)\n");
 	if (snap->kernel_hash_valid) {
-		char origin[96];
-
-		snprintf(origin, sizeof(origin),
-			 "PCR %d as this host booted, not a file hash",
-			 snap->kernel_hash_pcr);
-		emit_yaml_comment(out, "Source", origin);
+		emit_yaml_comment(
+			out, "Source",
+			"the bootloader's measurement of the kernel image (event log, PCR 9 EV_IPL)");
+		emit_yaml_comment(out, "Image", snap->kernel_image_path);
 		if (snap->kernel_release[0])
 			emit_yaml_comment(out, "Booted kernel",
 					  snap->kernel_release);
+	} else {
+		/*
+		 * Leave the list empty, never fall back to a PCR: it changes
+		 * with the whole boot, so the pin would refuse this host on
+		 * its next boot and read as kernel drift.
+		 */
+		emit_yaml_comment(
+			out, "Empty",
+			policy_kernel_hash_reason(snap->kernel_hash_error));
+		emit_yaml_comment(
+			out, "Note",
+			"a PCR value is not a substitute: it covers the whole boot and changes with it");
 	}
 
 	if (snap->kernel_hash_valid) {
@@ -279,6 +314,8 @@ int policy_emit(const struct policy_snapshot *snap, FILE *out)
 		snap->secureboot ? "true" : "false");
 	fprintf(out, "require_lockdown: %s\n",
 		snap->lockdown ? "true" : "false");
+	fprintf(out, "require_ima_appraisal: %s\n",
+		snap->ima_appraisal ? "true" : "false");
 
 	if (ferror(out))
 		return -EIO;
