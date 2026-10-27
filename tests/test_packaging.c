@@ -587,6 +587,276 @@ static void test_selinux_gaming_client_reaches_container_socket(void)
 	PASS();
 }
 
+enum {
+	TYPE_LEN = 64,
+	TYPES_MAX = 32
+};
+
+/* the argument a flag takes on a command line, e.g. -s lota_agent_t */
+static bool cmd_flag_arg(const char *cmd, const char *flag, char *out,
+			 size_t cap)
+{
+	const char *p = strstr(cmd, flag);
+	size_t n = 0;
+
+	if (!p)
+		return false;
+	p += strlen(flag);
+	while (*p == ' ')
+		p++;
+	while (n + 1 < cap && *p && !isspace((unsigned char)*p))
+		out[n++] = *p++;
+	out[n] = '\0';
+	return n > 0;
+}
+
+/*
+ * Types the LOTA policy declares itself. gen_require() names are indented,
+ * so only a line opening with "type " is a declaration.
+ */
+static size_t lota_declared_types(char types[][TYPE_LEN], size_t cap)
+{
+	static const char *const sources[] = { "selinux/lota.te",
+					       "selinux/lota_gaming.te" };
+	size_t n = 0;
+
+	for (size_t i = 0; i < sizeof(sources) / sizeof(sources[0]); i++) {
+		FILE *fp = open_shipped(sources[i]);
+		char line[512];
+
+		if (!fp)
+			return 0;
+		while (n < cap && fgets(line, sizeof(line), fp)) {
+			char *semi;
+
+			if (strncmp(line, "type ", 5) != 0)
+				continue;
+			semi = strchr(line + 5, ';');
+			if (!semi)
+				continue;
+			*semi = '\0';
+			if (strlen(line + 5) >= TYPE_LEN)
+				continue;
+			memcpy(types[n++], line + 5, strlen(line + 5) + 1);
+		}
+		fclose(fp);
+	}
+	return n;
+}
+
+static const char *shell_command(const char *line)
+{
+	while (isspace((unsigned char)*line))
+		line++;
+	if (strncmp(line, "sudo ", 5) == 0)
+		line += 5;
+	return line;
+}
+
+/*
+ * A documented sesearch must answer with the module's own rules: from a type
+ * the policy declares, matched literally (-ds -dt). A domain a gaming block
+ * only requires may be undeclared, and sesearch refuses the search ("steam_t
+ * is not a valid type attribute"); an unconfined one has its module rules
+ * dropped as redundant, and attribute expansion answers with base-policy
+ * rules instead.
+ */
+static void test_selinux_reference_searches_the_modules_own_rules(void)
+{
+	char types[TYPES_MAX][TYPE_LEN];
+	size_t ntypes;
+	FILE *fp;
+	char line[1024];
+	bool saw = false;
+
+	TEST("selinux: documented searches match the module's rules");
+
+	ntypes = lota_declared_types(types, TYPES_MAX);
+	if (!ntypes) {
+		FAIL("the policy sources declare no types to search for");
+		return;
+	}
+	fp = open_shipped("selinux/README.rst");
+	if (!fp) {
+		FAIL("could not open selinux/README.rst");
+		return;
+	}
+	while (fgets(line, sizeof(line), fp)) {
+		const char *cmd = shell_command(line);
+		char src[TYPE_LEN];
+		bool ours = false;
+
+		if (strncmp(cmd, "sesearch", 8) != 0)
+			continue;
+		saw = true;
+		if (!cmd_flag_arg(cmd, "-s ", src, sizeof(src))) {
+			fclose(fp);
+			FAIL("a documented search names no source domain");
+			return;
+		}
+		for (size_t i = 0; i < ntypes; i++) {
+			if (strcmp(types[i], src) == 0)
+				ours = true;
+		}
+		if (!ours) {
+			fclose(fp);
+			FAIL("a documented search starts from a domain the policy need not declare");
+			return;
+		}
+		if (!strstr(cmd, "-ds") || !strstr(cmd, "-dt")) {
+			fclose(fp);
+			FAIL("a documented search lets attribute rules answer for the module");
+			return;
+		}
+	}
+	fclose(fp);
+	if (!saw) {
+		FAIL("the reference documents no search at all");
+		return;
+	}
+	PASS();
+}
+
+static void rstrip(char *line)
+{
+	size_t n = strlen(line);
+
+	while (n && isspace((unsigned char)line[n - 1]))
+		line[--n] = '\0';
+}
+
+/* one command, backslash continuations folded in */
+static bool read_command(FILE *fp, char *cmd, size_t cap)
+{
+	char *cont;
+
+	if (!fgets(cmd, (int)cap, fp))
+		return false;
+	rstrip(cmd);
+	cont = cmd + strlen(cmd);
+	while (cont > cmd && cont[-1] == '\\') {
+		char more[512];
+
+		cont[-1] = '\0';
+		if (!fgets(more, sizeof(more), fp))
+			break;
+		rstrip(more);
+		snprintf(cmd + strlen(cmd), cap - strlen(cmd), "%s", more);
+		cont = cmd + strlen(cmd);
+	}
+	return true;
+}
+
+static bool rst_underline(const char *line)
+{
+	size_t n = strlen(line);
+
+	if (n < 3 || isalnum((unsigned char)line[0]) ||
+	    isspace((unsigned char)line[0]))
+		return false;
+	for (size_t i = 1; i < n; i++) {
+		if (line[i] != line[0])
+			return false;
+	}
+	return true;
+}
+
+/*
+ * A lockout grep spelled differently from tpm2_getcap's output matches
+ * nothing, which reads as a healthy TPM.
+ * Every alternative must match a line of the page's own sample output.
+ */
+static void test_lockout_runbook_matches_what_the_chip_prints(void)
+{
+	enum {
+		SAMPLE_MAX = 16
+	};
+	char sample[SAMPLE_MAX][256];
+	size_t nsample = 0;
+	char line[256];
+	char cmd[1024];
+	char pattern[512];
+	char *open_quote;
+	char *close_quote;
+	char *alt;
+	FILE *fp;
+	bool found = false;
+
+	TEST("selinux: the lockout search matches what the chip prints");
+
+	fp = open_shipped("selinux/README.rst");
+	if (!fp) {
+		FAIL("could not open selinux/README.rst");
+		return;
+	}
+	while (read_command(fp, cmd, sizeof(cmd))) {
+		if (strstr(cmd, "tpm2_getcap properties-variable")) {
+			found = true;
+			break;
+		}
+	}
+	if (!found) {
+		fclose(fp);
+		FAIL("the runbook reads no variable properties off the chip");
+		return;
+	}
+	open_quote = strstr(cmd, "grep -E \"");
+	if (!open_quote) {
+		fclose(fp);
+		FAIL("the lockout confirmation matches the dump against nothing");
+		return;
+	}
+	open_quote += strlen("grep -E \"");
+	close_quote = strchr(open_quote, '"');
+	if (!close_quote) {
+		fclose(fp);
+		FAIL("the lockout confirmation has an unterminated pattern");
+		return;
+	}
+	*close_quote = '\0';
+	snprintf(pattern, sizeof(pattern), "%s", open_quote);
+
+	/* the sample's literal block, within this section only */
+	while (fgets(line, sizeof(line), fp)) {
+		rstrip(line);
+		if (!nsample) {
+			size_t n = strlen(line);
+
+			if (rst_underline(line))
+				break;
+			if (n >= 2 && line[n - 1] == ':' && line[n - 2] == ':')
+				nsample = 1;
+			continue;
+		}
+		if (!line[0])
+			continue;
+		if (!isspace((unsigned char)line[0]))
+			break;
+		if (nsample - 1 < SAMPLE_MAX)
+			snprintf(sample[nsample - 1], sizeof(sample[0]), "%s",
+				 line);
+		nsample++;
+	}
+	fclose(fp);
+	if (nsample < 2) {
+		FAIL("the page quotes no output for the pattern to match");
+		return;
+	}
+	for (alt = strtok(pattern, "|"); alt; alt = strtok(NULL, "|")) {
+		bool hit = false;
+
+		for (size_t i = 0; i + 1 < nsample && i < SAMPLE_MAX; i++) {
+			if (strstr(sample[i], alt))
+				hit = true;
+		}
+		if (!hit) {
+			FAIL("the lockout confirmation matches on a field the chip does not print");
+			return;
+		}
+	}
+	PASS();
+}
+
 /* whole file into caller's buffer, NUL-terminated; 0 when it cannot be read */
 static size_t slurp_shipped(const char *rel, char *buf, size_t cap)
 {
@@ -1454,6 +1724,8 @@ int main(void)
 	test_selinux_reports_every_tunable();
 	test_selinux_policy_carries_no_portcon();
 	test_selinux_gaming_client_reaches_container_socket();
+	test_selinux_reference_searches_the_modules_own_rules();
+	test_lockout_runbook_matches_what_the_chip_prints();
 	test_installer_labels_the_config_directory();
 	test_installer_relabel_reapplies_the_device_labels();
 	test_documented_tpm_relabel_reaches_both_nodes();
