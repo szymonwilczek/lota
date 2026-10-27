@@ -133,16 +133,17 @@ then materialize the bundle:
 .. code-block:: sh
 
     # walk the EK cert's issuer chain to the self-signed root and draft a line
-    sudo tpm2_nvread 0x01c00002 -o ek.der
+    sudo tpm2_nvread 0x01c00002 > ek.der
     cp configs/ek-roots/sources.example sources
     scripts/lota-ek-root-pin.sh ek.der >>sources
 
     # after verifying each pin out of band, fetch and pin the roots
     scripts/lota-ek-roots-update.sh sources /var/lib/lota/ek-roots
 
-``lota-ek-root-pin.sh`` prints a fingerprint over what the network returned; it
-does not vouch for it, so confirm the pin against the vendor before the line
-enters ``sources``.
+The redirect leaves ``ek.der`` owned by the operator, so later steps need no
+``sudo``; ``sudo tpm2_nvread -o`` would leave a file only root can open.
+``lota-ek-root-pin.sh`` fingerprints what the network returned without
+vouching for it; confirm the pin with the vendor before it enters ``sources``.
 
 The bundle does not have to cover the whole path. A TPM that stores
 manufacturer intermediates of its own presents them with the enrollment
@@ -269,9 +270,12 @@ created before the publisher's identity entered the TPM creation template is
 one key shared by every publisher enrolled on that host, and a TPM key cannot
 be rewritten in place, so the agent refuses such a record instead of carrying
 it forward and says which publisher it belongs to. Re-enrolling that profile
-creates its own key; the device pseudonym is derived from the key and moves
-with it, so the publisher sees a device it has not met before and its verifier
-re-establishes the baseline.
+replaces the key with one of its own, certified under the same device ID:
+an HMAC over the endorsement key's modulus, keyed by the CA's pseudonym key,
+with the tenant mixed in when it is not ``default``. The attestation key is
+not an input, so the publisher's verifier checks the next report against the
+baseline it already holds. The ID changes only with another TPM, another
+tenant, or a replaced pseudonym key.
 
 Point every verifier at the CA root:
 
@@ -319,19 +323,34 @@ Deliberate counterpart of the self-service path works on every profile
 and needs no verifier flag. When a platform change is legitimate but the
 self-service re-anchor refuses it (or the profile does not enable it), drop
 the device's pinned baselines through the admin API; the next attestation
-re-establishes trust per the active TOFU/policy configuration:
+re-establishes trust per the active TOFU/policy configuration.
+
+The commands below run from any host that reaches the verifier's monitoring
+API. Off the verifier's host that API is HTTPS under the verifier's
+``--cert``; ``--cacert`` names its issuing CA. ``LOTA_ADMIN_API_KEY`` holds
+the verifier's admin key and ``CLIENT_ID`` the device ID: ``Device ID`` from
+``lota-agent --enroll``, the AIK certificate's ``CommonName``, as
+``GET /api/v1/clients`` lists it. Do not write the ID into a ``{...}``
+placeholder: curl treats braces in a URL as a pattern.
 
 .. code-block:: sh
 
-    curl -X POST https://verifier:8080/api/v1/clients/{clientID}/reanchor \
-        -H "Authorization: Bearer $ADMIN_KEY" \
+    curl --cacert verifier-ca.crt -X POST \
+        "https://verifier.example:8080/api/v1/clients/$CLIENT_ID/reanchor" \
+        -H "Authorization: Bearer $LOTA_ADMIN_API_KEY" \
         -d '{"actor":"ops@example.com","reason":"planned firmware update"}'
 
-``actor`` and ``reason`` are required and land in the audit log together with
-the optional ``note``;
-the action is also logged at security level and counted in the ``forced``
-re-anchor metric. The enrollment is untouched -- the host keeps attesting
-with its enrolled AIK identity.
+The verifier answers:
+
+.. code-block:: json
+
+    {"status": "reanchored", "client_id": "<client-id>"}
+
+``actor`` and ``reason`` are required and land in the audit log with the
+optional ``note``; a request missing either gets **400** and changes nothing.
+The action is also logged at security level and counted in the ``forced``
+re-anchor metric. The enrollment is untouched -- the host keeps attesting with
+its enrolled AIK identity.
 
 To remove a device from the fleet entirely (decommissioned host, or trust
 state that must be rebuilt from scratch), delete the client. This drops the
@@ -341,9 +360,16 @@ it out. ``actor`` and ``reason`` are required, ``note`` is optional:
 
 .. code-block:: sh
 
-    curl -X DELETE https://verifier:8080/api/v1/clients/{clientID} \
-        -H "Authorization: Bearer $ADMIN_KEY" \
+    curl --cacert verifier-ca.crt -X DELETE \
+        "https://verifier.example:8080/api/v1/clients/$CLIENT_ID" \
+        -H "Authorization: Bearer $LOTA_ADMIN_API_KEY" \
         -d '{"actor":"ops@example.com","reason":"decommissioned"}'
+
+The verifier answers:
+
+.. code-block:: json
+
+    {"status": "deleted", "client_id": "<client-id>"}
 
 Revocations and hardware bans are keyed separately and survive the delete,
 so removing a client cannot be used to shed either -- a revoked identity
@@ -460,13 +486,16 @@ ignored:
     3b1f...c7  acme
     9a20...4e  beta
 
-The fingerprint is the SHA-256 of the endorsement key's public modulus. For an
-EK certificate in ``ek.pem`` an operator computes it with:
+The fingerprint is the SHA-256 of the endorsement key's public modulus. For
+the ``ek.der`` read in `Materializing the EK root bundle`_:
 
 .. code-block:: sh
 
-    openssl x509 -in ek.pem -noout -modulus \
-      | sed 's/^Modulus=//' | xxd -r -p | sha256sum
+    modulus=$(openssl x509 -inform DER -in ek.der -noout -modulus) &&
+        printf '%s' "${modulus#Modulus=}" | xxd -r -p | sha256sum
+
+The ``&&`` stops a failed read; without it ``sha256sum`` hashes nothing and
+prints ``e3b0c442...``, a plausible fingerprint that matches no TPM.
 
 Point the CA at the manifest with ``--tenant-manifest``:
 
