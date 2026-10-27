@@ -133,8 +133,13 @@ scope went unverified.
 
 .. code-block:: sh
 
-    sudo grubby --update-kernel=ALL --args="ima=on ima_appraise=enforce"
+    sudo grubby --update-kernel=ALL --args="ima_appraise=enforce"
     sudo reboot
+
+IMA needs no parameter to be on. The kernel takes ``ima=`` only in a kdump
+kernel and anywhere else ignores it, logging ``ima: Warning: ima setup option
+only permitted in kdump`` on every boot, so a cmdline carrying ``ima=on`` gains
+nothing but that line.
 
 **On a Secure Boot host the kernel discards that parameter.**
 ``default_appraise_setup()`` refuses to be told the mode where
@@ -217,8 +222,13 @@ device-add. After ``make install``:
 .. code-block:: sh
 
     sudo udevadm control --reload-rules
-    sudo udevadm trigger /dev/tpmrm0 /dev/tpm0
+    sudo udevadm trigger --action=add /dev/tpmrm0 /dev/tpm0
     ls -lZ /dev/tpm0 /dev/tpmrm0                # expect lota_tpm_device_t
+
+The trigger has to send an ``add`` event. Without ``--action`` it sends
+``change``, which re-runs the rules but re-applies no ``SECLABEL``: a node
+that carries the stock ``tpm_device_t`` keeps it and the command still exits
+0.
 
 The **type** is the check: ``lota_tpm_device_t`` is what the agent's gate looks
 for. The SELinux user in front of it follows from how the file arrived --

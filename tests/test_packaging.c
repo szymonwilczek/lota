@@ -706,12 +706,18 @@ static void test_installer_relabel_reapplies_the_device_labels(void)
  * The resource manager is in subsystem tpmrm, not tpm, and it is the node the
  * agent's gate reads first. A documented remedy matching on tpm alone brings
  * /dev/tpm0 back, exits 0, and leaves the agent refusing for the same reason
- * the operator was told to fix.
+ * the operator was told to fix. A trigger without --action sends a change
+ * event, which re-runs the rules and re-applies no SECLABEL, so a device that
+ * lost its label keeps the stock one.
  */
 static void test_documented_tpm_relabel_reaches_both_nodes(void)
 {
-	static const char *const pages[] = { "configs/udev/99-lota-tpm.rules",
-					     "selinux/README.rst" };
+	static const char *const pages[] = {
+		"configs/udev/99-lota-tpm.rules",
+		"selinux/README.rst",
+		"Documentation/operator/production-bringup/manual-reference.rst",
+		"Documentation/operator/production-bringup/gate-matrix.rst",
+	};
 
 	TEST("docs: the TPM relabel command reaches both nodes");
 
@@ -739,8 +745,12 @@ static void test_documented_tpm_relabel_reaches_both_nodes(void)
 			if (!strstr(cmd, "udevadm trigger"))
 				continue;
 			saw = true;
-			if (!strstr(cmd, "--action=add") ||
-			    !strstr(cmd, "tpmrm")) {
+			if (!strstr(cmd, "--action=add")) {
+				fclose(fp);
+				FAIL("a documented trigger sends a change event, which re-applies no label");
+				return;
+			}
+			if (!strstr(cmd, "tpmrm")) {
 				fclose(fp);
 				FAIL("a documented trigger leaves /dev/tpmrm0 where it was");
 				return;
@@ -751,6 +761,67 @@ static void test_documented_tpm_relabel_reaches_both_nodes(void)
 			FAIL("a page that documents the relabel names no trigger");
 			return;
 		}
+	}
+	PASS();
+}
+
+/* true when line carries the boot parameter ima=, not ima_appraise= */
+static bool line_sets_ima(const char *line)
+{
+	for (const char *p = strstr(line, "ima="); p;
+	     p = strstr(p + 1, "ima=")) {
+		if (p == line || isspace((unsigned char)p[-1]) ||
+		    p[-1] == '"' || p[-1] == '\'')
+			return true;
+	}
+	return false;
+}
+
+/*
+ * Outside a kdump kernel ima= is refused with "ima setup option only
+ * permitted in kdump", so a documented cmdline must not carry it.
+ * The reference quotes this refusal beside the ima_appraise= one.
+ */
+static void test_documented_cmdline_carries_no_kdump_option(void)
+{
+	static const char *const pages[] = {
+		"Documentation/operator/production-bringup/manual-reference.rst",
+		"scripts/lota-dev-bringup.sh",
+	};
+	bool quoted = false;
+
+	TEST("docs: a documented cmdline carries no kdump-only ima=");
+
+	for (size_t i = 0; i < sizeof(pages) / sizeof(pages[0]); i++) {
+		FILE *fp = open_shipped(pages[i]);
+		char line[1024];
+		bool saw = false;
+
+		if (!fp) {
+			FAIL("could not open a page that documents the cmdline");
+			return;
+		}
+		while (fgets(line, sizeof(line), fp)) {
+			if (strstr(line, "only permitted in kdump"))
+				quoted = true;
+			if (!strstr(line, "grubby") || !strstr(line, "--args"))
+				continue;
+			saw = true;
+			if (line_sets_ima(line)) {
+				fclose(fp);
+				FAIL("a documented cmdline sets ima=, which the kernel refuses");
+				return;
+			}
+		}
+		fclose(fp);
+		if (!saw) {
+			FAIL("a page that documents the cmdline names no grubby --args");
+			return;
+		}
+	}
+	if (!quoted) {
+		FAIL("the reference does not quote the kernel's ima= refusal");
+		return;
 	}
 	PASS();
 }
@@ -1386,6 +1457,7 @@ int main(void)
 	test_installer_labels_the_config_directory();
 	test_installer_relabel_reapplies_the_device_labels();
 	test_documented_tpm_relabel_reaches_both_nodes();
+	test_documented_cmdline_carries_no_kdump_option();
 	test_documented_api_calls_use_the_bearer_header();
 	test_enrollment_example_runs_on_a_provisioned_host();
 	test_bringup_reference_matches_the_packaged_object();
