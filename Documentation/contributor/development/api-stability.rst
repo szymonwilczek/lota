@@ -159,7 +159,8 @@ struct it takes is an ABI break. It bumps ``LOTA_ABI_MAJOR``, which changes
 every soname, and the old library can no longer be replaced in place. Do not
 work around a break by leaving the symbol in the
 version script with different semantics behind it -- that is the one failure a
-version script cannot catch.
+version script cannot catch. A struct that moved under an unchanged symbol is
+caught by the layout baseline below.
 
 Status flags
 ============
@@ -167,7 +168,8 @@ Status flags
 ``LOTA_FLAG_*`` in ``lota_gaming.h`` is a bitmask, so a release may define a
 new bit and a program built against an older header keeps working: it reads
 the bits it knows and ignores the rest. The values already assigned never
-change meaning, which is what makes ignoring the unknown ones safe.
+change meaning, which is what makes ignoring the unknown ones safe; the layout
+baseline records every one.
 
 A caller must therefore test the bits it cares about rather than compare the
 word, and must not treat an unfamiliar bit as a failure. ``LOTA_FLAG_UPDATE_PENDING``
@@ -217,6 +219,17 @@ The gate
 carries against ``LOTA_ABI_MAJOR``, and the installed header set as stated in
 three places that must agree -- ``packaging/abi/public-headers.list``, the
 ``make install`` rule, and ``packaging/nfpm/lota-sdk-devel.yaml``.
+
+The layout of the types those headers declare is in the baseline too, in
+``packaging/abi/types.list``: every public struct's size, alignment and member
+offsets, every enumerator's value, and every ``LOTA_*`` constant, string
+constants included. An inserted member, a renumbered enumerator, a renamed
+environment variable or a reassigned ``LOTA_FLAG_*`` bit breaks a program
+without changing a symbol.
+
+The gate generates a program that prints ``sizeof``, ``_Alignof``, ``offsetof``
+and each constant's value, compiled against ``include/``, so padding, alignment
+and ``enum`` width are what the target gives them.
 
 It holds the two static archives to the same baseline, without the version
 nodes an archive cannot carry, and to one object each. The version script
