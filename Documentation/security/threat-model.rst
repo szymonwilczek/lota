@@ -356,10 +356,21 @@ Active threats
          number, size and modification time, all read from the descriptor the
          measurement holds open; fs-verity makes the contents behind such an
          inode immutable, and any other file is a different key.
+       | An executable with no fs-verity digest is measured by content: the
+         kernel hashes it during the agent's own open, and the token sets
+         ``LOTA_FLAG_IMAGE_CONTENT_HASHED``. Only the process's own
+         executable takes that road, and only on a local filesystem.
      - | Anonymous executable memory and JIT code are not measured as modules.
        | Intended bound is W^X plus policy enforcement.
-       | An object the kernel holds no fs-verity digest for is absent from the
-         measurement and reported as missing coverage, never folded in.
+       | A content hash records the bytes at one moment; fs-verity binds
+         every later page fault. The weaker road is reported apart, never as
+         full coverage.
+       | Mapped libraries stay off that road, since they remain writable, as
+         do filesystems served by userspace or a peer (FUSE, NFS, CIFS/SMB,
+         9P, Ceph), which can serve the hasher and the page fault different
+         bytes.
+       | An object with no digest and no road is reported as missing
+         coverage, never folded in.
    * - ptrace or process mutation
      - | BPF LSM hooks protect the agent and protected PIDs, including
          ``__ptrace_may_access`` where available. Both refuse a read and an

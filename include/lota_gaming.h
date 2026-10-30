@@ -201,6 +201,14 @@ enum lota_error {
 #define LOTA_FLAG_KERNEL_APPRAISAL (1 << 11)
 
 /*
+ * A protected process's own executable had no fs-verity digest and was
+ * measured by a kernel content hash: a read of its bytes while it runs and
+ * cannot be written, not a property the kernel keeps enforcing.
+ * Typical of a store install; a publisher that wants fs-verity only refuses it.
+ */
+#define LOTA_FLAG_IMAGE_CONTENT_HASHED (1 << 12)
+
+/*
  * Subscription event types
  *
  * Bitmask selecting which status changes trigger push notifications.

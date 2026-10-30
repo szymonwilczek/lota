@@ -463,6 +463,29 @@ struct lota_exec_event {
  */
 #define LOTA_MAX_GUARDED_FILES 64
 
+/*
+ * Agent threads with a kernel hash outstanding at once;
+ * each asks about one object at a time.
+ */
+#define LOTA_MAX_EXE_HASH_SLOTS 64
+
+#define LOTA_EXE_HASH_IDLE 0 /* nothing asked */
+#define LOTA_EXE_HASH_ASKED 1 /* the next open is hashed */
+#define LOTA_EXE_HASH_ANSWERED 2 /* algo, err and digest are set */
+
+/* <linux/hash_info.h> ids; the algorithm fixes the digest length */
+#define LOTA_EXE_HASH_ALGO_SHA256 4
+#define LOTA_EXE_HASH_ALGO_SHA512 6
+
+/* One agent thread's kernel hash request, keyed by its tid */
+struct lota_exe_hash_slot {
+	__u32 state; /* LOTA_EXE_HASH_* */
+	__u32 algo; /* LOTA_EXE_HASH_ALGO_*, 0 on failure */
+	__u32 err; /* positive errno, 0 on success */
+	__u32 pad;
+	__u8 digest[LOTA_VERITY_DIGEST_MAX_SIZE]; /* read during the open */
+};
+
 /* guarded_files value: why the file is guarded */
 #define LOTA_GUARD_CGROUP_KILL 1
 

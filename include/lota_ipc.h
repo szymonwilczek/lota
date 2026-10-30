@@ -148,6 +148,11 @@ enum lota_ipc_result {
 		  object could not be measured and is absent from the fold;   \
 		  what that is worth is the relying party's policy */
 
+#define LOTA_STATUS_IMAGE_CONTENT_HASHED \
+	(1                               \
+	 << 12) /* a protected process's own executable is in the fold by a \
+		   kernel content hash, not an fs-verity digest */
+
 #define LOTA_STATUS_KERNEL_APPRAISAL \
 	(1 << 11) /* IMA appraises every exec on this host. Clear on a stock \
 		   host; the agent is still bound by fs-verity and PCR 14 */

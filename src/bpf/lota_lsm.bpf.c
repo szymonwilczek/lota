@@ -289,6 +289,20 @@ struct {
 	__type(value, u32);
 } allow_verity SEC(".maps");
 
+/*
+ * Kernel content hashes the agent asked for, keyed by thread id.
+ * bpf_ima_file_hash() needs the struct file, so the agent marks its slot
+ * ASKED, opens the file and reads the answer back.
+ * Not keyed by inode: on a filesystem with a device per subvolume,
+ * s_dev differs from stat(2)'s.
+ */
+struct {
+	__uint(type, BPF_MAP_TYPE_HASH);
+	__uint(max_entries, LOTA_MAX_EXE_HASH_SLOTS);
+	__type(key, u32);
+	__type(value, struct lota_exe_hash_slot);
+} exe_hash_slots SEC(".maps");
+
 /* RCU read section for task walks in sleepable hooks */
 extern void bpf_rcu_read_lock(void) __ksym;
 extern void bpf_rcu_read_unlock(void) __ksym;
@@ -593,6 +607,9 @@ static __always_inline int is_lota_managed_map(struct bpf_map *map)
 		return 1;
 	if (__builtin_memcmp(name, "lota_task_auth",
 			     sizeof("lota_task_auth")) == 0)
+		return 1;
+	if (__builtin_memcmp(name, "exe_hash_slots",
+			     sizeof("exe_hash_slots")) == 0)
 		return 1;
 
 	return 0;
@@ -1066,6 +1083,52 @@ int BPF_PROG(lota_file_open, struct file *file, int ret)
 		return 0;
 
 	return -EPERM;
+}
+
+/* =====================================================================
+ * LSM hook: file_post_open (sleepable), measurement
+ *
+ * Hashes the opens the agent asked about, in every mode. Not file_open:
+ * the file is not open there yet, so bpf_ima_file_hash() cannot read it.
+ * Any other open costs one map lookup.
+ * ===================================================================== */
+SEC("lsm.s/file_post_open")
+int BPF_PROG(lota_file_post_open_measure, struct file *file, int mask)
+{
+	struct lota_exe_hash_slot *slot;
+	u32 tid;
+	long hashed;
+
+	if (!file)
+		return 0;
+
+	tid = (u32)bpf_get_current_pid_tgid();
+	slot = bpf_map_lookup_elem(&exe_hash_slots, &tid);
+	if (!slot)
+		return 0;
+	if (slot->state != LOTA_EXE_HASH_ASKED)
+		return 0;
+
+	/* user space writes this map: confirm the caller is the agent */
+	if (!sleepable_task_is_agent_or_admin()) {
+		slot->state = LOTA_EXE_HASH_ANSWERED;
+		slot->algo = 0;
+		slot->err = EPERM;
+		return 0;
+	}
+
+	/* returns the hash_info algorithm id, not a length */
+	hashed = bpf_ima_file_hash(file, slot->digest, sizeof(slot->digest));
+	if (hashed < 0) {
+		slot->algo = 0;
+		slot->err = (u32)-hashed;
+	} else {
+		slot->algo = (u32)hashed;
+		slot->err = 0;
+	}
+	slot->state = LOTA_EXE_HASH_ANSWERED;
+
+	return 0;
 }
 
 /* =====================================================================

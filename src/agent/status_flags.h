@@ -91,4 +91,17 @@ static inline uint32_t lota_status_fold_coverage(uint32_t flags,
 	return flags & ~(uint32_t)LOTA_STATUS_IMAGE_FULLY_MEASURED;
 }
 
+/*
+ * Set or clear LOTA_STATUS_IMAGE_CONTENT_HASHED in @flags, under the same
+ * contract as the coverage bit. Set when any object of the fold was hashed.
+ */
+static inline uint32_t lota_status_fold_content_hash(uint32_t flags,
+						     bool content_hashed)
+{
+	if (content_hashed)
+		return flags | LOTA_STATUS_IMAGE_CONTENT_HASHED;
+
+	return flags & ~(uint32_t)LOTA_STATUS_IMAGE_CONTENT_HASHED;
+}
+
 #endif /* LOTA_AGENT_STATUS_FLAGS_H */
