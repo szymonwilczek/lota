@@ -39,16 +39,17 @@ esac
 
 LOTA_HOOK_LIB="${LOTA_HOOK_LIB_PATH:-}"
 
+# also the soname: the bare .so is a -devel symlink
 if [[ -z "$LOTA_HOOK_LIB" ]]; then
-    for candidate in \
-        /usr/lib64/liblota_wine_hook.so \
-            /usr/lib/liblota_wine_hook.so \
-            /usr/local/lib64/liblota_wine_hook.so \
-            /usr/local/lib/liblota_wine_hook.so; do
-        if [[ -f "$candidate" ]]; then
-            LOTA_HOOK_LIB="$candidate"
-            break
-        fi
+    for dir in /usr/lib64 /usr/lib /usr/local/lib64 /usr/local/lib; do
+        for candidate in \
+            "$dir/liblota_wine_hook.so" \
+                "$dir"/liblota_wine_hook.so.[0-9]*; do
+            if [[ -f "$candidate" ]]; then
+                LOTA_HOOK_LIB="$candidate"
+                break 2
+            fi
+        done
     done
 fi
 
