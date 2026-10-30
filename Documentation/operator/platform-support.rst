@@ -237,7 +237,13 @@ and this one is over the line.
 The diagnostic verbs take from the same pool, so they say what they cost
 before they cost it. ``--test-tpm`` reports state and never creates a key: it
 says when the handle is empty and tells the operator which command provisions
-one. ``--test-signed`` cannot decline, since signing is what it is for, so it
+one. It quotes with each publisher's own key and names the publisher and its
+handle. The records that predate publishers name a handle whose stored
+authorization no longer opens what sits there, so quoting from them would
+fail on a healthy host and spend a dictionary-attack attempt; they are used
+only where nobody holds a publisher key.
+
+``--test-signed`` cannot decline, since signing is what it is for, so it
 names the key it is about to use, and when there is none at the handle it says
 that it is creating one that stays after the server exits. Both claim their
 socket before touching the TPM, so a run refused by a daemon that already

@@ -38,6 +38,128 @@ void print_hex(const char *label, const uint8_t *data, size_t len)
 	printf("\n");
 }
 
+/*
+ * Quote with the AIK the context is bound to. @whose names its publisher,
+ * or is NULL for the pre-profile records. Never provisions: a key would
+ * outlive the probe and hold a persistent-object slot.
+ */
+static void selftest_quote_one_key(struct selftest_tally *tally,
+				   const char *whose)
+{
+	uint32_t handle = g_agent.tpm_ctx.aik_handle;
+	int ret;
+
+	if (selftest_aik_plan(tpm_handle_holds_object(
+		    &g_agent.tpm_ctx, handle)) == SELFTEST_AIK_SKIP) {
+		/* skip both the key and the quote */
+		selftest_skip(tally);
+		if (whose)
+			printf("%s: no key at handle 0x%08X, and this command "
+			       "does not create one.\n",
+			       whose, handle);
+		else
+			printf("No attestation key at handle 0x%08X, and this "
+			       "command does not create one: a key "
+			       "provisioned here would outlive it and hold "
+			       "one of the TPM's persistent objects.\n"
+			       "Start lota-agent.service, or enroll with a "
+			       "publisher, to provision one.\n",
+			       handle);
+		selftest_skip(tally);
+		return;
+	}
+
+	if (whose)
+		printf("%s: attestation key at handle 0x%08X\n", whose, handle);
+	else
+		printf("Using the attestation key at handle 0x%08X...\n",
+		       handle);
+
+	ret = tpm_provision_aik(&g_agent.tpm_ctx);
+	selftest_record(tally, ret);
+	if (ret < 0) {
+		fprintf(stderr, "AIK could not be loaded: %s\n",
+			tpm_strerror(ret));
+		fprintf(stderr,
+			"Note: May require owner hierarchy authorization\n");
+		printf("Skipped: there is no attestation key to quote with.\n");
+		selftest_skip(tally);
+		return;
+	}
+	printf("AIK ready\n");
+
+	{
+		struct tpm_quote_response quote_resp;
+		uint8_t test_nonce[LOTA_NONCE_SIZE];
+		uint32_t quote_pcr_mask;
+
+		/* production uses the server's challenge */
+		printf("Generating test nonce...\n");
+		if (getrandom(test_nonce, LOTA_NONCE_SIZE, 0) !=
+		    LOTA_NONCE_SIZE) {
+			fprintf(stderr, "getrandom failed: %s\n",
+				strerror(errno));
+			selftest_record(tally, -EIO);
+			return;
+		}
+		print_hex("Nonce", test_nonce, LOTA_NONCE_SIZE);
+
+		/* quote pcrs: 0,1,14 */
+		quote_pcr_mask = (1U << 0) | (1U << 1) | (1U << LOTA_PCR_SELF);
+		printf("\nRequesting quote for PCRs 0, 1, %d...\n",
+		       LOTA_PCR_SELF);
+		printf("An authorization the TPM refuses here spends one "
+		       "dictionary-attack attempt, which the chip forgives on "
+		       "its own schedule.\n");
+
+		ret = tpm_quote(&g_agent.tpm_ctx, test_nonce, quote_pcr_mask,
+				&quote_resp);
+		selftest_record(tally, ret);
+		if (ret < 0) {
+			fprintf(stderr, "TPM Quote failed: %s\n",
+				tpm_strerror(ret));
+			return;
+		}
+
+		printf("Quote generated successfully!\n\n");
+		printf("Attestation data size: %u bytes\n",
+		       quote_resp.attest_size);
+		printf("Signature algorithm: 0x%04X\n", quote_resp.sig_alg);
+		printf("Signature size: %u bytes\n", quote_resp.signature_size);
+		print_hex("Signature", quote_resp.signature,
+			  quote_resp.signature_size);
+		printf("\nPCR values in quote:\n");
+		print_hex("  PCR 0", quote_resp.pcr_values[0], LOTA_HASH_SIZE);
+		print_hex("  PCR 1", quote_resp.pcr_values[1], LOTA_HASH_SIZE);
+		print_hex("  PCR 14", quote_resp.pcr_values[LOTA_PCR_SELF],
+			  LOTA_HASH_SIZE);
+	}
+}
+
+/* Quote with each publisher's key, bound through its profile. */
+static void selftest_quote_publisher_keys(struct selftest_tally *tally,
+					  const struct publisher_entry *entries,
+					  size_t count)
+{
+	for (size_t i = 0; i < count; i++) {
+		struct profile_paths paths;
+
+		if (!entries[i].has_aik_handle)
+			continue;
+
+		printf("\n");
+		if (profile_paths_from_id(LOTA_PROFILE_BASE_DIR, entries[i].id,
+					  &paths) < 0 ||
+		    tpm_bind_profile(&g_agent.tpm_ctx, &paths) < 0) {
+			fprintf(stderr, "  %s: could not open the profile\n",
+				entries[i].id);
+			selftest_record(tally, -EIO);
+			continue;
+		}
+		selftest_quote_one_key(tally, entries[i].id);
+	}
+}
+
 int test_tpm(void)
 {
 	struct selftest_tally tally = { 0 };
@@ -178,100 +300,42 @@ int test_tpm(void)
 		print_hex("PCR 14 (after)", pcr_value, LOTA_HASH_SIZE);
 	}
 
-	/* AIK test.
-	 *
-	 * A probe reports state, it does not create it: provisioning here
-	 * would persist a key that outlives the command and take one of
-	 * the TPM's persistent objects, which is the ceiling on how many
-	 * publishers this host can answer to.
-	 */
-	printf("\n=== AIK Test ===\n\n");
+	/* AIK and quote tests */
+	printf("\n=== AIK and Quote Test ===\n\n");
 
-	if (selftest_aik_plan(tpm_handle_holds_object(
-		    &g_agent.tpm_ctx, g_agent.tpm_ctx.aik_handle)) ==
-	    SELFTEST_AIK_SKIP) {
-		selftest_skip(&tally);
-		printf("No attestation key at handle 0x%08X, and this "
-		       "command does not create one: a key provisioned here "
-		       "would outlive it and hold one of the TPM's "
-		       "persistent objects.\n"
-		       "Start lota-agent.service, or enroll with a publisher, "
-		       "to provision one.\n",
-		       g_agent.tpm_ctx.aik_handle);
-		ret = -ENOENT;
-	} else {
-		printf("Using the attestation key at handle 0x%08X...\n",
-		       g_agent.tpm_ctx.aik_handle);
-		ret = tpm_provision_aik(&g_agent.tpm_ctx);
-		selftest_record(&tally, ret);
-		if (ret < 0) {
-			fprintf(stderr, "AIK could not be loaded: %s\n",
-				tpm_strerror(ret));
+	{
+		struct publisher_entry *entries = NULL;
+		size_t count = 0;
+		size_t held = 0;
+		int list_rc;
+
+		list_rc = publishers_list_alloc(LOTA_PROFILE_BASE_DIR, &entries,
+						&count);
+		if (list_rc < 0)
 			fprintf(stderr,
-				"Note: May require owner hierarchy authorization\n");
+				"Could not read %s: %s. Reporting on the "
+				"records that predate publishers.\n",
+				LOTA_PROFILE_BASE_DIR, strerror(-list_rc));
+		else
+			held = publishers_keys_held(entries, count);
+
+		if (selftest_quote_key(held) == SELFTEST_QUOTE_PER_PUBLISHER) {
+			printf("This host answers to %zu publisher(s) "
+			       "holding a key of their own, and those keys "
+			       "are what it attests with. The record at %s "
+			       "predates them and names handle 0x%08X, which "
+			       "is not a key this host attests with, so "
+			       "nothing here reads it.\n",
+			       held, TPM_AIK_META_PATH,
+			       g_agent.tpm_ctx.aik_handle);
+			selftest_quote_publisher_keys(&tally, entries, count);
 		} else {
-			printf("AIK ready\n");
+			printf("No publisher holds a key on this host, so the "
+			       "records that predate publishers name the key "
+			       "it attests with.\n\n");
+			selftest_quote_one_key(&tally, NULL);
 		}
-	}
-
-	/* Needs the key above, so it follows its verdict. */
-	printf("\n=== TPM Quote Test ===\n\n");
-
-	if (ret != 0) {
-		printf("Skipped: there is no attestation key to quote with.\n");
-		selftest_skip(&tally);
-	}
-
-	if (ret == 0) {
-		struct tpm_quote_response quote_resp;
-		uint8_t test_nonce[LOTA_NONCE_SIZE];
-		uint32_t quote_pcr_mask;
-
-		/* Generate random test nonce (production path uses server
-		 * challenge) */
-		printf("Generating test nonce...\n");
-		if (getrandom(test_nonce, LOTA_NONCE_SIZE, 0) !=
-		    LOTA_NONCE_SIZE) {
-			fprintf(stderr, "getrandom failed: %s\n",
-				strerror(errno));
-			tpm_cleanup(&g_agent.tpm_ctx);
-			return -1;
-		}
-		print_hex("Nonce", test_nonce, LOTA_NONCE_SIZE);
-
-		/* quote pcrs: 0,1,14 */
-		quote_pcr_mask = (1U << 0) | (1U << 1) | (1U << LOTA_PCR_SELF);
-		printf("\nRequesting quote for PCRs 0, 1, %d...\n",
-		       LOTA_PCR_SELF);
-		printf("An authorization the TPM refuses here spends one "
-		       "dictionary-attack attempt, which the chip forgives on "
-		       "its own schedule.\n");
-
-		ret = tpm_quote(&g_agent.tpm_ctx, test_nonce, quote_pcr_mask,
-				&quote_resp);
-		selftest_record(&tally, ret);
-		if (ret < 0) {
-			fprintf(stderr, "TPM Quote failed: %s\n",
-				tpm_strerror(ret));
-		} else {
-			printf("Quote generated successfully!\n\n");
-			printf("Attestation data size: %u bytes\n",
-			       quote_resp.attest_size);
-			printf("Signature algorithm: 0x%04X\n",
-			       quote_resp.sig_alg);
-			printf("Signature size: %u bytes\n",
-			       quote_resp.signature_size);
-			print_hex("Signature", quote_resp.signature,
-				  quote_resp.signature_size);
-			printf("\nPCR values in quote:\n");
-			print_hex("  PCR 0", quote_resp.pcr_values[0],
-				  LOTA_HASH_SIZE);
-			print_hex("  PCR 1", quote_resp.pcr_values[1],
-				  LOTA_HASH_SIZE);
-			print_hex("  PCR 14",
-				  quote_resp.pcr_values[LOTA_PCR_SELF],
-				  LOTA_HASH_SIZE);
-		}
+		free(entries);
 	}
 
 	tpm_cleanup(&g_agent.tpm_ctx);
