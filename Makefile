@@ -2307,6 +2307,7 @@ test-unit: all $(TEST_BINS)
 	@tests/integration/test_steam_setup_dropin.sh
 	@tests/integration/test_steam_setup_no_session.sh
 	@tests/integration/test_steam_setup_unopenable.sh
+	@tests/integration/test_steam_setup_no_agent.sh
 	@tests/integration/test_proton_hook_disable.sh
 	@tests/integration/test_proton_hook_shares.sh
 	@tests/integration/test_proton_hook_abi.sh
