@@ -141,10 +141,10 @@ check_lota_group() {
 }
 
 check_hook_library() {
-    local found=""
+    local found="" found32=""
 
     # also the soname, as the wrapper does
-    for dir in /usr/lib64 /usr/lib /usr/local/lib64 /usr/local/lib; do
+    for dir in /usr/lib64 /usr/local/lib64; do
         for candidate in "$dir/${HOOK_LIB}" "$dir"/${HOOK_LIB}.[0-9]*; do
             if [[ -f "$candidate" ]]; then
                 found="$candidate"
@@ -153,12 +153,37 @@ check_hook_library() {
         done
     done
 
-    if [[ -n "$found" ]]; then
-        ok "Hook library found: $found"
-    else
+    # 32-bit half: without it Steam logs a loader error, the game still runs
+    for dir in /usr/lib /usr/local/lib; do
+        for candidate in "$dir/${HOOK_LIB}" "$dir"/${HOOK_LIB}.[0-9]*; do
+            if [[ -f "$candidate" ]]; then
+                found32="$candidate"
+                break 2
+            fi
+        done
+    done
+
+    if [[ -z "$found" && -z "$found32" ]]; then
         warn "Hook library ($HOOK_LIB) not found in standard paths"
         echo "  It ships in lota-sdk, which lota-agent pulls in."
+        return
     fi
+
+    if [[ -n "$found" && -n "$found32" ]]; then
+        ok "Hook library found, both kinds: $found and $found32"
+        return
+    fi
+
+    ok "Hook library found: ${found:-$found32}"
+    warn "Only one kind of it is installed, so Steam will log a complaint"
+    echo "  Steam starts a game through several small programs of its own,"
+    echo "  and not all of them are the same kind of program. Each is handed"
+    echo "  the same LOTA library to load, and the ones that cannot read this"
+    echo "  copy say so in the log. The game still runs and LOTA still works."
+    echo "  Installing the missing copy stops the message:"
+    echo "    sudo dnf install lota-sdk"
+    echo "  If that is already installed, the package was built without its"
+    echo "  32-bit half; a build from source needs glibc-devel.i686."
 }
 
 # no login session, no XDG_RUNTIME_DIR: report it, never expand it bare (set -u)

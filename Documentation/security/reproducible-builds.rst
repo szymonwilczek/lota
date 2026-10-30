@@ -59,6 +59,10 @@ Reproduce a release
       liblotagaming.so liblotaserver.so liblota_wine_hook.so \
       liblota_anticheat.so lota_lsm.bpf.o
 
+The Wine hook's 32-bit half is hashed with the rest, as
+``liblota_wine_hook-i386.so``. Rebuilding it needs ``glibc-devel.i686``,
+as ``make install`` does.
+
 Compare the hashes against the ``SHA256SUMS`` attached to the release. Or, with
 the release's ``SHA256SUMS`` next to the rebuilt artifacts:
 

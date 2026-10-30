@@ -47,6 +47,10 @@ BuildRequires:  systemd-rpm-macros
 BuildRequires:  dbus-devel
 BuildRequires:  elfutils-libelf-devel
 BuildRequires:  selinux-policy-devel
+# the Wine hook's 32-bit half, which Steam's 32-bit launch processes load
+%ifarch x86_64
+BuildRequires:  glibc-devel(x86-32)
+%endif
 
 %description
 LOTA is a measured-boot remote-attestation framework with a BPF LSM
@@ -228,6 +232,10 @@ EOF
 %{_libdir}/liblotaserver.so.*
 %{_libdir}/liblota_wine_hook.so.*
 %{_libdir}/liblota_anticheat.so.*
+# the hook's 32-bit half
+%ifarch x86_64
+/usr/lib/liblota_wine_hook.so.*
+%endif
 
 %files sdk-devel
 %license LICENSE

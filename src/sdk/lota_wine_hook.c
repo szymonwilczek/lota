@@ -241,7 +241,9 @@ static bool policy_should_activate(const char *exe, const char *allow,
  *     If set and non-empty, the hook activates ONLY when
  *     /proc/self/exe begins with one of the comma-separated
  *     prefixes. Use this to pin attestation to a specific install
- *     tree rather than the FHS default.
+ *     tree rather than the FHS default. lota-proton-hook sets it
+ *     to the directories Steam names for the launch, which hold
+ *     the title, not the client helpers.
  *
  *   LOTA_HOOK_SKIP_PATH=/extra/skip/prefix
  *     Extends the built-in system-path skip list. Useful when a

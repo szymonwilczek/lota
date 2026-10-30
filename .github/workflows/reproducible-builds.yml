@@ -33,6 +33,7 @@ jobs:
             libtss2-dev \
             libssl-dev libsystemd-dev libseccomp-dev \
             libdbus-1-dev \
+            gcc-multilib \
             diffoscope
 
       - name: Install libbpf >= 1.0

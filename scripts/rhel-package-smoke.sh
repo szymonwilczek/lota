@@ -50,7 +50,8 @@ install_toolchain() {
 		git make gcc clang llvm bpftool pkgconf-pkg-config \
 		libbpf-devel elfutils-libelf-devel zlib-devel tpm2-tss-devel \
 		openssl-devel systemd-devel libseccomp-devel dbus-devel \
-		golang selinux-policy-devel rpm-build
+		golang selinux-policy-devel rpm-build \
+		glibc-devel.i686 libatomic.i686
 	go install github.com/goreleaser/nfpm/v2/cmd/nfpm@latest
 }
 
