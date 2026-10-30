@@ -45,10 +45,7 @@ BuildRequires:  libseccomp-devel
 BuildRequires:  systemd-devel
 BuildRequires:  systemd-rpm-macros
 BuildRequires:  dbus-devel
-BuildRequires:  SDL2-devel
-BuildRequires:  libcurl-devel
 BuildRequires:  elfutils-libelf-devel
-BuildRequires:  zlib-devel
 BuildRequires:  selinux-policy-devel
 
 %description
