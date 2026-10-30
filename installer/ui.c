@@ -6,6 +6,7 @@
 
 #include "ui.h"
 
+#include <ctype.h>
 #include <signal.h>
 #include <stdarg.h>
 #include <stdio.h>
@@ -437,9 +438,58 @@ void ui_kv(struct ui *ui, const char *key, const char *val)
 	fflush(stdout);
 }
 
-int ui_confirm(struct ui *ui, const char *prompt, int assume_yes)
+#define UI_CONFIRM_TRIES 3 /* unrecognised answers before declining */
+
+/*
+ * Parse @line into @answer; an empty line takes @def.
+ * Returns 0 when the line is neither yes nor no.
+ */
+static int confirm_answer(const char *line, int def, int *answer)
 {
+	char word[8];
+	size_t n = 0;
+
+	while (*line == ' ' || *line == '\t')
+		line++;
+	while (n < sizeof(word) - 1 && *line && *line != '\n' &&
+	       *line != '\r' && *line != ' ' && *line != '\t')
+		word[n++] = (char)tolower((unsigned char)*line++);
+	word[n] = '\0';
+
+	if (!n) {
+		*answer = def;
+		return 1;
+	}
+	if (!strcmp(word, "y") || !strcmp(word, "yes")) {
+		*answer = 1;
+		return 1;
+	}
+	if (!strcmp(word, "n") || !strcmp(word, "no") || !strcmp(word, "q") ||
+	    !strcmp(word, "quit")) {
+		*answer = 0;
+		return 1;
+	}
+	return 0;
+}
+
+/* Discard the rest of an answer longer than the buffer. */
+static void confirm_drain(const char *line)
+{
+	int c;
+
+	if (strchr(line, '\n'))
+		return;
+	while ((c = getchar()) != '\n' && c != EOF)
+		;
+}
+
+int ui_confirm(struct ui *ui, const char *prompt, int assume_yes,
+	       enum ui_default def)
+{
+	const int enter = def == UI_DEFAULT_YES;
+	const char *bracket = enter ? "[Y/n, q to quit]" : "[y/N, q to quit]";
 	char line[64];
+	int answer, try;
 
 	if (assume_yes)
 		return 1;
@@ -449,20 +499,24 @@ int ui_confirm(struct ui *ui, const char *prompt, int assume_yes)
 	if (ui->sink)
 		return 1;
 
-	if (ui->tty)
-		printf("  %s▸%s %s %s[Enter to continue, q to quit]%s ",
-		       col(ui, SGR_CYAN), col(ui, SGR_RESET), prompt,
-		       col(ui, SGR_DIM), col(ui, SGR_RESET));
-	else
-		printf("[lota-install] %s [Enter to continue, q to quit] ",
-		       prompt);
-	fflush(stdout);
+	for (try = 0; try < UI_CONFIRM_TRIES; try++) {
+		if (ui->tty)
+			printf("  %s->%s %s %s%s%s ", col(ui, SGR_CYAN),
+			       col(ui, SGR_RESET), prompt, col(ui, SGR_DIM),
+			       bracket, col(ui, SGR_RESET));
+		else
+			printf("[lota-install] %s %s ", prompt, bracket);
+		fflush(stdout);
 
-	if (!fgets(line, sizeof(line), stdin))
-		return 0;
-	if (line[0] == 'q' || line[0] == 'Q')
-		return 0;
-	return 1;
+		if (!fgets(line, sizeof(line), stdin))
+			return 0;
+		confirm_drain(line);
+		if (confirm_answer(line, enter, &answer))
+			return answer;
+		ui_text(ui, "Answer y or n ('q' quits).");
+	}
+	ui_text(ui, "No answer. Nothing was changed.");
+	return 0;
 }
 
 static const char *const spin_frames[] = { "⠋", "⠙", "⠹", "⠸", "⠼",

@@ -1434,6 +1434,7 @@ TEST_BINS := \
 	$(TEST_BIN_DIR)/test_installer_trust_key \
 	$(TEST_BIN_DIR)/test_installer_checkpoint \
 	$(TEST_BIN_DIR)/test_installer_service \
+	$(TEST_BIN_DIR)/test_installer_confirm \
 	$(TEST_BIN_DIR)/test_selftest_plan \
 	$(TEST_BIN_DIR)/test_ima_xattr \
 	$(TEST_BIN_DIR)/test_constant_time \
@@ -1474,6 +1475,11 @@ $(TEST_BIN_DIR)/test_installer_named_paths: tests/test_installer_named_paths.c \
 $(TEST_BIN_DIR)/test_installer_service: tests/test_installer_service.c installer/probe.c | $(BUILD_DIR)
 	$(QUIET_CC)
 	$(Q)$(CC) $(CFLAGS) -o $@ $^ -lcrypto
+
+$(TEST_BIN_DIR)/test_installer_confirm: tests/test_installer_confirm.c \
+		installer/ui.c | $(BUILD_DIR)
+	$(QUIET_CC)
+	$(Q)$(CC) $(CFLAGS) -o $@ $^
 
 $(TEST_BIN_DIR)/test_selftest_plan: tests/test_selftest_plan.c | $(BUILD_DIR)
 	$(QUIET_CC)
@@ -2034,6 +2040,7 @@ test-unit: all $(TEST_BINS)
 	@$(BUILD_DIR)/test_installer_trust_key
 	@$(BUILD_DIR)/test_installer_checkpoint
 	@$(BUILD_DIR)/test_installer_service
+	@$(BUILD_DIR)/test_installer_confirm
 	@$(BUILD_DIR)/test_selftest_plan
 	@$(BUILD_DIR)/test_ima_xattr
 	@$(BUILD_DIR)/test_constant_time
@@ -2224,7 +2231,8 @@ VALGRIND_UNIT_BINS := \
 	test_publisher_profile test_verify_result_str test_connect_hint \
 	test_net_errors test_tls_anchor \
 	test_xattr_carry test_ima_policy_scope test_integrity_baseline \
-	test_daemon_exit_status test_integrity_map_layout
+	test_daemon_exit_status test_integrity_map_layout \
+	test_installer_confirm
 
 valgrind-unit: $(TEST_BINS)
 	@echo "=== Running unit tests under valgrind memcheck ==="

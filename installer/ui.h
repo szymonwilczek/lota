@@ -120,10 +120,17 @@ void ui_error(struct ui *ui, const char *fmt, ...)
 /* aligned "key  value" detail line */
 void ui_kv(struct ui *ui, const char *key, const char *val);
 
+/* Answer Enter takes; irreversible questions default to no. */
+enum ui_default {
+	UI_DEFAULT_YES = 0,
+	UI_DEFAULT_NO,
+};
+
 /* 1 = proceed, 0 = abort.
- * Reads a line from stdin.
+ * Reads stdin: y/yes proceed, n/no/q decline, Enter takes @def.
  * assume_yes skips the prompt and proceeds. */
-int ui_confirm(struct ui *ui, const char *prompt, int assume_yes);
+int ui_confirm(struct ui *ui, const char *prompt, int assume_yes,
+	       enum ui_default def);
 
 /* live region: begin -> feed/tick -> end */
 void ui_live_begin(struct ui *ui, const char *label);
