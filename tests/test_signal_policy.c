@@ -30,7 +30,11 @@ static int g_failures;
 	} while (0)
 
 #define DENIED(sig, lota_mode, is_agent, is_protected) \
-	lota_signal_denied((sig), (lota_mode), (is_agent), (is_protected))
+	lota_signal_denied((sig), (lota_mode), (is_agent), (is_protected), 0)
+
+/* as DENIED, for a target with a handler for @sig */
+#define DENIED_HANDLED(sig, lota_mode, is_agent, is_protected) \
+	lota_signal_denied((sig), (lota_mode), (is_agent), (is_protected), 1)
 
 #define RECORDS(sig, denied) lota_signal_event((sig), (denied))
 
@@ -103,11 +107,59 @@ static void test_the_signals_that_are_always_delivered(void)
 	      "enforce refuses SIGHUP to a protected task that is not the agent");
 }
 
+/*
+ * A handled signal neither ends nor stops the target. The wineserver
+ * suspends threads and delivers APCs with SIGUSR1 and ends threads with
+ * SIGQUIT; a title under Wine refused them hangs.
+ */
+static void test_a_signal_the_target_handles_is_delivered(void)
+{
+	CHECK(!DENIED_HANDLED(SIGUSR1, LOTA_MODE_ENFORCE, 0, 1),
+	      "enforce delivers a handled SIGUSR1 to a protected task");
+	CHECK(!DENIED_HANDLED(SIGQUIT, LOTA_MODE_ENFORCE, 0, 1),
+	      "enforce delivers a handled SIGQUIT to a protected task");
+	CHECK(DENIED(SIGUSR1, LOTA_MODE_ENFORCE, 0, 1),
+	      "enforce refuses SIGUSR1 to a protected task with no handler");
+	CHECK(DENIED(SIGQUIT, LOTA_MODE_ENFORCE, 0, 1),
+	      "enforce refuses SIGQUIT to a protected task with no handler");
+}
+
+/*
+ * SIGKILL and SIGSTOP cannot be handled. SIGTERM, SIGINT and SIGHUP ask
+ * a process to end, so a protected title still ends only through the agent.
+ * The agent shuts down from its own handlers, so a handler opens nothing.
+ */
+static void test_a_handler_does_not_open_what_ends_the_target(void)
+{
+	CHECK(DENIED_HANDLED(SIGKILL, LOTA_MODE_ENFORCE, 0, 1),
+	      "enforce refuses SIGKILL to a protected task, handler or not");
+	CHECK(DENIED_HANDLED(SIGSTOP, LOTA_MODE_ENFORCE, 0, 1),
+	      "enforce refuses SIGSTOP to a protected task, handler or not");
+	CHECK(DENIED_HANDLED(SIGTERM, LOTA_MODE_ENFORCE, 0, 1),
+	      "enforce refuses a handled SIGTERM to a protected task");
+	CHECK(DENIED_HANDLED(SIGINT, LOTA_MODE_ENFORCE, 0, 1),
+	      "enforce refuses a handled SIGINT to a protected task");
+	CHECK(DENIED_HANDLED(SIGHUP, LOTA_MODE_ENFORCE, 0, 1),
+	      "enforce refuses a handled SIGHUP to a protected task");
+	CHECK(DENIED_HANDLED(SIGTERM, LOTA_MODE_ENFORCE, 1, 0),
+	      "enforce refuses a handled SIGTERM to the agent");
+	CHECK(DENIED_HANDLED(SIGUSR1, LOTA_MODE_ENFORCE, 1, 0),
+	      "enforce refuses a handled SIGUSR1 to the agent");
+}
+
 /* Header mirrors the signal number because the object has no uapi */
 static void test_the_mirrored_signal_number(void)
 {
 	CHECK(LOTA_SIG_HUP == SIGHUP,
 	      "the mirrored SIGHUP matches the system's");
+	CHECK(LOTA_SIG_INT == SIGINT,
+	      "the mirrored SIGINT matches the system's");
+	CHECK(LOTA_SIG_KILL == SIGKILL,
+	      "the mirrored SIGKILL matches the system's");
+	CHECK(LOTA_SIG_TERM == SIGTERM,
+	      "the mirrored SIGTERM matches the system's");
+	CHECK(LOTA_SIG_STOP == SIGSTOP,
+	      "the mirrored SIGSTOP matches the system's");
 }
 
 /* A refusal is recorded whatever the signal */
@@ -199,6 +251,8 @@ int main(void)
 	test_enforce_refuses_what_can_end_the_target();
 	test_an_unprotected_target_is_never_refused();
 	test_the_signals_that_are_always_delivered();
+	test_a_signal_the_target_handles_is_delivered();
+	test_a_handler_does_not_open_what_ends_the_target();
 	test_the_mirrored_signal_number();
 	test_a_refusal_is_always_recorded();
 	test_a_delivered_signal_is_still_recorded();

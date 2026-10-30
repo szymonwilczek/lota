@@ -401,6 +401,11 @@ Active threats
          no signal to a protected task from anything but itself, the agent or
          the kernel, and the agent relays only ``SIGTERM`` and ``SIGKILL``, only
          for a caller ``kill(2)`` would have allowed.
+       | Except a signal the task handles itself: it ends nothing, and the
+         wineserver drives every process it hosts with ``SIGUSR1`` and
+         ``SIGQUIT``. ``SIGTERM``, ``SIGINT`` and ``SIGHUP`` stay refused even
+         when handled, since a title handles them to exit, as does every
+         signal to the agent, whose handlers are how it shuts down.
        | Every relayed termination is journalled, and the host reports
          ``PROTECTED_TERMINATED`` in its status word and in every token it
          issues until it reboots.
