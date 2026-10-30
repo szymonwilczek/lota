@@ -14,6 +14,7 @@
 #include <stdint.h>
 
 #include "../../include/lota.h"
+#include "mapped_pins.h"
 
 struct bpf_object;
 struct ring_buffer;
@@ -40,6 +41,11 @@ struct bpf_loader_ctx {
 	int protected_pids_fd; /* Protected PIDs map fd */
 	int allow_verity_digest_fd; /* 'allow_verity_digest' map fd */
 	int exe_hash_slots_fd; /* 'exe_hash_slots' map fd */
+	int mapped_exec_fd; /* 'mapped_exec' pin map fd */
+	struct mapped_exec_pin *pins; /* what this agent has pinned */
+	size_t pin_count;
+	size_t pin_cap;
+	uint64_t pin_round; /* measurement round the pins were last seen in */
 	bool loaded; /* BPF object loaded into the kernel and maps resolved */
 	bool attached; /* LSM / fmod_ret programs attached to kernel hooks */
 };
@@ -95,6 +101,45 @@ int bpf_loader_allow_verity_path(struct bpf_loader_ctx *ctx, const char *path);
 int bpf_loader_hash_file(struct bpf_loader_ctx *ctx, const char *path,
 			 uint64_t expect_dev, uint64_t expect_ino,
 			 struct lota_verity_digest_key *out);
+
+/*
+ * bpf_loader_pin_mapped_object - Pin a mapped library against writes
+ * @ctx: Loaded context
+ * @path: Path to open, as for bpf_loader_hash_file
+ * @expect_dev: st_dev the open must still resolve to
+ * @expect_ino: st_ino the open must still resolve to
+ * @guarded: Set to 1 when the file is pinned and may be measured, 0 otherwise
+ *
+ * Pins the kernel's inode for this open. @guarded stays 0 when the file has
+ * no mapping record, changed since it was mapped, or is open for writing.
+ * Held until a bpf_loader_pin_sweep() misses it.
+ *
+ * Returns: 0 on success, negative errno on failure.
+ */
+int bpf_loader_pin_mapped_object(struct bpf_loader_ctx *ctx, const char *path,
+				 uint64_t expect_dev, uint64_t expect_ino,
+				 int *guarded);
+
+/*
+ * bpf_loader_pin_round_begin - Start a round of pinning
+ * @ctx: Loaded context
+ */
+void bpf_loader_pin_round_begin(struct bpf_loader_ctx *ctx);
+
+/*
+ * bpf_loader_pin_sweep - Release the pins this round did not reach
+ * @ctx: Loaded context
+ * @released: Optional, set to the number of inodes unpinned
+ *
+ * Returns: 0 on success, negative errno on failure.
+ */
+int bpf_loader_pin_sweep(struct bpf_loader_ctx *ctx, size_t *released);
+
+/*
+ * bpf_loader_pin_count - How many inodes this agent is holding pinned
+ * @ctx: Loaded context
+ */
+size_t bpf_loader_pin_count(const struct bpf_loader_ctx *ctx);
 
 /*
  * Callback for ring buffer events
@@ -499,6 +544,8 @@ struct bpf_extended_stats {
 	uint64_t kill_guard_blocked;
 	uint64_t events_yielded; /* dropped to leave ring room */
 	uint64_t kill_probes; /* signal-0 probes at a protected task */
+	uint64_t mapped_write_blocked; /* writes refused to a pinned library */
+	uint64_t mapped_pin_refused; /* mapped objects left unpinned */
 };
 
 /*

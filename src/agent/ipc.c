@@ -1415,20 +1415,14 @@ static void handle_get_token(struct ipc_context *ctx, struct ipc_client *client,
 		pid_list_size = (uint16_t)pid_bytes;
 	}
 
+	/* opened even when empty, so the last exit unpins everything */
+	lota_rt_measure_round_begin();
+
 	/*
-	 * Measure each protected process's live code from the kernel side and
-	 * fold the per-PID image digest into the protect digest. The
-	 * measurement is taken by the agent across the IPC boundary, never by
-	 * the measured process, so a process cannot forge its own measurement.
-	 *
-	 * Object the kernel holds no fs-verity digest for is absent from the fold
-	 * and counted instead, and the token says so through
-	 * LOTA_STATUS_IMAGE_FULLY_MEASURED:
-	 * missing measurement is never issued as a complete one, and how much
-	 * coverage a publisher requires is theirs to decide.
-	 * The round still fails closed when nothing could be measured or when
-	 * protected process's own executable could not be, which is the part
-	 * its publisher controls.
+	 * The agent measures each protected process, never the process itself,
+	 * and folds its image digest into the protect digest. A process that
+	 * cannot be measured is left out as a zero digest and clears
+	 * LOTA_STATUS_IMAGE_FULLY_MEASURED; only the caller's own refuses.
 	 */
 	if (runtime_pid_count > 0) {
 		image_list_size = (size_t)runtime_pid_count *
@@ -1558,6 +1552,20 @@ static void handle_get_token(struct ipc_context *ctx, struct ipc_client *client,
 				lota_info("%s%s", statement, held_clause);
 			}
 		}
+	}
+
+	/* unpin what this round did not reach */
+	{
+		size_t released = 0;
+		int sweep = lota_rt_measure_round_end(&released);
+
+		if (sweep < 0)
+			lota_warn("failed to release write guards of objects "
+				  "no longer measured: %s",
+				  strerror(-sweep));
+		else if (released > 0)
+			lota_dbg("released %zu write guard%s", released,
+				 released == 1 ? "" : "s");
 	}
 
 	ret = lota_compute_runtime_protect_digest_v2(runtime_pids,

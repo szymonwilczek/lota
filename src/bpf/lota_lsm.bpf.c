@@ -50,6 +50,14 @@ char LICENSE[] SEC("license") = "GPL";
 #define EPERM 1
 #endif
 
+#ifndef EINVAL
+#define EINVAL 22
+#endif
+
+#ifndef EOPNOTSUPP
+#define EOPNOTSUPP 95
+#endif
+
 #ifndef FMODE_WRITE
 #define FMODE_WRITE ((fmode_t)(1U << 1))
 #endif
@@ -121,7 +129,7 @@ struct {
  */
 struct {
 	__uint(type, BPF_MAP_TYPE_ARRAY);
-	__uint(max_entries, 20);
+	__uint(max_entries, 22);
 	__type(key, u32);
 	__type(value, u64);
 } stats SEC(".maps");
@@ -164,6 +172,8 @@ struct {
 #define STAT_KILL_GUARD_BLOCKED 17
 #define STAT_EVENTS_YIELDED 18
 #define STAT_KILL_PROBES 19 /* permitted sig 0, counted, not journalled */
+#define STAT_MAPPED_WRITE_BLOCKED 20 /* write refused to a pinned library */
+#define STAT_MAPPED_PIN_REFUSED 21 /* mapping not pinned, so not measured */
 
 /*
  * Rate-limit window per enum lota_event_type (see lota_event_budget.h):
@@ -273,6 +283,29 @@ struct {
 	__type(key, struct trusted_lib_key);
 	__type(value, u32);
 } guarded_files SEC(".maps");
+
+/*
+ * Libraries the agent pinned for a protected process; lota_file_open refuses
+ * their write opens, as the kernel does for a running executable.
+ * Renaming over one works. Only the agent writes it. Name fits 16 bytes.
+ */
+struct {
+	__uint(type, BPF_MAP_TYPE_HASH);
+	__uint(max_entries, LOTA_MAX_MAPPED_EXEC_GUARDS);
+	__type(key, struct trusted_lib_key);
+	__type(value, u32);
+} mapped_exec SEC(".maps");
+
+/*
+ * Size and ctime of every executable mapping, any task: protection is asked
+ * for after the loader maps. LRU: a lost record costs only a measurement.
+ */
+struct {
+	__uint(type, BPF_MAP_TYPE_LRU_HASH);
+	__uint(max_entries, LOTA_MAX_MAPPED_SEEN);
+	__type(key, struct trusted_lib_key);
+	__type(value, struct lota_mapped_seen);
+} mapped_seen SEC(".maps");
 
 /*
  * fs-verity digest allowlist.
@@ -594,6 +627,10 @@ static __always_inline int is_lota_managed_map(struct bpf_map *map)
 	if (__builtin_memcmp(name, "guarded_files", sizeof("guarded_files")) ==
 	    0)
 		return 1;
+	if (__builtin_memcmp(name, "mapped_exec", sizeof("mapped_exec")) == 0)
+		return 1;
+	if (__builtin_memcmp(name, "mapped_seen", sizeof("mapped_seen")) == 0)
+		return 1;
 	if (__builtin_memcmp(name, "events", sizeof("events")) == 0)
 		return 1;
 	if (__builtin_memcmp(name, "stats", sizeof("stats")) == 0)
@@ -759,6 +796,138 @@ static __always_inline u32 guarded_file_kind(struct file *file)
 
 	kind = bpf_map_lookup_elem(&guarded_files, &key);
 	return kind ? *kind : 0;
+}
+
+/*
+ * Enforcement map key of a file. s_dev, not stat(2)'s st_dev:
+ * they differ on a filesystem with a device per subvolume.
+ */
+static __always_inline int file_inode_key(struct file *file,
+					  struct trusted_lib_key *key)
+{
+	struct super_block *sb;
+	struct inode *inode;
+
+	if (!file)
+		return 0;
+
+	inode = BPF_CORE_READ(file, f_inode);
+	if (!inode)
+		return 0;
+
+	sb = BPF_CORE_READ(inode, i_sb);
+	if (!sb)
+		return 0;
+
+	key->dev = (u64)BPF_CORE_READ(sb, s_dev);
+	key->ino = (u64)BPF_CORE_READ(inode, i_ino);
+	if (key->dev == 0 || key->ino == 0)
+		return 0;
+
+	return 1;
+}
+
+static __always_inline int is_mapped_exec_guarded(struct file *file)
+{
+	struct trusted_lib_key key = {};
+	u32 *guarded;
+
+	if (!file_inode_key(file, &key))
+		return 0;
+
+	guarded = bpf_map_lookup_elem(&mapped_exec, &key);
+	return (guarded && *guarded) ? 1 : 0;
+}
+
+/* enough to tell a file from one swapped in */
+static __always_inline void inode_seen(struct inode *inode,
+				       struct lota_mapped_seen *seen)
+{
+	seen->size = (u64)BPF_CORE_READ(inode, i_size);
+	seen->ctime_sec = (u64)BPF_CORE_READ(inode, i_ctime_sec);
+	seen->ctime_nsec = (u32)BPF_CORE_READ(inode, i_ctime_nsec);
+	seen->pad = 0;
+}
+
+/* every mode and task: which records will be needed is not known yet */
+static __always_inline void remember_mapped_exec(struct file *file)
+{
+	struct trusted_lib_key key = {};
+	struct lota_mapped_seen seen = {};
+	struct inode *inode;
+
+	if (!file_inode_key(file, &key))
+		return;
+
+	inode = BPF_CORE_READ(file, f_inode);
+	if (!inode)
+		return;
+
+	inode_seen(inode, &seen);
+	bpf_map_update_elem(&mapped_seen, &key, &seen, BPF_ANY);
+}
+
+/*
+ * Fill @slot with @file's key, whether it is the file mapped, and its writers:
+ * a pin cannot recall a write open already granted.
+ */
+static __always_inline void answer_pin_question(struct file *file,
+						struct lota_exe_hash_slot *slot)
+{
+	struct trusted_lib_key key = {};
+	struct lota_mapped_seen now = {};
+	struct lota_mapped_seen *seen;
+	struct inode *inode;
+	int writers;
+
+	slot->algo = 0;
+	slot->err = 0;
+	slot->dev = 0;
+	slot->ino = 0;
+	slot->writers = 0;
+	slot->seen = LOTA_EXE_MAP_SEEN_MISSING;
+	slot->state = LOTA_EXE_HASH_ANSWERED;
+
+	/* a pin refuses nothing outside enforce */
+	if (get_mode() != LOTA_MODE_ENFORCE) {
+		slot->err = EOPNOTSUPP;
+		return;
+	}
+
+	inode = BPF_CORE_READ(file, f_inode);
+	if (!inode || !file_inode_key(file, &key)) {
+		slot->err = EINVAL;
+		return;
+	}
+
+	slot->dev = key.dev;
+	slot->ino = key.ino;
+
+	/* negative i_writecount: writes denied, e.g. a running exe */
+	writers = BPF_CORE_READ(inode, i_writecount.counter);
+	if (writers > 0)
+		slot->writers = (u32)writers;
+
+	seen = bpf_map_lookup_elem(&mapped_seen, &key);
+	if (!seen)
+		return;
+
+	inode_seen(inode, &now);
+	slot->seen =
+		(now.size == seen->size && now.ctime_sec == seen->ctime_sec &&
+		 now.ctime_nsec == seen->ctime_nsec) ?
+			LOTA_EXE_MAP_SEEN_OK :
+			LOTA_EXE_MAP_SEEN_CHANGED;
+}
+
+/* count objects the agent will not pin */
+static __always_inline void count_pin_refusal(struct lota_exe_hash_slot *slot)
+{
+	/* not enforcing, or already pinned: nothing refused */
+	if (slot->err != 0 || slot->guard)
+		return;
+	if (slot->seen != LOTA_EXE_MAP_SEEN_OK || slot->writers > 0)
+		inc_stat(STAT_MAPPED_PIN_REFUSED);
 }
 
 static __always_inline int is_write_open_flags(int flags)
@@ -1025,6 +1194,46 @@ static __always_inline void report_blocked_kill_guard(const char *what, u32 len)
 	inc_stat(STAT_EVENTS_SENT);
 }
 
+/* the writer sees only EPERM; tell the event stream */
+static __always_inline void report_blocked_mapped_write(struct file *file)
+{
+	struct lota_exec_event *event;
+	struct dentry *dentry;
+	const unsigned char *name = NULL;
+
+	inc_stat(STAT_MAPPED_WRITE_BLOCKED);
+
+	if (!should_emit_event(LOTA_MODE_ENFORCE, 1,
+			       LOTA_EVENT_MAPPED_WRITE_BLOCKED))
+		return;
+
+	event = bpf_ringbuf_reserve(&events, sizeof(*event), 0);
+	if (!event) {
+		inc_stat(STAT_RINGBUF_DROPS);
+		return;
+	}
+
+	__builtin_memset(event, 0, sizeof(*event));
+	event->timestamp_ns = bpf_ktime_get_ns();
+	event->event_type = LOTA_EVENT_MAPPED_WRITE_BLOCKED;
+	event->tgid = bpf_get_current_pid_tgid() >> 32;
+	event->pid = bpf_get_current_pid_tgid() & 0xFFFFFFFF;
+	event->uid = (u32)(bpf_get_current_uid_gid() & 0xFFFFFFFF);
+	event->gid = (u32)(bpf_get_current_uid_gid() >> 32);
+	bpf_get_current_comm(event->comm, sizeof(event->comm));
+
+	dentry = BPF_CORE_READ(file, f_path.dentry);
+	if (dentry)
+		name = BPF_CORE_READ(dentry, d_name.name);
+	if (!name ||
+	    bpf_probe_read_kernel_str(event->filename, sizeof(event->filename),
+				      name) < 0)
+		__builtin_memcpy(event->filename, "(unnamed)", 10);
+
+	bpf_ringbuf_submit(event, 0);
+	inc_stat(STAT_EVENTS_SENT);
+}
+
 /*
  * Refuse write opens of a guarded file; reads kill nobody.
  * The agent and admin are exempt, as from the signal gate.
@@ -1072,6 +1281,16 @@ int BPF_PROG(lota_file_open, struct file *file, int ret)
 		return -EPERM;
 	}
 
+	/*
+	 * Pinned library: unwritable like a running executable.
+	 * Ahead of strict_mmap, since its content hash depends on it.
+	 */
+	if (is_write_open_flags(BPF_CORE_READ(file, f_flags)) &&
+	    is_mapped_exec_guarded(file)) {
+		report_blocked_mapped_write(file);
+		return -EPERM;
+	}
+
 	if (!get_config(LOTA_CFG_STRICT_MMAP))
 		return 0;
 
@@ -1097,6 +1316,7 @@ int BPF_PROG(lota_file_post_open_measure, struct file *file, int mask)
 {
 	struct lota_exe_hash_slot *slot;
 	u32 tid;
+	u32 want;
 	long hashed;
 
 	if (!file)
@@ -1106,14 +1326,28 @@ int BPF_PROG(lota_file_post_open_measure, struct file *file, int mask)
 	slot = bpf_map_lookup_elem(&exe_hash_slots, &tid);
 	if (!slot)
 		return 0;
-	if (slot->state != LOTA_EXE_HASH_ASKED)
+	want = slot->state;
+	if (want != LOTA_EXE_HASH_ASKED && want != LOTA_EXE_HASH_ASKED_PIN)
 		return 0;
 
 	/* user space writes this map: confirm the caller is the agent */
 	if (!sleepable_task_is_agent_or_admin()) {
 		slot->state = LOTA_EXE_HASH_ANSWERED;
 		slot->algo = 0;
+		slot->guard = 0;
 		slot->err = EPERM;
+		return 0;
+	}
+
+	/* lota_file_open refuses writes in enforce mode only */
+	slot->guard = (get_mode() == LOTA_MODE_ENFORCE &&
+		       is_mapped_exec_guarded(file)) ?
+			      1 :
+			      0;
+
+	if (want == LOTA_EXE_HASH_ASKED_PIN) {
+		answer_pin_question(file, slot);
+		count_pin_refusal(slot);
 		return 0;
 	}
 
@@ -1648,6 +1882,12 @@ int BPF_PROG(lota_mmap_file, struct file *file, unsigned long reqprot,
 
 	inc_stat(STAT_MMAP_EXECS);
 
+	/*
+	 * Every task, before any verdict: the loader maps most libraries
+	 * before the process asks to be protected.
+	 */
+	remember_mapped_exec(file);
+
 	mode = get_mode();
 
 	/*
@@ -1812,6 +2052,9 @@ int BPF_PROG(lota_file_mprotect, struct vm_area_struct *vma,
 
 	inc_stat(STAT_MMAP_EXECS);
 	vm_flags = BPF_CORE_READ(vma, vm_flags);
+
+	/* mprotect(PROT_EXEC) maps code too */
+	remember_mapped_exec(file);
 
 	/*
 	 * mprotect(PROT_EXEC) on a file-backed VMA closes the W^X bypass

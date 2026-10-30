@@ -1425,6 +1425,7 @@ TEST_BINS := \
 	$(TEST_BIN_DIR)/test_runtime_mapping_identity \
 	$(TEST_BIN_DIR)/test_runtime_measure_pid \
 	$(TEST_BIN_DIR)/test_runtime_identity_road \
+	$(TEST_BIN_DIR)/test_mapped_pins \
 	$(TEST_BIN_DIR)/test_seal_blob \
 	$(TEST_BIN_DIR)/test_seal_envelope \
 	$(TEST_BIN_DIR)/test_seal_tpm \
@@ -1833,6 +1834,11 @@ $(TEST_BIN_DIR)/test_runtime_measure_pid: tests/test_runtime_measure_pid.c $(AGE
 	$(QUIET_CC)
 	$(Q)$(CC) $(CFLAGS) -o $@ $^ -lcrypto
 
+$(TEST_BIN_DIR)/test_mapped_pins: tests/test_mapped_pins.c \
+		$(AGENT_DIR)/mapped_pins.h | $(BUILD_DIR)
+	$(QUIET_CC)
+	$(Q)$(CC) $(CFLAGS) -o $@ tests/test_mapped_pins.c
+
 $(TEST_BIN_DIR)/test_runtime_identity_road: tests/test_runtime_identity_road.c $(AGENT_DIR)/runtime_image_measure.c | $(BUILD_DIR)
 	$(QUIET_CC)
 	$(Q)$(CC) $(CFLAGS) -o $@ $^ -lcrypto
@@ -2159,6 +2165,7 @@ test-unit: all $(TEST_BINS)
 	@$(BUILD_DIR)/test_runtime_image_collect
 	@$(BUILD_DIR)/test_runtime_mapping_identity
 	@$(BUILD_DIR)/test_runtime_measure_pid
+	@$(BUILD_DIR)/test_mapped_pins
 	@$(BUILD_DIR)/test_runtime_identity_road
 	@$(BUILD_DIR)/test_seal_blob
 	@$(BUILD_DIR)/test_seal_envelope

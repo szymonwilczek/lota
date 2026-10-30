@@ -49,13 +49,14 @@ static int tests_passed;
 #define MAGIC_9P 0x01021997UL
 #define MAGIC_CEPH 0x00C36400UL
 
-static void expect(const char *name, enum lota_rt_identity_road want, int role,
-		   int verity_present, unsigned long magic)
+static void expect_guarded(const char *name, enum lota_rt_identity_road want,
+			   int role, int verity_present, unsigned long magic,
+			   int write_guarded)
 {
 	enum lota_rt_identity_road got;
 
 	TEST(name);
-	got = lota_rt_identity_road(role, verity_present, magic);
+	got = lota_rt_identity_road(role, verity_present, magic, write_guarded);
 	if (got != want) {
 		char reason[96];
 
@@ -65,6 +66,13 @@ static void expect(const char *name, enum lota_rt_identity_road want, int role,
 		return;
 	}
 	PASS();
+}
+
+/* unguarded object */
+static void expect(const char *name, enum lota_rt_identity_road want, int role,
+		   int verity_present, unsigned long magic)
+{
+	expect_guarded(name, want, role, verity_present, magic, 0);
 }
 
 /* a verity digest is never traded for a hash, whatever the role or fs */
@@ -133,6 +141,41 @@ static void test_unknown_role_is_refused(void)
 	       LOTA_RT_ROLE_EXECUTABLE, 0, 0);
 }
 
+/*
+ * Write opens refused while mapped make a library as stable as a running
+ * executable, which the kernel alone guards.
+ */
+static void test_a_guarded_library_is_hashed(void)
+{
+	expect_guarded("a guarded library on btrfs is hashed",
+		       LOTA_RT_ROAD_CONTENT_HASH, LOTA_RT_ROLE_MAPPED_OBJECT, 0,
+		       MAGIC_BTRFS, 1);
+	expect_guarded("a guarded library on ext4 is hashed",
+		       LOTA_RT_ROAD_CONTENT_HASH, LOTA_RT_ROLE_MAPPED_OBJECT, 0,
+		       MAGIC_EXT4, 1);
+	expect_guarded("a guarded library with a verity digest still takes it",
+		       LOTA_RT_ROAD_VERITY, LOTA_RT_ROLE_MAPPED_OBJECT, 1,
+		       MAGIC_BTRFS, 1);
+}
+
+/* a served fs answers the hasher and the page fault separately */
+static void test_a_guarded_library_on_a_served_fs_is_refused(void)
+{
+	expect_guarded("a guarded library on fuse is still refused",
+		       LOTA_RT_ROAD_NONE, LOTA_RT_ROLE_MAPPED_OBJECT, 0,
+		       MAGIC_FUSE, 1);
+	expect_guarded("a guarded library on nfs is still refused",
+		       LOTA_RT_ROAD_NONE, LOTA_RT_ROLE_MAPPED_OBJECT, 0,
+		       MAGIC_NFS, 1);
+}
+
+static void test_a_guard_does_not_rescue_an_unknown_role(void)
+{
+	expect_guarded("a guarded object of unknown role is refused",
+		       LOTA_RT_ROAD_NONE, LOTA_RT_ROLE_UNKNOWN, 0, MAGIC_BTRFS,
+		       1);
+}
+
 int main(void)
 {
 	printf("\n=== LOTA runtime identity road tests ===\n\n");
@@ -142,6 +185,9 @@ int main(void)
 	test_libraries_are_not_hashed();
 	test_served_filesystems_are_refused();
 	test_unknown_role_is_refused();
+	test_a_guarded_library_is_hashed();
+	test_a_guarded_library_on_a_served_fs_is_refused();
+	test_a_guard_does_not_rescue_an_unknown_role();
 
 	printf("\n=== Results: %d/%d passed ===\n\n", tests_passed, tests_run);
 	return tests_passed == tests_run ? 0 : 1;
