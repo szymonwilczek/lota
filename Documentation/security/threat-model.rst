@@ -365,6 +365,10 @@ Active threats
          stream, not left a bare ``EPERM``.
      - | Anonymous executable memory and JIT code are not measured as modules.
        | Intended bound is W^X plus policy enforcement.
+       | Memory with no file behind it, such as the memfd Wine maps Windows
+         images out of, takes neither road: no digest can exist for it and no
+         guard refuses a write through an earlier mapping. It is reported as
+         missing coverage; a process whose own executable it is gets no token.
        | A content hash reads the bytes once; an fs-verity digest binds every
          later page fault. It is the weaker road, so it has its own flag.
        | An unpinned library gets no content hash, nor does any filesystem a

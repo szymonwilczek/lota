@@ -390,6 +390,7 @@ int lota_rt_measure_entry_verity(pid_t pid,
 			opened->size = (uint64_t)st.st_size;
 			opened->mtime_sec = (int64_t)st.st_mtim.tv_sec;
 			opened->mtime_nsec = (int64_t)st.st_mtim.tv_nsec;
+			opened->nlink = (unsigned long)st.st_nlink;
 			/* off the fd: the path may have moved since open */
 			if (fstatfs(fd, &sfs) == 0)
 				opened->fs_magic = (unsigned long)sfs.f_type;
@@ -488,6 +489,14 @@ void lota_rt_failure_reason(const struct lota_runtime_measure_failure *fail,
 	 * so both name the object and the action that fixes it;
 	 * anything else is ordinary errno against a named object.
 	 */
+	if (err == ENODATA && fail->no_file) {
+		snprintf(buf, buflen,
+			 "%s%s is memory with no file behind it, so nothing "
+			 "can carry a digest for it",
+			 subject, tail);
+		return;
+	}
+
 	if (err == ENODATA && fail->road_err != 0) {
 		/* content road refused too: name its error, not fs-verity */
 		snprintf(buf, buflen,
@@ -582,6 +591,7 @@ static int rt_err_is_unmeasurable(int err)
 #define LOTA_RT_MAGIC_XFS 0x58465342UL
 #define LOTA_RT_MAGIC_OVERLAYFS 0x794C7630UL
 #define LOTA_RT_MAGIC_TMPFS 0x01021994UL
+#define LOTA_RT_MAGIC_HUGETLBFS 0x958458F6UL
 
 static int rt_fs_may_be_content_hashed(unsigned long fs_magic)
 {
@@ -595,6 +605,15 @@ static int rt_fs_may_be_content_hashed(unsigned long fs_magic)
 	default:
 		return 0;
 	}
+}
+
+int lota_rt_object_has_no_file(unsigned long fs_magic, unsigned long nlink)
+{
+	if (nlink != 0)
+		return 0;
+
+	return fs_magic == LOTA_RT_MAGIC_TMPFS ||
+	       fs_magic == LOTA_RT_MAGIC_HUGETLBFS;
 }
 
 enum lota_rt_identity_road lota_rt_identity_road(int role, int verity_present,
@@ -625,6 +644,7 @@ struct rt_object_measure {
 	int is_exe;
 	int content_hashed; /* digest is a content hash, not fs-verity */
 	int road_err; /* why the content road refused, 0 if it was not open */
+	int no_file; /* memory with no file behind it */
 };
 
 /* Kernel hash of one mapping, cached by the identity the verity read took */
@@ -720,6 +740,13 @@ static int rt_measure_object(pid_t pid, const struct lota_rt_map_entry *entry,
 
 	if (ret == 0)
 		return 0;
+
+	/* no road for memory with no file: a gap, not a broken read */
+	if (m->opened.ino != 0 &&
+	    lota_rt_object_has_no_file(m->opened.fs_magic, m->opened.nlink)) {
+		m->no_file = 1;
+		return -ENODATA;
+	}
 	if (!rt_err_is_unmeasurable(ret))
 		return ret;
 
@@ -852,6 +879,7 @@ int lota_runtime_measure_pid(pid_t pid,
 				fail->role = m.role;
 				fail->err = ret;
 				fail->road_err = m.road_err;
+				fail->no_file = m.no_file;
 			}
 			/*
 			 * object with no digest is coverage the relying party

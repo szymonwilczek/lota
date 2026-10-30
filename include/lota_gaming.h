@@ -72,7 +72,10 @@ enum lota_error {
 	 * This process's own executable carries no measurable identity,
 	 * so the agent cannot state what is running and will not issue
 	 * a token for it.
-	 * Enable fs-verity on the binary, or stop asking to be protected.
+	 * The agent's log names the object and why: an executable on a
+	 * filesystem the host does not serve itself (FUSE, a network
+	 * mount) with no fs-verity digest, memory with no file, or a
+	 * measurement that broke.
 	 *
 	 * It is about this process and no other.  A different protected
 	 * process being unmeasurable never produces this code:

@@ -1296,7 +1296,7 @@ const char *lota_strerror(int error)
 	case LOTA_ERR_CONSENT_REQUIRED:
 		return "Nobody on this machine has agreed to answer to that publisher";
 	case LOTA_ERR_UNMEASURABLE_SELF:
-		return "This program's own executable carries no measurable identity (enable fs-verity on it)";
+		return "This program's own executable could not be measured on this machine (the agent's log names the object and why)";
 	case LOTA_ERR_NO_TPM:
 		return "The agent on this machine has no TPM and will not issue an unsigned token";
 	case LOTA_ERR_NO_ENFORCEMENT:
