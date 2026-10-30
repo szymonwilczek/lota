@@ -1205,6 +1205,41 @@ static void test_offline_clear_arms_the_next_disconnect(void)
 	PASS();
 }
 
+/* lota_poll_events() returns a count; only below zero is a failure */
+static void test_a_quiet_wait_is_not_a_failure(void)
+{
+	TEST("a poll that delivered nothing is not a failure");
+
+	if (hook_poll_failed(0)) {
+		FAIL("zero events read as a failure");
+		return;
+	}
+	PASS();
+}
+
+static void test_a_delivered_event_is_not_a_failure(void)
+{
+	TEST("a poll that delivered events is not a failure");
+
+	if (hook_poll_failed(1) || hook_poll_failed(7)) {
+		FAIL("a delivered event read as a failure");
+		return;
+	}
+	PASS();
+}
+
+static void test_a_refusal_is_a_failure(void)
+{
+	TEST("a refused poll is a failure");
+
+	if (!hook_poll_failed(LOTA_ERR_PROTOCOL) ||
+	    !hook_poll_failed(LOTA_ERR_NOT_CONNECTED)) {
+		FAIL("a refusal read as success");
+		return;
+	}
+	PASS();
+}
+
 static void test_hook_active_when_not_started(void)
 {
 	TEST("lota_hook_active() returns 0 when not initialized");
@@ -2197,6 +2232,11 @@ int main(void)
 	test_the_loader_wrapper_hands_back_what_it_got();
 	test_a_registration_publishes_itself();
 	test_a_refusal_publishes_itself();
+
+	/* how the refresh thread reads a poll */
+	test_a_quiet_wait_is_not_a_failure();
+	test_a_delivered_event_is_not_a_failure();
+	test_a_refusal_is_a_failure();
 
 	/* exported query functions */
 	test_hook_active_when_not_started();
