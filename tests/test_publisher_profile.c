@@ -163,6 +163,32 @@ static void server_bad_request(int client_fd)
 	usleep(50000);
 }
 
+/* the agent takes the request and answers too late */
+static void server_silent(int client_fd)
+{
+	struct lota_ipc_set_profile payload;
+	struct lota_ipc_request req;
+
+	if (read_exact(client_fd, &req, sizeof(req)) < 0)
+		_exit(2);
+	if (read_exact(client_fd, &payload, sizeof(payload)) < 0)
+		_exit(3);
+
+	usleep(600000);
+}
+
+/* the agent takes the request and hangs up unanswered */
+static void server_hang_up(int client_fd)
+{
+	struct lota_ipc_set_profile payload;
+	struct lota_ipc_request req;
+
+	if (read_exact(client_fd, &req, sizeof(req)) < 0)
+		_exit(2);
+	if (read_exact(client_fd, &payload, sizeof(payload)) < 0)
+		_exit(3);
+}
+
 /* title that names nobody must not send SET_PROFILE at all */
 static void server_expect_no_profile(int client_fd)
 {
@@ -364,6 +390,60 @@ static void test_bad_request_is_not_an_unknown_publisher(void)
 		return;
 	}
 	PASS();
+}
+
+/*
+ * A busy agent can miss the deadline on a publisher it holds;
+ * "no enrollment" would send the player after one that exists.
+ * Timeout and hang-up keep their own codes.
+ */
+static void expect_transport_failure(const char *name, scenario_fn scenario,
+				     int want, const char *wrong)
+{
+	struct lota_connect_opts opts = { .struct_size = sizeof(opts) };
+	struct lota_client *client;
+	pid_t server;
+
+	TEST(name);
+
+	server = start_mock_agent(scenario);
+	if (server < 0) {
+		if (socket_errno_is_sandbox(mock_errno)) {
+			SKIP("no unix sockets in this sandbox");
+			return;
+		}
+		FAIL("could not start the mock agent");
+		return;
+	}
+
+	opts.socket_path = test_socket;
+	opts.timeout_ms = 200;
+	opts.publisher_profile = PROFILE_HEX;
+
+	client = lota_connect_opts(&opts);
+	wait_agent(server);
+
+	if (client) {
+		FAIL("an unanswered SET_PROFILE still produced a connection");
+		lota_disconnect(client);
+		return;
+	}
+	if (lota_connect_last_error() != want) {
+		FAIL(wrong);
+		return;
+	}
+	PASS();
+}
+
+static void test_a_silent_agent_is_not_an_unknown_publisher(void)
+{
+	expect_transport_failure("an agent that does not answer is a timeout",
+				 server_silent, LOTA_ERR_TIMEOUT,
+				 "a timeout was reported as something else");
+	expect_transport_failure(
+		"an agent that hangs up is a failed connection", server_hang_up,
+		LOTA_ERR_CONNECTION_FAILED,
+		"a hang-up was reported as something else");
 }
 
 static void test_malformed_publisher_is_refused(void)
@@ -831,6 +911,7 @@ int main(void)
 	test_unknown_publisher_fails_the_connection();
 	test_malformed_publisher_is_refused();
 	test_bad_request_is_not_an_unknown_publisher();
+	test_a_silent_agent_is_not_an_unknown_publisher();
 	test_no_publisher_sends_nothing();
 	test_consent_required_is_distinguishable();
 	test_no_key_slot_is_distinguishable();

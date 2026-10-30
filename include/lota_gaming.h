@@ -364,9 +364,10 @@ struct lota_client *lota_connect_opts(const struct lota_connect_opts *opts);
  * lota_connect_last_error - Why the last connect on this thread failed
  *
  * lota_connect() and lota_connect_opts() return NULL for several reasons
- * and title has to tell them apart: LOTA_ERR_CONNECTION_FAILED is "no agent here",
- * LOTA_ERR_UNKNOWN_PROFILE is
- * "this machine has no enrollment with the publisher you named",
+ * and title has to tell them apart: LOTA_ERR_CONNECTION_FAILED is "no agent
+ * here, or it hung up unanswered", LOTA_ERR_TIMEOUT is "it did not answer in
+ * time", LOTA_ERR_UNKNOWN_PROFILE is "this machine has no enrollment with the
+ * publisher you named", only ever the agent's own answer,
  * and LOTA_ERR_CONSENT_REQUIRED is "nobody here has agreed to answer to them yet",
  * which is a screen to show rather than error to report.
  *
