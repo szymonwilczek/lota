@@ -197,9 +197,8 @@ Notes for production
      with; run --enroll --ca-server ca.example --ca-port 8444 --ca-cert
      /etc/lota/ca.crt to move it
 
-  ``--reenroll`` will not move it: it reuses the recorded endpoint by design,
-  which is what makes it safe to run unattended. Moving a CA is an ``--enroll``
-  naming the new address.
+  ``--reenroll`` reuses it; ``--ca-server``/``--ca-port`` override it for a
+  moved CA. Nothing on the host changes until the CA answers.
 - The record also carries the enrollment token the first enrollment presented,
   and both ``--reenroll`` and the daemon's renewal replay it, so a CA that
   admits on tokens keeps admitting the host with no operator step. The token

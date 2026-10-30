@@ -47,8 +47,7 @@ struct cli_options {
 	int export_policy_flag;
 	int attest_flag;
 	int enroll_flag;
-	int reenroll_flag; /* --reenroll: guided re-enroll, reuse saved endpoint
-			    */
+	int reenroll_flag; /* --reenroll: guided re-enroll, reuse saved endpoint */
 	int seal_flag;
 	int unseal_flag;
 	int seal_aik_auth_migrate_flag; /* --seal-aik-auth: adopt sealing */
@@ -88,6 +87,7 @@ struct cli_options {
 	/* attestation-CA enrollment endpoint (--enroll) */
 	const char *ca_server;
 	int ca_port;
+	bool ca_port_given; /* --ca-port named; ca_port holds a default */
 	const char *enroll_token_file; /* --enroll-token-file: tenant token */
 	/* --allow-publisher: record consent to answer to one publisher,
 	 * named by the hex SHA-256 of its CA anchor's SPKI */

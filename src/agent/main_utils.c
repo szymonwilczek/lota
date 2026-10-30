@@ -146,7 +146,9 @@ void print_usage(const char *prog, const char *default_bpf_path,
 	printf("                    certificate, then exit\n");
 	printf("  --reenroll        Re-enroll using the endpoint saved by the\n");
 	printf("                    last --enroll against the same --ca-cert,\n");
-	printf("                    then exit\n");
+	printf("                    then exit. --ca-server and --ca-port\n");
+	printf("                    override that endpoint, for a CA that has\n");
+	printf("                    moved since\n");
 	printf("  --ca-server HOST  Attestation CA address (required by "
 	       "--enroll)\n");
 	printf("  --ca-port PORT    Attestation CA port (default: %d)\n",
