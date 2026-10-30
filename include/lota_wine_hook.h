@@ -35,6 +35,14 @@ extern "C" {
  */
 #define LOTA_HOOK_ENV_ACTIVATE_PATH "LOTA_HOOK_ACTIVATE_PATH"
 
+/*
+ * title dir relative to a Wine drive ("steamapps/common/Title/");
+ * Wine's loader hooks only when its argv[1] lies inside, whatever
+ * the pin says; lota-proton-hook sets it from the Steam launch unless
+ * already set
+ */
+#define LOTA_HOOK_ENV_ACTIVATE_PROGRAM "LOTA_HOOK_ACTIVATE_PROGRAM"
+
 /* comma-separated exe prefixes to skip, on top of the system paths */
 #define LOTA_HOOK_ENV_SKIP_PATH "LOTA_HOOK_SKIP_PATH"
 

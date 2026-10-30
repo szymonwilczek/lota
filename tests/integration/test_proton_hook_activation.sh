@@ -77,20 +77,21 @@ names() {
 LIB="$WORK_DIR/liblota_wine_hook.so"
 : >"$LIB"
 
-# $pin = what the wrapped command got; <unset> tells unset from empty
+# $pin, $prog = what the wrapped command got; <unset> tells unset from empty
 run_wrapper() {
     local out_file="$WORK_DIR/out"
 
     set +e
     env "$@" LOTA_HOOK_LIB_PATH="$LIB" \
 	"$WRAPPER" /bin/sh -c \
-	'printf "PIN=[%s]\n" "${LOTA_HOOK_ACTIVATE_PATH-<unset>}"' \
+	'printf "PIN=[%s]\nPROG=[%s]\n" \
+		"${LOTA_HOOK_ACTIVATE_PATH-<unset>}" \
+		"${LOTA_HOOK_ACTIVATE_PROGRAM-<unset>}"' \
 	>"$out_file" 2>/dev/null
     rc=$?
     set -e
-    out=$(cat "$out_file")
-    pin=${out#PIN=[}
-    pin=${pin%]*}
+    pin=$(sed -n 's/^PIN=\[\(.*\)\]$/\1/p' "$out_file")
+    prog=$(sed -n 's/^PROG=\[\(.*\)\]$/\1/p' "$out_file")
     return $rc
 }
 
@@ -158,6 +159,35 @@ run_wrapper STEAM_COMPAT_INSTALL_PATH="$GAME" \
 	    STEAM_COMPAT_TOOL_PATHS="$TOOL"
 check "a title whose name merely starts the same is not attested" \
       lacks "$pin" "$GAME II/bin/title"
+
+# 10. Every Wine process runs the pinned loader; the title's directory,
+#     as Wine sees it, tells them apart. A library is a drive of its own
+#     in the prefix, so the directory starts at the library root.
+run_wrapper STEAM_COMPAT_INSTALL_PATH="$GAME" \
+	    STEAM_COMPAT_TOOL_PATHS="$PROTON:$TOOL"
+check "the title's directory is named from its library root" \
+      test "$prog" = "steamapps/common/A Title With Spaces/"
+
+run_wrapper STEAM_COMPAT_INSTALL_PATH="$GAME/" \
+	    STEAM_COMPAT_TOOL_PATHS="$PROTON"
+check "a trailing separator does not double" \
+      test "$prog" = "steamapps/common/A Title With Spaces/"
+
+# 11. A title outside any library is reached through the root drive.
+run_wrapper STEAM_COMPAT_INSTALL_PATH="$WORK_DIR/Games/Shortcut" \
+	    STEAM_COMPAT_TOOL_PATHS="$PROTON"
+check "a title outside a library is named by its host path" \
+      test "$prog" = "$WORK_DIR/Games/Shortcut/"
+
+# 12. As with the pin: a set value wins; no install path, no program.
+run_wrapper STEAM_COMPAT_INSTALL_PATH="$GAME" \
+	    LOTA_HOOK_ACTIVATE_PROGRAM="games/mine/"
+check "a title directory the player set is left alone" \
+      test "$prog" = "games/mine/"
+
+run_wrapper STEAM_COMPAT_TOOL_PATHS="$PROTON"
+check "a launch that names no title names no program" \
+      test "$prog" = "<unset>"
 
 echo ""
 if [[ $failures -eq 0 ]]; then
