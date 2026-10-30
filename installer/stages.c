@@ -1668,7 +1668,7 @@ const struct stage install_stages[] = {
 		.explain =
 			"LOTA pins TPM PCR 14 very early in boot (inside the "
 			"initramfs, before any regular userspace runs) so nothing "
-			"can pre-poison the agent's measurement slot."
+			"can pre-poison the agent's measurement slot. "
 			"This step regenerates the initramfs of every installed kernel "
 			"with dracut to include the lock helper, matching the next "
 			"step's scope: a kernel you can select in the boot menu and that "
@@ -1688,7 +1688,7 @@ const struct stage install_stages[] = {
 			"integrity floor: IMA appraisal in an enforcing mode "
 			"(ima_appraise=fix - it satisfies the floor without "
 			"blocking unsigned files), signed kernel modules, and "
-			"kernel lockdown."
+			"kernel lockdown. "
 			"This step appends the missing parameters to the boot "
 			"entries via grubby. They appear in /etc/default/grub and "
 			"take effect on the next boot. "
@@ -1731,7 +1731,7 @@ const struct stage install_stages[] = {
 		.explain =
 			"udev rule labels /dev/tpm* with a LOTA-specific SELinux "
 			"type so only the agent's domain (and root tooling) can "
-			"talk to the TPM directly."
+			"talk to the TPM directly. "
 			"This step loads the LOTA SELinux policy module if needed, "
 			"re-triggers udev with an add event -- a change event "
 			"re-applies no SECLABEL -- and restores the labels on the "
@@ -1751,10 +1751,10 @@ const struct stage install_stages[] = {
 		.title = "LOTA agent service",
 		.explain =
 			"Enables and starts lota-agent.service (plus its activation "
-			"socket)."
+			"socket). "
 			"The agent loads the signed BPF enforcement object, "
 			"measures itself into PCR 14 and exposes a local "
-			"socket games use to request attestation tokens."
+			"socket games use to request attestation tokens. "
 			"Note: a running agent cannot be killed, by design - pausing it is "
 			"done with 'lota-agent --shutdown' and resuming requires a "
 			"reboot.",

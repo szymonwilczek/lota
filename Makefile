@@ -1521,6 +1521,7 @@ TEST_BINS := \
 	$(TEST_BIN_DIR)/test_installer_named_paths \
 	$(TEST_BIN_DIR)/test_installer_trust_key \
 	$(TEST_BIN_DIR)/test_installer_checkpoint \
+	$(TEST_BIN_DIR)/test_installer_stage_text \
 	$(TEST_BIN_DIR)/test_installer_service \
 	$(TEST_BIN_DIR)/test_installer_confirm \
 	$(TEST_BIN_DIR)/test_selftest_plan \
@@ -1545,6 +1546,13 @@ $(TEST_BIN_DIR)/test_installer_trust_key: tests/test_installer_trust_key.c \
 	$(Q)$(CC) $(CFLAGS) -o $@ $(filter %.c,$^) -lcrypto
 
 $(TEST_BIN_DIR)/test_installer_checkpoint: tests/test_installer_checkpoint.c \
+		installer/stages.c installer/probe.c installer/run.c \
+		installer/ui.c $(AGENT_DIR)/policy_pubkey.c \
+		$(AGENT_DIR)/profile.c | $(BUILD_DIR)
+	$(QUIET_CC)
+	$(Q)$(CC) $(CFLAGS) -o $@ $(filter %.c,$^) -lcrypto
+
+$(TEST_BIN_DIR)/test_installer_stage_text: tests/test_installer_stage_text.c \
 		installer/stages.c installer/probe.c installer/run.c \
 		installer/ui.c $(AGENT_DIR)/policy_pubkey.c \
 		$(AGENT_DIR)/profile.c | $(BUILD_DIR)
@@ -2216,6 +2224,7 @@ test-unit: all $(TEST_BINS)
 	@$(BUILD_DIR)/test_installer_named_paths
 	@$(BUILD_DIR)/test_installer_trust_key
 	@$(BUILD_DIR)/test_installer_checkpoint
+	@$(BUILD_DIR)/test_installer_stage_text
 	@$(BUILD_DIR)/test_installer_service
 	@$(BUILD_DIR)/test_installer_confirm
 	@$(BUILD_DIR)/test_selftest_plan
