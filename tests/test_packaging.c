@@ -12,11 +12,13 @@
 
 #include <ctype.h>
 #include <dirent.h>
+#include <fcntl.h>
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
+#include <unistd.h>
 
 static int tests_run;
 static int tests_passed;
@@ -1658,6 +1660,9 @@ static void read_manifest(const char *dir, const char *file)
 			continue;
 		}
 		if (in_depends) {
+			/* comments and blank lines do not end the list */
+			if (*p == '#' || *p == '\0')
+				continue;
 			if (*p != '-') {
 				in_depends = false;
 			} else {
@@ -1837,6 +1842,150 @@ static bool commands_under(const char *dir)
 	}
 	closedir(d);
 	return ok;
+}
+
+/* Fixture manifest at <dir>/packaging/nfpm/<file> */
+static bool write_manifest(const char *dir, const char *file, const char *body)
+{
+	char path[512];
+	int fd;
+	FILE *fp;
+
+	snprintf(path, sizeof(path), "%s/packaging/nfpm/%s", dir, file);
+	fd = open(path, O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0600);
+	fp = fd >= 0 ? fdopen(fd, "w") : NULL;
+	if (!fp) {
+		if (fd >= 0)
+			close(fd);
+		return false;
+	}
+	fputs(body, fp);
+	return fclose(fp) == 0;
+}
+
+static void unlink_manifest(const char *dir, const char *file)
+{
+	char path[512];
+
+	snprintf(path, sizeof(path), "%s/packaging/nfpm/%s", dir, file);
+	unlink(path);
+}
+
+/* A comment or blank line inside a list must not drop the entries below */
+static void test_manifest_lists_survive_a_comment(void)
+{
+	static const char plain[] = "name: lota-probe\n"
+				    "overrides:\n"
+				    "  rpm:\n"
+				    "    depends:\n"
+				    "      - lota-sdk = 1.0\n"
+				    "      - lota-verifier\n"
+				    "\n"
+				    "contents:\n"
+				    "  - src: ./stage/probe\n"
+				    "    dst: /usr/bin/probe\n";
+	static const char commented[] =
+		"name: lota-probe\n"
+		"overrides:\n"
+		"  rpm:\n"
+		"    depends:\n"
+		"      # the headers were written against this soname\n"
+		"      - lota-sdk = 1.0\n"
+		"\n"
+		"      # the fleet half, which the probe reports to\n"
+		"      - lota-verifier\n"
+		"\n"
+		"contents:\n"
+		"  - src: ./stage/probe\n"
+		"    dst: /usr/bin/probe\n";
+	char dir[] = "/tmp/lota_test_manifest_XXXXXX";
+	char nfpm[320];
+	struct package *pkg;
+	char msg[256];
+	size_t i, plain_deps;
+	char plain_names[PACKAGE_DEPS_MAX][PACKAGE_NAME_MAX];
+
+	TEST("packaging: a comment inside a manifest list ends nothing");
+
+	if (!mkdtemp(dir)) {
+		FAIL("could not make a scratch directory");
+		return;
+	}
+	snprintf(nfpm, sizeof(nfpm), "%s/packaging", dir);
+	if (mkdir(nfpm, 0700) != 0) {
+		FAIL("could not make the fixture tree");
+		goto out;
+	}
+	snprintf(nfpm, sizeof(nfpm), "%s/packaging/nfpm", dir);
+	if (mkdir(nfpm, 0700) != 0) {
+		FAIL("could not make the fixture tree");
+		goto out;
+	}
+
+	if (!write_manifest(dir, "plain.yaml", plain) ||
+	    !write_manifest(dir, "commented.yaml", commented)) {
+		FAIL("could not write the fixture manifests");
+		goto out;
+	}
+
+	package_count = 0;
+	read_manifest(dir, "plain.yaml");
+	read_manifest(dir, "commented.yaml");
+	if (package_count != 2) {
+		FAIL("the fixture manifests were not read");
+		goto out;
+	}
+
+	/* both are lota-probe; packages[0] is plain.yaml */
+	plain_deps = packages[0].dep_count;
+	for (i = 0; i < plain_deps; i++)
+		snprintf(plain_names[i], PACKAGE_NAME_MAX, "%s",
+			 packages[0].deps[i]);
+
+	if (plain_deps != 2) {
+		snprintf(
+			msg, sizeof(msg),
+			"the uncommented manifest read %zu dependencies, not 2",
+			plain_deps);
+		FAIL(msg);
+		goto out;
+	}
+
+	pkg = &packages[1];
+	if (pkg->dep_count != plain_deps) {
+		snprintf(
+			msg, sizeof(msg),
+			"a comment inside depends hid %zu of %zu entries under it",
+			plain_deps - pkg->dep_count, plain_deps);
+		FAIL(msg);
+		goto out;
+	}
+	for (i = 0; i < plain_deps; i++)
+		if (strcmp(pkg->deps[i], plain_names[i]) != 0) {
+			snprintf(
+				msg, sizeof(msg),
+				"the commented manifest read '%.*s' where the plain one read '%.*s'",
+				(int)PACKAGE_NAME_MAX, pkg->deps[i],
+				(int)PACKAGE_NAME_MAX, plain_names[i]);
+			FAIL(msg);
+			goto out;
+		}
+
+	/* the next key still ends the list */
+	if (pkg->bin_count != 1 || strcmp(pkg->bins[0], "probe") != 0) {
+		FAIL("the commented manifest lost the command it ships");
+		goto out;
+	}
+
+	PASS();
+out:
+	unlink_manifest(dir, "plain.yaml");
+	unlink_manifest(dir, "commented.yaml");
+	snprintf(nfpm, sizeof(nfpm), "%s/packaging/nfpm", dir);
+	rmdir(nfpm);
+	snprintf(nfpm, sizeof(nfpm), "%s/packaging", dir);
+	rmdir(nfpm);
+	rmdir(dir);
 }
 
 /* Every command a page runs comes with the packages the same page installs */
@@ -2719,6 +2868,7 @@ int main(void)
 	test_the_gate_runs_the_unit_tests();
 	test_comments_name_symbols_that_exist();
 	test_pages_name_symbols_that_exist();
+	test_manifest_lists_survive_a_comment();
 	test_installed_packages_carry_the_documented_commands();
 	test_enrollment_example_runs_on_a_provisioned_host();
 	test_bringup_reference_matches_the_packaged_object();
