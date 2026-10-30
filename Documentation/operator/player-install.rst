@@ -333,7 +333,8 @@ created when the registered account logs in and released when its last
 session ends. ``lota-steam-setup --verify``, run from that account, is the
 check -- it reports the socket as ready only when this account can open it,
 and prints the ownership when it cannot, which is the case an account
-outside the ``lota`` group lands in.
+outside the ``lota`` group lands in. Nor can that account look into the
+group's directory holding the socket; the check names the group.
 
 An account with no login session (a service account, ``sudo -u``, cron) has
 no ``$XDG_RUNTIME_DIR``. Each check that needs it reports that, and the run

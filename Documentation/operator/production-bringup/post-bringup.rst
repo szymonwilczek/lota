@@ -275,12 +275,14 @@ halves: whether the socket exists and whether that account can open it. When
 it cannot, the tool prints the socket's ownership and points at the agent's
 own message (``journalctl -u lota-agent | grep chown``), because a socket the
 agent could not hand to the group looks identical from the outside to one it
-did. When the socket is absent it names the two things that produce one --
-a registered UID and a boot since it was registered -- and does not suggest
-restarting the agent. Run from an account with no login session, and so no
-``XDG_RUNTIME_DIR``, it reports that it has no runtime directory for the
-socket or the token directory, points at the account that starts Steam, and
-still runs the rest of its checks to a non-zero exit.
+did. The socket's directory is the group's too (mode 0750), so for an outside
+account the tool says it cannot look inside and names the group, rather than
+calling the socket absent. When the socket is absent it names the two things
+that produce one -- a registered UID and a boot since it was registered -- and
+does not suggest restarting the agent. Run from an account with no login
+session, and so no ``XDG_RUNTIME_DIR``, it reports that it has no runtime
+directory for the socket or the token directory, points at the account that
+starts Steam, and still runs the rest of its checks to a non-zero exit.
 
 The socket is the agent's half of the container path; the hook's half is a
 directory of the player's own. It writes ``lota-status``,
