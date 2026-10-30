@@ -96,7 +96,7 @@ jobs:
           cp -r dev/Documentation/_build/html/. site/lota-next/
 
       # Fold the signed dnf repository into the Pages tree under /rpm,
-      # so the site at LOTA_REPO_BASEURL/rpm serves the packages, metadata and public key.
+      # which is LOTA_REPO_BASEURL.
       #
       # Repo is public asset of the latest release (built and signed by release.yml),
       # so this needs no secret.

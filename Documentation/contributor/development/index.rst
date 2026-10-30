@@ -21,8 +21,6 @@ Contents
 * :doc:`Local patch checks and the PR quality gate <patch-checks>` --
   ``check-patch``, ``format-patch``, and the hotpath documentation contract.
 * :doc:`How the fuzzers work <fuzzing>` -- Go, C, and Syzkaller fuzzing.
-* :doc:`Release candidates and promotion <release-flow>` -- cutting ``-rc``
-  tags and promoting to ``main``.
 * :doc:`BPF LSM program coding <bpf-coding>` -- verifier-acceptance rules and
   device/inode identity in the kernel programs.
 * :doc:`Cross-component contracts <contracts>` -- wire-format, store-migration,
@@ -39,7 +37,6 @@ Contents
    testing-policy
    patch-checks
    fuzzing
-   release-flow
    bpf-coding
    contracts
    license-boundary

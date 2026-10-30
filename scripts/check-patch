@@ -1246,16 +1246,17 @@ check_container_images() {
     fi
 }
 
-# Package-manifest parity:
-# nfpm configs and the RPM spec must ship the same files per package,
-# since a host gets whichever one built its package.
-# Only runs when the patch touches manifest, the make install rule or the check itself
+# Package-manifest parity: nfpm and the spec ship the same files per package,
+# and every page names the repository the site serves.
+# Only run when a manifest, the Makefile, a page, conf.py or the check changed.
 check_package_manifests() {
     local path touched=1 out
     for path in "$@"; do
         case "$path" in
             packaging/nfpm/*.yaml | packaging/rpm/lota.spec | Makefile | \
-                scripts/check-package-manifests.sh)
+                scripts/check-package-manifests.sh | \
+                Documentation/*.rst | Documentation/conf.py | \
+                examples/*.rst | README.rst)
                 touched=0
                 ;;
         esac
@@ -1270,7 +1271,7 @@ check_package_manifests() {
     else
         printf '%s\n' "$out" | grep -v '^make'
         fail "package-manifests" \
-             "the nfpm configs and packaging/rpm/lota.spec ship different files; list the path in both."
+             "the nfpm configs and packaging/rpm/lota.spec ship different files, or a page names a repository address the site does not serve."
     fi
 }
 

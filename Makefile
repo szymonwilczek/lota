@@ -938,10 +938,12 @@ srpm: check-package-manifests
 # Signing key is a release secret held outside the tree:
 # set LOTA_RPM_GPG_NAME to its uid or key id and have its passphrase available
 # through gpg-agent
+# LOTA_REPO_BASEURL is the project site's /rpm, where the docs deploy serves
+# the latest release.
 # PKG_DIR is defined with the native-packages target above.
 REPO_DIR ?= $(BUILD_DIR)/dnf-repo
 LOTA_RPM_GPG_NAME ?=
-LOTA_REPO_BASEURL ?= https://lota.example/rpm
+LOTA_REPO_BASEURL ?= https://lota.szymon-wilczek.me/rpm
 
 rpm-sign:
 	@test -n "$(LOTA_RPM_GPG_NAME)" || { \
