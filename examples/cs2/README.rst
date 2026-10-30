@@ -41,7 +41,8 @@ Prerequisites
    half to ``/usr/lib/liblota_wine_hook.so.*``, which Steam's 32-bit launch
    processes load; the wrapper scripts go to
    ``/usr/bin/lota-{proton-hook,steam-setup}``. The 32-bit half needs
-   ``glibc-devel.i686``; ``make install`` refuses without it.
+   ``glibc-devel.i686`` and ``libatomic.i686``; ``make install`` refuses
+   without them.
 
 3. **Steam Runtime is the host's Steam**, not a Flatpak/Snap copy. The Flatpak
    Steam sandbox blocks ``LD_PRELOAD`` paths outside the container, so the hook

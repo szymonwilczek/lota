@@ -49,6 +49,10 @@ Testing policy
    * - Packaging
      - the nfpm configs and the RPM spec ship the same files
      - ``make check-package-manifests``
+   * - Player build
+     - the player page's build-from-source commands install in a clean
+       Fedora
+     - ``make check-player-build``; CI job ``player-build``
    * - Benchmarks
      - every benchmark builds and runs; either target fails when its runner
        does (numbers come from a pinned host, see
@@ -167,6 +171,27 @@ mounts the checkout read-only -- a syntax-only sweep writes nothing. CI runs
 it in the ``el9-decls`` job, inside the same image. The BPF program is skipped:
 it is built ``-target bpf`` against a generated ``vmlinux.h``, not against el9
 headers.
+
+The player page's build in a clean Fedora
+=========================================
+
+The player page lists the packages a build from source needs, and a
+development host cannot check that list: it already carries every package an
+earlier build wanted. The 32-bit half of the Wine hook is where this bites: a
+missing multilib package skips the half instead of failing the build, and
+``make install`` then refuses the tree.
+
+``make check-player-build`` runs the commands of the page's *Building it
+yourself* section in a clean ``registry.fedoraproject.org/fedora:44``. It
+reads them from the page, so the two cannot drift; the clone is replaced by a
+copy of the tree under test, and ``sudo`` is dropped, as the container runs as
+root. It passes when the install leaves the installer, the Steam helpers and
+both halves of the hook in place; a failing step prints its number and the
+tail of its output.
+
+The gate needs ``podman`` and a network. CI runs it in the ``player-build``
+job inside the same image, with nothing installed before the page's list; the
+checkout uses the REST API rather than install ``git`` early.
 
 Postgres-backed tests and the coverage ratchet
 ==============================================
