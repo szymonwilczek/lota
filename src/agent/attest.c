@@ -901,6 +901,17 @@ resolve_attest_profile(const char *ca_cert, struct profile_paths *storage)
 	return storage;
 }
 
+/* A bind drops the AIK record, the only mark of a shared key: reload it. */
+static int provision_bound_aik(void)
+{
+	int ret = tpm_aik_load_metadata(&g_agent.tpm_ctx);
+
+	if (ret < 0)
+		return ret;
+
+	return tpm_provision_aik(&g_agent.tpm_ctx);
+}
+
 /*
  * Exit status for a refused self-measurement: LOTA_EXIT_OPERATOR_ACTION
  * when lota_daemon_exit_status() says a restart cannot clear it, else 1.
@@ -977,7 +988,7 @@ int do_attest(const char *server, int port, const char *ca_cert,
 
 	printf("Checking AIK...\n");
 	key_present = tpm_aik_key_present(&g_agent.tpm_ctx);
-	ret = tpm_provision_aik(&g_agent.tpm_ctx);
+	ret = provision_bound_aik();
 	if (ret < 0) {
 		fprintf(stderr, "Failed to provision AIK: %s\n",
 			tpm_strerror(ret));
@@ -1204,11 +1215,33 @@ static int bind_target(struct attest_target *t)
 		return ret;
 	}
 
-	ret = tpm_provision_aik(&g_agent.tpm_ctx);
+	ret = provision_bound_aik();
 	if (ret < 0) {
+		/*
+		 * Replacing a shared key would orphan its certificate,
+		 * so it stays refused; say so once.
+		 */
+		if (ret == -ENOTSUP &&
+		    tpm_aik_key_is_shared(&g_agent.tpm_ctx)) {
+			if (!t->shared_key_announced) {
+				lota_err("%s No round is attempted for this "
+					 "publisher until their record names a "
+					 "key of its own. Publisher: %s",
+					 TPM_AIK_SHARED_KEY_ADVICE, t->label);
+				t->shared_key_announced = true;
+			}
+			return ret;
+		}
 		lota_err("AIK unavailable for %s: %s", t->label,
 			 tpm_strerror(ret));
 		return ret;
+	}
+
+	if (t->shared_key_announced) {
+		lota_info("This publisher's record now names an attestation "
+			  "key of its own; rounds resume. Publisher: %s",
+			  t->label);
+		t->shared_key_announced = false;
 	}
 
 	ret = tpm_aik_load_metadata(&g_agent.tpm_ctx);
@@ -1567,6 +1600,13 @@ static int attest_target_round(struct attest_target *t, int skip_verify,
 		return t->interval;
 	}
 
+	/* Likewise a shared key, until the profile is re-enrolled */
+	if (ret == -ENOTSUP && t->shared_key_announced) {
+		t->attested = false;
+		t->valid_until = 0;
+		return t->interval;
+	}
+
 	if (!target_reporting_now(t))
 		return t->interval;
 
@@ -1854,7 +1894,7 @@ static int continuous_attest_run(const struct lota_config *cfg,
 
 	lota_info("Checking AIK");
 	key_present = tpm_aik_key_present(&g_agent.tpm_ctx);
-	ret = tpm_provision_aik(&g_agent.tpm_ctx);
+	ret = provision_bound_aik();
 	if (ret < 0) {
 		lota_err("Failed to provision AIK: %s", tpm_strerror(ret));
 		tpm_cleanup(&g_agent.tpm_ctx);

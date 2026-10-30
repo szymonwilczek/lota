@@ -496,14 +496,7 @@ static int run_daemon(const struct run_daemon_params *params)
 		 * attest without saying why.
 		 */
 		if (tpm_aik_key_is_shared(&g_agent.tpm_ctx)) {
-			lota_err("This publisher's attestation key was created "
-				 "before each publisher got a key of its own, "
-				 "so it is byte for byte the key every other "
-				 "publisher enrolled here holds. Run "
-				 "lota-agent --reenroll --ca-cert <their "
-				 "anchor> to replace it; the CA certifies the "
-				 "new key under the device ID this host "
-				 "already has.");
+			lota_err("%s", TPM_AIK_SHARED_KEY_ADVICE);
 			ret = -ENOTSUP;
 			goto cleanup_tpm;
 		}

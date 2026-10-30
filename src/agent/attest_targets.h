@@ -91,6 +91,9 @@ struct attest_target {
 	 */
 	bool auth_fail_announced;
 
+	/* Said its record names the shared key. Same clearing rule. */
+	bool shared_key_announced;
+
 	/*
 	 * SHA-256 of the certificate this target's verifier must present,
 	 * taken from the publisher profile that names it.

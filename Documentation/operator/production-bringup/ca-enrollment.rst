@@ -269,13 +269,14 @@ It is also the command that moves a host onto per-publisher keys. An AIK
 created before the publisher's identity entered the TPM creation template is
 one key shared by every publisher enrolled on that host, and a TPM key cannot
 be rewritten in place, so the agent refuses such a record instead of carrying
-it forward and says which publisher it belongs to. Re-enrolling that profile
-replaces the key with one of its own, certified under the same device ID:
-an HMAC over the endorsement key's modulus, keyed by the CA's pseudonym key,
-with the tenant mixed in when it is not ``default``. The attestation key is
-not an input, so the publisher's verifier checks the next report against the
-baseline it already holds. The ID changes only with another TPM, another
-tenant, or a replaced pseudonym key.
+it forward and says which publisher it belongs to, at daemon startup and once
+on the attestation pass that binds that publisher. No round is attempted for
+that publisher until the record names a key of its own; other publishers keep
+reporting, however many publishers the host serves. Re-enrolling that profile
+gives it its own key under the same device ID: an HMAC over the endorsement
+key's modulus, keyed by the CA's pseudonym key, with a non-``default`` tenant
+mixed in. The attestation key is not an input, so the verifier keeps its
+baseline; the ID changes only with another TPM, tenant or pseudonym key.
 
 Point every verifier at the CA root:
 
