@@ -1219,6 +1219,42 @@ static void test_documented_api_calls_use_the_bearer_header(void)
 	PASS();
 }
 
+/* check-patch runs the unit tests, as CI does; a gap shows only after a push */
+static void test_the_gate_runs_the_unit_tests(void)
+{
+	FILE *fp = open_shipped("scripts/check-patch");
+	char line[1024];
+	bool defines = false;
+	bool runs = false;
+	bool invokes_make = false;
+
+	TEST("check-patch: the gate runs the unit tests");
+
+	if (!fp) {
+		FAIL("could not open the gate");
+		return;
+	}
+	while (fgets(line, sizeof(line), fp)) {
+		if (strstr(line, "check_unit_tests()"))
+			defines = true;
+		else if (strstr(line, "check_unit_tests"))
+			runs = true;
+		if (strstr(line, "test-unit"))
+			invokes_make = true;
+	}
+	fclose(fp);
+
+	if (!defines || !invokes_make) {
+		FAIL("the gate has no check that runs the unit tests");
+		return;
+	}
+	if (!runs) {
+		FAIL("the gate defines a unit-test check it never calls");
+		return;
+	}
+	PASS();
+}
+
 /*
  * Reads one shipped command per call, joining the backslash continuations a script
  * or a code block wraps a long invocation over.
@@ -2059,6 +2095,7 @@ int main(void)
 	test_documented_tpm_relabel_reaches_both_nodes();
 	test_documented_cmdline_carries_no_kdump_option();
 	test_documented_api_calls_use_the_bearer_header();
+	test_the_gate_runs_the_unit_tests();
 	test_enrollment_example_runs_on_a_provisioned_host();
 	test_bringup_reference_matches_the_packaged_object();
 	test_tpm_clear_section_says_what_nv_costs();
