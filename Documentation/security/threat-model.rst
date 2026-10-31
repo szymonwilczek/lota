@@ -384,6 +384,8 @@ Active threats
          issues until it reboots.
        | The protected set the token carries names who is left, so a publisher
          that knows which of its processes belongs there sees which one went.
+       | The verb's answer counts that set without the signalled process,
+         which stays a member until it exits.
      - | The owner of a protected process can end it, which the LSM alone would
          have refused. The bound is that no route to it avoids the agent, so
          the termination is reported rather than silent.

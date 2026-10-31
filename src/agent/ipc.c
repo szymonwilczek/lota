@@ -13,6 +13,7 @@
 #include "protect_pids.h"
 #include "status_flags.h"
 #include "terminate_policy.h"
+#include "terminate_report.h"
 
 #include <errno.h>
 #include <fcntl.h>
@@ -2741,7 +2742,9 @@ static void handle_terminate_protected(struct ipc_context *ctx,
 	out->pid = req.pid;
 	out->signal = req.signal;
 	agent_globals_lock(&g_agent);
-	out->protect_pid_count = (uint32_t)g_agent.policy_protect_pid_count;
+	out->other_protect_pid_count = terminate_others_protected(
+		g_agent.policy_protect_pids, g_agent.policy_protect_pid_count,
+		req.pid);
 	agent_globals_unlock(&g_agent);
 	out->_reserved1 = 0;
 	client->send_len = LOTA_IPC_RESPONSE_SIZE + sizeof(*out);
