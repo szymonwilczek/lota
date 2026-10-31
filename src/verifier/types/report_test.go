@@ -677,3 +677,56 @@ func TestParseReport_ESRT_NotPresent(t *testing.T) {
 		t.Error("expected ESRT.Present false")
 	}
 }
+
+// TestParseReport_EventSectionMatchesCLayout checks ExecEventSize against
+// struct lota_exec_event (include/lota.h), which has no static assert.
+// A short size lands the parser inside the event array, missing the event log
+// and ESRT.
+func TestParseReport_EventSectionMatchesCLayout(t *testing.T) {
+	// timestamp_ns, event_type, pid, tgid, uid, gid, target union,
+	// flags, hash, comm, filename
+	const cEventSize = 8 + 4 + 4 + 4 + 4 + 4 + 4 + 4 +
+		HashSize + 16 + MaxKernelPath
+
+	if ExecEventSize != cEventSize {
+		t.Fatalf("ExecEventSize: got %d, want %d (sizeof lota_exec_event)",
+			ExecEventSize, cEventSize)
+	}
+
+	// One event; the ESRT marker proves the walk stepped over it exactly
+	base := createTestReportBytes()
+	tail := len(base) - ESRTWireSize - 4 // event_log_size sits before ESRT
+	if tail < FixedReportSize+4 {
+		t.Fatalf("baseline report of %d bytes is too short", len(base))
+	}
+
+	data := append([]byte{}, base[:FixedReportSize]...)
+	data = binary.LittleEndian.AppendUint32(data, 1) // event_count
+
+	event := make([]byte, cEventSize)
+	for i := range event {
+		event[i] = 0xAB // anything a misread length would pick up
+	}
+	data = append(data, event...)
+
+	data = binary.LittleEndian.AppendUint32(data, 0) // event_log_size
+
+	esrt := make([]byte, ESRTWireSize)
+	binary.LittleEndian.PutUint32(esrt[0:], 1)   // present
+	binary.LittleEndian.PutUint32(esrt[4:], 785) // fw_version
+	data = append(data, esrt...)
+
+	binary.LittleEndian.PutUint32(data[8:12], uint32(len(data)))
+
+	report, err := ParseReport(data)
+	if err != nil {
+		t.Fatalf("report carrying one event rejected: %v", err)
+	}
+	if report.ESRT == nil || !report.ESRT.Present {
+		t.Fatal("the ESRT past the event section did not survive the walk")
+	}
+	if report.ESRT.FWVersion != 785 {
+		t.Errorf("ESRT past the event section: FWVersion %d, want 785",
+			report.ESRT.FWVersion)
+	}
+}
