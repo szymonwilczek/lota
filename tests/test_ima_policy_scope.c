@@ -159,21 +159,41 @@ static void test_dont_appraise_is_not_appraise(void)
 }
 
 /*
- * A kernel built without CONFIG_IMA_READ_POLICY cannot answer the scope question
- * at all. That is unknown, not absent: refusing every such host would turn
- * an unreadable file into a boot failure, so the mode still decides and the gate
- * says what it could not check.
+ * An unreadable scope is unknown, not satisfied: no CONFIG_IMA_READ_POLICY,
+ * or no privilege (the attest loop has an empty bounding set).
+ * 0 would set LOTA_STATUS_KERNEL_APPRAISAL; the errno lets the startup gate
+ * pass while the bit stays clear.
  */
-static void test_unreadable_policy_falls_back_to_the_mode(void)
+static void test_unreadable_scope_is_not_appraised(void)
 {
-	TEST("an unreadable policy leaves the mode deciding");
+	TEST("an unreadable scope is not reported as appraised");
 
 	write_file(cmdline_path, "ro quiet ima_appraise=enforce\n");
 	unlink(policy_path);
 
 	if (bpf_loader_ima_appraisal_active(cmdline_path,
-					    "/nonexistent/ima/policy", 0) != 0)
-		FAIL("a kernel that cannot publish its policy was refused");
+					    "/nonexistent/ima/policy", 0) == 0)
+		FAIL("a scope nobody could read was answered as appraising");
+	else
+		PASS();
+
+	TEST("an unreadable scope says it was unreadable");
+
+	if (bpf_loader_ima_appraisal_active(
+		    cmdline_path, "/nonexistent/ima/policy", 0) != -EACCES)
+		FAIL("an unreadable scope is not distinguishable from an "
+		     "empty one");
+	else
+		PASS();
+
+	TEST("a Secure Boot host does not appraise on an unreadable scope");
+
+	write_file(cmdline_path, "ro quiet\n");
+
+	if (bpf_loader_ima_appraisal_active(
+		    cmdline_path, "/nonexistent/ima/policy", 1) != -EACCES)
+		FAIL("the host the attest loop runs on was answered as "
+		     "appraising");
 	else
 		PASS();
 }
@@ -284,7 +304,7 @@ int main(void)
 	test_blocking_mode_with_exec_scope_passes();
 	test_appraise_without_func_covers_exec();
 	test_dont_appraise_is_not_appraise();
-	test_unreadable_policy_falls_back_to_the_mode();
+	test_unreadable_scope_is_not_appraised();
 	test_secureboot_ignores_the_cmdline_mode();
 	test_rule_shapes();
 	test_scope_advisory_rule();

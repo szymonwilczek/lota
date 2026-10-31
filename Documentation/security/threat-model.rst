@@ -156,9 +156,12 @@ lockdown, Secure Boot and whether the kernel appraises the host's executables
 policy knob. ``require_ima_appraisal`` is the appraisal one, off in every
 template but ``strict``: the signatures it demands come from a distribution or
 an image pipeline, so a fleet of stock hosts turning it on refuses every
-client. Secure Boot is the exception to reading these flags as evidence -- it
-is checked against the firmware-measured event log, because a compromised
-kernel sets its own flag freely.
+client. The flag is set only where the agent read both the appraisal mode and
+the loaded policy's scope; a kernel that does not publish its policy leaves it
+clear, so the quote signs a checked property, not one the mode implied. Secure
+Boot is the exception to reading these flags as evidence -- it is checked
+against the firmware-measured event log, because a compromised kernel sets its
+own flag freely.
 
 The default store is SQLite for single-node deployments. A Postgres backend
 (selected with ``--pg-dsn``) holds the baseline, used-nonce, revocation, ban,

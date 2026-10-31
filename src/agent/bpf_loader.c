@@ -458,14 +458,12 @@ int bpf_loader_ima_appraisal_active(const char *cmdline_path,
 
 	if (secureboot) {
 		ret = ima_policy_appraises_exec(policy_path, &read_err);
-		if (ret == -EACCES) {
-			lota_warn("IMA appraisal blocks (Secure Boot leaves "
-				  "the kernel's built-in mode in force) but %s "
-				  "could not be read (%s): whether any "
-				  "executable is appraised is unverified",
-				  policy_path, strerror(-read_err));
-			return 0;
-		}
+		if (ret == -EACCES)
+			lota_dbg("IMA appraisal blocks (Secure Boot leaves "
+				 "the kernel's built-in mode in force) but %s "
+				 "could not be read (%s), so the scope is "
+				 "unknown",
+				 policy_path, strerror(-read_err));
 		return ret;
 	}
 
@@ -488,20 +486,15 @@ int bpf_loader_ima_appraisal_active(const char *cmdline_path,
 			return -EPERM;
 
 		ret = ima_policy_appraises_exec(policy_path, &read_err);
-		if (ret == -EACCES) {
+		if (ret == -EACCES)
 			/*
-			 * Nothing published what the kernel loaded, so the mode
-			 * is all there is.
-			 * Said out loud, because "enforcing" here means the mode
-			 * alone and an operator reading the startup log is entitled
-			 * to know which of the two was checked.
+			 * Mode known, scope unread: -EACCES tells it apart
+			 * from an empty scope.
+			 * Debug, not warn: asked every round.
 			 */
-			lota_warn("IMA appraisal mode is %s but %s could not "
-				  "be read (%s): whether any executable is "
-				  "appraised is unverified",
-				  val, policy_path, strerror(-read_err));
-			return 0;
-		}
+			lota_dbg("IMA appraisal mode is %s but %s could not "
+				 "be read (%s), so the scope is unknown",
+				 val, policy_path, strerror(-read_err));
 		return ret;
 	}
 	return -EPERM;
@@ -776,8 +769,25 @@ int bpf_loader_verify_kernel_runtime_hardening(bool allow_mutable_rootfs)
 			"are what set it",
 			ret == -ENOENT ? "the loaded policy carries no "
 					 "appraise rule that reaches an exec" :
+			ret == -EACCES ? "the loaded policy could not be read, "
+					 "so no rule of it is known" :
 					 "IMA appraisal is not in a blocking "
 					 "mode");
+		ret = 0;
+	} else if (ret == -EACCES) {
+		/*
+		 * Unread is not empty (no CONFIG_IMA_READ_POLICY): pass like
+		 * an unappraised host, bit clear.
+		 * A publisher wanting the certainty refuses on the token.
+		 */
+		lota_warn("Whether the kernel appraises any executable on "
+			  "this host could not be determined: %s could not be "
+			  "read, so no rule of the loaded policy is known. A "
+			  "kernel built without CONFIG_IMA_READ_POLICY never "
+			  "publishes it. The agent starts, and every token "
+			  "says KERNEL_APPRAISAL is clear, because the scope "
+			  "was unverified rather than verified empty",
+			  IMA_POLICY_PATH);
 		ret = 0;
 	} else if (ret == -ENOENT) {
 		lota_err("IMA appraisal is in a blocking mode but %s carries "

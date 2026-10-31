@@ -340,7 +340,8 @@ bool bpf_loader_integrity_config_satisfied(const struct integrity_data *cfg);
  * default, which blocks.
  *
  * Returns: 0 when appraisal blocks on an integrity failure, negative errno
- * otherwise.
+ * otherwise: -ENOENT when the scope reaches no exec, -EACCES when it could not
+ * be read. Report anything but 0 as not appraised.
  */
 int bpf_loader_ima_appraisal_active(const char *cmdline_path,
 				    const char *policy_path, int secureboot);
@@ -360,7 +361,8 @@ int bpf_loader_secure_boot_enabled(void);
  * the loaded policy and this host's Secure Boot state.
  *
  * Returns: 0 when an executable on this host is appraised, negative errno
- * otherwise (-ENOENT when the policy reaches no exec).
+ * otherwise (-ENOENT when the policy reaches no exec, -EACCES when it could
+ * not be read, as in the attest loop without CAP_SYS_ADMIN).
  */
 int bpf_loader_kernel_appraises_exec(void);
 
