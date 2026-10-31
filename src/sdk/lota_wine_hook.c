@@ -779,6 +779,7 @@ static void hook_report_unreachable(void)
 static struct lota_client *hook_connect(void)
 {
 	struct lota_connect_opts opts;
+	struct lota_client *client;
 
 	memset(&opts, 0, sizeof(opts));
 	opts.struct_size = sizeof(opts);
@@ -787,7 +788,13 @@ static struct lota_client *hook_connect(void)
 		opts.socket_path = g_hook.socket_path;
 	opts.timeout_ms = LOTA_HOOK_CONNECT_TIMEOUT_MS;
 
-	return lota_connect_opts(&opts);
+	client = lota_connect_opts(&opts);
+	if (!client)
+		return NULL;
+
+	lota_set_request_timeout(client, LOTA_HOOK_REQUEST_TIMEOUT_MS);
+
+	return client;
 }
 
 /*
@@ -925,6 +932,14 @@ static void refresh_once(void)
 	hook_register_self();
 
 	ret = lota_get_status(g_hook.client, &status);
+
+	/* busy, not gone: keep the connection and status, ask again */
+	if (ret == LOTA_ERR_TIMEOUT) {
+		LOG_DBG("get_status: %s -> asking again in %ds",
+			lota_strerror(ret), g_hook.refresh_sec);
+		return;
+	}
+
 	if (ret != LOTA_OK) {
 		LOG_DBG("get_status: %s -> reconnecting", lota_strerror(ret));
 		lota_disconnect(g_hook.client);

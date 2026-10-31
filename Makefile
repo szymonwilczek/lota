@@ -1336,6 +1336,7 @@ TEST_BINS := \
 	$(TEST_BIN_DIR)/test_token_gate \
 	$(TEST_BIN_DIR)/test_wine_hook \
 	$(TEST_BIN_DIR)/test_wine_hook_events \
+	$(TEST_BIN_DIR)/test_wine_hook_slow_agent \
 	$(TEST_BIN_DIR)/test_daemon \
 	$(TEST_BIN_DIR)/test_daemon_start_status \
 	$(TEST_BIN_DIR)/test_signal_shutdown \
@@ -1531,6 +1532,12 @@ $(TEST_BIN_DIR)/test_wine_hook: tests/test_wine_hook.c $(SDK_DIR)/lota_gaming.c 
 
 # dlopen()ed, not linked: the subscription is in the hook's load-time half
 $(TEST_BIN_DIR)/test_wine_hook_events: tests/test_wine_hook_events.c \
+		$(WINE_HOOK_LIB) | $(BUILD_DIR)
+	$(QUIET_CC)
+	$(Q)$(CC) $(CFLAGS) -DLOTA_HOOK_LIB_PATH='"$(WINE_HOOK_LIB)"' \
+		-o $@ $< -ldl
+
+$(TEST_BIN_DIR)/test_wine_hook_slow_agent: tests/test_wine_hook_slow_agent.c \
 		$(WINE_HOOK_LIB) | $(BUILD_DIR)
 	$(QUIET_CC)
 	$(Q)$(CC) $(CFLAGS) -DLOTA_HOOK_LIB_PATH='"$(WINE_HOOK_LIB)"' \
@@ -2016,6 +2023,7 @@ test-unit: all $(TEST_BINS)
 	@$(BUILD_DIR)/test_token_gate
 	@$(BUILD_DIR)/test_wine_hook
 	@$(BUILD_DIR)/test_wine_hook_events
+	@$(BUILD_DIR)/test_wine_hook_slow_agent
 	@$(BUILD_DIR)/test_daemon
 	@$(BUILD_DIR)/test_daemon_start_status
 	@$(BUILD_DIR)/test_signal_shutdown

@@ -39,3 +39,8 @@ LOTAGAMING_1.0 {
 	local:
 		*;
 };
+
+LOTAGAMING_1.1 {
+	global:
+		lota_set_request_timeout;
+} LOTAGAMING_1.0;
