@@ -1034,6 +1034,7 @@ static void client_attestation_view(const struct ipc_context *ctx,
 static struct {
 	uint64_t epoch; /* protected-set mutation id it was taken under */
 	bool full;
+	bool content_hashed; /* a content hash answered for one of them */
 	bool valid;
 } g_coverage;
 
@@ -1063,12 +1064,13 @@ void ipc_token_answer_stats(uint64_t *repeated)
 }
 
 /*
- * The heartbeat binds the status flags into the token nonce,
- * so the status word and the token must carry the same bit.
+ * Coverage and content-hash use in one walk, so both describe one host state:
+ * the token nonce binds the status flags.
  */
-static bool runtime_coverage_is_full(void)
+static void runtime_coverage_take(bool *full_out, bool *content_hashed_out)
 {
 	uint64_t epoch;
+	bool content_hashed = false;
 	bool full;
 	int count;
 
@@ -1085,8 +1087,11 @@ static bool runtime_coverage_is_full(void)
 	epoch = g_agent.policy_protect_epoch;
 	agent_globals_unlock(&g_agent);
 
-	if (g_coverage.valid && g_coverage.epoch == epoch)
-		return g_coverage.full;
+	if (g_coverage.valid && g_coverage.epoch == epoch) {
+		*full_out = g_coverage.full;
+		*content_hashed_out = g_coverage.content_hashed;
+		return;
+	}
 
 	full = true;
 	if (count <= 0 || !g_agent.policy_protect_pids) {
@@ -1097,8 +1102,13 @@ static bool runtime_coverage_is_full(void)
 
 			if (lota_runtime_coverage_pid(
 				    (pid_t)g_agent.policy_protect_pids[i],
-				    &cov) != 0 ||
-			    cov.unmeasurable > 0) {
+				    &cov) != 0) {
+				full = false;
+				break;
+			}
+			if (cov.content_hashed > 0)
+				content_hashed = true;
+			if (cov.unmeasurable > 0) {
 				full = false;
 				break;
 			}
@@ -1109,9 +1119,23 @@ static bool runtime_coverage_is_full(void)
 
 	g_coverage.epoch = epoch;
 	g_coverage.full = full;
+	g_coverage.content_hashed = content_hashed;
 	g_coverage.valid = true;
 
-	return full;
+	*full_out = full;
+	*content_hashed_out = content_hashed;
+}
+
+/* Coverage and content-hash bits, folded alike for status and token */
+static uint32_t runtime_coverage_fold(uint32_t flags)
+{
+	bool content_hashed = false;
+	bool full = false;
+
+	runtime_coverage_take(&full, &content_hashed);
+
+	return lota_status_fold_content_hash(
+		lota_status_fold_coverage(flags, full), content_hashed);
 }
 
 uint32_t ipc_host_status_flags(const struct ipc_context *ctx)
@@ -1119,8 +1143,7 @@ uint32_t ipc_host_status_flags(const struct ipc_context *ctx)
 	if (!ctx)
 		return 0;
 
-	return lota_status_fold_coverage(ctx->status_flags,
-					 runtime_coverage_is_full());
+	return runtime_coverage_fold(ctx->status_flags);
 }
 
 static void handle_get_status(struct ipc_context *ctx,
@@ -1137,7 +1160,7 @@ static void handle_get_status(struct ipc_context *ctx,
 	resp->payload_len = sizeof(*status);
 
 	client_attestation_view(ctx, client, &flags, &valid_until);
-	flags = lota_status_fold_coverage(flags, runtime_coverage_is_full());
+	flags = runtime_coverage_fold(flags);
 
 	status = (void *)(client->send_buf + LOTA_IPC_RESPONSE_SIZE);
 	status->flags = flags;
@@ -1186,6 +1209,7 @@ static void handle_get_token(struct ipc_context *ctx, struct ipc_client *client,
 	bool fail = false;
 	bool rebound = false;
 	bool image_fully_measured = true;
+	bool image_content_hashed = false;
 	uint32_t fail_code = LOTA_IPC_ERR_INTERNAL;
 	/* compared as text: one code with two reasons is two answers */
 	char refusal[STANDING_ANSWER_STATEMENT_MAX] = "";
@@ -1494,6 +1518,9 @@ static void handle_get_token(struct ipc_context *ctx, struct ipc_client *client,
 				image_fully_measured = false;
 				continue;
 			}
+			if (cov.content_hashed > 0)
+				image_content_hashed = true;
+
 			if (cov.unmeasurable > 0) {
 				lota_rt_failure_reason(&mfail, mfail.err,
 						       reason, sizeof(reason));
@@ -1549,9 +1576,12 @@ static void handle_get_token(struct ipc_context *ctx, struct ipc_client *client,
 	 * Same rule as the status word: a round with no protected process
 	 * measured nothing, so it is not full coverage.
 	 */
-	token->flags = lota_status_fold_coverage(
-		token->flags,
-		lota_coverage_is_full(runtime_pid_count, image_fully_measured));
+	token->flags = lota_status_fold_content_hash(
+		lota_status_fold_coverage(
+			token->flags,
+			lota_coverage_is_full(runtime_pid_count,
+					      image_fully_measured)),
+		image_content_hashed);
 
 	memcpy(token->runtime_protect_digest, runtime_protect_digest,
 	       sizeof(token->runtime_protect_digest));

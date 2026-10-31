@@ -19,7 +19,7 @@ struct bpf_object;
 struct ring_buffer;
 struct bpf_link;
 
-#define BPF_MAX_LSM_LINKS 16
+#define BPF_MAX_LSM_LINKS 24
 
 /*
  * BPF loader context
@@ -39,6 +39,7 @@ struct bpf_loader_ctx {
 	int guarded_files_fd; /* 'guarded_files' map fd */
 	int protected_pids_fd; /* Protected PIDs map fd */
 	int allow_verity_digest_fd; /* 'allow_verity_digest' map fd */
+	int exe_hash_slots_fd; /* 'exe_hash_slots' map fd */
 	bool loaded; /* BPF object loaded into the kernel and maps resolved */
 	bool attached; /* LSM / fmod_ret programs attached to kernel hooks */
 };
@@ -77,6 +78,23 @@ int bpf_loader_measure_verity_digest(const char *path,
  * Returns: 0 on success, negative errno on failure
  */
 int bpf_loader_allow_verity_path(struct bpf_loader_ctx *ctx, const char *path);
+
+/*
+ * bpf_loader_hash_file - Kernel content hash of a file, taken during its open
+ * @ctx: Loaded context
+ * @path: /proc magic link to open, so no attacker path is walked
+ * @expect_dev: st_dev the open must resolve to
+ * @expect_ino: st_ino the open must resolve to
+ * @out: Digest length + bytes
+ *
+ * Returns: 0 on success, negative errno on failure: -ENOSYS without the
+ * exe_hash_slots map, -ESTALE when the open resolved to another object,
+ * -ENXIO when no program answered, -EPROTO for an unknown algorithm,
+ * else the kernel's own error.
+ */
+int bpf_loader_hash_file(struct bpf_loader_ctx *ctx, const char *path,
+			 uint64_t expect_dev, uint64_t expect_ino,
+			 struct lota_verity_digest_key *out);
 
 /*
  * Callback for ring buffer events

@@ -44,6 +44,7 @@
 #include "kernel_floor_hint.h"
 #include "main_utils.h"
 #include "profile.h"
+#include "runtime_image_measure.h"
 #include "sdnotify.h"
 #include "selftest.h"
 #include "shutdown.h"
@@ -108,6 +109,13 @@ static void republish_rotation_state(void *user)
 		return;
 
 	publish_rotation_state(hook->aik_ttl, hook->profile);
+}
+
+/* Content hasher over the daemon's BPF object; the hook takes no context */
+static int agent_kernel_hash_file(const char *path, uint64_t dev, uint64_t ino,
+				  struct lota_verity_digest_key *out)
+{
+	return bpf_loader_hash_file(&g_agent.bpf_ctx, path, dev, ino, out);
 }
 
 static int run_daemon(const struct run_daemon_params *params)
@@ -598,6 +606,9 @@ static int run_daemon(const struct run_daemon_params *params)
 		goto cleanup_bpf;
 	}
 	lota_info("BPF programs attached under full enforcement policy");
+
+	/* only once attached: an unattached program answers no open */
+	lota_rt_set_content_hasher(agent_kernel_hash_file);
 
 	ret = bpf_loader_setup_ringbuf(&g_agent.bpf_ctx, handle_exec_event,
 				       NULL);

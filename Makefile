@@ -1424,6 +1424,7 @@ TEST_BINS := \
 	$(TEST_BIN_DIR)/test_runtime_image_collect \
 	$(TEST_BIN_DIR)/test_runtime_mapping_identity \
 	$(TEST_BIN_DIR)/test_runtime_measure_pid \
+	$(TEST_BIN_DIR)/test_runtime_identity_road \
 	$(TEST_BIN_DIR)/test_seal_blob \
 	$(TEST_BIN_DIR)/test_seal_envelope \
 	$(TEST_BIN_DIR)/test_seal_tpm \
@@ -1832,6 +1833,10 @@ $(TEST_BIN_DIR)/test_runtime_measure_pid: tests/test_runtime_measure_pid.c $(AGE
 	$(QUIET_CC)
 	$(Q)$(CC) $(CFLAGS) -o $@ $^ -lcrypto
 
+$(TEST_BIN_DIR)/test_runtime_identity_road: tests/test_runtime_identity_road.c $(AGENT_DIR)/runtime_image_measure.c | $(BUILD_DIR)
+	$(QUIET_CC)
+	$(Q)$(CC) $(CFLAGS) -o $@ $^ -lcrypto
+
 $(TEST_BIN_DIR)/test_seal_blob: tests/test_seal_blob.c $(INC_DIR)/lota_seal.h | $(BUILD_DIR)
 	$(QUIET_CC)
 	$(Q)$(CC) $(CFLAGS) -o $@ $<
@@ -2154,6 +2159,7 @@ test-unit: all $(TEST_BINS)
 	@$(BUILD_DIR)/test_runtime_image_collect
 	@$(BUILD_DIR)/test_runtime_mapping_identity
 	@$(BUILD_DIR)/test_runtime_measure_pid
+	@$(BUILD_DIR)/test_runtime_identity_road
 	@$(BUILD_DIR)/test_seal_blob
 	@$(BUILD_DIR)/test_seal_envelope
 	@$(BUILD_DIR)/test_seal_tpm

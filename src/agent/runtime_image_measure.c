@@ -14,6 +14,7 @@
 #include <string.h>
 #include <sys/ioctl.h>
 #include <sys/stat.h>
+#include <sys/vfs.h>
 #include <unistd.h>
 
 #include "runtime_image_measure.h"
@@ -27,6 +28,21 @@
  * It holds no secret, only public file properties.
  */
 static struct lota_rt_verity_cache rt_digest_cache;
+
+/*
+ * Content hashes, kept apart so a hit never serves one road's digest for the
+ * other's. Same key; only running executables, which are unwritable, land here.
+ */
+static struct lota_rt_verity_cache rt_content_cache;
+
+/* installed by whoever loaded the BPF object */
+static lota_rt_content_hasher_fn rt_content_hasher;
+
+void lota_rt_set_content_hasher(lota_rt_content_hasher_fn fn)
+{
+	rt_content_hasher = fn;
+	lota_rt_verity_cache_clear(&rt_content_cache);
+}
 
 static const char *rt_basename(const char *path)
 {
@@ -268,10 +284,8 @@ int lota_rt_measure_entry_verity(pid_t pid,
 
 	if (reported_len)
 		*reported_len = 0;
-	if (opened) {
-		opened->dev = 0;
-		opened->ino = 0;
-	}
+	if (opened)
+		memset(opened, 0, sizeof(*opened));
 
 	if (!entry || !out)
 		return -EINVAL;
@@ -341,8 +355,16 @@ int lota_rt_measure_entry_verity(pid_t pid,
 		 * exists to avoid.
 		 */
 		if (opened) {
+			struct statfs sfs;
+
 			opened->dev = st.st_dev;
 			opened->ino = st.st_ino;
+			opened->size = (uint64_t)st.st_size;
+			opened->mtime_sec = (int64_t)st.st_mtim.tv_sec;
+			opened->mtime_nsec = (int64_t)st.st_mtim.tv_nsec;
+			/* off the fd: the path may have moved since open */
+			if (fstatfs(fd, &sfs) == 0)
+				opened->fs_magic = (unsigned long)sfs.f_type;
 		}
 	}
 
@@ -438,6 +460,17 @@ void lota_rt_failure_reason(const struct lota_runtime_measure_failure *fail,
 	 * so both name the object and the action that fixes it;
 	 * anything else is ordinary errno against a named object.
 	 */
+	if (err == ENODATA && fail->road_err != 0) {
+		/* content road refused too: name its error, not fs-verity */
+		snprintf(buf, buflen,
+			 "%s%s carries no fs-verity digest and the kernel "
+			 "would not hash its content either: %s",
+			 subject, tail,
+			 strerror(fail->road_err < 0 ? -fail->road_err :
+						       fail->road_err));
+		return;
+	}
+
 	if (err == ENODATA) {
 		snprintf(buf, buflen,
 			 "%s%s carries no fs-verity digest (enable fs-verity "
@@ -511,10 +544,150 @@ static int rt_err_is_unmeasurable(int err)
 	return err == -ENODATA || err == -EOPNOTSUPP || err == -EINVAL;
 }
 
+/*
+ * Allowlist of filesystems whose content this host serves itself.
+ * One served by userspace or a peer may hand the hasher and the page fault
+ * different bytes, and an untested one is not assumed safe.
+ */
+#define LOTA_RT_MAGIC_BTRFS 0x9123683EUL
+#define LOTA_RT_MAGIC_EXT4 0xEF53UL
+#define LOTA_RT_MAGIC_XFS 0x58465342UL
+#define LOTA_RT_MAGIC_OVERLAYFS 0x794C7630UL
+#define LOTA_RT_MAGIC_TMPFS 0x01021994UL
+
+static int rt_fs_may_be_content_hashed(unsigned long fs_magic)
+{
+	switch (fs_magic) {
+	case LOTA_RT_MAGIC_BTRFS:
+	case LOTA_RT_MAGIC_EXT4:
+	case LOTA_RT_MAGIC_XFS:
+	case LOTA_RT_MAGIC_OVERLAYFS:
+	case LOTA_RT_MAGIC_TMPFS:
+		return 1;
+	default:
+		return 0;
+	}
+}
+
+enum lota_rt_identity_road lota_rt_identity_road(int role, int verity_present,
+						 unsigned long fs_magic)
+{
+	/* a kernel-enforced digest wins, whatever the role */
+	if (verity_present)
+		return LOTA_RT_ROAD_VERITY;
+
+	/* a running executable is unwritable; a mapped library is not */
+	if (role != LOTA_RT_ROLE_EXECUTABLE)
+		return LOTA_RT_ROAD_NONE;
+
+	if (!rt_fs_may_be_content_hashed(fs_magic))
+		return LOTA_RT_ROAD_NONE;
+
+	return LOTA_RT_ROAD_CONTENT_HASH;
+}
+
+/* What one mapping of a live process measured to */
+struct rt_object_measure {
+	struct lota_verity_digest_key digest;
+	struct lota_rt_open_identity opened;
+	uint32_t reported_len;
+	int role;
+	int is_exe;
+	int content_hashed; /* digest is a content hash, not fs-verity */
+	int road_err; /* why the content road refused, 0 if it was not open */
+};
+
+/* Kernel hash of one mapping, cached by the identity the verity read took */
+static int rt_content_hash_entry(pid_t pid,
+				 const struct lota_rt_map_entry *entry,
+				 const struct lota_rt_open_identity *opened,
+				 struct lota_verity_digest_key *out)
+{
+	struct lota_rt_verity_key ckey = { 0 };
+	char path[96];
+	int ret;
+	int n;
+
+	if (!rt_content_hasher)
+		return -ENOTSUP;
+
+	ckey.dev = (uint64_t)opened->dev;
+	ckey.ino = (uint64_t)opened->ino;
+	ckey.size = opened->size;
+	ckey.mtime_sec = opened->mtime_sec;
+	ckey.mtime_nsec = opened->mtime_nsec;
+	if (lota_rt_verity_cache_get(&rt_content_cache, &ckey, out))
+		return 0;
+
+	n = snprintf(path, sizeof(path), "/proc/%d/map_files/%lx-%lx", (int)pid,
+		     entry->start, entry->end);
+	if (n < 0 || (size_t)n >= sizeof(path))
+		return -ENAMETOOLONG;
+
+	ret = rt_content_hasher(path, (uint64_t)opened->dev,
+				(uint64_t)opened->ino, out);
+	if (ret != 0)
+		return ret;
+	if (!LOTA_VERITY_DIGEST_LEN_SUPPORTED(out->len))
+		return -EINVAL;
+
+	lota_rt_verity_cache_put(&rt_content_cache, &ckey, out);
+	return 0;
+}
+
+/*
+ * Measure one mapping by whichever road may. Returns 0 or the verity read's
+ * errno, so the caller still tells a coverage gap from a failure.
+ */
+static int rt_measure_object(pid_t pid, const struct lota_rt_map_entry *entry,
+			     dev_t exe_dev, ino_t exe_ino,
+			     struct rt_object_measure *m)
+{
+	enum lota_rt_identity_road road;
+	int ret;
+
+	memset(m, 0, sizeof(*m));
+
+	ret = lota_rt_measure_entry_verity(pid, entry, &m->digest,
+					   &m->reported_len, &m->opened);
+
+	/*
+	 * Both from stat(): a maps device never matches one on a filesystem
+	 * with a device per subvolume.
+	 */
+	m->is_exe = m->opened.ino != 0 && m->opened.dev == exe_dev &&
+		    m->opened.ino == exe_ino;
+
+	/* not opened: is_exe is unknown, not false */
+	if (m->opened.ino == 0)
+		m->role = LOTA_RT_ROLE_UNKNOWN;
+	else
+		m->role = m->is_exe ? LOTA_RT_ROLE_EXECUTABLE :
+				      LOTA_RT_ROLE_MAPPED_OBJECT;
+
+	if (ret == 0)
+		return 0;
+	if (!rt_err_is_unmeasurable(ret))
+		return ret;
+
+	road = lota_rt_identity_road(m->role, 0, m->opened.fs_magic);
+	if (road != LOTA_RT_ROAD_CONTENT_HASH)
+		return ret;
+
+	m->road_err = rt_content_hash_entry(pid, entry, &m->opened, &m->digest);
+	if (m->road_err != 0)
+		return ret;
+
+	m->content_hashed = 1;
+	return 0;
+}
+
 int lota_runtime_coverage_pid(pid_t pid,
 			      struct lota_runtime_measure_coverage *cov)
 {
 	struct lota_rt_map_entry *entries = NULL;
+	dev_t exe_dev = 0;
+	ino_t exe_ino = 0;
 	size_t n = 0;
 	int ret;
 
@@ -531,13 +704,20 @@ int lota_runtime_coverage_pid(pid_t pid,
 	if (ret != 0)
 		goto out;
 
-	for (size_t i = 0; i < n; i++) {
-		struct lota_verity_digest_key key;
+	/* same roads as the token; unknown executable: fs-verity only */
+	if (rt_exe_identity(pid, &exe_dev, &exe_ino) != 0) {
+		exe_dev = 0;
+		exe_ino = 0;
+	}
 
-		ret = lota_rt_measure_entry_verity(pid, &entries[i], &key, NULL,
-						   NULL);
+	for (size_t i = 0; i < n; i++) {
+		struct rt_object_measure m;
+
+		ret = rt_measure_object(pid, &entries[i], exe_dev, exe_ino, &m);
 		if (ret == 0) {
 			cov->measured++;
+			if (m.content_hashed)
+				cov->content_hashed++;
 			continue;
 		}
 		if (!rt_err_is_unmeasurable(ret))
@@ -597,25 +777,12 @@ int lota_runtime_measure_pid(pid_t pid,
 	for (i = 0; i < n; i++) {
 		struct lota_runtime_image_module *slot =
 			&mods[local_cov.measured];
-		uint32_t reported = 0;
-		struct lota_rt_open_identity opened = { 0 };
-		int is_exe;
+		struct rt_object_measure m;
 
 		snprintf(slot->soname, sizeof(slot->soname), "%s",
 			 entries[i].soname);
 
-		ret = lota_rt_measure_entry_verity(
-			pid, &entries[i], &slot->verity, &reported, &opened);
-
-		/*
-		 * Both sides come from stat(): the mapping's opened handle
-		 * and /proc/<pid>/exe.
-		 * Comparing a maps device against a stat one would never match
-		 * on a filesystem that reports a device per subvolume,
-		 * and the executable would then never be recognised as measured.
-		 */
-		is_exe = opened.ino != 0 && opened.dev == exe_dev &&
-			 opened.ino == exe_ino;
+		ret = rt_measure_object(pid, &entries[i], exe_dev, exe_ino, &m);
 		if (ret != 0) {
 			if (fail) {
 				snprintf(fail->soname, sizeof(fail->soname),
@@ -623,16 +790,10 @@ int lota_runtime_measure_pid(pid_t pid,
 				snprintf(fail->path, sizeof(fail->path), "%s",
 					 entries[i].path);
 				fail->ino = entries[i].ino;
-				fail->reported_len = reported;
-				/* never opened, so never compared */
-				if (opened.ino == 0)
-					fail->role = LOTA_RT_ROLE_UNKNOWN;
-				else
-					fail->role =
-						is_exe ?
-							LOTA_RT_ROLE_EXECUTABLE :
-							LOTA_RT_ROLE_MAPPED_OBJECT;
+				fail->reported_len = m.reported_len;
+				fail->role = m.role;
 				fail->err = ret;
+				fail->road_err = m.road_err;
 			}
 			/*
 			 * object with no digest is coverage the relying party
@@ -642,7 +803,7 @@ int lota_runtime_measure_pid(pid_t pid,
 			 */
 			if (!rt_err_is_unmeasurable(ret))
 				goto out;
-			if (is_exe) {
+			if (m.is_exe) {
 				ret = -ENODATA;
 				goto out;
 			}
@@ -651,8 +812,11 @@ int lota_runtime_measure_pid(pid_t pid,
 			continue;
 		}
 
-		if (is_exe)
+		slot->verity = m.digest;
+		if (m.is_exe)
 			exe_measured = 1;
+		if (m.content_hashed)
+			local_cov.content_hashed++;
 		local_cov.measured++;
 	}
 

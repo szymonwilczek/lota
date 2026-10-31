@@ -72,7 +72,41 @@ int lota_rt_parse_maps_line(const char *line, struct lota_rt_map_entry *out);
 struct lota_rt_open_identity {
 	dev_t dev;
 	ino_t ino;
+	unsigned long fs_magic; /* fstatfs() f_type of the fd, 0 if unread */
+	uint64_t size; /* with mtime, tells a replaced file from a cached one */
+	int64_t mtime_sec;
+	int64_t mtime_nsec;
 };
+
+/*
+ * How an object's digest may be produced. fs-verity wins wherever present;
+ * a content hash is sound only for the process's own executable, which
+ * cannot be written while it runs.
+ */
+enum lota_rt_identity_road {
+	LOTA_RT_ROAD_NONE = 0, /* no digest may be produced for this object */
+	LOTA_RT_ROAD_VERITY, /* the kernel holds an fs-verity digest */
+	LOTA_RT_ROAD_CONTENT_HASH, /* the kernel hashes the content on demand */
+};
+
+/*
+ * Which road may measure one object of a live process.
+ * role is an enum lota_rt_object_role; fs_magic is matched against an allowlist,
+ * so an unlisted filesystem gets no content hash.
+ */
+enum lota_rt_identity_road lota_rt_identity_road(int role, int verity_present,
+						 unsigned long fs_magic);
+
+/*
+ * Kernel hash of the content behind one mapping: path is its /proc magic
+ * link, dev/ino the identity the open must resolve to.
+ * Returns 0 or a negative errno. With none installed, only fs-verity measures.
+ */
+typedef int (*lota_rt_content_hasher_fn)(const char *path, uint64_t dev,
+					 uint64_t ino,
+					 struct lota_verity_digest_key *out);
+
+void lota_rt_set_content_hasher(lota_rt_content_hasher_fn fn);
 
 /*
  * Does the opened mapping still describe the one that was enumerated?
@@ -139,6 +173,7 @@ struct lota_runtime_measure_failure {
 	uint32_t reported_len;
 	int role;
 	int err;
+	int road_err; /* content road's refusal, 0 if that road was closed */
 };
 
 #define LOTA_RT_REASON_MAX 512 /* longest lota_rt_failure_reason() sentence */
@@ -164,6 +199,7 @@ void lota_rt_failure_reason(const struct lota_runtime_measure_failure *fail,
 struct lota_runtime_measure_coverage {
 	uint32_t measured;
 	uint32_t unmeasurable;
+	uint32_t content_hashed; /* of measured: content hash, not fs-verity */
 };
 
 /*
