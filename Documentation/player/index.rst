@@ -64,8 +64,11 @@ only read::
 On a PC that is ready, they answer like this::
 
     UEFI
-    crw-------. 1 root root 252, 65536 /dev/tpmrm0
+    /dev/tpmrm0
     SecureBoot enabled
+
+The middle one repeats the path back when the chip is there. When it is not,
+it says ``ls: cannot access '/dev/tpmrm0': No such file or directory``.
 
 If any of the three answers differently, the PC is not ready *yet*. Every case
 is covered under :ref:`player-when-it-stops` below, with what to do about it.
@@ -106,8 +109,8 @@ laptop::
 
     sudo dnf install git make gcc clang llvm golang bpftool \
         libbpf-devel openssl-devel tpm2-tss-devel libseccomp-devel \
-        systemd-devel dbus-devel SDL2-devel libcurl-devel \
-        elfutils-libelf-devel zlib-devel selinux-policy-devel
+        systemd-devel dbus-devel elfutils-libelf-devel \
+        selinux-policy-devel
     git clone https://github.com/szymonwilczek/lota
     cd lota
     make all
@@ -121,14 +124,19 @@ with it, install::
         SIGNING_PUBKEY=$HOME/lota-enforcement.pub
     sudo make install SIGNING_PUBKEY=$HOME/lota-enforcement.pub
 
-The two commands say what they wrote::
+The two commands say what they wrote. ``make`` echoes the long command it is
+about to run first, and the ``INF:`` line is the agent noting that it locked
+itself down before touching a key::
 
+    lota-agent: INF: hardening: applied no_new_privs, dumpable=0
     Generated Ed25519 keypair:
       Private key: /home/you/lota-enforcement.key
       Public key:  /home/you/lota-enforcement.pub
 
+    lota-agent: INF: hardening: applied no_new_privs, dumpable=0
     Signed: build/lota_lsm.bpf.o
     Signature: build/lota_lsm.bpf.o.sig
+    Signed: build/lota_lsm.bpf.o.sig
 
 The private half is yours and stays on this PC. The public half is installed
 beside the component, and the agent checks the signature against it every time
@@ -293,13 +301,21 @@ Run this from your normal user account, **not** with ``sudo``::
 
 It checks everything on the way and then prints the exact line to use::
 
+    [...]
     === Steam Launch Options ===
 
-      Paste this string into the game's Properties ->
-      General -> Launch options:
+      For games launched through Steam's pressure-vessel container
+      (any Proton title and most native Linux titles on Steam),
+      the LOTA socket must be bind-mounted into the container, and
+      so must the directory the hook writes its status and token
+      into -- otherwise those files land inside the container and
+      nothing on this machine can read them.  The wrapper asks for
+      both itself, so the line to paste into the game's Properties
+      -> General -> Launch options is this one:
 
         LOTA_HOOK_LOG_LEVEL=info lota-proton-hook %command%
 
+    [...]
     [OK]   All checks passed.  LOTA Steam integration is ready.
 
 Copy it from your own terminal rather than from this page, because the check
@@ -394,8 +410,9 @@ or::
 
     sudo lota-agent --shutdown
 
-It explains itself before doing anything, and does nothing if you answer
-``q``::
+It explains itself before doing anything. Pausing needs a ``y``: the capital
+``N`` in the prompt is the answer it takes if you press Enter, and ``q`` walks
+away the same way::
 
     [lota-install] Pausing stops the agent through its own graceful path
     ('lota-agent --shutdown'). systemd cannot stop the agent - the anti-tamper
@@ -404,7 +421,8 @@ It explains itself before doing anything, and does nothing if you answer
     (PCR 14) on purpose, so this boot can no longer attest. That is the
     security contract, not a fault: resuming therefore needs a reboot (see
     --resume).
-    [lota-install] Pause the agent now? [Enter to continue, q to quit]
+    [lota-install] Pause the agent now? [y/N, q to quit]
+    [lota-install] Left running. Nothing changed.
 
 Starting it again is ``sudo lota-install --resume``, which offers to reboot
 and defaults to not doing it. A paused PC boots and works normally; the agent
@@ -417,8 +435,17 @@ in the meantime.
 
 The boot parameters the installer added stay behind. They are standard kernel
 settings, they harm nothing on their own, and editing them out is a separate
-job you can leave alone. The per-publisher keys live under ``/var/lib/lota``
-and go with the package.
+job you can leave alone.
+
+So does the key material. The per-publisher keys under ``/var/lib/lota``
+belong to this PC rather than to the package, which is why a reinstall picks
+up where the last one left off instead of asking the chip for new ones.
+Removing them is a separate command::
+
+    sudo rm -rf /var/lib/lota
+
+That one is final. The next install starts from nothing, and a publisher who
+had recognised this PC sees a PC it has never met.
 
 Where to next
 =============
