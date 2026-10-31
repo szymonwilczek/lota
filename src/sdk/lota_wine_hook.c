@@ -952,6 +952,9 @@ static void refresh_once(void)
 /* load-time only; the tests drive the connect and refresh path above */
 #ifndef LOTA_HOOK_TESTING
 
+/* flags change rarely; every attestation round moves counts and validity */
+#define HOOK_EVENT_MASK (LOTA_EVENT_STATUS | LOTA_EVENT_ATTEST)
+
 static void hook_status_cb(const struct lota_status *status, uint32_t events,
 			   void *user_data)
 {
@@ -959,6 +962,8 @@ static void hook_status_cb(const struct lota_status *status, uint32_t events,
 
 	(void)events;
 	(void)user_data;
+
+	hook_cache_status(status);
 
 	ret = write_status(status);
 	if (ret < 0)
@@ -1007,7 +1012,7 @@ static void *refresh_thread_fn(void *arg)
 			LOG_INF("connected to agent");
 			refresh_once();
 
-			ret = lota_subscribe(g_hook.client, LOTA_EVENT_STATUS,
+			ret = lota_subscribe(g_hook.client, HOOK_EVENT_MASK,
 					     hook_status_cb, NULL);
 			subscribed = (ret == LOTA_OK);
 			if (!subscribed)
