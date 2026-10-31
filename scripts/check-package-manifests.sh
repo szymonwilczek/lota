@@ -447,6 +447,8 @@ nfpm_rpm_list() {
 
     awk -v field="$field" '
 		$0 ~ "^[ \t]*" field ":[ \t]*$" { in_list = 1; next }
+		# comments and blank lines do not end the list
+		in_list && /^[ \t]*(#|$)/ { next }
 		in_list && /^[ \t]*-[ \t]*/ {
 			sub(/^[ \t]*-[ \t]*/, "")
 			gsub(/^["'"'"']|["'"'"']$/, "")
