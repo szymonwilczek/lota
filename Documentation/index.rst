@@ -16,6 +16,14 @@ relevant directory.
 Who are you?
 ============
 
+Somebody who wants to play a game that uses LOTA
+------------------------------------------------
+
+Start here. No prior knowledge assumed, one page, from a PC with nothing
+installed to a PC that a game can check.
+
+* :doc:`Installing LOTA on your PC <player/index>`
+
 New contributor or automated assistant
 --------------------------------------
 
@@ -111,6 +119,7 @@ reproducible and verified against signed manifests.
 .. toctree::
    :hidden:
 
+   player/index
    contributor/index
    operator/index
    security/index
