@@ -6,7 +6,7 @@
  * Mirrors src/attestca/wire: four length-prefixed, big-endian messages
  * carry one enrollment over TLS. The agent sends BeginRequest and
  * CompleteRequest and decodes ChallengeReply and ResultReply.
- * Every variable field is bounded.
+ * Each message has one layout, and every variable field is bounded.
  */
 
 #ifndef LOTA_ENROLL_H
@@ -16,19 +16,12 @@
 #define LOTA_ENROLL_MAGIC 0x4C434145u
 
 /*
- * Version 1 frames carry no enrollment token;
- * Version 2 appends one to BeginRequest.
- * Version 3 appends the manufacturer intermediates the device holds,
- * and carries the token field even when it is empty.
- * Version states what the frame carries, not how old the peer is:
- * untenanted enrollment sends version 1, tenant enrollment sends
- * version 2, a device presenting an EK chain sends version 3,
- * and the CA answers in the version it received.
- * All three are current modes.
+ * Protocol version, carried by every frame. One layout per message: the
+ * token and the intermediates are a length and a count that may be zero.
+ * A layout change takes the next number; the agent sends its newest,
+ * the CA answers in the request's, an unknown number is refused.
  */
 #define LOTA_ENROLL_VERSION 1u
-#define LOTA_ENROLL_VERSION_TOKEN 2u
-#define LOTA_ENROLL_VERSION_EK_CHAIN 3u
 
 /* Field bounds, identical to the Go wire caps. */
 /* see (src/attestca/wire/wire.go) */

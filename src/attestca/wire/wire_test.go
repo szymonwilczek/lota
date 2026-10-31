@@ -90,9 +90,7 @@ func TestResultRoundTrip(t *testing.T) {
 	}
 }
 
-// TestEncodeRejectsUnsetVersion covers the reply encoders:
-// version selects the frame layout, so an unset field is refused rather
-// than resolved to Version1 on the caller's behalf.
+// replies mirror their request, so an unset version is refused
 func TestEncodeRejectsUnsetVersion(t *testing.T) {
 	if _, err := EncodeChallenge(&ChallengeReply{SessionID: "s"}); err != ErrBadVersion {
 		t.Fatalf("EncodeChallenge with no version: want ErrBadVersion, got %v", err)
@@ -177,20 +175,27 @@ func TestReadFrameRejectsOversize(t *testing.T) {
 	}
 }
 
-func TestBeginWithoutTokenStaysVersion1(t *testing.T) {
+// absent token and chain still occupy their length and count
+func TestBeginWithoutTokenOrChainWritesBothFields(t *testing.T) {
 	enc, err := EncodeBegin(&BeginRequest{EKCertDER: []byte{0xAA}, AIKPublic: []byte{0xBB}})
 	if err != nil {
 		t.Fatalf("EncodeBegin: %v", err)
 	}
-	if got := binary.BigEndian.Uint16(enc[4:6]); got != Version1 {
-		t.Fatalf("token-less begin frame version = %d, want %d", got, Version1)
+
+	// preamble, EK, AIK, empty token, zero count
+	if len(enc) != 6+3+3+2+2 {
+		t.Fatalf("token-less begin frame is %d bytes, want %d", len(enc), 6+3+3+2+2)
+	}
+	if got := binary.BigEndian.Uint16(enc[4:6]); got != Version {
+		t.Fatalf("token-less begin frame version = %d, want %d", got, Version)
 	}
 	out, err := DecodeBegin(enc)
 	if err != nil {
 		t.Fatalf("DecodeBegin: %v", err)
 	}
-	if out.Version != Version1 || out.Token != nil {
-		t.Fatalf("decoded version=%d token=%v, want version 1 and no token", out.Version, out.Token)
+	if out.Version != Version || len(out.Token) != 0 || len(out.EKChainDER) != 0 {
+		t.Fatalf("decoded version=%d token=%v chain=%d, want version %d, no token and no chain",
+			out.Version, out.Token, len(out.EKChainDER), Version)
 	}
 }
 
@@ -204,22 +209,21 @@ func TestBeginTokenRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("EncodeBegin: %v", err)
 	}
-	if got := binary.BigEndian.Uint16(enc[4:6]); got != Version2 {
-		t.Fatalf("token begin frame version = %d, want %d", got, Version2)
+	if got := binary.BigEndian.Uint16(enc[4:6]); got != Version {
+		t.Fatalf("token begin frame version = %d, want %d", got, Version)
 	}
 	out, err := DecodeBegin(enc)
 	if err != nil {
 		t.Fatalf("DecodeBegin: %v", err)
 	}
-	if out.Version != Version2 || !bytes.Equal(out.Token, in.Token) ||
+	if out.Version != Version || !bytes.Equal(out.Token, in.Token) ||
 		!bytes.Equal(out.EKCertDER, in.EKCertDER) || !bytes.Equal(out.AIKPublic, in.AIKPublic) {
 		t.Fatal("begin token round trip mismatch")
 	}
 }
 
-func TestBeginVersion2ByteLayout(t *testing.T) {
-	// pin the version-2 layout the C agent mirrors:
-	// magic, version 2, then length-prefixed EK cert, AIK public, and token
+func TestBeginTokenByteLayout(t *testing.T) {
+	// pinned for the C agent: magic, version, EK, AIK, token, chain count
 	enc, err := EncodeBegin(&BeginRequest{
 		EKCertDER: []byte{0xAA, 0xBB},
 		AIKPublic: []byte{0xCC},
@@ -229,26 +233,30 @@ func TestBeginVersion2ByteLayout(t *testing.T) {
 		t.Fatalf("EncodeBegin: %v", err)
 	}
 	want := []byte{
-		0x4C, 0x43, 0x41, 0x45, 0x00, 0x02,
+		0x4C, 0x43, 0x41, 0x45, 0x00, 0x01,
 		0x00, 0x02, 0xAA, 0xBB,
 		0x00, 0x01, 0xCC,
 		0x00, 0x02, 't', 'k',
+		0x00, 0x00, // no intermediates
 	}
 	if !bytes.Equal(enc, want) {
-		t.Fatalf("version-2 begin layout = %x, want %x", enc, want)
+		t.Fatalf("begin token layout = %x, want %x", enc, want)
 	}
 }
 
-func TestBeginVersion2RequiresTokenField(t *testing.T) {
-	// version-2 preamble on token-less body is truncated,
-	// not silently token-free request
-	enc, err := EncodeBegin(&BeginRequest{EKCertDER: []byte{0xAA}, AIKPublic: []byte{0xBB}})
-	if err != nil {
-		t.Fatalf("EncodeBegin: %v", err)
+// a body stopping before a field is truncated, not a field absent
+func TestDecodeBeginRequiresEveryField(t *testing.T) {
+	preamble := []byte{0x4C, 0x43, 0x41, 0x45, 0x00, 0x01}
+	body := append(preamble, 0x00, 0x01, 0xAA, 0x00, 0x01, 0xBB)
+
+	if _, err := DecodeBegin(body); err != ErrShort {
+		t.Fatalf("body stopping before the token field: want ErrShort, got %v", err)
 	}
-	enc[5] = byte(Version2)
-	if _, err := DecodeBegin(enc); err == nil {
-		t.Fatal("accepted a version-2 begin frame without a token field")
+	if _, err := DecodeBegin(append(body, 0x00, 0x00)); err != ErrShort {
+		t.Fatalf("body stopping before the chain count: want ErrShort, got %v", err)
+	}
+	if _, err := DecodeBegin(append(body, 0x00, 0x00, 0x00, 0x00)); err != nil {
+		t.Fatalf("a whole body with both fields empty: %v", err)
 	}
 }
 
@@ -260,7 +268,7 @@ func TestEncodeBeginRejectsOversizeToken(t *testing.T) {
 }
 
 func TestRepliesMirrorRequestVersion(t *testing.T) {
-	for _, version := range []uint16{Version1, Version2, Version3} {
+	for _, version := range []uint16{Version1} {
 		ch, err := EncodeChallenge(&ChallengeReply{SessionID: "s", Version: version})
 		if err != nil {
 			t.Fatalf("EncodeChallenge v%d: %v", version, err)
@@ -282,24 +290,81 @@ func TestRepliesMirrorRequestVersion(t *testing.T) {
 	}
 }
 
+// numbers above Version1, including the old shape selectors,
+// are refused both ways
 func TestEncodeRejectsUnknownVersion(t *testing.T) {
-	if _, err := EncodeChallenge(&ChallengeReply{Version: 4}); err != ErrBadVersion {
-		t.Fatalf("EncodeChallenge: want ErrBadVersion, got %v", err)
-	}
-	if _, err := EncodeComplete(&CompleteRequest{Version: 4}); err != ErrBadVersion {
-		t.Fatalf("EncodeComplete: want ErrBadVersion, got %v", err)
-	}
-	if _, err := EncodeResult(&ResultReply{Version: 4}); err != ErrBadVersion {
-		t.Fatalf("EncodeResult: want ErrBadVersion, got %v", err)
+	for _, version := range []uint16{2, 3, 4} {
+		if _, err := EncodeChallenge(&ChallengeReply{Version: version}); err != ErrBadVersion {
+			t.Fatalf("EncodeChallenge v%d: want ErrBadVersion, got %v", version, err)
+		}
+		if _, err := EncodeComplete(&CompleteRequest{Version: version}); err != ErrBadVersion {
+			t.Fatalf("EncodeComplete v%d: want ErrBadVersion, got %v", version, err)
+		}
+		if _, err := EncodeResult(&ResultReply{Version: version}); err != ErrBadVersion {
+			t.Fatalf("EncodeResult v%d: want ErrBadVersion, got %v", version, err)
+		}
 	}
 }
 
-// A device whose EK certificate sits several levels below its manufacturer root
-// holds the intervening intermediates itself, so the begin request has to carry them.
-// Version 3 is that frame, and its layout is pinned byte for byte against the C
-// agent (tests/test_enroll_wire.c) -- the two encoders share nothing but
-// this expectation.
-func TestBeginVersion3ByteLayout(t *testing.T) {
+func TestDecodeRejectsRetiredVersions(t *testing.T) {
+	for _, version := range []uint16{0, 2, 3, 4, 0xFFFF} {
+		enc, err := EncodeBegin(&BeginRequest{EKCertDER: []byte{0xAA}, AIKPublic: []byte{0xBB}})
+		if err != nil {
+			t.Fatalf("EncodeBegin: %v", err)
+		}
+		binary.BigEndian.PutUint16(enc[4:6], version)
+		if _, err := DecodeBegin(enc); err != ErrBadVersion {
+			t.Fatalf("DecodeBegin v%d: want ErrBadVersion, got %v", version, err)
+		}
+	}
+}
+
+// trailing bytes are refused, or a begin with a token could enroll untenanted
+func TestDecodeRejectsTrailingBytes(t *testing.T) {
+	begin, err := EncodeBegin(&BeginRequest{EKCertDER: []byte{0xAA}, AIKPublic: []byte{0xBB}, Token: []byte("t")})
+	if err != nil {
+		t.Fatalf("EncodeBegin: %v", err)
+	}
+	challenge, err := EncodeChallenge(&ChallengeReply{SessionID: "s", Version: Version1})
+	if err != nil {
+		t.Fatalf("EncodeChallenge: %v", err)
+	}
+	complete, err := EncodeComplete(&CompleteRequest{SessionID: "s", Secret: []byte{1}, Version: Version1})
+	if err != nil {
+		t.Fatalf("EncodeComplete: %v", err)
+	}
+	result, err := EncodeResult(&ResultReply{DeviceID: "d", Version: Version1})
+	if err != nil {
+		t.Fatalf("EncodeResult: %v", err)
+	}
+
+	for _, tc := range []struct {
+		name   string
+		body   []byte
+		decode func([]byte) error
+	}{
+		{"begin", begin, func(b []byte) error { _, err := DecodeBegin(b); return err }},
+		{"challenge", challenge, func(b []byte) error { _, err := DecodeChallenge(b); return err }},
+		{"complete", complete, func(b []byte) error { _, err := DecodeComplete(b); return err }},
+		{"result", result, func(b []byte) error { _, err := DecodeResult(b); return err }},
+	} {
+		if err := tc.decode(tc.body); err != nil {
+			t.Fatalf("%s: whole body: %v", tc.name, err)
+		}
+		// one byte too many is a different frame, not this one
+		if err := tc.decode(append(tc.body, 0x00)); err != ErrTrailing {
+			t.Fatalf("%s with a trailing byte: want ErrTrailing, got %v", tc.name, err)
+		}
+		// and so is a whole appended field
+		if err := tc.decode(append(tc.body, 0x00, 0x01, 0xFF)); err != ErrTrailing {
+			t.Fatalf("%s with an appended field: want ErrTrailing, got %v", tc.name, err)
+		}
+	}
+}
+
+// chain closes the frame: a count, then length-prefixed certificates;
+// pinned byte for byte against tests/test_enroll_wire.c
+func TestBeginChainByteLayout(t *testing.T) {
 	enc, err := EncodeBegin(&BeginRequest{
 		EKCertDER: []byte{0xAA, 0xBB},
 		AIKPublic: []byte{0xCC},
@@ -312,7 +377,7 @@ func TestBeginVersion3ByteLayout(t *testing.T) {
 		t.Fatalf("EncodeBegin: %v", err)
 	}
 	want := []byte{
-		0x4C, 0x43, 0x41, 0x45, 0x00, 0x03,
+		0x4C, 0x43, 0x41, 0x45, 0x00, 0x01,
 		0x00, 0x02, 0xAA, 0xBB,
 		0x00, 0x01, 0xCC,
 		0x00, 0x00, // token field present and empty
@@ -321,7 +386,7 @@ func TestBeginVersion3ByteLayout(t *testing.T) {
 		0x00, 0x03, 0x30, 0x01, 0xEE,
 	}
 	if !bytes.Equal(enc, want) {
-		t.Fatalf("version-3 begin layout = %x, want %x", enc, want)
+		t.Fatalf("begin chain layout = %x, want %x", enc, want)
 	}
 }
 
@@ -336,14 +401,14 @@ func TestBeginChainRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("EncodeBegin: %v", err)
 	}
-	if got := binary.BigEndian.Uint16(enc[4:6]); got != Version3 {
-		t.Fatalf("chain begin frame version = %d, want %d", got, Version3)
+	if got := binary.BigEndian.Uint16(enc[4:6]); got != Version {
+		t.Fatalf("chain begin frame version = %d, want %d", got, Version)
 	}
 	out, err := DecodeBegin(enc)
 	if err != nil {
 		t.Fatalf("DecodeBegin: %v", err)
 	}
-	if out.Version != Version3 || !bytes.Equal(out.Token, in.Token) ||
+	if out.Version != Version || !bytes.Equal(out.Token, in.Token) ||
 		!bytes.Equal(out.EKCertDER, in.EKCertDER) || !bytes.Equal(out.AIKPublic, in.AIKPublic) {
 		t.Fatal("begin chain round trip mismatch")
 	}
@@ -357,22 +422,21 @@ func TestBeginChainRoundTrip(t *testing.T) {
 	}
 }
 
-// The version follows what the request carries, so an agent with no chain to
-// present keeps speaking to a CA that predates the field.
-func TestBeginWithoutChainKeepsLowerVersion(t *testing.T) {
+// no intermediates: count zero, decoded as an empty chain
+func TestBeginWithoutChainWritesAZeroCount(t *testing.T) {
 	enc, err := EncodeBegin(&BeginRequest{EKCertDER: []byte{0xAA}, AIKPublic: []byte{0xBB}, Token: []byte("t")})
 	if err != nil {
 		t.Fatalf("EncodeBegin: %v", err)
 	}
-	if got := binary.BigEndian.Uint16(enc[4:6]); got != Version2 {
-		t.Fatalf("chainless begin frame version = %d, want %d", got, Version2)
+	if got := binary.BigEndian.Uint16(enc[len(enc)-2:]); got != 0 {
+		t.Fatalf("chainless begin chain count = %d, want 0", got)
 	}
 	out, err := DecodeBegin(enc)
 	if err != nil {
 		t.Fatalf("DecodeBegin: %v", err)
 	}
-	if out.EKChainDER != nil {
-		t.Fatalf("decoded %d intermediates from a version-2 frame, want none", len(out.EKChainDER))
+	if len(out.EKChainDER) != 0 {
+		t.Fatalf("decoded %d intermediates, want none", len(out.EKChainDER))
 	}
 }
 
@@ -402,20 +466,17 @@ func TestEncodeBeginRejectsOversizeChain(t *testing.T) {
 }
 
 func TestDecodeBeginRejectsOversizeChain(t *testing.T) {
-	// version-3 frame claiming more intermediates than the wire allows
-	body := []byte{0x4C, 0x43, 0x41, 0x45, 0x00, 0x03, 0x00, 0x01, 0xAA, 0x00, 0x01, 0xBB, 0x00, 0x00}
+	// count above MaxEKChainCerts
+	body := []byte{0x4C, 0x43, 0x41, 0x45, 0x00, 0x01, 0x00, 0x01, 0xAA, 0x00, 0x01, 0xBB, 0x00, 0x00}
 	body = append(body, byte((MaxEKChainCerts+1)>>8), byte(MaxEKChainCerts+1))
 	if _, err := DecodeBegin(body); err != ErrTooLarge {
 		t.Fatalf("want ErrTooLarge, got %v", err)
 	}
 
-	// version-3 preamble on a version-2 body is truncated, not chainless
-	enc, err := EncodeBegin(&BeginRequest{EKCertDER: []byte{0xAA}, AIKPublic: []byte{0xBB}, Token: []byte("t")})
-	if err != nil {
-		t.Fatalf("EncodeBegin: %v", err)
-	}
-	enc[5] = byte(Version3)
-	if _, err := DecodeBegin(enc); err == nil {
-		t.Fatal("accepted a version-3 begin frame without a chain count")
+	// count the body does not deliver: truncated
+	body[len(body)-2], body[len(body)-1] = 0x00, 0x02
+	body = append(body, 0x00, 0x01, 0xCC)
+	if _, err := DecodeBegin(body); err != ErrShort {
+		t.Fatalf("count of two with one certificate: want ErrShort, got %v", err)
 	}
 }

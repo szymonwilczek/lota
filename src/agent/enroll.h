@@ -130,17 +130,13 @@ int enroll_split_cert_chain(const uint8_t *blob, size_t len,
  * decoders return 0 or negative errno. The encoded body excludes the
  * outer u32 frame length, which the transport adds.
  *
- * Token names the device's tenant at the CA (the gaming path);
- * NULL or empty means none.
- * Token-less begin is version-1 frame an old CA accepts;
- * Token upgrades the frame to version 2.
+ * Begin writes every field; token and ek_chain change only lengths.
  *
- * ek_chain carries the manufacturer intermediates between the leaf and a root
- * the CA pins, for a platform that stores them on the chip; it upgrades the frame
- * to version 3 and is what lets a leaf several levels below its root be verified
- * at all.
- * NULL or empty leaves the frame at the version the token selects,
- * so a host with nothing to present speaks to a CA that predates the field.
+ * Token names the device's tenant at the CA (the gaming path);
+ * NULL or empty writes length zero.
+ *
+ * ek_chain: manufacturer intermediates between the leaf and a root the CA
+ * pins, as stored on the chip; NULL or empty writes count zero.
  */
 ssize_t enroll_encode_begin(uint8_t *out, size_t out_max,
 			    const uint8_t *ek_cert, size_t ek_cert_len,
