@@ -5,7 +5,8 @@
 #
 # Sets LD_PRELOAD so that the LOTA Wine hook library is loaded into
 # the Wine/Proton process, transparently bridging attestation into
-# the Windows game.
+# the Windows game, and shares the agent's socket directory and the hook's
+# token directory through PRESSURE_VESSEL_FILESYSTEMS_RW.
 #
 # Usage:
 #   As Steam launch option:
@@ -62,5 +63,49 @@ if [[ -n "${LD_PRELOAD:-}" ]]; then
 else
     export LD_PRELOAD="${LOTA_HOOK_LIB}"
 fi
+
+# pressure-vessel binds only paths in PRESSURE_VESSEL_FILESYSTEMS_RW.
+# Outside a container the variable is ignored.
+
+# share_dir: append $1 unless it is already a whole element
+share_dir() {
+    local want="$1" entry
+
+    local IFS=:
+    for entry in ${PRESSURE_VESSEL_FILESYSTEMS_RW:-}; do
+        [[ "$entry" == "$want" ]] && return 0
+    done
+    unset IFS
+
+    if [[ -n "${PRESSURE_VESSEL_FILESYSTEMS_RW:-}" ]]; then
+        PRESSURE_VESSEL_FILESYSTEMS_RW="${PRESSURE_VESSEL_FILESYSTEMS_RW}:${want}"
+    else
+        PRESSURE_VESSEL_FILESYSTEMS_RW="${want}"
+    fi
+}
+
+# same order as token_dir_candidate() in src/sdk/lota_wine_hook.c
+if [[ -n "${LOTA_HOOK_TOKEN_DIR:-}" ]]; then
+    lota_token_dir="$LOTA_HOOK_TOKEN_DIR"
+elif [[ -n "${XDG_RUNTIME_DIR:-}" ]]; then
+    lota_token_dir="${XDG_RUNTIME_DIR}/lota-hook"
+else
+    lota_token_dir="/tmp/lota-$(id -u)"
+fi
+
+# must exist on the host to be bound; on failure the library reports it
+(umask 0077 && mkdir -p "$lota_token_dir") 2>/dev/null || true
+share_dir "$lota_token_dir"
+
+# agent-owned; share only if present, a missing path fails the container
+lota_socket="${LOTA_HOOK_SOCKET:-${XDG_RUNTIME_DIR:+${XDG_RUNTIME_DIR}/lota/lota.sock}}"
+if [[ -n "$lota_socket" ]]; then
+    lota_socket_dir=$(dirname -- "$lota_socket")
+    if [[ -d "$lota_socket_dir" ]]; then
+        share_dir "$lota_socket_dir"
+    fi
+fi
+
+export PRESSURE_VESSEL_FILESYSTEMS_RW
 
 exec "$@"

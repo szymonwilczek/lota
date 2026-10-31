@@ -475,6 +475,19 @@ STRIDE mapping
          LSM, SELinux, and ptrace restrictions.
        | It does not replace the kernel's own privilege boundary.
 
+Where the hook's token can be read
+==================================
+
+The Wine/Proton hook writes its status, token and attestation snapshot into a
+player-owned directory that a relying party reads. Under a container manager
+that directory must be bound in from the host, or the files never leave the
+container. For Steam's pressure-vessel, ``lota-proton-hook`` adds the socket
+and token directories to ``PRESSURE_VESSEL_FILESYSTEMS_RW``.
+
+Inside the container everything succeeds, so a hook whose token directory is
+not a mount point reports it on the title's stderr. The token is signed either
+way: this is an availability boundary, not a trust one.
+
 Explicit non-goals
 ==================
 

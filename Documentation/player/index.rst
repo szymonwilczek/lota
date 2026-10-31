@@ -298,18 +298,13 @@ It checks everything on the way and then prints the exact line to use::
       Paste this string into the game's Properties ->
       General -> Launch options:
 
-        PRESSURE_VESSEL_FILESYSTEMS_RW=/run/user/1000/lota \
-        LOTA_HOOK_SOCKET=/run/user/1000/lota/lota.sock \
-        LOTA_HOOK_LOG_LEVEL=info \
-        lota-proton-hook %command%
-
-      Paste on a single line; the line breaks above are for
-      readability only.
+        LOTA_HOOK_LOG_LEVEL=info lota-proton-hook %command%
 
     [OK]   All checks passed.  LOTA Steam integration is ready.
 
-Copy it from your own terminal rather than from this page: the number in those
-paths is your account's, and it differs between machines.
+Copy it from your own terminal rather than from this page, because the check
+above it is the part that matters: it tells you whether this account has a
+socket to reach at all.
 
 In Steam, right-click the game, choose **Properties**, and paste the line into
 **Launch options** as a single line. Repeat for each game that uses LOTA.
@@ -367,6 +362,18 @@ getting what it asked for. ``LOTA_OFFLINE=1`` means the bridge cannot reach
 the agent -- check the service above, and check that the launch options were
 pasted into *this* game. The file is left behind when the game exits, so read
 ``LOTA_UPDATED`` (a Unix timestamp) before trusting what it says.
+
+An empty ``lota-hook`` directory with the game running has one other cause,
+and the bridge says which::
+
+    lota-hook: /run/user/1000/lota-hook is inside this container, so the host
+    cannot read the status or the token written there; launch the title
+    through lota-proton-hook, which shares it
+
+The game's launch options do not start it through ``lota-proton-hook``, so
+the files stay inside the game's container. The game still gets its token,
+but nothing outside it can read the files. Pasting the line from
+``lota-steam-setup`` fixes it.
 
 If a game still refuses to start, the thing to send its support is what those
 commands print. It tells them in one line whether the problem is on your PC or

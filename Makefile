@@ -1338,6 +1338,7 @@ TEST_BINS := \
 	$(TEST_BIN_DIR)/test_wine_hook_events \
 	$(TEST_BIN_DIR)/test_wine_hook_slow_agent \
 	$(TEST_BIN_DIR)/test_wine_hook_publisher \
+	$(TEST_BIN_DIR)/hook_preload_target \
 	$(TEST_BIN_DIR)/test_daemon \
 	$(TEST_BIN_DIR)/test_daemon_start_status \
 	$(TEST_BIN_DIR)/test_signal_shutdown \
@@ -1550,6 +1551,10 @@ $(TEST_BIN_DIR)/test_wine_hook_publisher: tests/test_wine_hook_publisher.c \
 	$(QUIET_CC)
 	$(Q)$(CC) $(CFLAGS) -DLOTA_HOOK_LIB_PATH='"$(WINE_HOOK_LIB)"' \
 		-o $@ $< -ldl
+
+$(TEST_BIN_DIR)/hook_preload_target: tests/hook_preload_target.c | $(BUILD_DIR)
+	$(QUIET_CC)
+	$(Q)$(CC) $(CFLAGS) -o $@ $<
 
 $(TEST_BIN_DIR)/test_daemon: tests/test_daemon.c $(AGENT_DIR)/daemon.c | $(BUILD_DIR)
 	$(QUIET_CC)
@@ -2171,6 +2176,8 @@ test-unit: all $(TEST_BINS)
 	@tests/integration/test_steam_setup_dropin.sh
 	@tests/integration/test_steam_setup_no_session.sh
 	@tests/integration/test_proton_hook_disable.sh
+	@tests/integration/test_proton_hook_shares.sh
+	@tests/integration/test_hook_container_report.sh
 	@tests/integration/test_dev_bringup_idempotent.sh
 	@tests/integration/test_installer_status_stages.sh
 	@if command -v pkg-config >/dev/null 2>&1; then \
