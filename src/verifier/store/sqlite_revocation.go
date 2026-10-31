@@ -398,33 +398,103 @@ func (l *SQLiteAuditLog) Query(limit int) []AuditEntry {
 
 // implements AttestationLog using the attestation_log table (migration v3)
 type SQLiteAttestationLog struct {
-	mu sync.Mutex
-	db *sql.DB
+	mu     sync.Mutex
+	db     *sql.DB
+	window time.Duration // zero records every round
 }
 
 // creates an attestation log backed by the given database
 func NewSQLiteAttestationLog(db *sql.DB) *SQLiteAttestationLog {
-	return &SQLiteAttestationLog{db: db}
+	return NewSQLiteAttestationLogWindow(db, DefaultCollapseWindow)
+}
+
+// the same, with a deployment's own collapse window
+func NewSQLiteAttestationLogWindow(db *sql.DB, window time.Duration) *SQLiteAttestationLog {
+	return &SQLiteAttestationLog{db: db, window: window}
+}
+
+// scanned in this order by attestationStanding()
+const attestationStandingCols = `id, timestamp, last_seen, rounds, tenant, client_id,
+	 hardware_id, result, pcr14, details, kernel_hash`
+
+// *sql.DB or *sql.Tx
+type attestationExecer interface {
+	Exec(query string, args ...any) (sql.Result, error)
+	QueryRow(query string, args ...any) *sql.Row
+}
+
+// newest row of this tenant and client; id 0 when there is none
+func attestationStanding(x attestationExecer, query, tenant, clientID string) (int64, AttestationRecord) {
+	var id int64
+	var r AttestationRecord
+	var opened, seen any
+
+	err := x.QueryRow(query, tenant, clientID).Scan(&id, &opened, &seen,
+		&r.Rounds, &r.Tenant, &r.ClientID, &r.HardwareID, &r.Result, &r.PCR14,
+		&r.Details, &r.KernelHash)
+	if err != nil {
+		// unreadable counts as none: never fold into an unknown row
+		return 0, AttestationRecord{}
+	}
+
+	// unreadable times: same answer
+	if r.Timestamp, err = attestationTimeValue(opened); err != nil {
+		return 0, AttestationRecord{}
+	}
+	if r.LastSeen, err = attestationTimeValue(seen); err != nil {
+		return 0, AttestationRecord{}
+	}
+	return id, r
+}
+
+const sqliteStandingQuery = `SELECT ` + attestationStandingCols + `
+	 FROM attestation_log WHERE tenant = ? AND client_id = ?
+	 ORDER BY id DESC LIMIT 1`
+
+const sqliteExtendStanding = `UPDATE attestation_log
+	 SET last_seen = ?, rounds = rounds + 1, duration_ms = ?, remote_addr = ?
+	 WHERE id = ?`
+
+const sqliteInsertRow = `INSERT INTO attestation_log
+	 (timestamp, tenant, client_id, hardware_id, result, duration_ms, pcr14,
+	  details, remote_addr, kernel_hash, last_seen, rounds)
+	 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)`
+
+// extend the standing row or open a new one
+func (l *SQLiteAttestationLog) record(x attestationExecer, entry AttestationRecord, now time.Time) error {
+	if entry.Timestamp.IsZero() {
+		entry.Timestamp = now
+	}
+
+	id, standing := attestationStanding(x, sqliteStandingQuery, entry.Tenant, entry.ClientID)
+	if id != 0 && attestationCollapses(standing, entry, l.window) {
+		// duration and address describe the latest contact only
+		_, err := x.Exec(sqliteExtendStanding, attestationTimeArg(entry.Timestamp),
+			entry.DurationMs, entry.RemoteAddr, id)
+		return err
+	}
+
+	// as UTC instants: compared as text, read back from any zone
+	at := attestationTimeArg(entry.Timestamp)
+	_, err := x.Exec(sqliteInsertRow, at, entry.Tenant, entry.ClientID,
+		entry.HardwareID, entry.Result, entry.DurationMs, entry.PCR14,
+		entry.Details, entry.RemoteAddr, entry.KernelHash, at)
+	return err
 }
 
 func (l *SQLiteAttestationLog) Record(entry AttestationRecord) error {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 
-	ts := entry.Timestamp
-	if ts.IsZero() {
-		ts = time.Now().UTC()
+	// read and extend the standing row in one transaction
+	tx, err := l.db.Begin()
+	if err != nil {
+		return err
 	}
-
-	_, err := l.db.Exec(
-		`INSERT INTO attestation_log
-		 (timestamp, tenant, client_id, hardware_id, result, duration_ms, pcr14, details, remote_addr, kernel_hash)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		ts, entry.Tenant, entry.ClientID, entry.HardwareID, entry.Result,
-		entry.DurationMs, entry.PCR14, entry.Details, entry.RemoteAddr,
-		entry.KernelHash,
-	)
-	return err
+	if err := l.record(tx, entry, time.Now().UTC()); err != nil {
+		return rollbackOnErr(tx, err)
+	}
+	return tx.Commit()
 }
 
 func (l *SQLiteAttestationLog) RecordBatch(entries []AttestationRecord) error {
@@ -440,49 +510,39 @@ func (l *SQLiteAttestationLog) RecordBatch(entries []AttestationRecord) error {
 		return err
 	}
 
-	stmt, err := tx.Prepare(
-		`INSERT INTO attestation_log
-		 (timestamp, tenant, client_id, hardware_id, result, duration_ms, pcr14, details, remote_addr, kernel_hash)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
-	if err != nil {
-		return rollbackOnErr(tx, err)
-	}
-	defer stmt.Close()
-
+	// each round sees the ones before it, as if recorded one by one
 	now := time.Now().UTC()
 	for i := range entries {
-		ts := entries[i].Timestamp
-		if ts.IsZero() {
-			ts = now
-		}
-		if _, err := stmt.Exec(
-			ts, entries[i].Tenant, entries[i].ClientID, entries[i].HardwareID,
-			entries[i].Result, entries[i].DurationMs, entries[i].PCR14,
-			entries[i].Details, entries[i].RemoteAddr, entries[i].KernelHash,
-		); err != nil {
+		if err := l.record(tx, entries[i], now); err != nil {
 			return rollbackOnErr(tx, err)
 		}
 	}
 	return tx.Commit()
 }
 
+const sqliteAttestationSelect = `SELECT id, timestamp, tenant, client_id, hardware_id,
+	 result, duration_ms, pcr14, details, remote_addr, kernel_hash, last_seen, rounds
+	 FROM attestation_log`
+
 func (l *SQLiteAttestationLog) QueryAttestations(limit int) []AttestationRecord {
+	return l.QueryAttestationsFiltered(AttestationQuery{Limit: limit})
+}
+
+// zero query: the whole log, newest first
+func (l *SQLiteAttestationLog) QueryAttestationsFiltered(q AttestationQuery) []AttestationRecord {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 
-	query := `SELECT id, timestamp, tenant, client_id, hardware_id, result, duration_ms, pcr14, details, remote_addr, kernel_hash
-	          FROM attestation_log ORDER BY id DESC`
-	if limit > 0 {
+	where, args := attestationQueryClauses(q, func(int) string { return "?" },
+		attestationTimeArg)
+	// #nosec G202 -- constant fragments and placeholders; values are arguments
+	query := sqliteAttestationSelect + where + " ORDER BY id DESC"
+	if q.Limit > 0 {
 		query += " LIMIT ?"
+		args = append(args, q.Limit)
 	}
 
-	var rows *sql.Rows
-	var err error
-	if limit > 0 {
-		rows, err = l.db.Query(query, limit)
-	} else {
-		rows, err = l.db.Query(query)
-	}
+	rows, err := l.db.Query(query, args...)
 	if err != nil {
 		return nil
 	}
@@ -491,11 +551,20 @@ func (l *SQLiteAttestationLog) QueryAttestations(limit int) []AttestationRecord 
 	var entries []AttestationRecord
 	for rows.Next() {
 		var e AttestationRecord
-		if err := rows.Scan(&e.ID, &e.Timestamp, &e.Tenant, &e.ClientID, &e.HardwareID,
+		var opened, seen any
+		if err := rows.Scan(&e.ID, &opened, &e.Tenant, &e.ClientID, &e.HardwareID,
 			&e.Result, &e.DurationMs, &e.PCR14, &e.Details, &e.RemoteAddr,
-			&e.KernelHash); err == nil {
-			entries = append(entries, e)
+			&e.KernelHash, &seen, &e.Rounds); err != nil {
+			continue
 		}
+		var err error
+		if e.Timestamp, err = attestationTimeValue(opened); err != nil {
+			continue
+		}
+		if e.LastSeen, err = attestationTimeValue(seen); err != nil {
+			continue
+		}
+		entries = append(entries, e)
 	}
 	return entries
 }

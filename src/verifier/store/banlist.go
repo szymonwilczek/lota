@@ -422,6 +422,11 @@ type AttestationRecord struct {
 	// whether a device's kernel changed.
 	// It is covered by the quote, so a recorded value is attested.
 	KernelHash string
+
+	// Last round this row stands for, and the round count.
+	// An event row: Timestamp and 1.
+	LastSeen time.Time
+	Rounds   int64
 }
 
 // implements AttestationLog using an in-memory slice
@@ -429,26 +434,61 @@ type MemoryAttestationLog struct {
 	mu      sync.RWMutex
 	entries []AttestationRecord
 	nextID  int64
+	window  time.Duration // zero records every round
 }
 
 // creates an empty in-memory attestation log
 func NewMemoryAttestationLog() *MemoryAttestationLog {
+	return NewMemoryAttestationLogWindow(DefaultCollapseWindow)
+}
+
+// the same, with the caller's own collapse window
+func NewMemoryAttestationLogWindow(window time.Duration) *MemoryAttestationLog {
 	return &MemoryAttestationLog{
 		entries: make([]AttestationRecord, 0),
 		nextID:  1,
+		window:  window,
 	}
+}
+
+// newest entry of this tenant and client
+func (l *MemoryAttestationLog) standing(entry AttestationRecord) *AttestationRecord {
+	for i := len(l.entries) - 1; i >= 0; i-- {
+		if l.entries[i].Tenant == entry.Tenant &&
+			l.entries[i].ClientID == entry.ClientID {
+			return &l.entries[i]
+		}
+	}
+	return nil
+}
+
+// same rules as the SQL stores
+func (l *MemoryAttestationLog) record(entry AttestationRecord, now time.Time) {
+	if entry.Timestamp.IsZero() {
+		entry.Timestamp = now
+	}
+
+	if standing := l.standing(entry); standing != nil &&
+		attestationCollapses(*standing, entry, l.window) {
+		standing.LastSeen = entry.Timestamp
+		standing.Rounds++
+		standing.DurationMs = entry.DurationMs
+		standing.RemoteAddr = entry.RemoteAddr
+		return
+	}
+
+	entry.ID = l.nextID
+	entry.LastSeen = entry.Timestamp
+	entry.Rounds = 1
+	l.entries = append(l.entries, entry)
+	l.nextID++
 }
 
 func (l *MemoryAttestationLog) Record(entry AttestationRecord) error {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 
-	entry.ID = l.nextID
-	if entry.Timestamp.IsZero() {
-		entry.Timestamp = time.Now().UTC()
-	}
-	l.entries = append(l.entries, entry)
-	l.nextID++
+	l.record(entry, time.Now().UTC())
 	return nil
 }
 
@@ -462,15 +502,14 @@ func (l *MemoryAttestationLog) RecordBatch(entries []AttestationRecord) error {
 
 	now := time.Now().UTC()
 	for i := range entries {
-		entry := entries[i]
-		entry.ID = l.nextID
-		if entry.Timestamp.IsZero() {
-			entry.Timestamp = now
-		}
-		l.entries = append(l.entries, entry)
-		l.nextID++
+		l.record(entries[i], now)
 	}
 	return nil
+}
+
+// zero query: the whole log, newest first
+func (l *MemoryAttestationLog) QueryAttestationsFiltered(q AttestationQuery) []AttestationRecord {
+	return filterAttestations(l.QueryAttestations(0), q)
 }
 
 func (l *MemoryAttestationLog) QueryAttestations(limit int) []AttestationRecord {

@@ -37,7 +37,9 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 )
 
 func pgTestDB(t *testing.T) *sql.DB {
@@ -347,6 +349,55 @@ func TestPostgresAttestationLog(t *testing.T) {
 	rs = al.QueryAttestations(1)
 	if len(rs) != 1 || rs[0].Tenant != "acme" {
 		t.Fatalf("QueryAttestations tenant = %+v, want acme", rs)
+	}
+}
+
+// Two instances racing on a client's first round must not open two rows.
+func TestPostgresAttestationLogConcurrentFirstSighting(t *testing.T) {
+	db := pgTestDB(t)
+	other, err := OpenPostgresDB(os.Getenv("LOTA_TEST_PG_DSN"))
+	if err != nil {
+		t.Fatalf("OpenPostgresDB: %v", err)
+	}
+	t.Cleanup(func() { other.Close() })
+	logs := []*PostgresAttestationLog{
+		NewPostgresAttestationLog(db),
+		NewPostgresAttestationLog(other),
+	}
+
+	const clients, rounds = 20, 8
+	ts := time.Now().UTC()
+	var wg sync.WaitGroup
+	errs := make(chan error, clients*rounds)
+	for c := range clients {
+		for i := range rounds {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				errs <- logs[i%2].Record(AttestationRecord{
+					Timestamp: ts,
+					ClientID:  fmt.Sprintf("race-%02d", c),
+					Result:    attestationResultOK,
+				})
+			}()
+		}
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Fatalf("Record: %v", err)
+		}
+	}
+
+	rs := logs[0].QueryAttestations(0)
+	if len(rs) != clients {
+		t.Fatalf("%d rows for %d clients, want one each", len(rs), clients)
+	}
+	for _, r := range rs {
+		if r.Rounds != rounds {
+			t.Fatalf("%s: rounds = %d, want %d", r.ClientID, r.Rounds, rounds)
+		}
 	}
 }
 

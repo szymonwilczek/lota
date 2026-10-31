@@ -102,12 +102,16 @@ Metric                                          Type      Meaning
 ``lota_attestation_log_dropped_total``          counter   Decision records dropped because the log
                                                           buffer was full. Non-zero means the decision
                                                           log is missing rounds this verifier served:
-                                                          the backend stopped keeping up and the oldest
-                                                          buffered records went so the verify path
-                                                          would not wait. Not recoverable.
+                                                          the backend stopped keeping up and buffered
+                                                          records went so the verify path would not
+                                                          wait. Trusted rounds go first. Not
+                                                          recoverable.
 ``lota_attestation_log_failed_total``           counter   Decision records lost to a failed log write.
                                                           Same consequence, different cause: the write
                                                           reached the backend and did not land.
+``lota_attestation_log_events_lost_total``      counter   Events (refusals, bans, unparsable reports)
+                                                          among the records lost above. Alert on this
+                                                          one: lost trusted rounds cost only detail.
 ``lota_verification_duration_seconds``          histogram Attestation verification latency.
 ``lota_pending_challenges``                     gauge     Outstanding attestation challenges. A peer
                                                           that leaves without answering releases its
@@ -372,12 +376,17 @@ never waits on it -- but the audit trail has holes for this window, and the
 records that went are not recoverable.
 
 Which counter moved says which half it is. ``lota_attestation_log_dropped_total``
-means the backend stopped keeping up: the writer's buffer filled and the
-oldest records went so the verify path would not block. ``lota_attestation_log_failed_total``
-means the write reached the backend and did not land.
+means the backend stopped keeping up and the full buffer shed records,
+trusted rounds first, so refusals usually survive.
+``lota_attestation_log_failed_total`` means the write reached the backend and
+did not land.
+
+``lota_attestation_log_events_lost_total`` says how bad either one is. At
+zero, only detail on quiet hosts is lost. Above zero, refusals and bans are
+missing from the log, and the warning's hint says so.
 
 1. The verifier log carries the running total beside each event
-   (``attestation-log buffer full; oldest decision records dropped``, or
+   (``attestation-log buffer full; decision records shed``, or
    ``attestation-log flush failed``), and one summary line at shutdown.
 2. Both point at the database: check its latency, its connection count,
    and whether anything holds a lock on ``attestation_log``. Enforcement
@@ -385,7 +394,35 @@ means the write reached the backend and did not land.
    so a healthy verdict rate beside this alert is the expected picture.
 3. Note the window in the incident record. The API cannot serve what was
    dropped, so an operator reading ``GET /api/v1/attestations`` for that
-   period is reading an incomplete log.
+   period is reading an incomplete log: ``rounds`` there can undercount,
+   never overcount.
+
+Reading the log
+===============
+
+A trusted round identical to the host's newest row extends it
+(``last_seen``, ``rounds``). A refusal, a verdict change and a host's first
+round always open a new row. A row extends for at most
+``--attestation-log-window`` from its opening (default one hour; zero writes
+a row per round), so a quiet period resolves to the window: the timestamps
+of the rounds a row covers are not kept.
+
+``GET /api/v1/attestations`` narrows accordingly::
+
+   # what went wrong anywhere, yesterday
+   curl -H "Authorization: Bearer $READER_KEY" \
+     "http://127.0.0.1:8080/api/v1/attestations?events=true&since=2026-09-18T00:00:00Z&until=2026-09-19T00:00:00Z"
+
+   # one host's history
+   curl -H "Authorization: Bearer $READER_KEY" \
+     "http://127.0.0.1:8080/api/v1/attestations?client_id=$CLIENT&limit=50"
+
+   # every round refused for one reason
+   curl -H "Authorization: Bearer $READER_KEY" \
+     "http://127.0.0.1:8080/api/v1/attestations?result=pcr_fail"
+
+A window returns the rows that overlap it, including one opened before
+``since``.
 
 Forced integrity-loss drill
 ===========================

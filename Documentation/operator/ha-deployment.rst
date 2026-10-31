@@ -207,6 +207,10 @@ Rules for a sharded deployment:
 * **The first shard is the control database.** Fleet-global, read-mostly
   state -- revocations, hardware bans, the audit trail and the attestation
   decision log -- lives on shard 0, not on the per-report path.
+* **The decision log holds one row per host, not one per instance.** The
+  writing instance locks the host in the control database, so trusted
+  rounds served by different instances extend one row. See
+  :doc:`observability`.
 * **Size each shard for its slice.** A shard carries ``fleet / shards``
   clients; size ``max_connections`` on each for the instance count times the
   per-instance pool, as in the single-database case.

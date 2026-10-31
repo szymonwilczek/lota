@@ -158,6 +158,30 @@ an unconditional row rewrite costs a WAL record and a commit fsync each
 time, so the UPDATE is conditional on a real tenant change
 (``TestPostgresRepeatedTenantStampDoesNotRewriteRow``).
 
+What a decision-log row means
+=============================
+
+A row in ``attestation_log`` records an event on one host, not a round. A
+trusted round matching the host's newest trusted row (tenant, client,
+hardware ID, PCR 14, kernel hash, detail) extends it: ``last_seen`` moves
+and ``rounds`` counts it. Every other round opens a row: a first round, any
+non-trusted verdict, a recovery, a round behind ``last_seen``, or one past
+``--attestation-log-window`` from the row's opening (default one hour; zero
+writes a row per round). A steady host leaves one row per window.
+
+Both SQL stores read and extend the newest row in one transaction; Postgres
+also holds an advisory lock per tenant and client until commit, so
+instances sharing a database record one host serially, first round
+included. SQLite serializes on its mutex. An unreadable newest row is never
+extended.
+
+Both of a row's times are written in UTC and compared as instants, so
+verifiers in different zones agree.
+
+``AttestationQuerier`` narrows a read by window, verdict, events-only and
+client. A window returns the rows that overlap it, not only those opened
+inside it. Both SQL stores build the clauses with one function.
+
 Attestation log durability
 ==========================
 
@@ -181,9 +205,12 @@ The contract this creates:
   that *do* gate stay synchronous. A graceful shutdown flushes the tail,
   bounded: a backend that has stopped answering does not hold the process
   open, and what is still buffered at the deadline is counted as lost.
-- **Bounded memory.** Under a stalled database the buffer drops its oldest
-  records past ``MaxBuffer``. The hot path is never blocked and never sees
-  the error.
+- **Bounded memory, shedding heartbeats first.** Past ``MaxBuffer`` the
+  buffer sheds trusted rounds, oldest first; their standing row already
+  says what they say. Refusals go only when no trusted round is left. The
+  hot path never blocks and never sees the error.
+- **What a shed costs.** A shed first sighting or verdict change to trusted
+  is not lost: the next trusted round opens the row, at its later time.
 - **Reported loss.** What the writer could not keep reaches somebody: a
   rate-limited warning naming the running total, the
   ``lota_attestation_log_dropped_total`` and
@@ -191,6 +218,9 @@ The contract this creates:
   shutdown. A deployment that lost part of its decision log has to look
   different from one that did not, so a counter with no reader is not
   counting.
+- **What kind of loss.** ``lota_attestation_log_events_lost_total`` counts
+  the events among it, shed or never landed. Shed trusted rounds are the
+  bound working; a lost refusal is a hole in the audit trail.
 
 Any new attestation-log backend implements ``BatchRecorder`` so a batch
 costs one round trip; a backend that does not is still correct through the

@@ -484,13 +484,17 @@ configured.
 GET /api/v1/attestations
 ------------------------
 
-Reader. Query: ``limit`` (default 100, maximum 10000). **200**::
+Reader. Query: ``limit`` (default 100, maximum 10000), ``since`` and
+``until`` (RFC 3339), ``result`` (one verdict), ``events=true`` (every round
+that was not trusted) and ``client_id`` (one host). **200**::
 
    {
      "attestations": [
        {
          "id": 9,
          "timestamp": "2026-07-02T10:00:00Z",
+         "last_seen": "2026-07-02T10:55:00Z",
+         "rounds": 12,
          "tenant": "default",
          "client_id": "host-0001",
          "hardware_id": "ab12...",
@@ -503,6 +507,16 @@ Reader. Query: ``limit`` (default 100, maximum 10000). **200**::
      ],
      "count": 1
    }
+
+Identical trusted rounds of one host share a row: ``timestamp`` is the
+first, ``last_seen`` the last, ``rounds`` their count. The record above is
+twelve such rounds over an hour. A refusal, a verdict change and a
+host's first round always open a new row. ``--attestation-log-window``
+bounds how long a trusted row extends; zero writes a row per round.
+
+``since`` and ``until`` return the rows that overlap the window, including
+one opened before ``since``. A bound that does not parse is ignored.
+``events=true`` drops trusted rows and is ignored when ``result`` is set.
 
 ``result`` is the verdict the verifier reached, and an accepted round reads
 ``ok``. The refusals are ``nonce_fail``, ``sig_fail``, ``identity_fail``,
