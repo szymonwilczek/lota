@@ -460,7 +460,9 @@ decides how much of a process's code the measurement can account for.
        mount), the agent refuses the token with
        ``LOTA_ERR_UNMEASURABLE_SELF``. Another protected process being
        unmeasurable never refuses this caller, since any local program may
-       ask for protection; it clears the coverage flag instead.
+       ask for protection; it clears the coverage flag instead. So does
+       memory with no file behind it, such as the memfd Wine maps Windows
+       images out of: no digest can exist for it.
    * - Distribution libraries on a package-managed host
      - **None, today.** Fedora ships ``libc``, ``libcurl`` and the rest
        without fs-verity, so those objects are absent from the fold and the

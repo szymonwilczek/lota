@@ -40,6 +40,7 @@ static int tests_passed;
 #define MAGIC_XFS 0x58465342UL
 #define MAGIC_OVERLAYFS 0x794C7630UL
 #define MAGIC_TMPFS 0x01021994UL
+#define MAGIC_HUGETLBFS 0x958458F6UL
 
 /* served by userspace or a peer */
 #define MAGIC_FUSE 0x65735546UL
@@ -176,6 +177,34 @@ static void test_a_guard_does_not_rescue_an_unknown_role(void)
 		       1);
 }
 
+static void expect_no_file(const char *name, int want, unsigned long magic,
+			   unsigned long nlink)
+{
+	TEST(name);
+	if (lota_rt_object_has_no_file(magic, nlink) != want) {
+		FAIL(want ? "read as a file" : "read as memory");
+		return;
+	}
+	PASS();
+}
+
+/*
+ * Wine maps PE images out of nameless memory (memfd, unlinked shm),
+ * which no digest or write guard can reach: a coverage gap, not a failed
+ * measurement. A named file, or one on disk, is an ordinary object.
+ */
+static void test_memory_with_no_name_is_no_file(void)
+{
+	expect_no_file("an unlinked tmpfs object is no file", 1, MAGIC_TMPFS,
+		       0);
+	expect_no_file("an unlinked hugetlbfs object is no file", 1,
+		       MAGIC_HUGETLBFS, 0);
+	expect_no_file("a named tmpfs file is a file", 0, MAGIC_TMPFS, 1);
+	expect_no_file("an unlinked file on disk is a file", 0, MAGIC_EXT4, 0);
+	expect_no_file("an unlinked file on btrfs is a file", 0, MAGIC_BTRFS,
+		       0);
+}
+
 int main(void)
 {
 	printf("\n=== LOTA runtime identity road tests ===\n\n");
@@ -188,6 +217,7 @@ int main(void)
 	test_a_guarded_library_is_hashed();
 	test_a_guarded_library_on_a_served_fs_is_refused();
 	test_a_guard_does_not_rescue_an_unknown_role();
+	test_memory_with_no_name_is_no_file();
 
 	printf("\n=== Results: %d/%d passed ===\n\n", tests_passed, tests_run);
 	return tests_passed == tests_run ? 0 : 1;

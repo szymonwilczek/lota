@@ -200,6 +200,18 @@ int main(void)
 	else
 		FAIL(buf);
 
+	/* no file can take a digest, so no fs-verity advice */
+	TEST("memory with no file is named as such, with no fs-verity advice");
+	make_failure_at(&f, "memfd:a-mapping", "/memfd:a-mapping",
+			LOTA_RT_ROLE_MAPPED_OBJECT, 0, ENODATA);
+	f.no_file = 1;
+	lota_rt_failure_reason(&f, -ENODATA, buf, sizeof(buf));
+	if (strstr(buf, "/memfd:a-mapping") && strstr(buf, "no file") &&
+	    !strstr(buf, "enable fs-verity"))
+		PASS();
+	else
+		FAIL(buf);
+
 	/*
 	 * Coverage is the relying party's call, but two properties are the host's:
 	 * something was measured, and the process's own executable is part of it.
