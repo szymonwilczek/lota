@@ -276,9 +276,17 @@ File                  Format Owner
 
 A background refresh thread re-queries the agent every
 ``LOTA_HOOK_REFRESH_SEC`` seconds (default 60) and rewrites the files
-atomically. The destructor unlinks them on clean shutdown so a process crash
-leaves the files behind for post-mortem and a clean exit leaves the directory
-empty.
+atomically. The destructor leaves them alone, and does so deliberately: the
+Steam launch chain inherits ``LD_PRELOAD`` into every fork and exec, so each
+helper runs a destructor of its own against the same directory, and one
+exiting first would take the artefacts the running title had just written. A
+clean exit and a crash therefore both leave the files behind, and the next
+launch overwrites them on its first refresh.
+
+What removes the token and the snapshot is losing the agent:
+``publish_offline_status()`` rewrites ``lota-status`` with ``LOTA_ATTESTED=0``
+and unlinks the other two, because neither can be trusted past the
+disconnect.
 
 Verify after launching CS2 (run from the operator account, not root, so
 ``$XDG_RUNTIME_DIR`` resolves to the user's runtime dir):
