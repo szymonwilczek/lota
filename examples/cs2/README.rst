@@ -341,7 +341,19 @@ launch wrapper do not. A hooked process write-pins every library it maps,
 and ``reaper`` outlives the title, so hooking it would leave the C library
 unwritable after the game exits.
 
-A ``LOTA_HOOK_ACTIVATE_PATH=<prefix-list>`` set before the wrapper runs is
+Under Proton the pin is not enough: the title and every process the prefix
+starts (``services.exe``, ``explorer.exe``, device hosts, the tool's helpers)
+run the same loader, ``wine-preloader``, out of the pinned Proton directory.
+Each would protect itself, and a title that talks to them stops working. The
+wrapper therefore also writes the title's directory as Wine sees it into
+``LOTA_HOOK_ACTIVATE_PROGRAM``: from the library root down
+(``steamapps/common/<title>/``), since a Steam library is a drive of its own
+in the prefix, or the host path for a title outside any library. Wine's loader
+then activates only for a program (``argv[1]``) in that directory, on any
+drive and in any case; other processes are still decided by the pin.
+
+``LOTA_HOOK_ACTIVATE_PATH=<prefix-list>`` and
+``LOTA_HOOK_ACTIVATE_PROGRAM=<directory>`` set before the wrapper runs are
 kept. Without a pin, as outside Steam, the FHS rule applies, and
 ``LOTA_HOOK_SKIP_PATH=<prefix-list>`` extends it for distros that keep
 utilities outside FHS, e.g. ``/nix/store/``.

@@ -1009,6 +1009,145 @@ static void test_policy_whitespace_tolerant(void)
 		     "whitespace");
 }
 
+/*
+ * Every process of a Wine prefix runs the same pinned loader, so a Wine
+ * process is decided by its Windows program (argv[1]) against the title's
+ * directory.
+ *
+ * Made-up library; only Wine's loader and system32 names are real.
+ */
+#define TEST_LIBRARY "/srv/library"
+#define TEST_TOOL TEST_LIBRARY "/steamapps/common/Compat Tool"
+#define TEST_TITLE TEST_LIBRARY "/steamapps/common/A Title"
+#define TEST_WINE TEST_TOOL "/files/lib/wine/"
+#define TEST_TITLE_DIR "steamapps/common/A Title/"
+#define TEST_PIN TEST_TITLE "/," TEST_TOOL "/"
+
+static void test_policy_wine_title_is_attested(void)
+{
+	TEST("policy: the Windows title under Wine's loader is attested");
+	if (policy_should_activate_process(
+		    TEST_WINE "i386-unix/wine-preloader",
+		    "D:\\steamapps\\common\\A Title\\title.exe", TEST_TITLE_DIR,
+		    TEST_PIN, NULL))
+		PASS();
+	else
+		FAIL("the title's program must activate the hook");
+}
+
+static void test_policy_wine_prefix_processes_are_skipped(void)
+{
+	TEST("policy: the prefix Wine starts beside the title is not");
+	const char *loader = TEST_WINE "i386-unix/wine64-preloader";
+	if (!policy_should_activate_process(
+		    loader, "C:\\windows\\system32\\services.exe",
+		    TEST_TITLE_DIR, TEST_PIN, NULL) &&
+	    !policy_should_activate_process(
+		    loader, "C:\\windows\\system32\\explorer.exe",
+		    TEST_TITLE_DIR, TEST_PIN, NULL) &&
+	    !policy_should_activate_process(
+		    loader,
+		    "\\\\?\\D:\\steamapps\\common\\Compat Tool\\files\\"
+		    "share\\wine/../../helper/helper.exe",
+		    TEST_TITLE_DIR, TEST_PIN, NULL) &&
+	    !policy_should_activate_process(
+		    TEST_WINE "x86_64-unix/wine-preloader",
+		    "c:\\windows\\system32\\launcher.exe", TEST_TITLE_DIR,
+		    TEST_PIN, NULL))
+		PASS();
+	else
+		FAIL("a prefix service must not be attested for the title");
+}
+
+static void test_policy_wine_title_any_drive_any_case(void)
+{
+	TEST("policy: the title is found through any drive, in any case");
+	if (policy_should_activate_process(
+		    TEST_WINE "x86_64-unix/wine",
+		    "Z:\\SRV\\library\\STEAMAPPS\\common\\a title\\bin\\"
+		    "title.exe",
+		    TEST_TITLE_DIR, TEST_PIN, NULL) &&
+	    policy_should_activate_process(
+		    TEST_WINE "x86_64-unix/wine64",
+		    "d:/steamapps/common/A Title/title.exe", TEST_TITLE_DIR,
+		    TEST_PIN, NULL))
+		PASS();
+	else
+		FAIL("drive letter, separator and case must not matter");
+}
+
+static void test_policy_wine_title_matches_whole_components(void)
+{
+	TEST("policy: the title directory matches whole components");
+	const char *loader = TEST_WINE "i386-unix/wine-preloader";
+	if (!policy_should_activate_process(
+		    loader, "D:\\steamapps\\common\\A Title II\\title.exe",
+		    TEST_TITLE_DIR, TEST_PIN, NULL) &&
+	    !policy_should_activate_process(
+		    loader, "D:\\oldsteamapps\\common\\A Title\\title.exe",
+		    TEST_TITLE_DIR, TEST_PIN, NULL) &&
+	    !policy_should_activate_process(loader,
+					    "D:\\steamapps\\common\\A Title",
+					    TEST_TITLE_DIR, TEST_PIN, NULL))
+		PASS();
+	else
+		FAIL("a neighbour whose name only starts the same matched");
+}
+
+static void test_policy_wine_loader_without_program_is_skipped(void)
+{
+	TEST("policy: Wine's loader with no program is not the title");
+	const char *loader = TEST_WINE "i386-unix/wine-preloader";
+	if (!policy_should_activate_process(loader, NULL, TEST_TITLE_DIR,
+					    TEST_PIN, NULL) &&
+	    !policy_should_activate_process(loader, "", TEST_TITLE_DIR,
+					    TEST_PIN, NULL) &&
+	    policy_should_activate_process(
+		    TEST_WINE "i386-unix/wine-preloader (deleted)",
+		    "D:\\steamapps\\common\\A Title\\title.exe", TEST_TITLE_DIR,
+		    TEST_PIN, NULL))
+		PASS();
+	else
+		FAIL("a loader hosting nothing must not be attested");
+}
+
+static void test_policy_program_leaves_native_processes_alone(void)
+{
+	TEST("policy: a native process is still decided by its path");
+	if (policy_should_activate_process(TEST_TITLE "/title", NULL,
+					   TEST_TITLE_DIR, TEST_PIN, NULL) &&
+	    !policy_should_activate_process(
+		    TEST_LIBRARY "/client/helper",
+		    "D:\\steamapps\\common\\A Title\\title.exe", TEST_TITLE_DIR,
+		    TEST_PIN, NULL) &&
+	    !policy_should_activate_process("/usr/bin/python3",
+					    TEST_TOOL "/launch", TEST_TITLE_DIR,
+					    TEST_PIN, NULL) &&
+	    policy_should_activate_process(TEST_TOOL "/files/bin/wineserver",
+					   NULL, TEST_TITLE_DIR, TEST_PIN,
+					   NULL))
+		PASS();
+	else
+		FAIL("the program rule must answer for Wine's loader only");
+}
+
+static void test_policy_wine_without_title_dir_uses_the_pin(void)
+{
+	TEST("policy: with no title directory Wine's loader uses the pin");
+	const char *loader = TEST_WINE "i386-unix/wine-preloader";
+	if (policy_should_activate_process(
+		    loader, "C:\\windows\\system32\\explorer.exe", NULL,
+		    TEST_PIN, NULL) &&
+	    policy_should_activate_process(
+		    loader, "C:\\windows\\system32\\explorer.exe", "", TEST_PIN,
+		    NULL) &&
+	    !policy_should_activate_process(loader, "C:\\game.exe", NULL,
+					    "/opt/games/", NULL))
+		PASS();
+	else
+		FAIL("an unset title directory must leave the pin in charge");
+}
+
 static void test_write_status_marks_online_branch(void)
 {
 	char buf[1024];
@@ -2220,6 +2359,13 @@ int main(void)
 	test_policy_empty_env_strings_ignored();
 	test_policy_prefix_must_match_at_start();
 	test_policy_whitespace_tolerant();
+	test_policy_wine_title_is_attested();
+	test_policy_wine_prefix_processes_are_skipped();
+	test_policy_wine_title_any_drive_any_case();
+	test_policy_wine_title_matches_whole_components();
+	test_policy_wine_loader_without_program_is_skipped();
+	test_policy_program_leaves_native_processes_alone();
+	test_policy_wine_without_title_dir_uses_the_pin();
 
 	/* connect-then-register sequence */
 	test_the_launch_path_registers_the_title();

@@ -130,6 +130,42 @@ static int read_self_exe(char *out, size_t out_sz)
 	out[n] = '\0';
 	return 0;
 }
+
+/*
+ * Copy argv[1] from /proc/self/cmdline. Under Wine's loader it is the hosted
+ * Windows program: the preloader has dropped its own name, and the loader
+ * rewrites the line only after every preloaded constructor.
+ * 0 or -errno; @out is empty when argv[1] is absent or does not fit.
+ */
+static int read_self_program(char *out, size_t out_sz)
+{
+	char buf[PATH_MAX * 2];
+	size_t first, len;
+	ssize_t n;
+	int fd;
+
+	if (!out || out_sz < 2)
+		return -EINVAL;
+	out[0] = '\0';
+	fd = open("/proc/self/cmdline", O_RDONLY | O_CLOEXEC);
+	if (fd < 0)
+		return -errno;
+	n = read(fd, buf, sizeof(buf) - 1);
+	close(fd);
+	if (n < 0)
+		return -errno;
+	buf[n] = '\0';
+
+	first = strnlen(buf, (size_t)n);
+	if (first + 1 >= (size_t)n)
+		return 0;
+	len = strnlen(buf + first + 1, (size_t)n - first - 1);
+	if (len >= out_sz)
+		return 0;
+	memcpy(out, buf + first + 1, len);
+	out[len] = '\0';
+	return 0;
+}
 #endif
 
 /*
@@ -223,6 +259,94 @@ static bool policy_should_activate(const char *exe, const char *allow,
 	return !path_has_prefix_in(exe, LOTA_HOOK_FHS_SYSTEM_PREFIXES);
 }
 
+/* Wine's loader, with or without a preloader: every Wine process's exe */
+static bool exe_is_wine_loader(const char *exe)
+{
+	static const char *const names[] = { "wine", "wine64", "wine-preloader",
+					     "wine64-preloader" };
+	static const char deleted[] = " (deleted)";
+	const char *base;
+	size_t len, i;
+
+	if (!exe)
+		return false;
+	base = strrchr(exe, '/');
+	base = base ? base + 1 : exe;
+	len = strlen(base);
+	if (len > sizeof(deleted) - 1 &&
+	    strcmp(base + len - (sizeof(deleted) - 1), deleted) == 0)
+		len -= sizeof(deleted) - 1;
+
+	for (i = 0; i < sizeof(names) / sizeof(names[0]); i++)
+		if (strlen(names[i]) == len &&
+		    strncmp(base, names[i], len) == 0)
+			return true;
+	return false;
+}
+
+static bool win_path_sep(char c)
+{
+	return c == '/' || c == '\\';
+}
+
+/*
+ * Whether Windows path @program lies inside @dir ("steamapps/common/Title/")
+ * on any drive. @dir matches whole components only; either separator
+ * matches either and ASCII case is ignored, as on Windows.
+ */
+static bool program_in_dir(const char *program, const char *dir)
+{
+	size_t dlen, plen, i, j;
+
+	if (!program || !dir)
+		return false;
+	while (win_path_sep(*dir))
+		dir++;
+	dlen = strlen(dir);
+	while (dlen > 0 && win_path_sep(dir[dlen - 1]))
+		dlen--;
+	if (dlen == 0)
+		return false;
+
+	plen = strlen(program);
+	for (i = 0; i + dlen < plen; i++) {
+		if (i > 0 && !win_path_sep(program[i - 1]) &&
+		    program[i - 1] != ':')
+			continue;
+		for (j = 0; j < dlen; j++) {
+			char p = program[i + j], d = dir[j];
+
+			if (win_path_sep(p) && win_path_sep(d))
+				continue;
+			if (tolower((unsigned char)p) !=
+			    tolower((unsigned char)d))
+				break;
+		}
+		if (j == dlen && win_path_sep(program[i + dlen]))
+			return true;
+	}
+	return false;
+}
+
+/*
+ * @exe as above, @program its argv[1], @title_dir the title's directory
+ * as Wine sees it (nullable / may be empty), @allow and @skip as for
+ * policy_should_activate().
+ *
+ * With a title dir, Wine's loader activates only for a program inside it:
+ * the title and the prefix's services are one pinned loader binary.
+ * Anything else is decided by its path.
+ */
+static bool policy_should_activate_process(const char *exe, const char *program,
+					   const char *title_dir,
+					   const char *allow, const char *skip)
+{
+	if (title_dir && *title_dir && exe_is_wine_loader(exe))
+		return program_in_dir(program, title_dir);
+
+	return policy_should_activate(exe, allow, skip);
+}
+
 #ifndef LOTA_HOOK_TESTING
 /*
  * Decide whether the hook should activate in the current process.
@@ -234,7 +358,7 @@ static bool policy_should_activate(const char *exe, const char *allow,
  * thrashes the per-process token sink for no value.
  *
  * The hook treats /proc/self/exe as the source of truth and
- * delegates the policy decision to policy_should_activate(). Two
+ * delegates the policy decision to policy_should_activate_process(). Three
  * operator-visible overrides apply on top of the FHS default:
  *
  *   LOTA_HOOK_ACTIVATE_PATH=~/.local/share/Steam,/opt/games
@@ -244,6 +368,11 @@ static bool policy_should_activate(const char *exe, const char *allow,
  *     tree rather than the FHS default. lota-proton-hook sets it
  *     to the directories Steam names for the launch, which hold
  *     the title, not the client helpers.
+ *
+ *   LOTA_HOOK_ACTIVATE_PROGRAM=steamapps/common/Title/
+ *     Wine's loader activates ONLY when its Windows program
+ *     (argv[1]) lies in this directory, whatever the pin says.
+ *     lota-proton-hook sets it from the title's install directory.
  *
  *   LOTA_HOOK_SKIP_PATH=/extra/skip/prefix
  *     Extends the built-in system-path skip list. Useful when a
@@ -259,12 +388,17 @@ static bool policy_should_activate(const char *exe, const char *allow,
 static bool should_activate(void)
 {
 	char exe[PATH_MAX];
+	char program[PATH_MAX];
 
 	if (read_self_exe(exe, sizeof(exe)) != 0 || !exe[0])
 		return true;
+	if (read_self_program(program, sizeof(program)) != 0)
+		program[0] = '\0';
 
-	return policy_should_activate(exe, getenv(LOTA_HOOK_ENV_ACTIVATE_PATH),
-				      getenv(LOTA_HOOK_ENV_SKIP_PATH));
+	return policy_should_activate_process(
+		exe, program, getenv(LOTA_HOOK_ENV_ACTIVATE_PROGRAM),
+		getenv(LOTA_HOOK_ENV_ACTIVATE_PATH),
+		getenv(LOTA_HOOK_ENV_SKIP_PATH));
 }
 #endif
 
