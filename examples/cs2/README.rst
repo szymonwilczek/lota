@@ -293,10 +293,10 @@ A healthy run prints ``LOTA_ATTESTED=1``, ``LOTA_OFFLINE=0``, a non-zero
 ``LOTA_PROTECTED=1`` appears once the title registers,
 ``LOTA_HOOK_PROTECT_DELAY`` seconds into the launch. An object the gates
 refuse is named in ``LOTA_REFUSED_OBJECT`` (with ``LOTA_REFUSED_AT``) and on
-the game's stderr. The
-``lota-token.bin`` file size matches the ``LOTA_GAMING_MAX_TOKEN`` budget
-exposed by the gaming SDK; the first four bytes are the ``LOTK`` magic followed
-by the wire header, the TPM Quote bytes, and the AIK signature.
+the game's stderr.
+
+``lota-token.bin`` is the serialized token, up to ``LOTA_TOKEN_MAX_SIZE``
+bytes: ``LOTK`` magic, wire header, TPM Quote, AIK signature.
 
 ``xxd | head`` is enough to confirm the file is not all-zeros:
 
