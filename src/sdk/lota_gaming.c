@@ -470,10 +470,23 @@ static int build_discovery_paths(char paths[][PATH_MAX], int max)
 }
 
 /*
+ * The transport's failure in one errno space. recv_response() mixes negative
+ * errnos with LOTA_ERR_* codes, and the two overlap numerically.
+ */
+static int select_transport_error(int ret)
+{
+	if (ret == -ETIMEDOUT)
+		return -ETIMEDOUT;
+	if (ret == LOTA_ERR_PROTOCOL || ret == LOTA_ERR_BUFFER_TOO_SMALL)
+		return -EPROTO;
+	return -ECONNRESET;
+}
+
+/*
  * Bind the connection to one publisher, named by the hex SHA-256 of its CA trust
  * anchor's SubjectPublicKeyInfo.
- * Returns 0, or negative errno when the name is malformed
- * or the agent has no profile for it.
+ * Returns 0, or negative errno when the name is malformed, the agent has no
+ * profile for it, or the transport failed.
  */
 static int select_publisher(struct lota_client *client, const char *hex)
 {
@@ -501,13 +514,14 @@ static int select_publisher(struct lota_client *client, const char *hex)
 	req.cmd = LOTA_IPC_CMD_SET_PROFILE;
 	req.payload_len = (uint32_t)sizeof(payload);
 
+	/* no answer says nothing about the publisher */
 	ret = send_request(client, &req, &payload, sizeof(payload));
 	if (ret < 0)
-		return ret;
+		return select_transport_error(ret);
 
 	ret = recv_response(client, &resp, NULL, 0, &payload_len);
 	if (ret < 0)
-		return ret;
+		return select_transport_error(ret);
 	if (resp.result == LOTA_IPC_ERR_CONSENT_REQUIRED)
 		return -EACCES;
 	/*
@@ -612,10 +626,13 @@ struct lota_client *lota_connect_opts(const struct lota_connect_opts *opts)
 		 */
 		if (sel < 0) {
 			g_connect_error =
-				sel == -EACCES ? LOTA_ERR_CONSENT_REQUIRED :
-				sel == -ENOSPC ? LOTA_ERR_NO_KEY_SLOT :
-				sel == -EINVAL ? LOTA_ERR_INVALID_ARG :
-						 LOTA_ERR_UNKNOWN_PROFILE;
+				sel == -EACCES	  ? LOTA_ERR_CONSENT_REQUIRED :
+				sel == -ENOSPC	  ? LOTA_ERR_NO_KEY_SLOT :
+				sel == -EINVAL	  ? LOTA_ERR_INVALID_ARG :
+				sel == -ENOENT	  ? LOTA_ERR_UNKNOWN_PROFILE :
+				sel == -ETIMEDOUT ? LOTA_ERR_TIMEOUT :
+				sel == -EPROTO	  ? LOTA_ERR_PROTOCOL :
+						    LOTA_ERR_CONNECTION_FAILED;
 			lota_disconnect(client);
 			return NULL;
 		}
