@@ -126,8 +126,10 @@ check_agent_running() {
     fi
 
     warn "LOTA agent socket not found at $PRIMARY_SOCKET"
-    echo "  The agent may not be running.  Start it with:"
-    echo "    sudo lota-agent --daemon"
+    echo "  The agent is not running.  It runs under systemd, so do not"
+    echo "  start it by hand; the installer finds out why and says what"
+    echo "  brings it back (after a pause, that is a reboot):"
+    echo "    sudo lota-install"
     return 1
 }
 
