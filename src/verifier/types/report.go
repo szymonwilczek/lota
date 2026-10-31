@@ -34,7 +34,7 @@ const (
 	PCRCount        = 24   // TPM PCR bank size
 	MaxKernelPath   = 256
 	CmdlineParamMax = 64
-	ExecEventSize   = 340 // sizeof(lota_exec_event)
+	ExecEventSize   = 344 // sizeof(lota_exec_event)
 )
 
 // report flags (see: include/attestation.h)

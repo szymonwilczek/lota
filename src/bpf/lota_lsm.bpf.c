@@ -121,7 +121,7 @@ struct {
  */
 struct {
 	__uint(type, BPF_MAP_TYPE_ARRAY);
-	__uint(max_entries, 19);
+	__uint(max_entries, 20);
 	__type(key, u32);
 	__type(value, u64);
 } stats SEC(".maps");
@@ -163,6 +163,7 @@ struct {
 #define STAT_MOUNTS_BLOCKED 16
 #define STAT_KILL_GUARD_BLOCKED 17
 #define STAT_EVENTS_YIELDED 18
+#define STAT_KILL_PROBES 19 /* permitted sig 0, counted, not journalled */
 
 /*
  * Rate-limit window per enum lota_event_type (see lota_event_budget.h):
@@ -1926,6 +1927,7 @@ int BPF_PROG(lota_task_kill, struct task_struct *p, struct kernel_siginfo *info,
 	int target_is_agent;
 	int target_is_protected = 0;
 	int blocked;
+	int event_type;
 	int emit_event;
 	struct lota_exec_event *event = NULL;
 
@@ -1976,25 +1978,27 @@ int BPF_PROG(lota_task_kill, struct task_struct *p, struct kernel_siginfo *info,
 				     target_is_protected);
 
 	/*
-	 * The signal is reported whether or not it was refused.
-	 * Outside enforce that report is the whole of the hook's job,
-	 * and a refusal that names the sender is what makes a supervisor
-	 * that cannot stop the agent diagnosable.
+	 * Report every signal but a permitted probe, which is only counted.
+	 * Outside enforce the report is the hook's whole job.
 	 */
-	emit_event = should_emit_event(lota_mode, blocked,
-				       blocked ? LOTA_EVENT_KILL_BLOCKED :
-						 LOTA_EVENT_KILL);
+	event_type = lota_signal_event(sig, blocked);
+	if (!event_type) {
+		inc_stat(STAT_KILL_PROBES);
+		return 0;
+	}
+
+	emit_event = should_emit_event(lota_mode, blocked, event_type);
 	if (emit_event)
 		event = bpf_ringbuf_reserve(&events, sizeof(*event), 0);
 	if (event) {
 		__builtin_memset(event, 0, sizeof(*event));
 		event->timestamp_ns = bpf_ktime_get_ns();
-		event->event_type = blocked ? LOTA_EVENT_KILL_BLOCKED :
-					      LOTA_EVENT_KILL;
+		event->event_type = (u32)event_type;
 		event->tgid = sender_tgid;
 		event->pid = (u32)(bpf_get_current_pid_tgid() & 0xFFFFFFFF);
 		event->uid = (u32)(bpf_get_current_uid_gid() & 0xFFFFFFFF);
 		event->target_pid = target_tgid;
+		event->signal = (u32)sig;
 
 		bpf_get_current_comm(event->comm, sizeof(event->comm));
 		__builtin_memcpy(event->filename, "(kill)", 6);

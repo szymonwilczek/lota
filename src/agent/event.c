@@ -16,6 +16,7 @@
 #include "hash_verify.h"
 #include "ipc.h"
 #include "journal.h"
+#include "kill_report.h"
 #include "path_validate.h"
 #include "runtime_image_measure.h"
 #include "lota_runtime_image_measure.h"
@@ -242,15 +243,17 @@ int handle_exec_event(void *ctx, void *data, size_t len)
 			  filename_safe, event->pid, event->uid);
 		return 0;
 	case LOTA_EVENT_KILL:
-		lota_info("[%llu] KILL %s -> pid=%u (pid=%u, uid=%u)",
-			  (unsigned long long)event->timestamp_ns, comm_safe,
-			  event->target_pid, event->pid, event->uid);
+	case LOTA_EVENT_KILL_BLOCKED: {
+		char kill_line[LOTA_MAX_COMM_LEN + 96];
+
+		kill_report_line(kill_line, sizeof(kill_line),
+				 event->event_type == LOTA_EVENT_KILL_BLOCKED,
+				 comm_safe, event->target_pid, event->signal,
+				 event->pid, event->uid);
+		lota_info("[%llu] %s", (unsigned long long)event->timestamp_ns,
+			  kill_line);
 		return 0;
-	case LOTA_EVENT_KILL_BLOCKED:
-		lota_info("[%llu] KILL_BLOCKED %s -> pid=%u (pid=%u, uid=%u)",
-			  (unsigned long long)event->timestamp_ns, comm_safe,
-			  event->target_pid, event->pid, event->uid);
-		return 0;
+	}
 	/* no signal, so no target pid: name the file instead */
 	case LOTA_EVENT_KILL_GUARD_BLOCKED:
 		lota_info("[%llu] KILL_BLOCKED %s -> %s (pid=%u, uid=%u)",

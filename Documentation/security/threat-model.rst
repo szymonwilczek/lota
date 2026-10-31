@@ -386,6 +386,10 @@ Active threats
          that knows which of its processes belongs there sees which one went.
        | The verb's answer counts that set without the signalled process,
          which stays a member until it exits.
+       | Every signal the LSM sees at a protected task is journalled with its
+         number. A permitted signal 0 delivers nothing, and a launcher sends
+         it over a thousand times a minute, so it is only counted as
+         ``kill_probes``.
      - | The owner of a protected process can end it, which the LSM alone would
          have refused. The bound is that no route to it avoids the agent, so
          the termination is reported rather than silent.

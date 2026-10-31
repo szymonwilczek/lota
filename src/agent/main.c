@@ -679,13 +679,14 @@ static int run_daemon(const struct run_daemon_params *params)
 			"mod_blocked=%lu mmap_exec=%lu mmap_blocked=%lu "
 			"ptrace=%lu ptrace_blocked=%lu setuid=%lu bpf_blocked=%lu "
 			"mount_blocked=%lu kill_guard_blocked=%lu "
-			"yielded=%lu",
+			"yielded=%lu kill_probes=%lu",
 			stats.total_execs, stats.events_sent, stats.errors,
 			stats.drops, stats.modules_blocked, stats.mmap_execs,
 			stats.mmap_blocked, stats.ptrace_attempts,
 			stats.ptrace_blocked, stats.setuid_events,
 			stats.bpf_syscall_blocked, stats.mounts_blocked,
-			stats.kill_guard_blocked, stats.events_yielded);
+			stats.kill_guard_blocked, stats.events_yielded,
+			stats.kill_probes);
 	}
 
 	{

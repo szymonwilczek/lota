@@ -32,6 +32,8 @@ static int g_failures;
 #define DENIED(sig, lota_mode, is_agent, is_protected) \
 	lota_signal_denied((sig), (lota_mode), (is_agent), (is_protected))
 
+#define RECORDS(sig, denied) lota_signal_event((sig), (denied))
+
 /*
  * Monitor is the mode that blocks nothing.
  * The kill hook was the one hook that ignored that, so a `timeout 20` around
@@ -108,6 +110,86 @@ static void test_the_mirrored_signal_number(void)
 	      "the mirrored SIGHUP matches the system's");
 }
 
+/* A refusal is recorded whatever the signal */
+static void test_a_refusal_is_always_recorded(void)
+{
+	CHECK(RECORDS(SIGTERM, 1) == LOTA_EVENT_KILL_BLOCKED,
+	      "a refused SIGTERM is recorded as a refusal");
+	CHECK(RECORDS(SIGKILL, 1) == LOTA_EVENT_KILL_BLOCKED,
+	      "a refused SIGKILL is recorded as a refusal");
+	CHECK(RECORDS(SIGSTOP, 1) == LOTA_EVENT_KILL_BLOCKED,
+	      "a refused SIGSTOP is recorded as a refusal");
+	CHECK(RECORDS(SIGHUP, 1) == LOTA_EVENT_KILL_BLOCKED,
+	      "a refused SIGHUP is recorded as a refusal");
+}
+
+/* Every delivered signal but a probe is still recorded */
+static void test_a_delivered_signal_is_still_recorded(void)
+{
+	CHECK(RECORDS(SIGTERM, 0) == LOTA_EVENT_KILL,
+	      "a delivered SIGTERM is recorded");
+	CHECK(RECORDS(SIGKILL, 0) == LOTA_EVENT_KILL,
+	      "a delivered SIGKILL is recorded");
+	CHECK(RECORDS(SIGSTOP, 0) == LOTA_EVENT_KILL,
+	      "a delivered SIGSTOP is recorded");
+	CHECK(RECORDS(SIGINT, 0) == LOTA_EVENT_KILL,
+	      "a delivered interactive interrupt is recorded");
+	CHECK(RECORDS(SIGHUP, 0) == LOTA_EVENT_KILL,
+	      "the agent's own reload signal is recorded");
+	CHECK(RECORDS(SIGUSR1, 0) == LOTA_EVENT_KILL,
+	      "a signal the policy has no opinion about is recorded");
+}
+
+/*
+ * A delivered probe is not recorded: a launcher polls several times a second
+ * and would bury the real events.
+ */
+static void test_a_permitted_probe_is_not_recorded(void)
+{
+	CHECK(RECORDS(0, 0) == 0, "a permitted probe records nothing");
+}
+
+/* Suppression follows the verdict: a refused probe is still recorded */
+static void test_suppression_follows_the_verdict(void)
+{
+	CHECK(RECORDS(0, 1) == LOTA_EVENT_KILL_BLOCKED,
+	      "a refused probe is still recorded");
+}
+
+/* Verdict, then the event it records, in the hook's order */
+static void test_the_two_decisions_together(void)
+{
+	int sig;
+
+	sig = 0;
+	CHECK(RECORDS(sig, DENIED(sig, LOTA_MODE_ENFORCE, 1, 0)) == 0,
+	      "enforce: a probe at the agent is delivered and records nothing");
+
+	sig = SIGKILL;
+	CHECK(RECORDS(sig, DENIED(sig, LOTA_MODE_ENFORCE, 1, 0)) ==
+		      LOTA_EVENT_KILL_BLOCKED,
+	      "enforce: SIGKILL at the agent is refused and recorded");
+
+	sig = SIGKILL;
+	CHECK(RECORDS(sig, DENIED(sig, LOTA_MODE_MONITOR, 1, 0)) ==
+		      LOTA_EVENT_KILL,
+	      "monitor: SIGKILL at the agent is delivered and recorded");
+
+	sig = 0;
+	CHECK(RECORDS(sig, DENIED(sig, LOTA_MODE_MONITOR, 0, 1)) == 0,
+	      "monitor: a probe at a protected task records nothing");
+
+	sig = SIGHUP;
+	CHECK(RECORDS(sig, DENIED(sig, LOTA_MODE_ENFORCE, 1, 0)) ==
+		      LOTA_EVENT_KILL,
+	      "enforce: the agent's reload is delivered and recorded");
+
+	sig = SIGHUP;
+	CHECK(RECORDS(sig, DENIED(sig, LOTA_MODE_ENFORCE, 0, 1)) ==
+		      LOTA_EVENT_KILL_BLOCKED,
+	      "enforce: SIGHUP at a protected task is refused and recorded");
+}
+
 int main(void)
 {
 	printf("=== signal delivery policy tests ===\n\n");
@@ -118,6 +200,11 @@ int main(void)
 	test_an_unprotected_target_is_never_refused();
 	test_the_signals_that_are_always_delivered();
 	test_the_mirrored_signal_number();
+	test_a_refusal_is_always_recorded();
+	test_a_delivered_signal_is_still_recorded();
+	test_a_permitted_probe_is_not_recorded();
+	test_suppression_follows_the_verdict();
+	test_the_two_decisions_together();
 
 	printf("\n%s\n", g_failures ? "FAILURES" : "All tests passed");
 	return g_failures ? 1 : 0;
