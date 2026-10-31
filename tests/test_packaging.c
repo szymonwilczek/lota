@@ -1255,6 +1255,217 @@ static void test_the_gate_runs_the_unit_tests(void)
 	PASS();
 }
 
+#define SYMBOL_MAX 80
+#define SYMBOLS_MAX 4096
+
+/* LOTA_ tokens in code (string literals included, for getenv()) and comments */
+static char code_symbols[SYMBOLS_MAX][SYMBOL_MAX];
+static size_t code_symbol_count;
+static char comment_symbols[SYMBOLS_MAX][SYMBOL_MAX];
+static char comment_sources[SYMBOLS_MAX][160];
+static size_t comment_symbol_count;
+
+static bool symbol_seen(const char table[][SYMBOL_MAX], size_t count,
+			const char *name)
+{
+	size_t i;
+
+	for (i = 0; i < count; i++)
+		if (strcmp(table[i], name) == 0)
+			return true;
+	return false;
+}
+
+/* A trailing underscore names a family (LOTA_ERR_), not a symbol */
+static bool symbol_is_a_name(const char *tok)
+{
+	size_t len = strlen(tok);
+
+	return len > 5 && tok[len - 1] != '_';
+}
+
+static void remember_symbol(char table[][SYMBOL_MAX], size_t *count,
+			    const char *tok)
+{
+	if (*count >= SYMBOLS_MAX || symbol_seen(table, *count, tok))
+		return;
+	snprintf(table[*count], SYMBOL_MAX, "%s", tok);
+	(*count)++;
+}
+
+static void remember_mention(const char *tok, const char *path)
+{
+	if (symbol_seen(comment_symbols, comment_symbol_count, tok))
+		return;
+	if (comment_symbol_count >= SYMBOLS_MAX)
+		return;
+	snprintf(comment_sources[comment_symbol_count],
+		 sizeof(comment_sources[0]), "%s", path);
+	remember_symbol(comment_symbols, &comment_symbol_count, tok);
+}
+
+static void keep_symbol(const char *tok, bool in_comment, const char *path)
+{
+	if (strncmp(tok, "LOTA_", 5) != 0 || !symbol_is_a_name(tok))
+		return;
+	if (in_comment)
+		remember_mention(tok, path);
+	else
+		remember_symbol(code_symbols, &code_symbol_count, tok);
+}
+
+/* Collect LOTA_ tokens from code and from comments; literals count as code */
+static void scan_source(const char *path)
+{
+	enum {
+		CODE,
+		BLOCK,
+		LINE,
+		STRING,
+		CHARLIT
+	} state = CODE;
+	FILE *fp = fopen(path, "re");
+	char tok[SYMBOL_MAX];
+	size_t tok_len = 0;
+	bool tok_in_comment = false;
+	int c;
+
+	if (!fp)
+		return;
+
+	while ((c = fgetc(fp)) != EOF) {
+		bool in_comment = (state == BLOCK || state == LINE);
+
+		if (isalnum(c) || c == '_') {
+			if (tok_len == 0)
+				tok_in_comment = in_comment;
+			if (tok_len < sizeof(tok) - 1)
+				tok[tok_len++] = (char)c;
+			continue;
+		}
+		if (tok_len) {
+			tok[tok_len] = '\0';
+			keep_symbol(tok, tok_in_comment, path);
+			tok_len = 0;
+		}
+
+		switch (state) {
+		case CODE:
+			if (c == '/') {
+				int next = fgetc(fp);
+
+				if (next == '*')
+					state = BLOCK;
+				else if (next == '/')
+					state = LINE;
+				else if (next != EOF)
+					ungetc(next, fp);
+			} else if (c == '"') {
+				state = STRING;
+			} else if (c == '\'') {
+				state = CHARLIT;
+			}
+			break;
+		case BLOCK:
+			if (c == '*') {
+				int next = fgetc(fp);
+
+				if (next == '/')
+					state = CODE;
+				else if (next != EOF)
+					ungetc(next, fp);
+			}
+			break;
+		case LINE:
+			if (c == '\n')
+				state = CODE;
+			break;
+		case STRING:
+		case CHARLIT:
+			if (c == '\\')
+				(void)fgetc(fp);
+			else if ((state == STRING && c == '"') ||
+				 (state == CHARLIT && c == '\''))
+				state = CODE;
+			break;
+		}
+	}
+	if (tok_len) {
+		tok[tok_len] = '\0';
+		keep_symbol(tok, tok_in_comment, path);
+	}
+	fclose(fp);
+}
+
+static void sources_under(const char *dir)
+{
+	DIR *d = opendir(dir);
+	struct dirent *ent;
+
+	if (!d)
+		return;
+
+	while ((ent = readdir(d)) != NULL) {
+		char path[512];
+
+		if (ent->d_name[0] == '.')
+			continue;
+
+		snprintf(path, sizeof(path), "%s/%s", dir, ent->d_name);
+		if (ent->d_type == DT_DIR) {
+			sources_under(path);
+			continue;
+		}
+		if (has_suffix(ent->d_name, ".c") ||
+		    has_suffix(ent->d_name, ".h"))
+			scan_source(path);
+	}
+	closedir(d);
+}
+
+/*
+ * A comment naming a symbol the tree lacks fails silently: the reader sets
+ * it and nothing changes. Renames cause it, so every comment is checked.
+ */
+static void test_comments_name_symbols_that_exist(void)
+{
+	static const char *const roots[] = { "src", "include", "tests",
+					     "examples" };
+	size_t i;
+
+	TEST("sources: every comment names a symbol the tree defines");
+
+	for (i = 0; i < sizeof(roots) / sizeof(roots[0]); i++) {
+		char root[512];
+		struct stat st;
+
+		snprintf(root, sizeof(root), "%s", roots[i]);
+		if (stat(root, &st) != 0)
+			snprintf(root, sizeof(root), "../%s", roots[i]);
+		sources_under(root);
+	}
+
+	if (!code_symbol_count || !comment_symbol_count) {
+		FAIL("no sources were read");
+		return;
+	}
+
+	for (i = 0; i < comment_symbol_count; i++) {
+		char msg[512];
+
+		if (symbol_seen(code_symbols, code_symbol_count,
+				comment_symbols[i]))
+			continue;
+
+		snprintf(msg, sizeof(msg),
+			 "%.160s names %.80s, which the tree does not define",
+			 comment_sources[i], comment_symbols[i]);
+		FAIL(msg);
+		return;
+	}
+	PASS();
+}
+
 /*
  * Reads one shipped command per call, joining the backslash continuations a script
  * or a code block wraps a long invocation over.
@@ -2096,6 +2307,7 @@ int main(void)
 	test_documented_cmdline_carries_no_kdump_option();
 	test_documented_api_calls_use_the_bearer_header();
 	test_the_gate_runs_the_unit_tests();
+	test_comments_name_symbols_that_exist();
 	test_enrollment_example_runs_on_a_provisioned_host();
 	test_bringup_reference_matches_the_packaged_object();
 	test_tpm_clear_section_says_what_nv_costs();

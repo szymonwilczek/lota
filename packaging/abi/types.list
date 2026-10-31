@@ -193,6 +193,8 @@ struct lota_token_wire size=144 align=1
 	sig_size                         off=140 size=2
 	runtime_protect_version          off=142 size=2
 macro LOTA_HOOK_ENV_DISABLE                    = "LOTA_HOOK_DISABLE"
+macro LOTA_HOOK_ENV_ACTIVATE_PATH              = "LOTA_HOOK_ACTIVATE_PATH"
+macro LOTA_HOOK_ENV_SKIP_PATH                  = "LOTA_HOOK_SKIP_PATH"
 macro LOTA_HOOK_ENV_LOG_LEVEL                  = "LOTA_HOOK_LOG_LEVEL"
 macro LOTA_HOOK_ENV_SOCKET                     = "LOTA_HOOK_SOCKET"
 macro LOTA_HOOK_ENV_TOKEN_DIR                  = "LOTA_HOOK_TOKEN_DIR"
