@@ -82,6 +82,14 @@ of the host, so the agent exits with a status listed in
 the line naming the missing gate last in the journal. Fix the host (often a
 firmware setting) before restarting the unit.
 
+The refusal names the lever this host has. With Secure Boot off, that is
+Secure Boot itself, a firmware setting; ``lota-install --status`` prints the
+route to this machine's setup screen. With Secure Boot on and a gate still
+unmet, the kernel was built or booted without that state, and the refusal
+names the command-line parameter that raises it. A host refused on the floor
+is not told to correct its policy: the only edit that would let it start drops
+the requirement.
+
 What the mode decides
 =====================
 

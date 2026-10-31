@@ -1424,6 +1424,7 @@ TEST_BINS := \
 	$(TEST_BIN_DIR)/test_watchdog_supervisor \
 	$(TEST_BIN_DIR)/test_bpf_object_preflight \
 	$(TEST_BIN_DIR)/test_ima_policy_scope \
+	$(TEST_BIN_DIR)/test_kernel_floor_hint \
 	$(TEST_BIN_DIR)/test_integrity_baseline \
 	$(TEST_BIN_DIR)/test_daemon_exit_status \
 	$(TEST_BIN_DIR)/test_integrity_map_layout \
@@ -1952,6 +1953,10 @@ $(TEST_BIN_DIR)/test_bpf_object_preflight: tests/test_bpf_object_preflight.c $(A
 	$(Q)$(CC) $(CFLAGS) -o $@ $^ -lbpf -lsystemd -lcrypto \
 		-Wl,--wrap=policy_verify_buffer
 
+$(TEST_BIN_DIR)/test_kernel_floor_hint: tests/test_kernel_floor_hint.c $(AGENT_DIR)/kernel_floor_hint.h | $(BUILD_DIR)
+	$(QUIET_CC)
+	$(Q)$(CC) $(CFLAGS) -o $@ $<
+
 $(TEST_BIN_DIR)/test_ima_policy_scope: tests/test_ima_policy_scope.c $(AGENT_DIR)/bpf_loader.c $(AGENT_DIR)/journal.c $(AGENT_DIR)/policy_sign.c $(AGENT_DIR)/sb_dev.c $(AGENT_DIR)/cgroup_guard.c | $(BUILD_DIR)
 	$(QUIET_CC)
 	$(Q)$(CC) $(CFLAGS) -o $@ $^ -lbpf -lsystemd -lcrypto
@@ -2077,6 +2082,7 @@ test-unit: all $(TEST_BINS)
 	@$(BUILD_DIR)/test_watchdog_supervisor
 	@$(BUILD_DIR)/test_bpf_object_preflight
 	@$(BUILD_DIR)/test_ima_policy_scope
+	@$(BUILD_DIR)/test_kernel_floor_hint
 	@$(BUILD_DIR)/test_integrity_baseline
 	@$(BUILD_DIR)/test_daemon_exit_status
 	@$(BUILD_DIR)/test_startup_refusal_status
@@ -2230,7 +2236,8 @@ VALGRIND_UNIT_BINS := \
 	test_status_flags test_iommu_evidence test_terminate_policy \
 	test_publisher_profile test_verify_result_str test_connect_hint \
 	test_net_errors test_tls_anchor \
-	test_xattr_carry test_ima_policy_scope test_integrity_baseline \
+	test_xattr_carry test_ima_policy_scope test_kernel_floor_hint \
+	test_integrity_baseline \
 	test_daemon_exit_status test_integrity_map_layout \
 	test_installer_confirm
 

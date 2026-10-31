@@ -41,6 +41,7 @@
 #include "hash_verify.h"
 #include "ipc.h"
 #include "journal.h"
+#include "kernel_floor_hint.h"
 #include "main_utils.h"
 #include "profile.h"
 #include "sdnotify.h"
@@ -241,8 +242,8 @@ static int run_daemon(const struct run_daemon_params *params)
 	if (ret < 0) {
 		lota_err("Startup policy refused before the boot commitment "
 			 "was spent; the host keeps the agent it is running "
-			 "and PCR 14 is untouched. Correct the policy and "
-			 "start again.");
+			 "and PCR 14 is untouched. %s",
+			 startup_refusal_advice(ret));
 		return ret;
 	}
 
