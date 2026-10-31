@@ -162,7 +162,7 @@ struct ipc_context {
 
 	/* Attestation state */
 	uint32_t status_flags;
-	uint64_t last_attest_time;
+	uint64_t last_attest_time; /* set by a round, never by a recompute */
 	uint64_t valid_until;
 	uint32_t attest_count;
 	uint32_t fail_count;

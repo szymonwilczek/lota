@@ -607,6 +607,12 @@ publisher it plays for, and reporting follows it -- and it makes naming the
 publisher part of integrating, not an optimisation. The anti-cheat producer
 reference takes ``--publisher``; see :ghsrc:`examples/anticheat-integration.rst`.
 
+The status answer's last-attestation time is zero until this host attests,
+so an all-session-gated machine reports zero until a title runs. After that
+it holds the time of the last round, not of the last status read. Whether
+the host is attested *now* is the attested flag beside it and its validity
+window.
+
 **Nothing enrolls with a publisher until somebody here agrees to it.** An
 attestation key is a stable handle that publisher can recognise this machine
 by, so the decision to hand one out is recorded before the key exists, in the

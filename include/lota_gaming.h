@@ -221,8 +221,7 @@ struct lota_client;
  */
 struct lota_status {
 	uint32_t flags; /* LOTA_FLAG_* bitmask */
-	uint64_t last_attest_time; /* Unix timestamp of last successful
-				      attestation */
+	uint64_t last_attest_time; /* Last attestation (Unix time), 0 if none */
 	uint64_t valid_until; /* Token validity expiration (Unix timestamp) */
 	uint32_t attest_count; /* Total successful attestations */
 	uint32_t fail_count; /* Total failed attestations */

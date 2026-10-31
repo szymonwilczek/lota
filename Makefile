@@ -1356,6 +1356,7 @@ TEST_BINS := \
 	$(TEST_BIN_DIR)/test_ipc_privilege \
 	$(TEST_BIN_DIR)/test_startup_hint \
 	$(TEST_BIN_DIR)/test_ipc_notify \
+	$(TEST_BIN_DIR)/test_ipc_attest_time \
 	$(TEST_BIN_DIR)/test_ipc_lockout_sync \
 	$(TEST_BIN_DIR)/test_ipc_reload_binding \
 	$(TEST_BIN_DIR)/test_ipc_token_no_tpm \
@@ -1839,6 +1840,12 @@ $(TEST_BIN_DIR)/test_ipc_notify: tests/test_ipc_notify.c $(AGENT_DIR)/ipc.c \
 	$(QUIET_CC)
 	$(Q)$(CC) $(CFLAGS) -o $@ $^ -lcrypto -lsystemd
 
+$(TEST_BIN_DIR)/test_ipc_attest_time: tests/test_ipc_attest_time.c \
+		$(AGENT_DIR)/ipc.c $(AGENT_DIR)/journal.c \
+		$(AGENT_DIR)/profile.c $(AGENT_DIR)/token_gate.c | $(BUILD_DIR)
+	$(QUIET_CC)
+	$(Q)$(CC) $(CFLAGS) -o $@ $^ -lcrypto -lsystemd
+
 $(TEST_BIN_DIR)/test_ipc_lockout_sync: tests/test_ipc_lockout_sync.c \
 		$(AGENT_DIR)/ipc.c $(AGENT_DIR)/journal.c \
 		$(AGENT_DIR)/profile.c $(AGENT_DIR)/token_gate.c | $(BUILD_DIR)
@@ -2008,6 +2015,7 @@ test-unit: all $(TEST_BINS)
 	@$(BUILD_DIR)/test_ipc_privilege
 	@$(BUILD_DIR)/test_startup_hint
 	@$(BUILD_DIR)/test_ipc_notify
+	@$(BUILD_DIR)/test_ipc_attest_time
 	@$(BUILD_DIR)/test_ipc_lockout_sync
 	@$(BUILD_DIR)/test_ipc_reload_binding
 	@$(BUILD_DIR)/test_ipc_token_no_tpm
