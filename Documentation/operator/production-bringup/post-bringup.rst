@@ -333,7 +333,10 @@ verifier sees as staleness and marks untrusted.
 
 The unit arms a 60 s systemd watchdog: the attest loop pings it on a cadence
 independent of ``attest_interval``, so a loop wedged on the TPM or a stalled
-TLS socket misses the deadline and systemd restarts it.
+TLS socket misses the deadline and systemd restarts it. Every pass through the
+loop pings when one is owed, so a sleep cut short by a session or a reload
+pings like an expired one, and a long round is pinged before it starts. The
+target gap is half the deadline, leaving room for one slow round.
 
 Between an agent upgrade and the reboot after it, PCR 14 commits to the old
 build and the loop's startup self-measurement refuses every start. That status
