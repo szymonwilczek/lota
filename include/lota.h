@@ -243,13 +243,17 @@ static inline int lota_ptrace_denied(unsigned int ptrace_mode,
 }
 
 /*
- * SIGHUP from the signal numbers every Linux architecture LOTA builds for shares.
+ * Signal numbers shared by every Linux architecture LOTA builds for.
  *
  * Mirrored for the same reason as the ptrace flag above:
  * the enforcement object builds against vmlinux.h, which carries types
  * and not the uapi signal numbers.
  */
 #define LOTA_SIG_HUP 1
+#define LOTA_SIG_INT 2
+#define LOTA_SIG_KILL 9
+#define LOTA_SIG_TERM 15
+#define LOTA_SIG_STOP 19
 
 /*
  * The signal-delivery verdict, stated here so the enforcement object
@@ -260,14 +264,20 @@ static inline int lota_ptrace_denied(unsigned int ptrace_mode,
  * the agent, a task holding CAP_SYS_ADMIN over BPF, and a kernel-generated
  * signal all reach delivery without asking this.
  *
- * Three rules, in the order they are asked:
+ * @target_handles: the target has its own handler for @sig, neither
+ * SIG_DFL nor SIG_IGN.
+ *
+ * Four rules, in order:
  *
  *   - only enforce refuses anything; monitor and maintenance deliver every
  *     signal, so an operator evaluating LOTA can stop the agent without
  *     spending the boot commitment;
  *   - a target nobody protects is nobody's business here;
  *   - a probe (sig 0) and the agent's own reload signal are delivered,
- *     since neither can end the target.
+ *     since neither can end the target;
+ *   - a signal a protected title handles itself is delivered: it runs the
+ *     title's own code, and Wine drives its processes this way. Not SIGTERM,
+ *     SIGINT or SIGHUP, which a title handles to end, and never to the agent.
  *
  * Everything else reaching a protected target or the agent itself is refused,
  * so in enforce a local root cannot kill the agent and swap a tampered binary
@@ -275,7 +285,8 @@ static inline int lota_ptrace_denied(unsigned int ptrace_mode,
  */
 static inline int lota_signal_denied(int sig, unsigned int lota_mode,
 				     int target_is_agent,
-				     int target_is_protected)
+				     int target_is_protected,
+				     int target_handles)
 {
 	if (lota_mode != LOTA_MODE_ENFORCE)
 		return 0;
@@ -287,6 +298,11 @@ static inline int lota_signal_denied(int sig, unsigned int lota_mode,
 		return 0;
 
 	if (target_is_agent && sig == LOTA_SIG_HUP)
+		return 0;
+
+	if (!target_is_agent && target_handles && sig != LOTA_SIG_KILL &&
+	    sig != LOTA_SIG_STOP && sig != LOTA_SIG_TERM &&
+	    sig != LOTA_SIG_INT && sig != LOTA_SIG_HUP)
 		return 0;
 
 	return 1;

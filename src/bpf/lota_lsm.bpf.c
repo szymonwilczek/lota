@@ -2213,6 +2213,32 @@ int BPF_PROG(lota_ptrace_access_check, struct task_struct *child,
 	return 0;
 }
 
+/*
+ * Whether @p has its own handler for @sig, neither SIG_DFL nor SIG_IGN.
+ * The thread group shares the table, so any thread answers. An unreadable
+ * table or an out-of-range @sig answers no, keeping the signal refused.
+ */
+static __always_inline int lota_task_handles_signal(struct task_struct *p,
+						    int sig)
+{
+	struct sighand_struct *sighand;
+	unsigned long handler = 0;
+
+	if (sig < 1 ||
+	    sig > (int)(sizeof(sighand->action) / sizeof(sighand->action[0])))
+		return 0;
+
+	sighand = BPF_CORE_READ(p, sighand);
+	if (!sighand)
+		return 0;
+
+	if (bpf_core_read(&handler, sizeof(handler),
+			  &sighand->action[sig - 1].sa.sa_handler))
+		return 0;
+
+	return handler > 1;
+}
+
 /* ======================================================================
  * LSM hook: task_kill
  *
@@ -2273,15 +2299,10 @@ int BPF_PROG(lota_task_kill, struct task_struct *p, struct kernel_siginfo *info,
 			return 0;
 	}
 
-	/*
-	 * Which signals a protected target takes from a foreign task is stated
-	 * in include/lota.h, so this hook and the tests answer it with one
-	 * function: only enforce refuses, a probe and the agent's own reload
-	 * signal are delivered, and everything that could end the target is
-	 * refused for the agent and the protected set.
-	 */
+	/* the verdict lives in include/lota.h, shared with the tests */
 	blocked = lota_signal_denied(sig, lota_mode, target_is_agent,
-				     target_is_protected);
+				     target_is_protected,
+				     lota_task_handles_signal(p, sig));
 
 	/*
 	 * Report every signal but a permitted probe, which is only counted.
