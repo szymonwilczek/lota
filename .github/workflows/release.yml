@@ -43,7 +43,8 @@ jobs:
             libelf-dev zlib1g-dev \
             libtss2-dev \
             libssl-dev libsystemd-dev libseccomp-dev \
-            libdbus-1-dev
+            libdbus-1-dev \
+            gcc-multilib
 
       - name: Install libbpf >= 1.0
         env:
@@ -85,6 +86,8 @@ jobs:
           for a in $artifacts; do
             cp "build/$a" "release/$a"
           done
+          # 32-bit hook half: same filename as the 64-bit one, so renamed
+          cp build/lib32/liblota_wine_hook.so release/liblota_wine_hook-i386.so
           cp VERSION release/VERSION
           (cd release && sha256sum -- * > ../SHA256SUMS)
           cat SHA256SUMS
@@ -255,6 +258,7 @@ jobs:
             libbpf-devel elfutils-libelf-devel zlib-devel \
             tpm2-tss-devel openssl-devel systemd-devel libseccomp-devel \
             dbus-devel golang selinux-policy-devel \
+            glibc-devel.i686 libatomic.i686 \
             rpm-build rpm-sign rpmlint createrepo_c gnupg2 gh openssl
 
       - name: Checkout

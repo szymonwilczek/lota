@@ -117,6 +117,10 @@ spec_paths() {
 			next
 		}
 		!in_section || /^[ \t]*$/ || /^#/ { next }
+
+		# %ifarch and friends bracket paths; nfpm, x86_64 only,
+		# lists them unconditionally
+		/^%(if|ifarch|ifnarch|ifos|ifnos|else|elif|endif)\>/ { next }
 		{
 			line = $0
 			is_license = (line ~ /^%license[ \t]/)
@@ -198,6 +202,10 @@ guarded_installs() {
 
 		line ~ /^install:/ { in_install = 1; next }
 		!in_install { next }
+
+		# a conditional inside the recipe does not end it
+		line ~ /^(ifeq|ifneq|ifdef|ifndef|else|endif)([ \t(]|$)/ { next }
+
 		line !~ /^[ \t]/ { in_install = 0; next }
 
 		{
@@ -576,6 +584,10 @@ make_install_paths() {
 
 		line ~ /^install:/ { in_install = 1; next }
 		!in_install { next }
+
+		# a conditional inside the recipe does not end it
+		line ~ /^(ifeq|ifneq|ifdef|ifndef|else|endif)([ \t(]|$)/ { next }
+
 		line !~ /^[ \t]/ { in_install = 0; next }
 
 		{

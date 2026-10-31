@@ -49,6 +49,11 @@ contents:
     dst: /usr/lib64/
     file_info:
       mode: 0755
+  # 32-bit hook half: lota-proton-hook preloads it via ld.so's $LIB
+  - src: ./build/lib32/liblota_wine_hook.so.*
+    dst: /usr/lib/
+    file_info:
+      mode: 0755
   - src: ./LICENSE
     dst: /usr/share/licenses/lota-sdk/LICENSE
     type: license

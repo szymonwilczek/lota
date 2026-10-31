@@ -315,6 +315,12 @@ that title's launch options -- ``lota-steam-setup`` prints the exact string.
 Container mounts are not pasted: ``lota-proton-hook`` adds the socket and
 token directories to ``PRESSURE_VESSEL_FILESYSTEMS_RW`` itself.
 
+The bridge is installed once per word size on x86_64: Steam's launch chain
+mixes 64- and 32-bit processes that all inherit ``LD_PRELOAD``, so
+``lota-proton-hook`` names it through ld.so's ``$LIB`` token. With only one
+half installed, Steam logs a loader error on every launch.
+``lota-steam-setup`` reports which halves it found.
+
 A title running inside a Proton container reaches the agent through a
 per-user socket, and ``lota-steam-setup --register-uid`` records the account
 that needs one. The agent reads that setting when it starts, so it takes
