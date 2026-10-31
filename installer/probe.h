@@ -221,7 +221,8 @@ int probe_efivar_flag_at(const char *path);
 int probe_efivar_bit0_at(const char *path);
 
 /* Pure:
- * Writes the Secure-Boot remediation a player can act on without a manual:
+ * Writes the Secure-Boot remediation somebody at the machine can act on
+ * without a manual:
  * what the setting is called, how to reach firmware setup on this machine,
  * and what enabling it does not break.
  *
@@ -253,7 +254,8 @@ void probe_machine_description_at(const char *dmi_dir, char *out, size_t cap);
 
 /* 1 when the platform exposes an ESRT System Firmware entry (fw_type == 1),
  * 0 otherwise.
- * Informational only: it tells the player whether a future self-service
+ * Informational only: it tells whoever is installing whether a future
+ * self-service
  * re-anchor takes the strong (firmware-version) path or the
  * Low-Firmware-Assurance path. Many DIY boards expose no ESRT. */
 int probe_esrt_system_firmware_present(void);

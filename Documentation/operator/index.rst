@@ -12,7 +12,7 @@ intentionally fails closed when required gates are missing.
   and TPM the agent targets, and at what support tier.
 * :doc:`Production bring-up <production-bringup/index>` -- the full manual
   reference for fleet hosts, CA, and verifier.
-* :doc:`Player install (lota-install) <player-install>` -- the guided,
+* :doc:`Guided install (lota-install) <player-install>` -- the guided,
   reboot-resumable single-machine path.
 * :doc:`Verifier deployment topologies <ha-deployment>` -- single node versus
   N instances behind a load balancer.

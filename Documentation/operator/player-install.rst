@@ -2,10 +2,10 @@
 .. Copyright (C) 2026 Szymon Wilczek
 
 ======================================
-LOTA player install (``lota-install``)
+LOTA guided install (``lota-install``)
 ======================================
 
-``lota-install`` is the player-side path onto a LOTA-attested host: one guided,
+``lota-install`` is the single-machine path onto a LOTA-attested host: one guided,
 reboot-resumable command instead of the operator checklist in
 :doc:`production-bringup/index`. It drives the
 same hard requirements the agent enforces at startup, but it explains every
@@ -22,7 +22,7 @@ The three install surfaces and their audiences:
      - Audience
      - Scope
    * - ``lota-install``
-     - Player on a single machine
+     - Somebody installing one machine by hand
      - Guided stages, consent prompts, reboot resume
    * - :doc:`production bring-up <production-bringup/index>`
      - Operator bringing up fleet hosts, CA and verifier
@@ -153,9 +153,9 @@ What the stages do
    anything. Missing artifacts mean the LOTA package has not been installed yet.
 #. **Operator trust material** -- the BPF object's signature verifies against
    the operator's public key, and ``/etc/lota/lota.conf`` points the agent at
-   that key. Fail-closed: the installer never generates a signing key on the
-   player machine -- a locally generated key would let local malware re-sign a
-   tampered enforcement object.
+   that key. Fail-closed: the installer never generates a signing key on this
+   host -- a locally generated key would let local malware re-sign a tampered
+   enforcement object.
 #. **Binary immutability** -- enables fs-verity on the agent binary
    (ext4/btrfs/f2fs). On filesystems without verity (XFS, ZFS) it instead
    accepts a signed ``security.ima`` xattr enforced by IMA appraisal, which
@@ -220,12 +220,12 @@ What the stages do
    (credential activation) and receives a short-lived AIK certificate, one per
    publisher. Naming a CA here (``--ca-server`` with ``--ca-cert``) enrolls
    with it during the install, which is what an operator provisioning a fleet
-   wants. Naming none is the normal player case and is not a blocked stage:
-   the publisher is whoever they buy a title from, so the agent enrolls with
-   each publisher the first time a title asks for one. Either way the running
-   agent renews the certificate on its own against the endpoint recorded in
-   the profile, and ``lota-agent --reenroll --ca-cert ...`` stays as a manual
-   fallback.
+   wants. Naming none is the normal single-machine case and is not a blocked
+   stage: the publisher is whoever they buy a title from, so the agent enrolls
+   with each publisher the first time a title asks for one. Either way the
+   running agent renews the certificate on its own against the endpoint
+   recorded in the profile, and ``lota-agent --reenroll --ca-cert ...`` stays
+   as a manual fallback.
 
    Each publisher's key is derived from that publisher's identity, so the
    certificates they hold carry different public keys and no two of them can
@@ -258,7 +258,7 @@ of their titles runs.
 What the operator must ship
 ===========================
 
-A player install needs these inputs, all fail-closed:
+A guided install needs these inputs, all fail-closed:
 
 * nothing for **enforcement**: the agent package ships the BPF object, its
   ``.sig`` and the public key at ``/usr/lib/lota/enforcement.pub``, because
@@ -269,7 +269,7 @@ A player install needs these inputs, all fail-closed:
 * optionally an **attestation CA endpoint** (``--ca-server``, ``--ca-port``)
   and its **trust anchor** (``--ca-cert``), to enroll during the install. Both
   or neither: an anchor without an endpoint has nothing to enroll against. A
-  player install normally passes neither and lets the agent enroll with each
+  guided install normally passes neither and lets the agent enroll with each
   publisher when a title first asks;
 * optionally the **verifier endpoint** (``--verifier``) for the final
   round-trip check;

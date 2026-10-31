@@ -8,7 +8,7 @@
  *
  * Commands are argv arrays passed straight to execvp - no shell, no
  * word splitting - with stdout+stderr merged into the UI's live
- * region so the player sees exactly what ran.
+ * region so whoever is running the install sees exactly what ran.
  */
 
 #ifndef LOTA_INSTALL_RUN_H

@@ -34,7 +34,7 @@ Production operation starts with the bring-up document. The agent
 intentionally fails closed when required gates are missing.
 
 * :doc:`Production bring-up <operator/production-bringup/index>`
-* :doc:`Player install (lota-install) <operator/player-install>`
+* :doc:`Guided install (lota-install) <operator/player-install>`
 * :doc:`Verifier deployment topologies (HA) <operator/ha-deployment>`
 * PCR policy templates: :ghsrc:`policies/README.rst`
 * SELinux policy: :ghsrc:`selinux/README.rst`

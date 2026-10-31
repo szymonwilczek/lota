@@ -106,9 +106,9 @@ static enum stage_state st_preflight_probe(struct install_ctx *ctx, char *note,
 	if (sb == -ENOENT) {
 		/* UEFI, but the firmware carries no SecureBoot variable at all:
 		 * the feature is absent from this build rather than turned off.
-		 * Telling this machine to switch to UEFI mode would send player
-		 * after something already true, so name what is actually missing
-		 * and where it comes from. */
+		 * Telling this machine to switch to UEFI mode would send
+		 * somebody after something already true, so name what is
+		 * actually missing and where it comes from. */
 		if (host_is_virtual())
 			snprintf(note, cap,
 				 "This guest booted via UEFI, but its firmware "
@@ -134,7 +134,7 @@ static enum stage_state st_preflight_probe(struct install_ctx *ctx, char *note,
 	}
 	if (sb == 0) {
 		/* most common reason an install stops, and the one thing here
-		 * LOTA cannot do on the player's behalf:
+		 * LOTA cannot do for whoever is at the machine:
 		 * name the setting, this machine's way into firmware setup,
 		 * and the menu it lives under */
 		probe_secureboot_guidance(host_is_virtual(), note, cap);
@@ -1189,7 +1189,7 @@ static enum stage_state st_enroll_probe(struct install_ctx *ctx, char *note,
 	if (rc == -EINVAL) {
 		/*
 		 * No publisher named at install time, which is the normal case
-		 * for player:
+		 * for a single machine:
 		 * the publisher is whoever they buy title from, and the agent
 		 * enrolls with each of them the first time title asks.
 		 * Operator installing fleet names the CA here and gets
@@ -1460,8 +1460,9 @@ int install_self_check(struct install_ctx *ctx)
 after_cert:
 
 	/* Informational:
-	 * tells the player which firmware-update recovery path this machine
-	 * will take if the operator runs a self-service re-anchor verifier.
+	 * tells whoever is installing which firmware-update recovery path this
+	 * machine will take if the operator runs a self-service re-anchor
+	 * verifier.
 	 * Not a pass/fail gate! */
 	ui_kv(&ctx->ui, "Firmware version reporting (ESRT)",
 	      probe_esrt_system_firmware_present() ?
@@ -1537,8 +1538,8 @@ after_cert:
 
 /*
  * Informational stage:
- * tell the player which firmware-update recovery path this machine qualifies
- * for.
+ * tell whoever is installing which firmware-update recovery path this machine
+ * qualifies for.
  * Probe-only, changes nothing, always DONE.
  */
 static enum stage_state st_firmware_readiness_probe(struct install_ctx *ctx,
