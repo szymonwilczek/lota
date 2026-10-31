@@ -316,6 +316,13 @@ uint32_t ipc_host_status_flags(const struct ipc_context *ctx);
 void ipc_runtime_coverage_forget(void);
 
 /*
+ * ipc_runtime_measure_stats - Count what the measurement reports left out
+ * @repeated: rounds that repeated a written answer
+ * @unremembered: answers written without room to compare
+ */
+void ipc_runtime_measure_stats(uint64_t *repeated, uint64_t *unremembered);
+
+/*
  * ipc_set_profiles - Hand the IPC layer the publisher profiles
  * @ctx: Server context
  * @profiles: Targets owned by the attestation loop, borrowed for the run

@@ -10,6 +10,7 @@
 #include "ipc.h"
 #include "ipc_privilege.h"
 #include "ipc_payload.h"
+#include "measure_report.h"
 #include "protect_pids.h"
 #include "status_flags.h"
 #include "terminate_policy.h"
@@ -1034,6 +1035,17 @@ void ipc_runtime_coverage_forget(void)
 	g_coverage.valid = false;
 }
 
+/* Last answer reported per protected PID; an unchanged round stays quiet */
+static struct measure_report_table g_measure_reports;
+
+void ipc_runtime_measure_stats(uint64_t *repeated, uint64_t *unremembered)
+{
+	if (repeated)
+		*repeated = g_measure_reports.suppressed;
+	if (unremembered)
+		*unremembered = g_measure_reports.unremembered;
+}
+
 /*
  * The heartbeat binds the status flags into the token nonce,
  * so the status word and the token must carry the same bit.
@@ -1328,6 +1340,10 @@ static void handle_get_token(struct ipc_context *ctx, struct ipc_client *client,
 		goto out;
 	}
 
+	/* forget unprotected PIDs before a reuse can match them */
+	measure_report_retain(&g_measure_reports, runtime_pids,
+			      runtime_pid_count);
+
 	if (runtime_pid_count > LOTA_IPC_TOKEN_MAX_PROTECT_PIDS) {
 		lota_err("runtime protected PID count %u exceeds the per-token "
 			 "limit of %u",
@@ -1376,6 +1392,9 @@ static void handle_get_token(struct ipc_context *ctx, struct ipc_client *client,
 		for (uint32_t i = 0; i < runtime_pid_count; i++) {
 			struct lota_runtime_measure_failure mfail;
 			struct lota_runtime_measure_coverage cov;
+			char statement[MEASURE_REPORT_STATEMENT_MAX];
+			char held_clause[80];
+			uint64_t held = 0;
 			char reason[320];
 
 			ret = lota_runtime_measure_pid((pid_t)runtime_pids[i],
@@ -1396,10 +1415,24 @@ static void handle_get_token(struct ipc_context *ctx, struct ipc_client *client,
 				if (token_gate_failure_is_fatal(
 					    (pid_t)runtime_pids[i],
 					    client->peer_pid)) {
-					lota_err(
-						"runtime image measurement failed for "
-						"the requesting pid=%u: %s",
-						runtime_pids[i], reason);
+					measure_report_line(
+						statement, sizeof(statement),
+						MEASURE_ANSWER_REFUSED,
+						runtime_pids[i],
+						(uint32_t)client->peer_pid, 0,
+						0, reason);
+					if (measure_report_note(
+						    &g_measure_reports,
+						    runtime_pids[i],
+						    MEASURE_ANSWER_REFUSED,
+						    statement, &held)) {
+						measure_report_held_clause(
+							held_clause,
+							sizeof(held_clause),
+							held);
+						lota_err("%s%s", statement,
+							 held_clause);
+					}
 					fail = true;
 					fail_code =
 						LOTA_IPC_ERR_UNMEASURABLE_SELF;
@@ -1415,26 +1448,60 @@ static void handle_get_token(struct ipc_context *ctx, struct ipc_client *client,
 				 */
 				memset(image_digests[i], 0,
 				       sizeof(image_digests[i]));
-				lota_warn(
-					"runtime image measurement failed for pid=%u, "
-					"which is not the caller (pid=%d): the token "
-					"reports partial coverage rather than "
-					"refusing every title on this host: %s",
-					runtime_pids[i], client->peer_pid,
-					reason);
+				measure_report_line(statement,
+						    sizeof(statement),
+						    MEASURE_ANSWER_ABSENT,
+						    runtime_pids[i],
+						    (uint32_t)client->peer_pid,
+						    0, 0, reason);
+				if (measure_report_note(&g_measure_reports,
+							runtime_pids[i],
+							MEASURE_ANSWER_ABSENT,
+							statement, &held)) {
+					measure_report_held_clause(
+						held_clause,
+						sizeof(held_clause), held);
+					lota_warn("%s%s", statement,
+						  held_clause);
+				}
 				image_fully_measured = false;
 				continue;
 			}
 			if (cov.unmeasurable > 0) {
 				lota_rt_failure_reason(&mfail, mfail.err,
 						       reason, sizeof(reason));
-				lota_warn(
-					"runtime image measurement for pid=%u covers "
-					"%u object%s and misses %u: %s",
-					runtime_pids[i], cov.measured,
-					cov.measured == 1 ? "" : "s",
-					cov.unmeasurable, reason);
+				measure_report_line(
+					statement, sizeof(statement),
+					MEASURE_ANSWER_PARTIAL, runtime_pids[i],
+					(uint32_t)client->peer_pid,
+					cov.measured, cov.unmeasurable, reason);
+				if (measure_report_note(&g_measure_reports,
+							runtime_pids[i],
+							MEASURE_ANSWER_PARTIAL,
+							statement, &held)) {
+					measure_report_held_clause(
+						held_clause,
+						sizeof(held_clause), held);
+					lota_warn("%s%s", statement,
+						  held_clause);
+				}
 				image_fully_measured = false;
+				continue;
+			}
+
+			/* stated only when coverage recovers */
+			measure_report_line(statement, sizeof(statement),
+					    MEASURE_ANSWER_MEASURED,
+					    runtime_pids[i],
+					    (uint32_t)client->peer_pid,
+					    cov.measured, 0, NULL);
+			if (measure_report_note(&g_measure_reports,
+						runtime_pids[i],
+						MEASURE_ANSWER_MEASURED,
+						statement, &held)) {
+				measure_report_held_clause(
+					held_clause, sizeof(held_clause), held);
+				lota_info("%s%s", statement, held_clause);
 			}
 		}
 	}
