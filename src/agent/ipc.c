@@ -11,6 +11,7 @@
 #include "ipc_privilege.h"
 #include "ipc_payload.h"
 #include "measure_report.h"
+#include "standing_answer.h"
 #include "protect_pids.h"
 #include "status_flags.h"
 #include "terminate_policy.h"
@@ -254,6 +255,12 @@ struct ipc_client {
 	 * the moment one opens, rather than on its next scheduled sync.
 	 */
 	bool attest_peer;
+
+	/*
+	 * Last token answer journalled; an unchanged one is not written again.
+	 * Per connection, so a reconnect's refusal is news.
+	 */
+	struct standing_answer token_answer;
 
 	struct ipc_client *next;
 };
@@ -1038,12 +1045,21 @@ void ipc_runtime_coverage_forget(void)
 /* Last answer reported per protected PID; an unchanged round stays quiet */
 static struct measure_report_table g_measure_reports;
 
+/* Token rounds that repeated a journalled answer; reported at shutdown */
+static uint64_t g_token_answer_repeats;
+
 void ipc_runtime_measure_stats(uint64_t *repeated, uint64_t *unremembered)
 {
 	if (repeated)
 		*repeated = g_measure_reports.suppressed;
 	if (unremembered)
 		*unremembered = g_measure_reports.unremembered;
+}
+
+void ipc_token_answer_stats(uint64_t *repeated)
+{
+	if (repeated)
+		*repeated = g_token_answer_repeats;
 }
 
 /*
@@ -1171,6 +1187,9 @@ static void handle_get_token(struct ipc_context *ctx, struct ipc_client *client,
 	bool rebound = false;
 	bool image_fully_measured = true;
 	uint32_t fail_code = LOTA_IPC_ERR_INTERNAL;
+	/* compared as text: one code with two reasons is two answers */
+	char refusal[STANDING_ANSWER_STATEMENT_MAX] = "";
+	int refusal_level = -1;
 
 	memset(&quote, 0, sizeof(quote));
 
@@ -1206,8 +1225,10 @@ static void handle_get_token(struct ipc_context *ctx, struct ipc_client *client,
 	 * to be allowed would let one title spend another title's allowance
 	 */
 	if (check_session_token_rate_limit(client) < 0) {
-		lota_warn("rate limited GET_TOKEN for session pid=%d uid=%d",
-			  client->peer_pid, client->peer_uid);
+		refusal_level = LOG_WARNING;
+		snprintf(refusal, sizeof(refusal),
+			 "rate limited GET_TOKEN for session pid=%d uid=%d",
+			 client->peer_pid, client->peer_uid);
 		fail = true;
 		fail_code = LOTA_IPC_ERR_RATE_LIMITED;
 		goto out;
@@ -1215,8 +1236,10 @@ static void handle_get_token(struct ipc_context *ctx, struct ipc_client *client,
 
 	/* uid ceiling: the bound on how much TPM one user can consume */
 	if (check_get_token_rate_limit(client->peer_uid) < 0) {
-		lota_warn("rate limited GET_TOKEN for uid=%d pid=%d",
-			  client->peer_uid, client->peer_pid);
+		refusal_level = LOG_WARNING;
+		snprintf(refusal, sizeof(refusal),
+			 "rate limited GET_TOKEN for uid=%d pid=%d",
+			 client->peer_uid, client->peer_pid);
 		fail = true;
 		fail_code = LOTA_IPC_ERR_RATE_LIMITED;
 		goto out;
@@ -1229,7 +1252,9 @@ static void handle_get_token(struct ipc_context *ctx, struct ipc_client *client,
 	 * omission is the caller's and no TPM would change the answer.
 	 */
 	if (!client->profile && ctx->profile_count > 1) {
-		lota_err(
+		refusal_level = LOG_ERR;
+		snprintf(
+			refusal, sizeof(refusal),
 			"Refusing GET_TOKEN for pid=%d: this agent answers for %zu publishers and the connection named none. Send SET_PROFILE first",
 			client->peer_pid, ctx->profile_count);
 		fail = true;
@@ -1248,7 +1273,9 @@ static void handle_get_token(struct ipc_context *ctx, struct ipc_client *client,
 	 * After the rate limiters, so a caller that asks in a loop is throttled.
 	 */
 	if (!ipc_can_issue_tokens(ctx)) {
-		lota_err(
+		refusal_level = LOG_ERR;
+		snprintf(
+			refusal, sizeof(refusal),
 			"Refusing GET_TOKEN for pid=%d: no TPM on this agent, and an unsigned token is not evidence",
 			client->peer_pid);
 		fail = true;
@@ -1648,6 +1675,36 @@ out:
 		free(image_digests);
 	}
 	ipc_secure_bzero(&quote, sizeof(quote));
+
+	/* journal only news; the client is answered every round */
+	{
+		int answer = fail ? (int)fail_code :
+				    STANDING_ANSWER_NOTHING_WRONG;
+		uint64_t held = 0;
+		char held_clause[80];
+
+		if (standing_answer_note(&client->token_answer, answer, refusal,
+					 &held)) {
+			standing_answer_held_clause(held_clause,
+						    sizeof(held_clause), held);
+
+			if (refusal_level == LOG_ERR)
+				lota_err("%s%s", refusal, held_clause);
+			else if (refusal_level == LOG_WARNING)
+				lota_warn("%s%s", refusal, held_clause);
+			else if (!fail && held > 0)
+				lota_info(
+					"GET_TOKEN for pid=%d is answered again%s",
+					client->peer_pid, held_clause);
+
+			/* silent refusal: nothing withheld, nothing counted */
+			if (refusal_level < 0 && fail)
+				client->token_answer.stated = false;
+		} else if (client->token_answer.stated) {
+			g_token_answer_repeats++;
+		}
+	}
+
 	if (fail)
 		build_error_response(client, fail_code);
 }

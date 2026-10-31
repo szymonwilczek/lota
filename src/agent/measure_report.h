@@ -18,11 +18,12 @@
 
 #include <lota_ipc.h>
 
+#include "standing_answer.h"
+
 /* swept against the protected set, so never fuller than it */
 #define MEASURE_REPORT_MAX_PIDS LOTA_IPC_TOKEN_MAX_PROTECT_PIDS
 
-/* reason included; a longer statement is truncated, not dropped */
-#define MEASURE_REPORT_STATEMENT_MAX 768
+#define MEASURE_REPORT_STATEMENT_MAX STANDING_ANSWER_STATEMENT_MAX
 
 /* A round's verdict on one protected process; sets the log level */
 enum measure_answer {
@@ -32,13 +33,11 @@ enum measure_answer {
 	MEASURE_ANSWER_REFUSED, /* unmeasurable caller: round refused */
 };
 
+/* Standing answer for one protected PID */
 struct measure_report_entry {
 	bool used;
-	bool stated; /* written; clean answers are kept silently */
 	uint32_t pid;
-	int answer;
-	char statement[MEASURE_REPORT_STATEMENT_MAX];
-	uint64_t repeats; /* rounds repeating it since written */
+	struct standing_answer answer;
 };
 
 struct measure_report_table {
@@ -62,7 +61,10 @@ static inline bool measure_report_note(struct measure_report_table *table,
 				       const char *statement, uint64_t *held)
 {
 	struct measure_report_entry *entry = NULL;
+	struct measure_report_entry *free_slot = NULL;
 	uint32_t i;
+	bool stated_before;
+	bool news;
 
 	if (held)
 		*held = 0;
@@ -71,38 +73,19 @@ static inline bool measure_report_note(struct measure_report_table *table,
 		return true;
 
 	for (i = 0; i < MEASURE_REPORT_MAX_PIDS; i++) {
-		if (table->entries[i].used && table->entries[i].pid == pid) {
-			entry = &table->entries[i];
-			break;
-		}
-	}
-
-	if (entry) {
-		if (entry->answer == answer &&
-		    strcmp(entry->statement, statement) == 0) {
-			entry->repeats++;
-			if (entry->stated)
-				table->suppressed++;
-			return false;
-		}
-
-		/* a changed answer ends the old run; report its length */
-		if (held)
-			*held = entry->repeats;
-		entry->answer = answer;
-		entry->stated = true;
-		entry->repeats = 0;
-		snprintf(entry->statement, sizeof(entry->statement), "%s",
-			 statement);
-		return true;
-	}
-
-	for (i = 0; i < MEASURE_REPORT_MAX_PIDS; i++) {
 		if (!table->entries[i].used) {
+			if (!free_slot)
+				free_slot = &table->entries[i];
+			continue;
+		}
+		if (table->entries[i].pid == pid) {
 			entry = &table->entries[i];
 			break;
 		}
 	}
+
+	if (!entry)
+		entry = free_slot;
 
 	/* table full: an unremembered answer cannot be a known repeat */
 	if (!entry) {
@@ -112,13 +95,15 @@ static inline bool measure_report_note(struct measure_report_table *table,
 
 	entry->used = true;
 	entry->pid = pid;
-	entry->answer = answer;
-	entry->repeats = 0;
-	snprintf(entry->statement, sizeof(entry->statement), "%s", statement);
 
-	/* a first answer is news unless it is a clean measurement */
-	entry->stated = answer != MEASURE_ANSWER_MEASURED;
-	return entry->stated;
+	stated_before = entry->answer.stated;
+	news = standing_answer_note(&entry->answer, answer, statement, held);
+
+	/* clean answers never written are not counted as withheld */
+	if (!news && stated_before)
+		table->suppressed++;
+
+	return news;
 }
 
 /*
@@ -150,8 +135,10 @@ static inline void measure_report_retain(struct measure_report_table *table,
 			}
 		}
 
-		if (!still_protected)
+		if (!still_protected) {
 			table->entries[i].used = false;
+			standing_answer_forget(&table->entries[i].answer);
+		}
 	}
 }
 
@@ -222,16 +209,7 @@ static inline void measure_report_line(char *out, size_t cap, int answer,
 static inline void measure_report_held_clause(char *out, size_t cap,
 					      uint64_t held)
 {
-	if (!out || cap == 0)
-		return;
-
-	if (held == 0) {
-		out[0] = '\0';
-		return;
-	}
-
-	snprintf(out, cap, " (the previous answer held %llu further round%s)",
-		 (unsigned long long)held, held == 1 ? "" : "s");
+	standing_answer_held_clause(out, cap, held);
 }
 
 #endif /* LOTA_AGENT_MEASURE_REPORT_H */
