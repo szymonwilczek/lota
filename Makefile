@@ -268,7 +268,7 @@ WINE_HOOK_OBJS := $(patsubst $(SDK_DIR)/%.c,$(BUILD_DIR)/hook/%.o,\
 
 # The hook's 32-bit half, x86_64 only: Steam's launch chain mixes word sizes
 # and lota-proton-hook names the hook through ld.so's $$LIB token.
-# auto builds it when -m32 links; install requires it.
+# auto builds it when -m32 links, libatomic included; install requires it.
 LOTA_HOOK32 ?= auto
 ifeq ($(ARCH),x86_64)
 ifeq ($(LOTA_HOOK32),auto)
@@ -279,9 +279,10 @@ else
 LOTA_HOOK32 := 0
 endif
 
-# names the package, rather than a crt1.o link error
+# names the packages, rather than a crt1.o or libatomic link error
 HOOK32_MISSING := the 32-bit half of the Wine hook needs a multilib toolchain \
-(glibc-devel.i686 on Fedora/RHEL, gcc-multilib on Debian/Ubuntu)
+(glibc-devel.i686 and libatomic.i686 on Fedora/RHEL, gcc-multilib on \
+Debian/Ubuntu)
 
 ifeq ($(LOTA_HOOK32),1)
 WINE_HOOK_LIB32 := $(BUILD_DIR)/lib32/liblota_wine_hook.so
@@ -523,7 +524,7 @@ $(INC_DIR)/vmlinux.h:
 
 # Phony targets
 .PHONY: check-docs-strict
-.PHONY: help all bpf agent initramfs-lock installer verifier attest-ca fleet-cli loadgen packages container-images container-image-verifier container-image-attest-ca container-image-attest-ca-hsm helm-package helm-lint helm-template observability-lint srpm rpm-sign dnf-repo sdk server-sdk wine-hook anticheat pkgconfig sdk-stage clean htmldocs docs-lint docs-linkcheck docs-serve cleandocs install check-version-tag check-includes check-el9-decls check-license-boundary check-test-build-dir check-doc-diagnostics check-config-commands check-stack-frames check-private-errno check-package-manifests check-helm-chart check-container-images lint lint-c lint-go print-lint-go-modules sparse smatch coccicheck reproducible-build test test-unit test-bins test-hardware test-sdk sanitizer-build valgrind-unit valgrind-smoke fuzz-agent fuzz-config fuzz-enroll fuzz-seal-envelope fuzz-tpm-attest fuzz-policy-sign fuzz-server-sdk fuzz-tpm-resp fuzz-bpf-devt fuzz-bpf-open-flags fuzz-bpf-kmem-device fuzz-bpf-event-budget fuzz-bpf-inaccessible-exec fuzz-bpf-shebang fuzz-bpf-all fuzz-all fuzz-regress syzkaller-fuzz-loader examples examples-clean sign-bpf check-abi abi-baseline
+.PHONY: help all bpf agent initramfs-lock installer verifier attest-ca fleet-cli loadgen packages container-images container-image-verifier container-image-attest-ca container-image-attest-ca-hsm helm-package helm-lint helm-template observability-lint srpm rpm-sign dnf-repo sdk server-sdk wine-hook anticheat pkgconfig sdk-stage clean htmldocs docs-lint docs-linkcheck docs-serve cleandocs install check-version-tag check-includes check-el9-decls check-player-build check-license-boundary check-test-build-dir check-doc-diagnostics check-config-commands check-stack-frames check-private-errno check-package-manifests check-helm-chart check-container-images lint lint-c lint-go print-lint-go-modules sparse smatch coccicheck reproducible-build test test-unit test-bins test-hardware test-sdk sanitizer-build valgrind-unit valgrind-smoke fuzz-agent fuzz-config fuzz-enroll fuzz-seal-envelope fuzz-tpm-attest fuzz-policy-sign fuzz-server-sdk fuzz-tpm-resp fuzz-bpf-devt fuzz-bpf-open-flags fuzz-bpf-kmem-device fuzz-bpf-event-budget fuzz-bpf-inaccessible-exec fuzz-bpf-shebang fuzz-bpf-all fuzz-all fuzz-regress syzkaller-fuzz-loader examples examples-clean sign-bpf check-abi abi-baseline
 
 bpf: $(BPF_OBJ)
 
@@ -1026,6 +1027,12 @@ check-includes:
 # See scripts/check-el9-decls.sh
 check-el9-decls:
 	@scripts/check-el9-decls.sh
+
+# Player build gate
+# Runs the player page's build commands, read from the page, in a clean Fedora.
+# Spawns the container itself. See scripts/check-player-build.sh
+check-player-build:
+	@scripts/check-player-build.sh
 
 # License-boundary gate
 # Fails when MIT file depends on GPL-2.0-only one,
@@ -2865,6 +2872,7 @@ help:
 	@echo "  valgrind-smoke   Run CLI smoke paths under valgrind memcheck"
 	@echo "  check-includes   Fail on transitive (unused-direct) #includes"
 	@echo "  check-el9-decls  Syntax-check the C tree against el9 headers"
+	@echo "  check-player-build  Run the player page's build and install in a clean Fedora"
 	@echo "  check-abi        Fail on drift in the public SDK symbols, headers and type layout"
 	@echo "  check-stack-frames  Fail on an oversized stack frame in a shipped binary"
 	@echo "  check-doc-diagnostics  Fail on a quoted message the program cannot print"
