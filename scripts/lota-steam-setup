@@ -143,22 +143,21 @@ check_lota_group() {
 check_hook_library() {
     local found=""
 
-    for candidate in \
-        /usr/lib64/${HOOK_LIB} \
-        /usr/lib/${HOOK_LIB} \
-        /usr/local/lib64/${HOOK_LIB} \
-        /usr/local/lib/${HOOK_LIB}; do
-        if [[ -f "$candidate" ]]; then
-            found="$candidate"
-            break
-        fi
+    # also the soname, as the wrapper does
+    for dir in /usr/lib64 /usr/lib /usr/local/lib64 /usr/local/lib; do
+        for candidate in "$dir/${HOOK_LIB}" "$dir"/${HOOK_LIB}.[0-9]*; do
+            if [[ -f "$candidate" ]]; then
+                found="$candidate"
+                break 2
+            fi
+        done
     done
 
     if [[ -n "$found" ]]; then
         ok "Hook library found: $found"
     else
         warn "Hook library ($HOOK_LIB) not found in standard paths"
-        echo "  Install with: sudo make install"
+        echo "  It ships in lota-sdk, which lota-agent pulls in."
     fi
 }
 
@@ -283,27 +282,27 @@ register_uid=false
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
-    --verify)
-        verify_only=true
-        shift
-        ;;
-    --install-systemd-dropin)
-        install_dropin=true
-        shift
-        ;;
-    --register-uid)
-        register_uid=true
-        shift
-        ;;
-    --help | -h)
-        usage
-        exit 0
-        ;;
-    *)
-        echo "Unknown option: $1" >&2
-        usage >&2
-        exit 1
-        ;;
+        --verify)
+            verify_only=true
+            shift
+            ;;
+        --install-systemd-dropin)
+            install_dropin=true
+            shift
+            ;;
+        --register-uid)
+            register_uid=true
+            shift
+            ;;
+        --help | -h)
+            usage
+            exit 0
+            ;;
+        *)
+            echo "Unknown option: $1" >&2
+            usage >&2
+            exit 1
+            ;;
     esac
 done
 
@@ -342,10 +341,10 @@ install_systemd_dropin() {
 
     uid="$SUDO_UID"
     case "$uid" in
-    '' | *[!0-9]*)
-        fail "SUDO_UID=${SUDO_UID} is not a positive integer"
-        return 1
-        ;;
+        '' | *[!0-9]*)
+            fail "SUDO_UID=${SUDO_UID} is not a positive integer"
+            return 1
+            ;;
     esac
     if [[ "$uid" -eq 0 ]]; then
         fail "SUDO_UID=0; rerun from a non-root login shell"
@@ -417,10 +416,10 @@ register_container_listener_uid() {
 
     uid="$SUDO_UID"
     case "$uid" in
-    '' | *[!0-9]*)
-        fail "SUDO_UID=${SUDO_UID} is not a positive integer"
-        return 1
-        ;;
+        '' | *[!0-9]*)
+            fail "SUDO_UID=${SUDO_UID} is not a positive integer"
+            return 1
+            ;;
     esac
     if [[ "$uid" -eq 0 ]]; then
         fail "SUDO_UID=0; rerun from a non-root login shell"
@@ -466,7 +465,7 @@ register_container_listener_uid() {
         ' "$backup" >"$LOTA_CONF"
     else
         printf '\n# Added by lota-steam-setup --register-uid\n%s\n' \
-            "$line" >>"$LOTA_CONF"
+               "$line" >>"$LOTA_CONF"
     fi
 
     # Read back what was written.

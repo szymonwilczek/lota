@@ -1595,6 +1595,287 @@ static void test_pages_name_symbols_that_exist(void)
 	PASS();
 }
 
+#define PACKAGES_MAX 16
+#define PACKAGE_NAME_MAX 64
+#define PACKAGE_BINS_MAX 8
+#define PACKAGE_DEPS_MAX 8
+
+struct package {
+	char name[PACKAGE_NAME_MAX];
+	char bins[PACKAGE_BINS_MAX][PACKAGE_NAME_MAX];
+	size_t bin_count;
+	char deps[PACKAGE_DEPS_MAX][PACKAGE_NAME_MAX];
+	size_t dep_count;
+};
+
+static struct package packages[PACKAGES_MAX];
+static size_t package_count;
+static char install_offender[512];
+
+/* yaml scalar or list item up to the first space */
+static void first_word(const char *src, char *dst, size_t dst_size)
+{
+	size_t i;
+
+	for (i = 0; i < dst_size - 1 && src[i] && src[i] != ' '; i++)
+		dst[i] = src[i];
+	dst[i] = '\0';
+}
+
+/* One nfpm manifest: name, /usr/bin commands, lota- dependencies */
+static void read_manifest(const char *dir, const char *file)
+{
+	char path[512];
+	char line[1024];
+	struct package *pkg;
+	FILE *fp;
+	bool in_depends = false;
+
+	if (package_count == PACKAGES_MAX)
+		return;
+	snprintf(path, sizeof(path), "%s/packaging/nfpm/%s", dir, file);
+	fp = fopen(path, "re");
+	if (!fp)
+		return;
+
+	pkg = &packages[package_count++];
+	memset(pkg, 0, sizeof(*pkg));
+
+	while (fgets(line, sizeof(line), fp)) {
+		const char *p = line;
+		const char *dst;
+
+		rstrip(line);
+		if (strncmp(line, "name: ", 6) == 0) {
+			first_word(line + 6, pkg->name, sizeof(pkg->name));
+			continue;
+		}
+
+		while (*p == ' ' || *p == '\t')
+			p++;
+		if (strcmp(p, "depends:") == 0) {
+			in_depends = true;
+			continue;
+		}
+		if (in_depends) {
+			if (*p != '-') {
+				in_depends = false;
+			} else {
+				p++;
+				while (*p == ' ')
+					p++;
+				if (strncmp(p, "lota-", 5) == 0 &&
+				    pkg->dep_count < PACKAGE_DEPS_MAX)
+					first_word(p,
+						   pkg->deps[pkg->dep_count++],
+						   PACKAGE_NAME_MAX);
+				continue;
+			}
+		}
+
+		dst = strstr(line, "dst: /usr/bin/");
+		if (dst && pkg->bin_count < PACKAGE_BINS_MAX)
+			first_word(dst + strlen("dst: /usr/bin/"),
+				   pkg->bins[pkg->bin_count++],
+				   PACKAGE_NAME_MAX);
+	}
+	fclose(fp);
+}
+
+static struct package *package_named(const char *name)
+{
+	size_t i;
+
+	for (i = 0; i < package_count; i++)
+		if (strcmp(packages[i].name, name) == 0)
+			return &packages[i];
+	return NULL;
+}
+
+static bool package_ships(const struct package *pkg, const char *cmd)
+{
+	size_t i;
+
+	for (i = 0; i < pkg->bin_count; i++)
+		if (strcmp(pkg->bins[i], cmd) == 0)
+			return true;
+	return false;
+}
+
+/* Does any package this tree builds ship `cmd`? */
+static bool tree_ships_command(const char *cmd)
+{
+	size_t i;
+
+	for (i = 0; i < package_count; i++)
+		if (package_ships(&packages[i], cmd))
+			return true;
+	return false;
+}
+
+/* An install brings the dependency closure; depth bounded by package count */
+static bool install_reaches(const char *name, const char *cmd, size_t depth)
+{
+	const struct package *pkg = package_named(name);
+	size_t i;
+
+	if (!pkg || depth > package_count)
+		return false;
+	if (package_ships(pkg, cmd))
+		return true;
+	for (i = 0; i < pkg->dep_count; i++)
+		if (install_reaches(pkg->deps[i], cmd, depth + 1))
+			return true;
+	return false;
+}
+
+/* Program an indented line runs, past sudo and VAR=value; else prose */
+static bool command_word(const char *line, char *out, size_t out_size)
+{
+	const char *p = line;
+	size_t n = 0;
+
+	if (*p != ' ' && *p != '\t')
+		return false;
+	while (*p == ' ' || *p == '\t')
+		p++;
+
+	while (*p) {
+		const char *sp = strchr(p, ' ');
+
+		if (strncmp(p, "sudo ", 5) == 0)
+			p += 5;
+		else if (sp && memchr(p, '=', (size_t)(sp - p)))
+			p = sp + 1;
+		else
+			break;
+		while (*p == ' ')
+			p++;
+	}
+
+	while ((islower((unsigned char)*p) || isdigit((unsigned char)*p) ||
+		*p == '-') &&
+	       n < out_size - 1)
+		out[n++] = *p++;
+	out[n] = '\0';
+	return n > 0;
+}
+
+/* False at the first command the page runs that its installs do not ship */
+static bool page_commands_are_installed(const char *path)
+{
+	char installs[4][PACKAGE_NAME_MAX];
+	size_t install_count = 0;
+	char line[1024];
+	FILE *fp = fopen(path, "re");
+
+	if (!fp)
+		return true;
+
+	while (fgets(line, sizeof(line), fp)) {
+		char cmd[PACKAGE_NAME_MAX];
+		size_t i;
+
+		rstrip(line);
+
+		if (strstr(line, "dnf install")) {
+			const char *p = strstr(line, "lota-");
+
+			if (p && install_count < 4)
+				first_word(p, installs[install_count++],
+					   PACKAGE_NAME_MAX);
+			continue;
+		}
+
+		/* nothing to hold the page to until it has named a package */
+		if (!install_count)
+			continue;
+		if (!command_word(line, cmd, sizeof(cmd)))
+			continue;
+		if (strncmp(cmd, "lota-", 5) != 0 || !tree_ships_command(cmd))
+			continue;
+
+		for (i = 0; i < install_count; i++)
+			if (install_reaches(installs[i], cmd, 0))
+				break;
+		if (i == install_count) {
+			snprintf(
+				install_offender, sizeof(install_offender),
+				"%.200s runs %.60s, which %.60s does not install",
+				path, cmd, installs[0]);
+			fclose(fp);
+			return false;
+		}
+	}
+	fclose(fp);
+	return true;
+}
+
+static bool commands_under(const char *dir)
+{
+	DIR *d = opendir(dir);
+	struct dirent *ent;
+	bool ok = true;
+
+	if (!d)
+		return true;
+
+	while (ok && (ent = readdir(d)) != NULL) {
+		char path[512];
+
+		if (ent->d_name[0] == '.' || strcmp(ent->d_name, "_build") == 0)
+			continue;
+
+		snprintf(path, sizeof(path), "%s/%s", dir, ent->d_name);
+		if (ent->d_type == DT_DIR) {
+			ok = commands_under(path);
+			continue;
+		}
+		if (has_suffix(ent->d_name, ".rst") ||
+		    has_suffix(ent->d_name, ".md"))
+			ok = page_commands_are_installed(path);
+	}
+	closedir(d);
+	return ok;
+}
+
+/* Every command a page runs comes with the packages the same page installs */
+static void test_installed_packages_carry_the_documented_commands(void)
+{
+	static const char *const manifests[] = {
+		"lota-agent.yaml",     "lota-sdk.yaml",
+		"lota-sdk-devel.yaml", "lota-verifier.yaml",
+		"lota-attest-ca.yaml",
+	};
+	static const char *const roots[] = { "Documentation", "examples" };
+	struct stat st;
+	const char *dir;
+	size_t i;
+
+	TEST("docs: every command a page installs for is on the machine");
+
+	dir = stat("src", &st) == 0 ? "." : "..";
+	package_count = 0;
+	for (i = 0; i < sizeof(manifests) / sizeof(manifests[0]); i++)
+		read_manifest(dir, manifests[i]);
+
+	if (package_count != sizeof(manifests) / sizeof(manifests[0])) {
+		FAIL("no package manifests were read");
+		return;
+	}
+
+	for (i = 0; i < sizeof(roots) / sizeof(roots[0]); i++) {
+		char path[512];
+
+		snprintf(path, sizeof(path), "%s/%s", dir, roots[i]);
+		if (!commands_under(path)) {
+			FAIL(install_offender);
+			return;
+		}
+	}
+	PASS();
+}
+
 /*
  * Reads one shipped command per call, joining the backslash continuations a script
  * or a code block wraps a long invocation over.
@@ -2438,6 +2719,7 @@ int main(void)
 	test_the_gate_runs_the_unit_tests();
 	test_comments_name_symbols_that_exist();
 	test_pages_name_symbols_that_exist();
+	test_installed_packages_carry_the_documented_commands();
 	test_enrollment_example_runs_on_a_provisioned_host();
 	test_bringup_reference_matches_the_packaged_object();
 	test_tpm_clear_section_says_what_nv_costs();

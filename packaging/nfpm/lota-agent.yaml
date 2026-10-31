@@ -2,7 +2,8 @@
 # nfpm config for the lota-agent package (host enforcement)
 #
 # Ships the agent, the BPF LSM object, the PCR14 initramfs helper and 90lota
-# dracut module, the systemd/dbus/udev integration and the guided installer.
+# dracut module, the systemd/dbus/udev integration, the guided installer and
+# the Steam helpers a player launches a hooked title through.
 #
 # Build from the repo root with LOTA_VERSION set; see the `packages` make target.
 #
@@ -34,6 +35,7 @@ changelog: ./build/changelog.gen.yaml
 
 overrides:
   rpm:
+    # lota-sdk ships the hook; same build, as both speak the agent's IPC
     depends:
       - tpm2-tss
       - libbpf
@@ -42,6 +44,7 @@ overrides:
       - systemd
       - dracut
       - fsverity-utils
+      - lota-sdk = ${LOTA_RPM_VERSION}
 
 contents:
   - src: ./build/lota-agent
@@ -50,6 +53,15 @@ contents:
       mode: 0755
   - src: ./build/lota-install
     dst: /usr/bin/lota-install
+    file_info:
+      mode: 0755
+  # Steam helpers: players install the agent, not the SDK
+  - src: ./scripts/lota-proton-hook
+    dst: /usr/bin/lota-proton-hook
+    file_info:
+      mode: 0755
+  - src: ./scripts/lota-steam-setup
+    dst: /usr/bin/lota-steam-setup
     file_info:
       mode: 0755
   - src: ./build/lota-pcr14-lock
