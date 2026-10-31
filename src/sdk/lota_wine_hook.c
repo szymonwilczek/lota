@@ -22,6 +22,7 @@
 #define _GNU_SOURCE
 #endif
 
+#include <ctype.h>
 #include <dlfcn.h>
 #include <errno.h>
 #include <fcntl.h>
@@ -64,6 +65,8 @@ static struct {
 	int refresh_sec;
 	char token_dir[PATH_MAX - 64]; /* leave room for filename suffix */
 	char socket_path[PATH_MAX]; /* empty -> default */
+	/* hex; empty -> unnamed */
+	char publisher[LOTA_PUBLISHER_PROFILE_LEN + 1];
 	char status_path[PATH_MAX];
 	char token_path[PATH_MAX];
 	char snapshot_path[PATH_MAX]; /* atomic snapshot file (flags + token) */
@@ -75,6 +78,8 @@ static struct {
 	struct lota_status last_status; /* the last one the agent gave */
 	atomic_int have_status;
 	atomic_int offline_errno; /* the refusal already reported, negated */
+	atomic_int publisher_errno; /* the publisher refusal already reported */
+	atomic_int token_errno; /* the token refusal already reported */
 	atomic_int self_protected;
 	atomic_int offline_published;
 } g_hook;
@@ -605,6 +610,7 @@ static void hook_offline_clear(void)
 {
 	atomic_store(&g_hook.offline_published, 0);
 	atomic_store(&g_hook.offline_errno, 0);
+	atomic_store(&g_hook.publisher_errno, 0);
 }
 
 #ifdef LOTA_HOOK_TESTING
@@ -633,6 +639,44 @@ static int LOTA_UNUSED write_snapshot(uint32_t flags, const uint8_t *token_wire,
 			    sizeof(struct lota_snapshot_wire_hdr) + token_size);
 }
 
+/* hint for a lasting token refusal @err, or NULL */
+static const char *LOTA_UNUSED hook_token_reason(int err)
+{
+	switch (err) {
+	case LOTA_ERR_UNKNOWN_PROFILE:
+		return LOTA_HOOK_ENV_PUBLISHER
+			" names the publisher this title belongs to";
+	case LOTA_ERR_CONSENT_REQUIRED:
+		return "nobody at this machine has agreed to attest for this publisher yet";
+	case LOTA_ERR_NO_TPM:
+		return "this machine has no TPM to sign one with";
+	case LOTA_ERR_TPM_LOCKED:
+		return "the TPM is in lockout and signs nothing until it recovers";
+	case LOTA_ERR_RATE_LIMITED:
+		return "the agent is issuing tokens faster than it allows";
+	default:
+		return NULL;
+	}
+}
+
+/* warn once per reason why no token was issued; repeats stay at debug */
+static void LOTA_UNUSED hook_report_no_token(int err)
+{
+	const char *why = hook_token_reason(err);
+
+	if (atomic_exchange(&g_hook.token_errno, err) == err) {
+		LOG_DBG("the agent still issued no token: %s",
+			lota_strerror(err));
+		return;
+	}
+
+	if (why)
+		LOG_WRN("the agent issued no token: %s -- %s",
+			lota_strerror(err), why);
+	else
+		LOG_WRN("the agent issued no token: %s", lota_strerror(err));
+}
+
 static int LOTA_UNUSED fetch_token_wire(struct lota_client *client,
 					uint8_t *wire, size_t wire_sz,
 					size_t *written)
@@ -645,9 +689,15 @@ static int LOTA_UNUSED fetch_token_wire(struct lota_client *client,
 
 	ret = lota_get_token(client, NULL, &token);
 	if (ret != LOTA_OK) {
-		LOG_DBG("get_token: %s", lota_strerror(ret));
+		/* transient: no verdict until the next round */
+		if (ret == LOTA_ERR_NOT_ATTESTED)
+			LOG_DBG("get_token: %s", lota_strerror(ret));
+		else
+			hook_report_no_token(ret);
 		return ret;
 	}
+
+	atomic_store(&g_hook.token_errno, 0);
 
 	ret = lota_token_serialize(&token, wire, wire_sz, written);
 	lota_token_free(&token);
@@ -658,8 +708,6 @@ static int LOTA_UNUSED fetch_token_wire(struct lota_client *client,
 
 	return LOTA_OK;
 }
-
-#undef LOTA_UNUSED
 
 /*
  * Fetch and write the binary token file.
@@ -752,12 +800,55 @@ static const char *hook_connect_reason(int err)
 	}
 }
 
+/* hint for a publisher refusal @err, or NULL */
+static const char *hook_publisher_reason(int err)
+{
+	switch (err) {
+	case LOTA_ERR_UNKNOWN_PROFILE:
+		return "this machine holds no enrollment for that publisher";
+	case LOTA_ERR_CONSENT_REQUIRED:
+		return "nobody at this machine has agreed to attest for that publisher yet";
+	case LOTA_ERR_NO_KEY_SLOT:
+		return "the agent has no room left for another publisher's key";
+	case LOTA_ERR_INVALID_ARG:
+		return "the agent would not take that identity";
+	default:
+		return NULL;
+	}
+}
+
+/* Warn once per reason; the socket answered, so no probe */
+static void hook_report_publisher(int err)
+{
+	const char *why = hook_publisher_reason(err);
+
+	if (atomic_exchange(&g_hook.publisher_errno, err) == err) {
+		LOG_DBG("the agent still refuses publisher %s: %s",
+			g_hook.publisher, lota_strerror(err));
+		return;
+	}
+
+	if (why)
+		LOG_WRN("the agent will not attest for publisher %s: %s -- %s",
+			g_hook.publisher, lota_strerror(err), why);
+	else
+		LOG_WRN("the agent will not attest for publisher %s: %s",
+			g_hook.publisher, lota_strerror(err));
+}
+
 /* warn on the first refusal and each new reason; repeats stay at debug */
 static void hook_report_unreachable(void)
 {
 	char path[PATH_MAX];
 	const char *why;
 	int err;
+
+	/* the agent may have answered and refused the publisher */
+	err = lota_connect_last_error();
+	if (err != LOTA_OK && err != LOTA_ERR_CONNECTION_FAILED) {
+		hook_report_publisher(err);
+		return;
+	}
 
 	err = hook_probe_socket(path, sizeof(path));
 	why = hook_connect_reason(err);
@@ -776,6 +867,36 @@ static void hook_report_unreachable(void)
 			strerror(-err));
 }
 
+/* Not 64 hex chars: reported and dropped, the launch goes on unnamed */
+static void LOTA_UNUSED hook_publisher(const char *env)
+{
+	size_t len;
+	size_t i;
+
+	if (!env || !*env)
+		return;
+
+	len = strlen(env);
+	if (len != LOTA_PUBLISHER_PROFILE_LEN) {
+		LOG_WRN("%s is %zu characters, expected %d: ignoring it",
+			LOTA_HOOK_ENV_PUBLISHER, len,
+			LOTA_PUBLISHER_PROFILE_LEN);
+		return;
+	}
+
+	for (i = 0; i < len; i++) {
+		if (!isxdigit((unsigned char)env[i])) {
+			LOG_WRN("%s is not hex at character %zu: ignoring it",
+				LOTA_HOOK_ENV_PUBLISHER, i + 1);
+			return;
+		}
+	}
+
+	memcpy(g_hook.publisher, env, LOTA_PUBLISHER_PROFILE_LEN);
+}
+
+#undef LOTA_UNUSED
+
 static struct lota_client *hook_connect(void)
 {
 	struct lota_connect_opts opts;
@@ -786,6 +907,9 @@ static struct lota_client *hook_connect(void)
 
 	if (g_hook.socket_path[0])
 		opts.socket_path = g_hook.socket_path;
+	/* unnamed: no token on a multi-enrollment host */
+	if (g_hook.publisher[0])
+		opts.publisher_profile = g_hook.publisher;
 	opts.timeout_ms = LOTA_HOOK_CONNECT_TIMEOUT_MS;
 
 	client = lota_connect_opts(&opts);
@@ -1112,6 +1236,8 @@ __attribute__((constructor)) static void lota_wine_hook_init(void)
 	if (env && env[0])
 		snprintf(g_hook.socket_path, sizeof(g_hook.socket_path), "%s",
 			 env);
+
+	hook_publisher(getenv(LOTA_HOOK_ENV_PUBLISHER));
 
 	env = getenv(LOTA_HOOK_ENV_REFRESH_SEC);
 	g_hook.refresh_sec = (env && atoi(env) > 0) ?

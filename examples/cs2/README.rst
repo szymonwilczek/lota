@@ -326,6 +326,27 @@ out to do not. The filter is overridable through
 ``LOTA_HOOK_SKIP_PATH=<prefix-list>`` (extend the skip set for distros that
 keep utilities outside FHS, e.g. ``/nix/store/``).
 
+Which publisher the title attests for
+-------------------------------------
+
+A token is signed with one publisher's attestation key. On a host with more
+than one enrollment, a connection that names no publisher gets the host-wide
+verdict but no token. ``LOTA_HOOK_PUBLISHER`` names it: the hex SHA-256 of
+the publisher's attestation-CA anchor SubjectPublicKeyInfo, as printed by
+``lota-agent --add-publisher``:
+
+::
+
+   LOTA_HOOK_PUBLISHER=5f2d18c4...7d4b2a18 lota-proton-hook %command%
+
+Without it the launch still attests and publishes ``lota-status``, but no
+``lota-token.bin``. The hook logs ``the agent issued no token: ...`` on the
+game's stderr once per reason. A value that is not 64 hex characters is
+reported and ignored; the launch goes on unnamed.
+
+A host with a single enrollment answers every connection with that profile,
+so fleets leave the variable unset.
+
 What registration costs the title
 ---------------------------------
 
@@ -369,6 +390,9 @@ The hook honours a small set of environment variables, all documented in
 | ``LOTA_HOOK_PROTECT_DELAY`` | seconds to wait before the title joins the    |
 |                             | protected set (default 20; ``0`` registers on |
 |                             | the first connect)                            |
++-----------------------------+-----------------------------------------------+
+| ``LOTA_HOOK_PUBLISHER``     | publisher to attest for: hex SHA-256 of its   |
+|                             | CA anchor SubjectPublicKeyInfo                |
 +-----------------------------+-----------------------------------------------+
 
 Set them on Steam's launch line, e.g.:

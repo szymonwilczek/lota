@@ -139,7 +139,8 @@ an integration:
        several publishers refuses its token requests outright. The id is
        the hex SHA-256 of your CA anchor's SubjectPublicKeyInfo, which
        your installer already knows because ``--add-publisher`` prints
-       it.
+       it. A Wine/Proton title sets it in ``LOTA_HOOK_PUBLISHER`` on the
+       launch line.
    * - Token directory
      - ``token_dir`` in ``struct lota_ac_config``, or ``NULL`` to
        auto-detect. Auto-detection follows the producer exactly:
