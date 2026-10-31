@@ -24,12 +24,23 @@
 #include "lota_runtime_image_measure.h"
 #include "lota.h"
 
+/* longest mapping path kept; the parser refuses a longer one */
+#define LOTA_RT_MAP_PATH_MAX (LOTA_RUNTIME_IMAGE_SONAME_MAX + 64)
+
+/* What a failing object is to the process that mapped it */
+enum lota_rt_object_role {
+	LOTA_RT_ROLE_UNKNOWN = 0, /* mapping would not open */
+	LOTA_RT_ROLE_EXECUTABLE, /* no digest refuses the token */
+	LOTA_RT_ROLE_MAPPED_OBJECT, /* no digest marks coverage partial */
+};
+
 /*
  * One file-backed executable mapping selected for measurement.
  * - start/end are the mapping's virtual address range (used to build the
  * authoritative /proc/<pid>/map_files key)
  * - dev/ino identify the backing inode
- * - soname is the file basename
+ * - soname is the basename the image digest folds
+ * - path is the mapped file, for the operator
  */
 struct lota_rt_map_entry {
 	unsigned long start;
@@ -38,6 +49,7 @@ struct lota_rt_map_entry {
 	unsigned int dev_minor;
 	unsigned long long ino;
 	char soname[LOTA_RUNTIME_IMAGE_SONAME_MAX];
+	char path[LOTA_RT_MAP_PATH_MAX];
 };
 
 /*
@@ -112,21 +124,28 @@ int lota_rt_collect_exec_maps(pid_t pid, struct lota_rt_map_entry *entries,
  * soname is the basename of the object that stopped the measurement
  * and is empty when the measurement failed before any object was reached.
  *
+ * path is where that object was mapped from; a basename is ambiguous.
+ *
+ * role is enum lota_rt_object_role.
+ *
  * reported_len is the digest length the kernel returned for that object:
  * zero when it carries no fs-verity digest at all, otherwise a length LOTA
  * does not take.
  */
 struct lota_runtime_measure_failure {
 	char soname[LOTA_RUNTIME_IMAGE_SONAME_MAX];
+	char path[LOTA_RT_MAP_PATH_MAX];
 	unsigned long long ino;
 	uint32_t reported_len;
+	int role;
 	int err;
 };
 
+#define LOTA_RT_REASON_MAX 512 /* longest lota_rt_failure_reason() sentence */
+
 /*
- * Render a failure as one operator-readable sentence naming
- * the object and the reason, into buf.
- * Always NUL-terminates.
+ * Render a failure into buf as one sentence: object path, its role in the
+ * process, and the reason. Always NUL-terminates.
  * Safe with a NULL failure, which renders the errno alone.
  */
 void lota_rt_failure_reason(const struct lota_runtime_measure_failure *fail,

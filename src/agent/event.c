@@ -116,7 +116,7 @@ static void remeasure_protected_image(const struct lota_exec_event *event)
 	ret = lota_runtime_measure_pid((pid_t)event->tgid, digest, &cov,
 				       &mfail);
 	if (ret < 0) {
-		char reason[320];
+		char reason[LOTA_RT_REASON_MAX];
 
 		lota_rt_failure_reason(&mfail, ret, reason, sizeof(reason));
 		lota_warn(

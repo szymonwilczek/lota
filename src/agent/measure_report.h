@@ -22,7 +22,7 @@
 #define MEASURE_REPORT_MAX_PIDS LOTA_IPC_TOKEN_MAX_PROTECT_PIDS
 
 /* reason included; a longer statement is truncated, not dropped */
-#define MEASURE_REPORT_STATEMENT_MAX 512
+#define MEASURE_REPORT_STATEMENT_MAX 768
 
 /* A round's verdict on one protected process; sets the log level */
 enum measure_answer {

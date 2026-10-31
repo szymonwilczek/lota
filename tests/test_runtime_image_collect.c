@@ -118,6 +118,37 @@ int main(void)
 	else
 		FAIL("selected bracketed region");
 
+	/* Two copies of one library under different roots are two objects */
+	TEST("the mapping keeps the path it came from");
+	rc = lota_rt_parse_maps_line(
+		"55a3c0e00000-55a3c0e21000 r-xp 00001000 fd:01 1234567 "
+		"/usr/bin/foo\n",
+		&e);
+	if (rc == 1 && strcmp(e.path, "/usr/bin/foo") == 0)
+		PASS();
+	else
+		FAIL("path not kept");
+
+	TEST("a path with spaces is kept whole");
+	rc = lota_rt_parse_maps_line(
+		"55a3c0e00000-55a3c0e21000 r-xp 00001000 fd:01 1234567 "
+		"/opt/game dir/game bin\n",
+		&e);
+	if (rc == 1 && strcmp(e.path, "/opt/game dir/game bin") == 0)
+		PASS();
+	else
+		FAIL("path with spaces not preserved");
+
+	TEST("deleted suffix is stripped from the path too");
+	rc = lota_rt_parse_maps_line(
+		"55a3c0e00000-55a3c0e21000 r-xp 00001000 fd:01 1234567 "
+		"/tmp/game.bin (deleted)\n",
+		&e);
+	if (rc == 1 && strcmp(e.path, "/tmp/game.bin") == 0)
+		PASS();
+	else
+		FAIL("deleted suffix left on the path");
+
 	TEST("deleted suffix is stripped from soname");
 	rc = lota_rt_parse_maps_line(
 		"55a3c0e00000-55a3c0e21000 r-xp 00001000 fd:01 1234567 "

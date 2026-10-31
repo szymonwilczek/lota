@@ -26,9 +26,12 @@ static int g_failures;
 static struct measure_report_table g_table;
 static char g_line[MEASURE_REPORT_STATEMENT_MAX];
 
+/* Forget answers as the agent does; a memset would clear ~140 KiB */
 static void reset(void)
 {
-	memset(&g_table, 0, sizeof(g_table));
+	measure_report_retain(&g_table, NULL, 0);
+	g_table.suppressed = 0;
+	g_table.unremembered = 0;
 }
 
 /* Render the line as the agent does, then ask whether to write it */
@@ -48,12 +51,12 @@ static bool says(const char *needle)
 /* Which process, whether it was the caller, and why */
 static void test_the_line_names_what_happened(void)
 {
-	measure_report_line(g_line, sizeof(g_line), MEASURE_ANSWER_REFUSED,
-			    6134, 6134, 0, 1,
-			    "cs2 carries no fs-verity digest");
+	measure_report_line(
+		g_line, sizeof(g_line), MEASURE_ANSWER_REFUSED, 6134, 6134, 0,
+		1, "the process's own executable /games/cs2 carries no digest");
 	CHECK(says("pid=6134"), "a refusal names the process");
 	CHECK(says("requesting"), "a refusal says the process was the caller");
-	CHECK(says("cs2 carries no fs-verity digest"),
+	CHECK(says("the process's own executable /games/cs2 carries no digest"),
 	      "a refusal names the reason");
 
 	measure_report_line(g_line, sizeof(g_line), MEASURE_ANSWER_ABSENT, 900,
