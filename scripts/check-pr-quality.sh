@@ -31,6 +31,9 @@ limit, and so is every commit when the branch under test is lota-next. Body
 lines that are a single word, a trailer, a URL, a merge line, a diffstat line,
 or led by a file path are exempt too. In CI, PR_BRANCH names the branch.
 
+A subject with "a/b:" or "a: b:" prints a note asking whether the form is the
+intended one: "/" joins two surfaces, ": " names a submodule. Notes do not fail.
+
 Hotpath rule is either "required" (the change must touch a companion doc or
 the commit must carry a "Docs-Not-Needed: <reason>" trailer) or "recommended"
 (a missing doc only warns). The commit type caps the tier: an infrastructure
@@ -246,6 +249,14 @@ check_subject() {
     local subject=$1 where=$2
 
     [[ $subject == "Merge "* ]] && return 0
+
+    if [[ $subject =~ ^[^\ :]+/[^\ :]*: ]]; then
+	printf 'note: %s: "/" joins two surfaces. Submodule? Use "a: b:".\n' \
+	       "$where"
+    elif [[ $subject =~ ^[^\ :]+:\ [^\ :]+: ]]; then
+	printf 'note: %s: ": " names a submodule. Two surfaces? Use "a/b:".\n' \
+	       "$where"
+    fi
 
     if ((${#subject} > COMMIT_COLUMNS)); then
 	printf 'subject is %d columns, limit %d: %s %s\n' \

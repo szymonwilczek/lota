@@ -153,12 +153,16 @@ check_ci_policy() {
     local head=$2
     local output_file
     local github_output
+    local line
 
     output_file=$(mktemp)
     github_output=$(mktemp)
 
     if GITHUB_OUTPUT="$github_output" scripts/check-pr-quality.sh "$base" "$head" >"$output_file" 2>&1; then
         pass "DCO, column limits and hotpath documentation"
+        sed -n 's/^note: //p' "$output_file" | while IFS= read -r line; do
+            note "$line"
+        done
     else
         sed 's/^/  /' "$output_file"
         fail "DCO, column limits and hotpath documentation" \

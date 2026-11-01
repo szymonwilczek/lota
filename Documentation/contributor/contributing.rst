@@ -40,10 +40,15 @@ Commit subjects use a bare prefix::
 
     agent: reject stale AIK metadata
     verify: bind quote nonce to token epoch
-    docs/verifier: describe monitoring API authentication
+    docs: verifier: describe monitoring API authentication
+    sdk/server: agree on the token claim set
     ci: shard Go fuzz targets
 
 Do not use Conventional Commit parentheses such as ``fix(agent):``.
+A second prefix after a colon names a submodule, as in ``docs: operator:``. A
+slash joins two surfaces a commit changes together, as in ``sdk/server:``.
+``scripts/check-pr-quality.sh`` prints a note for both forms, to confirm the
+intended one.
 
 Commit bodies for ALL changes should state::
 
