@@ -439,16 +439,6 @@ func buildSignedReport(t *testing.T, clientID string, nonce [32]byte, pcr14 [32]
 	copy(buf[offset:], "intel_iommu=on")
 	offset += types.CmdlineParamMax
 
-	// BPF Summary (24 bytes)
-	binary.LittleEndian.PutUint32(buf[offset:], 42)
-	offset += 4
-	binary.LittleEndian.PutUint32(buf[offset:], 10)
-	offset += 4
-	binary.LittleEndian.PutUint64(buf[offset:], uint64(time.Now().Add(-time.Hour).Unix()))
-	offset += 8
-	binary.LittleEndian.PutUint64(buf[offset:], uint64(time.Now().Unix()))
-	offset += 8
-
 	// no serialized BPF exec events in API fixtures
 	binary.LittleEndian.PutUint32(buf[offset:], 0)
 	offset += 4

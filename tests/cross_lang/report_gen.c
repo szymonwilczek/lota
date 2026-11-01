@@ -102,11 +102,6 @@ int main(void)
 	snprintf((char *)report.system.iommu.cmdline_param,
 		 sizeof(report.system.iommu.cmdline_param), "intel_iommu=on");
 
-	report.bpf.total_exec_events = 0x11223344u;
-	report.bpf.unique_binaries = 0x55667788u;
-	report.bpf.first_event_ts = 0x0011223344556677ULL;
-	report.bpf.last_event_ts = 0x7766554433221100ULL;
-
 	esrt.present = 1;
 	esrt.fw_version = 785;
 	esrt.lowest_supported = 700;

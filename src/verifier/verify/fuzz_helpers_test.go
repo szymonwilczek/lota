@@ -295,12 +295,6 @@ func buildSignedReport(s *fuzzReportSpec, clientID string, challengeNonce [types
 	copy(buf[offset:offset+types.CmdlineParamMax], s.iommu.cmdline)
 	offset += types.CmdlineParamMax
 
-	// BPF summary (advisory; fixed)
-	binary.LittleEndian.PutUint32(buf[offset:], 1)
-	offset += 4
-	binary.LittleEndian.PutUint32(buf[offset:], 1)
-	offset += 4
-	offset += 16 // first_seen + last_seen timestamps left zero
 	// bpf event_count = 0
 	binary.LittleEndian.PutUint32(buf[offset:], 0)
 	offset += 4

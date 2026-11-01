@@ -197,17 +197,6 @@ struct lota_system_measurement {
 } __attribute__((packed));
 
 /*
- * eBPF event summary - aggregated info about executed binaries
- * Full event details are in variable-length section
- */
-struct lota_bpf_summary {
-	uint32_t total_exec_events; /* Total exec events since agent start */
-	uint32_t unique_binaries; /* Unique binary hashes seen */
-	uint64_t first_event_ts; /* Timestamp of first event */
-	uint64_t last_event_ts; /* Timestamp of last event */
-} __attribute__((packed));
-
-/*
  * ESRT System Firmware descriptor (EFI System Resource Table, fw_type == 1).
  * Carries the firmware version the verifier uses as an anti-rollback signal
  * for self-service re-anchor.
@@ -229,7 +218,6 @@ struct lota_esrt {
  *   [lota_report_header]
  *   [lota_tpm_evidence]
  *   [lota_system_measurement]
- *   [lota_bpf_summary]
  *   [event_count: uint32_t]
  *   [lota_exec_event * event_count]
  *   [event_log_size: uint32_t]
@@ -242,7 +230,6 @@ struct lota_attestation_report {
 	struct lota_report_header header;
 	struct lota_tpm_evidence tpm;
 	struct lota_system_measurement system;
-	struct lota_bpf_summary bpf;
 
 	/* Variable-length sections follow in serialized form */
 } __attribute__((packed));

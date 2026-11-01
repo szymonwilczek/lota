@@ -242,16 +242,6 @@ func (f *Fleet) BuildReport(a *Agent, challengeNonce [types.NonceSize]byte) ([]b
 	copy(buf[off:], iommuCmdline)
 	off += types.CmdlineParamMax
 
-	// BPF summary
-	binary.LittleEndian.PutUint32(buf[off:], 0)
-	off += 4
-	binary.LittleEndian.PutUint32(buf[off:], 0)
-	off += 4
-	binary.LittleEndian.PutUint64(buf[off:], 0)
-	off += 8
-	binary.LittleEndian.PutUint64(buf[off:], 0)
-	off += 8
-
 	if off != types.FixedReportSize {
 		return nil, fmt.Errorf("fixed section is %d bytes, want %d", off, types.FixedReportSize)
 	}

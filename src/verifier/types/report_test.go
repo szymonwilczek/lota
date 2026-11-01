@@ -115,16 +115,6 @@ func createTestReportBytes() []byte {
 	binary.LittleEndian.PutUint32(buf[offset:], 2) // unit_count
 	offset += 4
 	copy(buf[offset:], "intel_iommu=on") // cmdline
-	offset += CmdlineParamMax
-
-	// BPF Summary (24 bytes)
-	binary.LittleEndian.PutUint32(buf[offset:], 100) // total_exec_events
-	offset += 4
-	binary.LittleEndian.PutUint32(buf[offset:], 50) // unique_binaries
-	offset += 4
-	binary.LittleEndian.PutUint64(buf[offset:], 1699999000) // first_event_ts
-	offset += 8
-	binary.LittleEndian.PutUint64(buf[offset:], 1700000000) // last_event_ts
 
 	// mandatory trailing ESRT section
 	// all-zero means present == false
@@ -239,16 +229,6 @@ func TestParseReport_ValidReport(t *testing.T) {
 		}
 		t.Log("✓ System measurement parsed correctly")
 	})
-
-	t.Run("BPFSummary", func(t *testing.T) {
-		if report.BPF.TotalExecEvents != 100 {
-			t.Errorf("TotalExecEvents: got %d, want 100", report.BPF.TotalExecEvents)
-		}
-		if report.BPF.UniqueBinaries != 50 {
-			t.Errorf("UniqueBinaries: got %d, want 50", report.BPF.UniqueBinaries)
-		}
-		t.Log("✓ BPF summary parsed correctly")
-	})
 }
 
 func TestParseReport_InvalidMagic(t *testing.T) {
@@ -348,7 +328,7 @@ func TestParseReport_FieldOffsetsMatchCLayout(t *testing.T) {
 		offAgentHash  = offKernelHash + HashSize
 		offKernelPath = offAgentHash + HashSize
 		offIOMMU      = offKernelPath + MaxKernelPath
-		offBPFTotal   = offIOMMU + 4 + 4 + 4 + CmdlineParamMax
+		offFixedEnd   = offIOMMU + 4 + 4 + 4 + CmdlineParamMax
 	)
 
 	// layout must close exactly on the published constants
@@ -359,7 +339,7 @@ func TestParseReport_FieldOffsetsMatchCLayout(t *testing.T) {
 		}
 	}
 	assertEqual(tpmEnd-tpmBase, 5466, "TPM evidence section")
-	assertEqual(offBPFTotal+24, FixedReportSize, "fixed section")
+	assertEqual(offFixedEnd, FixedReportSize, "fixed section")
 
 	// byte-slice fields: write a marker, parse, require it in the field
 	sliceCases := []struct {
@@ -415,7 +395,6 @@ func TestParseReport_FieldOffsetsMatchCLayout(t *testing.T) {
 		binary.LittleEndian.PutUint16(data[offPrevAIKSize:], 0x0006)
 		binary.LittleEndian.PutUint16(data[offQuoteSigAlg:], TPMAlgRSASSA)
 		binary.LittleEndian.PutUint16(data[offQuoteHashAlg:], TPMAlgSHA256)
-		binary.LittleEndian.PutUint32(data[offBPFTotal:], 0x07070707)
 
 		report, err := ParseReport(data)
 		if err != nil {
@@ -435,7 +414,6 @@ func TestParseReport_FieldOffsetsMatchCLayout(t *testing.T) {
 			{"TPM.PrevAIKSize", uint64(report.TPM.PrevAIKSize), 0x0006},
 			{"TPM.QuoteSigAlg", uint64(report.TPM.QuoteSigAlg), uint64(TPMAlgRSASSA)},
 			{"TPM.QuoteSigHashAlg", uint64(report.TPM.QuoteSigHashAlg), uint64(TPMAlgSHA256)},
-			{"BPF.TotalExecEvents", uint64(report.BPF.TotalExecEvents), 0x07070707},
 		}
 		for _, c := range checks {
 			if c.got != c.want {

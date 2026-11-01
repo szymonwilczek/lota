@@ -38,9 +38,7 @@ _Static_assert(sizeof(struct lota_tpm_evidence) == 5466,
 	       "layout test");
 _Static_assert(sizeof(struct lota_system_measurement) == 396,
 	       "lota_system_measurement size changed; update types/report.go");
-_Static_assert(sizeof(struct lota_bpf_summary) == 24,
-	       "lota_bpf_summary size changed; update types/report.go");
-_Static_assert(sizeof(struct lota_attestation_report) == 5902,
+_Static_assert(sizeof(struct lota_attestation_report) == 5878,
 	       "fixed report size changed; update FixedReportSize in "
 	       "types/report.go");
 _Static_assert(sizeof(struct lota_esrt) == 28,

@@ -970,16 +970,6 @@ func createSQLiteTestReportWithKey(t testing.TB, clientID string, nonce [32]byte
 	copy(buf[offset:], "intel_iommu=on")
 	offset += types.CmdlineParamMax
 
-	// BPF summary
-	binary.LittleEndian.PutUint32(buf[offset:], 1)
-	offset += 4
-	binary.LittleEndian.PutUint32(buf[offset:], 1)
-	offset += 4
-	binary.LittleEndian.PutUint64(buf[offset:], uint64(time.Now().Unix()))
-	offset += 8
-	binary.LittleEndian.PutUint64(buf[offset:], uint64(time.Now().Unix()))
-	offset += 8
-
 	// bpf event_count = 0
 	binary.LittleEndian.PutUint32(buf[offset:], 0)
 	offset += 4
