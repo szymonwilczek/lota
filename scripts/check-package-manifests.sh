@@ -24,6 +24,9 @@
 # Provides and Requires must match too: nfpm declares the pkgconfig(<name>)
 # rpmbuild derives from each shipped .pc, and pins every sibling the spec pins.
 #
+# LOTA_REPO_BASEURL and every address a page prints are the one the docs deploy
+# serves.
+#
 # Parent directories of other listed paths are dropped (rpm needs %dir, nfpm
 # does not); a directory shipped empty stays compared.
 
@@ -658,11 +661,47 @@ while IFS=$'\t' read -r artifact path; do
     echo "  build ends in 'File not found' after compiling the whole tree"
 done < <(guarded_installs)
 
+# served at <conf.py _site>/rpm; a mismatch leaves dnf timing out
+check_repo_address() {
+    local site baseurl url
+
+    site=$(sed -n 's/^_site = "\(.*\)"$/\1/p' Documentation/conf.py)
+    baseurl=$(sed -n 's/^LOTA_REPO_BASEURL ?= //p' "$MAKEFILE")
+
+    if [ -z "$site" ] || [ -z "$baseurl" ]; then
+        fail=1
+        echo "FAIL: cannot read the site (Documentation/conf.py _site) or"
+        echo "  LOTA_REPO_BASEURL (${MAKEFILE})"
+        return
+    fi
+    if [ "$baseurl" != "${site}/rpm" ]; then
+        fail=1
+        echo "FAIL: LOTA_REPO_BASEURL is ${baseurl}; the site serves the"
+        echo "  repository at ${site}/rpm"
+    fi
+
+    while IFS= read -r url; do
+        case "$url" in
+            "${site}/rpm/lota.repo" | "${site}/rpm/RPM-GPG-KEY-lota") ;;
+            *)
+                fail=1
+                echo "FAIL: the docs send a reader to ${url}; the repository is"
+                echo "  served at ${site}/rpm"
+                ;;
+        esac
+    done < <(grep -rhoIE --include='*.rst' \
+                  'https?://[^ `"<>]*/(lota\.repo|RPM-GPG-KEY-lota)' \
+                  Documentation examples README.rst 2>/dev/null | sort -u)
+}
+
+check_repo_address
+
 if [ "$fail" -ne 0 ]; then
     echo
     echo "The two manifests must list the same installed paths per package and"
     echo "promise the same provides and dependencies, the spec must take its"
     echo "version from ${VERSION_FILE}, and it must produce every file it claims."
+    echo "The repository address is the one the site serves, everywhere."
     exit 1
 fi
 

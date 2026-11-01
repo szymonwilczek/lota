@@ -13,13 +13,6 @@ one line to copy.
 
 You need a Linux PC, about half an hour, and one or two restarts.
 
-.. note::
-
-   Neither package repository below is published, so their ``dnf`` commands
-   do not work yet. Until one of them is, the route onto a PC is
-   :ref:`building the packages from source <player-from-source>`. Everything
-   after that section is the same either way.
-
 .. contents:: On this page
    :local:
    :depth: 1
@@ -88,8 +81,8 @@ release::
 
 **The project's own signed repository**, which serves pre-built packages::
 
-    sudo dnf config-manager --add-repo https://lota.example/rpm/lota.repo
-    sudo rpm --import https://lota.example/rpm/RPM-GPG-KEY-lota
+    sudo dnf config-manager --add-repo https://lota.szymon-wilczek.me/rpm/lota.repo
+    sudo rpm --import https://lota.szymon-wilczek.me/rpm/RPM-GPG-KEY-lota
     sudo dnf install lota-agent
 
 Either way ``dnf`` refuses anything the project's key did not sign, so a

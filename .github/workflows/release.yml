@@ -249,7 +249,6 @@ jobs:
       RPM_GPG_PRIVATE_KEY: ${{ secrets.RPM_GPG_PRIVATE_KEY }}
       RPM_GPG_PASSPHRASE: ${{ secrets.RPM_GPG_PASSPHRASE }}
       RPM_GPG_NAME: ${{ vars.RPM_GPG_NAME }}
-      LOTA_REPO_BASEURL: ${{ vars.LOTA_REPO_BASEURL }}
     steps:
       - name: Install toolchain and packaging tools
         run: |
