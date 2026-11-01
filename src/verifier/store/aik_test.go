@@ -622,30 +622,6 @@ func TestFingerprint(t *testing.T) {
 	}
 }
 
-func TestMemoryStore_GetRegisteredAt(t *testing.T) {
-	store := NewMemoryStore()
-	key := generateTestKey(t)
-
-	// should fail for unknown client
-	_, err := store.GetRegisteredAt("unknown")
-	if err == nil {
-		t.Error("Expected error for non-existent client")
-	}
-
-	before := time.Now()
-	store.RegisterAIK("client1", &key.PublicKey)
-	after := time.Now()
-
-	regTime, err := store.GetRegisteredAt("client1")
-	if err != nil {
-		t.Fatalf("GetRegisteredAt failed: %v", err)
-	}
-
-	if regTime.Before(before) || regTime.After(after) {
-		t.Errorf("Registration time %v not in expected range [%v, %v]", regTime, before, after)
-	}
-}
-
 func TestMemoryStore_RotateAIK(t *testing.T) {
 	store := NewMemoryStore()
 	key1 := generateTestKey(t)
@@ -695,65 +671,12 @@ func TestMemoryStore_RotatePreservesHardwareID(t *testing.T) {
 	}
 }
 
-func TestMemoryStore_RotateUpdatesTimestamp(t *testing.T) {
-	store := NewMemoryStore()
-	key1 := generateTestKey(t)
-	key2 := generateTestKey(t)
-
-	store.RegisterAIK("client1", &key1.PublicKey)
-	regTime1, _ := store.GetRegisteredAt("client1")
-
-	// small sleep to ensure different timestamp
-	time.Sleep(10 * time.Millisecond)
-
-	store.RotateAIK("client1", &key2.PublicKey)
-	regTime2, _ := store.GetRegisteredAt("client1")
-
-	if !regTime2.After(regTime1) {
-		t.Errorf("Rotation should update timestamp: before=%v, after=%v", regTime1, regTime2)
-	}
-}
-
 func TestMemoryStore_RotateNonexistent(t *testing.T) {
 	store := NewMemoryStore()
 	key := generateTestKey(t)
 
 	if err := store.RotateAIK("nonexistent", &key.PublicKey); err == nil {
 		t.Error("RotateAIK should fail for non-existent client")
-	}
-}
-
-func TestFileStore_GetRegisteredAt(t *testing.T) {
-	tempDir, err := os.MkdirTemp("", "lota-test-*")
-	if err != nil {
-		t.Fatalf("Failed to create temp dir: %v", err)
-	}
-	defer os.RemoveAll(tempDir)
-
-	store, err := NewFileStore(tempDir)
-	if err != nil {
-		t.Fatalf("NewFileStore failed: %v", err)
-	}
-
-	key := generateTestKey(t)
-
-	before := time.Now()
-	store.RegisterAIK("client1", &key.PublicKey)
-	after := time.Now()
-
-	regTime, err := store.GetRegisteredAt("client1")
-	if err != nil {
-		t.Fatalf("GetRegisteredAt failed: %v", err)
-	}
-
-	if regTime.Before(before) || regTime.After(after) {
-		t.Errorf("Registration time %v not in expected range [%v, %v]", regTime, before, after)
-	}
-
-	// verify .meta file was created
-	metaPath := filepath.Join(tempDir, "client1.meta")
-	if _, err := os.Stat(metaPath); os.IsNotExist(err) {
-		t.Error("Metadata file was not created")
 	}
 }
 
@@ -1134,10 +1057,6 @@ func TestFileStore_PathTraversal(t *testing.T) {
 			t.Errorf("GetAIK(%s): want ErrInvalidClientID, got %v", label, err)
 		}
 
-		if _, err := store.GetRegisteredAt(id); !errors.Is(err, ErrInvalidClientID) {
-			t.Errorf("GetRegisteredAt(%s): want ErrInvalidClientID, got %v", label, err)
-		}
-
 		if err := store.RotateAIK(id, &key.PublicKey); !errors.Is(err, ErrInvalidClientID) {
 			t.Errorf("RotateAIK(%s): want ErrInvalidClientID, got %v", label, err)
 		}
@@ -1188,9 +1107,6 @@ func TestCertificateStore_DelegatesToFileStore(t *testing.T) {
 	if n := cs.CountClients(); n != 1 {
 		t.Fatalf("CountClients: %d", n)
 	}
-	if _, err := cs.GetRegisteredAt("client-a"); err != nil {
-		t.Fatalf("GetRegisteredAt: %v", err)
-	}
 }
 
 // CertificateStore gates every AIK change behind certificate-chain verification,
@@ -1235,9 +1151,6 @@ func TestMemoryStore_DeleteClient(t *testing.T) {
 	if _, err := store.GetHardwareID("del-client"); !errors.Is(err, ErrHardwareIDNotFound) {
 		t.Errorf("expected ErrHardwareIDNotFound after delete, got %v", err)
 	}
-	if _, err := store.GetRegisteredAt("del-client"); err == nil {
-		t.Error("registration time survived delete")
-	}
 
 	// freed identity must accept a fresh enrollment with a new key
 	newKey := generateTestKey(t)
@@ -1279,7 +1192,7 @@ func TestFileStore_DeleteClient(t *testing.T) {
 		t.Fatalf("DeleteClient failed: %v", err)
 	}
 
-	for _, ext := range []string{".pem", ".meta", ".hwid"} {
+	for _, ext := range []string{".pem", ".hwid"} {
 		path := filepath.Join(tempDir, "del-client"+ext)
 		if _, err := os.Stat(path); !os.IsNotExist(err) {
 			t.Errorf("%s file survived delete", ext)

@@ -13,7 +13,6 @@ import (
 	"fmt"
 	"sync"
 	"testing"
-	"time"
 )
 
 // TestSQLiteAIK_ConcurrentSameKeyTypedError pins that the global AIK-uniqueness
@@ -392,39 +391,6 @@ func TestSQLiteAIK_MultipleClients(t *testing.T) {
 	t.Logf("✓ %d independent clients registered and listed", numClients)
 }
 
-func TestSQLiteAIK_GetRegisteredAt(t *testing.T) {
-	t.Log("TEST: SQLite AIK registration timestamp")
-
-	store, cleanup := createTestSQLiteAIKStore(t)
-	defer cleanup()
-
-	key := generateTestKey(t)
-
-	// should fail for unknown client
-	_, err := store.GetRegisteredAt("unknown")
-	if err == nil {
-		t.Error("Expected error for non-existent client")
-	}
-
-	store.RegisterAIK("ts-client", &key.PublicKey)
-
-	regTime, err := store.GetRegisteredAt("ts-client")
-	if err != nil {
-		t.Fatalf("GetRegisteredAt failed: %v", err)
-	}
-
-	if regTime.IsZero() {
-		t.Error("Registration time should not be zero")
-	}
-
-	// should be recent (within last 10 seconds)
-	if time.Since(regTime) > 10*time.Second {
-		t.Errorf("Registration time too old: %v", regTime)
-	}
-
-	t.Log("✓ SQLite created_at timestamp is populated and readable")
-}
-
 func TestSQLiteAIK_RotateAIK(t *testing.T) {
 	t.Log("SECURITY TEST: SQLite AIK key rotation")
 
@@ -484,32 +450,6 @@ func TestSQLiteAIK_RotatePreservesHardwareID(t *testing.T) {
 	}
 
 	t.Log("✓ Hardware ID preserved across AIK rotation")
-}
-
-func TestSQLiteAIK_RotateUpdatesTimestamp(t *testing.T) {
-	t.Log("TEST: SQLite AIK rotation updates created_at timestamp")
-
-	store, cleanup := createTestSQLiteAIKStore(t)
-	defer cleanup()
-
-	key1 := generateTestKey(t)
-	key2 := generateTestKey(t)
-
-	store.RegisterAIK("ts-rotate", &key1.PublicKey)
-	regTime1, _ := store.GetRegisteredAt("ts-rotate")
-
-	// SQLite CURRENT_TIMESTAMP has second-level precision;
-	// sub-second sleeps cause flaky timestamp comparisons
-	time.Sleep(1100 * time.Millisecond)
-
-	store.RotateAIK("ts-rotate", &key2.PublicKey)
-	regTime2, _ := store.GetRegisteredAt("ts-rotate")
-
-	if !regTime2.After(regTime1) {
-		t.Errorf("Rotation should update timestamp: before=%v, after=%v", regTime1, regTime2)
-	}
-
-	t.Log("✓ Rotation resets registration timestamp")
 }
 
 func TestSQLiteAIK_RotateNonexistent(t *testing.T) {

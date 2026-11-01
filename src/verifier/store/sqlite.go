@@ -15,7 +15,6 @@ import (
 	"errors"
 	"fmt"
 	"strings"
-	"time"
 )
 
 // implements AIKStore using a SQLite database
@@ -311,24 +310,8 @@ func (s *SQLiteAIKStore) ExistingClients(clientIDs []string) (map[string]struct{
 	return existing, nil
 }
 
-func (s *SQLiteAIKStore) GetRegisteredAt(clientID string) (time.Time, error) {
-	var t time.Time
-	err := s.db.QueryRow(
-		"SELECT created_at FROM clients WHERE id = ?", clientID,
-	).Scan(&t)
-
-	if err == sql.ErrNoRows {
-		return time.Time{}, errors.New("client not found")
-	}
-	if err != nil {
-		return time.Time{}, fmt.Errorf("failed to query registration time: %w", err)
-	}
-
-	return t, nil
-}
-
-// DeleteClient removes the client row (AIK, hardware-ID binding and
-// registration timestamp); ErrAIKNotFound if no row matched.
+// DeleteClient removes the client row, AIK and hardware-ID binding included;
+// ErrAIKNotFound if no row matched.
 func (s *SQLiteAIKStore) DeleteClient(clientID string) error {
 	result, err := s.db.Exec("DELETE FROM clients WHERE id = ?", clientID)
 	if err != nil {
@@ -365,7 +348,7 @@ func (s *SQLiteAIKStore) RotateAIK(clientID string, newKey *rsa.PublicKey) error
 	}
 
 	result, err := s.db.Exec(
-		"UPDATE clients SET aik_der = ?, created_at = CURRENT_TIMESTAMP WHERE id = ?",
+		"UPDATE clients SET aik_der = ? WHERE id = ?",
 		derBytes, clientID,
 	)
 	if err != nil {

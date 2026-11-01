@@ -19,7 +19,6 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
-	"time"
 )
 
 // PostgresAIKStore implements AIKStore against a shared Postgres database
@@ -316,24 +315,8 @@ func (s *PostgresAIKStore) ExistingClients(clientIDs []string) (map[string]struc
 	return existing, nil
 }
 
-func (s *PostgresAIKStore) GetRegisteredAt(clientID string) (time.Time, error) {
-	var t time.Time
-	err := s.db.QueryRow(
-		"SELECT created_at FROM clients WHERE id = $1", clientID,
-	).Scan(&t)
-
-	if err == sql.ErrNoRows {
-		return time.Time{}, errors.New("client not found")
-	}
-	if err != nil {
-		return time.Time{}, fmt.Errorf("failed to query registration time: %w", err)
-	}
-
-	return t, nil
-}
-
-// DeleteClient removes the client row (AIK, hardware-ID binding and
-// registration timestamp); ErrAIKNotFound if no row matched.
+// DeleteClient removes the client row, AIK and hardware-ID binding included;
+// ErrAIKNotFound if no row matched.
 func (s *PostgresAIKStore) DeleteClient(clientID string) error {
 	result, err := s.db.Exec("DELETE FROM clients WHERE id = $1", clientID)
 	if err != nil {
@@ -370,7 +353,7 @@ func (s *PostgresAIKStore) RotateAIK(clientID string, newKey *rsa.PublicKey) err
 	}
 
 	result, err := s.db.Exec(
-		"UPDATE clients SET aik_der = $1, created_at = CURRENT_TIMESTAMP WHERE id = $2",
+		"UPDATE clients SET aik_der = $1 WHERE id = $2",
 		derBytes, clientID,
 	)
 	if err != nil {
