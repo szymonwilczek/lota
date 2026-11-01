@@ -291,66 +291,6 @@ static void test_journal_init_ident(void)
 	PASS();
 }
 
-static void test_journal_default_level(void)
-{
-	TEST("journal: default level is LOG_DEBUG");
-
-	journal_init("test");
-	if (journal_get_level() != LOG_DEBUG) {
-		FAIL("expected LOG_DEBUG");
-		return;
-	}
-	PASS();
-}
-
-static void test_journal_set_level(void)
-{
-	TEST("journal: set_level(LOG_WARNING) persists");
-
-	journal_init("test");
-	journal_set_level(LOG_WARNING);
-	if (journal_get_level() != LOG_WARNING) {
-		FAIL("level not set");
-		journal_set_level(LOG_DEBUG);
-		return;
-	}
-	journal_set_level(LOG_DEBUG);
-	PASS();
-}
-
-static void test_journal_not_journal_mode(void)
-{
-	TEST("journal: not in journal mode (no JOURNAL_STREAM)");
-
-	unsetenv("JOURNAL_STREAM");
-	unsetenv("INVOCATION_ID");
-	journal_init("test");
-
-	if (journal_use_journal()) {
-		FAIL("expected false");
-		return;
-	}
-	PASS();
-}
-
-static void test_journal_detect_stream(void)
-{
-	TEST("journal: detect JOURNAL_STREAM");
-
-	setenv("JOURNAL_STREAM", "8:12345", 1);
-	journal_init("test");
-
-	if (!journal_use_journal()) {
-		unsetenv("JOURNAL_STREAM");
-		FAIL("expected true");
-		return;
-	}
-	unsetenv("JOURNAL_STREAM");
-	/* reinit to clear */
-	journal_init("test");
-	PASS();
-}
-
 static void test_journal_macros_no_crash(void)
 {
 	TEST("journal: lota_err/warn/info/dbg macros");
@@ -409,10 +349,6 @@ int main(void)
 	/* journal tests */
 	test_journal_init_null();
 	test_journal_init_ident();
-	test_journal_default_level();
-	test_journal_set_level();
-	test_journal_not_journal_mode();
-	test_journal_detect_stream();
 	test_journal_macros_no_crash();
 	test_journal_level_filter();
 

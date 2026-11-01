@@ -225,11 +225,6 @@ void journal_set_level(int priority)
 	(void)priority;
 }
 
-bool journal_use_journal(void)
-{
-	return false;
-}
-
 void journal_detached_from_terminal(void)
 {
 }
