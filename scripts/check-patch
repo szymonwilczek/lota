@@ -4,8 +4,8 @@
 # Local contributor-side patch quality checker.
 #
 # This script checks the local commit range before a branch is pushed. It reuses
-# scripts/check-pr-quality.sh for DCO and hotpath documentation rules so local
-# checks stay aligned with CI.
+# scripts/check-pr-quality.sh for the DCO and column rules so local checks stay
+# aligned with CI.
 
 set -u
 
@@ -28,9 +28,10 @@ script uses the upstream merge-base, origin/lota-next, or lota-next in that
 order. Head defaults to HEAD.
 
 Checks:
-  - CI-equivalent DCO, column limit and hotpath documentation rules: subject
-    and body lines within 75 columns, fixed by scripts/format-patch for bodies,
-    and the branch name within 75 columns,
+  - CI-equivalent DCO and column limit rules: subject and body lines within
+    75 columns, fixed by scripts/format-patch for bodies, and the branch name
+    within 75 columns,
+  - documentation hints for changed files (recommended only),
   - conventional commit subjects with scope parentheses,
   - good GPG or SSH signature on every commit,
   - standalone Problem: and Solution: commit body sections, except on the
@@ -160,13 +161,13 @@ check_ci_policy() {
     github_output=$(mktemp)
 
     if GITHUB_OUTPUT="$github_output" scripts/check-pr-quality.sh "$base" "$head" >"$output_file" 2>&1; then
-        pass "DCO, column limits and hotpath documentation"
+        pass "DCO and column limits"
         sed -n 's/^note: //p' "$output_file" | while IFS= read -r line; do
             note "$line"
         done
     else
         sed 's/^/  /' "$output_file"
-        fail "DCO, column limits and hotpath documentation" \
+        fail "DCO and column limits" \
              "run scripts/check-pr-quality.sh $base $head and fix the reported commit."
     fi
 

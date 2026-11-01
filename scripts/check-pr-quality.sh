@@ -8,13 +8,8 @@ set -euo pipefail
 # shellcheck source=scripts/lib/commit-limits.sh
 . "$(dirname "${BASH_SOURCE[0]}")/lib/commit-limits.sh"
 
-# Infrastructure commit types:
-# capped at the recommended tier even against a required rule, because by convention
-# they do not change a documented contract
-INFRA_TYPES=" ci build test tests chore style refactor perf release "
-
 # Exempt commit types:
-# the change is documentation or housekeeping by nature and never needs a companion doc
+# the change is documentation or housekeeping by nature and gets no docs note
 EXEMPT_TYPES=" docs license gitignore "
 
 usage() {
@@ -23,7 +18,6 @@ usage: scripts/check-pr-quality.sh [--pr-diff] <base-commit> <head-commit>
 
 Checks every commit in base..head for:
   - DCO Signed-off-by trailer,
-  - hotpath changes without the documentation their tier requires,
   - subject and body lines within 75 columns,
   - branch name within 75 columns, and the pull request title under the subject
     rules when PR_TITLE is set.
@@ -37,16 +31,11 @@ branch; CI sets it.
 A subject with "a/b:" or "a: b:" prints a note asking whether the form is the
 intended one: "/" joins two surfaces, ": " names a submodule. Notes do not fail.
 
-Hotpath rule is either "required" (the change must touch a companion doc or
-the commit must carry a "Docs-Not-Needed: <reason>" trailer) or "recommended"
-(a missing doc prints a note). The commit type caps the tier: an infrastructure
-type (ci, build, test, chore, style, refactor, perf, release) is capped at
-recommended, and docs/license/gitignore are exempt. See
-.github/pr-quality-hotpaths.txt.
+A change to a file listed in .github/pr-quality-hotpaths.txt without the docs
+named there prints a note. docs, license and gitignore commits print none.
 
 With --pr-diff, DCO is checked only for non-merge commits made on top of a tree
-that already carried this gate, and a companion doc anywhere in the pull-request
-diff satisfies a required rule. This keeps newly added rules from being applied
+that already carried this gate. This keeps newly added rules from being applied
 retroactively to historical integration commits.
 
 AI assistant co-author or generator trailers are reported through the
@@ -83,14 +72,6 @@ commit_type() {
     printf '%s' "${type,,}"
 }
 
-# non-empty reason from a "Docs-Not-Needed: <reason>" trailer, if present
-docs_not_needed_reason() {
-    git log -1 --format=%B "$1" |
-	sed -n -E \
-	    's/^[Dd]ocs-[Nn]ot-[Nn]eeded:[[:space:]]*(.+[^[:space:]])[[:space:]]*$/\1/p' |
-	head -n1
-}
-
 is_merge_commit() {
     local commit=$1
     local parent_count
@@ -120,23 +101,14 @@ is_test_only_path() {
     return 1
 }
 
-# Classify one commit against the manifest.
-# Args: <commit> <manifest> <doc-pool files...>
-# doc pool is the commit's own files (commit mode) or the aggregate
-# pull-request diff (pr-diff mode);
-# doc there satisfies a required rule.
-# Returns 1 only on an unwaived required miss; recommended misses print a note.
-classify_commit() {
+# Print a note per manifest rule the commit touches without its docs.
+# Args: <commit> <manifest>
+note_missing_docs() {
     local commit=$1 manifest=$2
-    shift 2
-    local -a doc_pool=("$@")
 
-    local type cap
+    local type
     type=$(commit_type "$commit")
     [[ " $EXEMPT_TYPES " == *" $type "* ]] && return 0
-
-    cap="none"
-    [[ " $INFRA_TYPES " == *" $type "* ]] && cap="recommended"
 
     local -a files effective_files
     mapfile -t files < <(git diff-tree --no-commit-id --name-only -r "$commit")
@@ -145,53 +117,14 @@ classify_commit() {
     for path in "${files[@]}"; do
 	is_test_only_path "$path" || effective_files+=("$path")
     done
-    ((${#effective_files[@]} == 0)) && return 0
+    ((${#hot_hits[@]} == 0)) && continue
 
-    # explicit Docs-Not-Needed: trailer settles the commit
-    [[ -n $(docs_not_needed_reason "$commit") ]] && return 0
-
-    local tier hot_globs doc_globs why eff doc_ok failed=0
-    local -a hot_patterns doc_patterns hot_hits
+    local hot_globs doc_globs why doc_ok hot_hit
+    local -a hot_patterns doc_patterns
     local hot_glob doc_glob
 
-    while IFS='|' read -r tier hot_globs doc_globs why; do
-	[[ -z ${tier// /} || ${tier:0:1} == "#" ]] && continue
-
-	read -r -a hot_patterns <<<"$hot_globs"
-	read -r -a doc_patterns <<<"$doc_globs"
-
-	hot_hits=()
-	for path in "${effective_files[@]}"; do
-	    for hot_glob in "${hot_patterns[@]}"; do
-		[[ $path == $hot_glob ]] && {
-		    hot_hits+=("$path")
-		    break
-		}
-	    done
-	done
-	((${#hot_hits[@]} == 0)) && continue
-
-	doc_ok=0
-	for path in "${doc_pool[@]}"; do
-	    for doc_glob in "${doc_patterns[@]}"; do
-		[[ $path == $doc_glob ]] && {
-		    doc_ok=1
-		    break 2
-		}
-	    done
-	done
-	((doc_ok == 1)) && continue
-
-	eff=$tier
-	[[ $cap == "recommended" && $eff == "required" ]] && eff="recommended"
-
-	if [[ $eff != "required" ]]; then
-	    printf 'note: %s: docs not updated: %s\n' \
-		   "$(short_commit "$commit")" "$why"
-	    printf 'note:   update %s or add a "Docs-Not-Needed: <reason>" trailer\n' \
-		   "${doc_patterns[*]}"
-	    continue
-	fi
+    while IFS='|' read -r hot_globs doc_globs why; do
+	[[ -z ${hot_globs// /} || ${hot_globs:0:1} == "#" ]] && continue
 
 	failed=1
 	printf 'required docs missing: %s %s\n' \
@@ -204,7 +137,32 @@ classify_commit() {
 	printf '  or record a "Docs-Not-Needed: <reason>" trailer if no docs are warranted\n' >&2
     done <"$manifest"
 
-    ((failed == 0))
+    hot_hit=0
+    for path in "${effective_files[@]}"; do
+	for hot_glob in "${hot_patterns[@]}"; do
+	    [[ $path == $hot_glob ]] && {
+		hot_hit=1
+		break 2
+	    }
+	done
+    done
+    ((hot_hit == 0)) && continue
+
+    doc_ok=0
+    for path in "${files[@]}"; do
+	for doc_glob in "${doc_patterns[@]}"; do
+	    [[ $path == $doc_glob ]] && {
+		doc_ok=1
+		break 2
+	    }
+	done
+    done
+    ((doc_ok == 1)) && continue
+
+    printf 'note: %s: docs not updated: %s\n' \
+	   "$(short_commit "$commit")" "$why"
+    printf 'note:   consider updating %s\n' "${doc_patterns[*]}"
+done <"$manifest"
 }
 
 check_signoff() {
@@ -327,7 +285,7 @@ main() {
     local rc=0
     local ai_assisted=0
     local commit branch
-    local -a commits checked_commits pr_files commit_files
+    local -a commits checked_commits
 
     if [[ ${1:-} == "--pr-diff" ]]; then
 	mode="pr-diff"
@@ -393,9 +351,41 @@ main() {
 	    return 0
 	fi
 
-	if [[ $mode == "pr-diff" ]]; then
-	    classify_commit "$commit" "$manifest" \
-			    ${pr_files[@]+"${pr_files[@]}"} || rc=1
+	for commit in "${commits[@]}"; do
+	    if [[ $mode == "pr-diff" ]]; then
+		if is_merge_commit "$commit"; then
+		    continue
+		fi
+		if ! gate_existed_for_commit "$commit"; then
+		    continue
+		fi
+	    fi
+
+	    checked_commits+=("$commit")
+	    check_signoff "$commit" || rc=1
+	    if [[ $branch != lota-next ]]; then
+		check_message_limits "$commit" || rc=1
+	    fi
+	    if check_ai_assistance "$commit"; then
+		ai_assisted=1
+	    fi
+
+	    note_missing_docs "$commit" "$manifest"
+	done
+
+	if [[ -n ${GITHUB_OUTPUT:-} ]]; then
+	    printf 'ai_assisted=%s\n' "$([[ $ai_assisted -eq 1 ]] && printf true || printf false)" \
+		   >>"$GITHUB_OUTPUT"
+	fi
+
+	if ((rc != 0)); then
+	    printf '\nPR quality gate failed.\n' >&2
+	    return "$rc"
+	fi
+
+	if ((ai_assisted == 1)); then
+	    printf 'PR quality gate passed for %d checked commit(s); AI-assisted marker found.\n' \
+		   "${#checked_commits[@]}"
 	else
 	    mapfile -t commit_files < \
 		    <(git diff-tree --no-commit-id --name-only -r "$commit")
