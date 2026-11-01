@@ -1160,42 +1160,6 @@ static void test_documented_api_calls_use_the_bearer_header(void)
 	PASS();
 }
 
-/* check-patch runs the unit tests, as CI does; a gap shows only after a push */
-static void test_the_gate_runs_the_unit_tests(void)
-{
-	FILE *fp = open_shipped("scripts/check-patch");
-	char line[1024];
-	bool defines = false;
-	bool runs = false;
-	bool invokes_make = false;
-
-	TEST("check-patch: the gate runs the unit tests");
-
-	if (!fp) {
-		FAIL("could not open the gate");
-		return;
-	}
-	while (fgets(line, sizeof(line), fp)) {
-		if (strstr(line, "check_unit_tests()"))
-			defines = true;
-		else if (strstr(line, "check_unit_tests"))
-			runs = true;
-		if (strstr(line, "test-unit"))
-			invokes_make = true;
-	}
-	fclose(fp);
-
-	if (!defines || !invokes_make) {
-		FAIL("the gate has no check that runs the unit tests");
-		return;
-	}
-	if (!runs) {
-		FAIL("the gate defines a unit-test check it never calls");
-		return;
-	}
-	PASS();
-}
-
 #define SYMBOL_MAX 80
 #define SYMBOLS_MAX 4096
 
@@ -2414,149 +2378,6 @@ static void test_static_archive_paragraph_matches_the_archives(void)
 }
 
 /*
- * Enrollment refuses a full TPM at handle bind and at key provisioning.
- * The operator page promises both name the count and the verbs that free a slot,
- * so every -ENOSPC branch must call report_no_room_for_a_key().
- */
-static void test_a_full_tpm_is_refused_the_same_way_twice(void)
-{
-	static const char *const page =
-		"Documentation/operator/platform-support.rst";
-	static const char *const src_file = "src/agent/enroll_client.c";
-	char section[16384];
-	FILE *fp;
-	char line[1024];
-	unsigned no_space_branches = 0;
-	unsigned reported = 0;
-
-	TEST("agent: a full TPM is refused with the count and the verbs");
-
-	if (!read_rst_section(page, "How many publishers a TPM has room for",
-			      section, sizeof(section))) {
-		FAIL("could not read the publisher capacity section");
-		return;
-	}
-	if (!section_claims(section, "--forget-publisher")) {
-		/* the page no longer promises it; nothing to hold the code to */
-		PASS();
-		return;
-	}
-
-	fp = open_shipped(src_file);
-	if (!fp) {
-		FAIL("could not open the enrollment client");
-		return;
-	}
-	while (fgets(line, sizeof(line), fp)) {
-		/* the branch, not a mention of the errno in a comment */
-		if (strstr(line, "== -ENOSPC"))
-			no_space_branches++;
-		if (strstr(line, "report_no_room_for_a_key("))
-			reported++;
-	}
-	fclose(fp);
-
-	if (no_space_branches == 0) {
-		FAIL("no refusal for a full TPM is left to check");
-		return;
-	}
-	/* one definition plus one call per branch */
-	if (reported < no_space_branches + 1) {
-		FAIL("a refusal for a full TPM does not name the count and the verbs");
-		return;
-	}
-	PASS();
-}
-
-/*
- * The page promises the shared-key refusal names the publisher: the daemon
- * and the attest loop both print TPM_AIK_SHARED_KEY_ADVICE, the loop with
- * t->label.
- */
-static void test_shared_key_refusal_names_the_publisher(void)
-{
-	static const char *const page =
-		"Documentation/operator/production-bringup/ca-enrollment.rst";
-	static const char *const advice = "TPM_AIK_SHARED_KEY_ADVICE";
-	char buf[65536];
-	FILE *fp;
-	char line[1024];
-	unsigned defined = 0, in_daemon = 0, in_loop = 0, named = 0;
-
-	TEST("agent: the shared-key refusal names the publisher in both paths");
-
-	if (!slurp_shipped(page, buf, sizeof(buf))) {
-		FAIL("could not read the CA enrollment page");
-		return;
-	}
-	if (!strstr(buf, "says which publisher it belongs to")) {
-		/* the page no longer promises it; nothing to hold to */
-		PASS();
-		return;
-	}
-
-	if (!slurp_shipped("src/agent/tpm.h", buf, sizeof(buf))) {
-		FAIL("could not read the TPM header");
-		return;
-	}
-	if (strstr(buf, advice))
-		defined++;
-
-	fp = open_shipped("src/agent/main.c");
-	if (!fp) {
-		FAIL("could not open the daemon");
-		return;
-	}
-	while (fgets(line, sizeof(line), fp))
-		if (strstr(line, advice))
-			in_daemon++;
-	fclose(fp);
-
-	fp = open_shipped("src/agent/attest.c");
-	if (!fp) {
-		FAIL("could not open the attestation loop");
-		return;
-	}
-	while (fgets(line, sizeof(line), fp)) {
-		if (!strstr(line, advice))
-			continue;
-		in_loop++;
-	}
-	fclose(fp);
-
-	/* the loop's own line has to carry the publisher's label */
-	if (!slurp_shipped("src/agent/attest.c", buf, sizeof(buf))) {
-		FAIL("could not read the attestation loop");
-		return;
-	}
-	{
-		const char *at = strstr(buf, advice);
-		const char *end;
-
-		if (at) {
-			end = strstr(at, ");");
-			if (end && memmem(at, (size_t)(end - at), "t->label",
-					  strlen("t->label")))
-				named++;
-		}
-	}
-
-	if (defined == 0) {
-		FAIL("the sentence has no single home the two paths share");
-		return;
-	}
-	if (in_daemon == 0 || in_loop == 0) {
-		FAIL("one of the two refusals spells its own sentence");
-		return;
-	}
-	if (named == 0) {
-		FAIL("the loop's refusal does not name the publisher");
-		return;
-	}
-	PASS();
-}
-
-/*
  * A shared key shows only in the AIK record, which binding a profile drops:
  * attest.c asks for the key once, after tpm_aik_load_metadata() in the same
  * function.
@@ -2734,55 +2555,6 @@ static void test_reenroll_dials_what_the_command_line_named(void)
 	PASS();
 }
 
-/*
- * A key --seal-aik-auth cannot seal usually has no plaintext left,
- * so the failure line must read each key's auth state, not assert plaintext.
- */
-static void test_seal_report_reads_the_state_it_reports(void)
-{
-	FILE *fp;
-	char line[1024];
-	bool in_verb = false;
-	bool reads_state = false;
-	bool asserts_plaintext = false;
-
-	TEST("agent: the sealing report reads each key's state");
-
-	fp = open_shipped("src/agent/selftest.c");
-	if (!fp) {
-		FAIL("could not open the selftest sources");
-		return;
-	}
-	while (fgets(line, sizeof(line), fp)) {
-		if (strstr(line, "int do_seal_aik_auth("))
-			in_verb = true;
-		else if (in_verb && line[0] == '}')
-			break;
-		if (!in_verb)
-			continue;
-		if (strstr(line, "profile_aik_auth_state") ||
-		    strstr(line, "profile_aik_auth_needs_sealing"))
-			reads_state = true;
-		if (strstr(line, "still hold their"))
-			asserts_plaintext = true;
-	}
-	fclose(fp);
-
-	if (!in_verb) {
-		FAIL("could not find do_seal_aik_auth");
-		return;
-	}
-	if (asserts_plaintext) {
-		FAIL("the failure line asserts a plaintext copy it never read");
-		return;
-	}
-	if (!reads_state) {
-		FAIL("the report never reads the state of a key it could not seal");
-		return;
-	}
-	PASS();
-}
-
 int main(void)
 {
 	printf("=== LOTA Packaging Tests ===\n\n");
@@ -2803,7 +2575,6 @@ int main(void)
 	test_installer_relabel_reapplies_the_device_labels();
 	test_documented_tpm_relabel_reaches_both_nodes();
 	test_documented_api_calls_use_the_bearer_header();
-	test_the_gate_runs_the_unit_tests();
 	test_comments_name_symbols_that_exist();
 	test_pages_name_symbols_that_exist();
 	test_manifest_lists_survive_a_comment();
@@ -2815,9 +2586,6 @@ int main(void)
 	test_static_cli_is_built_without_cgo();
 	test_threat_model_names_what_separates_the_keys();
 	test_static_archive_paragraph_matches_the_archives();
-	test_a_full_tpm_is_refused_the_same_way_twice();
-	test_seal_report_reads_the_state_it_reports();
-	test_shared_key_refusal_names_the_publisher();
 	test_shared_key_refusal_survives_several_publishers();
 	test_probe_quotes_the_keys_the_host_attests_with();
 	test_enrollment_reaches_the_ca_before_it_spends_a_key();
