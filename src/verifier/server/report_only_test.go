@@ -31,7 +31,7 @@ func reportOnlyAPI(t *testing.T) *http.ServeMux {
 	auditLog := store.NewMemoryAuditLog()
 	cfg.RevocationStore = store.NewMemoryRevocationStore(auditLog)
 	cfg.BanStore = store.NewMemoryBanStore(auditLog)
-	v := verify.NewVerifier(cfg, store.NewMemoryStore())
+	v := verify.NewVerifier(cfg, nil)
 
 	srv := &Server{verifier: v, addr: ":8443", reportOnly: true}
 	mux := http.NewServeMux()
@@ -112,7 +112,7 @@ func TestReportOnlyHealthNamesTheModeInsteadOfDegrading(t *testing.T) {
 	vcfg := verify.DefaultConfig()
 	vcfg.RequireBootEnrollment = false
 	vcfg.Metrics = cfg.Metrics
-	v := verify.NewVerifier(vcfg, store.NewMemoryStore())
+	v := verify.NewVerifier(vcfg, nil)
 
 	srv, err := NewServer(cfg, v)
 	if err != nil {

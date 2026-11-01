@@ -90,7 +90,7 @@ func decodeDevicePseudonym(cn string) ([types.HardwareIDSize]byte, error) {
 type Verifier struct {
 	nonceStore    *NonceStore
 	pcrVerifier   *PCRVerifier
-	aikStore      store.AIKStore
+	aikVerifier   store.AIKCertVerifier
 	baselineStore BaselineStorer
 
 	// enforcement stores (nil = no enforcement)
@@ -228,7 +228,7 @@ func DefaultConfig() VerifierConfig {
 }
 
 // creates a new verification engine
-func NewVerifier(cfg VerifierConfig, aikStore store.AIKStore) *Verifier {
+func NewVerifier(cfg VerifierConfig, aikVerifier store.AIKCertVerifier) *Verifier {
 	nonceCfg := DefaultNonceStoreConfig()
 	nonceCfg.Lifetime = cfg.NonceLifetime
 	nonceCfg.UsedBackend = cfg.UsedNonceBackend
@@ -255,7 +255,7 @@ func NewVerifier(cfg VerifierConfig, aikStore store.AIKStore) *Verifier {
 	v := &Verifier{
 		nonceStore:            NewNonceStoreFromConfig(nonceCfg),
 		pcrVerifier:           pcrVerifier,
-		aikStore:              aikStore,
+		aikVerifier:           aikVerifier,
 		baselineStore:         baselineStore,
 		revocationStore:       cfg.RevocationStore,
 		banStore:              cfg.BanStore,
@@ -462,14 +462,12 @@ func (v *Verifier) VerifyReportFrom(challengeID, remoteAddr string, reportData [
 		return result, fmt.Errorf("failed to parse AIK: %w", err)
 	}
 
-	certVerifier, ok := v.aikStore.(store.AIKCertVerifier)
-	if !ok {
+	if v.aikVerifier == nil {
 		// verifier misconfiguration; nothing the host can change
-		logging.Security(clog, "AIK store cannot verify certificates; refusing attestation",
-			"store_type", fmt.Sprintf("%T", v.aikStore))
+		logging.Security(clog, "no attestation-CA root configured; refusing attestation")
 		v.metrics.Rejections.Inc(types.VerifyResultString(types.VerifyInternalError))
 		result.Result = types.VerifyInternalError
-		return result, errors.New("configured AIK store does not support AIK certificate verification")
+		return result, errors.New("no AIK certificate verifier configured")
 	}
 	if report.TPM.AIKCertSize == 0 {
 		// an unfinished enrolment, not a bad signature
@@ -481,7 +479,7 @@ func (v *Verifier) VerifyReportFrom(challengeID, remoteAddr string, reportData [
 	}
 	aikCert := cloneSensitive(report.TPM.AIKCertificate[:report.TPM.AIKCertSize])
 	defer wipeBytes(aikCert)
-	aikLeaf, err := certVerifier.VerifyAIKCertificate(reportAIK, aikCert)
+	aikLeaf, err := v.aikVerifier.VerifyAIKCertificate(reportAIK, aikCert)
 	if err != nil {
 		logging.Security(clog, "AIK certificate verification failed", "error", err)
 		verdict := certificateVerdict(err)
@@ -1134,17 +1132,8 @@ func (v *Verifier) ClientInfo(clientID string) (*ClientInfo, bool) {
 		ClientID: clientID,
 	}
 
-	// AIK store carries registrations only from out-of-band provisioning;
-	// under the Privacy CA flow the per-report certificate is
-	// the AIK trust anchor and the verifier runtime registers nothing
-	_, err := v.aikStore.GetAIK(clientID)
-	hasAIK := err == nil
-
-	// hardware ID: registered out of band, else the client ID itself
-	// (under the Privacy CA flow it is the hex device pseudonym)
-	if hwid, err := v.aikStore.GetHardwareID(clientID); err == nil {
-		info.HardwareID = hex.EncodeToString(hwid[:])
-	} else if hwid, err := store.ParseHardwareID(clientID); err == nil {
+	// client ID is the hex device pseudonym from the AIK certificate
+	if hwid, err := store.ParseHardwareID(clientID); err == nil {
 		info.HardwareID = store.FormatHardwareID(hwid)
 	}
 
@@ -1191,10 +1180,9 @@ func (v *Verifier) ClientInfo(clientID string) (*ClientInfo, bool) {
 	}
 
 	// check if client exists in any store
-	// baseline row is the durable record under the Privacy CA flow:
-	// AIK store carries no registrations there and the nonce history
-	// may start empty after a verifier restart
-	if !hasAIK && info.MonotonicCounter == 0 && !hasBaseline {
+	// baseline row is the durable record;
+	// nonce history may start empty after a verifier restart
+	if info.MonotonicCounter == 0 && !hasBaseline {
 		return nil, false
 	}
 
@@ -1202,9 +1190,8 @@ func (v *Verifier) ClientInfo(clientID string) (*ClientInfo, bool) {
 }
 
 // ListClients returns every known client: the durable baseline record first,
-// then AIK registrations and this process's challenge history.
-// Under the Privacy CA flow nothing registers into the AIK store at runtime,
-// so only the baseline record is shared and survives a restart.
+// then this process's challenge history.
+// Only the baseline record is shared and survives a restart.
 func (v *Verifier) ListClients() []string {
 	seen := make(map[string]struct{})
 	var clients []string
@@ -1220,7 +1207,6 @@ func (v *Verifier) ListClients() []string {
 	}
 
 	add(v.baselineStore.ListClients())
-	add(v.aikStore.ListClients())
 	add(v.nonceStore.ListActiveClients())
 
 	return clients
@@ -1263,11 +1249,6 @@ func (v *Verifier) RevocationStore() store.RevocationStore {
 // returns the configured hardware ban store
 func (v *Verifier) BanStore() store.BanStore {
 	return v.banStore
-}
-
-// returns the configured AIK store implementation
-func (v *Verifier) AIKStore() store.AIKStore {
-	return v.aikStore
 }
 
 // returns client IDs currently present in the nonce store
@@ -1503,15 +1484,13 @@ func (v *Verifier) AcknowledgeReanchorReview(clientID string) error {
 	}
 	// unknown client check, same as forced re-anchor
 	if v.baselineStore.GetBaseline(clientID) == nil && !v.hasBootBaseline(clientID) {
-		if _, err := v.aikStore.GetAIK(clientID); err != nil {
-			return ErrUnknownClient
-		}
+		return ErrUnknownClient
 	}
 	return rs.AcknowledgeLFAReview(clientID)
 }
 
 // ErrUnknownClient is returned by the operator-facing lifecycle helpers
-// when the target client has neither an AIK registration nor a baseline.
+// when the target client has no baseline.
 var ErrUnknownClient = errors.New("unknown client")
 
 // reports whether the store pins a boot baseline for the client;
@@ -1526,14 +1505,12 @@ func (v *Verifier) hasBootBaseline(clientID string) bool {
 // so the next attestation re-establishes trust per the active TOFU/policy configuration.
 // This is the deliberate operator re-baseline for platform changes the self-service
 // re-anchor refuses (or that profile is not enabled for).
-// AIK registration is untouched, so the host keeps attesting with its enrolled identity.
+// Host keeps attesting with its enrolled identity.
 func (v *Verifier) ForceReanchor(clientID string) error {
 	// in-memory store keeps the PCR14 and boot baselines in separate maps,
-	// so existence must consult both before falling back to the AIK registration
+	// so existence must consult both
 	if v.baselineStore.GetBaseline(clientID) == nil && !v.hasBootBaseline(clientID) {
-		if _, err := v.aikStore.GetAIK(clientID); err != nil {
-			return ErrUnknownClient
-		}
+		return ErrUnknownClient
 	}
 	if err := v.baselineStore.ClearBaseline(clientID); err != nil {
 		return err
@@ -1542,30 +1519,14 @@ func (v *Verifier) ForceReanchor(clientID string) error {
 	return nil
 }
 
-// DeleteClient removes all verifier-side trust state for a client:
-// the baseline row and, on deployments whose AIK store carries registrations,
-// the AIK registration.
-// Under the Privacy CA model the AIK trust anchor is the certificate presented
-// per attestation, so the baseline is the state that pins the device.
+// DeleteClient removes all verifier-side trust state for a client.
+// AIK trust anchor is the certificate presented per attestation,
+// so the baseline is the state that pins the device.
 // Deleted client re-establishes trust from scratch on its next attestation.
 // Revocations and hardware bans are keyed separately and intentionally
 // survive the delete, so removal cannot be used to shed either.
 func (v *Verifier) DeleteClient(clientID string) error {
-	known := v.baselineStore.GetBaseline(clientID) != nil || v.hasBootBaseline(clientID)
-
-	if deleter, ok := v.aikStore.(store.ClientDeleter); ok {
-		switch err := deleter.DeleteClient(clientID); {
-		case err == nil:
-			known = true
-		case errors.Is(err, store.ErrAIKNotFound):
-			// nothing registered
-			// baseline decides existence
-		default:
-			return err
-		}
-	}
-
-	if !known {
+	if v.baselineStore.GetBaseline(clientID) == nil && !v.hasBootBaseline(clientID) {
 		return ErrUnknownClient
 	}
 	if err := v.baselineStore.ClearBaseline(clientID); err != nil {

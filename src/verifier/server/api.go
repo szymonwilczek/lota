@@ -1764,7 +1764,7 @@ func (h *APIHandler) handleForceReanchor(w http.ResponseWriter, r *http.Request)
 }
 
 // DELETE /api/v1/clients/{id}
-// Remove the client's AIK registration and baselines (admin only).
+// Remove the client's baselines (admin only).
 // The device keeps its certificate; its next attestation becomes the new
 // baseline. Revoke or ban first to keep it out.
 // Revocations and hardware bans survive the delete.
@@ -1801,8 +1801,6 @@ func (h *APIHandler) handleDeleteClient(w http.ResponseWriter, r *http.Request, 
 		switch {
 		case errors.Is(err, verify.ErrUnknownClient):
 			writeJSONStatus(w, http.StatusNotFound, errorResponse{Error: "client not found"})
-		case errors.Is(err, store.ErrInvalidClientID):
-			writeJSONStatus(w, http.StatusBadRequest, errorResponse{Error: "invalid client ID"})
 		default:
 			h.log.Error("client delete failed", "client_id", logID, "error", err)
 			writeJSONStatus(w, http.StatusInternalServerError, errorResponse{Error: "internal error"})

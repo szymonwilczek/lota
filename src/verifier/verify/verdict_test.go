@@ -449,6 +449,27 @@ func TestRequirementRefusalNamesTheRequirement(t *testing.T) {
 	}
 }
 
+// With no attestation-CA root nothing can vouch for an AIK, and the fault is
+// the verifier's: the host must not be told its evidence was bad.
+func TestVerifierWithoutCARootRefusesAsItsOwnFault(t *testing.T) {
+	verifier := createTestVerifier(t, nil)
+
+	clientID := "no-ca-root-client"
+	challenge, err := verifier.GenerateChallenge(clientID)
+	if err != nil {
+		t.Fatalf("GenerateChallenge: %v", err)
+	}
+
+	result, verr := verifier.VerifyReport(clientID,
+		createValidReport(t, clientID, challenge.Nonce, [32]byte{}))
+	if verr == nil {
+		t.Fatal("a verifier with no CA root attested a report")
+	}
+	if result == nil || result.Result != types.VerifyInternalError {
+		t.Fatalf("result %+v, want the internal-error verdict", result)
+	}
+}
+
 // A profile with no certificate on disk reports without one.
 func TestReportWithoutAIKCertificateNamesTheAbsentCertificate(t *testing.T) {
 	aikStore := newCertStore(t)

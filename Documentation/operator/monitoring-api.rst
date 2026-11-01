@@ -426,8 +426,7 @@ Revocations and hardware bans survive the delete. Body: ``reason`` and
 
    {"status": "deleted", "client_id": "host-0001"}
 
-**400** invalid client ID or missing actor or reason, **404** unknown
-client. Writes an audit entry with action ``delete_client``.
+**400** missing actor or reason, **404** unknown client. Writes an audit entry with action ``delete_client``.
 
 GET /api/v1/reanchor/review
 ---------------------------

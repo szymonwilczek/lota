@@ -313,6 +313,7 @@ func main() {
 
 	// initialize stores
 	var aikStore store.AIKStore
+	var aikVerifier store.AIKCertVerifier
 	var auditLog store.AuditLog
 	var attestLog store.AttestationLog
 	aikParams := aikStoreParams{
@@ -529,6 +530,7 @@ func main() {
 		}
 		aikStore = selected
 		if aikCertStore != nil {
+			aikVerifier = aikCertStore
 			logAIKStore(logger, aikCertStore, aikParams, "postgres")
 		} else {
 			logger.Warn("INSECURE: Postgres TOFU AIK store initialized without certificate verification",
@@ -561,6 +563,7 @@ func main() {
 		}
 		aikStore = selected
 		if aikCertStore != nil {
+			aikVerifier = aikCertStore
 			logAIKStore(logger, aikCertStore, aikParams, *dbPath)
 		} else {
 			logger.Warn("INSECURE: SQLite TOFU AIK store initialized without certificate verification",
@@ -626,6 +629,7 @@ func main() {
 		}
 		aikStore = selected
 		if aikCertStore != nil {
+			aikVerifier = aikCertStore
 			logAIKStore(logger, aikCertStore, aikParams, *aikStorePath)
 		} else {
 			logger.Info("file-based AIK store initialized",
@@ -634,7 +638,7 @@ func main() {
 
 	}
 
-	verifier := verify.NewVerifier(verifierCfg, aikStore)
+	verifier := verify.NewVerifier(verifierCfg, aikVerifier)
 
 	// policy signature verification key
 	if *policyPubKey != "" {

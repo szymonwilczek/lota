@@ -1584,7 +1584,7 @@ func TestReanchorReviewEndpoints(t *testing.T) {
 	}
 }
 
-// drives full challenge/attest round so the client exists in the AIK store,
+// drives full challenge/attest round so the client has a baseline,
 // the baseline store and the nonce store
 func attestTestClient(t *testing.T, v *verify.Verifier, challengeID string) string {
 	t.Helper()

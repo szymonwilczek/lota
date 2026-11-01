@@ -368,7 +368,7 @@ func marshalRSAPublicKey(pub *rsa.PublicKey) []byte {
 }
 
 // creates a Verifier with default policy for testing
-func createTestVerifier(t *testing.T, aikStore store.AIKStore) *Verifier {
+func createTestVerifier(t *testing.T, aikStore store.AIKCertVerifier) *Verifier {
 	t.Helper()
 	cfg := DefaultConfig()
 	// Fixtures carry no signed policy pinning PCR0/1/7 and
@@ -1051,14 +1051,13 @@ func attestUnderConfig(t *testing.T, cfg VerifierConfig, clientID string) (*type
 // Client whose PCR14 baseline is on record must be visible through ClientInfo
 // even when the nonce store holds no history for it:
 // the monotonic counter starts at zero after a verifier restart with the
-// in-memory nonce backend, and the Privacy CA flow records nothing in the AIK store
-// (the certificate presented per attestation is the trust anchor).
+// in-memory nonce backend.
 // Such client is listed by ListClients but the per-client lookup reported it as not found.
 func TestClientInfo_BaselineOnlyClientIsFound(t *testing.T) {
 	baselines := NewBaselineStore()
 	cfg := DefaultConfig()
 	cfg.BaselineStore = baselines
-	verifier := NewVerifier(cfg, store.NewMemoryStore())
+	verifier := NewVerifier(cfg, nil)
 
 	var pcr14 [types.HashSize]byte
 	pcr14[0] = 0x42

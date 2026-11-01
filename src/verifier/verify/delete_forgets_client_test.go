@@ -7,19 +7,16 @@ import (
 	"testing"
 	"time"
 
-	"github.com/szymonwilczek/lota/verifier/store"
 	"github.com/szymonwilczek/lota/verifier/types"
 )
 
-// ListClients merges the baseline store, the AIK registry and the nonce
-// store's per-identity state; delete must clear all three. The used-nonce
+// ListClients merges the baseline store and the nonce store's per-identity
+// state; delete must clear both. The used-nonce
 // history (replay defence) is keyed separately and stays.
 func TestDeleteTakesTheClientOutOfTheListing(t *testing.T) {
-	aikStore := store.NewMemoryStore()
-
 	cfg := DefaultConfig()
 	cfg.RequireBootEnrollment = false
-	v := NewVerifier(cfg, aikStore)
+	v := NewVerifier(cfg, nil)
 
 	const clientID = "host-0001"
 

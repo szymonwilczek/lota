@@ -74,7 +74,7 @@ func issueAIKCertOrPanic(pseudonym string, aikPub *rsa.PublicKey) []byte {
 	return der
 }
 
-func newCertStore(t *testing.T) store.AIKStore {
+func newCertStore(t *testing.T) store.AIKCertVerifier {
 	t.Helper()
 	dir := t.TempDir()
 	caPath := filepath.Join(dir, "ca.pem")

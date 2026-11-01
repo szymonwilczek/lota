@@ -24,7 +24,7 @@ func FuzzAPIRequestBody(f *testing.F) {
 	cfg.RevocationStore = store.NewMemoryRevocationStore(auditLog)
 	cfg.BanStore = store.NewMemoryBanStore(auditLog)
 	cfg.Metrics = metrics.New()
-	v := verify.NewVerifier(cfg, store.NewMemoryStore())
+	v := verify.NewVerifier(cfg, nil)
 	if err := v.AddPolicy(verify.DefaultPolicy()); err != nil {
 		f.Fatalf("AddPolicy: %v", err)
 	}
