@@ -19,10 +19,7 @@ const (
 	//
 	// Verifier accepts exactly this one:
 	// breaking layout change bumps the major and is a flag-day.
-	//
-	// Major 2 dropped the always-empty ek_certificate field and made
-	// the trailing ESRT section mandatory.
-	ReportVersion uint32 = 0x00020100 // 2.1.0
+	ReportVersion uint32 = 0x00010000 // 1.0.0
 
 	HashSize        = 32   // SHA-256
 	NonceSize       = 32   // Challenge nonce

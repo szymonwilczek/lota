@@ -105,7 +105,6 @@ func main() {
 		fail("aik_cert_size = %d, want 1000", report.TPM.AIKCertSize)
 	}
 	// report carries no EK certificate:
-	// wire version 2 dropped the always-empty field
 	// if 2 KiB hole came back, every field below would be off by 2050 bytes
 	// and the checks would fail
 	if !bytes.Equal(report.TPM.Nonce[:], pattern(0x55, types.NonceSize)) {

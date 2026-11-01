@@ -50,7 +50,7 @@ Attestation protocol (agent - verifier)
 =======================================
 
 The attestation report carries a fixed wire version (``ReportVersion``, today
-``0x00020100`` = wire **2.1.0**). The verifier checks it for **exact equality**
+``0x00010000`` = wire **1.0.0**). The verifier checks it for **exact equality**
 and rejects a mismatch with the ``old_version`` verdict; there is no partial
 acceptance of a report from a wire the verifier does not implement. This is
 deliberate: the report is the security-load-bearing message, so the verifier
@@ -72,15 +72,6 @@ Consequences:
   separate verifier endpoints during the transition. A flag-day is unavoidable
   for a breaking report change; that is the cost the strict check pays for not
   parsing an unknown security message.
-* Wire **2.0.0** is the first such bump. It removed the ``ek_certificate``
-  field, which every agent left empty because the verifier never sees an EK
-  under the Privacy CA model, and made the trailing ESRT section mandatory. An
-  agent on wire 1.0.0 is rejected with ``old_version``.
-* Wire **2.1.0** removed the 32-byte session token from the verifier's result,
-  shortening it from 56 bytes to 24. The token was issued to every attested
-  host and could be presented by none, so nothing that reads the wire loses an
-  input. The version moves because the length does: an agent built for 2.0.0
-  waits for 32 bytes that never arrive.
 
 The report's ``pcr_mask`` and its boot-commitment and initramfs-lock flags are
 not negotiated. Every agent emits the full set and the verifier requires it, so
@@ -177,7 +168,7 @@ Every version an operator needs is printed by the verifier itself:
 .. code-block:: console
 
    $ lota-verifier --print-versions
-   attestation report wire:  2.1.0
+   attestation report wire:  1.0.0
    postgres schema target:   1 (4b3645b29d8a)
    sqlite schema target:     1 (c43317ff56f1)
    minimum TLS:              1.3
