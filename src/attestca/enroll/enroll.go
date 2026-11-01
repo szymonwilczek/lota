@@ -101,15 +101,6 @@ func WithMaxPending(n int) Option {
 	}
 }
 
-// WithClock overrides the time source (tests)
-func WithClock(now func() time.Time) Option {
-	return func(s *Service) {
-		if now != nil {
-			s.now = now
-		}
-	}
-}
-
 // WithTenantManifest binds an EK-to-tenant manifest so each enrollment is
 // assigned a tenant.
 // Without it every device enrolls into the default tenant,

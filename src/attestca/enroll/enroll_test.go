@@ -142,7 +142,7 @@ func TestEnrollSessionExpiry(t *testing.T) {
 	now := time.Now()
 	clock := &now
 	svc, root := newTestService(t, WithSessionTTL(time.Minute),
-		WithClock(func() time.Time { return *clock }))
+		func(s *Service) { s.now = func() time.Time { return *clock } })
 	ek := tpmtest.NewEKCert(t, root)
 	aikTPMT, aikName := tpmtest.AIKTemplate(t)
 
