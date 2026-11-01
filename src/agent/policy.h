@@ -97,21 +97,6 @@ struct policy_snapshot {
 int policy_emit(const struct policy_snapshot *snap, FILE *out);
 
 /*
- * policy_emit_to_buf - Serialize a policy snapshot to a memory buffer
- *
- * @snap:     System snapshot
- * @buf:      Output buffer
- * @buf_size: Buffer capacity
- * @written:  Bytes written (excluding NUL terminator)
- *
- * Convenience wrapper around policy_emit() using fmemopen.
- *
- * Returns: 0 on success, -ENOSPC if buffer too small, negative errno otherwise
- */
-int policy_emit_to_buf(const struct policy_snapshot *snap, char *buf,
-		       size_t buf_size, size_t *written);
-
-/*
  * policy_kernel_hash_reason - why an exported policy carries no kernel digest
  *
  * Renders the reader's errno as the sentence the document and the terminal
