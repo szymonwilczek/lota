@@ -2,10 +2,10 @@
 /*
  * LOTA runtime protected-PID digest - Unit Tests
  *
- * Covers the v2 fold, which binds each protected PID together with its
+ * Covers the fold, which binds each protected PID together with its
  * kernel-anchored runtime image digest. Pins determinism, the documented
- * byte layout, sensitivity to PID set and per-PID image digest, the
- * canonical-order contract, and domain separation from v1.
+ * byte layout, sensitivity to PID set and per-PID image digest, and the
+ * canonical-order contract.
  *
  * Copyright (C) 2026 Szymon Wilczek
  */
@@ -40,9 +40,9 @@ static int tests_passed;
 		printf("FAIL (%s)\n", reason); \
 	} while (0)
 
-/* independent reference fold mirroring the documented v2 byte layout */
-static int reference_v2(const uint32_t *pids, const uint8_t (*images)[32],
-			uint32_t count, uint8_t out[32])
+/* independent reference fold mirroring the documented byte layout */
+static int reference(const uint32_t *pids, const uint8_t (*images)[32],
+		     uint32_t count, uint8_t out[32])
 {
 	static const char domain[] = "lota-runtime-protect-pids:v2\0";
 	EVP_MD_CTX *ctx = EVP_MD_CTX_new();
@@ -78,20 +78,20 @@ int main(void)
 	uint8_t images[2][32];
 	uint8_t a[32], b[32], ref[32];
 
-	printf("Runtime protect digest (v2) tests:\n");
+	printf("Runtime protect digest tests:\n");
 
 	memset(images[0], 0xa1, 32);
 	memset(images[1], 0xb2, 32);
 
-	TEST("v2 matches independent reference layout");
-	if (lota_compute_runtime_protect_digest_v2(pids, images, 2, a) == 0 &&
-	    reference_v2(pids, images, 2, ref) == 0 && memcmp(a, ref, 32) == 0)
+	TEST("matches independent reference layout");
+	if (lota_compute_runtime_protect_digest(pids, images, 2, a) == 0 &&
+	    reference(pids, images, 2, ref) == 0 && memcmp(a, ref, 32) == 0)
 		PASS();
 	else
 		FAIL("layout drift");
 
-	TEST("v2 is deterministic");
-	if (lota_compute_runtime_protect_digest_v2(pids, images, 2, b) == 0 &&
+	TEST("is deterministic");
+	if (lota_compute_runtime_protect_digest(pids, images, 2, b) == 0 &&
 	    memcmp(a, b, 32) == 0)
 		PASS();
 	else
@@ -99,7 +99,7 @@ int main(void)
 
 	TEST("PID change alters digest");
 	pids[1] = 5679;
-	if (lota_compute_runtime_protect_digest_v2(pids, images, 2, b) == 0 &&
+	if (lota_compute_runtime_protect_digest(pids, images, 2, b) == 0 &&
 	    memcmp(a, b, 32) != 0)
 		PASS();
 	else
@@ -108,7 +108,7 @@ int main(void)
 
 	TEST("image digest change alters digest");
 	images[1][0] ^= 0xff;
-	if (lota_compute_runtime_protect_digest_v2(pids, images, 2, b) == 0 &&
+	if (lota_compute_runtime_protect_digest(pids, images, 2, b) == 0 &&
 	    memcmp(a, b, 32) != 0)
 		PASS();
 	else
@@ -116,78 +116,44 @@ int main(void)
 	images[1][0] ^= 0xff;
 
 	TEST("PID count change alters digest");
-	if (lota_compute_runtime_protect_digest_v2(pids, images, 1, b) == 0 &&
+	if (lota_compute_runtime_protect_digest(pids, images, 1, b) == 0 &&
 	    memcmp(a, b, 32) != 0)
 		PASS();
 	else
 		FAIL("count not bound");
 
-	TEST("v2 rejects unsorted PID list");
+	TEST("rejects unsorted PID list");
 	{
 		uint32_t bad[2] = { 5678, 1234 };
-		if (lota_compute_runtime_protect_digest_v2(bad, images, 2, b) ==
+		if (lota_compute_runtime_protect_digest(bad, images, 2, b) ==
 		    -EINVAL)
 			PASS();
 		else
 			FAIL("accepted unsorted");
 	}
 
-	TEST("v2 rejects NULL image array with non-zero count");
-	if (lota_compute_runtime_protect_digest_v2(pids, NULL, 2, b) == -EINVAL)
+	TEST("rejects NULL image array with non-zero count");
+	if (lota_compute_runtime_protect_digest(pids, NULL, 2, b) == -EINVAL)
 		PASS();
 	else
 		FAIL("accepted NULL images");
 
-	TEST("v2 empty set yields a defined digest");
-	if (lota_compute_runtime_protect_digest_v2(NULL, NULL, 0, b) == 0 &&
-	    reference_v2(NULL, NULL, 0, ref) == 0 && memcmp(b, ref, 32) == 0)
+	TEST("empty set yields a defined digest");
+	if (lota_compute_runtime_protect_digest(NULL, NULL, 0, b) == 0 &&
+	    reference(NULL, NULL, 0, ref) == 0 && memcmp(b, ref, 32) == 0)
 		PASS();
 	else
 		FAIL("empty set rejected");
 
-	TEST("v2 is domain-separated from v1");
-	{
-		uint8_t zero[2][32] = { { 0 }, { 0 } };
-		uint8_t v1[32], v2[32];
-		if (lota_compute_runtime_protect_digest(pids, 2, v1) == 0 &&
-		    lota_compute_runtime_protect_digest_v2(pids, zero, 2, v2) ==
-			    0 &&
-		    memcmp(v1, v2, 32) != 0)
-			PASS();
-		else
-			FAIL("v1 and v2 collide");
-	}
-
-	TEST("v1 matches the cross-language known-answer vector");
+	TEST("matches the cross-language known-answer vector");
 	{
 		/*
-		 * Locks the C and Go v1 folds to the same bytes, for pids {1,2}.
-		 * Every v1 token binds this value under its quote, and the Go
-		 * side now exports the fold (server.ComputeRuntimeProtectDigest),
+		 * Locks the C and Go folds to the same bytes.
+		 * pids {1,2}, image digests of 0xAA*32 and 0xBB*32
+		 * Every token binds this value under its quote, and the Go
+		 * side exports the fold (server.ComputeRuntimeProtectDigest),
 		 * so relying party's test suite consumes it instead of re-deriving it.
 		 * Mirror in the Go verifier's TestRuntimeProtectDigest_KAT.
-		 */
-		static const uint8_t kat[32] = {
-			0x35, 0xe7, 0x7d, 0x3b, 0x26, 0xca, 0xe8, 0x9d,
-			0xf4, 0x66, 0x73, 0xa3, 0xcc, 0xec, 0x9b, 0x85,
-			0xcc, 0x70, 0x7a, 0xb6, 0x94, 0x1a, 0x83, 0xbf,
-			0x29, 0x98, 0x85, 0x44, 0x12, 0x45, 0xbe, 0x02
-		};
-		uint32_t kp[2] = { 1, 2 };
-
-		if (lota_compute_runtime_protect_digest(kp, 2, b) == 0 &&
-		    memcmp(b, kat, 32) == 0)
-			PASS();
-		else
-			FAIL("KAT mismatch");
-	}
-
-	TEST("v2 matches the cross-language known-answer vector");
-	{
-		/*
-		 * Locks the C and Go v2 folds to the same bytes.
-		 * pids {1,2}, image digests of 0xAA*32 and 0xBB*32
-		 * Mirror in the Go verifier's TestRuntimeProtectDigestV2_KAT.
 		 */
 		static const uint8_t kat[32] = {
 			0x8d, 0x45, 0x1c, 0x6d, 0x0e, 0x1e, 0xa5, 0x11,
@@ -199,7 +165,7 @@ int main(void)
 		uint8_t ki[2][32];
 		memset(ki[0], 0xAA, 32);
 		memset(ki[1], 0xBB, 32);
-		if (lota_compute_runtime_protect_digest_v2(kp, ki, 2, b) == 0 &&
+		if (lota_compute_runtime_protect_digest(kp, ki, 2, b) == 0 &&
 		    memcmp(b, kat, 32) == 0)
 			PASS();
 		else

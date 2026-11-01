@@ -49,7 +49,7 @@ func main() {
 		pcrDigest[i] = byte(i)
 	}
 
-	runtimeDigest = computeRuntimeProtectDigest(nil)
+	runtimeDigest = computeRuntimeProtectDigest(nil, nil)
 
 	// compute token quote nonce using the Go server SDK implementation
 	expectedNonce := server.ComputeTokenQuoteNonce(validUntil, flags, pcrMask, nonce, policyDigest, runtimeDigest, 0)
@@ -69,7 +69,7 @@ func main() {
 
 	// serialize token
 	tokBytes, err := server.SerializeToken(validUntil, flags, nonce,
-		0x0014, 0x000B, pcrMask, policyDigest, runtimeDigest, nil, attestData, sig)
+		0x0014, 0x000B, pcrMask, policyDigest, runtimeDigest, 0, nil, nil, attestData, sig)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "serialize: %v\n", err)
 		os.Exit(1)
@@ -149,15 +149,16 @@ func buildFakeTPMSAttest(extraData []byte, pcrMask uint32, pcrDigest []byte) []b
 	return b
 }
 
-func computeRuntimeProtectDigest(pids []uint32) [32]byte {
+func computeRuntimeProtectDigest(pids []uint32, imageDigests [][32]byte) [32]byte {
 	h := sha256.New()
-	_, _ = h.Write([]byte("lota-runtime-protect-pids:v1\x00"))
+	_, _ = h.Write([]byte("lota-runtime-protect-pids:v2\x00"))
 	var le [4]byte
 	binary.LittleEndian.PutUint32(le[:], uint32(len(pids)))
 	_, _ = h.Write(le[:])
-	for _, pid := range pids {
+	for i, pid := range pids {
 		binary.LittleEndian.PutUint32(le[:], pid)
 		_, _ = h.Write(le[:])
+		_, _ = h.Write(imageDigests[i][:])
 	}
 	var out [32]byte
 	copy(out[:], h.Sum(nil))

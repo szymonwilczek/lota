@@ -129,8 +129,8 @@ so the measured process cannot influence it:
    file-backed executable mapping equals its on-disk file, which the kernel has
    already measured.
 3. The per-object digests are folded into a per-process image digest, and the
-   per-PID image digests are folded into the token's ``runtime_protect_digest``
-   (version 2), which is bound into the TPM quote. A verifier recomputes that
+   per-PID image digests are folded into the token's ``runtime_protect_digest``,
+   which is bound into the TPM quote. A verifier recomputes that
    digest from the PID list and the per-PID image digests carried in the token
    and checks it against the quote-bound value.
 

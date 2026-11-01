@@ -171,7 +171,6 @@ macro LOTA_TOKEN_MAX_PROTECT_PIDS              = 181
 macro LOTA_TOKEN_MAX_PID_LIST_SIZE             = 724
 macro LOTA_TOKEN_IMAGE_DIGEST_SIZE             = 32
 macro LOTA_RUNTIME_PROTECT_V1                  = 1
-macro LOTA_RUNTIME_PROTECT_V2                  = 2
 macro LOTA_TOKEN_MAX_IMAGE_LIST_SIZE           = 5792
 macro LOTA_TOKEN_MAX_SIZE                      = 8196
 struct lota_token_wire size=144 align=1

@@ -381,8 +381,7 @@ static int parse_wire_header(const uint8_t *data, size_t len,
 
 	if (hash_alg_digest_len(hdr->hash_alg) == 0)
 		return LOTA_SERVER_ERR_BAD_TOKEN;
-	if (hdr->runtime_protect_version < LOTA_RUNTIME_PROTECT_V1 ||
-	    hdr->runtime_protect_version > LOTA_RUNTIME_PROTECT_V2)
+	if (hdr->runtime_protect_version != LOTA_RUNTIME_PROTECT_V1)
 		return LOTA_SERVER_ERR_BAD_TOKEN;
 	if (hdr->protect_pid_count > LOTA_TOKEN_MAX_PROTECT_PIDS)
 		return LOTA_SERVER_ERR_BAD_TOKEN;
@@ -392,11 +391,9 @@ static int parse_wire_header(const uint8_t *data, size_t len,
 	    (uint16_t)(hdr->protect_pid_count * sizeof(uint32_t)))
 		return LOTA_SERVER_ERR_BAD_TOKEN;
 
-	/* validate sizes (the v2 image-digest block sits after the PID list) */
-	size_t image_list_size = 0;
-	if (hdr->runtime_protect_version == LOTA_RUNTIME_PROTECT_V2)
-		image_list_size = (size_t)hdr->protect_pid_count *
-				  LOTA_TOKEN_IMAGE_DIGEST_SIZE;
+	/* validate sizes (the image-digest block sits after the PID list) */
+	size_t image_list_size =
+		(size_t)hdr->protect_pid_count * LOTA_TOKEN_IMAGE_DIGEST_SIZE;
 
 	size_t expected = (size_t)LOTA_TOKEN_HEADER_SIZE + hdr->pid_list_size +
 			  image_list_size + hdr->attest_size + hdr->sig_size;
@@ -430,10 +427,7 @@ int lota_server_verify_token(const uint8_t *token_data, size_t token_len,
 
 	const uint8_t *pid_list_bytes = token_data + LOTA_TOKEN_HEADER_SIZE;
 	size_t image_list_size =
-		(hdr.runtime_protect_version == LOTA_RUNTIME_PROTECT_V2) ?
-			(size_t)hdr.protect_pid_count *
-				LOTA_TOKEN_IMAGE_DIGEST_SIZE :
-			0;
+		(size_t)hdr.protect_pid_count * LOTA_TOKEN_IMAGE_DIGEST_SIZE;
 	const uint8_t (*image_digests)[32] =
 		(const uint8_t (*)[32])(pid_list_bytes + hdr.pid_list_size);
 	const uint8_t *attest_data =
@@ -472,13 +466,9 @@ int lota_server_verify_token(const uint8_t *token_data, size_t token_len,
 		}
 	}
 
-	if (hdr.runtime_protect_version == LOTA_RUNTIME_PROTECT_V2)
-		ret = lota_compute_runtime_protect_digest_v2(
-			pid_list, pid_count ? image_digests : NULL, pid_count,
-			runtime_protect_digest);
-	else
-		ret = lota_compute_runtime_protect_digest(
-			pid_list, pid_count, runtime_protect_digest);
+	ret = lota_compute_runtime_protect_digest(
+		pid_list, pid_count ? image_digests : NULL, pid_count,
+		runtime_protect_digest);
 	if (ret != 0) {
 		if (pid_list) {
 			OPENSSL_cleanse(pid_list, pid_count * sizeof(uint32_t));
@@ -626,12 +616,8 @@ int lota_server_parse_token(const uint8_t *token_data, size_t token_len,
 
 	/* try to extract PCR digest from TPMS_ATTEST */
 	if (hdr.attest_size > 0) {
-		size_t image_list_size =
-			(hdr.runtime_protect_version ==
-			 LOTA_RUNTIME_PROTECT_V2) ?
-				(size_t)hdr.protect_pid_count *
-					LOTA_TOKEN_IMAGE_DIGEST_SIZE :
-				0;
+		size_t image_list_size = (size_t)hdr.protect_pid_count *
+					 LOTA_TOKEN_IMAGE_DIGEST_SIZE;
 		const uint8_t *attest_data =
 			token_data + LOTA_TOKEN_HEADER_SIZE +
 			hdr.pid_list_size + image_list_size;

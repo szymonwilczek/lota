@@ -105,7 +105,7 @@ func newSignedHeartbeat(t *testing.T, key *rsa.PrivateKey,
 	validUntil := uint64(time.Now().Add(5 * time.Minute).Unix())
 	pcrMask := uint32(0x4001)
 	policyDigest := [32]byte{0xA1, 0xB2, 0xC3}
-	runtimeDigest := verifysdk.ComputeRuntimeProtectDigest(nil)
+	runtimeDigest := verifysdk.ComputeRuntimeProtectDigest(nil, nil)
 
 	pcrDigest := make([]byte, 32)
 	for i := range pcrDigest {
@@ -124,7 +124,7 @@ func newSignedHeartbeat(t *testing.T, key *rsa.PrivateKey,
 
 	token, err := verifysdk.SerializeToken(validUntil, hdr.lotaFlags,
 		heartbeatNonce, 0x0014, 0x000B, pcrMask, policyDigest, runtimeDigest,
-		nil, attest, sig)
+		0, nil, nil, attest, sig)
 	if err != nil {
 		t.Fatalf("serialize: %v", err)
 	}

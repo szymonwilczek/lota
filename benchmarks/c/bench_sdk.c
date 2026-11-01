@@ -117,7 +117,7 @@ static int build_token(struct sdk_ctx *x)
 	x->tok.protect_pid_count = 0;
 	x->tok.protected_pids = NULL;
 	/* Serializers refuse version 0 */
-	x->tok.runtime_protect_version = LOTA_RUNTIME_PROTECT_V2;
+	x->tok.runtime_protect_version = LOTA_RUNTIME_PROTECT_V1;
 
 	/* Representative TPMS_ATTEST blob (quote info ~ 100-130 bytes). */
 	x->tok.attest_size = 120;

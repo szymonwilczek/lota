@@ -66,7 +66,7 @@ func TestConstantsMatchTokenHeader(t *testing.T) {
 	}
 }
 
-// TokenMaxSize must fit a full v2 token, 32-byte image digest per protected PID
+// TokenMaxSize must fit a full token, 32-byte image digest per protected PID
 func TestTokenMaxSizeCoversAFullV2Token(t *testing.T) {
 	hdr := headerConstants(t)
 	digest, ok := hdr["LOTA_TOKEN_IMAGE_DIGEST_SIZE"]
@@ -77,7 +77,7 @@ func TestTokenMaxSizeCoversAFullV2Token(t *testing.T) {
 		uint64(MaxProtectPIDs)*(4+digest) +
 		uint64(MaxAttestSize) + uint64(MaxSigSize)
 	if uint64(TokenMaxSize) < worst {
-		t.Errorf("TokenMaxSize = %d, below the %d-byte worst-case v2 token (%d PIDs)",
+		t.Errorf("TokenMaxSize = %d, below the %d-byte worst-case token (%d PIDs)",
 			TokenMaxSize, worst, MaxProtectPIDs)
 	}
 }

@@ -23,7 +23,7 @@ var tokenVersionHeaders = []string{
 	"lota_gaming.h",
 }
 
-// "0/1 = PID set", "2 = + image": versions left of an "="
+// "0/1 = PID set", "2 = PID set + image": versions left of an "="
 var namedVersions = regexp.MustCompile(`([0-9]+(?:/[0-9]+)*)\s*=[^=]`)
 
 // probes ParseToken with the field overwritten in a valid token
@@ -118,8 +118,8 @@ func show(v []int) string {
 // yields tokens every verifier refuses.
 func TestHeaderAnnotationsNameTheVersionsParsersAccept(t *testing.T) {
 	accepted := acceptedRuntimeProtectVersions(t)
-	if !sameVersions(accepted, []int{1, 2}) {
-		t.Fatalf("ParseToken accepts %s, expected the two defined versions", show(accepted))
+	if !sameVersions(accepted, []int{1}) {
+		t.Fatalf("ParseToken accepts %s, expected the defined version", show(accepted))
 	}
 
 	checked := 0

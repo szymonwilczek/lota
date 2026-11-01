@@ -77,16 +77,16 @@ static void test_verify_tampered_image_digest_is_named(EVP_PKEY *key,
 	const char *msg_nonce;
 	int ret;
 
-	if (forge_token_v2(key, now + LOTA_SERVER_MAX_TOKEN_AGE_SEC, 0x07,
-			   nonce, tokbuf, sizeof(tokbuf),
-			   &tok_written) != LOTA_OK) {
-		FAIL("build_full_token_v2 failed");
+	if (forge_token_protected(key, now + LOTA_SERVER_MAX_TOKEN_AGE_SEC,
+				  0x07, nonce, tokbuf, sizeof(tokbuf),
+				  &tok_written) != LOTA_OK) {
+		FAIL("forge_token_protected failed");
 		return;
 	}
 
 	if (lota_server_verify_token(tokbuf, tok_written, aik_der, aik_len,
 				     nonce, &claims) != LOTA_SERVER_OK) {
-		FAIL("the untampered v2 token did not verify");
+		FAIL("the untampered token did not verify");
 		return;
 	}
 
@@ -214,7 +214,7 @@ static void test_serialize_requires_protect_version(void)
 	}
 
 	/* out of range: refused too */
-	token.runtime_protect_version = LOTA_RUNTIME_PROTECT_V2 + 1;
+	token.runtime_protect_version = LOTA_RUNTIME_PROTECT_V1 + 1;
 	if (lota_token_serialize(&token, buf, sizeof(buf), &written) !=
 	    LOTA_ERR_INVALID_ARG) {
 		FAIL("expected LOTA_ERR_INVALID_ARG for an unknown version");
@@ -225,7 +225,7 @@ static void test_serialize_requires_protect_version(void)
 	token.runtime_protect_version = LOTA_RUNTIME_PROTECT_V1;
 	if (lota_token_serialize(&token, buf, sizeof(buf), &written) !=
 	    LOTA_OK) {
-		FAIL("v1 token failed to serialize");
+		FAIL("token failed to serialize");
 		return;
 	}
 	PASS();
@@ -651,7 +651,8 @@ static void test_verify_mixed_pcr_banks_rejected(EVP_PKEY *key,
 
 	memset(pcr_digest, 0xDD, sizeof(pcr_digest));
 
-	if (lota_compute_runtime_protect_digest(NULL, 0, runtime_digest) != 0) {
+	if (lota_compute_runtime_protect_digest(NULL, NULL, 0,
+						runtime_digest) != 0) {
 		FAIL("runtime digest compute failed");
 		return;
 	}

@@ -245,7 +245,8 @@ int forge_token(EVP_PKEY *key, uint16_t hash_alg, const EVP_MD *md,
 	uint8_t runtime_digest[32];
 	uint32_t pcr_mask = 0x4001;
 	uint8_t policy_digest[32] = { 0x11, 0x22, 0x33 };
-	if (lota_compute_runtime_protect_digest(NULL, 0, runtime_digest) != 0)
+	if (lota_compute_runtime_protect_digest(NULL, NULL, 0,
+						runtime_digest) != 0)
 		return LOTA_ERR_INVALID_ARG;
 	if (forge_quote_nonce(valid_until, flags, pcr_mask, nonce,
 			      policy_digest, runtime_digest, 0,
@@ -314,9 +315,9 @@ int forge_token_sha256(EVP_PKEY *key, uint64_t valid_until, uint32_t flags,
  * Same, but with one protected process and its image digest,
  * so the relying-party side has a v2 runtime measurement to recompute.
  */
-int forge_token_v2(EVP_PKEY *key, uint64_t valid_until, uint32_t flags,
-		   const uint8_t nonce[32], uint8_t *tokbuf, size_t tokbuf_size,
-		   size_t *tok_written)
+int forge_token_protected(EVP_PKEY *key, uint64_t valid_until, uint32_t flags,
+			  const uint8_t nonce[32], uint8_t *tokbuf,
+			  size_t tokbuf_size, size_t *tok_written)
 {
 	uint8_t exp_nonce[32];
 	uint8_t runtime_digest[32];
@@ -335,7 +336,7 @@ int forge_token_v2(EVP_PKEY *key, uint64_t valid_until, uint32_t flags,
 	memset(image_digests[0], 0x5A, sizeof(image_digests[0]));
 	memset(pcr_digest, 0xDD, sizeof(pcr_digest));
 
-	if (lota_compute_runtime_protect_digest_v2(
+	if (lota_compute_runtime_protect_digest(
 		    pids, (const uint8_t (*)[32])image_digests, 1,
 		    runtime_digest) != 0)
 		return LOTA_ERR_INVALID_ARG;
@@ -354,7 +355,7 @@ int forge_token_v2(EVP_PKEY *key, uint64_t valid_until, uint32_t flags,
 	}
 
 	memset(&token, 0, sizeof(token));
-	token.runtime_protect_version = LOTA_RUNTIME_PROTECT_V2;
+	token.runtime_protect_version = LOTA_RUNTIME_PROTECT_V1;
 	token.valid_until = valid_until;
 	token.flags = flags;
 	memcpy(token.nonce, nonce, 32);
