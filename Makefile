@@ -22,7 +22,6 @@
 # Compiler settings
 CC ?= gcc
 CLANG ?= clang
-LLC ?= llc
 
 # Build verbosity:
 # `make V=1` prints full commands
@@ -2028,7 +2027,6 @@ valgrind-smoke: all examples
 
 # Fuzzing
 FUZZ_CFLAGS := $(CFLAGS) -fsanitize=fuzzer,address -g -O1
-FUZZ_LDFLAGS := $(LDFLAGS) -fsanitize=fuzzer,address
 
 # Linked into every fuzz target: disables LSan where ptrace attach is refused
 FUZZ_LSAN_OBJ := $(BUILD_DIR)/fuzz/lsan_options.o
