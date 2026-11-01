@@ -19,7 +19,7 @@ Contents
 * :doc:`Testing policy <testing-policy>` -- test layers and the
   surface-specific contracts they pin.
 * :doc:`Local patch checks and the PR quality gate <patch-checks>` --
-  ``check-patch``, ``format-patch``, and the hotpath documentation contract.
+  ``check-patch``, ``format-patch``, and the documentation hints.
 * :doc:`How the fuzzers work <fuzzing>` -- Go, C, and Syzkaller fuzzing.
 * :doc:`BPF LSM program coding <bpf-coding>` -- verifier-acceptance rules and
   device/inode identity in the kernel programs.

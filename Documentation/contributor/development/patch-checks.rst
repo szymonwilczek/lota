@@ -16,9 +16,8 @@ golangci-lint, the absence of compiled files in the index, the full
 build, include hygiene, the license boundary
 (:doc:`license-boundary`), the public API and ABI surface
 (:doc:`api-stability`), the diagnostics the documentation quotes, the strict
-documentation build, the same hotpath documentation policy enforced by CI, and
--- when the patch touches C -- the Sparse, Smatch and Coccinelle analyzers and
-the stack-frame ceiling described below.
+documentation build, and -- when the patch touches C -- the Sparse, Smatch and
+Coccinelle analyzers and the stack-frame ceiling described below.
 
 The Go linter (``golangci-lint``, configured by ``.golangci.yml``) is
 **blocking**. It lints each module the patch touches as a whole, since
@@ -109,9 +108,12 @@ request from ``lota-next``, whose commits were checked when they landed there.
 A body that is short for the size of the change is reported as ``INFO``. It
 recommends more detail and does not fail the check.
 
-The local hotpath check delegates to ``scripts/check-pr-quality.sh``, using the
-same ``.github/pr-quality-hotpaths.txt`` manifest as the ``PR quality``
-workflow.
+A commit that changes a file listed in ``.github/pr-quality-hotpaths.txt``
+without touching the documentation named there is reported as ``INFO`` too.
+The manifest maps files to the pages that describe them, with the reason.
+The note is a recommendation and never fails a check: update the page when
+the change makes it wrong, and leave it alone otherwise. ``docs``, ``license``,
+and ``gitignore`` commits print no note.
 
 C static analysis
 =================
@@ -200,41 +202,15 @@ branch.
 Pull request quality gate
 =========================
 
-The ``PR quality`` workflow checks commit metadata and the hotpath
-documentation contract before the build matrix runs:
+The ``PR quality`` workflow checks commit metadata before the build matrix runs:
 
 * every non-merge commit created on top of a tree that already carries the
   quality gate must carry a DCO ``Signed-off-by`` trailer,
 * commits with AI assistant co-author or generator trailers are labeled
-  ``AI-Assisted``,
-* a commit that changes a hotpath file must update the documentation its tier
-  requires.
+  ``AI-Assisted``.
 
-The hotpath-to-documentation contract is versioned in
-``.github/pr-quality-hotpaths.txt``. Each rule maps a set of hotpath globs to
-the companion docs that describe them and carries a tier:
-
-* ``required`` -- the change must touch one of the companion docs, or the
-  commit must carry a ``Docs-Not-Needed: <reason>`` trailer, or the gate fails.
-  These cover the documented contracts: TPM enrollment, verifier policy, BPF
-  LSM enforcement, SDK token formats, deployment policy, and operator
-  provisioning.
-* ``recommended`` -- a missing companion doc prints a note naming the docs,
-  never fails. These cover process surfaces that seldom change a contract: CI,
-  build, the gate scripts, and dependency manifests.
-
-The commit type (the ``type:`` subject prefix) caps the tier. An
-infrastructure type -- ``ci``, ``build``, ``test``, ``tests``, ``chore``,
-``style``, ``refactor``, ``perf``, ``release`` -- is treated as recommended
-even against a required rule; ``docs``, ``license``, and ``gitignore`` are
-exempt; module-scoped commits (``agent:``, ``bpf:``, ``verifier:``, ...) and
-``treewide:`` take the tier of the rule. A ``Docs-Not-Needed: <reason>``
-trailer with a non-empty reason settles the commit it sits on for both tiers:
-nothing is printed, and the reason stays in history.
-
-In ``--pr-diff`` mode a companion doc anywhere in the pull-request diff
-satisfies a required rule, so a documentation commit can accompany a code
-commit within the same pull request.
+Documentation notes are local to ``check-patch``. The workflow does not print
+them.
 
 Scripts are split by audience: developer-workflow tooling (``check-*``,
 ``format-patch``, the CI gate scripts) maps to the contributor docs above,
