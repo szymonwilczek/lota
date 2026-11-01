@@ -742,41 +742,6 @@ int net_read_full(struct net_context *ctx, void *buf, size_t len)
 	return 0;
 }
 
-int net_attest(struct net_context *ctx, build_report_fn build_report,
-	       void *user_data, struct verifier_result *result)
-{
-	struct verifier_challenge challenge;
-	void *report = NULL;
-	size_t report_size = 0;
-	int ret;
-
-	if (!ctx || !build_report || !result)
-		return -EINVAL;
-
-	ret = net_connect(ctx);
-	if (ret < 0)
-		return ret;
-
-	ret = net_recv_challenge(ctx, &challenge);
-	if (ret < 0)
-		goto out;
-
-	ret = build_report(&challenge, &report, &report_size, user_data);
-	if (ret < 0)
-		goto out;
-
-	ret = net_send_report(ctx, report, report_size);
-	if (ret < 0)
-		goto out;
-
-	ret = net_recv_result(ctx, result);
-
-out:
-	free(report);
-	net_disconnect(ctx);
-	return ret;
-}
-
 /* First byte of a selinuxfs node under @root, or -1 when it cannot be read */
 static int selinux_node_state(const char *root, const char *rel)
 {

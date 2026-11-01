@@ -224,24 +224,6 @@ int net_send_report(struct net_context *ctx, const void *report,
  */
 int net_recv_result(struct net_context *ctx, struct verifier_result *result);
 
-/*
- * Perform full attestation exchange.
- * Convenience function combining all steps.
- *
- * @ctx: Initialized (not connected) context
- * @build_report: Callback to build report with received nonce
- * @user_data: User data passed to callback
- * @result: Output verification result
- *
- * Returns: 0 on success, negative errno on failure
- */
-typedef int (*build_report_fn)(const struct verifier_challenge *challenge,
-			       void **report_out, size_t *report_size_out,
-			       void *user_data);
-
-int net_attest(struct net_context *ctx, build_report_fn build_report,
-	       void *user_data, struct verifier_result *result);
-
 const char *net_result_str(uint32_t result);
 
 #endif /* LOTA_NET_H */
