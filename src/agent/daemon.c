@@ -393,26 +393,3 @@ int daemon_install_signals(volatile sig_atomic_t *running,
 
 	return 0;
 }
-
-int daemon_redirect_output(const char *log_path)
-{
-	int fd;
-
-	if (!log_path)
-		log_path = "/dev/null";
-
-	fd = open(log_path, O_WRONLY | O_CREAT | O_APPEND | O_CLOEXEC, 0640);
-	if (fd < 0)
-		return -errno;
-
-	if (dup2(fd, STDOUT_FILENO) < 0 || dup2(fd, STDERR_FILENO) < 0) {
-		int err = errno;
-		close(fd);
-		return -err;
-	}
-
-	if (fd > STDERR_FILENO)
-		close(fd);
-
-	return 0;
-}

@@ -431,99 +431,6 @@ static void test_sigterm_clears_running(void)
 	}
 }
 
-static void test_redirect_to_devnull(void)
-{
-	TEST("daemon_redirect_output(NULL) -> /dev/null");
-
-	pid_t child = fork();
-	if (child < 0) {
-		FAIL("fork failed");
-		return;
-	}
-
-	if (child == 0) {
-		int ret = daemon_redirect_output(NULL);
-		if (ret < 0)
-			_exit(1);
-
-		/* stdout should now be /dev/null - write should succeed
-		 * silently */
-		if (printf("test\n") < 0)
-			_exit(2);
-
-		_exit(0);
-	}
-
-	int status;
-	waitpid(child, &status, 0);
-	if (WIFEXITED(status) && WEXITSTATUS(status) == 0) {
-		PASS();
-	} else {
-		FAIL("redirect to /dev/null failed in child");
-	}
-}
-
-static void test_redirect_to_file(void)
-{
-	char log_path[256];
-
-	TEST("daemon_redirect_output(file) appends log");
-
-	snprintf(log_path, sizeof(log_path), "%s/test.log", tmp_dir);
-
-	pid_t child = fork();
-	if (child < 0) {
-		FAIL("fork failed");
-		return;
-	}
-
-	if (child == 0) {
-		int ret = daemon_redirect_output(log_path);
-		if (ret < 0)
-			_exit(1);
-
-		printf("stdout line\n");
-		fflush(stdout);
-		fprintf(stderr, "stderr line\n");
-		fflush(stderr);
-
-		_exit(0);
-	}
-
-	int status;
-	waitpid(child, &status, 0);
-
-	if (!WIFEXITED(status) || WEXITSTATUS(status) != 0) {
-		FAIL("child process failed");
-		return;
-	}
-
-	/* verify log file contents */
-	{
-		FILE *f = fopen(log_path, "r");
-		if (!f) {
-			FAIL("log file not created");
-			return;
-		}
-		char buf[256];
-		int found_stdout = 0, found_stderr = 0;
-		while (fgets(buf, sizeof(buf), f)) {
-			if (strstr(buf, "stdout line"))
-				found_stdout = 1;
-			if (strstr(buf, "stderr line"))
-				found_stderr = 1;
-		}
-		fclose(f);
-
-		if (!found_stdout || !found_stderr) {
-			FAIL("log file missing expected content");
-			return;
-		}
-	}
-
-	PASS();
-}
-
 static void test_daemonize(void)
 {
 	char marker_path[256];
@@ -603,10 +510,6 @@ int main(void)
 	test_signal_null_args();
 	test_sighup_sets_reload();
 	test_sigterm_clears_running();
-
-	/* output redirection */
-	test_redirect_to_devnull();
-	test_redirect_to_file();
 
 	/* daemonize */
 	test_daemonize();
