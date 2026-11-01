@@ -54,9 +54,8 @@ Each instance is stateless and identical apart from its listen ports. Both take
 ``--pg-dsn`` (here via ``LOTA_PG_DSN``), the same CA root, and the same policy,
 so they enforce the same rules over the same shared state.
 
-Neither passes ``--aik-store``: with a database configured, the client registry
-is in the database like the rest of the state, so nothing is written under the
-default store directory and both commands run as an ordinary user.
+With a database configured all the state is in the database, so nothing is
+written under ``/var/lib/lota`` and both commands run as an ordinary user.
 
 .. code:: sh
 

@@ -3,8 +3,6 @@
 package main
 
 import (
-	"crypto/rand"
-	"crypto/rsa"
 	"crypto/x509"
 	"encoding/pem"
 	"errors"
@@ -91,146 +89,53 @@ func writeTestCARoot(t *testing.T) string {
 	return filepath.Join(dir, "lota-verifier.crt")
 }
 
-// Every backend selects the certificate store, which persists into the
-// registry the backend supplies.
-func TestSelectAIKStoreCertificatePathWrapsTheRegistry(t *testing.T) {
-	caPath := writeTestCARoot(t)
-
-	registryBuilt := 0
-	registry := func() (store.AIKStore, error) {
-		registryBuilt++
-		return store.NewFileStore(t.TempDir())
-	}
-
-	aik, cs, err := selectAIKStore(aikStoreParams{
-		StorePath:   t.TempDir(),
-		CACerts:     []string{caPath},
+func TestSelectAIKVerifierWithRoot(t *testing.T) {
+	cv, err := selectAIKVerifier(aikVerifierParams{
+		CACerts:     []string{writeTestCARoot(t)},
 		RequireCert: true,
-	}, registry)
+	})
 	if err != nil {
-		t.Fatalf("selectAIKStore: %v", err)
+		t.Fatalf("selectAIKVerifier: %v", err)
 	}
-	if cs == nil {
-		t.Fatal("--require-cert with a trust anchor must select the certificate-backed store")
-	}
-	if aik != store.AIKStore(cs) {
-		t.Fatal("the returned AIK store must be the certificate-backed one")
-	}
-	if registryBuilt != 1 {
-		t.Fatalf("the deployment's registry must be built exactly once, built %d times", registryBuilt)
+	if cv == nil {
+		t.Fatal("a trust anchor must select the certificate verifier")
 	}
 }
 
-func TestSelectAIKStoreTOFUWhenNoVerificationAsked(t *testing.T) {
-	tofuCalled := false
-	tofu := func() (store.AIKStore, error) {
-		tofuCalled = true
-		return store.NewFileStore(t.TempDir())
-	}
-
-	aik, cs, err := selectAIKStore(aikStoreParams{StorePath: t.TempDir()}, tofu)
+func TestSelectAIKVerifierNoneWithoutARoot(t *testing.T) {
+	cv, err := selectAIKVerifier(aikVerifierParams{})
 	if err != nil {
-		t.Fatalf("selectAIKStore: %v", err)
+		t.Fatalf("selectAIKVerifier: %v", err)
 	}
-	if cs != nil {
-		t.Fatal("no --require-cert and no --aik-ca-cert must not select the certificate-backed store")
-	}
-	if !tofuCalled || aik == nil {
-		t.Fatal("the backend's TOFU store must be the fallback")
+	if cv != nil {
+		t.Fatal("no --aik-ca-cert must leave no verifier")
 	}
 }
 
-func TestSelectAIKStoreRefusals(t *testing.T) {
-	caPath := writeTestCARoot(t)
-
+func TestSelectAIKVerifierRefusals(t *testing.T) {
 	tests := []struct {
 		name   string
-		params aikStoreParams
+		params aikVerifierParams
 		want   error
 	}{
 		{
 			name:   "require-cert without a trust anchor",
-			params: aikStoreParams{RequireCert: true},
+			params: aikVerifierParams{RequireCert: true},
 			want:   store.ErrNoTrustedCAs,
 		},
 		{
 			name:   "CRL without a trust anchor",
-			params: aikStoreParams{CRLs: []string{"unused.crl"}},
+			params: aikVerifierParams{CRLs: []string{"unused.crl"}},
 			want:   errCRLWithoutCARoot,
 		},
 	}
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			tc.params.StorePath = t.TempDir()
-			registry := func() (store.AIKStore, error) {
-				t.Fatal("a refused selection must not construct the registry")
-				return nil, nil
-			}
-			_, _, err := selectAIKStore(tc.params, registry)
-			if !errors.Is(err, tc.want) {
+			if _, err := selectAIKVerifier(tc.params); !errors.Is(err, tc.want) {
 				t.Fatalf("expected %v, got %v", tc.want, err)
 			}
 		})
-	}
-
-	// the same CRL flag is accepted once a root is present,
-	// so the refusal above is about the missing anchor and not about CRLs at all
-	_, cs, err := selectAIKStore(aikStoreParams{
-		StorePath: t.TempDir(),
-		CACerts:   []string{caPath},
-	}, func() (store.AIKStore, error) {
-		return store.NewFileStore(t.TempDir())
-	})
-	if err != nil || cs == nil {
-		t.Fatalf("--aik-ca-cert alone must select the certificate-backed store: cs=%v err=%v", cs, err)
-	}
-}
-
-// With a shared database, the certificate-backed store must list the clients
-// registered in it, not a per-instance registry that differs per
-// load-balancer hop and empties on restart.
-func TestSelectAIKStoreServesTheDeploymentsRegistry(t *testing.T) {
-	caPath := writeTestCARoot(t)
-
-	dir := t.TempDir()
-	db, err := store.OpenDB(filepath.Join(dir, "shared.sqlite"))
-	if err != nil {
-		t.Fatalf("OpenDB: %v", err)
-	}
-	defer db.Close()
-
-	// what another instance registered, in the database both share
-	shared := store.NewSQLiteAIKStore(db)
-	key, err := rsa.GenerateKey(rand.Reader, 2048)
-	if err != nil {
-		t.Fatalf("GenerateKey: %v", err)
-	}
-	const registered = "client-registered-through-instance-a"
-	if err := shared.RegisterAIK(registered, &key.PublicKey); err != nil {
-		t.Fatalf("RegisterAIK: %v", err)
-	}
-
-	aik, cs, err := selectAIKStore(aikStoreParams{
-		StorePath:   t.TempDir(),
-		CACerts:     []string{caPath},
-		RequireCert: true,
-	}, func() (store.AIKStore, error) { return shared, nil })
-	if err != nil {
-		t.Fatalf("selectAIKStore: %v", err)
-	}
-	if cs == nil {
-		t.Fatal("a trust anchor must still select the certificate-backed store")
-	}
-
-	clients := aik.ListClients()
-	if len(clients) != 1 || clients[0] != registered {
-		t.Fatalf("the certificate-backed store lists %v; the deployment's registry holds %q",
-			clients, registered)
-	}
-
-	if got, err := aik.GetAIK(registered); err != nil || got == nil {
-		t.Fatalf("the client another instance registered must be readable here: %v", err)
 	}
 }
 

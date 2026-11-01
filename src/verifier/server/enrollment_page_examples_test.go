@@ -200,7 +200,7 @@ func TestEnrollmentPageLifecycleExamplesRunAsPrinted(t *testing.T) {
 	cfg.RequireBootEnrollment = false
 	cfg.BaselineStore = bs
 	cfg.Metrics = m
-	v := verify.NewVerifier(cfg, newCertStore(t))
+	v := verify.NewVerifier(cfg, newCertVerifier(t))
 	srv := &Server{verifier: v, addr: ":8443"}
 	auditLog := store.NewMemoryAuditLog()
 	mux := http.NewServeMux()

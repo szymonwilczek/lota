@@ -18,7 +18,7 @@ import (
 // Delete drops verifier state only; the host keeps a valid AIK certificate,
 // so its next attestation is a first sight and becomes the new baseline.
 func TestDeleteLeavesTheDeviceAbleToReturnOnItsOwn(t *testing.T) {
-	aikStore := newCertStore(t)
+	aikVerifier := newCertVerifier(t)
 	bs := verify.NewBaselineStore()
 
 	var before, after [types.HashSize]byte
@@ -34,7 +34,7 @@ func TestDeleteLeavesTheDeviceAbleToReturnOnItsOwn(t *testing.T) {
 	cfg.RequireBootEnrollment = false
 	cfg.BaselineStore = bs
 	cfg.Metrics = m
-	v := verify.NewVerifier(cfg, aikStore)
+	v := verify.NewVerifier(cfg, aikVerifier)
 	srv := &Server{verifier: v, addr: ":8443"}
 
 	auditLog := store.NewMemoryAuditLog()

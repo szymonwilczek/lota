@@ -6,16 +6,10 @@
 // signature) against an AIK public key. It is intentionally
 // decoupled from the AIK trust model so the same verifier handles
 // every supported source for the public key:
-//   - Certificate-backed AIK chain via CertificateStore.
-//     Production deployments take this path unconditionally
-//     (VerifyReport requires the AIK certificate in every report):
-//     the AIK and EK certificates have already been chain-verified
-//     against the configured trust roots and the hardware ID has been
-//     bound to the EK modulus before the signature is checked.
-//   - Key pinned in MemoryStore / FileStore, which carry no trust anchors.
-//     Those stores serve tests and out-of-band provisioning;
-//     they are not a way to attest without a certificate, because VerifyReport
-//     rejects report that carries none.
+//   - Certificate-backed AIK chain via CertificateVerifier.
+//     VerifyReport requires the AIK certificate in every report and has
+//     chain-verified it against the configured trust roots before the
+//     signature is checked.
 //   - Optional future Privacy CA / DAA flow. The interface stays
 //     intentionally minimal so a new strategy can be plugged in
 //     without touching the quote-verification fast path.

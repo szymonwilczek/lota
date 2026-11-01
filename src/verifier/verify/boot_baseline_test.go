@@ -756,7 +756,7 @@ func acceptLogVerifier(t *testing.T, buf *bytes.Buffer, policy *PCRPolicy,
 		Output: buf,
 	})
 
-	v := NewVerifier(cfg, newCertStore(t))
+	v := NewVerifier(cfg, newCertVerifier(t))
 	if err := v.AddPolicy(policy); err != nil {
 		t.Fatalf("AddPolicy: %v", err)
 	}

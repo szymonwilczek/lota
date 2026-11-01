@@ -15,55 +15,6 @@ import (
 	"time"
 )
 
-// fuzzes validateClientID path traversal protection
-func FuzzValidateClientID(f *testing.F) {
-	// seed 1: valid hex client ID
-	f.Add("abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789")
-	// seed 2: path traversal attempt
-	f.Add("../../../etc/passwd")
-	// seed 3: backslash path traversal
-	f.Add("..\\..\\system32")
-	// seed 4: embedded NUL
-	f.Add("abc\x00def")
-	// seed 5: empty
-	f.Add("")
-	// seed 6: just dots
-	f.Add("..")
-	// seed 7: slash in middle
-	f.Add("abc/def")
-
-	f.Fuzz(func(t *testing.T, id string) {
-		err := validateClientID(id)
-
-		// must reject empty
-		if id == "" && err == nil {
-			t.Error("accepted empty client ID")
-		}
-
-		// must reject path separators
-		for _, c := range id {
-			if c == '/' || c == '\\' || c == 0 {
-				if err == nil {
-					t.Errorf("accepted client ID with dangerous char %q: %q", c, id)
-				}
-				return
-			}
-		}
-
-		// must reject ".."
-		if len(id) >= 2 {
-			for i := 0; i < len(id)-1; i++ {
-				if id[i] == '.' && id[i+1] == '.' {
-					if err == nil {
-						t.Errorf("accepted client ID with '..': %q", id)
-					}
-					return
-				}
-			}
-		}
-	})
-}
-
 // fuzzes ParseHardwareID hex decoding
 func FuzzParseHardwareID(f *testing.F) {
 	// seed 1: valid 32-byte hex

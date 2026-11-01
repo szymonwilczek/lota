@@ -87,9 +87,9 @@ without any TOFU opt-out::
    describe. Use the default file-backed stores as above, or
    ``--pg-dsn`` for the shared Postgres backend -- the Postgres rig is
    the configuration the scale and failover numbers are recorded
-   against. With a database configured the client registry lives there
+   against. With a database configured the client inventory lives there
    too, so a multi-instance rig reports one fleet through whichever
-   instance is asked, and ``--aik-store`` is not needed at all.
+   instance is asked.
 
 Run modes
 =========

@@ -28,7 +28,7 @@ func TestBaselineStoreFailureIsNotAnIntegrityVerdict(t *testing.T) {
 	cfg.RequireBootEnrollment = false
 	cfg.BaselineStore = baseOnlyStore{NewBaselineStore()}
 
-	v := NewVerifier(cfg, newCertStore(t))
+	v := NewVerifier(cfg, newCertVerifier(t))
 	if err := v.AddPolicy(DefaultPolicy()); err != nil {
 		t.Fatalf("AddPolicy: %v", err)
 	}
@@ -210,7 +210,7 @@ func TestTruncatedReportIsNotAnOldAgent(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			verifier := createTestVerifier(t, newCertStore(t))
+			verifier := createTestVerifier(t, newCertVerifier(t))
 
 			clientID := "malformed-report-client"
 			challenge, err := verifier.GenerateChallenge(clientID)
@@ -472,8 +472,8 @@ func TestVerifierWithoutCARootRefusesAsItsOwnFault(t *testing.T) {
 
 // A profile with no certificate on disk reports without one.
 func TestReportWithoutAIKCertificateNamesTheAbsentCertificate(t *testing.T) {
-	aikStore := newCertStore(t)
-	verifier := createTestVerifier(t, aikStore)
+	aikVerifier := newCertVerifier(t)
+	verifier := createTestVerifier(t, aikVerifier)
 
 	clientID := "cert-absent-client"
 	challenge, err := verifier.GenerateChallenge(clientID)

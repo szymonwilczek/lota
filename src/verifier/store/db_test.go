@@ -131,7 +131,7 @@ func TestMigrations_TablesExist(t *testing.T) {
 	}
 	defer db.Close()
 
-	expectedTables := []string{"schema_version", "clients", "baselines", "used_nonces", "revocations", "hardware_bans", "audit_log", "attestation_log"}
+	expectedTables := []string{"schema_version", "baselines", "used_nonces", "revocations", "hardware_bans", "audit_log", "attestation_log"}
 
 	for _, table := range expectedTables {
 		t.Run(table, func(t *testing.T) {
@@ -159,7 +159,7 @@ func TestMigrations_IndexExists(t *testing.T) {
 	}
 	defer db.Close()
 
-	for _, indexName := range []string{"idx_used_nonces_used_at", "idx_clients_aik_der_unique"} {
+	for _, indexName := range []string{"idx_used_nonces_used_at"} {
 		t.Run(indexName, func(t *testing.T) {
 			var name string
 			err = db.QueryRow(
@@ -300,42 +300,4 @@ func TestOpenDB_PragmasAppliedPerConnection(t *testing.T) {
 
 	check(t, conn1, "conn1")
 	check(t, conn2, "conn2")
-}
-
-// SQLITE_CONSTRAINT_* extended result codes.
-// verifier maps a UNIQUE / PRIMARY KEY violation back to ErrAIKAlreadyRegistered;
-// it must not do the same for a NOT NULL, CHECK or FOREIGN KEY violation, which
-// all share the SQLITE_CONSTRAINT low byte (19) but mean a genuine storage error.
-func TestIsSQLiteUniqueViolationCode(t *testing.T) {
-	const (
-		sqliteConstraintBase       = 19   // SQLITE_CONSTRAINT
-		sqliteConstraintCheck      = 275  // SQLITE_CONSTRAINT_CHECK
-		sqliteConstraintForeignKey = 787  // SQLITE_CONSTRAINT_FOREIGNKEY
-		sqliteConstraintNotNull    = 1299 // SQLITE_CONSTRAINT_NOTNULL
-		sqliteConstraintPrimaryKey = 1555 // SQLITE_CONSTRAINT_PRIMARYKEY
-		sqliteConstraintUnique     = 2067 // SQLITE_CONSTRAINT_UNIQUE
-	)
-
-	cases := []struct {
-		name string
-		code int
-		want bool
-	}{
-		{"unique", sqliteConstraintUnique, true},
-		{"primary_key", sqliteConstraintPrimaryKey, true},
-		{"bare_constraint", sqliteConstraintBase, false},
-		{"not_null", sqliteConstraintNotNull, false},
-		{"check", sqliteConstraintCheck, false},
-		{"foreign_key", sqliteConstraintForeignKey, false},
-		{"unrelated_ok", 0, false},
-	}
-
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			if got := isSQLiteUniqueViolationCode(tc.code); got != tc.want {
-				t.Fatalf("isSQLiteUniqueViolationCode(%d) = %v, want %v",
-					tc.code, got, tc.want)
-			}
-		})
-	}
 }

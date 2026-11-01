@@ -132,10 +132,8 @@ a per-publisher view of PCR 14 while both still verify it, so this is a
 disclosure to state plainly.
 
 That is the only AIK trust model. A report with no AIK certificate is rejected
-at verification, and the certificate-backed AIK store refuses to record a bare
-public key at all, so an AIK cannot become trusted by being seen first. The
-anchorless stores exist for unit tests and for out-of-band provisioning that
-loads a store from material the operator already trusts.
+at verification, and the verifier keeps no AIK of its own, so an AIK cannot
+become trusted by being seen first.
 
 The CA key is a high-value fleet secret. It is loaded as a ``crypto.Signer``,
 so both an on-disk PKCS#8 PEM (the explicit dev-only fallback) and a PKCS#11

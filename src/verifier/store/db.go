@@ -24,18 +24,7 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/jackc/pgx/v5/pgconn"
 	sqlite "modernc.org/sqlite"
-)
-
-// sqliteConstraintUnique and sqliteConstraintPrimaryKey are the extended
-// SQLITE_CONSTRAINT result codes for a UNIQUE and a PRIMARY KEY violation.
-// Matching the precise subtypes keeps a future non-uniqueness constraint
-// on the same table from being misreported as a uniqueness violation,
-// and mirrors the Postgres path that checks the precise SQLSTATE.
-const (
-	sqliteConstraintUnique     = 2067
-	sqliteConstraintPrimaryKey = 1555
 )
 
 // rollbackOnErr unwinds a transaction after cause aborted it.
@@ -46,33 +35,6 @@ func rollbackOnErr(tx *sql.Tx, cause error) error {
 		return fmt.Errorf("%w (rollback failed: %v)", cause, rbErr)
 	}
 	return cause
-}
-
-// pgUniqueViolation is the SQLSTATE for a Postgres unique_violation
-const pgUniqueViolation = "23505"
-
-// isSQLiteUniqueViolationCode reports whether an extended SQLite result code
-// is a UNIQUE or PRIMARY KEY constraint violation.
-func isSQLiteUniqueViolationCode(code int) bool {
-	return code == sqliteConstraintUnique || code == sqliteConstraintPrimaryKey
-}
-
-// isUniqueViolation reports whether err is a unique / primary-key constraint
-// violation from either backend.
-// Global AIK-uniqueness index raises one when a concurrent registration wins
-// the race after a caller's pre-check passed.
-// Callers map it back to ErrAIKAlreadyRegistered so the race surfaces the same
-// typed error as the sequential path.
-func isUniqueViolation(err error) bool {
-	var se *sqlite.Error
-	if errors.As(err, &se) {
-		return isSQLiteUniqueViolationCode(se.Code())
-	}
-	var pe *pgconn.PgError
-	if errors.As(err, &pe) {
-		return pe.Code == pgUniqueViolation
-	}
-	return false
 }
 
 type sqliteConnector struct {
@@ -101,17 +63,8 @@ type migration struct {
 var migrations = []migration{
 	{
 		version:     1,
-		description: "consolidated schema: clients, baselines, nonces, revocations, bans, audit, attestation log, baseline archive",
+		description: "consolidated schema: baselines, nonces, revocations, bans, audit, attestation log, baseline archive",
 		sql: `
-			CREATE TABLE clients (
-				id          TEXT PRIMARY KEY,
-				aik_der     BLOB NOT NULL,
-				hardware_id BLOB,
-				created_at  TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
-			);
-
-			CREATE UNIQUE INDEX idx_clients_aik_der_unique ON clients(aik_der);
-
 			CREATE TABLE baselines (
 				client_id                TEXT PRIMARY KEY,
 				pcr14                    BLOB NOT NULL CHECK(length(pcr14) = 32),

@@ -133,7 +133,7 @@ func repinVerifierWithLog(t *testing.T, buf *bytes.Buffer,
 		Level: slog.LevelDebug,
 	}))
 
-	verifier := NewVerifier(cfg, newCertStore(t))
+	verifier := NewVerifier(cfg, newCertVerifier(t))
 	policy := DefaultPolicy()
 	for _, seed := range allowedSeeds {
 		h := fixtureAgentHashSeed(seed)

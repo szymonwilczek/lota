@@ -1,84 +1,27 @@
 // SPDX-License-Identifier: MIT
 // Copyright (C) 2026 Szymon Wilczek
-// LOTA Verifier - AIK key store
+// LOTA Verifier - AIK certificate verification
 //
-// Manages Attestation Identity Keys.
-// Under the Privacy CA model the verifier's live use of this store is
-// certificate VERIFICATION, not storage:
-// CertificateStore carries the attestation-CA trust anchors and the CRL engine,
-// and VerifyReport chain-verifies the CA-issued AIK certificate presented in
-// every attestation report (AIKCertVerifier).
-// Durable client identity is the CA-assigned device pseudonym in the certificate
-// subject; verifier never sees the EK and records nothing here per client.
-//
-// Registration/rotation surface (RegisterAIK*, RotateAIK, RegisterHardwareID)
-// is NOT called by the verifier runtime.
-// It remains for the in-memory/unit-test stores and for external provisioning
-// tooling that pre-loads store out-of-band; such records also feed the client-existence check.
+// Holds the attestation-CA trust anchors and the CRL engine.
+// VerifyReport chain-verifies the CA-issued AIK certificate presented in every
+// attestation report. Client identity is the CA-assigned device pseudonym in the
+// certificate subject; verifier never sees the EK and keeps no per-client AIK.
 
 package store
 
 import (
 	"crypto/rsa"
-	"crypto/sha256"
 	"crypto/x509"
 	"encoding/asn1"
-	"encoding/hex"
 	"encoding/pem"
 	"errors"
 	"fmt"
-	"log/slog"
 	"os"
-	"path/filepath"
-	"strings"
-	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/szymonwilczek/lota/crl"
 )
-
-var ErrAIKNotFound = errors.New("AIK not found")
-
-type AIKStore interface {
-	// retrieves AIK public key for client
-	GetAIK(clientID string) (*rsa.PublicKey, error)
-
-	// stores AIK public key for client.
-	// Not called by the verifier runtime (see the package comment);
-	// used by the test stores and by out-of-band provisioning tooling.
-	RegisterAIK(clientID string, pubKey *rsa.PublicKey) error
-
-	// stores AIK with certificate verification.
-	// Like RegisterAIK this is provisioning surface, not a runtime path:
-	// VerifyReport authenticates the AIK through the per-report certificate
-	// and registers nothing.
-	RegisterAIKWithCert(clientID string, pubKey *rsa.PublicKey, aikCert, ekCert []byte) error
-
-	// registers or validates hardware ID for client
-	RegisterHardwareID(clientID string, hardwareID [32]byte) error
-
-	// retrieves stored hardware ID for client
-	GetHardwareID(clientID string) ([32]byte, error)
-
-	// returns all registered client IDs
-	ListClients() []string
-
-	// replaces the AIK for an existing client (key rotation)
-	// preserves hardware ID binding
-	RotateAIK(clientID string, newKey *rsa.PublicKey) error
-}
-
-// Stores that hold trust anchors for certificate validation
-// implement this to gate AIK rotation behind the same chain
-// verification that RegisterAIKWithCert applies to first
-// registration. It is intentionally separate from
-// RegisterAIKWithCert: rotation must re-verify the new certificate
-// chain without touching the existing per-client baseline, while
-// RegisterAIKWithCert creates the baseline atomically.
-type AIKCertificateVerifier interface {
-	VerifyCertificatesForAIK(pubKey *rsa.PublicKey, aikCertDER, ekCertDER []byte) error
-}
 
 // AIKCertVerifier verifies an AIK certificate on its own (no EK) and
 // returns the parsed certificate. The Privacy CA model uses this: the CA
@@ -89,445 +32,6 @@ type AIKCertVerifier interface {
 	VerifyAIKCertificate(pubKey *rsa.PublicKey, aikCertDER []byte) (*x509.Certificate, error)
 }
 
-// Optional interface for stores that can remove client entirely:
-// the AIK, the hardware-ID binding and the registration metadata.
-// Used by the operator API to force a re-enrollment.
-// Next enrollment goes through the full RegisterAIKWithCert chain verification again.
-// Returns ErrAIKNotFound when the client is not registered.
-type ClientDeleter interface {
-	DeleteClient(clientID string) error
-}
-
-var (
-	_ ClientDeleter = (*FileStore)(nil)
-	_ ClientDeleter = (*MemoryStore)(nil)
-	_ ClientDeleter = (*SQLiteAIKStore)(nil)
-	_ ClientDeleter = (*PostgresAIKStore)(nil)
-)
-
-// optional interface for database-backed stores to avoid loading all clients
-// into memory for API list endpoints.
-type PaginatedClientLister interface {
-	ListClientsPage(limit, offset int) []string
-}
-
-// optional interface for stores that can return pagination errors.
-type PaginatedClientListerWithError interface {
-	ListClientsPageE(limit, offset int) ([]string, error)
-}
-
-// optional interface for retrieving total client count efficiently.
-type ClientCounter interface {
-	CountClients() int
-}
-
-// optional interface for retrieving total client count with error propagation.
-type ClientCounterWithError interface {
-	CountClientsE() (int, error)
-}
-
-// optional interface for checking if a client exists in the persistent store.
-type ClientExistenceChecker interface {
-	HasClient(clientID string) (bool, error)
-}
-
-// optional interface for checking existence of multiple client IDs efficiently.
-// intended for DB-backed stores to avoid N+1 queries in API list endpoints.
-type ClientExistenceBatchChecker interface {
-	ExistingClients(clientIDs []string) (map[string]struct{}, error)
-}
-
-// keys are stored as PEM files: {storePath}/{clientID}.pem
-// hardware IDs are stored as: {storePath}/{clientID}.hwid
-type FileStore struct {
-	mu          sync.RWMutex
-	storePath   string
-	cache       map[string]*rsa.PublicKey
-	fpIndex     map[string]string // Fingerprint(pubKey) -> clientID
-	hardwareIDs map[string][32]byte
-}
-
-// creates a new file-based AIK store
-func NewFileStore(storePath string) (*FileStore, error) {
-	if err := os.MkdirAll(storePath, 0o700); err != nil {
-		return nil, fmt.Errorf("failed to create store directory: %w", err)
-	}
-
-	fs := &FileStore{
-		storePath:   storePath,
-		cache:       make(map[string]*rsa.PublicKey),
-		fpIndex:     make(map[string]string),
-		hardwareIDs: make(map[string][32]byte),
-	}
-
-	// load existing keys into cache
-	if err := fs.loadAll(); err != nil {
-		return nil, err
-	}
-
-	return fs, nil
-}
-
-func (fs *FileStore) loadAll() error {
-	entries, err := os.ReadDir(fs.storePath)
-	if err != nil {
-		return err
-	}
-
-	for _, entry := range entries {
-		if entry.IsDir() {
-			continue
-		}
-
-		name := entry.Name()
-		ext := filepath.Ext(name)
-		clientID := name[:len(name)-len(ext)]
-
-		switch ext {
-		case ".pem":
-			pubKey, err := fs.loadKey(clientID)
-			if err != nil {
-				slog.Warn("failed to load key", "client", clientID, "error", err)
-				continue
-			}
-			fs.cache[clientID] = pubKey
-
-		case ".hwid":
-			hwid, err := fs.loadHardwareID(clientID)
-			if err != nil {
-				slog.Warn("failed to load hardware ID", "client", clientID, "error", err)
-				continue
-			}
-			fs.hardwareIDs[clientID] = hwid
-
-		}
-	}
-
-	// build fingerprint index for fast global uniqueness checks
-	for clientID, pubKey := range fs.cache {
-		fp := Fingerprint(pubKey)
-		if fp == "" {
-			return fmt.Errorf("failed to compute AIK fingerprint for client %q", clientID)
-		}
-		if existingClientID, exists := fs.fpIndex[fp]; exists && existingClientID != clientID {
-			return fmt.Errorf("duplicate AIK fingerprint in file store: client %q conflicts with %q", clientID, existingClientID)
-		}
-		fs.fpIndex[fp] = clientID
-	}
-
-	return nil
-}
-
-func (fs *FileStore) loadKey(clientID string) (*rsa.PublicKey, error) {
-	path := filepath.Join(fs.storePath, clientID+".pem")
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return nil, err
-	}
-
-	block, _ := pem.Decode(data)
-	if block == nil {
-		return nil, errors.New("failed to decode PEM block")
-	}
-
-	pub, err := x509.ParsePKIXPublicKey(block.Bytes)
-	if err != nil {
-		return nil, fmt.Errorf("failed to parse public key: %w", err)
-	}
-
-	rsaPub, ok := pub.(*rsa.PublicKey)
-	if !ok {
-		return nil, errors.New("not an RSA public key")
-	}
-
-	return rsaPub, nil
-}
-
-func (fs *FileStore) loadHardwareID(clientID string) ([32]byte, error) {
-	var hwid [32]byte
-	path := filepath.Join(fs.storePath, clientID+".hwid")
-
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return hwid, err
-	}
-
-	if len(data) != 32 {
-		return hwid, fmt.Errorf("invalid hardware ID size: %d", len(data))
-	}
-
-	copy(hwid[:], data)
-	return hwid, nil
-}
-
-func (fs *FileStore) GetAIK(clientID string) (*rsa.PublicKey, error) {
-	if err := validateClientID(clientID); err != nil {
-		return nil, err
-	}
-
-	fs.mu.RLock()
-	defer fs.mu.RUnlock()
-
-	pubKey, exists := fs.cache[clientID]
-	if !exists {
-		return nil, ErrAIKNotFound
-	}
-
-	return pubKey, nil
-}
-
-func (fs *FileStore) RegisterAIK(clientID string, pubKey *rsa.PublicKey) error {
-	if err := validateClientID(clientID); err != nil {
-		return err
-	}
-
-	fs.mu.Lock()
-	defer fs.mu.Unlock()
-
-	if existing, exists := fs.cache[clientID]; exists {
-		if !publicKeysEqual(existing, pubKey) {
-			return errors.New("client already registered with different key")
-		}
-		return nil // same key, no-op
-	}
-
-	keyBytes, err := x509.MarshalPKIXPublicKey(pubKey)
-	if err != nil {
-		return fmt.Errorf("failed to marshal public key: %w", err)
-	}
-
-	fp := FingerprintFromDER(keyBytes)
-	if fp == "" {
-		return errors.New("failed to compute public key fingerprint")
-	}
-	if existingClientID, exists := fs.fpIndex[fp]; exists && existingClientID != clientID {
-		return fmt.Errorf("%w: %s", ErrAIKAlreadyRegistered, existingClientID)
-	}
-
-	pemBlock := &pem.Block{
-		Type:  "PUBLIC KEY",
-		Bytes: keyBytes,
-	}
-
-	path := filepath.Join(fs.storePath, clientID+".pem")
-	if err := writeKeyPEM(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, pemBlock,
-		true); err != nil {
-		return fmt.Errorf("failed to write key file: %w", err)
-	}
-
-	// add to cache
-	fs.cache[clientID] = pubKey
-	fs.fpIndex[fp] = clientID
-
-	return nil
-}
-
-func (fs *FileStore) ListClients() []string {
-	fs.mu.RLock()
-	defer fs.mu.RUnlock()
-
-	clients := make([]string, 0, len(fs.cache))
-	for clientID := range fs.cache {
-		clients = append(clients, clientID)
-	}
-	return clients
-}
-
-func (fs *FileStore) ListClientsPage(limit, offset int) []string {
-	clients := fs.ListClients()
-	if offset < 0 {
-		offset = 0
-	}
-	if offset >= len(clients) {
-		return []string{}
-	}
-	if limit <= 0 {
-		return clients[offset:]
-	}
-	end := offset + limit
-	if end > len(clients) {
-		end = len(clients)
-	}
-	return clients[offset:end]
-}
-
-func (fs *FileStore) CountClients() int {
-	fs.mu.RLock()
-	defer fs.mu.RUnlock()
-	return len(fs.cache)
-}
-
-// replaces expired AIK with a new key, preserving hardware ID binding
-func (fs *FileStore) RotateAIK(clientID string, newKey *rsa.PublicKey) error {
-	if err := validateClientID(clientID); err != nil {
-		return err
-	}
-
-	fs.mu.Lock()
-	defer fs.mu.Unlock()
-
-	if _, exists := fs.cache[clientID]; !exists {
-		return errors.New("client not registered")
-	}
-
-	oldKey := fs.cache[clientID]
-	oldFP := Fingerprint(oldKey)
-	if oldFP == "" {
-		return errors.New("failed to compute fingerprint of existing AIK")
-	}
-
-	keyBytes, err := x509.MarshalPKIXPublicKey(newKey)
-	if err != nil {
-		return fmt.Errorf("failed to marshal public key: %w", err)
-	}
-
-	newFP := FingerprintFromDER(keyBytes)
-	if newFP == "" {
-		return errors.New("failed to compute fingerprint of new AIK")
-	}
-	if existingClientID, exists := fs.fpIndex[newFP]; exists && existingClientID != clientID {
-		return fmt.Errorf("%w: %s", ErrAIKAlreadyRegistered, existingClientID)
-	}
-
-	pemBlock := &pem.Block{
-		Type:  "PUBLIC KEY",
-		Bytes: keyBytes,
-	}
-
-	// overwrite existing PEM file
-	path := filepath.Join(fs.storePath, clientID+".pem")
-	if err := writeKeyPEM(path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, pemBlock,
-		false); err != nil {
-		return fmt.Errorf("failed to write key file: %w", err)
-	}
-
-	fs.cache[clientID] = newKey
-	if owner, ok := fs.fpIndex[oldFP]; ok && owner == clientID {
-		delete(fs.fpIndex, oldFP)
-	}
-	fs.fpIndex[newFP] = clientID
-
-	return nil
-}
-
-// DeleteClient removes the client's key, hardware-ID binding and registration
-// metadata from disk and from the caches.
-// Fingerprint index entry is freed so the AIK-uniqueness check does not keep
-// pointing at a client that no longer exists.
-func (fs *FileStore) DeleteClient(clientID string) error {
-	if !filepath.IsLocal(clientID) {
-		return ErrInvalidClientID
-	}
-	if err := validateClientID(clientID); err != nil {
-		return err
-	}
-
-	fs.mu.Lock()
-	defer fs.mu.Unlock()
-
-	pubKey, exists := fs.cache[clientID]
-	if !exists {
-		return ErrAIKNotFound
-	}
-
-	// key file first: it is the record of existence
-	// .hwid is a sidecar and may legitimately be absent
-	if err := os.Remove(filepath.Join(fs.storePath, clientID+".pem")); err != nil && !os.IsNotExist(err) {
-		return fmt.Errorf("failed to remove key file: %w", err)
-	}
-	if err := os.Remove(filepath.Join(fs.storePath, clientID+".hwid")); err != nil && !os.IsNotExist(err) {
-		return fmt.Errorf("failed to remove .hwid file: %w", err)
-	}
-
-	if fp := Fingerprint(pubKey); fp != "" {
-		if owner, ok := fs.fpIndex[fp]; ok && owner == clientID {
-			delete(fs.fpIndex, fp)
-		}
-	}
-	delete(fs.cache, clientID)
-	delete(fs.hardwareIDs, clientID)
-
-	return nil
-}
-
-// writeKeyPEM writes block to path opened with flag (mode 0600). The file's
-// Close error is reported even when the PEM encoding succeeds, so a flush
-// failure is not lost. When removeOnError is set, any failure unlinks path
-// so a partial key file is not left behind.
-func writeKeyPEM(path string, flag int, block *pem.Block, removeOnError bool) (err error) {
-	f, err := os.OpenFile(path, flag, 0o600)
-	if err != nil {
-		return err
-	}
-	defer func() {
-		if cerr := f.Close(); cerr != nil && err == nil {
-			err = cerr
-		}
-		if err != nil && removeOnError {
-			os.Remove(path)
-		}
-	}()
-	return pem.Encode(f, block)
-}
-
-// FileStore has no embedded CA roots, so it cannot verify the AIK/EK certificate
-// chain and records the key as presented.
-// It is the store for tests and for out-of-band provisioning.
-// Verifier runtime uses CertificateStore, and attestation rejects report with no
-// AIK certificate regardless of which store is configured.
-func (fs *FileStore) RegisterAIKWithCert(clientID string, pubKey *rsa.PublicKey, aikCert, ekCert []byte) error {
-	return fs.RegisterAIK(clientID, pubKey)
-}
-
-// Registers the hardware ID (SHA-256 of the EK modulus) for a
-// client on first attestation and validates the same value on every
-// subsequent attestation. The first-use branch is not a free TOFU
-// trust upgrade: on the cert-backed path
-// (RegisterAIKWithCert) the modulus has already been compared
-// against the EK certificate by verifyHardwareIDMatchesEKCert(), so
-// pinning here only records the value the chain already authenticated.
-func (fs *FileStore) RegisterHardwareID(clientID string, hardwareID [32]byte) error {
-	if err := validateClientID(clientID); err != nil {
-		return err
-	}
-
-	fs.mu.Lock()
-	defer fs.mu.Unlock()
-
-	// check if hardware ID already registered
-	if existing, exists := fs.hardwareIDs[clientID]; exists {
-		if existing != hardwareID {
-			return ErrHardwareIDMismatch
-		}
-		return nil // same hardware ID, all good
-	}
-
-	// store new hardware ID to file
-	path := filepath.Join(fs.storePath, clientID+".hwid")
-	if err := os.WriteFile(path, hardwareID[:], 0o600); err != nil {
-		return fmt.Errorf("failed to store hardware ID: %w", err)
-	}
-
-	fs.hardwareIDs[clientID] = hardwareID
-	return nil
-}
-
-// retrieves stored hardware ID for client
-func (fs *FileStore) GetHardwareID(clientID string) ([32]byte, error) {
-	if err := validateClientID(clientID); err != nil {
-		return [32]byte{}, err
-	}
-
-	fs.mu.RLock()
-	defer fs.mu.RUnlock()
-
-	hwid, exists := fs.hardwareIDs[clientID]
-	if !exists {
-		return [32]byte{}, ErrHardwareIDNotFound
-	}
-	return hwid, nil
-}
-
 // compares two RSA public keys
 func publicKeysEqual(a, b *rsa.PublicKey) bool {
 	if a.N.Cmp(b.N) != 0 {
@@ -536,190 +40,10 @@ func publicKeysEqual(a, b *rsa.PublicKey) bool {
 	return a.E == b.E
 }
 
-// returns SHA-256 fingerprint of a DER-encoded SubjectPublicKeyInfo blob
-func FingerprintFromDER(spkiDER []byte) string {
-	if len(spkiDER) == 0 {
-		return ""
-	}
-	sum := sha256.Sum256(spkiDER)
-	return hex.EncodeToString(sum[:])
-}
-
-// returns SHA-256 fingerprint of public key (PKIX/SPKI encoding)
-func Fingerprint(pubKey *rsa.PublicKey) string {
-	keyBytes, err := x509.MarshalPKIXPublicKey(pubKey)
-	if err != nil {
-		return ""
-	}
-	return FingerprintFromDER(keyBytes)
-}
-
-// implements AIKStore in-memory (for testing only right now).
-type MemoryStore struct {
-	mu          sync.RWMutex
-	keys        map[string]*rsa.PublicKey
-	hardwareIDs map[string][32]byte
-}
-
-func NewMemoryStore() *MemoryStore {
-	return &MemoryStore{
-		keys:        make(map[string]*rsa.PublicKey),
-		hardwareIDs: make(map[string][32]byte),
-	}
-}
-
-func (ms *MemoryStore) GetAIK(clientID string) (*rsa.PublicKey, error) {
-	ms.mu.RLock()
-	defer ms.mu.RUnlock()
-
-	pubKey, exists := ms.keys[clientID]
-	if !exists {
-		return nil, ErrAIKNotFound
-	}
-	return pubKey, nil
-}
-
-func (ms *MemoryStore) RegisterAIK(clientID string, pubKey *rsa.PublicKey) error {
-	ms.mu.Lock()
-	defer ms.mu.Unlock()
-
-	if existing, exists := ms.keys[clientID]; exists {
-		if !publicKeysEqual(existing, pubKey) {
-			return errors.New("client already registered with different key")
-		}
-		return nil
-	}
-
-	for existingClientID, existingKey := range ms.keys {
-		if existingClientID == clientID {
-			continue
-		}
-		if publicKeysEqual(existingKey, pubKey) {
-			return fmt.Errorf("%w: %s", ErrAIKAlreadyRegistered, existingClientID)
-		}
-	}
-
-	ms.keys[clientID] = pubKey
-	return nil
-}
-
-func (ms *MemoryStore) ListClients() []string {
-	ms.mu.RLock()
-	defer ms.mu.RUnlock()
-
-	clients := make([]string, 0, len(ms.keys))
-	for clientID := range ms.keys {
-		clients = append(clients, clientID)
-	}
-	return clients
-}
-
-func (ms *MemoryStore) ListClientsPage(limit, offset int) []string {
-	clients := ms.ListClients()
-	if offset < 0 {
-		offset = 0
-	}
-	if offset >= len(clients) {
-		return []string{}
-	}
-	if limit <= 0 {
-		return clients[offset:]
-	}
-	end := offset + limit
-	if end > len(clients) {
-		end = len(clients)
-	}
-	return clients[offset:end]
-}
-
-func (ms *MemoryStore) CountClients() int {
-	ms.mu.RLock()
-	defer ms.mu.RUnlock()
-	return len(ms.keys)
-}
-
-// MemoryStore is the in-process test store.
-// It has no trust anchors and therefore cannot verify the AIK/EK chain.
-// It records the key as presented so unit tests can drive the register/rotate
-// code without provisioning fake CA.
-// CertificateStore, the store the verifier runtime uses, verifies the chain instead.
-func (ms *MemoryStore) RegisterAIKWithCert(clientID string, pubKey *rsa.PublicKey, aikCert, ekCert []byte) error {
-	return ms.RegisterAIK(clientID, pubKey)
-}
-
-// replaces expired AIK with a new key, preserving hardware ID binding
-func (ms *MemoryStore) RotateAIK(clientID string, newKey *rsa.PublicKey) error {
-	ms.mu.Lock()
-	defer ms.mu.Unlock()
-
-	if _, exists := ms.keys[clientID]; !exists {
-		return errors.New("client not registered")
-	}
-
-	for existingClientID, existingKey := range ms.keys {
-		if existingClientID == clientID {
-			continue
-		}
-		if publicKeysEqual(existingKey, newKey) {
-			return fmt.Errorf("%w: %s", ErrAIKAlreadyRegistered, existingClientID)
-		}
-	}
-
-	ms.keys[clientID] = newKey
-	return nil
-}
-
-// DeleteClient removes the client's key, hardware-ID binding
-// and registration metadata from the in-memory store.
-func (ms *MemoryStore) DeleteClient(clientID string) error {
-	ms.mu.Lock()
-	defer ms.mu.Unlock()
-
-	if _, exists := ms.keys[clientID]; !exists {
-		return ErrAIKNotFound
-	}
-
-	delete(ms.keys, clientID)
-	delete(ms.hardwareIDs, clientID)
-	return nil
-}
-
-// registers hardware ID for client or validates against existing
-func (ms *MemoryStore) RegisterHardwareID(clientID string, hardwareID [32]byte) error {
-	ms.mu.Lock()
-	defer ms.mu.Unlock()
-
-	if existing, exists := ms.hardwareIDs[clientID]; exists {
-		if existing != hardwareID {
-			return ErrHardwareIDMismatch
-		}
-		return nil
-	}
-
-	ms.hardwareIDs[clientID] = hardwareID
-	return nil
-}
-
-// retrieves stored hardware ID for client
-func (ms *MemoryStore) GetHardwareID(clientID string) ([32]byte, error) {
-	ms.mu.RLock()
-	defer ms.mu.RUnlock()
-
-	hwid, exists := ms.hardwareIDs[clientID]
-	if !exists {
-		return [32]byte{}, ErrHardwareIDNotFound
-	}
-	return hwid, nil
-}
-
-// wraps a persistent AIK store with X.509 certificate verification
-// validates AIK and EK certificate chains against trusted CA roots
-// backend is the registry: a FileStore, or the database shared by a fleet
-type CertificateStore struct {
-	backend      AIKStore
-	trustedCAs   []*x509.Certificate
-	caPool       *x509.CertPool
-	requireCerts bool
+// CertificateVerifier validates AIK and EK certificates against trusted CA roots.
+type CertificateVerifier struct {
+	trustedCAs []*x509.Certificate
+	caPool     *x509.CertPool
 	// crlPaths holds the operator-configured CRL file paths captured at
 	// construction. ReloadCRLs() walks the same list, re-validates every
 	// CRL against the trust anchor, and atomically swaps the in-memory
@@ -778,139 +102,72 @@ var (
 	ErrCertificateNotYet   = errors.New("certificate not yet valid")
 	ErrNoTrustedCAs        = errors.New("no trusted CAs configured")
 	ErrCertificateEKOID    = errors.New("EK certificate missing TCG TPM 2.0 OID (2.23.133.8.1)")
-	ErrRotateNeedsCert     = errors.New("AIK rotation on a certificate store requires a certificate; use the certificate-verified registration path")
 )
 
-// hardware identity errors
-var (
-	ErrHardwareIDMismatch   = errors.New("hardware identity mismatch - possible cloning or hardware change")
-	ErrHardwareIDNotFound   = errors.New("hardware identity not registered")
-	ErrAIKAlreadyRegistered = errors.New("AIK already registered to another client")
-)
-
-// client ID validation error
-var ErrInvalidClientID = errors.New("invalid client ID")
-
-// ErrDeleteUnsupported is returned when the registry cannot remove a client.
-var ErrDeleteUnsupported = errors.New("this AIK registry cannot delete clients")
-
-// pageOf applies LIMIT/OFFSET to a sorted listing,
-// for registries without a paged query.
-func pageOf(all []string, limit, offset int) []string {
-	if offset >= len(all) {
-		return []string{}
-	}
-	end := offset + limit
-	if end > len(all) {
-		end = len(all)
-	}
-	return all[offset:end]
-}
-
-// rejects IDs that could escape the store directory
-// disallows empty strings, path separators, dot-dot sequences, and NUL bytes
-func validateClientID(id string) error {
-	if id == "" || strings.ContainsAny(id, "/\\\x00") || strings.Contains(id, "..") {
-		return ErrInvalidClientID
-	}
-	return nil
-}
-
-// creates a certificate-based store
-// caCertPaths: paths to trusted CA certificates (TPM manufacturers, Privacy CAs)
-// requireCerts: if true, reject registrations without valid certificates
-func NewCertificateStore(storePath string, caCertPaths []string, requireCerts bool) (*CertificateStore, error) {
-	return NewCertificateStoreWithCRL(storePath, caCertPaths, nil, requireCerts)
-}
-
-// NewCertificateStoreWithCRL extends NewCertificateStore with operator
-// supplied CRL paths. Each CRL is verified against the configured CA
-// roots at load time; a CRL whose signature does not chain or whose
-// issuer is unknown is rejected up front. Lookups during certificate
-// verification consult these lists in addition to the chain check.
-func NewCertificateStoreWithCRL(storePath string, caCertPaths, crlPaths []string, requireCerts bool) (*CertificateStore, error) {
-	if requireCerts && len(caCertPaths) == 0 {
+// NewCertificateVerifier loads the trusted CA roots and the operator's CRLs.
+// A CRL that does not verify against those roots is refused here; a verifier
+// with no root could vouch for nothing and is refused as well.
+func NewCertificateVerifier(caCertPaths, crlPaths []string) (*CertificateVerifier, error) {
+	if len(caCertPaths) == 0 {
 		return nil, ErrNoTrustedCAs
 	}
 
-	fs, err := NewFileStore(storePath)
-	if err != nil {
-		return nil, err
+	cv := &CertificateVerifier{
+		trustedCAs: make([]*x509.Certificate, 0, len(caCertPaths)),
+		caPool:     x509.NewCertPool(),
+		crlPaths:   append([]string(nil), crlPaths...),
 	}
+	cv.crls.Store(crl.NewSet())
 
-	return NewCertificateStoreWithBackend(fs, caCertPaths, crlPaths, requireCerts)
-}
-
-// NewCertificateStoreWithBackend builds the certificate store over
-// a caller-supplied registry: the database's AIK store when state
-// is shared, a FileStore otherwise (as the path-taking constructors above do).
-func NewCertificateStoreWithBackend(backend AIKStore, caCertPaths, crlPaths []string, requireCerts bool) (*CertificateStore, error) {
-	if requireCerts && len(caCertPaths) == 0 {
-		return nil, ErrNoTrustedCAs
-	}
-	if backend == nil {
-		return nil, errors.New("certificate store needs a registry to persist into")
-	}
-
-	cs := &CertificateStore{
-		backend:      backend,
-		trustedCAs:   make([]*x509.Certificate, 0),
-		caPool:       x509.NewCertPool(),
-		requireCerts: requireCerts,
-		crlPaths:     append([]string(nil), crlPaths...),
-	}
-	cs.crls.Store(crl.NewSet())
-
-	// load ca certificates
 	for _, path := range caCertPaths {
 		cert, err := loadCertificate(path)
 		if err != nil {
 			return nil, fmt.Errorf("failed to load CA cert %s: %w", path, err)
 		}
-		cs.trustedCAs = append(cs.trustedCAs, cert)
-		cs.caPool.AddCert(cert)
+		cv.trustedCAs = append(cv.trustedCAs, cert)
+		cv.caPool.AddCert(cert)
 	}
 
-	if len(cs.crlPaths) > 0 {
-		set, err := crl.BuildSet(cs.crlPaths, cs.trustedCAs)
+	if len(cv.crlPaths) > 0 {
+		set, err := crl.BuildSet(cv.crlPaths, cv.trustedCAs)
 		if err != nil {
 			return nil, err
 		}
-		cs.crls.Store(set)
+		cv.crls.Store(set)
 	}
 
-	return cs, nil
+	return cv, nil
 }
 
 // ReloadCRLs re-parses every CRL path configured at construction time,
 // validates the new feed against the trusted CA pool, and atomically
 // swaps the active revocation set on success. Verify paths reading via
-// cs.crls.Load() continue against the previous set during the rebuild
+// cv.crls.Load() continue against the previous set during the rebuild
 // and pick up the new one on their next call; failure to validate
 // leaves the previous set untouched so a malformed update cannot drop
 // revocations on the floor.
 //
 // The verifier daemon wires this to SIGHUP so operators can install a
 // refreshed manufacturer feed without restarting the process.
-func (cs *CertificateStore) ReloadCRLs() error {
-	if len(cs.crlPaths) == 0 {
+func (cv *CertificateVerifier) ReloadCRLs() error {
+	if len(cv.crlPaths) == 0 {
 		// nothing to refresh; treat as a successful no-op so the SIGHUP
 		// handler can blanket-call ReloadCRLs() without branching on
 		// whether the operator configured any CRLs at startup.
-		cs.crls.Store(crl.NewSet())
+		cv.crls.Store(crl.NewSet())
 		return nil
 	}
-	set, err := crl.BuildSet(cs.crlPaths, cs.trustedCAs)
+	set, err := crl.BuildSet(cv.crlPaths, cv.trustedCAs)
 	if err != nil {
 		return err
 	}
-	cs.crls.Store(set)
+	cv.crls.Store(set)
 	return nil
 }
 
-// CRLCount returns the number of CRLs loaded into the store. Exported
+// CRLCount returns the number of CRLs loaded. Exported
 // for startup logging; the value is informational only.
-func (cs *CertificateStore) CRLCount() int { return cs.crls.Load().Size() }
+func (cv *CertificateVerifier) CRLCount() int { return cv.crls.Load().Size() }
 
 func loadCertificate(path string) (*x509.Certificate, error) {
 	data, err := os.ReadFile(path)
@@ -926,64 +183,20 @@ func loadCertificate(path string) (*x509.Certificate, error) {
 	return x509.ParseCertificate(block.Bytes)
 }
 
-func (cs *CertificateStore) GetAIK(clientID string) (*rsa.PublicKey, error) {
-	return cs.backend.GetAIK(clientID)
-}
-
-// RegisterAIK on the cert-backed store has no certificate to verify, so it refuses.
-// CA-issued certificate is the anchor, and attestation rejects report without one in any case.
-// Callers that legitimately hold no chain (tests, out-of-band provisioning) use
-// MemoryStore or FileStore directly.
-func (cs *CertificateStore) RegisterAIK(clientID string, pubKey *rsa.PublicKey) error {
-	return ErrNoCertificate
-}
-
-// verifies AIK certificate chain before registering
-func (cs *CertificateStore) RegisterAIKWithCert(clientID string, pubKey *rsa.PublicKey, aikCertDER, ekCertDER []byte) error {
-	if cs.requireCerts {
-		if len(aikCertDER) == 0 || len(ekCertDER) == 0 {
-			return ErrNoCertificate
-		}
-	}
-
-	// No certs supplied:
-	// there is nothing to chain-verify, and this store exists to chain-verify.
-	// Refuse
-	if len(aikCertDER) == 0 && len(ekCertDER) == 0 {
-		return ErrNoCertificate
-	}
-
-	// parse and verify AIK certificate if provided
-	if len(aikCertDER) > 0 {
-		if err := cs.verifyAIKCertificate(aikCertDER, pubKey); err != nil {
-			return fmt.Errorf("AIK certificate verification failed: %w", err)
-		}
-	}
-
-	// parse and verify EK certificate if provided (validates TPM authenticity)
-	if len(ekCertDER) > 0 {
-		if err := cs.verifyEKCertificate(ekCertDER); err != nil {
-			return fmt.Errorf("EK certificate verification failed: %w", err)
-		}
-	}
-
-	return cs.backend.RegisterAIK(clientID, pubKey)
-}
-
 // VerifyAIKCertificate verifies that aikCertDER chains to a trusted root,
 // is time-valid, not revoked, and certifies pubKey, then returns the
 // parsed certificate. Under the Privacy CA model this is the verifier's
 // sole AIK trust anchor: the certificate's subject carries the CA-issued
 // device pseudonym used as the durable client identity, and the EK is
 // never seen by the verifier.
-func (cs *CertificateStore) VerifyAIKCertificate(pubKey *rsa.PublicKey, aikCertDER []byte) (*x509.Certificate, error) {
+func (cv *CertificateVerifier) VerifyAIKCertificate(pubKey *rsa.PublicKey, aikCertDER []byte) (*x509.Certificate, error) {
 	if pubKey == nil {
 		return nil, errors.New("nil AIK public key")
 	}
 	if len(aikCertDER) == 0 {
 		return nil, ErrNoCertificate
 	}
-	if err := cs.verifyAIKCertificate(aikCertDER, pubKey); err != nil {
+	if err := cv.verifyAIKCertificate(aikCertDER, pubKey); err != nil {
 		return nil, err
 	}
 	cert, err := x509.ParseCertificate(aikCertDER)
@@ -993,26 +206,20 @@ func (cs *CertificateStore) VerifyAIKCertificate(pubKey *rsa.PublicKey, aikCertD
 	return cert, nil
 }
 
-func (cs *CertificateStore) VerifyCertificatesForAIK(pubKey *rsa.PublicKey, aikCertDER, ekCertDER []byte) error {
+func (cv *CertificateVerifier) VerifyCertificatesForAIK(pubKey *rsa.PublicKey, aikCertDER, ekCertDER []byte) error {
 	if pubKey == nil {
 		return errors.New("nil AIK public key")
 	}
-	if cs.requireCerts {
-		if len(aikCertDER) == 0 || len(ekCertDER) == 0 {
-			return ErrNoCertificate
-		}
-	}
-
 	if len(aikCertDER) == 0 && len(ekCertDER) == 0 {
 		return ErrNoCertificate
 	}
 	if len(aikCertDER) > 0 {
-		if err := cs.verifyAIKCertificate(aikCertDER, pubKey); err != nil {
+		if err := cv.verifyAIKCertificate(aikCertDER, pubKey); err != nil {
 			return fmt.Errorf("AIK certificate verification failed: %w", err)
 		}
 	}
 	if len(ekCertDER) > 0 {
-		if err := cs.verifyEKCertificate(ekCertDER); err != nil {
+		if err := cv.verifyEKCertificate(ekCertDER); err != nil {
 			return fmt.Errorf("EK certificate verification failed: %w", err)
 		}
 	}
@@ -1020,7 +227,7 @@ func (cs *CertificateStore) VerifyCertificatesForAIK(pubKey *rsa.PublicKey, aikC
 }
 
 // validates AIK certificate against trusted CAs
-func (cs *CertificateStore) verifyAIKCertificate(certDER []byte, expectedPubKey *rsa.PublicKey) error {
+func (cv *CertificateVerifier) verifyAIKCertificate(certDER []byte, expectedPubKey *rsa.PublicKey) error {
 	cert, err := x509.ParseCertificate(certDER)
 	if err != nil {
 		return fmt.Errorf("%w: %v", ErrInvalidCertificate, err)
@@ -1036,15 +243,8 @@ func (cs *CertificateStore) verifyAIKCertificate(certDER []byte, expectedPubKey 
 	}
 
 	// verify certificate chain against trusted CAs
-	// With no anchors chain cannot be verified, so refuse rather than accepting
-	// on time-validity and public-key match alone.
-	// Fail closed at verify time so the skip cannot be configured into existence
-	// even when the store was built in TOFU mode (requireCerts=false)
-	if len(cs.trustedCAs) == 0 {
-		return ErrNoTrustedCAs
-	}
 	opts := x509.VerifyOptions{
-		Roots:       cs.caPool,
+		Roots:       cv.caPool,
 		CurrentTime: now,
 		KeyUsages:   []x509.ExtKeyUsage{x509.ExtKeyUsageAny},
 	}
@@ -1064,7 +264,7 @@ func (cs *CertificateStore) verifyAIKCertificate(certDER []byte, expectedPubKey 
 	}
 
 	// consult operator-supplied CRLs after chain + key checks pass
-	if err := cs.crls.Load().Check(cert, now); err != nil {
+	if err := cv.crls.Load().Check(cert, now); err != nil {
 		return err
 	}
 
@@ -1072,7 +272,7 @@ func (cs *CertificateStore) verifyAIKCertificate(certDER []byte, expectedPubKey 
 }
 
 // validates EK certificate (proves TPM authenticity)
-func (cs *CertificateStore) verifyEKCertificate(certDER []byte) error {
+func (cv *CertificateVerifier) verifyEKCertificate(certDER []byte) error {
 	cert, err := x509.ParseCertificate(certDER)
 	if err != nil {
 		return fmt.Errorf("%w: %v", ErrInvalidCertificate, err)
@@ -1087,16 +287,9 @@ func (cs *CertificateStore) verifyEKCertificate(certDER []byte) error {
 		return ErrCertificateExpired
 	}
 
-	// verify certificate chain against trusted CAs (TPM manufacturer CAs).
-	// With no anchors a chain cannot be verified, so refuse rather than
-	// accepting the EK on time-validity and OID alone.
-	// Fail closed at verify time so the skip cannot be configured into
-	// existence even in TOFU mode
-	if len(cs.trustedCAs) == 0 {
-		return ErrNoTrustedCAs
-	}
+	// verify certificate chain against trusted CAs (TPM manufacturer CAs)
 	opts := x509.VerifyOptions{
-		Roots:       cs.caPool,
+		Roots:       cv.caPool,
 		CurrentTime: now,
 		KeyUsages:   []x509.ExtKeyUsage{x509.ExtKeyUsageAny},
 	}
@@ -1115,106 +308,9 @@ func (cs *CertificateStore) verifyEKCertificate(certDER []byte) error {
 	}
 
 	// consult operator-supplied CRLs (TPM manufacturer revocation feeds)
-	if err := cs.crls.Load().Check(cert, now); err != nil {
+	if err := cv.crls.Load().Check(cert, now); err != nil {
 		return err
 	}
 
 	return nil
-}
-
-func (cs *CertificateStore) ListClients() []string {
-	return cs.backend.ListClients()
-}
-
-// paging, counting and existence use the backend's own queries
-// when it has them, otherwise fall back to the full listing
-func (cs *CertificateStore) ListClientsPage(limit, offset int) []string {
-	if pager, ok := cs.backend.(PaginatedClientLister); ok {
-		return pager.ListClientsPage(limit, offset)
-	}
-	return pageOf(cs.backend.ListClients(), limit, offset)
-}
-
-func (cs *CertificateStore) ListClientsPageE(limit, offset int) ([]string, error) {
-	if pager, ok := cs.backend.(PaginatedClientListerWithError); ok {
-		return pager.ListClientsPageE(limit, offset)
-	}
-	return cs.ListClientsPage(limit, offset), nil
-}
-
-func (cs *CertificateStore) CountClients() int {
-	if counter, ok := cs.backend.(ClientCounter); ok {
-		return counter.CountClients()
-	}
-	return len(cs.backend.ListClients())
-}
-
-func (cs *CertificateStore) CountClientsE() (int, error) {
-	if counter, ok := cs.backend.(ClientCounterWithError); ok {
-		return counter.CountClientsE()
-	}
-	return cs.CountClients(), nil
-}
-
-func (cs *CertificateStore) HasClient(clientID string) (bool, error) {
-	if checker, ok := cs.backend.(ClientExistenceChecker); ok {
-		return checker.HasClient(clientID)
-	}
-	_, err := cs.backend.GetAIK(clientID)
-	if errors.Is(err, ErrAIKNotFound) {
-		return false, nil
-	}
-	if err != nil {
-		return false, err
-	}
-	return true, nil
-}
-
-func (cs *CertificateStore) ExistingClients(clientIDs []string) (map[string]struct{}, error) {
-	if checker, ok := cs.backend.(ClientExistenceBatchChecker); ok {
-		return checker.ExistingClients(clientIDs)
-	}
-	registered := make(map[string]struct{}, len(clientIDs))
-	for _, id := range clientIDs {
-		exists, err := cs.HasClient(id)
-		if err != nil {
-			return nil, err
-		}
-		if exists {
-			registered[id] = struct{}{}
-		}
-	}
-	return registered, nil
-}
-
-func (cs *CertificateStore) RegisterHardwareID(clientID string, hardwareID [32]byte) error {
-	return cs.backend.RegisterHardwareID(clientID, hardwareID)
-}
-
-func (cs *CertificateStore) GetHardwareID(clientID string) ([32]byte, error) {
-	return cs.backend.GetHardwareID(clientID)
-}
-
-// DeleteClient removes the client from the registry,
-// or returns ErrDeleteUnsupported when it cannot.
-// Used to force a re-enrollment.
-func (cs *CertificateStore) DeleteClient(clientID string) error {
-	deleter, ok := cs.backend.(ClientDeleter)
-	if !ok {
-		return ErrDeleteUnsupported
-	}
-	return deleter.DeleteClient(clientID)
-}
-
-// RotateAIK refuses a keyed-only rotation.
-// CertificateStore binds each client to a CA-verified AIK certificate,
-// so swapping the trusted key without re-verifying a certificate chain would
-// bypass the gate RegisterAIKWithCert enforces on first registration.
-//
-// Method signature carries no certificate and so cannot re-verify one;
-// AIK change in the certificate model is handled by re-verifying the new
-// certificate per attestation, never by a stored keyed rotation.
-// Fail closed instead of delegating to the plain FileStore.
-func (cs *CertificateStore) RotateAIK(_ string, _ *rsa.PublicKey) error {
-	return ErrRotateNeedsCert
 }

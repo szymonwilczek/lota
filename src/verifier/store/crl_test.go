@@ -2,7 +2,7 @@
 // Copyright (C) 2026 Szymon Wilczek
 // LOTA Verifier - CRL load and revocation tests
 //
-// These exercise the CertificateStore wiring around the shared crl
+// These exercise the CertificateVerifier wiring around the shared crl
 // module (load at construction, lookup in the verify paths, SIGHUP
 // hot-swap).
 //
@@ -122,7 +122,7 @@ func writeCRL(t *testing.T, dir string, ca *x509.Certificate, caKey *rsa.Private
 	return path
 }
 
-// writeCert PEM-encodes a CA cert so NewCertificateStoreWithCRL can pick
+// writeCert PEM-encodes a CA cert so NewCertificateVerifier can pick
 // it up from a file path the same way the production loader does.
 func writeCert(t *testing.T, dir string, ca *x509.Certificate) string {
 	t.Helper()
@@ -145,8 +145,7 @@ func TestCRL_LoadRejectsUnknownIssuer(t *testing.T) {
 	// store's trusted root set
 	crlPath := writeCRL(t, dir, other, otherKey, time.Now().Add(time.Hour))
 
-	_, err := NewCertificateStoreWithCRL(filepath.Join(dir, "aiks"),
-		[]string{goodPath}, []string{crlPath}, false)
+	_, err := NewCertificateVerifier([]string{goodPath}, []string{crlPath})
 	if err == nil {
 		t.Fatal("expected CRL load to fail: signed by untrusted CA")
 	}
@@ -168,8 +167,7 @@ func TestCRL_RevokesEKCertificate(t *testing.T) {
 
 	crlPath := writeCRL(t, dir, ca, caKey, time.Now().Add(time.Hour), revokedSerial)
 
-	cs, err := NewCertificateStoreWithCRL(filepath.Join(dir, "aiks"),
-		[]string{caPath}, []string{crlPath}, true)
+	cs, err := NewCertificateVerifier([]string{caPath}, []string{crlPath})
 	if err != nil {
 		t.Fatalf("store init: %v", err)
 	}
@@ -194,8 +192,7 @@ func TestCRL_PassesUnrevokedEKCertificate(t *testing.T) {
 	_, leafDER := buildEKLeaf(t, ca, caKey, 0x11)
 	crlPath := writeCRL(t, dir, ca, caKey, time.Now().Add(time.Hour), 0x99 /* not the leaf */)
 
-	cs, err := NewCertificateStoreWithCRL(filepath.Join(dir, "aiks"),
-		[]string{caPath}, []string{crlPath}, true)
+	cs, err := NewCertificateVerifier([]string{caPath}, []string{crlPath})
 	if err != nil {
 		t.Fatalf("store init: %v", err)
 	}
@@ -216,8 +213,7 @@ func TestCRL_FailsClosedWhenStale(t *testing.T) {
 	// NextUpdate strictly in the past => every CRL for this issuer is stale
 	crlPath := writeCRL(t, dir, ca, caKey, time.Now().Add(-time.Minute), 0x99)
 
-	cs, err := NewCertificateStoreWithCRL(filepath.Join(dir, "aiks"),
-		[]string{caPath}, []string{crlPath}, true)
+	cs, err := NewCertificateVerifier([]string{caPath}, []string{crlPath})
 	if err != nil {
 		t.Fatalf("store init: %v", err)
 	}
@@ -244,8 +240,7 @@ func TestCRL_ReloadHotSwapsRevocations(t *testing.T) {
 	crlPath := writeCRL(t, dir, ca, caKey, time.Now().Add(time.Hour),
 		initialSerial)
 
-	cs, err := NewCertificateStoreWithCRL(filepath.Join(dir, "aiks"),
-		[]string{caPath}, []string{crlPath}, true)
+	cs, err := NewCertificateVerifier([]string{caPath}, []string{crlPath})
 	if err != nil {
 		t.Fatalf("store init: %v", err)
 	}
@@ -301,8 +296,7 @@ func TestCRL_ReloadRejectsBadFeedKeepsPreviousSet(t *testing.T) {
 	const revoked = 0x401
 	crlPath := writeCRL(t, dir, ca, caKey, time.Now().Add(time.Hour), revoked)
 
-	cs, err := NewCertificateStoreWithCRL(filepath.Join(dir, "aiks"),
-		[]string{caPath}, []string{crlPath}, true)
+	cs, err := NewCertificateVerifier([]string{caPath}, []string{crlPath})
 	if err != nil {
 		t.Fatalf("store init: %v", err)
 	}
@@ -334,8 +328,7 @@ func TestCRL_ReloadWithoutPathsIsNoOp(t *testing.T) {
 	ca, _ := buildCA(t)
 	caPath := writeCert(t, dir, ca)
 
-	cs, err := NewCertificateStoreWithCRL(filepath.Join(dir, "aiks"),
-		[]string{caPath}, nil, true)
+	cs, err := NewCertificateVerifier([]string{caPath}, nil)
 	if err != nil {
 		t.Fatalf("store init: %v", err)
 	}

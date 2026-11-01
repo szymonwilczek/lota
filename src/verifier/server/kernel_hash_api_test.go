@@ -19,7 +19,7 @@ import (
 // -- keeps pcr14 and drops that, which leaves the first question anyone asks
 // about a Linux host unanswerable after the fact.
 func TestAttestationLogEndpoint_ReportsKernelHash(t *testing.T) {
-	aikStore := newCertStore(t)
+	aikVerifier := newCertVerifier(t)
 	m := metrics.New()
 	cfg := verify.DefaultConfig()
 	cfg.RequireBootEnrollment = false
@@ -28,7 +28,7 @@ func TestAttestationLogEndpoint_ReportsKernelHash(t *testing.T) {
 	cfg.RevocationStore = store.NewMemoryRevocationStore(auditLog)
 	cfg.BanStore = store.NewMemoryBanStore(auditLog)
 	cfg.Metrics = m
-	v := verify.NewVerifier(cfg, aikStore)
+	v := verify.NewVerifier(cfg, aikVerifier)
 	if err := v.AddPolicy(verify.DefaultPolicy()); err != nil {
 		t.Fatalf("AddPolicy(DefaultPolicy) failed: %v", err)
 	}
