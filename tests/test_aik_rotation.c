@@ -1240,15 +1240,10 @@ static void test_clock_state_save_load_round_trip(void)
 	PASS();
 }
 
-static void reference_initramfs_lock_digest(uint32_t reset_count,
-					    uint32_t restart_count,
-					    uint8_t out[LOTA_HASH_SIZE])
+static void reference_initramfs_lock_digest(uint8_t out[LOTA_HASH_SIZE])
 {
 	static const char tag[] = "LOTA-PCR14-INITRAMFS-LOCK-v1";
 	EVP_MD_CTX *md = EVP_MD_CTX_new();
-
-	(void)reset_count;
-	(void)restart_count;
 
 	if (!md) {
 		memset(out, 0, LOTA_HASH_SIZE);
@@ -1264,7 +1259,7 @@ static void reference_initramfs_lock_digest(uint32_t reset_count,
 /*
  * The agent's lock-digest helper mirrors the standalone initramfs
  * binary. Pin it against an independent OpenSSL construction so a
- * tag or endian drift is caught without needing a hardware TPM.
+ * tag drift is caught without needing a hardware TPM.
  */
 static void test_initramfs_lock_digest_matches_reference(void)
 {
@@ -1279,7 +1274,7 @@ static void test_initramfs_lock_digest_matches_reference(void)
 		FAIL("digest helper failed");
 		return;
 	}
-	reference_initramfs_lock_digest(0x01020304U, 0xA0B0C0D0U, want);
+	reference_initramfs_lock_digest(want);
 	if (memcmp(got, want, LOTA_HASH_SIZE) != 0) {
 		FAIL("digest mismatch");
 		return;

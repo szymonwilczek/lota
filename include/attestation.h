@@ -56,12 +56,11 @@ struct lota_report_header {
  * that an initramfs-time helper (lota-pcr14-lock, shipped under the
  * 90lota dracut module) already extended PCR14 with the
  * domain-separated digest
- *     SHA256("LOTA-PCR14-INITRAMFS-LOCK-v1" || resetCount_be ||
- *             restartCount_be)
+ *     SHA256("LOTA-PCR14-INITRAMFS-LOCK-v1")
  * before the agent ran. The agent then extends with the existing
  * boot commitment ON TOP, so the final PCR14 reflects a two-hop
  * chain:
- *     pcr14_lock = SHA256(0^32 || initramfs_lock_commit)
+ *     pcr14_lock = SHA256(baseline || initramfs_lock_commit)
  *     pcr14_final = SHA256(pcr14_lock || boot_commitment)
  *
  * Verifier mirrors that derivation and has no other one, so every agent
