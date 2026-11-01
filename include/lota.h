@@ -45,7 +45,6 @@
 #define LOTA_MAX_SIG_SIZE 512 /* Max TPM signature size (RSA-4096) */
 #define LOTA_MAX_AIK_PUB_SIZE 512 /* Max AIK public key (DER SPKI format) */
 #define LOTA_MAX_AIK_CERT_SIZE 2048 /* Max AIK certificate size (DER X.509) */
-#define LOTA_MAX_EK_CERT_SIZE 2048 /* Max EK certificate size (DER X.509) */
 #define LOTA_HARDWARE_ID_SIZE 32 /* SHA-256 of EK public key */
 
 /* Number of PCRs to include in attestation */

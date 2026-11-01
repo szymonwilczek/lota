@@ -24,8 +24,6 @@
 
 #include "lota_endian.h"
 
-#define LOTA_RUNTIME_PROTECT_DIGEST_SIZE 32
-
 static inline void lota__runtime_digest_bzero(void *ptr, size_t len)
 {
 	if (!ptr || len == 0)
