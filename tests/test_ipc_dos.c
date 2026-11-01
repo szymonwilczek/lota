@@ -15,7 +15,6 @@
 #include "../include/lota_gaming.h"
 
 #define TEST_CONNECTIONS 100
-#define LOTA_SOCKET_PATH "/run/lota/lota.sock"
 
 static struct lota_client *clients[TEST_CONNECTIONS];
 
