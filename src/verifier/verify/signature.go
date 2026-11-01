@@ -27,11 +27,7 @@ func NewRSASSAVerifier() *RSASSAVerifier {
 	return &RSASSAVerifier{}
 }
 
-func (v *RSASSAVerifier) VerifyQuoteSignature(attestData, signature []byte, aikPubKey *rsa.PublicKey) error {
-	return v.VerifyQuoteSignatureWithHash(attestData, signature, aikPubKey, crypto.SHA256)
-}
-
-func (v *RSASSAVerifier) VerifyQuoteSignatureWithHash(attestData, signature []byte, aikPubKey *rsa.PublicKey, hashAlg crypto.Hash) error {
+func (v *RSASSAVerifier) VerifyQuoteSignature(attestData, signature []byte, aikPubKey *rsa.PublicKey, hashAlg crypto.Hash) error {
 	if aikPubKey == nil {
 		return errors.New("AIK public key is nil")
 	}
@@ -60,11 +56,7 @@ func NewRSAPSSVerifier() *RSAPSSVerifier {
 	return &RSAPSSVerifier{}
 }
 
-func (v *RSAPSSVerifier) VerifyQuoteSignature(attestData, signature []byte, aikPubKey *rsa.PublicKey) error {
-	return v.VerifyQuoteSignatureWithHash(attestData, signature, aikPubKey, crypto.SHA256)
-}
-
-func (v *RSAPSSVerifier) VerifyQuoteSignatureWithHash(attestData, signature []byte, aikPubKey *rsa.PublicKey, hashAlg crypto.Hash) error {
+func (v *RSAPSSVerifier) VerifyQuoteSignature(attestData, signature []byte, aikPubKey *rsa.PublicKey, hashAlg crypto.Hash) error {
 	if aikPubKey == nil {
 		return errors.New("AIK public key is nil")
 	}
@@ -135,13 +127,13 @@ func VerifyReportSignature(report *types.AttestationReport, aikPubKey *rsa.Publi
 		return errors.New("TPM quote signature scheme missing (quote_sig_alg=0)")
 
 	case types.TPMAlgRSASSA:
-		if verr := NewRSASSAVerifier().VerifyQuoteSignatureWithHash(attestData, signature, aikPubKey, hashAlg); verr != nil {
+		if verr := NewRSASSAVerifier().VerifyQuoteSignature(attestData, signature, aikPubKey, hashAlg); verr != nil {
 			return fmt.Errorf("TPM quote signature invalid (sig_alg=RSASSA hash=%s source=%s): %v", hashName(hashAlg), hashSource, verr)
 		}
 		return nil
 
 	case types.TPMAlgRSAPSS:
-		if verr := NewRSAPSSVerifier().VerifyQuoteSignatureWithHash(attestData, signature, aikPubKey, hashAlg); verr != nil {
+		if verr := NewRSAPSSVerifier().VerifyQuoteSignature(attestData, signature, aikPubKey, hashAlg); verr != nil {
 			return fmt.Errorf("TPM quote signature invalid (sig_alg=RSAPSS hash=%s source=%s): %v", hashName(hashAlg), hashSource, verr)
 		}
 		return nil
