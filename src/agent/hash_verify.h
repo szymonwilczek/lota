@@ -38,18 +38,6 @@ int hash_verify_init(struct hash_verify_ctx *ctx);
 void hash_verify_cleanup(struct hash_verify_ctx *ctx);
 
 /*
- * Resolve file integrity fingerprint from fs-verity measurement.
- *
- * @path: Absolute path to the file
- * @sha256_out: Output buffer (LOTA_HASH_SIZE bytes)
- *
- * On success, fills sha256_out with the first 32 bytes of the measured
- * fs-verity digest and returns 0. If fs-verity is unavailable or not enabled
- * for the file, returns negative errno (typically -ENODATA).
- */
-int hash_verify_file(const char *path, uint8_t sha256_out[LOTA_HASH_SIZE]);
-
-/*
  * Process a BPF ring buffer event and resolve fs-verity fingerprint.
  *
  * @ctx: Hash verification context

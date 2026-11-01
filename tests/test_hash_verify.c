@@ -50,68 +50,6 @@ static char *create_tmp_file(const char *content, size_t len)
 	return path;
 }
 
-static void test_hash_file_requires_verity(void)
-{
-	const char *data = "Hello, LOTA hash verification!\n";
-	char *path;
-	uint8_t hash[LOTA_HASH_SIZE];
-	int ret;
-
-	TEST("hash_verify_file fail-closed without fs-verity");
-
-	path = create_tmp_file(data, strlen(data));
-	ASSERT(path != NULL, "failed to create temp file");
-
-	ret = hash_verify_file(path, hash);
-	unlink(path);
-	free(path);
-
-	ASSERT(ret < 0, "expected failure for non-verity file");
-	ASSERT(ret == -ENODATA || ret == -EOPNOTSUPP || ret == -ENOTTY,
-	       "expected fs-verity unavailable/not-enabled error");
-
-	PASS();
-}
-
-static void test_hash_relative_path(void)
-{
-	uint8_t hash[LOTA_HASH_SIZE];
-	int ret;
-
-	TEST("hash_verify_file rejects relative path");
-
-	ret = hash_verify_file("relative/path.txt", hash);
-	ASSERT(ret == -ENOENT, "expected -ENOENT for relative path");
-
-	PASS();
-}
-
-static void test_hash_nonexistent(void)
-{
-	uint8_t hash[LOTA_HASH_SIZE];
-	int ret;
-
-	TEST("hash_verify_file rejects nonexistent file");
-
-	ret = hash_verify_file("/tmp/lota_test_nonexistent_12345678", hash);
-	ASSERT(ret < 0, "expected error for nonexistent file");
-
-	PASS();
-}
-
-static void test_hash_directory(void)
-{
-	uint8_t hash[LOTA_HASH_SIZE];
-	int ret;
-
-	TEST("hash_verify_file rejects directory");
-
-	ret = hash_verify_file("/tmp", hash);
-	ASSERT(ret == -EINVAL, "expected -EINVAL for directory");
-
-	PASS();
-}
-
 static void test_event_no_caching(void)
 {
 	struct hash_verify_ctx ctx;
@@ -218,43 +156,6 @@ static void test_stats(void)
 	PASS();
 }
 
-static void test_hash_large_file(void)
-{
-	char *path;
-	uint8_t hash[LOTA_HASH_SIZE];
-	int ret;
-
-	TEST("hash_verify_file on 1 MB file fails without fs-verity");
-
-	/* 1 MB file */
-	path = strdup("/tmp/lota_test_hash_large_XXXXXX");
-	ASSERT(path != NULL, "failed to allocate temp path");
-	{
-		int fd = mkstemp(path);
-		if (fd < 0) {
-			free(path);
-			FAIL("failed to create temp file");
-			return;
-		}
-
-		/* 1 MB of repeating pattern */
-		uint8_t buf[4096];
-		memset(buf, 0x42, sizeof(buf));
-		for (int i = 0; i < 256; i++) { /* 256 * 4096 = 1 MB */
-			ssize_t w = write(fd, buf, sizeof(buf));
-			(void)w;
-		}
-		close(fd);
-	}
-
-	ret = hash_verify_file(path, hash);
-	unlink(path);
-	free(path);
-	ASSERT(ret < 0, "expected failure for non-verity large file");
-
-	PASS();
-}
-
 static void test_null_args(void)
 {
 	struct hash_verify_ctx ctx;
@@ -262,12 +163,6 @@ static void test_null_args(void)
 	int ret;
 
 	TEST("NULL argument handling");
-
-	ret = hash_verify_file(NULL, hash);
-	ASSERT(ret == -EINVAL, "expected -EINVAL for NULL path");
-
-	ret = hash_verify_file("/tmp/whatever", NULL);
-	ASSERT(ret == -EINVAL, "expected -EINVAL for NULL output");
 
 	ret = hash_verify_init(NULL);
 	ASSERT(ret == -EINVAL, "expected -EINVAL for NULL ctx");
@@ -292,13 +187,8 @@ int main(void)
 {
 	printf("\n=== LOTA Hash Verification Tests ===\n\n");
 
-	test_hash_file_requires_verity();
-	test_hash_relative_path();
-	test_hash_nonexistent();
-	test_hash_directory();
 	test_event_no_caching();
 	test_stats();
-	test_hash_large_file();
 	test_null_args();
 
 	printf("\n=== Results: %d/%d passed ===\n\n", tests_passed, tests_run);
