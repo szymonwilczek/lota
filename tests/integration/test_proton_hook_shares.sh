@@ -72,17 +72,15 @@ LIB="$WORK_DIR/liblota_wine_hook.so"
 
 run_wrapper() {
     local out_file="$WORK_DIR/out"
-    local err_file="$WORK_DIR/err"
 
     set +e
     env "$@" LOTA_HOOK_LIB_PATH="$LIB" \
 	"$WRAPPER" /bin/sh -c \
 	'printf "RW=[%s]\n" "${PRESSURE_VESSEL_FILESYSTEMS_RW:-}"' \
-	>"$out_file" 2>"$err_file"
+	>"$out_file" 2>/dev/null
     rc=$?
     set -e
     out=$(cat "$out_file")
-    err=$(cat "$err_file")
     rw=${out#RW=[}
     rw=${rw%]*}
     return $rc
