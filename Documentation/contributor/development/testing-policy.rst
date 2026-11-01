@@ -147,7 +147,7 @@ directly.
 | Always review the diff and rebuild: the tools cannot see symbols reached only
   through a macro or behind conditional compilation, so an
   include needed only that way must carry an
-| ``// IWYU pragma: keep`` comment (see ``tests/test_seal_tpm.c`` for practice example).
+| ``// IWYU pragma: keep`` comment (see ``tests/test_seal_aik.c`` for practice example).
 
 A few exemptions live in both ``scripts/check-includes.sh`` and the local
 ``.clangd``, and must stay in sync:

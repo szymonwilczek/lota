@@ -1514,7 +1514,6 @@ $(TEST_HOOK): TEST_LDLIBS := -ldl
 
 TEST_INSTALLER := $(addprefix $(BUILD_DIR)/test_, \
 	installer_checkpoint \
-	installer_stage_text \
 	installer_trust_key \
 )
 $(TEST_INSTALLER): $(TEST_INSTALLER_SRCS)
@@ -1574,7 +1573,6 @@ TEST_TPM := $(addprefix $(BUILD_DIR)/test_, \
 	credential_activation \
 	pcr14_verdict \
 	seal_aik \
-	seal_tpm \
 )
 $(TEST_TPM): $(TEST_TPM_SRCS)
 $(TEST_TPM): TEST_CFLAGS := -DLOTA_INTERNAL_TESTS
