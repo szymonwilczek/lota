@@ -382,9 +382,6 @@ func createTestVerifier(t *testing.T, aikVerifier store.AIKCertVerifier) *Verifi
 	if err := verifier.AddPolicy(DefaultPolicy()); err != nil {
 		t.Fatalf("AddPolicy(DefaultPolicy) failed: %v", err)
 	}
-	if err := verifier.SetActivePolicy("default"); err != nil {
-		t.Fatalf("SetActivePolicy(default) failed: %v", err)
-	}
 
 	return verifier
 }
@@ -859,9 +856,6 @@ func TestVerify_RejectsMissingBootPCRs(t *testing.T) {
 	if err := verifier.AddPolicy(DefaultPolicy()); err != nil {
 		t.Fatalf("AddPolicy(DefaultPolicy): %v", err)
 	}
-	if err := verifier.SetActivePolicy("default"); err != nil {
-		t.Fatalf("SetActivePolicy(default): %v", err)
-	}
 
 	clientID := "boot-pcr-reject"
 	challenge, err := verifier.GenerateChallenge(clientID)
@@ -1034,9 +1028,6 @@ func attestUnderConfig(t *testing.T, cfg VerifierConfig, clientID string) (*type
 	verifier := NewVerifier(cfg, newCertVerifier(t))
 	if err := verifier.AddPolicy(DefaultPolicy()); err != nil {
 		t.Fatalf("AddPolicy(DefaultPolicy): %v", err)
-	}
-	if err := verifier.SetActivePolicy("default"); err != nil {
-		t.Fatalf("SetActivePolicy(default): %v", err)
 	}
 
 	challenge, err := verifier.GenerateChallenge(clientID)

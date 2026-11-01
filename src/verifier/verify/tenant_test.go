@@ -263,9 +263,6 @@ func attestWithBanStore(t *testing.T, clientID string, ous []string, bans store.
 	if err := verifier.AddPolicy(DefaultPolicy()); err != nil {
 		t.Fatalf("AddPolicy(DefaultPolicy) failed: %v", err)
 	}
-	if err := verifier.SetActivePolicy("default"); err != nil {
-		t.Fatalf("SetActivePolicy(default) failed: %v", err)
-	}
 
 	challenge, err := verifier.GenerateChallenge(clientID)
 	if err != nil {
@@ -354,9 +351,6 @@ func TestIntegration_TenantOnAttestationLog(t *testing.T) {
 	verifier := NewVerifier(cfg, newCertVerifier(t))
 	if err := verifier.AddPolicy(DefaultPolicy()); err != nil {
 		t.Fatalf("AddPolicy(DefaultPolicy) failed: %v", err)
-	}
-	if err := verifier.SetActivePolicy("default"); err != nil {
-		t.Fatalf("SetActivePolicy(default) failed: %v", err)
 	}
 
 	challenge, err := verifier.GenerateChallenge(clientID)
@@ -469,9 +463,6 @@ func attestWithTenantPolicy(t *testing.T, clientID string, ous []string) (*types
 		RequireLockdown: true,
 	}); err != nil {
 		t.Fatalf("AddPolicy(acme-strict) failed: %v", err)
-	}
-	if err := verifier.SetActivePolicy("default"); err != nil {
-		t.Fatalf("SetActivePolicy(default) failed: %v", err)
 	}
 
 	challenge, err := verifier.GenerateChallenge(clientID)

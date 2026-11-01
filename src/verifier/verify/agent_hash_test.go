@@ -142,9 +142,6 @@ func repinVerifierWithLog(t *testing.T, buf *bytes.Buffer,
 	if err := verifier.AddPolicy(policy); err != nil {
 		t.Fatalf("AddPolicy: %v", err)
 	}
-	if err := verifier.SetActivePolicy("default"); err != nil {
-		t.Fatalf("SetActivePolicy: %v", err)
-	}
 	return verifier
 }
 

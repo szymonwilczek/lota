@@ -703,9 +703,6 @@ func acceptLogVerifier(t *testing.T, buf *bytes.Buffer, policy *PCRPolicy,
 	if err := v.AddPolicy(policy); err != nil {
 		t.Fatalf("AddPolicy: %v", err)
 	}
-	if err := v.SetActivePolicy(policy.Name); err != nil {
-		t.Fatalf("SetActivePolicy: %v", err)
-	}
 	return v
 }
 

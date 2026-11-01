@@ -374,19 +374,6 @@ func (v *PCRVerifier) registerPolicy(policy *PCRPolicy) error {
 	return nil
 }
 
-// sets which policy to use for verification
-func (v *PCRVerifier) SetActivePolicy(name string) error {
-	v.mu.Lock()
-	defer v.mu.Unlock()
-
-	if _, exists := v.policies[name]; !exists {
-		return fmt.Errorf("policy not found: %s", name)
-	}
-
-	v.active = name
-	return nil
-}
-
 // checks report against active policy without event-log boot facts;
 // policies that gate on Secure Boot or the cmdline fail closed here
 func (v *PCRVerifier) VerifyReport(report *types.AttestationReport) error {

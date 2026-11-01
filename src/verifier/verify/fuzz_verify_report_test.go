@@ -33,9 +33,6 @@ func FuzzVerifyReport(f *testing.F) {
 	if err := v.AddPolicy(DefaultPolicy()); err != nil {
 		f.Fatalf("AddPolicy: %v", err)
 	}
-	if err := v.SetActivePolicy("default"); err != nil {
-		f.Fatalf("SetActivePolicy: %v", err)
-	}
 
 	key, err := rsa.GenerateKey(rand.Reader, 2048)
 	if err != nil {

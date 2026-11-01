@@ -27,9 +27,6 @@ func recordOneRound(t *testing.T, clientID string, report func(nonce [types.Nonc
 	if err := verifier.AddPolicy(DefaultPolicy()); err != nil {
 		t.Fatalf("AddPolicy(DefaultPolicy) failed: %v", err)
 	}
-	if err := verifier.SetActivePolicy("default"); err != nil {
-		t.Fatalf("SetActivePolicy(default) failed: %v", err)
-	}
 
 	challenge, err := verifier.GenerateChallenge(clientID)
 	if err != nil {
@@ -122,9 +119,6 @@ func TestRecordCarriesTheAddressTheReportCameFrom(t *testing.T) {
 	verifier := NewVerifier(cfg, newCertVerifier(t))
 	if err := verifier.AddPolicy(DefaultPolicy()); err != nil {
 		t.Fatalf("AddPolicy(DefaultPolicy) failed: %v", err)
-	}
-	if err := verifier.SetActivePolicy("default"); err != nil {
-		t.Fatalf("SetActivePolicy(default) failed: %v", err)
 	}
 
 	challenge, err := verifier.GenerateChallenge(clientID)

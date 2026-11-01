@@ -222,32 +222,7 @@ func TestPCRVerifier_MultiplePolicies(t *testing.T) {
 		t.Errorf("Expected 'default' as active, got '%s'", verifier.GetActivePolicy())
 	}
 
-	// switch to strict
-	if err := verifier.SetActivePolicy("strict"); err != nil {
-		t.Errorf("Failed to set active policy: %v", err)
-	}
-
-	if verifier.GetActivePolicy() != "strict" {
-		t.Errorf("Expected 'strict' as active after switch, got '%s'", verifier.GetActivePolicy())
-	}
-
 	t.Log("Multiple policies managed correctly")
-}
-
-func TestPCRVerifier_SetActivePolicy_NotFound(t *testing.T) {
-	t.Log("TEST: Setting non-existent policy fails")
-
-	verifier := NewPCRVerifier()
-	if err := verifier.AddPolicy(DefaultPolicy()); err != nil {
-		t.Fatalf("AddPolicy(DefaultPolicy) failed: %v", err)
-	}
-
-	err := verifier.SetActivePolicy("nonexistent")
-	if err == nil {
-		t.Error("Expected error when setting non-existent policy")
-	}
-
-	t.Log("Non-existent policy correctly rejected")
 }
 
 func TestPCRVerifier_VerifyReport_NoPolicy(t *testing.T) {
@@ -657,15 +632,8 @@ require_enforce: true
 	verifier := NewPCRVerifier()
 	verifier.SetAllowPermissivePolicy(true)
 
-	if err := verifier.AddPolicy(DefaultPolicy()); err != nil {
-		t.Fatalf("AddPolicy(DefaultPolicy): %v", err)
-	}
 	if err := verifier.LoadPolicy(policyPath); err != nil {
 		t.Fatalf("LoadPolicy(custom): %v", err)
-	}
-
-	if err := verifier.SetActivePolicy("custom-strict"); err != nil {
-		t.Fatalf("SetActivePolicy(custom-strict): %v", err)
 	}
 
 	if verifier.GetActivePolicy() != "custom-strict" {

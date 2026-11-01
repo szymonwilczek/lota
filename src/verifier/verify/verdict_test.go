@@ -32,9 +32,6 @@ func TestBaselineStoreFailureIsNotAnIntegrityVerdict(t *testing.T) {
 	if err := v.AddPolicy(DefaultPolicy()); err != nil {
 		t.Fatalf("AddPolicy: %v", err)
 	}
-	if err := v.SetActivePolicy("default"); err != nil {
-		t.Fatalf("SetActivePolicy: %v", err)
-	}
 
 	const clientID = "store-without-boot-pinning"
 	challenge, err := v.GenerateChallenge(clientID)

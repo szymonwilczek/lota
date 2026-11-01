@@ -68,9 +68,6 @@ func newRigVerifier(t *testing.T, fleet *synth.Fleet) *verify.Verifier {
 	if err := v.LoadPolicy(policyPath); err != nil {
 		t.Fatalf("LoadPolicy: %v", err)
 	}
-	if err := v.SetActivePolicy(synth.PolicyName); err != nil {
-		t.Fatalf("SetActivePolicy: %v", err)
-	}
 	return v
 }
 

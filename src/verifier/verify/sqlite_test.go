@@ -594,9 +594,6 @@ func TestSQLiteIntegration_FullFlow(t *testing.T) {
 	if err := verifier.AddPolicy(DefaultPolicy()); err != nil {
 		t.Fatalf("AddPolicy(DefaultPolicy): %v", err)
 	}
-	if err := verifier.SetActivePolicy("default"); err != nil {
-		t.Fatalf("SetActivePolicy(default): %v", err)
-	}
 
 	clientID := "sqlite-client"
 	pcr14 := sqliteFixturePCR14()
@@ -656,9 +653,6 @@ func TestSQLiteIntegration_ReplayAfterRestart(t *testing.T) {
 	if err := v1.AddPolicy(DefaultPolicy()); err != nil {
 		t.Fatalf("AddPolicy(DefaultPolicy): %v", err)
 	}
-	if err := v1.SetActivePolicy("default"); err != nil {
-		t.Fatalf("SetActivePolicy(default): %v", err)
-	}
 
 	// successful attestation
 	challenge, _ := v1.GenerateChallenge("restart-client")
@@ -680,9 +674,6 @@ func TestSQLiteIntegration_ReplayAfterRestart(t *testing.T) {
 	v2 := NewVerifier(cfg2, aikStore2)
 	if err := v2.AddPolicy(DefaultPolicy()); err != nil {
 		t.Fatalf("AddPolicy(DefaultPolicy): %v", err)
-	}
-	if err := v2.SetActivePolicy("default"); err != nil {
-		t.Fatalf("SetActivePolicy(default): %v", err)
 	}
 
 	// same report - MUST fail
@@ -720,9 +711,6 @@ func TestSQLiteIntegration_BaselineSurvivesRestart(t *testing.T) {
 	if err := v1.AddPolicy(DefaultPolicy()); err != nil {
 		t.Fatalf("AddPolicy(DefaultPolicy): %v", err)
 	}
-	if err := v1.SetActivePolicy("default"); err != nil {
-		t.Fatalf("SetActivePolicy(default): %v", err)
-	}
 
 	ch1, _ := v1.GenerateChallenge("baseline-client")
 	rep1 := createSQLiteTestReport(t, "baseline-client", ch1.Nonce, originalPCR14)
@@ -743,9 +731,6 @@ func TestSQLiteIntegration_BaselineSurvivesRestart(t *testing.T) {
 	v2 := NewVerifier(cfg2, aikStore2)
 	if err := v2.AddPolicy(DefaultPolicy()); err != nil {
 		t.Fatalf("AddPolicy(DefaultPolicy): %v", err)
-	}
-	if err := v2.SetActivePolicy("default"); err != nil {
-		t.Fatalf("SetActivePolicy(default): %v", err)
 	}
 
 	// tampered PCR14 should be detected even after restart
@@ -787,9 +772,6 @@ func TestSQLiteIntegration_ConcurrentAttestations(t *testing.T) {
 	verifier := NewVerifier(cfg, aikVerifier)
 	if err := verifier.AddPolicy(DefaultPolicy()); err != nil {
 		t.Fatalf("AddPolicy(DefaultPolicy): %v", err)
-	}
-	if err := verifier.SetActivePolicy("default"); err != nil {
-		t.Fatalf("SetActivePolicy(default): %v", err)
 	}
 
 	numClients := 10

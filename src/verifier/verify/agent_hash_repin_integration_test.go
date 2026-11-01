@@ -48,9 +48,6 @@ func repinVerifier(t *testing.T, allowedSeeds ...byte) *Verifier {
 	if err := verifier.AddPolicy(policy); err != nil {
 		t.Fatalf("AddPolicy: %v", err)
 	}
-	if err := verifier.SetActivePolicy("default"); err != nil {
-		t.Fatalf("SetActivePolicy: %v", err)
-	}
 	return verifier
 }
 
