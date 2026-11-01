@@ -36,7 +36,7 @@ func recordOneRound(t *testing.T, clientID string, report func(nonce [types.Nonc
 		t.Logf("round refused: %v", err)
 	}
 
-	records := attestLog.QueryAttestations(1)
+	records := attestLog.QueryAttestations(store.AttestationQuery{Limit: 1})
 	if len(records) != 1 {
 		t.Fatalf("attestation records = %d, want 1", len(records))
 	}
@@ -130,7 +130,7 @@ func TestRecordCarriesTheAddressTheReportCameFrom(t *testing.T) {
 		t.Fatalf("VerifyReportFrom: %v", err)
 	}
 
-	records := attestLog.QueryAttestations(1)
+	records := attestLog.QueryAttestations(store.AttestationQuery{Limit: 1})
 	if len(records) != 1 {
 		t.Fatalf("attestation records = %d, want 1", len(records))
 	}

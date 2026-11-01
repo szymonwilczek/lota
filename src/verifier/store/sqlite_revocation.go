@@ -519,12 +519,8 @@ const sqliteAttestationSelect = `SELECT id, timestamp, tenant, client_id, hardwa
 	 result, duration_ms, pcr14, details, remote_addr, kernel_hash, last_seen, rounds
 	 FROM attestation_log`
 
-func (l *SQLiteAttestationLog) QueryAttestations(limit int) []AttestationRecord {
-	return l.QueryAttestationsFiltered(AttestationQuery{Limit: limit})
-}
-
 // zero query: the whole log, newest first
-func (l *SQLiteAttestationLog) QueryAttestationsFiltered(q AttestationQuery) []AttestationRecord {
+func (l *SQLiteAttestationLog) QueryAttestations(q AttestationQuery) []AttestationRecord {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 

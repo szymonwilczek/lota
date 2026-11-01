@@ -502,12 +502,8 @@ const pgAttestationSelect = `SELECT id, timestamp, tenant, client_id, hardware_i
 	 result, duration_ms, pcr14, details, remote_addr, kernel_hash, last_seen, rounds
 	 FROM attestation_log`
 
-func (l *PostgresAttestationLog) QueryAttestations(limit int) []AttestationRecord {
-	return l.QueryAttestationsFiltered(AttestationQuery{Limit: limit})
-}
-
 // zero query: the whole log, newest first
-func (l *PostgresAttestationLog) QueryAttestationsFiltered(q AttestationQuery) []AttestationRecord {
+func (l *PostgresAttestationLog) QueryAttestations(q AttestationQuery) []AttestationRecord {
 	// timestamptz compares instants; the bound goes as UTC
 	where, args := attestationQueryClauses(q, func(n int) string {
 		return "$" + strconv.Itoa(n)

@@ -47,7 +47,7 @@ func TestIntegration_AttestationRecordCarriesBannableHardwareID(t *testing.T) {
 		t.Fatalf("result = %d, want VerifyOK", result.Result)
 	}
 
-	records := attestLog.QueryAttestations(1)
+	records := attestLog.QueryAttestations(store.AttestationQuery{Limit: 1})
 	if len(records) != 1 {
 		t.Fatalf("attestation records = %d, want 1", len(records))
 	}
@@ -77,7 +77,7 @@ func TestIntegration_RejectedRoundNamesTheHardwareToBan(t *testing.T) {
 		t.Fatalf("result = %d, want VerifyBanned", result.Result)
 	}
 
-	records := attestLog.QueryAttestations(1)
+	records := attestLog.QueryAttestations(store.AttestationQuery{Limit: 1})
 	if len(records) != 1 {
 		t.Fatalf("attestation records = %d, want 1", len(records))
 	}

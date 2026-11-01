@@ -244,7 +244,7 @@ func TestPostgresAttestationLog(t *testing.T) {
 	if err := al.Record(AttestationRecord{ClientID: "c1", Result: "VERIFY_OK", DurationMs: 1.5}); err != nil {
 		t.Fatalf("Record: %v", err)
 	}
-	rs := al.QueryAttestations(10)
+	rs := al.QueryAttestations(AttestationQuery{Limit: 10})
 	if len(rs) != 1 || rs[0].Result != "VERIFY_OK" {
 		t.Fatalf("QueryAttestations = %+v", rs)
 	}
@@ -252,7 +252,7 @@ func TestPostgresAttestationLog(t *testing.T) {
 	if err := al.Record(AttestationRecord{ClientID: "c2", Tenant: "acme", Result: "VERIFY_OK"}); err != nil {
 		t.Fatalf("Record with tenant: %v", err)
 	}
-	rs = al.QueryAttestations(1)
+	rs = al.QueryAttestations(AttestationQuery{Limit: 1})
 	if len(rs) != 1 || rs[0].Tenant != "acme" {
 		t.Fatalf("QueryAttestations tenant = %+v, want acme", rs)
 	}
@@ -296,7 +296,7 @@ func TestPostgresAttestationLogConcurrentFirstSighting(t *testing.T) {
 		}
 	}
 
-	rs := logs[0].QueryAttestations(0)
+	rs := logs[0].QueryAttestations(AttestationQuery{})
 	if len(rs) != clients {
 		t.Fatalf("%d rows for %d clients, want one each", len(rs), clients)
 	}
@@ -328,7 +328,7 @@ func TestPostgresAttestationLogRecordBatch(t *testing.T) {
 		t.Fatalf("RecordBatch: %v", err)
 	}
 
-	rs := al.QueryAttestations(n)
+	rs := al.QueryAttestations(AttestationQuery{Limit: n})
 	if len(rs) != n {
 		t.Fatalf("QueryAttestations returned %d records, want %d", len(rs), n)
 	}

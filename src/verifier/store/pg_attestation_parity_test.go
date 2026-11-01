@@ -66,7 +66,7 @@ func TestPostgresAndSQLiteAnswerTheSameQuestionTheSameWay(t *testing.T) {
 	}
 
 	// Postgres keeps the input truncated to the microsecond
-	whole := pg.QueryAttestations(0)
+	whole := pg.QueryAttestations(AttestationQuery{})
 	if len(whole) == 0 {
 		t.Fatal("postgres recorded nothing")
 	}
@@ -80,8 +80,8 @@ func TestPostgresAndSQLiteAnswerTheSameQuestionTheSameWay(t *testing.T) {
 	}
 
 	for _, q := range queries {
-		want := lite.QueryAttestationsFiltered(q)
-		got := pg.QueryAttestationsFiltered(q)
+		want := lite.QueryAttestations(q)
+		got := pg.QueryAttestations(q)
 		if len(got) != len(want) {
 			t.Errorf("%+v: postgres returned %d rows, sqlite returned %d", q, len(got), len(want))
 			continue
@@ -114,7 +114,7 @@ func TestPostgresHoldsTheInstantNotTheClockReading(t *testing.T) {
 	}
 
 	west := time.FixedZone("UTC-6", -6*60*60)
-	got := log.QueryAttestationsFiltered(AttestationQuery{
+	got := log.QueryAttestations(AttestationQuery{
 		Since: at.Add(-time.Minute).In(west),
 		Until: at.Add(time.Minute).In(west),
 	})
@@ -125,7 +125,7 @@ func TestPostgresHoldsTheInstantNotTheClockReading(t *testing.T) {
 		t.Errorf("the row reads %v, and the round was served at %v", got[0].Timestamp, at)
 	}
 
-	before := log.QueryAttestationsFiltered(AttestationQuery{
+	before := log.QueryAttestations(AttestationQuery{
 		Since: at.Add(-2 * time.Hour),
 		Until: at.Add(-time.Hour),
 	})
@@ -168,7 +168,7 @@ func TestPostgresWritesWhatItMayNotFold(t *testing.T) {
 				t.Fatalf("record the changed round: %v", err)
 			}
 
-			got := log.QueryAttestations(0)
+			got := log.QueryAttestations(AttestationQuery{})
 			if len(got) != 2 {
 				t.Fatalf("%s left %d rows, want 2", c.what, len(got))
 			}

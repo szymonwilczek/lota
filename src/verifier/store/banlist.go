@@ -154,8 +154,8 @@ type AttestationLog interface {
 	// records a single attestation attempt with its outcome
 	Record(entry AttestationRecord) error
 
-	// returns the most recent attestation records (newest first)
-	QueryAttestations(limit int) []AttestationRecord
+	// returns the records matching @q, newest first
+	QueryAttestations(q AttestationQuery) []AttestationRecord
 }
 
 // BatchRecorder is optional AttestationLog capability:

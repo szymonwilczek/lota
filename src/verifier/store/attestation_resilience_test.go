@@ -45,7 +45,7 @@ func TestARestartDoesNotOpenASecondRow(t *testing.T) {
 		}
 	}
 
-	got := log.QueryAttestations(0)
+	got := log.QueryAttestations(AttestationQuery{})
 	if len(got) != 1 {
 		t.Fatalf("a restart mid-row left %d rows, want 1", len(got))
 	}
@@ -126,7 +126,7 @@ func TestConcurrentRoundsForOneHostAreAllCounted(t *testing.T) {
 		t.Fatalf("record: %v", err)
 	}
 
-	got := log.QueryAttestations(0)
+	got := log.QueryAttestations(AttestationQuery{})
 	var total int64
 	for i := range got {
 		total += got[i].Rounds

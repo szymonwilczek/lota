@@ -42,7 +42,7 @@ func populatedLog(t *testing.T) (*SQLiteAttestationLog, time.Time) {
 func TestAWindowReturnsTheRowsThatOverlapIt(t *testing.T) {
 	log, at := populatedLog(t)
 
-	got := log.QueryAttestationsFiltered(AttestationQuery{
+	got := log.QueryAttestations(AttestationQuery{
 		Since: at.Add(30 * time.Minute),
 		Until: at.Add(90 * time.Minute),
 	})
@@ -60,7 +60,7 @@ func TestAWindowReturnsTheRowsThatOverlapIt(t *testing.T) {
 func TestAWindowBeforeAnythingIsEmpty(t *testing.T) {
 	log, at := populatedLog(t)
 
-	got := log.QueryAttestationsFiltered(AttestationQuery{
+	got := log.QueryAttestations(AttestationQuery{
 		Since: at.Add(-48 * time.Hour),
 		Until: at.Add(-24 * time.Hour),
 	})
@@ -72,7 +72,7 @@ func TestAWindowBeforeAnythingIsEmpty(t *testing.T) {
 func TestAResultFilterNarrowsToThatVerdict(t *testing.T) {
 	log, _ := populatedLog(t)
 
-	got := log.QueryAttestationsFiltered(AttestationQuery{Result: "pcr_fail"})
+	got := log.QueryAttestations(AttestationQuery{Result: "pcr_fail"})
 	if len(got) != 1 {
 		t.Fatalf("one refusal was recorded, got %d", len(got))
 	}
@@ -84,7 +84,7 @@ func TestAResultFilterNarrowsToThatVerdict(t *testing.T) {
 func TestEventsOnlyLeavesTheTrustedRoundsOut(t *testing.T) {
 	log, _ := populatedLog(t)
 
-	got := log.QueryAttestationsFiltered(AttestationQuery{EventsOnly: true})
+	got := log.QueryAttestations(AttestationQuery{EventsOnly: true})
 	if len(got) != 1 {
 		t.Fatalf("one round was not trusted, got %d", len(got))
 	}
@@ -96,7 +96,7 @@ func TestEventsOnlyLeavesTheTrustedRoundsOut(t *testing.T) {
 func TestAClientFilterNarrowsToThatHost(t *testing.T) {
 	log, _ := populatedLog(t)
 
-	got := log.QueryAttestationsFiltered(AttestationQuery{ClientID: "c2"})
+	got := log.QueryAttestations(AttestationQuery{ClientID: "c2"})
 	if len(got) != 1 {
 		t.Fatalf("the second host has one row, got %d", len(got))
 	}
@@ -108,7 +108,7 @@ func TestAClientFilterNarrowsToThatHost(t *testing.T) {
 func TestTheFilteredReadIsStillBoundedAndNewestFirst(t *testing.T) {
 	log, _ := populatedLog(t)
 
-	got := log.QueryAttestationsFiltered(AttestationQuery{Limit: 2})
+	got := log.QueryAttestations(AttestationQuery{Limit: 2})
 	if len(got) != 2 {
 		t.Fatalf("a limit of 2 returns 2, got %d", len(got))
 	}
@@ -117,18 +117,7 @@ func TestTheFilteredReadIsStillBoundedAndNewestFirst(t *testing.T) {
 	}
 }
 
-// same answer as the unfiltered read
-func TestAnEmptyQueryReadsTheWholeLog(t *testing.T) {
-	log, _ := populatedLog(t)
-
-	plain := log.QueryAttestations(0)
-	filtered := log.QueryAttestationsFiltered(AttestationQuery{})
-	if len(plain) != len(filtered) {
-		t.Fatalf("the two reads disagree: %d and %d rows", len(plain), len(filtered))
-	}
-}
-
-// the batched writer must not hide the backend's capability
+// the batched writer must pass the query through
 func TestTheBatchedWriterForwardsAFilteredRead(t *testing.T) {
 	backend := NewSQLiteAttestationLog(eventsTestDB(t), DefaultCollapseWindow)
 	bl := NewBatchedAttestationLog(backend, BatchedAttestationLogConfig{})
@@ -145,11 +134,7 @@ func TestTheBatchedWriterForwardsAFilteredRead(t *testing.T) {
 	}
 	bl.Flush()
 
-	q, ok := any(bl).(AttestationQuerier)
-	if !ok {
-		t.Fatal("the batched writer has to offer the narrowed read its backend offers")
-	}
-	got := q.QueryAttestationsFiltered(AttestationQuery{EventsOnly: true})
+	got := bl.QueryAttestations(AttestationQuery{EventsOnly: true})
 	if len(got) != 1 || got[0].Result != "banned" {
 		t.Fatalf("the filter did not reach the backend: %+v", got)
 	}

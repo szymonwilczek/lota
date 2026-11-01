@@ -187,7 +187,7 @@ func TestARoundOlderThanTheRowIsWrittenNotFolded(t *testing.T) {
 	}
 
 	// newest first: the stepped round
-	got := log.QueryAttestations(0)
+	got := log.QueryAttestations(AttestationQuery{})
 	if len(got) != 2 {
 		t.Fatalf("a round behind the row's last sighting is its own row, got %d rows", len(got))
 	}
@@ -270,7 +270,7 @@ func TestSteadyAttestationHoldsOneRow(t *testing.T) {
 		}
 	}
 
-	got := log.QueryAttestations(0)
+	got := log.QueryAttestations(AttestationQuery{})
 	if len(got) != 1 {
 		t.Fatalf("an hour of steady attestation is one row, got %d", len(got))
 	}
@@ -303,7 +303,7 @@ func TestARefusalIsWrittenImmediately(t *testing.T) {
 		t.Fatalf("record refusal: %v", err)
 	}
 
-	got := log.QueryAttestations(0)
+	got := log.QueryAttestations(AttestationQuery{})
 	if len(got) != 2 {
 		t.Fatalf("three trusted rounds and a refusal are two rows, got %d", len(got))
 	}
@@ -333,7 +333,7 @@ func TestRecoveryOpensItsOwnRow(t *testing.T) {
 		}
 	}
 
-	got := log.QueryAttestations(0)
+	got := log.QueryAttestations(AttestationQuery{})
 	if len(got) != 3 {
 		t.Fatalf("trusted, refused and trusted again are three rows, got %d", len(got))
 	}
@@ -358,7 +358,7 @@ func TestSubjectsDoNotShareARow(t *testing.T) {
 		}
 	}
 
-	got := log.QueryAttestations(0)
+	got := log.QueryAttestations(AttestationQuery{})
 	if len(got) != 2 {
 		t.Fatalf("two hosts attesting are two rows, got %d", len(got))
 	}
@@ -380,7 +380,7 @@ func TestABatchCollapsesLikeSingleRecords(t *testing.T) {
 		t.Fatalf("batch: %v", err)
 	}
 
-	got := log.QueryAttestations(0)
+	got := log.QueryAttestations(AttestationQuery{})
 	if len(got) != 2 {
 		t.Fatalf("six trusted rounds and a revocation are two rows, got %d", len(got))
 	}
@@ -403,7 +403,7 @@ func TestTheWindowClosesTheRowInTheStore(t *testing.T) {
 		}
 	}
 
-	got := log.QueryAttestations(0)
+	got := log.QueryAttestations(AttestationQuery{})
 	if len(got) != 2 {
 		t.Fatalf("two hours of half-hourly rounds under an hour-long window are two rows, got %d", len(got))
 	}
@@ -425,7 +425,7 @@ func TestAZeroWindowRecordsEveryRound(t *testing.T) {
 		}
 	}
 
-	got := log.QueryAttestations(0)
+	got := log.QueryAttestations(AttestationQuery{})
 	if len(got) != 5 {
 		t.Fatalf("a zero window writes every round, got %d rows", len(got))
 	}
@@ -533,7 +533,7 @@ func TestWindowEdgesAreInclusive(t *testing.T) {
 	log := windowFixture(t, at)
 	for _, c := range cases {
 		t.Run(c.what, func(t *testing.T) {
-			got := log.QueryAttestationsFiltered(c.q)
+			got := log.QueryAttestations(c.q)
 			if len(got) != c.count {
 				t.Errorf("%d rows, want %d", len(got), c.count)
 				for i := range got {
@@ -574,7 +574,7 @@ func TestNarrowedReadsAnswerWhatWasAsked(t *testing.T) {
 	log := windowFixture(t, at)
 	for _, c := range cases {
 		t.Run(c.what, func(t *testing.T) {
-			got := log.QueryAttestationsFiltered(c.q)
+			got := log.QueryAttestations(c.q)
 			if len(got) != c.count {
 				t.Errorf("%d rows, want %d", len(got), c.count)
 			}
@@ -594,7 +594,7 @@ func TestAttestationWindowIsAnInstantNotAClockReading(t *testing.T) {
 		t.Fatalf("record: %v", err)
 	}
 
-	got := log.QueryAttestationsFiltered(AttestationQuery{
+	got := log.QueryAttestations(AttestationQuery{
 		Since: at.Add(-time.Minute),
 		Until: at.Add(time.Minute),
 	})
@@ -605,7 +605,7 @@ func TestAttestationWindowIsAnInstantNotAClockReading(t *testing.T) {
 		t.Errorf("the row reads %v, and the round was served at %v", got[0].Timestamp, at)
 	}
 
-	before := log.QueryAttestationsFiltered(AttestationQuery{
+	before := log.QueryAttestations(AttestationQuery{
 		Since: at.Add(-2 * time.Hour),
 		Until: at.Add(-time.Hour),
 	})
@@ -628,7 +628,7 @@ func TestAttestationWindowInsideAStandingRowReturnsIt(t *testing.T) {
 		}
 	}
 
-	got := log.QueryAttestationsFiltered(AttestationQuery{
+	got := log.QueryAttestations(AttestationQuery{
 		Since: at.Add(10 * time.Minute),
 		Until: at.Add(15 * time.Minute),
 	})
@@ -654,7 +654,7 @@ func TestAttestationRowReadsBackAsTheInstantItHappened(t *testing.T) {
 		}
 	}
 
-	got := log.QueryAttestations(0)
+	got := log.QueryAttestations(AttestationQuery{})
 	if len(got) != 1 {
 		t.Fatalf("three identical rounds are one row, got %d", len(got))
 	}
@@ -692,7 +692,7 @@ func TestTheHourAClockRepeatsIsStillAnHour(t *testing.T) {
 	last := change.Add((rounds - 1) * 15 * time.Minute).In(warsaw).Format("15:04 MST")
 	t.Logf("the verifier's clock read %s for the first round and %s for the last", first, last)
 
-	got := log.QueryAttestations(0)
+	got := log.QueryAttestations(AttestationQuery{})
 	if len(got) != 1 {
 		t.Fatalf("a host attesting across the change left %d rows, want 1", len(got))
 	}
@@ -704,7 +704,7 @@ func TestTheHourAClockRepeatsIsStillAnHour(t *testing.T) {
 	}
 
 	// the repeated hour still reads as an hour
-	window := log.QueryAttestationsFiltered(AttestationQuery{
+	window := log.QueryAttestations(AttestationQuery{
 		Since: change.Add(30 * time.Minute),
 		Until: change.Add(45 * time.Minute),
 	})

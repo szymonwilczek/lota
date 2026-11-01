@@ -372,7 +372,7 @@ func TestIntegration_TenantOnAttestationLog(t *testing.T) {
 		t.Fatalf("result = %d, want VerifyOK", result.Result)
 	}
 
-	records := attestLog.QueryAttestations(1)
+	records := attestLog.QueryAttestations(store.AttestationQuery{Limit: 1})
 	if len(records) != 1 || records[0].Tenant != "acme-corp" {
 		t.Fatalf("attestation record = %+v, want tenant acme-corp", records)
 	}

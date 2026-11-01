@@ -802,7 +802,7 @@ func TestAttestationLogTenant(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("Record: %v", err)
 	}
-	rs := log.QueryAttestations(1)
+	rs := log.QueryAttestations(AttestationQuery{Limit: 1})
 	if len(rs) != 1 || rs[0].Tenant != "acme" {
 		t.Fatalf("QueryAttestations = %+v, want one record in tenant acme", rs)
 	}
@@ -828,7 +828,7 @@ func TestAttestationLogRecordBatch(t *testing.T) {
 		t.Fatalf("RecordBatch: %v", err)
 	}
 
-	rs := log.QueryAttestations(0)
+	rs := log.QueryAttestations(AttestationQuery{})
 	if len(rs) != 64 {
 		t.Fatalf("QueryAttestations returned %d records, want 64", len(rs))
 	}

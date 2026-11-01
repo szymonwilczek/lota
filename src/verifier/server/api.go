@@ -1415,12 +1415,7 @@ func (h *APIHandler) handleAttestationLog(w http.ResponseWriter, r *http.Request
 	}
 
 	p := requestPrincipal(r)
-	var entries []store.AttestationRecord
-	if narrower, ok := h.attestationLog.(store.AttestationQuerier); ok {
-		entries = narrower.QueryAttestationsFiltered(q)
-	} else {
-		entries = h.attestationLog.QueryAttestations(limit)
-	}
+	entries := h.attestationLog.QueryAttestations(q)
 	resp := make([]attestationResponse, 0, len(entries))
 	for i := range entries {
 		e := &entries[i]
