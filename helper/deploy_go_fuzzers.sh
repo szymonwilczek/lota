@@ -23,14 +23,11 @@ mkdir -p "$BUILD_DIR"
 
 echo "-> Compiling Go Fuzz Targets..."
 find src -name "*_fuzz_test.go" -print0 | xargs -0 -n1 dirname | sort -u | while read -r pkg_path; do
-    pkg_name=$(basename "$pkg_path")
     bin_name="fuzz_$(echo "$pkg_path" | tr '/' '_')"
     
     echo "   Building $bin_name from $pkg_path..."
     
-    target_dir="$pkg_path"
     module_root=""
-    rel_pkg="."
     
     pushd . > /dev/null
     
