@@ -41,7 +41,7 @@ import (
 // Token wire format constants
 const (
 	TokenMagic      uint32 = 0x4B544F4C // "LOTK" in memory (little-endian)
-	TokenVersion    uint16 = 0x0003
+	TokenVersion    uint16 = 0x0001
 	TokenHeaderSize        = 144
 
 	MaxAttestSize = 1024

@@ -59,7 +59,7 @@ extern "C" {
  * Maximum token size: LOTA_TOKEN_MAX_SIZE below.
  */
 #define LOTA_TOKEN_MAGIC 0x4B544F4C /* "LOTK" in memory (little-endian) */
-#define LOTA_TOKEN_VERSION 0x0003
+#define LOTA_TOKEN_VERSION 0x0001
 #define LOTA_TOKEN_HEADER_SIZE 144
 /*
  * Protected-PID cap: LOTA_IPC_TOKEN_MAX_PROTECT_PIDS from the uninstalled

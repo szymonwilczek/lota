@@ -166,7 +166,7 @@ struct lota_snapshot_wire_hdr size=16 align=1
 	flags                            off=8 size=4
 	token_size                       off=12 size=4
 macro LOTA_TOKEN_MAGIC                         = 1263816524
-macro LOTA_TOKEN_VERSION                       = 3
+macro LOTA_TOKEN_VERSION                       = 1
 macro LOTA_TOKEN_HEADER_SIZE                   = 144
 macro LOTA_TOKEN_MAX_PROTECT_PIDS              = 181
 macro LOTA_TOKEN_MAX_PID_LIST_SIZE             = 724
