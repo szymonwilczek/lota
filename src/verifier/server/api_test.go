@@ -1,9 +1,5 @@
 // SPDX-License-Identifier: MIT
 // Copyright (C) 2026 Szymon Wilczek
-// LOTA Verifier - REST Monitoring API tests
-//
-// Unit tests verify individual handler behavior in isolation.
-// Each test exercises a single HTTP handler with mocked dependencies.
 
 package server
 
@@ -1787,5 +1783,129 @@ func TestDeleteClient_RevocationSurvives(t *testing.T) {
 	// re-enrolled client with the same identity stays revoked
 	if _, revoked := v.RevocationStore().IsRevoked(clientID); !revoked {
 		t.Error("revocation did not survive client deletion")
+	}
+}
+
+// The startup banner is the operator's inventory of what an instance exposes:
+// what a firewall rule, a client or a runbook is written against. A route in it
+// the mux does not serve sends the reader after an endpoint that answers 404,
+// and a served route missing from it hides an exposed surface.
+// Both directions are asserted against the mux the server builds, by asking
+// the mux which pattern it matches rather than what the handler answers
+// -- a handler may legitimately answer 404 for a client that does not exist.
+
+// concreteRequestPath turns an advertised endpoint into a path a request can
+// carry: the identifier placeholder gets a value.
+func concreteRequestPath(path string) string {
+	return strings.ReplaceAll(path, "{id}", "test-client")
+}
+
+// matchedPattern is the route the mux would dispatch this endpoint to,
+// or "" when nothing is registered for it.
+func matchedPattern(t *testing.T, mux *http.ServeMux, endpoint string) string {
+	t.Helper()
+
+	method, path, found := strings.Cut(endpoint, " ")
+	if !found {
+		t.Fatalf("endpoint %q is not \"METHOD /path\"", endpoint)
+	}
+
+	req := httptest.NewRequest(method, concreteRequestPath(path),
+		strings.NewReader("{}"))
+	req.Header.Set("Content-Type", "application/json")
+
+	_, pattern := mux.Handler(req)
+	return pattern
+}
+
+func TestEveryAdvertisedEndpointIsServed(t *testing.T) {
+	mux := http.NewServeMux()
+	h := NewAPIHandler(mux, nil, nil, nil, nil, nil, nil, "", "")
+
+	for _, endpoint := range h.AdvertisedRoutes() {
+		if matchedPattern(t, mux, endpoint) == "" {
+			t.Errorf("advertised endpoint %q is served by nothing",
+				endpoint)
+		}
+	}
+}
+
+func TestEveryServedRouteIsAdvertised(t *testing.T) {
+	mux := http.NewServeMux()
+	h := NewAPIHandler(mux, nil, nil, nil, nil, nil, nil, "", "")
+
+	// A route that dispatches several endpoints under one pattern is advertised
+	// by those endpoints, so the pattern is covered when any advertised endpoint
+	// routes back to it.
+	covered := make(map[string]bool)
+	for _, endpoint := range h.AdvertisedRoutes() {
+		covered[matchedPattern(t, mux, endpoint)] = true
+	}
+
+	for _, pattern := range h.RegisteredRoutes() {
+		if !covered[pattern] {
+			t.Errorf("route %q is served and advertised by no endpoint",
+				pattern)
+		}
+	}
+}
+
+// Every non-2xx answer carries the `{"error": ...}` envelope,
+// including the mux's own refusals: a wrong method and an unknown path.
+func TestEveryRefusalCarriesTheErrorEnvelope(t *testing.T) {
+	mux, _ := setupTestAPIListening(t)
+
+	cases := []struct {
+		name   string
+		method string
+		path   string
+		want   int
+	}{
+		{"wrong method on a real endpoint", "POST", "/api/v1/stats", http.StatusMethodNotAllowed},
+		{"wrong method on a mutation endpoint", "GET", "/api/v1/bans/abab", http.StatusMethodNotAllowed},
+		{"a path nothing serves", "GET", "/api/v1/nope", http.StatusNotFound},
+		{"the root path", "GET", "/", http.StatusNotFound},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			req := httptest.NewRequest(tc.method, tc.path, nil)
+			rec := httptest.NewRecorder()
+			mux.ServeHTTP(rec, req)
+
+			if rec.Code != tc.want {
+				t.Fatalf("%s %s answered %d, want %d", tc.method, tc.path, rec.Code, tc.want)
+			}
+			if ct := rec.Header().Get("Content-Type"); !strings.HasPrefix(ct, "application/json") {
+				t.Errorf("Content-Type = %q, want application/json", ct)
+			}
+
+			var body errorResponse
+			if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+				t.Fatalf("body %q is not the error envelope: %v", rec.Body.String(), err)
+			}
+			if body.Error == "" {
+				t.Error("the envelope carries no message")
+			}
+		})
+	}
+}
+
+// A 405 names the methods the endpoint accepts.
+func TestMethodRefusalNamesTheMethodsTheEndpointTakes(t *testing.T) {
+	mux, _ := setupTestAPIListening(t)
+
+	req := httptest.NewRequest("PUT", "/api/v1/bans", nil)
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("PUT /api/v1/bans answered %d, want 405", rec.Code)
+	}
+	allow := rec.Header().Get("Allow")
+	for _, method := range []string{"GET", "HEAD", "POST"} {
+		if !strings.Contains(allow, method) {
+			t.Errorf("Allow = %q, missing the %s this path serves", allow, method)
+		}
 	}
 }
