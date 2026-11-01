@@ -208,27 +208,9 @@ func Pseudonym(rigID, name string) string {
 // DefaultKeyPool is the AIK key pool size when the caller does not choose one
 const DefaultKeyPool = 256
 
-// NewFleet builds n agents backed by freshly generated pool of keyPool RSA keys
-// (keyPool <= 0 collapses to DefaultKeyPool, and the pool never exceeds the fleet size)
-// Key generation and certificate issuance run across all CPUs
-func NewFleet(ca *CA, n, keyPool int, tenant string) (*Fleet, error) {
-	if n <= 0 {
-		return nil, fmt.Errorf("fleet size must be positive, got %d", n)
-	}
-	if keyPool <= 0 {
-		keyPool = DefaultKeyPool
-	}
-	keyPool = min(keyPool, n)
-	keys, err := GenerateKeyPool(keyPool)
-	if err != nil {
-		return nil, err
-	}
-	return NewFleetWithKeys(ca, n, keys, tenant)
-}
-
-// NewFleetWithKeys builds n agents over an existing key pool,
+// NewFleet builds n agents over an existing key pool,
 // e.g. one reloaded from rig directory
-func NewFleetWithKeys(ca *CA, n int, keys []*rsa.PrivateKey, tenant string) (*Fleet, error) {
+func NewFleet(ca *CA, n int, keys []*rsa.PrivateKey, tenant string) (*Fleet, error) {
 	if n <= 0 {
 		return nil, fmt.Errorf("fleet size must be positive, got %d", n)
 	}

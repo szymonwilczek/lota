@@ -156,7 +156,11 @@ func testFleet(t *testing.T, n int) *synth.Fleet {
 	if err != nil {
 		t.Fatalf("NewCA: %v", err)
 	}
-	fleet, err := synth.NewFleet(ca, n, 2, "")
+	keys, err := synth.GenerateKeyPool(2)
+	if err != nil {
+		t.Fatalf("GenerateKeyPool: %v", err)
+	}
+	fleet, err := synth.NewFleet(ca, n, keys, "")
 	if err != nil {
 		t.Fatalf("NewFleet: %v", err)
 	}
