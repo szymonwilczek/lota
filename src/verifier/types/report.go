@@ -15,7 +15,7 @@ import (
 const (
 	ReportMagic uint32 = 0x41544F4C // "LOTA" little-endian
 	// ReportVersion is the attestation report wire version,
-	// matching LOTA_VERSION in include/lota.h
+	// matching LOTA_REPORT_VERSION in include/lota.h
 	//
 	// Verifier accepts exactly this one:
 	// breaking layout change bumps the major and is a flag-day.

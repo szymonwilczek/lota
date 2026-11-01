@@ -55,7 +55,7 @@ int main(void)
 	memset(&esrt, 0, sizeof(esrt));
 
 	report.header.magic = LOTA_MAGIC;
-	report.header.version = LOTA_VERSION;
+	report.header.version = LOTA_REPORT_VERSION;
 	report.header.flags = 0xA5A5A5A5u;
 
 	for (int i = 0; i < LOTA_PCR_COUNT; i++)

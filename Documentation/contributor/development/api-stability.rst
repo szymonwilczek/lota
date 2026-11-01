@@ -306,7 +306,7 @@ carries its version in the message:
      - Version constant
      - Rule
    * - Attestation report
-     - ``LOTA_VERSION_MAJOR`` / ``types.ReportVersion``
+     - ``LOTA_REPORT_VERSION_MAJOR`` / ``types.ReportVersion``
      - Exact match. The verifier refuses a report from a wire it was not
        built to parse rather than guessing at the layout of the message
        every trust decision rests on, so a layout change is a flag day for

@@ -29,12 +29,12 @@
  * below the major, so both halves read the same number the same way.
  * See Documentation/operator/protocol-versions.rst
  */
-#define LOTA_VERSION_MAJOR 1
-#define LOTA_VERSION_MINOR 0
-#define LOTA_VERSION_PATCH 0
-#define LOTA_VERSION                                              \
-	((LOTA_VERSION_MAJOR << 16) | (LOTA_VERSION_MINOR << 8) | \
-	 LOTA_VERSION_PATCH)
+#define LOTA_REPORT_VERSION_MAJOR 1
+#define LOTA_REPORT_VERSION_MINOR 0
+#define LOTA_REPORT_VERSION_PATCH 0
+#define LOTA_REPORT_VERSION                  \
+	((LOTA_REPORT_VERSION_MAJOR << 16) | \
+	 (LOTA_REPORT_VERSION_MINOR << 8) | LOTA_REPORT_VERSION_PATCH)
 
 /* Magic number: "LOTA" in little-endian */
 #define LOTA_MAGIC 0x41544F4C
