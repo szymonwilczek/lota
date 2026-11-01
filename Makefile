@@ -1032,6 +1032,15 @@ check-version-tag:
 # nfpm configs and the RPM spec describe the same packages;
 # host gets whichever one built the package it installed,
 # so they must ship the same files; the spec takes its version from VERSION.
+# Comments and pages must name symbols and commands that exist.
+$(BUILD_DIR)/check-doc-references: scripts/check-doc-references.c | $(BUILD_DIR)
+	$(QUIET_CC)
+	$(Q)$(CC) $(CFLAGS) -o $@ $<
+
+.PHONY: check-doc-references
+check-doc-references: $(BUILD_DIR)/check-doc-references
+	@$<
+
 # See scripts/check-package-manifests.sh
 .PHONY: check-package-manifests
 check-package-manifests:

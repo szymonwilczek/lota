@@ -49,6 +49,9 @@ Testing policy
    * - Packaging
      - the nfpm configs and the RPM spec ship the same files
      - ``make check-package-manifests``
+   * - Documentation references
+     - comments and pages name symbols and commands that exist
+     - ``make check-doc-references``
    * - Player build
      - the player page's build-from-source commands install in a clean
        Fedora
