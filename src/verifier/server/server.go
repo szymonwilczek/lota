@@ -597,10 +597,9 @@ func (s *Server) sendErrorResult(conn net.Conn, resultCode uint32) {
 }
 
 type HealthStatus struct {
-	Listening         bool
-	Address           string
-	ActiveConnections int
-	Stats             verify.Stats
+	Listening bool
+	Address   string
+	Stats     verify.Stats
 }
 
 func (s *Server) HealthCheck() HealthStatus {
