@@ -534,13 +534,3 @@ func (r *VerifyResult) Serialize() []byte {
 	binary.LittleEndian.PutUint64(data[16:24], r.ValidUntil)
 	return data
 }
-
-// returns null-terminated kernel path as string
-func (s *SystemMeasurement) GetKernelPath() string {
-	for i, b := range s.KernelPath {
-		if b == 0 {
-			return string(s.KernelPath[:i])
-		}
-	}
-	return string(s.KernelPath[:])
-}
