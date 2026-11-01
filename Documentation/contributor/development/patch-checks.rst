@@ -182,8 +182,9 @@ messages before pushing. It rewrites commits in ``base..head`` to remove
 trailing spaces, trailing tabs, and blank lines after the final content line.
 It does not change file trees. It also fixes simple inline ``Problem:`` and
 ``Solution:`` headings, inserts the required blank line before
-``Signed-off-by``, wraps body paragraphs, and tells the developer to review the
-rewritten descriptions. The script requires a clean index and working tree,
+``Signed-off-by``, wraps body paragraphs to 75 columns, and tells the developer
+to review the rewritten descriptions. A trailer, a URL, a merge line, a
+diffstat line, and a line led by a file path are left as written. The script requires a clean index and working tree,
 refuses merge commits, and creates a backup branch before updating the current
 branch.
 
