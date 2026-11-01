@@ -87,9 +87,9 @@ func attestOnce(t *testing.T, v *verify.Verifier, fleet *Fleet, a *Agent, challe
 	if err != nil {
 		t.Fatalf("BuildReport(%s): %v", a.Name, err)
 	}
-	result, err := v.VerifyReport(challengeID, report)
+	result, err := v.VerifyReportFrom(challengeID, "", report)
 	if err != nil {
-		t.Logf("VerifyReport(%s): %v", a.Name, err)
+		t.Logf("VerifyReportFrom(%s): %v", a.Name, err)
 	}
 	return result
 }
@@ -134,7 +134,7 @@ func TestTamperedReportRejected(t *testing.T) {
 	// flip one byte of PCR0 (offset 16 = first PCR value)
 	report[16] ^= 0xFF
 
-	result, _ := v.VerifyReport("tamper", report)
+	result, _ := v.VerifyReportFrom("tamper", "", report)
 	if result.Result == types.VerifyOK {
 		t.Fatal("tampered report accepted")
 	}

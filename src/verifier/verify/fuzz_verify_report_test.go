@@ -55,7 +55,7 @@ func FuzzVerifyReport(f *testing.F) {
 			t.Fatalf("GenerateChallenge: %v", err)
 		}
 		report := buildSignedReport(spec, clientID, ch.Nonce, key)
-		result, err := v.VerifyReport(clientID, report)
+		result, err := v.VerifyReportFrom(clientID, "", report)
 
 		if result == nil {
 			t.Fatalf("VerifyReport returned nil result (err=%v)", err)

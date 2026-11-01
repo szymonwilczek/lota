@@ -406,7 +406,7 @@ func TestIntegration_FullAttestationFlow_TOFU(t *testing.T) {
 	reportData := createValidReport(t, clientID, challenge.Nonce, pcr14)
 	t.Logf("✓ Report created (%d bytes)", len(reportData))
 
-	result, err := verifier.VerifyReport(clientID, reportData)
+	result, err := verifier.VerifyReportFrom(clientID, "", reportData)
 	if err != nil {
 		t.Fatalf("Verification failed: %v", err)
 	}
@@ -431,7 +431,7 @@ func TestIntegration_SubsequentAttestation(t *testing.T) {
 	challenge1, _ := verifier.GenerateChallenge(clientID)
 	pcr14 := fixturePCR14()
 	report1 := createValidReport(t, clientID, challenge1.Nonce, pcr14)
-	result1, err := verifier.VerifyReport(clientID, report1)
+	result1, err := verifier.VerifyReportFrom(clientID, "", report1)
 	if err != nil || result1.Result != types.VerifyOK {
 		t.Fatalf("First attestation failed: %v (result=%d)", err, result1.Result)
 	}
@@ -440,7 +440,7 @@ func TestIntegration_SubsequentAttestation(t *testing.T) {
 	// should match baseline
 	challenge2, _ := verifier.GenerateChallenge(clientID)
 	report2 := createValidReport(t, clientID, challenge2.Nonce, pcr14)
-	result2, err := verifier.VerifyReport(clientID, report2)
+	result2, err := verifier.VerifyReportFrom(clientID, "", report2)
 	if err != nil || result2.Result != types.VerifyOK {
 		t.Fatalf("Second attestation failed: %v (result=%d)", err, result2.Result)
 	}
@@ -461,7 +461,7 @@ func TestIntegration_PCR14BaselineViolation(t *testing.T) {
 	challenge1, _ := verifier.GenerateChallenge(clientID)
 	originalPCR14 := fixturePCR14()
 	report1 := createValidReport(t, clientID, challenge1.Nonce, originalPCR14)
-	result1, _ := verifier.VerifyReport(clientID, report1)
+	result1, _ := verifier.VerifyReportFrom(clientID, "", report1)
 	if result1.Result != types.VerifyOK {
 		t.Fatalf("Baseline establishment failed")
 	}
@@ -474,7 +474,7 @@ func TestIntegration_PCR14BaselineViolation(t *testing.T) {
 	tamperedPCR14[0] ^= 0xFF // flip first byte - TAMPERING!
 
 	report2 := createValidReport(t, clientID, challenge2.Nonce, tamperedPCR14)
-	result2, err := verifier.VerifyReport(clientID, report2)
+	result2, err := verifier.VerifyReportFrom(clientID, "", report2)
 
 	// MUST detect the tampering
 	if result2.Result != types.VerifyIntegrityMismatch {
@@ -507,14 +507,14 @@ func TestIntegration_NonceReplayAttack(t *testing.T) {
 	reportData := createValidReport(t, clientID, challenge.Nonce, pcr14)
 
 	// should succeed
-	result1, err := verifier.VerifyReport(clientID, reportData)
+	result1, err := verifier.VerifyReportFrom(clientID, "", reportData)
 	if err != nil || result1.Result != types.VerifyOK {
 		t.Fatalf("First submission failed: %v", err)
 	}
 	t.Log("✓ First submission accepted")
 
 	// REPLAY ATTEMPT - same report again
-	result2, err := verifier.VerifyReport(clientID, reportData)
+	result2, err := verifier.VerifyReportFrom(clientID, "", reportData)
 
 	if result2.Result != types.VerifyNonceFail {
 		t.Fatalf("SECURITY FAILURE: Replay attack NOT detected!\n"+
@@ -543,7 +543,7 @@ func TestIntegration_InvalidSignature(t *testing.T) {
 	reportData[sigOffset] ^= 0xFF
 	reportData[sigOffset+1] ^= 0xFF
 
-	result, err := verifier.VerifyReport(clientID, reportData)
+	result, err := verifier.VerifyReportFrom(clientID, "", reportData)
 
 	if result.Result != types.VerifySigFail {
 		t.Fatalf("SECURITY FAILURE: Invalid signature NOT detected!\n"+
@@ -588,7 +588,7 @@ func TestIntegration_ConcurrentClients(t *testing.T) {
 
 			reportData := createValidReportWithKey(clientID, challenge.Nonce, pcr14, clientKeys[clientNum])
 
-			result, err := verifier.VerifyReport(clientID, reportData)
+			result, err := verifier.VerifyReportFrom(clientID, "", reportData)
 			if err != nil || result.Result != types.VerifyOK {
 				errors <- fmt.Errorf("client %d: verification failed: %v (result=%d)",
 					clientNum, err, result.Result)
@@ -647,7 +647,7 @@ func TestIntegration_ConcurrentFirstAttestationSameClient(t *testing.T) {
 			pcr14 := fixturePCR14()
 
 			reportData := createValidReportWithKey(hardwareLabel, challenge.Nonce, pcr14, key)
-			result, err := verifier.VerifyReport(challengeID, reportData)
+			result, err := verifier.VerifyReportFrom(challengeID, "", reportData)
 			if err != nil || result.Result != types.VerifyOK {
 				errs <- fmt.Errorf("verify failed: %v (result=%d)", err, result.Result)
 				done <- false
@@ -866,7 +866,7 @@ func TestVerify_RejectsMissingBootPCRs(t *testing.T) {
 	pcr14 := fixturePCR14()
 	reportData := createValidReportWithMask(t, clientID, challenge.Nonce, pcr14, legacyPCRMask)
 
-	result, err := verifier.VerifyReport(clientID, reportData)
+	result, err := verifier.VerifyReportFrom(clientID, "", reportData)
 	if err == nil {
 		t.Fatal("expected rejection: pcr_mask 0x4003 omits PCR 0/1/7")
 	}
@@ -905,7 +905,7 @@ func assertFlagRejected(t *testing.T, clientID string, flags uint32, wantMsg str
 	reportData := createValidReportWithFlags(t, clientID, challenge.Nonce,
 		fixturePCR14(), productionPCRMask, flags)
 
-	result, err := verifier.VerifyReport(clientID, reportData)
+	result, err := verifier.VerifyReportFrom(clientID, "", reportData)
 	if err == nil {
 		t.Fatalf("expected rejection: report flags 0x%08x omit %s", flags, wantMsg)
 	}
@@ -934,7 +934,7 @@ func TestVerify_RejectsNonUEFIBoot(t *testing.T) {
 	reportData := createValidReport(t, clientID, challenge.Nonce, fixturePCR14())
 	reportData = stripEventLogEntries(t, reportData)
 
-	result, err := verifier.VerifyReport(clientID, reportData)
+	result, err := verifier.VerifyReportFrom(clientID, "", reportData)
 	if err == nil {
 		t.Fatal("expected rejection: event log carries no UEFI evidence")
 	}
@@ -1036,7 +1036,7 @@ func attestUnderConfig(t *testing.T, cfg VerifierConfig, clientID string) (*type
 	}
 
 	reportData := createValidReport(t, clientID, challenge.Nonce, fixturePCR14())
-	return verifier.VerifyReport(clientID, reportData)
+	return verifier.VerifyReportFrom(clientID, "", reportData)
 }
 
 // Client whose PCR14 baseline is on record must be visible through ClientInfo
@@ -1120,7 +1120,7 @@ func TestVerify_MOKChangeIsRefusedAgainstThePinnedRegister(t *testing.T) {
 		t.Fatalf("GenerateChallenge failed: %v", err)
 	}
 	report1 := createValidReport(t, clientID, challenge1.Nonce, fixturePCR14())
-	result1, err := verifier.VerifyReport(clientID, report1)
+	result1, err := verifier.VerifyReportFrom(clientID, "", report1)
 	if err != nil || result1.Result != types.VerifyOK {
 		t.Fatalf("first attestation failed: %v (result=%d)", err, result1.Result)
 	}
@@ -1139,7 +1139,7 @@ func TestVerify_MOKChangeIsRefusedAgainstThePinnedRegister(t *testing.T) {
 	report2 := createValidReportWithEventLog(t, clientID, challenge2.Nonce, moved,
 		productionPCRMask, productionFlags, fixtureAgentHash(), mokEventLog(mok))
 
-	result2, err := verifier.VerifyReport(clientID, report2)
+	result2, err := verifier.VerifyReportFrom(clientID, "", report2)
 	if result2.Result != types.VerifyIntegrityMismatch {
 		t.Fatalf("SECURITY: a MOK change was accepted\n"+
 			"  expected: FAIL_INTEGRITY_MISMATCH (%d)\n"+

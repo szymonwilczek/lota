@@ -347,11 +347,6 @@ func (v *Verifier) bootBaselineRoad(tenant string, bootFacts *BootFacts) bootBas
 	return bootBaselineRoad{}
 }
 
-// VerifyReport verifies a report that arrived over an unnamed transport.
-func (v *Verifier) VerifyReport(challengeID string, reportData []byte) (*types.VerifyResult, error) {
-	return v.VerifyReportFrom(challengeID, "", reportData)
-}
-
 // VerifyReportFrom verifies a report and records the address it came from.
 // remoteAddr is what the decision log answers "which host" with; a caller
 // that has no address for the report passes an empty one.

@@ -605,7 +605,7 @@ func TestSQLiteIntegration_FullFlow(t *testing.T) {
 	}
 
 	reportData := createSQLiteTestReport(t, clientID, challenge.Nonce, pcr14)
-	result, err := verifier.VerifyReport(clientID, reportData)
+	result, err := verifier.VerifyReportFrom(clientID, "", reportData)
 	if err != nil {
 		t.Fatalf("VerifyReport failed: %v", err)
 	}
@@ -616,7 +616,7 @@ func TestSQLiteIntegration_FullFlow(t *testing.T) {
 	// second attestation (should match baseline)
 	challenge2, _ := verifier.GenerateChallenge(clientID)
 	report2 := createSQLiteTestReport(t, clientID, challenge2.Nonce, pcr14)
-	result2, err := verifier.VerifyReport(clientID, report2)
+	result2, err := verifier.VerifyReportFrom(clientID, "", report2)
 	if err != nil || result2.Result != types.VerifyOK {
 		t.Fatalf("Second attestation failed: %v (result=%d)", err, result2.Result)
 	}
@@ -657,7 +657,7 @@ func TestSQLiteIntegration_ReplayAfterRestart(t *testing.T) {
 	// successful attestation
 	challenge, _ := v1.GenerateChallenge("restart-client")
 	report := createSQLiteTestReport(t, "restart-client", challenge.Nonce, pcr14)
-	result1, err := v1.VerifyReport("restart-client", report)
+	result1, err := v1.VerifyReportFrom("restart-client", "", report)
 	if err != nil || result1.Result != types.VerifyOK {
 		t.Fatalf("First attestation failed: %v", err)
 	}
@@ -677,7 +677,7 @@ func TestSQLiteIntegration_ReplayAfterRestart(t *testing.T) {
 	}
 
 	// same report - MUST fail
-	result2, err := v2.VerifyReport("restart-client", report)
+	result2, err := v2.VerifyReportFrom("restart-client", "", report)
 	if result2.Result != types.VerifyNonceFail {
 		t.Fatalf("SECURITY FAILURE: Replay attack succeeded after restart!\n"+
 			"  Expected: FAIL_NONCE (%d)\n"+
@@ -714,7 +714,7 @@ func TestSQLiteIntegration_BaselineSurvivesRestart(t *testing.T) {
 
 	ch1, _ := v1.GenerateChallenge("baseline-client")
 	rep1 := createSQLiteTestReport(t, "baseline-client", ch1.Nonce, originalPCR14)
-	r1, err := v1.VerifyReport("baseline-client", rep1)
+	r1, err := v1.VerifyReportFrom("baseline-client", "", rep1)
 	if err != nil || r1.Result != types.VerifyOK {
 		t.Fatalf("Baseline attestation failed: %v", err)
 	}
@@ -736,7 +736,7 @@ func TestSQLiteIntegration_BaselineSurvivesRestart(t *testing.T) {
 	// tampered PCR14 should be detected even after restart
 	ch2, _ := v2.GenerateChallenge("baseline-client")
 	rep2 := createSQLiteTestReport(t, "baseline-client", ch2.Nonce, tamperedPCR14)
-	r2, err := v2.VerifyReport("baseline-client", rep2)
+	r2, err := v2.VerifyReportFrom("baseline-client", "", rep2)
 
 	if r2.Result != types.VerifyIntegrityMismatch {
 		t.Fatalf("SECURITY FAILURE: PCR14 tampering not detected after restart!\n"+
@@ -799,7 +799,7 @@ func TestSQLiteIntegration_ConcurrentAttestations(t *testing.T) {
 				}
 
 				rep := createSQLiteTestReportWithKey(nil, clientID, ch.Nonce, pcr14, clientKey)
-				result, err := verifier.VerifyReport(clientID, rep)
+				result, err := verifier.VerifyReportFrom(clientID, "", rep)
 				if err != nil || result.Result != types.VerifyOK {
 					errCh <- fmt.Errorf("client %d iter %d: verify: %v (result=%d)", n, j, err, result.Result)
 					return

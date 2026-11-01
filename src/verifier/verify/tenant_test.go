@@ -96,7 +96,7 @@ func attestWithCertOUs(t *testing.T, clientID string, ous []string) (*types.Veri
 	defer func() { testAIKCertOUs = nil }()
 	reportData := createValidReport(t, clientID, challenge.Nonce, pcr14)
 
-	return verifier.VerifyReport(clientID, reportData)
+	return verifier.VerifyReportFrom(clientID, "", reportData)
 }
 
 // attestVerifierWithCertOUs is attestWithCertOUs but returns
@@ -118,7 +118,7 @@ func attestVerifierWithCertOUs(t *testing.T, clientID string, ous []string) (*Ve
 	defer func() { testAIKCertOUs = nil }()
 	reportData := createValidReport(t, clientID, challenge.Nonce, pcr14)
 
-	result, err := verifier.VerifyReport(clientID, reportData)
+	result, err := verifier.VerifyReportFrom(clientID, "", reportData)
 	return verifier, result, err
 }
 
@@ -275,7 +275,7 @@ func attestWithBanStore(t *testing.T, clientID string, ous []string, bans store.
 	defer func() { testAIKCertOUs = nil }()
 	reportData := createValidReport(t, clientID, challenge.Nonce, pcr14)
 
-	return verifier.VerifyReport(clientID, reportData)
+	return verifier.VerifyReportFrom(clientID, "", reportData)
 }
 
 // devicePseudonymHWID returns the hardware identity the verifier derives
@@ -364,7 +364,7 @@ func TestIntegration_TenantOnAttestationLog(t *testing.T) {
 	defer func() { testAIKCertOUs = nil }()
 	reportData := createValidReport(t, clientID, challenge.Nonce, pcr14)
 
-	result, err := verifier.VerifyReport(clientID, reportData)
+	result, err := verifier.VerifyReportFrom(clientID, "", reportData)
 	if err != nil {
 		t.Fatalf("VerifyReport: %v", err)
 	}
@@ -476,7 +476,7 @@ func attestWithTenantPolicy(t *testing.T, clientID string, ous []string) (*types
 	defer func() { testAIKCertOUs = nil }()
 	reportData := createValidReport(t, clientID, challenge.Nonce, pcr14)
 
-	return verifier.VerifyReport(clientID, reportData)
+	return verifier.VerifyReportFrom(clientID, "", reportData)
 }
 
 func TestIntegration_TenantBoundPolicySelected(t *testing.T) {

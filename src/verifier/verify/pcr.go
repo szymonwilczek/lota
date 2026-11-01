@@ -374,18 +374,6 @@ func (v *PCRVerifier) registerPolicy(policy *PCRPolicy) error {
 	return nil
 }
 
-// checks report against active policy without event-log boot facts;
-// policies that gate on Secure Boot or the cmdline fail closed here
-func (v *PCRVerifier) VerifyReport(report *types.AttestationReport) error {
-	return v.VerifyReportWithFacts(report, nil)
-}
-
-// checks report against active policy using the quote-authenticated
-// boot facts extracted from the event log
-func (v *PCRVerifier) VerifyReportWithFacts(report *types.AttestationReport, facts *BootFacts) error {
-	return v.VerifyReportForTenant(report, "", facts)
-}
-
 // checks report against the policy bound to the client's tenant,
 // falling back to the active policy when the tenant has no binding
 func (v *PCRVerifier) VerifyReportForTenant(report *types.AttestationReport, tenant string, facts *BootFacts) error {

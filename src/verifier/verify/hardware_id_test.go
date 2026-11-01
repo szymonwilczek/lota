@@ -32,7 +32,7 @@ func attestWithLog(t *testing.T, clientID string, bans store.BanStore,
 		t.Fatalf("GenerateChallenge: %v", err)
 	}
 	reportData := createValidReport(t, clientID, challenge.Nonce, fixturePCR14())
-	result, _ := verifier.VerifyReport(clientID, reportData)
+	result, _ := verifier.VerifyReportFrom(clientID, "", reportData)
 	return verifier, result
 }
 

@@ -32,7 +32,7 @@ func recordOneRound(t *testing.T, clientID string, report func(nonce [types.Nonc
 	if err != nil {
 		t.Fatalf("GenerateChallenge: %v", err)
 	}
-	if _, err := verifier.VerifyReport(clientID, report(challenge.Nonce)); err != nil {
+	if _, err := verifier.VerifyReportFrom(clientID, "", report(challenge.Nonce)); err != nil {
 		t.Logf("round refused: %v", err)
 	}
 

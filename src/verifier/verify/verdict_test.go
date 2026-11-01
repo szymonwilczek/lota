@@ -40,7 +40,7 @@ func TestBaselineStoreFailureIsNotAnIntegrityVerdict(t *testing.T) {
 	}
 	report := createValidReport(t, clientID, challenge.Nonce, fixturePCR14())
 
-	result, err := v.VerifyReport(clientID, report)
+	result, err := v.VerifyReportFrom(clientID, "", report)
 	if err == nil {
 		t.Fatal("a store that cannot pin boot PCRs was accepted")
 	}
@@ -218,7 +218,7 @@ func TestTruncatedReportIsNotAnOldAgent(t *testing.T) {
 			report := tc.cut(createValidReport(t, clientID, challenge.Nonce, fixturePCR14()))
 
 			before := verifier.metrics.Rejections.Values()[tc.reason]
-			result, verr := verifier.VerifyReport(clientID, report)
+			result, verr := verifier.VerifyReportFrom(clientID, "", report)
 			if verr == nil {
 				t.Fatal("the verifier accepted a report it cannot parse")
 			}
@@ -457,7 +457,7 @@ func TestVerifierWithoutCARootRefusesAsItsOwnFault(t *testing.T) {
 		t.Fatalf("GenerateChallenge: %v", err)
 	}
 
-	result, verr := verifier.VerifyReport(clientID,
+	result, verr := verifier.VerifyReportFrom(clientID, "",
 		createValidReport(t, clientID, challenge.Nonce, [32]byte{}))
 	if verr == nil {
 		t.Fatal("a verifier with no CA root attested a report")
@@ -484,7 +484,7 @@ func TestReportWithoutAIKCertificateNamesTheAbsentCertificate(t *testing.T) {
 		types.MaxAIKPubSize + 2 + types.MaxAIKCertSize
 	binary.LittleEndian.PutUint16(reportData[aikCertSizeOff:aikCertSizeOff+2], 0)
 
-	result, verr := verifier.VerifyReport(clientID, reportData)
+	result, verr := verifier.VerifyReportFrom(clientID, "", reportData)
 	if verr == nil {
 		t.Fatal("expected verification to fail without an AIK certificate")
 	}

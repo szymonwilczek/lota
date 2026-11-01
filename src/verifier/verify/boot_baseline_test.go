@@ -717,7 +717,7 @@ func firstUseBootAcceptLine(t *testing.T, v *Verifier, logs *bytes.Buffer,
 		t.Fatalf("GenerateChallenge: %v", err)
 	}
 	report := createValidReport(t, clientID, challenge.Nonce, fixturePCR14())
-	result, err := v.VerifyReport(clientID, report)
+	result, err := v.VerifyReportFrom(clientID, "", report)
 	if err != nil {
 		t.Fatalf("VerifyReport: %v", err)
 	}

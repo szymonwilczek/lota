@@ -33,7 +33,7 @@ func TestRequireCert_RejectsReportWithoutAIKCertificate(t *testing.T) {
 		types.MaxAIKPubSize + 2 + types.MaxAIKCertSize
 	binary.LittleEndian.PutUint16(reportData[aikCertSizeOff:aikCertSizeOff+2], 0)
 
-	result, verr := verifier.VerifyReport(clientID, reportData)
+	result, verr := verifier.VerifyReportFrom(clientID, "", reportData)
 	if verr == nil {
 		t.Fatal("expected verification to fail without an AIK certificate")
 	}

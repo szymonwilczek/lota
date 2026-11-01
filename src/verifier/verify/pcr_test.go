@@ -231,7 +231,7 @@ func TestPCRVerifier_VerifyReport_NoPolicy(t *testing.T) {
 	verifier := NewPCRVerifier()
 	report := &types.AttestationReport{}
 
-	err := verifier.VerifyReport(report)
+	err := verifier.VerifyReportForTenant(report, "", nil)
 	if err == nil {
 		t.Error("Expected error when no policy configured")
 	}
@@ -263,7 +263,7 @@ func TestPCRVerifier_VerifyReport_PCRMismatch(t *testing.T) {
 		report.TPM.PCRValues[0][i] = 0xFF
 	}
 
-	err := verifier.VerifyReport(report)
+	err := verifier.VerifyReportForTenant(report, "", nil)
 	if err == nil {
 		t.Error("Expected error for PCR mismatch")
 	}
@@ -290,7 +290,7 @@ func TestPCRVerifier_VerifyReport_PCRNotInQuote(t *testing.T) {
 	report := &types.AttestationReport{}
 	report.TPM.PCRMask = 0x4000 // only PCR 14
 
-	err := verifier.VerifyReport(report)
+	err := verifier.VerifyReportForTenant(report, "", nil)
 	if err == nil {
 		t.Error("Expected error when required PCR not in quote")
 	}
@@ -327,7 +327,7 @@ func TestPCRVerifier_VerifyReport_NamesEveryMismatchingPCR(t *testing.T) {
 		report.TPM.PCRValues[9][i] = 0x22
 	}
 
-	err := verifier.VerifyReport(report)
+	err := verifier.VerifyReportForTenant(report, "", nil)
 	if err == nil {
 		t.Fatal("Expected error when two pinned PCRs are stale")
 	}
@@ -349,7 +349,7 @@ func TestPCRVerifier_VerifyReport_NamesEveryMismatchingPCR(t *testing.T) {
 	// map iteration is randomised per call, so the same fault must not read
 	// as a different fault on the next round
 	for round := 0; round < 64; round++ {
-		again := verifier.VerifyReport(report)
+		again := verifier.VerifyReportForTenant(report, "", nil)
 		if again == nil {
 			t.Fatalf("Round %d unexpectedly passed", round)
 		}
@@ -432,7 +432,7 @@ func TestPCRVerifier_VerifyReport_RequireIOMMU(t *testing.T) {
 	// IOMMU flag not set (0x04)
 	report.System.IOMMU.Flags = 0x00
 
-	err := verifier.VerifyReport(report)
+	err := verifier.VerifyReportForTenant(report, "", nil)
 	if err == nil {
 		t.Error("Expected error when IOMMU not enabled")
 	}
@@ -456,7 +456,7 @@ func TestPCRVerifier_VerifyReport_RequireSecureBoot(t *testing.T) {
 	report := &types.AttestationReport{}
 	report.Header.Flags = 0 // no SecureBoot flag
 
-	err := verifier.VerifyReport(report)
+	err := verifier.VerifyReportForTenant(report, "", nil)
 	if err == nil {
 		t.Error("Expected error when SecureBoot not enabled")
 	}
@@ -485,7 +485,7 @@ func TestPCRVerifier_VerifyReport_KernelHashAllowed(t *testing.T) {
 		report.System.KernelHash[i] = byte(i)
 	}
 
-	err := verifier.VerifyReport(report)
+	err := verifier.VerifyReportForTenant(report, "", nil)
 	if err == nil {
 		t.Error("Expected error for non-allowlisted kernel")
 	}
@@ -514,7 +514,7 @@ func TestPCRVerifier_VerifyReport_AgentHashAllowed(t *testing.T) {
 		report.System.AgentHash[i] = byte(i)
 	}
 
-	err := verifier.VerifyReport(report)
+	err := verifier.VerifyReportForTenant(report, "", nil)
 	if err == nil {
 		t.Error("Expected error for non-allowlisted agent")
 	}
@@ -536,7 +536,7 @@ func TestPCRVerifier_VerifyReport_PassingPolicy(t *testing.T) {
 	report.Header.Flags = types.FlagEnforce | types.FlagModuleSig
 	report.System.IOMMU.Flags = 0x04
 
-	err := verifier.VerifyReport(report)
+	err := verifier.VerifyReportForTenant(report, "", nil)
 	if err != nil {
 		t.Errorf("Report should pass default policy: %v", err)
 	}
@@ -658,7 +658,7 @@ func TestPCRVerifier_VerifyReport_RequireEnforce(t *testing.T) {
 	report := &types.AttestationReport{}
 	report.Header.Flags = 0
 
-	err := verifier.VerifyReport(report)
+	err := verifier.VerifyReportForTenant(report, "", nil)
 	if err == nil {
 		t.Error("Expected error when LSM enforce mode not active")
 	}
@@ -682,7 +682,7 @@ func TestPCRVerifier_VerifyReport_RequireEnforce_Pass(t *testing.T) {
 	report := &types.AttestationReport{}
 	report.Header.Flags = types.FlagEnforce
 
-	err := verifier.VerifyReport(report)
+	err := verifier.VerifyReportForTenant(report, "", nil)
 	if err != nil {
 		t.Errorf("Report with enforce flag should pass: %v", err)
 	}
@@ -702,7 +702,7 @@ func TestPCRVerifier_VerifyReport_DefaultPolicy_RejectsMonitor(t *testing.T) {
 	report := &types.AttestationReport{}
 	report.Header.Flags = types.FlagBPFActive // BPF loaded but not enforcing
 
-	err := verifier.VerifyReport(report)
+	err := verifier.VerifyReportForTenant(report, "", nil)
 	if err == nil {
 		t.Error("DefaultPolicy should reject agents not in enforce mode")
 	}
