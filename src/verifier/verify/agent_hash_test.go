@@ -91,9 +91,6 @@ func TestAgentHashDecision_ZeroVerdictIsEscalate(t *testing.T) {
 	if v != AgentHashEscalate {
 		t.Fatalf("zero value must be escalate, got %v", v)
 	}
-	if v.String() != "escalate" {
-		t.Fatalf("zero value String(): got %q", v.String())
-	}
 }
 
 // Policy gate and the re-pin discriminator must read the allow-list the same way.

@@ -49,13 +49,6 @@ const (
 	AgentHashRepin
 )
 
-func (v AgentHashVerdict) String() string {
-	if v == AgentHashRepin {
-		return "repin"
-	}
-	return "escalate"
-}
-
 // AgentHashRefusal is why a re-pin was refused, which the verdict alone cannot
 // carry: "this build is not one you trust" and "this build is one you trust,
 // but this client moved too recently" are the same escalation and completely
