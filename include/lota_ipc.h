@@ -23,12 +23,11 @@
 /* Protocol constants */
 #define LOTA_IPC_MAGIC 0x4C4F5441 /* "LOTA" */
 /*
- * Version 2 adds SET_PROFILE.
  * Agent refuses any other version outright:
  * this header is internal and the agent and the SDK that speaks to it ship
  * together, so there is nothing to negotiate with.
  */
-#define LOTA_IPC_VERSION 2
+#define LOTA_IPC_VERSION 1
 /*
  * Practical per-frame payload cap enforced by the agent socket parser.
  * The largest production payload is GET_TOKEN: token header, protected PID
