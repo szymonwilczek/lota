@@ -1450,6 +1450,19 @@ TEST_BINS += $(BUILD_DIR)/demo_sdk
 TEST_BINS += $(BUILD_DIR)/test_cross_lang_report_gen
 TEST_BINS += $(BUILD_DIR)/test_cross_lang_verify
 
+# Need a live agent, a server or generated input
+TEST_MANUAL := \
+	$(BUILD_DIR)/demo_sdk \
+	$(BUILD_DIR)/hook_preload_target \
+	$(BUILD_DIR)/test_cross_lang_report_gen \
+	$(BUILD_DIR)/test_cross_lang_verify \
+	$(BUILD_DIR)/test_ipc_client \
+	$(BUILD_DIR)/test_ipc_dos \
+	$(BUILD_DIR)/test_sdk_ipc \
+	$(BUILD_DIR)/test_tls_verify
+
+TEST_RUN := $(filter-out $(TEST_MANUAL),$(TEST_BINS))
+
 $(BUILD_DIR)/%: tests/%.c | $(BUILD_DIR)
 	$(QUIET_CC)
 	$(Q)$(CC) $(CFLAGS) $(TEST_CFLAGS) -o $@ $(filter %.c,$^) $(TEST_LDLIBS)
@@ -1802,122 +1815,7 @@ test: test-unit
 .PHONY: test-unit
 test-unit: all $(TEST_BINS)
 	@echo "=== Running unit tests ==="
-	@$(BUILD_DIR)/test_hash_verify
-	@$(BUILD_DIR)/test_dbus
-	@$(BUILD_DIR)/test_systemd
-	@$(BUILD_DIR)/test_packaging
-	@$(BUILD_DIR)/test_steam_runtime
-	@$(BUILD_DIR)/test_container_watch
-	@$(BUILD_DIR)/test_token_gate
-	@$(BUILD_DIR)/test_wine_hook
-	@$(BUILD_DIR)/test_wine_hook_events
-	@$(BUILD_DIR)/test_wine_hook_slow_agent
-	@$(BUILD_DIR)/test_wine_hook_publisher
-	@$(BUILD_DIR)/test_daemon
-	@$(BUILD_DIR)/test_daemon_start_status
-	@$(BUILD_DIR)/test_signal_shutdown
-	@$(BUILD_DIR)/test_daemon_loop
-	@$(BUILD_DIR)/test_config
-	@$(BUILD_DIR)/test_config_alloc
-	@$(BUILD_DIR)/test_config_add_profile
-	@$(BUILD_DIR)/test_subscribe
-	@$(BUILD_DIR)/test_policy_sign
-	@$(BUILD_DIR)/test_policy_export
-	@$(BUILD_DIR)/test_aik_rotation
-	@$(BUILD_DIR)/test_pcr14_verdict
-	@$(BUILD_DIR)/test_ipc_privilege
-	@$(BUILD_DIR)/test_startup_hint
-	@$(BUILD_DIR)/test_terminate_report
-	@$(BUILD_DIR)/test_kill_report
-	@$(BUILD_DIR)/test_measure_report
-	@$(BUILD_DIR)/test_standing_answer
-	@$(BUILD_DIR)/test_ipc_notify
-	@$(BUILD_DIR)/test_ipc_attest_time
-	@$(BUILD_DIR)/test_ipc_coverage_cost
-	@$(BUILD_DIR)/test_ipc_token_refusal
-	@$(BUILD_DIR)/test_ipc_lockout_sync
-	@$(BUILD_DIR)/test_ipc_reload_binding
-	@$(BUILD_DIR)/test_ipc_token_no_tpm
-	@$(BUILD_DIR)/test_ipc_extra_listener
-	@$(BUILD_DIR)/test_test_servers_order
-	@$(BUILD_DIR)/test_reload_enforcement_state
-	@$(BUILD_DIR)/test_credential_activation
-	@$(BUILD_DIR)/test_enroll_wire
-	@$(BUILD_DIR)/test_enroll_status
-	@$(BUILD_DIR)/test_enroll_state
-	@$(BUILD_DIR)/test_profile_id
-	@$(BUILD_DIR)/test_attest_targets
-	@$(BUILD_DIR)/test_attest_reload
-	@$(BUILD_DIR)/test_attest_stage
-	@$(BUILD_DIR)/test_attest_aggregate
-	@$(BUILD_DIR)/test_status_flags
-	@$(BUILD_DIR)/test_iommu_evidence
-	@$(BUILD_DIR)/test_publisher_profile
-	@$(BUILD_DIR)/test_io_read_file
-	@$(BUILD_DIR)/test_devt
-	@$(BUILD_DIR)/test_live_fixtures
-	@$(BUILD_DIR)/test_sb_dev
-	@$(BUILD_DIR)/test_cgroup_guard
-	@$(BUILD_DIR)/test_kernel_measure
-	@$(BUILD_DIR)/test_kernel_image
-	@$(BUILD_DIR)/test_bpf_mount_hooks
-	@$(BUILD_DIR)/test_bpf_kill_guard
-	@$(BUILD_DIR)/test_path_sanitize
-	@$(BUILD_DIR)/test_event_budget
-	@$(BUILD_DIR)/test_tpm_nv_chunk
-	@$(BUILD_DIR)/test_ipc_token_cap
-	@$(BUILD_DIR)/test_initramfs_lock
-	@$(BUILD_DIR)/test_installer_probe
-	@$(BUILD_DIR)/test_installer_named_paths
-	@$(BUILD_DIR)/test_installer_trust_key
-	@$(BUILD_DIR)/test_installer_checkpoint
-	@$(BUILD_DIR)/test_installer_stage_text
-	@$(BUILD_DIR)/test_installer_service
-	@$(BUILD_DIR)/test_installer_confirm
-	@$(BUILD_DIR)/test_selftest_plan
-	@$(BUILD_DIR)/test_ima_xattr
-	@$(BUILD_DIR)/test_constant_time
-	@$(BUILD_DIR)/test_hardening
-	@$(BUILD_DIR)/test_server_sdk
-	@$(BUILD_DIR)/test_anticheat
-	@$(BUILD_DIR)/test_flag_names
-	@$(BUILD_DIR)/test_verify_result_str
-	@$(BUILD_DIR)/test_connect_hint
-	@$(BUILD_DIR)/test_net_errors
-	@$(BUILD_DIR)/test_tls_anchor
-	@$(BUILD_DIR)/test_xattr_carry
-	@$(BUILD_DIR)/test_runtime_measure
-	@$(BUILD_DIR)/test_runtime_image_measure
-	@$(BUILD_DIR)/test_runtime_measure_failure
-	@$(BUILD_DIR)/test_rt_verity_cache
-	@$(BUILD_DIR)/test_verity_digest_key
-	@$(BUILD_DIR)/test_ptrace_policy
-	@$(BUILD_DIR)/test_signal_policy
-	@$(BUILD_DIR)/test_module_purpose
-	@$(BUILD_DIR)/test_runtime_protect_digest
-	@$(BUILD_DIR)/test_protect_pids
-	@$(BUILD_DIR)/test_terminate_policy
-	@$(BUILD_DIR)/test_runtime_image_collect
-	@$(BUILD_DIR)/test_runtime_mapping_identity
-	@$(BUILD_DIR)/test_runtime_measure_pid
-	@$(BUILD_DIR)/test_mapped_pins
-	@$(BUILD_DIR)/test_watchdog_pace
-	@$(BUILD_DIR)/test_runtime_identity_road
-	@$(BUILD_DIR)/test_seal_blob
-	@$(BUILD_DIR)/test_seal_envelope
-	@$(BUILD_DIR)/test_seal_tpm
-	@$(BUILD_DIR)/test_seal_aik
-	@$(BUILD_DIR)/test_loader_attach
-	@$(BUILD_DIR)/test_bpf_loader_load_source
-	@$(BUILD_DIR)/test_bpf_loader_open_fails_closed
-	@$(BUILD_DIR)/test_watchdog_supervisor
-	@$(BUILD_DIR)/test_bpf_object_preflight
-	@$(BUILD_DIR)/test_ima_policy_scope
-	@$(BUILD_DIR)/test_kernel_floor_hint
-	@$(BUILD_DIR)/test_integrity_baseline
-	@$(BUILD_DIR)/test_daemon_exit_status
-	@$(BUILD_DIR)/test_startup_refusal_status
-	@$(BUILD_DIR)/test_integrity_map_layout
+	@set -e; for t in $(TEST_RUN); do $$t; done
 	@echo ""
 	@echo "=== Running integration tests (best effort) ==="
 	@if [ -x $(AGENT_BIN) ] && command -v openssl >/dev/null 2>&1; then \

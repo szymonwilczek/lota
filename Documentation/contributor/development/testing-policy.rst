@@ -92,6 +92,9 @@ its own source declares it in the test section::
    $(BUILD_DIR)/test_foo: TEST_CFLAGS := -DFOO
    $(BUILD_DIR)/test_foo: TEST_LDLIBS := -lcrypto
 
+``make test-unit`` runs every test except those in ``TEST_MANUAL``, which need
+a live agent, a server or generated input.
+
 Package manifests
 =================
 
