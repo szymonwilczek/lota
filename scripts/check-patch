@@ -28,13 +28,13 @@ script uses the upstream merge-base, origin/lota-next, or lota-next in that
 order. Head defaults to HEAD.
 
 Checks:
-  - CI-equivalent DCO and hotpath documentation rules,
+  - CI-equivalent DCO, column limit and hotpath documentation rules: subject
+    and body lines within 75 columns, fixed by scripts/format-patch for bodies,
   - conventional commit subjects with scope parentheses,
   - good GPG or SSH signature on every commit,
   - standalone Problem: and Solution: commit body sections, except on the
     version-bump commit whose body is the release notes,
   - one blank line before the Signed-off-by trailer,
-  - commit body lines wrapped to 75 columns, with a two-column tolerance,
   - body detail proportional to changed files and lines (recommended only),
   - trailing whitespace in patches and commit messages,
   - clang-format and gofmt on changed C, header, and Go files,
@@ -158,10 +158,10 @@ check_ci_policy() {
     github_output=$(mktemp)
 
     if GITHUB_OUTPUT="$github_output" scripts/check-pr-quality.sh "$base" "$head" >"$output_file" 2>&1; then
-        pass "DCO and hotpath documentation"
+        pass "DCO, column limits and hotpath documentation"
     else
         sed 's/^/  /' "$output_file"
-        fail "DCO and hotpath documentation" \
+        fail "DCO, column limits and hotpath documentation" \
              "run scripts/check-pr-quality.sh $base $head and fix the reported commit."
     fi
 
@@ -308,21 +308,6 @@ check_commit_body_layout() {
 				}
 			}
 			{ prev = $0 }
-			END { exit bad ? 1 : 0 }
-		' "$msg_file" >"$output_file"; then
-            printf '  %s %s\n' "$(short_commit "$commit")" "$(commit_subject "$commit")"
-            sed 's/^/    /' "$output_file"
-            rc=1
-        fi
-
-        if ! awk '
-			NR == 1 { next }
-			/^$/ { next }
-			/^[A-Za-z0-9-]+-by:[[:space:]]/ { next }
-			length($0) > 77 && $0 ~ /[[:space:]]/ {
-				bad = 1
-				printf "%d: body line is %d columns\n", FNR, length($0)
-			}
 			END { exit bad ? 1 : 0 }
 		' "$msg_file" >"$output_file"; then
             printf '  %s %s\n' "$(short_commit "$commit")" "$(commit_subject "$commit")"

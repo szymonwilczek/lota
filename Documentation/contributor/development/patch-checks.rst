@@ -93,9 +93,17 @@ Commit body headings must use standalone ``Problem:`` and ``Solution:`` lines,
 with the explanatory text starting on the next line. **The version bump is the
 one exception**: the release tag sits on it, and ``release.yml`` publishes its
 description as the release notes, so its body is addressed to whoever reads the
-release page. Body text is wrapped to 75 columns, with a two-column tolerance
-when the final word reaches column 76 or 77. The DCO ``Signed-off-by`` trailer
-must be separated from the description by one blank line.
+release page. The DCO ``Signed-off-by`` trailer must be separated from the
+description by one blank line.
+
+Subjects and body lines are limited to 75 columns. A body line over the limit
+fails ``check-pr-quality.sh``, locally and in CI, and
+``scripts/format-patch`` rewraps it; a subject has to be shortened by hand. A
+body line keeps its length when it is a single word, a trailer (``*-by:``,
+``Fixes:``, ``Link:``, ``Closes:``, ``Docs-Not-Needed:``), a line with a URL, a
+``Merge branch`` line, a diffstat line, or a line led by a file path. Merge
+commits and subjects starting with ``Merge`` are exempt, and so is a pull
+request from ``lota-next``, whose commits were checked when they landed there.
 
 A body that is short for the size of the change is reported as ``INFO``. It
 recommends more detail and does not fail the check.
