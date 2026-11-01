@@ -486,12 +486,6 @@ func (is *Issuer) IssueAIKCertificate(aikPub *rsa.PublicKey, subjectCN, tenant s
 	return der, nil
 }
 
-// CACertDER returns the DER encoding of the CA certificate so verifiers
-// can be provisioned with the trust root.
-func (is *Issuer) CACertDER() []byte {
-	return is.caCert.Raw
-}
-
 func hasTCGEKOID(cert *x509.Certificate) bool {
 	for _, oid := range cert.UnknownExtKeyUsage {
 		if oid.Equal(oidTCGEKCertificate) {

@@ -217,7 +217,7 @@ func TestEnrollStrictManifestRejectsUnlistedEK(t *testing.T) {
 		t.Fatal("strict manifest enrolled an unlisted EK")
 	}
 	// strict rejection must not spend a session
-	if svc.PendingCount() != 0 {
-		t.Fatalf("rejected enrollment left a pending session: %d", svc.PendingCount())
+	if pendingCount(svc) != 0 {
+		t.Fatalf("rejected enrollment left a pending session: %d", pendingCount(svc))
 	}
 }

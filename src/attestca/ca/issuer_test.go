@@ -244,7 +244,7 @@ func TestIssueAIKCertificateChainsToCA(t *testing.T) {
 		t.Fatalf("parse issued AIK cert: %v", err)
 	}
 
-	caCert, _ := x509.ParseCertificate(is.CACertDER())
+	caCert := is.caCert
 	pool := x509.NewCertPool()
 	pool.AddCert(caCert)
 
@@ -323,7 +323,7 @@ func TestNewIssuerAcceptsExternalSigner(t *testing.T) {
 	if err != nil {
 		t.Fatalf("parse issued AIK cert: %v", err)
 	}
-	caCert, _ := x509.ParseCertificate(is.CACertDER())
+	caCert := is.caCert
 	pool := x509.NewCertPool()
 	pool.AddCert(caCert)
 	if _, err := aikCert.Verify(x509.VerifyOptions{

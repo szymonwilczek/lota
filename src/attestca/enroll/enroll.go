@@ -276,13 +276,6 @@ func (s *Service) Complete(sessionID string, recoveredSecret []byte) (aikCertDER
 	return der, sess.deviceID, nil
 }
 
-// PendingCount reports outstanding sessions (monitoring)
-func (s *Service) PendingCount() int {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return len(s.pending)
-}
-
 func (s *Service) sweepLocked(now time.Time) {
 	for id, sess := range s.pending {
 		if now.Sub(sess.createdAt) > s.ttl {

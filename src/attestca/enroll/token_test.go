@@ -109,8 +109,8 @@ func TestEnrollRejectsUnknownToken(t *testing.T) {
 		t.Fatalf("Begin(unknown token) = %v, want ErrTokenUnknown", err)
 	}
 	// token rejection must not spend a session
-	if svc.PendingCount() != 0 {
-		t.Fatalf("rejected enrollment left a pending session: %d", svc.PendingCount())
+	if pendingCount(svc) != 0 {
+		t.Fatalf("rejected enrollment left a pending session: %d", pendingCount(svc))
 	}
 
 	// CA with no token set rejects every presented token instead of silently ignoring it
@@ -130,8 +130,8 @@ func TestEnrollRequireToken(t *testing.T) {
 	if _, err := svc.Begin(ek.CertDER, aikTPMT, nil, nil); !errors.Is(err, ErrTokenRequired) {
 		t.Fatalf("token-less Begin = %v, want ErrTokenRequired", err)
 	}
-	if svc.PendingCount() != 0 {
-		t.Fatalf("rejected enrollment left a pending session: %d", svc.PendingCount())
+	if pendingCount(svc) != 0 {
+		t.Fatalf("rejected enrollment left a pending session: %d", pendingCount(svc))
 	}
 	cert, _ := enrollWith(t, svc, ek, []byte("beta-token"))
 	if len(cert.Subject.OrganizationalUnit) != 1 || cert.Subject.OrganizationalUnit[0] != "beta" {
