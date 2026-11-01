@@ -64,7 +64,8 @@ A *compromised* CA key is a faster path: stop the CA, drop the old CA
 certificate from verifiers immediately (every AIK it signed is now untrusted),
 and re-enroll the fleet against a new key. Individual compromised AIK
 certificates are revoked out of band with ``--aik-crl`` without a full CA
-rotation.
+rotation. The certificate that signs the CRL must carry the ``cRLSign`` key
+usage; the verifier refuses the CRL otherwise and does not start.
 
 Offline root, online intermediate
 =================================
