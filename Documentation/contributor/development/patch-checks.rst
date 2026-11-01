@@ -97,6 +97,9 @@ release page. Body text is wrapped to 75 columns, with a two-column tolerance
 when the final word reaches column 76 or 77. The DCO ``Signed-off-by`` trailer
 must be separated from the description by one blank line.
 
+A body that is short for the size of the change is reported as ``INFO``. It
+recommends more detail and does not fail the check.
+
 The local hotpath check delegates to ``scripts/check-pr-quality.sh``, using the
 same ``.github/pr-quality-hotpaths.txt`` manifest as the ``PR quality``
 workflow.

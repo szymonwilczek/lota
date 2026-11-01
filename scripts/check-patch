@@ -35,7 +35,7 @@ Checks:
     version-bump commit whose body is the release notes,
   - one blank line before the Signed-off-by trailer,
   - commit body lines wrapped to 75 columns, with a two-column tolerance,
-  - body detail proportional to changed files and lines,
+  - body detail proportional to changed files and lines (recommended only),
   - trailing whitespace in patches and commit messages,
   - clang-format and gofmt on changed C, header, and Go files,
   - full project build,
@@ -367,8 +367,7 @@ check_body_proportion() {
     if ((rc == 0)); then
         pass "commit body detail"
     else
-        fail "commit body detail" \
-             "expand Problem: and Solution: with changed modules, contract impact, and reviewer-relevant risk."
+        note "commit body detail: consider expanding Problem: and Solution: with changed modules, contract impact, and reviewer-relevant risk."
     fi
 }
 
