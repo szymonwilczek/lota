@@ -28,7 +28,7 @@ extern "C" {
 #endif
 
 #define LOTA_AC_MAGIC 0x4C414348 /* "LACH" little-endian */
-#define LOTA_AC_VERSION 3
+#define LOTA_AC_VERSION 1
 #define LOTA_AC_HEADER_SIZE 110
 #define LOTA_AC_MAX_TOKEN 1608
 #define LOTA_AC_MAX_HEARTBEAT (LOTA_AC_HEADER_SIZE + LOTA_AC_MAX_TOKEN)

@@ -25,7 +25,7 @@ import (
 // offsets.
 const (
 	lachMagic           uint32 = 0x4C414348 // 'LACH'
-	lachVersion         uint8  = 3
+	lachVersion         uint8  = 1
 	lachHeaderSize             = 110
 	lachSessionIDSize          = 16
 	lachGameHashSize           = 32

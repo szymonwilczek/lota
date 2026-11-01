@@ -2,7 +2,7 @@
 # Regenerate with `make abi-baseline`; the diff is the review signal.
 # See Documentation/contributor/development/api-stability.rst
 macro LOTA_AC_MAGIC                            = 1279345480
-macro LOTA_AC_VERSION                          = 3
+macro LOTA_AC_VERSION                          = 1
 macro LOTA_AC_HEADER_SIZE                      = 110
 macro LOTA_AC_MAX_TOKEN                        = 1608
 macro LOTA_AC_MAX_HEARTBEAT                    = 1718
