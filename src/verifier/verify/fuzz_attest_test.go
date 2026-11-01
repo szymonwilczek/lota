@@ -52,18 +52,18 @@ func FuzzVerifyPCRDigest(f *testing.F) {
 	f.Add(validBlob, []byte("valid args"))
 
 	f.Fuzz(func(t *testing.T, attestData []byte, _ []byte) {
-		err := VerifyPCRDigest(attestData, &pcrValues, pcrMask)
+		err := verifyPCRDigestBlob(attestData, &pcrValues, pcrMask)
 
 		parsed, parseErr := ParseTPMSAttest(attestData)
 		if parseErr != nil {
 			if err == nil {
-				t.Fatal("VerifyPCRDigest accepted an attest blob the parser rejects")
+				t.Fatal("verifyPCRDigestBlob accepted an attest blob the parser rejects")
 			}
 			return
 		}
 
 		// independently derive whether the digest should be accepted from
-		// the parsed quote's own fields, then require VerifyPCRDigest to
+		// the parsed quote's own fields, then require VerifyPCRDigestParsed to
 		// reach the same verdict.
 		// this catches a digest comparison or quote-precondition (type/alg/empty)
 		// check that wrongly accepts or rejects, which the no-oracle version could
@@ -82,7 +82,7 @@ func FuzzVerifyPCRDigest(f *testing.F) {
 			want = bytes.Equal(h.Sum(nil), parsed.QuoteInfo.PCRDigest)
 		}
 		if want != (err == nil) {
-			t.Fatalf("VerifyPCRDigest verdict %v disagrees with independent check %v", err == nil, want)
+			t.Fatalf("VerifyPCRDigestParsed verdict %v disagrees with independent check %v", err == nil, want)
 		}
 	})
 }
