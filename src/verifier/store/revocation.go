@@ -68,7 +68,6 @@ type RevocationEntry struct {
 var (
 	ErrAlreadyRevoked = errors.New("client is already revoked")
 	ErrNotRevoked     = errors.New("client is not revoked")
-	ErrInvalidReason  = errors.New("invalid revocation reason")
 )
 
 // manages client AIK revocations

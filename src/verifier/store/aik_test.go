@@ -62,32 +62,6 @@ func generateTestCertificate(t *testing.T, key *rsa.PrivateKey, isCA bool) *x509
 	return cert
 }
 
-// creates a certificate signed by a CA
-func generateSignedCertificate(t *testing.T, key *rsa.PrivateKey, ca *x509.Certificate, caKey *rsa.PrivateKey) []byte {
-	t.Helper()
-
-	template := &x509.Certificate{
-		SerialNumber: big.NewInt(2),
-		Subject: pkix.Name{
-			Organization: []string{"LOTA Test"},
-			CommonName:   "AIK Certificate",
-		},
-		NotBefore:             time.Now().Add(-1 * time.Hour),
-		NotAfter:              time.Now().Add(24 * time.Hour),
-		KeyUsage:              x509.KeyUsageDigitalSignature,
-		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageAny},
-		BasicConstraintsValid: true,
-		IsCA:                  false,
-	}
-
-	certDER, err := x509.CreateCertificate(rand.Reader, template, ca, &key.PublicKey, caKey)
-	if err != nil {
-		t.Fatalf("Failed to create signed certificate: %v", err)
-	}
-
-	return certDER
-}
-
 func TestCertificateVerifier_NeedsTrustedCAs(t *testing.T) {
 	cv, err := NewCertificateVerifier(nil, nil)
 	if !errors.Is(err, ErrNoTrustedCAs) {
