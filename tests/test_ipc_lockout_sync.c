@@ -16,6 +16,7 @@
 #include <time.h>
 #include <unistd.h>
 
+#include "test.h"
 #include "../include/lota_ipc.h"
 #include "../src/agent/agent.h"
 #include "../src/agent/bpf_loader.h"
@@ -181,26 +182,6 @@ void lota_rt_failure_reason(const struct lota_runtime_measure_failure *fail,
 	if (buf && buflen)
 		buf[0] = '\0';
 }
-
-static int tests_run;
-static int tests_passed;
-
-#define TEST(name)                                         \
-	do {                                               \
-		tests_run++;                               \
-		printf("  [%2d] %-62s ", tests_run, name); \
-	} while (0)
-
-#define PASS()                    \
-	do {                      \
-		tests_passed++;   \
-		printf("PASS\n"); \
-	} while (0)
-
-#define FAIL(msg)                          \
-	do {                               \
-		printf("FAIL: %s\n", msg); \
-	} while (0)
 
 /* The publisher whose verdict makes the host attested in these tests */
 static const char *const test_profile_hex = "aabbccddeeff0011"

@@ -26,11 +26,9 @@
 #include <sys/types.h>
 #include <unistd.h>
 
+#include "test.h"
 #include "../src/agent/dbus.h"
 #include "../src/agent/ipc.h"
-
-static int tests_run;
-static int tests_passed;
 
 void ipc_set_dbus(struct ipc_context *ctx, struct dbus_context *dbus)
 {
@@ -53,23 +51,6 @@ uint32_t ipc_host_status_flags(const struct ipc_context *ctx)
 	host_status_calls++;
 	return TEST_HOST_STATUS_FLAGS;
 }
-
-#define TEST(name)                                        \
-	do {                                              \
-		tests_run++;                              \
-		printf("  [%d] %-55s ", tests_run, name); \
-	} while (0)
-
-#define PASS()                    \
-	do {                      \
-		tests_passed++;   \
-		printf("PASS\n"); \
-	} while (0)
-
-#define FAIL(msg)                          \
-	do {                               \
-		printf("FAIL: %s\n", msg); \
-	} while (0)
 
 static struct ipc_context test_ipc;
 

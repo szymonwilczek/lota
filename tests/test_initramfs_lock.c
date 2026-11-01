@@ -14,30 +14,12 @@
 #include <string.h>
 #include <openssl/types.h>
 
+#include "test.h"
+
 #define HASH_SIZE 32
 
 int lota_initramfs_lock_commit(uint32_t reset_count, uint32_t restart_count,
 			       uint8_t out_digest[HASH_SIZE]);
-
-static int tests_run;
-static int tests_passed;
-
-#define TEST(name)                                         \
-	do {                                               \
-		tests_run++;                               \
-		printf("  [%2d] %-55s ", tests_run, name); \
-	} while (0)
-
-#define PASS()                    \
-	do {                      \
-		tests_passed++;   \
-		printf("PASS\n"); \
-	} while (0)
-
-#define FAIL(msg)                          \
-	do {                               \
-		printf("FAIL: %s\n", msg); \
-	} while (0)
 
 static int reference_commit(uint32_t reset_count, uint32_t restart_count,
 			    uint8_t out[HASH_SIZE])

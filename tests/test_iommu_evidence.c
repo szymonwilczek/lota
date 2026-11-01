@@ -16,28 +16,9 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
+#include "test.h"
 #include "../include/iommu_types.h"
 #include "../src/agent/iommu.h"
-
-static int tests_run;
-static int tests_passed;
-
-#define TEST(name)                                         \
-	do {                                               \
-		tests_run++;                               \
-		printf("  [%2d] %-62s ", tests_run, name); \
-	} while (0)
-
-#define PASS()                    \
-	do {                      \
-		tests_passed++;   \
-		printf("PASS\n"); \
-	} while (0)
-
-#define FAIL(msg)                          \
-	do {                               \
-		printf("FAIL: %s\n", msg); \
-	} while (0)
 
 static char g_root[64];
 

@@ -15,25 +15,7 @@
 #include <stdio.h>
 #include <string.h>
 
-static int tests_run;
-static int tests_passed;
-
-#define TEST(name)                                        \
-	do {                                              \
-		tests_run++;                              \
-		printf("  [%d] %-55s ", tests_run, name); \
-	} while (0)
-
-#define PASS()                    \
-	do {                      \
-		tests_passed++;   \
-		printf("PASS\n"); \
-	} while (0)
-
-#define FAIL(msg)                          \
-	do {                               \
-		printf("FAIL: %s\n", msg); \
-	} while (0)
+#include "test.h"
 
 /*
  * The packaged unit must not pass a --mode flag on ExecStart. The agent

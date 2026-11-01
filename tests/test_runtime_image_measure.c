@@ -18,29 +18,10 @@
 #include <errno.h>
 #include <openssl/types.h>
 
+#include "test.h"
 #include "lota_endian.h"
 #include "lota_runtime_image_measure.h"
 #include "lota.h"
-
-static int tests_run;
-static int tests_passed;
-
-#define TEST(name)                                        \
-	do {                                              \
-		tests_run++;                              \
-		printf("  [%2d] %-55s", tests_run, name); \
-	} while (0)
-
-#define PASS()                    \
-	do {                      \
-		tests_passed++;   \
-		printf("PASS\n"); \
-	} while (0)
-
-#define FAIL(reason)                           \
-	do {                                   \
-		printf("FAIL (%s)\n", reason); \
-	} while (0)
 
 /* fill a module with a soname and a verity digest of byte value `fill` */
 static void make_module_len(struct lota_runtime_image_module *m,

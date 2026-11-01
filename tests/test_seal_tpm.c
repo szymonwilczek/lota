@@ -15,28 +15,9 @@
 #include <stdint.h>
 #include <tss2/tss2_tpm2_types.h>
 
+#include "test.h"
 #include "../src/agent/agent_internal.h" // IWYU pragma: keep (defines LOTA_TPM_TESTING)
 #include "lota_seal.h"
-
-static int tests_run;
-static int tests_passed;
-
-#define TEST(name)                                        \
-	do {                                              \
-		tests_run++;                              \
-		printf("  [%2d] %-58s", tests_run, name); \
-	} while (0)
-
-#define PASS()                    \
-	do {                      \
-		tests_passed++;   \
-		printf("PASS\n"); \
-	} while (0)
-
-#define FAIL(reason)                           \
-	do {                                   \
-		printf("FAIL (%s)\n", reason); \
-	} while (0)
 
 static void test_mask_selection_default(void)
 {

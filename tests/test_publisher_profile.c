@@ -24,28 +24,9 @@
 #include <stdint.h>
 #include <sys/types.h>
 
+#include "test.h"
 #include "../include/lota_gaming.h"
 #include "../include/lota_ipc.h"
-
-static int tests_run;
-static int tests_passed;
-
-#define TEST(name)                                         \
-	do {                                               \
-		tests_run++;                               \
-		printf("  [%2d] %-56s ", tests_run, name); \
-	} while (0)
-
-#define PASS()                    \
-	do {                      \
-		tests_passed++;   \
-		printf("PASS\n"); \
-	} while (0)
-
-#define FAIL(msg)                          \
-	do {                               \
-		printf("FAIL: %s\n", msg); \
-	} while (0)
 
 static void SKIP(const char *msg)
 {

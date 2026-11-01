@@ -27,6 +27,7 @@
 #include <tss2/tss2_common.h>
 #include <tss2/tss2_tpm2_types.h>
 
+#include "test.h"
 #include "../src/agent/agent_internal.h" // IWYU pragma: keep (defines LOTA_TPM_TESTING)
 #include "lota.h"
 
@@ -67,26 +68,6 @@ static int mock_prop_reader_swtpm(struct tpm_context *ctx, TPM2_PT prop,
 		return -EINVAL;
 	}
 }
-
-static int tests_run;
-static int tests_passed;
-
-#define TEST(name)                                         \
-	do {                                               \
-		tests_run++;                               \
-		printf("  [%2d] %-55s ", tests_run, name); \
-	} while (0)
-
-#define PASS()                    \
-	do {                      \
-		tests_passed++;   \
-		printf("PASS\n"); \
-	} while (0)
-
-#define FAIL(msg)                          \
-	do {                               \
-		printf("FAIL: %s\n", msg); \
-	} while (0)
 
 static char tmp_dir[128];
 

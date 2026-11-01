@@ -12,6 +12,7 @@
 #include <errno.h>
 #include <linux/bpf_common.h>
 
+#include "test.h"
 #include "../src/agent/hardening.h"
 #include <linux/filter.h>
 #include <linux/seccomp.h>
@@ -25,26 +26,6 @@
 #include <sys/types.h>
 #include <sys/wait.h>
 #include <unistd.h>
-
-static int tests_run;
-static int tests_passed;
-
-#define TEST(name)                                         \
-	do {                                               \
-		tests_run++;                               \
-		printf("  [%2d] %-55s ", tests_run, name); \
-	} while (0)
-
-#define PASS()                    \
-	do {                      \
-		tests_passed++;   \
-		printf("PASS\n"); \
-	} while (0)
-
-#define FAIL(msg)                          \
-	do {                               \
-		printf("FAIL: %s\n", msg); \
-	} while (0)
 
 /*
  * hardening_parse_tracer_pid_buf lives in hardening.c without a public

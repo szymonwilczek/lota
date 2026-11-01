@@ -25,28 +25,9 @@
 #include <stdio.h>
 #include <string.h>
 
+#include "test.h"
 #include "../src/agent/exit_status.h"
 #include "../src/agent/tpm.h"
-
-static int tests_run;
-static int tests_passed;
-
-#define TEST(name)                                         \
-	do {                                               \
-		tests_run++;                               \
-		printf("  [%2d] %-58s ", tests_run, name); \
-	} while (0)
-
-#define PASS()                    \
-	do {                      \
-		tests_passed++;   \
-		printf("PASS\n"); \
-	} while (0)
-
-#define FAIL(msg)                          \
-	do {                               \
-		printf("FAIL: %s\n", msg); \
-	} while (0)
 
 /* The verdicts that refuse the extend, all of which -EBADMSG reaches main. */
 static const enum tpm_pcr14_state refusing_verdicts[] = {

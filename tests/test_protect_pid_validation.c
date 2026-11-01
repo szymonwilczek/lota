@@ -26,6 +26,7 @@
 #include <sys/wait.h>
 #include <unistd.h>
 
+#include "test.h"
 #include "../src/agent/agent.h"
 #include "../src/agent/bpf_loader.h"
 #include "../src/agent/main_utils.h"
@@ -60,26 +61,6 @@ const char *mode_to_string(int mode)
 	(void)mode;
 	return "monitor";
 }
-
-static int tests_run;
-static int tests_passed;
-
-#define TEST(name)                                         \
-	do {                                               \
-		tests_run++;                               \
-		printf("  [%2d] %-58s ", tests_run, name); \
-	} while (0)
-
-#define PASS()                    \
-	do {                      \
-		tests_passed++;   \
-		printf("PASS\n"); \
-	} while (0)
-
-#define FAIL(msg)                          \
-	do {                               \
-		printf("FAIL: %s\n", msg); \
-	} while (0)
 
 /*
  * A pid nothing holds. The child is reaped before it is used, so the number

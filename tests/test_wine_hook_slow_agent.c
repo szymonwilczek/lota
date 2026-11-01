@@ -25,6 +25,7 @@
 #include <time.h>
 #include <unistd.h>
 
+#include "test.h"
 #include "lota_ipc.h"
 #include "lota_wine_hook.h"
 
@@ -36,26 +37,6 @@
 #define AGENT_THINK_SEC 3
 
 #define AGENT_ATTEST_COUNT 7u
-
-static int tests_run;
-static int tests_passed;
-
-#define TEST(name)                                        \
-	do {                                              \
-		tests_run++;                              \
-		printf("  [%d] %-58s ", tests_run, name); \
-	} while (0)
-
-#define PASS()                    \
-	do {                      \
-		tests_passed++;   \
-		printf("PASS\n"); \
-	} while (0)
-
-#define FAIL(msg)                          \
-	do {                               \
-		printf("FAIL: %s\n", msg); \
-	} while (0)
 
 /* short enough that every path built from it fits its buffer */
 static char tmpdir[64];

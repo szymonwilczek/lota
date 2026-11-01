@@ -12,6 +12,7 @@
 #include <stdint.h>
 #include <stdio.h>
 
+#include "test.h"
 #include "../src/agent/agent.h"
 #include "../src/agent/main_utils.h"
 #include "../src/agent/startup_policy.h"
@@ -42,26 +43,6 @@ const char *mode_to_string(int mode)
 void ipc_runtime_coverage_forget(void)
 {
 }
-
-static int tests_run;
-static int tests_passed;
-
-#define TEST(name)                                         \
-	do {                                               \
-		tests_run++;                               \
-		printf("  [%2d] %-58s ", tests_run, name); \
-	} while (0)
-
-#define PASS()                    \
-	do {                      \
-		tests_passed++;   \
-		printf("PASS\n"); \
-	} while (0)
-
-#define FAIL(msg)                          \
-	do {                               \
-		printf("FAIL: %s\n", msg); \
-	} while (0)
 
 /* Secure Boot off: no lockdown, the floor answers -EPERM */
 static void test_validator_refuses_the_host_and_not_the_run(void)
