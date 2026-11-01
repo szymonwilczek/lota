@@ -3,16 +3,10 @@
 // LOTA Verifier - Signature verification module
 //
 // The signature verifier validates the TPM quote (TPMS_ATTEST +
-// signature) against an AIK public key. It is intentionally
-// decoupled from the AIK trust model so the same verifier handles
-// every supported source for the public key:
-//   - Certificate-backed AIK chain via CertificateVerifier.
-//     VerifyReport requires the AIK certificate in every report and has
-//     chain-verified it against the configured trust roots before the
-//     signature is checked.
-//   - Optional future Privacy CA / DAA flow. The interface stays
-//     intentionally minimal so a new strategy can be plugged in
-//     without touching the quote-verification fast path.
+// signature) against an AIK public key. The caller resolves that key
+// through CertificateVerifier, which requires the AIK certificate in
+// every report and chain-verifies it against the configured trust
+// roots before the signature is checked.
 
 package verify
 
@@ -28,31 +22,11 @@ import (
 	"github.com/szymonwilczek/lota/verifier/types"
 )
 
-// handles TPM quote signature verification
-// interface allows swapping verification strategies
-type SignatureVerifier interface {
-	// verifies the TPM quote signature
-	// attestData: raw TPMS_ATTEST from TPM
-	// signature: signature over attestData
-	// aikPubKey: AIK public key; provided by the caller after it
-	//   has been resolved through the active trust model:
-	//   the AIK certificate chain, or key pinned in one of
-	//   the anchorless stores used by tests and provisioning.
-	VerifyQuoteSignature(attestData, signature []byte, aikPubKey *rsa.PublicKey) error
-
-	// returns verifier name for logging
-	Name() string
-}
-
 // implements RSASSA-PKCS1-v1_5 verification
 type RSASSAVerifier struct{}
 
 func NewRSASSAVerifier() *RSASSAVerifier {
 	return &RSASSAVerifier{}
-}
-
-func (v *RSASSAVerifier) Name() string {
-	return "RSASSA-PKCS1-v1_5"
 }
 
 func (v *RSASSAVerifier) VerifyQuoteSignature(attestData, signature []byte, aikPubKey *rsa.PublicKey) error {
@@ -86,10 +60,6 @@ type RSAPSSVerifier struct{}
 
 func NewRSAPSSVerifier() *RSAPSSVerifier {
 	return &RSAPSSVerifier{}
-}
-
-func (v *RSAPSSVerifier) Name() string {
-	return "RSASSA-PSS"
 }
 
 func (v *RSAPSSVerifier) VerifyQuoteSignature(attestData, signature []byte, aikPubKey *rsa.PublicKey) error {

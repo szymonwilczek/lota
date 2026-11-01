@@ -1251,11 +1251,6 @@ func (v *Verifier) BanStore() store.BanStore {
 	return v.banStore
 }
 
-// returns client IDs currently present in the nonce store
-func (v *Verifier) ListActiveClients() []string {
-	return v.nonceStore.ListActiveClients()
-}
-
 // tryReanchor attempts self-service re-anchor on a firmware/Secure Boot PCR drift.
 // It returns true only when the per-device boot baseline was actually re-pinned
 // (the strong path, or an operator-approved LFA path), in which case the caller

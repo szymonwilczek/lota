@@ -752,15 +752,6 @@ func (v *PCRVerifier) ActivePolicyRequiresSecureBoot() bool {
 	return ok && policy != nil && policy.RequireSecureBoot
 }
 
-// reports whether the active policy gates on the measured kernel
-// cmdline; drives PCR 8 consistency enforcement in the event-log check
-func (v *PCRVerifier) ActivePolicyRequiresCmdline() bool {
-	v.mu.RLock()
-	defer v.mu.RUnlock()
-	policy, ok := v.policies[v.active]
-	return ok && policy != nil && policy.RequireCmdlinePolicy
-}
-
 // returns names of all loaded policies
 func (v *PCRVerifier) ListPolicies() []string {
 	v.mu.RLock()
