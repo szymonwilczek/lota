@@ -27,19 +27,15 @@ LOTA_ANTICHEAT_1.0 {
 		lota_ac_get_state;
 		lota_ac_heartbeat;
 		lota_ac_init;
+		lota_ac_last_error;
 		lota_ac_list_runtime_objects;
 		lota_ac_provider_str;
 		lota_ac_shutdown;
 		lota_ac_state_str;
+		lota_ac_strerror;
 		lota_ac_tick;
 		lota_ac_verify_heartbeat;
 
 	local:
 		*;
 };
-
-LOTA_ANTICHEAT_1.1 {
-	global:
-		lota_ac_last_error;
-		lota_ac_strerror;
-} LOTA_ANTICHEAT_1.0;

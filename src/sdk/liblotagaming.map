@@ -29,6 +29,7 @@ LOTAGAMING_1.0 {
 		lota_poll_events;
 		lota_protect_self;
 		lota_sdk_version;
+		lota_set_request_timeout;
 		lota_strerror;
 		lota_subscribe;
 		lota_token_free;
@@ -39,8 +40,3 @@ LOTAGAMING_1.0 {
 	local:
 		*;
 };
-
-LOTAGAMING_1.1 {
-	global:
-		lota_set_request_timeout;
-} LOTAGAMING_1.0;
