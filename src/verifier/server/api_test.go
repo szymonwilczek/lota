@@ -313,9 +313,9 @@ func buildSignedReport(t *testing.T, clientID string, nonce [32]byte, pcr14 [32]
 	t.Helper()
 	hwID := sha256.Sum256([]byte(clientID))
 
-	// fixed struct plus the two variable-section length prefixes;
+	// fixed struct plus the event log length prefix;
 	// mandatory ESRT section is appended at the end
-	buf := make([]byte, types.FixedReportSize+8)
+	buf := make([]byte, types.FixedReportSize+4)
 	offset := 0
 
 	// Header (32 bytes)
@@ -441,10 +441,6 @@ func buildSignedReport(t *testing.T, clientID string, nonce [32]byte, pcr14 [32]
 	offset += 4
 	copy(buf[offset:], "intel_iommu=on")
 	offset += types.CmdlineParamMax
-
-	// no serialized BPF exec events in API fixtures
-	binary.LittleEndian.PutUint32(buf[offset:], 0)
-	offset += 4
 
 	eventLog := buildUEFIEventLog()
 	binary.LittleEndian.PutUint32(buf[offset:], uint32(len(eventLog)))

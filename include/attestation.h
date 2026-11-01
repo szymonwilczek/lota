@@ -218,8 +218,6 @@ struct lota_esrt {
  *   [lota_report_header]
  *   [lota_tpm_evidence]
  *   [lota_system_measurement]
- *   [event_count: uint32_t]
- *   [lota_exec_event * event_count]
  *   [event_log_size: uint32_t]
  *   [tpm_event_log: uint8_t * event_log_size]
  *   [lota_esrt: 28 bytes]   (always present; esrt.present == 0 is how a
@@ -237,8 +235,6 @@ struct lota_attestation_report {
 /*
  * serialize_report - Serialize report to wire format
  * @report: Report structure
- * @events: Array of BPF events (can be NULL)
- * @event_count: Number of events
  * @event_log: TPM event log (can be NULL)
  * @event_log_size: Size of event log
  * @esrt: ESRT System Firmware descriptor; mandatory,
@@ -250,20 +246,18 @@ struct lota_attestation_report {
  * Returns: Number of bytes written, or negative errno
  */
 ssize_t serialize_report(const struct lota_attestation_report *report,
-			 const struct lota_exec_event *events,
-			 uint32_t event_count, const uint8_t *event_log,
-			 uint32_t event_log_size, const struct lota_esrt *esrt,
-			 uint8_t *out_buf, size_t out_buf_size);
+			 const uint8_t *event_log, uint32_t event_log_size,
+			 const struct lota_esrt *esrt, uint8_t *out_buf,
+			 size_t out_buf_size);
 
 /*
  * calculate_report_size - Calculate serialized report size
- * @event_count: Number of BPF events
  * @event_log_size: Size of TPM event log
  *
  * Trailing ESRT section is always counted: it is mandatory on the wire.
  *
  * Returns: Total size in bytes
  */
-size_t calculate_report_size(uint32_t event_count, uint32_t event_log_size);
+size_t calculate_report_size(uint32_t event_log_size);
 
 #endif /* LOTA_ATTESTATION_H */

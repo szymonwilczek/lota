@@ -533,11 +533,6 @@ func TestParseReport_WithEventLog(t *testing.T) {
 	binary.LittleEndian.PutUint32(buf[0:], types.ReportMagic)
 	binary.LittleEndian.PutUint32(buf[4:], types.ReportVersion)
 
-	// event_count = 0
-	eventCountBuf := make([]byte, 4)
-	binary.LittleEndian.PutUint32(eventCountBuf, 0)
-	buf = append(buf, eventCountBuf...)
-
 	// event_log_size = 5, data = "hello"
 	eventLogSizeBuf := make([]byte, 4)
 	binary.LittleEndian.PutUint32(eventLogSizeBuf, 5)

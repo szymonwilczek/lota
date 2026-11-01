@@ -146,9 +146,9 @@ func createValidReportWithEventLog(t *testing.T, clientID string, nonce [32]byte
 	t.Helper()
 	hwID := sha256.Sum256([]byte(clientID))
 
-	// fixed struct plus the two variable-section length prefixes;
+	// fixed struct plus the event log length prefix;
 	// mandatory ESRT section is appended at the end
-	buf := make([]byte, types.FixedReportSize+8)
+	buf := make([]byte, types.FixedReportSize+4)
 	offset := 0
 
 	// Header (32 bytes)
@@ -277,10 +277,6 @@ func createValidReportWithEventLog(t *testing.T, clientID string, nonce [32]byte
 	offset += 4
 	copy(buf[offset:], "intel_iommu=on")
 	offset += types.CmdlineParamMax
-
-	// bpf event_count = 0 (no serialized exec events in integration fixtures)
-	binary.LittleEndian.PutUint32(buf[offset:], 0)
-	offset += 4
 
 	// append the caller's firmware log
 	// (Spec ID header + the PCR 7 SecureBoot variable measurement
@@ -667,9 +663,9 @@ func TestIntegration_ConcurrentFirstAttestationSameClient(t *testing.T) {
 // helper for concurrent test
 func createValidReportWithKey(clientID string, nonce [32]byte, pcr14 [32]byte, key *rsa.PrivateKey) []byte {
 	hwID := sha256.Sum256([]byte(clientID))
-	// fixed struct plus the two variable-section length prefixes;
+	// fixed struct plus the event log length prefix;
 	// mandatory ESRT section is appended at the end
-	buf := make([]byte, types.FixedReportSize+8)
+	buf := make([]byte, types.FixedReportSize+4)
 	offset := 0
 
 	// Header
@@ -782,10 +778,6 @@ func createValidReportWithKey(clientID string, nonce [32]byte, pcr14 [32]byte, k
 	offset += 4
 	copy(buf[offset:offset+types.CmdlineParamMax], []byte("intel_iommu=on"))
 	offset += types.CmdlineParamMax
-
-	// bpf event_count = 0
-	binary.LittleEndian.PutUint32(buf[offset:], 0)
-	offset += 4
 
 	eventLog := uefiEventLog()
 	binary.LittleEndian.PutUint32(buf[offset:], uint32(len(eventLog)))
@@ -934,16 +926,7 @@ func stripEventLogEntries(t *testing.T, reportData []byte) []byte {
 
 	bare := buildTestEventLog(nil)
 
-	// Walk to the length field:
-	// the BPF event array before it is variable, and the wire may carry
-	// mandatory section after the log, so neither end is fixed distance
-	// from it
 	off := types.FixedReportSize
-	if len(reportData) < off+4 {
-		t.Fatalf("report of %d bytes stops before event_count", len(reportData))
-	}
-	eventCount := binary.LittleEndian.Uint32(reportData[off : off+4])
-	off += 4 + int(eventCount)*types.ExecEventSize
 	if len(reportData) < off+4 {
 		t.Fatalf("report of %d bytes stops before event_log_size", len(reportData))
 	}

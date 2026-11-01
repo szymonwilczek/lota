@@ -174,7 +174,7 @@ func main() {
 	}
 
 	// file's length must be exactly what the Go constants predict
-	wantLen := types.FixedReportSize + 4 + 4 + len(eventLog) + types.ESRTWireSize
+	wantLen := types.FixedReportSize + 4 + len(eventLog) + types.ESRTWireSize
 	if len(data) != wantLen {
 		fail("report is %d bytes, Go constants predict %d (FixedReportSize=%d)",
 			len(data), wantLen, types.FixedReportSize)

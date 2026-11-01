@@ -5,8 +5,6 @@
  *
  * Wire format:
  *   [lota_attestation_report]    (fixed struct, see the static asserts below)
- *   [event_count: uint32_t]
- *   [lota_exec_event * event_count]
  *   [event_log_size: uint32_t]
  *   [tpm_event_log: uint8_t * event_log_size]
  *   [lota_esrt]                  (mandatory trailing section)
@@ -21,7 +19,6 @@
 #include <sys/types.h>
 
 #include "../../include/attestation.h"
-#include "lota.h"
 
 /*
  * Go verifier parses this layout from hand-computed offsets
@@ -43,28 +40,9 @@ _Static_assert(sizeof(struct lota_attestation_report) == 5878,
 	       "types/report.go");
 _Static_assert(sizeof(struct lota_esrt) == 28,
 	       "lota_esrt size changed; update ESRTWireSize in types/report.go");
-_Static_assert(sizeof(struct lota_exec_event) == 344,
-	       "lota_exec_event size changed; update ExecEventSize in "
-	       "types/report.go");
-
-size_t calculate_report_size(uint32_t event_count, uint32_t event_log_size)
+size_t calculate_report_size(uint32_t event_log_size)
 {
 	size_t size = sizeof(struct lota_attestation_report);
-	size_t events_size;
-
-	/* BPF event section: count + events */
-	events_size = (size_t)event_count * sizeof(struct lota_exec_event);
-	if (event_count != 0 &&
-	    events_size / event_count != sizeof(struct lota_exec_event))
-		return 0;
-
-	if (size + sizeof(uint32_t) < size)
-		return 0;
-	size += sizeof(uint32_t); /* event_count */
-
-	if (size + events_size < size)
-		return 0;
-	size += events_size;
 
 	/* TPM event log section: size + data */
 	if (size + sizeof(uint32_t) < size)
@@ -84,10 +62,9 @@ size_t calculate_report_size(uint32_t event_count, uint32_t event_log_size)
 }
 
 ssize_t serialize_report(const struct lota_attestation_report *report,
-			 const struct lota_exec_event *events,
-			 uint32_t event_count, const uint8_t *event_log,
-			 uint32_t event_log_size, const struct lota_esrt *esrt,
-			 uint8_t *out_buf, size_t out_buf_size)
+			 const uint8_t *event_log, uint32_t event_log_size,
+			 const struct lota_esrt *esrt, uint8_t *out_buf,
+			 size_t out_buf_size)
 {
 	size_t total;
 	size_t offset = 0;
@@ -101,13 +78,10 @@ ssize_t serialize_report(const struct lota_attestation_report *report,
 	if (!report || !out_buf || !esrt)
 		return -EINVAL;
 
-	/* count without data pointer means no events */
-	if (!events)
-		event_count = 0;
 	if (!event_log)
 		event_log_size = 0;
 
-	total = calculate_report_size(event_count, event_log_size);
+	total = calculate_report_size(event_log_size);
 	if (total == 0)
 		return -EOVERFLOW;
 
@@ -117,22 +91,6 @@ ssize_t serialize_report(const struct lota_attestation_report *report,
 	/* fixed report struct */
 	memcpy(out_buf + offset, report, sizeof(*report));
 	offset += sizeof(*report);
-
-	/* BPF event section */
-	{
-		uint32_t ec_le = htole32(event_count);
-		memcpy(out_buf + offset, &ec_le, sizeof(ec_le));
-	}
-	offset += sizeof(event_count);
-
-	if (event_count > 0 && events) {
-		size_t events_size =
-			(size_t)event_count * sizeof(struct lota_exec_event);
-		if (events_size / event_count != sizeof(struct lota_exec_event))
-			return -EOVERFLOW;
-		memcpy(out_buf + offset, events, events_size);
-		offset += events_size;
-	}
 
 	/* TPM event log section */
 	{

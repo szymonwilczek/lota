@@ -853,9 +853,9 @@ func createSQLiteTestReportWithKey(t testing.TB, clientID string, nonce [32]byte
 	}
 	hwID := sha256.Sum256([]byte(clientID))
 
-	// fixed struct plus the two variable-section length prefixes;
+	// fixed struct plus the event log length prefix;
 	// mandatory ESRT section is appended at the end
-	buf := make([]byte, types.FixedReportSize+8)
+	buf := make([]byte, types.FixedReportSize+4)
 	offset := 0
 
 	// Header
@@ -969,10 +969,6 @@ func createSQLiteTestReportWithKey(t testing.TB, clientID string, nonce [32]byte
 	offset += 4
 	copy(buf[offset:], "intel_iommu=on")
 	offset += types.CmdlineParamMax
-
-	// bpf event_count = 0
-	binary.LittleEndian.PutUint32(buf[offset:], 0)
-	offset += 4
 
 	eventLog := uefiEventLog()
 	binary.LittleEndian.PutUint32(buf[offset:], uint32(len(eventLog)))

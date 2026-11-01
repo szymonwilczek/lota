@@ -109,7 +109,7 @@ int main(void)
 		esrt.fw_class[i] = (uint8_t)(0xC0 ^ i);
 
 	/* event log length excludes the terminating NUL */
-	expected = calculate_report_size(0, (uint32_t)(sizeof(event_log) - 1));
+	expected = calculate_report_size((uint32_t)(sizeof(event_log) - 1));
 	if (expected == 0 || expected > sizeof(buf)) {
 		fprintf(stderr, "report_gen: bad computed size %zu\n",
 			expected);
@@ -117,8 +117,7 @@ int main(void)
 	}
 	report.header.report_size = (uint32_t)expected;
 
-	wire_size = serialize_report(&report, NULL, 0,
-				     (const uint8_t *)event_log,
+	wire_size = serialize_report(&report, (const uint8_t *)event_log,
 				     (uint32_t)(sizeof(event_log) - 1), &esrt,
 				     buf, sizeof(buf));
 	if (wire_size < 0) {
@@ -134,7 +133,7 @@ int main(void)
 	}
 
 	/* ESRT section is mandatory: NULL must be refused */
-	if (serialize_report(&report, NULL, 0, (const uint8_t *)event_log,
+	if (serialize_report(&report, (const uint8_t *)event_log,
 			     (uint32_t)(sizeof(event_log) - 1), NULL, buf,
 			     sizeof(buf)) != -EINVAL) {
 		fprintf(stderr,

@@ -54,7 +54,6 @@ cat >"$WORK_DIR/sizes.c" <<'PROBE'
 
 int main(void)
 {
-	printf("ExecEventSize %zu\n", sizeof(struct lota_exec_event));
 	printf("ESRTWireSize %zu\n", sizeof(struct lota_esrt));
 	printf("FixedReportSize %zu\n",
 	       sizeof(struct lota_attestation_report));

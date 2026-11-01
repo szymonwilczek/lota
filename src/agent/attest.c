@@ -795,7 +795,7 @@ static int attest_once(const char *server, int port, const char *ca_cert,
 		 * Always sent, present=0 when absent */
 		esrt_read_system_firmware(&esrt);
 
-		total = calculate_report_size(0, (uint32_t)event_log_size);
+		total = calculate_report_size((uint32_t)event_log_size);
 		wire_buf_size = total;
 		wire_buf = malloc(total);
 		if (!wire_buf) {
@@ -805,7 +805,7 @@ static int attest_once(const char *server, int port, const char *ca_cert,
 		}
 
 		report.header.report_size = (uint32_t)total;
-		wire_size = serialize_report(&report, NULL, 0, event_log,
+		wire_size = serialize_report(&report, event_log,
 					     (uint32_t)event_log_size, &esrt,
 					     wire_buf, total);
 		if (wire_size < 0) {

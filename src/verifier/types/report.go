@@ -31,7 +31,6 @@ const (
 	PCRCount        = 24   // TPM PCR bank size
 	MaxKernelPath   = 256
 	CmdlineParamMax = 64
-	ExecEventSize   = 344 // sizeof(lota_exec_event)
 )
 
 // report flags (see: include/attestation.h)
@@ -333,12 +332,12 @@ var (
 )
 
 // minimum binary size of a serialized report on the wire.
-// Header(16) + TPM(5466) + System(396) + event_count(4) + event_log_size(4) + ESRT(28) = 5914.
+// Header(16) + TPM(5466) + System(396) + event_log_size(4) + ESRT(28) = 5910.
 //
 // ESRT section is mandatory, so it counts toward the minimum:
 // report that stops before it is truncated.
 // src/agent/report.c pins the C-side sizes with static asserts
-const MinReportSize = 5914
+const MinReportSize = 5910
 
 // fixed struct portion (without variable-length sections)
 // Header(16) + TPM(5466) + System(396) = 5878
@@ -443,19 +442,6 @@ func ParseReport(data []byte) (*AttestationReport, error) {
 	offset += 4
 	copy(report.System.IOMMU.CmdlineParam[:], data[offset:offset+CmdlineParamMax])
 	offset += CmdlineParamMax
-
-	// BPF events section: event_count + events
-	if len(data) < offset+4 {
-		return nil, fmt.Errorf("%w: truncated at event_count", ErrInvalidSize)
-	}
-	eventCount := binary.LittleEndian.Uint32(data[offset:])
-	offset += 4
-	remaining := len(data) - offset
-	if remaining < 0 || uint64(eventCount)*ExecEventSize > uint64(remaining) {
-		return nil, fmt.Errorf("%w: truncated at BPF events (event_count %d)", ErrInvalidSize, eventCount)
-	}
-	eventBytes := int(eventCount) * ExecEventSize
-	offset += eventBytes // skip BPF events (not parsed yet)
 
 	// TPM event log section
 	if len(data) < offset+4 {
