@@ -4,7 +4,7 @@
 //
 // Persistent implementations of RevocationStore, BanStore, and AuditLog
 // backed by SQLite. All three share the same database connection opened
-// by store.OpenDB() and use tables created by migration v2.
+// by store.OpenDB() and use tables created by the schema migration.
 //
 // The audit log is append-only. Every revoke/unrevoke/ban/unban action
 // is recorded with actor identity and timestamp for forensic review.
@@ -396,7 +396,7 @@ func (l *SQLiteAuditLog) Query(limit int) []AuditEntry {
 	return entries
 }
 
-// implements AttestationLog using the attestation_log table (migration v3)
+// implements AttestationLog using the attestation_log table
 type SQLiteAttestationLog struct {
 	mu     sync.Mutex
 	db     *sql.DB

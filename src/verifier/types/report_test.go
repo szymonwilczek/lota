@@ -322,7 +322,7 @@ func TestParseReport_TruncatedData(t *testing.T) {
 // production reports.
 func TestParseReport_FieldOffsetsMatchCLayout(t *testing.T) {
 	// Offsets derived from struct lota_tpm_evidence in include/attestation.h
-	// Report version 2 carries no ek_certificate
+	// The report carries no ek_certificate
 	const (
 		tpmBase          = 16
 		offPCRValues     = tpmBase
