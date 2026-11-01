@@ -183,7 +183,7 @@ const char *tpm_strerror(int err);
 #define TPM_AIK_KEY_DERIVATION_SHARED 0
 #define TPM_AIK_KEY_DERIVATION_PER_PUBLISHER 2
 
-/* Default metadata path (install target creates /var/lib/lota/aiks/) */
+/* Default metadata path (install target creates /var/lib/lota/) */
 #define TPM_AIK_META_PATH "/var/lib/lota/aik_meta.dat"
 #define TPM_AIK_AUTH_PATH "/var/lib/lota/aik_auth.dat"
 

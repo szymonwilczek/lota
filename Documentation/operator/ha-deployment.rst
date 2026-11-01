@@ -22,7 +22,7 @@ One verifier process owns its state. Two equivalent storage layouts exist:
 * **File + SQLite.** The used-nonce history and the enforcement state --
   revocations, hardware bans, the audit log and the attestation decision log
   -- persist to one SQLite database (``--state-db``, default
-  ``<aik-store>/verifier-state.sqlite``). The per-device boot baseline is
+  ``/var/lib/lota/verifier-state.sqlite``). The per-device boot baseline is
   in-memory, so a restart drops the baselines and the next report from each
   device re-pins them.
 * **SQLite (production default).** ``--db`` persists all of the above to one

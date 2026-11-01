@@ -10,8 +10,9 @@
 //   --http-addr ADDR   Listen address for HTTP monitoring API (default: disabled)
 //   --cert FILE        TLS certificate file
 //   --key FILE         TLS private key file
-//   --aik-store PATH   AIK key store directory (default: /var/lib/lota/aiks)
 //   --db PATH          SQLite database for persistent storage (default: disabled)
+//   --state-db PATH    SQLite state without --db or --pg-dsn
+//                      (default: /var/lib/lota/verifier-state.sqlite)
 //   --pg-dsn DSN       PostgreSQL DSN for shared multi-instance storage
 //                      (or LOTA_PG_DSN); mutually exclusive with --db
 //   --policy FILE      PCR policy file (YAML); may be repeated, first is active
@@ -49,7 +50,6 @@ import (
 	"net"
 	"os"
 	"os/signal"
-	"path/filepath"
 	"strings"
 	"syscall"
 	"time"
@@ -87,8 +87,6 @@ var (
 		"How long the monitoring API keeps answering after the attestation listener has closed on shutdown. /health answers 503 degraded for that window, which is what a load balancer reads to stop routing here before the process goes; set it to at least one health-check interval behind one. Zero shuts the API down as soon as it is idle.")
 	certFile     = flag.String("cert", "", "TLS certificate file")
 	keyFile      = flag.String("key", "", "TLS private key file")
-	aikStorePath = flag.String("aik-store", "/var/lib/lota/aiks",
-		"Directory of the default --state-db")
 	dbPath       = flag.String("db", "", "SQLite database path for all verifier state (empty = --state-db, which keeps no boot baselines)")
 	policyFiles  stringSliceFlag
 	policyPubKey = flag.String("policy-pubkey", "", "Ed25519 public key for policy signature verification (PEM)")
@@ -108,7 +106,7 @@ var (
 	pgDSN               = flag.String("pg-dsn", "", "PostgreSQL DSN for shared multi-instance storage (or LOTA_PG_DSN env); selects the Postgres backend for baseline, nonce, revocation, ban, audit and attestation state. The database must be writable: the verifier applies its schema at startup, so a hot standby is refused. Mutually exclusive with --db.")
 	attestLogWindow     = flag.Duration("attestation-log-window", store.DefaultCollapseWindow, "How long one decision-log row may stand for. A trusted round that repeats what the row standing for that host already says advances it -- last seen, rounds -- instead of writing another row, so the log grows with what happened rather than with how long the fleet stayed up. Refusals, verdict changes and first sightings always get their own row whatever this is set to. Zero writes every round as its own row, which is what a deployment whose retention rule counts rows asks for.")
 	pgMaxOpenConns      = flag.Int("pg-max-open-conns", store.DefaultPGMaxOpenConns, "Maximum open Postgres connections per instance (per shard when sharded). Postgres group-commits concurrent transactions, so a wider pool raises enrollment/attestation burst throughput; keep the value times the instance count under the database's max_connections.")
-	stateDBPath         = flag.String("state-db", "", "SQLite database an instance without --db or --pg-dsn keeps its durable state in: used nonce history, revocations, hardware bans, the audit log and the attestation decision log (defaults to <aik-store>/verifier-state.sqlite); set --allow-insecure-memory-state to keep none of it")
+	stateDBPath         = flag.String("state-db", "/var/lib/lota/verifier-state.sqlite", "SQLite database an instance without --db or --pg-dsn keeps its durable state in: used nonce history, revocations, hardware bans, the audit log and the attestation decision log; set --allow-insecure-memory-state to keep none of it")
 	scopedKeysFile      = flag.String("api-keys-file", "", "YAML file of scoped monitoring-API keys (entries of key_sha256, role: reader|admin, tenants list or * for all); reloaded on SIGHUP. Environment keys keep working with global scope.")
 	allowMemState       = flag.Bool("allow-insecure-memory-state", false, "INSECURE: keep no durable state without a database. The used nonce history lives in memory, so a restart re-opens a replay window, and this instance holds no revocations, bans, audit log or decision log at all -- those endpoints answer 503.")
 	reportOnly          = flag.Bool("report-only", false, "Serve the monitoring API from a database this instance never writes -- a Postgres hot standby or the primary -- with no attestation listener bound and every state-changing endpoint refused. Requires --http-addr and a Postgres DSN; the schema is verified but never applied, so the reporting load that is not the verifier's can be taken off the primary.")
@@ -527,9 +525,6 @@ func main() {
 		// forgets a ban
 		if !*allowMemState {
 			path := *stateDBPath
-			if path == "" {
-				path = filepath.Join(*aikStorePath, "verifier-state.sqlite")
-			}
 			db, err := store.OpenDB(path)
 			if err != nil {
 				logger.Error("failed to open the state database (required for anti-replay and enforcement persistence)",

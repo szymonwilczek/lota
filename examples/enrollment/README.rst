@@ -115,9 +115,9 @@ variable to move a taken one:
 
 The script starts ``lota-verifier`` from a writable runtime directory
 (``RUN_DIR``, default: a fresh ``/tmp/lota-enrollment.*``) and points
-``--aik-store`` / ``--state-db`` there. This keeps the verifier's durable
+``--state-db`` there. This keeps the verifier's durable
 state -- nonce replay history and the enforcement decisions an operator makes
--- out of the repository, and avoids the production ``/var/lib/lota/aiks``
+-- out of the repository, and avoids the production ``/var/lib/lota``
 default when the verifier is not running as root. The verifier presents the listener
 certificate ``gen-ca.sh`` issued, so the agent verifies the handshake against
 ``ca.crt`` -- the same file that names the publisher it enrolled with, which is

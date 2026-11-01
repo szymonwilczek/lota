@@ -109,9 +109,8 @@ State the packages own, and state they leave alone
 ==================================================
 
 ``lota-agent`` owns ``/var/lib/lota`` and ``/var/lib/lota/profiles``, both
-``0700``; ``lota-verifier`` owns ``/var/lib/lota`` and its default
-``--aik-store`` at ``/var/lib/lota/aiks``, also ``0700``, so ``rpm -V``
-reports a changed mode.
+``0700``; ``lota-verifier`` owns ``/var/lib/lota``, also ``0700``, so
+``rpm -V`` reports a changed mode.
 
 The files inside are **not** owned: the AIK authorisation value and its
 sealed form, the AIK metadata, the monotonic clock state and the publisher

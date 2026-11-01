@@ -34,7 +34,7 @@ aikCA:
   files:
     - ca.crt
 
-# Writable scratch dir (emptyDir) for the AIK store etc.
+# Writable scratch dir (emptyDir) for the --state-db file.
 # Durable enforcement state lives in Postgres, not here.
 dataDir: /var/lib/lota
 
