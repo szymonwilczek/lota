@@ -490,35 +490,53 @@ func TestCertificateStore_KeyMismatch(t *testing.T) {
 	}
 }
 
-func TestCertificateStore_ExpiredCertificate(t *testing.T) {
-	tempDir, err := os.MkdirTemp("", "lota-test-*")
-	if err != nil {
-		t.Fatalf("Failed to create temp dir: %v", err)
-	}
-	defer os.RemoveAll(tempDir)
+func TestCertificateStore_CertificateValidityWindow(t *testing.T) {
+	expired := [2]time.Duration{-48 * time.Hour, -24 * time.Hour}
+	notYet := [2]time.Duration{24 * time.Hour, 48 * time.Hour}
+	valid := [2]time.Duration{-1 * time.Hour, 24 * time.Hour}
 
-	// create CA
+	tests := []struct {
+		name string
+		aik  [2]time.Duration
+		ek   [2]time.Duration
+		want error
+	}{
+		{"expired AIK", expired, valid, ErrCertificateExpired},
+		{"future AIK", notYet, valid, ErrCertificateNotYet},
+		{"expired EK", valid, expired, ErrCertificateExpired},
+		{"future EK", valid, notYet, ErrCertificateNotYet},
+	}
+
 	caKey := generateTestKey(t)
 	caCert := generateTestCertificate(t, caKey, true)
-
-	// save CA cert
-	caCertPath := filepath.Join(tempDir, "ca.pem")
-	caCertDER, _ := x509.CreateCertificate(rand.Reader, caCert, caCert, &caKey.PublicKey, caKey)
-	saveCertPEM(t, caCertPath, caCertDER)
-
-	// create store with CA
-	store, err := NewCertificateStore(tempDir, []string{caCertPath}, false)
+	caCertDER, err := x509.CreateCertificate(rand.Reader, caCert, caCert, &caKey.PublicKey, caKey)
 	if err != nil {
-		t.Fatalf("NewCertificateStore failed: %v", err)
+		t.Fatalf("CreateCertificate: %v", err)
 	}
 
-	// create expired certificate
-	aikKey := generateTestKey(t)
-	expiredCertDER := generateExpiredCertificate(t, aikKey, caCert, caKey)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tempDir := t.TempDir()
+			caCertPath := filepath.Join(tempDir, "ca.pem")
+			saveCertPEM(t, caCertPath, caCertDER)
 
-	// should fail with expired certificate
-	if err := store.RegisterAIKWithCert("client1", &aikKey.PublicKey, expiredCertDER, nil); err == nil {
-		t.Error("Registration with expired cert should fail")
+			store, err := NewCertificateStore(tempDir, []string{caCertPath}, false)
+			if err != nil {
+				t.Fatalf("NewCertificateStore failed: %v", err)
+			}
+
+			aikKey := generateTestKey(t)
+			aikDER := generateWindowedCertificate(t, aikKey, caCert, caKey, tt.aik, false)
+			ekDER := generateWindowedCertificate(t, generateTestKey(t), caCert, caKey, tt.ek, true)
+
+			err = store.RegisterAIKWithCert("client1", &aikKey.PublicKey, aikDER, ekDER)
+			if !errors.Is(err, tt.want) {
+				t.Fatalf("RegisterAIKWithCert: want %v, got %v", tt.want, err)
+			}
+			if _, err := store.GetAIK("client1"); !errors.Is(err, ErrAIKNotFound) {
+				t.Errorf("refused client was registered: %v", err)
+			}
+		})
 	}
 }
 
@@ -537,24 +555,30 @@ func saveCertPEM(t *testing.T, path string, certDER []byte) {
 }
 
 // helper to generate expired certificate
-func generateExpiredCertificate(t *testing.T, key *rsa.PrivateKey, ca *x509.Certificate, caKey *rsa.PrivateKey) []byte {
+func generateWindowedCertificate(t *testing.T, key *rsa.PrivateKey, ca *x509.Certificate, caKey *rsa.PrivateKey,
+	window [2]time.Duration, ek bool,
+) []byte {
 	t.Helper()
 
 	template := &x509.Certificate{
 		SerialNumber: big.NewInt(3),
 		Subject: pkix.Name{
 			Organization: []string{"LOTA Test"},
-			CommonName:   "Expired Certificate",
+			CommonName:   "Windowed Certificate",
 		},
-		NotBefore:             time.Now().Add(-48 * time.Hour),
-		NotAfter:              time.Now().Add(-24 * time.Hour), // expired!
+		NotBefore:             time.Now().Add(window[0]),
+		NotAfter:              time.Now().Add(window[1]),
 		KeyUsage:              x509.KeyUsageDigitalSignature,
 		BasicConstraintsValid: true,
+	}
+	if ek {
+		template.KeyUsage = x509.KeyUsageKeyEncipherment
+		template.UnknownExtKeyUsage = []asn1.ObjectIdentifier{{2, 23, 133, 8, 1}}
 	}
 
 	certDER, err := x509.CreateCertificate(rand.Reader, template, ca, &key.PublicKey, caKey)
 	if err != nil {
-		t.Fatalf("Failed to create expired certificate: %v", err)
+		t.Fatalf("Failed to create windowed certificate: %v", err)
 	}
 
 	return certDER
