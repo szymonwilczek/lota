@@ -30,6 +30,7 @@ order. Head defaults to HEAD.
 Checks:
   - CI-equivalent DCO, column limit and hotpath documentation rules: subject
     and body lines within 75 columns, fixed by scripts/format-patch for bodies,
+    and the branch name within 75 columns,
   - conventional commit subjects with scope parentheses,
   - good GPG or SSH signature on every commit,
   - standalone Problem: and Solution: commit body sections, except on the

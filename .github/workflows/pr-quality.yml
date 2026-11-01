@@ -2,6 +2,7 @@ name: PR quality
 
 on:
   pull_request:
+    types: [opened, synchronize, reopened, edited]
 
 permissions:
   contents: read
@@ -30,6 +31,7 @@ jobs:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           PR_BRANCH: ${{ github.head_ref }}
+          PR_TITLE: ${{ github.event.pull_request.title }}
         run: scripts/check-pr-quality.sh --pr-diff "$BASE_SHA" "$HEAD_SHA"
 
       - name: Label AI-assisted pull request

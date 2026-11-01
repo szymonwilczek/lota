@@ -96,10 +96,11 @@ description as the release notes, so its body is addressed to whoever reads the
 release page. The DCO ``Signed-off-by`` trailer must be separated from the
 description by one blank line.
 
-Subjects and body lines are limited to 75 columns. A body line over the limit
+Subjects, pull request titles, branch names, and body lines are limited to 75
+columns. A body line over the limit
 fails ``check-pr-quality.sh``, locally and in CI, and
-``scripts/format-patch`` rewraps it; a subject has to be shortened by hand. A
-body line keeps its length when it is a single word, a trailer (``*-by:``,
+``scripts/format-patch`` rewraps it; a subject, title, or branch name has to
+be shortened by hand. A body line keeps its length when it is a single word, a trailer (``*-by:``,
 ``Fixes:``, ``Link:``, ``Closes:``, ``Docs-Not-Needed:``), a line with a URL, a
 ``Merge branch`` line, a diffstat line, or a line led by a file path. Merge
 commits and subjects starting with ``Merge`` are exempt, and so is a pull

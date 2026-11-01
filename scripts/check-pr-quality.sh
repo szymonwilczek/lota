@@ -24,12 +24,15 @@ usage: scripts/check-pr-quality.sh [--pr-diff] <base-commit> <head-commit>
 Checks every commit in base..head for:
   - DCO Signed-off-by trailer,
   - hotpath changes without the documentation their tier requires,
-  - subject and body lines within 75 columns.
+  - subject and body lines within 75 columns,
+  - branch name within 75 columns, and the pull request title under the subject
+    rules when PR_TITLE is set.
 
 Merge commits and subjects starting with "Merge " are exempt from the column
 limit, and so is every commit when the branch under test is lota-next. Body
 lines that are a single word, a trailer, a URL, a merge line, a diffstat line,
-or led by a file path are exempt too. In CI, PR_BRANCH names the branch.
+or led by a file path are exempt too. PR_BRANCH overrides the checked-out
+branch; CI sets it.
 
 A subject with "a/b:" or "a: b:" prints a note asking whether the form is the
 intended one: "/" joins two surfaces, ": " names a submodule. Notes do not fail.
@@ -266,6 +269,17 @@ check_subject() {
     fi
 }
 
+check_branch() {
+    local branch=$1
+
+    if ((${#branch} > COMMIT_COLUMNS)); then
+	printf 'branch name is %d columns, limit %d: %s\n' \
+	       "${#branch}" "$COMMIT_COLUMNS" "$branch" >&2
+	printf '  rename it with git branch -m\n' >&2
+	return 1
+    fi
+}
+
 check_message_limits() {
     local commit=$1
     local subject long_lines
@@ -388,8 +402,24 @@ main() {
 	if [[ $branch != lota-next ]]; then
 	    check_message_limits "$commit" || rc=1
 	fi
-	if check_ai_assistance "$commit"; then
-	    ai_assisted=1
+
+	[[ -f $manifest ]] || die "missing $manifest"
+	git cat-file -e "$base^{commit}" || die "base commit not found: $base"
+	git cat-file -e "$head^{commit}" || die "head commit not found: $head"
+
+	branch=${PR_BRANCH:-$(git symbolic-ref --quiet --short HEAD || true)}
+
+	if [[ $branch != lota-next ]]; then
+	    check_branch "$branch" || rc=1
+	    if [[ -n ${PR_TITLE:-} ]]; then
+		check_subject "$PR_TITLE" "pull request title" || rc=1
+	    fi
+	fi
+
+	mapfile -t commits < <(git rev-list --reverse "$base..$head")
+	if ((${#commits[@]} == 0)); then
+	    printf 'No commits to check.\n'
+	    return 0
 	fi
 
 	if [[ $mode == "pr-diff" ]]; then

@@ -50,6 +50,10 @@ slash joins two surfaces a commit changes together, as in ``sdk/server:``.
 ``scripts/check-pr-quality.sh`` prints a note for both forms, to confirm the
 intended one.
 
+Subjects, pull request titles, and branch names are at most 75 columns, and
+body text is wrapped to 75 columns. ``scripts/format-patch`` rewraps a body;
+see :doc:`development/patch-checks` for the lines that keep their length.
+
 Commit bodies for ALL changes should state::
 
     Problem: ...
