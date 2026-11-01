@@ -168,16 +168,6 @@ func connectionCap(configured int) int {
 	}
 }
 
-func DefaultServerConfig() ServerConfig {
-	return ServerConfig{
-		Address:        ":8443",
-		HTTPAddress:    "",
-		ReadTimeout:    30 * time.Second,
-		WriteTimeout:   10 * time.Second,
-		MaxConnections: DefaultMaxConnections,
-	}
-}
-
 func NewServer(cfg ServerConfig, verifier *verify.Verifier) (*Server, error) {
 	// load tls certificate; optional when report-only,
 	// but a non-loopback monitoring API still needs it

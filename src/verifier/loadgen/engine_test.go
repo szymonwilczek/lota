@@ -129,10 +129,13 @@ func startTestServer(t *testing.T, fleet *synth.Fleet) (addr string, clientTLSCf
 	certPath, keyPath := writeServerTLS(t, dir)
 	addr = freePort(t)
 
-	cfg := server.DefaultServerConfig()
-	cfg.Address = addr
-	cfg.CertFile = certPath
-	cfg.KeyFile = keyPath
+	cfg := server.ServerConfig{
+		Address:      addr,
+		CertFile:     certPath,
+		KeyFile:      keyPath,
+		ReadTimeout:  30 * time.Second,
+		WriteTimeout: 10 * time.Second,
+	}
 
 	srv, err := server.NewServer(cfg, newRigVerifier(t, fleet))
 	if err != nil {

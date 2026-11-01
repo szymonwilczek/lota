@@ -102,7 +102,7 @@ func TestReportOnlyHealthNamesTheModeInsteadOfDegrading(t *testing.T) {
 	attestAddr := freeLoopbackAddr(t)
 	httpAddr := freeLoopbackAddr(t)
 
-	cfg := DefaultServerConfig()
+	cfg := ServerConfig{ReadTimeout: 30 * time.Second, WriteTimeout: 10 * time.Second}
 	cfg.Address = attestAddr
 	cfg.HTTPAddress = httpAddr
 	cfg.Logger = logging.Nop()
