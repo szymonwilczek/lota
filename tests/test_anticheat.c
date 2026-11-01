@@ -734,16 +734,6 @@ static void test_state_no_files(void)
 	PASS();
 }
 
-static void test_wire_header_size(void)
-{
-	TEST("wire: header struct == 110 bytes");
-	if (sizeof(struct lota_ac_heartbeat_wire) != 110) {
-		FAIL("size mismatch");
-		return;
-	}
-	PASS();
-}
-
 static int test_sha256(const void *data, size_t len, uint8_t out[32])
 {
 	EVP_MD_CTX *ctx = EVP_MD_CTX_new();
@@ -2386,7 +2376,6 @@ int main(void)
 	test_state_no_files();
 
 	printf("\nHeartbeat Wire Format:\n");
-	test_wire_header_size();
 	test_heartbeat_game_id_hash_domain_separated();
 	test_heartbeat_buf_too_small();
 	test_heartbeat_null_args();

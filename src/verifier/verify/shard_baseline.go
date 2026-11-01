@@ -44,9 +44,12 @@ type ShardedBaselineStore struct {
 	shards []baselineShard
 }
 
-// compile-time proof the sharded store keeps the whole capability set,
-// so verifier's interface probes succeed exactly as on single store.
-var _ baselineShard = (*ShardedBaselineStore)(nil)
+// compile-time proof both stores keep the whole capability set,
+// so verifier's interface probes succeed on either.
+var (
+	_ baselineShard = (*BaselineStore)(nil)
+	_ baselineShard = (*ShardedBaselineStore)(nil)
+)
 
 // NewShardedBaselineStore partitions baseline state across shards.
 // Every shard must provide the full baseline capability set;

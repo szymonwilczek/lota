@@ -44,6 +44,9 @@ _Static_assert(LOTA_AC_ERR_BASE < -255,
 
 #define LOTA_AC_MAX_HEARTBEAT_AGE_SEC 120ULL
 
+_Static_assert(sizeof(struct lota_ac_heartbeat_wire) == 110,
+	       "heartbeat wire header is frozen");
+
 /*
  * Frozen string pairs selected by LOTA_AC_DOMAIN_VERSION_*. Adding a new
  * version means appending a new row, never editing an existing one.

@@ -27,14 +27,6 @@ func pcrOf(i int) [types.HashSize]byte {
 	return p
 }
 
-// In-memory reference store must satisfy the full shard capability set,
-// otherwise sharding would silently disable a feature.
-func TestBaselineStoreSatisfiesShardCapabilities(t *testing.T) {
-	if _, ok := any(NewBaselineStore()).(baselineShard); !ok {
-		t.Fatal("in-memory BaselineStore does not provide the full baselineShard set")
-	}
-}
-
 // Every client lands on exactly one shard, fleet is the union of the shards,
 // and client's baseline is retrievable through the router.
 func TestShardedBaselineDistributionAndRouting(t *testing.T) {
