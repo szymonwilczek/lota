@@ -13,9 +13,7 @@ package verify
 import (
 	"crypto"
 	"crypto/rsa"
-	"crypto/sha256"
 	"crypto/x509"
-	"encoding/hex"
 	"errors"
 	"fmt"
 
@@ -214,15 +212,4 @@ func ParseRSAPublicKey(keyData []byte) (*rsa.PublicKey, error) {
 	}
 
 	return rsaPub, nil
-}
-
-// returns SHA-256 fingerprint of AIK public key (PKIX/SPKI encoding)
-// used for tofu identification
-func AIKFingerprint(aikPubKey *rsa.PublicKey) string {
-	keyBytes, err := x509.MarshalPKIXPublicKey(aikPubKey)
-	if err != nil {
-		return ""
-	}
-	h := sha256.Sum256(keyBytes)
-	return hex.EncodeToString(h[:])
 }

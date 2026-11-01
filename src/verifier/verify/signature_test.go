@@ -414,32 +414,6 @@ func TestParseRSAPublicKey_RejectsSmallKey(t *testing.T) {
 	t.Logf("✓ Correctly rejected small key: %v", err)
 }
 
-func TestAIKFingerprint(t *testing.T) {
-	t.Log("TEST: AIK fingerprint generation")
-
-	fp := AIKFingerprint(&testKeyPair.PublicKey)
-
-	// fingerprint should be 64 hex chars (256 bits = 32 bytes)
-	if len(fp) != 64 {
-		t.Errorf("Fingerprint length: got %d, want 64", len(fp))
-	}
-
-	// same key should produce same fingerprint
-	fp2 := AIKFingerprint(&testKeyPair.PublicKey)
-	if fp != fp2 {
-		t.Error("Same key produced different fingerprints!")
-	}
-
-	// different key should produce different fingerprint
-	otherKey, _ := rsa.GenerateKey(rand.Reader, 2048)
-	fp3 := AIKFingerprint(&otherKey.PublicKey)
-	if fp == fp3 {
-		t.Error("Different keys produced same fingerprint!")
-	}
-
-	t.Logf("✓ AIK fingerprint: %s", fp)
-}
-
 func BenchmarkRSASSAVerify(b *testing.B) {
 	verifier := NewRSASSAVerifier()
 	attestData := make([]byte, 145) // typical TPMS_ATTEST size
