@@ -82,6 +82,16 @@ commit fails and the fix makes it pass:
   carry a test that drives the same hook, such as
   ``tests/integration/test_bpf_gates.sh``.
 
+Adding a C test
+---------------
+
+The ``Makefile`` builds every ``tests/test_*.c``. A test that needs more than
+its own source declares it in the test section::
+
+   $(BUILD_DIR)/test_foo: $(AGENT_DIR)/foo.c
+   $(BUILD_DIR)/test_foo: TEST_CFLAGS := -DFOO
+   $(BUILD_DIR)/test_foo: TEST_LDLIBS := -lcrypto
+
 Package manifests
 =================
 
