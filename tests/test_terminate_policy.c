@@ -45,7 +45,6 @@ static struct terminate_request base_request(void)
 		.target_pid = 1200,
 		.target_uid = 1000,
 		.caller_uid = 1000,
-		.caller_pid = 1300,
 		.agent_pid = 900,
 		.signal = SIGTERM,
 		.target_is_protected = true,
