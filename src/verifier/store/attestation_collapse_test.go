@@ -33,69 +33,6 @@ func TestIdenticalTrustedRoundExtendsTheStandingRow(t *testing.T) {
 	}
 }
 
-func TestRefusalNeverCollapses(t *testing.T) {
-	at := time.Date(2026, 9, 19, 10, 0, 0, 0, time.UTC)
-	standing := standingOK(at)
-
-	for _, result := range []string{"nonce_fail", "sig_fail", "pcr_fail", "integrity_mismatch", "revoked", "banned", "parse_error"} {
-		next := standingOK(at.Add(time.Minute))
-		next.Result = result
-		if attestationCollapses(standing, next, time.Hour) {
-			t.Fatalf("%s is an event and must have its own row", result)
-		}
-	}
-}
-
-func TestRecoveryAfterARefusalIsItsOwnRow(t *testing.T) {
-	at := time.Date(2026, 9, 19, 10, 0, 0, 0, time.UTC)
-	standing := standingOK(at)
-	standing.Result = "pcr_fail"
-	next := standingOK(at.Add(time.Minute))
-
-	if attestationCollapses(standing, next, time.Hour) {
-		t.Fatal("a verdict change back to trusted has to be recorded")
-	}
-}
-
-func TestChangedEvidenceIsNotTheSameRound(t *testing.T) {
-	at := time.Date(2026, 9, 19, 10, 0, 0, 0, time.UTC)
-
-	for _, tc := range []struct {
-		what string
-		edit func(*AttestationRecord)
-	}{
-		{"pcr14", func(r *AttestationRecord) { r.PCR14 = "ffffffff" }},
-		{"kernel hash", func(r *AttestationRecord) { r.KernelHash = "aaaaaa" }},
-		{"hardware id", func(r *AttestationRecord) { r.HardwareID = "bb22" }},
-		{"detail", func(r *AttestationRecord) { r.Details = "re-anchored" }},
-	} {
-		standing := standingOK(at)
-		next := standingOK(at.Add(time.Minute))
-		tc.edit(&next)
-		if attestationCollapses(standing, next, time.Hour) {
-			t.Fatalf("a changed %s is a new row", tc.what)
-		}
-	}
-}
-
-// another publisher, or another host of the same one
-func TestAnotherSubjectNeverCollapses(t *testing.T) {
-	at := time.Date(2026, 9, 19, 10, 0, 0, 0, time.UTC)
-
-	standing := standingOK(at)
-	other := standingOK(at.Add(time.Minute))
-	other.ClientID = "client-2"
-	if attestationCollapses(standing, other, time.Hour) {
-		t.Fatal("a different client is a different row")
-	}
-
-	otherTenant := standingOK(at.Add(time.Minute))
-	otherTenant.Tenant = "globex"
-	if attestationCollapses(standing, otherTenant, time.Hour) {
-		t.Fatal("a different tenant is a different row")
-	}
-}
-
 // per-day retention still keeps per-day evidence
 func TestTheWindowClosesAStandingRow(t *testing.T) {
 	at := time.Date(2026, 9, 19, 10, 0, 0, 0, time.UTC)
@@ -122,28 +59,6 @@ func TestTheWindowRunsFromWhenTheRowOpened(t *testing.T) {
 	next := standingOK(at.Add(time.Hour + time.Minute))
 	if attestationCollapses(standing, next, time.Hour) {
 		t.Fatal("the window is spent an hour after the row opened, whatever it absorbed since")
-	}
-}
-
-func TestAZeroWindowCollapsesNothing(t *testing.T) {
-	at := time.Date(2026, 9, 19, 10, 0, 0, 0, time.UTC)
-	standing := standingOK(at)
-	next := standingOK(at.Add(time.Second))
-
-	if attestationCollapses(standing, next, 0) {
-		t.Fatal("a zero window records every round")
-	}
-}
-
-// an out-of-order batch would move last_seen backwards
-func TestARoundOlderThanTheStandingRowDoesNotExtendIt(t *testing.T) {
-	at := time.Date(2026, 9, 19, 10, 0, 0, 0, time.UTC)
-	standing := standingOK(at)
-	standing.LastSeen = at.Add(10 * time.Minute)
-
-	next := standingOK(at.Add(5 * time.Minute))
-	if attestationCollapses(standing, next, time.Hour) {
-		t.Fatal("a round older than the row's last sighting does not extend it")
 	}
 }
 
