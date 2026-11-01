@@ -112,17 +112,6 @@ static int sdnotify_send_checked(const char *message)
 	return (ret < 0) ? ret : 0;
 }
 
-bool sdnotify_under_systemd(void)
-{
-	/*
-	 * NOTIFY_SOCKET is set for Type=notify services.
-	 * INVOCATION_ID is set for all systemd-managed units.
-	 * Either one indicates systemd management.
-	 */
-	return getenv("NOTIFY_SOCKET") != NULL ||
-	       getenv("INVOCATION_ID") != NULL;
-}
-
 int sdnotify_ready(void)
 {
 	return sdnotify_send_checked("READY=1");

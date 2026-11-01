@@ -38,53 +38,6 @@ void ipc_set_dbus(struct ipc_context *ctx, struct dbus_context *dbus)
 	(void)dbus;
 }
 
-static void test_not_under_systemd(void)
-{
-	TEST("sdnotify: not under systemd (no env vars)");
-
-	/* ensure test isolation */
-	unsetenv("NOTIFY_SOCKET");
-	unsetenv("INVOCATION_ID");
-
-	if (sdnotify_under_systemd()) {
-		FAIL("expected false");
-		return;
-	}
-	PASS();
-}
-
-static void test_detect_invocation_id(void)
-{
-	TEST("sdnotify: detect INVOCATION_ID");
-
-	unsetenv("NOTIFY_SOCKET");
-	setenv("INVOCATION_ID", "test-id-1234", 1);
-
-	if (!sdnotify_under_systemd()) {
-		unsetenv("INVOCATION_ID");
-		FAIL("expected true");
-		return;
-	}
-	unsetenv("INVOCATION_ID");
-	PASS();
-}
-
-static void test_detect_notify_socket(void)
-{
-	TEST("sdnotify: detect NOTIFY_SOCKET");
-
-	unsetenv("INVOCATION_ID");
-	setenv("NOTIFY_SOCKET", "/run/systemd/notify", 1);
-
-	if (!sdnotify_under_systemd()) {
-		unsetenv("NOTIFY_SOCKET");
-		FAIL("expected true");
-		return;
-	}
-	unsetenv("NOTIFY_SOCKET");
-	PASS();
-}
-
 static void test_ready_no_socket(void)
 {
 	TEST("sdnotify: ready() without socket -> 0");
@@ -331,9 +284,6 @@ int main(void)
 	printf("=== LOTA systemd Integration Tests ===\n\n");
 
 	/* sdnotify tests */
-	test_not_under_systemd();
-	test_detect_invocation_id();
-	test_detect_notify_socket();
 	test_ready_no_socket();
 	test_ready_rejects_spoofed_notify_socket();
 	test_stopping_no_socket();
