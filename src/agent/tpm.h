@@ -283,8 +283,7 @@ struct aik_metadata {
 	int64_t provisioned_at; /* time_t: current AIK creation */
 	int64_t last_rotated_at; /* time_t: last key rotation (0 if never) */
 	uint8_t key_derivation; /* TPM_AIK_KEY_DERIVATION_* */
-	int64_t auth_rotated_at; /* time_t: last auth rotation (0 if never) */
-	uint8_t _reserved[55];
+	uint8_t _reserved[63];
 } __attribute__((packed));
 
 /*
