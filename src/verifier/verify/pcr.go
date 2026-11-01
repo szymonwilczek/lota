@@ -799,25 +799,6 @@ func DefaultPolicy() *PCRPolicy {
 	}
 }
 
-// creates a strict policy for high-security environments.
-// Requires all available security features to be enabled.
-func StrictPolicy() *PCRPolicy {
-	return &PCRPolicy{
-		Name:                 "strict",
-		Description:          "High-security policy - requires all security features enabled",
-		PCRs:                 map[int]string{}, // defined via TOFU or custom policy
-		KernelHashes:         []string{},
-		AgentHashes:          []string{},
-		RequireIOMMU:         true,
-		RequireEnforce:       true,
-		RequireModuleSig:     true,
-		RequireSecureBoot:    true,
-		RequireLockdown:      true,
-		RequireCmdlinePolicy: true,
-		RequireIMAAppraisal:  true,
-	}
-}
-
 // calculates the PCR mask required by this policy
 // always includes PCR 14 (LOTA self-measurement) as it is required for baseline verification
 // and the firmware / SecureBoot PCRs (0, 1, 7) so the verifier can TOFU-pin them

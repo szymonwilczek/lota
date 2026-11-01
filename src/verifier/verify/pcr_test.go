@@ -39,41 +39,23 @@ func TestDefaultPolicy(t *testing.T) {
 	t.Log("DefaultPolicy creates valid baseline policy")
 }
 
-func TestStrictPolicy(t *testing.T) {
-	t.Log("TEST: StrictPolicy() creates high-security policy")
-
-	policy := StrictPolicy()
-
-	if policy.Name != "strict" {
-		t.Errorf("Expected name 'strict', got '%s'", policy.Name)
+func strictTestPolicy() *PCRPolicy {
+	return &PCRPolicy{
+		Name:                 "strict",
+		Description:          "High-security policy - requires all security features enabled",
+		PCRs:                 map[int]string{}, // defined via TOFU or custom policy
+		KernelHashes:         []string{},
+		AgentHashes:          []string{},
+		RequireIOMMU:         true,
+		RequireEnforce:       true,
+		RequireModuleSig:     true,
+		RequireSecureBoot:    true,
+		RequireLockdown:      true,
+		RequireCmdlinePolicy: true,
+		RequireIMAAppraisal:  true,
 	}
-
-	// all security requirements should be enabled
-	checks := []struct {
-		name  string
-		value bool
-	}{
-		{"RequireIOMMU", policy.RequireIOMMU},
-		{"RequireEnforce", policy.RequireEnforce},
-		{"RequireModuleSig", policy.RequireModuleSig},
-		{"RequireSecureBoot", policy.RequireSecureBoot},
-		{"RequireLockdown", policy.RequireLockdown},
-		{"RequireIMAAppraisal", policy.RequireIMAAppraisal},
-	}
-
-	for _, check := range checks {
-		if !check.value {
-			t.Errorf("Strict policy should have %s enabled", check.name)
-		}
-	}
-
-	t.Log("StrictPolicy enables all security requirements")
 }
 
-// The appraisal knob is off in the baseline on purpose: a stock distribution
-// host carries no IMA signatures, so requiring it there refuses every machine
-// the consumer road is written for. The agent reports the state instead,
-// and a fleet that signs its executables is the one that turns this into a gate.
 func TestDefaultPolicyLeavesAppraisalToTheFleet(t *testing.T) {
 	if DefaultPolicy().RequireIMAAppraisal {
 		t.Error("the baseline policy demands appraisal content a stock host cannot have")
@@ -226,8 +208,8 @@ func TestPCRVerifier_MultiplePolicies(t *testing.T) {
 	if err := verifier.AddPolicy(DefaultPolicy()); err != nil {
 		t.Fatalf("AddPolicy(DefaultPolicy) failed: %v", err)
 	}
-	if err := verifier.AddPolicy(StrictPolicy()); err != nil {
-		t.Fatalf("AddPolicy(StrictPolicy) failed: %v", err)
+	if err := verifier.AddPolicy(strictTestPolicy()); err != nil {
+		t.Fatalf("AddPolicy(strict) failed: %v", err)
 	}
 
 	policies := verifier.ListPolicies()
@@ -800,7 +782,7 @@ func TestValidatePolicy_EmptyPolicy(t *testing.T) {
 func TestValidatePolicy_StrictPolicy(t *testing.T) {
 	t.Log("TEST: ValidatePolicy on strict policy")
 
-	policy := StrictPolicy()
+	policy := strictTestPolicy()
 	warnings := ValidatePolicy(policy)
 
 	// strict has requirements enabled but no PCRs -> should warn about PCRs only

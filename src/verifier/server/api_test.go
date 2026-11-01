@@ -673,8 +673,8 @@ func TestHealthDegraded(t *testing.T) {
 
 func TestStatsEndpoint(t *testing.T) {
 	mux, v := setupTestAPIListeningWithKeys(t, "", "")
-	if err := v.AddPolicy(verify.StrictPolicy()); err != nil {
-		t.Fatalf("AddPolicy(StrictPolicy) failed: %v", err)
+	if err := v.AddPolicy(&verify.PCRPolicy{Name: "strict"}); err != nil {
+		t.Fatalf("AddPolicy failed: %v", err)
 	}
 
 	req := httptest.NewRequest("GET", "/api/v1/stats", nil)
