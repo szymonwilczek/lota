@@ -9,7 +9,6 @@ import (
 	"crypto/rsa"
 	"crypto/x509"
 	"crypto/x509/pkix"
-	"encoding/asn1"
 	"errors"
 	"math/big"
 	"os"
@@ -97,20 +96,13 @@ func TestCertificateVerifier_NeedsTrustedCAs(t *testing.T) {
 }
 
 func TestCertificateVerifier_CertificateValidityWindow(t *testing.T) {
-	expired := [2]time.Duration{-48 * time.Hour, -24 * time.Hour}
-	notYet := [2]time.Duration{24 * time.Hour, 48 * time.Hour}
-	valid := [2]time.Duration{-1 * time.Hour, 24 * time.Hour}
-
 	tests := []struct {
-		name string
-		aik  [2]time.Duration
-		ek   [2]time.Duration
-		want error
+		name   string
+		window [2]time.Duration
+		want   error
 	}{
-		{"expired AIK", expired, valid, ErrCertificateExpired},
-		{"future AIK", notYet, valid, ErrCertificateNotYet},
-		{"expired EK", valid, expired, ErrCertificateExpired},
-		{"future EK", valid, notYet, ErrCertificateNotYet},
+		{"expired", [2]time.Duration{-48 * time.Hour, -24 * time.Hour}, ErrCertificateExpired},
+		{"future", [2]time.Duration{24 * time.Hour, 48 * time.Hour}, ErrCertificateNotYet},
 	}
 
 	caKey := generateTestKey(t)
@@ -119,25 +111,21 @@ func TestCertificateVerifier_CertificateValidityWindow(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateCertificate: %v", err)
 	}
+	caCertPath := filepath.Join(t.TempDir(), "ca.pem")
+	saveCertPEM(t, caCertPath, caCertDER)
+
+	cv, err := NewCertificateVerifier([]string{caCertPath}, nil)
+	if err != nil {
+		t.Fatalf("NewCertificateVerifier failed: %v", err)
+	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			tempDir := t.TempDir()
-			caCertPath := filepath.Join(tempDir, "ca.pem")
-			saveCertPEM(t, caCertPath, caCertDER)
-
-			store, err := NewCertificateVerifier([]string{caCertPath}, nil)
-			if err != nil {
-				t.Fatalf("NewCertificateVerifier failed: %v", err)
-			}
-
 			aikKey := generateTestKey(t)
-			aikDER := generateWindowedCertificate(t, aikKey, caCert, caKey, tt.aik, false)
-			ekDER := generateWindowedCertificate(t, generateTestKey(t), caCert, caKey, tt.ek, true)
+			aikDER := generateWindowedCertificate(t, aikKey, caCert, caKey, tt.window)
 
-			err = store.VerifyCertificatesForAIK(&aikKey.PublicKey, aikDER, ekDER)
-			if !errors.Is(err, tt.want) {
-				t.Fatalf("VerifyCertificatesForAIK: want %v, got %v", tt.want, err)
+			if _, err := cv.VerifyAIKCertificate(&aikKey.PublicKey, aikDER); !errors.Is(err, tt.want) {
+				t.Fatalf("VerifyAIKCertificate: want %v, got %v", tt.want, err)
 			}
 		})
 	}
@@ -159,7 +147,7 @@ func saveCertPEM(t *testing.T, path string, certDER []byte) {
 
 // helper to generate expired certificate
 func generateWindowedCertificate(t *testing.T, key *rsa.PrivateKey, ca *x509.Certificate, caKey *rsa.PrivateKey,
-	window [2]time.Duration, ek bool,
+	window [2]time.Duration,
 ) []byte {
 	t.Helper()
 
@@ -173,10 +161,6 @@ func generateWindowedCertificate(t *testing.T, key *rsa.PrivateKey, ca *x509.Cer
 		NotAfter:              time.Now().Add(window[1]),
 		KeyUsage:              x509.KeyUsageDigitalSignature,
 		BasicConstraintsValid: true,
-	}
-	if ek {
-		template.KeyUsage = x509.KeyUsageKeyEncipherment
-		template.UnknownExtKeyUsage = []asn1.ObjectIdentifier{{2, 23, 133, 8, 1}}
 	}
 
 	certDER, err := x509.CreateCertificate(rand.Reader, template, ca, &key.PublicKey, caKey)
@@ -288,186 +272,5 @@ func TestCertificateVerifier_VerifyAIKCertificate(t *testing.T) {
 
 	if _, err := store.VerifyAIKCertificate(&aikKey.PublicKey, nil); !errors.Is(err, ErrNoCertificate) {
 		t.Fatalf("empty AIK certificate: %v", err)
-	}
-}
-
-// generates an EK certificate signed by a CA with the TCG EK OID in EKU
-func generateEKCertificate(t *testing.T, key *rsa.PrivateKey, ca *x509.Certificate, caKey *rsa.PrivateKey) []byte {
-	t.Helper()
-
-	template := &x509.Certificate{
-		SerialNumber: big.NewInt(10),
-		Subject: pkix.Name{
-			Organization: []string{"LOTA Test TPM Manufacturer"},
-			CommonName:   "EK Certificate",
-		},
-		NotBefore:             time.Now().Add(-1 * time.Hour),
-		NotAfter:              time.Now().Add(24 * time.Hour),
-		KeyUsage:              x509.KeyUsageKeyEncipherment,
-		UnknownExtKeyUsage:    []asn1.ObjectIdentifier{{2, 23, 133, 8, 1}},
-		BasicConstraintsValid: true,
-		IsCA:                  false,
-	}
-
-	certDER, err := x509.CreateCertificate(rand.Reader, template, ca, &key.PublicKey, caKey)
-	if err != nil {
-		t.Fatalf("Failed to create EK certificate: %v", err)
-	}
-
-	return certDER
-}
-
-// generates an EK certificate WITHOUT the TCG OID (should be rejected)
-func generateEKCertificateNoOID(t *testing.T, key *rsa.PrivateKey, ca *x509.Certificate, caKey *rsa.PrivateKey) []byte {
-	t.Helper()
-
-	template := &x509.Certificate{
-		SerialNumber: big.NewInt(11),
-		Subject: pkix.Name{
-			Organization: []string{"LOTA Test"},
-			CommonName:   "Fake EK Certificate",
-		},
-		NotBefore:             time.Now().Add(-1 * time.Hour),
-		NotAfter:              time.Now().Add(24 * time.Hour),
-		KeyUsage:              x509.KeyUsageKeyEncipherment,
-		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageAny},
-		BasicConstraintsValid: true,
-		IsCA:                  false,
-	}
-
-	certDER, err := x509.CreateCertificate(rand.Reader, template, ca, &key.PublicKey, caKey)
-	if err != nil {
-		t.Fatalf("Failed to create EK certificate without OID: %v", err)
-	}
-
-	return certDER
-}
-
-func TestCertificateVerifier_ValidEKCertificate(t *testing.T) {
-	tempDir, err := os.MkdirTemp("", "lota-test-*")
-	if err != nil {
-		t.Fatalf("Failed to create temp dir: %v", err)
-	}
-	defer os.RemoveAll(tempDir)
-
-	caKey := generateTestKey(t)
-	caCert := generateTestCertificate(t, caKey, true)
-
-	caCertPath := filepath.Join(tempDir, "ca.pem")
-	caCertDER, _ := x509.CreateCertificate(rand.Reader, caCert, caCert, &caKey.PublicKey, caKey)
-	saveCertPEM(t, caCertPath, caCertDER)
-
-	store, err := NewCertificateVerifier([]string{caCertPath}, nil)
-	if err != nil {
-		t.Fatalf("NewCertificateVerifier failed: %v", err)
-	}
-
-	aikKey := generateTestKey(t)
-	aikCertDER := generateSignedCertificate(t, aikKey, caCert, caKey)
-
-	ekKey := generateTestKey(t)
-	ekCertDER := generateEKCertificate(t, ekKey, caCert, caKey)
-
-	// should succeed: valid AIK cert + EK cert with TCG OID
-	if err := store.VerifyCertificatesForAIK(&aikKey.PublicKey, aikCertDER, ekCertDER); err != nil {
-		t.Errorf("Registration with valid EK cert should succeed: %v", err)
-	}
-}
-
-func TestCertificateVerifier_EKCertificateMissingOID(t *testing.T) {
-	tempDir, err := os.MkdirTemp("", "lota-test-*")
-	if err != nil {
-		t.Fatalf("Failed to create temp dir: %v", err)
-	}
-	defer os.RemoveAll(tempDir)
-
-	caKey := generateTestKey(t)
-	caCert := generateTestCertificate(t, caKey, true)
-
-	caCertPath := filepath.Join(tempDir, "ca.pem")
-	caCertDER, _ := x509.CreateCertificate(rand.Reader, caCert, caCert, &caKey.PublicKey, caKey)
-	saveCertPEM(t, caCertPath, caCertDER)
-
-	store, err := NewCertificateVerifier([]string{caCertPath}, nil)
-	if err != nil {
-		t.Fatalf("NewCertificateVerifier failed: %v", err)
-	}
-
-	aikKey := generateTestKey(t)
-	aikCertDER := generateSignedCertificate(t, aikKey, caCert, caKey)
-
-	ekKey := generateTestKey(t)
-	ekCertDER := generateEKCertificateNoOID(t, ekKey, caCert, caKey)
-
-	// should fail: EK cert without TCG OID
-	err = store.VerifyCertificatesForAIK(&aikKey.PublicKey, aikCertDER, ekCertDER)
-	if err == nil {
-		t.Fatal("Registration with EK cert missing TCG OID should fail")
-	}
-	if !errors.Is(err, ErrCertificateEKOID) {
-		t.Errorf("Expected ErrCertificateEKOID, got: %v", err)
-	}
-}
-
-// generates an EK certificate carrying the TCG OID as a certificate
-// policy, which is where genuine manufacturer EK certificates place it.
-func generateEKCertificatePolicyOID(t *testing.T, key *rsa.PrivateKey, ca *x509.Certificate, caKey *rsa.PrivateKey) []byte {
-	t.Helper()
-
-	oid, err := x509.OIDFromInts([]uint64{2, 23, 133, 8, 1})
-	if err != nil {
-		t.Fatalf("EK policy OID: %v", err)
-	}
-	template := &x509.Certificate{
-		SerialNumber: big.NewInt(12),
-		Subject: pkix.Name{
-			Organization: []string{"LOTA Test TPM Manufacturer"},
-			CommonName:   "EK Certificate (policy OID)",
-		},
-		NotBefore:             time.Now().Add(-1 * time.Hour),
-		NotAfter:              time.Now().Add(24 * time.Hour),
-		KeyUsage:              x509.KeyUsageKeyEncipherment,
-		Policies:              []x509.OID{oid},
-		BasicConstraintsValid: true,
-		IsCA:                  false,
-	}
-
-	certDER, err := x509.CreateCertificate(rand.Reader, template, ca, &key.PublicKey, caKey)
-	if err != nil {
-		t.Fatalf("Failed to create EK certificate with policy OID: %v", err)
-	}
-	return certDER
-}
-
-// A manufacturer EK certificate that carries the TCG OID in a certificate
-// policy (rather than an extended key usage) must be accepted. Checking
-// only the EKU rejects real hardware.
-func TestCertificateVerifier_EKCertificatePolicyOID(t *testing.T) {
-	tempDir, err := os.MkdirTemp("", "lota-test-*")
-	if err != nil {
-		t.Fatalf("Failed to create temp dir: %v", err)
-	}
-	defer os.RemoveAll(tempDir)
-
-	caKey := generateTestKey(t)
-	caCert := generateTestCertificate(t, caKey, true)
-
-	caCertPath := filepath.Join(tempDir, "ca.pem")
-	caCertDER, _ := x509.CreateCertificate(rand.Reader, caCert, caCert, &caKey.PublicKey, caKey)
-	saveCertPEM(t, caCertPath, caCertDER)
-
-	store, err := NewCertificateVerifier([]string{caCertPath}, nil)
-	if err != nil {
-		t.Fatalf("NewCertificateVerifier failed: %v", err)
-	}
-
-	aikKey := generateTestKey(t)
-	aikCertDER := generateSignedCertificate(t, aikKey, caCert, caKey)
-
-	ekKey := generateTestKey(t)
-	ekCertDER := generateEKCertificatePolicyOID(t, ekKey, caCert, caKey)
-
-	if err := store.VerifyCertificatesForAIK(&aikKey.PublicKey, aikCertDER, ekCertDER); err != nil {
-		t.Errorf("EK cert with TCG OID in a certificate policy should be accepted: %v", err)
 	}
 }

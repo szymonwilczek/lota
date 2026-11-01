@@ -12,7 +12,6 @@ package store
 import (
 	"crypto/rsa"
 	"crypto/x509"
-	"encoding/asn1"
 	"encoding/pem"
 	"errors"
 	"fmt"
@@ -40,7 +39,7 @@ func publicKeysEqual(a, b *rsa.PublicKey) bool {
 	return a.E == b.E
 }
 
-// CertificateVerifier validates AIK and EK certificates against trusted CA roots.
+// CertificateVerifier validates AIK certificates against trusted CA roots.
 type CertificateVerifier struct {
 	trustedCAs []*x509.Certificate
 	caPool     *x509.CertPool
@@ -65,33 +64,6 @@ var (
 	ErrCRLWeakSignature     = crl.ErrCRLWeakSignature
 )
 
-// TCG EK Credential Profile OID for TPM 2.0
-var oidTCGEKCertificate = asn1.ObjectIdentifier{2, 23, 133, 8, 1}
-
-// hasTCGEKOID reports whether the certificate carries the TCG EK OID in
-// either an extended key usage or a certificate policy. Current Go parses
-// policies into Policies; older accessors populate PolicyIdentifiers, so
-// consult all three.
-func hasTCGEKOID(cert *x509.Certificate) bool {
-	for _, oid := range cert.UnknownExtKeyUsage {
-		if oid.Equal(oidTCGEKCertificate) {
-			return true
-		}
-	}
-	for _, oid := range cert.PolicyIdentifiers {
-		if oid.Equal(oidTCGEKCertificate) {
-			return true
-		}
-	}
-	want := oidTCGEKCertificate.String()
-	for _, oid := range cert.Policies {
-		if oid.String() == want {
-			return true
-		}
-	}
-	return false
-}
-
 // certificate verification errors
 var (
 	ErrNoCertificate       = errors.New("certificate required but not provided")
@@ -101,7 +73,6 @@ var (
 	ErrCertificateExpired  = errors.New("certificate has expired")
 	ErrCertificateNotYet   = errors.New("certificate not yet valid")
 	ErrNoTrustedCAs        = errors.New("no trusted CAs configured")
-	ErrCertificateEKOID    = errors.New("EK certificate missing TCG TPM 2.0 OID (2.23.133.8.1)")
 )
 
 // NewCertificateVerifier loads the trusted CA roots and the operator's CRLs.
@@ -148,7 +119,7 @@ func NewCertificateVerifier(caCertPaths, crlPaths []string) (*CertificateVerifie
 // revocations on the floor.
 //
 // The verifier daemon wires this to SIGHUP so operators can install a
-// refreshed manufacturer feed without restarting the process.
+// refreshed feed without restarting the process.
 func (cv *CertificateVerifier) ReloadCRLs() error {
 	if len(cv.crlPaths) == 0 {
 		// nothing to refresh; treat as a successful no-op so the SIGHUP
@@ -206,26 +177,6 @@ func (cv *CertificateVerifier) VerifyAIKCertificate(pubKey *rsa.PublicKey, aikCe
 	return cert, nil
 }
 
-func (cv *CertificateVerifier) VerifyCertificatesForAIK(pubKey *rsa.PublicKey, aikCertDER, ekCertDER []byte) error {
-	if pubKey == nil {
-		return errors.New("nil AIK public key")
-	}
-	if len(aikCertDER) == 0 && len(ekCertDER) == 0 {
-		return ErrNoCertificate
-	}
-	if len(aikCertDER) > 0 {
-		if err := cv.verifyAIKCertificate(aikCertDER, pubKey); err != nil {
-			return fmt.Errorf("AIK certificate verification failed: %w", err)
-		}
-	}
-	if len(ekCertDER) > 0 {
-		if err := cv.verifyEKCertificate(ekCertDER); err != nil {
-			return fmt.Errorf("EK certificate verification failed: %w", err)
-		}
-	}
-	return nil
-}
-
 // validates AIK certificate against trusted CAs
 func (cv *CertificateVerifier) verifyAIKCertificate(certDER []byte, expectedPubKey *rsa.PublicKey) error {
 	cert, err := x509.ParseCertificate(certDER)
@@ -264,50 +215,6 @@ func (cv *CertificateVerifier) verifyAIKCertificate(certDER []byte, expectedPubK
 	}
 
 	// consult operator-supplied CRLs after chain + key checks pass
-	if err := cv.crls.Load().Check(cert, now); err != nil {
-		return err
-	}
-
-	return nil
-}
-
-// validates EK certificate (proves TPM authenticity)
-func (cv *CertificateVerifier) verifyEKCertificate(certDER []byte) error {
-	cert, err := x509.ParseCertificate(certDER)
-	if err != nil {
-		return fmt.Errorf("%w: %v", ErrInvalidCertificate, err)
-	}
-
-	// verify certificate time validity
-	now := time.Now()
-	if now.Before(cert.NotBefore) {
-		return ErrCertificateNotYet
-	}
-	if now.After(cert.NotAfter) {
-		return ErrCertificateExpired
-	}
-
-	// verify certificate chain against trusted CAs (TPM manufacturer CAs)
-	opts := x509.VerifyOptions{
-		Roots:       cv.caPool,
-		CurrentTime: now,
-		KeyUsages:   []x509.ExtKeyUsage{x509.ExtKeyUsageAny},
-	}
-
-	if _, err := cert.Verify(opts); err != nil {
-		return fmt.Errorf("%w: %v", ErrCertificateChain, err)
-	}
-
-	// EK certificate must carry the TCG EK Credential Profile OID
-	// (2.23.133.8.1) to prove TPM 2.0 origin. Genuine manufacturer EK
-	// certificates almost always place it in a certificate policy rather
-	// than an extended key usage, so accept either location; checking
-	// only the EKU rejects real hardware.
-	if !hasTCGEKOID(cert) {
-		return ErrCertificateEKOID
-	}
-
-	// consult operator-supplied CRLs (TPM manufacturer revocation feeds)
 	if err := cv.crls.Load().Check(cert, now); err != nil {
 		return err
 	}

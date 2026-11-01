@@ -9,7 +9,6 @@ import (
 	"crypto/rsa"
 	"crypto/x509"
 	"crypto/x509/pkix"
-	"encoding/asn1"
 	"math/big"
 	"testing"
 	"time"
@@ -128,48 +127,5 @@ func FuzzParseAIKCertificate(f *testing.F) {
 		if _, ok := cert.PublicKey.(*rsa.PublicKey); !ok {
 			return
 		}
-	})
-}
-
-// fuzzes X.509 EK certificate parsing with TCG OID check
-func FuzzParseEKCertificate(f *testing.F) {
-	key, _ := rsa.GenerateKey(rand.Reader, 2048)
-	tmpl := &x509.Certificate{
-		SerialNumber:       big.NewInt(1),
-		Subject:            pkix.Name{CommonName: "test-ek"},
-		NotBefore:          time.Now().Add(-time.Hour),
-		NotAfter:           time.Now().Add(time.Hour),
-		UnknownExtKeyUsage: []asn1.ObjectIdentifier{{2, 23, 133, 8, 1}},
-	}
-	certDER, _ := x509.CreateCertificate(rand.Reader, tmpl, tmpl, &key.PublicKey, key)
-
-	// cert without TCG OID
-	tmplNoOID := &x509.Certificate{
-		SerialNumber: big.NewInt(2),
-		Subject:      pkix.Name{CommonName: "test-no-oid"},
-		NotBefore:    time.Now().Add(-time.Hour),
-		NotAfter:     time.Now().Add(time.Hour),
-	}
-	certNoOID, _ := x509.CreateCertificate(rand.Reader, tmplNoOID, tmplNoOID, &key.PublicKey, key)
-
-	f.Add(certDER)
-	f.Add(certNoOID)
-	f.Add([]byte{})
-
-	f.Fuzz(func(t *testing.T, data []byte) {
-		cert, err := x509.ParseCertificate(data)
-		if err != nil {
-			return
-		}
-
-		// check for TCG EK OID the same way verifyEKCertificate does
-		found := false
-		for _, oid := range cert.UnknownExtKeyUsage {
-			if oid.Equal(asn1.ObjectIdentifier{2, 23, 133, 8, 1}) {
-				found = true
-				break
-			}
-		}
-		_ = found
 	})
 }
