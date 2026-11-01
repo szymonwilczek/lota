@@ -71,7 +71,7 @@ real ceremony runs them against the operator's own module:
    openssl req -new -x509 -days 365 -provider pkcs11 -provider default \
        -key "pkcs11:token=lota-ca;object=lota-ca-key;type=private?pin-value=1234" \
        -subj "/CN=lota-attest-ca" -addext basicConstraints=critical,CA:TRUE \
-       -addext keyUsage=critical,keyCertSign -out ca.crt
+       -addext keyUsage=critical,keyCertSign,cRLSign -out ca.crt
 
 The ``pin-value`` in the URI is what makes this run unattended. Without it
 OpenSSL prompts for the PIN, and a run with nothing on stdin fails with
