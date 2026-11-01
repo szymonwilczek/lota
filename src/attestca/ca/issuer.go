@@ -26,7 +26,6 @@ import (
 	"errors"
 	"fmt"
 	"math/big"
-	"os"
 	"sync/atomic"
 	"time"
 
@@ -550,9 +549,4 @@ func publicKeysMatch(a, b crypto.PublicKey) bool {
 		return ak.Equal(b)
 	}
 	return false
-}
-
-// LoadPEMFile reads a PEM file, exposed for the CA server's startup.
-func LoadPEMFile(path string) ([]byte, error) {
-	return os.ReadFile(path)
 }
