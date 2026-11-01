@@ -441,7 +441,9 @@ func (v *PCRVerifier) PolicyNameForTenant(tenant string) string {
 	return v.active
 }
 
-// tenant-aware counterpart of ActivePolicyDeclaresBootPCRs
+// reports whether tenant's policy pins expected hex values for PCR0, PCR1
+// and PCR7, which authenticates the firmware/Secure Boot baseline through
+// the signed-policy channel; used by the enrollment gate in Verify()
 func (v *PCRVerifier) PolicyDeclaresBootPCRsForTenant(tenant string) bool {
 	policy, ok := v.policyForTenant(tenant)
 	if !ok || policy == nil {
@@ -459,13 +461,15 @@ func (v *PCRVerifier) PolicyDeclaresBootPCRsForTenant(tenant string) bool {
 	return true
 }
 
-// tenant-aware counterpart of ActivePolicyRequiresSecureBoot
+// reports whether tenant's policy enforces event-log Secure Boot;
+// drives the event-log-anchored TOFU branch of the boot enrollment
+// gate in Verify()
 func (v *PCRVerifier) PolicyRequiresSecureBootForTenant(tenant string) bool {
 	policy, ok := v.policyForTenant(tenant)
 	return ok && policy != nil && policy.RequireSecureBoot
 }
 
-// tenant-aware counterpart of ActivePolicyRequiresCmdline
+// reports whether tenant's policy gates on the kernel command line
 func (v *PCRVerifier) PolicyRequiresCmdlineForTenant(tenant string) bool {
 	policy, ok := v.policyForTenant(tenant)
 	return ok && policy != nil && policy.RequireCmdlinePolicy
@@ -717,41 +721,6 @@ func (v *PCRVerifier) GetActivePolicyConfig() (*PCRPolicy, bool) {
 	return policy, ok
 }
 
-// ActivePolicyDeclaresBootPCRs reports whether the active policy pins
-// expected hex values for PCR0, PCR1, and PCR7. A policy that pins
-// all three authenticates the firmware/Secure Boot baseline through
-// the signed-policy channel, so first-use of the per-client boot
-// baseline is no longer a pure TOFU decision. Used by the
-// enrollment gate in Verify().
-func (v *PCRVerifier) ActivePolicyDeclaresBootPCRs() bool {
-	v.mu.RLock()
-	defer v.mu.RUnlock()
-	policy, ok := v.policies[v.active]
-	if !ok || policy == nil {
-		return false
-	}
-	if _, ok := policy.PCRs[0]; !ok {
-		return false
-	}
-	if _, ok := policy.PCRs[1]; !ok {
-		return false
-	}
-	if _, ok := policy.PCRs[7]; !ok {
-		return false
-	}
-	return true
-}
-
-// reports whether the active policy enforces event-log Secure Boot;
-// drives the event-log-anchored TOFU branch of the boot enrollment
-// gate in Verify()
-func (v *PCRVerifier) ActivePolicyRequiresSecureBoot() bool {
-	v.mu.RLock()
-	defer v.mu.RUnlock()
-	policy, ok := v.policies[v.active]
-	return ok && policy != nil && policy.RequireSecureBoot
-}
-
 // returns names of all loaded policies
 func (v *PCRVerifier) ListPolicies() []string {
 	v.mu.RLock()
@@ -831,19 +800,6 @@ func (p *PCRPolicy) GetRequiredMask() uint32 {
 	mask |= 1 << 9
 
 	return mask
-}
-
-// returns the PCR mask required by the currently active policy
-func (v *PCRVerifier) GetActivePolicyMask() uint32 {
-	v.mu.RLock()
-	defer v.mu.RUnlock()
-
-	if policy, exists := v.policies[v.active]; exists {
-		return policy.GetRequiredMask()
-	}
-
-	// fallback if no active policy
-	return DefaultPolicy().GetRequiredMask()
 }
 
 // GetChallengePolicyMask returns the union of the PCR masks of the active policy

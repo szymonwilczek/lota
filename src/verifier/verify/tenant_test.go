@@ -438,8 +438,12 @@ func TestChallengePolicyMaskIsUnion(t *testing.T) {
 	if mask&(1<<4) == 0 || mask&(1<<5) == 0 {
 		t.Fatalf("challenge mask %#x must cover the active AND the tenant-bound policy PCRs", mask)
 	}
-	if active := pv.GetActivePolicyMask(); active&(1<<5) != 0 {
-		t.Fatalf("active mask %#x should not include the bound policy's PCR", active)
+	active, ok := pv.GetActivePolicyConfig()
+	if !ok {
+		t.Fatal("no active policy")
+	}
+	if m := active.GetRequiredMask(); m&(1<<5) != 0 {
+		t.Fatalf("active mask %#x should not include the bound policy's PCR", m)
 	}
 }
 
