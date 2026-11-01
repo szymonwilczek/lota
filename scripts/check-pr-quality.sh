@@ -35,8 +35,8 @@ A change to a file listed in .github/pr-quality-hotpaths.txt without the docs
 named there prints a note. docs, license and gitignore commits print none.
 
 With --pr-diff, DCO is checked only for non-merge commits made on top of a tree
-that already carried this gate. This keeps newly added rules from being applied
-retroactively to historical integration commits.
+that already carried this gate, and no docs note is printed. This keeps newly
+added rules from being applied retroactively to historical integration commits.
 
 AI assistant co-author or generator trailers are reported through the
 ai_assisted=true output when GITHUB_OUTPUT is set. They do not fail this
@@ -117,7 +117,7 @@ note_missing_docs() {
     for path in "${files[@]}"; do
 	is_test_only_path "$path" || effective_files+=("$path")
     done
-    ((${#hot_hits[@]} == 0)) && continue
+    ((${#effective_files[@]} == 0)) && return 0
 
     local hot_globs doc_globs why doc_ok hot_hit
     local -a hot_patterns doc_patterns
@@ -126,43 +126,35 @@ note_missing_docs() {
     while IFS='|' read -r hot_globs doc_globs why; do
 	[[ -z ${hot_globs// /} || ${hot_globs:0:1} == "#" ]] && continue
 
-	failed=1
-	printf 'required docs missing: %s %s\n' \
-	       "$(short_commit "$commit")" "$(commit_subject "$commit")" >&2
-	printf '  reason: %s\n' "$why" >&2
-	printf '  hotpath files:\n' >&2
-	printf '    %s\n' "${hot_hits[@]}" >&2
-	printf '  update one of:\n' >&2
-	printf '    %s\n' "${doc_patterns[@]}" >&2
-	printf '  or record a "Docs-Not-Needed: <reason>" trailer if no docs are warranted\n' >&2
+	read -r -a hot_patterns <<<"$hot_globs"
+	read -r -a doc_patterns <<<"$doc_globs"
+
+	hot_hit=0
+	for path in "${effective_files[@]}"; do
+	    for hot_glob in "${hot_patterns[@]}"; do
+		[[ $path == $hot_glob ]] && {
+		    hot_hit=1
+		    break 2
+		}
+	    done
+	done
+	((hot_hit == 0)) && continue
+
+	doc_ok=0
+	for path in "${files[@]}"; do
+	    for doc_glob in "${doc_patterns[@]}"; do
+		[[ $path == $doc_glob ]] && {
+		    doc_ok=1
+		    break 2
+		}
+	    done
+	done
+	((doc_ok == 1)) && continue
+
+	printf 'note: %s: docs not updated: %s\n' \
+	       "$(short_commit "$commit")" "$why"
+	printf 'note:   consider updating %s\n' "${doc_patterns[*]}"
     done <"$manifest"
-
-    hot_hit=0
-    for path in "${effective_files[@]}"; do
-	for hot_glob in "${hot_patterns[@]}"; do
-	    [[ $path == $hot_glob ]] && {
-		hot_hit=1
-		break 2
-	    }
-	done
-    done
-    ((hot_hit == 0)) && continue
-
-    doc_ok=0
-    for path in "${files[@]}"; do
-	for doc_glob in "${doc_patterns[@]}"; do
-	    [[ $path == $doc_glob ]] && {
-		doc_ok=1
-		break 2
-	    }
-	done
-    done
-    ((doc_ok == 1)) && continue
-
-    printf 'note: %s: docs not updated: %s\n' \
-	   "$(short_commit "$commit")" "$why"
-    printf 'note:   consider updating %s\n' "${doc_patterns[*]}"
-done <"$manifest"
 }
 
 check_signoff() {
@@ -306,14 +298,17 @@ main() {
 
     branch=${PR_BRANCH:-$(git symbolic-ref --quiet --short HEAD || true)}
 
+    if [[ $branch != lota-next ]]; then
+	check_branch "$branch" || rc=1
+	if [[ -n ${PR_TITLE:-} ]]; then
+	    check_subject "$PR_TITLE" "pull request title" || rc=1
+	fi
+    fi
+
     mapfile -t commits < <(git rev-list --reverse "$base..$head")
     if ((${#commits[@]} == 0)); then
 	printf 'No commits to check.\n'
 	return 0
-    fi
-
-    if [[ $mode == "pr-diff" ]]; then
-	mapfile -t pr_files < <(git diff --name-only "$base" "$head")
     fi
 
     for commit in "${commits[@]}"; do
@@ -331,66 +326,12 @@ main() {
 	if [[ $branch != lota-next ]]; then
 	    check_message_limits "$commit" || rc=1
 	fi
-
-	[[ -f $manifest ]] || die "missing $manifest"
-	git cat-file -e "$base^{commit}" || die "base commit not found: $base"
-	git cat-file -e "$head^{commit}" || die "head commit not found: $head"
-
-	branch=${PR_BRANCH:-$(git symbolic-ref --quiet --short HEAD || true)}
-
-	if [[ $branch != lota-next ]]; then
-	    check_branch "$branch" || rc=1
-	    if [[ -n ${PR_TITLE:-} ]]; then
-		check_subject "$PR_TITLE" "pull request title" || rc=1
-	    fi
+	if check_ai_assistance "$commit"; then
+	    ai_assisted=1
 	fi
 
-	mapfile -t commits < <(git rev-list --reverse "$base..$head")
-	if ((${#commits[@]} == 0)); then
-	    printf 'No commits to check.\n'
-	    return 0
-	fi
-
-	for commit in "${commits[@]}"; do
-	    if [[ $mode == "pr-diff" ]]; then
-		if is_merge_commit "$commit"; then
-		    continue
-		fi
-		if ! gate_existed_for_commit "$commit"; then
-		    continue
-		fi
-	    fi
-
-	    checked_commits+=("$commit")
-	    check_signoff "$commit" || rc=1
-	    if [[ $branch != lota-next ]]; then
-		check_message_limits "$commit" || rc=1
-	    fi
-	    if check_ai_assistance "$commit"; then
-		ai_assisted=1
-	    fi
-
+	if [[ $mode != "pr-diff" ]]; then
 	    note_missing_docs "$commit" "$manifest"
-	done
-
-	if [[ -n ${GITHUB_OUTPUT:-} ]]; then
-	    printf 'ai_assisted=%s\n' "$([[ $ai_assisted -eq 1 ]] && printf true || printf false)" \
-		   >>"$GITHUB_OUTPUT"
-	fi
-
-	if ((rc != 0)); then
-	    printf '\nPR quality gate failed.\n' >&2
-	    return "$rc"
-	fi
-
-	if ((ai_assisted == 1)); then
-	    printf 'PR quality gate passed for %d checked commit(s); AI-assisted marker found.\n' \
-		   "${#checked_commits[@]}"
-	else
-	    mapfile -t commit_files < \
-		    <(git diff-tree --no-commit-id --name-only -r "$commit")
-	    classify_commit "$commit" "$manifest" \
-			    ${commit_files[@]+"${commit_files[@]}"} || rc=1
 	fi
     done
 
