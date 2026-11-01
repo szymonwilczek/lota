@@ -74,15 +74,6 @@ static void agent_policy_snapshot_clear(void)
 	/* epoch restarts: a stale verdict would match it by number */
 	ipc_runtime_coverage_forget();
 
-	if (g_agent.policy_trust_libs) {
-		OPENSSL_cleanse(g_agent.policy_trust_libs,
-				(size_t)g_agent.policy_trust_lib_count *
-					PATH_MAX);
-		free(g_agent.policy_trust_libs);
-		g_agent.policy_trust_libs = NULL;
-	}
-	g_agent.policy_trust_lib_count = 0;
-
 	g_agent.policy_snapshot_set = 0;
 	agent_globals_unlock(&g_agent);
 }
@@ -138,92 +129,6 @@ static int canonicalize_u32_set(const uint32_t *in, int in_count,
 	*out = canon;
 	*out_count = unique;
 	return 0;
-}
-
-static int canonicalize_trust_libs(char (*trust_libs)[PATH_MAX],
-				   int trust_lib_count,
-				   char (**out_libs)[PATH_MAX], int *out_count)
-{
-	const char **sorted = NULL;
-	int unique = 0;
-
-	if (!out_libs || !out_count)
-		return -EINVAL;
-	*out_libs = NULL;
-	*out_count = 0;
-
-	if (trust_lib_count < 0)
-		return -EINVAL;
-	if (trust_lib_count == 0)
-		return 0;
-	if (!trust_libs)
-		return -EINVAL;
-
-	sorted = calloc((size_t)trust_lib_count, sizeof(char *));
-	if (!sorted)
-		return -ENOMEM;
-	for (int i = 0; i < trust_lib_count; i++)
-		sorted[i] = trust_libs[i];
-
-	qsort(sorted, (size_t)trust_lib_count, sizeof(char *), cstr_ptr_cmp);
-	for (int i = 0; i < trust_lib_count; i++) {
-		if (i == 0 || strcmp(sorted[i], sorted[i - 1]) != 0)
-			unique++;
-	}
-
-	char (*canon)[PATH_MAX] = calloc((size_t)unique, PATH_MAX);
-	if (!canon) {
-		OPENSSL_cleanse(sorted,
-				(size_t)trust_lib_count * sizeof(char *));
-		free(sorted);
-		return -ENOMEM;
-	}
-
-	int w = 0;
-	for (int i = 0; i < trust_lib_count; i++) {
-		if (i != 0 && strcmp(sorted[i], sorted[i - 1]) == 0)
-			continue;
-		snprintf(canon[w], PATH_MAX, "%s", sorted[i]);
-		w++;
-	}
-
-	OPENSSL_cleanse(sorted, (size_t)trust_lib_count * sizeof(char *));
-	free(sorted);
-	sorted = NULL;
-
-	*out_libs = canon;
-	*out_count = unique;
-	return 0;
-}
-
-int agent_compute_policy_digest_for_protect_pids(const uint32_t *protect_pids,
-						 int protect_pid_count,
-						 uint8_t out_digest[32])
-{
-	struct agent_startup_policy pol;
-
-	if (!out_digest)
-		return -EINVAL;
-	if (!g_agent.policy_snapshot_set)
-		return -EINVAL;
-
-	memset(&pol, 0, sizeof(pol));
-	pol.mode = g_agent.policy_mode;
-	pol.strict_mmap = g_agent.policy_strict_mmap;
-	pol.strict_exec = g_agent.policy_strict_exec;
-	pol.block_ptrace = g_agent.policy_block_ptrace;
-	pol.strict_modules = g_agent.policy_strict_modules;
-	pol.block_anon_exec = g_agent.policy_block_anon_exec;
-
-	pol.protect_pids = (uint32_t *)protect_pids;
-	pol.protect_pid_count = protect_pid_count;
-
-	pol.trust_libs = g_agent.policy_trust_libs;
-	pol.trust_lib_count = g_agent.policy_trust_lib_count;
-
-	return compute_policy_digest(&pol, g_agent.policy_verity_digests,
-				     g_agent.policy_verity_digest_count,
-				     out_digest);
 }
 
 static int verity_digest_key_cmp(const void *a, const void *b)
@@ -845,12 +750,10 @@ allowlist_done:
 	}
 	lota_info("Trusted libs applied (%d entries)", applied_libs);
 
-	/* persist canonical policy snapshot for runtime recompute */
+	/* snapshot the IPC paths read after startup */
 	{
 		uint32_t *canon_pids = NULL;
 		int canon_pid_count = 0;
-		char (*canon_libs)[PATH_MAX] = NULL;
-		int canon_lib_count = 0;
 		struct lota_verity_digest_key *canon_digests = NULL;
 
 		if (digest_count > 0) {
@@ -880,35 +783,8 @@ allowlist_done:
 			goto out_fail;
 		}
 
-		ret = canonicalize_trust_libs(policy->trust_libs,
-					      policy->trust_lib_count,
-					      &canon_libs, &canon_lib_count);
-		if (ret < 0) {
-			if (canon_digests) {
-				OPENSSL_cleanse(
-					canon_digests,
-					(size_t)digest_count *
-						sizeof(struct lota_verity_digest_key));
-				free(canon_digests);
-			}
-			if (canon_pids) {
-				OPENSSL_cleanse(canon_pids,
-						(size_t)canon_pid_count *
-							sizeof(uint32_t));
-				free(canon_pids);
-			}
-			goto out_fail;
-		}
-
 		agent_policy_snapshot_clear();
 		agent_globals_lock(&g_agent);
-		g_agent.policy_mode = mode;
-		g_agent.policy_strict_mmap = policy->strict_mmap;
-		g_agent.policy_strict_exec = policy->strict_exec;
-		g_agent.policy_block_ptrace = policy->block_ptrace;
-		g_agent.policy_strict_modules = policy->strict_modules;
-		g_agent.policy_block_anon_exec = policy->block_anon_exec;
-
 		g_agent.policy_verity_digests = canon_digests;
 		g_agent.policy_verity_digest_count = digest_count;
 		g_agent.policy_protect_pids = canon_pids;
@@ -916,8 +792,6 @@ allowlist_done:
 		g_agent.policy_protect_epoch = 0;
 		/* epoch restarts, as above */
 		ipc_runtime_coverage_forget();
-		g_agent.policy_trust_libs = canon_libs;
-		g_agent.policy_trust_lib_count = canon_lib_count;
 		g_agent.policy_snapshot_set = 1;
 		agent_globals_unlock(&g_agent);
 	}
