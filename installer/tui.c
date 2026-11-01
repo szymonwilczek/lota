@@ -46,7 +46,6 @@
 #define C_GREEN 2
 #define C_YELLOW 3
 #define C_CYAN 4
-#define C_MAGENTA 5
 #define A_BOLD 0x08
 #define A_DIM 0x10
 #define A_INV 0x20

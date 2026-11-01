@@ -275,9 +275,6 @@ int probe_cmdline_ima_ok(const char *cmdline);
  * 0 otherwise. */
 int probe_cmdline_has_token(const char *cmdline, const char *token);
 
-/* 0 when the BOOTED kernel satisfies the agent's IMA floor */
-int probe_booted_ima_ok(void);
-
 /*
  * Pure: 1 when IMA appraisal blocks on an integrity failure, 0 when it does
  * not, mirroring the agent's bpf_loader_ima_appraisal_active() mode half.
