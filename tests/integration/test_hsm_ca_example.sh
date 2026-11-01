@@ -67,6 +67,9 @@ if [[ -s $OUT_DIR/ca.crt ]]; then
     ca_text=$(openssl x509 -in "$OUT_DIR/ca.crt" -noout -text)
     check "the certificate it issues is a CA certificate" \
         grep -q "CA:TRUE" <<<"$ca_text"
+    # The verifier refuses a CRL from an issuer without cRLSign
+    check "the certificate it issues may sign CRLs" \
+        grep -q "CRL Sign" <<<"$ca_text"
 
     # The CA refuses to start unless ca.crt carries the token key
     conf="$OUT_DIR/softhsm2.conf"
