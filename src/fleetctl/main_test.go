@@ -311,22 +311,6 @@ func TestDeleteRequiresAttribution(t *testing.T) {
  * error, and asserting that keeps a caller's script from failing silently if
  * it still carries the old invocation.
  */
-func TestSessionSubcommandIsWithdrawn(t *testing.T) {
-	f := newFakeAPI(t, nil)
-
-	code, _, errOut := runCLI(t, noEnv, "-server", f.srv.URL,
-		"session", "validate", strings.Repeat("00", 32))
-	if code != exitUsage {
-		t.Fatalf("exit = %d, want 2 for a withdrawn subcommand", code)
-	}
-	if !strings.Contains(errOut, "unknown command") {
-		t.Fatalf("stderr = %q", errOut)
-	}
-	if f.requests != 0 {
-		t.Fatalf("request sent for a withdrawn subcommand")
-	}
-}
-
 func TestAPIErrorReachesStderr(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusForbidden)

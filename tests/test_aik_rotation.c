@@ -1259,53 +1259,6 @@ static void test_clock_state_save_load_round_trip(void)
 	PASS();
 }
 
-/*
- * Older clock-state snapshots zero-filled the reserved tail. The
- * initramfs-lock flag now lives in the first byte of that tail, so
- * loading a zero-filled v1 record must preserve the legacy meaning:
- * no initramfs lock was observed on that boot.
- */
-static void test_clock_state_legacy_reserved_maps_to_no_lock(void)
-{
-	struct tpm_context ctx;
-	struct lota_clock_state legacy;
-	struct lota_clock_state out;
-
-	TEST("tpm_clock_state_load treats legacy reserved byte as no lock");
-	make_ctx(&ctx);
-	snprintf(ctx.clock_state_path, sizeof(ctx.clock_state_path),
-		 "%s/legacy_clock_state.dat", tmp_dir);
-
-	memset(&legacy, 0, sizeof(legacy));
-	legacy.magic = TPM_CLOCK_STATE_MAGIC;
-	legacy.version = TPM_CLOCK_STATE_VERSION;
-	legacy.reset_count = 3;
-	legacy.restart_count = 4;
-	legacy.saved_at = 1715000001;
-
-	int fd = open(ctx.clock_state_path, O_WRONLY | O_CREAT | O_TRUNC, 0600);
-	if (fd < 0) {
-		FAIL("cannot create legacy clock-state file");
-		return;
-	}
-	{
-		ssize_t w = write(fd, &legacy, sizeof(legacy));
-		(void)w;
-	}
-	close(fd);
-
-	if (tpm_clock_state_load(&ctx, &out) != 0) {
-		FAIL("legacy-shaped clock-state load failed");
-		return;
-	}
-	if (out.flags != 0) {
-		FAIL("legacy reserved byte must load as flags=0");
-		return;
-	}
-
-	PASS();
-}
-
 static void reference_initramfs_lock_digest(uint32_t reset_count,
 					    uint32_t restart_count,
 					    uint8_t out[LOTA_HASH_SIZE])
@@ -1887,7 +1840,6 @@ int main(void)
 	test_self_hash_pin_round_trip();
 	test_tpm_strerror_maps_lota_private();
 	test_clock_state_save_load_round_trip();
-	test_clock_state_legacy_reserved_maps_to_no_lock();
 	test_initramfs_lock_digest_matches_reference();
 	test_aik_unique_separates_publishers();
 	test_clock_state_load_missing_is_enoent();

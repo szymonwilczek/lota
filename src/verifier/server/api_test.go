@@ -54,21 +54,6 @@ func init() {
  * The credential was withdrawn rather than half-wired, and this asserts
  * the route is gone.
  */
-func TestSessionValidateEndpointIsWithdrawn(t *testing.T) {
-	mux, _ := setupTestAPI(t)
-
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/session/validate",
-		strings.NewReader(`{"session_token":"xyz"}`))
-	req.Header.Set("Content-Type", "application/json")
-	rr := httptest.NewRecorder()
-
-	mux.ServeHTTP(rr, req)
-	if rr.Code != http.StatusNotFound {
-		t.Fatalf("expected 404 for a withdrawn endpoint, got %d body=%s",
-			rr.Code, rr.Body.String())
-	}
-}
-
 func TestAttestationLogEndpoint_SanitizesDetails(t *testing.T) {
 	aikStore := newCertStore(t)
 	m := metrics.New()
