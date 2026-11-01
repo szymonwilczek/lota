@@ -676,12 +676,3 @@ int profile_consent_time(const struct profile_paths *paths, time_t *out)
 	*out = (time_t)strtoll(p, NULL, 10);
 	return errno == 0 ? 0 : -EINVAL;
 }
-
-int profile_consent_forget(const struct profile_paths *paths)
-{
-	if (!paths || paths->consent[0] == '\0')
-		return -EINVAL;
-	if (unlink(paths->consent) != 0 && errno != ENOENT)
-		return -errno;
-	return 0;
-}

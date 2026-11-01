@@ -276,6 +276,5 @@ bool profile_aik_auth_needs_sealing(enum profile_aik_auth_state state);
  */
 int profile_consent_record(const struct profile_paths *paths, uid_t by);
 int profile_consent_time(const struct profile_paths *paths, time_t *out);
-int profile_consent_forget(const struct profile_paths *paths);
 
 #endif /* LOTA_AGENT_PROFILE_H */

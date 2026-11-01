@@ -368,7 +368,7 @@ static void profile_forget(struct attest_target *target)
 {
 	char base[64];
 
-	profile_consent_forget(&target->paths);
+	unlink(target->paths.consent);
 	rmdir(target->paths.dir);
 	snprintf(base, sizeof(base), "/tmp/lota-reload-%d.profiles",
 		 (int)getpid());
