@@ -266,13 +266,6 @@ func NewNonceStoreFromConfig(cfg NonceStoreConfig) *NonceStore {
 	return ns
 }
 
-// creates a new nonce store with specified lifetime
-func NewNonceStore(lifetime time.Duration) *NonceStore {
-	cfg := DefaultNonceStoreConfig()
-	cfg.Lifetime = lifetime
-	return NewNonceStoreFromConfig(cfg)
-}
-
 // creates a new challenge with random nonce
 //
 // bindingID is a transport-level identifier used to bind the issued nonce
