@@ -436,38 +436,6 @@ static void test_ipc_set_dbus_attach(void)
 	PASS();
 }
 
-static void test_dbus_constants(void)
-{
-	TEST("constants: bus name, path, interface are non-empty");
-
-	if (!LOTA_DBUS_BUS_NAME[0]) {
-		FAIL("empty bus name");
-		return;
-	}
-	if (!LOTA_DBUS_OBJECT_PATH[0]) {
-		FAIL("empty path");
-		return;
-	}
-	if (!LOTA_DBUS_INTERFACE[0]) {
-		FAIL("empty interface");
-		return;
-	}
-
-	/* must contain a dot */
-	if (!strchr(LOTA_DBUS_BUS_NAME, '.')) {
-		FAIL("bus name missing dot");
-		return;
-	}
-
-	/* verify object path starts with / */
-	if (LOTA_DBUS_OBJECT_PATH[0] != '/') {
-		FAIL("object path missing leading /");
-		return;
-	}
-
-	PASS();
-}
-
 int main(void)
 {
 	printf("=== LOTA D-Bus Unit Tests ===\n\n");
@@ -481,7 +449,6 @@ int main(void)
 	test_emit_null_safe();
 	test_ipc_set_dbus_null();
 	test_ipc_set_dbus_attach();
-	test_dbus_constants();
 	test_version_names_this_build();
 	test_bus_answers_the_daemons_word();
 

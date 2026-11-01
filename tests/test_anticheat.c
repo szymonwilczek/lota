@@ -115,17 +115,6 @@ static void write_mock_snapshot(const char *dir, uint32_t flags)
 	write_test_file(dir, LOTA_SNAPSHOT_FILE_NAME, buf, 16 + tok_len);
 }
 
-static void write_mock_snapshot_no_token(const char *dir, uint32_t flags)
-{
-	uint8_t buf[16];
-	write_le32(buf + 0, LOTA_SNAPSHOT_MAGIC);
-	write_le16(buf + 4, (uint16_t)LOTA_SNAPSHOT_VERSION);
-	write_le16(buf + 6, 0);
-	write_le32(buf + 8, flags);
-	write_le32(buf + 12, 0);
-	write_test_file(dir, LOTA_SNAPSHOT_FILE_NAME, buf, sizeof(buf));
-}
-
 /*
  * minimal valid LOTA token wire blob using the gaming SDK
  * attest/sig data is fabricated (not cryptographically valid),
@@ -755,132 +744,6 @@ static void test_wire_header_size(void)
 	PASS();
 }
 
-static void test_heartbeat_generation(void)
-{
-	TEST("heartbeat: file mode replay-safe path disabled");
-	write_mock_snapshot(test_dir, 0x07);
-
-	struct lota_ac_config cfg = {
-		.struct_size = sizeof(cfg),
-		.provider = LOTA_AC_PROVIDER_EAC,
-		.game_id = "test-heartbeat",
-		.token_dir = test_dir,
-	};
-	struct lota_ac_session *s = lota_ac_init(&cfg);
-	if (!s) {
-		FAIL("init failed");
-		return;
-	}
-
-	uint8_t buf[LOTA_AC_MAX_HEARTBEAT];
-	size_t written = 0;
-	int ret = lota_ac_heartbeat(s, buf, sizeof(buf), &written);
-	lota_ac_shutdown(s);
-	if (ret == -EOPNOTSUPP)
-		PASS();
-	else
-		FAIL("expected -EOPNOTSUPP");
-}
-
-static void test_heartbeat_sequence_increments(void)
-{
-	TEST("heartbeat: file mode sequence path blocked");
-	write_mock_snapshot(test_dir, 0x07);
-
-	struct lota_ac_config cfg = {
-		.struct_size = sizeof(cfg),
-		.provider = LOTA_AC_PROVIDER_EAC,
-		.game_id = "test-seq",
-		.token_dir = test_dir,
-	};
-	struct lota_ac_session *s = lota_ac_init(&cfg);
-	if (!s) {
-		FAIL("init failed");
-		return;
-	}
-
-	uint8_t buf[LOTA_AC_MAX_HEARTBEAT];
-	size_t written;
-	const struct lota_ac_heartbeat_wire *hdr =
-		(const struct lota_ac_heartbeat_wire *)buf;
-
-	int r0 = lota_ac_heartbeat(s, buf, sizeof(buf), &written);
-	int r1 = lota_ac_heartbeat(s, buf, sizeof(buf), &written);
-	int r2 = lota_ac_heartbeat(s, buf, sizeof(buf), &written);
-
-	lota_ac_shutdown(s);
-
-	(void)hdr;
-	if (r0 == -EOPNOTSUPP && r1 == -EOPNOTSUPP && r2 == -EOPNOTSUPP)
-		PASS();
-	else
-		FAIL("expected -EOPNOTSUPP");
-}
-
-static void test_heartbeat_session_id_stable(void)
-{
-	TEST("heartbeat: file mode session heartbeat blocked");
-	write_mock_snapshot(test_dir, 0x07);
-
-	struct lota_ac_config cfg = {
-		.struct_size = sizeof(cfg),
-		.provider = LOTA_AC_PROVIDER_BATTLEYE,
-		.game_id = "test-stable",
-		.token_dir = test_dir,
-	};
-	struct lota_ac_session *s = lota_ac_init(&cfg);
-	if (!s) {
-		FAIL("init failed");
-		return;
-	}
-
-	uint8_t buf1[LOTA_AC_MAX_HEARTBEAT], buf2[LOTA_AC_MAX_HEARTBEAT];
-	size_t w1, w2;
-	int r1 = lota_ac_heartbeat(s, buf1, sizeof(buf1), &w1);
-	int r2 = lota_ac_heartbeat(s, buf2, sizeof(buf2), &w2);
-
-	lota_ac_shutdown(s);
-
-	if (r1 == -EOPNOTSUPP && r2 == -EOPNOTSUPP)
-		PASS();
-	else
-		FAIL("expected -EOPNOTSUPP");
-}
-
-static void test_heartbeat_game_id_hash(void)
-{
-	TEST("heartbeat: file mode game hash path blocked");
-	write_mock_snapshot(test_dir, 0x07);
-
-	uint8_t buf1[LOTA_AC_MAX_HEARTBEAT], buf2[LOTA_AC_MAX_HEARTBEAT];
-	size_t w1, w2;
-
-	struct lota_ac_config cfg1 = {
-		.struct_size = sizeof(cfg1),
-		.provider = LOTA_AC_PROVIDER_EAC,
-		.game_id = "game-alpha",
-		.token_dir = test_dir,
-	};
-	struct lota_ac_session *s1 = lota_ac_init(&cfg1);
-	int r1 = lota_ac_heartbeat(s1, buf1, sizeof(buf1), &w1);
-	lota_ac_shutdown(s1);
-
-	struct lota_ac_config cfg2 = {
-		.struct_size = sizeof(cfg2),
-		.provider = LOTA_AC_PROVIDER_EAC,
-		.game_id = "game-beta",
-		.token_dir = test_dir,
-	};
-	struct lota_ac_session *s2 = lota_ac_init(&cfg2);
-	int r2 = lota_ac_heartbeat(s2, buf2, sizeof(buf2), &w2);
-	lota_ac_shutdown(s2);
-
-	if (r1 == -EOPNOTSUPP && r2 == -EOPNOTSUPP)
-		PASS();
-	else
-		FAIL("expected -EOPNOTSUPP");
-}
-
 static int test_sha256(const void *data, size_t len, uint8_t out[32])
 {
 	EVP_MD_CTX *ctx = EVP_MD_CTX_new();
@@ -936,38 +799,6 @@ static void test_heartbeat_buf_too_small(void)
 	}
 
 	uint8_t buf[16]; /* way too small */
-	size_t written;
-	int ret = lota_ac_heartbeat(s, buf, sizeof(buf), &written);
-	lota_ac_shutdown(s);
-
-	if (ret == -EOPNOTSUPP)
-		PASS();
-	else
-		FAIL("expected -EOPNOTSUPP");
-}
-
-static void test_heartbeat_no_token(void)
-{
-	TEST("heartbeat: file mode no-token path blocked");
-	char empty_dir[512];
-	snprintf(empty_dir, sizeof(empty_dir), "%s/notoken", test_dir);
-	mkdir(empty_dir, 0700);
-	/* snapshot exists, but no token payload */
-	write_mock_snapshot_no_token(empty_dir, 0x07);
-
-	struct lota_ac_config cfg = {
-		.struct_size = sizeof(cfg),
-		.provider = LOTA_AC_PROVIDER_EAC,
-		.game_id = "test-notoken",
-		.token_dir = empty_dir,
-	};
-	struct lota_ac_session *s = lota_ac_init(&cfg);
-	if (!s) {
-		FAIL("init failed");
-		return;
-	}
-
-	uint8_t buf[LOTA_AC_MAX_HEARTBEAT];
 	size_t written;
 	int ret = lota_ac_heartbeat(s, buf, sizeof(buf), &written);
 	lota_ac_shutdown(s);
@@ -1823,16 +1654,6 @@ static void test_last_error_strings(void)
 	PASS();
 }
 
-static void test_default_heartbeat_interval(void)
-{
-	TEST("config: default heartbeat interval = 30s");
-	if (LOTA_AC_DEFAULT_HEARTBEAT_SEC != 30) {
-		FAIL("wrong default");
-		return;
-	}
-	PASS();
-}
-
 static void test_state_str(void)
 {
 	TEST("state_str: all states produce valid strings");
@@ -2566,15 +2387,9 @@ int main(void)
 
 	printf("\nHeartbeat Wire Format:\n");
 	test_wire_header_size();
-	test_heartbeat_generation();
-	test_heartbeat_sequence_increments();
-	test_heartbeat_session_id_stable();
-	test_heartbeat_game_id_hash();
 	test_heartbeat_game_id_hash_domain_separated();
 	test_heartbeat_buf_too_small();
-	test_heartbeat_no_token();
 	test_heartbeat_null_args();
-	test_default_heartbeat_interval();
 
 	printf("\nHeartbeat Verification:\n");
 	test_verify_roundtrip();

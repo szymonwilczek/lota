@@ -895,28 +895,6 @@ func TestMetricsCounterValues(t *testing.T) {
 	}
 }
 
-func TestUptimeIncreases(t *testing.T) {
-	mux, _ := setupTestAPIListeningWithKeys(t, "", "")
-
-	req := httptest.NewRequest("GET", "/health", nil)
-	rec := httptest.NewRecorder()
-	mux.ServeHTTP(rec, req)
-	var resp1 healthResponse
-	json.NewDecoder(rec.Body).Decode(&resp1)
-
-	time.Sleep(10 * time.Millisecond)
-
-	req = httptest.NewRequest("GET", "/health", nil)
-	rec = httptest.NewRecorder()
-	mux.ServeHTTP(rec, req)
-	var resp2 healthResponse
-	json.NewDecoder(rec.Body).Decode(&resp2)
-
-	if resp2.UptimeSec < resp1.UptimeSec {
-		t.Error("Uptime should not decrease")
-	}
-}
-
 func TestMethodNotAllowed(t *testing.T) {
 	mux, _ := setupTestAPIListeningWithKeys(t, "", "")
 

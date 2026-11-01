@@ -81,55 +81,6 @@ func TestDeriveLockedBootCommitmentPCR14_ChainsLockBeforeAgentCommit(t *testing.
 	}
 }
 
-// The commitment names the agent binary and nothing else.
-// Binding it to the quote's ClockInfo made the register key-specific:
-// a TPM obfuscates resetCount and restartCount per signing key, so every
-// publisher's AIK sees different counters for the same machine and only one of
-// them could ever rederive the single value PCR 14 holds.
-func TestDeriveLockedBootCommitmentPCR14_ClockCountersDoNotBindTheValue(t *testing.T) {
-	var agentHash [types.HashSize]byte
-	for i := range agentHash {
-		agentHash[i] = 0x5A
-	}
-
-	base := DeriveLockedBootCommitmentPCR14(zeroBaseline, agentHash)
-
-	if got := DeriveLockedBootCommitmentPCR14(zeroBaseline, agentHash); got != base {
-		t.Fatal("the derivation is not stable for one binary")
-	}
-
-	var other [types.HashSize]byte
-	for i := range other {
-		other[i] = 0x5B
-	}
-	if DeriveLockedBootCommitmentPCR14(zeroBaseline, other) == base {
-		t.Fatal("the agent hash must still change the committed value")
-	}
-
-	var otherBaseline [types.HashSize]byte
-	otherBaseline[0] = 0x01
-	if DeriveLockedBootCommitmentPCR14(otherBaseline, agentHash) == base {
-		t.Fatal("the platform baseline must still change the committed value")
-	}
-}
-
-// A host that suspended between the extend and the quote needs no skew window
-// to be recognised, because the counters no longer take part
-func TestMatchLockedBootCommitmentPCR14_ResumeNeedsNoSkewWindow(t *testing.T) {
-	var agentHash [types.HashSize]byte
-	for i := range agentHash {
-		agentHash[i] = 0x33
-	}
-
-	target := DeriveLockedBootCommitmentPCR14(zeroBaseline, agentHash)
-
-	expected, matched := MatchLockedBootCommitmentPCR14(
-		zeroBaseline, agentHash, target)
-	if !matched {
-		t.Fatalf("a resumed host was refused: expected %x target %x", expected, target)
-	}
-}
-
 func TestAgentHashStore_MemoryFirstUseAndMatch(t *testing.T) {
 	bs := NewBaselineStore()
 

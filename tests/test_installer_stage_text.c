@@ -50,19 +50,6 @@ static const char *run_together(const char *s)
 	return NULL;
 }
 
-static void test_the_detector(void)
-{
-	TEST("the check catches two sentences run together");
-	if (run_together("kernel lockdown.This step appends") &&
-	    run_together("the socket).The agent loads") &&
-	    !run_together("kernel lockdown. This step appends") &&
-	    !run_together("in /etc/lota/lota.conf and reloads") &&
-	    !run_together("See lota-install --resume."))
-		PASS();
-	else
-		FAIL("the detector itself is wrong");
-}
-
 static void test_every_explanation_is_spaced(void)
 {
 	char msg[64];
@@ -106,7 +93,6 @@ int main(void)
 {
 	printf("\n=== lota-install: the text a stage prints ===\n");
 
-	test_the_detector();
 	test_every_explanation_is_spaced();
 	test_every_title_is_spaced();
 

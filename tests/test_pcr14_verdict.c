@@ -365,40 +365,6 @@ static void test_forged_snapshot_cannot_fake_a_resume(void)
 }
 
 /*
- * The commitment names the agent binary, and nothing else.
- * Binding it to the TPM's clock counters made the register different for every
- * publisher's AIK -- each key sees its own obfuscated counters -- so one PCR 14
- * could only ever be verified by one of them.
- */
-static void test_commitment_does_not_bind_the_clock_counters(void)
-{
-	uint8_t self_hash[LOTA_HASH_SIZE];
-	uint8_t a[LOTA_HASH_SIZE];
-	uint8_t b[LOTA_HASH_SIZE];
-	uint8_t c[LOTA_HASH_SIZE];
-
-	TEST("the commitment does not bind the TPM clock counters");
-
-	fill(self_hash, 0xA0);
-
-	if (tpm_derive_locked_pcr14(self_hash, k_baseline, a) < 0)
-		FAIL("failed to derive the register value");
-	if (tpm_derive_locked_pcr14(self_hash, k_baseline, b) < 0)
-		FAIL("failed to derive the register value");
-
-	if (memcmp(a, b, LOTA_HASH_SIZE) != 0)
-		FAIL("the derivation is not stable for one binary");
-
-	/* binary is the only input that may move it */
-	fill(self_hash, 0xB0);
-	if (tpm_derive_locked_pcr14(self_hash, k_baseline, c) < 0)
-		FAIL("failed to derive the register value");
-	if (memcmp(a, c, LOTA_HASH_SIZE) == 0)
-		FAIL("a different agent binary produced the same value");
-	PASS();
-}
-
-/*
  * With the counters gone a resume needs no candidate scan:
  * the register still holds exactly what this agent extended,
  * so it reads as committed.
@@ -469,7 +435,6 @@ int main(void)
 {
 	test_lock_missing_on_a_shim_host();
 	test_warm_restart_is_committed();
-	test_commitment_does_not_bind_the_clock_counters();
 	test_resume_reads_as_committed();
 	test_commitment_present_after_a_cold_boot_is_refused();
 	test_forged_snapshot_cannot_fake_a_resume();

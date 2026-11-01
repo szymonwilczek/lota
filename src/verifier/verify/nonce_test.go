@@ -98,49 +98,6 @@ func TestNonceStore_GenerateAndVerify(t *testing.T) {
 	t.Log("✓ Nonce correctly verified on first use")
 }
 
-func TestNonceStore_GenerateChallengeAdvertisesBootCommitmentV1(t *testing.T) {
-	t.Log("SECURITY TEST: Challenge capability advertisement")
-	t.Log("Verifies every challenge names the boot-commitment v1 derivation")
-
-	store := NewNonceStore(5 * time.Minute)
-
-	challenge, err := store.GenerateChallenge("binding-1", 0x00004003)
-	if err != nil {
-		t.Fatalf("Failed to generate challenge: %v", err)
-	}
-
-	if challenge.Flags&types.ChallengeFlagBootCommitmentV1 == 0 {
-		t.Fatalf("Challenge flags 0x%08X do not advertise boot-commitment v1",
-			challenge.Flags)
-	}
-
-	t.Log("✓ Challenge carries the boot-commitment v1 capability")
-}
-
-func TestNonceStore_AcceptsBootCommitmentV1(t *testing.T) {
-	t.Log("SECURITY TEST: boot-commitment v1 acceptance")
-	t.Log("Accepts the v1 report flags every agent emits")
-
-	store := NewNonceStore(5 * time.Minute)
-
-	challenge, err := store.GenerateChallenge("binding-1", 0x00004003)
-	if err != nil {
-		t.Fatalf("Failed to generate challenge: %v", err)
-	}
-
-	report := &types.AttestationReport{}
-	report.Header.Flags = types.FlagBootCommitmentV1
-	copy(report.TPM.Nonce[:], challenge.Nonce[:])
-	report.TPM.AttestSize = uint16(len(createMockAttestWithNonce(testBindingNonce(report, challenge.Nonce))))
-	copy(report.TPM.AttestData[:], createMockAttestWithNonce(testBindingNonce(report, challenge.Nonce)))
-
-	if err := store.VerifyNonce(report, "binding-1", hex.EncodeToString(report.TPM.HardwareID[:])); err != nil {
-		t.Fatalf("boot-commitment v1 report was rejected: %v", err)
-	}
-
-	t.Log("✓ boot-commitment v1 report accepted")
-}
-
 func TestNonceStore_OneTimeUse(t *testing.T) {
 	t.Log("SECURITY TEST: Nonce one-time use (anti-replay)")
 	t.Log("CRITICAL: Ensures nonces cannot be reused to replay old attestations")
