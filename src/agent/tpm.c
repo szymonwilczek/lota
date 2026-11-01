@@ -2682,13 +2682,6 @@ int tpm_derive_locked_pcr14(const uint8_t self_hash[],
 }
 
 /*
- * Domain-separation marker used as qualifyingData for the empty-PCR
- * probe quote that captures TPM-signed clockInfo. The value is never
- * shipped to a verifier, so a constant string is sufficient.
- */
-#define TPM_CLOCK_PROBE_TAG "LOTA-PCR14-CLOCK-PROBE-v1"
-
-/*
  * Print the platform's own reset/restart counters, the pair an operator
  * can confirm with tpm2_readclock.
  *

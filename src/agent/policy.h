@@ -43,7 +43,6 @@
 #define POLICY_PCR_14 14
 
 #define POLICY_MAX_PCRS 24
-#define POLICY_MAX_HASHES 8
 
 /*
  * Collected system snapshot for policy generation.

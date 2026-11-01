@@ -48,11 +48,6 @@ enum steam_runtime_type {
 #define STEAM_ENV_PROTON (1U << 4) /* Proton/Wine detected */
 
 /*
- * Maximum number of extra socket paths the agent can manage.
- */
-#define STEAM_RT_MAX_EXTRA_SOCKETS 4
-
-/*
  * Container-accessible socket directory suffix.
  * Appended to $XDG_RUNTIME_DIR.
  */
