@@ -160,7 +160,7 @@ func sqliteEnforcementStores(db *sql.DB, logger *slog.Logger, m *metrics.Metrics
 		revocations: store.NewSQLiteRevocationStore(db, audit),
 		bans:        store.NewSQLiteBanStore(db, audit),
 		attestations: store.NewBatchedAttestationLog(
-			store.NewSQLiteAttestationLogWindow(db, *attestLogWindow),
+			store.NewSQLiteAttestationLog(db, *attestLogWindow),
 			store.BatchedAttestationLogConfig{Logger: logger, Loss: m}),
 	}
 }
@@ -174,7 +174,7 @@ func postgresEnforcementStores(db *sql.DB, logger *slog.Logger, m *metrics.Metri
 		revocations: store.NewPostgresRevocationStore(db, audit),
 		bans:        store.NewPostgresBanStore(db, audit),
 		attestations: store.NewBatchedAttestationLog(
-			store.NewPostgresAttestationLogWindow(db, *attestLogWindow),
+			store.NewPostgresAttestationLog(db, *attestLogWindow),
 			store.BatchedAttestationLogConfig{Logger: logger, Loss: m}),
 	}
 }
@@ -403,7 +403,7 @@ func main() {
 		}
 		dbs := make([]*sql.DB, 0, len(shardDSNs))
 		for i, d := range shardDSNs {
-			open := store.OpenPostgresDBPool
+			open := store.OpenPostgresDB
 			if *reportOnly {
 				open = store.OpenPostgresDBReadOnly
 			}

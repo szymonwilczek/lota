@@ -18,7 +18,7 @@ func TestAttestationLog_RecordsKernelHash(t *testing.T) {
 	}
 	defer db.Close()
 
-	log := NewSQLiteAttestationLog(db)
+	log := NewSQLiteAttestationLog(db, DefaultCollapseWindow)
 	if err := log.Record(AttestationRecord{
 		ClientID:   "c1",
 		Tenant:     "alpha",
@@ -48,7 +48,7 @@ func TestAttestationLog_RecordsKernelHashInBatch(t *testing.T) {
 	}
 	defer db.Close()
 
-	log := NewSQLiteAttestationLog(db)
+	log := NewSQLiteAttestationLog(db, DefaultCollapseWindow)
 	if err := log.RecordBatch([]AttestationRecord{
 		{ClientID: "c1", Result: "ok", KernelHash: "aaaa"},
 		{ClientID: "c1", Result: "ok", KernelHash: "bbbb"},

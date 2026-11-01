@@ -404,12 +404,7 @@ type SQLiteAttestationLog struct {
 }
 
 // creates an attestation log backed by the given database
-func NewSQLiteAttestationLog(db *sql.DB) *SQLiteAttestationLog {
-	return NewSQLiteAttestationLogWindow(db, DefaultCollapseWindow)
-}
-
-// the same, with a deployment's own collapse window
-func NewSQLiteAttestationLogWindow(db *sql.DB, window time.Duration) *SQLiteAttestationLog {
+func NewSQLiteAttestationLog(db *sql.DB, window time.Duration) *SQLiteAttestationLog {
 	return &SQLiteAttestationLog{db: db, window: window}
 }
 

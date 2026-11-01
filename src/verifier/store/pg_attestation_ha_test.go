@@ -33,8 +33,8 @@ func haRound(clientID string, at time.Time) AttestationRecord {
 // a second instance waits while the first decides about the same host
 func TestPostgresAttestationLogOneInstanceDecidesPerSubject(t *testing.T) {
 	db := pgTestDB(t)
-	first := NewPostgresAttestationLog(db)
-	second := NewPostgresAttestationLog(db)
+	first := NewPostgresAttestationLog(db, DefaultCollapseWindow)
+	second := NewPostgresAttestationLog(db, DefaultCollapseWindow)
 
 	at := time.Now().UTC().Truncate(time.Millisecond)
 	round := haRound("ha-subject", at)
@@ -78,8 +78,8 @@ func TestPostgresAttestationLogOneInstanceDecidesPerSubject(t *testing.T) {
 // different hosts do not wait on each other
 func TestPostgresAttestationLogSubjectsDoNotBlockEachOther(t *testing.T) {
 	db := pgTestDB(t)
-	first := NewPostgresAttestationLog(db)
-	second := NewPostgresAttestationLog(db)
+	first := NewPostgresAttestationLog(db, DefaultCollapseWindow)
+	second := NewPostgresAttestationLog(db, DefaultCollapseWindow)
 
 	at := time.Now().UTC().Truncate(time.Millisecond)
 
@@ -125,7 +125,7 @@ func TestPostgresAttestationLogConcurrentRoundsAreAllCounted(t *testing.T) {
 	)
 	logs := make([]*PostgresAttestationLog, instances)
 	for i := range logs {
-		logs[i] = NewPostgresAttestationLog(db)
+		logs[i] = NewPostgresAttestationLog(db, DefaultCollapseWindow)
 	}
 
 	at := time.Now().UTC().Truncate(time.Millisecond)

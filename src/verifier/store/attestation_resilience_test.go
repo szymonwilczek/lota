@@ -19,7 +19,7 @@ func restartableLog(t *testing.T, path string) (*SQLiteAttestationLog, *sql.DB) 
 	if err != nil {
 		t.Fatalf("open %s: %v", path, err)
 	}
-	return NewSQLiteAttestationLog(db), db
+	return NewSQLiteAttestationLog(db, DefaultCollapseWindow), db
 }
 
 // the standing row lives in the database: rounds after a restart extend it
@@ -60,7 +60,7 @@ func TestARestartDoesNotOpenASecondRow(t *testing.T) {
 // a row with unreadable times is left alone; the round gets its own row
 func TestARowWhoseTimesDoNotReadBackIsNotExtended(t *testing.T) {
 	db := eventsTestDB(t)
-	log := NewSQLiteAttestationLog(db)
+	log := NewSQLiteAttestationLog(db, DefaultCollapseWindow)
 	at := time.Date(2026, 9, 19, 17, 0, 0, 0, time.UTC)
 
 	for i := range 3 {
@@ -105,7 +105,7 @@ func TestARowWhoseTimesDoNotReadBackIsNotExtended(t *testing.T) {
 
 // concurrent rounds for one host: each counted exactly once
 func TestConcurrentRoundsForOneHostAreAllCounted(t *testing.T) {
-	log := NewSQLiteAttestationLog(eventsTestDB(t))
+	log := NewSQLiteAttestationLog(eventsTestDB(t), DefaultCollapseWindow)
 	at := time.Date(2026, 9, 19, 18, 0, 0, 0, time.UTC)
 
 	const rounds = 24

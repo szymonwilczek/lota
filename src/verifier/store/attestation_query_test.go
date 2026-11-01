@@ -13,7 +13,7 @@ import (
 func populatedLog(t *testing.T) (*SQLiteAttestationLog, time.Time) {
 	t.Helper()
 
-	log := NewSQLiteAttestationLog(eventsTestDB(t))
+	log := NewSQLiteAttestationLog(eventsTestDB(t), DefaultCollapseWindow)
 	at := time.Date(2026, 9, 19, 8, 0, 0, 0, time.UTC)
 
 	for i := 0; i < 8; i++ {
@@ -130,7 +130,7 @@ func TestAnEmptyQueryReadsTheWholeLog(t *testing.T) {
 
 // the batched writer must not hide the backend's capability
 func TestTheBatchedWriterForwardsAFilteredRead(t *testing.T) {
-	backend := NewSQLiteAttestationLog(eventsTestDB(t))
+	backend := NewSQLiteAttestationLog(eventsTestDB(t), DefaultCollapseWindow)
 	bl := NewBatchedAttestationLog(backend, BatchedAttestationLogConfig{})
 	defer bl.Close()
 

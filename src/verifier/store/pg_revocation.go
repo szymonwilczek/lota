@@ -398,12 +398,7 @@ type PostgresAttestationLog struct {
 
 // NewPostgresAttestationLog creates an attestation log backed by
 // the given Postgres database
-func NewPostgresAttestationLog(db *sql.DB) *PostgresAttestationLog {
-	return NewPostgresAttestationLogWindow(db, DefaultCollapseWindow)
-}
-
-// the same, with a deployment's own collapse window
-func NewPostgresAttestationLogWindow(db *sql.DB, window time.Duration) *PostgresAttestationLog {
+func NewPostgresAttestationLog(db *sql.DB, window time.Duration) *PostgresAttestationLog {
 	return &PostgresAttestationLog{db: db, window: window}
 }
 

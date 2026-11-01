@@ -46,7 +46,7 @@ func pgTestDB(t *testing.T) *sql.DB {
 	if dsn == "" {
 		t.Skip("LOTA_TEST_PG_DSN not set; skipping Postgres integration test")
 	}
-	db, err := OpenPostgresDB(dsn)
+	db, err := OpenPostgresDB(dsn, 0)
 	if err != nil {
 		t.Fatalf("OpenPostgresDB: %v", err)
 	}
@@ -76,7 +76,7 @@ func pgTestShards(t *testing.T, want int) []*sql.DB {
 
 	dbs := make([]*sql.DB, want)
 	for i := range want {
-		db, err := OpenPostgresDB(strings.TrimSpace(dsns[i]))
+		db, err := OpenPostgresDB(strings.TrimSpace(dsns[i]), 0)
 		if err != nil {
 			t.Fatalf("OpenPostgresDB(shard %d): %v", i, err)
 		}
@@ -110,9 +110,9 @@ func TestPostgresDBPoolCeiling(t *testing.T) {
 	}
 
 	// explicit ceiling is applied to the pool
-	db, err := OpenPostgresDBPool(dsn, 64)
+	db, err := OpenPostgresDB(dsn, 64)
 	if err != nil {
-		t.Fatalf("OpenPostgresDBPool: %v", err)
+		t.Fatalf("OpenPostgresDB: %v", err)
 	}
 	defer db.Close()
 	if got := db.Stats().MaxOpenConnections; got != 64 {
@@ -120,9 +120,9 @@ func TestPostgresDBPoolCeiling(t *testing.T) {
 	}
 
 	// non-positive ceiling falls back to the default
-	dbDefault, err := OpenPostgresDBPool(dsn, 0)
+	dbDefault, err := OpenPostgresDB(dsn, 0)
 	if err != nil {
-		t.Fatalf("OpenPostgresDBPool(0): %v", err)
+		t.Fatalf("OpenPostgresDB(0): %v", err)
 	}
 	defer dbDefault.Close()
 	if got := dbDefault.Stats().MaxOpenConnections; got != DefaultPGMaxOpenConns {
@@ -130,7 +130,7 @@ func TestPostgresDBPoolCeiling(t *testing.T) {
 	}
 
 	// plain constructor uses the default too
-	dbPlain, err := OpenPostgresDB(dsn)
+	dbPlain, err := OpenPostgresDB(dsn, 0)
 	if err != nil {
 		t.Fatalf("OpenPostgresDB: %v", err)
 	}
@@ -146,7 +146,7 @@ func TestPostgresMigrationsIdempotent(t *testing.T) {
 	// (advisory lock + schema_version check),
 	// not a duplicate-DDL failure
 	dsn := os.Getenv("LOTA_TEST_PG_DSN")
-	db2, err := OpenPostgresDB(dsn)
+	db2, err := OpenPostgresDB(dsn, 0)
 	if err != nil {
 		t.Fatalf("reopen: %v", err)
 	}
@@ -240,7 +240,7 @@ func TestPostgresRevocationBanAudit(t *testing.T) {
 
 func TestPostgresAttestationLog(t *testing.T) {
 	db := pgTestDB(t)
-	al := NewPostgresAttestationLog(db)
+	al := NewPostgresAttestationLog(db, DefaultCollapseWindow)
 	if err := al.Record(AttestationRecord{ClientID: "c1", Result: "VERIFY_OK", DurationMs: 1.5}); err != nil {
 		t.Fatalf("Record: %v", err)
 	}
@@ -261,14 +261,14 @@ func TestPostgresAttestationLog(t *testing.T) {
 // Two instances racing on a client's first round must not open two rows.
 func TestPostgresAttestationLogConcurrentFirstSighting(t *testing.T) {
 	db := pgTestDB(t)
-	other, err := OpenPostgresDB(os.Getenv("LOTA_TEST_PG_DSN"))
+	other, err := OpenPostgresDB(os.Getenv("LOTA_TEST_PG_DSN"), 0)
 	if err != nil {
 		t.Fatalf("OpenPostgresDB: %v", err)
 	}
 	t.Cleanup(func() { other.Close() })
 	logs := []*PostgresAttestationLog{
-		NewPostgresAttestationLog(db),
-		NewPostgresAttestationLog(other),
+		NewPostgresAttestationLog(db, DefaultCollapseWindow),
+		NewPostgresAttestationLog(other, DefaultCollapseWindow),
 	}
 
 	const clients, rounds = 20, 8
@@ -309,7 +309,7 @@ func TestPostgresAttestationLogConcurrentFirstSighting(t *testing.T) {
 
 func TestPostgresAttestationLogRecordBatch(t *testing.T) {
 	db := pgTestDB(t)
-	al := NewPostgresAttestationLog(db)
+	al := NewPostgresAttestationLog(db, DefaultCollapseWindow)
 
 	if err := al.RecordBatch(nil); err != nil {
 		t.Fatalf("RecordBatch(nil): %v", err)
@@ -512,7 +512,7 @@ func TestPostgresRefusesADatabaseThisBuildDidNotWrite(t *testing.T) {
 
 	// the pool this test opens is the production one, so it runs the
 	// migrations and the checks under the same advisory lock
-	prepared, err := OpenPostgresDB(dsn)
+	prepared, err := OpenPostgresDB(dsn, 0)
 	if err != nil {
 		t.Fatalf("OpenPostgresDB: %v", err)
 	}
@@ -525,7 +525,7 @@ func TestPostgresRefusesADatabaseThisBuildDidNotWrite(t *testing.T) {
 				t.Fatalf("restore %q: %v", stmt, err)
 			}
 		}
-		if db, err := OpenPostgresDB(dsn); err != nil {
+		if db, err := OpenPostgresDB(dsn, 0); err != nil {
 			t.Fatalf("the database must open again after the test undoes its damage: %v", err)
 		} else {
 			db.Close()
@@ -540,7 +540,7 @@ func TestPostgresRefusesADatabaseThisBuildDidNotWrite(t *testing.T) {
 		}
 		defer restore(t, fmt.Sprintf("DELETE FROM schema_version WHERE version = %d", target+1))
 
-		db, err := OpenPostgresDB(dsn)
+		db, err := OpenPostgresDB(dsn, 0)
 		if err == nil {
 			db.Close()
 			t.Fatal("a database written by a newer build must be refused")
@@ -562,7 +562,7 @@ func TestPostgresRefusesADatabaseThisBuildDidNotWrite(t *testing.T) {
 		}
 		defer restore(t, fmt.Sprintf("UPDATE schema_version SET fingerprint = '%s'", original.String))
 
-		db, err := OpenPostgresDB(dsn)
+		db, err := OpenPostgresDB(dsn, 0)
 		if err == nil {
 			db.Close()
 			t.Fatal("a database written by a build with different migrations must be refused")
@@ -579,7 +579,7 @@ func TestPostgresRefusesADatabaseThisBuildDidNotWrite(t *testing.T) {
 		}
 		defer restore(t, "DROP TABLE session_tokens")
 
-		db, err := OpenPostgresDB(dsn)
+		db, err := OpenPostgresDB(dsn, 0)
 		if err == nil {
 			db.Close()
 			t.Fatal("a database whose shape this build did not write must be refused")
@@ -601,7 +601,7 @@ func TestPostgresReadOnlyOpenVerifiesAndWritesNothing(t *testing.T) {
 		t.Skip("LOTA_TEST_PG_DSN not set; skipping Postgres integration test")
 	}
 
-	prepared, err := OpenPostgresDB(dsn)
+	prepared, err := OpenPostgresDB(dsn, 0)
 	if err != nil {
 		t.Fatalf("OpenPostgresDB: %v", err)
 	}

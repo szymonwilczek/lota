@@ -173,7 +173,7 @@ func TestCollapseRefusesEitherHalfOfAVerdictChange(t *testing.T) {
 // a round behind the last sighting (reordered, or clock stepped back) gets
 // its own row, so the anomaly shows instead of hiding in a count
 func TestARoundOlderThanTheRowIsWrittenNotFolded(t *testing.T) {
-	log := NewSQLiteAttestationLog(eventsTestDB(t))
+	log := NewSQLiteAttestationLog(eventsTestDB(t), DefaultCollapseWindow)
 	at := time.Date(2026, 9, 19, 13, 0, 0, 0, time.UTC)
 
 	for i := 0; i < 4; i++ {
@@ -262,7 +262,7 @@ func trustedRound(at time.Time) AttestationRecord {
 
 // the row counts its rounds and keeps the last one's time
 func TestSteadyAttestationHoldsOneRow(t *testing.T) {
-	log := NewSQLiteAttestationLog(eventsTestDB(t))
+	log := NewSQLiteAttestationLog(eventsTestDB(t), DefaultCollapseWindow)
 	at := time.Date(2026, 9, 19, 10, 0, 0, 0, time.UTC)
 
 	for i := 0; i < 12; i++ {
@@ -288,7 +288,7 @@ func TestSteadyAttestationHoldsOneRow(t *testing.T) {
 
 // the trusted rounds before a refusal survive it
 func TestARefusalIsWrittenImmediately(t *testing.T) {
-	log := NewSQLiteAttestationLog(eventsTestDB(t))
+	log := NewSQLiteAttestationLog(eventsTestDB(t), DefaultCollapseWindow)
 	at := time.Date(2026, 9, 19, 10, 0, 0, 0, time.UTC)
 
 	for i := 0; i < 3; i++ {
@@ -320,7 +320,7 @@ func TestARefusalIsWrittenImmediately(t *testing.T) {
 }
 
 func TestRecoveryOpensItsOwnRow(t *testing.T) {
-	log := NewSQLiteAttestationLog(eventsTestDB(t))
+	log := NewSQLiteAttestationLog(eventsTestDB(t), DefaultCollapseWindow)
 	at := time.Date(2026, 9, 19, 10, 0, 0, 0, time.UTC)
 
 	first := trustedRound(at)
@@ -344,7 +344,7 @@ func TestRecoveryOpensItsOwnRow(t *testing.T) {
 }
 
 func TestSubjectsDoNotShareARow(t *testing.T) {
-	log := NewSQLiteAttestationLog(eventsTestDB(t))
+	log := NewSQLiteAttestationLog(eventsTestDB(t), DefaultCollapseWindow)
 	at := time.Date(2026, 9, 19, 10, 0, 0, 0, time.UTC)
 
 	for i := 0; i < 4; i++ {
@@ -366,7 +366,7 @@ func TestSubjectsDoNotShareARow(t *testing.T) {
 }
 
 func TestABatchCollapsesLikeSingleRecords(t *testing.T) {
-	log := NewSQLiteAttestationLog(eventsTestDB(t))
+	log := NewSQLiteAttestationLog(eventsTestDB(t), DefaultCollapseWindow)
 	at := time.Date(2026, 9, 19, 10, 0, 0, 0, time.UTC)
 
 	batch := make([]AttestationRecord, 0, 7)
@@ -395,7 +395,7 @@ func TestABatchCollapsesLikeSingleRecords(t *testing.T) {
 
 // 0, 30 and 60 min share the first row; 90 opens a second, 120 joins it
 func TestTheWindowClosesTheRowInTheStore(t *testing.T) {
-	log := NewSQLiteAttestationLog(eventsTestDB(t))
+	log := NewSQLiteAttestationLog(eventsTestDB(t), DefaultCollapseWindow)
 	at := time.Date(2026, 9, 19, 10, 0, 0, 0, time.UTC)
 
 	for i := 0; i < 5; i++ {
@@ -417,7 +417,7 @@ func TestTheWindowClosesTheRowInTheStore(t *testing.T) {
 }
 
 func TestAZeroWindowRecordsEveryRound(t *testing.T) {
-	log := NewSQLiteAttestationLogWindow(eventsTestDB(t), 0)
+	log := NewSQLiteAttestationLog(eventsTestDB(t), 0)
 	at := time.Date(2026, 9, 19, 10, 0, 0, 0, time.UTC)
 
 	for i := 0; i < 5; i++ {
@@ -464,7 +464,7 @@ func windowFixture(t *testing.T, at time.Time) []windowBackend {
 
 	backends := []windowBackend{
 		{"memory", NewMemoryAttestationLogWindow(time.Hour)},
-		{"sqlite", NewSQLiteAttestationLogWindow(eventsTestDB(t), time.Hour)},
+		{"sqlite", NewSQLiteAttestationLog(eventsTestDB(t), time.Hour)},
 	}
 	for _, b := range backends {
 		for i, r := range rounds {
@@ -651,7 +651,7 @@ func assertSameAttestation(t *testing.T, wantName string, want AttestationRecord
 
 // a window matches instants, whatever zone wrote the row or asks
 func TestAttestationWindowIsAnInstantNotAClockReading(t *testing.T) {
-	log := NewSQLiteAttestationLog(eventsTestDB(t))
+	log := NewSQLiteAttestationLog(eventsTestDB(t), DefaultCollapseWindow)
 
 	// one instant, stamped in UTC+5, asked in UTC
 	east := time.FixedZone("UTC+5", 5*60*60)
@@ -683,7 +683,7 @@ func TestAttestationWindowIsAnInstantNotAClockReading(t *testing.T) {
 
 // a window inside a row's span returns it
 func TestAttestationWindowInsideAStandingRowReturnsIt(t *testing.T) {
-	log := NewSQLiteAttestationLog(eventsTestDB(t))
+	log := NewSQLiteAttestationLog(eventsTestDB(t), DefaultCollapseWindow)
 
 	west := time.FixedZone("UTC-7", -7*60*60)
 	at := time.Date(2026, 9, 19, 8, 0, 0, 0, time.UTC)
@@ -709,7 +709,7 @@ func TestAttestationWindowInsideAStandingRowReturnsIt(t *testing.T) {
 
 // a round stamped east of UTC reads back as the same instant and still folds
 func TestAttestationRowReadsBackAsTheInstantItHappened(t *testing.T) {
-	log := NewSQLiteAttestationLog(eventsTestDB(t))
+	log := NewSQLiteAttestationLog(eventsTestDB(t), DefaultCollapseWindow)
 
 	east := time.FixedZone("UTC+2", 2*60*60)
 	at := time.Date(2026, 9, 19, 6, 0, 0, 0, time.UTC)
@@ -744,7 +744,7 @@ func TestTheHourAClockRepeatsIsStillAnHour(t *testing.T) {
 
 	// 01:00 UTC: Warsaw falls back from 03:00 CEST to 02:00 CET
 	change := time.Date(2026, 10, 25, 0, 30, 0, 0, time.UTC)
-	log := NewSQLiteAttestationLogWindow(eventsTestDB(t), 2*time.Hour)
+	log := NewSQLiteAttestationLog(eventsTestDB(t), 2*time.Hour)
 
 	const rounds = 5
 	for i := range rounds {

@@ -826,7 +826,7 @@ func TestAttestationLogTenant(t *testing.T) {
 		log   AttestationLog
 	}{
 		{"Memory", NewMemoryAttestationLog()},
-		{"SQLite", NewSQLiteAttestationLog(db)},
+		{"SQLite", NewSQLiteAttestationLog(db, DefaultCollapseWindow)},
 	} {
 		t.Run(tc.label, func(t *testing.T) {
 			if err := tc.log.Record(AttestationRecord{
@@ -856,7 +856,7 @@ func TestAttestationLogRecordBatch(t *testing.T) {
 				t.Fatalf("OpenDB failed: %v", err)
 			}
 			t.Cleanup(func() { db.Close() })
-			return NewSQLiteAttestationLog(db)
+			return NewSQLiteAttestationLog(db, DefaultCollapseWindow)
 		}},
 	} {
 		t.Run(tc.label, func(t *testing.T) {

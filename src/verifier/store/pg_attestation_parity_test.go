@@ -38,8 +38,8 @@ func TestPostgresAndSQLiteAnswerTheSameQuestionTheSameWay(t *testing.T) {
 	// sub-microsecond on purpose
 	at := time.Date(2026, 9, 19, 9, 0, 0, 123456789, time.UTC)
 
-	pg := NewPostgresAttestationLogWindow(db, time.Hour)
-	lite := NewSQLiteAttestationLogWindow(eventsTestDB(t), time.Hour)
+	pg := NewPostgresAttestationLog(db, time.Hour)
+	lite := NewSQLiteAttestationLog(eventsTestDB(t), time.Hour)
 	for i, r := range parityRounds(at) {
 		if err := pg.Record(r); err != nil {
 			t.Fatalf("postgres: record %d: %v", i, err)
@@ -105,7 +105,7 @@ func truncateAttestationTimes(r AttestationRecord) AttestationRecord {
 // covered by a window named in another zone
 func TestPostgresHoldsTheInstantNotTheClockReading(t *testing.T) {
 	db := pgTestDB(t)
-	log := NewPostgresAttestationLogWindow(db, time.Hour)
+	log := NewPostgresAttestationLog(db, time.Hour)
 
 	east := time.FixedZone("UTC+9", 9*60*60)
 	at := time.Date(2026, 9, 19, 12, 0, 0, 0, time.UTC)
@@ -154,7 +154,7 @@ func TestPostgresWritesWhatItMayNotFold(t *testing.T) {
 	for _, c := range cases {
 		t.Run(c.what, func(t *testing.T) {
 			db := pgTestDB(t)
-			log := NewPostgresAttestationLogWindow(db, time.Hour)
+			log := NewPostgresAttestationLog(db, time.Hour)
 
 			for i := range 3 {
 				if err := log.Record(trustedRound(at.Add(time.Duration(i) * time.Minute))); err != nil {

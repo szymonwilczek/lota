@@ -27,7 +27,7 @@ func pgBaselineStore(t *testing.T) *PostgresBaselineStore {
 	if dsn == "" {
 		t.Skip("LOTA_TEST_PG_DSN not set; skipping Postgres integration test")
 	}
-	db, err := store.OpenPostgresDB(dsn)
+	db, err := store.OpenPostgresDB(dsn, 0)
 	if err != nil {
 		t.Fatalf("OpenPostgresDB: %v", err)
 	}
@@ -129,7 +129,7 @@ func TestPostgresUsedNonce(t *testing.T) {
 	if dsn == "" {
 		t.Skip("LOTA_TEST_PG_DSN not set; skipping Postgres integration test")
 	}
-	db, err := store.OpenPostgresDB(dsn)
+	db, err := store.OpenPostgresDB(dsn, 0)
 	if err != nil {
 		t.Fatalf("OpenPostgresDB: %v", err)
 	}
@@ -396,7 +396,7 @@ func TestPostgresAttestationIndependentClientsDoNotSerialize(t *testing.T) {
 	s := pgBaselineStore(t)
 
 	dsn := os.Getenv("LOTA_TEST_PG_DSN")
-	blocker, err := store.OpenPostgresDB(dsn)
+	blocker, err := store.OpenPostgresDB(dsn, 0)
 	if err != nil {
 		t.Fatalf("OpenPostgresDB (blocker): %v", err)
 	}
