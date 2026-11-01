@@ -48,8 +48,8 @@
  *   TPM error, unsupported TSS2 layer, failure to persist the baseline, or PCR14
  *   mutating away from the recorded baseline after the first run, all surface as
  *   non-zero exit.
- *   initramfs systemd unit that wraps this helper is ordered before sysroot.mount /
- *   initrd-root-fs.target so non-zero exit aborts the transition to the real root.
+ *   initrd.target only wants the wrapping unit, so the boot carries on with PCR14
+ *   unlocked. lota-agent then refuses to start, so attestation fails closed.
  *
  * Cleanup model
  *   Helper records the baseline at BASELINE_PATH on the /run tmpfs and otherwise
@@ -99,8 +99,8 @@
  * is legacy BIOS/CSM boot. LOTA requires UEFI:
  * Verifier refuses a report whose event log proves no UEFI firmware ran,
  * and PCR 0/1/7 carry nothing on such host.
- * Refusing here aborts the boot transition (the initramfs unit is ordered before
- * initrd-root-fs.target) instead of handing the agent a chain that can never attest.
+ * Refusing here leaves PCR14 unlocked, and the agent names that instead of
+ * attesting a chain that can never verify.
  *
  * Deliberately duplicated rather than shared with the agent's check:
  * this helper is standalone initramfs binary that links only tss2 and OpenSSL,
