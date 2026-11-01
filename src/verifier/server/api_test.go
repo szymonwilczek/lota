@@ -1836,7 +1836,7 @@ func TestEveryServedRouteIsAdvertised(t *testing.T) {
 		covered[matchedPattern(t, mux, endpoint)] = true
 	}
 
-	for _, pattern := range h.RegisteredRoutes() {
+	for _, pattern := range h.routes {
 		if !covered[pattern] {
 			t.Errorf("route %q is served and advertised by no endpoint",
 				pattern)
