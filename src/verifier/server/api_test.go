@@ -55,10 +55,11 @@ func TestAttestationLogEndpoint_SanitizesDetails(t *testing.T) {
 	m := metrics.New()
 	cfg := verify.DefaultConfig()
 	cfg.RequireBootEnrollment = false
-	auditLog := store.NewMemoryAuditLog()
-	attLog := store.NewMemoryAttestationLog()
-	cfg.RevocationStore = store.NewMemoryRevocationStore(auditLog)
-	cfg.BanStore = store.NewMemoryBanStore(auditLog)
+	db := testDB(t)
+	auditLog := store.NewSQLiteAuditLog(db)
+	attLog := store.NewSQLiteAttestationLog(db, store.DefaultCollapseWindow)
+	cfg.RevocationStore = store.NewSQLiteRevocationStore(db, auditLog)
+	cfg.BanStore = store.NewSQLiteBanStore(db, auditLog)
 	cfg.Metrics = m
 	v := verify.NewVerifier(cfg, aikVerifier)
 	if err := v.AddPolicy(verify.DefaultPolicy()); err != nil {
@@ -191,9 +192,10 @@ func setupTestAPIWithKeys(t *testing.T, adminKey, readerKey string) (*http.Serve
 	m := metrics.New()
 	cfg := verify.DefaultConfig()
 	cfg.RequireBootEnrollment = false
-	auditLog := store.NewMemoryAuditLog()
-	cfg.RevocationStore = store.NewMemoryRevocationStore(auditLog)
-	cfg.BanStore = store.NewMemoryBanStore(auditLog)
+	db := testDB(t)
+	auditLog := store.NewSQLiteAuditLog(db)
+	cfg.RevocationStore = store.NewSQLiteRevocationStore(db, auditLog)
+	cfg.BanStore = store.NewSQLiteBanStore(db, auditLog)
 	cfg.Metrics = m
 	v := verify.NewVerifier(cfg, aikVerifier)
 	if err := v.AddPolicy(verify.DefaultPolicy()); err != nil {
@@ -232,9 +234,10 @@ func setupTestAPIListeningWithKeys(t *testing.T, adminKey, readerKey string) (*h
 	m := metrics.New()
 	cfg := verify.DefaultConfig()
 	cfg.RequireBootEnrollment = false
-	auditLog := store.NewMemoryAuditLog()
-	cfg.RevocationStore = store.NewMemoryRevocationStore(auditLog)
-	cfg.BanStore = store.NewMemoryBanStore(auditLog)
+	db := testDB(t)
+	auditLog := store.NewSQLiteAuditLog(db)
+	cfg.RevocationStore = store.NewSQLiteRevocationStore(db, auditLog)
+	cfg.BanStore = store.NewSQLiteBanStore(db, auditLog)
 	cfg.Metrics = m
 	v := verify.NewVerifier(cfg, aikVerifier)
 	if err := v.AddPolicy(verify.DefaultPolicy()); err != nil {
@@ -1533,8 +1536,9 @@ func TestReanchorReviewEndpoints(t *testing.T) {
 	v := verify.NewVerifier(cfg, aikVerifier)
 	srv := &Server{verifier: v, addr: ":8443"}
 	mux := http.NewServeMux()
-	NewAPIHandler(mux, v, srv, store.NewMemoryAuditLog(), nil, m,
-		store.NewMemoryAttestationLog(), "admin-key", "reader-key")
+	db := testDB(t)
+	NewAPIHandler(mux, v, srv, store.NewSQLiteAuditLog(db), nil, m,
+		store.NewSQLiteAttestationLog(db, store.DefaultCollapseWindow), "admin-key", "reader-key")
 
 	// review list (reader) lists dev1
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/reanchor/review", nil)

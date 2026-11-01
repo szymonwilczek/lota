@@ -41,7 +41,7 @@ func attestWithLog(t *testing.T, clientID string, bans store.BanStore,
 func TestIntegration_AttestationRecordCarriesBannableHardwareID(t *testing.T) {
 	const clientID = "hwid-log-client"
 
-	attestLog := store.NewMemoryAttestationLog()
+	attestLog := store.NewSQLiteAttestationLog(testDB(t), store.DefaultCollapseWindow)
 	_, result := attestWithLog(t, clientID, nil, attestLog)
 	if result.Result != types.VerifyOK {
 		t.Fatalf("result = %d, want VerifyOK", result.Result)
@@ -66,12 +66,12 @@ func TestIntegration_RejectedRoundNamesTheHardwareToBan(t *testing.T) {
 	const clientID = "hwid-banned-client"
 	hwid := devicePseudonymHWID(t, clientID)
 
-	bans := store.NewMemoryBanStore()
+	bans := store.NewSQLiteBanStore(testDB(t), nil)
 	if err := bans.BanHardware(DefaultTenant, hwid, store.RevocationCheating, "op", ""); err != nil {
 		t.Fatalf("BanHardware: %v", err)
 	}
 
-	attestLog := store.NewMemoryAttestationLog()
+	attestLog := store.NewSQLiteAttestationLog(testDB(t), store.DefaultCollapseWindow)
 	_, result := attestWithLog(t, clientID, bans, attestLog)
 	if result.Result != types.VerifyBanned {
 		t.Fatalf("result = %d, want VerifyBanned", result.Result)

@@ -21,18 +21,19 @@ import (
 type scopedAPIFixture struct {
 	mux      *http.ServeMux
 	baseline *verify.BaselineStore
-	revStore *store.MemoryRevocationStore
-	banStore *store.MemoryBanStore
-	auditLog *store.MemoryAuditLog
+	revStore *store.SQLiteRevocationStore
+	banStore *store.SQLiteBanStore
+	auditLog *store.SQLiteAuditLog
 }
 
 func newScopedAPIFixture(t *testing.T, scopedKeyHash string) *scopedAPIFixture {
 	t.Helper()
 
 	baseline := verify.NewBaselineStore()
-	auditLog := store.NewMemoryAuditLog()
-	revStore := store.NewMemoryRevocationStore(auditLog)
-	banStore := store.NewMemoryBanStore(auditLog)
+	db := testDB(t)
+	auditLog := store.NewSQLiteAuditLog(db)
+	revStore := store.NewSQLiteRevocationStore(db, auditLog)
+	banStore := store.NewSQLiteBanStore(db, auditLog)
 
 	cfg := verify.DefaultConfig()
 	cfg.RequireBootEnrollment = false

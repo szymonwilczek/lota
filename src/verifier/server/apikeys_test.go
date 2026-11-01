@@ -101,9 +101,10 @@ func newScopedKeyAPI(t *testing.T, set *APIKeySet) *http.ServeMux {
 	aikVerifier := newCertVerifier(t)
 	cfg := verify.DefaultConfig()
 	cfg.RequireBootEnrollment = false
-	auditLog := store.NewMemoryAuditLog()
-	cfg.RevocationStore = store.NewMemoryRevocationStore(auditLog)
-	cfg.BanStore = store.NewMemoryBanStore(auditLog)
+	db := testDB(t)
+	auditLog := store.NewSQLiteAuditLog(db)
+	cfg.RevocationStore = store.NewSQLiteRevocationStore(db, auditLog)
+	cfg.BanStore = store.NewSQLiteBanStore(db, auditLog)
 	v := verify.NewVerifier(cfg, aikVerifier)
 	if err := v.AddPolicy(verify.DefaultPolicy()); err != nil {
 		t.Fatalf("AddPolicy(DefaultPolicy) failed: %v", err)

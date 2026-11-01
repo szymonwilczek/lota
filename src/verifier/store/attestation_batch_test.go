@@ -272,9 +272,9 @@ func TestBatchedAttestationLogCloseIdempotent(t *testing.T) {
 }
 
 // Backend that cannot batch still works through the per-record fallback.
-// It wraps MemoryAttestationLog as named field so RecordBatch is not promoted
+// It wraps SQLiteAttestationLog as named field so RecordBatch is not promoted
 // and the type is deliberately not a BatchRecorder.
-type recordOnlyLog struct{ inner *MemoryAttestationLog }
+type recordOnlyLog struct{ inner *SQLiteAttestationLog }
 
 func (r *recordOnlyLog) Record(e AttestationRecord) error { return r.inner.Record(e) }
 func (r *recordOnlyLog) QueryAttestations(limit int) []AttestationRecord {
@@ -282,7 +282,7 @@ func (r *recordOnlyLog) QueryAttestations(limit int) []AttestationRecord {
 }
 
 func TestBatchedAttestationLogFallbackWithoutBatcher(t *testing.T) {
-	backend := &recordOnlyLog{inner: NewMemoryAttestationLog()}
+	backend := &recordOnlyLog{inner: NewSQLiteAttestationLog(eventsTestDB(t), DefaultCollapseWindow)}
 	if _, isBatcher := any(backend).(BatchRecorder); isBatcher {
 		t.Fatal("test backend must not satisfy BatchRecorder")
 	}

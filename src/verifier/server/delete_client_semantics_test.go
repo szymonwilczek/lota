@@ -37,10 +37,12 @@ func TestDeleteLeavesTheDeviceAbleToReturnOnItsOwn(t *testing.T) {
 	v := verify.NewVerifier(cfg, aikVerifier)
 	srv := &Server{verifier: v, addr: ":8443"}
 
-	auditLog := store.NewMemoryAuditLog()
+	db := testDB(t)
+
+	auditLog := store.NewSQLiteAuditLog(db)
 	mux := http.NewServeMux()
 	NewAPIHandler(mux, v, srv, auditLog, nil, m,
-		store.NewMemoryAttestationLog(), "admin-key", "reader-key")
+		store.NewSQLiteAttestationLog(db, store.DefaultCollapseWindow), "admin-key", "reader-key")
 
 	req := httptest.NewRequest(http.MethodDelete, "/api/v1/clients/host-0001",
 		strings.NewReader(`{"actor":"alice@ops","reason":"suspected compromise"}`))

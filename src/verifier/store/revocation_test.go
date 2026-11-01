@@ -118,12 +118,6 @@ func testRevocationStore(t *testing.T, s RevocationStore, label string) {
 	})
 }
 
-func TestMemoryRevocationStore(t *testing.T) {
-	s := NewMemoryRevocationStore()
-	testRevocationStore(t, s, "Memory")
-	testRevocationTenant(t, s, "Memory")
-}
-
 func TestSQLiteRevocationStore(t *testing.T) {
 	db, err := OpenDB(":memory:")
 	if err != nil {
@@ -244,12 +238,6 @@ func testBanStore(t *testing.T, s BanStore, label string) {
 	})
 }
 
-func TestMemoryBanStore(t *testing.T) {
-	s := NewMemoryBanStore()
-	testBanStore(t, s, "Memory")
-	testBanStorePerTenant(t, s, "Memory")
-}
-
 func TestSQLiteBanStore(t *testing.T) {
 	db, err := OpenDB(":memory:")
 	if err != nil {
@@ -354,11 +342,6 @@ func testAuditLog(t *testing.T, l AuditLog, label string) {
 			t.Error("Expected non-empty audit log")
 		}
 	})
-}
-
-func TestMemoryAuditLog(t *testing.T) {
-	l := NewMemoryAuditLog()
-	testAuditLog(t, l, "Memory")
 }
 
 func TestSQLiteAuditLog(t *testing.T) {
@@ -775,26 +758,16 @@ func TestAuditLogTenant(t *testing.T) {
 	}
 	defer db.Close()
 
-	for _, tc := range []struct {
-		label string
-		audit AuditLog
-	}{
-		{"Memory", NewMemoryAuditLog()},
-		{"SQLite", NewSQLiteAuditLog(db)},
-	} {
-		t.Run(tc.label, func(t *testing.T) {
-			if err := tc.audit.Log("acme", "ban", "target", "cheating", "admin", ""); err != nil {
-				t.Fatalf("Log: %v", err)
-			}
-			entries := tc.audit.Query(1)
-			if len(entries) != 1 || entries[0].Tenant != "acme" {
-				t.Fatalf("Query = %+v, want one entry in tenant acme", entries)
-			}
-		})
+	audit := NewSQLiteAuditLog(db)
+	if err := audit.Log("acme", "ban", "target", "cheating", "admin", ""); err != nil {
+		t.Fatalf("Log: %v", err)
+	}
+	entries := audit.Query(1)
+	if len(entries) != 1 || entries[0].Tenant != "acme" {
+		t.Fatalf("Query = %+v, want one entry in tenant acme", entries)
 	}
 
 	// mutations record the tenant they acted in
-	audit := NewSQLiteAuditLog(db)
 	rev := NewSQLiteRevocationStore(db, audit)
 	if err := rev.Revoke("game-x", "audit-tenant-client", RevocationAdmin, "admin", ""); err != nil {
 		t.Fatalf("Revoke: %v", err)
@@ -802,7 +775,7 @@ func TestAuditLogTenant(t *testing.T) {
 	if err := rev.Unrevoke("audit-tenant-client", "appeal upheld", "test-operator", ""); err != nil {
 		t.Fatalf("Unrevoke: %v", err)
 	}
-	entries := audit.Query(2)
+	entries = audit.Query(2)
 	if len(entries) != 2 {
 		t.Fatalf("audit entries = %d, want 2", len(entries))
 	}
@@ -821,87 +794,57 @@ func TestAttestationLogTenant(t *testing.T) {
 	}
 	defer db.Close()
 
-	for _, tc := range []struct {
-		label string
-		log   AttestationLog
-	}{
-		{"Memory", NewMemoryAttestationLog()},
-		{"SQLite", NewSQLiteAttestationLog(db, DefaultCollapseWindow)},
-	} {
-		t.Run(tc.label, func(t *testing.T) {
-			if err := tc.log.Record(AttestationRecord{
-				Tenant:   "acme",
-				ClientID: "c1",
-				Result:   "ok",
-			}); err != nil {
-				t.Fatalf("Record: %v", err)
-			}
-			rs := tc.log.QueryAttestations(1)
-			if len(rs) != 1 || rs[0].Tenant != "acme" {
-				t.Fatalf("QueryAttestations = %+v, want one record in tenant acme", rs)
-			}
-		})
+	log := NewSQLiteAttestationLog(db, DefaultCollapseWindow)
+	if err := log.Record(AttestationRecord{
+		Tenant:   "acme",
+		ClientID: "c1",
+		Result:   "ok",
+	}); err != nil {
+		t.Fatalf("Record: %v", err)
+	}
+	rs := log.QueryAttestations(1)
+	if len(rs) != 1 || rs[0].Tenant != "acme" {
+		t.Fatalf("QueryAttestations = %+v, want one record in tenant acme", rs)
 	}
 }
 
 func TestAttestationLogRecordBatch(t *testing.T) {
-	for _, tc := range []struct {
-		label string
-		newer func(*testing.T) BatchRecorder
-	}{
-		{"Memory", func(*testing.T) BatchRecorder { return NewMemoryAttestationLog() }},
-		{"SQLite", func(t *testing.T) BatchRecorder {
-			db, err := OpenDB(":memory:")
-			if err != nil {
-				t.Fatalf("OpenDB failed: %v", err)
-			}
-			t.Cleanup(func() { db.Close() })
-			return NewSQLiteAttestationLog(db, DefaultCollapseWindow)
-		}},
-	} {
-		t.Run(tc.label, func(t *testing.T) {
-			br := tc.newer(t)
+	log := NewSQLiteAttestationLog(eventsTestDB(t), DefaultCollapseWindow)
 
-			// empty batch must be a no-op, not an error
-			if err := br.RecordBatch(nil); err != nil {
-				t.Fatalf("RecordBatch(nil): %v", err)
-			}
+	// empty batch must be a no-op, not an error
+	if err := log.RecordBatch(nil); err != nil {
+		t.Fatalf("RecordBatch(nil): %v", err)
+	}
 
-			batch := make([]AttestationRecord, 0, 64)
-			for i := range 64 {
-				batch = append(batch, AttestationRecord{
-					Tenant:   "acme",
-					ClientID: fmt.Sprintf("client-%02d", i),
-					Result:   "ok",
-				})
-			}
-			if err := br.RecordBatch(batch); err != nil {
-				t.Fatalf("RecordBatch: %v", err)
-			}
-
-			log, ok := br.(AttestationLog)
-			if !ok {
-				t.Fatal("BatchRecorder is not an AttestationLog")
-			}
-			rs := log.QueryAttestations(0)
-			if len(rs) != 64 {
-				t.Fatalf("QueryAttestations returned %d records, want 64", len(rs))
-			}
-
-			// every record must be durable, distinct, and timestamped
-			seen := make(map[string]bool, 64)
-			for _, r := range rs {
-				if r.Timestamp.IsZero() {
-					t.Errorf("record %s has a zero timestamp", r.ClientID)
-				}
-				if seen[r.ClientID] {
-					t.Errorf("duplicate record for %s", r.ClientID)
-				}
-				seen[r.ClientID] = true
-			}
-			if len(seen) != 64 {
-				t.Fatalf("saw %d distinct client IDs, want 64", len(seen))
-			}
+	batch := make([]AttestationRecord, 0, 64)
+	for i := range 64 {
+		batch = append(batch, AttestationRecord{
+			Tenant:   "acme",
+			ClientID: fmt.Sprintf("client-%02d", i),
+			Result:   "ok",
 		})
+	}
+	if err := log.RecordBatch(batch); err != nil {
+		t.Fatalf("RecordBatch: %v", err)
+	}
+
+	rs := log.QueryAttestations(0)
+	if len(rs) != 64 {
+		t.Fatalf("QueryAttestations returned %d records, want 64", len(rs))
+	}
+
+	// every record must be durable, distinct, and timestamped
+	seen := make(map[string]bool, 64)
+	for _, r := range rs {
+		if r.Timestamp.IsZero() {
+			t.Errorf("record %s has a zero timestamp", r.ClientID)
+		}
+		if seen[r.ClientID] {
+			t.Errorf("duplicate record for %s", r.ClientID)
+		}
+		seen[r.ClientID] = true
+	}
+	if len(seen) != 64 {
+		t.Fatalf("saw %d distinct client IDs, want 64", len(seen))
 	}
 }

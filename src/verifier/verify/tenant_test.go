@@ -296,7 +296,7 @@ func TestIntegration_HardwareBanIsPerTenant(t *testing.T) {
 	hwid := devicePseudonymHWID(t, clientID)
 
 	// banned in a DIFFERENT tenant: the client must attest cleanly
-	bans := store.NewMemoryBanStore()
+	bans := store.NewSQLiteBanStore(testDB(t), nil)
 	if err := bans.BanHardware("other-game", hwid, store.RevocationCheating, "op", ""); err != nil {
 		t.Fatalf("BanHardware(other-game): %v", err)
 	}
@@ -327,7 +327,7 @@ func TestIntegration_DefaultTenantClientHitsDefaultBans(t *testing.T) {
 
 	// certificate without an OU lands in the default tenant,
 	// so a default-tenant ban still rejects it
-	bans := store.NewMemoryBanStore()
+	bans := store.NewSQLiteBanStore(testDB(t), nil)
 	if err := bans.BanHardware(DefaultTenant, hwid, store.RevocationCheating, "op", ""); err != nil {
 		t.Fatalf("BanHardware(default): %v", err)
 	}
@@ -343,7 +343,7 @@ func TestIntegration_DefaultTenantClientHitsDefaultBans(t *testing.T) {
 func TestIntegration_TenantOnAttestationLog(t *testing.T) {
 	const clientID = "tenant-log-client"
 
-	attestLog := store.NewMemoryAttestationLog()
+	attestLog := store.NewSQLiteAttestationLog(testDB(t), store.DefaultCollapseWindow)
 	cfg := DefaultConfig()
 	cfg.RequireBootEnrollment = false
 	cfg.NonceLifetime = 1 * time.Second

@@ -28,15 +28,16 @@ func reportOnlyAPI(t *testing.T) *http.ServeMux {
 	cfg := verify.DefaultConfig()
 	cfg.RequireBootEnrollment = false
 	cfg.Metrics = m
-	auditLog := store.NewMemoryAuditLog()
-	cfg.RevocationStore = store.NewMemoryRevocationStore(auditLog)
-	cfg.BanStore = store.NewMemoryBanStore(auditLog)
+	db := testDB(t)
+	auditLog := store.NewSQLiteAuditLog(db)
+	cfg.RevocationStore = store.NewSQLiteRevocationStore(db, auditLog)
+	cfg.BanStore = store.NewSQLiteBanStore(db, auditLog)
 	v := verify.NewVerifier(cfg, nil)
 
 	srv := &Server{verifier: v, addr: ":8443", reportOnly: true}
 	mux := http.NewServeMux()
 	NewAPIHandler(mux, v, srv, auditLog, logging.Nop(), m,
-		store.NewMemoryAttestationLog(), "admin-key", "reader-key")
+		store.NewSQLiteAttestationLog(db, store.DefaultCollapseWindow), "admin-key", "reader-key")
 	return mux
 }
 

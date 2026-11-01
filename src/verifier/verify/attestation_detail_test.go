@@ -18,7 +18,7 @@ import (
 func recordOneRound(t *testing.T, clientID string, report func(nonce [types.NonceSize]byte) []byte) store.AttestationRecord {
 	t.Helper()
 
-	attestLog := store.NewMemoryAttestationLog()
+	attestLog := store.NewSQLiteAttestationLog(testDB(t), store.DefaultCollapseWindow)
 	cfg := DefaultConfig()
 	cfg.RequireBootEnrollment = false
 	cfg.NonceLifetime = 1 * time.Second
@@ -111,7 +111,7 @@ func TestRecordCarriesTheAddressTheReportCameFrom(t *testing.T) {
 	const clientID = "detail-addr-client"
 	const peer = "192.0.2.10:39412"
 
-	attestLog := store.NewMemoryAttestationLog()
+	attestLog := store.NewSQLiteAttestationLog(testDB(t), store.DefaultCollapseWindow)
 	cfg := DefaultConfig()
 	cfg.RequireBootEnrollment = false
 	cfg.NonceLifetime = 1 * time.Second

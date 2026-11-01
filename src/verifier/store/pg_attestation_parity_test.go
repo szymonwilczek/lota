@@ -179,3 +179,22 @@ func TestPostgresWritesWhatItMayNotFold(t *testing.T) {
 		})
 	}
 }
+
+// reader-visible fields; the row id is the backend's own
+func assertSameAttestation(t *testing.T, wantName string, want AttestationRecord, gotName string, got AttestationRecord) {
+	t.Helper()
+
+	if !want.Timestamp.Equal(got.Timestamp) || !want.LastSeen.Equal(got.LastSeen) {
+		t.Errorf("%s says %v..%v, %s says %v..%v",
+			wantName, want.Timestamp, want.LastSeen, gotName, got.Timestamp, got.LastSeen)
+	}
+	if want.Rounds != got.Rounds {
+		t.Errorf("%s counts %d rounds, %s counts %d", wantName, want.Rounds, gotName, got.Rounds)
+	}
+	if want.Result != got.Result || want.ClientID != got.ClientID ||
+		want.Tenant != got.Tenant || want.HardwareID != got.HardwareID ||
+		want.PCR14 != got.PCR14 || want.KernelHash != got.KernelHash ||
+		want.Details != got.Details {
+		t.Errorf("%s says %+v, %s says %+v", wantName, want, gotName, got)
+	}
+}

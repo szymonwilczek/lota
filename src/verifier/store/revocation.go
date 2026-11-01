@@ -19,7 +19,6 @@ package store
 
 import (
 	"errors"
-	"sync"
 	"time"
 )
 
@@ -90,92 +89,4 @@ type RevocationStore interface {
 
 	// returns all active revocations
 	ListRevocations() []RevocationEntry
-}
-
-// implements RevocationStore using an in-memory map
-// for testing
-type MemoryRevocationStore struct {
-	mu          sync.RWMutex
-	revocations map[string]*RevocationEntry // clientID -> entry
-	auditLog    AuditLog                    // optional audit trail
-}
-
-// creates an empty in-memory revocation store
-// if auditLog is non-nil, all mutations are recorded in the audit trail
-func NewMemoryRevocationStore(auditLog ...AuditLog) *MemoryRevocationStore {
-	s := &MemoryRevocationStore{
-		revocations: make(map[string]*RevocationEntry),
-	}
-	if len(auditLog) > 0 {
-		s.auditLog = auditLog[0]
-	}
-	return s
-}
-
-func (s *MemoryRevocationStore) Revoke(tenant, clientID string, reason RevocationReason, revokedBy, note string) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	if _, exists := s.revocations[clientID]; exists {
-		return ErrAlreadyRevoked
-	}
-
-	s.revocations[clientID] = &RevocationEntry{
-		ClientID:  clientID,
-		Tenant:    tenant,
-		Reason:    reason,
-		RevokedAt: time.Now().UTC(),
-		RevokedBy: revokedBy,
-		Note:      note,
-	}
-
-	if s.auditLog != nil {
-		if err := s.auditLog.Log(tenant, "revoke", clientID, string(reason), revokedBy, note); err != nil {
-			return err
-		}
-	}
-
-	return nil
-}
-
-func (s *MemoryRevocationStore) IsRevoked(clientID string) (*RevocationEntry, bool) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-
-	entry, exists := s.revocations[clientID]
-	if !exists {
-		return nil, false
-	}
-	return entry, true
-}
-
-func (s *MemoryRevocationStore) Unrevoke(clientID, reason, actor, note string) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	entry, exists := s.revocations[clientID]
-	if !exists {
-		return ErrNotRevoked
-	}
-
-	delete(s.revocations, clientID)
-
-	if s.auditLog != nil {
-		if err := s.auditLog.Log(entry.Tenant, "unrevoke", clientID, reason, actor, note); err != nil {
-			return err
-		}
-	}
-
-	return nil
-}
-
-func (s *MemoryRevocationStore) ListRevocations() []RevocationEntry {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-
-	entries := make([]RevocationEntry, 0, len(s.revocations))
-	for _, entry := range s.revocations {
-		entries = append(entries, *entry)
-	}
-	return entries
 }

@@ -21,13 +21,14 @@ func inventoryFixture(t *testing.T, clients ...string) *http.ServeMux {
 	t.Helper()
 
 	baseline := verify.NewBaselineStore()
-	auditLog := store.NewMemoryAuditLog()
+	db := testDB(t)
+	auditLog := store.NewSQLiteAuditLog(db)
 
 	cfg := verify.DefaultConfig()
 	cfg.RequireBootEnrollment = false
 	cfg.BaselineStore = baseline
-	cfg.RevocationStore = store.NewMemoryRevocationStore(auditLog)
-	cfg.BanStore = store.NewMemoryBanStore(auditLog)
+	cfg.RevocationStore = store.NewSQLiteRevocationStore(db, auditLog)
+	cfg.BanStore = store.NewSQLiteBanStore(db, auditLog)
 
 	v := verify.NewVerifier(cfg, nil)
 	if err := v.AddPolicy(verify.DefaultPolicy()); err != nil {
@@ -44,7 +45,7 @@ func inventoryFixture(t *testing.T, clients ...string) *http.ServeMux {
 	}
 
 	mux := http.NewServeMux()
-	NewAPIHandler(mux, v, nil, auditLog, nil, nil, store.NewMemoryAttestationLog(), "", "")
+	NewAPIHandler(mux, v, nil, auditLog, nil, nil, store.NewSQLiteAttestationLog(db, store.DefaultCollapseWindow), "", "")
 	return mux
 }
 
@@ -103,13 +104,14 @@ func TestListClientsPagesTheDurableRecord(t *testing.T) {
 // not from this instance's session history.
 func TestClientInfoReportsTheFleetsLastAttestation(t *testing.T) {
 	baseline := verify.NewBaselineStore()
-	auditLog := store.NewMemoryAuditLog()
+	db := testDB(t)
+	auditLog := store.NewSQLiteAuditLog(db)
 
 	cfg := verify.DefaultConfig()
 	cfg.RequireBootEnrollment = false
 	cfg.BaselineStore = baseline
-	cfg.RevocationStore = store.NewMemoryRevocationStore(auditLog)
-	cfg.BanStore = store.NewMemoryBanStore(auditLog)
+	cfg.RevocationStore = store.NewSQLiteRevocationStore(db, auditLog)
+	cfg.BanStore = store.NewSQLiteBanStore(db, auditLog)
 
 	v := verify.NewVerifier(cfg, nil)
 	if err := v.AddPolicy(verify.DefaultPolicy()); err != nil {

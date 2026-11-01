@@ -202,10 +202,11 @@ func TestEnrollmentPageLifecycleExamplesRunAsPrinted(t *testing.T) {
 	cfg.Metrics = m
 	v := verify.NewVerifier(cfg, newCertVerifier(t))
 	srv := &Server{verifier: v, addr: ":8443"}
-	auditLog := store.NewMemoryAuditLog()
+	db := testDB(t)
+	auditLog := store.NewSQLiteAuditLog(db)
 	mux := http.NewServeMux()
 	NewAPIHandler(mux, v, srv, auditLog, nil, m,
-		store.NewMemoryAttestationLog(), adminKey, "reader-key")
+		store.NewSQLiteAttestationLog(db, store.DefaultCollapseWindow), adminKey, "reader-key")
 
 	// off-host the API is HTTPS under a deployment CA no system store holds
 	ts := httptest.NewTLSServer(mux)

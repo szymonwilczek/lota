@@ -6,7 +6,6 @@ package store
 import (
 	"bytes"
 	"database/sql"
-	"fmt"
 	"io"
 	"log/slog"
 	"path/filepath"
@@ -437,17 +436,8 @@ func TestAZeroWindowRecordsEveryRound(t *testing.T) {
 	}
 }
 
-// one backend holding the fixture rounds
-type windowBackend struct {
-	name string
-	log  interface {
-		AttestationLog
-		AttestationQuerier
-	}
-}
-
-// standing row, one refusal, recovery; recorded into every backend
-func windowFixture(t *testing.T, at time.Time) []windowBackend {
+// standing row, one refusal, recovery
+func windowFixture(t *testing.T, at time.Time) *SQLiteAttestationLog {
 	t.Helper()
 
 	rounds := make([]AttestationRecord, 0, 8)
@@ -462,18 +452,13 @@ func windowFixture(t *testing.T, at time.Time) []windowBackend {
 		rounds = append(rounds, trustedRound(at.Add(time.Duration(20+i)*time.Minute)))
 	}
 
-	backends := []windowBackend{
-		{"memory", NewMemoryAttestationLogWindow(time.Hour)},
-		{"sqlite", NewSQLiteAttestationLog(eventsTestDB(t), time.Hour)},
-	}
-	for _, b := range backends {
-		for i, r := range rounds {
-			if err := b.log.Record(r); err != nil {
-				t.Fatalf("%s: record %d: %v", b.name, i, err)
-			}
+	log := NewSQLiteAttestationLog(eventsTestDB(t), time.Hour)
+	for i, r := range rounds {
+		if err := log.Record(r); err != nil {
+			t.Fatalf("record %d: %v", i, err)
 		}
 	}
-	return backends
+	return log
 }
 
 // a row's edges are inside the window; a nanosecond past either is not
@@ -545,19 +530,18 @@ func TestWindowEdgesAreInclusive(t *testing.T) {
 		},
 	}
 
-	for _, b := range windowFixture(t, at) {
-		for _, c := range cases {
-			t.Run(fmt.Sprintf("%s/%s", b.name, c.what), func(t *testing.T) {
-				got := b.log.QueryAttestationsFiltered(c.q)
-				if len(got) != c.count {
-					t.Errorf("%d rows, want %d", len(got), c.count)
-					for i := range got {
-						t.Logf("  %v..%v %s rounds=%d",
-							got[i].Timestamp, got[i].LastSeen, got[i].Result, got[i].Rounds)
-					}
+	log := windowFixture(t, at)
+	for _, c := range cases {
+		t.Run(c.what, func(t *testing.T) {
+			got := log.QueryAttestationsFiltered(c.q)
+			if len(got) != c.count {
+				t.Errorf("%d rows, want %d", len(got), c.count)
+				for i := range got {
+					t.Logf("  %v..%v %s rounds=%d",
+						got[i].Timestamp, got[i].LastSeen, got[i].Result, got[i].Rounds)
 				}
-			})
-		}
+			}
+		})
 	}
 }
 
@@ -587,65 +571,14 @@ func TestNarrowedReadsAnswerWhatWasAsked(t *testing.T) {
 		}, 0},
 	}
 
-	for _, b := range windowFixture(t, at) {
-		for _, c := range cases {
-			t.Run(fmt.Sprintf("%s/%s", b.name, c.what), func(t *testing.T) {
-				got := b.log.QueryAttestationsFiltered(c.q)
-				if len(got) != c.count {
-					t.Errorf("%d rows, want %d", len(got), c.count)
-				}
-			})
-		}
-	}
-}
-
-// same rounds, same query: rows match field for field across backends
-func TestBackendsAnswerTheSameQuestionTheSameWay(t *testing.T) {
-	at := time.Date(2026, 9, 19, 9, 0, 0, 0, time.UTC)
-	backends := windowFixture(t, at)
-
-	queries := []AttestationQuery{
-		{},
-		{Since: at.Add(time.Minute), Until: at.Add(2 * time.Minute)},
-		{Since: at.Add(9 * time.Minute), Until: at.Add(21 * time.Minute)},
-		{EventsOnly: true},
-		{Result: "ok"},
-		{ClientID: "c1", Limit: 2},
-		{Tenant: "alpha", Since: at.Add(-time.Hour)},
-	}
-
-	for _, q := range queries {
-		want := backends[0].log.QueryAttestationsFiltered(q)
-		for _, b := range backends[1:] {
-			got := b.log.QueryAttestationsFiltered(q)
-			if len(got) != len(want) {
-				t.Errorf("%+v: %s returned %d rows, %s returned %d",
-					q, b.name, len(got), backends[0].name, len(want))
-				continue
+	log := windowFixture(t, at)
+	for _, c := range cases {
+		t.Run(c.what, func(t *testing.T) {
+			got := log.QueryAttestationsFiltered(c.q)
+			if len(got) != c.count {
+				t.Errorf("%d rows, want %d", len(got), c.count)
 			}
-			for i := range got {
-				assertSameAttestation(t, backends[0].name, want[i], b.name, got[i])
-			}
-		}
-	}
-}
-
-// reader-visible fields; the row id is the backend's own
-func assertSameAttestation(t *testing.T, wantName string, want AttestationRecord, gotName string, got AttestationRecord) {
-	t.Helper()
-
-	if !want.Timestamp.Equal(got.Timestamp) || !want.LastSeen.Equal(got.LastSeen) {
-		t.Errorf("%s says %v..%v, %s says %v..%v",
-			wantName, want.Timestamp, want.LastSeen, gotName, got.Timestamp, got.LastSeen)
-	}
-	if want.Rounds != got.Rounds {
-		t.Errorf("%s counts %d rounds, %s counts %d", wantName, want.Rounds, gotName, got.Rounds)
-	}
-	if want.Result != got.Result || want.ClientID != got.ClientID ||
-		want.Tenant != got.Tenant || want.HardwareID != got.HardwareID ||
-		want.PCR14 != got.PCR14 || want.KernelHash != got.KernelHash ||
-		want.Details != got.Details {
-		t.Errorf("%s says %+v, %s says %+v", wantName, want, gotName, got)
+		})
 	}
 }
 
