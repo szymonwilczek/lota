@@ -12,7 +12,6 @@ macro LOTA_AC_GAME_HASH_SIZE                   = 32
 macro LOTA_AC_RUNTIME_MEASURE_SIZE             = 32
 macro LOTA_AC_DOMAIN_VERSION_V1                = 1
 macro LOTA_AC_DOMAIN_VERSION_CURRENT           = 1
-macro LOTA_AC_DEFAULT_HEARTBEAT_SEC            = 30
 macro LOTA_AC_FILE_EAC                         = "lota-ac-eac.bin"
 macro LOTA_AC_FILE_BATTLEYE                    = "lota-ac-battleye.bin"
 enum lota_ac_provider size=4
@@ -25,17 +24,16 @@ enum lota_ac_state size=4
 	LOTA_AC_STATE_UNTRUSTED                  = 3
 	LOTA_AC_STATE_ERROR                      = 4
 macro LOTA_AC_ERR_BASE                         = -1000
-struct lota_ac_config size=64 align=8
+struct lota_ac_config size=56 align=8
 	struct_size                      off=0 size=8
 	provider                         off=8 size=4
 	game_id                          off=16 size=8
-	heartbeat_interval_sec           off=24 size=4
-	required_flags                   off=28 size=4
-	direct                           off=32 size=4
-	token_dir                        off=40 size=8
-	socket_path                      off=48 size=8
-	publisher_profile                off=56 size=8
-macro LOTA_AC_CONFIG_SIZE_MIN                  = 64
+	required_flags                   off=24 size=4
+	direct                           off=28 size=4
+	token_dir                        off=32 size=8
+	socket_path                      off=40 size=8
+	publisher_profile                off=48 size=8
+macro LOTA_AC_CONFIG_SIZE_MIN                  = 56
 struct lota_ac_heartbeat_wire size=110 align=1
 	magic                            off=0 size=4
 	version                          off=4 size=1
