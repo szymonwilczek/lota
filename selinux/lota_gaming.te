@@ -7,7 +7,7 @@
 # LOTA attestation status. Rules are conditional on type existence.
 #
 
-policy_module(lota_gaming, 0.1.0)
+policy_module(lota_gaming, 1.0.0)
 
 #
 # Tunables
