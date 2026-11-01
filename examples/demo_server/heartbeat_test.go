@@ -94,7 +94,7 @@ func newSignedHeartbeat(t *testing.T, key *rsa.PrivateKey,
 		lotaFlags:     0x07,
 		timestamp:     uint64(time.Now().Unix()),
 		gameIDHash:    computeGameBindingHash(testGameID, testAnticheatExeDigest),
-		domainVersion: domainVersionV2,
+		domainVersion: domainVersion,
 		runtimeMeas:   testRuntimeMeasure,
 	}
 	if mutate != nil {

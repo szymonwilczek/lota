@@ -45,13 +45,10 @@ extern "C" {
  * wire; verifier rejects anything outside its accepted set. New string variants
  * must allocate the next integer instead of silently replacing an existing one.
  *
- * V1: "lota-ac-game-binding:v2\\0" + "lota-ac-heartbeat:v1\\0"
- * V2: "lota-ac-game-binding:v2\\0" + "lota-ac-heartbeat:v2\\0"
- *
+ * V1: "lota-ac-game-binding:v2\\0" + "lota-ac-heartbeat:v2\\0"
  */
 #define LOTA_AC_DOMAIN_VERSION_V1 1u
-#define LOTA_AC_DOMAIN_VERSION_V2 2u
-#define LOTA_AC_DOMAIN_VERSION_CURRENT LOTA_AC_DOMAIN_VERSION_V2
+#define LOTA_AC_DOMAIN_VERSION_CURRENT LOTA_AC_DOMAIN_VERSION_V1
 
 /* default heartbeat interval in seconds */
 #define LOTA_AC_DEFAULT_HEARTBEAT_SEC 30

@@ -33,9 +33,9 @@ const (
 	lachMaxToken               = 1608
 	lachMaxPacket              = lachHeaderSize + lachMaxToken
 
-	// V2 binds the runtime measurement into the heartbeat nonce
-	heartbeatNonceDomainV2 = "lota-ac-heartbeat:v2\x00"
-	domainVersionV2        = 2
+	// The heartbeat nonce binds the runtime measurement
+	heartbeatNonceDomain = "lota-ac-heartbeat:v2\x00"
+	domainVersion        = 1
 
 	// Runtime measures every file-backed loaded object.
 	// Each object yields a content digest under runtimeObjectDomain.
@@ -215,7 +215,7 @@ func parseHeartbeat(buf []byte) (*lachHeader, []byte, error) {
 	hdr.domainVersion = binary.LittleEndian.Uint32(buf[74:78])
 	copy(hdr.runtimeMeas[:], buf[78:110])
 
-	if hdr.domainVersion != domainVersionV2 {
+	if hdr.domainVersion != domainVersion {
 		return nil, nil, &rejectErr{msg: fmt.Sprintf("unsupported domain_version %d",
 			hdr.domainVersion)}
 	}
@@ -236,7 +236,7 @@ func parseHeartbeat(buf []byte) (*lachHeader, []byte, error) {
 // would no longer match the nonce the server expects.
 func computeHeartbeatNonce(hdr *lachHeader) [32]byte {
 	h := sha256.New()
-	_, _ = h.Write([]byte(heartbeatNonceDomainV2))
+	_, _ = h.Write([]byte(heartbeatNonceDomain))
 	_, _ = h.Write(hdr.sessionID[:])
 	_, _ = h.Write([]byte{hdr.provider})
 	var u32 [4]byte
@@ -250,7 +250,7 @@ func computeHeartbeatNonce(hdr *lachHeader) [32]byte {
 	_, _ = h.Write(hdr.gameIDHash[:])
 	binary.LittleEndian.PutUint32(u32[:], hdr.domainVersion)
 	_, _ = h.Write(u32[:])
-	// V2 binds the runtime measurement
+	// the nonce binds the runtime measurement
 	_, _ = h.Write(hdr.runtimeMeas[:])
 	var out [32]byte
 	copy(out[:], h.Sum(nil))

@@ -52,14 +52,11 @@ struct lota_ac_domain_strings {
 	uint32_t version;
 	const char *game_binding;
 	const char *heartbeat_nonce;
-	int bind_runtime; /* V2+: nonce also binds the runtime measurement */
 };
 
 static const struct lota_ac_domain_strings lota_ac_domain_table[] = {
 	{ LOTA_AC_DOMAIN_VERSION_V1, "lota-ac-game-binding:v2",
-	  "lota-ac-heartbeat:v1", 0 },
-	{ LOTA_AC_DOMAIN_VERSION_V2, "lota-ac-game-binding:v2",
-	  "lota-ac-heartbeat:v2", 1 },
+	  "lota-ac-heartbeat:v2" },
 };
 
 static const struct lota_ac_domain_strings *
@@ -816,15 +813,11 @@ static int compute_heartbeat_nonce(
 	unsigned int out_len = LOTA_NONCE_SIZE;
 	int ok;
 
-	if (!out_nonce || !session_id || !game_id_hash)
+	if (!out_nonce || !session_id || !game_id_hash || !runtime_measure)
 		return -EINVAL;
 
 	dom = lota_ac_domain_lookup(domain_version);
 	if (!dom)
-		return -EINVAL;
-
-	/* runtime-binding domains (V2+) require the measurement */
-	if (dom->bind_runtime && !runtime_measure)
 		return -EINVAL;
 
 	ctx = EVP_MD_CTX_new();
@@ -845,15 +838,9 @@ static int compute_heartbeat_nonce(
 	     EVP_DigestUpdate(ctx, flags_le, sizeof(flags_le)) &&
 	     EVP_DigestUpdate(ctx, le64, sizeof(le64)) &&
 	     EVP_DigestUpdate(ctx, game_id_hash, LOTA_AC_GAME_HASH_SIZE) &&
-	     EVP_DigestUpdate(ctx, ver_le, sizeof(ver_le));
-
-	/*
-	 * runtime measurement is appended only for domains that bind it,
-	 * so V1 nonces stay byte-for-byte identical to their frozen layout
-	 */
-	if (ok && dom->bind_runtime)
-		ok = EVP_DigestUpdate(ctx, runtime_measure,
-				      LOTA_AC_RUNTIME_MEASURE_SIZE);
+	     EVP_DigestUpdate(ctx, ver_le, sizeof(ver_le)) &&
+	     EVP_DigestUpdate(ctx, runtime_measure,
+			      LOTA_AC_RUNTIME_MEASURE_SIZE);
 
 	ok = ok && EVP_DigestFinal_ex(ctx, out_nonce, &out_len);
 
