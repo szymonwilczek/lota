@@ -31,7 +31,7 @@ struct tpm_context;
  * publisher, so the two cannot correlate the machine between them.
  */
 #define LOTA_ENROLL_STATE_MAGIC 0x4C455354 /* "LEST" */
-#define LOTA_ENROLL_STATE_VERSION 2
+#define LOTA_ENROLL_STATE_VERSION 1
 
 /*
  * Enrollment state: the CA endpoint a successful enrollment used plus the
@@ -40,9 +40,9 @@ struct tpm_context;
  * --reenroll reuse the endpoint with no re-typed CA arguments, and lets the
  * daemon tell when a local AIK rotation has outdated the stored certificate.
  *
- * Version 2 appends the enrollment token so --reenroll and automatic certificate
- * renewal keep presenting it.
- * Loader requires the current record: a short or older one is refused, never
+ * The enrollment token lets --reenroll and automatic certificate renewal keep
+ * presenting it.
+ * Loader requires the current record: a short or foreign one is refused, never
  * re-enrolled over.
  * Record is root-only 0600: the token is tenant-admission secret.
  */
