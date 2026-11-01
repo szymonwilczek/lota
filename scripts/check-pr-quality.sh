@@ -39,7 +39,7 @@ intended one: "/" joins two surfaces, ": " names a submodule. Notes do not fail.
 
 Hotpath rule is either "required" (the change must touch a companion doc or
 the commit must carry a "Docs-Not-Needed: <reason>" trailer) or "recommended"
-(a missing doc only warns). The commit type caps the tier: an infrastructure
+(a missing doc prints a note). The commit type caps the tier: an infrastructure
 type (ci, build, test, chore, style, refactor, perf, release) is capped at
 recommended, and docs/license/gitignore are exempt. See
 .github/pr-quality-hotpaths.txt.
@@ -120,39 +120,18 @@ is_test_only_path() {
     return 1
 }
 
-# does any hot glob in the manifest match one of the given files?
-files_touch_hotpath() {
-    local manifest=$1
-    shift
-    local -a files=("$@")
-    local tier hot_globs rest hot_glob path
-    local -a hot_patterns
-
-    while IFS='|' read -r tier hot_globs rest; do
-	[[ -z ${tier// /} || ${tier:0:1} == "#" ]] && continue
-	read -r -a hot_patterns <<<"$hot_globs"
-	for path in "${files[@]}"; do
-	    for hot_glob in "${hot_patterns[@]}"; do
-		[[ $path == $hot_glob ]] && return 0
-	    done
-	done
-    done <"$manifest"
-
-    return 1
-}
-
 # Classify one commit against the manifest.
 # Args: <commit> <manifest> <doc-pool files...>
 # doc pool is the commit's own files (commit mode) or the aggregate
 # pull-request diff (pr-diff mode);
 # doc there satisfies a required rule.
-# Returns 1 only on an unwaived required miss; recommended misses warn.
+# Returns 1 only on an unwaived required miss; recommended misses print a note.
 classify_commit() {
     local commit=$1 manifest=$2
     shift 2
     local -a doc_pool=("$@")
 
-    local type cap reason
+    local type cap
     type=$(commit_type "$commit")
     [[ " $EXEMPT_TYPES " == *" $type "* ]] && return 0
 
@@ -168,18 +147,8 @@ classify_commit() {
     done
     ((${#effective_files[@]} == 0)) && return 0
 
-    # explicit Docs-Not-Needed:
-    # trailer waives the requirement for this commit;
-    # note it once if it actually covers a hotpath change
-    reason=$(docs_not_needed_reason "$commit")
-    if [[ -n $reason ]]; then
-	if files_touch_hotpath "$manifest" "${effective_files[@]}"; then
-	    printf 'docs waived: %s %s\n' \
-		   "$(short_commit "$commit")" "$(commit_subject "$commit")" >&2
-	    printf '  Docs-Not-Needed: %s\n' "$reason" >&2
-	fi
-	return 0
-    fi
+    # explicit Docs-Not-Needed: trailer settles the commit
+    [[ -n $(docs_not_needed_reason "$commit") ]] && return 0
 
     local tier hot_globs doc_globs why eff doc_ok failed=0
     local -a hot_patterns doc_patterns hot_hits
@@ -216,19 +185,21 @@ classify_commit() {
 	eff=$tier
 	[[ $cap == "recommended" && $eff == "required" ]] && eff="recommended"
 
-	if [[ $eff == "required" ]]; then
-	    failed=1
-	    printf 'required docs missing: %s %s\n' \
-		   "$(short_commit "$commit")" "$(commit_subject "$commit")" >&2
-	else
-	    printf 'recommended docs (not blocking): %s %s\n' \
-		   "$(short_commit "$commit")" "$(commit_subject "$commit")" >&2
+	if [[ $eff != "required" ]]; then
+	    printf 'note: %s: docs not updated: %s\n' \
+		   "$(short_commit "$commit")" "$why"
+	    printf 'note:   update %s or add a "Docs-Not-Needed: <reason>" trailer\n' \
+		   "${doc_patterns[*]}"
+	    continue
 	fi
+
+	failed=1
+	printf 'required docs missing: %s %s\n' \
+	       "$(short_commit "$commit")" "$(commit_subject "$commit")" >&2
 	printf '  reason: %s\n' "$why" >&2
 	printf '  hotpath files:\n' >&2
 	printf '    %s\n' "${hot_hits[@]}" >&2
-	printf '  %s one of:\n' \
-	       "$([[ $eff == required ]] && printf update || printf consider)" >&2
+	printf '  update one of:\n' >&2
 	printf '    %s\n' "${doc_patterns[@]}" >&2
 	printf '  or record a "Docs-Not-Needed: <reason>" trailer if no docs are warranted\n' >&2
     done <"$manifest"

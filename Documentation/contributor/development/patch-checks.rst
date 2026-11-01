@@ -219,9 +219,9 @@ the companion docs that describe them and carries a tier:
   These cover the documented contracts: TPM enrollment, verifier policy, BPF
   LSM enforcement, SDK token formats, deployment policy, and operator
   provisioning.
-* ``recommended`` -- a missing companion doc only warns, never fails. These
-  cover process surfaces that seldom change a contract: CI, build, the gate
-  scripts, and dependency manifests.
+* ``recommended`` -- a missing companion doc prints a note naming the docs,
+  never fails. These cover process surfaces that seldom change a contract: CI,
+  build, the gate scripts, and dependency manifests.
 
 The commit type (the ``type:`` subject prefix) caps the tier. An
 infrastructure type -- ``ci``, ``build``, ``test``, ``tests``, ``chore``,
@@ -229,8 +229,8 @@ infrastructure type -- ``ci``, ``build``, ``test``, ``tests``, ``chore``,
 even against a required rule; ``docs``, ``license``, and ``gitignore`` are
 exempt; module-scoped commits (``agent:``, ``bpf:``, ``verifier:``, ...) and
 ``treewide:`` take the tier of the rule. A ``Docs-Not-Needed: <reason>``
-trailer with a non-empty reason waives the requirement for the commit it sits
-on and is recorded in history.
+trailer with a non-empty reason settles the commit it sits on for both tiers:
+nothing is printed, and the reason stays in history.
 
 In ``--pr-diff`` mode a companion doc anywhere in the pull-request diff
 satisfies a required rule, so a documentation commit can accompany a code
