@@ -6,7 +6,7 @@
  * Binds, per protected PID, the kernel-anchored runtime image digest of that
  * process (see lota_runtime_image_measure.h), so the quote attests not just
  * which processes are protected but what code each of them is actually running:
- *   SHA256("lota-runtime-protect-pids:v2\0" || count_LE ||
+ *   SHA256("lota-runtime-protect-pids:v1\0" || count_LE ||
  *          pid0_LE || image0[32] || pid1_LE || image1[32] || ...)
  *
  * The PID list must be sorted in strictly increasing order.
@@ -61,7 +61,7 @@ lota_compute_runtime_protect_digest(const uint32_t *pids,
 				    const uint8_t (*image_digests)[32],
 				    uint32_t pid_count, uint8_t out_digest[32])
 {
-	static const uint8_t domain[] = "lota-runtime-protect-pids:v2\0";
+	static const uint8_t domain[] = "lota-runtime-protect-pids:v1\0";
 	EVP_MD_CTX *mdctx = NULL;
 	unsigned int out_len = 0;
 	uint8_t le_u32[4];

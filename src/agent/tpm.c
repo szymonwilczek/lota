@@ -2321,12 +2321,9 @@ int tpm_pcr_extend(struct tpm_context *ctx, uint32_t pcr_index,
  * Domain-separation tag for the PCR14 boot commitment.
  *
  * The string is version-tagged so a change of derivation cannot collide
- * with a deployed baseline: v2 commits to the agent hash alone, where v1
- * also folded in the TPM's resetCount and restartCount.
- * Host that still runs a v1 agent therefore extends a value no v2 verifier
- * derives, and is refused.
+ * with a deployed baseline. The commitment covers the agent hash alone.
  */
-#define TPM_BOOT_COMMITMENT_TAG "LOTA-PCR14-BOOT-COMMITMENT-v2"
+#define TPM_BOOT_COMMITMENT_TAG "LOTA-PCR14-BOOT-COMMITMENT-v1"
 
 /*
  * Domain-separation tag for the PCR14 initramfs lock. Mirrors

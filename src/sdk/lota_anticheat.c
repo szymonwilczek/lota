@@ -55,8 +55,8 @@ struct lota_ac_domain_strings {
 };
 
 static const struct lota_ac_domain_strings lota_ac_domain_table[] = {
-	{ LOTA_AC_DOMAIN_VERSION_V1, "lota-ac-game-binding:v2",
-	  "lota-ac-heartbeat:v2" },
+	{ LOTA_AC_DOMAIN_VERSION_V1, "lota-ac-game-binding:v1",
+	  "lota-ac-heartbeat:v1" },
 };
 
 static const struct lota_ac_domain_strings *
@@ -238,7 +238,7 @@ static int compute_game_id_hash(const char *game_id,
  *
  * See lota_anticheat.h for the canonical layout.
  */
-#define LOTA_AC_RUNTIME_MEASURE_DOMAIN "lota-ac-runtime-measure:v2"
+#define LOTA_AC_RUNTIME_MEASURE_DOMAIN "lota-ac-runtime-measure:v1"
 #define LOTA_AC_RUNTIME_OBJECT_DOMAIN "lota-ac-runtime-object:v1"
 #define LOTA_AC_RUNTIME_MAX_SEGS 16
 #define LOTA_AC_RUNTIME_MAX_OBJS 256

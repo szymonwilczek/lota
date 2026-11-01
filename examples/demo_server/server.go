@@ -252,7 +252,7 @@ func parseExpectedGames(spec string, anticheatExeDigest [32]byte,
 // hash that lota_ac_compute_game_binding_hash() (src/sdk/lota_anticheat.c)
 // stamps into the LACH header. The C helper hashes
 //
-//	SHA-256("lota-ac-game-binding:v2" || 0x00 || game_id || sha256(exe))
+//	SHA-256("lota-ac-game-binding:v1" || 0x00 || game_id || sha256(exe))
 //
 // using the LOTA_AC_DOMAIN_VERSION_V1 entry of lota_ac_domain_table.
 // The Go derivation must mirror it byte for byte or the server keys
@@ -260,7 +260,7 @@ func parseExpectedGames(spec string, anticheatExeDigest [32]byte,
 // as state=UNTRUSTED reason="unknown game_id_hash" on a clean run.
 func computeGameBindingHash(gameID string, exeDigest [32]byte) [32]byte {
 	h := sha256.New()
-	_, _ = h.Write([]byte("lota-ac-game-binding:v2"))
+	_, _ = h.Write([]byte("lota-ac-game-binding:v1"))
 	_, _ = h.Write([]byte{0})
 	_, _ = h.Write([]byte(gameID))
 	_, _ = h.Write(exeDigest[:])

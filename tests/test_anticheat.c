@@ -170,7 +170,7 @@ static int compute_hb_nonce_test(uint8_t out[32], const uint8_t session_id[16],
 				 const uint8_t runtime_measure[32],
 				 uint32_t domain_version)
 {
-	static const char domain[] = "lota-ac-heartbeat:v2";
+	static const char domain[] = "lota-ac-heartbeat:v1";
 	uint8_t seq_le[4], flags_le[4], ts_le[8], ver_le[4];
 	EVP_MD_CTX *ctx = EVP_MD_CTX_new();
 	unsigned int out_len = 32;

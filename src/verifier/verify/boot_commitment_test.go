@@ -32,7 +32,7 @@ func referenceInitramfsLockPCR14() [types.HashSize]byte {
 }
 
 func referenceLockedBootCommitmentPCR14(agentHash [types.HashSize]byte) [types.HashSize]byte {
-	const tag = "LOTA-PCR14-BOOT-COMMITMENT-v2"
+	const tag = "LOTA-PCR14-BOOT-COMMITMENT-v1"
 	lockValue := referenceInitramfsLockPCR14()
 
 	commit := sha256.New()

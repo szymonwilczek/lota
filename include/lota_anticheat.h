@@ -45,7 +45,7 @@ extern "C" {
  * wire; verifier rejects anything outside its accepted set. New string variants
  * must allocate the next integer instead of silently replacing an existing one.
  *
- * V1: "lota-ac-game-binding:v2\\0" + "lota-ac-heartbeat:v2\\0"
+ * V1: "lota-ac-game-binding:v1\\0" + "lota-ac-heartbeat:v1\\0"
  */
 #define LOTA_AC_DOMAIN_VERSION_V1 1u
 #define LOTA_AC_DOMAIN_VERSION_CURRENT LOTA_AC_DOMAIN_VERSION_V1
@@ -393,7 +393,7 @@ int lota_ac_heartbeat(struct lota_ac_session *session, uint8_t *buf,
  * Compute canonical game-binding hash for a game ID and executable image.
  *
  * Hash format:
- *   SHA-256("lota-ac-game-binding:v2\\0" || game_id ||
+ *   SHA-256("lota-ac-game-binding:v1\\0" || game_id ||
  * SHA-256(executable-bytes))
  *
  * Use this to precompute expected_game_id_hash for server-side checks.
@@ -429,7 +429,7 @@ int lota_ac_compute_game_binding_hash(const char *game_id, const char *exe_path,
  * Combined image digest, over all objects sorted ascending by soname
  * (the object's file basename), so neither load order nor library search
  * path affects the result:
- *   SHA-256("lota-ac-runtime-measure:v2\\0" || object_count_LE32 ||
+ *   SHA-256("lota-ac-runtime-measure:v1\\0" || object_count_LE32 ||
  *           for each object:
  *               soname_len_LE32 || soname_bytes || object_digest[32])
  *

@@ -593,7 +593,7 @@ func parseProtectedPIDs(data []byte, count uint32) ([]uint32, error) {
 func computeRuntimeProtectDigest(pids []uint32, imageList []byte) [32]byte {
 	var le [4]byte
 	h := sha256.New()
-	_, _ = h.Write([]byte("lota-runtime-protect-pids:v2\x00"))
+	_, _ = h.Write([]byte("lota-runtime-protect-pids:v1\x00"))
 	// #nosec G115 -- the PID list is a wire field capped at MaxProtectPIDs
 	binary.LittleEndian.PutUint32(le[:], uint32(len(pids)))
 	_, _ = h.Write(le[:])

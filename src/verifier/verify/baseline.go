@@ -21,12 +21,10 @@ import (
 
 // bootCommitmentTag is the domain-separation prefix used by the agent
 // when extending PCR14 with the boot commitment. It MUST match the
-// LOTA-PCR14-BOOT-COMMITMENT-v2 string in src/agent/tpm.c.
+// LOTA-PCR14-BOOT-COMMITMENT-v1 string in src/agent/tpm.c.
 //
-// v2 commits to the agent hash alone.
-// An agent still extending v1 produces a register this code does not derive,
-// and is refused.
-const bootCommitmentTag = "LOTA-PCR14-BOOT-COMMITMENT-v2"
+// The commitment covers the agent hash alone.
+const bootCommitmentTag = "LOTA-PCR14-BOOT-COMMITMENT-v1"
 
 // initramfsLockTag is the domain-separation prefix used by the
 // initramfs lock helper (src/initramfs/lota-pcr14-lock.c) when it

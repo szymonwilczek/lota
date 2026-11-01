@@ -151,7 +151,7 @@ func buildFakeTPMSAttest(extraData []byte, pcrMask uint32, pcrDigest []byte) []b
 
 func computeRuntimeProtectDigest(pids []uint32, imageDigests [][32]byte) [32]byte {
 	h := sha256.New()
-	_, _ = h.Write([]byte("lota-runtime-protect-pids:v2\x00"))
+	_, _ = h.Write([]byte("lota-runtime-protect-pids:v1\x00"))
 	var le [4]byte
 	binary.LittleEndian.PutUint32(le[:], uint32(len(pids)))
 	_, _ = h.Write(le[:])

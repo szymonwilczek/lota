@@ -40,7 +40,7 @@ basename) and sorted, so neither load order nor library search path matters:
 
 ::
 
-   SHA-256("lota-ac-runtime-measure:v2\0" || object_count_LE32 ||
+   SHA-256("lota-ac-runtime-measure:v1\0" || object_count_LE32 ||
            for each object: soname_len_LE32 || soname_bytes || object_digest)
 
 For position-independent x86-64 code with full RELRO the executable segments

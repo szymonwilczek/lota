@@ -34,14 +34,14 @@ const (
 	lachMaxPacket              = lachHeaderSize + lachMaxToken
 
 	// The heartbeat nonce binds the runtime measurement
-	heartbeatNonceDomain = "lota-ac-heartbeat:v2\x00"
+	heartbeatNonceDomain = "lota-ac-heartbeat:v1\x00"
 	domainVersion        = 1
 
 	// Runtime measures every file-backed loaded object.
 	// Each object yields a content digest under runtimeObjectDomain.
 	// Combined image digest folds them, keyed by soname, under runtimeMeasureDomain.
 	runtimeObjectDomain  = "lota-ac-runtime-object:v1\x00"
-	runtimeMeasureDomain = "lota-ac-runtime-measure:v2\x00"
+	runtimeMeasureDomain = "lota-ac-runtime-measure:v1\x00"
 )
 
 // rejectErr signals that a packet failed at the wire-format layer and

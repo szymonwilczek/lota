@@ -61,7 +61,7 @@ func hexDigit(c byte) byte {
 func TestRegression_LockedDerivation_DoesNotDrift(t *testing.T) {
 	ah := referenceAgentHash()
 	got := DeriveLockedBootCommitmentPCR14(zeroBaseline, ah)
-	const want = "15111fb4be027e4e33d17811d8cc6da9cf1aec30038c4342b081cfef3151e2ba"
+	const want = "64a2192a9accbbc60a153cd982373354188e3bdf97395b0395cf2c9cd3093173"
 	if FormatPCR14(got) != want {
 		t.Fatalf("locked derivation drifted: got %s want %s",
 			FormatPCR14(got), want)

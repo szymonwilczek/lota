@@ -761,7 +761,7 @@ func TestRuntimeProtectDigest_KAT(t *testing.T) {
 		b[i] = 0xBB
 	}
 	got := ComputeRuntimeProtectDigest(pids, [][32]byte{a, b})
-	want := "8d451c6d0e1ea511dfc0a05c8be37f3502c73ffd7a06736a0affbce3dbd51e9d"
+	want := "6f4fe5ba701023bd8407e392bf83c541e15127fcc70a35d3bafd22b4bf6a6a5c"
 	if hex.EncodeToString(got[:]) != want {
 		t.Fatalf("KAT = %s, want %s", hex.EncodeToString(got[:]), want)
 	}
