@@ -611,6 +611,36 @@ static size_t slurp_shipped(const char *rel, char *buf, size_t cap)
 }
 
 /*
+ * A client stats the socket before it connects, so write alone leaves it with
+ * EACCES on the system socket.
+ */
+static void test_selinux_status_client_stats_socket(void)
+{
+	static char policy[65536];
+	const char *want = "lota_var_t:sock_file write_sock_file_perms;";
+	const char *body;
+	size_t len;
+
+	TEST("selinux: a status client may stat the agent socket");
+
+	if (!slurp_shipped("selinux/lota.if", policy, sizeof(policy))) {
+		FAIL("could not read selinux/lota.if");
+		return;
+	}
+	if (!iface_body(policy, "lota_query_status", &body, &len)) {
+		FAIL("lota_query_status is not defined");
+		return;
+	}
+	for (size_t i = 0; i + strlen(want) <= len; i++) {
+		if (strncmp(body + i, want, strlen(want)) == 0) {
+			PASS();
+			return;
+		}
+	}
+	FAIL("lota_query_status does not grant getattr on the socket");
+}
+
+/*
  * One argv literal, from the command name to the closing brace.
  * Every run_cmd() call in the installer builds one, so a claim about what
  * a step runs is a claim about the tokens between those two points.
@@ -980,6 +1010,7 @@ int main(void)
 	test_selinux_policy_carries_no_portcon();
 	test_selinux_container_listener_is_shipped();
 	test_selinux_gaming_client_reaches_container_socket();
+	test_selinux_status_client_stats_socket();
 	test_installer_labels_the_config_directory();
 	test_installer_relabel_reapplies_the_device_labels();
 	test_static_cli_is_built_without_cgo();
