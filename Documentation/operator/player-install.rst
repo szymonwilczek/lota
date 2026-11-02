@@ -226,7 +226,13 @@ What the stages do
    (credential activation) and receives a short-lived AIK certificate, one per
    publisher. Naming a CA here (``--ca-server`` with ``--ca-cert``) enrolls
    with it during the install, which is what an operator provisioning a fleet
-   wants. Naming none is the normal single-machine case and is not a blocked
+   wants, and records that CA in ``/etc/lota/lota.conf`` as a publisher
+   profile with ``reporting = continuous``, reporting to the ``--verifier``
+   given, or to nobody without one. That profile is what the attestation loop
+   reports to after the install and what a title names to reach the fleet's
+   CA; a host that enrolled without it is enrolled with a publisher nothing
+   reports to, and running the installer again with the same flags records
+   it. Naming none is the normal single-machine case and is not a blocked
    stage: the publisher is whoever they buy a title from, so the agent enrolls
    with each publisher the first time a title asks for one. Either way the
    running agent renews the certificate on its own against the endpoint
@@ -277,8 +283,9 @@ A guided install needs these inputs, all fail-closed:
   or neither: an anchor without an endpoint has nothing to enroll against. A
   guided install normally passes neither and lets the agent enroll with each
   publisher when a title first asks;
-* optionally the **verifier endpoint** (``--verifier``) for the final
-  round-trip check;
+* optionally the **verifier endpoint** (``--verifier``, ``--verifier-port``): the
+  verifier the recorded profile reports to, or with no CA named, the one the
+  final round-trip runs against;
 * compiled **SELinux module** (``lota.pp``, default
   ``/usr/share/lota/selinux/lota.pp``, override with ``--selinux-module``) on
   SELinux-enforcing distributions.

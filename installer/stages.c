@@ -1302,6 +1302,29 @@ static enum stage_state st_enroll_probe(struct install_ctx *ctx, char *note,
 
 	rc = probe_cert_days_left(paths.aik_cert, &days);
 
+	/*
+	 * Enrolled with a CA that lota.conf does not name: the loop has no
+	 * target for it and the daemon does not know the publisher.
+	 * The CA endpoint is what the profile needs, so only a run that names
+	 * it can write one.
+	 */
+	if (rc == 0 && days >= 0 && ctx->opts.ca_server) {
+		int rec = installer_profile_recorded(PATH_LOTA_CONF,
+						     ctx->opts.ca_cert);
+
+		if (rec < 0) {
+			snprintf(note, cap, "Cannot read %s (%s)",
+				 PATH_LOTA_CONF, strerror(-rec));
+			return STAGE_ERROR;
+		}
+		if (rec == 0) {
+			snprintf(note, cap,
+				 "Enrolled, but %s names no publisher for this "
+				 "CA, so nothing reports to it. Recording it.",
+				 PATH_LOTA_CONF);
+			return STAGE_PENDING;
+		}
+	}
 	if (rc == 0 && days > 0) {
 		snprintf(note, cap,
 			 "AIK certificate present, %d day%s "
@@ -1336,8 +1359,50 @@ static enum stage_state st_enroll_probe(struct install_ctx *ctx, char *note,
 	}
 	snprintf(note, cap,
 		 "Not enrolled yet. TPM will prove its "
-		 "identity to the operator's CA.");
+		 "identity to the operator's CA, which is then recorded "
+		 "as a publisher.");
 	return STAGE_PENDING;
+}
+
+/*
+ * Record the CA this host enrolled with as a publisher, so the loop reports
+ * to the fleet's verifier and the daemon answers a title naming it.
+ * Enrolling recorded the consent.
+ */
+static int record_fleet_publisher(struct install_ctx *ctx)
+{
+	const char *argv[INSTALLER_ADD_PUBLISHER_ARGC];
+	char out[2048];
+	int rc;
+
+	if (!ctx->opts.ca_server)
+		return 0;
+	rc = installer_profile_recorded(PATH_LOTA_CONF, ctx->opts.ca_cert);
+	if (rc != 0)
+		return rc < 0 ? rc : 0;
+
+	/* its hints address a game installer, which this is not */
+	installer_add_publisher_argv(&ctx->opts, argv);
+	rc = run_capture(argv, out, sizeof(out));
+	if (rc != 0) {
+		ui_text(&ctx->ui, "Recording the publisher in %s failed:\n%s",
+			PATH_LOTA_CONF, out);
+		return rc > 0 ? -EIO : rc;
+	}
+	ui_text(&ctx->ui, "Recorded the CA as a publisher in %s, reporting %s.",
+		PATH_LOTA_CONF,
+		ctx->opts.verifier && ctx->opts.verifier[0] ?
+			"continuously to the verifier given" :
+			"nothing (no --verifier given)");
+
+	{
+		const char *const rv[] = { "systemctl", "try-reload-or-restart",
+					   "lota-agent.service",
+					   "lota-attest.service", NULL };
+
+		rc = run_cmd(&ctx->ui, "Reloading the agent", rv);
+	}
+	return rc == 0 ? 0 : (rc > 0 ? -EIO : rc);
 }
 
 static int st_enroll_apply(struct install_ctx *ctx)
@@ -1352,7 +1417,10 @@ static int st_enroll_apply(struct install_ctx *ctx)
 	if (rc < 0)
 		return rc;
 
-	if (probe_cert_days_left(paths.aik_cert, &days) == 0) {
+	rc = probe_cert_days_left(paths.aik_cert, &days);
+	if (rc == 0 && days >= 0)
+		return record_fleet_publisher(ctx);
+	if (rc == 0) {
 		/* expired certificate:
 		 * the profile recorded the CA endpoint at first enrollment,
 		 * so the guided path needs only the anchor that names the profile */
@@ -1364,7 +1432,9 @@ static int st_enroll_apply(struct install_ctx *ctx)
 			     "Refreshing the AIK certificate "
 			     "(guided re-enrollment)...",
 			     rv);
-		return rc == 0 ? 0 : (rc > 0 ? -EIO : rc);
+		if (rc != 0)
+			return rc > 0 ? -EIO : rc;
+		return record_fleet_publisher(ctx);
 	}
 
 	argv[n++] = PATH_AGENT_BIN;
@@ -1383,7 +1453,9 @@ static int st_enroll_apply(struct install_ctx *ctx)
 		     "Enrolling with the attestation CA "
 		     "(TPM credential activation)...",
 		     argv);
-	return rc == 0 ? 0 : (rc > 0 ? -EIO : rc);
+	if (rc != 0)
+		return rc > 0 ? -EIO : rc;
+	return record_fleet_publisher(ctx);
 }
 
 /* self-check + telemetry summary */
