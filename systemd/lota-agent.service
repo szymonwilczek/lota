@@ -106,10 +106,6 @@ DevicePolicy=closed
 DeviceAllow=/dev/tpmrm0 rw
 DeviceAllow=/dev/tpm0 rw
 
-# TPM + BPF + raw I/O + kernel log (SYSLOG_ACTION_READ_ALL for
-# iommu_check_dmesg; CAP_SYS_ADMIN alone covers it today but the
-# klogctl(3) dependency is declared explicitly).
-#
 # CAP_SYS_PTRACE is what lets the agent read another process's /proc entries.
 # Title that calls lota_protect_self() is measured from the kernel side
 # -- /proc/<pid>/maps walked, each file-backed executable mapping opened through
