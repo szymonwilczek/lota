@@ -172,6 +172,12 @@ void print_usage(const char *prog, const char *default_bpf_path,
 	printf("                    Label for --add-publisher (default: a "
 	       "prefix of\n");
 	printf("                    the publisher identity)\n");
+	printf("  --reporting MODE  For --add-publisher: session (default) "
+	       "reports\n");
+	printf("                    only while one of their titles runs, "
+	       "continuous\n");
+	printf("                    always, as an operator-owned fleet "
+	       "wants\n");
 	printf("  --allow-publisher HEX\n");
 	printf("                    Record that this machine may answer to "
 	       "one\n");

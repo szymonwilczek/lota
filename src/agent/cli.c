@@ -302,6 +302,7 @@ int cli_parse(int argc, char **argv, struct cli_options *opts,
 		{ "allow-publisher", required_argument, NULL, 1016 },
 		{ "add-publisher", required_argument, NULL, 1040 },
 		{ "publisher-name", required_argument, NULL, 1041 },
+		{ "reporting", required_argument, NULL, 1044 },
 		{ "list-publishers", no_argument, NULL, 1017 },
 		{ "forget-publisher", required_argument, NULL, 1018 },
 		{ "seal", no_argument, NULL, 1007 },
@@ -443,6 +444,19 @@ int cli_parse(int argc, char **argv, struct cli_options *opts,
 			break;
 		case 1041:
 			opts->publisher_name = optarg;
+			break;
+		case 1044:
+			if (strcmp(optarg, "session") == 0) {
+				opts->reporting_continuous = false;
+			} else if (strcmp(optarg, "continuous") == 0) {
+				opts->reporting_continuous = true;
+			} else {
+				fprintf(stderr,
+					"Invalid --reporting '%s' (expected "
+					"session or continuous)\n",
+					optarg);
+				return 1;
+			}
 			break;
 		case 1017:
 			opts->list_publishers_flag = 1;

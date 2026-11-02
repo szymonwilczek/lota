@@ -105,6 +105,7 @@ struct cli_options {
 	 */
 	const char *add_publisher; /* CA host, or host:port */
 	const char *publisher_name; /* --publisher-name, the section label */
+	bool reporting_continuous; /* --reporting continuous */
 	int list_publishers_flag; /* --list-publishers */
 	/* --forget-publisher: destroy one publisher's key and stored state */
 	const char *forget_publisher;

@@ -356,7 +356,8 @@ int diagnostics_dispatch(struct cli_options *opts, struct lota_config *cfg)
 			opts->config_path, opts->publisher_name,
 			opts->add_publisher, opts->ca_port, opts->ca_cert_path,
 			opts->server_overridden ? opts->server_addr : NULL,
-			opts->server_port, opts->attest_interval, true));
+			opts->server_port, opts->attest_interval,
+			!opts->reporting_continuous));
 
 	/* only a typed --ca-port overrides the recorded one */
 	if (opts->reenroll_flag)
