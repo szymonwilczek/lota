@@ -491,7 +491,6 @@ int bpf_loader_untrust_lib(struct bpf_loader_ctx *ctx, const char *path);
 struct bpf_extended_stats {
 	uint64_t total_execs;
 	uint64_t events_sent;
-	uint64_t errors;
 	uint64_t drops;
 	uint64_t modules_blocked;
 	uint64_t mmap_execs;

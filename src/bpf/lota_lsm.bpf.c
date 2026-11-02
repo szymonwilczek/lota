@@ -146,7 +146,6 @@ struct {
 
 #define STAT_TOTAL_EXECS 0
 #define STAT_EVENTS_SENT 1
-#define STAT_ERRORS 2
 #define STAT_RINGBUF_DROPS 3
 #define STAT_MODULES_BLOCKED 4
 #define STAT_MMAP_EXECS 5

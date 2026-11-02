@@ -51,7 +51,6 @@
 /* Stats map indices - must match BPF program */
 #define STAT_TOTAL_EXECS 0
 #define STAT_EVENTS_SENT 1
-#define STAT_ERRORS 2
 #define STAT_RINGBUF_DROPS 3
 #define STAT_MODULES_BLOCKED 4
 #define STAT_MMAP_EXECS 5
@@ -2351,7 +2350,6 @@ int bpf_loader_get_extended_stats(struct bpf_loader_ctx *ctx,
 
 	read_stat(ctx->stats_fd, STAT_TOTAL_EXECS, &stats->total_execs);
 	read_stat(ctx->stats_fd, STAT_EVENTS_SENT, &stats->events_sent);
-	read_stat(ctx->stats_fd, STAT_ERRORS, &stats->errors);
 	read_stat(ctx->stats_fd, STAT_RINGBUF_DROPS, &stats->drops);
 	read_stat(ctx->stats_fd, STAT_MODULES_BLOCKED, &stats->modules_blocked);
 	read_stat(ctx->stats_fd, STAT_MMAP_EXECS, &stats->mmap_execs);

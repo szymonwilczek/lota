@@ -707,14 +707,14 @@ static int run_daemon(const struct run_daemon_params *params)
 	struct bpf_extended_stats stats;
 	if (bpf_loader_get_extended_stats(&g_agent.bpf_ctx, &stats) == 0) {
 		lota_info(
-			"Shutdown statistics: exec=%lu sent=%lu err=%lu drops=%lu "
+			"Shutdown statistics: exec=%lu sent=%lu drops=%lu "
 			"mod_blocked=%lu mmap_exec=%lu mmap_blocked=%lu "
 			"ptrace=%lu ptrace_blocked=%lu setuid=%lu bpf_blocked=%lu "
 			"mount_blocked=%lu kill_guard_blocked=%lu "
 			"yielded=%lu kill_probes=%lu "
 			"mapped_write_blocked=%lu mapped_pin_refused=%lu",
-			stats.total_execs, stats.events_sent, stats.errors,
-			stats.drops, stats.modules_blocked, stats.mmap_execs,
+			stats.total_execs, stats.events_sent, stats.drops,
+			stats.modules_blocked, stats.mmap_execs,
 			stats.mmap_blocked, stats.ptrace_attempts,
 			stats.ptrace_blocked, stats.setuid_events,
 			stats.bpf_syscall_blocked, stats.mounts_blocked,
