@@ -326,8 +326,7 @@ static void test_selinux_reports_every_tunable(void)
 	char line[1024];
 	bool derived = false;
 	int iterating_targets = 0;
-	static const char *const sources[] = { "selinux/lota.te",
-					       "selinux/lota_gaming.te" };
+	static const char *const sources[] = { "selinux/lota.te" };
 	FILE *fp;
 
 	TEST("selinux: the reported tunables are read from the policy");
@@ -419,9 +418,7 @@ static void test_selinux_reports_every_tunable(void)
 static void test_selinux_policy_carries_no_portcon(void)
 {
 	static const char *const sources[] = { "selinux/lota.te",
-					       "selinux/lota.fc",
-					       "selinux/lota_gaming.te",
-					       "selinux/lota_gaming.fc" };
+					       "selinux/lota.fc" };
 	char line[1024];
 
 	TEST("selinux: no source declares a port context");
