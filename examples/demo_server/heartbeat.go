@@ -423,7 +423,7 @@ func (s *demoServer) recordVerdict(sessionHex, gameHashHex, verdict, license,
 	if sessionHex != "" {
 		st, ok := s.sessions[sessionHex]
 		if !ok {
-			st = &sessionState{gameIDHex: gameHashHex}
+			st = &sessionState{}
 			s.sessions[sessionHex] = st
 		}
 		st.lastVerdict = verdict
@@ -441,7 +441,6 @@ func (s *demoServer) recordVerdict(sessionHex, gameHashHex, verdict, license,
 			lastLicense: license,
 			lastReason:  reason,
 			updatedAt:   now,
-			gameIDHex:   gameHashHex,
 		}
 	}
 }
