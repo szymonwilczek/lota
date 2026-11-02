@@ -99,7 +99,6 @@ struct tui {
 	int scroll;
 
 	/* Running action */
-	int running;
 	unsigned spin;
 	char run_label[OUT_CAP];
 	struct timespec run_start;
@@ -975,13 +974,11 @@ static void snk_status(void *ud, const char *label, int running,
 	char buf[OUT_CAP];
 
 	if (running) {
-		t->running = 1;
 		t->abort_req = 0;
 		snprintf(t->run_label, sizeof(t->run_label), "%s", label);
 		clock_gettime(CLOCK_MONOTONIC, &t->run_start);
 		snprintf(buf, sizeof(buf), "→ %s", label);
 	} else {
-		t->running = 0;
 		snprintf(buf, sizeof(buf), "%s %s (%.1fs)",
 			 r == UI_OK ? "✔" : "✖", label, secs);
 	}
