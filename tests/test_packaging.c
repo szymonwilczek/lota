@@ -120,12 +120,16 @@ static void test_attest_unit_config_driven(void)
 /*
  * attest loop is network-facing and runs as a separate process from the
  * enforcement daemon precisely so it carries a smaller blast radius.
- * Guard that it never grants itself the enforcement daemon's powerful caps,
- * and that it gates on a completed first enrollment.
+ * Guard that it never grants itself the enforcement daemon's powerful caps.
+ *
+ * It must not gate on a completed first enrollment either: the condition is
+ * read once, at start, and the profile appears after the installer has
+ * started the unit -- the loop itself enrolls for the first title -- so a
+ * gated unit stays stopped until the next boot.
  */
 static void test_attest_unit_isolated(void)
 {
-	TEST("attest unit: no BPF/admin caps, gated on first enroll");
+	TEST("attest unit: no BPF/admin caps, not gated on first enroll");
 
 	FILE *fp = open_shipped("systemd/lota-attest.service");
 	if (!fp) {
@@ -142,8 +146,7 @@ static void test_attest_unit_isolated(void)
 		     strstr(line, "CAP_PERFMON") ||
 		     strstr(line, "CAP_SYS_RAWIO")))
 			powerful_cap = true;
-		if (strstr(line, "ConditionDirectoryNotEmpty=") &&
-		    strstr(line, "/var/lib/lota/profiles"))
+		if (strncmp(line, "Condition", 9) == 0)
 			enroll_gate = true;
 	}
 	fclose(fp);
@@ -152,8 +155,8 @@ static void test_attest_unit_isolated(void)
 		FAIL("attest unit must not hold BPF/admin/rawio caps");
 		return;
 	}
-	if (!enroll_gate) {
-		FAIL("attest unit must gate on a non-empty profiles directory");
+	if (enroll_gate) {
+		FAIL("a condition keeps the unit stopped after enrollment");
 		return;
 	}
 	PASS();
