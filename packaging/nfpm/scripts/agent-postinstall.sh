@@ -38,14 +38,22 @@ touches; the agent prefers it whenever it is there. lota-install verifies the
 signature and never signs on this host.
 EOF
 
+# A loaded module is the store's copy: replacing the file does not touch it,
+# and the new agent would run under the old policy.
+if command -v semodule >/dev/null 2>&1 &&
+	semodule -l 2>/dev/null | grep -qx lota; then
+    semodule -i /usr/share/lota/selinux/lota.pp ||
+	echo "lota-agent: could not reload the SELinux module; run: semodule -i /usr/share/lota/selinux/lota.pp"
+fi
+
 # The stage engine is the one place that knows what each stage changes and how
 # to probe whether it is already done, so the hook drives it rather than
 # reimplementing a subset in shell.
 # Its failure is never this transaction's failure:
 # the package is installed either way, and the run says what is left.
 if [ -x /usr/bin/lota-install ]; then
-	echo
-	/usr/bin/lota-install --unattended || true
+    echo
+    /usr/bin/lota-install --unattended || true
 fi
 
 # Upgrade changed the binary, so the running daemon and the file on disk are
@@ -54,7 +62,7 @@ fi
 # effect on the next cold boot - and until then the agent keeps attesting as
 # the build that is still running
 if [ "${1:-0}" != "1" ]; then
-	cat <<'EOF'
+    cat <<'EOF'
 
 This was an upgrade. PCR 14 commits to the agent binary that booted, and it
 cannot be re-extended without a hardware reset, so the new build takes effect

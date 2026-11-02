@@ -85,6 +85,11 @@ stages it left before exiting with code ``11``, which a tool that runs
 
    sudo lota-install
 
+The policy store keeps its own copy of a loaded SELinux module, so the hook
+reloads ``/usr/share/lota/selinux/lota.pp`` over it on every transaction. A host
+that loaded its own build through ``--selinux-module`` loads it again after an
+upgrade.
+
 The hook's failure is never the transaction's failure: the package installs
 either way and the run reports what is left. A host that wants the boot-path
 stages unattended as well opts in **before** installing, by creating
