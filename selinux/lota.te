@@ -154,7 +154,6 @@ kernel_read_system_state(lota_agent_t)
 
 tunable_policy(`lota_bpf_load',`
         allow lota_agent_t self:bpf { map_create map_read map_write prog_load prog_run };
-        allow lota_agent_t self:perf_event { open read write };
 ')
 
 #
