@@ -180,7 +180,6 @@ Boolean                     Default Description
 =========================== ======= ======================================
 ``lota_network_attest``     on      Allow network attestation to verifiers
 ``lota_bpf_load``           on      Allow loading eBPF LSM programs
-``lota_module_enforce``     off     Allow kernel module enforcement
 ``lota_steam_attest``       on      Steam attestation integration
 ``lota_wine_attest``        on      Wine/Proton attestation integration
 ``lota_anticheat_extended`` on      Extended anti-cheat access
@@ -197,9 +196,6 @@ Modify Tunables
 
    # Disable network attestation
    sudo setsebool -P lota_network_attest off
-
-   # Enable module enforcement
-   sudo setsebool -P lota_module_enforce on
 
    # Show current values
    getsebool -a | grep lota

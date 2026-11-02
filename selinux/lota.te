@@ -20,11 +20,6 @@ gen_tunable(lota_network_attest, true)
 ## </desc>
 gen_tunable(lota_bpf_load, true)
 
-## <desc>
-## <p>Allow interaction with module loading subsystem.</p>
-## </desc>
-gen_tunable(lota_module_enforce, false)
-
 #
 # Type declarations
 #
@@ -336,14 +331,6 @@ tunable_policy(`lota_network_attest',`
         allow lota_agent_t self:tcp_socket create_stream_socket_perms;
         allow lota_agent_t self:udp_socket create_socket_perms;
         allow lota_agent_t self:netlink_route_socket { create bind getattr nlmsg_read };
-')
-
-#
-# Module subsystem
-#
-
-tunable_policy(`lota_module_enforce',`
-        modutils_read_module_deps(lota_agent_t)
 ')
 
 #
