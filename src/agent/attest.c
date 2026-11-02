@@ -48,6 +48,7 @@
 #include "net.h"
 #include "policy.h"
 #include "quote.h"
+#include "report_flags.h"
 #include "sdnotify.h"
 #include "selftest.h"
 #include "tpm.h"
@@ -378,19 +379,18 @@ static int build_attestation_report(const struct verifier_challenge *challenge,
 	memcpy(report->tpm.nonce, challenge->nonce, LOTA_NONCE_SIZE);
 	report->tpm.pcr_mask = challenge->pcr_mask;
 
-	/*
-	 * report LSM enforcement mode
-	 * this flag is part of nonce binding (signed by TPM quote extraData)
-	 */
-	if (g_agent.mode == LOTA_MODE_ENFORCE)
-		report->header.flags |= LOTA_REPORT_FLAG_ENFORCE;
+	/* part of the nonce binding, so signed by the quote's extraData */
+	{
+		struct enforcement_view view = {
+			.answered = true,
+			.mode = (uint8_t)g_agent.mode,
+			.status_flags = g_agent.bpf_ctx.loaded ?
+						LOTA_STATUS_BPF_LOADED :
+						0,
+		};
 
-	/*
-	 * report BPF LSM status
-	 * this flag is part of nonce binding (signed by TPM quote extraData)
-	 */
-	if (g_agent.bpf_ctx.loaded)
-		report->header.flags |= LOTA_REPORT_FLAG_BPF_ACTIVE;
+		report->header.flags |= report_enforcement_flags(&view);
+	}
 
 	/*
 	 * Report kernel security features before nonce binding so the TPM quote
