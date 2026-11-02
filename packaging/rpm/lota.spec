@@ -239,6 +239,8 @@ fi
 %{_unitdir}/lota-attest.service
 %{_prefix}/lib/udev/rules.d/99-lota-tpm.rules
 %config(noreplace) %{_sysconfdir}/dbus-1/system.d/org.lota.Agent1.conf
+# every lota.conf writer expects it; lota.conf itself is the host's, unowned
+%dir %{_sysconfdir}/lota
 %dir %{_datadir}/lota
 %{_datadir}/lota/VERSION
 %dir %{_datadir}/lota/ima

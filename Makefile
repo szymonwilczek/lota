@@ -1369,6 +1369,7 @@ install: check-version-tag check-hook32 all selinux-pp
 	install -d $(DESTDIR)/usr/lib64
 	install -d $(DESTDIR)/usr/include/lota
 	install -d $(DESTDIR)/usr/share/lota
+	install -d -m 755 $(DESTDIR)/etc/lota
 	install -d -m 700 $(DESTDIR)/var/lib/lota
 	install -d -m 700 $(DESTDIR)/var/lib/lota/profiles
 	install -m 755 $(AGENT_BIN) $(DESTDIR)/usr/bin/

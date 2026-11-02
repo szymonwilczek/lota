@@ -33,7 +33,6 @@ the host that runs the agent -- and only the public half travels:
         --signing-key ./enforcement.key           # writes lota_lsm.bpf.o.sig
 
     # on each agent host: the public half, the object and the signature
-    sudo install -d -m 0700 /etc/lota
     sudo install -m 0644 enforcement.pub /etc/lota/policy.pub
     sudo install -m 0644 lota_lsm.bpf.o /usr/lib/lota/lota_lsm.bpf.o
     sudo install -m 0644 lota_lsm.bpf.o.sig /usr/lib/lota/lota_lsm.bpf.o.sig

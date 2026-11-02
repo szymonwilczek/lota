@@ -1605,8 +1605,8 @@ int config_profile_append(const char *path, const struct lota_profile *p)
 		return -EINVAL;
 
 	/* A file that is not there yet is an empty one:
-	 * the agent ships a config, but a host may have removed it and the verb
-	 * still has to work rather than telling the player to create one.
+	 * the package ships /etc/lota but no lota.conf, and the verb has to work
+	 * rather than telling the player to create one.
 	 * The reader reports a missing file as zero bytes, which is the same thing. */
 	existing = calloc(1, LOTA_CONFIG_MAX_FILE + 1);
 	if (!existing)

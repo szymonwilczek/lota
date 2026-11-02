@@ -137,6 +137,11 @@ contents:
     type: dir
     file_info:
       mode: 0755
+  # every lota.conf writer expects it; lota.conf itself is the host's, unowned
+  - dst: /etc/lota
+    type: dir
+    file_info:
+      mode: 0755
   # agent state; the files inside are machine identity, unowned, kept on removal
   - dst: /var/lib/lota
     type: dir
