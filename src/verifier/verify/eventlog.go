@@ -128,7 +128,7 @@ func ParseEventLog(data []byte) (*ParsedEventLog, error) {
 
 	// parse remaining entries as TCG_PCR_EVENT2
 	for offset < len(data) {
-		entry, consumed, err := parsePCREvent2(data[offset:], algList)
+		entry, consumed, err := parsePCREvent2(data[offset:])
 		if err != nil {
 			return nil, fmt.Errorf("event log truncated or malformed at offset %d: %w", offset, err)
 		}
@@ -181,7 +181,7 @@ func parseSpecIDEvent(data []byte) ([]uint16, error) {
 }
 
 // parses a single TCG_PCR_EVENT2 entry
-func parsePCREvent2(data []byte, algList []uint16) (*EventLogEntry, int, error) {
+func parsePCREvent2(data []byte) (*EventLogEntry, int, error) {
 	if len(data) < 8 {
 		return nil, 0, io.ErrUnexpectedEOF
 	}
