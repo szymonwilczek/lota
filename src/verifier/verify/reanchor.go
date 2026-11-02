@@ -118,7 +118,6 @@ func reanchorDecision(in ReanchorInputs) (verdict ReanchorVerdict, reason string
 	// assurance tier and the anti-rollback / disappeared-ESRT escalations
 	// are decided from the ESRT alone, then the rate limit short-circuits
 	// before any parsing.
-	verdict = ReanchorAllow
 	if in.CurrentESRT != nil && in.CurrentESRT.Present {
 		// Firmware reporting that it runs below its own declared
 		// anti-rollback floor (ESRT LowestSupported above FWVersion) is
