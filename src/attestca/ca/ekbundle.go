@@ -75,7 +75,6 @@ type ekBundleEntry struct {
 	pin      string // lowercase hex SHA-256 of the certificate DER
 	filename string // PEM file relative to the bundle directory
 	class    string // EKClassRoot or EKClassIntermediate
-	label    string // free-text vendor label, for diagnostics only
 }
 
 // LoadEKRootBundle loads a pinned multi-vendor EK trust bundle from dir
@@ -208,7 +207,6 @@ func parseEKBundleManifest(data []byte) ([]ekBundleEntry, error) {
 			pin:      pin,
 			filename: filename,
 			class:    class,
-			label:    strings.Join(fields[3:], " "),
 		})
 	}
 	return entries, nil
