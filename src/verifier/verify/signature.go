@@ -117,7 +117,7 @@ func VerifyReportSignature(report *types.AttestationReport, aikPubKey *rsa.Publi
 	// extract actual data
 	attestData := report.TPM.AttestData[:report.TPM.AttestSize]
 	signature := report.TPM.QuoteSignature[:report.TPM.QuoteSigSize]
-	hashAlg, hashSource, err := selectQuoteHashAlgorithm(report)
+	hashAlg, err := selectQuoteHashAlgorithm(report)
 	if err != nil {
 		return err
 	}
@@ -128,13 +128,13 @@ func VerifyReportSignature(report *types.AttestationReport, aikPubKey *rsa.Publi
 
 	case types.TPMAlgRSASSA:
 		if verr := NewRSASSAVerifier().VerifyQuoteSignature(attestData, signature, aikPubKey, hashAlg); verr != nil {
-			return fmt.Errorf("TPM quote signature invalid (sig_alg=RSASSA hash=%s source=%s): %v", hashName(hashAlg), hashSource, verr)
+			return fmt.Errorf("TPM quote signature invalid (sig_alg=RSASSA hash=%s): %v", hashName(hashAlg), verr)
 		}
 		return nil
 
 	case types.TPMAlgRSAPSS:
 		if verr := NewRSAPSSVerifier().VerifyQuoteSignature(attestData, signature, aikPubKey, hashAlg); verr != nil {
-			return fmt.Errorf("TPM quote signature invalid (sig_alg=RSAPSS hash=%s source=%s): %v", hashName(hashAlg), hashSource, verr)
+			return fmt.Errorf("TPM quote signature invalid (sig_alg=RSAPSS hash=%s): %v", hashName(hashAlg), verr)
 		}
 		return nil
 	}
@@ -156,22 +156,22 @@ func tpmAlgToCryptoHash(tpmAlg uint16) (crypto.Hash, error) {
 	}
 }
 
-func selectQuoteHashAlgorithm(report *types.AttestationReport) (crypto.Hash, string, error) {
+func selectQuoteHashAlgorithm(report *types.AttestationReport) (crypto.Hash, error) {
 	if report == nil {
-		return 0, "report.tpm.quote_sig_hash_alg", errors.New("report is nil")
+		return 0, errors.New("report is nil")
 	}
 	if report.TPM.QuoteSigHashAlg == 0 {
-		return 0, "report.tpm.quote_sig_hash_alg", errors.New("TPM quote signature hash algorithm missing")
+		return 0, errors.New("TPM quote signature hash algorithm missing")
 	}
 
 	h, mapErr := tpmAlgToCryptoHash(report.TPM.QuoteSigHashAlg)
 	if mapErr != nil {
-		return 0, "report.tpm.quote_sig_hash_alg", mapErr
+		return 0, mapErr
 	}
 	if !h.Available() {
-		return 0, "report.tpm.quote_sig_hash_alg", fmt.Errorf("hash algorithm unavailable: %s", hashName(h))
+		return 0, fmt.Errorf("hash algorithm unavailable: %s", hashName(h))
 	}
-	return h, "report.tpm.quote_sig_hash_alg", nil
+	return h, nil
 }
 
 func hashName(h crypto.Hash) string {
