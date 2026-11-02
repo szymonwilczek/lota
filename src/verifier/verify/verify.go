@@ -103,7 +103,6 @@ type Verifier struct {
 	attestationLog store.AttestationLog
 
 	// configuration
-	nonceLifetime  time.Duration
 	resultValidity time.Duration
 
 	// monitoring
@@ -257,7 +256,6 @@ func NewVerifier(cfg VerifierConfig, aikVerifier store.AIKCertVerifier) *Verifie
 		log:                   logger,
 		metrics:               m,
 		attestationLog:        cfg.AttestationLog,
-		nonceLifetime:         cfg.NonceLifetime,
 		resultValidity:        cfg.ResultValidity,
 		requireBootEnrollment: cfg.RequireBootEnrollment,
 		selfServiceReanchor:   cfg.EnableSelfServiceReanchor,
