@@ -123,18 +123,6 @@ func (lc *LabeledCounter) Values() map[string]int64 {
 	return result
 }
 
-// returns the sum across all labels
-func (lc *LabeledCounter) Total() int64 {
-	lc.mu.RLock()
-	defer lc.mu.RUnlock()
-
-	var total int64
-	for _, v := range lc.counts {
-		total += v.Load()
-	}
-	return total
-}
-
 // tracks the distribution of observed values
 // implements cumulative bucket counting compatible with Prometheus
 type Histogram struct {
