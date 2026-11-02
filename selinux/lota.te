@@ -311,7 +311,6 @@ init_read_pid_files(lota_agent_t)
 #
 
 corenet_tcp_connect_http_port(lota_agent_t)
-corenet_tcp_connect_http_cache_port(lota_agent_t)
 sysnet_dns_name_resolve(lota_agent_t)
 
 tunable_policy(`lota_network_attest',`
