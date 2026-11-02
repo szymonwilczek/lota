@@ -345,7 +345,7 @@ int cli_parse(int argc, char **argv, struct cli_options *opts,
 
 	memset(opts, 0, sizeof(*opts));
 	opts->bpf_path = LOTA_CLI_DEFAULT_BPF_PATH;
-	opts->server_addr = "localhost";
+	opts->server_addr = "";
 	opts->server_port = LOTA_DEFAULT_VERIFIER_PORT;
 	opts->aik_ttl = LOTA_CLI_DEFAULT_AIK_TTL;
 	opts->ca_port = LOTA_DEFAULT_CA_PORT;

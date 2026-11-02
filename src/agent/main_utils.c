@@ -207,7 +207,7 @@ void print_usage(const char *prog, const char *default_bpf_path,
 	       "party's\n");
 	printf("                    freshness window)\n");
 	printf("  --server HOST     Verifier server address (default: "
-	       "localhost)\n");
+	       "none)\n");
 	printf("  --port PORT       Verifier server port (default: %d)\n",
 	       default_verifier_port);
 	printf("  --ca-cert PATH    CA trust anchor, PEM or DER. Verifies the\n");

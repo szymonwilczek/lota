@@ -16,8 +16,9 @@
 
 # ---- Verifier connection ------------------------------------------------
 
-# Verifier server address
-server = localhost
+# Verifier server address (default: none, so --attest has no single verifier
+# to report to; a [profile] below names each publisher's own)
+# server = verifier.example.com
 
 # Verifier server port
 port = 8443
