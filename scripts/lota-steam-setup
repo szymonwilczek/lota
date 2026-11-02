@@ -28,7 +28,8 @@ PRIMARY_SOCKET="${LOTA_AGENT_SOCKET:-/run/lota/${SOCKET_NAME}}"
 HOOK_LIB="liblota_wine_hook.so"
 # Mirrors LOTA_HOOK_TOKEN_DIR_NAME in include/lota_wine_hook.h
 HOOK_TOKEN_DIR_NAME="lota-hook"
-LOTA_CONF="/etc/lota/lota.conf"
+# LOTA_CONF: tests
+LOTA_CONF="${LOTA_CONF:-/etc/lota/lota.conf}"
 
 if [[ -t 1 ]]; then
     RED='\033[0;31m'
