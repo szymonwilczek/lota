@@ -17,6 +17,7 @@
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <sys/wait.h>
+#include <time.h>
 #include <unistd.h>
 
 #include "test.h"
@@ -315,6 +316,166 @@ static void test_pidfile_rejects_symlink_path(void)
 	PASS();
 }
 
+static long elapsed_ms(const struct timespec *from)
+{
+	struct timespec now;
+
+	clock_gettime(CLOCK_MONOTONIC, &now);
+	return (now.tv_sec - from->tv_sec) * 1000 +
+	       (now.tv_nsec - from->tv_nsec) / 1000000;
+}
+
+/* a child takes the PID file, says so on @ready, holds it @hold_ms, exits */
+static pid_t hold_pidfile(const char *path, int hold_ms)
+{
+	int pfd[2];
+	pid_t pid;
+	char c;
+
+	if (pipe(pfd) < 0)
+		return -1;
+
+	pid = fork();
+	if (pid == 0) {
+		int fd = pidfile_create(path);
+
+		close(pfd[0]);
+		c = fd >= 0 ? 'y' : 'n';
+		if (write(pfd[1], &c, 1) != 1)
+			_exit(1);
+		usleep((useconds_t)hold_ms * 1000);
+		pidfile_remove(path, fd);
+		_exit(0);
+	}
+
+	close(pfd[1]);
+	if (pid < 0 || read(pfd[0], &c, 1) != 1 || c != 'y') {
+		close(pfd[0]);
+		if (pid > 0)
+			waitpid(pid, NULL, 0);
+		return -1;
+	}
+	close(pfd[0]);
+	return pid;
+}
+
+static void test_pidfile_wait_missing(void)
+{
+	char path[256];
+	int ret;
+
+	TEST("pidfile_wait_released: no file -> 0");
+
+	snprintf(path, sizeof(path), "%s/none.pid", tmp_dir);
+	ret = pidfile_wait_released(path, 1000);
+	if (ret != 0) {
+		char msg[64];
+
+		snprintf(msg, sizeof(msg), "expected 0, got %d", ret);
+		FAIL(msg);
+		return;
+	}
+	PASS();
+}
+
+static void test_pidfile_wait_stale(void)
+{
+	char path[256];
+	int fd;
+	int ret;
+
+	TEST("pidfile_wait_released: file nobody holds -> 0");
+
+	snprintf(path, sizeof(path), "%s/stale.pid", tmp_dir);
+	fd = open(path, O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0600);
+	if (fd < 0) {
+		FAIL("cannot create stale pid file");
+		return;
+	}
+	close(fd);
+
+	ret = pidfile_wait_released(path, 1000);
+	unlink(path);
+	if (ret != 0) {
+		char msg[64];
+
+		snprintf(msg, sizeof(msg), "expected 0, got %d", ret);
+		FAIL(msg);
+		return;
+	}
+	PASS();
+}
+
+static void test_pidfile_wait_until_holder_exits(void)
+{
+	struct timespec start;
+	char path[256];
+	pid_t pid;
+	long ms;
+	int ret;
+
+	TEST("pidfile_wait_released: returns once the holder exits");
+
+	snprintf(path, sizeof(path), "%s/held.pid", tmp_dir);
+	pid = hold_pidfile(path, 300);
+	if (pid < 0) {
+		FAIL("child could not take the pid file");
+		return;
+	}
+
+	clock_gettime(CLOCK_MONOTONIC, &start);
+	ret = pidfile_wait_released(path, 5000);
+	ms = elapsed_ms(&start);
+	waitpid(pid, NULL, 0);
+
+	if (ret != 0 || ms < 200) {
+		char msg[96];
+
+		snprintf(msg, sizeof(msg),
+			 "expected 0 after the holder exits, got %d in %ld ms",
+			 ret, ms);
+		FAIL(msg);
+		return;
+	}
+	PASS();
+}
+
+static void test_pidfile_wait_times_out(void)
+{
+	struct timespec start;
+	char path[256];
+	pid_t pid;
+	long ms;
+	int ret;
+
+	TEST("pidfile_wait_released: held past the timeout -> -ETIMEDOUT");
+
+	snprintf(path, sizeof(path), "%s/stuck.pid", tmp_dir);
+	pid = hold_pidfile(path, 2000);
+	if (pid < 0) {
+		FAIL("child could not take the pid file");
+		return;
+	}
+
+	clock_gettime(CLOCK_MONOTONIC, &start);
+	ret = pidfile_wait_released(path, 300);
+	ms = elapsed_ms(&start);
+	kill(pid, SIGKILL);
+	waitpid(pid, NULL, 0);
+	unlink(path);
+
+	if (ret != -ETIMEDOUT || ms < 200 || ms > 1500) {
+		char msg[96];
+
+		snprintf(msg, sizeof(msg),
+			 "expected -ETIMEDOUT after ~300 ms, got %d in %ld ms",
+			 ret, ms);
+		FAIL(msg);
+		return;
+	}
+	PASS();
+}
+
 static void test_signal_install(void)
 {
 	volatile sig_atomic_t running = 1;
@@ -504,6 +665,10 @@ int main(void)
 	test_pidfile_explicit_path_is_kept();
 	test_pidfile_creates_parent_dir();
 	test_pidfile_rejects_symlink_path();
+	test_pidfile_wait_missing();
+	test_pidfile_wait_stale();
+	test_pidfile_wait_until_holder_exits();
+	test_pidfile_wait_times_out();
 
 	/* signal tests */
 	test_signal_install();
