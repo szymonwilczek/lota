@@ -257,9 +257,13 @@ and an attestation round-trip) and a plain-language summary of exactly what
 telemetry leaves the machine.
 
 Who performs that round-trip depends on whether the host answers to
-publishers. On a machine with no publisher profiles, ``--verifier`` names the
-one verifier and the self-check runs a round against it; with no
-``--verifier``, the first title launch performs it. **On a machine that has
+publishers. A fleet install that recorded its CA with a ``--verifier`` is
+proven by the attestation loop, since the loop is what reports to that
+verifier from then on: the self-check waits up to 90 seconds for the loop's
+status to name every continuously reporting publisher as attested, and fails
+with the last status it read otherwise. On a machine with no publisher
+profiles, ``--verifier`` names the one verifier and the self-check runs a
+round against it; with no ``--verifier``, the first title launch performs it. **On a machine that has
 publisher profiles, the publishers are the agent's target list** -- each with
 its own trust anchor, verifier and cadence -- so no single verifier stands for
 them and the self-check says so instead of naming one. That is not a host

@@ -95,6 +95,8 @@ struct install_ctx {
 	/* a stage changed this host during this run, so state read from before it
 	 * no longer describes what the host would do now */
 	int applied;
+	/* the loop's status just before this run reloaded it, if it did */
+	char loop_status_before[256];
 };
 
 /* Probe verdict for one stage */

@@ -1223,13 +1223,17 @@ int probe_conf_buf_continuous_count(const char *buf)
 	return count;
 }
 
-int probe_attest_status_covers(const char *status, int expected)
+int probe_attest_status_covers(const char *status, const char *before,
+			       int expected)
 {
 	static const char prefix[] = "Attested (";
 	char *end;
 	long n;
 
 	if (!status || strncmp(status, prefix, sizeof(prefix) - 1) != 0)
+		return 0;
+	/* valid-until moves with every round, so a new round reads differently */
+	if (before && before[0] && strcmp(status, before) == 0)
 		return 0;
 	status += sizeof(prefix) - 1;
 	if (*status < '0' || *status > '9')
@@ -1241,13 +1245,16 @@ int probe_attest_status_covers(const char *status, int expected)
 }
 
 enum probe_selfcheck_plan probe_selfcheck_plan(const char *verifier,
-					       int profile_count)
+					       int profile_count,
+					       bool fleet_profile)
 {
 	/*
 	 * Publishers first: they are the agent's target list, so they decide
 	 * where this host reports whether or not a verifier was named.
 	 * A round that named one as well is the combination the agent refuses.
 	 */
+	if (fleet_profile && verifier && verifier[0])
+		return SELFCHECK_LOOP_REPORTS;
 	if (profile_count > 0)
 		return SELFCHECK_PUBLISHERS_REPORT;
 	if (!verifier || !verifier[0])

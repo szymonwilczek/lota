@@ -1211,7 +1211,7 @@ static void test_conf_profile_count(void)
 static void test_selfcheck_plan(void)
 {
 	TEST("a verifier and no publishers is one round against it");
-	if (probe_selfcheck_plan("verifier.example", 0) !=
+	if (probe_selfcheck_plan("verifier.example", 0, false) !=
 	    SELFCHECK_ONE_ROUND) {
 		FAIL("named verifier did not produce a round");
 		return;
@@ -1219,15 +1219,16 @@ static void test_selfcheck_plan(void)
 	PASS();
 
 	TEST("no verifier named leaves the round to the first title");
-	if (probe_selfcheck_plan(NULL, 0) != SELFCHECK_SKIP_NO_VERIFIER ||
-	    probe_selfcheck_plan("", 0) != SELFCHECK_SKIP_NO_VERIFIER) {
+	if (probe_selfcheck_plan(NULL, 0, false) !=
+		    SELFCHECK_SKIP_NO_VERIFIER ||
+	    probe_selfcheck_plan("", 0, false) != SELFCHECK_SKIP_NO_VERIFIER) {
 		FAIL("an unnamed verifier was treated as named");
 		return;
 	}
 	PASS();
 
 	TEST("configured publishers are the target list, so no verifier is named");
-	if (probe_selfcheck_plan("verifier.example", 5) !=
+	if (probe_selfcheck_plan("verifier.example", 5, false) !=
 	    SELFCHECK_PUBLISHERS_REPORT) {
 		FAIL("the self-check still names one verifier");
 		return;
@@ -1235,8 +1236,30 @@ static void test_selfcheck_plan(void)
 	PASS();
 
 	TEST("publishers decide even when no verifier was given");
-	if (probe_selfcheck_plan(NULL, 5) != SELFCHECK_PUBLISHERS_REPORT) {
+	if (probe_selfcheck_plan(NULL, 5, false) !=
+	    SELFCHECK_PUBLISHERS_REPORT) {
 		FAIL("a host with publishers was told a title would do it");
+		return;
+	}
+	PASS();
+
+	/*
+	 * A fleet install records its verifier as a profile, and the loop is
+	 * what reports to it from then on: a one-shot round proves a process
+	 * that does not run after the installer exits.
+	 */
+	TEST("the fleet profile is proven by the loop that reports to it");
+	if (probe_selfcheck_plan("verifier.example", 1, true) !=
+	    SELFCHECK_LOOP_REPORTS) {
+		FAIL("the fleet verifier was not waited on through the loop");
+		return;
+	}
+	PASS();
+
+	TEST("a fleet profile without a verifier has nobody to report to");
+	if (probe_selfcheck_plan(NULL, 1, true) !=
+	    SELFCHECK_PUBLISHERS_REPORT) {
+		FAIL("a token-only fleet was waited on");
 		return;
 	}
 	PASS();
@@ -1332,9 +1355,11 @@ static void test_attest_status_covers(void)
 {
 	TEST("an attested status covering every publisher is accepted");
 	if (!probe_attest_status_covers(
-		    "Attested (1 publisher), valid until 1700000000", 1) ||
+		    "Attested (1 publisher), valid until 1700000000", NULL,
+		    1) ||
 	    !probe_attest_status_covers(
-		    "Attested (3 publishers), valid until 1700000000", 2)) {
+		    "Attested (3 publishers), valid until 1700000000", NULL,
+		    2)) {
 		FAIL("attested status refused");
 		return;
 	}
@@ -1342,13 +1367,38 @@ static void test_attest_status_covers(void)
 
 	TEST("a status short of the expected count is not the fleet's");
 	if (probe_attest_status_covers(
-		    "Attested (1 publisher), valid until 1700000000", 2) ||
-	    probe_attest_status_covers("Idle: no publisher configured", 1) ||
-	    probe_attest_status_covers("Attestation incomplete", 1) ||
-	    probe_attest_status_covers("Attested (x publishers)", 1) ||
-	    probe_attest_status_covers("", 1) ||
-	    probe_attest_status_covers(NULL, 1)) {
+		    "Attested (1 publisher), valid until 1700000000", NULL,
+		    2) ||
+	    probe_attest_status_covers("Idle: no publisher configured", NULL,
+				       1) ||
+	    probe_attest_status_covers("Attestation incomplete", NULL, 1) ||
+	    probe_attest_status_covers("Attested (x publishers)", NULL, 1) ||
+	    probe_attest_status_covers("", NULL, 1) ||
+	    probe_attest_status_covers(NULL, NULL, 1)) {
 		FAIL("unattested status accepted");
+		return;
+	}
+	PASS();
+
+	/*
+	 * A host that already attested to one publisher reads the same count
+	 * after the reload that swaps it for the fleet's, until the loop has
+	 * taken the reload: only a status other than the one read before it
+	 * is the fleet's round.
+	 */
+	TEST("the status from before the reload is not taken for a new round");
+	if (probe_attest_status_covers(
+		    "Attested (1 publisher), valid until 1700000000",
+		    "Attested (1 publisher), valid until 1700000000", 1)) {
+		FAIL("stale status accepted");
+		return;
+	}
+	if (!probe_attest_status_covers(
+		    "Attested (1 publisher), valid until 1700000300",
+		    "Attested (1 publisher), valid until 1700000000", 1) ||
+	    !probe_attest_status_covers(
+		    "Attested (1 publisher), valid until 1700000300", "", 1)) {
+		FAIL("new round refused");
 		return;
 	}
 	PASS();

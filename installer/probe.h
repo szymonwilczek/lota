@@ -382,8 +382,10 @@ int probe_conf_buf_profile_anchor(const char *buf, int index, char *out,
 int probe_conf_buf_continuous_count(const char *buf);
 
 /* Pure: 1 when the loop's status says it attested to at least expected
- * publishers ("Attested (N publisher(s)), ..."), else 0 */
-int probe_attest_status_covers(const char *status, int expected);
+ * publishers ("Attested (N publisher(s)), ...") and is not the status
+ * before read ahead of a reload (NULL or empty: none was), else 0 */
+int probe_attest_status_covers(const char *status, const char *before,
+			       int expected);
 
 /* How the self-check proves this host attests. */
 enum probe_selfcheck_plan {
@@ -394,11 +396,16 @@ enum probe_selfcheck_plan {
 	/* Publisher profiles are the target list, so no single verifier can be
 	 * named -- the agent refuses that combination */
 	SELFCHECK_PUBLISHERS_REPORT,
+	/* This install recorded the fleet's verifier as a profile: the loop
+	 * reports to it, so the loop's own status is waited on */
+	SELFCHECK_LOOP_REPORTS,
 };
 
-/* Pure decision from the two inputs the stage has */
+/* Pure decision from the inputs the stage has.
+ * fleet_profile: the CA this install enrolled with is recorded as a profile */
 enum probe_selfcheck_plan probe_selfcheck_plan(const char *verifier,
-					       int profile_count);
+					       int profile_count,
+					       bool fleet_profile);
 
 /* 1 when this host has opted into unattended boot-path bring-up,
  * either by the marker file at path or by LOTA_AUTO_BRINGUP=1 in the environment.

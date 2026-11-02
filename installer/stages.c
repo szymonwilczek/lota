@@ -1396,6 +1396,19 @@ static int record_fleet_publisher(struct install_ctx *ctx)
 			"nothing (no --verifier given)");
 
 	{
+		const char *const sv[] = { "systemctl", "show",
+					   "-p",	"StatusText",
+					   "--value",	"lota-attest.service",
+					   NULL };
+
+		/* the self-check waits for a status other than this one */
+		if (run_capture(sv, ctx->loop_status_before,
+				sizeof(ctx->loop_status_before)) != 0)
+			ctx->loop_status_before[0] = '\0';
+		ctx->loop_status_before[strcspn(ctx->loop_status_before, "\n")] =
+			'\0';
+	}
+	{
 		const char *const rv[] = { "systemctl", "try-reload-or-restart",
 					   "lota-agent.service",
 					   "lota-attest.service", NULL };
@@ -1459,6 +1472,69 @@ static int st_enroll_apply(struct install_ctx *ctx)
 }
 
 /* self-check + telemetry summary */
+
+/* first round to a freshly recorded profile, retries included */
+#define SELFCHECK_LOOP_WAIT_SEC 90
+#define SELFCHECK_LOOP_POLL_SEC 2
+
+/*
+ * The fleet's verifier is reported to by the loop, so the loop is what is
+ * proven: its status has to name every continuously reporting publisher as
+ * attested.
+ * A status from before the reload names fewer, so it is not taken for it.
+ */
+static int wait_for_loop_report(struct install_ctx *ctx)
+{
+	const char *const argv[] = { "systemctl", "show",
+				     "-p",	  "StatusText",
+				     "--value",	  "lota-attest.service",
+				     NULL };
+	const size_t conf_cap = 16384;
+	char status[512] = { 0 };
+	int expected = 1;
+	char *conf;
+
+	/* inlined into install_self_check(), whose frame cannot hold it */
+	conf = calloc(1, conf_cap);
+	if (!conf) {
+		ui_text(&ctx->ui, "Cannot read %s (%s)", PATH_LOTA_CONF,
+			strerror(ENOMEM));
+		return -ENOMEM;
+	}
+	if (probe_read_text(PATH_LOTA_CONF, conf, conf_cap) == 0 &&
+	    probe_conf_buf_continuous_count(conf) > expected)
+		expected = probe_conf_buf_continuous_count(conf);
+	free(conf);
+
+	ui_text(&ctx->ui,
+		"Waiting up to %d s for the attestation loop to report to the "
+		"fleet's verifier.",
+		SELFCHECK_LOOP_WAIT_SEC);
+
+	for (int waited = 0;; waited += SELFCHECK_LOOP_POLL_SEC) {
+		if (run_capture(argv, status, sizeof(status)) == 0) {
+			status[strcspn(status, "\n")] = '\0';
+			if (probe_attest_status_covers(status,
+						       ctx->loop_status_before,
+						       expected)) {
+				ui_kv(&ctx->ui, "Attestation loop", status);
+				return 0;
+			}
+		}
+		if (waited >= SELFCHECK_LOOP_WAIT_SEC)
+			break;
+		if (ctx->ui.sink && ctx->ui.sink->abort &&
+		    ctx->ui.sink->abort(ctx->ui.sink->ud))
+			break;
+		sleep(SELFCHECK_LOOP_POLL_SEC);
+	}
+
+	ui_kv(&ctx->ui, "Attestation loop",
+	      status[0] ? status : "no status reported");
+	ui_text(&ctx->ui, "The loop has not attested to the fleet's verifier. "
+			  "journalctl -u lota-attest -b says why.");
+	return -1;
+}
 
 static const char telemetry_summary[] =
 	"Every attestation report sent to the operator's verifier "
@@ -1550,6 +1626,7 @@ int install_self_check(struct install_ctx *ctx)
 	int ok = 1;
 	int profiles;
 	int rc_cert;
+	bool fleet;
 
 	ui_stage_begin(&ctx->ui, install_step_count, install_step_count,
 		       install_selfcheck_title);
@@ -1638,7 +1715,23 @@ after_cert:
 	if (profiles < 0)
 		profiles = 0;
 
-	switch (probe_selfcheck_plan(ctx->opts.verifier, profiles)) {
+	fleet = false;
+	if (ctx->opts.ca_server && ctx->opts.ca_cert) {
+		int rec = installer_profile_recorded(PATH_LOTA_CONF,
+						     ctx->opts.ca_cert);
+
+		if (rec < 0) {
+			ui_kv(&ctx->ui, "Fleet publisher", "NOT readable");
+			ok = 0;
+		}
+		fleet = rec == 1;
+	}
+
+	switch (probe_selfcheck_plan(ctx->opts.verifier, profiles, fleet)) {
+	case SELFCHECK_LOOP_REPORTS:
+		if (wait_for_loop_report(ctx) != 0)
+			ok = 0;
+		break;
 	case SELFCHECK_ONE_ROUND: {
 		const char *argv[10];
 		int n = 0;
