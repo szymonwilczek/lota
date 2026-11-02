@@ -52,18 +52,6 @@ type CertificateVerifier struct {
 	crls     atomic.Pointer[crl.Set]
 }
 
-// CRL sentinels re-exported from the shared crl module so existing
-// errors.Is callers keep matching against the store API after the
-// engine moved out of this package.
-var (
-	ErrCertificateRevoked   = crl.ErrCertificateRevoked
-	ErrCRLStale             = crl.ErrCRLStale
-	ErrCRLSignature         = crl.ErrCRLSignature
-	ErrCRLNoIssuer          = crl.ErrCRLNoIssuer
-	ErrCRLMissingNextUpdate = crl.ErrCRLMissingNextUpdate
-	ErrCRLWeakSignature     = crl.ErrCRLWeakSignature
-)
-
 // certificate verification errors
 var (
 	ErrNoCertificate       = errors.New("certificate required but not provided")
