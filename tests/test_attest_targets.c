@@ -111,6 +111,10 @@ static void test_single_verifier(void)
 	CHECK(attest_targets_build(&cfg, NULL, 8443, NULL, 300, targets,
 				   LOTA_CONFIG_MAX_PROFILES, &count) == -EINVAL,
 	      "a single target with no verifier is refused");
+	/* what the CLI hands over when neither a file nor --server named one */
+	CHECK(attest_targets_build(&cfg, "", 8443, NULL, 300, targets,
+				   LOTA_CONFIG_MAX_PROFILES, &count) == -EINVAL,
+	      "an empty verifier name is no verifier either");
 
 	/* NULL config is the same case as config with no profiles */
 	CHECK(attest_targets_build(NULL, "verifier.example", 8443, NULL, 300,
