@@ -1754,6 +1754,7 @@ $(BUILD_DIR)/test_signal_shutdown: TEST_LDLIBS := -pthread
 $(BUILD_DIR)/test_standing_answer: $(AGENT_DIR)/standing_answer.h
 $(BUILD_DIR)/test_startup_hint: $(AGENT_DIR)/startup_hint.h
 $(BUILD_DIR)/test_status_flags: $(AGENT_DIR)/status_flags.h $(INC_DIR)/lota_ipc.h
+$(BUILD_DIR)/test_report_flags: $(AGENT_DIR)/report_flags.h $(INC_DIR)/attestation.h $(INC_DIR)/lota_ipc.h
 
 $(BUILD_DIR)/test_steam_runtime: $(AGENT_DIR)/steam_runtime.c $(AGENT_DIR)/journal.c
 $(BUILD_DIR)/test_steam_runtime: TEST_LDLIBS := -lsystemd
@@ -1982,7 +1983,8 @@ VALGRIND_UNIT_BINS := \
 	test_module_purpose \
 	test_server_sdk test_anticheat test_loader_attach test_enroll_state \
 	test_profile_id test_attest_targets test_attest_reload test_attest_aggregate \
-	test_status_flags test_iommu_evidence test_terminate_policy \
+	test_status_flags test_report_flags test_iommu_evidence \
+	test_terminate_policy \
 	test_publisher_profile test_verify_result_str test_connect_hint \
 	test_net_errors test_tls_anchor \
 	test_xattr_carry test_ima_policy_scope test_kernel_floor_hint \
