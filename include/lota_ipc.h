@@ -341,7 +341,6 @@ struct lota_ipc_token {
  * SUBSCRIBE drops this bit for every other connection.
  */
 #define LOTA_IPC_EVENT_PROFILE (1U << 3)
-#define LOTA_IPC_EVENT_ALL 0xFFFFFFFFU
 
 /*
  * SUBSCRIBE request payload
