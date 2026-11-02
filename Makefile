@@ -1756,7 +1756,6 @@ $(BUILD_DIR)/test_startup_hint: $(AGENT_DIR)/startup_hint.h
 $(BUILD_DIR)/test_status_flags: $(AGENT_DIR)/status_flags.h $(INC_DIR)/lota_ipc.h
 
 $(BUILD_DIR)/test_steam_runtime: $(AGENT_DIR)/steam_runtime.c $(AGENT_DIR)/journal.c
-$(BUILD_DIR)/test_steam_runtime: TEST_CFLAGS := -DLOTA_GROUP_NAME='"root"'
 $(BUILD_DIR)/test_steam_runtime: TEST_LDLIBS := -lsystemd
 
 $(BUILD_DIR)/test_subscribe: $(SDK_DIR)/lota_gaming.c $(VERSION_FILE)

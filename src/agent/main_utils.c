@@ -5,6 +5,7 @@
 
 #include <errno.h>
 #include <fcntl.h>
+#include <grp.h>
 #include <limits.h>
 #include <stdio.h>
 #include <string.h>
@@ -452,6 +453,33 @@ static int container_socket_paths(uint32_t uid, char *dir, size_t dirsz,
 	return 0;
 }
 
+/* group every container socket directory is handed to; set before any bind */
+static gid_t container_dir_gid = (gid_t)-1;
+
+/*
+ * Only the daemon, as root, hands the directory to the group.
+ * An unprivileged agent has nothing to give and leaves it alone.
+ * A missing group is said once here, not at every login.
+ */
+static int resolve_container_dir_gid(void)
+{
+	struct group *grp;
+
+	container_dir_gid = (gid_t)-1;
+	if (geteuid() != 0)
+		return 0;
+
+	grp = getgrnam(STEAM_RT_SOCKET_GROUP);
+	if (!grp) {
+		lota_err(
+			"No '%s' group, so a container socket directory would be root-only and no title could reach the socket in it; no container socket will be served",
+			STEAM_RT_SOCKET_GROUP);
+		return -ENOENT;
+	}
+	container_dir_gid = grp->gr_gid;
+	return 0;
+}
+
 static int add_listener_for_uid(uint32_t uid, void *user)
 {
 	struct ipc_context *ctx = user;
@@ -463,7 +491,7 @@ static int add_listener_for_uid(uint32_t uid, void *user)
 	if (ret < 0)
 		return ret;
 
-	ret = steam_runtime_ensure_socket_dir(dir);
+	ret = steam_runtime_ensure_socket_dir(dir, container_dir_gid);
 	if (ret < 0) {
 		/* no login yet, or logind still mounting: the watch retries */
 		if (!container_watch_bind_pending(ret))
@@ -548,6 +576,9 @@ void setup_container_listener(struct ipc_context *ctx,
 			.user = ctx,
 		};
 
+		if (resolve_container_dir_gid() < 0)
+			return;
+
 		/*
 		 * The listener a Proton title connects to belongs to a login,
 		 * and no one has logged in yet when the daemon starts.
@@ -585,7 +616,10 @@ void setup_container_listener(struct ipc_context *ctx,
 	if (strcmp(path, LOTA_IPC_SOCKET_PATH) == 0)
 		return;
 
-	ret = steam_runtime_ensure_socket_dir(dir);
+	if (resolve_container_dir_gid() < 0)
+		return;
+
+	ret = steam_runtime_ensure_socket_dir(dir, container_dir_gid);
 	if (ret < 0) {
 		lota_err(
 			"Cannot create the container socket dir %s (%s), and this runtime directory names no login to wait for, so no container socket will appear until the agent is started again with the directory in place. A host whose runtime directory is %s/<uid> gets one when its user logs in; name the uid with container_listener_uid to have that watched explicitly",

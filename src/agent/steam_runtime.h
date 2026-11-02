@@ -15,6 +15,7 @@
 #include <limits.h>
 #include <stddef.h>
 #include <stdint.h>
+#include <sys/types.h>
 
 /*
  * Steam Runtime container types.
@@ -52,6 +53,11 @@ enum steam_runtime_type {
  * Appended to $XDG_RUNTIME_DIR.
  */
 #define STEAM_RT_SOCKET_DIR_SUFFIX "lota"
+
+/*
+ * Group the socket directory is handed to, so titles in it can connect.
+ */
+#define STEAM_RT_SOCKET_GROUP "lota"
 
 /*
  * Container-accessible socket filename.
@@ -140,13 +146,14 @@ int steam_runtime_container_socket_path(char *buf, size_t bufsz);
  * steam_runtime_ensure_socket_dir - Create the container-accessible
  *   socket directory with correct permissions.
  * @dir: Path to create (e.g: from steam_runtime_container_socket_dir).
+ * @gid: Group to hand the directory to, or (gid_t)-1 to leave it.
  *
- * Creates the directory with mode 0750 and sets group to 'lota'
- * if the group exists, matching the primary socket directory setup.
+ * Creates the directory with mode 0750 and hands it to @gid,
+ * matching the primary socket directory setup.
  *
  * Returns: 0 on success, negative errno on failure.
  */
-int steam_runtime_ensure_socket_dir(const char *dir);
+int steam_runtime_ensure_socket_dir(const char *dir, gid_t gid);
 
 /*
  * steam_runtime_log_info - Log detected runtime information.

@@ -552,7 +552,7 @@ static void test_ensure_dir_creates(void)
 
 	snprintf(dir, sizeof(dir), "%s/lota_test_dir", tmpdir);
 
-	int ret = steam_runtime_ensure_socket_dir(dir);
+	int ret = steam_runtime_ensure_socket_dir(dir, (gid_t)-1);
 	if (ret != 0) {
 		FAIL("returned error");
 		return;
@@ -588,7 +588,7 @@ static void test_ensure_dir_mode_under_restrictive_umask(void)
 	snprintf(dir, sizeof(dir), "%s/lota_test_umask_dir", tmpdir);
 
 	old_umask = umask(0077);
-	ret = steam_runtime_ensure_socket_dir(dir);
+	ret = steam_runtime_ensure_socket_dir(dir, (gid_t)-1);
 	umask(old_umask);
 
 	if (ret != 0) {
@@ -610,7 +610,7 @@ static void test_ensure_dir_exists(void)
 {
 	TEST("ensure_socket_dir: succeeds if directory already exists");
 
-	int ret = steam_runtime_ensure_socket_dir(tmpdir);
+	int ret = steam_runtime_ensure_socket_dir(tmpdir, (gid_t)-1);
 	if (ret != 0) {
 		FAIL("returned error");
 		return;
@@ -630,7 +630,7 @@ static void test_ensure_dir_not_a_dir(void)
 	if (fd >= 0)
 		close(fd);
 
-	int ret = steam_runtime_ensure_socket_dir(path);
+	int ret = steam_runtime_ensure_socket_dir(path, (gid_t)-1);
 	if (ret != -ENOTDIR) {
 		FAIL("expected -ENOTDIR");
 		return;
@@ -642,7 +642,7 @@ static void test_ensure_dir_null(void)
 {
 	TEST("ensure_socket_dir: NULL -> -EINVAL");
 
-	int ret = steam_runtime_ensure_socket_dir(NULL);
+	int ret = steam_runtime_ensure_socket_dir(NULL, (gid_t)-1);
 	if (ret != -EINVAL) {
 		FAIL("expected -EINVAL");
 		return;
@@ -654,7 +654,7 @@ static void test_ensure_dir_empty(void)
 {
 	TEST("ensure_socket_dir: empty string -> -EINVAL");
 
-	int ret = steam_runtime_ensure_socket_dir("");
+	int ret = steam_runtime_ensure_socket_dir("", (gid_t)-1);
 	if (ret != -EINVAL) {
 		FAIL("expected -EINVAL");
 		return;
