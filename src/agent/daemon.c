@@ -330,6 +330,28 @@ void pidfile_remove(const char *path, int fd)
 		close(fd);
 }
 
+int pidfile_wait_released(const char *path, unsigned int timeout_ms)
+{
+	int flags = O_RDONLY | O_CLOEXEC;
+	int fd;
+	int ret = 0;
+
+	(void)timeout_ms;
+
+#ifdef O_NOFOLLOW
+	flags |= O_NOFOLLOW;
+#endif
+	fd = open(daemon_pidfile_path(path), flags);
+	if (fd < 0)
+		return errno == ENOENT ? 0 : -errno;
+
+	if (flock(fd, LOCK_SH | LOCK_NB) < 0)
+		ret = errno == EWOULDBLOCK ? -ETIMEDOUT : -errno;
+
+	close(fd);
+	return ret;
+}
+
 bool daemon_reload_pending(void)
 {
 	return g_daemon_reload && *g_daemon_reload != 0;
