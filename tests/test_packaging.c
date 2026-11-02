@@ -511,6 +511,37 @@ static size_t iface_calls(const char *body, size_t len, char out[][64],
 	return count;
 }
 
+static void test_selinux_container_listener_is_shipped(void)
+{
+	static const char *const rules[] = {
+		"userdom_manage_tmp_dirs(lota_agent_t)",
+		"userdom_manage_tmp_sockets(lota_agent_t)",
+		"userdom_watch_tmp_dirs(lota_agent_t)", " chown "
+	};
+	static char policy[65536];
+	FILE *fp;
+	size_t got;
+
+	TEST("selinux: the shipped module carries the container listener");
+
+	fp = open_shipped("selinux/lota.te");
+	if (!fp) {
+		FAIL("could not open selinux/lota.te");
+		return;
+	}
+	got = fread(policy, 1, sizeof(policy) - 1, fp);
+	fclose(fp);
+	policy[got] = '\0';
+
+	for (size_t i = 0; i < sizeof(rules) / sizeof(rules[0]); i++) {
+		if (!strstr(policy, rules[i])) {
+			FAIL("the packages ship lota.pp alone: the rule belongs there");
+			return;
+		}
+	}
+	PASS();
+}
+
 static void test_selinux_gaming_client_reaches_container_socket(void)
 {
 	static const char *const road[] = { "lota_gaming_client",
@@ -950,6 +981,7 @@ int main(void)
 	test_selinux_interfaces_are_installed();
 	test_selinux_reports_every_tunable();
 	test_selinux_policy_carries_no_portcon();
+	test_selinux_container_listener_is_shipped();
 	test_selinux_gaming_client_reaches_container_socket();
 	test_installer_labels_the_config_directory();
 	test_installer_relabel_reapplies_the_device_labels();
