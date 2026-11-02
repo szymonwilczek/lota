@@ -589,14 +589,12 @@ func (s *Server) sendErrorResult(conn net.Conn, resultCode uint32) {
 type HealthStatus struct {
 	Listening bool
 	Address   string
-	Stats     verify.Stats
 }
 
 func (s *Server) HealthCheck() HealthStatus {
 	return HealthStatus{
 		Listening: s.serving.Load(),
 		Address:   s.addr,
-		Stats:     s.verifier.Stats(),
 	}
 }
 
