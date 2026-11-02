@@ -36,7 +36,6 @@
 /usr/lib/lota/lota_lsm\.bpf\.o		--	gen_context(system_u:object_r:lota_bpf_t,s0)
 /usr/lib64/lota(/.*)?				gen_context(system_u:object_r:lota_bpf_t,s0)
 /usr/lib64/lota/lota_lsm\.bpf\.o	--	gen_context(system_u:object_r:lota_bpf_t,s0)
-/sys/fs/bpf/lota(/.*)?				gen_context(system_u:object_r:lota_bpf_t,s0)
 
 #
 # Configuration

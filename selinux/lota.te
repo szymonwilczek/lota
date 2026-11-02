@@ -150,8 +150,6 @@ dev_read_rand(lota_agent_t)
 # BPF subsystem
 #
 
-fs_manage_bpf_files(lota_agent_t)
-fs_manage_bpf_dirs(lota_agent_t)
 kernel_read_system_state(lota_agent_t)
 
 tunable_policy(`lota_bpf_load',`
