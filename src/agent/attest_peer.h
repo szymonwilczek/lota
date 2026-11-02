@@ -27,6 +27,7 @@
 #include <stdint.h>
 
 #include "attest_targets.h"
+#include "report_flags.h"
 
 struct attest_peer {
 	int fd; /* connection to the socket owner, -1 when down */
@@ -77,5 +78,14 @@ int attest_peer_fd(const struct attest_peer *peer);
  * Closed connection returns false and schedules a reconnect.
  */
 bool attest_peer_drain(struct attest_peer *peer);
+
+/*
+ * Ask the socket owner for its mode and status word, on a connection of
+ * its own, so a one-shot report can ask as well as the loop.
+ * Only an owner running as this process's user is believed.
+ *
+ * Returns 0 with @out->answered set, or a negative errno with @out zeroed.
+ */
+int attest_daemon_view(struct enforcement_view *out);
 
 #endif /* LOTA_AGENT_ATTEST_PEER_H */

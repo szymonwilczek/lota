@@ -4,7 +4,9 @@
  *
  * LOTA_REPORT_FLAG_ENFORCE and LOTA_REPORT_FLAG_BPF_ACTIVE are bound into the
  * quote's nonce, and a verifier that requires enforcement accepts a host on
- * ENFORCE alone. Both bits describe the process that holds the LSM.
+ * ENFORCE alone. Both bits describe the enforcement daemon, which holds the
+ * LSM, not the process building the report: a daemon that does not answer
+ * enforces nothing, and enforce mode with nothing loaded blocks nothing.
  *
  * Copyright (C) 2026 Szymon Wilczek
  */
@@ -30,13 +32,12 @@ report_enforcement_flags(const struct enforcement_view *v)
 {
 	uint32_t flags = 0;
 
-	if (!v)
+	if (!v || !v->answered || !(v->status_flags & LOTA_STATUS_BPF_LOADED))
 		return 0;
 
+	flags |= LOTA_REPORT_FLAG_BPF_ACTIVE;
 	if (v->mode == LOTA_MODE_ENFORCE)
 		flags |= LOTA_REPORT_FLAG_ENFORCE;
-	if (v->status_flags & LOTA_STATUS_BPF_LOADED)
-		flags |= LOTA_REPORT_FLAG_BPF_ACTIVE;
 
 	return flags;
 }

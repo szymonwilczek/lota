@@ -208,6 +208,82 @@ static int peer_read_reply(int fd, struct lota_ipc_response *resp,
 	return -EPROTO;
 }
 
+int attest_daemon_view(struct enforcement_view *out)
+{
+	struct timeval tv = { .tv_sec = ATTEST_PEER_IO_TIMEOUT_SEC,
+			      .tv_usec = 0 };
+	struct lota_ipc_request req = {
+		.magic = LOTA_IPC_MAGIC,
+		.version = LOTA_IPC_VERSION,
+		.cmd = LOTA_IPC_CMD_GET_STATUS,
+		.payload_len = 0,
+	};
+	uint8_t payload[LOTA_IPC_MAX_PAYLOAD];
+	struct lota_ipc_response resp;
+	struct lota_ipc_status status;
+	struct sockaddr_un addr;
+	struct ucred cred;
+	socklen_t cred_len = sizeof(cred);
+	int fd, ret;
+
+	if (!out)
+		return -EINVAL;
+	memset(out, 0, sizeof(*out));
+
+	fd = socket(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0);
+	if (fd < 0)
+		return -errno;
+
+	memset(&addr, 0, sizeof(addr));
+	addr.sun_family = AF_UNIX;
+	snprintf(addr.sun_path, sizeof(addr.sun_path), "%s",
+		 LOTA_IPC_SOCKET_PATH);
+
+	if (connect(fd, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
+		ret = -errno;
+		goto out;
+	}
+
+	/* the answer is reported as enforcement, so the owner must be us */
+	if (getsockopt(fd, SOL_SOCKET, SO_PEERCRED, &cred, &cred_len) < 0) {
+		ret = -errno;
+		goto out;
+	}
+	if (cred_len < sizeof(cred) || cred.uid != geteuid()) {
+		ret = -EPERM;
+		goto out;
+	}
+
+	setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+	setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
+
+	ret = peer_write_all(fd, (const uint8_t *)&req, sizeof(req));
+	if (ret < 0)
+		goto out;
+
+	ret = peer_read_reply(fd, &resp, payload, sizeof(payload));
+	if (ret < 0)
+		goto out;
+
+	if (resp.result != LOTA_IPC_OK) {
+		ret = -EACCES;
+		goto out;
+	}
+	if (resp.payload_len < sizeof(status)) {
+		ret = -EBADMSG;
+		goto out;
+	}
+
+	memcpy(&status, payload, sizeof(status));
+	out->answered = true;
+	out->mode = status.mode;
+	out->status_flags = status.flags;
+	ret = 0;
+out:
+	close(fd);
+	return ret;
+}
+
 int attest_peer_fd(const struct attest_peer *peer)
 {
 	return peer ? peer->fd : -1;

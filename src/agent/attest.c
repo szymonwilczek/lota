@@ -358,6 +358,22 @@ int export_policy(int mode)
  *                 trust anchor is configured and the host therefore has no
  *                 profile to read one from.
  */
+/* Say when the daemon stops or starts answering, not at every report */
+static void note_daemon_view(int ret)
+{
+	static int last = 1;
+
+	if (ret < 0 && last >= 0)
+		lota_warn(
+			"The enforcement daemon on %s does not answer (%s): "
+			"reports carry no ENFORCE or BPF_ACTIVE until it does",
+			LOTA_IPC_SOCKET_PATH, strerror(-ret));
+	else if (ret == 0 && last < 0)
+		lota_info("The enforcement daemon answers again; reports "
+			  "carry its mode");
+	last = ret < 0 ? ret : 0;
+}
+
 static int build_attestation_report(const struct verifier_challenge *challenge,
 				    struct lota_attestation_report *report,
 				    const char *aik_cert_path)
@@ -379,16 +395,14 @@ static int build_attestation_report(const struct verifier_challenge *challenge,
 	memcpy(report->tpm.nonce, challenge->nonce, LOTA_NONCE_SIZE);
 	report->tpm.pcr_mask = challenge->pcr_mask;
 
-	/* part of the nonce binding, so signed by the quote's extraData */
+	/*
+	 * Enforcement is the daemon's, asked fresh for every report.
+	 * Part of the nonce binding, so signed by the quote's extraData.
+	 */
 	{
-		struct enforcement_view view = {
-			.answered = true,
-			.mode = (uint8_t)g_agent.mode,
-			.status_flags = g_agent.bpf_ctx.loaded ?
-						LOTA_STATUS_BPF_LOADED :
-						0,
-		};
+		struct enforcement_view view;
 
+		note_daemon_view(attest_daemon_view(&view));
 		report->header.flags |= report_enforcement_flags(&view);
 	}
 
