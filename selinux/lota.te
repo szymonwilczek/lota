@@ -98,9 +98,9 @@ dev_node(lota_tpm_device_t)
 # the code of title that asked to be protected.
 # It grants no debugger: attaching is refused separately by the agent's own
 # LSM hook, which exempts the agent for read access only.
-allow lota_agent_t self:capability { dac_override dac_read_search sys_admin sys_rawio ipc_lock sys_ptrace };
+allow lota_agent_t self:capability { dac_override dac_read_search sys_admin sys_ptrace };
 allow lota_agent_t self:capability2 { bpf perfmon };
-allow lota_agent_t self:process { signal signull setcap setrlimit };
+allow lota_agent_t self:process { signal signull };
 allow lota_agent_t self:fifo_file rw_fifo_file_perms;
 allow lota_agent_t self:unix_stream_socket create_stream_socket_perms;
 allow lota_agent_t self:unix_dgram_socket create_socket_perms;
