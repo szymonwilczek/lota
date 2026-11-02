@@ -1169,8 +1169,8 @@ static int st_agent_apply(struct install_ctx *ctx)
 		 * attestation loop is enabled here rather than by package:
 		 * installing enforcement is not the same act as deciding a machine
 		 * should start reporting.
-		 * Its own condition keeps it inactive until this host has publisher,
-		 * so enabling it before there is one starts nothing.
+		 * Before this host has a publisher the loop runs with no target,
+		 * so the enrollment that follows is reported to without a restart.
 		 */
 		const char *const argv[] = { "systemctl", "enable", "--now",
 					     "lota-attest.service", NULL };
