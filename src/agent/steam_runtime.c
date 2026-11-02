@@ -364,15 +364,8 @@ int steam_runtime_ensure_socket_dir(const char *dir, gid_t gid)
 	 * syscalls, but the symlink check pins the inode the chown lands
 	 * on to the one lstat saw).
 	 */
-	if (fchownat(AT_FDCWD, dir, (uid_t)-1, gid, AT_SYMLINK_NOFOLLOW) < 0) {
-		int ret = -errno;
-
-		lota_err("steam_runtime: chown(%s, -1, %d): %s -- the "
-			 "directory stays root-only, so no title can reach "
-			 "the socket in it",
-			 dir, (int)gid, strerror(-ret));
-		return ret;
-	}
+	if (fchownat(AT_FDCWD, dir, (uid_t)-1, gid, AT_SYMLINK_NOFOLLOW) < 0)
+		return -errno;
 
 	return 0;
 }

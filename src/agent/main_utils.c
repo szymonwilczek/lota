@@ -495,9 +495,9 @@ static int add_listener_for_uid(uint32_t uid, void *user)
 	if (ret < 0) {
 		/* no login yet, or logind still mounting: the watch retries */
 		if (!container_watch_bind_pending(ret))
-			fprintf(stderr,
-				"Warning: cannot create container socket dir %s: %s\n",
-				dir, strerror(-ret));
+			lota_err(
+				"Cannot prepare the container socket dir %s (%s), so no title of uid %u can reach a socket in it",
+				dir, strerror(-ret), uid);
 		return ret;
 	}
 
