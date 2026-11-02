@@ -74,7 +74,6 @@ type Counter struct {
 func (c *Counter) Inc()         { c.val.Add(1) }
 func (c *Counter) Add(n int64)  { c.val.Add(n) }
 func (c *Counter) Value() int64 { return c.val.Load() }
-func (c *Counter) Reset()       { c.val.Store(0) }
 
 // tracks counts per label value
 type LabeledCounter struct {
