@@ -200,9 +200,6 @@ allow lota_agent_t system_map_t:file read_file_perms;
 files_read_all_files(lota_agent_t)
 allow lota_agent_t file_type:file { getattr open read ioctl };
 
-# /proc/<pid>/map_files of a process the agent did not spawn
-domain_read_all_domains_state(lota_agent_t)
-
 # Ending a protected process on its owner's behalf
 #
 # Protected task takes no signal from anything but itself, the agent
