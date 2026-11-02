@@ -142,8 +142,6 @@ allow lota_agent_t lota_tpm_device_t:chr_file rw_chr_file_perms;
 # attest until the udev relabel has run.
 dev_rw_tpm(lota_agent_t)
 
-dev_read_raw_memory(lota_agent_t)
-
 # /dev/urandom
 dev_read_urand(lota_agent_t)
 dev_read_rand(lota_agent_t)
