@@ -113,8 +113,8 @@ int net_transport_error(int ssl_err, int sock_errno);
  * The likely cause of a connect(2) that was refused, as a sentence the operator
  * can act on, or NULL when there is nothing better to say than the errno.
  *
- * Both causes answer EACCES with no AVC (dontaudit): a port without lota_port_t,
- * or lota_network_attest off. The hint names the one it reads, or both when it
+ * Both causes answer EACCES: a port without lota_port_t, or lota_network_attest
+ * off. The hint names the one it reads, or both when it
  * reads neither, and is given only while SELinux enforces.
  *
  * @selinux_root: selinuxfs mount holding enforce and booleans/; NULL for the

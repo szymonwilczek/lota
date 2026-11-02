@@ -796,26 +796,22 @@ const char *net_connect_refusal_hint(int err, int port,
 		n = snprintf(buf, cap,
 			     "SELinux is enforcing and the " NET_ATTEST_BOOLEAN
 			     " boolean is off, which is "
-			     "what refuses this connect; the policy dontaudits "
-			     "it, so no AVC is logged anywhere. Labelling the "
-			     "port changes nothing while the boolean is off -- "
+			     "what refuses this connect. Labelling the port "
+			     "changes nothing while the boolean is off -- "
 			     "semanage would answer 'already defined' and exit "
 			     "0. Turn it back on:\n"
 			     "  sudo setsebool -P " NET_ATTEST_BOOLEAN " on");
 	else if (tunable == 1)
 		n = snprintf(buf, cap,
 			     "SELinux is enforcing and TCP port %d carries no "
-			     "LOTA label, which is what refuses this connect; "
-			     "the policy dontaudits it, so no AVC is logged "
-			     "anywhere. Label the port and the next round goes "
-			     "through:\n"
+			     "LOTA label, which is what refuses this connect. "
+			     "Label the port and the next round goes through:\n"
 			     "  sudo semanage port -a -t lota_port_t -p tcp %d",
 			     port, port);
 	else
 		n = snprintf(buf, cap,
-			     "SELinux is enforcing and refused this connect; "
-			     "the policy dontaudits it, so no AVC is logged "
-			     "anywhere. Two rules refuse it and this host "
+			     "SELinux is enforcing and refused this connect. "
+			     "Two rules refuse it and this host "
 			     "cannot read which one did: TCP port %d carrying "
 			     "no LOTA label, and the " NET_ATTEST_BOOLEAN
 			     " boolean being off.\n"
