@@ -202,9 +202,6 @@ allow lota_agent_t system_map_t:file read_file_perms;
 # and measurement that is missing must never be issued as trusted one,
 # so every GET_TOKEN on the host fails closed.
 #
-# Denial is dontaudit'ed in the base policy, so it leaves no trace in the audit
-# log either: the symptom is a token that is refused with no explanation.
-#
 # Read and measure only, on files already mapped by process the agent was asked
 # to protect.
 files_read_all_files(lota_agent_t)

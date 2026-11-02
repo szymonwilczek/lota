@@ -858,8 +858,8 @@ operator works around it.
 
   Verify the rule landed with ``sesearch -A -s lota_agent_t ...`` before
   retrying the agent. The stock policy ``dontaudit``\ s many reads that the
-  agent legitimately needs (e.g. kallsyms, securityfs), so denials may be
-  silent: run ``sudo semodule -DB`` before reproducing to surface them, then
+  agent legitimately needs (e.g. securityfs), so denials may be silent: run
+  ``sudo semodule -DB`` before reproducing to surface them, then
   ``sudo semodule -B`` to re-enable.
 
 * ``/usr/bin/lota-agent`` **must carry** ``lota_agent_exec_t``. A fresh
