@@ -717,11 +717,11 @@ static void test_export_pcrs_omit_grub_registers(void)
 	 * static pin then fails healthy host, so they must not be in the export set
 	 */
 	for (size_t i = 0; i < count; i++) {
-		if (pcrs[i] == POLICY_PCR_8) {
+		if (pcrs[i] == 8) {
 			FAIL("PCR 8 must not be exported (grubenv drift)");
 			return;
 		}
-		if (pcrs[i] == POLICY_PCR_9) {
+		if (pcrs[i] == 9) {
 			FAIL("PCR 9 must not be exported (grubenv drift)");
 			return;
 		}

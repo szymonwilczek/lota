@@ -37,8 +37,6 @@
 #define POLICY_PCR_1 1
 #define POLICY_PCR_4 4
 #define POLICY_PCR_7 7
-#define POLICY_PCR_8 8
-#define POLICY_PCR_9 9
 #define POLICY_PCR_11 11
 #define POLICY_PCR_14 14
 
