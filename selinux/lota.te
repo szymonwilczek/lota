@@ -231,8 +231,6 @@ fs_read_efivarfs_files(lota_agent_t)
 
 # /sys/fs/selinux
 selinux_get_fs_mount(lota_agent_t)
-selinux_compute_access_vector(lota_agent_t)
-
 # dmesg
 kernel_read_ring_buffer(lota_agent_t)
 
