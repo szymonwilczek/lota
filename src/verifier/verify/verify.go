@@ -115,7 +115,6 @@ type Verifier struct {
 	bannedAttests  atomic.Int64
 
 	// policy enforcement
-	requireEventLog       bool
 	requireBootEnrollment bool
 	selfServiceReanchor   *bool
 }
@@ -169,9 +168,6 @@ type VerifierConfig struct {
 	// optional: attestation decision log (nil = no attestation audit)
 	AttestationLog store.AttestationLog
 
-	// if true, reject attestation reports that do not include an event log
-	RequireEventLog bool
-
 	// if true, refuse to TOFU-establish a per-client boot baseline
 	// (PCR0/PCR1/PCR7) the first time a client reports. The baseline
 	// must be authenticated through one of two enrollment paths:
@@ -221,7 +217,6 @@ func DefaultConfig() VerifierConfig {
 	return VerifierConfig{
 		NonceLifetime:         5 * time.Minute,
 		ResultValidity:        1 * time.Hour,
-		RequireEventLog:       true,
 		RequireBootEnrollment: true,
 		AllowPermissivePolicy: false,
 	}
@@ -264,7 +259,6 @@ func NewVerifier(cfg VerifierConfig, aikVerifier store.AIKCertVerifier) *Verifie
 		attestationLog:        cfg.AttestationLog,
 		nonceLifetime:         cfg.NonceLifetime,
 		resultValidity:        cfg.ResultValidity,
-		requireEventLog:       cfg.RequireEventLog,
 		requireBootEnrollment: cfg.RequireBootEnrollment,
 		selfServiceReanchor:   cfg.EnableSelfServiceReanchor,
 		startTime:             time.Now(),
