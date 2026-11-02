@@ -226,4 +226,12 @@ int net_recv_result(struct net_context *ctx, struct verifier_result *result);
 
 const char *net_result_str(uint32_t result);
 
+/*
+ * The sentence for a verdict on a report that carried @report_flags.
+ *
+ * Some refusals have more than one cause on the host, and the report the
+ * verdict answers says which one this host has.
+ */
+const char *net_verdict_str(uint32_t result, uint32_t report_flags);
+
 #endif /* LOTA_NET_H */

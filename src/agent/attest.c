@@ -846,7 +846,8 @@ static int attest_once(const char *server, int port, const char *ca_cert,
 	}
 
 	if (verbose) {
-		printf("Result: %s\n", net_result_str(result.result));
+		printf("Result: %s\n",
+		       net_verdict_str(result.result, report.header.flags));
 		if (result.result == VERIFY_OK) {
 			printf("Valid until: %lu\n",
 			       (unsigned long)result.valid_until);
@@ -856,7 +857,7 @@ static int attest_once(const char *server, int port, const char *ca_cert,
 	if (result.result != VERIFY_OK) {
 		lota_err("Attestation round failed at %s: %s",
 			 attest_stage_str(ATTEST_STAGE_VERDICT),
-			 net_result_str(result.result));
+			 net_verdict_str(result.result, report.header.flags));
 		ret = 1;
 		goto cleanup;
 	}

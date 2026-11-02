@@ -943,3 +943,9 @@ const char *net_result_str(uint32_t result)
 		return "FAIL - Unknown error";
 	}
 }
+
+const char *net_verdict_str(uint32_t result, uint32_t report_flags)
+{
+	(void)report_flags;
+	return net_result_str(result);
+}
