@@ -837,6 +837,36 @@ static void test_both_hooks_drive_bringup(void)
 }
 
 /*
+ * lota.conf lives in /etc/lota, and every writer of it (--add-publisher, the
+ * installer, lota-steam-setup) expects the directory to be there.
+ */
+static void test_both_manifests_own_the_config_directory(void)
+{
+	static char src[65536];
+
+	TEST("packaging: both manifests own /etc/lota");
+
+	if (!slurp_shipped("packaging/rpm/lota.spec", src, sizeof(src))) {
+		FAIL("could not read lota.spec");
+		return;
+	}
+	if (!strstr(src, "\n%dir %{_sysconfdir}/lota\n")) {
+		FAIL("the spec leaves /etc/lota to whoever writes first");
+		return;
+	}
+	if (!slurp_shipped("packaging/nfpm/lota-agent.yaml", src,
+			   sizeof(src))) {
+		FAIL("could not read lota-agent.yaml");
+		return;
+	}
+	if (!strstr(src, "\n  - dst: /etc/lota\n    type: dir\n")) {
+		FAIL("the nfpm package leaves /etc/lota to whoever writes first");
+		return;
+	}
+	PASS();
+}
+
+/*
  * Ports are labelled by st_selinux_apply(), which a host that passed the stage
  * once never reaches unless the probe asks about the ports of this run.
  */
@@ -1169,6 +1199,7 @@ int main(void)
 	test_installer_labels_the_config_directory();
 	test_upgrade_reloads_the_selinux_module();
 	test_both_hooks_drive_bringup();
+	test_both_manifests_own_the_config_directory();
 	test_agent_unit_skips_userdb();
 	test_installer_probe_asks_about_ports();
 	test_installer_relabel_reapplies_the_device_labels();
