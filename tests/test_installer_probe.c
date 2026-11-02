@@ -735,6 +735,53 @@ cleanup:
 }
 
 /*
+ * A port only a range covers looks typed but the agent is refused there,
+ * and a port another service owns cannot be taken with semanage port -a.
+ */
+static void test_port_needs_label(void)
+{
+	static const char listing[] =
+		"SELinux Port Type              Proto    Port Number\n"
+		"\n"
+		"http_port_t                    tcp      80, 443, 8443\n"
+		"http_port_t                    udp      7443\n"
+		"lota_port_t                    tcp      8545\n"
+		"ssh_port_t                     tcp      22\n"
+		"amqp_port_t                    tcp      15672, 5671-5672\n"
+		"unreserved_port_t              tcp      61000-65535, 1024-32767\n";
+
+	TEST("a port the agent cannot reach needs a label");
+
+	if (probe_port_needs_label(listing, "8443") != 0 ||
+	    probe_port_needs_label(listing, "8545") != 0) {
+		FAIL("a type the agent reaches needs no label");
+		return;
+	}
+	if (probe_port_needs_label(listing, "22") != 0) {
+		FAIL("a port with a type of its own cannot be labelled");
+		return;
+	}
+	if (probe_port_needs_label(listing, "8444") != 1 ||
+	    probe_port_needs_label(listing, "5671") != 1 ||
+	    probe_port_needs_label(listing, "62000") != 1) {
+		FAIL("a port under a range only is refused at connect");
+		return;
+	}
+	if (probe_port_needs_label(listing, "7443") != 1) {
+		FAIL("a udp row says nothing about the tcp port");
+		return;
+	}
+	if (probe_port_needs_label(listing, "") != -EINVAL ||
+	    probe_port_needs_label(listing, "84x") != -EINVAL ||
+	    probe_port_needs_label(listing, "70000") != -EINVAL ||
+	    probe_port_needs_label(listing, "-1") != -EINVAL) {
+		FAIL("not a port number");
+		return;
+	}
+	PASS();
+}
+
+/*
  * Runtime manifest is acted on with privilege, so what counts as a path matters
  * more than convenience: comments and blank lines are skipped, and anything that
  * is not an absolute path -- including one walking back out through '..'
@@ -1492,6 +1539,7 @@ int main(void)
 	test_secureboot_remediation_fits_a_note();
 	test_auto_bringup_opt_in();
 	test_manifest_line();
+	test_port_needs_label();
 	test_installed_kernels();
 	test_barrier_stage_verdicts();
 	test_agent_paused_reader();

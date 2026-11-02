@@ -163,6 +163,18 @@ int probe_fsverity_enable(const char *path);
  */
 int probe_manifest_line(const char *line, char *out, size_t cap);
 
+/*
+ * Pure: reads `semanage port -l` and says whether a tcp port must be labelled
+ * before the agent can reach it.
+ *
+ * 0 when the port is listed under a type the agent connects to, or under a type
+ * of its own that `semanage port -a` cannot replace.
+ * 1 otherwise, including a port covered only by a range such as
+ * unreserved_port_t, where the agent is refused at connect.
+ * -EINVAL when port is not a port number.
+ */
+int probe_port_needs_label(const char *listing, const char *port);
+
 /* Pure: maps statfs f_type magic to probe_fstype */
 enum probe_fstype probe_fstype_from_magic(long magic);
 
