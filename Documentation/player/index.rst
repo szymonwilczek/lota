@@ -402,7 +402,8 @@ Pausing and removing it
 
 **Pausing** is deliberately awkward, and the reason is worth a sentence.
 LOTA's job is to be impossible for a cheat to switch off mid-game, so it
-cannot be stopped the ordinary way, and starting it again takes a restart::
+cannot be killed like an ordinary program, and starting it again takes a
+restart::
 
     sudo lota-install --pause
 
@@ -410,13 +411,18 @@ or::
 
     sudo lota-agent --shutdown
 
+or::
+
+    sudo systemctl stop lota-agent
+
 It explains itself before doing anything. Pausing needs a ``y``: the capital
 ``N`` in the prompt is the answer it takes if you press Enter, and ``q`` walks
 away the same way::
 
     [lota-install] Pausing stops the agent through its own graceful path
-    ('lota-agent --shutdown'). systemd cannot stop the agent - the anti-tamper
-    hook blocks that - so this dedicated path is the only clean way down.
+    ('lota-agent --shutdown', which 'systemctl stop lota-agent' runs too). No
+    signal can stop the agent - the anti-tamper hook blocks them - so this path
+    is the only way down.
     [lota-install] On the way down the agent poisons its TPM measurement slot
     (PCR 14) on purpose, so this boot can no longer attest. That is the
     security contract, not a fault: resuming therefore needs a reboot (see
