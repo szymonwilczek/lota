@@ -802,6 +802,38 @@ static void test_upgrade_reloads_the_selinux_module(void)
 }
 
 /*
+ * Both packages hand bring-up to the stage engine, so an upgrade restores
+ * fs-verity on the new binary whichever manifest built it.
+ */
+static void test_both_hooks_drive_bringup(void)
+{
+	static const char *const hooks[] = {
+		"packaging/nfpm/scripts/agent-postinstall.sh",
+		"packaging/rpm/lota.spec"
+	};
+	static char src[65536];
+
+	TEST("packaging: both post-install hooks run lota-install --unattended");
+
+	for (size_t i = 0; i < sizeof(hooks) / sizeof(hooks[0]); i++) {
+		if (!slurp_shipped(hooks[i], src, sizeof(src))) {
+			FAIL("could not read a post-install hook");
+			return;
+		}
+		if (!strstr(src, "lota-install --unattended")) {
+			FAIL("a post-install hook leaves bring-up to the reader");
+			return;
+		}
+		if (strstr(src, "ships unsigned") ||
+		    strstr(src, "sign the BPF object")) {
+			FAIL("a package says lota-install signs the BPF object");
+			return;
+		}
+	}
+	PASS();
+}
+
+/*
  * Ports are labelled by st_selinux_apply(), which a host that passed the stage
  * once never reaches unless the probe asks about the ports of this run.
  */
@@ -1133,6 +1165,7 @@ int main(void)
 	test_selinux_agent_reads_filesystem_types();
 	test_installer_labels_the_config_directory();
 	test_upgrade_reloads_the_selinux_module();
+	test_both_hooks_drive_bringup();
 	test_agent_unit_skips_userdb();
 	test_installer_probe_asks_about_ports();
 	test_installer_relabel_reapplies_the_device_labels();
