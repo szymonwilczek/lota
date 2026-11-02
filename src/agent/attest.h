@@ -98,18 +98,20 @@ _Static_assert(MAX_ATTEST_INTERVAL + ATTEST_TOKEN_VALIDITY_SLACK_SEC <=
 
 /*
  * The cadence --attest runs at:
- * what the host configured, the default when it named publishers but no interval,
- * and 0 when it named neither -- the only case that still belongs to the
- * single-verifier one-shot.
+ * what the host configured, the default when it named publishers but no
+ * interval, the default again when it named nothing at all -- the loop then
+ * waits for a reload to name a target -- and 0 when it named only a single
+ * verifier, the one case that still belongs to the single-verifier one-shot.
  *
  * Pure function so the choice is testable without a TPM or a verifier:
  * it decides whether a configured publisher list is attested to at all.
  */
-static inline int attest_effective_interval(int configured, int profile_count)
+static inline int attest_effective_interval(int configured, int profile_count,
+					    bool has_server)
 {
 	if (configured > 0)
 		return configured;
-	if (profile_count > 0)
+	if (profile_count > 0 || !has_server)
 		return DEFAULT_ATTEST_INTERVAL;
 	return 0;
 }
@@ -121,11 +123,13 @@ static inline int attest_effective_interval(int configured, int profile_count)
  * Same inputs as the cadence, so the two cannot disagree.
  */
 static inline bool attest_env_overrides_allowed(int attest_flag, int configured,
-						int profile_count)
+						int profile_count,
+						bool has_server)
 {
 	if (!attest_flag)
 		return true;
-	return attest_effective_interval(configured, profile_count) <= 0;
+	return attest_effective_interval(configured, profile_count,
+					 has_server) <= 0;
 }
 
 /*

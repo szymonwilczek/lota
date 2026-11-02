@@ -279,15 +279,17 @@ static void test_more_profiles_than_room(void)
  */
 static void test_effective_interval(void)
 {
-	CHECK(attest_effective_interval(0, 0) == 0,
-	      "no publishers and no interval stays a one-shot");
-	CHECK(attest_effective_interval(0, 1) == DEFAULT_ATTEST_INTERVAL,
+	CHECK(attest_effective_interval(0, 0, true) == 0,
+	      "a single verifier and no interval stays a one-shot");
+	CHECK(attest_effective_interval(0, 0, false) == DEFAULT_ATTEST_INTERVAL,
+	      "naming nothing runs the loop, which waits for a publisher");
+	CHECK(attest_effective_interval(0, 1, false) == DEFAULT_ATTEST_INTERVAL,
 	      "one publisher and no interval attests at the default cadence");
-	CHECK(attest_effective_interval(0, 8) == DEFAULT_ATTEST_INTERVAL,
+	CHECK(attest_effective_interval(0, 8, true) == DEFAULT_ATTEST_INTERVAL,
 	      "several publishers and no interval do the same");
-	CHECK(attest_effective_interval(45, 3) == 45,
+	CHECK(attest_effective_interval(45, 3, false) == 45,
 	      "a configured cadence wins over the default");
-	CHECK(attest_effective_interval(45, 0) == 45,
+	CHECK(attest_effective_interval(45, 0, true) == 45,
 	      "a configured cadence runs the loop without profiles too");
 }
 
@@ -298,15 +300,18 @@ static void test_effective_interval(void)
  */
 static void test_env_overrides_stop_at_the_deployment(void)
 {
-	CHECK(attest_env_overrides_allowed(0, 0, 0),
+	CHECK(attest_env_overrides_allowed(0, 0, 0, false),
 	      "a verb that is not --attest is interactive");
-	CHECK(attest_env_overrides_allowed(1, 0, 0),
-	      "--attest with neither cadence nor publishers is a one-shot");
-	CHECK(!attest_env_overrides_allowed(1, 0, 1),
+	CHECK(attest_env_overrides_allowed(1, 0, 0, true),
+	      "--attest to a named verifier with neither cadence nor "
+	      "publishers is a one-shot");
+	CHECK(!attest_env_overrides_allowed(1, 0, 0, false),
+	      "--attest that names nothing is the loop, so overrides stop");
+	CHECK(!attest_env_overrides_allowed(1, 0, 1, true),
 	      "one publisher and no interval is the loop, so overrides stop");
-	CHECK(!attest_env_overrides_allowed(1, 45, 0),
+	CHECK(!attest_env_overrides_allowed(1, 45, 0, true),
 	      "a configured cadence is the loop without publishers too");
-	CHECK(!attest_env_overrides_allowed(1, 45, 3),
+	CHECK(!attest_env_overrides_allowed(1, 45, 3, false),
 	      "the deployed shape takes neither variable");
 }
 

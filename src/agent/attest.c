@@ -1741,6 +1741,8 @@ static void publish_aggregate_status(const struct attest_target *targets,
 		sdnotify_status("Attested (%zu publisher%s), valid until %lu",
 				agg.considered, agg.considered == 1 ? "" : "s",
 				(unsigned long)agg.valid_until);
+	else if (count == 0)
+		sdnotify_status("Idle: no publisher configured");
 	else if (agg.considered == 0)
 		sdnotify_status("Idle: no title running, nothing reported");
 	else
@@ -1766,6 +1768,9 @@ static void watchdog_keepalive(struct watchdog_pace *pace)
  * because a list that changed under the operator is a list worth restating */
 static void announce_targets(const struct attest_target *targets, size_t count)
 {
+	if (count == 0)
+		lota_info("No publisher and no verifier configured: nothing "
+			  "is reported until a reload names one");
 	for (size_t i = 0; i < count; i++) {
 		if (targets[i].token_only)
 			lota_info("Target %zu: %s -- nothing is reported to "
@@ -1818,6 +1823,48 @@ static void resolve_auto_renew(struct attest_target *targets, size_t count)
 }
 
 /*
+ * Bind the first target's publisher and provision its AIK: the key a round
+ * quotes with and a GET_TOKEN is answered with.
+ * Called once the list names a target, at startup or at the reload that
+ * names the first one.
+ */
+static int aik_ready_for(const struct attest_target *first)
+{
+	int key_present;
+	int ret;
+
+	if (first->has_profile) {
+		ret = tpm_bind_profile(&g_agent.tpm_ctx, &first->paths);
+		if (ret < 0) {
+			lota_err("Failed to bind the publisher profile: %s",
+				 tpm_strerror(ret));
+			return ret;
+		}
+	}
+
+	lota_info("Checking AIK");
+	key_present = tpm_aik_key_present(&g_agent.tpm_ctx);
+	ret = provision_bound_aik();
+	if (ret < 0) {
+		lota_err("Failed to provision AIK: %s", tpm_strerror(ret));
+		return ret;
+	}
+	if (first->has_profile)
+		attest_warn_cert_orphaned(&first->paths, first->label,
+					  key_present);
+
+	ret = tpm_aik_load_metadata(&g_agent.tpm_ctx);
+	if (ret < 0) {
+		lota_err("Failed to load AIK metadata: %s", tpm_strerror(ret));
+		return ret;
+	}
+	lota_info("AIK generation: %lu, age: %ld seconds",
+		  (unsigned long)g_agent.tpm_ctx.aik_meta.generation,
+		  (long)tpm_aik_age(&g_agent.tpm_ctx));
+	return 0;
+}
+
+/*
  * The loop itself.
  * @targets is the caller's array, LOTA_CONFIG_MAX_PROFILES long;
  * do_continuous_attest owns it so that every exit below can keep the cleanup
@@ -1837,7 +1884,6 @@ static int continuous_attest_run(const struct lota_config *cfg,
 	uint32_t status_flags = 0;
 	struct watchdog_pace pace;
 	uint64_t wd_usec = 0;
-	int key_present;
 	int ret;
 
 	lota_info("Continuous attestation starting");
@@ -1853,7 +1899,13 @@ static int continuous_attest_run(const struct lota_config *cfg,
 	ret = attest_targets_build(cfg, server, port, ca_cert, interval_sec,
 				   targets, LOTA_CONFIG_MAX_PROFILES,
 				   &target_count);
-	if (ret < 0) {
+	/*
+	 * Naming nothing is a host before its first publisher, not a failure:
+	 * exiting would leave the unit stopped when one is added.
+	 */
+	if (ret == -EINVAL) {
+		target_count = 0;
+	} else if (ret < 0) {
 		lota_err("Cannot build the attestation target list: %s",
 			 strerror(-ret));
 		return 1;
@@ -1905,29 +1957,12 @@ static int continuous_attest_run(const struct lota_config *cfg,
 	}
 	status_flags |= LOTA_STATUS_TPM_OK;
 
-	if (targets[0].has_profile) {
-		ret = tpm_bind_profile(&g_agent.tpm_ctx, &targets[0].paths);
-		if (ret < 0) {
-			lota_err("Failed to bind the publisher profile: %s",
-				 tpm_strerror(ret));
-			tpm_cleanup(&g_agent.tpm_ctx);
-			net_cleanup();
-			return 1;
-		}
-	}
-
-	lota_info("Checking AIK");
-	key_present = tpm_aik_key_present(&g_agent.tpm_ctx);
-	ret = provision_bound_aik();
-	if (ret < 0) {
-		lota_err("Failed to provision AIK: %s", tpm_strerror(ret));
+	/* no key is made for a host that names nobody to quote for */
+	if (target_count > 0 && aik_ready_for(&targets[0]) < 0) {
 		tpm_cleanup(&g_agent.tpm_ctx);
 		net_cleanup();
 		return 1;
 	}
-	if (targets[0].has_profile)
-		attest_warn_cert_orphaned(&targets[0].paths, targets[0].label,
-					  key_present);
 
 	/*
 	 * Self-measurement extends PCR14 with a commitment over the agent
@@ -1955,19 +1990,6 @@ static int continuous_attest_run(const struct lota_config *cfg,
 		tpm_cleanup(&g_agent.tpm_ctx);
 		net_cleanup();
 		return status;
-	}
-
-	ret = tpm_aik_load_metadata(&g_agent.tpm_ctx);
-	if (ret < 0) {
-		lota_err("Failed to load AIK metadata: %s", tpm_strerror(ret));
-		tpm_cleanup(&g_agent.tpm_ctx);
-		net_cleanup();
-		return 1;
-	} else {
-		int64_t age = tpm_aik_age(&g_agent.tpm_ctx);
-		lota_info("AIK generation: %lu, age: %ld seconds",
-			  (unsigned long)g_agent.tpm_ctx.aik_meta.generation,
-			  (long)age);
 	}
 
 	/*
@@ -2027,9 +2049,13 @@ static int continuous_attest_run(const struct lota_config *cfg,
 				 * AIK, and the reload may have changed which
 				 * publisher that is.
 				 */
-				if (target_count > 0 &&
-				    targets[0].has_profile &&
-				    bind_target(&targets[0]) < 0)
+				if (before == 0 && target_count > 0) {
+					if (aik_ready_for(&targets[0]) < 0)
+						lota_warn("The first round "
+							  "retries the AIK");
+				} else if (target_count > 0 &&
+					   targets[0].has_profile &&
+					   bind_target(&targets[0]) < 0)
 					lota_warn("Tokens will keep the "
 						  "previous publisher's AIK "
 						  "until the next round");
@@ -2082,6 +2108,10 @@ static int continuous_attest_run(const struct lota_config *cfg,
 			if (wake_ms == 0 || targets[i].next_due_ms < wake_ms)
 				wake_ms = targets[i].next_due_ms;
 		}
+		/* nothing due: wait for a reload, keeping the peer in sync */
+		if (target_count == 0)
+			wake_ms =
+				monotonic_ms() + (uint64_t)interval_sec * 1000;
 		lota_dbg("Next attestation round in %llu ms",
 			 (unsigned long long)(wake_ms > monotonic_ms() ?
 						      wake_ms - monotonic_ms() :
