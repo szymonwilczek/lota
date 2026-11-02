@@ -26,7 +26,6 @@ static void make_failure_at(struct lota_runtime_measure_failure *f,
 	if (path)
 		snprintf(f->path, sizeof(f->path), "%s", path);
 	f->role = role;
-	f->ino = 4242;
 	f->reported_len = reported_len;
 	f->err = err;
 }

@@ -201,7 +201,6 @@ int lota_rt_collect_exec_maps(pid_t pid, struct lota_rt_map_entry *entries,
 struct lota_runtime_measure_failure {
 	char soname[LOTA_RUNTIME_IMAGE_SONAME_MAX];
 	char path[LOTA_RT_MAP_PATH_MAX];
-	unsigned long long ino;
 	uint32_t reported_len;
 	int role;
 	int err;
