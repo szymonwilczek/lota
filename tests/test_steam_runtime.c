@@ -662,6 +662,137 @@ static void test_ensure_dir_empty(void)
 	PASS();
 }
 
+/*
+ * The caller knows whether a failure is a login logind is still
+ * mounting, so the function itself says nothing.
+ * Runs @dir through ensure_socket_dir with stderr captured;
+ * *said is how many bytes it wrote there.
+ */
+static int ensure_dir_quietly(const char *dir, gid_t gid, long *said)
+{
+	FILE *cap = tmpfile();
+	int saved_fd;
+	int ret;
+
+	*said = -1;
+	if (!cap)
+		return -errno;
+
+	fflush(stderr);
+	saved_fd = dup(STDERR_FILENO);
+	if (saved_fd < 0) {
+		fclose(cap);
+		return -errno;
+	}
+	dup2(fileno(cap), STDERR_FILENO);
+
+	ret = steam_runtime_ensure_socket_dir(dir, gid);
+
+	fflush(stderr);
+	dup2(saved_fd, STDERR_FILENO);
+	close(saved_fd);
+
+	*said = lseek(fileno(cap), 0, SEEK_END);
+	fclose(cap);
+	return ret;
+}
+
+static void SKIP(const char *msg)
+{
+	tests_passed++;
+	printf("SKIP (%s)\n", msg);
+}
+
+/* a group the caller is not in, which only root could hand anything to */
+static int foreign_gid(gid_t *out)
+{
+	gid_t groups[NGROUPS_MAX];
+	int n = getgroups(NGROUPS_MAX, groups);
+	gid_t candidate = 0;
+
+	if (n < 0 || geteuid() == 0 || getgid() == candidate)
+		return -1;
+	for (int i = 0; i < n; i++)
+		if (groups[i] == candidate)
+			return -1;
+	*out = candidate;
+	return 0;
+}
+
+static void test_ensure_dir_own_gid(void)
+{
+	char dir[PATH_MAX];
+	struct stat st;
+	long said;
+	int ret;
+
+	TEST("ensure_socket_dir: own group -> handed over, nothing said");
+
+	snprintf(dir, sizeof(dir), "%s/lota_test_own_gid", tmpdir);
+	ret = ensure_dir_quietly(dir, getgid(), &said);
+	if (ret != 0) {
+		FAIL("returned error");
+		return;
+	}
+	if (stat(dir, &st) != 0 || st.st_gid != getgid()) {
+		FAIL("directory not in the group");
+		return;
+	}
+	if (said != 0) {
+		FAIL("wrote to stderr");
+		return;
+	}
+	PASS();
+}
+
+static void test_ensure_dir_foreign_gid_quiet(void)
+{
+	char dir[PATH_MAX];
+	gid_t gid;
+	long said;
+	int ret;
+
+	TEST("ensure_socket_dir: foreign group -> -EPERM, nothing said");
+
+	if (foreign_gid(&gid) < 0) {
+		SKIP("running as root or in group 0");
+		return;
+	}
+
+	snprintf(dir, sizeof(dir), "%s/lota_test_foreign_gid", tmpdir);
+	ret = ensure_dir_quietly(dir, gid, &said);
+	if (ret != -EPERM) {
+		FAIL("expected -EPERM");
+		return;
+	}
+	if (said != 0) {
+		FAIL("wrote to stderr, so the caller cannot keep a pending login quiet");
+		return;
+	}
+	PASS();
+}
+
+static void test_ensure_dir_missing_parent_quiet(void)
+{
+	char dir[PATH_MAX];
+	long said;
+	int ret;
+
+	TEST("ensure_socket_dir: no runtime dir yet -> -ENOENT, nothing said");
+
+	snprintf(dir, sizeof(dir), "%s/no_login/lota", tmpdir);
+	ret = ensure_dir_quietly(dir, getgid(), &said);
+	if (ret != -ENOENT) {
+		FAIL("expected -ENOENT");
+		return;
+	}
+	if (said != 0) {
+		FAIL("wrote to stderr");
+		return;
+	}
+	PASS();
+}
+
 static void test_log_info_null(void)
 {
 	TEST("log_info: NULL pointer does not crash");
@@ -741,6 +872,9 @@ int main(void)
 	test_ensure_dir_not_a_dir();
 	test_ensure_dir_null();
 	test_ensure_dir_empty();
+	test_ensure_dir_own_gid();
+	test_ensure_dir_foreign_gid_quiet();
+	test_ensure_dir_missing_parent_quiet();
 
 	/* log_info */
 	test_log_info_null();
