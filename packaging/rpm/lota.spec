@@ -68,9 +68,10 @@ Requires:       %{name}-sdk%{?_isa} = %{version}-%{release}
 
 %description agent
 Measured-boot TPM attestation client with a BPF LSM runtime-integrity
-enforcer. Fails closed until host bring-up (lota-install) signs the BPF
-object, installs the 90lota initramfs module and arms the PCR14 commitment.
-The BPF object ships unsigned: each adopter signs it with their own key.
+enforcer. The post-install hook runs the host-local half of bring-up; the
+90lota initramfs module and the kernel integrity floor wait for
+`lota-install`, since they change how the machine boots. Fails closed until
+both halves are done.
 
 %package verifier
 Summary:        LOTA remote attestation verifier
@@ -182,9 +183,35 @@ if [ -d %{_sysconfdir}/lota ]; then
 fi
 cat <<'EOF'
 lota-agent installed. The agent fails closed until host bring-up completes.
-Run `lota-install` to sign the BPF object, install the 90lota initramfs
-module and arm the PCR14 boot commitment. The agent is not started here.
+
+The BPF enforcement object ships signed, next to its signature and the public
+key it verifies against (/usr/lib/lota/enforcement.pub). All three are
+replaced together by an upgrade, so enforcement still arms after one.
+
+A fleet that signs enforcement with its own key re-signs the object and puts
+its key at /etc/lota/policy.pub, which no package owns and no upgrade
+touches; the agent prefers it whenever it is there. lota-install verifies the
+signature and never signs on this host.
 EOF
+
+# The stage engine decides what a package may do; the boot path waits for
+# a person. The package is installed either way.
+if [ -x %{_bindir}/lota-install ]; then
+	echo
+	%{_bindir}/lota-install --unattended || :
+fi
+
+if [ "$1" -gt 1 ]; then
+	cat <<'EOF'
+
+This was an upgrade. PCR 14 commits to the agent binary that booted, and it
+cannot be re-extended without a hardware reset, so the new build takes effect
+on the next cold boot. Until then the running agent keeps attesting as the
+build that is still loaded. Add the new hash to the verifier's agent_hashes
+before the fleet reboots; a verifier that lists it re-pins each device on its
+own.
+EOF
+fi
 
 %preun agent
 %systemd_preun lota-agent.service lota-agent.socket lota-attest.service
