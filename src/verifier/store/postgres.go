@@ -101,10 +101,6 @@ var pgMigrations = []migration{
 				tenant    TEXT NOT NULL DEFAULT 'default'
 			);
 
-			CREATE INDEX idx_audit_log_timestamp ON audit_log(timestamp);
-			CREATE INDEX idx_audit_log_target ON audit_log(target_id);
-			CREATE INDEX idx_audit_log_tenant ON audit_log(tenant);
-
 			CREATE TABLE attestation_log (
 				id          BIGSERIAL PRIMARY KEY,
 				timestamp   TIMESTAMPTZ NOT NULL,

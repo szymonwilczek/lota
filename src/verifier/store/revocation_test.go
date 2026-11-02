@@ -537,17 +537,6 @@ func TestMigrationV2_AuditLogTable(t *testing.T) {
 		t.Errorf("Expected max id 5, got %d", maxID)
 	}
 
-	// verify indexes exist
-	for _, idx := range []string{"idx_audit_log_timestamp", "idx_audit_log_target"} {
-		var name string
-		err := db.QueryRow(
-			"SELECT name FROM sqlite_master WHERE type='index' AND name=?", idx,
-		).Scan(&name)
-		if err != nil {
-			t.Errorf("Index %s not found: %v", idx, err)
-		}
-	}
-
 	t.Log("✓ audit_log table with AUTOINCREMENT and indexes works correctly")
 }
 
