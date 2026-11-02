@@ -21,9 +21,7 @@
  * Leading type byte of a security.ima xattr, mirroring the kernel's
  * enum evm_ima_xattr_type (security/integrity/integrity.h)
  */
-#define LOTA_IMA_XATTR_DIGEST 0x01 /* unsigned SHA1 digest */
 #define LOTA_IMA_XATTR_DIGSIG 0x03 /* EVM_IMA_XATTR_DIGSIG */
-#define LOTA_IMA_XATTR_DIGEST_NG 0x04 /* unsigned, algorithm-tagged */
 #define LOTA_IMA_XATTR_PORTABLE_DIGSIG 0x05 /* EVM_XATTR_PORTABLE_DIGSIG */
 #define LOTA_IMA_XATTR_VERITY_DIGSIG 0x06 /* IMA_VERITY_DIGSIG */
 
