@@ -60,23 +60,9 @@
 /var/lib/lota/baseline(/.*)?			gen_context(system_u:object_r:lota_var_t,s0)
 
 #
-# Logs
-#
-/var/log/lota(/.*)?				gen_context(system_u:object_r:lota_log_t,s0)
-/var/log/lota/lota\.log			--	gen_context(system_u:object_r:lota_log_t,s0)
-/var/log/lota/attest\.log		--	gen_context(system_u:object_r:lota_log_t,s0)
-/var/log/lota/events\.log		--	gen_context(system_u:object_r:lota_log_t,s0)
-
-#
 # Runtime
 #
 /run/lota(/.*)?					gen_context(system_u:object_r:lota_var_t,s0)
 /run/lota/lota-agent\.pid		--	gen_context(system_u:object_r:lota_var_t,s0)
 /run/lota/lota\.sock			-s	gen_context(system_u:object_r:lota_var_t,s0)
 /var/run/lota(/.*)?				gen_context(system_u:object_r:lota_var_t,s0)
-
-#
-# Temp
-#
-/tmp/lota(/.*)?					gen_context(system_u:object_r:lota_tmp_t,s0)
-/var/tmp/lota(/.*)?				gen_context(system_u:object_r:lota_tmp_t,s0)

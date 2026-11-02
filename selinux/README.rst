@@ -22,8 +22,6 @@ Types
 +-----------------------+-----------------------------------------------------+
 | ``lota_bpf_t``        | eBPF object files                                   |
 +-----------------------+-----------------------------------------------------+
-| ``lota_log_t``        | Log files                                           |
-+-----------------------+-----------------------------------------------------+
 | ``lota_port_t``       | Network port for attestation                        |
 +-----------------------+-----------------------------------------------------+
 | ``lota_tpm_device_t`` | ``/dev/tpm[0-9]*`` and ``/dev/tpmrm[0-9]*``         |
@@ -325,7 +323,6 @@ Path                    Context
 ``/usr/lib/lota/``      ``lota_bpf_t``
 ``/etc/lota/``          ``lota_etc_t``
 ``/var/lib/lota/``      ``lota_var_t``
-``/var/log/lota/``      ``lota_log_t``
 ``/run/lota/``          ``lota_var_t``
 ``/dev/tpm[0-9]*``      ``lota_tpm_device_t``
 ``/dev/tpmrm[0-9]*``    ``lota_tpm_device_t``
@@ -455,8 +452,8 @@ what is spending the attempts, and reset:
 The agent re-publishes the status flag on the next attestation cycle. If the
 lockout returns on a host where ``ls -Z /dev/tpm*`` shows
 ``lota_tpm_device_t``, the offender is inside the ``lota_agent_t`` policy
-boundary; check ``/var/log/lota`` for repeated ``LOTA_ERR_TPM_LOCKED`` retries
-before escalating to hardware.
+boundary; check ``journalctl -u lota-agent`` for repeated
+``LOTA_ERR_TPM_LOCKED`` retries before escalating to hardware.
 
 BPF program loading fails
 ^^^^^^^^^^^^^^^^^^^^^^^^^

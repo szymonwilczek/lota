@@ -61,12 +61,6 @@ files_config_file(lota_etc_t)
 type lota_bpf_t;
 files_type(lota_bpf_t)
 
-type lota_log_t;
-logging_log_file(lota_log_t)
-
-type lota_tmp_t;
-files_tmp_file(lota_tmp_t)
-
 #
 # Port type for the attestation endpoints the agent connects out to.
 #
@@ -135,16 +129,6 @@ allow lota_agent_t self:unix_stream_socket connectto;
 # /usr/lib/lota/*.bpf.o
 allow lota_agent_t lota_bpf_t:dir list_dir_perms;
 allow lota_agent_t lota_bpf_t:file { read_file_perms execute map };
-
-# /var/log/lota
-allow lota_agent_t lota_log_t:dir { create_dir_perms add_entry_dir_perms };
-allow lota_agent_t lota_log_t:file { create_file_perms append_file_perms };
-logging_log_filetrans(lota_agent_t, lota_log_t, file)
-
-# /tmp/lota
-allow lota_agent_t lota_tmp_t:dir manage_dir_perms;
-allow lota_agent_t lota_tmp_t:file manage_file_perms;
-files_tmp_filetrans(lota_agent_t, lota_tmp_t, { file dir })
 
 #
 # Hardware access

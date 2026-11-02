@@ -106,26 +106,6 @@ interface(`lota_read_config',`
 
 ########################################
 ## <summary>
-##      Read LOTA logs.
-## </summary>
-## <param name="domain">
-##      <summary>
-##      Domain allowed to read.
-##      </summary>
-## </param>
-#
-interface(`lota_read_log',`
-        gen_require(`
-                type lota_log_t;
-        ')
-
-        logging_search_logs($1)
-        allow $1 lota_log_t:dir list_dir_perms;
-        allow $1 lota_log_t:file read_file_perms;
-')
-
-########################################
-## <summary>
 ##      Administrate LOTA.
 ## </summary>
 ## <param name="domain">
@@ -146,9 +126,7 @@ interface(`lota_admin',`
                 type lota_agent_exec_t;
                 type lota_etc_t;
                 type lota_var_t;
-                type lota_log_t;
                 type lota_bpf_t;
-                type lota_tmp_t;
         ')
 
         allow $1 lota_agent_t:process { ptrace signal_perms };
@@ -163,14 +141,8 @@ interface(`lota_admin',`
         files_search_var_lib($1)
         admin_pattern($1, lota_var_t)
 
-        logging_search_logs($1)
-        admin_pattern($1, lota_log_t)
-
         files_search_usr($1)
         admin_pattern($1, lota_bpf_t)
-
-        files_search_tmp($1)
-        admin_pattern($1, lota_tmp_t)
 ')
 
 ########################################
