@@ -251,7 +251,6 @@ func TestNonceStore_GenerateChallenge_RetriesOnPendingCollision(t *testing.T) {
 		nonce:     colliding,
 		createdAt: time.Now(),
 		bindingID: "existing-binding",
-		counter:   1,
 	}
 	store.mu.Unlock()
 

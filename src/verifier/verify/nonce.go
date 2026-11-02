@@ -181,7 +181,6 @@ type nonceEntry struct {
 	nonce     [types.NonceSize]byte
 	createdAt time.Time
 	bindingID string // optional: bind nonce to specific bindingID (challengeID)
-	counter   uint64 // monotonic counter for ordering
 }
 
 // tracks per-client challenge state for rate limiting
@@ -309,9 +308,7 @@ func (ns *NonceStore) GenerateChallenge(bindingID string, pcrMask uint32) (*type
 			return nil, err
 		}
 
-		// get and increment binding counters
 		cs := ns.bindingChallenges[bindingID]
-		cs.attestCounter++
 		cs.pendingCount++
 		ns.bindingChallenges[bindingID] = cs
 
@@ -319,7 +316,6 @@ func (ns *NonceStore) GenerateChallenge(bindingID string, pcrMask uint32) (*type
 			nonce:     nonce,
 			createdAt: time.Now(),
 			bindingID: bindingID,
-			counter:   cs.attestCounter,
 		}
 		ns.mu.Unlock()
 
