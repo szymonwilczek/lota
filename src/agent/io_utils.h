@@ -13,8 +13,7 @@ int lota_read_full(int fd, void *buf, size_t len);
  *
  * A writer that replaces a file by rename gives the replacement whatever
  * the parent directory implies, not what the file it replaced carried,
- * so a rewritten configuration can come back with an SELinux type the confined
- * agent cannot read -- and that denial is dontaudit'ed.
+ * so a rewritten configuration can come back with another SELinux type.
  * @name is the attribute to carry: production passes "security.selinux",
  * a test passes one it is allowed to set.
  *
