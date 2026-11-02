@@ -74,8 +74,9 @@ static void test_config_init_defaults(void)
 	TEST("config_init sets correct defaults");
 	config_init(&cfg);
 
-	if (strcmp(cfg.server, "localhost") != 0) {
-		FAIL("server != localhost");
+	/* no verifier until one is named: the loop would report to it */
+	if (cfg.server[0] != '\0') {
+		FAIL("server has a default");
 		return;
 	}
 	if (cfg.port != 8443) {
@@ -224,7 +225,7 @@ static void test_config_load_empty_file(void)
 		return;
 	}
 	/* defaults should be unchanged */
-	if (strcmp(cfg.server, "localhost") != 0) {
+	if (cfg.server[0] != '\0') {
 		FAIL("server changed after empty file");
 		return;
 	}
@@ -1629,6 +1630,60 @@ static void test_config_host_pin_beside_profiles(void)
 	PASS();
 }
 
+/*
+ * --add-publisher rewrites lota.conf from the dump, so a host that never
+ * named a verifier must not get one written for it
+ */
+static void test_config_dump_keeps_server_unset(void)
+{
+	struct lota_config cfg;
+	struct lota_config reloaded;
+	char path[PATH_MAX];
+	char line[512];
+	FILE *f;
+	int fd;
+
+	TEST("config_dump writes no server the host never named");
+	config_init(&cfg);
+
+	snprintf(path, sizeof(path), "%s/unset_server.conf", tmpdir);
+	fd = open(path, O_WRONLY | O_CREAT | O_TRUNC, 0600);
+	f = fd >= 0 ? fdopen(fd, "w") : NULL;
+	if (fd >= 0 && !f)
+		close(fd);
+	if (!f) {
+		FAIL("fopen dump");
+		return;
+	}
+	config_dump(&cfg, f);
+	fclose(f);
+
+	f = fopen(path, "re");
+	if (!f) {
+		FAIL("reopen dump");
+		return;
+	}
+	while (fgets(line, sizeof(line), f)) {
+		if (strncmp(line, "server", 6) == 0) {
+			fclose(f);
+			FAIL("dump names a server");
+			return;
+		}
+	}
+	fclose(f);
+
+	config_init(&reloaded);
+	if (config_load(&reloaded, path) != 0) {
+		FAIL("reload dump");
+		return;
+	}
+	if (reloaded.server[0] != '\0') {
+		FAIL("reloaded dump names a server");
+		return;
+	}
+	PASS();
+}
+
 static void test_config_dump_roundtrip(void)
 {
 	struct lota_config cfg1, cfg2;
@@ -2455,6 +2510,7 @@ int main(void)
 		test_config_host_pin_beside_profiles,
 		test_config_load_rejects_group_writable,
 		test_config_load_rejects_symlink,
+		test_config_dump_keeps_server_unset,
 		test_config_dump_roundtrip,
 		test_config_dump_keeps_the_sealing_keys,
 		test_dump_prints_every_key_the_parser_takes,
