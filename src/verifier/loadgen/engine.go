@@ -271,7 +271,7 @@ func run(ctx context.Context, cfg *runConfig) (*summary, error) {
 	case modeSteady:
 		err = runSteady(ctx, cfg, attest)
 	case modeStorm:
-		err = runStorm(ctx, cfg, attest)
+		runStorm(ctx, cfg, attest)
 	default:
 		err = fmt.Errorf("unknown mode %q", cfg.Mode)
 	}
@@ -326,7 +326,7 @@ func runSteady(ctx context.Context, cfg *runConfig, attest func(agent int)) erro
 // Cancellation stops launching but is not run failure:
 // Operator interrupting a long storm still gets the summary and the -out file
 // for the agents that did attest, the same way steady mode ends on its duration
-func runStorm(ctx context.Context, cfg *runConfig, attest func(agent int)) error {
+func runStorm(ctx context.Context, cfg *runConfig, attest func(agent int)) {
 	inFlight := cfg.InFlight
 	if inFlight <= 0 {
 		inFlight = 128
@@ -337,7 +337,7 @@ func runStorm(ctx context.Context, cfg *runConfig, attest func(agent int)) error
 		select {
 		case <-ctx.Done():
 			wg.Wait()
-			return nil
+			return
 		case sem <- struct{}{}:
 		}
 		wg.Go(func() {
@@ -346,7 +346,6 @@ func runStorm(ctx context.Context, cfg *runConfig, attest func(agent int)) error
 		})
 	}
 	wg.Wait()
-	return nil
 }
 
 // attestOnce performs one full attestation exchange for agent a
