@@ -632,6 +632,27 @@ static void test_selinux_agent_reaches_user_namespaces(void)
 }
 
 /*
+ * The road for a store install turns on the type of the filesystem a title
+ * lives on, and fstatfs() on it needs filesystem getattr.
+ */
+static void test_selinux_agent_reads_filesystem_types(void)
+{
+	static char policy[65536];
+
+	TEST("selinux: the agent reads the filesystem type of a title");
+
+	if (!slurp_shipped("selinux/lota.te", policy, sizeof(policy))) {
+		FAIL("could not read selinux/lota.te");
+		return;
+	}
+	if (!strstr(policy, "fs_getattr_all_fs(lota_agent_t)")) {
+		FAIL("no filesystem getattr: a title without verity loses its token");
+		return;
+	}
+	PASS();
+}
+
+/*
  * A client stats the socket before it connects, so write alone leaves it with
  * EACCES on the system socket.
  */
@@ -1033,6 +1054,7 @@ int main(void)
 	test_selinux_gaming_client_reaches_container_socket();
 	test_selinux_status_client_stats_socket();
 	test_selinux_agent_reaches_user_namespaces();
+	test_selinux_agent_reads_filesystem_types();
 	test_installer_labels_the_config_directory();
 	test_installer_relabel_reapplies_the_device_labels();
 	test_static_cli_is_built_without_cgo();
