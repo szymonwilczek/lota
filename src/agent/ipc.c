@@ -3857,9 +3857,12 @@ int ipc_add_listener(struct ipc_context *ctx, const char *socket_path)
 		umask(old_umask);
 	}
 
+	/*
+	 * A login's runtime directory can be replaced by logind's tmpfs under
+	 * the bind or the chown, which the caller retries; the caller reports.
+	 */
 	if (ret < 0) {
 		ret = -errno;
-		lota_err("bind(%s) failed: %s", socket_path, strerror(-ret));
 		close(fd);
 		return ret;
 	}
@@ -3869,7 +3872,7 @@ int ipc_add_listener(struct ipc_context *ctx, const char *socket_path)
 	 * at all. A socket nobody but root can open is not a listener a caller
 	 * can use, so a failure here refuses.
 	 * The daemon needs CAP_CHOWN for this; without it the chown returns
-	 * EPERM and the message says so.
+	 * EPERM.
 	 */
 	{
 		struct group *grp = getgrnam(LOTA_GROUP_NAME);
@@ -3885,9 +3888,6 @@ int ipc_add_listener(struct ipc_context *ctx, const char *socket_path)
 
 		if (chown(socket_path, 0, grp->gr_gid) < 0) {
 			ret = -errno;
-			lota_err(
-				"chown(%s) failed: %s -- the socket would be reachable by root alone",
-				socket_path, strerror(-ret));
 			close(fd);
 			unlink(socket_path);
 			return ret;

@@ -513,8 +513,10 @@ static int add_listener_for_uid(uint32_t uid, void *user)
 		return ret;
 	}
 	if (ret < 0) {
-		fprintf(stderr, "Warning: container listener %s: %s\n", path,
-			strerror(-ret));
+		if (!container_watch_bind_pending(ret))
+			lota_err(
+				"Cannot serve the container socket %s (%s), so no title of uid %u can reach the agent through it",
+				path, strerror(-ret), uid);
 		return ret;
 	}
 
@@ -629,8 +631,9 @@ void setup_container_listener(struct ipc_context *ctx,
 
 	ret = ipc_add_listener(ctx, path);
 	if (ret < 0) {
-		fprintf(stderr, "Warning: container listener %s: %s\n", path,
-			strerror(-ret));
+		lota_err(
+			"Cannot serve the container socket %s (%s), so no title can reach the agent through it",
+			path, strerror(-ret));
 		return;
 	}
 
