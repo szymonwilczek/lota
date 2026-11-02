@@ -13,6 +13,7 @@
 #ifndef LOTA_INSTALL_PROBE_H
 #define LOTA_INSTALL_PROBE_H
 
+#include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
 
@@ -368,6 +369,21 @@ int probe_conf_buf_profile_count(const char *buf);
 /* File-backed wrapper for probe_conf_buf_profile_count().
  * count or -errno */
 int probe_conf_profile_count(const char *conf_path);
+
+/* Pure parser:
+ * ca_cert of the index-th [profile] section (0-based).
+ * 1 and the path in out, or 0 when that section has none or does not exist */
+int probe_conf_buf_profile_anchor(const char *buf, int index, char *out,
+				  size_t cap);
+
+/* Pure parser:
+ * [profile] sections with reporting = continuous and a verifier other than
+ * none, the ones the loop reports to whether or not a title runs */
+int probe_conf_buf_continuous_count(const char *buf);
+
+/* Pure: 1 when the loop's status says it attested to at least expected
+ * publishers ("Attested (N publisher(s)), ..."), else 0 */
+int probe_attest_status_covers(const char *status, int expected);
 
 /* How the self-check proves this host attests. */
 enum probe_selfcheck_plan {

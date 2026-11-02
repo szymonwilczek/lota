@@ -1243,6 +1243,118 @@ static void test_selfcheck_plan(void)
 }
 
 /*
+ * A fleet install enrolled with the operator's CA and wrote nothing into
+ * lota.conf, so after the reboot the loop had no target and the publisher
+ * it had enrolled with was invisible to the daemon.
+ * Whether the anchor is recorded is read from each profile's ca_cert.
+ */
+static void test_conf_profile_anchor(void)
+{
+	static const char conf[] = "log_level = debug\n"
+				   "ca_cert = /etc/lota/top.pem\n"
+				   "[profile \"pubA\"]\n"
+				   "ca = ca.a.example\n"
+				   "ca_cert = /etc/lota/a.pem\n"
+				   "[profile \"pubB\"]\n"
+				   "# ca_cert = /etc/lota/commented.pem\n"
+				   "ca-cert = /etc/lota/b.pem  \n"
+				   "[profile \"pubC\"]\n"
+				   "ca = ca.c.example\n";
+	char out[256];
+
+	TEST("each profile's anchor is read from its own section");
+	if (probe_conf_buf_profile_anchor(conf, 0, out, sizeof(out)) != 1 ||
+	    strcmp(out, "/etc/lota/a.pem") != 0) {
+		FAIL("first profile's anchor");
+		return;
+	}
+	if (probe_conf_buf_profile_anchor(conf, 1, out, sizeof(out)) != 1 ||
+	    strcmp(out, "/etc/lota/b.pem") != 0) {
+		FAIL("hyphenated key, comment or trailing blank");
+		return;
+	}
+	PASS();
+
+	TEST("a profile without an anchor, or past the last, has none");
+	if (probe_conf_buf_profile_anchor(conf, 2, out, sizeof(out)) != 0 ||
+	    probe_conf_buf_profile_anchor(conf, 3, out, sizeof(out)) != 0 ||
+	    probe_conf_buf_profile_anchor(NULL, 0, out, sizeof(out)) != 0) {
+		FAIL("an anchor was invented");
+		return;
+	}
+	PASS();
+
+	TEST("the top-level anchor is not a profile's");
+	if (probe_conf_buf_profile_anchor("ca_cert = /etc/lota/top.pem\n", 0,
+					  out, sizeof(out)) != 0) {
+		FAIL("top-level key read as a profile");
+		return;
+	}
+	PASS();
+}
+
+/*
+ * The loop's status names how many publishers it attested to.
+ * Until it has picked up the profile the installer wrote, that count is
+ * short of the profiles that report continuously, so a status left over
+ * from before the reload is not taken for the fleet's.
+ */
+static void test_conf_continuous_count(void)
+{
+	TEST("only continuous profiles with a verifier are counted");
+	if (probe_conf_buf_continuous_count("[profile \"session\"]\n"
+					    "verifier = v.session.example\n"
+					    "[profile \"fleet\"]\n"
+					    "reporting = continuous\n"
+					    "verifier = v.fleet.example\n"
+					    "[profile \"tokens\"]\n"
+					    "reporting = continuous\n"
+					    "verifier = none\n"
+					    "[profile \"fleet2\"]\n"
+					    "verifier = v.fleet2.example\n"
+					    "reporting = continuous\n") != 2) {
+		FAIL("wrong count");
+		return;
+	}
+	PASS();
+
+	TEST("top-level keys are not a profile");
+	if (probe_conf_buf_continuous_count("reporting = continuous\n"
+					    "verifier = v.example\n") != 0 ||
+	    probe_conf_buf_continuous_count(NULL) != 0) {
+		FAIL("false positive");
+		return;
+	}
+	PASS();
+}
+
+static void test_attest_status_covers(void)
+{
+	TEST("an attested status covering every publisher is accepted");
+	if (!probe_attest_status_covers(
+		    "Attested (1 publisher), valid until 1700000000", 1) ||
+	    !probe_attest_status_covers(
+		    "Attested (3 publishers), valid until 1700000000", 2)) {
+		FAIL("attested status refused");
+		return;
+	}
+	PASS();
+
+	TEST("a status short of the expected count is not the fleet's");
+	if (probe_attest_status_covers(
+		    "Attested (1 publisher), valid until 1700000000", 2) ||
+	    probe_attest_status_covers("Idle: no publisher configured", 1) ||
+	    probe_attest_status_covers("Attestation incomplete", 1) ||
+	    probe_attest_status_covers("Attested (x publishers)", 1) ||
+	    probe_attest_status_covers("", 1) ||
+	    probe_attest_status_covers(NULL, 1)) {
+		FAIL("unattested status accepted");
+		return;
+	}
+	PASS();
+}
+
+/*
  * A path the operator typed, checked before anything runs.
  *
  * The three cases the option table produces: an option nobody used, one whose
@@ -1528,6 +1640,9 @@ int main(void)
 	test_conf_key();
 	test_conf_profile_count();
 	test_selfcheck_plan();
+	test_conf_profile_anchor();
+	test_conf_continuous_count();
+	test_attest_status_covers();
 	test_esrt_present();
 	test_fstype_magic_mapping();
 	test_fs_verity_capability();
