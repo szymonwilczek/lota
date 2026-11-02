@@ -454,7 +454,7 @@ fi
 # config knob accepts up to LOTA_CONFIG_MAX_CONTAINER_LISTENERS
 # entries, while the drop-in can only pin one XDG_RUNTIME_DIR.
 register_container_listener_uid() {
-    local uid line backup
+    local uid line backup created=false
 
     if [[ $EUID -ne 0 ]]; then
         fail "--register-uid must run as root (try: sudo $(basename "$0") --register-uid)"
@@ -479,9 +479,15 @@ register_container_listener_uid() {
         return 1
     fi
 
-    if [[ ! -f "$LOTA_CONF" ]]; then
-        fail "$LOTA_CONF does not exist; install LOTA before --register-uid"
+    # The package ships the directory, not the file:
+    # an absent lota.conf is an empty one, as it is to --add-publisher.
+    if [[ ! -d "$(dirname -- "$LOTA_CONF")" ]]; then
+        fail "$(dirname -- "$LOTA_CONF") does not exist; install LOTA before --register-uid"
         return 1
+    fi
+    if [[ ! -e "$LOTA_CONF" ]]; then
+        created=true
+        (umask 022 && : >"$LOTA_CONF")
     fi
 
     line="container_listener_uid = ${uid}"
@@ -526,7 +532,11 @@ register_container_listener_uid() {
     # the running agent has already read its copy, so the damage would stay
     # invisible until the host failed to bring the agent up at the next boot.
     if ! lota-agent --dump-config --config "$LOTA_CONF" >/dev/null 2>&1; then
-        cp -p -- "$backup" "$LOTA_CONF"
+        if $created; then
+            rm -f -- "$LOTA_CONF" "$backup"
+        else
+            cp -p -- "$backup" "$LOTA_CONF"
+        fi
         fail "the resulting ${LOTA_CONF} does not parse; restored the original"
         fail "nothing was changed. Report this with the config layout"
         return 1
