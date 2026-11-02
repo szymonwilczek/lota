@@ -1025,7 +1025,6 @@ static __always_inline void report_blocked_mount(const char *what, u32 len)
 	event->tgid = bpf_get_current_pid_tgid() >> 32;
 	event->pid = bpf_get_current_pid_tgid() & 0xFFFFFFFF;
 	event->uid = (u32)(bpf_get_current_uid_gid() & 0xFFFFFFFF);
-	event->gid = (u32)(bpf_get_current_uid_gid() >> 32);
 	bpf_get_current_comm(event->comm, sizeof(event->comm));
 	if (len > 0 && len < sizeof(event->filename))
 		bpf_probe_read_kernel(event->filename, len, what);
@@ -1170,7 +1169,6 @@ static __always_inline void report_blocked_kill_guard(const char *what, u32 len)
 	event->tgid = bpf_get_current_pid_tgid() >> 32;
 	event->pid = bpf_get_current_pid_tgid() & 0xFFFFFFFF;
 	event->uid = (u32)(bpf_get_current_uid_gid() & 0xFFFFFFFF);
-	event->gid = (u32)(bpf_get_current_uid_gid() >> 32);
 	bpf_get_current_comm(event->comm, sizeof(event->comm));
 	if (len > 0 && len < sizeof(event->filename))
 		bpf_probe_read_kernel(event->filename, len, what);
@@ -1204,7 +1202,6 @@ static __always_inline void report_blocked_mapped_write(struct file *file)
 	event->tgid = bpf_get_current_pid_tgid() >> 32;
 	event->pid = bpf_get_current_pid_tgid() & 0xFFFFFFFF;
 	event->uid = (u32)(bpf_get_current_uid_gid() & 0xFFFFFFFF);
-	event->gid = (u32)(bpf_get_current_uid_gid() >> 32);
 	bpf_get_current_comm(event->comm, sizeof(event->comm));
 
 	dentry = BPF_CORE_READ(file, f_path.dentry);
@@ -1449,7 +1446,6 @@ int BPF_PROG(lota_bprm_check_security, struct linux_binprm *bprm)
 			event->pid = bpf_get_current_pid_tgid() & 0xFFFFFFFF;
 			event->uid =
 				(u32)(bpf_get_current_uid_gid() & 0xFFFFFFFF);
-			event->gid = (u32)(bpf_get_current_uid_gid() >> 32);
 
 			bpf_get_current_comm(event->comm, sizeof(event->comm));
 

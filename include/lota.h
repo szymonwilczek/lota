@@ -441,7 +441,6 @@ struct lota_exec_event {
 	__u32 pid;
 	__u32 tgid;
 	__u32 uid;
-	__u32 gid;
 	union {
 		__u32 target_pid; /* ptrace: target process PID */
 		__u32 target_uid; /* setuid: new UID after transition */
