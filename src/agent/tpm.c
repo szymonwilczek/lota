@@ -1987,7 +1987,6 @@ int tpm_quote(struct tpm_context *ctx, const uint8_t *nonce, uint32_t pcr_mask,
 		}
 	}
 
-	memcpy(response->nonce, nonce, LOTA_NONCE_SIZE);
 	response->pcr_mask = pcr_mask;
 	response->hash_alg = TPM2_ALG_NULL;
 

@@ -42,9 +42,6 @@ struct tpm_quote_response {
 	/* Signature hash algorithm (TPM2_ALG_SHA256/SHA384/SHA512). */
 	uint16_t hash_alg;
 
-	/* Server-provided nonce (echoed in TPMS_ATTEST.extraData) */
-	uint8_t nonce[LOTA_NONCE_SIZE];
-
 	/* PCR selection mask used in quote */
 	uint32_t pcr_mask;
 
