@@ -751,6 +751,31 @@ static void test_installer_labels_the_config_directory(void)
 }
 
 /*
+ * Ports are labelled by st_selinux_apply(), which a host that passed the stage
+ * once never reaches unless the probe asks about the ports of this run.
+ */
+static void test_installer_probe_asks_about_ports(void)
+{
+	static char src[262144];
+	const char *start, *end, *call;
+
+	TEST("installer: the SELinux stage probes the ports of this run");
+
+	if (!slurp_shipped("installer/stages.c", src, sizeof(src))) {
+		FAIL("could not open installer/stages.c");
+		return;
+	}
+	start = strstr(src, "static enum stage_state st_selinux_probe(");
+	end = start ? strstr(start, "\n}\n") : NULL;
+	call = start ? strstr(start, "selinux_port_pending(") : NULL;
+	if (!end || !call || call > end) {
+		FAIL("a later run with a new port skips the labelling");
+		return;
+	}
+	PASS();
+}
+
+/*
  * SECLABEL{selinux} is applied when udev adds the device, so a trigger that
  * sends the default change event re-runs the rules and moves no label.
  * The step reports success and leaves both nodes where they were.
@@ -1056,6 +1081,7 @@ int main(void)
 	test_selinux_agent_reaches_user_namespaces();
 	test_selinux_agent_reads_filesystem_types();
 	test_installer_labels_the_config_directory();
+	test_installer_probe_asks_about_ports();
 	test_installer_relabel_reapplies_the_device_labels();
 	test_static_cli_is_built_without_cgo();
 	test_shared_key_refusal_survives_several_publishers();
