@@ -1199,6 +1199,77 @@ static int enroll_profile(const struct install_ctx *ctx,
 	return profile_paths_from_anchor(ctx->opts.ca_cert, paths);
 }
 
+/* two profile_paths and the file are too large for one stack frame */
+struct profile_recorded_scratch {
+	struct profile_paths want;
+	struct profile_paths have;
+	char buf[16384];
+	char path[PATH_MAX];
+};
+
+int installer_profile_recorded(const char *conf_path, const char *anchor)
+{
+	struct profile_recorded_scratch *s;
+	int count;
+	int ret = 0;
+
+	if (!conf_path || !anchor)
+		return 0;
+
+	s = calloc(1, sizeof(*s));
+	if (!s)
+		return -ENOMEM;
+
+	if (profile_paths_from_anchor(anchor, &s->want) < 0 ||
+	    probe_read_text(conf_path, s->buf, sizeof(s->buf)) < 0)
+		goto out;
+
+	count = probe_conf_buf_profile_count(s->buf);
+	for (int i = 0; i < count; i++) {
+		if (!probe_conf_buf_profile_anchor(s->buf, i, s->path,
+						   sizeof(s->path)))
+			continue;
+		if (profile_paths_from_anchor(s->path, &s->have) < 0)
+			continue;
+		if (strcmp(s->have.id, s->want.id) == 0) {
+			ret = 1;
+			break;
+		}
+	}
+out:
+	free(s);
+	return ret;
+}
+
+void installer_add_publisher_argv(const struct install_opts *o,
+				  const char *argv[INSTALLER_ADD_PUBLISHER_ARGC])
+{
+	int n = 0;
+
+	argv[n++] = PATH_AGENT_BIN;
+	argv[n++] = "--add-publisher";
+	argv[n++] = o->ca_server;
+	if (o->ca_port) {
+		argv[n++] = "--ca-port";
+		argv[n++] = o->ca_port;
+	}
+	argv[n++] = "--ca-cert";
+	argv[n++] = o->ca_cert;
+	if (o->verifier && o->verifier[0]) {
+		argv[n++] = "--server";
+		argv[n++] = o->verifier;
+		if (o->verifier_port) {
+			argv[n++] = "--port";
+			argv[n++] = o->verifier_port;
+		}
+	}
+	/* operator-owned host: its verifier hears from it whether or not a
+	 * title runs */
+	argv[n++] = "--reporting";
+	argv[n++] = "continuous";
+	argv[n] = NULL;
+}
+
 static enum stage_state st_enroll_probe(struct install_ctx *ctx, char *note,
 					size_t cap)
 {
