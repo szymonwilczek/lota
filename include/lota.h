@@ -638,6 +638,28 @@ struct lota_mapped_seen {
 #define LOTA_MAX_MAPPED_SEEN 65536
 
 /*
+ * Every file a protected process mapped or mprotected executable, refused
+ * attempts included: an unmapped object leaves no trace in /proc.
+ * Keyed by the process and its start time, so a reused PID starts empty.
+ * Only the agent deletes, and only entries of a process that is gone.
+ */
+#define LOTA_EXEC_HISTORY_NAME_MAX 128
+#define LOTA_MAX_EXEC_HISTORY 65536
+
+struct lota_exec_history_key {
+	__u32 tgid;
+	__u32 pad;
+	__u64 start_ticks;
+	__u64 dev; /* s_dev, kernel encoding */
+	__u64 ino;
+};
+
+struct lota_exec_history_val {
+	__u64 size;
+	char name[LOTA_EXEC_HISTORY_NAME_MAX];
+};
+
+/*
  * Kernel integrity baseline, as the agent's startup hardening gate read it.
  *
  * The gate refuses to start the agent unless the kernel enforces module

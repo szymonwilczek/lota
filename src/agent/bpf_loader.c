@@ -65,6 +65,7 @@
 #define STAT_KILL_PROBES 19
 #define STAT_MAPPED_WRITE_BLOCKED 20
 #define STAT_MAPPED_PIN_REFUSED 21
+#define STAT_EXEC_HISTORY_LOST 22
 
 struct protected_pid_entry {
 	uint64_t start_time_ticks;
@@ -2467,6 +2468,8 @@ int bpf_loader_get_extended_stats(struct bpf_loader_ctx *ctx,
 		  &stats->mapped_write_blocked);
 	read_stat(ctx->stats_fd, STAT_MAPPED_PIN_REFUSED,
 		  &stats->mapped_pin_refused);
+	read_stat(ctx->stats_fd, STAT_EXEC_HISTORY_LOST,
+		  &stats->exec_history_lost);
 	read_stat(ctx->stats_fd, STAT_EVENTS_YIELDED, &stats->events_yielded);
 	read_stat(ctx->stats_fd, STAT_KILL_PROBES, &stats->kill_probes);
 

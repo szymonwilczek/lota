@@ -533,6 +533,7 @@ struct bpf_extended_stats {
 	uint64_t kill_probes; /* signal-0 probes at a protected task */
 	uint64_t mapped_write_blocked; /* writes refused to a pinned library */
 	uint64_t mapped_pin_refused; /* mapped objects left unpinned */
+	uint64_t exec_history_lost; /* exec mappings left unrecorded */
 };
 
 /*

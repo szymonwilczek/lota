@@ -749,7 +749,8 @@ static int run_daemon(const struct run_daemon_params *params)
 			"ptrace=%lu ptrace_blocked=%lu setuid=%lu bpf_blocked=%lu "
 			"mount_blocked=%lu kill_guard_blocked=%lu "
 			"yielded=%lu kill_probes=%lu "
-			"mapped_write_blocked=%lu mapped_pin_refused=%lu",
+			"mapped_write_blocked=%lu mapped_pin_refused=%lu "
+			"exec_history_lost=%lu",
 			stats.total_execs, stats.events_sent, stats.drops,
 			stats.modules_blocked, stats.mmap_execs,
 			stats.mmap_blocked, stats.ptrace_attempts,
@@ -757,7 +758,7 @@ static int run_daemon(const struct run_daemon_params *params)
 			stats.bpf_syscall_blocked, stats.mounts_blocked,
 			stats.kill_guard_blocked, stats.events_yielded,
 			stats.kill_probes, stats.mapped_write_blocked,
-			stats.mapped_pin_refused);
+			stats.mapped_pin_refused, stats.exec_history_lost);
 	}
 
 	{

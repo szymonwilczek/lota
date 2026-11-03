@@ -54,6 +54,10 @@ char LICENSE[] SEC("license") = "GPL";
 #define ENOMEM 12
 #endif
 
+#ifndef EEXIST
+#define EEXIST 17
+#endif
+
 #ifndef EINVAL
 #define EINVAL 22
 #endif
@@ -121,7 +125,7 @@ struct {
  */
 struct {
 	__uint(type, BPF_MAP_TYPE_ARRAY);
-	__uint(max_entries, 22);
+	__uint(max_entries, 23);
 	__type(key, u32);
 	__type(value, u64);
 } stats SEC(".maps");
@@ -165,6 +169,8 @@ struct {
 #define STAT_KILL_PROBES 19 /* permitted sig 0, counted, not journalled */
 #define STAT_MAPPED_WRITE_BLOCKED 20 /* write refused to a pinned library */
 #define STAT_MAPPED_PIN_REFUSED 21 /* mapping not pinned, so not measured */
+#define STAT_EXEC_HISTORY_LOST \
+	22 /* exec mapping of a protected task unrecorded */
 
 /*
  * Rate-limit window per enum lota_event_type (see lota_event_budget.h):
@@ -316,6 +322,14 @@ struct {
 	__type(key, struct trusted_lib_key);
 	__type(value, struct lota_mapped_seen);
 } mapped_seen SEC(".maps");
+
+/* see struct lota_exec_history_key; not LRU, a loss is counted instead */
+struct {
+	__uint(type, BPF_MAP_TYPE_HASH);
+	__uint(max_entries, LOTA_MAX_EXEC_HISTORY);
+	__type(key, struct lota_exec_history_key);
+	__type(value, struct lota_exec_history_val);
+} exec_history SEC(".maps");
 
 /*
  * fs-verity digest allowlist.
@@ -713,6 +727,8 @@ static __always_inline int is_lota_managed_map(struct bpf_map *map)
 		return 1;
 	if (__builtin_memcmp(name, "mapped_seen", sizeof("mapped_seen")) == 0)
 		return 1;
+	if (__builtin_memcmp(name, "exec_history", sizeof("exec_history")) == 0)
+		return 1;
 	if (__builtin_memcmp(name, "events", sizeof("events")) == 0)
 		return 1;
 	if (__builtin_memcmp(name, "stats", sizeof("stats")) == 0)
@@ -962,6 +978,44 @@ static __always_inline void remember_mapped_exec(struct file *file)
 
 	inode_seen(inode, &seen);
 	bpf_map_update_elem(&mapped_seen, &key, &seen, BPF_ANY);
+}
+
+/* first attempt per file wins; a refused one is recorded too */
+static __always_inline void remember_protected_exec(struct file *file)
+{
+	struct lota_exec_history_key key = {};
+	struct lota_exec_history_val val = {};
+	struct trusted_lib_key ik = {};
+	struct task_struct *task;
+	struct task_struct *leader;
+	const unsigned char *name;
+	struct inode *inode;
+	long err;
+
+	task = (struct task_struct *)bpf_get_current_task_btf();
+	if (!task || !is_protected_task(task))
+		return;
+
+	if (!file_inode_key(file, &ik)) {
+		inc_stat(STAT_EXEC_HISTORY_LOST);
+		return;
+	}
+
+	leader = BPF_CORE_READ(task, group_leader);
+	key.tgid = BPF_CORE_READ(task, tgid);
+	key.start_ticks = get_task_start_ticks(leader ? leader : task);
+	key.dev = ik.dev;
+	key.ino = ik.ino;
+
+	inode = BPF_CORE_READ(file, f_inode);
+	val.size = inode ? (u64)BPF_CORE_READ(inode, i_size) : 0;
+	name = BPF_CORE_READ(file, f_path.dentry, d_name.name);
+	if (name)
+		bpf_probe_read_kernel_str(val.name, sizeof(val.name), name);
+
+	err = bpf_map_update_elem(&exec_history, &key, &val, BPF_NOEXIST);
+	if (err && err != -EEXIST)
+		inc_stat(STAT_EXEC_HISTORY_LOST);
 }
 
 /*
@@ -1905,6 +1959,7 @@ int BPF_PROG(lota_mmap_file, struct file *file, unsigned long reqprot,
 	 * before the process asks to be protected.
 	 */
 	remember_mapped_exec(file);
+	remember_protected_exec(file);
 
 	mode = get_mode();
 
@@ -2073,6 +2128,7 @@ int BPF_PROG(lota_file_mprotect, struct vm_area_struct *vma,
 
 	/* mprotect(PROT_EXEC) maps code too */
 	remember_mapped_exec(file);
+	remember_protected_exec(file);
 
 	/*
 	 * mprotect(PROT_EXEC) on a file-backed VMA closes the W^X bypass
