@@ -2110,6 +2110,15 @@ fuzz-bench-result: $(FUZZ_BENCH_SRCS) $(wildcard $(LOTA_BENCH_DIR)/*.h) $(FUZZ_L
 	$(Q)clang $(FUZZ_CFLAGS) -o $(BUILD_DIR)/fuzz-bench-result \
 		$(FUZZ_BENCH_SRCS) $(FUZZ_LSAN_OBJ)
 
+# lota-bench MangoHud log reader fuzz (standalone, libc only)
+FUZZ_BENCH_FRAMES_SRCS := fuzz/fuzz_bench_frames.c $(LOTA_BENCH_DIR)/frames.c
+
+.PHONY: fuzz-bench-frames
+fuzz-bench-frames: $(FUZZ_BENCH_FRAMES_SRCS) $(LOTA_BENCH_DIR)/frames.h $(FUZZ_LSAN_OBJ)
+	$(QUIET_CLANG)
+	$(Q)clang $(FUZZ_CFLAGS) -o $(BUILD_DIR)/fuzz-bench-frames \
+		$(FUZZ_BENCH_FRAMES_SRCS) $(FUZZ_LSAN_OBJ)
+
 # Enrollment reply decoders fuzz (standalone, includes enroll.c, libc only)
 $(BUILD_DIR)/fuzz/fuzz_enroll.o: fuzz/fuzz_enroll.c src/agent/enroll.c src/agent/enroll.h | $(BUILD_DIR)/fuzz
 	$(QUIET_CLANG)
@@ -2305,7 +2314,7 @@ FUZZ_TARGETS := fuzz-agent fuzz-config fuzz-enroll \
 	fuzz-seal-envelope fuzz-tpm-attest fuzz-policy-sign fuzz-server-sdk \
 	fuzz-tpm-resp fuzz-bpf-devt fuzz-bpf-open-flags fuzz-bpf-kmem-device \
 	fuzz-bpf-event-budget fuzz-bpf-inaccessible-exec fuzz-bpf-shebang \
-	fuzz-bench-result
+	fuzz-bench-result fuzz-bench-frames
 
 .PHONY: fuzz-all
 fuzz-all: $(FUZZ_TARGETS)
