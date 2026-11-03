@@ -51,13 +51,16 @@ prints what any caller of the socket is told:
 
    $ lota-agent --status
    Mode:         enforce
-   Flags:        ATTESTED,TPM_OK,IOMMU_OK,BPF_LOADED,SECURE_BOOT,BENCH
+   Flags:        ATTESTED,TPM_OK,IOMMU_OK,BPF_LOADED,SECURE_BOOT,BENCH,ENFORCE
+   Policy:       none
    Attested:     2026-01-01 12:00:00 UTC
    Token until:  2026-01-01 12:01:30 UTC
    Attestations: 3 succeeded, 0 failed
 
 It needs the socket's group, not root, and changes nothing. A bit this
-build has no name for is printed in hex rather than dropped.
+build has no name for is printed in hex rather than dropped. ``Policy`` names
+the keys the host applies, or says why none does (``monitor mode``, ``LSM not
+loaded``).
 
 The file
 ========
