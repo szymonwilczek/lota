@@ -1018,11 +1018,67 @@ static __always_inline void remember_mapped_exec(struct file *file)
 	bpf_map_update_elem(&mapped_seen, &key, &seen, BPF_ANY);
 }
 
-/* first attempt per file wins; a refused one is recorded too */
+#define LOTA_TMPFS_MAGIC 0x01021994
+#define LOTA_HUGETLBFS_MAGIC 0x958458f6
+#define LOTA_F_SEAL_WRITE 0x0008
+#define LOTA_F_SEAL_FUTURE_WRITE 0x0010
+
+/* seals of a tmpfs or hugetlbfs inode */
+static __always_inline u32 memory_inode_seals(struct inode *inode,
+					      unsigned long magic)
+{
+	struct hugetlbfs_inode_info *h;
+	struct shmem_inode_info *s;
+
+	if (magic == LOTA_HUGETLBFS_MAGIC) {
+		h = (void *)((char *)inode -
+			     bpf_core_field_offset(struct hugetlbfs_inode_info,
+						   vfs_inode));
+		return BPF_CORE_READ(h, seals);
+	}
+	s = (void *)((char *)inode -
+		     bpf_core_field_offset(struct shmem_inode_info, vfs_inode));
+	return BPF_CORE_READ(s, seals);
+}
+
+/* who else could change the code of @inode right now */
+static __always_inline u32 exec_history_flags(struct inode *inode)
+{
+	unsigned long magic;
+	u32 flags = 0;
+
+	if (!inode)
+		return 0;
+
+	/* negative i_writecount: writes denied, e.g. a running exe */
+	if (BPF_CORE_READ(inode, i_writecount.counter) > 0 ||
+	    BPF_CORE_READ(inode, i_mapping, i_mmap_writable.counter) > 0)
+		flags |= LOTA_EXEC_HISTORY_WRITABLE;
+
+	magic = BPF_CORE_READ(inode, i_sb, s_magic);
+	if (magic != LOTA_TMPFS_MAGIC && magic != LOTA_HUGETLBFS_MAGIC)
+		return flags;
+
+	flags |= LOTA_EXEC_HISTORY_MEMORY;
+
+	/*
+	 * A memfd or shm segment has no name to open: its fds never count
+	 * in i_writecount, and any holder can write until a seal forbids it.
+	 */
+	if (BPF_CORE_READ(inode, __i_nlink) == 0 &&
+	    !(memory_inode_seals(inode, magic) &
+	      (LOTA_F_SEAL_WRITE | LOTA_F_SEAL_FUTURE_WRITE)))
+		flags |= LOTA_EXEC_HISTORY_WRITABLE;
+
+	return flags;
+}
+
+/* first attempt per file names it; the flags gather every attempt's */
 static __always_inline void remember_protected_exec(struct file *file)
 {
 	struct lota_exec_history_key key = {};
 	struct lota_exec_history_val val = {};
+	struct lota_exec_history_val *seen;
 	struct trusted_lib_key ik = {};
 	struct task_struct *task;
 	struct task_struct *leader;
@@ -1046,14 +1102,28 @@ static __always_inline void remember_protected_exec(struct file *file)
 	key.ino = ik.ino;
 
 	inode = BPF_CORE_READ(file, f_inode);
+	val.flags = exec_history_flags(inode);
+
+	seen = bpf_map_lookup_elem(&exec_history, &key);
+	if (seen) {
+		if (val.flags & ~seen->flags)
+			__sync_fetch_and_or(&seen->flags, val.flags);
+		return;
+	}
+
 	val.size = inode ? (u64)BPF_CORE_READ(inode, i_size) : 0;
 	name = BPF_CORE_READ(file, f_path.dentry, d_name.name);
 	if (name)
 		bpf_probe_read_kernel_str(val.name, sizeof(val.name), name);
 
 	err = bpf_map_update_elem(&exec_history, &key, &val, BPF_NOEXIST);
-	if (err && err != -EEXIST)
+	if (err == -EEXIST) {
+		seen = bpf_map_lookup_elem(&exec_history, &key);
+		if (seen)
+			__sync_fetch_and_or(&seen->flags, val.flags);
+	} else if (err) {
 		inc_stat(STAT_EXEC_HISTORY_LOST);
+	}
 }
 
 /*

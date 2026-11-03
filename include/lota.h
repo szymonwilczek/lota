@@ -654,8 +654,18 @@ struct lota_exec_history_key {
 	__u64 ino;
 };
 
+/*
+ * another file could write the code: open for write, mapped shared writable,
+ * or memory with no name and no write seal, which any fd holder can write
+ */
+#define LOTA_EXEC_HISTORY_WRITABLE (1U << 0)
+/* the code lives in memory only: memfd, shm, tmpfs or hugetlbfs */
+#define LOTA_EXEC_HISTORY_MEMORY (1U << 1)
+
 struct lota_exec_history_val {
 	__u64 size;
+	__u32 flags; /* LOTA_EXEC_HISTORY_*, of every attempt */
+	__u32 pad;
 	char name[LOTA_EXEC_HISTORY_NAME_MAX];
 };
 
