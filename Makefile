@@ -2099,6 +2099,16 @@ fuzz-config: $(BUILD_DIR)/fuzz/fuzz_config.o $(FUZZ_CONFIG_OBJS) $(FUZZ_LSAN_OBJ
 	$(QUIET_CLANG)
 	$(Q)clang $(FUZZ_CFLAGS) -o $(BUILD_DIR)/fuzz-config $^
 
+# lota-bench result validator fuzz (standalone, libc only)
+FUZZ_BENCH_SRCS := fuzz/fuzz_bench_result.c \
+	$(addprefix $(LOTA_BENCH_DIR)/,validate.c json.c result.c cgroup.c)
+
+.PHONY: fuzz-bench-result
+fuzz-bench-result: $(FUZZ_BENCH_SRCS) $(wildcard $(LOTA_BENCH_DIR)/*.h) $(FUZZ_LSAN_OBJ)
+	$(QUIET_CLANG)
+	$(Q)clang $(FUZZ_CFLAGS) -o $(BUILD_DIR)/fuzz-bench-result \
+		$(FUZZ_BENCH_SRCS) $(FUZZ_LSAN_OBJ)
+
 # Enrollment reply decoders fuzz (standalone, includes enroll.c, libc only)
 $(BUILD_DIR)/fuzz/fuzz_enroll.o: fuzz/fuzz_enroll.c src/agent/enroll.c src/agent/enroll.h | $(BUILD_DIR)/fuzz
 	$(QUIET_CLANG)
@@ -2293,7 +2303,8 @@ update-bpf-mirror:
 FUZZ_TARGETS := fuzz-agent fuzz-config fuzz-enroll \
 	fuzz-seal-envelope fuzz-tpm-attest fuzz-policy-sign fuzz-server-sdk \
 	fuzz-tpm-resp fuzz-bpf-devt fuzz-bpf-open-flags fuzz-bpf-kmem-device \
-	fuzz-bpf-event-budget fuzz-bpf-inaccessible-exec fuzz-bpf-shebang
+	fuzz-bpf-event-budget fuzz-bpf-inaccessible-exec fuzz-bpf-shebang \
+	fuzz-bench-result
 
 .PHONY: fuzz-all
 fuzz-all: $(FUZZ_TARGETS)
