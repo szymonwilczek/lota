@@ -1085,7 +1085,10 @@ static void test_registry_digest(void)
 		{ "title.exe", "/opt/title/title.exe", 4096, 0x803, 42,
 		  LOTA_REGISTRY_ROAD_NONE, 0, 0, NULL },
 		{ "inject.so", NULL, 512, 0x2a, 7, LOTA_REGISTRY_ROAD_NONE,
-		  LOTA_REGISTRY_OBJECT_UNMAPPED, 0, NULL },
+		  LOTA_REGISTRY_OBJECT_UNMAPPED |
+			  LOTA_REGISTRY_OBJECT_WRITABLE |
+			  LOTA_REGISTRY_OBJECT_MEMORY,
+		  0, NULL },
 		{ "libz.so.1", "/usr/lib64/libz.so.1", 1024, 0x803, 18,
 		  LOTA_REGISTRY_ROAD_CONTENT, 0, sizeof(d1), d1 },
 	};
@@ -1180,6 +1183,11 @@ static void test_registry_digest(void)
 		/* an unmapped object passed off as mapped */
 		memcpy(edit, mods, sizeof(mods));
 		edit[2].flags = 0;
+		ok &= lota_server_registry_digest(flags, edit, 4, peers, 2,
+						  other) == LOTA_SERVER_OK &&
+		      memcmp(other, got, sizeof(got)) != 0;
+		/* code another process could write passed off as fixed */
+		edit[2].flags = LOTA_REGISTRY_OBJECT_UNMAPPED;
 		ok &= lota_server_registry_digest(flags, edit, 4, peers, 2,
 						  other) == LOTA_SERVER_OK &&
 		      memcmp(other, got, sizeof(got)) != 0;
@@ -1279,7 +1287,7 @@ static void test_registry_digest(void)
 						       got) ==
 				   LOTA_SERVER_ERR_INVALID_ARG;
 		bad = mods[0];
-		bad.flags = 1U << 4;
+		bad.flags = 1U << 3;
 		ok = ok && lota_server_registry_digest(flags, &bad, 1, NULL, 0,
 						       got) ==
 				   LOTA_SERVER_ERR_INVALID_ARG;

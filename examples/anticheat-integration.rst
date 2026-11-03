@@ -317,6 +317,12 @@ Worth being precise about, because it decides what you can build on it:
   round found them: size, inode and, where one was taken, the digest; the
   path for an object still mapped, ``LOTA_REGISTRY_OBJECT_UNMAPPED`` and the
   file's name for one that is gone. A refused mapping is listed too.
+  ``LOTA_REGISTRY_OBJECT_WRITABLE`` says another process could write the
+  object's pages while the title ran them, such as a helper holding a
+  memfd that no seal keeps from writes, or a file open for write or mapped
+  shared and writable; ``LOTA_REGISTRY_OBJECT_MEMORY``
+  says the code has no file on disk. A digest of such an object shows the
+  pages at the round only.
   ``LOTA_REGISTRY_HISTORY_LOST`` says the kernel lost a record and the list
   may miss an object. The token does not carry the list, it binds it:
   ``lota_server_registry_digest()`` hashes the flags, every object and every

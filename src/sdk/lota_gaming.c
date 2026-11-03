@@ -1322,14 +1322,16 @@ int lota_poll_events(struct lota_client *client, int timeout_ms)
 #define REGISTRY_FLAGS                                                 \
 	(LOTA_IPC_REGISTRY_MEASURED | LOTA_IPC_REGISTRY_HISTORY_LOST | \
 	 LOTA_IPC_REGISTRY_PEERS_LOST)
-_Static_assert(LOTA_REGISTRY_MEASURED == LOTA_IPC_REGISTRY_MEASURED &&
-		       LOTA_REGISTRY_HISTORY_LOST ==
-			       LOTA_IPC_REGISTRY_HISTORY_LOST &&
-		       LOTA_REGISTRY_PEERS_LOST ==
-			       LOTA_IPC_REGISTRY_PEERS_LOST &&
-		       LOTA_REGISTRY_OBJECT_UNMAPPED ==
-			       LOTA_IPC_REGISTRY_ENTRY_UNMAPPED,
-	       "lota_gaming.h registry flags copy lota_ipc.h");
+_Static_assert(
+	LOTA_REGISTRY_MEASURED == LOTA_IPC_REGISTRY_MEASURED &&
+		LOTA_REGISTRY_HISTORY_LOST == LOTA_IPC_REGISTRY_HISTORY_LOST &&
+		LOTA_REGISTRY_PEERS_LOST == LOTA_IPC_REGISTRY_PEERS_LOST &&
+		LOTA_REGISTRY_OBJECT_UNMAPPED ==
+			LOTA_IPC_REGISTRY_ENTRY_UNMAPPED &&
+		LOTA_REGISTRY_OBJECT_WRITABLE ==
+			LOTA_IPC_REGISTRY_ENTRY_WRITABLE &&
+		LOTA_REGISTRY_OBJECT_MEMORY == LOTA_IPC_REGISTRY_ENTRY_MEMORY,
+	"lota_gaming.h registry flags copy lota_ipc.h");
 _Static_assert(LOTA_REGISTRY_PEER_CONNECT == LOTA_IPC_REGISTRY_PEER_CONNECT &&
 		       LOTA_REGISTRY_PEER_SEND == LOTA_IPC_REGISTRY_PEER_SEND &&
 		       LOTA_REGISTRY_PEER_PTRACE_READ ==
@@ -1459,7 +1461,7 @@ static int registry_decode_entries(const uint8_t *buf, size_t len,
 			    e.digest_len != 0 :
 			    (e.digest_len != 32 && e.digest_len != 64))
 			return LOTA_ERR_PROTOCOL;
-		if (e.flags & ~LOTA_IPC_REGISTRY_ENTRY_UNMAPPED)
+		if (e.flags & ~LOTA_IPC_REGISTRY_ENTRY_KNOWN)
 			return LOTA_ERR_PROTOCOL;
 
 		memset(o, 0, sizeof(*o));

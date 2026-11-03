@@ -513,6 +513,16 @@ struct lota_ipc_registry_request {
 
 /* mapped since protection began, gone from the address space when measured */
 #define LOTA_IPC_REGISTRY_ENTRY_UNMAPPED (1U << 0)
+/*
+ * when mapped executable, open for write or mapped shared writable
+ * elsewhere, or a memfd or shm segment no seal kept from writes
+ */
+#define LOTA_IPC_REGISTRY_ENTRY_WRITABLE (1U << 1)
+/* backed by memory only: memfd, shm, tmpfs or hugetlbfs */
+#define LOTA_IPC_REGISTRY_ENTRY_MEMORY (1U << 2)
+#define LOTA_IPC_REGISTRY_ENTRY_KNOWN                                          \
+	(LOTA_IPC_REGISTRY_ENTRY_UNMAPPED | LOTA_IPC_REGISTRY_ENTRY_WRITABLE | \
+	 LOTA_IPC_REGISTRY_ENTRY_MEMORY)
 
 /* objects listed for one process: those mapped, then those unmapped */
 #define LOTA_IPC_REGISTRY_MAX_OBJECTS 512

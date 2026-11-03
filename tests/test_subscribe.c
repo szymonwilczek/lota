@@ -1141,9 +1141,12 @@ static size_t build_registry_page(uint8_t *buf, uint64_t round, uint32_t start,
 			memset(e.digest, (int)i + 1, 32);
 		}
 		if (i == 4)
-			e.flags = LOTA_IPC_REGISTRY_ENTRY_UNMAPPED;
+			e.flags = LOTA_IPC_REGISTRY_ENTRY_UNMAPPED |
+				  LOTA_IPC_REGISTRY_ENTRY_MEMORY;
+		if (i == 2)
+			e.flags = LOTA_IPC_REGISTRY_ENTRY_WRITABLE;
 		if (i == 1 && fault == REGISTRY_BAD_ENTRY_FLAG)
-			e.flags = 1U << 5;
+			e.flags = 1U << 3;
 		e.soname_len = (uint16_t)strlen(soname);
 		e.path_len = (uint16_t)strlen(path);
 		memcpy(buf + off, &e, sizeof(e));
@@ -1282,7 +1285,9 @@ static void test_registry_pages(void)
 	    reg->objects[3].digest[0] != 4 ||
 	    reg->objects[4].road != LOTA_REGISTRY_ROAD_NONE ||
 	    reg->objects[4].digest_len != 0 ||
-	    reg->objects[4].flags != LOTA_REGISTRY_OBJECT_UNMAPPED ||
+	    reg->objects[4].flags != (LOTA_REGISTRY_OBJECT_UNMAPPED |
+				      LOTA_REGISTRY_OBJECT_MEMORY) ||
+	    reg->objects[2].flags != LOTA_REGISTRY_OBJECT_WRITABLE ||
 	    reg->objects[4].path[0] != '\0' || reg->objects[3].flags != 0 ||
 	    reg->peer_count != 2 || !reg->peers || reg->peers[0].tgid != 6000 ||
 	    reg->peers[0].count != 2 || reg->peers[0].start_ticks != 9000 ||

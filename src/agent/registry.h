@@ -176,6 +176,10 @@ static inline void registry_entry(const struct lota_rt_object_record *o,
 	e->path_len = (uint16_t)strnlen(o->entry.path, sizeof(o->entry.path));
 	if (o->unmapped)
 		e->flags |= LOTA_IPC_REGISTRY_ENTRY_UNMAPPED;
+	if (o->history_flags & LOTA_EXEC_HISTORY_WRITABLE)
+		e->flags |= LOTA_IPC_REGISTRY_ENTRY_WRITABLE;
+	if (o->history_flags & LOTA_EXEC_HISTORY_MEMORY)
+		e->flags |= LOTA_IPC_REGISTRY_ENTRY_MEMORY;
 }
 
 /*
@@ -217,7 +221,8 @@ static inline int registry_digest(uint16_t flags,
 
 /*
  * Append to @objs, holding @n of @cap, every history item of the process
- * @tgid started at @start_ticks that the maps no longer show.
+ * @tgid started at @start_ticks that the maps no longer show, and give the
+ * objects still mapped the flags their history carries.
  * Returns the new count; sets *@overflow when one did not fit.
  */
 static inline size_t
@@ -238,10 +243,14 @@ registry_merge_history(struct lota_rt_object_record *objs, size_t n, size_t cap,
 
 		if (h->tgid != tgid || h->start_ticks != start_ticks)
 			continue;
-		for (size_t j = 0; j < mapped && !listed; j++)
-			listed = objs[j].entry.dev_major == major &&
-				 objs[j].entry.dev_minor == minor &&
-				 objs[j].entry.ino == h->ino;
+		for (size_t j = 0; j < mapped; j++) {
+			if (objs[j].entry.dev_major == major &&
+			    objs[j].entry.dev_minor == minor &&
+			    objs[j].entry.ino == h->ino) {
+				objs[j].history_flags |= v->flags;
+				listed = 1;
+			}
+		}
 		if (listed)
 			continue;
 		if (n >= cap) {
@@ -256,6 +265,7 @@ registry_merge_history(struct lota_rt_object_record *objs, size_t n, size_t cap,
 		o->entry.ino = h->ino;
 		o->size = v->size;
 		o->unmapped = 1;
+		o->history_flags = v->flags;
 		if (v->name[0] == '\0')
 			memcpy(o->entry.soname, "?", 2);
 		else

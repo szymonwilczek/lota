@@ -721,7 +721,7 @@ static int registry_wire_entry(const struct lota_server_registry_module *m,
 	if (slen == 0 || slen >= REGISTRY_SONAME_MAX ||
 	    plen >= REGISTRY_PATH_MAX)
 		return LOTA_SERVER_ERR_INVALID_ARG;
-	if (m->flags & ~(uint32_t)LOTA_IPC_REGISTRY_ENTRY_UNMAPPED)
+	if (m->flags & ~(uint32_t)LOTA_IPC_REGISTRY_ENTRY_KNOWN)
 		return LOTA_SERVER_ERR_INVALID_ARG;
 
 	switch (m->road) {

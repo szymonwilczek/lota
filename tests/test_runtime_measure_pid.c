@@ -268,8 +268,10 @@ int main(void)
 		}
 		/* still mapped, so already listed */
 		keys[0] = (struct lota_exec_history_key){ 7, 0, 99, dev, 10 };
+		vals[0].flags = LOTA_EXEC_HISTORY_WRITABLE;
 		keys[1] = (struct lota_exec_history_key){ 7, 0, 99, dev, 12 };
 		vals[1].size = 512;
+		vals[1].flags = LOTA_EXEC_HISTORY_MEMORY;
 		strcpy(vals[1].name, "inject.so");
 		/* an earlier process under the same PID */
 		keys[2] = (struct lota_exec_history_key){ 7, 0, 98, dev, 13 };
@@ -282,6 +284,10 @@ int main(void)
 					   &overflow);
 		ok &= n == 4 && !overflow && !objs[0].unmapped &&
 		      !objs[1].unmapped;
+		ok &= objs[0].history_flags == LOTA_EXEC_HISTORY_WRITABLE &&
+		      objs[1].history_flags == 0 &&
+		      objs[2].history_flags == LOTA_EXEC_HISTORY_MEMORY &&
+		      objs[3].history_flags == 0;
 		ok &= objs[2].unmapped && objs[2].entry.ino == 12 &&
 		      objs[2].entry.dev_major == 8 &&
 		      objs[2].entry.dev_minor == 3 && objs[2].size == 512 &&
@@ -381,6 +387,8 @@ int main(void)
 		objs[0].digest.len = 32;
 		memset(objs[0].digest.digest, 0x5a, 32);
 		objs[2].unmapped = 1;
+		objs[1].history_flags = LOTA_EXEC_HISTORY_WRITABLE |
+					LOTA_EXEC_HISTORY_MEMORY;
 
 		memset(peers, 0, sizeof(peers));
 		peers[0] = (struct lota_ipc_registry_peer){
@@ -426,6 +434,10 @@ int main(void)
 				ok &= (i == 2) ==
 				      !!(e.flags &
 					 LOTA_IPC_REGISTRY_ENTRY_UNMAPPED);
+				ok &= (i == 1) ==
+				      (e.flags ==
+				       (LOTA_IPC_REGISTRY_ENTRY_WRITABLE |
+					LOTA_IPC_REGISTRY_ENTRY_MEMORY));
 				ok &= lota_registry_digest_entry(
 					      md, &e, s, s + e.soname_len) == 0;
 			}

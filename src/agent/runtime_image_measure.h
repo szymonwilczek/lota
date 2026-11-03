@@ -321,6 +321,7 @@ struct lota_rt_object_record {
 	uint64_t size;
 	int content_hashed;
 	int unmapped; /* only in the exec history, no longer in the maps */
+	uint32_t history_flags; /* LOTA_EXEC_HISTORY_* the kernel recorded */
 };
 
 /*

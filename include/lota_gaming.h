@@ -627,6 +627,15 @@ int lota_poll_events(struct lota_client *client, int timeout_ms);
  * measured: no path and no digest, the soname is the file's name.
  */
 #define LOTA_REGISTRY_OBJECT_UNMAPPED (1U << 0)
+/*
+ * When a protected process mapped it executable, something else held it
+ * open for write or mapped it shared writable, or it was a memfd or shm
+ * segment with no write seal, which anyone holding an fd can write: the
+ * code could change without the file being written again.
+ */
+#define LOTA_REGISTRY_OBJECT_WRITABLE (1U << 1)
+/* backed by memory only (memfd, shm, tmpfs, hugetlbfs), no file on disk */
+#define LOTA_REGISTRY_OBJECT_MEMORY (1U << 2)
 
 /*
  * One code object a protected process mapped executable.

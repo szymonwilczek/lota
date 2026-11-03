@@ -141,6 +141,8 @@ macro LOTA_REGISTRY_MEASURED                   = 1
 macro LOTA_REGISTRY_HISTORY_LOST               = 2
 macro LOTA_REGISTRY_PEERS_LOST                 = 4
 macro LOTA_REGISTRY_OBJECT_UNMAPPED            = 1
+macro LOTA_REGISTRY_OBJECT_WRITABLE            = 2
+macro LOTA_REGISTRY_OBJECT_MEMORY              = 4
 struct lota_registry_object size=680 align=8
 	size                             off=0 size=8
 	dev                              off=8 size=8

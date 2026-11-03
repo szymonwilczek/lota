@@ -451,6 +451,21 @@ an object loaded and dropped between two rounds is still listed. A record the
 kernel could not keep sets ``LOTA_IPC_REGISTRY_HISTORY_LOST`` on every list of
 the round: such a list may lack an object.
 
+A file can change under a mapping without being written again: another process
+holds it open for write, or maps it shared and writable, and stores into the
+pages the protected process runs. The kernel notes, at every executable
+mapping, whether the file had such a writer, and whether it lives in memory
+only (memfd, shm, tmpfs or hugetlbfs), where no file on disk names the code.
+A memfd or shm segment has no name to open, so its fds never count as
+writers: such an object counts as written unless a seal
+(``F_SEAL_WRITE`` or ``F_SEAL_FUTURE_WRITE``) forbade writes when it was
+mapped.
+An object mapped once with a writer carries
+``LOTA_IPC_REGISTRY_ENTRY_WRITABLE``, one backed by memory
+``LOTA_IPC_REGISTRY_ENTRY_MEMORY``, mapped or unmapped alike. A digest taken
+at the round says what the pages held then, not what they held between two
+rounds. Nothing is refused on either flag.
+
 After the objects come the peers: every process that reached a process of
 the instance on a road the kernel lets through. An instance is the protected
 process and everything it started. From outside, the road is a unix socket:
