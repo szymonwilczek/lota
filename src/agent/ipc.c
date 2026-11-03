@@ -7,6 +7,7 @@
 
 #include "attest_aggregate.h"
 #include "enroll.h"
+#include "hardening.h"
 #include "ipc.h"
 #include "ipc_privilege.h"
 #include "ipc_payload.h"
@@ -2488,6 +2489,27 @@ static int pid_set_remove(const uint32_t *pids, int count, uint32_t pid,
 	return 0;
 }
 
+/*
+ * 0 when @pid has no tracer. A process under one is refused protection:
+ * the LSM stops new attaches, not the one already there, and that tracer
+ * would read and write the process as if it were unprotected.
+ */
+static int protect_target_untraced(uint32_t pid)
+{
+	long tracer = 0;
+	int ret;
+
+	ret = hardening_read_tracer_pid((pid_t)pid, &tracer);
+	if (ret == -EPERM)
+		lota_warn("Refusing PROTECT_PID %u: traced by pid %ld, "
+			  "which protection does not detach",
+			  pid, tracer);
+	else if (ret < 0)
+		lota_warn("Refusing PROTECT_PID %u: cannot read its tracer: %s",
+			  pid, strerror(-ret));
+	return ret;
+}
+
 static void handle_protect_pid_update(struct ipc_context *ctx,
 				      struct ipc_client *client,
 				      const uint8_t *payload,
@@ -2638,6 +2660,22 @@ static void handle_protect_pid_update(struct ipc_context *ctx,
 			lota_err("Failed to protect PID %u (IPC): %s", pid,
 				 strerror(-ret));
 			build_error_response(client, LOTA_IPC_ERR_INTERNAL);
+			return;
+		}
+
+		/*
+		 * Read after the map holds the process, so no attach lands
+		 * between the check and the protection: a tracer seen now
+		 * was attached before it, and stays.
+		 */
+		ret = protect_target_untraced(pid);
+		if (ret < 0) {
+			if (bpf_loader_unprotect_pid(&g_agent.bpf_ctx, pid) < 0)
+				lota_err("Failed to withdraw protection from "
+					 "PID %u",
+					 pid);
+			build_error_response(client,
+					     LOTA_IPC_ERR_ACCESS_DENIED);
 			return;
 		}
 		mutated = true;

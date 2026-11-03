@@ -22,6 +22,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <sys/prctl.h>
+#include <sys/ptrace.h>
 #include <sys/syscall.h>
 #include <sys/types.h>
 #include <sys/wait.h>
@@ -181,6 +182,52 @@ static int run_in_child(int (*body)(void))
 static int child_refuse_if_traced_untraced(void)
 {
 	return hardening_refuse_if_traced() == 0 ? 0 : 1;
+}
+
+/* by pid, as the agent reads a process it is asked to protect */
+static int child_read_tracer_pid_untraced(void)
+{
+	long tracer = -1;
+
+	if (hardening_read_tracer_pid(getpid(), &tracer) != 0 || tracer != 0)
+		return 1;
+	return 0;
+}
+
+/* above the default pid_max, so nothing runs there */
+static int child_read_tracer_pid_gone(void)
+{
+	long tracer = -1;
+
+	return hardening_read_tracer_pid(0x3fffffff, &tracer) == -ENOENT ? 0 :
+									   1;
+}
+
+/* the tracer of a process seized from outside is named */
+static int child_read_tracer_pid_seized(void)
+{
+	long tracer = 0;
+	pid_t target;
+	int ret;
+
+	target = fork();
+	if (target < 0)
+		return 2;
+	if (target == 0) {
+		pause();
+		_exit(0);
+	}
+
+	if (ptrace(PTRACE_SEIZE, target, NULL, NULL) != 0) {
+		kill(target, SIGKILL);
+		return 3;
+	}
+
+	ret = hardening_read_tracer_pid(target, &tracer);
+	kill(target, SIGKILL);
+	waitpid(target, NULL, 0);
+
+	return ret == -EPERM && tracer == getpid() ? 0 : 1;
 }
 
 static int child_no_new_privs_sets_flag(void)
@@ -522,6 +569,12 @@ int main(void)
 
 	run_child_case("refuse_if_traced: clean process returns 0",
 		       child_refuse_if_traced_untraced);
+	run_child_case("read_tracer_pid: an untraced process reads 0",
+		       child_read_tracer_pid_untraced);
+	run_child_case("read_tracer_pid: a process that is gone is -ENOENT",
+		       child_read_tracer_pid_gone);
+	run_child_case("read_tracer_pid: a seized process names its tracer",
+		       child_read_tracer_pid_seized);
 	run_child_case("apply_no_new_privs: PR_GET_NO_NEW_PRIVS == 1",
 		       child_no_new_privs_sets_flag);
 	run_child_case("apply_no_dumpable: PR_GET_DUMPABLE == 0",

@@ -466,7 +466,8 @@ int lota_ping(struct lota_client *client, uint64_t *uptime_sec);
  * need covering (see LOTA_HOOK_ENV_PROTECT_DELAY).
  *
  * Returns LOTA_OK on success.
- *         LOTA_ERR_ACCESS_DENIED if the PID identity check fails.
+ *         LOTA_ERR_ACCESS_DENIED if the PID identity check fails, or a
+ *                                tracer already holds the process.
  *         LOTA_ERR_RATE_LIMITED  if the caller's UID exceeded the
  *                                privileged-PID rate window.
  *         LOTA_ERR_PROTOCOL      on IPC framing errors.

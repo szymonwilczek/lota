@@ -9,6 +9,7 @@
 
 #include <errno.h>
 #include <fcntl.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/prctl.h>
@@ -89,9 +90,21 @@ int hardening_parse_tracer_pid_buf(const char *buf, long *out_tracer)
 	return tracer == 0 ? 0 : -EPERM;
 }
 
-int hardening_refuse_if_traced(void)
+int hardening_read_tracer_pid(pid_t pid, long *out_tracer)
 {
-	int fd = open("/proc/self/status", O_RDONLY | O_CLOEXEC);
+	char path[64];
+	int fd;
+
+	if (!out_tracer)
+		return -EINVAL;
+	*out_tracer = 0;
+
+	if (pid > 0)
+		snprintf(path, sizeof(path), "/proc/%d/status", (int)pid);
+	else
+		snprintf(path, sizeof(path), "/proc/self/status");
+
+	fd = open(path, O_RDONLY | O_CLOEXEC);
 	if (fd < 0)
 		return -errno;
 
@@ -137,9 +150,16 @@ int hardening_refuse_if_traced(void)
 	}
 	buf[off] = '\0';
 
-	long tracer = 0;
-	int ret = hardening_parse_tracer_pid_buf(buf, &tracer);
+	int ret = hardening_parse_tracer_pid_buf(buf, out_tracer);
 	free(buf);
+	return ret;
+}
+
+int hardening_refuse_if_traced(void)
+{
+	long tracer = 0;
+	int ret = hardening_read_tracer_pid(0, &tracer);
+
 	if (ret == -EPERM)
 		lota_err("hardening: refusing to start under tracer pid %ld",
 			 tracer);

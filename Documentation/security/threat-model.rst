@@ -401,6 +401,10 @@ Active threats
          that, the creation fails, so no child runs unprotected. A protected
          process held by a tracer outside the protected set creates nothing,
          since the kernel would hand the tracer the child as well.
+       | The agent refuses to protect a process a tracer already holds: the
+         LSM refuses new attaches, and one made before the protection would
+         stay. It reads the tracer after the process is in the map, so no
+         attach lands between the check and the protection.
        | ``block_ptrace``, off by default, extends the refusal to an attach on
          any other task.
      - | Reading another process's ``/proc`` is left to the kernel outside the

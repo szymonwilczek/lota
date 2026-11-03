@@ -1509,7 +1509,8 @@ TEST_LIBSDK := -L$(BUILD_DIR) -llotagaming -Wl,-rpath,$(abspath $(BUILD_DIR))
 
 TEST_ATTEST_SRCS := $(addprefix $(AGENT_DIR)/,attest_targets.c profile.c config.c io_utils.c pin.c)
 TEST_CONFIG_SRCS := $(addprefix $(AGENT_DIR)/,config.c io_utils.c pin.c)
-TEST_IPC_SRCS := $(addprefix $(AGENT_DIR)/,ipc.c journal.c profile.c token_gate.c)
+TEST_IPC_SRCS := $(addprefix $(AGENT_DIR)/,ipc.c journal.c profile.c token_gate.c \
+	hardening.c)
 TEST_LOADER_SRCS := $(addprefix $(AGENT_DIR)/,bpf_loader.c journal.c policy_sign.c \
 	sb_dev.c cgroup_guard.c)
 TEST_NET_SRCS := $(addprefix $(AGENT_DIR)/,net.c journal.c pin.c)
@@ -1563,7 +1564,7 @@ TEST_IPC := $(addprefix $(BUILD_DIR)/test_, \
 	ipc_token_no_tpm \
 )
 $(TEST_IPC): $(TEST_IPC_SRCS)
-$(TEST_IPC): TEST_LDLIBS := $(TEST_LIBSSL)
+$(TEST_IPC): TEST_LDLIBS := $(TEST_LIBSSL) -lseccomp
 
 TEST_LOADER := $(addprefix $(BUILD_DIR)/test_, \
 	bpf_loader_load_source \
@@ -1739,8 +1740,9 @@ $(BUILD_DIR)/test_ipc_payload_len: $(AGENT_DIR)/ipc_payload.h $(INC_DIR)/lota_ip
 $(BUILD_DIR)/test_ipc_privilege: $(AGENT_DIR)/ipc_privilege.h
 $(BUILD_DIR)/test_ipc_token_cap: $(INC_DIR)/lota_ipc.h $(INC_DIR)/lota_token.h
 
-$(BUILD_DIR)/test_ipc_token_refusal: $(addprefix $(AGENT_DIR)/,ipc.c profile.c token_gate.c)
-$(BUILD_DIR)/test_ipc_token_refusal: TEST_LDLIBS := $(TEST_LIBSSL)
+$(BUILD_DIR)/test_ipc_token_refusal: $(addprefix $(AGENT_DIR)/,ipc.c profile.c token_gate.c \
+	hardening.c)
+$(BUILD_DIR)/test_ipc_token_refusal: TEST_LDLIBS := $(TEST_LIBSSL) -lseccomp
 
 $(BUILD_DIR)/test_kernel_floor_hint: $(AGENT_DIR)/kernel_floor_hint.h
 $(BUILD_DIR)/test_kernel_image: $(AGENT_DIR)/kernel_image.c
