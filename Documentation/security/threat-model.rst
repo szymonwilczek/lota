@@ -358,7 +358,7 @@ Active threats
          the agent's own open of it, flagged by
          ``LOTA_FLAG_IMAGE_CONTENT_HASHED``. Only on a kernel-served
          filesystem, and only for a file no writer may replace: the running
-         executable, or, in enforce mode, a library the agent has pinned. A
+         executable, or a library the agent has pinned, in every mode. A
          refused write to a pinned library is counted and sent on the event
          stream, not left a bare ``EPERM``.
      - | Anonymous executable memory and JIT code are not measured as modules.
@@ -430,16 +430,18 @@ Active threats
    * - Kernel module or memory-only load
      - | Kernel lockdown, module signature enforcement, and BPF LSM gates reject
          unsafe load paths.
-       | In enforce mode a module or firmware load also stands on the kernel
-         integrity baseline: module signatures enforced and lockdown at
+       | In every mode a module or firmware load also stands on the kernel
+         integrity baseline, and kexec is refused: module signatures enforced and lockdown at
          integrity or above. The startup hardening gate reads both out of
          sysfs and refuses to start the agent without them, and neither can
          fall while the kernel runs, so a running agent has already
          established the baseline and the hook reads its verdict.
-       | With ``strict_modules``, a module load has to name a file in the
-         fs-verity allowlist, in either form the kernel accepts: the image
-         itself, and the compressed file ``modprobe`` hands the kernel on a
-         distribution that ships ``.ko.xz`` or ``.ko.zst``. The allowlist
+       | With ``strict_modules`` in enforce mode, a module or firmware load
+         has to name a file in the fs-verity allowlist, and one handed over
+         from memory is refused. A module counts in either form the kernel
+         accepts: the image itself, and the compressed file ``modprobe``
+         hands the kernel on a distribution that ships ``.ko.xz`` or
+         ``.ko.zst``. The allowlist
          therefore has to name the compressed files, since that is what such a
          host presents. A purpose the object does not recognise -- what a later
          kernel adds -- is refused.

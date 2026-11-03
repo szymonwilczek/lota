@@ -57,7 +57,8 @@ bpf_path = /usr/lib/lota/lota_lsm.bpf.o
 # so both flags default to off; the operator opts in once the
 # allow_verity list is provisioned.
 #
-# strict_modules covers a module in either of the forms the kernel accepts:
+# strict_modules covers firmware and modules. A module counts in either of
+# the forms the kernel accepts:
 # the image itself, and the compressed file modprobe hands the kernel on
 # a distribution that ships .ko.xz or .ko.zst.
 # On such a host every module load arrives in the compressed form, so the allowlist

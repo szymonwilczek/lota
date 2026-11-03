@@ -160,6 +160,80 @@ static inline int lota_kread_is_known(unsigned int id)
 }
 
 /*
+ * Whether the gate rules on a purpose at all.
+ * @from_file: kernel_read_file rather than kernel_load_data, which also sees
+ * certificates handed to the keyring from memory.
+ */
+static inline int lota_kread_is_watched(unsigned int id, int from_file)
+{
+	if (lota_kread_is_module(id))
+		return 1;
+
+	switch (id) {
+	case LOTA_KREAD_FIRMWARE:
+	case LOTA_KREAD_KEXEC_IMAGE:
+	case LOTA_KREAD_KEXEC_INITRAMFS:
+	case LOTA_KREAD_POLICY:
+		return 1;
+	case LOTA_KREAD_X509_CERTIFICATE:
+		return !from_file;
+	}
+	return 0;
+}
+
+/*
+ * The verdict on code or data the kernel takes in on its own behalf, shared
+ * by kernel_read_file and kernel_load_data and stated here for the tests.
+ * Returns 1 to deny, 0 to allow.
+ *
+ * Integrity of the running kernel is not policy and holds in every mode:
+ *
+ *   - kexec replaces the measured kernel, and is refused;
+ *   - a user namespace other than the initial one takes nothing in;
+ *   - a module or firmware load needs module signature enforcement and
+ *     lockdown, the baseline the token reports.
+ *
+ * strict_modules is policy and applies in enforce only (@policy_on):
+ *
+ *   - a module or firmware read from a file needs an allow_verity digest;
+ *   - one handed over from memory has no file to check, and is refused;
+ *   - a purpose this object has no rule for is refused.
+ *
+ * An IMA policy read from a file is always allowed.
+ */
+static inline int lota_kread_denied(unsigned int id, int from_file,
+				    int policy_on, int strict_modules,
+				    int baseline_ok, int verity_allowed,
+				    int foreign_userns)
+{
+	int strict = policy_on && strict_modules;
+	int payload = lota_kread_is_module(id) || id == LOTA_KREAD_FIRMWARE;
+
+	if (!lota_kread_is_known(id))
+		return strict;
+
+	if (!lota_kread_is_watched(id, from_file))
+		return 0;
+
+	if (from_file && id == LOTA_KREAD_POLICY)
+		return 0;
+
+	if (id == LOTA_KREAD_KEXEC_IMAGE || id == LOTA_KREAD_KEXEC_INITRAMFS)
+		return 1;
+
+	if (foreign_userns)
+		return 1;
+
+	if (payload && !baseline_ok)
+		return 1;
+
+	if (payload && strict)
+		return from_file ? !verity_allowed : 1;
+
+	return 0;
+}
+
+/*
  * PTRACE_MODE_ATTACH from include/linux/ptrace.h.
  *
  * Mirrored: the enforcement object builds against vmlinux.h, which carries types
