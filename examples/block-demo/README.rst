@@ -112,21 +112,20 @@ What the demo does NOT prove
 ----------------------------
 
 The cross-process attack surface (a sibling process attaching ptrace to the
-game, sending it SIGSTOP, or reading ``/proc/<game>/mem``) is gated by separate
-LSM hooks in the same BPF object:
+game or reading ``/proc/<game>/mem``) is gated, and signals recorded, by
+separate LSM hooks in the same BPF object:
 
 +------------------------------+---------------------------------+------------------------------+
 | Hook                         | Source                          | Scope                        |
 +==============================+=================================+==============================+
-| ``lota_ptrace_access_check`` | ``src/bpf/lota_lsm.bpf.c:1467`` | ``is_protected_task(child)`` |
+| ``lota_ptrace_access_check`` | ``src/bpf/lota_lsm.bpf.c``      | ``is_protected_task(child)`` |
 |                              |                                 | rejects every external       |
 |                              |                                 | ptrace/peek against a        |
 |                              |                                 | registered PID.              |
 +------------------------------+---------------------------------+------------------------------+
-| ``lota_task_kill``           | ``src/bpf/lota_lsm.bpf.c:1667`` | Same scope, rejects external |
-|                              |                                 | signals (SIGSTOP / SIGKILL)  |
-|                              |                                 | targeted at a registered     |
-|                              |                                 | PID.                         |
+| ``lota_task_kill``           | ``src/bpf/lota_lsm.bpf.c``      | Records every signal at a    |
+|                              |                                 | registered PID; refuses only |
+|                              |                                 | signals to the agent.        |
 +------------------------------+---------------------------------+------------------------------+
 
 Those are covered by ``tests/integration/test_bpf_gates.sh`` (see the top-level

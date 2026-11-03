@@ -48,8 +48,8 @@ static inline void startup_busy_message(bool asked_protect_pid, char *out,
 		 "one that is running: it seeds the protected set of the "
 		 "instance it starts.\n"
 		 "A process that is already running protects itself through "
-		 "the SDK, with lota_protect_self(); ending one that did is "
-		 "lota-agent --terminate-protected PID.");
+		 "the SDK, with lota_protect_self(), or starts under "
+		 "lota-protect.");
 }
 
 #endif /* LOTA_AGENT_STARTUP_HINT_H */

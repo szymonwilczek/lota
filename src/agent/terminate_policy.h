@@ -2,17 +2,10 @@
 /*
  * Who may end a protected process, and on what terms.
  *
- * Protected task takes no signal from anything but itself, the agent, holder of
- * LOTA_TASK_AUTH_ADMIN or the kernel, and the admin identity lives on the agent's
- * own PID in a frozen map.
- * That is what stops a cheat from killing the process being measured, and it is
- * also what leaves a player with a hung title and no remedy short of a reboot.
- *
- * The agent can deliver the signal, so the boundary is who it delivers for.
- * The rule below is kill(2)'s own: the owner of the process, or root.
- * The verb hands back what the machine had before the LSM intervened and widens
- * nothing, which is why it needs no operator privilege gate -- demanding
- * verity-allowlisted caller would reproduce the dead end it exists to end.
+ * The agent delivers the signal and journals it, so the boundary is who it
+ * delivers for. The rule below is kill(2)'s own: the owner of the process, or
+ * root. The verb widens nothing, which is why it needs no operator privilege
+ * gate.
  *
  * What the rule does not hand back is the ability to drive a protected process:
  * only a termination is relayed, so nothing a process survives can be sent through

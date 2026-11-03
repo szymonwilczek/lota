@@ -360,17 +360,13 @@ lota_inside_instance(int actor_protected, unsigned int actor_root,
 }
 
 /*
- * Signal numbers shared by every Linux architecture LOTA builds for.
+ * SIGHUP, shared by every Linux architecture LOTA builds for.
  *
  * Mirrored for the same reason as the ptrace flag above:
  * the enforcement object builds against vmlinux.h, which carries types
  * and not the uapi signal numbers.
  */
 #define LOTA_SIG_HUP 1
-#define LOTA_SIG_INT 2
-#define LOTA_SIG_KILL 9
-#define LOTA_SIG_TERM 15
-#define LOTA_SIG_STOP 19
 
 /*
  * The signal-delivery verdict, stated here so the enforcement object
@@ -381,46 +377,25 @@ lota_inside_instance(int actor_protected, unsigned int actor_root,
  * the agent, a task holding CAP_SYS_ADMIN over BPF, and a kernel-generated
  * signal all reach delivery without asking this.
  *
- * @target_handles: the target has its own handler for @sig, neither
- * SIG_DFL nor SIG_IGN.
+ * Only the agent is guarded, so a local root cannot kill it and swap a
+ * tampered binary in before the next attestation. A probe (sig 0) and SIGHUP,
+ * its reload, are delivered, since neither ends it. It stops with
+ * lota-agent --shutdown.
+ *
+ * A protected process is not guarded: a signal runs its own handler or ends
+ * or stops it, and none of that puts foreign code into it. Every signal at it
+ * is still recorded.
  *
  * The verdict does not depend on the enforcement mode: an agent that can be
  * killed in monitor is an agent whose measurements stop without a trace,
  * and the mode switches policy, not the integrity of the measurement.
- * The agent stops with lota-agent --shutdown in every mode.
- *
- * Three rules, in order:
- *
- *   - a target nobody protects is nobody's business here;
- *   - a probe (sig 0) and the agent's own reload signal are delivered,
- *     since neither can end the target;
- *   - a signal a protected title handles itself is delivered: it runs the
- *     title's own code, and Wine drives its processes this way. Not SIGTERM,
- *     SIGINT or SIGHUP, which a title handles to end, and never to the agent.
- *
- * Everything else reaching a protected target or the agent itself is refused,
- * so a local root cannot kill the agent and swap a tampered binary in before
- * the next attestation.
  */
-static inline int lota_signal_denied(int sig, int target_is_agent,
-				     int target_is_protected,
-				     int target_handles)
+static inline int lota_signal_denied(int sig, int target_is_agent)
 {
-	if (!target_is_agent && !target_is_protected)
+	if (!target_is_agent)
 		return 0;
 
-	if (sig == 0)
-		return 0;
-
-	if (target_is_agent && sig == LOTA_SIG_HUP)
-		return 0;
-
-	if (!target_is_agent && target_handles && sig != LOTA_SIG_KILL &&
-	    sig != LOTA_SIG_STOP && sig != LOTA_SIG_TERM &&
-	    sig != LOTA_SIG_INT && sig != LOTA_SIG_HUP)
-		return 0;
-
-	return 1;
+	return sig != 0 && sig != LOTA_SIG_HUP;
 }
 
 /*

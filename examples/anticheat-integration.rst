@@ -315,11 +315,10 @@ Worth being precise about, because it decides what you can build on it:
   written, and the token carries ``LOTA_FLAG_IMAGE_CONTENT_HASHED``.
   Refusing that flag demands fs-verity, at the cost of every such install.
 
-* Whether a protected process was ended on that host since it booted. A
-  protected process takes no signal except through the agent, and the agent
-  relays a termination only for the process's owner or root -- so a player can
-  close a hung title, and ``LOTA_FLAG_PROTECTED_TERMINATED`` says on every
-  later token that it happened. Ordinarily it means exactly that. Read
+* Whether a protected process was ended through the agent on that host since
+  it booted. The agent relays a termination only for the process's owner or
+  root, and ``LOTA_FLAG_PROTECTED_TERMINATED`` says on every later token that
+  it happened; an ordinary signal ends the process too, without the flag. Ordinarily it means exactly that. Read
   together with the protected set the token carries, it is also how a session
   that ended locally is told apart from a process that vanished, which is the
   case worth a second look if the process that left was yours.

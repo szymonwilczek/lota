@@ -271,11 +271,7 @@ int main(int argc, char *argv[])
 
 	ret = 0;
 
-	/*
-	 * Detach the hooks before reaping the victims: while task_kill is
-	 * live it blocks signals to the protected victims (this loader is
-	 * not the agent), so they would be unkillable otherwise.
-	 */
+	/* detach the hooks before reaping the victims */
 	for (int i = 0; i < attached && i < MAX_LINKS; i++)
 		bpf_link__destroy(links[i]);
 out_obj:

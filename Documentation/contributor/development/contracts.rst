@@ -378,12 +378,13 @@ configured publisher runs a verifier at all.
 Ending a protected process
 --------------------------
 
-``LOTA_IPC_CMD_TERMINATE_PROTECTED`` is the only way a protected process can
-be signalled. ``lota_task_kill`` passes a signal to such a task from the task
-itself, from the agent, from a holder of ``LOTA_TASK_AUTH_ADMIN`` or from the
+``lota_task_kill`` delivers every signal to a protected process and records
+it; a killed title cheats in nothing. It refuses signals to the agent from
+anything but the agent itself, a holder of ``LOTA_TASK_AUTH_ADMIN`` or the
 kernel; that flag is set on the agent's PID before the map is frozen, so
-nothing else on the machine holds it and root is no exception. Without the
-command a hung title costs a reboot.
+nothing else on the machine holds it and root is no exception.
+``LOTA_IPC_CMD_TERMINATE_PROTECTED`` ends a protected process on request and
+leaves a record of it.
 
 That hook covers signals only. A write to ``cgroup.kill`` kills a whole
 cgroup from cgroup code, past every security hook, so ``lota_file_open``
@@ -391,7 +392,7 @@ refuses write opens of the files in ``guarded_files``. The loader arms it at
 startup with the agent's cgroup and its ancestors: an agent killed that way
 drops enforcement for the rest of the boot while PCR 14 still holds the boot
 commitment. A protected process's cgroup is not armed: killing it ends only
-its own session, and its owner can end it through the command above anyway.
+its own session, and its owner can end it with an ordinary signal anyway.
 
 The handler applies ``kill(2)``'s own rule -- the owner of the target, or root
 -- and nothing wider. It deliberately does **not** call
@@ -399,8 +400,8 @@ The handler applies ``kill(2)``'s own rule -- the owner of the target, or root
 that gate demands a caller whose executable is on the operator's verity
 allowlist, which is empty on a default install, so requiring it here would
 reproduce the dead end the command exists to end. What keeps the widening
-bounded is that no route to a protected process avoids the agent, so every
-termination is recorded rather than silent.
+bounded is that the caller could send the same signal itself; the command
+adds only the record.
 
 Four refusals sit around that rule: a signal other than ``SIGTERM`` or
 ``SIGKILL``, so the command cannot drive a process that stays in the measured

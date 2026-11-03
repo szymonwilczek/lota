@@ -36,8 +36,7 @@ struct cli_options {
 	int status_flag; /* --status */
 	/*
 	 * --terminate-protected PID:
-	 * end a process that asked to be protected, which no signal from terminal
-	 * or a task manager can reach.
+	 * end a process that asked to be protected, and journal that it was ended.
 	 * SIGTERM unless --force, which sends SIGKILL to a title that is too far
 	 * gone to handle anything.
 	 */

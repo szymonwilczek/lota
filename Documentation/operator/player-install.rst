@@ -367,17 +367,11 @@ examined and rejected, are in :ghsrc:`examples/cs2/README.rst`.
 When a title will not close
 ===========================
 
-A game that asks to be protected (``lota_protect_self()``) gets a signal that
-could end or stop it only from itself, the agent or the kernel. That stops a
-cheat from killing the measured process, and also means a hung title survives
-a terminal, a task manager and a root shell alike.
+A protected game takes signals like any other process: a terminal, a task
+manager or Steam's own *Stop* ends it. Killing a game does not cheat in it;
+the session simply ends. Only the agent refuses signals.
 
-A signal the game handles itself runs the game's own code and is delivered;
-Wine drives the program it hosts that way. ``SIGTERM``, ``SIGINT`` and
-``SIGHUP`` stay refused even when handled: a game handles them to exit.
-
-The agent holds the identity the kernel accepts, so it delivers the signal on
-request::
+The agent can also deliver the signal on request, and record that it did::
 
     lota-agent --terminate-protected <pid>
     lota-agent --terminate-protected <pid> --force   # SIGKILL

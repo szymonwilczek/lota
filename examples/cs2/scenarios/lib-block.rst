@@ -174,10 +174,9 @@ in the journal. A second shell that never registered its PID can run
 ``LD_PRELOAD=/tmp/evil.so cat`` unaffected -- the gate is scoped to the
 opted-in set on purpose, so a single agent can guard the game without breaking
 the rest of the host. The cross-process threat surface (an external aimbot
-reading ``/proc/<game>/mem``) is covered by the ptrace and task_kill hooks in
-the same BPF object, both of which already scope by ``is_protected_task()`` and
-reject untrusted readers regardless of whether the attacker is themselves
-registered.
+reading ``/proc/<game>/mem``) is covered by the ptrace hook in the same BPF
+object, which scopes by ``is_protected_task()`` and rejects every reader outside
+the game's own instance, registered or not.
 
 What this proves
 ----------------

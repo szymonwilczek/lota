@@ -176,14 +176,13 @@ enum lota_error {
 #define LOTA_FLAG_IMAGE_FULLY_MEASURED (1 << 9)
 
 /*
- * Protected process was ended locally on this host since it booted.
+ * Protected process was ended through the agent on this host since it booted.
  *
- * Process that asked to be protected takes no signal from anything but itself,
- * the agent or the kernel, so a title that hangs can only be closed by asking
- * the agent to end it -- and the agent does that for whoever kill(2) would have
- * allowed, the owner of the process or root.
- * The player gets their machine back; this bit is what the publisher gets,
- * and it stays set until the host reboots.
+ * The agent ends a protected process on request, for whoever kill(2) would
+ * have allowed, the owner of the process or root. An ordinary signal reaches
+ * it as well; this route is the one that leaves a record.
+ * This bit is what the publisher gets, and it stays set until the host
+ * reboots.
  *
  * It says a session was ended on the machine rather than a process quietly
  * disappearing.
@@ -455,9 +454,10 @@ int lota_ping(struct lota_client *client, uint64_t *uptime_sec);
  * Idempotent: a second call from the same task returns LOTA_OK
  * without mutating the runtime PID set.
  *
- * Once registered, the agent's BPF strict_mmap, block_anon_exec,
- * ptrace_access_check, and task_kill hooks gate every access into
- * or out of this process against the trust set. Every process it
+ * Once registered, the agent's BPF strict_mmap, block_anon_exec and
+ * ptrace_access_check hooks gate every access into or out of this
+ * process against the trust set, and task_kill records every signal
+ * at it. Every process it
  * creates from then on is protected with it, from its first instruction.
  *
  * Call it once the loader is done: a protected task maps only files with

@@ -2209,36 +2209,11 @@ int BPF_PROG(lota_ptrace_access_check, struct task_struct *child,
 	return 0;
 }
 
-/*
- * Whether @p has its own handler for @sig, neither SIG_DFL nor SIG_IGN.
- * The thread group shares the table, so any thread answers. An unreadable
- * table or an out-of-range @sig answers no, keeping the signal refused.
- */
-static __always_inline int lota_task_handles_signal(struct task_struct *p,
-						    int sig)
-{
-	struct sighand_struct *sighand;
-	unsigned long handler = 0;
-
-	if (sig < 1 ||
-	    sig > (int)(sizeof(sighand->action) / sizeof(sighand->action[0])))
-		return 0;
-
-	sighand = BPF_CORE_READ(p, sighand);
-	if (!sighand)
-		return 0;
-
-	if (bpf_core_read(&handler, sizeof(handler),
-			  &sighand->action[sig - 1].sa.sa_handler))
-		return 0;
-
-	return handler > 1;
-}
-
 /* ======================================================================
  * LSM hook: task_kill
  *
- * Blocks selected signal delivery to protected tasks from foreign tasks.
+ * Blocks signal delivery to the agent from foreign tasks, and records every
+ * signal at the agent or a protected task.
  *
  * SECURITY: Never trust sender PID/namespace for privileged signal paths.
  * Only authenticated LOTA task identities and kernel-generated signals can
@@ -2296,8 +2271,7 @@ int BPF_PROG(lota_task_kill, struct task_struct *p, struct kernel_siginfo *info,
 	}
 
 	/* the verdict lives in include/lota.h, shared with the tests */
-	blocked = lota_signal_denied(sig, target_is_agent, target_is_protected,
-				     lota_task_handles_signal(p, sig));
+	blocked = lota_signal_denied(sig, target_is_agent);
 
 	/* report every signal but a permitted probe, which is only counted */
 	event_type = lota_signal_event(sig, blocked);

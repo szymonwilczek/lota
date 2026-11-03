@@ -2794,21 +2794,12 @@ static int read_pid_real_uid(pid_t pid, uint32_t *out_uid)
 /*
  * End a protected process on behalf of its owner.
  *
- * Protected task takes no signal from anything but itself, the agent
- * or the kernel, which is what stops a cheat from killing the process being
- * measured and also what leaves a player with a hung title and no way out but
- * a reboot.
- *
- * The agent holds the identity the LSM accepts, so it delivers the signal for
- * caller kill(2) would already have allowed -- the owner of the process,
+ * The agent delivers the signal and journals it, for a caller kill(2)
+ * would already have allowed -- the owner of the process,
  * or root -- and refuses everything past that.
  *
- * There is no operator privilege gate here on purpose.
- * Requiring a verity-allowlisted caller, as UNPROTECT_PID does, would reproduce
- * the dead end on the machines this exists for: that list is empty on a default
- * install.
- * What keeps the widening honest is that the request cannot be made anywhere but
- * here, so nothing ends a protected process without the agent recording it.
+ * There is no operator privilege gate here on purpose: the caller could send
+ * the same signal itself, and the verb adds only the record.
  */
 static void handle_terminate_protected(struct ipc_context *ctx,
 				       struct ipc_client *client,

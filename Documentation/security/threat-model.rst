@@ -419,16 +419,16 @@ Active threats
        | Hook availability and verifier behavior must be validated on the
          target kernel.
    * - Ending a protected process
-     - | ``lota-agent --terminate-protected`` is the only route: the LSM passes
-         no signal to a protected task from anything but itself, the agent or
-         the kernel, and the agent relays only ``SIGTERM`` and ``SIGKILL``, only
-         for a caller ``kill(2)`` would have allowed.
-       | Except a signal the task handles itself: it ends nothing, and the
-         wineserver drives every process it hosts with ``SIGUSR1`` and
-         ``SIGQUIT``. ``SIGTERM``, ``SIGINT`` and ``SIGHUP`` stay refused even
-         when handled, since a title handles them to exit, as does every
-         signal to the agent, whose handlers are how it shuts down.
-       | Every relayed termination is journalled, and the host reports
+     - | A protected task takes signals as the kernel would deliver them. A
+         title that is killed or stopped is not cheated in: its session ends
+         or stalls, and the publisher sees that.
+       | The agent is guarded: the LSM refuses every signal to it but
+         ``SIGHUP`` and signal 0 from anything but itself, a holder of
+         ``LOTA_TASK_AUTH_ADMIN`` or the kernel, since its handlers are how it
+         shuts down.
+       | ``lota-agent --terminate-protected`` relays ``SIGTERM`` or
+         ``SIGKILL`` for a caller ``kill(2)`` would have allowed and leaves a
+         record. Every relayed termination is journalled, and the host reports
          ``PROTECTED_TERMINATED`` in its status word and in every token it
          issues until it reboots.
        | The protected set the token carries names who is left, so a publisher

@@ -471,8 +471,7 @@ struct lota_ipc_policy_update {
 /*
  * TERMINATE_PROTECTED request payload
  *
- * Protected process takes no signal from anything but itself, the agent
- * or the kernel, so its owner asks the agent to deliver one.
+ * Its owner asks the agent to end a protected process, which journals it.
  * Only SIGTERM and SIGKILL are relayed: the verb ends a process,
  * it does not drive one.
  */

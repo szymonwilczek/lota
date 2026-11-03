@@ -2,19 +2,11 @@
 /*
  * Unit tests for who may end a protected process.
  *
- * Title that calls lota_protect_self() is unkillable:
- * lota_task_kill passes signal only from the task itself, from the agent,
- * from a task holding LOTA_TASK_AUTH_ADMIN, or from the kernel, and the admin
- * flag lives on the agent's own PID in a frozen map.
- * Nothing else on the machine holds it, root included, so a hung title costs
- * the player a reboot.
+ * The agent delivers SIGTERM or SIGKILL to a protected title on request
+ * and journals it, which makes the question "on whose request".
  *
- * The way out is the agent delivering the signal on request, which makes
- * the question "on whose request".
- *
- * The rule tested here is the one kill(2) would have applied had the LSM
- * not intervened -- the owner of the process, or root -- so the verb returns
- * what the machine already had rather than granting anything new.
+ * The rule tested here is the one kill(2) applies -- the owner of the
+ * process, or root -- so the verb grants nothing the caller lacks.
  *
  * Everything past that boundary is what the tests pin: signal that is not
  * termination, a process nobody protected, and the agent itself.
