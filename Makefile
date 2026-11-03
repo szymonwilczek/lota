@@ -341,6 +341,16 @@ $(INSTALLER_BIN): $(INSTALLER_SRCS) installer/install.h installer/probe.h \
 	$(Q)$(CC) $(CFLAGS) -DLOTA_INSTALL_VERSION=\"$(LOTA_VERSION_STRING)\" \
 		-o $@ $(INSTALLER_SRCS) -pie -Wl,-z,relro,-z,now -lcrypto
 
+# lota-bench measures what LOTA costs a game.
+# Contributors build it from the tree; no package ships it.
+LOTA_BENCH_BIN := $(BUILD_DIR)/lota-bench
+LOTA_BENCH_SRCS := $(addprefix $(LOTA_BENCH_DIR)/,main.c cgroup.c result.c)
+LOTA_BENCH_PREFIX ?= /usr/local
+$(LOTA_BENCH_BIN): $(LOTA_BENCH_SRCS) $(wildcard $(LOTA_BENCH_DIR)/*.h) | $(BUILD_DIR)
+	$(QUIET_CC)
+	$(Q)$(CC) $(CFLAGS) -DLOTA_BENCH_VERSION=\"$(LOTA_VERSION_STRING)\" \
+		-o $@ $(LOTA_BENCH_SRCS) -pie -Wl,-z,relro,-z,now
+
 # auto-generated header dependencies. -MMD writes a sibling
 # <object>.d listing every header the .c file pulled in;
 # -MP adds phony targets for those headers so a deleted header
@@ -520,6 +530,13 @@ initramfs-lock: $(INITRAMFS_LOCK_BIN)
 
 .PHONY: installer
 installer: $(INSTALLER_BIN)
+
+.PHONY: lota-bench
+lota-bench: $(LOTA_BENCH_BIN)
+
+.PHONY: install-lota-bench
+install-lota-bench: $(LOTA_BENCH_BIN)
+	install -D -m 755 $(LOTA_BENCH_BIN) $(DESTDIR)$(LOTA_BENCH_PREFIX)/bin/lota-bench
 
 .PHONY: verifier
 verifier: $(VERIFIER_BIN)
@@ -1608,6 +1625,7 @@ $(BUILD_DIR)/test_anticheat: TEST_LDLIBS := -lcrypto
 $(BUILD_DIR)/test_attest_stage: $(addprefix $(AGENT_DIR)/,attest_stage.c net_errno.c tpm_errno.c)
 
 $(BUILD_DIR)/test_bench_cgroup: $(LOTA_BENCH_DIR)/cgroup.c $(LOTA_BENCH_DIR)/cgroup.h
+$(BUILD_DIR)/test_bench_result: $(addprefix $(LOTA_BENCH_DIR)/,result.c result.h cgroup.c cgroup.h)
 
 $(BUILD_DIR)/test_bpf_kill_guard: $(BPF_OBJ)
 $(BUILD_DIR)/test_bpf_kill_guard: TEST_CFLAGS := -DBPF_OBJ_PATH='"$(BPF_OBJ)"'
@@ -1959,7 +1977,8 @@ test-sdk: $(TEST_SDK_BIN) $(SDK_LIB) $(AGENT_BIN)
 # Build every CI-safe userspace artifact under ASan/UBSan. This is a
 # compilation/smoke gate for broad coverage; make test-unit remains the
 # runtime sanitizer gate for the standalone unit tests.
-SANITIZER_BUILD_TARGETS = all examples $(BENCH_C_BIN) syzkaller-fuzz-loader
+SANITIZER_BUILD_TARGETS = all examples $(BENCH_C_BIN) $(LOTA_BENCH_BIN) \
+	syzkaller-fuzz-loader
 .PHONY: sanitizer-build
 sanitizer-build:
 	$(MAKE) SANITIZE=address,undefined $(SANITIZER_BUILD_TARGETS)
@@ -1993,7 +2012,7 @@ VALGRIND_UNIT_BINS := \
 	test_xattr_carry test_ima_policy_scope test_kernel_floor_hint \
 	test_integrity_baseline \
 	test_daemon_exit_status test_integrity_map_layout \
-	test_installer_confirm test_bench_cgroup
+	test_installer_confirm test_bench_cgroup test_bench_result
 
 .PHONY: valgrind-unit
 valgrind-unit: $(TEST_BINS)
@@ -2409,6 +2428,8 @@ help:
 	@$(HELP_ROW) server-sdk "Build server SDK shared/static libraries"
 	@$(HELP_ROW) wine-hook "Build Wine/Proton LD_PRELOAD hook"
 	@$(HELP_ROW) anticheat "Build anti-cheat compatibility layer"
+	@$(HELP_ROW) lota-bench "Build the game cost meter (not packaged)"
+	@$(HELP_ROW) install-lota-bench "Install lota-bench under LOTA_BENCH_PREFIX"
 	@$(HELP_ROW) packages "Build native RPMs via nfpm"
 	@$(HELP_ROW) package-lint "rpmlint the built RPMs (gating)"
 	@$(HELP_ROW) rhel-package-smoke "Install RPMs in Rocky 9 podman; no attestation"
