@@ -16,6 +16,7 @@
  *   --daemon        Run as daemon
  */
 #include <errno.h>
+#include <grp.h>
 #include <signal.h>
 #include <stdbool.h>
 #include <stdio.h>
@@ -28,6 +29,7 @@
 #include "../../include/lota.h"
 #include "agent.h"
 #include "attest.h"
+#include "bench_snapshot.h"
 #include "bpf_loader.h"
 #include "cli.h"
 #include "config.h"
@@ -657,6 +659,25 @@ static int run_daemon(const struct run_daemon_params *params)
 	sdnotify_status("Monitoring, mode=%s", mode_to_string(g_agent.mode));
 	lota_info("Monitoring binary executions (event-driven)");
 
+	/* the agent's counters go to a fixed file a lota member reads */
+	static struct bench_state bench;
+	struct bench_state *bench_ctx = NULL;
+
+	if (boot_state.bench) {
+		struct group *grp = getgrnam("lota");
+
+		if (!grp)
+			lota_warn("Bench: group 'lota' not found, %s is "
+				  "readable by root only",
+				  LOTA_BENCH_PATH);
+		bench_state_init(&bench, grp ? grp->gr_gid : 0, bench_now_ns());
+		bench_ctx = &bench;
+		lota_info("Bench: writing %s every %d ms", LOTA_BENCH_PATH,
+			  LOTA_BENCH_INTERVAL_MS);
+	} else {
+		bench_remove();
+	}
+
 	struct agent_loop_ctx loop_ctx = {
 		.epoll_fd = epoll_fd,
 		.sfd = sfd,
@@ -681,6 +702,7 @@ static int run_daemon(const struct run_daemon_params *params)
 		.dbus_ctx = g_agent.dbus_ctx,
 		.bpf_ctx = &g_agent.bpf_ctx,
 		.container_watch = &g_agent.container_watch,
+		.bench = bench_ctx,
 		.running = &g_agent.running,
 	};
 	/* task_kill refuses systemd's watchdog kill; supervise from inside */
@@ -697,6 +719,8 @@ static int run_daemon(const struct run_daemon_params *params)
 	}
 
 	ret = agent_run_event_loop(&loop_ctx);
+	if (bench_ctx)
+		bench_remove();
 
 	watchdog_stop();
 

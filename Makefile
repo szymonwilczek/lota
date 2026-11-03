@@ -185,6 +185,8 @@ AGENT_SRCS := $(AGENT_DIR)/main.c \
 			  $(AGENT_DIR)/main_utils.c \
 			  $(AGENT_DIR)/io_utils.c \
 			  $(AGENT_DIR)/bench.c \
+			  $(AGENT_DIR)/bench_proc.c \
+			  $(AGENT_DIR)/bench_snapshot.c \
 			  $(AGENT_DIR)/exit_status.c \
 			  $(AGENT_DIR)/sb_dev.c \
 			  $(AGENT_DIR)/cgroup_guard.c \
@@ -1516,6 +1518,8 @@ TEST_INSTALLER_SRCS := installer/stages.c installer/probe.c installer/run.c inst
 
 $(BUILD_DIR)/test_agent_bench_file: $(AGENT_DIR)/bench.c $(AGENT_DIR)/io_utils.c
 $(BUILD_DIR)/test_agent_bench_file: TEST_CFLAGS := -DLOTA_INTERNAL_TESTS
+$(BUILD_DIR)/test_agent_bench_snapshot: $(AGENT_DIR)/bench_snapshot.c \
+	$(AGENT_DIR)/bench_proc.c $(AGENT_DIR)/bench.c $(AGENT_DIR)/io_utils.c
 
 TEST_ATTEST := $(addprefix $(BUILD_DIR)/test_, \
 	attest_aggregate \
@@ -2022,7 +2026,7 @@ VALGRIND_UNIT_BINS := \
 	test_daemon_exit_status test_integrity_map_layout \
 	test_installer_confirm test_bench_cgroup test_bench_result \
 	test_bench_validate test_bench_frames test_agent_bench_file \
-	test_socket_watch
+	test_agent_bench_snapshot test_socket_watch
 
 .PHONY: valgrind-unit
 valgrind-unit: $(TEST_BINS)

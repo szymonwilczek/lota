@@ -9,6 +9,7 @@
 #include <stdint.h>
 
 #include "attest_targets.h"
+#include "bench_snapshot.h"
 #include "bpf_loader.h"
 #include "config.h"
 #include "container_watch.h"
@@ -53,6 +54,7 @@ struct agent_loop_ctx {
 	 * a container listener the configuration already asked for.
 	 */
 	struct container_watch *container_watch;
+	struct bench_state *bench; /* NULL without --bench */
 	volatile sig_atomic_t *running;
 };
 

@@ -140,16 +140,38 @@ static void agent_reload_publishers(struct agent_loop_ctx *ctx)
 	}
 }
 
+/* logged when it changes, not every second */
+static void bench_poll(struct bench_state *bench, int *last_err)
+{
+	int ret = bench_tick(bench, monotonic_ns());
+
+	if (ret > 0 || ret == -EMSGSIZE || ret == *last_err)
+		return;
+	if (ret < 0)
+		lota_warn("Bench: cannot write %s: %s", LOTA_BENCH_PATH,
+			  strerror(-ret));
+	else
+		lota_info("Bench: writing %s again", LOTA_BENCH_PATH);
+	*last_err = ret;
+}
+
 int agent_run_event_loop(struct agent_loop_ctx *ctx)
 {
 	struct epoll_event events[16];
 	uint64_t last_drops = 0;
 	uint64_t last_drop_poll_ns = 0;
+	int bench_err = 0;
 
 	while (*ctx->running) {
 		int timeout = -1;
 		if (ctx->wd_enabled && ctx->wd_usec > 0)
 			timeout = (int)(ctx->wd_usec / 2000);
+		if (ctx->bench) {
+			int due = bench_timeout_ms(ctx->bench, monotonic_ns());
+
+			if (timeout < 0 || due < timeout)
+				timeout = due;
+		}
 
 		int nfds = epoll_wait(ctx->epoll_fd, events, 16, timeout);
 
@@ -161,9 +183,12 @@ int agent_run_event_loop(struct agent_loop_ctx *ctx)
 		}
 
 		poll_ringbuf_drops(ctx, &last_drops, &last_drop_poll_ns);
+		if (ctx->bench)
+			bench_poll(ctx->bench, &bench_err);
 
-		if (nfds == 0 && ctx->wd_enabled) {
-			watchdog_beat();
+		if (nfds == 0) {
+			if (ctx->wd_enabled)
+				watchdog_beat();
 			continue;
 		}
 
