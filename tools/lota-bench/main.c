@@ -18,20 +18,22 @@
 
 #include "frames.h"
 #include "result.h"
+#include "run.h"
 #include "validate.h"
 
 #ifndef LOTA_BENCH_VERSION
 #define LOTA_BENCH_VERSION "unknown"
 #endif
 
-#define EXIT_BENCH_USAGE 2
-
 static void usage(FILE *f)
 {
-	fputs("Usage: lota-bench validate FILE\n"
+	fputs("Usage: lota-bench run DIR [--game TITLE ...]\n"
+	      "       lota-bench validate FILE\n"
 	      "       lota-bench frames LOG\n"
 	      "       lota-bench --version\n"
 	      "\n"
+	      "run       Take the next run of the session in DIR; run --help\n"
+	      "          lists the options that start one.\n"
 	      "validate  Check a plan, run, result or summary file against\n"
 	      "          the schema.\n"
 	      "frames    Summarise the frame times of a MangoHud log.\n",
@@ -212,6 +214,8 @@ int main(int argc, char **argv)
 		usage(stdout);
 		return 0;
 	}
+	if (strcmp(argv[1], "run") == 0)
+		return bench_main_run(argc - 1, argv + 1);
 	if (strcmp(argv[1], "validate") == 0)
 		return main_validate(argc - 1, argv + 1);
 	if (strcmp(argv[1], "frames") == 0)

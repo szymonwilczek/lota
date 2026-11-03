@@ -33,7 +33,10 @@ the same whether LOTA is stopped, running, or protecting the game.
 Three sources are sampled:
 
 ``game``
-   The cgroup the game runs in.
+   The transient scope ``lota-bench-game.scope`` the game's launch
+   options start it in (see `Running a session`_), under the user's
+   ``app.slice``. It is found by name, so no PID of the game is ever
+   looked up.
 
 ``lota-agent``, ``lota-attest``
    The cgroups of ``lota-agent.service`` and ``lota-attest.service``
@@ -153,6 +156,97 @@ of columns than that row, when a frame time is not a plain decimal
 number of milliseconds or ``elapsed`` goes back, or when the frames
 cover less than half of the time the log spans, which is what a log
 with an interval looks like. A refusal names the line.
+
+Running a session
+=================
+
+A session measures one title in three configurations:
+
+``A``
+   LOTA stopped: no agent, no attestation.
+
+``B``
+   The agent running, the title not protected.
+
+``C``
+   The agent running and protecting the title through
+   ``lota-proton-hook``.
+
+It is a warm-up run in ``A`` followed by rounds of ``A``, ``B`` and
+``C``, so drift over the session (a warming machine, a filling shader
+cache) falls on every configuration alike. Moving between
+configurations can take a reboot, so ``lota-bench run`` takes one run a
+call and keeps the session in a directory. The first call names the
+title and starts it:
+
+.. code-block:: console
+
+   $ lota-bench run ~/bench/example --game "Example Title" --proton 9.0 \
+         --settings "high, 1440p"
+   The session begins in /home/user/bench/example: 7 runs of 300 s.
+   Run 0 of 6, configuration A (warm-up). Set the game's launch options to:
+
+     MANGOHUD_CONFIG=output_folder=/home/user/bench/example,autostart_log=5,log_duration=300 systemd-run --user --scope --unit=lota-bench-game mangohud %command%
+
+   start it, and play as you would for 300 s once it is in the game.
+   Waiting for the game; Ctrl+C gives up.
+
+``--rounds`` (default 3), ``--duration-s`` (default 300) and
+``--interval-ms`` (default 1000) set the rest of the plan; ``--proton``,
+``--game-version`` and ``--settings`` only describe the run. Every later
+call is ``lota-bench run DIR`` alone and takes the next run the plan
+calls for; options given to a session that has begun are refused. The
+directory's full path goes into ``MANGOHUD_CONFIG`` and the launch
+options, so it may hold only letters, digits and ``/ . _ - +``.
+
+Each call first checks that LOTA is where the run needs it and, when it
+is not, says how to get it there and exits:
+
+.. code-block:: console
+
+   $ sudo systemctl stop lota-attest lota-agent.socket lota-agent    # A
+   $ sudo systemctl start lota-agent.socket lota-agent               # B, C
+
+The socket is stopped with the agent because the agent is socket
+activated: any client, ``lota-bench`` included, would start it again.
+In ``A`` ``lota-bench`` never touches the socket. Where PCR 14 binds the
+agent, stopping it spends the boot's commitment, and the agent refuses
+to start again until a reboot, which also brings attestation back; on
+such a host every run in ``B`` that follows an ``A`` begins with a
+reboot. In ``B`` and ``C`` the agent's status is read from the
+socket, which takes membership of the ``lota`` group; the agent's
+figures need it to run with ``--bench`` (``BENCH`` among the flags
+``lota-agent --status`` prints), and a run without them says so. For
+``C`` the printed launch options carry ``lota-proton-hook`` in front of
+``mangohud``; without ``--bench`` nothing tells whether the title was
+in fact protected.
+
+Once the scope appears the run is sampled for ``duration_s`` seconds,
+then ``lota-bench`` asks to quit the game and waits for the scope to go.
+``lota-bench`` runs as the user, at nice 10 and idle I/O priority, and
+reads nothing but cgroup files, the agent's snapshot and its own
+directory. A run is not kept, and the next call takes it again, when:
+
+- the game quits before ``duration_s`` is up, or Ctrl+C stops the run;
+- LOTA left the state of the configuration during the run: the agent
+  or attestation ran in ``A``, or the agent went away in ``B`` or
+  ``C``;
+- a ``C`` run with agent figures protected nothing, which means
+  ``lota-proton-hook`` is missing from the launch options, or a ``B``
+  run protected the title.
+
+A call also refuses to go on while a ``lota-bench-game.scope`` is still
+running, and when the machine described in the plan changed (another
+kernel, GPU or driver): a session compares like with like, so that
+takes a new session.
+
+The run's MangoHud log is the newest ``.csv`` in the directory written
+since the game started; it is summarised into the run and kept as
+``frames-NN.csv``. Without one the run has no frame times. Each file is
+written aside, read back by the same validator as ``lota-bench
+validate``, and only then given its name, so a session directory never
+holds a half-written file. After the last run the same call joins the
+plan and every run into ``result.json``, and the session is complete.
 
 The files of a session
 ======================
