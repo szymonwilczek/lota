@@ -248,6 +248,58 @@ validate``, and only then given its name, so a session directory never
 holds a half-written file. After the last run the same call joins the
 plan and every run into ``result.json``, and the session is complete.
 
+Reading a session
+=================
+
+``lota-bench report`` reads a result or a summary and sets the three
+configurations side by side:
+
+.. code-block:: console
+
+   $ lota-bench report ~/bench/example/result.json
+   Example Title: 3 rounds of A B C, 300 s a run
+   ...
+                                        A               B               C         B-A         C-A
+   frame time median ms          6.94 ±0.02      6.95 ±0.01      6.97 ±0.03     +0.01 ~     +0.03 ~
+   game CPU %                   182.4 ±1.3      183.0 ±0.9      183.6 ±1.1       +0.6 ~      +1.2 ~
+   lota-agent CPU %              0.00 ±0.00      0.08 ±0.01      0.11 ±0.01     +0.08       +0.11
+   ...
+
+Every row is one figure of a run, and for each configuration the median
+of its runs, the warm-up left out. A median rather than a mean lets one
+disturbed run (an update in the background, a shader compiled late)
+pass without moving the figure. The ``±`` is half the range of those
+runs: how far apart runs of the same configuration already are. A
+difference from ``A`` no larger than the two spreads together is marked
+``~``, noise: the session cannot tell it from the runs disagreeing among
+themselves, and more rounds are what would.
+
+``frame time median``, ``p99``, ``1% low``, in ms
+   From the run's MangoHud log, as ``lota-bench frames`` defines them.
+   Lower is better.
+
+``game CPU``, ``lota-agent CPU``, ``lota-attest CPU``, in %
+   The CPU time the cgroup accrued over the run, as a share of one CPU:
+   ``cpu_usec / (wall_ms * 10)``. A game busy on two CPUs shows
+   ``200``. The services stopped in ``A`` count as ``0``, and so does
+   attestation while it is not running.
+
+``game memory``, ``lota-agent memory``, in MiB
+   The highest ``memory.current`` of the run.
+
+``BPF programs``, in µs/s
+   The time the agent's BPF programs ran during the run, for every
+   second of it: ``bpf_run_ns / wall_ms``. It needs the agent under
+   ``--bench``, which turns on the counting
+   (:doc:`agent-bench`). The time is spent in the processes the hooks
+   run in, the game's among them, so it is already part of their CPU
+   time rather than added to it.
+
+A figure some runs of a configuration lack is marked ``*``, one none of
+them has is ``-``. When the power settings (governor, platform profile,
+supply) changed across the session, the report says so: runs under
+different settings do not compare.
+
 The files of a session
 ======================
 

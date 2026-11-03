@@ -17,6 +17,7 @@
 #include <unistd.h>
 
 #include "frames.h"
+#include "report.h"
 #include "result.h"
 #include "run.h"
 #include "validate.h"
@@ -28,12 +29,14 @@
 static void usage(FILE *f)
 {
 	fputs("Usage: lota-bench run DIR [--game TITLE ...]\n"
+	      "       lota-bench report FILE\n"
 	      "       lota-bench validate FILE\n"
 	      "       lota-bench frames LOG\n"
 	      "       lota-bench --version\n"
 	      "\n"
 	      "run       Take the next run of the session in DIR; run --help\n"
 	      "          lists the options that start one.\n"
+	      "report    Compare the configurations of a result or summary.\n"
 	      "validate  Check a plan, run, result or summary file against\n"
 	      "          the schema.\n"
 	      "frames    Summarise the frame times of a MangoHud log.\n",
@@ -110,39 +113,78 @@ static void print_valid(const char *path, const struct bench_doc *d)
 	}
 }
 
-static int main_validate(int argc, char **argv)
+/* the file at @path read and validated; its runs point into *@buf */
+static struct bench_doc *load(const char *path, char **buf)
 {
 	struct bench_doc *d;
 	char err[256];
 	size_t len;
+
+	*buf = read_file(path, BENCH_RESULT_MAX_BYTES, &len);
+	if (!*buf) {
+		fprintf(stderr, "lota-bench: %s: %s\n", path,
+			errno == EINVAL ? "not a regular file" :
+					  strerror(errno));
+		return NULL;
+	}
+	d = malloc(sizeof(*d));
+	if (!d) {
+		perror("lota-bench");
+	} else if (bench_validate(*buf, len, d, err, sizeof(err))) {
+		fprintf(stderr, "%s: invalid: %s\n", path, err);
+		free(d);
+		d = NULL;
+	}
+	if (!d) {
+		free(*buf);
+		*buf = NULL;
+	}
+	return d;
+}
+
+static int main_validate(int argc, char **argv)
+{
+	struct bench_doc *d;
 	char *buf;
-	int ret;
 
 	if (argc != 2) {
 		usage(stderr);
 		return EXIT_BENCH_USAGE;
 	}
-	buf = read_file(argv[1], BENCH_RESULT_MAX_BYTES, &len);
-	if (!buf) {
-		fprintf(stderr, "lota-bench: %s: %s\n", argv[1],
-			errno == EINVAL ? "not a regular file" :
-					  strerror(errno));
+	d = load(argv[1], &buf);
+	if (!d)
 		return 1;
-	}
-	d = malloc(sizeof(*d));
-	if (!d) {
-		perror("lota-bench");
-		free(buf);
-		return 1;
-	}
-	ret = bench_validate(buf, len, d, err, sizeof(err));
-	if (ret)
-		fprintf(stderr, "%s: invalid: %s\n", argv[1], err);
-	else
-		print_valid(argv[1], d);
+	print_valid(argv[1], d);
 	free(d);
 	free(buf);
-	return ret ? 1 : 0;
+	return 0;
+}
+
+static int main_report(int argc, char **argv)
+{
+	struct bench_doc *d;
+	char *buf;
+	int ret = 1;
+
+	if (argc != 2) {
+		usage(stderr);
+		return EXIT_BENCH_USAGE;
+	}
+	d = load(argv[1], &buf);
+	if (!d)
+		return 1;
+	if (d->kind != BK_RESULT && d->kind != BK_SUMMARY)
+		fprintf(stderr,
+			"lota-bench: %s is a %s; a report needs a result or "
+			"a summary\n",
+			argv[1], bench_kind_names[d->kind]);
+	else if (bench_report(stdout, d) || fflush(stdout))
+		perror("lota-bench: stdout");
+	else
+		ret = 0;
+	free(d);
+	free(buf);
+	return ret;
 }
 
 static void print_frame_time(const char *label, uint64_t us)
@@ -216,6 +258,8 @@ int main(int argc, char **argv)
 	}
 	if (strcmp(argv[1], "run") == 0)
 		return bench_main_run(argc - 1, argv + 1);
+	if (strcmp(argv[1], "report") == 0)
+		return main_report(argc - 1, argv + 1);
 	if (strcmp(argv[1], "validate") == 0)
 		return main_validate(argc - 1, argv + 1);
 	if (strcmp(argv[1], "frames") == 0)
