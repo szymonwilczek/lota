@@ -62,6 +62,10 @@ int main(void)
 	CHECK(agent_status_flags(&st) == LOTA_STATUS_SECURE_BOOT,
 	      "the Secure Boot bit has a producer");
 
+	st = (struct agent_boot_state){ .bench = true };
+	CHECK(agent_status_flags(&st) == LOTA_STATUS_BENCH,
+	      "the bench bit comes from --bench");
+
 	st = (struct agent_boot_state){ .tpm_lockout = true };
 	CHECK(agent_status_flags(&st) == LOTA_STATUS_TPM_LOCKOUT,
 	      "the TPM lockout bit comes from the TPM context");

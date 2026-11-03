@@ -700,6 +700,53 @@ static void test_config_load_invalid_boolean(void)
 	PASS();
 }
 
+static void test_config_load_bench(void)
+{
+	struct lota_config cfg;
+	char path[PATH_MAX];
+	char *dump = NULL;
+	size_t dump_len = 0;
+	FILE *fp;
+
+	TEST("config_load reads bench strictly and the dump keeps it");
+	config_init(&cfg);
+	if (cfg.bench) {
+		FAIL("bench default != false");
+		return;
+	}
+
+	write_config("bench.conf", "bench = true\n");
+	config_path("bench.conf", path, sizeof(path));
+	config_init(&cfg);
+	if (config_load(&cfg, path) != 0 || !cfg.bench) {
+		FAIL("bench = true not read");
+		return;
+	}
+
+	fp = open_memstream(&dump, &dump_len);
+	if (!fp) {
+		FAIL("open_memstream");
+		return;
+	}
+	config_dump(&cfg, fp);
+	fclose(fp);
+	if (!strstr(dump, "bench = true\n")) {
+		free(dump);
+		FAIL("dump drops bench");
+		return;
+	}
+	free(dump);
+
+	write_config("bench_bad.conf", "bench = maybe\n");
+	config_path("bench_bad.conf", path, sizeof(path));
+	config_init(&cfg);
+	if (config_load(&cfg, path) != -EINVAL) {
+		FAIL("bench = maybe accepted");
+		return;
+	}
+	PASS();
+}
+
 static void test_config_load_invalid_mode(void)
 {
 	struct lota_config cfg;
@@ -2194,6 +2241,7 @@ static void test_config_load_all_known_keys(void)
 		"mode = maintenance\n"
 		"strict_mmap = true\n"
 		"block_ptrace = true\n"
+		"bench = true\n"
 		"attest_interval = 240\n"
 		"aik_ttl = 86400\n"
 		"aik_handle = 0x81010005\n"
@@ -2492,6 +2540,7 @@ int main(void)
 		test_config_load_container_listener_uid_invalid,
 		test_config_load_boolean_variants,
 		test_config_load_invalid_boolean,
+		test_config_load_bench,
 		test_config_load_invalid_mode,
 		test_config_load_whitespace_trimming,
 		test_config_load_unknown_keys,

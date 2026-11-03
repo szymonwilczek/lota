@@ -155,6 +155,10 @@ enum lota_ipc_result {
 	(1 << 11) /* IMA appraises every exec on this host. Clear on a stock \
 		   host; the agent is still bound by fs-verity and PCR 14 */
 
+#define LOTA_STATUS_BENCH \
+	(1 << 13) /* the agent runs with --bench: it writes what it costs, \
+		   and its policy is the same as without it */
+
 #define LOTA_STATUS_PROTECTED_TERMINATED \
 	(1                               \
 	 << 10) /* the agent ended a protected process for its owner since    \

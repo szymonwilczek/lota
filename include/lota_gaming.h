@@ -212,6 +212,13 @@ enum lota_error {
 #define LOTA_FLAG_IMAGE_CONTENT_HASHED (1 << 12)
 
 /*
+ * The agent runs with --bench and writes what it and the protected set cost.
+ * Its policy is the same as without it; a publisher that wants no measuring
+ * agent on its hosts refuses it.
+ */
+#define LOTA_FLAG_BENCH (1 << 13)
+
+/*
  * Subscription event types
  *
  * Bitmask selecting which status changes trigger push notifications.

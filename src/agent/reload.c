@@ -780,6 +780,10 @@ int agent_reload_config(const char *config_path, struct lota_config *cfg,
 	reload_trust_libs(new_cfg, trust_libs, trust_lib_count);
 	lota_info("Trusted libs reloaded (%d entries)", *trust_lib_count);
 
+	if (new_cfg->bench != cfg->bench)
+		lota_warn("bench changes on the next start; keeping it %s",
+			  cfg->bench ? "on" : "off");
+
 	if (new_cfg->allow_verity_count != cfg->allow_verity_count) {
 		lota_warn("allow_verity changes require restart; keeping "
 			  "previous allowlist");

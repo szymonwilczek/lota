@@ -874,6 +874,17 @@ static int apply_key(struct lota_config *cfg, const char *key,
 		cfg->block_anon_exec = parsed;
 		return 0;
 	}
+	if (strcmp(key, "bench") == 0) {
+		bool parsed;
+		if (parse_bool_strict(value, &parsed) != 0) {
+			fprintf(stderr,
+				"%s:%d: invalid bench '%s' (use true/false)\n",
+				filepath, lineno, value);
+			return -1;
+		}
+		cfg->bench = parsed;
+		return 0;
+	}
 	if (strcmp(key, "seal_aik_auth") == 0 ||
 	    strcmp(key, "seal-aik-auth") == 0) {
 		bool parsed;
@@ -1342,6 +1353,7 @@ void config_dump(const struct lota_config *cfg, FILE *fp)
 		cfg->strict_modules ? "true" : "false");
 	fprintf(fp, "block_anon_exec = %s\n",
 		cfg->block_anon_exec ? "true" : "false");
+	fprintf(fp, "bench = %s\n", cfg->bench ? "true" : "false");
 
 	fprintf(fp, "\n# Attestation\n");
 	fprintf(fp, "attest_interval = %d\n", cfg->attest_interval);

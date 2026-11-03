@@ -1350,6 +1350,7 @@ int lota_flags_to_string(uint32_t flags, char *buf, size_t buflen)
 		{ LOTA_FLAG_IMAGE_CONTENT_HASHED, "IMAGE_CONTENT_HASHED" },
 		{ LOTA_FLAG_PROTECTED_TERMINATED, "PROTECTED_TERMINATED" },
 		{ LOTA_FLAG_KERNEL_APPRAISAL, "KERNEL_APPRAISAL" },
+		{ LOTA_FLAG_BENCH, "BENCH" },
 	};
 	size_t pos = 0;
 	int first = 1;

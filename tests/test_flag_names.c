@@ -78,6 +78,8 @@ int main(void)
 	CHECK(strstr(buf, "ATTESTED") && strstr(buf, "PROTECTED_TERMINATED"),
 	      "an attested host that ended a protected process decodes as both");
 
+	CHECK(names(LOTA_FLAG_BENCH, "BENCH"), "BENCH is named");
+
 	CHECK(lota_flags_to_string(LOTA_FLAG_ATTESTED, buf, 2) ==
 		      LOTA_ERR_BUFFER_TOO_SMALL,
 	      "a buffer too small is refused rather than truncated silently");

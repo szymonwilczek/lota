@@ -73,6 +73,8 @@ struct cli_options {
 	bool strict_modules;
 	bool block_anon_exec;
 
+	bool bench;
+
 	/* daemon lifecycle */
 	int daemon_flag;
 	const char *pid_file_path;

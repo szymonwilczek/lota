@@ -79,6 +79,10 @@ const (
 	// PCR 14 commitment in this report cover that.
 	// Telemetry with a policy knob (RequireIMAAppraisal), not a verdict.
 	FlagIMAAppraisal uint32 = 1 << 10
+
+	// FlagBench is set when the daemon runs with --bench and writes what it
+	// costs. Its policy is the same as without it. Logged, not a verdict.
+	FlagBench uint32 = 1 << 11
 )
 
 // challenge capability flags (see: include/attestation.h)

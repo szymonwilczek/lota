@@ -73,6 +73,7 @@ struct run_daemon_params {
 	bool strict_modules;
 	bool block_anon_exec;
 	bool allow_mutable_rootfs;
+	bool bench;
 	const char *config_path;
 	struct lota_config *cfg;
 };
@@ -174,6 +175,7 @@ static int run_daemon(const struct run_daemon_params *params)
 	block_ptrace = params->block_ptrace;
 	strict_modules = params->strict_modules;
 	block_anon_exec = params->block_anon_exec;
+	boot_state.bench = params->bench;
 	config_path = params->config_path;
 	cfg = params->cfg;
 
@@ -928,6 +930,7 @@ int main(int argc, char *argv[])
 		.strict_modules = opts.strict_modules,
 		.block_anon_exec = opts.block_anon_exec,
 		.allow_mutable_rootfs = opts.insecure_allow_mutable_rootfs != 0,
+		.bench = opts.bench,
 		.config_path = opts.config_path,
 		.cfg = cfg,
 	};

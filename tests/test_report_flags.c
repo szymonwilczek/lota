@@ -65,6 +65,21 @@ int main(void)
 
 	CHECK(report_enforcement_flags(NULL) == 0, "no view: neither");
 
+	f = flags_for(true, LOTA_MODE_ENFORCE,
+		      LOTA_STATUS_BPF_LOADED | LOTA_STATUS_BENCH);
+	CHECK(f == (ENF | BPF | LOTA_REPORT_FLAG_BENCH),
+	      "daemon on --bench: BENCH beside the enforcement bits");
+
+	f = flags_for(true, LOTA_MODE_MONITOR, LOTA_STATUS_BENCH);
+	CHECK(f == LOTA_REPORT_FLAG_BENCH,
+	      "--bench without the LSM loaded: BENCH alone");
+
+	f = flags_for(false, LOTA_MODE_ENFORCE, LOTA_STATUS_BENCH);
+	CHECK(f == 0, "daemon not reached: no BENCH");
+
+	f = flags_for(true, LOTA_MODE_ENFORCE, LOTA_STATUS_BPF_LOADED);
+	CHECK(!(f & LOTA_REPORT_FLAG_BENCH), "no --bench: no BENCH");
+
 	if (g_failures) {
 		fprintf(stderr, "\n%d failure(s)\n", g_failures);
 		return 1;
