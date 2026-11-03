@@ -351,7 +351,7 @@ $(INSTALLER_BIN): $(INSTALLER_SRCS) installer/install.h installer/probe.h \
 # Contributors build it from the tree; no package ships it.
 LOTA_BENCH_BIN := $(BUILD_DIR)/lota-bench
 LOTA_BENCH_SRCS := $(addprefix $(LOTA_BENCH_DIR)/,main.c cgroup.c result.c json.c \
-	validate.c frames.c)
+	validate.c frames.c field.c)
 LOTA_BENCH_PREFIX ?= /usr/local
 $(LOTA_BENCH_BIN): $(LOTA_BENCH_SRCS) $(wildcard $(LOTA_BENCH_DIR)/*.h) | $(BUILD_DIR)
 	$(QUIET_CC)
@@ -1644,6 +1644,7 @@ $(BUILD_DIR)/test_bench_result: $(addprefix $(LOTA_BENCH_DIR)/,result.c result.h
 $(BUILD_DIR)/test_bench_validate: $(addprefix $(LOTA_BENCH_DIR)/,validate.c validate.h \
 	json.c json.h result.c result.h cgroup.c cgroup.h)
 $(BUILD_DIR)/test_bench_frames: $(addprefix $(LOTA_BENCH_DIR)/,frames.c frames.h)
+$(BUILD_DIR)/test_bench_field: $(addprefix $(LOTA_BENCH_DIR)/,field.c field.h)
 
 $(BUILD_DIR)/test_bpf_kill_guard: $(BPF_OBJ)
 $(BUILD_DIR)/test_bpf_kill_guard: TEST_CFLAGS := -DBPF_OBJ_PATH='"$(BPF_OBJ)"'
@@ -2031,7 +2032,7 @@ VALGRIND_UNIT_BINS := \
 	test_integrity_baseline \
 	test_daemon_exit_status test_integrity_map_layout \
 	test_installer_confirm test_bench_cgroup test_bench_result \
-	test_bench_validate test_bench_frames test_agent_bench_file \
+	test_bench_validate test_bench_frames test_bench_field test_agent_bench_file \
 	test_agent_bench_snapshot test_socket_watch test_status_cmd
 
 .PHONY: valgrind-unit
