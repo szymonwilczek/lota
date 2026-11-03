@@ -1631,7 +1631,8 @@ $(BUILD_DIR)/test_bpf_loader_load_source: TEST_LDLIBS += \
 	-Wl,--wrap=bpf_object__open_file \
 	-Wl,--wrap=bpf_object__open_mem
 
-# wraps return NULL with errno clear: refusal path without a kernel
+# wraps return NULL with errno clear: refusal path without a kernel;
+# the map calls run over a table in memory
 $(BUILD_DIR)/test_bpf_loader_open_fails_closed: TEST_LDLIBS += \
 	-Wl,--wrap=policy_verify_buffer \
 	-Wl,--wrap=bpf_object__open_mem \
@@ -1639,7 +1640,10 @@ $(BUILD_DIR)/test_bpf_loader_open_fails_closed: TEST_LDLIBS += \
 	-Wl,--wrap=bpf_program__type \
 	-Wl,--wrap=bpf_program__name \
 	-Wl,--wrap=bpf_program__attach \
-	-Wl,--wrap=ring_buffer__new
+	-Wl,--wrap=ring_buffer__new \
+	-Wl,--wrap=bpf_map_get_next_key \
+	-Wl,--wrap=bpf_map_lookup_elem \
+	-Wl,--wrap=bpf_map_delete_elem
 
 $(BUILD_DIR)/test_bpf_object_preflight: TEST_LDLIBS += -Wl,--wrap=policy_verify_buffer
 

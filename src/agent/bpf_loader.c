@@ -2159,18 +2159,73 @@ void bpf_loader_pin_round_begin(struct bpf_loader_ctx *ctx)
 		ctx->pin_round++;
 }
 
+#define OWNED_MAP_KEY_MAX 64
+
+/*
+ * Read up to @max entries of the map @fd into @k and @v, then delete those
+ * of a process @alive denies; @owner names the process of a key.
+ * Returns the number of live entries, packed at the front.
+ */
+static size_t read_owned_map(int fd, size_t max, size_t ksz, size_t vsz,
+			     uint8_t *k, uint8_t *v,
+			     void (*owner)(const void *key, uint32_t *tgid,
+					   uint64_t *start_ticks),
+			     int (*alive)(uint32_t tgid, uint64_t start_ticks))
+{
+	uint8_t cur[OWNED_MAP_KEY_MAX];
+	uint8_t next[OWNED_MAP_KEY_MAX];
+	size_t count = 0;
+	size_t kept = 0;
+	void *prev = NULL;
+
+	while (count < max && bpf_map_get_next_key(fd, prev, next) == 0) {
+		memcpy(cur, next, ksz);
+		prev = cur;
+		if (bpf_map_lookup_elem(fd, cur, v + count * vsz) < 0)
+			continue;
+		memcpy(k + count * ksz, cur, ksz);
+		count++;
+	}
+
+	/* deleted after the walk: a delete during it restarts the walk */
+	for (size_t i = 0; i < count; i++) {
+		uint32_t tgid = 0;
+		uint64_t ticks = 0;
+
+		owner(k + i * ksz, &tgid, &ticks);
+		if (!alive(tgid, ticks)) {
+			(void)bpf_map_delete_elem(fd, k + i * ksz);
+			continue;
+		}
+		if (kept != i) {
+			memcpy(k + kept * ksz, k + i * ksz, ksz);
+			memcpy(v + kept * vsz, v + i * vsz, vsz);
+		}
+		kept++;
+	}
+	return kept;
+}
+
+static void exec_history_owner(const void *key, uint32_t *tgid,
+			       uint64_t *start_ticks)
+{
+	const struct lota_exec_history_key *h = key;
+
+	*tgid = h->tgid;
+	*start_ticks = h->start_ticks;
+}
+
+_Static_assert(sizeof(struct lota_exec_history_key) <= OWNED_MAP_KEY_MAX,
+	       "exec history key fits the walk buffer");
+
 int bpf_loader_exec_history(struct bpf_loader_ctx *ctx,
 			    int (*alive)(uint32_t tgid, uint64_t start_ticks),
 			    struct lota_exec_history_key **keys,
 			    struct lota_exec_history_val **vals, size_t *n)
 {
-	struct lota_exec_history_key *k = NULL;
-	struct lota_exec_history_val *v = NULL;
-	struct lota_exec_history_key cur;
-	struct lota_exec_history_key next;
-	size_t count = 0;
-	size_t dead = 0;
-	void *prev = NULL;
+	struct lota_exec_history_key *k;
+	struct lota_exec_history_val *v;
+	size_t count;
 
 	if (!ctx || !alive || !keys || !vals || !n)
 		return -EINVAL;
@@ -2188,31 +2243,15 @@ int bpf_loader_exec_history(struct bpf_loader_ctx *ctx,
 		return -ENOMEM;
 	}
 
-	while (count < LOTA_MAX_EXEC_HISTORY &&
-	       bpf_map_get_next_key(ctx->exec_history_fd, prev, &next) == 0) {
-		cur = next;
-		prev = &cur;
-		if (bpf_map_lookup_elem(ctx->exec_history_fd, &cur, &v[count]) <
-		    0)
-			continue;
-		v[count].name[sizeof(v[count].name) - 1] = '\0';
-		k[count++] = cur;
-	}
-
-	/* deleted after the walk: a delete during it restarts the walk */
-	for (size_t i = 0; i < count; i++) {
-		if (alive(k[i].tgid, k[i].start_ticks)) {
-			k[i - dead] = k[i];
-			v[i - dead] = v[i];
-			continue;
-		}
-		(void)bpf_map_delete_elem(ctx->exec_history_fd, &k[i]);
-		dead++;
-	}
+	count = read_owned_map(ctx->exec_history_fd, LOTA_MAX_EXEC_HISTORY,
+			       sizeof(*k), sizeof(*v), (uint8_t *)k,
+			       (uint8_t *)v, exec_history_owner, alive);
+	for (size_t i = 0; i < count; i++)
+		v[i].name[sizeof(v[i].name) - 1] = '\0';
 
 	*keys = k;
 	*vals = v;
-	*n = count - dead;
+	*n = count;
 	return 0;
 }
 
