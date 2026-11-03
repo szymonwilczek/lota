@@ -52,6 +52,7 @@ SRC_DIR := src
 BPF_DIR := $(SRC_DIR)/bpf
 AGENT_DIR := $(SRC_DIR)/agent
 INC_DIR := include
+LOTA_BENCH_DIR := tools/lota-bench
 BUILD_DIR := build
 export LOTA_BUILD_DIR := $(abspath $(BUILD_DIR))
 VERSION_FILE := VERSION
@@ -1606,6 +1607,8 @@ $(BUILD_DIR)/test_anticheat: TEST_LDLIBS := -lcrypto
 
 $(BUILD_DIR)/test_attest_stage: $(addprefix $(AGENT_DIR)/,attest_stage.c net_errno.c tpm_errno.c)
 
+$(BUILD_DIR)/test_bench_cgroup: $(LOTA_BENCH_DIR)/cgroup.c $(LOTA_BENCH_DIR)/cgroup.h
+
 $(BUILD_DIR)/test_bpf_kill_guard: $(BPF_OBJ)
 $(BUILD_DIR)/test_bpf_kill_guard: TEST_CFLAGS := -DBPF_OBJ_PATH='"$(BPF_OBJ)"'
 $(BUILD_DIR)/test_bpf_kill_guard: TEST_LDLIBS := -lbpf
@@ -1990,7 +1993,7 @@ VALGRIND_UNIT_BINS := \
 	test_xattr_carry test_ima_policy_scope test_kernel_floor_hint \
 	test_integrity_baseline \
 	test_daemon_exit_status test_integrity_map_layout \
-	test_installer_confirm
+	test_installer_confirm test_bench_cgroup
 
 .PHONY: valgrind-unit
 valgrind-unit: $(TEST_BINS)
