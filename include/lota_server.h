@@ -182,11 +182,17 @@ const char *lota_server_sdk_version(void);
 
 /*
  * One code object of a protected process's registry, as the relying party
- * received it: its soname and the digest the agent took, digest_len 0 for
- * an object absent from the fold.
+ * received it: every field of the lota_registry_object lota_get_registry()
+ * reported, unchanged. digest_len is 0 for an object without a digest.
  */
 struct lota_server_registry_module {
 	const char *soname;
+	const char *path; /* NULL or "" for none */
+	uint64_t size;
+	uint64_t dev;
+	uint64_t ino;
+	uint32_t road; /* LOTA_REGISTRY_ROAD_* */
+	uint32_t flags; /* LOTA_REGISTRY_OBJECT_* */
 	uint32_t digest_len; /* 0, 32 or 64 */
 	const uint8_t *digest;
 };
@@ -195,21 +201,24 @@ struct lota_server_registry_module {
 #define LOTA_SERVER_REGISTRY_MAX_OBJECTS 512
 
 /*
- * lota_server_registry_digest - Fold a registry into its image digest
- * @mods:  The objects of one process, in any order
+ * lota_server_registry_digest - Hash a registry into its image digest
+ * @flags: The registry's LOTA_REGISTRY_* flags
+ * @mods:  The objects of one process, in the order they were listed
  * @count: Number of objects
  * @out:   Receives the 32-byte image digest
  *
- * Folds the objects that carry a digest the way the agent does, so @out
- * equals the token's protected_image_digests entry for the process when the
- * registry is the one that round measured. A registry that folds to anything
- * else is not the list behind the token.
+ * Hashes the flags and every object the way the agent does, those without
+ * a digest included, so @out equals the token's protected_image_digests
+ * entry for the process when the registry is the one that round measured.
+ * A registry that hashes to anything else, reordered, short of an object
+ * or with one rewritten, is not the list behind the token.
  *
  * Returns: LOTA_SERVER_OK, LOTA_SERVER_ERR_INVALID_ARG for a malformed
- *          object or more objects than a process is listed with,
- *          or LOTA_SERVER_ERR_CRYPTO.
+ *          object, an unknown flag or more objects than a process is
+ *          listed with, or LOTA_SERVER_ERR_CRYPTO.
  */
-int lota_server_registry_digest(const struct lota_server_registry_module *mods,
+int lota_server_registry_digest(uint32_t flags,
+				const struct lota_server_registry_module *mods,
 				size_t count, uint8_t out[32]);
 
 #ifdef __cplusplus

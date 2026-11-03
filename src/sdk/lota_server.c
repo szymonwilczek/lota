@@ -21,6 +21,7 @@
 
 #include "../../include/lota_runtime_image_measure.h"
 #include "../../include/lota_ipc.h"
+#include "../../include/lota_registry_digest.h"
 #include "../../include/lota_runtime_protect_digest.h"
 #include "../../include/lota_server.h"
 #include "../../include/lota_token_quote_nonce.h"
@@ -686,71 +687,96 @@ const char *lota_server_sdk_version(void)
 	return LOTA_BUILD_VERSION_STRING;
 }
 
+/* the agent's bounds, terminator included; lota_gaming.h repeats them */
+#define REGISTRY_SONAME_MAX LOTA_RUNTIME_IMAGE_SONAME_MAX
+#define REGISTRY_PATH_MAX (LOTA_RUNTIME_IMAGE_SONAME_MAX + 64)
+#define REGISTRY_FLAGS \
+	(LOTA_IPC_REGISTRY_MEASURED | LOTA_IPC_REGISTRY_HISTORY_LOST)
+
 _Static_assert(LOTA_SERVER_REGISTRY_MAX_OBJECTS ==
 		       LOTA_IPC_REGISTRY_MAX_OBJECTS,
 	       "lota_server.h copies the agent's registry bound");
 
-static int registry_module_cmp(const void *a, const void *b)
+/* @m as the agent put it on the wire; 0 or LOTA_SERVER_ERR_INVALID_ARG */
+static int registry_wire_entry(const struct lota_server_registry_module *m,
+			       struct lota_ipc_registry_entry *e)
 {
-	return lota__runtime_image_module_cmp(a, b);
+	const char *path = m->path ? m->path : "";
+	size_t slen;
+	size_t plen;
+
+	if (!m->soname)
+		return LOTA_SERVER_ERR_INVALID_ARG;
+	slen = strnlen(m->soname, REGISTRY_SONAME_MAX);
+	plen = strnlen(path, REGISTRY_PATH_MAX);
+	if (slen == 0 || slen >= REGISTRY_SONAME_MAX ||
+	    plen >= REGISTRY_PATH_MAX)
+		return LOTA_SERVER_ERR_INVALID_ARG;
+	if (m->flags & ~(uint32_t)LOTA_IPC_REGISTRY_ENTRY_UNMAPPED)
+		return LOTA_SERVER_ERR_INVALID_ARG;
+
+	switch (m->road) {
+	case LOTA_IPC_REGISTRY_ROAD_NONE:
+		if (m->digest_len != 0)
+			return LOTA_SERVER_ERR_INVALID_ARG;
+		break;
+	case LOTA_IPC_REGISTRY_ROAD_VERITY:
+	case LOTA_IPC_REGISTRY_ROAD_CONTENT:
+		if (!m->digest ||
+		    !LOTA_VERITY_DIGEST_LEN_SUPPORTED(m->digest_len))
+			return LOTA_SERVER_ERR_INVALID_ARG;
+		break;
+	default:
+		return LOTA_SERVER_ERR_INVALID_ARG;
+	}
+
+	memset(e, 0, sizeof(*e));
+	e->size = m->size;
+	e->dev = m->dev;
+	e->ino = m->ino;
+	e->road = (uint8_t)m->road;
+	e->digest_len = (uint8_t)m->digest_len;
+	e->soname_len = (uint16_t)slen;
+	e->path_len = (uint16_t)plen;
+	e->flags = (uint16_t)m->flags;
+	if (m->digest_len)
+		memcpy(e->digest, m->digest, m->digest_len);
+	return 0;
 }
 
-int lota_server_registry_digest(const struct lota_server_registry_module *mods,
+int lota_server_registry_digest(uint32_t flags,
+				const struct lota_server_registry_module *mods,
 				size_t count, uint8_t out[32])
 {
-	struct lota_runtime_image_module *folded = NULL;
-	size_t n = 0, unique = 0;
-	int ret;
+	EVP_MD_CTX *md;
+	int ret = LOTA_SERVER_OK;
 
 	if (!out || (count > 0 && !mods))
 		return LOTA_SERVER_ERR_INVALID_ARG;
-	if (count > LOTA_SERVER_REGISTRY_MAX_OBJECTS)
+	if (count > LOTA_SERVER_REGISTRY_MAX_OBJECTS ||
+	    (flags & ~REGISTRY_FLAGS))
 		return LOTA_SERVER_ERR_INVALID_ARG;
 
-	if (count > 0) {
-		folded = calloc(count, sizeof(*folded));
-		if (!folded)
-			return LOTA_SERVER_ERR_CRYPTO;
-	}
+	md = EVP_MD_CTX_new();
+	if (!md)
+		return LOTA_SERVER_ERR_CRYPTO;
+	if (lota_registry_digest_begin(md, (uint16_t)flags, (uint32_t)count))
+		ret = LOTA_SERVER_ERR_CRYPTO;
 
-	for (size_t i = 0; i < count; i++) {
+	for (size_t i = 0; ret == LOTA_SERVER_OK && i < count; i++) {
 		const struct lota_server_registry_module *m = &mods[i];
-		size_t slen;
+		struct lota_ipc_registry_entry e;
 
-		if (m->digest_len == 0)
-			continue;
-		if (!m->soname || !m->digest ||
-		    !LOTA_VERITY_DIGEST_LEN_SUPPORTED(m->digest_len)) {
-			ret = LOTA_SERVER_ERR_INVALID_ARG;
-			goto out;
-		}
-		slen = strnlen(m->soname, LOTA_RUNTIME_IMAGE_SONAME_MAX);
-		if (slen == 0 || slen >= LOTA_RUNTIME_IMAGE_SONAME_MAX) {
-			ret = LOTA_SERVER_ERR_INVALID_ARG;
-			goto out;
-		}
-		memcpy(folded[n].soname, m->soname, slen);
-		folded[n].verity.len = m->digest_len;
-		memcpy(folded[n].verity.digest, m->digest, m->digest_len);
-		n++;
+		ret = registry_wire_entry(m, &e);
+		if (ret != LOTA_SERVER_OK)
+			break;
+		if (lota_registry_digest_entry(md, &e, m->soname,
+					       m->path ? m->path : ""))
+			ret = LOTA_SERVER_ERR_CRYPTO;
 	}
 
-	/* the agent's canonical order, one entry per soname and digest */
-	if (n > 0) {
-		qsort(folded, n, sizeof(*folded), registry_module_cmp);
-		unique = 1;
-		for (size_t i = 1; i < n; i++) {
-			if (lota__runtime_image_module_cmp(&folded[unique - 1],
-							   &folded[i]) != 0)
-				folded[unique++] = folded[i];
-		}
-	}
-
-	ret = lota_compute_runtime_image_digest(folded, (uint32_t)unique,
-						out) == 0 ?
-		      LOTA_SERVER_OK :
-		      LOTA_SERVER_ERR_CRYPTO;
-out:
-	free(folded);
+	if (ret == LOTA_SERVER_OK && lota_registry_digest_final(md, out))
+		ret = LOTA_SERVER_ERR_CRYPTO;
+	EVP_MD_CTX_free(md);
 	return ret;
 }

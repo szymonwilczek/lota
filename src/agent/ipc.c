@@ -1515,13 +1515,31 @@ static void handle_get_token(struct ipc_context *ctx, struct ipc_client *client,
 			if (hist_lost || lost)
 				rflags |= LOTA_IPC_REGISTRY_HISTORY_LOST;
 
-			rec = registry_add(&next_registry, runtime_pids[i],
-					   owner, rflags,
-					   ret < 0 ? NULL : image_digests[i],
-					   objs, n_objs);
-			if (rec < 0)
-				lota_warn("registry of pid=%u not kept: %s",
-					  runtime_pids[i], strerror(-rec));
+			/* the token's entry binds the whole list */
+			if (ret >= 0) {
+				rec = registry_digest(
+					rflags | LOTA_IPC_REGISTRY_MEASURED,
+					objs, n_objs, image_digests[i]);
+				if (rec == 0)
+					rec = registry_add(&next_registry,
+							   runtime_pids[i],
+							   owner, rflags,
+							   image_digests[i],
+							   objs, n_objs);
+			} else {
+				rec = registry_add(&next_registry,
+						   runtime_pids[i], owner,
+						   rflags, NULL, objs, n_objs);
+			}
+
+			/* a digest the registry cannot back is not sent */
+			if (rec < 0) {
+				lota_err("registry of pid=%u not kept: %s",
+					 runtime_pids[i], strerror(-rec));
+				fail = true;
+				fail_code = LOTA_IPC_ERR_INTERNAL;
+				goto out;
+			}
 			if (ret < 0) {
 				lota_rt_failure_reason(&mfail, ret, reason,
 						       sizeof(reason));

@@ -436,12 +436,11 @@ over, so a bit set in one and not the other surfaces as a nonce mismatch.
 What a protected process mapped
 -------------------------------
 
-The token carries one image digest per protected process, folded from the
-soname and digest of every code object that has one. ``8192`` bytes hold no
-list of the objects themselves, so ``LOTA_IPC_CMD_GET_REGISTRY`` hands them out
-in pages: every code object the process mapped or mprotected executable since
-it was protected, the objects it could not measure included, each with its
-size, device, inode and, where one was taken, its digest.
+The token carries one image digest per protected process. ``8192`` bytes hold
+no list of the objects themselves, so ``LOTA_IPC_CMD_GET_REGISTRY`` hands them
+out in pages: every code object the process mapped or mprotected executable
+since it was protected, each with its size, device, inode and, where one was
+taken, its digest.
 
 Objects still mapped when the token round measured the process carry their
 path. Objects the process had already unmapped carry
@@ -452,13 +451,14 @@ an object loaded and dropped between two rounds is still listed. A record the
 kernel could not keep sets ``LOTA_IPC_REGISTRY_HISTORY_LOST`` on every list of
 the round: such a list may lack an object.
 
-The token binds the list. Folding the entries that carry a digest as
-``lota_runtime_image_measure.h`` does yields the page's ``image_digest``, which
-is the token's entry for that process while ``LOTA_IPC_REGISTRY_MEASURED`` is
-set. A list from another round than the token's does not fold to the token's
-value, so a relying party that checks the fold needs no further pairing; the
-``round`` field only keeps the pages of one listing together. Path, size,
-device, inode and flags describe and are not bound.
+The token binds the list. Hashing the page's ``flags`` and ``total`` and every
+entry in order as ``lota_registry_digest.h`` does yields the page's
+``image_digest``, which is the token's entry for that process while
+``LOTA_IPC_REGISTRY_MEASURED`` is set. Every field of every entry is in the
+hash, the entries without a digest included, so a list with an entry dropped,
+reordered or rewritten does not hash to the token's value. A list from another
+round does not either, so a relying party that checks the hash needs no further
+pairing; the ``round`` field only keeps the pages of one listing together.
 
 The owner of the process or root may read its registry, the callers that could
 read its ``maps`` themselves. A process the last round did not measure is
@@ -466,8 +466,8 @@ answered ``LOTA_IPC_ERR_NOT_PROTECTED``.
 
 ``lota_get_registry()`` in ``liblotagaming`` fetches every page and starts over
 when a token round replaces the listing between two of them;
-``lota_server_registry_digest()`` in ``liblotaserver`` is the fold, so a relying
-party checks the list without reimplementing it.
+``lota_server_registry_digest()`` in ``liblotaserver`` is the hash, so a
+relying party checks the list without reimplementing it.
 
 GET_TOKEN rate limits
 =====================

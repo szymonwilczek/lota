@@ -611,7 +611,7 @@ int lota_poll_events(struct lota_client *client, int timeout_ms);
 #define LOTA_REGISTRY_PATH_MAX 320
 
 /* How a registry object's digest was taken */
-#define LOTA_REGISTRY_ROAD_NONE 0 /* no digest; absent from the fold */
+#define LOTA_REGISTRY_ROAD_NONE 0 /* no digest */
 #define LOTA_REGISTRY_ROAD_VERITY 1 /* fs-verity measurement */
 #define LOTA_REGISTRY_ROAD_CONTENT 2 /* contents hashed while running */
 
@@ -628,9 +628,7 @@ int lota_poll_events(struct lota_client *client, int timeout_ms);
 
 /*
  * One code object a protected process mapped executable.
- *
- * soname and digest are what the token's image digest folds;
- * the other fields describe the object and are not bound.
+ * The token's image digest binds every field.
  */
 struct lota_registry_object {
 	uint64_t size;

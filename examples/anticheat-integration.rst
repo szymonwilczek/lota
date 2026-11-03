@@ -319,10 +319,10 @@ Worth being precise about, because it decides what you can build on it:
   file's name for one that is gone. A refused mapping is listed too.
   ``LOTA_REGISTRY_HISTORY_LOST`` says the kernel lost a record and the list
   may miss an object. The token does not carry the list, it binds it:
-  ``lota_server_registry_digest()`` folds the listed sonames and digests,
-  and the result equals the image digest the token holds for that process.
-  A list that does not fold to it is not the one the token describes. The
-  path and size are not bound and only say which file a soname came from.
+  ``lota_server_registry_digest()`` hashes the flags and every object in the
+  order listed, and the result equals the image digest the token holds for
+  that process. A list that does not hash to it, short of an object or with
+  one rewritten, is not the one the token describes.
 
 * Whether a protected process was ended through the agent on that host since
   it booted. The agent relays a termination only for the process's owner or

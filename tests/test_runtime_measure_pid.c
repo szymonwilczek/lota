@@ -22,6 +22,9 @@
 #include "lota.h"
 #include "lota_devt.h"
 #include "lota_ipc.h"
+#include "lota_registry_digest.h"
+
+#include <openssl/evp.h>
 
 static int digest_is_zero(const uint8_t d[32])
 {
@@ -271,6 +274,82 @@ int main(void)
 			PASS();
 		else
 			FAIL("history merge kept, lost or misnamed an object");
+	}
+
+	TEST("registry digest is the hash of the listed pages");
+	{
+		static struct lota_rt_object_record objs[3];
+		struct registry cur = { 0 };
+		struct registry next = { 0 };
+		const struct registry_process *p;
+		const uint16_t flags = LOTA_IPC_REGISTRY_HISTORY_LOST;
+		uint8_t want[32], got[32], other[32];
+		uint8_t buf[2048];
+		size_t len = 0, off = sizeof(struct lota_ipc_registry_page);
+		EVP_MD_CTX *md = EVP_MD_CTX_new();
+		int ok = md != NULL;
+
+		memset(objs, 0, sizeof(objs));
+		for (int i = 0; i < 3; i++) {
+			snprintf(objs[i].entry.soname,
+				 sizeof(objs[i].entry.soname), "lib%d.so", i);
+			objs[i].entry.ino = 20u + (uint64_t)i;
+			objs[i].size = 100u * (uint64_t)i;
+		}
+		strcpy(objs[0].entry.path, "/opt/title/lib0.so");
+		objs[0].digest.len = 32;
+		memset(objs[0].digest.digest, 0x5a, 32);
+		objs[2].unmapped = 1;
+
+		ok &= registry_digest(flags | LOTA_IPC_REGISTRY_MEASURED, objs,
+				      3, want) == 0;
+		ok &= registry_add(&next, 77, 1000, flags, want, objs, 3) == 0;
+		registry_replace(&cur, &next);
+		p = registry_find(&cur, 77);
+		if (!p)
+			ok = 0;
+		else
+			ok &= p->flags ==
+				      (flags | LOTA_IPC_REGISTRY_MEASURED) &&
+			      registry_encode_page(p, cur.round, 0, buf,
+						   sizeof(buf), &len) == 3;
+
+		/* what a relying party does with the page it received */
+		if (ok) {
+			struct lota_ipc_registry_page hdr;
+
+			memcpy(&hdr, buf, sizeof(hdr));
+			ok &= lota_registry_digest_begin(md, hdr.flags,
+							 hdr.total) == 0;
+			for (int i = 0; ok && i < hdr.count; i++) {
+				struct lota_ipc_registry_entry e;
+				const char *s;
+
+				memcpy(&e, buf + off, sizeof(e));
+				off += sizeof(e);
+				s = (const char *)buf + off;
+				off += e.soname_len + e.path_len;
+				ok &= (i == 2) ==
+				      !!(e.flags &
+					 LOTA_IPC_REGISTRY_ENTRY_UNMAPPED);
+				ok &= lota_registry_digest_entry(
+					      md, &e, s, s + e.soname_len) == 0;
+			}
+			ok &= lota_registry_digest_final(md, got) == 0 &&
+			      memcmp(got, want, 32) == 0 &&
+			      memcmp(hdr.image_digest, want, 32) == 0;
+		}
+
+		/* an object without a digest is bound all the same */
+		ok &= registry_digest(flags | LOTA_IPC_REGISTRY_MEASURED, objs,
+				      2, other) == 0 &&
+		      memcmp(other, want, 32) != 0;
+		EVP_MD_CTX_free(md);
+		registry_clear(&cur);
+		if (ok)
+			PASS();
+		else
+			FAIL("the pages do not hash to the token's entry");
 	}
 
 	printf("\n%d/%d kernel-anchored measurement tests passed\n",

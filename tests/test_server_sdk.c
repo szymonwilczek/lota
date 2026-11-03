@@ -23,7 +23,6 @@
 #include <stdint.h>
 
 #include "lota_gaming.h"
-#include "lota_runtime_image_measure.h"
 #include "lota_runtime_protect_digest.h"
 #include "lota_server.h"
 #include "lota_token.h"
@@ -1065,89 +1064,163 @@ static void test_sdk_version_is_a_real_build(void)
 	PASS();
 }
 
+/* Append @n bytes of @v little-endian to @b at *@off. */
+static void put_le(uint8_t *b, size_t *off, uint64_t v, int n)
+{
+	for (int i = 0; i < n; i++)
+		b[(*off)++] = (uint8_t)(v >> (8 * i));
+}
+
 /*
- * A relying party folds a fetched registry and compares the result with the
- * image digest the token carries, so the fold must be the agent's own:
- * canonical order, one entry per soname and digest, unmeasured objects out.
+ * A relying party hashes a fetched registry and compares the result with
+ * the image digest the token carries, so the hash must be the documented
+ * one: every object in list order, those without a digest included.
  */
 static void test_registry_digest(void)
 {
-	uint8_t d1[32], d2[64], d3[32];
+	uint8_t d1[32], d2[64];
 	struct lota_server_registry_module mods[] = {
-		{ "libz.so.1", sizeof(d1), d1 },
-		{ "libc.so.6", sizeof(d2), d2 },
-		{ "title.exe", 0, NULL },
-		{ "libc.so.6", sizeof(d2), d2 },
-		{ "liba.so", sizeof(d3), d3 },
+		{ "libc.so.6", "/usr/lib64/libc.so.6", 2048, 0x803, 17,
+		  LOTA_REGISTRY_ROAD_VERITY, 0, sizeof(d2), d2 },
+		{ "title.exe", "/opt/title/title.exe", 4096, 0x803, 42,
+		  LOTA_REGISTRY_ROAD_NONE, 0, 0, NULL },
+		{ "inject.so", NULL, 512, 0x2a, 7, LOTA_REGISTRY_ROAD_NONE,
+		  LOTA_REGISTRY_OBJECT_UNMAPPED, 0, NULL },
+		{ "libz.so.1", "/usr/lib64/libz.so.1", 1024, 0x803, 18,
+		  LOTA_REGISTRY_ROAD_CONTENT, 0, sizeof(d1), d1 },
 	};
-	struct lota_server_registry_module shuffled[] = {
-		mods[4],
-		mods[2],
-		mods[0],
-		mods[1],
-	};
-	struct lota_runtime_image_module expect[3];
-	uint8_t want[32], got[32], again[32];
+	const uint32_t flags = LOTA_REGISTRY_MEASURED;
+	uint8_t buf[1024];
+	uint8_t want[32], got[32], other[32];
+	unsigned int wlen = 0;
+	size_t off = 0;
 
 	memset(d1, 0x11, sizeof(d1));
 	memset(d2, 0x22, sizeof(d2));
-	memset(d3, 0x33, sizeof(d3));
-	memset(expect, 0, sizeof(expect));
-	strcpy(expect[0].soname, "liba.so");
-	expect[0].verity.len = sizeof(d3);
-	memcpy(expect[0].verity.digest, d3, sizeof(d3));
-	strcpy(expect[1].soname, "libc.so.6");
-	expect[1].verity.len = sizeof(d2);
-	memcpy(expect[1].verity.digest, d2, sizeof(d2));
-	strcpy(expect[2].soname, "libz.so.1");
-	expect[2].verity.len = sizeof(d1);
-	memcpy(expect[2].verity.digest, d1, sizeof(d1));
 
-	TEST("registry_digest folds like the agent");
-	if (lota_compute_runtime_image_digest(expect, 3, want) != 0 ||
-	    lota_server_registry_digest(mods, 5, got) != LOTA_SERVER_OK ||
+	/* the layout of lota_registry_digest.h, spelled out */
+	memcpy(buf, "lota-runtime-registry:v1", 25);
+	off = 25;
+	put_le(buf, &off, flags, 2);
+	put_le(buf, &off, 4, 4);
+	for (size_t i = 0; i < 4; i++) {
+		const struct lota_server_registry_module *m = &mods[i];
+		size_t slen = strlen(m->soname);
+		size_t plen = m->path ? strlen(m->path) : 0;
+
+		put_le(buf, &off, m->size, 8);
+		put_le(buf, &off, m->dev, 8);
+		put_le(buf, &off, m->ino, 8);
+		buf[off++] = (uint8_t)m->road;
+		buf[off++] = (uint8_t)m->digest_len;
+		put_le(buf, &off, slen, 2);
+		put_le(buf, &off, plen, 2);
+		put_le(buf, &off, m->flags, 2);
+		if (m->digest_len)
+			memcpy(buf + off, m->digest, m->digest_len);
+		off += m->digest_len;
+		memcpy(buf + off, m->soname, slen);
+		off += slen;
+		if (plen)
+			memcpy(buf + off, m->path, plen);
+		off += plen;
+	}
+
+	TEST("registry_digest hashes the documented layout");
+	if (EVP_Digest(buf, off, want, &wlen, EVP_sha256(), NULL) != 1 ||
+	    lota_server_registry_digest(flags, mods, 4, got) !=
+		    LOTA_SERVER_OK ||
 	    memcmp(want, got, sizeof(got)) != 0)
-		FAIL("fold differs from the canonical digest");
+		FAIL("digest differs from the documented layout");
 	else
 		PASS();
 
-	TEST("registry_digest ignores order and repeats");
-	if (lota_server_registry_digest(shuffled, 4, again) != LOTA_SERVER_OK ||
-	    memcmp(want, again, sizeof(again)) != 0)
-		FAIL("order or a repeated object changed the fold");
-	else
-		PASS();
+	TEST("registry_digest binds what the list leaves out");
+	{
+		struct lota_server_registry_module swapped[4];
+		struct lota_server_registry_module cut[3] = { mods[0], mods[1],
+							      mods[3] };
+		struct lota_server_registry_module edit[4];
+		int ok = 1;
 
-	TEST("registry_digest of nothing measured is the empty fold");
-	if (lota_compute_runtime_image_digest(NULL, 0, want) != 0 ||
-	    lota_server_registry_digest(&mods[2], 1, got) != LOTA_SERVER_OK ||
-	    memcmp(want, got, sizeof(got)) != 0)
-		FAIL("unmeasured object reached the fold");
-	else
-		PASS();
+		/* an object without a digest dropped */
+		ok &= lota_server_registry_digest(flags, cut, 3, other) ==
+			      LOTA_SERVER_OK &&
+		      memcmp(other, got, sizeof(got)) != 0;
+		/* reordered */
+		memcpy(swapped, mods, sizeof(mods));
+		swapped[0] = mods[3];
+		swapped[3] = mods[0];
+		ok &= lota_server_registry_digest(flags, swapped, 4, other) ==
+			      LOTA_SERVER_OK &&
+		      memcmp(other, got, sizeof(got)) != 0;
+		/* an unmapped object passed off as mapped */
+		memcpy(edit, mods, sizeof(mods));
+		edit[2].flags = 0;
+		ok &= lota_server_registry_digest(flags, edit, 4, other) ==
+			      LOTA_SERVER_OK &&
+		      memcmp(other, got, sizeof(got)) != 0;
+		/* a path rewritten */
+		memcpy(edit, mods, sizeof(mods));
+		edit[1].path = "/opt/title/other.exe";
+		ok &= lota_server_registry_digest(flags, edit, 4, other) ==
+			      LOTA_SERVER_OK &&
+		      memcmp(other, got, sizeof(got)) != 0;
+		/* a lost history hidden */
+		ok &= lota_server_registry_digest(
+			      flags | LOTA_REGISTRY_HISTORY_LOST, mods, 4,
+			      other) == LOTA_SERVER_OK &&
+		      memcmp(other, got, sizeof(got)) != 0;
+		/* NULL and empty path are one and the same */
+		memcpy(edit, mods, sizeof(mods));
+		edit[2].path = "";
+		ok &= lota_server_registry_digest(flags, edit, 4, other) ==
+			      LOTA_SERVER_OK &&
+		      memcmp(other, got, sizeof(got)) == 0;
+		if (ok)
+			PASS();
+		else
+			FAIL("an edit to the list kept the digest");
+	}
 
 	TEST("registry_digest refuses malformed modules");
 	{
 		struct lota_server_registry_module bad = mods[0];
-		int ok = lota_server_registry_digest(mods, 1, NULL) ==
+		int ok = lota_server_registry_digest(flags, mods, 1, NULL) ==
 				 LOTA_SERVER_ERR_INVALID_ARG &&
-			 lota_server_registry_digest(NULL, 1, got) ==
+			 lota_server_registry_digest(flags, NULL, 1, got) ==
+				 LOTA_SERVER_ERR_INVALID_ARG &&
+			 lota_server_registry_digest(1U << 7, mods, 1, got) ==
 				 LOTA_SERVER_ERR_INVALID_ARG;
 
 		bad.digest_len = 20;
-		ok = ok && lota_server_registry_digest(&bad, 1, got) ==
+		ok = ok && lota_server_registry_digest(flags, &bad, 1, got) ==
 				   LOTA_SERVER_ERR_INVALID_ARG;
 		bad = mods[0];
 		bad.soname = "";
-		ok = ok && lota_server_registry_digest(&bad, 1, got) ==
+		ok = ok && lota_server_registry_digest(flags, &bad, 1, got) ==
 				   LOTA_SERVER_ERR_INVALID_ARG;
 		bad = mods[0];
 		bad.digest = NULL;
-		ok = ok && lota_server_registry_digest(&bad, 1, got) ==
+		ok = ok && lota_server_registry_digest(flags, &bad, 1, got) ==
 				   LOTA_SERVER_ERR_INVALID_ARG;
-		ok = ok && lota_server_registry_digest(
-				   mods, LOTA_SERVER_REGISTRY_MAX_OBJECTS + 1,
-				   got) == LOTA_SERVER_ERR_INVALID_ARG;
+		bad = mods[0];
+		bad.road = 3;
+		ok = ok && lota_server_registry_digest(flags, &bad, 1, got) ==
+				   LOTA_SERVER_ERR_INVALID_ARG;
+		bad = mods[1];
+		bad.digest_len = 32;
+		bad.digest = d1;
+		ok = ok && lota_server_registry_digest(flags, &bad, 1, got) ==
+				   LOTA_SERVER_ERR_INVALID_ARG;
+		bad = mods[0];
+		bad.flags = 1U << 4;
+		ok = ok && lota_server_registry_digest(flags, &bad, 1, got) ==
+				   LOTA_SERVER_ERR_INVALID_ARG;
+		ok = ok &&
+		     lota_server_registry_digest(
+			     flags, mods, LOTA_SERVER_REGISTRY_MAX_OBJECTS + 1,
+			     got) == LOTA_SERVER_ERR_INVALID_ARG;
 		if (ok)
 			PASS();
 		else

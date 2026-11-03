@@ -3,11 +3,10 @@
  * The code objects each protected process had mapped when the last token
  * round measured it.
  *
- * The token carries one image digest per process, folded from the soname
- * and digest of every object that has one. The registry keeps the objects
- * themselves, the unmeasured ones and those already unmapped included, so a
- * relying party can see what was loaded and check the list against the
- * digest it was given.
+ * The registry keeps the objects themselves, the unmeasured ones and those
+ * already unmapped included. The token carries one digest per process over
+ * that whole list (lota_registry_digest.h), so a relying party can see what
+ * was loaded and check the list against the digest it was given.
  *
  * Split out of ipc.c so the paging is tested on its own rather than through
  * a socket.
@@ -28,7 +27,10 @@
 #include "../../include/lota.h"
 #include "../../include/lota_devt.h"
 #include "../../include/lota_ipc.h"
+#include "../../include/lota_registry_digest.h"
 #include "runtime_image_measure.h"
+
+#include <openssl/evp.h>
 
 struct registry_process {
 	uint32_t pid;
@@ -59,7 +61,7 @@ static inline void registry_clear(struct registry *r)
 
 /*
  * Append a copy of @n objects mapped in @pid.
- * @digest is the value folded into the token, or NULL when none was.
+ * @digest is the token's entry, or NULL when the round put none there.
  * @flags carries LOTA_IPC_REGISTRY_* other than MEASURED.
  * Returns 0 or -ENOMEM; on failure @r is unchanged.
  */
@@ -133,6 +135,57 @@ static inline uint8_t registry_road(const struct lota_rt_object_record *o)
 		return LOTA_IPC_REGISTRY_ROAD_NONE;
 	return o->content_hashed ? LOTA_IPC_REGISTRY_ROAD_CONTENT :
 				   LOTA_IPC_REGISTRY_ROAD_VERITY;
+}
+
+/* Wire entry of @o; soname and path follow it with the lengths set here. */
+static inline void registry_entry(const struct lota_rt_object_record *o,
+				  struct lota_ipc_registry_entry *e)
+{
+	memset(e, 0, sizeof(*e));
+	e->size = o->size;
+	e->dev = makedev(o->entry.dev_major, o->entry.dev_minor);
+	e->ino = o->entry.ino;
+	e->road = registry_road(o);
+	if (e->road != LOTA_IPC_REGISTRY_ROAD_NONE) {
+		e->digest_len = (uint8_t)o->digest.len;
+		memcpy(e->digest, o->digest.digest, o->digest.len);
+	}
+	e->soname_len =
+		(uint16_t)strnlen(o->entry.soname, sizeof(o->entry.soname));
+	e->path_len = (uint16_t)strnlen(o->entry.path, sizeof(o->entry.path));
+	if (o->unmapped)
+		e->flags |= LOTA_IPC_REGISTRY_ENTRY_UNMAPPED;
+}
+
+/*
+ * The token's entry for a process whose list is @objs and flags @flags,
+ * MEASURED included. Returns 0 or a negative errno.
+ */
+static inline int registry_digest(uint16_t flags,
+				  const struct lota_rt_object_record *objs,
+				  size_t n, uint8_t out[32])
+{
+	EVP_MD_CTX *md;
+	int ret;
+
+	if (n > UINT32_MAX || (n > 0 && !objs))
+		return -EINVAL;
+	md = EVP_MD_CTX_new();
+	if (!md)
+		return -ENOMEM;
+
+	ret = lota_registry_digest_begin(md, flags, (uint32_t)n);
+	for (size_t i = 0; ret == 0 && i < n; i++) {
+		struct lota_ipc_registry_entry e;
+
+		registry_entry(&objs[i], &e);
+		ret = lota_registry_digest_entry(md, &e, objs[i].entry.soname,
+						 objs[i].entry.path);
+	}
+	if (ret == 0)
+		ret = lota_registry_digest_final(md, out);
+	EVP_MD_CTX_free(md);
+	return ret;
 }
 
 /*
@@ -211,25 +264,14 @@ static inline int registry_encode_page(const struct registry_process *p,
 	for (size_t i = start; i < p->count && count < UINT16_MAX; i++) {
 		const struct lota_rt_object_record *o = &p->objects[i];
 		struct lota_ipc_registry_entry e;
-		size_t slen = strnlen(o->entry.soname, sizeof(o->entry.soname));
-		size_t plen = strnlen(o->entry.path, sizeof(o->entry.path));
+		size_t slen;
+		size_t plen;
 
+		registry_entry(o, &e);
+		slen = e.soname_len;
+		plen = e.path_len;
 		if (cap - off < sizeof(e) + slen + plen)
 			break;
-
-		memset(&e, 0, sizeof(e));
-		e.size = o->size;
-		e.dev = makedev(o->entry.dev_major, o->entry.dev_minor);
-		e.ino = o->entry.ino;
-		e.road = registry_road(o);
-		if (e.road != LOTA_IPC_REGISTRY_ROAD_NONE) {
-			e.digest_len = (uint8_t)o->digest.len;
-			memcpy(e.digest, o->digest.digest, o->digest.len);
-		}
-		e.soname_len = (uint16_t)slen;
-		e.path_len = (uint16_t)plen;
-		if (o->unmapped)
-			e.flags |= LOTA_IPC_REGISTRY_ENTRY_UNMAPPED;
 
 		memcpy(buf + off, &e, sizeof(e));
 		off += sizeof(e);

@@ -504,7 +504,7 @@ struct lota_ipc_registry_request {
 	uint32_t start;
 } __attribute__((packed));
 
-/* image_digest is the value the round folded for @pid into its token */
+/* image_digest is the token's entry for @pid */
 #define LOTA_IPC_REGISTRY_MEASURED (1U << 0)
 /* an executable mapping of @pid went unrecorded; the list may miss one */
 #define LOTA_IPC_REGISTRY_HISTORY_LOST (1U << 1)
@@ -523,9 +523,8 @@ struct lota_ipc_registry_request {
  * pages of one listing that carry different rounds do not belong together.
  *
  * The token binds the list. With LOTA_IPC_REGISTRY_MEASURED set,
- * folding the entries that carry a digest as lota_runtime_image_measure.h
+ * hashing @flags, @total and every entry in order as lota_registry_digest.h
  * does yields @image_digest, the token's entry for @pid.
- * Path, size, device and inode describe; only the soname and digest are bound.
  */
 struct lota_ipc_registry_page {
 	uint64_t round;
@@ -539,7 +538,7 @@ struct lota_ipc_registry_page {
 
 /* How an entry's digest was taken */
 enum lota_ipc_registry_road {
-	LOTA_IPC_REGISTRY_ROAD_NONE = 0, /* no digest; absent from the fold */
+	LOTA_IPC_REGISTRY_ROAD_NONE = 0, /* no digest */
 	LOTA_IPC_REGISTRY_ROAD_VERITY = 1, /* fs-verity measurement */
 	LOTA_IPC_REGISTRY_ROAD_CONTENT = 2, /* kernel hash of the contents */
 };
