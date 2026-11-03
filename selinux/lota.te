@@ -126,6 +126,10 @@ allow lota_agent_t lota_var_t:file manage_file_perms;
 allow lota_agent_t lota_var_t:sock_file manage_sock_file_perms;
 allow lota_agent_t self:unix_stream_socket connectto;
 
+# A link planted at /run/lota/.bench.tmp or bench.json is removed or
+# renamed over, never followed; that is all the daemon may do to one.
+allow lota_agent_t lota_var_t:lnk_file unlink;
+
 # /usr/lib/lota/*.bpf.o
 allow lota_agent_t lota_bpf_t:dir list_dir_perms;
 allow lota_agent_t lota_bpf_t:file { read_file_perms execute map };
