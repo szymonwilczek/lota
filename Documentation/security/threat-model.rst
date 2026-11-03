@@ -389,7 +389,7 @@ Active threats
          ``__ptrace_may_access`` where available. Both refuse a read and an
          attach alike, so nothing reads a protected process's ``/proc`` or
          attaches a debugger to it.
-       | ``block_ptrace``, on by default, extends the refusal to an attach on
+       | ``block_ptrace``, off by default, extends the refusal to an attach on
          any other task.
      - | Reading another process's ``/proc`` is left to the kernel outside the
          protected set. Same-uid access to it is ordinary, ``yama``'s

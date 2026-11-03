@@ -35,13 +35,12 @@ static int g_failures;
 			   (is_protected))
 
 /*
- * The shipped default is block_ptrace on, in enforce, with nothing protected.
- * On that host an ordinary task must still be able to read another task's /proc:
- * lsof, ps with per-process detail, a crash handler and a profiler all take
+ * With block_ptrace on, in enforce, and nothing protected, an ordinary task
+ * must still be able to read another task's /proc: lsof, ps with per-process detail, a crash handler and a profiler all take
  * PTRACE_MODE_READ, and same-uid /proc access is not a boundary this project
  * owns -- denying it breaks the desktop.
  */
-static void test_read_is_allowed_on_the_shipped_default(void)
+static void test_read_is_allowed_with_the_key_on(void)
 {
 	CHECK(!DENIED(PTRACE_MODE_READ, LOTA_MODE_ENFORCE, 1, 0, 0),
 	      "a read of an unprotected task is allowed with block_ptrace on");
@@ -49,8 +48,8 @@ static void test_read_is_allowed_on_the_shipped_default(void)
 	      "an access asking for neither flag is not an attach");
 }
 
-/* The half the key is named for, and the reason it defaults to on */
-static void test_attach_is_refused_on_the_shipped_default(void)
+/* The half the key is named for */
+static void test_attach_is_refused_with_the_key_on(void)
 {
 	CHECK(DENIED(LOTA_PTRACE_MODE_ATTACH, LOTA_MODE_ENFORCE, 1, 0, 0),
 	      "an attach on an unprotected task is refused with block_ptrace on");
@@ -144,8 +143,8 @@ static void test_attach_is_recognised_by_its_flag(void)
 int main(void)
 {
 	printf("=== ptrace policy tests ===\n");
-	test_read_is_allowed_on_the_shipped_default();
-	test_attach_is_refused_on_the_shipped_default();
+	test_read_is_allowed_with_the_key_on();
+	test_attach_is_refused_with_the_key_on();
 	test_the_key_off_refuses_nothing();
 	test_the_global_rule_is_enforce_only();
 	test_a_protected_target_refuses_both_modes();

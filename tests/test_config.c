@@ -91,24 +91,24 @@ static void test_config_init_defaults(void)
 		FAIL("mode != enforce");
 		return;
 	}
-	if (cfg.strict_mmap != true) {
-		FAIL("strict_mmap != true");
+	if (cfg.strict_mmap != false) {
+		FAIL("strict_mmap != false");
 		return;
 	}
 	if (cfg.strict_exec != false) {
 		FAIL("strict_exec != false");
 		return;
 	}
-	if (cfg.block_ptrace != true) {
-		FAIL("block_ptrace != true");
+	if (cfg.block_ptrace != false) {
+		FAIL("block_ptrace != false");
 		return;
 	}
 	if (cfg.strict_modules != false) {
 		FAIL("strict_modules != false");
 		return;
 	}
-	if (cfg.block_anon_exec != true) {
-		FAIL("block_anon_exec != true");
+	if (cfg.block_anon_exec != false) {
+		FAIL("block_anon_exec != false");
 		return;
 	}
 	if (cfg.seal_aik_auth != false) {

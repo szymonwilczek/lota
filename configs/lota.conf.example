@@ -41,8 +41,8 @@ bpf_path = /usr/lib/lota/lota_lsm.bpf.o
 # mode = enforce
 
 # Strict policy flags.
-#   strict_mmap, block_ptrace, block_anon_exec   -- on by default.
-#   strict_exec, strict_modules                  -- off by default.
+#   strict_mmap, strict_exec, block_ptrace, strict_modules, block_anon_exec
+#   -- all off by default.
 #
 # All five apply in enforce mode only; in monitor they are
 # inert, as `lota-agent --dump-config` and the startup log say.
