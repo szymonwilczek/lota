@@ -198,6 +198,20 @@ static inline bool attest_target_reports(const struct attest_target *t)
 }
 
 /*
+ * Rebuild @targets from @cfg, keeping the live state of every target that
+ * is still configured: its verdict, schedule, failure state and the sessions
+ * the IPC layer counts. A reload that drops them reads as a host that is no
+ * longer attested until the next round.
+ *
+ * Returns 0 (an empty list when @cfg names nothing), or a negative errno
+ * with @targets untouched.
+ */
+int attest_targets_rebuild(const struct lota_config *cfg, const char *server,
+			   int port, const char *ca_cert, int interval_sec,
+			   struct attest_target *targets, size_t max,
+			   size_t *count);
+
+/*
  * Re-read @config_path and rebuild the list while the loop is running.
  *
  * A publisher registered by a game's installer has to be reported to without

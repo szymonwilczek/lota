@@ -112,21 +112,16 @@ static void agent_reload_publishers(struct agent_loop_ctx *ctx)
 	if (!ctx->targets || !ctx->target_count || ctx->target_max == 0)
 		return;
 
-	ret = attest_targets_build(
+	count = *ctx->target_count;
+	ret = attest_targets_rebuild(
 		ctx->cfg,
 		(ctx->cfg && ctx->cfg->server[0]) ? ctx->cfg->server : NULL,
 		ctx->cfg ? ctx->cfg->port : 0,
 		ctx->cfg ? ctx->cfg->ca_cert : NULL,
 		ctx->cfg ? ctx->cfg->attest_interval : 0, ctx->targets,
 		ctx->target_max, &count);
-	if (ret < 0) {
-		/* no publisher configured at all is valid state,
-		 * and the only one that legitimately empties the list */
-		if (ret == -EINVAL)
-			count = 0;
-		else
-			return;
-	}
+	if (ret < 0)
+		return;
 
 	*ctx->target_count = count;
 	ipc_set_profiles(ctx->ipc_ctx, ctx->targets, count);
