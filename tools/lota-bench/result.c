@@ -41,7 +41,7 @@ const char *const bench_mode_names[BMO_COUNT] = {
 	[BMO_NONE] = "none",
 	[BMO_MONITOR] = "monitor",
 	[BMO_ENFORCE] = "enforce",
-	[BMO_MAINTENANCE] = "maintenance",
+	[BMO_UNKNOWN] = "unknown",
 };
 
 const char *const bench_total_names[BT_COUNT] = {

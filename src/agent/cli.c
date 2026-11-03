@@ -530,8 +530,8 @@ int cli_parse(int argc, char **argv, struct cli_options *opts,
 			int opt_mode = parse_mode(optarg);
 			if (opt_mode < 0) {
 				fprintf(stderr, "Invalid mode: %s\n", optarg);
-				fprintf(stderr, "Valid modes: monitor, "
-						"enforce, maintenance\n");
+				fprintf(stderr,
+					"Valid modes: monitor, enforce\n");
 				return 1;
 			}
 			agent_globals_lock(&g_agent);
@@ -773,8 +773,6 @@ int cli_dump_config(struct cli_options *opts, struct lota_config *cfg)
 	}
 	if (g_agent.mode == LOTA_MODE_ENFORCE)
 		snprintf(cfg->mode, sizeof(cfg->mode), "enforce");
-	else if (g_agent.mode == LOTA_MODE_MAINTENANCE)
-		snprintf(cfg->mode, sizeof(cfg->mode), "maintenance");
 	else
 		snprintf(cfg->mode, sizeof(cfg->mode), "monitor");
 

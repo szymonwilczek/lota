@@ -884,8 +884,7 @@ int main(int argc, char *argv[])
 	 * unit to add --mode monitor, or who packages their own unit with a
 	 * weakened mode, would otherwise silently override the configured
 	 * enforce policy. Refuse to start in that case and require the
-	 * caller to acknowledge the downgrade explicitly. Maintenance and
-	 * monitor are both treated as weakenings of enforce.
+	 * caller to acknowledge the downgrade explicitly.
 	 */
 	if (opts.cli_mode_set && opts.config_file_mode == LOTA_MODE_ENFORCE &&
 	    g_agent.mode != LOTA_MODE_ENFORCE &&

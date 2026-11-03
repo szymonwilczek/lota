@@ -168,7 +168,7 @@ struct lota_config {
 
 	/* BPF / enforcement */
 	char bpf_path[PATH_MAX];
-	char mode[32]; /* "monitor", "enforce", "maintenance" */
+	char mode[32]; /* "monitor", "enforce" */
 	bool strict_mmap;
 	bool strict_exec;
 	bool block_ptrace;

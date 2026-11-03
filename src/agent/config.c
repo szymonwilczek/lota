@@ -72,8 +72,7 @@ static int parse_mode_strict(const char *value)
 	if (!value)
 		return -1;
 
-	if (strcmp(value, "monitor") == 0 || strcmp(value, "enforce") == 0 ||
-	    strcmp(value, "maintenance") == 0)
+	if (strcmp(value, "monitor") == 0 || strcmp(value, "enforce") == 0)
 		return 0;
 
 	return -1;
@@ -802,7 +801,7 @@ static int apply_key(struct lota_config *cfg, const char *key,
 		if (parse_mode_strict(value) != 0) {
 			fprintf(stderr,
 				"%s:%d: invalid mode '%s' (valid: "
-				"monitor/enforce/maintenance)\n",
+				"monitor/enforce)\n",
 				filepath, lineno, value);
 			return -1;
 		}

@@ -95,8 +95,10 @@ What the mode decides
 
 The strict flags (``strict_mmap``, ``strict_exec``, ``block_ptrace``,
 ``strict_modules``, ``block_anon_exec`` and their command-line forms) apply in
-``mode = enforce`` only. In ``monitor`` and ``maintenance`` each gate returns
-early: the agent starts, reports the flag as on and blocks nothing.
+``mode = enforce`` only. In ``monitor`` each gate returns early: the agent
+starts, reports the flag as on and blocks nothing the flag covers. The mode
+switches these flags and nothing else; the agent and protected processes
+are guarded in both modes.
 
 ``lota-agent --dump-config`` lists the keys the mode leaves inert::
 

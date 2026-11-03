@@ -125,8 +125,6 @@ static const char *mode_name(uint8_t mode)
 		return "monitor";
 	case LOTA_MODE_ENFORCE:
 		return "enforce";
-	case LOTA_MODE_MAINTENANCE:
-		return "maintenance";
 	}
 	return NULL;
 }

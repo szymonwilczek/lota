@@ -36,7 +36,7 @@ port = 8443
 # Path to compiled BPF object file
 bpf_path = /usr/lib/lota/lota_lsm.bpf.o
 
-# Enforcement mode: monitor, enforce, maintenance
+# Enforcement mode: monitor, enforce
 # Default is enforce.
 # mode = enforce
 
@@ -44,7 +44,7 @@ bpf_path = /usr/lib/lota/lota_lsm.bpf.o
 #   strict_mmap, block_ptrace, block_anon_exec   -- on by default.
 #   strict_exec, strict_modules                  -- off by default.
 #
-# All five apply in enforce mode only; in monitor and maintenance they are
+# All five apply in enforce mode only; in monitor they are
 # inert, as `lota-agent --dump-config` and the startup log say.
 #
 # block_ptrace refuses a ptrace attach on any task.

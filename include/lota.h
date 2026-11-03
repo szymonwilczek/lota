@@ -94,9 +94,8 @@ enum lota_event_flag {
  * Controls whether LSM hooks block or just monitor
  */
 enum lota_mode {
-	LOTA_MODE_MONITOR = 0, /* Log only, allow everything */
-	LOTA_MODE_ENFORCE = 1, /* Block unauthorized operations */
-	LOTA_MODE_MAINTENANCE = 2, /* Temporarily allow all (for updates) */
+	LOTA_MODE_MONITOR = 0, /* Log what policy would refuse */
+	LOTA_MODE_ENFORCE = 1, /* Refuse what policy refuses */
 };
 
 /* Config map keys */

@@ -97,15 +97,13 @@ static void test_a_protected_target_refuses_both_modes(void)
 	      "a protected task is refused in monitor mode");
 }
 
-/* Maintenance lifts policy, and isolation of a protected task is not policy */
-static void test_maintenance_keeps_the_protected_rule(void)
+/* Monitor lifts policy, and isolation of a protected task is not policy */
+static void test_monitor_keeps_the_protected_rule(void)
 {
-	CHECK(DENIED(PTRACE_MODE_READ, LOTA_MODE_MAINTENANCE, 1, 0, 1),
-	      "maintenance refuses a read of a protected task");
-	CHECK(DENIED(LOTA_PTRACE_MODE_ATTACH, LOTA_MODE_MAINTENANCE, 0, 0, 1),
-	      "maintenance refuses an attach on a protected task");
-	CHECK(!DENIED(LOTA_PTRACE_MODE_ATTACH, LOTA_MODE_MAINTENANCE, 1, 0, 0),
-	      "maintenance lifts block_ptrace on an unprotected task");
+	CHECK(DENIED(PTRACE_MODE_READ, LOTA_MODE_MONITOR, 1, 0, 1),
+	      "monitor refuses a read of a protected task");
+	CHECK(DENIED(LOTA_PTRACE_MODE_ATTACH, LOTA_MODE_MONITOR, 0, 0, 1),
+	      "monitor refuses an attach on a protected task");
 }
 
 /* The agent is never a target, in any mode, whatever the key says */
@@ -113,8 +111,8 @@ static void test_the_agent_is_never_a_target(void)
 {
 	CHECK(DENIED(PTRACE_MODE_READ, LOTA_MODE_ENFORCE, 0, 1, 0),
 	      "a read of the agent is refused with block_ptrace off");
-	CHECK(DENIED(LOTA_PTRACE_MODE_ATTACH, LOTA_MODE_MAINTENANCE, 0, 1, 0),
-	      "an attach on the agent is refused in maintenance");
+	CHECK(DENIED(LOTA_PTRACE_MODE_ATTACH, LOTA_MODE_MONITOR, 0, 1, 0),
+	      "an attach on the agent is refused in monitor mode");
 	CHECK(DENIED(PTRACE_MODE_READ, LOTA_MODE_MONITOR, 0, 1, 0),
 	      "a read of the agent is refused in monitor mode");
 }
@@ -151,7 +149,7 @@ int main(void)
 	test_the_key_off_refuses_nothing();
 	test_the_global_rule_is_enforce_only();
 	test_a_protected_target_refuses_both_modes();
-	test_maintenance_keeps_the_protected_rule();
+	test_monitor_keeps_the_protected_rule();
 	test_the_agent_is_never_a_target();
 	test_the_agent_read_exemption();
 	test_attach_is_recognised_by_its_flag();

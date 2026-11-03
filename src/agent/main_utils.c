@@ -34,8 +34,6 @@
 const char *mode_to_string(int mode)
 {
 	switch (mode) {
-	case LOTA_MODE_MAINTENANCE:
-		return "MAINTENANCE";
 	case LOTA_MODE_MONITOR:
 		return "MONITOR";
 	case LOTA_MODE_ENFORCE:
@@ -51,8 +49,6 @@ int parse_mode(const char *mode_str)
 		return LOTA_MODE_MONITOR;
 	if (strcmp(mode_str, "enforce") == 0)
 		return LOTA_MODE_ENFORCE;
-	if (strcmp(mode_str, "maintenance") == 0)
-		return LOTA_MODE_MAINTENANCE;
 	return -1;
 }
 
@@ -241,10 +237,11 @@ void print_usage(const char *prog, const char *default_bpf_path,
 	printf("  --bpf PATH        Path to BPF object file\n");
 	printf("                    (default: %s)\n", default_bpf_path);
 	printf("  --mode MODE       Set enforcement mode:\n");
-	printf("                      enforce     - block unauthorized modules "
+	printf("                      enforce - refuse what policy refuses "
 	       "(default)\n");
-	printf("                      monitor     - log events only\n");
-	printf("                      maintenance - allow all, minimal logging\n");
+	printf("                      monitor - log what policy would refuse\n");
+	printf("                    The mode switches policy only; the agent\n");
+	printf("                    and protected processes are guarded in both.\n");
 	printf("                    A CLI --mode that weakens the configured\n");
 	printf("                    'enforce' mode requires:\n");
 	printf("                      --insecure-allow-mode-downgrade\n");
@@ -256,7 +253,7 @@ void print_usage(const char *prog, const char *default_bpf_path,
 	printf("                    again.\n");
 	printf("  --insecure-allow-mode-downgrade\n");
 	printf("                    Acknowledge that --mode weakens cfg.mode\n"
-	       "                    'enforce' to monitor/maintenance.\n");
+	       "                    'enforce' to monitor.\n");
 	printf("  --insecure-allow-mutable-rootfs\n");
 	printf("                    Skip the agent-binary immutability check\n"
 	       "                    at startup. Use only where the rootfs can\n"

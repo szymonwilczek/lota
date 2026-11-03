@@ -1842,7 +1842,7 @@ int bpf_loader_set_mode(struct bpf_loader_ctx *ctx, uint32_t mode)
 	if (!ctx || !ctx->loaded || ctx->config_fd < 0)
 		return -EINVAL;
 
-	if (mode > LOTA_MODE_MAINTENANCE)
+	if (mode > LOTA_MODE_ENFORCE)
 		return -EINVAL;
 
 	return bpf_map_update_elem(ctx->config_fd, &key, &mode, BPF_ANY);
