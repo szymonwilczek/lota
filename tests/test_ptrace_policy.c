@@ -212,9 +212,36 @@ static void test_an_attach_inside_the_instance_is_allowed(void)
 	      "the agent stays refused to every instance");
 }
 
+#define PROC_NAME(s) (s), (unsigned int)(sizeof(s) - 1)
+
+/* /proc entries a CAP_PERFMON reader would get past the ptrace verdict */
+static void test_proc_entries_that_read_memory(void)
+{
+	CHECK(lota_proc_entry_reads_mm(PROC_NAME("maps")), "maps reads memory");
+	CHECK(lota_proc_entry_reads_mm(PROC_NAME("smaps_rollup")),
+	      "smaps_rollup reads memory");
+	CHECK(lota_proc_entry_reads_mm(PROC_NAME("pagemap")),
+	      "pagemap reads memory");
+	CHECK(lota_proc_entry_reads_mm(PROC_NAME("environ")),
+	      "environ reads memory");
+	CHECK(lota_proc_entry_reads_mm(PROC_NAME("auxv")), "auxv reads memory");
+	CHECK(lota_proc_entry_reads_mm(PROC_NAME("map_files")),
+	      "map_files lists the mappings");
+	CHECK(!lota_proc_entry_reads_mm(PROC_NAME("status")),
+	      "status only names the process");
+	CHECK(!lota_proc_entry_reads_mm(PROC_NAME("cmdline")),
+	      "cmdline stays readable for ps");
+	CHECK(!lota_proc_entry_reads_mm(PROC_NAME("cgroup")),
+	      "cgroup stays readable for systemd");
+	CHECK(!lota_proc_entry_reads_mm("mapsx", 4 + 1),
+	      "a longer name is another entry");
+	CHECK(!lota_proc_entry_reads_mm("map", 3), "a prefix is another entry");
+}
+
 int main(void)
 {
 	printf("=== ptrace policy tests ===\n");
+	test_proc_entries_that_read_memory();
 	test_read_is_allowed_with_the_key_on();
 	test_attach_is_refused_with_the_key_on();
 	test_the_key_off_refuses_nothing();

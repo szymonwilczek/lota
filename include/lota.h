@@ -238,11 +238,12 @@ static inline int lota_kread_denied(unsigned int id, int from_file,
 }
 
 /*
- * PTRACE_MODE_ATTACH from include/linux/ptrace.h.
+ * PTRACE_MODE_READ and PTRACE_MODE_ATTACH from include/linux/ptrace.h.
  *
  * Mirrored: the enforcement object builds against vmlinux.h, which carries types
  * and not the uapi-adjacent flag definitions.
  */
+#define LOTA_PTRACE_MODE_READ 0x01
 #define LOTA_PTRACE_MODE_ATTACH 0x02
 
 /* Whether an access asks to trace the target rather than only to read it */
@@ -312,6 +313,45 @@ static inline int lota_ptrace_denied(unsigned int ptrace_mode,
 		return 1;
 
 	return 0;
+}
+
+/* longest /proc entry name lota_proc_entry_reads_mm() names, plus one */
+#define LOTA_PROC_NAME_MAX 16
+
+static inline int lota_name_is(const char *name, unsigned int len,
+			       const char *want)
+{
+	unsigned int i;
+
+	for (i = 0; i < LOTA_PROC_NAME_MAX; i++) {
+		if (want[i] == '\0')
+			return i == len;
+		if (i >= len || name[i] != want[i])
+			return 0;
+	}
+	return 0;
+}
+
+/*
+ * Whether opening the /proc/<pid> entry @name reads that process's address
+ * space or the memory behind it.
+ *
+ * The kernel answers these opens with a READ ptrace check, and when it fails
+ * still admits a caller with CAP_PERFMON, past ptrace_access_check. The
+ * ptrace verdict above then never sees them, so the open is refused on its
+ * own, by the same rules. Entries that only name the process (stat, status,
+ * cmdline, cgroup) stay open to ps, systemd and journald.
+ */
+static inline int lota_proc_entry_reads_mm(const char *name, unsigned int len)
+{
+	return lota_name_is(name, len, "maps") ||
+	       lota_name_is(name, len, "smaps") ||
+	       lota_name_is(name, len, "smaps_rollup") ||
+	       lota_name_is(name, len, "numa_maps") ||
+	       lota_name_is(name, len, "pagemap") ||
+	       lota_name_is(name, len, "environ") ||
+	       lota_name_is(name, len, "auxv") ||
+	       lota_name_is(name, len, "map_files");
 }
 
 /* CLONE_THREAD from <linux/sched.h>, mirrored like the above */

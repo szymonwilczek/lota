@@ -396,6 +396,10 @@ struct {
 extern void bpf_rcu_read_lock(void) __ksym;
 extern void bpf_rcu_read_unlock(void) __ksym;
 
+/* a referenced task by global pid, for a hook that only has a struct pid */
+extern struct task_struct *bpf_task_from_pid(s32 pid) __ksym;
+extern void bpf_task_release(struct task_struct *p) __ksym;
+
 /* kfunc definition for bpf_get_fsverity_digest */
 extern int bpf_get_fsverity_digest(struct file *file,
 				   struct bpf_dynptr *digest_p) __ksym;
@@ -1414,6 +1418,118 @@ static __always_inline int sleepable_task_is_agent_or_admin(void)
 	return ret;
 }
 
+#define LOTA_PROC_SUPER_MAGIC 0x9fa0
+
+/*
+ * An open of a /proc memory entry of the agent or of a protected process,
+ * from outside it; see lota_proc_entry_reads_mm(). The ptrace verdict,
+ * asked of the open itself because CAP_PERFMON passes the kernel's check
+ * without it. Returns 1 to deny; @target_pid is the process refused.
+ */
+static __always_inline int denies_proc_mm_open(struct file *file,
+					       u32 *target_pid)
+{
+	struct lota_instance_entry target_id = {};
+	struct lota_instance_entry actor_id = {};
+	char name[LOTA_PROC_NAME_MAX] = {};
+	struct task_struct *current;
+	struct task_struct *target;
+	int target_protected;
+	struct dentry *dentry;
+	struct proc_inode *pi;
+	struct inode *inode;
+	int target_agent;
+	int actor_agent;
+	int inside = 0;
+	u32 len;
+	s32 nr;
+
+	inode = BPF_CORE_READ(file, f_inode);
+	if (!inode ||
+	    BPF_CORE_READ(inode, i_sb, s_magic) != LOTA_PROC_SUPER_MAGIC)
+		return 0;
+
+	dentry = BPF_CORE_READ(file, f_path.dentry);
+	len = BPF_CORE_READ(dentry, d_name.len);
+	if (len == 0 || len >= LOTA_PROC_NAME_MAX)
+		return 0;
+	if (bpf_probe_read_kernel(name, len & (LOTA_PROC_NAME_MAX - 1),
+				  BPF_CORE_READ(dentry, d_name.name)))
+		return 0;
+	if (!lota_proc_entry_reads_mm(name, len))
+		return 0;
+
+	pi = (void *)((char *)inode -
+		      bpf_core_field_offset(struct proc_inode, vfs_inode));
+	nr = BPF_CORE_READ(pi, pid, numbers[0].nr);
+	if (nr <= 0)
+		return 0;
+
+	target = bpf_task_from_pid(nr);
+	if (!target)
+		return 0;
+
+	*target_pid = target->tgid;
+	if (target->tgid == bpf_get_current_pid_tgid() >> 32) {
+		bpf_task_release(target);
+		return 0;
+	}
+
+	current = (struct task_struct *)bpf_get_current_task_btf();
+	bpf_rcu_read_lock();
+	actor_agent = has_task_auth_flag(current, LOTA_TASK_AUTH_AGENT);
+	target_agent = has_task_auth_flag(target, LOTA_TASK_AUTH_AGENT);
+	bpf_rcu_read_unlock();
+
+	target_protected = task_instance(target, &target_id);
+	bpf_task_release(target);
+
+	if (lota_ptrace_agent_read_exempt(LOTA_PTRACE_MODE_READ, actor_agent))
+		return 0;
+
+	if (target_protected)
+		inside = lota_inside_instance(
+			task_instance(current, &actor_id), actor_id.root_tgid,
+			actor_id.root_start_ticks, target_protected,
+			target_id.root_tgid, target_id.root_start_ticks);
+
+	return lota_ptrace_denied(LOTA_PTRACE_MODE_READ, LOTA_MODE_MONITOR, 0,
+				  target_agent, target_protected && !inside);
+}
+
+/* the reader sees only EPERM; logged as PTRACE_BLOCKED, naming the entry */
+static __always_inline void report_blocked_proc_mm(struct file *file,
+						   u32 target_pid)
+{
+	struct lota_exec_event *event;
+
+	inc_stat(STAT_PTRACE_BLOCKED);
+
+	if (!should_emit_event(LOTA_MODE_ENFORCE, 1, LOTA_EVENT_PTRACE_BLOCKED))
+		return;
+
+	event = bpf_ringbuf_reserve(&events, sizeof(*event), 0);
+	if (!event) {
+		inc_stat(STAT_RINGBUF_DROPS);
+		return;
+	}
+
+	__builtin_memset(event, 0, sizeof(*event));
+	event->timestamp_ns = bpf_ktime_get_ns();
+	event->event_type = LOTA_EVENT_PTRACE_BLOCKED;
+	event->tgid = bpf_get_current_pid_tgid() >> 32;
+	event->pid = bpf_get_current_pid_tgid() & 0xFFFFFFFF;
+	event->uid = (u32)(bpf_get_current_uid_gid() & 0xFFFFFFFF);
+	event->target_pid = target_pid;
+	bpf_get_current_comm(event->comm, sizeof(event->comm));
+	bpf_probe_read_kernel_str(event->filename, LOTA_PROC_NAME_MAX,
+				  BPF_CORE_READ(file, f_path.dentry,
+						d_name.name));
+
+	bpf_ringbuf_submit(event, 0);
+	inc_stat(STAT_EVENTS_SENT);
+}
+
 /* report a refused guarded-file open; logged as KILL_BLOCKED */
 static __always_inline void report_blocked_kill_guard(const char *what, u32 len)
 {
@@ -1501,6 +1617,7 @@ static __always_inline int denies_kill_guard_open(struct file *file)
 SEC("lsm.s/file_open")
 int BPF_PROG(lota_file_open, struct file *file, int ret)
 {
+	u32 target_pid = 0;
 	u32 mode;
 	int flags;
 
@@ -1513,6 +1630,11 @@ int BPF_PROG(lota_file_open, struct file *file, int ret)
 	/* kernel memory, kill protection and pins are not policy */
 	if (is_kernel_mem_device(file))
 		return -EPERM;
+
+	if (denies_proc_mm_open(file, &target_pid)) {
+		report_blocked_proc_mm(file, target_pid);
+		return -EPERM;
+	}
 
 	if (denies_kill_guard_open(file)) {
 		report_blocked_kill_guard("(cgroup.kill)", 14);

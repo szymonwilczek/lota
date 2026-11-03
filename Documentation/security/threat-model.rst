@@ -395,8 +395,14 @@ Active threats
    * - ptrace or process mutation
      - | BPF LSM hooks protect the agent and protected PIDs, including
          ``__ptrace_may_access`` where available. Both refuse a read and an
-         attach alike, so nothing reads a protected process's ``/proc`` or
-         attaches a debugger to it.
+         attach alike, so nothing attaches a debugger to a protected process
+         or reads its memory.
+       | The ``/proc`` entries that read an address space (``maps``,
+         ``smaps``, ``pagemap``, ``environ``, ``auxv``, ``map_files``) are
+         refused at the open, by the same rules: the kernel lets a holder of
+         ``CAP_PERFMON`` past a refused read there, root included. Entries
+         that only name the process (``stat``, ``status``, ``cmdline``) stay
+         readable, as for any process.
        | A process a protected one creates is protected before it first runs,
          and stays protected across ``execve``. When the kernel cannot record
          that, the creation fails, so no child runs unprotected. A protected
