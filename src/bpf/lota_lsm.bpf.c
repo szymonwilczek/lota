@@ -2242,6 +2242,138 @@ int BPF_PROG(lota_file_mprotect, struct vm_area_struct *vma,
 }
 
 /* ======================================================================
+ * Who reached a process of an instance
+ *
+ * instance_peers records, per instance, every process that reached one of
+ * its processes on a road the gate lets through:
+ *
+ *   - a process outside the instance that connects to, or sends to, a unix
+ *     socket a process of the instance created, bound or listens on: a
+ *     process of the instance can act on a request that came that way;
+ *   - a process of the instance that ptrace-accesses another one, or
+ *     signals it: what the wineserver does to the processes it hosts, and
+ *     what the gate allows inside an instance and refuses from outside.
+ *
+ * Nothing is refused here.
+ * ====================================================================== */
+static __always_inline void mark_instance_socket(struct sock *sk)
+{
+	struct lota_instance_entry id = {};
+	struct lota_sock_owner *owner;
+	struct task_struct *task;
+
+	if (!sk || BPF_CORE_READ(sk, __sk_common.skc_family) != AF_UNIX)
+		return;
+
+	task = (struct task_struct *)bpf_get_current_task_btf();
+	if (!task || !task_instance(task, &id))
+		return;
+
+	owner = bpf_sk_storage_get(&lota_sock_owner, sk, 0,
+				   BPF_LOCAL_STORAGE_GET_F_CREATE);
+	if (!owner) {
+		inc_stat(STAT_INSTANCE_PEERS_LOST);
+		return;
+	}
+	if (owner->tgid)
+		return;
+
+	owner->id = id;
+	bpf_get_current_comm(owner->comm, sizeof(owner->comm));
+	owner->tgid = BPF_CORE_READ(task, tgid);
+}
+
+/*
+ * Count one reach of @task into process @owner_tgid, named @owner_comm,
+ * of the instance @root.
+ */
+static __always_inline void
+note_instance_peer(struct task_struct *task,
+		   const struct lota_instance_entry *root, u32 owner_tgid,
+		   const char *owner_comm, u32 kind)
+{
+	struct lota_instance_peer_key key = {};
+	struct lota_instance_peer_val val = {};
+	struct trusted_lib_key ik = {};
+	struct lota_instance_peer_val *seen;
+	struct task_struct *leader;
+	long err;
+
+	leader = BPF_CORE_READ(task, group_leader);
+	key.root_start_ticks = root->root_start_ticks;
+	key.root_tgid = root->root_tgid;
+	key.peer_tgid = BPF_CORE_READ(task, tgid);
+	key.peer_start_ticks = get_task_start_ticks(leader ? leader : task);
+	key.owner_tgid = owner_tgid;
+	key.kind = kind;
+
+	seen = bpf_map_lookup_elem(&instance_peers, &key);
+	if (seen) {
+		__sync_fetch_and_add(&seen->count, 1);
+		return;
+	}
+
+	val.count = 1;
+	if (file_inode_key(BPF_CORE_READ(task, mm, exe_file), &ik)) {
+		val.exe_dev = ik.dev;
+		val.exe_ino = ik.ino;
+	}
+	val.uid = (u32)(bpf_get_current_uid_gid() & 0xFFFFFFFF);
+	bpf_get_current_comm(val.comm, sizeof(val.comm));
+	__builtin_memcpy(val.owner_comm, owner_comm, sizeof(val.owner_comm));
+
+	err = bpf_map_update_elem(&instance_peers, &key, &val, BPF_NOEXIST);
+	if (err == -EEXIST) {
+		seen = bpf_map_lookup_elem(&instance_peers, &key);
+		if (seen)
+			__sync_fetch_and_add(&seen->count, 1);
+	} else if (err) {
+		inc_stat(STAT_INSTANCE_PEERS_LOST);
+	}
+}
+
+/* @other was reached from the current task; counted when from outside */
+static __always_inline void record_instance_peer(struct sock *other, u32 kind)
+{
+	struct lota_instance_entry id = {};
+	struct lota_sock_owner *owner;
+	struct task_struct *task;
+
+	if (!other)
+		return;
+	owner = bpf_sk_storage_get(&lota_sock_owner, other, 0, 0);
+	if (!owner || !owner->tgid)
+		return;
+
+	task = (struct task_struct *)bpf_get_current_task_btf();
+	if (!task)
+		return;
+	if (lota_inside_instance(task_instance(task, &id), id.root_tgid,
+				 id.root_start_ticks, 1, owner->id.root_tgid,
+				 owner->id.root_start_ticks))
+		return;
+
+	note_instance_peer(task, &owner->id, owner->tgid, owner->comm, kind);
+}
+
+/* @target of instance @root was reached from the current task, inside it */
+static __always_inline void
+record_instance_access(struct task_struct *target,
+		       const struct lota_instance_entry *root, u32 kind)
+{
+	char target_comm[LOTA_MAX_COMM_LEN] = {};
+	struct task_struct *task;
+
+	task = (struct task_struct *)bpf_get_current_task_btf();
+	if (!task)
+		return;
+	bpf_probe_read_kernel_str(target_comm, sizeof(target_comm),
+				  &target->comm);
+	note_instance_peer(task, root, BPF_CORE_READ(target, tgid), target_comm,
+			   kind);
+}
+
+/* ======================================================================
  * LSM hook: security_ptrace_access_check
  *
  * Called when one process attempts to trace/debug another via ptrace,
@@ -2339,6 +2471,14 @@ int BPF_PROG(lota_ptrace_access_check, struct task_struct *child,
 		return -EPERM;
 	}
 
+	/* the ring buffer drops; the instance's record does not */
+	if (inside)
+		record_instance_access(
+			child, &target_id,
+			lota_ptrace_is_attach(mode) ?
+				LOTA_INSTANCE_PEER_PTRACE_ATTACH :
+				LOTA_INSTANCE_PEER_PTRACE_READ);
+
 	return 0;
 }
 
@@ -2356,6 +2496,8 @@ SEC("lsm/task_kill")
 int BPF_PROG(lota_task_kill, struct task_struct *p, struct kernel_siginfo *info,
 	     int sig, const struct cred *cred)
 {
+	struct lota_instance_entry target_id = {};
+	struct lota_instance_entry sender_id = {};
 	struct task_struct *current;
 	u32 sender_tgid;
 	u32 target_tgid;
@@ -2375,7 +2517,7 @@ int BPF_PROG(lota_task_kill, struct task_struct *p, struct kernel_siginfo *info,
 	lota_mode = get_mode();
 	target_is_agent = is_lota_agent_task(p);
 	if (!target_is_agent)
-		target_is_protected = is_protected_task(p);
+		target_is_protected = task_instance(p, &target_id);
 
 	if (!target_is_agent && !target_is_protected)
 		return 0;
@@ -2402,6 +2544,15 @@ int BPF_PROG(lota_task_kill, struct task_struct *p, struct kernel_siginfo *info,
 		if (si_code == SI_KERNEL)
 			return 0;
 	}
+
+	/* a signal between two processes of one instance is in its record */
+	if (sig && target_is_protected &&
+	    lota_inside_instance(
+		    task_instance(current, &sender_id), sender_id.root_tgid,
+		    sender_id.root_start_ticks, 1, target_id.root_tgid,
+		    target_id.root_start_ticks))
+		record_instance_access(p, &target_id,
+				       LOTA_INSTANCE_PEER_SIGNAL);
 
 	/* the verdict lives in include/lota.h, shared with the tests */
 	blocked = lota_signal_denied(sig, target_is_agent);
@@ -2442,100 +2593,9 @@ int BPF_PROG(lota_task_kill, struct task_struct *p, struct kernel_siginfo *info,
 }
 
 /* ======================================================================
- * Unix sockets of an instance
- *
- * A socket a process of an instance creates, binds or listens on carries
- * the instance. A process outside it that connects to such a socket or
- * sends to it is recorded in instance_peers: a process of the instance
- * can act on a request that came that way, inside the instance, where
- * nothing else records it. Nothing is refused.
+ * Unix sockets of an instance: the sockets carry it, a reach from outside
+ * is counted (record_instance_peer())
  * ====================================================================== */
-static __always_inline void mark_instance_socket(struct sock *sk)
-{
-	struct lota_instance_entry id = {};
-	struct lota_sock_owner *owner;
-	struct task_struct *task;
-
-	if (!sk || BPF_CORE_READ(sk, __sk_common.skc_family) != AF_UNIX)
-		return;
-
-	task = (struct task_struct *)bpf_get_current_task_btf();
-	if (!task || !task_instance(task, &id))
-		return;
-
-	owner = bpf_sk_storage_get(&lota_sock_owner, sk, 0,
-				   BPF_LOCAL_STORAGE_GET_F_CREATE);
-	if (!owner) {
-		inc_stat(STAT_INSTANCE_PEERS_LOST);
-		return;
-	}
-	if (owner->tgid)
-		return;
-
-	owner->id = id;
-	bpf_get_current_comm(owner->comm, sizeof(owner->comm));
-	owner->tgid = BPF_CORE_READ(task, tgid);
-}
-
-static __always_inline void record_instance_peer(struct sock *other, u32 kind)
-{
-	struct lota_instance_peer_key key = {};
-	struct lota_instance_peer_val val = {};
-	struct lota_instance_entry id = {};
-	struct trusted_lib_key ik = {};
-	struct lota_instance_peer_val *seen;
-	struct lota_sock_owner *owner;
-	struct task_struct *task;
-	struct task_struct *leader;
-	long err;
-
-	if (!other)
-		return;
-	owner = bpf_sk_storage_get(&lota_sock_owner, other, 0, 0);
-	if (!owner || !owner->tgid)
-		return;
-
-	task = (struct task_struct *)bpf_get_current_task_btf();
-	if (!task)
-		return;
-	if (lota_inside_instance(task_instance(task, &id), id.root_tgid,
-				 id.root_start_ticks, 1, owner->id.root_tgid,
-				 owner->id.root_start_ticks))
-		return;
-
-	leader = BPF_CORE_READ(task, group_leader);
-	key.root_start_ticks = owner->id.root_start_ticks;
-	key.root_tgid = owner->id.root_tgid;
-	key.peer_tgid = BPF_CORE_READ(task, tgid);
-	key.peer_start_ticks = get_task_start_ticks(leader ? leader : task);
-	key.owner_tgid = owner->tgid;
-	key.kind = kind;
-
-	seen = bpf_map_lookup_elem(&instance_peers, &key);
-	if (seen) {
-		__sync_fetch_and_add(&seen->count, 1);
-		return;
-	}
-
-	val.count = 1;
-	if (file_inode_key(BPF_CORE_READ(task, mm, exe_file), &ik)) {
-		val.exe_dev = ik.dev;
-		val.exe_ino = ik.ino;
-	}
-	val.uid = (u32)(bpf_get_current_uid_gid() & 0xFFFFFFFF);
-	bpf_get_current_comm(val.comm, sizeof(val.comm));
-	__builtin_memcpy(val.owner_comm, owner->comm, sizeof(val.owner_comm));
-
-	err = bpf_map_update_elem(&instance_peers, &key, &val, BPF_NOEXIST);
-	if (err == -EEXIST) {
-		seen = bpf_map_lookup_elem(&instance_peers, &key);
-		if (seen)
-			__sync_fetch_and_add(&seen->count, 1);
-	} else if (err) {
-		inc_stat(STAT_INSTANCE_PEERS_LOST);
-	}
-}
-
 SEC("lsm/socket_post_create")
 int BPF_PROG(lota_socket_post_create, struct socket *sock, int family, int type,
 	     int protocol, int kern, int ret)
