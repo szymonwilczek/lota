@@ -302,8 +302,8 @@ Verify after launching CS2 (run from the operator account, not root, so
 
 A healthy run prints ``LOTA_ATTESTED=1``, ``LOTA_OFFLINE=0``, a non-zero
 ``LOTA_VALID_UNTIL`` timestamp, and ``LOTA_PID`` matching the game process.
-``LOTA_PROTECTED=1`` appears once the title registers,
-``LOTA_HOOK_PROTECT_DELAY`` seconds into the launch. An object the gates
+``LOTA_PROTECTED=1`` appears once the hook first reaches the agent. An object
+the gates
 refuse is named in ``LOTA_REFUSED_OBJECT`` (with ``LOTA_REFUSED_AT``) and on
 the game's stderr.
 
@@ -383,17 +383,16 @@ so fleets leave the variable unset.
 What registration costs the title
 ---------------------------------
 
-The hook puts the title's PID in the protected set, which scopes
-``strict_mmap``, ``block_anon_exec``, the ptrace gate and the kill guard to it.
-From then on the title may map an executable file only if its fs-verity digest
-is allowed or its inode is in ``trusted_libs``. A Proton tree's libraries are
-ordinary files, so a title registered mid-load is refused ``ntdll.so``.
+``lota-proton-hook`` starts the title through ``lota-protect``, so the title
+and every process it creates are protected from their first instruction. That
+scopes ``strict_mmap``, ``block_anon_exec`` and the ptrace gate to the whole
+tree. Under ``strict_mmap`` the title may map an executable file only if its
+fs-verity digest is allowed or its inode is in ``trusted_libs``, and a Proton
+tree's libraries are ordinary files: each one needs covering, ``ntdll.so``
+first.
 
-The hook therefore registers ``LOTA_HOOK_PROTECT_DELAY`` seconds (default 20)
-after it loads, logging ``registered pid=<pid> for runtime enforcement`` at
-``info``. With verity-covered objects, ``LOTA_HOOK_PROTECT_DELAY=0`` registers
-on the first connect. A library first loaded after the wait is refused unless
-covered; a late loader needs a longer wait or a ``trusted_libs`` entry.
+The hook also registers its own PID on the first connect, logging
+``registered pid=<pid> for runtime enforcement`` at ``info``.
 
 Hook environment overrides
 --------------------------
@@ -421,10 +420,6 @@ The hook honours a small set of environment variables, all documented in
 |                             | player has not                                |
 +-----------------------------+-----------------------------------------------+
 | ``LOTA_HOOK_SKIP_PATH``     | extend the FHS system-path skip list          |
-+-----------------------------+-----------------------------------------------+
-| ``LOTA_HOOK_PROTECT_DELAY`` | seconds to wait before the title joins the    |
-|                             | protected set (default 20; ``0`` registers on |
-|                             | the first connect)                            |
 +-----------------------------+-----------------------------------------------+
 | ``LOTA_HOOK_PUBLISHER``     | publisher to attest for: hex SHA-256 of its   |
 |                             | CA anchor SubjectPublicKeyInfo                |

@@ -272,15 +272,11 @@ A token says the producer was in the protected set only if the producer put
 itself there: ``lota_ac_init()`` does not register the process; the reference
 calls ``lota_protect_self()`` behind ``--protect-self``.
 
-Once registered, the process may map an executable file only if its fs-verity
-digest is allowed or its inode is in ``trusted_libs``; anything else is
-``-EPERM``, its own libraries included. Registering before the loader is done
-kills the title. Two points are safe:
-
-* **After startup**, as the Wine hook does (``LOTA_HOOK_PROTECT_DELAY``, 20
-  seconds by default). A library loaded later meets the same rule.
-* **Any time**, once the game's libraries carry allowed fs-verity digests
-  (``LOTA_FLAG_IMAGE_FULLY_MEASURED`` on the far side).
+Under ``strict_mmap`` a registered process may map an executable file only if
+its fs-verity digest is allowed or its inode is in ``trusted_libs``; anything
+else is ``-EPERM``, its own libraries included. ``lota-protect`` registers a
+program before it runs, so on such a host every object the title loads needs
+an allowed digest (``LOTA_FLAG_IMAGE_FULLY_MEASURED`` on the far side).
 
 A refusal surfaces as ``dlopen()`` failing with "failed to map segment from
 shared object"; the agent journal has the matching ``MMAP_BLOCKED`` line. The

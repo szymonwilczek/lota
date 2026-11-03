@@ -460,10 +460,9 @@ int lota_ping(struct lota_client *client, uint64_t *uptime_sec);
  * at it. Every process it
  * creates from then on is protected with it, from its first instruction.
  *
- * Call it once the loader is done: a protected task maps only files with
- * an allowed fs-verity digest or a trusted_libs inode, so registering
- * earlier refuses the process its own libraries. Libraries loaded later
- * need covering (see LOTA_HOOK_ENV_PROTECT_DELAY).
+ * Under strict_mmap a protected task maps only files with an allowed
+ * fs-verity digest or a trusted_libs inode; lota-protect protects a
+ * program from its first instruction.
  *
  * Returns LOTA_OK on success.
  *         LOTA_ERR_ACCESS_DENIED if the PID identity check fails, or a

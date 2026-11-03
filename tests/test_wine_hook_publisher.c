@@ -271,7 +271,6 @@ static int load_hook(const char *token_dir, const char *publisher,
 	setenv(LOTA_HOOK_ENV_TOKEN_DIR, token_dir, 1);
 	setenv(LOTA_HOOK_ENV_LOG_LEVEL, log_level, 1);
 	setenv(LOTA_HOOK_ENV_REFRESH_SEC, "1", 1);
-	setenv(LOTA_HOOK_ENV_PROTECT_DELAY, "0", 1);
 
 	if (publisher)
 		setenv(HOOK_ENV_PUBLISHER, publisher, 1);

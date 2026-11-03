@@ -1745,71 +1745,13 @@ static void test_the_registration_is_not_repeated(void)
 	PASS();
 }
 
-/*
- * A protected task maps only allowlisted or trusted libraries, so a title
- * registered mid-load is refused its own. Registration waits a grace period.
- */
-static void test_the_loader_grace_period_holds_the_registration(void)
-{
-	TEST("the grace period holds the registration until the loader is done");
-
-	if (hook_protect_due(1000, 20, 1000)) {
-		FAIL("registered at init, before the loader has mapped a thing");
-		return;
-	}
-	if (hook_protect_due(1000, 20, 1019)) {
-		FAIL("registered one second before the grace period ends");
-		return;
-	}
-	if (!hook_protect_due(1000, 20, 1020)) {
-		FAIL("the grace period elapsed and the title is still not registered");
-		return;
-	}
-	if (!hook_protect_due(1000, 0, 1000)) {
-		FAIL("a zero delay must register on the first connect");
-		return;
-	}
-
-	PASS();
-}
-
-/* A host whose objects carry verity digests can ask for no wait at all. */
-static void test_the_grace_period_is_configurable(void)
-{
-	TEST("the grace period reads its length from the environment");
-
-	if (hook_protect_delay(NULL) != LOTA_HOOK_DEFAULT_PROTECT_DELAY_SEC) {
-		FAIL("unset must fall back to the default grace period");
-		return;
-	}
-	if (hook_protect_delay("0") != 0) {
-		FAIL("0 must disable the wait");
-		return;
-	}
-	if (hook_protect_delay("45") != 45) {
-		FAIL("an explicit length must be honoured");
-		return;
-	}
-	if (hook_protect_delay("-5") != LOTA_HOOK_DEFAULT_PROTECT_DELAY_SEC) {
-		FAIL("a negative length must fall back to the default");
-		return;
-	}
-	if (hook_protect_delay("later") !=
-	    LOTA_HOOK_DEFAULT_PROTECT_DELAY_SEC) {
-		FAIL("a value that is not a number must fall back");
-		return;
-	}
-
-	PASS();
-}
-
-/* The same rule on the wire: nothing is sent until the grace period ends. */
-static void test_a_refresh_inside_the_grace_period_does_not_register(void)
+/* lota-protect protects from exec, so nothing is left to wait for. */
+static void test_the_first_refresh_registers(void)
 {
 	pid_t agent;
 	int count;
 
-	TEST("a refresh inside the grace period does not register");
+	TEST("the first refresh registers the title");
 
 	agent = start_mock_agent();
 	if (agent < 0) {
@@ -1821,9 +1763,7 @@ static void test_a_refresh_inside_the_grace_period_does_not_register(void)
 		return;
 	}
 
-	hook_state_for_mock_agent("grace");
-	g_hook.init_time = time(NULL);
-	g_hook.protect_delay_sec = 30;
+	hook_state_for_mock_agent("first_refresh");
 
 	g_hook.client = hook_connect();
 	if (!g_hook.client) {
@@ -1832,18 +1772,6 @@ static void test_a_refresh_inside_the_grace_period_does_not_register(void)
 		return;
 	}
 	refresh_once();
-
-	count = mock_cmd_count(LOTA_IPC_CMD_PROTECT_PID);
-	if (count != 0) {
-		lota_disconnect(g_hook.client);
-		g_hook.client = NULL;
-		stop_mock_agent(agent);
-		FAIL("registered while the loader is still mapping libraries");
-		return;
-	}
-
-	/* the title is up: the grace period has passed */
-	g_hook.init_time -= 31;
 	refresh_once();
 
 	lota_disconnect(g_hook.client);
@@ -1852,7 +1780,7 @@ static void test_a_refresh_inside_the_grace_period_does_not_register(void)
 
 	count = mock_cmd_count(LOTA_IPC_CMD_PROTECT_PID);
 	if (count != 1) {
-		FAIL("the title is never registered once its loader is done");
+		FAIL("the title is not registered exactly once");
 		return;
 	}
 
@@ -2030,8 +1958,6 @@ static void test_a_registration_publishes_itself(void)
 
 	hook_state_for_mock_agent("publish");
 	snprintf(path, sizeof(path), "%s/publish.status", tmpdir);
-	g_hook.init_time = time(NULL);
-	g_hook.protect_delay_sec = 3600; /* the loader is still running */
 
 	g_hook.client = hook_connect();
 	if (!g_hook.client) {
@@ -2039,10 +1965,6 @@ static void test_a_registration_publishes_itself(void)
 		FAIL("hook did not connect to the mock agent");
 		return;
 	}
-	refresh_once();
-
-	/* the loader is done: what every cycle of the thread loop does */
-	g_hook.protect_delay_sec = 0;
 	hook_register_self();
 
 	lota_disconnect(g_hook.client);
@@ -2087,8 +2009,6 @@ static void test_a_refusal_publishes_itself(void)
 
 	hook_state_for_mock_agent("refused_publish");
 	snprintf(path, sizeof(path), "%s/refused_publish.status", tmpdir);
-	g_hook.init_time = time(NULL);
-	g_hook.protect_delay_sec = 0;
 
 	g_hook.client = hook_connect();
 	if (!g_hook.client) {
@@ -2488,9 +2408,7 @@ int main(void)
 	/* connect-then-register sequence */
 	test_the_launch_path_registers_the_title();
 	test_the_registration_is_not_repeated();
-	test_the_loader_grace_period_holds_the_registration();
-	test_the_grace_period_is_configurable();
-	test_a_refresh_inside_the_grace_period_does_not_register();
+	test_the_first_refresh_registers();
 	test_a_gate_refusal_is_told_apart_from_a_missing_file();
 	test_the_status_file_names_the_refused_object();
 	test_the_loader_wrapper_hands_back_what_it_got();
