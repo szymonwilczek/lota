@@ -551,6 +551,7 @@ struct bpf_extended_stats {
 	uint64_t mapped_write_blocked; /* writes refused to a pinned library */
 	uint64_t mapped_pin_refused; /* mapped objects left unpinned */
 	uint64_t exec_history_lost; /* exec mappings left unrecorded */
+	uint64_t instance_peers_lost; /* instance socket reaches unrecorded */
 };
 
 /*

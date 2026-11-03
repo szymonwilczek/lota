@@ -62,6 +62,10 @@ char LICENSE[] SEC("license") = "GPL";
 #define EINVAL 22
 #endif
 
+#ifndef AF_UNIX
+#define AF_UNIX 1
+#endif
+
 #ifndef FMODE_WRITE
 #define FMODE_WRITE ((fmode_t)(1U << 1))
 #endif
@@ -125,7 +129,7 @@ struct {
  */
 struct {
 	__uint(type, BPF_MAP_TYPE_ARRAY);
-	__uint(max_entries, 23);
+	__uint(max_entries, 24);
 	__type(key, u32);
 	__type(value, u64);
 } stats SEC(".maps");
@@ -171,6 +175,8 @@ struct {
 #define STAT_MAPPED_PIN_REFUSED 21 /* mapping not pinned, so not measured */
 #define STAT_EXEC_HISTORY_LOST \
 	22 /* exec mapping of a protected task unrecorded */
+#define STAT_INSTANCE_PEERS_LOST \
+	23 /* reach into an instance socket unrecorded */
 
 /*
  * Rate-limit window per enum lota_event_type (see lota_event_budget.h):
@@ -330,6 +336,32 @@ struct {
 	__type(key, struct lota_exec_history_key);
 	__type(value, struct lota_exec_history_val);
 } exec_history SEC(".maps");
+
+/*
+ * The instance a unix socket belongs to: set when a process of the
+ * instance creates, binds or listens on it, never cleared.
+ */
+struct lota_sock_owner {
+	struct lota_instance_entry id;
+	u32 tgid;
+	u32 pad;
+	char comm[LOTA_MAX_COMM_LEN];
+};
+
+struct {
+	__uint(type, BPF_MAP_TYPE_SK_STORAGE);
+	__uint(map_flags, BPF_F_NO_PREALLOC);
+	__type(key, int);
+	__type(value, struct lota_sock_owner);
+} lota_sock_owner SEC(".maps");
+
+/* see struct lota_instance_peer_key; not LRU, a loss is counted instead */
+struct {
+	__uint(type, BPF_MAP_TYPE_HASH);
+	__uint(max_entries, LOTA_MAX_INSTANCE_PEERS);
+	__type(key, struct lota_instance_peer_key);
+	__type(value, struct lota_instance_peer_val);
+} instance_peers SEC(".maps");
 
 /*
  * fs-verity digest allowlist.
@@ -728,6 +760,12 @@ static __always_inline int is_lota_managed_map(struct bpf_map *map)
 	if (__builtin_memcmp(name, "mapped_seen", sizeof("mapped_seen")) == 0)
 		return 1;
 	if (__builtin_memcmp(name, "exec_history", sizeof("exec_history")) == 0)
+		return 1;
+	if (__builtin_memcmp(name, "lota_sock_owner",
+			     sizeof("lota_sock_owner")) == 0)
+		return 1;
+	if (__builtin_memcmp(name, "instance_peers",
+			     sizeof("instance_peers")) == 0)
 		return 1;
 	if (__builtin_memcmp(name, "events", sizeof("events")) == 0)
 		return 1;
@@ -2400,6 +2438,150 @@ int BPF_PROG(lota_task_kill, struct task_struct *p, struct kernel_siginfo *info,
 	if (blocked)
 		return -EPERM;
 
+	return 0;
+}
+
+/* ======================================================================
+ * Unix sockets of an instance
+ *
+ * A socket a process of an instance creates, binds or listens on carries
+ * the instance. A process outside it that connects to such a socket or
+ * sends to it is recorded in instance_peers: a process of the instance
+ * can act on a request that came that way, inside the instance, where
+ * nothing else records it. Nothing is refused.
+ * ====================================================================== */
+static __always_inline void mark_instance_socket(struct sock *sk)
+{
+	struct lota_instance_entry id = {};
+	struct lota_sock_owner *owner;
+	struct task_struct *task;
+
+	if (!sk || BPF_CORE_READ(sk, __sk_common.skc_family) != AF_UNIX)
+		return;
+
+	task = (struct task_struct *)bpf_get_current_task_btf();
+	if (!task || !task_instance(task, &id))
+		return;
+
+	owner = bpf_sk_storage_get(&lota_sock_owner, sk, 0,
+				   BPF_LOCAL_STORAGE_GET_F_CREATE);
+	if (!owner) {
+		inc_stat(STAT_INSTANCE_PEERS_LOST);
+		return;
+	}
+	if (owner->tgid)
+		return;
+
+	owner->id = id;
+	bpf_get_current_comm(owner->comm, sizeof(owner->comm));
+	owner->tgid = BPF_CORE_READ(task, tgid);
+}
+
+static __always_inline void record_instance_peer(struct sock *other, u32 kind)
+{
+	struct lota_instance_peer_key key = {};
+	struct lota_instance_peer_val val = {};
+	struct lota_instance_entry id = {};
+	struct trusted_lib_key ik = {};
+	struct lota_instance_peer_val *seen;
+	struct lota_sock_owner *owner;
+	struct task_struct *task;
+	struct task_struct *leader;
+	long err;
+
+	if (!other)
+		return;
+	owner = bpf_sk_storage_get(&lota_sock_owner, other, 0, 0);
+	if (!owner || !owner->tgid)
+		return;
+
+	task = (struct task_struct *)bpf_get_current_task_btf();
+	if (!task)
+		return;
+	if (lota_inside_instance(task_instance(task, &id), id.root_tgid,
+				 id.root_start_ticks, 1, owner->id.root_tgid,
+				 owner->id.root_start_ticks))
+		return;
+
+	leader = BPF_CORE_READ(task, group_leader);
+	key.root_start_ticks = owner->id.root_start_ticks;
+	key.root_tgid = owner->id.root_tgid;
+	key.peer_tgid = BPF_CORE_READ(task, tgid);
+	key.peer_start_ticks = get_task_start_ticks(leader ? leader : task);
+	key.owner_tgid = owner->tgid;
+	key.kind = kind;
+
+	seen = bpf_map_lookup_elem(&instance_peers, &key);
+	if (seen) {
+		__sync_fetch_and_add(&seen->count, 1);
+		return;
+	}
+
+	val.count = 1;
+	if (file_inode_key(BPF_CORE_READ(task, mm, exe_file), &ik)) {
+		val.exe_dev = ik.dev;
+		val.exe_ino = ik.ino;
+	}
+	val.uid = (u32)(bpf_get_current_uid_gid() & 0xFFFFFFFF);
+	bpf_get_current_comm(val.comm, sizeof(val.comm));
+	__builtin_memcpy(val.owner_comm, owner->comm, sizeof(val.owner_comm));
+
+	err = bpf_map_update_elem(&instance_peers, &key, &val, BPF_NOEXIST);
+	if (err == -EEXIST) {
+		seen = bpf_map_lookup_elem(&instance_peers, &key);
+		if (seen)
+			__sync_fetch_and_add(&seen->count, 1);
+	} else if (err) {
+		inc_stat(STAT_INSTANCE_PEERS_LOST);
+	}
+}
+
+SEC("lsm/socket_post_create")
+int BPF_PROG(lota_socket_post_create, struct socket *sock, int family, int type,
+	     int protocol, int kern, int ret)
+{
+	if (ret || kern || family != AF_UNIX || !sock)
+		return ret;
+	mark_instance_socket(sock->sk);
+	return 0;
+}
+
+SEC("lsm/socket_bind")
+int BPF_PROG(lota_socket_bind, struct socket *sock, struct sockaddr *address,
+	     int addrlen, int ret)
+{
+	if (ret || !sock)
+		return ret;
+	mark_instance_socket(sock->sk);
+	return 0;
+}
+
+SEC("lsm/socket_listen")
+int BPF_PROG(lota_socket_listen, struct socket *sock, int backlog, int ret)
+{
+	if (ret || !sock)
+		return ret;
+	mark_instance_socket(sock->sk);
+	return 0;
+}
+
+SEC("lsm/unix_stream_connect")
+int BPF_PROG(lota_unix_stream_connect, struct sock *sock, struct sock *other,
+	     struct sock *newsk, int ret)
+{
+	if (ret)
+		return ret;
+	record_instance_peer(other, LOTA_INSTANCE_PEER_CONNECT);
+	return 0;
+}
+
+SEC("lsm/unix_may_send")
+int BPF_PROG(lota_unix_may_send, struct socket *sock, struct socket *other,
+	     int ret)
+{
+	if (ret || !other)
+		return ret;
+	record_instance_peer(other->sk, LOTA_INSTANCE_PEER_SEND);
 	return 0;
 }
 

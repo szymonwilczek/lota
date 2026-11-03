@@ -660,6 +660,39 @@ struct lota_exec_history_val {
 };
 
 /*
+ * Every process outside an instance that reached a unix socket of the
+ * instance, by connecting to it or sending to it.
+ * Keyed by the instance root and its start time, the peer and its start
+ * time, the process that owns the socket and how it was reached.
+ * Only the agent deletes, and only entries of a root that is gone.
+ */
+#define LOTA_MAX_INSTANCE_PEERS 4096
+
+enum lota_instance_peer_kind {
+	LOTA_INSTANCE_PEER_CONNECT = 1, /* stream or seqpacket connect */
+	LOTA_INSTANCE_PEER_SEND = 2, /* datagram sent */
+};
+
+struct lota_instance_peer_key {
+	__u64 root_start_ticks;
+	__u64 peer_start_ticks;
+	__u32 root_tgid;
+	__u32 peer_tgid;
+	__u32 owner_tgid; /* process of the instance that made the socket */
+	__u32 kind; /* enum lota_instance_peer_kind */
+};
+
+struct lota_instance_peer_val {
+	__u64 count; /* connects or datagrams */
+	__u64 exe_dev; /* s_dev of the peer's executable, kernel encoding */
+	__u64 exe_ino;
+	__u32 uid; /* peer's real uid at its first reach */
+	__u32 pad;
+	char comm[LOTA_MAX_COMM_LEN];
+	char owner_comm[LOTA_MAX_COMM_LEN];
+};
+
+/*
  * Kernel integrity baseline, as the agent's startup hardening gate read it.
  *
  * The gate refuses to start the agent unless the kernel enforces module
