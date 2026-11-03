@@ -97,13 +97,15 @@ static void test_a_protected_target_refuses_both_modes(void)
 	      "a protected task is refused in monitor mode");
 }
 
-/* Maintenance is the mode that exists to lift the gates */
-static void test_maintenance_lifts_the_protected_rule(void)
+/* Maintenance lifts policy, and isolation of a protected task is not policy */
+static void test_maintenance_keeps_the_protected_rule(void)
 {
-	CHECK(!DENIED(PTRACE_MODE_READ, LOTA_MODE_MAINTENANCE, 1, 0, 1),
-	      "maintenance allows a read of a protected task");
-	CHECK(!DENIED(LOTA_PTRACE_MODE_ATTACH, LOTA_MODE_MAINTENANCE, 1, 0, 1),
-	      "maintenance allows an attach on a protected task");
+	CHECK(DENIED(PTRACE_MODE_READ, LOTA_MODE_MAINTENANCE, 1, 0, 1),
+	      "maintenance refuses a read of a protected task");
+	CHECK(DENIED(LOTA_PTRACE_MODE_ATTACH, LOTA_MODE_MAINTENANCE, 0, 0, 1),
+	      "maintenance refuses an attach on a protected task");
+	CHECK(!DENIED(LOTA_PTRACE_MODE_ATTACH, LOTA_MODE_MAINTENANCE, 1, 0, 0),
+	      "maintenance lifts block_ptrace on an unprotected task");
 }
 
 /* The agent is never a target, in any mode, whatever the key says */
@@ -149,7 +151,7 @@ int main(void)
 	test_the_key_off_refuses_nothing();
 	test_the_global_rule_is_enforce_only();
 	test_a_protected_target_refuses_both_modes();
-	test_maintenance_lifts_the_protected_rule();
+	test_maintenance_keeps_the_protected_rule();
 	test_the_agent_is_never_a_target();
 	test_the_agent_read_exemption();
 	test_attach_is_recognised_by_its_flag();

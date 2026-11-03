@@ -177,21 +177,16 @@ At startup the agent logs the files it guards::
 It refuses to start when it cannot resolve them. A host without a unified
 cgroup hierarchy has none to guard and logs that.
 
-**This applies in enforce mode only.** The hook reads the enforcement mode the
-way every other gate does: in ``monitor`` and ``maintenance`` the signal is
-reported and delivered, so an agent an operator is evaluating stops with
-``kill``, ``timeout`` or whatever supervisor started it. In ``enforce`` the
-refusal stands and the way to stop the agent is ``lota-agent --shutdown``.
-Either way the signal is logged with the sender's pid, uid and command, so a
+**This applies in every mode.** The enforcement mode switches policy, and an
+agent that can be killed is one whose measurements stop without a trace, so
+``monitor`` refuses the signal and the ``cgroup.kill`` write exactly as
+``enforce`` does. The way to stop the agent is ``lota-agent --shutdown``.
+The refused signal is logged with the sender's pid, uid and command, so a
 supervisor that cannot stop the agent is diagnosable from the journal.
 
-What the boot commitment costs does not change with the mode, because it is a
-property of how the agent stopped. A delivered ``SIGTERM`` runs the same clean
-shutdown as ``--shutdown``: PCR 14 is poisoned, and the next agent start in that
-boot says the host is paused. A ``SIGKILL`` is a dirty stop, leaves PCR 14
-holding the boot commitment, and a new agent starts in the same boot -- which is
-what makes an evaluation loop practical, and why the dirty-shutdown case is
-covered by fs-verity on the agent binary instead.
+``--shutdown`` is a clean stop: PCR 14 is poisoned, and the next agent start in
+that boot says the host is paused. Evaluating the agent in ``monitor`` therefore
+takes a reboot between runs, as in ``enforce``.
 
 The trade-off is that ``systemctl restart lota-agent`` does **not** bring the
 host back the way it does for other units. Stopping works: ``ExecStop`` is

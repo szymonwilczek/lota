@@ -202,11 +202,14 @@ static inline int lota_ptrace_agent_read_exempt(unsigned int ptrace_mode,
  *
  * Three rules, in the order they are asked:
  *
- *   - the agent itself is never a ptrace target, in any mode;
- *   - a process that asked for protection refuses both modes, except in
- *     maintenance, which is the mode that exists to lift the gates;
+ *   - the agent itself is never a ptrace target;
+ *   - a process that asked for protection refuses both modes;
  *   - block_ptrace covers every other task, in enforce, and for an attach
  *     only.
+ *
+ * The first two hold in every enforcement mode: a token speaks for an isolated
+ * process measured by an intact agent, and no mode makes that true without
+ * the gate. The mode switches policy, and block_ptrace is policy.
  *
  * The third rule is a global over every task on the machine, so the access modes
  * part company there. An attach is what the key is named for and what it refuses.
@@ -223,10 +226,7 @@ static inline int lota_ptrace_denied(unsigned int ptrace_mode,
 				     int target_is_agent,
 				     int target_is_protected)
 {
-	if (target_is_agent)
-		return 1;
-
-	if (lota_mode != LOTA_MODE_MAINTENANCE && target_is_protected)
+	if (target_is_agent || target_is_protected)
 		return 1;
 
 	if (lota_mode == LOTA_MODE_ENFORCE && block_ptrace &&
@@ -261,11 +261,13 @@ static inline int lota_ptrace_denied(unsigned int ptrace_mode,
  * @target_handles: the target has its own handler for @sig, neither
  * SIG_DFL nor SIG_IGN.
  *
- * Four rules, in order:
+ * The verdict does not depend on the enforcement mode: an agent that can be
+ * killed in monitor is an agent whose measurements stop without a trace,
+ * and the mode switches policy, not the integrity of the measurement.
+ * The agent stops with lota-agent --shutdown in every mode.
  *
- *   - only enforce refuses anything; monitor and maintenance deliver every
- *     signal, so an operator evaluating LOTA can stop the agent without
- *     spending the boot commitment;
+ * Three rules, in order:
+ *
  *   - a target nobody protects is nobody's business here;
  *   - a probe (sig 0) and the agent's own reload signal are delivered,
  *     since neither can end the target;
@@ -274,17 +276,13 @@ static inline int lota_ptrace_denied(unsigned int ptrace_mode,
  *     SIGINT or SIGHUP, which a title handles to end, and never to the agent.
  *
  * Everything else reaching a protected target or the agent itself is refused,
- * so in enforce a local root cannot kill the agent and swap a tampered binary
- * in before the next attestation.
+ * so a local root cannot kill the agent and swap a tampered binary in before
+ * the next attestation.
  */
-static inline int lota_signal_denied(int sig, unsigned int lota_mode,
-				     int target_is_agent,
+static inline int lota_signal_denied(int sig, int target_is_agent,
 				     int target_is_protected,
 				     int target_handles)
 {
-	if (lota_mode != LOTA_MODE_ENFORCE)
-		return 0;
-
 	if (!target_is_agent && !target_is_protected)
 		return 0;
 
@@ -318,6 +316,19 @@ static inline int lota_signal_event(int sig, int denied)
 		return 0;
 
 	return LOTA_EVENT_KILL;
+}
+
+/*
+ * The cgroup.kill verdict, shared with the tests like the signal verdict.
+ * A write to a guarded cgroup.kill ends every task in the cgroup without
+ * passing the signal hook, so it is refused on the same terms as SIGKILL:
+ * in every mode, to everyone but the agent and the admin identity.
+ * A read ends nobody.
+ */
+static inline int lota_kill_guard_denied(int write_open, int guarded,
+					 int opener_exempt)
+{
+	return write_open && guarded && !opener_exempt;
 }
 
 /*

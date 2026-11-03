@@ -1216,22 +1216,16 @@ static __always_inline void report_blocked_mapped_write(struct file *file)
 	inc_stat(STAT_EVENTS_SENT);
 }
 
-/*
- * Refuse write opens of a guarded file; reads kill nobody.
- * The agent and admin are exempt, as from the signal gate.
- */
-static __always_inline int denies_kill_guard_open(struct file *file, u32 mode)
+/* the verdict lives in include/lota.h, shared with the tests */
+static __always_inline int denies_kill_guard_open(struct file *file)
 {
-	if (mode != LOTA_MODE_ENFORCE)
-		return 0;
-
 	if (!is_write_open_flags(BPF_CORE_READ(file, f_flags)))
 		return 0;
 
 	if (!guarded_file_kind(file))
 		return 0;
 
-	return !sleepable_task_is_agent_or_admin();
+	return lota_kill_guard_denied(1, 1, sleepable_task_is_agent_or_admin());
 }
 
 /*
@@ -1247,21 +1241,21 @@ int BPF_PROG(lota_file_open, struct file *file, int ret)
 	if (ret != 0)
 		return -EPERM;
 
+	if (!file)
+		return 0;
+
+	/* kill protection is not policy: ahead of the mode */
+	if (denies_kill_guard_open(file)) {
+		report_blocked_kill_guard("(cgroup.kill)", 14);
+		return -EPERM;
+	}
+
 	mode = get_mode();
 	if (mode != LOTA_MODE_ENFORCE)
 		return 0;
 
 	if (is_kernel_mem_device(file))
 		return -EPERM;
-
-	if (!file)
-		return 0;
-
-	/* ahead of strict_mmap: kill protection is not opt-in */
-	if (denies_kill_guard_open(file, mode)) {
-		report_blocked_kill_guard("(cgroup.kill)", 14);
-		return -EPERM;
-	}
 
 	/*
 	 * Pinned library: unwritable like a running executable.
@@ -2100,9 +2094,9 @@ int BPF_PROG(lota_file_mprotect, struct vm_area_struct *vma,
  * Called when one process attempts to trace/debug another via ptrace,
  * and by procfs for a read of another process's /proc.
  *
- * In ENFORCE mode, ptrace on protected PIDs is blocked entirely,
- * and an attach on any other task is blocked while block_ptrace is set.
- * In MONITOR mode, all ptrace attempts are logged for forensic review.
+ * Ptrace on the agent and on protected PIDs is blocked in every mode.
+ * In ENFORCE mode an attach on any other task is blocked while
+ * block_ptrace is set; otherwise it is logged.
  *
  * @child: The process being traced (target)
  * @mode: PTRACE_MODE_* flags (read, attach, etc)
@@ -2265,14 +2259,10 @@ int BPF_PROG(lota_task_kill, struct task_struct *p, struct kernel_siginfo *info,
 	}
 
 	/* the verdict lives in include/lota.h, shared with the tests */
-	blocked = lota_signal_denied(sig, lota_mode, target_is_agent,
-				     target_is_protected,
+	blocked = lota_signal_denied(sig, target_is_agent, target_is_protected,
 				     lota_task_handles_signal(p, sig));
 
-	/*
-	 * Report every signal but a permitted probe, which is only counted.
-	 * Outside enforce the report is the hook's whole job.
-	 */
+	/* report every signal but a permitted probe, which is only counted */
 	event_type = lota_signal_event(sig, blocked);
 	if (!event_type) {
 		inc_stat(STAT_KILL_PROBES);

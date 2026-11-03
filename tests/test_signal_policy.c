@@ -2,12 +2,9 @@
 /*
  * Unit tests for the signal-delivery decision (include/lota.h).
  *
- * They pin the mode contract: an agent in monitor mode observes and refuses
- * nothing, including a signal aimed at itself, because monitor is the mode
- * an operator evaluates LOTA in and an agent that cannot be stopped without
- * spending the boot commitment is the opposite of an evaluation posture.
- * Self-protection in enforce is the deliberate property and is pinned here
- * as well, so the two cannot be confused for one another later.
+ * The verdict takes no enforcement mode: the agent and a protected process
+ * are guarded in every mode, since the mode switches policy and not the
+ * integrity of the measurement.
  *
  * Copyright (C) 2026 Szymon Wilczek
  */
@@ -29,64 +26,37 @@ static int g_failures;
 		}                                           \
 	} while (0)
 
-#define DENIED(sig, lota_mode, is_agent, is_protected) \
-	lota_signal_denied((sig), (lota_mode), (is_agent), (is_protected), 0)
+#define DENIED(sig, is_agent, is_protected) \
+	lota_signal_denied((sig), (is_agent), (is_protected), 0)
 
 /* as DENIED, for a target with a handler for @sig */
-#define DENIED_HANDLED(sig, lota_mode, is_agent, is_protected) \
-	lota_signal_denied((sig), (lota_mode), (is_agent), (is_protected), 1)
+#define DENIED_HANDLED(sig, is_agent, is_protected) \
+	lota_signal_denied((sig), (is_agent), (is_protected), 1)
 
 #define RECORDS(sig, denied) lota_signal_event((sig), (denied))
 
 /*
- * Monitor is the mode that blocks nothing.
- * The kill hook was the one hook that ignored that, so a `timeout 20` around
- * a monitor-mode agent outlived its timeout, and every experiment in a sweep
- * had to end in a reboot.
+ * A local root must not be able to kill the agent, drop the BPF coverage and
+ * swap a tampered binary in before the next attestation, in any mode.
  */
-static void test_monitor_refuses_nothing(void)
+static void test_refuses_what_can_end_the_target(void)
 {
-	CHECK(!DENIED(SIGTERM, LOTA_MODE_MONITOR, 1, 0),
-	      "monitor delivers SIGTERM to the agent");
-	CHECK(!DENIED(SIGKILL, LOTA_MODE_MONITOR, 1, 0),
-	      "monitor delivers SIGKILL to the agent");
-	CHECK(!DENIED(SIGTERM, LOTA_MODE_MONITOR, 0, 1),
-	      "monitor delivers SIGTERM to a protected task");
-	CHECK(!DENIED(SIGINT, LOTA_MODE_MONITOR, 1, 0),
-	      "monitor delivers an interactive interrupt to the agent");
+	CHECK(DENIED(SIGTERM, 1, 0), "refuses SIGTERM to the agent");
+	CHECK(DENIED(SIGKILL, 1, 0), "refuses SIGKILL to the agent");
+	CHECK(DENIED(SIGINT, 1, 0),
+	      "refuses an interactive interrupt to the agent");
+	CHECK(DENIED(SIGTERM, 0, 1), "refuses SIGTERM to a protected task");
+	CHECK(DENIED(SIGKILL, 0, 1), "refuses SIGKILL to a protected task");
+	CHECK(DENIED(SIGSTOP, 0, 1), "refuses SIGSTOP to a protected task");
 }
 
-/* Maintenance exists to lift the gates, and lifts this one too */
-static void test_maintenance_refuses_nothing(void)
-{
-	CHECK(!DENIED(SIGTERM, LOTA_MODE_MAINTENANCE, 0, 1),
-	      "maintenance delivers SIGTERM to a protected task");
-	CHECK(!DENIED(SIGKILL, LOTA_MODE_MAINTENANCE, 1, 0),
-	      "maintenance delivers SIGKILL to the agent");
-}
-
-/*
- * Enforce is where the refusal is the point: a local-root attacker must not be
- * able to kill the agent, drop the BPF coverage and swap a tampered binary in
- * before the next attestation
- */
-static void test_enforce_refuses_what_can_end_the_target(void)
-{
-	CHECK(DENIED(SIGTERM, LOTA_MODE_ENFORCE, 1, 0),
-	      "enforce refuses SIGTERM to the agent");
-	CHECK(DENIED(SIGKILL, LOTA_MODE_ENFORCE, 1, 0),
-	      "enforce refuses SIGKILL to the agent");
-	CHECK(DENIED(SIGSTOP, LOTA_MODE_ENFORCE, 0, 1),
-	      "enforce refuses SIGSTOP to a protected task");
-}
-
-/* A target nobody protects is nobody's business here, in any mode */
+/* A target nobody protects is nobody's business here */
 static void test_an_unprotected_target_is_never_refused(void)
 {
-	CHECK(!DENIED(SIGKILL, LOTA_MODE_ENFORCE, 0, 0),
-	      "enforce delivers SIGKILL to a task nobody protects");
-	CHECK(!DENIED(SIGTERM, LOTA_MODE_MONITOR, 0, 0),
-	      "monitor delivers SIGTERM to a task nobody protects");
+	CHECK(!DENIED(SIGKILL, 0, 0),
+	      "delivers SIGKILL to a task nobody protects");
+	CHECK(!DENIED(SIGTERM, 0, 0),
+	      "delivers SIGTERM to a task nobody protects");
 }
 
 /*
@@ -97,14 +67,12 @@ static void test_an_unprotected_target_is_never_refused(void)
  */
 static void test_the_signals_that_are_always_delivered(void)
 {
-	CHECK(!DENIED(0, LOTA_MODE_ENFORCE, 1, 0),
-	      "enforce delivers a probe aimed at the agent");
-	CHECK(!DENIED(0, LOTA_MODE_ENFORCE, 0, 1),
-	      "enforce delivers a probe aimed at a protected task");
-	CHECK(!DENIED(SIGHUP, LOTA_MODE_ENFORCE, 1, 0),
-	      "enforce delivers SIGHUP to the agent, which is its reload");
-	CHECK(DENIED(SIGHUP, LOTA_MODE_ENFORCE, 0, 1),
-	      "enforce refuses SIGHUP to a protected task that is not the agent");
+	CHECK(!DENIED(0, 1, 0), "delivers a probe aimed at the agent");
+	CHECK(!DENIED(0, 0, 1), "delivers a probe aimed at a protected task");
+	CHECK(!DENIED(SIGHUP, 1, 0),
+	      "delivers SIGHUP to the agent, which is its reload");
+	CHECK(DENIED(SIGHUP, 0, 1),
+	      "refuses SIGHUP to a protected task that is not the agent");
 }
 
 /*
@@ -114,14 +82,14 @@ static void test_the_signals_that_are_always_delivered(void)
  */
 static void test_a_signal_the_target_handles_is_delivered(void)
 {
-	CHECK(!DENIED_HANDLED(SIGUSR1, LOTA_MODE_ENFORCE, 0, 1),
-	      "enforce delivers a handled SIGUSR1 to a protected task");
-	CHECK(!DENIED_HANDLED(SIGQUIT, LOTA_MODE_ENFORCE, 0, 1),
-	      "enforce delivers a handled SIGQUIT to a protected task");
-	CHECK(DENIED(SIGUSR1, LOTA_MODE_ENFORCE, 0, 1),
-	      "enforce refuses SIGUSR1 to a protected task with no handler");
-	CHECK(DENIED(SIGQUIT, LOTA_MODE_ENFORCE, 0, 1),
-	      "enforce refuses SIGQUIT to a protected task with no handler");
+	CHECK(!DENIED_HANDLED(SIGUSR1, 0, 1),
+	      "delivers a handled SIGUSR1 to a protected task");
+	CHECK(!DENIED_HANDLED(SIGQUIT, 0, 1),
+	      "delivers a handled SIGQUIT to a protected task");
+	CHECK(DENIED(SIGUSR1, 0, 1),
+	      "refuses SIGUSR1 to a protected task with no handler");
+	CHECK(DENIED(SIGQUIT, 0, 1),
+	      "refuses SIGQUIT to a protected task with no handler");
 }
 
 /*
@@ -131,20 +99,20 @@ static void test_a_signal_the_target_handles_is_delivered(void)
  */
 static void test_a_handler_does_not_open_what_ends_the_target(void)
 {
-	CHECK(DENIED_HANDLED(SIGKILL, LOTA_MODE_ENFORCE, 0, 1),
-	      "enforce refuses SIGKILL to a protected task, handler or not");
-	CHECK(DENIED_HANDLED(SIGSTOP, LOTA_MODE_ENFORCE, 0, 1),
-	      "enforce refuses SIGSTOP to a protected task, handler or not");
-	CHECK(DENIED_HANDLED(SIGTERM, LOTA_MODE_ENFORCE, 0, 1),
-	      "enforce refuses a handled SIGTERM to a protected task");
-	CHECK(DENIED_HANDLED(SIGINT, LOTA_MODE_ENFORCE, 0, 1),
-	      "enforce refuses a handled SIGINT to a protected task");
-	CHECK(DENIED_HANDLED(SIGHUP, LOTA_MODE_ENFORCE, 0, 1),
-	      "enforce refuses a handled SIGHUP to a protected task");
-	CHECK(DENIED_HANDLED(SIGTERM, LOTA_MODE_ENFORCE, 1, 0),
-	      "enforce refuses a handled SIGTERM to the agent");
-	CHECK(DENIED_HANDLED(SIGUSR1, LOTA_MODE_ENFORCE, 1, 0),
-	      "enforce refuses a handled SIGUSR1 to the agent");
+	CHECK(DENIED_HANDLED(SIGKILL, 0, 1),
+	      "refuses SIGKILL to a protected task, handler or not");
+	CHECK(DENIED_HANDLED(SIGSTOP, 0, 1),
+	      "refuses SIGSTOP to a protected task, handler or not");
+	CHECK(DENIED_HANDLED(SIGTERM, 0, 1),
+	      "refuses a handled SIGTERM to a protected task");
+	CHECK(DENIED_HANDLED(SIGINT, 0, 1),
+	      "refuses a handled SIGINT to a protected task");
+	CHECK(DENIED_HANDLED(SIGHUP, 0, 1),
+	      "refuses a handled SIGHUP to a protected task");
+	CHECK(DENIED_HANDLED(SIGTERM, 1, 0),
+	      "refuses a handled SIGTERM to the agent");
+	CHECK(DENIED_HANDLED(SIGUSR1, 1, 0),
+	      "refuses a handled SIGUSR1 to the agent");
 }
 
 /* Header mirrors the signal number because the object has no uapi */
@@ -214,41 +182,43 @@ static void test_the_two_decisions_together(void)
 	int sig;
 
 	sig = 0;
-	CHECK(RECORDS(sig, DENIED(sig, LOTA_MODE_ENFORCE, 1, 0)) == 0,
-	      "enforce: a probe at the agent is delivered and records nothing");
+	CHECK(RECORDS(sig, DENIED(sig, 1, 0)) == 0,
+	      "a probe at the agent is delivered and records nothing");
 
 	sig = SIGKILL;
-	CHECK(RECORDS(sig, DENIED(sig, LOTA_MODE_ENFORCE, 1, 0)) ==
-		      LOTA_EVENT_KILL_BLOCKED,
-	      "enforce: SIGKILL at the agent is refused and recorded");
-
-	sig = SIGKILL;
-	CHECK(RECORDS(sig, DENIED(sig, LOTA_MODE_MONITOR, 1, 0)) ==
-		      LOTA_EVENT_KILL,
-	      "monitor: SIGKILL at the agent is delivered and recorded");
+	CHECK(RECORDS(sig, DENIED(sig, 1, 0)) == LOTA_EVENT_KILL_BLOCKED,
+	      "SIGKILL at the agent is refused and recorded");
 
 	sig = 0;
-	CHECK(RECORDS(sig, DENIED(sig, LOTA_MODE_MONITOR, 0, 1)) == 0,
-	      "monitor: a probe at a protected task records nothing");
+	CHECK(RECORDS(sig, DENIED(sig, 0, 1)) == 0,
+	      "a probe at a protected task records nothing");
 
 	sig = SIGHUP;
-	CHECK(RECORDS(sig, DENIED(sig, LOTA_MODE_ENFORCE, 1, 0)) ==
-		      LOTA_EVENT_KILL,
-	      "enforce: the agent's reload is delivered and recorded");
+	CHECK(RECORDS(sig, DENIED(sig, 1, 0)) == LOTA_EVENT_KILL,
+	      "the agent's reload is delivered and recorded");
 
 	sig = SIGHUP;
-	CHECK(RECORDS(sig, DENIED(sig, LOTA_MODE_ENFORCE, 0, 1)) ==
-		      LOTA_EVENT_KILL_BLOCKED,
-	      "enforce: SIGHUP at a protected task is refused and recorded");
+	CHECK(RECORDS(sig, DENIED(sig, 0, 1)) == LOTA_EVENT_KILL_BLOCKED,
+	      "SIGHUP at a protected task is refused and recorded");
+}
+
+/* cgroup.kill ends the cgroup past the signal hook, so it is SIGKILL's twin */
+static void test_the_cgroup_kill_guard(void)
+{
+	CHECK(lota_kill_guard_denied(1, 1, 0),
+	      "a write open of a guarded cgroup.kill is refused");
+	CHECK(!lota_kill_guard_denied(1, 1, 1),
+	      "the agent and the admin identity may write it");
+	CHECK(!lota_kill_guard_denied(0, 1, 0), "a read ends nobody");
+	CHECK(!lota_kill_guard_denied(1, 0, 0),
+	      "a cgroup.kill nobody guards is not refused");
 }
 
 int main(void)
 {
 	printf("=== signal delivery policy tests ===\n\n");
 
-	test_monitor_refuses_nothing();
-	test_maintenance_refuses_nothing();
-	test_enforce_refuses_what_can_end_the_target();
+	test_refuses_what_can_end_the_target();
 	test_an_unprotected_target_is_never_refused();
 	test_the_signals_that_are_always_delivered();
 	test_a_signal_the_target_handles_is_delivered();
@@ -259,6 +229,7 @@ int main(void)
 	test_a_permitted_probe_is_not_recorded();
 	test_suppression_follows_the_verdict();
 	test_the_two_decisions_together();
+	test_the_cgroup_kill_guard();
 
 	printf("\n%s\n", g_failures ? "FAILURES" : "All tests passed");
 	return g_failures ? 1 : 0;
