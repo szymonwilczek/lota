@@ -1640,9 +1640,10 @@ $(BUILD_DIR)/test_anticheat: TEST_LDLIBS := -lcrypto
 $(BUILD_DIR)/test_attest_stage: $(addprefix $(AGENT_DIR)/,attest_stage.c net_errno.c tpm_errno.c)
 
 $(BUILD_DIR)/test_bench_cgroup: $(LOTA_BENCH_DIR)/cgroup.c $(LOTA_BENCH_DIR)/cgroup.h
-$(BUILD_DIR)/test_bench_result: $(addprefix $(LOTA_BENCH_DIR)/,result.c result.h cgroup.c cgroup.h)
+$(BUILD_DIR)/test_bench_result: $(addprefix $(LOTA_BENCH_DIR)/,result.c result.h cgroup.c cgroup.h \
+	machine.c machine.h field.c field.h)
 $(BUILD_DIR)/test_bench_validate: $(addprefix $(LOTA_BENCH_DIR)/,validate.c validate.h \
-	json.c json.h result.c result.h cgroup.c cgroup.h)
+	json.c json.h result.c result.h cgroup.c cgroup.h machine.c machine.h field.c field.h)
 $(BUILD_DIR)/test_bench_frames: $(addprefix $(LOTA_BENCH_DIR)/,frames.c frames.h)
 $(BUILD_DIR)/test_bench_field: $(addprefix $(LOTA_BENCH_DIR)/,field.c field.h)
 $(BUILD_DIR)/test_bench_machine: $(addprefix $(LOTA_BENCH_DIR)/,machine.c machine.h \
@@ -2123,7 +2124,7 @@ fuzz-config: $(BUILD_DIR)/fuzz/fuzz_config.o $(FUZZ_CONFIG_OBJS) $(FUZZ_LSAN_OBJ
 
 # lota-bench result validator fuzz (standalone, libc only)
 FUZZ_BENCH_SRCS := fuzz/fuzz_bench_result.c \
-	$(addprefix $(LOTA_BENCH_DIR)/,validate.c json.c result.c cgroup.c)
+	$(addprefix $(LOTA_BENCH_DIR)/,validate.c json.c result.c cgroup.c machine.c field.c)
 
 .PHONY: fuzz-bench-result
 fuzz-bench-result: $(FUZZ_BENCH_SRCS) $(wildcard $(LOTA_BENCH_DIR)/*.h) $(FUZZ_LSAN_OBJ)
