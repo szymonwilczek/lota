@@ -149,6 +149,9 @@ static int wait_for_socket(int fd, int events, int timeout_ms)
 		return -errno;
 	if (ret == 0)
 		return -ETIMEDOUT;
+	/* a reply queued before the hangup is still read */
+	if (pfd.revents & POLLIN)
+		return 0;
 	if (pfd.revents & (POLLERR | POLLHUP | POLLNVAL))
 		return -ECONNRESET;
 

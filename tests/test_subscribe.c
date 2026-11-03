@@ -1013,6 +1013,52 @@ out:
 	close(sv[1]);
 }
 
+/* Answer one PING and hang up at once, as an agent shutting down does. */
+static void server_ping_then_hangup(int client_fd)
+{
+	struct lota_ipc_request req;
+	struct lota_ipc_ping_response ping = { .uptime_sec = 7, .pid = 1 };
+
+	if (recv_request(client_fd, &req, NULL, 0) < 0)
+		_exit(1);
+	if (send_response(client_fd, LOTA_IPC_OK, &ping, sizeof(ping)) < 0)
+		_exit(2);
+}
+
+static void test_reply_before_hangup(void)
+{
+	struct lota_connect_opts opts = { .struct_size = sizeof(opts) };
+	struct lota_client *client;
+	uint64_t uptime = 0;
+	pid_t server;
+	int ret;
+
+	TEST("a reply sent just before the agent hangs up is read");
+	server = start_mock_server(server_ping_then_hangup);
+	if (server < 0) {
+		if (socket_errno_is_sandbox(mock_server_errno))
+			SKIP("AF_UNIX mock server not permitted");
+		else
+			FAIL("failed to start mock server");
+		return;
+	}
+	opts.socket_path = test_socket;
+	opts.timeout_ms = 5000;
+	client = lota_connect_opts(&opts);
+	if (!client) {
+		FAIL("connect failed");
+		wait_server(server);
+		return;
+	}
+	ret = lota_ping(client, &uptime);
+	lota_disconnect(client);
+	wait_server(server);
+	if (ret != LOTA_OK || uptime != 7)
+		FAIL(lota_strerror(ret));
+	else
+		PASS();
+}
+
 int main(void)
 {
 	printf("=== SUBSCRIBE / Push Notification Tests ===\n\n");
@@ -1044,6 +1090,7 @@ int main(void)
 	test_unsubscribe();
 	test_poll_no_data();
 	test_poll_infinite_wait();
+	test_reply_before_hangup();
 
 	printf("\n=== Results: %d/%d passed ===\n", tests_passed, tests_run);
 	return (tests_passed == tests_run) ? 0 : 1;
