@@ -94,6 +94,7 @@
     "openat$lota_mem",
     "openat$lota_kmem",
     "openat$lota_port",
+    "truncate",
     "faccessat"
   ],
 

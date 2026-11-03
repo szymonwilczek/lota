@@ -361,8 +361,9 @@ Active threats
          ``LOTA_FLAG_IMAGE_CONTENT_HASHED``. Only on a kernel-served
          filesystem, and only for a file no writer may replace: the running
          executable, or a library the agent has pinned, in every mode. A
-         refused write to a pinned library is counted and sent on the event
-         stream, not left a bare ``EPERM``.
+         pinned library refuses a write open and a ``truncate(2)`` by path.
+         A refused write is counted and sent on the event stream, not left
+         a bare ``EPERM``.
      - | Anonymous executable memory and JIT code are not measured as modules.
        | Intended bound is W^X plus policy enforcement: ``block_anon_exec``
          refuses it in a protected process, off by default and carried as

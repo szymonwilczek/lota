@@ -887,16 +887,11 @@ static __always_inline u32 guarded_file_kind(struct file *file)
  * Enforcement map key of a file. s_dev, not stat(2)'s st_dev:
  * they differ on a filesystem with a device per subvolume.
  */
-static __always_inline int file_inode_key(struct file *file,
-					  struct trusted_lib_key *key)
+static __always_inline int inode_key(struct inode *inode,
+				     struct trusted_lib_key *key)
 {
 	struct super_block *sb;
-	struct inode *inode;
 
-	if (!file)
-		return 0;
-
-	inode = BPF_CORE_READ(file, f_inode);
 	if (!inode)
 		return 0;
 
@@ -912,16 +907,33 @@ static __always_inline int file_inode_key(struct file *file,
 	return 1;
 }
 
-static __always_inline int is_mapped_exec_guarded(struct file *file)
+static __always_inline int file_inode_key(struct file *file,
+					  struct trusted_lib_key *key)
+{
+	if (!file)
+		return 0;
+
+	return inode_key(BPF_CORE_READ(file, f_inode), key);
+}
+
+static __always_inline int is_inode_mapped_exec_guarded(struct inode *inode)
 {
 	struct trusted_lib_key key = {};
 	u32 *guarded;
 
-	if (!file_inode_key(file, &key))
+	if (!inode_key(inode, &key))
 		return 0;
 
 	guarded = bpf_map_lookup_elem(&mapped_exec, &key);
 	return (guarded && *guarded) ? 1 : 0;
+}
+
+static __always_inline int is_mapped_exec_guarded(struct file *file)
+{
+	if (!file)
+		return 0;
+
+	return is_inode_mapped_exec_guarded(BPF_CORE_READ(file, f_inode));
 }
 
 /* enough to tell a file from one swapped in */
@@ -1272,10 +1284,9 @@ static __always_inline void report_blocked_kill_guard(const char *what, u32 len)
 }
 
 /* the writer sees only EPERM; tell the event stream */
-static __always_inline void report_blocked_mapped_write(struct file *file)
+static __always_inline void report_blocked_mapped_write(struct dentry *dentry)
 {
 	struct lota_exec_event *event;
-	struct dentry *dentry;
 	const unsigned char *name = NULL;
 
 	inc_stat(STAT_MAPPED_WRITE_BLOCKED);
@@ -1298,7 +1309,6 @@ static __always_inline void report_blocked_mapped_write(struct file *file)
 	event->uid = (u32)(bpf_get_current_uid_gid() & 0xFFFFFFFF);
 	bpf_get_current_comm(event->comm, sizeof(event->comm));
 
-	dentry = BPF_CORE_READ(file, f_path.dentry);
 	if (dentry)
 		name = BPF_CORE_READ(dentry, d_name.name);
 	if (!name ||
@@ -1350,7 +1360,7 @@ int BPF_PROG(lota_file_open, struct file *file, int ret)
 	/* pinned library: unwritable like a running executable */
 	if (is_write_open_flags(BPF_CORE_READ(file, f_flags)) &&
 	    is_mapped_exec_guarded(file)) {
-		report_blocked_mapped_write(file);
+		report_blocked_mapped_write(BPF_CORE_READ(file, f_path.dentry));
 		return -EPERM;
 	}
 
@@ -1368,6 +1378,35 @@ int BPF_PROG(lota_file_open, struct file *file, int ret)
 	if (!is_write_open_flags(flags))
 		return 0;
 
+	return -EPERM;
+}
+
+/* =====================================================================
+ * LSM hook: path_truncate
+ *
+ * truncate(2) shortens a file by path, with no open for lota_file_open
+ * to refuse. A pinned library stays as unwritable as a running
+ * executable, which the kernel will not truncate either.
+ * ===================================================================== */
+SEC("lsm/path_truncate")
+int BPF_PROG(lota_path_truncate, const struct path *path, int ret)
+{
+	struct dentry *dentry;
+
+	if (ret != 0)
+		return ret;
+
+	if (!path)
+		return 0;
+
+	dentry = BPF_CORE_READ(path, dentry);
+	if (!dentry)
+		return 0;
+
+	if (!is_inode_mapped_exec_guarded(BPF_CORE_READ(dentry, d_inode)))
+		return 0;
+
+	report_blocked_mapped_write(dentry);
 	return -EPERM;
 }
 

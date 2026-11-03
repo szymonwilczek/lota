@@ -63,6 +63,8 @@ Every LSM program the harness attaches has a row naming the
 +------------------------------+------------------------------------------------------+
 | ``file_post_open``           | ``openat``; hashes only opens the agent asked about  |
 +------------------------------+------------------------------------------------------+
+| ``path_truncate``            | ``truncate``                                         |
++------------------------------+------------------------------------------------------+
 | ``kernel_read_file``         | ``finit_module`` on a file from ``openat$binfmt``    |
 +------------------------------+------------------------------------------------------+
 | ``kernel_load_data``         | ``init_module``, ``kexec_load``                      |
