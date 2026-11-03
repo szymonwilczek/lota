@@ -2538,6 +2538,8 @@ help:
 	@$(HELP_ROW) fuzz-policy-sign "Build policy signature-verify fuzz target"
 	@$(HELP_ROW) fuzz-server-sdk "Build server SDK token-verify fuzz target"
 	@$(HELP_ROW) fuzz-tpm-resp "Build TPM2B response/credential fuzz target"
+	@$(HELP_ROW) fuzz-bench-result "Build lota-bench session file fuzz target"
+	@$(HELP_ROW) fuzz-bench-frames "Build lota-bench MangoHud log fuzz target"
 	@$(HELP_ROW) fuzz-bpf-all "Build all BPF LSM oracle fuzz targets"
 	@$(HELP_ROW) syzkaller-fuzz-loader "Build the syzkaller BPF LSM bring-up harness"
 	@echo ""
