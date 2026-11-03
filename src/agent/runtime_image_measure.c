@@ -823,10 +823,11 @@ out:
 	return ret;
 }
 
-int lota_runtime_measure_pid(pid_t pid,
-			     uint8_t out_digest[LOTA_RUNTIME_IMAGE_DIGEST_SIZE],
-			     struct lota_runtime_measure_coverage *cov,
-			     struct lota_runtime_measure_failure *fail)
+int lota_runtime_measure_pid_objects(
+	pid_t pid, uint8_t out_digest[LOTA_RUNTIME_IMAGE_DIGEST_SIZE],
+	struct lota_runtime_measure_coverage *cov,
+	struct lota_runtime_measure_failure *fail,
+	struct lota_rt_object_record *objs, size_t *n_objs)
 {
 	struct lota_rt_map_entry *entries = NULL;
 	struct lota_runtime_image_module *mods = NULL;
@@ -842,8 +843,10 @@ int lota_runtime_measure_pid(pid_t pid,
 		memset(fail, 0, sizeof(*fail));
 	if (cov)
 		memset(cov, 0, sizeof(*cov));
+	if (n_objs)
+		*n_objs = 0;
 
-	if (!out_digest)
+	if (!out_digest || (objs && !n_objs))
 		return -EINVAL;
 
 	entries = calloc(LOTA_RUNTIME_IMAGE_MAX_MODULES, sizeof(*entries));
@@ -863,6 +866,15 @@ int lota_runtime_measure_pid(pid_t pid,
 		goto out;
 	}
 
+	/* every mapping is listed, measured or not */
+	if (objs) {
+		for (i = 0; i < n; i++) {
+			memset(&objs[i], 0, sizeof(objs[i]));
+			objs[i].entry = entries[i];
+		}
+		*n_objs = n;
+	}
+
 	ret = rt_exe_identity(pid, &exe_dev, &exe_ino);
 	if (ret != 0)
 		goto out;
@@ -876,6 +888,13 @@ int lota_runtime_measure_pid(pid_t pid,
 			 entries[i].soname);
 
 		ret = rt_measure_object(pid, &entries[i], exe_dev, exe_ino, &m);
+		if (objs) {
+			objs[i].size = m.opened.size;
+			if (ret == 0) {
+				objs[i].digest = m.digest;
+				objs[i].content_hashed = m.content_hashed;
+			}
+		}
 		if (ret != 0) {
 			if (fail) {
 				snprintf(fail->soname, sizeof(fail->soname),
@@ -943,4 +962,13 @@ out:
 				LOTA_RUNTIME_IMAGE_MAX_MODULES * sizeof(*mods));
 	free(mods);
 	return ret;
+}
+
+int lota_runtime_measure_pid(pid_t pid,
+			     uint8_t out_digest[LOTA_RUNTIME_IMAGE_DIGEST_SIZE],
+			     struct lota_runtime_measure_coverage *cov,
+			     struct lota_runtime_measure_failure *fail)
+{
+	return lota_runtime_measure_pid_objects(pid, out_digest, cov, fail,
+						NULL, NULL);
 }

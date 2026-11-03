@@ -433,6 +433,28 @@ from one source. That agreement is load-bearing: the anti-cheat heartbeat
 binds the flags it read from ``GET_STATUS`` into the nonce the token is quoted
 over, so a bit set in one and not the other surfaces as a nonce mismatch.
 
+What a protected process mapped
+-------------------------------
+
+The token carries one image digest per protected process, folded from the
+soname and digest of every code object that has one. ``8192`` bytes hold no
+list of the objects themselves, so ``LOTA_IPC_CMD_GET_REGISTRY`` hands them out
+in pages: what the last token round found mapped in one process, the objects
+it could not measure included, each with its path, size, device, inode and
+digest.
+
+The token binds the list. Folding the entries that carry a digest as
+``lota_runtime_image_measure.h`` does yields the page's ``image_digest``, which
+is the token's entry for that process while ``LOTA_IPC_REGISTRY_MEASURED`` is
+set. A list from another round than the token's does not fold to the token's
+value, so a relying party that checks the fold needs no further pairing; the
+``round`` field only keeps the pages of one listing together. Path, size,
+device and inode describe and are not bound.
+
+The owner of the process or root may read its registry, the callers that could
+read its ``maps`` themselves. A process the last round did not measure is
+answered ``LOTA_IPC_ERR_NOT_PROTECTED``.
+
 GET_TOKEN rate limits
 =====================
 

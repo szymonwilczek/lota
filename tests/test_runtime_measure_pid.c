@@ -10,6 +10,7 @@
  * Copyright (C) 2026 Szymon Wilczek
  */
 
+#include <errno.h>
 #include <stdio.h>
 #include <string.h>
 #include <unistd.h>
@@ -17,6 +18,7 @@
 
 #include "test.h"
 #include "../src/agent/runtime_image_measure.h"
+#include "../src/agent/registry.h"
 #include "lota.h"
 
 static int digest_is_zero(const uint8_t d[32])
@@ -83,6 +85,134 @@ int main(void)
 			PASS();
 		else
 			FAIL("accepted unbacked range");
+	}
+
+	TEST("measure_pid_objects lists the mappings of a failed measurement");
+	{
+		static struct lota_rt_object_record
+			objs[LOTA_RUNTIME_IMAGE_MAX_MODULES];
+		char exe[LOTA_RT_MAP_PATH_MAX] = "";
+		size_t n = 0;
+		int found = 0;
+		ssize_t elen = readlink("/proc/self/exe", exe, sizeof(exe) - 1);
+
+		if (elen > 0)
+			exe[elen] = '\0';
+		(void)lota_runtime_measure_pid_objects(getpid(), digest, NULL,
+						       NULL, objs, &n);
+		for (size_t i = 0; i < n; i++)
+			if (strcmp(objs[i].entry.path, exe) == 0)
+				found = 1;
+		if (n > 0 && found)
+			PASS();
+		else
+			FAIL("own executable missing from the objects");
+	}
+
+	TEST("measure_pid_objects refuses objects with nowhere to count them");
+	{
+		static struct lota_rt_object_record objs[1];
+
+		if (lota_runtime_measure_pid_objects(getpid(), digest, NULL,
+						     NULL, objs,
+						     NULL) == -EINVAL)
+			PASS();
+		else
+			FAIL("accepted objects without a count");
+	}
+
+	TEST("registry pages every object and binds the round");
+	{
+		static struct lota_rt_object_record objs[40];
+		struct registry cur = { 0 };
+		struct registry next = { 0 };
+		const struct registry_process *p;
+		uint8_t folded[32];
+		uint8_t buf[2048];
+		uint32_t start = 0, pages = 0, seen = 0;
+		int ok = 1;
+
+		memset(folded, 0xab, sizeof(folded));
+		for (int i = 0; i < 40; i++) {
+			memset(&objs[i], 0, sizeof(objs[i]));
+			snprintf(objs[i].entry.soname,
+				 sizeof(objs[i].entry.soname), "lib%02d.so", i);
+			snprintf(objs[i].entry.path, sizeof(objs[i].entry.path),
+				 "/opt/title/lib%02d.so", i);
+			objs[i].size = 4096u * (uint64_t)i;
+			if (i % 3 != 0) {
+				objs[i].digest.len = 32;
+				objs[i].digest.digest[0] = (uint8_t)i;
+				objs[i].content_hashed = (i % 3 == 2);
+			}
+		}
+		ok &= registry_add(&next, 1234, 1000, folded, objs, 40) == 0;
+		ok &= registry_add(&next, 1235, 1000, NULL, NULL, 0) == 0;
+		registry_replace(&cur, &next);
+		ok &= cur.round == 1 && next.count == 0;
+
+		p = registry_find(&cur, 1234);
+		ok &= p != NULL && registry_find(&cur, 99) == NULL;
+		while (ok && p && start < p->count) {
+			struct lota_ipc_registry_page hdr;
+			size_t len = 0, off = sizeof(hdr);
+			int c = registry_encode_page(p, cur.round, start, buf,
+						     sizeof(buf), &len);
+
+			if (c <= 0) {
+				ok = 0;
+				break;
+			}
+			memcpy(&hdr, buf, sizeof(hdr));
+			ok &= hdr.round == 1 && hdr.pid == 1234 &&
+			      hdr.total == 40 && hdr.start == start &&
+			      hdr.count == (uint16_t)c &&
+			      (hdr.flags & LOTA_IPC_REGISTRY_MEASURED) &&
+			      memcmp(hdr.image_digest, folded, 32) == 0;
+			for (int k = 0; k < c; k++) {
+				struct lota_ipc_registry_entry e;
+				uint32_t idx = start + (uint32_t)k;
+				uint8_t want =
+					idx % 3 == 0 ?
+						LOTA_IPC_REGISTRY_ROAD_NONE :
+					idx % 3 == 2 ?
+						LOTA_IPC_REGISTRY_ROAD_CONTENT :
+						LOTA_IPC_REGISTRY_ROAD_VERITY;
+
+				memcpy(&e, buf + off, sizeof(e));
+				off += sizeof(e);
+				ok &= e.road == want &&
+				      e.size == 4096u * (uint64_t)idx &&
+				      e.soname_len == 8 &&
+				      memcmp(buf + off, objs[idx].entry.soname,
+					     8) == 0;
+				off += e.soname_len + e.path_len;
+				seen++;
+			}
+			ok &= off == len;
+			start += (uint32_t)c;
+			pages++;
+		}
+		ok &= seen == 40 && pages > 1;
+		{
+			size_t len = 0;
+
+			ok &= registry_encode_page(p, cur.round, 41, buf,
+						   sizeof(buf),
+						   &len) == -ERANGE;
+			ok &= registry_encode_page(p, cur.round, 0, buf, 100,
+						   &len) == -ENOSPC;
+			p = registry_find(&cur, 1235);
+			ok &= p && !(p->flags & LOTA_IPC_REGISTRY_MEASURED) &&
+			      registry_encode_page(p, cur.round, 0, buf,
+						   sizeof(buf), &len) == 0 &&
+			      len == sizeof(struct lota_ipc_registry_page);
+		}
+		registry_clear(&cur);
+		if (ok)
+			PASS();
+		else
+			FAIL("registry paging lost or misdescribed an object");
 	}
 
 	printf("\n%d/%d kernel-anchored measurement tests passed\n",

@@ -308,4 +308,31 @@ int lota_runtime_measure_pid(pid_t pid,
 			     struct lota_runtime_measure_coverage *cov,
 			     struct lota_runtime_measure_failure *fail);
 
+/*
+ * One mapping a measurement found, for the registry.
+ *
+ * digest.len is 0 for an object absent from the fold; content_hashed says
+ * the digest is a kernel content hash rather than an fs-verity one.
+ * size is 0 when the object would not open.
+ */
+struct lota_rt_object_record {
+	struct lota_rt_map_entry entry;
+	struct lota_verity_digest_key digest;
+	uint64_t size;
+	int content_hashed;
+};
+
+/*
+ * lota_runtime_measure_pid(), plus every enumerated mapping in objs.
+ *
+ * objs holds LOTA_RUNTIME_IMAGE_MAX_MODULES records, or is NULL.
+ * *n_objs receives how many were filled, also when the measurement fails
+ * after the enumeration, so a failed process still names what it mapped.
+ */
+int lota_runtime_measure_pid_objects(
+	pid_t pid, uint8_t out_digest[LOTA_RUNTIME_IMAGE_DIGEST_SIZE],
+	struct lota_runtime_measure_coverage *cov,
+	struct lota_runtime_measure_failure *fail,
+	struct lota_rt_object_record *objs, size_t *n_objs);
+
 #endif /* LOTA_AGENT_RUNTIME_IMAGE_MEASURE_H */

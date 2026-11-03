@@ -44,6 +44,9 @@ static inline bool ipc_payload_len_valid(uint32_t cmd, uint32_t payload_len)
 	case LOTA_IPC_CMD_TERMINATE_PROTECTED:
 		return payload_len == sizeof(struct lota_ipc_terminate_request);
 
+	case LOTA_IPC_CMD_GET_REGISTRY:
+		return payload_len == sizeof(struct lota_ipc_registry_request);
+
 	case LOTA_IPC_CMD_SYNC_ATTEST:
 		/*
 		 * One verdict per publisher, and a host that answers to nobody

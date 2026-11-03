@@ -103,6 +103,15 @@ int main(void)
 				     sizeof(struct lota_ipc_pid_request)),
 	      "TERMINATE_PROTECTED without a signal is refused");
 
+	CHECK(ipc_payload_len_valid(LOTA_IPC_CMD_GET_REGISTRY,
+				    sizeof(struct lota_ipc_registry_request)),
+	      "GET_REGISTRY carries a pid and a start");
+	CHECK(!ipc_payload_len_valid(LOTA_IPC_CMD_GET_REGISTRY, 0),
+	      "GET_REGISTRY naming nobody is refused");
+	CHECK(!ipc_payload_len_valid(LOTA_IPC_CMD_GET_REGISTRY,
+				     sizeof(struct lota_ipc_pid_request)),
+	      "GET_REGISTRY without a start is refused");
+
 	CHECK(!ipc_payload_len_valid(0xdead, 4),
 	      "an unknown command may not carry a payload");
 	CHECK(ipc_payload_len_valid(0xdead, 0),

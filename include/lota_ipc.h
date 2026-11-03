@@ -58,6 +58,8 @@ enum lota_ipc_cmd {
 		0x09, /* Exchange state with the attestation loop (agent peer only) */
 	LOTA_IPC_CMD_TERMINATE_PROTECTED =
 		0x0A, /* End a protected process on behalf of its owner */
+	LOTA_IPC_CMD_GET_REGISTRY =
+		0x0B, /* Code objects the last measurement found in a process */
 };
 
 /*
@@ -488,6 +490,66 @@ struct lota_ipc_terminate_response {
 	uint32_t signal;
 	uint32_t other_protect_pid_count; /* protected set minus @pid */
 	uint32_t _reserved1;
+} __attribute__((packed));
+
+/*
+ * GET_REGISTRY request payload
+ *
+ * Asks for the code objects the last token round found mapped in @pid,
+ * from object @start on.
+ * Answered for the owner of the process or root.
+ */
+struct lota_ipc_registry_request {
+	uint32_t pid;
+	uint32_t start;
+} __attribute__((packed));
+
+/* image_digest is the value the round folded for @pid into its token */
+#define LOTA_IPC_REGISTRY_MEASURED (1U << 0)
+
+/*
+ * GET_REGISTRY response payload
+ *
+ * A page header followed by @count entries.
+ * @round names the measurement round the list comes from:
+ * pages of one listing that carry different rounds do not belong together.
+ *
+ * The token binds the list. With LOTA_IPC_REGISTRY_MEASURED set,
+ * folding the entries that carry a digest as lota_runtime_image_measure.h
+ * does yields @image_digest, the token's entry for @pid.
+ * Path, size, device and inode describe; only the soname and digest are bound.
+ */
+struct lota_ipc_registry_page {
+	uint64_t round;
+	uint32_t pid;
+	uint32_t total; /* objects the round found in @pid */
+	uint32_t start;
+	uint16_t count; /* entries in this page */
+	uint16_t flags; /* LOTA_IPC_REGISTRY_* */
+	uint8_t image_digest[32];
+} __attribute__((packed));
+
+/* How an entry's digest was taken */
+enum lota_ipc_registry_road {
+	LOTA_IPC_REGISTRY_ROAD_NONE = 0, /* no digest; absent from the fold */
+	LOTA_IPC_REGISTRY_ROAD_VERITY = 1, /* fs-verity measurement */
+	LOTA_IPC_REGISTRY_ROAD_CONTENT = 2, /* kernel hash of the contents */
+};
+
+/*
+ * One registry entry, followed by @soname_len bytes of soname and
+ * @path_len bytes of path, neither NUL-terminated.
+ */
+struct lota_ipc_registry_entry {
+	uint64_t size;
+	uint64_t dev; /* makedev() of the backing device */
+	uint64_t ino;
+	uint8_t road; /* enum lota_ipc_registry_road */
+	uint8_t digest_len; /* 0, 32 or 64 */
+	uint16_t soname_len;
+	uint16_t path_len;
+	uint16_t _reserved;
+	uint8_t digest[64];
 } __attribute__((packed));
 
 #endif /* LOTA_IPC_H */

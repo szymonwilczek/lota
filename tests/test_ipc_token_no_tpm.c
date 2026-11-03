@@ -173,15 +173,19 @@ int enroll_state_load_path(const char *path, struct enroll_state *out)
 	return -ENOENT;
 }
 
-int lota_runtime_measure_pid(pid_t pid,
-			     uint8_t out_digest[LOTA_RUNTIME_IMAGE_DIGEST_SIZE],
-			     struct lota_runtime_measure_coverage *cov,
-			     struct lota_runtime_measure_failure *fail)
+int lota_runtime_measure_pid_objects(
+	pid_t pid, uint8_t out_digest[LOTA_RUNTIME_IMAGE_DIGEST_SIZE],
+	struct lota_runtime_measure_coverage *cov,
+	struct lota_runtime_measure_failure *fail,
+	struct lota_rt_object_record *objs, size_t *n_objs)
 {
 	(void)pid;
 	(void)out_digest;
 	(void)cov;
 	(void)fail;
+	(void)objs;
+	if (n_objs)
+		*n_objs = 0;
 	return -ENOTSUP;
 }
 

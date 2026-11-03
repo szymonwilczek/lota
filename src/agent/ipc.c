@@ -14,6 +14,7 @@
 #include "measure_report.h"
 #include "standing_answer.h"
 #include "protect_pids.h"
+#include "registry.h"
 #include "status_flags.h"
 #include "terminate_policy.h"
 #include "terminate_report.h"
@@ -1047,6 +1048,11 @@ void ipc_runtime_coverage_forget(void)
 /* Last answer reported per protected PID; an unchanged round stays quiet */
 static struct measure_report_table g_measure_reports;
 
+/* what the last token round found mapped; IPC thread only */
+static struct registry g_registry;
+
+static int read_pid_real_uid(pid_t pid, uint32_t *out_uid);
+
 /* Token rounds that repeated a journalled answer; reported at shutdown */
 static uint64_t g_token_answer_repeats;
 
@@ -1203,6 +1209,8 @@ static void handle_get_token(struct ipc_context *ctx, struct ipc_client *client,
 	uint16_t pid_list_size = 0;
 	uint8_t (*image_digests)[32] = NULL;
 	size_t image_list_size = 0;
+	struct lota_rt_object_record *objs = NULL;
+	struct registry next_registry = { 0 };
 	size_t total_size;
 	uint64_t view_valid_until;
 	uint32_t view_flags;
@@ -1430,7 +1438,8 @@ static void handle_get_token(struct ipc_context *ctx, struct ipc_client *client,
 				  LOTA_IPC_TOKEN_IMAGE_DIGEST_SIZE;
 		image_digests =
 			calloc(runtime_pid_count, sizeof(*image_digests));
-		if (!image_digests) {
+		objs = calloc(LOTA_RUNTIME_IMAGE_MAX_MODULES, sizeof(*objs));
+		if (!image_digests || !objs) {
 			fail = true;
 			fail_code = LOTA_IPC_ERR_INTERNAL;
 			goto out;
@@ -1442,10 +1451,22 @@ static void handle_get_token(struct ipc_context *ctx, struct ipc_client *client,
 			char held_clause[80];
 			uint64_t held = 0;
 			char reason[LOTA_RT_REASON_MAX];
+			uint32_t owner = UINT32_MAX;
+			size_t n_objs = 0;
+			int rec;
 
-			ret = lota_runtime_measure_pid((pid_t)runtime_pids[i],
-						       image_digests[i], &cov,
-						       &mfail);
+			/* unreadable owner: only root reads the entry */
+			(void)read_pid_real_uid((pid_t)runtime_pids[i], &owner);
+			ret = lota_runtime_measure_pid_objects(
+				(pid_t)runtime_pids[i], image_digests[i], &cov,
+				&mfail, objs, &n_objs);
+			rec = registry_add(&next_registry, runtime_pids[i],
+					   owner,
+					   ret < 0 ? NULL : image_digests[i],
+					   objs, n_objs);
+			if (rec < 0)
+				lota_warn("registry of pid=%u not kept: %s",
+					  runtime_pids[i], strerror(-rec));
 			if (ret < 0) {
 				lota_rt_failure_reason(&mfail, ret, reason,
 						       sizeof(reason));
@@ -1568,6 +1589,8 @@ static void handle_get_token(struct ipc_context *ctx, struct ipc_client *client,
 			lota_dbg("released %zu write guard%s", released,
 				 released == 1 ? "" : "s");
 	}
+
+	registry_replace(&g_registry, &next_registry);
 
 	ret = lota_compute_runtime_protect_digest(runtime_pids, image_digests,
 						  runtime_pid_count,
@@ -1712,6 +1735,8 @@ out:
 		OPENSSL_cleanse(image_digests, image_list_size);
 		free(image_digests);
 	}
+	free(objs);
+	registry_clear(&next_registry);
 	ipc_secure_bzero(&quote, sizeof(quote));
 
 	/* journal only news; the client is answered every round */
@@ -2919,6 +2944,56 @@ static int read_pid_real_uid(pid_t pid, uint32_t *out_uid)
 }
 
 /*
+ * One page of the objects the last token round found mapped in a process.
+ *
+ * The owner of the process or root may read it, the same callers that
+ * could read its maps themselves.
+ * A process the round did not measure is answered NOT_PROTECTED.
+ */
+static void handle_get_registry(struct ipc_client *client,
+				const uint8_t *payload, uint32_t payload_len)
+{
+	struct lota_ipc_response *resp = (void *)client->send_buf;
+	struct lota_ipc_registry_request req;
+	const struct registry_process *p;
+	size_t len = 0;
+	int ret;
+
+	if (payload_len < sizeof(req)) {
+		build_error_response(client, LOTA_IPC_ERR_BAD_REQUEST);
+		return;
+	}
+	memcpy(&req, payload, sizeof(req));
+
+	p = registry_find(&g_registry, req.pid);
+	if (!p) {
+		build_error_response(client, LOTA_IPC_ERR_NOT_PROTECTED);
+		return;
+	}
+	if (client->peer_uid != 0 && (uint32_t)client->peer_uid != p->uid) {
+		build_error_response(client, LOTA_IPC_ERR_ACCESS_DENIED);
+		return;
+	}
+
+	ret = registry_encode_page(p, g_registry.round, req.start,
+				   client->send_buf + LOTA_IPC_RESPONSE_SIZE,
+				   LOTA_IPC_MAX_PAYLOAD, &len);
+	if (ret < 0) {
+		build_error_response(client, ret == -ERANGE ?
+						     LOTA_IPC_ERR_BAD_REQUEST :
+						     LOTA_IPC_ERR_INTERNAL);
+		return;
+	}
+
+	resp->magic = LOTA_IPC_MAGIC;
+	resp->version = LOTA_IPC_VERSION;
+	resp->result = LOTA_IPC_OK;
+	resp->payload_len = (uint32_t)len;
+	client->send_len = LOTA_IPC_RESPONSE_SIZE + len;
+	client->send_offset = 0;
+}
+
+/*
  * End a protected process on behalf of its owner.
  *
  * The agent delivers the signal and journals it, for a caller kill(2)
@@ -3161,6 +3236,10 @@ static void process_request(struct ipc_context *ctx, struct ipc_client *client)
 
 	case LOTA_IPC_CMD_TERMINATE_PROTECTED:
 		handle_terminate_protected(ctx, client, payload, payload_len);
+		break;
+
+	case LOTA_IPC_CMD_GET_REGISTRY:
+		handle_get_registry(client, payload, payload_len);
 		break;
 
 	case LOTA_IPC_CMD_SHUTDOWN:
