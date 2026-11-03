@@ -4,9 +4,11 @@
  * round measured it.
  *
  * The registry keeps the objects themselves, the unmeasured ones and those
- * already unmapped included. The token carries one digest per process over
- * that whole list (lota_registry_digest.h), so a relying party can see what
- * was loaded and check the list against the digest it was given.
+ * already unmapped included, and the processes outside the instance that
+ * reached one of its unix sockets. The token carries one digest per process
+ * over that whole list (lota_registry_digest.h), so a relying party can see
+ * what was loaded and who reached in, and check the list against the digest
+ * it was given.
  *
  * Split out of ipc.c so the paging is tested on its own rather than through
  * a socket.
@@ -39,6 +41,8 @@ struct registry_process {
 	uint8_t image_digest[32];
 	size_t count;
 	struct lota_rt_object_record *objects;
+	size_t peer_count;
+	struct lota_ipc_registry_peer *peers;
 };
 
 struct registry {
@@ -52,15 +56,18 @@ static inline void registry_clear(struct registry *r)
 {
 	if (!r)
 		return;
-	for (size_t i = 0; i < r->count; i++)
+	for (size_t i = 0; i < r->count; i++) {
 		free(r->procs[i].objects);
+		free(r->procs[i].peers);
+	}
 	free(r->procs);
 	r->procs = NULL;
 	r->count = 0;
 }
 
 /*
- * Append a copy of @n objects mapped in @pid.
+ * Append a copy of @n objects mapped in @pid and @n_peers peers of its
+ * instance.
  * @digest is the token's entry, or NULL when the round put none there.
  * @flags carries LOTA_IPC_REGISTRY_* other than MEASURED.
  * Returns 0 or -ENOMEM; on failure @r is unchanged.
@@ -68,13 +75,16 @@ static inline void registry_clear(struct registry *r)
 static inline int registry_add(struct registry *r, uint32_t pid, uint32_t uid,
 			       uint16_t flags, const uint8_t *digest,
 			       const struct lota_rt_object_record *objs,
-			       size_t n)
+			       size_t n,
+			       const struct lota_ipc_registry_peer *peers,
+			       size_t n_peers)
 {
 	struct registry_process *procs;
 	struct registry_process *p;
 	struct lota_rt_object_record *copy = NULL;
+	struct lota_ipc_registry_peer *peer_copy = NULL;
 
-	if (!r || (n > 0 && !objs))
+	if (!r || (n > 0 && !objs) || (n_peers > 0 && !peers))
 		return -EINVAL;
 
 	if (n > 0) {
@@ -83,10 +93,19 @@ static inline int registry_add(struct registry *r, uint32_t pid, uint32_t uid,
 			return -ENOMEM;
 		memcpy(copy, objs, n * sizeof(*copy));
 	}
+	if (n_peers > 0) {
+		peer_copy = calloc(n_peers, sizeof(*peer_copy));
+		if (!peer_copy) {
+			free(copy);
+			return -ENOMEM;
+		}
+		memcpy(peer_copy, peers, n_peers * sizeof(*peer_copy));
+	}
 
 	procs = realloc(r->procs, (r->count + 1) * sizeof(*procs));
 	if (!procs) {
 		free(copy);
+		free(peer_copy);
 		return -ENOMEM;
 	}
 	r->procs = procs;
@@ -97,6 +116,8 @@ static inline int registry_add(struct registry *r, uint32_t pid, uint32_t uid,
 	p->uid = uid;
 	p->count = n;
 	p->objects = copy;
+	p->peer_count = n_peers;
+	p->peers = peer_copy;
 	p->flags = flags & (uint16_t)~LOTA_IPC_REGISTRY_MEASURED;
 	if (digest) {
 		p->flags |= LOTA_IPC_REGISTRY_MEASURED;
@@ -158,23 +179,27 @@ static inline void registry_entry(const struct lota_rt_object_record *o,
 }
 
 /*
- * The token's entry for a process whose list is @objs and flags @flags,
- * MEASURED included. Returns 0 or a negative errno.
+ * The token's entry for a process whose list is @objs and @peers and flags
+ * @flags, MEASURED included. Returns 0 or a negative errno.
  */
 static inline int registry_digest(uint16_t flags,
 				  const struct lota_rt_object_record *objs,
-				  size_t n, uint8_t out[32])
+				  size_t n,
+				  const struct lota_ipc_registry_peer *peers,
+				  size_t n_peers, uint8_t out[32])
 {
 	EVP_MD_CTX *md;
 	int ret;
 
-	if (n > UINT32_MAX || (n > 0 && !objs))
+	if (n > UINT32_MAX || (n > 0 && !objs) || n_peers > UINT32_MAX ||
+	    (n_peers > 0 && !peers))
 		return -EINVAL;
 	md = EVP_MD_CTX_new();
 	if (!md)
 		return -ENOMEM;
 
-	ret = lota_registry_digest_begin(md, flags, (uint32_t)n);
+	ret = lota_registry_digest_begin(md, flags, (uint32_t)n,
+					 (uint32_t)n_peers);
 	for (size_t i = 0; ret == 0 && i < n; i++) {
 		struct lota_ipc_registry_entry e;
 
@@ -182,6 +207,8 @@ static inline int registry_digest(uint16_t flags,
 		ret = lota_registry_digest_entry(md, &e, objs[i].entry.soname,
 						 objs[i].entry.path);
 	}
+	for (size_t i = 0; ret == 0 && i < n_peers; i++)
+		ret = lota_registry_digest_peer(md, &peers[i]);
 	if (ret == 0)
 		ret = lota_registry_digest_final(md, out);
 	EVP_MD_CTX_free(md);
@@ -238,12 +265,62 @@ registry_merge_history(struct lota_rt_object_record *objs, size_t n, size_t cap,
 	return n;
 }
 
+_Static_assert(
+	sizeof(((struct lota_ipc_registry_peer *)0)->comm) ==
+			sizeof(((struct lota_instance_peer_val *)0)->comm) &&
+		sizeof(((struct lota_ipc_registry_peer *)0)->owner_comm) ==
+			sizeof(((struct lota_instance_peer_val *)0)->owner_comm),
+	"the wire carries the kernel's task name");
+
 /*
- * Encode the page of @p starting at object @start into @buf.
+ * Copy into @out, holding @cap, every peer of the instance whose root
+ * @tgid started at @start_ticks, as the wire carries it.
+ * Returns the count; sets *@overflow when one did not fit.
+ */
+static inline size_t
+registry_collect_peers(struct lota_ipc_registry_peer *out, size_t cap,
+		       const struct lota_instance_peer_key *keys,
+		       const struct lota_instance_peer_val *vals, size_t n_hist,
+		       uint32_t tgid, uint64_t start_ticks, int *overflow)
+{
+	size_t n = 0;
+
+	for (size_t i = 0; i < n_hist; i++) {
+		const struct lota_instance_peer_key *k = &keys[i];
+		const struct lota_instance_peer_val *v = &vals[i];
+		struct lota_ipc_registry_peer *p;
+
+		if (k->root_tgid != tgid || k->root_start_ticks != start_ticks)
+			continue;
+		if (n >= cap) {
+			*overflow = 1;
+			break;
+		}
+
+		p = &out[n++];
+		memset(p, 0, sizeof(*p));
+		p->count = v->count;
+		p->start_ticks = k->peer_start_ticks;
+		p->exe_dev = makedev((unsigned int)LOTA_DEVT_MAJOR(v->exe_dev),
+				     (unsigned int)LOTA_DEVT_MINOR(v->exe_dev));
+		p->exe_ino = v->exe_ino;
+		p->tgid = k->peer_tgid;
+		p->uid = v->uid;
+		p->owner_tgid = k->owner_tgid;
+		p->kind = k->kind;
+		memcpy(p->comm, v->comm, sizeof(p->comm) - 1);
+		memcpy(p->owner_comm, v->owner_comm, sizeof(p->owner_comm) - 1);
+	}
+	return n;
+}
+
+/*
+ * Encode the page of @p starting at entry @start into @buf: objects, then
+ * peers.
  *
  * As many entries as fit in @cap follow the header.
  * Returns the number of entries written and sets *@len,
- * -ERANGE when @start is past the last object,
+ * -ERANGE when @start is past the last entry,
  * or -ENOSPC when not even one entry fits.
  */
 static inline int registry_encode_page(const struct registry_process *p,
@@ -251,17 +328,19 @@ static inline int registry_encode_page(const struct registry_process *p,
 				       uint8_t *buf, size_t cap, size_t *len)
 {
 	struct lota_ipc_registry_page hdr;
+	size_t total = p ? p->count + p->peer_count : 0;
 	size_t off = sizeof(hdr);
 	uint16_t count = 0;
+	size_t i;
 
 	if (!p || !buf || !len)
 		return -EINVAL;
-	if (start > p->count)
+	if (start > total)
 		return -ERANGE;
 	if (cap < sizeof(hdr))
 		return -ENOSPC;
 
-	for (size_t i = start; i < p->count && count < UINT16_MAX; i++) {
+	for (i = start; i < p->count && count < UINT16_MAX; i++) {
 		const struct lota_rt_object_record *o = &p->objects[i];
 		struct lota_ipc_registry_entry e;
 		size_t slen;
@@ -282,13 +361,26 @@ static inline int registry_encode_page(const struct registry_process *p,
 		count++;
 	}
 
-	if (count == 0 && start < p->count)
+	/* peers only once every object before them is in */
+	for (; i >= p->count && i < total && count < UINT16_MAX; i++) {
+		const struct lota_ipc_registry_peer *peer =
+			&p->peers[i - p->count];
+
+		if (cap - off < sizeof(*peer))
+			break;
+		memcpy(buf + off, peer, sizeof(*peer));
+		off += sizeof(*peer);
+		count++;
+	}
+
+	if (count == 0 && start < total)
 		return -ENOSPC;
 
 	memset(&hdr, 0, sizeof(hdr));
 	hdr.round = round;
 	hdr.pid = p->pid;
 	hdr.total = (uint32_t)p->count;
+	hdr.peer_total = (uint32_t)p->peer_count;
 	hdr.start = start;
 	hdr.count = count;
 	hdr.flags = p->flags;

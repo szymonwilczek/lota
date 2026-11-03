@@ -201,25 +201,51 @@ struct lota_server_registry_module {
 #define LOTA_SERVER_REGISTRY_MAX_OBJECTS 512
 
 /*
+ * One process outside the instance that reached one of its unix sockets,
+ * as the relying party received it: every field of the lota_registry_peer
+ * lota_get_registry() reported, unchanged.
+ */
+struct lota_server_registry_peer {
+	uint64_t count;
+	uint64_t start_ticks;
+	uint64_t exe_dev;
+	uint64_t exe_ino;
+	uint32_t tgid;
+	uint32_t uid;
+	uint32_t owner_tgid;
+	uint32_t kind; /* LOTA_REGISTRY_PEER_* */
+	char comm[16];
+	char owner_comm[16];
+};
+
+/* Most peers the agent lists for one process */
+#define LOTA_SERVER_REGISTRY_MAX_PEERS 256
+
+/*
  * lota_server_registry_digest - Hash a registry into its image digest
- * @flags: The registry's LOTA_REGISTRY_* flags
- * @mods:  The objects of one process, in the order they were listed
- * @count: Number of objects
- * @out:   Receives the 32-byte image digest
+ * @flags:      The registry's LOTA_REGISTRY_* flags
+ * @mods:       The objects of one process, in the order they were listed
+ * @count:      Number of objects
+ * @peers:      The peers of the process, in the order they were listed
+ * @peer_count: Number of peers
+ * @out:        Receives the 32-byte image digest
  *
- * Hashes the flags and every object the way the agent does, those without
- * a digest included, so @out equals the token's protected_image_digests
- * entry for the process when the registry is the one that round measured.
- * A registry that hashes to anything else, reordered, short of an object
- * or with one rewritten, is not the list behind the token.
+ * Hashes the flags, every object and every peer the way the agent does,
+ * objects without a digest included, so @out equals the token's
+ * protected_image_digests entry for the process when the registry is the
+ * one that round measured. A registry that hashes to anything else,
+ * reordered, short of an entry or with one rewritten, is not the list
+ * behind the token.
  *
  * Returns: LOTA_SERVER_OK, LOTA_SERVER_ERR_INVALID_ARG for a malformed
- *          object, an unknown flag or more objects than a process is
- *          listed with, or LOTA_SERVER_ERR_CRYPTO.
+ *          object or peer, an unknown flag or more entries than a process
+ *          is listed with, or LOTA_SERVER_ERR_CRYPTO.
  */
 int lota_server_registry_digest(uint32_t flags,
 				const struct lota_server_registry_module *mods,
-				size_t count, uint8_t out[32]);
+				size_t count,
+				const struct lota_server_registry_peer *peers,
+				size_t peer_count, uint8_t out[32]);
 
 #ifdef __cplusplus
 }

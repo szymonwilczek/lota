@@ -451,11 +451,26 @@ an object loaded and dropped between two rounds is still listed. A record the
 kernel could not keep sets ``LOTA_IPC_REGISTRY_HISTORY_LOST`` on every list of
 the round: such a list may lack an object.
 
-The token binds the list. Hashing the page's ``flags`` and ``total`` and every
-entry in order as ``lota_registry_digest.h`` does yields the page's
+After the objects come the peers: every process outside the instance that
+connected to a unix stream socket, or sent a datagram to one, owned by a
+process of the instance. An instance is the protected process and everything
+it started. The kernel marks a socket with its owner when a process of the
+instance creates, binds or listens on it, and records each contact as it is
+made (``instance_peers`` in ``src/bpf/lota_lsm.bpf.c``). A peer carries its
+PID, start time, uid, the device and inode of its executable, its command
+name, the owning process and its name, how it reached in and how many times.
+Nothing is refused: the list says who reached in, the relying party decides
+what that means. A record the kernel could not keep, or a list longer than
+``LOTA_IPC_REGISTRY_MAX_PEERS``, sets ``LOTA_IPC_REGISTRY_PEERS_LOST``. Indices
+below ``total`` are objects, the next ``peer_total`` are peers, and the pages
+hand them out in that order.
+
+The token binds the list. Hashing the page's ``flags``, ``total`` and
+``peer_total`` and every entry in order as ``lota_registry_digest.h`` does
+yields the page's
 ``image_digest``, which is the token's entry for that process while
 ``LOTA_IPC_REGISTRY_MEASURED`` is set. Every field of every entry is in the
-hash, the entries without a digest included, so a list with an entry dropped,
+hash, the entries without a digest and the peers included, so a list with an entry dropped,
 reordered or rewritten does not hash to the token's value. A list from another
 round does not either, so a relying party that checks the hash needs no further
 pairing; the ``round`` field only keeps the pages of one listing together.

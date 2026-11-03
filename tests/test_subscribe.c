@@ -1065,9 +1065,18 @@ enum registry_fault {
 	REGISTRY_BAD_ROAD, /* a digest on the unmeasured object */
 	REGISTRY_BAD_ENTRY_FLAG, /* an entry flag the SDK does not know */
 	REGISTRY_BAD_FLAG, /* a page flag the SDK does not know */
+	REGISTRY_BAD_PEER_KIND, /* a peer kind the SDK does not know */
+	REGISTRY_BAD_PEER_COMM, /* a peer name without its NUL */
 };
 
-/* Registry page of objects [start, start + count) of a 5-object listing. */
+/* 5 objects, then 2 peers */
+#define REGISTRY_MOCK_OBJECTS 5
+#define REGISTRY_MOCK_PEERS 2
+
+/*
+ * Registry page of entries [start, start + count) of a listing of
+ * REGISTRY_MOCK_OBJECTS objects followed by REGISTRY_MOCK_PEERS peers.
+ */
 static size_t build_registry_page(uint8_t *buf, uint64_t round, uint32_t start,
 				  uint16_t count, enum registry_fault fault)
 {
@@ -1077,7 +1086,8 @@ static size_t build_registry_page(uint8_t *buf, uint64_t round, uint32_t start,
 	memset(&hdr, 0, sizeof(hdr));
 	hdr.round = round;
 	hdr.pid = 4242;
-	hdr.total = 5;
+	hdr.total = REGISTRY_MOCK_OBJECTS;
+	hdr.peer_total = REGISTRY_MOCK_PEERS;
 	hdr.start = start;
 	hdr.count = count;
 	hdr.flags = LOTA_IPC_REGISTRY_MEASURED | LOTA_IPC_REGISTRY_HISTORY_LOST;
@@ -1088,8 +1098,32 @@ static size_t build_registry_page(uint8_t *buf, uint64_t round, uint32_t start,
 
 	for (uint32_t i = start; i < start + count; i++) {
 		struct lota_ipc_registry_entry e;
+		struct lota_ipc_registry_peer q;
 		char soname[24];
 		char path[48];
+
+		if (i >= REGISTRY_MOCK_OBJECTS) {
+			uint32_t k = i - REGISTRY_MOCK_OBJECTS;
+
+			memset(&q, 0, sizeof(q));
+			q.count = 2 + k;
+			q.start_ticks = 9000 + k;
+			q.exe_ino = 300 + k;
+			q.tgid = 6000 + k;
+			q.uid = 1000;
+			q.owner_tgid = 4243;
+			q.kind = k == 0 ? LOTA_IPC_REGISTRY_PEER_CONNECT :
+					  LOTA_IPC_REGISTRY_PEER_SEND;
+			if (k == 1 && fault == REGISTRY_BAD_PEER_KIND)
+				q.kind = 3;
+			snprintf(q.comm, sizeof(q.comm), "peer%u", k);
+			if (k == 1 && fault == REGISTRY_BAD_PEER_COMM)
+				memset(q.comm, 'a', sizeof(q.comm));
+			strcpy(q.owner_comm, "wineserver");
+			memcpy(buf + off, &q, sizeof(q));
+			off += sizeof(q);
+			continue;
+		}
 
 		snprintf(soname, sizeof(soname), "lib%u.so", i);
 		/* object 4 was unmapped before the round: no path */
@@ -1122,7 +1156,10 @@ static size_t build_registry_page(uint8_t *buf, uint64_t round, uint32_t start,
 	return off;
 }
 
-/* Answer GET_REGISTRY in pages of three; round @torn_round from the 2nd on. */
+/*
+ * Answer GET_REGISTRY in pages of three, one of them both objects and
+ * peers; round @torn_round from the 2nd on.
+ */
 static void serve_registry(int client_fd, uint64_t torn_round,
 			   enum registry_fault fault)
 {
@@ -1133,7 +1170,9 @@ static void serve_registry(int client_fd, uint64_t torn_round,
 
 	while (recv_request(client_fd, &req, &body, sizeof(body)) == 0) {
 		uint64_t round = served > 0 && torn_round ? torn_round : 1;
-		uint16_t count = body.start == 0 ? 3 : 2;
+		uint32_t left = REGISTRY_MOCK_OBJECTS + REGISTRY_MOCK_PEERS -
+				body.start;
+		uint16_t count = (uint16_t)(left < 3 ? left : 3);
 		size_t len;
 
 		if (req.cmd != LOTA_IPC_CMD_GET_REGISTRY || body.pid != 4242)
@@ -1169,6 +1208,16 @@ static void server_registry_bad_entry_flag(int client_fd)
 static void server_registry_bad_flag(int client_fd)
 {
 	serve_registry(client_fd, 0, REGISTRY_BAD_FLAG);
+}
+
+static void server_registry_bad_peer_kind(int client_fd)
+{
+	serve_registry(client_fd, 0, REGISTRY_BAD_PEER_KIND);
+}
+
+static void server_registry_bad_peer_comm(int client_fd)
+{
+	serve_registry(client_fd, 0, REGISTRY_BAD_PEER_COMM);
 }
 
 static void server_registry_not_protected(int client_fd)
@@ -1234,7 +1283,14 @@ static void test_registry_pages(void)
 	    reg->objects[4].road != LOTA_REGISTRY_ROAD_NONE ||
 	    reg->objects[4].digest_len != 0 ||
 	    reg->objects[4].flags != LOTA_REGISTRY_OBJECT_UNMAPPED ||
-	    reg->objects[4].path[0] != '\0' || reg->objects[3].flags != 0) {
+	    reg->objects[4].path[0] != '\0' || reg->objects[3].flags != 0 ||
+	    reg->peer_count != 2 || !reg->peers || reg->peers[0].tgid != 6000 ||
+	    reg->peers[0].count != 2 || reg->peers[0].start_ticks != 9000 ||
+	    reg->peers[0].kind != LOTA_REGISTRY_PEER_CONNECT ||
+	    reg->peers[1].kind != LOTA_REGISTRY_PEER_SEND ||
+	    reg->peers[1].exe_ino != 301 || reg->peers[1].owner_tgid != 4243 ||
+	    strcmp(reg->peers[1].comm, "peer1") != 0 ||
+	    strcmp(reg->peers[1].owner_comm, "wineserver") != 0) {
 		FAIL(lota_strerror(ret));
 		lota_registry_free(reg);
 		return;
@@ -1290,6 +1346,24 @@ static void test_registry_refusals(void)
 
 	TEST("get_registry refuses a listing flag it does not know");
 	ret = fetch_registry(server_registry_bad_flag, &reg, &skipped);
+	if (skipped)
+		SKIP("AF_UNIX mock server not permitted");
+	else if (ret != LOTA_ERR_PROTOCOL || reg)
+		FAIL(lota_strerror(ret));
+	else
+		PASS();
+
+	TEST("get_registry refuses a peer kind it does not know");
+	ret = fetch_registry(server_registry_bad_peer_kind, &reg, &skipped);
+	if (skipped)
+		SKIP("AF_UNIX mock server not permitted");
+	else if (ret != LOTA_ERR_PROTOCOL || reg)
+		FAIL(lota_strerror(ret));
+	else
+		PASS();
+
+	TEST("get_registry refuses a peer name without its end");
+	ret = fetch_registry(server_registry_bad_peer_comm, &reg, &skipped);
 	if (skipped)
 		SKIP("AF_UNIX mock server not permitted");
 	else if (ret != LOTA_ERR_PROTOCOL || reg)

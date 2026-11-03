@@ -619,6 +619,8 @@ int lota_poll_events(struct lota_client *client, int timeout_ms);
 #define LOTA_REGISTRY_MEASURED (1U << 0)
 /* an executable mapping went unrecorded; the list may miss an object */
 #define LOTA_REGISTRY_HISTORY_LOST (1U << 1)
+/* a peer went unrecorded; the list may miss a process that reached in */
+#define LOTA_REGISTRY_PEERS_LOST (1U << 2)
 
 /*
  * Mapped since protection began, gone from the address space when
@@ -642,8 +644,31 @@ struct lota_registry_object {
 	char path[LOTA_REGISTRY_PATH_MAX];
 };
 
+/* How a peer reached the instance */
+#define LOTA_REGISTRY_PEER_CONNECT 1 /* connected to a stream socket */
+#define LOTA_REGISTRY_PEER_SEND 2 /* sent a datagram */
+
 /*
- * The code objects the last token round found mapped in one process.
+ * One process outside the instance of a protected process that reached a
+ * unix socket a process of that instance owns.
+ * The token's image digest binds every field.
+ */
+struct lota_registry_peer {
+	uint64_t count; /* times it did so */
+	uint64_t start_ticks; /* the peer's start time, in clock ticks */
+	uint64_t exe_dev; /* device of the peer's executable */
+	uint64_t exe_ino; /* inode of the peer's executable */
+	uint32_t tgid;
+	uint32_t uid;
+	uint32_t owner_tgid; /* the instance process owning the socket */
+	uint32_t kind; /* LOTA_REGISTRY_PEER_* */
+	char comm[16];
+	char owner_comm[16];
+};
+
+/*
+ * The code objects the last token round found mapped in one process and
+ * the processes outside its instance that reached it.
  */
 struct lota_registry {
 	uint64_t round; /* measurement round the list comes from */
@@ -652,6 +677,8 @@ struct lota_registry {
 	uint8_t image_digest[32];
 	uint32_t count;
 	struct lota_registry_object *objects;
+	uint32_t peer_count;
+	struct lota_registry_peer *peers;
 };
 
 /*
@@ -663,7 +690,7 @@ struct lota_registry {
  * Every object is listed, those the agent could not measure included.
  * The token binds the list: with LOTA_REGISTRY_MEASURED set, image_digest
  * is the token's protected_image_digests entry for @pid, and
- * lota_server_registry_digest() over the objects reproduces it.
+ * lota_server_registry_digest() over the objects and peers reproduces it.
  * A relying party checks both before trusting the list.
  *
  * Returns: LOTA_OK, LOTA_ERR_NOT_PROTECTED for a process the last round

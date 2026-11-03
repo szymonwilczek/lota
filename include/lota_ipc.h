@@ -495,8 +495,8 @@ struct lota_ipc_terminate_response {
 /*
  * GET_REGISTRY request payload
  *
- * Asks for the code objects the last token round found mapped in @pid,
- * from object @start on.
+ * Asks for what the last token round found in @pid, from entry @start on:
+ * the code objects, then the peers.
  * Answered for the owner of the process or root.
  */
 struct lota_ipc_registry_request {
@@ -508,28 +508,35 @@ struct lota_ipc_registry_request {
 #define LOTA_IPC_REGISTRY_MEASURED (1U << 0)
 /* an executable mapping of @pid went unrecorded; the list may miss one */
 #define LOTA_IPC_REGISTRY_HISTORY_LOST (1U << 1)
+/* a reach into a socket of @pid's instance went unrecorded */
+#define LOTA_IPC_REGISTRY_PEERS_LOST (1U << 2)
 
 /* mapped since protection began, gone from the address space when measured */
 #define LOTA_IPC_REGISTRY_ENTRY_UNMAPPED (1U << 0)
 
 /* objects listed for one process: those mapped, then those unmapped */
 #define LOTA_IPC_REGISTRY_MAX_OBJECTS 512
+/* peers listed for one process; more set LOTA_IPC_REGISTRY_PEERS_LOST */
+#define LOTA_IPC_REGISTRY_MAX_PEERS 256
 
 /*
  * GET_REGISTRY response payload
  *
- * A page header followed by @count entries.
+ * A page header followed by @count entries. Entry i of the listing is
+ * object i while i < @total and peer i - @total after it.
  * @round names the measurement round the list comes from:
  * pages of one listing that carry different rounds do not belong together.
  *
  * The token binds the list. With LOTA_IPC_REGISTRY_MEASURED set,
- * hashing @flags, @total and every entry in order as lota_registry_digest.h
- * does yields @image_digest, the token's entry for @pid.
+ * hashing @flags, @total, @peer_total, every object and every peer in
+ * order as lota_registry_digest.h does yields @image_digest, the token's
+ * entry for @pid.
  */
 struct lota_ipc_registry_page {
 	uint64_t round;
 	uint32_t pid;
 	uint32_t total; /* objects the round found in @pid */
+	uint32_t peer_total; /* peers of @pid's instance */
 	uint32_t start;
 	uint16_t count; /* entries in this page */
 	uint16_t flags; /* LOTA_IPC_REGISTRY_* */
@@ -557,6 +564,30 @@ struct lota_ipc_registry_entry {
 	uint16_t path_len;
 	uint16_t flags; /* LOTA_IPC_REGISTRY_ENTRY_* */
 	uint8_t digest[64];
+} __attribute__((packed));
+
+/* How a peer reached the instance */
+enum lota_ipc_registry_peer_kind {
+	LOTA_IPC_REGISTRY_PEER_CONNECT = 1, /* stream or seqpacket connect */
+	LOTA_IPC_REGISTRY_PEER_SEND = 2, /* datagram sent */
+};
+
+/*
+ * A process outside the instance of @pid that connected to, or sent to,
+ * a unix socket a process of the instance made, bound or listened on.
+ * The command names are NUL-terminated and zero-padded.
+ */
+struct lota_ipc_registry_peer {
+	uint64_t count; /* connects or datagrams */
+	uint64_t start_ticks; /* the peer's, /proc/<tgid>/stat field 22 */
+	uint64_t exe_dev; /* makedev() of the peer executable's device */
+	uint64_t exe_ino; /* 0 when the peer had no executable */
+	uint32_t tgid; /* the peer */
+	uint32_t uid; /* the peer's real uid at its first reach */
+	uint32_t owner_tgid; /* the process of the instance owning the socket */
+	uint32_t kind; /* enum lota_ipc_registry_peer_kind */
+	char comm[16];
+	char owner_comm[16];
 } __attribute__((packed));
 
 #endif /* LOTA_IPC_H */

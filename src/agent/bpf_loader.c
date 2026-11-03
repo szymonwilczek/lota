@@ -985,6 +985,7 @@ int bpf_loader_init(struct bpf_loader_ctx *ctx)
 	ctx->exe_hash_slots_fd = -1;
 	ctx->mapped_exec_fd = -1;
 	ctx->exec_history_fd = -1;
+	ctx->instance_peers_fd = -1;
 
 	libbpf_set_print(libbpf_print_fn);
 	libbpf_set_strict_mode(LIBBPF_STRICT_ALL);
@@ -1475,6 +1476,21 @@ int bpf_loader_load(struct bpf_loader_ctx *ctx, const char *bpf_obj_path,
 		}
 	}
 
+	/* optional: without it no peer of an instance is listed */
+	ctx->instance_peers_fd =
+		bpf_object__find_map_fd_by_name(ctx->obj, "instance_peers");
+	if (ctx->instance_peers_fd < 0) {
+		ctx->instance_peers_fd = -1;
+	} else {
+		err = harden_fd_cloexec(ctx->instance_peers_fd,
+					"instance_peers map");
+		if (err < 0) {
+			lota_err("Failed to harden instance_peers map fd: %s",
+				 strerror(-err));
+			goto err_close;
+		}
+	}
+
 	/* Get fs-verity allowlist map fd */
 	ctx->allow_verity_digest_fd =
 		bpf_object__find_map_fd_by_name(ctx->obj, "allow_verity");
@@ -1680,6 +1696,7 @@ void bpf_loader_cleanup(struct bpf_loader_ctx *ctx)
 	ctx->exe_hash_slots_fd = -1;
 	ctx->mapped_exec_fd = -1;
 	ctx->exec_history_fd = -1;
+	ctx->instance_peers_fd = -1;
 
 	/* the map took the pins with it */
 	free(ctx->pins);
@@ -2248,6 +2265,57 @@ int bpf_loader_exec_history(struct bpf_loader_ctx *ctx,
 			       (uint8_t *)v, exec_history_owner, alive);
 	for (size_t i = 0; i < count; i++)
 		v[i].name[sizeof(v[i].name) - 1] = '\0';
+
+	*keys = k;
+	*vals = v;
+	*n = count;
+	return 0;
+}
+
+static void instance_peer_owner(const void *key, uint32_t *tgid,
+				uint64_t *start_ticks)
+{
+	const struct lota_instance_peer_key *p = key;
+
+	*tgid = p->root_tgid;
+	*start_ticks = p->root_start_ticks;
+}
+
+_Static_assert(sizeof(struct lota_instance_peer_key) <= OWNED_MAP_KEY_MAX,
+	       "instance peer key fits the walk buffer");
+
+int bpf_loader_instance_peers(struct bpf_loader_ctx *ctx,
+			      int (*alive)(uint32_t tgid, uint64_t start_ticks),
+			      struct lota_instance_peer_key **keys,
+			      struct lota_instance_peer_val **vals, size_t *n)
+{
+	struct lota_instance_peer_key *k;
+	struct lota_instance_peer_val *v;
+	size_t count;
+
+	if (!ctx || !alive || !keys || !vals || !n)
+		return -EINVAL;
+	*keys = NULL;
+	*vals = NULL;
+	*n = 0;
+	if (ctx->instance_peers_fd < 0)
+		return -ENOENT;
+
+	k = calloc(LOTA_MAX_INSTANCE_PEERS, sizeof(*k));
+	v = calloc(LOTA_MAX_INSTANCE_PEERS, sizeof(*v));
+	if (!k || !v) {
+		free(k);
+		free(v);
+		return -ENOMEM;
+	}
+
+	count = read_owned_map(ctx->instance_peers_fd, LOTA_MAX_INSTANCE_PEERS,
+			       sizeof(*k), sizeof(*v), (uint8_t *)k,
+			       (uint8_t *)v, instance_peer_owner, alive);
+	for (size_t i = 0; i < count; i++) {
+		v[i].comm[sizeof(v[i].comm) - 1] = '\0';
+		v[i].owner_comm[sizeof(v[i].owner_comm) - 1] = '\0';
+	}
 
 	*keys = k;
 	*vals = v;

@@ -251,6 +251,54 @@ static void test_exec_history_walk(void)
 	free(vals);
 }
 
+static void test_instance_peers_walk(void)
+{
+	struct lota_instance_peer_key key;
+	struct lota_instance_peer_val val;
+	struct lota_instance_peer_key *keys = NULL;
+	struct lota_instance_peer_val *vals = NULL;
+	struct bpf_loader_ctx ctx;
+	size_t n = 99;
+	int ret;
+
+	memset(&ctx, 0, sizeof(ctx));
+	ctx.instance_peers_fd = -1;
+	ret = bpf_loader_instance_peers(&ctx, fake_alive, &keys, &vals, &n);
+	CHECK(ret == -ENOENT && n == 0 && !keys && !vals,
+	      "an object without the peer record reports it missing");
+
+	/* the root decides whether a peer stays, not the peer */
+	fake_map_reset(sizeof(key), sizeof(val));
+	for (uint32_t root = 1; root <= 4; root++) {
+		memset(&key, 0, sizeof(key));
+		memset(&val, 'x', sizeof(val));
+		key.root_tgid = root;
+		key.root_start_ticks = root == 3 ? 200 : 100;
+		key.peer_tgid = 2;
+		key.peer_start_ticks = 7;
+		key.kind = 1;
+		val.count = root;
+		fake_map_put(&key, &val);
+	}
+
+	ctx.instance_peers_fd = FAKE_MAP_FD;
+	ret = bpf_loader_instance_peers(&ctx, fake_alive, &keys, &vals, &n);
+	CHECK(ret == 0 && n == 1,
+	      "the peer record keeps only instances still running");
+	CHECK(n == 1 && keys[0].root_tgid == 1 && keys[0].peer_tgid == 2 &&
+		      vals[0].count == 1,
+	      "a kept peer keeps its key and value together");
+	CHECK(n == 1 && vals[0].comm[sizeof(vals[0].comm) - 1] == '\0' &&
+		      vals[0].owner_comm[sizeof(vals[0].owner_comm) - 1] ==
+			      '\0',
+	      "kept peer names are terminated");
+	CHECK(g_map.deletes == 3 && g_map.gone[1] && g_map.gone[2] &&
+		      g_map.gone[3],
+	      "an exited root and a reused root PID lose their peers");
+	free(keys);
+	free(vals);
+}
+
 static void write_file(const char *path, const void *data, size_t len)
 {
 	int fd = open(path, O_WRONLY | O_CREAT | O_TRUNC, 0600);
@@ -325,6 +373,7 @@ int main(void)
 	unlink(sig_path);
 
 	test_exec_history_walk();
+	test_instance_peers_walk();
 
 	if (g_failures) {
 		printf("Failed: %d\n", g_failures);

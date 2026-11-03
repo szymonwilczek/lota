@@ -319,10 +319,18 @@ Worth being precise about, because it decides what you can build on it:
   file's name for one that is gone. A refused mapping is listed too.
   ``LOTA_REGISTRY_HISTORY_LOST`` says the kernel lost a record and the list
   may miss an object. The token does not carry the list, it binds it:
-  ``lota_server_registry_digest()`` hashes the flags and every object in the
-  order listed, and the result equals the image digest the token holds for
+  ``lota_server_registry_digest()`` hashes the flags, every object and every
+  peer in the order listed, and the result equals the image digest the token holds for
   that process. A list that does not hash to it, short of an object or with
   one rewritten, is not the one the token describes.
+
+* Which processes outside the title reached it through a unix socket, such
+  as one asking the title's ``wineserver`` to write into its memory. The
+  registry lists each one after the objects: its PID, uid, executable,
+  command name, the title process it reached and how many times.
+  ``LOTA_REGISTRY_PEERS_LOST`` says the list may miss one. The agent refuses
+  nothing; whether a peer is expected, say the launcher, is your policy. The
+  peers are in the same hash, so a list with one dropped does not match.
 
 * Whether a protected process was ended through the agent on that host since
   it booted. The agent relays a termination only for the process's owner or

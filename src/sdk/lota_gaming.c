@@ -1318,14 +1318,27 @@ int lota_poll_events(struct lota_client *client, int timeout_ms)
 
 /* bounds the allocation a reply asks for */
 #define REGISTRY_MAX_OBJECTS LOTA_IPC_REGISTRY_MAX_OBJECTS
-#define REGISTRY_FLAGS \
-	(LOTA_IPC_REGISTRY_MEASURED | LOTA_IPC_REGISTRY_HISTORY_LOST)
+#define REGISTRY_MAX_PEERS LOTA_IPC_REGISTRY_MAX_PEERS
+#define REGISTRY_FLAGS                                                 \
+	(LOTA_IPC_REGISTRY_MEASURED | LOTA_IPC_REGISTRY_HISTORY_LOST | \
+	 LOTA_IPC_REGISTRY_PEERS_LOST)
 _Static_assert(LOTA_REGISTRY_MEASURED == LOTA_IPC_REGISTRY_MEASURED &&
 		       LOTA_REGISTRY_HISTORY_LOST ==
 			       LOTA_IPC_REGISTRY_HISTORY_LOST &&
+		       LOTA_REGISTRY_PEERS_LOST ==
+			       LOTA_IPC_REGISTRY_PEERS_LOST &&
 		       LOTA_REGISTRY_OBJECT_UNMAPPED ==
 			       LOTA_IPC_REGISTRY_ENTRY_UNMAPPED,
 	       "lota_gaming.h registry flags copy lota_ipc.h");
+_Static_assert(LOTA_REGISTRY_PEER_CONNECT == LOTA_IPC_REGISTRY_PEER_CONNECT &&
+		       LOTA_REGISTRY_PEER_SEND == LOTA_IPC_REGISTRY_PEER_SEND,
+	       "lota_gaming.h peer kinds copy lota_ipc.h");
+_Static_assert(
+	sizeof(((struct lota_registry_peer *)0)->comm) ==
+			sizeof(((struct lota_ipc_registry_peer *)0)->comm) &&
+		sizeof(((struct lota_registry_peer *)0)->owner_comm) ==
+			sizeof(((struct lota_ipc_registry_peer *)0)->owner_comm),
+	"lota_gaming.h copies the agent's name width");
 /* a token round between two pages restarts the listing */
 #define REGISTRY_FETCH_TRIES 4
 
@@ -1334,6 +1347,7 @@ void lota_registry_free(struct lota_registry *reg)
 	if (!reg)
 		return;
 	free(reg->objects);
+	free(reg->peers);
 	free(reg);
 }
 
@@ -1370,17 +1384,57 @@ static int registry_request_page(struct lota_client *client, uint32_t pid,
 	return LOTA_OK;
 }
 
-/* Decode @count entries after the page header into @objs. */
+/* Decode the peer at @off into @p; 0 or LOTA_ERR_PROTOCOL */
+static int registry_decode_peer(const uint8_t *buf, size_t len, size_t *off,
+				struct lota_registry_peer *p)
+{
+	struct lota_ipc_registry_peer w;
+
+	if (len - *off < sizeof(w))
+		return LOTA_ERR_PROTOCOL;
+	memcpy(&w, buf + *off, sizeof(w));
+	*off += sizeof(w);
+
+	if (w.kind != LOTA_IPC_REGISTRY_PEER_CONNECT &&
+	    w.kind != LOTA_IPC_REGISTRY_PEER_SEND)
+		return LOTA_ERR_PROTOCOL;
+	if (!memchr(w.comm, '\0', sizeof(w.comm)) ||
+	    !memchr(w.owner_comm, '\0', sizeof(w.owner_comm)))
+		return LOTA_ERR_PROTOCOL;
+
+	memset(p, 0, sizeof(*p));
+	p->count = w.count;
+	p->start_ticks = w.start_ticks;
+	p->exe_dev = w.exe_dev;
+	p->exe_ino = w.exe_ino;
+	p->tgid = w.tgid;
+	p->uid = w.uid;
+	p->owner_tgid = w.owner_tgid;
+	p->kind = w.kind;
+	memcpy(p->comm, w.comm, sizeof(p->comm));
+	memcpy(p->owner_comm, w.owner_comm, sizeof(p->owner_comm));
+	return LOTA_OK;
+}
+
+/* Decode @count entries after the page header, the first at @start. */
 static int registry_decode_entries(const uint8_t *buf, size_t len,
-				   uint16_t count,
-				   struct lota_registry_object *objs)
+				   uint32_t start, uint16_t count,
+				   struct lota_registry *reg)
 {
 	size_t off = sizeof(struct lota_ipc_registry_page);
 
-	for (uint16_t i = 0; i < count; i++) {
+	for (uint32_t i = start; i < start + count; i++) {
 		struct lota_ipc_registry_entry e;
-		struct lota_registry_object *o = &objs[i];
+		struct lota_registry_object *o;
 
+		if (i >= reg->count) {
+			if (registry_decode_peer(buf, len, &off,
+						 &reg->peers[i - reg->count]))
+				return LOTA_ERR_PROTOCOL;
+			continue;
+		}
+
+		o = &reg->objects[i];
 		if (len - off < sizeof(e))
 			return LOTA_ERR_PROTOCOL;
 		memcpy(&e, buf + off, sizeof(e));
@@ -1422,6 +1476,7 @@ static int registry_fetch(struct lota_client *client, uint32_t pid,
 {
 	struct lota_registry *reg = NULL;
 	uint32_t start = 0;
+	uint32_t all = 0;
 	int ret;
 
 	do {
@@ -1441,6 +1496,7 @@ static int registry_fetch(struct lota_client *client, uint32_t pid,
 
 		if (!reg) {
 			if (hdr.total > REGISTRY_MAX_OBJECTS ||
+			    hdr.peer_total > REGISTRY_MAX_PEERS ||
 			    (hdr.flags & ~REGISTRY_FLAGS))
 				goto fail;
 			ret = LOTA_ERR_NO_MEMORY;
@@ -1453,27 +1509,34 @@ static int registry_fetch(struct lota_client *client, uint32_t pid,
 				if (!reg->objects)
 					goto fail;
 			}
+			if (hdr.peer_total > 0) {
+				reg->peers = calloc(hdr.peer_total,
+						    sizeof(*reg->peers));
+				if (!reg->peers)
+					goto fail;
+			}
 			reg->round = hdr.round;
 			reg->pid = pid;
 			reg->flags = hdr.flags;
 			reg->count = hdr.total;
+			reg->peer_count = hdr.peer_total;
 			memcpy(reg->image_digest, hdr.image_digest,
 			       sizeof(reg->image_digest));
-		} else if (hdr.round != reg->round || hdr.total != reg->count) {
+		} else if (hdr.round != reg->round || hdr.total != reg->count ||
+			   hdr.peer_total != reg->peer_count) {
 			lota_registry_free(reg);
 			return 1;
 		}
 
 		ret = LOTA_ERR_PROTOCOL;
-		if ((hdr.count == 0 && start < reg->count) ||
-		    hdr.count > reg->count - start)
+		all = reg->count + reg->peer_count;
+		if ((hdr.count == 0 && start < all) || hdr.count > all - start)
 			goto fail;
-		ret = registry_decode_entries(buf, len, hdr.count,
-					      reg->objects + start);
+		ret = registry_decode_entries(buf, len, start, hdr.count, reg);
 		if (ret != LOTA_OK)
 			goto fail;
 		start += hdr.count;
-	} while (start < reg->count);
+	} while (start < all);
 
 	*out = reg;
 	return LOTA_OK;
