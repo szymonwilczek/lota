@@ -309,6 +309,23 @@ static inline int lota_ptrace_denied(unsigned int ptrace_mode,
 	return 0;
 }
 
+/* CLONE_THREAD from <linux/sched.h>, mirrored like the above */
+#define LOTA_CLONE_THREAD 0x00010000
+
+/*
+ * Whether a task made by clone(2) joins its creator's protected set.
+ *
+ * A protected process is protected with everything it starts. The child is
+ * marked before it first runs, so nothing reaches it unprotected, and the
+ * mark stays across execve as the process does. A thread belongs to its
+ * leader and takes no mark of its own.
+ */
+static inline int lota_clone_inherits_protection(unsigned long clone_flags,
+						 int creator_protected)
+{
+	return creator_protected && !(clone_flags & LOTA_CLONE_THREAD);
+}
+
 /*
  * Signal numbers shared by every Linux architecture LOTA builds for.
  *

@@ -64,6 +64,8 @@
     "tgkill",
     "pidfd_open",
     "pidfd_send_signal",
+    "clone",
+    "clone3",
 
     "kexec_load",
     "init_module",

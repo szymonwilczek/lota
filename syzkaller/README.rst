@@ -85,6 +85,8 @@ Every LSM program the harness attaches has a row naming the
 | ``bpf_map``                  | ``bpf$MAP_CREATE``, ``bpf$OBJ_GET_MAP``: each hands  |
 |                              | out a map fd                                         |
 +------------------------------+------------------------------------------------------+
+| ``task_alloc``               | ``clone``, ``clone3``; every executor fork           |
++------------------------------+------------------------------------------------------+
 | ``task_free``                | process exit (exercised as executors die)            |
 +------------------------------+------------------------------------------------------+
 

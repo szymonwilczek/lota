@@ -457,7 +457,8 @@ int lota_ping(struct lota_client *client, uint64_t *uptime_sec);
  *
  * Once registered, the agent's BPF strict_mmap, block_anon_exec,
  * ptrace_access_check, and task_kill hooks gate every access into
- * or out of this process against the trust set.
+ * or out of this process against the trust set. Every process it
+ * creates from then on is protected with it, from its first instruction.
  *
  * Call it once the loader is done: a protected task maps only files with
  * an allowed fs-verity digest or a trusted_libs inode, so registering

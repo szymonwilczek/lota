@@ -6,7 +6,7 @@
  * what the key's help text and the documentation promise, and not a read of
  * another process's /proc, which the kernel's own permission model already
  * answers. A process that asked for protection is the separate case, and it
- * refuses both.
+ * refuses both, as does every process it starts.
  *
  * Copyright (C) 2026 Szymon Wilczek
  */
@@ -140,6 +140,35 @@ static void test_attach_is_recognised_by_its_flag(void)
 	      "an access carrying both flags is an attach");
 }
 
+/* CLONE_VM | CLONE_VFORK, what posix_spawn() passes */
+#define SPAWN_FLAGS 0x00004100UL
+/* CLONE_VM | CLONE_FS | CLONE_FILES | CLONE_SIGHAND, what a thread adds to */
+#define THREAD_SHARE_FLAGS 0x00000f00UL
+
+/*
+ * A protected process passes its protection to the processes it creates,
+ * however it creates them, and to nothing a process nobody protects creates.
+ */
+static void test_a_child_inherits_protection(void)
+{
+	CHECK(lota_clone_inherits_protection(0, 1),
+	      "a fork of a protected process is protected");
+	CHECK(lota_clone_inherits_protection(SPAWN_FLAGS, 1),
+	      "a posix_spawn() child of a protected process is protected");
+	CHECK(!lota_clone_inherits_protection(0, 0),
+	      "a fork of an unprotected process is not protected");
+	CHECK(!lota_clone_inherits_protection(SPAWN_FLAGS, 0),
+	      "a spawn of an unprotected process is not protected");
+}
+
+/* A thread is covered through its leader and takes no mark of its own */
+static void test_a_thread_takes_no_mark(void)
+{
+	CHECK(!lota_clone_inherits_protection(
+		      THREAD_SHARE_FLAGS | LOTA_CLONE_THREAD, 1),
+	      "a thread of a protected process takes no mark");
+}
+
 int main(void)
 {
 	printf("=== ptrace policy tests ===\n");
@@ -152,6 +181,8 @@ int main(void)
 	test_the_agent_is_never_a_target();
 	test_the_agent_read_exemption();
 	test_attach_is_recognised_by_its_flag();
+	test_a_child_inherits_protection();
+	test_a_thread_takes_no_mark();
 
 	if (g_failures) {
 		fprintf(stderr, "\n%d test(s) failed\n", g_failures);

@@ -50,6 +50,10 @@ char LICENSE[] SEC("license") = "GPL";
 #define EPERM 1
 #endif
 
+#ifndef ENOMEM
+#define ENOMEM 12
+#endif
+
 #ifndef EINVAL
 #define EINVAL 22
 #endif
@@ -193,6 +197,25 @@ struct {
 	__type(key, int);
 	__type(value, struct lota_task_auth_entry);
 } lota_task_auth SEC(".maps");
+
+/*
+ * Protection a task took from the protected process that created it, named
+ * by the process registered through protected_pids at the root of the tree.
+ * The entry lives and dies with the task, so it needs no start-time binding
+ * against TGID reuse and has no capacity for a fork to run out of.
+ */
+struct lota_instance_entry {
+	u64 root_start_ticks;
+	u32 root_tgid;
+	u32 pad;
+};
+
+struct {
+	__uint(type, BPF_MAP_TYPE_TASK_STORAGE);
+	__uint(map_flags, BPF_F_NO_PREALLOC);
+	__type(key, int);
+	__type(value, struct lota_instance_entry);
+} lota_instance SEC(".maps");
 
 /*
  * Scratch holds what the kernel writes and the key built from it.
@@ -468,7 +491,9 @@ static __always_inline u64 get_task_start_ticks(struct task_struct *task)
 	return start_ns / (LOTA_NSEC_PER_SEC / LOTA_USER_HZ);
 }
 
-static __always_inline int is_protected_task(struct task_struct *task)
+/* Is @task the process protected_pids names? Its start time in @start_ticks. */
+static __always_inline int is_registered_task(struct task_struct *task,
+					      u64 *start_ticks)
 {
 	u32 tgid;
 	u64 task_start_ticks;
@@ -487,6 +512,7 @@ static __always_inline int is_protected_task(struct task_struct *task)
 		task_start_ticks = get_task_start_ticks(leader);
 	else
 		task_start_ticks = get_task_start_ticks(task);
+	*start_ticks = task_start_ticks;
 	return task_start_ticks && entry->start_time_ticks == task_start_ticks;
 }
 
@@ -512,6 +538,50 @@ auth_subject_task(struct task_struct *task)
 	 */
 	leader = task->group_leader;
 	return leader ? leader : task;
+}
+
+/*
+ * The instance @task belongs to, in @id: the one it inherited, or its own
+ * when protected_pids names it. Returns 1 when @task is protected.
+ * Under the RCU read lock, which a sleepable hook needs for task storage.
+ */
+static __always_inline int task_instance(struct task_struct *task,
+					 struct lota_instance_entry *id)
+{
+	struct lota_instance_entry *entry;
+	struct task_struct *subject;
+	u64 start_ticks = 0;
+	int found = 0;
+
+	if (!task)
+		return 0;
+
+	bpf_rcu_read_lock();
+	subject = auth_subject_task(task);
+	entry = bpf_task_storage_get(&lota_instance, subject, 0, 0);
+	if (entry) {
+		*id = *entry;
+		found = 1;
+	}
+	bpf_rcu_read_unlock();
+
+	if (found)
+		return 1;
+
+	if (!is_registered_task(task, &start_ticks))
+		return 0;
+
+	id->root_start_ticks = start_ticks;
+	id->root_tgid = BPF_CORE_READ(task, tgid);
+	id->pad = 0;
+	return 1;
+}
+
+static __always_inline int is_protected_task(struct task_struct *task)
+{
+	struct lota_instance_entry id;
+
+	return task_instance(task, &id);
 }
 
 static __always_inline int has_task_auth_flag(struct task_struct *task,
@@ -625,6 +695,9 @@ static __always_inline int is_lota_managed_map(struct bpf_map *map)
 		return 1;
 	if (__builtin_memcmp(name, "lota_task_auth",
 			     sizeof("lota_task_auth")) == 0)
+		return 1;
+	if (__builtin_memcmp(name, "lota_instance", sizeof("lota_instance")) ==
+	    0)
 		return 1;
 	if (__builtin_memcmp(name, "exe_hash_slots",
 			     sizeof("exe_hash_slots")) == 0)
@@ -2210,6 +2283,40 @@ int BPF_PROG(lota_task_kill, struct task_struct *p, struct kernel_siginfo *info,
 	if (blocked)
 		return -EPERM;
 
+	return 0;
+}
+
+/* ======================================================================
+ * LSM hook: task_alloc
+ *
+ * A process created by a protected one is marked here, before it first
+ * runs. If the mark cannot be stored the clone fails: a child that runs
+ * unprotected is the window this closes.
+ * ====================================================================== */
+SEC("lsm/task_alloc")
+int BPF_PROG(lota_task_alloc, struct task_struct *task,
+	     unsigned long clone_flags, int ret)
+{
+	struct lota_instance_entry id = {};
+	struct lota_instance_entry *entry;
+	struct task_struct *current;
+	int creator_protected;
+
+	if (ret != 0)
+		return ret;
+
+	current = (struct task_struct *)bpf_get_current_task_btf();
+	creator_protected = task_instance(current, &id);
+	if (!lota_clone_inherits_protection(clone_flags, creator_protected))
+		return 0;
+
+	entry = bpf_task_storage_get(&lota_instance, task, 0,
+				     BPF_LOCAL_STORAGE_GET_F_CREATE);
+	if (!entry)
+		return -ENOMEM;
+
+	entry->root_start_ticks = id.root_start_ticks;
+	entry->root_tgid = id.root_tgid;
 	return 0;
 }
 
