@@ -264,6 +264,14 @@ int handle_exec_event(void *ctx, void *data, size_t len)
 			(unsigned long long)event->timestamp_ns, comm_safe,
 			filename_safe, event->pid, event->uid);
 		return 0;
+	/* the kill guard followed it; the move itself is the record */
+	case LOTA_EVENT_AGENT_MOVED:
+		lota_warn("[%llu] AGENT_MOVED %s moved the agent pid=%u to %s "
+			  "(pid=%u, uid=%u)",
+			  (unsigned long long)event->timestamp_ns, comm_safe,
+			  event->target_pid, filename_safe, event->pid,
+			  event->uid);
+		return 0;
 	/* no signal, so no target pid: name the file instead */
 	case LOTA_EVENT_KILL_GUARD_BLOCKED:
 		lota_info("[%llu] KILL_BLOCKED %s -> %s (pid=%u, uid=%u)",

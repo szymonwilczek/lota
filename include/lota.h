@@ -73,10 +73,11 @@ enum lota_event_type {
 	LOTA_EVENT_MOUNT_BLOCKED, /* mount that would shadow a trusted file */
 	LOTA_EVENT_KILL_GUARD_BLOCKED, /* write that would kill a guarded task */
 	LOTA_EVENT_MAPPED_WRITE_BLOCKED, /* write to a pinned mapped library */
+	LOTA_EVENT_AGENT_MOVED, /* the agent was moved to another cgroup */
 };
 
 /* One past the last event type, so a per-type array covers every one */
-#define LOTA_EVENT_TYPE_COUNT (LOTA_EVENT_MAPPED_WRITE_BLOCKED + 1)
+#define LOTA_EVENT_TYPE_COUNT (LOTA_EVENT_AGENT_MOVED + 1)
 
 /*
  * Event flags (struct lota_exec_event.flags).
@@ -622,6 +623,12 @@ struct lota_exec_event {
  * two per level of a cgroup depth.
  */
 #define LOTA_MAX_GUARDED_FILES 64
+
+/*
+ * Levels of the cgroup the agent was last moved to, root first; the kill
+ * guard follows it there. A cgroup path deeper than this is not followed.
+ */
+#define LOTA_AGENT_CGROUP_DEPTH 32
 
 /*
  * Agent threads with a kernel hash outstanding at once;
