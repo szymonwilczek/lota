@@ -341,6 +341,8 @@ static int ipc_result_to_error(uint32_t result)
 		return LOTA_ERR_NO_KEY_SLOT;
 	case LOTA_IPC_ERR_TPM_LOCKOUT:
 		return LOTA_ERR_TPM_LOCKED;
+	case LOTA_IPC_ERR_NOT_PROTECTED:
+		return LOTA_ERR_NOT_PROTECTED;
 	case LOTA_IPC_ERR_TPM_FAILURE:
 	case LOTA_IPC_ERR_INTERNAL:
 	default:
@@ -1314,6 +1316,187 @@ int lota_poll_events(struct lota_client *client, int timeout_ms)
 	return dispatched;
 }
 
+/* far above what one process maps; bounds the allocation a reply asks for */
+#define REGISTRY_MAX_OBJECTS 4096
+/* a token round between two pages restarts the listing */
+#define REGISTRY_FETCH_TRIES 4
+
+void lota_registry_free(struct lota_registry *reg)
+{
+	if (!reg)
+		return;
+	free(reg->objects);
+	free(reg);
+}
+
+static int registry_request_page(struct lota_client *client, uint32_t pid,
+				 uint32_t start, uint8_t *buf, size_t cap,
+				 size_t *len)
+{
+	struct lota_ipc_request req;
+	struct lota_ipc_response resp;
+	struct lota_ipc_registry_request body;
+	int ret;
+
+	memset(&body, 0, sizeof(body));
+	body.pid = pid;
+	body.start = start;
+
+	memset(&req, 0, sizeof(req));
+	req.magic = LOTA_IPC_MAGIC;
+	req.version = LOTA_IPC_VERSION;
+	req.cmd = LOTA_IPC_CMD_GET_REGISTRY;
+	req.payload_len = sizeof(body);
+
+	ret = send_request(client, &req, &body, sizeof(body));
+	if (ret < 0)
+		return (ret == -ETIMEDOUT) ? LOTA_ERR_TIMEOUT :
+					     LOTA_ERR_PROTOCOL;
+
+	ret = recv_response(client, &resp, buf, cap, len);
+	if (ret < 0)
+		return (ret == -ETIMEDOUT) ? LOTA_ERR_TIMEOUT :
+					     LOTA_ERR_PROTOCOL;
+	if (resp.result != LOTA_IPC_OK)
+		return ipc_result_to_error(resp.result);
+	return LOTA_OK;
+}
+
+/* Decode @count entries after the page header into @objs. */
+static int registry_decode_entries(const uint8_t *buf, size_t len,
+				   uint16_t count,
+				   struct lota_registry_object *objs)
+{
+	size_t off = sizeof(struct lota_ipc_registry_page);
+
+	for (uint16_t i = 0; i < count; i++) {
+		struct lota_ipc_registry_entry e;
+		struct lota_registry_object *o = &objs[i];
+
+		if (len - off < sizeof(e))
+			return LOTA_ERR_PROTOCOL;
+		memcpy(&e, buf + off, sizeof(e));
+		off += sizeof(e);
+
+		if (e.soname_len == 0 ||
+		    e.soname_len >= LOTA_REGISTRY_SONAME_MAX ||
+		    e.path_len >= LOTA_REGISTRY_PATH_MAX ||
+		    len - off < (size_t)e.soname_len + e.path_len)
+			return LOTA_ERR_PROTOCOL;
+		if (e.road > LOTA_IPC_REGISTRY_ROAD_CONTENT)
+			return LOTA_ERR_PROTOCOL;
+		if (e.road == LOTA_IPC_REGISTRY_ROAD_NONE ?
+			    e.digest_len != 0 :
+			    (e.digest_len != 32 && e.digest_len != 64))
+			return LOTA_ERR_PROTOCOL;
+
+		memset(o, 0, sizeof(*o));
+		o->size = e.size;
+		o->dev = e.dev;
+		o->ino = e.ino;
+		o->road = e.road;
+		o->digest_len = e.digest_len;
+		memcpy(o->digest, e.digest, e.digest_len);
+		memcpy(o->soname, buf + off, e.soname_len);
+		off += e.soname_len;
+		memcpy(o->path, buf + off, e.path_len);
+		off += e.path_len;
+	}
+	return off == len ? LOTA_OK : LOTA_ERR_PROTOCOL;
+}
+
+/* One listing; 1 asks for a restart because a token round intervened. */
+static int registry_fetch(struct lota_client *client, uint32_t pid,
+			  uint8_t *buf, struct lota_registry **out)
+{
+	struct lota_registry *reg = NULL;
+	uint32_t start = 0;
+	int ret;
+
+	do {
+		struct lota_ipc_registry_page hdr;
+		size_t len = 0;
+
+		ret = registry_request_page(client, pid, start, buf,
+					    LOTA_IPC_MAX_PAYLOAD, &len);
+		if (ret != LOTA_OK)
+			goto fail;
+		ret = LOTA_ERR_PROTOCOL;
+		if (len < sizeof(hdr))
+			goto fail;
+		memcpy(&hdr, buf, sizeof(hdr));
+		if (hdr.pid != pid || hdr.start != start)
+			goto fail;
+
+		if (!reg) {
+			if (hdr.total > REGISTRY_MAX_OBJECTS)
+				goto fail;
+			ret = LOTA_ERR_NO_MEMORY;
+			reg = calloc(1, sizeof(*reg));
+			if (!reg)
+				goto fail;
+			if (hdr.total > 0) {
+				reg->objects = calloc(hdr.total,
+						      sizeof(*reg->objects));
+				if (!reg->objects)
+					goto fail;
+			}
+			reg->round = hdr.round;
+			reg->pid = pid;
+			reg->flags = hdr.flags;
+			reg->count = hdr.total;
+			memcpy(reg->image_digest, hdr.image_digest,
+			       sizeof(reg->image_digest));
+		} else if (hdr.round != reg->round || hdr.total != reg->count) {
+			lota_registry_free(reg);
+			return 1;
+		}
+
+		ret = LOTA_ERR_PROTOCOL;
+		if ((hdr.count == 0 && start < reg->count) ||
+		    hdr.count > reg->count - start)
+			goto fail;
+		ret = registry_decode_entries(buf, len, hdr.count,
+					      reg->objects + start);
+		if (ret != LOTA_OK)
+			goto fail;
+		start += hdr.count;
+	} while (start < reg->count);
+
+	*out = reg;
+	return LOTA_OK;
+fail:
+	lota_registry_free(reg);
+	return ret;
+}
+
+int lota_get_registry(struct lota_client *client, uint32_t pid,
+		      struct lota_registry **out)
+{
+	uint8_t *buf;
+	int ret = LOTA_ERR_AGENT_ERROR;
+
+	if (!client)
+		return LOTA_ERR_NOT_CONNECTED;
+	if (!out || pid == 0)
+		return LOTA_ERR_INVALID_ARG;
+	*out = NULL;
+
+	buf = malloc(LOTA_IPC_MAX_PAYLOAD);
+	if (!buf)
+		return LOTA_ERR_NO_MEMORY;
+
+	/* torn by a token round on every try: reported as an agent error */
+	for (int i = 0; i < REGISTRY_FETCH_TRIES; i++) {
+		ret = registry_fetch(client, pid, buf, out);
+		if (ret != 1)
+			break;
+		ret = LOTA_ERR_AGENT_ERROR;
+	}
+	free(buf);
+	return ret;
+}
+
 const char *lota_strerror(int error)
 {
 	switch (error) {
@@ -1355,6 +1538,8 @@ const char *lota_strerror(int error)
 		return "This machine has no attestation-key slot left for that publisher";
 	case LOTA_ERR_TPM_LOCKED:
 		return "The TPM on this machine is locked out after too many failed authorizations and signs nothing until it is cleared";
+	case LOTA_ERR_NOT_PROTECTED:
+		return "The last token round did not measure that process";
 	default:
 		return "Unknown error";
 	}

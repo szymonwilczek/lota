@@ -311,6 +311,15 @@ Worth being precise about, because it decides what you can build on it:
   written, and the token carries ``LOTA_FLAG_IMAGE_CONTENT_HASHED``.
   Refusing that flag demands fs-verity, at the cost of every such install.
 
+* Which code objects the process had mapped, the unmeasured ones included.
+  ``lota_get_registry()`` lists them for a protected PID as the last token
+  round found them: path, size, inode and, where one was taken, the digest.
+  The token does not carry the list, it binds it:
+  ``lota_server_registry_digest()`` folds the listed sonames and digests,
+  and the result equals the image digest the token holds for that process.
+  A list that does not fold to it is not the one the token describes. The
+  path and size are not bound and only say which file a soname came from.
+
 * Whether a protected process was ended through the agent on that host since
   it booted. The agent relays a termination only for the process's owner or
   root, and ``LOTA_FLAG_PROTECTED_TERMINATED`` says on every later token that

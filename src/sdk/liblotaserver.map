@@ -17,6 +17,7 @@
 LOTASERVER_1.0 {
 	global:
 		lota_server_parse_token;
+		lota_server_registry_digest;
 		lota_server_sdk_version;
 		lota_server_strerror;
 		lota_server_verify_token;

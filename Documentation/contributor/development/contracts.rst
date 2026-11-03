@@ -455,6 +455,11 @@ The owner of the process or root may read its registry, the callers that could
 read its ``maps`` themselves. A process the last round did not measure is
 answered ``LOTA_IPC_ERR_NOT_PROTECTED``.
 
+``lota_get_registry()`` in ``liblotagaming`` fetches every page and starts over
+when a token round replaces the listing between two of them;
+``lota_server_registry_digest()`` in ``liblotaserver`` is the fold, so a relying
+party checks the list without reimplementing it.
+
 GET_TOKEN rate limits
 =====================
 

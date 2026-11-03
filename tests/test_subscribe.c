@@ -1059,6 +1059,213 @@ static void test_reply_before_hangup(void)
 		PASS();
 }
 
+/* Registry page of objects [start, start + count) of a 5-object listing. */
+static size_t build_registry_page(uint8_t *buf, uint64_t round, uint32_t start,
+				  uint16_t count, int bad_road)
+{
+	struct lota_ipc_registry_page hdr;
+	size_t off = sizeof(hdr);
+
+	memset(&hdr, 0, sizeof(hdr));
+	hdr.round = round;
+	hdr.pid = 4242;
+	hdr.total = 5;
+	hdr.start = start;
+	hdr.count = count;
+	hdr.flags = LOTA_IPC_REGISTRY_MEASURED;
+	memset(hdr.image_digest, 0x5a, sizeof(hdr.image_digest));
+	memcpy(buf, &hdr, sizeof(hdr));
+
+	for (uint32_t i = start; i < start + count; i++) {
+		struct lota_ipc_registry_entry e;
+		char soname[24];
+		char path[48];
+
+		snprintf(soname, sizeof(soname), "lib%u.so", i);
+		snprintf(path, sizeof(path), "/opt/title/lib%u.so", i);
+		memset(&e, 0, sizeof(e));
+		e.size = 1000 + i;
+		e.ino = 77 + i;
+		/* Object 4 is unmeasured; @bad_road gives it a digest anyway. */
+		e.road = i == 4 ? LOTA_IPC_REGISTRY_ROAD_NONE :
+				  LOTA_IPC_REGISTRY_ROAD_VERITY;
+		if (i != 4 || bad_road) {
+			e.digest_len = 32;
+			memset(e.digest, (int)i + 1, 32);
+		}
+		e.soname_len = (uint16_t)strlen(soname);
+		e.path_len = (uint16_t)strlen(path);
+		memcpy(buf + off, &e, sizeof(e));
+		off += sizeof(e);
+		memcpy(buf + off, soname, e.soname_len);
+		off += e.soname_len;
+		memcpy(buf + off, path, e.path_len);
+		off += e.path_len;
+	}
+	return off;
+}
+
+/* Answer GET_REGISTRY in pages of three; round @torn_round from the 2nd on. */
+static void serve_registry(int client_fd, uint64_t torn_round, int bad_road)
+{
+	struct lota_ipc_request req;
+	struct lota_ipc_registry_request body;
+	uint8_t buf[LOTA_IPC_MAX_PAYLOAD];
+	int served = 0;
+
+	while (recv_request(client_fd, &req, &body, sizeof(body)) == 0) {
+		uint64_t round = served > 0 && torn_round ? torn_round : 1;
+		uint16_t count = body.start == 0 ? 3 : 2;
+		size_t len;
+
+		if (req.cmd != LOTA_IPC_CMD_GET_REGISTRY || body.pid != 4242)
+			_exit(2);
+		len = build_registry_page(buf, round, body.start, count,
+					  bad_road);
+		if (send_response(client_fd, LOTA_IPC_OK, buf, (uint32_t)len) <
+		    0)
+			_exit(3);
+		served++;
+	}
+}
+
+static void server_registry(int client_fd)
+{
+	serve_registry(client_fd, 0, 0);
+}
+
+static void server_registry_torn(int client_fd)
+{
+	serve_registry(client_fd, 2, 0);
+}
+
+static void server_registry_bad_road(int client_fd)
+{
+	serve_registry(client_fd, 0, 1);
+}
+
+static void server_registry_not_protected(int client_fd)
+{
+	struct lota_ipc_request req;
+	struct lota_ipc_registry_request body;
+
+	if (recv_request(client_fd, &req, &body, sizeof(body)) < 0)
+		_exit(1);
+	if (send_response(client_fd, LOTA_IPC_ERR_NOT_PROTECTED, NULL, 0) < 0)
+		_exit(3);
+}
+
+/* Fetch pid 4242 from a mock agent running @scenario. */
+static int fetch_registry(server_scenario_fn scenario,
+			  struct lota_registry **reg, int *skipped)
+{
+	struct lota_connect_opts opts = { .struct_size = sizeof(opts) };
+	struct lota_client *client;
+	pid_t server;
+	int ret;
+
+	*skipped = 0;
+	server = start_mock_server(scenario);
+	if (server < 0) {
+		*skipped = socket_errno_is_sandbox(mock_server_errno);
+		return LOTA_ERR_CONNECTION_FAILED;
+	}
+	opts.socket_path = test_socket;
+	opts.timeout_ms = 5000;
+	client = lota_connect_opts(&opts);
+	if (!client) {
+		wait_server(server);
+		return LOTA_ERR_CONNECTION_FAILED;
+	}
+	ret = lota_get_registry(client, 4242, reg);
+	lota_disconnect(client);
+	wait_server(server);
+	return ret;
+}
+
+static void test_registry_pages(void)
+{
+	struct lota_registry *reg = NULL;
+	int skipped;
+	int ret;
+
+	TEST("get_registry joins the pages of one listing");
+	ret = fetch_registry(server_registry, &reg, &skipped);
+	if (skipped) {
+		SKIP("AF_UNIX mock server not permitted");
+		return;
+	}
+	if (ret != LOTA_OK || !reg || reg->count != 5 || reg->round != 1 ||
+	    reg->pid != 4242 || !(reg->flags & LOTA_REGISTRY_MEASURED) ||
+	    reg->image_digest[0] != 0x5a ||
+	    strcmp(reg->objects[3].soname, "lib3.so") != 0 ||
+	    strcmp(reg->objects[3].path, "/opt/title/lib3.so") != 0 ||
+	    reg->objects[3].size != 1003 || reg->objects[3].digest_len != 32 ||
+	    reg->objects[3].digest[0] != 4 ||
+	    reg->objects[4].road != LOTA_REGISTRY_ROAD_NONE ||
+	    reg->objects[4].digest_len != 0) {
+		FAIL(lota_strerror(ret));
+		lota_registry_free(reg);
+		return;
+	}
+	lota_registry_free(reg);
+	PASS();
+}
+
+static void test_registry_torn(void)
+{
+	struct lota_registry *reg = NULL;
+	int skipped;
+	int ret;
+
+	TEST("get_registry restarts a listing a token round tore");
+	ret = fetch_registry(server_registry_torn, &reg, &skipped);
+	if (skipped) {
+		SKIP("AF_UNIX mock server not permitted");
+		return;
+	}
+	if (ret != LOTA_OK || !reg || reg->round != 2 || reg->count != 5) {
+		FAIL(lota_strerror(ret));
+		lota_registry_free(reg);
+		return;
+	}
+	lota_registry_free(reg);
+	PASS();
+}
+
+static void test_registry_refusals(void)
+{
+	struct lota_registry *reg = NULL;
+	int skipped;
+	int ret;
+
+	TEST("get_registry refuses a digest on an unmeasured object");
+	ret = fetch_registry(server_registry_bad_road, &reg, &skipped);
+	if (skipped)
+		SKIP("AF_UNIX mock server not permitted");
+	else if (ret != LOTA_ERR_PROTOCOL || reg)
+		FAIL(lota_strerror(ret));
+	else
+		PASS();
+
+	TEST("get_registry names a process the round did not measure");
+	ret = fetch_registry(server_registry_not_protected, &reg, &skipped);
+	if (skipped)
+		SKIP("AF_UNIX mock server not permitted");
+	else if (ret != LOTA_ERR_NOT_PROTECTED || reg)
+		FAIL(lota_strerror(ret));
+	else
+		PASS();
+
+	TEST("get_registry refuses a missing client or output");
+	if (lota_get_registry(NULL, 1, &reg) == LOTA_ERR_NOT_CONNECTED &&
+	    lota_get_registry((struct lota_client *)&reg, 1, NULL) ==
+		    LOTA_ERR_INVALID_ARG)
+		PASS();
+	else
+		FAIL("accepted a missing argument");
+}
+
 int main(void)
 {
 	printf("=== SUBSCRIBE / Push Notification Tests ===\n\n");
@@ -1091,6 +1298,9 @@ int main(void)
 	test_poll_no_data();
 	test_poll_infinite_wait();
 	test_reply_before_hangup();
+	test_registry_pages();
+	test_registry_torn();
+	test_registry_refusals();
 
 	printf("\n=== Results: %d/%d passed ===\n", tests_passed, tests_run);
 	return (tests_passed == tests_run) ? 0 : 1;

@@ -180,6 +180,35 @@ const char *lota_server_strerror(int error);
  */
 const char *lota_server_sdk_version(void);
 
+/*
+ * One code object of a protected process's registry, as the relying party
+ * received it: its soname and the digest the agent took, digest_len 0 for
+ * an object absent from the fold.
+ */
+struct lota_server_registry_module {
+	const char *soname;
+	uint32_t digest_len; /* 0, 32 or 64 */
+	const uint8_t *digest;
+};
+
+/*
+ * lota_server_registry_digest - Fold a registry into its image digest
+ * @mods:  The objects of one process, in any order
+ * @count: Number of objects
+ * @out:   Receives the 32-byte image digest
+ *
+ * Folds the objects that carry a digest the way the agent does, so @out
+ * equals the token's protected_image_digests entry for the process when the
+ * registry is the one that round measured. A registry that folds to anything
+ * else is not the list behind the token.
+ *
+ * Returns: LOTA_SERVER_OK, LOTA_SERVER_ERR_INVALID_ARG for a malformed
+ *          object or more objects than a process may be measured with,
+ *          or LOTA_SERVER_ERR_CRYPTO.
+ */
+int lota_server_registry_digest(const struct lota_server_registry_module *mods,
+				size_t count, uint8_t out[32]);
+
 #ifdef __cplusplus
 }
 #endif

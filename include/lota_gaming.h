@@ -114,6 +114,12 @@ enum lota_error {
 	 * Unlike LOTA_ERR_NOT_ATTESTED, retrying next round does not help.
 	 */
 	LOTA_ERR_TPM_LOCKED = -18,
+
+	/*
+	 * The process asked about was not measured by the last token round:
+	 * nobody protected it, or it exited before the round reached it.
+	 */
+	LOTA_ERR_NOT_PROTECTED = -19,
 };
 
 /*
@@ -599,6 +605,69 @@ int lota_unsubscribe(struct lota_client *client);
  *          or negative LOTA_ERR_* on error.
  */
 int lota_poll_events(struct lota_client *client, int timeout_ms);
+
+/* Upper bounds of the strings in a registry object, terminator included */
+#define LOTA_REGISTRY_SONAME_MAX 256
+#define LOTA_REGISTRY_PATH_MAX 320
+
+/* How a registry object's digest was taken */
+#define LOTA_REGISTRY_ROAD_NONE 0 /* no digest; absent from the fold */
+#define LOTA_REGISTRY_ROAD_VERITY 1 /* fs-verity measurement */
+#define LOTA_REGISTRY_ROAD_CONTENT 2 /* contents hashed while running */
+
+/* image_digest is the token's entry for the process */
+#define LOTA_REGISTRY_MEASURED (1U << 0)
+
+/*
+ * One code object mapped in a protected process.
+ *
+ * soname and digest are what the token's image digest folds;
+ * path, size, dev and ino describe the object and are not bound.
+ */
+struct lota_registry_object {
+	uint64_t size;
+	uint64_t dev;
+	uint64_t ino;
+	uint32_t road; /* LOTA_REGISTRY_ROAD_* */
+	uint32_t digest_len; /* 0, 32 or 64 */
+	uint8_t digest[64];
+	char soname[LOTA_REGISTRY_SONAME_MAX];
+	char path[LOTA_REGISTRY_PATH_MAX];
+};
+
+/*
+ * The code objects the last token round found mapped in one process.
+ */
+struct lota_registry {
+	uint64_t round; /* measurement round the list comes from */
+	uint32_t pid;
+	uint32_t flags; /* LOTA_REGISTRY_* */
+	uint8_t image_digest[32];
+	uint32_t count;
+	struct lota_registry_object *objects;
+};
+
+/*
+ * lota_get_registry - Fetch what the last token round found mapped in @pid
+ * @client: Connected client
+ * @pid:    A protected process the caller owns, or any one for root
+ * @out:    Receives a registry to release with lota_registry_free()
+ *
+ * Every object is listed, those the agent could not measure included.
+ * The token binds the list: with LOTA_REGISTRY_MEASURED set, image_digest
+ * is the token's protected_image_digests entry for @pid, and
+ * lota_server_registry_digest() over the objects reproduces it.
+ * A relying party checks both before trusting the list.
+ *
+ * Returns: LOTA_OK, LOTA_ERR_NOT_PROTECTED for a process the last round
+ *          did not measure, LOTA_ERR_ACCESS_DENIED for somebody else's,
+ *          or another negative LOTA_ERR_*.
+ */
+int lota_get_registry(struct lota_client *client, uint32_t pid,
+		      struct lota_registry **out);
+
+/* Release a registry from lota_get_registry(); NULL is a no-op. */
+void lota_registry_free(struct lota_registry *reg);
 
 const char *lota_strerror(int error);
 

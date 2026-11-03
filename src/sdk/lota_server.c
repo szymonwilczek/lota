@@ -19,6 +19,7 @@
 #include <time.h>
 #include <stdint.h>
 
+#include "../../include/lota_runtime_image_measure.h"
 #include "../../include/lota_runtime_protect_digest.h"
 #include "../../include/lota_server.h"
 #include "../../include/lota_token_quote_nonce.h"
@@ -682,4 +683,69 @@ const char *lota_server_strerror(int error)
 const char *lota_server_sdk_version(void)
 {
 	return LOTA_BUILD_VERSION_STRING;
+}
+
+static int registry_module_cmp(const void *a, const void *b)
+{
+	return lota__runtime_image_module_cmp(a, b);
+}
+
+int lota_server_registry_digest(const struct lota_server_registry_module *mods,
+				size_t count, uint8_t out[32])
+{
+	struct lota_runtime_image_module *folded = NULL;
+	size_t n = 0, unique = 0;
+	int ret;
+
+	if (!out || (count > 0 && !mods))
+		return LOTA_SERVER_ERR_INVALID_ARG;
+	if (count > LOTA_RUNTIME_IMAGE_MAX_MODULES)
+		return LOTA_SERVER_ERR_INVALID_ARG;
+
+	if (count > 0) {
+		folded = calloc(count, sizeof(*folded));
+		if (!folded)
+			return LOTA_SERVER_ERR_CRYPTO;
+	}
+
+	for (size_t i = 0; i < count; i++) {
+		const struct lota_server_registry_module *m = &mods[i];
+		size_t slen;
+
+		if (m->digest_len == 0)
+			continue;
+		if (!m->soname || !m->digest ||
+		    !LOTA_VERITY_DIGEST_LEN_SUPPORTED(m->digest_len)) {
+			ret = LOTA_SERVER_ERR_INVALID_ARG;
+			goto out;
+		}
+		slen = strnlen(m->soname, LOTA_RUNTIME_IMAGE_SONAME_MAX);
+		if (slen == 0 || slen >= LOTA_RUNTIME_IMAGE_SONAME_MAX) {
+			ret = LOTA_SERVER_ERR_INVALID_ARG;
+			goto out;
+		}
+		memcpy(folded[n].soname, m->soname, slen);
+		folded[n].verity.len = m->digest_len;
+		memcpy(folded[n].verity.digest, m->digest, m->digest_len);
+		n++;
+	}
+
+	/* the agent's canonical order, one entry per soname and digest */
+	if (n > 0) {
+		qsort(folded, n, sizeof(*folded), registry_module_cmp);
+		unique = 1;
+		for (size_t i = 1; i < n; i++) {
+			if (lota__runtime_image_module_cmp(&folded[unique - 1],
+							   &folded[i]) != 0)
+				folded[unique++] = folded[i];
+		}
+	}
+
+	ret = lota_compute_runtime_image_digest(folded, (uint32_t)unique,
+						out) == 0 ?
+		      LOTA_SERVER_OK :
+		      LOTA_SERVER_ERR_CRYPTO;
+out:
+	free(folded);
+	return ret;
 }

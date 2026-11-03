@@ -23,6 +23,7 @@
 #include <stdint.h>
 
 #include "lota_gaming.h"
+#include "lota_runtime_image_measure.h"
 #include "lota_runtime_protect_digest.h"
 #include "lota_server.h"
 #include "lota_token.h"
@@ -1064,6 +1065,96 @@ static void test_sdk_version_is_a_real_build(void)
 	PASS();
 }
 
+/*
+ * A relying party folds a fetched registry and compares the result with the
+ * image digest the token carries, so the fold must be the agent's own:
+ * canonical order, one entry per soname and digest, unmeasured objects out.
+ */
+static void test_registry_digest(void)
+{
+	uint8_t d1[32], d2[64], d3[32];
+	struct lota_server_registry_module mods[] = {
+		{ "libz.so.1", sizeof(d1), d1 },
+		{ "libc.so.6", sizeof(d2), d2 },
+		{ "title.exe", 0, NULL },
+		{ "libc.so.6", sizeof(d2), d2 },
+		{ "liba.so", sizeof(d3), d3 },
+	};
+	struct lota_server_registry_module shuffled[] = {
+		mods[4],
+		mods[2],
+		mods[0],
+		mods[1],
+	};
+	struct lota_runtime_image_module expect[3];
+	uint8_t want[32], got[32], again[32];
+
+	memset(d1, 0x11, sizeof(d1));
+	memset(d2, 0x22, sizeof(d2));
+	memset(d3, 0x33, sizeof(d3));
+	memset(expect, 0, sizeof(expect));
+	strcpy(expect[0].soname, "liba.so");
+	expect[0].verity.len = sizeof(d3);
+	memcpy(expect[0].verity.digest, d3, sizeof(d3));
+	strcpy(expect[1].soname, "libc.so.6");
+	expect[1].verity.len = sizeof(d2);
+	memcpy(expect[1].verity.digest, d2, sizeof(d2));
+	strcpy(expect[2].soname, "libz.so.1");
+	expect[2].verity.len = sizeof(d1);
+	memcpy(expect[2].verity.digest, d1, sizeof(d1));
+
+	TEST("registry_digest folds like the agent");
+	if (lota_compute_runtime_image_digest(expect, 3, want) != 0 ||
+	    lota_server_registry_digest(mods, 5, got) != LOTA_SERVER_OK ||
+	    memcmp(want, got, sizeof(got)) != 0)
+		FAIL("fold differs from the canonical digest");
+	else
+		PASS();
+
+	TEST("registry_digest ignores order and repeats");
+	if (lota_server_registry_digest(shuffled, 4, again) != LOTA_SERVER_OK ||
+	    memcmp(want, again, sizeof(again)) != 0)
+		FAIL("order or a repeated object changed the fold");
+	else
+		PASS();
+
+	TEST("registry_digest of nothing measured is the empty fold");
+	if (lota_compute_runtime_image_digest(NULL, 0, want) != 0 ||
+	    lota_server_registry_digest(&mods[2], 1, got) != LOTA_SERVER_OK ||
+	    memcmp(want, got, sizeof(got)) != 0)
+		FAIL("unmeasured object reached the fold");
+	else
+		PASS();
+
+	TEST("registry_digest refuses malformed modules");
+	{
+		struct lota_server_registry_module bad = mods[0];
+		int ok = lota_server_registry_digest(mods, 1, NULL) ==
+				 LOTA_SERVER_ERR_INVALID_ARG &&
+			 lota_server_registry_digest(NULL, 1, got) ==
+				 LOTA_SERVER_ERR_INVALID_ARG;
+
+		bad.digest_len = 20;
+		ok = ok && lota_server_registry_digest(&bad, 1, got) ==
+				   LOTA_SERVER_ERR_INVALID_ARG;
+		bad = mods[0];
+		bad.soname = "";
+		ok = ok && lota_server_registry_digest(&bad, 1, got) ==
+				   LOTA_SERVER_ERR_INVALID_ARG;
+		bad = mods[0];
+		bad.digest = NULL;
+		ok = ok && lota_server_registry_digest(&bad, 1, got) ==
+				   LOTA_SERVER_ERR_INVALID_ARG;
+		ok = ok && lota_server_registry_digest(
+				   mods, LOTA_RUNTIME_IMAGE_MAX_MODULES + 1,
+				   got) == LOTA_SERVER_ERR_INVALID_ARG;
+		if (ok)
+			PASS();
+		else
+			FAIL("accepted a malformed module");
+	}
+}
+
 int main(void)
 {
 	printf(BOLD "\n=== LOTA Server SDK - Test Suite ===\n\n" RESET);
@@ -1122,6 +1213,7 @@ int main(void)
 	test_update_pending_flag_is_distinct_and_named();
 	test_sdk_version_agrees_across_libraries();
 	test_sdk_version_is_a_real_build();
+	test_registry_digest();
 
 	printf(BOLD "\n=== Results: %d/%d passed" RESET, tests_pass, tests_run);
 	if (tests_fail > 0) {
