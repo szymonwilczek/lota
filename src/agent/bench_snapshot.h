@@ -14,6 +14,7 @@
 
 #include "bench.h"
 #include "bench_proc.h"
+#include "bench_protected.h"
 
 #define LOTA_BENCH_VERSION 1
 #define LOTA_BENCH_INTERVAL_MS 1000
@@ -57,21 +58,25 @@ bool bench_due(struct bench_state *st, uint64_t now_ns);
 
 /*
  * Sample the daemon and replace the file. @bpf is NULL when nothing
- * is loaded. Returns 0 or the write's error.
+ * is loaded, @prot when the protected set could not be read. Returns 0
+ * or the write's error.
  */
 int bench_write(struct bench_state *st, uint64_t now_ns,
-		const struct bench_bpf *bpf);
+		const struct bench_bpf *bpf,
+		const struct bench_protected_sum *prot);
 
 /* Remove a snapshot an earlier run left behind */
 void bench_remove(void);
 
 /*
- * The snapshot in three parts: header and agent, BPF, close.
+ * The snapshot in parts: header and agent, BPF, protected set, close.
  * @self or @b is NULL when it could not be read; it is written as null.
  */
 void bench_format(struct bench_state *st, uint64_t now_ns,
 		  const struct bench_proc *self);
 void bench_format_bpf(struct bench_writer *w, const struct bench_bpf *b);
+void bench_format_protected(struct bench_state *st,
+			    const struct bench_protected_sum *p);
 void bench_format_end(struct bench_writer *w);
 
 /* Copy @src into @dst, every byte outside [A-Za-z0-9_.] made '_' */

@@ -35,6 +35,7 @@ static const char k_stat[] =
 	"20 0 4 0 100 2000000 500 18446744073709551615\n";
 
 static const char k_status[] = "Name:\tgame\n"
+			       "VmRSS:\t   3000 kB\n"
 			       "Threads:\t4\n"
 			       "voluntary_ctxt_switches:\t77\n"
 			       "nonvoluntary_ctxt_switches:\t5\n";
@@ -55,6 +56,7 @@ static void test_parse_stat(void)
 	CHECK(bench_parse_stat(k_stat, &p) == 0, "stat parses");
 	CHECK(p.minflt == 120 && p.majflt == 3, "page faults read past comm");
 	CHECK(p.utime == 250 && p.stime == 40, "CPU ticks read past comm");
+	CHECK(p.start == 100, "start time read past negative fields");
 	CHECK(bench_parse_stat("4242 (game S 1", &p) == -EINVAL,
 	      "a stat without a closing paren is refused");
 	CHECK(bench_parse_stat("4242 (game) S 1 2 3\n", &p) == -EINVAL,
@@ -68,8 +70,14 @@ static void test_parse_status(void)
 	CHECK(bench_parse_status(k_status, &p) == 0, "status parses");
 	CHECK(p.ctxt_vol == 77 && p.ctxt_invol == 5,
 	      "voluntary and involuntary switches are told apart");
+	CHECK(p.vm_rss_kb == 3000, "VmRSS is read from status");
 	CHECK(bench_parse_status("Name:\tgame\n", &p) == -EINVAL,
 	      "a status without switch counters is refused");
+	CHECK(bench_parse_status("voluntary_ctxt_switches:\t1\n"
+				 "nonvoluntary_ctxt_switches:\t2\n",
+				 &p) == 0 &&
+		      p.vm_rss_kb == 0,
+	      "a status without VmRSS reads as no resident pages");
 }
 
 static void test_parse_rollup(void)
@@ -111,17 +119,19 @@ static void test_read_proc(void)
 		      put(dirfd, "status", k_status) == 0,
 	      "synthetic proc directory written");
 
-	CHECK(bench_read_proc(dirfd, &p) == -ENOENT,
+	CHECK(bench_read_proc(dirfd, &p, true) == -ENOENT,
 	      "a missing smaps_rollup fails the read");
+	CHECK(bench_read_proc(dirfd, &p, false) == 0 && p.utime == 250,
+	      "without a rollup it is not opened");
 
 	CHECK(symlinkat("status", dirfd, "smaps_rollup") == 0,
 	      "smaps_rollup planted as a symlink");
-	CHECK(bench_read_proc(dirfd, &p) == -ELOOP,
+	CHECK(bench_read_proc(dirfd, &p, true) == -ELOOP,
 	      "a symlinked proc file is not followed");
 	unlinkat(dirfd, "smaps_rollup", 0);
 
 	CHECK(put(dirfd, "smaps_rollup", k_rollup) == 0, "rollup written");
-	CHECK(bench_read_proc(dirfd, &p) == 0 && p.utime == 250 &&
+	CHECK(bench_read_proc(dirfd, &p, true) == 0 && p.utime == 250 &&
 		      p.ctxt_vol == 77 && p.pss_kb == 1024,
 	      "all three files land in one sample");
 
@@ -137,7 +147,7 @@ static void test_read_self(void)
 	struct bench_proc p = { 0 };
 	int dirfd = open("/proc/self", O_RDONLY | O_DIRECTORY | O_CLOEXEC);
 
-	CHECK(dirfd >= 0 && bench_read_proc(dirfd, &p) == 0,
+	CHECK(dirfd >= 0 && bench_read_proc(dirfd, &p, true) == 0,
 	      "the test's own counters read");
 	CHECK(p.rss_kb > 0 && p.pss_kb > 0,
 	      "a live process has resident pages");
@@ -227,8 +237,131 @@ static void test_format_bpf(void)
 		bench_format(&st, UINT64_MAX, &p);
 	}
 	bench_format_bpf(&st.w, &b);
+	{
+		struct bench_protected_sum sum;
+
+		memset(&sum, 0xff, sizeof(sum));
+		sum.pss_ok = true;
+		bench_format_protected(&st, &sum);
+	}
 	bench_format_end(&st.w);
 	CHECK(!st.w.overflow, "the largest snapshot fits the cap");
+}
+
+static void proc_at(struct bench_proc *p, uint64_t start, uint64_t cpu,
+		    uint64_t flt, uint64_t pss)
+{
+	memset(p, 0, sizeof(*p));
+	p->start = start;
+	p->utime = cpu;
+	p->minflt = flt;
+	p->majflt = flt / 10;
+	p->vm_rss_kb = 100;
+	p->pss_kb = pss;
+}
+
+static void test_protected_fold(void)
+{
+	static struct bench_protected bp;
+	struct bench_protected_sum sum;
+	struct bench_proc p;
+
+	bench_protected_begin(&bp, &sum);
+	proc_at(&p, 7, 100, 50, 40);
+	bench_protected_add(&bp, &sum, 10, &p, true);
+	proc_at(&p, 8, 200, 20, 0);
+	bench_protected_add(&bp, &sum, 11, &p, false);
+	bench_protected_end(&bp);
+	CHECK(sum.count == 2 && sum.rss_kb == 200, "both processes are summed");
+	CHECK(sum.cpu == 0 && sum.minflt == 0 && sum.majflt == 0,
+	      "a process first seen is not charged its past");
+	CHECK(!sum.pss_ok, "PSS is unknown until each process had a rollup");
+
+	bench_protected_begin(&bp, &sum);
+	proc_at(&p, 7, 130, 80, 0);
+	bench_protected_add(&bp, &sum, 10, &p, false);
+	proc_at(&p, 8, 205, 21, 60);
+	bench_protected_add(&bp, &sum, 11, &p, true);
+	bench_protected_end(&bp);
+	CHECK(sum.cpu == 35 && sum.minflt == 31 && sum.majflt == 3,
+	      "the interval carries the deltas only");
+	CHECK(sum.pss_ok && sum.pss_kb == 100,
+	      "PSS is carried between rollups");
+
+	/* PID 10 is reused by another process, 11 has exited */
+	bench_protected_begin(&bp, &sum);
+	proc_at(&p, 9, 5, 5, 0);
+	bench_protected_add(&bp, &sum, 10, &p, false);
+	bench_protected_end(&bp);
+	CHECK(sum.count == 1 && sum.cpu == 0 && sum.minflt == 0,
+	      "a reused PID starts over");
+	CHECK(!sum.pss_ok, "and has no PSS until its own rollup");
+	CHECK(bp.nprev == 1, "an exited process is dropped");
+
+	bench_protected_begin(&bp, &sum);
+	bench_protected_end(&bp);
+	CHECK(sum.count == 0 && sum.pss_ok && sum.pss_kb == 0,
+	      "an empty set is zero, not unknown");
+}
+
+static void test_protected_sample(void)
+{
+	static struct bench_protected bp;
+	struct bench_protected_sum sum;
+	struct bench_pid pid;
+	struct bench_proc self = { 0 };
+	int dirfd = open("/proc/self", O_RDONLY | O_DIRECTORY | O_CLOEXEC);
+
+	CHECK(dirfd >= 0 && bench_read_proc(dirfd, &self, false) == 0,
+	      "own start time read");
+	if (dirfd >= 0)
+		close(dirfd);
+
+	pid.pid = (uint32_t)getpid();
+	pid.start = self.start;
+	bench_protected_sample(&bp, &pid, 1, true, &sum);
+	CHECK(sum.count == 1 && sum.pss_ok && sum.pss_kb > 0,
+	      "a live protected process is sampled");
+
+	pid.start = self.start + 1;
+	bench_protected_sample(&bp, &pid, 1, true, &sum);
+	CHECK(sum.count == 0, "a start time mismatch is another process");
+
+	pid.pid = 0;
+	bench_protected_sample(&bp, &pid, 1, false, &sum);
+	CHECK(sum.count == 0, "an unreadable PID is skipped");
+}
+
+static void test_format_protected(void)
+{
+	static struct bench_state st;
+	struct bench_protected_sum sum = { .count = 2,
+					   .cpu = 3,
+					   .minflt = 4,
+					   .majflt = 5,
+					   .rss_kb = 6,
+					   .pss_kb = 7,
+					   .pss_ok = true };
+
+	bench_state_init(&st, 0, 0);
+	st.clk_tck = 100;
+	bench_format_protected(&st, &sum);
+	CHECK(strcmp(st.w.buf,
+		     ",\"protected\":{\"count\":2,\"cpu_ns\":30000000,"
+		     "\"minflt\":4,\"majflt\":5,\"rss_kb\":6,\"pss_kb\":7,"
+		     "\"pss_every_ms\":5000}") == 0,
+	      "the protected set is one sum");
+
+	bench_reset(&st.w);
+	sum.pss_ok = false;
+	bench_format_protected(&st, &sum);
+	CHECK(strstr(st.w.buf, "\"pss_kb\":null") != NULL,
+	      "an incomplete PSS is null");
+
+	bench_reset(&st.w);
+	bench_format_protected(&st, NULL);
+	CHECK(strcmp(st.w.buf, ",\"protected\":null") == 0,
+	      "an unreadable set is null");
 }
 
 static void test_sanitize(void)
@@ -288,6 +421,9 @@ int main(void)
 	test_read_self();
 	test_format();
 	test_format_bpf();
+	test_protected_fold();
+	test_protected_sample();
+	test_format_protected();
 	test_sanitize();
 	test_memlock();
 	test_schedule();

@@ -121,6 +121,29 @@ void bench_format_bpf(struct bench_writer *w, const struct bench_bpf *b)
 	bench_append(w, "]}");
 }
 
+void bench_format_protected(struct bench_state *st,
+			    const struct bench_protected_sum *p)
+{
+	struct bench_writer *w = &st->w;
+
+	if (!p) {
+		bench_append(w, ",\"protected\":null");
+		return;
+	}
+	bench_append(w,
+		     ",\"protected\":{\"count\":%zu,\"cpu_ns\":%" PRIu64
+		     ",\"minflt\":%" PRIu64 ",\"majflt\":%" PRIu64
+		     ",\"rss_kb\":%" PRIu64,
+		     p->count, ticks_ns(p->cpu, st->clk_tck), p->minflt,
+		     p->majflt, p->rss_kb);
+	if (p->pss_ok)
+		bench_append(w, ",\"pss_kb\":%" PRIu64, p->pss_kb);
+	else
+		bench_append(w, ",\"pss_kb\":null");
+	bench_append(w, ",\"pss_every_ms\":%d}",
+		     LOTA_BENCH_PSS_EVERY * LOTA_BENCH_INTERVAL_MS);
+}
+
 void bench_format_end(struct bench_writer *w)
 {
 	bench_append(w, "}\n");
@@ -139,20 +162,22 @@ bool bench_due(struct bench_state *st, uint64_t now_ns)
 }
 
 int bench_write(struct bench_state *st, uint64_t now_ns,
-		const struct bench_bpf *bpf)
+		const struct bench_bpf *bpf,
+		const struct bench_protected_sum *prot)
 {
 	struct bench_proc self;
 	int dirfd, ok = 0;
 
 	dirfd = open("/proc/self", O_RDONLY | O_DIRECTORY | O_CLOEXEC);
 	if (dirfd >= 0) {
-		ok = bench_read_proc(dirfd, &self) == 0;
+		ok = bench_read_proc(dirfd, &self, true) == 0;
 		close(dirfd);
 	}
 
 	st->seq++;
 	bench_format(st, now_ns, ok ? &self : NULL);
 	bench_format_bpf(&st->w, bpf);
+	bench_format_protected(st, prot);
 	bench_format_end(&st->w);
 	return bench_commit(&st->w);
 }

@@ -11,11 +11,14 @@
 #include <unistd.h>
 #include <sys/types.h>
 
+#include "../../include/lota.h"
 #include "../../include/lota_ipc.h"
 #include "journal.h"
 #include "reload.h"
 #include "sdnotify.h"
 #include "bench_bpf.h"
+#include "bench_protected.h"
+#include "bench_snapshot.h"
 #include "bpf_loader.h"
 #include "dbus.h"
 #include "ipc.h"
@@ -145,16 +148,25 @@ static void agent_reload_publishers(struct agent_loop_ctx *ctx)
 static void bench_poll(struct agent_loop_ctx *ctx, int *last_err)
 {
 	static struct bench_bpf bpf;
+	static struct bench_pid pids[LOTA_MAX_PROTECTED_PIDS];
+	static struct bench_protected prot;
+	struct bench_protected_sum sum;
 	uint64_t now = monotonic_ns();
 	bool have_bpf;
-	int ret;
+	int ret, n;
 
 	if (!bench_due(ctx->bench, now))
 		return;
 
 	have_bpf =
 		bench_bpf_sample(ctx->bpf_ctx, ctx->bench->stats_fd >= 0, &bpf);
-	ret = bench_write(ctx->bench, now, have_bpf ? &bpf : NULL);
+	n = bench_bpf_protected(ctx->bpf_ctx, pids, LOTA_MAX_PROTECTED_PIDS);
+	if (n >= 0)
+		bench_protected_sample(
+			&prot, pids, (size_t)n,
+			ctx->bench->seq % LOTA_BENCH_PSS_EVERY == 0, &sum);
+	ret = bench_write(ctx->bench, now, have_bpf ? &bpf : NULL,
+			  n >= 0 ? &sum : NULL);
 	if (ret == -EMSGSIZE || ret == *last_err)
 		return;
 	if (ret < 0)

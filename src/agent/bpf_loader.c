@@ -2154,6 +2154,33 @@ int bpf_loader_pin_sweep(struct bpf_loader_ctx *ctx, size_t *released)
 	return ret;
 }
 
+int bpf_loader_protected_pids(const struct bpf_loader_ctx *ctx, uint32_t *pid,
+			      uint64_t *start, size_t max)
+{
+	struct protected_pid_entry value;
+	uint32_t key, next;
+	size_t n = 0;
+	int ret;
+
+	if (!ctx || !ctx->loaded || ctx->protected_pids_fd < 0)
+		return -ENOTSUP;
+
+	ret = bpf_map_get_next_key(ctx->protected_pids_fd, NULL, &next);
+	while (ret == 0 && n < max) {
+		key = next;
+		if (bpf_map_lookup_elem(ctx->protected_pids_fd, &key, &value) ==
+		    0) {
+			pid[n] = key;
+			start[n] = value.start_time_ticks;
+			n++;
+		}
+		ret = bpf_map_get_next_key(ctx->protected_pids_fd, &key, &next);
+	}
+	if (ret < 0 && errno != ENOENT)
+		return -errno;
+	return (int)n;
+}
+
 int bpf_loader_protect_pid(struct bpf_loader_ctx *ctx, uint32_t pid)
 {
 	struct protected_pid_entry value = { 0 };

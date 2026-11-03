@@ -444,6 +444,18 @@ int bpf_loader_protect_pid(struct bpf_loader_ctx *ctx, uint32_t pid);
 int bpf_loader_probe_protect_pid(uint32_t pid);
 
 /*
+ * bpf_loader_protected_pids - Read the protected set
+ * @ctx: Loaded context
+ * @pid: Out, up to @max PIDs
+ * @start: Out, each PID's start time in clock ticks, as protected
+ * @max: Capacity of both arrays
+ *
+ * Returns: the number of entries read, or negative errno
+ */
+int bpf_loader_protected_pids(const struct bpf_loader_ctx *ctx, uint32_t *pid,
+			      uint64_t *start, size_t max);
+
+/*
  * bpf_loader_unprotect_pid - Remove a PID from the protected set
  * @ctx: Loaded context
  * @pid: Process ID to unprotect

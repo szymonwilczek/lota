@@ -46,10 +46,10 @@ int bench_parse_stat(const char *buf, struct bench_proc *p)
 	if (!s)
 		return -EINVAL;
 
-	for (field = 4; field <= 15; field++) {
+	for (field = 4; field <= 22; field++) {
 		if (*s != ' ')
 			return -EINVAL;
-		/* field 7, tty_nr, and field 8, tpgid, may be negative */
+		/* tty_nr, tpgid, priority and nice may be negative */
 		if (s[1] == '-') {
 			s = strchr(s + 1, ' ');
 			if (!s)
@@ -72,6 +72,9 @@ int bench_parse_stat(const char *buf, struct bench_proc *p)
 			break;
 		case 15:
 			p->stime = v;
+			break;
+		case 22:
+			p->start = v;
 			break;
 		}
 	}
@@ -102,6 +105,8 @@ int bench_parse_status(const char *buf, struct bench_proc *p)
 	if (line_value(buf, "voluntary_ctxt_switches:", &p->ctxt_vol) < 0 ||
 	    line_value(buf, "nonvoluntary_ctxt_switches:", &p->ctxt_invol) < 0)
 		return -EINVAL;
+	if (line_value(buf, "VmRSS:", &p->vm_rss_kb) < 0)
+		p->vm_rss_kb = 0;
 	return 0;
 }
 
@@ -167,7 +172,7 @@ int bench_read_memlock(int fdinfo_dirfd, int fd, uint64_t *out)
 	return bench_parse_memlock(buf, out);
 }
 
-int bench_read_proc(int dirfd, struct bench_proc *p)
+int bench_read_proc(int dirfd, struct bench_proc *p, bool rollup)
 {
 	char buf[BENCH_PROC_BUF];
 	int ret;
@@ -183,7 +188,7 @@ int bench_read_proc(int dirfd, struct bench_proc *p)
 	ret = read_at(dirfd, "status", buf, sizeof(buf));
 	if (ret == 0)
 		ret = bench_parse_status(buf, p);
-	if (ret < 0)
+	if (ret < 0 || !rollup)
 		return ret;
 
 	ret = read_at(dirfd, "smaps_rollup", buf, sizeof(buf));

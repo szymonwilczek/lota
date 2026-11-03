@@ -10,6 +10,7 @@
 #include <string.h>
 #include <unistd.h>
 
+#include "../../include/lota.h"
 #include "bench_proc.h"
 
 int bench_bpf_enable_stats(void)
@@ -73,4 +74,21 @@ bool bench_bpf_sample(const struct bpf_loader_ctx *ctx, bool run_stats,
 	if (dirfd >= 0)
 		close(dirfd);
 	return true;
+}
+
+int bench_bpf_protected(const struct bpf_loader_ctx *ctx, struct bench_pid *out,
+			size_t max)
+{
+	static uint32_t pid[LOTA_MAX_PROTECTED_PIDS];
+	static uint64_t start[LOTA_MAX_PROTECTED_PIDS];
+	int n, i;
+
+	if (max > LOTA_MAX_PROTECTED_PIDS)
+		max = LOTA_MAX_PROTECTED_PIDS;
+	n = bpf_loader_protected_pids(ctx, pid, start, max);
+	for (i = 0; i < n; i++) {
+		out[i].pid = pid[i];
+		out[i].start = start[i];
+	}
+	return n;
 }

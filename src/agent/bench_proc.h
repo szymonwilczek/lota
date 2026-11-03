@@ -7,6 +7,7 @@
 #ifndef LOTA_AGENT_BENCH_PROC_H
 #define LOTA_AGENT_BENCH_PROC_H
 
+#include <stdbool.h>
 #include <stdint.h>
 
 struct bench_proc {
@@ -19,6 +20,8 @@ struct bench_proc {
 	uint64_t uss_kb; /* Private_Clean + Private_Dirty */
 	uint64_t ctxt_vol;
 	uint64_t ctxt_invol;
+	uint64_t start; /* starttime, clock ticks since boot */
+	uint64_t vm_rss_kb; /* VmRSS of status, 0 when absent */
 };
 
 /* Each takes the whole file as a C string and returns 0 or -EINVAL */
@@ -31,9 +34,9 @@ int bench_parse_memlock(const char *buf, uint64_t *out);
 int bench_read_memlock(int fdinfo_dirfd, int fd, uint64_t *out);
 
 /*
- * Fill @p from stat, status and smaps_rollup under the /proc/<pid>
- * directory @dirfd. No descriptor outlives the call.
+ * Fill @p from stat, status and, with @rollup, smaps_rollup under the
+ * /proc/<pid> directory @dirfd. No descriptor outlives the call.
  */
-int bench_read_proc(int dirfd, struct bench_proc *p);
+int bench_read_proc(int dirfd, struct bench_proc *p, bool rollup);
 
 #endif /* LOTA_AGENT_BENCH_PROC_H */

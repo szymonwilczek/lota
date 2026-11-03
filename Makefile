@@ -188,6 +188,7 @@ AGENT_SRCS := $(AGENT_DIR)/main.c \
 			  $(AGENT_DIR)/bench_proc.c \
 			  $(AGENT_DIR)/bench_snapshot.c \
 			  $(AGENT_DIR)/bench_bpf.c \
+			  $(AGENT_DIR)/bench_protected.c \
 			  $(AGENT_DIR)/exit_status.c \
 			  $(AGENT_DIR)/sb_dev.c \
 			  $(AGENT_DIR)/cgroup_guard.c \
@@ -1520,7 +1521,8 @@ TEST_INSTALLER_SRCS := installer/stages.c installer/probe.c installer/run.c inst
 $(BUILD_DIR)/test_agent_bench_file: $(AGENT_DIR)/bench.c $(AGENT_DIR)/io_utils.c
 $(BUILD_DIR)/test_agent_bench_file: TEST_CFLAGS := -DLOTA_INTERNAL_TESTS
 $(BUILD_DIR)/test_agent_bench_snapshot: $(AGENT_DIR)/bench_snapshot.c \
-	$(AGENT_DIR)/bench_proc.c $(AGENT_DIR)/bench.c $(AGENT_DIR)/io_utils.c
+	$(AGENT_DIR)/bench_proc.c $(AGENT_DIR)/bench_protected.c \
+	$(AGENT_DIR)/bench.c $(AGENT_DIR)/io_utils.c
 
 TEST_ATTEST := $(addprefix $(BUILD_DIR)/test_, \
 	attest_aggregate \
