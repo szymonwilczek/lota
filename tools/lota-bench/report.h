@@ -20,4 +20,17 @@
  */
 int bench_report(FILE *f, const struct bench_doc *d);
 
+/* the most an issue body holds */
+#define BENCH_ISSUE_MAX_BYTES 65536
+
+/*
+ * bench_issue - the body of an issue reporting the session in @d
+ *
+ * The report, then the session's summary in a ```lota-bench block. The
+ * summary is read back before it is written, and the body must fit an
+ * issue. Returns 0, -EIO once @f has failed, or -EINVAL with the reason
+ * in @err.
+ */
+int bench_issue(FILE *f, const struct bench_doc *d, char *err, size_t errcap);
+
 #endif /* LOTA_BENCH_REPORT_H */

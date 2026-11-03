@@ -9,6 +9,7 @@
 
 #include <errno.h>
 #include <fcntl.h>
+#include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -30,6 +31,7 @@ static void usage(FILE *f)
 {
 	fputs("Usage: lota-bench run DIR [--game TITLE ...]\n"
 	      "       lota-bench report FILE\n"
+	      "       lota-bench issue FILE\n"
 	      "       lota-bench validate FILE\n"
 	      "       lota-bench frames LOG\n"
 	      "       lota-bench --version\n"
@@ -37,6 +39,7 @@ static void usage(FILE *f)
 	      "run       Take the next run of the session in DIR; run --help\n"
 	      "          lists the options that start one.\n"
 	      "report    Compare the configurations of a result or summary.\n"
+	      "issue     The report and the summary, as the body of an issue.\n"
 	      "validate  Check a plan, run, result or summary file against\n"
 	      "          the schema.\n"
 	      "frames    Summarise the frame times of a MangoHud log.\n",
@@ -163,8 +166,9 @@ static int main_validate(int argc, char **argv)
 static int main_report(int argc, char **argv)
 {
 	struct bench_doc *d;
-	char *buf;
+	char *buf, err[256];
 	int ret = 1;
+	bool issue = strcmp(argv[0], "issue") == 0;
 
 	if (argc != 2) {
 		usage(stderr);
@@ -175,10 +179,14 @@ static int main_report(int argc, char **argv)
 		return 1;
 	if (d->kind != BK_RESULT && d->kind != BK_SUMMARY)
 		fprintf(stderr,
-			"lota-bench: %s is a %s; a report needs a result or "
+			"lota-bench: %s is a %s; %s needs a result or "
 			"a summary\n",
-			argv[1], bench_kind_names[d->kind]);
-	else if (bench_report(stdout, d) || fflush(stdout))
+			argv[1], bench_kind_names[d->kind], argv[0]);
+	else if (issue && bench_issue(stdout, d, err, sizeof(err)))
+		fprintf(stderr, "lota-bench: %s: %s\n", argv[1], err);
+	else if (!issue && bench_report(stdout, d))
+		perror("lota-bench: stdout");
+	else if (fflush(stdout))
 		perror("lota-bench: stdout");
 	else
 		ret = 0;
@@ -258,7 +266,7 @@ int main(int argc, char **argv)
 	}
 	if (strcmp(argv[1], "run") == 0)
 		return bench_main_run(argc - 1, argv + 1);
-	if (strcmp(argv[1], "report") == 0)
+	if (strcmp(argv[1], "report") == 0 || strcmp(argv[1], "issue") == 0)
 		return main_report(argc - 1, argv + 1);
 	if (strcmp(argv[1], "validate") == 0)
 		return main_validate(argc - 1, argv + 1);

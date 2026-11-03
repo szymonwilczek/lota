@@ -13,9 +13,11 @@
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include "report.h"
+#include "validate.h"
 
 struct metric {
 	const char *name;
@@ -319,4 +321,76 @@ int bench_report(FILE *f, const struct bench_doc *d)
 			   "figure.\n");
 	put_power(f, d);
 	return ferror(f) ? -EIO : 0;
+}
+
+static char *text_of(const struct bench_doc *d, bool summary, size_t *len)
+{
+	char *buf = NULL;
+	FILE *m;
+	int ret;
+
+	*len = 0;
+	m = open_memstream(&buf, len);
+	if (!m)
+		return NULL;
+	ret = summary ? bench_write_session(m, d, BK_SUMMARY) :
+			bench_report(m, d);
+	if (fclose(m) || ret) {
+		free(buf);
+		return NULL;
+	}
+	return buf;
+}
+
+int bench_issue(FILE *f, const struct bench_doc *d, char *err, size_t errcap)
+{
+	static const char head[] = "```text\n",
+			  mid[] = "```\n\n```lota-bench\n", tail[] = "```\n";
+	struct bench_doc *back = malloc(sizeof(*back));
+	char *report = NULL, *summary = NULL, why[256];
+	size_t rlen, slen, total;
+	int ret = -EINVAL;
+
+	if (!back) {
+		snprintf(err, errcap, "out of memory");
+		return -ENOMEM;
+	}
+	report = text_of(d, false, &rlen);
+	summary = text_of(d, true, &slen);
+	if (!report || !summary) {
+		snprintf(err, errcap, "out of memory");
+		ret = -ENOMEM;
+		goto out;
+	}
+	/* what the issue carries is what a reader of it accepts */
+	if (bench_validate(summary, slen, back, why, sizeof(why))) {
+		snprintf(err, errcap, "the summary does not read back: %s",
+			 why);
+		goto out;
+	}
+	if (back->kind != BK_SUMMARY || back->nruns != d->nruns) {
+		snprintf(err, errcap, "the summary reads back as another file");
+		goto out;
+	}
+	total = sizeof(head) - 1 + rlen + sizeof(mid) - 1 + slen +
+		sizeof(tail) - 1;
+	if (total > BENCH_ISSUE_MAX_BYTES) {
+		snprintf(err, errcap,
+			 "%zu bytes, more than an issue holds (%d)", total,
+			 BENCH_ISSUE_MAX_BYTES);
+		goto out;
+	}
+	fputs(head, f);
+	fwrite(report, 1, rlen, f);
+	fputs(mid, f);
+	fwrite(summary, 1, slen, f);
+	fputs(tail, f);
+	ret = ferror(f) ? -EIO : 0;
+	if (ret)
+		snprintf(err, errcap, "%s", strerror(EIO));
+out:
+	free(report);
+	free(summary);
+	free(back);
+	return ret;
 }

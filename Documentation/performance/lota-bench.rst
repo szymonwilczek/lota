@@ -300,6 +300,23 @@ them has is ``-``. When the power settings (governor, platform profile,
 supply) changed across the session, the report says so: runs under
 different settings do not compare.
 
+Sharing a session
+-----------------
+
+``lota-bench issue`` prints the body of an issue for a result or a
+summary: the report in a ``text`` block, then the session's summary in a
+``lota-bench`` block, which is what a reader of the issue or a script
+takes the figures from:
+
+.. code-block:: console
+
+   $ lota-bench issue ~/bench/example/result.json > issue.md
+
+The summary is read back by the validator before anything is printed,
+so the block holds only what ``lota-bench validate`` accepts, and the
+whole body must fit the 65536 characters an issue holds; a session of
+the most rounds takes about half of that.
+
 The files of a session
 ======================
 

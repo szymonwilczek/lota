@@ -4,12 +4,15 @@
  * Unit tests for lota-bench's report of a session.
  */
 
+#include <errno.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
 #include "test.h"
 #include "../tools/lota-bench/report.h"
+#include "../tools/lota-bench/validate.h"
 
 #define ROUNDS 2
 #define NRUNS (1 + BC_COUNT * ROUNDS)
@@ -44,11 +47,14 @@ static void fill(void)
 		r->config = bench_run_config(i);
 		r->warmup = i == 0;
 		r->wall_ms = 1000;
+		r->sample_count = 2;
+		r->end = BE_DURATION;
 		r->totals[BS_GAME].present = true;
 		/* half a CPU */
 		r->totals[BS_GAME].v[BT_CPU_USEC] =
 			(struct bench_opt){ 500000, true };
 		r->frames.present = true;
+		r->frames.s.frames = 100;
 		r->frames.s.median_us = median_us[i];
 		if (r->config == BC_A)
 			continue;
@@ -59,6 +65,8 @@ static void fill(void)
 			(struct bench_opt){ 1000, true };
 		r->agent.present = true;
 		r->agent.v[BA_BPF_RUN_NS] = (struct bench_opt){ 2000, true };
+		r->agent.v[BA_PROTECTED_MAX] =
+			(struct bench_opt){ r->config == BC_C ? 1 : 0, true };
 	}
 }
 
@@ -170,6 +178,95 @@ static void test_missing(void)
 	free(text);
 }
 
+static char *issue(int *ret, char *err, size_t cap)
+{
+	char *buf = NULL;
+	size_t len = 0;
+	FILE *f;
+
+	f = open_memstream(&buf, &len);
+	if (!f)
+		return NULL;
+	*ret = bench_issue(f, doc, err, cap);
+	fclose(f);
+	return buf;
+}
+
+static void test_issue(void)
+{
+	static const char open_block[] = "\n```\n\n```lota-bench\n";
+	struct bench_doc *back = malloc(sizeof(*back));
+	char err[256], *text, *json, *end;
+	int ret = 0;
+
+	TEST("an issue carries the report and a summary that reads back");
+	fill();
+	text = issue(&ret, err, sizeof(err));
+	json = text ? strstr(text, open_block) : NULL;
+	end = json ? strstr(json + sizeof(open_block) - 1, "```\n") : NULL;
+	if (!back || ret || !json || !end) {
+		FAIL(ret ? err : "no lota-bench block");
+	} else if (strncmp(text, "```text\nExample Title: ", 23) ||
+		   end[4] != '\0') {
+		FAIL("not the report, then the block");
+	} else {
+		json += sizeof(open_block) - 1;
+		if (bench_validate(json, (size_t)(end - json), back, err,
+				   sizeof(err)))
+			FAIL(err);
+		else if (back->kind != BK_SUMMARY || back->nruns != NRUNS)
+			FAIL("not the session's summary");
+		else
+			PASS();
+	}
+	free(text);
+
+	TEST("a session of the most rounds fits an issue");
+	fill();
+	doc->plan.rounds = BENCH_ROUNDS_MAX;
+	doc->nruns = BENCH_MAX_RUNS;
+	for (unsigned int i = NRUNS; i < BENCH_MAX_RUNS; i++) {
+		doc->runs[i] = doc->runs[i - BC_COUNT];
+		doc->runs[i].index = i;
+	}
+	for (unsigned int i = 0; i < BENCH_MAX_RUNS; i++) {
+		struct bench_run *r = &doc->runs[i];
+
+		for (int t = 0; t < BT_COUNT; t++)
+			r->totals[BS_GAME].v[t] =
+				(struct bench_opt){ UINT64_MAX, true };
+		r->frames.present = true;
+		for (int k = 0; k < BF_COUNT; k++)
+			*bench_frame_stat(&r->frames.s,
+					  (enum bench_frame_stat)k) =
+				UINT64_MAX;
+		r->totals[BS_GAME].v[BT_CPU_USEC].v = 500000;
+	}
+	for (int c = 0; c < BENCH_MAX_GPUS; c++) {
+		doc->plan.machine.gpu[c].vendor_id = 0xffff;
+		set(&doc->plan.machine.gpu[c].name,
+		    "Test GPU with a name as long as a cleaned field lets it be");
+	}
+	doc->plan.machine.ngpus = BENCH_MAX_GPUS;
+	text = issue(&ret, err, sizeof(err));
+	if (ret)
+		FAIL(err);
+	else
+		PASS();
+	free(text);
+
+	TEST("a session that does not read back is not put in an issue");
+	fill();
+	doc->runs[3].agent.v[BA_PROTECTED_MAX].v = 0;
+	text = issue(&ret, err, sizeof(err));
+	if (ret != -EINVAL || !strstr(err, "does not read back"))
+		FAIL("an invalid summary was written");
+	else
+		PASS();
+	free(text);
+	free(back);
+}
+
 int main(void)
 {
 	printf("lota-bench report:\n");
@@ -179,6 +276,7 @@ int main(void)
 		return 1;
 	test_figures();
 	test_missing();
+	test_issue();
 	free(doc);
 
 	printf("%d/%d tests passed\n", tests_passed, tests_run);
