@@ -405,7 +405,11 @@ Active threats
        | An instance is the tree one protected process started. Inside it the
          refusal does not apply and every access is recorded: the wineserver
          reads and writes the memory of each process it hosts. Nothing outside
-         an instance reaches into it, another instance included.
+         an instance reaches into it, another instance included. The agent
+         adds every process of an instance to the protected set, so the
+         token names it and the measurement covers it; it reads the
+         membership through a pidfd before and after the start time, so a
+         reused PID is never added.
        | The agent refuses to protect a process a tracer already holds: the
          LSM refuses new attaches, and one made before the protection would
          stay. It reads the tracer after the process is in the map, so no

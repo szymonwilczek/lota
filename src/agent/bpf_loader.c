@@ -75,6 +75,13 @@ struct lota_task_auth_entry {
 	uint32_t pad;
 };
 
+/* mirrors struct lota_instance_entry in lota_lsm.bpf.c */
+struct lota_instance_entry {
+	uint64_t root_start_ticks;
+	uint32_t root_tgid;
+	uint32_t pad;
+};
+
 #define LOTA_TASK_AUTH_ADMIN (1U << 0)
 #define LOTA_TASK_AUTH_AGENT (1U << 1)
 
@@ -971,6 +978,7 @@ int bpf_loader_init(struct bpf_loader_ctx *ctx)
 	ctx->trusted_libs_fd = -1;
 	ctx->guarded_files_fd = -1;
 	ctx->protected_pids_fd = -1;
+	ctx->instance_fd = -1;
 	ctx->allow_verity_digest_fd = -1;
 	ctx->exe_hash_slots_fd = -1;
 	ctx->mapped_exec_fd = -1;
@@ -1388,6 +1396,20 @@ int bpf_loader_load(struct bpf_loader_ctx *ctx, const char *bpf_obj_path,
 		}
 	}
 
+	/* optional: without it no process joins the set through its creator */
+	ctx->instance_fd =
+		bpf_object__find_map_fd_by_name(ctx->obj, "lota_instance");
+	if (ctx->instance_fd < 0) {
+		ctx->instance_fd = -1;
+	} else {
+		err = harden_fd_cloexec(ctx->instance_fd, "lota_instance map");
+		if (err < 0) {
+			lota_err("Failed to harden lota_instance map fd: %s",
+				 strerror(-err));
+			goto err_close;
+		}
+	}
+
 	/* required: without it cgroup.kill ends the agent past the signal gate */
 	ctx->guarded_files_fd =
 		bpf_object__find_map_fd_by_name(ctx->obj, "guarded_files");
@@ -1635,6 +1657,7 @@ void bpf_loader_cleanup(struct bpf_loader_ctx *ctx)
 	ctx->trusted_libs_fd = -1;
 	ctx->guarded_files_fd = -1;
 	ctx->protected_pids_fd = -1;
+	ctx->instance_fd = -1;
 	ctx->allow_verity_digest_fd = -1;
 	ctx->exe_hash_slots_fd = -1;
 	ctx->mapped_exec_fd = -1;
@@ -2204,6 +2227,57 @@ int bpf_loader_protect_pid(struct bpf_loader_ctx *ctx, uint32_t pid)
 		return -errno;
 
 	return 0;
+}
+
+int bpf_loader_adopt_instance_member(struct bpf_loader_ctx *ctx, uint32_t pid)
+{
+	struct protected_pid_entry value = { 0 };
+	struct lota_instance_entry entry;
+	int pidfd;
+	int ret;
+
+	if (!ctx || !ctx->loaded || pid == 0)
+		return -EINVAL;
+
+	if (ctx->protected_pids_fd < 0 || ctx->instance_fd < 0)
+		return -ENOTSUP;
+
+#ifndef SYS_pidfd_open
+	return -ENOTSUP;
+#else
+	pidfd = (int)syscall(SYS_pidfd_open, (pid_t)pid, 0);
+	if (pidfd < 0)
+		return -errno;
+
+	if (bpf_map_lookup_elem(ctx->instance_fd, &pidfd, &entry) < 0) {
+		ret = errno == ENOENT ? 0 : -errno;
+		goto out;
+	}
+
+	ret = read_pid_start_time_ticks(pid, &value.start_time_ticks);
+	if (ret < 0)
+		goto out;
+	if (value.start_time_ticks == 0) {
+		ret = -EINVAL;
+		goto out;
+	}
+
+	/* still alive: the start time read was its own, not a successor's */
+	if (bpf_map_lookup_elem(ctx->instance_fd, &pidfd, &entry) < 0) {
+		ret = errno == ENOENT ? 0 : -errno;
+		goto out;
+	}
+
+	if (bpf_map_update_elem(ctx->protected_pids_fd, &pid, &value, BPF_ANY) <
+	    0) {
+		ret = -errno;
+		goto out;
+	}
+	ret = 1;
+out:
+	close(pidfd);
+	return ret;
+#endif
 }
 
 int bpf_loader_probe_protect_pid(uint32_t pid)

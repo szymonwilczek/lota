@@ -18,6 +18,7 @@
 #include "terminate_policy.h"
 #include "terminate_report.h"
 
+#include <dirent.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <grp.h>
@@ -93,7 +94,7 @@ static int protect_pid_rate_count = 0;
 static uint64_t protect_pid_last_table_full_warn_sec = 0;
 
 static int u32_cmp(const void *a, const void *b);
-static void runtime_protect_reap_exited(void);
+static void runtime_protect_catch_up(void);
 static int build_canonical_runtime_pid_list(uint32_t **out_pids,
 					    uint32_t *out_count);
 
@@ -1080,7 +1081,7 @@ static void runtime_coverage_take(bool *full_out, bool *content_hashed_out)
 	 * Reaping in one place keeps the status word and the token in agreement.
 	 * Before the cache check: a dropped PID bumps the epoch.
 	 */
-	runtime_protect_reap_exited();
+	runtime_protect_catch_up();
 
 	agent_globals_lock(&g_agent);
 	count = g_agent.policy_protect_pid_count;
@@ -1379,7 +1380,7 @@ static void handle_get_token(struct ipc_context *ctx, struct ipc_client *client,
 	 * the one that protected itself.
 	 * Catch the set up with the kernel's before reading it
 	 */
-	runtime_protect_reap_exited();
+	runtime_protect_catch_up();
 
 	ret = build_canonical_runtime_pid_list(&runtime_pids,
 					       &runtime_pid_count);
@@ -2357,6 +2358,132 @@ static void runtime_protect_reap_exited(void)
 	agent_globals_unlock(&g_agent);
 }
 
+static int protect_pid_adopt(uint32_t pid, void *ctx)
+{
+	(void)ctx;
+	return bpf_loader_adopt_instance_member(&g_agent.bpf_ctx, pid);
+}
+
+/* Every running process but the agent, from /proc */
+static int list_running_pids(uint32_t **out, int *out_count)
+{
+	uint32_t self = (uint32_t)getpid();
+	uint32_t *pids = NULL;
+	struct dirent *de;
+	int count = 0;
+	int cap = 0;
+	DIR *dir;
+
+	*out = NULL;
+	*out_count = 0;
+
+	dir = opendir("/proc");
+	if (!dir)
+		return -errno;
+
+	while ((de = readdir(dir)) != NULL) {
+		unsigned long val;
+		char *end;
+
+		if (de->d_name[0] < '1' || de->d_name[0] > '9')
+			continue;
+		errno = 0;
+		val = strtoul(de->d_name, &end, 10);
+		if (errno || *end || val > UINT32_MAX || val == self)
+			continue;
+
+		if (count == cap) {
+			int next_cap = cap ? cap * 2 : 256;
+			uint32_t *next;
+
+			next = realloc(pids, (size_t)next_cap * sizeof(*pids));
+			if (!next) {
+				free(pids);
+				closedir(dir);
+				return -ENOMEM;
+			}
+			pids = next;
+			cap = next_cap;
+		}
+		pids[count++] = (uint32_t)val;
+	}
+	closedir(dir);
+
+	*out = pids;
+	*out_count = count;
+	return 0;
+}
+
+/*
+ * Add every process a protected one created to the set.
+ *
+ * The kernel protects such a process from its first instruction, but only
+ * the root of the tree was ever named here, so the token and the runtime
+ * measurement saw the launcher and not the title it started. Run after
+ * every reap, for the same reason: the read is where a missing member
+ * would be left out.
+ */
+static void runtime_protect_adopt_members(void)
+{
+	uint32_t *cands = NULL;
+	uint32_t *next = NULL;
+	int cand_count = 0;
+	int next_count = 0;
+	int count;
+	int ret;
+
+	if (g_agent.bpf_ctx.instance_fd < 0)
+		return;
+
+	count = g_agent.policy_protect_pid_count;
+	if (count < 0 || (count > 0 && !g_agent.policy_protect_pids))
+		return;
+
+	if (g_agent.policy_protect_epoch == UINT64_MAX)
+		return;
+
+	if (list_running_pids(&cands, &cand_count) < 0)
+		return;
+
+	next = calloc(LOTA_MAX_PROTECTED_PIDS, sizeof(*next));
+	if (!next)
+		goto out;
+
+	ret = protect_pids_adopt(g_agent.policy_protect_pids, count, cands,
+				 cand_count, protect_pid_adopt, NULL,
+				 LOTA_MAX_PROTECTED_PIDS, next, &next_count);
+	if (ret <= 0)
+		goto out;
+
+	for (int i = count; i < next_count; i++)
+		lota_info("PID %u runs in a protected instance; adding it to "
+			  "the runtime set",
+			  next[i]);
+
+	agent_globals_lock(&g_agent);
+	if (g_agent.policy_protect_pids) {
+		OPENSSL_cleanse(g_agent.policy_protect_pids,
+				(size_t)count * sizeof(uint32_t));
+		free(g_agent.policy_protect_pids);
+	}
+	g_agent.policy_protect_pids = next;
+	g_agent.policy_protect_pid_count = next_count;
+	g_agent.policy_protect_epoch += 1;
+	agent_globals_unlock(&g_agent);
+	next = NULL;
+
+out:
+	free(next);
+	free(cands);
+}
+
+/* Bring the set in step with the kernel: exited processes out, members in */
+static void runtime_protect_catch_up(void)
+{
+	runtime_protect_reap_exited();
+	runtime_protect_adopt_members();
+}
+
 static int build_canonical_runtime_pid_list(uint32_t **out_pids,
 					    uint32_t *out_count)
 {
@@ -2609,7 +2736,7 @@ static void handle_protect_pid_update(struct ipc_context *ctx,
 
 	/* same catch-up, so idempotent no-op is judged against the processes
 	 * that are actually running */
-	runtime_protect_reap_exited();
+	runtime_protect_catch_up();
 
 	had = pid_set_contains(g_agent.policy_protect_pids,
 			       g_agent.policy_protect_pid_count, pid);
@@ -2854,7 +2981,7 @@ static void handle_terminate_protected(struct ipc_context *ctx,
 	}
 
 	/* judge membership against the processes that are actually running */
-	runtime_protect_reap_exited();
+	runtime_protect_catch_up();
 
 	agent_globals_lock(&g_agent);
 	decision_input.target_is_protected =

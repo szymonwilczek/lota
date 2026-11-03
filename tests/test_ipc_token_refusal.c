@@ -101,6 +101,13 @@ int bpf_loader_unprotect_pid(struct bpf_loader_ctx *ctx, uint32_t pid)
 	return -ENOTSUP;
 }
 
+int bpf_loader_adopt_instance_member(struct bpf_loader_ctx *ctx, uint32_t pid)
+{
+	(void)ctx;
+	(void)pid;
+	return 0;
+}
+
 int dbus_get_fd(struct dbus_context *ctx)
 {
 	(void)ctx;

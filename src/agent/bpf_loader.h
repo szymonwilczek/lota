@@ -39,6 +39,7 @@ struct bpf_loader_ctx {
 	int trusted_libs_fd; /* 'trusted_libs' map fd */
 	int guarded_files_fd; /* 'guarded_files' map fd */
 	int protected_pids_fd; /* Protected PIDs map fd */
+	int instance_fd; /* 'lota_instance' task storage fd */
 	int allow_verity_digest_fd; /* 'allow_verity_digest' map fd */
 	int exe_hash_slots_fd; /* 'exe_hash_slots' map fd */
 	int mapped_exec_fd; /* 'mapped_exec' pin map fd */
@@ -425,6 +426,21 @@ int bpf_loader_verify_kernel_runtime_hardening(bool allow_mutable_rootfs);
  * Returns: 0 on success, negative errno on failure
  */
 int bpf_loader_protect_pid(struct bpf_loader_ctx *ctx, uint32_t pid);
+
+/*
+ * bpf_loader_adopt_instance_member - Name an instance member in the set
+ * @ctx: Loaded context
+ * @pid: Process ID to ask about
+ *
+ * A process created by a protected one carries its creator's instance in
+ * lota_instance from its first instruction. When @pid does, it is added
+ * to protected_pids under its start time, so the token and the runtime
+ * measurement see it. The membership is read through a pidfd before and
+ * after the start time, so a PID reused in between is not taken.
+ *
+ * Returns: 1 when added, 0 when @pid is not a member, negative errno
+ */
+int bpf_loader_adopt_instance_member(struct bpf_loader_ctx *ctx, uint32_t pid);
 
 /*
  * bpf_loader_probe_protect_pid - Ask whether a PID could be protected
