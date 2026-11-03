@@ -26,6 +26,10 @@ int bench_parse_stat(const char *buf, struct bench_proc *p);
 int bench_parse_status(const char *buf, struct bench_proc *p);
 int bench_parse_rollup(const char *buf, struct bench_proc *p);
 
+/* "memlock:" of a BPF map's fdinfo, in bytes, under /proc/self/fdinfo */
+int bench_parse_memlock(const char *buf, uint64_t *out);
+int bench_read_memlock(int fdinfo_dirfd, int fd, uint64_t *out);
+
 /*
  * Fill @p from stat, status and smaps_rollup under the /proc/<pid>
  * directory @dirfd. No descriptor outlives the call.

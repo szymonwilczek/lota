@@ -15,6 +15,7 @@
 #include "journal.h"
 #include "reload.h"
 #include "sdnotify.h"
+#include "bench_bpf.h"
 #include "bpf_loader.h"
 #include "dbus.h"
 #include "ipc.h"
@@ -141,11 +142,20 @@ static void agent_reload_publishers(struct agent_loop_ctx *ctx)
 }
 
 /* logged when it changes, not every second */
-static void bench_poll(struct bench_state *bench, int *last_err)
+static void bench_poll(struct agent_loop_ctx *ctx, int *last_err)
 {
-	int ret = bench_tick(bench, monotonic_ns());
+	static struct bench_bpf bpf;
+	uint64_t now = monotonic_ns();
+	bool have_bpf;
+	int ret;
 
-	if (ret > 0 || ret == -EMSGSIZE || ret == *last_err)
+	if (!bench_due(ctx->bench, now))
+		return;
+
+	have_bpf =
+		bench_bpf_sample(ctx->bpf_ctx, ctx->bench->stats_fd >= 0, &bpf);
+	ret = bench_write(ctx->bench, now, have_bpf ? &bpf : NULL);
+	if (ret == -EMSGSIZE || ret == *last_err)
 		return;
 	if (ret < 0)
 		lota_warn("Bench: cannot write %s: %s", LOTA_BENCH_PATH,
@@ -184,7 +194,7 @@ int agent_run_event_loop(struct agent_loop_ctx *ctx)
 
 		poll_ringbuf_drops(ctx, &last_drops, &last_drop_poll_ns);
 		if (ctx->bench)
-			bench_poll(ctx->bench, &bench_err);
+			bench_poll(ctx, &bench_err);
 
 		if (nfds == 0) {
 			if (ctx->wd_enabled)

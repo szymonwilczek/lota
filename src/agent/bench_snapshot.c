@@ -26,6 +26,7 @@ void bench_state_init(struct bench_state *st, gid_t gid, uint64_t now_ns)
 	st->seq = 0;
 	st->start_ns = now_ns;
 	st->next_ns = now_ns;
+	st->stats_fd = -1;
 	st->clk_tck = sysconf(_SC_CLK_TCK);
 	if (st->clk_tck <= 0)
 		st->clk_tck = 100;
@@ -60,7 +61,7 @@ void bench_format(struct bench_state *st, uint64_t now_ns,
 		     LOTA_BENCH_INTERVAL_MS, w->skipped);
 
 	if (!self) {
-		bench_append(w, "null}\n");
+		bench_append(w, "null");
 		return;
 	}
 
@@ -69,11 +70,60 @@ void bench_format(struct bench_state *st, uint64_t now_ns,
 		     ",\"minflt\":%" PRIu64 ",\"majflt\":%" PRIu64
 		     ",\"rss_kb\":%" PRIu64 ",\"pss_kb\":%" PRIu64
 		     ",\"uss_kb\":%" PRIu64 ",\"ctxt_vol\":%" PRIu64
-		     ",\"ctxt_invol\":%" PRIu64 "}}\n",
+		     ",\"ctxt_invol\":%" PRIu64 "}",
 		     ticks_ns(self->utime, st->clk_tck),
 		     ticks_ns(self->stime, st->clk_tck), self->minflt,
 		     self->majflt, self->rss_kb, self->pss_kb, self->uss_kb,
 		     self->ctxt_vol, self->ctxt_invol);
+}
+
+void bench_sanitize_name(char *dst, size_t size, const char *src)
+{
+	size_t i;
+
+	if (size == 0)
+		return;
+	for (i = 0; i + 1 < size && src[i]; i++) {
+		char c = src[i];
+
+		dst[i] = ((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+			  (c >= '0' && c <= '9') || c == '_' || c == '.') ?
+				 c :
+				 '_';
+	}
+	dst[i] = '\0';
+}
+
+void bench_format_bpf(struct bench_writer *w, const struct bench_bpf *b)
+{
+	size_t i;
+
+	if (!b) {
+		bench_append(w, ",\"bpf\":null");
+		return;
+	}
+
+	bench_append(w, ",\"bpf\":{\"run_stats\":%s,\"maps\":%zu",
+		     b->run_stats ? "true" : "false", b->map_count);
+	if (b->memlock_ok)
+		bench_append(w, ",\"maps_memlock\":%" PRIu64, b->memlock);
+	else
+		bench_append(w, ",\"maps_memlock\":null");
+	bench_append(w, ",\"progs_dropped\":%zu,\"progs\":[", b->prog_dropped);
+	for (i = 0; i < b->prog_count; i++) {
+		const struct bench_prog *p = &b->progs[i];
+
+		bench_append(w,
+			     "%s{\"name\":\"%s\",\"run_ns\":%" PRIu64
+			     ",\"run_cnt\":%" PRIu64 "}",
+			     i ? "," : "", p->name, p->run_ns, p->run_cnt);
+	}
+	bench_append(w, "]}");
+}
+
+void bench_format_end(struct bench_writer *w)
+{
+	bench_append(w, "}\n");
 }
 
 bool bench_due(struct bench_state *st, uint64_t now_ns)
@@ -88,13 +138,11 @@ bool bench_due(struct bench_state *st, uint64_t now_ns)
 	return true;
 }
 
-int bench_tick(struct bench_state *st, uint64_t now_ns)
+int bench_write(struct bench_state *st, uint64_t now_ns,
+		const struct bench_bpf *bpf)
 {
 	struct bench_proc self;
 	int dirfd, ok = 0;
-
-	if (!bench_due(st, now_ns))
-		return 1;
 
 	dirfd = open("/proc/self", O_RDONLY | O_DIRECTORY | O_CLOEXEC);
 	if (dirfd >= 0) {
@@ -104,6 +152,8 @@ int bench_tick(struct bench_state *st, uint64_t now_ns)
 
 	st->seq++;
 	bench_format(st, now_ns, ok ? &self : NULL);
+	bench_format_bpf(&st->w, bpf);
+	bench_format_end(&st->w);
 	return bench_commit(&st->w);
 }
 

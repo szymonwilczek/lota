@@ -29,7 +29,7 @@
 #include "../../include/lota.h"
 #include "agent.h"
 #include "attest.h"
-#include "bench_snapshot.h"
+#include "bench_bpf.h"
 #include "bpf_loader.h"
 #include "cli.h"
 #include "config.h"
@@ -671,6 +671,10 @@ static int run_daemon(const struct run_daemon_params *params)
 				  "readable by root only",
 				  LOTA_BENCH_PATH);
 		bench_state_init(&bench, grp ? grp->gr_gid : 0, bench_now_ns());
+		bench.stats_fd = bench_bpf_enable_stats();
+		if (bench.stats_fd < 0)
+			lota_warn("Bench: BPF run time is not counted: %s",
+				  strerror(-bench.stats_fd));
 		bench_ctx = &bench;
 		lota_info("Bench: writing %s every %d ms", LOTA_BENCH_PATH,
 			  LOTA_BENCH_INTERVAL_MS);
@@ -719,8 +723,11 @@ static int run_daemon(const struct run_daemon_params *params)
 	}
 
 	ret = agent_run_event_loop(&loop_ctx);
-	if (bench_ctx)
+	if (bench_ctx) {
 		bench_remove();
+		if (bench.stats_fd >= 0)
+			close(bench.stats_fd);
+	}
 
 	watchdog_stop();
 

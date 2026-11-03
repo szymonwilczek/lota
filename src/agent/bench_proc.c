@@ -6,6 +6,7 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <stdbool.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
@@ -147,6 +148,23 @@ static int read_at(int dirfd, const char *name, char *buf, size_t size)
 	close(fd);
 	buf[len] = '\0';
 	return ret;
+}
+
+int bench_parse_memlock(const char *buf, uint64_t *out)
+{
+	return line_value(buf, "memlock:", out);
+}
+
+int bench_read_memlock(int fdinfo_dirfd, int fd, uint64_t *out)
+{
+	char name[16], buf[BENCH_PROC_BUF];
+	int ret;
+
+	snprintf(name, sizeof(name), "%d", fd);
+	ret = read_at(fdinfo_dirfd, name, buf, sizeof(buf));
+	if (ret < 0)
+		return ret;
+	return bench_parse_memlock(buf, out);
 }
 
 int bench_read_proc(int dirfd, struct bench_proc *p)

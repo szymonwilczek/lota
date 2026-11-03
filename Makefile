@@ -187,6 +187,7 @@ AGENT_SRCS := $(AGENT_DIR)/main.c \
 			  $(AGENT_DIR)/bench.c \
 			  $(AGENT_DIR)/bench_proc.c \
 			  $(AGENT_DIR)/bench_snapshot.c \
+			  $(AGENT_DIR)/bench_bpf.c \
 			  $(AGENT_DIR)/exit_status.c \
 			  $(AGENT_DIR)/sb_dev.c \
 			  $(AGENT_DIR)/cgroup_guard.c \

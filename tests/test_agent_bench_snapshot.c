@@ -8,6 +8,7 @@
 #include <fcntl.h>
 #include <limits.h>
 #include <stdio.h>
+#include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
@@ -153,6 +154,8 @@ static void test_format(void)
 	st.clk_tck = 100;
 	st.seq = 3;
 	bench_format(&st, 3010 * MS, &p);
+	bench_format_bpf(&st.w, NULL);
+	bench_format_end(&st.w);
 	CHECK(strncmp(st.w.buf, "{\"version\":1,\"seq\":3,\"uptime_ms\":3000,",
 		      38) == 0,
 	      "the header carries version, sequence and uptime");
@@ -160,15 +163,97 @@ static void test_format(void)
 		      strstr(st.w.buf, "\"cpu_sys_ns\":400000000,"),
 	      "CPU ticks are written as nanoseconds");
 	CHECK(strstr(st.w.buf, "\"pss_kb\":1024,") != NULL, "PSS is written");
-	CHECK(st.w.len > 0 && st.w.buf[st.w.len - 1] == '\n' &&
-		      strstr(st.w.buf, "}}\n"),
+	CHECK(strstr(st.w.buf, "},\"bpf\":null}\n") != NULL &&
+		      st.w.buf[st.w.len - 1] == '\n',
 	      "the snapshot is one closed object on one line");
 
 	bench_reset(&st.w);
 	bench_format(&st, 3010 * MS, NULL);
-	CHECK(strstr(st.w.buf, "\"agent\":null}\n") != NULL,
+	CHECK(strstr(st.w.buf, "\"agent\":null") != NULL,
 	      "unreadable counters are written as null, not zero");
-	CHECK(!st.w.overflow, "a full snapshot fits the cap");
+}
+
+static void test_format_bpf(void)
+{
+	static struct bench_state st;
+	static struct bench_bpf b;
+	size_t i;
+
+	bench_state_init(&st, 0, 0);
+	memset(&b, 0, sizeof(b));
+	b.run_stats = true;
+	b.map_count = 2;
+	b.memlock_ok = true;
+	b.memlock = 8192;
+	b.prog_count = 2;
+	strcpy(b.progs[0].name, "lota_bprm_check");
+	b.progs[0].run_ns = 900;
+	b.progs[0].run_cnt = 3;
+	strcpy(b.progs[1].name, "lota_mmap");
+	bench_format_bpf(&st.w, &b);
+	CHECK(strcmp(st.w.buf,
+		     ",\"bpf\":{\"run_stats\":true,\"maps\":2,"
+		     "\"maps_memlock\":8192,\"progs_dropped\":0,\"progs\":["
+		     "{\"name\":\"lota_bprm_check\",\"run_ns\":900,\"run_cnt\":3},"
+		     "{\"name\":\"lota_mmap\",\"run_ns\":0,\"run_cnt\":0}]}") ==
+		      0,
+	      "programs are listed by name with run time and count");
+
+	bench_reset(&st.w);
+	b.memlock_ok = false;
+	b.run_stats = false;
+	bench_format_bpf(&st.w, &b);
+	CHECK(strstr(st.w.buf, "\"run_stats\":false") &&
+		      strstr(st.w.buf, "\"maps_memlock\":null"),
+	      "what was not read is written as null or false");
+
+	/* the cap holds the worst case the daemon can produce */
+	bench_reset(&st.w);
+	b.prog_count = LOTA_BENCH_MAX_PROGS;
+	for (i = 0; i < LOTA_BENCH_MAX_PROGS; i++) {
+		memset(b.progs[i].name, 'x', LOTA_BENCH_NAME_MAX - 1);
+		b.progs[i].name[LOTA_BENCH_NAME_MAX - 1] = '\0';
+		b.progs[i].run_ns = UINT64_MAX;
+		b.progs[i].run_cnt = UINT64_MAX;
+	}
+	b.memlock = UINT64_MAX;
+	b.memlock_ok = true;
+	{
+		struct bench_proc p;
+
+		memset(&p, 0xff, sizeof(p));
+		st.seq = UINT64_MAX;
+		st.w.skipped = UINT64_MAX;
+		bench_format(&st, UINT64_MAX, &p);
+	}
+	bench_format_bpf(&st.w, &b);
+	bench_format_end(&st.w);
+	CHECK(!st.w.overflow, "the largest snapshot fits the cap");
+}
+
+static void test_sanitize(void)
+{
+	char out[LOTA_BENCH_NAME_MAX];
+
+	bench_sanitize_name(out, sizeof(out), "lota_file.open");
+	CHECK(strcmp(out, "lota_file.open") == 0, "a plain name is kept");
+	bench_sanitize_name(out, sizeof(out), "a\"b\\c/d\n");
+	CHECK(strcmp(out, "a_b_c_d_") == 0,
+	      "quotes, slashes and control bytes become underscores");
+	bench_sanitize_name(out, 4, "abcdef");
+	CHECK(strcmp(out, "abc") == 0, "a long name is cut to the buffer");
+}
+
+static void test_memlock(void)
+{
+	uint64_t v = 0;
+
+	CHECK(bench_parse_memlock("map_type:\t27\nmemlock:\t266240\n", &v) ==
+			      0 &&
+		      v == 266240,
+	      "memlock is read from a map's fdinfo");
+	CHECK(bench_parse_memlock("map_type:\t27\n", &v) == -EINVAL,
+	      "an fdinfo without memlock is refused");
 }
 
 static void test_schedule(void)
@@ -202,6 +287,9 @@ int main(void)
 	test_read_proc();
 	test_read_self();
 	test_format();
+	test_format_bpf();
+	test_sanitize();
+	test_memlock();
 	test_schedule();
 
 	printf("\n%s: %d failure(s)\n", g_failures ? "FAILED" : "OK",
