@@ -584,13 +584,14 @@ static __always_inline int task_instance(struct task_struct *task,
 	return ret;
 }
 
-/* Is @task held by a tracer, and is that tracer protected? */
-static __always_inline int task_tracer_protected(struct task_struct *task,
-						 int *traced)
+/* Is @task held by a tracer, and is that tracer inside instance @id? */
+static __always_inline int
+task_tracer_inside(struct task_struct *task,
+		   const struct lota_instance_entry *id, int *traced)
 {
-	struct lota_instance_entry id;
+	struct lota_instance_entry tracer_id = {};
 	struct task_struct *tracer;
-	int ret = 0;
+	int tracer_protected = 0;
 
 	*traced = BPF_CORE_READ(task, ptrace) != 0;
 	if (!*traced)
@@ -599,10 +600,12 @@ static __always_inline int task_tracer_protected(struct task_struct *task,
 	bpf_rcu_read_lock();
 	tracer = task->parent;
 	if (tracer)
-		ret = task_instance_rcu(tracer, &id);
+		tracer_protected = task_instance_rcu(tracer, &tracer_id);
 	bpf_rcu_read_unlock();
 
-	return ret;
+	return lota_inside_instance(tracer_protected, tracer_id.root_tgid,
+				    tracer_id.root_start_ticks, 1,
+				    id->root_tgid, id->root_start_ticks);
 }
 
 static __always_inline int is_protected_task(struct task_struct *task)
@@ -2111,7 +2114,8 @@ int BPF_PROG(lota_file_mprotect, struct vm_area_struct *vma,
  * Called when one process attempts to trace/debug another via ptrace,
  * and by procfs for a read of another process's /proc.
  *
- * Ptrace on the agent and on protected PIDs is blocked in every mode.
+ * Ptrace on the agent and on protected PIDs is blocked in every mode,
+ * except between two processes of one instance, which is logged.
  * In ENFORCE mode an attach on any other task is blocked while
  * block_ptrace is set; otherwise it is logged.
  *
@@ -2124,7 +2128,12 @@ SEC("lsm/ptrace_access_check")
 int BPF_PROG(lota_ptrace_access_check, struct task_struct *child,
 	     unsigned int mode, int ret)
 {
+	struct lota_instance_entry target_id = {};
+	struct lota_instance_entry actor_id = {};
 	struct lota_exec_event *event = NULL;
+	struct task_struct *current;
+	int target_protected;
+	int inside = 0;
 	u32 lota_mode;
 	u32 child_pid;
 	int blocked = 0;
@@ -2144,10 +2153,19 @@ int BPF_PROG(lota_ptrace_access_check, struct task_struct *child,
 		return 0;
 	}
 
+	target_protected = task_instance(child, &target_id);
+	if (target_protected) {
+		current = (struct task_struct *)bpf_get_current_task_btf();
+		inside = lota_inside_instance(
+			task_instance(current, &actor_id), actor_id.root_tgid,
+			actor_id.root_start_ticks, target_protected,
+			target_id.root_tgid, target_id.root_start_ticks);
+	}
+
 	blocked = lota_ptrace_denied(mode, lota_mode,
 				     get_config(LOTA_CFG_BLOCK_PTRACE),
 				     is_lota_agent_task(child),
-				     is_protected_task(child));
+				     target_protected && !inside);
 
 	/* for logging */
 	emit_event = should_emit_event(lota_mode, blocked,
@@ -2161,6 +2179,8 @@ int BPF_PROG(lota_ptrace_access_check, struct task_struct *child,
 		event->timestamp_ns = bpf_ktime_get_ns();
 		event->event_type = blocked ? LOTA_EVENT_PTRACE_BLOCKED :
 					      LOTA_EVENT_PTRACE;
+		if (inside)
+			event->flags |= LOTA_EVENT_FLAG_INSIDE_INSTANCE;
 		event->tgid = bpf_get_current_pid_tgid() >> 32;
 		event->pid = bpf_get_current_pid_tgid() & 0xFFFFFFFF;
 		event->uid = (u32)(bpf_get_current_uid_gid() & 0xFFFFFFFF);
@@ -2320,8 +2340,8 @@ int BPF_PROG(lota_task_kill, struct task_struct *p, struct kernel_siginfo *info,
  * A process created by a protected one is marked here, before it first
  * runs. If the mark cannot be stored the clone fails: a child that runs
  * unprotected is the window this closes. A protected process held by a
- * tracer outside the protected set creates nothing, threads included,
- * since the tracer would follow it into the child.
+ * tracer outside its instance creates nothing, threads included, since
+ * the tracer would follow it into the child.
  * ====================================================================== */
 SEC("lsm/task_alloc")
 int BPF_PROG(lota_task_alloc, struct task_struct *task,
@@ -2331,7 +2351,7 @@ int BPF_PROG(lota_task_alloc, struct task_struct *task,
 	struct lota_instance_entry *entry;
 	struct task_struct *current;
 	int creator_protected;
-	int tracer_protected;
+	int tracer_inside;
 	int traced;
 
 	if (ret != 0)
@@ -2342,8 +2362,8 @@ int BPF_PROG(lota_task_alloc, struct task_struct *task,
 	if (!creator_protected)
 		return 0;
 
-	tracer_protected = task_tracer_protected(current, &traced);
-	if (lota_clone_refused(creator_protected, traced, tracer_protected))
+	tracer_inside = task_tracer_inside(current, &id, &traced);
+	if (lota_clone_refused(creator_protected, traced, tracer_inside))
 		return -EPERM;
 
 	if (!lota_clone_inherits_protection(clone_flags, creator_protected))

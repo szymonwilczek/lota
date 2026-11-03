@@ -399,8 +399,12 @@ Active threats
        | A process a protected one creates is protected before it first runs,
          and stays protected across ``execve``. When the kernel cannot record
          that, the creation fails, so no child runs unprotected. A protected
-         process held by a tracer outside the protected set creates nothing,
-         since the kernel would hand the tracer the child as well.
+         process held by a tracer outside its instance creates nothing, since
+         the kernel would hand the tracer the child as well.
+       | An instance is the tree one protected process started. Inside it the
+         refusal does not apply and every access is recorded: the wineserver
+         reads and writes the memory of each process it hosts. Nothing outside
+         an instance reaches into it, another instance included.
        | The agent refuses to protect a process a tracer already holds: the
          LSM refuses new attaches, and one made before the protection would
          stay. It reads the tracer after the process is in the map, so no

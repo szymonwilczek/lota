@@ -178,11 +178,38 @@ static void test_a_tracer_from_outside_stops_creation(void)
 	CHECK(lota_clone_refused(1, 1, 0),
 	      "a protected process traced from outside creates nothing");
 	CHECK(!lota_clone_refused(1, 1, 1),
-	      "a protected process traced from inside the set creates");
+	      "a protected process traced from inside its instance creates");
 	CHECK(!lota_clone_refused(1, 0, 0),
 	      "an untraced protected process creates");
 	CHECK(!lota_clone_refused(0, 1, 0),
 	      "a traced unprotected process is not this rule's business");
+}
+
+static void test_access_inside_an_instance(void)
+{
+	CHECK(lota_inside_instance(1, 100, 5000, 1, 100, 5000),
+	      "two processes of one instance are inside it");
+	CHECK(!lota_inside_instance(1, 100, 5000, 1, 200, 5000),
+	      "another instance's process is outside");
+	CHECK(!lota_inside_instance(1, 100, 5000, 1, 100, 6000),
+	      "a recycled root tgid names another instance");
+	CHECK(!lota_inside_instance(0, 100, 5000, 1, 100, 5000),
+	      "an unprotected actor is outside every instance");
+	CHECK(!lota_inside_instance(1, 100, 5000, 0, 100, 5000),
+	      "an unprotected target is in no instance");
+}
+
+/* the hook passes a target inside the actor's instance as unprotected */
+static void test_an_attach_inside_the_instance_is_allowed(void)
+{
+	int inside = lota_inside_instance(1, 100, 5000, 1, 100, 5000);
+
+	CHECK(!lota_ptrace_denied(LOTA_PTRACE_MODE_ATTACH, LOTA_MODE_MONITOR, 0,
+				  0, !inside),
+	      "an attach inside the instance is not refused");
+	CHECK(lota_ptrace_denied(LOTA_PTRACE_MODE_ATTACH, LOTA_MODE_MONITOR, 0,
+				 1, !inside),
+	      "the agent stays refused to every instance");
 }
 
 int main(void)
@@ -200,6 +227,8 @@ int main(void)
 	test_a_child_inherits_protection();
 	test_a_thread_takes_no_mark();
 	test_a_tracer_from_outside_stops_creation();
+	test_access_inside_an_instance();
+	test_an_attach_inside_the_instance_is_allowed();
 
 	if (g_failures) {
 		fprintf(stderr, "\n%d test(s) failed\n", g_failures);

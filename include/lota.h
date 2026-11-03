@@ -84,9 +84,13 @@ enum lota_event_type {
  * PROTECTED marks an executable-mapping event whose task is in the
  * protected set, so the agent can trigger an event-driven re-measurement
  * of that process instead of waiting for the next periodic heartbeat.
+ *
+ * INSIDE_INSTANCE marks a ptrace access one process of an instance made
+ * to another of the same instance: allowed, and recorded.
  */
 enum lota_event_flag {
 	LOTA_EVENT_FLAG_PROTECTED = (1U << 0),
+	LOTA_EVENT_FLAG_INSIDE_INSTANCE = (1U << 1),
 };
 
 /*
@@ -276,7 +280,8 @@ static inline int lota_ptrace_agent_read_exempt(unsigned int ptrace_mode,
  * Three rules, in the order they are asked:
  *
  *   - the agent itself is never a ptrace target;
- *   - a process that asked for protection refuses both modes;
+ *   - a protected process refuses both modes to anything outside its
+ *     instance (lota_inside_instance());
  *   - block_ptrace covers every other task, in enforce, and for an attach
  *     only.
  *
@@ -328,7 +333,7 @@ static inline int lota_clone_inherits_protection(unsigned long clone_flags,
 
 /*
  * Whether a protected process may not create anything because a tracer
- * outside the protected set holds it. A tracer attached before the process
+ * outside its instance holds it. A tracer attached before the process
  * was protected stays attached, and the kernel hands it every child a
  * PTRACE_O_TRACEFORK tracer asks for without asking the LSM.
  */
@@ -336,6 +341,22 @@ static inline int lota_clone_refused(int creator_protected, int creator_traced,
 				     int tracer_protected)
 {
 	return creator_protected && creator_traced && !tracer_protected;
+}
+
+/*
+ * Whether an access stays inside one instance: the tree one protected process
+ * started, named by that root's tgid and start time, so a recycled tgid names
+ * another instance. Wine's server reads and writes the memory of every process
+ * it hosts, so inside an instance ptrace is recorded, not refused; nothing
+ * outside it reaches in.
+ */
+static inline int
+lota_inside_instance(int actor_protected, unsigned int actor_root,
+		     unsigned long long actor_ticks, int target_protected,
+		     unsigned int target_root, unsigned long long target_ticks)
+{
+	return actor_protected && target_protected &&
+	       actor_root == target_root && actor_ticks == target_ticks;
 }
 
 /*

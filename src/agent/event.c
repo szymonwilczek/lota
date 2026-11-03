@@ -229,7 +229,10 @@ int handle_exec_event(void *ctx, void *data, size_t len)
 		}
 		break;
 	case LOTA_EVENT_PTRACE:
-		event_type_str = "PTRACE";
+		event_type_str =
+			(event->flags & LOTA_EVENT_FLAG_INSIDE_INSTANCE) ?
+				"PTRACE_INSIDE_INSTANCE" :
+				"PTRACE";
 		lota_info("[%llu] %s %s -> pid=%u: %s (pid=%u, uid=%u)",
 			  (unsigned long long)event->timestamp_ns,
 			  event_type_str, comm_safe, event->target_pid,
