@@ -184,6 +184,7 @@ AGENT_SRCS := $(AGENT_DIR)/main.c \
 			  $(AGENT_DIR)/daemon_loop_telemetry.c \
 			  $(AGENT_DIR)/main_utils.c \
 			  $(AGENT_DIR)/io_utils.c \
+			  $(AGENT_DIR)/bench.c \
 			  $(AGENT_DIR)/exit_status.c \
 			  $(AGENT_DIR)/sb_dev.c \
 			  $(AGENT_DIR)/cgroup_guard.c \
@@ -1513,6 +1514,9 @@ TEST_TPM_SRCS := $(addprefix $(AGENT_DIR)/,tpm.c tpm_errno.c seal_envelope.c pro
 TEST_INSTALLER_SRCS := installer/stages.c installer/probe.c installer/run.c installer/ui.c \
 	$(AGENT_DIR)/policy_pubkey.c $(AGENT_DIR)/profile.c
 
+$(BUILD_DIR)/test_agent_bench_file: $(AGENT_DIR)/bench.c $(AGENT_DIR)/io_utils.c
+$(BUILD_DIR)/test_agent_bench_file: TEST_CFLAGS := -DLOTA_INTERNAL_TESTS
+
 TEST_ATTEST := $(addprefix $(BUILD_DIR)/test_, \
 	attest_aggregate \
 	attest_reload \
@@ -2017,7 +2021,7 @@ VALGRIND_UNIT_BINS := \
 	test_integrity_baseline \
 	test_daemon_exit_status test_integrity_map_layout \
 	test_installer_confirm test_bench_cgroup test_bench_result \
-	test_bench_validate test_bench_frames
+	test_bench_validate test_bench_frames test_agent_bench_file
 
 .PHONY: valgrind-unit
 valgrind-unit: $(TEST_BINS)
