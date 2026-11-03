@@ -1113,9 +1113,9 @@ static size_t build_registry_page(uint8_t *buf, uint64_t round, uint32_t start,
 			q.uid = 1000;
 			q.owner_tgid = 4243;
 			q.kind = k == 0 ? LOTA_IPC_REGISTRY_PEER_CONNECT :
-					  LOTA_IPC_REGISTRY_PEER_SEND;
+					  LOTA_IPC_REGISTRY_PEER_PTRACE_ATTACH;
 			if (k == 1 && fault == REGISTRY_BAD_PEER_KIND)
-				q.kind = 3;
+				q.kind = 6;
 			snprintf(q.comm, sizeof(q.comm), "peer%u", k);
 			if (k == 1 && fault == REGISTRY_BAD_PEER_COMM)
 				memset(q.comm, 'a', sizeof(q.comm));
@@ -1287,7 +1287,7 @@ static void test_registry_pages(void)
 	    reg->peer_count != 2 || !reg->peers || reg->peers[0].tgid != 6000 ||
 	    reg->peers[0].count != 2 || reg->peers[0].start_ticks != 9000 ||
 	    reg->peers[0].kind != LOTA_REGISTRY_PEER_CONNECT ||
-	    reg->peers[1].kind != LOTA_REGISTRY_PEER_SEND ||
+	    reg->peers[1].kind != LOTA_REGISTRY_PEER_PTRACE_ATTACH ||
 	    reg->peers[1].exe_ino != 301 || reg->peers[1].owner_tgid != 4243 ||
 	    strcmp(reg->peers[1].comm, "peer1") != 0 ||
 	    strcmp(reg->peers[1].owner_comm, "wineserver") != 0) {

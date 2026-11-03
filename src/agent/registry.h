@@ -271,6 +271,17 @@ _Static_assert(
 		sizeof(((struct lota_ipc_registry_peer *)0)->owner_comm) ==
 			sizeof(((struct lota_instance_peer_val *)0)->owner_comm),
 	"the wire carries the kernel's task name");
+_Static_assert((int)LOTA_INSTANCE_PEER_CONNECT ==
+			       (int)LOTA_IPC_REGISTRY_PEER_CONNECT &&
+		       (int)LOTA_INSTANCE_PEER_SEND ==
+			       (int)LOTA_IPC_REGISTRY_PEER_SEND &&
+		       (int)LOTA_INSTANCE_PEER_PTRACE_READ ==
+			       (int)LOTA_IPC_REGISTRY_PEER_PTRACE_READ &&
+		       (int)LOTA_INSTANCE_PEER_PTRACE_ATTACH ==
+			       (int)LOTA_IPC_REGISTRY_PEER_PTRACE_ATTACH &&
+		       (int)LOTA_INSTANCE_PEER_SIGNAL ==
+			       (int)LOTA_IPC_REGISTRY_PEER_SIGNAL,
+	       "the wire carries the kernel's peer kind");
 
 /*
  * Copy into @out, holding @cap, every peer of the instance whose root

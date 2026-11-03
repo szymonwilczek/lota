@@ -451,12 +451,17 @@ an object loaded and dropped between two rounds is still listed. A record the
 kernel could not keep sets ``LOTA_IPC_REGISTRY_HISTORY_LOST`` on every list of
 the round: such a list may lack an object.
 
-After the objects come the peers: every process outside the instance that
-connected to a unix stream socket, or sent a datagram to one, owned by a
-process of the instance. An instance is the protected process and everything
-it started. The kernel marks a socket with its owner when a process of the
-instance creates, binds or listens on it, and records each contact as it is
-made (``instance_peers`` in ``src/bpf/lota_lsm.bpf.c``). A peer carries its
+After the objects come the peers: every process that reached a process of
+the instance on a road the kernel lets through. An instance is the protected
+process and everything it started. From outside, the road is a unix socket:
+a process connected to a unix stream socket, or sent a datagram to one, owned
+by a process of the instance. The kernel marks a socket with its owner when a
+process of the instance creates, binds or listens on it. From inside, the
+road is one process of the instance reading another (``ptrace`` in read mode),
+attaching to it or writing into it (``ptrace`` attach, ``process_vm_writev``,
+``/proc/<pid>/mem``), or signalling it, as ``wineserver`` does to the title.
+The kernel records each contact as it is made (``instance_peers`` in
+``src/bpf/lota_lsm.bpf.c``). A peer carries its
 PID, start time, uid, the device and inode of its executable, its command
 name, the owning process and its name, how it reached in and how many times.
 Nothing is refused: the list says who reached in, the relying party decides

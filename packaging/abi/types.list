@@ -153,6 +153,9 @@ struct lota_registry_object size=680 align=8
 	path                             off=356 size=320
 macro LOTA_REGISTRY_PEER_CONNECT               = 1
 macro LOTA_REGISTRY_PEER_SEND                  = 2
+macro LOTA_REGISTRY_PEER_PTRACE_READ           = 3
+macro LOTA_REGISTRY_PEER_PTRACE_ATTACH         = 4
+macro LOTA_REGISTRY_PEER_SIGNAL                = 5
 struct lota_registry_peer size=80 align=8
 	count                            off=0 size=8
 	start_ticks                      off=8 size=8

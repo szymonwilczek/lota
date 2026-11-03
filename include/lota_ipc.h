@@ -568,23 +568,31 @@ struct lota_ipc_registry_entry {
 
 /* How a peer reached the instance */
 enum lota_ipc_registry_peer_kind {
+	/* from outside, through a unix socket of the instance */
 	LOTA_IPC_REGISTRY_PEER_CONNECT = 1, /* stream or seqpacket connect */
 	LOTA_IPC_REGISTRY_PEER_SEND = 2, /* datagram sent */
+	/* from inside, one process of the instance to another */
+	LOTA_IPC_REGISTRY_PEER_PTRACE_READ = 3, /* read-mode ptrace access */
+	LOTA_IPC_REGISTRY_PEER_PTRACE_ATTACH =
+		4, /* attach-mode ptrace access */
+	LOTA_IPC_REGISTRY_PEER_SIGNAL = 5, /* signal sent */
+	LOTA_IPC_REGISTRY_PEER_KIND_MAX = LOTA_IPC_REGISTRY_PEER_SIGNAL,
 };
 
 /*
- * A process outside the instance of @pid that connected to, or sent to,
- * a unix socket a process of the instance made, bound or listened on.
+ * A process that reached a process of the instance of @pid: from outside,
+ * through a unix socket a process of the instance made, bound or listened
+ * on; or from inside, by a ptrace access or a signal.
  * The command names are NUL-terminated and zero-padded.
  */
 struct lota_ipc_registry_peer {
-	uint64_t count; /* connects or datagrams */
+	uint64_t count; /* times it did so */
 	uint64_t start_ticks; /* the peer's, /proc/<tgid>/stat field 22 */
 	uint64_t exe_dev; /* makedev() of the peer executable's device */
 	uint64_t exe_ino; /* 0 when the peer had no executable */
 	uint32_t tgid; /* the peer */
 	uint32_t uid; /* the peer's real uid at its first reach */
-	uint32_t owner_tgid; /* the process of the instance owning the socket */
+	uint32_t owner_tgid; /* the process of the instance it reached */
 	uint32_t kind; /* enum lota_ipc_registry_peer_kind */
 	char comm[16];
 	char owner_comm[16];

@@ -201,9 +201,9 @@ struct lota_server_registry_module {
 #define LOTA_SERVER_REGISTRY_MAX_OBJECTS 512
 
 /*
- * One process outside the instance that reached one of its unix sockets,
- * as the relying party received it: every field of the lota_registry_peer
- * lota_get_registry() reported, unchanged.
+ * One process that reached a process of the instance, as the relying party
+ * received it: every field of the lota_registry_peer lota_get_registry()
+ * reported, unchanged.
  */
 struct lota_server_registry_peer {
 	uint64_t count;

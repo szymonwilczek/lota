@@ -1304,7 +1304,14 @@ static void test_registry_digest(void)
 		ok = ok && lota_server_registry_digest(flags, mods, 4, &bad, 1,
 						       got) ==
 				   LOTA_SERVER_ERR_INVALID_ARG;
-		bad.kind = 3;
+		for (uint32_t kind = LOTA_REGISTRY_PEER_CONNECT;
+		     kind <= LOTA_REGISTRY_PEER_SIGNAL; kind++) {
+			bad.kind = kind;
+			ok = ok && lota_server_registry_digest(flags, mods, 4,
+							       &bad, 1, got) ==
+					   LOTA_SERVER_OK;
+		}
+		bad.kind = 6;
 		ok = ok && lota_server_registry_digest(flags, mods, 4, &bad, 1,
 						       got) ==
 				   LOTA_SERVER_ERR_INVALID_ARG;

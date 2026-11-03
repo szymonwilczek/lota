@@ -324,10 +324,12 @@ Worth being precise about, because it decides what you can build on it:
   that process. A list that does not hash to it, short of an object or with
   one rewritten, is not the one the token describes.
 
-* Which processes outside the title reached it through a unix socket, such
-  as one asking the title's ``wineserver`` to write into its memory. The
-  registry lists each one after the objects: its PID, uid, executable,
-  command name, the title process it reached and how many times.
+* Which processes reached the title: from outside through a unix socket,
+  such as one asking the title's ``wineserver`` to write into its memory, and
+  from inside by reading, writing or signalling another of its processes,
+  such as ``wineserver`` writing into the game. The registry lists each one
+  after the objects: its PID, uid, executable, command name, the title
+  process it reached, how (``LOTA_REGISTRY_PEER_*``) and how many times.
   ``LOTA_REGISTRY_PEERS_LOST`` says the list may miss one. The agent refuses
   nothing; whether a peer is expected, say the launcher, is your policy. The
   peers are in the same hash, so a list with one dropped does not match.

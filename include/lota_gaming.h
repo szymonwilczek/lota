@@ -644,13 +644,18 @@ struct lota_registry_object {
 	char path[LOTA_REGISTRY_PATH_MAX];
 };
 
-/* How a peer reached the instance */
+/* How a peer reached the instance: from outside, through a unix socket */
 #define LOTA_REGISTRY_PEER_CONNECT 1 /* connected to a stream socket */
 #define LOTA_REGISTRY_PEER_SEND 2 /* sent a datagram */
+/* from inside, one process of the instance to another */
+#define LOTA_REGISTRY_PEER_PTRACE_READ 3 /* read-mode ptrace access */
+#define LOTA_REGISTRY_PEER_PTRACE_ATTACH 4 /* ptrace, process_vm_*, mem */
+#define LOTA_REGISTRY_PEER_SIGNAL 5 /* sent a signal */
 
 /*
- * One process outside the instance of a protected process that reached a
- * unix socket a process of that instance owns.
+ * One process that reached a process of the instance of a protected
+ * process: from outside, through a unix socket a process of the instance
+ * owns, or from inside, by a ptrace access or a signal.
  * The token's image digest binds every field.
  */
 struct lota_registry_peer {
@@ -660,7 +665,7 @@ struct lota_registry_peer {
 	uint64_t exe_ino; /* inode of the peer's executable */
 	uint32_t tgid;
 	uint32_t uid;
-	uint32_t owner_tgid; /* the instance process owning the socket */
+	uint32_t owner_tgid; /* the instance process it reached */
 	uint32_t kind; /* LOTA_REGISTRY_PEER_* */
 	char comm[16];
 	char owner_comm[16];

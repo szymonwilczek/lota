@@ -330,7 +330,7 @@ int main(void)
 		};
 		/* a name that fills the kernel's buffer */
 		keys[3] = (struct lota_instance_peer_key){
-			99, 303, 7, 43, 7, LOTA_IPC_REGISTRY_PEER_SEND
+			99, 303, 7, 43, 7, LOTA_IPC_REGISTRY_PEER_SIGNAL
 		};
 		memset(vals[3].comm, 'a', sizeof(vals[3].comm));
 
@@ -344,7 +344,8 @@ int main(void)
 		      out[0].kind == LOTA_IPC_REGISTRY_PEER_CONNECT &&
 		      strcmp(out[0].comm, "injector") == 0 &&
 		      strcmp(out[0].owner_comm, "wineserver") == 0;
-		ok &= out[1].tgid == 43 && strlen(out[1].comm) == 15;
+		ok &= out[1].tgid == 43 && strlen(out[1].comm) == 15 &&
+		      out[1].kind == LOTA_IPC_REGISTRY_PEER_SIGNAL;
 
 		n = registry_collect_peers(out, 1, keys, vals, 4, 7, 99,
 					   &overflow);

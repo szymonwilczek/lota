@@ -1331,7 +1331,15 @@ _Static_assert(LOTA_REGISTRY_MEASURED == LOTA_IPC_REGISTRY_MEASURED &&
 			       LOTA_IPC_REGISTRY_ENTRY_UNMAPPED,
 	       "lota_gaming.h registry flags copy lota_ipc.h");
 _Static_assert(LOTA_REGISTRY_PEER_CONNECT == LOTA_IPC_REGISTRY_PEER_CONNECT &&
-		       LOTA_REGISTRY_PEER_SEND == LOTA_IPC_REGISTRY_PEER_SEND,
+		       LOTA_REGISTRY_PEER_SEND == LOTA_IPC_REGISTRY_PEER_SEND &&
+		       LOTA_REGISTRY_PEER_PTRACE_READ ==
+			       LOTA_IPC_REGISTRY_PEER_PTRACE_READ &&
+		       LOTA_REGISTRY_PEER_PTRACE_ATTACH ==
+			       LOTA_IPC_REGISTRY_PEER_PTRACE_ATTACH &&
+		       LOTA_REGISTRY_PEER_SIGNAL ==
+			       LOTA_IPC_REGISTRY_PEER_SIGNAL &&
+		       LOTA_IPC_REGISTRY_PEER_KIND_MAX ==
+			       LOTA_IPC_REGISTRY_PEER_SIGNAL,
 	       "lota_gaming.h peer kinds copy lota_ipc.h");
 _Static_assert(
 	sizeof(((struct lota_registry_peer *)0)->comm) ==
@@ -1395,8 +1403,8 @@ static int registry_decode_peer(const uint8_t *buf, size_t len, size_t *off,
 	memcpy(&w, buf + *off, sizeof(w));
 	*off += sizeof(w);
 
-	if (w.kind != LOTA_IPC_REGISTRY_PEER_CONNECT &&
-	    w.kind != LOTA_IPC_REGISTRY_PEER_SEND)
+	if (w.kind < LOTA_IPC_REGISTRY_PEER_CONNECT ||
+	    w.kind > LOTA_IPC_REGISTRY_PEER_KIND_MAX)
 		return LOTA_ERR_PROTOCOL;
 	if (!memchr(w.comm, '\0', sizeof(w.comm)) ||
 	    !memchr(w.owner_comm, '\0', sizeof(w.owner_comm)))

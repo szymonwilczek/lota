@@ -757,8 +757,8 @@ static int registry_wire_entry(const struct lota_server_registry_module *m,
 static int registry_wire_peer(const struct lota_server_registry_peer *p,
 			      struct lota_ipc_registry_peer *w)
 {
-	if (p->kind != LOTA_IPC_REGISTRY_PEER_CONNECT &&
-	    p->kind != LOTA_IPC_REGISTRY_PEER_SEND)
+	if (p->kind < LOTA_IPC_REGISTRY_PEER_CONNECT ||
+	    p->kind > LOTA_IPC_REGISTRY_PEER_KIND_MAX)
 		return LOTA_SERVER_ERR_INVALID_ARG;
 	if (memchr(p->comm, '\0', sizeof(p->comm)) == NULL ||
 	    memchr(p->owner_comm, '\0', sizeof(p->owner_comm)) == NULL)
