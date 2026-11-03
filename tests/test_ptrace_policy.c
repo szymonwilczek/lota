@@ -169,6 +169,22 @@ static void test_a_thread_takes_no_mark(void)
 	      "a thread of a protected process takes no mark");
 }
 
+/*
+ * A tracer attached before the protection would follow a protected process
+ * into its children, so a process held from outside the set creates nothing
+ */
+static void test_a_tracer_from_outside_stops_creation(void)
+{
+	CHECK(lota_clone_refused(1, 1, 0),
+	      "a protected process traced from outside creates nothing");
+	CHECK(!lota_clone_refused(1, 1, 1),
+	      "a protected process traced from inside the set creates");
+	CHECK(!lota_clone_refused(1, 0, 0),
+	      "an untraced protected process creates");
+	CHECK(!lota_clone_refused(0, 1, 0),
+	      "a traced unprotected process is not this rule's business");
+}
+
 int main(void)
 {
 	printf("=== ptrace policy tests ===\n");
@@ -183,6 +199,7 @@ int main(void)
 	test_attach_is_recognised_by_its_flag();
 	test_a_child_inherits_protection();
 	test_a_thread_takes_no_mark();
+	test_a_tracer_from_outside_stops_creation();
 
 	if (g_failures) {
 		fprintf(stderr, "\n%d test(s) failed\n", g_failures);

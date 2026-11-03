@@ -327,6 +327,18 @@ static inline int lota_clone_inherits_protection(unsigned long clone_flags,
 }
 
 /*
+ * Whether a protected process may not create anything because a tracer
+ * outside the protected set holds it. A tracer attached before the process
+ * was protected stays attached, and the kernel hands it every child a
+ * PTRACE_O_TRACEFORK tracer asks for without asking the LSM.
+ */
+static inline int lota_clone_refused(int creator_protected, int creator_traced,
+				     int tracer_protected)
+{
+	return creator_protected && creator_traced && !tracer_protected;
+}
+
+/*
  * Signal numbers shared by every Linux architecture LOTA builds for.
  *
  * Mirrored for the same reason as the ptrace flag above:

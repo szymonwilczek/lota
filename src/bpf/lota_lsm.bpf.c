@@ -543,30 +543,25 @@ auth_subject_task(struct task_struct *task)
 /*
  * The instance @task belongs to, in @id: the one it inherited, or its own
  * when protected_pids names it. Returns 1 when @task is protected.
- * Under the RCU read lock, which a sleepable hook needs for task storage.
+ * The caller holds the RCU read lock, which a sleepable hook needs for task
+ * storage; task_instance() takes it.
  */
-static __always_inline int task_instance(struct task_struct *task,
-					 struct lota_instance_entry *id)
+static __always_inline int task_instance_rcu(struct task_struct *task,
+					     struct lota_instance_entry *id)
 {
 	struct lota_instance_entry *entry;
 	struct task_struct *subject;
 	u64 start_ticks = 0;
-	int found = 0;
 
 	if (!task)
 		return 0;
 
-	bpf_rcu_read_lock();
 	subject = auth_subject_task(task);
 	entry = bpf_task_storage_get(&lota_instance, subject, 0, 0);
 	if (entry) {
 		*id = *entry;
-		found = 1;
-	}
-	bpf_rcu_read_unlock();
-
-	if (found)
 		return 1;
+	}
 
 	if (!is_registered_task(task, &start_ticks))
 		return 0;
@@ -575,6 +570,39 @@ static __always_inline int task_instance(struct task_struct *task,
 	id->root_tgid = BPF_CORE_READ(task, tgid);
 	id->pad = 0;
 	return 1;
+}
+
+static __always_inline int task_instance(struct task_struct *task,
+					 struct lota_instance_entry *id)
+{
+	int ret;
+
+	bpf_rcu_read_lock();
+	ret = task_instance_rcu(task, id);
+	bpf_rcu_read_unlock();
+
+	return ret;
+}
+
+/* Is @task held by a tracer, and is that tracer protected? */
+static __always_inline int task_tracer_protected(struct task_struct *task,
+						 int *traced)
+{
+	struct lota_instance_entry id;
+	struct task_struct *tracer;
+	int ret = 0;
+
+	*traced = BPF_CORE_READ(task, ptrace) != 0;
+	if (!*traced)
+		return 0;
+
+	bpf_rcu_read_lock();
+	tracer = task->parent;
+	if (tracer)
+		ret = task_instance_rcu(tracer, &id);
+	bpf_rcu_read_unlock();
+
+	return ret;
 }
 
 static __always_inline int is_protected_task(struct task_struct *task)
@@ -2291,7 +2319,9 @@ int BPF_PROG(lota_task_kill, struct task_struct *p, struct kernel_siginfo *info,
  *
  * A process created by a protected one is marked here, before it first
  * runs. If the mark cannot be stored the clone fails: a child that runs
- * unprotected is the window this closes.
+ * unprotected is the window this closes. A protected process held by a
+ * tracer outside the protected set creates nothing, threads included,
+ * since the tracer would follow it into the child.
  * ====================================================================== */
 SEC("lsm/task_alloc")
 int BPF_PROG(lota_task_alloc, struct task_struct *task,
@@ -2301,12 +2331,21 @@ int BPF_PROG(lota_task_alloc, struct task_struct *task,
 	struct lota_instance_entry *entry;
 	struct task_struct *current;
 	int creator_protected;
+	int tracer_protected;
+	int traced;
 
 	if (ret != 0)
 		return ret;
 
 	current = (struct task_struct *)bpf_get_current_task_btf();
 	creator_protected = task_instance(current, &id);
+	if (!creator_protected)
+		return 0;
+
+	tracer_protected = task_tracer_protected(current, &traced);
+	if (lota_clone_refused(creator_protected, traced, tracer_protected))
+		return -EPERM;
+
 	if (!lota_clone_inherits_protection(clone_flags, creator_protected))
 		return 0;
 

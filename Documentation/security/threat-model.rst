@@ -398,7 +398,9 @@ Active threats
          attaches a debugger to it.
        | A process a protected one creates is protected before it first runs,
          and stays protected across ``execve``. When the kernel cannot record
-         that, the creation fails, so no child runs unprotected.
+         that, the creation fails, so no child runs unprotected. A protected
+         process held by a tracer outside the protected set creates nothing,
+         since the kernel would hand the tracer the child as well.
        | ``block_ptrace``, off by default, extends the refusal to an attach on
          any other task.
      - | Reading another process's ``/proc`` is left to the kernel outside the
