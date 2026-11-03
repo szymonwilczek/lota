@@ -386,6 +386,8 @@ ordinary ``kill`` reaches it, and the agent will not end itself this way.
 The exchange is that the host says so. Every relayed termination is journalled
 with the target, its owner and the caller, and the host reports
 ``PROTECTED_TERMINATED`` in its status and in every token until it reboots.
+An agent that ends some other way and is started again in the same boot has
+lost that record, and reports ``AGENT_RESTARTED`` until the reboot instead.
 A publisher then sees a session that was ended on the machine rather than a
 process that silently disappeared -- closing a hung game is the ordinary reason
 for it, and what says *which* process left is the protected set the token

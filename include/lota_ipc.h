@@ -173,6 +173,13 @@ enum lota_ipc_result {
 #define LOTA_STATUS_BLOCK_ANON_EXEC (1 << 18) /* block_anon_exec applies */
 #define LOTA_STATUS_BLOCK_PTRACE (1 << 19) /* block_ptrace applies */
 
+/*
+ * This agent found PCR 14 already holding the boot's commitment: an earlier
+ * one ended in this boot without a shutdown, and what it recorded,
+ * PROTECTED_TERMINATED included, ended with it. Sticky until the next boot.
+ */
+#define LOTA_STATUS_AGENT_RESTARTED (1 << 20)
+
 #define LOTA_STATUS_PROTECTED_TERMINATED \
 	(1                               \
 	 << 10) /* the agent ended a protected process for its owner since    \

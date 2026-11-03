@@ -434,6 +434,13 @@ from one source. That agreement is load-bearing: the anti-cheat heartbeat
 binds the flags it read from ``GET_STATUS`` into the nonce the token is quoted
 over, so a bit set in one and not the other surfaces as a nonce mismatch.
 
+The record lives in the agent and ends with it. An agent that starts and finds
+PCR 14 already holding the boot's commitment follows one that ended without a
+shutdown, since only a shutdown spends it, so it sets
+``LOTA_STATUS_AGENT_RESTARTED`` for the rest of the boot the same way. A token
+that dropped ``PROTECTED_TERMINATED`` across a restart carries that bit instead,
+and the register it rests on is not one root can reset.
+
 What a protected process mapped
 -------------------------------
 

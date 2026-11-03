@@ -39,6 +39,7 @@ static const struct lota_flag_name lota_flag_names[] = {
 	{ LOTA_STATUS_STRICT_MODULES, "STRICT_MODULES" },
 	{ LOTA_STATUS_BLOCK_ANON_EXEC, "BLOCK_ANON_EXEC" },
 	{ LOTA_STATUS_BLOCK_PTRACE, "BLOCK_PTRACE" },
+	{ LOTA_STATUS_AGENT_RESTARTED, "AGENT_RESTARTED" },
 };
 
 /* The bits only the host's operator is shown */

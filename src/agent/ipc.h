@@ -160,6 +160,9 @@ struct ipc_context {
 	 */
 	bool protected_terminated;
 
+	/* this agent is not the first of the boot; sticky like the above */
+	bool agent_restarted;
+
 	/* Attestation state */
 	uint32_t status_flags;
 	uint64_t last_attest_time; /* set by a round, never by a recompute */
@@ -290,6 +293,13 @@ void ipc_update_rotation(struct ipc_context *ctx, uint64_t generation,
 			 uint64_t provisioned_at, uint64_t last_rotated_at,
 			 uint64_t rotation_deadline, uint64_t grace_deadline,
 			 bool reenroll_required);
+
+/*
+ * ipc_set_agent_restarted - Say for the rest of the boot that an earlier
+ * agent of this boot ended without a shutdown
+ * @ctx: Server context
+ */
+void ipc_set_agent_restarted(struct ipc_context *ctx);
 
 /*
  * ipc_set_mode - Update current mode

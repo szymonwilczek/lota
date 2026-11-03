@@ -3998,6 +3998,8 @@ void ipc_update_status(struct ipc_context *ctx, uint32_t flags,
 	 */
 	if (ctx->protected_terminated)
 		flags |= LOTA_STATUS_PROTECTED_TERMINATED;
+	if (ctx->agent_restarted)
+		flags |= LOTA_STATUS_AGENT_RESTARTED;
 
 	/* a round knows nothing of the policy, the daemon does */
 	flags = lota_status_fold_policy(flags, ctx->mode, ctx->policy_keys);
@@ -4069,6 +4071,17 @@ void ipc_update_rotation(struct ipc_context *ctx, uint64_t generation,
 
 	if (changed)
 		dbus_emit_rotation_changed(ctx->dbus);
+}
+
+void ipc_set_agent_restarted(struct ipc_context *ctx)
+{
+	ctx->agent_restarted = true;
+	if (ctx->status_flags & LOTA_STATUS_AGENT_RESTARTED)
+		return;
+
+	ctx->status_flags |= LOTA_STATUS_AGENT_RESTARTED;
+	notify_subscribers(ctx, LOTA_IPC_EVENT_STATUS);
+	dbus_emit_status_changed(ctx->dbus, ctx->status_flags);
 }
 
 void ipc_set_mode(struct ipc_context *ctx, uint8_t mode)

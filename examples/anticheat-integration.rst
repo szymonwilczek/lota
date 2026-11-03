@@ -348,6 +348,12 @@ Worth being precise about, because it decides what you can build on it:
   that ended locally is told apart from a process that vanished, which is the
   case worth a second look if the process that left was yours.
 
+* Whether the agent answering is the first of that boot.
+  ``LOTA_FLAG_AGENT_RESTARTED`` says an earlier agent ended without a shutdown
+  and was started again; whatever it recorded, ``PROTECTED_TERMINATED``
+  included, ended with it, so a token with this bit vouches for nothing before
+  the restart.
+
 It does **not** prove the player is not cheating. It proves the platform
 underneath is what it claims to be, which removes the layer where a cheat
 would otherwise be invisible to you: a tampered kernel, an unsigned

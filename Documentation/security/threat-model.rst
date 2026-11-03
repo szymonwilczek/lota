@@ -442,6 +442,10 @@ Active threats
          record. Every relayed termination is journalled, and the host reports
          ``PROTECTED_TERMINATED`` in its status word and in every token it
          issues until it reboots.
+       | That record ends with the agent. An agent restarted within the boot
+         finds PCR 14 already committed, which only a shutdown would have
+         spent, and reports ``AGENT_RESTARTED`` until the reboot: a restart
+         that drops the record cannot also hide that it happened.
        | The protected set the token carries names who is left, so a publisher
          that knows which of its processes belongs there sees which one went.
        | The verb's answer counts that set without the signalled process,

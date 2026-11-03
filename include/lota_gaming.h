@@ -245,6 +245,18 @@ enum lota_error {
 #define LOTA_FLAG_BLOCK_PTRACE (1 << 19)
 
 /*
+ * The agent answering was not the first of this boot: an earlier one ended
+ * without a shutdown, and was started again. PCR 14 still held the boot's
+ * commitment, which the agent cannot forge or reset, so the restart is
+ * certain while what led to it is not.
+ *
+ * Every record the earlier agent kept ended with it. A token that carries
+ * this bit says nothing of what happened on the host before the restart,
+ * PROTECTED_TERMINATED included. It stays set until the host reboots.
+ */
+#define LOTA_FLAG_AGENT_RESTARTED (1 << 20)
+
+/*
  * Subscription event types
  *
  * Bitmask selecting which status changes trigger push notifications.

@@ -590,6 +590,14 @@ static int run_daemon(const struct run_daemon_params *params)
 			lota_info(
 				"Self-measurement complete (PCR %d already held this boot's commitment; the restart did not spend it)",
 				LOTA_PCR_SELF);
+			/*
+			 * Only a shutdown spends the commitment, so an agent that
+			 * finds it held follows one that ended some other way.
+			 * What that one recorded is gone; say so for the boot.
+			 */
+			lota_warn(
+				"An earlier agent of this boot ended without a shutdown; status and tokens say AGENT_RESTARTED until reboot");
+			ipc_set_agent_restarted(&g_agent.ipc_ctx);
 		} else {
 			lota_info("Self-measurement complete (PCR %d extended)",
 				  LOTA_PCR_SELF);
