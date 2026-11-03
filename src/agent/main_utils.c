@@ -123,6 +123,11 @@ void print_usage(const char *prog, const char *default_bpf_path,
 	       "testing)\n");
 	printf("  --shutdown        Request graceful shutdown via "
 	       "authenticated IPC\n");
+	printf("  --status          Print the running agent's mode, flags "
+	       "and\n"
+	       "                    attestation counts, as any caller of "
+	       "the\n"
+	       "                    socket sees them, and exit\n");
 	printf("  --terminate-protected PID\n");
 	printf("                    End a process that asked to be protected, "
 	       "which\n");

@@ -292,6 +292,7 @@ int cli_parse(int argc, char **argv, struct cli_options *opts,
 		{ "test-ipc", no_argument, NULL, 'c' },
 		{ "test-signed", no_argument, NULL, 'S' },
 		{ "shutdown", no_argument, NULL, 1001 },
+		{ "status", no_argument, NULL, 1046 },
 		{ "terminate-protected", required_argument, NULL, 1042 },
 		{ "force", no_argument, NULL, 1043 },
 		{ "export-policy", no_argument, NULL, 'E' },
@@ -387,6 +388,9 @@ int cli_parse(int argc, char **argv, struct cli_options *opts,
 			break;
 		case 1001:
 			opts->shutdown_flag = 1;
+			break;
+		case 1046:
+			opts->status_flag = 1;
 			break;
 		case 'E':
 			opts->export_policy_flag = 1;

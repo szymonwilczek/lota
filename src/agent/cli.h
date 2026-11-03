@@ -33,6 +33,7 @@ struct cli_options {
 	int test_ipc_flag;
 	int test_signed_flag;
 	int shutdown_flag;
+	int status_flag; /* --status */
 	/*
 	 * --terminate-protected PID:
 	 * end a process that asked to be protected, which no signal from terminal

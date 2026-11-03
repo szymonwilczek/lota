@@ -25,6 +25,7 @@
 #include "io_utils.h"
 #include "main_utils.h"
 #include "selftest.h"
+#include "status_cmd.h"
 #include "terminate_report.h"
 #include "test_servers.h"
 #include "tpm.h"
@@ -237,6 +238,22 @@ int diagnostics_dispatch(struct cli_options *opts, struct lota_config *cfg)
 			"Agent stopped. PCR14 is spent, so this host attests "
 			"again only after a reboot; starting the agent before "
 			"then is refused\n");
+		return 0;
+	}
+
+	if (opts->status_flag) {
+		struct lota_ipc_status st;
+		char out[1024];
+		int sret = status_request(LOTA_IPC_SOCKET_PATH, &st);
+
+		if (sret < 0) {
+			fprintf(stderr,
+				"Cannot read the agent's status on %s: %s\n",
+				LOTA_IPC_SOCKET_PATH, strerror(-sret));
+			return 1;
+		}
+		status_format(&st, out, sizeof(out));
+		fputs(out, stdout);
 		return 0;
 	}
 

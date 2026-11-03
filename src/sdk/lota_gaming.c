@@ -23,6 +23,7 @@
 #include <sys/types.h>
 
 #include "../../include/lota_endian.h"
+#include "../../include/lota_flag_names.h"
 #include "../../include/lota_gaming.h"
 #include "../../include/lota_ipc.h"
 #include "../../include/lota_token.h"
@@ -32,6 +33,31 @@ _Static_assert(LOTA_TOKEN_MAX_PROTECT_PIDS == LOTA_IPC_TOKEN_MAX_PROTECT_PIDS,
 	       "wire protected-PID cap must be the IPC-derived cap");
 _Static_assert(LOTA_TOKEN_MAX_PID_LIST_SIZE == LOTA_IPC_TOKEN_MAX_PID_LIST_SIZE,
 	       "wire and IPC PID-list bounds must agree");
+
+/* a title's flags are the status word; the name table is keyed by the latter */
+_Static_assert(LOTA_FLAG_ATTESTED == LOTA_STATUS_ATTESTED, "ATTESTED differs");
+_Static_assert(LOTA_FLAG_TPM_OK == LOTA_STATUS_TPM_OK, "TPM_OK differs");
+_Static_assert(LOTA_FLAG_IOMMU_OK == LOTA_STATUS_IOMMU_OK, "IOMMU_OK differs");
+_Static_assert(LOTA_FLAG_BPF_LOADED == LOTA_STATUS_BPF_LOADED,
+	       "BPF_LOADED differs");
+_Static_assert(LOTA_FLAG_SECURE_BOOT == LOTA_STATUS_SECURE_BOOT,
+	       "SECURE_BOOT differs");
+_Static_assert(LOTA_FLAG_UPDATE_PENDING == LOTA_STATUS_UPDATE_PENDING,
+	       "UPDATE_PENDING differs");
+_Static_assert(LOTA_FLAG_TOKEN_ONLY == LOTA_STATUS_TOKEN_ONLY,
+	       "TOKEN_ONLY differs");
+_Static_assert(LOTA_FLAG_IMAGE_FULLY_MEASURED ==
+		       LOTA_STATUS_IMAGE_FULLY_MEASURED,
+	       "IMAGE_FULLY_MEASURED differs");
+_Static_assert(LOTA_FLAG_IMAGE_CONTENT_HASHED ==
+		       LOTA_STATUS_IMAGE_CONTENT_HASHED,
+	       "IMAGE_CONTENT_HASHED differs");
+_Static_assert(LOTA_FLAG_PROTECTED_TERMINATED ==
+		       LOTA_STATUS_PROTECTED_TERMINATED,
+	       "PROTECTED_TERMINATED differs");
+_Static_assert(LOTA_FLAG_KERNEL_APPRAISAL == LOTA_STATUS_KERNEL_APPRAISAL,
+	       "KERNEL_APPRAISAL differs");
+_Static_assert(LOTA_FLAG_BENCH == LOTA_STATUS_BENCH, "BENCH differs");
 
 #define DEFAULT_TIMEOUT_MS 5000
 
@@ -1327,31 +1353,6 @@ const char *lota_sdk_version(void)
 
 int lota_flags_to_string(uint32_t flags, char *buf, size_t buflen)
 {
-	static const struct {
-		uint32_t flag;
-		const char *name;
-	} flag_names[] = {
-		{ LOTA_FLAG_ATTESTED, "ATTESTED" },
-		{ LOTA_FLAG_TPM_OK, "TPM_OK" },
-		{ LOTA_FLAG_IOMMU_OK, "IOMMU_OK" },
-		{ LOTA_FLAG_BPF_LOADED, "BPF_LOADED" },
-		{ LOTA_FLAG_SECURE_BOOT, "SECURE_BOOT" },
-		{ LOTA_FLAG_UPDATE_PENDING, "UPDATE_PENDING" },
-		/*
-		 * The flag this branch exists for.
-		 * Title that renders the decoded string is showing player why
-		 * the machine reads the way it does, and "nobody verifies here"
-		 * is the one answer that is not failure
-		 * -- leaving it out of the table turns it back into bare
-		 *  NOT ATTESTED, which is the confusion the flag was added to remove
-		 */
-		{ LOTA_FLAG_TOKEN_ONLY, "TOKEN_ONLY" },
-		{ LOTA_FLAG_IMAGE_FULLY_MEASURED, "IMAGE_FULLY_MEASURED" },
-		{ LOTA_FLAG_IMAGE_CONTENT_HASHED, "IMAGE_CONTENT_HASHED" },
-		{ LOTA_FLAG_PROTECTED_TERMINATED, "PROTECTED_TERMINATED" },
-		{ LOTA_FLAG_KERNEL_APPRAISAL, "KERNEL_APPRAISAL" },
-		{ LOTA_FLAG_BENCH, "BENCH" },
-	};
 	size_t pos = 0;
 	int first = 1;
 
@@ -1360,12 +1361,11 @@ int lota_flags_to_string(uint32_t flags, char *buf, size_t buflen)
 
 	buf[0] = '\0';
 
-	for (size_t i = 0; i < sizeof(flag_names) / sizeof(flag_names[0]);
-	     i++) {
-		if (!(flags & flag_names[i].flag))
+	for (size_t i = 0; i < LOTA_FLAG_NAME_COUNT; i++) {
+		if (!(flags & lota_flag_names[i].flag))
 			continue;
 
-		size_t name_len = strlen(flag_names[i].name);
+		size_t name_len = strlen(lota_flag_names[i].name);
 		size_t needed = name_len + (first ? 0 : 1);
 
 		if (pos + needed >= buflen)
@@ -1374,7 +1374,7 @@ int lota_flags_to_string(uint32_t flags, char *buf, size_t buflen)
 		if (!first)
 			buf[pos++] = ',';
 
-		memcpy(buf + pos, flag_names[i].name, name_len);
+		memcpy(buf + pos, lota_flag_names[i].name, name_len);
 		pos += name_len;
 		first = 0;
 	}
