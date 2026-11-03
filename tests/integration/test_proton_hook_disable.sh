@@ -8,6 +8,8 @@
 # Both end the same way -- the game is exec'd with LD_PRELOAD untouched and one
 # warning on stderr -- and they are the only thing standing between a player
 # and a launch the preload breaks, so they are driven through the script.
+# Only LOTA_HOOK_DISABLE also skips lota-protect: a missing library still
+# launches protected.
 #
 # The library honours LOTA_HOOK_DISABLE as well, but by the time it can it is
 # already mapped into the game; the wrapper's answer is the one that keeps it out.
@@ -55,6 +57,22 @@ denies() { ! grep -qi -- "$2" <<<"$1"; }
 # and the assertions read the LD_PRELOAD the game was handed.
 LIB="$WORK_DIR/liblota_wine_hook.so"
 : >"$LIB"
+
+# lota-protect stand-in: leaves a mark, then runs what follows "--"
+PROTECT="$WORK_DIR/lota-protect"
+MARK="$WORK_DIR/protected"
+cat >"$PROTECT" <<STUB
+#!/bin/bash
+[[ "\${1:-}" == "--" ]] || exit 99
+shift
+: >"$MARK"
+exec "\$@"
+STUB
+chmod 755 "$PROTECT"
+export LOTA_PROTECT_PATH="$PROTECT"
+
+protected() { [[ -e "$MARK" ]]; }
+unprotected() { [[ ! -e "$MARK" ]]; }
 
 AMBIENT_PRELOAD=$(/bin/sh -c 'printf "%s" "${LD_PRELOAD:-}"')
 
@@ -137,6 +155,38 @@ set -e
 check "missing library: the wrapper still warns" says "$missing_err" "not found"
 check "missing library: the warning is not the disable one" \
     denies "$missing_err" "LOTA_HOOK_DISABLE"
+
+# the launch itself goes through lota-protect, arguments intact
+rm -f "$MARK"
+run_wrapper LOTA_HOOK_QUIET=
+check "unset: the command runs through lota-protect" protected
+set +e
+args_out=$(env LOTA_HOOK_LIB_PATH="$LIB" \
+    "$WRAPPER" /bin/sh -c 'printf "[%s]" "$@"' sh "a b" "" c 2>/dev/null)
+set -e
+check "unset: no argument is split or dropped" \
+    test "$args_out" = '[a b][][c]'
+
+rm -f "$MARK"
+run_wrapper LOTA_HOOK_DISABLE=1
+check "DISABLE=1: lota-protect is skipped as well" unprotected
+
+rm -f "$MARK"
+set +e
+env LOTA_HOOK_LIB_PATH="$WORK_DIR/no-such-hook.so" \
+    "$WRAPPER" /bin/true >/dev/null 2>&1
+set -e
+check "missing library: the launch is still protected" protected
+
+rm -f "$MARK"
+set +e
+noprotect_err=$(env LOTA_PROTECT_PATH="$WORK_DIR/no-such-protect" \
+    LOTA_HOOK_LIB_PATH="$LIB" "$WRAPPER" /bin/true 2>&1 >/dev/null)
+noprotect_rc=$?
+set -e
+check "no lota-protect: the command still runs" test "$noprotect_rc" -eq 0
+check "no lota-protect: the wrapper says it is unprotected" \
+    says "$noprotect_err" "starting unprotected"
 
 echo ""
 if [[ $failures -eq 0 ]]; then

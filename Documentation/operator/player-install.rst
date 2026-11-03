@@ -326,6 +326,12 @@ that title's launch options -- ``lota-steam-setup`` prints the exact string.
 Container mounts are not pasted: ``lota-proton-hook`` adds the socket and
 token directories to ``PRESSURE_VESSEL_FILESYSTEMS_RW`` itself.
 
+``lota-proton-hook`` starts the launch through ``lota-protect``, which has the
+agent protect it before anything of the title runs; every process the launch
+creates is protected with it. A launch a debugger already holds is refused
+and does not start. With no agent answering, the title starts unprotected,
+and no token lists it among the protected processes.
+
 The bridge is installed once per word size on x86_64: Steam's launch chain
 mixes 64- and 32-bit processes that all inherit ``LD_PRELOAD``, so
 ``lota-proton-hook`` names it through ld.so's ``$LIB`` token. With only one
