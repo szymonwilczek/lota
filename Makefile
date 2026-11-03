@@ -2021,7 +2021,8 @@ VALGRIND_UNIT_BINS := \
 	test_integrity_baseline \
 	test_daemon_exit_status test_integrity_map_layout \
 	test_installer_confirm test_bench_cgroup test_bench_result \
-	test_bench_validate test_bench_frames test_agent_bench_file
+	test_bench_validate test_bench_frames test_agent_bench_file \
+	test_socket_watch
 
 .PHONY: valgrind-unit
 valgrind-unit: $(TEST_BINS)
