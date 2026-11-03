@@ -80,6 +80,30 @@ int main(void)
 	f = flags_for(true, LOTA_MODE_ENFORCE, LOTA_STATUS_BPF_LOADED);
 	CHECK(!(f & LOTA_REPORT_FLAG_BENCH), "no --bench: no BENCH");
 
+	/* the daemon's policy keys reach the report under enforce only */
+	f = flags_for(true, LOTA_MODE_ENFORCE,
+		      LOTA_STATUS_BPF_LOADED | LOTA_STATUS_STRICT_MMAP |
+			      LOTA_STATUS_BLOCK_PTRACE);
+	CHECK(f == (ENF | BPF | LOTA_REPORT_FLAG_STRICT_MMAP |
+		    LOTA_REPORT_FLAG_BLOCK_PTRACE),
+	      "enforcing daemon: its keys beside ENFORCE");
+
+	f = flags_for(true, LOTA_MODE_ENFORCE,
+		      LOTA_STATUS_BPF_LOADED | LOTA_STATUS_STRICT_EXEC |
+			      LOTA_STATUS_STRICT_MODULES |
+			      LOTA_STATUS_BLOCK_ANON_EXEC);
+	CHECK(f == (ENF | BPF | LOTA_REPORT_FLAG_STRICT_EXEC |
+		    LOTA_REPORT_FLAG_STRICT_MODULES |
+		    LOTA_REPORT_FLAG_BLOCK_ANON_EXEC),
+	      "enforcing daemon: the other three keys");
+
+	f = flags_for(true, LOTA_MODE_MONITOR,
+		      LOTA_STATUS_BPF_LOADED | LOTA_STATUS_STRICT_MMAP);
+	CHECK(f == BPF, "monitor: no key, whatever the word says");
+
+	f = flags_for(true, LOTA_MODE_ENFORCE, LOTA_STATUS_STRICT_MMAP);
+	CHECK(f == 0, "enforce without the LSM loaded: no key");
+
 	if (g_failures) {
 		fprintf(stderr, "\n%d failure(s)\n", g_failures);
 		return 1;

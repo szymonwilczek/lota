@@ -167,6 +167,7 @@ struct ipc_context {
 	uint32_t attest_count;
 	uint32_t fail_count;
 	uint8_t mode;
+	uint32_t policy_keys; /* LOTA_STATUS_POLICY_KEYS the daemon holds */
 
 	/* AIK rotation state, surfaced read-only over D-Bus */
 	uint64_t aik_generation; /* monotonic rotation counter */
@@ -296,6 +297,12 @@ void ipc_update_rotation(struct ipc_context *ctx, uint64_t generation,
  * @mode: New mode (enum lota_mode)
  */
 void ipc_set_mode(struct ipc_context *ctx, uint8_t mode);
+
+/*
+ * Set the policy keys the daemon applies, as LOTA_STATUS_POLICY_KEYS bits.
+ * The status word and the token carry them while the mode is enforce.
+ */
+void ipc_set_policy(struct ipc_context *ctx, uint32_t keys);
 
 /*
  * ipc_host_status_flags - the status word a caller that names no publisher sees

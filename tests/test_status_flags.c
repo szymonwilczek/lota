@@ -113,6 +113,48 @@ int main(void)
 					lota_coverage_is_full(0, true)) == 0,
 	      "an empty round clears a bit an earlier round set");
 
+	/*
+	 * Policy.
+	 * The word says what the host refuses, so a key the mode leaves inert
+	 * reads as off, and a title cannot mistake a configured key for one
+	 * that applies.
+	 */
+	{
+		uint32_t keys = lota_status_policy_keys(true, false, false,
+							false, true);
+		uint32_t loaded = LOTA_STATUS_BPF_LOADED;
+
+		CHECK(keys == (LOTA_STATUS_STRICT_MMAP |
+			       LOTA_STATUS_BLOCK_PTRACE),
+		      "each key maps to its own bit");
+		CHECK(lota_status_policy_keys(false, true, true, true, false) ==
+			      (LOTA_STATUS_STRICT_EXEC |
+			       LOTA_STATUS_STRICT_MODULES |
+			       LOTA_STATUS_BLOCK_ANON_EXEC),
+		      "the other three keys map to theirs");
+
+		CHECK(lota_status_fold_policy(loaded, LOTA_MODE_ENFORCE,
+					      keys) ==
+			      (loaded | LOTA_STATUS_ENFORCE | keys),
+		      "enforce with the LSM loaded carries the mode and keys");
+		CHECK(lota_status_fold_policy(loaded, LOTA_MODE_ENFORCE, 0) ==
+			      (loaded | LOTA_STATUS_ENFORCE),
+		      "enforce with no key carries the mode alone");
+		CHECK(lota_status_fold_policy(loaded, LOTA_MODE_MONITOR,
+					      keys) == loaded,
+		      "monitor carries no key, set or not");
+		CHECK(lota_status_fold_policy(0, LOTA_MODE_ENFORCE, keys) == 0,
+		      "enforce without the LSM refuses nothing and says so");
+		CHECK(lota_status_fold_policy(
+			      loaded | LOTA_STATUS_ENFORCE | keys,
+			      LOTA_MODE_MONITOR, keys) == loaded,
+		      "a switch to monitor clears what enforce set");
+		CHECK(lota_status_fold_policy(loaded, LOTA_MODE_ENFORCE,
+					      LOTA_STATUS_ATTESTED) ==
+			      (loaded | LOTA_STATUS_ENFORCE),
+		      "a bit outside the policy is not taken as a key");
+	}
+
 	printf("\n%s\n", g_failures ? "FAILURES" : "All tests passed");
 	return g_failures ? 1 : 0;
 }

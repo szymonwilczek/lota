@@ -3647,6 +3647,9 @@ void ipc_update_status(struct ipc_context *ctx, uint32_t flags,
 	if (ctx->protected_terminated)
 		flags |= LOTA_STATUS_PROTECTED_TERMINATED;
 
+	/* a round knows nothing of the policy, the daemon does */
+	flags = lota_status_fold_policy(flags, ctx->mode, ctx->policy_keys);
+
 	ctx->status_flags = flags;
 	ctx->valid_until = valid_until;
 
@@ -3654,6 +3657,30 @@ void ipc_update_status(struct ipc_context *ctx, uint32_t flags,
 		notify_subscribers(ctx, LOTA_IPC_EVENT_STATUS);
 		dbus_emit_status_changed(ctx->dbus, flags);
 	}
+}
+
+/* Refold the policy bits after the mode or a key changed */
+static void refold_policy(struct ipc_context *ctx)
+{
+	uint32_t flags;
+
+	if (!ctx->running)
+		return;
+
+	flags = lota_status_fold_policy(ctx->status_flags, ctx->mode,
+					ctx->policy_keys);
+	if (flags == ctx->status_flags)
+		return;
+
+	ctx->status_flags = flags;
+	notify_subscribers(ctx, LOTA_IPC_EVENT_STATUS);
+	dbus_emit_status_changed(ctx->dbus, flags);
+}
+
+void ipc_set_policy(struct ipc_context *ctx, uint32_t keys)
+{
+	ctx->policy_keys = keys & LOTA_STATUS_POLICY_KEYS;
+	refold_policy(ctx);
 }
 
 void ipc_record_attestation(struct ipc_context *ctx, bool success)
@@ -3702,6 +3729,7 @@ void ipc_set_mode(struct ipc_context *ctx, uint8_t mode)
 		notify_subscribers(ctx, LOTA_IPC_EVENT_MODE);
 		dbus_emit_mode_changed(ctx->dbus, mode);
 	}
+	refold_policy(ctx);
 }
 
 void ipc_set_tpm(struct ipc_context *ctx, struct tpm_context *tpm,

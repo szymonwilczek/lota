@@ -21,7 +21,16 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include "../../include/lota.h"
 #include "../../include/lota_ipc.h"
+
+/* The key bits of the policy word, without the mode */
+#define LOTA_STATUS_POLICY_KEYS                                     \
+	(LOTA_STATUS_STRICT_MMAP | LOTA_STATUS_STRICT_EXEC |        \
+	 LOTA_STATUS_STRICT_MODULES | LOTA_STATUS_BLOCK_ANON_EXEC | \
+	 LOTA_STATUS_BLOCK_PTRACE)
+
+#define LOTA_STATUS_POLICY (LOTA_STATUS_ENFORCE | LOTA_STATUS_POLICY_KEYS)
 
 /* What the daemon has probed about the machine it enforces on */
 struct agent_boot_state {
@@ -105,6 +114,45 @@ static inline uint32_t lota_status_fold_content_hash(uint32_t flags,
 		return flags | LOTA_STATUS_IMAGE_CONTENT_HASHED;
 
 	return flags & ~(uint32_t)LOTA_STATUS_IMAGE_CONTENT_HASHED;
+}
+
+/* The policy keys the daemon holds, as status bits */
+static inline uint32_t
+lota_status_policy_keys(bool strict_mmap, bool strict_exec, bool strict_modules,
+			bool block_anon_exec, bool block_ptrace)
+{
+	uint32_t keys = 0;
+
+	if (strict_mmap)
+		keys |= LOTA_STATUS_STRICT_MMAP;
+	if (strict_exec)
+		keys |= LOTA_STATUS_STRICT_EXEC;
+	if (strict_modules)
+		keys |= LOTA_STATUS_STRICT_MODULES;
+	if (block_anon_exec)
+		keys |= LOTA_STATUS_BLOCK_ANON_EXEC;
+	if (block_ptrace)
+		keys |= LOTA_STATUS_BLOCK_PTRACE;
+
+	return keys;
+}
+
+/*
+ * Set the policy bits of @flags from @mode and @keys.
+ *
+ * A key is only applied in enforce mode with the LSM loaded, so outside that
+ * every policy bit is clear: the word says what the host refuses, not what
+ * its configuration names.
+ */
+static inline uint32_t lota_status_fold_policy(uint32_t flags, int mode,
+					       uint32_t keys)
+{
+	flags &= ~(uint32_t)LOTA_STATUS_POLICY;
+
+	if (!(flags & LOTA_STATUS_BPF_LOADED) || mode != LOTA_MODE_ENFORCE)
+		return flags;
+
+	return flags | LOTA_STATUS_ENFORCE | (keys & LOTA_STATUS_POLICY_KEYS);
 }
 
 #endif /* LOTA_AGENT_STATUS_FLAGS_H */

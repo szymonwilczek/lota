@@ -159,6 +159,18 @@ enum lota_ipc_result {
 	(1 << 13) /* the agent runs with --bench: it writes what it costs, \
 		   and its policy is the same as without it */
 
+/*
+ * The policy the daemon applies. Set only while the LSM is loaded and the mode
+ * is enforce, so a key the mode leaves inert reads as off. The agent and the
+ * protected processes are guarded with every one of these clear.
+ */
+#define LOTA_STATUS_ENFORCE (1 << 14) /* mode = enforce */
+#define LOTA_STATUS_STRICT_MMAP (1 << 15) /* strict_mmap applies */
+#define LOTA_STATUS_STRICT_EXEC (1 << 16) /* strict_exec applies */
+#define LOTA_STATUS_STRICT_MODULES (1 << 17) /* strict_modules applies */
+#define LOTA_STATUS_BLOCK_ANON_EXEC (1 << 18) /* block_anon_exec applies */
+#define LOTA_STATUS_BLOCK_PTRACE (1 << 19) /* block_ptrace applies */
+
 #define LOTA_STATUS_PROTECTED_TERMINATED \
 	(1                               \
 	 << 10) /* the agent ended a protected process for its owner since    \

@@ -367,6 +367,10 @@ static int run_daemon(const struct run_daemon_params *params)
 	}
 
 	ipc_set_mode(&g_agent.ipc_ctx, (uint8_t)g_agent.mode);
+	ipc_set_policy(&g_agent.ipc_ctx,
+		       lota_status_policy_keys(strict_mmap, strict_exec,
+					       strict_modules, block_anon_exec,
+					       block_ptrace));
 	ipc_set_profiles(&g_agent.ipc_ctx, targets, target_count);
 	setup_container_listener(&g_agent.ipc_ctx, cfg);
 	setup_dbus(&g_agent.ipc_ctx);

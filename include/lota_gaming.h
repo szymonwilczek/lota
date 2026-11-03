@@ -219,6 +219,27 @@ enum lota_error {
 #define LOTA_FLAG_BENCH (1 << 13)
 
 /*
+ * The policy the host applies, as its operator set it.
+ *
+ * LOTA_FLAG_ENFORCE says the host runs in enforce mode with the LSM loaded;
+ * each other bit says one policy key is on and applies. In monitor mode every
+ * one of them is clear. The agent and the protected processes are guarded
+ * either way, so a clear bit takes nothing from the protection a title asked
+ * for. Whether a title needs one of them is its publisher's call.
+ */
+#define LOTA_FLAG_ENFORCE (1 << 14)
+/* a protected process maps no file outside the allowlist executable */
+#define LOTA_FLAG_STRICT_MMAP (1 << 15)
+/* an exec of a file outside the allowlist is refused */
+#define LOTA_FLAG_STRICT_EXEC (1 << 16)
+/* a module or firmware load outside the allowlist is refused */
+#define LOTA_FLAG_STRICT_MODULES (1 << 17)
+/* a protected process makes no anonymous mapping executable */
+#define LOTA_FLAG_BLOCK_ANON_EXEC (1 << 18)
+/* a ptrace attach on any task is refused */
+#define LOTA_FLAG_BLOCK_PTRACE (1 << 19)
+
+/*
  * Subscription event types
  *
  * Bitmask selecting which status changes trigger push notifications.

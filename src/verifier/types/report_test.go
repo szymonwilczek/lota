@@ -518,6 +518,27 @@ func TestReportFlags(t *testing.T) {
 	t.Log("✓ All flag combinations verified")
 }
 
+func TestPolicyKeys(t *testing.T) {
+	all := FlagStrictMmap | FlagStrictExec | FlagStrictModules |
+		FlagBlockAnonExec | FlagBlockPtrace
+
+	if got := PolicyKeys(all); got != nil {
+		t.Errorf("keys outside enforce mode = %v, want none", got)
+	}
+	if got := PolicyKeys(FlagEnforce); got != nil {
+		t.Errorf("enforce with no key = %v, want none", got)
+	}
+
+	got := PolicyKeys(FlagEnforce | FlagStrictMmap | FlagBlockPtrace)
+	want := []string{"strict_mmap", "block_ptrace"}
+	if len(got) != len(want) || got[0] != want[0] || got[1] != want[1] {
+		t.Errorf("PolicyKeys = %v, want %v", got, want)
+	}
+	if got := PolicyKeys(FlagEnforce | all); len(got) != 5 {
+		t.Errorf("every key = %v, want five", got)
+	}
+}
+
 // Endianness test
 func TestEndianness(t *testing.T) {
 	t.Log("TEST: Little-endian encoding verification")

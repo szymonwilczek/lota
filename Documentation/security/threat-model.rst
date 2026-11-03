@@ -344,8 +344,10 @@ Active threats
      - | PCR14 is OS-writable by the PC Client Profile.
        | Userspace cannot make that race impossible on every platform.
    * - Runtime image substitution
-     - | BPF LSM gates executable mmap and mprotect for protected processes
-         against the fs-verity allow-list.
+     - | With ``strict_mmap`` in enforce mode, BPF LSM gates executable mmap
+         and mprotect for protected processes against the fs-verity
+         allow-list. The key is off by default, and the token carries
+         ``LOTA_FLAG_STRICT_MMAP`` while it applies.
        | A bind or move mount that would shadow a trusted file is refused
          through both mount APIs, and the refusal is emitted on the event
          stream and counted like every other blocked hook.
@@ -362,7 +364,12 @@ Active threats
          refused write to a pinned library is counted and sent on the event
          stream, not left a bare ``EPERM``.
      - | Anonymous executable memory and JIT code are not measured as modules.
-       | Intended bound is W^X plus policy enforcement.
+       | Intended bound is W^X plus policy enforcement: ``block_anon_exec``
+         refuses it in a protected process, off by default and carried as
+         ``LOTA_FLAG_BLOCK_ANON_EXEC``.
+       | Without ``strict_mmap`` a protected process maps any library; the
+         re-measurement still folds what it maps, so an unlisted library is
+         in the measurement rather than refused.
        | Memory with no file behind it, such as the memfd Wine maps Windows
          images out of, takes neither road: no digest can exist for it and no
          guard refuses a write through an earlier mapping. It is reported as
