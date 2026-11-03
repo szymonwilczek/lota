@@ -223,6 +223,7 @@ fi
 %license LICENSE LICENSE.GPL-2.0-only
 %{_bindir}/lota-agent
 %{_bindir}/lota-install
+%{_bindir}/lota-protect
 %{_bindir}/lota-proton-hook
 %{_bindir}/lota-steam-setup
 %dir %{_prefix}/lib/lota

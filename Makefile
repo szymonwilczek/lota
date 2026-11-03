@@ -280,6 +280,10 @@ WINE_HOOK_OBJS32 := $(patsubst $(SDK_DIR)/%.c,$(BUILD_DIR)/hook32/%.o,\
 	$(WINE_HOOK_SRCS) $(SDK_SRCS))
 endif
 
+# Starts a program already protected; links the gaming SDK statically
+PROTECT_BIN := $(BUILD_DIR)/lota-protect
+PROTECT_SRCS := $(SDK_DIR)/lota_protect.c
+
 # Anti-cheat compatibility layer
 ANTICHEAT_LIB := $(BUILD_DIR)/liblota_anticheat.so
 ANTICHEAT_SRCS := $(SDK_DIR)/lota_anticheat.c
@@ -301,7 +305,7 @@ PKGCONFIG_FILES := $(patsubst packaging/pkgconfig/%.pc.in,$(PKGCONFIG_DIR)/%.pc,
 
 # Default target
 .PHONY: all
-all: $(AGENT_BIN) $(INITRAMFS_LOCK_BIN) $(INSTALLER_BIN) $(BPF_OBJ) $(VERIFIER_BIN) $(ATTESTCA_BIN) $(SDK_LIB) $(SERVER_SDK_LIB) $(WINE_HOOK_LIB) $(WINE_HOOK_LIB32) $(ANTICHEAT_LIB) $(PKGCONFIG_FILES)
+all: $(AGENT_BIN) $(INITRAMFS_LOCK_BIN) $(INSTALLER_BIN) $(BPF_OBJ) $(VERIFIER_BIN) $(ATTESTCA_BIN) $(SDK_LIB) $(SERVER_SDK_LIB) $(WINE_HOOK_LIB) $(WINE_HOOK_LIB32) $(PROTECT_BIN) $(ANTICHEAT_LIB) $(PKGCONFIG_FILES)
 ifeq ($(ARCH),x86_64)
 ifneq ($(LOTA_HOOK32),1)
 	@echo "note: $(HOOK32_MISSING); this tree cannot be installed as it is"
@@ -496,6 +500,12 @@ $(WINE_HOOK_LIB32): $(WINE_HOOK_OBJS32) Makefile | $(BUILD_DIR)
 		$(WINE_HOOK_OBJS32) -lpthread
 	$(Q)ln -sf $(notdir $@).$(LOTA_ABI_VERSION) $@.$(LOTA_ABI_MAJOR)
 	$(Q)ln -sf $(notdir $@).$(LOTA_ABI_VERSION) $@
+
+$(PROTECT_BIN): $(PROTECT_SRCS) $(SDK_OBJS) include/lota_gaming.h \
+		include/lota_wine_hook.h | $(BUILD_DIR)
+	$(QUIET_CC)
+	$(Q)$(CC) $(CFLAGS) -o $@ $(PROTECT_SRCS) $(SDK_OBJS) \
+		-pie -Wl,-z,relro,-z,now
 
 # build anti-cheat compatibility layer (includes gaming + server SDK; versioned)
 $(ANTICHEAT_LIB): $(ANTICHEAT_OBJS) $(SDK_OBJS) $(SERVER_SDK_OBJS) \
@@ -1435,6 +1445,7 @@ ifeq ($(LOTA_HOOK32),1)
 	ln -sf liblota_wine_hook.so.$(LOTA_ABI_VERSION) \
 		$(DESTDIR)/usr/lib/liblota_wine_hook.so.$(LOTA_ABI_MAJOR)
 endif
+	install -m 755 $(PROTECT_BIN) $(DESTDIR)/usr/bin/
 	install -m 755 scripts/lota-proton-hook $(DESTDIR)/usr/bin/
 	install -m 755 scripts/lota-steam-setup $(DESTDIR)/usr/bin/
 	install -d $(DESTDIR)/usr/share/lota/ima
@@ -1846,10 +1857,12 @@ $(BUILD_DIR)/demo_sdk: TEST_CFLAGS := $(SDK_VERSION_CFLAGS)
 
 # the test #includes lota_wine_hook.c; list it so a hook edit rebuilds
 $(BUILD_DIR)/test_wine_hook: tests/test_wine_hook.c $(SDK_DIR)/lota_gaming.c \
-		$(SDK_DIR)/lota_wine_hook.c $(VERSION_FILE) | $(BUILD_DIR)
+		$(SDK_DIR)/lota_wine_hook.c $(PROTECT_SRCS) $(VERSION_FILE) \
+		| $(BUILD_DIR)
 	$(QUIET_CC)
 	$(Q)$(CC) $(CFLAGS) $(SDK_VERSION_CFLAGS) -DLOTA_HOOK_TESTING \
-		-o $@ $(filter-out $(VERSION_FILE) $(SDK_DIR)/lota_wine_hook.c,$^) \
+		-o $@ $(filter-out $(VERSION_FILE) $(SDK_DIR)/lota_wine_hook.c \
+		$(PROTECT_SRCS),$^) \
 		-lpthread
 
 # C half of the report layout cross-check:

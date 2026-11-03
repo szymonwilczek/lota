@@ -56,6 +56,10 @@ contents:
     file_info:
       mode: 0755
   # Steam helpers: players install the agent, not the SDK
+  - src: ./build/lota-protect
+    dst: /usr/bin/lota-protect
+    file_info:
+      mode: 0755
   - src: ./scripts/lota-proton-hook
     dst: /usr/bin/lota-proton-hook
     file_info:
