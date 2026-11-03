@@ -43,6 +43,7 @@ struct bpf_loader_ctx {
 	int allow_verity_digest_fd; /* 'allow_verity_digest' map fd */
 	int exe_hash_slots_fd; /* 'exe_hash_slots' map fd */
 	int mapped_exec_fd; /* 'mapped_exec' pin map fd */
+	int exec_history_fd; /* 'exec_history' map fd */
 	struct mapped_exec_pin *pins; /* what this agent has pinned */
 	size_t pin_count;
 	size_t pin_cap;
@@ -126,6 +127,22 @@ void bpf_loader_pin_round_begin(struct bpf_loader_ctx *ctx);
  * Returns: 0 on success, negative errno on failure.
  */
 int bpf_loader_pin_sweep(struct bpf_loader_ctx *ctx, size_t *released);
+
+/*
+ * bpf_loader_exec_history - Read the exec history, dropping the dead
+ * @ctx:   Loaded context
+ * @alive: Says whether process @tgid started at @start_ticks still runs
+ * @keys:  Receives the live entries' keys, to free()
+ * @vals:  Receives their values, parallel to @keys, to free()
+ * @n:     Receives the number of entries
+ *
+ * Entries of a process @alive denies are deleted from the map.
+ * Returns: 0 on success, -ENOENT without the map, negative errno on failure.
+ */
+int bpf_loader_exec_history(struct bpf_loader_ctx *ctx,
+			    int (*alive)(uint32_t tgid, uint64_t start_ticks),
+			    struct lota_exec_history_key **keys,
+			    struct lota_exec_history_val **vals, size_t *n);
 
 /*
  * Callback for ring buffer events

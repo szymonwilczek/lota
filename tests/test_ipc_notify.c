@@ -117,6 +117,27 @@ int bpf_loader_adopt_instance_member(struct bpf_loader_ctx *ctx, uint32_t pid)
 	return 0;
 }
 
+int bpf_loader_exec_history(struct bpf_loader_ctx *ctx,
+			    int (*alive)(uint32_t tgid, uint64_t start_ticks),
+			    struct lota_exec_history_key **keys,
+			    struct lota_exec_history_val **vals, size_t *n)
+{
+	(void)ctx;
+	(void)alive;
+	*keys = NULL;
+	*vals = NULL;
+	*n = 0;
+	return -ENOENT;
+}
+
+int bpf_loader_get_extended_stats(struct bpf_loader_ctx *ctx,
+				  struct bpf_extended_stats *stats)
+{
+	(void)ctx;
+	memset(stats, 0, sizeof(*stats));
+	return 0;
+}
+
 int dbus_get_fd(struct dbus_context *ctx)
 {
 	(void)ctx;

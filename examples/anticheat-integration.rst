@@ -311,10 +311,14 @@ Worth being precise about, because it decides what you can build on it:
   written, and the token carries ``LOTA_FLAG_IMAGE_CONTENT_HASHED``.
   Refusing that flag demands fs-verity, at the cost of every such install.
 
-* Which code objects the process had mapped, the unmeasured ones included.
+* Which code objects the process mapped executable since it was protected,
+  the unmeasured ones and those it already dropped included.
   ``lota_get_registry()`` lists them for a protected PID as the last token
-  round found them: path, size, inode and, where one was taken, the digest.
-  The token does not carry the list, it binds it:
+  round found them: size, inode and, where one was taken, the digest; the
+  path for an object still mapped, ``LOTA_REGISTRY_OBJECT_UNMAPPED`` and the
+  file's name for one that is gone. A refused mapping is listed too.
+  ``LOTA_REGISTRY_HISTORY_LOST`` says the kernel lost a record and the list
+  may miss an object. The token does not carry the list, it binds it:
   ``lota_server_registry_digest()`` folds the listed sonames and digests,
   and the result equals the image digest the token holds for that process.
   A list that does not fold to it is not the one the token describes. The

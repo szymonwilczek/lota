@@ -191,6 +191,9 @@ struct lota_server_registry_module {
 	const uint8_t *digest;
 };
 
+/* Most objects the agent lists for one process */
+#define LOTA_SERVER_REGISTRY_MAX_OBJECTS 512
+
 /*
  * lota_server_registry_digest - Fold a registry into its image digest
  * @mods:  The objects of one process, in any order
@@ -203,7 +206,7 @@ struct lota_server_registry_module {
  * else is not the list behind the token.
  *
  * Returns: LOTA_SERVER_OK, LOTA_SERVER_ERR_INVALID_ARG for a malformed
- *          object or more objects than a process may be measured with,
+ *          object or more objects than a process is listed with,
  *          or LOTA_SERVER_ERR_CRYPTO.
  */
 int lota_server_registry_digest(const struct lota_server_registry_module *mods,

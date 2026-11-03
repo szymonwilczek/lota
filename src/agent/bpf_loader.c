@@ -983,6 +983,7 @@ int bpf_loader_init(struct bpf_loader_ctx *ctx)
 	ctx->allow_verity_digest_fd = -1;
 	ctx->exe_hash_slots_fd = -1;
 	ctx->mapped_exec_fd = -1;
+	ctx->exec_history_fd = -1;
 
 	libbpf_set_print(libbpf_print_fn);
 	libbpf_set_strict_mode(LIBBPF_STRICT_ALL);
@@ -1458,6 +1459,21 @@ int bpf_loader_load(struct bpf_loader_ctx *ctx, const char *bpf_obj_path,
 		}
 	}
 
+	/* optional: without it no unmapped object is listed */
+	ctx->exec_history_fd =
+		bpf_object__find_map_fd_by_name(ctx->obj, "exec_history");
+	if (ctx->exec_history_fd < 0) {
+		ctx->exec_history_fd = -1;
+	} else {
+		err = harden_fd_cloexec(ctx->exec_history_fd,
+					"exec_history map");
+		if (err < 0) {
+			lota_err("Failed to harden exec_history map fd: %s",
+				 strerror(-err));
+			goto err_close;
+		}
+	}
+
 	/* Get fs-verity allowlist map fd */
 	ctx->allow_verity_digest_fd =
 		bpf_object__find_map_fd_by_name(ctx->obj, "allow_verity");
@@ -1662,6 +1678,7 @@ void bpf_loader_cleanup(struct bpf_loader_ctx *ctx)
 	ctx->allow_verity_digest_fd = -1;
 	ctx->exe_hash_slots_fd = -1;
 	ctx->mapped_exec_fd = -1;
+	ctx->exec_history_fd = -1;
 
 	/* the map took the pins with it */
 	free(ctx->pins);
@@ -2139,6 +2156,63 @@ void bpf_loader_pin_round_begin(struct bpf_loader_ctx *ctx)
 {
 	if (ctx)
 		ctx->pin_round++;
+}
+
+int bpf_loader_exec_history(struct bpf_loader_ctx *ctx,
+			    int (*alive)(uint32_t tgid, uint64_t start_ticks),
+			    struct lota_exec_history_key **keys,
+			    struct lota_exec_history_val **vals, size_t *n)
+{
+	struct lota_exec_history_key *k = NULL;
+	struct lota_exec_history_val *v = NULL;
+	struct lota_exec_history_key cur;
+	struct lota_exec_history_key next;
+	size_t count = 0;
+	size_t dead = 0;
+	void *prev = NULL;
+
+	if (!ctx || !alive || !keys || !vals || !n)
+		return -EINVAL;
+	*keys = NULL;
+	*vals = NULL;
+	*n = 0;
+	if (ctx->exec_history_fd < 0)
+		return -ENOENT;
+
+	k = calloc(LOTA_MAX_EXEC_HISTORY, sizeof(*k));
+	v = calloc(LOTA_MAX_EXEC_HISTORY, sizeof(*v));
+	if (!k || !v) {
+		free(k);
+		free(v);
+		return -ENOMEM;
+	}
+
+	while (count < LOTA_MAX_EXEC_HISTORY &&
+	       bpf_map_get_next_key(ctx->exec_history_fd, prev, &next) == 0) {
+		cur = next;
+		prev = &cur;
+		if (bpf_map_lookup_elem(ctx->exec_history_fd, &cur, &v[count]) <
+		    0)
+			continue;
+		v[count].name[sizeof(v[count].name) - 1] = '\0';
+		k[count++] = cur;
+	}
+
+	/* deleted after the walk: a delete during it restarts the walk */
+	for (size_t i = 0; i < count; i++) {
+		if (alive(k[i].tgid, k[i].start_ticks)) {
+			k[i - dead] = k[i];
+			v[i - dead] = v[i];
+			continue;
+		}
+		(void)bpf_map_delete_elem(ctx->exec_history_fd, &k[i]);
+		dead++;
+	}
+
+	*keys = k;
+	*vals = v;
+	*n = count - dead;
+	return 0;
 }
 
 int bpf_loader_pin_sweep(struct bpf_loader_ctx *ctx, size_t *released)

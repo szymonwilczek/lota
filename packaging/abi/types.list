@@ -138,15 +138,18 @@ macro LOTA_REGISTRY_ROAD_NONE                  = 0
 macro LOTA_REGISTRY_ROAD_VERITY                = 1
 macro LOTA_REGISTRY_ROAD_CONTENT               = 2
 macro LOTA_REGISTRY_MEASURED                   = 1
-struct lota_registry_object size=672 align=8
+macro LOTA_REGISTRY_HISTORY_LOST               = 2
+macro LOTA_REGISTRY_OBJECT_UNMAPPED            = 1
+struct lota_registry_object size=680 align=8
 	size                             off=0 size=8
 	dev                              off=8 size=8
 	ino                              off=16 size=8
 	road                             off=24 size=4
-	digest_len                       off=28 size=4
-	digest                           off=32 size=64
-	soname                           off=96 size=256
-	path                             off=352 size=320
+	flags                            off=28 size=4
+	digest_len                       off=32 size=4
+	digest                           off=36 size=64
+	soname                           off=100 size=256
+	path                             off=356 size=320
 struct lota_registry size=64 align=8
 	round                            off=0 size=8
 	pid                              off=8 size=4
@@ -186,6 +189,7 @@ struct lota_server_registry_module size=24 align=8
 	soname                           off=0 size=8
 	digest_len                       off=8 size=4
 	digest                           off=16 size=8
+macro LOTA_SERVER_REGISTRY_MAX_OBJECTS         = 512
 macro LOTA_SNAPSHOT_FILE_NAME                  = "lota-attestation.bin"
 macro LOTA_SNAPSHOT_MAGIC                      = 1096044364
 macro LOTA_SNAPSHOT_VERSION                    = 1

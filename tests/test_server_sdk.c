@@ -1146,7 +1146,7 @@ static void test_registry_digest(void)
 		ok = ok && lota_server_registry_digest(&bad, 1, got) ==
 				   LOTA_SERVER_ERR_INVALID_ARG;
 		ok = ok && lota_server_registry_digest(
-				   mods, LOTA_RUNTIME_IMAGE_MAX_MODULES + 1,
+				   mods, LOTA_SERVER_REGISTRY_MAX_OBJECTS + 1,
 				   got) == LOTA_SERVER_ERR_INVALID_ARG;
 		if (ok)
 			PASS();

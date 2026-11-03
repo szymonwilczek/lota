@@ -617,18 +617,27 @@ int lota_poll_events(struct lota_client *client, int timeout_ms);
 
 /* image_digest is the token's entry for the process */
 #define LOTA_REGISTRY_MEASURED (1U << 0)
+/* an executable mapping went unrecorded; the list may miss an object */
+#define LOTA_REGISTRY_HISTORY_LOST (1U << 1)
 
 /*
- * One code object mapped in a protected process.
+ * Mapped since protection began, gone from the address space when
+ * measured: no path and no digest, the soname is the file's name.
+ */
+#define LOTA_REGISTRY_OBJECT_UNMAPPED (1U << 0)
+
+/*
+ * One code object a protected process mapped executable.
  *
  * soname and digest are what the token's image digest folds;
- * path, size, dev and ino describe the object and are not bound.
+ * the other fields describe the object and are not bound.
  */
 struct lota_registry_object {
 	uint64_t size;
 	uint64_t dev;
 	uint64_t ino;
 	uint32_t road; /* LOTA_REGISTRY_ROAD_* */
+	uint32_t flags; /* LOTA_REGISTRY_OBJECT_* */
 	uint32_t digest_len; /* 0, 32 or 64 */
 	uint8_t digest[64];
 	char soname[LOTA_REGISTRY_SONAME_MAX];

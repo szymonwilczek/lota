@@ -320,6 +320,7 @@ struct lota_rt_object_record {
 	struct lota_verity_digest_key digest;
 	uint64_t size;
 	int content_hashed;
+	int unmapped; /* only in the exec history, no longer in the maps */
 };
 
 /*

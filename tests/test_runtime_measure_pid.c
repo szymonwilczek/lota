@@ -20,6 +20,8 @@
 #include "../src/agent/runtime_image_measure.h"
 #include "../src/agent/registry.h"
 #include "lota.h"
+#include "lota_devt.h"
+#include "lota_ipc.h"
 
 static int digest_is_zero(const uint8_t d[32])
 {
@@ -146,8 +148,11 @@ int main(void)
 				objs[i].content_hashed = (i % 3 == 2);
 			}
 		}
-		ok &= registry_add(&next, 1234, 1000, folded, objs, 40) == 0;
-		ok &= registry_add(&next, 1235, 1000, NULL, NULL, 0) == 0;
+		ok &= registry_add(&next, 1234, 1000, 0, folded, objs, 40) == 0;
+		ok &= registry_add(&next, 1235, 1000,
+				   LOTA_IPC_REGISTRY_HISTORY_LOST |
+					   LOTA_IPC_REGISTRY_MEASURED,
+				   NULL, NULL, 0) == 0;
 		registry_replace(&cur, &next);
 		ok &= cur.round == 1 && next.count == 0;
 
@@ -203,7 +208,7 @@ int main(void)
 			ok &= registry_encode_page(p, cur.round, 0, buf, 100,
 						   &len) == -ENOSPC;
 			p = registry_find(&cur, 1235);
-			ok &= p && !(p->flags & LOTA_IPC_REGISTRY_MEASURED) &&
+			ok &= p && p->flags == LOTA_IPC_REGISTRY_HISTORY_LOST &&
 			      registry_encode_page(p, cur.round, 0, buf,
 						   sizeof(buf), &len) == 0 &&
 			      len == sizeof(struct lota_ipc_registry_page);
@@ -213,6 +218,59 @@ int main(void)
 			PASS();
 		else
 			FAIL("registry paging lost or misdescribed an object");
+	}
+
+	TEST("registry lists what the maps no longer show");
+	{
+		static struct lota_rt_object_record objs[4];
+		struct lota_exec_history_key keys[5];
+		struct lota_exec_history_val vals[5];
+		const uint64_t dev = LOTA_DEVT_MKDEV(8, 3);
+		size_t n;
+		int overflow = 0;
+		int ok = 1;
+
+		memset(objs, 0, sizeof(objs));
+		memset(keys, 0, sizeof(keys));
+		memset(vals, 0, sizeof(vals));
+		for (int i = 0; i < 2; i++) {
+			objs[i].entry.dev_major = 8;
+			objs[i].entry.dev_minor = 3;
+			objs[i].entry.ino = 10u + (uint64_t)i;
+			snprintf(objs[i].entry.soname,
+				 sizeof(objs[i].entry.soname), "lib%d.so", i);
+		}
+		/* still mapped, so already listed */
+		keys[0] = (struct lota_exec_history_key){ 7, 0, 99, dev, 10 };
+		keys[1] = (struct lota_exec_history_key){ 7, 0, 99, dev, 12 };
+		vals[1].size = 512;
+		strcpy(vals[1].name, "inject.so");
+		/* an earlier process under the same PID */
+		keys[2] = (struct lota_exec_history_key){ 7, 0, 98, dev, 13 };
+		/* another process */
+		keys[3] = (struct lota_exec_history_key){ 8, 0, 99, dev, 14 };
+		/* the kernel found no name */
+		keys[4] = (struct lota_exec_history_key){ 7, 0, 99, dev, 15 };
+
+		n = registry_merge_history(objs, 2, 4, keys, vals, 5, 7, 99,
+					   &overflow);
+		ok &= n == 4 && !overflow && !objs[0].unmapped &&
+		      !objs[1].unmapped;
+		ok &= objs[2].unmapped && objs[2].entry.ino == 12 &&
+		      objs[2].entry.dev_major == 8 &&
+		      objs[2].entry.dev_minor == 3 && objs[2].size == 512 &&
+		      strcmp(objs[2].entry.soname, "inject.so") == 0 &&
+		      objs[2].entry.path[0] == '\0' && objs[2].digest.len == 0;
+		ok &= objs[3].unmapped && objs[3].entry.ino == 15 &&
+		      strcmp(objs[3].entry.soname, "?") == 0;
+
+		n = registry_merge_history(objs, 2, 3, keys, vals, 5, 7, 99,
+					   &overflow);
+		ok &= n == 3 && overflow;
+		if (ok)
+			PASS();
+		else
+			FAIL("history merge kept, lost or misnamed an object");
 	}
 
 	printf("\n%d/%d kernel-anchored measurement tests passed\n",

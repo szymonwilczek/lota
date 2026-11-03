@@ -1051,6 +1051,40 @@ static struct measure_report_table g_measure_reports;
 /* what the last token round found mapped; IPC thread only */
 static struct registry g_registry;
 
+#define REGISTRY_OBJECTS_MAX LOTA_IPC_REGISTRY_MAX_OBJECTS
+_Static_assert(REGISTRY_OBJECTS_MAX >= LOTA_RUNTIME_IMAGE_MAX_MODULES,
+	       "the registry must hold every object a process is measured with");
+
+static int exec_history_alive(uint32_t tgid, uint64_t start_ticks)
+{
+	uint64_t ticks = 0;
+
+	return read_pid_start_time_ticks((pid_t)tgid, &ticks) == 0 &&
+	       ticks == start_ticks;
+}
+
+/*
+ * The exec history of every live process.
+ * False when it is missing or a kernel record was lost: every list of the
+ * round may then lack an object.
+ */
+static bool exec_history_read(struct lota_exec_history_key **keys,
+			      struct lota_exec_history_val **vals, size_t *n)
+{
+	struct bpf_extended_stats stats;
+	int ret;
+
+	ret = bpf_loader_exec_history(&g_agent.bpf_ctx, exec_history_alive,
+				      keys, vals, n);
+	if (ret < 0) {
+		lota_warn("exec history unavailable: %s", strerror(-ret));
+		return false;
+	}
+	if (bpf_loader_get_extended_stats(&g_agent.bpf_ctx, &stats) < 0)
+		return false;
+	return stats.exec_history_lost == 0;
+}
+
 static int read_pid_real_uid(pid_t pid, uint32_t *out_uid);
 
 /* Token rounds that repeated a journalled answer; reported at shutdown */
@@ -1211,6 +1245,10 @@ static void handle_get_token(struct ipc_context *ctx, struct ipc_client *client,
 	size_t image_list_size = 0;
 	struct lota_rt_object_record *objs = NULL;
 	struct registry next_registry = { 0 };
+	struct lota_exec_history_key *hist_keys = NULL;
+	struct lota_exec_history_val *hist_vals = NULL;
+	size_t n_hist = 0;
+	bool hist_lost = false;
 	size_t total_size;
 	uint64_t view_valid_until;
 	uint32_t view_flags;
@@ -1438,12 +1476,13 @@ static void handle_get_token(struct ipc_context *ctx, struct ipc_client *client,
 				  LOTA_IPC_TOKEN_IMAGE_DIGEST_SIZE;
 		image_digests =
 			calloc(runtime_pid_count, sizeof(*image_digests));
-		objs = calloc(LOTA_RUNTIME_IMAGE_MAX_MODULES, sizeof(*objs));
+		objs = calloc(REGISTRY_OBJECTS_MAX, sizeof(*objs));
 		if (!image_digests || !objs) {
 			fail = true;
 			fail_code = LOTA_IPC_ERR_INTERNAL;
 			goto out;
 		}
+		hist_lost = !exec_history_read(&hist_keys, &hist_vals, &n_hist);
 		for (uint32_t i = 0; i < runtime_pid_count; i++) {
 			struct lota_runtime_measure_failure mfail;
 			struct lota_runtime_measure_coverage cov;
@@ -1452,6 +1491,9 @@ static void handle_get_token(struct ipc_context *ctx, struct ipc_client *client,
 			uint64_t held = 0;
 			char reason[LOTA_RT_REASON_MAX];
 			uint32_t owner = UINT32_MAX;
+			uint64_t start_ticks = 0;
+			uint16_t rflags = 0;
+			int lost = 0;
 			size_t n_objs = 0;
 			int rec;
 
@@ -1460,8 +1502,21 @@ static void handle_get_token(struct ipc_context *ctx, struct ipc_client *client,
 			ret = lota_runtime_measure_pid_objects(
 				(pid_t)runtime_pids[i], image_digests[i], &cov,
 				&mfail, objs, &n_objs);
+
+			/* what the maps no longer show, from the history */
+			if (read_pid_start_time_ticks((pid_t)runtime_pids[i],
+						      &start_ticks) < 0)
+				lost = 1;
+			n_objs = registry_merge_history(objs, n_objs,
+							REGISTRY_OBJECTS_MAX,
+							hist_keys, hist_vals,
+							n_hist, runtime_pids[i],
+							start_ticks, &lost);
+			if (hist_lost || lost)
+				rflags |= LOTA_IPC_REGISTRY_HISTORY_LOST;
+
 			rec = registry_add(&next_registry, runtime_pids[i],
-					   owner,
+					   owner, rflags,
 					   ret < 0 ? NULL : image_digests[i],
 					   objs, n_objs);
 			if (rec < 0)
@@ -1736,6 +1791,8 @@ out:
 		free(image_digests);
 	}
 	free(objs);
+	free(hist_keys);
+	free(hist_vals);
 	registry_clear(&next_registry);
 	ipc_secure_bzero(&quote, sizeof(quote));
 

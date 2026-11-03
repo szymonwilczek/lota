@@ -5,8 +5,9 @@
  *
  * The token carries one image digest per process, folded from the soname
  * and digest of every object that has one. The registry keeps the objects
- * themselves, the unmeasured ones included, so a relying party can see
- * what was loaded and check the list against the digest it was given.
+ * themselves, the unmeasured ones and those already unmapped included, so a
+ * relying party can see what was loaded and check the list against the
+ * digest it was given.
  *
  * Split out of ipc.c so the paging is tested on its own rather than through
  * a socket.
@@ -19,10 +20,13 @@
 #include <errno.h>
 #include <stddef.h>
 #include <stdint.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/sysmacros.h>
 
+#include "../../include/lota.h"
+#include "../../include/lota_devt.h"
 #include "../../include/lota_ipc.h"
 #include "runtime_image_measure.h"
 
@@ -56,10 +60,11 @@ static inline void registry_clear(struct registry *r)
 /*
  * Append a copy of @n objects mapped in @pid.
  * @digest is the value folded into the token, or NULL when none was.
+ * @flags carries LOTA_IPC_REGISTRY_* other than MEASURED.
  * Returns 0 or -ENOMEM; on failure @r is unchanged.
  */
 static inline int registry_add(struct registry *r, uint32_t pid, uint32_t uid,
-			       const uint8_t *digest,
+			       uint16_t flags, const uint8_t *digest,
 			       const struct lota_rt_object_record *objs,
 			       size_t n)
 {
@@ -90,6 +95,7 @@ static inline int registry_add(struct registry *r, uint32_t pid, uint32_t uid,
 	p->uid = uid;
 	p->count = n;
 	p->objects = copy;
+	p->flags = flags & (uint16_t)~LOTA_IPC_REGISTRY_MEASURED;
 	if (digest) {
 		p->flags |= LOTA_IPC_REGISTRY_MEASURED;
 		memcpy(p->image_digest, digest, sizeof(p->image_digest));
@@ -127,6 +133,56 @@ static inline uint8_t registry_road(const struct lota_rt_object_record *o)
 		return LOTA_IPC_REGISTRY_ROAD_NONE;
 	return o->content_hashed ? LOTA_IPC_REGISTRY_ROAD_CONTENT :
 				   LOTA_IPC_REGISTRY_ROAD_VERITY;
+}
+
+/*
+ * Append to @objs, holding @n of @cap, every history item of the process
+ * @tgid started at @start_ticks that the maps no longer show.
+ * Returns the new count; sets *@overflow when one did not fit.
+ */
+static inline size_t
+registry_merge_history(struct lota_rt_object_record *objs, size_t n, size_t cap,
+		       const struct lota_exec_history_key *keys,
+		       const struct lota_exec_history_val *vals, size_t n_hist,
+		       uint32_t tgid, uint64_t start_ticks, int *overflow)
+{
+	size_t mapped = n;
+
+	for (size_t i = 0; i < n_hist; i++) {
+		const struct lota_exec_history_key *h = &keys[i];
+		const struct lota_exec_history_val *v = &vals[i];
+		unsigned int major = (unsigned int)LOTA_DEVT_MAJOR(h->dev);
+		unsigned int minor = (unsigned int)LOTA_DEVT_MINOR(h->dev);
+		struct lota_rt_object_record *o;
+		int listed = 0;
+
+		if (h->tgid != tgid || h->start_ticks != start_ticks)
+			continue;
+		for (size_t j = 0; j < mapped && !listed; j++)
+			listed = objs[j].entry.dev_major == major &&
+				 objs[j].entry.dev_minor == minor &&
+				 objs[j].entry.ino == h->ino;
+		if (listed)
+			continue;
+		if (n >= cap) {
+			*overflow = 1;
+			break;
+		}
+
+		o = &objs[n++];
+		memset(o, 0, sizeof(*o));
+		o->entry.dev_major = major;
+		o->entry.dev_minor = minor;
+		o->entry.ino = h->ino;
+		o->size = v->size;
+		o->unmapped = 1;
+		if (v->name[0] == '\0')
+			memcpy(o->entry.soname, "?", 2);
+		else
+			snprintf(o->entry.soname, sizeof(o->entry.soname),
+				 "%.*s", (int)sizeof(v->name), v->name);
+	}
+	return n;
 }
 
 /*
@@ -172,6 +228,8 @@ static inline int registry_encode_page(const struct registry_process *p,
 		}
 		e.soname_len = (uint16_t)slen;
 		e.path_len = (uint16_t)plen;
+		if (o->unmapped)
+			e.flags |= LOTA_IPC_REGISTRY_ENTRY_UNMAPPED;
 
 		memcpy(buf + off, &e, sizeof(e));
 		off += sizeof(e);

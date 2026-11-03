@@ -439,9 +439,18 @@ What a protected process mapped
 The token carries one image digest per protected process, folded from the
 soname and digest of every code object that has one. ``8192`` bytes hold no
 list of the objects themselves, so ``LOTA_IPC_CMD_GET_REGISTRY`` hands them out
-in pages: what the last token round found mapped in one process, the objects
-it could not measure included, each with its path, size, device, inode and
-digest.
+in pages: every code object the process mapped or mprotected executable since
+it was protected, the objects it could not measure included, each with its
+size, device, inode and, where one was taken, its digest.
+
+Objects still mapped when the token round measured the process carry their
+path. Objects the process had already unmapped carry
+``LOTA_IPC_REGISTRY_ENTRY_UNMAPPED``, the file's name in place of a soname, and
+no path or digest. The kernel records each mapping as it is made
+(``exec_history`` in ``src/bpf/lota_lsm.bpf.c``), a refused one included, so
+an object loaded and dropped between two rounds is still listed. A record the
+kernel could not keep sets ``LOTA_IPC_REGISTRY_HISTORY_LOST`` on every list of
+the round: such a list may lack an object.
 
 The token binds the list. Folding the entries that carry a digest as
 ``lota_runtime_image_measure.h`` does yields the page's ``image_digest``, which
@@ -449,7 +458,7 @@ is the token's entry for that process while ``LOTA_IPC_REGISTRY_MEASURED`` is
 set. A list from another round than the token's does not fold to the token's
 value, so a relying party that checks the fold needs no further pairing; the
 ``round`` field only keeps the pages of one listing together. Path, size,
-device and inode describe and are not bound.
+device, inode and flags describe and are not bound.
 
 The owner of the process or root may read its registry, the callers that could
 read its ``maps`` themselves. A process the last round did not measure is

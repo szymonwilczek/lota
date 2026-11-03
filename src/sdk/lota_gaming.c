@@ -1316,8 +1316,16 @@ int lota_poll_events(struct lota_client *client, int timeout_ms)
 	return dispatched;
 }
 
-/* far above what one process maps; bounds the allocation a reply asks for */
-#define REGISTRY_MAX_OBJECTS 4096
+/* bounds the allocation a reply asks for */
+#define REGISTRY_MAX_OBJECTS LOTA_IPC_REGISTRY_MAX_OBJECTS
+#define REGISTRY_FLAGS \
+	(LOTA_IPC_REGISTRY_MEASURED | LOTA_IPC_REGISTRY_HISTORY_LOST)
+_Static_assert(LOTA_REGISTRY_MEASURED == LOTA_IPC_REGISTRY_MEASURED &&
+		       LOTA_REGISTRY_HISTORY_LOST ==
+			       LOTA_IPC_REGISTRY_HISTORY_LOST &&
+		       LOTA_REGISTRY_OBJECT_UNMAPPED ==
+			       LOTA_IPC_REGISTRY_ENTRY_UNMAPPED,
+	       "lota_gaming.h registry flags copy lota_ipc.h");
 /* a token round between two pages restarts the listing */
 #define REGISTRY_FETCH_TRIES 4
 
@@ -1389,12 +1397,15 @@ static int registry_decode_entries(const uint8_t *buf, size_t len,
 			    e.digest_len != 0 :
 			    (e.digest_len != 32 && e.digest_len != 64))
 			return LOTA_ERR_PROTOCOL;
+		if (e.flags & ~LOTA_IPC_REGISTRY_ENTRY_UNMAPPED)
+			return LOTA_ERR_PROTOCOL;
 
 		memset(o, 0, sizeof(*o));
 		o->size = e.size;
 		o->dev = e.dev;
 		o->ino = e.ino;
 		o->road = e.road;
+		o->flags = e.flags;
 		o->digest_len = e.digest_len;
 		memcpy(o->digest, e.digest, e.digest_len);
 		memcpy(o->soname, buf + off, e.soname_len);
@@ -1429,7 +1440,8 @@ static int registry_fetch(struct lota_client *client, uint32_t pid,
 			goto fail;
 
 		if (!reg) {
-			if (hdr.total > REGISTRY_MAX_OBJECTS)
+			if (hdr.total > REGISTRY_MAX_OBJECTS ||
+			    (hdr.flags & ~REGISTRY_FLAGS))
 				goto fail;
 			ret = LOTA_ERR_NO_MEMORY;
 			reg = calloc(1, sizeof(*reg));

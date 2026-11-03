@@ -506,6 +506,14 @@ struct lota_ipc_registry_request {
 
 /* image_digest is the value the round folded for @pid into its token */
 #define LOTA_IPC_REGISTRY_MEASURED (1U << 0)
+/* an executable mapping of @pid went unrecorded; the list may miss one */
+#define LOTA_IPC_REGISTRY_HISTORY_LOST (1U << 1)
+
+/* mapped since protection began, gone from the address space when measured */
+#define LOTA_IPC_REGISTRY_ENTRY_UNMAPPED (1U << 0)
+
+/* objects listed for one process: those mapped, then those unmapped */
+#define LOTA_IPC_REGISTRY_MAX_OBJECTS 512
 
 /*
  * GET_REGISTRY response payload
@@ -548,7 +556,7 @@ struct lota_ipc_registry_entry {
 	uint8_t digest_len; /* 0, 32 or 64 */
 	uint16_t soname_len;
 	uint16_t path_len;
-	uint16_t _reserved;
+	uint16_t flags; /* LOTA_IPC_REGISTRY_ENTRY_* */
 	uint8_t digest[64];
 } __attribute__((packed));
 

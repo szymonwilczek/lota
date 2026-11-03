@@ -20,6 +20,7 @@
 #include <stdint.h>
 
 #include "../../include/lota_runtime_image_measure.h"
+#include "../../include/lota_ipc.h"
 #include "../../include/lota_runtime_protect_digest.h"
 #include "../../include/lota_server.h"
 #include "../../include/lota_token_quote_nonce.h"
@@ -685,6 +686,10 @@ const char *lota_server_sdk_version(void)
 	return LOTA_BUILD_VERSION_STRING;
 }
 
+_Static_assert(LOTA_SERVER_REGISTRY_MAX_OBJECTS ==
+		       LOTA_IPC_REGISTRY_MAX_OBJECTS,
+	       "lota_server.h copies the agent's registry bound");
+
 static int registry_module_cmp(const void *a, const void *b)
 {
 	return lota__runtime_image_module_cmp(a, b);
@@ -699,7 +704,7 @@ int lota_server_registry_digest(const struct lota_server_registry_module *mods,
 
 	if (!out || (count > 0 && !mods))
 		return LOTA_SERVER_ERR_INVALID_ARG;
-	if (count > LOTA_RUNTIME_IMAGE_MAX_MODULES)
+	if (count > LOTA_SERVER_REGISTRY_MAX_OBJECTS)
 		return LOTA_SERVER_ERR_INVALID_ARG;
 
 	if (count > 0) {

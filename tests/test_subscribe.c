@@ -1059,9 +1059,17 @@ static void test_reply_before_hangup(void)
 		PASS();
 }
 
+/* How a mock registry listing breaks the wire contract */
+enum registry_fault {
+	REGISTRY_SOUND,
+	REGISTRY_BAD_ROAD, /* a digest on the unmeasured object */
+	REGISTRY_BAD_ENTRY_FLAG, /* an entry flag the SDK does not know */
+	REGISTRY_BAD_FLAG, /* a page flag the SDK does not know */
+};
+
 /* Registry page of objects [start, start + count) of a 5-object listing. */
 static size_t build_registry_page(uint8_t *buf, uint64_t round, uint32_t start,
-				  uint16_t count, int bad_road)
+				  uint16_t count, enum registry_fault fault)
 {
 	struct lota_ipc_registry_page hdr;
 	size_t off = sizeof(hdr);
@@ -1072,7 +1080,9 @@ static size_t build_registry_page(uint8_t *buf, uint64_t round, uint32_t start,
 	hdr.total = 5;
 	hdr.start = start;
 	hdr.count = count;
-	hdr.flags = LOTA_IPC_REGISTRY_MEASURED;
+	hdr.flags = LOTA_IPC_REGISTRY_MEASURED | LOTA_IPC_REGISTRY_HISTORY_LOST;
+	if (fault == REGISTRY_BAD_FLAG)
+		hdr.flags |= 1U << 9;
 	memset(hdr.image_digest, 0x5a, sizeof(hdr.image_digest));
 	memcpy(buf, &hdr, sizeof(hdr));
 
@@ -1082,17 +1092,24 @@ static size_t build_registry_page(uint8_t *buf, uint64_t round, uint32_t start,
 		char path[48];
 
 		snprintf(soname, sizeof(soname), "lib%u.so", i);
-		snprintf(path, sizeof(path), "/opt/title/lib%u.so", i);
+		/* object 4 was unmapped before the round: no path */
+		if (i == 4)
+			path[0] = '\0';
+		else
+			snprintf(path, sizeof(path), "/opt/title/lib%u.so", i);
 		memset(&e, 0, sizeof(e));
 		e.size = 1000 + i;
 		e.ino = 77 + i;
-		/* Object 4 is unmeasured; @bad_road gives it a digest anyway. */
 		e.road = i == 4 ? LOTA_IPC_REGISTRY_ROAD_NONE :
 				  LOTA_IPC_REGISTRY_ROAD_VERITY;
-		if (i != 4 || bad_road) {
+		if (i != 4 || fault == REGISTRY_BAD_ROAD) {
 			e.digest_len = 32;
 			memset(e.digest, (int)i + 1, 32);
 		}
+		if (i == 4)
+			e.flags = LOTA_IPC_REGISTRY_ENTRY_UNMAPPED;
+		if (i == 1 && fault == REGISTRY_BAD_ENTRY_FLAG)
+			e.flags = 1U << 5;
 		e.soname_len = (uint16_t)strlen(soname);
 		e.path_len = (uint16_t)strlen(path);
 		memcpy(buf + off, &e, sizeof(e));
@@ -1106,7 +1123,8 @@ static size_t build_registry_page(uint8_t *buf, uint64_t round, uint32_t start,
 }
 
 /* Answer GET_REGISTRY in pages of three; round @torn_round from the 2nd on. */
-static void serve_registry(int client_fd, uint64_t torn_round, int bad_road)
+static void serve_registry(int client_fd, uint64_t torn_round,
+			   enum registry_fault fault)
 {
 	struct lota_ipc_request req;
 	struct lota_ipc_registry_request body;
@@ -1120,8 +1138,7 @@ static void serve_registry(int client_fd, uint64_t torn_round, int bad_road)
 
 		if (req.cmd != LOTA_IPC_CMD_GET_REGISTRY || body.pid != 4242)
 			_exit(2);
-		len = build_registry_page(buf, round, body.start, count,
-					  bad_road);
+		len = build_registry_page(buf, round, body.start, count, fault);
 		if (send_response(client_fd, LOTA_IPC_OK, buf, (uint32_t)len) <
 		    0)
 			_exit(3);
@@ -1131,17 +1148,27 @@ static void serve_registry(int client_fd, uint64_t torn_round, int bad_road)
 
 static void server_registry(int client_fd)
 {
-	serve_registry(client_fd, 0, 0);
+	serve_registry(client_fd, 0, REGISTRY_SOUND);
 }
 
 static void server_registry_torn(int client_fd)
 {
-	serve_registry(client_fd, 2, 0);
+	serve_registry(client_fd, 2, REGISTRY_SOUND);
 }
 
 static void server_registry_bad_road(int client_fd)
 {
-	serve_registry(client_fd, 0, 1);
+	serve_registry(client_fd, 0, REGISTRY_BAD_ROAD);
+}
+
+static void server_registry_bad_entry_flag(int client_fd)
+{
+	serve_registry(client_fd, 0, REGISTRY_BAD_ENTRY_FLAG);
+}
+
+static void server_registry_bad_flag(int client_fd)
+{
+	serve_registry(client_fd, 0, REGISTRY_BAD_FLAG);
 }
 
 static void server_registry_not_protected(int client_fd)
@@ -1196,14 +1223,18 @@ static void test_registry_pages(void)
 		return;
 	}
 	if (ret != LOTA_OK || !reg || reg->count != 5 || reg->round != 1 ||
-	    reg->pid != 4242 || !(reg->flags & LOTA_REGISTRY_MEASURED) ||
+	    reg->pid != 4242 ||
+	    reg->flags !=
+		    (LOTA_REGISTRY_MEASURED | LOTA_REGISTRY_HISTORY_LOST) ||
 	    reg->image_digest[0] != 0x5a ||
 	    strcmp(reg->objects[3].soname, "lib3.so") != 0 ||
 	    strcmp(reg->objects[3].path, "/opt/title/lib3.so") != 0 ||
 	    reg->objects[3].size != 1003 || reg->objects[3].digest_len != 32 ||
 	    reg->objects[3].digest[0] != 4 ||
 	    reg->objects[4].road != LOTA_REGISTRY_ROAD_NONE ||
-	    reg->objects[4].digest_len != 0) {
+	    reg->objects[4].digest_len != 0 ||
+	    reg->objects[4].flags != LOTA_REGISTRY_OBJECT_UNMAPPED ||
+	    reg->objects[4].path[0] != '\0' || reg->objects[3].flags != 0) {
 		FAIL(lota_strerror(ret));
 		lota_registry_free(reg);
 		return;
@@ -1241,6 +1272,24 @@ static void test_registry_refusals(void)
 
 	TEST("get_registry refuses a digest on an unmeasured object");
 	ret = fetch_registry(server_registry_bad_road, &reg, &skipped);
+	if (skipped)
+		SKIP("AF_UNIX mock server not permitted");
+	else if (ret != LOTA_ERR_PROTOCOL || reg)
+		FAIL(lota_strerror(ret));
+	else
+		PASS();
+
+	TEST("get_registry refuses an entry flag it does not know");
+	ret = fetch_registry(server_registry_bad_entry_flag, &reg, &skipped);
+	if (skipped)
+		SKIP("AF_UNIX mock server not permitted");
+	else if (ret != LOTA_ERR_PROTOCOL || reg)
+		FAIL(lota_strerror(ret));
+	else
+		PASS();
+
+	TEST("get_registry refuses a listing flag it does not know");
+	ret = fetch_registry(server_registry_bad_flag, &reg, &skipped);
 	if (skipped)
 		SKIP("AF_UNIX mock server not permitted");
 	else if (ret != LOTA_ERR_PROTOCOL || reg)
