@@ -70,6 +70,12 @@ bpf_path = /usr/lib/lota/lota_lsm.bpf.o
 # strict_modules = true
 # block_anon_exec = true
 
+# bench: write the agent's own cost, and the protected set's as one sum,
+# to /run/lota/bench.json once a second (0640 root:lota). The policy is
+# the same with it; the status word and the report say it is on.
+# Read at startup only.
+# bench = true
+
 # allow_verity: allow fs-verity protected files by digest.
 #
 # Each entry must be an absolute path and must refer to a file with fs-verity
