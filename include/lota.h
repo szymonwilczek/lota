@@ -617,8 +617,9 @@ struct lota_exec_event {
 #define LOTA_MAX_TRUSTED_LIBS 512
 
 /*
- * Files whose write kills a protected task past every signal hook:
- * cgroup.kill of the agent's cgroup and its ancestors, so a cgroup depth.
+ * Files whose write kills or stops a protected task past every signal hook:
+ * cgroup.kill and cgroup.freeze of the agent's cgroup and its ancestors,
+ * two per level of a cgroup depth.
  */
 #define LOTA_MAX_GUARDED_FILES 64
 
@@ -657,6 +658,7 @@ struct lota_exe_hash_slot {
 
 /* guarded_files value: why the file is guarded */
 #define LOTA_GUARD_CGROUP_KILL 1
+#define LOTA_GUARD_CGROUP_FREEZE 2
 
 /*
  * Libraries the agent pins against writes while measuring a process.

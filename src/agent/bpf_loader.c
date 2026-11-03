@@ -904,15 +904,14 @@ int bpf_loader_verify_kernel_runtime_hardening(bool allow_mutable_rootfs)
 }
 
 /*
- * Arm guarded_files with the agent's cgroup.kill and each ancestor's:
- * a write there SIGKILLs the agent past lota_task_kill.
+ * Arm guarded_files with the agent's cgroup.kill and cgroup.freeze and each
+ * ancestor's: a write there SIGKILLs or stops the agent past lota_task_kill.
  * No unified hierarchy is not a failure; any other error is.
  */
 static int arm_kill_guard(struct bpf_loader_ctx *ctx)
 {
 	struct cgroup_guard_file files[LOTA_CGROUP_GUARD_MAX];
 	char cgroup_path[PATH_MAX];
-	uint32_t kind = LOTA_GUARD_CGROUP_KILL;
 	int count;
 	int ret;
 
@@ -920,7 +919,7 @@ static int arm_kill_guard(struct bpf_loader_ctx *ctx)
 				     sizeof(cgroup_path));
 	if (ret == -ENOENT) {
 		lota_info(
-			"No unified cgroup hierarchy: no cgroup.kill road to guard");
+			"No unified cgroup hierarchy: no cgroup road to guard");
 		return 0;
 	}
 	if (ret < 0) {
@@ -932,23 +931,25 @@ static int arm_kill_guard(struct bpf_loader_ctx *ctx)
 	count = cgroup_guard_collect(LOTA_CGROUP_MOUNT_ROOT, cgroup_path, files,
 				     LOTA_CGROUP_GUARD_MAX);
 	if (count < 0) {
-		lota_err("Failed to resolve the cgroup.kill files of %s: %s",
+		lota_err("Failed to resolve the guarded cgroup files of %s: %s",
 			 cgroup_path, strerror(-count));
 		return count;
 	}
 	if (count == 0) {
-		lota_info("cgroup %s carries no cgroup.kill file", cgroup_path);
+		lota_info("cgroup %s carries no cgroup.kill or cgroup.freeze",
+			  cgroup_path);
 		return 0;
 	}
 
 	for (int i = 0; i < count; i++) {
 		struct trusted_lib_key key = { .dev = files[i].dev,
 					       .ino = files[i].ino };
+		uint32_t kind = files[i].kind;
 
 		if (bpf_map_update_elem(ctx->guarded_files_fd, &key, &kind,
 					BPF_ANY) < 0) {
 			ret = -errno;
-			lota_err("Failed to guard a cgroup.kill file: %s",
+			lota_err("Failed to guard a cgroup file: %s",
 				 strerror(-ret));
 			return ret;
 		}
@@ -962,7 +963,7 @@ static int arm_kill_guard(struct bpf_loader_ctx *ctx)
 		return ret;
 	}
 
-	lota_info("Kill guard armed on %d cgroup.kill file(s) above %s", count,
+	lota_info("Kill guard armed on %d cgroup file(s) above %s", count,
 		  cgroup_path);
 	return 0;
 }

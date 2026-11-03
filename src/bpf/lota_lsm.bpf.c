@@ -1599,15 +1599,22 @@ static __always_inline void report_blocked_mapped_write(struct dentry *dentry)
 }
 
 /* the verdict lives in include/lota.h, shared with the tests */
-static __always_inline int denies_kill_guard_open(struct file *file)
+/* LOTA_GUARD_* of a refused write open of a guarded file, or 0 */
+static __always_inline u32 denies_kill_guard_open(struct file *file)
 {
+	u32 kind;
+
 	if (!is_write_open_flags(BPF_CORE_READ(file, f_flags)))
 		return 0;
 
-	if (!guarded_file_kind(file))
+	kind = guarded_file_kind(file);
+	if (!kind)
 		return 0;
 
-	return lota_kill_guard_denied(1, 1, sleepable_task_is_agent_or_admin());
+	if (!lota_kill_guard_denied(1, 1, sleepable_task_is_agent_or_admin()))
+		return 0;
+
+	return kind;
 }
 
 /*
@@ -1618,6 +1625,7 @@ SEC("lsm.s/file_open")
 int BPF_PROG(lota_file_open, struct file *file, int ret)
 {
 	u32 target_pid = 0;
+	u32 guard;
 	u32 mode;
 	int flags;
 
@@ -1636,7 +1644,12 @@ int BPF_PROG(lota_file_open, struct file *file, int ret)
 		return -EPERM;
 	}
 
-	if (denies_kill_guard_open(file)) {
+	guard = denies_kill_guard_open(file);
+	if (guard == LOTA_GUARD_CGROUP_FREEZE) {
+		report_blocked_kill_guard("(cgroup.freeze)", 16);
+		return -EPERM;
+	}
+	if (guard) {
 		report_blocked_kill_guard("(cgroup.kill)", 14);
 		return -EPERM;
 	}

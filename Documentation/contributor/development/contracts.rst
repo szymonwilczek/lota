@@ -387,11 +387,12 @@ nothing else on the machine holds it and root is no exception.
 leaves a record of it.
 
 That hook covers signals only. A write to ``cgroup.kill`` kills a whole
-cgroup from cgroup code, past every security hook, so ``lota_file_open``
-refuses write opens of the files in ``guarded_files``. The loader arms it at
-startup with the agent's cgroup and its ancestors: an agent killed that way
-drops enforcement for the rest of the boot while PCR 14 still holds the boot
-commitment. A protected process's cgroup is not armed: killing it ends only
+cgroup from cgroup code, past every security hook, and a write to
+``cgroup.freeze`` stops it the same way, so ``lota_file_open`` refuses write
+opens of the files in ``guarded_files``. The loader arms it at startup with
+both files of the agent's cgroup and of its ancestors: an agent killed or
+frozen that way drops enforcement for the rest of the boot while PCR 14 still
+holds the boot commitment. A protected process's cgroup is not armed: killing it ends only
 its own session, and its owner can end it with an ordinary signal anyway.
 
 The handler applies ``kill(2)``'s own rule -- the owner of the target, or root

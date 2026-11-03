@@ -1683,7 +1683,8 @@ $(BUILD_DIR)/test_bpf_mount_hooks: $(BPF_OBJ)
 $(BUILD_DIR)/test_bpf_mount_hooks: TEST_CFLAGS := -DBPF_OBJ_PATH='"$(BPF_OBJ)"'
 $(BUILD_DIR)/test_bpf_mount_hooks: TEST_LDLIBS := -lelf
 
-$(BUILD_DIR)/test_cgroup_guard: $(AGENT_DIR)/cgroup_guard.c $(AGENT_DIR)/sb_dev.c
+$(BUILD_DIR)/test_cgroup_guard: $(AGENT_DIR)/cgroup_guard.c $(AGENT_DIR)/sb_dev.c \
+	$(INC_DIR)/lota.h
 
 $(BUILD_DIR)/test_config: $(TEST_CONFIG_SRCS) $(AGENT_DIR)/policy_pubkey.c
 $(BUILD_DIR)/test_config_add_profile: $(TEST_CONFIG_SRCS)

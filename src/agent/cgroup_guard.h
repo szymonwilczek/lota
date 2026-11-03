@@ -6,16 +6,18 @@
 #include <stddef.h>
 
 /*
- * cgroup.kill SIGKILLs a whole cgroup from cgroup code, past task_kill;
- * the agent's cgroup and each ancestor carry one.
+ * cgroup.kill SIGKILLs a whole cgroup from cgroup code, past task_kill, and
+ * cgroup.freeze stops it the same way; the agent's cgroup and each ancestor
+ * carry both.
  */
-#define LOTA_CGROUP_GUARD_MAX 32 /* cgroup path depth; a packaged unit is 2 */
+#define LOTA_CGROUP_GUARD_MAX 64 /* two per level; a packaged unit is 2 deep */
 #define LOTA_CGROUP_MOUNT_ROOT "/sys/fs/cgroup" /* unified hierarchy */
 
-/* a cgroup.kill inode as the BPF side reads it */
+/* a guarded cgroup file's inode as the BPF side reads it */
 struct cgroup_guard_file {
 	unsigned long long dev; /* superblock dev, kernel MKDEV layout */
 	unsigned long long ino;
+	unsigned int kind; /* LOTA_GUARD_CGROUP_* */
 };
 
 /*
@@ -26,9 +28,10 @@ int cgroup_guard_self_path(const char *proc_cgroup_path, char *out,
 			   size_t out_len);
 
 /*
- * Fill @out with cgroup.kill of @cgroup_path under @mount_root and of each
- * ancestor, deepest first. Return the count or -errno. A level whose file
- * cannot be resolved is skipped: the root cgroup has none.
+ * Fill @out with cgroup.kill and cgroup.freeze of @cgroup_path under
+ * @mount_root and of each ancestor, deepest first. Return the count or
+ * -errno. A file that cannot be resolved is skipped: the root cgroup has
+ * neither.
  */
 int cgroup_guard_collect(const char *mount_root, const char *cgroup_path,
 			 struct cgroup_guard_file *out, size_t max);

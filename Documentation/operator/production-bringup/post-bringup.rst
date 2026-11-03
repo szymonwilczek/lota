@@ -163,23 +163,26 @@ BPF coverage, and swapping a tampered binary into place before the next
 attestation.
 
 A write to a cgroup's ``cgroup.kill`` kills every task in it without passing
-a signal hook. The agent therefore refuses write opens of its own cgroup's
-``cgroup.kill`` and every ancestor's to any task it has not authorised.
+a signal hook, and a write to its ``cgroup.freeze`` stops them the same way.
+The agent therefore refuses write opens of both files of its own cgroup and
+of every ancestor to any task it has not authorised.
 ``systemctl kill lota-agent`` and ``systemctl stop`` past its timeout take
-that road, so ``enforce`` refuses both like a raw ``kill`` and logs::
+the first road and ``systemctl freeze lota-agent`` the second, so ``enforce``
+refuses them like a raw ``kill`` and logs::
 
   KILL_BLOCKED systemd -> (cgroup.kill) (pid=1, uid=0)
+  KILL_BLOCKED systemd -> (cgroup.freeze) (pid=1, uid=0)
 
 At startup the agent logs the files it guards::
 
-  Kill guard armed on 2 cgroup.kill file(s) above /system.slice/lota-agent.service
+  Kill guard armed on 4 cgroup file(s) above /system.slice/lota-agent.service
 
 It refuses to start when it cannot resolve them. A host without a unified
 cgroup hierarchy has none to guard and logs that.
 
 **This applies in every mode.** The enforcement mode switches policy, and an
 agent that can be killed is one whose measurements stop without a trace, so
-``monitor`` refuses the signal and the ``cgroup.kill`` write exactly as
+``monitor`` refuses the signal and the cgroup file writes exactly as
 ``enforce`` does. The way to stop the agent is ``lota-agent --shutdown``.
 The refused signal is logged with the sender's pid, uid and command, so a
 supervisor that cannot stop the agent is diagnosable from the journal.
