@@ -344,7 +344,8 @@ $(INSTALLER_BIN): $(INSTALLER_SRCS) installer/install.h installer/probe.h \
 # lota-bench measures what LOTA costs a game.
 # Contributors build it from the tree; no package ships it.
 LOTA_BENCH_BIN := $(BUILD_DIR)/lota-bench
-LOTA_BENCH_SRCS := $(addprefix $(LOTA_BENCH_DIR)/,main.c cgroup.c result.c)
+LOTA_BENCH_SRCS := $(addprefix $(LOTA_BENCH_DIR)/,main.c cgroup.c result.c json.c \
+	validate.c)
 LOTA_BENCH_PREFIX ?= /usr/local
 $(LOTA_BENCH_BIN): $(LOTA_BENCH_SRCS) $(wildcard $(LOTA_BENCH_DIR)/*.h) | $(BUILD_DIR)
 	$(QUIET_CC)
@@ -1626,6 +1627,8 @@ $(BUILD_DIR)/test_attest_stage: $(addprefix $(AGENT_DIR)/,attest_stage.c net_err
 
 $(BUILD_DIR)/test_bench_cgroup: $(LOTA_BENCH_DIR)/cgroup.c $(LOTA_BENCH_DIR)/cgroup.h
 $(BUILD_DIR)/test_bench_result: $(addprefix $(LOTA_BENCH_DIR)/,result.c result.h cgroup.c cgroup.h)
+$(BUILD_DIR)/test_bench_validate: $(addprefix $(LOTA_BENCH_DIR)/,validate.c validate.h \
+	json.c json.h result.c result.h cgroup.c cgroup.h)
 
 $(BUILD_DIR)/test_bpf_kill_guard: $(BPF_OBJ)
 $(BUILD_DIR)/test_bpf_kill_guard: TEST_CFLAGS := -DBPF_OBJ_PATH='"$(BPF_OBJ)"'
@@ -2012,7 +2015,8 @@ VALGRIND_UNIT_BINS := \
 	test_xattr_carry test_ima_policy_scope test_kernel_floor_hint \
 	test_integrity_baseline \
 	test_daemon_exit_status test_integrity_map_layout \
-	test_installer_confirm test_bench_cgroup test_bench_result
+	test_installer_confirm test_bench_cgroup test_bench_result \
+	test_bench_validate
 
 .PHONY: valgrind-unit
 valgrind-unit: $(TEST_BINS)

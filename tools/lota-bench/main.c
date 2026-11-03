@@ -18,6 +18,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/resource.h>
+#include <sys/stat.h>
 #include <sys/syscall.h>
 #include <sys/vfs.h>
 #include <time.h>
@@ -25,6 +26,7 @@
 
 #include "cgroup.h"
 #include "result.h"
+#include "validate.h"
 
 #ifndef LOTA_BENCH_VERSION
 #define LOTA_BENCH_VERSION "unknown"
@@ -58,11 +60,13 @@ static void usage(FILE *f)
 	fprintf(f,
 		"Usage: lota-bench sample --cgroup PATH --output FILE "
 		"[--interval-ms N] [--duration-s N]\n"
+		"       lota-bench validate FILE\n"
 		"       lota-bench --version\n"
 		"\n"
 		"sample  Sample the game's cgroup and the LOTA units' cgroups\n"
 		"        until the duration runs out, the game's cgroup goes\n"
 		"        away, or Ctrl+C.\n"
+		"validate  Check FILE against the result schema.\n"
 		"\n"
 		"  --cgroup PATH     the game's cgroup: a path under " CGROUP_ROOT
 		",\n"
@@ -215,7 +219,8 @@ static int sample_loop(FILE *out, int root, int game,
 	for (i = 0;; i++) {
 		const struct bench_sample *src[BS_COUNT];
 
-		if (stop_requested) {
+		/* the first sample is always taken: a result has one */
+		if (stop_requested && i) {
 			*end = BE_INTERRUPTED;
 			break;
 		}
@@ -383,6 +388,84 @@ static int main_sample(int argc, char **argv)
 	return cmd_sample(&o);
 }
 
+/*
+ * NULL with errno set: EINVAL for anything but a regular file, EFBIG for
+ * one over the limit
+ */
+static char *read_result(const char *path, size_t *len)
+{
+	struct stat st;
+	size_t got = 0;
+	char *buf;
+	int fd;
+
+	fd = open(path, O_RDONLY | O_CLOEXEC);
+	if (fd < 0)
+		return NULL;
+	if (fstat(fd, &st))
+		goto fail;
+	if (!S_ISREG(st.st_mode)) {
+		errno = EINVAL;
+		goto fail;
+	}
+	if ((uint64_t)st.st_size > BENCH_RESULT_MAX_BYTES) {
+		errno = EFBIG;
+		goto fail;
+	}
+	buf = malloc((size_t)st.st_size + 1);
+	if (!buf)
+		goto fail;
+	while (got < (size_t)st.st_size) {
+		ssize_t n = read(fd, buf + got, (size_t)st.st_size - got);
+
+		if (n < 0 && errno == EINTR)
+			continue;
+		if (n <= 0) {
+			if (n == 0)
+				errno = EIO;
+			free(buf);
+			goto fail;
+		}
+		got += (size_t)n;
+	}
+	close(fd);
+	*len = got;
+	return buf;
+fail:
+	close(fd);
+	return NULL;
+}
+
+static int main_validate(int argc, char **argv)
+{
+	struct bench_validate_info info;
+	char err[256];
+	size_t len;
+	char *buf;
+	int ret;
+
+	if (argc != 2) {
+		usage(stderr);
+		return EXIT_BENCH_USAGE;
+	}
+	buf = read_result(argv[1], &len);
+	if (!buf) {
+		fprintf(stderr, "lota-bench: %s: %s\n", argv[1],
+			errno == EINVAL ? "not a regular file" :
+					  strerror(errno));
+		return 1;
+	}
+	ret = bench_validate(buf, len, &info, err, sizeof(err));
+	free(buf);
+	if (ret) {
+		fprintf(stderr, "%s: invalid: %s\n", argv[1], err);
+		return 1;
+	}
+	printf("%s: valid, %u samples every %u ms (%s)\n", argv[1],
+	       info.samples, info.interval_ms, bench_end_names[info.end]);
+	return 0;
+}
+
 int main(int argc, char **argv)
 {
 	if (argc < 2) {
@@ -399,6 +482,8 @@ int main(int argc, char **argv)
 	}
 	if (strcmp(argv[1], "sample") == 0)
 		return main_sample(argc - 1, argv + 1);
+	if (strcmp(argv[1], "validate") == 0)
+		return main_validate(argc - 1, argv + 1);
 
 	fprintf(stderr, "lota-bench: unknown command '%s'\n", argv[1]);
 	usage(stderr);
