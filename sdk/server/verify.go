@@ -115,6 +115,7 @@ var (
 	ErrNoSignature  = errors.New("lota: token contains no signature")
 	ErrNoAttestData = errors.New("lota: token contains no attestation data")
 	ErrRuntimeImage = errors.New("lota: runtime image measurement does not match the quote")
+	ErrBadEvidence  = errors.New("lota: boot evidence does not match the token")
 )
 
 // represents the verified claims extracted from a LOTA attestation token

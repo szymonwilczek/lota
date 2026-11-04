@@ -7,7 +7,10 @@ package server
 import (
 	"crypto/rand"
 	"crypto/rsa"
+	"crypto/sha256"
 	"crypto/x509"
+	"encoding/binary"
+	"math/bits"
 	"testing"
 	"time"
 )
@@ -191,6 +194,33 @@ func FuzzParseRSAPublicKeySDK(f *testing.F) {
 		}
 		if again.N.Cmp(pub.N) != 0 || again.E != pub.E {
 			t.Fatal("RSA public key changed across marshal/parse roundtrip")
+		}
+	})
+}
+
+// Claims are taken from the evidence's own header and PCR values, so the
+// fuzzer reaches the event replay; a refusal must never read on.
+func FuzzVerifyBootEvidence(f *testing.F) {
+	evidence, _ := buildEvidence([]testEvent{
+		{evOn, evOn}, {evPK, nil}, {evSeparator, nil},
+	})
+	f.Add(evidence)
+	f.Add(evidence[:BootEvidenceHeaderSize])
+	f.Add([]byte{})
+
+	f.Fuzz(func(t *testing.T, data []byte) {
+		claims := &Claims{}
+		if len(data) >= BootEvidenceHeaderSize {
+			claims.PCRMask = binary.LittleEndian.Uint32(data[4:])
+			n := bits.OnesCount32(claims.PCRMask) * sha256.Size
+			if len(data) >= BootEvidenceHeaderSize+n {
+				d := sha256.Sum256(data[BootEvidenceHeaderSize : BootEvidenceHeaderSize+n])
+				claims.PCRDigest = d[:]
+			}
+		}
+		sb, err := VerifyBootEvidence(claims, data)
+		if err != nil && sb {
+			t.Fatalf("refused evidence read on: %v", err)
 		}
 	})
 }

@@ -390,7 +390,8 @@ Worth being precise about, because it decides what you can build on it:
   fetches their values and the PCR 7 events behind them, from the agent or
   from the hook's ``lota-boot-evidence.bin``; send it with a heartbeat, and
   ``lota_ac_verify_boot_evidence()`` reads Secure Boot from it with the info
-  ``lota_ac_verify_heartbeat()`` filled. Evidence that is not the boot the
+  ``lota_ac_verify_heartbeat()`` filled, or ``VerifyBootEvidence`` (Go) with
+  the claims ``VerifyToken`` returned. Evidence that is not the boot the
   quote signed is refused, so a host cannot edit it. The quoted PCRs hold
   still for a boot, so one copy serves every heartbeat until the player
   reboots.
