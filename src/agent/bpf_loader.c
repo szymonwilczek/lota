@@ -1555,6 +1555,7 @@ int bpf_loader_attach(struct bpf_loader_ctx *ctx)
 	static const char *const required_programs[] = {
 		"lota_ptrace_access_check",
 		"lota_agent_exit",
+		"lota_no_core",
 	};
 	const size_t required_count =
 		sizeof(required_programs) / sizeof(required_programs[0]);

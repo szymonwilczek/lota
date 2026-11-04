@@ -434,7 +434,9 @@ Active threats
          in, its session ends and the publisher sees that.
        | From outside its instance the LSM refuses a signal that would stop it
          or write its memory to a core file, sent directly or aimed through
-         ``F_SETOWN``, and refuses a change to its resource limits.
+         ``F_SETOWN``, and refuses a change to its resource limits. A dump
+         signal with no handler, from a crash or a terminal's quit key, ends
+         the group before the kernel writes anything.
        | A title whose own cgroup is frozen stalls. Nothing refuses that, and
          the publisher sees only a session that stopped answering.
        | The agent is guarded: the LSM refuses every signal to it but

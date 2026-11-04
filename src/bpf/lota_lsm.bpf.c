@@ -3116,6 +3116,36 @@ int BPF_PROG(lota_agent_exit, struct task_struct *task, bool group_dead)
 }
 
 /* ======================================================================
+ * Tracepoint: signal_deliver
+ *
+ * A core file is a read of the memory the hooks guard, and a terminal's ^\ or
+ * a process's own crash raises the signal with no hook asked. The group's
+ * SIGKILL goes out here, before the kernel acts on the default: a group already
+ * exiting takes no dump. A signal with a handler is the process's own business.
+ * ====================================================================== */
+SEC("tp_btf/signal_deliver")
+int BPF_PROG(lota_no_core, int sig, struct kernel_siginfo *info,
+	     struct k_sigaction *ka)
+{
+	struct lota_instance_entry id = {};
+	struct task_struct *current;
+
+	(void)info;
+
+	if (!lota_signal_dumps(sig) || BPF_CORE_READ(ka, sa.sa_handler))
+		return 0;
+
+	current = bpf_get_current_task_btf();
+	if (!task_instance(current, &id))
+		return 0;
+
+	report_signal(LOTA_EVENT_KILL_BLOCKED, 1, sig,
+		      BPF_CORE_READ(current, tgid), "(dump)\0");
+	kill_group(current);
+	return 0;
+}
+
+/* ======================================================================
  * LSM hook: task_free
  *
  * Called when task exits and resources are being freed.

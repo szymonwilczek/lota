@@ -393,6 +393,11 @@ process that silently disappeared -- closing a hung game is the ordinary reason
 for it, and what says *which* process left is the protected set the token
 already carries.
 
+A protected game ends with the agent, however the agent ended, since nothing
+vouches for the game afterwards. It cannot be suspended from outside (``^Z``
+from its terminal, ``kill -STOP``), and it leaves no core file: a crash with no
+handler of its own ends it instead.
+
 Pausing and removing
 ====================
 
