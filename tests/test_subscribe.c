@@ -1398,6 +1398,96 @@ static void test_registry_refusals(void)
 		FAIL("accepted a missing argument");
 }
 
+/* Answer GET_BOOT_EVIDENCE with 64 patterned bytes, or refuse it */
+static void serve_boot_evidence(int client_fd, uint32_t result)
+{
+	struct lota_ipc_request req;
+	uint8_t buf[64];
+
+	if (recv_request(client_fd, &req, NULL, 0) < 0)
+		_exit(1);
+	if (req.cmd != LOTA_IPC_CMD_GET_BOOT_EVIDENCE || req.payload_len != 0)
+		_exit(2);
+	for (size_t i = 0; i < sizeof(buf); i++)
+		buf[i] = (uint8_t)i;
+	if (send_response(client_fd, result, result == LOTA_IPC_OK ? buf : NULL,
+			  result == LOTA_IPC_OK ? sizeof(buf) : 0) < 0)
+		_exit(3);
+}
+
+static void server_boot_evidence(int client_fd)
+{
+	serve_boot_evidence(client_fd, LOTA_IPC_OK);
+}
+
+static void server_boot_evidence_no_tpm(int client_fd)
+{
+	serve_boot_evidence(client_fd, LOTA_IPC_ERR_NO_TPM);
+}
+
+static int fetch_boot_evidence(server_scenario_fn scenario, uint8_t *buf,
+			       size_t buflen, size_t *written, int *skipped)
+{
+	struct lota_connect_opts opts = { .struct_size = sizeof(opts) };
+	struct lota_client *client;
+	pid_t server;
+	int ret;
+
+	*skipped = 0;
+	server = start_mock_server(scenario);
+	if (server < 0) {
+		*skipped = socket_errno_is_sandbox(mock_server_errno);
+		return LOTA_ERR_CONNECTION_FAILED;
+	}
+	opts.socket_path = test_socket;
+	opts.timeout_ms = 5000;
+	client = lota_connect_opts(&opts);
+	if (!client) {
+		wait_server(server);
+		return LOTA_ERR_CONNECTION_FAILED;
+	}
+	ret = lota_get_boot_evidence(client, buf, buflen, written);
+	lota_disconnect(client);
+	wait_server(server);
+	return ret;
+}
+
+static void test_boot_evidence(void)
+{
+	uint8_t buf[128];
+	size_t written = 0;
+	int skipped;
+	int ret;
+
+	TEST("get_boot_evidence hands back the agent's bytes");
+	ret = fetch_boot_evidence(server_boot_evidence, buf, sizeof(buf),
+				  &written, &skipped);
+	if (skipped) {
+		SKIP("AF_UNIX mock server not permitted");
+		return;
+	}
+	if (ret != LOTA_OK || written != 64 || buf[0] != 0 || buf[63] != 63)
+		FAIL("evidence lost or cut");
+	else
+		PASS();
+
+	TEST("get_boot_evidence refuses a buffer too small");
+	ret = fetch_boot_evidence(server_boot_evidence, buf, 16, &written,
+				  &skipped);
+	if (ret != LOTA_ERR_BUFFER_TOO_SMALL)
+		FAIL("short buffer not reported");
+	else
+		PASS();
+
+	TEST("get_boot_evidence passes NO_TPM through");
+	ret = fetch_boot_evidence(server_boot_evidence_no_tpm, buf, sizeof(buf),
+				  &written, &skipped);
+	if (ret != LOTA_ERR_NO_TPM)
+		FAIL("refusal not mapped");
+	else
+		PASS();
+}
+
 int main(void)
 {
 	printf("=== SUBSCRIBE / Push Notification Tests ===\n\n");
@@ -1433,6 +1523,7 @@ int main(void)
 	test_registry_pages();
 	test_registry_torn();
 	test_registry_refusals();
+	test_boot_evidence();
 
 	printf("\n=== Results: %d/%d passed ===\n", tests_passed, tests_run);
 	return (tests_passed == tests_run) ? 0 : 1;

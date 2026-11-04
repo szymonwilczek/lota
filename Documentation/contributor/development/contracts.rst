@@ -554,6 +554,7 @@ format is in ``include/lota_token.h``; ``src/agent/boot_evidence.c`` builds it.
 The agent vouches for none of it. The relying party hashes the PCR values
 against the digest a verified token quotes and replays the events to the
 PCR 7 value, so evidence root edits no longer matches its token.
+``lota_get_boot_evidence()`` in ``liblotagaming`` fetches it.
 
 GET_TOKEN rate limits
 =====================

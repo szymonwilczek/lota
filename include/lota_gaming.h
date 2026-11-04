@@ -574,6 +574,27 @@ int lota_token_serialize(const struct lota_token *token, uint8_t *buf,
 			 size_t buflen, size_t *written);
 
 /*
+ * lota_get_boot_evidence - Fetch the evidence behind a token's boot PCRs
+ * @client:  Client handle
+ * @buf:     Output buffer; LOTA_BOOT_EVIDENCE_MAX_SIZE (lota_token.h) holds any
+ * @buflen:  Size of @buf
+ * @written: Output: number of bytes written (may be NULL)
+ *
+ * The values of the PCRs a token quotes and the PCR 7 events behind them,
+ * in the wire format lota_token.h describes. Send it with a token to a
+ * server that runs no verifier: lota_server_verify_boot_evidence() checks it
+ * against the token and says whether the machine booted with Secure Boot on.
+ * Fetch it next to the token it goes with: it matches a token only while
+ * the quoted PCRs hold the same values.
+ *
+ * Returns LOTA_OK, LOTA_ERR_BUFFER_TOO_SMALL, LOTA_ERR_NO_TPM,
+ * LOTA_ERR_RATE_LIMITED (it counts against the same per-user limit as
+ * lota_get_token()), or another negative LOTA_ERR_*.
+ */
+int lota_get_boot_evidence(struct lota_client *client, uint8_t *buf,
+			   size_t buflen, size_t *written);
+
+/*
  * Status change callback type
  *
  * @status:    Current attestation status snapshot

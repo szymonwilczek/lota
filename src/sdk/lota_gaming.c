@@ -1007,6 +1007,43 @@ oom:
 	return LOTA_ERR_NO_MEMORY;
 }
 
+int lota_get_boot_evidence(struct lota_client *client, uint8_t *buf,
+			   size_t buflen, size_t *written)
+{
+	struct lota_ipc_request req;
+	struct lota_ipc_response resp;
+	size_t len = 0;
+	int ret;
+
+	if (!client)
+		return LOTA_ERR_NOT_CONNECTED;
+	if (!buf)
+		return LOTA_ERR_INVALID_ARG;
+
+	memset(&req, 0, sizeof(req));
+	req.magic = LOTA_IPC_MAGIC;
+	req.version = LOTA_IPC_VERSION;
+	req.cmd = LOTA_IPC_CMD_GET_BOOT_EVIDENCE;
+
+	ret = send_request(client, &req, NULL, 0);
+	if (ret < 0)
+		return (ret == -ETIMEDOUT) ? LOTA_ERR_TIMEOUT :
+					     LOTA_ERR_PROTOCOL;
+
+	ret = recv_response(client, &resp, buf, buflen, &len);
+	if (ret == LOTA_ERR_BUFFER_TOO_SMALL)
+		return ret;
+	if (ret < 0)
+		return (ret == -ETIMEDOUT) ? LOTA_ERR_TIMEOUT :
+					     LOTA_ERR_PROTOCOL;
+	if (resp.result != LOTA_IPC_OK)
+		return ipc_result_to_error(resp.result);
+
+	if (written)
+		*written = len;
+	return LOTA_OK;
+}
+
 void lota_token_free(struct lota_token *token)
 {
 	if (!token)
