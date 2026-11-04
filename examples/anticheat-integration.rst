@@ -385,6 +385,16 @@ Worth being precise about, because it decides what you can build on it:
   are kept apart from that log. The bit can arrive a second or more after the
   loss, and what it is worth is your policy.
 
+* Whether Secure Boot was on, without a verifier of your own. The token
+  quotes the boot PCRs by their digest alone. ``lota_ac_boot_evidence()``
+  fetches their values and the PCR 7 events behind them, from the agent or
+  from the hook's ``lota-boot-evidence.bin``; send it with a heartbeat, and
+  ``lota_ac_verify_boot_evidence()`` reads Secure Boot from it with the info
+  ``lota_ac_verify_heartbeat()`` filled. Evidence that is not the boot the
+  quote signed is refused, so a host cannot edit it. The quoted PCRs hold
+  still for a boot, so one copy serves every heartbeat until the player
+  reboots.
+
 It does **not** prove the player is not cheating. It proves the platform
 underneath is what it claims to be, which removes the layer where a cheat
 would otherwise be invisible to you: a tampered kernel, an unsigned

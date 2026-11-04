@@ -24,6 +24,7 @@
 #include "lota_snapshot.h"
 #include "lota_server.h"
 #include "lota_token.h"
+#include "lota_wine_hook.h"
 #include "token_forge.h"
 
 static char test_dir[256];
@@ -1596,6 +1597,8 @@ static void test_last_error_strings(void)
 		LOTA_AC_ERR_TOKEN,
 		LOTA_AC_ERR_MEASURE,
 		LOTA_AC_ERR_SERIALIZE,
+		LOTA_AC_ERR_NO_EVIDENCE,
+		LOTA_AC_ERR_BAD_EVIDENCE,
 	};
 	const char *unknown = lota_ac_strerror(-9999);
 	size_t i, j;
@@ -2076,7 +2079,8 @@ static const int ac_error_codes[] = {
 	LOTA_AC_ERR_TOKEN_DIR,	     LOTA_AC_ERR_NOT_ATTESTED,
 	LOTA_AC_ERR_RATE_LIMITED,    LOTA_AC_ERR_STATUS,
 	LOTA_AC_ERR_TOKEN,	     LOTA_AC_ERR_MEASURE,
-	LOTA_AC_ERR_SERIALIZE,
+	LOTA_AC_ERR_SERIALIZE,	     LOTA_AC_ERR_NO_EVIDENCE,
+	LOTA_AC_ERR_BAD_EVIDENCE,
 };
 
 /* The errno values the measure helpers are documented to return */
@@ -2326,6 +2330,193 @@ static void test_verified_attested_host_is_trusted(void)
 		PASS();
 }
 
+/* Boot evidence */
+
+static void ac_evidence_path(char *out, size_t len)
+{
+	snprintf(out, len, "%s/%s", test_dir, LOTA_HOOK_BOOT_EVIDENCE_FILE);
+}
+
+static struct lota_ac_session *file_mode_session(void)
+{
+	struct lota_ac_config cfg = {
+		.struct_size = sizeof(cfg),
+		.provider = LOTA_AC_PROVIDER_EAC,
+		.game_id = "test-evidence",
+		.token_dir = test_dir,
+	};
+
+	write_mock_snapshot(test_dir, 0x07);
+	return lota_ac_init(&cfg);
+}
+
+static void test_boot_evidence_file_mode(void)
+{
+	char path[512];
+	uint8_t want[40], got[64];
+	size_t written = 0;
+	struct lota_ac_session *s;
+	int ret;
+
+	TEST("boot evidence: file mode hands back the hook's file");
+	for (size_t i = 0; i < sizeof(want); i++)
+		want[i] = (uint8_t)(0x40 + i);
+	ac_evidence_path(path, sizeof(path));
+	write_test_file(test_dir, LOTA_HOOK_BOOT_EVIDENCE_FILE, want,
+			sizeof(want));
+
+	s = file_mode_session();
+	if (!s) {
+		FAIL("init returned NULL");
+		return;
+	}
+	ret = lota_ac_boot_evidence(s, got, sizeof(got), &written);
+	if (ret != 0 || written != sizeof(want) ||
+	    memcmp(got, want, sizeof(want)) != 0)
+		FAIL("the evidence is not the file's");
+	else
+		PASS();
+
+	TEST("boot evidence: a buffer too small is refused");
+	ret = lota_ac_boot_evidence(s, got, 16, &written);
+	if (ret == -ENOSPC && lota_ac_last_error() == LOTA_AC_ERR_INVALID_ARG)
+		PASS();
+	else
+		FAIL("a short buffer was filled");
+
+	TEST("boot evidence: no file means no evidence");
+	unlink(path);
+	ret = lota_ac_boot_evidence(s, got, sizeof(got), &written);
+	if (ret == -ENODATA && lota_ac_last_error() == LOTA_AC_ERR_NO_EVIDENCE)
+		PASS();
+	else
+		FAIL("a missing file was not NO_EVIDENCE");
+
+	TEST("boot evidence: NULL arguments are refused");
+	if (lota_ac_boot_evidence(NULL, got, sizeof(got), &written) ==
+		    -EINVAL &&
+	    lota_ac_boot_evidence(s, NULL, sizeof(got), &written) == -EINVAL &&
+	    lota_ac_boot_evidence(s, got, sizeof(got), NULL) == -EINVAL)
+		PASS();
+	else
+		FAIL("a NULL argument was accepted");
+
+	lota_ac_shutdown(s);
+}
+
+static void test_boot_evidence_no_agent(void)
+{
+	struct lota_ac_config cfg = {
+		.struct_size = sizeof(cfg),
+		.provider = LOTA_AC_PROVIDER_EAC,
+		.game_id = "test-evidence-direct",
+		.direct = 1,
+		.socket_path = "/tmp/lota_nonexistent_socket_for_test",
+	};
+	struct lota_ac_session *s = lota_ac_init(&cfg);
+	uint8_t buf[64];
+	size_t written = 0;
+
+	TEST("boot evidence: direct mode without an agent");
+	if (!s) {
+		FAIL("init returned NULL");
+		return;
+	}
+	if (lota_ac_boot_evidence(s, buf, sizeof(buf), &written) == -ENOTCONN &&
+	    lota_ac_last_error() == LOTA_AC_ERR_NO_AGENT)
+		PASS();
+	else
+		FAIL("expected -ENOTCONN and NO_AGENT");
+	lota_ac_shutdown(s);
+}
+
+/* PCR 7 alone: a SecureBoot=1 measurement, then the separator */
+static size_t secure_boot_evidence(uint8_t *out, struct lota_ac_info *info)
+{
+	static const uint8_t guid[16] = {
+		0x61, 0xdf, 0xe4, 0x8b, 0xca, 0x93, 0xd2, 0x11,
+		0xaa, 0x0d, 0x00, 0xe0, 0x98, 0x03, 0x2b, 0x8c,
+	};
+	static const char name[] = "SecureBoot";
+	uint8_t var[64], digests[2][32], chain[64] = { 0 };
+	uint8_t separator[4] = { 0 };
+	size_t var_len = 0, off;
+
+	memcpy(var, guid, sizeof(guid));
+	var_len = sizeof(guid);
+	memset(var + var_len, 0, 16);
+	var[var_len] = (uint8_t)(sizeof(name) - 1);
+	var[var_len + 8] = 1;
+	var_len += 16;
+	for (size_t i = 0; i < sizeof(name) - 1; i++) {
+		var[var_len++] = (uint8_t)name[i];
+		var[var_len++] = 0;
+	}
+	var[var_len++] = 1;
+
+	test_sha256(var, var_len, digests[0]);
+	test_sha256(separator, sizeof(separator), digests[1]);
+	for (int i = 0; i < 2; i++) {
+		memcpy(chain + 32, digests[i], 32);
+		test_sha256(chain, sizeof(chain), chain);
+	}
+
+	write_le16(out, LOTA_BOOT_EVIDENCE_VERSION);
+	write_le16(out + 2, 2);
+	write_le32(out + 4, 1u << 7);
+	memcpy(out + 8, chain, 32);
+	off = 40;
+	memcpy(out + off, digests[0], 32);
+	write_le16(out + off + 32, (uint16_t)var_len);
+	memcpy(out + off + 34, var, var_len);
+	off += 34 + var_len;
+	memcpy(out + off, digests[1], 32);
+	write_le16(out + off + 32, 0);
+	off += 34;
+
+	memset(info, 0, sizeof(*info));
+	info->pcr_mask = 1u << 7;
+	test_sha256(chain, 32, info->pcr_digest);
+	return off;
+}
+
+static void test_verify_boot_evidence(void)
+{
+	struct lota_ac_info info;
+	uint8_t buf[256];
+	size_t len = secure_boot_evidence(buf, &info);
+	int sb = -1, ret;
+
+	TEST("verify boot evidence: Secure Boot reads on");
+	ret = lota_ac_verify_boot_evidence(&info, buf, len, &sb);
+	if (ret == LOTA_AC_ERR_OK && sb == 1)
+		PASS();
+	else
+		FAIL(lota_ac_strerror(ret));
+
+	TEST("verify boot evidence: another boot's digest is refused");
+	info.pcr_digest[0] ^= 1;
+	sb = -1;
+	ret = lota_ac_verify_boot_evidence(&info, buf, len, &sb);
+	info.pcr_digest[0] ^= 1;
+	if (ret == LOTA_AC_ERR_BAD_EVIDENCE && sb == 0 &&
+	    lota_ac_last_error() == LOTA_AC_ERR_BAD_EVIDENCE)
+		PASS();
+	else
+		FAIL("evidence of another boot passed");
+
+	TEST("verify boot evidence: NULL arguments are refused");
+	if (lota_ac_verify_boot_evidence(NULL, buf, len, &sb) ==
+		    LOTA_AC_ERR_INVALID_ARG &&
+	    lota_ac_verify_boot_evidence(&info, NULL, len, &sb) ==
+		    LOTA_AC_ERR_INVALID_ARG &&
+	    lota_ac_verify_boot_evidence(&info, buf, len, NULL) ==
+		    LOTA_AC_ERR_INVALID_ARG)
+		PASS();
+	else
+		FAIL("a NULL argument was accepted");
+}
+
 int main(void)
 {
 	printf("=== LOTA Anti-Cheat Compatibility Tests ===\n\n");
@@ -2388,6 +2579,11 @@ int main(void)
 	test_last_error_session_calls();
 	test_last_error_verify_heartbeat();
 	test_last_error_strings();
+
+	printf("\nBoot evidence:\n");
+	test_boot_evidence_file_mode();
+	test_boot_evidence_no_agent();
+	test_verify_boot_evidence();
 
 	printf("\nIntegration:\n");
 	test_integration_wine_artifacts_consumed_by_eac();

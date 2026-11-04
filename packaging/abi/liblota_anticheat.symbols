@@ -1,3 +1,4 @@
+lota_ac_boot_evidence@@LOTA_ANTICHEAT_1.0
 lota_ac_compute_expected_runtime_measure@@LOTA_ANTICHEAT_1.0
 lota_ac_compute_expected_runtime_measure_set@@LOTA_ANTICHEAT_1.0
 lota_ac_compute_game_binding_hash@@LOTA_ANTICHEAT_1.0
@@ -13,4 +14,5 @@ lota_ac_shutdown@@LOTA_ANTICHEAT_1.0
 lota_ac_state_str@@LOTA_ANTICHEAT_1.0
 lota_ac_strerror@@LOTA_ANTICHEAT_1.0
 lota_ac_tick@@LOTA_ANTICHEAT_1.0
+lota_ac_verify_boot_evidence@@LOTA_ANTICHEAT_1.0
 lota_ac_verify_heartbeat@@LOTA_ANTICHEAT_1.0

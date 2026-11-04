@@ -29,6 +29,7 @@
 #include "lota_server.h"
 #include "lota_wine_hook.h"
 #include "lota_snapshot.h"
+#include "lota_token.h"
 
 _Static_assert(sizeof(struct lota_ac_heartbeat_wire) == LOTA_AC_HEADER_SIZE,
 	       "heartbeat wire header size must match LOTA_AC_HEADER_SIZE");
@@ -133,6 +134,7 @@ struct lota_ac_session {
 	char status_path[512];
 	char token_path[512];
 	char snapshot_path[512];
+	char evidence_path[512];
 	int snapshot_warned;
 
 	/* cached token (wire format) */
@@ -1078,6 +1080,10 @@ const char *lota_ac_strerror(int err)
 		return "the token could not be serialised";
 	case LOTA_AC_ERR_RUNTIME_IMAGE:
 		return "the runtime measurement is not the expected one";
+	case LOTA_AC_ERR_NO_EVIDENCE:
+		return "the agent would not hand over boot evidence";
+	case LOTA_AC_ERR_BAD_EVIDENCE:
+		return "the boot evidence is not the boot the heartbeat quotes";
 	}
 
 	/*
@@ -1212,6 +1218,9 @@ struct lota_ac_session *lota_ac_init(const struct lota_ac_config *cfg)
 			snprintf(s->snapshot_path, sizeof(s->snapshot_path),
 				 "%s/%s", s->token_dir,
 				 LOTA_SNAPSHOT_FILE_NAME);
+			snprintf(s->evidence_path, sizeof(s->evidence_path),
+				 "%s/%s", s->token_dir,
+				 LOTA_HOOK_BOOT_EVIDENCE_FILE);
 			s->state = LOTA_AC_STATE_RUNNING;
 		}
 	}
@@ -1258,6 +1267,9 @@ int lota_ac_get_info(const struct lota_ac_session *session,
 	info->heartbeat_seq = session->heartbeat_seq;
 	info->lota_flags = session->lota_flags;
 	info->trusted = session->state == LOTA_AC_STATE_TRUSTED;
+	/* only a verified heartbeat says which boot it quotes */
+	info->pcr_mask = 0;
+	memset(info->pcr_digest, 0, sizeof(info->pcr_digest));
 
 	return ac_ret(0);
 }
@@ -1491,6 +1503,80 @@ int lota_ac_heartbeat(struct lota_ac_session *session, uint8_t *buf,
 	return 0;
 }
 
+static int boot_evidence_from_agent(struct lota_ac_session *session,
+				    uint8_t *buf, size_t buflen,
+				    size_t *written)
+{
+	int ret;
+
+	if (!session->client) {
+		ac_fail(session->connect_error ? session->connect_error :
+						 LOTA_AC_ERR_NO_AGENT);
+		return -ENOTCONN;
+	}
+
+	ret = lota_get_boot_evidence(session->client, buf, buflen, written);
+	switch (ret) {
+	case LOTA_OK:
+		return 0;
+	case LOTA_ERR_BUFFER_TOO_SMALL:
+		ac_fail(LOTA_AC_ERR_INVALID_ARG);
+		return -ENOSPC;
+	case LOTA_ERR_NO_TPM:
+		ac_fail(LOTA_AC_ERR_NO_EVIDENCE);
+		return -ENODATA;
+	case LOTA_ERR_RATE_LIMITED:
+		ac_fail(LOTA_AC_ERR_RATE_LIMITED);
+		return -EIO;
+	case LOTA_ERR_CONNECTION_FAILED:
+		ac_fail(LOTA_AC_ERR_NO_AGENT);
+		return -EIO;
+	default:
+		ac_fail(LOTA_AC_ERR_NO_EVIDENCE);
+		return -EIO;
+	}
+}
+
+/* the hook writes it only when the agent gave it */
+static int boot_evidence_from_file(struct lota_ac_session *session,
+				   uint8_t *buf, size_t buflen, size_t *written)
+{
+	uint8_t file[LOTA_BOOT_EVIDENCE_MAX_SIZE + 1];
+	ssize_t n = read_file_buf(session->evidence_path, file, sizeof(file));
+
+	if (n == -ENOENT || n == 0) {
+		ac_fail(LOTA_AC_ERR_NO_EVIDENCE);
+		return -ENODATA;
+	}
+	if (n < 0 || (size_t)n > LOTA_BOOT_EVIDENCE_MAX_SIZE) {
+		ac_fail(LOTA_AC_ERR_NO_EVIDENCE);
+		return n < 0 ? (int)n : -EIO;
+	}
+	if ((size_t)n > buflen) {
+		ac_fail(LOTA_AC_ERR_INVALID_ARG);
+		return -ENOSPC;
+	}
+
+	memcpy(buf, file, (size_t)n);
+	*written = (size_t)n;
+	return 0;
+}
+
+int lota_ac_boot_evidence(struct lota_ac_session *session, uint8_t *buf,
+			  size_t buflen, size_t *written)
+{
+	g_ac_error = LOTA_AC_ERR_OK;
+
+	if (!session || !buf || !written) {
+		ac_fail(LOTA_AC_ERR_INVALID_ARG);
+		return -EINVAL;
+	}
+
+	if (session->direct)
+		return boot_evidence_from_agent(session, buf, buflen, written);
+	return boot_evidence_from_file(session, buf, buflen, written);
+}
+
 /*
  * The server SDK's verdict in this library's terms.
  *
@@ -1519,6 +1605,8 @@ static int ac_error_from_server(int server_err)
 		return LOTA_AC_ERR_CRYPTO;
 	case LOTA_SERVER_ERR_RUNTIME_IMAGE:
 		return LOTA_AC_ERR_RUNTIME_IMAGE;
+	case LOTA_SERVER_ERR_BAD_EVIDENCE:
+		return LOTA_AC_ERR_BAD_EVIDENCE;
 	case LOTA_SERVER_ERR_BAD_TOKEN:
 	case LOTA_SERVER_ERR_ATTEST_PARSE:
 	case LOTA_SERVER_ERR_BUFFER:
@@ -1631,8 +1719,31 @@ int lota_ac_verify_heartbeat(
 	info->trusted = is_trusted(claims.flags, 0);
 	info->state = info->trusted ? LOTA_AC_STATE_TRUSTED :
 				      LOTA_AC_STATE_UNTRUSTED;
+	info->pcr_mask = claims.pcr_mask;
+	memset(info->pcr_digest, 0, sizeof(info->pcr_digest));
+	if (claims.pcr_digest_len == sizeof(info->pcr_digest))
+		memcpy(info->pcr_digest, claims.pcr_digest,
+		       sizeof(info->pcr_digest));
 
 	return ac_ret(0);
+}
+
+int lota_ac_verify_boot_evidence(const struct lota_ac_info *info,
+				 const uint8_t *evidence, size_t len,
+				 int *secure_boot)
+{
+	struct lota_server_claims claims;
+
+	if (!info || !evidence || !secure_boot)
+		return ac_ret(LOTA_AC_ERR_INVALID_ARG);
+
+	memset(&claims, 0, sizeof(claims));
+	claims.pcr_mask = info->pcr_mask;
+	memcpy(claims.pcr_digest, info->pcr_digest, sizeof(info->pcr_digest));
+	claims.pcr_digest_len = sizeof(info->pcr_digest);
+
+	return ac_ret(ac_error_from_server(lota_server_verify_boot_evidence(
+		&claims, evidence, len, secure_boot)));
 }
 
 const char *lota_ac_state_str(enum lota_ac_state state)
