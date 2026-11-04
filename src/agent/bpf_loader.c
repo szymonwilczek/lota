@@ -68,7 +68,7 @@
 #define STAT_MAPPED_WRITE_BLOCKED 20
 #define STAT_MAPPED_PIN_REFUSED 21
 #define STAT_EXEC_HISTORY_LOST 22
-#define STAT_INSTANCE_PEERS_LOST 23
+#define STAT_INSTANCE_ACTORS_LOST 23
 #define STAT_INSTANCE_STOPS_LOST 24
 
 struct protected_pid_entry {
@@ -999,7 +999,7 @@ int bpf_loader_init(struct bpf_loader_ctx *ctx)
 	ctx->exe_hash_slots_fd = -1;
 	ctx->mapped_exec_fd = -1;
 	ctx->exec_history_fd = -1;
-	ctx->instance_peers_fd = -1;
+	ctx->instance_actors_fd = -1;
 
 	libbpf_set_print(libbpf_print_fn);
 	libbpf_set_strict_mode(LIBBPF_STRICT_ALL);
@@ -1521,16 +1521,16 @@ int bpf_loader_load(struct bpf_loader_ctx *ctx, const char *bpf_obj_path,
 		}
 	}
 
-	/* optional: without it no peer of an instance is listed */
-	ctx->instance_peers_fd =
-		bpf_object__find_map_fd_by_name(ctx->obj, "instance_peers");
-	if (ctx->instance_peers_fd < 0) {
-		ctx->instance_peers_fd = -1;
+	/* optional: without it no actor of an instance is listed */
+	ctx->instance_actors_fd =
+		bpf_object__find_map_fd_by_name(ctx->obj, "instance_actors");
+	if (ctx->instance_actors_fd < 0) {
+		ctx->instance_actors_fd = -1;
 	} else {
-		err = harden_fd_cloexec(ctx->instance_peers_fd,
-					"instance_peers map");
+		err = harden_fd_cloexec(ctx->instance_actors_fd,
+					"instance_actors map");
 		if (err < 0) {
-			lota_err("Failed to harden instance_peers map fd: %s",
+			lota_err("Failed to harden instance_actors map fd: %s",
 				 strerror(-err));
 			goto err_close;
 		}
@@ -1747,7 +1747,7 @@ void bpf_loader_cleanup(struct bpf_loader_ctx *ctx)
 	ctx->exe_hash_slots_fd = -1;
 	ctx->mapped_exec_fd = -1;
 	ctx->exec_history_fd = -1;
-	ctx->instance_peers_fd = -1;
+	ctx->instance_actors_fd = -1;
 
 	/* the map took the pins with it */
 	free(ctx->pins);
@@ -2346,24 +2346,25 @@ int bpf_loader_exec_history(struct bpf_loader_ctx *ctx,
 	return 0;
 }
 
-static void instance_peer_owner(const void *key, uint32_t *tgid,
-				uint64_t *start_ticks)
+static void instance_actor_owner(const void *key, uint32_t *tgid,
+				 uint64_t *start_ticks)
 {
-	const struct lota_instance_peer_key *p = key;
+	const struct lota_instance_actor_key *p = key;
 
 	*tgid = p->root_tgid;
 	*start_ticks = p->root_start_ticks;
 }
 
-_Static_assert(sizeof(struct lota_instance_peer_key) <= OWNED_MAP_KEY_MAX,
-	       "instance peer key fits the walk buffer");
+_Static_assert(sizeof(struct lota_instance_actor_key) <= OWNED_MAP_KEY_MAX,
+	       "instance actor key fits the walk buffer");
 
-int bpf_loader_instance_peers(struct bpf_loader_ctx *ctx,
-			      int (*alive)(uint32_t tgid, uint64_t start_ticks),
-			      struct lota_instance_peer_key **keys,
-			      struct lota_instance_peer_val **vals, size_t *n)
+int bpf_loader_instance_actors(struct bpf_loader_ctx *ctx,
+			       int (*alive)(uint32_t tgid,
+					    uint64_t start_ticks),
+			       struct lota_instance_actor_key **keys,
+			       struct lota_instance_actor_val **vals, size_t *n)
 {
-	struct lota_instance_peer_val *v;
+	struct lota_instance_actor_val *v;
 	void *k, *raw_v;
 	size_t count;
 	int ret;
@@ -2373,12 +2374,12 @@ int bpf_loader_instance_peers(struct bpf_loader_ctx *ctx,
 	*keys = NULL;
 	*vals = NULL;
 	*n = 0;
-	if (ctx->instance_peers_fd < 0)
+	if (ctx->instance_actors_fd < 0)
 		return -ENOENT;
 
-	ret = read_owned_map(ctx->instance_peers_fd, LOTA_MAX_INSTANCE_PEERS,
+	ret = read_owned_map(ctx->instance_actors_fd, LOTA_MAX_INSTANCE_ACTORS,
 			     sizeof(**keys), sizeof(*v), &k, &raw_v, &count,
-			     instance_peer_owner, alive);
+			     instance_actor_owner, alive);
 	if (ret)
 		return ret;
 	v = raw_v;
@@ -2894,8 +2895,8 @@ int bpf_loader_get_extended_stats(struct bpf_loader_ctx *ctx,
 		  &stats->mapped_pin_refused);
 	read_stat(ctx->stats_fd, STAT_EXEC_HISTORY_LOST,
 		  &stats->exec_history_lost);
-	read_stat(ctx->stats_fd, STAT_INSTANCE_PEERS_LOST,
-		  &stats->instance_peers_lost);
+	read_stat(ctx->stats_fd, STAT_INSTANCE_ACTORS_LOST,
+		  &stats->instance_actors_lost);
 	read_stat(ctx->stats_fd, STAT_INSTANCE_STOPS_LOST,
 		  &stats->instance_stops_lost);
 	read_stat(ctx->stats_fd, STAT_EVENTS_YIELDED, &stats->events_yielded);

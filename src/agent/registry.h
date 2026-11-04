@@ -41,8 +41,8 @@ struct registry_process {
 	uint8_t image_digest[32];
 	size_t count;
 	struct lota_rt_object_record *objects;
-	size_t peer_count;
-	struct lota_ipc_registry_peer *peers;
+	size_t actor_count;
+	struct lota_ipc_registry_actor *actors;
 };
 
 struct registry {
@@ -58,7 +58,7 @@ static inline void registry_clear(struct registry *r)
 		return;
 	for (size_t i = 0; i < r->count; i++) {
 		free(r->procs[i].objects);
-		free(r->procs[i].peers);
+		free(r->procs[i].actors);
 	}
 	free(r->procs);
 	r->procs = NULL;
@@ -66,7 +66,7 @@ static inline void registry_clear(struct registry *r)
 }
 
 /*
- * Append a copy of @n objects mapped in @pid and @n_peers peers of its
+ * Append a copy of @n objects mapped in @pid and @n_actors actors of its
  * instance.
  * @digest is the token's entry, or NULL when the round put none there.
  * @flags carries LOTA_IPC_REGISTRY_* other than MEASURED.
@@ -76,15 +76,15 @@ static inline int registry_add(struct registry *r, uint32_t pid, uint32_t uid,
 			       uint16_t flags, const uint8_t *digest,
 			       const struct lota_rt_object_record *objs,
 			       size_t n,
-			       const struct lota_ipc_registry_peer *peers,
-			       size_t n_peers)
+			       const struct lota_ipc_registry_actor *actors,
+			       size_t n_actors)
 {
 	struct registry_process *procs;
 	struct registry_process *p;
 	struct lota_rt_object_record *copy = NULL;
-	struct lota_ipc_registry_peer *peer_copy = NULL;
+	struct lota_ipc_registry_actor *actor_copy = NULL;
 
-	if (!r || (n > 0 && !objs) || (n_peers > 0 && !peers))
+	if (!r || (n > 0 && !objs) || (n_actors > 0 && !actors))
 		return -EINVAL;
 
 	if (n > 0) {
@@ -93,19 +93,19 @@ static inline int registry_add(struct registry *r, uint32_t pid, uint32_t uid,
 			return -ENOMEM;
 		memcpy(copy, objs, n * sizeof(*copy));
 	}
-	if (n_peers > 0) {
-		peer_copy = calloc(n_peers, sizeof(*peer_copy));
-		if (!peer_copy) {
+	if (n_actors > 0) {
+		actor_copy = calloc(n_actors, sizeof(*actor_copy));
+		if (!actor_copy) {
 			free(copy);
 			return -ENOMEM;
 		}
-		memcpy(peer_copy, peers, n_peers * sizeof(*peer_copy));
+		memcpy(actor_copy, actors, n_actors * sizeof(*actor_copy));
 	}
 
 	procs = realloc(r->procs, (r->count + 1) * sizeof(*procs));
 	if (!procs) {
 		free(copy);
-		free(peer_copy);
+		free(actor_copy);
 		return -ENOMEM;
 	}
 	r->procs = procs;
@@ -116,8 +116,8 @@ static inline int registry_add(struct registry *r, uint32_t pid, uint32_t uid,
 	p->uid = uid;
 	p->count = n;
 	p->objects = copy;
-	p->peer_count = n_peers;
-	p->peers = peer_copy;
+	p->actor_count = n_actors;
+	p->actors = actor_copy;
 	p->flags = flags & (uint16_t)~LOTA_IPC_REGISTRY_MEASURED;
 	if (digest) {
 		p->flags |= LOTA_IPC_REGISTRY_MEASURED;
@@ -183,27 +183,27 @@ static inline void registry_entry(const struct lota_rt_object_record *o,
 }
 
 /*
- * The token's entry for a process whose list is @objs and @peers and flags
+ * The token's entry for a process whose list is @objs and @actors and flags
  * @flags, MEASURED included. Returns 0 or a negative errno.
  */
 static inline int registry_digest(uint16_t flags,
 				  const struct lota_rt_object_record *objs,
 				  size_t n,
-				  const struct lota_ipc_registry_peer *peers,
-				  size_t n_peers, uint8_t out[32])
+				  const struct lota_ipc_registry_actor *actors,
+				  size_t n_actors, uint8_t out[32])
 {
 	EVP_MD_CTX *md;
 	int ret;
 
-	if (n > UINT32_MAX || (n > 0 && !objs) || n_peers > UINT32_MAX ||
-	    (n_peers > 0 && !peers))
+	if (n > UINT32_MAX || (n > 0 && !objs) || n_actors > UINT32_MAX ||
+	    (n_actors > 0 && !actors))
 		return -EINVAL;
 	md = EVP_MD_CTX_new();
 	if (!md)
 		return -ENOMEM;
 
 	ret = lota_registry_digest_begin(md, flags, (uint32_t)n,
-					 (uint32_t)n_peers);
+					 (uint32_t)n_actors);
 	for (size_t i = 0; ret == 0 && i < n; i++) {
 		struct lota_ipc_registry_entry e;
 
@@ -211,8 +211,8 @@ static inline int registry_digest(uint16_t flags,
 		ret = lota_registry_digest_entry(md, &e, objs[i].entry.soname,
 						 objs[i].entry.path);
 	}
-	for (size_t i = 0; ret == 0 && i < n_peers; i++)
-		ret = lota_registry_digest_peer(md, &peers[i]);
+	for (size_t i = 0; ret == 0 && i < n_actors; i++)
+		ret = lota_registry_digest_actor(md, &actors[i]);
 	if (ret == 0)
 		ret = lota_registry_digest_final(md, out);
 	EVP_MD_CTX_free(md);
@@ -276,40 +276,42 @@ registry_merge_history(struct lota_rt_object_record *objs, size_t n, size_t cap,
 }
 
 _Static_assert(
-	sizeof(((struct lota_ipc_registry_peer *)0)->comm) ==
-			sizeof(((struct lota_instance_peer_val *)0)->comm) &&
-		sizeof(((struct lota_ipc_registry_peer *)0)->owner_comm) ==
-			sizeof(((struct lota_instance_peer_val *)0)->owner_comm),
+	sizeof(((struct lota_ipc_registry_actor *)0)->comm) ==
+			sizeof(((struct lota_instance_actor_val *)0)->comm) &&
+		sizeof(((struct lota_ipc_registry_actor *)0)->owner_comm) ==
+			sizeof(((struct lota_instance_actor_val *)0)
+				       ->owner_comm),
 	"the wire carries the kernel's task name");
-_Static_assert((int)LOTA_INSTANCE_PEER_CONNECT ==
-			       (int)LOTA_IPC_REGISTRY_PEER_CONNECT &&
-		       (int)LOTA_INSTANCE_PEER_SEND ==
-			       (int)LOTA_IPC_REGISTRY_PEER_SEND &&
-		       (int)LOTA_INSTANCE_PEER_PTRACE_READ ==
-			       (int)LOTA_IPC_REGISTRY_PEER_PTRACE_READ &&
-		       (int)LOTA_INSTANCE_PEER_PTRACE_ATTACH ==
-			       (int)LOTA_IPC_REGISTRY_PEER_PTRACE_ATTACH &&
-		       (int)LOTA_INSTANCE_PEER_SIGNAL ==
-			       (int)LOTA_IPC_REGISTRY_PEER_SIGNAL,
-	       "the wire carries the kernel's peer kind");
+_Static_assert((int)LOTA_INSTANCE_ACTOR_CONNECT ==
+			       (int)LOTA_IPC_REGISTRY_ACTOR_CONNECT &&
+		       (int)LOTA_INSTANCE_ACTOR_SEND ==
+			       (int)LOTA_IPC_REGISTRY_ACTOR_SEND &&
+		       (int)LOTA_INSTANCE_ACTOR_PTRACE_READ ==
+			       (int)LOTA_IPC_REGISTRY_ACTOR_PTRACE_READ &&
+		       (int)LOTA_INSTANCE_ACTOR_PTRACE_ATTACH ==
+			       (int)LOTA_IPC_REGISTRY_ACTOR_PTRACE_ATTACH &&
+		       (int)LOTA_INSTANCE_ACTOR_SIGNAL ==
+			       (int)LOTA_IPC_REGISTRY_ACTOR_SIGNAL,
+	       "the wire carries the kernel's actor kind");
 
 /*
- * Copy into @out, holding @cap, every peer of the instance whose root
+ * Copy into @out, holding @cap, every actor of the instance whose root
  * @tgid started at @start_ticks, as the wire carries it.
  * Returns the count; sets *@overflow when one did not fit.
  */
 static inline size_t
-registry_collect_peers(struct lota_ipc_registry_peer *out, size_t cap,
-		       const struct lota_instance_peer_key *keys,
-		       const struct lota_instance_peer_val *vals, size_t n_hist,
-		       uint32_t tgid, uint64_t start_ticks, int *overflow)
+registry_collect_actors(struct lota_ipc_registry_actor *out, size_t cap,
+			const struct lota_instance_actor_key *keys,
+			const struct lota_instance_actor_val *vals,
+			size_t n_hist, uint32_t tgid, uint64_t start_ticks,
+			int *overflow)
 {
 	size_t n = 0;
 
 	for (size_t i = 0; i < n_hist; i++) {
-		const struct lota_instance_peer_key *k = &keys[i];
-		const struct lota_instance_peer_val *v = &vals[i];
-		struct lota_ipc_registry_peer *p;
+		const struct lota_instance_actor_key *k = &keys[i];
+		const struct lota_instance_actor_val *v = &vals[i];
+		struct lota_ipc_registry_actor *p;
 
 		if (k->root_tgid != tgid || k->root_start_ticks != start_ticks)
 			continue;
@@ -321,11 +323,11 @@ registry_collect_peers(struct lota_ipc_registry_peer *out, size_t cap,
 		p = &out[n++];
 		memset(p, 0, sizeof(*p));
 		p->count = v->count;
-		p->start_ticks = k->peer_start_ticks;
+		p->start_ticks = k->actor_start_ticks;
 		p->exe_dev = makedev((unsigned int)LOTA_DEVT_MAJOR(v->exe_dev),
 				     (unsigned int)LOTA_DEVT_MINOR(v->exe_dev));
 		p->exe_ino = v->exe_ino;
-		p->tgid = k->peer_tgid;
+		p->tgid = k->actor_tgid;
 		p->uid = v->uid;
 		p->owner_tgid = k->owner_tgid;
 		p->kind = k->kind;
@@ -337,7 +339,7 @@ registry_collect_peers(struct lota_ipc_registry_peer *out, size_t cap,
 
 /*
  * Encode the page of @p starting at entry @start into @buf: objects, then
- * peers.
+ * actors.
  *
  * As many entries as fit in @cap follow the header.
  * Returns the number of entries written and sets *@len,
@@ -349,7 +351,7 @@ static inline int registry_encode_page(const struct registry_process *p,
 				       uint8_t *buf, size_t cap, size_t *len)
 {
 	struct lota_ipc_registry_page hdr;
-	size_t total = p ? p->count + p->peer_count : 0;
+	size_t total = p ? p->count + p->actor_count : 0;
 	size_t off = sizeof(hdr);
 	uint16_t count = 0;
 	size_t i;
@@ -382,15 +384,15 @@ static inline int registry_encode_page(const struct registry_process *p,
 		count++;
 	}
 
-	/* peers only once every object before them is in */
+	/* actors only once every object before them is in */
 	for (; i >= p->count && i < total && count < UINT16_MAX; i++) {
-		const struct lota_ipc_registry_peer *peer =
-			&p->peers[i - p->count];
+		const struct lota_ipc_registry_actor *actor =
+			&p->actors[i - p->count];
 
-		if (cap - off < sizeof(*peer))
+		if (cap - off < sizeof(*actor))
 			break;
-		memcpy(buf + off, peer, sizeof(*peer));
-		off += sizeof(*peer);
+		memcpy(buf + off, actor, sizeof(*actor));
+		off += sizeof(*actor);
 		count++;
 	}
 
@@ -401,7 +403,7 @@ static inline int registry_encode_page(const struct registry_process *p,
 	hdr.round = round;
 	hdr.pid = p->pid;
 	hdr.total = (uint32_t)p->count;
-	hdr.peer_total = (uint32_t)p->peer_count;
+	hdr.actor_total = (uint32_t)p->actor_count;
 	hdr.start = start;
 	hdr.count = count;
 	hdr.flags = p->flags;

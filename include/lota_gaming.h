@@ -643,8 +643,8 @@ int lota_poll_events(struct lota_client *client, int timeout_ms);
 #define LOTA_REGISTRY_MEASURED (1U << 0)
 /* an executable mapping went unrecorded; the list may miss an object */
 #define LOTA_REGISTRY_HISTORY_LOST (1U << 1)
-/* a peer went unrecorded; the list may miss a process that reached in */
-#define LOTA_REGISTRY_PEERS_LOST (1U << 2)
+/* an actor went unrecorded; the list may miss a process that reached in */
+#define LOTA_REGISTRY_ACTORS_LOST (1U << 2)
 /*
  * The image was executed under protection, so the list starts at its exec.
  * Without it the list starts when protection did: an object loaded and dropped
@@ -683,13 +683,13 @@ struct lota_registry_object {
 	char path[LOTA_REGISTRY_PATH_MAX];
 };
 
-/* How a peer reached the instance: from outside, through a unix socket */
-#define LOTA_REGISTRY_PEER_CONNECT 1 /* connected to a stream socket */
-#define LOTA_REGISTRY_PEER_SEND 2 /* sent a datagram */
+/* How an actor reached the instance: from outside, through a unix socket */
+#define LOTA_REGISTRY_ACTOR_CONNECT 1 /* connected to a stream socket */
+#define LOTA_REGISTRY_ACTOR_SEND 2 /* sent a datagram */
 /* from inside, one process of the instance to another */
-#define LOTA_REGISTRY_PEER_PTRACE_READ 3 /* read-mode ptrace access */
-#define LOTA_REGISTRY_PEER_PTRACE_ATTACH 4 /* ptrace, process_vm_*, mem */
-#define LOTA_REGISTRY_PEER_SIGNAL 5 /* sent a signal */
+#define LOTA_REGISTRY_ACTOR_PTRACE_READ 3 /* read-mode ptrace access */
+#define LOTA_REGISTRY_ACTOR_PTRACE_ATTACH 4 /* ptrace, process_vm_*, mem */
+#define LOTA_REGISTRY_ACTOR_SIGNAL 5 /* sent a signal */
 
 /*
  * One process that reached a process of the instance of a protected
@@ -697,15 +697,15 @@ struct lota_registry_object {
  * owns, or from inside, by a ptrace access or a signal.
  * The token's image digest binds every field.
  */
-struct lota_registry_peer {
+struct lota_registry_actor {
 	uint64_t count; /* times it did so */
-	uint64_t start_ticks; /* the peer's start time, in clock ticks */
-	uint64_t exe_dev; /* device of the peer's executable */
-	uint64_t exe_ino; /* inode of the peer's executable */
+	uint64_t start_ticks; /* the actor's start time, in clock ticks */
+	uint64_t exe_dev; /* device of the actor's executable */
+	uint64_t exe_ino; /* inode of the actor's executable */
 	uint32_t tgid;
 	uint32_t uid;
 	uint32_t owner_tgid; /* the instance process it reached */
-	uint32_t kind; /* LOTA_REGISTRY_PEER_* */
+	uint32_t kind; /* LOTA_REGISTRY_ACTOR_* */
 	char comm[16];
 	char owner_comm[16];
 };
@@ -721,8 +721,8 @@ struct lota_registry {
 	uint8_t image_digest[32];
 	uint32_t count;
 	struct lota_registry_object *objects;
-	uint32_t peer_count;
-	struct lota_registry_peer *peers;
+	uint32_t actor_count;
+	struct lota_registry_actor *actors;
 };
 
 /*
@@ -734,7 +734,7 @@ struct lota_registry {
  * Every object is listed, those the agent could not measure included.
  * The token binds the list: with LOTA_REGISTRY_MEASURED set, image_digest
  * is the token's protected_image_digests entry for @pid, and
- * lota_server_registry_digest() over the objects and peers reproduces it.
+ * lota_server_registry_digest() over the objects and actors reproduces it.
  * A relying party checks both before trusting the list.
  *
  * Returns: LOTA_OK, LOTA_ERR_NOT_PROTECTED for a process the last round

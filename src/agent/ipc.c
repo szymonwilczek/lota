@@ -1089,21 +1089,22 @@ static bool exec_history_read(struct lota_exec_history_key **keys,
  * Every process outside an instance that reached one of its unix sockets.
  * False when the record is missing or one was lost.
  */
-static bool instance_peers_read(struct lota_instance_peer_key **keys,
-				struct lota_instance_peer_val **vals, size_t *n)
+static bool instance_actors_read(struct lota_instance_actor_key **keys,
+				 struct lota_instance_actor_val **vals,
+				 size_t *n)
 {
 	struct bpf_extended_stats stats;
 	int ret;
 
-	ret = bpf_loader_instance_peers(&g_agent.bpf_ctx, exec_history_alive,
-					keys, vals, n);
+	ret = bpf_loader_instance_actors(&g_agent.bpf_ctx, exec_history_alive,
+					 keys, vals, n);
 	if (ret < 0) {
-		lota_warn("instance peers unavailable: %s", strerror(-ret));
+		lota_warn("instance actors unavailable: %s", strerror(-ret));
 		return false;
 	}
 	if (bpf_loader_get_extended_stats(&g_agent.bpf_ctx, &stats) < 0)
 		return false;
-	return stats.instance_peers_lost == 0;
+	return stats.instance_actors_lost == 0;
 }
 
 static int read_pid_real_uid(pid_t pid, uint32_t *out_uid);
@@ -1271,11 +1272,11 @@ static void handle_get_token(struct ipc_context *ctx, struct ipc_client *client,
 	struct lota_exec_history_val *hist_vals = NULL;
 	size_t n_hist = 0;
 	bool hist_lost = false;
-	struct lota_instance_peer_key *peer_keys = NULL;
-	struct lota_instance_peer_val *peer_vals = NULL;
-	struct lota_ipc_registry_peer *peers = NULL;
-	size_t n_peer_hist = 0;
-	bool peers_lost = false;
+	struct lota_instance_actor_key *actor_keys = NULL;
+	struct lota_instance_actor_val *actor_vals = NULL;
+	struct lota_ipc_registry_actor *actors = NULL;
+	size_t n_actor_hist = 0;
+	bool actors_lost = false;
 	size_t total_size;
 	uint64_t view_valid_until;
 	uint32_t view_flags;
@@ -1504,15 +1505,15 @@ static void handle_get_token(struct ipc_context *ctx, struct ipc_client *client,
 		image_digests =
 			calloc(runtime_pid_count, sizeof(*image_digests));
 		objs = calloc(REGISTRY_OBJECTS_MAX, sizeof(*objs));
-		peers = calloc(LOTA_IPC_REGISTRY_MAX_PEERS, sizeof(*peers));
-		if (!image_digests || !objs || !peers) {
+		actors = calloc(LOTA_IPC_REGISTRY_MAX_ACTORS, sizeof(*actors));
+		if (!image_digests || !objs || !actors) {
 			fail = true;
 			fail_code = LOTA_IPC_ERR_INTERNAL;
 			goto out;
 		}
 		hist_lost = !exec_history_read(&hist_keys, &hist_vals, &n_hist);
-		peers_lost = !instance_peers_read(&peer_keys, &peer_vals,
-						  &n_peer_hist);
+		actors_lost = !instance_actors_read(&actor_keys, &actor_vals,
+						    &n_actor_hist);
 		for (uint32_t i = 0; i < runtime_pid_count; i++) {
 			struct lota_runtime_measure_failure mfail;
 			struct lota_runtime_measure_coverage cov;
@@ -1524,9 +1525,9 @@ static void handle_get_token(struct ipc_context *ctx, struct ipc_client *client,
 			uint64_t start_ticks = 0;
 			uint16_t rflags = 0;
 			int lost = 0;
-			int peer_overflow = 0;
+			int actor_overflow = 0;
 			size_t n_objs = 0;
-			size_t n_peers;
+			size_t n_actors;
 			int rec;
 
 			/* unreadable owner: only root reads the entry */
@@ -1547,12 +1548,12 @@ static void handle_get_token(struct ipc_context *ctx, struct ipc_client *client,
 			if (hist_lost || lost)
 				rflags |= LOTA_IPC_REGISTRY_HISTORY_LOST;
 
-			n_peers = registry_collect_peers(
-				peers, LOTA_IPC_REGISTRY_MAX_PEERS, peer_keys,
-				peer_vals, n_peer_hist, runtime_pids[i],
-				start_ticks, &peer_overflow);
-			if (peers_lost || lost || peer_overflow)
-				rflags |= LOTA_IPC_REGISTRY_PEERS_LOST;
+			n_actors = registry_collect_actors(
+				actors, LOTA_IPC_REGISTRY_MAX_ACTORS,
+				actor_keys, actor_vals, n_actor_hist,
+				runtime_pids[i], start_ticks, &actor_overflow);
+			if (actors_lost || lost || actor_overflow)
+				rflags |= LOTA_IPC_REGISTRY_ACTORS_LOST;
 			if (bpf_loader_born_protected(&g_agent.bpf_ctx,
 						      runtime_pids[i],
 						      start_ticks) > 0)
@@ -1562,18 +1563,18 @@ static void handle_get_token(struct ipc_context *ctx, struct ipc_client *client,
 			if (ret >= 0) {
 				rec = registry_digest(
 					rflags | LOTA_IPC_REGISTRY_MEASURED,
-					objs, n_objs, peers, n_peers,
+					objs, n_objs, actors, n_actors,
 					image_digests[i]);
 				if (rec == 0)
 					rec = registry_add(
 						&next_registry, runtime_pids[i],
 						owner, rflags, image_digests[i],
-						objs, n_objs, peers, n_peers);
+						objs, n_objs, actors, n_actors);
 			} else {
 				rec = registry_add(&next_registry,
 						   runtime_pids[i], owner,
 						   rflags, NULL, objs, n_objs,
-						   peers, n_peers);
+						   actors, n_actors);
 			}
 
 			/* a digest the registry cannot back is not sent */
@@ -1866,9 +1867,9 @@ out:
 	free(objs);
 	free(hist_keys);
 	free(hist_vals);
-	free(peer_keys);
-	free(peer_vals);
-	free(peers);
+	free(actor_keys);
+	free(actor_vals);
+	free(actors);
 	registry_clear(&next_registry);
 	ipc_secure_bzero(&quote, sizeof(quote));
 

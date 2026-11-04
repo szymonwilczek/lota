@@ -4,14 +4,14 @@
  * Digest of one process's registry: the token's entry for that process.
  *
  *   registry_digest = SHA256("lota-runtime-registry:v1\0" ||
- *                            flags_LE16 || total_LE32 || peer_total_LE32 ||
+ *                            flags_LE16 || total_LE32 || actor_total_LE32 ||
  *                            for each object, in list order:
  *                              size_LE64 || dev_LE64 || ino_LE64 ||
  *                              road || digest_len ||
  *                              soname_len_LE16 || path_len_LE16 ||
  *                              entry_flags_LE16 ||
  *                              digest[digest_len] || soname || path ||
- *                            for each peer, in list order:
+ *                            for each actor, in list order:
  *                              count_LE64 || start_ticks_LE64 ||
  *                              exe_dev_LE64 || exe_ino_LE64 ||
  *                              tgid_LE32 || uid_LE32 || owner_tgid_LE32 ||
@@ -41,14 +41,14 @@
 
 static inline int lota_registry_digest_begin(EVP_MD_CTX *md, uint16_t flags,
 					     uint32_t total,
-					     uint32_t peer_total)
+					     uint32_t actor_total)
 {
 	static const uint8_t domain[] = "lota-runtime-registry:v1\0";
 	uint8_t hdr[10];
 
 	lota__write_le16(hdr, flags);
 	lota__write_le32(hdr + 2, total);
-	lota__write_le32(hdr + 6, peer_total);
+	lota__write_le32(hdr + 6, actor_total);
 	if (EVP_DigestInit_ex(md, EVP_sha256(), NULL) != 1 ||
 	    EVP_DigestUpdate(md, domain, sizeof(domain) - 1) != 1 ||
 	    EVP_DigestUpdate(md, hdr, sizeof(hdr)) != 1)
@@ -95,8 +95,8 @@ static inline void lota__registry_comm(uint8_t *b, const char *comm)
 }
 
 static inline int
-lota_registry_digest_peer(EVP_MD_CTX *md,
-			  const struct lota_ipc_registry_peer *p)
+lota_registry_digest_actor(EVP_MD_CTX *md,
+			   const struct lota_ipc_registry_actor *p)
 {
 	uint8_t b[80];
 

@@ -142,7 +142,7 @@ macro LOTA_REGISTRY_ROAD_VERITY                = 1
 macro LOTA_REGISTRY_ROAD_CONTENT               = 2
 macro LOTA_REGISTRY_MEASURED                   = 1
 macro LOTA_REGISTRY_HISTORY_LOST               = 2
-macro LOTA_REGISTRY_PEERS_LOST                 = 4
+macro LOTA_REGISTRY_ACTORS_LOST                = 4
 macro LOTA_REGISTRY_FROM_EXEC                  = 8
 macro LOTA_REGISTRY_OBJECT_UNMAPPED            = 1
 macro LOTA_REGISTRY_OBJECT_WRITABLE            = 2
@@ -157,12 +157,12 @@ struct lota_registry_object size=680 align=8
 	digest                           off=36 size=64
 	soname                           off=100 size=256
 	path                             off=356 size=320
-macro LOTA_REGISTRY_PEER_CONNECT               = 1
-macro LOTA_REGISTRY_PEER_SEND                  = 2
-macro LOTA_REGISTRY_PEER_PTRACE_READ           = 3
-macro LOTA_REGISTRY_PEER_PTRACE_ATTACH         = 4
-macro LOTA_REGISTRY_PEER_SIGNAL                = 5
-struct lota_registry_peer size=80 align=8
+macro LOTA_REGISTRY_ACTOR_CONNECT              = 1
+macro LOTA_REGISTRY_ACTOR_SEND                 = 2
+macro LOTA_REGISTRY_ACTOR_PTRACE_READ          = 3
+macro LOTA_REGISTRY_ACTOR_PTRACE_ATTACH        = 4
+macro LOTA_REGISTRY_ACTOR_SIGNAL               = 5
+struct lota_registry_actor size=80 align=8
 	count                            off=0 size=8
 	start_ticks                      off=8 size=8
 	exe_dev                          off=16 size=8
@@ -180,8 +180,8 @@ struct lota_registry size=80 align=8
 	image_digest                     off=16 size=32
 	count                            off=48 size=4
 	objects                          off=56 size=8
-	peer_count                       off=64 size=4
-	peers                            off=72 size=8
+	actor_count                      off=64 size=4
+	actors                           off=72 size=8
 macro LOTA_SERVER_MAX_PCR_DIGEST_SIZE          = 64
 macro LOTA_SERVER_MAX_TOKEN_AGE_SEC            = 300
 macro LOTA_SERVER_MAX_CLOCK_SKEW_SEC           = 60
@@ -222,7 +222,7 @@ struct lota_server_registry_module size=64 align=8
 	digest_len                       off=48 size=4
 	digest                           off=56 size=8
 macro LOTA_SERVER_REGISTRY_MAX_OBJECTS         = 512
-struct lota_server_registry_peer size=80 align=8
+struct lota_server_registry_actor size=80 align=8
 	count                            off=0 size=8
 	start_ticks                      off=8 size=8
 	exe_dev                          off=16 size=8
@@ -233,7 +233,7 @@ struct lota_server_registry_peer size=80 align=8
 	kind                             off=44 size=4
 	comm                             off=48 size=16
 	owner_comm                       off=64 size=16
-macro LOTA_SERVER_REGISTRY_MAX_PEERS           = 256
+macro LOTA_SERVER_REGISTRY_MAX_ACTORS          = 256
 macro LOTA_SNAPSHOT_FILE_NAME                  = "lota-attestation.bin"
 macro LOTA_SNAPSHOT_MAGIC                      = 1096044364
 macro LOTA_SNAPSHOT_VERSION                    = 1

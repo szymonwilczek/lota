@@ -204,10 +204,10 @@ struct lota_server_registry_module {
 
 /*
  * One process that reached a process of the instance, as the relying party
- * received it: every field of the lota_registry_peer lota_get_registry()
+ * received it: every field of the lota_registry_actor lota_get_registry()
  * reported, unchanged.
  */
-struct lota_server_registry_peer {
+struct lota_server_registry_actor {
 	uint64_t count;
 	uint64_t start_ticks;
 	uint64_t exe_dev;
@@ -215,24 +215,24 @@ struct lota_server_registry_peer {
 	uint32_t tgid;
 	uint32_t uid;
 	uint32_t owner_tgid;
-	uint32_t kind; /* LOTA_REGISTRY_PEER_* */
+	uint32_t kind; /* LOTA_REGISTRY_ACTOR_* */
 	char comm[16];
 	char owner_comm[16];
 };
 
-/* Most peers the agent lists for one process */
-#define LOTA_SERVER_REGISTRY_MAX_PEERS 256
+/* Most actors the agent lists for one process */
+#define LOTA_SERVER_REGISTRY_MAX_ACTORS 256
 
 /*
  * lota_server_registry_digest - Hash a registry into its image digest
  * @flags:      The registry's LOTA_REGISTRY_* flags
  * @mods:       The objects of one process, in the order they were listed
  * @count:      Number of objects
- * @peers:      The peers of the process, in the order they were listed
- * @peer_count: Number of peers
+ * @actors:      The actors of the process, in the order they were listed
+ * @actor_count: Number of actors
  * @out:        Receives the 32-byte image digest
  *
- * Hashes the flags, every object and every peer the way the agent does,
+ * Hashes the flags, every object and every actor the way the agent does,
  * objects without a digest included, so @out equals the token's
  * protected_image_digests entry for the process when the registry is the
  * one that round measured. A registry that hashes to anything else,
@@ -240,14 +240,14 @@ struct lota_server_registry_peer {
  * behind the token.
  *
  * Returns: LOTA_SERVER_OK, LOTA_SERVER_ERR_INVALID_ARG for a malformed
- *          object or peer, an unknown flag or more entries than a process
+ *          object or actor, an unknown flag or more entries than a process
  *          is listed with, or LOTA_SERVER_ERR_CRYPTO.
  */
 int lota_server_registry_digest(uint32_t flags,
 				const struct lota_server_registry_module *mods,
 				size_t count,
-				const struct lota_server_registry_peer *peers,
-				size_t peer_count, uint8_t out[32]);
+				const struct lota_server_registry_actor *actors,
+				size_t actor_count, uint8_t out[32]);
 
 #ifdef __cplusplus
 }

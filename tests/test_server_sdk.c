@@ -1126,11 +1126,11 @@ static void test_registry_digest(void)
 		{ "libz.so.1", "/usr/lib64/libz.so.1", 1024, 0x803, 18,
 		  LOTA_REGISTRY_ROAD_CONTENT, 0, sizeof(d1), d1 },
 	};
-	struct lota_server_registry_peer peers[] = {
+	struct lota_server_registry_actor actors[] = {
 		{ 3, 912345, 0x803, 99, 4242, 1000, 4100,
-		  LOTA_REGISTRY_PEER_CONNECT, "injector", "wineserver" },
+		  LOTA_REGISTRY_ACTOR_CONNECT, "injector", "wineserver" },
 		{ 1, 912400, 0x803, 100, 4250, 1000, 4100,
-		  LOTA_REGISTRY_PEER_SEND, "probe", "wineserver" },
+		  LOTA_REGISTRY_ACTOR_SEND, "probe", "wineserver" },
 	};
 	const uint32_t flags = LOTA_REGISTRY_MEASURED;
 	uint8_t buf[1024];
@@ -1170,7 +1170,7 @@ static void test_registry_digest(void)
 		off += plen;
 	}
 	for (size_t i = 0; i < 2; i++) {
-		const struct lota_server_registry_peer *q = &peers[i];
+		const struct lota_server_registry_actor *q = &actors[i];
 
 		put_le(buf, &off, q->count, 8);
 		put_le(buf, &off, q->start_ticks, 8);
@@ -1188,7 +1188,7 @@ static void test_registry_digest(void)
 
 	TEST("registry_digest hashes the documented layout");
 	if (EVP_Digest(buf, off, want, &wlen, EVP_sha256(), NULL) != 1 ||
-	    lota_server_registry_digest(flags, mods, 4, peers, 2, got) !=
+	    lota_server_registry_digest(flags, mods, 4, actors, 2, got) !=
 		    LOTA_SERVER_OK ||
 	    memcmp(want, got, sizeof(got)) != 0)
 		FAIL("digest differs from the documented layout");
@@ -1204,71 +1204,71 @@ static void test_registry_digest(void)
 		int ok = 1;
 
 		/* an object without a digest dropped */
-		ok &= lota_server_registry_digest(flags, cut, 3, peers, 2,
+		ok &= lota_server_registry_digest(flags, cut, 3, actors, 2,
 						  other) == LOTA_SERVER_OK &&
 		      memcmp(other, got, sizeof(got)) != 0;
 		/* reordered */
 		memcpy(swapped, mods, sizeof(mods));
 		swapped[0] = mods[3];
 		swapped[3] = mods[0];
-		ok &= lota_server_registry_digest(flags, swapped, 4, peers, 2,
+		ok &= lota_server_registry_digest(flags, swapped, 4, actors, 2,
 						  other) == LOTA_SERVER_OK &&
 		      memcmp(other, got, sizeof(got)) != 0;
 		/* an unmapped object passed off as mapped */
 		memcpy(edit, mods, sizeof(mods));
 		edit[2].flags = 0;
-		ok &= lota_server_registry_digest(flags, edit, 4, peers, 2,
+		ok &= lota_server_registry_digest(flags, edit, 4, actors, 2,
 						  other) == LOTA_SERVER_OK &&
 		      memcmp(other, got, sizeof(got)) != 0;
 		/* code another process could write passed off as fixed */
 		edit[2].flags = LOTA_REGISTRY_OBJECT_UNMAPPED;
-		ok &= lota_server_registry_digest(flags, edit, 4, peers, 2,
+		ok &= lota_server_registry_digest(flags, edit, 4, actors, 2,
 						  other) == LOTA_SERVER_OK &&
 		      memcmp(other, got, sizeof(got)) != 0;
 		/* a path rewritten */
 		memcpy(edit, mods, sizeof(mods));
 		edit[1].path = "/opt/title/other.exe";
-		ok &= lota_server_registry_digest(flags, edit, 4, peers, 2,
+		ok &= lota_server_registry_digest(flags, edit, 4, actors, 2,
 						  other) == LOTA_SERVER_OK &&
 		      memcmp(other, got, sizeof(got)) != 0;
 		/* a lost history hidden */
 		ok &= lota_server_registry_digest(
 			      flags | LOTA_REGISTRY_HISTORY_LOST, mods, 4,
-			      peers, 2, other) == LOTA_SERVER_OK &&
+			      actors, 2, other) == LOTA_SERVER_OK &&
 		      memcmp(other, got, sizeof(got)) != 0;
 		/* a late start dressed as a whole life */
 		ok &= lota_server_registry_digest(
-			      flags | LOTA_REGISTRY_FROM_EXEC, mods, 4, peers,
+			      flags | LOTA_REGISTRY_FROM_EXEC, mods, 4, actors,
 			      2, other) == LOTA_SERVER_OK &&
 		      memcmp(other, got, sizeof(got)) != 0;
-		/* a peer dropped */
-		ok &= lota_server_registry_digest(flags, mods, 4, peers, 1,
+		/* an actor dropped */
+		ok &= lota_server_registry_digest(flags, mods, 4, actors, 1,
 						  other) == LOTA_SERVER_OK &&
 		      memcmp(other, got, sizeof(got)) != 0;
-		/* a lost peer hidden */
+		/* a lost actor hidden */
 		ok &= lota_server_registry_digest(
-			      flags | LOTA_REGISTRY_PEERS_LOST, mods, 4, peers,
-			      2, other) == LOTA_SERVER_OK &&
+			      flags | LOTA_REGISTRY_ACTORS_LOST, mods, 4,
+			      actors, 2, other) == LOTA_SERVER_OK &&
 		      memcmp(other, got, sizeof(got)) != 0;
 		{
-			struct lota_server_registry_peer pe[2] = { peers[0],
-								   peers[1] };
+			struct lota_server_registry_actor pe[2] = { actors[0],
+								    actors[1] };
 
-			/* a peer passed off as another executable */
+			/* an actor passed off as another executable */
 			pe[0].exe_ino = 1;
 			ok &= lota_server_registry_digest(flags, mods, 4, pe, 2,
 							  other) ==
 				      LOTA_SERVER_OK &&
 			      memcmp(other, got, sizeof(got)) != 0;
 			/* fewer contacts claimed */
-			pe[0] = peers[0];
+			pe[0] = actors[0];
 			pe[0].count = 1;
 			ok &= lota_server_registry_digest(flags, mods, 4, pe, 2,
 							  other) ==
 				      LOTA_SERVER_OK &&
 			      memcmp(other, got, sizeof(got)) != 0;
 			/* bytes behind a name's NUL do not count */
-			pe[0] = peers[0];
+			pe[0] = actors[0];
 			pe[0].comm[14] = 'x';
 			ok &= lota_server_registry_digest(flags, mods, 4, pe, 2,
 							  other) ==
@@ -1278,7 +1278,7 @@ static void test_registry_digest(void)
 		/* NULL and empty path are one and the same */
 		memcpy(edit, mods, sizeof(mods));
 		edit[2].path = "";
-		ok &= lota_server_registry_digest(flags, edit, 4, peers, 2,
+		ok &= lota_server_registry_digest(flags, edit, 4, actors, 2,
 						  other) == LOTA_SERVER_OK &&
 		      memcmp(other, got, sizeof(got)) == 0;
 		if (ok)
@@ -1340,9 +1340,9 @@ static void test_registry_digest(void)
 			FAIL("accepted a malformed module");
 	}
 
-	TEST("registry_digest refuses malformed peers");
+	TEST("registry_digest refuses malformed actors");
 	{
-		struct lota_server_registry_peer bad = peers[0];
+		struct lota_server_registry_actor bad = actors[0];
 		int ok = lota_server_registry_digest(flags, mods, 4, NULL, 1,
 						     got) ==
 			 LOTA_SERVER_ERR_INVALID_ARG;
@@ -1351,8 +1351,8 @@ static void test_registry_digest(void)
 		ok = ok && lota_server_registry_digest(flags, mods, 4, &bad, 1,
 						       got) ==
 				   LOTA_SERVER_ERR_INVALID_ARG;
-		for (uint32_t kind = LOTA_REGISTRY_PEER_CONNECT;
-		     kind <= LOTA_REGISTRY_PEER_SIGNAL; kind++) {
+		for (uint32_t kind = LOTA_REGISTRY_ACTOR_CONNECT;
+		     kind <= LOTA_REGISTRY_ACTOR_SIGNAL; kind++) {
 			bad.kind = kind;
 			ok = ok && lota_server_registry_digest(flags, mods, 4,
 							       &bad, 1, got) ==
@@ -1362,24 +1362,24 @@ static void test_registry_digest(void)
 		ok = ok && lota_server_registry_digest(flags, mods, 4, &bad, 1,
 						       got) ==
 				   LOTA_SERVER_ERR_INVALID_ARG;
-		bad = peers[0];
+		bad = actors[0];
 		memset(bad.comm, 'a', sizeof(bad.comm));
 		ok = ok && lota_server_registry_digest(flags, mods, 4, &bad, 1,
 						       got) ==
 				   LOTA_SERVER_ERR_INVALID_ARG;
-		bad = peers[0];
+		bad = actors[0];
 		memset(bad.owner_comm, 'a', sizeof(bad.owner_comm));
 		ok = ok && lota_server_registry_digest(flags, mods, 4, &bad, 1,
 						       got) ==
 				   LOTA_SERVER_ERR_INVALID_ARG;
 		ok = ok && lota_server_registry_digest(
-				   flags, mods, 4, peers,
-				   LOTA_SERVER_REGISTRY_MAX_PEERS + 1,
+				   flags, mods, 4, actors,
+				   LOTA_SERVER_REGISTRY_MAX_ACTORS + 1,
 				   got) == LOTA_SERVER_ERR_INVALID_ARG;
 		if (ok)
 			PASS();
 		else
-			FAIL("accepted a malformed peer");
+			FAIL("accepted a malformed actor");
 	}
 }
 

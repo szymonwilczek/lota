@@ -748,34 +748,34 @@ struct lota_exec_history_val {
  * lets through: from outside, through a unix socket of the instance, by
  * connecting to it or sending to it; from inside, by a ptrace access or a
  * signal to another process of the instance.
- * Keyed by the instance root and its start time, the peer and its start
+ * Keyed by the instance root and its start time, the actor and its start
  * time, the process of the instance it reached and how.
  * Only the agent deletes, and only entries of a root that is gone.
  */
-#define LOTA_MAX_INSTANCE_PEERS 4096
+#define LOTA_MAX_INSTANCE_ACTORS 4096
 
-enum lota_instance_peer_kind {
-	LOTA_INSTANCE_PEER_CONNECT = 1, /* stream or seqpacket connect */
-	LOTA_INSTANCE_PEER_SEND = 2, /* datagram sent */
-	LOTA_INSTANCE_PEER_PTRACE_READ = 3, /* read-mode access, inside */
-	LOTA_INSTANCE_PEER_PTRACE_ATTACH = 4, /* attach-mode access, inside */
-	LOTA_INSTANCE_PEER_SIGNAL = 5, /* signal sent, inside */
+enum lota_instance_actor_kind {
+	LOTA_INSTANCE_ACTOR_CONNECT = 1, /* stream or seqpacket connect */
+	LOTA_INSTANCE_ACTOR_SEND = 2, /* datagram sent */
+	LOTA_INSTANCE_ACTOR_PTRACE_READ = 3, /* read-mode access, inside */
+	LOTA_INSTANCE_ACTOR_PTRACE_ATTACH = 4, /* attach-mode access, inside */
+	LOTA_INSTANCE_ACTOR_SIGNAL = 5, /* signal sent, inside */
 };
 
-struct lota_instance_peer_key {
+struct lota_instance_actor_key {
 	__u64 root_start_ticks;
-	__u64 peer_start_ticks;
+	__u64 actor_start_ticks;
 	__u32 root_tgid;
-	__u32 peer_tgid;
+	__u32 actor_tgid;
 	__u32 owner_tgid; /* process of the instance it reached */
-	__u32 kind; /* enum lota_instance_peer_kind */
+	__u32 kind; /* enum lota_instance_actor_kind */
 };
 
-struct lota_instance_peer_val {
+struct lota_instance_actor_val {
 	__u64 count; /* times it did so */
-	__u64 exe_dev; /* s_dev of the peer's executable, kernel encoding */
+	__u64 exe_dev; /* s_dev of the actor's executable, kernel encoding */
 	__u64 exe_ino;
-	__u32 uid; /* peer's real uid at its first reach */
+	__u32 uid; /* actor's real uid at its first reach */
 	__u32 pad;
 	char comm[LOTA_MAX_COMM_LEN];
 	char owner_comm[LOTA_MAX_COMM_LEN];

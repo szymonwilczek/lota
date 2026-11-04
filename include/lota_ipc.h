@@ -45,17 +45,17 @@ enum lota_ipc_cmd {
 	LOTA_IPC_CMD_GET_STATUS = 0x02, /* Attestation status */
 	LOTA_IPC_CMD_GET_TOKEN = 0x03, /* Signed attestation token */
 	LOTA_IPC_CMD_SUBSCRIBE =
-		0x04, /* Subscribe to status changes (requires privileged peer) */
+		0x04, /* Subscribe to status changes (requires privileged actor) */
 	LOTA_IPC_CMD_PROTECT_PID =
-		0x05, /* Hot-add protected PID (requires privileged peer) */
+		0x05, /* Hot-add protected PID (requires privileged actor) */
 	LOTA_IPC_CMD_UNPROTECT_PID =
-		0x06, /* Hot-remove protected PID (requires privileged peer) */
+		0x06, /* Hot-remove protected PID (requires privileged actor) */
 	LOTA_IPC_CMD_SHUTDOWN =
-		0x07, /* Graceful agent self-shutdown (requires privileged peer) */
+		0x07, /* Graceful agent self-shutdown (requires privileged actor) */
 	LOTA_IPC_CMD_SET_PROFILE =
 		0x08, /* Bind this connection to one publisher profile */
 	LOTA_IPC_CMD_SYNC_ATTEST =
-		0x09, /* Exchange state with the attestation loop (agent peer only) */
+		0x09, /* Exchange state with the attestation loop (agent actor only) */
 	LOTA_IPC_CMD_TERMINATE_PROTECTED =
 		0x0A, /* End a protected process on behalf of its owner */
 	LOTA_IPC_CMD_GET_REGISTRY =
@@ -412,7 +412,7 @@ struct lota_ipc_notify {
  * the enforcement policy digest and the boot state a title asks about.
  * What it does not have is a verifier's verdict.
  *
- * So the attestation loop connects to that socket as a local peer and trades what
+ * So the attestation loop connects to that socket as a local actor and trades what
  * each side knows in one round trip: it sends the verdict it holds for every
  * publisher, and reads back which publishers a title is currently playing for
  * and which one a title has asked this host to enrol with.
@@ -506,7 +506,7 @@ struct lota_ipc_terminate_response {
  * GET_REGISTRY request payload
  *
  * Asks for what the last token round found in @pid, from entry @start on:
- * the code objects, then the peers.
+ * the code objects, then the actors.
  * Answered for the owner of the process or root.
  */
 struct lota_ipc_registry_request {
@@ -519,7 +519,7 @@ struct lota_ipc_registry_request {
 /* an executable mapping of @pid went unrecorded; the list may miss one */
 #define LOTA_IPC_REGISTRY_HISTORY_LOST (1U << 1)
 /* a reach into a socket of @pid's instance went unrecorded */
-#define LOTA_IPC_REGISTRY_PEERS_LOST (1U << 2)
+#define LOTA_IPC_REGISTRY_ACTORS_LOST (1U << 2)
 /* @pid's image was executed under protection: the list starts at its exec */
 #define LOTA_IPC_REGISTRY_FROM_EXEC (1U << 3)
 
@@ -538,19 +538,19 @@ struct lota_ipc_registry_request {
 
 /* objects listed for one process: those mapped, then those unmapped */
 #define LOTA_IPC_REGISTRY_MAX_OBJECTS 512
-/* peers listed for one process; more set LOTA_IPC_REGISTRY_PEERS_LOST */
-#define LOTA_IPC_REGISTRY_MAX_PEERS 256
+/* actors listed for one process; more set LOTA_IPC_REGISTRY_ACTORS_LOST */
+#define LOTA_IPC_REGISTRY_MAX_ACTORS 256
 
 /*
  * GET_REGISTRY response payload
  *
  * A page header followed by @count entries. Entry i of the listing is
- * object i while i < @total and peer i - @total after it.
+ * object i while i < @total and actor i - @total after it.
  * @round names the measurement round the list comes from:
  * pages of one listing that carry different rounds do not belong together.
  *
  * The token binds the list. With LOTA_IPC_REGISTRY_MEASURED set,
- * hashing @flags, @total, @peer_total, every object and every peer in
+ * hashing @flags, @total, @actor_total, every object and every actor in
  * order as lota_registry_digest.h does yields @image_digest, the token's
  * entry for @pid.
  */
@@ -558,7 +558,7 @@ struct lota_ipc_registry_page {
 	uint64_t round;
 	uint32_t pid;
 	uint32_t total; /* objects the round found in @pid */
-	uint32_t peer_total; /* peers of @pid's instance */
+	uint32_t actor_total; /* actors of @pid's instance */
 	uint32_t start;
 	uint16_t count; /* entries in this page */
 	uint16_t flags; /* LOTA_IPC_REGISTRY_* */
@@ -588,17 +588,17 @@ struct lota_ipc_registry_entry {
 	uint8_t digest[64];
 } __attribute__((packed));
 
-/* How a peer reached the instance */
-enum lota_ipc_registry_peer_kind {
+/* How an actor reached the instance */
+enum lota_ipc_registry_actor_kind {
 	/* from outside, through a unix socket of the instance */
-	LOTA_IPC_REGISTRY_PEER_CONNECT = 1, /* stream or seqpacket connect */
-	LOTA_IPC_REGISTRY_PEER_SEND = 2, /* datagram sent */
+	LOTA_IPC_REGISTRY_ACTOR_CONNECT = 1, /* stream or seqpacket connect */
+	LOTA_IPC_REGISTRY_ACTOR_SEND = 2, /* datagram sent */
 	/* from inside, one process of the instance to another */
-	LOTA_IPC_REGISTRY_PEER_PTRACE_READ = 3, /* read-mode ptrace access */
-	LOTA_IPC_REGISTRY_PEER_PTRACE_ATTACH =
+	LOTA_IPC_REGISTRY_ACTOR_PTRACE_READ = 3, /* read-mode ptrace access */
+	LOTA_IPC_REGISTRY_ACTOR_PTRACE_ATTACH =
 		4, /* attach-mode ptrace access */
-	LOTA_IPC_REGISTRY_PEER_SIGNAL = 5, /* signal sent */
-	LOTA_IPC_REGISTRY_PEER_KIND_MAX = LOTA_IPC_REGISTRY_PEER_SIGNAL,
+	LOTA_IPC_REGISTRY_ACTOR_SIGNAL = 5, /* signal sent */
+	LOTA_IPC_REGISTRY_ACTOR_KIND_MAX = LOTA_IPC_REGISTRY_ACTOR_SIGNAL,
 };
 
 /*
@@ -607,15 +607,15 @@ enum lota_ipc_registry_peer_kind {
  * on; or from inside, by a ptrace access or a signal.
  * The command names are NUL-terminated and zero-padded.
  */
-struct lota_ipc_registry_peer {
+struct lota_ipc_registry_actor {
 	uint64_t count; /* times it did so */
-	uint64_t start_ticks; /* the peer's, /proc/<tgid>/stat field 22 */
-	uint64_t exe_dev; /* makedev() of the peer executable's device */
-	uint64_t exe_ino; /* 0 when the peer had no executable */
-	uint32_t tgid; /* the peer */
-	uint32_t uid; /* the peer's real uid at its first reach */
+	uint64_t start_ticks; /* the actor's, /proc/<tgid>/stat field 22 */
+	uint64_t exe_dev; /* makedev() of the actor executable's device */
+	uint64_t exe_ino; /* 0 when the actor had no executable */
+	uint32_t tgid; /* the actor */
+	uint32_t uid; /* the actor's real uid at its first reach */
 	uint32_t owner_tgid; /* the process of the instance it reached */
-	uint32_t kind; /* enum lota_ipc_registry_peer_kind */
+	uint32_t kind; /* enum lota_ipc_registry_actor_kind */
 	char comm[16];
 	char owner_comm[16];
 } __attribute__((packed));
