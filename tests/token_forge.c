@@ -178,12 +178,12 @@ uint8_t *forge_tpms_attest_mixed_banks(const uint8_t *extra_data,
 int forge_quote_nonce(uint64_t valid_until, uint32_t flags, uint32_t pcr_mask,
 		      const uint8_t nonce[32], const uint8_t policy_digest[32],
 		      const uint8_t runtime_protect_digest[32],
-		      uint64_t runtime_protect_epoch, uint8_t out[32])
+		      uint64_t runtime_protect_epoch, uint64_t stopped_ms,
+		      uint8_t out[32])
 {
-	return lota_compute_token_quote_nonce(valid_until, flags, pcr_mask,
-					      nonce, policy_digest,
-					      runtime_protect_digest,
-					      runtime_protect_epoch, out);
+	return lota_compute_token_quote_nonce(
+		valid_until, flags, pcr_mask, nonce, policy_digest,
+		runtime_protect_digest, runtime_protect_epoch, stopped_ms, out);
 }
 
 /*
@@ -249,7 +249,7 @@ int forge_token(EVP_PKEY *key, uint16_t hash_alg, const EVP_MD *md,
 						runtime_digest) != 0)
 		return LOTA_ERR_INVALID_ARG;
 	if (forge_quote_nonce(valid_until, flags, pcr_mask, nonce,
-			      policy_digest, runtime_digest, 0,
+			      policy_digest, runtime_digest, 0, 0,
 			      exp_nonce) != 0) {
 		return LOTA_ERR_INVALID_ARG;
 	}
@@ -341,7 +341,8 @@ int forge_token_protected(EVP_PKEY *key, uint64_t valid_until, uint32_t flags,
 		    runtime_digest) != 0)
 		return LOTA_ERR_INVALID_ARG;
 	if (forge_quote_nonce(valid_until, flags, pcr_mask, nonce,
-			      policy_digest, runtime_digest, 0, exp_nonce) != 0)
+			      policy_digest, runtime_digest, 0, 0,
+			      exp_nonce) != 0)
 		return LOTA_ERR_INVALID_ARG;
 
 	attest = build_fake_tpms_attest(exp_nonce, 32, pcr_mask, pcr_digest,

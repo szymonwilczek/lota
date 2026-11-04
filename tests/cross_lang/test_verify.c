@@ -97,6 +97,11 @@ int main(void)
 	}
 
 	printf("[C] Verify OK!\n");
+	if (claims.stopped_ms != 4242) {
+		fprintf(stderr, "[C] stopped_ms: got %llu\n",
+			(unsigned long long)claims.stopped_ms);
+		return 1;
+	}
 	printf("[C]   flags       = 0x%X\n", claims.flags);
 	printf("[C]   pcr_mask    = 0x%X\n", claims.pcr_mask);
 	printf("[C]   pcr_digest  = %zu bytes", claims.pcr_digest_len);

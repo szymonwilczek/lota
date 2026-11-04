@@ -358,7 +358,15 @@ Worth being precise about, because it decides what you can build on it:
   however the agent ended, and moving the agent to another cgroup ends both, so
   a session that goes quiet together with its agent is the design at work rather
   than evidence of anything. A session that goes quiet alone may be a stalled
-  title: LOTA does not report a stall, so your own heartbeat is what shows it.
+  title, which the next item can tell you once it answers again.
+
+* How long the title stood. ``stopped_ms`` is the time any thread of its
+  instance stood stopped: a frozen cgroup, job control, a tracer inside the
+  instance. It only grows while the process at the root of the instance lives,
+  so compare two tokens. A suspend leaves its own freeze in it, not the sleep.
+  LOTA holds no threshold: what gap is too long is your policy. A process in no
+  instance reads 0, and so does one whose root has ended. A title slowed down
+  rather than stopped does not show here.
 
 * Whether the agent's log is whole. ``LOTA_FLAG_EVENTS_LOST`` says the kernel
   left an event out of it: the agent did not keep up, or something produced more

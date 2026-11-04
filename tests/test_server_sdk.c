@@ -589,6 +589,40 @@ static void test_verify_tampered_flags(EVP_PKEY *key, const uint8_t *aik_der,
 	}
 }
 
+static void test_verify_tampered_stopped_ms(EVP_PKEY *key,
+					    const uint8_t *aik_der,
+					    size_t aik_len)
+{
+	TEST("lota_server_verify_token - tampered stopped_ms → NONCE_FAIL");
+
+	uint64_t now = (uint64_t)time(NULL);
+	uint8_t nonce[32] = { 0 };
+
+	uint8_t tokbuf[2048];
+	size_t tok_written = 0;
+	int ret = forge_token_sha256(key, now + LOTA_SERVER_MAX_TOKEN_AGE_SEC,
+				     0x07, nonce, tokbuf, sizeof(tokbuf),
+				     &tok_written);
+	if (ret != LOTA_OK) {
+		FAIL("build_full_token failed");
+		return;
+	}
+
+	/* a client hiding a stall would clear this field (offset 144) */
+	tokbuf[144] = 0xFF;
+
+	struct lota_server_claims claims;
+	ret = lota_server_verify_token(tokbuf, tok_written, aik_der, aik_len,
+				       nonce, &claims);
+	if (ret == LOTA_SERVER_ERR_NONCE_FAIL) {
+		PASS();
+	} else {
+		char msg[64];
+		snprintf(msg, sizeof(msg), "expected NONCE_FAIL, got %d", ret);
+		FAIL(msg);
+	}
+}
+
 static void test_verify_tampered_pcr_mask(EVP_PKEY *key, const uint8_t *aik_der,
 					  size_t aik_len)
 {
@@ -658,7 +692,7 @@ static void test_verify_mixed_pcr_banks_rejected(EVP_PKEY *key,
 	}
 
 	if (forge_quote_nonce(valid_until, flags, pcr_mask_union, nonce,
-			      policy_digest, runtime_digest, 0,
+			      policy_digest, runtime_digest, 0, 0,
 			      expected_nonce) != 0) {
 		FAIL("expected nonce compute failed");
 		return;
@@ -1385,6 +1419,7 @@ int main(void)
 	test_verify_wrong_nonce(key, aik_der, aik_len);
 	test_verify_bad_signature(key, aik_der, aik_len);
 	test_verify_tampered_flags(key, aik_der, aik_len);
+	test_verify_tampered_stopped_ms(key, aik_der, aik_len);
 	test_verify_tampered_pcr_mask(key, aik_der, aik_len);
 	test_verify_tampered_image_digest_is_named(key, aik_der, aik_len);
 	test_verify_mixed_pcr_banks_rejected(key, aik_der, aik_len);

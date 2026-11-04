@@ -1245,7 +1245,7 @@ static void handle_get_status(struct ipc_context *ctx,
  * The TPM signs over the token quote nonce:
  *   SHA256(valid_until_LE || flags_LE || pcr_mask_LE || client_nonce ||
  *          policy_digest || runtime_protect_digest ||
- *          runtime_protect_epoch_LE)
+ *          runtime_protect_epoch_LE || stopped_ms_LE)
  * binding the signature to both the token metadata and the client's challenge.
  */
 static void handle_get_token(struct ipc_context *ctx, struct ipc_client *client,
@@ -1261,6 +1261,7 @@ static void handle_get_token(struct ipc_context *ctx, struct ipc_client *client,
 	uint8_t *data_ptr;
 	uint32_t *runtime_pids = NULL;
 	uint32_t runtime_pid_count = 0;
+	uint64_t stopped_ms = 0;
 	uint16_t pid_list_size = 0;
 	uint8_t (*image_digests)[32] = NULL;
 	size_t image_list_size = 0;
@@ -1738,11 +1739,22 @@ static void handle_get_token(struct ipc_context *ctx, struct ipc_client *client,
 	else
 		memset(token->client_nonce, 0, 32);
 
+	ret = bpf_loader_instance_stopped_ms(
+		&g_agent.bpf_ctx, (uint32_t)client->peer_pid, &stopped_ms);
+	if (ret < 0) {
+		lota_err("stopped time of PID %d unreadable: %s",
+			 client->peer_pid, strerror(-ret));
+		fail = true;
+		fail_code = LOTA_IPC_ERR_INTERNAL;
+		goto out;
+	}
+	token->stopped_ms = stopped_ms;
+
 	ret = lota_compute_token_quote_nonce(
 		token->valid_until, token->flags, token->pcr_mask,
 		token->client_nonce, token->policy_digest,
 		token->runtime_protect_digest, token->runtime_protect_epoch,
-		binding_nonce);
+		token->stopped_ms, binding_nonce);
 	if (ret < 0) {
 		lota_err("token quote nonce computation failed: %s",
 			 strerror(-ret));

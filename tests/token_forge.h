@@ -55,7 +55,8 @@ uint8_t *forge_tpms_attest_mixed_banks(const uint8_t *extra_data,
 int forge_quote_nonce(uint64_t valid_until, uint32_t flags, uint32_t pcr_mask,
 		      const uint8_t nonce[32], const uint8_t policy_digest[32],
 		      const uint8_t runtime_protect_digest[32],
-		      uint64_t runtime_protect_epoch, uint8_t out[32]);
+		      uint64_t runtime_protect_epoch, uint64_t stopped_ms,
+		      uint8_t out[32]);
 
 uint8_t *forge_sign(EVP_PKEY *pkey, const EVP_MD *md, const uint8_t *data,
 		    size_t data_len, size_t *sig_len);

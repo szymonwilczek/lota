@@ -65,7 +65,7 @@ func mintToken(t *testing.T, opts tokenOpts) []byte {
 	}
 
 	quoteNonce := verifysdk.ComputeTokenQuoteNonce(validUntil, opts.flags,
-		pcrMask, opts.nonce, policyDigest, runtimeDigest, 0)
+		pcrMask, opts.nonce, policyDigest, runtimeDigest, 0, 0)
 	attest := fakeTPMSAttest(quoteNonce[:], pcrMask, pcrDigest)
 
 	hash := sha256.Sum256(attest)
@@ -79,7 +79,7 @@ func mintToken(t *testing.T, opts tokenOpts) []byte {
 	}
 
 	token, err := verifysdk.SerializeToken(validUntil, opts.flags, opts.nonce,
-		0x0014, 0x000B, pcrMask, policyDigest, runtimeDigest, 0, nil, nil, attest, sig)
+		0x0014, 0x000B, pcrMask, policyDigest, runtimeDigest, 0, 0, nil, nil, attest, sig)
 	if err != nil {
 		t.Fatalf("serialize: %v", err)
 	}

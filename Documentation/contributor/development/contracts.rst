@@ -499,6 +499,17 @@ what that means. A record the kernel could not keep, or a list longer than
 below ``total`` are objects, the next ``peer_total`` are peers, and the pages
 hand them out in that order.
 
+A token also says how long the caller's instance stood stopped, in
+``stopped_ms``. A frozen cgroup, job control and a ptrace stop all pass through
+``cgroup_enter_frozen()`` and ``cgroup_leave_frozen()`` in the thread that
+stands, so one pair of programs covers the three, and ``instance_stops`` on the
+root task holds the result. The clock runs while at least one thread stands, not
+once per thread, and it is ``bpf_ktime_get_ns()``, which skips a suspend. The
+agent adds the period still open when it reads. Withdrawing protection from a
+root closes its open period and keeps the total, because a thread of an
+unprotected process leaves its stop unseen. The value never falls while the root
+lives.
+
 The token binds the list. Hashing the page's ``flags``, ``total`` and
 ``peer_total`` and every entry in order as ``lota_registry_digest.h`` does
 yields the page's
@@ -560,7 +571,7 @@ value is what ties every other field in the token to the signature:
 
    extraData = SHA256(valid_until || flags || pcr_mask || nonce ||
                       policy_digest || runtime_protect_digest ||
-                      runtime_protect_epoch)
+                      runtime_protect_epoch || stopped_ms)
 
 Integers are little-endian. Three implementations must agree on it byte for
 byte: the agent that builds the quote

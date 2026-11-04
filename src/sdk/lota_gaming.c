@@ -919,6 +919,7 @@ int lota_get_token(struct lota_client *client, const uint8_t *nonce,
 	       sizeof(token->runtime_protect_digest));
 	token->runtime_protect_epoch = ipc_token_hdr.runtime_protect_epoch;
 	token->runtime_protect_version = ipc_token_hdr.runtime_protect_version;
+	token->stopped_ms = ipc_token_hdr.stopped_ms;
 	token->protect_pid_count = ipc_token_hdr.protect_pid_count;
 
 	if (ipc_token_hdr.pid_list_size !=
@@ -1104,6 +1105,7 @@ int lota_token_serialize(const struct lota_token *token, uint8_t *buf,
 	wire.attest_size = htole16((uint16_t)token->attest_size);
 	wire.sig_size = htole16((uint16_t)token->signature_len);
 	wire.runtime_protect_version = htole16(token->runtime_protect_version);
+	wire.stopped_ms = htole64(token->stopped_ms);
 
 	/* write header */
 	memcpy(buf, &wire, sizeof(wire));

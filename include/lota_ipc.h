@@ -275,7 +275,7 @@ struct lota_ipc_token_request {
  * - Recompute runtime_protect_digest from protected_pids[]
  * - Compute expected_nonce = SHA256(valid_until_LE || flags_LE || pcr_mask_LE
  * || client_nonce || policy_digest || runtime_protect_digest ||
- * runtime_protect_epoch_LE)
+ * runtime_protect_epoch_LE || stopped_ms_LE)
  * - Verify TPM signature over attest_data using AIK public key
  * - Parse attest_data, check extraData == expected_nonce
  * - Check PCR digest in attest_data matches expected policy
@@ -298,6 +298,7 @@ struct lota_ipc_token {
 					   id */
 	uint16_t pid_list_size; /* Bytes for protected_pids[] */
 	uint16_t runtime_protect_version; /* 1 = PID set + image digests */
+	uint64_t stopped_ms; /* Time the caller's instance stood stopped */
 
 	/*
 	 * Variable-length data follows:

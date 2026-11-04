@@ -381,6 +381,7 @@ static int parse_wire_header(const uint8_t *data, size_t len,
 	hdr->attest_size = read_le16(data + 138);
 	hdr->sig_size = read_le16(data + 140);
 	hdr->runtime_protect_version = read_le16(data + 142);
+	hdr->stopped_ms = read_le64(data + 144);
 
 	if (hash_alg_digest_len(hdr->hash_alg) == 0)
 		return LOTA_SERVER_ERR_BAD_TOKEN;
@@ -517,12 +518,13 @@ int lota_server_verify_token(const uint8_t *token_data, size_t token_len,
 
 	/* verify nonce binding: extraData ==
 	 * SHA256(valid_until||flags||pcr_mask||nonce||policy_digest||
-	 * runtime_protect_digest||runtime_protect_epoch) */
+	 * runtime_protect_digest||runtime_protect_epoch||stopped_ms) */
 	uint8_t computed_nonce[32];
 	if (lota_compute_token_quote_nonce(
 		    hdr.valid_until, hdr.flags, hdr.pcr_mask, hdr.nonce,
 		    hdr.policy_digest, hdr.runtime_protect_digest,
-		    hdr.runtime_protect_epoch, computed_nonce) != 0) {
+		    hdr.runtime_protect_epoch, hdr.stopped_ms,
+		    computed_nonce) != 0) {
 		return LOTA_SERVER_ERR_NONCE_FAIL;
 	}
 
@@ -547,6 +549,7 @@ int lota_server_verify_token(const uint8_t *token_data, size_t token_len,
 	memcpy(claims->runtime_protect_digest, hdr.runtime_protect_digest, 32);
 	claims->runtime_protect_epoch = hdr.runtime_protect_epoch;
 	claims->protect_pid_count = hdr.protect_pid_count;
+	claims->stopped_ms = hdr.stopped_ms;
 
 	if (!pcr_digest || pcr_digest_len != expected_pcr_digest_len)
 		return LOTA_SERVER_ERR_ATTEST_PARSE;
@@ -616,6 +619,7 @@ int lota_server_parse_token(const uint8_t *token_data, size_t token_len,
 	memcpy(claims->runtime_protect_digest, hdr.runtime_protect_digest, 32);
 	claims->runtime_protect_epoch = hdr.runtime_protect_epoch;
 	claims->protect_pid_count = hdr.protect_pid_count;
+	claims->stopped_ms = hdr.stopped_ms;
 
 	/* try to extract PCR digest from TPMS_ATTEST */
 	if (hdr.attest_size > 0) {

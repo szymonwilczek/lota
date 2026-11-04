@@ -102,6 +102,8 @@ struct lota_server_claims {
 	uint8_t pcr_digest[LOTA_SERVER_MAX_PCR_DIGEST_SIZE];
 	size_t pcr_digest_len; /* Actual length of pcr_digest (0 if absent) */
 	int expired; /* 1 if token has expired, 0 otherwise */
+	/* milliseconds any thread of the instance stood stopped, suspend aside */
+	uint64_t stopped_ms;
 };
 
 /*

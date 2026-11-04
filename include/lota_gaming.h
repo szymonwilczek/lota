@@ -300,7 +300,7 @@ struct lota_status {
  * - Verifying the TPM signature over attest_data with the AIK public key
  * - Checking extraData in TPMS_ATTEST equals
  *   SHA256(valid_until || flags || pcr_mask || nonce || policy_digest ||
- *   runtime_protect_digest || runtime_protect_epoch),
+ *   runtime_protect_digest || runtime_protect_epoch || stopped_ms),
  *   which is what puts every field above inside the signature
  * - Checking the nonce is the one it issued
  * - Verifying PCR digest matches expected policy
@@ -339,6 +339,9 @@ struct lota_token {
 	size_t attest_size; /* Size of attest_data */
 	uint8_t *signature; /* TPM signature (heap allocated) */
 	size_t signature_len; /* Signature length in bytes */
+
+	/* milliseconds any thread of the instance stood stopped, suspend aside */
+	uint64_t stopped_ms;
 };
 
 /*

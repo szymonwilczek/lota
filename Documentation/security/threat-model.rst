@@ -437,8 +437,14 @@ Active threats
          ``F_SETOWN``, and refuses a change to its resource limits. A dump
          signal with no handler, from a crash or a terminal's quit key, ends
          the group before the kernel writes anything.
-       | A title whose own cgroup is frozen stalls. Nothing refuses that, and
-         the publisher sees only a session that stopped answering.
+       | A title whose own cgroup is frozen stands, as does one stopped from
+         inside its instance. Nothing refuses that; the token's ``stopped_ms``
+         says for how long any of its threads stood, and the publisher decides
+         what that means. The freeze a suspend applies counts, the sleep itself
+         does not. A title slowed rather than stopped (``cpu.max``,
+         ``SCHED_IDLE``) or frozen through the cgroup v1 freezer adds nothing
+         to it, and the value ends with the process at the root of the
+         instance.
        | The agent is guarded: the LSM refuses every signal to it but
          ``SIGHUP`` and signal 0 from anything but itself, a holder of
          ``LOTA_TASK_AUTH_ADMIN`` or the kernel, since its handlers are how it

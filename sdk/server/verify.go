@@ -42,7 +42,7 @@ import (
 const (
 	TokenMagic      uint32 = 0x4B544F4C // "LOTK" in memory (little-endian)
 	TokenVersion    uint16 = 0x0001
-	TokenHeaderSize        = 144
+	TokenHeaderSize        = 152
 
 	MaxAttestSize = 1024
 	MaxSigSize    = 512
@@ -50,7 +50,7 @@ const (
 	ImageDigestSize = 32 // per protected PID
 
 	// LOTA_TOKEN_MAX_PROTECT_PIDS in include/lota_token.h
-	MaxProtectPIDs = 181
+	MaxProtectPIDs = 180
 
 	// largest token an agent can produce: header, full PID list with image
 	// digests, maximum quote and signature
@@ -144,6 +144,9 @@ type Claims struct {
 	// monotonic runtime protected PID-set mutation identifier
 	RuntimeProtectEpoch uint64
 
+	// milliseconds any thread of the instance stood stopped, suspend aside
+	StoppedMS uint64
+
 	// composite hash of the selected PCR values
 	// from the TPMS_ATTEST QuoteInfo (empty if not a Quote)
 	PCRDigest []byte
@@ -177,6 +180,7 @@ type tokenWire struct {
 	attestSize            uint16
 	sigSize               uint16
 	runtimeProtectVersion uint16
+	stoppedMS             uint64
 }
 
 // runtime_protect_version wire values.
@@ -246,7 +250,7 @@ func VerifyToken(tokenData []byte, aikPub *rsa.PublicKey, expectedNonce []byte) 
 	}
 
 	// verify nonce binding: extraData == SHA256(valid_until||flags||pcr_mask||nonce||policy_digest||runtime_protect_digest||runtime_protect_epoch)
-	computedNonce := computeExpectedNonce(hdr.validUntil, hdr.flags, hdr.pcrMask, hdr.nonce, hdr.policy, hdr.runtimeProtectDigest, hdr.runtimeProtectEpoch)
+	computedNonce := computeExpectedNonce(hdr.validUntil, hdr.flags, hdr.pcrMask, hdr.nonce, hdr.policy, hdr.runtimeProtectDigest, hdr.runtimeProtectEpoch, hdr.stoppedMS)
 	if subtle.ConstantTimeCompare(extraData, computedNonce[:]) != 1 {
 		return nil, fmt.Errorf("%w: extraData does not match SHA256(metadata||nonce)", ErrNonceFail)
 	}
@@ -273,6 +277,7 @@ func VerifyToken(tokenData []byte, aikPub *rsa.PublicKey, expectedNonce []byte) 
 		PolicyDigest:         hdr.policy,
 		RuntimeProtectDigest: hdr.runtimeProtectDigest,
 		ProtectPIDCount:      hdr.protectPIDCount,
+		StoppedMS:            hdr.stoppedMS,
 		RuntimeProtectEpoch:  hdr.runtimeProtectEpoch,
 		PCRDigest:            pcrDigest,
 		SigAlg:               hdr.sigAlg,
@@ -340,6 +345,7 @@ func ParseToken(tokenData []byte) (*Claims, error) {
 		PolicyDigest:         hdr.policy,
 		RuntimeProtectDigest: hdr.runtimeProtectDigest,
 		ProtectPIDCount:      hdr.protectPIDCount,
+		StoppedMS:            hdr.stoppedMS,
 		SigAlg:               hdr.sigAlg,
 		HashAlg:              hdr.hashAlg,
 	}
@@ -370,7 +376,7 @@ func ParseToken(tokenData []byte) (*Claims, error) {
 // and image digests (see ComputeRuntimeProtectDigest).
 func SerializeToken(validUntil uint64, flags uint32, nonce [32]byte,
 	sigAlg, hashAlg uint16, pcrMask uint32, policyDigest [32]byte,
-	runtimeProtectDigest [32]byte, runtimeProtectEpoch uint64,
+	runtimeProtectDigest [32]byte, runtimeProtectEpoch, stoppedMS uint64,
 	protectedPIDs []uint32, imageDigests [][32]byte,
 	attestData, signature []byte,
 ) ([]byte, error) {
@@ -414,6 +420,7 @@ func SerializeToken(validUntil uint64, flags uint32, nonce [32]byte,
 	binary.LittleEndian.PutUint16(buf[138:140], uint16(len(attestData))) // #nosec G115 -- bounded by MaxAttestSize above
 	binary.LittleEndian.PutUint16(buf[140:142], uint16(len(signature)))  // #nosec G115 -- bounded by MaxSigSize above
 	binary.LittleEndian.PutUint16(buf[142:144], runtimeProtectV1)
+	binary.LittleEndian.PutUint64(buf[144:152], stoppedMS)
 
 	off := TokenHeaderSize
 	for _, pid := range protectedPIDs {
@@ -480,6 +487,7 @@ func parseWireHeader(data []byte) (*tokenWire, error) {
 	hdr.attestSize = binary.LittleEndian.Uint16(data[138:140])
 	hdr.sigSize = binary.LittleEndian.Uint16(data[140:142])
 	hdr.runtimeProtectVersion = binary.LittleEndian.Uint16(data[142:144])
+	hdr.stoppedMS = binary.LittleEndian.Uint64(data[144:152])
 	if hdr.runtimeProtectVersion != runtimeProtectV1 {
 		return nil, fmt.Errorf("%w: unsupported runtime protect version", ErrBadToken)
 	}
@@ -533,8 +541,8 @@ func verifyRSASignature(attestData, signature []byte, sigAlg, hashAlg uint16, ai
 	}
 }
 
-func computeExpectedNonce(validUntil uint64, flags, pcrMask uint32, nonce, policyDigest, runtimeProtectDigest [32]byte, runtimeProtectEpoch uint64) [32]byte {
-	var buf [120]byte // 8 + 4 + 4 + 32 + 32 + 32 + 8
+func computeExpectedNonce(validUntil uint64, flags, pcrMask uint32, nonce, policyDigest, runtimeProtectDigest [32]byte, runtimeProtectEpoch, stoppedMS uint64) [32]byte {
+	var buf [128]byte // 8 + 4 + 4 + 32 + 32 + 32 + 8 + 8
 	binary.LittleEndian.PutUint64(buf[0:8], validUntil)
 	binary.LittleEndian.PutUint32(buf[8:12], flags)
 	binary.LittleEndian.PutUint32(buf[12:16], pcrMask)
@@ -542,19 +550,20 @@ func computeExpectedNonce(validUntil uint64, flags, pcrMask uint32, nonce, polic
 	copy(buf[48:80], policyDigest[:])
 	copy(buf[80:112], runtimeProtectDigest[:])
 	binary.LittleEndian.PutUint64(buf[112:120], runtimeProtectEpoch)
+	binary.LittleEndian.PutUint64(buf[120:128], stoppedMS)
 	return sha256.Sum256(buf[:])
 }
 
 // computes the token quote nonce used in the token verification domain:
 //
-//	SHA256(valid_until_LE || flags_LE || pcr_mask_LE || client_nonce || policy_digest || runtime_protect_digest || runtime_protect_epoch_LE)
+//	SHA256(valid_until_LE || flags_LE || pcr_mask_LE || client_nonce || policy_digest || runtime_protect_digest || runtime_protect_epoch_LE || stopped_ms_LE)
 //
 // This value is expected to match TPMS_ATTEST.extraData in the token format.
 //
 // NOTE: This is intentionally different from the attestation report binding
 // nonce used by the remote attestation verifier/agent report path.
-func ComputeTokenQuoteNonce(validUntil uint64, flags, pcrMask uint32, nonce, policyDigest, runtimeProtectDigest [32]byte, runtimeProtectEpoch uint64) [32]byte {
-	return computeExpectedNonce(validUntil, flags, pcrMask, nonce, policyDigest, runtimeProtectDigest, runtimeProtectEpoch)
+func ComputeTokenQuoteNonce(validUntil uint64, flags, pcrMask uint32, nonce, policyDigest, runtimeProtectDigest [32]byte, runtimeProtectEpoch, stoppedMS uint64) [32]byte {
+	return computeExpectedNonce(validUntil, flags, pcrMask, nonce, policyDigest, runtimeProtectDigest, runtimeProtectEpoch, stoppedMS)
 }
 
 func validateCanonicalPIDList(pids []uint32) error {

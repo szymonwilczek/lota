@@ -41,10 +41,11 @@ extern "C" {
  *   138     2     attest_size    (TPMS_ATTEST blob size)
  *   140     2     sig_size       (TPM signature size)
  *   142     2     runtime_protect_version (1 = PID-set + kernel image digests)
+ *   144     8     stopped_ms     (time the caller's instance stood stopped)
  *   ---     ---   --------------------------------
- *   144     var   protected_pids[protect_pid_count] (little-endian uint32)
- *   144+P   var   protected_image_digests[protect_pid_count][32]
- *   144+P+I var   attest_data[attest_size]
+ *   152     var   protected_pids[protect_pid_count] (little-endian uint32)
+ *   152+P   var   protected_image_digests[protect_pid_count][32]
+ *   152+P+I var   attest_data[attest_size]
  *   ...     var   signature[sig_size]
  *
  * The runtime_protect_digest binds, per PID, the kernel-anchored
@@ -58,12 +59,12 @@ extern "C" {
  */
 #define LOTA_TOKEN_MAGIC 0x4B544F4C /* "LOTK" in memory (little-endian) */
 #define LOTA_TOKEN_VERSION 0x0001
-#define LOTA_TOKEN_HEADER_SIZE 144
+#define LOTA_TOKEN_HEADER_SIZE 152
 /*
  * Protected-PID cap: LOTA_IPC_TOKEN_MAX_PROTECT_PIDS from the uninstalled
  * lota_ipc.h, copied here; src/sdk/lota_gaming.c asserts they match.
  */
-#define LOTA_TOKEN_MAX_PROTECT_PIDS 181
+#define LOTA_TOKEN_MAX_PROTECT_PIDS 180
 #define LOTA_TOKEN_MAX_PID_LIST_SIZE (LOTA_TOKEN_MAX_PROTECT_PIDS * 4)
 #define LOTA_TOKEN_IMAGE_DIGEST_SIZE 32
 
@@ -103,9 +104,10 @@ struct lota_token_wire {
 	/* 138   2   attest_size  (TPMS_ATTEST blob size) */
 	/* 140   2   sig_size     (TPM signature size) */
 	/* 142   2   runtime_protect_version (1 = PID set + image) */
+	/* 144   8   stopped_ms */
 	/* ---   --- ----------------------------------- */
-	/* 144   var protected_pids[protect_pid_count] */
-	/* 144+P var protected_image_digests[protect_pid_count][32] */
+	/* 152   var protected_pids[protect_pid_count] */
+	/* 152+P var protected_image_digests[protect_pid_count][32] */
 	/* ...   var attest_data[attest_size] */
 	/* ...   var signature[sig_size] */
 
@@ -126,6 +128,7 @@ struct lota_token_wire {
 	uint16_t attest_size;
 	uint16_t sig_size;
 	uint16_t runtime_protect_version;
+	uint64_t stopped_ms;
 	/*
 	 * followed by protected_pids[], protected_image_digests[],
 	 * attest_data[] and signature[]

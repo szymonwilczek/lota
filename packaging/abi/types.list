@@ -109,7 +109,7 @@ struct lota_status size=32 align=8
 	valid_until                      off=16 size=8
 	attest_count                     off=24 size=4
 	fail_count                       off=28 size=4
-struct lota_token size=184 align=8
+struct lota_token size=192 align=8
 	valid_until                      off=0 size=8
 	flags                            off=8 size=4
 	nonce                            off=12 size=32
@@ -127,6 +127,7 @@ struct lota_token size=184 align=8
 	attest_size                      off=160 size=8
 	signature                        off=168 size=8
 	signature_len                    off=176 size=8
+	stopped_ms                       off=184 size=8
 struct lota_connect_opts size=32 align=8
 	struct_size                      off=0 size=8
 	socket_path                      off=8 size=8
@@ -196,7 +197,7 @@ enum lota_server_error size=4
 	LOTA_SERVER_ERR_BUFFER                   = -9
 	LOTA_SERVER_ERR_FUTURE                   = -10
 	LOTA_SERVER_ERR_RUNTIME_IMAGE            = -11
-struct lota_server_claims size=208 align=8
+struct lota_server_claims size=216 align=8
 	valid_until                      off=0 size=8
 	flags                            off=8 size=4
 	nonce                            off=12 size=32
@@ -208,6 +209,7 @@ struct lota_server_claims size=208 align=8
 	pcr_digest                       off=124 size=64
 	pcr_digest_len                   off=192 size=8
 	expired                          off=200 size=4
+	stopped_ms                       off=208 size=8
 struct lota_server_registry_module size=64 align=8
 	soname                           off=0 size=8
 	path                             off=8 size=8
@@ -243,14 +245,14 @@ struct lota_snapshot_wire_hdr size=16 align=1
 	token_size                       off=12 size=4
 macro LOTA_TOKEN_MAGIC                         = 1263816524
 macro LOTA_TOKEN_VERSION                       = 1
-macro LOTA_TOKEN_HEADER_SIZE                   = 144
-macro LOTA_TOKEN_MAX_PROTECT_PIDS              = 181
-macro LOTA_TOKEN_MAX_PID_LIST_SIZE             = 724
+macro LOTA_TOKEN_HEADER_SIZE                   = 152
+macro LOTA_TOKEN_MAX_PROTECT_PIDS              = 180
+macro LOTA_TOKEN_MAX_PID_LIST_SIZE             = 720
 macro LOTA_TOKEN_IMAGE_DIGEST_SIZE             = 32
 macro LOTA_RUNTIME_PROTECT_V1                  = 1
-macro LOTA_TOKEN_MAX_IMAGE_LIST_SIZE           = 5792
-macro LOTA_TOKEN_MAX_SIZE                      = 8196
-struct lota_token_wire size=144 align=1
+macro LOTA_TOKEN_MAX_IMAGE_LIST_SIZE           = 5760
+macro LOTA_TOKEN_MAX_SIZE                      = 8168
+struct lota_token_wire size=152 align=1
 	magic                            off=0 size=4
 	version                          off=4 size=2
 	total_size                       off=6 size=2
@@ -268,6 +270,7 @@ struct lota_token_wire size=144 align=1
 	attest_size                      off=138 size=2
 	sig_size                         off=140 size=2
 	runtime_protect_version          off=142 size=2
+	stopped_ms                       off=144 size=8
 macro LOTA_HOOK_ENV_DISABLE                    = "LOTA_HOOK_DISABLE"
 macro LOTA_HOOK_ENV_ACTIVATE_PATH              = "LOTA_HOOK_ACTIVATE_PATH"
 macro LOTA_HOOK_ENV_ACTIVATE_PROGRAM           = "LOTA_HOOK_ACTIVATE_PROGRAM"
