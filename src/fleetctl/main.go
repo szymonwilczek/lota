@@ -361,10 +361,21 @@ func cmdDevices(ctx *cmdContext, stderr io.Writer, args []string) error {
 		kv(ctx.stdout, "monotonic counter", info.MonotonicCounter)
 		kv(ctx.stdout, "pending challenges", info.PendingChallenges)
 		kv(ctx.stdout, "pcr14 baseline", info.PCR14Baseline)
+		if keys := info.MachineKeys; keys != nil {
+			kv(ctx.stdout, "mok state", keys.MOKState)
+			printMachineKeys(ctx, "mok key", keys.MOK)
+			printMachineKeys(ctx, "db key", keys.DB)
+		}
 		return nil
 
 	default:
 		return fmt.Errorf("%w: unknown devices subcommand %q", errUsage, args[0])
+	}
+}
+
+func printMachineKeys(ctx *cmdContext, label string, keys []client.MachineKey) {
+	for _, k := range keys {
+		kv(ctx.stdout, label, strings.TrimSpace(k.Type+" "+k.SHA256+" "+k.Subject))
 	}
 }
 

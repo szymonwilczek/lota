@@ -175,6 +175,11 @@ The table ``attests`` prints without ``--json`` names the client; under the
 Privacy CA flow the client id *is* the hardware identity, because the pseudonym
 the CA issues is that identity.
 
+``devices show`` also lists the keys the host trusts: ``db key`` for firmware
+db, ``mok key`` for the MOK list, and ``mok state`` for whether that list is
+proven against the measured boot. LOTA draws no verdict from these keys; the
+verifier logs a change and the operator decides what it means.
+
 Re-baseline a host after a planned firmware update::
 
    lota-fleet --key-file /etc/lota/fleet-admin.key \
