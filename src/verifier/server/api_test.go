@@ -1114,6 +1114,9 @@ func TestIntegrationAPI_ClientInfoAfterAttestation(t *testing.T) {
 	if resp.FirstSeen == "" {
 		t.Error("Expected non-empty first_seen after attestation")
 	}
+	if resp.MachineKeys == nil || resp.MachineKeys.MOKState == "" {
+		t.Errorf("Expected machine_keys after attestation, got %+v", resp.MachineKeys)
+	}
 
 	prefix := resp.PCR14Baseline
 	if len(prefix) > 16 {

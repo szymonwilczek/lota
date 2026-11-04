@@ -82,3 +82,39 @@ func TestRecordKernelHash_MemoryStore(t *testing.T) {
 		t.Errorf("previous value not returned: %x had=%v", prev, had)
 	}
 }
+
+// Keys follow the kernel hash: no row is not tracked, a first record is not a
+// change, and the value replaced comes back
+func TestRecordMachineKeys_ReturnsWhatItReplaced(t *testing.T) {
+	db, err := store.OpenDB(filepath.Join(t.TempDir(), "v.sqlite"))
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer db.Close()
+
+	sqlite := NewSQLiteBaselineStore(db)
+	sqlite.CheckAndUpdate("c1", kernelHash(0x01))
+	memory := NewBaselineStore()
+	memory.CheckAndUpdate("c1", kernelHash(0x01))
+
+	for name, bs := range map[string]MachineKeysRecorder{"sqlite": sqlite, "memory": memory} {
+		t.Run(name, func(t *testing.T) {
+			if prev, err := bs.RecordMachineKeys("nobody", []byte(`{"a":1}`)); err != nil || prev != nil {
+				t.Fatalf("unknown client: prev=%q err=%v", prev, err)
+			}
+			if got := bs.GetMachineKeys("nobody"); got != nil {
+				t.Fatalf("unknown client tracked: %q", got)
+			}
+			if prev, err := bs.RecordMachineKeys("c1", []byte(`{"a":1}`)); err != nil || prev != nil {
+				t.Fatalf("first record: prev=%q err=%v", prev, err)
+			}
+			prev, err := bs.RecordMachineKeys("c1", []byte(`{"a":2}`))
+			if err != nil || string(prev) != `{"a":1}` {
+				t.Fatalf("change: prev=%q err=%v", prev, err)
+			}
+			if got := bs.GetMachineKeys("c1"); string(got) != `{"a":2}` {
+				t.Fatalf("stored: %q", got)
+			}
+		})
+	}
+}

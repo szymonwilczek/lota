@@ -427,6 +427,19 @@ type KernelHashRecorder interface {
 	RecordKernelHash(clientID string, kernelHash [types.HashSize]byte) (prev [types.HashSize]byte, had bool, err error)
 }
 
+// MachineKeysRecorder is optionally implemented by baseline stores that keep
+// the keys a client's machine last reported, as MachineKeys JSON.
+//
+// Advisory: gates nothing. A store without the capability omits them.
+type MachineKeysRecorder interface {
+	// RecordMachineKeys stores the keys and returns the ones they replaced.
+	// A client with no baseline row is not tracked. prev is nil when nothing
+	// was stored yet, so a first attestation is not a change.
+	RecordMachineKeys(clientID string, keys []byte) (prev []byte, err error)
+	// GetMachineKeys returns the stored keys, nil when there are none.
+	GetMachineKeys(clientID string) []byte
+}
+
 type AgentHashRepinStorer interface {
 	GetAgentHashRepinState(clientID string) AgentHashRepinState
 	ArchiveAndRepinAgentHash(clientID string,
@@ -441,6 +454,7 @@ type BaselineStore struct {
 	reanchor      map[string]*ReanchorState  // clientID -> re-anchor state
 	tenants       map[string]string          // clientID -> CA-assigned tenant
 	kernelHashes  map[string][types.HashSize]byte
+	machineKeys   map[string][]byte
 }
 
 // creates a new baseline store
@@ -451,6 +465,7 @@ func NewBaselineStore() *BaselineStore {
 		reanchor:      make(map[string]*ReanchorState),
 		tenants:       make(map[string]string),
 		kernelHashes:  make(map[string][types.HashSize]byte),
+		machineKeys:   make(map[string][]byte),
 	}
 }
 
@@ -696,6 +711,7 @@ func (s *BaselineStore) ClearBaseline(clientID string) error {
 	delete(s.bootBaselines, clientID)
 	delete(s.reanchor, clientID)
 	delete(s.tenants, clientID)
+	delete(s.machineKeys, clientID)
 	return nil
 }
 
@@ -979,4 +995,26 @@ func (s *BaselineStore) RecordKernelHash(clientID string,
 	prev, had = s.kernelHashes[clientID]
 	s.kernelHashes[clientID] = kernelHash
 	return prev, had, nil
+}
+
+// RecordMachineKeys implements MachineKeysRecorder for the in-memory store.
+func (s *BaselineStore) RecordMachineKeys(clientID string, keys []byte) ([]byte, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if _, known := s.baselines[clientID]; !known {
+		return nil, nil
+	}
+
+	prev := s.machineKeys[clientID]
+	s.machineKeys[clientID] = keys
+	return prev, nil
+}
+
+// GetMachineKeys implements MachineKeysRecorder for the in-memory store.
+func (s *BaselineStore) GetMachineKeys(clientID string) []byte {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	return s.machineKeys[clientID]
 }

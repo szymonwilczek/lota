@@ -12,8 +12,10 @@
 package verify
 
 import (
+	"bytes"
 	"crypto/ed25519"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -1009,6 +1011,24 @@ func (v *Verifier) VerifyReportFrom(challengeID, remoteAddr string, reportData [
 		}
 	}
 
+	// Record which keys this machine trusts, and log once when they change.
+	// Advisory too: LOTA shows them and the publisher judges.
+	if kr, ok := v.baselineStore.(MachineKeysRecorder); ok && bootFacts != nil {
+		keys := ExtractMachineKeys(bootFacts.Parsed, report.MokList)
+		encoded, err := json.Marshal(keys)
+		if err == nil {
+			var prev []byte
+			prev, err = kr.RecordMachineKeys(clientID, encoded)
+			if err == nil && prev != nil && !bytes.Equal(prev, encoded) {
+				clog.Info("machine_keys changed", "db", len(keys.DB),
+					"mok", len(keys.MOK), "mok_state", keys.MOKState)
+			}
+		}
+		if err != nil {
+			clog.Warn("failed to record the machine keys", "error", err)
+		}
+	}
+
 	// stamp the CA-assigned tenant on the baseline row so the operator
 	// surface can scope this client.
 	// Fail closed rather than let tenant-owned device linger unscoped
@@ -1115,7 +1135,8 @@ type ClientInfo struct {
 	PendingChallenges int
 	PCR14Baseline     string // hex-encoded
 	FirstSeen         time.Time
-	Tenant            string // CA-assigned; DefaultTenant when never stamped
+	Tenant            string       // CA-assigned; DefaultTenant when never stamped
+	MachineKeys       *MachineKeys // nil until an attestation recorded them
 }
 
 // returns aggregated information about a specific client
@@ -1153,6 +1174,15 @@ func (v *Verifier) ClientInfo(clientID string) (*ClientInfo, bool) {
 	}
 	if info.LastAttestation.IsZero() {
 		info.LastAttestation = v.nonceStore.ClientLastAttestation(clientID)
+	}
+
+	if kr, ok := v.baselineStore.(MachineKeysRecorder); ok {
+		if stored := kr.GetMachineKeys(clientID); stored != nil {
+			keys := &MachineKeys{}
+			if err := json.Unmarshal(stored, keys); err == nil {
+				info.MachineKeys = keys
+			}
+		}
 	}
 
 	// CA-assigned tenant from the baseline row;

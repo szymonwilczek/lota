@@ -449,6 +449,8 @@ type clientInfoResponse struct {
 	PCR14Baseline     string `json:"pcr14_baseline,omitempty"`
 	FirstSeen         string `json:"first_seen,omitempty"`
 	FirstSeenUnix     int64  `json:"first_seen_unix,omitempty"`
+
+	MachineKeys *verify.MachineKeys `json:"machine_keys,omitempty"`
 }
 
 type errorResponse struct {
@@ -692,6 +694,7 @@ func (h *APIHandler) handleClientInfo(w http.ResponseWriter, r *http.Request) {
 		MonotonicCounter:  info.MonotonicCounter,
 		PendingChallenges: info.PendingChallenges,
 		PCR14Baseline:     info.PCR14Baseline,
+		MachineKeys:       info.MachineKeys,
 	}
 
 	if !info.LastAttestation.IsZero() {
