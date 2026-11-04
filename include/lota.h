@@ -656,12 +656,6 @@ struct lota_exec_event {
 #define LOTA_MAX_GUARDED_FILES 64
 
 /*
- * Levels of the cgroup the agent was last moved to, root first; the kill
- * guard follows it there. A cgroup path deeper than this is not followed.
- */
-#define LOTA_AGENT_CGROUP_DEPTH 32
-
-/*
  * Agent threads with a kernel hash outstanding at once;
  * each asks about one object at a time.
  */

@@ -354,6 +354,12 @@ Worth being precise about, because it decides what you can build on it:
   included, ended with it, so a token with this bit vouches for nothing before
   the restart.
 
+* Whether anything outlived the agent. A protected process ends with the agent,
+  however the agent ended, and moving the agent to another cgroup ends both, so
+  a session that goes quiet together with its agent is the design at work rather
+  than evidence of anything. A session that goes quiet alone may be a stalled
+  title: LOTA does not report a stall, so your own heartbeat is what shows it.
+
 It does **not** prove the player is not cheating. It proves the platform
 underneath is what it claims to be, which removes the layer where a cheat
 would otherwise be invisible to you: a tampered kernel, an unsigned

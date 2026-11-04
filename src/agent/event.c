@@ -264,7 +264,7 @@ int handle_exec_event(void *ctx, void *data, size_t len)
 			(unsigned long long)event->timestamp_ns, comm_safe,
 			filename_safe, event->pid, event->uid);
 		return 0;
-	/* the kill guard followed it; the move itself is the record */
+	/* the move also ended the agent; this is the record */
 	case LOTA_EVENT_AGENT_MOVED:
 		lota_warn("[%llu] AGENT_MOVED %s moved the agent pid=%u to %s "
 			  "(pid=%u, uid=%u)",

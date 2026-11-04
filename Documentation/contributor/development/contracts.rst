@@ -393,10 +393,12 @@ opens of the files in ``guarded_files``. The loader arms it at startup with
 both files of the agent's cgroup and of its ancestors: an agent killed or
 frozen that way drops enforcement for the rest of the boot while PCR 14 still
 holds the boot commitment. Moving a task between cgroups has no security hook,
-so a move of the agent is followed instead: the ``cgroup_attach_task``
-tracepoint records the destination and its ancestors in ``agent_cgroups``,
-``lota_file_open`` refuses their two files on the same terms, and the move is
-journalled as ``AGENT_MOVED``. A protected process's cgroup is not armed: killing it ends only
+and a cgroup frozen beforehand freezes what enters it, in either hierarchy, so
+no file guard covers a move. ``lota_agent_moved`` on ``cgroup_attach_task``
+therefore ends the protected processes and the agent before the move takes
+effect, as the agent's own exit does. It is an fentry program because the
+tracepoint of that name runs under a spinlock, where signals go through one
+per-CPU slot. A protected process's cgroup is not armed: killing it ends only
 its own session, and its owner can end it with an ordinary signal anyway.
 
 The handler applies ``kill(2)``'s own rule -- the owner of the target, or root

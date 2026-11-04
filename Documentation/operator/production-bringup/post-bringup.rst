@@ -179,10 +179,11 @@ At startup the agent logs the files it guards::
 
 It refuses to start when it cannot resolve them. A host without a unified
 cgroup hierarchy has none to guard and logs that. Writing the agent's pid into
-another cgroup's ``cgroup.procs`` moves it, and the guard moves with it to the
-new cgroup and its ancestors; the agent logs::
+any other cgroup's ``cgroup.procs`` or ``tasks`` file ends the agent and every
+protected process before the move takes effect. systemd restarts the agent, and
+its status and token then carry ``AGENT_RESTARTED``, and the agent logs::
 
-  AGENT_MOVED bash moved the agent pid=812 to /drive (pid=4410, uid=0)
+  AGENT_MOVED bash moved the agent pid=812 to drive (pid=4410, uid=0)
 
 **This applies in every mode.** The enforcement mode switches policy, and an
 agent that can be killed is one whose measurements stop without a trace, so

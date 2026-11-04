@@ -1556,6 +1556,7 @@ int bpf_loader_attach(struct bpf_loader_ctx *ctx)
 		"lota_ptrace_access_check",
 		"lota_agent_exit",
 		"lota_no_core",
+		"lota_agent_moved",
 	};
 	const size_t required_count =
 		sizeof(required_programs) / sizeof(required_programs[0]);

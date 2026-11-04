@@ -444,7 +444,9 @@ Active threats
          ``LOTA_TASK_AUTH_ADMIN`` or the kernel, since its handlers are how it
          shuts down.
        | Every report rests on the agent, so what it protects ends with it,
-         whatever ended it.
+         whatever ended it. Moving the agent to another cgroup ends both before
+         the move takes effect, since a cgroup frozen beforehand would freeze
+         it on arrival.
        | ``lota-agent --terminate-protected`` relays ``SIGTERM`` or
          ``SIGKILL`` for a caller ``kill(2)`` would have allowed and leaves a
          record. Every relayed termination is journalled, and the host reports

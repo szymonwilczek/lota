@@ -307,18 +307,6 @@ struct {
 } guarded_files SEC(".maps");
 
 /*
- * Cgroup ids of the cgroup the agent was moved to and of its ancestors, by
- * level; zero past its depth and before any move. guarded_files names the
- * cgroup the agent started in, this one where it went. Only BPF writes it.
- */
-struct {
-	__uint(type, BPF_MAP_TYPE_ARRAY);
-	__uint(max_entries, LOTA_AGENT_CGROUP_DEPTH);
-	__type(key, u32);
-	__type(value, u64);
-} agent_cgroups SEC(".maps");
-
-/*
  * Libraries the agent pinned for a protected process; lota_file_open refuses
  * their write opens, as the kernel does for a running executable.
  * Renaming over one works. Only the agent writes it. Name fits 16 bytes.
@@ -776,9 +764,6 @@ static __always_inline int is_lota_managed_map(struct bpf_map *map)
 			     sizeof("trusted_inodes")) == 0)
 		return 1;
 	if (__builtin_memcmp(name, "guarded_files", sizeof("guarded_files")) ==
-	    0)
-		return 1;
-	if (__builtin_memcmp(name, "agent_cgroups", sizeof("agent_cgroups")) ==
 	    0)
 		return 1;
 	if (__builtin_memcmp(name, "mapped_exec", sizeof("mapped_exec")) == 0)
@@ -1624,60 +1609,6 @@ static __always_inline void report_blocked_mapped_write(struct dentry *dentry)
 }
 
 /* the verdict lives in include/lota.h, shared with the tests */
-#define LOTA_CGROUP2_SUPER_MAGIC 0x63677270
-
-/*
- * LOTA_GUARD_* of @file when it is cgroup.kill or cgroup.freeze of the
- * cgroup the agent was moved to, or of an ancestor; see agent_cgroups.
- */
-static __always_inline u32 moved_agent_cgroup_kind(struct file *file)
-{
-	char name[LOTA_PROC_NAME_MAX] = {};
-	struct dentry *dentry;
-	struct inode *inode;
-	struct kernfs_node *kn;
-	u32 kind;
-	u32 len;
-	u64 id;
-
-	inode = BPF_CORE_READ(file, f_inode);
-	if (!inode ||
-	    BPF_CORE_READ(inode, i_sb, s_magic) != LOTA_CGROUP2_SUPER_MAGIC)
-		return 0;
-
-	dentry = BPF_CORE_READ(file, f_path.dentry);
-	len = BPF_CORE_READ(dentry, d_name.len);
-	if (len == 0 || len >= LOTA_PROC_NAME_MAX)
-		return 0;
-	if (bpf_probe_read_kernel(name, len & (LOTA_PROC_NAME_MAX - 1),
-				  BPF_CORE_READ(dentry, d_name.name)))
-		return 0;
-	if (lota_name_is(name, len, "cgroup.kill"))
-		kind = LOTA_GUARD_CGROUP_KILL;
-	else if (lota_name_is(name, len, "cgroup.freeze"))
-		kind = LOTA_GUARD_CGROUP_FREEZE;
-	else
-		return 0;
-
-	/* the cgroup's directory node carries the cgroup id */
-	kn = BPF_CORE_READ(dentry, d_parent, d_inode, i_private);
-	id = BPF_CORE_READ(kn, id);
-	if (!id)
-		return 0;
-
-	for (u32 i = 0; i < LOTA_AGENT_CGROUP_DEPTH; i++) {
-		u32 key = i;
-		u64 *level = bpf_map_lookup_elem(&agent_cgroups, &key);
-
-		if (!level || !*level)
-			return 0;
-		if (*level == id)
-			return kind;
-	}
-
-	return 0;
-}
-
 /* LOTA_GUARD_* of a refused write open of a guarded file, or 0 */
 static __always_inline u32 denies_kill_guard_open(struct file *file)
 {
@@ -1687,8 +1618,6 @@ static __always_inline u32 denies_kill_guard_open(struct file *file)
 		return 0;
 
 	kind = guarded_file_kind(file);
-	if (!kind)
-		kind = moved_agent_cgroup_kind(file);
 	if (!kind)
 		return 0;
 
@@ -3084,8 +3013,8 @@ static __always_inline void kill_group(struct task_struct *t)
 	}
 }
 
-/* end every protected group */
-static __always_inline void kill_instances(void)
+/* end every protected group, and the agent with @with_agent */
+static __always_inline void kill_instances(int with_agent)
 {
 	struct lota_instance_entry id = {};
 	struct task_struct *held;
@@ -3094,7 +3023,8 @@ static __always_inline void kill_instances(void)
 	bpf_rcu_read_lock();
 	bpf_for_each(task, t, NULL, LOTA_TASK_ITER_ALL_THREADS)
 	{
-		if (!task_instance_rcu(t, &id))
+		if (!task_instance_rcu(t, &id) &&
+		    !(with_agent && is_lota_agent_task(t)))
 			continue;
 		held = bpf_task_acquire(t);
 		if (!held)
@@ -3111,7 +3041,7 @@ int BPF_PROG(lota_agent_exit, struct task_struct *task, bool group_dead)
 	if (!group_dead || !is_lota_agent_task(task))
 		return 0;
 
-	kill_instances();
+	kill_instances(0);
 	return 0;
 }
 
@@ -3314,65 +3244,46 @@ int BPF_PROG(lota_bpf, int cmd, union bpf_attr *attr, unsigned int size,
 }
 
 /* =====================================================================
- * Tracepoint: cgroup_attach_task
+ * fentry: cgroup_attach_task
  *
- * Moving a task between cgroups has no security hook. A move of the agent
- * takes it out of the cgroup whose cgroup.kill and cgroup.freeze the loader
- * guarded, so the guard follows it: agent_cgroups records the destination
- * and its ancestors, and lota_file_open refuses their files the same way.
- * The move itself is journalled.
+ * Moving a task between cgroups has no security hook, and a cgroup frozen
+ * before the move freezes what enters it, in either hierarchy: no file guard
+ * can stop that. The agent has no reason to move, so a move ends it the way
+ * its death does, before the move takes effect. Not the cgroup_attach_task
+ * tracepoint: it fires under a spinlock, where one kill per CPU gets out.
  * ===================================================================== */
-SEC("tp_btf/cgroup_attach_task")
-int BPF_PROG(lota_cgroup_attach_task, struct cgroup *dst_cgrp, const char *path,
-	     struct task_struct *task, bool threadgroup)
+SEC("fentry/cgroup_attach_task")
+int BPF_PROG(lota_agent_moved, struct cgroup *dst_cgrp,
+	     struct task_struct *leader, bool threadgroup)
 {
 	struct lota_exec_event *event;
-	int level;
+	const char *name;
 
-	if (!dst_cgrp || !is_lota_agent_task(task))
-		return 0;
+	(void)threadgroup;
 
-	level = BPF_CORE_READ(dst_cgrp, level);
-	for (u32 i = 0; i < LOTA_AGENT_CGROUP_DEPTH; i++) {
-		struct cgroup *anc = NULL;
-		u32 key = i;
-		u64 id = 0;
-
-		if ((int)i <= level) {
-			bpf_core_read(&anc, sizeof(anc),
-				      &dst_cgrp->ancestors[i]);
-			if (anc)
-				id = BPF_CORE_READ(anc, kn, id);
-		}
-		bpf_map_update_elem(&agent_cgroups, &key, &id, BPF_ANY);
-	}
-
-	/* a threadgroup move visits every thread; report the process once */
-	if (BPF_CORE_READ(task, pid) != BPF_CORE_READ(task, tgid))
-		return 0;
-
-	if (!should_emit_event(LOTA_MODE_ENFORCE, 1, LOTA_EVENT_AGENT_MOVED))
+	if (!is_lota_agent_task(leader))
 		return 0;
 
 	event = bpf_ringbuf_reserve(&events, sizeof(*event), 0);
-	if (!event) {
+	if (event) {
+		__builtin_memset(event, 0, sizeof(*event));
+		event->timestamp_ns = bpf_ktime_get_ns();
+		event->event_type = LOTA_EVENT_AGENT_MOVED;
+		event->tgid = bpf_get_current_pid_tgid() >> 32;
+		event->pid = bpf_get_current_pid_tgid() & 0xFFFFFFFF;
+		event->uid = (u32)(bpf_get_current_uid_gid() & 0xFFFFFFFF);
+		event->target_pid = BPF_CORE_READ(leader, tgid);
+		bpf_get_current_comm(event->comm, sizeof(event->comm));
+		name = BPF_CORE_READ(dst_cgrp, kn, name);
+		if (name)
+			bpf_probe_read_kernel_str(
+				event->filename, sizeof(event->filename), name);
+		bpf_ringbuf_submit(event, 0);
+		inc_stat(STAT_EVENTS_SENT);
+	} else {
 		inc_stat(STAT_RINGBUF_DROPS);
-		return 0;
 	}
 
-	__builtin_memset(event, 0, sizeof(*event));
-	event->timestamp_ns = bpf_ktime_get_ns();
-	event->event_type = LOTA_EVENT_AGENT_MOVED;
-	event->tgid = bpf_get_current_pid_tgid() >> 32;
-	event->pid = bpf_get_current_pid_tgid() & 0xFFFFFFFF;
-	event->uid = (u32)(bpf_get_current_uid_gid() & 0xFFFFFFFF);
-	event->target_pid = BPF_CORE_READ(task, tgid);
-	bpf_get_current_comm(event->comm, sizeof(event->comm));
-	if (path)
-		bpf_probe_read_kernel_str(event->filename,
-					  sizeof(event->filename), path);
-
-	bpf_ringbuf_submit(event, 0);
-	inc_stat(STAT_EVENTS_SENT);
+	kill_instances(1);
 	return 0;
 }
