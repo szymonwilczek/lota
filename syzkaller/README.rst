@@ -73,6 +73,8 @@ Every LSM program the harness attaches has a row naming the
 +------------------------------+------------------------------------------------------+
 | ``task_kill``                | ``kill``, ``tgkill``, ``pidfd_send_signal``          |
 +------------------------------+------------------------------------------------------+
+| ``file_send_sigiotask``      | ``fcntl$setown``, ``fcntl$setsig``                   |
++------------------------------+------------------------------------------------------+
 | ``task_fix_setuid``          | ``setuid``, ``setreuid``, ``setresuid``              |
 +------------------------------+------------------------------------------------------+
 | ``sb_mount``                 | ``mount``, including MS_BIND and MS_MOVE             |

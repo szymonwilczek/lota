@@ -68,6 +68,8 @@
     "tgkill",
     "pidfd_open",
     "pidfd_send_signal",
+    "fcntl$setown",
+    "fcntl$setsig",
     "clone",
     "clone3",
 

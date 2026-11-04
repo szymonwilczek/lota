@@ -20,7 +20,7 @@ struct bpf_object;
 struct ring_buffer;
 struct bpf_link;
 
-#define BPF_MAX_LSM_LINKS 24
+#define BPF_MAX_LSM_LINKS 32
 
 /*
  * BPF loader context

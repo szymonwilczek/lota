@@ -433,7 +433,8 @@ Active threats
      - | A protected task can be ended: a title that is killed is not cheated
          in, its session ends and the publisher sees that.
        | From outside its instance the LSM refuses a signal that would stop it
-         or write its memory to a core file.
+         or write its memory to a core file, sent directly or aimed through
+         ``F_SETOWN``.
        | A title whose own cgroup is frozen stalls. Nothing refuses that, and
          the publisher sees only a session that stopped answering.
        | The agent is guarded: the LSM refuses every signal to it but

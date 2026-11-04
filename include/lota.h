@@ -408,6 +408,7 @@ lota_inside_instance(int actor_protected, unsigned int actor_root,
  * and not the uapi signal numbers.
  */
 #define LOTA_SIG_HUP 1
+#define LOTA_SIG_IO 29
 
 /* what stops a task, and what makes the kernel write its memory to a core */
 #define LOTA_SIG_FREEZES \
@@ -457,6 +458,15 @@ static inline int lota_signal_denied(int sig, int target_is_agent,
 		return 0;
 
 	return lota_signal_dumps(sig) || !!(LOTA_SIG_FREEZES & (1ULL << sig));
+}
+
+/*
+ * The same verdict for a signal aimed through F_SETOWN. The sender is unknown,
+ * so it counts as outside, and sig 0 means the default SIGIO.
+ */
+static inline int lota_sigio_denied(int sig, int target_is_agent)
+{
+	return lota_signal_denied(sig ? sig : LOTA_SIG_IO, target_is_agent, 0);
 }
 
 /*

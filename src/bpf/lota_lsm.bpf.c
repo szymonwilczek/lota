@@ -2882,6 +2882,34 @@ int BPF_PROG(lota_task_kill, struct task_struct *p, struct kernel_siginfo *info,
 }
 
 /* ======================================================================
+ * LSM hook: file_send_sigiotask
+ *
+ * F_SETOWN and F_SETSIG aim any signal at a task past lota_task_kill. The write
+ * raising it can run in softirq, where current says nothing about who aimed it,
+ * so the sender counts as outside the instance.
+ * ====================================================================== */
+SEC("lsm/file_send_sigiotask")
+int BPF_PROG(lota_file_send_sigiotask, struct task_struct *tsk,
+	     struct fown_struct *fown, int sig)
+{
+	struct lota_instance_entry id = {};
+	int target_is_agent;
+
+	(void)fown;
+
+	target_is_agent = is_lota_agent_task(tsk);
+	if (!target_is_agent && !task_instance(tsk, &id))
+		return 0;
+
+	if (!lota_sigio_denied(sig, target_is_agent))
+		return 0;
+
+	report_signal(LOTA_EVENT_KILL_BLOCKED, 1, sig, BPF_CORE_READ(tsk, tgid),
+		      "(sigio)");
+	return -EPERM;
+}
+
+/* ======================================================================
  * Unix sockets of an instance: the sockets carry it, a reach from outside
  * is counted (record_instance_peer())
  * ====================================================================== */

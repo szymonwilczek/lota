@@ -81,6 +81,21 @@ static void test_a_protected_process_is_not_frozen_or_dumped(void)
 	}
 }
 
+/* the sender is unknown there, so it counts as outside; 0 is the default SIGIO */
+static void test_sigio_counts_as_outside(void)
+{
+	CHECK(lota_sigio_denied(SIGSTOP, 0),
+	      "refuses SIGSTOP through F_SETOWN to a protected process");
+	CHECK(lota_sigio_denied(SIGSEGV, 0),
+	      "refuses SIGSEGV through F_SETOWN to a protected process");
+	CHECK(!lota_sigio_denied(0, 0), "passes SIGIO to a protected process");
+	CHECK(!lota_sigio_denied(SIGRTMIN, 0),
+	      "passes a realtime signal to a protected process");
+	CHECK(lota_sigio_denied(0, 1), "refuses SIGIO to the agent");
+	CHECK(lota_sigio_denied(SIGKILL, 1),
+	      "refuses SIGKILL through F_SETOWN to the agent");
+}
+
 /* Numbers outside the mask's range are never an index into it */
 static void test_numbers_outside_the_mask(void)
 {
@@ -188,6 +203,7 @@ int main(void)
 	test_the_signals_the_agent_takes();
 	test_a_protected_process_can_be_ended();
 	test_a_protected_process_is_not_frozen_or_dumped();
+	test_sigio_counts_as_outside();
 	test_numbers_outside_the_mask();
 	test_the_mirrored_signal_number();
 	test_a_refusal_is_always_recorded();
