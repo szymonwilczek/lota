@@ -2910,6 +2910,49 @@ int BPF_PROG(lota_file_send_sigiotask, struct task_struct *tsk,
 }
 
 /* ======================================================================
+ * LSM hook: task_setrlimit
+ *
+ * RLIMIT_CPU has the kernel itself raise SIGXCPU and SIGKILL at the task, which
+ * no signal verdict sees, and RLIMIT_CORE widens what a dump writes. Another
+ * process's limits are refused from outside its instance.
+ * ====================================================================== */
+SEC("lsm/task_setrlimit")
+int BPF_PROG(lota_task_setrlimit, struct task_struct *p, unsigned int resource,
+	     struct rlimit *new_rlim)
+{
+	struct lota_instance_entry target_id = {};
+	struct lota_instance_entry sender_id = {};
+	struct task_struct *current;
+	u32 target_tgid;
+	int target_is_agent;
+
+	(void)new_rlim;
+	(void)resource;
+
+	target_is_agent = is_lota_agent_task(p);
+	if (!target_is_agent && !task_instance(p, &target_id))
+		return 0;
+
+	target_tgid = BPF_CORE_READ(p, tgid);
+	if ((u32)(bpf_get_current_pid_tgid() >> 32) == target_tgid)
+		return 0;
+
+	current = (struct task_struct *)bpf_get_current_task_btf();
+	if (is_lota_agent_task(current) || is_bpf_admin_task())
+		return 0;
+
+	if (!target_is_agent &&
+	    lota_inside_instance(
+		    task_instance(current, &sender_id), sender_id.root_tgid,
+		    sender_id.root_start_ticks, 1, target_id.root_tgid,
+		    target_id.root_start_ticks))
+		return 0;
+
+	report_signal(LOTA_EVENT_KILL_BLOCKED, 1, 0, target_tgid, "(rlimit)");
+	return -EPERM;
+}
+
+/* ======================================================================
  * Unix sockets of an instance: the sockets carry it, a reach from outside
  * is counted (record_instance_peer())
  * ====================================================================== */

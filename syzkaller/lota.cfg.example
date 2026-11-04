@@ -70,6 +70,8 @@
     "pidfd_send_signal",
     "fcntl$setown",
     "fcntl$setsig",
+    "prlimit64",
+    "setrlimit",
     "clone",
     "clone3",
 
