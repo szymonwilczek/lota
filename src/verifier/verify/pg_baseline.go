@@ -1080,6 +1080,29 @@ func (s *PostgresBaselineStore) ArchiveAndRepinAgentHash(clientID string,
 	return nil
 }
 
+// RepinPCR14 moves the pinned PCR 14 and the boot evidence (Postgres).
+// The WHERE on the old register makes the write its own race guard.
+func (s *PostgresBaselineStore) RepinPCR14(clientID string,
+	from, to [types.HashSize]byte, eventLog []byte, now time.Time,
+) error {
+	res, err := s.db.ExecContext(context.Background(),
+		`UPDATE baselines SET pcr14 = $1, eventlog_baseline = $2, last_seen = $3
+		 WHERE client_id = $4 AND pcr14 = $5`,
+		to[:], eventLog, now.UTC(), clientID, from[:],
+	)
+	if err != nil {
+		return err
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if n == 0 {
+		return ErrPCR14RepinRaced
+	}
+	return nil
+}
+
 // RecordBootEvidence stores the event log + ESRT version for a first-use
 // boot baseline (Postgres).
 // Idempotent UPDATE; esrt_capable kept sticky.

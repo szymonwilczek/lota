@@ -1022,6 +1022,32 @@ func (s *SQLiteBaselineStore) ArchiveAndRepinAgentHash(clientID string,
 	return tx.Commit()
 }
 
+// RepinPCR14 moves the pinned PCR 14 and the boot evidence (SQLite).
+// The WHERE on the old register makes the write its own race guard.
+func (s *SQLiteBaselineStore) RepinPCR14(clientID string,
+	from, to [types.HashSize]byte, eventLog []byte, now time.Time,
+) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	res, err := s.db.Exec(
+		`UPDATE baselines SET pcr14 = ?, eventlog_baseline = ?, last_seen = ?
+		 WHERE client_id = ? AND pcr14 = ?`,
+		to[:], eventLog, now.UTC(), clientID, from[:],
+	)
+	if err != nil {
+		return err
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if n == 0 {
+		return ErrPCR14RepinRaced
+	}
+	return nil
+}
+
 // RecordBootEvidence stores the event log + ESRT version for a first-use
 // boot baseline (SQLite).
 // Idempotent UPDATE; esrt_capable kept sticky.
