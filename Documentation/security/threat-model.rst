@@ -137,10 +137,12 @@ unlinkable; evidence is not, and the product says so where a player can act on
 it -- at the consent prompt, in ``--list-publishers`` and in the player
 documentation.
 
-The fork the design already had is the answer to it. A publisher whose titles
-only check tokens receives no report, no PCR values and no event log, so for
-them the separation is complete; a publisher who runs a verifier trades that
-away for a verifier's judgement. Nothing in the protocol can give two verifiers
+The fork the design already had narrows it. A publisher whose titles only
+check tokens receives no report and no event log: the quoted PCR digest, and
+with the boot evidence the values behind it and the PCR 7 event digests. Those
+are the same for every publisher on one boot, so they link a machine too, but
+they do not name its disk; a publisher who runs a verifier trades that away for
+a verifier's judgement. Nothing in the protocol can give two verifiers
 a per-publisher view of PCR 14 while both still verify it, so this is a
 disclosure to state plainly.
 

@@ -273,6 +273,10 @@ struct lota_token_wire size=152 align=1
 	sig_size                         off=140 size=2
 	runtime_protect_version          off=142 size=2
 	stopped_ms                       off=144 size=8
+macro LOTA_BOOT_EVIDENCE_VERSION               = 1
+macro LOTA_BOOT_EVIDENCE_HEADER_SIZE           = 8
+macro LOTA_BOOT_EVIDENCE_EVENT_SIZE            = 34
+macro LOTA_BOOT_EVIDENCE_MAX_SIZE              = 8192
 macro LOTA_HOOK_ENV_DISABLE                    = "LOTA_HOOK_DISABLE"
 macro LOTA_HOOK_ENV_ACTIVATE_PATH              = "LOTA_HOOK_ACTIVATE_PATH"
 macro LOTA_HOOK_ENV_ACTIVATE_PROGRAM           = "LOTA_HOOK_ACTIVATE_PROGRAM"

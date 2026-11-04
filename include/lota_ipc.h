@@ -60,6 +60,8 @@ enum lota_ipc_cmd {
 		0x0A, /* End a protected process on behalf of its owner */
 	LOTA_IPC_CMD_GET_REGISTRY =
 		0x0B, /* Code objects the last measurement found in a process */
+	LOTA_IPC_CMD_GET_BOOT_EVIDENCE =
+		0x0C, /* Quoted PCR values and PCR 7 events (lota_token.h) */
 };
 
 /*

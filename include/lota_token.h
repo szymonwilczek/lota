@@ -135,6 +135,34 @@ struct lota_token_wire {
 	 */
 } __attribute__((packed));
 
+/*
+ * Boot evidence wire format
+ *
+ * The values of the PCRs a token quotes and the PCR 7 events behind them,
+ * so a relying party with no verifier can check how the machine booted.
+ *
+ * Wire layout (little-endian):
+ *
+ *   Offset  Size  Field
+ *   0       2     version      (LOTA_BOOT_EVIDENCE_VERSION)
+ *   2       2     event_count
+ *   4       4     pcr_mask     (the token's)
+ *   8       32*N  pcr_values   (one per set bit of pcr_mask, lowest first)
+ *   ---     ---   --------------------------------
+ *   ...     var   events[event_count], in log order:
+ *                   32  digest    (SHA-256 the firmware extended)
+ *                   2   data_size
+ *                   var data[data_size]
+ *
+ * An event carries data only when it measures the EFI global SecureBoot
+ * variable. Nothing in the evidence is trusted until the PCR values hash to
+ * the quoted PCR digest and the events replay to the PCR 7 value.
+ */
+#define LOTA_BOOT_EVIDENCE_VERSION 0x0001
+#define LOTA_BOOT_EVIDENCE_HEADER_SIZE 8
+#define LOTA_BOOT_EVIDENCE_EVENT_SIZE 34 /* digest + data_size */
+#define LOTA_BOOT_EVIDENCE_MAX_SIZE 8192
+
 #ifdef __cplusplus
 }
 #endif

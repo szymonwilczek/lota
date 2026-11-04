@@ -6,6 +6,7 @@
  */
 
 #include "attest_aggregate.h"
+#include "boot_evidence.h"
 #include "enroll.h"
 #include "hardening.h"
 #include "ipc.h"
@@ -1236,6 +1237,43 @@ static void handle_get_status(struct ipc_context *ctx,
 	memset(status->reserved, 0, sizeof(status->reserved));
 
 	client->send_len = LOTA_IPC_RESPONSE_SIZE + sizeof(*status);
+	client->send_offset = 0;
+}
+
+/*
+ * The PCR values a token quotes and the PCR 7 events behind them.
+ * Charged to the GET_TOKEN uid ceiling: each answer reads the TPM and the log.
+ */
+static void handle_get_boot_evidence(struct ipc_context *ctx,
+				     struct ipc_client *client)
+{
+	struct lota_ipc_response *resp = (void *)client->send_buf;
+	size_t len = 0;
+	int ret;
+
+	if (check_get_token_rate_limit(client->peer_uid) < 0) {
+		build_error_response(client, LOTA_IPC_ERR_RATE_LIMITED);
+		return;
+	}
+	if (!ipc_can_issue_tokens(ctx)) {
+		build_error_response(client, LOTA_IPC_ERR_NO_TPM);
+		return;
+	}
+
+	ret = boot_evidence_collect(ctx->tpm, ctx->quote_pcr_mask,
+				    client->send_buf + LOTA_IPC_RESPONSE_SIZE,
+				    LOTA_IPC_MAX_PAYLOAD, &len);
+	if (ret < 0) {
+		lota_err("cannot build boot evidence: %s", strerror(-ret));
+		build_error_response(client, LOTA_IPC_ERR_INTERNAL);
+		return;
+	}
+
+	resp->magic = LOTA_IPC_MAGIC;
+	resp->version = LOTA_IPC_VERSION;
+	resp->result = LOTA_IPC_OK;
+	resp->payload_len = (uint32_t)len;
+	client->send_len = LOTA_IPC_RESPONSE_SIZE + len;
 	client->send_offset = 0;
 }
 
@@ -3344,6 +3382,10 @@ static void process_request(struct ipc_context *ctx, struct ipc_client *client)
 
 	case LOTA_IPC_CMD_GET_TOKEN:
 		handle_get_token(ctx, client, payload, payload_len);
+		break;
+
+	case LOTA_IPC_CMD_GET_BOOT_EVIDENCE:
+		handle_get_boot_evidence(ctx, client);
 		break;
 
 	case LOTA_IPC_CMD_SET_PROFILE:

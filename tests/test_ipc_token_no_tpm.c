@@ -2,7 +2,7 @@
 /*
  * Unit tests for what the IPC bridge answers when the agent holds nothing.
  *
- * Three refusals share that shape. GET_TOKEN on a host with no TPM is the
+ * Four refusals share that shape. GET_TOKEN on a host with no TPM is the
  * first.
  *
  * A token nobody signed is not evidence, so the refusal itself is right and stays.
@@ -17,6 +17,9 @@
  *
  * GET_TOKEN naming no publisher on a host that serves several is the third:
  * any key the agent picks signs another publisher's evidence.
+ *
+ * GET_BOOT_EVIDENCE is the fourth: with no TPM there is no token to check it
+ * against.
  *
  * These tests drive the real ipc_process() loop over a real socket with no TPM
  * and no enforcement, which is the state --test-ipc runs in.
@@ -47,6 +50,7 @@
 #include "../src/agent/profile.h"
 #include "../src/agent/runtime_image_measure.h"
 #include "../src/agent/tpm.h"
+#include "../src/agent/boot_evidence.h"
 
 /*
  * The daemon's state and the layers below the socket.
@@ -98,6 +102,18 @@ int tpm_aik_slot_census(struct tpm_context *ctx, const char *base_dir,
 	(void)ctx;
 	(void)base_dir;
 	(void)out;
+	return -ENOTSUP;
+}
+
+/* no TPM: never reached */
+int boot_evidence_collect(struct tpm_context *tpm, uint32_t pcr_mask,
+			  uint8_t *out, size_t out_size, size_t *out_len)
+{
+	(void)tpm;
+	(void)pcr_mask;
+	(void)out;
+	(void)out_size;
+	(void)out_len;
 	return -ENOTSUP;
 }
 
@@ -742,6 +758,32 @@ static void test_one_publisher_still_answers_an_unnamed_caller(void)
 	PASS();
 }
 
+static void test_boot_evidence_without_tpm(struct ipc_context *ctx)
+{
+	struct lota_ipc_response resp;
+	uint8_t payload[LOTA_IPC_MAX_PAYLOAD];
+	int fd, ret;
+
+	TEST("a host with no TPM refuses boot evidence as having none");
+
+	fd = client_open();
+	if (fd < 0) {
+		FAIL("cannot connect");
+		return;
+	}
+	ret = send_request(fd, LOTA_IPC_CMD_GET_BOOT_EVIDENCE, NULL, 0);
+	if (ret >= 0)
+		ret = read_frame(ctx, fd, &resp, payload, sizeof(payload), 64);
+	close(fd);
+
+	if (ret < 0)
+		FAIL("no answer");
+	else if (resp.result != LOTA_IPC_ERR_NO_TPM)
+		FAIL("the refusal does not say there is no TPM");
+	else
+		PASS();
+}
+
 int main(void)
 {
 	struct ipc_context ctx;
@@ -803,6 +845,8 @@ int main(void)
 		test_protect_pid_refusal_names_itself();
 		test_protect_pid_refusal_is_logged();
 	}
+
+	test_boot_evidence_without_tpm(&ctx);
 
 	/* after the probes above, which need a host with no publishers */
 	unnamed_profiles_set(&ctx, 1);
