@@ -765,7 +765,7 @@ SELINUX_PP := selinux/lota.pp
 SELINUX_IF := selinux/lota.if
 # Must match both package manifests and lota-install's SELinux stage default.
 SELINUX_DATA_DIR := /usr/share/lota/selinux
-$(SELINUX_PP):
+$(SELINUX_PP): selinux/lota.te selinux/lota.if selinux/lota.fc
 	$(Q)$(MAKE) -C selinux lota.pp
 
 .PHONY: selinux-pp
