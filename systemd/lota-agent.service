@@ -83,6 +83,13 @@ RestartPreventExitStatus=78 3
 User=root
 Group=root
 
+#
+# Whatever the agent protects dies with it, so the OOM killer should look
+# elsewhere first. Not -1000: a memory limit on this unit with nothing left to
+# kill in it loops in the kernel instead of ending the agent.
+#
+OOMScoreAdjust=-900
+
 ProtectSystem=strict
 ReadWritePaths=/var/lib/lota /run/lota
 ReadOnlyPaths=/etc/lota /usr/lib/lota
