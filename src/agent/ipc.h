@@ -163,6 +163,9 @@ struct ipc_context {
 	/* this agent is not the first of the boot; sticky like the above */
 	bool agent_restarted;
 
+	/* the kernel left out an event; sticky like the above */
+	bool events_lost;
+
 	/* Attestation state */
 	uint32_t status_flags;
 	uint64_t last_attest_time; /* set by a round, never by a recompute */
@@ -300,6 +303,13 @@ void ipc_update_rotation(struct ipc_context *ctx, uint64_t generation,
  * @ctx: Server context
  */
 void ipc_set_agent_restarted(struct ipc_context *ctx);
+
+/*
+ * ipc_set_events_lost - Say until the agent ends that the kernel left out
+ * an event of the log
+ * @ctx: Server context
+ */
+void ipc_set_events_lost(struct ipc_context *ctx);
 
 /*
  * ipc_set_mode - Update current mode

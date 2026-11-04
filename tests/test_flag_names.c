@@ -94,6 +94,8 @@ int main(void)
 	      "BLOCK_PTRACE is named");
 	CHECK(names(LOTA_FLAG_AGENT_RESTARTED, "AGENT_RESTARTED"),
 	      "AGENT_RESTARTED is named");
+	CHECK(names(LOTA_FLAG_EVENTS_LOST, "EVENTS_LOST"),
+	      "EVENTS_LOST is named");
 
 	CHECK(lota_flags_to_string(LOTA_FLAG_ATTESTED, buf, 2) ==
 		      LOTA_ERR_BUFFER_TOO_SMALL,

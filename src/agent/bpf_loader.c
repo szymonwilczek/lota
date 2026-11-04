@@ -59,6 +59,7 @@
 #define STAT_PTRACE_BLOCKED 8
 #define STAT_SETUID_EVENTS 9
 #define STAT_BPF_SYSCALL_BLOCKED 13
+#define STAT_BLOCKED_EVENTS_SUPPRESSED 15
 #define STAT_MOUNTS_BLOCKED 16
 #define STAT_KILL_GUARD_BLOCKED 17
 #define STAT_EVENTS_YIELDED 18
@@ -2659,6 +2660,8 @@ int bpf_loader_get_extended_stats(struct bpf_loader_ctx *ctx,
 	read_stat(ctx->stats_fd, STAT_INSTANCE_PEERS_LOST,
 		  &stats->instance_peers_lost);
 	read_stat(ctx->stats_fd, STAT_EVENTS_YIELDED, &stats->events_yielded);
+	read_stat(ctx->stats_fd, STAT_BLOCKED_EVENTS_SUPPRESSED,
+		  &stats->blocked_suppressed);
 	read_stat(ctx->stats_fd, STAT_KILL_PROBES, &stats->kill_probes);
 
 	return 0;

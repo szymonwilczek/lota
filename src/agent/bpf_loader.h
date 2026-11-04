@@ -564,6 +564,7 @@ struct bpf_extended_stats {
 	uint64_t mounts_blocked;
 	uint64_t kill_guard_blocked;
 	uint64_t events_yielded; /* dropped to leave ring room */
+	uint64_t blocked_suppressed; /* refused events past their budget */
 	uint64_t kill_probes; /* signal-0 probes at a protected task */
 	uint64_t mapped_write_blocked; /* writes refused to a pinned library */
 	uint64_t mapped_pin_refused; /* mapped objects left unpinned */

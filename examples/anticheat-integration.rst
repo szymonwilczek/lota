@@ -360,6 +360,12 @@ Worth being precise about, because it decides what you can build on it:
   than evidence of anything. A session that goes quiet alone may be a stalled
   title: LOTA does not report a stall, so your own heartbeat is what shows it.
 
+* Whether the agent's log is whole. ``LOTA_FLAG_EVENTS_LOST`` says the kernel
+  left an event out of it: the agent did not keep up, or something produced more
+  events than the log takes. Refusals still happened and the lists in the token
+  are kept apart from that log. The bit can arrive a second or more after the
+  loss, and what it is worth is your policy.
+
 It does **not** prove the player is not cheating. It proves the platform
 underneath is what it claims to be, which removes the layer where a cheat
 would otherwise be invisible to you: a tampered kernel, an unsigned

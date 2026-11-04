@@ -67,6 +67,12 @@ never reaches its share. Yields are counted in ``STAT_EVENTS_YIELDED``
 (``yielded=`` in the shutdown statistics); ``STAT_RINGBUF_DROPS`` counts detail
 lost to a full ring, which may belong to a type that was not the loud one.
 
+A full ring, a yield or a refusal past its budget raises
+``LOTA_STATUS_EVENTS_LOST`` until the agent ends. A permitted event past its
+budget does not: an ordinary boot spends that budget, so the bit would always be
+set. The agent reads the counters at most once a second, so the bit follows the
+loss; the counters keep the count for an agent short of CPU.
+
 An event never worth a line is dropped before the reserve, not by the budget.
 ``lota_task_kill`` asks ``lota_signal_event`` (``include/lota.h``): a permitted
 signal 0, a liveness probe a launcher sends over a thousand times a minute, is

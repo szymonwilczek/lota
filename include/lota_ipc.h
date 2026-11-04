@@ -123,10 +123,12 @@ enum lota_ipc_result {
 #define LOTA_STATUS_BPF_LOADED (1 << 3) /* BPF LSM active */
 #define LOTA_STATUS_SECURE_BOOT (1 << 4) /* Secure Boot enabled */
 #define LOTA_STATUS_TPM_LOCKOUT (1 << 5) /* TPM signaled DA lockout */
-#define LOTA_STATUS_RINGBUF_DROPS \
-	(1                        \
-	 << 6) /* BPF events ringbuf dropped at least one event since last     \
-		  poll; forensic stream incomplete, enforcement unaffected */
+/*
+ * the kernel left out an event: ring full, yielded under pressure or a refusal
+ * past its budget. The event log is incomplete, enforcement is not affected.
+ * Stays set until the agent ends.
+ */
+#define LOTA_STATUS_EVENTS_LOST (1 << 6)
 #define LOTA_STATUS_UPDATE_PENDING \
 	(1                         \
 	 << 7) /* Agent binary on disk differs from the running one: package \

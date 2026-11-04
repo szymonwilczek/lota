@@ -257,6 +257,15 @@ enum lota_error {
 #define LOTA_FLAG_AGENT_RESTARTED (1 << 20)
 
 /*
+ * The kernel left an event out of the agent's log: the agent did not keep up,
+ * or something produced more events than the log takes. What the agent refuses
+ * is still refused and the token's lists are kept apart from that log, so only
+ * the lines are gone. It stays set until the agent ends, and it can arrive up
+ * to a second after the loss, later on an agent short of CPU.
+ */
+#define LOTA_FLAG_EVENTS_LOST (1 << 6)
+
+/*
  * Subscription event types
  *
  * Bitmask selecting which status changes trigger push notifications.

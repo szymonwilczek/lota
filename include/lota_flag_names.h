@@ -40,12 +40,12 @@ static const struct lota_flag_name lota_flag_names[] = {
 	{ LOTA_STATUS_BLOCK_ANON_EXEC, "BLOCK_ANON_EXEC" },
 	{ LOTA_STATUS_BLOCK_PTRACE, "BLOCK_PTRACE" },
 	{ LOTA_STATUS_AGENT_RESTARTED, "AGENT_RESTARTED" },
+	{ LOTA_STATUS_EVENTS_LOST, "EVENTS_LOST" },
 };
 
 /* The bits only the host's operator is shown */
 static const struct lota_flag_name lota_host_flag_names[] = {
 	{ LOTA_STATUS_TPM_LOCKOUT, "TPM_LOCKOUT" },
-	{ LOTA_STATUS_RINGBUF_DROPS, "RINGBUF_DROPS" },
 };
 
 #define LOTA_FLAG_NAME_COUNT \

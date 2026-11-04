@@ -497,6 +497,44 @@ static void test_idle_round_keeps_the_time(struct ipc_context *ctx)
 	PASS();
 }
 
+/* the round publishes the word from scratch; the loss outlives it */
+static void test_events_lost_outlives_a_round(struct ipc_context *ctx)
+{
+	struct lota_ipc_status st;
+	uint64_t until = (uint64_t)time(NULL) + 600;
+
+	TEST("a lost event stays in the status and leaves the window alone");
+
+	ipc_update_status(ctx, LOTA_STATUS_TPM_OK, until);
+	ipc_set_events_lost(ctx);
+
+	if (read_status(ctx, &st) < 0) {
+		FAIL("status");
+		return;
+	}
+	if (!(st.flags & LOTA_STATUS_EVENTS_LOST)) {
+		FAIL("the loss did not reach the status");
+		return;
+	}
+	if (st.valid_until != until) {
+		FAIL("the loss moved the validity window");
+		return;
+	}
+
+	ipc_update_status(ctx, LOTA_STATUS_TPM_OK, until);
+
+	if (read_status(ctx, &st) < 0) {
+		FAIL("status");
+		return;
+	}
+	if (!(st.flags & LOTA_STATUS_EVENTS_LOST)) {
+		FAIL("a round erased the loss");
+		return;
+	}
+
+	PASS();
+}
+
 int main(void)
 {
 	struct ipc_context ctx;
@@ -522,6 +560,7 @@ int main(void)
 	test_completed_round_sets_the_time(&ctx);
 	test_recompute_keeps_the_time(&ctx);
 	test_idle_round_keeps_the_time(&ctx);
+	test_events_lost_outlives_a_round(&ctx);
 
 	ipc_cleanup(&ctx);
 	unlink(test_socket);
