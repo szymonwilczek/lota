@@ -7,7 +7,9 @@
  *   [lota_attestation_report]    (fixed struct, see the static asserts below)
  *   [event_log_size: uint32_t]
  *   [tpm_event_log: uint8_t * event_log_size]
- *   [lota_esrt]                  (mandatory trailing section)
+ *   [lota_esrt]                  (mandatory section)
+ *   [mok_list_size: uint32_t]
+ *   [mok_list: uint8_t * mok_list_size]
  *
  * Copyright (C) 2026 Szymon Wilczek
  */
@@ -40,7 +42,7 @@ _Static_assert(sizeof(struct lota_attestation_report) == 5878,
 	       "types/report.go");
 _Static_assert(sizeof(struct lota_esrt) == 28,
 	       "lota_esrt size changed; update ESRTWireSize in types/report.go");
-size_t calculate_report_size(uint32_t event_log_size)
+size_t calculate_report_size(uint32_t event_log_size, uint32_t mok_list_size)
 {
 	size_t size = sizeof(struct lota_attestation_report);
 
@@ -53,17 +55,27 @@ size_t calculate_report_size(uint32_t event_log_size)
 		return 0;
 	size += event_log_size;
 
-	/* Mandatory trailing ESRT section (fixed size) */
+	/* Mandatory ESRT section (fixed size) */
 	if (size + sizeof(struct lota_esrt) < size)
 		return 0;
 	size += sizeof(struct lota_esrt);
+
+	/* Mandatory MOK list section: size + data */
+	if (size + sizeof(uint32_t) < size)
+		return 0;
+	size += sizeof(uint32_t);
+
+	if (size + mok_list_size < size)
+		return 0;
+	size += mok_list_size;
 
 	return size;
 }
 
 ssize_t serialize_report(const struct lota_attestation_report *report,
 			 const uint8_t *event_log, uint32_t event_log_size,
-			 const struct lota_esrt *esrt, uint8_t *out_buf,
+			 const struct lota_esrt *esrt, const uint8_t *mok_list,
+			 uint32_t mok_list_size, uint8_t *out_buf,
 			 size_t out_buf_size)
 {
 	size_t total;
@@ -81,7 +93,10 @@ ssize_t serialize_report(const struct lota_attestation_report *report,
 	if (!event_log)
 		event_log_size = 0;
 
-	total = calculate_report_size(event_log_size);
+	if (!mok_list)
+		mok_list_size = 0;
+
+	total = calculate_report_size(event_log_size, mok_list_size);
 	if (total == 0)
 		return -EOVERFLOW;
 
@@ -104,7 +119,7 @@ ssize_t serialize_report(const struct lota_attestation_report *report,
 		offset += event_log_size;
 	}
 
-	/* mandatory trailing ESRT section, little-endian fields */
+	/* mandatory ESRT section, little-endian fields */
 	{
 		uint32_t present_le = htole32(esrt->present);
 		uint32_t ver_le = htole32(esrt->fw_version);
@@ -119,6 +134,19 @@ ssize_t serialize_report(const struct lota_attestation_report *report,
 		memcpy(out_buf + offset, esrt->fw_class,
 		       sizeof(esrt->fw_class));
 		offset += sizeof(esrt->fw_class);
+	}
+
+	/* mandatory MOK list section */
+	{
+		uint32_t mls_le = htole32(mok_list_size);
+
+		memcpy(out_buf + offset, &mls_le, sizeof(mls_le));
+		offset += sizeof(mls_le);
+	}
+
+	if (mok_list_size > 0) {
+		memcpy(out_buf + offset, mok_list, mok_list_size);
+		offset += mok_list_size;
 	}
 
 	return (ssize_t)offset;

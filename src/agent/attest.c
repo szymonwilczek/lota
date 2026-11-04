@@ -38,6 +38,7 @@
 #include "daemon.h"
 #include "enroll.h"
 #include "esrt.h"
+#include "moklist.h"
 #include "exit_status.h"
 #include "hardening.h"
 #include "iommu.h"
@@ -732,6 +733,7 @@ static int attest_once(const char *server, int port, const char *ca_cert,
 	uint8_t *event_log = NULL;
 	size_t event_log_size = 0;
 	uint8_t *wire_buf = NULL;
+	uint8_t *mok_list = NULL;
 	size_t wire_buf_size = 0;
 	ssize_t wire_size = 0;
 	enum attest_stage stage = ATTEST_STAGE_COUNT;
@@ -802,6 +804,7 @@ static int attest_once(const char *server, int port, const char *ca_cert,
 	/* serialize report with variable-length sections */
 	{
 		struct lota_esrt esrt;
+		uint32_t mok_list_size = 0;
 		size_t total;
 
 		/* ESRT System Firmware version (anti-rollback signal for the
@@ -809,7 +812,20 @@ static int attest_once(const char *server, int port, const char *ca_cert,
 		 * Always sent, present=0 when absent */
 		esrt_read_system_firmware(&esrt);
 
-		total = calculate_report_size((uint32_t)event_log_size);
+		/* Verifier checks the list against the MokList event of the log.
+		 * Nothing to send leaves it unproven there, not a failed attestation */
+		mok_list = malloc(MOK_LIST_MAX);
+		if (!mok_list) {
+			ret = -ENOMEM;
+			stage = ATTEST_STAGE_SERIALIZE;
+			goto cleanup;
+		}
+		if (mok_list_read(mok_list, MOK_LIST_MAX, &mok_list_size) < 0 &&
+		    verbose)
+			printf("MOK list not sent\n");
+
+		total = calculate_report_size((uint32_t)event_log_size,
+					      mok_list_size);
 		wire_buf_size = total;
 		wire_buf = malloc(total);
 		if (!wire_buf) {
@@ -821,7 +837,8 @@ static int attest_once(const char *server, int port, const char *ca_cert,
 		report.header.report_size = (uint32_t)total;
 		wire_size = serialize_report(&report, event_log,
 					     (uint32_t)event_log_size, &esrt,
-					     wire_buf, total);
+					     mok_list, mok_list_size, wire_buf,
+					     total);
 		if (wire_size < 0) {
 			ret = (int)wire_size;
 			stage = ATTEST_STAGE_SERIALIZE;
@@ -881,6 +898,7 @@ cleanup:
 		OPENSSL_cleanse(event_log, event_log_size);
 	free(wire_buf);
 	free(event_log);
+	free(mok_list);
 	if (net_ctx_inited)
 		net_context_cleanup(&net_ctx);
 	OPENSSL_cleanse(&net_ctx, sizeof(net_ctx));

@@ -28,8 +28,8 @@ verifier under test runs its strict production configuration; no TOFU
 opt-out flags are involved.
 
 The synthetic report is built to the same wire version the agent emits
-(``ReportVersion``), including the mandatory trailing ESRT section, so a wire
-change breaks the harness in the build rather than showing up as a fleet of
+(``ReportVersion``), including the mandatory ESRT and MOK list sections, so a
+wire change breaks the harness in the build rather than showing up as a fleet of
 rejected attestations mid-run.
 
 What a run measures and what it cannot

@@ -39,6 +39,7 @@
 /* event log the report carries;
  * contents are opaque to this test */
 static const char event_log[] = "LOTA-CROSS-LANG-EVENT-LOG";
+static const char mok_list[] = "LOTA-CROSS-LANG-MOK-LIST";
 
 int main(void)
 {
@@ -109,7 +110,8 @@ int main(void)
 		esrt.fw_class[i] = (uint8_t)(0xC0 ^ i);
 
 	/* event log length excludes the terminating NUL */
-	expected = calculate_report_size((uint32_t)(sizeof(event_log) - 1));
+	expected = calculate_report_size((uint32_t)(sizeof(event_log) - 1),
+					 (uint32_t)(sizeof(mok_list) - 1));
 	if (expected == 0 || expected > sizeof(buf)) {
 		fprintf(stderr, "report_gen: bad computed size %zu\n",
 			expected);
@@ -119,7 +121,9 @@ int main(void)
 
 	wire_size = serialize_report(&report, (const uint8_t *)event_log,
 				     (uint32_t)(sizeof(event_log) - 1), &esrt,
-				     buf, sizeof(buf));
+				     (const uint8_t *)mok_list,
+				     (uint32_t)(sizeof(mok_list) - 1), buf,
+				     sizeof(buf));
 	if (wire_size < 0) {
 		fprintf(stderr, "report_gen: serialize_report failed: %zd\n",
 			wire_size);
@@ -134,7 +138,9 @@ int main(void)
 
 	/* ESRT section is mandatory: NULL must be refused */
 	if (serialize_report(&report, (const uint8_t *)event_log,
-			     (uint32_t)(sizeof(event_log) - 1), NULL, buf,
+			     (uint32_t)(sizeof(event_log) - 1), NULL,
+			     (const uint8_t *)mok_list,
+			     (uint32_t)(sizeof(mok_list) - 1), buf,
 			     sizeof(buf)) != -EINVAL) {
 		fprintf(stderr,
 			"report_gen: serialize_report accepted a NULL ESRT\n");

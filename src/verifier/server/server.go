@@ -531,7 +531,7 @@ func (s *Server) handleConnection(conn net.Conn) {
 
 	// get total size from report header.report_size (offset 8)
 	totalSize := binary.LittleEndian.Uint32(headerBuf[8:12])
-	if totalSize < 32 || totalSize > 64*1024 { // 64KB max
+	if totalSize < 32 || totalSize > types.MaxReportWireSize {
 		clog.Warn("invalid report size", "size", totalSize)
 		s.metrics.ConnectionErrors.Inc()
 		s.sendErrorResult(conn, types.VerifyReportMalformed)

@@ -116,9 +116,9 @@ func createTestReportBytes() []byte {
 	offset += 4
 	copy(buf[offset:], "intel_iommu=on") // cmdline
 
-	// mandatory trailing ESRT section
-	// all-zero means present == false
-	buf = append(buf, make([]byte, ESRTWireSize)...)
+	// mandatory ESRT and MOK list sections
+	// all-zero means present == false and an empty list
+	buf = append(buf, make([]byte, ESRTWireSize+MokListSizeLen)...)
 	binary.LittleEndian.PutUint32(buf[8:12], uint32(len(buf))) // report_size
 
 	return buf
@@ -577,7 +577,7 @@ func BenchmarkParseReport(b *testing.B) {
 // before the section is truncated, not an older agent
 func TestParseReport_RejectsMissingESRT(t *testing.T) {
 	full := createTestReportBytes()
-	truncated := full[:len(full)-ESRTWireSize]
+	truncated := full[:len(full)-MokListSizeLen-ESRTWireSize]
 	binary.LittleEndian.PutUint32(truncated[8:12], uint32(len(truncated)))
 
 	report, err := ParseReport(truncated)
@@ -589,7 +589,7 @@ func TestParseReport_RejectsMissingESRT(t *testing.T) {
 	}
 
 	// one byte short of the section is refused just the same
-	short := full[:len(full)-1]
+	short := full[:len(full)-MokListSizeLen-1]
 	binary.LittleEndian.PutUint32(short[8:12], uint32(len(short)))
 	if _, err := ParseReport(short); !errors.Is(err, ErrInvalidSize) {
 		t.Fatalf("report one byte short of the ESRT section: got %v, want ErrInvalidSize", err)
@@ -608,7 +608,7 @@ func TestParseReport_ESRT(t *testing.T) {
 	// createTestReportBytes() already carries all-zero ESRT section
 	// overwrite it rather than appending second one
 	data := createTestReportBytes()
-	copy(data[len(data)-ESRTWireSize:], esrt)
+	copy(data[len(data)-MokListSizeLen-ESRTWireSize:], esrt)
 
 	report, err := ParseReport(data)
 	if err != nil {
@@ -641,7 +641,7 @@ func TestParseReport_ESRT_NotPresent(t *testing.T) {
 	// createTestReportBytes() already carries all-zero ESRT section
 	// overwrite it rather than appending second one
 	data := createTestReportBytes()
-	copy(data[len(data)-ESRTWireSize:], esrt)
+	copy(data[len(data)-MokListSizeLen-ESRTWireSize:], esrt)
 
 	report, err := ParseReport(data)
 	if err != nil {
@@ -652,5 +652,47 @@ func TestParseReport_ESRT_NotPresent(t *testing.T) {
 	}
 	if report.ESRT.Present {
 		t.Error("expected ESRT.Present false")
+	}
+}
+
+// MOK list section is mandatory: a list is copied out, no list is size 0,
+// and a report that stops before or inside the section is truncated
+func TestParseReport_MokList(t *testing.T) {
+	base := createTestReportBytes()
+
+	report, err := ParseReport(base)
+	if err != nil {
+		t.Fatalf("ParseReport failed: %v", err)
+	}
+	if report.MokList != nil {
+		t.Errorf("empty section: got %x, want nil", report.MokList)
+	}
+
+	list := []byte("synthetic-mok-list")
+	data := append([]byte(nil), base...)
+	binary.LittleEndian.PutUint32(data[len(data)-MokListSizeLen:], uint32(len(list)))
+	data = append(data, list...)
+	binary.LittleEndian.PutUint32(data[8:12], uint32(len(data)))
+
+	report, err = ParseReport(data)
+	if err != nil {
+		t.Fatalf("ParseReport failed: %v", err)
+	}
+	if !bytes.Equal(report.MokList, list) {
+		t.Errorf("MokList: got %q, want %q", report.MokList, list)
+	}
+
+	if _, err := ParseReport(data[:len(data)-1]); !errors.Is(err, ErrInvalidSize) {
+		t.Errorf("list one byte short: got %v, want ErrInvalidSize", err)
+	}
+	if _, err := ParseReport(base[:len(base)-1]); !errors.Is(err, ErrInvalidSize) {
+		t.Errorf("no length prefix: got %v, want ErrInvalidSize", err)
+	}
+
+	// a size past the end does not wrap the bounds check
+	huge := append([]byte(nil), base...)
+	binary.LittleEndian.PutUint32(huge[len(huge)-MokListSizeLen:], 0xFFFFFFFF)
+	if _, err := ParseReport(huge); !errors.Is(err, ErrInvalidSize) {
+		t.Errorf("oversized list: got %v, want ErrInvalidSize", err)
 	}
 }

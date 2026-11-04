@@ -239,6 +239,9 @@ struct lota_esrt {
  *   [lota_esrt: 28 bytes]   (always present; esrt.present == 0 is how a
  *                            platform without an ESRT System Firmware entry
  *                            is reported)
+ *   [mok_list_size: uint32_t]
+ *   [mok_list: uint8_t * mok_list_size]  (EFI_SIGNATURE_LIST data of MokListRT;
+ *                            size 0 where the agent has nothing to send)
  */
 struct lota_attestation_report {
 	struct lota_report_header header;
@@ -256,6 +259,8 @@ struct lota_attestation_report {
  * @esrt: ESRT System Firmware descriptor; mandatory,
  * 	  NULL is rejected with -EINVAL
  * 	  (present == 0 is how a platform without an entry reports)
+ * @mok_list: MokListRT data (can be NULL)
+ * @mok_list_size: Size of MokListRT data
  * @out_buf: Output buffer (caller allocates)
  * @out_buf_size: Size of output buffer
  *
@@ -263,17 +268,19 @@ struct lota_attestation_report {
  */
 ssize_t serialize_report(const struct lota_attestation_report *report,
 			 const uint8_t *event_log, uint32_t event_log_size,
-			 const struct lota_esrt *esrt, uint8_t *out_buf,
+			 const struct lota_esrt *esrt, const uint8_t *mok_list,
+			 uint32_t mok_list_size, uint8_t *out_buf,
 			 size_t out_buf_size);
 
 /*
  * calculate_report_size - Calculate serialized report size
  * @event_log_size: Size of TPM event log
+ * @mok_list_size: Size of MokListRT data
  *
- * Trailing ESRT section is always counted: it is mandatory on the wire.
+ * ESRT and MOK list sections are always counted: both are mandatory on the wire.
  *
  * Returns: Total size in bytes
  */
-size_t calculate_report_size(uint32_t event_log_size);
+size_t calculate_report_size(uint32_t event_log_size, uint32_t mok_list_size);
 
 #endif /* LOTA_ATTESTATION_H */

@@ -172,7 +172,7 @@ func TestTruncatedReportIsNotAnOldAgent(t *testing.T) {
 		{
 			name: "a report that stops before the mandatory ESRT section",
 			cut: func(report []byte) []byte {
-				return report[:len(report)-types.ESRTWireSize]
+				return report[:len(report)-types.MokListSizeLen-types.ESRTWireSize]
 			},
 			verdict: codeReportMalformed,
 			reason:  "report_malformed",
@@ -180,7 +180,15 @@ func TestTruncatedReportIsNotAnOldAgent(t *testing.T) {
 		{
 			name: "a report one byte short of the ESRT section",
 			cut: func(report []byte) []byte {
-				return report[:len(report)-1]
+				return report[:len(report)-types.MokListSizeLen-1]
+			},
+			verdict: codeReportMalformed,
+			reason:  "report_malformed",
+		},
+		{
+			name: "a report that stops before the mandatory MOK list section",
+			cut: func(report []byte) []byte {
+				return report[:len(report)-types.MokListSizeLen]
 			},
 			verdict: codeReportMalformed,
 			reason:  "report_malformed",
