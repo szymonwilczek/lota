@@ -327,6 +327,18 @@ counted in the ``lfa`` re-anchor metric.
 If a reviewed re-anchor looks wrong, revoke or ban the device through the
 existing endpoints.
 
+The same profile follows a MOK change. Enrolling or deleting a Machine Owner
+Key (``mokutil``, a DKMS or akmods signing key) moves only the ``MokList``,
+``MokListX`` and ``MokListTrusted`` events shim measures into PCR 14, and so
+the pinned PCR 14 itself. When every other PCR 14 event of the boot log on
+record is unchanged in count, type, name and digest, and a moved ``MokList``
+matches the list the agent sent, the verifier re-pins PCR 14 and the log in
+place. A MOK change already needs a physical confirmation in MokManager at the
+next boot, so the path has no rate limit and no review queue; each re-pin is
+logged at security level and counted in the ``mok`` re-anchor metric, and the
+log line names the events that moved. Any other change to PCR 14 is escalated
+as before.
+
 The profile lives in the policy because it describes the fleet, not the
 deployment, and one verifier can serve several tenants and therefore several
 fleets. ``enterprise`` (and an unset profile) leaves the path off, which is

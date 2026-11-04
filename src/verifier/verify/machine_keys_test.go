@@ -4,6 +4,7 @@
 package verify
 
 import (
+	"bytes"
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
@@ -13,9 +14,13 @@ import (
 	"encoding/asn1"
 	"encoding/binary"
 	"encoding/hex"
+	"log/slog"
 	"math/big"
+	"slices"
 	"testing"
 	"time"
+
+	"github.com/szymonwilczek/lota/verifier/types"
 )
 
 func signatureList(sigType [16]byte, sigs ...[]byte) []byte {
@@ -212,5 +217,197 @@ func TestCertSubject(t *testing.T) {
 
 	if got := certSubject([]byte("not a certificate")); got != "" {
 		t.Errorf("garbage subject: %q", got)
+	}
+}
+
+func mokEvent(digest [32]byte, name string) EventLogEntry {
+	return EventLogEntry{PCRIndex: 14, EventType: EvIPL,
+		Digests: map[uint16][]byte{AlgSHA256: digest[:]}, EventData: []byte(name + "\x00")}
+}
+
+// what shim measures on a Secure Boot host: the MOK list, the denylist and the
+// trust flag
+func mokBootEntries(list []byte, trusted byte) []EventLogEntry {
+	return []EventLogEntry{
+		measuredSecureBootEntry(1),
+		mokEvent(sha256.Sum256(list), "MokList"),
+		mokEvent(sha256.Sum256([]byte("denylist")), "MokListX"),
+		mokEvent(sha256.Sum256([]byte{trusted}), "MokListTrusted"),
+	}
+}
+
+func TestMOKPCR14Change(t *testing.T) {
+	other := mokEvent(sha256.Sum256([]byte("other")), "Other")
+	moved := mokEvent(sha256.Sum256([]byte("moved")), "Other")
+	renamed := mokBootEntries([]byte("list-a"), 0)
+	renamed[1].EventData = []byte("MokListX\x00")
+
+	tests := []struct {
+		name    string
+		pinned  []EventLogEntry
+		current []EventLogEntry
+		want    []string
+	}{
+		{"list moved", mokBootEntries([]byte("list-a"), 0),
+			mokBootEntries([]byte("list-b"), 0), []string{"MokList"}},
+		{"trust flag moved", mokBootEntries([]byte("list-a"), 0),
+			mokBootEntries([]byte("list-a"), 1), []string{"MokListTrusted"}},
+		{"other event moved", append(mokBootEntries([]byte("list-a"), 0), other),
+			append(mokBootEntries([]byte("list-b"), 0), moved), nil},
+		{"event added", mokBootEntries([]byte("list-a"), 0),
+			append(mokBootEntries([]byte("list-b"), 0), other), nil},
+		{"name moved", mokBootEntries([]byte("list-a"), 0), renamed, nil},
+		{"nothing moved", mokBootEntries([]byte("list-a"), 0),
+			mokBootEntries([]byte("list-a"), 0), nil},
+		{"no shim", []EventLogEntry{measuredSecureBootEntry(1)},
+			mokBootEntries([]byte("list-a"), 0), nil},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := mokPCR14Change(&ParsedEventLog{Entries: tt.pinned},
+				&ParsedEventLog{Entries: tt.current})
+			if tt.want == nil {
+				if err == nil {
+					t.Fatalf("expected refusal, got %v", got)
+				}
+				return
+			}
+			if err != nil || !slices.Equal(got, tt.want) {
+				t.Fatalf("got %v, %v; want %v", got, err, tt.want)
+			}
+		})
+	}
+}
+
+type mokRepinCase struct {
+	v       *Verifier
+	id      string
+	pinned  [types.HashSize]byte
+	pcr14   [types.HashSize]byte
+	report  *types.AttestationReport
+	facts   *BootFacts
+	logNext []byte
+}
+
+// a client pinned on one MOK list that boots with another
+func newMOKRepinCase(t *testing.T, profile string, current []EventLogEntry) *mokRepinCase {
+	t.Helper()
+
+	agent := fixtureAgentHash()
+	v := NewVerifier(DefaultConfig(), newCertVerifier(t))
+	policy := DefaultPolicy()
+	policy.Profile = profile
+	policy.RequireSecureBoot = true
+	policy.AgentHashes = []string{hex.EncodeToString(agent[:])}
+	if err := v.AddPolicy(policy); err != nil {
+		t.Fatalf("AddPolicy: %v", err)
+	}
+
+	pinnedLog := buildTestEventLog(mokBootEntries([]byte("list-a"), 0))
+	pinnedParsed, err := ParseEventLog(pinnedLog)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c := &mokRepinCase{v: v, id: "mok-client"}
+	c.pinned = DeriveLockedBootCommitmentPCR14(PCR14BaselineFromEventLog(pinnedParsed), agent)
+	b := boot(0x10, 0x11, 0x17)
+	v.baselineStore.(AtomicBaselineStorer).CheckAndUpdateAttestation(c.id, c.pinned, agent, &b)
+	if err := v.baselineStore.(ReanchorStorer).RecordBootEvidence(c.id, pinnedLog, 0, false); err != nil {
+		t.Fatal(err)
+	}
+
+	c.logNext = buildTestEventLog(current)
+	parsed, err := ParseEventLog(c.logNext)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.pcr14 = DeriveLockedBootCommitmentPCR14(PCR14BaselineFromEventLog(parsed), agent)
+	c.report = &types.AttestationReport{EventLog: c.logNext, MokList: []byte("list-b")}
+	c.report.System.AgentHash = agent
+	c.facts = &BootFacts{Parsed: parsed, SecureBootTrusted: true,
+		SecureBoot: SecureBootState{Found: true, Enabled: true}}
+	return c
+}
+
+func (c *mokRepinCase) try() bool {
+	return c.v.tryMOKRepin(slog.Default(), c.id, "", c.pinned, c.pcr14, c.report, c.facts)
+}
+
+func (c *mokRepinCase) pinnedNow() [types.HashSize]byte {
+	return c.v.baselineStore.GetBaseline(c.id).PCR14
+}
+
+func TestTryMOKRepin_FollowsAnEnrolledKey(t *testing.T) {
+	c := newMOKRepinCase(t, ProfileConsumer, mokBootEntries([]byte("list-b"), 0))
+	if !c.try() {
+		t.Fatal("a change confined to the MOK list must re-pin")
+	}
+	if c.pinnedNow() != c.pcr14 {
+		t.Fatal("pin did not move to the reported register")
+	}
+	st := c.v.baselineStore.(ReanchorStorer).GetReanchorState(c.id)
+	if !bytes.Equal(st.EventLogBaseline, c.logNext) {
+		t.Fatal("boot evidence did not move with the pin")
+	}
+}
+
+func TestTryMOKRepin_Refusals(t *testing.T) {
+	tests := []struct {
+		name    string
+		profile string
+		current []EventLogEntry
+		mutate  func(*mokRepinCase)
+	}{
+		{"enterprise", ProfileEnterprise, mokBootEntries([]byte("list-b"), 0), nil},
+		{"no secure boot", ProfileConsumer, mokBootEntries([]byte("list-b"), 0),
+			func(c *mokRepinCase) { c.facts.SecureBoot.Enabled = false }},
+		{"list not sent", ProfileConsumer, mokBootEntries([]byte("list-b"), 0),
+			func(c *mokRepinCase) { c.report.MokList = nil }},
+		{"other event", ProfileConsumer,
+			append(mokBootEntries([]byte("list-b"), 0),
+				mokEvent(sha256.Sum256([]byte("other")), "Other")), nil},
+		{"log off the pin", ProfileConsumer, mokBootEntries([]byte("list-b"), 0),
+			func(c *mokRepinCase) { c.pinned[0] ^= 1 }},
+		{"no log on record", ProfileConsumer, mokBootEntries([]byte("list-b"), 0),
+			func(c *mokRepinCase) {
+				_ = c.v.baselineStore.(ReanchorStorer).RecordBootEvidence(c.id, nil, 0, false)
+			}},
+		{"log unparseable", ProfileConsumer, mokBootEntries([]byte("list-b"), 0),
+			func(c *mokRepinCase) {
+				_ = c.v.baselineStore.(ReanchorStorer).RecordBootEvidence(c.id, []byte{1}, 0, false)
+			}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			c := newMOKRepinCase(t, tt.profile, tt.current)
+			before := c.pinnedNow()
+			if tt.mutate != nil {
+				tt.mutate(c)
+			}
+			if c.try() {
+				t.Fatal("re-pinned")
+			}
+			if c.pinnedNow() != before {
+				t.Fatal("refusal moved the pin")
+			}
+		})
+	}
+}
+
+// the row moved after the decision read it: the write refuses
+func TestTryMOKRepin_RaceRefused(t *testing.T) {
+	c := newMOKRepinCase(t, ProfileConsumer, mokBootEntries([]byte("list-b"), 0))
+	var other [types.HashSize]byte
+	other[0] = 0x99
+	if err := c.v.baselineStore.(PCR14RepinStorer).RepinPCR14(c.id, c.pinned, other, nil, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	_ = c.v.baselineStore.(ReanchorStorer).RecordBootEvidence(c.id,
+		buildTestEventLog(mokBootEntries([]byte("list-a"), 0)), 0, false)
+	if c.try() {
+		t.Fatal("re-pinned over a moved row")
+	}
+	if c.pinnedNow() != other {
+		t.Fatal("race refusal moved the pin")
 	}
 }
