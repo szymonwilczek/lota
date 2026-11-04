@@ -797,6 +797,9 @@ static __always_inline int is_lota_managed_map(struct bpf_map *map)
 		return 1;
 	if (__builtin_memcmp(name, "allow_verity", sizeof("allow_verity")) == 0)
 		return 1;
+	if (__builtin_memcmp(name, "verity_scratch",
+			     sizeof("verity_scratch")) == 0)
+		return 1;
 	if (__builtin_memcmp(name, "lota_task_auth",
 			     sizeof("lota_task_auth")) == 0)
 		return 1;
