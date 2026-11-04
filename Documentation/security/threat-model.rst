@@ -617,8 +617,9 @@ Explicit non-goals
   keeps the device identity the CA derives from the EK. A relying party watches
   the PCR digest for a change on each device, keeps a ban on that identity and
   judges play on its server; it does not treat the flags as proof against the
-  machine's owner. The digest differs between machines, so without the event log
-  it does not show that Secure Boot was on when the device was first seen.
+  machine's owner. The digest differs between machines, so on its own it does
+  not show that Secure Boot was on when the device was first seen; the boot
+  evidence that comes with the token does.
 * Supporting hosts that intentionally disable lockdown, module signature
   enforcement, SELinux enforcing mode, fs-verity, IMA appraisal, or TPM access
   control required by production policy.

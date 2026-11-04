@@ -82,6 +82,8 @@ enum lota_server_error {
 	LOTA_SERVER_ERR_RUNTIME_IMAGE =
 		-11, /* the runtime image measurement does not
 			reconcile with the one the TPM signed */
+	LOTA_SERVER_ERR_BAD_EVIDENCE = -12, /* boot evidence malformed, or not
+						the boot the token quotes */
 };
 
 /*
@@ -248,6 +250,28 @@ int lota_server_registry_digest(uint32_t flags,
 				size_t count,
 				const struct lota_server_registry_actor *actors,
 				size_t actor_count, uint8_t out[32]);
+
+/*
+ * lota_server_verify_boot_evidence - Read Secure Boot from a token's PCRs
+ * @claims:      Claims lota_server_verify_token() returned for the token;
+ *               lota_server_parse_token() claims prove nothing
+ * @evidence:    Bytes lota_get_boot_evidence() returned next to it
+ * @len:         Length of @evidence
+ * @secure_boot: Output: 1 when the firmware measured Secure Boot on before
+ *               it handed over to the boot loader, 0 otherwise
+ *
+ * Accepts the evidence only when its PCR values hash to the signed PCR
+ * digest and its PCR 7 events replay to the PCR 7 value, so a host cannot
+ * rewrite it. A SecureBoot measurement that is absent, carries any value but
+ * 1 or comes after the firmware's separator leaves @secure_boot at 0, as
+ * does evidence with no separator.
+ *
+ * Returns: LOTA_SERVER_OK, LOTA_SERVER_ERR_INVALID_ARG,
+ *          LOTA_SERVER_ERR_BAD_EVIDENCE or LOTA_SERVER_ERR_CRYPTO.
+ */
+int lota_server_verify_boot_evidence(const struct lota_server_claims *claims,
+				     const uint8_t *evidence, size_t len,
+				     int *secure_boot);
 
 #ifdef __cplusplus
 }

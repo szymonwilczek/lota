@@ -20,6 +20,7 @@ LOTASERVER_1.0 {
 		lota_server_registry_digest;
 		lota_server_sdk_version;
 		lota_server_strerror;
+		lota_server_verify_boot_evidence;
 		lota_server_verify_token;
 
 	local:
