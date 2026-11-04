@@ -245,8 +245,9 @@ An agent that goes away mid-session
 An integrator reading the hook's file sink sees the same event through
 ``lota-status``, and the field that carries it is ``LOTA_OFFLINE``, not
 ``LOTA_ATTESTED``. When the hook loses the agent it rewrites the file with
-``LOTA_OFFLINE=1`` and a zeroed payload, and unlinks ``lota-token.bin`` and
-``lota-attestation.bin``, which cannot be trusted past the disconnect.
+``LOTA_OFFLINE=1`` and a zeroed payload, and unlinks ``lota-token.bin``,
+``lota-attestation.bin`` and ``lota-boot-evidence.bin``, which cannot be
+trusted past the disconnect.
 The write happens once per disconnect: the hook retries the connection for
 as long as the process lives, and a reconnect that succeeds publishes live
 state again, so a file that stops changing is not a signal.

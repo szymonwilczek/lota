@@ -5,7 +5,8 @@
  * A multi-publisher host refuses a token to a connection that names no
  * publisher. The real library is dlopen()ed (the connection and its
  * environment are in the load-time half) against a mock agent that records
- * the selected identity and refuses a token when there is none.
+ * the selected identity and refuses a token when there is none. The boot
+ * evidence the agent hands over lands next to the token file.
  *
  * Copyright (C) 2026 Szymon Wilczek
  */
@@ -47,12 +48,14 @@
 
 #define MOCK_ATTEST_SIZE 64
 #define MOCK_SIG_SIZE 64
+#define MOCK_EVIDENCE_SIZE 48
 
 static char tmpdir[64]; /* short: paths built from it must fit */
 static char sock_path[104];
 static char named_dir[96]; /* <tmpdir>/<name> */
 static char unnamed_dir[96];
 static char token_path[PATH_MAX];
+static char evidence_path[PATH_MAX];
 static char profile_path[PATH_MAX];
 static char log_path[PATH_MAX];
 
@@ -142,6 +145,12 @@ static int mock_send_token(int fd)
 	return mock_send(fd, LOTA_IPC_OK, payload, (uint32_t)sizeof(payload));
 }
 
+static void mock_evidence(uint8_t *buf)
+{
+	for (size_t i = 0; i < MOCK_EVIDENCE_SIZE; i++)
+		buf[i] = (uint8_t)(0x30 + i);
+}
+
 /* Status is per host; a token needs a publisher, so none means refusal */
 static void mock_serve(int client_fd)
 {
@@ -190,6 +199,16 @@ static void mock_serve(int client_fd)
 				ret = mock_send_token(client_fd);
 
 			if (ret < 0)
+				return;
+			continue;
+		}
+
+		if (req.cmd == LOTA_IPC_CMD_GET_BOOT_EVIDENCE) {
+			uint8_t evidence[MOCK_EVIDENCE_SIZE];
+
+			mock_evidence(evidence);
+			if (mock_send(client_fd, LOTA_IPC_OK, evidence,
+				      sizeof(evidence)) < 0)
 				return;
 			continue;
 		}
@@ -417,6 +436,37 @@ static void test_a_named_publisher_gets_a_token(void)
 	PASS();
 }
 
+static void test_the_evidence_lands_next_to_the_token(void)
+{
+	uint8_t want[MOCK_EVIDENCE_SIZE];
+	uint8_t got[MOCK_EVIDENCE_SIZE + 1];
+	ssize_t n;
+	int fd;
+
+	TEST("the boot evidence lands next to the token file");
+
+	if (wait_for_file(evidence_path, 5) < 0) {
+		FAIL("no evidence file was written");
+		return;
+	}
+
+	fd = open(evidence_path, O_RDONLY | O_CLOEXEC);
+	if (fd < 0) {
+		FAIL("the evidence file does not open");
+		return;
+	}
+	n = read(fd, got, sizeof(got));
+	close(fd);
+
+	mock_evidence(want);
+	if (n != MOCK_EVIDENCE_SIZE || memcmp(got, want, sizeof(want)) != 0) {
+		FAIL("the evidence file is not what the agent sent");
+		return;
+	}
+
+	PASS();
+}
+
 /* An unnamed launch runs and publishes status; only the token is missing */
 static void test_the_refusal_reaches_the_player_s_log(void)
 {
@@ -451,6 +501,8 @@ int main(void)
 	snprintf(log_path, sizeof(log_path), "%s/unnamed.log", tmpdir);
 	snprintf(token_path, sizeof(token_path), "%s/%s", named_dir,
 		 LOTA_HOOK_TOKEN_FILE);
+	snprintf(evidence_path, sizeof(evidence_path), "%s/%s", named_dir,
+		 LOTA_HOOK_BOOT_EVIDENCE_FILE);
 
 	if (mkdir(named_dir, 0700) != 0 || mkdir(unnamed_dir, 0700) != 0) {
 		perror("mkdir");
@@ -482,6 +534,7 @@ int main(void)
 
 	test_the_hook_names_the_title_s_publisher();
 	test_a_named_publisher_gets_a_token();
+	test_the_evidence_lands_next_to_the_token();
 	test_the_refusal_reaches_the_player_s_log();
 
 	kill(agent, SIGKILL);

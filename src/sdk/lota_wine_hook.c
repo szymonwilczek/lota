@@ -44,6 +44,7 @@
 #include "../../include/lota_gaming.h"
 #include "../../include/lota_ipc.h"
 #include "../../include/lota_snapshot.h"
+#include "../../include/lota_token.h"
 #include "../../include/lota_wine_hook.h"
 #include "hook_container.h"
 
@@ -71,6 +72,7 @@ static struct {
 	char status_path[PATH_MAX];
 	char token_path[PATH_MAX];
 	char snapshot_path[PATH_MAX]; /* atomic snapshot file (flags + token) */
+	char evidence_path[PATH_MAX];
 	pid_t init_pid;
 	char refused_object[256]; /* last object that would not load */
 	time_t refused_at;
@@ -81,6 +83,7 @@ static struct {
 	atomic_int token_errno; /* the token refusal already reported */
 	atomic_int self_protected;
 	atomic_int offline_published;
+	atomic_int evidence_written; /* this boot's evidence is on disk */
 } g_hook;
 
 /* Guards last_status against the loader thread reading it. */
@@ -769,6 +772,15 @@ static void hook_publish_state(void)
  * The token / snapshot files are also unlinked because they cannot be trusted
  * past the disconnect.
  */
+/* the token goes, and the evidence it is checked with goes with it */
+static void drop_token_files(void)
+{
+	unlink(g_hook.token_path);
+	unlink(g_hook.snapshot_path);
+	unlink(g_hook.evidence_path);
+	atomic_store(&g_hook.evidence_written, 0);
+}
+
 static void publish_offline_status(void)
 {
 	struct lota_status offline = { 0 };
@@ -777,8 +789,7 @@ static void publish_offline_status(void)
 	ret = write_status_payload(&offline, 1);
 	if (ret < 0)
 		LOG_WRN("write_status (offline): %s", strerror(-ret));
-	unlink(g_hook.token_path);
-	unlink(g_hook.snapshot_path);
+	drop_token_files();
 }
 
 /*
@@ -899,6 +910,28 @@ static int LOTA_UNUSED fetch_token_wire(struct lota_client *client,
 }
 
 /*
+ * The quoted PCRs hold still for a boot, so one copy serves every token
+ * the hook writes until the token files are dropped.
+ */
+static void write_boot_evidence(struct lota_client *client)
+{
+	uint8_t buf[LOTA_BOOT_EVIDENCE_MAX_SIZE];
+	size_t len = 0;
+	int ret;
+
+	if (atomic_load(&g_hook.evidence_written))
+		return;
+
+	ret = lota_get_boot_evidence(client, buf, sizeof(buf), &len);
+	if (ret != LOTA_OK) {
+		LOG_DBG("get_boot_evidence: %s", lota_strerror(ret));
+		return;
+	}
+	if (atomic_write(g_hook.evidence_path, buf, len) == 0)
+		atomic_store(&g_hook.evidence_written, 1);
+}
+
+/*
  * Fetch and write the binary token file.
  *
  * Requests a token without a client nonce (nonce = NULL).
@@ -915,8 +948,7 @@ static int write_token(struct lota_client *client, uint32_t flags)
 
 	ret = fetch_token_wire(client, wire, sizeof(wire), &written);
 	if (ret != LOTA_OK) {
-		unlink(g_hook.token_path);
-		unlink(g_hook.snapshot_path);
+		drop_token_files();
 		return ret;
 	}
 
@@ -925,6 +957,7 @@ static int write_token(struct lota_client *client, uint32_t flags)
 		return wr;
 
 	(void)write_snapshot(flags, wire, written);
+	write_boot_evidence(client);
 	return 0;
 }
 
@@ -1238,8 +1271,7 @@ static void refresh_once(void)
 		if (ret < 0 && ret != LOTA_ERR_NOT_ATTESTED)
 			LOG_DBG("write_token: %s", lota_strerror(ret));
 	} else {
-		unlink(g_hook.token_path);
-		unlink(g_hook.snapshot_path);
+		drop_token_files();
 	}
 }
 
@@ -1274,8 +1306,7 @@ static void hook_status_cb(const struct lota_status *status, uint32_t events,
 		if (ret < 0 && ret != LOTA_ERR_NOT_ATTESTED)
 			LOG_DBG("write_token: %s", lota_strerror(ret));
 	} else {
-		unlink(g_hook.token_path);
-		unlink(g_hook.snapshot_path);
+		drop_token_files();
 	}
 }
 
@@ -1411,6 +1442,8 @@ __attribute__((constructor)) static void lota_wine_hook_init(void)
 		 g_hook.token_dir, LOTA_HOOK_TOKEN_FILE);
 	snprintf(g_hook.snapshot_path, sizeof(g_hook.snapshot_path), "%s/%s",
 		 g_hook.token_dir, LOTA_HOOK_SNAPSHOT_FILE);
+	snprintf(g_hook.evidence_path, sizeof(g_hook.evidence_path), "%s/%s",
+		 g_hook.token_dir, LOTA_HOOK_BOOT_EVIDENCE_FILE);
 
 	/* export token directory for wine-side discovery */
 	setenv(LOTA_HOOK_ENV_TOKEN_DIR, g_hook.token_dir, 0);

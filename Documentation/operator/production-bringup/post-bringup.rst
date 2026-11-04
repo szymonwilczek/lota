@@ -292,10 +292,10 @@ starts Steam, and still runs the rest of its checks to a non-zero exit.
 
 The socket is the agent's half of the container path; the hook's half is a
 directory of the player's own. It writes ``lota-status``,
-``lota-token.bin`` and ``lota-attestation.bin`` into
-``$XDG_RUNTIME_DIR/lota-hook`` -- not into ``$XDG_RUNTIME_DIR/lota``, which
-the agent owns as ``root:lota`` and which a process running as the player
-cannot write. Under pressure-vessel both directories must be bound into the
+``lota-token.bin``, ``lota-attestation.bin`` and
+``lota-boot-evidence.bin`` into ``$XDG_RUNTIME_DIR/lota-hook`` -- not into
+``$XDG_RUNTIME_DIR/lota``, which the agent owns as ``root:lota`` and which a
+process running as the player cannot write. Under pressure-vessel both directories must be bound into the
 container; ``lota-proton-hook`` creates the token directory and shares both
 before the container is built. ``--verify`` also reports the token directory,
 and names the ``/tmp/lota-<uid>`` fallback the hook takes when a leftover in
