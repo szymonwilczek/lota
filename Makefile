@@ -203,6 +203,7 @@ AGENT_SRCS := $(AGENT_DIR)/main.c \
               $(AGENT_DIR)/iommu.c \
               $(AGENT_DIR)/kernel_measure.c \
               $(AGENT_DIR)/kernel_image.c \
+              $(AGENT_DIR)/tcg_log.c \
               $(AGENT_DIR)/bpf_loader.c \
               $(AGENT_DIR)/net.c \
               $(AGENT_DIR)/net_errno.c \
@@ -1762,7 +1763,7 @@ $(BUILD_DIR)/test_ipc_token_refusal: $(addprefix $(AGENT_DIR)/,ipc.c profile.c t
 $(BUILD_DIR)/test_ipc_token_refusal: TEST_LDLIBS := $(TEST_LIBSSL) -lseccomp
 
 $(BUILD_DIR)/test_kernel_floor_hint: $(AGENT_DIR)/kernel_floor_hint.h
-$(BUILD_DIR)/test_kernel_image: $(AGENT_DIR)/kernel_image.c
+$(BUILD_DIR)/test_kernel_image: $(AGENT_DIR)/kernel_image.c $(AGENT_DIR)/tcg_log.c
 $(BUILD_DIR)/test_kernel_measure: $(AGENT_DIR)/kernel_measure.c
 $(BUILD_DIR)/test_kill_report: $(AGENT_DIR)/kill_report.h
 $(BUILD_DIR)/test_mapped_pins: $(AGENT_DIR)/mapped_pins.h
