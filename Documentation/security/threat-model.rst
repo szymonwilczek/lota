@@ -448,9 +448,10 @@ Active threats
          the move takes effect, since a cgroup frozen beforehand would freeze
          it on arrival.
        | An agent kept short of CPU enforces all the same, as the hooks run in
-         the kernel. Its log falls behind, and the status word and the token
-         carry ``EVENTS_LOST`` until it ends. The slowdown itself is not
-         reported, and its rounds still pass.
+         the kernel. Its log falls behind, and the status word, the token and
+         the report carry ``EVENTS_LOST`` until it ends. The verifier logs the
+         bit and decides nothing on it. The slowdown itself is not reported, and
+         its rounds still pass.
        | ``lota-agent --terminate-protected`` relays ``SIGTERM`` or
          ``SIGKILL`` for a caller ``kill(2)`` would have allowed and leaves a
          record. Every relayed termination is journalled, and the host reports

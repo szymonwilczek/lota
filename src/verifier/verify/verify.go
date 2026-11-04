@@ -983,6 +983,9 @@ func (v *Verifier) VerifyReportFrom(challengeID, remoteAddr string, reportData [
 	if report.Header.Flags&types.FlagBench != 0 {
 		clog.Info("agent runs with --bench")
 	}
+	if report.Header.Flags&types.FlagEventsLost != 0 {
+		clog.Warn("agent's event log is incomplete: the kernel left events out")
+	}
 	if report.Header.Flags&types.FlagEnforce != 0 {
 		clog.Info("enforce mode", "policy", types.PolicyKeys(report.Header.Flags))
 	}

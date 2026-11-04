@@ -80,6 +80,22 @@ int main(void)
 	f = flags_for(true, LOTA_MODE_ENFORCE, LOTA_STATUS_BPF_LOADED);
 	CHECK(!(f & LOTA_REPORT_FLAG_BENCH), "no --bench: no BENCH");
 
+	/* a daemon that lost its LSM after the loss still says so */
+	f = flags_for(true, LOTA_MODE_ENFORCE,
+		      LOTA_STATUS_BPF_LOADED | LOTA_STATUS_EVENTS_LOST);
+	CHECK(f == (ENF | BPF | LOTA_REPORT_FLAG_EVENTS_LOST),
+	      "events lost: EVENTS_LOST beside the enforcement bits");
+
+	f = flags_for(true, LOTA_MODE_MONITOR, LOTA_STATUS_EVENTS_LOST);
+	CHECK(f == LOTA_REPORT_FLAG_EVENTS_LOST,
+	      "events lost without the LSM loaded: EVENTS_LOST alone");
+
+	f = flags_for(false, LOTA_MODE_ENFORCE, LOTA_STATUS_EVENTS_LOST);
+	CHECK(f == 0, "daemon not reached: no EVENTS_LOST");
+
+	f = flags_for(true, LOTA_MODE_ENFORCE, LOTA_STATUS_BPF_LOADED);
+	CHECK(!(f & LOTA_REPORT_FLAG_EVENTS_LOST), "no loss: no EVENTS_LOST");
+
 	/* the daemon's policy keys reach the report under enforce only */
 	f = flags_for(true, LOTA_MODE_ENFORCE,
 		      LOTA_STATUS_BPF_LOADED | LOTA_STATUS_STRICT_MMAP |
