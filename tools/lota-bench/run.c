@@ -741,7 +741,7 @@ int bench_run_find_log(int dir, time_t since, char *name, size_t cap)
 	DIR *d;
 	int fd;
 
-	fd = dup(dir);
+	fd = openat(dir, ".", O_RDONLY | O_DIRECTORY | O_CLOEXEC);
 	if (fd < 0)
 		return -1;
 	d = fdopendir(fd);
