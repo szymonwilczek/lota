@@ -5,7 +5,7 @@
 // Machine-independent kernel trust controls derived from the TPM event
 // log instead of raw PCR pins or agent-reported flags:
 //   - Secure Boot state from the firmware-measured SecureBoot variable
-//     (PCR 7, EV_EFI_VARIABLE_DRIVER_CONFIG)
+//     (PCR 7, before the separator)
 //   - kernel command line from the GRUB measurement (PCR 8, EV_IPL)
 //
 // Extracted values are trustworthy only when the corresponding PCR
@@ -32,27 +32,63 @@ type SecureBootState struct {
 	Enabled bool
 }
 
-// scans PCR 7 EV_EFI_VARIABLE_DRIVER_CONFIG events for the EFI global
-// "SecureBoot" variable.
-// Enabled means a one-byte value of 0x01.
-// Malformed or conflicting SecureBoot measurements are errors so the
-// caller fails closed.
+// separatorDigest is what firmware extends for the EV_SEPARATOR that ends
+// its own PCR 7 measurements.
+var separatorDigest = sha256.Sum256([]byte{0, 0, 0, 0})
+
+// firmwarePCR7 returns the PCR 7 events the replay extended before the
+// firmware's separator, and false when no separator was extended.
+// Event types sit outside the digest, so the separator is found by its
+// digest, and everything root extends after boot lands past it.
+func firmwarePCR7(parsed *ParsedEventLog) ([]*EventLogEntry, bool) {
+	var out []*EventLogEntry
+	for i := range parsed.Entries {
+		e := &parsed.Entries[i]
+		if e.PCRIndex != 7 || e.EventType == EvNoAction {
+			continue
+		}
+		d, ok := e.Digests[AlgSHA256]
+		if !ok {
+			continue
+		}
+		if bytes.Equal(d, separatorDigest[:]) {
+			return out, true
+		}
+		out = append(out, e)
+	}
+	return nil, false
+}
+
+// ExtractSecureBootState reads the EFI global SecureBoot variable the
+// firmware measured into PCR 7 before its separator, whatever type the log
+// gives the event. Enabled means a one-byte value of 0x01.
+// A log with no separator reports not-found. A SecureBoot measurement off
+// its digest, malformed or conflicting is an error, so the caller fails
+// closed.
 func ExtractSecureBootState(parsed *ParsedEventLog) (SecureBootState, error) {
 	var st SecureBootState
 	if parsed == nil {
 		return st, errors.New("nil event log")
 	}
 
-	for _, e := range parsed.Entries {
-		if e.PCRIndex != 7 || e.EventType != EvEFIVariableDriverConfig {
-			continue
-		}
+	events, ok := firmwarePCR7(parsed)
+	if !ok {
+		return st, nil
+	}
+	for _, e := range events {
 		v, err := parseUEFIVariableData(e.EventData)
 		if err != nil {
-			return SecureBootState{}, fmt.Errorf("malformed UEFI variable event on PCR 7: %w", err)
+			if e.EventType == EvEFIVariableDriverConfig {
+				return SecureBootState{}, fmt.Errorf("malformed UEFI variable event on PCR 7: %w", err)
+			}
+			continue
 		}
 		if v.VariableName != efiGlobalVariableGUID || v.UnicodeName != "SecureBoot" {
 			continue
+		}
+		sum := sha256.Sum256(e.EventData)
+		if !bytes.Equal(e.Digests[AlgSHA256], sum[:]) {
+			return SecureBootState{}, errors.New("SecureBoot measurement does not match its digest")
 		}
 		if len(v.VariableData) != 1 {
 			return SecureBootState{}, fmt.Errorf("unexpected SecureBoot variable size: %d", len(v.VariableData))
@@ -346,9 +382,8 @@ func SecureBootAnchored(facts *BootFacts) bool {
 }
 
 // UEFIAnchored reports whether the event log proves the host booted via UEFI:
-// the firmware measured the EFI global SecureBoot variable into PCR 7
-// (EV_EFI_VARIABLE_DRIVER_CONFIG) and that PCR 7 is quote-authenticated
-// by the replay.
+// the firmware measured the EFI global SecureBoot variable into PCR 7 before
+// its separator and that PCR 7 is quote-authenticated by the replay.
 //
 // The variable's value is irrelevant here -- host with Secure Boot off still
 // measures it, and whether Secure Boot must be on is a policy question

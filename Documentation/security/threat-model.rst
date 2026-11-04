@@ -292,6 +292,14 @@ Active threats
      - | The verifier reads the firmware-measured ``SecureBoot`` variable from the
          event log (PCR 7) and accepts it only when the log replay reproduces the
          TPM-quoted PCR, so the value cannot be fabricated or stripped.
+       | Root can still extend PCR 7 after boot and hand over a log that replays
+         to it. Event types sit outside the digests, so the verifier reads none:
+         it counts only events before the firmware's separator, found by its
+         digest, binds each ``SecureBoot`` measurement to its digest whatever
+         type the log names, and fails on conflicting values. An extend made
+         after boot lands past the separator, and a log with no separator reads
+         Secure Boot as unmeasured. The Secure Boot keys the re-anchor compares
+         come from the same events.
        | The replay follows what the TPM did:
          ``EV_NO_ACTION`` records are informational and are not extended, and
          where the log records that firmware started the TPM above locality 0 --

@@ -97,16 +97,22 @@ func secureBootVariableEvent() []byte {
 	return append(buf, 0x01)
 }
 
-// PCR7 returns the value the fleet's event log replays into PCR 7:
-// single SecureBoot variable measurement extended over a zero register
-func (f *Fleet) PCR7() [types.HashSize]byte {
-	digest := sha256.Sum256(secureBootVariableEvent())
+// separatorEvent is the EV_SEPARATOR data that ends the firmware's PCR 7
+// measurements; the verifier reads SecureBoot only before it.
+var separatorEvent = []byte{0, 0, 0, 0}
 
+// PCR7 returns the value the fleet's event log replays into PCR 7:
+// the SecureBoot variable measurement and the separator extended over a zero
+// register
+func (f *Fleet) PCR7() [types.HashSize]byte {
 	var pcr7 [types.HashSize]byte
-	h := sha256.New()
-	h.Write(pcr7[:])
-	h.Write(digest[:])
-	copy(pcr7[:], h.Sum(nil))
+	for _, data := range [][]byte{secureBootVariableEvent(), separatorEvent} {
+		digest := sha256.Sum256(data)
+		h := sha256.New()
+		h.Write(pcr7[:])
+		h.Write(digest[:])
+		copy(pcr7[:], h.Sum(nil))
+	}
 	return pcr7
 }
 
@@ -312,17 +318,21 @@ var efiGlobalVariableGUID = [16]byte{
 }
 
 // uefiEventLog is the synthetic firmware log: the Spec ID header, the PCR 7
-// EV_EFI_VARIABLE_DRIVER_CONFIG measurement of SecureBoot, and the PCR 9
+// EV_EFI_VARIABLE_DRIVER_CONFIG measurement of SecureBoot and the separator
+// after it, and the PCR 9
 // EV_IPL record naming the kernel image the bootloader loaded.
 // It carries no PCR 14 event, so the verifier reconstructs zero PCR 14 baseline
 // -- the shape of a UEFI host that boots without shim.
 func (f *Fleet) uefiEventLog() []byte {
 	payload := secureBootVariableEvent()
 	digest := sha256.Sum256(payload)
+	separator := sha256.Sum256(separatorEvent)
 
 	log := minimalEventLog()
 	log = append(log, eventEntry(7, verify.EvEFIVariableDriverConfig,
 		digest[:], payload)...)
+	log = append(log, eventEntry(7, verify.EvSeparator, separator[:],
+		separatorEvent)...)
 	log = append(log, eventEntry(9, verify.EvIPL, f.KernelHash[:],
 		[]byte(KernelImagePath+"\x00"))...)
 	return log
