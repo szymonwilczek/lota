@@ -2211,25 +2211,45 @@ void bpf_loader_pin_round_begin(struct bpf_loader_ctx *ctx)
 }
 
 #define OWNED_MAP_KEY_MAX 64
+#define OWNED_MAP_FIRST_CAP 64
 
 /*
- * Read up to @max entries of the map @fd into @k and @v, then delete those
- * of a process @alive denies; @owner names the process of a key.
- * Returns the number of live entries, packed at the front.
+ * Read up to @max entries of the map @fd into buffers that grow with them,
+ * then delete those of a process @alive denies; @owner names the process of
+ * a key. On success @kp and @vp hold @n live entries, packed at the front.
  */
-static size_t read_owned_map(int fd, size_t max, size_t ksz, size_t vsz,
-			     uint8_t *k, uint8_t *v,
-			     void (*owner)(const void *key, uint32_t *tgid,
-					   uint64_t *start_ticks),
-			     int (*alive)(uint32_t tgid, uint64_t start_ticks))
+static int read_owned_map(int fd, size_t max, size_t ksz, size_t vsz, void **kp,
+			  void **vp, size_t *n,
+			  void (*owner)(const void *key, uint32_t *tgid,
+					uint64_t *start_ticks),
+			  int (*alive)(uint32_t tgid, uint64_t start_ticks))
 {
 	uint8_t cur[OWNED_MAP_KEY_MAX];
 	uint8_t next[OWNED_MAP_KEY_MAX];
+	size_t cap = OWNED_MAP_FIRST_CAP;
+	uint8_t *k = malloc(cap * ksz);
+	uint8_t *v = malloc(cap * vsz);
 	size_t count = 0;
 	size_t kept = 0;
 	void *prev = NULL;
 
+	if (!k || !v)
+		goto nomem;
+
 	while (count < max && bpf_map_get_next_key(fd, prev, next) == 0) {
+		if (count == cap) {
+			uint8_t *grown;
+
+			cap = cap * 2 < max ? cap * 2 : max;
+			grown = realloc(k, cap * ksz);
+			if (!grown)
+				goto nomem;
+			k = grown;
+			grown = realloc(v, cap * vsz);
+			if (!grown)
+				goto nomem;
+			v = grown;
+		}
 		memcpy(cur, next, ksz);
 		prev = cur;
 		if (bpf_map_lookup_elem(fd, cur, v + count * vsz) < 0)
@@ -2254,7 +2274,14 @@ static size_t read_owned_map(int fd, size_t max, size_t ksz, size_t vsz,
 		}
 		kept++;
 	}
-	return kept;
+	*kp = k;
+	*vp = v;
+	*n = kept;
+	return 0;
+nomem:
+	free(k);
+	free(v);
+	return -ENOMEM;
 }
 
 static void exec_history_owner(const void *key, uint32_t *tgid,
@@ -2274,9 +2301,10 @@ int bpf_loader_exec_history(struct bpf_loader_ctx *ctx,
 			    struct lota_exec_history_key **keys,
 			    struct lota_exec_history_val **vals, size_t *n)
 {
-	struct lota_exec_history_key *k;
 	struct lota_exec_history_val *v;
+	void *k, *raw_v;
 	size_t count;
+	int ret;
 
 	if (!ctx || !alive || !keys || !vals || !n)
 		return -EINVAL;
@@ -2286,17 +2314,12 @@ int bpf_loader_exec_history(struct bpf_loader_ctx *ctx,
 	if (ctx->exec_history_fd < 0)
 		return -ENOENT;
 
-	k = calloc(LOTA_MAX_EXEC_HISTORY, sizeof(*k));
-	v = calloc(LOTA_MAX_EXEC_HISTORY, sizeof(*v));
-	if (!k || !v) {
-		free(k);
-		free(v);
-		return -ENOMEM;
-	}
-
-	count = read_owned_map(ctx->exec_history_fd, LOTA_MAX_EXEC_HISTORY,
-			       sizeof(*k), sizeof(*v), (uint8_t *)k,
-			       (uint8_t *)v, exec_history_owner, alive);
+	ret = read_owned_map(ctx->exec_history_fd, LOTA_MAX_EXEC_HISTORY,
+			     sizeof(**keys), sizeof(*v), &k, &raw_v, &count,
+			     exec_history_owner, alive);
+	if (ret)
+		return ret;
+	v = raw_v;
 	for (size_t i = 0; i < count; i++)
 		v[i].name[sizeof(v[i].name) - 1] = '\0';
 
@@ -2323,9 +2346,10 @@ int bpf_loader_instance_peers(struct bpf_loader_ctx *ctx,
 			      struct lota_instance_peer_key **keys,
 			      struct lota_instance_peer_val **vals, size_t *n)
 {
-	struct lota_instance_peer_key *k;
 	struct lota_instance_peer_val *v;
+	void *k, *raw_v;
 	size_t count;
+	int ret;
 
 	if (!ctx || !alive || !keys || !vals || !n)
 		return -EINVAL;
@@ -2335,17 +2359,12 @@ int bpf_loader_instance_peers(struct bpf_loader_ctx *ctx,
 	if (ctx->instance_peers_fd < 0)
 		return -ENOENT;
 
-	k = calloc(LOTA_MAX_INSTANCE_PEERS, sizeof(*k));
-	v = calloc(LOTA_MAX_INSTANCE_PEERS, sizeof(*v));
-	if (!k || !v) {
-		free(k);
-		free(v);
-		return -ENOMEM;
-	}
-
-	count = read_owned_map(ctx->instance_peers_fd, LOTA_MAX_INSTANCE_PEERS,
-			       sizeof(*k), sizeof(*v), (uint8_t *)k,
-			       (uint8_t *)v, instance_peer_owner, alive);
+	ret = read_owned_map(ctx->instance_peers_fd, LOTA_MAX_INSTANCE_PEERS,
+			     sizeof(**keys), sizeof(*v), &k, &raw_v, &count,
+			     instance_peer_owner, alive);
+	if (ret)
+		return ret;
+	v = raw_v;
 	for (size_t i = 0; i < count; i++) {
 		v[i].comm[sizeof(v[i].comm) - 1] = '\0';
 		v[i].owner_comm[sizeof(v[i].owner_comm) - 1] = '\0';
