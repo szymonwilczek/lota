@@ -3090,14 +3090,15 @@ int BPF_PROG(lota_bpf_map, struct bpf_map *map, fmode_t fmode, int ret)
  * LSM hook: bpf
  *
  * Keep global bpf() hook non-invasive. Object-specific access control is
- * enforced in lota_bpf_map where map identity is available.
+ * enforced in lota_bpf_map where map identity is available. The exception is
+ * BPF_LINK_DETACH, which takes a program off its hook and names its link by a
+ * descriptor the caller can swap after this hook read it, so one link cannot
+ * be told from another here.
  * ====================================================================== */
 SEC("lsm/bpf")
 int BPF_PROG(lota_bpf, int cmd, union bpf_attr *attr, unsigned int size,
 	     int ret)
 {
-	(void)cmd;
-
 	(void)size;
 	(void)attr;
 
@@ -3127,6 +3128,12 @@ int BPF_PROG(lota_bpf, int cmd, union bpf_attr *attr, unsigned int size,
 	 */
 	if (ret != 0)
 		return -EPERM;
+
+	if (cmd == BPF_LINK_DETACH && get_config(LOTA_CFG_LOCK_BPF) &&
+	    !is_bpf_admin_task()) {
+		inc_stat(STAT_BPF_SYSCALL_BLOCKED);
+		return -EPERM;
+	}
 	return 0;
 }
 
