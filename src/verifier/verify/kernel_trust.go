@@ -17,6 +17,7 @@ package verify
 
 import (
 	"bytes"
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -73,43 +74,88 @@ const (
 	grubCmdPrefix       = "grub_cmd: "
 )
 
-// Returns the kernel command lines GRUB measured into PCR 8.
-// Dedicated "kernel_cmdline: " EV_IPL event is the primary source;
-// "grub_cmd: linux ..." events are the fallback for GRUB builds that do
-// not emit it.
+// Returns the kernel command lines GRUB measured into PCR 8, and how many
+// PCR 8 EV_IPL events carry text their digest does not cover.
+// Only covered text is read. GRUB leaves its "label: " prefix out of the
+// digest, so lines are found by what the text says: a linux command, or a
+// kernel image path followed by parameters. The label adds lines, never
+// hides one.
 // Leading kernel image path token is stripped: it duplicates the per-machine
 // boot device/path and carries no parameters.
 // All returned command lines must satisfy the policy; only one of them
 // booted, but the log does not say which.
-func ExtractKernelCmdlines(parsed *ParsedEventLog) []string {
+func ExtractKernelCmdlines(parsed *ParsedEventLog) (lines []string, unbound int) {
 	if parsed == nil {
-		return nil
+		return nil, 0
 	}
 
-	var primary, fallback []string
-	for _, e := range parsed.Entries {
+	add := func(line string) {
+		for _, l := range lines {
+			if l == line {
+				return
+			}
+		}
+		lines = append(lines, line)
+	}
+
+	for i := range parsed.Entries {
+		e := &parsed.Entries[i]
 		if e.PCRIndex != 8 || e.EventType != EvIPL {
 			continue
 		}
-		s := parseIPLEventString(e.EventData)
-
-		if rest, ok := strings.CutPrefix(s, kernelCmdlinePrefix); ok {
-			primary = append(primary, stripImagePathToken(rest))
+		s, covered, ok := boundIPLText(e)
+		if !ok {
+			unbound++
 			continue
 		}
+
+		if rest, ok := strings.CutPrefix(s, kernelCmdlinePrefix); ok {
+			add(stripImagePathToken(rest))
+		}
 		if rest, ok := strings.CutPrefix(s, grubCmdPrefix); ok {
-			fields := strings.Fields(rest)
-			if len(fields) >= 2 &&
-				(fields[0] == "linux" || fields[0] == "linuxefi" || fields[0] == "linux16") {
-				fallback = append(fallback, strings.Join(fields[2:], " "))
+			if line, ok := linuxCommandArgs(rest); ok {
+				add(line)
 			}
 		}
+		if line, ok := linuxCommandArgs(covered); ok {
+			add(line)
+		}
+		if fields := strings.Fields(covered); len(fields) > 0 && namesKernelImage(fields[0]) {
+			add(stripImagePathToken(covered))
+		}
 	}
+	return lines, unbound
+}
 
-	if len(primary) > 0 {
-		return primary
+// boundIPLText returns the event text and the part after its label, once the
+// SHA-256 digest is shown to cover it. GRUB hashes the text after "label: "
+// without its NUL; a whole-event digest covers the label too.
+func boundIPLText(e *EventLogEntry) (text, covered string, ok bool) {
+	digest := e.Digests[AlgSHA256]
+	text = parseIPLEventString(e.EventData)
+	_, rest, labelled := strings.Cut(text, ": ")
+	if !labelled {
+		rest = text
 	}
-	return fallback
+	for _, c := range []string{string(e.EventData), text, rest} {
+		if sum := sha256.Sum256([]byte(c)); bytes.Equal(digest, sum[:]) {
+			return text, rest, true
+		}
+	}
+	return "", "", false
+}
+
+// parameters of a GRUB linux command, image path dropped
+func linuxCommandArgs(cmd string) (string, bool) {
+	fields := strings.Fields(cmd)
+	if len(fields) < 2 {
+		return "", false
+	}
+	switch fields[0] {
+	case "linux", "linuxefi", "linux16":
+		return strings.Join(fields[2:], " "), true
+	}
+	return "", false
 }
 
 // drops the first whitespace-separated token (the kernel image path)
@@ -270,6 +316,7 @@ type BootFacts struct {
 	SecureBootTrusted bool // PCR 7 quoted + replay-consistent
 
 	Cmdlines       []string
+	CmdlineUnbound int  // PCR 8 events whose text the digest does not cover
 	CmdlineTrusted bool // PCR 8 quoted + replay-consistent
 	PCR8Quoted     bool
 	PCR8Reported   [types.HashSize]byte
@@ -351,10 +398,13 @@ func ExtractBootFacts(report *types.AttestationReport, parsed *ParsedEventLog, r
 		img = KernelImage{}
 	}
 
+	cmdlines, unbound := ExtractKernelCmdlines(parsed)
+
 	return &BootFacts{
 		SecureBoot:         sb,
 		SecureBootTrusted:  pcrReplayAuthenticated(report, replay, 7),
-		Cmdlines:           ExtractKernelCmdlines(parsed),
+		Cmdlines:           cmdlines,
+		CmdlineUnbound:     unbound,
 		CmdlineTrusted:     pcrReplayAuthenticated(report, replay, 8),
 		PCR8Quoted:         report.TPM.PCRMask&(1<<8) != 0,
 		PCR8Reported:       report.TPM.PCRValues[8],
@@ -390,6 +440,10 @@ func verifyCmdlinePolicy(policy *PCRPolicy, facts *BootFacts) error {
 
 	if !facts.CmdlineTrusted {
 		return errors.New("cmdline policy: kernel cmdline measurement not authenticated by quote")
+	}
+	if facts.CmdlineUnbound > 0 {
+		return fmt.Errorf("cmdline policy: %d PCR 8 events carry text their digest does not cover",
+			facts.CmdlineUnbound)
 	}
 	if len(facts.Cmdlines) == 0 {
 		return errors.New("cmdline policy: PCR 8 is non-zero but the log carries no measured kernel cmdline")

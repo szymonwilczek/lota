@@ -295,6 +295,9 @@ Active threats
        ``lockdown=none``, ...)
      - | The verifier checks the GRUB-measured kernel command line (PCR 8 event
          log, quote-bound) against a machine-independent parameter denylist.
+       | Event text is read only where its digest covers it, and a PCR 8 event
+         whose text does not hash to its digest is rejected. GRUB leaves the
+         event label out of the digest, so command lines are found by content.
        | Non-zero quoted PCR 8 with no measured command line is rejected as a
          truncated log.
      - | GRUB-only today: systemd-boot/UKI hosts measure the command line into PCR
