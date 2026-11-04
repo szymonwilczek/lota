@@ -7,6 +7,9 @@
 #ifndef LOTA_BENCH_RUN_H
 #define LOTA_BENCH_RUN_H
 
+#include <stddef.h>
+#include <time.h>
+
 #define EXIT_BENCH_USAGE 2
 
 /* the transient scope the game is started in, from its launch options */
@@ -14,5 +17,8 @@
 
 /* @argv[0] is "run"; returns the exit status */
 int bench_main_run(int argc, char **argv);
+
+/* the newest MangoHud log in @dir since @since; 0, or -1 for none */
+int bench_run_find_log(int dir, time_t since, char *name, size_t cap);
 
 #endif /* LOTA_BENCH_RUN_H */

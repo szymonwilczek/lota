@@ -334,6 +334,39 @@ static void cleanup(void)
 		(void)!system(cmd);
 }
 
+static void test_find_log(void)
+{
+	char dir[sizeof(base) + 16], path[sizeof(dir) + 16], name[64];
+	int fd, log;
+
+	TEST("the log is found on every look at a session");
+	snprintf(dir, sizeof(dir), "%s/logs", base);
+	snprintf(path, sizeof(path), "%s/Title_1.csv", dir);
+	fd = mkdir(dir, 0700) ? -1 : open(dir, O_RDONLY | O_DIRECTORY);
+	log = fd < 0 ? -1 : open(path, O_WRONLY | O_CREAT, 0600);
+	if (log < 0) {
+		FAIL("session");
+		goto out;
+	}
+	close(log);
+	if (bench_run_find_log(fd, 0, name, sizeof(name)) ||
+	    strcmp(name, "Title_1.csv")) {
+		FAIL("first look");
+		goto out;
+	}
+	if (bench_run_find_log(fd, 0, name, sizeof(name)) ||
+	    strcmp(name, "Title_1.csv")) {
+		FAIL("second look");
+		goto out;
+	}
+	PASS();
+out:
+	if (fd >= 0)
+		close(fd);
+	unlink(path);
+	rmdir(dir);
+}
+
 int main(void)
 {
 	printf("lota-bench run:\n");
@@ -345,6 +378,7 @@ int main(void)
 	}
 	test_assemble();
 	test_refusals();
+	test_find_log();
 
 	cleanup();
 	free(expected_result);
