@@ -117,7 +117,11 @@ configuration or through ``MANGOHUD_CONFIG``:
 For a Steam title, put ``MANGOHUD_CONFIG=... mangohud %command%`` in the
 launch options. ``log_interval`` must stay at its default of ``0``: with
 an interval the log holds one row per interval, frame times between rows
-are lost, and ``lota-bench`` refuses the log. The log is summarised with:
+are lost, and ``lota-bench`` refuses the log. ``log_duration`` can end
+the title along with the log, so save before it runs out. ``steam
+-applaunch`` starts the launcher of a title that has one, and the launch
+options wrap that launcher; start such a title from the Steam window and
+pick the entry without it. The log is summarised with:
 
 .. code-block:: console
 
