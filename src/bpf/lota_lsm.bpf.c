@@ -2761,6 +2761,37 @@ int BPF_PROG(lota_ptrace_access_check, struct task_struct *child,
 	return 0;
 }
 
+/* records a signal at the agent or a protected task; label is 8 bytes */
+static __always_inline void report_signal(int event_type, int blocked, int sig,
+					  u32 target_tgid, const char *label)
+{
+	struct lota_exec_event *event = NULL;
+	u64 pid_tgid = bpf_get_current_pid_tgid();
+	int emit_event;
+
+	emit_event = should_emit_event(get_mode(), blocked, event_type);
+	if (emit_event)
+		event = bpf_ringbuf_reserve(&events, sizeof(*event), 0);
+	if (event) {
+		__builtin_memset(event, 0, sizeof(*event));
+		event->timestamp_ns = bpf_ktime_get_ns();
+		event->event_type = (u32)event_type;
+		event->tgid = (u32)(pid_tgid >> 32);
+		event->pid = (u32)pid_tgid;
+		event->uid = (u32)(bpf_get_current_uid_gid() & 0xFFFFFFFF);
+		event->target_pid = target_tgid;
+		event->signal = (u32)sig;
+
+		bpf_get_current_comm(event->comm, sizeof(event->comm));
+		__builtin_memcpy(event->filename, label, 8);
+
+		bpf_ringbuf_submit(event, 0);
+		inc_stat(STAT_EVENTS_SENT);
+	} else if (emit_event) {
+		inc_stat(STAT_RINGBUF_DROPS);
+	}
+}
+
 /* ======================================================================
  * LSM hook: task_kill
  *
@@ -2780,20 +2811,17 @@ int BPF_PROG(lota_task_kill, struct task_struct *p, struct kernel_siginfo *info,
 	struct task_struct *current;
 	u32 sender_tgid;
 	u32 target_tgid;
-	u32 lota_mode;
 	int target_is_agent;
 	int target_is_protected = 0;
+	int sender_inside = 0;
 	int blocked;
 	int event_type;
-	int emit_event;
-	struct lota_exec_event *event = NULL;
 
 	(void)cred;
 
 	if (!p)
 		return 0;
 
-	lota_mode = get_mode();
 	target_is_agent = is_lota_agent_task(p);
 	if (!target_is_agent)
 		target_is_protected = task_instance(p, &target_id);
@@ -2824,17 +2852,19 @@ int BPF_PROG(lota_task_kill, struct task_struct *p, struct kernel_siginfo *info,
 			return 0;
 	}
 
+	if (target_is_protected)
+		sender_inside = lota_inside_instance(
+			task_instance(current, &sender_id), sender_id.root_tgid,
+			sender_id.root_start_ticks, 1, target_id.root_tgid,
+			target_id.root_start_ticks);
+
 	/* a signal between two processes of one instance is in its record */
-	if (sig && target_is_protected &&
-	    lota_inside_instance(
-		    task_instance(current, &sender_id), sender_id.root_tgid,
-		    sender_id.root_start_ticks, 1, target_id.root_tgid,
-		    target_id.root_start_ticks))
+	if (sig && sender_inside)
 		record_instance_access(p, &target_id,
 				       LOTA_INSTANCE_PEER_SIGNAL);
 
 	/* the verdict lives in include/lota.h, shared with the tests */
-	blocked = lota_signal_denied(sig, target_is_agent);
+	blocked = lota_signal_denied(sig, target_is_agent, sender_inside);
 
 	/* report every signal but a permitted probe, which is only counted */
 	event_type = lota_signal_event(sig, blocked);
@@ -2843,27 +2873,7 @@ int BPF_PROG(lota_task_kill, struct task_struct *p, struct kernel_siginfo *info,
 		return 0;
 	}
 
-	emit_event = should_emit_event(lota_mode, blocked, event_type);
-	if (emit_event)
-		event = bpf_ringbuf_reserve(&events, sizeof(*event), 0);
-	if (event) {
-		__builtin_memset(event, 0, sizeof(*event));
-		event->timestamp_ns = bpf_ktime_get_ns();
-		event->event_type = (u32)event_type;
-		event->tgid = sender_tgid;
-		event->pid = (u32)(bpf_get_current_pid_tgid() & 0xFFFFFFFF);
-		event->uid = (u32)(bpf_get_current_uid_gid() & 0xFFFFFFFF);
-		event->target_pid = target_tgid;
-		event->signal = (u32)sig;
-
-		bpf_get_current_comm(event->comm, sizeof(event->comm));
-		__builtin_memcpy(event->filename, "(kill)", 6);
-
-		bpf_ringbuf_submit(event, 0);
-		inc_stat(STAT_EVENTS_SENT);
-	} else if (emit_event) {
-		inc_stat(STAT_RINGBUF_DROPS);
-	}
+	report_signal(event_type, blocked, sig, target_tgid, "(kill)\0");
 
 	if (blocked)
 		return -EPERM;

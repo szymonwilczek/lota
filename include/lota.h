@@ -409,6 +409,20 @@ lota_inside_instance(int actor_protected, unsigned int actor_root,
  */
 #define LOTA_SIG_HUP 1
 
+/* what stops a task, and what makes the kernel write its memory to a core */
+#define LOTA_SIG_FREEZES \
+	((1ULL << 19) | (1ULL << 20) | (1ULL << 21) | (1ULL << 22))
+#define LOTA_SIG_DUMPS                                                         \
+	((1ULL << 3) | (1ULL << 4) | (1ULL << 5) | (1ULL << 6) | (1ULL << 7) | \
+	 (1ULL << 8) | (1ULL << 11) | (1ULL << 24) | (1ULL << 25) |            \
+	 (1ULL << 31))
+
+/* a signal whose default action writes a core file */
+static inline int lota_signal_dumps(int sig)
+{
+	return sig > 0 && sig <= 31 && !!(LOTA_SIG_DUMPS & (1ULL << sig));
+}
+
 /*
  * The signal-delivery verdict, stated here so the enforcement object
  * and the tests answer it the same way.
@@ -423,20 +437,26 @@ lota_inside_instance(int actor_protected, unsigned int actor_root,
  * its reload, are delivered, since neither ends it. It stops with
  * lota-agent --shutdown.
  *
- * A protected process is not guarded: a signal runs its own handler or ends
- * or stops it, and none of that puts foreign code into it. Every signal at it
- * is still recorded.
+ * A protected process can be ended: a title that hung has to die from the
+ * terminal, and its session ends with it. From outside its instance it cannot
+ * be stopped, nor sent a signal whose default writes its memory to a core
+ * file. Inside the instance everything goes through, since the wineserver
+ * drives the processes it hosts with signals. Every signal at it is recorded.
  *
  * The verdict does not depend on the enforcement mode: an agent that can be
  * killed in monitor is an agent whose measurements stop without a trace,
  * and the mode switches policy, not the integrity of the measurement.
  */
-static inline int lota_signal_denied(int sig, int target_is_agent)
+static inline int lota_signal_denied(int sig, int target_is_agent,
+				     int sender_inside)
 {
-	if (!target_is_agent)
+	if (target_is_agent)
+		return sig != 0 && sig != LOTA_SIG_HUP;
+
+	if (sender_inside || sig <= 0 || sig > 31)
 		return 0;
 
-	return sig != 0 && sig != LOTA_SIG_HUP;
+	return lota_signal_dumps(sig) || !!(LOTA_SIG_FREEZES & (1ULL << sig));
 }
 
 /*

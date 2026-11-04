@@ -430,9 +430,12 @@ Active threats
        | Hook availability and verifier behavior must be validated on the
          target kernel.
    * - Ending a protected process
-     - | A protected task takes signals as the kernel would deliver them. A
-         title that is killed or stopped is not cheated in: its session ends
-         or stalls, and the publisher sees that.
+     - | A protected task can be ended: a title that is killed is not cheated
+         in, its session ends and the publisher sees that.
+       | From outside its instance the LSM refuses a signal that would stop it
+         or write its memory to a core file.
+       | A title whose own cgroup is frozen stalls. Nothing refuses that, and
+         the publisher sees only a session that stopped answering.
        | The agent is guarded: the LSM refuses every signal to it but
          ``SIGHUP`` and signal 0 from anything but itself, a holder of
          ``LOTA_TASK_AUTH_ADMIN`` or the kernel, since its handlers are how it

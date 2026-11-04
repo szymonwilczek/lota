@@ -9,6 +9,7 @@
  */
 
 #include <signal.h>
+#include <string.h>
 #include <stdio.h>
 
 #include "../include/lota.h"
@@ -25,7 +26,9 @@ static int g_failures;
 		}                                           \
 	} while (0)
 
-#define DENIED(sig, is_agent) lota_signal_denied((sig), (is_agent))
+#define DENIED(sig, is_agent) lota_signal_denied((sig), (is_agent), 0)
+
+#define DENIED_INSIDE(sig) lota_signal_denied((sig), 0, 1)
 
 #define RECORDS(sig, denied) lota_signal_event((sig), (denied))
 
@@ -51,17 +54,39 @@ static void test_the_signals_the_agent_takes(void)
 	      "delivers SIGHUP to the agent, which is its reload");
 }
 
-/*
- * Ending or stopping a protected process puts nothing into it, and the
- * wineserver drives every process it hosts with signals.
- */
-static void test_any_other_target_takes_every_signal(void)
+/* A title that hung has to die from the terminal or the task manager */
+static void test_a_protected_process_can_be_ended(void)
 {
-	CHECK(!DENIED(SIGKILL, 0), "delivers SIGKILL to any other task");
-	CHECK(!DENIED(SIGSTOP, 0), "delivers SIGSTOP to any other task");
-	CHECK(!DENIED(SIGTERM, 0), "delivers SIGTERM to any other task");
-	CHECK(!DENIED(SIGUSR1, 0), "delivers SIGUSR1 to any other task");
-	CHECK(!DENIED(0, 0), "delivers a probe to any other task");
+	CHECK(!DENIED(SIGKILL, 0), "delivers SIGKILL to a protected process");
+	CHECK(!DENIED(SIGTERM, 0), "delivers SIGTERM to a protected process");
+	CHECK(!DENIED(SIGINT, 0), "delivers SIGINT to a protected process");
+	CHECK(!DENIED(SIGHUP, 0), "delivers SIGHUP to a protected process");
+	CHECK(!DENIED(SIGUSR1, 0), "delivers SIGUSR1 to a protected process");
+	CHECK(!DENIED(SIGCONT, 0), "delivers SIGCONT to a protected process");
+	CHECK(!DENIED(0, 0), "delivers a probe to a protected process");
+}
+
+/* Stopping the title or dumping its memory is what a cheat gains from */
+static void test_a_protected_process_is_not_frozen_or_dumped(void)
+{
+	static const int refused[] = {
+		SIGSTOP, SIGTSTP, SIGTTIN, SIGTTOU, SIGQUIT, SIGILL,  SIGTRAP,
+		SIGABRT, SIGBUS,  SIGFPE,  SIGSEGV, SIGXCPU, SIGXFSZ, SIGSYS,
+	};
+
+	for (size_t i = 0; i < sizeof(refused) / sizeof(refused[0]); i++) {
+		CHECK(DENIED(refused[i], 0), strsignal(refused[i]));
+		CHECK(!DENIED_INSIDE(refused[i]),
+		      "the same signal passes inside the instance");
+	}
+}
+
+/* Numbers outside the mask's range are never an index into it */
+static void test_numbers_outside_the_mask(void)
+{
+	CHECK(!DENIED(-1, 0), "a negative number is not refused by the mask");
+	CHECK(!DENIED(SIGRTMIN, 0), "a realtime signal is not in the mask");
+	CHECK(!DENIED(64, 0), "the last signal number is not in the mask");
 }
 
 /* Header mirrors the signal number because the object has no uapi */
@@ -161,7 +186,9 @@ int main(void)
 
 	test_refuses_what_can_end_the_agent();
 	test_the_signals_the_agent_takes();
-	test_any_other_target_takes_every_signal();
+	test_a_protected_process_can_be_ended();
+	test_a_protected_process_is_not_frozen_or_dumped();
+	test_numbers_outside_the_mask();
 	test_the_mirrored_signal_number();
 	test_a_refusal_is_always_recorded();
 	test_a_delivered_signal_is_still_recorded();
