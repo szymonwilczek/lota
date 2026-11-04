@@ -343,9 +343,12 @@ Worth being precise about, because it decides what you can build on it:
   such as ``wineserver`` writing into the game. The registry lists each one
   after the objects: its PID, uid, executable, command name, the title
   process it reached, how (``LOTA_REGISTRY_ACTOR_*``) and how many times.
-  ``LOTA_REGISTRY_ACTORS_LOST`` says the list may miss one. The agent refuses
-  nothing; whether an actor is expected, say the launcher, is your policy. The
-  actors are in the same hash, so a list with one dropped does not match.
+  ``LOTA_REGISTRY_ACTOR_ANON_EXEC`` is a process of the title making its own
+  anonymous memory executable, code with no object to list: a JIT does it, and
+  so does injected code. ``LOTA_REGISTRY_ACTORS_LOST`` says the list may miss
+  one. The agent refuses nothing; whether an actor is expected, say the
+  launcher, is your policy. The actors are in the same hash, so a list with one
+  dropped does not match.
 
 * Whether a protected process was ended through the agent on that host since
   it booted. The agent relays a termination only for the process's owner or

@@ -747,7 +747,8 @@ struct lota_exec_history_val {
  * Every process that reached a process of an instance on a road the gate
  * lets through: from outside, through a unix socket of the instance, by
  * connecting to it or sending to it; from inside, by a ptrace access or a
- * signal to another process of the instance.
+ * signal to another process of the instance. A process of the instance is
+ * listed for itself when it makes anonymous memory executable.
  * Keyed by the instance root and its start time, the actor and its start
  * time, the process of the instance it reached and how.
  * Only the agent deletes, and only entries of a root that is gone.
@@ -760,6 +761,7 @@ enum lota_instance_actor_kind {
 	LOTA_INSTANCE_ACTOR_PTRACE_READ = 3, /* read-mode access, inside */
 	LOTA_INSTANCE_ACTOR_PTRACE_ATTACH = 4, /* attach-mode access, inside */
 	LOTA_INSTANCE_ACTOR_SIGNAL = 5, /* signal sent, inside */
+	LOTA_INSTANCE_ACTOR_ANON_EXEC = 6, /* own anonymous memory executable */
 };
 
 struct lota_instance_actor_key {

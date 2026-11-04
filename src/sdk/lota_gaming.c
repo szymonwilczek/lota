@@ -1348,8 +1348,10 @@ _Static_assert(LOTA_REGISTRY_ACTOR_CONNECT == LOTA_IPC_REGISTRY_ACTOR_CONNECT &&
 			       LOTA_IPC_REGISTRY_ACTOR_PTRACE_ATTACH &&
 		       LOTA_REGISTRY_ACTOR_SIGNAL ==
 			       LOTA_IPC_REGISTRY_ACTOR_SIGNAL &&
+		       LOTA_REGISTRY_ACTOR_ANON_EXEC ==
+			       LOTA_IPC_REGISTRY_ACTOR_ANON_EXEC &&
 		       LOTA_IPC_REGISTRY_ACTOR_KIND_MAX ==
-			       LOTA_IPC_REGISTRY_ACTOR_SIGNAL,
+			       LOTA_IPC_REGISTRY_ACTOR_ANON_EXEC,
 	       "lota_gaming.h actor kinds copy lota_ipc.h");
 _Static_assert(
 	sizeof(((struct lota_registry_actor *)0)->comm) ==

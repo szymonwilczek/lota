@@ -203,8 +203,7 @@ struct lota_server_registry_module {
 #define LOTA_SERVER_REGISTRY_MAX_OBJECTS 512
 
 /*
- * One process that reached a process of the instance, as the relying party
- * received it: every field of the lota_registry_actor lota_get_registry()
+ * One actor of the instance, as the relying party received it: every field of the lota_registry_actor lota_get_registry()
  * reported, unchanged.
  */
 struct lota_server_registry_actor {

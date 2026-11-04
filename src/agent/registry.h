@@ -291,7 +291,9 @@ _Static_assert((int)LOTA_INSTANCE_ACTOR_CONNECT ==
 		       (int)LOTA_INSTANCE_ACTOR_PTRACE_ATTACH ==
 			       (int)LOTA_IPC_REGISTRY_ACTOR_PTRACE_ATTACH &&
 		       (int)LOTA_INSTANCE_ACTOR_SIGNAL ==
-			       (int)LOTA_IPC_REGISTRY_ACTOR_SIGNAL,
+			       (int)LOTA_IPC_REGISTRY_ACTOR_SIGNAL &&
+		       (int)LOTA_INSTANCE_ACTOR_ANON_EXEC ==
+			       (int)LOTA_IPC_REGISTRY_ACTOR_ANON_EXEC,
 	       "the wire carries the kernel's actor kind");
 
 /*

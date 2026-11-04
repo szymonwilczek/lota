@@ -495,6 +495,10 @@ process of the instance creates, binds or listens on it. From inside, the
 road is one process of the instance reading another (``ptrace`` in read mode),
 attaching to it or writing into it (``ptrace`` attach, ``process_vm_writev``,
 ``/proc/<pid>/mem``), or signalling it, as ``wineserver`` does to the title.
+A process of the instance is also listed for itself when it maps anonymous
+memory executable or mprotects it to executable, a refused attempt included:
+such code leaves no object to list, so the entry (``ANON_EXEC``, with
+``owner_tgid`` equal to ``tgid``) says who did it and how many times.
 The kernel records each contact as it is made (``instance_actors`` in
 ``src/bpf/lota_lsm.bpf.c``). An actor carries its
 PID, start time, uid, the device and inode of its executable, its command

@@ -2147,6 +2147,71 @@ int BPF_PROG(lota_kernel_load_data, enum kernel_load_data_id id)
 	return 0;
 }
 
+/*
+ * Count one reach of @task into process @owner_tgid, named @owner_comm,
+ * of the instance @root.
+ */
+static __always_inline void
+note_instance_actor(struct task_struct *task,
+		    const struct lota_instance_entry *root, u32 owner_tgid,
+		    const char *owner_comm, u32 kind)
+{
+	struct lota_instance_actor_key key = {};
+	struct lota_instance_actor_val val = {};
+	struct trusted_lib_key ik = {};
+	struct lota_instance_actor_val *seen;
+	struct task_struct *leader;
+	long err;
+
+	leader = BPF_CORE_READ(task, group_leader);
+	key.root_start_ticks = root->root_start_ticks;
+	key.root_tgid = root->root_tgid;
+	key.actor_tgid = BPF_CORE_READ(task, tgid);
+	key.actor_start_ticks = get_task_start_ticks(leader ? leader : task);
+	key.owner_tgid = owner_tgid;
+	key.kind = kind;
+
+	seen = bpf_map_lookup_elem(&instance_actors, &key);
+	if (seen) {
+		__sync_fetch_and_add(&seen->count, 1);
+		return;
+	}
+
+	val.count = 1;
+	if (file_inode_key(BPF_CORE_READ(task, mm, exe_file), &ik)) {
+		val.exe_dev = ik.dev;
+		val.exe_ino = ik.ino;
+	}
+	val.uid = (u32)(bpf_get_current_uid_gid() & 0xFFFFFFFF);
+	bpf_get_current_comm(val.comm, sizeof(val.comm));
+	__builtin_memcpy(val.owner_comm, owner_comm, sizeof(val.owner_comm));
+
+	err = bpf_map_update_elem(&instance_actors, &key, &val, BPF_NOEXIST);
+	if (err == -EEXIST) {
+		seen = bpf_map_lookup_elem(&instance_actors, &key);
+		if (seen)
+			__sync_fetch_and_add(&seen->count, 1);
+	} else if (err) {
+		inc_stat(STAT_INSTANCE_ACTORS_LOST);
+	}
+}
+
+/* the current task made anonymous memory executable, refused or not */
+static __always_inline void record_anon_exec(void)
+{
+	struct lota_instance_entry id = {};
+	char comm[LOTA_MAX_COMM_LEN] = {};
+	struct task_struct *task;
+
+	task = (struct task_struct *)bpf_get_current_task_btf();
+	if (!task || !task_instance(task, &id))
+		return;
+
+	bpf_get_current_comm(comm, sizeof(comm));
+	note_instance_actor(task, &id, BPF_CORE_READ(task, tgid), comm,
+			    LOTA_INSTANCE_ACTOR_ANON_EXEC);
+}
+
 /* ======================================================================
  * LSM hook: security_mmap_file
  *
@@ -2195,6 +2260,7 @@ int BPF_PROG(lota_mmap_file, struct file *file, unsigned long reqprot,
 		int emit_event = 0;
 
 		inc_stat(STAT_ANON_EXEC);
+		record_anon_exec();
 
 		mode = get_mode();
 
@@ -2372,6 +2438,7 @@ int BPF_PROG(lota_file_mprotect, struct vm_area_struct *vma,
 		int emit_event = 0;
 
 		inc_stat(STAT_ANON_EXEC);
+		record_anon_exec();
 
 		if (mode == LOTA_MODE_ENFORCE &&
 		    get_config(LOTA_CFG_BLOCK_ANON_EXEC) &&
@@ -2505,7 +2572,9 @@ int BPF_PROG(lota_file_mprotect, struct vm_area_struct *vma,
  *     process of the instance can act on a request that came that way;
  *   - a process of the instance that ptrace-accesses another one, or
  *     signals it: what the wineserver does to the processes it hosts, and
- *     what the gate allows inside an instance and refuses from outside.
+ *     what the gate allows inside an instance and refuses from outside;
+ *   - a process of the instance that makes anonymous memory executable, which
+ *     leaves no object behind for the list of objects to name.
  *
  * Nothing is refused here.
  * ====================================================================== */
@@ -2534,55 +2603,6 @@ static __always_inline void mark_instance_socket(struct sock *sk)
 	owner->id = id;
 	bpf_get_current_comm(owner->comm, sizeof(owner->comm));
 	owner->tgid = BPF_CORE_READ(task, tgid);
-}
-
-/*
- * Count one reach of @task into process @owner_tgid, named @owner_comm,
- * of the instance @root.
- */
-static __always_inline void
-note_instance_actor(struct task_struct *task,
-		    const struct lota_instance_entry *root, u32 owner_tgid,
-		    const char *owner_comm, u32 kind)
-{
-	struct lota_instance_actor_key key = {};
-	struct lota_instance_actor_val val = {};
-	struct trusted_lib_key ik = {};
-	struct lota_instance_actor_val *seen;
-	struct task_struct *leader;
-	long err;
-
-	leader = BPF_CORE_READ(task, group_leader);
-	key.root_start_ticks = root->root_start_ticks;
-	key.root_tgid = root->root_tgid;
-	key.actor_tgid = BPF_CORE_READ(task, tgid);
-	key.actor_start_ticks = get_task_start_ticks(leader ? leader : task);
-	key.owner_tgid = owner_tgid;
-	key.kind = kind;
-
-	seen = bpf_map_lookup_elem(&instance_actors, &key);
-	if (seen) {
-		__sync_fetch_and_add(&seen->count, 1);
-		return;
-	}
-
-	val.count = 1;
-	if (file_inode_key(BPF_CORE_READ(task, mm, exe_file), &ik)) {
-		val.exe_dev = ik.dev;
-		val.exe_ino = ik.ino;
-	}
-	val.uid = (u32)(bpf_get_current_uid_gid() & 0xFFFFFFFF);
-	bpf_get_current_comm(val.comm, sizeof(val.comm));
-	__builtin_memcpy(val.owner_comm, owner_comm, sizeof(val.owner_comm));
-
-	err = bpf_map_update_elem(&instance_actors, &key, &val, BPF_NOEXIST);
-	if (err == -EEXIST) {
-		seen = bpf_map_lookup_elem(&instance_actors, &key);
-		if (seen)
-			__sync_fetch_and_add(&seen->count, 1);
-	} else if (err) {
-		inc_stat(STAT_INSTANCE_ACTORS_LOST);
-	}
 }
 
 /* @other was reached from the current task; counted when from outside */

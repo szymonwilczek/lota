@@ -690,11 +690,14 @@ struct lota_registry_object {
 #define LOTA_REGISTRY_ACTOR_PTRACE_READ 3 /* read-mode ptrace access */
 #define LOTA_REGISTRY_ACTOR_PTRACE_ATTACH 4 /* ptrace, process_vm_*, mem */
 #define LOTA_REGISTRY_ACTOR_SIGNAL 5 /* sent a signal */
+/* a process of the instance to itself: owner_tgid is tgid */
+#define LOTA_REGISTRY_ACTOR_ANON_EXEC 6 /* made anonymous memory executable */
 
 /*
  * One process that reached a process of the instance of a protected
  * process: from outside, through a unix socket a process of the instance
- * owns, or from inside, by a ptrace access or a signal.
+ * owns, or from inside, by a ptrace access or a signal. Or one process of
+ * the instance that made its own anonymous memory executable.
  * The token's image digest binds every field.
  */
 struct lota_registry_actor {
@@ -712,7 +715,7 @@ struct lota_registry_actor {
 
 /*
  * The code objects the last token round found mapped in one process and
- * the processes outside its instance that reached it.
+ * the processes that acted on it.
  */
 struct lota_registry {
 	uint64_t round; /* measurement round the list comes from */

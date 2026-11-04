@@ -1114,10 +1114,10 @@ static size_t build_registry_page(uint8_t *buf, uint64_t round, uint32_t start,
 			q.tgid = 6000 + k;
 			q.uid = 1000;
 			q.owner_tgid = 4243;
-			q.kind = k == 0 ? LOTA_IPC_REGISTRY_ACTOR_CONNECT :
+			q.kind = k == 0 ? LOTA_IPC_REGISTRY_ACTOR_ANON_EXEC :
 					  LOTA_IPC_REGISTRY_ACTOR_PTRACE_ATTACH;
 			if (k == 1 && fault == REGISTRY_BAD_ACTOR_KIND)
-				q.kind = 6;
+				q.kind = LOTA_IPC_REGISTRY_ACTOR_KIND_MAX + 1;
 			snprintf(q.comm, sizeof(q.comm), "actor%u", k);
 			if (k == 1 && fault == REGISTRY_BAD_ACTOR_COMM)
 				memset(q.comm, 'a', sizeof(q.comm));
@@ -1294,7 +1294,7 @@ static void test_registry_pages(void)
 	    reg->actor_count != 2 || !reg->actors ||
 	    reg->actors[0].tgid != 6000 || reg->actors[0].count != 2 ||
 	    reg->actors[0].start_ticks != 9000 ||
-	    reg->actors[0].kind != LOTA_REGISTRY_ACTOR_CONNECT ||
+	    reg->actors[0].kind != LOTA_REGISTRY_ACTOR_ANON_EXEC ||
 	    reg->actors[1].kind != LOTA_REGISTRY_ACTOR_PTRACE_ATTACH ||
 	    reg->actors[1].exe_ino != 301 ||
 	    reg->actors[1].owner_tgid != 4243 ||

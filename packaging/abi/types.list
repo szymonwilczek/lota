@@ -162,6 +162,7 @@ macro LOTA_REGISTRY_ACTOR_SEND                 = 2
 macro LOTA_REGISTRY_ACTOR_PTRACE_READ          = 3
 macro LOTA_REGISTRY_ACTOR_PTRACE_ATTACH        = 4
 macro LOTA_REGISTRY_ACTOR_SIGNAL               = 5
+macro LOTA_REGISTRY_ACTOR_ANON_EXEC            = 6
 struct lota_registry_actor size=80 align=8
 	count                            off=0 size=8
 	start_ticks                      off=8 size=8

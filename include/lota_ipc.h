@@ -598,13 +598,17 @@ enum lota_ipc_registry_actor_kind {
 	LOTA_IPC_REGISTRY_ACTOR_PTRACE_ATTACH =
 		4, /* attach-mode ptrace access */
 	LOTA_IPC_REGISTRY_ACTOR_SIGNAL = 5, /* signal sent */
-	LOTA_IPC_REGISTRY_ACTOR_KIND_MAX = LOTA_IPC_REGISTRY_ACTOR_SIGNAL,
+	/* one process of the instance to itself: owner_tgid is tgid */
+	LOTA_IPC_REGISTRY_ACTOR_ANON_EXEC =
+		6, /* anonymous memory made executable, refused or not */
+	LOTA_IPC_REGISTRY_ACTOR_KIND_MAX = LOTA_IPC_REGISTRY_ACTOR_ANON_EXEC,
 };
 
 /*
  * A process that reached a process of the instance of @pid: from outside,
  * through a unix socket a process of the instance made, bound or listened
- * on; or from inside, by a ptrace access or a signal.
+ * on; or from inside, by a ptrace access or a signal. Or a process of the
+ * instance that made its own anonymous memory executable.
  * The command names are NUL-terminated and zero-padded.
  */
 struct lota_ipc_registry_actor {
