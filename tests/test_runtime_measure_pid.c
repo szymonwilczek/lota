@@ -165,6 +165,7 @@ int main(void)
 				   peers, 30) == 0;
 		ok &= registry_add(&next, 1235, 1000,
 				   LOTA_IPC_REGISTRY_HISTORY_LOST |
+					   LOTA_IPC_REGISTRY_FROM_EXEC |
 					   LOTA_IPC_REGISTRY_MEASURED,
 				   NULL, NULL, 0, NULL, 0) == 0;
 		registry_replace(&cur, &next);
@@ -234,7 +235,9 @@ int main(void)
 			ok &= registry_encode_page(p, cur.round, 0, buf, 100,
 						   &len) == -ENOSPC;
 			p = registry_find(&cur, 1235);
-			ok &= p && p->flags == LOTA_IPC_REGISTRY_HISTORY_LOST &&
+			ok &= p &&
+			      p->flags == (LOTA_IPC_REGISTRY_HISTORY_LOST |
+					   LOTA_IPC_REGISTRY_FROM_EXEC) &&
 			      registry_encode_page(p, cur.round, 0, buf,
 						   sizeof(buf), &len) == 0 &&
 			      len == sizeof(struct lota_ipc_registry_page);

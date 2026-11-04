@@ -231,6 +231,18 @@ struct {
 } lota_instance SEC(".maps");
 
 /*
+ * Set on a process whose image was executed under protection: its history
+ * starts before the first mapping of that image. A fork does not take it, the
+ * parent's history can die with the parent; the agent drops it with protection.
+ */
+struct {
+	__uint(type, BPF_MAP_TYPE_TASK_STORAGE);
+	__uint(map_flags, BPF_F_NO_PREALLOC);
+	__type(key, int);
+	__type(value, u32);
+} born_protected SEC(".maps");
+
+/*
  * How long instance threads stood stopped, held on the root task. The clock
  * runs while at least one thread stands: since_ns is when the first stopped,
  * total_ns what ended periods add up to. bpf_ktime_get_ns() skips a suspend.
@@ -820,6 +832,9 @@ static __always_inline int is_lota_managed_map(struct bpf_map *map)
 		return 1;
 	if (__builtin_memcmp(name, "instance_stops",
 			     sizeof("instance_stops")) == 0)
+		return 1;
+	if (__builtin_memcmp(name, "born_protected",
+			     sizeof("born_protected")) == 0)
 		return 1;
 	if (__builtin_memcmp(name, "exe_hash_slots",
 			     sizeof("exe_hash_slots")) == 0)
@@ -3121,6 +3136,34 @@ int BPF_PROG(lota_task_free, struct task_struct *task)
 		return 0;
 
 	bpf_map_delete_elem(&protected_pids, &tgid);
+	return 0;
+}
+
+/* ======================================================================
+ * LSM hook: bprm_committed_creds
+ *
+ * The old image is gone and the new one is not mapped yet, so every object of
+ * the new image passes through the history.
+ * ====================================================================== */
+SEC("lsm/bprm_committed_creds")
+int BPF_PROG(lota_bprm_committed_creds, const struct linux_binprm *bprm)
+{
+	struct task_struct *task;
+	u32 *born;
+
+	task = bpf_get_current_task_btf();
+	if (!is_protected_task(task))
+		return 0;
+
+	born = bpf_task_storage_get(&born_protected, task, 0,
+				    BPF_LOCAL_STORAGE_GET_F_CREATE);
+	if (!born)
+		return 0;
+	*born = 1;
+
+	/* withdrawn meanwhile: the agent's delete may have run before the create */
+	if (!is_protected_task(task))
+		bpf_task_storage_delete(&born_protected, task);
 	return 0;
 }
 

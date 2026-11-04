@@ -994,6 +994,7 @@ int bpf_loader_init(struct bpf_loader_ctx *ctx)
 	ctx->protected_pids_fd = -1;
 	ctx->instance_fd = -1;
 	ctx->instance_stops_fd = -1;
+	ctx->born_protected_fd = -1;
 	ctx->allow_verity_digest_fd = -1;
 	ctx->exe_hash_slots_fd = -1;
 	ctx->mapped_exec_fd = -1;
@@ -1432,11 +1433,27 @@ int bpf_loader_load(struct bpf_loader_ctx *ctx, const char *bpf_obj_path,
 		bpf_object__find_map_fd_by_name(ctx->obj, "instance_stops");
 	if (ctx->instance_stops_fd < 0) {
 		ctx->instance_stops_fd = -1;
+		ctx->born_protected_fd = -1;
 	} else {
 		err = harden_fd_cloexec(ctx->instance_stops_fd,
 					"instance_stops map");
 		if (err < 0) {
 			lota_err("Failed to harden instance_stops map fd: %s",
+				 strerror(-err));
+			goto err_close;
+		}
+	}
+
+	/* optional: without it no list claims to start at the exec */
+	ctx->born_protected_fd =
+		bpf_object__find_map_fd_by_name(ctx->obj, "born_protected");
+	if (ctx->born_protected_fd < 0) {
+		ctx->born_protected_fd = -1;
+	} else {
+		err = harden_fd_cloexec(ctx->born_protected_fd,
+					"born_protected map");
+		if (err < 0) {
+			lota_err("Failed to harden born_protected map fd: %s",
 				 strerror(-err));
 			goto err_close;
 		}
@@ -2641,6 +2658,66 @@ static void close_instance_stops(struct bpf_loader_ctx *ctx, uint32_t pid)
 #endif
 }
 
+int bpf_loader_born_protected(struct bpf_loader_ctx *ctx, uint32_t pid,
+			      uint64_t start_ticks)
+{
+	uint64_t ticks = 0;
+	uint32_t born;
+	int pidfd;
+	int ret;
+
+	if (!ctx || pid == 0)
+		return -EINVAL;
+
+	if (!ctx->loaded || ctx->born_protected_fd < 0 || start_ticks == 0)
+		return 0;
+
+#ifndef SYS_pidfd_open
+	return 0;
+#else
+	pidfd = (int)syscall(SYS_pidfd_open, (pid_t)pid, 0);
+	if (pidfd < 0)
+		return errno == ESRCH ? 0 : -errno;
+
+	/* pidfd first: a PID reused after this read fails the lookup */
+	ret = read_pid_start_time_ticks(pid, &ticks);
+	if (ret < 0) {
+		ret = ret == -ENOENT ? 0 : ret;
+		goto out;
+	}
+	if (ticks != start_ticks) {
+		ret = 0;
+		goto out;
+	}
+
+	if (bpf_map_lookup_elem(ctx->born_protected_fd, &pidfd, &born) < 0)
+		ret = (errno == ENOENT || errno == ESRCH) ? 0 : -errno;
+	else
+		ret = 1;
+out:
+	close(pidfd);
+	return ret;
+#endif
+}
+
+/* history stops with protection, so a later one starts past the exec */
+static void forget_born_protected(struct bpf_loader_ctx *ctx, uint32_t pid)
+{
+	int pidfd;
+
+	if (ctx->born_protected_fd < 0)
+		return;
+
+#ifdef SYS_pidfd_open
+	pidfd = (int)syscall(SYS_pidfd_open, (pid_t)pid, 0);
+	if (pidfd < 0)
+		return;
+
+	(void)bpf_map_delete_elem(ctx->born_protected_fd, &pidfd);
+	close(pidfd);
+#endif
+}
+
 int bpf_loader_unprotect_pid(struct bpf_loader_ctx *ctx, uint32_t pid)
 {
 	if (!ctx || !ctx->loaded)
@@ -2652,6 +2729,7 @@ int bpf_loader_unprotect_pid(struct bpf_loader_ctx *ctx, uint32_t pid)
 	if (bpf_map_delete_elem(ctx->protected_pids_fd, &pid) < 0)
 		return -errno;
 
+	forget_born_protected(ctx, pid);
 	close_instance_stops(ctx, pid);
 	return 0;
 }

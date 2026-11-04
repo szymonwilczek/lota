@@ -1090,7 +1090,9 @@ static size_t build_registry_page(uint8_t *buf, uint64_t round, uint32_t start,
 	hdr.peer_total = REGISTRY_MOCK_PEERS;
 	hdr.start = start;
 	hdr.count = count;
-	hdr.flags = LOTA_IPC_REGISTRY_MEASURED | LOTA_IPC_REGISTRY_HISTORY_LOST;
+	hdr.flags = LOTA_IPC_REGISTRY_MEASURED |
+		    LOTA_IPC_REGISTRY_HISTORY_LOST |
+		    LOTA_IPC_REGISTRY_FROM_EXEC;
 	if (fault == REGISTRY_BAD_FLAG)
 		hdr.flags |= 1U << 9;
 	memset(hdr.image_digest, 0x5a, sizeof(hdr.image_digest));
@@ -1276,8 +1278,8 @@ static void test_registry_pages(void)
 	}
 	if (ret != LOTA_OK || !reg || reg->count != 5 || reg->round != 1 ||
 	    reg->pid != 4242 ||
-	    reg->flags !=
-		    (LOTA_REGISTRY_MEASURED | LOTA_REGISTRY_HISTORY_LOST) ||
+	    reg->flags != (LOTA_REGISTRY_MEASURED | LOTA_REGISTRY_HISTORY_LOST |
+			   LOTA_REGISTRY_FROM_EXEC) ||
 	    reg->image_digest[0] != 0x5a ||
 	    strcmp(reg->objects[3].soname, "lib3.so") != 0 ||
 	    strcmp(reg->objects[3].path, "/opt/title/lib3.so") != 0 ||

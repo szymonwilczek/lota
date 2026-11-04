@@ -41,6 +41,7 @@ struct bpf_loader_ctx {
 	int protected_pids_fd; /* Protected PIDs map fd */
 	int instance_fd; /* 'lota_instance' task storage fd */
 	int instance_stops_fd; /* 'instance_stops' task storage fd */
+	int born_protected_fd; /* 'born_protected' task storage fd */
 	int allow_verity_digest_fd; /* 'allow_verity_digest' map fd */
 	int exe_hash_slots_fd; /* 'exe_hash_slots' map fd */
 	int mapped_exec_fd; /* 'mapped_exec' pin map fd */
@@ -491,6 +492,19 @@ int bpf_loader_adopt_instance_member(struct bpf_loader_ctx *ctx, uint32_t pid);
  */
 int bpf_loader_instance_stopped_ms(struct bpf_loader_ctx *ctx, uint32_t pid,
 				   uint64_t *ms);
+
+/*
+ * bpf_loader_born_protected - Was @pid's image executed under protection?
+ * @ctx: Loaded context
+ * @pid: Process ID to ask about
+ * @start_ticks: Start time the answer has to belong to
+ *
+ * A process that forked from a protected one and never executed is not.
+ *
+ * Returns: 1 when it was, 0 when not or unknown, negative errno
+ */
+int bpf_loader_born_protected(struct bpf_loader_ctx *ctx, uint32_t pid,
+			      uint64_t start_ticks);
 
 /*
  * bpf_loader_probe_protect_pid - Ask whether a PID could be protected

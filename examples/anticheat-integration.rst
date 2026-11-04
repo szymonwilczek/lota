@@ -330,6 +330,13 @@ Worth being precise about, because it decides what you can build on it:
   that process. A list that does not hash to it, short of an object or with
   one rewritten, is not the one the token describes.
 
+* Whether the list covers the whole life of the image.
+  ``LOTA_REGISTRY_FROM_EXEC`` says the image was executed under protection, as
+  with ``lota-protect``. Without it the list starts at the moment protection
+  did, so a library loaded and dropped before that is not there. A process the
+  title forked and that never executed lacks the flag too, its parent's history
+  can be gone. The flag is in the hash; the agent refuses nothing without it.
+
 * Which processes reached the title: from outside through a unix socket,
   such as one asking the title's ``wineserver`` to write into its memory, and
   from inside by reading, writing or signalling another of its processes,

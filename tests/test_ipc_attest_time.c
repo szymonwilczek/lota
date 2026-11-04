@@ -101,6 +101,15 @@ int bpf_loader_unprotect_pid(struct bpf_loader_ctx *ctx, uint32_t pid)
 	return -ENOTSUP;
 }
 
+int bpf_loader_born_protected(struct bpf_loader_ctx *ctx, uint32_t pid,
+			      uint64_t start_ticks)
+{
+	(void)ctx;
+	(void)pid;
+	(void)start_ticks;
+	return 0;
+}
+
 int bpf_loader_instance_stopped_ms(struct bpf_loader_ctx *ctx, uint32_t pid,
 				   uint64_t *ms)
 {

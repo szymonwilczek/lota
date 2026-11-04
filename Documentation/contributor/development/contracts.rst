@@ -465,6 +465,12 @@ an object loaded and dropped between two rounds is still listed. A record the
 kernel could not keep sets ``LOTA_IPC_REGISTRY_HISTORY_LOST`` on every list of
 the round: such a list may lack an object.
 
+The history starts when protection does. ``LOTA_IPC_REGISTRY_FROM_EXEC`` says
+the process's current image was executed under protection (``born_protected``,
+set by ``lsm/bprm_committed_creds``), so nothing the image mapped predates the
+list. A process protected after it started, or forked from a protected one and
+never executed, lacks the flag; withdrawing protection clears it.
+
 A file can change under a mapping without being written again: another process
 holds it open for write, or maps it shared and writable, and stores into the
 pages the protected process runs. The kernel notes, at every executable
