@@ -80,7 +80,7 @@ Two paths feed the protected_pids map:
   is the production path; nothing else needs to happen on the agent CLI.
   ``liblota_wine_hook.so`` also calls ``lota_protect_self()`` on its first
   connect. Confirm with the ``info`` line ``registered pid=<pid> for runtime
-  enforcement`` or ``bpftool map dump name protected_pids``.
+  enforcement`` or ``journalctl -u lota-agent``.
 
   A protected title maps only files with an allowed fs-verity digest or a
   ``trusted_libs`` inode, so every Proton object it loads, ``ntdll.so`` first,

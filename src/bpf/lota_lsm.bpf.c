@@ -3062,6 +3062,8 @@ int BPF_PROG(lota_task_fix_setuid, struct cred *new, const struct cred *old,
 SEC("lsm/bpf_map")
 int BPF_PROG(lota_bpf_map, struct bpf_map *map, fmode_t fmode, int ret)
 {
+	(void)fmode;
+
 	if (ret != 0)
 		return -EPERM;
 
@@ -3072,9 +3074,6 @@ int BPF_PROG(lota_bpf_map, struct bpf_map *map, fmode_t fmode, int ret)
 		return 0;
 
 	if (is_bpf_admin_task())
-		return 0;
-
-	if (!(fmode & FMODE_WRITE))
 		return 0;
 
 	if (!is_lota_managed_map(map))
