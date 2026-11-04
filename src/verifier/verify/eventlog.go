@@ -461,6 +461,10 @@ func VerifyEventLogWithPolicy(report *types.AttestationReport, enforcePCR8 bool)
 		return nil, fmt.Errorf("event log replay failed: %w", err)
 	}
 
+	if err := verifyVariableEventDigests(parsed); err != nil {
+		return nil, fmt.Errorf("event log verification: %w", err)
+	}
+
 	// skip PCR 14 (LOTA self-measurement, extended at runtime)
 	// skip PCR 9 (bootloader-loaded files, not modeled by any policy)
 	// skip PCR 8 (GRUB cmdline) only while no policy consumes it
@@ -492,6 +496,24 @@ func VerifyEventLogWithPolicy(report *types.AttestationReport, enforcePCR8 bool)
 		"pcrs_replayed", countNonZero(replay.ExtendCounts[:]))
 
 	return facts, nil
+}
+
+// verifyVariableEventDigests binds the Secure Boot variables to the replay.
+// Replay extends the digest alone, so event data it does not cover could name
+// any value while PCR 7 still matches. Firmware measures the whole
+// UEFI_VARIABLE_DATA, and these values are what verifier reads out of the log.
+func verifyVariableEventDigests(parsed *ParsedEventLog) error {
+	for i := range parsed.Entries {
+		e := &parsed.Entries[i]
+		if e.PCRIndex != 7 || e.EventType != EvEFIVariableDriverConfig {
+			continue
+		}
+		sum := sha256.Sum256(e.EventData)
+		if !bytes.Equal(e.Digests[AlgSHA256], sum[:]) {
+			return fmt.Errorf("PCR 7 variable event %d does not match its digest", i)
+		}
+	}
+	return nil
 }
 
 func countNonZero(counts []int) int {
