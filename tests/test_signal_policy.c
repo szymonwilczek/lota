@@ -197,6 +197,20 @@ static void test_the_cgroup_kill_guard(void)
 	      "a cgroup.kill nobody guards is not refused");
 }
 
+/* the open period counts while a thread stands, and only then */
+static void test_stopped_time(void)
+{
+	CHECK(lota_stopped_ns(0, 0, 0, 500) == 0, "never stopped: nothing");
+	CHECK(lota_stopped_ns(70, 0, 100, 500) == 70,
+	      "none standing: the ended periods alone");
+	CHECK(lota_stopped_ns(70, 1, 100, 500) == 470,
+	      "one standing: its period counts");
+	CHECK(lota_stopped_ns(70, 8, 100, 500) == 470,
+	      "eight standing: the same period, not eight");
+	CHECK(lota_stopped_ns(70, 1, 500, 100) == 70,
+	      "clock behind the stop: no wrap");
+}
+
 int main(void)
 {
 	printf("=== signal delivery policy tests ===\n\n");
@@ -214,6 +228,7 @@ int main(void)
 	test_suppression_follows_the_verdict();
 	test_the_two_decisions_together();
 	test_the_cgroup_kill_guard();
+	test_stopped_time();
 
 	printf("\n%s\n", g_failures ? "FAILURES" : "All tests passed");
 	return g_failures ? 1 : 0;

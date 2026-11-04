@@ -40,6 +40,7 @@ struct bpf_loader_ctx {
 	int guarded_files_fd; /* 'guarded_files' map fd */
 	int protected_pids_fd; /* Protected PIDs map fd */
 	int instance_fd; /* 'lota_instance' task storage fd */
+	int instance_stops_fd; /* 'instance_stops' task storage fd */
 	int allow_verity_digest_fd; /* 'allow_verity_digest' map fd */
 	int exe_hash_slots_fd; /* 'exe_hash_slots' map fd */
 	int mapped_exec_fd; /* 'mapped_exec' pin map fd */
@@ -477,6 +478,21 @@ int bpf_loader_protect_pid(struct bpf_loader_ctx *ctx, uint32_t pid);
 int bpf_loader_adopt_instance_member(struct bpf_loader_ctx *ctx, uint32_t pid);
 
 /*
+ * bpf_loader_instance_stopped_ms - How long @pid's instance stood stopped
+ * @ctx: Loaded context
+ * @pid: Process ID to ask about
+ * @ms: Output, milliseconds any thread of the instance stood stopped
+ *
+ * Read from the root of the instance, so the value covers every member and
+ * ends with the root. A process in no instance, or one whose root has gone,
+ * has none: @ms is 0.
+ *
+ * Returns: 0 on success, negative errno
+ */
+int bpf_loader_instance_stopped_ms(struct bpf_loader_ctx *ctx, uint32_t pid,
+				   uint64_t *ms);
+
+/*
  * bpf_loader_probe_protect_pid - Ask whether a PID could be protected
  * @pid: Process ID a startup policy names
  *
@@ -570,6 +586,7 @@ struct bpf_extended_stats {
 	uint64_t mapped_pin_refused; /* mapped objects left unpinned */
 	uint64_t exec_history_lost; /* exec mappings left unrecorded */
 	uint64_t instance_peers_lost; /* instance socket reaches unrecorded */
+	uint64_t instance_stops_lost; /* instance thread stops unrecorded */
 };
 
 /*

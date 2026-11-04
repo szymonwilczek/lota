@@ -758,7 +758,8 @@ static int run_daemon(const struct run_daemon_params *params)
 			"mount_blocked=%lu kill_guard_blocked=%lu "
 			"yielded=%lu kill_probes=%lu "
 			"mapped_write_blocked=%lu mapped_pin_refused=%lu "
-			"exec_history_lost=%lu instance_peers_lost=%lu",
+			"exec_history_lost=%lu instance_peers_lost=%lu "
+			"instance_stops_lost=%lu",
 			stats.total_execs, stats.events_sent, stats.drops,
 			stats.modules_blocked, stats.mmap_execs,
 			stats.mmap_blocked, stats.ptrace_attempts,
@@ -767,7 +768,7 @@ static int run_daemon(const struct run_daemon_params *params)
 			stats.kill_guard_blocked, stats.events_yielded,
 			stats.kill_probes, stats.mapped_write_blocked,
 			stats.mapped_pin_refused, stats.exec_history_lost,
-			stats.instance_peers_lost);
+			stats.instance_peers_lost, stats.instance_stops_lost);
 	}
 
 	{

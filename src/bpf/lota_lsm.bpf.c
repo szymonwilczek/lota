@@ -129,7 +129,7 @@ struct {
  */
 struct {
 	__uint(type, BPF_MAP_TYPE_ARRAY);
-	__uint(max_entries, 24);
+	__uint(max_entries, 25);
 	__type(key, u32);
 	__type(value, u64);
 } stats SEC(".maps");
@@ -177,6 +177,7 @@ struct {
 	22 /* exec mapping of a protected task unrecorded */
 #define STAT_INSTANCE_PEERS_LOST \
 	23 /* reach into an instance socket unrecorded */
+#define STAT_INSTANCE_STOPS_LOST 24 /* stop of an instance thread unrecorded */
 
 /*
  * Rate-limit window per enum lota_event_type (see lota_event_budget.h):
@@ -228,6 +229,25 @@ struct {
 	__type(key, int);
 	__type(value, struct lota_instance_entry);
 } lota_instance SEC(".maps");
+
+/*
+ * How long instance threads stood stopped, held on the root task. The clock
+ * runs while at least one thread stands: since_ns is when the first stopped,
+ * total_ns what ended periods add up to. bpf_ktime_get_ns() skips a suspend.
+ */
+struct lota_instance_stops {
+	struct bpf_spin_lock lock;
+	u32 stopped_threads;
+	u64 since_ns;
+	u64 total_ns;
+};
+
+struct {
+	__uint(type, BPF_MAP_TYPE_TASK_STORAGE);
+	__uint(map_flags, BPF_F_NO_PREALLOC);
+	__type(key, int);
+	__type(value, struct lota_instance_stops);
+} instance_stops SEC(".maps");
 
 /*
  * Scratch holds what the kernel writes and the key built from it.
@@ -797,6 +817,9 @@ static __always_inline int is_lota_managed_map(struct bpf_map *map)
 		return 1;
 	if (__builtin_memcmp(name, "lota_instance", sizeof("lota_instance")) ==
 	    0)
+		return 1;
+	if (__builtin_memcmp(name, "instance_stops",
+			     sizeof("instance_stops")) == 0)
 		return 1;
 	if (__builtin_memcmp(name, "exe_hash_slots",
 			     sizeof("exe_hash_slots")) == 0)
@@ -3285,5 +3308,96 @@ int BPF_PROG(lota_agent_moved, struct cgroup *dst_cgrp,
 	}
 
 	kill_instances(1);
+	return 0;
+}
+
+/* =====================================================================
+ * STOPPED TIME
+ *
+ * A frozen cgroup, a job-control stop and a ptrace stop all pass through
+ * these two, in the thread that stands. An unfrozen thread passing through
+ * cgroup_leave_frozen() is what ends a stop: leaving with the freeze still on
+ * re-arms the trap and the thread stays frozen.
+ * ===================================================================== */
+static __always_inline struct task_struct *
+instance_root_acquire(struct task_struct *task)
+{
+	struct lota_instance_entry id = {};
+	struct task_struct *root;
+
+	if (!task_instance(task, &id))
+		return NULL;
+
+	root = bpf_task_from_pid(id.root_tgid);
+	if (!root)
+		return NULL;
+	if (get_task_start_ticks(root) != id.root_start_ticks) {
+		bpf_task_release(root);
+		return NULL;
+	}
+	return root;
+}
+
+SEC("fentry/cgroup_enter_frozen")
+int BPF_PROG(lota_stop_enter)
+{
+	struct task_struct *task = bpf_get_current_task_btf();
+	struct lota_instance_stops *stops;
+	struct task_struct *root;
+	u64 now;
+
+	if (BPF_CORE_READ_BITFIELD_PROBED(task, frozen))
+		return 0;
+
+	root = instance_root_acquire(task);
+	if (!root)
+		return 0;
+
+	stops = bpf_task_storage_get(&instance_stops, root, 0,
+				     BPF_LOCAL_STORAGE_GET_F_CREATE);
+	if (!stops) {
+		inc_stat(STAT_INSTANCE_STOPS_LOST);
+		goto out;
+	}
+
+	now = bpf_ktime_get_ns();
+	bpf_spin_lock(&stops->lock);
+	if (stops->stopped_threads++ == 0)
+		stops->since_ns = now;
+	bpf_spin_unlock(&stops->lock);
+out:
+	bpf_task_release(root);
+	return 0;
+}
+
+SEC("fexit/cgroup_leave_frozen")
+int BPF_PROG(lota_stop_leave, bool always_leave)
+{
+	struct task_struct *task = bpf_get_current_task_btf();
+	struct lota_instance_stops *stops;
+	struct task_struct *root;
+	u64 now;
+
+	(void)always_leave;
+
+	if (BPF_CORE_READ_BITFIELD_PROBED(task, frozen))
+		return 0;
+
+	root = instance_root_acquire(task);
+	if (!root)
+		return 0;
+
+	stops = bpf_task_storage_get(&instance_stops, root, 0, 0);
+	if (!stops)
+		goto out;
+
+	now = bpf_ktime_get_ns();
+	bpf_spin_lock(&stops->lock);
+	if (stops->stopped_threads > 0 && --stops->stopped_threads == 0)
+		stops->total_ns = lota_stopped_ns(stops->total_ns, 1,
+						  stops->since_ns, now);
+	bpf_spin_unlock(&stops->lock);
+out:
+	bpf_task_release(root);
 	return 0;
 }

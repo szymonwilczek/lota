@@ -795,4 +795,16 @@ struct integrity_data {
 	__u32 lockdown; /* 1 when lockdown is integrity or above */
 };
 
+/*
+ * Stopped time of an instance at @now: what ended periods add up to, plus the
+ * open one while a thread still stands.
+ */
+static inline __u64 lota_stopped_ns(__u64 total_ns, __u32 stopped_threads,
+				    __u64 since_ns, __u64 now)
+{
+	if (stopped_threads && now > since_ns)
+		return total_ns + (now - since_ns);
+	return total_ns;
+}
+
 #endif /* LOTA_H */
