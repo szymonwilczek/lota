@@ -48,6 +48,8 @@ To harden the agent's own AIK userAuth at rest, enable sealing in ``lota.conf``:
 
 ``strict`` removes the plaintext sidecar, so a captured disk no longer yields
 the AIK auth even to an attacker with the same TPM in a different boot state.
+It protects this value and not the key: ``userAuth`` is no input to a primary,
+so a local root can create the same key with an authorization of its own.
 Leave both keys at their default ``false`` to keep the existing
 plaintext-sidecar behaviour.
 

@@ -87,8 +87,9 @@ enum lota_server_error {
 /*
  * Verified claims extracted from a token
  *
- * After successful verification, these fields contain trusted data
- * that has been cryptographically validated.
+ * A successful verification proves that the AIK signed these fields. pcr_mask
+ * and pcr_digest come from the TPM. The rest is what the signer stated, and a
+ * local root can sign its own: see Documentation/security/threat-model.rst.
  */
 struct lota_server_claims {
 	uint64_t valid_until; /* Token expiry time (Unix timestamp) */
