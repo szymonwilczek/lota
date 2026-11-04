@@ -493,6 +493,10 @@ Active threats
    * - Kernel module or memory-only load
      - | Kernel lockdown, module signature enforcement, and BPF LSM gates reject
          unsafe load paths.
+       | A module signed with a key the owner enrolled in MOK passes all of them,
+         which is what lets DKMS drivers load. Keys are recorded, not judged:
+         ``GET /api/v1/clients/{id}`` lists the machine's db and MOK keys for the
+         publisher to weigh.
        | In every mode a module or firmware load also stands on the kernel
          integrity baseline, and kexec is refused: module signatures enforced and lockdown at
          integrity or above. The startup hardening gate reads both out of
