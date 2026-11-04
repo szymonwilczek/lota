@@ -661,10 +661,12 @@ every file the bootloader read, ``grubenv`` among them, so it answers for a
 boot rather than for a kernel.
 
 The gate reads the same measurement, and only where the quote covers PCR 9 and
-the event log replays to it. Where it does not, a policy pinning
+the event log replays to it. The digest covers the file, not the path the record
+names, so a pin proves that the bootloader read a file with that digest during
+the boot, not that the kernel it started was that file. Where it does not, a policy pinning
 ``kernel_hashes`` is refused with that as the reason. The pin stays advisory:
-PCR 7 is the anchor for "a trusted kernel booted", and a kernel pin buys
-anti-rollback at the cost of an entry per kernel.
+PCR 7 is the anchor for "a trusted kernel booted", and a kernel pin catches an
+older kernel on a host that reports honestly, at the cost of an entry per kernel.
 
 Pinning these registers is not optional. A report whose ``pcr_mask`` omits
 PCR 0, 1 or 7 is refused before any baseline is consulted or written, and no
