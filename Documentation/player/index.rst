@@ -427,6 +427,8 @@ away the same way::
     (PCR 14) on purpose, so this boot can no longer attest. That is the
     security contract, not a fault: resuming therefore needs a reboot (see
     --resume).
+    [lota-install] A game the agent protects ends with it, so save and close
+    any that is running first.
     [lota-install] Pause the agent now? [y/N, q to quit]
     [lota-install] Left running. Nothing changed.
 

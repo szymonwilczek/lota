@@ -441,6 +441,8 @@ Active threats
          ``SIGHUP`` and signal 0 from anything but itself, a holder of
          ``LOTA_TASK_AUTH_ADMIN`` or the kernel, since its handlers are how it
          shuts down.
+       | Every report rests on the agent, so what it protects ends with it,
+         whatever ended it.
        | ``lota-agent --terminate-protected`` relays ``SIGTERM`` or
          ``SIGKILL`` for a caller ``kill(2)`` would have allowed and leaves a
          record. Every relayed termination is journalled, and the host reports

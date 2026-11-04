@@ -401,7 +401,8 @@ Pausing and removing
   kill-block is the anti-tamper surface), and the graceful shutdown poisons PCR
   14 before unloading -- so **resume requires a reboot**. That is the security
   contract, not a bug: same-boot re-attestation after a shutdown would let a
-  tampered session pose as the original one.
+  tampered session pose as the original one. A protected game still running
+  ends with the agent.
 * **Resume:** ``sudo lota-install --resume`` explains that resuming is a reboot
   and offers to reboot now (default no); the socket-activated agent then
   starts on its own and re-measures into a fresh PCR 14.

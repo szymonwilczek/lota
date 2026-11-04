@@ -109,6 +109,8 @@ static void test_the_mirrored_signal_number(void)
 {
 	CHECK(LOTA_SIG_HUP == SIGHUP,
 	      "the mirrored SIGHUP matches the system's");
+	CHECK(LOTA_SIG_KILL == SIGKILL,
+	      "the mirrored SIGKILL matches the system's");
 }
 
 /* A refusal is recorded whatever the signal */

@@ -1554,6 +1554,7 @@ int bpf_loader_attach(struct bpf_loader_ctx *ctx)
 	 */
 	static const char *const required_programs[] = {
 		"lota_ptrace_access_check",
+		"lota_agent_exit",
 	};
 	const size_t required_count =
 		sizeof(required_programs) / sizeof(required_programs[0]);
@@ -1671,10 +1672,10 @@ void bpf_loader_cleanup(struct bpf_loader_ctx *ctx)
 		ctx->ringbuf = NULL;
 	}
 
-	for (int i = 0; i < ctx->link_count; i++) {
-		bpf_link__destroy(ctx->links[i]);
-		ctx->links[i] = NULL;
-	}
+	/*
+	 * The links stay open: the kernel closes them when this process exits,
+	 * after lota_agent_exit has ended what the agent protected.
+	 */
 	ctx->link_count = 0;
 
 	if (ctx->obj) {

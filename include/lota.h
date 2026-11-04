@@ -408,6 +408,7 @@ lota_inside_instance(int actor_protected, unsigned int actor_root,
  * and not the uapi signal numbers.
  */
 #define LOTA_SIG_HUP 1
+#define LOTA_SIG_KILL 9
 #define LOTA_SIG_IO 29
 
 /* what stops a task, and what makes the kernel write its memory to a core */

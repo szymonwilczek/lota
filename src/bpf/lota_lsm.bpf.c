@@ -410,7 +410,14 @@ extern void bpf_rcu_read_unlock(void) __ksym;
 
 /* a referenced task by global pid, for a hook that only has a struct pid */
 extern struct task_struct *bpf_task_from_pid(s32 pid) __ksym;
+extern struct task_struct *bpf_task_acquire(struct task_struct *p) __ksym;
 extern void bpf_task_release(struct task_struct *p) __ksym;
+extern int bpf_send_signal_task(struct task_struct *task, int sig,
+				enum pid_type type, u64 value) __ksym;
+extern int bpf_iter_task_new(struct bpf_iter_task *it, struct task_struct *task,
+			     unsigned int flags) __ksym;
+extern struct task_struct *bpf_iter_task_next(struct bpf_iter_task *it) __ksym;
+extern void bpf_iter_task_destroy(struct bpf_iter_task *it) __ksym;
 
 /* kfunc definition for bpf_get_fsverity_digest */
 extern int bpf_get_fsverity_digest(struct file *file,
@@ -3047,6 +3054,64 @@ int BPF_PROG(lota_task_alloc, struct task_struct *task,
 
 	entry->root_start_ticks = id.root_start_ticks;
 	entry->root_tgid = id.root_tgid;
+	return 0;
+}
+
+/* ======================================================================
+ * The agent's exit: nothing it protects outlives it
+ *
+ * The agent is what a report rests on, and the programs end with it. Its links
+ * close in exit_files(), after this tracepoint, so the signal goes out with
+ * every hook still on, whatever ended the agent. A process forking meanwhile
+ * adds its child behind the walk, or is refused the fork once signalled.
+ * Threads are walked, not leaders: a leader that exited takes no signal, and
+ * its group can be running.
+ * ====================================================================== */
+#define LOTA_TASK_ITER_ALL_THREADS 1
+
+/* where preemption is off the kill goes through a per-CPU slot: -EBUSY, once */
+#define LOTA_KILL_TRIES 64
+#define LOTA_EBUSY 16
+
+static __always_inline void kill_group(struct task_struct *t)
+{
+	int i;
+
+	for (i = 0; i < LOTA_KILL_TRIES; i++) {
+		if (bpf_send_signal_task(t, LOTA_SIG_KILL, PIDTYPE_TGID, 0) !=
+		    -LOTA_EBUSY)
+			break;
+	}
+}
+
+/* end every protected group */
+static __always_inline void kill_instances(void)
+{
+	struct lota_instance_entry id = {};
+	struct task_struct *held;
+	struct task_struct *t;
+
+	bpf_rcu_read_lock();
+	bpf_for_each(task, t, NULL, LOTA_TASK_ITER_ALL_THREADS)
+	{
+		if (!task_instance_rcu(t, &id))
+			continue;
+		held = bpf_task_acquire(t);
+		if (!held)
+			continue;
+		kill_group(held);
+		bpf_task_release(held);
+	}
+	bpf_rcu_read_unlock();
+}
+
+SEC("tp_btf/sched_process_exit")
+int BPF_PROG(lota_agent_exit, struct task_struct *task, bool group_dead)
+{
+	if (!group_dead || !is_lota_agent_task(task))
+		return 0;
+
+	kill_instances();
 	return 0;
 }
 
