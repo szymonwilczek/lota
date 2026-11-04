@@ -348,6 +348,8 @@ Active threats
          and mprotect for protected processes against the fs-verity
          allow-list. The key is off by default, and the token carries
          ``LOTA_FLAG_STRICT_MMAP`` while it applies.
+       | The gate sees every executable mapping of the process, so a Proton
+         title needs the whole Proton tree on the allow-list or does not start.
        | A bind or move mount that would shadow a trusted file is refused
          through both mount APIs, and the refusal is emitted on the event
          stream and counted like every other blocked hook.
@@ -595,6 +597,9 @@ Explicit non-goals
   measurements. A measurement produced by layer N cannot bootstrap trust in
   layer N.
 * Measuring anonymous executable memory as a trusted module set.
+* Guarding data a protected process shares with an unprotected one. Memory it
+  maps executable is recorded with who could write it; plain data in a shared
+  segment is neither guarded nor recorded.
 * Making PCR14 immutable from userspace on platforms where the TPM profile
   leaves it OS-writable.
 * Replacing operator key management, CA key ceremony, or release governance.
