@@ -855,7 +855,7 @@ int lota_runtime_coverage_pid(pid_t pid,
 				cov->content_hashed++;
 			continue;
 		}
-		if (!rt_err_is_unmeasurable(ret))
+		if (lota_rt_err_is_agent_failure(ret))
 			goto out;
 		cov->unmeasurable++;
 	}
@@ -883,6 +883,7 @@ int lota_runtime_measure_pid_objects(
 	ino_t exe_ino = 0;
 	size_t n = 0;
 	size_t i, unique;
+	int unopened = 0;
 	int ret;
 
 	if (fail)
@@ -955,7 +956,9 @@ int lota_runtime_measure_pid_objects(
 			}
 		}
 		if (ret != 0) {
-			if (fail) {
+			int agent_failure = lota_rt_err_is_agent_failure(ret);
+
+			if (fail && (!unopened || m.is_exe || agent_failure)) {
 				snprintf(fail->soname, sizeof(fail->soname),
 					 "%s", entries[i].soname);
 				snprintf(fail->path, sizeof(fail->path), "%s",
@@ -966,18 +969,16 @@ int lota_runtime_measure_pid_objects(
 				fail->road_err = m.road_err;
 				fail->no_file = m.no_file;
 			}
-			/*
-			 * object with no digest is coverage the relying party
-			 * judges; anything else -- a mapping that will not open,
-			 * or one that no longer resolves to the inode enumerated
-			 * -- is this measurement failing.
-			 */
-			if (!rt_err_is_unmeasurable(ret))
+			if (m.role == LOTA_RT_ROLE_UNKNOWN && !unopened)
+				unopened = ret;
+			if (agent_failure)
 				goto out;
 			if (m.is_exe) {
-				ret = -ENODATA;
+				if (rt_err_is_unmeasurable(ret))
+					ret = -ENODATA;
 				goto out;
 			}
+			/* a gap the relying party judges, whatever the cause */
 			local_cov.unmeasurable++;
 			memset(slot, 0, sizeof(*slot));
 			continue;
@@ -996,8 +997,12 @@ int lota_runtime_measure_pid_objects(
 		fail->past_limit = local_cov.past_limit;
 
 	ret = lota_rt_coverage_verdict(&local_cov, exe_measured);
-	if (ret != 0)
+	if (ret != 0) {
+		/* a mapping that would not open may be the executable */
+		if (unopened)
+			ret = unopened;
 		goto out;
+	}
 
 	qsort(mods, local_cov.measured, sizeof(*mods), rt_module_qsort_cmp);
 

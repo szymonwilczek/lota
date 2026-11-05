@@ -1660,7 +1660,10 @@ static void handle_get_token(struct ipc_context *ctx, struct ipc_client *client,
 					}
 					fail = true;
 					fail_code =
-						LOTA_IPC_ERR_UNMEASURABLE_SELF;
+						lota_rt_err_is_agent_failure(
+							ret) ?
+							LOTA_IPC_ERR_INTERNAL :
+							LOTA_IPC_ERR_UNMEASURABLE_SELF;
 					goto out;
 				}
 
