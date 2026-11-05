@@ -1,30 +1,17 @@
 /* SPDX-License-Identifier: MIT */
 /* Copyright (C) 2026 Szymon Wilczek */
 /*
- * Ring-buffer emission budget shared by the BPF LSM and its unit tests.
+ * Ring-buffer emission budget: the arithmetic of should_emit_event(), free of
+ * maps and atomics so it can be unit-tested in user space.
  *
- * In ENFORCE mode every event type is rate-limited per one-second window so an
- * attacker-driven flood cannot exhaust the ring buffer and starve the other
- * types.
+ * In ENFORCE mode each event type has its own one-second window, so one
+ * flooding type cannot spend another's budget. Blocked events get the larger
+ * cap, still finite so self-induced denials cannot fill the ring faster than
+ * user space drains it; the stats map counts them regardless, so only per-event
+ * detail is dropped.
  *
- * Allowed (benign) events get the tighter budget; blocked (security-relevant)
- * events get a larger one but are still bounded, so a flood of self-induced
- * denials cannot blind the agent to other events by filling the ring buffer
- * faster than user space drains it.
- *
- * Block counts themselves are never lost: they are tallied in the stats map
- * independently of ring-buffer emission, so suppressing a blocked event drops
- * only its per-event detail.
- *
- * The class sets the cap, the window is per type, so one flooding type cannot
- * spend another's budget. All types share one ring, so past the pressure
- * watermark a type that spent its share of the window yields to quieter ones;
- * that rule bounds the ring as a whole.
- *
- * Decision arithmetic lives here as pure helpers (no BPF maps, no atomics)
- * so it can be unit-tested in user space.
- * BPF program keeps the map lookup and the cross-CPU atomics around these
- * helpers.
+ * All types share one ring, so past the pressure watermark a type that spent
+ * its share of the window yields to quieter ones.
  */
 
 #ifndef LOTA_EVENT_BUDGET_H
@@ -40,11 +27,12 @@
 #define LOTA_ALLOW_EVENT_BUDGET_PER_SEC 256U
 #define LOTA_BLOCKED_EVENT_BUDGET_PER_SEC 1024U
 
-/*
- * Per-window emission cap for an event class, or 0 when the class is unbounded
- * (outside ENFORCE mode nothing is gated).
- * Blocked events earn the larger cap because they are security-relevant, but
- * the cap is finite so a flood cannot monopolise the ring buffer.
+/**
+ * lota_event_budget_limit() - Emission cap of an event class per window.
+ * @enforce: The mode is enforce.
+ * @blocked: The class is refused operations, else permitted ones.
+ *
+ * Return: the cap, or 0 when unbounded, as everything is outside ENFORCE.
  */
 LOTA_EB_INLINE unsigned int lota_event_budget_limit(unsigned int enforce,
 						    int blocked)
@@ -55,10 +43,12 @@ LOTA_EB_INLINE unsigned int lota_event_budget_limit(unsigned int enforce,
 			 LOTA_ALLOW_EVENT_BUDGET_PER_SEC;
 }
 
-/*
- * Whether the one-second window that began at window_start_ns has elapsed, or
- * the clock moved backwards.
- * In either case the caller rotates the window and resets the counter.
+/**
+ * lota_event_budget_window_expired() - Test whether to rotate the window.
+ * @now_ns:          monotonic time now.
+ * @window_start_ns: monotonic time the window opened.
+ *
+ * Return: non-zero if the window has elapsed or the clock moved backwards.
  */
 LOTA_EB_INLINE int
 lota_event_budget_window_expired(unsigned long long now_ns,
@@ -68,9 +58,12 @@ lota_event_budget_window_expired(unsigned long long now_ns,
 	       now_ns - window_start_ns >= LOTA_EVENT_BUDGET_WINDOW_NS;
 }
 
-/*
- * Whether a slot claimed at count_before (the counter value before this
- * caller's increment) is over the per-window cap.
+/**
+ * lota_event_budget_exhausted() - Test a claimed slot against the cap.
+ * @count_before: counter value before this caller's increment.
+ * @limit: a non-zero cap from lota_event_budget_limit().
+ *
+ * Return: non-zero if the slot is over the cap.
  */
 LOTA_EB_INLINE int lota_event_budget_exhausted(unsigned int count_before,
 					       unsigned int limit)
@@ -81,7 +74,13 @@ LOTA_EB_INLINE int lota_event_budget_exhausted(unsigned int count_before,
 #define LOTA_EVENT_RING_PRESSURE_PCT 75U /* ring % full where yielding starts */
 #define LOTA_EVENT_PRESSURE_SHARE 8U /* events per type per window under it */
 
-/* whether the ring is past the pressure watermark; ring_bytes 0 is unknown */
+/**
+ * lota_event_ring_under_pressure() - Test the ring against the watermark.
+ * @avail_bytes: bytes not yet consumed.
+ * @ring_bytes: ring size, 0 if unknown.
+ *
+ * Return: non-zero if the ring is past the watermark.
+ */
 LOTA_EB_INLINE int
 lota_event_ring_under_pressure(unsigned long long avail_bytes,
 			       unsigned long long ring_bytes)
@@ -92,7 +91,14 @@ lota_event_ring_under_pressure(unsigned long long avail_bytes,
 	       ring_bytes * (unsigned long long)LOTA_EVENT_RING_PRESSURE_PCT;
 }
 
-/* whether a type with type_count_before events this window must yield */
+/**
+ * lota_event_type_yields() - Test whether a type yields to quieter ones.
+ * @type_count_before: events of the type this window.
+ * @avail_bytes: bytes not yet consumed.
+ * @ring_bytes: ring size, 0 if unknown.
+ *
+ * Return: non-zero if the type must yield.
+ */
 LOTA_EB_INLINE int lota_event_type_yields(unsigned int type_count_before,
 					  unsigned long long avail_bytes,
 					  unsigned long long ring_bytes)

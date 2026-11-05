@@ -1,10 +1,8 @@
 /* SPDX-License-Identifier: MIT */
 /* Copyright (C) 2026 Szymon Wilczek */
 /*
- * Per-process runtime image measurement (kernel-anchored).
- *
- * Folds the set of file-backed executable objects mapped into a running
- * process into one canonical SHA-256 image digest:
+ * Runtime image digest of a process: the file-backed executable objects mapped
+ * into it, folded into one value.
  *
  *   image_digest = SHA256("lota-runtime-image-measure:v1\0" ||
  *                         count_LE ||
@@ -12,17 +10,12 @@
  *                           soname_len_LE || soname ||
  *                           verity_len_LE || verity_digest)
  *
- * Each module digest is the kernel-computed fs-verity measurement of its
- * backing file (FS_IOC_MEASURE_VERITY), so the value is never derived from
- * the attacker-reachable process address space. The fold is keyed by soname
- * (file basename) and sorted, so neither load order nor library search path
- * affects the result.
+ * Each module digest comes from the kernel over the backing file, an fs-verity
+ * measurement or a content hash (LOTA_STATUS_IMAGE_CONTENT_HASHED), never from
+ * the process address space. The fold is keyed by soname and sorted, so neither
+ * load order nor library search path affects the result.
  *
- * The module set must be sorted in strictly increasing canonical order
- * (soname, then verity length, then verity digest). Callers own the sort,
- * matching lota_runtime_protect_digest.h. A zero-length set yields a
- * well-defined digest; rejecting an empty measurement is a policy decision
- * left to the privileged caller that binds the digest under the quote.
+ * Callers own the sort. An empty set yields a well-defined digest.
  */
 
 #ifndef LOTA_RUNTIME_IMAGE_MEASURE_H
@@ -42,7 +35,7 @@
 #define LOTA_RUNTIME_IMAGE_SONAME_MAX 256
 #define LOTA_RUNTIME_IMAGE_MAX_MODULES 512
 
-/* One measured object: its soname (file basename) and fs-verity digest. */
+/* One measured object: its soname (file basename) and digest. */
 struct lota_runtime_image_module {
 	char soname[LOTA_RUNTIME_IMAGE_SONAME_MAX];
 	struct lota_verity_digest_key verity;
@@ -68,10 +61,16 @@ lota__runtime_image_module_cmp(const struct lota_runtime_image_module *a,
 	return memcmp(a->verity.digest, b->verity.digest, a->verity.len);
 }
 
-/*
- * Validate the module set: each soname NUL-terminated and non-empty, each
- * verity digest a supported size, and the set strictly increasing in canonical
- * order (which also rejects duplicates).
+/**
+ * lota_validate_runtime_image_modules() - Check a module set.
+ * @m: the set, may be NULL if @count is 0.
+ * @count: entries in @m, at most LOTA_RUNTIME_IMAGE_MAX_MODULES.
+ *
+ * Each soname must be NUL-terminated and non-empty, each digest a supported
+ * size, and the set strictly increasing in canonical order, which also rejects
+ * duplicates.
+ *
+ * Return: 0 if valid, -E2BIG on too many modules, -EINVAL otherwise.
  */
 static inline int
 lota_validate_runtime_image_modules(const struct lota_runtime_image_module *m,
@@ -98,10 +97,14 @@ lota_validate_runtime_image_modules(const struct lota_runtime_image_module *m,
 	return 0;
 }
 
-/*
- * Computes the canonical per-process runtime image digest. The module set
- * must already be sorted and pass lota_validate_runtime_image_modules().
- * Returns 0 on success, or a negative errno-style value on failure.
+/**
+ * lota_compute_runtime_image_digest() - Compute the image digest of a process.
+ * @modules: the set, sorted.
+ * @count: as for lota_validate_runtime_image_modules().
+ * @out_digest: receives the digest; zeroed on -EIO.
+ *
+ * Return: 0 on success, a validation error, -EINVAL on a NULL @out_digest,
+ * -ENOMEM or -EIO from the hash.
  */
 static inline int lota_compute_runtime_image_digest(
 	const struct lota_runtime_image_module *modules, uint32_t count,

@@ -1,25 +1,16 @@
 /* SPDX-License-Identifier: MIT */
 /* Copyright (C) 2026 Szymon Wilczek */
 /*
- * LOTA token quote nonce (token verification domain)
+ * TPM quote nonce of the token path, computed by the agent for GET_TOKEN and by
+ * lota_server.c to verify it:
  *
- * This helper computes the TPM quote nonce used in the token path
- * (agent IPC GET_TOKEN and server-side token verification).
- *
- * Scheme:
  *   token_quote_nonce = SHA256(valid_until_LE || flags_LE || pcr_mask_LE ||
  *                              client_nonce || policy_digest ||
  *                              runtime_protect_digest ||
  *                              runtime_protect_epoch_LE || stopped_ms_LE)
  *
- * This binds TPMS_ATTEST.extraData (quote nonce) to the token's
- * wire-format metadata and the client's challenge nonce.
- *
- * IMPORTANT:
- * - This is intentionally different from the attestation report binding
- *   nonce used by the remote attestation verifier/agent report path.
- * - Do not confuse these two nonce domains; they bind different data and
- *   serve different trust models.
+ * It binds TPMS_ATTEST.extraData to the token's wire metadata and the client's
+ * nonce. The binding nonce of a report (src/agent/attest.c) covers other data.
  */
 
 #ifndef LOTA_TOKEN_QUOTE_NONCE_H
@@ -45,10 +36,24 @@ static inline void lota__secure_bzero(void *ptr, size_t len)
 	OPENSSL_cleanse(ptr, len);
 }
 
-/*
- * Computes the token quote nonce used as TPMS_ATTEST.extraData in the
- * token path. Returns 0 on success, or a negative errno-style value on
- * failure.
+/**
+ * lota_compute_token_quote_nonce() - Compute TPMS_ATTEST.extraData of a token.
+ * @valid_until:            Unix time the token lapses.
+ * @flags:                  LOTA_FLAG_* bits.
+ * @pcr_mask:               PCRs the quote selects.
+ * @client_nonce:           nonce the client sent.
+ * @policy_digest:          SHA-256 of the startup enforcement policy.
+ * @runtime_protect_digest: digest of the protected PIDs and their registry
+ *                          digests.
+ * @runtime_protect_epoch:  changes to that set since the policy loaded.
+ * @stopped_ms:             ms the caller's instance stood stopped.
+ * @out_nonce:              receives the nonce; zeroed on -ENOMEM or -EIO.
+ *
+ * Each argument is the token field of the same name; the nonce is SHA-256 over
+ * them, integers little-endian.
+ *
+ * Return: 0 on success, -EINVAL on a NULL argument, -ENOMEM or -EIO from the
+ * hash.
  */
 static inline int lota_compute_token_quote_nonce(
 	uint64_t valid_until, uint32_t flags, uint32_t pcr_mask,

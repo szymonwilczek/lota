@@ -1,9 +1,6 @@
 /* SPDX-License-Identifier: MIT */
 /*
- * LOTA Token Wire Format
- *
- * Shared definitions for the LOTA attestation token format.
- * Used by both the gaming SDK (client) and server SDK (verifier).
+ * LOTA token and boot evidence wire formats.
  *
  * Copyright (C) 2026 Szymon Wilczek
  */
@@ -18,9 +15,7 @@ extern "C" {
 #endif
 
 /*
- * Token wire format constants
- *
- * Wire layout (little-endian):
+ * Token wire layout (little-endian):
  *
  *   Offset  Size  Field
  *   0       4     magic          (LOTA_TOKEN_MAGIC)
@@ -40,7 +35,7 @@ extern "C" {
  *   136     2     pid_list_size  (bytes, must be protect_pid_count * 4)
  *   138     2     attest_size    (TPMS_ATTEST blob size)
  *   140     2     sig_size       (TPM signature size)
- *   142     2     runtime_protect_version (1 = PID-set + kernel image digests)
+ *   142     2     runtime_protect_version (1 = PID set + image digests)
  *   144     8     stopped_ms     (time the caller's instance stood stopped)
  *   ---     ---   --------------------------------
  *   152     var   protected_pids[protect_pid_count] (little-endian uint32)
@@ -48,69 +43,34 @@ extern "C" {
  *   152+P+I var   attest_data[attest_size]
  *   ...     var   signature[sig_size]
  *
- * The runtime_protect_digest binds, per PID, the kernel-anchored
- * runtime image digest carried in protected_image_digests, so the quote
- * attests what code each protected process is running, not just its
- * identity. The image digests are authenticated transitively: a verifier
- * recomputes runtime_protect_digest from the PID list and the carried image
- * digests and checks it against the quote-bound value.
- *
- * Maximum token size: LOTA_TOKEN_MAX_SIZE below.
+ * runtime_protect_digest covers each PID and its image digest, so the quote
+ * attests what each protected process runs. The carried image digests are
+ * authenticated only by recomputing it and comparing with the quoted value.
  */
 #define LOTA_TOKEN_MAGIC 0x4B544F4C /* "LOTK" in memory (little-endian) */
 #define LOTA_TOKEN_VERSION 0x0001
 #define LOTA_TOKEN_HEADER_SIZE 152
 /*
- * Protected-PID cap: LOTA_IPC_TOKEN_MAX_PROTECT_PIDS from the uninstalled
- * lota_ipc.h, copied here; src/sdk/lota_gaming.c asserts they match.
+ * Copy of LOTA_IPC_TOKEN_MAX_PROTECT_PIDS, as lota_ipc.h is not installed.
+ * src/sdk/lota_gaming.c asserts they match.
  */
 #define LOTA_TOKEN_MAX_PROTECT_PIDS 180
 #define LOTA_TOKEN_MAX_PID_LIST_SIZE (LOTA_TOKEN_MAX_PROTECT_PIDS * 4)
 #define LOTA_TOKEN_IMAGE_DIGEST_SIZE 32
 
 /* runtime_protect_version values */
-#define LOTA_RUNTIME_PROTECT_V1 1 /* PID set + per-PID kernel image digest */
+#define LOTA_RUNTIME_PROTECT_V1 1 /* PID set + per-PID image digest */
 
 #define LOTA_TOKEN_MAX_IMAGE_LIST_SIZE \
 	(LOTA_TOKEN_MAX_PROTECT_PIDS * LOTA_TOKEN_IMAGE_DIGEST_SIZE)
 
-/*
- * Largest token that can reach a relying party: the header, a full protected
- * PID list, the per-PID image digests for that same list,
- * and a maximum quote plus signature. A receive buffer sized from this holds
- * any token an agent can produce.
- */
+/* Full PID and image digest lists, largest quote and signature. */
 #define LOTA_TOKEN_MAX_SIZE                                      \
 	(LOTA_TOKEN_HEADER_SIZE + LOTA_TOKEN_MAX_PID_LIST_SIZE + \
 	 LOTA_TOKEN_MAX_IMAGE_LIST_SIZE + 1024 + 512)
 
-/*
- * Token wire format header (packed, little-endian)
- */
+/* Fixed part of the layout above. */
 struct lota_token_wire {
-	/* 6     2   total_size   (header + variable data) */
-	/* 8     8   valid_until  (Unix timestamp) */
-	/* 16    4   flags        (LOTA_FLAG_* bitmask) */
-	/* 20    32  nonce        (client nonce) */
-	/* 52    2   sig_alg      (TPM signature algorithm) */
-	/* 54    2   hash_alg     (TPM hash algorithm) */
-	/* 56    4   pcr_mask     (PCR selection bitmask) */
-	/* 60    32  policy_digest (SHA-256 over startup enforcement policy) */
-	/* 92    32  runtime_protect_digest (canonical runtime protected PID
-	 * set) */
-	/* 124   4   protect_pid_count */
-	/* 128   8   runtime_protect_epoch */
-	/* 136   2   pid_list_size (protect_pid_count * sizeof(uint32_t)) */
-	/* 138   2   attest_size  (TPMS_ATTEST blob size) */
-	/* 140   2   sig_size     (TPM signature size) */
-	/* 142   2   runtime_protect_version (1 = PID set + image) */
-	/* 144   8   stopped_ms */
-	/* ---   --- ----------------------------------- */
-	/* 152   var protected_pids[protect_pid_count] */
-	/* 152+P var protected_image_digests[protect_pid_count][32] */
-	/* ...   var attest_data[attest_size] */
-	/* ...   var signature[sig_size] */
-
 	uint32_t magic;
 	uint16_t version;
 	uint16_t total_size;
@@ -136,10 +96,9 @@ struct lota_token_wire {
 } __attribute__((packed));
 
 /*
- * Boot evidence wire format
- *
- * The values of the PCRs a token quotes and the PCR 7 events behind them,
- * so a relying party with no verifier can check how the machine booted.
+ * Boot evidence: the values of the PCRs a token quotes and the PCR 7 events
+ * behind them, so a relying party with no verifier can check how the machine
+ * booted.
  *
  * Wire layout (little-endian):
  *

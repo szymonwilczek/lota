@@ -1,7 +1,6 @@
 /* SPDX-License-Identifier: MIT */
 /*
- * LOTA - Attestation Report Schema
- * Defines the structure sent to remote verifier
+ * LOTA attestation report, as sent to the verifier.
  *
  * Copyright (C) 2026 Szymon Wilczek
  */
@@ -16,9 +15,6 @@
 #include "iommu_types.h"
 #include "lota.h"
 
-/*
- * Attestation report header
- */
 struct lota_report_header {
 	uint32_t magic; /* LOTA_MAGIC */
 	uint32_t version; /* LOTA_REPORT_VERSION */
@@ -37,41 +33,31 @@ struct lota_report_header {
 #define LOTA_REPORT_FLAG_LOCKDOWN (1U << 5) /* Kernel lockdown active */
 #define LOTA_REPORT_FLAG_SECUREBOOT (1U << 6) /* Secure Boot enabled */
 #define LOTA_REPORT_FLAG_ENFORCE (1U << 7) /* daemon enforces with its LSM */
-/* v1 only; another derivation needs its own report and capability bits */
 #define LOTA_REPORT_FLAG_BOOT_COMMITMENT_V1 \
 	(1U << 8) /* PCR14 bound by v1 boot-commitment derivation */
 
 /*
- * Challenge capability flags.
- * Verifier sends these in verifier_challenge.flags to name the PCR14
- * derivation it validates.
- * Every challenge carries the v1 bit, because v1 is the only construction
- * there is; the field exists so future v2 derivation has something to differ
- * from.
+ * verifier_challenge.flags: the PCR 14 derivation the verifier validates.
+ * Every challenge carries v1.
  */
 #define LOTA_CHALLENGE_FLAG_BOOT_COMMITMENT_V1 (1U << 0)
 
 /*
- * LOTA_REPORT_FLAG_INITRAMFS_LOCK_V1 is set when the agent observed
- * that an initramfs-time helper (lota-pcr14-lock, shipped under the
- * 90lota dracut module) already extended PCR14 with the
- * domain-separated digest
- *     SHA256("LOTA-PCR14-INITRAMFS-LOCK-v1")
- * before the agent ran. The agent then extends with the existing
- * boot commitment ON TOP, so the final PCR14 reflects a two-hop
- * chain:
+ * lota-pcr14-lock (90lota dracut module) extended PCR 14 with
+ * SHA256("LOTA-PCR14-INITRAMFS-LOCK-v1") before the agent ran, and the agent
+ * extended its boot commitment on top:
  *     pcr14_lock = SHA256(baseline || initramfs_lock_commit)
  *     pcr14_final = SHA256(pcr14_lock || boot_commitment)
  *
- * Verifier mirrors that derivation and has no other one, so every agent
- * sets this bit alongside LOTA_REPORT_FLAG_BOOT_COMMITMENT_V1
- * and a report carrying only one of the two is refused.
+ * The verifier has no other derivation: it refuses a report without both this
+ * bit and LOTA_REPORT_FLAG_BOOT_COMMITMENT_V1.
  */
 #define LOTA_REPORT_FLAG_INITRAMFS_LOCK_V1 (1U << 9)
 
 /*
- * IMA appraises every exec on this host. Clear on a stock host; the agent is
- * still bound by fs-verity and PCR 14. Policy knob: require_ima_appraisal.
+ * IMA is in a blocking mode and the loaded policy has an appraise rule on
+ * BPRM_CHECK or with no func=. Clear on a stock host. Policy knob:
+ * require_ima_appraisal.
  */
 #define LOTA_REPORT_FLAG_IMA_APPRAISAL (1U << 10)
 
@@ -91,25 +77,15 @@ struct lota_report_header {
 /* The kernel left events out of the daemon's log. Enforcement is unaffected. */
 #define LOTA_REPORT_FLAG_EVENTS_LOST (1U << 17)
 
-/*
- * Maximum size of TPMS_ATTEST structure returned by TPM2_Quote.
- * Contains: magic, type, qualifiedSigner, extraData (nonce),
- * clockInfo, firmwareVersion, and quote info (PCR selection + digest).
- */
+/* Largest TPMS_ATTEST the agent accepts from TPM2_Quote. */
 #define LOTA_MAX_ATTEST_SIZE 1024
 
 /*
- * Contains the raw TPMS_ATTEST blob which is cryptographically signed by TPM.
- * The verifier MUST verify the signature over attest_data, then parse it
- * to extract the nonce (extraData) and PCR digest for validation.
- *
- * The nonce field below is a convenience copy of TPMS_ATTEST.extraData.
- * It allows the verifier to perform O(1) nonce lookup without parsing
- * the TPMS_ATTEST structure first, while the authoritative value inside
- * attest_data is used for cryptographic verification.
+ * The verifier checks quote_signature over attest_data, then compares extraData
+ * inside it with the binding nonce it computes.
  */
 struct lota_tpm_evidence {
-	/* PCR values - all 24 PCRs, SHA-256 */
+	/* SHA-256 */
 	uint8_t pcr_values[LOTA_PCR_COUNT][LOTA_HASH_SIZE];
 
 	/* Which PCRs are included (bitmask) */
@@ -119,71 +95,36 @@ struct lota_tpm_evidence {
 	uint8_t quote_signature[LOTA_MAX_SIG_SIZE];
 	uint16_t quote_sig_size;
 
-	/*
-	 * Raw TPMS_ATTEST blob from TPM2_Quote.
-	 * Verifier must: SHA256(attest_data) == signed_digest
-	 */
+	/* TPMS_ATTEST from TPM2_Quote */
 	uint8_t attest_data[LOTA_MAX_ATTEST_SIZE];
 	uint16_t attest_size;
 
-	/*
-	 * AIK public key in DER-encoded SPKI format.
-	 * Verifier uses this for quote signature verification and as the
-	 * key bound into the hardware-id record at AIK registration.
-	 * Format: SubjectPublicKeyInfo (x509.MarshalPKIXPublicKey compatible)
-	 */
+	/* AIK public key, DER SPKI: verifies the quote signature */
 	uint8_t aik_public[LOTA_MAX_AIK_PUB_SIZE];
 	uint16_t aik_public_size;
 
-	/*
-	 * AIK certificate in DER-encoded X.509 format.
-	 * Required under the production verifier default
-	 * (VerifierConfig.RequireCert=true): the verifier validates the
-	 * certificate chain against the configured trusted CAs before
-	 * binding the AIK to the host's hardware id. Reports that arrive
-	 * without an AIK certificate are rejected under the production
-	 * default; the closed-fixture opt-out is reserved for test
-	 * deployments and is not the documented production mode.
-	 */
+	/* AIK certificate, DER X.509: a report without one is refused */
 	uint8_t aik_certificate[LOTA_MAX_AIK_CERT_SIZE];
 	uint16_t aik_cert_size;
 
 	/*
-	 * No EK certificate travels in an attestation report.
-	 * Under the Privacy CA model the EK is presented once, to the attestation
-	 * CA during enrollment; the verifier authenticates the AIK through its
-	 * CA-issued certificate alone and never sees the EK,
-	 * which is what keeps attestations unlinkable to the hardware.
+	 * Challenge nonce, the key of the verifier's pending entry. extraData
+	 * holds the binding nonce derived from it.
 	 */
-
-	/* Nonce from server */
 	uint8_t nonce[LOTA_NONCE_SIZE];
 
 	/*
-	 * Hardware identity derived from the Endorsement Key:
-	 * SHA-256(EK public key), stable per TPM.
-	 *
-	 * Verifier does not use it to identify the host -- that is the CA-assigned
-	 * device pseudonym in the AIK certificate subject, which the verifier can
-	 * check without ever seeing an EK.
-	 * What this field still does is enter the attestation binding nonce
-	 * (ComputeAttestationBindingNonce), so it is covered by the quote signature
-	 * and report cannot be replayed with it altered.
+	 * SHA-256 of the EK public key, or of the AIK public key on a TPM that
+	 * yields no EK. The verifier identifies the host by the pseudonym in
+	 * the AIK certificate; this field only enters the binding nonce, so the
+	 * quote covers it.
 	 */
 	uint8_t hardware_id[LOTA_HARDWARE_ID_SIZE];
 
-	/*
-	 * AIK rotation metadata.
-	 * Generation is a monotonic counter incremented on every rotation.
-	 */
+	/* Incremented on every AIK rotation */
 	uint64_t aik_generation;
 
-	/*
-	 * Previous AIK public key (DER SPKI), populated during rotation
-	 * grace period. When prev_aik_public_size > 0 the agent just
-	 * rotated its AIK and includes the old key so the verifier can
-	 * verify continuity (same TPM, legitimate rotation).
-	 */
+	/* Previous AIK, DER SPKI, during the rotation grace period, else 0 */
 	uint8_t prev_aik_public[LOTA_MAX_AIK_PUB_SIZE];
 	uint16_t prev_aik_public_size;
 
@@ -195,9 +136,6 @@ struct lota_tpm_evidence {
 	uint16_t quote_sig_hash_alg;
 } __attribute__((packed));
 
-/*
- * System measurement section
- */
 struct lota_system_measurement {
 	/* TPM measured-boot digest (kernel-relevant PCR, SHA-256) */
 	uint8_t kernel_hash[LOTA_HASH_SIZE];
@@ -213,12 +151,9 @@ struct lota_system_measurement {
 } __attribute__((packed));
 
 /*
- * ESRT System Firmware descriptor (EFI System Resource Table, fw_type == 1).
- * Carries the firmware version the verifier uses as an anti-rollback signal
- * for self-service re-anchor.
- * present == 0 when the platform exposes no ESRT (common on DIY boards),
- * which routes the host onto the verifier's Low-Firmware-Assurance path.
- * Wire size is fixed at 28 bytes.
+ * ESRT System Firmware entry (fw_type == 1). fw_version is the verifier's
+ * anti-rollback signal for self-service re-anchor; present == 0 puts the host
+ * on the Low-Firmware-Assurance path.
  */
 struct lota_esrt {
 	uint32_t present; /* 1 if a System Firmware entry was found */
@@ -228,20 +163,15 @@ struct lota_esrt {
 } __attribute__((packed));
 
 /*
- * Complete attestation report
- *
  * Wire format:
  *   [lota_report_header]
  *   [lota_tpm_evidence]
  *   [lota_system_measurement]
  *   [event_log_size: uint32_t]
  *   [tpm_event_log: uint8_t * event_log_size]
- *   [lota_esrt: 28 bytes]   (always present; esrt.present == 0 is how a
- *                            platform without an ESRT System Firmware entry
- *                            is reported)
+ *   [lota_esrt: 28 bytes]
  *   [mok_list_size: uint32_t]
- *   [mok_list: uint8_t * mok_list_size]  (EFI_SIGNATURE_LIST data of MokListRT;
- *                            size 0 where the agent has nothing to send)
+ *   [mok_list: uint8_t * mok_list_size]  (EFI_SIGNATURE_LIST data of MokListRT)
  */
 struct lota_attestation_report {
 	struct lota_report_header header;
@@ -251,20 +181,18 @@ struct lota_attestation_report {
 	/* Variable-length sections follow in serialized form */
 } __attribute__((packed));
 
-/*
- * serialize_report - Serialize report to wire format
- * @report: Report structure
- * @event_log: TPM event log (can be NULL)
- * @event_log_size: Size of event log
- * @esrt: ESRT System Firmware descriptor; mandatory,
- * 	  NULL is rejected with -EINVAL
- * 	  (present == 0 is how a platform without an entry reports)
- * @mok_list: MokListRT data (can be NULL)
- * @mok_list_size: Size of MokListRT data
- * @out_buf: Output buffer (caller allocates)
- * @out_buf_size: Size of output buffer
+/**
+ * serialize_report() - Serialize a report to its wire format.
+ * @report: Report.
+ * @event_log: TPM event log, may be NULL.
+ * @event_log_size: Size of @event_log.
+ * @esrt: ESRT entry, mandatory; present == 0 reports a platform without one.
+ * @mok_list: MokListRT data, may be NULL.
+ * @mok_list_size: Size of @mok_list.
+ * @out_buf: Output buffer.
+ * @out_buf_size: Size of @out_buf.
  *
- * Returns: Number of bytes written, or negative errno
+ * Return: Number of bytes written, or a negative errno.
  */
 ssize_t serialize_report(const struct lota_attestation_report *report,
 			 const uint8_t *event_log, uint32_t event_log_size,
@@ -272,14 +200,12 @@ ssize_t serialize_report(const struct lota_attestation_report *report,
 			 uint32_t mok_list_size, uint8_t *out_buf,
 			 size_t out_buf_size);
 
-/*
- * calculate_report_size - Calculate serialized report size
- * @event_log_size: Size of TPM event log
- * @mok_list_size: Size of MokListRT data
+/**
+ * calculate_report_size() - Size of a serialized report.
+ * @event_log_size: Size of the TPM event log.
+ * @mok_list_size: Size of the MokListRT data.
  *
- * ESRT and MOK list sections are always counted: both are mandatory on the wire.
- *
- * Returns: Total size in bytes
+ * Return: Total size in bytes.
  */
 size_t calculate_report_size(uint32_t event_log_size, uint32_t mok_list_size);
 

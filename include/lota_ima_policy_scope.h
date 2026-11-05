@@ -3,13 +3,8 @@
 /*
  * IMA appraisal scope check.
  *
- * ima_appraise= on the cmdline is not enough: appraisal applies only to
- * the func= rules in the loaded policy, so a measure-only policy under
- * ima_appraise=enforce blocks nothing.
- *
- * Without fs-verity on the agent binary, the agent refuses to start if no
- * rule appraises executables. The installer uses the same rules from here,
- * so it cannot pass a host the agent refuses.
+ * Appraisal applies only to the rules of the loaded policy, so a measure-only
+ * policy under ima_appraise=enforce blocks nothing.
  */
 #ifndef LOTA_IMA_POLICY_SCOPE_H
 #define LOTA_IMA_POLICY_SCOPE_H
@@ -19,12 +14,16 @@
 /* Longest policy rule line the predicate reads; a longer one is no match */
 #define LOTA_IMA_POLICY_RULE_MAX 512
 
-/*
- * Return 1 if @rule appraises executables.
+/**
+ * lota_ima_policy_rule_appraises_exec() - Test a policy rule for exec coverage.
+ * @rule: one policy line.
  *
- * Appraise rule without func= covers every hook, exec included.
- * With func=, only BPRM_CHECK covers exec.
- * dont_appraise is an exclusion, not appraisal.
+ * Reads only the action and the first func=. Other hooks that run during exec
+ * (FILE_CHECK, MMAP_CHECK, CREDS_CHECK) do not count, and conditions such as
+ * fowner= and earlier dont_appraise rules are not read, so the answer proves
+ * nothing about one given executable.
+ *
+ * Return: 1 for an appraise rule on BPRM_CHECK or with no func=, 0 otherwise.
  */
 static inline int lota_ima_policy_rule_appraises_exec(const char *rule)
 {
@@ -52,12 +51,15 @@ static inline int lota_ima_policy_rule_appraises_exec(const char *rule)
 	return 1;
 }
 
-/*
- * Return 1 if a kernel that appraises no executable is advisory.
+/**
+ * lota_ima_scope_is_advisory() - Test whether exec appraisal may be missing.
+ * @agent_verity_bound: the agent binary has fs-verity enabled.
  *
- * With fs-verity and PCR 14 binding the agent binary, appraisal only adds
- * coverage of the rest of the host. Without verity, a signed security.ima
- * xattr is the only binding and means nothing unless appraised.
+ * fs-verity on the binary passes the immutability gate alone. Without it, the
+ * gate rests on a signed security.ima xattr, which means nothing unless
+ * appraised.
+ *
+ * Return: 1 if a kernel that appraises no executable is advisory, 0 otherwise.
  */
 static inline int lota_ima_scope_is_advisory(int agent_verity_bound)
 {
