@@ -412,6 +412,7 @@ static void rt_fill_open_identity(const struct rt_mapping *map,
 		opened->fs_magic = (unsigned long)sfs.f_type;
 	else
 		opened->fs_magic_err = errno;
+	opened->seals = fcntl(map->fd, F_GET_SEALS);
 }
 
 static int rt_read_verity(const struct rt_mapping *map,
@@ -630,6 +631,22 @@ int lota_rt_object_has_no_file(unsigned long fs_magic, unsigned long nlink)
 
 	return fs_magic == LOTA_RT_MAGIC_TMPFS ||
 	       fs_magic == LOTA_RT_MAGIC_HUGETLBFS;
+}
+
+uint32_t lota_rt_object_memory_flags(unsigned long fs_magic,
+				     unsigned long nlink, int seals)
+{
+	uint32_t flags = LOTA_EXEC_HISTORY_MEMORY;
+
+	if (fs_magic != LOTA_RT_MAGIC_TMPFS &&
+	    fs_magic != LOTA_RT_MAGIC_HUGETLBFS)
+		return 0;
+
+	if (nlink == 0 &&
+	    (seals < 0 || !(seals & (F_SEAL_WRITE | F_SEAL_FUTURE_WRITE))))
+		flags |= LOTA_EXEC_HISTORY_WRITABLE;
+
+	return flags;
 }
 
 enum lota_rt_identity_road lota_rt_identity_road(int role, int verity_present,
@@ -929,6 +946,9 @@ int lota_runtime_measure_pid_objects(
 					exe_ino, &m);
 		if (objs) {
 			objs[i].size = m.opened.size;
+			objs[i].history_flags = lota_rt_object_memory_flags(
+				m.opened.fs_magic, m.opened.nlink,
+				m.opened.seals);
 			if (ret == 0) {
 				objs[i].digest = m.digest;
 				objs[i].content_hashed = m.content_hashed;

@@ -10,8 +10,11 @@
  * Copyright (C) 2026 Szymon Wilczek
  */
 
+#include <fcntl.h>
+#include <stdint.h>
 #include <stdio.h>
 
+#include "lota.h"
 #include "test.h"
 #include "../src/agent/runtime_image_measure.h"
 
@@ -186,6 +189,45 @@ static void test_memory_with_no_name_is_no_file(void)
 		       0);
 }
 
+static void expect_memory_flags(const char *name, uint32_t want,
+				unsigned long magic, unsigned long nlink,
+				int seals)
+{
+	TEST(name);
+	if (lota_rt_object_memory_flags(magic, nlink, seals) != want) {
+		FAIL("wrong flags");
+		return;
+	}
+	PASS();
+}
+
+/* what the kernel would have noted, had it seen the mapping */
+static void test_memory_flags_of_an_older_mapping(void)
+{
+	const uint32_t mem = LOTA_EXEC_HISTORY_MEMORY;
+	const uint32_t both = mem | LOTA_EXEC_HISTORY_WRITABLE;
+
+	expect_memory_flags("a named tmpfs file is memory", mem, MAGIC_TMPFS, 1,
+			    F_SEAL_SEAL);
+	expect_memory_flags("a memfd can be written", both, MAGIC_TMPFS, 0, 0);
+	expect_memory_flags("a memfd sealed against writes cannot", mem,
+			    MAGIC_TMPFS, 0, F_SEAL_WRITE);
+	expect_memory_flags("a memfd sealed against future writes cannot", mem,
+			    MAGIC_TMPFS, 0, F_SEAL_FUTURE_WRITE);
+	expect_memory_flags("a memfd sealed against growth alone can", both,
+			    MAGIC_TMPFS, 0, F_SEAL_GROW | F_SEAL_SHRINK);
+	expect_memory_flags("nameless memory with unread seals can", both,
+			    MAGIC_HUGETLBFS, 0, -1);
+	expect_memory_flags("a named hugetlbfs file is memory", mem,
+			    MAGIC_HUGETLBFS, 1, -1);
+	expect_memory_flags("a file on disk is not memory", 0, MAGIC_EXT4, 1,
+			    -1);
+	expect_memory_flags("an unlinked file on disk is not memory", 0,
+			    MAGIC_BTRFS, 0, -1);
+	expect_memory_flags("a mapping that never opened is not memory", 0, 0,
+			    0, 0);
+}
+
 int main(void)
 {
 	printf("\n=== LOTA runtime identity road tests ===\n\n");
@@ -199,6 +241,7 @@ int main(void)
 	test_a_guarded_library_on_a_served_fs_is_refused();
 	test_a_guard_does_not_rescue_an_unknown_role();
 	test_memory_with_no_name_is_no_file();
+	test_memory_flags_of_an_older_mapping();
 
 	printf("\n=== Results: %d/%d passed ===\n\n", tests_passed, tests_run);
 	return tests_passed == tests_run ? 0 : 1;
