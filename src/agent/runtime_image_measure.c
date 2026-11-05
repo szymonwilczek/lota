@@ -453,6 +453,23 @@ static int rt_read_verity(const struct rt_mapping *map,
 	return 0;
 }
 
+/* the link reads where the file behind it may not be reached */
+static void rt_name_exe_failure(pid_t pid, int err,
+				struct lota_runtime_measure_failure *fail)
+{
+	char exe_path[64];
+	ssize_t len;
+
+	snprintf(exe_path, sizeof(exe_path), "/proc/%d/exe", (int)pid);
+	len = readlink(exe_path, fail->path, sizeof(fail->path) - 1);
+	if (len <= 0)
+		return;
+
+	fail->path[len] = '\0';
+	fail->role = LOTA_RT_ROLE_EXECUTABLE;
+	fail->err = err;
+}
+
 /* object the kernel holds no usable fs-verity digest for */
 static int rt_err_is_unmeasurable(int err)
 {
@@ -941,8 +958,11 @@ int lota_runtime_measure_pid_objects(
 	}
 
 	ret = rt_exe_identity(pid, &exe_dev, &exe_ino);
-	if (ret != 0)
+	if (ret != 0) {
+		if (fail)
+			rt_name_exe_failure(pid, ret, fail);
 		goto out;
+	}
 
 	maps = rt_open_mappings(pid, entries, n);
 	if (!maps) {
