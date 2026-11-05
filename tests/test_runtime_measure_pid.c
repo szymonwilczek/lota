@@ -53,6 +53,22 @@ FILE *__wrap_fopen(const char *path, const char *mode)
 
 /* a filesystem that refuses this file to the agent, as FUSE does to root */
 static const char *refuse_open;
+static int refuse_exe_stat;
+
+int __real_stat(const char *path, struct stat *st);
+int __wrap_stat(const char *path, struct stat *st);
+
+int __wrap_stat(const char *path, struct stat *st)
+{
+	size_t len = strlen(path);
+
+	if (refuse_exe_stat && len >= 4 &&
+	    strcmp(path + len - 4, "/exe") == 0) {
+		errno = EACCES;
+		return -1;
+	}
+	return __real_stat(path, st);
+}
 
 /* opening a map_files link takes CAP_CHECKPOINT_RESTORE, reading it does not */
 int __wrap_openat(int dirfd, const char *path, int flags, ...)
@@ -795,6 +811,25 @@ int main(void)
 			PASS();
 		else
 			FAIL("the executable did not stop the walk");
+	}
+
+	TEST("an own executable the agent may not stat is named");
+	{
+		struct lota_runtime_measure_failure refused;
+		char exe[PATH_MAX];
+		ssize_t len = readlink("/proc/self/exe", exe, sizeof(exe) - 1);
+		int refusal;
+
+		exe[len > 0 ? len : 0] = '\0';
+		refuse_exe_stat = 1;
+		refusal = lota_runtime_measure_pid(getpid(), digest, &cov,
+						   &refused);
+		refuse_exe_stat = 0;
+		if (refusal == -EACCES && strcmp(refused.path, exe) == 0 &&
+		    refused.role == LOTA_RT_ROLE_EXECUTABLE)
+			PASS();
+		else
+			FAIL("the refusal names nothing");
 	}
 
 	TEST("a walk out of descriptors fails without a gap");
