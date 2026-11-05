@@ -27,6 +27,7 @@ static const char expected_plan[] =
 	"  \"game\": {\"title\": \"Example Title\", \"proton\": null, "
 	"\"version\": null, \"settings\": \"high\"},\n"
 	"  \"rounds\": 3,\n"
+	"  \"settle_s\": 30,\n"
 	"  \"duration_s\": 300,\n"
 	"  \"interval_ms\": 1000\n"
 	"}\n";
@@ -89,6 +90,7 @@ static void fill_plan(struct bench_plan *p)
 	set(&p->game.title, "Example Title");
 	set(&p->game.settings, "high");
 	p->rounds = 3;
+	p->settle_s = 30;
 	p->duration_s = 300;
 	p->interval_ms = 1000;
 }

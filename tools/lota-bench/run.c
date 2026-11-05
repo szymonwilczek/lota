@@ -294,6 +294,7 @@ struct plan_opts {
 	const char *version;
 	const char *settings;
 	unsigned long rounds;
+	unsigned long settle_s;
 	unsigned long duration_s;
 	unsigned long interval_ms;
 	bool any;
@@ -322,6 +323,7 @@ static int write_plan(int dir, const struct plan_opts *o,
 	set_field(&p.game.version, o->version);
 	set_field(&p.game.settings, o->settings);
 	p.rounds = (unsigned int)o->rounds;
+	p.settle_s = (unsigned int)o->settle_s;
 	p.duration_s = (unsigned int)o->duration_s;
 	p.interval_ms = (unsigned int)o->interval_ms;
 
@@ -329,7 +331,7 @@ static int write_plan(int dir, const struct plan_opts *o,
 		fprintf(stderr, "lota-bench: --game names no title\n");
 		return -1;
 	}
-	per_run = (uint64_t)p.duration_s * 1000 / p.interval_ms + 1;
+	per_run = bench_run_samples(&p);
 	total = per_run * bench_session_runs(p.rounds);
 	if (per_run > BENCH_MAX_SAMPLES || total > BENCH_SESSION_MAX_SAMPLES) {
 		fprintf(stderr,
@@ -515,14 +517,16 @@ static void print_launch(const char *path, unsigned int index, bool warming,
 
 	printf("Run %u of %u, configuration %s%s. Set the game's launch "
 	       "options to:\n\n"
-	       "  MANGOHUD_CONFIG=output_folder=%s,autostart_log=5,"
+	       "  MANGOHUD_CONFIG=output_folder=%s,autostart_log=%u,"
 	       "log_duration=%u systemd-run --user --scope --unit=%s %s"
 	       "mangohud %%command%%\n\n"
-	       "start it, and play as you would for %u s once it is in the "
-	       "game.\nWaiting for the game; Ctrl+C gives up.\n",
+	       "start it, and be in the game within %u s, when the frame log "
+	       "starts;\nplay as you would for %u s from there.\n"
+	       "Waiting for the game; Ctrl+C gives up.\n",
 	       index, bench_session_runs(p->rounds) - 1, bench_config_names[c],
-	       note, path, p->duration_s, BENCH_GAME_UNIT,
-	       c == BC_C ? "lota-proton-hook " : "", p->duration_s);
+	       note, path, p->settle_s, p->duration_s, BENCH_GAME_UNIT,
+	       c == BC_C ? "lota-proton-hook " : "", p->settle_s,
+	       p->duration_s);
 	fflush(stdout);
 }
 
@@ -939,7 +943,7 @@ static int take_run(int dir, const char *path, const struct bench_plan *p,
 		}
 	}
 	printf("The game is up; sampling every %u ms for %u s.\n",
-	       p->interval_ms, p->duration_s);
+	       p->interval_ms, p->settle_s + p->duration_s);
 	fflush(stdout);
 	step_aside();
 
@@ -949,7 +953,7 @@ static int take_run(int dir, const char *path, const struct bench_plan *p,
 		goto out;
 	}
 	sp.interval_ms = p->interval_ms;
-	sp.duration_ms = (uint64_t)p->duration_s * 1000;
+	sp.duration_ms = (uint64_t)(p->settle_s + p->duration_s) * 1000;
 	ret = bench_write_run_begin(sp.out, &r);
 	if (!ret)
 		ret = sample_loop(&sp, &r);
@@ -969,8 +973,8 @@ static int take_run(int dir, const char *path, const struct bench_plan *p,
 		fprintf(stderr,
 			"lota-bench: the game quit %llu s into a %u s run; run "
 			"%u is not kept, take it again\n",
-			(unsigned long long)(r.wall_ms / 1000), p->duration_s,
-			index);
+			(unsigned long long)(r.wall_ms / 1000),
+			p->settle_s + p->duration_s, index);
 		goto out;
 	}
 	if (warming)
@@ -1106,7 +1110,7 @@ static void run_usage(FILE *f)
 		"[--game-version V]\n"
 		"                          [--settings TEXT] [--rounds N] "
 		"[--duration-s N]\n"
-		"                          [--interval-ms N]]\n"
+		"                          [--settle-s N] [--interval-ms N]]\n"
 		"\n"
 		"Take the next run of the session in DIR. The first call "
 		"starts the\n"
@@ -1115,11 +1119,15 @@ static void run_usage(FILE *f)
 		"\n"
 		"  --rounds N        %d..%d rounds of A B C, default %d\n"
 		"  --duration-s N    %d..%d seconds a run, default %d\n"
+		"  --settle-s N      %d..%d seconds before the frame log, "
+		"default %d\n"
 		"  --interval-ms N   %d..%d, default %d\n",
 		BENCH_ROUNDS_MIN, BENCH_ROUNDS_MAX, BENCH_ROUNDS_DEFAULT,
 		BENCH_DURATION_MIN_S, BENCH_DURATION_MAX_S,
-		BENCH_DURATION_DEFAULT_S, BENCH_INTERVAL_MIN_MS,
-		BENCH_INTERVAL_MAX_MS, BENCH_INTERVAL_DEFAULT_MS);
+		BENCH_DURATION_DEFAULT_S, BENCH_SETTLE_MIN_S,
+		BENCH_SETTLE_MAX_S, BENCH_SETTLE_DEFAULT_S,
+		BENCH_INTERVAL_MIN_MS, BENCH_INTERVAL_MAX_MS,
+		BENCH_INTERVAL_DEFAULT_MS);
 }
 
 static int parse_opts(int argc, char **argv, struct plan_opts *o)
@@ -1132,6 +1140,7 @@ static int parse_opts(int argc, char **argv, struct plan_opts *o)
 		{ "rounds", required_argument, NULL, 'r' },
 		{ "duration-s", required_argument, NULL, 'd' },
 		{ "interval-ms", required_argument, NULL, 'i' },
+		{ "settle-s", required_argument, NULL, 'S' },
 		{ "help", no_argument, NULL, 'h' },
 		{ NULL, 0, NULL, 0 },
 	};
@@ -1162,6 +1171,10 @@ static int parse_opts(int argc, char **argv, struct plan_opts *o)
 			bad = parse_uint(optarg, BENCH_DURATION_MIN_S,
 					 BENCH_DURATION_MAX_S, &o->duration_s);
 			break;
+		case 'S':
+			bad = parse_uint(optarg, BENCH_SETTLE_MIN_S,
+					 BENCH_SETTLE_MAX_S, &o->settle_s);
+			break;
 		case 'i':
 			bad = parse_uint(optarg, BENCH_INTERVAL_MIN_MS,
 					 BENCH_INTERVAL_MAX_MS,
@@ -1178,6 +1191,7 @@ static int parse_opts(int argc, char **argv, struct plan_opts *o)
 			fprintf(stderr, "lota-bench: --%s out of range\n",
 				longopts[c == 'r' ? 4 :
 					 c == 'd' ? 5 :
+					 c == 'S' ? 7 :
 						    6]
 					.name);
 			return -1;
@@ -1278,6 +1292,7 @@ int bench_main_run(int argc, char **argv)
 {
 	struct plan_opts o = {
 		.rounds = BENCH_ROUNDS_DEFAULT,
+		.settle_s = BENCH_SETTLE_DEFAULT_S,
 		.duration_s = BENCH_DURATION_DEFAULT_S,
 		.interval_ms = BENCH_INTERVAL_DEFAULT_MS,
 	};

@@ -235,8 +235,9 @@ static void put_header(FILE *f, const struct bench_doc *d)
 	bool modes[BMO_COUNT] = { false };
 	bool no_bench = false;
 
-	fprintf(f, "%s: %u rounds of A B C, %u s a run\n\n", p->game.title.s,
-		p->rounds, p->duration_s);
+	fprintf(f,
+		"%s: %u rounds of A B C, %u s a run after %u s to settle\n\n",
+		p->game.title.s, p->rounds, p->duration_s, p->settle_s);
 	put_field(f, "proton", &p->game.proton);
 	put_field(f, "version", &p->game.version);
 	put_field(f, "settings", &p->game.settings);

@@ -42,6 +42,11 @@
 #define BENCH_DURATION_MAX_S 3600
 #define BENCH_DURATION_DEFAULT_S 300
 
+/* autostart_log=0 is no log at all */
+#define BENCH_SETTLE_MIN_S 1
+#define BENCH_SETTLE_MAX_S 600
+#define BENCH_SETTLE_DEFAULT_S 30
+
 /* the file kinds */
 enum bench_kind {
 	BK_PLAN = 0,
@@ -218,9 +223,17 @@ struct bench_plan {
 	struct bench_machine machine;
 	struct bench_game game;
 	unsigned int rounds;
+	unsigned int settle_s;
 	unsigned int duration_s;
 	unsigned int interval_ms;
 };
+
+/* at most, in a run of @p: the settle is sampled like the rest */
+static inline uint64_t bench_run_samples(const struct bench_plan *p)
+{
+	return ((uint64_t)p->settle_s + p->duration_s) * 1000 / p->interval_ms +
+	       1;
+}
 
 /* any of the four files, as read */
 struct bench_doc {

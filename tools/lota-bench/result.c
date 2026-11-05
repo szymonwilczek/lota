@@ -179,9 +179,10 @@ static void write_plan_body(FILE *f, const struct bench_plan *p)
 	fprintf(f,
 		",\n"
 		"  \"rounds\": %u,\n"
+		"  \"settle_s\": %u,\n"
 		"  \"duration_s\": %u,\n"
 		"  \"interval_ms\": %u",
-		p->rounds, p->duration_s, p->interval_ms);
+		p->rounds, p->settle_s, p->duration_s, p->interval_ms);
 }
 
 int bench_write_plan(FILE *f, const struct bench_plan *p)
