@@ -40,7 +40,7 @@
 
 #define LOTA_RUNTIME_IMAGE_DIGEST_SIZE 32
 #define LOTA_RUNTIME_IMAGE_SONAME_MAX 256
-#define LOTA_RUNTIME_IMAGE_MAX_MODULES 256
+#define LOTA_RUNTIME_IMAGE_MAX_MODULES 512
 
 /* One measured object: its soname (file basename) and fs-verity digest. */
 struct lota_runtime_image_module {

@@ -38,7 +38,7 @@
  * protected processes share their libraries, so this holds a typical protected
  * set whole.
  */
-#define LOTA_RT_VERITY_CACHE_ENTRIES 512
+#define LOTA_RT_VERITY_CACHE_ENTRIES 1024
 
 /* Identity of the inode a digest was read from */
 struct lota_rt_verity_key {
@@ -172,7 +172,11 @@ lota_rt_verity_cache_clear(struct lota_rt_verity_cache *cache)
 {
 	if (!cache)
 		return;
-	memset(cache, 0, sizeof(*cache));
+	for (size_t i = 0; i < LOTA_RT_VERITY_CACHE_ENTRIES; i++)
+		memset(&cache->entries[i], 0, sizeof(cache->entries[i]));
+	cache->clock = 0;
+	cache->hits = 0;
+	cache->misses = 0;
 }
 
 #endif /* LOTA_AGENT_RT_VERITY_CACHE_H */

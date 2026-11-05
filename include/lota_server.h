@@ -203,7 +203,7 @@ struct lota_server_registry_module {
 };
 
 /* Most objects the agent lists for one process */
-#define LOTA_SERVER_REGISTRY_MAX_OBJECTS 512
+#define LOTA_SERVER_REGISTRY_MAX_OBJECTS 1024
 
 /*
  * One actor of the instance, as the relying party received it: every field of the lota_registry_actor lota_get_registry()

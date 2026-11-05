@@ -539,7 +539,7 @@ struct lota_ipc_registry_request {
 	 LOTA_IPC_REGISTRY_ENTRY_MEMORY)
 
 /* objects listed for one process: those mapped, then those unmapped */
-#define LOTA_IPC_REGISTRY_MAX_OBJECTS 512
+#define LOTA_IPC_REGISTRY_MAX_OBJECTS 1024
 /* actors listed for one process; more set LOTA_IPC_REGISTRY_ACTORS_LOST */
 #define LOTA_IPC_REGISTRY_MAX_ACTORS 256
 
