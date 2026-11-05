@@ -580,7 +580,8 @@ static int rt_exe_identity(pid_t pid, dev_t *dev, ino_t *ino)
 /* object the kernel holds no usable fs-verity digest for */
 static int rt_err_is_unmeasurable(int err)
 {
-	return err == -ENODATA || err == -EOPNOTSUPP || err == -EINVAL;
+	return err == -ENODATA || err == -EOPNOTSUPP || err == -EINVAL ||
+	       err == -ENOTTY;
 }
 
 /*
