@@ -683,6 +683,49 @@ int main(void)
 		unlink(other);
 	}
 
+	TEST("a process past the object limit is measured up to the limit");
+	{
+		enum {
+			COUNT = LOTA_RUNTIME_IMAGE_MAX_MODULES
+		};
+		static void *many[COUNT];
+		static char many_path[COUNT][PATH_MAX + 16];
+		int ok = 1;
+
+		for (int i = 0; ok && i < COUNT; i++) {
+			char suffix[32];
+			int fd;
+
+			snprintf(suffix, sizeof(suffix), ".many%d", i);
+			fd = open_scratch_file(many_path[i],
+					       sizeof(many_path[i]), suffix);
+			ok = fd >= 0;
+			if (!ok)
+				break;
+			many[i] = mmap(NULL, MAPPING_SIZE,
+				       PROT_READ | PROT_EXEC, MAP_PRIVATE, fd,
+				       0);
+			ok = many[i] != MAP_FAILED;
+			close(fd);
+		}
+		lota_rt_set_content_hasher(fake_content_hash);
+		ret = ok ? lota_runtime_measure_pid(getpid(), digest, &cov,
+						    NULL) :
+			   -EIO;
+		lota_rt_set_content_hasher(NULL);
+		for (int i = 0; i < COUNT; i++) {
+			if (many[i] && many[i] != MAP_FAILED)
+				munmap(many[i], MAPPING_SIZE);
+			if (many_path[i][0])
+				unlink(many_path[i]);
+		}
+		if (ret == 0 && cov.measured >= 1 &&
+		    cov.measured + cov.unmeasurable > COUNT)
+			PASS();
+		else
+			FAIL("measurement refused the whole process");
+	}
+
 	printf("\n%d/%d kernel-anchored measurement tests passed\n",
 	       tests_passed, tests_run);
 	return tests_passed == tests_run ? 0 : 1;
