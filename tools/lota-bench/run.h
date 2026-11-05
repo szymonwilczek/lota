@@ -7,6 +7,7 @@
 #ifndef LOTA_BENCH_RUN_H
 #define LOTA_BENCH_RUN_H
 
+#include <stdbool.h>
 #include <stddef.h>
 #include <time.h>
 
@@ -20,5 +21,11 @@ int bench_main_run(int argc, char **argv);
 
 /* the newest MangoHud log in @dir since @since; 0, or -1 for none */
 int bench_run_find_log(int dir, time_t since, char *name, size_t cap);
+
+/* the session in @dir has warmed up in boot @boot */
+bool bench_run_warm(int dir, const char *boot);
+
+/* record @boot as the one the session in @dir warmed up in; 0, or -1 */
+int bench_run_note_boot(int dir, const char *boot);
 
 #endif /* LOTA_BENCH_RUN_H */

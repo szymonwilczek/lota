@@ -367,6 +367,56 @@ out:
 	rmdir(dir);
 }
 
+static void test_warm(void)
+{
+	char dir[sizeof(base) + 16], path[sizeof(dir) + 16];
+	int fd;
+
+	TEST("a session is warm only in the boot it warmed up in");
+	snprintf(dir, sizeof(dir), "%s/boots", base);
+	snprintf(path, sizeof(path), "%s/boot_id", dir);
+	fd = mkdir(dir, 0700) ? -1 : open(dir, O_RDONLY | O_DIRECTORY);
+	if (fd < 0) {
+		FAIL("session");
+		return;
+	}
+	if (bench_run_warm(fd, "boot-a")) {
+		FAIL("warm before any run");
+		goto out;
+	}
+	if (bench_run_note_boot(fd, "boot-a") ||
+	    !bench_run_warm(fd, "boot-a")) {
+		FAIL("cold in the boot it warmed up in");
+		goto out;
+	}
+	if (bench_run_warm(fd, "boot-b")) {
+		FAIL("warm after a reboot");
+		goto out;
+	}
+	if (bench_run_note_boot(fd, "boot-b") ||
+	    !bench_run_warm(fd, "boot-b") || bench_run_warm(fd, "boot-a")) {
+		FAIL("the later boot does not replace the earlier");
+		goto out;
+	}
+	if (exists(dir, ".boot_id.tmp")) {
+		FAIL("the temporary file is left behind");
+		goto out;
+	}
+	if (unlink(path) || symlink("boot-a", path)) {
+		FAIL("planting the link");
+		goto out;
+	}
+	if (bench_run_warm(fd, "boot-a")) {
+		FAIL("followed a link");
+		goto out;
+	}
+	PASS();
+out:
+	close(fd);
+	unlink(path);
+	rmdir(dir);
+}
+
 int main(void)
 {
 	printf("lota-bench run:\n");
@@ -378,6 +428,7 @@ int main(void)
 	}
 	test_assemble();
 	test_refusals();
+	test_warm();
 	test_find_log();
 
 	cleanup();

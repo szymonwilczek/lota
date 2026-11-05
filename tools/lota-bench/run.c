@@ -50,6 +50,9 @@
 #define CGROUP_ROOT "/sys/fs/cgroup"
 #define PLAN_NAME "plan.json"
 #define RESULT_NAME "result.json"
+#define BOOT_NAME "boot_id"
+#define BOOT_ID_PATH "/proc/sys/kernel/random/boot_id"
+#define BOOT_ID_CAP 64
 #define NAME_MAX_LEN 32
 
 /* how often a wait looks again */
@@ -502,10 +505,13 @@ static bool scope_present(int root)
 	return true;
 }
 
-static void print_launch(const char *path, unsigned int index,
+static void print_launch(const char *path, unsigned int index, bool warming,
 			 const struct bench_plan *p)
 {
 	enum bench_config c = bench_run_config(index);
+	const char *note = warming ? " (warm-up after a reboot, not kept)" :
+			   index   ? "" :
+				     " (warm-up)";
 
 	printf("Run %u of %u, configuration %s%s. Set the game's launch "
 	       "options to:\n\n"
@@ -515,7 +521,7 @@ static void print_launch(const char *path, unsigned int index,
 	       "start it, and play as you would for %u s once it is in the "
 	       "game.\nWaiting for the game; Ctrl+C gives up.\n",
 	       index, bench_session_runs(p->rounds) - 1, bench_config_names[c],
-	       index ? "" : " (warm-up)", path, p->duration_s, BENCH_GAME_UNIT,
+	       note, path, p->duration_s, BENCH_GAME_UNIT,
 	       c == BC_C ? "lota-proton-hook " : "", p->duration_s);
 	fflush(stdout);
 }
@@ -805,6 +811,56 @@ static void take_frames(int dir, time_t since, unsigned int index,
 			strerror(errno));
 }
 
+/* --- the boot a session warmed up in ---------------------------------- */
+
+static int read_boot(char *boot, size_t cap)
+{
+	FILE *f = fopen(BOOT_ID_PATH, "re");
+	char *got;
+
+	if (!f) {
+		perror("lota-bench: " BOOT_ID_PATH);
+		return -1;
+	}
+	got = fgets(boot, (int)cap, f);
+	fclose(f);
+	if (!got) {
+		fprintf(stderr, "lota-bench: " BOOT_ID_PATH " is empty\n");
+		return -1;
+	}
+	boot[strcspn(boot, "\n")] = '\0';
+	return 0;
+}
+
+bool bench_run_warm(int dir, const char *boot)
+{
+	size_t len;
+	char *buf;
+	bool same;
+
+	buf = read_at(dir, BOOT_NAME, BOOT_ID_CAP, &len);
+	if (!buf)
+		return false;
+	buf[len] = '\0';
+	buf[strcspn(buf, "\n")] = '\0';
+	same = strcmp(buf, boot) == 0;
+	free(buf);
+	return same;
+}
+
+int bench_run_note_boot(int dir, const char *boot)
+{
+	static const char tmp[] = "." BOOT_NAME ".tmp";
+	FILE *f = create_tmp(dir, tmp);
+
+	if (f && !close_tmp(f, fprintf(f, "%s\n", boot) < 0 ? -1 : 0) &&
+	    !renameat(dir, tmp, dir, BOOT_NAME))
+		return 0;
+	fprintf(stderr, "lota-bench: " BOOT_NAME ": %s\n", strerror(errno));
+	unlinkat(dir, tmp, 0);
+	return -1;
+}
+
 /* --- one run ---------------------------------------------------------- */
 
 /* the run saw LOTA as its configuration has it; why not, or NULL */
@@ -829,8 +885,9 @@ static const char *run_mismatch(const struct sampling *sp,
 	return NULL;
 }
 
+/* @warming: the same run, for what it leaves in memory; nothing is kept */
 static int take_run(int dir, const char *path, const struct bench_plan *p,
-		    unsigned int index, struct bench_doc *d)
+		    unsigned int index, bool warming, struct bench_doc *d)
 {
 	char tmp[NAME_MAX_LEN + 8], name[NAME_MAX_LEN];
 	struct sampling sp = { .rundir = -1 };
@@ -868,7 +925,7 @@ static int take_run(int dir, const char *path, const struct bench_plan *p,
 	}
 
 	catch_stop();
-	print_launch(path, index, p);
+	print_launch(path, index, warming, p);
 	sp.game = wait_scope(sp.root);
 	if (sp.game < 0)
 		goto out_stopped;
@@ -916,7 +973,10 @@ static int take_run(int dir, const char *path, const struct bench_plan *p,
 			index);
 		goto out;
 	}
-	printf("Run %u is measured. Quit the game.\n", index);
+	if (warming)
+		printf("The warm-up is over. Quit the game.\n");
+	else
+		printf("Run %u is measured. Quit the game.\n", index);
 	fflush(stdout);
 	if (wait_gone(sp.root)) {
 		fclose(sp.out);
@@ -942,6 +1002,19 @@ static int take_run(int dir, const char *path, const struct bench_plan *p,
 		unlinkat(dir, tmp, 0);
 		fprintf(stderr, "lota-bench: run %u is not kept: %s\n", index,
 			why);
+		goto out;
+	}
+	if (warming) {
+		char log[NAME_MAX + 1];
+
+		fclose(sp.out);
+		unlinkat(dir, tmp, 0);
+		if (!bench_run_find_log(dir, since, log, sizeof(log)))
+			unlinkat(dir, log, 0);
+		printf("The warm-up is not kept; lota-bench run takes run %u "
+		       "next.\n",
+		       index);
+		ret = 0;
 		goto out;
 	}
 	take_frames(dir, since, index, &r.frames);
@@ -1280,14 +1353,20 @@ int bench_main_run(int argc, char **argv)
 		goto out;
 	if (index < nruns) {
 		struct bench_doc *run = malloc(sizeof(*run));
+		char boot[BOOT_ID_CAP];
+		bool warming;
 
 		if (!run || machine_unchanged(&d->plan) ||
-		    take_run(dir, path, &d->plan, index, run)) {
+		    read_boot(boot, sizeof(boot))) {
 			free(run);
 			goto out;
 		}
+		warming = index > 0 && !bench_run_warm(dir, boot);
+		ret = take_run(dir, path, &d->plan, index, warming, run);
 		free(run);
-		if (index + 1 < nruns) {
+		if (ret || bench_run_note_boot(dir, boot))
+			goto out;
+		if (warming || index + 1 < nruns) {
 			status = 0;
 			goto out;
 		}

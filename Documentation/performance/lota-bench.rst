@@ -203,6 +203,13 @@ calls for; options given to a session that has begun are refused. The
 directory's full path goes into ``MANGOHUD_CONFIG`` and the launch
 options, so it may hold only letters, digits and ``/ . _ - +``.
 
+The first launch after a reboot finds a cold page cache and an agent in
+its first attestation rounds, and moving to ``B`` is where a reboot
+falls, so a run taken there would charge that cost to ``B`` alone. The session
+keeps the boot it last ran in, in ``boot_id``. A call in another boot
+is a warm-up: it goes as a run does, in the configuration of the next
+run, and keeps nothing. The next call takes that run.
+
 Each call first checks that LOTA is where the run needs it and, when it
 is not, says how to get it there and exits:
 
