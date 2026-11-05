@@ -600,6 +600,31 @@ int main(void)
 			FAIL("maps read once per object");
 	}
 
+	TEST("a mapped file on tmpfs is a gap in coverage");
+	{
+		char path[] = "/dev/shm/lota-test-XXXXXX";
+		int fd = mkstemp(path);
+		void *m = MAP_FAILED;
+
+		if (fd >= 0 && ftruncate(fd, MAPPING_SIZE) == 0)
+			m = mmap(NULL, MAPPING_SIZE, PROT_READ | PROT_EXEC,
+				 MAP_PRIVATE, fd, 0);
+		if (m == MAP_FAILED) {
+			PASS();
+		} else if (lota_runtime_coverage_pid(getpid(), &cov) == 0 &&
+			   cov.unmeasurable > 0) {
+			PASS();
+		} else {
+			FAIL("a file on tmpfs stopped the walk");
+		}
+		if (m != MAP_FAILED)
+			munmap(m, MAPPING_SIZE);
+		if (fd >= 0) {
+			close(fd);
+			unlink(path);
+		}
+	}
+
 	TEST("a walk leaves no mapping open");
 	{
 		int before = next_fd();
