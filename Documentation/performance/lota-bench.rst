@@ -294,6 +294,10 @@ themselves, and more rounds are what would.
 ``frame time median``, ``p99``, ``1% low``, in ms
    From the run's MangoHud log, as ``lota-bench frames`` defines them.
    Lower is better.
+   A game held to the display's refresh by vsync hides what it spends:
+   the frame time stays on the refresh interval while the CPU has room.
+   For such a game the CPU rows give the cost, and the frame times only
+   show that nothing got worse.
 
 ``game CPU``, ``lota-agent CPU``, ``lota-attest CPU``, in %
    The CPU time the cgroup accrued over the run, as a share of one CPU:
@@ -303,6 +307,10 @@ themselves, and more rounds are what would.
 
 ``game memory``, ``lota-agent memory``, in MiB
    The highest ``memory.current`` of the run.
+   The agent's figure in ``C`` counts the page cache of the game's files
+   it reads to hash them, which the kernel takes back under pressure.
+   ``file`` in the unit's ``memory.stat`` tells it from ``anon``, the
+   memory the agent holds.
 
 ``BPF programs``, in µs/s
    The time the agent's BPF programs ran during the run, for every
