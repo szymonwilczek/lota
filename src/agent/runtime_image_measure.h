@@ -19,6 +19,7 @@
 
 #include <stddef.h>
 #include <stdint.h>
+#include <sys/stat.h>
 #include <sys/types.h>
 
 #include "lota_runtime_image_measure.h"
@@ -164,16 +165,6 @@ int lota_rt_mapping_identity_ok(const struct lota_rt_map_entry *enumerated,
 				unsigned long long opened_ino);
 
 /*
- * Read the current /proc/<pid>/maps entry covering exactly [start, end).
- *
- * Returns 1 and fills *out when the range is still a file-backed executable
- * mapping, 0 when no such range exists any more, or a negative errno.
- * *out is zeroed on anything but a hit.
- */
-int lota_rt_lookup_map_entry(pid_t pid, unsigned long start, unsigned long end,
-			     struct lota_rt_map_entry *out);
-
-/*
  * Collect the deduplicated set of file-backed executable mappings of a live
  * process (one entry per backing inode) into entries[].
  *
@@ -262,31 +253,23 @@ int lota_rt_coverage_verdict(const struct lota_runtime_measure_coverage *cov,
 			     int exe_measured);
 
 /*
- * Measure the kernel fs-verity digest of one enumerated mapping.
+ * Open the file behind one enumerated mapping through <dirfd>/<range>, dirfd
+ * being /proc/<pid>/map_files: a kernel magic symlink, so no path the process
+ * controls is followed.
  *
- * Opens the exact backing inode through /proc/<pid>/map_files/<range> (a
- * kernel magic symlink, so no attacker-controlled path is followed),
- * confirms it still resolves to the dev/inode recorded during enumeration,
- * and reads the kernel-computed fs-verity measurement.
- * Fails closed if the object lacks fs-verity.
- *
- * When reported_len is non-NULL it receives the digest length the kernel reported,
- * so caller can say what was wrong with a length LOTA does not take.
- *
- * Returns 0 on success, negative errno otherwise.
+ * Returns the fd and fills st, or a negative errno; -ESTALE when the range no
+ * longer holds a regular file.
  */
-int lota_rt_measure_entry_verity(pid_t pid,
-				 const struct lota_rt_map_entry *entry,
-				 struct lota_verity_digest_key *out,
-				 uint32_t *reported_len,
-				 struct lota_rt_open_identity *opened);
+int lota_rt_open_mapping(int dirfd, const struct lota_rt_map_entry *entry,
+			 struct stat *st);
 
 /*
  * Compute the kernel-anchored runtime image digest of a live process.
  *
- * Enumerates the process's file-backed executable mappings, folds the
- * kernel fs-verity digest of every object that carries one into the
- * canonical image digest, and writes the 32-byte result.
+ * Enumerates the process's file-backed executable mappings, opens them all,
+ * reads the maps once more to tie every handle to its range, folds the kernel
+ * fs-verity digest of every object that carries one into the canonical image
+ * digest, and writes the 32-byte result.
  *
  * Objects the kernel holds no digest for are counted, not guessed at:
  * they are absent from the fold and reported through cov, so partial measurement
