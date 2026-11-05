@@ -40,7 +40,7 @@
 
 #define BENCH_DURATION_MIN_S 10
 #define BENCH_DURATION_MAX_S 3600
-#define BENCH_DURATION_DEFAULT_S 300
+#define BENCH_DURATION_DEFAULT_S 60
 
 /* autostart_log=0 is no log at all */
 #define BENCH_SETTLE_MIN_S 1

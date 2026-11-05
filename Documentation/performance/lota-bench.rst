@@ -187,16 +187,16 @@ title and starts it:
 
    $ lota-bench run ~/bench/example --game "Example Title" --proton 9.0 \
          --settings "high, 1440p"
-   The session begins in /home/user/bench/example: 7 runs of 300 s.
+   The session begins in /home/user/bench/example: 7 runs of 60 s.
    Run 0 of 6, configuration A (warm-up). Set the game's launch options to:
 
-     MANGOHUD_CONFIG=output_folder=/home/user/bench/example,autostart_log=30,log_duration=300 systemd-run --user --scope --unit=lota-bench-game mangohud %command%
+     MANGOHUD_CONFIG=output_folder=/home/user/bench/example,autostart_log=30,log_duration=60 systemd-run --user --scope --unit=lota-bench-game mangohud %command%
 
    start it, and be in the game within 30 s, when the frame log starts;
-   play as you would for 300 s from there.
+   play as you would for 60 s from there.
    Waiting for the game; Ctrl+C gives up.
 
-``--rounds`` (default 3), ``--duration-s`` (default 300),
+``--rounds`` (default 3), ``--duration-s`` (default 60),
 ``--settle-s`` (default 30) and ``--interval-ms`` (default 1000) set the
 rest of the plan. A loading screen makes the tail of the frame times
 noise, so the frame log starts ``--settle-s`` after the game; the
@@ -274,7 +274,7 @@ configurations side by side:
 .. code-block:: console
 
    $ lota-bench report ~/bench/example/result.json
-   Example Title: 3 rounds of A B C, 300 s a run after 30 s to settle
+   Example Title: 3 rounds of A B C, 60 s a run after 30 s to settle
    ...
                                         A               B               C         B-A         C-A
    frame time median ms          6.94 ±0.02      6.95 ±0.01      6.97 ±0.03     +0.01 ~     +0.03 ~
@@ -373,7 +373,7 @@ The plan
             "version": null, "settings": "high, 1440p"},
    "rounds": 3,
    "settle_s": 30,
-   "duration_s": 300,
+   "duration_s": 60,
    "interval_ms": 1000
 
 ``version``
@@ -413,7 +413,7 @@ A run
       "lota-agent": {...}, "lota-attest": null},
      {"t_ms": 1000, ...}
     ],
-    "sample_count": 330, "wall_ms": 330004, "end": "duration",
+    "sample_count": 90, "wall_ms": 90004, "end": "duration",
     "totals": {"game": {"cpu_usec": ..., "memory_max_bytes": ...,
                         "pgfault": ..., "pgmajfault": ...,
                         "io_read_bytes": ..., "io_write_bytes": ...},
