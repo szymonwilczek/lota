@@ -19,6 +19,7 @@
 #include <unistd.h>
 #include <stdint.h>
 #include <sys/mman.h>
+#include <sys/resource.h>
 #include <sys/sysmacros.h>
 
 #include "test.h"
@@ -50,6 +51,9 @@ FILE *__wrap_fopen(const char *path, const char *mode)
 	return __real_fopen(path, mode);
 }
 
+/* a filesystem that refuses this file to the agent, as FUSE does to root */
+static const char *refuse_open;
+
 /* opening a map_files link takes CAP_CHECKPOINT_RESTORE, reading it does not */
 int __wrap_openat(int dirfd, const char *path, int flags, ...)
 {
@@ -59,6 +63,10 @@ int __wrap_openat(int dirfd, const char *path, int flags, ...)
 	if (len <= 0)
 		return __real_openat(dirfd, path, flags);
 	target[len] = '\0';
+	if (refuse_open && strcmp(target, refuse_open) == 0) {
+		errno = EACCES;
+		return -1;
+	}
 	return __real_openat(AT_FDCWD, target, flags);
 }
 
@@ -109,6 +117,32 @@ static int open_scratch_file(char *path, size_t size, const char *suffix)
 		return -1;
 	}
 	return fd;
+}
+
+/* the process measures, and path is listed with nothing read from it */
+static int walk_leaves_gap(const char *path)
+{
+	struct lota_rt_object_record *objs =
+		calloc(LOTA_RUNTIME_IMAGE_MAX_MODULES, sizeof(*objs));
+	struct lota_runtime_measure_coverage cov;
+	uint8_t digest[LOTA_RUNTIME_IMAGE_DIGEST_SIZE];
+	size_t n = 0;
+	int ret;
+	int ok = 0;
+
+	if (!objs)
+		return 0;
+	lota_rt_set_content_hasher(fake_content_hash);
+	ret = lota_runtime_measure_pid_objects(getpid(), digest, &cov, NULL,
+					       objs, &n);
+	lota_rt_set_content_hasher(NULL);
+	for (size_t i = 0; i < n; i++) {
+		if (strcmp(objs[i].entry.path, path) == 0)
+			ok = ret == 0 && cov.unmeasurable > 0 &&
+			     objs[i].size == 0;
+	}
+	free(objs);
+	return ok;
 }
 
 /* lowest free descriptor, so a leak moves it */
@@ -685,23 +719,23 @@ int main(void)
 							  MAP_PRIVATE, fd, 0);
 		before = next_fd();
 
-		TEST("a mapping replaced by the check is stale");
+		TEST("a mapping replaced by the check is a gap");
 		before_second_maps_read = replace_mapping;
 		maps_reads = 0;
-		if (mapping != MAP_FAILED &&
-		    lota_runtime_coverage_pid(getpid(), &cov) == -ESTALE)
+		if (mapping != MAP_FAILED && walk_leaves_gap(path))
 			PASS();
 		else
-			FAIL("measured a file the range no longer maps");
+			FAIL("not a gap");
 
-		TEST("a mapping gone by the check is stale");
+		TEST("a mapping gone by the check is a gap");
 		before_second_maps_read = unmap_mapping;
 		maps_reads = 0;
 		if (mapping != MAP_FAILED &&
-		    lota_runtime_coverage_pid(getpid(), &cov) == -ESTALE)
+		    lota_runtime_coverage_pid(getpid(), &cov) == 0 &&
+		    cov.unmeasurable > 0)
 			PASS();
 		else
-			FAIL("measured a range no longer mapped");
+			FAIL("not a gap");
 		before_second_maps_read = NULL;
 
 		TEST("a stale walk leaves no mapping open");
@@ -716,6 +750,78 @@ int main(void)
 			close(other_file);
 		unlink(path);
 		unlink(other);
+	}
+
+	{
+		static char path[PATH_MAX + 16];
+		int fd = open_scratch_file(path, sizeof(path), ".map2");
+		void *m = fd < 0 ? MAP_FAILED :
+				   mmap(NULL, MAPPING_SIZE,
+					PROT_READ | PROT_EXEC, MAP_PRIVATE, fd,
+					0);
+
+		TEST("a mapping that will not open is a gap");
+		refuse_open = path;
+		if (m != MAP_FAILED && walk_leaves_gap(path) &&
+		    lota_runtime_coverage_pid(getpid(), &cov) == 0 &&
+		    cov.unmeasurable > 0)
+			PASS();
+		else
+			FAIL("not a gap");
+		refuse_open = NULL;
+
+		if (m != MAP_FAILED)
+			munmap(m, MAPPING_SIZE);
+		if (fd >= 0)
+			close(fd);
+		unlink(path);
+	}
+
+	TEST("an own executable that will not open is refused");
+	{
+		struct lota_runtime_measure_failure refused;
+		static char exe[PATH_MAX];
+		ssize_t len = readlink("/proc/self/exe", exe, sizeof(exe) - 1);
+		int refusal;
+
+		exe[len > 0 ? len : 0] = '\0';
+		refuse_open = exe;
+		lota_rt_set_content_hasher(fake_content_hash);
+		refusal = lota_runtime_measure_pid(getpid(), digest, &cov,
+						   &refused);
+		lota_rt_set_content_hasher(NULL);
+		refuse_open = NULL;
+		if (refusal == -EACCES && strcmp(refused.path, exe) == 0)
+			PASS();
+		else
+			FAIL("the executable did not stop the walk");
+	}
+
+	TEST("a walk out of descriptors fails without a gap");
+	{
+		struct rlimit old;
+		struct rlimit low;
+		int measured = 0;
+		int counted = 0;
+
+		if (getrlimit(RLIMIT_NOFILE, &old) == 0) {
+			low = old;
+			/* the map_files directory fits, a mapping does not */
+			low.rlim_cur = (rlim_t)next_fd() + 1;
+			if (setrlimit(RLIMIT_NOFILE, &low) == 0) {
+				lota_rt_set_content_hasher(fake_content_hash);
+				measured = lota_runtime_measure_pid(
+					getpid(), digest, &cov, NULL);
+				lota_rt_set_content_hasher(NULL);
+				counted = lota_runtime_coverage_pid(getpid(),
+								    &cov);
+				(void)setrlimit(RLIMIT_NOFILE, &old);
+			}
+		}
+		if (measured == -EMFILE && counted == -EMFILE)
+			PASS();
+		else
+			FAIL("read the agent's own limit as a gap");
 	}
 
 	TEST("a process past the object limit is measured up to the limit");
