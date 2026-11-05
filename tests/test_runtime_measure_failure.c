@@ -70,6 +70,47 @@ int main(void)
 	else
 		FAIL(buf);
 
+	/* tmpfs, FUSE: the ioctl fails, and fs-verity cannot be enabled there */
+	TEST("a filesystem without the ioctl is named, with no advice");
+	{
+		static const int no_ioctl[] = { ENOTTY, EOPNOTSUPP, EINVAL };
+		int ok = 1;
+
+		for (size_t i = 0; i < sizeof(no_ioctl) / sizeof(*no_ioctl);
+		     i++) {
+			make_failure(&f, "game.dll", 0, -no_ioctl[i]);
+			lota_rt_failure_reason(&f, -no_ioctl[i], buf,
+					       sizeof(buf));
+			if (!strstr(buf, "game.dll") ||
+			    !strstr(buf, "filesystem without fs-verity") ||
+			    strstr(buf, "enable"))
+				ok = 0;
+		}
+		if (ok)
+			PASS();
+		else
+			FAIL(buf);
+	}
+
+	TEST("an executable's refusal keeps the walk's cause");
+	make_failure_at(&f, "game.bin", "/mnt/game.bin",
+			LOTA_RT_ROLE_EXECUTABLE, 0, -EINVAL);
+	lota_rt_failure_reason(&f, -ENODATA, buf, sizeof(buf));
+	if (strstr(buf, "own executable") &&
+	    strstr(buf, "filesystem without fs-verity"))
+		PASS();
+	else
+		FAIL(buf);
+
+	TEST("a closed content road is named whatever verity answered");
+	make_failure(&f, "game.dll", 0, -ENOTTY);
+	f.road_err = -EIO;
+	lota_rt_failure_reason(&f, -ENOTTY, buf, sizeof(buf));
+	if (strstr(buf, "would not hash") && strstr(buf, strerror(EIO)))
+		PASS();
+	else
+		FAIL(buf);
+
 	TEST("any other errno still names the object");
 	make_failure(&f, "libbar.so.2", 0, EACCES);
 	lota_rt_failure_reason(&f, -EACCES, buf, sizeof(buf));
