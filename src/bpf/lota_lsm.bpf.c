@@ -1042,13 +1042,17 @@ static __always_inline int is_mapped_exec_guarded(struct file *file)
 	return is_inode_mapped_exec_guarded(BPF_CORE_READ(file, f_inode));
 }
 
+/* the kernel's I_CTIME_QUERIED: the first stat since a change sets this bit */
+#define LOTA_CTIME_NSEC_MASK 0x7fffffff
+
 /* enough to tell a file from one swapped in */
 static __always_inline void inode_seen(struct inode *inode,
 				       struct lota_mapped_seen *seen)
 {
 	seen->size = (u64)BPF_CORE_READ(inode, i_size);
 	seen->ctime_sec = (u64)BPF_CORE_READ(inode, i_ctime_sec);
-	seen->ctime_nsec = (u32)BPF_CORE_READ(inode, i_ctime_nsec);
+	seen->ctime_nsec = (u32)BPF_CORE_READ(inode, i_ctime_nsec) &
+			   LOTA_CTIME_NSEC_MASK;
 	seen->pad = 0;
 }
 
