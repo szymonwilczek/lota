@@ -11,7 +11,10 @@
  */
 
 #include <errno.h>
+#include <fcntl.h>
+#include <limits.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
 #include <stdint.h>
@@ -26,6 +29,46 @@
 #include "lota_registry_digest.h"
 
 #include <openssl/evp.h>
+
+static int maps_reads;
+
+FILE *__real_fopen(const char *path, const char *mode);
+FILE *__wrap_fopen(const char *path, const char *mode);
+int __real_openat(int dirfd, const char *path, int flags, ...);
+int __wrap_openat(int dirfd, const char *path, int flags, ...);
+
+FILE *__wrap_fopen(const char *path, const char *mode)
+{
+	size_t len = strlen(path);
+
+	if (len >= 5 && strcmp(path + len - 5, "/maps") == 0)
+		maps_reads++;
+	return __real_fopen(path, mode);
+}
+
+/* opening a map_files link takes CAP_CHECKPOINT_RESTORE, reading it does not */
+int __wrap_openat(int dirfd, const char *path, int flags, ...)
+{
+	char target[PATH_MAX];
+	ssize_t len = readlinkat(dirfd, path, target, sizeof(target) - 1);
+
+	if (len <= 0)
+		return __real_openat(dirfd, path, flags);
+	target[len] = '\0';
+	return __real_openat(AT_FDCWD, target, flags);
+}
+
+static int fake_content_hash(const char *path, uint64_t dev, uint64_t ino,
+			     struct lota_verity_digest_key *out)
+{
+	(void)path;
+	(void)dev;
+	(void)ino;
+	memset(out, 0, sizeof(*out));
+	out->len = LOTA_VERITY_DIGEST_SHA256_SIZE;
+	out->digest[0] = 1;
+	return 0;
+}
 
 static int digest_is_zero(const uint8_t d[32])
 {
@@ -472,6 +515,38 @@ int main(void)
 			PASS();
 		else
 			FAIL("the pages do not hash to the token's entry");
+	}
+
+	TEST("coverage reads the maps twice however many objects there are");
+	{
+		struct lota_rt_map_entry *e =
+			calloc(LOTA_RUNTIME_IMAGE_MAX_MODULES, sizeof(*e));
+		size_t n = 0;
+
+		ret = e ? lota_rt_collect_exec_maps(
+				  getpid(), e, LOTA_RUNTIME_IMAGE_MAX_MODULES,
+				  &n) :
+			  -ENOMEM;
+		free(e);
+		maps_reads = 0;
+		if (ret == 0 && n > 2 &&
+		    lota_runtime_coverage_pid(getpid(), &cov) == 0 &&
+		    cov.measured + cov.unmeasurable == n && maps_reads == 2)
+			PASS();
+		else
+			FAIL("maps read once per object");
+	}
+
+	TEST("measurement reads the maps twice however many objects there are");
+	{
+		lota_rt_set_content_hasher(fake_content_hash);
+		maps_reads = 0;
+		ret = lota_runtime_measure_pid(getpid(), digest, &cov, NULL);
+		lota_rt_set_content_hasher(NULL);
+		if (ret == 0 && cov.unmeasurable > 1 && maps_reads == 2)
+			PASS();
+		else
+			FAIL("maps read once per object");
 	}
 
 	printf("\n%d/%d kernel-anchored measurement tests passed\n",

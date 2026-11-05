@@ -1608,6 +1608,8 @@ TEST_RUNTIME_IMAGE := $(addprefix $(BUILD_DIR)/test_, \
 )
 $(TEST_RUNTIME_IMAGE): $(AGENT_DIR)/runtime_image_measure.c
 $(TEST_RUNTIME_IMAGE): TEST_LDLIBS := -lcrypto
+$(BUILD_DIR)/test_runtime_measure_pid: TEST_LDLIBS += -Wl,--wrap=fopen \
+	-Wl,--wrap=openat
 
 TEST_STARTUP := $(addprefix $(BUILD_DIR)/test_, \
 	protect_pid_validation \
