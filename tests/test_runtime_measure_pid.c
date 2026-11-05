@@ -626,6 +626,40 @@ int main(void)
 		}
 	}
 
+	TEST("a file on tmpfs mapped before protection is listed as memory");
+	{
+		static struct lota_rt_object_record
+			objs[LOTA_RUNTIME_IMAGE_MAX_MODULES];
+		char path[] = "/dev/shm/lota-test-XXXXXX";
+		int fd = mkstemp(path);
+		void *m = MAP_FAILED;
+		size_t n = 0;
+		uint32_t flags = 0;
+
+		if (fd >= 0 && ftruncate(fd, MAPPING_SIZE) == 0)
+			m = mmap(NULL, MAPPING_SIZE, PROT_READ | PROT_EXEC,
+				 MAP_PRIVATE, fd, 0);
+		lota_rt_set_content_hasher(fake_content_hash);
+		if (m != MAP_FAILED)
+			(void)lota_runtime_measure_pid_objects(
+				getpid(), digest, &cov, NULL, objs, &n);
+		lota_rt_set_content_hasher(NULL);
+		for (size_t i = 0; i < n; i++) {
+			if (strcmp(objs[i].entry.path, path) == 0)
+				flags = objs[i].history_flags;
+		}
+		if (m == MAP_FAILED || flags == LOTA_EXEC_HISTORY_MEMORY)
+			PASS();
+		else
+			FAIL("no memory flag on a file on tmpfs");
+		if (m != MAP_FAILED)
+			munmap(m, MAPPING_SIZE);
+		if (fd >= 0) {
+			close(fd);
+			unlink(path);
+		}
+	}
+
 	TEST("a walk leaves no mapping open");
 	{
 		int before = next_fd();
