@@ -168,12 +168,13 @@ int lota_rt_mapping_identity_ok(const struct lota_rt_map_entry *enumerated,
  * Collect the deduplicated set of file-backed executable mappings of a live
  * process (one entry per backing inode) into entries[].
  *
- * Returns 0 and the entry count via *n_out, or a negative errno. -E2BIG is
- * returned (fail closed) if the process has more measurable objects than the
- * caller-provided capacity.
+ * Returns 0, the entry count via *n_out and the number of mappings that did
+ * not fit via *past_limit, or a negative errno. Mappings past max are counted
+ * and not deduplicated: telling their inodes apart would take the list the
+ * limit bounds.
  */
 int lota_rt_collect_exec_maps(pid_t pid, struct lota_rt_map_entry *entries,
-			      size_t max, size_t *n_out);
+			      size_t max, size_t *n_out, uint32_t *past_limit);
 
 /*
  * Why a runtime image measurement failed, so the caller can name the object
@@ -198,6 +199,7 @@ struct lota_runtime_measure_failure {
 	int err;
 	int road_err; /* content road's refusal, 0 if that road was closed */
 	int no_file; /* memory with no file behind it */
+	uint32_t past_limit; /* mappings past the limit, once all were walked */
 };
 
 #define LOTA_RT_REASON_MAX 512 /* longest lota_rt_failure_reason() sentence */
@@ -224,6 +226,7 @@ struct lota_runtime_measure_coverage {
 	uint32_t measured;
 	uint32_t unmeasurable;
 	uint32_t content_hashed; /* of measured: content hash, not fs-verity */
+	uint32_t past_limit; /* of unmeasurable: past the object limit */
 };
 
 /*
@@ -271,9 +274,11 @@ int lota_rt_open_mapping(int dirfd, const struct lota_rt_map_entry *entry,
  * fs-verity digest of every object that carries one into the canonical image
  * digest, and writes the 32-byte result.
  *
- * Objects the kernel holds no digest for are counted, not guessed at:
+ * Objects the kernel holds no digest for, and mappings past
+ * LOTA_RUNTIME_IMAGE_MAX_MODULES, are counted, not guessed at:
  * they are absent from the fold and reported through cov, so partial measurement
  * can never be read as a complete one.
+ * cov->past_limit is set also when the measurement fails after the enumeration.
  *
  * Fails closed (negative errno) when lota_rt_coverage_verdict() refuses the round,
  * and on any error that is not an unmeasurable object -- mapping that cannot

@@ -570,13 +570,14 @@ int main(void)
 
 	TEST("coverage reads the maps twice however many objects there are");
 	{
+		uint32_t past = 0;
 		struct lota_rt_map_entry *e =
 			calloc(LOTA_RUNTIME_IMAGE_MAX_MODULES, sizeof(*e));
 		size_t n = 0;
 
 		ret = e ? lota_rt_collect_exec_maps(
 				  getpid(), e, LOTA_RUNTIME_IMAGE_MAX_MODULES,
-				  &n) :
+				  &n, &past) :
 			  -ENOMEM;
 		free(e);
 		maps_reads = 0;
@@ -690,6 +691,10 @@ int main(void)
 		};
 		static void *many[COUNT];
 		static char many_path[COUNT][PATH_MAX + 16];
+		static struct lota_rt_object_record objs[COUNT];
+		struct lota_runtime_measure_coverage walk;
+		char why[LOTA_RT_REASON_MAX];
+		size_t n = 0;
 		int ok = 1;
 
 		for (int i = 0; ok && i < COUNT; i++) {
@@ -709,18 +714,24 @@ int main(void)
 			close(fd);
 		}
 		lota_rt_set_content_hasher(fake_content_hash);
-		ret = ok ? lota_runtime_measure_pid(getpid(), digest, &cov,
-						    NULL) :
+		ret = ok ? lota_runtime_measure_pid_objects(
+				   getpid(), digest, &cov, &mfail, objs, &n) :
 			   -EIO;
 		lota_rt_set_content_hasher(NULL);
+		ok &= lota_runtime_coverage_pid(getpid(), &walk) == 0;
 		for (int i = 0; i < COUNT; i++) {
 			if (many[i] && many[i] != MAP_FAILED)
 				munmap(many[i], MAPPING_SIZE);
 			if (many_path[i][0])
 				unlink(many_path[i]);
 		}
-		if (ret == 0 && cov.measured >= 1 &&
-		    cov.measured + cov.unmeasurable > COUNT)
+		lota_rt_failure_reason(&mfail, -ENODATA, why, sizeof(why));
+		if (ok && ret == 0 && n == COUNT && cov.measured >= 1 &&
+		    cov.past_limit > 0 && walk.past_limit == cov.past_limit &&
+		    walk.unmeasurable >= cov.past_limit &&
+		    cov.measured + cov.unmeasurable == COUNT + cov.past_limit &&
+		    mfail.past_limit == cov.past_limit &&
+		    strstr(why, "past the"))
 			PASS();
 		else
 			FAIL("measurement refused the whole process");

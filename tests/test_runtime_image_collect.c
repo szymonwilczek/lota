@@ -38,6 +38,7 @@ int main(void)
 	char exe[PATH_MAX];
 	const char *self;
 	size_t n = 0;
+	uint32_t past = 0;
 	int rc;
 
 	printf("Runtime image mapping enumeration tests:\n");
@@ -159,8 +160,8 @@ int main(void)
 
 	TEST("collector finds the process's own executable");
 	self = self_basename(exe, sizeof(exe));
-	rc = lota_rt_collect_exec_maps(getpid(), entries,
-				       LOTA_RUNTIME_IMAGE_MAX_MODULES, &n);
+	rc = lota_rt_collect_exec_maps(
+		getpid(), entries, LOTA_RUNTIME_IMAGE_MAX_MODULES, &n, &past);
 	if (rc == 0 && self && n >= 1) {
 		int found = 0;
 		for (size_t i = 0; i < n; i++) {
@@ -192,6 +193,19 @@ int main(void)
 			PASS();
 		else
 			FAIL("duplicate inode in set");
+	}
+
+	TEST("collector counts the mappings past its capacity");
+	{
+		size_t all = n;
+		uint32_t past_all = past;
+
+		rc = lota_rt_collect_exec_maps(getpid(), entries, 1, &n, &past);
+		if (past_all == 0 && all > 1 && rc == 0 && n == 1 &&
+		    past >= all - 1)
+			PASS();
+		else
+			FAIL("capacity lost or refused a mapping");
 	}
 
 	printf("\n%d/%d runtime image enumeration tests passed\n", tests_passed,

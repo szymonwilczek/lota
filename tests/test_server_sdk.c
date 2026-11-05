@@ -1237,6 +1237,11 @@ static void test_registry_digest(void)
 			      flags | LOTA_REGISTRY_HISTORY_LOST, mods, 4,
 			      actors, 2, other) == LOTA_SERVER_OK &&
 		      memcmp(other, got, sizeof(got)) != 0;
+		/* a list cut short dressed as a whole one */
+		ok &= lota_server_registry_digest(
+			      flags | LOTA_REGISTRY_TRUNCATED, mods, 4, actors,
+			      2, other) == LOTA_SERVER_OK &&
+		      memcmp(other, got, sizeof(got)) != 0;
 		/* a late start dressed as a whole life */
 		ok &= lota_server_registry_digest(
 			      flags | LOTA_REGISTRY_FROM_EXEC, mods, 4, actors,

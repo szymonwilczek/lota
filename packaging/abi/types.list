@@ -146,6 +146,7 @@ macro LOTA_REGISTRY_MEASURED                   = 1
 macro LOTA_REGISTRY_HISTORY_LOST               = 2
 macro LOTA_REGISTRY_ACTORS_LOST                = 4
 macro LOTA_REGISTRY_FROM_EXEC                  = 8
+macro LOTA_REGISTRY_TRUNCATED                  = 16
 macro LOTA_REGISTRY_OBJECT_UNMAPPED            = 1
 macro LOTA_REGISTRY_OBJECT_WRITABLE            = 2
 macro LOTA_REGISTRY_OBJECT_MEMORY              = 4

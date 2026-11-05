@@ -472,6 +472,13 @@ set by ``lsm/bprm_committed_creds``), so nothing the image mapped predates the
 list. A process protected after it started, or forked from a protected one and
 never executed, lacks the flag; withdrawing protection clears it.
 
+One measurement holds ``LOTA_RUNTIME_IMAGE_MAX_MODULES`` objects, the first in
+address order. Mappings past them are unmeasured and clear
+``LOTA_STATUS_IMAGE_FULLY_MEASURED``, and ``LOTA_IPC_REGISTRY_TRUNCATED`` says so
+on the list. They have no entry of their own: one the history knows is listed
+as unmapped. A process whose own executable falls past the limit is not
+measured.
+
 A file can change under a mapping without being written again: another process
 holds it open for write, or maps it shared and writable, and stores into the
 pages the protected process runs. The kernel notes, at every executable

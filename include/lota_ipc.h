@@ -524,6 +524,12 @@ struct lota_ipc_registry_request {
 #define LOTA_IPC_REGISTRY_ACTORS_LOST (1U << 2)
 /* @pid's image was executed under protection: the list starts at its exec */
 #define LOTA_IPC_REGISTRY_FROM_EXEC (1U << 3)
+/*
+ * @pid had more executable mappings than one measurement holds: those past
+ * the limit are unmeasured, and any of them the history knows is listed as
+ * unmapped
+ */
+#define LOTA_IPC_REGISTRY_TRUNCATED (1U << 4)
 
 /* mapped since protection began, gone from the address space when measured */
 #define LOTA_IPC_REGISTRY_ENTRY_UNMAPPED (1U << 0)

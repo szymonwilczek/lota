@@ -672,6 +672,11 @@ int lota_poll_events(struct lota_client *client, int timeout_ms);
  * earlier is not there, and a late start looks otherwise the same.
  */
 #define LOTA_REGISTRY_FROM_EXEC (1U << 3)
+/*
+ * The process had more executable mappings than one measurement holds: those
+ * past the limit are unmeasured, and an object listed as unmapped may be one.
+ */
+#define LOTA_REGISTRY_TRUNCATED (1U << 4)
 
 /*
  * Mapped since protection began, gone from the address space when
