@@ -29,9 +29,8 @@
 #include "lota_token.h"
 
 /*
- * Build identity, injected from the VERSION file by the Makefile.
- * Library that cannot name the build it came from is useless to advisory
- * or a support ticket, so refuse to compile instead of reporting a placeholder.
+ * Injected from the VERSION file by the Makefile. A library that cannot name
+ * its build is useless to an advisory or a support ticket.
  */
 #ifndef LOTA_BUILD_VERSION_STRING
 #error "LOTA_BUILD_VERSION_STRING must be defined at build time"
@@ -74,9 +73,6 @@ static size_t hash_alg_digest_len(uint16_t hash_alg)
 	}
 }
 
-/*
- * Upper bound for DER-encoded AIK public key
- */
 #define LOTA_MAX_AIK_PUB_DER_SIZE 512
 
 static uint16_t read_be16(const uint8_t *p)
@@ -107,8 +103,6 @@ static uint64_t read_le64(const uint8_t *p)
 }
 
 /*
- * Parse TPMS_ATTEST to extract extraData and PCR digest
- *
  * TPMS_ATTEST layout:
  *   magic:           UINT32 (big-endian, = TPM_GENERATED_VALUE)
  *   type:            TPMI_ST_ATTEST (UINT16, big-endian)
@@ -121,7 +115,7 @@ static uint64_t read_le64(const uint8_t *p)
  *       pcrSelect:   TPML_PCR_SELECTION (4-byte count + array)
  *       pcrDigest:   TPM2B_DIGEST (2-byte size + data): PCR hash
  *
- * Returns 0 on success, -1 on parse error.
+ * Return: 0, or -1 on parse error.
  */
 static int parse_tpms_attest(const uint8_t *data, size_t len,
 			     const uint8_t **extra_data, size_t *extra_data_len,
@@ -134,17 +128,14 @@ static int parse_tpms_attest(const uint8_t *data, size_t len,
 	if (len < 10)
 		return -1;
 
-	/* magic */
 	uint32_t magic = read_be32(data + off);
 	off += 4;
 	if (magic != TPM_GENERATED_VALUE)
 		return -1;
 
-	/* type */
 	uint16_t type = read_be16(data + off);
 	off += 2;
 
-	/* qualifiedSigner (TPM2B_NAME) */
 	if (off + 2 > len)
 		return -1;
 	uint16_t signer_size = read_be16(data + off);
@@ -153,7 +144,6 @@ static int parse_tpms_attest(const uint8_t *data, size_t len,
 		return -1;
 	off += signer_size;
 
-	/* extraData (TPM2B_DATA) - nonce lives here */
 	if (off + 2 > len)
 		return -1;
 	uint16_t ed_size = read_be16(data + off);
@@ -167,13 +157,11 @@ static int parse_tpms_attest(const uint8_t *data, size_t len,
 		*extra_data_len = ed_size;
 	off += ed_size;
 
-	/* clockInfo: clock(8) + resetCount(4) + restartCount(4) + safe(1) = 17
-	 */
+	/* clockInfo: clock(8) + resetCount(4) + restartCount(4) + safe(1) */
 	if (off + 17 > len)
 		return -1;
 	off += 17;
 
-	/* firmwareVersion (8 bytes) */
 	if (off + 8 > len)
 		return -1;
 	off += 8;
@@ -181,19 +169,16 @@ static int parse_tpms_attest(const uint8_t *data, size_t len,
 	if (type == TPM_ST_ATTEST_QUOTE) {
 		uint32_t parsed_pcr_mask = 0;
 		uint16_t pcr_bank_alg = 0;
-		/* TPML_PCR_SELECTION: count(4) + array */
 		if (off + 4 > len)
 			return -1;
 		uint32_t pcr_sel_count = read_be32(data + off);
 		off += 4;
 
-		/* TPM 2.0 spec: TPML_PCR_SELECTION.count <= TPM_NUM_PCR_BANKS
-		 */
+		/* TPM2_NUM_PCR_BANKS in the TSS headers */
 		if (pcr_sel_count > 16)
 			return -1;
 
-		/* each TPMS_PCR_SELECTION: hash(2) + sizeOfSelect(1) + select[]
-		 */
+		/* TPMS_PCR_SELECTION: hash(2) + sizeOfSelect(1) + select[] */
 		for (uint32_t i = 0; i < pcr_sel_count; i++) {
 			uint16_t hash_alg;
 			if (off + 3 > len)
@@ -201,17 +186,14 @@ static int parse_tpms_attest(const uint8_t *data, size_t len,
 			hash_alg = read_be16(data + off);
 			off += 2;
 
+			/* the token has one PCR mask, for the SHA-256 bank */
 			if (i == 0) {
 				pcr_bank_alg = hash_alg;
 			} else if (hash_alg != pcr_bank_alg) {
-				/* mixed-bank selections are not representable
-				 * in single-bank wire */
 				return -1;
 			}
 
 			if (hash_alg != TPM_ALG_SHA256) {
-				/* LOTA token wire carries a single SHA-256 PCR
-				 * mask domain */
 				return -1;
 			}
 
@@ -227,15 +209,13 @@ static int parse_tpms_attest(const uint8_t *data, size_t len,
 					parsed_pcr_mask |= ((uint32_t)sel)
 							   << (8U * j);
 				} else if (sel != 0) {
-					/* Cannot represent PCR >= 24 in current
-					 * wire format. */
+					/* the mask covers PCR 0-23 */
 					return -1;
 				}
 			}
 			off += select_size;
 		}
 
-		/* pcrDigest (TPM2B_DIGEST) */
 		if (off + 2 > len)
 			return -1;
 		uint16_t digest_size = read_be16(data + off);
@@ -254,7 +234,6 @@ static int parse_tpms_attest(const uint8_t *data, size_t len,
 		if (pcr_mask_out)
 			*pcr_mask_out = parsed_pcr_mask;
 	} else {
-		/* Not a quote - no PCR digest */
 		if (pcr_digest)
 			*pcr_digest = NULL;
 		if (pcr_digest_len)
@@ -284,19 +263,16 @@ static int verify_rsa_signature(const uint8_t *attest_data, size_t attest_len,
 	if (aik_pub_len > LOTA_MAX_AIK_PUB_DER_SIZE)
 		return LOTA_SERVER_ERR_INVALID_ARG;
 
-	/* parse DER-encoded public key (PKIX / SubjectPublicKeyInfo) */
 	der_ptr = aik_pub_der;
 	pkey = d2i_PUBKEY(NULL, &der_ptr, (long)aik_pub_len);
 	if (!pkey)
 		return LOTA_SERVER_ERR_CRYPTO;
 
-	/* verify RSA type */
 	if (EVP_PKEY_base_id(pkey) != EVP_PKEY_RSA) {
 		ret = LOTA_SERVER_ERR_CRYPTO;
 		goto out;
 	}
 
-	/* reject weak RSA keys (< 2048 bits) */
 	if (EVP_PKEY_get_bits(pkey) < 2048) {
 		ret = LOTA_SERVER_ERR_CRYPTO;
 		goto out;
@@ -315,7 +291,6 @@ static int verify_rsa_signature(const uint8_t *attest_data, size_t attest_len,
 	}
 
 	if (sig_alg == TPM_ALG_RSAPSS) {
-		/* RSASSA-PSS verification */
 		if (EVP_DigestVerifyInit(md_ctx, &pkey_ctx, md, NULL, pkey) !=
 		    1)
 			goto out;
@@ -328,11 +303,9 @@ static int verify_rsa_signature(const uint8_t *attest_data, size_t attest_len,
 			    pkey_ctx, RSA_PSS_SALTLEN_DIGEST) != 1)
 			goto out;
 	} else if (sig_alg == TPM_ALG_RSASSA) {
-		/* RSASSA-PKCS1-v1_5 */
 		if (EVP_DigestVerifyInit(md_ctx, NULL, md, NULL, pkey) != 1)
 			goto out;
 	} else {
-		/* reject unknown signature algorithms */
 		ret = LOTA_SERVER_ERR_SIG_FAIL;
 		goto out;
 	}
@@ -345,7 +318,6 @@ static int verify_rsa_signature(const uint8_t *attest_data, size_t attest_len,
 
 out:
 	EVP_MD_CTX_free(md_ctx);
-	/* Key material cleanup is delegated to OpenSSL via EVP_PKEY_free(). */
 	EVP_PKEY_free(pkey);
 	return ret;
 }
@@ -396,7 +368,7 @@ static int parse_wire_header(const uint8_t *data, size_t len,
 	    (uint16_t)(hdr->protect_pid_count * sizeof(uint32_t)))
 		return LOTA_SERVER_ERR_BAD_TOKEN;
 
-	/* validate sizes (the image-digest block sits after the PID list) */
+	/* the image-digest block follows the PID list */
 	size_t image_list_size =
 		(size_t)hdr->protect_pid_count * LOTA_TOKEN_IMAGE_DIGEST_SIZE;
 
@@ -425,7 +397,6 @@ int lota_server_verify_token(const uint8_t *token_data, size_t token_len,
 
 	memset(claims, 0, sizeof(*claims));
 
-	/* parse wire format */
 	ret = parse_wire_header(token_data, token_len, &hdr);
 	if (ret != LOTA_SERVER_OK)
 		return ret;
@@ -441,15 +412,10 @@ int lota_server_verify_token(const uint8_t *token_data, size_t token_len,
 	uint8_t runtime_protect_digest[32];
 	uint32_t *pid_list = NULL;
 
-	/* verify RSA signature over attest_data */
 	if (hdr.attest_size == 0 || hdr.sig_size == 0)
 		return LOTA_SERVER_ERR_BAD_TOKEN;
 
-	/*
-	 * parse_wire_header already enforces this bound. Copy the count into a
-	 * local and validate the local so the allocation size is provably
-	 * capped (<= LOTA_TOKEN_MAX_PROTECT_PIDS) at the point of use.
-	 */
+	/* parse_wire_header checked this; repeated for the allocation below */
 	uint32_t pid_count = hdr.protect_pid_count;
 	if (pid_count > LOTA_TOKEN_MAX_PROTECT_PIDS)
 		return LOTA_SERVER_ERR_BAD_TOKEN;
@@ -500,7 +466,6 @@ int lota_server_verify_token(const uint8_t *token_data, size_t token_len,
 	if (ret != LOTA_SERVER_OK)
 		return ret;
 
-	/* parse TPMS_ATTEST - extract extraData and PCR digest */
 	const uint8_t *extra_data = NULL;
 	size_t extra_data_len = 0;
 	const uint8_t *pcr_digest = NULL;
@@ -534,14 +499,12 @@ int lota_server_verify_token(const uint8_t *token_data, size_t token_len,
 		return LOTA_SERVER_ERR_NONCE_FAIL;
 	}
 
-	/* verify caller-provided challenge nonce */
 	if (CRYPTO_memcmp(hdr.nonce, expected_nonce, 32) != 0)
 		return LOTA_SERVER_ERR_NONCE_FAIL;
 
 	if (expected_pcr_digest_len == 0)
 		return LOTA_SERVER_ERR_SIG_FAIL;
 
-	/* fill claims */
 	claims->valid_until = hdr.valid_until;
 	claims->flags = hdr.flags;
 	memcpy(claims->nonce, hdr.nonce, 32);
@@ -561,17 +524,11 @@ int lota_server_verify_token(const uint8_t *token_data, size_t token_len,
 	memcpy(claims->pcr_digest, pcr_digest, pcr_digest_len);
 	claims->pcr_digest_len = pcr_digest_len;
 
-	/* check expiry */
 	uint64_t now = (uint64_t)time(NULL);
 
 	/*
-	 * Freshness:
-	 * the token has no issue time, so valid_until is the only temporal anchor.
-	 * An agent on the default interval mints a token expiring one interval
-	 * from now; one claiming to live much longer is either misconfigured
-	 * or replayed from somewhere else.
-	 * sdk/server computes this bound from the same two values,
-	 * so both verifiers accept the same tokens.
+	 * The token has no issue time, so valid_until is the only temporal
+	 * anchor. sdk/server computes this bound from the same two values.
 	 */
 	{
 		const uint64_t window =
@@ -622,7 +579,6 @@ int lota_server_parse_token(const uint8_t *token_data, size_t token_len,
 	claims->protect_pid_count = hdr.protect_pid_count;
 	claims->stopped_ms = hdr.stopped_ms;
 
-	/* try to extract PCR digest from TPMS_ATTEST */
 	if (hdr.attest_size > 0) {
 		size_t image_list_size = (size_t)hdr.protect_pid_count *
 					 LOTA_TOKEN_IMAGE_DIGEST_SIZE;

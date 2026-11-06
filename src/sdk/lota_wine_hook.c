@@ -2,18 +2,16 @@
 /*
  * LOTA Wine/Proton Hook - LD_PRELOAD Integration
  *
- * Shared library loaded via LD_PRELOAD into Wine/Proton processes
- * to transparently bridge LOTA attestation into Windows games.
+ * Preloaded into Wine/Proton processes to publish LOTA attestation
+ * to the title as files.
  *
  * Lifecycle:
- *   1. Constructor: connect to agent, write initial status/token,
- *      start background refresh thread.
- *   2. Background thread: periodically re-query agent, atomically
- *      update the status and token files.
- *   3. Destructor: stop thread, disconnect, remove files.
+ *   1. Constructor: start the refresh thread.
+ *   2. Refresh thread: connect to the agent, then rewrite the status
+ *      and token files on each agent event.
+ *   3. Destructor: stop the thread and disconnect; the files stay.
  *
- * The hook is self-contained -- the Gaming SDK is linked statically
- * into the .so!
+ * The Gaming SDK is linked statically into the .so.
  *
  * Copyright (C) 2026 Szymon Wilczek
  */
@@ -48,7 +46,6 @@
 #include "../../include/lota_wine_hook.h"
 #include "hook_container.h"
 
-/* log levels */
 enum hook_log_level {
 	HOOK_LOG_DEBUG = 0,
 	HOOK_LOG_INFO = 1,
@@ -57,7 +54,6 @@ enum hook_log_level {
 	HOOK_LOG_SILENT = 4,
 };
 
-/* global state */
 static struct {
 	struct lota_client *client;
 	pthread_t thread;
@@ -83,7 +79,7 @@ static struct {
 	atomic_int token_errno; /* the token refusal already reported */
 	atomic_int self_protected;
 	atomic_int offline_published;
-	atomic_int evidence_written; /* this boot's evidence is on disk */
+	atomic_int evidence_written; /* the evidence is on disk */
 } g_hook;
 
 /* Guards last_status against the loader thread reading it. */
@@ -111,12 +107,9 @@ static void status_lock_init(void)
 
 #ifndef LOTA_HOOK_TESTING
 /*
- * Resolve /proc/self/exe into a caller-owned buffer. Returns 0 on
- * success, -errno on failure. The buffer is left empty on failure so
- * callers can treat an empty path as "unknown" and fall back to the
- * permissive default. Gated on !LOTA_HOOK_TESTING because the
- * /proc-free unit tests drive the policy decision directly through
- * policy_should_activate() with synthetic paths.
+ * Resolve /proc/self/exe. 0 or -errno; @out is empty on failure.
+ * Gated on !LOTA_HOOK_TESTING: the unit tests call policy_should_activate()
+ * with synthetic paths.
  */
 static int read_self_exe(char *out, size_t out_sz)
 {
@@ -171,9 +164,8 @@ static int read_self_program(char *out, size_t out_sz)
 
 /*
  * Check whether path begins with any comma-separated prefix in list.
- * Empty list or empty path returns false. Each prefix is matched
- * against path verbatim; leading and trailing whitespace inside the
- * list entry is ignored.
+ * Empty list or empty path returns false. Whitespace around an entry
+ * is ignored.
  */
 static bool path_has_prefix_in(const char *path, const char *list)
 {
@@ -202,22 +194,10 @@ static bool path_has_prefix_in(const char *path, const char *list)
 }
 
 /*
- * FHS-mandated system-binary path prefixes.
- *
- * The Filesystem Hierarchy Standard fixes system binaries under
- * /usr/, /bin, /sbin, /lib, /lib64. On usrmerge distros (Fedora)
- * /bin, /sbin, /lib, /lib64 are symlinks back into /usr,
- * so /proc/self/exe always resolves to the /usr form after
- * readlink; the extra entries cover non-usrmerge layouts where the
- * legacy paths survive verbatim. The /run/host/ entries cover the
- * Steam pressure-vessel case where the container exposes the host
- * /usr tree as /run/host/usr/ so a process exec'd through that path
- * still resolves to a system binary.
- *
- * Kept as a compile-time string so the constants live next to the
- * policy that consumes them; distro-specific paths that fall
- * outside FHS are an operator concern and reach the policy through
- * LOTA_HOOK_SKIP_PATH.
+ * System binaries, skipped by default. Usrmerge distros resolve
+ * /proc/self/exe to /usr/; the other entries cover layouts without the
+ * merge. Steam's pressure-vessel container shows the host's /usr as
+ * /run/host/usr/. Paths outside the list take LOTA_HOOK_SKIP_PATH.
  */
 #define LOTA_HOOK_FHS_SYSTEM_PREFIXES                    \
 	"/usr/,/bin/,/sbin/,/lib/,/lib64/,"              \
@@ -225,25 +205,15 @@ static bool path_has_prefix_in(const char *path, const char *list)
 	"/run/host/lib/,/run/host/lib64/"
 
 /*
- * Pure policy decision: should the hook activate for the process
- * whose /proc/self/exe resolves to @exe, with @allow as the
- * positive-pin prefix list and @skip as the additional skip prefix
- * list (both comma-separated, both nullable / may be empty)?
+ * Should the hook activate for the process whose /proc/self/exe is @exe?
+ * @allow and @skip are comma-separated prefix lists, nullable.
  *
- * Decision order matches should_activate():
- *
- *   1. Empty @exe (read_self_exe failed): default to activate.
- *      This preserves the original constructor contract on systems
- *      where /proc is not mounted (build-time test, chroot smoke).
- *   2. Non-empty @allow: positive pin. Activate iff @exe starts
- *      with one of the comma-separated prefixes; otherwise skip.
- *      The default FHS list is ignored when @allow is set so a
- *      pin to /opt/games/ does not get widened by accident.
- *   3. Non-empty @skip and @exe matches: skip. Used by
- *      operators on non-FHS distros to extend the built-in list
- *      without rebuilding the hook.
- *   4. Default: skip iff @exe starts with one of
- *      LOTA_HOOK_FHS_SYSTEM_PREFIXES; otherwise activate.
+ *   1. Empty @exe (read_self_exe failed): activate.
+ *   2. Non-empty @allow: activate iff @exe starts with one of its
+ *      prefixes; the system list is ignored.
+ *   3. @exe matches @skip: skip.
+ *   4. Otherwise skip iff @exe starts with an entry of
+ *      LOTA_HOOK_FHS_SYSTEM_PREFIXES.
  */
 static bool policy_should_activate(const char *exe, const char *allow,
 				   const char *skip)
@@ -352,39 +322,27 @@ static bool policy_should_activate_process(const char *exe, const char *program,
 /*
  * Decide whether the hook should activate in the current process.
  *
- * LD_PRELOAD is inherited by every fork+exec inside the launcher
- * shell. Running the hook's agent-connect + background-thread
- * machinery in throwaway shells and POSIX utilities (basename,
- * dirname, ldconfig, sudo, ...) stalls the launcher script and
- * thrashes the per-process token sink for no value.
+ * LD_PRELOAD reaches every fork+exec inside the launcher shell,
+ * and an activated process waits for its refresh thread at exit.
+ * /proc/self/exe decides, through policy_should_activate_process().
  *
- * The hook treats /proc/self/exe as the source of truth and
- * delegates the policy decision to policy_should_activate_process(). Three
- * operator-visible overrides apply on top of the FHS default:
- *
- *   LOTA_HOOK_ACTIVATE_PATH=~/.local/share/Steam,/opt/games
- *     If set and non-empty, the hook activates ONLY when
- *     /proc/self/exe begins with one of the comma-separated
- *     prefixes. Use this to pin attestation to a specific install
- *     tree rather than the FHS default. lota-proton-hook sets it
- *     to the directories Steam names for the launch, which hold
- *     the title, not the client helpers.
+ *   LOTA_HOOK_ACTIVATE_PATH=/opt/games,/srv/games
+ *     Activate only when the exe begins with one of these prefixes.
+ *     lota-proton-hook sets it to the title's install path and the
+ *     compatibility tools Steam names; a preset pin wins, no install
+ *     path, no pin.
  *
  *   LOTA_HOOK_ACTIVATE_PROGRAM=steamapps/common/Title/
- *     Wine's loader activates ONLY when its Windows program
- *     (argv[1]) lies in this directory, whatever the pin says.
+ *     Wine's loader activates only when its Windows program (argv[1])
+ *     lies in this directory, whatever the pin says.
  *     lota-proton-hook sets it from the title's install directory.
  *
- *   LOTA_HOOK_SKIP_PATH=/extra/skip/prefix
- *     Extends the built-in system-path skip list. Useful when a
- *     distro keeps utilities outside FHS (e.g. /nix/store) without
- *     recompiling the hook.
+ *   LOTA_HOOK_SKIP_PATH=/nix/store
+ *     Adds to the built-in system-path skip list.
  *
- * Returns true when the hook should run its constructor body,
- * false when the constructor should early-return cleanly. Gated on
- * !LOTA_HOOK_TESTING because the unit tests drive
- * policy_should_activate() directly with synthetic paths and would
- * trip -Werror=unused-function otherwise.
+ * Gated on !LOTA_HOOK_TESTING: the unit tests call
+ * policy_should_activate() directly and would trip
+ * -Werror=unused-function.
  */
 static bool should_activate(void)
 {
@@ -403,10 +361,7 @@ static bool should_activate(void)
 }
 #endif
 
-/*
- * Parse log level string. Returns HOOK_LOG_WARN for NULL or
- * unrecognised values (safe default for LD_PRELOAD context).
- */
+/* HOOK_LOG_WARN for NULL or an unknown name */
 static int parse_log_level(const char *s)
 {
 	if (!s)
@@ -428,16 +383,15 @@ static int parse_log_level(const char *s)
  * Write the @n'th token-directory candidate into g_hook.token_dir.
  *
  * Candidates, in order:
- *   0. LOTA_HOOK_TOKEN_DIR        (explicit override, absent -> skipped)
- *   1. $XDG_RUNTIME_DIR/lota-hook (the player's own runtime directory)
- *   2. /tmp/lota-<uid>            (no runtime directory at all)
+ *   0. LOTA_HOOK_TOKEN_DIR        (absent or empty: skipped)
+ *   1. $XDG_RUNTIME_DIR/lota-hook
+ *   2. /tmp/lota-<uid>
  *
- * $XDG_RUNTIME_DIR/lota is deliberately not among them: the agent creates
- * that one root:lota 0750 for the container socket
- * (src/agent/steam_runtime.c::steam_runtime_ensure_socket_dir),
- * and this directory holds files the player must own and nobody else may read.
+ * Not $XDG_RUNTIME_DIR/lota: the agent creates that one root:lota 0750 for
+ * the container socket (steam_runtime_ensure_socket_dir()), and this
+ * directory holds files the player must own and nobody else may read.
  *
- * Returns 0 when a candidate was written, -ENOENT when @n names none.
+ * Return: 0 when a candidate was written, -ENOENT when @n names none.
  */
 static int token_dir_candidate(int n)
 {
@@ -467,23 +421,18 @@ static int token_dir_candidate(int n)
 }
 
 /*
- * Create and validate the token directory.
- *
- * Security requirements:
- *  - path must resolve to a real directory (no symlink traversal)
- *  - owned by current uid
- *  - mode forced to 0700 (private attestation artifacts)
+ * Create and validate the token directory: opened O_NOFOLLOW,
+ * owned by the current uid, mode forced to 0700.
  *
  * @repaired_from: receives the mode a tightened directory had, else 0.
  *
- * Returns 0 on success, negative errno on failure.
+ * Return: 0 or a negative errno.
  */
 static int ensure_token_dir(mode_t *repaired_from)
 {
 	struct stat st;
 	int dirfd;
 
-	/* try to create; EEXIST is fine */
 	if (mkdir(g_hook.token_dir, 0700) < 0 && errno != EEXIST) {
 		LOG_ERR("mkdir %s: %s", g_hook.token_dir, strerror(errno));
 		return -errno;
@@ -540,17 +489,11 @@ static int ensure_token_dir(mode_t *repaired_from)
 }
 
 /*
- * Settle on a token directory: the first candidate that can be made
- * a private directory of the player's own.
+ * Settle on a token directory: the first candidate that can be made a
+ * private directory of the player's own. Each refusal is reported and
+ * the next candidate tried.
  *
- * A candidate that cannot be used is not the end of the hook -- a player
- * whose runtime directory is unusable still gets attestation out of /tmp
- * -- so each refusal is reported and the next candidate is tried.
- * The directory that was settled on is named by the caller's own log line,
- * because a hook writing somewhere other than the documented default is
- * the first thing an integrator needs to know.
- *
- * Returns 0 with g_hook.token_dir set, or the last error when every
+ * Return: 0 with g_hook.token_dir set, or the last error when every
  * candidate was refused.
  */
 static int setup_token_dir(void)
@@ -598,9 +541,8 @@ static void report_unshared_token_dir(void)
 		return;
 
 	/*
-	 * Unreadable mountinfo: say nothing rather than guess. Read line by
-	 * line (it has no size and runs to tens of KB); an overlong line is
-	 * skipped whole, since a fragment could fake the fields.
+	 * Unreadable mountinfo: say nothing. An overlong line is skipped
+	 * whole, since a fragment could fake the fields.
 	 */
 	f = fopen("/proc/self/mountinfo", "re");
 	if (!f)
@@ -636,11 +578,8 @@ static void report_unshared_token_dir(void)
 #endif
 
 /*
- * Write data to a file atomically.
- *
- * Writes to a PID-tagged temporary file, fsyncs, then renames
- * over the target path. This guarantees readers never see a
- * partially written file.
+ * Write data to a file atomically: a temporary file beside it, fsync,
+ * rename. Readers never see a partially written file.
  */
 static int atomic_write(const char *path, const void *data, size_t len)
 {
@@ -681,17 +620,9 @@ static int atomic_write(const char *path, const void *data, size_t len)
 }
 
 /*
- * Write the text status file.
+ * Write the text status file: key=value, one per line, no quoting.
  *
- * Render the agent's last reported status into the key=value text file
- * the operator-facing consumers (verify-attested.sh, server-side
- * bridges) poll. @offline non-zero means the hook lost the agent
- * channel entirely: the LOTA_OFFLINE=1 marker lets consumers
- * distinguish "agent reachable, says not attested" (UNTRUSTED) from
- * "agent unreachable" (OFFLINE).
- *
- * Format: key=value, one per line, no quoting.
- * Parseable from C, Python, shell, and Wine-side code.
+ * @offline non-zero means the hook holds no connection to the agent.
  */
 static int write_status_payload(const struct lota_status *status, int offline)
 {
@@ -766,12 +697,6 @@ static void hook_publish_state(void)
 		LOG_DBG("write_status: %s", strerror(-ret));
 }
 
-/*
- * Publish an explicit "offline" status so consumers of lota-status
- * (verify-attested.sh, server-side bridges) observe the transition to OFFLINE.
- * The token / snapshot files are also unlinked because they cannot be trusted
- * past the disconnect.
- */
 /* the token goes, and the evidence it is checked with goes with it */
 static void drop_token_files(void)
 {
@@ -781,6 +706,7 @@ static void drop_token_files(void)
 	atomic_store(&g_hook.evidence_written, 0);
 }
 
+/* LOTA_OFFLINE=1 in the status file, the token files gone */
 static void publish_offline_status(void)
 {
 	struct lota_status offline = { 0 };
@@ -792,13 +718,7 @@ static void publish_offline_status(void)
 	drop_token_files();
 }
 
-/*
- * One OFFLINE per disconnect. Every road that loses the agent ends here
- * -- the polling refresh, a failed status query, and the reconnect the
- * event-driven thread retries every refresh_sec -- so the sink states
- * the transition once and is not rewritten while the agent stays away.
- * hook_offline_clear() re-arms it on the next connect.
- */
+/* One OFFLINE per disconnect; hook_offline_clear() re-arms it on connect. */
 static void hook_offline_publish(void)
 {
 	if (atomic_exchange(&g_hook.offline_published, 1))
@@ -909,10 +829,7 @@ static int LOTA_UNUSED fetch_token_wire(struct lota_client *client,
 	return LOTA_OK;
 }
 
-/*
- * The quoted PCRs hold still for a boot, so one copy serves every token
- * the hook writes until the token files are dropped.
- */
+/* The quoted PCRs hold still while the agent runs: one copy serves that run. */
 static void write_boot_evidence(struct lota_client *client)
 {
 	uint8_t buf[LOTA_BOOT_EVIDENCE_MAX_SIZE];
@@ -934,11 +851,8 @@ static void write_boot_evidence(struct lota_client *client)
 /*
  * Fetch and write the binary token file.
  *
- * Requests a token without a client nonce (nonce = NULL).
- * The resulting token is still TPM-signed and proves attestation
- * at a point in time; it is just not bound to a specific server
- * challenge. Games requiring challenge-response freshness should
- * use the SDK directly.
+ * No client nonce: the token is TPM-signed but bound to no server
+ * challenge. A challenge needs the SDK.
  */
 static int write_token(struct lota_client *client, uint32_t flags)
 {
@@ -963,8 +877,8 @@ static int write_token(struct lota_client *client, uint32_t flags)
 
 /*
  * Probe the sockets lota_connect() would try, in its order, since it reports
- * every failure as LOTA_ERR_CONNECTION_FAILED. Names the judged path in @path;
- * returns 0 or the negative errno it refused with.
+ * every socket failure as LOTA_ERR_CONNECTION_FAILED. Names the judged path in
+ * @path; returns 0 or the negative errno it refused with.
  */
 static int hook_probe_socket(char *path, size_t len)
 {
@@ -1144,9 +1058,8 @@ static struct lota_client *hook_connect(void)
 }
 
 /*
- * Add this process to protected_pids, which scopes every runtime gate.
- * Called after each connect, since the launch path connects before
- * refresh_once(). Once per process; the fork handler clears the latch.
+ * Add this process to protected_pids; latched once the agent takes it.
+ * Called on each refresh and each thread cycle, so a refusal is asked again.
  */
 static void hook_register_self(void)
 {
@@ -1169,7 +1082,7 @@ static void hook_register_self(void)
 /*
  * Was a failed load the gate's refusal? Reading dlerror() would consume
  * the title's message, so judge the object: an existing readable path
- * was refused, a bare name never found is just missing.
+ * counts as refused whatever the real error, a bare name never does.
  */
 static bool hook_refusal_is_gate(const char *path)
 {
@@ -1179,7 +1092,7 @@ static bool hook_refusal_is_gate(const char *path)
 	return access(path, R_OK) == 0;
 }
 
-/* Keep the refusal where the player's launcher already reads. */
+/* For the status file. */
 static void hook_record_refusal(const char *path)
 {
 	snprintf(g_hook.refused_object, sizeof(g_hook.refused_object), "%s",
@@ -1218,13 +1131,7 @@ LOTA_HOOK_EXPORT void *dlopen(const char *file, int mode)
 	return handle;
 }
 
-/*
- * Perform one refresh cycle.
- *
- * Reconnects to the agent if needed, queries status, writes files.
- * All failures are handled gracefully -- the hook never aborts
- * the host process.
- */
+/* One refresh cycle: reconnect if needed, query status, write files. */
 static void refresh_once(void)
 {
 	struct lota_status status;
@@ -1312,9 +1219,9 @@ static void hook_status_cb(const struct lota_status *status, uint32_t events,
 
 /*
  * Refresh thread.
- * Waits for STATUS events (lota_subscribe + lota_poll_events).
- * If the agent refuses the subscription, which it should not, logs it once
- * and polls with refresh_once() every refresh_sec so the hook keeps working.
+ * Waits for STATUS and ATTEST events (lota_subscribe + lota_poll_events).
+ * If the agent refuses the subscription, logs it and polls with
+ * refresh_once() every refresh_sec.
  */
 static void *refresh_thread_fn(void *arg)
 {
@@ -1352,7 +1259,7 @@ static void *refresh_thread_fn(void *arg)
 					lota_strerror(ret), g_hook.refresh_sec);
 		}
 
-		/* usually too early on the first cycle; no-op once latched */
+		/* retries a refused registration; no-op once latched */
 		hook_register_self();
 
 		if (subscribed) {
@@ -1389,10 +1296,9 @@ static void hook_child_after_fork(void)
 	g_hook.client = NULL;
 	g_hook.init_pid = 0;
 	/*
-	 * Forked child has a new PID, so the parent's protected_pids
-	 * registration does not cover it. Clear the latch so the next
-	 * refresh_once() in the child reconnects and re-issues
-	 * lota_protect_self() against the child PID.
+	 * The child starts no refresh thread and registers nothing: it
+	 * carries the protection the parent had at the fork. An exec the
+	 * hook activates in registers it.
 	 */
 	atomic_store(&g_hook.self_protected, 0);
 
@@ -1403,19 +1309,18 @@ __attribute__((constructor)) static void lota_wine_hook_init(void)
 {
 	const char *env;
 
-	/* check disable flag */
 	env = getenv(LOTA_HOOK_ENV_DISABLE);
 	if (env && (strcmp(env, "1") == 0 || strcmp(env, "true") == 0))
 		return;
 
 	/*
-	 * LD_PRELOAD reaches every utility the launcher shell runs;
-	 * skip them so none blocks on agent I/O. See should_activate().
+	 * LD_PRELOAD reaches every utility the launcher shell runs; an
+	 * activated one waits for its refresh thread at exit.
+	 * See should_activate().
 	 */
 	if (!should_activate())
 		return;
 
-	/* parse configuration from environment */
 	g_hook.log_level = parse_log_level(getenv(LOTA_HOOK_ENV_LOG_LEVEL));
 
 	env = getenv(LOTA_HOOK_ENV_SOCKET);
@@ -1430,7 +1335,6 @@ __attribute__((constructor)) static void lota_wine_hook_init(void)
 				     atoi(env) :
 				     LOTA_HOOK_DEFAULT_REFRESH_SEC;
 
-	/* settle on a token directory the player owns */
 	if (setup_token_dir() < 0)
 		return;
 
@@ -1445,7 +1349,7 @@ __attribute__((constructor)) static void lota_wine_hook_init(void)
 	snprintf(g_hook.evidence_path, sizeof(g_hook.evidence_path), "%s/%s",
 		 g_hook.token_dir, LOTA_HOOK_BOOT_EVIDENCE_FILE);
 
-	/* export token directory for wine-side discovery */
+	/* for the consumer's discovery; a preset value stays */
 	setenv(LOTA_HOOK_ENV_TOKEN_DIR, g_hook.token_dir, 0);
 
 	LOG_INF("initializing (token_dir=%s, refresh=%ds)", g_hook.token_dir,
@@ -1455,12 +1359,9 @@ __attribute__((constructor)) static void lota_wine_hook_init(void)
 	pthread_atfork(NULL, NULL, hook_child_after_fork);
 
 	/*
-	 * Connect + first refresh are deferred to the background thread.
-	 * The constructor must return immediately so the host process
-	 * (game binary or its launcher shell) does not block on agent
-	 * I/O. The thread's first loop iteration drives hook_connect()
-	 * and refresh_once() and retries every refresh_sec seconds while
-	 * the agent is unreachable.
+	 * Connect + first refresh are deferred to the refresh thread, which
+	 * retries every refresh_sec while the agent is unreachable.
+	 * The constructor does no agent I/O.
 	 */
 	g_hook.running = 1;
 	if (pthread_create(&g_hook.thread, NULL, refresh_thread_fn, NULL) !=
@@ -1497,29 +1398,17 @@ __attribute__((destructor)) static void lota_wine_hook_fini(void)
 	}
 
 	/*
-	 * Do NOT unlink the status / token / snapshot files here. The
-	 * Steam launch chain inherits LD_PRELOAD into every fork+exec;
-	 * each one runs its own constructor and destructor, all sharing
-	 * the same $XDG_RUNTIME_DIR/lota-hook/ token sink. A helper that
-	 * exits before the game binary would otherwise unlink the
-	 * artefacts the still-running cs2 hook just wrote, leaving the
-	 * consumer (verify-attested.sh, server-side bridge) with a
-	 * vanished token while the game is still attested.
-	 *
-	 * The OFFLINE contract is owned by publish_offline_status() in
-	 * refresh_once(): when the agent becomes unreachable the hook
-	 * actively rewrites lota-status with LOTA_ATTESTED=0 and
-	 * unlinks the token / snapshot files. Stale artefacts from a
-	 * prior session are overwritten by the next refresh_once() on
-	 * the next launch.
+	 * The status, token and snapshot files stay: the launch chain's
+	 * activated processes share this directory, and a helper exiting
+	 * before the title would remove what the title's hook wrote.
+	 * Losing the agent rewrites the status and removes the token files:
+	 * hook_offline_publish().
 	 */
 
 	LOG_INF("hook detached");
 }
 
 #endif /* !LOTA_HOOK_TESTING */
-
-/* exported query functions */
 
 LOTA_HOOK_EXPORT int lota_hook_active(void)
 {
