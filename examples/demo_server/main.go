@@ -3,28 +3,15 @@
 //
 // LOTA demo game server.
 //
-// Reference integration that issues attestation nonces to game clients
-// and verifies anti-cheat heartbeats produced by the LOTA SDK. The
-// process is deliberately single-binary, single-listen-address and
-// host-local: it is a demo of the framework's wire contract, not a
-// production-grade game backend.
-//
 // Endpoints:
-//   POST /nonce      -- mint a session id + 32 random bytes for the
-//                       initial trust handshake from the game client.
-//   POST /heartbeat  -- decode a LACH wire packet, verify the embedded
-//                       LOTA token against the configured AIK public
-//                       key, return TRUSTED / UNTRUSTED / REJECT.
-//   GET  /state      -- read the most recent verdict the server has
-//                       seen for a given game_id; trust_pong polls this
-//                       to keep its banner in sync without owning a
-//                       heartbeat channel itself.
+//   POST /nonce      -- a session id and 32 random bytes for a game client.
+//   POST /heartbeat  -- decode a LACH packet, verify its token against the
+//                       AIK and answer TRUSTED, UNTRUSTED or REJECT.
+//   GET  /state      -- the latest verdict for a game_id; trust_pong polls it.
 //
-// Transport security is opt-in. With no TLS flags the demo serves plain
-// HTTP on 127.0.0.1 so the operator can curl every endpoint without
-// bringing in a CA. Pass -tls-cert/-tls-key to serve HTTPS, and add
-// -client-ca to require a provisioned anti-cheat producer to present a
-// certificate (mutual TLS); see examples/mtls/README.rst.
+// Without TLS flags it serves plain HTTP. -tls-cert and -tls-key serve HTTPS;
+// -client-ca also requires a producer certificate, see
+// examples/mtls/README.rst.
 
 package main
 
@@ -47,9 +34,8 @@ import (
 	"time"
 )
 
-// readRuntimeManifest reads a trusted runtime manifest: one ELF path per
-// line, with '#' comments and blank lines ignored.
-// Returned paths are folded into the expected runtime measurement.
+// readRuntimeManifest reads one ELF path per line, skipping blank lines and
+// '#' comments.
 func readRuntimeManifest(path string) ([]string, error) {
 	f, err := os.Open(path)
 	if err != nil {
@@ -81,9 +67,7 @@ const (
 	defaultLicense  = "lota-demo-CS2-clone"
 	shutdownTimeout = 3 * time.Second
 
-	// A day is already far past anything a heartbeat freshness window should be;
-	// the cap exists so the value cannot reach the duration arithmetic large
-	// enough to wrap.
+	// keeps --max-age seconds from overflowing a time.Duration
 	maxHeartbeatAgeSecCap = 86400
 )
 
@@ -151,11 +135,8 @@ func main() {
 		}
 		anticheatDigest = sha256.Sum256(bin)
 
-		// Precompute the runtime measurement the producer must report
-		// so the server can reject heartbeats whose live code pages
-		// diverge from the registered binaries. With a manifest this
-		// spans every loaded object; without one it covers just the
-		// producer binary (a statically linked image).
+		// The runtime measurement a matching producer reports: over the
+		// manifest, or over the producer binary alone.
 		objs := []string{*anticheatBin}
 		if *runtimeManifest != "" {
 			objs, err = readRuntimeManifest(*runtimeManifest)
@@ -187,10 +168,6 @@ func main() {
 		os.Exit(2)
 	}
 
-	// --max-age big enough to overflow the duration would wrap into negative
-	// one, and negative freshness window accepts every heartbeat ever minted.
-	// Bound it here, where the operator can still be told,
-	// rather than at the comparison.
 	if *maxAgeSec > maxHeartbeatAgeSecCap {
 		fmt.Fprintf(os.Stderr,
 			"demo_server: --max-age %d exceeds the %d second cap\n",
@@ -245,8 +222,7 @@ func main() {
 		log.Printf("demo_server listening on %s (games=%s, transport=%s)",
 			*listen, strings.Join(gameIDs(games), ","),
 			transportLabel(tlsConfig))
-		// ListenAndServeTLS reads the keypair from TLSConfig.Certificates
-		// when both path arguments are empty
+		// empty paths: the keypair comes from TLSConfig.Certificates
 		var serveErr error
 		if tlsConfig != nil {
 			serveErr = hs.ListenAndServeTLS("", "")
@@ -267,10 +243,8 @@ func main() {
 	}
 }
 
-// buildTLSConfig turns the transport flags into a *tls.Config, or nil for
-// plain HTTP. -tls-cert and -tls-key must be set together; -client-ca adds
-// mutual TLS by requiring a producer certificate that verifies against the
-// provisioning CA.
+// buildTLSConfig returns nil for plain HTTP. -tls-cert and -tls-key go
+// together; -client-ca requires a producer certificate signed by that CA.
 func buildTLSConfig(certPath, keyPath, clientCAPath string) (*tls.Config, error) {
 	if certPath == "" && keyPath == "" {
 		if clientCAPath != "" {
@@ -325,10 +299,8 @@ func gameIDs(games map[string]gameBinding) []string {
 	return out
 }
 
-// loadAIK reads a PKIX/SPKI public key from disk. An empty path leaves
-// the server without a key; it then rejects every heartbeat with a
-// REJECT verdict. The empty path is supported because the unit tests
-// build the AIK in memory and inject it through newServer directly.
+// loadAIK reads a PKIX public key. An empty path leaves the server without
+// one, and a heartbeat that reaches verification is answered REJECT.
 func loadAIK(path string) (*rsa.PublicKey, error) {
 	if path == "" {
 		return nil, nil

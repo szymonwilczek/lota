@@ -1,14 +1,12 @@
 /* SPDX-License-Identifier: MIT */
 /* Copyright (C) 2026 Szymon Wilczek */
 /*
- * LOTA block-demo: dummy "evil" shared object.
+ * LOTA block-demo: the shared object the victim dlopen()s.
  *
- * Loaded via dlopen() from the demo victim. The constructor only
- * writes to stderr so the demo cannot be mistaken for a real
- * payload, and so the operator can tell whether the loader was
- * permitted to execute the .so or not. The BPF LSM mmap_file
- * gate runs *before* the constructor, so on a successful block
- * the message below never appears.
+ * The constructor only prints, so a load that gets through is harmless and
+ * visible. In enforce mode with strict_mmap the mmap_file hook refuses a
+ * protected task's executable mapping of an object outside the trust set,
+ * before any constructor runs.
  */
 
 #include <stdio.h>

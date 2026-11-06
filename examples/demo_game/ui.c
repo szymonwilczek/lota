@@ -225,7 +225,7 @@ static void fit_text(enum text_role role, const char *src, int max_w, char *dst,
 
 /*
  * Split @src over two rows no wider than @max_w, at the last space that fits,
- * or mid-run when there is none (a digest, a path).
+ * or mid-run when there is none.
  * The caller ellipsizes what overflows the second row.
  */
 static void wrap_two_rows(enum text_role role, const char *src, int max_w,

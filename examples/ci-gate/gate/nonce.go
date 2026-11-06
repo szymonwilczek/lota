@@ -11,21 +11,14 @@ import (
 	"time"
 )
 
-// Errors a nonce lookup can produce.
-// Caller reports them verbatim, because "unknown" and "expired" mean different
-// things to whoever is debugging a failing pipeline.
+// Errors consume returns; the gate passes them to the caller verbatim.
 var (
 	errUnknownNonce = errors.New("nonce was not issued by this gate")
 	errStaleNonce   = errors.New("nonce expired before the token arrived")
 )
 
-// nonceStore hands out single-use challenges.
-//
-// Nonce is the whole reason a token presented to this gate cannot be replayed:
-// it is generated here, it goes into the TPM quote, and it is consumed on first
-// use whether the verification that follows succeeds or fails.
-// Failed attempt that left its nonce spendable would let a caller grind against
-// the gate with one captured token.
+// nonceStore hands out single-use challenges. consume spends a nonce whatever
+// the verdict that follows, so a captured token gets one attempt.
 type nonceStore struct {
 	mu     sync.Mutex
 	issued map[[32]byte]time.Time
@@ -41,7 +34,7 @@ func newNonceStore(ttl time.Duration) *nonceStore {
 	}
 }
 
-// issue returns a fresh challenge and the moment it stops being valid
+// issue returns a fresh challenge and its expiry.
 func (s *nonceStore) issue() ([32]byte, time.Time, error) {
 	var nonce [32]byte
 	if _, err := rand.Read(nonce[:]); err != nil {
@@ -58,8 +51,7 @@ func (s *nonceStore) issue() ([32]byte, time.Time, error) {
 	return nonce, expires, nil
 }
 
-// consume removes a nonce and reports whether it was live at that moment.
-// nonce is spent by the attempt, not by the verdict.
+// consume removes a nonce and reports whether it was live.
 func (s *nonceStore) consume(nonce [32]byte) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -85,8 +77,8 @@ func (s *nonceStore) evictExpiredLocked() {
 	}
 }
 
-// constantTimeEqual keeps a caller from learning how much of a nonce it guessed
-// correctly by timing the comparison.
+// constantTimeEqual compares without leaking through timing how many
+// leading bytes match.
 func constantTimeEqual(a, b []byte) bool {
 	return subtle.ConstantTimeCompare(a, b) == 1
 }

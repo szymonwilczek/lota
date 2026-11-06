@@ -3,14 +3,9 @@
 /*
  * LOTA demo anti-cheat heartbeat producer.
  *
- * Drives an lota_ac_session in direct mode against the local LOTA
- * agent and POSTs the resulting LACH packet to the demo server.
- * Designed to be the smallest possible reference for an EAC- or
- * BattlEye-style integrator: open a session, mint a heartbeat,
- * ship it over HTTP, log the verdict, sleep, repeat.
- *
- * --once exits with the server-reported verdict as the process
- * return code so setup.sh can use it as a liveness check.
+ * Runs a direct-mode lota_ac_session against the local agent and
+ * POSTs each LACH packet to demo_server.
+ * --once exits with the server's verdict.
  */
 
 #include <ctype.h>
@@ -47,17 +42,7 @@ struct demo_options {
 	const char *server_url;
 	const char *game_id;
 	const char *socket_path;
-	/*
-	 * The publisher this producer plays for, as the hex SHA-256 of their
-	 * CA anchor's SubjectPublicKeyInfo.
-	 *
-	 * Naming it is what opens a session for that publisher,
-	 * and a session-gated host reports only while one is open
-	 * -- so a producer that names nobody is never attested for anybody.
-	 * A host that answers for several refuses its token requests.
-	 * A shipped producer knows its own publisher; this is a flag here
-	 * because the demo does not know which machine it is run on.
-	 */
+	/* see lota_ac_config.publisher_profile */
 	const char *publisher_profile;
 	const char *tamper_marker;
 	const char *ca_cert; /* provisioning CA that signs the server cert */
@@ -305,10 +290,8 @@ static int parse_args(int argc, char **argv, struct demo_options *opt)
 }
 
 /*
- * Apply mutual-TLS material to the curl handle. Peer and hostname
- * verification stay on (curl's default) so the producer never ships a
- * heartbeat to an unauthenticated server; --ca-cert pins the provisioning
- * CA and the client cert/key present the producer's identity.
+ * Peer and host verification apply to an https:// URL; --ca-cert names the
+ * provisioning CA and the client pair identifies the producer.
  */
 static void configure_tls(CURL *curl, const struct demo_options *opt)
 {
@@ -339,10 +322,8 @@ static size_t response_writer(void *ptr, size_t size, size_t nmemb, void *user)
 }
 
 /*
- * Extract a quoted value for the given JSON key without pulling in a
- * full JSON parser. Returns a heap-allocated NUL-terminated string the
- * caller frees, or NULL when the key is absent. Good enough for the
- * server's fixed response schema; not safe for arbitrary inputs.
+ * Returns the string value of @key in the server's flat JSON reply, or NULL.
+ * Escapes are not decoded. The caller frees the result.
  */
 static char *extract_string_field(const char *body, const char *key)
 {
@@ -425,13 +406,7 @@ static int post_heartbeat(CURL *curl, const char *url, const uint8_t *body,
 	return 0;
 }
 
-/*
- * Returns true when the operator has armed the tamper marker. The check
- * is intentionally a plain access(F_OK) on every tick rather than an
- * inotify watch: the marker is created and removed by demo_tamper.sh
- * out-of-band and the heartbeat cadence (default 5s) makes polling
- * cheap and race-free against the script's own EXIT trap.
- */
+/* Checked once per heartbeat */
 static bool tamper_marker_armed(const char *path)
 {
 	if (!path || !*path)
@@ -452,21 +427,13 @@ static int send_one_heartbeat(struct lota_ac_session *session, CURL *curl,
 		*out_verdict = DEMO_EXIT_TRANSPORT;
 		return rc;
 	}
-	/* sequence lives at offset 24 in the LACH header (LE u32). */
+	/* LACH sequence: little-endian u32 at offset 24 */
 	*out_seq = (uint32_t)buf[24] | ((uint32_t)buf[25] << 8) |
 		   ((uint32_t)buf[26] << 16) | ((uint32_t)buf[27] << 24);
 
 	/*
-	 * Tamper hook for the live demo.
-	 * Flip the last byte of the packet, which is the tail of the TPM signature:
-	 * the token's own header fields are untouched, so the server parses
-	 * the heartbeat and the token fully and then fails the signature check.
-	 * That is the UNTRUSTED branch in heartbeat.go rather than REJECT,
-	 * and it is the path a production verifier takes against mangled signature.
-	 *
-	 * The first byte of the token is not a usable target:
-	 * it is the token magic, and corrupting it exercises the parser,
-	 * which is the one thing this hook is meant not to test.
+	 * The packet ends with the token signature, so flipping its last byte
+	 * keeps the packet parseable and the server answers UNTRUSTED.
 	 */
 	if (written > LOTA_AC_HEADER_SIZE &&
 	    tamper_marker_armed(opt->tamper_marker)) {
@@ -529,14 +496,6 @@ int main(int argc, char **argv)
 		return DEMO_EXIT_TRANSPORT;
 	}
 
-	/*
-	 * Publisher who requires the runtime measurement to cover every mapped
-	 * object asks for the flag that says it did.
-	 * Which side of that choice a title sits on is the publisher's policy,
-	 * so it is a flag here rather than a default:
-	 * on a host whose distribution ships its libraries without fs-verity,
-	 * requiring it makes every heartbeat UNTRUSTED.
-	 */
 	struct lota_ac_config cfg = {
 		.struct_size = sizeof(cfg),
 		.provider = opt.provider,
@@ -550,10 +509,8 @@ int main(int argc, char **argv)
 	};
 
 	/*
-	 * Joining the protected set is a second call on the gaming API:
-	 * the anti-cheat session owns its own agent connection,
-	 * and protection is a property of this process rather than of that
-	 * session, so any connection this process holds can claim it.
+	 * The session keeps its own agent connection. Protection
+	 * belongs to the process, so a second connection claims it.
 	 */
 	struct lota_client *protect_client = NULL;
 

@@ -2,15 +2,9 @@
 /*
  * LOTA CI attestation step.
  *
- * Pipeline side of the release gate: ask the gate for a challenge, ask the local
- * LOTA agent for a token answering it, present the token, and write out the secret
- * the gate releases. Nothing else.
- *
- * It is written to be dropped into a pipeline as one step, so every outcome is exit
- * code and every failure is fail-closed: the output file is created only after
- * the gate has released, so a step that fails for any reason
- * -- no agent, unattested host, refused release, network error -- leaves the job
- *  without the secret rather than proceeding with a stale one.
+ * Fetches a challenge from the release gate, has the local agent answer it with
+ * a token, presents the token and writes the released secret.
+ * --out is opened only after the gate releases.
  *
  * Copyright (C) 2026 Szymon Wilczek
  */
@@ -28,9 +22,8 @@
 #include <lota/lota_gaming.h>
 
 /*
- * Exit codes.
- * Pipeline distinguishes "this host is not allowed" from "the gate was unreachable":
- * the first is a policy decision to act on, the second is infrastructure to retry.
+ * EXIT_REFUSED: POST /release answered, but no secret could be read from it.
+ * EXIT_TRANSPORT: no challenge from the gate, or no answer to the token.
  */
 #define EXIT_USAGE 2
 #define EXIT_NO_AGENT 3
@@ -74,10 +67,9 @@ static size_t collect(void *chunk, size_t size, size_t nmemb, void *userdata)
 }
 
 /*
- * Extracts a JSON string value.
- * Gate's two responses have three string fields between them and no nesting,
- * so a scanner is the honest dependency here
- * -- integrator with a JSON library in the build already uses it.
+ * The gate answers with flat objects whose string fields are nonce,
+ * secret and reason, so a scan for the key suffices.
+ * Escapes are not decoded.
  */
 static char *json_string(const char *json, const char *key)
 {
@@ -250,12 +242,7 @@ out:
 	return rc;
 }
 
-/*
- * POST /release -> the secret, or a reason.
- * The reason is printed as the step's own diagnostic:
- * it is what tells whoever reads the pipeline log whether the host
- * or the pipeline is at fault.
- */
+/* POST /release -> the secret, or the gate's reason for the pipeline log */
 static int present_token(const struct options *opts, const char *nonce_b64,
 			 const char *token_b64, char **secret_b64)
 {
@@ -323,8 +310,7 @@ out:
 	return rc;
 }
 
-/* Writes the secret 0600 and only on success,
- * so a failed step leaves nothing behind for a later one to pick up. */
+/* A file this creates gets at most 0600; one that exists keeps its mode */
 static int write_secret(const char *path, const uint8_t *secret, size_t len)
 {
 	int fd = open(path, O_WRONLY | O_CREAT | O_TRUNC | O_NOFOLLOW, 0600);
@@ -418,17 +404,8 @@ int main(int argc, char **argv)
 		return EXIT_USAGE;
 	}
 
-	/*
-	 * The agent is the only thing that can answer a challenge, because the key
-	 * that signs the answer never leaves the TPM.
-	 * Connect before asking the gate for anything: host with no agent cannot
-	 * prove anything, and saying so without a network round trip keeps
-	 * the failure legible in a pipeline log.
-	 */
+	/* No agent, no token: fail before any request to the gate */
 	struct lota_connect_opts connect_opts = {
-		/* Library refuses a zero struct_size rather than guessing one,
-		 * so integrator who omits it gets no client and the step reports
-		 * a host with no agent. */
 		.struct_size = sizeof(connect_opts),
 		.socket_path = opts.socket_path,
 		.timeout_ms = 5000,

@@ -16,8 +16,7 @@ import (
 	verifysdk "github.com/szymonwilczek/lota/sdk/server"
 )
 
-// Attestation flags a token can carry, from include/lota_gaming.h.
-// Gate's policy is expressed as a required subset of these.
+// Token flags from include/lota_gaming.h; --require names a subset of them.
 const (
 	flagAttested   uint32 = 1 << 0
 	flagTPMOK      uint32 = 1 << 1
@@ -64,9 +63,8 @@ func flagList(mask uint32) string {
 	return strings.Join(names, ",")
 }
 
-// gate is the relying party:
-// it decides whether the caller's host is trustworthy enough to receive
-// the secret it is guarding.
+// gate is the relying party that releases the secret to a host whose token
+// satisfies the policy.
 type gate struct {
 	aik      *rsa.PublicKey
 	secret   []byte
@@ -111,10 +109,7 @@ func (g *gate) handleNonce(w http.ResponseWriter, _ *http.Request) {
 	})
 }
 
-// handleRelease is the gate proper.
-// Every path out of it either releases the secret or states a reason,
-// and the reason is what a pipeline log will carry,
-// so it names the check that failed rather than "denied".
+// handleRelease releases the secret or refuses with the check that failed.
 func (g *gate) handleRelease(w http.ResponseWriter, r *http.Request) {
 	var req releaseRequest
 	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 64<<10)).
@@ -137,8 +132,7 @@ func (g *gate) handleRelease(w http.ResponseWriter, r *http.Request) {
 	var nonce [32]byte
 	copy(nonce[:], nonceBytes)
 
-	// Spend the nonce before verifying,
-	// so a caller cannot retry a captured token against the same challenge.
+	// Spent before verification: one verification per challenge.
 	if err := g.nonces.consume(nonce); err != nil {
 		g.deny(w, req.Nonce, err.Error())
 		return
@@ -150,8 +144,6 @@ func (g *gate) handleRelease(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// VerifyToken proves the token is this TPM's and answers this challenge.
-	// What the host must additionally be is the gate's own policy, checked below.
 	if !constantTimeEqual(claims.Nonce[:], nonce[:]) {
 		g.deny(w, req.Nonce, "verified token carries a different nonce")
 		return
@@ -162,11 +154,7 @@ func (g *gate) handleRelease(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Token carries an expiry, not an issue time, so freshness past
-	// valid_until is this gate's policy:
-	// refuse a token whose remaining life is longer than a token the agent
-	// would mint now, which is what replayed long-lived token from another
-	// host would look like.
+	// Claims carry no issue time, so maxLife caps the remaining validity.
 	if g.maxLife > 0 {
 		remaining := time.Until(claims.ExpiresAt)
 		if remaining > g.maxLife {
@@ -186,8 +174,7 @@ func (g *gate) handleRelease(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// deny is the only way this service says no,
-// so every refusal is audited and none of them leaks the secret through a partial response.
+// deny audits a refusal and answers 403 with the reason alone.
 func (g *gate) deny(w http.ResponseWriter, nonce, reason string) {
 	g.audit.Printf("release refused nonce=%s reason=%q", shortNonce(nonce), reason)
 	g.writeJSON(w, http.StatusForbidden, releaseResponse{Reason: reason})
@@ -203,8 +190,8 @@ func (g *gate) writeJSON(w http.ResponseWriter, status int, payload any) {
 	}
 }
 
-// shortNonce keeps audit line readable and correlatable without writing the whole
-// challenge into a log a pipeline may publish.
+// shortNonce keeps a prefix of the nonce for the audit log, enough to
+// correlate a request without logging the whole challenge.
 func shortNonce(nonce string) string {
 	if len(nonce) > 12 {
 		return nonce[:12] + "..."

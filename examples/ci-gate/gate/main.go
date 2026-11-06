@@ -1,18 +1,11 @@
 // SPDX-License-Identifier: MIT
 // Copyright (C) 2026 Szymon Wilczek
 //
-// Reference release gate for a CI/CD pipeline.
+// Release gate for a CI/CD pipeline.
 //
-// It guards one secret -- signing key, registry credential, deployment token
-// -- and hands it over only to a caller that proves, with TPM-signed LOTA token
-// answering a challenge this process issued, that it runs on a host in the state
-// the gate requires.
-//
-// The shape is deliberately the smallest thing that is still correct:
-// issue a nonce, verify a token against it, apply a policy, release or refuse.
-// Production gate differs in what it does after the verdict
-// (fetch from a real secret store, mint a short-lived credential, sign an artifact),
-// not in the four steps above.
+// Guards one secret and releases it to a caller whose LOTA token
+// answers a challenge this process issued and carries the flags
+// --require names.
 
 package main
 
@@ -112,8 +105,7 @@ func main() {
 	}
 }
 
-// loadAIK accepts the key in either of the two forms the tooling around it
-// produces: PEM from tpm2_readpublic, DER from the agent's own export.
+// loadAIK reads an RSA public key in PKIX form, PEM or DER.
 func loadAIK(path string) (*rsa.PublicKey, error) {
 	raw, err := os.ReadFile(path)
 	if err != nil {

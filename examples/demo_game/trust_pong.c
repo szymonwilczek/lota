@@ -1,20 +1,11 @@
 /* SPDX-License-Identifier: MIT */
 /* Copyright (C) 2026 Szymon Wilczek */
 /*
- * trust_pong - LOTA gaming SDK reference demo.
+ * trust_pong - LOTA gaming SDK demo.
  *
- * Single-window SDL2 game (paddle vs back wall, score on bounce) that
- * exercises the gaming SDK at startup and then mirrors the verdict
- * the demo server publishes for the trust-pong game id. The game
- * deliberately does not produce its own heartbeats: that work lives
- * in demo_anticheat. trust_pong only consumes the server's state so
- * the reviewer sees the end-to-end pipeline without having to read
- * two heartbeat producers.
- *
- * Cold-launch contract: when the agent is missing, the server is
- * down, or the policy is wrong, the game still opens its window and
- * shows the OFFLINE / UNTRUSTED banner. It never segfaults on a
- * failed handshake.
+ * An SDL2 paddle game that shows the verdict demo_server holds for
+ * its game id. Heartbeats come from demo_anticheat; the game polls
+ * /state.
  */
 
 #include <ctype.h>
@@ -34,7 +25,7 @@
 #include "ui.h"
 
 #define POLL_INTERVAL_MS 750
-/* consecutive UNTRUSTED heartbeats that end the session */
+/* UNTRUSTED poll results, with no TRUSTED between them, that freeze the game */
 #define UNTRUSTED_FREEZE_STREAK 2
 #define POLL_TIMEOUT_MS 600
 #define DEFAULT_GAME_ID "trust-pong"
@@ -54,7 +45,7 @@ struct game_state {
 
 struct verdict_snapshot {
 	enum ui_verdict verdict;
-	unsigned int seq; /* bumped per published verdict, not per frame */
+	unsigned int seq; /* bumped by each publish_verdict() */
 	char reason[160];
 };
 
@@ -134,14 +125,9 @@ static char *extract_string(const char *body, const char *key)
 }
 
 /*
- * Initial trust handshake: GET nonce + session id from the demo
- * server, ask the agent for a token bound to that nonce, drop the
- * token payload because the heartbeat producer will mint signed
- * heartbeats on its own. The handshake exists to validate that the
- * agent is reachable and that the server is online before the
- * SDL2 window opens. Failure is non-fatal: the game launches with
- * the OFFLINE banner and switches to the live verdict once a
- * heartbeat lands.
+ * Checks that the server answers /nonce and the agent reports attested; the
+ * nonce goes unused.
+ * On failure main() publishes OFFLINE; the poller's first answer replaces it.
  */
 static int initial_handshake(const struct cli_opts *opts, CURL *curl)
 {
@@ -189,12 +175,6 @@ static int initial_handshake(const struct cli_opts *opts, CURL *curl)
 	free(nonce_b64);
 	free(session);
 
-	/*
-	 * Agent reachability check via the gaming SDK. The token itself
-	 * is intentionally discarded: trust_pong does not own the
-	 * heartbeat channel, demo_anticheat does. We only need to prove
-	 * the agent is up before the SDL2 window opens.
-	 */
 	struct lota_connect_opts copts = {
 		.struct_size = sizeof(copts),
 		.socket_path = opts->socket_path,
@@ -491,7 +471,7 @@ int main(int argc, char **argv)
 		struct verdict_snapshot snap;
 		snapshot_verdict(&snap);
 
-		/* count each verdict once, not once per frame */
+		/* count each poll result once */
 		if (snap.seq != counted_seq) {
 			counted_seq = snap.seq;
 			if (snap.verdict == UI_VERDICT_UNTRUSTED) {
