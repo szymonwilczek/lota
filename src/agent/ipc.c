@@ -66,17 +66,12 @@
 #define LOTA_GROUP_NAME "lota"
 
 /*
- * Events any connected client may subscribe to.
- *
- * STATUS, ATTEST and MODE carry only what GET_STATUS returns to any caller,
- * so pushing them exposes nothing new.
- * PROFILE is left out: it says which titles hold a session with which publisher.
- * Only the attestation loop needs it, and SYNC_ATTEST subscribes it implicitly.
+ * Events any connected client may subscribe to. PROFILE is reserved
+ * to the attestation loop, which SYNC_ATTEST subscribes.
  */
 #define IPC_EVENT_PUBLIC \
 	(LOTA_IPC_EVENT_STATUS | LOTA_IPC_EVENT_ATTEST | LOTA_IPC_EVENT_MODE)
 
-/* Rate limiting: cap privileged PROTECT_PID updates per UID per window */
 #define PROTECT_PID_RATE_LIMIT 60 /* requests */
 #define PROTECT_PID_RATE_WINDOW_SEC 60 /* per minute */
 
@@ -112,8 +107,6 @@ static uint64_t monotonic_now_sec(void)
 	if (clock_gettime(CLOCK_MONOTONIC, &ts) == 0)
 		return (uint64_t)ts.tv_sec;
 
-	/* fallback only if CLOCK_MONOTONIC is unavailable (should not happen)
-	 */
 	return (uint64_t)time(NULL);
 }
 
@@ -132,10 +125,8 @@ static int check_rate_limit(struct uid_rate *table, int *entry_count,
 	    !last_table_full_warn_sec || !name)
 		return -1;
 
-	/* existing entry */
 	for (int i = 0; i < *entry_count; i++) {
 		if (table[i].uid == uid) {
-			/* reset window if expired */
 			if (now < table[i].window_start_sec ||
 			    now - table[i].window_start_sec >=
 				    (uint64_t)window_sec) {
@@ -143,7 +134,6 @@ static int check_rate_limit(struct uid_rate *table, int *entry_count,
 				table[i].window_start_sec = now;
 				return 0;
 			}
-			/* within window: check limit */
 			if (table[i].count >= request_limit)
 				return -1;
 			table[i].count++;
@@ -151,7 +141,6 @@ static int check_rate_limit(struct uid_rate *table, int *entry_count,
 		}
 	}
 
-	/* new entry */
 	if (*entry_count < MAX_RATE_ENTRIES) {
 		table[*entry_count].uid = uid;
 		table[*entry_count].count = 1;
@@ -161,10 +150,9 @@ static int check_rate_limit(struct uid_rate *table, int *entry_count,
 	}
 
 	/*
-	 * Table full: do NOT evict an active UID entry.
-	 * Reuse only an entry whose window has already expired; otherwise
-	 * refuse the request to prevent trivial UID-exhaustion bypass
-	 * (an attacker filling the table to evict legitimate rate state).
+	 * Table full: reuse only an entry whose window has expired.
+	 * Evicting a live one would let a caller fill the table to
+	 * reset a uid's count.
 	 */
 	for (int i = 0; i < *entry_count; i++) {
 		if (now < table[i].window_start_sec ||
@@ -203,13 +191,7 @@ static int check_protect_pid_rate_limit(uid_t uid)
 				"IPC PROTECT_PID");
 }
 
-/*
- * Client connection state
- *
- * recv_buf and send_buf are sized to hold exactly one maximum-size
- * IPC message. The payload_len cap in handle_client_read() ensures
- * untrusted clients cannot trigger allocations beyond these buffers.
- */
+/* recv_buf and send_buf each hold one maximum-size IPC message */
 struct ipc_client {
 	int fd;
 	uid_t peer_uid; /* authenticated peer UID via SO_PEERCRED */
@@ -226,38 +208,23 @@ struct ipc_client {
 	uint32_t pending_events; /* accumulated LOTA_IPC_EVENT_* while busy */
 	bool shutdown_on_flush; /* trigger graceful daemon stop after reply */
 
-	/*
-	 * Per-session GET_TOKEN budget.
-	 * Fixed window like the per-UID table, but held on the connection,
-	 * so two titles from one user cannot throttle each other.
-	 * It dies with the connection.
-	 */
+	/* per-connection GET_TOKEN budget, a fixed window like the uid table */
 	int token_count;
 	uint64_t token_window_start_sec;
 
 	/*
-	 * The publisher this connection speaks for, set by SET_PROFILE.
-	 * Borrowed from ctx->profiles, which the attestation loop rebuilds
-	 * under a running connection whenever the list is reloaded.
-	 * Not const: binding and unbinding maintain that publisher's session count.
+	 * The publisher set by SET_PROFILE, borrowed from ctx->profiles, which
+	 * a reload replaces. Not const: unbinding maintains its session count.
 	 */
 	struct attest_target *profile;
 
 	/*
-	 * The same publisher, named.
-	 * A title sends SET_PROFILE once, at connect time, so the pointer above
-	 * is the only thing a reload could restore it from -- and that pointer
-	 * is into the list being replaced. The identity outlives the list.
-	 * Empty when this connection named no publisher.
+	 * Its id, from which ipc_set_profiles() binds again when the list is
+	 * replaced. Empty when this connection named no publisher.
 	 */
 	char profile_id[LOTA_PROFILE_ID_LEN];
 
-	/*
-	 * This connection is the agent's own attestation loop, established by
-	 * SYNC_ATTEST it was allowed to send.
-	 * It is subscribed to publisher events so it learns about a session
-	 * the moment one opens, rather than on its next scheduled sync.
-	 */
+	/* an accepted SYNC_ATTEST: this is the agent's attestation loop */
 	bool attest_peer;
 
 	/*
@@ -273,11 +240,8 @@ struct ipc_client {
  * Per-session fixed-window budget for GET_TOKEN.
  * Returns 0 if allowed, -1 if rate limited.
  *
- * No table and no eviction, unlike the per-UID limiter:
- * the state lives on the connection, so there is nothing for caller to exhaust
- * and nothing to reclaim.
- * Opening more connections to get more budget is what the per-UID ceiling
- * is there to stop.
+ * The state lives on the connection, so there is no table to exhaust.
+ * The per-UID ceiling bounds a caller that opens more connections.
  */
 static int check_session_token_rate_limit(struct ipc_client *client)
 {
@@ -286,11 +250,7 @@ static int check_session_token_rate_limit(struct ipc_client *client)
 	if (!client)
 		return -1;
 
-	/*
-	 * Backwards clock is treated as new window, matching the per-UID limiter.
-	 * CLOCK_MONOTONIC does not go backwards, so this only covers the fallback
-	 * path in monotonic_now_sec()
-	 */
+	/* CLOCK_MONOTONIC does not go back: covers the fallback clock */
 	if (now < client->token_window_start_sec ||
 	    now - client->token_window_start_sec >=
 		    (uint64_t)TOKEN_RATE_WINDOW_SEC) {
@@ -375,7 +335,6 @@ static int read_pid_exe_path(pid_t pid, char *out, size_t out_len)
 
 	out[n] = '\0';
 
-	/* refuse inaccessible/deleted executable targets */
 	if (strstr(out, " (deleted)") != NULL)
 		return -ENOENT;
 
@@ -521,9 +480,8 @@ _Static_assert(LOTA_IPC_TOKEN_MAX_SIZE <= LOTA_IPC_MAX_PAYLOAD,
 	       "maximum GET_TOKEN payload must fit the IPC parser buffer");
 
 /*
- * Two agent units trade one state entry per configured publisher,
- * and the public IPC header sizes that frame without seeing the configuration
- * parser.
+ * LOTA_IPC_MAX_PROFILES sizes the SYNC_ATTEST frame in the public IPC header,
+ * which does not see the configuration parser.
  */
 _Static_assert(LOTA_IPC_MAX_PROFILES == LOTA_CONFIG_MAX_PROFILES,
 	       "the IPC profile cap must match the configurable profile count");
@@ -533,13 +491,11 @@ _Static_assert(LOTA_IPC_ATTEST_SYNC_RESPONSE_MAX_SIZE <= LOTA_IPC_MAX_PAYLOAD,
 	       "maximum SYNC_ATTEST response must fit the IPC parser buffer");
 
 /*
- * Whether a process is still answering on @path.
+ * Whether a process still answers on @path. A socket file survives an unclean
+ * stop, so only connect() can tell.
  *
- * Stale socket file survives an unclean stop, so its presence says nothing;
- * a connect() that is accepted or queued does.
- * ECONNREFUSED is the leftover, ENOENT is a clean slate, and anything else is
- * treated as occupied because failing to take a socket costs a restart while
- * taking somebody else's costs a title the half of the answer they hold.
+ * ECONNREFUSED is the leftover, ENOENT a clean slate, and any other connect()
+ * error counts as occupied.
  */
 static bool socket_has_live_listener(const char *path)
 {
@@ -577,9 +533,8 @@ static int set_nonblocking(int fd)
 }
 
 /*
- * Bind a fresh listener at the primary socket path, at startup and again when
- * the file is replaced. The caller decides whether taking the path over is
- * legitimate.
+ * Bind a listener at the primary path, replacing the file there.
+ * The caller decides whether taking the path over is legitimate.
  */
 static int open_primary_listener(int *out_fd)
 {
@@ -643,7 +598,7 @@ err_close:
 
 /*
  * Record the (device, inode) at the socket path. The fd outlives an unlink,
- * so only a changed pair shows that clients now connect somewhere else.
+ * so a changed pair shows that clients connect somewhere else.
  */
 static void record_listen_identity(struct ipc_context *ctx)
 {
@@ -760,11 +715,7 @@ static void client_destroy(struct ipc_context *ctx, struct ipc_client *client)
 
 	client_map_remove(ctx, client->fd);
 
-	/*
-	 * session ends when its connection does -- which is the right lifetime
-	 * whether the title exited cleanly or was killed, and is why session-gated
-	 * reporting needs nothing from the title to stop
-	 */
+	/* a session lasts as long as its connection */
 	if (client->profile) {
 		if (client->profile->sessions > 0)
 			client->profile->sessions--;
@@ -828,11 +779,7 @@ static int ipc_client_is_privileged(struct ipc_context *ctx,
 						    &current_ticks) >= 0 &&
 			  current_ticks == client->peer_start_time_ticks;
 
-	/*
-	 * Settle the cheap checks before measuring the peer's executable:
-	 * that reads /proc and hashes a file, and a caller the uid check
-	 * already refused must not be able to make the agent do it.
-	 */
+	/* cheap checks first: a refused caller must not cost a file hash */
 	if (!ipc_privilege_granted(client->peer_uid == geteuid(),
 				   pid_identity_ok, 0, true))
 		return 0;
@@ -845,30 +792,11 @@ static int ipc_client_is_privileged(struct ipc_context *ctx,
 }
 
 /*
- * SYNC_ATTEST comes from the agent's other unit, not from a title.
+ * SYNC_ATTEST writes the verdicts titles read, and group lota reaches this
+ * socket. The peer needs the agent's uid, from SO_PEERCRED, and the start time
+ * it connected with.
  *
- * The boundary this holds is the socket's own:
- * /run/lota/lota.sock is opened to group `lota` so titles can reach it,
- * and no member of that group may write a publisher's verdict into the answer
- * other titles read.
- *
- * Peer uid, authenticated by the kernel through SO_PEERCRED, is what says that,
- * and the live PID identity is re-checked so a recycled PID cannot inherit
- * the answer.
- *
- * It does not hold against uid 0, and nothing this process can ask would.
- * Comparing the peer's executable to our own is the natural check and is not
- * available: the peer runs with dumpable cleared by its own hardening,
- * so /proc/<pid>/exe is refused to anything without CAP_SYS_PTRACE,
- * and the enforcement daemon deliberately does not carry that capability.
- *
- * Root already owns enforcement here: it can stop this unit, load its own BPF,
- * or run its own loop, so check that pretends otherwise would be decoration.
- *
- * ipc_client_is_privileged() is not the gate either:
- * it asks whether the peer's executable is on the operator's verity allowlist,
- * which is empty on default install, so it would refuse the attestation loop
- * on every stock host.
+ * Under the unit that uid is 0, so any root process passes.
  */
 static int ipc_client_is_agent_peer(const struct ipc_client *client)
 {
@@ -890,13 +818,9 @@ static int ipc_client_is_agent_peer(const struct ipc_client *client)
 }
 
 /*
- * Ask the event loop to write what this client now has queued.
- *
- * Nothing leaves the daemon without EPOLLOUT, and a client's interest is EPOLLIN
- * alone between frames. A response is armed by the pass that built it;
- * a notification is built outside that pass -- by another connection opening
- * a session. The attestation loop, which sleeps on exactly that frame,
- * read the silence as an interval with nothing to do.
+ * Ask the event loop to write what this client has queued. Between frames a
+ * client's interest is EPOLLIN alone, and a notification can be built while
+ * another connection is being served.
  */
 static void client_arm_send(struct ipc_context *ctx, struct ipc_client *client)
 {
@@ -989,13 +913,9 @@ static void handle_ping(struct ipc_context *ctx, struct ipc_client *client)
 }
 
 /*
- * The attestation answer this connection gets.
- *
- * Host-wide unless the connection named a publisher, in which case only that
- * publisher's verdict decides: title must not read NOT ATTESTED because verifier
- * it never talks to is down.
- * Everything else in the status -- TPM health, lockout, mode -- is property
- * of the machine and stays as it is.
+ * The attestation answer this connection gets: the host's, unless it named a
+ * publisher. Then that publisher decides ATTESTED and valid_until, and one
+ * without a verifier also sets TOKEN_ONLY. The other bits stay the host's.
  */
 static void client_attestation_view(const struct ipc_context *ctx,
 				    const struct ipc_client *client,
@@ -1007,13 +927,7 @@ static void client_attestation_view(const struct ipc_context *ctx,
 	if (!client->profile)
 		return;
 
-	/*
-	 * A publisher who runs no verifier is never reported to,
-	 * so this host holds no verdict of theirs and ATTESTED would be claim
-	 * about nothing.
-	 * Say which case it is instead: the title's own backend verifies
-	 * the token it fetches.
-	 */
+	/* never reported to, so this host holds no verdict of theirs */
 	if (client->profile->token_only) {
 		*flags |= LOTA_STATUS_TOKEN_ONLY;
 		*flags &= ~(uint32_t)LOTA_STATUS_ATTESTED;
@@ -1030,10 +944,7 @@ static void client_attestation_view(const struct ipc_context *ctx,
 	}
 }
 
-/*
- * Cached coverage verdict: the walk takes seconds for a large game.
- * Dropped on an epoch change or by ipc_runtime_coverage_forget().
- */
+/* Cached coverage verdict, dropped on an epoch change or on forget */
 static struct {
 	uint64_t epoch; /* protected-set mutation id it was taken under */
 	bool full;
@@ -1139,10 +1050,8 @@ static void runtime_coverage_take(bool *full_out, bool *content_hashed_out)
 	int count;
 
 	/*
-	 * Reap here, not in each caller. An exited PID is unmeasurable,
-	 * so a stale entry would report partial coverage.
-	 * Reaping in one place keeps the status word and the token in agreement.
-	 * Before the cache check: a dropped PID bumps the epoch.
+	 * An exited PID is unmeasurable, so a stale entry would report partial
+	 * coverage. Before the cache check: a dropped PID bumps the epoch.
 	 */
 	runtime_protect_catch_up();
 
@@ -1277,16 +1186,6 @@ static void handle_get_boot_evidence(struct ipc_context *ctx,
 	client->send_offset = 0;
 }
 
-/*
- * Handle GET_TOKEN command
- *
- * Generates a signed attestation token using TPM Quote.
- * The TPM signs over the token quote nonce:
- *   SHA256(valid_until_LE || flags_LE || pcr_mask_LE || client_nonce ||
- *          policy_digest || runtime_protect_digest ||
- *          runtime_protect_epoch_LE || stopped_ms_LE)
- * binding the signature to both the token metadata and the client's challenge.
- */
 static void handle_get_token(struct ipc_context *ctx, struct ipc_client *client,
 			     const uint8_t *payload, uint32_t payload_len)
 {
@@ -1333,13 +1232,8 @@ static void handle_get_token(struct ipc_context *ctx, struct ipc_client *client,
 	client_attestation_view(ctx, client, &view_flags, &view_valid_until);
 
 	/*
-	 * Refuse to issue tokens while the TPM is in DA lockout: a Quote
-	 * attempt would either hang the IPC thread on retry or surface a
-	 * second-class error to the client. Fail closed with a dedicated
-	 * status code so SDK consumers can back off coherently.
-	 *
-	 * Checked before the verdict: a lockout is why the verdict lapsed,
-	 * and NOT_ATTESTED would invite a retry that cannot succeed.
+	 * Before the verdict: a lockout is why the verdict lapsed,
+	 * and NOT_ATTESTED would invite a retry.
 	 */
 	if ((ctx->tpm && tpm_is_locked_out(ctx->tpm)) ||
 	    (ctx->status_flags & LOTA_STATUS_TPM_LOCKOUT)) {
@@ -1355,12 +1249,7 @@ static void handle_get_token(struct ipc_context *ctx, struct ipc_client *client,
 		goto out;
 	}
 
-	/*
-	 * Session budget first:
-	 * it is the one a well-behaved title can hit by asking too fast,
-	 * and charging the uid ceiling for request the session was never going
-	 * to be allowed would let one title spend another title's allowance
-	 */
+	/* session budget first: its refusal does not charge the uid ceiling */
 	if (check_session_token_rate_limit(client) < 0) {
 		refusal_level = LOG_WARNING;
 		snprintf(refusal, sizeof(refusal),
@@ -1371,7 +1260,6 @@ static void handle_get_token(struct ipc_context *ctx, struct ipc_client *client,
 		goto out;
 	}
 
-	/* uid ceiling: the bound on how much TPM one user can consume */
 	if (check_get_token_rate_limit(client->peer_uid) < 0) {
 		refusal_level = LOG_WARNING;
 		snprintf(refusal, sizeof(refusal),
@@ -1383,10 +1271,8 @@ static void handle_get_token(struct ipc_context *ctx, struct ipc_client *client,
 	}
 
 	/*
-	 * Nothing below picks a publisher: the quote would be signed by
-	 * whichever AIK the TPM is bound to. One publisher is no guess,
-	 * a title there names nobody. Before the TPM check, because the
-	 * omission is the caller's and no TPM would change the answer.
+	 * The quote would be signed by whichever AIK the TPM is bound to.
+	 * With one publisher that is no guess, and a title there names nobody.
 	 */
 	if (!client->profile && ctx->profile_count > 1) {
 		refusal_level = LOG_ERR;
@@ -1400,14 +1286,8 @@ static void handle_get_token(struct ipc_context *ctx, struct ipc_client *client,
 	}
 
 	/*
-	 * Signing is the whole of a token, so a server with no TPM has nothing
-	 * to give: an unsigned token is not evidence and is never issued.
-	 * Said here, before the protected set is reaped and every protected
-	 * process measured, because none of that work can change the answer.
-	 * It is reported as its own code and not as a TPM failure: nothing
-	 * failed, and no retry will help.
-	 *
-	 * After the rate limiters, so a caller that asks in a loop is throttled.
+	 * After the rate limiters, and before the protected set is reaped and
+	 * measured, which cannot change this answer.
 	 */
 	if (!ipc_can_issue_tokens(ctx)) {
 		refusal_level = LOG_ERR;
@@ -1427,16 +1307,12 @@ static void handle_get_token(struct ipc_context *ctx, struct ipc_client *client,
 
 	token = (void *)(client->send_buf + LOTA_IPC_RESPONSE_SIZE);
 
-	/* token states this publisher's verdict and window,
-	 * not the host's aggregate,
-	 * so a relying party reads its own answer */
+	/* this publisher's window, not the host's aggregate */
 	token->valid_until = view_valid_until;
 
 	/*
-	 * A publisher who runs no verifier has no round to take a window from,
-	 * and a zero one reads as expired to every relying party.
-	 * The agent bounds its own freshness instead; the status word still
-	 * answers zero, because that is a verdict window and there is no verdict.
+	 * No verifier, so no round to take a window from: the agent bounds the
+	 * token itself. The status keeps a zero valid_until: there is no verdict.
 	 */
 	if (view_flags & LOTA_STATUS_TOKEN_ONLY)
 		token->valid_until =
@@ -1445,12 +1321,8 @@ static void handle_get_token(struct ipc_context *ctx, struct ipc_client *client,
 	token->pcr_mask = ctx->quote_pcr_mask;
 
 	/*
-	 * Quote with the publisher's own AIK.
-	 * Attestation loop leaves the TPM bound to the first profile between
-	 * rounds, so connection that named different one rebinds here and puts
-	 * it back afterwards -- token has to verify against the certificate
-	 * that publisher's verifier holds, and the loop's next round expects
-	 * the binding it left
+	 * Quote with this publisher's own AIK. The first profile's binding is
+	 * restored at out.
 	 */
 	if (client->profile && ctx->tpm) {
 		ret = tpm_bind_profile(ctx->tpm, &client->profile->paths);
@@ -1486,12 +1358,7 @@ static void handle_get_token(struct ipc_context *ctx, struct ipc_client *client,
 	memcpy(token->policy_digest, g_agent.policy_digest,
 	       sizeof(token->policy_digest));
 
-	/*
-	 * Protected process that has exited leaves PID nothing can measure,
-	 * and the measurement below fails closed -- for every title, not just
-	 * the one that protected itself.
-	 * Catch the set up with the kernel's before reading it
-	 */
+	/* an exited PID left in the set would report partial coverage */
 	runtime_protect_catch_up();
 
 	ret = build_canonical_runtime_pid_list(&runtime_pids,
@@ -1532,9 +1399,8 @@ static void handle_get_token(struct ipc_context *ctx, struct ipc_client *client,
 	lota_rt_measure_round_begin();
 
 	/*
-	 * The agent measures each protected process, never the process itself,
-	 * and folds its image digest into the protect digest. A process that
-	 * cannot be measured is left out as a zero digest and clears
+	 * Each protected process's image digest joins the protect digest.
+	 * One that cannot be measured stays a zero digest and clears
 	 * LOTA_STATUS_IMAGE_FULLY_MEASURED; only the caller's own refuses.
 	 */
 	if (runtime_pid_count > 0) {
@@ -1629,14 +1495,6 @@ static void handle_get_token(struct ipc_context *ctx, struct ipc_client *client,
 				lota_rt_failure_reason(&mfail, ret, reason,
 						       sizeof(reason));
 
-				/*
-				 * Only the caller's own executable decides
-				 * the caller's token.
-				 * Any local program may protect itself,
-				 * so folding somebody else's unmeasurable
-				 * binary into this refusal stops every title
-				 * on the machine until that program exits.
-				 */
 				if (token_gate_failure_is_fatal(
 					    (pid_t)runtime_pids[i],
 					    client->peer_pid)) {
@@ -1667,13 +1525,6 @@ static void handle_get_token(struct ipc_context *ctx, struct ipc_client *client,
 					goto out;
 				}
 
-				/*
-				 * Absent from the fold:
-				 * the digest stays a zero for that process,
-				 * the coverage flag carries the gap,
-				 * and a publisher who requires full coverage
-				 * refuses the token on that flag.
-				 */
 				memset(image_digests[i], 0,
 				       sizeof(image_digests[i]));
 				measure_report_line(statement,
@@ -1764,10 +1615,6 @@ static void handle_get_token(struct ipc_context *ctx, struct ipc_client *client,
 		goto out;
 	}
 
-	/*
-	 * Same rule as the status word: a round with no protected process
-	 * measured nothing, so it is not full coverage.
-	 */
 	token->flags = lota_status_fold_content_hash(
 		lota_status_fold_coverage(
 			token->flags,
@@ -1816,14 +1663,8 @@ static void handle_get_token(struct ipc_context *ctx, struct ipc_client *client,
 		lota_err("tpm_quote failed: %s", tpm_strerror(ret));
 		fail = true;
 		/*
-		 * tpm_quote() latches lockout_active on the tpm_context the
-		 * first time TPM2_RC_LOCKOUT is observed. The continuous
-		 * attestation loop folds that bit into ctx->status_flags on
-		 * its next round, but GET_TOKEN may be the path that triggered
-		 * the transition. Surface LOTA_IPC_ERR_TPM_LOCKOUT directly
-		 * and seed the IPC status so the next request short-circuits
-		 * at the early-reject branch above instead of repeating the
-		 * doomed quote.
+		 * GET_TOKEN may see the lockout first: seed the status so the
+		 * next request stops at the early refusal.
 		 */
 		if (tpm_is_locked_out(ctx->tpm)) {
 			fail_code = LOTA_IPC_ERR_TPM_LOCKOUT;
@@ -1837,7 +1678,6 @@ static void handle_get_token(struct ipc_context *ctx, struct ipc_client *client,
 		goto out;
 	}
 
-	/* check buffer space */
 	total_size = LOTA_IPC_TOKEN_HEADER_SIZE + pid_list_size +
 		     image_list_size + quote.attest_size + quote.signature_size;
 	if (total_size > LOTA_IPC_MAX_PAYLOAD) {
@@ -1886,7 +1726,7 @@ static void handle_get_token(struct ipc_context *ctx, struct ipc_client *client,
 	client->send_offset = 0;
 
 out:
-	/* leave the TPM where the attestation loop expects to find it */
+	/* back to the first profile */
 	if (rebound) {
 		int rb = tpm_bind_profile(ctx->tpm, &ctx->profiles[0].paths);
 
@@ -1950,16 +1790,11 @@ out:
 }
 
 /*
- * Handle SET_PROFILE command
+ * Bind this connection to one publisher, named by the SHA-256 of its CA trust
+ * anchor SubjectPublicKeyInfo.
  *
- * Binds this connection to one publisher, named by the SHA-256 of that publisher's
- * CA trust anchor SubjectPublicKeyInfo.
- * From here on the connection's token is signed by that publisher's AIK
- * and its status is that publisher's verdict.
- *
- * An id the host has no profile for is refused rather than ignored:
- * title that asked for publisher B and silently got publisher A's answers would
- * be told its machine is trusted on evidence B never sees.
+ * An id without a profile is refused: a title that asked for one publisher must
+ * not read another's answers.
  */
 static void handle_set_profile(struct ipc_context *ctx,
 			       struct ipc_client *client,
@@ -1993,10 +1828,9 @@ static void handle_set_profile(struct ipc_context *ctx,
 			continue;
 
 		/*
-		 * Answering to publisher hands them stable handle on this machine,
-		 * so somebody here has to have agreed to it.
-		 * The title is told which case it is, because "nobody agreed yet"
-		 * is a screen to show, not a failure to report
+		 * Answering to a publisher hands them a stable handle on this
+		 * machine, so somebody here has to have agreed. The own code
+		 * lets the title show a screen.
 		 */
 		if (profile_consent_time(&ctx->profiles[i].paths, &agreed) ==
 		    -ENOENT) {
@@ -2009,8 +1843,8 @@ static void handle_set_profile(struct ipc_context *ctx,
 		}
 
 		/*
-		 * A publisher with no key yet needs a free handle; refuse here
-		 * rather than let the session fail at the first GET_TOKEN.
+		 * A publisher with no key yet needs a free handle: refused here
+		 * so the session does not fail at its first GET_TOKEN.
 		 */
 		if (ctx->tpm &&
 		    profile_aik_handle_load(&ctx->profiles[i].paths,
@@ -2045,13 +1879,10 @@ static void handle_set_profile(struct ipc_context *ctx,
 			ctx->profiles[i].sessions == 1 ? "" : "s");
 
 		/*
-		 * Title asking for a publisher this host has never enrolled with
-		 * is the trigger the runtime enrollment exists for.
-		 * Ask the attestation loop to run it -- the ceremony is TLS round
-		 * trip and TPM credential activation, which is not something
-		 * to do inside an IPC reply -- and answer now.
-		 * The connection reads not-attested until it completes,
-		 * which is the truth.
+		 * Never enrolled with this publisher: the attestation loop runs
+		 * the enrollment, a TLS round trip and TPM credential
+		 * activation. The connection reads not attested until it
+		 * completes.
 		 */
 		{
 			struct enroll_state st;
@@ -2114,8 +1945,7 @@ static void profile_id_to_hex(const uint8_t id[32], char *out, size_t out_len)
 		snprintf(out + i * 2, 3, "%02x", id[i]);
 }
 
-/* Reverse of the above;
- * malformed stored id yields zeros, which match no publisher a peer can name */
+/* Reverse of the above; a malformed stored id yields zeros */
 static void profile_id_from_hex(const char *hex, uint8_t out[32])
 {
 	memset(out, 0, 32);
@@ -2135,26 +1965,9 @@ static void profile_id_from_hex(const char *hex, uint8_t out[32])
 }
 
 /*
- * Returns true when the agent binary on disk is no longer the one this process
- * is running, ie a package update has landed and its effect is waiting on cold boot.
- *
- * The distinction matters to whoever is looking at a screen.
- * Attestation keeps succeeding here, and correctly so:
- * PCR 14 commits to the running build and the report carries that build's hash,
- * so the machine is exactly what it claims to be.
- *
- * What has changed is that the *next* boot will present a different one,
- * and PCR 14 cannot be re-extended without a hardware reset.
- *
- * Saying so while everything still works is the difference between player
- * rebooting when it suits them and a player discovering it when a game refuses
- * to start.
- *
- * /proc/self/exe still resolves to the replaced inode, which is the whole reason
- * the running hash stays valid, so the readlink target carries " (deleted)" suffix
- * once the package manager has swapped the file.
- * That suffix is the cheapest reliable signal available: hashing the path again
- * would re-read the same unlinked inode.
+ * True when /proc/self/exe ends in " (deleted)": the file of the running binary
+ * was replaced or removed. PCR 14 commits to the running build and resets on
+ * every boot, so an update takes effect after a reboot.
  */
 static bool agent_binary_replaced_on_disk(void)
 {
@@ -2172,8 +1985,7 @@ static bool agent_binary_replaced_on_disk(void)
 		      suffix_len) == 0;
 }
 
-/* Fold every publisher's verdict into the one answer title
- * that named no publisher reads */
+/* Fold every publisher's verdict into the answer of a title naming nobody */
 static void recompute_host_attestation(struct ipc_context *ctx)
 {
 	struct attest_aggregate agg;
@@ -2187,21 +1999,15 @@ static void recompute_host_attestation(struct ipc_context *ctx)
 		flags &= ~(uint32_t)LOTA_STATUS_ATTESTED;
 
 	/*
-	 * host whose every publisher runs light never reports at all,
-	 * so the host-wide answer says which case it is:
-	 * title that names nobody would otherwise read a bare NOT ATTESTED
-	 * and conclude the machine failed something
+	 * Nothing reports: TOKEN_ONLY tells a title naming nobody why it is not
+	 * attested.
 	 */
 	if (ctx->profile_count > 0 && agg.reporting == 0)
 		flags |= LOTA_STATUS_TOKEN_ONLY;
 	else
 		flags &= ~(uint32_t)LOTA_STATUS_TOKEN_ONLY;
 
-	/*
-	 * Re-checked on every fold rather than once at startup:
-	 * the update lands while this process runs,
-	 * and the point is to say so from the moment it does.
-	 */
+	/* the update lands while this process runs */
 	if (agent_binary_replaced_on_disk())
 		flags |= LOTA_STATUS_UPDATE_PENDING;
 	else
@@ -2213,7 +2019,6 @@ static void recompute_host_attestation(struct ipc_context *ctx)
 /*
  * Set LOTA_STATUS_TPM_LOCKOUT while the loop or this process sees a lockout,
  * clear it when neither does, so clearing the chip needs no restart.
- * Transitions are logged here: this is the journal an operator reads.
  */
 static void adopt_loop_observations(struct ipc_context *ctx,
 				    const struct lota_ipc_attest_sync *hdr)
@@ -2224,8 +2029,8 @@ static void adopt_loop_observations(struct ipc_context *ctx,
 	bool locked;
 
 	/*
-	 * Our latch clears only on a successful call, which the gate never
-	 * makes; a round the loop completed proves the chip works again.
+	 * The early refusal makes no TPM call that could clear our latch;
+	 * a round the loop completed shows the chip works.
 	 */
 	if (mine && !reported && hdr->attest_count > ctx->attest_count) {
 		tpm_reset_lockout_state(ctx->tpm);
@@ -2250,11 +2055,10 @@ static void adopt_loop_observations(struct ipc_context *ctx,
 /*
  * Adopt the attestation loop's counters and announce any round they show.
  *
- * The loop sends running totals, not events, so a round is seen as a counter
- * going up. That raises the ATTEST event for subscribers and the AttestationResult
- * D-Bus signal. Both counters can rise in one sync when the loop reports several
- * publishers, so pass and fail are signalled separately.
- * A counter that drops, as after a loop restart, is adopted silently.
+ * The loop sends running totals, so a round shows as a counter going up.
+ * Both can rise in one sync when it reports several publishers, so pass and fail
+ * are signalled separately. A counter that drops, as after a loop restart,
+ * is adopted silently.
  */
 static void adopt_attest_counters(struct ipc_context *ctx,
 				  const struct lota_ipc_attest_sync *hdr)
@@ -2279,17 +2083,12 @@ static void adopt_attest_counters(struct ipc_context *ctx,
 }
 
 /*
- * Handle SYNC_ATTEST -- the state exchange with the agent's attestation loop.
+ * The state exchange with the attestation loop: it hands over the verdict it
+ * holds for each publisher and reads back the sessions and enrollment requests.
  *
- * One round trip, both directions:
- * the loop hands over the verdict it holds for each publisher, and reads back
- * the sessions and the enrollment request that only the socket owner sees.
- * Neither process can answer a title on its own, and only one of them can own
- * the socket.
- *
- * enroll_pending is cleared as it is handed over:
- * it is a request, not a state, and the loop carries its own backoff for ceremony
- * that fails. A later SET_PROFILE raises it again.
+ * enroll_pending is cleared as it is handed over: the loop keeps its own
+ * backoff for an enrollment that fails, and a later SET_PROFILE raises it
+ * again.
  */
 static void handle_sync_attest(struct ipc_context *ctx,
 			       struct ipc_client *client,
@@ -2342,7 +2141,6 @@ static void handle_sync_attest(struct ipc_context *ctx,
 		}
 	}
 
-	/* Loop is the process that attests, so its tallies are the host's */
 	resp->magic = LOTA_IPC_MAGIC;
 	resp->version = LOTA_IPC_VERSION;
 	resp->result = LOTA_IPC_OK;
@@ -2374,11 +2172,7 @@ static void handle_sync_attest(struct ipc_context *ctx,
 	client->send_len = LOTA_IPC_RESPONSE_SIZE + resp->payload_len;
 	client->send_offset = 0;
 
-	/*
-	 * Loop is subscribed by the act of syncing, to publisher events only:
-	 * session opening is what it must not sleep through,
-	 * and it has no use for the status changes it is itself the source of
-	 */
+	/* publisher events only: a session opening must wake the loop */
 	client->attest_peer = true;
 	client->subscribed = true;
 	client->event_mask = LOTA_IPC_EVENT_PROFILE;
@@ -2392,14 +2186,8 @@ static void handle_sync_attest(struct ipc_context *ctx,
 }
 
 /*
- * Handle SUBSCRIBE command
- *
- * Registers or cancels per-connection push notifications.
- * event_mask = 0 cancels any existing subscription.
- *
- * Any connected client may subscribe. Bits the caller may not have are dropped,
- * so a title asking for everything gets what is meant for it;
- * the request fails only if nothing is left.
+ * event_mask = 0 cancels the subscription. Bits the caller may not have are
+ * dropped; the request fails only if nothing is left.
  */
 static void handle_subscribe(struct ipc_context *ctx, struct ipc_client *client,
 			     const uint8_t *payload, uint32_t payload_len)
@@ -2467,9 +2255,8 @@ static int u32_cmp(const void *a, const void *b)
 }
 
 /*
- * Production liveness predicate: pid whose /proc/<pid>/stat cannot be read is
- * process that has gone. That file is world-readable and is not gated by
- * the dumpable flag, so this works against hardened peer.
+ * A pid whose /proc/<pid>/stat cannot be read counts as gone. That file is
+ * world-readable, so this works on a process with dumpable cleared.
  */
 static bool protect_pid_is_alive(uint32_t pid, void *ctx)
 {
@@ -2480,19 +2267,8 @@ static bool protect_pid_is_alive(uint32_t pid, void *ctx)
 }
 
 /*
- * Drop every protected PID whose process has exited.
- *
- * Kernel already did this to its own map through lota_task_free;
- * this is the agent's copy catching up.
- *
- * Run before every read of the set rather than on timer, because the read is
- * the only place stale entry does harm -- and it does it to every title at once,
- * since PID that no longer resolves cannot be measured and the measurement fails
- * closed. The coverage answer runs it itself, which is what keeps a read path
- * that folds coverage from forgetting.
- *
- * The mutation epoch moves whenever the set does, so relying party comparing epochs
- * never sees the same one with different set.
+ * Drop every protected PID whose process has exited; lota_task_free drops it
+ * from the kernel's map. A changed set moves the epoch.
  */
 static void runtime_protect_reap_exited(void)
 {
@@ -2525,12 +2301,7 @@ static void runtime_protect_reap_exited(void)
 		return;
 	}
 
-	/*
-	 * map entry is already gone -- the kernel dropped it on exit --
-	 * so this is best-effort tidy of a PID the map may have recycled
-	 * to nobody.
-	 * Failure here changes nothing the token says.
-	 */
+	/* lota_task_free drops the map entry: best effort */
 	for (int i = 0; i < count; i++) {
 		uint32_t pid = g_agent.policy_protect_pids[i];
 		bool still_kept = false;
@@ -2617,13 +2388,8 @@ static int list_running_pids(uint32_t **out, int *out_count)
 }
 
 /*
- * Add every process a protected one created to the set.
- *
- * The kernel protects such a process from its first instruction, but only
- * the root of the tree was ever named here, so the token and the runtime
- * measurement saw the launcher and not the title it started. Run after
- * every reap, for the same reason: the read is where a missing member
- * would be left out.
+ * Add the processes a protected one created: the kernel protects them from
+ * their first instruction, and only the root of the tree was named here.
  */
 static void runtime_protect_adopt_members(void)
 {
@@ -2820,8 +2586,7 @@ static int pid_set_remove(const uint32_t *pids, int count, uint32_t pid,
 
 /*
  * 0 when @pid has no tracer. A process under one is refused protection:
- * the LSM stops new attaches, not the one already there, and that tracer
- * would read and write the process as if it were unprotected.
+ * the LSM stops new attaches, not the one already there.
  */
 static int protect_target_untraced(uint32_t pid)
 {
@@ -2869,18 +2634,9 @@ static void handle_protect_pid_update(struct ipc_context *ctx,
 	}
 
 	/*
-	 * Privilege model:
-	 * - Registering a third-party PID still requires
-	 *   ipc_client_is_privileged (same UID + trusted executable).
-	 * - A process registering its own PID is allowed without the
-	 *   trusted-executable gate because opting yourself in to
-	 *   stricter LSM enforcement is not a privilege escalation.
-	 *   PID identity is still verified against the live
-	 *   start_time_ticks so a PID-recycle attacker cannot use the
-	 *   shortcut.
-	 * - UNPROTECT_PID is privileged-only regardless of target: a
-	 *   process unprotecting itself would loosen the gate against
-	 *   its own task and break the threat model.
+	 * Protecting one's own PID only tightens enforcement: it needs the live
+	 * PID identity and no privilege. Another target and every UNPROTECT_PID
+	 * need ipc_client_is_privileged().
 	 */
 	self_target = add && (req.pid == (uint32_t)client->peer_pid);
 
@@ -2915,10 +2671,8 @@ static void handle_protect_pid_update(struct ipc_context *ctx,
 	}
 
 	/*
-	 * Runtime PID policy is a change to what the enforcement object holds,
-	 * and it is judged against the snapshot the startup policy left behind.
-	 * An agent that applied none has nothing to change and nothing to judge
-	 * against, which is its ordinary state and not a broken daemon.
+	 * Runtime PID policy changes what the startup policy left behind.
+	 * An agent that applied none has nothing to change.
 	 */
 	if (!g_agent.policy_snapshot_set) {
 		lota_warn(
@@ -2936,8 +2690,7 @@ static void handle_protect_pid_update(struct ipc_context *ctx,
 		return;
 	}
 
-	/* same catch-up, so idempotent no-op is judged against the processes
-	 * that are actually running */
+	/* judge the no-op against the running processes */
 	runtime_protect_catch_up();
 
 	had = pid_set_contains(g_agent.policy_protect_pids,
@@ -2982,7 +2735,6 @@ static void handle_protect_pid_update(struct ipc_context *ctx,
 		}
 	}
 
-	/* attempt BPF update */
 	if (add) {
 		ret = bpf_loader_protect_pid(&g_agent.bpf_ctx, pid);
 		if (ret < 0) {
@@ -3019,7 +2771,6 @@ static void handle_protect_pid_update(struct ipc_context *ctx,
 		mutated = true;
 	}
 
-	/* update runtime PID set (does not affect startup policy digest) */
 	if (add) {
 		ret = pid_set_add(g_agent.policy_protect_pids,
 				  g_agent.policy_protect_pid_count, pid,
@@ -3034,7 +2785,6 @@ static void handle_protect_pid_update(struct ipc_context *ctx,
 		goto rollback_bpf;
 	}
 
-	/* commit runtime PID set while preserving startup-only policy_digest */
 	{
 		agent_globals_lock(&g_agent);
 		if (g_agent.policy_protect_pids) {
@@ -3052,7 +2802,6 @@ static void handle_protect_pid_update(struct ipc_context *ctx,
 		new_count = 0;
 	}
 
-	/* success response */
 	resp->magic = LOTA_IPC_MAGIC;
 	resp->version = LOTA_IPC_VERSION;
 	resp->result = LOTA_IPC_OK;
@@ -3082,13 +2831,7 @@ rollback_bpf:
 	build_error_response(client, LOTA_IPC_ERR_INTERNAL);
 }
 
-/*
- * The real uid of @pid, from /proc/<pid>/status.
- *
- * Caller holds a pidfd on the same process, which pins the PID number against
- * reuse, so the line read here belongs to the process that will be signalled
- * and not to a successor wearing its number.
- */
+/* The real uid of @pid, from /proc/<pid>/status */
 static int read_pid_real_uid(pid_t pid, uint32_t *out_uid)
 {
 	char path[64];
@@ -3121,11 +2864,8 @@ static int read_pid_real_uid(pid_t pid, uint32_t *out_uid)
 }
 
 /*
- * One page of the objects the last token round found mapped in a process.
- *
- * The owner of the process or root may read it, the same callers that
- * could read its maps themselves.
- * A process the round did not measure is answered NOT_PROTECTED.
+ * One page of the objects the last token round found mapped in a process,
+ * for its owner or root. A PID absent from that round is answered NOT_PROTECTED.
  */
 static void handle_get_registry(struct ipc_client *client,
 				const uint8_t *payload, uint32_t payload_len)
@@ -3171,14 +2911,11 @@ static void handle_get_registry(struct ipc_client *client,
 }
 
 /*
- * End a protected process on behalf of its owner.
+ * End a protected process for its owner or root; terminate_policy_decide()
+ * holds the rule.
  *
- * The agent delivers the signal and journals it, for a caller kill(2)
- * would already have allowed -- the owner of the process,
- * or root -- and refuses everything past that.
- *
- * There is no operator privilege gate here on purpose: the caller could send
- * the same signal itself, and the verb adds only the record.
+ * No privilege gate: the LSM lets the caller send these signals itself.
+ * This adds the journal line and the status bit.
  */
 static void handle_terminate_protected(struct ipc_context *ctx,
 				       struct ipc_client *client,
@@ -3205,12 +2942,6 @@ static void handle_terminate_protected(struct ipc_context *ctx,
 		return;
 	}
 
-	/*
-	 * Hold the process open before anything is read or decided.
-	 * pidfd pins the PID number for as long as it is open,
-	 * so the /proc entry consulted below and the kill() issued after it
-	 * address one process, even if that process exits in between.
-	 */
 #ifndef SYS_pidfd_open
 #define SYS_pidfd_open 434
 #endif
@@ -3232,7 +2963,6 @@ static void handle_terminate_protected(struct ipc_context *ctx,
 		return;
 	}
 
-	/* judge membership against the processes that are actually running */
 	runtime_protect_catch_up();
 
 	agent_globals_lock(&g_agent);
@@ -3271,28 +3001,15 @@ static void handle_terminate_protected(struct ipc_context *ctx,
 	}
 	close(pidfd);
 
-	/*
-	 * Recorded at notice level rather than info:
-	 * this is the one path on the machine that ends a measured process,
-	 * and the operator reading back a session wants it beside
-	 * the attestation rounds.
-	 */
 	lota_notice("Protected pid=%u (uid=%u) terminated with signal %u at "
 		    "the request of uid=%d pid=%d",
 		    req.pid, target_uid, req.signal, client->peer_uid,
 		    client->peer_pid);
 
 	/*
-	 * What the publisher gets in exchange for what the player got back:
-	 * the host says for the rest of the boot that a protected process was
-	 * ended here, so session closed locally is not the same silence as process
-	 * that vanished.
-	 * Published through the status word, which the token is built from,
-	 * so both readings agree -- the anti-cheat heartbeat binds the flags it
-	 * read from the status into the nonce the token is quoted over.
-	 *
-	 * Set here rather than through ipc_update_status, which stamps
-	 * the last attestation time: nothing was attested by ending a process.
+	 * The status word says until the agent ends that a protected process
+	 * was ended here: a session closed locally differs from one that
+	 * vanished.
 	 */
 	ctx->protected_terminated = true;
 	if (!(ctx->status_flags & LOTA_STATUS_PROTECTED_TERMINATED)) {
@@ -3440,10 +3157,7 @@ static int handle_client_read(struct ipc_context *ctx,
 	size_t need;
 	struct lota_ipc_request req;
 
-	/*
-	 * Check if the buffer already contains a complete request from a
-	 * previous read (pipelined leftover)
-	 */
+	/* the buffer may already hold a complete pipelined request */
 	if (client->recv_len < LOTA_IPC_REQUEST_SIZE)
 		goto do_recv;
 
@@ -3495,10 +3209,8 @@ have_request:
 		return 0;
 	process_request(ctx, client);
 
-	/* arm EPOLLOUT so the event loop will drive the send */
 	client_arm_send(ctx, client);
 
-	/* preserve any leftover bytes from the next pipelined request */
 	{
 		size_t consumed = LOTA_IPC_REQUEST_SIZE + req.payload_len;
 		if (client->recv_len > consumed) {
@@ -3540,15 +3252,10 @@ static int handle_client_write(struct ipc_context *ctx,
 	}
 
 	if (client->send_offset >= client->send_len) {
-		/* response complete, reset */
 		ipc_secure_bzero(client->send_buf, client->send_len);
 		client->send_len = 0;
 		client->send_offset = 0;
 
-		/*
-		 * deliver pending notification that accumulated
-		 * while the previous send was in progress
-		 */
 		if (client->subscribed && client->notify_pending) {
 			uint32_t pending = client->pending_events;
 			client->notify_pending = false;
@@ -3557,22 +3264,14 @@ static int handle_client_write(struct ipc_context *ctx,
 		}
 
 		/*
-		 * A request that arrived while the previous frame was going out.
-		 *
-		 * handle_client_read() defers it, and this is the only place
-		 * that can take it up again: the bytes are already in the receive
-		 * buffer, so no further EPOLLIN is coming to announce them.
-		 * Left there, the peer waits for an answer to a request this
-		 * process has already read -- which is what made the attestation
-		 * loop time out and drop a connection the daemon still
-		 * considered live.
+		 * A request deferred by handle_client_read(): its bytes are
+		 * already in recv_buf, so no EPOLLIN announces them.
 		 */
 		if (client->send_len == 0 &&
 		    client->recv_len >= LOTA_IPC_REQUEST_SIZE &&
 		    handle_client_read(ctx, client) < 0)
 			return -1;
 
-		/* disarm EPOLLOUT if nothing left to send */
 		if (client->send_len == 0) {
 			struct epoll_event ev;
 			ev.events = EPOLLIN;
@@ -3675,13 +3374,8 @@ int ipc_init(struct ipc_context *ctx)
 	}
 
 	/*
-	 * Unlink below is what makes a second server silently replace the first,
-	 * and a title reaching the replacement gets whichever half of the answer
-	 * that process happens to hold.
-	 * So the path is probed first: socket somebody is still answering on is
-	 * not ours to take.
-	 * One that refuses the connection is a leftover, and unlinking that is
-	 * what lets a host recover from an unclean stop.
+	 * A socket somebody still answers on is not ours to take. One that
+	 * refuses the connection is a leftover of an unclean stop.
 	 */
 	if (socket_has_live_listener(LOTA_IPC_SOCKET_PATH)) {
 		lota_err("%s already has a listener; refusing to take it over",
@@ -3725,16 +3419,6 @@ err_listener:
 	return ret;
 }
 
-/*
- * Watch the directory the primary socket lives in.
- *
- * Restarting a socket unit with RemoveOnStop=yes binds a new inode at the path,
- * and titles connect to it while this daemon keeps accepting on the old one.
- * Its LSM refuses PID 1's signals, so unnoticed the host stays enforcing
- * and unreachable until reboot.
- *
- * Failing to watch is not fatal; the daemon just cannot rebind on its own.
- */
 int ipc_watch_socket_path(struct ipc_context *ctx)
 {
 	int fd, ret;
@@ -3766,11 +3450,8 @@ int ipc_socket_watch_fd(const struct ipc_context *ctx)
 }
 
 /*
- * Take the socket path back after something replaced the file.
- *
- * Unlike ipc_init, which refuses a path with a live listener, this takes
- * the path over: the name belongs to this running daemon, and refusing leaves
- * a host only a reboot fixes.
+ * Take the socket path back after something replaced the file,
+ * whatever answers on it: the name belongs to this running daemon.
  */
 static int ipc_rebind_primary(struct ipc_context *ctx)
 {
@@ -3802,7 +3483,7 @@ static int ipc_rebind_primary(struct ipc_context *ctx)
 	}
 
 	ctx->listen_fd = fd;
-	/* The socket is this process's own from here */
+	/* ipc_cleanup() unlinks it from here on */
 	ctx->activated = false;
 	record_listen_identity(ctx);
 
@@ -3819,10 +3500,6 @@ int ipc_socket_was_replaced(const char *path, dev_t dev, ino_t ino)
 	if (!path)
 		return 0;
 
-	/*
-	 * Zero: the path was gone when the listener was armed.
-	 * Nothing to compare against.
-	 */
 	if (ino == 0)
 		return 0;
 
@@ -3852,7 +3529,7 @@ int ipc_recheck_socket(struct ipc_context *ctx)
 				  strerror(errno));
 			named = true;
 		}
-		/* the directory also holds --bench's file, rewritten each second */
+		/* the directory holds other files, such as --bench's */
 		if (!named)
 			return 0;
 	}
@@ -3993,11 +3670,9 @@ int ipc_process(struct ipc_context *ctx, int timeout_ms)
 		}
 
 		if (fd == ctx->listen_fd || ipc_is_listener(ctx, fd)) {
-			/* new connection on primary or extra listener */
 			accept_client(ctx, fd);
 			processed++;
 		} else {
-			/* client event */
 			struct ipc_client *client = client_find(ctx, fd);
 			if (!client)
 				continue;
@@ -4025,14 +3700,8 @@ int ipc_process(struct ipc_context *ctx, int timeout_ms)
 	}
 
 	/*
-	 * Session opened or closed during the pass above.
-	 * Both change which publishers hold a live verdict, and both are what
-	 * the attestation loop must not sleep through -- title that has just
-	 * launched wants its first report now, not one interval from now.
-	 *
-	 * Done here rather than at the point of change:
-	 * those run with a client being created or destroyed underneath them,
-	 * and this walks the client list.
+	 * A session opening wakes the attestation loop: a title that has just
+	 * launched wants its first report.
 	 */
 	if (ctx->profiles_changed) {
 		ctx->profiles_changed = false;
@@ -4056,10 +3725,7 @@ void ipc_update_status(struct ipc_context *ctx, uint32_t flags,
 
 	uint32_t old_flags = ctx->status_flags;
 
-	/*
-	 * termination that happened cannot be un-happened by the next attestation
-	 * round, which publishes this word from scratch.
-	 */
+	/* a round publishes this word from scratch */
 	if (ctx->protected_terminated)
 		flags |= LOTA_STATUS_PROTECTED_TERMINATED;
 	if (ctx->agent_restarted)
@@ -4214,10 +3880,8 @@ void ipc_set_profiles(struct ipc_context *ctx, struct attest_target *profiles,
 	ctx->profile_count = profiles ? count : 0;
 
 	/*
-	 * Every binding points into the list being replaced, so all of them
-	 * are dropped first: keeping one would be a use-after-free the moment
-	 * the caller frees what it rebuilt. Session counts go with them,
-	 * and are rebuilt below from the connections that survive.
+	 * Every binding points into the list being replaced. Session counts are
+	 * rebuilt below from the connections that survive.
 	 */
 	for (struct ipc_client *c = ctx->client_list; c; c = c->next)
 		c->profile = NULL;
@@ -4225,11 +3889,8 @@ void ipc_set_profiles(struct ipc_context *ctx, struct attest_target *profiles,
 		ctx->profiles[i].sessions = 0;
 
 	/*
-	 * A title sends SET_PROFILE once and is playing by the time the list is
-	 * reloaded, so nothing re-binds it: the connection is re-resolved here
-	 * by the publisher it named, or it is left unbound because that
-	 * publisher is no longer configured -- which is a change somebody made
-	 * on this machine, and is said out loud.
+	 * A title sends SET_PROFILE once: bind it again by the publisher it
+	 * named, or leave it unbound when that publisher is gone.
 	 */
 	for (struct ipc_client *c = ctx->client_list; c; c = c->next) {
 		if (!c->profile_id[0])
@@ -4257,23 +3918,12 @@ void ipc_set_profiles(struct ipc_context *ctx, struct attest_target *profiles,
 		}
 	}
 
-	/*
-	 * The loop learns the session counts on its next sync,
-	 * and the counts it is holding are the ones from before the rebuild.
-	 */
+	/* the loop learns the rebuilt counts on its next sync */
 	for (size_t i = 0; i < ctx->profile_count; i++)
 		ctx->profiles[i].session_changed = true;
 	ctx->profiles_changed = true;
 }
 
-/*
- * Add extra listener socket.
- *
- * Creates a new Unix stream socket at the given path, registers it
- * with epoll, and stores it in the extra[] array for cleanup on
- * shutdown. Connections accepted on this socket are handled
- * identically to the primary listener.
- */
 int ipc_add_listener(struct ipc_context *ctx, const char *socket_path)
 {
 	struct sockaddr_un addr;
@@ -4300,10 +3950,8 @@ int ipc_add_listener(struct ipc_context *ctx, const char *socket_path)
 		return -ENOSPC;
 
 	/*
-	 * Same check as the primary socket: a path another agent still serves
-	 * is not ours to take.
-	 * One nothing answers on is a leftover from an unclean stop and is safe
-	 * to unlink.
+	 * As for the primary socket: a path somebody still answers on is
+	 * refused, and a leftover of an unclean stop is unlinked.
 	 */
 	if (socket_has_live_listener(socket_path)) {
 		lota_err("%s already has a listener; refusing to take it over",
@@ -4337,8 +3985,8 @@ int ipc_add_listener(struct ipc_context *ctx, const char *socket_path)
 	}
 
 	/*
-	 * A login's runtime directory can be replaced by logind's tmpfs under
-	 * the bind or the chown, which the caller retries; the caller reports.
+	 * logind's tmpfs can replace a login's runtime directory under the bind
+	 * or the chown; the caller retries or reports.
 	 */
 	if (ret < 0) {
 		ret = -errno;
@@ -4346,13 +3994,7 @@ int ipc_add_listener(struct ipc_context *ctx, const char *socket_path)
 		return ret;
 	}
 
-	/*
-	 * The socket is bound 0660, so its group is what lets a title connect
-	 * at all. A socket nobody but root can open is not a listener a caller
-	 * can use, so a failure here refuses.
-	 * The daemon needs CAP_CHOWN for this; without it the chown returns
-	 * EPERM.
-	 */
+	/* bound 0660: only the group lets a title connect, failure refuses */
 	{
 		struct group *grp = getgrnam(LOTA_GROUP_NAME);
 
