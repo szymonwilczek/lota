@@ -2,12 +2,6 @@
 /*
  * LOTA Agent - Structured Journal Logging
  *
- * Usage:
- *   journal_init("lota-agent");
- *   lota_err("TPM init failed: %s", strerror(-ret));
- *   lota_info("BPF program loaded from %s", path);
- *   lota_dbg("PCR %d value: %s", idx, hex);
- *
  * Copyright (C) 2026 Szymon Wilczek
  */
 
@@ -16,49 +10,41 @@
 
 #include <syslog.h>
 
-/*
- * journal_init - Initialize logging subsystem.
+/**
+ * journal_init() - Pick the backend and the identifier.
+ * @ident: SYSLOG_IDENTIFIER and the stderr prefix; NULL keeps "lota".
  *
- * @ident: Program identifier (eg: "lota-agent").
- *         Used as prefix in stderr fallback mode.
- *
- * Automatically detects whether the process is running under systemd and
- * selects the backend.
+ * The journal when JOURNAL_STREAM or INVOCATION_ID is set, stderr otherwise.
  */
 void journal_init(const char *ident);
 
-/*
- * journal_print - Emit a log message at given priority.
+/**
+ * journal_print() - Log one message.
+ * @file: CODE_FILE.
+ * @line: CODE_LINE.
+ * @func: CODE_FUNC.
+ * @priority: Syslog priority.
+ * @fmt: printf-style format; the message is cut at 1023 bytes.
  *
- * @file:     Source file name (__FILE__).
- * @line:     Source line number (__LINE__).
- * @func:     Function name (__func__).
- * @priority: Syslog priority (LOG_ERR, LOG_WARNING, LOG_INFO, LOG_DEBUG).
- * @fmt:      printf-style format string.
- *
- * Prefer the lota_err/lota_warn/lota_info/lota_dbg macros.
+ * Called through the lota_* macros.
  */
 __attribute__((format(printf, 5, 6))) void
 journal_print(const char *file, int line, const char *func, int priority,
 	      const char *fmt, ...);
 
-/*
- * journal_set_level - Set minimum priority for output.
+/**
+ * journal_set_level() - Drop messages less severe than @priority.
+ * @priority: LOG_EMERG to LOG_DEBUG; any other value is ignored.
  *
- * @priority: Minimum syslog priority to emit (LOG_ERR .. LOG_DEBUG).
- *            Messages below this level are silently dropped.
- *            Default: LOG_DEBUG (all messages).
+ * LOG_DEBUG until called.
  */
 void journal_set_level(int priority);
 
-/*
- * journal_detached_from_terminal - Send to the journal from here on.
+/**
+ * journal_detached_from_terminal() - Log to the journal from here on.
  *
- * The backend is chosen at journal_init() from the environment, which answers
- * "is systemd running this". A process that daemonises itself answers no
- * and then closes the stderr the fallback writes to, so every later diagnostic
- * is written to /dev/null.
- * Calling this once stderr is gone keeps them readable.
+ * For a process that loses the stderr journal_init() chose, as daemonize()
+ * points it at /dev/null.
  */
 void journal_detached_from_terminal(void);
 

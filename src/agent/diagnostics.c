@@ -30,10 +30,6 @@
 #include "test_servers.h"
 #include "tpm.h"
 
-/*
- * Below the unit's stop timeout, so systemd sees the daemon gone before it
- * gives up on the stop.
- */
 #define SHUTDOWN_WAIT_MS 60000
 
 static int ipc_request_shutdown(void)
@@ -86,15 +82,7 @@ static int ipc_request_shutdown(void)
 	return 0;
 }
 
-/*
- * Ask the agent to end a protected process.
- *
- * The agent journals the termination.
- * It answers for a caller kill(2) would already have allowed,
- * so this runs as the player who owns the title, without sudo.
- *
- * @out_others receives the protected set size, not counting @pid.
- */
+/* the agent ends it for its owner or root, so the player needs no sudo */
 static int ipc_request_terminate_protected(uint32_t pid, uint32_t sig,
 					   uint32_t *out_others)
 {
@@ -149,13 +137,6 @@ static int ipc_request_terminate_protected(uint32_t pid, uint32_t sig,
 
 	if (resp.result != LOTA_IPC_OK) {
 		close(fd);
-		/*
-		 * Each refusal keeps its own errno so the caller can say what
-		 * happened rather than guessing:
-		 * a process nobody protected, a target no caller may end this way,
-		 * one that is not there at all,
-		 * and a request that is not this caller's to make.
-		 */
 		switch (resp.result) {
 		case LOTA_IPC_ERR_NOT_PROTECTED:
 			return -EINVAL;
@@ -199,13 +180,6 @@ static bool opts_name_a_server(const struct cli_options *opts)
 
 int diagnostics_dispatch(struct cli_options *opts, struct lota_config *cfg)
 {
-	/*
-	 * Interactive one-shots (seal/unseal, enroll, attest, test servers,
-	 * ...) may redirect the TPM endpoint and AIK key store via
-	 * LOTA_TCTI / LOTA_AIK_META_PATH for the swtpm demo and tests. The
-	 * persistent daemon must not: it is reached only when this function
-	 * falls through to "return -1" below, where the flag is cleared again.
-	 */
 	g_agent.tpm_ctx.allow_env_tpm_overrides = attest_env_overrides_allowed(
 		opts->attest_flag, opts->attest_interval,
 		cfg ? cfg->profile_count : 0, opts_name_a_server(opts));
@@ -219,9 +193,8 @@ int diagnostics_dispatch(struct cli_options *opts, struct lota_config *cfg)
 		}
 
 		/*
-		 * the daemon answers before it has poisoned PCR14 and unloaded
-		 * its LSM; a supervisor that starts it again before then starts
-		 * a second instance beside the first
+		 * The daemon answers before it poisons PCR 14 and unloads its
+		 * LSM; a start before then meets it still running.
 		 */
 		sret = pidfile_wait_released(opts->pid_file_path,
 					     SHUTDOWN_WAIT_MS);
@@ -357,18 +330,8 @@ int diagnostics_dispatch(struct cli_options *opts, struct lota_config *cfg)
 		return diagnostic_exit_code(run_signed_ipc_test_server(cfg));
 
 	/*
-	 * The verbs a player runs and reads the output of.
-	 *
-	 * The TSS library logs its own WARNING/ERROR lines, with a source path
-	 * and a hex code, to the same stderr these verbs write their answer to
-	 * Everything these paths can go wrong with is reported by LOTA in LOTA's
-	 * words through tpm_strerror(), so the library's copy is noise here
-	 * and nothing else.
-	 *
-	 * The daemon and the attestation loop are deliberately not included:
-	 * their stderr is the journal, where an operator debugging a TPM wants
-	 * every layer's account.
-	 * overwrite=0 leaves an operator-set TSS2_LOG alone for the same reason.
+	 * These verbs answer a player on stderr, where the TSS library would
+	 * add its own log lines; overwrite=0 keeps a TSS2_LOG the operator set.
 	 */
 	if (opts->list_publishers_flag || opts->forget_publisher ||
 	    opts->allow_publisher || opts->add_publisher ||
@@ -387,12 +350,9 @@ int diagnostics_dispatch(struct cli_options *opts, struct lota_config *cfg)
 			do_allow_publisher(opts->allow_publisher));
 
 	/*
-	 * --server is the only thing that names this publisher's verifier.
-	 * opts->server_addr always holds one -- the single-verifier default,
-	 * or the top-level `server` key -- and neither is a choice anybody
-	 * made about the publisher being added.
-	 * A publisher who runs no verifier is a supported arrangement,
-	 * so the writer has to be told "not given".
+	 * Only a typed --server names this publisher's verifier; the file's
+	 * server key belongs to the top level. NULL writes a publisher that
+	 * runs none.
 	 */
 	if (opts->add_publisher)
 		return diagnostic_exit_code(do_add_publisher(
@@ -449,11 +409,6 @@ int diagnostics_dispatch(struct cli_options *opts, struct lota_config *cfg)
 				"the publisher profile the AIK certificate is "
 				"read from\n");
 		}
-		/*
-		 * profile list is the target list, so the single-verifier flags
-		 * no longer have one target to apply to.
-		 * Refusing beats ignoring them: operator who passed --server means it
-		 */
 		if (cfg && cfg->profile_count > 0) {
 			if (opts->server_overridden) {
 				fprintf(stderr,
@@ -479,17 +434,6 @@ int diagnostics_dispatch(struct cli_options *opts, struct lota_config *cfg)
 			}
 		}
 
-		/*
-		 * Profile list is the target list, so host that names publishers
-		 * attests to them continuously.
-		 * Unset cadence says the host never chose one, not that it wants
-		 * the single-verifier one-shot below:
-		 * that path has no target list and would attest to the top-level
-		 * verifier -- unset on consumer install -- while every configured
-		 * publisher waited.
-		 * Host that names nothing gets the loop too, waiting for the
-		 * reload that names its first publisher.
-		 */
 		interval = attest_effective_interval(
 			opts->attest_interval, cfg ? cfg->profile_count : 0,
 			opts_name_a_server(opts));
@@ -507,9 +451,7 @@ int diagnostics_dispatch(struct cli_options *opts, struct lota_config *cfg)
 				  opts->has_pin ? opts->pin_sha256_bin : NULL));
 	}
 
-	/* No one-shot matched: the caller will start the daemon.
-	 * Clear the override permission so the daemon ignores
-	 * LOTA_TCTI / LOTA_AIK_META_PATH. */
+	/* the daemon does not take LOTA_TCTI or LOTA_AIK_META_PATH */
 	g_agent.tpm_ctx.allow_env_tpm_overrides = false;
 	return -1;
 }
