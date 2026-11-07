@@ -3,32 +3,20 @@
 # Copyright (C) 2026 Szymon Wilczek
 #
 # Turn a live EK certificate into candidate sources lines for the EK root
-# bundle. Given an Endorsement Key certificate, the tool walks the
-# Authority Information Access "CA Issuers" chain up to the self-signed
-# root and prints a ready-to-paste sources line for every certificate the
-# operator has to pin.
+# bundle. The tool walks the Authority Information Access "CA Issuers" chain up
+# to the self-signed root and prints a line for the root and every certificate
+# the walk fetched. Each line is classed: "root" is a trust anchor,
+# "intermediate" is path material the CA builds through but never anchors a
+# chain at.
 #
-# That is the root and every certificate the walk had to fetch. A device
-# supplies the certificates its TPM carries with its enrollment request, so
-# those need no line; everything the walk reached over the network is
-# published nowhere else, and a bundle without it leaves a hole in the path
-# that surfaces as a refused endorsement key. Each line is classed: "root"
-# is a trust anchor, "intermediate" is path material the CA builds through
-# but never anchors a chain at.
+# The pins are computed over the certificates as received and are NOT trusted.
+# Confirm each out of band against the vendor's published value before adding
+# the line to a sources file.
 #
-# The pins it prints are NOT trusted: they are computed over what the network
-# handed back. Confirm each out of band against the vendor's published value
-# before adding the line to a sources file. The tool exists to find the
-# right certificates for a platform and format the lines, not to vouch for
-# them.
-#
-# A firmware TPM needs one step before the walk can start. An Intel PTT EK
-# certificate carries no Authority Information Access extension at all,
-# so there is no "CA Issuers" URL to follow from the leaf; the certificates
-# nearest it live on the chip, at NV index 0x01c00100, as concatenated DER
-# in one blob, and AIA appears only from the certificates above them.
-# Hand that blob over with --nv-chain and the walk climbs it first, then
-# continues online from the highest certificate it found.
+# An Intel PTT EK certificate can carry no Authority Information Access
+# extension. Its nearest issuers are then on the chip, at NV index 0x01c00100,
+# as concatenated DER. --nv-chain hands that blob over: the walk climbs it
+# first, then continues online from the highest certificate it found.
 #
 # Usage:
 #   scripts/lota-ek-root-pin.sh [--nv-chain FILE] <ek-cert | -> [output-dir]
@@ -89,7 +77,6 @@ command -v sha256sum >/dev/null 2>&1 || die "sha256sum not found"
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/lota-ek-root-pin.XXXXXX")"
 trap 'rm -rf "$WORK"' EXIT
 
-# to_pem reads a certificate in DER or PEM and writes it back as PEM
 to_pem() {
     local in="$1" out="$2"
     if openssl x509 -inform DER -in "$in" -outform PEM -out "$out" 2>/dev/null; then
@@ -98,15 +85,11 @@ to_pem() {
     openssl x509 -inform PEM -in "$in" -outform PEM -out "$out" 2>/dev/null
 }
 
-# ca_issuer_url prints the first AIA "CA Issuers" URI of a PEM certificate,
-# empty if the certificate carries none
 ca_issuer_url() {
     openssl x509 -in "$1" -noout -ext authorityInfoAccess 2>/dev/null |
 	sed -n 's/.*CA Issuers - URI:\(.*\)/\1/p' | head -n1
 }
 
-# is_self_signed succeeds when a PEM certificate is its own issuer and its
-# signature verifies against itself -- i.e. a trust-anchor root
 is_self_signed() {
     local cert="$1" subj issu
     subj="$(openssl x509 -in "$cert" -noout -subject_hash 2>/dev/null)"
@@ -115,13 +98,9 @@ is_self_signed() {
     openssl verify -CAfile "$cert" "$cert" >/dev/null 2>&1
 }
 
-# split_certs explodes a certificate blob into one PEM per certificate under
-# $WORK/chain. Takes a PEM bundle, or the concatenated DER a TPM stores.
-#
-# DER is self-delimiting: a certificate is a SEQUENCE, so the first bytes give
-# the tag and the length of what follows, and the next certificate starts right
-# after. Intel PTT stores three this way at NV 0x01c00100, with no separators
-# and no count.
+# split_certs writes each certificate of a blob as PEM under $WORK/chain. A blob
+# is a PEM bundle or concatenated DER, which has no separators and no count: a
+# certificate's SEQUENCE header gives its length, and the next starts after it.
 split_certs() {
     local blob="$1" n=0 off=0 size hdr len bytes tag lenbyte b1 b2
 
@@ -176,9 +155,8 @@ split_certs() {
     [ "$n" -gt 0 ]
 }
 
-# issuer_from_chain finds, among the split certificates, the one that issued
-# $1 -- matched by subject and confirmed by the signature, so a certificate
-# that merely claims the name is not followed
+# issuer_from_chain finds the split certificate that issued $1: a subject match
+# is only a claim, the signature confirms it
 issuer_from_chain() {
     local cert="$1" want cand
     want="$(openssl x509 -in "$cert" -noout -issuer_hash 2>/dev/null)"
@@ -196,7 +174,6 @@ issuer_from_chain() {
     return 1
 }
 
-# materialize the EK certificate as PEM
 if [ "$EK_INPUT" = "-" ]; then
     cat >"$WORK/in.raw"
 else
@@ -205,7 +182,6 @@ else
 fi
 to_pem "$WORK/in.raw" "$WORK/cur.pem" || die "input is not a certificate"
 
-# certificates the device carries, if any were handed over
 if [ -n "$NV_CHAIN" ]; then
     [ -r "$NV_CHAIN" ] || die "cannot read chain file: $NV_CHAIN"
     split_certs "$NV_CHAIN" ||
@@ -213,10 +189,6 @@ if [ -n "$NV_CHAIN" ]; then
     echo "# on-chip chain: $(ls "$WORK"/chain/*.pem 2>/dev/null | wc -l) certificate(s) from $NV_CHAIN" >&2
 fi
 
-# walk to the self-signed root: through what the device carries first,
-# then online from the highest certificate it had.
-# Every certificate the walk has to fetch is kept: the device does not carry it,
-# so the operator has to pin it or the CA cannot build the path.
 fetched_pem=()
 fetched_url=()
 depth=0
@@ -251,14 +223,10 @@ while ! is_self_signed "$WORK/cur.pem"; do
     fetched_url+=("$url")
 done
 
-# der_sha256 prints the lowercase hex SHA-256 over a PEM certificate's DER
 der_sha256() {
     openssl x509 -in "$1" -outform DER 2>/dev/null | sha256sum | cut -d' ' -f1
 }
 
-# emit_line prints one sources line for a certificate the operator has to pin:
-# its pin, the file the bundle keeps it under, whether it is a trust anchor
-# or path material, and where this run got it from.
 emit_line() {
     local cert="$1" class="$2" url="$3" pin label slug filename
 
@@ -266,7 +234,6 @@ emit_line() {
     [ -n "$pin" ] || die "failed to fingerprint a certificate on the path"
 
     label="$(openssl x509 -in "$cert" -noout -subject -nameopt sep_comma_plus,utf8 2>/dev/null | sed 's/^subject=//')"
-    # slugify the label into a bare filename
     slug="$(printf '%s' "$label" | tr '[:upper:]' '[:lower:]' | tr -c 'a-z0-9' '-' | sed 's/--*/-/g; s/^-//; s/-$//')"
     [ -n "$slug" ] || slug="ek-$class"
     filename="${slug}.pem"
@@ -282,22 +249,17 @@ emit_line() {
     echo "$pin  $filename  $class  ${url:-REPLACE_WITH_VENDOR_PUBLISHED_URL}  $label"
 }
 
-# at this point cur.pem is the self-signed root
 root_pin="$(der_sha256 "$WORK/cur.pem")"
 [ -n "$root_pin" ] || die "failed to fingerprint the root certificate"
 
-# the root is fetched material too whenever the walk went online for it;
-# a root the device carried has no URL to record
+# a root the walk did not fetch has no URL to record
 root_url=""
 for i in "${!fetched_pem[@]}"; do
     [ "$(der_sha256 "${fetched_pem[$i]}")" = "$root_pin" ] || continue
     root_url="${fetched_url[$i]}"
 done
 
-# stdout carries only the sources lines so it can be appended to a sources
-# file; everything else is diagnostics on stderr.
-# The certificates are written out only when an output dir is given -- the normal
-# flow re-fetches each of them when lota-ek-roots-update.sh materializes the bundle
+# stdout carries only the sources lines, so it can be appended to a sources file
 echo "# candidate sources lines -- verify each pin out of band before trusting it:" >&2
 emit_line "$WORK/cur.pem" root "$root_url"
 for i in "${!fetched_pem[@]}"; do
