@@ -2,21 +2,11 @@
 /* Copyright (C) 2026 Szymon Wilczek */
 /*
  * The attestation loop's side of the state exchange with the enforcement
- * daemon.
+ * daemon, which owns LOTA_IPC_SOCKET_PATH: verdicts out, sessions and
+ * enrollment requests in.
  *
- * Only one process can own LOTA_IPC_SOCKET_PATH, and the daemon owns it:
- * it is the always-on unit, it is what the packaged socket unit activates,
- * and it holds the BPF context, the enforcement policy digest and the boot
- * state a title asks about.
- * The loop therefore connects to that socket rather than binding it,
- * and trades what each side knows -- verdicts out, sessions and enrollment
- * requests in.
- *
- * Daemon that is not up yet, or is restarting, is not an error here:
- * the loop keeps attesting and retries the connection.
- * What it loses meanwhile is session gating, so a session-gated publisher
- * is not reported to, which is the safe direction for something whose whole
- * cost is exfiltration.
+ * With the daemon down the loop keeps attesting and retries the connection;
+ * session counts stay as last synced.
  */
 
 #ifndef LOTA_AGENT_ATTEST_PEER_H
@@ -32,10 +22,10 @@
 struct attest_peer {
 	int fd; /* connection to the socket owner, -1 when down */
 	uint64_t next_retry_ms; /* monotonic deadline before reconnecting */
-	bool connected_once; /* so the first failure logs once, not per round */
+	bool connected_once; /* arms the one warning a lost connection logs */
 };
 
-/* State the socket owner keeps for the loop rather than the other way round */
+/* Tallies sent to the socket owner with each sync */
 struct attest_peer_counters {
 	uint32_t attest_count;
 	uint32_t fail_count;
@@ -46,45 +36,44 @@ struct attest_peer_counters {
 void attest_peer_init(struct attest_peer *peer);
 void attest_peer_close(struct attest_peer *peer);
 
-/*
- * Trade state with the socket owner.
+/**
+ * attest_peer_sync() - Trade state with the socket owner.
+ * @peer: The connection, made on demand within its own retry deadline.
+ * @targets: Each with a profile sends a verdict and takes back its session
+ *           count and enrollment request; one the owner does not name is left
+ *           alone.
+ * @count: Length of @targets.
+ * @counters: Tallies to send.
  *
- * Sends one verdict per target and applies what comes back onto the same array:
- * the session count each publisher currently has, and whether a title has asked
- * this host to enrol with one.
- * Publisher the owner does not know about is left alone.
- *
- * Connects on demand, honouring its own retry deadline, so caller may call this
- * every round without checking whether the daemon is up.
- *
- * Returns 0 when the exchange completed, or a negative errno.
+ * Return: 0 when the exchange completed, or a negative errno.
  */
 int attest_peer_sync(struct attest_peer *peer, struct attest_target *targets,
 		     size_t count, const struct attest_peer_counters *counters);
 
-/*
- * File descriptor to poll for pushed publisher events, or -1 when the connection
- * is down.
- * Readable means attest_peer_drain() has something to do.
+/**
+ * attest_peer_fd() - The descriptor to poll for pushed publisher events.
+ * @peer: The connection.
+ *
+ * Return: the descriptor, -1 when the connection is down.
  */
 int attest_peer_fd(const struct attest_peer *peer);
 
-/*
- * Consume pushed notifications.
+/**
+ * attest_peer_drain() - Consume pushed notifications.
+ * @peer: The connection; closing it schedules a reconnect.
  *
- * Returns true when a publisher event arrived, which is session opening or closing
- * or a title asking for an unenrolled publisher -- all reasons to stop sleeping
- * and sync now.
- * Closed connection returns false and schedules a reconnect.
+ * Return: true when a publisher event arrived: time to sync.
  */
 bool attest_peer_drain(struct attest_peer *peer);
 
-/*
- * Ask the socket owner for its mode and status word, on a connection of
- * its own, so a one-shot report can ask as well as the loop.
- * Only an owner running as this process's user is believed.
+/**
+ * attest_daemon_view() - Ask the socket owner for its mode and status word.
+ * @out: The answer.
  *
- * Returns 0 with @out->answered set, or a negative errno with @out zeroed.
+ * Uses a connection of its own. Only an owner running as this process's user
+ * is believed.
+ *
+ * Return: 0 with @out->answered set, or a negative errno with @out zeroed.
  */
 int attest_daemon_view(struct enforcement_view *out);
 

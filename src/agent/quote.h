@@ -1,7 +1,6 @@
 /* SPDX-License-Identifier: MIT */
 /*
- * LOTA - TPM Quote Response Structure
- * Wire format for attestation evidence
+ * LOTA - TPM quote response
  *
  * Copyright (C) 2026 Szymon Wilczek
  */
@@ -13,26 +12,11 @@
 
 #include "../../include/attestation.h"
 
-/*
- * TPM Quote Response - complete attestation evidence
- *
- * Contains everything needed for remote verification:
- *   - The raw TPMS_ATTEST blob (signed by TPM)
- *   - The signature over the TPMS_ATTEST
- *   - PCR values at time of quote (for replay verification)
- *
- * Verifier:
- *   - Verifies signature using AIK public key
- *   - Parses TPMS_ATTEST to extract nonce and PCR digest
- *   - Computes expected PCR digest from provided values
- *   - Compares digests to ensure integrity
- */
+/* A TPM quote, its signature and the PCR values read just before it */
 struct tpm_quote_response {
-	/* Raw attestation data */
 	uint8_t attest_data[LOTA_MAX_ATTEST_SIZE];
 	uint16_t attest_size;
 
-	/* Signature over attest_data */
 	uint8_t signature[LOTA_MAX_SIG_SIZE];
 	uint16_t signature_size;
 
@@ -42,10 +26,8 @@ struct tpm_quote_response {
 	/* Signature hash algorithm (TPM2_ALG_SHA256/SHA384/SHA512). */
 	uint16_t hash_alg;
 
-	/* PCR selection mask used in quote */
 	uint32_t pcr_mask;
 
-	/* PCR values at time of quote */
 	uint8_t pcr_values[LOTA_PCR_COUNT][LOTA_HASH_SIZE];
 } __attribute__((packed));
 

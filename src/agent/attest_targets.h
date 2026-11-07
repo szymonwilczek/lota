@@ -3,13 +3,9 @@
 /*
  * Attestation targets: who this host reports to, and on what cadence.
  *
- * Player's machine has one state and several publishers judging it,
- * so the attestation loop is not one verifier on one timer.
  * Each target carries the publisher profile whose AIK answers to it and its own
- * schedule and failure state, because one unreachable verifier must not back off
+ * schedule and failure state, so an unreachable verifier does not back off
  * another publisher's reporting.
- *
- * Built apart from the loop so the list can be tested without a TPM.
  */
 
 #ifndef LOTA_AGENT_ATTEST_TARGETS_H
@@ -29,75 +25,45 @@ struct attest_target {
 	char server[256];
 	int port;
 
-	/*
-	 * How this target is named in log line, built once by attest_targets_build()
-	 * Every message about a target says which one it means, and deriving
-	 * that at each site made the identity of target formatting decision
-	 * repeated fifteen times.
-	 */
+	/* How log lines name this target, built by attest_targets_build() */
 	char label[288];
 	char ca_cert[PATH_MAX];
 	int interval;
 
-	/* the attestation CA this publisher enrolls against,
-	 * empty when the target came from the single-verifier path */
+	/* this publisher's enrollment CA, empty on the single-verifier path */
 	char ca[256];
 	int ca_port;
 
 	/*
-	 * This publisher runs no verifier:
-	 * their backend checks the tokens a title fetches, so nothing is reported here.
-	 * The target still exists because everything else about it does
-	 * -- it enrolls, it holds an AIK, that key rotates and its certificate
-	 * is renewed, and dropping it from the list would let the certificate
-	 * the publisher's backend chains against lapse while the player is playing.
+	 * This publisher runs no verifier: nothing is reported here. The target
+	 * still enrolls, holds an AIK, rotates it and renews its certificate.
 	 */
 	bool token_only;
 
 	/*
-	 * Report only while a title of this publisher's is running.
-	 *
-	 * sessions counts the connections currently bound to this publisher,
-	 * maintained by the IPC layer.
-	 * Reporting is exfiltration and closed game has no reason to produce any;
-	 * enforcement and the boot commitment are local and never stop,
-	 * which is what lets session's first quote still prove the whole
-	 * boot-to-now window.
+	 * Report only while a title of this publisher's runs. sessions counts
+	 * the connections bound to this publisher, as last synced from the
+	 * socket owner.
 	 */
 	bool session_gated;
 	int sessions;
 
-	/*
-	 * Whether this target has already said it is waiting for a title of
-	 * this publisher's to start.
-	 * Said once: a loop that repeats it every round is the same silence
-	 * with more lines.
-	 */
+	/* Said it is waiting for a title of this publisher's to start */
 	bool wait_announced;
 
 	/*
-	 * Whether this target has already said that the key at its handle is
-	 * not the key its certificate names. Said once for the same reason,
-	 * and cleared the moment they agree again, so a publisher re-enrolled
-	 * out of band resumes without a restart and a later mismatch is
-	 * announced afresh.
+	 * Said the key at its handle is not the one its certificate names;
+	 * cleared when they agree.
 	 */
 	bool key_mismatch_announced;
 
-	/*
-	 * Whether this target has already said the TPM refused to authorize
-	 * its quote. Same reason, and the same clearing rule: a round that
-	 * succeeds puts it back.
-	 */
+	/* Said the TPM refused its quote's auth; a good round clears it */
 	bool auth_fail_announced;
 
-	/* Said its record names the shared key. Same clearing rule. */
+	/* Said its record names the shared key; naming its own clears it */
 	bool shared_key_announced;
 
-	/*
-	 * SHA-256 of the certificate this target's verifier must present,
-	 * taken from the publisher profile that names it.
-	 */
+	/* SHA-256 of the certificate this target's verifier must present */
 	uint8_t pin_sha256[LOTA_PIN_SHA256_LEN];
 	bool has_pin;
 
@@ -109,19 +75,17 @@ struct attest_target {
 	/* schedule, on the monotonic clock */
 	uint64_t next_due_ms;
 
-	/* per-target attestation state */
 	int consecutive_failures;
 	int backoff_sec;
 	time_t last_success;
 	bool attested;
 	uint64_t valid_until;
 
-	/* per-target certificate renewal */
 	bool auto_renew;
 	int renew_backoff;
 	uint64_t next_renew_ms;
 
-	/* renewal endpoint from the enrollment record, not the configuration */
+	/* renewal endpoint, from the enrollment record */
 	char renew_ca[256];
 	int renew_ca_port;
 
@@ -129,18 +93,14 @@ struct attest_target {
 	bool renew_move_announced; /* configured vs recorded CA mismatch logged */
 
 	/*
-	 * First enrollment, which happens while the host runs rather than while
-	 * it is installed: player has no CA endpoint to type in at install time,
-	 * and the publisher they buy from is not known until title of theirs runs.
-	 * enroll_pending is raised by title selecting this publisher,
-	 * so the loop stops sleeping and enrolls now.
+	 * First enrollment. enroll_pending is raised by a title selecting this
+	 * publisher, so the loop stops sleeping and enrolls.
 	 */
 	bool enroll_pending;
 	int enroll_backoff;
 	uint64_t next_enroll_ms;
 
-	/* session has just opened or closed;
-	 * the loop reacts on its next pass instead of sleeping through the change */
+	/* a session opened or closed: the loop reacts on its next pass */
 	bool session_changed;
 };
 
@@ -151,10 +111,15 @@ enum attest_renew_say {
 	ATTEST_RENEW_OFF,
 };
 
-/*
- * Set @t's unattended renewal from its enrollment record: @rec_server and
- * @rec_port are the recorded endpoint, @rec_server NULL if never enrolled.
- * Stores the endpoint on @t. Call on every pass.
+/**
+ * attest_target_resolve_renew() - Set @t's renewal from its enrollment record.
+ * @t: The target; stores the endpoint on it.
+ * @rec_server: Recorded endpoint, NULL if never enrolled.
+ * @rec_port: Recorded port.
+ *
+ * Call on every pass.
+ *
+ * Return: what to log.
  */
 enum attest_renew_say attest_target_resolve_renew(struct attest_target *t,
 						  const char *rec_server,
@@ -163,31 +128,36 @@ enum attest_renew_say attest_target_resolve_renew(struct attest_target *t,
 /* ", renewing at " plus the recorded endpoint */
 #define LOTA_RENEW_AT_LEN 288
 
-/*
- * Write ", renewing at <host>:<port>" for @t into @buf;
- * empty when @t cannot renew or its label already names that endpoint.
- * Returns @buf.
+/**
+ * attest_target_renew_at() - Write ", renewing at <host>:<port>" for @t.
+ * @t: The target.
+ * @buf: Destination; empty when @t cannot renew or a token-only label already
+ *       names that endpoint.
+ * @len: Size of @buf.
+ *
+ * Return: @buf.
  */
 const char *attest_target_renew_at(const struct attest_target *t, char *buf,
 				   size_t len);
 
-/*
- * True once while @t's configured CA differs from the recorded renewal
- * endpoint; re-armed when they agree again.
+/**
+ * attest_target_should_announce_renew_move() - Time to say the CA moved?
+ * @t: The target; records the answer.
+ *
+ * Return: true once while @t's configured CA differs from the recorded renewal
+ * endpoint; re-armed when they agree or that endpoint changes.
  */
 bool attest_target_should_announce_renew_move(struct attest_target *t);
 
-/*
- * Whether this round sends report for @t.
+/**
+ * attest_target_reports() - Whether this round sends a report for @t.
+ * @t: The target.
  *
- * Two publishers are not reported to: one who verifies tokens in their own backend
- * (nothing here holds verdict of theirs), and session-gated one with no title
- * of theirs running (reporting follows the session).
- * Neither is a reason to skip the round's enrollment, AIK rotation and certificate
- * renewal -- those run for every configured publisher, which is what keeps
- * session-gated one reachable at all.
+ * A token-only publisher holds no verdict here, and a session-gated one is
+ * reported to only with a title of theirs running. Enrollment, AIK rotation
+ * and certificate renewal do not depend on this answer.
  *
- * Pure so both gates are pinned without a TPM, a verifier or a live title.
+ * Return: true when a report goes out.
  */
 static inline bool attest_target_reports(const struct attest_target *t)
 {
@@ -197,73 +167,67 @@ static inline bool attest_target_reports(const struct attest_target *t)
 	return !t->session_gated || t->sessions > 0;
 }
 
-/*
- * Rebuild @targets from @cfg, keeping the live state of every target that
- * is still configured: its verdict, schedule, failure state and the sessions
- * the IPC layer counts. A reload that drops them reads as a host that is no
- * longer attested until the next round.
+/**
+ * attest_targets_rebuild() - Rebuild the list from a configuration.
+ * @cfg: The configuration.
+ * @server: As attest_targets_build().
+ * @port: As attest_targets_build().
+ * @ca_cert: As attest_targets_build().
+ * @interval_sec: As attest_targets_build().
+ * @targets: The list; a target still configured keeps its verdict, schedule,
+ *           failure state and session count.
+ * @max: Capacity of @targets.
+ * @count: Length of @targets.
  *
- * Returns 0 (an empty list when @cfg names nothing), or a negative errno
- * with @targets untouched.
+ * Return: 0, the list empty when neither @cfg nor @server names a target,
+ * or a negative errno with @targets untouched.
  */
 int attest_targets_rebuild(const struct lota_config *cfg, const char *server,
 			   int port, const char *ca_cert, int interval_sec,
 			   struct attest_target *targets, size_t max,
 			   size_t *count);
 
-/*
- * Re-read @config_path and rebuild the list while the loop is running.
+/**
+ * attest_targets_reload() - Re-read the configuration and rebuild the list.
+ * @config_path: The configuration file.
+ * @server: As attest_targets_build().
+ * @port: As attest_targets_build().
+ * @ca_cert: As attest_targets_build().
+ * @interval_sec: As attest_targets_build().
+ * @targets: As attest_targets_rebuild().
+ * @max: Capacity of @targets.
+ * @count: Length of @targets.
  *
- * A publisher registered by a game's installer has to be reported to without
- * a restart, and a publisher that is still configured has to come through
- * the rebuild as the loop left it: same schedule, same failure state,
- * same session count, since those live in this list and nowhere else.
- *
- * A config that does not load leaves the list untouched -- reporting from
- * the previous list beats reporting to nobody -- and is returned as a negative
- * errno.
- * A file that loads and names no publisher at all empties the list, which is
- * a state an operator can legitimately configure.
- *
- * The loaded configuration is this call's own: nothing outside the target list
- * survives it, because nothing else in the loop reads the config after
- * the list is built.
- *
- * The single-verifier arguments are the CLI's and do not change across
- * a reload; they are passed through to attest_targets_build()
+ * Return: as attest_targets_rebuild(), or a negative errno with @targets
+ * untouched when the file does not load.
  */
 int attest_targets_reload(const char *config_path, const char *server, int port,
 			  const char *ca_cert, int interval_sec,
 			  struct attest_target *targets, size_t max,
 			  size_t *count);
 
-/*
- * attest_target_should_announce_wait - is this the moment to say that this
- * publisher is waiting for a title of theirs to start?
+/**
+ * attest_target_should_announce_wait() - Time to say @t waits for a title?
+ * @t: The target; records the answer.
  *
- * A session-gated target reports nothing until a title runs, and a caller
- * that never says so looks stopped. The end of a session is already
- * announced; this is the beginning of waiting for the first one, and it is
- * true once per target.
- *
- * A publisher who runs no verifier is not waiting to report to one.
- *
- * Not pure: it records having answered, so the caller is not asked to keep
- * that state itself at every site that could say it.
+ * Return: true once for a session-gated target that is not token-only and has
+ * no session; a reload re-arms it.
  */
 bool attest_target_should_announce_wait(struct attest_target *t);
 
-/*
- * Build the target list.
+/**
+ * attest_targets_build() - Build the target list.
+ * @cfg: Each configured profile is one target.
+ * @server: The only target when @cfg configures no profile.
+ * @port: Port of @server.
+ * @ca_cert: Trust anchor of @server.
+ * @interval_sec: Cadence of a target that states none.
+ * @out: The list.
+ * @max: Capacity of @out.
+ * @count: Length of @out.
  *
- * Configured profile list is the target list:
- * each publisher names its own verifier, its own trust anchor and optionally
- * its own cadence, inheriting @interval_sec when it states none.
- * With no profiles configured the single @server / @port / @ca_cert is the only
- * target, as on an enterprise fleet host.
- *
- * Returns 0, -EINVAL on a missing or empty single-target server or bad
- * argument, or E2BIG when @max cannot hold every configured profile.
+ * Return: 0, -EINVAL on a missing or empty single-target server or a bad
+ * argument, or -E2BIG when @max cannot hold every configured profile.
  */
 int attest_targets_build(const struct lota_config *cfg, const char *server,
 			 int port, const char *ca_cert, int interval_sec,

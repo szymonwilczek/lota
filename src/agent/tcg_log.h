@@ -2,9 +2,6 @@
 /*
  * LOTA - TCG crypto-agile event log reader
  *
- * The log comes from securityfs and is as long as the firmware made it,
- * so every count in it is read as a bound to check.
- *
  * Copyright (C) 2026 Szymon Wilczek
  */
 #ifndef LOTA_TCG_LOG_H
@@ -31,18 +28,25 @@ struct tcg_event {
 	uint32_t data_size;
 };
 
-/*
- * tcg_log_open - start reading a log
+/**
+ * tcg_log_open() - Start reading a log.
+ * @log: Reader state.
+ * @data: The log.
+ * @size: Its length.
  *
- * Skips the legacy Spec ID record that opens every crypto-agile log.
- * Returns 0, or -EINVAL when the log does not start with one.
+ * Skips the first record, whose data is not parsed.
+ *
+ * Return: 0, or -EINVAL when the log does not start with a legacy-format
+ * EV_NO_ACTION record on PCR 0.
  */
 int tcg_log_open(struct tcg_log *log, const uint8_t *data, size_t size);
 
-/*
- * tcg_log_next - read the next record
+/**
+ * tcg_log_next() - Read the next record.
+ * @log: Reader state.
+ * @ev: Receives the record; its pointers point into the log.
  *
- * Returns 1 and fills @ev, 0 at the end of the log, or -EINVAL for a record
+ * Return: 1 with @ev filled, 0 at the end of the log, or -EINVAL for a record
  * that does not parse.
  */
 int tcg_log_next(struct tcg_log *log, struct tcg_event *ev);

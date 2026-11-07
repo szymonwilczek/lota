@@ -2,13 +2,6 @@
 /*
  * The host-wide answer, folded from every publisher's verdict.
  *
- * Title that names no publisher asks "is this machine attested",
- * and a consumer host answers to several publishers at once, so the answer is
- * a fold rather than a flag.
- * Split out of the attestation loop because the process that computes it
- * and the process that answers with it are not the same one, and because the fold
- * has cases a live host is a slow way to reach.
- *
  * Copyright (C) 2026 Szymon Wilczek
  */
 #ifndef LOTA_AGENT_ATTEST_AGGREGATE_H
@@ -31,19 +24,15 @@ struct attest_aggregate {
 	size_t reporting;
 };
 
-/*
- * Fold @targets into the host-wide answer.
+/**
+ * attest_aggregate_compute() - Fold @targets into the host-wide answer.
+ * @targets: The target list.
+ * @count: Its length.
+ * @out: The answer.
  *
- * A publisher nobody is playing for is not reporting, so it has no verdict to
- * contribute: counting its silence as a failure would leave a consumer host
- * permanently unattested, and counting it as success would assert something
- * nothing is checking.
- *
- * Host with nobody reporting is therefore not attested either
- * -- there is no live verdict to report.
- *
- * The expiry is the earliest of the contributing verdicts,
- * so the answer stops being true when the first publisher's does.
+ * A session-gated publisher with no session and a token-only one hold no
+ * verdict and count neither way. With no verdict at all the host is not
+ * attested.
  */
 static inline void attest_aggregate_compute(const struct attest_target *targets,
 					    size_t count,
@@ -76,11 +65,6 @@ static inline void attest_aggregate_compute(const struct attest_target *targets,
 		if (targets[i].session_gated && targets[i].sessions == 0)
 			continue;
 
-		/*
-		 * Publisher who verifies tokens in their own backend never reports
-		 * here, so this host holds no verdict of theirs to fold in.
-		 * Their titles read the token they fetched, not this bit.
-		 */
 		if (targets[i].token_only)
 			continue;
 
