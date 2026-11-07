@@ -2,13 +2,6 @@
 /*
  * LOTA Agent - Configuration file parser
  *
- * Parses /etc/lota/lota.conf (or user-supplied path) into a typed
- * struct.
- *
- * Every field has a sensible default. CLI flags override any value
- * loaded from the config file -- the caller applies config first,
- * then lets getopt overwrite individual fields.
- *
  * Copyright (C) 2026 Szymon Wilczek
  */
 #ifndef LOTA_CONFIG_H
@@ -22,75 +15,42 @@
 #include "../../include/lota.h"
 #include "profile.h"
 
-/* Default config file path */
 #define LOTA_CONFIG_DEFAULT_PATH "/etc/lota/lota.conf"
 
-/*
- * Default endpoints.
- * Stated here rather than beside the CLI because the config file, the CLI
- * and every publisher profile all need the same two numbers, and config.h
- * is the header they can all reach.
- */
 #define LOTA_DEFAULT_VERIFIER_PORT 8443
 #define LOTA_DEFAULT_CA_PORT 8444
 
 /*
- * The key the enforcement object's signature is verified against.
- *
- * The packaged key is data, not configuration: it ships beside the object
- * and its signature, and an upgrade replaces all three together, so key can never
- * be left behind by the object it verifies.
- * Fleet that signs enforcement itself puts its own key at the override path
- * (or names one with policy_pubkey), and that answer survives every upgrade
- * because the package does not own that file.
+ * Candidates of policy_pubkey_resolve(). The package owns the packaged key and
+ * does not own the override path.
  */
 #define LOTA_ENFORCEMENT_PUBKEY_PATH "/usr/lib/lota/enforcement.pub"
 #define LOTA_POLICY_PUBKEY_OVERRIDE "/etc/lota/policy.pub"
 
-/* Largest lota.conf the agent will read back when appending a profile.
- * Far above any real file.
- * The bound exists so caller cannot be made to allocate on file's say-so */
+/* Largest lota.conf config_profile_append() reads; a larger one is refused */
 #define LOTA_CONFIG_MAX_FILE 262144
 
-/* Maximum line length in config file */
 #define LOTA_CONFIG_MAX_LINE 1024
 
-/* Maximum number of trust-lib / protect-pid entries */
 #define LOTA_CONFIG_MAX_LIBS 64
 
-/*
- * Maximum number of fs-verity allowlist entries.
- * Must not exceed the BPF map capacity (allow_verity_digest.max_entries=1024).
- */
+/* Must not exceed the allow_verity BPF map's max_entries (1024). */
 #define LOTA_CONFIG_MAX_VERITY 256
 
 /*
- * Maximum number of operator UIDs that get a container-accessible
- * IPC listener at /run/user/<uid>/lota/lota.sock. Must match
- * IPC_MAX_EXTRA_LISTENERS so every entry has a slot in
- * struct ipc_context.extra[]. Asserted in main_utils.c.
+ * Operator UIDs with a container listener. Not above IPC_MAX_EXTRA_LISTENERS,
+ * asserted in main_utils.c.
  */
 #define LOTA_CONFIG_MAX_CONTAINER_LISTENERS 4
 
 /*
- * Publisher profiles.
- *
- * Player's machine has one state and several publishers judging it, each with
- * its own attestation CA, its own verifier and its own cadence.
- *
- * Profile list is how the agent is told about more than one of them, so that
- * buying a second game does not mean re-provisioning the host.
- *
- * The section name is an operator-facing label only.
- * Profile's identity is the SHA-256 of its CA trust anchor's SubjectPublicKeyInfo
- * -- the endpoint is mutable and spoofable, while the anchor is what enrollment
- *  actually verifies against, so it survives an address change and cannot collide
- *  between two publishers sharing a hostname.
+ * Publisher profiles: one section per publisher, each with its own CA, verifier
+ * and interval. The section name is a label. The profile's identity is the
+ * SHA-256 of its CA trust anchor's SubjectPublicKeyInfo.
  */
 #define LOTA_CONFIG_MAX_PROFILES 8
 #define LOTA_CONFIG_MAX_PROFILE_NAME 64
 
-/* Every configured profile has to have an AIK handle to be given */
 _Static_assert(LOTA_PROFILE_MAX_AIK_HANDLES >= LOTA_CONFIG_MAX_PROFILES,
 	       "the AIK handle range must cover every configurable profile");
 
@@ -102,40 +62,25 @@ struct lota_profile {
 	int ca_port;
 
 	/*
-	 * Trust anchor for both the CA and the verifier connection.
-	 * Required: it is what the profile's identity is derived from
+	 * Trust anchor for the CA and the verifier connection. Required: the
+	 * profile's identity is derived from it.
 	 */
 	char ca_cert[PATH_MAX];
 
 	/*
-	 * Verifier the profile reports to, empty when the publisher runs
-	 * none.
-	 *
-	 * Publisher can adopt either half of the evidence.
-	 * Running a verifier buys a judgement over the full attestation report
-	 * -- boot PCR pins, agent-hash allow-list, firmware floor, revocation.
-	 * Taking tokens only buys the TPM signature over the flags and the PCR
-	 * digest, checked in the publisher's own backend with the server SDK,
-	 * and costs the player less: no report, no event log and no runtime
-	 * manifest leaves the machine for that publisher.
-	 *
-	 * `verifier = none` is how the second one is said, and saying it is required:
-	 * omitted key is a mistake that would otherwise produce host that starts,
-	 * enrolls, mints tokens and reports to nobody, which fails only at whatever
-	 * was waiting for a report.
+	 * Verifier the profile reports to. `verifier = none` leaves it empty
+	 * and sets token_only: nothing is reported to this publisher, and the
+	 * target still enrolls, holds an AIK and renews its certificate.
+	 * A profile that names neither is refused.
 	 */
 	char verifier[256];
 	int verifier_port;
 	bool token_only;
 
 	/*
-	 * SHA-256 of the certificate this publisher's verifier is allowed to
-	 * present, hex, empty when the profile pins nothing.
-	 *
-	 * Per profile because the pin is per certificate: every publisher runs
-	 * its own verifier, so one fingerprint can match at most one of them.
-	 * The top-level `pin_sha256` belongs to the single-verifier deployment
-	 * and is refused beside profiles.
+	 * SHA-256 of the certificate this publisher's verifier may present,
+	 * in hex; empty pins nothing.
+	 * A top-level pin_sha256 is refused beside profiles.
 	 */
 	char pin_sha256[128];
 
@@ -143,18 +88,8 @@ struct lota_profile {
 	int attest_interval;
 
 	/*
-	 * Report to this publisher only while a title of theirs is running.
-	 *
-	 * Player's machine is not a fleet asset:
-	 * Verifier receiving quote every five minutes from boot to poweroff
-	 * learns when the machine is on, and learns it for a publisher whose
-	 * game is closed.
-	 * Enforcement and the PCR 14 boot commitment stay always-on either way
-	 * and never send a byte, which is what keeps a session's quote able to
-	 * prove the whole boot-to-now window.
-	 *
-	 * Default for a profile; Operator fleet that wants continuous stream
-	 * sets `reporting = continuous`
+	 * Report to this publisher only while a title bound to it is connected.
+	 * On by default; `reporting = continuous` turns it off.
 	 */
 	bool session_gated;
 };
@@ -179,26 +114,23 @@ struct lota_config {
 	bool bench;
 
 	/* Attestation */
-	int attest_interval; /* 0 = one-shot */
+	int attest_interval; /* 0: see attest_effective_interval() */
 	uint32_t aik_ttl; /* seconds, 0 = default */
-	uint32_t aik_handle; /* TPM persistent handle, 0 = default */
+	uint32_t aik_handle; /* TPM persistent handle */
 	char kernel_path[PATH_MAX];
 
 	/*
-	 * At-rest hardening for the AIK userAuth. Default off keeps the
-	 * existing plaintext sidecar behaviour byte-for-byte. When on, the
-	 * agent also writes a copy sealed to the boot/PCR state and prefers
-	 * it on load. strict additionally drops the plaintext sidecar so the
-	 * auth only exists sealed -- a boot-state change then forces
-	 * re-provisioning.
+	 * AIK userAuth at rest. seal_aik_auth adds a copy sealed to the PCR
+	 * state and tries it first on load. seal_aik_auth_strict also seals,
+	 * drops the plaintext sidecar and has no fallback to it.
 	 */
 	bool seal_aik_auth;
 	bool seal_aik_auth_strict;
 
 	/*
-	 * Reuse a persistent seal storage primary (TPM_SEAL_PRIMARY_HANDLE)
-	 * instead of deriving it per seal/unseal. Default off. Persist/evict
-	 * the object with --seal-persist-primary / --seal-evict-primary.
+	 * Seal and unseal use the primary at TPM_SEAL_PRIMARY_HANDLE when it
+	 * exists. --seal-persist-primary and --seal-evict-primary manage the
+	 * object.
 	 */
 	bool seal_persistent_primary;
 
@@ -218,18 +150,12 @@ struct lota_config {
 	char allow_verity[LOTA_CONFIG_MAX_VERITY][PATH_MAX];
 	int allow_verity_count;
 
-	/* Protected PIDs: inline, capped at LOTA_MAX_PROTECTED_PIDS */
 	uint32_t protect_pids[LOTA_MAX_PROTECTED_PIDS];
 	int protect_pid_count;
 
 	/*
-	 * Operator UIDs that receive an additional listener under
-	 * /run/user/<uid>/lota/lota.sock. Steam pressure-vessel only
-	 * mounts /run/user/<uid> into the container, so each user that
-	 * launches games needs a per-UID secondary socket.
-	 * Empty list selects the single-operator mode instead: one secondary
-	 * listener in the agent's own XDG_RUNTIME_DIR, which is what
-	 * the documented systemd drop-in pins and what the SDK auto-detects.
+	 * UIDs served a listener at /run/user/<uid>/lota/lota.sock.
+	 * Empty: one listener in the agent's own XDG_RUNTIME_DIR, when it is set.
 	 */
 	uint32_t container_listener_uids[LOTA_CONFIG_MAX_CONTAINER_LISTENERS];
 	int container_listener_uid_count;
@@ -238,192 +164,164 @@ struct lota_config {
 	struct lota_profile profiles[LOTA_CONFIG_MAX_PROFILES];
 	int profile_count;
 
-	/* Log level: "debug", "info", "warn", "error" */
+	/*
+	 * "error", "warn", "info"; any other non-empty value means debug.
+	 * Only a reload that changes the value applies it.
+	 */
 	char log_level[16];
 };
 
 void config_init(struct lota_config *cfg);
 
-/*
- * config_new - Allocate a config and apply the defaults.
+/**
+ * config_new() - Allocate a config and apply the defaults.
  *
- * struct lota_config is over a megabyte, most of it the fs-verity allow-list
- * and the trusted-library list, so a local one costs more stack than a thread
- * is typically given in total.
- * Callers allocate instead; config_init() stays for the caller that already
- * owns the storage.
+ * The struct is over a megabyte, so callers allocate it.
  *
- * Returns a config with defaults applied, or NULL if the allocation failed.
- * Release it with config_free().
+ * Return: the config, to release with config_free(), or NULL.
  */
 struct lota_config *config_new(void);
 
-/*
- * config_free - Release a config from config_new().
- * NULL is a no-op.
+/**
+ * config_free() - Release a config from config_new().
+ * @cfg: The config, or NULL.
  */
 void config_free(struct lota_config *cfg);
 
-/*
- * config_load - Parse a config file into the struct.
+/**
+ * config_load() - Parse a config file into @cfg.
+ * @cfg: An initialized config.
+ * @path: File to read, or NULL for LOTA_CONFIG_DEFAULT_PATH.
  *
- * @cfg:  Pointer to an already-initialized config struct.
- * @path: File path. If NULL, uses LOTA_CONFIG_DEFAULT_PATH.
+ * A symlink is not followed. A file that is not regular, is group- or
+ * world-writable, or is owned by neither root nor the effective user is refused
+ * before parsing. Parsing continues past a refused line, naming each on stderr,
+ * and @cfg keeps the lines that applied.
  *
- * Returns:
- *    0  on success (file parsed, all recognised keys applied)
- *   -ENOENT  if the file does not exist (non-fatal if default path)
- *   -EINVAL  if a line is malformed (logged to stderr, keeps going)
- *   -errno   on I/O error
+ * A line of the form [profile "name"] opens a publisher profile. Every key
+ * after it belongs to that profile until the next header or the end of the
+ * file, so top-level keys go above the first profile.
  *
- * Unknown keys are logged to stderr and cause an error return (fail-closed).
- * Malformed lines are logged but do not stop parsing.
- *
- * Line of the form [profile "name"] opens a publisher profile.
- * Every key after it belongs to that profile until the next section header
- * or the end of the file; there is no way back to the top level,
- * so the top-level keys belong above the first profile.
+ * Return: 0 on success; -EINVAL when a line or a profile was refused or the
+ * file is not regular; -EPERM for its mode or owner; -EIO on a read error;
+ * or the negative errno of the open, -ENOENT for a missing file.
  */
 int config_load(struct lota_config *cfg, const char *path);
 
-/*
- * config_clamp_aik_ttl - Lift an AIK rotation TTL that is below the floor.
+/**
+ * config_clamp_aik_ttl() - Lift an AIK rotation TTL below the floor.
+ * @ttl: The value read; 0 selects the default and is left alone.
+ * @filepath: File the value came from, or NULL.
+ * @lineno: Its line, ignored when @filepath is NULL.
  *
- * @ttl:      The value as it was read. 0 selects the built-in default and is
- *            left alone; it is not a cadence.
- * @filepath: File the value came from, or NULL when it did not come from one.
- * @lineno:   Line it was read at, ignored when @filepath is NULL.
+ * Warns on stderr when it changes the value.
  *
- * Both roads a TTL arrives by call this: the parser as it reads the key,
- * and the CLI once the flag and the file have been merged into one value.
- * A floor applied on one road and not the other is one file edit away from
- * being gone, so the settled value is what meets it.
- *
- * Returns the TTL to use, and warns on stderr when it is not the one given.
+ * Return: the TTL to use.
  */
 uint32_t config_clamp_aik_ttl(uint32_t ttl, const char *filepath, int lineno);
 
-/*
- * config_load_from_fd - Parse configuration from an already-open fd.
+/**
+ * config_load_from_fd() - Parse a config from an open file descriptor.
+ * @cfg: An initialized config.
+ * @fd: Open file, read from offset 0; it stays open.
+ * @filepath: Label for diagnostics, or NULL for "(fd)".
  *
- * @cfg:      Pointer to an already-initialized config struct.
- * @fd:       Open read-only file descriptor for config file.
- * @filepath: Optional label for diagnostics (NULL -> "(fd)").
+ * Applies the file checks and the rules of config_load(), except the symlink
+ * one.
  *
- * This validates file security constraints and then parses from offset 0.
- * The caller keeps ownership of @fd.
+ * Return: as config_load().
  */
 int config_load_from_fd(struct lota_config *cfg, int fd, const char *filepath);
 
 /* strict flags, applied in enforce mode only */
 #define LOTA_STRICT_FLAG_COUNT 5
 
-/*
- * config_inert_strict_flags - strict flags set but ignored outside enforce
+/**
+ * config_inert_strict_flags() - Strict flags set but inert outside enforce.
+ * @cfg: Configuration to read.
+ * @names: Receives the key names, in the order config_dump() prints them.
+ * @max: Capacity of @names.
  *
- * @cfg:   Configuration to read.
- * @names: Receives the key names, in the order config_dump prints them.
- * @max:   Capacity of @names.
- *
- * Returns the number of names written, or a negative errno.
+ * Return: the number of names written, or a negative errno.
  */
 int config_inert_strict_flags(const struct lota_config *cfg,
 			      const char *names[], int max);
 
-/*
- * config_inert_strict_flags_of - config_inert_strict_flags() on bare flags
+/**
+ * config_inert_strict_flags_of() - config_inert_strict_flags() on bare flags.
+ * @mode_is_enforce: Whether the mode being applied is enforce.
+ * @flags: The five flags, in the order config_dump() prints them.
+ * @names: Receives the key names of those that are on and inert.
+ * @max: Capacity of @names.
  *
- * @mode_is_enforce: whether the mode being applied is enforce.
- * @flags:           the five flags, in the order config_dump prints them.
- * @names:           receives the key names of those that are on and inert.
- * @max:             capacity of @names.
- *
- * Returns the number of names written, or a negative errno.
+ * Return: the number of names written, or a negative errno.
  */
 int config_inert_strict_flags_of(bool mode_is_enforce,
 				 const bool flags[LOTA_STRICT_FLAG_COUNT],
 				 const char *names[], int max);
 
-/*
- * config_dump - Print current configuration to FILE.
- *
- * Writes all effective values in the same key = value format that
- * can be fed back into config_load().
+/**
+ * config_dump() - Print a config in the syntax config_load() parses.
+ * @cfg: Configuration to print.
+ * @fp: Where to print it.
  */
 void config_dump(const struct lota_config *cfg, FILE *fp);
 
-/*
- * config_profile_name_defect - why the parser would refuse a profile label
- * @name:    candidate label for a [profile "name"] header
- * @why:     receives a reason fit for an error message, naming the character
- *           at fault where one is
- * @why_cap: size of @why
+/**
+ * config_profile_name_defect() - Why the parser would refuse a profile label.
+ * @name: Candidate for a [profile "name"] header.
+ * @why: Receives a reason for an error message.
+ * @why_cap: Size of @why.
  *
- * The header's rules live here rather than inside the parser so that anything
- * writing a label can apply them before the file exists. The quote is one of
- * them: it is not a control character, but it is what ends the header,
- * so a label carrying one names a section that ends where the label does.
- *
- * Returns 0 for a label the parser reads back as written, -EINVAL for an empty
- * one, or -EILSEQ for a label the parser would refuse.
+ * Return: 0 for an acceptable label, -EINVAL for an empty one or no @why,
+ * or -EILSEQ for one too long or carrying a quote or a control character.
  */
 int config_profile_name_defect(const char *name, char *why, size_t why_cap);
 
-/*
- * config_profile_defect - why the parser would not read a profile back
- * @p:       the publisher a section would be written for
- * @why:     receives a reason fit for an error message, naming the field
- * @why_cap: size of @why
+/**
+ * config_profile_defect() - Why the writer would refuse a profile.
+ * @p: The publisher a section would be written for.
+ * @why: Receives a reason for an error message, naming the field.
+ * @why_cap: Size of @why.
  *
- * Every field a section interpolates arrives from a command line,
- * and the parser has rules for all of them: a host carrying a newline forges
- * a key inside the section, a relative trust anchor is refused outright,
- * and a value with an edge of whitespace is trimmed into a different value.
+ * Checks the label, ca, ca_cert, pin_sha256 and verifier. The ports and the
+ * interval are not checked.
  *
- * Returns 0 for a profile the parser reads back as written,
- * -EINVAL when a required field is missing, or -EILSEQ when a field's value
- * would not survive the round trip.
+ * Return: 0 when the checks pass, -EINVAL when the label, ca or ca_cert is
+ * empty, or -EILSEQ when a check refuses a field.
  */
 int config_profile_defect(const struct lota_profile *p, char *why,
 			  size_t why_cap);
 
-/*
- * config_profile_append_text - add a publisher profile to a config's text
- * @existing: current file contents (may be empty, never NULL)
- * @p:        the publisher to add
- * @out:      receives the new contents
- * @out_cap:  size of @out
+/**
+ * config_profile_append_text() - Add a publisher profile to a config's text.
+ * @existing: Current file contents; may be empty, not NULL.
+ * @p: The publisher to add.
+ * @out: Receives @existing unchanged, then the section.
+ * @out_cap: Size of @out.
  *
- * Game's installer registers its publisher this way rather than asking the player
- * to edit a file. Existing text is copied through untouched: installer that rewrote
- * the file would drop whatever the operator put there, and the profile section
- * is appended at the end, which is always valid because every key after a section
- * header belongs to that section.
+ * @existing is searched as plain text, so a comment counts, and for the ca_cert
+ * so do a top-level key and a longer path starting with @p's.
  *
- * Returns 1 when the profile was appended, 0 when the same publisher is already
- * present under the same name (an installer that runs twice), or negative errno:
- * -EEXIST when the name is taken by a different publisher,
- * E2BIG at LOTA_CONFIG_MAX_PROFILES,
- * -EOVERFLOW when @out cannot hold the result,
- * -EINVAL when a required field is missing,
- * -EILSEQ when a field's value would not survive the parser reading it back
- * (see config_profile_defect()).
+ * Return: 1 when the section was appended; 0, with @out holding @existing, when
+ * "ca_cert = " and @p's path occur in the text; -EEXIST when "[profile" with
+ * the quoted label occurs; -E2BIG when "[profile" occurs
+ * LOTA_CONFIG_MAX_PROFILES times or more; -EOVERFLOW when the section or the
+ * result does not fit; or the errors of config_profile_defect().
  */
 int config_profile_append_text(const char *existing,
 			       const struct lota_profile *p, char *out,
 			       size_t out_cap);
 
-/*
- * config_profile_append - the same, applied to a file at @path
+/**
+ * config_profile_append() - Add a publisher profile to the file at @path.
+ * @path: The config file; a missing one counts as empty.
+ * @p: The publisher to add.
  *
- * Writes through a temporary file in the same directory and renames it into place,
- * so crash mid-write leaves the old config rather than half of one.
+ * Writes @path.new, reads it back with config_load() and renames it into place.
  *
- * The replacement is read back with config_load() before the rename,
- * since the text already in the file is copied through unexamined: a config that
- * had stopped parsing before this call would otherwise be renamed into place
- * and reported as a publisher added. Same return values, plus -EBADMSG when
- * the result does not parse, in which case @path is left exactly as it was.
+ * Return: as config_profile_append_text(); -EBADMSG when the read-back fails,
+ * with @path untouched; or another negative errno.
  */
 int config_profile_append(const char *path, const struct lota_profile *p);
 

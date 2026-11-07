@@ -318,16 +318,8 @@ static void apply_runtime_flags_transactional(
 }
 
 /*
- * Keep the enforcement switches the command line turned on.
- *
- * All five flags only enable, and the reload below applies whatever the file says
- * -- whose defaults leave strict_exec and strict_modules off.
- * So a switch an operator passed as an argument would be withdrawn by a reload
- * that merely inherited a default, and the daemon cannot be restarted to read
- * its own command line again.
- *
- * A switch the command line did not pass is untouched here, so the file still
- * decides everything nobody asked for by hand.
+ * A reload applies the file, so turn back on each switch the command line
+ * passed. A switch it did not pass stays as the file says.
  */
 static void keep_command_line_switches(struct lota_config *new_cfg)
 {
@@ -367,19 +359,8 @@ static void keep_command_line_switches(struct lota_config *new_cfg)
 }
 
 /*
- * Fold what the command line asked for back into the set the file describes.
- *
- * --trust-lib and --protect-pid are arguments to the running daemon, not entries
- * in the file it re-reads, so a reload built from the file alone revokes them:
- * the trusted-library map empties and lota_sb_mount has no inode left to refuse,
- * which is the substitution it exists to stop. There is no way back short of
- * a cold boot, because the agent burns its boot commitment when it stops.
- *
- * Merging here rather than inside the two reload paths keeps their rollback
- * intact and makes the counts they report the real totals.
- *
- * The file still owns what the file says: an entry it drops is dropped,
- * unless the command line asked for that one too.
+ * Add the --trust-lib and --protect-pid entries back into the set the file
+ * describes, since the reload paths below apply only @new_cfg.
  */
 static void merge_command_line_state(struct lota_config *new_cfg)
 {
@@ -529,11 +510,6 @@ static void reload_trust_libs(const struct lota_config *new_cfg,
 	bool trust_reload_failed = false;
 	int applied_libs = 0;
 
-	/*
-	 * Rollback snapshot is 256 KB, so it is allocated not held in this frame.
-	 * Without it there is no way back to the working set, so a failed allocation
-	 * leaves the current set alone instead of starting a change it could not undo.
-	 */
 	char (*old_trust_libs)[PATH_MAX] =
 		calloc(LOTA_CONFIG_MAX_LIBS, sizeof(*old_trust_libs));
 
@@ -638,13 +614,7 @@ static void sync_config_snapshot(
 		copy_path(cfg->trust_libs[k], trust_libs[k]);
 	}
 
-	/*
-	 * Publisher list moves with the file.
-	 * lota.conf gains publishers while the daemon runs
-	 * -- game's installer writes one -- and the caller rebuilds the attestation
-	 *  targets from this snapshot right after, so publisher that is only
-	 *  in the file is a publisher no title can name.
-	 */
+	/* the caller rebuilds the attestation targets from this snapshot */
 	memcpy(cfg->profiles, new_cfg->profiles, sizeof(cfg->profiles));
 	cfg->profile_count = new_cfg->profile_count;
 
@@ -700,12 +670,6 @@ int agent_reload_config(const char *config_path, struct lota_config *cfg,
 		return open_err;
 	}
 
-	/*
-	 * Allocated, not declared: this function holds a whole second config
-	 * alongside the caller's for the length of the reload, and the struct
-	 * is over a megabyte.
-	 * Taken after the open succeeds so the paths above keep their plain returns.
-	 */
 	new_cfg = config_new();
 	if (!new_cfg) {
 		lota_err("Failed to allocate config for reload");

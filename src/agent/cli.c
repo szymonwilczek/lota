@@ -26,7 +26,6 @@
 #include "policy_pubkey.h"
 #include "tpm.h"
 
-/* Runtime config populated by --protect-pid / --trust-lib / --allow-verity. */
 static uint32_t *g_protect_pids = NULL;
 static int g_protect_pid_count = 0;
 static char g_trust_libs[LOTA_CONFIG_MAX_LIBS][PATH_MAX];
@@ -143,11 +142,7 @@ static int load_config_into_options(struct cli_options *opts,
 			opts->config_path);
 		return 1;
 	} else if (cfg_ret == -EACCES && !opts->config_path) {
-		/*
-		 * Default config is root-only, so unprivileged callers cannot
-		 * read it. Treat it as absent and warn. A file named with
-		 * --config still fails below
-		 */
+		/* a file named with --config fails below instead */
 		fprintf(stderr,
 			"Cannot read %s: %s. Continuing with defaults; pass "
 			"--config to name a file this user can read.\n",
@@ -244,11 +239,6 @@ static int load_config_into_options(struct cli_options *opts,
 	return 0;
 }
 
-/*
- * Parse --attest-interval value
- * 0 disables the loop, a nonzero value below the minimum is raised to it,
- * one above the maximum is refused.
- */
 static int parse_attest_interval(const char *arg, int *interval)
 {
 	long v;
@@ -355,7 +345,9 @@ int cli_parse(int argc, char **argv, struct cli_options *opts,
 	opts->ca_port = LOTA_DEFAULT_CA_PORT;
 	opts->config_file_mode = -1;
 
-	/* Pre-scan for --config so config_load() runs before option defaults.
+	/*
+	 * the file loads first: the flags below overwrite its values and add to
+	 * its lists
 	 */
 	for (int i = 1; i < argc; i++) {
 		if ((strcmp(argv[i], "--config") == 0 ||
@@ -682,7 +674,7 @@ int cli_parse(int argc, char **argv, struct cli_options *opts,
 			opts->policy_pubkey_path = optarg;
 			break;
 		case 'f':
-			/* --config: handled in pre-scan above */
+			/* the pre-scan reads the two-argument spellings only */
 			break;
 		case 'Z':
 			opts->dump_config_flag = 1;
@@ -696,10 +688,8 @@ int cli_parse(int argc, char **argv, struct cli_options *opts,
 	}
 
 	/*
-	 * The flag has overwritten the file by now, so this is where the TTL
-	 * is settled and the only place the floor covers both roads.
-	 * The parser has already lifted a value that came from the file,
-	 * naming it, so a file-only TTL reaches this clamped and passes through.
+	 * --aik-ttl reaches here unclamped; a value from the file has already
+	 * been lifted by the parser and passes through.
 	 */
 	opts->aik_ttl = config_clamp_aik_ttl(opts->aik_ttl, NULL, 0);
 
