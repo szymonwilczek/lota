@@ -1,17 +1,8 @@
 /* SPDX-License-Identifier: MIT */
 /* Copyright (C) 2026 Szymon Wilczek */
 /*
- * What to say when the daemon will not start because one is already running.
- *
- * Header-only and pure: the caller owns the buffer and the printing, so what an
- * operator reads can be pinned by a test rather than reproduced by starting a
- * second daemon.
- *
- * Flags only the daemon reads do nothing when another instance holds the PID
- * file.
- * --protect-pid is the one passed expecting an effect on the running instance,
- * so a refusal that carried it says the flag was ignored and names what protects
- * a live process instead; any other refusal stays one line.
+ * Header-only, so a test pins what an operator reads without starting a second
+ * daemon.
  */
 
 #ifndef LOTA_AGENT_STARTUP_HINT_H
@@ -21,12 +12,14 @@
 #include <stddef.h>
 #include <stdio.h>
 
-/*
- * @asked_protect_pid: the command line carried --protect-pid.
+/**
+ * startup_busy_message() - Why the daemon does not start beside another one.
+ * @asked_protect_pid: Add the part on --protect-pid.
+ * @out: Receives a NUL-terminated message.
+ * @cap: Size of @out.
  *
- * Always writes a NUL-terminated sentence naming the refusal; adds what
- * the flag would have done, and the way to protect a process that is
- * already running, when that is what the caller asked for.
+ * With @asked_protect_pid the message also says the flag did nothing
+ * and how a running process gets protected.
  */
 static inline void startup_busy_message(bool asked_protect_pid, char *out,
 					size_t cap)

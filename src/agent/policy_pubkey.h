@@ -11,16 +11,15 @@
 #ifndef LOTA_POLICY_PUBKEY_H
 #define LOTA_POLICY_PUBKEY_H
 
-/*
- * policy_pubkey_resolve - Which key verifies the enforcement object.
+/**
+ * policy_pubkey_resolve() - Pick the key that verifies the enforcement object.
+ * @configured: policy_pubkey from the config file, or NULL.
+ * @override_path: The operator's key.
+ * @packaged_path: The key the agent package ships.
  *
- * @configured:    policy_pubkey from the config file or the CLI, or NULL.
- * @override_path: operator-owned key no package owns.
- * @packaged_path: key the agent package shipped beside the object.
+ * The paths are parameters so that tests need not touch /usr or /etc.
  *
- * Returns the first readable path in that order, or NULL; the agent refuses
- * to load an object it cannot verify. Paths are parameters so tests need not
- * touch /usr or /etc.
+ * Return: the first readable path in the order of the parameters, or NULL.
  */
 const char *policy_pubkey_resolve(const char *configured,
 				  const char *override_path,

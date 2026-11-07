@@ -2,13 +2,9 @@
 /*
  * LOTA Agent - Policy File Ed25519 Signing
  *
- * Provides Ed25519 key generation, signing, and verification for
- * YAML policy files. Detached signatures are stored alongside the
- * policy as <policy>.sig (raw 64-byte Ed25519 signature).
- *
- * Key format: raw 32-byte seed (private) / 32-byte public key.
- * On disk, keys are stored as PEM-encoded PKCS#8 (private) and
- * SubjectPublicKeyInfo (public) via OpenSSL.
+ * A signature is the raw POLICY_SIG_SIZE bytes in a file of its own. Keys are
+ * PEM: PKCS#8 for the private key, SubjectPublicKeyInfo for the public one.
+ * EAUTH is 80 where the C library does not define it.
  *
  * Copyright (C) 2026 Szymon Wilczek
  */
@@ -19,84 +15,72 @@
 #include <stddef.h>
 #include <stdint.h>
 
-#define POLICY_SIG_SIZE 64 /* Ed25519 signature size */
+#define POLICY_SIG_SIZE 64
 
-/*
- * Maximum signed-object file size. Bounds both the signer (read the
- * file into memory before Ed25519) and the verifier (read the BPF
- * object back to recompute the signature). 4 MiB covers the
- * compiled lota_lsm.bpf.o plus headroom.
- * config-style policy files are orders of magnitude below.
- */
+/* Largest file the functions below and the BPF loader read. */
 #define LOTA_MAX_SIGNED_OBJECT_SIZE (4 * 1024 * 1024)
 
-/*
- * policy_sign_generate_keypair - Generate an Ed25519 keypair
+/**
+ * policy_sign_generate_keypair() - Write a new Ed25519 keypair.
+ * @privkey_pem_path: Receives the private key, created with mode 0600.
+ * @pubkey_pem_path: Receives the public key, created with mode 0644.
  *
- * @privkey_pem_path: Output path for PEM-encoded private key (PKCS#8)
- * @pubkey_pem_path:  Output path for PEM-encoded public key (SPKI)
+ * The umask applies to both modes. A file that exists is truncated and keeps
+ * its mode.
  *
- * Generates a cryptographically random Ed25519 keypair and writes
- * both keys to disk in PEM format.
- *
- * Returns: 0 on success, negative errno on failure
+ * Return: 0, -EINVAL for a NULL path, or another negative errno.
  */
 int policy_sign_generate_keypair(const char *privkey_pem_path,
 				 const char *pubkey_pem_path);
 
-/*
- * policy_sign_file - Sign a file with Ed25519
+/**
+ * policy_sign_file() - Write a detached signature of a file.
+ * @file_path: File to sign.
+ * @privkey_pem_path: The private key.
+ * @sig_path: Receives the signature, created with mode 0644 under the umask.
  *
- * @file_path:        Path to the file to sign (e.g: policy.yaml)
- * @privkey_pem_path: Path to PEM-encoded Ed25519 private key
- * @sig_path:         Output path for the 64-byte raw signature
- *
- * Reads the entire file, signs with Ed25519, and writes the detached
- * signature to sig_path.
- *
- * Returns: 0 on success, negative errno on failure
+ * Return: 0; -ENOENT when the key cannot be read or is not Ed25519; -EFBIG
+ * when the file exceeds LOTA_MAX_SIGNED_OBJECT_SIZE; -EAGAIN when its size
+ * changes while it is read; or another negative errno.
  */
 int policy_sign_file(const char *file_path, const char *privkey_pem_path,
 		     const char *sig_path);
 
-/*
- * policy_verify_file - Verify an Ed25519 signature on a file
+/**
+ * policy_verify_file() - Check a detached signature of a file.
+ * @file_path: The signed file.
+ * @pubkey_pem_path: The public key.
+ * @sig_path: The signature; bytes past POLICY_SIG_SIZE are ignored.
  *
- * @file_path:       Path to the file that was signed
- * @pubkey_pem_path: Path to PEM-encoded Ed25519 public key
- * @sig_path:        Path to the 64-byte raw signature file
- *
- * Returns: 0 if signature is valid, -EAUTH if invalid, negative errno otherwise
+ * Return: 0 for a valid signature; -EAUTH for an invalid one or a signature
+ * shorter than POLICY_SIG_SIZE; otherwise as policy_sign_file().
  */
 int policy_verify_file(const char *file_path, const char *pubkey_pem_path,
 		       const char *sig_path);
 
-/*
- * policy_sign_buffer - Sign a buffer with Ed25519
+/**
+ * policy_sign_buffer() - Sign a buffer.
+ * @data: Data to sign.
+ * @data_len: Its length.
+ * @privkey_pem_path: The private key.
+ * @sig_out: Receives POLICY_SIG_SIZE bytes.
  *
- * Primarily used in unit tests to generate test signatures.
- *
- * @data:             Data to sign
- * @data_len:         Length of data
- * @privkey_pem_path: Path to PEM-encoded Ed25519 private key
- * @sig_out:          Output buffer (POLICY_SIG_SIZE bytes)
- *
- * Returns: 0 on success, negative errno on failure
+ * Return: 0, -EINVAL for a NULL argument, -ENOENT when the key cannot be read
+ * or is not Ed25519, -ENOMEM, or -EIO.
  */
 int policy_sign_buffer(const uint8_t *data, size_t data_len,
 		       const char *privkey_pem_path, uint8_t *sig_out);
 
-/*
- * policy_verify_buffer - Verify Ed25519 signature on buffer
+/**
+ * policy_verify_buffer() - Check a signature of a buffer.
+ * @data: The signed data.
+ * @data_len: Its length.
+ * @pubkey_pem_path: The public key.
+ * @sig: POLICY_SIG_SIZE bytes.
  *
- * Primarily used in unit tests to verify test signatures.
- *
- * @data:             Data that was signed
- * @data_len:         Length of data
- * @pubkey_pem_path:  Path to PEM-encoded Ed25519 public key
- * @sig:              Signature to verify (POLICY_SIG_SIZE bytes)
- *
- * Returns: 0 if valid, -EAUTH if invalid, negative errno otherwise
+ * Return: 0 for a valid signature, -EAUTH for an invalid one, -EINVAL for
+ * a NULL argument, -ENOENT when the key cannot be read or is not Ed25519,
+ * -ENOMEM, or -EIO.
  */
 int policy_verify_buffer(const uint8_t *data, size_t data_len,
 			 const char *pubkey_pem_path, const uint8_t *sig);

@@ -194,8 +194,6 @@ static int compute_policy_digest(const struct agent_startup_policy *policy,
 	if (policy->trust_lib_count > 0 && !policy->trust_libs)
 		return -EINVAL;
 
-	/* hard caps: protect against unbounded memory/time via hostile inputs
-	 */
 	if (policy->protect_pid_count > LOTA_MAX_PROTECTED_PIDS)
 		return -ENOSPC;
 	if (policy->trust_lib_count > LOTA_MAX_TRUSTED_LIBS)
@@ -212,7 +210,7 @@ static int compute_policy_digest(const struct agent_startup_policy *policy,
 	if (policy->block_anon_exec)
 		flags |= (1u << 4);
 
-	/* lock_bpf is always enabled by startup_policy */
+	/* lock_bpf, always on */
 	flags |= (1u << 5);
 
 	mdctx = EVP_MD_CTX_new();
@@ -282,7 +280,6 @@ static int compute_policy_digest(const struct agent_startup_policy *policy,
 		qsort(sorted_pids, (size_t)policy->protect_pid_count,
 		      sizeof(uint32_t), u32_cmp);
 
-		/* hash unique count + values */
 		int unique = 0;
 		for (int i = 0; i < policy->protect_pid_count; i++) {
 			if (i == 0 || sorted_pids[i] != sorted_pids[i - 1])
@@ -384,9 +381,8 @@ out:
 }
 
 /*
- * Kernel floor check for both startup paths. A refusal is a state of the
- * host, so it returns -ENOTSUP, which the unit does not restart on;
- * the kernel's errno goes to the log, as it names the missing gate.
+ * A refusal returns -ENOTSUP, which the unit does not restart on. The check
+ * that refused logs which gate is missing.
  */
 static int verify_kernel_floor(const struct agent_startup_policy *policy)
 {
@@ -414,13 +410,6 @@ int agent_validate_startup_policy(const struct agent_startup_policy *policy)
 	if (ret < 0)
 		return ret;
 
-	/*
-	 * Probe each pid here, before self_measure().
-	 * The apply path runs after it, so a pid that names no process would
-	 * fail there with PCR 14 already spent, and the host could not attest
-	 * until reboot.
-	 * Same probe the protected-set update makes.
-	 */
 	for (int i = 0; i < policy->protect_pid_count; i++) {
 		ret = bpf_loader_probe_protect_pid(policy->protect_pids[i]);
 		if (ret == -ENOENT) {
@@ -615,7 +604,6 @@ int agent_apply_startup_policy(const struct agent_startup_policy *policy)
 			}
 		}
 
-		/* canonicalize allowlist digest order */
 		qsort(digests, (size_t)digest_count, sizeof(*digests),
 		      verity_digest_key_cmp);
 		ret = compute_policy_digest(policy, digests, digest_count,
@@ -638,7 +626,6 @@ int agent_apply_startup_policy(const struct agent_startup_policy *policy)
 		goto out_fail;
 	}
 
-	/* no allowlist: still compute policy digest */
 	ret = compute_policy_digest(policy, NULL, 0, computed_policy_digest);
 	if (ret < 0) {
 		lota_err("Failed to compute policy digest: %s", strerror(-ret));

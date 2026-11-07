@@ -13,17 +13,42 @@
 
 #include "../../include/lota_ipc.h"
 
-/* Ask the daemon on @socket_path; 0 or negative errno */
+/**
+ * status_request() - Ask the daemon for its status.
+ * @socket_path: The daemon's socket.
+ * @out: Receives the answer.
+ *
+ * Return: 0, -EPROTO for an answer of another protocol version or size,
+ * -EACCES when the daemon refuses, or another negative errno.
+ */
 int status_request(const char *socket_path, struct lota_ipc_status *out);
 
-/* Comma-separated names of @flags; a bit without a name prints as hex */
+/**
+ * status_flags_string() - Name the bits of a status flags word.
+ * @flags: The word.
+ * @buf: Receives the names, comma-separated.
+ * @len: Size of @buf.
+ *
+ * Bits without a name print as one hex value, and an empty word as "none".
+ */
 void status_flags_string(uint32_t flags, char *buf, size_t len);
 
-/* The policy keys the host applies, or why none does */
+/**
+ * status_policy_string() - Name the strict keys the host applies.
+ * @s: The daemon's status.
+ * @buf: Receives the names, or "none", with the reason when the LSM does not
+ *       enforce.
+ * @len: Size of @buf.
+ */
 void status_policy_string(const struct lota_ipc_status *s, char *buf,
 			  size_t len);
 
-/* The whole report, one "Key: value" line each */
+/**
+ * status_format() - Write the --status report.
+ * @s: The daemon's status.
+ * @buf: Receives one "Key: value" line per field.
+ * @len: Size of @buf.
+ */
 void status_format(const struct lota_ipc_status *s, char *buf, size_t len);
 
 #endif /* LOTA_AGENT_STATUS_CMD_H */

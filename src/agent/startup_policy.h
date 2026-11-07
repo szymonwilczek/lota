@@ -23,36 +23,26 @@ struct agent_startup_policy {
 	int allow_verity_count;
 
 	/*
-	 * When true, skip the agent-binary immutability check inside
-	 * bpf_loader_verify_kernel_runtime_hardening().
-	 * It is for a host that can offer neither proof
-	 * -- no fs-verity (XFS and ZFS have none) and no signed security.ima xattr.
-	 * --insecure-allow-mutable-rootfs CLI flag is the only path that flips
-	 *  this on, and operators are warned that the dirty-shutdown coverage
-	 *  gap stays open on that host.
+	 * Set by --insecure-allow-mutable-rootfs. Turns four refusals of
+	 * bpf_loader_verify_kernel_runtime_hardening() into warnings: an agent
+	 * binary with neither fs-verity nor a signed security.ima xattr, a TPM
+	 * device without its SELinux label, IMA appraisal in a mode that does
+	 * not block, and no IMA rule appraising exec.
 	 */
 	bool allow_mutable_rootfs;
 };
 
-/*
- * agent_validate_startup_policy - refuse a policy before anything is spent
- * @policy: the policy agent_apply_startup_policy() will be given
+/**
+ * agent_validate_startup_policy() - Refuse a policy before the boot commitment.
+ * @policy: The policy agent_apply_startup_policy() will get.
  *
- * Runs every check in the apply path that can fail on the policy's own
- * contents rather than on the state of a BPF map: the protected-PID
- * capacity, the kernel's anti-tamper prerequisites, whether each
- * fs-verity path can be measured, whether each trusted-library path
- * resolves, and the strict-exec-without-allowlist combination.
+ * Checks the protected-PID capacity and that each PID names a process, the kernel
+ * floor, strict_exec or strict_modules without allow_verity, that each fs-verity
+ * path can be measured, and probes each trusted library. The boot commitment is
+ * made once per boot, so a refusal after it leaves the host without an agent
+ * until reboot. Needs no loaded BPF object.
  *
- * It exists because the boot commitment is irreversible.
- * PCR 14 can be extended once per boot, so a policy that is going to be
- * refused has to be refused before the extend: otherwise a mistyped path
- * costs the host its agent until the next reboot rather than costing
- * a failed start. Every refusal here is one the apply path would raise anyway.
- *
- * Touches no map and needs no loaded BPF context.
- *
- * Returns: 0 when the policy will apply, negative errno otherwise
+ * Return: 0 or a negative errno, -ENOTSUP for a kernel floor refusal.
  */
 int agent_validate_startup_policy(const struct agent_startup_policy *policy);
 
