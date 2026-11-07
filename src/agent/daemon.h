@@ -2,9 +2,6 @@
 /*
  * LOTA Agent - Daemon utilities
  *
- * Provides Unix daemonization and SIGHUP-driven
- * configuration reload support.
- *
  * Copyright (C) 2026 Szymon Wilczek
  */
 
@@ -15,125 +12,100 @@
 #include <stdbool.h>
 #include <sys/types.h>
 
-/* Default PID file path */
 #define DAEMON_DEFAULT_PID_FILE "/run/lota/lota-agent.pid"
 
-/* Maximum PID string length: "4194304\n" (kernel max PID) + NUL */
+/* "%d\n" of a pid, and the NUL */
 #define DAEMON_PID_STR_MAX 16
 
-/*
- * Daemonize the current process.
+/**
+ * daemonize() - Detach into the background.
  *
- * Performs the classic Unix double-fork sequence:
- *   First fork  -> parent exits, child continues
- *   setsid()    -> new session, detach from controlling terminal
- *   Second fork -> session leader exits, grandchild continues
- *   chdir("/")  -> release working directory
- *   umask(0)    -> clear file creation mask
- *   Close stdin/stdout/stderr, redirect to /dev/null
+ * Forks twice with setsid() between, changes to /, sets the umask to 0077
+ * and points stdin, stdout and stderr at /dev/null. The launching process
+ * waits for daemon_notify_started() and exits with the reported status,
+ * or with 1 when the daemon exits without reporting.
  *
- * The launching process does not exit at the fork. It waits on a pipe until
- * the daemon reports how its startup ended, and exits with that status,
- * so a caller that gets its shell back has been told something true.
- * See daemon_notify_started().
- *
- * Returns: 0 in the daemon process, does not return in the launching process.
- *          Negative errno on failure.
+ * Return: 0 in the daemon, or a negative errno. Once the first fork()
+ * succeeds, the launching process does not return.
  */
 int daemonize(void);
 
-/*
- * Report the startup verdict to the process that launched a daemon.
+/**
+ * daemon_notify_started() - Report the startup verdict to the launcher.
+ * @status: Exit status for the launching process.
  *
- * Called once with 0 when the daemon is serving, and once with the exit status
- * on any path that gives up before that. The first call wins and the rest are
- * ignored, so an exit path may call it without knowing whether startup already
- * succeeded.
- *
- * A no-op when the process was not daemonised.
- *
- * @status: exit status the launching process should carry.
+ * The first call wins and later calls do nothing, so an exit path may call it
+ * after startup succeeded. Does nothing without daemonize().
  */
 void daemon_notify_started(int status);
 
-/*
- * Resolve the PID file path a caller means.
+/**
+ * daemon_pidfile_path() - The PID file path a caller means.
+ * @path: Path, or NULL.
  *
- * @path: PID file path, or NULL for the shipped default
- *
- * Returns: @path when it is set, DAEMON_DEFAULT_PID_FILE otherwise.
- *          Never returns NULL.
+ * Return: @path, or DAEMON_DEFAULT_PID_FILE for NULL.
  */
 const char *daemon_pidfile_path(const char *path);
 
-/*
- * Create and lock PID file.
+/**
+ * pidfile_create() - Create, lock and fill the PID file.
+ * @path: Path, or NULL for DAEMON_DEFAULT_PID_FILE.
  *
- * Creates the parent directory if needed, writes the current PID,
- * and holds an exclusive flock() on the file. The lock is inherited
- * across exec but released on process exit, providing automatic
- * stale PID file cleanup.
+ * Creates a missing parent directory with mode 0700. The flock() lasts while
+ * the returned descriptor is open; the descriptor is close-on-exec.
  *
- * @path: PID file path (NULL for default /run/lota/lota-agent.pid)
- *
- * Returns: file descriptor (>= 0) on success (caller must keep it open),
- *          -EEXIST if another instance holds the lock,
- *          negative errno on other failures.
+ * Return: the descriptor, -EEXIST when another process holds the lock,
+ * -EPERM when the parent lacks the sticky bit and is world-writable or owned by
+ * another user, or when the file is owned by another user, -ENOTDIR for
+ * a parent that is not a directory, -EINVAL for a file that is not regular or
+ * has another link, or a negative errno.
  */
 int pidfile_create(const char *path);
 
-/*
- * Remove PID file and release lock.
- *
- * @path: PID file path (must match the path used in pidfile_create)
- * @fd:   file descriptor returned by pidfile_create (-1 to skip close)
+/**
+ * pidfile_remove() - Unlink the PID file and drop its lock.
+ * @path: Path given to pidfile_create().
+ * @fd: Its descriptor, or -1.
  */
 void pidfile_remove(const char *path, int fd);
 
-/*
- * Wait until no process holds the PID file's lock.
+/**
+ * pidfile_wait_released() - Wait until no process holds the PID file's lock.
+ * @path: Path, or NULL for DAEMON_DEFAULT_PID_FILE.
+ * @timeout_ms: How long to wait.
  *
- * The daemon keeps its lock until it has finished shutting down, so a
- * caller that asked it to stop learns here when it is gone.
+ * The daemon drops the lock in pidfile_remove(), after run_daemon() returns.
  *
- * @path:       PID file path (NULL for the shipped default)
- * @timeout_ms: how long to wait for the holder
- *
- * Returns: 0 when nothing holds the lock or the file does not exist,
- *          -ETIMEDOUT if it is still held after @timeout_ms,
- *          negative errno on other failures.
+ * Return: 0 when the lock is free or the file is missing, -ETIMEDOUT when it is
+ * still held, or a negative errno.
  */
 int pidfile_wait_released(const char *path, unsigned int timeout_ms);
 
-/*
- * Whether a SIGHUP has been taken since the last time this was asked,
- * and clearing it in the same call.
+/**
+ * daemon_reload_taken() - Take a pending SIGHUP.
  *
- * The enforcement daemon reads its own flag off a signalfd inside its event
- * loop. The attestation loop has no event loop to hang one on and only needs
- * to know, between rounds, whether the publisher list has to be re-read
- * -- so it asks the handler that daemon_install_signals() already put in place.
+ * For the attestation loop, which checks between rounds; the enforcement
+ * daemon reads SIGHUP from a signalfd.
+ *
+ * Return: true when a SIGHUP came since the last call.
  */
 bool daemon_reload_taken(void);
 
-/* Whether a SIGHUP is waiting, without taking it.
- * Lets a loop stop sleeping for a reload it will act on at the top of its
- * next pass. */
+/**
+ * daemon_reload_pending() - Is a SIGHUP waiting?
+ *
+ * Return: true when daemon_reload_taken() would take one; it stays pending.
+ */
 bool daemon_reload_pending(void);
 
-/*
- * Install signal handlers for daemon operation.
+/**
+ * daemon_install_signals() - Handle SIGTERM, SIGINT and SIGHUP.
+ * @running: Set to 0 on SIGTERM and SIGINT.
+ * @reload: Set to 1 on SIGHUP.
  *
- * Installs handlers for:
- *   SIGTERM -> set g_running = 0 (graceful shutdown)
- *   SIGINT  -> set g_running = 0 (graceful shutdown)
- *   SIGHUP  -> set g_reload = 1  (configuration reload)
- *   SIGPIPE -> ignored (broken network connections)
+ * SIGPIPE is ignored.
  *
- * @running: pointer to volatile sig_atomic_t for shutdown flag
- * @reload:  pointer to volatile sig_atomic_t for reload flag
- *
- * Returns: 0 on success, negative errno on failure
+ * Return: 0 or a negative errno.
  */
 int daemon_install_signals(volatile sig_atomic_t *running,
 			   volatile sig_atomic_t *reload);

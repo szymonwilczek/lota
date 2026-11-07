@@ -2,10 +2,6 @@
 /*
  * LOTA Agent - systemd Integration
  *
- * Implements sd_notify lifecycle, watchdog pings, and socket
- * activation fd inheritance. All functions are safe to call
- * when not running under systemd.
- *
  * Copyright (C) 2026 Szymon Wilczek
  */
 
@@ -24,12 +20,8 @@
 #include <sys/types.h>
 
 /*
- * systemd creates the notify socket mode 0777 by design so any process
- * inside a unit, privileged or not, can report status; the inode mode
- * therefore carries no authenticity signal. The anti-spoof boundary is
- * the parent directory: only a writer of that directory can replace the
- * socket node. Require the socket and its directory to belong to the
- * expected owner and the directory to deny group/other writes.
+ * The socket's mode says nothing: the system one is 0777.
+ * Whoever can write the directory can replace the node.
  */
 static int validate_filesystem_notify_socket(const char *path, uid_t owner)
 {
@@ -130,7 +122,7 @@ int sdnotify_stopping(void)
 int sdnotify_status(const char *fmt, ...)
 {
 	char buf[256];
-	char msg[280]; /* STATUS= prefix + buf */
+	char msg[280];
 	va_list ap;
 
 	if (!fmt)
@@ -165,11 +157,6 @@ int sdnotify_watchdog_ping(void)
 
 int sdnotify_listen_fds(void)
 {
-	/*
-	 * sd_listen_fds(1) consumes LISTEN_FDS / LISTEN_PID so
-	 * subsequent calls return 0. This is the correct behavior:
-	 * the fds should only be claimed once.
-	 */
 	return sd_listen_fds(1);
 }
 

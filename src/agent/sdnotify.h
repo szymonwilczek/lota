@@ -2,19 +2,11 @@
 /*
  * LOTA Agent - systemd Integration
  *
- * Lifecycle:
- *   sdnotify_ready()     ->  READY=1
- *   sdnotify_reloading() ->  RELOADING=1
- *   sdnotify_stopping()  ->  STOPPING=1
- *   sdnotify_status()    ->  STATUS=<text>
- *
- * Watchdog:
- *   sdnotify_watchdog_enabled()  -> read WATCHDOG_USEC
- *   sdnotify_watchdog_ping()     -> WATCHDOG=1
- *
- * Socket activation:
- *   sdnotify_listen_fds()        -> count of inherited fds
- *   sdnotify_is_unix_socket()    -> check fd type
+ * Each sender first checks NOTIFY_SOCKET: /run/systemd/notify and the euid's
+ * /run/user/<uid>/systemd/notify must belong to root or that user, in a
+ * directory only the owner writes, and the abstract
+ * @org/freedesktop/systemd1/notify is taken as is. Any other value is refused
+ * with -EPERM and unset, so later sends return 0 without sending.
  *
  * Copyright (C) 2026 Szymon Wilczek
  */
@@ -25,92 +17,69 @@
 #include <stdbool.h>
 #include <stdint.h>
 
-/*
- * sdnotify_ready - Signal readiness to systemd.
+/**
+ * sdnotify_ready() - Send READY=1.
  *
- * Sends READY=1. For Type=notify services this unblocks
- * "systemctl start" and transitions the unit to active.
- *
- * Returns: 0 on success (or not under systemd), negative errno on error.
+ * Return: 0, also without NOTIFY_SOCKET, or a negative errno.
  */
 int sdnotify_ready(void);
 
-/*
- * sdnotify_reloading - Signal configuration reload in progress.
+/**
+ * sdnotify_reloading() - Send RELOADING=1.
  *
- * Sends RELOADING=1.
- *
- * Returns: 0 on success, negative errno on error.
+ * Return: As sdnotify_ready().
  */
 int sdnotify_reloading(void);
 
-/*
- * sdnotify_stopping - Signal graceful shutdown.
+/**
+ * sdnotify_stopping() - Send STOPPING=1.
  *
- * Sends STOPPING=1.
- *
- * Returns: 0 on success, negative errno on error.
+ * Return: As sdnotify_ready().
  */
 int sdnotify_stopping(void);
 
-/*
- * sdnotify_status - Send a human-readable status string.
+/**
+ * sdnotify_status() - Send STATUS= with a formatted text.
+ * @fmt: printf format.
  *
- * @fmt: printf-style format string.
+ * The text is cut to 255 bytes.
  *
- * The status appears in "systemctl status lota-agent" output.
- * Maximum length is 256 bytes (excess is silently truncated).
- *
- * Returns: 0 on success, negative errno on error.
+ * Return: -EINVAL for a NULL @fmt, else as sdnotify_ready().
  */
 __attribute__((format(printf, 1, 2))) int sdnotify_status(const char *fmt, ...);
 
-/*
- * sdnotify_watchdog_enabled - Check if watchdog is active.
+/**
+ * sdnotify_watchdog_enabled() - Does systemd expect watchdog pings?
+ * @interval_usec: Receives the interval when true; may be NULL.
  *
- * @interval_usec: If non-NULL, receives the watchdog interval
- *                 in microseconds from WATCHDOG_USEC.
- *
- * Returns: true if WATCHDOG_USEC is set and > 0.
+ * Return: true when sd_watchdog_enabled() reports a nonzero interval.
  */
 bool sdnotify_watchdog_enabled(uint64_t *interval_usec);
 
-/*
- * sdnotify_watchdog_ping - Pet the watchdog.
+/**
+ * sdnotify_watchdog_ping() - Send WATCHDOG=1.
  *
- * Sends WATCHDOG=1. Must be called at least every
- * WATCHDOG_USEC/2 microseconds to prevent systemd from
- * killing the process.
- *
- * Returns: 0 on success, negative errno on error.
+ * Return: As sdnotify_ready().
  */
 int sdnotify_watchdog_ping(void);
 
-/*
- * SD_LISTEN_FDS_START - First file descriptor passed by systemd.
- *
- * Inherited fds start at this number. fd 3 corresponds to
- * the first socket in the .socket unit's Listen* directives.
- */
 #define SD_LISTEN_FDS_START 3
 
-/*
- * sdnotify_listen_fds - Return the number of file descriptors
- *                       passed by systemd socket activation.
+/**
+ * sdnotify_listen_fds() - Count the descriptors socket activation passed.
  *
- * Reads LISTEN_FDS and validates LISTEN_PID. On success,
- * inherited fds are [SD_LISTEN_FDS_START, SD_LISTEN_FDS_START+n).
+ * They start at SD_LISTEN_FDS_START. LISTEN_FDS and LISTEN_PID are unset,
+ * so a later call returns 0.
  *
- * Returns: Number of fds (>= 0), or negative errno on error.
+ * Return: the count, or a negative errno.
  */
 int sdnotify_listen_fds(void);
 
-/*
- * sdnotify_is_unix_socket - Check if an fd is a Unix stream socket.
+/**
+ * sdnotify_is_unix_socket() - Check the type of an inherited descriptor.
+ * @fd: Descriptor.
  *
- * @fd: File descriptor to check.
- *
- * Returns: true if fd is an AF_UNIX SOCK_STREAM socket.
+ * Return: true for a listening AF_UNIX SOCK_STREAM socket.
  */
 bool sdnotify_is_unix_socket(int fd);
 

@@ -1,19 +1,8 @@
 /* SPDX-License-Identifier: MIT */
 /*
  * LOTA Agent
- * Minimalist C daemon for Linux remote attestation
  *
  * Copyright (C) 2026 Szymon Wilczek
- *
- * Usage:
- *   lota-agent [options]
- *
- * Options:
- *   --test-tpm      Test TPM operations and exit
- *   --test-iommu    Test IOMMU verification and exit
- *   --bpf PATH      Path to BPF object file
- *   --server HOST   Remote attestation server
- *   --daemon        Run as daemon
  */
 #include <errno.h>
 #include <grp.h>
@@ -56,7 +45,6 @@
 #include "tpm.h"
 #include "watchdog.h"
 
-/* Global state */
 struct agent_globals g_agent = {
 	.running = 1,
 	.dbus_ctx = NULL,
@@ -80,12 +68,7 @@ struct run_daemon_params {
 	struct lota_config *cfg;
 };
 
-/*
- * What republish_rotation_state() needs to answer:
- * "which AIK, measured against whose enrollment"
- * Outlives the daemon's frame: the IPC context that holds the pointer
- * is global, so the object it points at cannot be one the frame owns.
- */
+/* static: the global IPC context keeps the pointer after run_daemon() */
 struct rotation_hook_ctx {
 	uint32_t aik_ttl;
 	const struct profile_paths *profile;
@@ -94,12 +77,8 @@ struct rotation_hook_ctx {
 static struct rotation_hook_ctx g_rotation_hook;
 
 /*
- * Re-read the AIK rotation record and publish it.
- *
- * Called when the attestation loop syncs.
- * Loop rotates the key and writes the record;
- * this process serves D-Bus, so it has to pick the change up from the file rather
- * than from its own copy, which was loaded at startup.
+ * The attestation loop runs in its own process, rotates the AIK and writes the
+ * record; its sync says a round has finished.
  */
 static void republish_rotation_state(void *user)
 {
@@ -114,14 +93,13 @@ static void republish_rotation_state(void *user)
 	publish_rotation_state(hook->aik_ttl, hook->profile);
 }
 
-/* Content hasher over the daemon's BPF object; the hook takes no context */
+/* The hooks take no context, so these use the daemon's BPF loader */
 static int agent_kernel_hash_file(const char *path, uint64_t dev, uint64_t ino,
 				  struct lota_verity_digest_key *out)
 {
 	return bpf_loader_hash_file(&g_agent.bpf_ctx, path, dev, ino, out);
 }
 
-/* Same hook, asked to pin the file */
 static int agent_kernel_pin_object(const char *path, uint64_t dev, uint64_t ino,
 				   int *pinned)
 {
@@ -157,10 +135,7 @@ static int run_daemon(const struct run_daemon_params *params)
 	sigset_t mask;
 	struct epoll_event ev;
 	const struct profile_paths *profile = NULL;
-	/*
-	 * IPC context is global and keeps this list for as long as it serves
-	 * titles, so the list cannot be one the frame owns
-	 */
+	/* static: the global IPC context keeps the pointer after return */
 	static struct attest_target targets[LOTA_CONFIG_MAX_PROFILES];
 	size_t target_count = 0;
 
@@ -191,12 +166,7 @@ static int run_daemon(const struct run_daemon_params *params)
 			sizeof(targets) / sizeof(targets[0]), &target_count);
 
 		if (t_ret < 0) {
-			/*
-			 * No publisher is configured at all, which is a fresh
-			 * consumer install before any title has run.
-			 * Not a reason to stop: enforcement is host-owned
-			 * and no publisher grants it.
-			 */
+			/* no profile, no server: enforcement needs neither */
 			target_count = 0;
 			lota_info("No publisher configured; enforcing for the "
 				  "host and answering titles for nobody");
@@ -205,7 +175,7 @@ static int run_daemon(const struct run_daemon_params *params)
 
 	for (size_t i = 0; i < target_count; i++) {
 		if (targets[i].profile_error)
-			/* label, not verifier: token-only has none */
+			/* a token-only target names no verifier */
 			lota_warn("Cannot read the CA trust anchor %s (%s): "
 				  "answering for %s without a publisher "
 				  "profile",
@@ -214,20 +184,10 @@ static int run_daemon(const struct run_daemon_params *params)
 				  targets[i].label);
 	}
 
-	/*
-	 * Connection that names no publisher gets the first one's AIK,
-	 * which is the same choice the attestation loop makes between rounds.
-	 */
+	/* the TPM stays bound to the first publisher between token requests */
 	if (target_count > 0 && targets[0].has_profile)
 		profile = &targets[0].paths;
 
-	/*
-	 * Daemon-mode hardening: refuse to start under a tracer and install
-	 * the seccomp blocklist. Pre-CLI hardening already set
-	 * no_new_privs and dumpable=0; running these here keeps the
-	 * diagnostic admin paths (--shutdown, --test-tpm, ...) usable
-	 * under strace while the long-running daemon remains locked down.
-	 */
 	{
 		int harden_ret = hardening_apply_daemon();
 		if (harden_ret < 0) {
@@ -238,19 +198,11 @@ static int run_daemon(const struct run_daemon_params *params)
 	}
 
 	/*
-	 * Enforcement policy is built and checked here, before anything
-	 * this process does can cost something.
-	 *
-	 * The boot commitment can be spent once per boot: the register is not
-	 * resettable from userspace, so an instance that extends it and then
-	 * dies leaves every later instance unable to commit until the host
-	 * reboots.
-	 * A policy naming a path this process cannot see is an ordinary
-	 * configuration mistake and has to cost a failed start, not the boot.
-	 *
-	 * Everything that can refuse on the policy's own contents therefore
-	 * refuses before the extend, and agent_apply_startup_policy() below
-	 * still performs the same checks against the live maps.
+	 * The policy, the object's signature and its integrity map are checked
+	 * before self_measure() extends PCR 14. Once BPF is loaded, a refusal
+	 * reaches the poison at cleanup_bpf, and the next start of this boot is
+	 * refused until reboot. agent_apply_startup_policy() repeats the policy
+	 * checks against the live maps.
 	 */
 	struct agent_startup_policy startup_policy = {
 		.mode = g_agent.mode,
@@ -277,11 +229,7 @@ static int run_daemon(const struct run_daemon_params *params)
 		return ret;
 	}
 
-	/*
-	 * A mis-signed enforcement object is the same kind of refusal:
-	 * it needs only files on disk, so it is caught before the extend.
-	 * bpf_loader_load() still verifies the bytes it hands the kernel.
-	 */
+	/* bpf_loader_load() verifies again the bytes it hands the kernel */
 	ret = bpf_loader_verify_object(bpf_path, bpf_pubkey_path);
 	if (ret < 0) {
 		lota_err("Enforcement object %s refused before the boot "
@@ -292,12 +240,6 @@ static int run_daemon(const struct run_daemon_params *params)
 		return ret;
 	}
 
-	/*
-	 * The object's integrity map is checked here, on the same side of
-	 * the extend as its signature: what the map holds is a property of
-	 * the file, and a file this build cannot read is a mistake an operator
-	 * makes, not a boot to spend.
-	 */
 	ret = bpf_loader_check_object_integrity_layout(bpf_path);
 	if (ret < 0) {
 		lota_err("Enforcement object %s refused before the boot "
@@ -307,13 +249,11 @@ static int run_daemon(const struct run_daemon_params *params)
 		return ret;
 	}
 
-	/* detect watchdog interval */
 	wd_enabled = sdnotify_watchdog_enabled(&wd_usec);
 	if (wd_enabled)
 		lota_info("Watchdog enabled, interval %lu us",
 			  (unsigned long)wd_usec);
 
-	/* setup signalfd for synchronous signal handling */
 	sigemptyset(&mask);
 	sigaddset(&mask, SIGTERM);
 	sigaddset(&mask, SIGINT);
@@ -376,11 +316,9 @@ static int run_daemon(const struct run_daemon_params *params)
 	setup_dbus(&g_agent.ipc_ctx);
 
 	/*
-	 * Logins happen after this point, and each one may carry a listener.
-	 * Two things say a login became bindable:
-	 * the runtime directory appearing (inotify) and the tmpfs logind mounts
-	 * over it landing (a mount-table change, which fires no inotify event
-	 * and is reported as EPOLLPRI on /proc/self/mountinfo).
+	 * A login can be bound once its runtime directory appears and logind's
+	 * tmpfs is mounted over it. A mount fires no inotify event, and
+	 * /proc/self/mountinfo reports it as EPOLLPRI.
 	 */
 	int watch_fd = container_watch_fd(&g_agent.container_watch);
 	if (watch_fd >= 0) {
@@ -396,7 +334,7 @@ static int run_daemon(const struct run_daemon_params *params)
 		epoll_ctl(epoll_fd, EPOLL_CTL_ADD, mount_fd, &ev);
 	}
 
-	/* Rebind after a socket-unit restart, see ipc_watch_socket_path */
+	/* rebind after a socket-unit restart */
 	int sock_watch_fd = ipc_watch_socket_path(&g_agent.ipc_ctx);
 	if (sock_watch_fd >= 0) {
 		ev.events = EPOLLIN;
@@ -408,7 +346,6 @@ static int run_daemon(const struct run_daemon_params *params)
 			  LOTA_IPC_SOCKET_PATH, strerror(-sock_watch_fd));
 	}
 
-	/* IPC epoll fd to main loop */
 	int ipc_fd = ipc_get_fd(&g_agent.ipc_ctx);
 	if (ipc_fd >= 0) {
 		ev.events = EPOLLIN;
@@ -433,12 +370,6 @@ static int run_daemon(const struct run_daemon_params *params)
 		boot_state.iommu_ok = true;
 	}
 
-	/*
-	 * Secure Boot, read straight off efivarfs.
-	 *
-	 * Title asks this process because this process is the one that booted
-	 * with the machine.
-	 */
 	boot_state.secure_boot = bpf_loader_secure_boot_enabled() == 0;
 	boot_state.kernel_appraisal = bpf_loader_kernel_appraises_exec() == 0;
 	lota_info("Kernel appraisal: %s",
@@ -466,26 +397,13 @@ static int run_daemon(const struct run_daemon_params *params)
 		boot_state.tpm_ok = true;
 
 		/*
-		 * The AIK a token is quoted with has to be the one whose
-		 * certificate the relying party holds, so the daemon uses the same
-		 * publisher profile the enrollment did: the one the configured CA
-		 * trust anchor names.
-		 * With no anchor configured the host has no publisher and keeps
-		 * its own AIK.
+		 * Tokens are quoted with the AIK the enrollment certified, kept
+		 * in the profile of the configured CA trust anchor.
 		 */
 		if (profile) {
 			ret = tpm_bind_profile(&g_agent.tpm_ctx, profile);
 			if (ret < 0) {
-				/*
-				 * Not fatal, for the same reason an unreadable
-				 * anchor above is not:
-				 * BPF policy, PCR 14 and the hash verifier are
-				 * host-owned and no publisher grants them.
-				 * Refusing to start would take enforcement down
-				 * over a publisher the host may not even have
-				 * enrolled with yet, which is the failure this
-				 * daemon exists to prevent
-				 */
+				/* enforcement and PCR 14 need no publisher */
 				lota_warn("Cannot bind the publisher profile "
 					  "under %s (%s): enforcing without a "
 					  "publisher, tokens are signed with "
@@ -502,18 +420,8 @@ static int run_daemon(const struct run_daemon_params *params)
 		}
 
 		/*
-		 * load metadata BEFORE provisioning the AIK so a fresh
-		 * install (no /var/lib/lota/aik_meta and no persistent
-		 * AIK handle yet) takes the ENOENT branch that initialises
-		 * a fresh aik_metadata record and writes it to disk
-		 *
-		 * tpm_aik_load_metadata() returns -EKEYREVOKED when the
-		 * file is missing but an AIK is already in the TPM, on
-		 * the theory that the on-disk witness was wiped under an
-		 * agent that the operator no longer controls.
-		 * Loading first means EKEYREVOKED is reserved for its real
-		 * case: someone has wiped the agent's state under a TPM
-		 * that still holds the AIK.
+		 * Before tpm_provision_aik(): once the key exists,
+		 * a missing record reads as -EKEYREVOKED.
 		 */
 		ret = tpm_aik_load_metadata(&g_agent.tpm_ctx);
 		if (ret < 0) {
@@ -522,14 +430,6 @@ static int run_daemon(const struct run_daemon_params *params)
 			goto cleanup_tpm;
 		}
 
-		/*
-		 * The record predates per-publisher key derivation,
-		 * so the key it names is the one every publisher enrolled here
-		 * holds.
-		 * The daemon does not replace it: doing so would invalidate
-		 * the certificate that names it and leave the host unable to
-		 * attest without saying why.
-		 */
 		if (tpm_aik_key_is_shared(&g_agent.tpm_ctx)) {
 			lota_err("%s", TPM_AIK_SHARED_KEY_ADVICE);
 			ret = -ENOTSUP;
@@ -558,20 +458,10 @@ static int run_daemon(const struct run_daemon_params *params)
 					  g_agent.tpm_ctx.aik_meta.generation,
 				  (long)age);
 
-			/*
-			 * surface the rotation state over D-Bus from
-			 * the loaded metadata, read against the same profile
-			 */
 			publish_rotation_state(
 				params->cfg ? params->cfg->aik_ttl : 0,
 				profile);
 
-			/*
-			 * attestation loop is the process that rotates the AIK,
-			 * and it writes the record to disk
-			 * sync from it says a round has just finished,
-			 * which is exactly when that record is worth re-reading
-			 */
 			g_rotation_hook.aik_ttl =
 				params->cfg ? params->cfg->aik_ttl : 0;
 			g_rotation_hook.profile = profile;
@@ -590,11 +480,6 @@ static int run_daemon(const struct run_daemon_params *params)
 			lota_info(
 				"Self-measurement complete (PCR %d already held this boot's commitment; the restart did not spend it)",
 				LOTA_PCR_SELF);
-			/*
-			 * Only a shutdown spends the commitment, so an agent that
-			 * finds it held follows one that ended some other way.
-			 * What that one recorded is gone; say so for the boot.
-			 */
 			lota_warn(
 				"An earlier agent of this boot ended without a shutdown; status and tokens say AGENT_RESTARTED until reboot");
 			ipc_set_agent_restarted(&g_agent.ipc_ctx);
@@ -620,16 +505,7 @@ static int run_daemon(const struct run_daemon_params *params)
 		  "applied)");
 	boot_state.bpf_loaded = true;
 
-	/*
-	 * Write the full enforcement policy (mode + strict_* + block_* +
-	 * protected pids + verity allowlist) into lota_config / aux maps
-	 * BEFORE BPF programs go live. agent_apply_startup_policy() calls
-	 * the bpf_loader_set_* helpers that operate on map fds resolved by
-	 * bpf_loader_load(); it does not need attached programs. Doing
-	 * this here closes the attach -> startup-policy window: the very
-	 * first invocation of every LSM hook below sees the operator
-	 * policy, not the post-load default zeros.
-	 */
+	/* before attach, so the first call of every hook sees the policy */
 	ret = agent_apply_startup_policy(&startup_policy);
 	if (ret < 0)
 		goto cleanup_bpf;
@@ -655,7 +531,6 @@ static int run_daemon(const struct run_daemon_params *params)
 	}
 	lota_info("Ring buffer ready");
 
-	/* BPF ringbuf epoll fd registered after setup_ringbuf creates it */
 	int bpf_fd = bpf_loader_get_event_fd(&g_agent.bpf_ctx);
 	if (bpf_fd >= 0) {
 		ev.events = EPOLLIN;
@@ -671,7 +546,6 @@ static int run_daemon(const struct run_daemon_params *params)
 	sdnotify_status("Monitoring, mode=%s", mode_to_string(g_agent.mode));
 	lota_info("Monitoring binary executions (event-driven)");
 
-	/* the agent's counters go to a fixed file a lota member reads */
 	static struct bench_state bench;
 	struct bench_state *bench_ctx = NULL;
 
@@ -743,7 +617,6 @@ static int run_daemon(const struct run_daemon_params *params)
 
 	watchdog_stop();
 
-	/* clean shutdown via signal - do not propagate EINTR as failure */
 	if (!g_agent.running)
 		ret = 0;
 
@@ -794,39 +667,6 @@ static int run_daemon(const struct run_daemon_params *params)
 	}
 
 cleanup_bpf:
-	/*
-	 * Dirty-shutdown coverage.
-	 *
-	 * poison_runtime_pcr() only runs on the clean shutdown path that
-	 * reaches this label. A panic, power loss, SIGKILL, or hard reset
-	 * leaves PCR14 carrying the last live boot commitment and never
-	 * extends it with the poison value, so a verifier that re-attests
-	 * the same host after such a stop sees that PCR14 as authentic
-	 * even if the on-disk agent binary, library closure, or policy
-	 * file was tampered while the host was offline. The TPM itself
-	 * cannot detect that mutation: PCR0/PCR1/PCR7 cover firmware /
-	 * SecureBoot / cmdline, and PCR14 only binds the running agent
-	 * self-hash, not inode contents that were touched after the
-	 * agent stopped reading them.
-	 *
-	 * Closing the dirty-shutdown gap therefore lives outside the
-	 * agent's runtime path:
-	 *   - fs-verity on /proc/self/exe is enforced at startup by
-	 *     bpf_loader_verify_kernel_runtime_hardening() (the
-	 *     agent_self_fsverity_enabled() gate), so a hard reset that
-	 *     swaps the agent binary on disk fails the next agent start
-	 *     and never reaches a fresh attestation;
-	 *   - dm-verity or IMA appraisal on the rootfs that hosts the
-	 *     policy file, shared libraries, and supporting binaries is
-	 *     the operator's deployment contract; the agent already
-	 *     requires kernel IMA appraisal at startup.
-	 * The --insecure-allow-mutable-rootfs escape hatch keeps the gap
-	 * open where the rootfs can prove neither, and logs a warn-level
-	 * deviation; the
-	 * verifier still binds PCR14 to the live agent self-hash, but
-	 * the dirty-shutdown -> tampered-rootfs branch is no longer
-	 * authenticated end to end on that host.
-	 */
 	ret = agent_poison_runtime_pcr_before_bpf_unload(&g_agent.tpm_ctx,
 							 &g_agent.bpf_ctx, ret);
 
@@ -865,10 +705,7 @@ int main(int argc, char *argv[])
 		return 1;
 	}
 
-	/*
-	 * The config is over a megabyte, so it is allocated, not held in this frame.
-	 * Every exit below runs through the cleanup at the bottom.
-	 */
+	/* over a megabyte, so not on the stack */
 	cfg = config_new();
 	if (!cfg) {
 		fprintf(stderr, "Failed to allocate configuration\n");
@@ -892,14 +729,9 @@ int main(int argc, char *argv[])
 		goto out;
 
 	/*
-	 * Mode downgrade guard.
-	 *
-	 * The packaged systemd unit does not pass --mode and lets the agent
-	 * pick up cfg.mode (default enforce). An operator who hand-edits the
-	 * unit to add --mode monitor, or who packages their own unit with a
-	 * weakened mode, would otherwise silently override the configured
-	 * enforce policy. Refuse to start in that case and require the
-	 * caller to acknowledge the downgrade explicitly.
+	 * A --mode below the file's enforce needs
+	 * --insecure-allow-mode-downgrade, so an edited unit cannot lower the
+	 * mode silently.
 	 */
 	if (opts.cli_mode_set && opts.config_file_mode == LOTA_MODE_ENFORCE &&
 	    g_agent.mode != LOTA_MODE_ENFORCE &&
@@ -924,17 +756,10 @@ int main(int argc, char *argv[])
 			rc = 1;
 			goto out;
 		}
-		/*
-		 * stderr is /dev/null from here, and every refusal below is
-		 * one an operator has to read
-		 */
+		/* stderr is /dev/null from here; refusals go to the journal */
 		journal_detached_from_terminal();
 	}
 
-	/*
-	 * every refusal from here down can be reached after --daemon
-	 * has detached stderr, so they go through the journal
-	 */
 	pid_fd = pidfile_create(opts.pid_file_path);
 	if (pid_fd == -EEXIST) {
 		char busy[512];
@@ -948,7 +773,7 @@ int main(int argc, char *argv[])
 	if (pid_fd < 0) {
 		lota_warn("Warning: Failed to create PID file: %s",
 			  strerror(-pid_fd));
-		pid_fd = -1; /* non-fatal */
+		pid_fd = -1;
 	}
 
 	if (!opts.policy_pubkey_path || opts.policy_pubkey_path[0] == '\0') {
@@ -980,22 +805,13 @@ int main(int argc, char *argv[])
 		.cfg = cfg,
 	};
 	rc = run_daemon(&run_params);
-	/*
-	 * supervisor learns from the status alone whether starting again can
-	 * succeed, so the whole answer is produced in one place
-	 */
 	rc = lota_daemon_exit_status(rc, g_agent.tpm_ctx.boot_commitment_state);
 
 out_pidfile:
 	pidfile_remove(opts.pid_file_path, pid_fd);
 out:
 	config_free(cfg);
-	/*
-	 * Reached with a refusal before the daemon ever served,
-	 * and with the shutdown status after it did.
-	 * The first report is the one that counts, so a daemon that started
-	 * carries its own 0 and this call changes nothing.
-	 */
+	/* the first report wins: a daemon that started has reported 0 */
 	daemon_notify_started(rc);
 	return rc;
 }

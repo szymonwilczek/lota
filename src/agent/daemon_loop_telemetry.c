@@ -1,12 +1,8 @@
 /* SPDX-License-Identifier: MIT */
 /*
- * LOTA agent - event-loop telemetry helpers.
+ * LOTA agent - event-loop telemetry helpers
  *
- * Kept in its own translation unit so the pure-function half of the
- * loop (drop-counter delta, future per-loop accumulators) can be
- * unit-tested without pulling the global agent context, libbpf,
- * libtss2, libsystemd, or any other heavy dependency of the live
- * event loop in daemon_loop.c.
+ * Apart from daemon_loop.c, so a test links it without the agent's libraries.
  *
  * Copyright (C) 2026 Szymon Wilczek
  */

@@ -25,17 +25,9 @@
 #include "watchdog.h"
 
 /*
- * Event loss telemetry.
- *
- * A hook that refuses or allows still does so when its event is left out, but
- * the log loses that line. The kernel counts each case: the ring was full, the
- * type yielded under pressure, or a refusal spent its budget. The loop reads
- * the counters at most once per EVENT_LOSS_POLL_INTERVAL_NS and, on any
- * increase, logs them and raises LOTA_STATUS_EVENTS_LOST for the rest of this
- * agent.
- *
- * Permitted events past their budget stay out: an ordinary boot spends it.
- * A loaded agent reads the counters late; they wait for it.
+ * A hook decides the same when its event is left out; only the log loses it.
+ * Permitted events past their budget stay out of the sum: an ordinary boot
+ * spends it.
  */
 #define EVENT_LOSS_POLL_INTERVAL_NS (1000ULL * 1000ULL * 1000ULL)
 
@@ -47,11 +39,6 @@ static uint64_t monotonic_ns(void)
 	return (uint64_t)ts.tv_sec * 1000000000ULL + (uint64_t)ts.tv_nsec;
 }
 
-/*
- * agent_ringbuf_drop_delta() lives in daemon_loop_telemetry.c so the
- * pure delta logic can be unit-tested without dragging the global
- * agent context and libbpf/libtss2/libsystemd into the test target.
- */
 static void poll_event_loss(struct agent_loop_ctx *ctx, uint64_t *last_lost,
 			    uint64_t *last_poll_ns)
 {
@@ -88,16 +75,8 @@ static void poll_event_loss(struct agent_loop_ctx *ctx, uint64_t *last_lost,
 }
 
 /*
- * Re-read the publisher list the IPC layer answers titles from.
- *
- * lota.conf gains publishers while the daemon runs
- * -- `lota-agent -add-publisher` is what game's installer calls --
- *  and the list handed to the IPC layer at startup does not grow with it.
- * Title naming publisher added since would be refused as unknown until the next
- * boot, which is the re-provisioning the profile list exists to avoid.
- *
- * Rebuild that fails leaves the previous list in place:
- * answering titles from stale list beats answering none.
+ * --add-publisher writes lota.conf while the daemon runs. A failed rebuild
+ * keeps the previous list.
  */
 static void agent_reload_publishers(struct agent_loop_ctx *ctx)
 {

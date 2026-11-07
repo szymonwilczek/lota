@@ -71,9 +71,8 @@ void watchdog_beat(void)
 }
 
 /*
- * SIGKILL to self: task_kill delivers it within one thread group, and unlike
- * the shutdown path it does not spend PCR 14, so the restart keeps the boot
- * commitment.
+ * SIGKILL skips the PCR 14 poison of the shutdown path, so a restart of
+ * the same binary finds this boot's commitment held.
  */
 static void end_wedged_process(uint64_t age_ns)
 {
