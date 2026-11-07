@@ -1,11 +1,9 @@
 /* SPDX-License-Identifier: MIT */
 /* Copyright (C) 2026 Szymon Wilczek */
 /*
- * Whether a repeated answer is news. The agent re-answers unchanging questions
- * on a timer (measurable code, token issuance); callers own printing, storage
- * and keys. Terms as for a decision-log row in contracts.rst: a first answer
- * is written unless it is NOTHING_WRONG, a change is written both ways,
- * and the rendered statement, not the verdict, is compared.
+ * Whether a round's answer is news: a first answer is stated unless it is
+ * NOTHING_WRONG, a change is stated both ways, and a repeat, the same answer
+ * with the same statement, is not.
  */
 
 #ifndef LOTA_AGENT_STANDING_ANSWER_H
@@ -17,7 +15,7 @@
 #include <stdio.h>
 #include <string.h>
 
-/* a longer statement is truncated, not dropped */
+/* a longer statement is truncated and then never compares equal */
 #define STANDING_ANSWER_STATEMENT_MAX 768
 
 /* zero answer: news only when it replaces another */
@@ -31,12 +29,12 @@ struct standing_answer {
 	char statement[STANDING_ANSWER_STATEMENT_MAX];
 };
 
-/*
- * standing_answer_note - Record a round's answer
- * @answer_state: subject's standing answer, NULL to state everything
- * @answer: this round's answer
- * @statement: rendered line, compared; NULL compares as empty
- * @held: on a change, rounds the replaced answer stood
+/**
+ * standing_answer_note() - Record a round's answer.
+ * @answer_state: Subject's standing answer, NULL to state everything.
+ * @answer: This round's answer.
+ * @statement: Rendered line, compared; NULL compares as empty.
+ * @held: On a change, how many repeats the replaced answer had.
  *
  * Return: true when the answer is worth a line.
  */
@@ -62,7 +60,6 @@ static inline bool standing_answer_note(struct standing_answer *answer_state,
 	if (answer_state->seen) {
 		if (held)
 			*held = answer_state->repeats;
-		/* a change is news both ways, recovery included */
 		answer_state->stated = true;
 	} else {
 		answer_state->stated = answer != STANDING_ANSWER_NOTHING_WRONG;
@@ -76,16 +73,24 @@ static inline bool standing_answer_note(struct standing_answer *answer_state,
 	return answer_state->stated;
 }
 
-/* Forget a subject, so its next answer is news */
+/**
+ * standing_answer_forget() - Forget a subject, so its next answer is news.
+ * @answer_state: The subject's standing answer.
+ */
 static inline void standing_answer_forget(struct standing_answer *answer_state)
 {
 	if (answer_state)
 		memset(answer_state, 0, sizeof(*answer_state));
 }
 
-/*
- * Clause giving the length of the run just ended; kept out of the compared
- * statement, which would otherwise change every round.
+/**
+ * standing_answer_held_clause() - Give the length of the run just ended.
+ * @out: Receives the clause.
+ * @cap: Size of @out.
+ * @held: Repeats of the replaced answer; 0 gives an empty clause.
+ *
+ * Kept out of the compared statement, which would otherwise change every
+ * round.
  */
 static inline void standing_answer_held_clause(char *out, size_t cap,
 					       uint64_t held)

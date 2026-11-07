@@ -1,22 +1,7 @@
 /* SPDX-License-Identifier: MIT */
 /*
- * Who may end a protected process, and on what terms.
- *
- * The agent delivers the signal and journals it, so the boundary is who it
- * delivers for. The rule below is kill(2)'s own: the owner of the process, or
- * root. The verb widens nothing, which is why it needs no operator privilege
- * gate.
- *
- * What the rule does not hand back is the ability to drive a protected process:
- * only a termination is relayed, so nothing a process survives can be sent through
- * the agent's privilege while that process stays in the measured set.
- *
- * Every allowed termination is recorded, and the host reports for the rest of
- * the boot that one happened, so the publisher sees a session ended locally
- * rather than a process that merely vanished.
- *
- * Split out of ipc.c so the boundary is exercised as a table of cases rather
- * than by spawning processes a test would then have to protect and kill.
+ * Who may end a protected process through the agent: root, or the process's
+ * owner. Only SIGTERM and SIGKILL are relayed.
  *
  * Copyright (C) 2026 Szymon Wilczek
  */
@@ -31,15 +16,11 @@
 
 enum terminate_decision {
 	TERMINATE_ALLOW = 0,
-	/* the target is not a process this verb speaks for */
+	/* no request, pid 0 or PID 1 */
 	TERMINATE_DENY_TARGET,
-	/* nobody protected it, so kill(2) already reaches it */
 	TERMINATE_DENY_NOT_PROTECTED,
-	/* not a termination */
 	TERMINATE_DENY_SIGNAL,
-	/* kill(2) would have refused this caller */
 	TERMINATE_DENY_OWNER,
-	/* the agent stops through --shutdown and a reboot, not through this */
 	TERMINATE_DENY_AGENT,
 };
 
@@ -52,10 +33,11 @@ struct terminate_request {
 	bool target_is_protected;
 };
 
-/*
- * Whether @req may be relayed, and when it may not, which boundary refused it.
- * The caller reports the reason, so the cases stay distinguishable rather than
- * collapsing into one denial a player cannot act on.
+/**
+ * terminate_policy_decide() - Decide a termination request.
+ * @req: The request.
+ *
+ * Return: TERMINATE_ALLOW, or the boundary that refused it.
  */
 static inline enum terminate_decision
 terminate_policy_decide(const struct terminate_request *req)
@@ -63,11 +45,6 @@ terminate_policy_decide(const struct terminate_request *req)
 	if (!req || req->target_pid == 0)
 		return TERMINATE_DENY_TARGET;
 
-	/*
-	 * PID 1 is refused to everyone.
-	 * No title is init, and a machine that loses init is a machine that
-	 * reboots -- which is the outcome the verb exists to avoid.
-	 */
 	if (req->target_pid == 1)
 		return TERMINATE_DENY_TARGET;
 
@@ -77,12 +54,6 @@ terminate_policy_decide(const struct terminate_request *req)
 	if (!req->target_is_protected)
 		return TERMINATE_DENY_NOT_PROTECTED;
 
-	/*
-	 * SIGTERM asks, SIGKILL insists, and both end the process.
-	 * Anything else -- handled signal, stop, or the sig == 0 existence probe
-	 * kill(2) answers on its own -- would make the agent a signal relay for
-	 * process the machine is still measuring.
-	 */
 	if (req->signal != SIGTERM && req->signal != SIGKILL)
 		return TERMINATE_DENY_SIGNAL;
 
@@ -92,17 +63,13 @@ terminate_policy_decide(const struct terminate_request *req)
 	return TERMINATE_ALLOW;
 }
 
-/*
- * The wire code a denial answers with.
+/**
+ * terminate_decision_result() - The wire code a denial answers with.
+ * @d: The decision.
  *
- * The caller sees this and not the sentence below, so the families a player can
- * act on stay apart:
- * a process nobody protected is one an ordinary kill reaches,
- * a target the verb does not speak for is one no caller can end this way,
- * and the rest is the request not being theirs to make.
+ * diagnostics.c words its message from this code.
  *
- * Collapsing them makes the message wrong -- with one code, ending the agent's
- * own PID reads as a permission problem with someone else's process.
+ * Return: the code, LOTA_IPC_OK for TERMINATE_ALLOW.
  */
 static inline enum lota_ipc_result
 terminate_decision_result(enum terminate_decision d)
@@ -122,7 +89,12 @@ terminate_decision_result(enum terminate_decision d)
 	return LOTA_IPC_OK;
 }
 
-/* One sentence per denial, for the journal and for the caller's stderr */
+/**
+ * terminate_decision_reason() - One sentence per decision, for the journal.
+ * @d: The decision.
+ *
+ * Return: a static string.
+ */
 static inline const char *terminate_decision_reason(enum terminate_decision d)
 {
 	switch (d) {

@@ -1,17 +1,9 @@
 /* SPDX-License-Identifier: MIT */
 /*
  * The code objects each protected process had mapped when the last token
- * round measured it.
- *
- * The registry keeps the objects themselves, the unmeasured ones and those
- * already unmapped included, and the processes outside the instance that
- * reached one of its unix sockets. The token carries one digest per process
- * over that whole list (lota_registry_digest.h), so a relying party can see
- * what was loaded and who reached in, and check the list against the digest
- * it was given.
- *
- * Split out of ipc.c so the paging is tested on its own rather than through
- * a socket.
+ * round measured it, the unmeasured and the already unmapped included, and the
+ * actors of its instance. The token carries one digest per process over that
+ * list (lota_registry_digest.h).
  *
  * Copyright (C) 2026 Szymon Wilczek
  */
@@ -51,7 +43,10 @@ struct registry {
 	struct registry_process *procs;
 };
 
-/* Free every process record; the round number stays. */
+/**
+ * registry_clear() - Free every process record; the round number stays.
+ * @r: The registry.
+ */
 static inline void registry_clear(struct registry *r)
 {
 	if (!r)
@@ -65,12 +60,19 @@ static inline void registry_clear(struct registry *r)
 	r->count = 0;
 }
 
-/*
- * Append a copy of @n objects mapped in @pid and @n_actors actors of its
- * instance.
- * @digest is the token's entry, or NULL when the round put none there.
- * @flags carries LOTA_IPC_REGISTRY_* other than MEASURED.
- * Returns 0 or -ENOMEM; on failure @r is unchanged.
+/**
+ * registry_add() - Append a copy of one process's lists.
+ * @r: The registry.
+ * @pid: The process.
+ * @uid: Its owner when measured.
+ * @flags: LOTA_IPC_REGISTRY_* other than MEASURED.
+ * @digest: The token's entry, or NULL when the round put none there.
+ * @objs: Objects mapped in @pid.
+ * @n: How many.
+ * @actors: Actors of its instance.
+ * @n_actors: How many.
+ *
+ * Return: 0, -EINVAL or -ENOMEM; on failure @r is unchanged.
  */
 static inline int registry_add(struct registry *r, uint32_t pid, uint32_t uid,
 			       uint16_t flags, const uint8_t *digest,
@@ -126,9 +128,10 @@ static inline int registry_add(struct registry *r, uint32_t pid, uint32_t uid,
 	return 0;
 }
 
-/*
- * Make @next the current registry under the following round number.
- * @next is left empty.
+/**
+ * registry_replace() - Make @next current under the following round number.
+ * @cur: The current registry.
+ * @next: Left empty.
  */
 static inline void registry_replace(struct registry *cur, struct registry *next)
 {
@@ -158,7 +161,11 @@ static inline uint8_t registry_road(const struct lota_rt_object_record *o)
 				   LOTA_IPC_REGISTRY_ROAD_VERITY;
 }
 
-/* Wire entry of @o; soname and path follow it with the lengths set here. */
+/**
+ * registry_entry() - Fill the wire entry of an object.
+ * @o: The object.
+ * @e: Soname and path follow it, with the lengths set here.
+ */
 static inline void registry_entry(const struct lota_rt_object_record *o,
 				  struct lota_ipc_registry_entry *e)
 {
@@ -182,9 +189,16 @@ static inline void registry_entry(const struct lota_rt_object_record *o,
 		e->flags |= LOTA_IPC_REGISTRY_ENTRY_MEMORY;
 }
 
-/*
- * The token's entry for a process whose list is @objs and @actors and flags
- * @flags, MEASURED included. Returns 0 or a negative errno.
+/**
+ * registry_digest() - Compute the token's entry for a process.
+ * @flags: Its flags, MEASURED included.
+ * @objs: Its objects.
+ * @n: How many.
+ * @actors: Its actors.
+ * @n_actors: How many.
+ * @out: Receives the digest.
+ *
+ * Return: 0 or a negative errno.
  */
 static inline int registry_digest(uint16_t flags,
 				  const struct lota_rt_object_record *objs,
@@ -219,11 +233,21 @@ static inline int registry_digest(uint16_t flags,
 	return ret;
 }
 
-/*
- * Append to @objs, holding @n of @cap, every history item of the process
- * @tgid started at @start_ticks that the maps no longer show, and give the
- * objects still mapped the flags their history carries.
- * Returns the new count; sets *@overflow when one did not fit.
+/**
+ * registry_merge_history() - Add history the maps no longer show.
+ * @objs: Objects of the process.
+ * @n: How many it holds.
+ * @cap: How many it can hold.
+ * @keys: History keys.
+ * @vals: History values.
+ * @n_hist: How many.
+ * @tgid: The process.
+ * @start_ticks: When it started.
+ * @overflow: Set when an item did not fit.
+ *
+ * Objects still mapped take the flags their history carries.
+ *
+ * Return: the new count.
  */
 static inline size_t
 registry_merge_history(struct lota_rt_object_record *objs, size_t n, size_t cap,
@@ -296,10 +320,18 @@ _Static_assert((int)LOTA_INSTANCE_ACTOR_CONNECT ==
 			       (int)LOTA_IPC_REGISTRY_ACTOR_ANON_EXEC,
 	       "the wire carries the kernel's actor kind");
 
-/*
- * Copy into @out, holding @cap, every actor of the instance whose root
- * @tgid started at @start_ticks, as the wire carries it.
- * Returns the count; sets *@overflow when one did not fit.
+/**
+ * registry_collect_actors() - Copy an instance's actors in wire form.
+ * @out: Receives the actors.
+ * @cap: Its capacity.
+ * @keys: Actor keys.
+ * @vals: Actor values.
+ * @n_hist: How many.
+ * @tgid: Root of the instance.
+ * @start_ticks: When the root started.
+ * @overflow: Set when an actor did not fit.
+ *
+ * Return: the count.
  */
 static inline size_t
 registry_collect_actors(struct lota_ipc_registry_actor *out, size_t cap,
@@ -339,14 +371,18 @@ registry_collect_actors(struct lota_ipc_registry_actor *out, size_t cap,
 	return n;
 }
 
-/*
- * Encode the page of @p starting at entry @start into @buf: objects, then
- * actors.
+/**
+ * registry_encode_page() - Encode one page: objects, then actors.
+ * @p: The process.
+ * @round: The registry's round.
+ * @start: First entry of the page.
+ * @buf: Receives the header and the entries.
+ * @cap: Size of @buf.
+ * @len: Receives the bytes written.
  *
- * As many entries as fit in @cap follow the header.
- * Returns the number of entries written and sets *@len,
- * -ERANGE when @start is past the last entry,
- * or -ENOSPC when not even one entry fits.
+ * Return: the number of entries written, -EINVAL, -ERANGE when @start is
+ * above the entry count, or -ENOSPC when the header or the first entry
+ * does not fit.
  */
 static inline int registry_encode_page(const struct registry_process *p,
 				       uint64_t round, uint32_t start,

@@ -3,8 +3,7 @@
 /*
  * Write guard pins, each stamped with the last measurement round that reached
  * its inode. A library outlives the first process that maps it, so no process
- * owns a pin: one an older round stamped is released, and the set converges
- * on what the last round measured. Plain arrays, testable in user space.
+ * owns a pin: the round decides which ones are released.
  */
 
 #ifndef LOTA_MAPPED_PINS_H
@@ -19,7 +18,15 @@ struct mapped_exec_pin {
 	uint64_t round; /* last round that reached it */
 };
 
-/* Index of the pin, or count when the inode is not pinned */
+/**
+ * mapped_pins_find() - Look up an inode.
+ * @pins: The pins.
+ * @count: How many.
+ * @dev: The kernel's s_dev.
+ * @ino: Inode number.
+ *
+ * Return: index of the pin, or @count when the inode is not pinned.
+ */
 static inline size_t mapped_pins_find(const struct mapped_exec_pin *pins,
 				      size_t count, uint64_t dev, uint64_t ino)
 {
@@ -36,9 +43,13 @@ static inline size_t mapped_pins_find(const struct mapped_exec_pin *pins,
 	return count;
 }
 
-/*
- * Move the pins this round reached to the front and return their count;
- * the caller unpins the rest and truncates. Unordered: lookups scan it all.
+/**
+ * mapped_pins_partition() - Move the pins @round reached to the front.
+ * @pins: The pins.
+ * @count: How many.
+ * @round: The round.
+ *
+ * Return: their count. The caller unpins the rest and truncates.
  */
 static inline size_t mapped_pins_partition(struct mapped_exec_pin *pins,
 					   size_t count, uint64_t round)

@@ -12,11 +12,6 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
-/*
- * Events that can start or end a login: logind creates the runtime
- * directory when the user's first session opens and removes it when
- * the last one closes.
- */
 #define WATCH_EVENTS \
 	(IN_CREATE | IN_MOVED_TO | IN_DELETE | IN_MOVED_FROM | IN_ONLYDIR)
 
@@ -29,10 +24,6 @@ static int watch_slot_of_uid(const struct container_watch *w, uint32_t uid)
 	return -1;
 }
 
-/*
- * A runtime directory is the login's own tmpfs mount,
- * so nothing but a directory at that path is one.
- */
 static bool runtime_dir_present(const struct container_watch *w, uint32_t uid)
 {
 	char path[PATH_MAX];
@@ -50,13 +41,8 @@ static bool runtime_dir_present(const struct container_watch *w, uint32_t uid)
 }
 
 /*
- * Reconcile one UID against what is on the filesystem.
- *
- * The events themselves are never read for their contents:
- * a rescan answers the same question without having to trust that every event
- * arrived, which the queue does not guarantee under IN_Q_OVERFLOW, and without
- * a second code path for the directory that appeared while the watch was being
- * installed.
+ * Events are drained unread: a rescan also covers IN_Q_OVERFLOW and a directory
+ * made while the watch went in.
  *
  * Returns 1 when this call bound the UID.
  */
@@ -82,13 +68,6 @@ static int watch_sync_uid(struct container_watch *w, int slot)
 	return 0;
 }
 
-/*
- * Re-read /proc/self/mountinfo to the end.
- *
- * poll(2) reports POLLPRI on that file when the mount table changes,
- * and only a read that reaches EOF re-arms it. The contents are of
- * no interest -- the reconcile below asks the filesystem directly.
- */
 static void watch_drain_mounts(struct container_watch *w)
 {
 	char buf[4096];
@@ -196,11 +175,6 @@ int container_watch_plan(const uint32_t *cfg_uids, int cfg_uid_count,
 		return cfg_uid_count;
 	}
 
-	/*
-	 * Single-operator host names no UID.
-	 * Its listener still belongs to a login that does not exist when
-	 * the daemon starts, so it is watched like any other.
-	 */
 	if (runtime_dir) {
 		uint32_t uid;
 
@@ -242,11 +216,7 @@ int container_watch_init(struct container_watch *w, const char *root,
 		w->uids[w->uid_count++] = uids[i];
 	}
 
-	/*
-	 * Watch first, scan second.
-	 * A login that lands between the two is seen twice, which costs nothing;
-	 * the other order loses it.
-	 */
+	/* watch before the scan: a login between the two is not lost */
 	ret = watch_start(w);
 
 	for (int i = 0; i < w->uid_count; i++)
