@@ -3,10 +3,8 @@
 /*
  * LOTA attestation-CA enrollment client - wire codec.
  *
- * Encodes the agent's BeginRequest/CompleteRequest and decodes the CA's
- * ChallengeReply/ResultReply. The byte layout mirrors src/attestca/wire:
- * a magic/version preamble followed by big-endian, length-prefixed
- * fields, each bounded before it is copied.
+ * The layout mirrors src/attestca/wire: a magic and version, then big-endian
+ * fields.
  */
 
 #include <errno.h>
@@ -18,7 +16,6 @@
 #include "enroll.h"
 #include "lota_enroll.h"
 
-/* Bounded big-endian reader over a decoded frame body. */
 struct rd {
 	const uint8_t *buf;
 	size_t len;
@@ -45,7 +42,6 @@ static int rd_u32(struct rd *r, uint32_t *out)
 	return 0;
 }
 
-/* Read a u16-length-prefixed field, bounded by max, into dst. */
 static int rd_bytes16(struct rd *r, uint8_t *dst, size_t max, size_t *out_len)
 {
 	uint16_t n;
@@ -62,13 +58,12 @@ static int rd_bytes16(struct rd *r, uint8_t *dst, size_t max, size_t *out_len)
 	return 0;
 }
 
-/* the only version check; a revision adds its number here */
 static bool enroll_version_supported(uint16_t version)
 {
 	return version == LOTA_ENROLL_VERSION;
 }
 
-/* trailing bytes: a newer frame, whose extra fields must not be dropped */
+/* trailing bytes are fields of a newer frame; refused, not dropped */
 static int rd_end(const struct rd *r)
 {
 	return r->pos == r->len ? 0 : -EBADMSG;
@@ -95,7 +90,6 @@ static int rd_preamble(struct rd *r)
 	return 0;
 }
 
-/* Bounded big-endian writer. */
 struct wr {
 	uint8_t *buf;
 	size_t max;
@@ -132,7 +126,7 @@ static int wr_bytes16(struct wr *w, const uint8_t *data, size_t len)
 		return ret;
 	if (w->pos + len > w->max)
 		return -ENOSPC;
-	/* empty field is a length and nothing else; data may be NULL */
+	/* data may be NULL for an empty field */
 	if (len > 0)
 		memcpy(w->buf + w->pos, data, len);
 	w->pos += len;
@@ -147,13 +141,7 @@ static int wr_preamble(struct wr *w, uint16_t version)
 	return wr_u16(w, version);
 }
 
-/*
- * Total length of the DER certificate starting at buf, or 0 when those bytes
- * do not begin one that fits. Only the definite-length constructed SEQUENCE
- * an X.509 certificate is encoded as is accepted; an indefinite length,
- * a length wider than four bytes and a body running past the blob all end
- * the walk.
- */
+/* length of a definite-length SEQUENCE in len, or 0; long form up to 4 bytes */
 static size_t der_cert_len(const uint8_t *buf, size_t len)
 {
 	size_t hdr, body;
@@ -243,7 +231,6 @@ ssize_t enroll_encode_begin(uint8_t *out, size_t out_max,
 	if (chain_bytes > LOTA_ENROLL_MAX_EK_CHAIN_BYTES)
 		return -EMSGSIZE;
 
-	/* newest version; every field written, absent ones as zero length */
 	ret = wr_preamble(&w, LOTA_ENROLL_VERSION);
 	if (ret < 0)
 		return ret;
@@ -360,8 +347,7 @@ int enroll_token_from_file(const char *path, char *out, size_t out_size)
 		ret = -EMSGSIZE;
 		goto out;
 	}
-	/* printable, non-whitespace ASCII only:
-	 * CA hashes the exact bytes, so transport or shell could mangle is refused */
+	/* the CA hashes the exact bytes; refuse what a shell could mangle */
 	for (size_t i = 0; i < len; i++) {
 		if (buf[i] <= 0x20 || buf[i] >= 0x7F)
 			goto out;
@@ -404,24 +390,11 @@ int enroll_decode_result(const uint8_t *body, size_t len,
 	return rd_end(&r);
 }
 
-/*
- * The sentence an operator is shown for a refusal the CA sent.
- *
- * Enrollment is the first thing a machine does, so a refusal here arrives
- * with no other context: the message has to name what was refused and what
- * to do about it.
- * Returns NULL for a status this build has no sentence for.
- */
 const char *lota_enroll_status_text(unsigned int status)
 {
-	/*
-	 * No default arm: a status added to the enumeration without a sentence
-	 * fails the build. A value outside it -- a CA newer than this agent
-	 * -- falls past the switch to the NULL below.
-	 */
+	/* no default: -Wswitch fails the build for a status with no sentence */
 	switch ((enum lota_enroll_status)status) {
 	case LOTA_ENROLL_STATUS_OK:
-		/* not a refusal; the caller never asks about it */
 		return NULL;
 	case LOTA_ENROLL_STATUS_BAD_REQUEST:
 		return "the CA could not read this request. The agent and the "

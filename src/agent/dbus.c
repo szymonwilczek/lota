@@ -48,11 +48,7 @@ uint32_t dbus_status_word(const struct ipc_context *ipc)
 	if (!ipc)
 		return 0;
 
-	/*
-	 * A bus connection names no publisher, so the host-wide view is the only
-	 * one there is -- but it is the daemon's to produce, not this file's to
-	 * assemble out of stored fields.
-	 */
+	/* a bus connection names no publisher: the host-wide word */
 	return ipc_host_status_flags(ipc);
 }
 
@@ -268,10 +264,6 @@ static int method_ping(sd_bus_message *msg, void *userdata, sd_bus_error *error)
 					  (uint32_t)getpid());
 }
 
-/*
- * GetStatus() -> (u flags, s mode, t last_attest_time,
- *                 t valid_until, u attest_count, u fail_count)
- */
 static int method_get_status(sd_bus_message *msg, void *userdata,
 			     sd_bus_error *error)
 {
@@ -285,16 +277,6 @@ static int method_get_status(sd_bus_message *msg, void *userdata,
 		ctx->ipc->fail_count);
 }
 
-/*
- * GetRotationStatus() -> (t generation, t provisioned_at, t last_rotated_at,
- *                         t rotation_deadline, t grace_deadline,
- *                         b reenroll_required)
- *
- * One call so an operator can read the whole AIK rotation picture: the
- * current generation and creation time, when rotation is due, whether a
- * grace window is open, and whether the issued certificate needs a guided
- * re-enrollment (lota-agent --reenroll).
- */
 static int method_get_rotation_status(sd_bus_message *msg, void *userdata,
 				      sd_bus_error *error)
 {
@@ -308,15 +290,7 @@ static int method_get_rotation_status(sd_bus_message *msg, void *userdata,
 		(int)ctx->ipc->aik_reenroll_required);
 }
 
-/*
- * GetToken() -> (u flags)
- *
- * Token generation requires TPM and the binary socket protocol
- * due to the variable-length TPM quote blob. Over D-Bus LOTA can
- * only report whether the system is attested, not the full token.
- * Clients that need the actual signed token must use the Unix
- * socket SDK.
- */
+/* the flags only; a signed token comes over the Unix socket */
 static int method_get_token(sd_bus_message *msg, void *userdata,
 			    sd_bus_error *error)
 {
@@ -329,10 +303,6 @@ static int method_get_token(sd_bus_message *msg, void *userdata,
 						  "System is not attested");
 	}
 
-	/*
-	 * return the status flags so callers can confirm attestation
-	 * state without needing the full binary token
-	 */
 	(void)error;
 	return sd_bus_reply_method_return(msg, "u", ctx->ipc->status_flags);
 }
@@ -340,7 +310,6 @@ static int method_get_token(sd_bus_message *msg, void *userdata,
 static const sd_bus_vtable agent_vtable[] = {
 	SD_BUS_VTABLE_START(0),
 
-	/* properties (read-only, emits-change on signal) */
 	SD_BUS_PROPERTY("StatusFlags", "u", prop_get_status_flags, 0,
 			SD_BUS_VTABLE_PROPERTY_EMITS_CHANGE),
 	SD_BUS_PROPERTY("Mode", "s", prop_get_mode, 0,
@@ -356,7 +325,6 @@ static const sd_bus_vtable agent_vtable[] = {
 	SD_BUS_PROPERTY("Version", "s", prop_get_version, 0,
 			SD_BUS_VTABLE_PROPERTY_CONST),
 
-	/* AIK rotation state (read-only, emits-change on rotation) */
 	SD_BUS_PROPERTY("AikGeneration", "t", prop_get_aik_generation, 0,
 			SD_BUS_VTABLE_PROPERTY_EMITS_CHANGE),
 	SD_BUS_PROPERTY("AikProvisionedAt", "t", prop_get_aik_provisioned_at, 0,
@@ -371,7 +339,6 @@ static const sd_bus_vtable agent_vtable[] = {
 	SD_BUS_PROPERTY("ReenrollRequired", "b", prop_get_reenroll_required, 0,
 			SD_BUS_VTABLE_PROPERTY_EMITS_CHANGE),
 
-	/* methods */
 	SD_BUS_METHOD("Ping", "", "tu", method_ping,
 		      SD_BUS_VTABLE_UNPRIVILEGED),
 	SD_BUS_METHOD("GetStatus", "", "usttuu", method_get_status,
@@ -380,7 +347,6 @@ static const sd_bus_vtable agent_vtable[] = {
 		      method_get_rotation_status, SD_BUS_VTABLE_UNPRIVILEGED),
 	SD_BUS_METHOD("GetToken", "", "u", method_get_token, 0),
 
-	/* signals */
 	SD_BUS_SIGNAL("StatusChanged", "u", 0),
 	SD_BUS_SIGNAL("AttestationResult", "b", 0),
 	SD_BUS_SIGNAL("ModeChanged", "s", 0),
@@ -457,10 +423,9 @@ int dbus_process(struct dbus_context *ctx, uint64_t timeout_us)
 			return ret;
 		}
 		if (ret == 0)
-			break; /* no more work */
+			break;
 	}
 
-	/* wait for new work up to the caller-specified timeout */
 	if (timeout_us > 0) {
 		ret = sd_bus_wait(ctx->bus, timeout_us);
 		if (ret < 0 && ret != -EINTR)
@@ -471,12 +436,8 @@ int dbus_process(struct dbus_context *ctx, uint64_t timeout_us)
 }
 
 /*
- * Put what was emitted on the wire, and say so when it did not go.
- *
- * sd_bus_emit_signal() hands the message to the connection, which writes it
- * only as far as the socket takes without blocking, and queues the rest.
- * The daemon drives this connection from epoll, which reports the fd readable.
- * Flushing here is what makes an emit an emit.
+ * An emit writes what the socket takes without blocking and queues the rest;
+ * without a flush the rest waits for the next message the bus sends in.
  */
 static void emit_flush(struct dbus_context *ctx, const char *what, int ret)
 {
@@ -508,13 +469,7 @@ void dbus_emit_status_changed(struct dbus_context *ctx, uint32_t flags)
 			   "AttestCount", "FailCount", NULL));
 }
 
-/*
- * A round is when the tallies move, and it is also when the host last attested
- * and how long that answer holds, so all four properties are announced with
- * the signal.
- * Nothing else moves LastAttestTime or ValidUntil on a host whose status word
- * is steady, and both are declared emits-change.
- */
+/* LastAttestTime and ValidUntil move here even on a steady status word */
 void dbus_emit_attestation_result(struct dbus_context *ctx, bool success)
 {
 	if (!ctx || !ctx->bus)

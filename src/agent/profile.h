@@ -3,20 +3,10 @@
 /*
  * Publisher profile identity and on-disk layout.
  *
- * Player's machine has one state and several publishers judging it, each with
- * its own attestation CA.
- * Enrollment is therefore per publisher, not per host:
- * one enrollment record and one CA-issued AIK certificate under directory named
- * after the publisher.
- *
- * The name is the SHA-256 of the CA trust anchor's SubjectPublicKeyInfo.
- * The endpoint is mutable and spoofable -- DNS, port, shared hosting -- while
- * the anchor is what enrollment verifies against, so the identity survives address
- * change and cannot collide between two publishers that share hostname.
- *
- * It is also why enrollment requires an anchor:
- * without one there is nothing to key the state by, and second publisher would
- * land on the first one's AIK.
+ * Each publisher gets a directory with its own AIK, certificate, enrollment
+ * record and consent, named by the SHA-256 of its CA trust anchor's
+ * SubjectPublicKeyInfo. The anchor, not the endpoint, names it: two publishers
+ * may share a host, and one may move.
  */
 
 #ifndef LOTA_AGENT_PROFILE_H
@@ -29,212 +19,219 @@
 #include <sys/types.h>
 #include <time.h>
 
-/* Parent of the per-publisher directories */
 #define LOTA_PROFILE_BASE_DIR "/var/lib/lota/profiles"
 
-/* SHA-256 as lowercase hex, plus the terminator */
 #define LOTA_PROFILE_ID_LEN 65
 
-/*
- * How many AIK persistent handles the layout can hand out.
- * TPM persistent slots are a scarce, shared resource, so the range is bounded
- * and sized to the configurable profile count
- * (asserted against LOTA_CONFIG_MAX_PROFILES in config.h);
- * the range itself lives in tpm.h, which owns handle assignment.
- */
+/* from TPM_AIK_PROFILE_HANDLE_BASE; at least LOTA_CONFIG_MAX_PROFILES */
 #define LOTA_PROFILE_MAX_AIK_HANDLES 8
 
-/* Files inside profile directory */
 #define LOTA_PROFILE_ENROLL_STATE_FILE "enroll_state.dat"
 #define LOTA_PROFILE_AIK_CERT_FILE "aik_cert.der"
 #define LOTA_PROFILE_AIK_META_FILE "aik_meta.dat"
 #define LOTA_PROFILE_AIK_HANDLE_FILE "aik_handle"
 #define LOTA_PROFILE_CONSENT_FILE "consent"
 
-/*
- * The AIK authorization, in each of the two forms it may be kept in.
- * Both sit beside the metadata, so the TPM layer derives their paths from that
- * directory; the names live here with the profile's other files so one place
- * says what a profile directory contains.
- */
+/* the TPM layer puts these beside the AIK metadata */
 #define LOTA_PROFILE_AIK_AUTH_FILE "aik_auth.dat"
 #define LOTA_PROFILE_AIK_AUTH_SEALED_FILE "aik_auth.sealed"
 
+/**
+ * struct profile_paths - One publisher's directory and files.
+ * @id: Lowercase hex identity.
+ * @dir: The directory.
+ * @enroll_state: struct enroll_state.
+ * @aik_cert: Issued AIK certificate, DER.
+ * @aik_meta: AIK metadata.
+ * @aik_handle: Persistent handle the AIK occupies.
+ * @consent: Consent record.
+ */
 struct profile_paths {
 	char id[LOTA_PROFILE_ID_LEN];
 	char dir[PATH_MAX];
 	char enroll_state[PATH_MAX];
 	char aik_cert[PATH_MAX];
-
-	/*
-	 * The profile's own AIK:
-	 * its rotation metadata, and the persistent handle that key occupies.
-	 * userAuth sidecars are derived from the metadata's directory
-	 * by the TPM layer, so they follow it here.
-	 */
 	char aik_meta[PATH_MAX];
 	char aik_handle[PATH_MAX];
-
-	/*
-	 * The record that somebody on this machine agreed to answer to this publisher.
-	 * Written before the enrollment it authorises, which is what makes it
-	 * decision rather than note about one.
-	 */
 	char consent[PATH_MAX];
 };
 
-/*
- * Derive a profile identity from a CA trust anchor.
+/**
+ * profile_id_from_anchor() - Derive a profile identity from a CA trust anchor.
+ * @ca_cert_path: PEM or DER file; only the first certificate counts.
+ * @out: Lowercase hex SHA-256 of its SubjectPublicKeyInfo.
+ * @out_len: At least LOTA_PROFILE_ID_LEN.
  *
- * @ca_cert_path: PEM or DER certificate file.
- * 		  File holding several certificates is keyed by the first one
- * 		  -- anchor names one publisher.
- * @out:          receives the lowercase hex SHA-256 of the anchor's SPKI.
- * @out_len:      size of @out; must be at least LOTA_PROFILE_ID_LEN.
- *
- * Returns 0, -ENOENT if the anchor cannot be opened, -EINVAL if it holds no
- * parsable certificate or the buffer is too small.
+ * Return: 0, -ENOENT when the file is not readable, or -EINVAL when it holds
+ * no certificate or for a bad argument.
  */
 int profile_id_from_anchor(const char *ca_cert_path, char *out, size_t out_len);
 
-/* Fill @out with the paths of the profile the anchor identifies */
+/**
+ * profile_paths_from_anchor() - Lay out the profile an anchor names.
+ * @ca_cert_path: CA trust anchor.
+ * @out: Paths under LOTA_PROFILE_BASE_DIR.
+ *
+ * Return: As profile_id_from_anchor(), or -ENAMETOOLONG.
+ */
 int profile_paths_from_anchor(const char *ca_cert_path,
 			      struct profile_paths *out);
 
-/* Path-parameterized variant behind the wrapper above (tests) */
+/**
+ * profile_paths_from_anchor_base() - The same under @base_dir.
+ * @base_dir: Parent directory.
+ * @ca_cert_path: CA trust anchor.
+ * @out: Paths.
+ *
+ * Return: As profile_paths_from_anchor().
+ */
 int profile_paths_from_anchor_base(const char *base_dir,
 				   const char *ca_cert_path,
 				   struct profile_paths *out);
 
-/*
- * Is this trust anchor a CA certificate, or a listener leaf?
+/**
+ * profile_anchor_is_ca() - Whether the anchor's first certificate is a CA.
+ * @ca_cert_path: CA trust anchor.
  *
- * One --ca-cert serves two roles: the TLS trust anchor the CA server is verified
- * against, and the publisher's identity. A CA anchor serves both and outlives
- * the deployment. A TLS listener certificate serves the first and is rotated on
- * a schedule -- and a rotation with a new key moves the identity, so every host
- * of that publisher becomes a new device with a new AIK in a new persistent slot.
+ * A leaf that is re-keyed moves the identity, and with it the profile.
  *
- * Not a refusal: a self-signed leaf is a legitimate pin for a deployment that
- * wants one, and this cannot tell that apart from a listener certificate
- * somebody named by mistake. Callers say what the choice costs and continue.
- *
- * Returns 1 for a CA certificate, 0 for one that is not, negative errno when
- * the file cannot be read or parsed.
+ * Return: 1 for a CA, 0 for an end-entity certificate, the access() errno,
+ * or -EINVAL when no certificate parses.
  */
 int profile_anchor_is_ca(const char *ca_cert_path);
 
-/*
- * Lay out a profile from its identity rather than from an anchor,
- * for the paths that meet a publisher by name: title handing over the hex,
- * and the inventory reading directories that are already there.
- * Identity is validated -- 64 lowercase hex characters -- because it becomes path.
+/**
+ * profile_paths_from_id() - Lay out a profile from its identity.
+ * @base_dir: Parent directory.
+ * @id: 64 lowercase hex characters; it becomes a path.
+ * @out: Paths.
+ *
+ * Return: 0, -EINVAL for any other @id, or -ENAMETOOLONG.
  */
 int profile_paths_from_id(const char *base_dir, const char *id,
 			  struct profile_paths *out);
 
-/*
- * Create the profile directory and its parent if they are missing,
- * 0700: the enrollment record carries the tenant admission token, and the directory
- * name itself says which publisher this host answers to.
+/**
+ * profile_dir_ensure() - Create the profile directory and its parent, 0700.
+ * @paths: Profile.
+ *
+ * The enrollment record holds the token, and the directory name says which
+ * publisher this host answers to.
+ *
+ * Return: 0, also when both exist, or a negative errno.
  */
 int profile_dir_ensure(const struct profile_paths *paths);
 
-/*
- * The persistent handle this profile's AIK occupies.
+/**
+ * profile_aik_handle_load() - Read the handle this profile's AIK occupies.
+ * @paths: Profile.
+ * @out: Handle.
  *
- * Recorded rather than derived from the profile's position in the config file:
- * removing one profile would otherwise shift every later profile onto another
- * publisher's key.
- * Record is advisory in the security sense -- the TPM is the authority on what
- * lives at a handle, and a quote signed by the wrong key fails against
- * the certificate the profile presents -- so it is a plain "0x%08X" line,
- * readable by operator listing what host has allocated.
+ * Recorded, not derived from the profile's place in the configuration,
+ * so removing a profile moves no other onto another publisher's key.
  *
- * Load returns -ENOENT when this profile has no handle yet.
+ * Return: 0, -ENOENT when none is recorded, -EINVAL for a malformed record,
+ * or a negative errno.
  */
 int profile_aik_handle_load(const struct profile_paths *paths, uint32_t *out);
+
+/**
+ * profile_aik_handle_save() - Record the handle as a "0x%08X" line.
+ * @paths: Profile; its directory is created.
+ * @handle: Nonzero handle.
+ *
+ * Return: 0 or a negative errno.
+ */
 int profile_aik_handle_save(const struct profile_paths *paths, uint32_t handle);
 
-/*
- * Drop the handle record of a profile whose key never reached the TPM.
+/**
+ * profile_aik_handle_forget() - Remove the handle record.
+ * @paths: Profile.
  *
- * The record is written when the profile is bound, before the key exists,
- * and everything that counts keys reads it. Caller must first confirm with
- * the TPM that nothing lives at the handle.
+ * For a key that never reached the TPM; the caller checks the handle is empty.
  *
- * Returns 0, also when no record exists, or a negative errno.
+ * Return: 0, also when no record exists, or a negative errno.
  */
 int profile_aik_handle_forget(const struct profile_paths *paths);
 
-/*
- * Handles in [base, base + count) that no profile under @base_dir has recorded,
- * lowest first, so caller can take the first one its TPM has no object at.
+/**
+ * profile_aik_handle_candidates() - Handles no profile records, lowest first.
+ * @base_dir: Parent directory.
+ * @base: First handle of the range.
+ * @count: Handles in the range, at most LOTA_PROFILE_MAX_AIK_HANDLES.
+ * @out: Candidates.
+ * @out_max: Entries in @out.
+ * @out_count: Entries written; 0 when all are recorded.
  *
- * @out/@out_max: caller's array and its capacity.
- * @out_count:    receives how many candidates were written.
- *
- * Returns 0 (with *out_count == 0 when every handle in the range is spoken
- * for), or a negative errno.
- * Profile directory that records nothing is skipped: it has not provisioned yet.
+ * Return: 0, -EINVAL, or the opendir() errno.
  */
 int profile_aik_handle_candidates(const char *base_dir, uint32_t base,
 				  uint32_t count, uint32_t *out, size_t out_max,
 				  size_t *out_count);
 
-/*
- * Usage of the AIK handle range, which caps the publisher count. A slot is
- * taken by a profile or by an object no profile records (wiped profile,
- * failed eviction, other program); the allocator never evicts the latter.
+/**
+ * struct profile_aik_slots - Usage of the AIK handle range.
+ * @total: Handles in the range.
+ * @recorded: Handles a profile records.
+ * @unrecorded: Handles holding an object no profile records; the allocator
+ *	never evicts one.
+ * @free_slots: Neither.
+ * @unrecorded_handles: The @unrecorded handles.
  */
 struct profile_aik_slots {
-	uint32_t total; /* handles in the range */
-	uint32_t recorded; /* slots a profile on this host records */
-	uint32_t unrecorded; /* objects in the range no profile records */
-	uint32_t free_slots; /* what a new publisher can still take */
+	uint32_t total;
+	uint32_t recorded;
+	uint32_t unrecorded;
+	uint32_t free_slots;
 	uint32_t unrecorded_handles[LOTA_PROFILE_MAX_AIK_HANDLES];
 };
 
-/*
- * Classify [base, base + count) from @recorded (profiles on disk) and @in_use
- * (objects on the TPM); handles outside the range are ignored. No I/O.
+/**
+ * profile_aik_slot_tally() - Classify each handle of a range.
+ * @base: First handle.
+ * @count: Handles, at most LOTA_PROFILE_MAX_AIK_HANDLES.
+ * @recorded: Handles the profiles record.
+ * @recorded_count: Entries in @recorded.
+ * @in_use: Handles holding a TPM object.
+ * @in_use_count: Entries in @in_use.
+ * @out: Tally; handles outside the range are ignored.
+ *
+ * Return: 0 or -EINVAL.
  */
 int profile_aik_slot_tally(uint32_t base, uint32_t count,
 			   const uint32_t *recorded, size_t recorded_count,
 			   const uint32_t *in_use, size_t in_use_count,
 			   struct profile_aik_slots *out);
 
-/* handles the profiles under @base_dir record, in directory order */
+/**
+ * profile_aik_handles_recorded() - Handles the profiles record.
+ * @base_dir: Parent directory.
+ * @out: Handles, in directory order.
+ * @out_max: Entries in @out; more are dropped.
+ * @out_count: Entries written.
+ *
+ * Return: 0, -EINVAL, or the opendir() errno.
+ */
 int profile_aik_handles_recorded(const char *base_dir, uint32_t *out,
 				 size_t out_max, size_t *out_count);
 
-/*
- * profile_aik_cert_stored - does this publisher have an enrollment
- * certificate on disk?
+/**
+ * profile_aik_cert_stored() - Whether a certificate is on disk.
+ * @paths: Profile.
  *
- * The certificate is what names the key to a verifier, so its presence is
- * what makes a replaced key a problem worth reporting.
- * Reads nothing: the file either is there or is not.
+ * Return: true for a non-empty regular file.
  */
 bool profile_aik_cert_stored(const struct profile_paths *paths);
 
-/*
- * How this publisher's AIK authorization is kept at rest.
+/**
+ * enum profile_aik_auth_state - Which AIK authorization files are present.
+ * @PROFILE_AIK_AUTH_NONE: neither.
+ * @PROFILE_AIK_AUTH_PLAINTEXT: the plaintext file only, the default.
+ * @PROFILE_AIK_AUTH_SEALED: the sealed file only, as seal_aik_auth_strict
+ *	leaves it.
+ * @PROFILE_AIK_AUTH_BOTH: both, as seal_aik_auth leaves it.
  *
- * The authorization opens the attestation key, so whether a copy of it is on
- * disk in the clear is what at-rest sealing exists to answer. The state is
- * read off the files, not taken from the verb that wrote them.
- *
- * The four states are what an auditor needs to tell apart:
- *
- *   NONE       neither file: this publisher holds no authorization yet
- *   PLAINTEXT  the sidecar only, which is the shipped default
- *   SEALED     the sealed copy only, which is seal_aik_auth_strict
- *   BOTH       sealed, with the sidecar kept -- adopted but not hardened,
- *              and a copy is still readable from a captured disk
- *
- * Reads no file contents and needs no TPM: the two files either are there
- * or are not, which is exactly what "is it on disk in the clear" asks.
+ * A file counts when it is a non-empty regular file.
  */
 enum profile_aik_auth_state {
 	PROFILE_AIK_AUTH_NONE = 0,
@@ -243,38 +240,58 @@ enum profile_aik_auth_state {
 	PROFILE_AIK_AUTH_BOTH,
 };
 
+/**
+ * profile_aik_auth_state() - Read the state off the profile directory.
+ * @paths: Profile, or NULL for PROFILE_AIK_AUTH_NONE.
+ *
+ * Return: The state.
+ */
 enum profile_aik_auth_state
 profile_aik_auth_state(const struct profile_paths *paths);
 
-/* The state's name, for a caller reporting it. Never NULL. */
+/**
+ * profile_aik_auth_state_str() - Describe a state.
+ * @state: State.
+ *
+ * Return: A sentence, never NULL.
+ */
 const char *profile_aik_auth_state_str(enum profile_aik_auth_state state);
 
-/*
- * Whether a copy of the authorization is readable from a powered-off disk.
- * True for PLAINTEXT and BOTH: sealing a second copy protects nothing while
- * the first one is still in the clear.
+/**
+ * profile_aik_auth_exposed() - Whether a plaintext copy is on disk.
+ * @state: State.
+ *
+ * Return: true for PLAINTEXT and BOTH.
  */
 bool profile_aik_auth_exposed(enum profile_aik_auth_state state);
 
-/*
- * Whether sealing would take a copy out of the clear: true for PLAINTEXT
- * and BOTH. False for SEALED (nothing to do) and NONE (a broken profile).
+/**
+ * profile_aik_auth_needs_sealing() - Whether a plaintext copy is left to seal.
+ * @state: State.
+ *
+ * Return: true for PLAINTEXT and BOTH.
  */
 bool profile_aik_auth_needs_sealing(enum profile_aik_auth_state state);
 
-/*
- * Consent to answer to a publisher.
+/**
+ * profile_consent_record() - Record consent to answer to this publisher.
+ * @paths: Profile; its directory is created.
+ * @by: Uid recorded beside the time.
  *
- * Minting AIK for publisher gives them stable handle on this machine,
- * so the host records that somebody agreed to it before the key exists.
- * Record is plain text, root-only like the directory holding it, and states when
- * it was made and by whom -- audit note, not secret: anyone who could forge it
- * could delete the profile instead.
+ * Plain text, mode 0600.
  *
- * profile_consent_record() creates the profile directory if needed.
- * profile_consent_time() returns -ENOENT when this publisher has no consent.
+ * Return: 0 or a negative errno.
  */
 int profile_consent_record(const struct profile_paths *paths, uid_t by);
+
+/**
+ * profile_consent_time() - When consent was recorded.
+ * @paths: Profile.
+ * @out: Time.
+ *
+ * Return: 0, -ENOENT when there is none, -EINVAL for a malformed record,
+ * or a negative errno.
+ */
 int profile_consent_time(const struct profile_paths *paths, time_t *out);
 
 #endif /* LOTA_AGENT_PROFILE_H */

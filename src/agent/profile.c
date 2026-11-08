@@ -1,12 +1,9 @@
 /* SPDX-License-Identifier: MIT */
 /* Copyright (C) 2026 Szymon Wilczek */
 /*
- * Publisher profile identity: hash CA trust anchor into the directory the host
- * keeps that publisher's enrollment under.
- * See profile.h for why the anchor and not the endpoint names a publisher.
+ * Publisher profile identity and layout; see profile.h.
  *
- * Self-contained file I/O and OpenSSL so it stays unit-testable apart from
- * the TPM and network stack the enrollment ceremony pulls in.
+ * File I/O and OpenSSL only, so the tests link it without the TPM code.
  */
 
 #include <dirent.h>
@@ -32,13 +29,7 @@
 
 #include "profile.h"
 
-/*
- * Read the first certificate of PEM or DER file.
- *
- * Second attempt reopens the file rather than rewinding it:
- * BIO_reset() reports success as 0 on a file BIO and 1 elsewhere,
- * so shared rewind is trap for the next reader of this code.
- */
+/* reopened, not rewound: BIO_reset() on a file BIO returns 0 on success */
 static X509 *anchor_read(const char *path)
 {
 	X509 *cert = NULL;
@@ -54,9 +45,7 @@ static X509 *anchor_read(const char *path)
 	if (cert)
 		return cert;
 
-	/* not PEM:
-	 * try DER, keeping the error queue clean so later TLS failure is not
-	 * reported against this file */
+	/* not PEM; clear the queue so a later TLS error is not blamed on it */
 	ERR_clear_error();
 
 	bio = BIO_new_file(path, "r");
@@ -72,12 +61,7 @@ static X509 *anchor_read(const char *path)
 	return cert;
 }
 
-/*
- * SHA-256 over the anchor's SubjectPublicKeyInfo, taken from the parsed X509_PUBKEY
- * rather than the public key itself:
- * the SPKI carries the algorithm identifier, so two keys of different types cannot
- * hash alike.
- */
+/* the SPKI carries the algorithm, so keys of two types cannot hash alike */
 static int anchor_spki_sha256(const char *path, uint8_t out[32])
 {
 	unsigned char *der = NULL;
@@ -131,11 +115,7 @@ int profile_anchor_is_ca(const char *ca_cert_path)
 	if (!cert)
 		return -EINVAL;
 
-	/*
-	 * X509_check_ca() answers 0 for a plain end-entity certificate
-	 * and non-zero for anything the library will let sign
-	 * -- basicConstraints CA:TRUE, and the older shapes it still honours.
-	 */
+	/* nonzero also for the pre-basicConstraints shapes OpenSSL accepts */
 	is_ca = X509_check_ca(cert) > 0 ? 1 : 0;
 	X509_free(cert);
 	return is_ca;
@@ -201,7 +181,6 @@ int profile_paths_from_anchor_base(const char *base_dir,
 	return profile_paths_fill(base_dir, &p, out);
 }
 
-/* lay out one profile's files under @base_dir from the identity in @tmp */
 static int profile_paths_fill(const char *base_dir, struct profile_paths *tmp,
 			      struct profile_paths *out)
 {
@@ -263,7 +242,6 @@ int profile_dir_ensure(const struct profile_paths *paths)
 	return 0;
 }
 
-/* Read recorded handle out of one profile directory's aik_handle file */
 static int handle_read(const char *path, uint32_t *out)
 {
 	char buf[32];
@@ -274,7 +252,7 @@ static int handle_read(const char *path, uint32_t *out)
 
 	fd = open(path, O_RDONLY | O_CLOEXEC);
 	if (fd < 0)
-		return -errno; /* -ENOENT: nothing allocated yet */
+		return -errno;
 
 	n = read(fd, buf, sizeof(buf) - 1);
 	close(fd);
@@ -286,7 +264,6 @@ static int handle_read(const char *path, uint32_t *out)
 	v = strtoul(buf, &end, 0);
 	if (errno != 0 || end == buf || v == 0 || v > UINT32_MAX)
 		return -EINVAL;
-	/* only whitespace may follow the number */
 	for (; *end; end++) {
 		if (*end != '\n' && *end != '\r' && *end != ' ' && *end != '\t')
 			return -EINVAL;
@@ -312,13 +289,7 @@ int profile_aik_handle_save(const struct profile_paths *paths, uint32_t handle)
 	if (!paths || paths->aik_handle[0] == '\0' || handle == 0)
 		return -EINVAL;
 
-	/*
-	 * Handle is the first thing written under publisher the host has only been
-	 * configured for:
-	 * the profile is bound at startup and the enrollment that would have
-	 * created the directory happens later, when title first asks.
-	 * Create the layout here rather than inherit it.
-	 */
+	/* binding at start comes before the enrollment that creates the dir */
 	ret = profile_dir_ensure(paths);
 	if (ret < 0)
 		return ret;
@@ -404,7 +375,6 @@ int profile_aik_handle_candidates(const char *base_dir, uint32_t base,
 			     ent->d_name,
 			     LOTA_PROFILE_AIK_HANDLE_FILE) >= (int)sizeof(path))
 			continue;
-		/* profile that has not provisioned records nothing */
 		if (handle_read(path, &handle) < 0)
 			continue;
 		if (taken_count < LOTA_PROFILE_MAX_AIK_HANDLES)
@@ -461,7 +431,6 @@ int profile_aik_handles_recorded(const char *base_dir, uint32_t *out,
 			     ent->d_name,
 			     LOTA_PROFILE_AIK_HANDLE_FILE) >= (int)sizeof(path))
 			continue;
-		/* profile that has not provisioned records nothing */
 		if (handle_read(path, &handle) < 0)
 			continue;
 		if (written < out_max)
@@ -508,7 +477,6 @@ int profile_aik_slot_tally(uint32_t base, uint32_t count,
 			out->recorded++;
 			continue;
 		}
-		/* the allocator never evicts it; lost until removed by hand */
 		if (is_held) {
 			out->unrecorded_handles[out->unrecorded++] = handle;
 			continue;
@@ -526,19 +494,12 @@ bool profile_aik_cert_stored(const struct profile_paths *paths)
 	if (!paths || !paths->aik_cert[0])
 		return false;
 
-	/*
-	 * Empty file is not a certificate.
-	 * A write interrupted between create and content leaves one,
-	 * and treating that as an enrollment would name a key nothing was
-	 * ever issued against.
-	 */
 	if (stat(paths->aik_cert, &st) != 0)
 		return false;
 
 	return S_ISREG(st.st_mode) && st.st_size > 0;
 }
 
-/* A non-empty regular file at path, which is what "this copy exists" means */
 static bool profile_file_present(const char *dir, const char *name)
 {
 	char path[PATH_MAX];
@@ -552,12 +513,6 @@ static bool profile_file_present(const char *dir, const char *name)
 	if (stat(path, &st) != 0)
 		return false;
 
-	/*
-	 * An empty file is not a copy of anything.
-	 * A write interrupted between create and content leaves one,
-	 * and counting it would report an authorization protected that is not
-	 * there at all.
-	 */
 	return S_ISREG(st.st_mode) && st.st_size > 0;
 }
 
@@ -656,7 +611,7 @@ int profile_consent_time(const struct profile_paths *paths, time_t *out)
 
 	fd = open(paths->consent, O_RDONLY | O_CLOEXEC);
 	if (fd < 0)
-		return -errno; /* -ENOENT: nobody agreed to this publisher */
+		return -errno;
 
 	n = read(fd, buf, sizeof(buf) - 1);
 	close(fd);

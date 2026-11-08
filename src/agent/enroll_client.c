@@ -3,9 +3,8 @@
 /*
  * LOTA attestation-CA enrollment client - orchestrator.
  *
- * Runs the agent side of the credential-activation ceremony over TLS:
- * present the EK certificate and AIK template, activate the credential
- * the CA wraps to the TPM, and persist the issued AIK certificate.
+ * Runs enrollment over TLS and stores what the CA issues in the publisher
+ * profile.
  */
 
 #include <errno.h>
@@ -28,7 +27,7 @@
 #include "tpm.h"
 #include "lota_enroll.h"
 
-/* Outer frame: u32 big-endian body length followed by the body. */
+/* u32 big-endian body length, then the body */
 static int send_frame(struct net_context *net, const uint8_t *body, size_t len)
 {
 	uint8_t hdr[4];
@@ -68,7 +67,6 @@ static int recv_frame(struct net_context *net, uint8_t *buf, size_t buf_max,
 	return 0;
 }
 
-/* Write a file atomically: write a temp file, fsync, then rename. */
 static int write_file_atomic(const char *path, const void *data, size_t len,
 			     mode_t mode)
 {
@@ -114,13 +112,11 @@ static int write_file_atomic(const char *path, const void *data, size_t len,
 	return 0;
 }
 
-/* Persist the DER certificate atomically. */
 static int store_cert(const char *path, const uint8_t *der, size_t len)
 {
 	return write_file_atomic(path, der, len, 0644);
 }
 
-/* TLS setup failed before sending: the cause is local */
 static void report_ca_setup_failed(const char *server, int port,
 				   const char *ca_cert, int ret)
 {
@@ -132,7 +128,6 @@ static void report_ca_setup_failed(const char *server, int port,
 		ca_cert ? ca_cert : "", ca_cert ? ")" : "");
 }
 
-/* A TLS refusal is reported apart: the CA answered, the anchor is at fault */
 static void report_ca_unreachable(const char *server, int port,
 				  const char *ca_cert, int ret)
 {
@@ -198,13 +193,6 @@ int enroll_to_ca(struct tpm_context *tpm, const char *server, int port,
 		goto out;
 	}
 
-	/*
-	 * Manufacturer intermediates, where the platform keeps them.
-	 * A TPM whose EK certificate is issued directly by a published root
-	 * stores none, and one that does store them is the only party that
-	 * has them -- so this is presented when it exists and passed over
-	 * when it does not.
-	 */
 	ret = tpm_get_ek_cert_chain(tpm, ek_chain_blob,
 				    LOTA_ENROLL_MAX_EK_CHAIN_BYTES,
 				    &ek_chain_blob_len);
@@ -376,13 +364,7 @@ out:
 	return ret;
 }
 
-/*
- * Persist the endpoint a successful enrollment used together with the AIK
- * generation the issued certificate is bound to, so --reenroll can reuse
- * the endpoint and the daemon can detect when a local AIK rotation has
- * outdated the certificate. A persistence failure does not fail the
- * enrollment: the certificate is already stored.
- */
+/* a failure only warns: the certificate is already stored */
 static void persist_enroll_state(const struct profile_paths *paths,
 				 const char *server, int port,
 				 const char *ca_cert, int skip_verify,
@@ -415,13 +397,8 @@ static void persist_enroll_state(const struct profile_paths *paths,
 }
 
 /*
- * Forget the handle a profile reserved for a key that never reached the TPM.
- *
- * Binding a profile records the key's handle before the key is created,
- * and both --list-publishers and the count of keys held against the TPM's
- * capacity read that record. The record is dropped only when the TPM holds
- * nothing at the handle: a failure after the key is in place (a certificate
- * that would not issue, say) keeps it.
+ * Drop the handle record when the TPM holds nothing at it: --list-publishers
+ * and the key count read the record.
  */
 static void release_unfilled_handle(struct tpm_context *tpm,
 				    const struct profile_paths *paths)
@@ -437,23 +414,12 @@ static void release_unfilled_handle(struct tpm_context *tpm,
 	profile_aik_handle_forget(paths);
 }
 
-/*
- * Which limit an enrollment ran into.
- *
- * Both are -ENOSPC, but the operator looks in different places:
- * the TPM is shared with other software, the build's handle range may run
- * out first.
- */
+/* both are -ENOSPC */
 enum no_room_reason {
 	NO_ROOM_IN_THE_TPM, /* no persistent object left, for anyone */
 	NO_ROOM_IN_THE_BUILD, /* every publisher handle is claimed */
 };
 
-/*
- * Report that no slot is left for another attestation key, and how to free
- * one. Counts come from the TPM and the profile inventory; a count that cannot
- * be read is left out, not the message.
- */
 static void report_no_room_for_a_key(struct tpm_context *tpm,
 				     enum no_room_reason why)
 {
@@ -490,10 +456,7 @@ static void report_no_room_for_a_key(struct tpm_context *tpm,
 				used, used == 1 ? "" : "s", total);
 	}
 
-	/*
-	 * From the profile inventory, not the TPM: a reserved handle outlives
-	 * its object across a TPM clear, so this need not be a share of used.
-	 */
+	/* the profile records, not the TPM: a record outlives its key */
 	if (held == 1)
 		fprintf(stderr,
 			"This machine holds one attestation key of its own. "
@@ -519,10 +482,6 @@ static void report_no_room_for_a_key(struct tpm_context *tpm,
 		"This publisher holds no key here, so nothing was enrolled.\n");
 }
 
-/*
- * A failure at the CA leaves the profile, handle and key in place for a retry
- * with the same anchor; name the slot it holds and how to free it.
- */
 static void report_slot_the_attempt_took(const struct profile_paths *paths)
 {
 	uint32_t handle = 0;
@@ -547,10 +506,7 @@ static void report_slot_the_attempt_took(const struct profile_paths *paths)
 		LOTA_PROFILE_MAX_AIK_HANDLES, paths->id);
 }
 
-/*
- * Handshake and hang up before the host changes: a failure here costs no TPM
- * object, persistent slot or dictionary-attack attempt.
- */
+/* before tpm_init(): a failure here costs no TPM object or slot */
 static int ca_session_opens(const char *server, int port, const char *ca_cert,
 			    int skip_verify, const uint8_t *pin)
 {
@@ -573,14 +529,6 @@ static int ca_session_opens(const char *server, int port, const char *ca_cert,
 	return ret;
 }
 
-/*
- * Bring up the TPM, provision the AIK, run one enrollment against the CA,
- * store the certificate, and record the endpoint. Returns 0 on success,
- * negative errno on failure.
- *
- * Everything the enrollment writes lands in the profile the CA trust anchor
- * names, so second publisher does not overwrite the first one's identity.
- */
 static int run_enrollment(const struct profile_paths *paths, const char *server,
 			  int port, const char *ca_cert, int skip_verify,
 			  const uint8_t *pin, const char *token)
@@ -623,7 +571,6 @@ static int run_enrollment(const struct profile_paths *paths, const char *server,
 
 	ret = tpm_bind_profile(&g_agent.tpm_ctx, paths);
 	if (ret < 0) {
-		/* no free handle in the range; a bare errno reads as broken */
 		if (ret == -ENOSPC)
 			report_no_room_for_a_key(&g_agent.tpm_ctx,
 						 NO_ROOM_IN_THE_BUILD);
@@ -638,7 +585,7 @@ static int run_enrollment(const struct profile_paths *paths, const char *server,
 
 	printf("Checking AIK...\n");
 
-	/* this is the command that comes back with a certificate */
+	/* this run certifies the key, so it may replace a shared one */
 	if (tpm_aik_load_metadata(&g_agent.tpm_ctx) == 0 &&
 	    tpm_aik_replacing_shared_key(&g_agent.tpm_ctx,
 					 tpm_aik_key_present(&g_agent.tpm_ctx)))
@@ -674,15 +621,6 @@ static int run_enrollment(const struct profile_paths *paths, const char *server,
 	return ret;
 }
 
-/*
- * Resolve the profile a CA trust anchor names.
- *
- * The anchor is mandatory for every enrollment path:
- * it is the only input that tells two publishers apart, and the host keeps
- * separate AIK per publisher so they cannot correlate the same machine across
- * titles.
- * Without it there is nothing to key the enrollment by.
- */
 static int resolve_profile(const char *ca_cert, struct profile_paths *paths)
 {
 	int ret;
@@ -703,13 +641,7 @@ static int resolve_profile(const char *ca_cert, struct profile_paths *paths)
 		return ret;
 	}
 
-	/*
-	 * The anchor is also this publisher's identity, so naming a certificate
-	 * that is meant to rotate spends the identity with it.
-	 * Not refused: a self-signed leaf is a legitimate pin, and nothing in
-	 * the file says whether that is what somebody meant.
-	 * Said once, where the decision is being made.
-	 */
+	/* not refused: a self-signed leaf is a legitimate pin */
 	if (profile_anchor_is_ca(ca_cert) == 0)
 		fprintf(stderr,
 			"Warning: %s is not a CA certificate, so this "
@@ -730,11 +662,7 @@ static int resolve_profile(const char *ca_cert, struct profile_paths *paths)
 	return 0;
 }
 
-/*
- * Report another profile at this CA endpoint; not a refusal, as one CA may
- * serve several publishers. When that profile's anchor path now names this
- * one, it is a rotated pin and the older profile is orphaned.
- */
+/* one CA may serve several publishers, so this only reports */
 static void report_endpoint_already_enrolled(const struct profile_paths *paths,
 					     const char *server, int port)
 {
@@ -785,12 +713,7 @@ int do_enroll(const char *server, int port, const char *ca_cert,
 	printf("Publisher profile: %s\n", paths.id);
 	report_endpoint_already_enrolled(&paths, server, port);
 
-	/*
-	 * Running --enroll is the consent:
-	 * somebody with root named this CA and asked for the key.
-	 * Recording it here keeps one rule for the agent to enforce,
-	 * rather than one for operators and one for players
-	 */
+	/* running --enroll is the consent */
 	if (profile_consent_record(&paths, getuid()) < 0)
 		fprintf(stderr,
 			"Warning: could not record consent for %s; the loop "
@@ -810,12 +733,6 @@ int do_enroll(const char *server, int port, const char *ca_cert,
 		}
 	}
 
-	/*
-	 * --enroll is a one-shot CLI mode. Return a non-negative exit code
-	 * (0 success, 1 failure): diagnostics_dispatch() treats any negative
-	 * return as "not a diagnostic, fall through to the daemon", so a
-	 * failed enrollment must not leak a negative errno upward.
-	 */
 	ret = run_enrollment(&paths, server, port, ca_cert, skip_verify, pin,
 			     token[0] ? token : NULL);
 	OPENSSL_cleanse(token, sizeof(token));
@@ -870,11 +787,7 @@ int do_reenroll(const char *ca_cert, const char *ca_server, int ca_port)
 		return 1;
 	}
 
-	/*
-	 * Anchor from the caller, which selected this record by it, so a stale
-	 * path in the record cannot redirect to another publisher.
-	 * Endpoint from the record unless given.
-	 */
+	/* the anchor selected this record, so a stale path in it is unused */
 	server = enroll_endpoint_server(st.ca_server, ca_server);
 	port = enroll_endpoint_port(st.ca_port, ca_port);
 
@@ -898,12 +811,7 @@ int do_reenroll(const char *ca_cert, const char *ca_server, int ca_port)
 	return ret == 0 ? 0 : 1;
 }
 
-/*
- * Build the profile paths for a publisher named by its identity.
- * --allow-publisher runs before anything has enrolled, so there is no anchor
- *  on disk to derive the identity from:
- *  the title (or the publisher's own instructions) supplies the hex directly.
- */
+/* --allow-publisher runs before enrollment: no anchor to derive the id */
 static int paths_from_id(const char *profile_id, struct profile_paths *out)
 {
 	return profile_paths_from_id(LOTA_PROFILE_BASE_DIR, profile_id, out);
@@ -960,20 +868,7 @@ static bool anchor_is_hidden_from_the_units(const char *path)
 	       strncmp(path, "/var/tmp/", 9) == 0;
 }
 
-/*
- * Register a publisher in lota.conf so a title of theirs can name it.
- *
- * This is the step that used to be a text editor.
- * Game's installer runs it with the publisher's CA endpoint, the trust anchor it
- * ships, and where that publisher's verifier lives; the agent picks the change
- * up on its next start or reload.
- *
- * It records no consent.
- * That stays a separate act by the person at the machine, because installer must
- * not be able to agree on their behalf to publisher holding an attestation key
- * on their hardware -- the whole point of the consent gate.
- * The message says so, and names the command.
- */
+/* no consent: an installer must not agree for the person at the machine */
 int do_add_publisher(const char *config_path, const char *name,
 		     const char *ca_server, int ca_port, const char *ca_cert,
 		     const char *verifier, int verifier_port, int interval,
@@ -990,12 +885,7 @@ int do_add_publisher(const char *config_path, const char *name,
 		return 1;
 	}
 
-	/*
-	 * Anchor is the publisher's identity, so it has to be readable
-	 * and parseable here rather than at the next start:
-	 * installer that wrote a profile naming a file that is not a certificate
-	 * would leave a host that refuses to start.
-	 */
+	/* checked here: at start an unreadable anchor only drops the profile */
 	ret = profile_paths_from_anchor(ca_cert, &paths);
 	if (ret < 0) {
 		fprintf(stderr,
@@ -1005,8 +895,6 @@ int do_add_publisher(const char *config_path, const char *name,
 		return 1;
 	}
 
-	/* Same warning as the enrollment path: this is the other place
-	 * a publisher's identity is chosen from a file somebody named. */
 	if (profile_anchor_is_ca(ca_cert) == 0)
 		fprintf(stderr,
 			"Warning: %s is not a CA certificate, so this "
@@ -1018,11 +906,8 @@ int do_add_publisher(const char *config_path, const char *name,
 			ca_cert);
 
 	/*
-	 * Text-level check in the writer compares anchor paths, which misses
-	 * the same key reached by a second path -- copied PEM, symlink,
-	 * per-title install directory.
-	 * The identity is the key, and it is already resolved here, so compare
-	 * that against what the file configures before adding anything.
+	 * The writer compares anchor paths; the same key under a second path is
+	 * caught here.
 	 */
 	{
 		struct lota_config *existing = config_new();
@@ -1063,16 +948,9 @@ int do_add_publisher(const char *config_path, const char *name,
 	}
 
 	memset(&p, 0, sizeof(p));
-	/* Identity is 64 hex characters and the label field is shorter,
-	 * so unnamed publisher is labelled by a readable prefix of it rather
-	 * than a silently cut one */
+	/* the label field is shorter than the 64-hex identity */
 	if (name && name[0]) {
-		/*
-		 * checked before the copy, because the copy is what would hide it:
-		 * a label longer than the field is a label the operator would
-		 * never see again, silently shortened into one that may already
-		 * belong to another publisher
-		 */
+		/* before the copy, which would cut a long label silently */
 		char why[160];
 
 		if (config_profile_name_defect(name, why, sizeof(why))) {
@@ -1088,13 +966,6 @@ int do_add_publisher(const char *config_path, const char *name,
 	snprintf(p.ca, sizeof(p.ca), "%s", ca_server);
 	p.ca_port = ca_port > 0 ? ca_port : LOTA_DEFAULT_CA_PORT;
 	snprintf(p.ca_cert, sizeof(p.ca_cert), "%s", ca_cert);
-	/*
-	 * No verifier named is the publisher who runs none:
-	 * their backend checks the tokens their titles fetch and nothing is
-	 * reported from this machine.
-	 * The port goes with the verifier, since a port for a verifier declared
-	 * absent is a contradiction the parser refuses.
-	 */
 	p.token_only = !(verifier && verifier[0]);
 	if (!p.token_only) {
 		snprintf(p.verifier, sizeof(p.verifier), "%s", verifier);
@@ -1112,8 +983,6 @@ int do_add_publisher(const char *config_path, const char *name,
 		printf("Publisher %s added to %s as \"%s\".\n", paths.id,
 		       config_path ? config_path : LOTA_CONFIG_DEFAULT_PATH,
 		       p.name);
-		/* Which of the two arrangements was written,
-		 * since the difference is whether anything leaves this machine */
 		if (p.token_only)
 			printf("They run no verifier, so nothing is reported "
 			       "from this machine: their\nbackend checks the "
@@ -1181,18 +1050,8 @@ int do_add_publisher(const char *config_path, const char *name,
 }
 
 /*
- * Whether the key at a publisher's handle is still the key its certificate
- * names, for the one surface an operator checks first.
- *
- * Everything else this listing prints -- the consent, the enrollment, the handle,
- * the certificate's validity -- survives the key at that handle being replaced,
- * so a publisher whose evidence the TPM will refuse to sign reads exactly like
- * a healthy one. The answer costs a TPM_ReadPublic, which needs no authorization
- * and spends no dictionary-attack attempt.
- *
- * UNKNOWN is the honest answer whenever the question could not be put:
- * no certificate, no key, or a TPM that would not open. It prints nothing,
- * since the listing already says which of those it is.
+ * Whether the key at the handle is the one the certificate names; nothing
+ * else listed changes when it is replaced. UNKNOWN when it cannot be asked.
  */
 enum publisher_key_status {
 	PUBLISHER_KEY_UNKNOWN = 0,
@@ -1275,11 +1134,6 @@ static void print_publisher(const struct publisher_entry *e,
 	else
 		printf("  certificate    none stored\n");
 
-	/*
-	 * Whether the authorization that opens this key is on disk in the clear.
-	 * It is the question at-rest sealing exists to answer: the sealing verb
-	 * reports what it attempted, this line reports what it stored.
-	 */
 	{
 		struct profile_paths paths;
 		enum profile_aik_auth_state st = PROFILE_AIK_AUTH_NONE;
@@ -1314,17 +1168,7 @@ static void print_publisher(const struct publisher_entry *e,
 	}
 }
 
-/*
- * What this machine has room for, said before it runs out.
- *
- * The 17th title a player buys is the one that finds the ceiling.
- * The TPM is asked: LOTA's own maximum is a constant, but the binding number
- * is how many persistent objects this chip holds, which is smaller on firmware
- * TPMs and shared with whatever else persists keys here.
- *
- * A TPM that is not there, or does not answer for its capacity, costs the line
- * and nothing else -- reading the inventory is deliberately not a TPM operation.
- */
+/* the held count reads the profile records, so it prints without a TPM */
 static void print_key_capacity(const struct publisher_entry *entries,
 			       size_t count)
 {
@@ -1403,9 +1247,8 @@ int do_list_publishers(void)
 	int ret;
 
 	/*
-	 * Consent creates a profile before enrollment and nothing prunes,
-	 * so the directory can exceed LOTA_PROFILE_MAX_AIK_HANDLES;
-	 * list them all, or --forget-publisher has no id to take.
+	 * Consent creates profiles and nothing prunes, so there can be more
+	 * than LOTA_PROFILE_MAX_AIK_HANDLES.
 	 */
 	ret = publishers_list_alloc(LOTA_PROFILE_BASE_DIR, &entries, &count);
 	if (ret < 0) {
@@ -1420,11 +1263,6 @@ int do_list_publishers(void)
 		return 0;
 	}
 
-	/*
-	 * One TPM open for the whole listing, and only to read public areas.
-	 * A host whose TPM will not open still gets the listing: only the
-	 * key check needs the TPM.
-	 */
 	bool tpm_open = tpm_init(&g_agent.tpm_ctx) == 0;
 
 	printf("Publishers this machine answers to:\n\n");
@@ -1474,13 +1312,7 @@ int do_forget_publisher(const char *profile_id)
 		return 1;
 	}
 
-	/*
-	 * A publisher this machine never answered to has nothing to take back,
-	 * and reporting one forgotten would tell somebody checking that they
-	 * had removed a publisher they had not.
-	 * The directory is the record of the relationship, so its absence is
-	 * the answer.
-	 */
+	/* without the directory there is nothing to report forgotten */
 	if (access(paths.dir, F_OK) != 0) {
 		fprintf(stderr,
 			"This machine does not answer to publisher %s, so "
@@ -1578,13 +1410,7 @@ int enroll_profile_now(struct tpm_context *tpm,
 	if (ret < 0)
 		return ret;
 
-	/*
-	 * No enrollment token:
-	 * publisher admitting players cannot hand each of them a secret in advance,
-	 * so the CA admits on the EK's chain to a pinned root instead.
-	 * Operator fleet that does use tokens enrolls with --enroll before
-	 * the loop ever reaches this path.
-	 */
+	/* no token: a publisher cannot hand one to every player in advance */
 	ret = enroll_to_ca(tpm, ca_server, ca_port, ca_cert, 0, NULL, NULL,
 			   paths->aik_cert);
 	if (ret < 0)
@@ -1607,12 +1433,9 @@ int enroll_renew_cert(struct tpm_context *tpm,
 
 	ret = enroll_state_load_path(paths->enroll_state, &st);
 	if (ret < 0)
-		return ret; /* -ENOENT: never enrolled, caller disables renew */
+		return ret;
 
-	/*
-	 * endpoint comes from the record, which is the promise --reenroll makes
-	 * the anchor does not: see enroll_renew_anchor()
-	 */
+	/* endpoint from the record; the anchor from enroll_renew_anchor() */
 	ret = enroll_renew_anchor(configured_ca_cert, st.ca_cert, &anchor);
 	if (ret < 0) {
 		OPENSSL_cleanse(&st, sizeof(st));

@@ -1,9 +1,6 @@
 /* SPDX-License-Identifier: MIT */
 /* Copyright (C) 2026 Szymon Wilczek */
-/*
- * Names for the LOTA-private transport codes in net.h. Apart from net.c
- * so callers link without OpenSSL, as tpm_errno.c is apart from tpm.c.
- */
+/* apart from net.c, so callers link without OpenSSL */
 
 #include <string.h>
 
