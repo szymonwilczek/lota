@@ -1,239 +1,208 @@
 # /etc/lota/lota.conf -- LOTA Agent configuration
 #
-# Line-oriented key = value format.
-# Lines starting with '#' are comments. Empty lines are ignored.
-# Keys accept both underscore and hyphen forms (e.g: ca_cert, ca-cert).
-# CLI flags override any value set here.
+# One key = value per line. A line whose first non-blank character is '#' is a
+# comment; a '#' after a value is part of the value. A key with more than one
+# word may be written with hyphens instead (ca-cert for ca_cert).
 #
-# [profile "name"] header opens a publisher profile and every key after it belongs
-# to that profile, so the top-level keys go above the first profile and the profiles
-# go last.
-# See the end of this file.
+# The file must be a regular file that is neither group- nor world-writable,
+# owned by root (for an agent run as another user, by that user or root).
+# An unknown key or a value the key's parser rejects makes the agent refuse
+# the whole file.
 #
-# To dump the effective configuration after loading this file:
+# A command-line flag replaces the value of the key it names here, except
+# --allow-verity, --trust-lib and --protect-pid, which add to the entries
+# read from this file.
+#
+# A [profile "name"] header opens a publisher profile, and every key after it
+# belongs to that profile, so the top-level keys go above the first profile.
+#
+# To print the configuration as the agent reads it:
 #   lota-agent --dump-config
 #   lota-agent --config /path/to/file --dump-config
 
 # ---- Verifier connection ------------------------------------------------
 
-# Verifier server address (default: none, so --attest has no single verifier
-# to report to; a [profile] below names each publisher's own)
+# The single verifier --attest reports to when no [profile] is configured.
+# There is no default.
 # server = verifier.example.com
 
-# Verifier server port
 port = 8443
 
-# CA certificate for TLS verification (default: system CA store)
+# CA certificate the verifier's TLS certificate is checked against
+# (default: the system CA store)
 # ca_cert = /etc/lota/ca.pem
 
-# Pin verifier certificate by SHA-256 fingerprint (64 hex chars)
-# This key is for the single-verifier deployment above; a host with publisher
-# profiles pins inside each profile instead, and setting both is refused.
+# Pin the verifier's certificate by SHA-256 fingerprint (64 hex characters;
+# colons and spaces are allowed). With [profile] entries configured, the pin
+# goes inside each profile instead, and a pin here is refused.
 # pin_sha256 = 4fd24ead1c6c1c0d2e5f0a9b8c7d6e5f4a3b2c1d0e9f8a7b6c5d4e3f2a1b0c9d
 
 # ---- BPF / enforcement --------------------------------------------------
 
-# Path to compiled BPF object file
 bpf_path = /usr/lib/lota/lota_lsm.bpf.o
 
-# Enforcement mode: monitor, enforce
-# Default is enforce.
+# Enforcement mode: monitor or enforce (default: enforce). A --mode below the
+# mode set here is refused without --insecure-allow-mode-downgrade.
 # mode = enforce
 
-# Strict policy flags.
-#   strict_mmap, strict_exec, block_ptrace, strict_modules, block_anon_exec
-#   -- all off by default.
+# Strict policy flags, all off by default. They act in enforce mode only;
+# in monitor mode `lota-agent --dump-config` and the startup log list them as
+# inert.
 #
-# All five apply in enforce mode only; in monitor they are
-# inert, as `lota-agent --dump-config` and the startup log say.
+# block_ptrace refuses every ptrace attach. Reading another process's /proc
+# is not an attach and stays the kernel's decision. In either mode and with
+# or without the flag, the agent and each protected process refuse both to
+# anything outside their own instance.
 #
-# block_ptrace refuses a ptrace attach on any task.
-# Reading another process's /proc is not an attach and is left to the kernel;
-# a process that opted into protection refuses both.
+# strict_exec and strict_modules need at least one allow_verity entry below;
+# with neither the agent refuses to start.
 #
-# strict_exec and strict_modules require at least one allow_verity entry
-# below. Enabling either without populating allow_verity makes the agent
-# refuse to start. A fresh install has no fs-verity allowlist by design,
-# so both flags default to off; the operator opts in once the
-# allow_verity list is provisioned.
-#
-# strict_modules covers firmware and modules. A module counts in either of
-# the forms the kernel accepts:
-# the image itself, and the compressed file modprobe hands the kernel on
-# a distribution that ships .ko.xz or .ko.zst.
-# On such a host every module load arrives in the compressed form, so the allowlist
-# has to name the compressed files -- fs-verity is enabled on the .ko.xz, not on
-# the module it expands to.
-# A host that arms the flag without them loads no further modules.
+# strict_modules lets a module or firmware file load only when its fs-verity
+# digest is in the allow_verity list, and refuses a module handed over from
+# memory. Where modprobe passes the compressed .ko.xz or .ko.zst file to the
+# kernel, that compressed file is the one that needs fs-verity and an entry.
 # strict_mmap = true
 # strict_exec = true
 # block_ptrace = true
 # strict_modules = true
 # block_anon_exec = true
 
-# bench: write the agent's own cost, and the protected set's as one sum,
-# to /run/lota/bench.json once a second (0640 root:lota). The policy is
-# the same with it; the status word and the report say it is on.
+# bench: write the agent's own cost, and the protected set's as one sum, to
+# /run/lota/bench.json once a second, mode 0640, group lota (root only when
+# the group is missing). The status word and the report flag it as on.
 # Read at startup only.
 # bench = true
 
-# allow_verity: allow fs-verity protected files by digest.
-#
-# Each entry must be an absolute path and must refer to a file with fs-verity
-# enabled. The agent measures the fs-verity digest at startup and provisions it
-# into the BPF allowlist.
+# allow_verity: a file with fs-verity enabled, by absolute path. The agent
+# measures its fs-verity digest at startup and allows that digest; a path it
+# cannot measure makes it refuse to start. One entry per line, up to 256.
 #
 # allow_verity = /usr/bin/my_verified_binary
 # allow_verity = /usr/lib/my_verified_module.ko
 
 # ---- Attestation ---------------------------------------------------------
 
-# Continuous attestation interval in seconds (0 = one-shot when --attest)
+# Seconds between attestation rounds of `lota-agent --attest`, which the
+# packaged lota-attest.service runs: 0, or 30 to 300.
 #
-# Packaged lota-attest.service runs `lota-agent --attest` fire-and-forget
-# and reads this value: non-zero interval keeps the loop running (and renews
-# the AIK certificate before it expires).
-#
-# 0 means this host never chose a cadence, not that it wants a single round.
-# With a [profile] list below it attests to every configured publisher at
-# the default 300 s; with no profile at all it falls back to attesting once
-# to the single verifier named by `server` and exiting. With neither, the
-# loop runs with no target and waits for a reload that names a publisher.
-#
-# Set `server`, `port` and `ca_cert` above to the verifier the loop should reach.
+# 0 is no cadence chosen. With [profile] entries the loop then attests every
+# 300 s; with no profile but a `server`, --attest attests once and exits; with
+# neither, the loop runs with no target until a reload names a publisher.
 attest_interval = 300
 
-# AIK key lifetime in seconds before rotation (0 = default 30 days).
-# The floor is 3600: below it a host rotates its attestation key faster than
-# an enrolment completes. The same floor applies to --aik-ttl.
+# AIK key lifetime in seconds before rotation (0 = 30 days). A value below
+# 3600 is raised to 3600, here and for --aik-ttl.
 aik_ttl = 0
 
-# ---- Sealed AIK auth (at-rest hardening) ---------------------------------
-# Keep a copy of the AIK userAuth sealed to the platform state (PCRs 0-7,
-# the firmware and Secure Boot set) so it is only usable on this machine booted
-# as expected. Those registers describe the hardware, so the sealed copy survives
-# a reboot and an agent upgrade; PCR 14 is not bound, because it tracks the agent
-# binary and binding it would cost every host its AIK authorization at each update.
-# Both keys default to false, which preserves the plaintext-sidecar behaviour.
+# ---- Sealed AIK auth ------------------------------------------------------
+# Keep the AIK userAuth sealed to PCRs 0-7, so it unseals only while the
+# firmware, its configuration, the boot loader and Secure Boot state measure
+# as they did when it was sealed. PCR 14 is not in the set, so an agent
+# upgrade keeps it. Both default to false: the auth is then kept in plain
+# text beside the key.
 #
 #   seal_aik_auth         also write a sealed copy and prefer it on load;
-#                         falls back to the plaintext sidecar if the sealed
-#                         copy is missing or the boot state changed.
-#   seal_aik_auth_strict  store ONLY the sealed copy (no plaintext on disk)
-#                         and never fall back. A firmware or Secure Boot change
-#                         then forces AIK re-provisioning instead of exposing
-#                         the auth.
+#                         use the plain-text copy when the sealed one is
+#                         missing or does not unseal.
+#   seal_aik_auth_strict  keep only the sealed copy and never fall back.
+#                         When the key is in the TPM but its sealed copy is
+#                         missing or no longer unseals while either copy is
+#                         on disk, as after turning this on for a key kept
+#                         in plain text, the agent refuses to use or replace
+#                         the key; the operator restores the record or
+#                         replaces the key with --forget-publisher,
+#                         --allow-publisher and --enroll. With neither copy,
+#                         or no key in the TPM, the agent provisions a new
+#                         key.
 # seal_aik_auth = false
 # seal_aik_auth_strict = false
 
-# ---- Seal storage primary (performance) ----------------------------------
-# By default --seal/--unseal derive their storage primary per operation with
-# CreatePrimary: stateless and consuming no persistent slot. A host that
-# seals/unseals frequently can persist the primary once with
+# ---- Seal storage primary -------------------------------------------------
+# Every seal and unseal (--seal, --unseal, the sealed AIK auth) derives its
+# storage primary with CreatePrimary, using no persistent handle. After
 #   lota-agent --seal-persist-primary
-# and set the following to true so the seal path reuses it and skips the
-# per-op CreatePrimary. The derived and persisted primaries are identical,
-# so existing sealed blobs stay valid either way. Remove it with
+# set this to true to reuse the persisted primary instead; without one the
+# agent still derives it. Both primaries are the same key, so sealed blobs
+# stay valid either way. Remove it with
 #   lota-agent --seal-evict-primary
 # seal_persistent_primary = false
 
-# Optional absolute path to currently booted kernel image.
-# Use this on distros that do not expose /boot/vmlinuz-<release>.
-# It tells the agent where to find the image -- `--test-tpm` hashes it.
-# It does not select what `--export-policy` exports: the measured-boot digest
-# in an exported policy is the value of a PCR as this host booted,
-# so the document names that register and the running kernel.
+# Absolute path to the booted kernel image, for a distribution without
+# /boot/vmlinuz-<release>. `--test-tpm` hashes it and attestation reports
+# carry its path. `--export-policy` does not use it: the kernel digest there is
+# the boot loader's measurement of the image it loaded.
 # kernel_path = /efi/EFI/Linux/linux.efi
 
 # ---- Daemon --------------------------------------------------------------
 
-# Fork to background (not needed under systemd)
+# Fork to the background; the packaged unit runs the agent in the foreground
 daemon = false
 
-# PID file location
 pid_file = /run/lota/lota-agent.pid
 
 # ---- Policy signing ------------------------------------------------------
 
-# Ed25519 private key for signing policies
+# Ed25519 private key --sign-policy signs with
 # signing_key = /etc/lota/policy.key
 
-# Ed25519 public key the enforcement object's signature is verified against.
-# Unset is the normal case: the agent uses /etc/lota/policy.pub when fleet put
-# its own key there, and otherwise the key the package shipped beside the object
-# at /usr/lib/lota/enforcement.pub.
-# Set this only to name a third path.
+# Ed25519 public key the enforcement object's signature is checked against.
+# The agent takes the first readable one of this path, /etc/lota/policy.pub
+# and /usr/lib/lota/enforcement.pub, so an unreadable path here is skipped.
 # policy_pubkey = /etc/lota/policy.pub
 
 # ---- Logging -------------------------------------------------------------
 
-# Log level: debug, info, warn, error
+# Log level: debug, info, warn or error; any other value is accepted and means
+# debug. Only a reload that changes it applies it; the agent starts logging at
+# debug.
 log_level = info
 
 # ---- Trusted libraries ---------------------------------------------------
-# Multiple trust_lib entries are allowed (one per line).
+# A trusted library passes the strict_mmap check on executable mappings. Each
+# entry is an absolute path to a regular file with no symlink along it; one
+# that does not resolve makes the agent refuse to start. One per line, up to
+# 64.
 # trust_lib = /usr/lib64/libc.so.6
-# trust_lib = /usr/lib64/libssl.so.3
 
 # ---- Protected PIDs ------------------------------------------------------
-# Multiple protect_pid entries are allowed (one per line).
+# One protect_pid entry per line, up to 1024; a reload reads them again.
 # protect_pid = 1234
 # protect_pid = 5678
 
 # ---- Publisher profiles (must stay last) ---------------------------------
-# One machine, several publishers.
-# Each profile names the attestation CA it enrolls against, the trust anchor
-# that CA is verified with, and the verifier it reports to.
-# The publisher's policy is entirely on their side: profile grants no publisher
-# any say over this host's enforcement.
+# One machine, several publishers, up to 8. Each profile names the attestation
+# CA it enrolls against (ca, ca_port), that CA's trust anchor (ca_cert) and the
+# verifier it reports to (verifier, verifier_port). A profile gives its
+# publisher no say over this host's enforcement.
 #
-# The section name is label for the operator.
-# Profile is identified by the SHA-256 of its ca_cert trust anchor's
-# SubjectPublicKeyInfo, which is why the anchor is required and why moving CA
-# to new address keeps the profile.
+# The section name is a label for the operator. A profile is identified by
+# the SHA-256 of its ca_cert's SubjectPublicKeyInfo, so ca_cert is required,
+# and moving the CA to a new address keeps the profile. ca_cert must be
+# readable by lota-attest.service, as the top-level ca_cert is.
 #
-# ca_cert must be readable by the hardened lota-attest.service, exactly as the
-# top-level ca_cert above.
+# ca_port defaults to 8444 and verifier_port to 8443. interval defaults to
+# attest_interval above (300 when that is 0) and takes the same range.
 #
-# ca_port defaults to 8444 and verifier_port to 8443.
-# interval defaults to the attest_interval above; set it only where publisher
-# wants different cadence, and keep it inside the range lota-agent --help prints
+# reporting = session (the default) sends that publisher reports only while
+# one of their titles runs. reporting = continuous reports on every round,
+# as an operator-owned fleet wants. Enforcement and the PCR 14 boot
+# commitment stay on either way.
 #
-# reporting = session (the default) sends reports only while a title of that
-# publisher's is running -- report is the only thing that leaves this machine,
-# and closed game has no reason to produce one.
-# reporting = continuous keeps the always-on stream, which is what an operator-owned
-# fleet wants.
-# Enforcement and the PCR 14 boot commitment are always-on either way and send nothing.
+# The agent enrolls a profile itself: when the loop first reaches it, and at
+# once when a title asks for that publisher.
 #
-# Every key below a header belongs to that profile, so nothing top-level may
-# follow.
-# `lota-agent --dump-config` prints profiles last for the same reason.
+# The profiles are the attestation loop's targets: each is reported to on its
+# own cadence, signed with that publisher's own AIK, and an unreachable
+# verifier backs off only its own reporting. With profiles configured,
+# --attest refuses --server and --pin-sha256, and a top-level pin_sha256 is
+# refused: each profile carries its own pin.
 #
-# Profile whose CA this host has never enrolled with is enrolled by the agent itself
-# -- when the loop first reaches it, and immediately when a title selects that
-# publisher. That is why `ca` and `ca_cert` belong in the profile:
-# on player's machine there is no install-time step at which the publisher is
-# even known yet.
-#
-# Profile list is the attestation loop's target list:
-# the agent reports to every profile's verifier on that profile's cadence,
-# signing each report with that publisher's own AIK, and one unreachable verifier
-# backs off only its own reporting.
-# Because the list replaces the single verifier above, --server and --pin-sha256
-# are refused while profiles are configured, as is the top-level pin_sha256:
-# every publisher's verifier presents its own certificate, so a pin belongs to
-# the profile whose verifier it was measured against.
-#
-# verifier = none is for a publisher who runs no verifier and checks the tokens
-# their titles fetch in their own backend instead. Nothing is reported to them:
-# no attestation report, no event log and no runtime manifest leaves this
-# machine for that publisher, and this host holds no verdict of theirs.
-# Their profile still enrolls, holds its own AIK and renews that key's certificate,
-# because the certificate is what their backend chains a token to.
-# Saying it is required -- omitted verifier key is refused, so typo cannot quietly
-# turn a publisher who expects reports into one who receives none.
-# verifier_port must not be set alongside it.
+# verifier = none is for a publisher who runs no verifier and checks the
+# tokens their titles fetch in their own backend. Nothing is reported to
+# them, but the profile still enrolls, holds its own AIK and renews that key's
+# certificate, which their backend chains a token to. The verifier key is
+# required, so a missing one is refused rather than read as none, and a
+# verifier_port other than 8443 is refused alongside none.
 #
 # [profile "publisher-a"]
 # ca = ca.publisher-a.example

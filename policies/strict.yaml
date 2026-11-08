@@ -1,68 +1,47 @@
 # SPDX-License-Identifier: MIT
 # LOTA PCR Policy - Strict Security
 #
-# High-security policy requiring ALL security features enabled.
-# Suitable for competitive gaming, esports, and money tournaments.
-#
-# Requirements:
-#   - IOMMU/VT-d enabled in BIOS and kernel
-#   - SELinux or AppArmor in enforce mode
-#   - Kernel module signature enforcement enabled
-#   - UEFI Secure Boot enabled
-#   - Kernel lockdown mode active
-#
-# Check a host before deployment; require_iommu, require_module_sig,
-# require_secureboot and require_lockdown must be true:
+# Every require_* check on, with PCR 0/1/7/8 pinned. A host must show
+# require_iommu, require_enforce, require_module_sig, require_secureboot,
+# require_lockdown and require_ima_appraisal true in
 #
 #   sudo lota-agent --export-policy | grep '^require_'
 #
-# require_enforce is the agent's mode, not the MAC's: check the MAC with
-# getenforce (SELinux) or aa-status (AppArmor).
+# require_enforce there is the mode the configuration or --mode sets, not
+# the running agent's and not the SELinux or AppArmor mode.
 
 name: strict
 description: "Strict security policy - all protections required"
 
-# Owned fleet:
-# firmware drift is a finding, so drifted boot baseline waits for operator rather
-# than re-anchoring itself.
-# Set `consumer` for fleet of machines you do not own (see policies/README.rst)
+# A drifted boot baseline waits for an operator unless the verifier runs
+# with -enable-self-service-reanchor; see production.yaml for consumer.
 profile: enterprise
 
-# Critical PCR values that MUST match.
-#
-# All three boot PCRs are REQUIRED under VerifierConfig.RequireBootEnrollment=true
-# (the production default). The strict profile rejects any host whose
-# firmware, UEFI configuration, or Secure Boot state drifts from the
-# pinned values below; that is the whole point of this profile.
+# A host whose PCR 0, 1, 7 or 8 differs from these values is refused.
 pcrs:
-  # PCR 0: SRTM firmware measurements; changes indicate firmware update
+  # firmware
   0: "REPLACE_WITH_REAL_PCR0_FROM_lota-agent_--export-policy"
-  # PCR 1: UEFI configuration / NVRAM-resident BIOS settings
+  # firmware configuration
   1: "REPLACE_WITH_REAL_PCR1_FROM_lota-agent_--export-policy"
-  # PCR 7: Secure Boot policies + certificates; the signed-kernel anchor
+  # Secure Boot state
   7: "REPLACE_WITH_REAL_PCR7_FROM_lota-agent_--export-policy"
-  # PCR 8: kernel cmdline + boot config (GRUB). Rejects a signed kernel
-  # booted with a tampered cmdline. On systemd-boot/UKI pin 12 instead of 8.
+  # GRUB kernel command line; on systemd-boot or a UKI pin 12 instead
   8: "REPLACE_WITH_REAL_PCR8_FROM_lota-agent_--export-policy"
 
-# Kernel image hashes are ADVISORY ONLY, not a trust control: the value is
-# the agent's self-reported userspace sha256(/boot/vmlinuz), spoofable by a
-# compromised kernel. Trust the kernel through PCR 7 (signed) + PCR 8
-# (cmdline), not this list. Leave empty.
+# Left empty: PCR 7 and PCR 8 bind the kernel. See production.yaml.
 kernel_hashes: []
 
-# Only specifically approved agent versions
 agent_hashes:
-  # Add SHA-256 hashes of approved agent builds
+  # SHA-256 of each agent binary the fleet runs
 
-# ALL SECURITY FEATURES REQUIRED
 require_iommu: true
 require_enforce: true
 require_module_sig: true
-require_secureboot: true # event-log enforced (firmware-measured SecureBoot variable)
+require_secureboot: true
 require_lockdown: true
-# needs IMA-signed executables on the host, from distribution packages
-# or the operator's image pipeline; a stock host cannot satisfy it
+# needs an appraise rule on BPRM_CHECK, or with no func=, in the host's IMA
+# policy, and Secure Boot on or ima_appraise=enforce or fix on the command
+# line
 require_ima_appraisal: true
-require_cmdline_policy: true # event-log enforced kernel cmdline denylist (PCR 8)
+require_cmdline_policy: true
 cmdline_deny: []
