@@ -1,15 +1,8 @@
 // SPDX-License-Identifier: MIT
 // Copyright (C) 2026 Szymon Wilczek
-// LOTA Attestation CA - EK trust and AIK certificate issuance
-//
-// The issuer holds the operator's CA signing key and the trusted TPM
-// manufacturer roots. It verifies that an Endorsement Key certificate
-// chains to a manufacturer the operator trusts, and -- only after the
-// agent has proven possession of the matching TPM through credential
-// activation -- mints a short-lived AIK certificate. Downstream
-// verifiers then trust the AIK because it chains to this CA, without
-// ever seeing the EK or running an activation round-trip themselves.
 
+// Package ca verifies EK certificates against pinned manufacturer roots
+// and CRLs and signs AIK certificates with the CA key.
 package ca
 
 import (
@@ -32,23 +25,15 @@ import (
 	"github.com/szymonwilczek/lota/crl"
 )
 
-// TCG EK Credential Profile OID for a TPM 2.0 endorsement key.
-// Manufacturer EK certificates carry it either as an extended key usage
-// or, far more commonly, as a certificate policy.
-// Both placements are accepted
+// hasTCGEKOID accepts this OID as an extended key usage or a policy.
 var oidTCGEKCertificate = asn1.ObjectIdentifier{2, 23, 133, 8, 1}
 
-// defaultTenant is the reserved tenant encoded as the absence
-// of an OrganizationalUnit in an issued certificate.
-// Mirrors enroll.DefaultTenant.
-// Duplicated here because the ca package cannot import enroll
-// (enroll depends on ca).
+// enroll.DefaultTenant; enroll imports ca, so ca cannot import it.
 const defaultTenant = "default"
 
-// Critical extensions a TPM EK certificate may carry that Go's x509
-// verifier does not process: the subject alternative name (TPM
-// manufacturer/model/version as a directoryName) and the subject
-// directory attributes.
+// Critical extensions an EK certificate may carry that crypto/x509 leaves
+// unhandled: a subject alternative name with no DNS, email, IP or URI name,
+// and subject directory attributes.
 var (
 	oidSubjectAltName        = asn1.ObjectIdentifier{2, 5, 29, 17}
 	oidSubjectDirectoryAttrs = asn1.ObjectIdentifier{2, 5, 29, 9}
@@ -66,14 +51,15 @@ func dropTPMCriticalExtensions(oids []asn1.ObjectIdentifier) []asn1.ObjectIdenti
 }
 
 const (
-	// MinEKKeyBits rejects undersized EK moduli.
+	// MinEKKeyBits is the smallest EK or AIK RSA modulus accepted.
 	MinEKKeyBits = 2048
 
-	// DefaultAIKCertTTL keeps issued AIK certificates short-lived so a
-	// compromised key is bounded by the re-enrollment interval.
+	// DefaultAIKCertTTL is the AIK certificate lifetime used when
+	// IssuerConfig.AIKCertTTL is not positive.
 	DefaultAIKCertTTL = 24 * time.Hour
 )
 
+// Errors returned by NewIssuer and VerifyEKCertificate.
 var (
 	ErrNoEKRoots        = errors.New("no trusted EK manufacturer roots configured")
 	ErrEKParse          = errors.New("failed to parse EK certificate")
@@ -96,88 +82,54 @@ type Issuer struct {
 	ekRoots *x509.CertPool
 	certTTL time.Duration
 
-	// ekIntermediates holds the path material the operator pinned.
-	// Enroll wire carries a single EK leaf (a TPM NV index holds one cert)
-	// plus whatever the chip stores, so the rest of a
-	// leaf -> intermediate -> root manufacturer PKI has to come from the
-	// bundle.
-	// Nothing here is an anchor: a certificate in this pool can only
-	// complete a route that still terminates in ekRoots.
+	// pinned intermediates and every root that is not self-signed
 	ekIntermediates *x509.CertPool
 
-	// ekPathCerts mirrors ekIntermediates and ekRoots
-	// as a map keyed by raw Subject.
-	// A CertPool cannot be walked, and naming the link a failed chain
-	// needed next means following the path by hand.
+	// roots and intermediates by raw Subject, for missingLink: a CertPool
+	// cannot be walked
 	ekPathCerts map[string]*x509.Certificate
 
-	// ekRootCerts mirrors ekRoots as a slice:
-	// CRL engine verifies each manufacturer CRL signature against the
-	// certificate whose Subject matches the CRL Issuer, which a CertPool
-	// cannot answer.
-	// Pinned intermediates are in it too: manufacturers that issue EK
-	// certificates through an intermediate sign the covering CRL with it.
+	// roots and intermediates: the certificates a CRL may be signed by
 	ekRootCerts []*x509.Certificate
 
-	// ekCRLPaths holds the operator-configured manufacturer CRL file
-	// paths captured at construction.
-	// ReloadEKCRLs() walks the same list, re-validates every CRL against
-	// the EK trust anchors, and atomically swaps the in-memory set so
-	// concurrent enrollments see the new feed without locking.
 	ekCRLPaths []string
 	ekCRLs     atomic.Pointer[crl.Set]
 }
 
 // IssuerConfig configures a new Issuer.
 type IssuerConfig struct {
-	// CACertPEM is the PEM-encoded CA certificate whose key signs AIK
-	// certificates. Downstream verifiers pin this as a trust root.
+	// CACertPEM is the CA certificate that signs AIK certificates;
+	// it must be a CA.
 	CACertPEM []byte
 
-	// CAKeyPEM is the PEM-encoded PKCS#8 CA private key.
-	// It is used only when CASigner is nil; an on-disk key
-	// is the dev-only fallback.
+	// CAKeyPEM is the PKCS#8 ECDSA, Ed25519 or RSA CA key,
+	// read only when CASigner is nil.
 	CAKeyPEM []byte
 
-	// CASigner is a pre-built signer for the CA key
-	// Typically backed by an HSM or other external key store that never
-	// exposes the private key. When set, it takes precedence over CAKeyPEM
-	// and the private key material never enters the process.
-	// Its public key must match the CA certificate, the same check applied
-	// to an on-disk key.
+	// CASigner takes precedence over CAKeyPEM.
+	// Either key must match the CA certificate.
 	CASigner crypto.Signer
 
-	// EKRootPEMs are the PEM-encoded TPM manufacturer root certificates.
-	// They are trust anchors: a chain terminates here or it is refused.
+	// EKRootPEMs are the anchors an EK chain must end at;
+	// at least one is required.
 	EKRootPEMs [][]byte
 
-	// EKIntermediatePEMs are PEM-encoded manufacturer CA certificates
-	// the operator pins as path material.
-	// A firmware TPM sends the certificates it keeps on the chip with its
-	// enrollment request; the ones above those are published only by the vendor,
-	// so the operator supplies them here.
-	// They complete a route to an anchor and never become one, so pinning
-	// an intermediate does not quietly narrow the trusted set to one
-	// manufacturer branch.
+	// EKIntermediatePEMs are path material, never an anchor.
 	EKIntermediatePEMs [][]byte
 
-	// EKCRLPaths are files holding TPM manufacturer CRLs (PEM or DER;
-	// a file may bundle several PEM blocks).
-	// Each CRL must be signed by a certificate in EKRootPEMs
-	// or EKIntermediatePEMs - a manufacturer whose CRL is issued by
-	// an intermediate CA needs that intermediate pinned for the feed to load.
-	// Enrollment rejects an EK certificate listed in a matching CRL;
-	// Issuer whose every CRL is stale fails closed.
-	// Empty means no revocation feed (issuers without a configured CRL
-	// are accepted).
+	// EKCRLPaths are manufacturer CRL files, loaded as crl.BuildSet does;
+	// each CRL must be signed by a certificate of EKRootPEMs or
+	// EKIntermediatePEMs.
 	EKCRLPaths []string
 
-	// AIKCertTTL is the lifetime of issued AIK certificates.
-	// Zero selects DefaultAIKCertTTL.
+	// AIKCertTTL is the AIK certificate lifetime.
 	AIKCertTTL time.Duration
 }
 
-// NewIssuer builds an Issuer from PEM material.
+// NewIssuer builds an Issuer and loads its CRL files. It fails on a CA
+// certificate that is not a CA, a CA key that does not parse, is not
+// supported or does not match it, no EK root, and a certificate or CRL that
+// does not load.
 func NewIssuer(cfg IssuerConfig) (*Issuer, error) {
 	caCert, err := parseCertPEM(cfg.CACertPEM)
 	if err != nil {
@@ -187,11 +139,6 @@ func NewIssuer(cfg IssuerConfig) (*Issuer, error) {
 		return nil, ErrCANotCA
 	}
 
-	// externally held signer (HSM, KMS, ...) takes precedence
-	// the on-disk PEM is the dev-only fallback.
-	// Either way the signer's public key is checked against
-	// the CA certificate so a misconfigured key store cannot
-	// sign under the wrong identity
 	caKey := cfg.CASigner
 	if caKey == nil {
 		caKey, err = parseSignerPEM(cfg.CAKeyPEM)
@@ -221,8 +168,6 @@ func NewIssuer(cfg IssuerConfig) (*Issuer, error) {
 		ekRoots.AddCert(root)
 		ekRootCerts = append(ekRootCerts, root)
 		ekPathCerts[string(root.RawSubject)] = root
-		// an anchor that is not self-signed only anchors anything if
-		// a chain can also be built through it
 		if !bytes.Equal(root.RawSubject, root.RawIssuer) {
 			ekIntermediates.AddCert(root)
 		}
@@ -234,8 +179,7 @@ func NewIssuer(cfg IssuerConfig) (*Issuer, error) {
 		}
 		ekIntermediates.AddCert(inter)
 		ekPathCerts[string(inter.RawSubject)] = inter
-		// path material, never an anchor -- but the CRL engine still has
-		// to find it by Subject to verify a CRL it signed
+		// a CRL may be signed by an intermediate
 		ekRootCerts = append(ekRootCerts, inter)
 	}
 
@@ -263,12 +207,8 @@ func NewIssuer(cfg IssuerConfig) (*Issuer, error) {
 	return is, nil
 }
 
-// ReloadEKCRLs re-parses every manufacturer CRL path configured at
-// construction time, validates the refreshed feed against the EK trust
-// anchors, and atomically swaps the active revocation set on success.
-// Failure leaves the previous set in place so a malformed update cannot
-// drop revocations on the floor.
-// Daemon wires this to SIGHUP.
+// ReloadEKCRLs rebuilds the CRL set from the files NewIssuer was given;
+// on error the previous set stays in use.
 func (is *Issuer) ReloadEKCRLs() error {
 	set, err := crl.BuildSet(is.ekCRLPaths, is.ekRootCerts)
 	if err != nil {
@@ -278,23 +218,14 @@ func (is *Issuer) ReloadEKCRLs() error {
 	return nil
 }
 
-// EKCRLCount returns the number of loaded manufacturer CRLs.
-// Startup logging only.
+// EKCRLCount returns the number of loaded CRLs.
 func (is *Issuer) EKCRLCount() int { return is.ekCRLs.Load().Size() }
 
-// maxEKPathHops bounds the diagnostic walk.
-// Real manufacturer PKIs are six levels deep at the most; the bound is there
-// because the supplied chain is unauthenticated and could describe a cycle.
+// a supplied chain may describe a cycle
 const maxEKPathHops = 16
 
-// pathMaterial returns the intermediate pool one verification runs against:
-// the operator's bundled intermediates plus whatever the device supplied.
-//
-// Trust is unaffected by what a device sends. Only is.ekRoots anchors a chain,
-// so a supplied certificate can at most complete a route that already
-// terminates at a pinned root.
-// Elements that do not parse are dropped, because the chain is unauthenticated
-// input and a device whose path is complete without them has done nothing wrong.
+// pathMaterial returns ekIntermediates plus the supplied certificates that
+// parse; the rest are dropped.
 func (is *Issuer) pathMaterial(chainDER [][]byte) *x509.CertPool {
 	if len(chainDER) == 0 {
 		return is.ekIntermediates
@@ -310,17 +241,10 @@ func (is *Issuer) pathMaterial(chainDER [][]byte) *x509.CertPool {
 	return pool
 }
 
-// missingLink walks the path upwards from the leaf through everything the CA
-// pinned and the device supplied, and returns the Subject the walk needed next
-// and could not find.
-// It answers "" when the walk reaches a self-signed certificate, because then
-// the path is complete and the refusal came from something else -- an untrusted
-// anchor, an expiry, a bad signature.
-//
-// Diagnostics only: it decides nothing, and it runs only after a verification
-// has already failed.
-// Naming the link is what separates "your endorsement key is not accepted" from
-// "this bundle is missing a certificate".
+// missingLink follows issuers up from leaf through the pinned and supplied
+// certificates and returns the first issuer name it cannot find, or "" on
+// reaching a self-signed certificate or maxEKPathHops. It only words the
+// error of a failed verification.
 func (is *Issuer) missingLink(leaf *x509.Certificate, chainDER [][]byte) string {
 	bySubject := make(map[string]*x509.Certificate, len(is.ekPathCerts)+len(chainDER))
 	for k, v := range is.ekPathCerts {
@@ -332,7 +256,6 @@ func (is *Issuer) missingLink(leaf *x509.Certificate, chainDER [][]byte) string 
 			continue
 		}
 
-		// a certificate the device supplied never displaces a pinned one
 		if _, pinned := bySubject[string(c.RawSubject)]; !pinned {
 			bySubject[string(c.RawSubject)] = c
 		}
@@ -352,19 +275,10 @@ func (is *Issuer) missingLink(leaf *x509.Certificate, chainDER [][]byte) string 
 	return ""
 }
 
-// VerifyEKCertificate confirms an EK certificate chains to a trusted
-// manufacturer root, is not listed in a configured manufacturer CRL,
-// is time-valid, carries the TCG EK OID, and holds an RSA key large
-// enough to wrap an activation seed. It returns the parsed certificate
-// so the caller can bind the credential to its public key.
-//
-// chainDER holds the manufacturer intermediates the device presented with its
-// leaf, for a platform that stores them on the chip and publishes them
-// nowhere. They are path material only: they may complete a route to a root
-// the operator pinned, and they can never become an anchor, so a device that
-// supplies its own self-signed root is refused exactly as one supplying
-// nothing is. A nil chain is the discrete-TPM case and verifies against the
-// bundle alone.
+// VerifyEKCertificate returns the parsed EK certificate once it is within
+// its validity, chains to an EK root, passes the CRL check, carries the TCG
+// EK OID and holds an RSA key of at least MinEKKeyBits that is not ROCA-weak.
+// chainDER is path material only: a root it carries is not an anchor.
 func (is *Issuer) VerifyEKCertificate(der []byte, chainDER [][]byte, now time.Time) (*x509.Certificate, error) {
 	cert, err := x509.ParseCertificate(der)
 	if err != nil {
@@ -378,19 +292,10 @@ func (is *Issuer) VerifyEKCertificate(der []byte, chainDER [][]byte, now time.Ti
 		return nil, ErrEKExpired
 	}
 
-	// TPM EK certificates carry TCG-specific critical extensions that
-	// Go's verifier does not process -- the subject alternative name
-	// holding the TPM manufacturer/model/version as a directoryName
-	// (the subject itself is empty per the TCG profile) and the subject
-	// directory attributes. They are irrelevant to chain verification,
-	// so drop them from the unhandled-critical set; EK authenticity is
-	// still gated by the chain check and the TCG EK OID below. Without
-	// this, x509.Verify fails with "unhandled critical extension" on
-	// every genuine EK certificate.
+	// Verify refuses any unhandled critical extension
 	cert.UnhandledCriticalExtensions = dropTPMCriticalExtensions(cert.UnhandledCriticalExtensions)
 
-	// EK certificates are leaf certificates that may omit the TLS server
-	// EKU, so verify with ExtKeyUsageAny
+	// with no KeyUsages Verify demands ServerAuth
 	if _, err := cert.Verify(x509.VerifyOptions{
 		Roots:         is.ekRoots,
 		Intermediates: is.pathMaterial(chainDER),
@@ -404,13 +309,6 @@ func (is *Issuer) VerifyEKCertificate(der []byte, chainDER [][]byte, now time.Ti
 		return nil, fmt.Errorf("%w: %v", ErrEKChain, err)
 	}
 
-	// Manufacturer revocation feed.
-	// Runs only after the chain check has established the issuer is
-	// trusted; a revoked EK (e.g. the bulk ROCA/CVE-2017-15361 revocations)
-	// has a recoverable private key, so issuing an AIK certificate against
-	// it would let a software attacker complete credential activation
-	// without the TPM.
-	// Error chain preserves the crl sentinels for errors.Is callers.
 	if err := is.ekCRLs.Load().Check(cert, now); err != nil {
 		return nil, fmt.Errorf("EK certificate revocation: %w", err)
 	}
@@ -421,21 +319,14 @@ func (is *Issuer) VerifyEKCertificate(der []byte, chainDER [][]byte, now time.Ti
 
 	rsaPub, ok := cert.PublicKey.(*rsa.PublicKey)
 	if !ok {
-		// Credential activation wraps the secret to an RSA EK
-		// (TPM2_MakeCredential is RSA-OAEP here)
-		// ECC or other EK is refused with a message that names
-		// the offending algorithm so an operator knows the host
-		// needs its RSA EK provisioned
+		// credential.GenerateChallenge takes an RSA EK only
 		return nil, fmt.Errorf("%w: certificate carries a %s key", ErrEKKeyType, cert.PublicKeyAlgorithm)
 	}
 	if rsaPub.N.BitLen() < MinEKKeyBits {
 		return nil, fmt.Errorf("%w: %d bits", ErrEKKeySize, rsaPub.N.BitLen())
 	}
 
-	// ROCA-weak EK is rejected regardless of CRL coverage:
-	// fingerprint is intrinsic to the modulus and a factorable EK makes
-	// the activation secret recoverable in software, so the chain and
-	// OID checks above prove nothing about TPM residency for such a key.
+	// refused whether or not a CRL lists it
 	if IsROCAWeak(rsaPub.N) {
 		return nil, ErrEKWeakKey
 	}
@@ -443,10 +334,10 @@ func (is *Issuer) VerifyEKCertificate(der []byte, chainDER [][]byte, now time.Ti
 	return cert, nil
 }
 
-// IssueAIKCertificate mints a short-lived certificate for an activated
-// AIK. subjectCN is an opaque, privacy-preserving device identifier
-// chosen by the caller; the EK is never referenced so attestations
-// across verifiers cannot be linked back to the hardware.
+// IssueAIKCertificate signs a certificate for aikPub with CN subjectCN and,
+// unless tenant is empty or the default, OU tenant, valid from a minute
+// before now until now plus the issuer's TTL. It carries nothing of the
+// EK. An AIK below MinEKKeyBits is refused.
 func (is *Issuer) IssueAIKCertificate(aikPub *rsa.PublicKey, subjectCN, tenant string, now time.Time) ([]byte, error) {
 	if aikPub == nil {
 		return nil, errors.New("nil AIK public key")
@@ -460,10 +351,6 @@ func (is *Issuer) IssueAIKCertificate(aikPub *rsa.PublicKey, subjectCN, tenant s
 		return nil, fmt.Errorf("serial number: %w", err)
 	}
 
-	// verifier reads a single OrganizationalUnit as the device tenant
-	// and treats certificate with no OU as the default tenant,
-	// so the default tenant is encoded as the absence of an OU.
-	// This keeps single-tenant deployments issuing byte-identical subjects.
 	subject := pkix.Name{CommonName: subjectCN}
 	if tenant != "" && tenant != defaultTenant {
 		subject.OrganizationalUnit = []string{tenant}

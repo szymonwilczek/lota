@@ -1,12 +1,5 @@
 // SPDX-License-Identifier: MIT
 // Copyright (C) 2026 Szymon Wilczek
-// LOTA Attestation CA - enrollment-token tenant assignment
-//
-// Gaming path assigns tenants to devices the operator has never seen:
-// consumer machine cannot be pre-listed in an EK manifest, so it presents
-// per-tenant enrollment token with its begin request instead.
-// CA stores only the SHA-256 of each token, so the token file leaks no enrollable
-// credential, and resolves the tenant from the digest of the presented token.
 
 package enroll
 
@@ -20,16 +13,16 @@ import (
 	"strings"
 )
 
-// MaxEnrollTokenLen bounds a presented token;
-// Mirrors the wire cap so token the codec carries is never rejected here for size alone.
+// MaxEnrollTokenLen is the longest token TenantFor accepts,
+// as wire.MaxEnrollTokenSize.
 const MaxEnrollTokenLen = 128
 
 var (
-	// ErrTokenUnknown rejects a presented token that matches no
-	// configured entry (including a CA with no token file at all).
+	// ErrTokenUnknown is returned for a token no entry matches.
 	ErrTokenUnknown = errors.New("enrollment token not recognized")
 
-	// ErrTokenRequired rejects a token-less enrollment on a CA that mandates tokens.
+	// ErrTokenRequired is returned by Begin for a token-less enrollment
+	// under WithRequireToken.
 	ErrTokenRequired = errors.New("enrollment requires a token")
 )
 
@@ -38,14 +31,9 @@ type EnrollmentTokens struct {
 	byDigest map[string]string
 }
 
-// LoadEnrollmentTokens reads and validates a token-to-tenant file.
-// File is one entry per line, "<token_sha256> <tenant>", with blank lines
-// and lines beginning with '#' ignored.
-// Every entry must carry a 64-hex token digest and a valid tenant name;
-// Duplicate digest or any malformed line fails the whole load.
-// Only digests are stored, never tokens:
-// operator mints a token, hands it to the tenant's install flow,
-// and records sha256(token) here.
+// LoadEnrollmentTokens reads lines of "<token_sha256> <tenant>"; blank and
+// '#' lines are skipped. A malformed line, a duplicate digest, an invalid
+// tenant or a file with no entry fails the load.
 func LoadEnrollmentTokens(path string) (*EnrollmentTokens, error) {
 	f, err := os.Open(path)
 	if err != nil {
@@ -89,12 +77,8 @@ func LoadEnrollmentTokens(path string) (*EnrollmentTokens, error) {
 	return t, nil
 }
 
-// TenantFor resolves the tenant of a presented token.
-// Token is hashed before the lookup, so the comparison never touches token
-// bytes and the map key cannot be probed byte by byte.
-// Unmatched token fails closed with ErrTokenUnknown;
-// There is no default-tenant fallback, because device that presents token
-// asks for an explicit assignment.
+// TenantFor returns the tenant listed for the token's SHA-256. An empty,
+// overlong or unlisted token, or a nil t, gives ErrTokenUnknown.
 func (t *EnrollmentTokens) TenantFor(token []byte) (string, error) {
 	if t == nil || len(token) == 0 || len(token) > MaxEnrollTokenLen {
 		return "", ErrTokenUnknown

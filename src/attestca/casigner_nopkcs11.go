@@ -2,11 +2,6 @@
 // Copyright (C) 2026 Szymon Wilczek
 //go:build !pkcs11
 
-// Default (pure-Go) build:
-// PKCS#11 support is not compiled in.
-// PKCS#11 key request fails closed with a build hint
-// rather than silently falling back to an on-disk key.
-
 package main
 
 import (
@@ -14,8 +9,7 @@ import (
 	"errors"
 )
 
-// newPKCS11Signer always refuses; a container has no tree to rebuild in,
-// so the error also names the -hsm image.
+// newPKCS11Signer always refuses: this build has no PKCS#11 support.
 func newPKCS11Signer(pkcs11KeyConfig) (crypto.Signer, func() error, error) {
 	return nil, nil, errors.New(
 		"this lota-attest-ca was built without PKCS#11 support; " +

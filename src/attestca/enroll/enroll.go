@@ -1,14 +1,10 @@
 // SPDX-License-Identifier: MIT
 // Copyright (C) 2026 Szymon Wilczek
-// LOTA Attestation CA - enrollment state machine
-//
-// Drives one host through the credential-activation ceremony: verify the
-// EK certificate, wrap a secret to that EK bound to the AIK name, and -
-// only once the agent returns the activated secret - issue the AIK
-// certificate. The pending challenge is the single piece of server state;
-// it is bounded and expires so a flood of half-finished enrollments
-// cannot exhaust memory.
 
+// Package enroll runs credential-activation enrollment: Begin checks the EK
+// certificate and the AIK template and wraps a secret to the EK, Complete
+// issues the AIK certificate once that secret comes back.
+// Pending challenges are held in memory, capped and expiring.
 package enroll
 
 import (
@@ -28,17 +24,16 @@ import (
 )
 
 const (
-	// DefaultSessionTTL bounds how long an agent has to activate a
-	// credential before the pending challenge is swept.
+	// DefaultSessionTTL is how long a pending challenge stays valid.
 	DefaultSessionTTL = 2 * time.Minute
 
-	// DefaultMaxPending caps outstanding challenges so an unauthenticated
-	// flood of Begin calls cannot grow the session map without bound.
+	// DefaultMaxPending caps the pending challenges.
 	DefaultMaxPending = 4096
 
 	sessionIDSize = 16
 )
 
+// Errors returned by Begin and Complete.
 var (
 	ErrUnknownSession     = errors.New("unknown or consumed enrollment session")
 	ErrSessionExpired     = errors.New("enrollment session expired")
@@ -72,8 +67,7 @@ type session struct {
 	createdAt time.Time
 }
 
-// Challenge is returned by Begin and carries the activation material the
-// agent feeds to TPM2_ActivateCredential.
+// Challenge is what Begin returns for the agent's TPM2_ActivateCredential.
 type Challenge struct {
 	SessionID       string
 	CredentialBlob  []byte
@@ -83,7 +77,7 @@ type Challenge struct {
 // Option configures a Service.
 type Option func(*Service)
 
-// WithSessionTTL overrides the pending-challenge lifetime.
+// WithSessionTTL replaces DefaultSessionTTL; a non-positive ttl is ignored.
 func WithSessionTTL(ttl time.Duration) Option {
 	return func(s *Service) {
 		if ttl > 0 {
@@ -92,7 +86,7 @@ func WithSessionTTL(ttl time.Duration) Option {
 	}
 }
 
-// WithMaxPending overrides the outstanding-session cap.
+// WithMaxPending replaces DefaultMaxPending; a non-positive n is ignored.
 func WithMaxPending(n int) Option {
 	return func(s *Service) {
 		if n > 0 {
@@ -101,37 +95,31 @@ func WithMaxPending(n int) Option {
 	}
 }
 
-// WithTenantManifest binds an EK-to-tenant manifest so each enrollment is
-// assigned a tenant.
-// Without it every device enrolls into the default tenant,
-// preserving single-tenant behavior.
+// WithTenantManifest assigns a token-less device its tenant by EK from m.
+// Without it such a device enrolls into DefaultTenant.
 func WithTenantManifest(m *TenantManifest) Option {
 	return func(s *Service) {
 		s.tenants = m
 	}
 }
 
-// WithEnrollmentTokens binds token-to-tenant set so a device can name its tenant
-// by presenting an enrollment token.
-// Without it every presented token is rejected.
+// WithEnrollmentTokens assigns a device that presents a token its tenant
+// from t. Without it every presented token is refused.
 func WithEnrollmentTokens(t *EnrollmentTokens) Option {
 	return func(s *Service) {
 		s.tokens = t
 	}
 }
 
-// WithRequireToken refuses any enrollment that presents no token,
-// turning the token set into the sole admission control
-// (the gaming deployment shape, where no enrolling EK is known up front).
+// WithRequireToken refuses an enrollment that presents no token.
 func WithRequireToken() Option {
 	return func(s *Service) {
 		s.requireToken = true
 	}
 }
 
-// NewService builds an enrollment Service. pseudonymKey keys the stable,
-// EK-derived device identifier placed in issued certificates
-// It must be kept secret so a verifier cannot reverse a device ID back to its EK
+// NewService returns a Service that issues through issuer. pseudonymKey
+// keys the device ID of issued certificates and must be at least 16 bytes.
 func NewService(issuer *ca.Issuer, pseudonymKey []byte, opts ...Option) (*Service, error) {
 	if issuer == nil {
 		return nil, errors.New("nil issuer")
@@ -153,14 +141,11 @@ func NewService(issuer *ca.Issuer, pseudonymKey []byte, opts ...Option) (*Servic
 	return s, nil
 }
 
-// Begin verifies the EK certificate and AIK template, wraps a fresh
-// activation secret, and records the pending session. The returned
-// Challenge must be activated by the agent and handed back to Complete.
-// Token is the optional enrollment token from the begin request;
-// nil or empty means the device presented none.
-// ekChainDER holds the manufacturer intermediates the device presented with
-// its leaf, for a platform that stores them on the chip; they complete a path
-// to a pinned root and never anchor one.
+// Begin checks the EK certificate, with ekChainDER as path material, and
+// the AIK template, assigns the tenant and records a pending challenge for
+// Complete. A non-empty token decides the tenant and is never replaced by
+// the manifest or DefaultTenant; without one the manifest decides, unless
+// WithRequireToken is set.
 func (s *Service) Begin(ekCertDER, aikTPMTPublic, token []byte, ekChainDER [][]byte) (*Challenge, error) {
 	now := s.now()
 
@@ -186,12 +171,6 @@ func (s *Service) Begin(ekCertDER, aikTPMTPublic, token []byte, ekChainDER [][]b
 		return nil, ErrAIKKeyType
 	}
 
-	// resolve the tenant before wrapping the credential, so a barred
-	// device is rejected without spending a challenge.
-	// A presented token is an explicit assignment and fails closed:
-	// unmatched token never falls back to the EK manifest or the
-	// default tenant. Token-less enrollment takes the EK-manifest path
-	// unless the CA mandates tokens.
 	var tenant string
 	switch {
 	case len(token) > 0:
@@ -236,10 +215,9 @@ func (s *Service) Begin(ekCertDER, aikTPMTPublic, token []byte, ekChainDER [][]b
 	}, nil
 }
 
-// Complete consumes a pending session: it compares the activated secret
-// in constant time and, on a match, issues the AIK certificate.
-// The session is removed whether or not activation succeeds, so a wrong
-// secret burns the challenge.
+// Complete removes the session, then checks its age and, in constant time,
+// the activated secret; on a match it issues the AIK certificate.
+// An expired session or a wrong secret burns the challenge.
 func (s *Service) Complete(sessionID string, recoveredSecret []byte) (aikCertDER []byte, deviceID string, err error) {
 	now := s.now()
 
@@ -275,22 +253,10 @@ func (s *Service) sweepLocked(now time.Time) {
 	}
 }
 
-// deviceID derives a stable, privacy-preserving identifier from the EK modulus
-// and the assigned tenant.
-// The same TPM in the same tenant always maps to the same ID so the operator
-// can correlate re-enrollments, but the keyed hash cannot be reversed to the EK
-// by a verifier that only sees the issued certificate.
-// Mixing the tenant in keeps one TPM enrolling into two tenants from colliding
-// on a single device ID, which the per-tenant state model requires.
-//
-// Default tenant has no name to mix in, so its MAC input is the EK alone.
-// That is the structural reason, not compatibility one:
-// device does not keep its pseudonym when it moves into a named tenant,
-// and it is not meant to -- the per-tenant state model requires the two to differ.
-//
-// NUL byte separates a named tenant from the modulus;
-// Valid tenant name never contains NUL, so the split is unambiguous and no two
-// (tenant, EK) pairs share MAC input.
+// deviceID is the hex HMAC-SHA256, under the pseudonym key, of the EK
+// modulus, prefixed with the tenant and a NUL unless the tenant is
+// DefaultTenant. A tenant name holds no NUL, so two (named tenant, EK) pairs
+// never share an input.
 func (s *Service) deviceID(ekPub *rsa.PublicKey, tenant string) string {
 	input := ekPub.N.Bytes()
 	if tenant != DefaultTenant {

@@ -1,14 +1,10 @@
 // SPDX-License-Identifier: MIT
 // Copyright (C) 2026 Szymon Wilczek
-// LOTA Attestation CA - self-hosted enrollment service
-//
-// Each LOTA adopter runs their own lota-attest-ca with their own CA
-// signing key and their own trusted TPM manufacturer roots. The service
-// proves an AIK lives in a genuine TPM through credential activation and
-// issues a short-lived AIK certificate the fleet's verifiers trust. It
-// holds no TPM and stores no per-host secrets beyond the in-flight
-// challenge.
 
+// Command lota-attest-ca enrolls AIKs: it checks the EK certificate against
+// the configured manufacturer roots, proves by credential activation that
+// the AIK is on the same TPM and issues an AIK certificate signed by the CA
+// key. Pending challenges are held in memory only.
 package main
 
 import (
@@ -122,17 +118,12 @@ func run(listen string, cfg *runConfig, log *slog.Logger) error {
 		"pseudonym-key": cfg.pseudonymKey,
 	}
 
-	// CA key comes from exactly one source:
-	// PKCS#11 token or an on-disk PEM
-	// -ca-key is required only when no token is configured
 	if cfg.pkcs11.requested() {
 		if cfg.caKeyPath != "" {
 			return fmt.Errorf("specify either -ca-key or -ca-key-pkcs11-*, not both (given: -ca-key, %s)",
 				cfg.pkcs11.flagsGiven())
 		}
 
-		// A selector names a key on a token nothing has been told to open,
-		// so it is a typo or a forgotten flag. Say which.
 		if cfg.pkcs11.module == "" {
 			return fmt.Errorf("-ca-key-pkcs11-module is required with %s",
 				cfg.pkcs11.flagsGiven())
@@ -149,7 +140,7 @@ func run(listen string, cfg *runConfig, log *slog.Logger) error {
 		return fmt.Errorf("at least one of -ek-root-bundle or -ek-root is required")
 	}
 
-	// enroll silently swaps a non-positive ceiling for its default
+	// enroll ignores a non-positive value and keeps its default
 	if cfg.sessionTTL <= 0 {
 		return fmt.Errorf("-session-ttl must be positive (got %s); omit the flag for the default of %s",
 			cfg.sessionTTL, enroll.DefaultSessionTTL)
@@ -164,8 +155,6 @@ func run(listen string, cfg *runConfig, log *slog.Logger) error {
 		return fmt.Errorf("read ca-cert: %w", err)
 	}
 
-	// CA signing key anchors the whole fleet's trust.
-	// Load it either from a PKCS#11 token (production) or an on-disk PEM (dev-only)
 	var (
 		caKeyPEM []byte
 		caSigner crypto.Signer
@@ -189,17 +178,12 @@ func run(listen string, cfg *runConfig, log *slog.Logger) error {
 			return fmt.Errorf("read ca-key: %w", err)
 		}
 
-		// On-disk key is a development convenience only;
-		// Production holds it in an HSM.
-		// Warn loudly so it is never mistaken for a default.
 		log.Warn("using on-disk CA signing key -- development-only fallback; "+
 			"hold the CA key in an HSM in production",
 			"flag", "-ca-key", "doc", "Documentation/operator/production-bringup/index.rst")
 	}
 
 	var ekRootPEMs, ekIntermediatePEMs [][]byte
-	// operator-provisioned, pin-enforced bundle is the trust baseline
-	// -ek-root adds operator-supplied roots (e.g. a swtpm CA in the demo tor) on top
 	if cfg.ekRootBundle != "" {
 		bundle, err := ca.LoadEKRootBundle(cfg.ekRootBundle)
 		if err != nil {
@@ -293,10 +277,6 @@ func run(listen string, cfg *runConfig, log *slog.Logger) error {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
-	// SIGHUP refreshes the manufacturer EK CRL feed in place:
-	// operator rewrites the configured file(s) atomically and signals
-	// the daemon.
-	// Failed reload keeps the previous set active.
 	hup := make(chan os.Signal, 1)
 	signal.Notify(hup, syscall.SIGHUP)
 	defer signal.Stop(hup)
@@ -321,7 +301,6 @@ func run(listen string, cfg *runConfig, log *slog.Logger) error {
 	return srv.Serve(ctx, ln)
 }
 
-// startupFields lists the running configuration, every enforced bound included.
 func startupFields(cfg *runConfig, addr string, roots, intermediates, crls int) []any {
 	return []any{
 		"address", addr,
@@ -334,8 +313,8 @@ func startupFields(cfg *runConfig, addr string, roots, intermediates, crls int) 
 	}
 }
 
-// splitPEMCerts expands a PEM bundle into one []byte per CERTIFICATE block
-// so a manufacturer root file holding several roots is fully loaded
+// splitPEMCerts returns each CERTIFICATE block of data;
+// other blocks are skipped.
 func splitPEMCerts(data []byte) [][]byte {
 	var out [][]byte
 	rest := data

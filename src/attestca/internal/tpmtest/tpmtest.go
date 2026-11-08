@@ -1,11 +1,8 @@
 // SPDX-License-Identifier: MIT
 // Copyright (C) 2026 Szymon Wilczek
-// Package tpmtest provides hardware-free test fixtures for the
-// attestation CA: a manufacturer root, EK certificates, AIK templates,
-// the operator CA material, and a software model of
-// TPM2_ActivateCredential. It lets the CA flow be exercised end to end
-// without a TPM. It is test-support only and never imported by the
-// shipped binaries.
+// Package tpmtest provides attestation CA test fixtures: roots,
+// EK certificates, an AIK template, CA material and a software
+// TPM2_ActivateCredential.
 package tpmtest
 
 import (
@@ -36,7 +33,7 @@ type Root struct {
 	Key  crypto.Signer
 }
 
-// EK bundles a generated endorsement key with its certificate.
+// EK is an endorsement key with its certificate.
 type EK struct {
 	Priv    *rsa.PrivateKey
 	CertDER []byte
@@ -172,11 +169,9 @@ func PEM(typ string, der []byte) []byte {
 	return pem.EncodeToMemory(&pem.Block{Type: typ, Bytes: der})
 }
 
-// SoftwareActivate models TPM2_ActivateCredential: decrypts the seed
-// with the EK private key, re-derives the storage and integrity keys via
-// KDFa, verifies the outer HMAC, and recovers the wrapped secret.
-// It is the oracle that proves a CA-issued challenge is activatable without
-// a TPM.
+// SoftwareActivate models TPM2_ActivateCredential: it decrypts the seed
+// with ekPriv, derives the integrity and storage keys, checks the HMAC
+// and returns the wrapped secret; any failure fails tb.
 func SoftwareActivate(tb testing.TB, ekPriv *rsa.PrivateKey, aikName tpm2.Name,
 	credBlob, encSecret []byte,
 ) []byte {
@@ -238,8 +233,6 @@ func SoftwareActivate(tb testing.TB, ekPriv *rsa.PrivateKey, aikName tpm2.Name,
 		tb.Fatalf("aes: %v", err)
 	}
 	cv := make([]byte, len(encIdentity))
-	// CFB is mandated by TPM 2.0 credential protection
-	// this oracle mirrors the TPM, it does not choose the cipher mode
 	cipher.NewCFBDecrypter(block, make([]byte, 16)).XORKeyStream(cv, encIdentity) //nolint:staticcheck // CFB is mandated by TPM 2.0 credential protection
 
 	if len(cv) < 2 {

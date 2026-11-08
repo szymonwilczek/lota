@@ -1,26 +1,5 @@
 // SPDX-License-Identifier: MIT
 // Copyright (C) 2026 Szymon Wilczek
-// LOTA Attestation CA - pinned multi-vendor EK trust bundle
-//
-// A deployment trusts EK certificates from several TPM manufacturers
-// (Infineon, Intel, STM, AMD fTPM, Microsoft/AMD vTPM, ...).
-// The roots themselves are published by each vendor and fetched out of band;
-// what LOTA ships and version-controls is the pin manifest -- a fingerprint
-// per certificate -- so a swapped or injected certificate cannot widen
-// the trust set without the change showing up in the manifest.
-//
-// A bundle carries two kinds of certificate and the manifest says which is
-// which. A root anchors a chain. An intermediate is path material: a firmware
-// TPM keeps the certificates nearest its EK on the chip and sends them with
-// the enrollment request, but the ones above those are published only by
-// the vendor, so the operator has to supply them -- without making them
-// anchors, which would trust one manufacturer branch as if it were the whole
-// PKI.
-//
-// The loader is fail-closed: every manifest pin must resolve to a present,
-// parseable certificate whose SHA-256 matches, every certificate in the bundle
-// directory must be covered by a pin, every entry must carry a class
-// the certificate can actually hold, and a bundle that anchors nothing is refused.
 
 package ca
 
@@ -41,14 +20,14 @@ import (
 // EKBundleManifestName is the pin manifest a bundle directory must carry.
 const EKBundleManifestName = "ek-roots.manifest"
 
-// Manifest classes.
-// A root is a trust anchor; an intermediate completes a path to one
-// and never anchors a chain itself.
+// EKClassRoot and EKClassIntermediate are the manifest classes:
+// a root must be self-signed, an intermediate must not be.
 const (
 	EKClassRoot         = "root"
 	EKClassIntermediate = "intermediate"
 )
 
+// Errors returned by LoadEKRootBundle.
 var (
 	ErrEKBundleManifest = errors.New("EK root bundle manifest is missing or unreadable")
 	ErrEKBundleEmpty    = errors.New("EK root bundle manifest lists no roots")
@@ -62,37 +41,29 @@ var (
 	ErrEKBundleNoAnchor = errors.New("EK root bundle manifest pins no root, so it anchors no chain")
 )
 
-// EKBundle is a loaded trust bundle split the way the issuer consumes it:
-// anchors a chain may terminate at, and path material it may build through.
+// EKBundle is a loaded bundle: Roots for IssuerConfig.EKRootPEMs,
+// Intermediates for IssuerConfig.EKIntermediatePEMs.
 type EKBundle struct {
-	Roots         [][]byte // PEM, self-signed, trust anchors
-	Intermediates [][]byte // PEM, path material only
+	Roots         [][]byte // PEM, self-signed
+	Intermediates [][]byte // PEM, not self-signed
 }
 
-// ekBundleEntry is one parsed manifest line: a SHA-256 pin over the
-// certificate DER and the PEM file that must carry it.
 type ekBundleEntry struct {
-	pin      string // lowercase hex SHA-256 of the certificate DER
-	filename string // PEM file relative to the bundle directory
-	class    string // EKClassRoot or EKClassIntermediate
+	pin      string // lowercase hex SHA-256 of the DER
+	filename string // bare name inside the bundle directory
+	class    string
 }
 
-// LoadEKRootBundle loads a pinned multi-vendor EK trust bundle from dir
-// and returns it split into anchors and path material,
-// ready for IssuerConfig.EKRootPEMs and IssuerConfig.EKIntermediatePEMs.
+// LoadEKRootBundle loads the bundle in dir. Each line of EKBundleManifestName
+// that is not empty and does not start with '#' is
 //
-// dir must contain a pin manifest (EKBundleManifestName). Each non-empty,
-// non-comment line is:
+//	<sha256-hex>  <pem-filename>  <class>  [label...]
 //
-//	<sha256-hex>  <pem-filename>  <class>  <vendor label...>
-//
-// The load fails closed: a manifest that is absent, empty, or malformed; a
-// pinned file that is missing, unparseable, or carries more than one
-// certificate; a fingerprint that does not match its pin; a class the certificate
-// cannot hold, because a root is self-signed and an intermediate is not; a bundle
-// pinning no root at all; or a stray certificate in dir that no pin covers
-// -- any of these is a hard error so the trusted manufacturer set cannot drift
-// from the version-controlled manifest.
+// It fails on a missing or empty manifest, a malformed or duplicate line,
+// a pinned file that is missing or does not hold exactly one certificate,
+// a DER whose SHA-256 is not its pin, a root that is not self-signed or an
+// intermediate that is, a manifest with no root, and a .pem file in dir
+// that no line pins.
 func LoadEKRootBundle(dir string) (*EKBundle, error) {
 	manifestPath := filepath.Join(dir, EKBundleManifestName)
 	manifest, err := os.ReadFile(manifestPath)
@@ -127,10 +98,6 @@ func LoadEKRootBundle(dir string) (*EKBundle, error) {
 			return nil, fmt.Errorf("%w: %s: %v", ErrEKBundlePEM, path, err)
 		}
 
-		// the class is a claim about the certificate, so it is checked against
-		// the certificate: an anchor must be self-signed, and path material
-		// must not be, or the operator has pinned something other than what
-		// they wrote down
 		selfSigned := isSelfSigned(cert)
 		switch {
 		case e.class == EKClassRoot && !selfSigned:
@@ -157,8 +124,7 @@ func LoadEKRootBundle(dir string) (*EKBundle, error) {
 	return out, nil
 }
 
-// isSelfSigned reports whether a certificate is its own issuer by name
-// and by signature -- the name alone is a claim anyone can make.
+// isSelfSigned checks the issuer name and the signature.
 func isSelfSigned(cert *x509.Certificate) bool {
 	if !bytes.Equal(cert.RawSubject, cert.RawIssuer) {
 		return false
@@ -166,8 +132,6 @@ func isSelfSigned(cert *x509.Certificate) bool {
 	return cert.CheckSignatureFrom(cert) == nil
 }
 
-// parseEKBundleManifest decodes manifest lines into pinned entries and
-// rejects duplicate pins or filenames so two lines cannot disagree.
 func parseEKBundleManifest(data []byte) ([]ekBundleEntry, error) {
 	var entries []ekBundleEntry
 	seenPin := map[string]struct{}{}
@@ -212,9 +176,8 @@ func parseEKBundleManifest(data []byte) ([]ekBundleEntry, error) {
 	return entries, nil
 }
 
-// readSingleCertPEM reads a PEM file that must hold exactly one CERTIFICATE
-// block, returning its DER and the re-encoded PEM. More than one
-// certificate is rejected so a pin is unambiguous.
+// readSingleCertPEM returns the DER and re-encoded PEM of the one CERTIFICATE
+// block in path; blocks of other types are skipped.
 func readSingleCertPEM(path string) (der, pemBytes []byte, err error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -246,9 +209,8 @@ func readSingleCertPEM(path string) (der, pemBytes []byte, err error) {
 	return certDER, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: certDER}), nil
 }
 
-// rejectUnpinnedCerts fails if the bundle directory holds a .pem file that
-// no manifest entry pins, closing the door on an injected root that a less
-// careful loader might otherwise pick up.
+// rejectUnpinnedCerts fails on a .pem file in dir that pinned does not name;
+// other files and subdirectories are not checked.
 func rejectUnpinnedCerts(dir string, pinned map[string]struct{}) error {
 	ents, err := os.ReadDir(dir)
 	if err != nil {
