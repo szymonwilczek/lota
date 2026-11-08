@@ -32,7 +32,7 @@ type PCR14RepinStorer interface {
 		eventLog []byte, now time.Time) error
 }
 
-// shim measures these into PCR 14, ahead of the initramfs lock
+// mokPCR14Events names the PCR 14 events that carry the MOK state.
 var mokPCR14Events = []string{"MokList", "MokListX", "MokListTrusted"}
 
 func pcr14Events(parsed *ParsedEventLog) []*EventLogEntry {
@@ -91,10 +91,9 @@ func mokPCR14Change(pinned, current *ParsedEventLog) ([]string, error) {
 // the pin with it. Returns true only on an actual re-pin.
 //
 // By the time this runs the register is derived from this boot's log and the
-// pinned agent hash, so what moved is the pre-lock baseline. When that change
-// sits in the MOK events alone, the pin follows it: enrolling a key is the
-// owner's decision, and the verifier logs which lists moved instead of
-// refusing the device.
+// agent hash, so what moved is the pre-lock baseline. The pin follows it only
+// when the change sits in the MOK events alone, and the re-pin logs which
+// lists moved.
 //
 // Gated like the boot re-anchor: the tenant's profile enables self-service and
 // its policy requires Secure Boot, which this boot's log proves.

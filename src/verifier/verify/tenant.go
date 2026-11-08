@@ -2,16 +2,9 @@
 // Copyright (C) 2026 Szymon Wilczek
 // LOTA Verifier - device tenant extraction
 //
-// Attestation CA assigns each device to a tenant at enrollment and records it
-// in the AIK certificate subject (OrganizationalUnit).
-//
-// Tenant partitions all verifier-side trust state:
-// baselines, revocations, hardware bans and logs are scoped to the tenant
-// carried by the certificate, so one verifier can serve multiple
-// isolated organisations or titles.
-//
-// Certificate carrying no OU falls into the default tenant, which is how deployment
-// that assigns no tenants works.
+// The attestation CA records a device's tenant as the one OrganizationalUnit
+// of its AIK certificate subject, and leaves the OU out for the default
+// tenant.
 
 package verify
 
@@ -20,18 +13,15 @@ import (
 	"fmt"
 )
 
-// DefaultTenant is the tenant of every certificate issued without explicit assignment;
-// pre-multi-tenancy deployment is exactly one fleet under this name.
+// DefaultTenant is the tenant of a certificate without an OU.
 const DefaultTenant = "default"
 
 // MaxTenantLen bounds the tenant name.
-// It fits store columns and log lines and leaves no room for delimiter smuggling.
 const MaxTenantLen = 64
 
-// TenantFromCertificate returns the tenant the CA recorded in the AIK certificate subject.
-// No OU means the default tenant.
-// Name is validated fail-closed: certificate carrying malformed or ambiguous tenant must
-// not attest into anyone's fleet.
+// TenantFromCertificate returns the tenant the CA recorded in the AIK
+// certificate subject: DefaultTenant with no OU, an error with more than one
+// OU or a name ValidTenantName refuses.
 func TenantFromCertificate(cert *x509.Certificate) (string, error) {
 	ous := cert.Subject.OrganizationalUnit
 	switch len(ous) {
@@ -49,8 +39,6 @@ func TenantFromCertificate(cert *x509.Certificate) (string, error) {
 
 // ValidTenantName reports whether a tenant name is well-formed:
 // lower-case alphanumerics and inner dashes, 1..MaxTenantLen characters.
-// Shared by the certificate path and the API-key scope loader so both
-// sides of the trust boundary agree on the alphabet.
 func ValidTenantName(name string) bool {
 	if name == "" || len(name) > MaxTenantLen {
 		return false

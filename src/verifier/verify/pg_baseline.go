@@ -1,27 +1,14 @@
 // SPDX-License-Identifier: MIT
 // Copyright (C) 2026 Szymon Wilczek
-// LOTA Verifier - PostgreSQL Baseline Store
+// LOTA Verifier - PostgreSQL baseline store
 //
-// Postgres counterpart of SQLiteBaselineStore.
-// Same TOFU semantics; the cross-process serialization that SQLite gets
-// from BEGIN IMMEDIATE is provided here by a per-client transaction-scoped
-// advisory lock:
+// The check-and-pin, re-anchor and agent-hash re-pin transactions of one
+// client serialize on a transaction-scoped advisory lock, which holds before
+// the client has a row:
 //
 //	pg_advisory_xact_lock(hashtextextended(client_id, 0))
 //
-// Advisory lock serializes every writer for a given client_id even when
-// no baseline row exists yet, which a bare SELECT ... FOR UPDATE cannot do
-// (there is no row to lock on first use).
-// Lock auto-releases on COMMIT/ROLLBACK.
-//
-// Advisory lock is the ONLY write fence, and it is deliberately per-client:
-// independent clients commit concurrently, which is what lets registration
-// bursts and steady-state attestation scale with the connection pool instead
-// of serializing process-wide.
-// Do not add a store-level mutex here -- *sql.DB is safe for concurrent use,
-// every method is single statement or single transaction, and the SQLite store's
-// process-wide write serialization is property of SQLite's single-writer model,
-// not of the store contract.
+// Different clients commit concurrently.
 
 package verify
 
@@ -37,22 +24,18 @@ import (
 	"github.com/szymonwilczek/lota/verifier/types"
 )
 
-// PostgresBaselineStore implements BaselineStorer, AgentHashStorer,
-// BootBaselineStorer, BootBaselineReader and AtomicBaselineStorer
-// against a shared Postgres database
+// PostgresBaselineStore is the baseline store on a Postgres database the
+// verifier instances share.
 type PostgresBaselineStore struct {
 	db *sql.DB
 }
 
-// NewPostgresBaselineStore creates a baseline store backed by
-// the given Postgres database
+// NewPostgresBaselineStore returns a baseline store on db.
 func NewPostgresBaselineStore(db *sql.DB) *PostgresBaselineStore {
 	return &PostgresBaselineStore{db: db}
 }
 
-// lockClient takes the per-client transaction-scoped advisory lock so the
-// SELECT/INSERT/UPDATE that follow run as one critical section against
-// every other writer for the same client across all instances
+// lockClient takes the client's advisory lock for the rest of tx.
 func lockClient(ctx context.Context, tx *sql.Tx, clientID string) error {
 	_, err := tx.ExecContext(ctx,
 		"SELECT pg_advisory_xact_lock(hashtextextended($1, 0))", clientID)
@@ -156,10 +139,7 @@ func (s *PostgresBaselineStore) CheckAndUpdate(clientID string, pcr14 [types.Has
 	}
 }
 
-// CheckAndUpdateAgentHash pins agent_hash with TOFU semantics.
-// pcr14 column is filled on first use from currentPCR14 and compared on every
-// later round by CheckAndUpdateAttestation, which is what makes a moved pre-lock
-// baseline visible.
+// CheckAndUpdateAgentHash implements AgentHashStorer.
 func (s *PostgresBaselineStore) CheckAndUpdateAgentHash(clientID string,
 	currentPCR14, agentHash [types.HashSize]byte,
 ) (TOFUResult, *ClientBaseline) {
@@ -229,10 +209,7 @@ func (s *PostgresBaselineStore) CheckAndUpdateAgentHash(clientID string,
 		copy(stored[:], storedAgentHash)
 	}
 
-	// NULL agent_hash can only come from an out-of-band PCR14 pin:
-	// every attestation writes the column
-	// Such row is refused with the stored (zero) hash rather than
-	// adopting the incoming one
+	// a NULL agent_hash is an out-of-band PCR14 pin and mismatches
 	if !hasStored || stored != agentHash {
 		return TOFUMismatch, &ClientBaseline{
 			PCR14:       pcr14,
@@ -290,10 +267,8 @@ func (s *PostgresBaselineStore) GetBaseline(clientID string) *ClientBaseline {
 	}
 }
 
-// GetBootBaseline returns the persisted PCR0/PCR1/PCR7 row for a client
-// or nil when the boot baseline has never been pinned.
-// A row whose boot columns are still NULL counts as "not enrolled"
-// and returns nil.
+// GetBootBaseline implements BootBaselineReader. A row with NULL boot
+// columns has no boot baseline.
 func (s *PostgresBaselineStore) GetBootBaseline(clientID string) *BootBaseline {
 	var (
 		pcr0, pcr1, pcr7    []byte
@@ -334,11 +309,8 @@ func (s *PostgresBaselineStore) ClearBaseline(clientID string) error {
 	return err
 }
 
-// SetClientTenant records the CA-assigned tenant on the baseline row
-// Called per verified report, so the UPDATE is conditional:
-// re-stamping tenant already in place matches no row and produces no WAL write,
-// and the follow-up existence probe is a plain read.
-// Only real tenant change pays for row rewrite.
+// SetClientTenant implements TenantStorer. A row that already holds this
+// tenant is not rewritten.
 func (s *PostgresBaselineStore) SetClientTenant(clientID, tenant string) error {
 	res, err := s.db.Exec(
 		"UPDATE baselines SET tenant = $1 WHERE client_id = $2 AND tenant <> $1",
@@ -362,8 +334,7 @@ func (s *PostgresBaselineStore) SetClientTenant(clientID, tenant string) error {
 	return nil
 }
 
-// ClientTenant returns the recorded tenant.
-// Client without baseline row or with pre-tenancy row is in the default tenant.
+// ClientTenant implements TenantStorer.
 func (s *PostgresBaselineStore) ClientTenant(clientID string) (string, error) {
 	var tenant string
 	err := s.db.QueryRow(
@@ -442,11 +413,8 @@ func (s *PostgresBaselineStore) Stats() BaselineStats {
 	return stats
 }
 
-// CheckAndUpdateBootPCRs persists PCR0/PCR1/PCR7 alongside the existing
-// PCR14 baseline.
-// Boot columns are nullable because the PCR14 row is written first:
-// client whose firmware baseline is not pinned yet TOFU-establishes it on
-// its next attestation rather than being rejected.
+// CheckAndUpdateBootPCRs implements BootBaselineStorer on an existing row:
+// a client with no row is TOFUError.
 func (s *PostgresBaselineStore) CheckAndUpdateBootPCRs(clientID string, boot BootBaseline) (TOFUResult, *BootBaseline) {
 	ctx := context.Background()
 	now := time.Now()
@@ -481,9 +449,6 @@ func (s *PostgresBaselineStore) CheckAndUpdateBootPCRs(clientID string, boot Boo
 	).Scan(&storedPCR0, &storedPCR1, &storedPCR7, &bootFirst, &bootLast)
 
 	if err == sql.ErrNoRows {
-		// no row at all - cannot pin boot PCRs before the PCR14 baseline
-		// was inserted.
-		// Surface as error so the caller fails closed.
 		return TOFUError, nil
 	}
 	if err != nil {
@@ -492,7 +457,6 @@ func (s *PostgresBaselineStore) CheckAndUpdateBootPCRs(clientID string, boot Boo
 	}
 
 	if len(storedPCR0) == 0 && len(storedPCR1) == 0 && len(storedPCR7) == 0 {
-		// PCR14 row exists but no boot baseline yet - TOFU first use
 		if _, err := tx.ExecContext(ctx,
 			"UPDATE baselines SET pcr0 = $1, pcr1 = $2, pcr7 = $3, boot_first_seen = $4, boot_last_seen = $5 WHERE client_id = $6",
 			boot.PCR0[:], boot.PCR1[:], boot.PCR7[:], now.UTC(), now.UTC(), clientID,
@@ -549,22 +513,13 @@ func (s *PostgresBaselineStore) CheckAndUpdateBootPCRs(clientID string, boot Boo
 	return TOFUMatch, &stored
 }
 
-// CheckAndUpdateAttestation commits the agent_hash pin and (when boot is
-// non-nil) the firmware/SecureBoot pin in a single Postgres transaction.
-// Per-client advisory lock taken at the top serializes the whole
-// read-modify-write against every other writer for this client, the
-// Postgres equivalent of the SQLite store's BEGIN IMMEDIATE contract: a
-// second instance cannot observe a half-pinned row and TOFU-establish
-// attacker-controlled PCR0/PCR1/PCR7.
-// A non-success branch rolls back and leaves persistent state untouched.
+// CheckAndUpdateAttestation implements AtomicBaselineStorer in one
+// transaction under lockClient. A branch that does not commit rolls back.
 func (s *PostgresBaselineStore) CheckAndUpdateAttestation(clientID string,
 	pcr14, agentHash [types.HashSize]byte,
 	boot *BootBaseline,
 ) AttestationOutcome {
 	ctx := context.Background()
-	// every result starts at TOFUError: a component the transaction never
-	// reached carries no decision, and a caller that reads one anyway
-	// refuses the round
 	outcome := AttestationOutcome{BootProvided: boot != nil, PCR14Result: TOFUError}
 
 	tx, err := s.db.BeginTx(ctx, nil)
@@ -612,7 +567,6 @@ func (s *PostgresBaselineStore) CheckAndUpdateAttestation(clientID string,
 	now := time.Now()
 	switch {
 	case err == sql.ErrNoRows:
-		// fresh client: insert both halves in one statement
 		if boot != nil {
 			if _, err := tx.ExecContext(ctx, `
 				INSERT INTO baselines (
@@ -678,7 +632,6 @@ func (s *PostgresBaselineStore) CheckAndUpdateAttestation(clientID string,
 		return outcome
 	}
 
-	// existing row: decide agent_hash branch
 	var stored [types.HashSize]byte
 	hasStored := len(storedAgentHash) == types.HashSize
 	if hasStored {
@@ -691,7 +644,6 @@ func (s *PostgresBaselineStore) CheckAndUpdateAttestation(clientID string,
 
 	switch {
 	case !hasStored || stored != agentHash:
-		// mismatch terminates the transaction without writes
 		outcome.AgentHashResult = TOFUMismatch
 		outcome.AgentHashBaseline = &ClientBaseline{
 			PCR14: pcr14Stored, AgentHash: stored,
@@ -706,11 +658,7 @@ func (s *PostgresBaselineStore) CheckAndUpdateAttestation(clientID string,
 		outcome.AgentHashResult = TOFUMatch
 	}
 
-	// decide PCR14 branch
-	//
-	// Every road that inserts a row writes the register with it, and the column
-	// is NOT NULL, so an existing row always has one to compare against.
-	// A mismatch terminates the transaction without writes.
+	// pcr14 is NOT NULL: every row has one to compare
 	switch {
 	case pcr14Stored != pcr14:
 		outcome.PCR14Result = TOFUMismatch
@@ -727,7 +675,6 @@ func (s *PostgresBaselineStore) CheckAndUpdateAttestation(clientID string,
 		outcome.PCR14Result = TOFUMatch
 	}
 
-	// decide boot branch
 	bootZero := len(storedPCR0) == 0 && len(storedPCR1) == 0 && len(storedPCR7) == 0
 	if boot != nil {
 		if bootZero {
@@ -765,7 +712,6 @@ func (s *PostgresBaselineStore) CheckAndUpdateAttestation(clientID string,
 		}
 	}
 
-	// commit phase: every half passed; build a single UPDATE
 	newCount := attestCount + 1
 	if boot != nil {
 		switch outcome.BootResult {
@@ -848,8 +794,8 @@ func (s *PostgresBaselineStore) CheckAndUpdateAttestation(clientID string,
 	return outcome
 }
 
-// GetReanchorState implements ReanchorStorer for Postgres.
-// Present is true only when a boot baseline (PCR0/1/7) has been pinned for the client.
+// GetReanchorState implements ReanchorStorer. Present is false when the
+// client has no boot baseline.
 func (s *PostgresBaselineStore) GetReanchorState(clientID string) ReanchorState {
 	ctx := context.Background()
 	var (
@@ -894,10 +840,7 @@ func (s *PostgresBaselineStore) GetReanchorState(clientID string) ReanchorState 
 	return st
 }
 
-// ArchiveAndReanchor implements ReanchorStorer for Postgres:
-// it archives the current boot baseline and replaces it with boot
-// under the per-client advisory lock.
-// esrt_capable is kept sticky (OR), never cleared.
+// ArchiveAndReanchor implements ReanchorStorer.
 func (s *PostgresBaselineStore) ArchiveAndReanchor(clientID string,
 	boot BootBaseline, eventLog []byte, esrtVersion uint32,
 	esrtCapable, lfa bool, reason string, now time.Time,
@@ -926,9 +869,6 @@ func (s *PostgresBaselineStore) ArchiveAndReanchor(clientID string,
 		oldESRT                   sql.NullInt64
 		lastReanchor              sql.NullTime
 	)
-	// FOR UPDATE locks the row, and last_reanchor_at is read under that lock,
-	// so the rate-limit guard below cannot be raced by a concurrent re-anchor
-	// running on another verifier instance
 	if err := tx.QueryRowContext(ctx,
 		"SELECT pcr0, pcr1, pcr7, esrt_version, last_reanchor_at FROM baselines WHERE client_id = $1 FOR UPDATE",
 		clientID,
@@ -947,9 +887,7 @@ func (s *PostgresBaselineStore) ArchiveAndReanchor(clientID string,
 	); err != nil {
 		return err
 	}
-	// LFA re-anchor applies automatically but flags the client for post-fact
-	// operator review;
-	// strong re-anchor clears any prior flag
+	// a strong re-anchor clears a pending LFA review
 	if _, err := tx.ExecContext(ctx,
 		`UPDATE baselines SET pcr0 = $1, pcr1 = $2, pcr7 = $3, boot_last_seen = $4,
 		   eventlog_baseline = $5, esrt_version = $6,
@@ -969,7 +907,7 @@ func (s *PostgresBaselineStore) ArchiveAndReanchor(clientID string,
 	return nil
 }
 
-// GetAgentHashRepinState returns the re-pin bookkeeping (Postgres)
+// GetAgentHashRepinState implements AgentHashRepinStorer.
 func (s *PostgresBaselineStore) GetAgentHashRepinState(clientID string) AgentHashRepinState {
 	ctx := context.Background()
 
@@ -983,10 +921,7 @@ func (s *PostgresBaselineStore) GetAgentHashRepinState(clientID string) AgentHas
 		   FROM baselines WHERE client_id = $1`,
 		clientID,
 	).Scan(&agentHash, &count, &lastRepin); err != nil {
-		// missing row is Present=false,
-		// which the caller treats as "no pin to move";
-		// store error is reported the same way so the decision fails
-		// closed rather than on stale bookkeeping
+		// a store error reads as a missing row: no re-pin
 		if !errors.Is(err, sql.ErrNoRows) {
 			slog.Warn("agent-hash re-pin state read failed",
 				"client_id", clientID, "error", err)
@@ -1004,13 +939,7 @@ func (s *PostgresBaselineStore) GetAgentHashRepinState(clientID string) AgentHas
 	return st
 }
 
-// ArchiveAndRepinAgentHash archives the outgoing agent hash
-// and moves the pin to the reported (agent_hash, PCR14) pair (Postgres)
-//
-// PCR14 moves with the hash because the two are one statement:
-// the expected register content is derived from the pinned hash,
-// so leaving the old PCR14 behind would pin a value the new binary can
-// never reproduce.
+// ArchiveAndRepinAgentHash implements AgentHashRepinStorer.
 func (s *PostgresBaselineStore) ArchiveAndRepinAgentHash(clientID string,
 	agentHash, pcr14 [types.HashSize]byte, now time.Time,
 ) error {
@@ -1038,9 +967,6 @@ func (s *PostgresBaselineStore) ArchiveAndRepinAgentHash(clientID string,
 		oldAgentHash []byte
 		lastRepin    sql.NullTime
 	)
-	// FOR UPDATE locks the row, and last_agent_hash_repin_at is read under
-	// that lock, so the rate-limit guard cannot be raced by concurrent re-pin
-	// running on another verifier instance
 	if err := tx.QueryRowContext(ctx,
 		`SELECT agent_hash, last_agent_hash_repin_at
 		   FROM baselines WHERE client_id = $1 FOR UPDATE`,
@@ -1048,7 +974,6 @@ func (s *PostgresBaselineStore) ArchiveAndRepinAgentHash(clientID string,
 	).Scan(&oldAgentHash, &lastRepin); err != nil {
 		return err
 	}
-	// no pin to move, and no predecessor to archive
 	if len(oldAgentHash) != types.HashSize {
 		return ErrAgentHashNotPinned
 	}
@@ -1080,8 +1005,8 @@ func (s *PostgresBaselineStore) ArchiveAndRepinAgentHash(clientID string,
 	return nil
 }
 
-// RepinPCR14 moves the pinned PCR 14 and the boot evidence (Postgres).
-// The WHERE on the old register makes the write its own race guard.
+// RepinPCR14 moves the pinned PCR 14 and the boot evidence. The WHERE on
+// the old register is the race guard.
 func (s *PostgresBaselineStore) RepinPCR14(clientID string,
 	from, to [types.HashSize]byte, eventLog []byte, now time.Time,
 ) error {
@@ -1103,9 +1028,7 @@ func (s *PostgresBaselineStore) RepinPCR14(clientID string,
 	return nil
 }
 
-// RecordBootEvidence stores the event log + ESRT version for a first-use
-// boot baseline (Postgres).
-// Idempotent UPDATE; esrt_capable kept sticky.
+// RecordBootEvidence implements ReanchorStorer.
 func (s *PostgresBaselineStore) RecordBootEvidence(clientID string,
 	eventLog []byte, esrtVersion uint32, esrtPresent bool,
 ) error {
@@ -1119,8 +1042,7 @@ func (s *PostgresBaselineStore) RecordBootEvidence(clientID string,
 	return err
 }
 
-// ListLFAReviewPending returns clients with an unreviewed LFA re-anchor
-// (Postgres).
+// ListLFAReviewPending implements ReanchorStorer.
 func (s *PostgresBaselineStore) ListLFAReviewPending() []string {
 	rows, err := s.db.QueryContext(context.Background(),
 		"SELECT client_id FROM baselines WHERE lfa_review_pending = TRUE ORDER BY client_id")
@@ -1138,8 +1060,7 @@ func (s *PostgresBaselineStore) ListLFAReviewPending() []string {
 	return out
 }
 
-// AcknowledgeLFAReview clears a client's pending-review flag (Postgres).
-// No matching row means nothing was queued.
+// AcknowledgeLFAReview implements ReanchorStorer.
 func (s *PostgresBaselineStore) AcknowledgeLFAReview(clientID string) error {
 	res, err := s.db.ExecContext(context.Background(),
 		"UPDATE baselines SET lfa_review_pending = FALSE WHERE client_id = $1 AND lfa_review_pending",
@@ -1157,8 +1078,8 @@ func (s *PostgresBaselineStore) AcknowledgeLFAReview(clientID string) error {
 	return nil
 }
 
-// RecordKernelHash implements KernelHashRecorder against Postgres.
-// See the SQLite implementation for why the value is kept and why it gates nothing.
+// RecordKernelHash implements KernelHashRecorder.
+// An unchanged hash writes nothing.
 func (s *PostgresBaselineStore) RecordKernelHash(clientID string,
 	kernelHash [types.HashSize]byte,
 ) (prev [types.HashSize]byte, had bool, err error) {

@@ -1,10 +1,6 @@
 // SPDX-License-Identifier: MIT
 // Copyright (C) 2026 Szymon Wilczek
-// LOTA Verifier - SQLite Baseline Store
-//
-// Persistent PCR baseline storage backed by SQLite.
-// Implements BaselineStorer for TOFU (Trust On First Use) validation
-// with state surviving verifier restarts.
+// LOTA Verifier - SQLite baseline store
 
 package verify
 
@@ -21,14 +17,14 @@ import (
 	"github.com/szymonwilczek/lota/verifier/types"
 )
 
-// implements BaselineStorer using a SQLite database
-// provides TOFU baseline persistence across verifier restarts
+// SQLiteBaselineStore is the baseline store on a SQLite database.
+// s.mu makes it single-writer inside the process.
 type SQLiteBaselineStore struct {
 	mu sync.RWMutex
 	db *sql.DB
 }
 
-// creates a baseline store backed by the given database
+// NewSQLiteBaselineStore returns a baseline store on db.
 func NewSQLiteBaselineStore(db *sql.DB) *SQLiteBaselineStore {
 	return &SQLiteBaselineStore{db: db}
 }
@@ -39,7 +35,6 @@ func (s *SQLiteBaselineStore) CheckAndUpdate(clientID string, pcr14 [types.HashS
 
 	now := time.Now()
 
-	// check for existing baseline
 	var storedPCR14, storedAgentHash []byte
 	var firstSeen, lastSeen time.Time
 	var attestCount uint64
@@ -50,7 +45,6 @@ func (s *SQLiteBaselineStore) CheckAndUpdate(clientID string, pcr14 [types.HashS
 	).Scan(&storedPCR14, &storedAgentHash, &firstSeen, &lastSeen, &attestCount)
 
 	if err == sql.ErrNoRows {
-		// first use - establish baseline
 		_, err := s.db.Exec(
 			"INSERT INTO baselines (client_id, pcr14, first_seen, last_seen, attest_count) VALUES (?, ?, ?, ?, 1)",
 			clientID, pcr14[:], now.UTC(), now.UTC(),
@@ -70,11 +64,9 @@ func (s *SQLiteBaselineStore) CheckAndUpdate(clientID string, pcr14 [types.HashS
 	}
 
 	if err != nil {
-		// query failed - refuse attestation to prevent re-TOFU with arbitrary PCR14
 		return TOFUError, nil
 	}
 
-	// compare stored baseline
 	var stored [types.HashSize]byte
 	if len(storedPCR14) == types.HashSize {
 		copy(stored[:], storedPCR14)
@@ -85,7 +77,6 @@ func (s *SQLiteBaselineStore) CheckAndUpdate(clientID string, pcr14 [types.HashS
 	}
 
 	if stored != pcr14 {
-		// PCR mismatch detected - possible tampering, do not update baseline
 		return TOFUMismatch, &ClientBaseline{
 			PCR14:       stored,
 			AgentHash:   agentHash,
@@ -95,7 +86,6 @@ func (s *SQLiteBaselineStore) CheckAndUpdate(clientID string, pcr14 [types.HashS
 		}
 	}
 
-	// match
 	newCount := attestCount + 1
 	_, err = s.db.Exec(
 		"UPDATE baselines SET last_seen = ?, attest_count = ? WHERE client_id = ?",
@@ -114,10 +104,7 @@ func (s *SQLiteBaselineStore) CheckAndUpdate(clientID string, pcr14 [types.HashS
 	}
 }
 
-// CheckAndUpdateAgentHash pins agent_hash with TOFU semantics. The
-// pcr14 column is filled on first use from currentPCR14 and compared on every
-// later round by CheckAndUpdateAttestation, which is what makes a moved pre-lock
-// baseline visible.
+// CheckAndUpdateAgentHash implements AgentHashStorer.
 func (s *SQLiteBaselineStore) CheckAndUpdateAgentHash(clientID string,
 	currentPCR14, agentHash [types.HashSize]byte,
 ) (TOFUResult, *ClientBaseline) {
@@ -167,10 +154,7 @@ func (s *SQLiteBaselineStore) CheckAndUpdateAgentHash(clientID string,
 		copy(stored[:], storedAgentHash)
 	}
 
-	// NULL agent_hash can only come from an out-of-band PCR14 pin:
-	// every attestation writes the column
-	// Such a row is refused with the stored (zero) hash rather than
-	// adopting the incoming one
+	// a NULL agent_hash is an out-of-band PCR14 pin and mismatches
 	if !hasStored || stored != agentHash {
 		return TOFUMismatch, &ClientBaseline{
 			PCR14:       pcr14,
@@ -226,10 +210,8 @@ func (s *SQLiteBaselineStore) GetBaseline(clientID string) *ClientBaseline {
 	}
 }
 
-// GetBootBaseline returns the persisted PCR0/PCR1/PCR7 row for a
-// client or nil when the boot baseline has never been pinned. A row
-// whose boot columns are still NULL counts as "not enrolled" and
-// returns nil.
+// GetBootBaseline implements BootBaselineReader.
+// A row with NULL boot columns has no boot baseline.
 func (s *SQLiteBaselineStore) GetBootBaseline(clientID string) *BootBaseline {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -276,10 +258,8 @@ func (s *SQLiteBaselineStore) ClearBaseline(clientID string) error {
 	return err
 }
 
-// SetClientTenant records the CA-assigned tenant on the baseline row
-// Called per verified report, so the UPDATE is conditional:
-// re-stamping tenant already in place matches no row and skips the disk write,
-// mirroring the Postgres store
+// SetClientTenant implements TenantStorer.
+// A row that already holds this tenant is not rewritten.
 func (s *SQLiteBaselineStore) SetClientTenant(clientID, tenant string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -306,8 +286,7 @@ func (s *SQLiteBaselineStore) SetClientTenant(clientID, tenant string) error {
 	return nil
 }
 
-// ClientTenant returns the recorded tenant.
-// Client without baseline row or with pre-tenancy row is in the default tenant.
+// ClientTenant implements TenantStorer.
 func (s *SQLiteBaselineStore) ClientTenant(clientID string) (string, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -391,11 +370,8 @@ func (s *SQLiteBaselineStore) Stats() BaselineStats {
 	return stats
 }
 
-// CheckAndUpdateBootPCRs persists PCR0/PCR1/PCR7 alongside the existing
-// PCR14 baseline.
-// Boot columns are nullable because the PCR14 row is written first:
-// client whose firmware baseline is not pinned yet TOFU-establishes it on
-// its next attestation rather than being rejected.
+// CheckAndUpdateBootPCRs implements BootBaselineStorer on an existing row:
+// a client with no row is TOFUError.
 func (s *SQLiteBaselineStore) CheckAndUpdateBootPCRs(clientID string, boot BootBaseline) (TOFUResult, *BootBaseline) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -413,8 +389,6 @@ func (s *SQLiteBaselineStore) CheckAndUpdateBootPCRs(clientID string, boot BootB
 	).Scan(&storedPCR0, &storedPCR1, &storedPCR7, &bootFirst, &bootLast)
 
 	if err == sql.ErrNoRows {
-		// no row at all - cannot pin boot PCRs before the PCR14 baseline
-		// was inserted. Surface as error so the caller fails closed.
 		return TOFUError, nil
 	}
 	if err != nil {
@@ -424,7 +398,6 @@ func (s *SQLiteBaselineStore) CheckAndUpdateBootPCRs(clientID string, boot BootB
 	}
 
 	if len(storedPCR0) == 0 && len(storedPCR1) == 0 && len(storedPCR7) == 0 {
-		// PCR14 row exists but no boot baseline yet - TOFU first use
 		_, err := s.db.Exec(
 			"UPDATE baselines SET pcr0 = ?, pcr1 = ?, pcr7 = ?, boot_first_seen = ?, boot_last_seen = ? WHERE client_id = ?",
 			boot.PCR0[:], boot.PCR1[:], boot.PCR7[:], now.UTC(), now.UTC(), clientID,
@@ -474,26 +447,11 @@ func (s *SQLiteBaselineStore) CheckAndUpdateBootPCRs(clientID string, boot BootB
 	return TOFUMatch, &stored
 }
 
-// CheckAndUpdateAttestation commits the agent_hash pin and (when boot
-// is non-nil) the firmware/SecureBoot pin in a single SQLite
-// transaction held under BEGIN IMMEDIATE on a dedicated connection.
-// BEGIN IMMEDIATE acquires SQLite's RESERVED write lock at the
-// transaction start instead of upgrading from SHARED on the first
-// write, so a second process attempting the same transaction blocks
-// until the first COMMIT / ROLLBACK. Combined with PRAGMA
-// busy_timeout=5000 from db.go this serialises every multi-process
-// writer onto the baselines row and closes the window in which a
-// CheckAndUpdateBootPCRs running in process B could observe a
-// half-pinned row left behind by process A and TOFU-establish
-// attacker-controlled PCR0/PCR1/PCR7.
-//
-// The function holds s.mu in addition to the SQL lock so the
-// transaction is also single-writer inside the calling process; the
-// database/sql connection pool is bypassed via db.Conn() so BEGIN
-// IMMEDIATE, the SELECT/UPDATE statements, and COMMIT all run on the
-// same underlying connection. A non-success branch ROLLBACKs and
-// leaves the persistent row untouched, mirroring the existing split
-// methods' semantics.
+// CheckAndUpdateAttestation implements AtomicBaselineStorer. BEGIN IMMEDIATE
+// takes the write lock at the start of the transaction, so another process
+// blocks until COMMIT or ROLLBACK, up to busy_timeout. The transaction runs
+// on one db.Conn() because BEGIN, the statements and COMMIT must share a
+// connection. A branch that does not commit rolls back.
 func (s *SQLiteBaselineStore) CheckAndUpdateAttestation(clientID string,
 	pcr14, agentHash [types.HashSize]byte,
 	boot *BootBaseline,
@@ -553,7 +511,6 @@ func (s *SQLiteBaselineStore) CheckAndUpdateAttestation(clientID string,
 	now := time.Now()
 	switch {
 	case err == sql.ErrNoRows:
-		// fresh client: insert both halves in one statement.
 		if boot != nil {
 			if _, err := conn.ExecContext(ctx, `
 				INSERT INTO baselines (
@@ -621,7 +578,6 @@ func (s *SQLiteBaselineStore) CheckAndUpdateAttestation(clientID string,
 		return outcome
 	}
 
-	// --- existing row: decide agent_hash branch ---
 	var stored [types.HashSize]byte
 	hasStored := len(storedAgentHash) == types.HashSize
 	if hasStored {
@@ -634,7 +590,6 @@ func (s *SQLiteBaselineStore) CheckAndUpdateAttestation(clientID string,
 
 	switch {
 	case !hasStored || stored != agentHash:
-		// mismatch terminates the transaction without writes.
 		outcome.AgentHashResult = TOFUMismatch
 		outcome.AgentHashBaseline = &ClientBaseline{
 			PCR14: pcr14Stored, AgentHash: stored,
@@ -649,11 +604,7 @@ func (s *SQLiteBaselineStore) CheckAndUpdateAttestation(clientID string,
 		outcome.AgentHashResult = TOFUMatch
 	}
 
-	// --- decide PCR14 branch ---
-	//
-	// Every road that inserts a row writes the register with it, and the column
-	// is NOT NULL, so an existing row always has one to compare against.
-	// A mismatch terminates the transaction without writes.
+	// pcr14 is NOT NULL: every row has one to compare
 	switch {
 	case pcr14Stored != pcr14:
 		outcome.PCR14Result = TOFUMismatch
@@ -670,7 +621,6 @@ func (s *SQLiteBaselineStore) CheckAndUpdateAttestation(clientID string,
 		outcome.PCR14Result = TOFUMatch
 	}
 
-	// --- decide boot branch ---
 	bootZero := len(storedPCR0) == 0 && len(storedPCR1) == 0 && len(storedPCR7) == 0
 	if boot != nil {
 		if bootZero {
@@ -708,7 +658,6 @@ func (s *SQLiteBaselineStore) CheckAndUpdateAttestation(clientID string,
 		}
 	}
 
-	// --- commit phase: every half passed; build a single UPDATE ---
 	newCount := attestCount + 1
 	if boot != nil {
 		switch outcome.BootResult {
@@ -792,8 +741,8 @@ func (s *SQLiteBaselineStore) CheckAndUpdateAttestation(clientID string,
 	return outcome
 }
 
-// GetReanchorState implements ReanchorStorer for SQLite.
-// Present is true only when a boot baseline (PCR0/1/7) has been pinned for the client.
+// GetReanchorState implements ReanchorStorer.
+// Present is false when the client has no boot baseline.
 func (s *SQLiteBaselineStore) GetReanchorState(clientID string) ReanchorState {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -840,11 +789,7 @@ func (s *SQLiteBaselineStore) GetReanchorState(clientID string) ReanchorState {
 	return st
 }
 
-// ArchiveAndReanchor implements ReanchorStorer for SQLite:
-// it copies the current boot baseline into baseline_archive and replaces it
-// with boot in one transaction.
-// esrt_capable is kept sticky via MAX so a device that ever reported an ESRT
-// can never silently lose the capability.
+// ArchiveAndReanchor implements ReanchorStorer.
 func (s *SQLiteBaselineStore) ArchiveAndReanchor(clientID string,
 	boot BootBaseline, eventLog []byte, esrtVersion uint32,
 	esrtCapable, lfa bool, reason string, now time.Time,
@@ -870,9 +815,6 @@ func (s *SQLiteBaselineStore) ArchiveAndReanchor(clientID string,
 		oldESRT                   sql.NullInt64
 		lastReanchor              sql.NullTime
 	)
-	// last_reanchor_at is read inside the transaction so the rate-limit guard
-	// below sees a value no concurrent re-anchor can have moved out from under
-	// it between the read and the write
 	if err := tx.QueryRow(
 		"SELECT pcr0, pcr1, pcr7, esrt_version, last_reanchor_at FROM baselines WHERE client_id = ?",
 		clientID,
@@ -899,9 +841,7 @@ func (s *SQLiteBaselineStore) ArchiveAndReanchor(clientID string,
 	if lfa {
 		lfaVal = 1
 	}
-	// LFA re-anchor applies automatically but flags the client for
-	// post-fact operator review;
-	// strong re-anchor clears any prior flag
+	// a strong re-anchor clears a pending LFA review
 	if _, err = tx.Exec(
 		`UPDATE baselines SET pcr0 = ?, pcr1 = ?, pcr7 = ?, boot_last_seen = ?,
 		   eventlog_baseline = ?, esrt_version = ?,
@@ -918,7 +858,7 @@ func (s *SQLiteBaselineStore) ArchiveAndReanchor(clientID string,
 	return tx.Commit()
 }
 
-// GetAgentHashRepinState returns the re-pin bookkeeping (SQLite)
+// GetAgentHashRepinState implements AgentHashRepinStorer.
 func (s *SQLiteBaselineStore) GetAgentHashRepinState(clientID string) AgentHashRepinState {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -936,10 +876,7 @@ func (s *SQLiteBaselineStore) GetAgentHashRepinState(clientID string) AgentHashR
 		   FROM baselines WHERE client_id = ?`,
 		clientID,
 	).Scan(&clientPK, &agentHash, &count, &lastPin); err != nil {
-		// missing row is Present=false,
-		// which the caller treats as "no pin to move";
-		// store error is reported the same way so the decision fails
-		// closed rather than on stale bookkeeping
+		// a store error reads as a missing row: no re-pin
 		if !errors.Is(err, sql.ErrNoRows) {
 			slog.Warn("agent-hash re-pin state read failed",
 				"client_id", clientID, "error", err)
@@ -955,13 +892,7 @@ func (s *SQLiteBaselineStore) GetAgentHashRepinState(clientID string) AgentHashR
 	return state
 }
 
-// ArchiveAndRepinAgentHash archives the outgoing agent hash
-// and moves the pin to the reported (agent_hash, PCR14) pair (SQLite)
-//
-// PCR14 moves with the hash because the two are one statement:
-// the expected register content is derived from the pinned hash,
-// so leaving the old PCR14 behind would pin a value the new binary can
-// never reproduce.
+// ArchiveAndRepinAgentHash implements AgentHashRepinStorer.
 func (s *SQLiteBaselineStore) ArchiveAndRepinAgentHash(clientID string,
 	agentHash, pcr14 [types.HashSize]byte, now time.Time,
 ) error {
@@ -985,8 +916,6 @@ func (s *SQLiteBaselineStore) ArchiveAndRepinAgentHash(clientID string,
 		lastRepin    sql.NullTime
 	)
 
-	// Read inside the transaction so the rate-limit guard sees value no
-	// concurrent re-pin can have moved between the read and the write
 	if err := tx.QueryRow(
 		`SELECT agent_hash, last_agent_hash_repin_at
 		   FROM baselines WHERE client_id = ?`,
@@ -994,7 +923,6 @@ func (s *SQLiteBaselineStore) ArchiveAndRepinAgentHash(clientID string,
 	).Scan(&oldAgentHash, &lastRepin); err != nil {
 		return err
 	}
-	// no pin to move, and no predecessor to archive
 	if len(oldAgentHash) != types.HashSize {
 		return ErrAgentHashNotPinned
 	}
@@ -1022,8 +950,8 @@ func (s *SQLiteBaselineStore) ArchiveAndRepinAgentHash(clientID string,
 	return tx.Commit()
 }
 
-// RepinPCR14 moves the pinned PCR 14 and the boot evidence (SQLite).
-// The WHERE on the old register makes the write its own race guard.
+// RepinPCR14 moves the pinned PCR 14 and the boot evidence.
+// The WHERE on the old register is the race guard.
 func (s *SQLiteBaselineStore) RepinPCR14(clientID string,
 	from, to [types.HashSize]byte, eventLog []byte, now time.Time,
 ) error {
@@ -1048,9 +976,7 @@ func (s *SQLiteBaselineStore) RepinPCR14(clientID string,
 	return nil
 }
 
-// RecordBootEvidence stores the event log + ESRT version for a first-use
-// boot baseline (SQLite).
-// Idempotent UPDATE; esrt_capable kept sticky.
+// RecordBootEvidence implements ReanchorStorer.
 func (s *SQLiteBaselineStore) RecordBootEvidence(clientID string,
 	eventLog []byte, esrtVersion uint32, esrtPresent bool,
 ) error {
@@ -1070,8 +996,7 @@ func (s *SQLiteBaselineStore) RecordBootEvidence(clientID string,
 	return err
 }
 
-// ListLFAReviewPending returns clients with an unreviewed LFA re-anchor
-// (SQLite).
+// ListLFAReviewPending implements ReanchorStorer.
 func (s *SQLiteBaselineStore) ListLFAReviewPending() []string {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -1091,8 +1016,7 @@ func (s *SQLiteBaselineStore) ListLFAReviewPending() []string {
 	return out
 }
 
-// AcknowledgeLFAReview clears a client's pending-review flag (SQLite).
-// No matching row means nothing was queued.
+// AcknowledgeLFAReview implements ReanchorStorer.
 func (s *SQLiteBaselineStore) AcknowledgeLFAReview(clientID string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -1112,16 +1036,8 @@ func (s *SQLiteBaselineStore) AcknowledgeLFAReview(clientID string) error {
 	return nil
 }
 
-// RecordKernelHash stores the kernel hash a client reported and returns
-// the one it replaced.
-//
-// The value gates nothing -- it is a hash of a file the agent read, which is
-// why no policy has to pin it -- but it rides in the digest the TPM signs,
-// so what is stored here is attested.
-// Keeping it is what lets an operator answer whether a device's kernel changed.
-//
-// A client with no baseline row has nothing to compare against and reports
-// had=false: that is a first attestation, not a change.
+// RecordKernelHash implements KernelHashRecorder.
+// An unchanged hash writes nothing.
 func (s *SQLiteBaselineStore) RecordKernelHash(clientID string,
 	kernelHash [types.HashSize]byte,
 ) (prev [types.HashSize]byte, had bool, err error) {
