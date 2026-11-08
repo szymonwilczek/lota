@@ -1,9 +1,6 @@
 // SPDX-License-Identifier: MIT
 // Copyright (C) 2026 Szymon Wilczek
 // LOTA Verifier - TPMS_ATTEST parser
-//
-// Parses the raw TPMS_ATTEST structure from TPM2_Quote response.
-// Reference: TCG TPM 2.0 Library Specification, Part 2, Section 10.12
 
 package verify
 
@@ -29,13 +26,13 @@ type TPMSAttest struct {
 	Magic           uint32
 	Type            uint16
 	QualifiedSigner []byte // TPM2B_NAME
-	ExtraData       []byte // TPM2B_DATA (IMPORTANT: contains the nonce!!!)
+	ExtraData       []byte // TPM2B_DATA, the binding nonce
 	ClockInfo       ClockInfo
 	FirmwareVersion uint64
 	QuoteInfo       *QuoteInfo // only if Type == TPM_ST_ATTEST_QUOTE
 }
 
-// TPMS_CLOCK_INFO
+// ClockInfo is TPMS_CLOCK_INFO.
 type ClockInfo struct {
 	Clock        uint64
 	ResetCount   uint32
@@ -43,14 +40,14 @@ type ClockInfo struct {
 	Safe         bool
 }
 
-// TPMS_QUOTE_INFO
+// QuoteInfo is TPMS_QUOTE_INFO.
 type QuoteInfo struct {
 	PCRSelect  []byte // TPML_PCR_SELECTION
 	PCRDigest  []byte // TPM2B_DIGEST - hash of selected PCR values
 	PCRHashAlg uint16 // hash algorithm from TPMS_PCR_SELECTION
 }
 
-// parses raw TPMS_ATTEST blob from TPM
+// ParseTPMSAttest parses a TPMS_ATTEST; QuoteInfo is set for a quote.
 func ParseTPMSAttest(data []byte) (*TPMSAttest, error) {
 	if len(data) < 20 {
 		return nil, errors.New("attest data too short")
@@ -59,7 +56,6 @@ func ParseTPMSAttest(data []byte) (*TPMSAttest, error) {
 	r := bytes.NewReader(data)
 	attest := &TPMSAttest{}
 
-	// magic (4 bytes)
 	if err := binary.Read(r, binary.BigEndian, &attest.Magic); err != nil {
 		return nil, fmt.Errorf("failed to read magic: %w", err)
 	}
@@ -68,12 +64,10 @@ func ParseTPMSAttest(data []byte) (*TPMSAttest, error) {
 			attest.Magic, TPMGeneratedValue)
 	}
 
-	// type (2 bytes)
 	if err := binary.Read(r, binary.BigEndian, &attest.Type); err != nil {
 		return nil, fmt.Errorf("failed to read type: %w", err)
 	}
 
-	// qualifiedSigner (TPM2B_NAME: 2 bytes size + data)
 	var signerSize uint16
 	if err := binary.Read(r, binary.BigEndian, &signerSize); err != nil {
 		return nil, fmt.Errorf("failed to read signer size: %w", err)
@@ -83,7 +77,6 @@ func ParseTPMSAttest(data []byte) (*TPMSAttest, error) {
 		return nil, fmt.Errorf("failed to read signer: %w", err)
 	}
 
-	// extraData (TPM2B_DATA: 2 bytes size + data) - nonce
 	var extraDataSize uint16
 	if err := binary.Read(r, binary.BigEndian, &extraDataSize); err != nil {
 		return nil, fmt.Errorf("failed to read extraData size: %w", err)
@@ -93,7 +86,6 @@ func ParseTPMSAttest(data []byte) (*TPMSAttest, error) {
 		return nil, fmt.Errorf("failed to read extraData: %w", err)
 	}
 
-	// clockInfo (17 bytes total)
 	if err := binary.Read(r, binary.BigEndian, &attest.ClockInfo.Clock); err != nil {
 		return nil, fmt.Errorf("failed to read clock: %w", err)
 	}
@@ -109,12 +101,10 @@ func ParseTPMSAttest(data []byte) (*TPMSAttest, error) {
 	}
 	attest.ClockInfo.Safe = safeByte != 0
 
-	// firmwareVersion (8 bytes)
 	if err := binary.Read(r, binary.BigEndian, &attest.FirmwareVersion); err != nil {
 		return nil, fmt.Errorf("failed to read firmwareVersion: %w", err)
 	}
 
-	// parse quote-specific data if this is a quote
 	if attest.Type == TPMSTAttestQuote {
 		quoteInfo, err := parseQuoteInfo(r)
 		if err != nil {
@@ -126,27 +116,19 @@ func ParseTPMSAttest(data []byte) (*TPMSAttest, error) {
 	return attest, nil
 }
 
-// parses TPMS_QUOTE_INFO from reader
 func parseQuoteInfo(r *bytes.Reader) (*QuoteInfo, error) {
 	qi := &QuoteInfo{}
 
-	// TPML_PCR_SELECTION
-	// count (4 bytes) + array of TPMS_PCR_SELECTION
 	var count uint32
 	if err := binary.Read(r, binary.BigEndian, &count); err != nil {
 		return nil, fmt.Errorf("failed to read PCR selection count: %w", err)
 	}
 
-	// TPM 2.0: TPML_PCR_SELECTION.count <= TPM_NUM_PCR_BANKS.
-	// Without a bound an attacker-controlled count from untrusted attestation
-	// data drives an O(count) parse loop and pcrSelectBuf growth -- a
-	// denial-of-service the fuzzer reaches as inputs grow.
-	// Reject oversized selections up front, matching the server SDK's bound.
+	// bounds the parse loop an untrusted count drives
 	if count > 16 {
 		return nil, fmt.Errorf("PCR selection count too large: %d", count)
 	}
 
-	// reconstruct the raw TPML_PCR_SELECTION bytes for signature verification
 	var pcrSelectBuf bytes.Buffer
 	if err := binary.Write(&pcrSelectBuf, binary.BigEndian, count); err != nil {
 		return nil, fmt.Errorf("failed to encode PCR selection count: %w", err)
@@ -181,7 +163,6 @@ func parseQuoteInfo(r *bytes.Reader) (*QuoteInfo, error) {
 	qi.PCRSelect = pcrSelectBuf.Bytes()
 	qi.PCRHashAlg = pcrHashAlg
 
-	// PCR digest (TPM2B_DIGEST: 2 bytes size + data)
 	var digestSize uint16
 	if err := binary.Read(r, binary.BigEndian, &digestSize); err != nil {
 		return nil, fmt.Errorf("failed to read PCR digest size: %w", err)
@@ -194,7 +175,8 @@ func parseQuoteInfo(r *bytes.Reader) (*QuoteInfo, error) {
 	return qi, nil
 }
 
-// verifies that extraData in TPMS_ATTEST matches expected nonce
+// VerifyNonceInAttest parses attestData and compares its extraData with
+// expectedNonce in constant time.
 func VerifyNonceInAttest(attestData, expectedNonce []byte) error {
 	attest, err := ParseTPMSAttest(attestData)
 	if err != nil {
@@ -208,25 +190,9 @@ func VerifyNonceInAttest(attestData, expectedNonce []byte) error {
 	return nil
 }
 
-// VerifyPCRDigestParsed compares the reported PCR values against the
-// PCRDigest signed inside an already-parsed TPMS_ATTEST. Callers that
-// reuse the parsed structure later in the verification flow (e.g. for
-// the FlagBootCommitment ClockInfo path) MUST go through this entry
-// point instead of VerifyPCRDigest so the heavy attest parser runs
-// once per attestation and a malformed attestData cannot pay for two
-// allocation passes.
-//
-// The TPM computes the PCR digest using the hash algorithm declared on
-// the TPMS_PCR_SELECTION it quoted (SHA-256, SHA-384, SHA-512 or, on
-// legacy stacks, SHA-1). The agent wire format pins PCR values at
-// types.HashSize bytes (32 bytes = SHA-256), so a quote signed over a
-// PCR bank other than SHA-256 cannot be reproduced byte-for-byte from
-// the report content. Accepting such a quote would let a malicious
-// (or buggy) agent ship truncated PCR values that happen to satisfy a
-// SHA-256 recomputation while the TPM-signed digest is something else
-// entirely; reject the quote with an explicit error so an operator
-// upgrading the PCR bank notices the wire-format gap instead of
-// silently passing or silently failing.
+// VerifyPCRDigestParsed checks that the SHA-256 of the masked PCR values,
+// in index order, equals the PCR digest of a parsed quote. A quote over a bank
+// other than SHA-256 is refused: the report carries SHA-256 values alone.
 func VerifyPCRDigestParsed(attest *TPMSAttest, pcrValues *[types.PCRCount][types.HashSize]byte, pcrMask uint32) error {
 	if attest == nil {
 		return errors.New("nil TPMS_ATTEST")
@@ -260,20 +226,14 @@ func VerifyPCRDigestParsed(attest *TPMSAttest, pcrValues *[types.PCRCount][types
 	return nil
 }
 
-// computes SHA-256(
+// ComputeAttestationBindingNonce returns the quote extraData that binds the
+// report fields the quote signature does not cover:
 //
-//	challengeNonce || hardwareID || signedFlags ||
-//	kernelHash || agentHash || iommuStatus
+//	SHA-256(challengeNonce || hardwareID || signedFlags ||
+//		kernelHash || agentHash || iommuStatus)
 //
-// )
-// to cryptographically bind TPM quote extraData to security-relevant
-// report fields that are otherwise not covered by the quote signature.
-//
-// NOTE: This is the remote attestation report binding nonce.
-// It is intentionally different from the token quote nonce used by the
-// local IPC token path and server-side token verification.
-// signedFlags is report.Header.Flags with FlagTPMQuoteOK masked out because
-// that bit is set only after quote generation.
+// signedFlags is Header.Flags without FlagTPMQuoteOK, which the agent sets
+// after the quote. A nil report hashes zeros in place of its fields.
 func ComputeAttestationBindingNonce(challengeNonce [types.NonceSize]byte, report *types.AttestationReport) [types.NonceSize]byte {
 	var flagsLE [4]byte
 	signedFlags := uint32(0)

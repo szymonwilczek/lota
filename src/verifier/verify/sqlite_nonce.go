@@ -1,10 +1,6 @@
 // SPDX-License-Identifier: MIT
 // Copyright (C) 2026 Szymon Wilczek
 // LOTA Verifier - SQLite Used Nonce Backend
-//
-// Persistent used nonce storage backed by SQLite.
-// Implements UsedNonceBackend for anti-replay protection that survives
-// verifier restarts.
 
 package verify
 
@@ -15,13 +11,13 @@ import (
 	"time"
 )
 
-// implements UsedNonceBackend using a SQLite database
-// provides persistent anti-replay protection across verifier restarts
+// SQLiteUsedNonceBackend keeps the used-nonce history in SQLite, across
+// verifier restarts.
 type SQLiteUsedNonceBackend struct {
 	db *sql.DB
 }
 
-// creates a used nonce backend backed by the given database
+// NewSQLiteUsedNonceBackend returns a backend over db.
 func NewSQLiteUsedNonceBackend(db *sql.DB) *SQLiteUsedNonceBackend {
 	return &SQLiteUsedNonceBackend{db: db}
 }
@@ -35,9 +31,7 @@ func (s *SQLiteUsedNonceBackend) Record(nonceKey string, usedAt time.Time) error
 	return err
 }
 
-// Contains tells a nonce that was never used from one the database could not
-// be asked about. Folding both into false answered "fresh" during an outage,
-// which silently suspends the cross-instance replay guarantee.
+// Contains returns an error, not false, when the database cannot answer.
 func (s *SQLiteUsedNonceBackend) Contains(nonceKey string) (bool, error) {
 	hash := hexEncode(nonceKey)
 	var exists int
@@ -67,7 +61,6 @@ func (s *SQLiteUsedNonceBackend) Cleanup(olderThan time.Time) {
 	}
 }
 
-// converts raw nonce key bytes to hex string for safe DB storage
 func hexEncode(nonceKey string) string {
 	return hex.EncodeToString([]byte(nonceKey))
 }

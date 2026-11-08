@@ -1,13 +1,6 @@
 // SPDX-License-Identifier: MIT
 // Copyright (C) 2026 Szymon Wilczek
 // LOTA Verifier - Main verification orchestrator
-//
-// Coordinates all verification steps:
-//   1. Parse and validate report structure
-//   2. Verify nonce (freshness/anti-replay)
-//   3. Verify TPM quote signature
-//   4. Verify PCR values against policy
-//   5. Generate verification result
 
 package verify
 
@@ -70,10 +63,8 @@ func unixTimestamp(t time.Time) uint64 {
 	return uint64(ts)
 }
 
-// decodeDevicePseudonym parses the CA-assigned device identifier from an
-// AIK certificate subject. The CA encodes it as the hex of a 32-byte
-// keyed hash of the EK, so it decodes to a fixed-width identity that the
-// ban store reuses in place of the former hardware_id.
+// decodeDevicePseudonym decodes the device identity the attestation CA writes
+// as hex in the AIK certificate subject.
 func decodeDevicePseudonym(cn string) ([types.HardwareIDSize]byte, error) {
 	var out [types.HardwareIDSize]byte
 	if len(cn) != hex.EncodedLen(types.HardwareIDSize) {
@@ -88,26 +79,23 @@ func decodeDevicePseudonym(cn string) ([types.HardwareIDSize]byte, error) {
 	return out, nil
 }
 
-// main verification engine
+// Verifier verifies attestation reports.
 type Verifier struct {
 	nonceStore    *NonceStore
 	pcrVerifier   *PCRVerifier
 	aikVerifier   store.AIKCertVerifier
 	baselineStore BaselineStorer
 
-	// enforcement stores (nil = no enforcement)
+	// nil = not enforced
 	revocationStore store.RevocationStore
 	banStore        store.BanStore
 
-	// structured logging and telemetry
 	log            *slog.Logger
 	metrics        *metrics.Metrics
 	attestationLog store.AttestationLog
 
-	// configuration
 	resultValidity time.Duration
 
-	// monitoring
 	startTime      time.Time
 	totalAttests   atomic.Int64
 	successAttests atomic.Int64
@@ -115,7 +103,6 @@ type Verifier struct {
 	revokedAttests atomic.Int64
 	bannedAttests  atomic.Int64
 
-	// policy enforcement
 	requireBootEnrollment bool
 	selfServiceReanchor   *bool
 }
@@ -139,81 +126,46 @@ func validateTPMFieldSizes(report *types.AttestationReport) error {
 	return nil
 }
 
-// holds verifier configuration
+// VerifierConfig configures NewVerifier.
 type VerifierConfig struct {
-	// how long a challenge nonce is valid
 	NonceLifetime time.Duration
 
-	// how long a successful verdict holds, reported to the host
-	// as ValidUntil
+	// ResultValidity is how long a passing verdict holds; the host gets it
+	// as ValidUntil.
 	ResultValidity time.Duration
 
-	// optional: persistent baseline store (nil = in-memory)
-	BaselineStore BaselineStorer
+	BaselineStore    BaselineStorer   // nil = in-memory
+	UsedNonceBackend UsedNonceBackend // nil = in-memory
 
-	// optional: persistent used nonce backend (nil = in-memory)
-	UsedNonceBackend UsedNonceBackend
+	RevocationStore store.RevocationStore // nil = not enforced
+	BanStore        store.BanStore        // nil = not enforced
 
-	// optional: revocation enforcement (nil = no revocation checks)
-	RevocationStore store.RevocationStore
+	Logger *slog.Logger // nil = discarded
 
-	// optional: hardware ban enforcement (nil = no ban checks)
-	BanStore store.BanStore
+	Metrics *metrics.Metrics // nil = a private instance
 
-	// optional: structured logger (nil = default stderr text logger)
-	Logger *slog.Logger
+	AttestationLog store.AttestationLog // nil = not recorded
 
-	// optional: Prometheus metrics (nil = no metrics)
-	Metrics *metrics.Metrics
-
-	// optional: attestation decision log (nil = no attestation audit)
-	AttestationLog store.AttestationLog
-
-	// if true, refuse to TOFU-establish a per-client boot baseline
-	// (PCR0/PCR1/PCR7) the first time a client reports. The baseline
-	// must be authenticated through one of two enrollment paths:
-	//   - the active (signed) policy explicitly pins PCR0/PCR1/PCR7,
-	//     so the operator-approved firmware/Secure Boot values are
-	//     compared against the report by the existing PCRVerifier;
-	//   - the baseline store already holds a row for the client,
-	//     i.e. the host has been enrolled out-of-band.
-	// Without one of those, a first-attestation host that boots on
-	// already-compromised firmware would silently pin the attacker's
-	// PCR0/1/7 as the canonical baseline.
-	// Default (true) closes that branch; deployment that wants pure TOFU
-	// first use must set this to false explicitly (--allow-tofu-boot-baseline)
+	// RequireBootEnrollment refuses a first-use PCR 0/1/7 baseline unless
+	// the policy pins PCR 0/1/7, the store holds an enrolled row, or the
+	// policy requires Secure Boot and the event log anchors it.
 	RequireBootEnrollment bool
 
-	// EnableSelfServiceReanchor overrides the fleet profile declared by
-	// the policy, in either direction.
-	// Nil means the policy decides:
-	// `profile: consumer` turns self-service re-anchor on and anything
-	// else leaves it off.
-	//
-	// Knob belongs to the policy rather than to the command line because
-	// it describes the fleet, not the deployment, and because verifier
-	// serving several tenants serves several fleets.
-	// Override exists for the case where an operator has to contradict
-	// policy they cannot immediately re-sign.
-	//
-	// Whatever turns it on, the re-anchor discriminator still requires
-	// policy with require_secureboot and a quote-authenticated Secure Boot
-	// anchor before anything moves (see reanchorDecision).
+	// EnableSelfServiceReanchor overrides the policy profile; nil lets the
+	// policy decide (profile consumer turns it on). Re-anchor also needs
+	// require_secureboot and a trusted Secure Boot anchor.
 	EnableSelfServiceReanchor *bool
 
-	// if true, allow policies that define no measurement allowlists
-	// (no PCR values and no kernel/agent hash allowlists)
-	// This is insecure and should be enabled only explicitly!
+	// AllowPermissivePolicy lets LoadPolicy accept a policy for which
+	// IsMeasurementEmptyPolicy holds.
 	AllowPermissivePolicy bool
 
-	// if true, allow a diverse-fleet policy (require_secureboot, no raw PCR
-	// pins) that does not pin agent_hashes.
-	// INSECURE: agent self-hash is then TOFU, so a modified non-enforcing
-	// agent can pin its own hash!
+	// AllowUnpinnedAgent lets LoadPolicy accept a policy for which
+	// RequiresAgentHashPin holds.
 	AllowUnpinnedAgent bool
 }
 
-// returns sensible defaults for verifier
+// DefaultConfig returns the default verifier configuration.
 func DefaultConfig() VerifierConfig {
 	return VerifierConfig{
 		NonceLifetime:         5 * time.Minute,
@@ -223,7 +175,7 @@ func DefaultConfig() VerifierConfig {
 	}
 }
 
-// creates a new verification engine
+// NewVerifier returns a verifier; Close stops its nonce store sweep.
 func NewVerifier(cfg VerifierConfig, aikVerifier store.AIKCertVerifier) *Verifier {
 	nonceCfg := DefaultNonceStoreConfig()
 	nonceCfg.Lifetime = cfg.NonceLifetime
@@ -267,14 +219,15 @@ func NewVerifier(cfg VerifierConfig, aikVerifier store.AIKCertVerifier) *Verifie
 	return v
 }
 
+// Close stops the nonce store's expiry sweep.
 func (v *Verifier) Close() {
 	v.nonceStore.Close()
 }
 
-// creates a challenge for client attestation
+// GenerateChallenge issues a challenge bound to clientID, the caller's
+// per-connection binding. It asks for the PCRs of every selectable policy:
+// the tenant is not known before the report.
 func (v *Verifier) GenerateChallenge(clientID string) (*types.Challenge, error) {
-	// challenges precede tenant authentication, so request the union
-	// of every selectable policy's PCRs
 	pcrMask := v.pcrVerifier.GetChallengePolicyMask()
 	return v.nonceStore.GenerateChallenge(clientID, pcrMask)
 }
@@ -288,7 +241,7 @@ func (v *Verifier) DiscardChallenge(challenge *types.Challenge, clientID string)
 }
 
 // certificateVerdict maps an AIK certificate failure to the agent's verdict:
-//   - names another key: VerifyIdentityFail (re-enroll; a TPM clear does it);
+//   - names another key: VerifyIdentityFail;
 //   - outside its validity window: VerifyCertificateValidity (expiry, clock);
 //   - unparseable, untrusted chain or no anchors: VerifySigFail.
 func certificateVerdict(err error) uint32 {
@@ -320,13 +273,13 @@ func recordedDetail(err error) string {
 	return detail
 }
 
-// What authenticated a client's first-use PCR0/1/7 baseline
+// bootBaselineRoad names what authenticated a first-use PCR 0/1/7 baseline.
 type bootBaselineRoad struct {
-	allowedBy string // logged as allowed_by; empty = not authenticated yet
-	note      string // operator caveat, optional
+	allowedBy string // logged as allowed_by; empty = not authenticated
+	note      string
 }
 
-// Policy-only roads; the baseline store is left to the caller.
+// bootBaselineRoad resolves the policy roads; the caller checks the store.
 func (v *Verifier) bootBaselineRoad(tenant string, bootFacts *BootFacts) bootBaselineRoad {
 	if v.pcrVerifier.PolicyDeclaresBootPCRsForTenant(tenant) {
 		return bootBaselineRoad{allowedBy: "signed policy PCR0/1/7 pins"}
@@ -341,16 +294,10 @@ func (v *Verifier) bootBaselineRoad(tenant string, bootFacts *BootFacts) bootBas
 	return bootBaselineRoad{}
 }
 
-// VerifyReportFrom verifies a report and records the address it came from.
-// remoteAddr is what the decision log answers "which host" with; a caller
-// that has no address for the report passes an empty one.
-//
-// challengeID identifies the transport-level endpoint used when the
-// challenge was generated. It is used exclusively for nonce binding
-// verification. All persistent identity operations (AIK registration,
-// baseline, revocation, bans) require a non-zero hardware-derived
-// clientID (hex-encoded HardwareID from the TPM report) so that
-// transport identity (e.g. NATed IP) is never used as durable identity.
+// VerifyReportFrom verifies a report and records the address it came from;
+// remoteAddr may be empty. challengeID is the binding the challenge was issued
+// to; logs and the record name it as the client until the verified AIK
+// certificate does.
 func (v *Verifier) VerifyReportFrom(challengeID, remoteAddr string, reportData []byte) (_ *types.VerifyResult, retErr error) {
 	reportBuf := cloneSensitive(reportData)
 	defer wipeBytes(reportBuf)
@@ -359,16 +306,13 @@ func (v *Verifier) VerifyReportFrom(challengeID, remoteAddr string, reportData [
 	v.totalAttests.Add(1)
 	v.metrics.AttestationTotal.Inc()
 
-	// clientID will be derived from HardwareID after parse; until then
-	// use challengeID as provisional identity for early logging
+	// logged until the AIK certificate names the client
 	clientID := challengeID
 	clog := logging.WithClient(v.log, clientID)
 	var pcr14Hex string
 	var kernelHashHex string
 	var hwID string
-	// tenant stays empty until the AIK certificate authenticates it.
-	// attestation record without a tenant is one that never proved
-	// tenant-assigned identity
+	// empty in the record until the AIK certificate names it
 	var tenant string
 
 	result := &types.VerifyResult{
@@ -428,13 +372,6 @@ func (v *Verifier) VerifyReportFrom(challengeID, remoteAddr string, reportData [
 		return result, err
 	}
 
-	// Authenticate the AIK through its CA-issued certificate. The
-	// certificate chain is the only AIK trust anchor: the attestation CA
-	// issues it only after credential activation proves the AIK and the
-	// endorsement key share one TPM, so a software-only client that never
-	// passed activation cannot present a chaining certificate. The durable
-	// client identity is the CA-assigned device pseudonym in the subject,
-	// not the agent-asserted hardware_id; the verifier never sees the EK.
 	if report.TPM.AIKPublicSize == 0 {
 		clog.Error("no AIK public key in report")
 		v.metrics.Rejections.Inc("sig_fail")
@@ -500,9 +437,7 @@ func (v *Verifier) VerifyReportFrom(challengeID, remoteAddr string, reportData [
 	clog = logging.WithClient(v.log, clientID).With("tenant", tenant)
 	clog.Debug("client identity derived from AIK certificate", "challenge_id", challengeID)
 
-	// check revocation BEFORE consuming nonce
-	// Why? This prevents wasting nonces on known-revoked clients
-	// and avoids any crypto operations for identities that should be rejected.
+	// revocation and bans are checked before the nonce is consumed
 	if v.revocationStore != nil {
 		if entry, revoked := v.revocationStore.IsRevoked(clientID); revoked {
 			v.revokedAttests.Add(1)
@@ -514,11 +449,7 @@ func (v *Verifier) VerifyReportFrom(challengeID, remoteAddr string, reportData [
 		}
 	}
 
-	// check hardware ban BEFORE consuming nonce
-	//
-	// Bans are strictly per-tenant:
-	// Only a ban recorded in the tenant the CA assigned to this client rejects it.
-	// The same hardware stays clean in every other tenant.
+	// a ban holds in the tenant it was recorded in alone
 	if v.banStore != nil {
 		if entry, banned := v.banStore.IsBanned(tenant, identity); banned {
 			v.bannedAttests.Add(1)
@@ -538,8 +469,6 @@ func (v *Verifier) VerifyReportFrom(challengeID, remoteAddr string, reportData [
 	}
 	clog.Debug("nonce verified", "method", "challenge-response+TPMS_ATTEST")
 
-	// The AIK certificate authenticated the AIK above; the quote is
-	// signed by that key.
 	if err := VerifyReportSignature(report, reportAIK); err != nil {
 		clog.Error("signature verification failed", "error", err)
 		v.metrics.Rejections.Inc("sig_fail")
@@ -548,12 +477,6 @@ func (v *Verifier) VerifyReportFrom(challengeID, remoteAddr string, reportData [
 	}
 	clog.Debug("signature verified with certificate-authenticated AIK")
 
-	// verify PCR digest binding: ensure reported PCR values match the
-	// TPM-signed digest. The parsed TPMS_ATTEST is reused below by the
-	// FlagBootCommitment branch so attestData walks the parser exactly
-	// once per attestation; a malformed payload therefore cannot cost
-	// two allocation passes and the DoS surface from twice-running the
-	// parser collapses to one.
 	var parsedAttest *TPMSAttest
 	if report.TPM.AttestSize > 0 {
 		attestData := cloneSensitive(report.TPM.AttestData[:report.TPM.AttestSize])
@@ -575,17 +498,11 @@ func (v *Verifier) VerifyReportFrom(challengeID, remoteAddr string, reportData [
 		clog.Debug("PCR digest verified against TPM-signed attestation")
 	}
 
-	// verify event log -> independent PCR reconstruction + boot facts.
-	// Runs before the policy gates because RequireSecureBoot and the
-	// cmdline policy consume the quote-authenticated facts extracted
-	// here. PCR 8 consistency is enforced whenever the active policy
-	// gates on the measured cmdline; otherwise a forged kernel_cmdline
-	// event would go undetected.
+	// the policy gates read the boot facts
 	var bootFacts *BootFacts
 	if len(report.EventLog) > 0 {
 		facts, err := VerifyEventLogWithPolicy(report, v.pcrVerifier.PolicyRequiresCmdlineForTenant(tenant))
 		if err != nil {
-			// present but inconsistent -> boot chain tampered
 			clog.Error("event log verification failed", "error", err)
 			v.metrics.Rejections.Inc("pcr_fail")
 			result.Result = types.VerifyPCRFail
@@ -610,12 +527,6 @@ func (v *Verifier) VerifyReportFrom(challengeID, remoteAddr string, reportData [
 		return result, err
 	}
 
-	// UEFI gate.
-	// Every measurement below the quote comes from UEFI firmware:
-	// the PCR 0/1/7 pin, the Secure Boot state the policy gates on,
-	// and the PCR 14 baseline the boot commitment chains onto.
-	// Legacy BIOS/CSM measures none of it, so its reports would pin firmware
-	// baseline nothing authenticates.
 	if !UEFIAnchored(bootFacts) {
 		logging.Security(clog, "event log carries no UEFI firmware evidence",
 			"hint", "LOTA requires UEFI; switch the firmware out of legacy BIOS/CSM mode and reinstall")
@@ -624,7 +535,6 @@ func (v *Verifier) VerifyReportFrom(challengeID, remoteAddr string, reportData [
 		return result, errors.New("FAIL_PCR_FAIL: event log proves no UEFI boot (no quote-authenticated SecureBoot variable measurement)")
 	}
 
-	// check agent self-measurement against baseline
 	pcr14 := report.TPM.PCRValues[14]
 	pcr14Hex = FormatPCR14(pcr14)
 	recordedKernelHash := RecordedKernelHash(report, bootFacts)
@@ -635,14 +545,8 @@ func (v *Verifier) VerifyReportFrom(challengeID, remoteAddr string, reportData [
 			"path", bootFacts.KernelImage.Path)
 	}
 
-	// PCR14 carries exactly one construction:
-	// the initramfs lock value the 90lota dracut helper extends before
-	// pivot_root, with the agent's boot commitment chained on top.
-	// The lock closes the kernel-handoff -> lota-agent window in which
-	// PCR14 is still writable from locality 0, and the commitment binds
-	// the running agent binary to the quote.
-	// Report that does not advertise both flags carries PCR14 the verifier
-	// has no derivation for.
+	// PCR 14 is derived for the initramfs lock with the boot commitment on
+	// top, and for nothing else
 	if report.Header.Flags&types.FlagBootCommitmentV1 == 0 {
 		logging.Security(clog, "report omits FlagBootCommitmentV1",
 			"flags", fmt.Sprintf("0x%08x", report.Header.Flags))
@@ -658,11 +562,7 @@ func (v *Verifier) VerifyReportFrom(challengeID, remoteAddr string, reportData [
 		return result, errors.New("FAIL_PCR_FAIL: report missing FlagInitramfsLockV1 (initramfs PCR14 lock required)")
 	}
 
-	// Mask gate: PCR0/PCR1/PCR7 (firmware + Secure Boot) are mandatory.
-	// Report that omits them would bypass the BootBaselineStorer pin
-	// even where one is configured.
-	// Move this ahead of any baseline write so malformed report cannot
-	// persist partial row.
+	// PCR 0, 1 and 7 are required before any baseline write
 	const bootPCRMask = (uint32(1) << 0) | (uint32(1) << 1) | (uint32(1) << 7)
 	haveBootPCRs := report.TPM.PCRMask&bootPCRMask == bootPCRMask
 	if !haveBootPCRs {
@@ -680,13 +580,7 @@ func (v *Verifier) VerifyReportFrom(challengeID, remoteAddr string, reportData [
 		return result, errors.New("FAIL_BASELINE_ERROR: store missing boot PCR support")
 	}
 
-	// agent_hash pin and the firmware/SecureBoot PCR pin must commit atomically:
-	// splitting them across two store calls opens multi-process race where
-	// second verifier instance can observe the row mid-flight and TOFU-establish
-	// attacker-controlled PCR0/1/7 between the two writes.
-	// AtomicBaselineStorer contract folds both decisions into one SQL
-	// transaction (BEGIN IMMEDIATE on SQLite) so any concurrent writer blocks
-	// until the first attestation commits or rolls back.
+	// the agent_hash and boot PCR pins commit in one transaction
 	atomicStore, atomicOK := v.baselineStore.(AtomicBaselineStorer)
 	if !atomicOK {
 		clog.Error("baseline store does not implement AtomicBaselineStorer; refusing FlagBootCommitment attestation")
@@ -695,9 +589,6 @@ func (v *Verifier) VerifyReportFrom(challengeID, remoteAddr string, reportData [
 		return result, errors.New("FAIL_BASELINE_ERROR: store missing atomic agent_hash/boot pinning")
 	}
 
-	// Reuse the TPMS_ATTEST already parsed for the PCR digest binding above;
-	// FlagBootCommitment paths cannot run with AttestSize=0,
-	// so parsedAttest must be non-nil here
 	if parsedAttest == nil {
 		clog.Error("FlagBootCommitment set without a TPM quote payload")
 		v.metrics.Rejections.Inc("pcr_fail")
@@ -705,16 +596,8 @@ func (v *Verifier) VerifyReportFrom(challengeID, remoteAddr string, reportData [
 		return result, errors.New("FAIL_PCR_FAIL: FlagBootCommitment requires a TPMS_ATTEST payload")
 	}
 
-	// initramfs lock helper (src/initramfs/lota-pcr14-lock.c) runs before
-	// the agent ever starts, so PCR14 carries the two-hop chain
-	// SHA256(lock_value || boot_commit)
-	//
-	// pcr14Baseline is the PCR14 content present before the initramfs lock /
-	// agent extends: 0^32 on legacy/BIOS host, or the firmware/shim MOK
-	// measurement on UEFI Secure Boot, reconstructed by replaying the firmware
-	// event log (LOTA extends are post-ExitBootServices and never enter that log)
-	// Forged log diverges from the signed PCR14 and fails the match below,
-	// so baseline doesnt need separate pin here
+	// the pre-lock PCR 14 comes from the event log; a forged log fails the
+	// match with the quoted register
 	var pcr14Baseline [types.HashSize]byte
 	if bootFacts != nil {
 		pcr14Baseline = PCR14BaselineFromEventLog(bootFacts.Parsed)
@@ -733,43 +616,17 @@ func (v *Verifier) VerifyReportFrom(challengeID, remoteAddr string, reportData [
 		return result, errors.New("FAIL_INTEGRITY_MISMATCH: PCR14 does not match boot-commitment derivation")
 	}
 
-	// mask gate above rejected a report without PCR0/1/7 and the store gate
-	// rejected store that cannot pin them, so the boot columns are always
-	// written from here on
 	bootPtr := &BootBaseline{
 		PCR0: report.TPM.PCRValues[0],
 		PCR1: report.TPM.PCRValues[1],
 		PCR7: report.TPM.PCRValues[7],
 	}
 
-	// Enrollment gate.
-	//
-	// Atomic transaction below will TOFU-establish the per-client PCR0/PCR1/PCR7
-	// row on first use.
-	// With pure TOFU, brand-new client that boots on already-tampered firmware
-	// would silently pin the attacker-controlled values as the canonical baseline;
-	// later attestations would then "match" the poisoned baseline.
-	// Refuse that branch when the operator has not authenticated the initial
-	// PCR0/1/7 values through one of:
-	//	- the active signed policy (PCR0+PCR1+PCR7 hex entries that the existing
-	//	PCRVerifier compares against the report),
-	//	- out-of-band baseline row that is already present in the store for this
-	//	client, or
-	//	- the event-log Secure Boot anchor: the active policy enforces
-	//	RequireSecureBoot and this report's quote-authenticated event log proves
-	//	Secure Boot enabled
-	//
-	//	Policy gate above already rejected the report otherwise; re-derived from
-	//	bootFacts so this branch cannot silently widen if the gates move.
-	//	Raw PCR0/1/7 differ per machine, so diverse fleet cannot pin them
-	//	in policy; with the firmware boot-with-Secure-Boot-off path already
-	//	rejected machine-independently, the TOFU row serves as per-device
-	//	rollback/consistency anchor rather than the firmware trust control itself.
-	//
-	// The road is resolved even with the gate off: the pin logs it.
+	// Enrollment gate: a first-use PCR 0/1/7 row needs a policy road or an
+	// enrolled store row while RequireBootEnrollment holds. The road is
+	// resolved with the gate off too: the pin logs it.
 	bootPin := v.bootBaselineRoad(tenant, bootFacts)
 	if bootPin.allowedBy == "" && v.requireBootEnrollment {
-		// store last: policy is in memory, the store is not
 		if reader, ok := v.baselineStore.(BootBaselineReader); ok &&
 			reader.GetBootBaseline(clientID) != nil {
 			bootPin.allowedBy = "baseline store enrollment"
@@ -803,23 +660,11 @@ func (v *Verifier) VerifyReportFrom(challengeID, remoteAddr string, reportData [
 				"attest_count", outcome.AgentHashBaseline.AttestCount)
 		}
 	case TOFUMismatch:
-		// Package update:
-		// if the reported build is one the policy lists,
-		// move the pin instead of refusing this client for good.
-		// Returns true only on an actual re-pin.
 		if v.tryAgentHashRepin(clog, clientID, tenant, pcr14, report) {
-			// Transaction above aborted on the mismatch, so it left
-			// the boot side undecided (BootResult carries TOFUError
-			// precisely because no write happened) and wrote no attestation.
-			// Re-run it against the row the re-pin just replaced:
-			// agent hash now matches and the boot branch below gets
-			// real decision instead of store error from aborted transaction.
+			// the mismatch aborted the transaction; re-run it
 			outcome = atomicStore.CheckAndUpdateAttestation(
 				clientID, pcr14, report.System.AgentHash, bootPtr)
 			if outcome.AgentHashResult != TOFUMatch {
-				// Something moved the row again between
-				// the re-pin and this read.
-				// Fail closed
 				logging.Security(clog, "agent_hash re-pin did not settle; refusing",
 					"agent_hash", hex.EncodeToString(report.System.AgentHash[:]))
 				v.metrics.Rejections.Inc("integrity_mismatch")
@@ -833,8 +678,6 @@ func (v *Verifier) VerifyReportFrom(challengeID, remoteAddr string, reportData [
 			stored = outcome.AgentHashBaseline.AgentHash
 		}
 		if stored == ([types.HashSize]byte{}) {
-			// Not drift: no hash was ever pinned,
-			// so do not report a change from baseline.
 			logging.Security(clog,
 				"baseline carries no pinned agent_hash; refusing to adopt the reported one",
 				"reported_agent_hash",
@@ -858,17 +701,9 @@ func (v *Verifier) VerifyReportFrom(challengeID, remoteAddr string, reportData [
 		return result, errors.New("FAIL_BASELINE_ERROR: agent_hash baseline store unavailable")
 	}
 
-	// The register the boot chain rests on is pinned.
-	// Every check above agrees with the report in hand: the commitment is rederived
-	// from the event log that report carries, so a host whose pre-lock baseline
-	// moved -- a MOK enrollment, a shim or SBAT update, a rebuilt initramfs lock
-	// -- presents a log and a register that agree with each other and derives
-	// clean. Comparing the register the client pinned is what makes that change
-	// visible; it is a boot-chain change, so it takes the same operator re-anchor
-	// a firmware change does, except a change confined to the MOK state, which
-	// tryMOKRepin follows where self-service re-anchor is on.
-	// An agent update moves the register legitimately, and the agent_hash re-pin
-	// above moves the pin with it in one statement.
+	// The derivation above holds for any pre-lock PCR 14 the log names; the
+	// pinned register catches a change of it. tryMOKRepin follows a change
+	// confined to the MOK events.
 	switch outcome.PCR14Result {
 	case TOFUFirstUse:
 		clog.Info("TOFU: PCR14 baseline established", "pcr14", pcr14Hex)
@@ -910,7 +745,6 @@ func (v *Verifier) VerifyReportFrom(challengeID, remoteAddr string, reportData [
 	if outcome.BootProvided {
 		switch outcome.BootResult {
 		case TOFUFirstUse:
-			// every road logs at SECURITY; allowed_by tells them apart
 			pinArgs := []any{
 				"pcr0", hex.EncodeToString(bootPtr.PCR0[:]),
 				"pcr1", hex.EncodeToString(bootPtr.PCR1[:]),
@@ -923,9 +757,7 @@ func (v *Verifier) VerifyReportFrom(challengeID, remoteAddr string, reportData [
 			}
 			logging.Security(clog, "boot baseline TOFU first-use accepted", pinArgs...)
 
-			// capture the event log + firmware version alongside the boot
-			// baseline so later self-service re-anchor can replay-diff
-			// PCR 7 and apply the firmware anti-rollback check
+			// evidence for a later self-service re-anchor
 			if rs, ok := v.baselineStore.(ReanchorStorer); ok {
 				var esrtVer uint32
 				esrtPresent := false
@@ -942,10 +774,6 @@ func (v *Verifier) VerifyReportFrom(challengeID, remoteAddr string, reportData [
 		case TOFUMatch:
 			clog.Debug("boot PCRs match baseline")
 		case TOFUMismatch:
-			// self-service re-anchor:
-			// if the drift preserves the Secure Boot root of trust,
-			// re-pin the baseline instead of rejecting
-			// Returns true only on an actual re-pin
 			if v.tryReanchor(clog, clientID, tenant, bootPtr, report, bootFacts) {
 				break
 			}
@@ -974,7 +802,6 @@ func (v *Verifier) VerifyReportFrom(challengeID, remoteAddr string, reportData [
 
 	if report.Header.Flags&types.FlagIOMMUOK == 0 {
 		clog.Warn("IOMMU not verified")
-		// IMPORTANT: policy determines if this is required
 	}
 
 	secFlags := []string{}
@@ -1008,10 +835,7 @@ func (v *Verifier) VerifyReportFrom(challengeID, remoteAddr string, reportData [
 
 	clog.Info("verification successful")
 
-	// Record which kernel image this device reported, and log once when it
-	// changes.
-	// Advisory: the hash is of a file the agent read, so nothing gates on it.
-	// It is carried in the digest the TPM signs, so the stored value is attested.
+	// advisory: record the kernel digest and log a change
 	if kr, ok := v.baselineStore.(KernelHashRecorder); ok {
 		prev, had, err := kr.RecordKernelHash(clientID, recordedKernelHash)
 		switch {
@@ -1025,8 +849,7 @@ func (v *Verifier) VerifyReportFrom(challengeID, remoteAddr string, reportData [
 		}
 	}
 
-	// Record which keys this machine trusts, and log once when they change.
-	// Advisory too: LOTA shows them and the publisher judges.
+	// advisory: record the trusted keys and log a change
 	if kr, ok := v.baselineStore.(MachineKeysRecorder); ok && bootFacts != nil {
 		keys := ExtractMachineKeys(bootFacts.Parsed, report.MokList)
 		encoded, err := json.Marshal(keys)
@@ -1043,10 +866,7 @@ func (v *Verifier) VerifyReportFrom(challengeID, remoteAddr string, reportData [
 		}
 	}
 
-	// stamp the CA-assigned tenant on the baseline row so the operator
-	// surface can scope this client.
-	// Fail closed rather than let tenant-owned device linger unscoped
-	// in the default tenant
+	// fail closed: an unstamped client reads as the default tenant
 	if ts, ok := v.baselineStore.(TenantStorer); ok {
 		if err := ts.SetClientTenant(clientID, tenant); err != nil {
 			clog.Error("failed to persist the client tenant", "error", err)
@@ -1062,40 +882,40 @@ func (v *Verifier) VerifyReportFrom(challengeID, remoteAddr string, reportData [
 	return result, nil
 }
 
-// loads a PCR policy file
+// LoadPolicy loads a PCR policy file.
 func (v *Verifier) LoadPolicy(path string) error {
 	return v.pcrVerifier.LoadPolicy(path)
 }
 
-// adds a policy programmatically
+// AddPolicy adds a policy without the signature, IsMeasurementEmptyPolicy and
+// RequiresAgentHashPin checks of LoadPolicy.
 func (v *Verifier) AddPolicy(policy *PCRPolicy) error {
 	return v.pcrVerifier.AddPolicy(policy)
 }
 
-// sets the Ed25519 public key used to verify policy file signatures
-// when set, LoadPolicy rejects any policy without a valid detached .sig file!
+// SetPolicyPublicKey makes LoadPolicy require a valid detached signature by
+// pubKey.
 func (v *Verifier) SetPolicyPublicKey(pubKey ed25519.PublicKey) {
 	v.pcrVerifier.SetPolicyPublicKey(pubKey)
 }
 
-// returns the currently active PCR policy
-// returned pointer must be treated as read-only by callers
+// ActivePolicyConfig returns the active policy; callers must not modify it.
 func (v *Verifier) ActivePolicyConfig() (*PCRPolicy, bool) {
 	return v.pcrVerifier.GetActivePolicyConfig()
 }
 
-// returns the names of every loaded policy
+// ListPolicies returns the names of the loaded policies.
 func (v *Verifier) ListPolicies() []string {
 	return v.pcrVerifier.ListPolicies()
 }
 
-// reports which policy each tenant is verified against; a tenant that binds
-// none falls back to the active policy
+// TenantBindings returns the policy each tenant binds; a tenant that binds
+// none is verified against the active policy.
 func (v *Verifier) TenantBindings() map[string]string {
 	return v.pcrVerifier.TenantBindings()
 }
 
-// returns verifier statistics
+// Stats is a snapshot of the verifier's counters.
 type Stats struct {
 	PendingChallenges int
 	UsedNonces        int
@@ -1137,7 +957,7 @@ func (v *Verifier) Stats() Stats {
 	return s
 }
 
-// per-client information for monitoring API
+// ClientInfo is what the verifier knows about one client.
 type ClientInfo struct {
 	ClientID          string
 	HardwareID        string // hex-encoded
@@ -1153,18 +973,17 @@ type ClientInfo struct {
 	MachineKeys       *MachineKeys // nil until an attestation recorded them
 }
 
-// returns aggregated information about a specific client
+// ClientInfo returns the client's record; false when it has no baseline and
+// a zero ClientCounter.
 func (v *Verifier) ClientInfo(clientID string) (*ClientInfo, bool) {
 	info := &ClientInfo{
 		ClientID: clientID,
 	}
 
-	// client ID is the hex device pseudonym from the AIK certificate
 	if hwid, err := store.ParseHardwareID(clientID); err == nil {
 		info.HardwareID = store.FormatHardwareID(hwid)
 	}
 
-	// revocation status
 	if v.revocationStore != nil {
 		if entry, revoked := v.revocationStore.IsRevoked(clientID); revoked {
 			info.Revoked = true
@@ -1176,8 +995,7 @@ func (v *Verifier) ClientInfo(clientID string) (*ClientInfo, bool) {
 	info.MonotonicCounter = v.nonceStore.ClientCounter(clientID)
 	info.PendingChallenges = v.nonceStore.ClientPendingCount(clientID)
 
-	// baseline store data: shared durable record, including last attestation;
-	// without a record, fall back to this instance's nonce history
+	// the baseline record is shared; the nonce history is this instance's
 	hasBaseline := false
 	if baseline := v.baselineStore.GetBaseline(clientID); baseline != nil {
 		hasBaseline = true
@@ -1199,10 +1017,7 @@ func (v *Verifier) ClientInfo(clientID string) (*ClientInfo, bool) {
 		}
 	}
 
-	// CA-assigned tenant from the baseline row;
-	// store without the capability serves the single default fleet.
-	// Unresolved tenant stays empty and matches no scoped key,
-	// so store error cannot leak the client into anyone's visible set
+	// an unresolved tenant stays empty and matches no scoped key
 	info.Tenant = DefaultTenant
 	if ts, ok := v.baselineStore.(TenantStorer); ok {
 		tenant, err := ts.ClientTenant(clientID)
@@ -1215,9 +1030,6 @@ func (v *Verifier) ClientInfo(clientID string) (*ClientInfo, bool) {
 		}
 	}
 
-	// check if client exists in any store
-	// baseline row is the durable record;
-	// nonce history may start empty after a verifier restart
 	if info.MonotonicCounter == 0 && !hasBaseline {
 		return nil, false
 	}
@@ -1277,31 +1089,18 @@ func (v *Verifier) IsDurableClient(clientID string) bool {
 	return v.baselineStore.GetBaseline(clientID) != nil
 }
 
-// returns the configured revocation store
+// RevocationStore returns the revocation store, nil when not enforced.
 func (v *Verifier) RevocationStore() store.RevocationStore {
 	return v.revocationStore
 }
 
-// returns the configured hardware ban store
+// BanStore returns the ban store, nil when not enforced.
 func (v *Verifier) BanStore() store.BanStore {
 	return v.banStore
 }
 
-// tryReanchor attempts self-service re-anchor on a firmware/Secure Boot PCR drift.
-// It returns true only when the per-device boot baseline was actually re-pinned
-// (the strong path, or an operator-approved LFA path), in which case the caller
-// treats the attestation as a match instead of rejecting.
-// Pending or escalated outcome returns false and the caller rejects as before.
-// Decision itself lives in reanchorDecision.
-//
-// selfServiceReanchorForTenant resolves who decides whether drifted boot baseline
-// may be re-anchored without operator: the command line when it says anything,
+// selfServiceReanchorForTenant returns EnableSelfServiceReanchor when set,
 // the tenant's policy profile otherwise.
-//
-// Policy is the primary source because the answer describes the fleet rather than
-// the deployment, and one verifier can serve several fleets.
-// Flag stays as override for the operator who has to contradict a policy they cannot
-// immediately re-sign.
 func (v *Verifier) selfServiceReanchorForTenant(tenant string) bool {
 	if v.selfServiceReanchor != nil {
 		return *v.selfServiceReanchor
@@ -1309,6 +1108,10 @@ func (v *Verifier) selfServiceReanchorForTenant(tenant string) bool {
 	return v.pcrVerifier.PolicyEnablesSelfServiceReanchorForTenant(tenant)
 }
 
+// tryReanchor re-pins a drifted PCR 0/1/7 baseline when reanchorDecision
+// allows it on the strong or the LFA path, and returns true only on a re-pin.
+// It needs self-service re-anchor on, require_secureboot and a trusted Secure
+// Boot anchor.
 func (v *Verifier) tryReanchor(clog *slog.Logger, clientID, tenant string,
 	boot *BootBaseline, report *types.AttestationReport,
 	bootFacts *BootFacts,
@@ -1316,9 +1119,6 @@ func (v *Verifier) tryReanchor(clog *slog.Logger, clientID, tenant string,
 	if !v.selfServiceReanchorForTenant(tenant) {
 		return false
 	}
-	// diverse-fleet profile only:
-	// client's policy with require_secureboot and the event-log Secure Boot
-	// anchor proven for this boot
 	if !v.pcrVerifier.PolicyRequiresSecureBootForTenant(tenant) || !SecureBootAnchored(bootFacts) {
 		return false
 	}
@@ -1331,7 +1131,7 @@ func (v *Verifier) tryReanchor(clog *slog.Logger, clientID, tenant string,
 	now := time.Now()
 	verdict, reason := reanchorDecision(ReanchorInputs{
 		BaselineEventLog:    st.EventLogBaseline,
-		CurrentParsed:       bootFacts.Parsed, // already parsed + quote-verified upstream
+		CurrentParsed:       bootFacts.Parsed,
 		BaselineESRTVersion: st.ESRTVersion,
 		CurrentESRT:         report.ESRT,
 		ESRTCapable:         st.ESRTCapable,
@@ -1350,8 +1150,7 @@ func (v *Verifier) tryReanchor(clog *slog.Logger, clientID, tenant string,
 		if err := rs.ArchiveAndReanchor(clientID, *boot, report.EventLog,
 			esrtVer, esrtPresent, false, "strong", now); err != nil {
 			if errors.Is(err, ErrReanchorRateLimited) {
-				// concurrent attestation for this client re-anchored first;
-				// in-transaction guard refused this one. Fail closed.
+				// a concurrent round re-anchored first
 				logging.Security(clog, "boot baseline re-anchor escalated (rate limit raced)", "reason", reason)
 				v.metrics.Reanchors.Inc("escalate")
 				return false
@@ -1363,16 +1162,11 @@ func (v *Verifier) tryReanchor(clog *slog.Logger, clientID, tenant string,
 		v.metrics.Reanchors.Inc("strong")
 		return true
 	case ReanchorLFA:
-		// LFA re-anchor applies automatically (no approval gate):
-		// player keeps attesting after a firmware update.
-		// ArchiveAndReanchor flags the client for post-fact operator review;
-		// the alert below and the review list (GET /api/v1/reanchor/review)
-		// surface it so an operator can inspect and, if needed, revoke or ban.
+		// applied at once and flagged, see ListReanchorReview
 		if err := rs.ArchiveAndReanchor(clientID, *boot, report.EventLog,
 			esrtVer, esrtPresent, true, "lfa", now); err != nil {
 			if errors.Is(err, ErrReanchorRateLimited) {
-				// concurrent attestation for this client re-anchored first;
-				// in-transaction guard refused this one. Fail closed.
+				// a concurrent round re-anchored first
 				logging.Security(clog, "boot baseline re-anchor escalated (rate limit raced)", "reason", reason)
 				v.metrics.Reanchors.Inc("escalate")
 				return false
@@ -1390,25 +1184,9 @@ func (v *Verifier) tryReanchor(clog *slog.Logger, clientID, tenant string,
 	}
 }
 
-// tryAgentHashRepin decides whether client whose reported agent hash no longer
-// matches its pinned baseline may move the pin to the reported one.
-// Returns true only on an actual re-pin.
-//
-// This is the package-update path.
-// The pin is TOFU, so it records whichever agent build the client happened
-// to run first; later package update makes the reported hash differ and,
-// without this, the client is refused for good.
-//
-// What makes moving the pin safe is proven before this runs.
-// MatchLockedBootCommitmentPCR14 derived the expected PCR 14 from the *reported*
-// hash and compared it against the quoted register, so the hash is not a claim:
-// it is the binary that extended PCR 14 during this boot, attested by the TPM.
-// The policy allow-list then decides whether that binary is one the relying
-// party trusts. With both, refusing the transition protects nothing and costs
-// every client its next update.
-//
-// Without allow-list there is nothing to appeal to, agentHashDecision escalates,
-// and the operator decides.
+// tryAgentHashRepin moves a mismatched agent_hash pin, with its PCR 14, to the
+// reported hash when agentHashDecision allows it, and returns true only on a
+// re-pin.
 func (v *Verifier) tryAgentHashRepin(clog *slog.Logger, clientID, tenant string,
 	pcr14 [types.HashSize]byte, report *types.AttestationReport,
 ) bool {
@@ -1423,17 +1201,10 @@ func (v *Verifier) tryAgentHashRepin(clog *slog.Logger, clientID, tenant string,
 
 	st := rs.GetAgentHashRepinState(clientID)
 	if !st.Present {
-		// No row to move.
-		// TOFU establishes a pin;
-		// this path only replaces one
 		return false
 	}
 	if !st.Pinned {
-		/*
-		 * Out-of-band PCR 14 pin, no agent hash.
-		 * Allow-list and interval both pass here, so refuse explicitly:
-		 * re-pinning would adopt the reported hash and replace the pinned PCR 14.
-		 */
+		// a PCR 14 pin without an agent hash is not moved
 		logging.Security(clog,
 			"agent_hash re-pin refused: the baseline carries no pinned hash to move",
 			"reported_agent_hash",
@@ -1449,14 +1220,7 @@ func (v *Verifier) tryAgentHashRepin(clog *slog.Logger, clientID, tenant string,
 		policy.AgentHashes, st.LastRepinAt, now)
 
 	if verdict != AgentHashRepin {
-		/*
-		 * The other two refusals are already named: an unlisted build is
-		 * refused by the policy gate before this path runs, and an empty
-		 * allow-list is the enterprise profile, where the pin standing is
-		 * the whole arrangement.
-		 * This one had no voice at all, and it is the one that looks exactly
-		 * like tampering while being an update arriving early.
-		 */
+		// an unlisted build already failed the policy gate
 		if refusal == AgentHashTooSoon {
 			logging.Security(clog,
 				"agent_hash re-pin refused by the per-client interval, not by the allow-list",
@@ -1475,9 +1239,7 @@ func (v *Verifier) tryAgentHashRepin(clog *slog.Logger, clientID, tenant string,
 	if err := rs.ArchiveAndRepinAgentHash(clientID, report.System.AgentHash,
 		pcr14, now); err != nil {
 		if errors.Is(err, ErrAgentHashRepinRateLimited) {
-			// concurrent attestation for this client re-pinned first
-			// and the in-transaction guard refused this one
-			// Fail closed
+			// a concurrent round re-pinned first
 			logging.Security(clog, "agent_hash re-pin escalated (rate limit raced)")
 			v.metrics.Reanchors.Inc("agent_hash_escalate")
 			return false
@@ -1495,8 +1257,7 @@ func (v *Verifier) tryAgentHashRepin(clog *slog.Logger, clientID, tenant string,
 }
 
 // ListReanchorReview returns the clients that re-anchored on the
-// Low-Firmware-Assurance path and have not yet been reviewed by an operator.
-// List is informational (post-fact); LFA re-anchors are not blocked on it.
+// Low-Firmware-Assurance path and await operator review.
 func (v *Verifier) ListReanchorReview() ([]string, error) {
 	rs, ok := v.baselineStore.(ReanchorStorer)
 	if !ok {
@@ -1513,7 +1274,6 @@ func (v *Verifier) AcknowledgeReanchorReview(clientID string) error {
 	if !ok {
 		return fmt.Errorf("baseline store does not support self-service re-anchor")
 	}
-	// unknown client check, same as forced re-anchor
 	if v.baselineStore.GetBaseline(clientID) == nil && !v.hasBootBaseline(clientID) {
 		return ErrUnknownClient
 	}
@@ -1524,22 +1284,15 @@ func (v *Verifier) AcknowledgeReanchorReview(clientID string) error {
 // when the target client has no baseline.
 var ErrUnknownClient = errors.New("unknown client")
 
-// reports whether the store pins a boot baseline for the client;
-// stores without boot-PCR support report false
 func (v *Verifier) hasBootBaseline(clientID string) bool {
 	br, ok := v.baselineStore.(BootBaselineReader)
 	return ok && br.GetBootBaseline(clientID) != nil
 }
 
-// ForceReanchor drops all stored baseline state for a client
-// (PCR14 baseline, PCR0/1/7 boot baseline, re-anchor bookkeeping)
-// so the next attestation re-establishes trust per the active TOFU/policy configuration.
-// This is the deliberate operator re-baseline for platform changes the self-service
-// re-anchor refuses (or that profile is not enabled for).
-// Host keeps attesting with its enrolled identity.
+// ForceReanchor clears the client's baseline, so its next attestation pins
+// afresh under the active policy.
 func (v *Verifier) ForceReanchor(clientID string) error {
-	// in-memory store keeps the PCR14 and boot baselines in separate maps,
-	// so existence must consult both
+	// the in-memory store keeps the boot baseline apart
 	if v.baselineStore.GetBaseline(clientID) == nil && !v.hasBootBaseline(clientID) {
 		return ErrUnknownClient
 	}
@@ -1550,12 +1303,8 @@ func (v *Verifier) ForceReanchor(clientID string) error {
 	return nil
 }
 
-// DeleteClient removes all verifier-side trust state for a client.
-// AIK trust anchor is the certificate presented per attestation,
-// so the baseline is the state that pins the device.
-// Deleted client re-establishes trust from scratch on its next attestation.
-// Revocations and hardware bans are keyed separately and intentionally
-// survive the delete, so removal cannot be used to shed either.
+// DeleteClient clears the client's baseline and its nonce store state.
+// Revocations and bans stay.
 func (v *Verifier) DeleteClient(clientID string) error {
 	if v.baselineStore.GetBaseline(clientID) == nil && !v.hasBootBaseline(clientID) {
 		return ErrUnknownClient

@@ -1,16 +1,6 @@
 // SPDX-License-Identifier: MIT
-// LOTA Verifier - Policy Ed25519 signature verification
-//
-// Verifies that YAML policy files have not been tampered with.
-// Signatures are detached: policy.yaml + policy.yaml.sig
-//
-// Compatible with signatures produced by the C agent:
-//   lota-agent --sign-policy policy.yaml --signing-key key.key
-//
-// Key format: PEM-encoded SubjectPublicKeyInfo (SPKI) with Ed25519.
-// Signature format: raw 64-byte Ed25519 signature.
-//
 // Copyright (C) 2026 Szymon Wilczek
+// LOTA Verifier - Policy Ed25519 signature verification
 
 package verify
 
@@ -23,28 +13,20 @@ import (
 	"os"
 )
 
-// Ed25519 signature size in bytes
+// PolicySigSize is the size of a raw Ed25519 signature.
 const PolicySigSize = 64
 
-// Maximum policy file size (64 KiB)
+// PolicyMaxFileSize bounds the policy file VerifyPolicyFile reads.
 const PolicyMaxFileSize = 64 * 1024
 
 var (
-	// returned when Ed25519 verification fails
 	ErrInvalidSignature = errors.New("invalid Ed25519 signature")
-
-	// returned when the PEM public key is not Ed25519 SPKI
-	ErrBadKeyFormat = errors.New("not an Ed25519 public key")
-
-	// returned when a file exceeds PolicyMaxFileSize
-	ErrFileTooLarge = errors.New("file exceeds maximum size")
-
-	// returned when the signature file is not exactly 64 bytes
-	ErrBadSigSize = errors.New("signature must be exactly 64 bytes")
+	ErrBadKeyFormat     = errors.New("not an Ed25519 public key")
+	ErrFileTooLarge     = errors.New("file exceeds maximum size")
+	ErrBadSigSize       = errors.New("signature must be exactly 64 bytes")
 )
 
-// reads a PEM-encoded Ed25519 public key (SPKI format)
-// returns the ed25519.PublicKey or an error if the file is malformed
+// LoadPolicyPublicKey reads the PEM SubjectPublicKeyInfo Ed25519 key at path.
 func LoadPolicyPublicKey(path string) (ed25519.PublicKey, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -69,9 +51,7 @@ func LoadPolicyPublicKey(path string) (ed25519.PublicKey, error) {
 	return edPub, nil
 }
 
-// checks an Ed25519 signature over raw policy data
-// sig must be exactly 64 bytes!
-// returns nil if valid, ErrInvalidSignature if not
+// VerifyPolicySignature verifies the raw Ed25519 signature sig over data.
 func VerifyPolicySignature(data, sig []byte, pubKey ed25519.PublicKey) error {
 	if len(sig) != PolicySigSize {
 		return ErrBadSigSize
@@ -84,10 +64,8 @@ func VerifyPolicySignature(data, sig []byte, pubKey ed25519.PublicKey) error {
 	return nil
 }
 
-// verifies the detached Ed25519 signature on a policy file
-// reads policyPath and policyPath+".sig", then verifies with pubKey
-//
-// returns nil if signature is valid
+// VerifyPolicyFile verifies policyPath against the detached signature in
+// policyPath+".sig", the form lota-agent --sign-policy writes.
 func VerifyPolicyFile(policyPath string, pubKey ed25519.PublicKey) error {
 	data, err := readBoundedFile(policyPath, PolicyMaxFileSize)
 	if err != nil {
@@ -103,8 +81,6 @@ func VerifyPolicyFile(policyPath string, pubKey ed25519.PublicKey) error {
 	return VerifyPolicySignature(data, sig, pubKey)
 }
 
-// reads a file up to maxSize bytes
-// returns ErrFileTooLarge if the file exceeds the limit
 func readBoundedFile(path string, maxSize int64) ([]byte, error) {
 	info, err := os.Stat(path)
 	if err != nil {
