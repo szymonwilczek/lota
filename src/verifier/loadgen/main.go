@@ -1,20 +1,6 @@
 // SPDX-License-Identifier: MIT
 // Copyright (C) 2026 Szymon Wilczek
 // LOTA Load Generator - CLI
-//
-// lota-loadgen drives synthetic agent fleet against a live verifier for scale
-// and soak testing.
-// See Documentation/performance for the methodology and the soak runbook.
-//
-//	lota-loadgen setup -dir RIG -agents N [-key-pool K]
-//	lota-loadgen run   -dir RIG -server HOST:PORT (-tls-ca FILE | -insecure)
-//	                   [-agents N] [-mode steady|storm] [-interval D]
-//	                   [-duration D] [-in-flight N] [-timeout D]
-//	                   [-out FILE] [-attest-log FILE]
-//
-// Rig directory carries the throwaway attestation CA and the AIK key pool;
-// hand ca.crt to the verifier as --aik-ca-cert and policy.yaml as --policy
-// so the verifier runs its strict production configuration against the synthetic fleet
 
 package main
 
@@ -169,9 +155,6 @@ func cmdRun(args []string) (code int) {
 			return 1
 		}
 
-		// close can surface a short write the writes themselves did not report
-		// truncated log silently drops accepted attestations,
-		// so failed close fails the run
 		defer func() {
 			if cerr := f.Close(); cerr != nil {
 				fmt.Fprintf(os.Stderr, "run: close attestation log: %v\n", cerr)
@@ -257,7 +240,8 @@ func printHuman(s *summary) {
 	}
 }
 
-// rateLine renders the verified and attempted rates, flagging unverified attempts
+// rateLine notes when the rate is no throughput ceiling,
+// because some attempts did not verify.
 func rateLine(s *summary) string {
 	line := fmt.Sprintf("%.1f/s verified (%.1f/s attempted", s.RatePerSec, s.AttemptRatePerSec)
 	if s.OK < s.Attempts {

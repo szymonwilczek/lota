@@ -1,15 +1,6 @@
 // SPDX-License-Identifier: MIT
 // Copyright (C) 2026 Szymon Wilczek
 // LOTA Load Generator - Rig policy generation
-//
-// Emits the PCR policy matching the fleet's shared measurement profile,
-// so the verifier under test runs its production configuration:
-// raw PCR 0/1/7 pins (satisfies the first-attestation boot-enrollment gate
-// without TOFU opt-outs), pinned kernel and agent hashes,
-// and the enforcement/module-sig requirements the synthetic reports advertise.
-//
-// PCR 14 is deliberately never pinned:
-// it is the boot-commitment register the verifier validates by derivation.
 
 package synth
 
@@ -22,13 +13,12 @@ import (
 	"github.com/szymonwilczek/lota/verifier/verify"
 )
 
-// PolicyName is the policy the rig ships to the verifier under test
+// PolicyName names the rig policy of a fleet with no tenant.
 const PolicyName = "lota-loadgen"
 
-// Policy returns the fleet's PCR policy.
-//
-// A tenanted fleet gets a policy that binds itself to that tenant and carries
-// the tenant in its name, so several rigs can hand one verifier a policy each.
+// Policy returns the PCR policy the fleet's reports satisfy. A fleet with a
+// tenant gets a policy bound to that tenant and named after it, so rigs of
+// different tenants can load into one verifier.
 func (f *Fleet) Policy() *verify.PCRPolicy {
 	pcr7 := f.PCR7()
 	name := PolicyName
@@ -42,9 +32,8 @@ func (f *Fleet) Policy() *verify.PCRPolicy {
 		PCRs: map[int]string{
 			0: hex.EncodeToString(f.PCRs[0][:]),
 			1: hex.EncodeToString(f.PCRs[1][:]),
-			// PCR 7 is the event log's SecureBoot measurement,
-			// not profile digest: the verifier authenticates that
-			// register against the replay, so the pin has to match it
+			// not a profile digest: the reported PCR 7 must
+			// equal the event log replay
 			7: hex.EncodeToString(pcr7[:]),
 		},
 		KernelHashes:     []string{hex.EncodeToString(f.KernelHash[:])},
@@ -54,7 +43,7 @@ func (f *Fleet) Policy() *verify.PCRPolicy {
 	}
 }
 
-// PolicyYAML renders Policy for the verifier's --policy flag
+// PolicyYAML returns Policy as YAML for the verifier's --policy flag.
 func (f *Fleet) PolicyYAML() ([]byte, error) {
 	out, err := yaml.Marshal(f.Policy())
 	if err != nil {

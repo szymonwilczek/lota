@@ -3,8 +3,7 @@
 
 package types
 
-// TPM signature algorithm identifiers (TPM2_ALG_*)
-// Used for quote signature scheme selection.
+// TPM2_ALG_* identifiers of the quote signature scheme and its hash.
 const (
 	TPMAlgRSASSA uint16 = 0x0014
 	TPMAlgRSAPSS uint16 = 0x0016

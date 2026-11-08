@@ -1,28 +1,6 @@
 // SPDX-License-Identifier: MIT
 // Copyright (C) 2026 Szymon Wilczek
 // LOTA Verifier - scoped API key file
-//
-// Monitoring API takes two keys from environment variables,
-// LOTA_ADMIN_API_KEY and LOTA_READER_API_KEY, both global-scope because
-// a variable carries a key and nothing else.
-//
-// Multi-tenant deployments need more:
-// one operator per tenant, each with their own key, role, and tenant set.
-//
-// --api-keys-file names a YAML file of key entries:
-//
-//	keys:
-//	  - key_sha256: <64 lowercase hex of sha256(key)>
-//	    role: reader | admin
-//	    tenants: ["acme", "beta"]   # or ["*"] for every tenant
-//
-// Only the SHA-256 of each key is stored, never the key itself.
-// The file is reloaded on SIGHUP; file that fails to parse or validate leaves
-// the previously loaded set in place.
-// Environment keys are the development default and are deliberately global-scope:
-// they carry no tenant list, so principal authenticated by one is scoped to every tenant.
-// Deployment that needs per-tenant scoping configures the key file, which is
-// the only way to express it.
 
 package server
 
@@ -37,8 +15,7 @@ import (
 	"github.com/szymonwilczek/lota/verifier/verify"
 )
 
-// APIKeyRole names an authorization tier.
-// Admin implies reader.
+// APIKeyRole names an authorization tier; admin implies reader.
 type APIKeyRole string
 
 const (
@@ -46,8 +23,8 @@ const (
 	RoleAdmin  APIKeyRole = "admin"
 )
 
-// Principal describes an authenticated API caller:
-// its tier and the tenants it may observe and act on.
+// Principal is an authenticated API caller: its tier and the tenants it
+// may see and act on.
 type Principal struct {
 	Role       APIKeyRole
 	AllTenants bool
@@ -71,15 +48,14 @@ func (p *Principal) AllowsTenant(tenant string) bool {
 	return ok
 }
 
-// one parsed key entry, keyed by the hash of the presented token
 type apiKeyEntry struct {
 	role       APIKeyRole
 	allTenants bool
 	tenants    map[string]struct{}
 }
 
-// APIKeySet is an immutable, validated key file.
-// Server swaps whole sets atomically on reload.
+// APIKeySet is a validated key file, never changed once loaded;
+// a reload swaps in a new set.
 type APIKeySet struct {
 	byHash map[[32]byte]apiKeyEntry
 }
@@ -108,7 +84,6 @@ func (ks *APIKeySet) Lookup(token string) (*Principal, bool) {
 	}, true
 }
 
-// on-disk shape
 type apiKeyFile struct {
 	Keys []apiKeyFileEntry `yaml:"keys"`
 }
@@ -119,9 +94,9 @@ type apiKeyFileEntry struct {
 	Tenants   []string   `yaml:"tenants"`
 }
 
-// LoadAPIKeysFile parses and validates a scoped API key file.
-// Any invalid entry fails the whole load so typo cannot silently
-// drop a key or widen a scope.
+// LoadAPIKeysFile parses and validates a scoped API key file. One invalid
+// entry, or no entry, fails the whole load, so a typo cannot drop a key or
+// widen a scope.
 func LoadAPIKeysFile(path string) (*APIKeySet, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {

@@ -1,13 +1,6 @@
 // SPDX-License-Identifier: MIT
 // Copyright (C) 2026 Szymon Wilczek
 // LOTA Verifier - TLS server
-//
-// Handles incoming attestation requests over TLS.
-// Protocol:
-//   1. Client connects via TLS
-//   2. Server sends Challenge (48 bytes)
-//   3. Client sends AttestationReport
-//   4. Server sends VerifyResult (56 bytes)
 
 package server
 
@@ -52,6 +45,8 @@ func unixTimeFromUint64(ts uint64) time.Time {
 	return time.Unix(int64(ts), 0)
 }
 
+// Server serves the attestation protocol over TLS and, given an HTTP
+// address, the monitoring API.
 type Server struct {
 	verifier  *verify.Verifier
 	auditLog  store.AuditLog
@@ -59,16 +54,14 @@ type Server struct {
 	tlsConfig *tls.Config
 	addr      string
 
-	// attestation listener still accepting; read by /health,
-	// cleared on drain or when the accept loop loses the listener
+	// cleared by Stop or when the accept loop loses the listener
 	serving       atomic.Bool
 	shutdownDrain time.Duration
 
 	shutdownCh chan struct{}
 	wg         sync.WaitGroup
-	connSem    chan struct{} // limits concurrent connections
+	connSem    chan struct{} // nil = no cap
 
-	// http monitoring api
 	httpServer     *http.Server
 	reportOnly     bool
 	httpAddr       string
@@ -77,86 +70,61 @@ type Server struct {
 	scopedKeysFile string
 	apiKeys        atomic.Pointer[APIKeySet]
 
-	// structured logging and telemetry
 	log     *slog.Logger
 	metrics *metrics.Metrics
 
-	// optional: attestation decision log
 	attestationLog store.AttestationLog
 
-	// timeouts
 	readTimeout  time.Duration
 	writeTimeout time.Duration
 }
 
+// ServerConfig configures NewServer.
 type ServerConfig struct {
-	// address to listen on (binary TLS protocol)
 	Address string
 
-	// address for HTTP monitoring API (empty = disabled)
-	HTTPAddress string
+	HTTPAddress string // empty = no monitoring API
 
-	// ReportOnly serves the monitoring API read-only off a hot standby:
-	// no attestation listener, mutating endpoints refused.
+	// ReportOnly opens no attestation listener and refuses mutating
+	// endpoints.
 	ReportOnly bool
 
-	// tls certificate and key paths
 	CertFile string
 	KeyFile  string
 
-	// optional: audit log for revocation/ban API
 	AuditLog store.AuditLog
 
-	// optional: structured logger (nil = nop)
-	Logger *slog.Logger
+	Logger *slog.Logger // nil = nop
 
-	// optional: shared metrics registry (nil = fresh)
-	Metrics *metrics.Metrics
+	Metrics *metrics.Metrics // nil = fresh
 
-	// optional: attestation decision log for HTTP API
 	AttestationLog store.AttestationLog
 
-	// admin API key for mutating endpoints (empty = admin endpoints disabled)
 	AdminAPIKey string
 
-	// reader API key for sensitive read-only endpoints (empty = public)
 	ReaderAPIKey string
 
-	// path to the scoped API key file (empty = env keys only);
-	// reloaded on SIGHUP via ReloadAPIKeys
-	ScopedKeysFile string
+	ScopedKeysFile string // empty = environment keys only
 
-	// timeouts
 	ReadTimeout  time.Duration
 	WriteTimeout time.Duration
 
-	// how long the monitoring API keeps answering after the attestation
-	// listener closes, for a load balancer to read `degraded` off /health;
-	// zero stops the API once idle
+	// ShutdownDrain is how long Stop keeps the monitoring API answering
+	// after the attestation listener closes, while /health reads degraded.
 	ShutdownDrain time.Duration
 
-	// max concurrent attestation connections.
-	// 0 (the zero value) means DefaultMaxConnections, not "unlimited":
-	// caller that forgets the field gets the bounded listener,
-	// and removing the bound takes UnlimitedConnections explicitly
+	// MaxConnections caps concurrent attestation connections; 0 means
+	// DefaultMaxConnections and a negative value removes the cap.
 	MaxConnections int
 }
 
 const (
-	// DefaultMaxConnections bounds concurrent attestation connections when
-	// the config does not choose.
-	// Every accepted connection costs TLS handshake and full report verification,
-	// so the listener is never left unbounded by omission
 	DefaultMaxConnections = 256
 
-	// UnlimitedConnections disables the cap.
-	// Only for load rigs measuring the crypto ceiling
-	// -- production listener wants a bound
 	UnlimitedConnections = -1
 )
 
-// connectionCap resolves the configured value to a semaphore size,
-// 0 meaning "no semaphore"
+// connectionCap returns the semaphore size for configured; 0 means none.
 func connectionCap(configured int) int {
 	switch {
 	case configured == 0:
@@ -168,9 +136,10 @@ func connectionCap(configured int) int {
 	}
 }
 
+// NewServer loads the TLS certificate and the scoped key file.
+// A report-only server may go without a certificate, but then refuses
+// a non-loopback monitoring API.
 func NewServer(cfg ServerConfig, verifier *verify.Verifier) (*Server, error) {
-	// load tls certificate; optional when report-only,
-	// but a non-loopback monitoring API still needs it
 	var tlsConfig *tls.Config
 	if cfg.CertFile != "" || cfg.KeyFile != "" || !cfg.ReportOnly {
 		cert, err := tls.LoadX509KeyPair(cfg.CertFile, cfg.KeyFile)
@@ -231,8 +200,10 @@ func NewServer(cfg ServerConfig, verifier *verify.Verifier) (*Server, error) {
 	return s, nil
 }
 
+// Start opens the attestation listener and, given an HTTP address,
+// the monitoring API. A report-only server opens the API alone and needs
+// the address.
 func (s *Server) Start() error {
-	// report-only: monitoring API only, no attestation listener
 	if s.reportOnly {
 		if s.httpAddr == "" {
 			return fmt.Errorf("a reporting instance serves only the monitoring API and needs an address to serve it on")
@@ -265,7 +236,8 @@ func (s *Server) Start() error {
 	return nil
 }
 
-// checks if the given address binds to loopback only
+// isLoopbackAddr reports whether addr names a loopback IP;
+// a hostname does not count.
 func isLoopbackAddr(addr string) bool {
 	host, _, err := net.SplitHostPort(addr)
 	if err != nil {
@@ -278,12 +250,9 @@ func isLoopbackAddr(addr string) bool {
 	return ip != nil && ip.IsLoopback()
 }
 
-// newMonitoringHTTPServer builds the monitoring API server with the request
-// timeouts that bound slow-client attacks.
-// ReadTimeout/WriteTimeout/IdleTimeout bound the whole exchange;
-// ReadHeaderTimeout additionally caps the header-read phase on its own so
-// Slowloris-style slow-header client cannot hold a connection up to the full
-// ReadTimeout before the body even starts.
+// newMonitoringHTTPServer builds the monitoring API server. ReadHeaderTimeout
+// caps the header read on its own, so a slow-header client cannot hold a
+// connection for the full ReadTimeout.
 func newMonitoringHTTPServer(addr string, handler http.Handler) *http.Server {
 	return &http.Server{
 		Addr:              addr,
@@ -295,7 +264,6 @@ func newMonitoringHTTPServer(addr string, handler http.Handler) *http.Server {
 	}
 }
 
-// starts the HTTP monitoring API server
 func (s *Server) startHTTP() error {
 	mux := http.NewServeMux()
 	api := NewAPIHandler(mux, s.verifier, s, s.auditLog, s.log, s.metrics, s.attestationLog, s.adminAPIKey, s.readerAPIKey)
@@ -312,11 +280,7 @@ func (s *Server) startHTTP() error {
 			ln.Close()
 			return fmt.Errorf("HTTP API on non-loopback address %s requires TLS; configure CertFile/KeyFile or use 127.0.0.1", s.httpAddr)
 		}
-		// TLS encrypts the channel but does not authenticate the caller; with
-		// no auth tier configured requireReader serves the sensitive read
-		// endpoints (clients, audit, attestations, metrics, session/validate)
-		// to anyone who can reach the socket. Refuse the bind, like TLS is
-		// refused, instead of exposing the fleet
+		// with no key requireReader serves its endpoints to anyone
 		if s.readerAPIKey == "" && s.adminAPIKey == "" && s.apiKeys.Load().Len() == 0 {
 			ln.Close()
 			return fmt.Errorf("HTTP API on non-loopback address %s requires authentication; set LOTA_READER_API_KEY (and/or LOTA_ADMIN_API_KEY), provide --api-keys-file, or bind 127.0.0.1", s.httpAddr)
@@ -355,7 +319,6 @@ func (s *Server) Stop() {
 		}
 	}
 
-	// give a load balancer polling /health time to drop this instance
 	if s.shutdownDrain > 0 {
 		s.log.Info("draining", "for", s.shutdownDrain,
 			"health", "degraded while the API answers")
@@ -364,7 +327,6 @@ func (s *Server) Stop() {
 
 	s.verifier.Close()
 
-	// graceful HTTP shutdown, last
 	if s.httpServer != nil {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
@@ -385,8 +347,7 @@ func (s *Server) acceptLoop() {
 				return
 			default:
 			}
-			// a closed listener never accepts again;
-			// stop instead of spinning, and report degraded
+			// a closed listener never accepts again
 			if errors.Is(err, net.ErrClosed) {
 				s.serving.Store(false)
 				s.log.Error("attestation listener closed; this instance serves no attestations",
@@ -399,11 +360,9 @@ func (s *Server) acceptLoop() {
 			continue
 		}
 
-		// enforce connection limit
 		if s.connSem != nil {
 			select {
 			case s.connSem <- struct{}{}:
-				// acquired slot
 			default:
 				s.log.Warn("connection limit reached, rejecting",
 					"remote_addr", conn.RemoteAddr())
@@ -418,9 +377,8 @@ func (s *Server) acceptLoop() {
 	}
 }
 
-// peerLeftBeforeProtocol reports whether err is the peer hanging up.
-// Before any data arrives that is a health check or scanner,
-// not a connection error.
+// peerLeftBeforeProtocol reports whether err is the peer hanging up,
+// which before the report is not counted as a connection error.
 func peerLeftBeforeProtocol(err error) bool {
 	return errors.Is(err, io.EOF) ||
 		errors.Is(err, syscall.ECONNRESET) ||
@@ -437,13 +395,12 @@ func (s *Server) handleConnection(conn net.Conn) {
 
 	clientAddr := conn.RemoteAddr().String()
 
-	// best-effort parse of client IP for logs only
 	clientIP, _, err := net.SplitHostPort(clientAddr)
 	if err != nil {
-		clientIP = clientAddr // fallback if no port
+		clientIP = clientAddr
 	}
 
-	// Handshake before issuing a challenge, so a silent peer leaves none pending
+	// handshake first, so a silent peer leaves no challenge pending
 	if tlsConn, ok := conn.(*tls.Conn); ok {
 		ctx, cancel := context.WithTimeout(context.Background(), s.readTimeout)
 		err := tlsConn.HandshakeContext(ctx)
@@ -462,7 +419,6 @@ func (s *Server) handleConnection(conn net.Conn) {
 		}
 	}
 
-	// IMPORTANT: challengeID must be unique per connection!
 	challengeID, err := newChallengeID()
 	if err != nil {
 		s.log.Error("failed to generate challenge id", "error", err)
@@ -498,17 +454,14 @@ func (s *Server) handleConnection(conn net.Conn) {
 
 	clog.Debug("challenge sent")
 
-	// read attestation report
 	if err := conn.SetReadDeadline(time.Now().Add(s.readTimeout)); err != nil {
 		clog.Error("failed to set read deadline", "error", err)
 		s.metrics.ConnectionErrors.Inc()
 		return
 	}
 
-	// read header to get total size
 	headerBuf := make([]byte, 32)
 	if n, err := io.ReadFull(conn, headerBuf); err != nil {
-		// nothing sent is a probe; a partial header is a protocol failure
 		if n == 0 && peerLeftBeforeProtocol(err) {
 			clog.Debug("peer left without sending a report")
 			s.verifier.DiscardChallenge(challenge, challengeID)
@@ -519,7 +472,6 @@ func (s *Server) handleConnection(conn net.Conn) {
 		return
 	}
 
-	// validate magic
 	magic := binary.LittleEndian.Uint32(headerBuf[0:4])
 	if magic != types.ReportMagic {
 		clog.Warn("invalid report magic", "magic", fmt.Sprintf("0x%08X", magic))
@@ -529,7 +481,6 @@ func (s *Server) handleConnection(conn net.Conn) {
 		return
 	}
 
-	// get total size from report header.report_size (offset 8)
 	totalSize := binary.LittleEndian.Uint32(headerBuf[8:12])
 	if totalSize < 32 || totalSize > types.MaxReportWireSize {
 		clog.Warn("invalid report size", "size", totalSize)
@@ -538,7 +489,6 @@ func (s *Server) handleConnection(conn net.Conn) {
 		return
 	}
 
-	// read rest of report
 	reportData := make([]byte, totalSize)
 	copy(reportData[:32], headerBuf)
 
@@ -565,7 +515,6 @@ func (s *Server) handleConnection(conn net.Conn) {
 	}
 }
 
-// sends the full verification result, preserving ValidUntil
 func (s *Server) sendResult(conn net.Conn, result *types.VerifyResult) {
 	if err := conn.SetWriteDeadline(time.Now().Add(s.writeTimeout)); err != nil {
 		s.log.Warn("failed to set write deadline", "error", err)
@@ -577,7 +526,6 @@ func (s *Server) sendResult(conn net.Conn, result *types.VerifyResult) {
 	}
 }
 
-// sends an error result when no full VerifyResult is available
 func (s *Server) sendErrorResult(conn net.Conn, resultCode uint32) {
 	s.sendResult(conn, &types.VerifyResult{
 		Magic:   types.ReportMagic,
@@ -586,11 +534,13 @@ func (s *Server) sendErrorResult(conn net.Conn, resultCode uint32) {
 	})
 }
 
+// HealthStatus is the attestation listener state /health reports.
 type HealthStatus struct {
 	Listening bool
 	Address   string
 }
 
+// HealthCheck reports whether the attestation listener is accepting.
 func (s *Server) HealthCheck() HealthStatus {
 	return HealthStatus{
 		Listening: s.serving.Load(),
@@ -598,15 +548,13 @@ func (s *Server) HealthCheck() HealthStatus {
 	}
 }
 
-// apiKeySet returns the currently loaded scoped key set
-// (nil when no --api-keys-file was configured).
+// apiKeySet returns the scoped key set, nil without a key file.
 func (s *Server) apiKeySet() *APIKeySet {
 	return s.apiKeys.Load()
 }
 
-// ReloadAPIKeys re-reads the scoped API key file and atomically swaps
-// the active set.
-// File that fails to load leaves the previous set in place, mirroring the CRL SIGHUP semantics.
+// ReloadAPIKeys re-reads the scoped API key file and swaps in the new set;
+// a file that fails to load leaves the previous set in place.
 func (s *Server) ReloadAPIKeys() error {
 	if s.scopedKeysFile == "" {
 		return fmt.Errorf("no API keys file configured")

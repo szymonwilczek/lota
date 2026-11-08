@@ -1,14 +1,6 @@
 // SPDX-License-Identifier: MIT
 // Copyright (C) 2026 Szymon Wilczek
 // LOTA Load Generator - Attestation report synthesis
-//
-// Serializes the exact wire layout types.ParseReport consumes
-// (the Go mirror of include/attestation.h)
-// and signs the quote so the report passes the production verification path:
-// binding nonce, PCR digest, PCR14 boot-commitment derivation (initramfs lock
-// + boot commitment over zero baseline, the shape a UEFI host that boots
-// without shim reports),
-// and the AIK certificate chain.
 
 package synth
 
@@ -26,9 +18,8 @@ import (
 	"github.com/szymonwilczek/lota/verifier/verify"
 )
 
-// narrow16/narrow32/narrow8 bound a length before narrowing it for the wire.
-// Every input is already checked against its wire maximum, so out-of-range
-// value is builder bug, not runtime condition
+// narrow16, narrow32 and narrow8 panic on a length out of range,
+// which is a builder bug.
 func narrow16(n int) uint16 {
 	if n < 0 || n > math.MaxUint16 {
 		panic(fmt.Sprintf("wire length %d out of uint16 range", n))
@@ -50,28 +41,23 @@ func narrow8(n int) byte {
 	return byte(n)
 }
 
-// ReportPCRMask selects PCR 0, 1, 7 (boot pins), 9 (the bootloader's files,
-// where the kernel image is measured) and 14 (boot commitment)
-// -- the minimum production verifier accepts with RequireBootPCRs and the
-// boot-commitment path, plus the register that makes a kernel pin evaluable.
+// ReportPCRMask selects PCR 0, 1 and 7, which the verifier requires, PCR 9,
+// where the kernel image is measured, and PCR 14, the boot commitment.
 const ReportPCRMask uint32 = 1<<0 | 1<<1 | 1<<7 | 1<<9 | 1<<14
 
-// reportFlags mirrors a healthy enforcing agent
-// FlagBootCommitmentV1 + FlagInitramfsLockV1 select the locked two-hop PCR14 derivation
+// reportFlags are those of an enforcing agent; FlagBootCommitmentV1 and
+// FlagInitramfsLockV1 select the locked PCR 14 derivation.
 const reportFlags = types.FlagTPMQuoteOK | types.FlagKernelHashOK |
 	types.FlagBPFActive | types.FlagModuleSig | types.FlagLockdown |
 	types.FlagEnforce | types.FlagBootCommitmentV1 | types.FlagInitramfsLockV1
 
-// quote ClockInfo counters
-// PCR14 derivation folds them, so the TPMS_ATTEST below carries the same values
 const (
 	quoteResetCount   uint32 = 1
 	quoteRestartCount uint32 = 0
 )
 
-// synthetic IOMMU block
-// hashed into the binding nonce, so the serialized report
-// and the binding mirror share these constants
+// the binding nonce covers the IOMMU block, so the report and the binding
+// mirror in BuildReport share these values
 const (
 	iommuVendor  uint32 = 0x8086
 	iommuFlags   uint32 = 0x07
@@ -80,9 +66,8 @@ const (
 )
 
 // secureBootVariableEvent is the UEFI_VARIABLE_DATA payload measuring the EFI
-// global SecureBoot variable as enabled.
-// Verifier takes that measurement as proof the host booted via UEFI,
-// so synthetic report has to carry it like a real one does.
+// global SecureBoot variable as enabled. The verifier reads it as the UEFI
+// boot anchor.
 func secureBootVariableEvent() []byte {
 	const name = "SecureBoot"
 
@@ -101,9 +86,8 @@ func secureBootVariableEvent() []byte {
 // measurements; the verifier reads SecureBoot only before it.
 var separatorEvent = []byte{0, 0, 0, 0}
 
-// PCR7 returns the value the fleet's event log replays into PCR 7:
-// the SecureBoot variable measurement and the separator extended over a zero
-// register
+// PCR7 returns the value the fleet's event log replays into PCR 7: the
+// SecureBoot variable measurement and the separator over a zero register.
 func (f *Fleet) PCR7() [types.HashSize]byte {
 	var pcr7 [types.HashSize]byte
 	for _, data := range [][]byte{secureBootVariableEvent(), separatorEvent} {
@@ -116,16 +100,11 @@ func (f *Fleet) PCR7() [types.HashSize]byte {
 	return pcr7
 }
 
-// KernelImagePath is the kernel the synthetic bootloader loaded,
-// written the way GRUB writes one.
+// KernelImagePath is the GRUB path the PCR 9 event names.
 const KernelImagePath = "(hd0,gpt2)/vmlinuz-6.19.4-200.fc44.x86_64"
 
-// PCR9 returns the register the synthetic bootloader leaves behind:
-// the zero baseline extended with the kernel image's digest, which is what
-// a real bootloader extends when it measures the file it is about to load.
-//
-// The fleet's KernelHash is that digest. A rig whose reports carry a kernel
-// hash no event measures would satisfy a gate no real host satisfies.
+// PCR9 returns a zero register extended with KernelHash, the digest the event
+// log's PCR 9 event carries.
 func (f *Fleet) PCR9() [types.HashSize]byte {
 	var pcr9 [types.HashSize]byte
 
@@ -136,15 +115,14 @@ func (f *Fleet) PCR9() [types.HashSize]byte {
 	return pcr9
 }
 
-// PCR14 returns the fleet's boot-commitment PCR14:
-// initramfs lock and agent boot commitment chained over zero baseline
-// (nothing measures PCR14 before userspace in the synthetic event log)
+// PCR14 returns the initramfs lock and the boot commitment over a zero
+// baseline; the event log has no PCR 14 event.
 func (f *Fleet) PCR14() [types.HashSize]byte {
 	var zeroBaseline [types.HashSize]byte
 	return verify.DeriveLockedBootCommitmentPCR14(zeroBaseline, f.AgentHash)
 }
 
-// BuildReport assembles and signs full attestation report for agent answering challengeNonce
+// BuildReport returns a's signed report answering challengeNonce.
 func (f *Fleet) BuildReport(a *Agent, challengeNonce [types.NonceSize]byte) ([]byte, error) {
 	aikPub, err := x509.MarshalPKIXPublicKey(&a.Key.PublicKey)
 	if err != nil {
@@ -160,9 +138,8 @@ func (f *Fleet) BuildReport(a *Agent, challengeNonce [types.NonceSize]byte) ([]b
 	pcrs[9] = f.PCR9()
 	pcrs[14] = f.PCR14()
 
-	// binding nonce covers hardware_id, flags, kernel/agent hash
-	// and the IOMMU block
-	// mirror struct must match the serialized bytes below field for field
+	// the binding nonce covers these fields; they must equal the bytes
+	// serialized below
 	binding := &types.AttestationReport{}
 	binding.Header.Flags = reportFlags
 	binding.TPM.HardwareID = a.HardwareID
@@ -186,7 +163,6 @@ func (f *Fleet) BuildReport(a *Agent, challengeNonce [types.NonceSize]byte) ([]b
 	buf := make([]byte, types.FixedReportSize, types.MinReportSize+len(eventLog))
 	off := 0
 
-	// header
 	binary.LittleEndian.PutUint32(buf[off:], types.ReportMagic)
 	off += 4
 	binary.LittleEndian.PutUint32(buf[off:], types.ReportVersion)
@@ -195,7 +171,6 @@ func (f *Fleet) BuildReport(a *Agent, challengeNonce [types.NonceSize]byte) ([]b
 	binary.LittleEndian.PutUint32(buf[off:], reportFlags)
 	off += 4
 
-	// TPM evidence
 	for i := range pcrs {
 		copy(buf[off:], pcrs[i][:])
 		off += types.HashSize
@@ -232,7 +207,6 @@ func (f *Fleet) BuildReport(a *Agent, challengeNonce [types.NonceSize]byte) ([]b
 	binary.LittleEndian.PutUint16(buf[off:], types.TPMAlgSHA256)
 	off += 2
 
-	// system measurement
 	copy(buf[off:], f.KernelHash[:])
 	off += types.HashSize
 	copy(buf[off:], f.AgentHash[:])
@@ -255,18 +229,15 @@ func (f *Fleet) BuildReport(a *Agent, challengeNonce [types.NonceSize]byte) ([]b
 	buf = binary.LittleEndian.AppendUint32(buf, narrow32(len(eventLog)))
 	buf = append(buf, eventLog...)
 
-	// mandatory ESRT and MOK list sections
-	// synthetic platform exposes no ESRT System Firmware entry, which is
-	// present == 0 -- the same thing real host without one reports -- and
-	// boots no shim, so it has no MOK list to send
+	// ESRT with present == 0 and an empty MOK list: no ESRT firmware
+	// entry, no shim
 	buf = append(buf, make([]byte, types.ESRTWireSize+types.MokListSizeLen)...)
 
 	binary.LittleEndian.PutUint32(buf[8:12], narrow32(len(buf)))
 	return buf, nil
 }
 
-// pcrDigest is the SHA-256 over the selected PCR values in ascending index order,
-// the digest TPM2_Quote signs
+// pcrDigest returns the SHA-256 of the masked PCR values in index order.
 func pcrDigest(pcrs *[types.PCRCount][types.HashSize]byte, mask uint32) []byte {
 	h := sha256.New()
 	for i := range types.PCRCount {
@@ -277,9 +248,8 @@ func pcrDigest(pcrs *[types.PCRCount][types.HashSize]byte, mask uint32) []byte {
 	return h.Sum(nil)
 }
 
-// buildTPMSAttest emits minimal TPMS_ATTEST(QUOTE) blob:
-// correct magic/type, the binding nonce as extraData, ClockInfo counters
-// the PCR14 derivation expects, and signed PCR selection/digest
+// buildTPMSAttest returns a minimal TPMS_ATTEST quote with nonce as extraData
+// and digest as the PCR digest. Its selection names PCR 0, 1, 7 and 14 only.
 func buildTPMSAttest(nonce, digest []byte) []byte {
 	buf := make([]byte, 0, 128)
 
@@ -298,7 +268,7 @@ func buildTPMSAttest(nonce, digest []byte) []byte {
 
 	buf = append(buf, make([]byte, 8)...) // firmwareVersion
 
-	// TPMS_QUOTE_INFO: one SHA-256 selection over ReportPCRMask
+	// TPMS_QUOTE_INFO: one SHA-256 selection
 	buf = append(buf,
 		0x00, 0x00, 0x00, 0x01, // selection count
 		0x00, 0x0b, // TPM_ALG_SHA256
@@ -317,12 +287,8 @@ var efiGlobalVariableGUID = [16]byte{
 	0xaa, 0x0d, 0x00, 0xe0, 0x98, 0x03, 0x2b, 0x8c,
 }
 
-// uefiEventLog is the synthetic firmware log: the Spec ID header, the PCR 7
-// EV_EFI_VARIABLE_DRIVER_CONFIG measurement of SecureBoot and the separator
-// after it, and the PCR 9
-// EV_IPL record naming the kernel image the bootloader loaded.
-// It carries no PCR 14 event, so the verifier reconstructs zero PCR 14 baseline
-// -- the shape of a UEFI host that boots without shim.
+// uefiEventLog returns the Spec ID header, the PCR 7 SecureBoot measurement
+// and separator, and the PCR 9 EV_IPL event naming KernelImagePath.
 func (f *Fleet) uefiEventLog() []byte {
 	payload := secureBootVariableEvent()
 	digest := sha256.Sum256(payload)
@@ -338,9 +304,7 @@ func (f *Fleet) uefiEventLog() []byte {
 	return log
 }
 
-// eventEntry encodes one crypto-agile TCG record carrying a single SHA-256
-// digest. The digest is what the replay extends the register with, which for
-// a measured file is the file's own digest.
+// eventEntry encodes one crypto-agile TCG record with a single SHA-256 digest.
 func eventEntry(pcr, eventType uint32, digest, payload []byte) []byte {
 	entry := make([]byte, 0, 64+len(payload))
 	entry = binary.LittleEndian.AppendUint32(entry, pcr)
@@ -352,7 +316,7 @@ func eventEntry(pcr, eventType uint32, digest, payload []byte) []byte {
 	return append(entry, payload...)
 }
 
-// minimalEventLog is valid TCG log holding only the Spec ID header
+// minimalEventLog returns a TCG log holding only the Spec ID header.
 func minimalEventLog() []byte {
 	specData := specIDEvent()
 
@@ -364,7 +328,7 @@ func minimalEventLog() []byte {
 	return append(header, specData...)
 }
 
-// specIDEvent encodes SHA-256-only "Spec ID Event03" block
+// specIDEvent encodes a SHA-256-only "Spec ID Event03" block.
 func specIDEvent() []byte {
 	var buf []byte
 	buf = append(buf, []byte("Spec ID Event03\x00")...)
