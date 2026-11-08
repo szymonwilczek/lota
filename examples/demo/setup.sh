@@ -8,9 +8,6 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(cd "$SCRIPT_DIR/../.." && pwd)"
-# BUILD_DIR can be overridden in the environment so the demo runs from a
-# writable build root (e.g. /var/tmp/lota-build) when the repository is
-# mounted read-only; default $LOTA_BUILD_DIR, then $ROOT_DIR/build.
 BUILD_DIR="${BUILD_DIR:-${LOTA_BUILD_DIR:-$ROOT_DIR/build}}"
 EXAMPLES_BIN="$BUILD_DIR/examples"
 
@@ -388,12 +385,8 @@ start_agent() {
 }
 
 generate_runtime_manifest() {
-	# Runtime measures every loaded object (main binary + shared
-	# libraries), so the server reproduces the expected measurement from
-	# the producer's runtime manifest, not the binary alone.
-	# The producer emits its own loaded-object set.
-	# For a localhost/http run the set is identical to the one it maps
-	# while sending heartbeats.
+	# demo_server derives the expected runtime measurement from the
+	# objects the producer lists: its binary and shared libraries.
 	if [ "$DRY_RUN" -eq 1 ]; then
 		run_or_print "$EXAMPLES_BIN/demo_anticheat" \
 			--print-runtime-objects

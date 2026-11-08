@@ -2,37 +2,17 @@
 # SPDX-License-Identifier: MIT
 # Copyright (C) 2026 Szymon Wilczek
 #
-# Anti-rollback for *versioned* sealed secrets, via a TPM NV monotonic
-# counter. Reference recipe, built on tpm2-tools (not lota-agent).
+# Revokes old sealed secrets with a TPM NV counter, using tpm2-tools only.
+# The secret is sealed under PolicyPCR AND PolicyNV(counter <= seal-time
+# value), so incrementing the counter stops every secret sealed at or below
+# the old value from unsealing, though the PCRs still match.
 #
-# Why this is a separate recipe and not a lota-agent feature:
-#
-#   LOTA sealing binds a secret to a boot/PCR *state*. That is the intended
-#   contract for the DRM / offline use case: booting the same good state
-#   must release the key every time -- "replaying" a recurring good state is
-#   correct behaviour, not a rollback attack. PCR binding already fails
-#   closed on a *different* (tampered) state.
-#
-#   A monotonic counter solves a different problem: revoking an OLD secret
-#   so it stops unsealing even though the host can still reproduce the PCR
-#   state it was sealed against (a key/version downgrade). That matters only
-#   when you version and revoke sealed secrets -- which LOTA core does not.
-#   So the mechanism lives here as an operator recipe instead of as
-#   speculative machinery in the agent. See the "Anti-rollback" section of
-#   examples/sealed-key/README.rst.
-#
-# The recipe seals a secret under a compound policy: PolicyPCR AND
-# PolicyNV(counter <= seal-time value). While the counter has not advanced,
-# the secret unseals. Incrementing the counter (bumping the "version")
-# revokes every secret sealed at or below the old value -- they fail closed.
-#
-# Needs tpm2-tools and access to a TPM (root, or TPM2TOOLS_TCTI pointed at a
-# swtpm sandbox). It defines and then cleans up its own NV index and a
-# persistent parent handle.
+# Needs tpm2-tools and a TPM (root, or TPM2TOOLS_TCTI at a swtpm).
 
 set -euo pipefail
 
-# Override these if they collide with handles already in use on the host.
+# On exit whatever is at NV_INDEX and PARENT_HANDLE is removed, even when
+# this run did not create it.
 NV_INDEX="${NV_INDEX:-0x1500016}"
 PARENT_HANDLE="${PARENT_HANDLE:-0x81000010}"
 PCR_LIST="${PCR_LIST:-sha256:0,7}"
@@ -40,8 +20,6 @@ PCR_LIST="${PCR_LIST:-sha256:0,7}"
 WORK="$(mktemp -d /tmp/lota-antiroll.XXXXXX)"
 
 cleanup() {
-	# Best-effort teardown so the recipe leaves no NV index or persistent
-	# object behind, even on failure.
 	tpm2_evictcontrol -C o -c "$PARENT_HANDLE" >/dev/null 2>&1 || true
 	tpm2_nvundefine -C o "$NV_INDEX" >/dev/null 2>&1 || true
 	rm -rf "$WORK"
@@ -66,8 +44,7 @@ tpm2_nvread -C o "$NV_INDEX" -o operand.bin 2>/dev/null
 echo "    seal-time counter: $(xxd -p operand.bin)"
 
 echo "==> Persist a storage parent and free the transient slots"
-# Persistent parent keeps the later tpm2_load from exhausting the small
-# transient-object memory some TPMs (and swtpm) expose.
+# A persistent parent leaves the transient slots free for tpm2_load.
 tpm2_createprimary -C o -g sha256 -G ecc -c prim.ctx >/dev/null
 tpm2_evictcontrol -C o -c prim.ctx "$PARENT_HANDLE" >/dev/null
 tpm2_flushcontext -t >/dev/null

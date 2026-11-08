@@ -2,16 +2,11 @@
 # SPDX-License-Identifier: MIT
 # Copyright (C) 2026 Szymon Wilczek
 #
-# Generate the trust material an operator hosts for the LOTA attestation
-# CA: the CA signing key and certificate (it signs AIK certificates), a
-# device-pseudonym secret, and a server TLS keypair. Each adopter runs
-# this once on their own infrastructure; the keys never leave it.
-#
-# It does NOT generate the TPM manufacturer EK roots -- those come from
-# your hardware vendor (Infineon/Intel/STM/...) or, for swTPM, from the
-# local swtpm CA. A single self-signed anchor is lota-attest-ca -ek-root;
-# a vendor chain needs the pinned bundle, -ek-root-bundle (see run.sh /
-# README.rst).
+# Writes into $1 (default ./ca) the attestation CA's key and certificate,
+# its device-pseudonym secret and its TLS listener key and certificate.
+# A pair whose key exists is skipped with its certificate, present or not,
+# and an existing pseudonym.key is kept. The EK manufacturer roots are not
+# made here.
 
 set -euo pipefail
 
@@ -20,9 +15,6 @@ mkdir -p "$OUT_DIR"
 cd "$OUT_DIR"
 umask 077
 
-# CA signing key + self-signed CA certificate (ECDSA P-256). The CA
-# certificate is the trust root operators load into every verifier via
-# --aik-ca-cert.
 if [ ! -f ca.key ]; then
     openssl genpkey -algorithm EC -pkeyopt ec_paramgen_curve:P-256 -out ca.key
     openssl req -x509 -new -key ca.key -days 1825 -out ca.crt \
@@ -32,25 +24,16 @@ if [ ! -f ca.key ]; then
     echo "generated CA key + cert"
 fi
 
-# Device-pseudonym secret. Keyed hash of the EK modulus uses this so the
-# same TPM maps to a stable device id that a verifier cannot reverse to
-# the EK. Keep it secret; rotating it re-pseudonymises the whole fleet.
+# The HMAC key of the device id over the EK modulus, with a named tenant
+# prefixed; a new key gives every TPM a new device id.
 if [ ! -f pseudonym.key ]; then
     openssl rand -out pseudonym.key 32
     echo "generated pseudonym key"
 fi
 
-# Server TLS keypair for the enrollment endpoint, ISSUED BY the CA above.
-#
-# The agent passes one file as --ca-cert and it serves two roles:
-# the trust anchor the CA server's TLS chain is verified against,
-# and the identity of the publisher this host answers to
-# (the SHA-256 of its SubjectPublicKeyInfo).
-# Issuing the listener from the CA is what lets an operator name the anchor
-# for both. A self-signed listener would force the identity onto the one
-# certificate in the deployment that is rotated on a schedule, and a rotation
-# with a new key would make every host of this publisher a new device:
-# a new profile, a new AIK in a new TPM persistent handle, and consent asked again.
+# Issued by ca.crt, not self-signed: the agent's --ca-cert both anchors this
+# chain and names the publisher by the SHA-256 of its SPKI, so the listener
+# can be replaced without moving any host to a new profile.
 if [ ! -f tls.key ]; then
     openssl genpkey -algorithm EC -pkeyopt ec_paramgen_curve:P-256 -out tls.key
     openssl req -new -key tls.key -out tls.csr -subj "/CN=lota-attest-ca"

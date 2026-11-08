@@ -2,18 +2,8 @@
 # SPDX-License-Identifier: MIT
 # Copyright (C) 2026 Szymon Wilczek
 #
-# Operator-facing watcher for the LOTA Wine/Proton hook.
-#
-# Polls $XDG_RUNTIME_DIR/lota-hook/lota-status at a fixed cadence and
-# prints one timestamped line per state transition: TRUSTED <->
-# UNTRUSTED <-> OFFLINE. The watcher does not interpret the rest of
-# the status payload; it only translates LOTA_OFFLINE, LOTA_ATTESTED
-# and the file's existence into a verdict the operator can read.
-#
-# The companion walk-throughs in this directory drive the
-# transitions intentionally (kill the agent, load an unauthorised
-# library, etc) and use this watcher as the single source of truth
-# for what the hook observed.
+# Polls the Wine/Proton hook's lota-status file and prints a timestamped
+# TRUSTED, UNTRUSTED or OFFLINE line whenever the verdict changes.
 
 set -euo pipefail
 
@@ -112,18 +102,6 @@ if [ -z "$STATUS_PATH" ]; then
 	done
 fi
 
-# Translate the file's existence + LOTA_ATTESTED / LOTA_OFFLINE
-# values into a canonical verdict. The status file is small and
-# rewritten atomically by the hook, so a single grep pass per field
-# is enough; no awk / sed pipeline that would race against the writer.
-#
-# Decision order:
-#   - file missing                       -> OFFLINE (hook never ran
-#                                           or token dir not mounted)
-#   - LOTA_OFFLINE=1                     -> OFFLINE (hook lost agent;
-#                                           publish_offline_status())
-#   - LOTA_ATTESTED=1                    -> TRUSTED
-#   - LOTA_ATTESTED=0                    -> UNTRUSTED
 classify() {
 	local path="$1"
 	local attested
@@ -148,8 +126,6 @@ classify() {
 	esac
 }
 
-# map verdict string to the --once exit code so the script can double
-# as a CI / shell-test liveness probe
 verdict_to_exit() {
 	case "$1" in
 	TRUSTED) return 0 ;;

@@ -2,22 +2,13 @@
 # SPDX-License-Identifier: MIT
 # Copyright (C) 2026 Szymon Wilczek
 #
-# End-to-end proof of the CI release gate, on one host, with no root.
+# Runs the CI release gate end to end without root, on a throwaway swTPM:
+# the step must get the secret from a gate that trusts this TPM's AIK, and
+# exit 6 with no file from a gate that trusts another key.
 #
-# It stands up a throwaway swTPM, runs lota-agent against it under socket
-# activation so the agent listens on a path in $TMPDIR rather than /run/lota,
-# starts the release gate on the AIK that TPM provisioned, and then runs
-# the pipeline step twice: once as a host that can attest, and once against a gate
-# that trusts a different TPM.
-#
-# The assertions are the two that matter to a buyer:
-#
-#   1. attested host gets the secret, and
-#   2. host the gate does not trust gets a non-zero exit and no file.
-#
-# Requires: swtpm, swtpm_setup, tpm2_readpublic, systemd-socket-activate,
-# and `make all examples` already run.
-# Override the binaries with BIN and the examples with EXAMPLES_BIN.
+# Needs swtpm, swtpm_setup, tpm2_readpublic, systemd-socket-activate, openssl
+# and `make all examples`. LOTA_BUILD_DIR, BIN, EXAMPLES_BIN, TPM_PORT and
+# GATE_ADDR override the defaults below.
 
 set -euo pipefail
 
@@ -45,8 +36,7 @@ for c in swtpm swtpm_setup tpm2_readpublic systemd-socket-activate; do
 	}
 done
 
-# The agent socket lives here,
-# so the directory has to stay well inside the 108-byte sockaddr_un limit.
+# /tmp, not $TMPDIR: the agent socket path has to fit in sockaddr_un.
 RUN_DIR="$(mktemp -d /tmp/lota-ci-gate.XXXXXX)"
 TPM_PORT="${TPM_PORT:-42521}"
 GATE_ADDR="${GATE_ADDR:-127.0.0.1:8500}"
@@ -77,9 +67,7 @@ SWTPM_PID=$!
 sleep 1
 
 echo "== 2/5 start lota-agent on a socket-activated path =="
-# Socket activation is what keeps this rootless:
-# systemd-socket-activate binds the listener,
-# so the agent never has to create /run/lota.
+# The activated listener keeps the agent off /run/lota.
 systemd-socket-activate -l "$RUN_DIR/lota.sock" \
 	-E LOTA_TCTI="$TCTI" \
 	-E LOTA_AIK_META_PATH="$RUN_DIR/aik_meta.dat" \
@@ -93,11 +81,9 @@ done
 [ -S "$RUN_DIR/lota.sock" ] || fail "agent socket never appeared"
 
 echo "== 3/5 export the AIK the gate will trust =="
-# Socket activation starts the agent on the first connection,
-# and the agent provisions its AIK on startup.
-# The step connects to the agent before it talks to the gate,
-# so running it against a gate that is not up yet is enough to bring the agent
-# to life.
+# The agent starts on the first connection and provisions its AIK; the
+# step connects before it reaches the gate, so a gate that is not up yet
+# is enough.
 "$step" --gate "http://$GATE_ADDR" --socket "$RUN_DIR/lota.sock" \
 	--out "$RUN_DIR/warmup" >/dev/null 2>&1 || true
 
@@ -138,9 +124,7 @@ wait "$GATE_PID" 2>/dev/null || true
 GATE_PID=""
 
 echo "== 5/5 a host the gate does not trust is refused =="
-# Same host, same agent:
-# only the key the gate trusts changes, which is what a token minted on somebody
-# else's machine looks like from here.
+# Only the key the gate trusts changes, as for a token from another TPM.
 openssl genrsa -out "$RUN_DIR/other.key" 2048 >/dev/null 2>&1
 openssl rsa -in "$RUN_DIR/other.key" -pubout -out "$RUN_DIR/other.pem" \
 	>/dev/null 2>&1
