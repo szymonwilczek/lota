@@ -1,49 +1,16 @@
 # SPDX-License-Identifier: MIT
 #
-# Drop-in override for lota-agent.service.
+# Drop-in for lota-agent.service: XDG_RUNTIME_DIR=/run/user/<uid> names the
+# uid for which the agent watches /run/user and creates <dir>/lota/lota.sock.
+# Without it, and without container_listener_uid in /etc/lota/lota.conf,
+# no container socket is served. A container_listener_uid entry overrides
+# XDG_RUNTIME_DIR and can name more than one uid.
 #
-# The agent's container-aware secondary IPC listener
-# (src/agent/main_utils.c::setup_container_listener) is created
-# under $XDG_RUNTIME_DIR/lota/lota.sock so a Steam pressure-vessel
-# container can reach it through a single PRESSURE_VESSEL_FILESYSTEMS_RW
-# bind-mount. lota-agent.service runs as root and inherits no
-# XDG_RUNTIME_DIR from a login session, so without this drop-in the
-# secondary listener is silently skipped and the only socket the
-# Wine/Proton hook can connect to is /run/lota/lota.sock, which
-# pressure-vessel does not mount into the container.
-#
-# Activate by copying to /etc/systemd/system/, replacing 1000 with
-# the operator UID, and reloading systemd:
-#
-#   uid=$(id -u)
-#   sudo install -D -m 0644 \
-#       systemd/lota-agent.service.d/10-xdg-runtime.conf.example \
-#       /etc/systemd/system/lota-agent.service.d/10-xdg-runtime.conf
-#   sudo sed -i "s/=1000/=${uid}/g" \
-#       /etc/systemd/system/lota-agent.service.d/10-xdg-runtime.conf
-#   sudo systemctl daemon-reload
-#
-# The drop-in is read when the agent starts, so it takes effect at
-# the next boot. The listener itself follows the login: the path names
-# a uid under /run/user, and the socket is laid down when logind creates
-# that directory, which is after the agent starts.
-# Do not restart the units to shorten the wait for the drop-in:
-# lota-agent.socket Triggers= the service and the service Requires=
-# the socket, so restarting either runs ExecStop=lota-agent
-# --shutdown, which spends the boot's PCR 14 commitment and stops
-# the host attesting until it reboots.
-#
-# `lota-steam-setup --install-systemd-dropin` automates the same
-# substitution + install pair for the calling user.
-#
-# Multi-user note: the drop-in is single-valued. Hosts with more
-# than one interactive operator should use the
-# `container_listener_uid` config knob in /etc/lota/lota.conf
-# instead. Each entry yields a /run/user/<uid>/lota/lota.sock
-# listener at startup, capped at LOTA_CONFIG_MAX_CONTAINER_LISTENERS.
-# `lota-steam-setup --register-uid` automates the conf-file edit for
-# the caller's $SUDO_UID; it restarts nothing either, for the same
-# reason.
+# Install it as /etc/systemd/system/lota-agent.service.d/10-xdg-runtime.conf
+# with 1000 replaced by the uid, run systemctl daemon-reload, and reboot;
+# lota-steam-setup --install-systemd-dropin writes the file for $SUDO_UID.
+# Restarting lota-agent.service or lota-agent.socket instead stops the
+# agent, which spends this boot's PCR 14 commitment.
 
 [Service]
 Environment=XDG_RUNTIME_DIR=/run/user/1000

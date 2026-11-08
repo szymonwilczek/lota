@@ -1,61 +1,12 @@
 /* SPDX-License-Identifier: MIT */
 /*
- * LOTA - initramfs PCR14 lock helper
+ * lota-pcr14-lock - extend PCR14 with SHA256(INITRAMFS_LOCK_TAG) on top of
+ * whatever it holds, and record the pre-extend value at BASELINE_PATH.
  *
- * Purpose
- *   TPM 2.0 PC Client Platform TPM Profile p3.3 keeps PCR14
- *   OS-writable from Locality 0 with no AuthValue or policy
- *   mechanism that could gate the extend. Without intervention any
- *   userspace caller with /dev/tpmrm0 access can extend PCR14
- *   between cold boot and the lota-agent self_measure() call,
- *   wedging the boot-commitment baseline.
- *
- *   This helper runs inside the initramfs, before pivot_root, before
- *   systemd-udev applies any rule. At that point only the kernel
- *   and components packaged inside the initramfs image have touched
- *   the TPM; if the boot chain itself is trusted (verified by
- *   measured boot / dm-verity) then nothing untrusted has reached
- *   /dev/tpmrm0 yet. The helper extends PCR14 with the
- *   domain-separated digest
- *
- *     SHA256("LOTA-PCR14-INITRAMFS-LOCK-v1")
- *
- *   The digest folds in no clock counter: a TPM obfuscates resetCount and
- *   restartCount per signing key. Once locked, any further extension by an
- *   untrusted userspace process produces a value the verifier cannot
- *   match, so the attestation fails closed.
- *
- * Baseline
- *   PCR14 is not pristine on every platform. On UEFI Secure Boot shim
- *   measures the MOK state (MokList, SbatLevel, MokListRT) into PCR14
- *   before the initramfs runs, so PCR14 is already non-zero.
- *   The helper therefore extends its commitment on top of whatever PCR14
- *   holds (the baseline) instead of requiring 0^32, and records that baseline
- *   at BASELINE_PATH on /run.
- *   lota-agent reads it to anchor its derivations, and the verifier
- *   independently reconstructs it from the signed event log, so forged handoff
- *   cannot move trust - it only fails closed.
- *   UEFI host that boots without shim measures nothing into PCR14, so its
- *   baseline is legitimately 0^32.
- *
- * Idempotency
- *   The helper is safe to run multiple times within a single boot session.
- *   First run records the baseline. Later runs (kexec, a late systemd-tpm2 hook)
- *   recompute SHA256(baseline || commit) from the recorded baseline and exit 0
- *   when PCR14 already matches it.
- *
- * Failure mode
- *   TPM error, unsupported TSS2 layer, failure to persist the baseline, or PCR14
- *   mutating away from the recorded baseline after the first run, all surface as
- *   non-zero exit.
- *   initrd.target only wants the wrapping unit, so the boot carries on with PCR14
- *   unlocked. lota-agent then refuses to start, so attestation fails closed.
- *
- * Cleanup model
- *   Helper records the baseline at BASELINE_PATH on the /run tmpfs and otherwise
- *   releases all TSS2/OpenSSL allocations before exit.
- *   ENV variable LOTA_INITRAMFS_LOCK_TCTI overrides the default /dev/tpmrm0 device
- *   path (used by the test harness)
+ * A re-run in the same boot exits 0 when PCR14 already holds the locked
+ * value, finishes the extend when it still holds the recorded value, and
+ * exits 11 on any other value. A host without UEFI_FIRMWARE_PATH exits 13.
+ * LOTA_INITRAMFS_LOCK_TCTI replaces the /dev/tpmrm0 device path.
  *
  * Copyright (C) 2026 Szymon Wilczek
  */
@@ -80,32 +31,11 @@
 #define PCR14_HASH_ALG TPM2_ALG_SHA256
 #define HASH_SIZE 32
 
-/*
- * Baseline handoff.
- * Helper records the PCR14 value it observed before its own extend
- * (the shim MOK measurement, or 0^32 where no shim measured PCR14)
- * here, on the /run tmpfs that persists across the initramfs -> rootfs switch.
- * lota-agent reads it (LOTA_PCR14_BASELINE_PATH in src/agent/tpm.h) so its
- * boot-commitment derivations anchor on the same baseline, and re-runs of this
- * helper use it for idempotency.
- */
+/* lota-agent reads it as LOTA_PCR14_BASELINE_PATH */
 #define BASELINE_DIR "/run/lota"
 #define BASELINE_PATH "/run/lota/pcr14_baseline"
 
-/*
- * UEFI firmware path.
- *
- * efivarfs exists only when the kernel booted from UEFI firmware, so its absence
- * is legacy BIOS/CSM boot. LOTA requires UEFI:
- * Verifier refuses a report whose event log proves no UEFI firmware ran,
- * and PCR 0/1/7 carry nothing on such host.
- * Refusing here leaves PCR14 unlocked, and the agent names that instead of
- * attesting a chain that can never verify.
- *
- * Deliberately duplicated rather than shared with the agent's check:
- * this helper is standalone initramfs binary that links only tss2 and OpenSSL,
- * so it pulls in nothing from the agent's translation units.
- */
+/* absent on a legacy BIOS/CSM boot */
 #define UEFI_FIRMWARE_PATH "/sys/firmware/efi"
 
 #ifndef LOTA_INITRAMFS_LOCK_NO_MAIN
@@ -121,12 +51,11 @@ static const char *device_path(void)
 int lota_initramfs_lock_commit(uint8_t out_digest[HASH_SIZE]);
 
 /*
- * lota_initramfs_lock_commit - reproduce the domain-separated digest
+ * lota_initramfs_lock_commit - SHA256(INITRAMFS_LOCK_TAG) into out_digest
  *
- * Exposed with normal C linkage so unit tests can call into the same
- * byte-for-byte derivation used by the standalone helper.
+ * Not static: tests/test_initramfs_lock.c calls it.
  *
- * Returns: 0 on success, negative errno on failure.
+ * Return: 0, -EINVAL for a NULL out_digest, -ENOMEM or -EIO.
  */
 int lota_initramfs_lock_commit(uint8_t out_digest[HASH_SIZE])
 {
@@ -147,14 +76,7 @@ int lota_initramfs_lock_commit(uint8_t out_digest[HASH_SIZE])
 }
 
 #ifndef LOTA_INITRAMFS_LOCK_NO_MAIN
-/*
- * extend_over - SHA256(base || commit), the PCR14 value after extending
- * commit on top of base.
- * base is the pre-extend PCR14 content: the shim MOK measurement,
- * or 0^32 on UEFI host whose boot chain never touched PCR14.
- * PCR14 is not pristine behind shim, so the lock cannot assume zero base;
- * it folds whatever the firmware left into the chain.
- */
+/* extend_over - SHA256(base || commit), PCR14 after extending commit on base */
 static int extend_over(const uint8_t base[HASH_SIZE],
 		       const uint8_t commit[HASH_SIZE], uint8_t out[HASH_SIZE])
 {
@@ -170,10 +92,10 @@ static int extend_over(const uint8_t base[HASH_SIZE],
 }
 
 /*
- * read_saved_baseline - load a baseline this helper persisted earlier in
- * the same boot session.
- * Returns 1 and fills out on success, 0 when no file exists yet
- * (the normal first-run case), negative errno on error.
+ * read_saved_baseline - load BASELINE_PATH into out
+ *
+ * Return: 1 when read, 0 when the file is missing or short, negative errno
+ * otherwise.
  */
 static int read_saved_baseline(uint8_t out[HASH_SIZE])
 {
@@ -195,10 +117,10 @@ static int read_saved_baseline(uint8_t out[HASH_SIZE])
 }
 
 /*
- * write_baseline - persist the observed pre-extend PCR14 for lota-agent
- * and for idempotent re-runs of this helper.
- * Written before the extend so crash between write and extend still lets
- * the agent attribute PCR14.
+ * write_baseline - store base at BASELINE_PATH
+ *
+ * Called before the extend, so a re-run can finish an extend that did not
+ * land.
  */
 static int write_baseline(const uint8_t base[HASH_SIZE])
 {
@@ -366,11 +288,6 @@ int main(int argc, char **argv)
 	int exit_code = 0;
 
 	if (have_saved) {
-		/*
-		 * Helper already recorded a baseline this boot session.
-		 * Re-entry (kexec, a late systemd-tpm2 hook):
-		 * act idempotently against the recorded baseline
-		 */
 		uint8_t locked[HASH_SIZE];
 		crc = extend_over(saved, commit, locked);
 		if (crc < 0) {
@@ -382,8 +299,7 @@ int main(int argc, char **argv)
 			fprintf(stderr,
 				"lota-pcr14-lock: PCR14 already locked, skipping extend\n");
 		} else if (memcmp(current, saved, HASH_SIZE) == 0) {
-			/* baseline persisted but the extend did not land
-			 * (crash between write and extend): finish it */
+			/* recorded, but the extend did not land */
 			crc = extend_pcr14(esys, commit);
 			if (crc < 0) {
 				fprintf(stderr,
@@ -394,24 +310,12 @@ int main(int argc, char **argv)
 					"lota-pcr14-lock: PCR14 locked over recorded baseline\n");
 			}
 		} else {
-			/*
-			 * PCR14 is neither the recorded baseline nor our locked value:
-			 * non-LOTA writer touched it after recorded the baseline this boot.
-			 * Fail loud; the verifier rejects the resulting quote regardless.
-			 */
 			fprintf(stderr,
 				"lota-pcr14-lock: PCR14 mutated after the baseline was "
 				"recorded this boot; refusing to extend\n");
 			exit_code = 11;
 		}
 	} else {
-		/*
-		 * First run this boot.
-		 * Whatever PCR14 holds now is the pre-LOTA baseline:
-		 * the shim MOK measurement, or 0^32 where no shim ran.
-		 * Persist it for lota-agent and for idempotent re-runs, then extend
-		 * the lock commitment on top.
-		 */
 		crc = write_baseline(current);
 		if (crc < 0) {
 			fprintf(stderr,
