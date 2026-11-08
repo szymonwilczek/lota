@@ -1,11 +1,8 @@
 /* SPDX-License-Identifier: MIT */
-/* Copyright (C) 2026 Szymon Wilczek */
 /*
- * ESRT System Firmware version read (see esrt.h).
+ * LOTA Agent - ESRT System Firmware entry.
  *
- * Walks the ESRT entries directory, picks the System Firmware entry
- * (fw_type == 1), and records its version, lowest-supported version and
- * fw_class GUID. Values feed the verifier's firmware anti-rollback check.
+ * Copyright (C) 2026 Szymon Wilczek
  */
 
 #include <ctype.h>
@@ -20,13 +17,8 @@
 
 #define ESRT_DEFAULT_BASE "/sys/firmware/efi/esrt/entries"
 
-/* ESRT fw_type values (UEFI spec) */
 #define ESRT_FW_TYPE_SYSTEM 1
 
-/*
- * Read a single unsigned integer from a sysfs file.
- * Returns 0 on success.
- */
 static int read_sysfs_u32(const char *dir, const char *name, uint32_t *out)
 {
 	char path[512];
@@ -44,25 +36,12 @@ static int read_sysfs_u32(const char *dir, const char *name, uint32_t *out)
 		return -EINVAL;
 	}
 	fclose(f);
-	/*
-	 * these values feed the verifier's firmware anti-rollback comparison.
-	 * value past UINT32_MAX would silently truncate;
-	 * reject it so the entry is skipped (fail closed) instead of
-	 * comparing a wrapped number
-	 */
 	if (val > UINT32_MAX)
 		return -ERANGE;
 	*out = (uint32_t)val;
 	return 0;
 }
 
-/*
- * Parse a textual GUID ("xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx") into 16 raw
- * bytes, hyphens skipped.
- * Layout is opaque -- it only has to be stable between agent and verifier for
- * identity comparison.
- * Returns 0 on success.
- */
 static int parse_guid(const char *dir, uint8_t out[16])
 {
 	char path[512];
@@ -89,19 +68,13 @@ static int parse_guid(const char *dir, uint8_t out[16])
 			p++;
 			continue;
 		}
-		/*
-		 * byte is two hex chars
-		 * Require both before advancing by two, so a dangling final nibble
-		 * (p[1] is the NUL terminator) is rejected here instead of stepping
-		 * the cursor past the buffer on the next iteration
-		 */
 		if (!isxdigit((unsigned char)p[0]) ||
 		    !isxdigit((unsigned char)p[1]))
 			return -EINVAL;
 		if (sscanf(p, "%2x", &byte) != 1)
 			return -EINVAL;
 		out[n++] = (uint8_t)byte;
-		p += 2; /* one GUID byte = two hex chars */
+		p += 2;
 	}
 	return n == 16 ? 0 : -EINVAL;
 }
@@ -119,7 +92,7 @@ int esrt_read_system_firmware_path(const char *base, struct lota_esrt *out)
 
 	d = opendir(base);
 	if (!d)
-		return 0; /* no ESRT on this platform -> present = 0 */
+		return 0;
 
 	while (!found && (de = readdir(d)) != NULL) {
 		char dir[512];
@@ -138,7 +111,6 @@ int esrt_read_system_firmware_path(const char *base, struct lota_esrt *out)
 			continue;
 		if (read_sysfs_u32(dir, "fw_version", &fw_version) != 0)
 			continue;
-		/* lowest_supported_fw_version is best-effort */
 		(void)read_sysfs_u32(dir, "lowest_supported_fw_version",
 				     &lowest);
 

@@ -14,13 +14,8 @@
 #include "kernel_image.h"
 #include "tcg_log.h"
 
-/* PCR 9 is where a bootloader records the files it read */
 #define PCR_BOOT_FILES 9u
 
-/*
- * Match the last path element against the verifier's kernel prefixes.
- * GRUB writes paths like (hd0,gpt2)/vmlinuz-6.19.4.
- */
 bool kernel_image_path_names_kernel(const char *path)
 {
 	static const char *const prefixes[] = { "vmlinuz", "kernel",
@@ -42,10 +37,6 @@ bool kernel_image_path_names_kernel(const char *path)
 	return false;
 }
 
-/*
- * EV_IPL data is the path the bootloader read, NUL-terminated or not.
- * A path too long for out is refused.
- */
 static bool ipl_path(const uint8_t *data, size_t size, char *out,
 		     size_t out_size)
 {
@@ -88,10 +79,6 @@ int kernel_image_from_event_log(const uint8_t *log, size_t log_size,
 		if (!kernel_image_path_names_kernel(path))
 			continue;
 
-		/*
-		 * Kernel without a SHA-256 digest yields -ENOMSG only
-		 * when no record with one is found
-		 */
 		if (!sha256) {
 			missing_sha256 = true;
 			continue;
@@ -101,11 +88,6 @@ int kernel_image_from_event_log(const uint8_t *log, size_t log_size,
 			if (strcmp(found.path, path) == 0 &&
 			    memcmp(found.digest, sha256, LOTA_HASH_SIZE) == 0)
 				continue;
-			/*
-			 * Two kernels and the log does not say which ran.
-			 * Every command line can be checked, but the digest
-			 * names what booted, so there is none to return.
-			 */
 			return -EEXIST;
 		}
 

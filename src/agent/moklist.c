@@ -2,9 +2,6 @@
 /*
  * LOTA - MOK list reader
  *
- * shim mirrors the MOK list it measured into PCR 14 to MokListRT. Verifier
- * compares the data with that measurement, so the bytes go out as they are.
- *
  * Copyright (C) 2026 Szymon Wilczek
  */
 
@@ -22,7 +19,6 @@
 /* efivarfs prefixes a variable with its attributes */
 #define EFI_VAR_ATTR_SIZE 4
 
-/* Returns: bytes read, short only at end of file, or negative errno */
 static ssize_t read_full(int fd, uint8_t *buf, size_t size)
 {
 	size_t got = 0;

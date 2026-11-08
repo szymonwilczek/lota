@@ -81,7 +81,6 @@ int bench_parse_stat(const char *buf, struct bench_proc *p)
 	return 0;
 }
 
-/* "Key:<blank>N[ kB]" lines; @key carries its colon */
 static int line_value(const char *buf, const char *key, uint64_t *out)
 {
 	size_t klen = strlen(key);

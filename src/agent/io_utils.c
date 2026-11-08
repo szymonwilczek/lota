@@ -53,8 +53,6 @@ int lota_read_full(int fd, void *buf, size_t len)
 
 int lota_copy_xattr(const char *from, const char *to, const char *name)
 {
-	/* SELinux context is well under this;
-	 * a value that does not fit is not one this carries */
 	char value[512];
 	ssize_t got;
 
@@ -63,8 +61,6 @@ int lota_copy_xattr(const char *from, const char *to, const char *name)
 
 	got = getxattr(from, name, value, sizeof(value));
 	if (got < 0) {
-		/* nothing to carry is the common case and not a failure:
-		 * a first write has no file to take the attribute from */
 		if (errno == ENODATA || errno == ENOTSUP)
 			return 0;
 		return -errno;
@@ -89,10 +85,6 @@ int lota_read_file_bounded(const char *path, void *buf, size_t max,
 
 	fd = open(path, O_RDONLY | O_CLOEXEC);
 	if (fd < 0) {
-		/* missing file is not an error: the caller treats a zero
-		 * length as "absent" so an unenrolled host still builds a
-		 * report (which the verifier then rejects under require-cert)
-		 */
 		if (errno == ENOENT)
 			return 0;
 		return -errno;
@@ -107,8 +99,6 @@ int lota_read_file_bounded(const char *path, void *buf, size_t max,
 		close(fd);
 		return -EMSGSIZE;
 	}
-	/* nothing to hand back is what every caller reads as absent,
-	 * and it is not the "larger than the bound" -EMSGSIZE reports */
 	if (st.st_size <= 0) {
 		close(fd);
 		return 0;

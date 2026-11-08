@@ -37,11 +37,6 @@ int kernel_measurement_select(kernel_pcr_reader read, void *ctx,
 		if (read(ctx, candidates[i], digest) != 0)
 			continue;
 
-		/*
-		 * An unextended register reads as zeros. Reported as the kernel
-		 * measurement, zeros make every host on the same boot path look
-		 * identical, and an allow-list built from them admits all of them.
-		 */
 		if (digest_is_all_zero(digest))
 			continue;
 

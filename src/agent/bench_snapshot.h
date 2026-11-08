@@ -56,16 +56,19 @@ int bench_timeout_ms(const struct bench_state *st, uint64_t now_ns);
 /* True once per interval; moves the schedule past @now_ns */
 bool bench_due(struct bench_state *st, uint64_t now_ns);
 
-/*
- * Sample the daemon and replace the file. @bpf is NULL when nothing
- * is loaded, @prot when the protected set could not be read. Returns 0
- * or the write's error.
+/**
+ * bench_write() - Sample the daemon and replace the file.
+ * @st: the state.
+ * @now_ns: CLOCK_MONOTONIC now.
+ * @bpf: the BPF sample, NULL when nothing is loaded.
+ * @prot: the protected sum, NULL when the set could not be read.
+ *
+ * Return: what bench_commit() returns.
  */
 int bench_write(struct bench_state *st, uint64_t now_ns,
 		const struct bench_bpf *bpf,
 		const struct bench_protected_sum *prot);
 
-/* Remove a snapshot an earlier run left behind */
 void bench_remove(void);
 
 /*

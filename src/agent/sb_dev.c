@@ -13,15 +13,8 @@
 #include "../../include/lota_devt.h"
 #include "sb_dev.h"
 
-/* mountinfo lines carry two paths, so one path's worth of slack is not enough */
 #define SB_DEV_LINE_MAX 8192
 
-/*
- * A mountinfo record starts with "<mount id> <parent id> <major>:<minor> ",
- * and the fields after it are the only ones that can be long.
- * A line that does not fit is still read to its end, so the remainder is never
- * taken for a record of its own.
- */
 static int parse_mountinfo_line(const char *line, unsigned long long *out_id,
 				unsigned long long *out_dev)
 {
@@ -57,6 +50,7 @@ int sb_dev_from_mountinfo(const char *mountinfo_path, unsigned long long mnt_id,
 		unsigned long long dev = 0;
 		int truncated = strchr(line, '\n') == NULL;
 
+		/* the fields parsed come first; drop the rest of a long line */
 		if (truncated) {
 			int c;
 
@@ -86,11 +80,7 @@ int sb_dev_from_fd(int fd, unsigned long long *out_dev)
 	if (fd < 0 || !out_dev)
 		return -EINVAL;
 
-	/*
-	 * STATX_MNT_ID, not STATX_MNT_ID_UNIQUE: mountinfo lists the old 32-bit
-	 * mount id, and asking for the unique one gets a number that appears
-	 * nowhere in it.
-	 */
+	/* mountinfo lists the id STATX_MNT_ID returns */
 	if (statx(fd, "", AT_EMPTY_PATH, STATX_MNT_ID, &stx) != 0)
 		return -errno;
 

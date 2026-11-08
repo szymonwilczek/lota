@@ -53,9 +53,16 @@ struct bench_protected_sum {
 void bench_protected_begin(struct bench_protected *bp,
 			   struct bench_protected_sum *sum);
 
-/*
- * Fold one process in. A process first seen adds nothing to the interval
- * counters, so a title protected mid-run is not charged its past.
+/**
+ * bench_protected_add() - Fold one process into the sum.
+ * @bp: the tracked set.
+ * @sum: the sum.
+ * @pid: the process.
+ * @s: its counters.
+ * @has_pss: @s carries a rollup.
+ *
+ * A process first seen adds nothing to the interval counters, so a title
+ * protected mid-run is not charged its past.
  */
 void bench_protected_add(struct bench_protected *bp,
 			 struct bench_protected_sum *sum, uint32_t pid,
@@ -63,9 +70,16 @@ void bench_protected_add(struct bench_protected *bp,
 
 void bench_protected_end(struct bench_protected *bp);
 
-/*
- * Read each of @pids from /proc and fold it in. A PID whose start time
- * differs from the entry's is another process and is skipped.
+/**
+ * bench_protected_sample() - Read the protected set from /proc into the sum.
+ * @bp: the tracked set.
+ * @pids: the protected entries.
+ * @n: how many.
+ * @rollup: also read smaps_rollup.
+ * @sum: the sum.
+ *
+ * A PID whose start time differs from the entry's is another process and is
+ * skipped.
  */
 void bench_protected_sample(struct bench_protected *bp,
 			    const struct bench_pid *pids, size_t n, bool rollup,

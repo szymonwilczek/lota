@@ -1,7 +1,7 @@
 /* SPDX-License-Identifier: MIT */
 /* Copyright (C) 2026 Szymon Wilczek */
 /*
- * LOTA Agent - Parsing utilities (internal)
+ * LOTA Agent - integer parsers.
  */
 
 #ifndef LOTA_AGENT_PARSE_UTILS_H
@@ -12,10 +12,7 @@
 #include <stdint.h>
 #include <stdlib.h>
 
-/*
- * Safe integer parser.
- * Returns 0 on success, -1 on error (overflow, empty, trailing garbage).
- */
+/* Return: 0, or -1 for NULL, no digits, overflow or trailing characters */
 static inline int safe_parse_long(const char *s, long *out)
 {
 	char *end;
@@ -33,12 +30,7 @@ static inline int safe_parse_long(const char *s, long *out)
 	return 0;
 }
 
-/*
- * Safe unsigned long parser with an explicit base.
- *
- * Returns 0 on success, -1 on error (overflow, empty, trailing garbage,
- * invalid base, or negative sign).
- */
+/* As safe_parse_long(); -1 also for a base strtoul() rejects or a minus sign */
 static inline int safe_parse_ulong_base(const char *s, int base,
 					unsigned long *out)
 {
@@ -66,10 +58,7 @@ static inline int safe_parse_ulong_base(const char *s, int base,
 	return 0;
 }
 
-/*
- * Safe uint32 decimal parser independent from host long width.
- * Returns 0 on success, -1 on error.
- */
+/* As safe_parse_ulong_base() in base 10; -1 also above UINT32_MAX */
 static inline int safe_parse_u32_dec(const char *s, uint32_t *out)
 {
 	unsigned long v;

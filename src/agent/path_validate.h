@@ -49,11 +49,7 @@ static inline bool lota_str_has_control(const char *s)
 	return false;
 }
 
-/*
- * Copy in into out, folding every control characterto a single space,
- * and truncating to out_size - 1 bytes.
- * out is always NUL-terminated when out_size > 0
- */
+/* Copy @in, control characters as spaces, cut to @out_size - 1 bytes */
 static inline void lota_str_sanitize(const char *in, char *out, size_t out_size)
 {
 	size_t i = 0;

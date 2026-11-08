@@ -2,8 +2,7 @@
 /*
  * The snapshot file of --bench.
  *
- * The agent runs as root and the file is read by an unprivileged tool, so the
- * file is an output channel only: one fixed path, replaced whole by rename,
+ * Written as root for an unprivileged reader: replaced whole by rename,
  * never read back, and no descriptor kept between writes.
  *
  * Copyright (C) 2026 Szymon Wilczek
@@ -37,11 +36,12 @@ void bench_reset(struct bench_writer *w);
 __attribute__((format(printf, 2, 3))) void bench_append(struct bench_writer *w,
 							const char *fmt, ...);
 
-/*
- * Replace LOTA_BENCH_PATH with the buffer and reset it.
+/**
+ * bench_commit() - Replace LOTA_BENCH_PATH with the buffer and reset it.
+ * @w: the writer.
  *
- * A buffer that overflowed is not written: the snapshot is dropped,
- * w->skipped counts it, and -EMSGSIZE is returned.
+ * Return: 0, -EMSGSIZE for a buffer that overflowed, dropped and counted in
+ * @w->skipped, or another negative errno.
  */
 int bench_commit(struct bench_writer *w);
 
