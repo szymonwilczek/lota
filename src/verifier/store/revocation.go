@@ -1,19 +1,6 @@
 // SPDX-License-Identifier: MIT
 // Copyright (C) 2026 Szymon Wilczek
-// LOTA Verifier - AIK Revocation Management
-//
-// Manages client AIK revocations. Revoked client is permanently rejected
-// from attestation until explicitly unrevoked by an administrator.
-//
-// Revocation check happens BEFORE nonce consumption in the
-// verification pipeline. This prevents wasting nonces on known-bad clients
-// and avoids any crypto operations for revoked identities.
-//
-// Revocation reasons follow a fixed taxonomy for consistent audit trails:
-//   - cheating:         detected cheating via game server or manual review
-//   - compromised:      AIK key material suspected compromised
-//   - hardware_change:  legitimate hardware change requiring re-enrollment
-//   - admin:            administrative action (catch-all)
+// LOTA Verifier - AIK revocation
 
 package store
 
@@ -22,7 +9,7 @@ import (
 	"time"
 )
 
-// categorizes why a client was revoked
+// RevocationReason is why a client was revoked or a hardware ID banned.
 type RevocationReason string
 
 const (
@@ -32,7 +19,7 @@ const (
 	RevocationAdmin          RevocationReason = "admin"
 )
 
-// lists all accepted reason values
+// ValidRevocationReasons lists every accepted reason.
 var ValidRevocationReasons = []RevocationReason{
 	RevocationCheating,
 	RevocationCompromised,
@@ -40,7 +27,7 @@ var ValidRevocationReasons = []RevocationReason{
 	RevocationAdmin,
 }
 
-// checks whether a string is an accepted revocation reason
+// IsValidReason reports whether reason is in ValidRevocationReasons.
 func IsValidReason(reason string) bool {
 	for _, r := range ValidRevocationReasons {
 		if string(r) == reason {
@@ -50,43 +37,36 @@ func IsValidReason(reason string) bool {
 	return false
 }
 
-// records an active AIK revocation
-// Tenant records which tenant the client belonged to at revocation time
-// so the operator surface can scope listings and mutations.
-// Enforcement keys on the client ID, which the CA issues per tenant.
+// RevocationEntry is an active revocation. Tenant is the client's tenant
+// when it was revoked; IsRevoked looks up the client ID alone.
 type RevocationEntry struct {
 	ClientID  string
 	Tenant    string
 	Reason    RevocationReason
 	RevokedAt time.Time
-	RevokedBy string // administrator identifier
+	RevokedBy string // actor named by the request
 	Note      string // free-form justification
 }
 
-// revocation errors
 var (
 	ErrAlreadyRevoked = errors.New("client is already revoked")
 	ErrNotRevoked     = errors.New("client is not revoked")
 )
 
-// manages client AIK revocations
+// RevocationStore holds the active client revocations.
 type RevocationStore interface {
-	// marks client's AIK as revoked, recording the tenant it belongs to
-	// returns ErrAlreadyRevoked if already revoked
+	// Revoke revokes clientID under tenant. It returns ErrAlreadyRevoked
+	// if the client is revoked.
 	Revoke(tenant, clientID string, reason RevocationReason, revokedBy, note string) error
 
-	// checks if a client's AIK has been revoked
-	// returns the revocation entry and true if revoked, nil and false otherwise
+	// IsRevoked returns the client's revocation and true, or nil and false.
 	IsRevoked(clientID string) (*RevocationEntry, bool)
 
-	// unrevoke removes the revocation for a client
-	// returns ErrNotRevoked if the client is not currently revoked
-	//
-	// reason and actor are recorded in the audit trail on the same terms as
-	// Revoke's: restoring a client's access is the act a fleet most wants
-	// signed, so the row that lifts a revocation names who did it and why.
+	// Unrevoke removes the client's revocation and logs reason and actor
+	// to the audit trail. It returns ErrNotRevoked if the client is not
+	// revoked.
 	Unrevoke(clientID, reason, actor, note string) error
 
-	// returns all active revocations
+	// ListRevocations returns every active revocation.
 	ListRevocations() []RevocationEntry
 }

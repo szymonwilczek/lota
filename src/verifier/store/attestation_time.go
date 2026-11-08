@@ -16,13 +16,15 @@ import (
 // UTC, fixed width: text order is time order
 const attestationTimeLayout = "2006-01-02 15:04:05.000000000"
 
-// SQLite argument for a decision-log time, written or queried
+// attestationTimeArg renders a decision-log time for SQLite, written
+// or queried.
 func attestationTimeArg(t time.Time) any {
 	return t.UTC().Format(attestationTimeLayout)
 }
 
-// time column as the driver returned it, as UTC; unreadable is an error,
-// never the zero time, which would read as an ancient row
+// attestationTimeValue reads a time column as UTC. NULL is the zero time;
+// anything unreadable is an error, since the zero time reads as an ancient
+// row.
 func attestationTimeValue(v any) (time.Time, error) {
 	switch t := v.(type) {
 	case nil:

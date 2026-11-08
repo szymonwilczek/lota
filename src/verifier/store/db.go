@@ -1,15 +1,6 @@
 // SPDX-License-Identifier: MIT
 // Copyright (C) 2026 Szymon Wilczek
 // LOTA Verifier - SQLite database management
-//
-// Manages database connection, schema migrations, and connection tuning.
-// All SQLite-backed stores share a single database connection for consistency.
-//
-// Schema versioning ensures safe upgrades between verifier releases.
-// Each migration runs in a transaction with automatic rollback on failure.
-//
-// Pre-v1.0: Schema is consolidated into a single migration.
-// Post-v1.0: Append new migrations only. Never modify existing ones.
 
 package store
 
@@ -28,8 +19,7 @@ import (
 )
 
 // rollbackOnErr unwinds a transaction after cause aborted it.
-// It returns cause unless the rollback itself fails, in which case both are wrapped
-// so neither the original failure nor leaked transaction is lost.
+// It returns cause, wrapped with the rollback error when the rollback fails.
 func rollbackOnErr(tx *sql.Tx, cause error) error {
 	if rbErr := tx.Rollback(); rbErr != nil && !errors.Is(rbErr, sql.ErrTxDone) {
 		return fmt.Errorf("%w (rollback failed: %v)", cause, rbErr)
@@ -50,16 +40,14 @@ func (c *sqliteConnector) Driver() driver.Driver {
 	return c.driver
 }
 
-// represents a single schema version upgrade
+// migration is one schema version, applied in its own transaction.
 type migration struct {
 	version     int
 	description string
 	sql         string
 }
 
-// Schema migration history
-// One consolidated schema: verifier creates the database at its final shape.
-// runMigrations stays so post-1.0 change can append entry.
+// migrations lists the schema versions in order. A schema change appends one.
 var migrations = []migration{
 	{
 		version:     1,
@@ -179,8 +167,8 @@ var migrations = []migration{
 	},
 }
 
-// opens or creates a SQLite database at the given path
-// Applies pending schema migrations automatically.
+// OpenDB opens or creates the SQLite database at path and applies the
+// pending migrations.
 func OpenDB(path string) (*sql.DB, error) {
 	pragmas := []string{
 		"PRAGMA journal_mode=WAL",   // write-ahead logging for concurrent reads
@@ -213,7 +201,6 @@ func OpenDB(path string) (*sql.DB, error) {
 
 	db := sql.OpenDB(&sqliteConnector{driver: sqliteDriver, dsn: path})
 
-	// verify connectivity
 	if err := db.Ping(); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("database ping failed: %w", err)
@@ -231,7 +218,8 @@ func OpenDB(path string) (*sql.DB, error) {
 	return db, nil
 }
 
-// applies pending schema migrations inside transactions
+// runMigrations applies the pending migrations, then checks the schema
+// identity.
 func runMigrations(db *sql.DB) error {
 	_, err := db.Exec(`
 		CREATE TABLE IF NOT EXISTS schema_version (
@@ -385,7 +373,7 @@ func sqliteTableNames(db *sql.DB) ([]string, error) {
 	return names, rows.Err()
 }
 
-// returns the current database schema version
+// SchemaVersion returns the highest applied migration version.
 func SchemaVersion(db *sql.DB) (int, error) {
 	var version int
 	err := db.QueryRow("SELECT COALESCE(MAX(version), 0) FROM schema_version").Scan(&version)

@@ -1,12 +1,6 @@
 // SPDX-License-Identifier: MIT
 // Copyright (C) 2026 Szymon Wilczek
-// LOTA Verifier - PostgreSQL Revocation, Ban, and Audit Log Stores
-//
-// Postgres counterparts of the SQLite revocation, ban, audit and
-// attestation stores. Same semantics and the same append-only audit
-// trail; only the SQL dialect differs (numbered $N placeholders, BYTEA
-// hardware IDs).
-// All four share the Postgres connection opened by store.OpenPostgresDB()
+// LOTA Verifier - PostgreSQL revocation, ban, audit and attestation logs
 
 package store
 
@@ -19,17 +13,16 @@ import (
 	"time"
 )
 
-// PostgresRevocationStore implements RevocationStore using
-// the revocations table
+// PostgresRevocationStore implements RevocationStore on the revocations
+// table.
 type PostgresRevocationStore struct {
 	mu       sync.RWMutex
 	db       *sql.DB
 	auditLog AuditLog
 }
 
-// NewPostgresRevocationStore creates a revocation store backed by
-// the given Postgres database if auditLog is non-nil,
-// all actions are recorded in the audit trail
+// NewPostgresRevocationStore returns a revocation store on db that logs
+// each action to auditLog when it is non-nil.
 func NewPostgresRevocationStore(db *sql.DB, auditLog AuditLog) *PostgresRevocationStore {
 	return &PostgresRevocationStore{db: db, auditLog: auditLog}
 }
@@ -130,15 +123,14 @@ func (s *PostgresRevocationStore) ListRevocations() []RevocationEntry {
 	return entries
 }
 
-// PostgresBanStore implements BanStore using the hardware_bans table
+// PostgresBanStore implements BanStore on the hardware_bans table.
 type PostgresBanStore struct {
 	db       *sql.DB
 	auditLog AuditLog
 }
 
-// NewPostgresBanStore creates a ban store backed by the given Postgres
-// database if auditLog is non-nil,
-// all actions are recorded in the audit trail
+// NewPostgresBanStore returns a ban store on db that logs each action to
+// auditLog when it is non-nil.
 func NewPostgresBanStore(db *sql.DB, auditLog AuditLog) *PostgresBanStore {
 	return &PostgresBanStore{db: db, auditLog: auditLog}
 }
@@ -335,17 +327,12 @@ func (s *PostgresBanStore) CountBansE() (int, error) {
 	return total, nil
 }
 
-// PostgresAuditLog implements AuditLog using the audit_log table
-// No store-level lock:
-// every method is a single statement against the concurrency-safe *sql.DB,
-// and Log runs on operator actions and revocation events -- process-wide mutex
-// here only serializes callers for no correctness gain
+// PostgresAuditLog implements AuditLog on the audit_log table.
 type PostgresAuditLog struct {
 	db *sql.DB
 }
 
-// NewPostgresAuditLog creates an audit log backed by the given
-// Postgres database
+// NewPostgresAuditLog returns an audit log on db.
 func NewPostgresAuditLog(db *sql.DB) *PostgresAuditLog {
 	return &PostgresAuditLog{db: db}
 }
@@ -386,18 +373,15 @@ func (l *PostgresAuditLog) Query(limit int) []AuditEntry {
 	return entries
 }
 
-// PostgresAttestationLog implements AttestationLog using
-// the attestation_log table
-// No store-level lock:
-// Record is one transaction on the attestation hot path (one call per verified report),
-// so process-wide mutex here caps fleet attestation throughput at one commit latency per report
+// PostgresAttestationLog implements AttestationLog on the attestation_log
+// table.
 type PostgresAttestationLog struct {
 	db     *sql.DB
 	window time.Duration // zero records every round
 }
 
-// NewPostgresAttestationLog creates an attestation log backed by
-// the given Postgres database
+// NewPostgresAttestationLog returns an attestation log on db that collapses
+// rounds within window.
 func NewPostgresAttestationLog(db *sql.DB, window time.Duration) *PostgresAttestationLog {
 	return &PostgresAttestationLog{db: db, window: window}
 }
@@ -406,15 +390,17 @@ const pgStandingQuery = `SELECT ` + attestationStandingCols + `
 	 FROM attestation_log WHERE tenant = $1 AND client_id = $2
 	 ORDER BY id DESC LIMIT 1`
 
-// held to commit; also covers a host with no row yet
+// pgSubjectLock is held until commit and also covers a subject with no row.
 const pgSubjectLock = `SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`
 
-// client IDs are unique per tenant; NUL is not valid Postgres text
+// pgSubjectKey joins tenant and client ID with 0x1f; NUL is not valid
+// Postgres text.
 func pgSubjectKey(r *AttestationRecord) string {
 	return r.Tenant + "\x1f" + r.ClientID
 }
 
-// lock each subject once, in one order, so two batches cannot deadlock
+// pgLockSubjects locks each subject once, in sorted order, so two batches
+// cannot deadlock.
 func pgLockSubjects(x attestationExecer, entries []AttestationRecord) error {
 	keys := make([]string, 0, len(entries))
 	for i := range entries {
@@ -438,7 +424,7 @@ const pgInsertRow = `INSERT INTO attestation_log
 	  details, remote_addr, kernel_hash, last_seen, rounds)
 	 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, 1)`
 
-// extend the standing row or open a new one
+// record extends the standing row or inserts a new one.
 func (l *PostgresAttestationLog) record(x attestationExecer, entry AttestationRecord, now time.Time) error {
 	if entry.Timestamp.IsZero() {
 		entry.Timestamp = now
@@ -462,7 +448,7 @@ func (l *PostgresAttestationLog) record(x attestationExecer, entry AttestationRe
 	return err
 }
 
-// read and extend the standing row under the subject lock
+// Record records entry in its own transaction under the subject lock.
 func (l *PostgresAttestationLog) Record(entry AttestationRecord) error {
 	tx, err := l.db.Begin()
 	if err != nil {
@@ -474,7 +460,8 @@ func (l *PostgresAttestationLog) Record(entry AttestationRecord) error {
 	return tx.Commit()
 }
 
-// each round sees the ones before it, as if recorded one by one
+// RecordBatch records entries in one transaction; each round sees the ones
+// before it.
 func (l *PostgresAttestationLog) RecordBatch(entries []AttestationRecord) error {
 	if len(entries) == 0 {
 		return nil
@@ -502,7 +489,8 @@ const pgAttestationSelect = `SELECT id, timestamp, tenant, client_id, hardware_i
 	 result, duration_ms, pcr14, details, remote_addr, kernel_hash, last_seen, rounds
 	 FROM attestation_log`
 
-// zero query: the whole log, newest first
+// QueryAttestations returns matching rows, newest first. A zero query
+// returns the whole log.
 func (l *PostgresAttestationLog) QueryAttestations(q AttestationQuery) []AttestationRecord {
 	// timestamptz compares instants; the bound goes as UTC
 	where, args := attestationQueryClauses(q, func(n int) string {

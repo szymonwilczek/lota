@@ -1,8 +1,6 @@
 // SPDX-License-Identifier: MIT
 // Copyright (C) 2026 Szymon Wilczek
 // LOTA Verifier - reading the decision log by what is being asked
-//
-// Narrowed reads: what went wrong, on which host, during which window.
 
 package store
 
@@ -30,8 +28,8 @@ type AttestationQuery struct {
 	ClientID string
 }
 
-// WHERE clause and arguments for @q; shared so both SQL stores agree.
-// @timeArg renders a bound as the store writes its times.
+// attestationQueryClauses returns the WHERE clause and arguments for q,
+// for both SQL stores. timeArg renders a bound as the store writes its times.
 func attestationQueryClauses(q AttestationQuery, placeholder func(n int) string,
 	timeArg func(time.Time) any,
 ) (where string, args []any) {

@@ -2,23 +2,14 @@
 // Copyright (C) 2026 Szymon Wilczek
 // LOTA Verifier - Compiled-in schema targets
 //
-// SchemaVersion() reports the schema live database is already at;
-// functions here report the schema given verifier binary was built to reach.
-//
-// The two differ only while database predates an appended migration:
-// target is what runMigrations brings it up to on start.
-// Operator reads both to see whether starting a binary touches the schema.
-//
-// SQLite and Postgres histories are versioned independently on purpose.
-// Each backend's number counts its own entries, so there is deliberately no
-// parity requirement between them.
+// SchemaVersion reports the version a database is at; the functions here
+// report the schema this build applies. SQLite and Postgres are versioned
+// independently.
 
 package store
 
 // PgTargetSchemaVersion returns the highest Postgres schema version this
 // binary knows how to apply.
-// Database already at this version needs no migration from this instance;
-// one below it is migrated forward on start.
 func PgTargetSchemaVersion() int {
 	return maxMigrationVersion(pgMigrations)
 }
@@ -29,13 +20,14 @@ func SQLiteTargetSchemaVersion() int {
 	return maxMigrationVersion(migrations)
 }
 
-// PgSchemaFingerprint and SQLiteSchemaFingerprint return the short fingerprint
-// of the migration SQL this binary applies; it tells apart two builds of one
-// schema version.
+// PgSchemaFingerprint returns the short fingerprint of the Postgres
+// migrations this binary applies; it tells apart two builds of one schema
+// version.
 func PgSchemaFingerprint() string {
 	return shortFingerprint(schemaFingerprint(pgMigrations))
 }
 
+// SQLiteSchemaFingerprint is PgSchemaFingerprint for SQLite.
 func SQLiteSchemaFingerprint() string {
 	return shortFingerprint(schemaFingerprint(migrations))
 }

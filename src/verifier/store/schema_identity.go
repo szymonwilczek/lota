@@ -2,13 +2,9 @@
 // Copyright (C) 2026 Szymon Wilczek
 // LOTA Verifier - what identifies the schema a database holds
 //
-// The consolidated migration is rewritten in place until 1.0, so the version
-// number alone does not identify a schema. Open also checks, both derived from
-// the migration history:
-//
-//   - the fingerprint of the migration SQL, recorded in schema_version
-//   - the set of tables that SQL creates, against the tables the database
-//     holds; this covers databases written before fingerprints existed
+// Besides the version, an open checks the fingerprint of the migrations
+// recorded in schema_version and the tables they create against the tables
+// the database holds.
 
 package store
 
@@ -22,14 +18,14 @@ import (
 	"strings"
 )
 
-// refusals returned by a store open
+// Schema refusals returned by a store open.
 var (
 	ErrSchemaNewerThanBuild      = errors.New("database schema is newer than this build")
 	ErrSchemaFingerprintMismatch = errors.New("database schema was written by a different build")
 	ErrSchemaShapeMismatch       = errors.New("database schema is not the shape this build creates")
 )
 
-// matches CREATE TABLE in either dialect's migrations
+// createTable matches CREATE TABLE in either dialect's migrations.
 var createTable = regexp.MustCompile(`(?i)CREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?([A-Za-z_][A-Za-z0-9_]*)`)
 
 // schemaFingerprint hashes every migration's version, description and SQL,
@@ -88,7 +84,6 @@ func schemaShapeError(expected, actual []string) error {
 	sort.Strings(missing)
 	sort.Strings(extra)
 
-	// phrased about the database, which is what the operator acts on
 	var parts []string
 	if len(missing) > 0 {
 		parts = append(parts, "does not have "+strings.Join(missing, ", "))
@@ -100,8 +95,7 @@ func schemaShapeError(expected, actual []string) error {
 		ErrSchemaShapeMismatch, strings.Join(parts, " and it "))
 }
 
-// schemaVersionError names both versions, so the operator knows which binary
-// to run.
+// schemaVersionError reports a database version above this build's.
 func schemaVersionError(found, target int) error {
 	return fmt.Errorf("%w: the database is at schema version %d and this build knows %d; "+
 		"it was written by a newer build, so run that one or restore a backup taken at %d",

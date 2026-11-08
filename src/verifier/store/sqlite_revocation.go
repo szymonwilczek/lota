@@ -1,13 +1,6 @@
 // SPDX-License-Identifier: MIT
 // Copyright (C) 2026 Szymon Wilczek
-// LOTA Verifier - SQLite Revocation, Ban, and Audit Log Stores
-//
-// Persistent implementations of RevocationStore, BanStore, and AuditLog
-// backed by SQLite. All three share the same database connection opened
-// by store.OpenDB() and use tables created by the schema migration.
-//
-// The audit log is append-only. Every revoke/unrevoke/ban/unban action
-// is recorded with actor identity and timestamp for forensic review.
+// LOTA Verifier - SQLite revocation, ban, audit and attestation logs
 
 package store
 
@@ -18,15 +11,15 @@ import (
 	"time"
 )
 
-// implements RevocationStore using the revocations table
+// SQLiteRevocationStore implements RevocationStore on the revocations table.
 type SQLiteRevocationStore struct {
 	mu       sync.RWMutex
 	db       *sql.DB
 	auditLog AuditLog
 }
 
-// creates a revocation store backed by the given database
-// if auditLog is non-nil, all actions are recorded in the audit trail
+// NewSQLiteRevocationStore returns a revocation store on db that logs each
+// action to auditLog when it is non-nil.
 func NewSQLiteRevocationStore(db *sql.DB, auditLog AuditLog) *SQLiteRevocationStore {
 	return &SQLiteRevocationStore{db: db, auditLog: auditLog}
 }
@@ -35,7 +28,6 @@ func (s *SQLiteRevocationStore) Revoke(tenant, clientID string, reason Revocatio
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	// check if already revoked
 	var existing string
 	err := s.db.QueryRow("SELECT client_id FROM revocations WHERE client_id = ?", clientID).Scan(&existing)
 	if err == nil {
@@ -140,20 +132,19 @@ func (s *SQLiteRevocationStore) ListRevocations() []RevocationEntry {
 	return entries
 }
 
-// implements BanStore using the hardware_bans table
+// SQLiteBanStore implements BanStore on the hardware_bans table.
 type SQLiteBanStore struct {
 	db       *sql.DB
 	auditLog AuditLog
 }
 
-// creates a ban store backed by the given database
-// if auditLog is non-nil, all actions are recorded in the audit trail
+// NewSQLiteBanStore returns a ban store on db that logs each action to
+// auditLog when it is non-nil.
 func NewSQLiteBanStore(db *sql.DB, auditLog AuditLog) *SQLiteBanStore {
 	return &SQLiteBanStore{db: db, auditLog: auditLog}
 }
 
 func (s *SQLiteBanStore) BanHardware(tenant string, hardwareID [32]byte, reason RevocationReason, bannedBy, note string) error {
-	// check if already banned in this tenant
 	var existing []byte
 	err := s.db.QueryRow("SELECT hardware_id FROM hardware_bans WHERE tenant = ? AND hardware_id = ?",
 		tenant, hardwareID[:]).Scan(&existing)
@@ -343,13 +334,13 @@ func (s *SQLiteBanStore) CountBansE() (int, error) {
 	return total, nil
 }
 
-// implements AuditLog using the audit_log table
+// SQLiteAuditLog implements AuditLog on the audit_log table.
 type SQLiteAuditLog struct {
 	mu sync.Mutex
 	db *sql.DB
 }
 
-// creates an audit log backed by the given database
+// NewSQLiteAuditLog returns an audit log on db.
 func NewSQLiteAuditLog(db *sql.DB) *SQLiteAuditLog {
 	return &SQLiteAuditLog{db: db}
 }
@@ -396,29 +387,32 @@ func (l *SQLiteAuditLog) Query(limit int) []AuditEntry {
 	return entries
 }
 
-// implements AttestationLog using the attestation_log table
+// SQLiteAttestationLog implements AttestationLog on the attestation_log
+// table.
 type SQLiteAttestationLog struct {
 	mu     sync.Mutex
 	db     *sql.DB
 	window time.Duration // zero records every round
 }
 
-// creates an attestation log backed by the given database
+// NewSQLiteAttestationLog returns an attestation log on db that collapses
+// rounds within window.
 func NewSQLiteAttestationLog(db *sql.DB, window time.Duration) *SQLiteAttestationLog {
 	return &SQLiteAttestationLog{db: db, window: window}
 }
 
-// scanned in this order by attestationStanding()
+// attestationStandingCols are scanned in this order by attestationStanding.
 const attestationStandingCols = `id, timestamp, last_seen, rounds, tenant, client_id,
 	 hardware_id, result, pcr14, details, kernel_hash`
 
-// *sql.DB or *sql.Tx
+// attestationExecer is a *sql.DB or a *sql.Tx.
 type attestationExecer interface {
 	Exec(query string, args ...any) (sql.Result, error)
 	QueryRow(query string, args ...any) *sql.Row
 }
 
-// newest row of this tenant and client; id 0 when there is none
+// attestationStanding returns the newest row of the tenant and client,
+// or id 0 when there is none or it cannot be read.
 func attestationStanding(x attestationExecer, query, tenant, clientID string) (int64, AttestationRecord) {
 	var id int64
 	var r AttestationRecord
@@ -455,7 +449,7 @@ const sqliteInsertRow = `INSERT INTO attestation_log
 	  details, remote_addr, kernel_hash, last_seen, rounds)
 	 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)`
 
-// extend the standing row or open a new one
+// record extends the standing row or inserts a new one.
 func (l *SQLiteAttestationLog) record(x attestationExecer, entry AttestationRecord, now time.Time) error {
 	if entry.Timestamp.IsZero() {
 		entry.Timestamp = now
@@ -477,11 +471,11 @@ func (l *SQLiteAttestationLog) record(x attestationExecer, entry AttestationReco
 	return err
 }
 
+// Record records entry in its own transaction.
 func (l *SQLiteAttestationLog) Record(entry AttestationRecord) error {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 
-	// read and extend the standing row in one transaction
 	tx, err := l.db.Begin()
 	if err != nil {
 		return err
@@ -492,6 +486,8 @@ func (l *SQLiteAttestationLog) Record(entry AttestationRecord) error {
 	return tx.Commit()
 }
 
+// RecordBatch records entries in one transaction; each round sees the ones
+// before it.
 func (l *SQLiteAttestationLog) RecordBatch(entries []AttestationRecord) error {
 	if len(entries) == 0 {
 		return nil
@@ -505,7 +501,6 @@ func (l *SQLiteAttestationLog) RecordBatch(entries []AttestationRecord) error {
 		return err
 	}
 
-	// each round sees the ones before it, as if recorded one by one
 	now := time.Now().UTC()
 	for i := range entries {
 		if err := l.record(tx, entries[i], now); err != nil {
@@ -519,7 +514,8 @@ const sqliteAttestationSelect = `SELECT id, timestamp, tenant, client_id, hardwa
 	 result, duration_ms, pcr14, details, remote_addr, kernel_hash, last_seen, rounds
 	 FROM attestation_log`
 
-// zero query: the whole log, newest first
+// QueryAttestations returns matching rows, newest first.
+// A zero query returns the whole log.
 func (l *SQLiteAttestationLog) QueryAttestations(q AttestationQuery) []AttestationRecord {
 	l.mu.Lock()
 	defer l.mu.Unlock()
