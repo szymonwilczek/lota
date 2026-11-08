@@ -1,9 +1,6 @@
 /* SPDX-License-Identifier: MIT */
 /*
- * LOTA Agent - File integrity fingerprint helper
- *
- * Exposes a 32-byte fingerprint derived from fs-verity measurement.
- * This avoids userspace read-and-hash TOCTOU races for security paths.
+ * LOTA Agent - fs-verity fingerprint of the file behind an event.
  *
  * Copyright (C) 2026 Szymon Wilczek
  */
@@ -16,49 +13,42 @@
 
 #include "../../include/lota.h"
 
-/*
- * Hash verification context. Tracks running counters for the agent's
- * shutdown statistics log. There is no userspace content-hash cache:
- * every fingerprint comes from the kernel's fs-verity measurement, so
- * a cache layer in userspace would either be redundant (the kernel
- * already serves the digest from its own state) or unsafe (it would
- * have to bypass the kernel and re-open a TOCTOU window).
+/**
+ * struct hash_verify_ctx - Counters for the shutdown statistics log.
+ * @resolved: fingerprints resolved.
+ * @errors: resolutions that failed.
  */
 struct hash_verify_ctx {
 	uint64_t resolved;
 	uint64_t errors;
 };
 
-/*
- * Initialize hash verification context. Returns 0 on success or
- * -EINVAL when ctx is NULL.
- */
+/* Return: 0, or -EINVAL for a NULL ctx */
 int hash_verify_init(struct hash_verify_ctx *ctx);
 
 void hash_verify_cleanup(struct hash_verify_ctx *ctx);
 
-/*
- * Process a BPF ring buffer event and resolve fs-verity fingerprint.
+/**
+ * hash_verify_event() - fs-verity fingerprint of the file behind an event.
+ * @ctx: the counters.
+ * @event: the event; an exec is read through /proc/<pid>/exe, any other
+ *	through its absolute filename.
+ * @sha256_out: the first LOTA_HASH_SIZE bytes of the fs-verity digest.
  *
- * @ctx: Hash verification context
- * @event: BPF exec event (must have filename set to full path)
- * @sha256_out: Output buffer for 32-byte integrity fingerprint
- *
- * Returns:  0 on success (sha256_out filled)
- *          -ENOENT if file not found or path is relative/empty
- *          -EINVAL on bad arguments
- *          negative errno on other errors
+ * Return: 0, -EPERM for a blocked exec, -ENOENT for a filename that is not
+ * absolute, -EINVAL for a bad argument or a file that is not regular,
+ * -ENODATA without an fs-verity digest, -EPROTO for a digest length out of
+ * range, or another negative errno.
  */
 int hash_verify_event(struct hash_verify_ctx *ctx,
 		      const struct lota_exec_event *event,
 		      uint8_t sha256_out[LOTA_HASH_SIZE]);
 
-/*
- * Get verification statistics.
- *
- * @ctx: Hash verification context
- * @resolved: Output - successful fingerprint resolutions (NULL to skip)
- * @errors: Output - resolution failures (NULL to skip)
+/**
+ * hash_verify_stats() - Read the counters.
+ * @ctx: the counters.
+ * @resolved: fingerprints resolved, or NULL.
+ * @errors: resolutions that failed, or NULL.
  */
 void hash_verify_stats(const struct hash_verify_ctx *ctx, uint64_t *resolved,
 		       uint64_t *errors);

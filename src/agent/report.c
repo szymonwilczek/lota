@@ -1,13 +1,12 @@
 /* SPDX-License-Identifier: MIT */
 /*
- * LOTA - Attestation Report Serialization
- * Implements variable-length wire format for attestation reports.
+ * LOTA - Attestation report serialization.
  *
- * Wire format:
- *   [lota_attestation_report]    (fixed struct, see the static asserts below)
+ * Wire format, sizes and ESRT fields little-endian:
+ *   [lota_attestation_report]
  *   [event_log_size: uint32_t]
  *   [tpm_event_log: uint8_t * event_log_size]
- *   [lota_esrt]                  (mandatory section)
+ *   [lota_esrt]
  *   [mok_list_size: uint32_t]
  *   [mok_list: uint8_t * mok_list_size]
  *
@@ -23,14 +22,8 @@
 #include "../../include/attestation.h"
 
 /*
- * Go verifier parses this layout from hand-computed offsets
- * (src/verifier/types/report.go: FixedReportSize, MinReportSize
- * and the offset walk in ParseReport).
- * Nothing links the two languages at build time, so pin the sizes here:
- * field added, removed or reordered on either side breaks this build instead
- * of producing reports the verifier silently misreads.
- *
- * Keep these in step with the constants in report.go
+ * The verifier walks this layout by the constants in
+ * src/verifier/types/report.go; nothing else ties the two at build time.
  */
 _Static_assert(sizeof(struct lota_tpm_evidence) == 5466,
 	       "lota_tpm_evidence size changed; update types/report.go and its "
@@ -46,21 +39,18 @@ size_t calculate_report_size(uint32_t event_log_size, uint32_t mok_list_size)
 {
 	size_t size = sizeof(struct lota_attestation_report);
 
-	/* TPM event log section: size + data */
 	if (size + sizeof(uint32_t) < size)
 		return 0;
-	size += sizeof(uint32_t); /* event_log_size */
+	size += sizeof(uint32_t);
 
 	if (size + event_log_size < size)
 		return 0;
 	size += event_log_size;
 
-	/* Mandatory ESRT section (fixed size) */
 	if (size + sizeof(struct lota_esrt) < size)
 		return 0;
 	size += sizeof(struct lota_esrt);
 
-	/* Mandatory MOK list section: size + data */
 	if (size + sizeof(uint32_t) < size)
 		return 0;
 	size += sizeof(uint32_t);
@@ -81,12 +71,7 @@ ssize_t serialize_report(const struct lota_attestation_report *report,
 	size_t total;
 	size_t offset = 0;
 
-	/*
-	 * esrt is mandatory:
-	 * verifier requires the section and reads present == 0 as
-	 * "this platform exposes no ESRT System Firmware entry",
-	 * so there is no such thing as a report without it
-	 */
+	/* the verifier requires the ESRT section; present == 0 says none */
 	if (!report || !out_buf || !esrt)
 		return -EINVAL;
 
@@ -103,11 +88,9 @@ ssize_t serialize_report(const struct lota_attestation_report *report,
 	if (out_buf_size < total)
 		return -ENOSPC;
 
-	/* fixed report struct */
 	memcpy(out_buf + offset, report, sizeof(*report));
 	offset += sizeof(*report);
 
-	/* TPM event log section */
 	{
 		uint32_t els_le = htole32(event_log_size);
 		memcpy(out_buf + offset, &els_le, sizeof(els_le));
@@ -119,7 +102,6 @@ ssize_t serialize_report(const struct lota_attestation_report *report,
 		offset += event_log_size;
 	}
 
-	/* mandatory ESRT section, little-endian fields */
 	{
 		uint32_t present_le = htole32(esrt->present);
 		uint32_t ver_le = htole32(esrt->fw_version);
@@ -136,7 +118,6 @@ ssize_t serialize_report(const struct lota_attestation_report *report,
 		offset += sizeof(esrt->fw_class);
 	}
 
-	/* mandatory MOK list section */
 	{
 		uint32_t mls_le = htole32(mok_list_size);
 

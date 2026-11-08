@@ -20,22 +20,12 @@
 #include "runtime_image_measure.h"
 #include "rt_verity_cache.h"
 
-/*
- * Digests already read from the kernel this boot.
- *
- * One instance for the daemon, which runs a single event-loop thread
- * (see agent_globals_lock())
- * It holds no secret, only public file properties.
- */
+/* fs-verity digests read this boot; unlocked, only the event loop measures */
 static struct lota_rt_verity_cache rt_digest_cache;
 
-/*
- * Content hashes, kept apart so a hit never serves one road's digest for the
- * other's. Same key; only running executables, which are unwritable, land here.
- */
+/* content hashes, kept apart so a hit never serves the other road's digest */
 static struct lota_rt_verity_cache rt_content_cache;
 
-/* installed by whoever loaded the BPF object */
 static lota_rt_content_hasher_fn rt_content_hasher;
 
 static lota_rt_pin_object_fn rt_pin_object;
@@ -78,7 +68,6 @@ static const char *rt_basename(const char *path)
 	return slash ? slash + 1 : path;
 }
 
-/* drop the kernel's " (deleted)" suffix from a mapped pathname in place */
 static void rt_strip_deleted_suffix(char *path)
 {
 	static const char suffix[] = " (deleted)";
@@ -140,15 +129,14 @@ int lota_rt_parse_maps_line(const char *line, struct lota_rt_map_entry *out)
 	if (strlen(perms) != 4)
 		return -EINVAL;
 
-	/* only file-backed executable mappings are measured */
 	if (perms[2] != 'x' || ino == 0)
 		return 0;
 
 	p = line + pos;
 	if (*p == '\0' || *p == '\n')
-		return 0; /* anonymous executable mapping */
+		return 0;
 	if (*p == '[')
-		return 0; /* special region: [vdso], [stack], ... */
+		return 0;
 
 	if (strlen(p) >= sizeof(path))
 		return -ENAMETOOLONG;
@@ -237,19 +225,11 @@ int lota_rt_mapping_identity_ok(const struct lota_rt_map_entry *enumerated,
 	if (!enumerated || !observed)
 		return 0;
 
-	/*
-	 * Both devices come from /proc/<pid>/maps, so they are the same quantity.
-	 * Taking one of them from stat() would compare a subvolume's anonymous
-	 * device against the filesystem's on any filesystem that distinguishes
-	 * them.
-	 */
 	if (observed->dev_major != enumerated->dev_major ||
 	    observed->dev_minor != enumerated->dev_minor)
 		return 0;
 	if (observed->ino != enumerated->ino)
 		return 0;
-
-	/* and the handle that was opened is that same inode */
 	if (opened_ino != enumerated->ino)
 		return 0;
 
@@ -266,10 +246,6 @@ int lota_rt_open_mapping(int dirfd, const struct lota_rt_map_entry *entry,
 	if (!entry || !st || entry->start >= entry->end)
 		return -EINVAL;
 
-	/*
-	 * Keep the untrusted maps pathname out of the file access: map_files
-	 * is keyed only by the numeric range, which holds no path separator.
-	 */
 	n = snprintf(leaf, sizeof(leaf), "%lx-%lx", entry->start, entry->end);
 	if (n < 0 || (size_t)n >= sizeof(leaf) ||
 	    !rt_map_files_leaf_is_safe(leaf))
@@ -361,9 +337,8 @@ static void rt_close_mappings(struct rt_mapping *maps, size_t n)
 }
 
 /*
- * Open everything before the one maps read that checks it, so the read costs
- * the same however many objects the process maps. A mapping that fails keeps
- * its errno for the walk to reach in order. NULL when out of memory.
+ * Open all, then check all with one maps read. A mapping that fails keeps its
+ * errno. NULL when out of memory.
  */
 static struct rt_mapping *
 rt_open_mappings(pid_t pid, const struct lota_rt_map_entry *entries, size_t n)
@@ -426,10 +401,7 @@ static int rt_read_verity(const struct rt_mapping *map,
 	} d;
 	struct lota_rt_verity_key ckey;
 
-	/*
-	 * fs-verity fixes the contents of an inode, so a digest read from this
-	 * device, inode, size and mtime has not changed.
-	 */
+	/* fs-verity fixes an inode's content, so the digest of a key holds */
 	lota_rt_verity_key_from_stat(&map->st, &ckey);
 	if (lota_rt_verity_cache_get(&rt_digest_cache, &ckey, out)) {
 		*reported_len = out->len;
@@ -499,7 +471,7 @@ void lota_rt_failure_reason(const struct lota_runtime_measure_failure *fail,
 	if (err < 0)
 		err = -err;
 
-	/* the walk answers ENODATA for an executable and keeps the cause here */
+	/* an executable answered ENODATA; its cause is kept in fail */
 	if (err == ENODATA && fail && fail->err != 0)
 		err = fail->err < 0 ? -fail->err : fail->err;
 
@@ -508,10 +480,8 @@ void lota_rt_failure_reason(const struct lota_runtime_measure_failure *fail,
 		return;
 	}
 
-	/* basename only when the mapping was never parsed */
 	object = fail->path[0] ? fail->path : fail->soname;
 
-	/* role is unknown when the mapping would not open */
 	switch (fail->role) {
 	case LOTA_RT_ROLE_EXECUTABLE:
 		snprintf(subject, sizeof(subject),
@@ -529,11 +499,6 @@ void lota_rt_failure_reason(const struct lota_runtime_measure_failure *fail,
 		break;
 	}
 
-	/*
-	 * two measurable-object cases are what integrator hits,
-	 * so both name the object and the action that fixes it;
-	 * anything else is ordinary errno against a named object.
-	 */
 	if (err == ENODATA && fail->no_file) {
 		snprintf(buf, buflen,
 			 "%s%s is memory with no file behind it, so nothing "
@@ -584,7 +549,6 @@ void lota_rt_failure_reason(const struct lota_runtime_measure_failure *fail,
 	snprintf(buf, buflen, "%s: %s", subject, strerror(err));
 }
 
-/* qsort comparator over the canonical module order */
 static int rt_module_qsort_cmp(const void *a, const void *b)
 {
 	return lota__runtime_image_module_cmp(a, b);
@@ -596,26 +560,15 @@ int lota_rt_coverage_verdict(const struct lota_runtime_measure_coverage *cov,
 	if (!cov)
 		return -EINVAL;
 
-	/* nothing measured is not a partial measurement, it is none */
 	if (cov->measured == 0)
 		return -ENODATA;
-
-	/*
-	 * Title's own code is the object its publisher controls,
-	 * so an unmeasurable executable is a packaging decision on their side,
-	 * not a property of the machine the player runs.
-	 */
 	if (!exe_measured)
 		return -ENODATA;
 
 	return 0;
 }
 
-/*
- * Object at /proc/<pid>/exe, so the measurement can tell the process's own
- * executable apart from the libraries it loaded.
- * Returns 0 and fills dev/ino, or a negative errno.
- */
+/* stat() of /proc/<pid>/exe, to tell the executable from what it mapped */
 static int rt_exe_identity(pid_t pid, dev_t *dev, ino_t *ino)
 {
 	char exe_path[64];
@@ -631,9 +584,9 @@ static int rt_exe_identity(pid_t pid, dev_t *dev, ino_t *ino)
 }
 
 /*
- * Allowlist of filesystems whose content this host serves itself.
- * One served by userspace or a peer may hand the hasher and the page fault
- * different bytes, and an untested one is not assumed safe.
+ * Only a filesystem this host serves itself may be content hashed: one served
+ * by userspace or a peer may hand the hasher and the page fault different
+ * bytes.
  */
 #define LOTA_RT_MAGIC_BTRFS 0x9123683EUL
 #define LOTA_RT_MAGIC_EXT4 0xEF53UL
@@ -685,7 +638,6 @@ enum lota_rt_identity_road lota_rt_identity_road(int role, int verity_present,
 						 unsigned long fs_magic,
 						 int write_guarded)
 {
-	/* a kernel-enforced digest wins, whatever the role */
 	if (verity_present)
 		return LOTA_RT_ROAD_VERITY;
 
@@ -708,11 +660,11 @@ struct rt_object_measure {
 	int role;
 	int is_exe;
 	int content_hashed; /* digest is a content hash, not fs-verity */
-	int road_err; /* why the content road refused, 0 if it was not open */
+	int road_err; /* why the content road refused, 0 if not tried */
 	int no_file; /* memory with no file behind it */
 };
 
-/* Kernel hash of one mapping, cached by the identity the verity read took */
+/* Kernel hash of one mapping, cached under its fstat() identity */
 static int rt_content_hash_entry(pid_t pid,
 				 const struct lota_rt_map_entry *entry,
 				 const struct lota_rt_open_identity *opened,
@@ -750,7 +702,7 @@ static int rt_content_hash_entry(pid_t pid,
 	return 0;
 }
 
-/* no pinner or no answer: unpinned, so unmeasured */
+/* no pinner or an error reads as unpinned */
 static int rt_entry_pinned(pid_t pid, const struct lota_rt_map_entry *entry,
 			   const struct lota_rt_open_identity *opened)
 {
@@ -774,8 +726,9 @@ static int rt_entry_pinned(pid_t pid, const struct lota_rt_map_entry *entry,
 }
 
 /*
- * Measure one mapping by whichever road may. Returns 0 or the verity read's
- * errno, so the caller still tells a coverage gap from a failure.
+ * Measure one mapping by whichever road may. Returns 0, the open's, the
+ * mapping check's or the verity read's errno, or -ENODATA for memory with
+ * no file.
  */
 static int rt_measure_object(pid_t pid, const struct lota_rt_map_entry *entry,
 			     const struct rt_mapping *map, dev_t exe_dev,
@@ -791,10 +744,7 @@ static int rt_measure_object(pid_t pid, const struct lota_rt_map_entry *entry,
 		ret = rt_read_verity(map, &m->digest, &m->reported_len);
 	}
 
-	/*
-	 * Both from stat(): a maps device never matches one on a filesystem
-	 * with a device per subvolume.
-	 */
+	/* both from stat(): maps reports another device per subvolume */
 	m->is_exe = m->opened.ino != 0 && m->opened.dev == exe_dev &&
 		    m->opened.ino == exe_ino;
 
@@ -808,7 +758,7 @@ static int rt_measure_object(pid_t pid, const struct lota_rt_map_entry *entry,
 	if (ret == 0)
 		return 0;
 
-	/* no road for memory with no file: a gap, not a broken read */
+	/* memory with no file has no road */
 	if (m->opened.ino != 0 &&
 	    lota_rt_object_has_no_file(m->opened.fs_magic, m->opened.nlink)) {
 		m->no_file = 1;
@@ -864,7 +814,7 @@ int lota_runtime_coverage_pid(pid_t pid,
 	if (ret != 0 || n == 0)
 		goto out;
 
-	/* same roads as the token; unknown executable: fs-verity only */
+	/* unknown executable: every opened object is a mapped one */
 	if (rt_exe_identity(pid, &exe_dev, &exe_ino) != 0) {
 		exe_dev = 0;
 		exe_ino = 0;
@@ -1042,9 +992,8 @@ int lota_runtime_measure_pid_objects(
 	qsort(mods, local_cov.measured, sizeof(*mods), rt_module_qsort_cmp);
 
 	/*
-	 * Two distinct inodes can share an soname and content digest (the same
-	 * library mounted at two paths); collapse such exact duplicates so the
-	 * strictly increasing canonical-order contract still holds
+	 * Two inodes can share soname and digest (one library at two paths):
+	 * drop the repeat so the canonical order stays strictly increasing.
 	 */
 	unique = 1;
 	for (i = 1; i < local_cov.measured; i++) {

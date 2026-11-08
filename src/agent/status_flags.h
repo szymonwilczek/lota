@@ -2,15 +2,8 @@
 /*
  * Host status bits, and where each one comes from.
  *
- * Title reads this word and decides whether to run, so bit with no producer is
- * worse than missing bit: it reads as machine that failed the check.
- * Keeping the mapping in one table, one field per bit, is what makes an unproduced
- * bit visible.
- *
- * What is deliberately absent is LOTA_STATUS_ATTESTED.
- * That is verifier's verdict, it reaches this process over SYNC_ATTEST, and host
- * that could set it from local state could call itself attested with nobody
- * having checked.
+ * LOTA_STATUS_ATTESTED is not among them: it is the verifier's verdict and
+ * arrives over SYNC_ATTEST, never from local state.
  *
  * Copyright (C) 2026 Szymon Wilczek
  */
@@ -32,15 +25,24 @@
 
 #define LOTA_STATUS_POLICY (LOTA_STATUS_ENFORCE | LOTA_STATUS_POLICY_KEYS)
 
-/* What the daemon has probed about the machine it enforces on */
+/**
+ * struct agent_boot_state - What the daemon probed about its machine.
+ * @tpm_ok: the TPM opened and answered.
+ * @iommu_ok: test_iommu() passed.
+ * @bpf_loaded: the LSM object loaded.
+ * @secure_boot: efivarfs shows SecureBoot=1.
+ * @tpm_lockout: the TPM is in dictionary-attack lockout.
+ * @kernel_appraisal: bpf_loader_kernel_appraises_exec() returned 0.
+ * @bench: started with --bench.
+ */
 struct agent_boot_state {
-	bool tpm_ok; /* the TPM opened and answered */
-	bool iommu_ok; /* DMA protection verified */
-	bool bpf_loaded; /* the LSM object loaded */
-	bool secure_boot; /* UEFI SecureBoot reports enabled */
-	bool tpm_lockout; /* the TPM is in dictionary-attack lockout */
-	bool kernel_appraisal; /* IMA appraises every exec */
-	bool bench; /* started with --bench */
+	bool tpm_ok;
+	bool iommu_ok;
+	bool bpf_loaded;
+	bool secure_boot;
+	bool tpm_lockout;
+	bool kernel_appraisal;
+	bool bench;
 };
 
 static inline uint32_t agent_status_flags(const struct agent_boot_state *st)
@@ -69,14 +71,8 @@ static inline uint32_t agent_status_flags(const struct agent_boot_state *st)
 }
 
 /*
- * Full coverage needs at least one protected process, and every object of
- * every measured process must be measurable.
- *
- * An empty round is not full coverage. A host that protects nothing has
- * measured nothing, and must not get LOTA_STATUS_IMAGE_FULLY_MEASURED.
- *
- * Both the status word and the token use this helper. The token binds
- * the flags into the quoted nonce, so the two must never disagree.
+ * Full coverage needs a protected process: a host that protects nothing has
+ * measured nothing. The status word and the token both decide it here.
  */
 static inline bool lota_coverage_is_full(size_t protected_count,
 					 bool every_object_measured)
@@ -84,13 +80,7 @@ static inline bool lota_coverage_is_full(size_t protected_count,
 	return protected_count > 0 && every_object_measured;
 }
 
-/*
- * Set or clear LOTA_STATUS_IMAGE_FULLY_MEASURED in @flags.
- *
- * Coverage belongs to the host, not to the caller, so every path that hands
- * out a status word must fold it here.
- * @fully_measured is a cached walk, not one per caller.
- */
+/* coverage is the host's, so a path that hands out the word must fold it */
 static inline uint32_t lota_status_fold_coverage(uint32_t flags,
 						 bool fully_measured)
 {
@@ -100,10 +90,7 @@ static inline uint32_t lota_status_fold_coverage(uint32_t flags,
 	return flags & ~(uint32_t)LOTA_STATUS_IMAGE_FULLY_MEASURED;
 }
 
-/*
- * Set or clear LOTA_STATUS_IMAGE_CONTENT_HASHED in @flags, under the same
- * contract as the coverage bit. Set when any object of the fold was hashed.
- */
+/* as the coverage bit; set when any object of the fold was content hashed */
 static inline uint32_t lota_status_fold_content_hash(uint32_t flags,
 						     bool content_hashed)
 {
@@ -113,7 +100,6 @@ static inline uint32_t lota_status_fold_content_hash(uint32_t flags,
 	return flags & ~(uint32_t)LOTA_STATUS_IMAGE_CONTENT_HASHED;
 }
 
-/* The policy keys the daemon holds, as status bits */
 static inline uint32_t
 lota_status_policy_keys(bool strict_mmap, bool strict_exec, bool strict_modules,
 			bool block_anon_exec, bool block_ptrace)
@@ -135,11 +121,8 @@ lota_status_policy_keys(bool strict_mmap, bool strict_exec, bool strict_modules,
 }
 
 /*
- * Set the policy bits of @flags from @mode and @keys.
- *
- * A key is only applied in enforce mode with the LSM loaded, so outside that
- * every policy bit is clear: the word says what the host refuses, not what
- * its configuration names.
+ * Outside enforce mode with the LSM loaded every policy bit is clear:
+ * the word says what the host refuses, not what its configuration names.
  */
 static inline uint32_t lota_status_fold_policy(uint32_t flags, int mode,
 					       uint32_t keys)
