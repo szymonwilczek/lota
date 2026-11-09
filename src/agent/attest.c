@@ -1439,9 +1439,8 @@ static int attest_target_round(struct attest_target *t, int skip_verify,
 			lota_err("The TPM refused to authorize a quote for "
 				 "%s. The attestation key or its stored "
 				 "authorization is not the one this publisher "
-				 "enrolled, and every retry spends a "
-				 "dictionary-attack attempt, so no round is "
-				 "attempted until this publisher is "
+				 "enrolled, so no round is attempted until "
+				 "this publisher is "
 				 "re-enrolled: lota-agent --reenroll "
 				 "--ca-cert <their anchor>.",
 				 t->label);

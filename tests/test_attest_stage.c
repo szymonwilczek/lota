@@ -117,13 +117,10 @@ static void test_tpm_codes_are_named(void)
 	CHECK(locked && strcmp(locked, strerror(LOTA_ERR_TPM_LOCKED)) != 0,
 	      "the lockout reason is not whatever strerror makes of 4097");
 
-	/*
-	 * The one that precedes a lockout matters more:
-	 * it is the warning a responder acts on before the platform locks out
-	 * at all.
-	 */
-	CHECK(authfail && strstr(authfail, "DA lockout"),
-	      "an authorization failure names its DA-counter implication");
+	/* BAD_AUTH and NV_AUTHORIZATION share the code and leave the counter */
+	CHECK(authfail && strstr(authfail, "authorization") &&
+		      !strstr(authfail, "DA"),
+	      "an authorization failure promises no DA count");
 }
 
 /*

@@ -102,9 +102,10 @@ static void selftest_quote_one_key(struct selftest_tally *tally,
 		quote_pcr_mask = (1U << 0) | (1U << 1) | (1U << LOTA_PCR_SELF);
 		printf("\nRequesting quote for PCRs 0, 1, %d...\n",
 		       LOTA_PCR_SELF);
-		printf("An authorization the TPM refuses here spends one "
-		       "dictionary-attack attempt, which the chip forgives on "
-		       "its own schedule.\n");
+		printf("An authorization the TPM refuses here for a "
+		       "DA-protected key spends one dictionary-attack "
+		       "attempt, which the chip forgives on its own "
+		       "schedule.\n");
 
 		ret = tpm_quote(&g_agent.tpm_ctx, test_nonce, quote_pcr_mask,
 				&quote_resp);

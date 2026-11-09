@@ -1191,9 +1191,9 @@ static void test_tpm_strerror_maps_lota_private(void)
 	}
 
 	const char *auth = tpm_strerror(-LOTA_ERR_TPM_AUTH_FAIL);
-	if (!auth || strstr(auth, "DA") == NULL) {
-		FAIL("AUTH_FAIL description must call out the DA-counter "
-		     "implication");
+	if (!auth || strstr(auth, "authorization") == NULL ||
+	    strstr(auth, "DA") != NULL) {
+		FAIL("AUTH_FAIL covers codes the DA counter ignores");
 		return;
 	}
 
