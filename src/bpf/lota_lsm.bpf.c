@@ -1564,12 +1564,14 @@ int BPF_PROG(lota_file_open, struct file *file, int ret)
  * LSM hook: path_truncate
  *
  * truncate(2) shortens a file by path, with no open for lota_file_open
- * to refuse.
+ * to refuse. Refuses a pinned file, and in enforce mode with strict_mmap a
+ * trusted library.
  * ===================================================================== */
 SEC("lsm/path_truncate")
 int BPF_PROG(lota_path_truncate, const struct path *path, int ret)
 {
 	struct dentry *dentry;
+	struct inode *inode;
 
 	if (ret != 0)
 		return ret;
@@ -1581,11 +1583,17 @@ int BPF_PROG(lota_path_truncate, const struct path *path, int ret)
 	if (!dentry)
 		return 0;
 
-	if (!is_inode_mapped_exec_guarded(BPF_CORE_READ(dentry, d_inode)))
-		return 0;
+	inode = BPF_CORE_READ(dentry, d_inode);
+	if (is_inode_mapped_exec_guarded(inode)) {
+		report_blocked_mapped_write(dentry);
+		return -EPERM;
+	}
 
-	report_blocked_mapped_write(dentry);
-	return -EPERM;
+	if (get_mode() == LOTA_MODE_ENFORCE &&
+	    get_config(LOTA_CFG_STRICT_MMAP) && is_trusted_inode(inode))
+		return -EPERM;
+
+	return 0;
 }
 
 /* =====================================================================
