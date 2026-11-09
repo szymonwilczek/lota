@@ -1898,6 +1898,67 @@ static void test_pcr_batch_reads_past_eight(void)
 	PASS();
 }
 
+static void test_refused_unseal_with_unmoved_pcrs_is_the_blob(void)
+{
+	uint8_t same[LOTA_HASH_SIZE];
+	uint8_t moved[LOTA_HASH_SIZE];
+	uint8_t value[LOTA_HASH_SIZE];
+	struct tpm_context ctx;
+	unsigned int len = 0;
+	EVP_MD_CTX *md;
+	int ok;
+
+	TEST("a refused unseal with the seal-time PCRs is a rejected blob");
+	make_ctx(&ctx);
+
+	/* PCRs 0, 1 and 7 of the mocked bank */
+	md = EVP_MD_CTX_new();
+	ok = md && EVP_DigestInit_ex(md, EVP_sha256(), NULL) == 1;
+	for (int i = 0; ok && i < 3; i++) {
+		memset(value, i == 2 ? 8 : i + 1, sizeof(value));
+		ok = EVP_DigestUpdate(md, value, sizeof(value)) == 1;
+	}
+	ok = ok && EVP_DigestFinal_ex(md, same, &len) == 1;
+	EVP_MD_CTX_free(md);
+	if (!ok || len != sizeof(same)) {
+		FAIL("digest");
+		return;
+	}
+	memcpy(moved, same, sizeof(moved));
+	moved[0] ^= 1;
+
+	if (tpm_test_seal_refusal_errno(&ctx, 0x83, same, TPM2_RC_INTEGRITY,
+					-EIO) != -EBADMSG) {
+		FAIL("an integrity refusal with unmoved PCRs");
+		return;
+	}
+	if (tpm_test_seal_refusal_errno(&ctx, 0x83, same, TPM2_RC_POLICY_FAIL,
+					-LOTA_ERR_TPM_POLICY_FAIL) !=
+	    -EBADMSG) {
+		FAIL("a policy refusal with unmoved PCRs");
+		return;
+	}
+	if (tpm_test_seal_refusal_errno(&ctx, 0x83, moved, TPM2_RC_POLICY_FAIL,
+					-LOTA_ERR_TPM_POLICY_FAIL) !=
+	    -LOTA_ERR_TPM_POLICY_FAIL) {
+		FAIL("moved PCRs read as a rejected blob");
+		return;
+	}
+	if (tpm_test_seal_refusal_errno(&ctx, 0x83, same,
+					TSS2_ESYS_RC_GENERAL_FAILURE,
+					-EIO) != -EIO) {
+		FAIL("a stack error read as a TPM refusal");
+		return;
+	}
+	if (tpm_test_seal_refusal_errno(&ctx, 0x83, same, TPM2_RC_LOCKOUT,
+					-LOTA_ERR_TPM_LOCKED) !=
+	    -LOTA_ERR_TPM_LOCKED) {
+		FAIL("a lockout read as a rejected blob");
+		return;
+	}
+	PASS();
+}
+
 int main(void)
 {
 	printf("\n=== AIK Rotation Tests ===\n\n");
@@ -1940,6 +2001,7 @@ int main(void)
 	test_lockout_flag_lifecycle();
 	test_lockout_survives_auth_free_success();
 	test_pcr_batch_reads_past_eight();
+	test_refused_unseal_with_unmoved_pcrs_is_the_blob();
 	test_self_hash_pin_round_trip();
 	test_tpm_strerror_maps_lota_private();
 	test_clock_state_save_load_round_trip();

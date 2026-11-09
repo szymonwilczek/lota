@@ -15,7 +15,7 @@
  *   8      4    pcr_mask     PCR selection the blob is sealed against
  *   12     1    pcr_alg      LOTA_SEAL_PCR_ALG_SHA256
  *   13     3    reserved     must be 0
- *   16     32   pcr_digest   seal-time PCR digest, unused on unseal
+ *   16     32   pcr_digest   seal-time PCR digest, read on a refused unseal
  *   48     2    pub_len      marshalled TPM2B_PUBLIC length
  *   50     2    priv_len     marshalled TPM2B_PRIVATE length
  *   52     var  pub[pub_len] || priv[priv_len]

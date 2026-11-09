@@ -1067,10 +1067,10 @@ int tpm_seal_secret(struct tpm_context *ctx, const uint8_t *secret,
  * Runs over an encrypted PolicyPCR session.
  *
  * Return: 0, -EINVAL/-EMSGSIZE on a header lota_seal_parse_header() refuses,
- * -EBADMSG on a body that does not unmarshal, -ENOSPC on a small @out_secret,
- * -LOTA_ERR_TPM_POLICY_FAIL when the policy fails, as after a PCR move, -EIO
- * when the TPM refuses the tampered or foreign object, or a negative errno /
- * LOTA_ERR_TPM_*.
+ * -EBADMSG on a body that does not unmarshal or that the TPM refuses while the
+ * PCRs still hash to the header's pcr_digest, -ENOSPC on a small @out_secret,
+ * -LOTA_ERR_TPM_POLICY_FAIL or -EIO on any other refusal of the policy or the
+ * object, or a negative errno / LOTA_ERR_TPM_*.
  */
 int tpm_unseal_secret(struct tpm_context *ctx, const uint8_t *blob,
 		      size_t blob_len, uint8_t *out_secret, size_t out_cap,
@@ -1108,9 +1108,9 @@ int tpm_seal_secret_envelope(struct tpm_context *ctx, const uint8_t *payload,
  *
  * Return: 0, -EINVAL/-EMSGSIZE on a malformed blob or bad arguments, -ENOSPC on
  * a small @out, -EBADMSG when the tag fails over the header, the sealed KEK or
- * the payload, or the KEK does not unmarshal, -LOTA_ERR_TPM_POLICY_FAIL when
- * the policy fails, as after a PCR move, -EIO when the TPM refuses the sealed
- * KEK, or a negative errno / LOTA_ERR_TPM_*.
+ * the payload, or tpm_unseal_secret() gives it for the KEK,
+ * -LOTA_ERR_TPM_POLICY_FAIL or -EIO when it gives those, or a negative errno /
+ * LOTA_ERR_TPM_*.
  */
 int tpm_unseal_secret_envelope(struct tpm_context *ctx, const uint8_t *blob,
 			       size_t blob_len, uint8_t *out, size_t out_cap,
@@ -1241,6 +1241,9 @@ typedef int (*tpm_test_prop_reader_fn)(struct tpm_context *ctx, TPM2_PT prop,
 
 int tpm_test_read_pcr14_baseline(const char *path, uint8_t out[LOTA_HASH_SIZE],
 				 int *present);
+int tpm_test_seal_refusal_errno(struct tpm_context *ctx, uint32_t pcr_mask,
+				const uint8_t *pcr_digest, uint32_t rc,
+				int err);
 
 /*
  * Pure helpers: the Name comparison behind tpm_aik_object_replaced(), and

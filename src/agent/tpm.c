@@ -4834,8 +4834,8 @@ out:
 
 /*
  * Diagnostic composite: SHA-256 over the selected PCR values in ascending
- * index order. Recorded in the blob so an operator can see which PCR state
- * a secret was sealed against. Not security-critical; the authPolicy is
+ * index order. Recorded in the blob, and compared on a refused unseal to tell
+ * a rejected blob from moved PCRs. Not security-critical; the authPolicy is
  * the binding.
  */
 static int seal_compute_pcr_digest(struct tpm_context *ctx, uint32_t pcr_mask,
@@ -4871,6 +4871,24 @@ static int seal_compute_pcr_digest(struct tpm_context *ctx, uint32_t pcr_mask,
 out:
 	EVP_MD_CTX_free(md);
 	return ret;
+}
+
+/* PCRs that still match the seal-time digest put a TPM refusal on the blob */
+static int seal_refusal_errno(struct tpm_context *ctx,
+			      const struct lota_seal_meta *meta, TSS2_RC rc,
+			      int err)
+{
+	uint8_t now[LOTA_SEAL_PCR_DIGEST_SIZE];
+
+	if (err != -EIO && err != -LOTA_ERR_TPM_POLICY_FAIL)
+		return err;
+	if (!tpm_rc_layer_is_tpm(rc))
+		return err;
+	if (seal_compute_pcr_digest(ctx, meta->pcr_mask, now) < 0)
+		return err;
+	if (memcmp(now, meta->pcr_digest, sizeof(now)) != 0)
+		return err;
+	return -EBADMSG;
 }
 
 int tpm_seal_secret(struct tpm_context *ctx, const uint8_t *secret,
@@ -5130,7 +5148,7 @@ out:
 	if (sealed != ESYS_TR_NONE)
 		Esys_FlushContext(ctx->esys_ctx, sealed);
 	seal_release_primary(ctx, primary, primary_persistent);
-	return ret;
+	return seal_refusal_errno(ctx, &meta, rc, ret);
 }
 
 int tpm_seal_secret_envelope(struct tpm_context *ctx, const uint8_t *payload,
@@ -5375,6 +5393,15 @@ int tpm_test_read_pcr14_baseline(const char *path, uint8_t out[LOTA_HASH_SIZE],
 				 int *present)
 {
 	return read_pcr14_baseline(path, out, present);
+}
+
+int tpm_test_seal_refusal_errno(struct tpm_context *ctx, uint32_t pcr_mask,
+				const uint8_t *pcr_digest, uint32_t rc, int err)
+{
+	struct lota_seal_meta meta = { .pcr_mask = pcr_mask };
+
+	memcpy(meta.pcr_digest, pcr_digest, sizeof(meta.pcr_digest));
+	return seal_refusal_errno(ctx, &meta, (TSS2_RC)rc, err);
 }
 
 int tpm_test_rc_is_stale_object_record(uint32_t rc)
