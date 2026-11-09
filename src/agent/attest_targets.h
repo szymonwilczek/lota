@@ -230,15 +230,17 @@ int attest_targets_rebuild(const struct lota_config *cfg, const char *server,
  * @port: As attest_targets_build().
  * @ca_cert: As attest_targets_build().
  * @interval_sec: As attest_targets_build().
+ * @pinned: The loop pins @server's certificate.
  * @targets: As attest_targets_rebuild().
  * @max: Capacity of @targets.
  * @count: Length of @targets.
  *
- * Return: as attest_targets_rebuild(), or a negative errno with @targets
- * untouched when the file does not load.
+ * Return: as attest_targets_rebuild(), -ENOTUNIQ when @pinned and the file
+ * configures profiles, or a negative errno with @targets untouched when the
+ * file does not load.
  */
 int attest_targets_reload(const char *config_path, const char *server, int port,
-			  const char *ca_cert, int interval_sec,
+			  const char *ca_cert, int interval_sec, bool pinned,
 			  struct attest_target *targets, size_t max,
 			  size_t *count);
 

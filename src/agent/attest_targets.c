@@ -223,7 +223,7 @@ out:
 }
 
 int attest_targets_reload(const char *config_path, const char *server, int port,
-			  const char *ca_cert, int interval_sec,
+			  const char *ca_cert, int interval_sec, bool pinned,
 			  struct attest_target *targets, size_t max,
 			  size_t *count)
 {
@@ -238,6 +238,8 @@ int attest_targets_reload(const char *config_path, const char *server, int port,
 		return -ENOMEM;
 
 	ret = config_load(fresh, config_path);
+	if (ret == 0 && pinned && fresh->profile_count > 0)
+		ret = -ENOTUNIQ;
 	if (ret == 0)
 		ret = attest_targets_rebuild(fresh, server, port, ca_cert,
 					     interval_sec, targets, max, count);

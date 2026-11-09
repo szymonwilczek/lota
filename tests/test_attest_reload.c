@@ -140,7 +140,7 @@ int main(void)
 		return 1;
 	}
 
-	rc = attest_targets_reload(conf, NULL, 0, NULL, 300, targets,
+	rc = attest_targets_reload(conf, NULL, 0, NULL, 300, false, targets,
 				   LOTA_CONFIG_MAX_PROFILES, &count);
 	CHECK(rc == 0 && count == 1, "the configured publisher is a target");
 
@@ -170,7 +170,7 @@ int main(void)
 		return 1;
 	}
 
-	rc = attest_targets_reload(conf, NULL, 0, NULL, 300, targets,
+	rc = attest_targets_reload(conf, NULL, 0, NULL, 300, false, targets,
 				   LOTA_CONFIG_MAX_PROFILES, &count);
 	CHECK(rc == 0 && count == 2,
 	      "a publisher added while the loop runs becomes a target");
@@ -213,15 +213,37 @@ int main(void)
 	if (write_file(conf, "[profile \"broken\"]\n") == 0) {
 		size_t before = count;
 
-		rc = attest_targets_reload(conf, NULL, 0, NULL, 300, targets,
-					   LOTA_CONFIG_MAX_PROFILES, &count);
+		rc = attest_targets_reload(conf, NULL, 0, NULL, 300, false,
+					   targets, LOTA_CONFIG_MAX_PROFILES,
+					   &count);
 		CHECK(rc < 0, "a config that does not load is refused");
 		CHECK(count == before &&
 			      strcmp(targets[1].server, "v.beta.example") == 0,
 		      "and the list the loop is using is left alone");
 	}
 
-	CHECK(attest_targets_reload(NULL, NULL, 0, NULL, 300, targets,
+	/* a pin given for one verifier must not reach a profile's verifier */
+	snprintf(text, sizeof(text),
+		 "[profile \"gamma\"]\n"
+		 "ca = ca.gamma.example\n"
+		 "ca_cert = %s\n"
+		 "verifier = v.gamma.example\n"
+		 "verifier_port = 8593\n",
+		 anchor_a);
+	if (write_file(conf, text) == 0) {
+		size_t before = count;
+
+		rc = attest_targets_reload(conf, "v.single.example", 8443, NULL,
+					   300, true, targets,
+					   LOTA_CONFIG_MAX_PROFILES, &count);
+		CHECK(rc == -ENOTUNIQ,
+		      "a pinned loop refuses a file that configures profiles");
+		CHECK(count == before &&
+			      strcmp(targets[1].server, "v.beta.example") == 0,
+		      "and keeps reporting to the list it had");
+	}
+
+	CHECK(attest_targets_reload(NULL, NULL, 0, NULL, 300, false, targets,
 				    LOTA_CONFIG_MAX_PROFILES, &count) < 0,
 	      "a reload without a config path is refused");
 

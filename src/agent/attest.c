@@ -1643,10 +1643,19 @@ static int continuous_attest_run(const struct lota_config *cfg,
 			size_t before = target_count;
 			int rret = attest_targets_reload(
 				config_path, server, port, ca_cert,
-				interval_sec, targets, LOTA_CONFIG_MAX_PROFILES,
-				&target_count);
+				interval_sec, pin_sha256 != NULL, targets,
+				LOTA_CONFIG_MAX_PROFILES, &target_count);
 
-			if (rret < 0) {
+			if (rret == -ENOTUNIQ) {
+				lota_warn("Reload refused: the certificate pin "
+					  "this loop started with is for %s, "
+					  "but the file now configures "
+					  "publisher profiles; still reporting "
+					  "to the %zu target(s) it started "
+					  "with. Restart without the pin to "
+					  "report to the profiles",
+					  server ? server : "(none)", before);
+			} else if (rret < 0) {
 				lota_warn("Reload failed (%s); still reporting "
 					  "to the %zu publisher(s) this loop "
 					  "started with",
