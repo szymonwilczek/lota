@@ -57,6 +57,9 @@ struct attest_target {
 	 */
 	bool key_mismatch_announced;
 
+	/* Said its stored certificate cannot be read; reading it clears it */
+	bool cert_unreadable_announced;
+
 	/* Said the TPM refused its quote's auth; a good round clears it */
 	bool auth_fail_announced;
 
@@ -148,6 +151,26 @@ const char *attest_target_renew_at(const struct attest_target *t, char *buf,
  * endpoint; re-armed when they agree or that endpoint changes.
  */
 bool attest_target_should_announce_renew_move(struct attest_target *t);
+
+/* what to log about the key at a target's handle against its certificate */
+enum attest_cert_say {
+	ATTEST_CERT_SILENT = 0, /* nothing new to log */
+	ATTEST_CERT_MISMATCH,
+	ATTEST_CERT_MATCHES_AGAIN,
+	ATTEST_CERT_UNREADABLE,
+};
+
+/**
+ * attest_target_note_cert_match() - Record what the certificate check said.
+ * @t: The target; records the answer.
+ * @match_rc: aik_cert_matches_key() for the key at @t's handle.
+ *
+ * A certificate that cannot be read confirms nothing and clears no mismatch.
+ *
+ * Return: what to log.
+ */
+enum attest_cert_say attest_target_note_cert_match(struct attest_target *t,
+						   int match_rc);
 
 /**
  * attest_targets_take_wakeups() - Make due now every target a title asked for.

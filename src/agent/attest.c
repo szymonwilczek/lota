@@ -954,32 +954,37 @@ static int target_key_matches_cert(struct attest_target *t)
 	}
 
 	ret = aik_cert_matches_key(t->paths.aik_cert, spki, spki_len);
-	if (ret == -EKEYREJECTED) {
-		if (!t->key_mismatch_announced) {
-			lota_err("The attestation key at this publisher's "
-				 "handle is not the key their certificate was "
-				 "issued over, so every quote would be refused "
-				 "by the TPM and each refusal spends a "
-				 "dictionary-attack attempt. No round is "
-				 "attempted until they issue a certificate for "
-				 "the key that is here now: lota-agent "
-				 "--reenroll --ca-cert <their anchor>. "
-				 "Publisher: %s",
-				 t->label);
-			t->key_mismatch_announced = true;
-		}
-		return ret;
-	}
-
-	if (t->key_mismatch_announced) {
+	switch (attest_target_note_cert_match(t, ret)) {
+	case ATTEST_CERT_MISMATCH:
+		lota_err("The attestation key at this publisher's "
+			 "handle is not the key their certificate was "
+			 "issued over, so every quote would be refused "
+			 "by the TPM and each refusal spends a "
+			 "dictionary-attack attempt. No round is "
+			 "attempted until they issue a certificate for "
+			 "the key that is here now: lota-agent "
+			 "--reenroll --ca-cert <their anchor>. "
+			 "Publisher: %s",
+			 t->label);
+		break;
+	case ATTEST_CERT_MATCHES_AGAIN:
 		lota_info("The attestation key at this publisher's handle "
 			  "matches their certificate again; rounds resume. "
 			  "Publisher: %s",
 			  t->label);
-		t->key_mismatch_announced = false;
+		break;
+	case ATTEST_CERT_UNREADABLE:
+		lota_warn("The AIK certificate stored for %s cannot be read "
+			  "(%s): the key at its handle is not checked against "
+			  "it and it is not renewed. Re-enroll to replace it: "
+			  "lota-agent --reenroll --ca-cert <their anchor>",
+			  t->label, strerror(-ret));
+		break;
+	case ATTEST_CERT_SILENT:
+		break;
 	}
 
-	return 0;
+	return ret == -EKEYREJECTED ? ret : 0;
 }
 
 static int bind_target(struct attest_target *t)

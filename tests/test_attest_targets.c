@@ -626,6 +626,34 @@ static void test_each_profile_pins_its_own_verifier(void)
 	unlink(anchor);
 }
 
+/* A certificate that cannot be read confirms nothing about the key. */
+static void test_an_unreadable_cert_confirms_nothing(void)
+{
+	struct attest_target t;
+
+	memset(&t, 0, sizeof(t));
+	CHECK(attest_target_note_cert_match(&t, -EKEYREJECTED) ==
+		      ATTEST_CERT_MISMATCH,
+	      "a foreign key is reported");
+	CHECK(attest_target_note_cert_match(&t, -EINVAL) ==
+			      ATTEST_CERT_UNREADABLE &&
+		      t.key_mismatch_announced,
+	      "an unreadable certificate keeps the mismatch");
+	CHECK(attest_target_note_cert_match(&t, -EINVAL) == ATTEST_CERT_SILENT,
+	      "an unreadable certificate is reported once");
+	CHECK(attest_target_note_cert_match(&t, 0) ==
+			      ATTEST_CERT_MATCHES_AGAIN &&
+		      !t.key_mismatch_announced,
+	      "only a certificate naming the key clears the mismatch");
+	CHECK(attest_target_note_cert_match(&t, -EINVAL) ==
+		      ATTEST_CERT_UNREADABLE,
+	      "a certificate that broke again is reported again");
+	attest_target_note_cert_match(&t, -EKEYREJECTED);
+	CHECK(attest_target_note_cert_match(&t, -EINVAL) ==
+		      ATTEST_CERT_UNREADABLE,
+	      "a certificate read as a foreign key's counts as read");
+}
+
 /* A title asking for an enrolled publisher wakes the loop once, not forever. */
 static void test_a_request_wakes_the_loop_once(void)
 {
@@ -671,6 +699,7 @@ int main(void)
 	test_the_renewal_endpoint_is_said_once();
 	test_each_profile_pins_its_own_verifier();
 	test_a_request_wakes_the_loop_once();
+	test_an_unreadable_cert_confirms_nothing();
 
 	printf("\n%s\n", g_failures ? "FAILURES" : "All tests passed");
 	return g_failures ? 1 : 0;
