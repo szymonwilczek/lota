@@ -30,8 +30,7 @@ struct tpm_context;
  * struct enroll_state - What the last successful enrollment of a profile used.
  * @magic: LOTA_ENROLL_STATE_MAGIC.
  * @version: LOTA_ENROLL_STATE_VERSION.
- * @aik_generation: AIK generation the certificate was issued for; the daemon
- *	reports re-enrollment required when the AIK's differs.
+ * @_unused: Zero, ignored on read.
  * @ca_port: CA port.
  * @no_verify_tls: TLS verification was skipped.
  * @has_pin: @pin_sha256 is set.
@@ -46,7 +45,7 @@ struct tpm_context;
 struct enroll_state {
 	uint32_t magic;
 	uint32_t version;
-	uint64_t aik_generation;
+	uint8_t _unused[8];
 	int32_t ca_port;
 	int32_t no_verify_tls;
 	int32_t has_pin;

@@ -73,14 +73,6 @@ func createTestReportBytes() []byte {
 		buf[offset+i] = byte(0xAA ^ i)
 	}
 	offset += NonceSize
-	// aik_generation (8)
-	binary.LittleEndian.PutUint64(buf[offset:], 1)
-	offset += 8
-	// prev_aik_public (512) + size
-	copy(buf[offset:], []byte("PREV_AIK_PUBLIC_KEY"))
-	offset += MaxAIKPubSize
-	binary.LittleEndian.PutUint16(buf[offset:], 0)
-	offset += 2
 	// quote_sig_alg (2 bytes)
 	binary.LittleEndian.PutUint16(buf[offset:], 0x0014) // TPM2_ALG_RSASSA
 	offset += 2
@@ -289,10 +281,7 @@ func TestParseReport_FieldOffsetsMatchCLayout(t *testing.T) {
 		offAIKCert       = offAIKPublicSize + 2
 		offAIKCertSize   = offAIKCert + MaxAIKCertSize
 		offNonce         = offAIKCertSize + 2
-		offAIKGeneration = offNonce + NonceSize
-		offPrevAIKPublic = offAIKGeneration + 8
-		offPrevAIKSize   = offPrevAIKPublic + MaxAIKPubSize
-		offQuoteSigAlg   = offPrevAIKSize + 2
+		offQuoteSigAlg   = offNonce + NonceSize
 		offQuoteHashAlg  = offQuoteSigAlg + 2
 		tpmEnd           = offQuoteHashAlg + 2
 
@@ -310,7 +299,7 @@ func TestParseReport_FieldOffsetsMatchCLayout(t *testing.T) {
 			t.Fatalf("%s: got %d, want %d", msg, got, want)
 		}
 	}
-	assertEqual(tpmEnd-tpmBase, 5434, "TPM evidence section")
+	assertEqual(tpmEnd-tpmBase, 4912, "TPM evidence section")
 	assertEqual(offFixedEnd, FixedReportSize, "fixed section")
 
 	// byte-slice fields: write a marker, parse, require it in the field
@@ -326,7 +315,6 @@ func TestParseReport_FieldOffsetsMatchCLayout(t *testing.T) {
 		{"TPM.AIKPublic", offAIKPublic, 16, func(r *AttestationReport) []byte { return r.TPM.AIKPublic[:16] }},
 		{"TPM.AIKCertificate", offAIKCert, 16, func(r *AttestationReport) []byte { return r.TPM.AIKCertificate[:16] }},
 		{"TPM.Nonce", offNonce, NonceSize, func(r *AttestationReport) []byte { return r.TPM.Nonce[:] }},
-		{"TPM.PrevAIKPublic", offPrevAIKPublic, 16, func(r *AttestationReport) []byte { return r.TPM.PrevAIKPublic[:16] }},
 		{"System.KernelHash", offKernelHash, HashSize, func(r *AttestationReport) []byte { return r.System.KernelHash[:] }},
 		{"System.AgentHash", offAgentHash, HashSize, func(r *AttestationReport) []byte { return r.System.AgentHash[:] }},
 		{"System.KernelPath", offKernelPath, 8, func(r *AttestationReport) []byte { return r.System.KernelPath[:8] }},
@@ -362,8 +350,6 @@ func TestParseReport_FieldOffsetsMatchCLayout(t *testing.T) {
 		binary.LittleEndian.PutUint16(data[offAttestSize:], 0x0202)
 		binary.LittleEndian.PutUint16(data[offAIKPublicSize:], 499)
 		binary.LittleEndian.PutUint16(data[offAIKCertSize:], 0x0404)
-		binary.LittleEndian.PutUint64(data[offAIKGeneration:], 0x0505050505050505)
-		binary.LittleEndian.PutUint16(data[offPrevAIKSize:], 0x0006)
 		binary.LittleEndian.PutUint16(data[offQuoteSigAlg:], TPMAlgRSASSA)
 		binary.LittleEndian.PutUint16(data[offQuoteHashAlg:], TPMAlgSHA256)
 
@@ -381,8 +367,6 @@ func TestParseReport_FieldOffsetsMatchCLayout(t *testing.T) {
 			{"TPM.AttestSize", uint64(report.TPM.AttestSize), 0x0202},
 			{"TPM.AIKPublicSize", uint64(report.TPM.AIKPublicSize), 499},
 			{"TPM.AIKCertSize", uint64(report.TPM.AIKCertSize), 0x0404},
-			{"TPM.AIKGeneration", report.TPM.AIKGeneration, 0x0505050505050505},
-			{"TPM.PrevAIKSize", uint64(report.TPM.PrevAIKSize), 0x0006},
 			{"TPM.QuoteSigAlg", uint64(report.TPM.QuoteSigAlg), uint64(TPMAlgRSASSA)},
 			{"TPM.QuoteSigHashAlg", uint64(report.TPM.QuoteSigHashAlg), uint64(TPMAlgSHA256)},
 		}

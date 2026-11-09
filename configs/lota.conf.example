@@ -90,10 +90,6 @@ bpf_path = /usr/lib/lota/lota_lsm.bpf.o
 # neither, the loop runs with no target until a reload names a publisher.
 attest_interval = 300
 
-# AIK key lifetime in seconds before rotation (0 = 30 days). A value below
-# 3600 is raised to 3600, here and for --aik-ttl.
-aik_ttl = 0
-
 # ---- Sealed AIK auth ------------------------------------------------------
 # Keep the AIK userAuth sealed to PCRs 0-7, so it unseals only while the
 # firmware, its configuration, the boot loader and Secure Boot state measure

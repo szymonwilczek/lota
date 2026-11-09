@@ -15,12 +15,6 @@
 #define MAX_BACKOFF_SECONDS 300 /* Max retry delay */
 
 /*
- * Floor on the AIK rotation TTL, for the command line and the configuration
- * file.
- */
-#define MIN_AIK_TTL 3600 /* seconds */
-
-/*
  * Added to the interval in a publisher's valid_until: the window outlasts the
  * wait for the next round.
  */
@@ -169,7 +163,6 @@ int do_attest(const char *server, int port, const char *ca_cert,
  * @skip_verify: Nonzero disables TLS certificate verification.
  * @pin_sha256: The pin of a target that states none; NULL for none.
  * @interval_sec: The cadence a profile that states none inherits.
- * @aik_ttl: The -aik-ttl or configured value, 0 for the default.
  *
  * Return: 0 after a shutdown, 1 when the loop cannot start,
  * LOTA_EXIT_OPERATOR_ACTION when a restart cannot clear a refused
@@ -178,17 +171,6 @@ int do_attest(const char *server, int port, const char *ca_cert,
 int do_continuous_attest(const struct lota_config *cfg, const char *config_path,
 			 const char *server, int port, const char *ca_cert,
 			 int skip_verify, const uint8_t *pin_sha256,
-			 int interval_sec, uint32_t aik_ttl);
-
-/**
- * publish_rotation_state() - Publish the AIK rotation state over IPC and D-Bus.
- * @aik_ttl: The -aik-ttl or configured value, 0 for the default.
- * @paths: The profile whose enrollment is compared against the live AIK; NULL
- *         compares nothing and leaves the reenroll flag clear.
- *
- * A no-op until the AIK metadata is loaded.
- */
-void publish_rotation_state(uint32_t aik_ttl,
-			    const struct profile_paths *paths);
+			 int interval_sec);
 
 #endif /* LOTA_ATTEST_H */

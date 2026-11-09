@@ -863,8 +863,8 @@ Production deployments must:
 * maintain EK root bundles for the supported TPM vendors,
 * verify release manifests before shipping binaries,
 * validate BPF LSM hook attachment on the target kernel and distribution,
-* document operator recovery for AIK rotation, policy rotation, and legitimate
-  binary updates.
+* document operator recovery for AIK replacement, policy rotation, and
+  legitimate binary updates.
 
 See :doc:`../operator/production-bringup/index`, :ghsrc:`policies/README.rst`, and
 :ghsrc:`selinux/README.rst` for the deployment details.

@@ -444,7 +444,7 @@ int diagnostics_dispatch(struct cli_options *opts, struct lota_config *cfg)
 				opts->server_port, opts->ca_cert_path,
 				opts->no_verify_tls,
 				opts->has_pin ? opts->pin_sha256_bin : NULL,
-				interval, opts->aik_ttl));
+				interval));
 		return diagnostic_exit_code(
 			do_attest(opts->server_addr, opts->server_port,
 				  opts->ca_cert_path, opts->no_verify_tls,

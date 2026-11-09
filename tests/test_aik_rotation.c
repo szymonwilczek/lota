@@ -1,9 +1,8 @@
 /* SPDX-License-Identifier: MIT */
 /*
- * Unit tests for AIK rotation (tpm.h / tpm.c metadata and lifecycle).
+ * Unit tests for the AIK record and lifecycle (tpm.h / tpm.c).
  *
- * These tests exercise the metadata persistence, age calculation,
- * rotation-needed checks, and grace period logic WITHOUT requiring
+ * These tests exercise the metadata persistence WITHOUT requiring
  * a real TPM. The heavy TPM call paths (EvictControl, CreatePrimary)
  * are not invoked here! -- those are integration-tested via
  * --test-tpm on a real machine.
@@ -11,6 +10,7 @@
  * Copyright (C) 2026 Szymon Wilczek
  */
 
+#include <endian.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <openssl/evp.h>
@@ -117,7 +117,6 @@ static void test_metadata_key_derivation_round_trip(void)
 
 	ctx.aik_meta.magic = TPM_AIK_META_MAGIC;
 	ctx.aik_meta.version = TPM_AIK_META_VERSION;
-	ctx.aik_meta.generation = 7;
 	ctx.aik_meta.key_derivation = TPM_AIK_KEY_DERIVATION_PER_PUBLISHER;
 	ctx.aik_meta_loaded = true;
 
@@ -199,7 +198,6 @@ static void test_recorded_shared_key_still_reads_shared(void)
 
 	ctx.aik_meta.magic = TPM_AIK_META_MAGIC;
 	ctx.aik_meta.version = TPM_AIK_META_VERSION;
-	ctx.aik_meta.generation = 1;
 	ctx.aik_meta.key_derivation = TPM_AIK_KEY_DERIVATION_SHARED;
 	ctx.aik_meta_loaded = true;
 
@@ -312,46 +310,67 @@ static void test_shared_replacement_needs_a_key(void)
 	PASS();
 }
 
-static void test_metadata_save_load(void)
+/* Bytes 8-31 are written zero and read past: key_derivation sits at 32 */
+static void test_metadata_unused_bytes_are_ignored(void)
 {
 	struct tpm_context ctx;
-	struct tpm_context ctx2;
-	int ret;
+	uint8_t raw[sizeof(struct aik_metadata)];
+	uint32_t word;
+	int fd, ret;
 
-	TEST("metadata save -> load round-trip");
+	TEST("load reads key_derivation past the unused bytes");
 	make_ctx(&ctx);
-	make_ctx(&ctx2);
 
-	ctx.aik_meta.magic = TPM_AIK_META_MAGIC;
-	ctx.aik_meta.version = TPM_AIK_META_VERSION;
-	ctx.aik_meta.generation = 42;
-	ctx.aik_meta.provisioned_at = 1700000000;
-	ctx.aik_meta.last_rotated_at = 1700000100;
-	ctx.aik_meta_loaded = true;
+	memset(raw, 0, sizeof(raw));
+	word = htole32(TPM_AIK_META_MAGIC);
+	memcpy(raw, &word, sizeof(word));
+	word = htole32(TPM_AIK_META_VERSION);
+	memcpy(raw + 4, &word, sizeof(word));
+	memset(raw + 8, 0x5A, 24);
+	raw[32] = TPM_AIK_KEY_DERIVATION_SHARED;
 
-	ret = tpm_aik_save_metadata(&ctx);
-	if (ret != 0) {
-		FAIL("save returned error");
+	fd = open(ctx.aik_meta_path, O_WRONLY | O_CREAT | O_TRUNC, 0600);
+	if (fd < 0) {
+		FAIL("cannot create test file");
 		return;
 	}
+	{
+		ssize_t wr_ = write(fd, raw, sizeof(raw));
+		(void)wr_;
+	}
+	close(fd);
 
-	ret = tpm_aik_load_metadata(&ctx2);
+	ret = tpm_aik_load_metadata(&ctx);
 	if (ret != 0) {
 		FAIL("load returned error");
 		return;
 	}
-
-	if (ctx2.aik_meta.magic != TPM_AIK_META_MAGIC ||
-	    ctx2.aik_meta.version != TPM_AIK_META_VERSION ||
-	    ctx2.aik_meta.generation != 42 ||
-	    ctx2.aik_meta.provisioned_at != 1700000000 ||
-	    ctx2.aik_meta.last_rotated_at != 1700000100) {
-		FAIL("metadata values mismatch after round-trip");
+	if (ctx.aik_meta.key_derivation != TPM_AIK_KEY_DERIVATION_SHARED) {
+		FAIL("key_derivation read from the wrong offset");
 		return;
 	}
 
-	if (!ctx2.aik_meta_loaded) {
-		FAIL("aik_meta_loaded not set");
+	ctx.aik_meta.key_derivation = TPM_AIK_KEY_DERIVATION_PER_PUBLISHER;
+	if (tpm_aik_save_metadata(&ctx) != 0) {
+		FAIL("save returned error");
+		return;
+	}
+	fd = open(ctx.aik_meta_path, O_RDONLY);
+	if (fd < 0 || read(fd, raw, sizeof(raw)) != (ssize_t)sizeof(raw)) {
+		if (fd >= 0)
+			close(fd);
+		FAIL("cannot read the record back");
+		return;
+	}
+	close(fd);
+	for (size_t i = 8; i < 32; i++) {
+		if (raw[i] != 0) {
+			FAIL("save wrote a nonzero unused byte");
+			return;
+		}
+	}
+	if (raw[32] != TPM_AIK_KEY_DERIVATION_PER_PUBLISHER) {
+		FAIL("save moved key_derivation");
 		return;
 	}
 
@@ -362,16 +381,13 @@ static void test_metadata_default_creation(void)
 {
 	struct tpm_context ctx;
 	int ret;
-	time_t before, after;
 
 	TEST("load fills defaults without writing a record");
 	make_ctx(&ctx);
 	/* make sure file does not exist */
 	unlink(ctx.aik_meta_path);
 
-	before = time(NULL);
 	ret = tpm_aik_load_metadata(&ctx);
-	after = time(NULL);
 
 	if (ret != 0) {
 		FAIL("load returned error");
@@ -382,17 +398,9 @@ static void test_metadata_default_creation(void)
 		FAIL("wrong magic");
 		return;
 	}
-	if (ctx.aik_meta.generation != 1) {
-		FAIL("default generation should be 1");
-		return;
-	}
-	if (ctx.aik_meta.provisioned_at < (int64_t)before ||
-	    ctx.aik_meta.provisioned_at > (int64_t)after) {
-		FAIL("provisioned_at out of range");
-		return;
-	}
-	if (ctx.aik_meta.last_rotated_at != 0) {
-		FAIL("last_rotated_at should be 0 on first create");
+	if (ctx.aik_meta.key_derivation !=
+	    TPM_AIK_KEY_DERIVATION_PER_PUBLISHER) {
+		FAIL("default key_derivation should be per publisher");
 		return;
 	}
 
@@ -414,16 +422,13 @@ static void test_new_key_metadata_persisted(void)
 	struct tpm_context ctx;
 	struct tpm_context ctx2;
 	int ret;
-	time_t before, after;
 
 	TEST("new AIK metadata is persisted");
 	make_ctx(&ctx);
 	make_ctx(&ctx2);
 	unlink(ctx.aik_meta_path);
 
-	before = time(NULL);
 	ret = tpm_test_save_new_key_metadata(&ctx);
-	after = time(NULL);
 
 	if (ret != 0) {
 		FAIL("save new-key metadata returned error");
@@ -443,15 +448,8 @@ static void test_new_key_metadata_persisted(void)
 
 	if (ctx2.aik_meta.magic != TPM_AIK_META_MAGIC ||
 	    ctx2.aik_meta.version != TPM_AIK_META_VERSION ||
-	    ctx2.aik_meta.generation != 1 ||
-	    ctx2.aik_meta.last_rotated_at != 0) {
+	    ctx2.aik_meta.key_derivation != TPM_AIK_KEY_DERIVATION_SHARED) {
 		FAIL("metadata defaults mismatch");
-		return;
-	}
-
-	if (ctx2.aik_meta.provisioned_at < (int64_t)before ||
-	    ctx2.aik_meta.provisioned_at > (int64_t)after) {
-		FAIL("provisioned_at out of range");
 		return;
 	}
 
@@ -532,238 +530,6 @@ static void test_metadata_bad_version(void)
 	PASS();
 }
 
-static void test_aik_age(void)
-{
-	struct tpm_context ctx;
-	int64_t age;
-	time_t now;
-
-	TEST("tpm_aik_age returns correct age");
-	make_ctx(&ctx);
-
-	now = time(NULL);
-	ctx.aik_meta.magic = TPM_AIK_META_MAGIC;
-	ctx.aik_meta.version = TPM_AIK_META_VERSION;
-	ctx.aik_meta.provisioned_at = (int64_t)(now - 7200); /* 2 hours ago */
-	ctx.aik_meta_loaded = true;
-
-	age = tpm_aik_age(&ctx);
-	if (age < 7199 || age > 7201) {
-		char buf[64];
-		snprintf(buf, sizeof(buf), "expected ~7200, got %ld",
-			 (long)age);
-		FAIL(buf);
-		return;
-	}
-
-	PASS();
-}
-
-static void test_aik_age_no_metadata(void)
-{
-	struct tpm_context ctx;
-	int64_t age;
-
-	TEST("tpm_aik_age fails if metadata not loaded");
-	make_ctx(&ctx);
-	ctx.aik_meta_loaded = false;
-
-	age = tpm_aik_age(&ctx);
-	if (age >= 0) {
-		FAIL("should return negative error");
-		return;
-	}
-
-	PASS();
-}
-
-static void test_needs_rotation_fresh(void)
-{
-	struct tpm_context ctx;
-	int ret;
-
-	TEST("needs_rotation -> 0 for fresh key");
-	make_ctx(&ctx);
-
-	ctx.aik_meta.magic = TPM_AIK_META_MAGIC;
-	ctx.aik_meta.version = TPM_AIK_META_VERSION;
-	ctx.aik_meta.provisioned_at = (int64_t)time(NULL);
-	ctx.aik_meta_loaded = true;
-
-	ret = tpm_aik_needs_rotation(&ctx, 3600);
-	if (ret != 0) {
-		FAIL("should be 0 for just-provisioned key");
-		return;
-	}
-
-	PASS();
-}
-
-static void test_needs_rotation_expired(void)
-{
-	struct tpm_context ctx;
-	int ret;
-
-	TEST("needs_rotation -> 1 for expired key");
-	make_ctx(&ctx);
-
-	ctx.aik_meta.magic = TPM_AIK_META_MAGIC;
-	ctx.aik_meta.version = TPM_AIK_META_VERSION;
-	ctx.aik_meta.provisioned_at = (int64_t)(time(NULL) - 7200);
-	ctx.aik_meta_loaded = true;
-
-	ret = tpm_aik_needs_rotation(&ctx, 3600);
-	if (ret != 1) {
-		FAIL("should be 1 for 2h-old key with 1h TTL");
-		return;
-	}
-
-	PASS();
-}
-
-static void test_needs_rotation_default_ttl(void)
-{
-	struct tpm_context ctx;
-	int ret;
-
-	TEST("needs_rotation uses default 30d TTL");
-	make_ctx(&ctx);
-
-	ctx.aik_meta.magic = TPM_AIK_META_MAGIC;
-	ctx.aik_meta.version = TPM_AIK_META_VERSION;
-	ctx.aik_meta.provisioned_at = (int64_t)time(NULL);
-	ctx.aik_meta_loaded = true;
-
-	/* 0 -> use TPM_AIK_DEFAULT_TTL_SEC (30 days) */
-	ret = tpm_aik_needs_rotation(&ctx, 0);
-	if (ret != 0) {
-		FAIL("fresh key should not need rotation with 30d default");
-		return;
-	}
-
-	/* simulate 31-day old key */
-	ctx.aik_meta.provisioned_at = (int64_t)(time(NULL) - 31 * 24 * 3600);
-	ret = tpm_aik_needs_rotation(&ctx, 0);
-	if (ret != 1) {
-		FAIL("31-day old key should need rotation with 30d default");
-		return;
-	}
-
-	PASS();
-}
-
-static void test_grace_period_inactive(void)
-{
-	struct tpm_context ctx;
-
-	TEST("grace period inactive by default");
-	make_ctx(&ctx);
-
-	if (tpm_aik_in_grace_period(&ctx) != 0) {
-		FAIL("should be 0 with no rotation");
-		return;
-	}
-
-	PASS();
-}
-
-static void test_grace_period_active(void)
-{
-	struct tpm_context ctx;
-
-	TEST("grace period active within deadline");
-	make_ctx(&ctx);
-
-	ctx.grace_deadline = time(NULL) + 600; /* 10 minutes from now */
-	ctx.prev_aik_public_size = 128;
-	memset(ctx.prev_aik_public, 0xAA, 128);
-
-	if (tpm_aik_in_grace_period(&ctx) != 1) {
-		FAIL("should be 1 during grace window");
-		return;
-	}
-
-	PASS();
-}
-
-static void test_grace_period_expired(void)
-{
-	struct tpm_context ctx;
-
-	TEST("grace period expires -> clears state");
-	make_ctx(&ctx);
-
-	ctx.grace_deadline = time(NULL) - 10; /* 10 seconds in the past */
-	ctx.prev_aik_public_size = 128;
-
-	if (tpm_aik_in_grace_period(&ctx) != 0) {
-		FAIL("should be 0 after deadline");
-		return;
-	}
-
-	if (ctx.prev_aik_public_size != 0) {
-		FAIL("prev_aik_public_size not cleared");
-		return;
-	}
-
-	if (ctx.grace_deadline != 0) {
-		FAIL("grace_deadline not cleared");
-		return;
-	}
-
-	PASS();
-}
-
-static void test_get_prev_public_grace(void)
-{
-	struct tpm_context ctx;
-	uint8_t buf[LOTA_MAX_AIK_PUB_SIZE];
-	size_t out_size = 0;
-	int ret;
-
-	TEST("get_prev_public returns key in grace period");
-	make_ctx(&ctx);
-
-	ctx.grace_deadline = time(NULL) + 600;
-	ctx.prev_aik_public_size = 64;
-	memset(ctx.prev_aik_public, 0xBB, 64);
-
-	ret = tpm_aik_get_prev_public(&ctx, buf, sizeof(buf), &out_size);
-	if (ret != 0) {
-		FAIL("should succeed during grace period");
-		return;
-	}
-	if (out_size != 64) {
-		FAIL("wrong output size");
-		return;
-	}
-	if (buf[0] != 0xBB || buf[63] != 0xBB) {
-		FAIL("data mismatch");
-		return;
-	}
-
-	PASS();
-}
-
-static void test_get_prev_public_no_grace(void)
-{
-	struct tpm_context ctx;
-	uint8_t buf[LOTA_MAX_AIK_PUB_SIZE];
-	size_t out_size = 0;
-	int ret;
-
-	TEST("get_prev_public -> -ENOENT without grace period");
-	make_ctx(&ctx);
-
-	ret = tpm_aik_get_prev_public(&ctx, buf, sizeof(buf), &out_size);
-	if (ret != -ENOENT) {
-		FAIL("expected -ENOENT");
-		return;
-	}
-
-	PASS();
-}
-
 static void test_save_creates_dirs(void)
 {
 	struct tpm_context ctx;
@@ -779,8 +545,6 @@ static void test_save_creates_dirs(void)
 
 	ctx.aik_meta.magic = TPM_AIK_META_MAGIC;
 	ctx.aik_meta.version = TPM_AIK_META_VERSION;
-	ctx.aik_meta.generation = 7;
-	ctx.aik_meta.provisioned_at = 1234567890;
 	ctx.aik_meta_loaded = true;
 
 	ret = tpm_aik_save_metadata(&ctx);
@@ -825,54 +589,6 @@ static void test_metadata_truncated(void)
 	if (ret != -EIO) {
 		char ebuf[32];
 		snprintf(ebuf, sizeof(ebuf), "expected -EIO, got %d", ret);
-		FAIL(ebuf);
-		return;
-	}
-
-	PASS();
-}
-
-static void test_needs_rotation_boundary(void)
-{
-	struct tpm_context ctx;
-	int ret;
-
-	TEST("needs_rotation boundary: age == TTL -> 1");
-	make_ctx(&ctx);
-
-	ctx.aik_meta.magic = TPM_AIK_META_MAGIC;
-	ctx.aik_meta.version = TPM_AIK_META_VERSION;
-	ctx.aik_meta.provisioned_at = (int64_t)(time(NULL) - 3600);
-	ctx.aik_meta_loaded = true;
-
-	/* exactly at boundary */
-	ret = tpm_aik_needs_rotation(&ctx, 3600);
-	if (ret != 1) {
-		FAIL("age == TTL should trigger rotation");
-		return;
-	}
-
-	PASS();
-}
-
-static void test_get_prev_public_small_buf(void)
-{
-	struct tpm_context ctx;
-	uint8_t buf[8];
-	size_t out_size = 0;
-	int ret;
-
-	TEST("get_prev_public -> -ENOSPC if buffer too small");
-	make_ctx(&ctx);
-
-	ctx.grace_deadline = time(NULL) + 600;
-	ctx.prev_aik_public_size = 64;
-	memset(ctx.prev_aik_public, 0xCC, 64);
-
-	ret = tpm_aik_get_prev_public(&ctx, buf, sizeof(buf), &out_size);
-	if (ret != -ENOSPC) {
-		char ebuf[32];
-		snprintf(ebuf, sizeof(ebuf), "expected -ENOSPC, got %d", ret);
 		FAIL(ebuf);
 		return;
 	}
@@ -2013,7 +1729,6 @@ static void test_reprovision_reads_the_record_first(void)
 	make_ctx(&ctx);
 	ctx.aik_meta.magic = TPM_AIK_META_MAGIC;
 	ctx.aik_meta.version = TPM_AIK_META_VERSION;
-	ctx.aik_meta.generation = 3;
 	ctx.aik_meta.key_derivation = TPM_AIK_KEY_DERIVATION_SHARED;
 	ctx.aik_meta_loaded = true;
 	if (tpm_aik_save_metadata(&ctx) != 0) {
@@ -2031,7 +1746,8 @@ static void test_reprovision_reads_the_record_first(void)
 		FAIL("a shared key was let through");
 		return;
 	}
-	if (!ctx.aik_meta_loaded || ctx.aik_meta.generation != 3) {
+	if (!ctx.aik_meta_loaded ||
+	    ctx.aik_meta.key_derivation != TPM_AIK_KEY_DERIVATION_SHARED) {
 		FAIL("the record was not loaded");
 		return;
 	}
@@ -2145,7 +1861,6 @@ static void test_lost_auth_keeps_a_shared_key(void)
 	memset(ctx.aik_profile_id, 'd', LOTA_PROFILE_ID_LEN - 1);
 	ctx.aik_meta.magic = TPM_AIK_META_MAGIC;
 	ctx.aik_meta.version = TPM_AIK_META_VERSION;
-	ctx.aik_meta.generation = 1;
 	ctx.aik_meta.key_derivation = TPM_AIK_KEY_DERIVATION_SHARED;
 	ctx.aik_meta_loaded = true;
 
@@ -2220,11 +1935,11 @@ static void test_reconnect_keeps_the_aik_name(void)
 
 int main(void)
 {
-	printf("\n=== AIK Rotation Tests ===\n\n");
+	printf("\n=== AIK Tests ===\n\n");
 
 	setup_tmp_dir();
 
-	test_metadata_save_load();
+	test_metadata_unused_bytes_are_ignored();
 	test_metadata_key_derivation_round_trip();
 	test_absent_metadata_claims_nothing();
 	test_recorded_shared_key_still_reads_shared();
@@ -2234,20 +1949,8 @@ int main(void)
 	test_new_key_metadata_persisted();
 	test_metadata_bad_magic();
 	test_metadata_bad_version();
-	test_aik_age();
-	test_aik_age_no_metadata();
-	test_needs_rotation_fresh();
-	test_needs_rotation_expired();
-	test_needs_rotation_default_ttl();
-	test_grace_period_inactive();
-	test_grace_period_active();
-	test_grace_period_expired();
-	test_get_prev_public_grace();
-	test_get_prev_public_no_grace();
 	test_save_creates_dirs();
 	test_metadata_truncated();
-	test_needs_rotation_boundary();
-	test_get_prev_public_small_buf();
 	test_provision_rejects_swtpm_vendor();
 	test_rc_success_is_zero();
 	test_rc_lockout_raw();

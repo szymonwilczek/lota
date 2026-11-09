@@ -306,10 +306,6 @@ void print_usage(const char *prog, const char *default_bpf_path,
 	       "systemd)\n");
 	printf("  --pid-file PATH   PID file location\n");
 	printf("                    (default: %s)\n", DAEMON_DEFAULT_PID_FILE);
-	printf("  --aik-ttl SECS    AIK key lifetime in seconds before "
-	       "rotation\n");
-	printf("                    (default: 30 days, min: %d)\n",
-	       MIN_AIK_TTL);
 	printf("\nPolicy signing:\n");
 	printf("  --gen-signing-key PREFIX\n");
 	printf("                    Generate Ed25519 keypair: PREFIX.key + "

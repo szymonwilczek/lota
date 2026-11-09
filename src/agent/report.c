@@ -25,12 +25,12 @@
  * The verifier walks this layout by the constants in
  * src/verifier/types/report.go; nothing else ties the two at build time.
  */
-_Static_assert(sizeof(struct lota_tpm_evidence) == 5434,
+_Static_assert(sizeof(struct lota_tpm_evidence) == 4912,
 	       "lota_tpm_evidence size changed; update types/report.go and its "
 	       "layout test");
 _Static_assert(sizeof(struct lota_system_measurement) == 396,
 	       "lota_system_measurement size changed; update types/report.go");
-_Static_assert(sizeof(struct lota_attestation_report) == 5846,
+_Static_assert(sizeof(struct lota_attestation_report) == 5324,
 	       "fixed report size changed; update FixedReportSize in "
 	       "types/report.go");
 _Static_assert(sizeof(struct lota_esrt) == 28,

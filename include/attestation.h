@@ -113,13 +113,6 @@ struct lota_tpm_evidence {
 	 */
 	uint8_t nonce[LOTA_NONCE_SIZE];
 
-	/* Incremented on every AIK rotation */
-	uint64_t aik_generation;
-
-	/* Previous AIK, DER SPKI, during the rotation grace period, else 0 */
-	uint8_t prev_aik_public[LOTA_MAX_AIK_PUB_SIZE];
-	uint16_t prev_aik_public_size;
-
 	/* TPM quote signature scheme (TPM2_ALG_RSASSA or TPM2_ALG_RSAPSS). */
 	uint16_t quote_sig_alg;
 

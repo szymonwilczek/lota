@@ -194,11 +194,6 @@ func (f *Fleet) BuildReport(a *Agent, challengeNonce [types.NonceSize]byte) ([]b
 	off += 2
 	copy(buf[off:], challengeNonce[:])
 	off += types.NonceSize
-	binary.LittleEndian.PutUint64(buf[off:], 1) // aik_generation
-	off += 8
-	off += types.MaxAIKPubSize // no prev AIK
-	binary.LittleEndian.PutUint16(buf[off:], 0)
-	off += 2
 	binary.LittleEndian.PutUint16(buf[off:], types.TPMAlgRSASSA)
 	off += 2
 	binary.LittleEndian.PutUint16(buf[off:], types.TPMAlgSHA256)

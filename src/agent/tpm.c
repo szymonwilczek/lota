@@ -606,9 +606,6 @@ int tpm_init(struct tpm_context *ctx)
 	memset(ctx->aik_object_name, 0, sizeof(ctx->aik_object_name));
 	ctx->aik_object_name_size = 0;
 	ctx->aik_object_replaced = false;
-	memset(ctx->prev_aik_public, 0, sizeof(ctx->prev_aik_public));
-	ctx->prev_aik_public_size = 0;
-	ctx->grace_deadline = 0;
 	ctx->lockout_active = false;
 	ctx->lockout_first_seen = 0;
 	ctx->lockout_event_count = 0;
@@ -1056,7 +1053,7 @@ static bool aik_binding_survives(const char *bound_id, uint32_t bound_handle,
 
 /*
  * Drop everything cached for the key when the object at the AIK handle differs
- * from the Name recorded here. The rotation record and the userAuth belong to
+ * from the Name recorded here. The AIK record and the userAuth belong to
  * one key; a replaced object leaves them describing a key the TPM no longer
  * holds.
  */
@@ -1577,27 +1574,18 @@ void tpm_test_reset_prop_reader(void)
 
 static int tpm_aik_save_new_key_metadata(struct tpm_context *ctx)
 {
-	time_t now;
-
 	if (!ctx || !ctx->initialized)
 		return -EINVAL;
-
-	now = time(NULL);
 
 	if (!ctx->aik_meta_loaded) {
 		memset(&ctx->aik_meta, 0, sizeof(ctx->aik_meta));
 		ctx->aik_meta.magic = TPM_AIK_META_MAGIC;
 		ctx->aik_meta.version = TPM_AIK_META_VERSION;
-		ctx->aik_meta.generation = 1;
-		ctx->aik_meta.last_rotated_at = 0;
 	} else if (ctx->aik_meta.magic != TPM_AIK_META_MAGIC ||
 		   ctx->aik_meta.version != TPM_AIK_META_VERSION) {
 		return -EINVAL;
-	} else if (ctx->aik_meta.generation == 0) {
-		ctx->aik_meta.generation = 1;
 	}
 
-	ctx->aik_meta.provisioned_at = (int64_t)now;
 	ctx->aik_meta.key_derivation =
 		ctx->aik_profile_id[0] ? TPM_AIK_KEY_DERIVATION_PER_PUBLISHER :
 					 TPM_AIK_KEY_DERIVATION_SHARED;
@@ -1693,10 +1681,7 @@ int tpm_provision_aik(struct tpm_context *ctx)
 	return tpm_aik_save_new_key_metadata(ctx);
 }
 
-/*
- * A loaded record keeps its generation: a bump marks the certificate
- * over the key stale.
- */
+/* The key did not change: a loaded record is written back as it is. */
 static int tpm_aik_save_auth_rotation_metadata(struct tpm_context *ctx)
 {
 	if (!ctx || !ctx->initialized)
@@ -4056,9 +4041,6 @@ int tpm_aik_load_metadata(struct tpm_context *ctx)
 		memset(&ctx->aik_meta, 0, sizeof(ctx->aik_meta));
 		ctx->aik_meta.magic = TPM_AIK_META_MAGIC;
 		ctx->aik_meta.version = TPM_AIK_META_VERSION;
-		ctx->aik_meta.generation = 1;
-		ctx->aik_meta.provisioned_at = (int64_t)time(NULL);
-		ctx->aik_meta.last_rotated_at = 0;
 		ctx->aik_meta.key_derivation =
 			TPM_AIK_KEY_DERIVATION_PER_PUBLISHER;
 		ctx->aik_meta_loaded = true;
@@ -4074,9 +4056,6 @@ int tpm_aik_load_metadata(struct tpm_context *ctx)
 
 	meta.magic = le32toh(meta.magic);
 	meta.version = le32toh(meta.version);
-	meta.generation = le64toh(meta.generation);
-	meta.provisioned_at = (int64_t)le64toh((uint64_t)meta.provisioned_at);
-	meta.last_rotated_at = (int64_t)le64toh((uint64_t)meta.last_rotated_at);
 
 	if (meta.magic != TPM_AIK_META_MAGIC)
 		return -EINVAL;
@@ -4123,11 +4102,6 @@ int tpm_aik_save_metadata(struct tpm_context *ctx)
 	memset(&wire, 0, sizeof(wire));
 	wire.magic = htole32(ctx->aik_meta.magic);
 	wire.version = htole32(TPM_AIK_META_VERSION);
-	wire.generation = htole64(ctx->aik_meta.generation);
-	wire.provisioned_at =
-		(int64_t)htole64((uint64_t)ctx->aik_meta.provisioned_at);
-	wire.last_rotated_at =
-		(int64_t)htole64((uint64_t)ctx->aik_meta.last_rotated_at);
 	wire.key_derivation = ctx->aik_meta.key_derivation;
 
 	n = write(fd, &wire, sizeof(wire));
@@ -4155,122 +4129,6 @@ int tpm_aik_save_metadata(struct tpm_context *ctx)
 	if (ret < 0)
 		return ret;
 
-	return 0;
-}
-
-int64_t tpm_aik_age(struct tpm_context *ctx)
-{
-	time_t now;
-
-	if (!ctx || !ctx->aik_meta_loaded)
-		return -EINVAL;
-
-	now = time(NULL);
-	return (int64_t)(now - (time_t)ctx->aik_meta.provisioned_at);
-}
-
-int tpm_aik_needs_rotation(struct tpm_context *ctx, uint32_t max_age_sec)
-{
-	int64_t age;
-
-	if (!ctx || !ctx->aik_meta_loaded)
-		return -EINVAL;
-
-	if (max_age_sec == 0)
-		max_age_sec = TPM_AIK_DEFAULT_TTL_SEC;
-
-	age = tpm_aik_age(ctx);
-	if (age < 0)
-		return (int)age;
-
-	return (age >= (int64_t)max_age_sec) ? 1 : 0;
-}
-
-int tpm_rotate_aik(struct tpm_context *ctx)
-{
-	int ret;
-	size_t prev_size = 0;
-
-	if (!ctx || !ctx->initialized || !ctx->aik_meta_loaded)
-		return -EINVAL;
-
-	ret = aik_exists(ctx, NULL);
-	if (ret < 0)
-		return ret;
-
-	if (ret == 1) {
-		ret = tpm_get_aik_public(ctx, ctx->prev_aik_public,
-					 sizeof(ctx->prev_aik_public),
-					 &prev_size);
-		if (ret < 0) {
-			prev_size = 0;
-		}
-		ctx->prev_aik_public_size = prev_size;
-
-		ret = tpm_aik_reprovision_with_auth(ctx, 1);
-		if (ret < 0)
-			return ret;
-	} else {
-		ctx->prev_aik_public_size = 0;
-
-		ret = tpm_provision_aik(ctx);
-		if (ret < 0)
-			return ret;
-	}
-
-	ctx->aik_meta.generation++;
-	ctx->aik_meta.last_rotated_at = (int64_t)time(NULL);
-	ctx->aik_meta.provisioned_at = ctx->aik_meta.last_rotated_at;
-
-	ret = tpm_aik_save_metadata(ctx);
-	if (ret < 0)
-		return ret;
-
-	if (ctx->prev_aik_public_size > 0) {
-		ctx->grace_deadline = time(NULL) + TPM_AIK_GRACE_PERIOD_SEC;
-	} else {
-		ctx->grace_deadline = 0;
-	}
-
-	return 0;
-}
-
-int tpm_aik_in_grace_period(struct tpm_context *ctx)
-{
-	if (!ctx)
-		return 0;
-
-	if (ctx->grace_deadline == 0)
-		return 0;
-
-	if (time(NULL) >= ctx->grace_deadline) {
-		ctx->grace_deadline = 0;
-		ctx->prev_aik_public_size = 0;
-		return 0;
-	}
-
-	return 1;
-}
-
-int tpm_aik_get_prev_public(struct tpm_context *ctx, uint8_t *buf,
-			    size_t buf_size, size_t *out_size)
-{
-	if (!ctx || !buf || !out_size)
-		return -EINVAL;
-
-	*out_size = 0;
-
-	if (!tpm_aik_in_grace_period(ctx))
-		return -ENOENT;
-
-	if (ctx->prev_aik_public_size == 0)
-		return -ENOENT;
-
-	if (buf_size < ctx->prev_aik_public_size)
-		return -ENOSPC;
-
-	memcpy(buf, ctx->prev_aik_public, ctx->prev_aik_public_size);
-	*out_size = ctx->prev_aik_public_size;
 	return 0;
 }
 

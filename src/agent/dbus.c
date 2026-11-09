@@ -136,97 +136,6 @@ static int prop_get_valid_until(sd_bus *bus, const char *path,
 	return sd_bus_message_append(reply, "t", ctx->ipc->valid_until);
 }
 
-static int prop_get_aik_generation(sd_bus *bus, const char *path,
-				   const char *interface, const char *property,
-				   sd_bus_message *reply, void *userdata,
-				   sd_bus_error *error)
-{
-	struct dbus_context *ctx = userdata;
-	(void)bus;
-	(void)path;
-	(void)interface;
-	(void)property;
-	(void)error;
-	return sd_bus_message_append(reply, "t", ctx->ipc->aik_generation);
-}
-
-static int prop_get_aik_provisioned_at(sd_bus *bus, const char *path,
-				       const char *interface,
-				       const char *property,
-				       sd_bus_message *reply, void *userdata,
-				       sd_bus_error *error)
-{
-	struct dbus_context *ctx = userdata;
-	(void)bus;
-	(void)path;
-	(void)interface;
-	(void)property;
-	(void)error;
-	return sd_bus_message_append(reply, "t", ctx->ipc->aik_provisioned_at);
-}
-
-static int prop_get_aik_last_rotated_at(sd_bus *bus, const char *path,
-					const char *interface,
-					const char *property,
-					sd_bus_message *reply, void *userdata,
-					sd_bus_error *error)
-{
-	struct dbus_context *ctx = userdata;
-	(void)bus;
-	(void)path;
-	(void)interface;
-	(void)property;
-	(void)error;
-	return sd_bus_message_append(reply, "t", ctx->ipc->aik_last_rotated_at);
-}
-
-static int prop_get_aik_rotation_deadline(sd_bus *bus, const char *path,
-					  const char *interface,
-					  const char *property,
-					  sd_bus_message *reply, void *userdata,
-					  sd_bus_error *error)
-{
-	struct dbus_context *ctx = userdata;
-	(void)bus;
-	(void)path;
-	(void)interface;
-	(void)property;
-	(void)error;
-	return sd_bus_message_append(reply, "t",
-				     ctx->ipc->aik_rotation_deadline);
-}
-
-static int prop_get_aik_grace_deadline(sd_bus *bus, const char *path,
-				       const char *interface,
-				       const char *property,
-				       sd_bus_message *reply, void *userdata,
-				       sd_bus_error *error)
-{
-	struct dbus_context *ctx = userdata;
-	(void)bus;
-	(void)path;
-	(void)interface;
-	(void)property;
-	(void)error;
-	return sd_bus_message_append(reply, "t", ctx->ipc->aik_grace_deadline);
-}
-
-static int prop_get_reenroll_required(sd_bus *bus, const char *path,
-				      const char *interface,
-				      const char *property,
-				      sd_bus_message *reply, void *userdata,
-				      sd_bus_error *error)
-{
-	struct dbus_context *ctx = userdata;
-	(void)bus;
-	(void)path;
-	(void)interface;
-	(void)property;
-	(void)error;
-	return sd_bus_message_append(reply, "b",
-				     (int)ctx->ipc->aik_reenroll_required);
-}
-
 const char *dbus_version_string(void)
 {
 	return LOTA_BUILD_VERSION_STRING;
@@ -277,19 +186,6 @@ static int method_get_status(sd_bus_message *msg, void *userdata,
 		ctx->ipc->fail_count);
 }
 
-static int method_get_rotation_status(sd_bus_message *msg, void *userdata,
-				      sd_bus_error *error)
-{
-	struct dbus_context *ctx = userdata;
-	(void)error;
-
-	return sd_bus_reply_method_return(
-		msg, "tttttb", ctx->ipc->aik_generation,
-		ctx->ipc->aik_provisioned_at, ctx->ipc->aik_last_rotated_at,
-		ctx->ipc->aik_rotation_deadline, ctx->ipc->aik_grace_deadline,
-		(int)ctx->ipc->aik_reenroll_required);
-}
-
 /* the flags only; a signed token comes over the Unix socket */
 static int method_get_token(sd_bus_message *msg, void *userdata,
 			    sd_bus_error *error)
@@ -325,26 +221,10 @@ static const sd_bus_vtable agent_vtable[] = {
 	SD_BUS_PROPERTY("Version", "s", prop_get_version, 0,
 			SD_BUS_VTABLE_PROPERTY_CONST),
 
-	SD_BUS_PROPERTY("AikGeneration", "t", prop_get_aik_generation, 0,
-			SD_BUS_VTABLE_PROPERTY_EMITS_CHANGE),
-	SD_BUS_PROPERTY("AikProvisionedAt", "t", prop_get_aik_provisioned_at, 0,
-			SD_BUS_VTABLE_PROPERTY_EMITS_CHANGE),
-	SD_BUS_PROPERTY("AikLastRotatedAt", "t", prop_get_aik_last_rotated_at,
-			0, SD_BUS_VTABLE_PROPERTY_EMITS_CHANGE),
-	SD_BUS_PROPERTY("AikRotationDeadline", "t",
-			prop_get_aik_rotation_deadline, 0,
-			SD_BUS_VTABLE_PROPERTY_EMITS_CHANGE),
-	SD_BUS_PROPERTY("AikGraceDeadline", "t", prop_get_aik_grace_deadline, 0,
-			SD_BUS_VTABLE_PROPERTY_EMITS_CHANGE),
-	SD_BUS_PROPERTY("ReenrollRequired", "b", prop_get_reenroll_required, 0,
-			SD_BUS_VTABLE_PROPERTY_EMITS_CHANGE),
-
 	SD_BUS_METHOD("Ping", "", "tu", method_ping,
 		      SD_BUS_VTABLE_UNPRIVILEGED),
 	SD_BUS_METHOD("GetStatus", "", "usttuu", method_get_status,
 		      SD_BUS_VTABLE_UNPRIVILEGED),
-	SD_BUS_METHOD("GetRotationStatus", "", "tttttb",
-		      method_get_rotation_status, SD_BUS_VTABLE_UNPRIVILEGED),
 	SD_BUS_METHOD("GetToken", "", "u", method_get_token, 0),
 
 	SD_BUS_SIGNAL("StatusChanged", "u", 0),
@@ -501,19 +381,6 @@ void dbus_emit_mode_changed(struct dbus_context *ctx, uint8_t mode)
 		   sd_bus_emit_properties_changed(
 			   ctx->bus, LOTA_DBUS_OBJECT_PATH, LOTA_DBUS_INTERFACE,
 			   "Mode", NULL));
-}
-
-void dbus_emit_rotation_changed(struct dbus_context *ctx)
-{
-	if (!ctx || !ctx->bus)
-		return;
-
-	emit_flush(ctx, "AIK rotation properties",
-		   sd_bus_emit_properties_changed(
-			   ctx->bus, LOTA_DBUS_OBJECT_PATH, LOTA_DBUS_INTERFACE,
-			   "AikGeneration", "AikProvisionedAt",
-			   "AikLastRotatedAt", "AikRotationDeadline",
-			   "AikGraceDeadline", "ReenrollRequired", NULL));
 }
 
 void dbus_cleanup(struct dbus_context *ctx)

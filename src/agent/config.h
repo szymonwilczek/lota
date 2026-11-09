@@ -115,7 +115,6 @@ struct lota_config {
 
 	/* Attestation */
 	int attest_interval; /* 0: see attest_effective_interval() */
-	uint32_t aik_ttl; /* seconds, 0 = default */
 	uint32_t aik_handle; /* TPM persistent handle */
 	char kernel_path[PATH_MAX];
 
@@ -207,18 +206,6 @@ void config_free(struct lota_config *cfg);
  * or the negative errno of the open, -ENOENT for a missing file.
  */
 int config_load(struct lota_config *cfg, const char *path);
-
-/**
- * config_clamp_aik_ttl() - Lift an AIK rotation TTL below the floor.
- * @ttl: The value read; 0 selects the default and is left alone.
- * @filepath: File the value came from, or NULL.
- * @lineno: Its line, ignored when @filepath is NULL.
- *
- * Warns on stderr when it changes the value.
- *
- * Return: the TTL to use.
- */
-uint32_t config_clamp_aik_ttl(uint32_t ttl, const char *filepath, int lineno);
 
 /**
  * config_load_from_fd() - Parse a config from an open file descriptor.

@@ -175,8 +175,8 @@ Notes for production
 - AIK certificates are short-lived (``--aik-cert-ttl``, default 24h); a host
   refreshes before expiry. The first enrollment records the CA endpoint in the
   publisher profile, so a refresh is a single ``lota-agent --reenroll
-  --ca-cert ...`` naming the same trust anchor -- the same guided path the
-  agent points operators to after an AIK rotation.
+  --ca-cert ...`` naming the same trust anchor -- the same guided path that
+  follows ``--reprovision-aik``.
 - The daemon's own renewal reuses that recorded **endpoint**, but presents the
   trust anchor the profile is **configured** with, falling back to the
   recorded path only for a target that has none. The two name the same

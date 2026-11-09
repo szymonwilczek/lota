@@ -124,14 +124,6 @@ const char *tpm_strerror(int err);
 /* Hash algorithm for PCR bank */
 #define TPM_HASH_ALG TPM2_ALG_SHA256
 
-/*
- * AIK rotation defaults.
- * tpm_aik_get_prev_public() answers for the grace period after a rotation by
- * the same context; nothing persists it.
- */
-#define TPM_AIK_DEFAULT_TTL_SEC (30 * 24 * 3600) /* 30 days */
-#define TPM_AIK_GRACE_PERIOD_SEC 3600 /* 1 hour */
-
 /* AIK metadata file magic and version */
 #define TPM_AIK_META_MAGIC 0x4D4B4941 /* "AIKM" */
 #define TPM_AIK_META_VERSION 1
@@ -199,20 +191,11 @@ struct aik_auth_record {
 	uint8_t _reserved[22];
 } __attribute__((packed));
 
-/*
- * AIK metadata on disk, at TPM_AIK_META_PATH or in the publisher profile.
- *
- * generation is 1 on a fresh record, tpm_rotate_aik() increments it and
- * creating a key over a loaded record keeps it, raising 0 to 1.
- * provisioned_at drives tpm_aik_age(), is wall-clock time and moves on a key
- * creation, a rotation and a fresh record.
- */
+/* AIK metadata on disk, at TPM_AIK_META_PATH or in the publisher profile. */
 struct aik_metadata {
 	uint32_t magic;
 	uint32_t version;
-	uint64_t generation;
-	int64_t provisioned_at; /* time_t */
-	int64_t last_rotated_at; /* time_t: last rotation (0 if none) */
+	uint8_t _unused[24]; /* zero, ignored on read */
 	uint8_t key_derivation; /* TPM_AIK_KEY_DERIVATION_* */
 	uint8_t _reserved[63];
 } __attribute__((packed));
@@ -269,7 +252,7 @@ struct tpm_context {
 	/* AIK persistent handle (configurable, default TPM_AIK_HANDLE) */
 	uint32_t aik_handle;
 
-	/* AIK rotation state */
+	/* AIK record */
 	struct aik_metadata aik_meta;
 	bool aik_meta_loaded;
 
@@ -304,11 +287,6 @@ struct tpm_context {
 	/* AIK userAuth */
 	uint8_t aik_auth[TPM_AIK_AUTH_SIZE];
 	bool aik_auth_loaded;
-
-	/* Previous AIK public key, exported by tpm_rotate_aik() */
-	uint8_t prev_aik_public[LOTA_MAX_AIK_PUB_SIZE];
-	size_t prev_aik_public_size;
-	time_t grace_deadline; /* 0 if no grace period active */
 
 	/*
 	 * Dictionary-attack lockout state.
@@ -890,11 +868,11 @@ int tpm_get_ek_cert_chain(struct tpm_context *ctx, uint8_t *buf,
 			  size_t buf_size, size_t *out_size);
 
 /**
- * tpm_aik_load_metadata() - Load the AIK rotation metadata.
+ * tpm_aik_load_metadata() - Load the AIK metadata.
  * @ctx: Initialized TPM context; @ctx->aik_meta_path, or TPM_AIK_META_PATH.
  *
  * A missing file with no key at the handle yields defaults in memory
- * (generation 1, provisioned_at now), with nothing written.
+ * (a per-publisher key), with nothing written.
  *
  * Return: 0, -EKEYREVOKED on a missing file with a key at the handle, -EIO on
  * a short file, -EINVAL on wrong magic, -ENOTSUP on another version, or
@@ -909,65 +887,6 @@ int tpm_aik_load_metadata(struct tpm_context *ctx);
  * Return: 0 or a negative errno.
  */
 int tpm_aik_save_metadata(struct tpm_context *ctx);
-
-/**
- * tpm_aik_age() - Seconds since provisioned_at.
- * @ctx: TPM context with loaded metadata.
- *
- * Return: the age, negative when provisioned_at is ahead of the clock, or
- * -EINVAL with no metadata loaded.
- */
-int64_t tpm_aik_age(struct tpm_context *ctx);
-
-/**
- * tpm_aik_needs_rotation() - Is the AIK at or past its maximum age?
- * @ctx: TPM context with loaded metadata.
- * @max_age_sec: Maximum age; 0 selects TPM_AIK_DEFAULT_TTL_SEC.
- *
- * Return: 1 when due, 0 when not, -EINVAL with no metadata loaded, or the
- * negative age truncated to int when provisioned_at is ahead of the clock.
- */
-int tpm_aik_needs_rotation(struct tpm_context *ctx, uint32_t max_age_sec);
-
-/**
- * tpm_rotate_aik() - Run one AIK rotation.
- * @ctx: Initialized TPM context with loaded metadata.
- *
- * Exports the current public key for the grace period, evicts the handle,
- * provisions it again with fresh userAuth, increments generation, updates
- * provisioned_at and saves the metadata.
- *
- * The same seed and template derive the same key, so the key material and
- * the public key from tpm_aik_get_prev_public() equal the current ones.
- *
- * Return: 0 or a negative errno.
- */
-int tpm_rotate_aik(struct tpm_context *ctx);
-
-/**
- * tpm_aik_in_grace_period() - Is the rotation grace period active?
- * @ctx: TPM context.
- *
- * For TPM_AIK_GRACE_PERIOD_SEC after a rotation by this context the report
- * carries the previous public key, also after binding another publisher.
- * Expiry clears the state.
- *
- * Return: 1 when active, 0 otherwise.
- */
-int tpm_aik_in_grace_period(struct tpm_context *ctx);
-
-/**
- * tpm_aik_get_prev_public() - Get the previous AIK public key.
- * @ctx: TPM context.
- * @buf: Receives the DER-encoded key.
- * @buf_size: Size of @buf.
- * @out_size: Receives the key's size.
- *
- * Return: 0, -ENOENT outside the grace period, -ENOSPC on a small @buf,
- * or a negative errno.
- */
-int tpm_aik_get_prev_public(struct tpm_context *ctx, uint8_t *buf,
-			    size_t buf_size, size_t *out_size);
 
 /*
  * TPM Event Log path

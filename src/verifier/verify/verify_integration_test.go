@@ -228,15 +228,6 @@ func createValidReportWithEventLog(t *testing.T, clientID string, nonce [32]byte
 	copy(buf[offset:], nonce[:])
 	offset += types.NonceSize
 
-	// aik_generation
-	binary.LittleEndian.PutUint64(buf[offset:], 1)
-	offset += 8
-
-	// prev_aik_public (grace period; empty in tests)
-	offset += types.MaxAIKPubSize
-	binary.LittleEndian.PutUint16(buf[offset:], 0)
-	offset += 2
-
 	// quote_sig_alg (was reserved)
 	binary.LittleEndian.PutUint16(buf[offset:], types.TPMAlgRSASSA)
 	offset += 2
@@ -728,13 +719,6 @@ func createValidReportWithKey(clientID string, nonce [32]byte, pcr14 [32]byte, k
 
 	copy(buf[offset:], nonce[:])
 	offset += types.NonceSize
-	// aik_generation
-	binary.LittleEndian.PutUint64(buf[offset:], 1)
-	offset += 8
-	// prev_aik_public (empty)
-	offset += types.MaxAIKPubSize
-	binary.LittleEndian.PutUint16(buf[offset:], 0)
-	offset += 2
 	binary.LittleEndian.PutUint16(buf[offset:], types.TPMAlgRSASSA)
 	offset += 2
 	binary.LittleEndian.PutUint16(buf[offset:], types.TPMAlgSHA256)

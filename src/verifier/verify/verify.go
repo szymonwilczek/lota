@@ -51,7 +51,6 @@ func wipeReportSensitive(report *types.AttestationReport) {
 	wipeBytes(report.TPM.AIKPublic[:])
 	wipeBytes(report.TPM.AIKCertificate[:])
 	wipeBytes(report.TPM.Nonce[:])
-	wipeBytes(report.TPM.PrevAIKPublic[:])
 	wipeBytes(report.EventLog)
 }
 
@@ -119,9 +118,6 @@ func validateTPMFieldSizes(report *types.AttestationReport) error {
 	}
 	if int(report.TPM.QuoteSigSize) > len(report.TPM.QuoteSignature) {
 		return fmt.Errorf("invalid quote_sig_size: %d > %d", report.TPM.QuoteSigSize, len(report.TPM.QuoteSignature))
-	}
-	if int(report.TPM.PrevAIKSize) > len(report.TPM.PrevAIKPublic) {
-		return fmt.Errorf("invalid prev_aik_public_size: %d > %d", report.TPM.PrevAIKSize, len(report.TPM.PrevAIKPublic))
 	}
 	return nil
 }

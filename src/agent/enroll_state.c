@@ -93,7 +93,7 @@ int enroll_state_load_path(const char *path, struct enroll_state *out)
 	close(fd);
 	if (n < 0)
 		return -errno;
-	if ((size_t)n < offsetof(struct enroll_state, aik_generation))
+	if ((size_t)n < offsetof(struct enroll_state, _unused))
 		return -EIO;
 	if (st.magic != LOTA_ENROLL_STATE_MAGIC)
 		return -EINVAL;

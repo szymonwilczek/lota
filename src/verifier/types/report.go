@@ -223,7 +223,7 @@ type ReportHeader struct {
 }
 
 // TPMEvidence is struct lota_tpm_evidence (include/attestation.h),
-// 5434 bytes on the wire.
+// 4912 bytes on the wire.
 type TPMEvidence struct {
 	PCRValues       [PCRCount][HashSize]byte
 	PCRMask         uint32
@@ -236,9 +236,6 @@ type TPMEvidence struct {
 	AIKCertificate  [MaxAIKCertSize]byte
 	AIKCertSize     uint16
 	Nonce           [NonceSize]byte
-	AIKGeneration   uint64
-	PrevAIKPublic   [MaxAIKPubSize]byte
-	PrevAIKSize     uint16
 	QuoteSigAlg     uint16
 	QuoteSigHashAlg uint16
 }
@@ -320,15 +317,15 @@ var (
 )
 
 // MinReportSize is a report with empty variable sections: Header(16) +
-// TPM(5434) + System(396) + event_log_size(4) + ESRT(28) + mok_list_size(4).
-const MinReportSize = 5882
+// TPM(4912) + System(396) + event_log_size(4) + ESRT(28) + mok_list_size(4).
+const MinReportSize = 5360
 
 // MaxReportWireSize caps a report before the verifier allocates for it. A
 // firmware event log takes most of it, and dbx grows over a machine's life.
 const MaxReportWireSize = 256 * 1024
 
-// FixedReportSize is Header(16) + TPM(5434) + System(396).
-const FixedReportSize = 5846
+// FixedReportSize is Header(16) + TPM(4912) + System(396).
+const FixedReportSize = 5324
 
 // ParseReport parses a wire report, refusing any version but ReportVersion.
 func ParseReport(data []byte) (*AttestationReport, error) {
@@ -393,15 +390,6 @@ func ParseReport(data []byte) (*AttestationReport, error) {
 	}
 	copy(report.TPM.Nonce[:], data[offset:offset+NonceSize])
 	offset += NonceSize
-	report.TPM.AIKGeneration = binary.LittleEndian.Uint64(data[offset:])
-	offset += 8
-	copy(report.TPM.PrevAIKPublic[:], data[offset:offset+MaxAIKPubSize])
-	offset += MaxAIKPubSize
-	report.TPM.PrevAIKSize = binary.LittleEndian.Uint16(data[offset:])
-	offset += 2
-	if report.TPM.PrevAIKSize > MaxAIKPubSize {
-		return nil, fmt.Errorf("%w: prev_aik_public_size %d exceeds max %d", ErrInvalidSize, report.TPM.PrevAIKSize, MaxAIKPubSize)
-	}
 	report.TPM.QuoteSigAlg = binary.LittleEndian.Uint16(data[offset:])
 	offset += 2
 	report.TPM.QuoteSigHashAlg = binary.LittleEndian.Uint16(data[offset:])

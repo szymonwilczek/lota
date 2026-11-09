@@ -82,10 +82,6 @@ int main(void)
 
 	for (size_t i = 0; i < sizeof(report.tpm.nonce); i++)
 		report.tpm.nonce[i] = (uint8_t)(0x55 ^ i);
-	report.tpm.aik_generation = 0x0102030405060708ULL;
-	for (size_t i = 0; i < sizeof(report.tpm.prev_aik_public); i++)
-		report.tpm.prev_aik_public[i] = (uint8_t)(0x77 ^ i);
-	report.tpm.prev_aik_public_size = 300;
 	report.tpm.quote_sig_alg = 0x0014; /* TPM2_ALG_RSASSA */
 	report.tpm.quote_sig_hash_alg = 0x000B; /* TPM2_ALG_SHA256 */
 

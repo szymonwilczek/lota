@@ -601,7 +601,6 @@ static void sync_config_snapshot(
 	cfg->strict_modules = strict_modules;
 	cfg->block_anon_exec = block_anon_exec;
 	cfg->attest_interval = new_cfg->attest_interval;
-	cfg->aik_ttl = new_cfg->aik_ttl;
 	cfg->aik_handle = new_cfg->aik_handle;
 	cfg->daemon = new_cfg->daemon;
 	memcpy(cfg->pid_file, new_cfg->pid_file, sizeof(cfg->pid_file));

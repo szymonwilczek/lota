@@ -59,9 +59,6 @@ func FuzzParseReport(f *testing.F) {
 		if report.TPM.AIKCertSize > MaxAIKCertSize {
 			t.Fatalf("aik_cert_size %d exceeds max %d", report.TPM.AIKCertSize, MaxAIKCertSize)
 		}
-		if report.TPM.PrevAIKSize > MaxAIKPubSize {
-			t.Fatalf("prev_aik_size %d exceeds max %d", report.TPM.PrevAIKSize, MaxAIKPubSize)
-		}
 		// determinism:
 		// re-parsing the same bytes must reach the same verdict
 		// and yield the same declared report size
