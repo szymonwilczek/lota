@@ -1644,8 +1644,9 @@ int BPF_PROG(lota_file_post_open_measure, struct file *file, int mask)
  * LSM hook: bprm_check_security
  *
  * In enforce mode with strict_exec, refuses an exec of a file starting with
- * "#!", through a descriptor (fdpath set), and of a file without an fs-verity
- * digest in allow_verity.
+ * "#!", of an interpreter a binfmt handler hands the exec to, through a
+ * descriptor (fdpath set), and of a file without an fs-verity digest in
+ * allow_verity.
  * ====================================================================== */
 SEC("lsm/bprm_check_security")
 int BPF_PROG(lota_bprm_check_security, struct linux_binprm *bprm)
@@ -1685,8 +1686,10 @@ int BPF_PROG(lota_bprm_check_security, struct linux_binprm *bprm)
 	}
 
 	if (mode == LOTA_MODE_ENFORCE && get_config(LOTA_CFG_STRICT_EXEC)) {
+		/* a binfmt handing off renames interp before the next pass */
 		if (is_shebang_binprm(bprm) ||
-		    BPF_CORE_READ(bprm, interpreter) ||
+		    BPF_CORE_READ(bprm, interp) !=
+			    BPF_CORE_READ(bprm, filename) ||
 		    is_inaccessible_exec_path(bprm)) {
 			blocked = 1;
 		} else if (!have_digest) {
