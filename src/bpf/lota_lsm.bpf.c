@@ -2958,18 +2958,17 @@ int BPF_PROG(lota_bpf_map, struct bpf_map *map, fmode_t fmode, int ret)
 /* ======================================================================
  * LSM hook: bpf
  *
- * Refuses every bpf() the kernel issues: the hook's last argument is
- * bool kernel, which @ret receives. With lock_bpf, refuses BPF_LINK_DETACH to
- * all but the admin identity. It names its link by a descriptor the caller
- * can swap after this hook read it, so one link cannot be told from another
- * here.
+ * With lock_bpf, refuses BPF_LINK_DETACH to all but the admin identity.
+ * It names its link by a descriptor the caller can swap after this hook
+ * read it, so one link cannot be told from another here.
  * ====================================================================== */
 SEC("lsm/bpf")
 int BPF_PROG(lota_bpf, int cmd, union bpf_attr *attr, unsigned int size,
-	     int ret)
+	     bool kernel, int ret)
 {
 	(void)size;
 	(void)attr;
+	(void)kernel;
 
 	if (ret != 0)
 		return -EPERM;

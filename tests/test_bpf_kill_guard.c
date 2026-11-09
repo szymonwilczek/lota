@@ -57,6 +57,43 @@ static int reserves_ringbuf(struct bpf_object *obj, const char *prog_name)
 	return 0;
 }
 
+/*
+ * Whether the program reads the u64 at @off of its context while r1 still
+ * holds it: BPF_PROG() argument n sits at n * 8.
+ */
+static int reads_ctx_slot(struct bpf_object *obj, const char *prog_name,
+			  int off)
+{
+	const struct bpf_insn *insns;
+	struct bpf_program *prog;
+	size_t count;
+
+	prog = bpf_object__find_program_by_name(obj, prog_name);
+	if (!prog)
+		return 0;
+
+	insns = bpf_program__insns(prog);
+	count = bpf_program__insn_cnt(prog);
+	if (!insns)
+		return 0;
+
+	for (size_t i = 0; i < count; i++) {
+		unsigned char cls = BPF_CLASS(insns[i].code);
+
+		if (insns[i].code == (BPF_LDX | BPF_MEM | BPF_DW) &&
+		    insns[i].src_reg == BPF_REG_1 && insns[i].off == off)
+			return 1;
+		if (cls == BPF_JMP && BPF_OP(insns[i].code) == BPF_CALL)
+			return 0;
+		if ((cls == BPF_ALU || cls == BPF_ALU64 || cls == BPF_LD ||
+		     cls == BPF_LDX) &&
+		    insns[i].dst_reg == BPF_REG_1)
+			return 0;
+	}
+
+	return 0;
+}
+
 static struct bpf_map *find_map(struct bpf_object *obj, const char *map_name)
 {
 	struct bpf_map *map;
@@ -103,6 +140,12 @@ int main(void)
 	/* a refused cgroup.kill write must reach the operator */
 	CHECK(reserves_ringbuf(obj, "lota_file_open"),
 	      "a refused open leaves a record");
+
+	/* bpf(cmd, attr, size, kernel), then the previous program's verdict */
+	CHECK(reads_ctx_slot(obj, "lota_bpf", 4 * 8),
+	      "the bpf hook reads the verdict after the kernel argument");
+	CHECK(!reads_ctx_slot(obj, "lota_bpf", 3 * 8),
+	      "the bpf hook does not refuse on the kernel argument");
 
 	bpf_object__close(obj);
 
