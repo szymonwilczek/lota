@@ -1096,7 +1096,8 @@ int tpm_aik_reseal_auth(struct tpm_context *ctx);
  * Recovery for strict at-rest sealing after a boot-state change made the sealed
  * auth unrecoverable. The key is a primary: same template, same key.
  * seal_aik_auth and seal_aik_auth_strict select how the new auth is stored.
- * With a key at the handle, the record is loaded first if it is not already.
+ * With a key at the handle, the record is loaded first if it is not already;
+ * a missing record is written afresh.
  *
  * Return: 0, -ENOTSUP when the record says shared and
  * tpm_aik_allow_shared_key_replace() was not set, or a negative errno.

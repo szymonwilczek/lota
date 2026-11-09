@@ -1834,6 +1834,39 @@ static void test_lost_auth_keeps_a_shared_key(void)
 	PASS();
 }
 
+static void test_reprovision_rewrites_a_missing_record(void)
+{
+	static int session;
+	char dir[192];
+	struct tpm_context ctx;
+	int ret;
+
+	TEST("a missing record does not block reprovision");
+	snprintf(dir, sizeof(dir), "%s/missing_meta", tmp_dir);
+	mkdir(dir, 0700);
+	make_ctx(&ctx);
+	snprintf(ctx.aik_meta_path, sizeof(ctx.aik_meta_path),
+		 "%s/aik_meta.dat", dir);
+	ctx.esys_ctx = (ESYS_CONTEXT *)&session;
+	ctx.aik_handle = 0x81010016;
+	g_listed_handle = ctx.aik_handle;
+	g_key_opens = 0;
+	memset(ctx.aik_profile_id, 'e', LOTA_PROFILE_ID_LEN - 1);
+
+	ret = tpm_test_aik_check_shared_replace(&ctx);
+	if (ret != 0) {
+		char ebuf[64];
+		snprintf(ebuf, sizeof(ebuf), "expected 0, got %d", ret);
+		FAIL(ebuf);
+		return;
+	}
+	if (ctx.aik_meta_loaded) {
+		FAIL("a record was assumed");
+		return;
+	}
+	PASS();
+}
+
 static void test_provision_ignores_the_vendor_string(void)
 {
 	static int session;
@@ -1953,6 +1986,7 @@ int main(void)
 	test_reconnect_keeps_the_aik_name();
 	test_reprovision_reads_the_record_first();
 	test_lost_auth_keeps_a_shared_key();
+	test_reprovision_rewrites_a_missing_record();
 	test_provision_ignores_the_vendor_string();
 	test_self_hash_pin_round_trip();
 	test_tpm_strerror_maps_lota_private();

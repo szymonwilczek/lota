@@ -1544,6 +1544,9 @@ static int aik_check_shared_replace(struct tpm_context *ctx)
 
 	if (!ctx->aik_meta_loaded) {
 		ret = tpm_aik_load_metadata(ctx);
+		/* no record: nothing says the key is shared */
+		if (ret == -EKEYREVOKED)
+			return 0;
 		if (ret < 0)
 			return ret;
 	}
