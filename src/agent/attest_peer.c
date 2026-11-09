@@ -333,8 +333,9 @@ int attest_peer_sync(struct attest_peer *peer, struct attest_target *targets,
 	if (ret < 0) {
 		if (peer->connected_once) {
 			lota_warn("Cannot reach the enforcement daemon on %s "
-				  "(%s): reporting on, session gating off "
-				  "until it answers",
+				  "(%s): session-gated publishers keep the "
+				  "session counts it last reported until it "
+				  "answers",
 				  LOTA_IPC_SOCKET_PATH, strerror(-ret));
 			peer->connected_once = false;
 		}
