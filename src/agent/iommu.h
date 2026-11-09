@@ -31,11 +31,15 @@ int iommu_check_sysfs(struct iommu_status *status, const char *root);
  * @status: the state to fill.
  * @root: prefix of the path read, NULL for the live machine.
  *
- * Checks intel_iommu=on, amd_iommu=force and amd_iommu=on in that order,
- * records the first present with IOMMU_FLAG_CMDLINE_SET, and sets
- * IOMMU_FLAG_STRICT for iommu.strict=1 or iommu=strict.
+ * Words after "--" are not read, and a dash in a parameter name reads as an
+ * underscore. The last on or off in the intel_iommu= lists wins, amd_iommu=
+ * needs force_enable and no off. The word that enabled it is recorded with
+ * IOMMU_FLAG_CMDLINE_SET, Intel first. IOMMU_FLAG_STRICT is set when the last
+ * valid iommu.strict= value asks for strict invalidation, or an intel_iommu=
+ * list names strict or an amd_iommu= list names fullflush, which apply after
+ * iommu.strict= wherever they stand.
  *
- * Return: 0 when one of the three is present, -1 otherwise.
+ * Return: 0 when the cmdline enables an IOMMU, -1 otherwise.
  */
 int iommu_check_cmdline(struct iommu_status *status, const char *root);
 
