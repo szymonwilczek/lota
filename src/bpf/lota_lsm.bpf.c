@@ -1379,7 +1379,7 @@ static __always_inline int denies_proc_mm_open(struct file *file,
 				  target_agent, target_protected && !inside);
 }
 
-/* logged as PTRACE_BLOCKED with the name of the entry */
+/* logged as PTRACE_BLOCKED with the name of the entry or device */
 static __always_inline void report_blocked_proc_mm(struct file *file,
 						   u32 target_pid)
 {
@@ -1518,8 +1518,10 @@ int BPF_PROG(lota_file_open, struct file *file, int ret)
 		return 0;
 
 	/* refused in every mode */
-	if (is_kernel_mem_device(file))
+	if (is_kernel_mem_device(file)) {
+		report_blocked_proc_mm(file, 0);
 		return -EPERM;
+	}
 
 	if (denies_proc_mm_open(file, &target_pid)) {
 		report_blocked_proc_mm(file, target_pid);
