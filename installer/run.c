@@ -16,12 +16,8 @@
 #include <unistd.h>
 #include <sys/types.h>
 
-/* Spinner cadence while a child is running */
 #define RUN_TICK_MS 90
 
-/* Forks argv with stdout+stderr merged into a pipe.
- * On success stores the read end and the pid.
- * 0 or -errno. */
 static int spawn_child(const char *const argv[], int *fd_out, pid_t *pid_out)
 {
 	int pfd[2];
@@ -40,7 +36,6 @@ static int spawn_child(const char *const argv[], int *fd_out, pid_t *pid_out)
 	}
 
 	if (pid == 0) {
-		/* child: merge stdout+stderr into the pipe, detach stdin */
 		int devnull = open("/dev/null", O_RDONLY);
 
 		if (devnull >= 0)
@@ -93,9 +88,6 @@ int run_cmd(struct ui *ui, const char *label, const char *const argv[])
 	while (1) {
 		int ready;
 
-		/* user abort from the full-screen frontend:
-		 * terminate the child and keep draining the pipe until EOF
-		 * so the exit status below reflects the signal */
 		if (ui->sink && ui->sink->abort &&
 		    ui->sink->abort(ui->sink->ud))
 			kill(pid, SIGTERM);

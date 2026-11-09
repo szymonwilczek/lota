@@ -16,10 +16,6 @@
 #include <unistd.h>
 #include <termios.h>
 
-/*
- * SGR fragments
- * Empty strings in no-color mode
- */
 #define SGR_RESET "\033[0m"
 #define SGR_BOLD "\033[1m"
 #define SGR_DIM "\033[2m"
@@ -70,8 +66,6 @@ int ui_term_width(struct ui *ui)
 	return ws.ws_col;
 }
 
-/* counting codepoints is exact here:
- * every glyph the installer emits is single-width */
 int ui_disp_len(const char *s)
 {
 	int n = 0;
@@ -82,7 +76,6 @@ int ui_disp_len(const char *s)
 	return n;
 }
 
-/* feeds a possibly multi-line text to the sink, one line per call */
 static void sink_emit_lines(struct ui *ui, const char *text)
 {
 	char line[UI_LIVE_LINE_CAP];
@@ -102,9 +95,7 @@ static void sink_emit_lines(struct ui *ui, const char *text)
 	}
 }
 
-/* Copies at most `cols` display columns, never splitting a UTF-8
- * sequence.
- * `out` must hold UI_LIVE_LINE_CAP bytes. */
+/* @out holds UI_LIVE_LINE_CAP bytes; a UTF-8 sequence is never split */
 static void disp_trunc(char *out, const char *s, int cols)
 {
 	int used = 0;
@@ -129,8 +120,6 @@ static void disp_trunc(char *out, const char *s, int cols)
 	out[o] = '\0';
 }
 
-/* Word-wraps `text` to the current width and prints each line as prefix + body.
- * Explicit newlines in the text are honored. */
 static void wrap_print(struct ui *ui, const char *prefix, const char *text)
 {
 	int width = ui_term_width(ui);
@@ -150,14 +139,12 @@ static void wrap_print(struct ui *ui, const char *prefix, const char *text)
 			size_t i = 0;
 			int used = 0;
 
-			/* widest prefix of the segment that fits */
 			while (i < seg && used < body) {
 				if (((unsigned char)p[i] & 0xC0) != 0x80)
 					used++;
 				i++;
 			}
 			if (i < seg) {
-				/* break at the last space inside the fit */
 				for (fit = i; fit > 0 && p[fit] != ' '; fit--)
 					;
 				take = fit > 0 ? fit : i;
@@ -186,7 +173,6 @@ void ui_banner(struct ui *ui, const char *title, const char *version,
 	int pad;
 	int i;
 
-	/* full-screen frontend draws its own chrome */
 	if (ui->sink)
 		return;
 
@@ -327,8 +313,6 @@ void ui_stage_result(struct ui *ui, enum ui_result r, const char *title,
 	if (!note)
 		note = ui_result_word(r);
 
-	/* short notes ride the title line,
-	 * long ones wrap below it */
 	if (ui_disp_len(title) + ui_disp_len(note) + 9 <= ui_term_width(ui)) {
 		printf("  %s%s%s %s%s — %s%s\n", sgr, glyph, col(ui, SGR_RESET),
 		       title, col(ui, SGR_DIM), note, col(ui, SGR_RESET));
@@ -431,10 +415,7 @@ void ui_kv(struct ui *ui, const char *key, const char *val)
 
 #define UI_CONFIRM_TRIES 3 /* unrecognised answers before declining */
 
-/*
- * Parse @line into @answer; an empty line takes @def.
- * Returns 0 when the line is neither yes nor no.
- */
+/* 0 when @line is neither yes nor no; an empty line takes @def */
 static int confirm_answer(const char *line, int def, int *answer)
 {
 	char word[8];
@@ -463,7 +444,6 @@ static int confirm_answer(const char *line, int def, int *answer)
 	return 0;
 }
 
-/* Discard the rest of an answer longer than the buffer. */
 static void confirm_drain(const char *line)
 {
 	int c;
@@ -484,9 +464,6 @@ int ui_confirm(struct ui *ui, const char *prompt, int assume_yes,
 
 	if (assume_yes)
 		return 1;
-	/* Full-screen frontend confirms through its own modal before
-	 * calling into a stage.
-	 * Nothing on the ui_* path asks again. */
 	if (ui->sink)
 		return 1;
 
@@ -522,9 +499,7 @@ static double live_elapsed(const struct ui *ui)
 	       (double)(now.tv_nsec - ui->live_start.tv_nsec) / 1e9;
 }
 
-/* Erases the previously rendered region and repaints it at the current width.
- * After a resize the old row count is unreliable (the terminal may have
- * rewrapped), so start fresh below instead of erasing. */
+/* after a resize the old row count is stale: draw below, do not erase */
 static void live_redraw(struct ui *ui)
 {
 	int width = ui_term_width(ui);
@@ -581,7 +556,6 @@ void ui_live_begin(struct ui *ui, const char *label)
 	live_redraw(ui);
 }
 
-/* Appends one complete output line to the rolling tail. */
 static void live_push_line(struct ui *ui, const char *s)
 {
 	if (ui->sink) {
@@ -650,7 +624,6 @@ void ui_live_end(struct ui *ui, enum ui_result r)
 	if (!ui->live_active)
 		return;
 
-	/* flush a trailing partial line */
 	if (ui->carry_len > 0) {
 		ui->carry[ui->carry_len] = '\0';
 		live_push_line(ui, ui->carry);
@@ -670,7 +643,6 @@ void ui_live_end(struct ui *ui, enum ui_result r)
 		return;
 	}
 
-	/* collapse: erase the region, keep failure tails for debugging */
 	if (g_winch) {
 		g_winch = 0;
 		ui->live_rows = 0;

@@ -2,12 +2,6 @@
  * Copyright (C) 2026 Szymon Wilczek
  *
  * lota-install - System State Probes
- *
- * Every stage of the guided installer decides "done vs pending"
- * by probing live system state instead of trusting a state file.
- * Probes mirror the agent's own startup gates (src/agent/bpf_loader.c)
- * so the installer never reports green for a host the agent would
- * refuse.
  */
 
 #ifndef LOTA_INSTALL_PROBE_H
@@ -21,13 +15,6 @@
 
 #define PROBE_HASH_SIZE 32
 
-/*
- * What the installer learned about the agent's units.
- *
- * Running and enabled are separate questions and a host can answer them
- * differently: one that was started by hand, or through socket activation,
- * enforces now and not after the next reboot.
- */
 struct probe_service_state {
 	int agent_active;
 	int agent_enabled;
@@ -35,89 +22,66 @@ struct probe_service_state {
 	int attest_enabled;
 };
 
-/*
- * Verdict for the agent-service stage, and the sentence explaining it.
+/**
+ * probe_agent_service_stage() - Verdict for the agent-service stage.
+ * @s:    service state the caller read.
+ * @note: filled with the reason for the verdict.
+ * @cap:  size of @note.
  *
- * Pure: the caller does the asking, this decides.
- * Satisfied only when the agent is active and all three units are enabled,
- * so enforcement survives the next boot.
+ * Return: STAGE_DONE when the agent is active and the agent, socket
+ * and attest units are enabled, STAGE_PENDING when one of those is
+ * not, STAGE_ERROR when @s is NULL.
  */
 enum stage_state probe_agent_service_stage(const struct probe_service_state *s,
 					   char *note, size_t cap);
 
-/* Where the kernel publishes the policy it loaded */
 #define PROBE_IMA_POLICY_PATH "/sys/kernel/security/ima/policy"
 
-/* What the loaded IMA policy says about this host, as the scope stage reads it */
 struct probe_ima_scope {
-	/* PROBE_IMA_SCOPE_EXEC, PROBE_IMA_SCOPE_NONE, or -errno when the policy
-	 * could not be read at all */
-	int scope;
-	/* the policy appraises policy writes against a signature,
-	 * so an unsigned rule set cannot be loaded on this host at all */
-	int policy_signed;
-	/* Secure Boot is on, which is what decides the appraisal mode:
-	 * the kernel discards ima_appraise= on such a host and appraises in
-	 * enforce, so a rule set loaded here refuses whatever it cannot verify */
+	int scope; /* enum probe_ima_scope_state, or -errno from the read */
+	int policy_signed; /* policy writes are appraised against a signature */
 	int secureboot;
-	/* the agent binary carries a signature the kernel can appraise,
-	 * which is the evidence that this host has a signing route at all */
-	int agent_signed;
-	/* fs-verity holds the agent binary;
-	 * decides if missing scope stops the install */
-	int agent_verity;
-	/* the probe ran privileged, which decides whether an unreadable policy
-	 * is a kernel that publishes none or a caller that may not look */
+	int agent_signed; /* agent binary carries a signed security.ima */
+	int agent_verity; /* agent binary is under fs-verity */
 	int is_root;
 };
 
-/*
- * Verdict for the IMA appraisal-scope stage, and the sentence explaining it.
+/**
+ * probe_ima_scope_stage() - Verdict for the IMA appraisal-scope stage.
+ * @s:    policy state the caller read.
+ * @note: filled with the reason for the verdict.
+ * @cap:  size of @note.
  *
- * Pure: the caller does the reading, this decides. The gate this stage exists
- * to satisfy lives in the agent, and an unreadable policy is deliberately decided
- * the way the agent decides it -- unknown scope leaves the appraisal mode
- * deciding on both sides, so the installer never blocks a host the agent would
- * have started on.
- *
- * Where the scope is missing the stage reports it; it does not widen it. Every
- * rule that reaches an executable appraises every executable the rule matches,
- * appraisal on a Secure Boot host runs in enforce whatever the cmdline asked
- * for, and a host whose files carry no signature would refuse them all at the
- * next boot. What is missing is a signing route, and that is the
- * distribution's or the operator's to supply.
- *
- * Whether that stops the install is lota_ima_scope_is_advisory(), the rule
- * the agent starts on.
+ * Return: STAGE_DONE when a rule reaches an executable, or when the policy
+ * cannot be read for a reason other than -EACCES without root. With no such
+ * rule, STAGE_DONE when lota_ima_scope_is_advisory() holds for
+ * @s->agent_verity, otherwise STAGE_BLOCKED. STAGE_ERROR when @s is NULL or
+ * the read failed with -EACCES without root.
  */
 enum stage_state probe_ima_scope_stage(const struct probe_ima_scope *s,
 				       char *note, size_t cap);
 
-/* What the loaded policy appraises.
- * Missing file is -ENOENT from the read */
 enum probe_ima_scope_state {
 	PROBE_IMA_SCOPE_EXEC = 0, /* a rule reaches an executable */
 	PROBE_IMA_SCOPE_NONE = 1, /* readable, and appraises no executable */
 };
 
-/*
- * Reads the loaded IMA policy: PROBE_IMA_SCOPE_EXEC or PROBE_IMA_SCOPE_NONE,
- * or -errno when the file could not be read (a kernel built without
- * CONFIG_IMA_READ_POLICY publishes nothing).
- * Sets @policy_signed when the policy appraises policy writes against a signature.
+/**
+ * probe_ima_policy_scope() - Read the loaded IMA policy.
+ * @policy_path:   policy file.
+ * @policy_signed: set when an appraise rule for func=POLICY_CHECK requires
+ *                 appraise_type=imasig.
+ *
+ * Return: enum probe_ima_scope_state, or -errno when the file cannot be read.
  */
 int probe_ima_policy_scope(const char *policy_path, int *policy_signed);
 
-/* fs-verity state of one file */
 enum probe_verity {
 	PROBE_VERITY_ENABLED = 0,
 	PROBE_VERITY_DISABLED,
-	PROBE_VERITY_UNSUPPORTED, /* filesystem lacks the verity feature */
+	PROBE_VERITY_UNSUPPORTED,
 };
 
-/* Filesystem class of the volume backing path, used to steer binary-immutability
- * remediation: verity-capable filesystems take the fs-verity path, the rest take
- * the filesystem-agnostic signed-IMA-xattr path */
 enum probe_fstype {
 	PROBE_FS_UNKNOWN = 0,
 	PROBE_FS_EXT4, /* ext2/ext3/ext4 */
@@ -127,341 +91,454 @@ enum probe_fstype {
 	PROBE_FS_ZFS,
 };
 
-/* PCR14 state relative to the initramfs lock */
 enum probe_pcr14 {
-	PROBE_PCR14_LOCK_ONLY = 0, /* lock ran, agent not yet extended */
-	PROBE_PCR14_ZERO, /* lock did not run this boot */
-	PROBE_PCR14_OTHER, /* extended past the lock (agent or stale) */
+	PROBE_PCR14_LOCK_ONLY = 0, /* holds the initramfs lock value */
+	PROBE_PCR14_ZERO,
+	PROBE_PCR14_OTHER,
 };
 
-/* Reads a small text file, NUL-terminates, strips one trailing
- * newline.
- * Returns byte count >= 0 or -errno. */
+/**
+ * probe_read_text() - Read a small text file.
+ * @path: file to read.
+ * @buf:  NUL-terminated output, one trailing newline stripped.
+ * @cap:  size of @buf; at least 2.
+ *
+ * Return: bytes in @buf, or -errno.
+ */
 int probe_read_text(const char *path, char *buf, size_t cap);
 
-/* enum probe_verity (PROBE_VERITY_ENABLED is 0), or -errno on hard
- * failure (file missing, permission) */
+/**
+ * probe_fsverity_state() - fs-verity state of a file.
+ * @path: file to query.
+ *
+ * Return: enum probe_verity, or -errno.
+ */
 int probe_fsverity_state(const char *path);
 
-/* Enables fs-verity (SHA-256, 4K blocks) on the file.
- * 0 or -errno; EOPNOTSUPP/-ENOTTY mean the filesystem lacks the feature. */
+/**
+ * probe_fsverity_enable() - Enable fs-verity (SHA-256, 4096-byte blocks).
+ * @path: file to seal.
+ *
+ * Return: 0 or -errno.
+ */
 int probe_fsverity_enable(const char *path);
 
-/*
- * Pure: reads one line of a runtime manifest -- the object list a title captures
- * with `demo_anticheat --print-runtime-objects` or the equivalent for its own
- * binary set.
+/**
+ * probe_manifest_line() - Parse one line of a runtime manifest.
+ * @line: the line.
+ * @out:  receives the path.
+ * @cap:  size of @out.
  *
- * Writes the path into out and returns 1 when the line names one,
- * 0 when the line is blank or a '#' comment,
- * and -EINVAL when it is neither
- * (relative path, a path carrying a '..' component, or one longer than out holds).
+ * Surrounding spaces, tabs and line endings are trimmed.
  *
- * Absolute paths that read as what they resolve to, only:
- * the manifest comes from whoever ships the title and is acted on with privilege,
- * so a path resolved against a working directory or walked back out of the directory
- * it names is refused rather than guessed at.
+ * Return: 1 when @line names a path, 0 for a blank or '#' line, -EINVAL for
+ * a relative path, a path with a '..' component, or one @out cannot hold.
  */
 int probe_manifest_line(const char *line, char *out, size_t cap);
 
-/*
- * Pure: reads `semanage port -l` and says whether a tcp port must be labelled
- * before the agent can reach it.
+/**
+ * probe_port_needs_label() - Whether a tcp port needs an SELinux label.
+ * @listing: output of `semanage port -l`.
+ * @port:    decimal port.
  *
- * 0 when the port is listed under a type the agent connects to, or under a type
- * of its own that `semanage port -a` cannot replace.
- * 1 otherwise, including a port covered only by a range such as
- * unreserved_port_t, where the agent is refused at connect.
- * -EINVAL when port is not a port number.
+ * Return: 0 when a tcp row of lota_port_t or http_port_t covers @port,
+ * or a tcp row of any other type lists @port as a single entry, otherwise 1.
+ * -EINVAL when @port is not a port number.
  */
 int probe_port_needs_label(const char *listing, const char *port);
 
-/* Pure: maps statfs f_type magic to probe_fstype */
+/**
+ * probe_fstype_from_magic() - Classify a statfs f_type.
+ * @magic: f_type value.
+ *
+ * Return: enum probe_fstype.
+ */
 enum probe_fstype probe_fstype_from_magic(long magic);
 
-/* Pure:
- * 1 when the filesystem implements native fs-verity (ext4, btrfs, f2fs),
- * 0 otherwise.
- * Live ioctl in probe_fsverity_state() stays authoritative for capability;
- * this only steers remediation text */
+/**
+ * probe_fs_supports_fsverity() - Whether a filesystem class has fs-verity.
+ * @fs: filesystem class.
+ *
+ * Return: 1 for ext4, btrfs and f2fs, otherwise 0.
+ */
 int probe_fs_supports_fsverity(enum probe_fstype fs);
 
-/* Pure:
- * Writes filesystem-specific guidance for establishing kernel-enforced
- * immutability of the binary at path.
- * Verity-capable filesystems get the fs-verity-enable path;
- * the rest get the filesystem-agnostic signed-IMA-xattr path */
+/**
+ * probe_verity_remediation() - Guidance for making a binary immutable.
+ * @fs:   filesystem class of @path.
+ * @path: the binary.
+ * @out:  output buffer.
+ * @cap:  size of @out.
+ */
 void probe_verity_remediation(enum probe_fstype fs, const char *path, char *out,
 			      size_t cap);
 
-/* statfs the path and classify its filesystem.
- * enum probe_fstype, or PROBE_FS_UNKNOWN when statfs fails */
+/**
+ * probe_path_fstype() - Filesystem class of the volume holding a path.
+ * @path: path to statfs.
+ *
+ * Return: enum probe_fstype; PROBE_FS_UNKNOWN when statfs fails.
+ */
 enum probe_fstype probe_path_fstype(const char *path);
 
-/* Mirrors the agent's agent_self_ima_signed():
- * 1 when the file carries a signature-type security.ima xattr,
- * 0 when it has none or only a bare digest, errno on read failure. */
+/**
+ * probe_file_ima_signed() - Whether a file carries a signed security.ima.
+ * @path: file to check.
+ *
+ * Return: 1 for a signature, 0 for none or a bare digest, -errno on read
+ * failure.
+ */
 int probe_file_ima_signed(const char *path);
 
-/* 1 when the machine booted through UEFI, 0 when it did not.
+/**
+ * probe_firmware_is_uefi() - Whether the machine booted through UEFI.
  *
- * Separate from probe_secureboot(): missing SecureBoot variable is either legacy
- * BIOS boot or UEFI firmware without Secure Boot support, and the two get
- * different instructions.
- * _at form takes the firmware directory so the decision is testable without reboot */
+ * Return: 1 or 0.
+ */
 int probe_firmware_is_uefi(void);
+/* probe_firmware_is_uefi() against firmware directory @dir */
 int probe_firmware_is_uefi_at(const char *dir);
 
-/* 1 = Secure Boot enabled, 0 = disabled/setup mode,
- * -ENOENT = no UEFI (BIOS/CSM host), other -errno on read failure. */
+/**
+ * probe_secureboot() - Read the SecureBoot variable.
+ *
+ * Return: 1 when enabled, 0 when not, -errno on read failure (-ENOENT when
+ * the variable is absent).
+ */
 int probe_secureboot(void);
 
-/* 1 = firmware holds no platform key (setup mode), so enabling Secure Boot also
- * needs the factory keys restored,
- * 0 = user mode,
- * -errno on read failure (-ENOENT on firmware that exposes no SetupMode variable) */
+/**
+ * probe_secureboot_setup_mode() - Read the SetupMode variable.
+ *
+ * Return: 1 in setup mode, 0 in user mode, -errno on read failure.
+ */
 int probe_secureboot_setup_mode(void);
 
-/* 1 = firmware accepts the OsIndications request to boot straight into its setup
- * UI, which is what makes 'systemctl reboot --firmware-setup' work,
- * 0 = unsupported,
- * -errno on read failure */
+/**
+ * probe_firmware_setup_supported() - Whether firmware accepts a boot into
+ * its setup UI.
+ *
+ * Return: bit 0 of OsIndicationsSupported, or -errno on read failure.
+ */
 int probe_firmware_setup_supported(void);
 
-/* Path-parameterized variants behind the fixed-path wrappers above.
- * Both read efivarfs file: 4-byte attribute header, then the payload */
+/* efivarfs readers behind the wrappers above; 4-byte attribute header first */
 int probe_efivar_flag_at(const char *path);
 int probe_efivar_bit0_at(const char *path);
 
-/* Pure:
- * Writes the Secure-Boot remediation somebody at the machine can act on
- * without a manual:
- * what the setting is called, how to reach firmware setup on this machine,
- * and what enabling it does not break.
+/**
+ * probe_secureboot_remediation() - Secure Boot instructions for the person
+ * at the machine.
+ * @machine:                  DMI description, or NULL.
+ * @is_virtual:               1 for a guest.
+ * @setup_mode:               probe_secureboot_setup_mode() result.
+ * @firmware_setup_supported: probe_firmware_setup_supported() result.
+ * @out:                      output buffer.
+ * @cap:                      size of @out.
  *
- * It deliberately carries no per-vendor menu path or setup key.
- * Those differ between firmware revisions of one model, nothing here can verify
- * them, and confidently wrong instruction costs more than general one.
- *
- * machine is the DMI description echoed back (may be NULL);
- * is_virtual says this is a guest (systemd-detect-virt, decided by the caller);
- * setup_mode and firmware_setup_supported take the probe results above,
- * where negative value reads as "could not tell" */
+ * Only a @firmware_setup_supported of 1 offers the reboot into setup,
+ * and only a @setup_mode of 1 adds the step that restores the keys.
+ */
 void probe_secureboot_remediation(const char *machine, int is_virtual,
 				  int setup_mode, int firmware_setup_supported,
 				  char *out, size_t cap);
 
-/* Gathers the live inputs this file owns (DMI, SetupMode, OsIndicationsSupported)
- * and builds the remediation above.
- * Whether the host is a guest comes from the caller, since answering it means
- * running systemd-detect-virt and no probe here spawns a process */
+/**
+ * probe_secureboot_guidance() - probe_secureboot_remediation() on live DMI
+ * and EFI variables.
+ * @is_virtual: 1 for a guest.
+ * @out:        output buffer.
+ * @cap:        size of @out.
+ */
 void probe_secureboot_guidance(int is_virtual, char *out, size_t cap);
 
-/* Describes this machine the way DMI does ("Dell Inc. Latitude 7420"),
- * for echoing back to whoever is at the keyboard.
- * Writes empty string when DMI says nothing usable;
- * placeholder strings a board ships unfilled ("System Product Name") count
- * as nothing */
+/**
+ * probe_machine_description() - DMI vendor and product of this machine.
+ * @out: output buffer; empty when DMI holds only placeholders.
+ * @cap: size of @out.
+ */
 void probe_machine_description(char *out, size_t cap);
+/* probe_machine_description() against DMI directory @dmi_dir */
 void probe_machine_description_at(const char *dmi_dir, char *out, size_t cap);
 
-/* 1 when the platform exposes an ESRT System Firmware entry (fw_type == 1),
- * 0 otherwise.
- * Informational only: it tells whoever is installing whether a future
- * self-service
- * re-anchor takes the strong (firmware-version) path or the
- * Low-Firmware-Assurance path. Many DIY boards expose no ESRT. */
+/**
+ * probe_esrt_system_firmware_present() - Whether ESRT has a system firmware
+ * entry.
+ *
+ * Return: 1 when an entry has fw_type 1, otherwise 0.
+ */
 int probe_esrt_system_firmware_present(void);
-
-/* Path-parameterized variant behind the fixed-path wrapper above; base is
- * the ESRT entries directory. Lets tests point at a fixture tree. */
+/* probe_esrt_system_firmware_present() against ESRT entries directory @base */
 int probe_esrt_system_firmware_present_at(const char *base);
 
-/* Pure parser:
- * 0 when the cmdline buffer carries ima_appraise=enforce|fix,
- * -EPERM otherwise.
- * First token wins, mirroring the agent's kernel_ima_appraise_enforcing() */
+/**
+ * probe_cmdline_ima_ok() - Whether a cmdline sets ima_appraise=enforce or fix.
+ * @cmdline: kernel command line.
+ *
+ * The first ima_appraise= token decides.
+ *
+ * Return: 0 for enforce or fix, -EPERM otherwise, -EINVAL for NULL,
+ * -E2BIG for a cmdline of 4096 bytes or more.
+ */
 int probe_cmdline_ima_ok(const char *cmdline);
 
-/* Pure parser:
- * 1 when the whitespace-separated cmdline buffer contains the exact token,
- * 0 otherwise. */
+/**
+ * probe_cmdline_has_token() - Whether a cmdline holds an exact token.
+ * @cmdline: whitespace-separated kernel command line.
+ * @token:   token to find.
+ *
+ * Return: 1 or 0.
+ */
 int probe_cmdline_has_token(const char *cmdline, const char *token);
 
-/*
- * Pure: 1 when IMA appraisal blocks on an integrity failure, 0 when it does
- * not, mirroring the agent's bpf_loader_ima_appraisal_active() mode half.
+/**
+ * probe_ima_mode_blocking() - Nonzero @secureboot, or a cmdline that passes
+ * probe_cmdline_ima_ok().
+ * @secureboot: probe_secureboot() result.
+ * @cmdline:    kernel command line.
  *
- * A Secure Boot kernel discards ima_appraise= and keeps its own blocking default,
- * so on such a host the parameter says nothing about the mode and appending it
- * changes nothing. Only where the kernel honours the parameter does the cmdline
- * decide.
+ * Return: 1 when @secureboot is nonzero or @cmdline passes
+ * probe_cmdline_ima_ok(), otherwise 0.
  */
 int probe_ima_mode_blocking(int secureboot, const char *cmdline);
 
-/* 0 when the running kernel enforces module signatures */
+/**
+ * probe_module_sig_enforced() - Whether module signatures are enforced.
+ *
+ * Return: 0 when enforced, -EPERM when not, -EIO for an empty parameter,
+ * -errno on read failure.
+ */
 int probe_module_sig_enforced(void);
 
-/* 0 when lockdown is [integrity] or [confidentiality] */
+/**
+ * probe_lockdown_restrictive() - Whether lockdown is integrity or stricter.
+ *
+ * Return: 0 for [integrity] or [confidentiality], -EPERM otherwise, -EIO for
+ * an empty file, -errno on read failure.
+ */
 int probe_lockdown_restrictive(void);
 
-/* Where lota-pcr14-lock persists the pre-extend PCR14;
- * read by the fixed-path helpers below */
+/**
+ * probe_pcr14_baseline_path() - File lota-pcr14-lock records the pre-extend
+ * PCR 14 in.
+ *
+ * Return: the path.
+ */
 const char *probe_pcr14_baseline_path(void);
 
-/* Derives the post-lock PCR14 value installed by the initramfs lock:
- * SHA256(baseline || SHA256("LOTA-PCR14-INITRAMFS-LOCK-v1")), where baseline
- * is the pre-extend PCR14 lota-pcr14-lock persisted this boot (the shim MOK
- * measurement, or 0^32 on a UEFI host whose boot chain never measured
- * PCR14). */
+/**
+ * probe_pcr14_lock_value() - PCR 14 after the initramfs lock.
+ * @out: SHA256(baseline || SHA256("LOTA-PCR14-INITRAMFS-LOCK-v1")).
+ *
+ * A missing or short baseline counts as zero.
+ */
 void probe_pcr14_lock_value(uint8_t out[PROBE_HASH_SIZE]);
-
-/* Path-parameterized variant behind the fixed-path wrapper above;
- * baseline_path is the file lota-pcr14-lock writes the pre-extend PCR14 to.
- * Lets tests pin the derivation against known baseline. */
+/* probe_pcr14_lock_value() with the baseline read from @baseline_path */
 void probe_pcr14_lock_value_at(const char *baseline_path,
 			       uint8_t out[PROBE_HASH_SIZE]);
 
-/* Pure parser:
- * Hex string (exactly 2*n chars, case-insensitive) to bytes.
- * 0 or -EINVAL. */
+/**
+ * probe_hex_to_bytes() - Decode hex.
+ * @hex: exactly 2 * @n hex digits, either case.
+ * @out: receives @n bytes.
+ * @n:   number of bytes.
+ *
+ * Return: 0 or -EINVAL.
+ */
 int probe_hex_to_bytes(const char *hex, uint8_t *out, size_t n);
 
-/* Classifies the live PCR14 from sysfs (/sys/class/tpm/tpm0/pcr-sha256/14)
- * enum probe_pcr14 or -errno (-ENOENT: no TPM 2.0 sysfs PCR interface) */
+/**
+ * probe_pcr14_state() - Classify the live PCR 14.
+ *
+ * Return: enum probe_pcr14, -EBADMSG for an unparseable value, or -errno
+ * (-ENOENT without the TPM sysfs PCR interface).
+ */
 int probe_pcr14_state(void);
 
-/* Mirrors the agent's tpm_device_selinux_label_ok():
- * 0 when every present /dev/tpm{rm,}0 carries lota_tpm_device_t (or the host
- * has no SELinux xattrs), -ENOENT when no TPM device exists, -EPERM on a wrong
- * label, other -errno on read failure */
+/**
+ * probe_selinux_tpm_label() - Whether the TPM nodes carry lota_tpm_device_t.
+ *
+ * Return: 0 when each present /dev/tpmrm0 and /dev/tpm0 carries the label,
+ * or the filesystem has no SELinux xattrs; -ENOENT when neither node exists;
+ * -EPERM on another label; -errno on read failure.
+ */
 int probe_selinux_tpm_label(void);
 
-/* Parses a DER certificate and reports whole days until notAfter
- * (negative = expired).
- * 0 or -errno (-ENOENT: not enrolled, EBADMSG: unparseable) */
+/**
+ * probe_cert_days_left() - Whole days until a DER certificate expires.
+ * @der_path:  certificate file.
+ * @days_left: receives the days; negative once expired.
+ *
+ * Return: 0, -EBADMSG for an unparseable file, or -errno.
+ */
 int probe_cert_days_left(const char *der_path, int *days_left);
 
-/* Pure parser:
- * 1 when a "key = value" line for the exact key exists
- * (comments and leading whitespace skipped), 0 otherwise */
+/**
+ * probe_conf_buf_has_key() - Whether a configuration sets a key.
+ * @buf: configuration text.
+ * @key: exact key.
+ *
+ * Return: 1 when a "key = value" line exists, otherwise 0.
+ */
 int probe_conf_buf_has_key(const char *buf, const char *key);
 
-/* Pure parser: copy @key's value into @out and return 1;
- * 0 with @out empty when absent, empty or too long */
+/**
+ * probe_conf_buf_value() - Value of a configuration key.
+ * @buf: configuration text.
+ * @key: exact key.
+ * @out: receives the value.
+ * @cap: size of @out.
+ *
+ * Return: 1, or 0 with @out empty when the key is absent, empty or its
+ * value does not fit.
+ */
 int probe_conf_buf_value(const char *buf, const char *key, char *out,
 			 size_t cap);
 
-/* File-backed wrapper for probe_conf_buf_value() */
+/**
+ * probe_conf_value() - probe_conf_buf_value() on a file.
+ * @conf_path: configuration file.
+ * @key:       exact key.
+ * @out:       receives the value.
+ * @cap:       size of @out.
+ *
+ * Return: as probe_conf_buf_value(); 0 when the file cannot be read.
+ */
 int probe_conf_value(const char *conf_path, const char *key, char *out,
 		     size_t cap);
 
-/* File-backed wrapper for probe_conf_buf_has_key().
- * 1/0 or -errno */
+/**
+ * probe_conf_has_key() - probe_conf_buf_has_key() on a file.
+ * @conf_path: configuration file.
+ * @key:       exact key.
+ *
+ * Return: 1, 0, or -errno.
+ */
 int probe_conf_has_key(const char *conf_path, const char *key);
 
-/* Pure parser:
- * How many [profile "name"] sections the configuration carries.
- * Publisher profiles are the agent's target list, so the count is what
- * decides where this host reports */
+/**
+ * probe_conf_buf_profile_count() - Number of [profile "name"] sections.
+ * @buf: configuration text.
+ *
+ * Return: the count.
+ */
 int probe_conf_buf_profile_count(const char *buf);
 
-/* File-backed wrapper for probe_conf_buf_profile_count().
- * count or -errno */
+/**
+ * probe_conf_profile_count() - probe_conf_buf_profile_count() on a file.
+ * @conf_path: configuration file.
+ *
+ * Return: the count, or -errno.
+ */
 int probe_conf_profile_count(const char *conf_path);
 
-/* Pure parser:
- * ca_cert of the index-th [profile] section (0-based).
- * 1 and the path in out, or 0 when that section has none or does not exist */
+/**
+ * probe_conf_buf_profile_anchor() - ca_cert of a profile section.
+ * @buf:   configuration text.
+ * @index: 0-based profile section.
+ * @out:   receives the path.
+ * @cap:   size of @out.
+ *
+ * Return: 1, or 0 when the section or its ca_cert is absent.
+ */
 int probe_conf_buf_profile_anchor(const char *buf, int index, char *out,
 				  size_t cap);
 
-/* Pure parser:
- * [profile] sections with reporting = continuous and a verifier other than
- * none, the ones the loop reports to whether or not a title runs */
+/**
+ * probe_conf_buf_continuous_count() - Profiles that report continuously.
+ * @buf: configuration text.
+ *
+ * Return: profile sections with reporting = continuous and a verifier
+ * other than none.
+ */
 int probe_conf_buf_continuous_count(const char *buf);
 
-/* Pure: 1 when the loop's status says it attested to at least expected
- * publishers ("Attested (N publisher(s)), ...") and is not the status
- * before read ahead of a reload (NULL or empty: none was), else 0 */
+/**
+ * probe_attest_status_covers() - Whether the loop reported a new round.
+ * @status:   current loop status.
+ * @before:   status read before a reload; NULL or empty for none.
+ * @expected: publishers the round must cover.
+ *
+ * Return: 1 when @status reads "Attested (N publisher..." with N at least
+ * @expected and differs from a non-empty @before, otherwise 0.
+ */
 int probe_attest_status_covers(const char *status, const char *before,
 			       int expected);
 
-/* How the self-check proves this host attests. */
 enum probe_selfcheck_plan {
-	/* Nobody named a verifier: the first title launch performs the round */
 	SELFCHECK_SKIP_NO_VERIFIER,
-	/* One verifier named and no profiles: one round against it, then exit */
-	SELFCHECK_ONE_ROUND,
-	/* Publisher profiles are the target list, so no single verifier can be
-	 * named -- the agent refuses that combination */
+	SELFCHECK_ONE_ROUND, /* one round against the named verifier */
 	SELFCHECK_PUBLISHERS_REPORT,
-	/* This install recorded the fleet's verifier as a profile: the loop
-	 * reports to it, so the loop's own status is waited on */
-	SELFCHECK_LOOP_REPORTS,
+	SELFCHECK_LOOP_REPORTS, /* wait on the loop's status */
 };
 
-/* Pure decision from the inputs the stage has.
- * fleet_profile: the CA this install enrolled with is recorded as a profile */
+/**
+ * probe_selfcheck_plan() - How the self-check proves this host attests.
+ * @verifier:      verifier named on the command line, or NULL.
+ * @profile_count: profile sections in the configuration.
+ * @fleet_profile: the CA this install enrolled with is recorded as a profile.
+ *
+ * Return: SELFCHECK_LOOP_REPORTS for @fleet_profile with a verifier, else
+ * SELFCHECK_PUBLISHERS_REPORT when profiles exist, else
+ * SELFCHECK_SKIP_NO_VERIFIER without a verifier, else SELFCHECK_ONE_ROUND.
+ */
 enum probe_selfcheck_plan probe_selfcheck_plan(const char *verifier,
 					       int profile_count,
 					       bool fleet_profile);
 
-/* 1 when this host has opted into unattended boot-path bring-up,
- * either by the marker file at path or by LOTA_AUTO_BRINGUP=1 in the environment.
+/**
+ * probe_auto_bringup_at() - Whether unattended boot-path bring-up is allowed.
+ * @path: marker file, or NULL.
  *
- * Exactly "1": package hook runs with whatever environment the transaction had,
- * and reading "0" or "false" as consent is how a host ends up with boot path
- * nobody chose. */
+ * Return: 1 when $LOTA_AUTO_BRINGUP is exactly "1" or @path exists,
+ * otherwise 0.
+ */
 int probe_auto_bringup_at(const char *path);
 
-/* Kernels installed on this host, one entry each.
- *
- * The boot-path work is only done when every one of them carries it:
- * the cmdline floor is armed with --update-kernel=ALL, and the PCR 14 lock
- * has to match that scope or selecting an older kernel from the GRUB menu
- * -- the reason more than one is kept -- boots a host with no commitment.
- *
- * Eight is above Fedora's installonly_limit of three with room for a fleet
- * that raised it; a host holding more is enumerated up to the cap. */
 #define PROBE_MAX_KERNELS 8
 #define PROBE_KERNEL_RELEASE_MAX 96
 #define PROBE_KERNEL_IMAGE_MAX 320
 
 struct probe_kernel_image {
-	char release[PROBE_KERNEL_RELEASE_MAX]; /* uname -r of that kernel */
+	char release[PROBE_KERNEL_RELEASE_MAX];
 	char image[PROBE_KERNEL_IMAGE_MAX]; /* its initramfs */
 };
 
-/* A kernel counts when /lib/modules holds its tree and /boot holds its initramfs.
- * A modules tree with no image is what a half-removed kernel leaves
- * and has nothing to lock; a rescue image belongs to no tree of its own and is
- * not regenerated by dracut, so neither is enumerated here.
+/**
+ * probe_installed_kernels_at() - Kernels that have an initramfs.
+ * @modules_dir: modules tree, one directory per release.
+ * @boot_dir:    holds initramfs-<release>.img.
+ * @out:         receives the kernels.
+ * @max:         capacity of @out; enumeration stops there.
+ * @count:       receives the number found.
  *
- * Returns 0 with *count set (0 when the host has no modules directory at all,
- * which is not an error), or a negative errno. */
+ * Return: 0, with @count 0 when @modules_dir cannot be opened; -EINVAL for
+ * a NULL argument.
+ */
 int probe_installed_kernels_at(const char *modules_dir, const char *boot_dir,
 			       struct probe_kernel_image *out, size_t max,
 			       size_t *count);
 
-/* Fixed-path wrapper over /lib/modules and /boot */
+/* probe_installed_kernels_at() on /lib/modules and /boot */
 int probe_installed_kernels(struct probe_kernel_image *out, size_t max,
 			    size_t *count);
 
-/* 1 when the initramfs lock helper ran this boot, 0 when it did not.
+/**
+ * probe_pcr14_lock_ran() - Whether lota-pcr14-lock ran this boot.
  *
- * The helper writes the pre-extend PCR 14 to the /run handoff as its first act,
- * so the file's presence is the evidence.
- * Without it, a PCR 14 the installer cannot derive is the platform's -- shim
- * measures the MOK variables into it on every Secure Boot host -- and not
- * residue from a LOTA install. */
+ * Return: 1 when its baseline file exists, otherwise 0.
+ */
 int probe_pcr14_lock_ran(void);
+/* probe_pcr14_lock_ran() for baseline file @baseline_path */
 int probe_pcr14_lock_ran_at(const char *baseline_path);
 
-/*
- * 1 when the snapshot at @snapshot_path records a pause (PCR 14 spent on an
- * operator-requested shutdown) and @live still holds the value it left, else 0.
- * Mirrors tpm_classify_pcr14(); the result only picks the operator's sentence.
+/**
+ * probe_agent_paused_at() - Whether PCR 14 was spent on a requested shutdown.
+ * @snapshot_path: the agent's clock-state snapshot.
+ * @live:          live PCR 14.
+ *
+ * Return: 1 when the snapshot records a pause and @live holds the PCR 14 it
+ * recorded, otherwise 0.
  */
 int probe_agent_paused_at(const char *snapshot_path,
 			  const uint8_t live[PROBE_HASH_SIZE]);
@@ -469,51 +546,41 @@ int probe_agent_paused_at(const char *snapshot_path,
 /* probe_agent_paused_at() on the agent's snapshot and the live PCR 14 */
 int probe_agent_paused(void);
 
-/*
- * Verdict for the reboot barrier, and the sentence explaining it.
+/**
+ * probe_pcr14_barrier_stage() - Verdict for the reboot barrier.
+ * @pcr_state:    enum probe_pcr14.
+ * @lock_ran:     probe_pcr14_lock_ran() result.
+ * @agent_active: the agent unit is active.
+ * @agent_failed: the agent unit failed.
+ * @agent_paused: probe_agent_paused() result.
+ * @note:         filled with the reason for the verdict.
+ * @cap:          size of @note.
  *
- * Pure: the caller reads PCR 14, the handoff and the service state; this decides.
- * @pcr_state is an enum probe_pcr14, @lock_ran, @agent_active, @agent_failed
- * and @agent_paused are 1/0.
- *
- * A first install on a Secure Boot host and a host carrying a commitment from
- * an earlier agent run look identical in the register and need the same reboot;
- * they are told apart by whether the lock ran, and only ever differ in what the
- * operator is told.
+ * Return: STAGE_BLOCKED when the agent failed and is not active (after the
+ * paused case), STAGE_DONE for PROBE_PCR14_LOCK_ONLY or for
+ * PROBE_PCR14_OTHER with the agent active, otherwise STAGE_REBOOT.
  */
 enum stage_state probe_pcr14_barrier_stage(int pcr_state, int lock_ran,
 					   int agent_active, int agent_failed,
 					   int agent_paused, char *note,
 					   size_t cap);
 
-/*
- * One file the operator named on the command line.
- *
- * The flag travels with the path because the refusal has to name it: an operator
- * who typed one of several file-taking options needs to know which of them did
- * not resolve, and the path alone does not say.
- */
 struct probe_named_file {
-	const char *flag; /* the option as it is spelled, e.g. "--ca-cert" */
-	const char *path; /* what the operator typed, or NULL if they did not */
+	const char *flag; /* e.g. "--ca-cert" */
+	const char *path; /* NULL when the option was not given */
 };
 
-/*
- * probe_named_files - the first named file that cannot be read
- * @files: what the operator named
- * @count: how many entries @files holds
- * @note: sentence for the operator
- * @cap: size of @note
+/**
+ * probe_named_files() - Find the first named file that cannot be read.
+ * @files: files named on the command line.
+ * @count: entries in @files.
+ * @note:  names the flag, path and reason of the failure.
+ * @cap:   size of @note.
  *
- * Returns 0 when every named file is readable, or -errno for the first that is not,
- * with @note naming the flag, the path and the reason.
- * A NULL path is skipped: an option the operator did not use has nothing to check,
- * and only a path somebody typed can be a typo. An option with a built-in default
- * is passed as NULL unless it was named, since a default that is absent is a fact
- * about the host and not a mistake.
+ * Entries with a NULL path are skipped.
  *
- * Pure in the sense the other probes are: it asks the filesystem and decides,
- * so the caller does nothing but print.
+ * Return: 0 when each file is readable, otherwise -errno for the first that
+ * is not.
  */
 int probe_named_files(const struct probe_named_file *files, size_t count,
 		      char *note, size_t cap);

@@ -109,7 +109,6 @@ int probe_fsverity_enable(const char *path)
 	return -errno;
 }
 
-/* statfs f_type magics, mirroring <linux/magic.h> */
 #define PROBE_MAGIC_EXT 0xEF53L
 #define PROBE_MAGIC_XFS 0x58465342L
 #define PROBE_MAGIC_BTRFS 0x9123683EL
@@ -143,13 +142,6 @@ int probe_manifest_line(const char *line, char *out, size_t cap)
 	if (len >= cap)
 		return -EINVAL;
 
-	/*
-	 * '..' component takes the walk out of the directory the line names,
-	 * so manifest a title ships could aim the root-only ioctl at any file
-	 * on the box -- an fs-verity digest is permanent and makes the file
-	 * read-only for good.
-	 * Only paths that mean what they read are taken.
-	 */
 	for (comp = start; comp < start + len; comp++) {
 		if (comp != start && comp[-1] != '/')
 			continue;
@@ -203,8 +195,6 @@ void probe_verity_remediation(enum probe_fstype fs, const char *path, char *out,
 		path = "the agent binary";
 
 	if (probe_fs_supports_fsverity(fs)) {
-		/* verity-capable filesystem,
-		 * feature just not enabled here */
 		snprintf(out, cap,
 			 "Filesystem holding %s supports fs-verity but it "
 			 "is not enabled. ext4: 'tune2fs -O verity' on the "
@@ -214,9 +204,6 @@ void probe_verity_remediation(enum probe_fstype fs, const char *path, char *out,
 		return;
 	}
 
-	/* XFS / ZFS: no native fs-verity
-	 * IMA appraisal of a signed security.ima xattr gives the same offline-swap
-	 * guarantee on any filesystem, and the agent accepts it as equivalent */
 	snprintf(out, cap,
 		 "Filesystem holding %s has no fs-verity. Establish "
 		 "kernel-enforced immutability with IMA instead: sign the "
@@ -249,10 +236,6 @@ int probe_file_ima_signed(const char *path)
 	return lota_ima_xattr_is_signature(xattr, (size_t)n) ? 1 : 0;
 }
 
-/*
- * EFI global variable GUID
- * 4-byte attribute header precedes the payload in efivarfs
- */
 #define EFI_GLOBAL_GUID "8be4df61-93ca-11d2-aa0d-00e098032b8c"
 #define EFI_FIRMWARE_DIR "/sys/firmware/efi"
 #define EFIVARS_DIR "/sys/firmware/efi/efivars/"
@@ -263,10 +246,7 @@ int probe_file_ima_signed(const char *path)
 
 #define EFIVAR_ATTR_LEN 4
 
-/* Reads the payload of an efivarfs variable, dropping the attribute header.
- * Byte count (>= 1) or -errno;
- * -EBADMSG when the file is shorter than the header plus one payload byte.
- * A failure never encodes as 0, which the callers would read as a clear flag */
+/* never returns 0, which a caller would read as a clear flag */
 static int read_efivar_payload(const char *path, uint8_t *out, size_t cap)
 {
 	uint8_t raw[EFIVAR_ATTR_LEN + 8];
@@ -306,9 +286,7 @@ int probe_efivar_flag_at(const char *path)
 	return val == 1 ? 1 : 0;
 }
 
-/* UEFI bitmask variables are little-endian UINT64,
- * so the flag this cares about lives in the first payload byte whatever
- * the firmware wrote above it */
+/* little-endian: bit 0 is in the first payload byte */
 int probe_efivar_bit0_at(const char *path)
 {
 	uint8_t val;
@@ -319,14 +297,6 @@ int probe_efivar_bit0_at(const char *path)
 	return val & 1U ? 1 : 0;
 }
 
-/* Whether the machine booted through UEFI at all.
- *
- * Asked apart from Secure Boot because missing SecureBoot variable does not say
- * which of two machines this is: legacy BIOS boot, or UEFI firmware built without
- * Secure Boot support.
- * Firmware directory exists in the second case and not in the first,
- * and the two need opposite instructions.
- */
 int probe_firmware_is_uefi_at(const char *dir)
 {
 	struct stat st;
@@ -352,7 +322,6 @@ int probe_secureboot_setup_mode(void)
 	return probe_efivar_flag_at(SETUPMODE_EFIVAR);
 }
 
-/* EFI_OS_INDICATIONS_BOOT_TO_FW_UI is bit 0 of OsIndicationsSupported */
 int probe_firmware_setup_supported(void)
 {
 	return probe_efivar_bit0_at(OSINDICATIONS_SUPPORTED_EFIVAR);
@@ -374,7 +343,6 @@ static int str_starts_with_ci(const char *s, const char *prefix)
 
 #define DMI_ID_DIR "/sys/class/dmi/id"
 
-/* Reads one DMI field, leaving out an empty string on any failure */
 static void read_dmi_field(const char *dmi_dir, const char *field, char *out,
 			   size_t cap)
 {
@@ -388,10 +356,6 @@ static void read_dmi_field(const char *dmi_dir, const char *field, char *out,
 		out[0] = '\0';
 }
 
-/*
- * Placeholders a board ships when nobody filled the DMI field in.
- * Reading one back describes no machine anybody owns.
- */
 static int dmi_is_placeholder(const char *s)
 {
 	static const char *const junk[] = {
@@ -485,11 +449,6 @@ void probe_secureboot_remediation(const char *machine, int is_virtual,
 			return;
 	}
 
-	/*
-	 * Support is not room: the request is an EFI variable write, which a
-	 * full store refuses. The startup screen's own key is the fallback;
-	 * no table here, since the key differs between revisions of one model.
-	 */
 	if (firmware_setup_supported == 1) {
 		used += (size_t)snprintf(
 			out + used, cap - used,
@@ -520,11 +479,6 @@ void probe_secureboot_remediation(const char *machine, int is_virtual,
 		return;
 
 	if (setup_mode == 1) {
-		/*
-		 * With no platform key installed there is nothing for Secure Boot
-		 * to enforce against, and firmware commonly leaves the switch
-		 * unselectable until the factory keys are restored.
-		 */
 		used += (size_t)snprintf(
 			out + used, cap - used,
 			"This firmware currently holds no platform keys (setup "
@@ -580,12 +534,6 @@ int probe_cmdline_ima_ok(const char *cmdline)
 	return -EPERM;
 }
 
-/*
- * Return 1 if @rule requires a signed IMA policy (func=POLICY_CHECK with
- * appraise_type=imasig). Such a host refuses any unsigned policy write,
- * the shipped developer baseline included, so the installer reports that
- * instead of suggesting a file the kernel will reject.
- */
 static int rule_demands_signed_policy(const char *rule)
 {
 	char buf[LOTA_IMA_POLICY_RULE_MAX];
@@ -630,11 +578,6 @@ int probe_ima_policy_scope(const char *policy_path, int *policy_signed)
 	if (!fp)
 		return -errno;
 
-	/*
-	 * Read to the end whatever the first rule says: the scope answer and
-	 * the signed-policy answer are two different rules, and the second is
-	 * what turns a remedy into a route the host would refuse.
-	 */
 	while (fgets(line, sizeof(line), fp)) {
 		if (lota_ima_policy_rule_appraises_exec(line))
 			found = 1;
@@ -715,28 +658,12 @@ int probe_lockdown_restrictive(void)
 	return -EPERM;
 }
 
-/*
- * Must match LOTA-PCR14-INITRAMFS-LOCK-v1 in
- * src/initramfs/lota-pcr14-lock.c and the verifier's
- * DeriveInitramfsLockPCR14 (src/verifier/verify/baseline.go)
- */
+/* must match lota-pcr14-lock.c and DeriveInitramfsLockPCR14 */
 #define INITRAMFS_LOCK_TAG "LOTA-PCR14-INITRAMFS-LOCK-v1"
 
-/*
- * lota-pcr14-lock records the pre-extend PCR14 content here on the /run
- * tmpfs (the shim MOK measurement, or 0^32 on a UEFI host whose boot chain
- * never measured PCR14).
- * Must match BASELINE_PATH in src/initramfs/lota-pcr14-lock.c.
- */
+/* must match BASELINE_PATH in src/initramfs/lota-pcr14-lock.c */
 #define PCR14_BASELINE_PATH "/run/lota/pcr14_baseline"
 
-/*
- * read_pcr14_baseline_at - load the baseline the lock helper persisted this
- * boot.
- * Missing or short file yields a zero baseline, matching the agent's own fallback:
- * that is the correct anchor where no shim measured PCR14, and elsewhere it
- * simply fails to match the live register.
- */
 static void read_pcr14_baseline_at(const char *path,
 				   uint8_t out[PROBE_HASH_SIZE])
 {
@@ -761,10 +688,7 @@ void probe_pcr14_lock_value_at(const char *baseline_path,
 
 	read_pcr14_baseline_at(baseline_path, baseline);
 
-	/* SHA-256 over a static tag cannot fail with a live libcrypto;
-	 * NULL ctx would mean allocation failure, where aborting via
-	 * the zeroed output (never equal to a real PCR chain) is the
-	 * fail-closed choice */
+	/* left zeroed on failure */
 	memset(out, 0, PROBE_HASH_SIZE);
 	if (!md)
 		return;
@@ -869,9 +793,6 @@ int probe_selinux_tpm_label(void)
 		if (got < 0) {
 			if (errno == ENOENT)
 				continue;
-			/* No SELinux xattr support:
-			 * udev fence is not the active defence on this host,
-			 * same call the agent's gate makes */
 			if (errno == ENOTSUP)
 				return 0;
 			return -errno;
@@ -912,10 +833,6 @@ int probe_cert_days_left(const char *der_path, int *days_left)
 	if (!cert)
 		return -EBADMSG;
 
-	/*
-	 * days/seconds from now until notAfter
-	 * negative = expired
-	 */
 	if (ASN1_TIME_diff(&day_diff, &sec_diff, NULL,
 			   X509_get0_notAfter(cert)) != 1) {
 		X509_free(cert);
@@ -999,8 +916,6 @@ int probe_conf_buf_value(const char *buf, const char *key, char *out,
 			while (*p == ' ' || *p == '\t')
 				p++;
 			end = eol ? eol : p + strlen(p);
-			/* a value is what is left after the trailing blanks;
-			 * a key with nothing after it is not a value */
 			while (end > p && (end[-1] == ' ' || end[-1] == '\t' ||
 					   end[-1] == '\r'))
 				end--;
@@ -1055,7 +970,6 @@ int probe_conf_buf_profile_count(const char *buf)
 			p++;
 		if (*p != '#' && strncmp(p, "[profile", 8) == 0) {
 			p += 8;
-			/* the section name is quoted and follows the keyword */
 			while (*p == ' ' || *p == '\t')
 				p++;
 			if (*p == '"')
@@ -1076,10 +990,7 @@ int probe_conf_profile_count(const char *conf_path)
 	return probe_conf_buf_profile_count(buf);
 }
 
-/*
- * Key of one config line, hyphens read as underscores like the agent's parser.
- * 1 and the value in out when line holds key, else 0.
- */
+/* 1 and the value in @out when @line sets @key; '-' reads as '_' */
 static int conf_line_value(const char *line, const char *eol, const char *key,
 			   char *out, size_t cap)
 {
@@ -1128,10 +1039,7 @@ static bool conf_line_opens_profile(const char *line)
 	return *p == '"';
 }
 
-/*
- * Walk the [profile] sections, calling fn on each key line of each.
- * Section index is -1 above the first one.
- */
+/* @fn sees only lines under a [profile] header, sections from 0 */
 typedef void (*conf_profile_line_fn)(int section, const char *line,
 				     const char *eol, void *arg);
 
@@ -1232,7 +1140,6 @@ int probe_attest_status_covers(const char *status, const char *before,
 
 	if (!status || strncmp(status, prefix, sizeof(prefix) - 1) != 0)
 		return 0;
-	/* valid-until moves with every round, so a new round reads differently */
 	if (before && before[0] && strcmp(status, before) == 0)
 		return 0;
 	status += sizeof(prefix) - 1;
@@ -1248,11 +1155,6 @@ enum probe_selfcheck_plan probe_selfcheck_plan(const char *verifier,
 					       int profile_count,
 					       bool fleet_profile)
 {
-	/*
-	 * Publishers first: they are the agent's target list, so they decide
-	 * where this host reports whether or not a verifier was named.
-	 * A round that named one as well is the combination the agent refuses.
-	 */
 	if (fleet_profile && verifier && verifier[0])
 		return SELFCHECK_LOOP_REPORTS;
 	if (profile_count > 0)
@@ -1262,7 +1164,6 @@ enum probe_selfcheck_plan probe_selfcheck_plan(const char *verifier,
 	return SELFCHECK_ONE_ROUND;
 }
 
-/* 1 when an ESRT System Firmware entry (fw_type == 1) exists, else 0. */
 int probe_esrt_system_firmware_present_at(const char *base)
 {
 	DIR *d;
@@ -1284,8 +1185,6 @@ int probe_esrt_system_firmware_present_at(const char *base)
 		if (snprintf(path, sizeof(path), "%s/%s/fw_type", base,
 			     de->d_name) >= (int)sizeof(path))
 			continue;
-		/* probe_read_text returns the byte count read (>= 0) or a
-		 * negative errno; only a negative value is a failure */
 		if (probe_read_text(path, buf, sizeof(buf)) < 0)
 			continue;
 		if (atoi(buf) == 1) /* ESRT_FW_TYPE_SYSTEM */
@@ -1316,12 +1215,6 @@ enum stage_state probe_agent_service_stage(const struct probe_service_state *s,
 		return STAGE_PENDING;
 	}
 
-	/*
-	 * Running is not installed.
-	 * A unit that is not enabled does not come back after a reboot,
-	 * and a host that stops enforcing at its next boot must not be
-	 * reported as satisfied.
-	 */
 	if (!s->agent_enabled || !s->socket_enabled || !s->attest_enabled) {
 		char units[160];
 		size_t used = 0;
@@ -1351,20 +1244,6 @@ enum stage_state probe_agent_service_stage(const struct probe_service_state *s,
 	return STAGE_DONE;
 }
 
-/*
- * Stage verdict for the IMA appraisal scope.
- *
- * The previous stage checks the cmdline mode; this one checks the loaded
- * rules. If no rule appraises executables, nothing is appraised and the
- * agent refuses to start.
- *
- * The installer never widens the scope. IMA rules cannot match by path,
- * so a wider rule appraises every matching executable, and Secure Boot
- * kernels ignore ima_appraise= and always enforce.
- * On an unsigned rootfs that stops the next boot. The missing piece is
- * signatures, which come from the distribution or the operator's image
- * pipeline.
- */
 enum stage_state probe_ima_scope_stage(const struct probe_ima_scope *s,
 				       char *note, size_t cap)
 {
@@ -1388,13 +1267,6 @@ enum stage_state probe_ima_scope_stage(const struct probe_ima_scope *s,
 				 PROBE_IMA_POLICY_PATH, strerror(-s->scope));
 			return STAGE_ERROR;
 		}
-		/*
-		 * A kernel built without CONFIG_IMA_READ_POLICY publishes no
-		 * policy, and the agent's gate lets the mode decide alone on
-		 * exactly that host.
-		 * Refusing here would block a machine the agent starts on,
-		 * so the stage reports what it could not see.
-		 */
 		snprintf(note, cap,
 			 "This kernel does not publish its loaded IMA policy "
 			 "(%s: %s), so the scope cannot be checked. The agent "
@@ -1404,10 +1276,6 @@ enum stage_state probe_ima_scope_stage(const struct probe_ima_scope *s,
 		return STAGE_DONE;
 	}
 
-	/*
-	 * Four sentences at most, because STAGE_NOTE_CAP is the whole budget
-	 * and a report that runs past it loses its last clause
-	 */
 	snprintf(note, cap,
 		 "The loaded IMA policy carries no appraise rule that reaches "
 		 "an executable, so the kernel appraises nothing here%s. The "
@@ -1442,16 +1310,6 @@ enum stage_state probe_ima_scope_stage(const struct probe_ima_scope *s,
 							     STAGE_BLOCKED;
 }
 
-/*
- * Kernels installed on this host.
- *
- * /lib/modules is the register of what is installed -- the package manager
- * creates a tree per kernel and removes it with the kernel -- and /boot holds
- * the image each one boots with.
- * A tree with no image cannot be locked (a half-removed kernel), and an image
- * with no tree is the rescue entry, which dracut does not regenerate,
- * so neither is a kernel this stage can act on.
- */
 int probe_installed_kernels_at(const char *modules_dir, const char *boot_dir,
 			       struct probe_kernel_image *out, size_t max,
 			       size_t *count)
@@ -1467,7 +1325,7 @@ int probe_installed_kernels_at(const char *modules_dir, const char *boot_dir,
 
 	d = opendir(modules_dir);
 	if (!d)
-		return 0; /* no modules tree: nothing installed to lock */
+		return 0;
 
 	while (n < max && (de = readdir(d)) != NULL) {
 		char image[PROBE_KERNEL_IMAGE_MAX];
@@ -1513,11 +1371,7 @@ int probe_pcr14_lock_ran(void)
 	return probe_pcr14_lock_ran_at(probe_pcr14_baseline_path());
 }
 
-/*
- * Layout of struct lota_clock_state (src/agent/tpm.h), spelled out because the
- * installer does not link the TPM stack. The probe tests write it through the
- * agent's struct.
- */
+/* struct lota_clock_state (src/agent/tpm.h) */
 #define CLOCK_STATE_PATH "/var/lib/lota/clock_state.dat"
 #define CLOCK_STATE_MAGIC 0x4C434C4BU /* "LCLK" */
 #define CLOCK_STATE_VERSION 1U
@@ -1564,19 +1418,6 @@ int probe_agent_paused(void)
 	return probe_agent_paused_at(CLOCK_STATE_PATH, live);
 }
 
-/*
- * Verdict for the reboot barrier.
- *
- * A register the installer cannot derive means one of three things, and they
- * do not need the same sentence -- or, in one case, the same reboot: an agent
- * ran earlier this boot and left its commitment, an agent ran this boot
- * and refused to start, or the platform extended PCR 14 before LOTA was ever
- * installed, which every Secure Boot host does because shim measures the MOK
- * variables there.
- * Whether the lock ran this boot separates the last from the others,
- * and whether the unit has failed separates the first two.
- * A pause is the one refusal the next boot clears.
- */
 enum stage_state probe_pcr14_barrier_stage(int pcr_state, int lock_ran,
 					   int agent_active, int agent_failed,
 					   int agent_paused, char *note,
@@ -1592,12 +1433,6 @@ enum stage_state probe_pcr14_barrier_stage(int pcr_state, int lock_ran,
 		return STAGE_REBOOT;
 	}
 
-	/*
-	 * A reboot is what this stage asks for, and it is the one thing that
-	 * cannot help here: the agent refused a gate that will refuse it again
-	 * on the next boot, and the register carries the extend of the attempt.
-	 * Say that instead, whatever the register holds.
-	 */
 	if (agent_failed && !agent_active) {
 		snprintf(note, cap,
 			 "lota-agent has already run and refused to start this "
@@ -1641,7 +1476,7 @@ enum stage_state probe_pcr14_barrier_stage(int pcr_state, int lock_ran,
 	}
 }
 
-/* one "type proto a, b-c" row; 1 port listed, 2 listed as a single entry */
+/* 0 when @row does not list @want, 1 in a range, 2 as a single entry */
 static int port_row_lists(const char *row, unsigned long want, char *type,
 			  size_t type_cap)
 {
