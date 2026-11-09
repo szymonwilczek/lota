@@ -130,7 +130,7 @@ int profile_id_from_anchor(const char *ca_cert_path, char *out, size_t out_len)
 		return -EINVAL;
 
 	if (access(ca_cert_path, R_OK) != 0)
-		return -ENOENT;
+		return -errno;
 
 	ret = anchor_spki_sha256(ca_cert_path, digest);
 	if (ret < 0)

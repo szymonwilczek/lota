@@ -62,8 +62,8 @@ struct profile_paths {
  * @out: Lowercase hex SHA-256 of its SubjectPublicKeyInfo.
  * @out_len: At least LOTA_PROFILE_ID_LEN.
  *
- * Return: 0, -ENOENT when the file is not readable, or -EINVAL when it holds
- * no certificate or for a bad argument.
+ * Return: 0, the access(2) errno when the file is not readable, or -EINVAL
+ * when it holds no certificate or for a bad argument.
  */
 int profile_id_from_anchor(const char *ca_cert_path, char *out, size_t out_len);
 
