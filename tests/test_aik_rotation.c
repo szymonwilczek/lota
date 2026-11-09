@@ -1959,6 +1959,39 @@ static void test_refused_unseal_with_unmoved_pcrs_is_the_blob(void)
 	PASS();
 }
 
+static void test_failed_bind_keeps_the_bound_publisher(void)
+{
+	static const char bound[] = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+				    "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+	static struct profile_paths paths;
+	struct tpm_context ctx;
+	int ret;
+
+	TEST("a failed bind leaves the bound publisher's id in place");
+	make_ctx(&ctx);
+	snprintf(ctx.aik_profile_id, sizeof(ctx.aik_profile_id), "%s", bound);
+	ctx.aik_handle = 0x81010016;
+
+	memset(&paths, 0, sizeof(paths));
+	memset(paths.id, 'b', LOTA_PROFILE_ID_LEN - 1);
+	memset(paths.aik_meta, 'm', sizeof(ctx.aik_meta_path));
+
+	ret = tpm_bind_profile(&ctx, &paths);
+	if (ret != -ENAMETOOLONG) {
+		FAIL("expected -ENAMETOOLONG");
+		return;
+	}
+	if (strcmp(ctx.aik_profile_id, bound) != 0) {
+		FAIL("the refused publisher's id stayed bound");
+		return;
+	}
+	if (ctx.aik_handle != 0x81010016) {
+		FAIL("the handle moved");
+		return;
+	}
+	PASS();
+}
+
 int main(void)
 {
 	printf("\n=== AIK Rotation Tests ===\n\n");
@@ -2002,6 +2035,7 @@ int main(void)
 	test_lockout_survives_auth_free_success();
 	test_pcr_batch_reads_past_eight();
 	test_refused_unseal_with_unmoved_pcrs_is_the_blob();
+	test_failed_bind_keeps_the_bound_publisher();
 	test_self_hash_pin_round_trip();
 	test_tpm_strerror_maps_lota_private();
 	test_clock_state_save_load_round_trip();

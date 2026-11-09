@@ -1284,6 +1284,8 @@ restore:
 	 * A caller that survives a failed bind must not write this publisher's
 	 * metadata under the previous publisher's handle.
 	 */
+	snprintf(ctx->aik_profile_id, sizeof(ctx->aik_profile_id), "%s",
+		 previous_profile_id);
 	snprintf(ctx->aik_meta_path, sizeof(ctx->aik_meta_path), "%s",
 		 previous_meta_path);
 	ctx->aik_handle = previous_handle;

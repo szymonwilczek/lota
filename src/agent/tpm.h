@@ -274,8 +274,8 @@ struct tpm_context {
 	bool aik_meta_loaded;
 
 	/*
-	 * Publisher named by the last tpm_bind_profile() past its argument
-	 * checks, also a failed one; empty on a host with no publisher.
+	 * Publisher named by the last successful tpm_bind_profile();
+	 * empty on a host with no publisher.
 	 * Creation input, so publishers hold different keys.
 	 */
 	char aik_profile_id[LOTA_PROFILE_ID_LEN];
@@ -459,8 +459,8 @@ int tpm_provision_aik(struct tpm_context *ctx);
  * Call after tpm_init() and before tpm_provision_aik().
  * A LOTA_AIK_META_PATH override wins over the profile's metadata path.
  *
- * A failure past the argument checks restores the handle and the metadata path
- * and drops the cached key; aik_profile_id keeps the new publisher.
+ * A failure past the argument checks restores the publisher,
+ * the handle and the metadata path and drops the cached key.
  *
  * Return: 0, -ENOSPC when the range is exhausted, or a negative errno.
  */
