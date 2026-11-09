@@ -237,9 +237,7 @@ int diagnostics_dispatch(struct cli_options *opts, struct lota_config *cfg)
 			opts->terminate_protected_pid, sig, &others);
 
 		if (tret == -EINVAL) {
-			fprintf(stderr,
-				"PID %u is not a protected process, so an "
-				"ordinary kill reaches it.\n",
+			fprintf(stderr, "PID %u is not a protected process.\n",
 				opts->terminate_protected_pid);
 			return 1;
 		}

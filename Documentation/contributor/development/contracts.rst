@@ -424,8 +424,8 @@ because PCR 14 commits for the whole boot.
 
 Each of those answers with its own result code, because the code is all the
 caller gets and the sentence it turns into has to match what happened:
-``LOTA_IPC_ERR_NOT_PROTECTED`` for a process nobody protected, which an
-ordinary ``kill`` reaches; ``LOTA_IPC_ERR_TARGET_REFUSED`` for a target the
+``LOTA_IPC_ERR_NOT_PROTECTED`` for a process nobody protected;
+``LOTA_IPC_ERR_TARGET_REFUSED`` for a target the
 command does not speak for at all, PID 0, PID 1 and the agent;
 ``LOTA_IPC_ERR_ACCESS_DENIED`` for a request that is not this caller's to
 make, which covers both the wrong signal and the wrong owner; and
