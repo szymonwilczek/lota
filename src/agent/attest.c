@@ -956,15 +956,12 @@ static int target_key_matches_cert(struct attest_target *t)
 	ret = aik_cert_matches_key(t->paths.aik_cert, spki, spki_len);
 	switch (attest_target_note_cert_match(t, ret)) {
 	case ATTEST_CERT_MISMATCH:
-		lota_err("The attestation key at this publisher's "
-			 "handle is not the key their certificate was "
-			 "issued over, so every quote would be refused "
-			 "by the TPM and each refusal spends a "
-			 "dictionary-attack attempt. No round is "
-			 "attempted until they issue a certificate for "
-			 "the key that is here now: lota-agent "
-			 "--reenroll --ca-cert <their anchor>. "
-			 "Publisher: %s",
+		lota_err("The attestation key at this publisher's handle is "
+			 "not the key their certificate was issued over, so "
+			 "their verifier would not accept its quotes. No round "
+			 "is attempted until they issue a certificate for the "
+			 "key that is here now: lota-agent --reenroll "
+			 "--ca-cert <their anchor>. Publisher: %s",
 			 t->label);
 		break;
 	case ATTEST_CERT_MATCHES_AGAIN:
