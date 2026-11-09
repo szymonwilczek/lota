@@ -241,6 +241,51 @@ static void test_rebinds_second_login(void)
 	logout(PLAYER_UID);
 }
 
+/* a new directory at the same path stands in for a mount over the old one */
+static void test_rebinds_replaced_runtime_dir(void)
+{
+	const uint32_t uids[] = { PLAYER_UID };
+	char link[PATH_MAX], next[PATH_MAX], a[PATH_MAX], b[PATH_MAX];
+	struct container_watch w;
+	struct call_log log;
+
+	TEST("a runtime directory replaced under a bound UID is bound again");
+
+	snprintf(link, sizeof(link), "%s/%u", root, PLAYER_UID);
+	snprintf(next, sizeof(next), "%s/next", root);
+	snprintf(a, sizeof(a), "%s/a", root);
+	snprintf(b, sizeof(b), "%s/b", root);
+	if (mkdir(a, 0700) < 0 || mkdir(b, 0700) < 0 || symlink(a, link) < 0 ||
+	    symlink(b, next) < 0) {
+		FAIL("cannot stage the runtime directory");
+		goto out;
+	}
+
+	if (init_watch(&w, &log, uids, 1) != 0 || log.bound_count != 1) {
+		FAIL("the login was not bound at init");
+		goto out;
+	}
+
+	if (rename(next, link) < 0) {
+		FAIL("cannot replace the runtime directory");
+		container_watch_cleanup(&w);
+		goto out;
+	}
+	(void)container_watch_process(&w);
+
+	if (log.unbound_count != 1 || log.bound_count != 2)
+		FAIL("the listener stayed in the replaced directory");
+	else
+		PASS();
+
+	container_watch_cleanup(&w);
+out:
+	unlink(link);
+	unlink(next);
+	rmdir(a);
+	rmdir(b);
+}
+
 static void test_ignores_unconfigured_uid(void)
 {
 	const uint32_t uids[] = { PLAYER_UID };
@@ -426,6 +471,7 @@ int main(void)
 	test_binds_existing_login();
 	test_binds_login_after_start();
 	test_rebinds_second_login();
+	test_rebinds_replaced_runtime_dir();
 	test_ignores_unconfigured_uid();
 	test_retries_failed_bind();
 	test_a_runtime_dir_names_the_login_to_watch();
