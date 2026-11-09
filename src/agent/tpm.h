@@ -406,10 +406,10 @@ int tpm_read_pcr(struct tpm_context *ctx, uint32_t pcr_index,
  * tpm_read_pcrs_batch() - Read several PCRs from the SHA-256 bank.
  * @ctx: Initialized TPM context.
  * @pcr_mask: PCRs to read; bit 0 is PCR 0.
- * @values: Receives the values; PCRs outside @pcr_mask read zero, as do those
- *          past the eight one TPM2_PCR_Read returns.
+ * @values: Receives the values; PCRs outside @pcr_mask read zero.
  *
- * Return: 0 or a negative errno.
+ * Return: 0, -ENODATA when the TPM returns none of the PCRs still to read, or
+ * a negative errno.
  */
 int tpm_read_pcrs_batch(struct tpm_context *ctx, uint32_t pcr_mask,
 			uint8_t values[LOTA_PCR_COUNT][LOTA_HASH_SIZE]);

@@ -814,77 +814,89 @@ int tpm_read_pcrs_batch(struct tpm_context *ctx, uint32_t pcr_mask,
 	TPML_DIGEST *pcr_values = NULL;
 	uint32_t pcr_update_counter;
 	TPML_PCR_SELECTION *pcr_selection_out = NULL;
-	uint32_t digest_idx = 0;
+	uint32_t want = pcr_mask & ((1U << LOTA_PCR_COUNT) - 1U);
 	uint32_t i;
+	int ret = 0;
 
 	if (!ctx || !values)
 		return -EINVAL;
 
 	memset(values, 0, LOTA_PCR_COUNT * LOTA_HASH_SIZE);
 
-	if (pcr_mask == 0)
-		return 0;
+	/* TPM2_PCR_Read returns at most eight digests per call. */
+	while (want) {
+		uint32_t digest_idx = 0;
+		uint32_t got = 0;
 
-	memset(&pcr_selection, 0, sizeof(pcr_selection));
-	pcr_selection.count = 1;
-	pcr_selection.pcrSelections[0].hash = TPM_HASH_ALG;
-	pcr_selection.pcrSelections[0].sizeofSelect = 3; /* 24 PCRs = 3 bytes */
+		memset(&pcr_selection, 0, sizeof(pcr_selection));
+		pcr_selection.count = 1;
+		pcr_selection.pcrSelections[0].hash = TPM_HASH_ALG;
+		pcr_selection.pcrSelections[0].sizeofSelect = 3;
+		pcr_selection.pcrSelections[0].pcrSelect[0] =
+			(uint8_t)(want & 0xFF);
+		pcr_selection.pcrSelections[0].pcrSelect[1] =
+			(uint8_t)((want >> 8) & 0xFF);
+		pcr_selection.pcrSelections[0].pcrSelect[2] =
+			(uint8_t)((want >> 16) & 0xFF);
 
-	pcr_selection.pcrSelections[0].pcrSelect[0] =
-		(uint8_t)(pcr_mask & 0xFF);
-	pcr_selection.pcrSelections[0].pcrSelect[1] =
-		(uint8_t)((pcr_mask >> 8) & 0xFF);
-	pcr_selection.pcrSelections[0].pcrSelect[2] =
-		(uint8_t)((pcr_mask >> 16) & 0xFF);
+		{
+			struct esys_pcr_read_args args = {
+				.esys_ctx = ctx->esys_ctx,
+				.pcr_selection_in = &pcr_selection,
+				.pcr_update_counter_out = &pcr_update_counter,
+				.pcr_selection_out = &pcr_selection_out,
+				.pcr_values_out = &pcr_values,
+			};
+			int call_ret = tpm_call_with_backoff(
+				ctx, esys_pcr_read_thunk, &args, &rc, 2,
+				(void **)&pcr_selection_out,
+				(void **)&pcr_values);
+			if (call_ret < 0)
+				return call_ret;
+		}
 
-	{
-		struct esys_pcr_read_args args = {
-			.esys_ctx = ctx->esys_ctx,
-			.pcr_selection_in = &pcr_selection,
-			.pcr_update_counter_out = &pcr_update_counter,
-			.pcr_selection_out = &pcr_selection_out,
-			.pcr_values_out = &pcr_values,
-		};
-		int call_ret = tpm_call_with_backoff(
-			ctx, esys_pcr_read_thunk, &args, &rc, 2,
-			(void **)&pcr_selection_out, (void **)&pcr_values);
-		if (call_ret < 0)
-			return call_ret;
-	}
+		if (!pcr_values || !pcr_selection_out ||
+		    pcr_selection_out->count == 0) {
+			ret = -ENODATA;
+			goto out;
+		}
 
-	if (!pcr_values || !pcr_selection_out ||
-	    pcr_selection_out->count == 0) {
+		for (i = 0; i < LOTA_PCR_COUNT; i++) {
+			uint8_t sel = pcr_selection_out->pcrSelections[0]
+					      .pcrSelect[i / 8];
+			if (!(sel & (1U << (i % 8))))
+				continue;
+
+			if (!(want & (1U << i)) ||
+			    digest_idx >= pcr_values->count ||
+			    pcr_values->digests[digest_idx].size !=
+				    LOTA_HASH_SIZE) {
+				ret = -EIO;
+				goto out;
+			}
+			memcpy(values[i],
+			       pcr_values->digests[digest_idx].buffer,
+			       LOTA_HASH_SIZE);
+			digest_idx++;
+			got |= 1U << i;
+		}
+
 		Esys_Free(pcr_values);
 		Esys_Free(pcr_selection_out);
-		return -ENODATA;
+		pcr_values = NULL;
+		pcr_selection_out = NULL;
+
+		if (!got)
+			return -ENODATA;
+		want &= ~got;
 	}
-
-	for (i = 0; i < LOTA_PCR_COUNT; i++) {
-		uint8_t sel =
-			pcr_selection_out->pcrSelections[0].pcrSelect[i / 8];
-		if (!(sel & (1U << (i % 8))))
-			continue;
-
-		if (digest_idx >= pcr_values->count) {
-			Esys_Free(pcr_values);
-			Esys_Free(pcr_selection_out);
-			return -EIO;
-		}
-
-		if (pcr_values->digests[digest_idx].size != LOTA_HASH_SIZE) {
-			Esys_Free(pcr_values);
-			Esys_Free(pcr_selection_out);
-			return -EIO;
-		}
-		memcpy(values[i], pcr_values->digests[digest_idx].buffer,
-		       LOTA_HASH_SIZE);
-		digest_idx++;
-	}
-
-	Esys_Free(pcr_values);
-	Esys_Free(pcr_selection_out);
 
 	return 0;
+
+out:
+	Esys_Free(pcr_values);
+	Esys_Free(pcr_selection_out);
+	return ret;
 }
 
 /*

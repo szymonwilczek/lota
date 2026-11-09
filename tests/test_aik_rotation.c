@@ -25,6 +25,7 @@
 #include <stdint.h>
 #include <sys/types.h>
 #include <tss2/tss2_common.h>
+#include <tss2/tss2_esys.h>
 #include <tss2/tss2_tpm2_types.h>
 
 #include "test.h"
@@ -1825,6 +1826,82 @@ static void test_object_change_is_read_from_the_name(void)
 	PASS();
 }
 
+/* A 24-PCR SHA-256 bank: PCR n reads n + 1 in every byte. */
+static int g_pcr_read_calls;
+
+TSS2_RC __wrap_Esys_PCR_Read(ESYS_CONTEXT *esys_ctx, ESYS_TR shandle1,
+			     ESYS_TR shandle2, ESYS_TR shandle3,
+			     const TPML_PCR_SELECTION *in, UINT32 *counter,
+			     TPML_PCR_SELECTION **sel_out,
+			     TPML_DIGEST **values_out);
+
+TSS2_RC __wrap_Esys_PCR_Read(ESYS_CONTEXT *esys_ctx, ESYS_TR shandle1,
+			     ESYS_TR shandle2, ESYS_TR shandle3,
+			     const TPML_PCR_SELECTION *in, UINT32 *counter,
+			     TPML_PCR_SELECTION **sel_out,
+			     TPML_DIGEST **values_out)
+{
+	TPML_PCR_SELECTION *sel = calloc(1, sizeof(*sel));
+	TPML_DIGEST *values = calloc(1, sizeof(*values));
+
+	(void)esys_ctx;
+	(void)shandle1;
+	(void)shandle2;
+	(void)shandle3;
+	g_pcr_read_calls++;
+	if (!sel || !values) {
+		free(sel);
+		free(values);
+		return TSS2_ESYS_RC_MEMORY;
+	}
+	*counter = 1;
+	sel->count = 1;
+	sel->pcrSelections[0].hash = TPM2_ALG_SHA256;
+	sel->pcrSelections[0].sizeofSelect = 3;
+	for (uint32_t i = 0; i < 24 && values->count < 8; i++) {
+		if (!(in->pcrSelections[0].pcrSelect[i / 8] & (1U << (i % 8))))
+			continue;
+		sel->pcrSelections[0].pcrSelect[i / 8] |= 1U << (i % 8);
+		values->digests[values->count].size = LOTA_HASH_SIZE;
+		memset(values->digests[values->count].buffer, (int)(i + 1),
+		       LOTA_HASH_SIZE);
+		values->count++;
+	}
+	*sel_out = sel;
+	*values_out = values;
+	return TSS2_RC_SUCCESS;
+}
+
+static void test_pcr_batch_reads_past_eight(void)
+{
+	static uint8_t values[LOTA_PCR_COUNT][LOTA_HASH_SIZE];
+	struct tpm_context ctx;
+	int ret;
+
+	TEST("tpm_read_pcrs_batch reads every PCR of a 24-bit mask");
+	make_ctx(&ctx);
+	g_pcr_read_calls = 0;
+
+	ret = tpm_read_pcrs_batch(&ctx, 0xFFFFFF, values);
+	if (ret != 0) {
+		FAIL("batch read failed");
+		return;
+	}
+	for (uint32_t i = 0; i < LOTA_PCR_COUNT; i++) {
+		if (values[i][0] != i + 1 ||
+		    values[i][LOTA_HASH_SIZE - 1] != i + 1) {
+			FAIL("a PCR past the first eight read zero");
+			return;
+		}
+	}
+	if (g_pcr_read_calls != 3) {
+		FAIL("expected three TPM2_PCR_Read calls");
+		return;
+	}
+
+	PASS();
+}
+
 int main(void)
 {
 	printf("\n=== AIK Rotation Tests ===\n\n");
@@ -1866,6 +1943,7 @@ int main(void)
 	test_rc_tcti_layer();
 	test_lockout_flag_lifecycle();
 	test_lockout_survives_auth_free_success();
+	test_pcr_batch_reads_past_eight();
 	test_self_hash_pin_round_trip();
 	test_tpm_strerror_maps_lota_private();
 	test_clock_state_save_load_round_trip();

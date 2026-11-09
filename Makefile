@@ -1294,6 +1294,7 @@ TEST_TPM := $(addprefix $(BUILD_DIR)/test_, \
 $(TEST_TPM): $(TEST_TPM_SRCS)
 $(TEST_TPM): TEST_CFLAGS := -DLOTA_INTERNAL_TESTS
 $(TEST_TPM): TEST_LDLIBS := $(TEST_LIBTSS)
+$(BUILD_DIR)/test_aik_rotation: TEST_LDLIBS += -Wl,--wrap=Esys_PCR_Read
 
 # Interpose libbpf's open calls and the signature verify so the loader's
 # verify-then-load path is testable without a key or a live kernel
