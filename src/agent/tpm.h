@@ -419,8 +419,7 @@ int tpm_quote(struct tpm_context *ctx, const uint8_t *nonce, uint32_t pcr_mask,
  * - auth record present but unreadable: the load error, key left alone;
  * - no auth record: fresh auth, refused as above for a shared key.
  *
- * Return: 0, -EACCES when tpm_verify_device_identity() refuses the device,
- * or a negative errno.
+ * Return: 0 or a negative errno.
  */
 int tpm_provision_aik(struct tpm_context *ctx);
 

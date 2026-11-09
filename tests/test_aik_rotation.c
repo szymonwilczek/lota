@@ -596,28 +596,6 @@ static void test_metadata_truncated(void)
 	PASS();
 }
 
-static void test_provision_rejects_swtpm_vendor(void)
-{
-	struct tpm_context ctx;
-	int ret;
-
-	TEST("provision rejects software TPM vendor strings");
-	make_ctx(&ctx);
-
-	tpm_test_set_prop_reader(mock_prop_reader_swtpm);
-	ret = tpm_provision_aik(&ctx);
-	tpm_test_reset_prop_reader();
-
-	if (ret != -EACCES) {
-		char ebuf[64];
-		snprintf(ebuf, sizeof(ebuf), "expected -EACCES, got %d", ret);
-		FAIL(ebuf);
-		return;
-	}
-
-	PASS();
-}
-
 static void test_rc_success_is_zero(void)
 {
 	TEST("tpm_test_rc_to_errno: TSS2_RC_SUCCESS -> 0");
@@ -1768,27 +1746,6 @@ static void test_reprovision_reads_the_record_first(void)
 	PASS();
 }
 
-static int mock_prop_reader_hw(struct tpm_context *ctx, TPM2_PT prop,
-			       uint32_t *out_val)
-{
-	(void)ctx;
-	switch (prop) {
-	case TPM2_PT_MANUFACTURER:
-		*out_val = tpm_ascii4('X', 'Y', 'Z', '\0');
-		return 0;
-	case TPM2_PT_FIRMWARE_VERSION_1:
-	case TPM2_PT_FIRMWARE_VERSION_2:
-		*out_val = 1;
-		return 0;
-	case TPM2_PT_VENDOR_STRING_1:
-		*out_val = tpm_ascii4('T', 'E', 'S', 'T');
-		return 0;
-	default:
-		*out_val = 0;
-		return 0;
-	}
-}
-
 /* The TPM lists the bound handle; opening the key is never expected. */
 static uint32_t g_listed_handle;
 static int g_key_opens;
@@ -1864,9 +1821,7 @@ static void test_lost_auth_keeps_a_shared_key(void)
 	ctx.aik_meta.key_derivation = TPM_AIK_KEY_DERIVATION_SHARED;
 	ctx.aik_meta_loaded = true;
 
-	tpm_test_set_prop_reader(mock_prop_reader_hw);
 	ret = tpm_provision_aik(&ctx);
-	tpm_test_reset_prop_reader();
 
 	if (ret != -ENOTSUP) {
 		FAIL("expected -ENOTSUP");
@@ -1874,6 +1829,37 @@ static void test_lost_auth_keeps_a_shared_key(void)
 	}
 	if (g_key_opens != 0) {
 		FAIL("provisioning went on to replace the key");
+		return;
+	}
+	PASS();
+}
+
+static void test_provision_ignores_the_vendor_string(void)
+{
+	static int session;
+	struct tpm_context ctx;
+	int ret;
+
+	TEST("provisioning does not judge the vendor string");
+	make_ctx(&ctx);
+	ctx.esys_ctx = (ESYS_CONTEXT *)&session;
+	ctx.aik_handle = 0x81010016;
+	g_listed_handle = ctx.aik_handle;
+	g_key_opens = 0;
+	memset(ctx.aik_profile_id, 'd', LOTA_PROFILE_ID_LEN - 1);
+	ctx.aik_meta.magic = TPM_AIK_META_MAGIC;
+	ctx.aik_meta.version = TPM_AIK_META_VERSION;
+	ctx.aik_meta.key_derivation = TPM_AIK_KEY_DERIVATION_SHARED;
+	ctx.aik_meta_loaded = true;
+
+	tpm_test_set_prop_reader(mock_prop_reader_swtpm);
+	ret = tpm_provision_aik(&ctx);
+	tpm_test_reset_prop_reader();
+
+	if (ret != -ENOTSUP) {
+		char ebuf[64];
+		snprintf(ebuf, sizeof(ebuf), "expected -ENOTSUP, got %d", ret);
+		FAIL(ebuf);
 		return;
 	}
 	PASS();
@@ -1951,7 +1937,6 @@ int main(void)
 	test_metadata_bad_version();
 	test_save_creates_dirs();
 	test_metadata_truncated();
-	test_provision_rejects_swtpm_vendor();
 	test_rc_success_is_zero();
 	test_rc_lockout_raw();
 	test_rc_lockout_resmgr_layer();
@@ -1968,6 +1953,7 @@ int main(void)
 	test_reconnect_keeps_the_aik_name();
 	test_reprovision_reads_the_record_first();
 	test_lost_auth_keeps_a_shared_key();
+	test_provision_ignores_the_vendor_string();
 	test_self_hash_pin_round_trip();
 	test_tpm_strerror_maps_lota_private();
 	test_clock_state_save_load_round_trip();
