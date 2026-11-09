@@ -295,6 +295,46 @@ static void test_secureboot_ignores_the_cmdline_mode(void)
  * the token; on a host where the binary's only claim is a signature nobody
  * appraises, the same policy is fatal.
  */
+static void test_secure_boot_judge(void)
+{
+	static const uint8_t sb_on[5] = { 0x06, 0, 0, 0, 1 };
+	static const uint8_t sb_off[5] = { 0x06, 0, 0, 0, 0 };
+	static const uint8_t mok_nv[5] = { 0x07, 0, 0, 0, 1 };
+	static const uint8_t mok_rt[5] = { 0x06, 0, 0, 0, 1 };
+	static const uint8_t mok_rt_zero[5] = { 0x06, 0, 0, 0, 0 };
+
+	TEST("SecureBoot=1 without MokSBStateRT is on");
+	if (bpf_loader_secure_boot_judge(sb_on, 5, NULL, -ENOENT) != 0)
+		FAIL("a missing shim variable turned it off");
+	else
+		PASS();
+
+	TEST("a NON_VOLATILE MokSBStateRT=1 is ignored, as by the kernel");
+	if (bpf_loader_secure_boot_judge(sb_on, 5, mok_nv, 5) != 0)
+		FAIL("a non-volatile variable turned it off");
+	else
+		PASS();
+
+	TEST("a volatile MokSBStateRT=1 is shim's insecure mode");
+	if (bpf_loader_secure_boot_judge(sb_on, 5, mok_rt, 5) != -EPERM)
+		FAIL("insecure mode read as on");
+	else if (bpf_loader_secure_boot_judge(sb_on, 5, mok_rt_zero, 5) != 0)
+		FAIL("MokSBStateRT=0 turned it off");
+	else if (bpf_loader_secure_boot_judge(sb_on, 5, mok_rt, 4) != 0)
+		FAIL("a short shim variable turned it off");
+	else
+		PASS();
+
+	TEST("SecureBoot=0, short or unread is not on");
+	if (bpf_loader_secure_boot_judge(sb_off, 5, NULL, -ENOENT) != -EPERM ||
+	    bpf_loader_secure_boot_judge(sb_on, 4, NULL, -ENOENT) != -EIO ||
+	    bpf_loader_secure_boot_judge(sb_on, -ENOENT, NULL, -ENOENT) !=
+		    -ENOENT)
+		FAIL("the SecureBoot variable was misread");
+	else
+		PASS();
+}
+
 static void test_scope_advisory_rule(void)
 {
 	TEST("an unappraised kernel is advisory where verity binds the agent");
@@ -332,6 +372,7 @@ int main(void)
 	test_unreadable_scope_is_not_appraised();
 	test_secureboot_ignores_the_cmdline_mode();
 	test_rule_shapes();
+	test_secure_boot_judge();
 	test_scope_advisory_rule();
 
 	unlink(cmdline_path);

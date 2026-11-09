@@ -507,33 +507,51 @@ int bpf_loader_kernel_module_sig_enforced(const char *sig_enforce_path)
 	return -EPERM;
 }
 
-/* efivarfs: 4 bytes of attributes, then SecureBoot's byte, 1 when enabled */
-int bpf_loader_secure_boot_enabled(void)
+int bpf_loader_secure_boot_judge(const uint8_t *sb, ssize_t sb_len,
+				 const uint8_t *mok, ssize_t mok_len)
 {
-	static const char path[] =
-		"/sys/firmware/efi/efivars/"
-		"SecureBoot-8be4df61-93ca-11d2-aa0d-00e098032b8c";
-	uint8_t buf[5];
-	int fd;
+	if (sb_len < 0)
+		return (int)sb_len;
+	if (sb_len < 5)
+		return -EIO;
+	if (sb[4] != 1)
+		return -EPERM;
+	/* shim's insecure mode, honoured by the kernel when not NON_VOLATILE */
+	if (mok_len >= 5 && !(mok[0] & 0x1) && mok[4] == 1)
+		return -EPERM;
+	return 0;
+}
+
+static ssize_t read_efivar(const char *path, uint8_t *buf, size_t cap)
+{
 	ssize_t n;
+	int fd;
 
 	fd = open(path, O_RDONLY | O_CLOEXEC);
 	if (fd < 0)
 		return -errno;
 
-	n = read(fd, buf, sizeof(buf));
-	if (n < 0) {
-		int err = -errno;
-		close(fd);
-		return err;
-	}
+	n = read(fd, buf, cap);
+	if (n < 0)
+		n = -errno;
 	close(fd);
+	return n;
+}
 
-	if (n < (ssize_t)sizeof(buf))
-		return -EIO;
-	if (buf[4] == 1)
-		return 0;
-	return -EPERM;
+int bpf_loader_secure_boot_enabled(void)
+{
+	static const char sb_path[] =
+		"/sys/firmware/efi/efivars/"
+		"SecureBoot-8be4df61-93ca-11d2-aa0d-00e098032b8c";
+	static const char mok_path[] =
+		"/sys/firmware/efi/efivars/"
+		"MokSBStateRT-605dab50-e046-4300-abb6-3dd810dd8b23";
+	uint8_t sb[5] = { 0 };
+	uint8_t mok[5] = { 0 };
+	ssize_t sb_len = read_efivar(sb_path, sb, sizeof(sb));
+	ssize_t mok_len = read_efivar(mok_path, mok, sizeof(mok));
+
+	return bpf_loader_secure_boot_judge(sb, sb_len, mok, mok_len);
 }
 
 /*
