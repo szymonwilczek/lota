@@ -2004,6 +2004,60 @@ static void test_failed_bind_keeps_the_bound_publisher(void)
 	PASS();
 }
 
+static int g_esys_session;
+
+void __wrap_Esys_Finalize(ESYS_CONTEXT **esys_ctx);
+TSS2_RC __wrap_Esys_Initialize(ESYS_CONTEXT **esys_ctx, TSS2_TCTI_CONTEXT *tcti,
+			       TSS2_ABI_VERSION *abi);
+
+void __wrap_Esys_Finalize(ESYS_CONTEXT **esys_ctx)
+{
+	*esys_ctx = NULL;
+}
+
+TSS2_RC __wrap_Esys_Initialize(ESYS_CONTEXT **esys_ctx, TSS2_TCTI_CONTEXT *tcti,
+			       TSS2_ABI_VERSION *abi)
+{
+	(void)tcti;
+	(void)abi;
+	*esys_ctx = (ESYS_CONTEXT *)&g_esys_session;
+	return TSS2_RC_SUCCESS;
+}
+
+static void test_reconnect_keeps_the_aik_name(void)
+{
+	static int tcti;
+	struct tpm_context ctx;
+
+	TEST("a session reconnect keeps the AIK's Name");
+	make_ctx(&ctx);
+	ctx.esys_ctx = (ESYS_CONTEXT *)&tcti;
+	ctx.tcti_ctx = (TSS2_TCTI_CONTEXT *)&tcti;
+	memset(ctx.aik_object_name, 0x5a, 34);
+	ctx.aik_object_name_size = 34;
+	ctx.aik_auth_loaded = true;
+	ctx.aik_meta_loaded = true;
+
+	if (tpm_test_esys_reconnect(&ctx) != 0) {
+		FAIL("reconnect failed");
+		return;
+	}
+	if (ctx.esys_ctx != (ESYS_CONTEXT *)&g_esys_session) {
+		FAIL("the session was not replaced");
+		return;
+	}
+	if (ctx.aik_object_name_size != 34 || ctx.aik_object_name[0] != 0x5a ||
+	    ctx.aik_object_name[33] != 0x5a) {
+		FAIL("the AIK's Name was forgotten");
+		return;
+	}
+	if (ctx.aik_auth_loaded || ctx.aik_meta_loaded) {
+		FAIL("the cached auth or record survived");
+		return;
+	}
+	PASS();
+}
+
 int main(void)
 {
 	printf("\n=== AIK Rotation Tests ===\n\n");
@@ -2048,6 +2102,7 @@ int main(void)
 	test_pcr_batch_reads_past_eight();
 	test_refused_unseal_with_unmoved_pcrs_is_the_blob();
 	test_failed_bind_keeps_the_bound_publisher();
+	test_reconnect_keeps_the_aik_name();
 	test_self_hash_pin_round_trip();
 	test_tpm_strerror_maps_lota_private();
 	test_clock_state_save_load_round_trip();

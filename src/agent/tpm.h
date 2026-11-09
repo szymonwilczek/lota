@@ -472,9 +472,9 @@ int tpm_bind_profile(struct tpm_context *ctx,
  * @ctx: TPM context.
  *
  * Set when an open of the handle finds an object other than the Name recorded
- * by the last open. A reconnect, a failed bind or a bind to another publisher,
- * handle or metadata path forgets that Name, so a change across one goes
- * unseen. The cached auth is already dropped by then, so this is diagnostic.
+ * by the last open. A failed bind or a bind to another publisher, handle or
+ * metadata path forgets that Name, so a change across one goes unseen.
+ * The cached auth is already dropped by then, so this is diagnostic.
  * Reading clears it.
  *
  * Return: true when set since the last read.
@@ -1241,6 +1241,7 @@ typedef int (*tpm_test_prop_reader_fn)(struct tpm_context *ctx, TPM2_PT prop,
 
 int tpm_test_read_pcr14_baseline(const char *path, uint8_t out[LOTA_HASH_SIZE],
 				 int *present);
+int tpm_test_esys_reconnect(struct tpm_context *ctx);
 int tpm_test_seal_refusal_errno(struct tpm_context *ctx, uint32_t pcr_mask,
 				const uint8_t *pcr_digest, uint32_t rc,
 				int err);

@@ -1086,11 +1086,13 @@ static void aik_note_object(struct tpm_context *ctx, ESYS_TR object)
 
 /*
  * Only the ESYS object cache goes stale: keep the TCTI and replace the session.
- * The rest of the context (self-measurement, PCR 14 verdict, profile binding)
- * survives.
+ * The rest of the context (self-measurement, PCR 14 verdict, profile binding,
+ * the AIK's Name) survives.
  */
 static int tpm_esys_reconnect(struct tpm_context *ctx)
 {
+	uint8_t name[sizeof(ctx->aik_object_name)];
+	uint16_t name_size;
 	TSS2_RC rc;
 
 	if (!ctx || !ctx->initialized || !ctx->esys_ctx || !ctx->tcti_ctx)
@@ -1104,7 +1106,11 @@ static int tpm_esys_reconnect(struct tpm_context *ctx)
 		return tss2_rc_to_errno(rc);
 	}
 
+	memcpy(name, ctx->aik_object_name, sizeof(name));
+	name_size = ctx->aik_object_name_size;
 	tpm_forget_bound_aik(ctx);
+	memcpy(ctx->aik_object_name, name, sizeof(name));
+	ctx->aik_object_name_size = name_size;
 	return 0;
 }
 
@@ -5416,6 +5422,11 @@ int tpm_test_seal_refusal_errno(struct tpm_context *ctx, uint32_t pcr_mask,
 
 	memcpy(meta.pcr_digest, pcr_digest, sizeof(meta.pcr_digest));
 	return seal_refusal_errno(ctx, &meta, (TSS2_RC)rc, err);
+}
+
+int tpm_test_esys_reconnect(struct tpm_context *ctx)
+{
+	return tpm_esys_reconnect(ctx);
 }
 
 int tpm_test_rc_is_stale_object_record(uint32_t rc)
