@@ -170,7 +170,7 @@ static void test_process_null(void)
 static void test_emit_null_safe(void)
 {
 	TEST("emit_*: NULL context does not crash");
-	dbus_emit_status_changed(NULL, 0);
+	dbus_emit_status_changed(NULL);
 	dbus_emit_attestation_result(NULL, true);
 	dbus_emit_mode_changed(NULL, 0);
 	PASS();
@@ -203,7 +203,7 @@ static void test_init_system_bus(void)
 	}
 
 	/* should not crash even if nobody is listening */
-	dbus_emit_status_changed(ctx, 0x0F);
+	dbus_emit_status_changed(ctx);
 	dbus_emit_attestation_result(ctx, true);
 	dbus_emit_attestation_result(ctx, false);
 	dbus_emit_mode_changed(ctx, 1);
@@ -263,6 +263,8 @@ struct bus_witness {
 	bool attestation_result;
 	bool properties_changed;
 	bool success;
+	bool status_changed;
+	uint32_t status_word;
 };
 
 static int on_agent_signal(sd_bus_message *m, void *userdata,
@@ -284,6 +286,9 @@ static int on_agent_signal(sd_bus_message *m, void *userdata,
 		seen->attestation_result = true;
 	} else if (strcmp(member, "PropertiesChanged") == 0) {
 		seen->properties_changed = true;
+	} else if (strcmp(member, "StatusChanged") == 0) {
+		if (sd_bus_message_read(m, "u", &seen->status_word) >= 0)
+			seen->status_changed = true;
 	}
 
 	return 0;
@@ -301,7 +306,7 @@ static int on_agent_signal(sd_bus_message *m, void *userdata,
  */
 static void test_signal_reaches_a_real_bus(void)
 {
-	struct bus_witness seen = { false, false, false };
+	struct bus_witness seen = { 0 };
 	struct dbus_context *ctx;
 	sd_bus *watcher = NULL;
 	int ret;
@@ -417,6 +422,91 @@ static void test_ipc_set_dbus_attach(void)
 	PASS();
 }
 
+struct token_reply {
+	bool done;
+	bool ok;
+	uint32_t word;
+};
+
+static int on_token_reply(sd_bus_message *m, void *userdata,
+			  sd_bus_error *error)
+{
+	struct token_reply *reply = userdata;
+
+	(void)error;
+	reply->done = true;
+	reply->ok = !sd_bus_message_is_method_error(m, NULL) &&
+		    sd_bus_message_read(m, "u", &reply->word) >= 0;
+	return 0;
+}
+
+/* GetToken() and StatusChanged answer the word GetStatus() answers */
+static void test_bus_words_agree_on_a_real_bus(void)
+{
+	struct bus_witness seen = { 0 };
+	struct token_reply reply = { 0 };
+	struct dbus_context *ctx;
+	sd_bus *watcher = NULL;
+	int ret;
+
+	TEST("GetToken and StatusChanged carry the bus status word");
+
+	if (private_bus_start() < 0) {
+		printf("SKIP (no dbus-daemon)\n");
+		tests_passed++;
+		return;
+	}
+
+	ret = sd_bus_open_system(&watcher);
+	if (ret < 0) {
+		private_bus_stop();
+		printf("SKIP (cannot open the private bus)\n");
+		tests_passed++;
+		return;
+	}
+
+	ret = sd_bus_add_match(watcher, NULL,
+			       "type='signal',path='" LOTA_DBUS_OBJECT_PATH "'",
+			       on_agent_signal, &seen);
+	ctx = ret < 0 ? NULL : dbus_init(&test_ipc);
+	if (!ctx) {
+		sd_bus_flush_close_unref(watcher);
+		private_bus_stop();
+		FAIL("cannot watch the agent on the private bus");
+		return;
+	}
+
+	dbus_emit_status_changed(ctx);
+	ret = sd_bus_call_method_async(watcher, NULL, LOTA_DBUS_BUS_NAME,
+				       LOTA_DBUS_OBJECT_PATH,
+				       LOTA_DBUS_INTERFACE, "GetToken",
+				       on_token_reply, &reply, "");
+
+	for (int i = 0; ret >= 0 && i < 200; i++) {
+		if (seen.status_changed && reply.done)
+			break;
+		dbus_process(ctx, 0);
+		if (sd_bus_process(watcher, NULL) > 0)
+			continue;
+		sd_bus_wait(watcher, 10 * 1000);
+	}
+
+	dbus_cleanup(ctx);
+	sd_bus_flush_close_unref(watcher);
+	private_bus_stop();
+
+	if (ret < 0 || !reply.ok)
+		FAIL("GetToken did not answer");
+	else if (!seen.status_changed)
+		FAIL("no StatusChanged arrived");
+	else if (reply.word != TEST_HOST_STATUS_FLAGS)
+		FAIL("GetToken answers the stored word");
+	else if (seen.status_word != TEST_HOST_STATUS_FLAGS)
+		FAIL("StatusChanged carries the stored word");
+	else
+		PASS();
+}
+
 int main(void)
 {
 	printf("=== LOTA D-Bus Unit Tests ===\n\n");
@@ -436,6 +526,7 @@ int main(void)
 	/* may skip if unavailable */
 	test_init_system_bus();
 	test_signal_reaches_a_real_bus();
+	test_bus_words_agree_on_a_real_bus();
 	test_double_cleanup();
 
 	printf("\n=== Results: %d/%d passed ===\n", tests_passed, tests_run);

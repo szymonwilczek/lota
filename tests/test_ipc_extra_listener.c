@@ -202,10 +202,9 @@ int dbus_process(struct dbus_context *ctx, uint64_t timeout_us)
 	return 0;
 }
 
-void dbus_emit_status_changed(struct dbus_context *ctx, uint32_t flags)
+void dbus_emit_status_changed(struct dbus_context *ctx)
 {
 	(void)ctx;
-	(void)flags;
 }
 
 void dbus_emit_attestation_result(struct dbus_context *ctx, bool success)

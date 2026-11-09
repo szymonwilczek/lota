@@ -3036,7 +3036,7 @@ static void handle_terminate_protected(struct ipc_context *ctx,
 	if (!(ctx->status_flags & LOTA_STATUS_PROTECTED_TERMINATED)) {
 		ctx->status_flags |= LOTA_STATUS_PROTECTED_TERMINATED;
 		notify_subscribers(ctx, LOTA_IPC_EVENT_STATUS);
-		dbus_emit_status_changed(ctx->dbus, ctx->status_flags);
+		dbus_emit_status_changed(ctx->dbus);
 	}
 
 	resp->magic = LOTA_IPC_MAGIC;
@@ -3762,7 +3762,7 @@ void ipc_update_status(struct ipc_context *ctx, uint32_t flags,
 
 	if (old_flags != flags) {
 		notify_subscribers(ctx, LOTA_IPC_EVENT_STATUS);
-		dbus_emit_status_changed(ctx->dbus, flags);
+		dbus_emit_status_changed(ctx->dbus);
 	}
 }
 
@@ -3781,7 +3781,7 @@ static void refold_policy(struct ipc_context *ctx)
 
 	ctx->status_flags = flags;
 	notify_subscribers(ctx, LOTA_IPC_EVENT_STATUS);
-	dbus_emit_status_changed(ctx->dbus, flags);
+	dbus_emit_status_changed(ctx->dbus);
 }
 
 void ipc_set_policy(struct ipc_context *ctx, uint32_t keys)
@@ -3811,7 +3811,7 @@ void ipc_set_agent_restarted(struct ipc_context *ctx)
 
 	ctx->status_flags |= LOTA_STATUS_AGENT_RESTARTED;
 	notify_subscribers(ctx, LOTA_IPC_EVENT_STATUS);
-	dbus_emit_status_changed(ctx->dbus, ctx->status_flags);
+	dbus_emit_status_changed(ctx->dbus);
 }
 
 void ipc_set_events_lost(struct ipc_context *ctx)
@@ -3822,7 +3822,7 @@ void ipc_set_events_lost(struct ipc_context *ctx)
 
 	ctx->status_flags |= LOTA_STATUS_EVENTS_LOST;
 	notify_subscribers(ctx, LOTA_IPC_EVENT_STATUS);
-	dbus_emit_status_changed(ctx->dbus, ctx->status_flags);
+	dbus_emit_status_changed(ctx->dbus);
 }
 
 void ipc_set_mode(struct ipc_context *ctx, uint8_t mode)

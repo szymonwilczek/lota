@@ -50,9 +50,10 @@ int dbus_process(struct dbus_context *ctx, uint64_t timeout_us);
 /**
  * dbus_emit_status_changed() - Emit StatusChanged and the status properties.
  * @ctx: Context, or NULL.
- * @flags: The signal's argument.
+ *
+ * The signal carries dbus_status_word().
  */
-void dbus_emit_status_changed(struct dbus_context *ctx, uint32_t flags);
+void dbus_emit_status_changed(struct dbus_context *ctx);
 
 /**
  * dbus_emit_attestation_result() - Emit AttestationResult and the round's
