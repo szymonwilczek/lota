@@ -10,7 +10,6 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <linux/fsverity.h>
-#include <stdio.h>
 #include <string.h>
 #include <sys/ioctl.h>
 #include <sys/stat.h>
@@ -70,33 +69,15 @@ int hash_verify_event(struct hash_verify_ctx *ctx,
 		      uint8_t sha256_out[LOTA_HASH_SIZE])
 {
 	struct stat st;
-	int is_exec;
 	int fd;
 	int ret;
 
 	if (!ctx || !event || !sha256_out)
 		return -EINVAL;
 
-	is_exec = (event->event_type == LOTA_EVENT_EXEC ||
-		   event->event_type == LOTA_EVENT_EXEC_BLOCKED);
-
-	if (is_exec) {
-		char proc_path[32];
-
-		if (event->event_type == LOTA_EVENT_EXEC_BLOCKED) {
-			ctx->errors++;
-			return -EPERM;
-		}
-
-		snprintf(proc_path, sizeof(proc_path), "/proc/%u/exe",
-			 event->pid);
-		fd = open(proc_path, O_RDONLY | O_NOCTTY);
-	} else {
-		if (event->filename[0] != '/')
-			return -ENOENT;
-		fd = open(event->filename, O_RDONLY | O_NOFOLLOW | O_NOCTTY);
-	}
-
+	if (event->filename[0] != '/')
+		return -ENOENT;
+	fd = open(event->filename, O_RDONLY | O_NOFOLLOW | O_NOCTTY);
 	if (fd < 0) {
 		ctx->errors++;
 		return -errno;

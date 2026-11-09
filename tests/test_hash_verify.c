@@ -69,10 +69,8 @@ static void test_event_no_caching(void)
 	ASSERT(path != NULL, "failed to create temp file");
 
 	memset(&event, 0, sizeof(event));
-	event.event_type = LOTA_EVENT_EXEC;
-	event.pid = getpid(); /* self PID to ensure /proc/PID/exe exists */
-
-	strncpy(event.filename, "/tmp/ignored", sizeof(event.filename) - 1);
+	event.event_type = LOTA_EVENT_MMAP_EXEC;
+	strncpy(event.filename, path, sizeof(event.filename) - 1);
 
 	/* first call */
 	ret = hash_verify_event(&ctx, &event, hash1);
@@ -141,7 +139,7 @@ static void test_stats(void)
 		struct lota_exec_event event;
 		uint8_t hash[LOTA_HASH_SIZE];
 		memset(&event, 0, sizeof(event));
-		event.event_type = LOTA_EVENT_EXEC;
+		event.event_type = LOTA_EVENT_MMAP_EXEC;
 		strncpy(event.filename, "/tmp/lota_test_nonexistent_99999999",
 			sizeof(event.filename) - 1);
 		memset(event.hash, 0xFF, LOTA_HASH_SIZE);
@@ -152,6 +150,32 @@ static void test_stats(void)
 	ASSERT(e == 1, "expected 1 error after bad path");
 
 	hash_verify_cleanup(&ctx);
+
+	PASS();
+}
+
+/* the pid may run another image by now; only the named file is read */
+static void test_exec_is_not_read_through_its_pid(void)
+{
+	struct hash_verify_ctx ctx;
+	struct lota_exec_event event;
+	uint8_t hash[LOTA_HASH_SIZE];
+	int ret;
+
+	TEST("an exec is not fingerprinted through /proc/<pid>/exe");
+
+	ret = hash_verify_init(&ctx);
+	ASSERT(ret == 0, "init failed");
+
+	memset(&event, 0, sizeof(event));
+	event.event_type = LOTA_EVENT_EXEC;
+	event.pid = getpid();
+	strncpy(event.filename, "/tmp/lota_test_nonexistent_99999999",
+		sizeof(event.filename) - 1);
+
+	ret = hash_verify_event(&ctx, &event, hash);
+	hash_verify_cleanup(&ctx);
+	ASSERT(ret == -ENOENT, "expected the named file, not the pid's image");
 
 	PASS();
 }
@@ -189,6 +213,7 @@ int main(void)
 
 	test_event_no_caching();
 	test_stats();
+	test_exec_is_not_read_through_its_pid();
 	test_null_args();
 
 	printf("\n=== Results: %d/%d passed ===\n\n", tests_passed, tests_run);
