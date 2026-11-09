@@ -43,8 +43,8 @@ char LICENSE[] SEC("license") = "GPL";
 #ifndef BINPRM_FLAGS_PATH_INACCESSIBLE
 #define BINPRM_FLAGS_PATH_INACCESSIBLE (1U << 2)
 #endif
-#ifndef SI_KERNEL
-#define SI_KERNEL 0x80
+#ifndef PF_EXITING
+#define PF_EXITING 0x00000004
 #endif
 
 #ifndef MS_BIND
@@ -2521,7 +2521,8 @@ static __always_inline void report_signal(int event_type, int blocked, int sig,
  *
  * The verdict of lota_signal_denied() for a signal at the agent or a
  * protected process. A signal within one thread group, from the agent or
- * the admin identity, with no siginfo or with SI_KERNEL passes unrecorded.
+ * the admin identity, or the parent-death signal of an exiting parent
+ * passes unrecorded.
  * ====================================================================== */
 SEC("lsm/task_kill")
 int BPF_PROG(lota_task_kill, struct task_struct *p, struct kernel_siginfo *info,
@@ -2563,13 +2564,14 @@ int BPF_PROG(lota_task_kill, struct task_struct *p, struct kernel_siginfo *info,
 	if (is_lota_agent_task(current) || is_bpf_admin_task())
 		return 0;
 
-	if (!info)
+	/*
+	 * The signal the target asked for when its parent exits. The verifier
+	 * holds info non-NULL, and an exiting task sends no other signal that
+	 * reaches this hook.
+	 */
+	if ((BPF_CORE_READ(current, flags) & PF_EXITING) &&
+	    sig == BPF_CORE_READ(p, pdeath_signal))
 		return 0;
-	{
-		int si_code = BPF_CORE_READ(info, si_code);
-		if (si_code == SI_KERNEL)
-			return 0;
-	}
 
 	if (target_is_protected)
 		sender_inside = lota_inside_instance(
