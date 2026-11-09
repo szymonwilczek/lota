@@ -365,7 +365,7 @@ bool bpf_loader_integrity_config_satisfied(const struct integrity_data *cfg);
  * @secureboot: Non-zero when this host booted with Secure Boot on. The kernel
  *	then keeps its built-in mode, enforce, and @cmdline_path is not read.
  *
- * Return: 0 when the mode is enforce or fix and a rule reaches an executable,
+ * Return: 0 when the mode is enforce and a rule reaches an executable,
  * -ENOENT when no rule does, -EACCES when the policy could not be read, or
  * another negative errno. Callers report anything but 0 as not appraised.
  */

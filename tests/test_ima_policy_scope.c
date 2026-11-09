@@ -7,8 +7,8 @@
  * and that takes both files: ima_appraise= on the cmdline carries the mode,
  * and the loaded policy carries the scope. A mode with an empty scope appraises
  * nothing -- appraisal applies only to the func= rules the policy contains
- * -- so a host booted ima_appraise=fix with no BPRM_CHECK rule blocks on nothing
- * while looking, from the cmdline alone, like the floor is in place.
+ * -- so a host booted ima_appraise=enforce with no BPRM_CHECK rule blocks on
+ * nothing while looking, from the cmdline alone, like the floor is in place.
  *
  * Both files are written by the test, because the point is the combinations
  * a single machine cannot present.
@@ -67,6 +67,20 @@ static void test_mode_off_is_refused(void)
 		PASS();
 }
 
+/* fix repairs a failing xattr and passes the access */
+static void test_mode_fix_is_refused(void)
+{
+	TEST("ima_appraise=fix is refused whatever the policy says");
+
+	write_file(cmdline_path, "ro quiet ima=on ima_appraise=fix\n");
+	write_file(policy_path, policy_appraises_exec);
+
+	if (bpf_loader_ima_appraisal_active(cmdline_path, policy_path, 0) == 0)
+		FAIL("ima_appraise=fix passed the gate");
+	else
+		PASS();
+}
+
 static void test_mode_absent_is_refused(void)
 {
 	TEST("no ima_appraise= at all is refused");
@@ -81,14 +95,14 @@ static void test_mode_absent_is_refused(void)
 }
 
 /*
- * ima_appraise=fix with a policy that has no BPRM_CHECK rule appraises
+ * ima_appraise=enforce with a policy that has no BPRM_CHECK rule appraises
  * no executable, so the gate must refuse it despite the blocking mode.
  */
 static void test_blocking_mode_with_empty_scope_is_refused(void)
 {
 	TEST("a blocking mode over a policy that appraises no exec is refused");
 
-	write_file(cmdline_path, "ro quiet ima=on ima_appraise=fix\n");
+	write_file(cmdline_path, "ro quiet ima=on ima_appraise=enforce\n");
 	write_file(policy_path, policy_measure_only);
 
 	if (bpf_loader_ima_appraisal_active(cmdline_path, policy_path, 0) == 0)
@@ -280,6 +294,7 @@ int main(void)
 		 (int)getpid());
 
 	test_mode_off_is_refused();
+	test_mode_fix_is_refused();
 	test_mode_absent_is_refused();
 	test_blocking_mode_with_empty_scope_is_refused();
 	test_blocking_mode_with_exec_scope_passes();

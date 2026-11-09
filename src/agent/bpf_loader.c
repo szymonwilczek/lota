@@ -479,7 +479,7 @@ int bpf_loader_ima_appraisal_active(const char *cmdline_path,
 		if (strncmp(tok, "ima_appraise=", 13) != 0)
 			continue;
 		val = tok + 13;
-		if (strcmp(val, "enforce") != 0 && strcmp(val, "fix") != 0)
+		if (strcmp(val, "enforce") != 0)
 			return -EPERM;
 
 		ret = ima_policy_appraises_exec(policy_path, &read_err);
@@ -736,8 +736,8 @@ int bpf_loader_verify_kernel_runtime_hardening(bool allow_mutable_rootfs)
 	}
 	if (ret < 0) {
 		lota_err("IMA appraisal is not in an enforcing mode "
-			 "(ima_appraise=enforce or fix required on the kernel "
-			 "cmdline; log and the default off do not block on "
+			 "(ima_appraise=enforce required on the kernel "
+			 "cmdline; fix, log and off do not block on "
 			 "integrity failures). This host booted without Secure "
 			 "Boot, where the parameter is the whole answer, and "
 			 "its agent binary carries no fs-verity, so appraisal "

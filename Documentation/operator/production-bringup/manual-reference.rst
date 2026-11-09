@@ -116,10 +116,10 @@ signature-type ``security.ima`` xattr.
 =======================
 
 The agent parses ``/proc/cmdline`` and refuses to start unless
-``ima_appraise=enforce`` (block on integrity failure) or ``ima_appraise=fix``
-(block on signature failure, write missing xattrs) is present.
-``ima_appraise=log`` and the default ``off`` are non-blocking and do not satisfy
-the kernel-floor.
+``ima_appraise=enforce`` (block on integrity failure) is present.
+``ima_appraise=fix`` writes missing xattrs and lets the access through, and
+``log`` and ``off`` do not block either, so none of them satisfies the
+kernel floor.
 
 Appraisal applies only to the ``func=`` rules the loaded policy contains, so a host
 booted ``ima_appraise=enforce`` whose policy carries no ``appraise func=BPRM_CHECK``

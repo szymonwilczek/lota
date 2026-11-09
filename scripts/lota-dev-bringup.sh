@@ -156,13 +156,11 @@ else
     warn "fsverity utility not installed; install fsverity-utils and re-run"
 fi
 
-if grep -qE 'ima_appraise=(enforce|fix)' /proc/cmdline 2>/dev/null; then
+if grep -qE 'ima_appraise=enforce' /proc/cmdline 2>/dev/null; then
     info "IMA appraisal already in an enforcing mode"
 else
-    warn "kernel cmdline lacks ima_appraise=enforce|fix; the agent will"
-    warn "refuse to start. For a dev host run:"
-    warn "  sudo grubby --update-kernel=ALL --args='ima_appraise=fix'"
-    warn "  sudo reboot"
+    warn "kernel cmdline lacks ima_appraise=enforce; the agent will"
+    warn "refuse to start. fix and log do not block on integrity failures"
     warn "(enforce on a rootfs without IMA signatures blocks every exec;"
     warn "see Documentation/operator/production-bringup/index.rst before using it)"
 fi
