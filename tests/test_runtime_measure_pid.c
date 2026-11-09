@@ -332,7 +332,7 @@ int main(void)
 			      hdr.total == 40 && hdr.actor_total == 30 &&
 			      hdr.start == start && hdr.count == (uint16_t)c &&
 			      (hdr.flags & LOTA_IPC_REGISTRY_MEASURED) &&
-			      memcmp(hdr.image_digest, folded, 32) == 0;
+			      memcmp(hdr.registry_digest, folded, 32) == 0;
 			for (int k = 0; k < c; k++) {
 				struct lota_ipc_registry_entry e;
 				struct lota_ipc_registry_actor q;
@@ -599,7 +599,7 @@ int main(void)
 			ok &= off == len;
 			ok &= lota_registry_digest_final(md, got) == 0 &&
 			      memcmp(got, want, 32) == 0 &&
-			      memcmp(hdr.image_digest, want, 32) == 0;
+			      memcmp(hdr.registry_digest, want, 32) == 0;
 		}
 
 		/* an object without a digest is bound all the same */

@@ -128,10 +128,10 @@ so the measured process cannot influence it:
    digest (``FS_IOC_MEASURE_VERITY``). No process memory is hashed; under W^X a
    file-backed executable mapping equals its on-disk file, which the kernel has
    already measured.
-3. The per-object digests are folded into a per-process image digest, and the
-   per-PID image digests are folded into the token's ``runtime_protect_digest``,
+3. The per-object digests are folded into a per-process registry digest, and the
+   per-PID registry digests are folded into the token's ``runtime_protect_digest``,
    which is bound into the TPM quote. A verifier recomputes that
-   digest from the PID list and the per-PID image digests carried in the token
+   digest from the PID list and the per-PID registry digests carried in the token
    and checks it against the quote-bound value.
 
 If any protected process's objects cannot be measured (for example they are not

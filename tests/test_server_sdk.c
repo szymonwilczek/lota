@@ -58,15 +58,15 @@ static int tests_fail = 0;
 	} while (0)
 
 /*
- * A tampered image digest is the one signal a relying party has that the
+ * A tampered registry digest is the one signal a relying party has that the
  * runtime image measurement did not reconcile, so it may not arrive wearing
  * the name of a nonce failure.
  */
-static void test_verify_tampered_image_digest_is_named(EVP_PKEY *key,
-						       const uint8_t *aik_der,
-						       size_t aik_len)
+static void test_verify_tampered_registry_digest_is_named(
+	EVP_PKEY *key, const uint8_t *aik_der, size_t aik_len)
 {
-	TEST("lota_server_verify_token - tampered image digest is not a nonce failure");
+	TEST("lota_server_verify_token - tampered registry digest is not a "
+	     "nonce failure");
 
 	uint64_t now = (uint64_t)time(NULL);
 	uint8_t nonce[32] = { 0 };
@@ -91,14 +91,14 @@ static void test_verify_tampered_image_digest_is_named(EVP_PKEY *key,
 		return;
 	}
 
-	/* header, then the four-byte pid list, then the image digest */
+	/* header, then the four-byte pid list, then the registry digest */
 	image_off = LOTA_TOKEN_HEADER_SIZE + sizeof(uint32_t);
 	tokbuf[image_off] ^= 0x01;
 
 	ret = lota_server_verify_token(tokbuf, tok_written, aik_der, aik_len,
 				       nonce, &claims);
 	if (ret == LOTA_SERVER_OK) {
-		FAIL("a tampered image digest was accepted");
+		FAIL("a tampered registry digest was accepted");
 		return;
 	}
 	if (ret == LOTA_SERVER_ERR_NONCE_FAIL) {
@@ -1108,7 +1108,7 @@ static void put_le(uint8_t *b, size_t *off, uint64_t v, int n)
 
 /*
  * A relying party hashes a fetched registry and compares the result with
- * the image digest the token carries, so the hash must be the documented
+ * the registry digest the token carries, so the hash must be the documented
  * one: every object in list order, those without a digest included.
  */
 static void test_registry_digest(void)
@@ -1768,7 +1768,7 @@ int main(void)
 	test_verify_tampered_flags(key, aik_der, aik_len);
 	test_verify_tampered_stopped_ms(key, aik_der, aik_len);
 	test_verify_tampered_pcr_mask(key, aik_der, aik_len);
-	test_verify_tampered_image_digest_is_named(key, aik_der, aik_len);
+	test_verify_tampered_registry_digest_is_named(key, aik_der, aik_len);
 	test_verify_mixed_pcr_banks_rejected(key, aik_der, aik_len);
 	test_verify_expired(key, aik_der, aik_len);
 	test_verify_beyond_freshness_window(key, aik_der, aik_len);

@@ -459,7 +459,7 @@ and the register it rests on is not one root can reset.
 What a protected process mapped
 -------------------------------
 
-The token carries one image digest per protected process. ``8192`` bytes hold
+The token carries one registry digest per protected process. ``8192`` bytes hold
 no list of the objects themselves, so ``LOTA_IPC_CMD_GET_REGISTRY`` hands them
 out in pages: every code object the process mapped or mprotected executable
 since it was protected, each with its size, device, inode and, where one was
@@ -543,7 +543,7 @@ lives.
 The token binds the list. Hashing the page's ``flags``, ``total`` and
 ``actor_total`` and every entry in order as ``lota_registry_digest.h`` does
 yields the page's
-``image_digest``, which is the token's entry for that process while
+``registry_digest``, which is the token's entry for that process while
 ``LOTA_IPC_REGISTRY_MEASURED`` is set. Every field of every entry is in the
 hash, the entries without a digest and the actors included, so a list with an entry dropped,
 reordered or rewritten does not hash to the token's value. A list from another
@@ -663,7 +663,7 @@ IPC token payload budget
 Signed token returned over the local socket (``struct lota_ipc_token`` in
 ``include/lota_ipc.h``, built by ``src/agent/ipc.c``, parsed by the SDK in
 ``src/sdk/lota_gaming.c``) must fit ``LOTA_IPC_MAX_PAYLOAD``. Every protected
-PID costs four bytes in the PID list plus a 32-byte kernel image digest, so
+PID costs four bytes in the PID list plus a 32-byte registry digest, so
 ``LOTA_IPC_TOKEN_MAX_PROTECT_PIDS`` is derived from the payload budget left
 after the header, a maximum quote and a maximum signature -- it is the real
 per-token limit, not a round number.
@@ -686,7 +686,7 @@ follow.
 
 The maximum a relying party sizes a receive buffer from --
 ``LOTA_TOKEN_MAX_SIZE``, ``TokenMaxSize`` in Go -- covers a full token at that
-cap *including* the per-PID image digests. A maximum that
+cap *including* the per-PID registry digests. A maximum that
 counts only the PID list describes a token nobody sends.
 
 Installer probes and agent gates

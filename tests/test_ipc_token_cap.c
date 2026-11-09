@@ -3,7 +3,7 @@
 // LOTA - token protected-PID capacity bound test
 //
 // Per-token protected-PID cap must reflect what actually fits the IPC payload:
-// every protected PID costs its 4-byte value plus a 32-byte kernel image digest
+// every protected PID costs its 4-byte value plus a 32-byte registry digest
 // in a token, on top of the header, a maximum quote and a maximum signature.
 //
 // If the advertised cap is larger than what fits, the runtime count guard can
@@ -43,10 +43,10 @@ _Static_assert(LOTA_IPC_TOKEN_MAX_SIZE <= LOTA_IPC_MAX_PAYLOAD,
 	       "advertised max token size must fit the IPC payload");
 
 /* worst-case wire token the agent can produce at the IPC-derived cap */
-#define LOTA_TOKEN_WORST_CASE_SIZE                                   \
-	((size_t)LOTA_TOKEN_HEADER_SIZE +                            \
-	 (size_t)LOTA_IPC_TOKEN_MAX_PROTECT_PIDS *                   \
-		 (sizeof(uint32_t) + LOTA_TOKEN_IMAGE_DIGEST_SIZE) + \
+#define LOTA_TOKEN_WORST_CASE_SIZE                                      \
+	((size_t)LOTA_TOKEN_HEADER_SIZE +                               \
+	 (size_t)LOTA_IPC_TOKEN_MAX_PROTECT_PIDS *                      \
+		 (sizeof(uint32_t) + LOTA_TOKEN_REGISTRY_DIGEST_SIZE) + \
 	 LOTA_IPC_TOKEN_MAX_ATTEST + LOTA_IPC_TOKEN_MAX_SIG)
 
 int main(void)

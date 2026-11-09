@@ -81,7 +81,7 @@ struct lota_server_claims {
  *          extraData and nonce check out, so LOTA_SERVER_ERR_FUTURE and
  *          LOTA_SERVER_ERR_EXPIRED still report valid_until.
  *
- * Recomputes the runtime digest from the PID list and image digests, then
+ * Recomputes the runtime digest from the PID list and registry digests, then
  * checks the TPM signature over attest_data, the quoted PCR mask against the
  * header, and extraData against lota_compute_token_quote_nonce() over the
  * header, so every field the caller acts on is inside the signature. Then the
@@ -95,7 +95,7 @@ struct lota_server_claims {
  * LOTA_SERVER_ERR_FUTURE if valid_until is too far ahead,
  * LOTA_SERVER_ERR_NONCE_FAIL if the mask, extraData or nonce differ,
  * LOTA_SERVER_ERR_RUNTIME_IMAGE if the digest recomputed from the PID list and
- * image digests differs from the signed one,
+ * registry digests differs from the signed one,
  * another negative code otherwise.
  */
 int lota_server_verify_token(const uint8_t *token_data, size_t token_len,
@@ -177,7 +177,7 @@ struct lota_server_registry_actor {
  * @actors: actors of the process, in the order listed.
  * @out: receives the digest.
  *
- * @out equals the token's protected_image_digests entry for the process when
+ * @out equals the token's protected_registry_digests entry for the process when
  * the registry is the one that round measured. Anything else, reordered, short
  * of an entry or with one rewritten, is not the list behind the token.
  *

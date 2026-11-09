@@ -665,7 +665,7 @@ func TestVerifyToken_V2_Success(t *testing.T) {
 	}
 }
 
-func TestVerifyToken_V2_TamperedImageDigest(t *testing.T) {
+func TestVerifyToken_V2_TamperedRegistryDigest(t *testing.T) {
 	key := generateTestKey(t)
 
 	nonce := [32]byte{}
@@ -691,14 +691,14 @@ func TestVerifyToken_V2_TamperedImageDigest(t *testing.T) {
 		t.Fatalf("SerializeToken: %v", err)
 	}
 
-	// flip a byte inside the carried image digest (after the 152-byte header
-	// and the 4-byte PID list); the recomputed digest must then diverge
-	// from the quote-bound value
+	// flip a byte inside the carried registry digest (after the 152-byte
+	// header and the 4-byte PID list); the recomputed digest must then
+	// diverge from the quote-bound value
 	tok[TokenHeaderSize+4] ^= 0xFF
 
 	_, err = VerifyToken(tok, &key.PublicKey, nonce[:])
 	if err == nil {
-		t.Fatalf("VerifyToken accepted a tampered image digest")
+		t.Fatalf("VerifyToken accepted a tampered registry digest")
 	}
 
 	// The refusal is right either way; what it is called decides where
@@ -711,8 +711,8 @@ func TestVerifyToken_V2_TamperedImageDigest(t *testing.T) {
 	// so a backend must not get a different answer for one event depending
 	// on which SDK it links.
 	if !errors.Is(err, ErrRuntimeImage) {
-		t.Fatalf("tampered image digest reported as %v, want ErrRuntimeImage",
-			err)
+		t.Fatalf("tampered registry digest reported as %v, "+
+			"want ErrRuntimeImage", err)
 	}
 	if errors.Is(err, ErrNonceFail) {
 		t.Fatalf("a runtime image mismatch must not read as a nonce failure")
@@ -753,7 +753,7 @@ func TestRuntimeProtectDigest_KAT(t *testing.T) {
 	// test_runtime_protect_digest.c
 	// Relying party binds this value under the quote of every token it mints,
 	// so the two implementations of the fold have to stay one answer.
-	// pids {1,2}, image digests 0xAA*32, 0xBB*32
+	// pids {1,2}, registry digests 0xAA*32, 0xBB*32
 	pids := []uint32{1, 2}
 	var a, b [32]byte
 	for i := range a {

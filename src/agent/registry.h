@@ -30,7 +30,7 @@ struct registry_process {
 	uint32_t pid;
 	uint32_t uid; /* owner when measured */
 	uint16_t flags; /* LOTA_IPC_REGISTRY_* */
-	uint8_t image_digest[32];
+	uint8_t registry_digest[32];
 	size_t count;
 	struct lota_rt_object_record *objects;
 	size_t actor_count;
@@ -123,7 +123,7 @@ static inline int registry_add(struct registry *r, uint32_t pid, uint32_t uid,
 	p->flags = flags & (uint16_t)~LOTA_IPC_REGISTRY_MEASURED;
 	if (digest) {
 		p->flags |= LOTA_IPC_REGISTRY_MEASURED;
-		memcpy(p->image_digest, digest, sizeof(p->image_digest));
+		memcpy(p->registry_digest, digest, sizeof(p->registry_digest));
 	}
 	return 0;
 }
@@ -445,7 +445,8 @@ static inline int registry_encode_page(const struct registry_process *p,
 	hdr.start = start;
 	hdr.count = count;
 	hdr.flags = p->flags;
-	memcpy(hdr.image_digest, p->image_digest, sizeof(hdr.image_digest));
+	memcpy(hdr.registry_digest, p->registry_digest,
+	       sizeof(hdr.registry_digest));
 	memcpy(buf, &hdr, sizeof(hdr));
 
 	*len = off;

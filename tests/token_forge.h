@@ -36,7 +36,7 @@ int forge_token_sha256(EVP_PKEY *key, uint64_t valid_until, uint32_t flags,
 		       const uint8_t nonce[32], uint8_t *tokbuf,
 		       size_t tokbuf_size, size_t *tok_written);
 
-/* The same token carrying a protected PID and its image digest */
+/* The same token carrying a protected PID and its registry digest */
 int forge_token_protected(EVP_PKEY *key, uint64_t valid_until, uint32_t flags,
 			  const uint8_t nonce[32], uint8_t *tokbuf,
 			  size_t tokbuf_size, size_t *tok_written);

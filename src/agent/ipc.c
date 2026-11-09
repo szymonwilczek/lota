@@ -1210,8 +1210,8 @@ static void handle_get_token(struct ipc_context *ctx, struct ipc_client *client,
 	uint32_t runtime_pid_count = 0;
 	uint64_t stopped_ms = 0;
 	uint16_t pid_list_size = 0;
-	uint8_t (*image_digests)[32] = NULL;
-	size_t image_list_size = 0;
+	uint8_t (*registry_digests)[32] = NULL;
+	size_t registry_list_size = 0;
 	struct lota_rt_object_record *objs = NULL;
 	struct registry next_registry = { 0 };
 	struct lota_exec_history_key *hist_keys = NULL;
@@ -1408,18 +1408,18 @@ static void handle_get_token(struct ipc_context *ctx, struct ipc_client *client,
 	lota_rt_measure_round_begin();
 
 	/*
-	 * Each protected process's image digest joins the protect digest.
+	 * Each protected process's registry digest joins the protect digest.
 	 * One that cannot be measured stays a zero digest and clears
 	 * LOTA_STATUS_IMAGE_FULLY_MEASURED; only the caller's own refuses.
 	 */
 	if (runtime_pid_count > 0) {
-		image_list_size = (size_t)runtime_pid_count *
-				  LOTA_IPC_TOKEN_IMAGE_DIGEST_SIZE;
-		image_digests =
-			calloc(runtime_pid_count, sizeof(*image_digests));
+		registry_list_size = (size_t)runtime_pid_count *
+				     LOTA_IPC_TOKEN_REGISTRY_DIGEST_SIZE;
+		registry_digests =
+			calloc(runtime_pid_count, sizeof(*registry_digests));
 		objs = calloc(REGISTRY_OBJECTS_MAX, sizeof(*objs));
 		actors = calloc(LOTA_IPC_REGISTRY_MAX_ACTORS, sizeof(*actors));
-		if (!image_digests || !objs || !actors) {
+		if (!registry_digests || !objs || !actors) {
 			fail = true;
 			fail_code = LOTA_IPC_ERR_INTERNAL;
 			goto out;
@@ -1430,6 +1430,7 @@ static void handle_get_token(struct ipc_context *ctx, struct ipc_client *client,
 		for (uint32_t i = 0; i < runtime_pid_count; i++) {
 			struct lota_runtime_measure_failure mfail;
 			struct lota_runtime_measure_coverage cov = { 0 };
+			uint8_t image_digest[LOTA_RUNTIME_IMAGE_DIGEST_SIZE];
 			char statement[MEASURE_REPORT_STATEMENT_MAX];
 			char held_clause[80];
 			uint64_t held = 0;
@@ -1446,7 +1447,7 @@ static void handle_get_token(struct ipc_context *ctx, struct ipc_client *client,
 			/* unreadable owner: only root reads the entry */
 			(void)read_pid_real_uid((pid_t)runtime_pids[i], &owner);
 			ret = lota_runtime_measure_pid_objects(
-				(pid_t)runtime_pids[i], image_digests[i], &cov,
+				(pid_t)runtime_pids[i], image_digest, &cov,
 				&mfail, objs, &n_objs);
 
 			/* what the maps no longer show, from the history */
@@ -1479,12 +1480,14 @@ static void handle_get_token(struct ipc_context *ctx, struct ipc_client *client,
 				rec = registry_digest(
 					rflags | LOTA_IPC_REGISTRY_MEASURED,
 					objs, n_objs, actors, n_actors,
-					image_digests[i]);
+					registry_digests[i]);
 				if (rec == 0)
-					rec = registry_add(
-						&next_registry, runtime_pids[i],
-						owner, rflags, image_digests[i],
-						objs, n_objs, actors, n_actors);
+					rec = registry_add(&next_registry,
+							   runtime_pids[i],
+							   owner, rflags,
+							   registry_digests[i],
+							   objs, n_objs, actors,
+							   n_actors);
 			} else {
 				rec = registry_add(&next_registry,
 						   runtime_pids[i], owner,
@@ -1534,8 +1537,6 @@ static void handle_get_token(struct ipc_context *ctx, struct ipc_client *client,
 					goto out;
 				}
 
-				memset(image_digests[i], 0,
-				       sizeof(image_digests[i]));
 				measure_report_line(statement,
 						    sizeof(statement),
 						    MEASURE_ANSWER_ABSENT,
@@ -1613,7 +1614,8 @@ static void handle_get_token(struct ipc_context *ctx, struct ipc_client *client,
 
 	registry_replace(&g_registry, &next_registry);
 
-	ret = lota_compute_runtime_protect_digest(runtime_pids, image_digests,
+	ret = lota_compute_runtime_protect_digest(runtime_pids,
+						  registry_digests,
 						  runtime_pid_count,
 						  runtime_protect_digest);
 	if (ret < 0) {
@@ -1688,7 +1690,8 @@ static void handle_get_token(struct ipc_context *ctx, struct ipc_client *client,
 	}
 
 	total_size = LOTA_IPC_TOKEN_HEADER_SIZE + pid_list_size +
-		     image_list_size + quote.attest_size + quote.signature_size;
+		     registry_list_size + quote.attest_size +
+		     quote.signature_size;
 	if (total_size > LOTA_IPC_MAX_PAYLOAD) {
 		lota_err("token too large (%zu bytes): too many protected PIDs",
 			 total_size);
@@ -1718,9 +1721,9 @@ static void handle_get_token(struct ipc_context *ctx, struct ipc_client *client,
 		memcpy(data_ptr, pid_le, sizeof(pid_le));
 		data_ptr += sizeof(pid_le);
 	}
-	if (image_list_size > 0 && image_digests) {
-		memcpy(data_ptr, image_digests, image_list_size);
-		data_ptr += image_list_size;
+	if (registry_list_size > 0 && registry_digests) {
+		memcpy(data_ptr, registry_digests, registry_list_size);
+		data_ptr += registry_list_size;
 	}
 	memcpy(data_ptr, quote.attest_data, quote.attest_size);
 	data_ptr += quote.attest_size;
@@ -1752,9 +1755,9 @@ out:
 				(size_t)runtime_pid_count * sizeof(uint32_t));
 		free(runtime_pids);
 	}
-	if (image_digests) {
-		OPENSSL_cleanse(image_digests, image_list_size);
-		free(image_digests);
+	if (registry_digests) {
+		OPENSSL_cleanse(registry_digests, registry_list_size);
+		free(registry_digests);
 	}
 	free(objs);
 	free(hist_keys);

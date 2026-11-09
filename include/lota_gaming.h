@@ -196,15 +196,15 @@ struct lota_token {
 	/* SHA-256 over startup enforcement policy, allowlist included */
 	uint8_t policy_digest[32];
 
-	/* SHA-256 over the protected PIDs and their image digests */
+	/* SHA-256 over the protected PIDs and their registry digests */
 	uint8_t runtime_protect_digest[32];
 	uint64_t runtime_protect_epoch; /* Monotonic PID-set mutation id */
-	uint16_t runtime_protect_version; /* 1 = PID set + image digests */
+	uint16_t runtime_protect_version; /* 1 = PID set + registry digests */
 	uint32_t protect_pid_count;
 	uint32_t *protected_pids; /* heap-allocated canonical list */
 
-	/* per-PID runtime image digest, parallel to protected_pids */
-	uint8_t (*protected_image_digests)[32];
+	/* per-PID registry digest, parallel to protected_pids */
+	uint8_t (*protected_registry_digests)[32];
 
 	uint8_t *attest_data; /* TPMS_ATTEST blob (heap allocated) */
 	size_t attest_size; /* Size of attest_data */
@@ -454,7 +454,7 @@ int lota_poll_events(struct lota_client *client, int timeout_ms);
 #define LOTA_REGISTRY_ROAD_VERITY 1 /* fs-verity measurement */
 #define LOTA_REGISTRY_ROAD_CONTENT 2 /* contents hashed while running */
 
-/* image_digest is the token's entry for the process */
+/* registry_digest is the token's entry for the process */
 #define LOTA_REGISTRY_MEASURED (1U << 0)
 /* an executable mapping went unrecorded; the list may miss an object */
 #define LOTA_REGISTRY_HISTORY_LOST (1U << 1)
@@ -489,7 +489,7 @@ int lota_poll_events(struct lota_client *client, int timeout_ms);
 
 /*
  * One code object a protected process mapped executable.
- * The token's image digest binds every field.
+ * The token's registry digest binds every field.
  */
 struct lota_registry_object {
 	uint64_t size;
@@ -518,7 +518,7 @@ struct lota_registry_object {
  * process: from outside, through a unix socket a process of the instance
  * owns, or from inside, by a ptrace access or a signal. Or one process of
  * the instance that made its own anonymous memory executable.
- * The token's image digest binds every field.
+ * The token's registry digest binds every field.
  */
 struct lota_registry_actor {
 	uint64_t count; /* times it did so */
@@ -541,7 +541,7 @@ struct lota_registry {
 	uint64_t round; /* measurement round the list comes from */
 	uint32_t pid;
 	uint32_t flags; /* LOTA_REGISTRY_* */
-	uint8_t image_digest[32];
+	uint8_t registry_digest[32];
 	uint32_t count;
 	struct lota_registry_object *objects;
 	uint32_t actor_count;
@@ -555,8 +555,8 @@ struct lota_registry {
  *
  * Objects the agent could not measure are listed too. The LOTA_REGISTRY_* flags
  * say what the list may miss.
- * The token binds the list: with LOTA_REGISTRY_MEASURED set, image_digest is
- * the token's protected_image_digests entry for @pid, and
+ * The token binds the list: with LOTA_REGISTRY_MEASURED set, registry_digest is
+ * the token's protected_registry_digests entry for @pid, and
  * lota_server_registry_digest() over the objects and actors reproduces it.
  * A relying party checks both before trusting the list.
  *

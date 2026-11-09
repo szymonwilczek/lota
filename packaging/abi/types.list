@@ -124,7 +124,7 @@ struct lota_token size=192 align=8
 	runtime_protect_version          off=128 size=2
 	protect_pid_count                off=132 size=4
 	protected_pids                   off=136 size=8
-	protected_image_digests          off=144 size=8
+	protected_registry_digests       off=144 size=8
 	attest_data                      off=152 size=8
 	attest_size                      off=160 size=8
 	signature                        off=168 size=8
@@ -181,7 +181,7 @@ struct lota_registry size=80 align=8
 	round                            off=0 size=8
 	pid                              off=8 size=4
 	flags                            off=12 size=4
-	image_digest                     off=16 size=32
+	registry_digest                  off=16 size=32
 	count                            off=48 size=4
 	objects                          off=56 size=8
 	actor_count                      off=64 size=4
@@ -254,9 +254,9 @@ macro LOTA_TOKEN_VERSION                       = 1
 macro LOTA_TOKEN_HEADER_SIZE                   = 152
 macro LOTA_TOKEN_MAX_PROTECT_PIDS              = 180
 macro LOTA_TOKEN_MAX_PID_LIST_SIZE             = 720
-macro LOTA_TOKEN_IMAGE_DIGEST_SIZE             = 32
+macro LOTA_TOKEN_REGISTRY_DIGEST_SIZE          = 32
 macro LOTA_RUNTIME_PROTECT_V1                  = 1
-macro LOTA_TOKEN_MAX_IMAGE_LIST_SIZE           = 5760
+macro LOTA_TOKEN_MAX_REGISTRY_LIST_SIZE        = 5760
 macro LOTA_TOKEN_MAX_SIZE                      = 8168
 struct lota_token_wire size=152 align=1
 	magic                            off=0 size=4
