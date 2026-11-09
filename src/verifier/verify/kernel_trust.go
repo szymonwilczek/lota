@@ -245,6 +245,9 @@ type KernelImage struct {
 	Digest []byte
 }
 
+// KERNEL_IMAGE_PATH_MAX on the agent, which exports the same image
+const kernelImagePathMax = 256
+
 // last path element of a measured kernel image starts with one of these
 var kernelImagePrefixes = []string{"vmlinuz", "kernel", "bzImage"}
 
@@ -264,7 +267,8 @@ func namesKernelImage(path string) bool {
 // ExtractKernelImageDigest returns the kernel image digest from the PCR 9
 // EV_IPL events.
 // Found is false when no image is measured. A log naming two different images
-// is refused: it does not say which one booted.
+// is refused: it does not say which one booted. So is an image without
+// a SHA-256 digest or with a path of kernelImagePathMax bytes or more.
 func ExtractKernelImageDigest(parsed *ParsedEventLog) (KernelImage, error) {
 	var out KernelImage
 	if parsed == nil {
@@ -278,6 +282,12 @@ func ExtractKernelImageDigest(parsed *ParsedEventLog) (KernelImage, error) {
 		path := parseIPLEventString(e.EventData)
 		if !namesKernelImage(path) {
 			continue
+		}
+		if len(path) >= kernelImagePathMax {
+			return KernelImage{}, fmt.Errorf(
+				"kernel image path is %d bytes, over the %d "+
+					"the agent exports",
+				len(path), kernelImagePathMax-1)
 		}
 		digest, ok := e.Digests[AlgSHA256]
 		if !ok || len(digest) != types.HashSize {

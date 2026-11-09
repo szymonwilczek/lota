@@ -99,6 +99,24 @@ func TestExtractKernelImageDigest_ConflictingImagesRefused(t *testing.T) {
 	}
 }
 
+// The agent exports no image whose path does not fit KERNEL_IMAGE_PATH_MAX;
+// the verifier must not pin one either.
+func TestExtractKernelImageDigest_OverlongPathRefused(t *testing.T) {
+	log := grubBootLog(0x51)
+	dir := string(bytes.Repeat([]byte{'d'}, 240))
+	long := "(hd0,gpt4)/" + dir + "/vmlinuz-9.9.9"
+	log.Entries = []EventLogEntry{iplEntry(9, long, 0x5b)}
+
+	if _, err := ExtractKernelImageDigest(log); err == nil {
+		t.Errorf("accepted a %d-byte kernel image path", len(long))
+	}
+
+	log.Entries = []EventLogEntry{iplEntry(9, long[len(long)-255:], 0x5b)}
+	if _, err := ExtractKernelImageDigest(log); err != nil {
+		t.Errorf("refused a 255-byte kernel image path: %v", err)
+	}
+}
+
 // The recorded value and the kernel_hashes gate read one source,
 // or a policy copied from the log refuses the host it came from.
 func TestRecordedKernelHash_PrefersTheMeasuredImage(t *testing.T) {

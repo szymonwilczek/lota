@@ -32,10 +32,11 @@ struct kernel_image {
  *
  * Reads the PCR 9 EV_IPL records whose path names a kernel image.
  *
- * Return: 0 when the images with a SHA-256 digest agree, -EINVAL for a bad
- * argument or a log that does not parse, -ENOENT when no record names a
- * kernel image, -EEXIST for two such images that differ in path or digest,
- * or -ENOMSG when every image is measured without a SHA-256 digest.
+ * Return: 0 when the images agree, -EINVAL for a bad argument or a log that
+ * does not parse, -ENOENT when no record names a kernel image, -EEXIST for two
+ * such images that differ in path or digest, -ENOMSG for an image measured
+ * without a SHA-256 digest, or -ENAMETOOLONG for an image path of
+ * KERNEL_IMAGE_PATH_MAX bytes or more.
  */
 int kernel_image_from_event_log(const uint8_t *log, size_t log_size,
 				struct kernel_image *out);

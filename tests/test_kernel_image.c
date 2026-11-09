@@ -223,7 +223,8 @@ static void test_sha1_only_kernel_is_its_own_answer(void)
 	      "a kernel measured without SHA-256 is reported as that, not as absent");
 }
 
-static void test_a_good_record_beats_a_sha1_only_one(void)
+/* the verifier refuses the whole log over one such record */
+static void test_a_sha1_only_record_refuses_the_log(void)
 {
 	struct log_builder b;
 	struct kernel_image img;
@@ -232,8 +233,26 @@ static void test_a_good_record_beats_a_sha1_only_one(void)
 	add_sha1_event(&b, 9, 0x0000000D, "(hd0,gpt2)/vmlinuz-6.19.4");
 	add_event(&b, 9, 0x0000000D, 0x51, "(hd0,gpt2)/vmlinuz-6.19.4");
 
-	CHECK(kernel_image_from_event_log(b.buf, b.len, &img) == 0,
-	      "a SHA-256 record answers even when a SHA-1-only one precedes it");
+	CHECK(kernel_image_from_event_log(b.buf, b.len, &img) == -ENOMSG,
+	      "a SHA-1-only kernel record refuses the log beside a good one");
+}
+
+static void test_an_overlong_kernel_path_refuses_the_log(void)
+{
+	struct log_builder b;
+	struct kernel_image img;
+	char path[KERNEL_IMAGE_PATH_MAX + 16];
+
+	memset(path, 'd', sizeof(path));
+	memcpy(path, "(hd0,gpt2)/", 11);
+	memcpy(path + sizeof(path) - 15, "/vmlinuz-9.9.9", 15);
+
+	begin_log(&b);
+	add_event(&b, 9, 0x0000000D, 0x51, path);
+
+	CHECK(kernel_image_from_event_log(b.buf, b.len, &img) == -ENAMETOOLONG,
+	      "a kernel path too long to export refuses the log, as the "
+	      "verifier does");
 }
 
 static void test_a_log_that_does_not_parse_is_not_an_absent_kernel(void)
@@ -436,7 +455,8 @@ int main(void)
 	test_one_kernel_measured_twice_is_one_answer();
 	test_kernel_outside_pcr9_is_not_the_answer();
 	test_sha1_only_kernel_is_its_own_answer();
-	test_a_good_record_beats_a_sha1_only_one();
+	test_a_sha1_only_record_refuses_the_log();
+	test_an_overlong_kernel_path_refuses_the_log();
 	test_a_log_that_does_not_parse_is_not_an_absent_kernel();
 	test_an_unknown_digest_algorithm_stops_the_walk();
 	test_which_paths_name_a_kernel();
