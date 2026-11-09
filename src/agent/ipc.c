@@ -2637,7 +2637,7 @@ static void handle_protect_pid_update(struct ipc_context *ctx,
 	}
 	memcpy(&req, payload, sizeof(req));
 	pid = req.pid;
-	if (pid == 0) {
+	if (pid == 0 || pid > INT_MAX) {
 		build_error_response(client, LOTA_IPC_ERR_BAD_REQUEST);
 		return;
 	}
