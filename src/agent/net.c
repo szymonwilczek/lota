@@ -372,6 +372,21 @@ int net_connect(struct net_context *ctx)
 	if (ret != 1) {
 		int ssl_err = SSL_get_error(ssl, ret);
 		unsigned long err_code = ERR_peek_last_error();
+		long verify_result = ctx->skip_verify ?
+					     X509_V_OK :
+					     SSL_get_verify_result(ssl);
+
+		if (verify_result != X509_V_OK) {
+			lota_err("TLS certificate verification failed: %s "
+				 "(code %ld). "
+				 "Use --ca-cert or --no-verify-tls for testing",
+				 X509_verify_cert_error_string(verify_result),
+				 verify_result);
+			SSL_free(ssl);
+			close(sock);
+			ctx->socket_fd = -1;
+			return -LOTA_ERR_NET_TLS_CERT;
+		}
 
 		if (ssl_err == SSL_ERROR_SSL) {
 			lota_err("TLS handshake failed: %s",
@@ -406,20 +421,6 @@ int net_connect(struct net_context *ctx)
 	}
 
 	if (!ctx->skip_verify) {
-		long verify_result = SSL_get_verify_result(ssl);
-		if (verify_result != X509_V_OK) {
-			lota_err("TLS certificate verification failed: %s "
-				 "(code %ld). "
-				 "Use --ca-cert or --no-verify-tls for testing",
-				 X509_verify_cert_error_string(verify_result),
-				 verify_result);
-			SSL_shutdown(ssl);
-			SSL_free(ssl);
-			close(sock);
-			ctx->socket_fd = -1;
-			return -LOTA_ERR_NET_TLS_CERT;
-		}
-
 		X509 *peer_cert = SSL_get1_peer_certificate(ssl);
 		if (!peer_cert) {
 			lota_err("Verifier did not present a TLS certificate");
