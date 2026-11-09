@@ -154,12 +154,28 @@ else
     warn "see Documentation/operator/production-bringup/index.rst before using it)"
 fi
 
-if [[ -f "$IMA_POLICY_SRC" ]] &&
-    ! grep -q "appraise" "$IMA_POLICY_RUNTIME" 2>/dev/null; then
-    info "loading IMA appraisal policy from $IMA_POLICY_SRC"
-    if ! cat "$IMA_POLICY_SRC" >"$IMA_POLICY_RUNTIME" 2>/dev/null; then
-        warn "writing to $IMA_POLICY_RUNTIME failed; kernel may need"
-        warn "ima_policy=appraise_tcb on cmdline or a custom policy"
+# the agent's test: an appraise rule whose first func= is BPRM_CHECK, or none
+appraises_exec() {
+    awk '$1 == "appraise" {
+        f = ""
+        for (i = 2; i <= NF; i++)
+            if ($i ~ /^func=/) { f = substr($i, 6); break }
+        if (f == "" || f == "BPRM_CHECK") found = 1
+    } END { exit !found }'
+}
+
+if [[ -f "$IMA_POLICY_SRC" ]]; then
+    if ! ima_rules=$(cat "$IMA_POLICY_RUNTIME" 2>/dev/null); then
+        warn "$IMA_POLICY_RUNTIME cannot be read; not loading"
+        warn "$IMA_POLICY_SRC over rules that may already be there"
+    elif appraises_exec <<<"$ima_rules"; then
+        info "IMA policy already appraises exec"
+    else
+        info "loading IMA appraisal policy from $IMA_POLICY_SRC"
+        if ! cat "$IMA_POLICY_SRC" >"$IMA_POLICY_RUNTIME" 2>/dev/null; then
+            warn "writing to $IMA_POLICY_RUNTIME failed; kernel may need"
+            warn "ima_policy=appraise_tcb on cmdline or a custom policy"
+        fi
     fi
 fi
 
