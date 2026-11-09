@@ -433,10 +433,13 @@ make, which covers both the wrong signal and the wrong owner; and
 misdirects: with one code, ending the agent's own PID reads back as a
 permission problem with somebody else's process.
 
-The handler opens a pidfd on the target before reading its owner or sending
-anything. A pidfd pins the PID number for as long as it is held, so the
-``/proc`` entry consulted and the signal delivered address one process and not
-a successor that inherited the number.
+The handler opens a pidfd on the target before reading its owner from
+``/proc``, and sends the signal through that pidfd. A pidfd names the process,
+not the number: once the process is reaped its number can be handed to another
+one, and a signal sent through the pidfd fails with ``ESRCH`` instead of
+reaching it. A target that has exited by the time its owner is read, or has
+been reaped by the time the signal is sent, answers
+``LOTA_IPC_ERR_BAD_REQUEST``.
 
 ``LOTA_STATUS_PROTECTED_TERMINATED`` is then set for the rest of the boot. It
 is kept beside ``status_flags`` rather than inside it, because that word is

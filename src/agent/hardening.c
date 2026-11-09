@@ -164,7 +164,6 @@ static const int hardening_denied_syscalls[] = {
 	SCMP_SYS(io_uring_enter),
 	SCMP_SYS(io_uring_register),
 	SCMP_SYS(userfaultfd),
-	SCMP_SYS(pidfd_send_signal),
 	SCMP_SYS(modify_ldt),
 	SCMP_SYS(personality),
 };

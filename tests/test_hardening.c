@@ -299,14 +299,16 @@ static int child_seccomp_kills_on_userfaultfd(void)
 	return 0;
 }
 
-static int child_seccomp_kills_on_pidfd_send_signal(void)
+/* TERMINATE_PROTECTED signals its target through the pidfd it opened */
+static int child_seccomp_allows_pidfd_send_signal(void)
 {
 	if (hardening_apply_no_new_privs() != 0)
 		return 1;
 	if (hardening_apply_seccomp() != 0)
 		return 1;
-	syscall(SYS_pidfd_send_signal, -1, 0, 0, 0);
-	return 0;
+	if (syscall(SYS_pidfd_send_signal, -1, 0, NULL, 0) != -1)
+		return 1;
+	return errno == EBADF ? 0 : 1;
 }
 
 #ifdef SYS_modify_ldt
@@ -588,8 +590,9 @@ int main(void)
 			      child_seccomp_kills_on_io_uring_setup);
 		run_kill_case("seccomp kills on userfaultfd with SIGSYS",
 			      child_seccomp_kills_on_userfaultfd);
-		run_kill_case("seccomp kills on pidfd_send_signal with SIGSYS",
-			      child_seccomp_kills_on_pidfd_send_signal);
+		run_child_case(
+			"seccomp lets pidfd_send_signal reach the kernel",
+			child_seccomp_allows_pidfd_send_signal);
 #ifdef SYS_modify_ldt
 		run_kill_case("seccomp kills on modify_ldt with SIGSYS",
 			      child_seccomp_kills_on_modify_ldt);

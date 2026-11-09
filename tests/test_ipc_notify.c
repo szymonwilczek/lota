@@ -140,10 +140,21 @@ int bpf_loader_instance_stopped_ms(struct bpf_loader_ctx *ctx, uint32_t pid,
 	return 0;
 }
 
+/*
+ * The adoption pass runs between the owner read and the signal of
+ * TERMINATE_PROTECTED; a victim set here dies and is reaped in that window.
+ */
+static pid_t terminate_victim;
+
 int bpf_loader_adopt_instance_member(struct bpf_loader_ctx *ctx, uint32_t pid)
 {
 	(void)ctx;
 	(void)pid;
+	if (terminate_victim > 0) {
+		kill(terminate_victim, SIGKILL);
+		waitpid(terminate_victim, NULL, 0);
+		terminate_victim = 0;
+	}
 	return 0;
 }
 
@@ -1026,6 +1037,138 @@ static void test_repeated_sync_announces_nothing(struct ipc_context *ctx)
 	PASS();
 }
 
+static pid_t protected_child(void)
+{
+	pid_t pid = fork();
+
+	if (pid == 0) {
+		for (;;)
+			pause();
+	}
+	if (pid < 0)
+		return -1;
+
+	g_agent.policy_protect_pids = calloc(1, sizeof(uint32_t));
+	if (!g_agent.policy_protect_pids) {
+		kill(pid, SIGKILL);
+		waitpid(pid, NULL, 0);
+		return -1;
+	}
+	g_agent.policy_protect_pids[0] = (uint32_t)pid;
+	g_agent.policy_protect_pid_count = 1;
+	return pid;
+}
+
+static void protected_forget(void)
+{
+	free(g_agent.policy_protect_pids);
+	g_agent.policy_protect_pids = NULL;
+	g_agent.policy_protect_pid_count = 0;
+}
+
+static int terminate_request(struct ipc_context *ctx, pid_t pid,
+			     uint32_t *result)
+{
+	struct lota_ipc_terminate_request req = {
+		.pid = (uint32_t)pid,
+		.signal = SIGTERM,
+	};
+	struct lota_ipc_response resp;
+	uint8_t payload[LOTA_IPC_MAX_PAYLOAD];
+	int fd, ret;
+
+	fd = client_open();
+	if (fd < 0)
+		return fd;
+
+	ret = send_request(fd, LOTA_IPC_CMD_TERMINATE_PROTECTED, &req,
+			   sizeof(req));
+	if (ret == 0)
+		ret = read_frame(ctx, fd, &resp, payload, sizeof(payload), 64);
+	close(fd);
+	if (ret == 0)
+		*result = resp.result;
+	return ret;
+}
+
+static void test_terminate_reaches_the_target(struct ipc_context *ctx)
+{
+	uint32_t result = 0;
+	int status = 0;
+	pid_t pid;
+
+	TEST("TERMINATE_PROTECTED ends a live protected process");
+
+	pid = protected_child();
+	if (pid < 0) {
+		FAIL("cannot fork a protected process");
+		return;
+	}
+
+	if (terminate_request(ctx, pid, &result) < 0) {
+		FAIL("terminate request");
+		kill(pid, SIGKILL);
+		waitpid(pid, NULL, 0);
+		goto out;
+	}
+	if (result != LOTA_IPC_OK) {
+		FAIL("a live protected process is refused");
+		kill(pid, SIGKILL);
+		waitpid(pid, NULL, 0);
+		goto out;
+	}
+	if (waitpid(pid, &status, 0) != pid || !WIFSIGNALED(status) ||
+	    WTERMSIG(status) != SIGTERM) {
+		FAIL("the process did not die of SIGTERM");
+		goto out;
+	}
+
+	PASS();
+out:
+	protected_forget();
+}
+
+/*
+ * A target reaped after the owner read leaves its number free for another
+ * process; the request must not reach anything by that number.
+ */
+static void test_terminate_target_reaped_mid_request(struct ipc_context *ctx)
+{
+	uint32_t result = 0;
+	pid_t pid;
+
+	TEST("a target reaped before the signal is answered as gone");
+
+	pid = protected_child();
+	if (pid < 0) {
+		FAIL("cannot fork a protected process");
+		return;
+	}
+	terminate_victim = pid;
+
+	if (terminate_request(ctx, pid, &result) < 0) {
+		FAIL("terminate request");
+		goto out;
+	}
+	if (terminate_victim != 0) {
+		FAIL("the target was not reaped inside the request");
+		goto out;
+	}
+	if (result != LOTA_IPC_ERR_BAD_REQUEST) {
+		FAIL("a reaped target is not answered as a missing process");
+		goto out;
+	}
+
+	PASS();
+out:
+	if (terminate_victim > 0) {
+		kill(terminate_victim, SIGKILL);
+		waitpid(terminate_victim, NULL, 0);
+		terminate_victim = 0;
+	}
+	protected_forget();
+}
+
 int main(void)
 {
 	struct ipc_context ctx;
@@ -1072,6 +1215,8 @@ int main(void)
 	test_repeated_sync_announces_nothing(&ctx);
 	test_session_notification_is_delivered(&ctx);
 	test_sync_after_notification_is_answered(&ctx);
+	test_terminate_reaches_the_target(&ctx);
+	test_terminate_target_reaped_mid_request(&ctx);
 
 	ipc_cleanup(&ctx);
 	profile_forget(profiles);

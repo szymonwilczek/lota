@@ -25,7 +25,7 @@
 #include <fcntl.h>
 #include <grp.h>
 #include <limits.h>
-#include <signal.h>
+#include <poll.h>
 #include <sys/syscall.h>
 #include <openssl/crypto.h>
 #include <stdint.h>
@@ -2907,6 +2907,13 @@ static void handle_get_registry(struct ipc_client *client,
 	client->send_offset = 0;
 }
 
+static bool pidfd_exited(int pidfd)
+{
+	struct pollfd pfd = { .fd = pidfd, .events = POLLIN };
+
+	return poll(&pfd, 1, 0) > 0;
+}
+
 /*
  * End a protected process for its owner or root; terminate_policy_decide()
  * holds the rule.
@@ -2951,6 +2958,8 @@ static void handle_terminate_protected(struct ipc_context *ctx,
 	}
 
 	uid_ret = read_pid_real_uid((pid_t)req.pid, &target_uid);
+	if (uid_ret == 0 && pidfd_exited(pidfd))
+		uid_ret = -ESRCH;
 	if (uid_ret < 0) {
 		close(pidfd);
 		lota_warn("TERMINATE_PROTECTED for pid=%u from uid=%d: cannot "
@@ -2987,13 +2996,16 @@ static void handle_terminate_protected(struct ipc_context *ctx,
 		return;
 	}
 
-	if (kill((pid_t)req.pid, (int)req.signal) < 0) {
+	if (syscall(SYS_pidfd_send_signal, pidfd, (int)req.signal, NULL, 0) <
+	    0) {
 		int err = errno;
 
 		close(pidfd);
 		lota_err("TERMINATE_PROTECTED failed for pid=%u sig=%u: %s",
 			 req.pid, req.signal, strerror(err));
-		build_error_response(client, LOTA_IPC_ERR_INTERNAL);
+		build_error_response(client, err == ESRCH ?
+						     LOTA_IPC_ERR_BAD_REQUEST :
+						     LOTA_IPC_ERR_INTERNAL);
 		return;
 	}
 	close(pidfd);
