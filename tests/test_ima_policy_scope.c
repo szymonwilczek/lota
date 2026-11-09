@@ -101,15 +101,23 @@ static void test_last_mode_decides(void)
 		PASS();
 }
 
-static void test_mode_absent_is_refused(void)
+/* without the parameter the kernel stays in its default, enforce */
+static void test_mode_absent_reads_the_scope(void)
 {
-	TEST("no ima_appraise= at all is refused");
+	TEST("no ima_appraise= at all leaves the policy to decide");
 
 	write_file(cmdline_path, "ro quiet\n");
 	write_file(policy_path, policy_appraises_exec);
+	if (bpf_loader_ima_appraisal_active(cmdline_path, policy_path, 0) !=
+	    0) {
+		FAIL("the default mode over an exec rule was refused");
+		return;
+	}
 
-	if (bpf_loader_ima_appraisal_active(cmdline_path, policy_path, 0) == 0)
-		FAIL("a kernel booted without the parameter passed");
+	write_file(policy_path, policy_measure_only);
+	if (bpf_loader_ima_appraisal_active(cmdline_path, policy_path, 0) !=
+	    -ENOENT)
+		FAIL("the default mode over no exec rule was not -ENOENT");
 	else
 		PASS();
 }
@@ -316,7 +324,7 @@ int main(void)
 	test_mode_off_is_refused();
 	test_mode_fix_is_refused();
 	test_last_mode_decides();
-	test_mode_absent_is_refused();
+	test_mode_absent_reads_the_scope();
 	test_blocking_mode_with_empty_scope_is_refused();
 	test_blocking_mode_with_exec_scope_passes();
 	test_appraise_without_func_covers_exec();

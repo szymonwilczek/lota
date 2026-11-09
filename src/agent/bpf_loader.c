@@ -473,13 +473,15 @@ int bpf_loader_ima_appraisal_active(const char *cmdline_path,
 	if (buf[len - 1] == '\n')
 		buf[len - 1] = '\0';
 
-	/* the kernel keeps the last one */
+	/* the kernel keeps the last one; with none, its default enforce */
 	for (tok = strtok_r(buf, " \t", &save); tok;
 	     tok = strtok_r(NULL, " \t", &save)) {
 		if (strncmp(tok, "ima_appraise=", 13) == 0)
 			val = tok + 13;
 	}
-	if (!val || strcmp(val, "enforce") != 0)
+	if (!val)
+		val = "enforce";
+	if (strcmp(val, "enforce") != 0)
 		return -EPERM;
 
 	ret = ima_policy_appraises_exec(policy_path, &read_err);

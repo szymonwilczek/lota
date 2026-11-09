@@ -117,7 +117,8 @@ signature-type ``security.ima`` xattr.
 
 The agent parses ``/proc/cmdline`` and refuses to start unless the last
 ``ima_appraise=`` on it, the one the kernel keeps, is ``enforce`` (block on
-integrity failure).
+integrity failure). A cmdline without the parameter leaves the kernel in its
+default, ``enforce``.
 ``ima_appraise=fix`` writes missing xattrs and lets the access through, and
 ``log`` and ``off`` do not block either, so none of them satisfies the
 kernel floor.
