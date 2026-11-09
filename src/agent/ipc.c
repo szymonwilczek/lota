@@ -2533,15 +2533,6 @@ static int pid_set_add(const uint32_t *pids, int count, uint32_t pid,
 		memcpy(new_pids, pids, (size_t)count * sizeof(uint32_t));
 	new_pids[count] = pid;
 
-	/* keep sorted invariant */
-	for (int i = count; i > 0; i--) {
-		if (new_pids[i - 1] <= new_pids[i])
-			break;
-		uint32_t tmp = new_pids[i - 1];
-		new_pids[i - 1] = new_pids[i];
-		new_pids[i] = tmp;
-	}
-
 	*out = new_pids;
 	*out_count = count + 1;
 	return 0;
