@@ -370,6 +370,12 @@ static void test_aead_rejects_tamper(void)
 		FAIL("tag tamper accepted");
 		return;
 	}
+	for (unsigned i = 0; i < sizeof(got); i++) {
+		if (got[i] != 0) {
+			FAIL("unverified plaintext left behind");
+			return;
+		}
+	}
 
 	/* wrong KEK */
 	uint8_t bad_kek[LOTA_ENVELOPE_KEK_SIZE];
