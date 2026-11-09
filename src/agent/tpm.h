@@ -56,7 +56,6 @@ struct tpm_quote_response;
  * tpm_unseal_boot_state_unknown() - Print the boot-state hint after an unseal?
  * @err: Return value of the failed unseal.
  *
- * tpm_strerror() names the boot state for -LOTA_ERR_TPM_POLICY_FAIL.
  * -EBADMSG is a bad blob.
  *
  * Return: true for any other negative @err.
@@ -65,7 +64,7 @@ static inline bool tpm_unseal_boot_state_unknown(int err)
 {
 	if (err >= 0)
 		return false;
-	return err != -LOTA_ERR_TPM_POLICY_FAIL && err != -EBADMSG;
+	return err != -EBADMSG;
 }
 
 /**

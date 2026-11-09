@@ -714,13 +714,13 @@ static void test_policy_fail_maps_clean(void)
 	PASS();
 }
 
-/* the boot-state hint must not follow a framing or PolicyPCR refusal */
+/* the boot-state hint must not follow a framing refusal */
 static void test_boot_state_hint_is_for_a_tpm_that_did_not_say(void)
 {
-	TEST("the boot-state hint is only for an unexplained TPM refusal");
+	TEST("the boot-state hint is only for a TPM refusal");
 
-	if (tpm_unseal_boot_state_unknown(-LOTA_ERR_TPM_POLICY_FAIL)) {
-		FAIL("a policy failure already names the state");
+	if (!tpm_unseal_boot_state_unknown(-LOTA_ERR_TPM_POLICY_FAIL)) {
+		FAIL("a policy failure does not say which policy");
 		return;
 	}
 	if (tpm_unseal_boot_state_unknown(-EBADMSG)) {

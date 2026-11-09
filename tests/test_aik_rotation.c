@@ -1198,15 +1198,11 @@ static void test_tpm_strerror_maps_lota_private(void)
 		return;
 	}
 
-	/*
-	 * The code an operator meets when a sealed secret will not open:
-	 * the host is not in the state the blob was sealed against.
-	 * It says which state, because "policy not satisfied" alone sends
-	 * a reader to the TPM specification.
-	 */
+	/* an EK policy session fails with the same code as a PCR unseal */
 	const char *policy = tpm_strerror(-LOTA_ERR_TPM_POLICY_FAIL);
-	if (!policy || strstr(policy, "PCR") == NULL) {
-		FAIL("POLICY_FAIL description must name the boot/PCR state");
+	if (!policy || strstr(policy, "policy") == NULL ||
+	    strstr(policy, "boot") != NULL) {
+		FAIL("POLICY_FAIL description names a boot state");
 		return;
 	}
 	if (strcmp(policy, strerror(LOTA_ERR_TPM_POLICY_FAIL)) == 0) {
