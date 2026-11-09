@@ -548,7 +548,12 @@ func (v *PCRVerifier) verifyAgainstPolicy(report *types.AttestationReport, polic
 	if policy.RequireIMAAppraisal {
 		if report.Header.Flags&types.FlagIMAAppraisal == 0 {
 			return refuse(types.VerifyIMAAppraisalRequired,
-				errors.New("kernel appraises no executable on this host (IMA appraisal scope absent)"))
+				errors.New("exec appraisal not established "+
+					"on this host (KERNEL_APPRAISAL "+
+					"clear: ima_appraise= not enforce, "+
+					"no appraise rule on BPRM_CHECK or "+
+					"without func=, or the policy "+
+					"unread)"))
 		}
 	}
 

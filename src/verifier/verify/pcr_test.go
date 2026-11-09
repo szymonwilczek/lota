@@ -78,7 +78,7 @@ func TestRequireIMAAppraisalRefusesAnUnappraisedHost(t *testing.T) {
 	if err == nil {
 		t.Fatal("a host that appraises nothing satisfied the requirement")
 	}
-	if !strings.Contains(err.Error(), "appraises no executable") {
+	if !strings.Contains(err.Error(), "exec appraisal not established") {
 		t.Errorf("the refusal does not name what is missing: %v", err)
 	}
 }
