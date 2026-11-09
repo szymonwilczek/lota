@@ -16,7 +16,6 @@
 #include <sys/ioctl.h>
 #include <sys/stat.h>
 #include <sys/types.h>
-#include <sys/vfs.h>
 #include <sys/xattr.h>
 #include <unistd.h>
 #include <openssl/asn1.h>
@@ -154,73 +153,6 @@ int probe_manifest_line(const char *line, char *out, size_t cap)
 	memcpy(out, start, len);
 	out[len] = '\0';
 	return 1;
-}
-
-enum probe_fstype probe_fstype_from_magic(long magic)
-{
-	switch (magic) {
-	case PROBE_MAGIC_EXT:
-		return PROBE_FS_EXT4;
-	case PROBE_MAGIC_XFS:
-		return PROBE_FS_XFS;
-	case PROBE_MAGIC_BTRFS:
-		return PROBE_FS_BTRFS;
-	case PROBE_MAGIC_F2FS:
-		return PROBE_FS_F2FS;
-	case PROBE_MAGIC_ZFS:
-		return PROBE_FS_ZFS;
-	default:
-		return PROBE_FS_UNKNOWN;
-	}
-}
-
-int probe_fs_supports_fsverity(enum probe_fstype fs)
-{
-	switch (fs) {
-	case PROBE_FS_EXT4:
-	case PROBE_FS_BTRFS:
-	case PROBE_FS_F2FS:
-		return 1;
-	default:
-		return 0;
-	}
-}
-
-void probe_verity_remediation(enum probe_fstype fs, const char *path, char *out,
-			      size_t cap)
-{
-	if (!out || cap == 0)
-		return;
-	if (!path)
-		path = "the agent binary";
-
-	if (probe_fs_supports_fsverity(fs)) {
-		snprintf(out, cap,
-			 "Filesystem holding %s supports fs-verity but it "
-			 "is not enabled. ext4: 'tune2fs -O verity' on the "
-			 "unmounted device; btrfs and f2fs ship the feature by "
-			 "default. Then re-run lota-install.",
-			 path);
-		return;
-	}
-
-	snprintf(out, cap,
-		 "Filesystem holding %s has no fs-verity. Establish "
-		 "kernel-enforced immutability with IMA instead: sign the "
-		 "binary into a security.ima xattr (evmctl ima_sign --key "
-		 "<ima.key>), load the matching certificate into the .ima "
-		 "keyring, and boot with ima_appraise=enforce. Then re-run "
-		 "lota-install.",
-		 path);
-}
-
-enum probe_fstype probe_path_fstype(const char *path)
-{
-	struct statfs sfs;
-
-	if (!path || statfs(path, &sfs) != 0)
-		return PROBE_FS_UNKNOWN;
-	return probe_fstype_from_magic((long)sfs.f_type);
 }
 
 int probe_file_ima_signed(const char *path)
@@ -1250,8 +1182,8 @@ enum stage_state probe_ima_scope_stage(const struct probe_ima_scope *s,
 
 	if (s->scope == PROBE_IMA_SCOPE_EXEC) {
 		snprintf(note, cap,
-			 "The loaded IMA policy appraises executables, which "
-			 "is the scope the agent's startup gate requires.");
+			 "The loaded IMA policy appraises executables, so "
+			 "tokens can say KERNEL_APPRAISAL.");
 		return STAGE_DONE;
 	}
 
@@ -1265,30 +1197,22 @@ enum stage_state probe_ima_scope_stage(const struct probe_ima_scope *s,
 		}
 		snprintf(note, cap,
 			 "This kernel does not publish its loaded IMA policy "
-			 "(%s: %s), so the scope cannot be checked. The agent "
-			 "starts on the appraisal mode alone and records that "
-			 "the scope is unverified.",
+			 "(%s: %s), so the scope cannot be checked and every "
+			 "token says KERNEL_APPRAISAL is clear.",
 			 PROBE_IMA_POLICY_PATH, strerror(-s->scope));
 		return STAGE_DONE;
 	}
 
 	snprintf(note, cap,
-		 "The loaded IMA policy carries no appraise rule that reaches "
-		 "an executable, so the kernel appraises nothing here%s. The "
-		 "installer does not widen the scope: an IMA rule cannot name "
-		 "a path, so a rule reaching the agent reaches every "
-		 "executable it matches%s, and this host's %s The scope "
-		 "arrives with the signatures -- IMA-signed distribution "
-		 "packages, or an image pipeline that signs executables and "
-		 "enrols its certificate (production bring-up guide, \"IMA "
-		 "appraisal policy\").%s",
-		 s->agent_verity ?
-			 ", which the agent reports: "
-			 "fs-verity holds its own binary and the token says "
-			 "KERNEL_APPRAISAL is clear" :
-			 " -- and the agent refuses to start, because without "
-			 "fs-verity on its binary an unappraised signature is "
-			 "the only thing holding it",
+		 "The loaded IMA policy has no appraise rule on BPRM_CHECK or "
+		 "without func=, so every token says KERNEL_APPRAISAL is "
+		 "clear. The installer does not widen the scope: an IMA rule "
+		 "cannot name a path, so a rule reaching the agent reaches "
+		 "every executable it matches%s, and this host's %s The "
+		 "scope arrives with the signatures -- IMA-signed "
+		 "distribution packages, or an image pipeline that signs "
+		 "executables and enrols its certificate (production "
+		 "bring-up guide, \"IMA appraisal policy\").%s",
 		 s->secureboot ? ", in enforce, since Secure Boot makes the "
 				 "kernel discard ima_appraise=" :
 				 "",
@@ -1298,12 +1222,11 @@ enum stage_state probe_ima_scope_stage(const struct probe_ima_scope *s,
 			 "executables carry no signature (its agent binary "
 			 "carries none), so the next boot would refuse them.",
 		 s->policy_signed ?
-			 " Policy writes are appraised here too (appraise "
+			 " Policy writes are appraised here (appraise "
 			 "func=POLICY_CHECK appraise_type=imasig), so any rule "
 			 "set has to be signed by a key on the .ima keyring." :
 			 "");
-	return lota_ima_scope_is_advisory(s->agent_verity) ? STAGE_DONE :
-							     STAGE_BLOCKED;
+	return STAGE_DONE;
 }
 
 int probe_installed_kernels_at(const char *modules_dir, const char *boot_dir,

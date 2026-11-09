@@ -3,12 +3,10 @@
 /*
  * Unit tests for the shared security.ima xattr signature-type predicate.
  *
- * Agent self-check and the installer's filesystem-integrity stage both use this
- * predicate to accept IMA appraisal as proof of binary immutability on
- * filesystems without fs-verity (XFS, ZFS, ...).
- * Only a signature variant binds the file content to a key in the .ima keyring;
- * bare digest can be recomputed by an offline attacker and must never count
- * as a signature.
+ * The installer's IMA scope stage uses it to tell a host that signs its
+ * executables from one that does not. Only a signature variant binds the file
+ * content to a key in the .ima keyring; a bare digest must never count as a
+ * signature.
  */
 
 #include <stddef.h>

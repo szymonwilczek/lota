@@ -168,23 +168,22 @@ It prints every step and what it found::
 
     [lota-install] LOTA Guided Install <version>
     [lota-install] Hardware-rooted attestation for this host
-    [lota-install] stage 1/13: Preflight: Hardware and Host Requirements
+    [lota-install] stage 1/12: Preflight: Hardware and Host Requirements
     [lota-install]   already satisfied: Preflight: Hardware and Host
         Requirements - TPM 2.0 present, Secure Boot on, tooling found
     [...]
-    [lota-install] stage 13/13: Self-check & summary
+    [lota-install] stage 12/12: Self-check & summary
     [lota-install]   already satisfied: Self-check & summary - Ready: floor
-        satisfied, agent binary immutable, service running, and no publisher
-        named yet - the certificate arrives when a title first asks. The
-        attestation round-trip runs during an install; this report performs
-        nothing.
+        satisfied, service running, and no publisher named yet - the
+        certificate arrives when a title first asks. The attestation
+        round-trip runs during an install; this report performs nothing.
 
-    0 of 13 stages need work.
+    0 of 12 stages need work.
 
 (Each stage prints on one long line; the indented continuations above are
 wrapped to fit this page.)
 
-**"0 of 13 stages need work" is the finish line.** Your PC is installed.
+**"0 of 12 stages need work" is the finish line.** Your PC is installed.
 
 Note what the last line says: *no publisher named yet*. That is expected, and
 the next section explains it.

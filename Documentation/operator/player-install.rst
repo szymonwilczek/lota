@@ -58,7 +58,7 @@ calls both "pending" reads as work about to happen.
 
 The last step is the self-check, which is where an install answers "did this
 work". The report says what it can see without acting -- the kernel integrity
-floor, the agent binary's immutability, the service, and the AIK certificate
+floor, the service, and the AIK certificate
 -- and stops there: the attestation round-trip is an action and belongs to an
 install, so no report sends one.
 
@@ -162,10 +162,6 @@ What the stages do
    that key. Fail-closed: the installer never generates a signing key on this
    host -- a locally generated key would let local malware re-sign a tampered
    enforcement object.
-#. **Binary immutability** -- enables fs-verity on the agent binary
-   (ext4/btrfs/f2fs). On filesystems without verity (XFS, ZFS) it instead
-   accepts a signed ``security.ima`` xattr enforced by IMA appraisal, which
-   gives the same guarantee.
 #. **Initramfs PCR14 lock** -- regenerates the initramfs of every installed
    kernel so the PCR14 lock helper runs before any regular userspace, whichever
    kernel is selected at boot. It reports work to do while any installed kernel
@@ -193,17 +189,12 @@ What the stages do
    ``.ima`` keyring, or an operator image pipeline that signs the executable
    closure and enrols its certificate.
 
-   **A host that appraises nothing still finishes the install**, as long as the
-   agent binary carries fs-verity: the kernel refuses a modified read of it and
-   PCR 14 commits the running build, so the agent's own footing does not rest
-   on IMA. The stage says what the machine gives up, and every token it hands
-   out carries ``LOTA_FLAG_KERNEL_APPRAISAL`` clear, which is what a publisher
-   or a verifier policy (``require_ima_appraisal``) reads. On a filesystem
-   without verity, where the agent's only claim is a signed ``security.ima``
-   xattr, appraisal is what makes that claim real: there the agent refuses to
-   start and the stage is blocked. A kernel built without
+   **A host without an exec appraise rule still finishes the install.** The stage
+   says what the machine gives up, and every token it hands out carries
+   ``LOTA_FLAG_KERNEL_APPRAISAL`` clear, which is what a publisher or a
+   verifier policy (``require_ima_appraisal``) reads. A kernel built without
    ``CONFIG_IMA_READ_POLICY`` publishes no policy at all, so the scope cannot
-   be read and both the stage and the agent say it went unverified.
+   be read and both the stage and the agent say so.
 #. **SELinux fence** -- loads the LOTA policy module if needed and re-triggers
    udev so ``/dev/tpm*`` carries the LOTA-only label.
 #. **Reboot checkpoint** -- stops with exit 10 until the boot-chain changes are

@@ -23,11 +23,8 @@ struct agent_startup_policy {
 	int allow_verity_count;
 
 	/*
-	 * Set by --insecure-allow-mutable-rootfs. Turns four refusals of
-	 * bpf_loader_verify_kernel_runtime_hardening() into warnings: an agent
-	 * binary with neither fs-verity nor a signed security.ima xattr, a TPM
-	 * device without its SELinux label, IMA appraisal in a mode that does
-	 * not block, and no IMA rule appraising exec.
+	 * Set by --insecure-allow-mutable-rootfs. Turns the refusal of a TPM
+	 * device without its SELinux label into a warning.
 	 */
 	bool allow_mutable_rootfs;
 };

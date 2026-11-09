@@ -5,9 +5,8 @@
 # lota-dev-bringup.sh
 #
 # Prepare a developer host for the agent: an Ed25519 key at
-# /etc/lota/policy.key, a signature on the BPF object, policy_pubkey in
-# /etc/lota/lota.conf and fs-verity on /usr/bin/lota-agent. Not meant for
-# hardened production hosts.
+# /etc/lota/policy.key, a signature on the BPF object and policy_pubkey in
+# /etc/lota/lota.conf. Not meant for hardened production hosts.
 #
 # Each step skips what is already in place. There is no rollback: a failed run
 # keeps its partial work.
@@ -54,7 +53,7 @@ redirected=false
 [[ -n "$BRINGUP_ROOT" ]] && redirected=true
 
 if ! $redirected && [[ $EUID -ne 0 ]]; then
-    echo "lota-dev-bringup: must run as root (TPM + fs-verity + IMA)" >&2
+    echo "lota-dev-bringup: must run as root (TPM + IMA)" >&2
     exit 2
 fi
 
@@ -142,28 +141,15 @@ else
     info "policy_pubkey already configured, leaving $LOTA_CONF alone"
 fi
 
-if command -v fsverity >/dev/null 2>&1; then
-    if fsverity measure "$AGENT_BIN" >/dev/null 2>&1; then
-        info "fs-verity already enabled on $AGENT_BIN"
-    else
-        info "enabling fs-verity on $AGENT_BIN"
-        if ! fsverity enable "$AGENT_BIN"; then
-            warn "fsverity enable failed; filesystem may lack the verity feature"
-            warn "agent will refuse to start without --insecure-allow-mutable-rootfs"
-        fi
-    fi
-else
-    warn "fsverity utility not installed; install fsverity-utils and re-run"
-fi
-
 # the kernel keeps the last one; with none, its default enforce
 ima_mode=$({ grep -oE '(^| )ima_appraise=[^ ]*' /proc/cmdline 2>/dev/null ||
     true; } | tail -n 1 | sed 's/^ *ima_appraise=//')
 if [[ -z "$ima_mode" || "$ima_mode" == enforce ]]; then
     info "IMA appraisal already in an enforcing mode"
 else
-    warn "kernel cmdline sets ima_appraise=$ima_mode; the agent will"
-    warn "refuse to start. fix and log do not block on integrity failures"
+    warn "kernel cmdline sets ima_appraise=$ima_mode; tokens will say"
+    warn "KERNEL_APPRAISAL is clear. fix and log do not block on"
+    warn "integrity failures"
     warn "(enforce on a rootfs without IMA signatures blocks every exec;"
     warn "see Documentation/operator/production-bringup/index.rst before using it)"
 fi

@@ -13,15 +13,8 @@ The most common failures, with the gate that produced them:
 * ``Kernel anti-tamper prerequisites are not satisfied``. Check
   ``cat /sys/kernel/security/lockdown`` (must show ``[integrity]`` or
   ``[confidentiality]``), ``cat /sys/module/module/parameters/sig_enforce``
-  (must be ``Y``), and ``grep -oE 'ima_appraise=\w+' /proc/cmdline`` (must
-  report ``enforce`` or ``fix``).
-* ``Agent binary (/proc/self/exe) is not protected against offline
-  tampering``. On
-  ext4/btrfs/f2fs re-run ``fsverity enable`` on ``/usr/bin/lota-agent``; the
-  verity merkle root is bound to the inode, so re-installs invalidate the bit
-  and the bring-up script re-enables on every run. On XFS/ZFS (no verity)
-  re-sign the binary into its ``security.ima`` xattr and confirm
-  ``ima_appraise=enforce``; the agent accepts the signed xattr as equivalent.
+  (must be ``Y``), and the ``/dev/tpmrm0`` SELinux label (``ls -Z``, must
+  carry ``lota_tpm_device_t``).
 * ``BPF object signature verification failed``. The object and the key no
   longer belong to each other. A ``policy_pubkey`` line naming a file that is
   no longer there does not cause this: the agent treats a key that has stopped
@@ -41,7 +34,7 @@ The most common failures, with the gate that produced them:
   measurement in PCR14, and without the lock recording that baseline at
   ``/run/lota/pcr14_baseline`` the agent cannot anchor its derivation. Confirm
   the dracut module is installed and the initramfs was rebuilt (see
-  :doc:`manual-reference`, section 5), then cold reboot.
+  :doc:`manual-reference`, section 4), then cold reboot.
 * ``The agent is paused on this host``. Its boot commitment was spent by a
   shutdown requested here -- ``lota-agent --shutdown``, ``lota-install
   --pause``, or a ``systemctl stop`` that ran the unit's ``ExecStop``. PCR 14

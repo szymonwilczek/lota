@@ -335,23 +335,6 @@ static void test_secure_boot_judge(void)
 		PASS();
 }
 
-static void test_scope_advisory_rule(void)
-{
-	TEST("an unappraised kernel is advisory where verity binds the agent");
-	if (!lota_ima_scope_is_advisory(1))
-		FAIL("a host bound by the kernel was refused for coverage it "
-		     "cannot have");
-	else
-		PASS();
-
-	TEST("without verity an unappraised kernel is fatal");
-	if (lota_ima_scope_is_advisory(0))
-		FAIL("a signed xattr nobody appraises was accepted as a "
-		     "binding");
-	else
-		PASS();
-}
-
 int main(void)
 {
 	printf("=== IMA appraisal scope tests ===\n\n");
@@ -373,7 +356,6 @@ int main(void)
 	test_secureboot_ignores_the_cmdline_mode();
 	test_rule_shapes();
 	test_secure_boot_judge();
-	test_scope_advisory_rule();
 
 	unlink(cmdline_path);
 	unlink(policy_path);

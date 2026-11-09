@@ -29,7 +29,7 @@ Contents
 * :doc:`Startup gate matrix and automated bring-up <gate-matrix>` -- the gates
   the agent enforces and the developer bring-up script.
 * :doc:`Manual reference: host gates <manual-reference>` -- operator key, signed
-  BPF object, fs-verity, IMA, the TPM SELinux label, and the AIK / PCR14 reset.
+  BPF object, IMA, the TPM SELinux label, and the AIK / PCR14 reset.
 * :doc:`Attestation CA enrollment <ca-enrollment>` -- standing up the CA,
   enrolling a host, and the re-anchor and rotation surfaces.
 * :doc:`Sealed keys (offline local attestation) <sealed-keys>` -- sealing

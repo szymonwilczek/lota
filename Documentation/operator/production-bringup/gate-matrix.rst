@@ -27,21 +27,11 @@ current tree.
      - ``src/agent/bpf_loader.c::kernel_module_sig_enforced()``
      - Fedora 44 ships this by default. On distros that do not, add
        ``module.sig_enforce=1`` to the cmdline.
-   * - IMA appraisal in an enforcing mode
-     - ``src/agent/bpf_loader.c::kernel_ima_appraise_enforcing()``
-     - Add ``ima_appraise=enforce`` (or ``fix``) to the kernel cmdline. ``log``
-       and the default ``off`` do not satisfy the gate.
    * - ``/dev/tpm{rm,}0`` carries ``lota_tpm_device_t``
      - ``src/agent/bpf_loader.c::tpm_device_selinux_label_ok()``
      - Install the udev rule under :ghsrc:`configs/udev/99-lota-tpm.rules` (handled by
        ``make install``) and run
        ``udevadm trigger --action=add /dev/tpmrm0 /dev/tpm0``.
-   * - Kernel-enforced immutability of ``/usr/bin/lota-agent``
-     - ``src/agent/bpf_loader.c::agent_self_immutability_enforced()``
-     - fs-verity OR a signed ``security.ima`` xattr. On ext4/btrfs/f2fs run
-       ``fsverity enable /usr/bin/lota-agent`` (or let bring-up do it); on
-       XFS/ZFS sign the binary (``evmctl ima_sign``) under
-       ``ima_appraise=enforce``.
    * - BPF object Ed25519 signature
      - ``src/agent/bpf_loader.c::verify_bpf_object_signature()``
      - Ships signed: the agent package carries ``lota_lsm.bpf.o``, its

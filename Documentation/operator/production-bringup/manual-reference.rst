@@ -58,79 +58,22 @@ sign call into the build system for CI / packaging.
    :ghsrc:`scripts/lota-dev-bringup.sh` does generate one on the host: that is
    a development convenience and not a production path.
 
-2. Kernel-enforced immutability of the agent binary
-===================================================
-
-The agent refuses to start unless the kernel will reject a modified read of
-``/usr/bin/lota-agent``, so a binary swapped while the host is offline is
-caught at the next boot. Two mechanisms satisfy this, and the agent accepts
-**either** (``agent_self_immutability_enforced()``):
-
-**fs-verity** -- ext4, btrfs, f2fs and recent XFS:
-
-.. code-block:: sh
-
-    # ext4 needs the feature enabled at mkfs time
-    # or via `sudo tune2fs -O verity /dev/sdX` on an unmounted device.
-    # btrfs / f2fs ship verity in 5.15+.
-    sudo fsverity enable /usr/bin/lota-agent
-    sudo fsverity measure /usr/bin/lota-agent
-
-Verity is enabled once per inode and cannot be enabled twice, so on a binary
-that already carries it ``enable`` exits non-zero with
-``FS_IOC_ENABLE_VERITY failed on '/usr/bin/lota-agent': File exists``. That is
-the armed state, not a failure; ``measure`` printing a digest is the check.
-A re-install replaces the inode and the bit with it, which is why bring-up
-runs ``enable`` on every pass.
-
-If ``fsverity enable`` returns ``EOPNOTSUPP``, the filesystem has no verity
-support. Production lays this down at install time via dracut + an
-fs-verity-enabled rootfs.
-
-The hash algorithm is the operator's choice: LOTA reads whichever digest the
-kernel reports, SHA-256 (the ``fsverity enable`` default, and what the RPM
-fs-verity plugin and composefs produce) or SHA-512
-(``--hash-alg=sha512``). An allowlist entry matches only under the algorithm
-it was captured with, so re-capture the digest after changing it -- and note
-that the algorithm is fixed when verity is enabled, so changing it on an
-existing file means writing a fresh copy of that file.
-
-**Signed IMA xattr** -- any filesystem with a ``security`` xattr namespace,
-including XFS and ZFS where fs-verity is unavailable. Under
-``ima_appraise=enforce`` (see section 3) the kernel refuses to exec or read a
-file whose content does not match the hash signed in its ``security.ima``
-xattr by a key on the ``.ima`` keyring, which is the same offline-swap
-guarantee:
-
-.. code-block:: sh
-
-    # sign the binary; load the matching cert onto the .ima keyring
-    sudo evmctl ima_sign --key /etc/keys/ima.key /usr/bin/lota-agent
-    getfattr -m security.ima -d /usr/bin/lota-agent   # verify present
-
-Bare (unsigned) digest does **not** count -- attacker who swaps the binary
-offline can recompute it. The agent and the installer accept only a
-signature-type ``security.ima`` xattr.
-
-3. IMA appraisal policy
+2. IMA appraisal policy
 =======================
 
-The agent parses ``/proc/cmdline`` and refuses to start unless the last
-``ima_appraise=`` on it, the one the kernel keeps, is ``enforce`` (block on
-integrity failure). A cmdline without the parameter leaves the kernel in its
-default, ``enforce``.
+The agent parses ``/proc/cmdline`` and counts appraisal as blocking only when
+the last ``ima_appraise=`` on it, the one the kernel keeps, is ``enforce``
+(block on integrity failure). A cmdline without the parameter leaves the
+kernel in its default, ``enforce``.
 ``ima_appraise=fix`` writes missing xattrs and lets the access through, and
-``log`` and ``off`` do not block either, so none of them satisfies the
-kernel floor.
+``log`` and ``off`` do not block either, so none of them sets
+``LOTA_FLAG_KERNEL_APPRAISAL``.
 
 Appraisal applies only to the ``func=`` rules the loaded policy contains, so a host
 booted ``ima_appraise=enforce`` whose policy carries no ``appraise func=BPRM_CHECK``
 rule appraises no executable at all.
-The agent reads ``/sys/kernel/security/ima/policy`` as well and refuses to
-start when the scope is empty, naming the rule it did not find. Where the
-kernel was built without ``CONFIG_IMA_READ_POLICY`` that file cannot be read;
-there the mode decides on its own and the agent logs, at startup, that the
-scope went unverified.
+The agent reads ``/sys/kernel/security/ima/policy`` as well and counts
+appraisal only when a rule there reaches an exec.
 
 .. code-block:: sh
 
@@ -147,9 +90,8 @@ nothing but that line.
 ``arch_ima_get_secureboot()`` is true, logging ``ima: Secure boot enabled:
 ignoring ima_appraise=... option``, and leaves its built-in default, which
 blocks. Since LOTA requires Secure Boot, that is the mode every supported host
-appraises in: setting ``ima_appraise=fix`` there stages nothing, and the agent's
-startup gate reads the loaded policy rather than the parameter for exactly that
-reason. The staging advice below applies to a host booted without Secure Boot,
+appraises in: setting ``ima_appraise=fix`` there stages nothing, and the agent
+reads the loaded policy rather than the parameter for exactly that reason. The staging advice below applies to a host booted without Secure Boot,
 where the parameter is honoured.
 
 The cmdline only sets the appraisal mode; the kernel still needs a loaded IMA
@@ -157,12 +99,8 @@ policy with ``appraise`` rules for anything to be checked. **The appraisal
 content -- the signatures on disk and the rule set -- is distribution or
 operator-supplied. LOTA ships neither an xattr-signing pipeline nor a production
 appraisal policy**; what the agent checks is that the rule set in force reaches
-executables at all, not where the signatures behind it came from.
-On a verity-capable rootfs LOTA's own binary is integrity-bound through
-fs-verity and the PCR14 boot commitment independently of IMA appraisal; on a
-filesystem without verity (XFS, ZFS) the signed ``security.ima`` route from
-section 2 is what binds the agent binary instead. Two supported routes for the
-appraisal content:
+executables at all, not where the signatures behind it came from. Two
+supported routes for the appraisal content:
 
 #. **Distribution signatures.** On Fedora/RHEL, packages can carry IMA file
    signatures applied at install time (``rpm-plugin-ima``, with the
@@ -196,16 +134,11 @@ machine whose executables carry none stops booting.
 ``lota-install`` therefore reports the missing scope; it never widens one. A
 rule set is loaded here by whoever owns the signatures.
 
-**A host that appraises nothing still runs the agent**, as long as the agent
-binary carries fs-verity: the kernel refuses a modified read of it and PCR 14
-commits the running build, so the agent's own footing does not rest on IMA.
-What is missing is coverage of everything else the machine executes, and that
-travels rather than blocking -- ``LOTA_FLAG_KERNEL_APPRAISAL`` is clear in the
-status word, the TPM-signed token and the attestation report, and a verifier
-policy asks for it with ``require_ima_appraisal: true``. On a filesystem
-without verity, where the binary's only claim is a signed ``security.ima``
-xattr, appraisal is what makes that claim real and the agent refuses to start
-without it.
+**A host without an exec appraise rule still runs the agent.** What is missing is
+coverage of what the machine executes, and that travels rather than blocking
+-- ``LOTA_FLAG_KERNEL_APPRAISAL`` is clear in the status word, the TPM-signed
+token and the attestation report, and a verifier policy asks for it with
+``require_ima_appraisal: true``.
 
 **A host whose scope cannot be read reports no appraisal either.** The scope
 is read from ``/sys/kernel/security/ima/policy``, which a kernel without
@@ -223,7 +156,7 @@ rules verify signatures where they exist. IMA rules cannot match by path, so it
 is not a "LOTA-only" policy -- do not load it under ``enforce`` on a host without
 signatures.
 
-4. SELinux label on /dev/tpm
+3. SELinux label on /dev/tpm
 ============================
 
 The udev rule from :ghsrc:`configs/udev/99-lota-tpm.rules` lays this down on
@@ -246,7 +179,7 @@ for. The SELinux user in front of it follows from how the file arrived --
 unconfined session installed -- and neither the gate nor ``restorecon`` treats
 it as wrong.
 
-5. AIK + PCR14 reset
+4. AIK + PCR14 reset
 ====================
 
 The initramfs helper first pins PCR14 with the LOTA lock, then the agent binds

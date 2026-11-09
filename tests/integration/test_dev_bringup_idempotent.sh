@@ -12,8 +12,8 @@
 # Requires:
 #   - bash, and a writable temp directory
 #
-# Runs unprivileged under LOTA_BRINGUP_ROOT, with TPM, fs-verity
-# and systemd tools stubbed on PATH; the host is not touched.
+# Runs unprivileged under LOTA_BRINGUP_ROOT, with TPM and systemd tools
+# stubbed on PATH; the host is not touched.
 
 set -euo pipefail
 
@@ -89,15 +89,6 @@ AGENT
 chmod 0755 "$ROOT/usr/bin/lota-agent"
 printf 'bpf object\n' >"$ROOT/usr/lib/lota/lota_lsm.bpf.o"
 
-# fsverity measure fails until enable has run once
-cat >"$STUB_BIN/fsverity" <<'FSVERITY'
-#!/bin/bash
-case "${1:-}" in
-measure) [[ -e "$LOTA_TEST_VERITY_MARK" ]] || exit 1 ;;
-enable) : >"$LOTA_TEST_VERITY_MARK" ;;
-esac
-exit 0
-FSVERITY
 cat >"$STUB_BIN/tpm2_evictcontrol" <<'TPM2'
 #!/bin/bash
 for arg in "$@"; do
@@ -119,7 +110,6 @@ chmod 0755 "$STUB_BIN"/*
 
 export LOTA_TEST_AGENT_LOG="$AGENT_LOG"
 export LOTA_TEST_TPM_LOG="$TPM_LOG"
-export LOTA_TEST_VERITY_MARK="$WORK_DIR/verity.mark"
 export LOTA_BRINGUP_ROOT="$ROOT"
 export PATH="$STUB_BIN:$PATH"
 
