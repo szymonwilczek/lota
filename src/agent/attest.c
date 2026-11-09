@@ -1354,12 +1354,12 @@ static int attest_target_round(struct attest_target *t, int skip_verify,
 	if (ret == -LOTA_ERR_TPM_AUTH_FAIL) {
 		if (!t->auth_fail_announced) {
 			lota_err("The TPM refused to authorize a quote for "
-				 "%s. The attestation key or its stored "
-				 "authorization is not the one this publisher "
-				 "enrolled, so no round is attempted until "
-				 "this publisher is "
-				 "re-enrolled: lota-agent --reenroll "
-				 "--ca-cert <their anchor>.",
+				 "%s: the stored authorization is not the "
+				 "attestation key's. Until the agent restarts, "
+				 "the TPM is not asked again with it, so "
+				 "rounds fail until it changes: lota-agent "
+				 "--reprovision-aik, then lota-agent "
+				 "--reenroll --ca-cert <their anchor>.",
 				 t->label);
 			t->auth_fail_announced = true;
 		}

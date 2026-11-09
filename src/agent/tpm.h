@@ -287,6 +287,12 @@ struct tpm_context {
 	/* AIK userAuth */
 	uint8_t aik_auth[TPM_AIK_AUTH_SIZE];
 	bool aik_auth_loaded;
+	/*
+	 * SHA-256 of Name || userAuth for the last pairs the TPM refused.
+	 * A publisher switch keeps them; only init and cleanup drop them.
+	 */
+	uint8_t aik_auth_refused[TPM_AIK_PROFILE_HANDLE_COUNT][32];
+	unsigned int aik_auth_refused_next;
 
 	/*
 	 * Dictionary-attack lockout state.
@@ -398,9 +404,11 @@ int tpm_read_pcrs_batch(struct tpm_context *ctx, uint32_t pcr_mask,
  * @pcr_mask: PCRs to include.
  * @response: Receives the attestation, signature and PCR values (see quote.h).
  *
- * Signs with the AIK at @ctx->aik_handle.
+ * Signs with the AIK at @ctx->aik_handle. An authorization the TPM refused is
+ * not offered again until the stored one changes or the key is rebound.
  *
- * Return: 0, -ENOKEY with no AIK at the handle, or a negative errno.
+ * Return: 0, -ENOKEY with no AIK at the handle, -LOTA_ERR_TPM_AUTH_FAIL for
+ * a refused authorization, or a negative errno.
  */
 int tpm_quote(struct tpm_context *ctx, const uint8_t *nonce, uint32_t pcr_mask,
 	      struct tpm_quote_response *response);

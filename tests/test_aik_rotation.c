@@ -30,6 +30,7 @@
 
 #include "test.h"
 #include "../src/agent/agent_internal.h" // IWYU pragma: keep (defines LOTA_TPM_TESTING)
+#include "../src/agent/quote.h"
 #include "lota.h"
 
 static uint32_t tpm_ascii4(char a, char b, char c, char d)
@@ -1746,9 +1747,10 @@ static void test_reprovision_reads_the_record_first(void)
 	PASS();
 }
 
-/* The TPM lists the bound handle; opening the key is never expected. */
+/* The TPM lists the bound handle; opening it needs g_key_object */
 static uint32_t g_listed_handle;
 static int g_key_opens;
+static ESYS_TR g_key_object;
 
 TSS2_RC __wrap_Esys_GetCapability(ESYS_CONTEXT *esys_ctx, ESYS_TR shandle1,
 				  ESYS_TR shandle2, ESYS_TR shandle3,
@@ -1793,9 +1795,11 @@ TSS2_RC __wrap_Esys_TR_FromTPMPublic(ESYS_CONTEXT *esys_ctx, TPM2_HANDLE handle,
 	(void)shandle1;
 	(void)shandle2;
 	(void)shandle3;
-	(void)object;
 	g_key_opens++;
-	return TSS2_ESYS_RC_GENERAL_FAILURE;
+	if (!g_key_object)
+		return TSS2_ESYS_RC_GENERAL_FAILURE;
+	*object = g_key_object;
+	return TSS2_RC_SUCCESS;
 }
 
 static void test_lost_auth_keeps_a_shared_key(void)
@@ -1952,6 +1956,187 @@ static void test_reconnect_keeps_the_aik_name(void)
 	PASS();
 }
 
+static int g_quotes;
+
+TSS2_RC __wrap_Esys_TR_GetName(ESYS_CONTEXT *esys_ctx, ESYS_TR handle,
+			       TPM2B_NAME **name);
+TSS2_RC __wrap_Esys_TR_SetAuth(ESYS_CONTEXT *esys_ctx, ESYS_TR handle,
+			       const TPM2B_AUTH *auth);
+TSS2_RC __wrap_Esys_TR_Close(ESYS_CONTEXT *esys_ctx, ESYS_TR *object);
+TSS2_RC __wrap_Esys_Quote(ESYS_CONTEXT *esys_ctx, ESYS_TR sign_handle,
+			  ESYS_TR shandle1, ESYS_TR shandle2, ESYS_TR shandle3,
+			  const TPM2B_DATA *qualifying_data,
+			  const TPMT_SIG_SCHEME *in_scheme,
+			  const TPML_PCR_SELECTION *pcr_select,
+			  TPM2B_ATTEST **quoted, TPMT_SIGNATURE **signature);
+
+TSS2_RC __wrap_Esys_TR_GetName(ESYS_CONTEXT *esys_ctx, ESYS_TR handle,
+			       TPM2B_NAME **name)
+{
+	(void)esys_ctx;
+	(void)handle;
+	*name = calloc(1, sizeof(**name));
+	if (!*name)
+		return TSS2_ESYS_RC_MEMORY;
+	(*name)->size = 34;
+	memset((*name)->name, 0x5a, 34);
+	return TSS2_RC_SUCCESS;
+}
+
+TSS2_RC __wrap_Esys_TR_SetAuth(ESYS_CONTEXT *esys_ctx, ESYS_TR handle,
+			       const TPM2B_AUTH *auth)
+{
+	(void)esys_ctx;
+	(void)handle;
+	(void)auth;
+	return TSS2_RC_SUCCESS;
+}
+
+TSS2_RC __wrap_Esys_TR_Close(ESYS_CONTEXT *esys_ctx, ESYS_TR *object)
+{
+	(void)esys_ctx;
+	*object = ESYS_TR_NONE;
+	return TSS2_RC_SUCCESS;
+}
+
+/* Every quote is refused: the stored authorization is not the key's. */
+TSS2_RC __wrap_Esys_Quote(ESYS_CONTEXT *esys_ctx, ESYS_TR sign_handle,
+			  ESYS_TR shandle1, ESYS_TR shandle2, ESYS_TR shandle3,
+			  const TPM2B_DATA *qualifying_data,
+			  const TPMT_SIG_SCHEME *in_scheme,
+			  const TPML_PCR_SELECTION *pcr_select,
+			  TPM2B_ATTEST **quoted, TPMT_SIGNATURE **signature)
+{
+	(void)esys_ctx;
+	(void)sign_handle;
+	(void)shandle1;
+	(void)shandle2;
+	(void)shandle3;
+	(void)qualifying_data;
+	(void)in_scheme;
+	(void)pcr_select;
+	*quoted = NULL;
+	*signature = NULL;
+	g_quotes++;
+	return (TSS2_RC)(TPM2_RC_AUTH_FAIL | 0x300);
+}
+
+static void test_refused_auth_is_not_offered_again(void)
+{
+	static struct tpm_quote_response resp;
+	static int session;
+	uint8_t nonce[LOTA_NONCE_SIZE] = { 0 };
+	uint8_t auth[TPM_AIK_AUTH_SIZE];
+	char dir[192];
+	struct tpm_context ctx;
+	int first;
+	int again;
+	int changed;
+
+	TEST("a refused AIK authorization is not offered to the TPM again");
+	snprintf(dir, sizeof(dir), "%s/refused_auth", tmp_dir);
+	mkdir(dir, 0700);
+	make_ctx(&ctx);
+	snprintf(ctx.aik_meta_path, sizeof(ctx.aik_meta_path),
+		 "%s/aik_meta.dat", dir);
+	ctx.esys_ctx = (ESYS_CONTEXT *)&session;
+	ctx.aik_handle = 0x81010017;
+	g_listed_handle = ctx.aik_handle;
+	g_key_object = 0x4000ff;
+	g_quotes = 0;
+	memset(auth, 0x11, sizeof(auth));
+	if (tpm_test_aik_save_auth(&ctx, auth) != 0) {
+		g_key_object = 0;
+		FAIL("could not store the authorization");
+		return;
+	}
+
+	first = tpm_quote(&ctx, nonce, 1, &resp);
+	again = tpm_quote(&ctx, nonce, 1, &resp);
+	if (first != -LOTA_ERR_TPM_AUTH_FAIL || again != first ||
+	    g_quotes != 1) {
+		g_key_object = 0;
+		FAIL("the refused authorization reached the TPM again");
+		return;
+	}
+
+	/* what --reprovision-aik leaves behind */
+	memset(auth, 0x22, sizeof(auth));
+	tpm_test_aik_save_auth(&ctx, auth);
+	changed = tpm_quote(&ctx, nonce, 1, &resp);
+	g_key_object = 0;
+	if (changed != -LOTA_ERR_TPM_AUTH_FAIL || g_quotes != 2) {
+		FAIL("a changed authorization was not offered");
+		return;
+	}
+	PASS();
+}
+
+static void publisher_paths(struct profile_paths *paths, const char *name,
+			    char id, uint32_t handle)
+{
+	char dir[192];
+	int fd;
+
+	memset(paths, 0, sizeof(*paths));
+	memset(paths->id, id, LOTA_PROFILE_ID_LEN - 1);
+	snprintf(dir, sizeof(dir), "%s/%s", tmp_dir, name);
+	mkdir(dir, 0700);
+	snprintf(paths->dir, sizeof(paths->dir), "%s", dir);
+	snprintf(paths->aik_meta, sizeof(paths->aik_meta), "%s/aik_meta.dat",
+		 dir);
+	snprintf(paths->aik_handle, sizeof(paths->aik_handle), "%s/aik_handle",
+		 dir);
+	fd = open(paths->aik_handle, O_WRONLY | O_CREAT | O_TRUNC, 0600);
+	if (fd >= 0) {
+		dprintf(fd, "0x%08X\n", handle);
+		close(fd);
+	}
+}
+
+static void test_refusal_outlives_a_publisher_switch(void)
+{
+	static struct profile_paths a;
+	static struct profile_paths b;
+	static struct tpm_quote_response resp;
+	static int session;
+	uint8_t nonce[LOTA_NONCE_SIZE] = { 0 };
+	uint8_t auth[TPM_AIK_AUTH_SIZE];
+	struct tpm_context ctx;
+	int ret;
+
+	TEST("a refused AIK authorization stays refused across publishers");
+	publisher_paths(&a, "refused_pub_a", 'a', 0x81010017);
+	publisher_paths(&b, "refused_pub_b", 'b', 0x81010018);
+	make_ctx(&ctx);
+	ctx.esys_ctx = (ESYS_CONTEXT *)&session;
+	g_listed_handle = 0x81010017;
+	g_key_object = 0x4000ff;
+	g_quotes = 0;
+	memset(auth, 0x33, sizeof(auth));
+	if (tpm_bind_profile(&ctx, &a) != 0 ||
+	    tpm_test_aik_save_auth(&ctx, auth) != 0) {
+		g_key_object = 0;
+		FAIL("could not bind the first publisher");
+		return;
+	}
+
+	tpm_quote(&ctx, nonce, 1, &resp);
+	if (tpm_bind_profile(&ctx, &b) != 0 ||
+	    tpm_bind_profile(&ctx, &a) != 0) {
+		g_key_object = 0;
+		FAIL("could not switch publishers");
+		return;
+	}
+	ret = tpm_quote(&ctx, nonce, 1, &resp);
+	g_key_object = 0;
+	if (ret != -LOTA_ERR_TPM_AUTH_FAIL || g_quotes != 1) {
+		FAIL("the refused authorization reached the TPM again");
+		return;
+	}
+	PASS();
+}
+
 int main(void)
 {
 	printf("\n=== AIK Tests ===\n\n");
@@ -1986,6 +2171,8 @@ int main(void)
 	test_reconnect_keeps_the_aik_name();
 	test_reprovision_reads_the_record_first();
 	test_lost_auth_keeps_a_shared_key();
+	test_refused_auth_is_not_offered_again();
+	test_refusal_outlives_a_publisher_switch();
 	test_reprovision_rewrites_a_missing_record();
 	test_provision_ignores_the_vendor_string();
 	test_self_hash_pin_round_trip();

@@ -603,6 +603,8 @@ int tpm_init(struct tpm_context *ctx)
 	ctx->aik_meta_loaded = false;
 	memset(ctx->aik_auth, 0, sizeof(ctx->aik_auth));
 	ctx->aik_auth_loaded = false;
+	memset(ctx->aik_auth_refused, 0, sizeof(ctx->aik_auth_refused));
+	ctx->aik_auth_refused_next = 0;
 	memset(ctx->aik_object_name, 0, sizeof(ctx->aik_object_name));
 	ctx->aik_object_name_size = 0;
 	ctx->aik_object_replaced = false;
@@ -711,6 +713,8 @@ void tpm_cleanup(struct tpm_context *ctx)
 
 	memset(ctx->aik_auth, 0, sizeof(ctx->aik_auth));
 	ctx->aik_auth_loaded = false;
+	memset(ctx->aik_auth_refused, 0, sizeof(ctx->aik_auth_refused));
+	ctx->aik_auth_refused_next = 0;
 	memset(ctx->aik_object_name, 0, sizeof(ctx->aik_object_name));
 	ctx->aik_object_name_size = 0;
 	ctx->aik_object_replaced = false;
@@ -1695,6 +1699,33 @@ int tpm_reprovision_aik(struct tpm_context *ctx, bool *out_key_changed)
 	return tpm_aik_save_auth_rotation_metadata(ctx);
 }
 
+/*
+ * The Name is part of the digest: a new key at the handle with the same auth
+ * is not the one that refused it.
+ */
+static bool aik_auth_was_refused(const struct tpm_context *ctx,
+				 uint8_t digest[32])
+{
+	uint8_t buf[sizeof(ctx->aik_object_name) + TPM_AIK_AUTH_SIZE];
+	size_t len = ctx->aik_object_name_size;
+	bool refused = false;
+	int ok;
+
+	memcpy(buf, ctx->aik_object_name, len);
+	memcpy(buf + len, ctx->aik_auth, TPM_AIK_AUTH_SIZE);
+	len += TPM_AIK_AUTH_SIZE;
+	ok = EVP_Digest(buf, len, digest, NULL, EVP_sha256(), NULL);
+	secure_bzero(buf, sizeof(buf));
+	if (!ok)
+		return true;
+
+	for (size_t i = 0; i < TPM_AIK_PROFILE_HANDLE_COUNT; i++) {
+		if (CRYPTO_memcmp(ctx->aik_auth_refused[i], digest, 32) == 0)
+			refused = true;
+	}
+	return refused;
+}
+
 int tpm_quote(struct tpm_context *ctx, const uint8_t *nonce, uint32_t pcr_mask,
 	      struct tpm_quote_response *response)
 {
@@ -1706,6 +1737,7 @@ int tpm_quote(struct tpm_context *ctx, const uint8_t *nonce, uint32_t pcr_mask,
 	TPML_PCR_SELECTION pcr_selection;
 	TPM2B_ATTEST *quoted = NULL;
 	TPMT_SIGNATURE *signature = NULL;
+	uint8_t auth_digest[32];
 	uint32_t i;
 
 	if (!ctx || !ctx->initialized || !nonce || !response)
@@ -1719,10 +1751,17 @@ int tpm_quote(struct tpm_context *ctx, const uint8_t *nonce, uint32_t pcr_mask,
 	if (ret == 0)
 		return -ENOKEY;
 
-	if (!ctx->aik_auth_loaded) {
+	/* a refused value is re-read: only another one is offered */
+	if (!ctx->aik_auth_loaded || aik_auth_was_refused(ctx, auth_digest)) {
 		ret = tpm_aik_load_auth(ctx);
 		if (ret < 0)
 			goto out;
+	}
+
+	/* asking again with a refused value spends another DA attempt */
+	if (aik_auth_was_refused(ctx, auth_digest)) {
+		ret = -LOTA_ERR_TPM_AUTH_FAIL;
+		goto out;
 	}
 
 	{
@@ -1778,6 +1817,14 @@ int tpm_quote(struct tpm_context *ctx, const uint8_t *nonce, uint32_t pcr_mask,
 						     (void **)&signature);
 		secure_bzero(qualifying_data.buffer,
 			     sizeof(qualifying_data.buffer));
+		if (call_ret == -LOTA_ERR_TPM_AUTH_FAIL) {
+			unsigned int slot = ctx->aik_auth_refused_next;
+
+			memcpy(ctx->aik_auth_refused[slot], auth_digest,
+			       sizeof(auth_digest));
+			ctx->aik_auth_refused_next =
+				(slot + 1) % TPM_AIK_PROFILE_HANDLE_COUNT;
+		}
 		if (call_ret < 0) {
 			ret = call_ret;
 			goto out;
@@ -3240,6 +3287,13 @@ static int fsync_parent_dir(const char *path)
 	return 0;
 }
 
+static void aik_auth_store(struct tpm_context *ctx,
+			   const uint8_t auth[TPM_AIK_AUTH_SIZE])
+{
+	memcpy(ctx->aik_auth, auth, TPM_AIK_AUTH_SIZE);
+	ctx->aik_auth_loaded = true;
+}
+
 static int tpm_aik_auth_path_for_ctx(struct tpm_context *ctx, char *buf,
 				     size_t buf_len)
 {
@@ -3426,8 +3480,7 @@ static int tpm_aik_load_auth_plaintext(struct tpm_context *ctx)
 		return -EKEYREVOKED;
 	}
 
-	memcpy(ctx->aik_auth, rec.auth, TPM_AIK_AUTH_SIZE);
-	ctx->aik_auth_loaded = true;
+	aik_auth_store(ctx, rec.auth);
 	secure_bzero(&rec, sizeof(rec));
 	return 0;
 }
@@ -3582,8 +3635,7 @@ static int tpm_aik_load_auth_sealed(struct tpm_context *ctx)
 		return -EPROTO;
 	}
 
-	memcpy(ctx->aik_auth, secret, TPM_AIK_AUTH_SIZE);
-	ctx->aik_auth_loaded = true;
+	aik_auth_store(ctx, secret);
 	secure_bzero(secret, sizeof(secret));
 	return 0;
 }
@@ -3931,8 +3983,7 @@ static int tpm_aik_reprovision_with_auth(struct tpm_context *ctx,
 		return ret;
 	}
 
-	memcpy(ctx->aik_auth, new_auth, TPM_AIK_AUTH_SIZE);
-	ctx->aik_auth_loaded = true;
+	aik_auth_store(ctx, new_auth);
 	secure_bzero(new_auth, sizeof(new_auth));
 	return 0;
 }
