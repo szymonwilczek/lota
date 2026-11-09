@@ -1657,16 +1657,10 @@ static int continuous_attest_run(const struct lota_config *cfg,
 					  target_count);
 				announce_targets(targets, target_count);
 				resolve_auto_renew(targets, target_count);
-				if (before == 0 && target_count > 0) {
-					if (aik_ready_for(&targets[0]) < 0)
-						lota_warn("The first round "
-							  "retries the AIK");
-				} else if (target_count > 0 &&
-					   targets[0].has_profile &&
-					   bind_target(&targets[0]) < 0)
-					lota_warn("Tokens will keep the "
-						  "previous publisher's AIK "
-						  "until the next round");
+				if (before == 0 && target_count > 0 &&
+				    aik_ready_for(&targets[0]) < 0)
+					lota_warn("The first round retries "
+						  "the AIK");
 			}
 			now_ms = monotonic_ms();
 		}
@@ -1689,14 +1683,6 @@ static int continuous_attest_run(const struct lota_config *cfg,
 		/* After the rounds: a title reads this round's answer */
 		attest_peer_sync(&peer, targets, target_count,
 				 &g_attest_counters);
-
-		if (target_count > 1 && targets[0].has_profile) {
-			ret = bind_target(&targets[0]);
-			if (ret < 0)
-				lota_warn("Tokens will keep the previous "
-					  "publisher's AIK until the next "
-					  "round");
-		}
 
 		for (size_t i = 0; i < target_count; i++) {
 			if (wake_ms == 0 || targets[i].next_due_ms < wake_ms)
