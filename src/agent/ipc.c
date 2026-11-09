@@ -498,17 +498,17 @@ _Static_assert(LOTA_IPC_ATTEST_SYNC_RESPONSE_MAX_SIZE <= LOTA_IPC_MAX_PAYLOAD,
  * Whether a process still answers on @path. A socket file survives an unclean
  * stop, so only connect() can tell.
  *
- * ECONNREFUSED is the leftover, ENOENT a clean slate, and any other connect()
- * error counts as occupied.
+ * Returns 1 when something answers, 0 for a leftover (ECONNREFUSED) or a clean
+ * slate (ENOENT), and -errno when socket() or connect() fails otherwise.
  */
-static bool socket_has_live_listener(const char *path)
+static int socket_has_live_listener(const char *path)
 {
 	struct sockaddr_un addr;
 	int fd, ret;
 
 	fd = socket(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0);
 	if (fd < 0)
-		return false;
+		return -errno;
 
 	memset(&addr, 0, sizeof(addr));
 	addr.sun_family = AF_UNIX;
@@ -517,13 +517,33 @@ static bool socket_has_live_listener(const char *path)
 	ret = connect(fd, (struct sockaddr *)&addr, sizeof(addr));
 	if (ret == 0) {
 		close(fd);
-		return true;
+		return 1;
 	}
 
 	ret = errno;
 	close(fd);
 
-	return ret != ECONNREFUSED && ret != ENOENT;
+	if (ret == ECONNREFUSED || ret == ENOENT)
+		return 0;
+	return -ret;
+}
+
+/*
+ * 0 when @path may be taken; otherwise the reason it is refused.
+ */
+static int socket_path_free(const char *path)
+{
+	int ret = socket_has_live_listener(path);
+
+	if (ret > 0) {
+		lota_err("%s already has a listener; refusing to take it over",
+			 path);
+		return -EADDRINUSE;
+	}
+	if (ret < 0)
+		lota_err("cannot probe %s (%s); refusing to take it over", path,
+			 strerror(-ret));
+	return ret;
 }
 
 static int set_nonblocking(int fd)
@@ -3389,11 +3409,9 @@ int ipc_init(struct ipc_context *ctx)
 	 * A socket somebody still answers on is not ours to take. One that
 	 * refuses the connection is a leftover of an unclean stop.
 	 */
-	if (socket_has_live_listener(LOTA_IPC_SOCKET_PATH)) {
-		lota_err("%s already has a listener; refusing to take it over",
-			 LOTA_IPC_SOCKET_PATH);
-		return -EADDRINUSE;
-	}
+	ret = socket_path_free(LOTA_IPC_SOCKET_PATH);
+	if (ret < 0)
+		return ret;
 
 	ret = open_primary_listener(&ctx->listen_fd);
 	if (ret < 0)
@@ -3932,11 +3950,9 @@ int ipc_add_listener(struct ipc_context *ctx, const char *socket_path)
 	 * As for the primary socket: a path somebody still answers on is
 	 * refused, and a leftover of an unclean stop is unlinked.
 	 */
-	if (socket_has_live_listener(socket_path)) {
-		lota_err("%s already has a listener; refusing to take it over",
-			 socket_path);
-		return -EADDRINUSE;
-	}
+	ret = socket_path_free(socket_path);
+	if (ret < 0)
+		return ret;
 
 	unlink(socket_path);
 
