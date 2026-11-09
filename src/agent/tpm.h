@@ -491,8 +491,8 @@ bool tpm_aik_object_replaced(struct tpm_context *ctx);
  * A primary key is derived from the hierarchy seed and the creation template:
  * the same template gives the same key at any handle.
  *
- * Return: 0, or -EINVAL on a wrong length or a byte %2x cannot read; "1g" reads
- * as 0x01.
+ * Return: 0, or -EINVAL on a wrong length or a character that is not a hex
+ * digit.
  */
 int tpm_aik_profile_unique(const char *profile_id, uint8_t out[LOTA_HASH_SIZE],
 			   uint16_t *out_len);

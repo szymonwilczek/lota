@@ -1717,6 +1717,18 @@ static void test_aik_unique_separates_publishers(void)
 		FAIL("a host with no publisher must contribute nothing");
 		return;
 	}
+
+	static const char *const bad[] = { "1g", " 1", "+1", "-1" };
+	for (size_t i = 0; i < sizeof(bad) / sizeof(bad[0]); i++) {
+		char id[LOTA_PROFILE_ID_LEN];
+
+		snprintf(id, sizeof(id), "%s", id_a);
+		memcpy(id + 6, bad[i], 2);
+		if (tpm_aik_profile_unique(id, again, &len_again) != -EINVAL) {
+			FAIL("a profile id with a non-hex byte was read");
+			return;
+		}
+	}
 	PASS();
 }
 

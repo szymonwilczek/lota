@@ -1176,6 +1176,17 @@ void tpm_aik_allow_shared_key_replace(struct tpm_context *ctx, bool allow)
 		ctx->aik_allow_shared_key_replace = allow;
 }
 
+static int hex_nibble(char c)
+{
+	if (c >= '0' && c <= '9')
+		return c - '0';
+	if (c >= 'a' && c <= 'f')
+		return c - 'a' + 10;
+	if (c >= 'A' && c <= 'F')
+		return c - 'A' + 10;
+	return -1;
+}
+
 int tpm_aik_profile_unique(const char *profile_id, uint8_t out[LOTA_HASH_SIZE],
 			   uint16_t *out_len)
 {
@@ -1192,13 +1203,14 @@ int tpm_aik_profile_unique(const char *profile_id, uint8_t out[LOTA_HASH_SIZE],
 		return -EINVAL;
 
 	for (size_t i = 0; i < LOTA_HASH_SIZE; i++) {
-		unsigned int byte;
+		int hi = hex_nibble(profile_id[i * 2]);
+		int lo = hex_nibble(profile_id[i * 2 + 1]);
 
-		if (sscanf(profile_id + i * 2, "%2x", &byte) != 1) {
+		if (hi < 0 || lo < 0) {
 			memset(out, 0, LOTA_HASH_SIZE);
 			return -EINVAL;
 		}
-		out[i] = (uint8_t)byte;
+		out[i] = (uint8_t)(hi << 4 | lo);
 	}
 
 	*out_len = LOTA_HASH_SIZE;
