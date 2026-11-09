@@ -736,6 +736,66 @@ static void subscriber_child(uint32_t mask, int ready_fd, uint32_t await_event)
 	_exit((notify.events & await_event) ? 0 : CHILD_ERR_NOT_NOTIFY);
 }
 
+#define CHILD_ERR_VIEW_DIFFERS 0x46
+
+/*
+ * A title bound to the test publisher: subscribe, wait for one push, then ask
+ * GET_STATUS on the same connection; both answers must carry the same word.
+ */
+static void title_view_child(int ready_fd)
+{
+	struct lota_ipc_subscribe_request sub = {
+		.event_mask = LOTA_IPC_EVENT_STATUS,
+	};
+	struct lota_ipc_set_profile set;
+	struct lota_ipc_response resp;
+	uint8_t payload[LOTA_IPC_MAX_PAYLOAD];
+	struct lota_ipc_notify notify;
+	struct lota_ipc_status st;
+	int fd;
+
+	fd = client_open();
+	if (fd < 0)
+		_exit(CHILD_ERR_CONNECT);
+
+	memset(&set, 0, sizeof(set));
+	memcpy(set.profile_id, test_profile_id, sizeof(set.profile_id));
+	if (send_request(fd, LOTA_IPC_CMD_SET_PROFILE, &set, sizeof(set)) < 0)
+		_exit(CHILD_ERR_SEND);
+	if (client_read_frame(fd, &resp, payload, sizeof(payload), 2000) < 0)
+		_exit(CHILD_ERR_NO_ANSWER);
+	if (resp.result != LOTA_IPC_OK)
+		_exit((int)resp.result);
+
+	if (send_request(fd, LOTA_IPC_CMD_SUBSCRIBE, &sub, sizeof(sub)) < 0)
+		_exit(CHILD_ERR_SEND);
+	if (client_read_frame(fd, &resp, payload, sizeof(payload), 2000) < 0)
+		_exit(CHILD_ERR_NO_ANSWER);
+	if (resp.result != LOTA_IPC_OK)
+		_exit((int)resp.result);
+
+	if (write(ready_fd, "s", 1) != 1)
+		_exit(CHILD_ERR_SEND);
+
+	if (client_read_frame(fd, &resp, payload, sizeof(payload), 2000) < 0)
+		_exit(CHILD_ERR_NO_NOTIFY);
+	if (resp.result != LOTA_IPC_NOTIFY || resp.payload_len < sizeof(notify))
+		_exit(CHILD_ERR_NOT_NOTIFY);
+	memcpy(&notify, payload, sizeof(notify));
+
+	if (send_request(fd, LOTA_IPC_CMD_GET_STATUS, NULL, 0) < 0)
+		_exit(CHILD_ERR_SEND);
+	if (client_read_frame(fd, &resp, payload, sizeof(payload), 2000) < 0)
+		_exit(CHILD_ERR_NO_ANSWER);
+	if (resp.result != LOTA_IPC_OK || resp.payload_len < sizeof(st))
+		_exit(CHILD_ERR_NO_ANSWER);
+	memcpy(&st, payload, sizeof(st));
+
+	if (notify.flags != st.flags || notify.valid_until != st.valid_until)
+		_exit(CHILD_ERR_VIEW_DIFFERS);
+	_exit(0);
+}
+
 /* Drive the daemon until the forked client is done, and report what it said */
 static int pump_until_exit(struct ipc_context *ctx, pid_t pid, int passes)
 {
@@ -835,6 +895,64 @@ static void test_outside_client_is_notified(struct ipc_context *ctx)
 	}
 	if (rc != 0) {
 		FAIL("the pushed frame is not the status event");
+		return;
+	}
+
+	PASS();
+}
+
+/*
+ * The host attests for another publisher; the title's publisher holds no
+ * verdict, so the push must not tell the title otherwise.
+ */
+static void test_title_push_carries_its_publisher_view(struct ipc_context *ctx)
+{
+	uint32_t saved_flags = ctx->status_flags;
+	uint64_t saved_valid = ctx->valid_until;
+	int ready[2];
+	pid_t pid;
+	int rc;
+
+	TEST("a title's push carries the word GET_STATUS gives it");
+
+	if (pipe(ready) < 0) {
+		FAIL("pipe");
+		return;
+	}
+
+	pid = fork();
+	if (pid < 0) {
+		FAIL("fork");
+		close(ready[0]);
+		close(ready[1]);
+		return;
+	}
+	if (pid == 0) {
+		close(ready[0]);
+		title_view_child(ready[1]);
+	}
+	close(ready[1]);
+
+	for (int i = 0; i < 256; i++) {
+		struct pollfd pfd = { .fd = ready[0], .events = POLLIN };
+
+		if (poll(&pfd, 1, 0) > 0)
+			break;
+		ipc_process(ctx, 10);
+	}
+	close(ready[0]);
+
+	ipc_update_status(ctx, ctx->status_flags | LOTA_STATUS_ATTESTED,
+			  (uint64_t)time(NULL) + 300);
+
+	rc = pump_until_exit(ctx, pid, 256);
+	ipc_update_status(ctx, saved_flags, saved_valid);
+	if (rc == CHILD_ERR_VIEW_DIFFERS) {
+		FAIL("the push carries the host verdict, not the publisher's");
+		return;
+	}
+	if (rc != 0) {
+		FAIL("the title did not get its push and its status");
 		return;
 	}
 
@@ -1215,6 +1333,7 @@ int main(void)
 	test_repeated_sync_announces_nothing(&ctx);
 	test_session_notification_is_delivered(&ctx);
 	test_sync_after_notification_is_answered(&ctx);
+	test_title_push_carries_its_publisher_view(&ctx);
 	test_terminate_reaches_the_target(&ctx);
 	test_terminate_target_reaped_mid_request(&ctx);
 

@@ -91,6 +91,10 @@ static int protect_pid_rate_count = 0;
 static uint64_t protect_pid_last_table_full_warn_sec = 0;
 
 static int u32_cmp(const void *a, const void *b);
+static void client_attestation_view(const struct ipc_context *ctx,
+				    const struct ipc_client *client,
+				    uint32_t *flags, uint64_t *valid_until);
+static uint32_t runtime_coverage_fold(uint32_t flags);
 static void runtime_protect_catch_up(void);
 static int build_canonical_runtime_pid_list(uint32_t **out_pids,
 					    uint32_t *out_count);
@@ -839,6 +843,11 @@ static void build_notification(struct ipc_context *ctx,
 {
 	struct lota_ipc_response *resp = (void *)client->send_buf;
 	struct lota_ipc_notify *notify;
+	uint64_t valid_until;
+	uint32_t flags;
+
+	client_attestation_view(ctx, client, &flags, &valid_until);
+	flags = runtime_coverage_fold(flags);
 
 	resp->magic = LOTA_IPC_MAGIC;
 	resp->version = LOTA_IPC_VERSION;
@@ -847,9 +856,9 @@ static void build_notification(struct ipc_context *ctx,
 
 	notify = (void *)(client->send_buf + LOTA_IPC_RESPONSE_SIZE);
 	notify->events = events;
-	notify->flags = ctx->status_flags;
+	notify->flags = flags;
 	notify->last_attest_time = ctx->last_attest_time;
-	notify->valid_until = ctx->valid_until;
+	notify->valid_until = valid_until;
 	notify->attest_count = ctx->attest_count;
 	notify->fail_count = ctx->fail_count;
 	notify->mode = ctx->mode;
