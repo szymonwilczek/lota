@@ -626,6 +626,33 @@ static void test_each_profile_pins_its_own_verifier(void)
 	unlink(anchor);
 }
 
+/* A title asking for an enrolled publisher wakes the loop once, not forever. */
+static void test_a_request_wakes_the_loop_once(void)
+{
+	struct attest_target t[2];
+
+	memset(t, 0, sizeof(t));
+	t[0].next_due_ms = 9000;
+	t[1].next_due_ms = 9000;
+	t[1].enroll_pending = true;
+
+	CHECK(attest_targets_take_wakeups(t, 2, 100) && t[1].next_due_ms == 100,
+	      "a pending enrollment makes its target due now");
+	CHECK(t[0].next_due_ms == 9000,
+	      "a target nobody asked for keeps its slot");
+
+	t[1].next_due_ms = 5000;
+	CHECK(!attest_targets_take_wakeups(t, 2, 200) &&
+		      t[1].next_due_ms == 5000,
+	      "the request is spent once served");
+
+	t[0].session_changed = true;
+	CHECK(attest_targets_take_wakeups(t, 2, 300) &&
+		      !attest_targets_take_wakeups(t, 2, 400) &&
+		      t[0].next_due_ms == 300,
+	      "a session change wakes the loop once too");
+}
+
 int main(void)
 {
 	printf("=== Attestation target list tests ===\n\n");
@@ -643,6 +670,7 @@ int main(void)
 	test_a_moved_ca_is_reported();
 	test_the_renewal_endpoint_is_said_once();
 	test_each_profile_pins_its_own_verifier();
+	test_a_request_wakes_the_loop_once();
 
 	printf("\n%s\n", g_failures ? "FAILURES" : "All tests passed");
 	return g_failures ? 1 : 0;

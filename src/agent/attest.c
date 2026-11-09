@@ -1089,8 +1089,6 @@ static bool enroll_target_if_needed(struct attest_target *t)
 		return false;
 	}
 
-	t->enroll_pending = false;
-
 	{
 		time_t agreed = 0;
 		int cret = profile_consent_time(&t->paths, &agreed);
@@ -1699,7 +1697,6 @@ static int continuous_attest_run(const struct lota_config *cfg,
 
 		while (g_agent.running) {
 			uint64_t current_ms;
-			bool asked = false;
 			int timeout_ms;
 
 			watchdog_keepalive(&pace);
@@ -1712,15 +1709,8 @@ static int continuous_attest_run(const struct lota_config *cfg,
 				break;
 
 			/* a launched title wants its first report now */
-			for (size_t i = 0; i < target_count; i++) {
-				if (targets[i].enroll_pending ||
-				    targets[i].session_changed) {
-					targets[i].session_changed = false;
-					targets[i].next_due_ms = current_ms;
-					asked = true;
-				}
-			}
-			if (asked)
+			if (attest_targets_take_wakeups(targets, target_count,
+							current_ms))
 				break;
 
 			timeout_ms = (int)watchdog_pace_sleep_ms(

@@ -150,6 +150,19 @@ const char *attest_target_renew_at(const struct attest_target *t, char *buf,
 bool attest_target_should_announce_renew_move(struct attest_target *t);
 
 /**
+ * attest_targets_take_wakeups() - Make due now every target a title asked for.
+ * @targets: The targets.
+ * @count: Number of @targets.
+ * @now_ms: Now, on the monotonic clock.
+ *
+ * Clears each request it serves, so a request wakes the loop once.
+ *
+ * Return: true when a target was made due.
+ */
+bool attest_targets_take_wakeups(struct attest_target *targets, size_t count,
+				 uint64_t now_ms);
+
+/**
  * attest_target_reports() - Whether this round sends a report for @t.
  * @t: The target.
  *

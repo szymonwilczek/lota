@@ -133,6 +133,22 @@ static void carry_live_state(struct attest_target *to,
 	to->next_enroll_ms = from->next_enroll_ms;
 }
 
+bool attest_targets_take_wakeups(struct attest_target *targets, size_t count,
+				 uint64_t now_ms)
+{
+	bool asked = false;
+
+	for (size_t i = 0; i < count; i++) {
+		if (!targets[i].enroll_pending && !targets[i].session_changed)
+			continue;
+		targets[i].enroll_pending = false;
+		targets[i].session_changed = false;
+		targets[i].next_due_ms = now_ms;
+		asked = true;
+	}
+	return asked;
+}
+
 int attest_targets_rebuild(const struct lota_config *cfg, const char *server,
 			   int port, const char *ca_cert, int interval_sec,
 			   struct attest_target *targets, size_t max,
