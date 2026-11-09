@@ -1226,10 +1226,12 @@ int bpf_loader_load(struct bpf_loader_ctx *ctx, const char *bpf_obj_path,
 			lota_info(
 				"Kernel integrity baseline: module signatures enforced, lockdown at integrity or above");
 		} else {
-			lota_err(
-				"Kernel integrity baseline not met (module signatures enforced: %s, lockdown at integrity or above: %s); module and firmware loads are refused in enforce mode",
-				cfg.sig_enforce ? "yes" : "no",
-				cfg.lockdown ? "yes" : "no");
+			lota_err("Kernel integrity baseline not met (module "
+				 "signatures enforced: %s, lockdown at "
+				 "integrity or above: %s); module and firmware "
+				 "loads are refused in every mode",
+				 cfg.sig_enforce ? "yes" : "no",
+				 cfg.lockdown ? "yes" : "no");
 		}
 
 		uint32_t key = 0;
@@ -1497,8 +1499,7 @@ int bpf_loader_attach(struct bpf_loader_ctx *ctx)
 	for (size_t i = 0; i < required_count; i++) {
 		if (!required_attached[i]) {
 			lota_err("Required BPF program %s not attached; "
-				 "refusing to run with "
-				 "ptrace policy gap",
+				 "refusing to run without it",
 				 required_programs[i]);
 			err = -ENOENT;
 			goto err_detach;
