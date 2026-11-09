@@ -439,7 +439,7 @@ int tpm_quote(struct tpm_context *ctx, const uint8_t *nonce, uint32_t pcr_mask,
  * - auth readable, record says shared: -ENOTSUP unless
  *   tpm_aik_allow_shared_key_replace() was set, then the profile's own key;
  * - auth record present but unreadable: the load error, key left alone;
- * - no auth record: fresh auth.
+ * - no auth record: fresh auth, refused as above for a shared key.
  *
  * Return: 0, -EACCES when tpm_verify_device_identity() refuses the device,
  * or a negative errno.

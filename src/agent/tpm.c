@@ -1675,6 +1675,10 @@ int tpm_provision_aik(struct tpm_context *ctx)
 			return load_rc;
 		}
 
+		ret = aik_check_shared_replace(ctx);
+		if (ret < 0)
+			return ret;
+
 		ret = tpm_aik_reprovision_with_auth(ctx, 1);
 		if (ret < 0)
 			return ret;

@@ -2052,6 +2052,118 @@ static void test_reprovision_reads_the_record_first(void)
 	PASS();
 }
 
+static int mock_prop_reader_hw(struct tpm_context *ctx, TPM2_PT prop,
+			       uint32_t *out_val)
+{
+	(void)ctx;
+	switch (prop) {
+	case TPM2_PT_MANUFACTURER:
+		*out_val = tpm_ascii4('X', 'Y', 'Z', '\0');
+		return 0;
+	case TPM2_PT_FIRMWARE_VERSION_1:
+	case TPM2_PT_FIRMWARE_VERSION_2:
+		*out_val = 1;
+		return 0;
+	case TPM2_PT_VENDOR_STRING_1:
+		*out_val = tpm_ascii4('T', 'E', 'S', 'T');
+		return 0;
+	default:
+		*out_val = 0;
+		return 0;
+	}
+}
+
+/* The TPM lists the bound handle; opening the key is never expected. */
+static uint32_t g_listed_handle;
+static int g_key_opens;
+
+TSS2_RC __wrap_Esys_GetCapability(ESYS_CONTEXT *esys_ctx, ESYS_TR shandle1,
+				  ESYS_TR shandle2, ESYS_TR shandle3,
+				  TPM2_CAP capability, UINT32 property,
+				  UINT32 property_count, TPMI_YES_NO *more_data,
+				  TPMS_CAPABILITY_DATA **capability_data);
+TSS2_RC __wrap_Esys_TR_FromTPMPublic(ESYS_CONTEXT *esys_ctx, TPM2_HANDLE handle,
+				     ESYS_TR shandle1, ESYS_TR shandle2,
+				     ESYS_TR shandle3, ESYS_TR *object);
+
+TSS2_RC __wrap_Esys_GetCapability(ESYS_CONTEXT *esys_ctx, ESYS_TR shandle1,
+				  ESYS_TR shandle2, ESYS_TR shandle3,
+				  TPM2_CAP capability, UINT32 property,
+				  UINT32 property_count, TPMI_YES_NO *more_data,
+				  TPMS_CAPABILITY_DATA **capability_data)
+{
+	TPMS_CAPABILITY_DATA *data = calloc(1, sizeof(*data));
+
+	(void)esys_ctx;
+	(void)shandle1;
+	(void)shandle2;
+	(void)shandle3;
+	(void)property;
+	(void)property_count;
+	if (!data)
+		return TSS2_ESYS_RC_MEMORY;
+	data->capability = capability;
+	data->data.handles.count = 1;
+	data->data.handles.handle[0] = g_listed_handle;
+	if (more_data)
+		*more_data = TPM2_NO;
+	*capability_data = data;
+	return TSS2_RC_SUCCESS;
+}
+
+TSS2_RC __wrap_Esys_TR_FromTPMPublic(ESYS_CONTEXT *esys_ctx, TPM2_HANDLE handle,
+				     ESYS_TR shandle1, ESYS_TR shandle2,
+				     ESYS_TR shandle3, ESYS_TR *object)
+{
+	(void)esys_ctx;
+	(void)handle;
+	(void)shandle1;
+	(void)shandle2;
+	(void)shandle3;
+	(void)object;
+	g_key_opens++;
+	return TSS2_ESYS_RC_GENERAL_FAILURE;
+}
+
+static void test_lost_auth_keeps_a_shared_key(void)
+{
+	static int session;
+	char dir[192];
+	struct tpm_context ctx;
+	int ret;
+
+	TEST("a lost auth record does not replace a shared key");
+	snprintf(dir, sizeof(dir), "%s/lost_auth", tmp_dir);
+	mkdir(dir, 0700);
+	make_ctx(&ctx);
+	snprintf(ctx.aik_meta_path, sizeof(ctx.aik_meta_path),
+		 "%s/aik_meta.dat", dir);
+	ctx.esys_ctx = (ESYS_CONTEXT *)&session;
+	ctx.aik_handle = 0x81010016;
+	g_listed_handle = ctx.aik_handle;
+	g_key_opens = 0;
+	memset(ctx.aik_profile_id, 'd', LOTA_PROFILE_ID_LEN - 1);
+	ctx.aik_meta.magic = TPM_AIK_META_MAGIC;
+	ctx.aik_meta.version = TPM_AIK_META_VERSION;
+	ctx.aik_meta.generation = 1;
+	ctx.aik_meta.key_derivation = TPM_AIK_KEY_DERIVATION_SHARED;
+	ctx.aik_meta_loaded = true;
+
+	tpm_test_set_prop_reader(mock_prop_reader_hw);
+	ret = tpm_provision_aik(&ctx);
+	tpm_test_reset_prop_reader();
+
+	if (ret != -ENOTSUP) {
+		FAIL("expected -ENOTSUP");
+		return;
+	}
+	if (g_key_opens != 0) {
+		FAIL("provisioning went on to replace the key");
+		return;
+	}
+	PASS();
+}
+
 static int g_esys_session;
 
 void __wrap_Esys_Finalize(ESYS_CONTEXT **esys_ctx);
@@ -2152,6 +2264,7 @@ int main(void)
 	test_failed_bind_keeps_the_bound_publisher();
 	test_reconnect_keeps_the_aik_name();
 	test_reprovision_reads_the_record_first();
+	test_lost_auth_keeps_a_shared_key();
 	test_self_hash_pin_round_trip();
 	test_tpm_strerror_maps_lota_private();
 	test_clock_state_save_load_round_trip();
