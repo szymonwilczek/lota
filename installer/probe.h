@@ -272,12 +272,13 @@ int probe_esrt_system_firmware_present(void);
 int probe_esrt_system_firmware_present_at(const char *base);
 
 /**
- * probe_cmdline_ima_ok() - Whether a cmdline sets ima_appraise=enforce or fix.
+ * probe_cmdline_ima_ok() - Whether a cmdline leaves ima_appraise=enforce.
  * @cmdline: kernel command line.
  *
- * The first ima_appraise= token decides.
+ * The last ima_appraise= token decides; with none the kernel keeps its
+ * default, enforce.
  *
- * Return: 0 for enforce or fix, -EPERM otherwise, -EINVAL for NULL,
+ * Return: 0 for enforce, -EPERM otherwise, -EINVAL for NULL,
  * -E2BIG for a cmdline of 4096 bytes or more.
  */
 int probe_cmdline_ima_ok(const char *cmdline);

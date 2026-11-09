@@ -680,7 +680,7 @@ static int st_cmdline_apply(struct install_ctx *ctx)
 	booted_floor(&st);
 
 	if (!st.ima_ok)
-		strcat(args, "ima_appraise=fix ");
+		strcat(args, "ima_appraise=enforce ");
 	if (!st.sig_ok)
 		strcat(args, "module.sig_enforce=1 ");
 	if (!st.lockdown_ok)
@@ -1711,10 +1711,8 @@ const struct stage install_stages[] = {
 		.title = "Kernel integrity floor on the cmdline",
 		.explain =
 			"The agent refuses to start unless the kernel enforces an "
-			"integrity floor: IMA appraisal in an enforcing mode "
-			"(ima_appraise=fix - it satisfies the floor without "
-			"blocking unsigned files), signed kernel modules, and "
-			"kernel lockdown. "
+			"integrity floor: IMA appraisal in enforce mode, "
+			"signed kernel modules, and kernel lockdown. "
 			"This step appends the missing parameters to the boot "
 			"entries via grubby. They appear in /etc/default/grub and "
 			"take effect on the next boot. "

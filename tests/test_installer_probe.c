@@ -159,32 +159,34 @@ static void test_cmdline_ima(void)
 	}
 	PASS();
 
-	TEST("ima_appraise=fix satisfies the floor");
-	if (probe_cmdline_ima_ok("ima_appraise=fix") != 0) {
-		FAIL("fix rejected");
+	TEST("absent ima_appraise leaves the kernel default, enforce");
+	if (probe_cmdline_ima_ok("ro root=UUID=x rhgb quiet") != 0) {
+		FAIL("the default mode rejected");
 		return;
 	}
 	PASS();
 
-	TEST("log, off and absent ima_appraise fail the floor");
-	if (probe_cmdline_ima_ok("ima_appraise=log") != -EPERM ||
-	    probe_cmdline_ima_ok("ima_appraise=off") != -EPERM ||
-	    probe_cmdline_ima_ok("ro root=UUID=x rhgb quiet") != -EPERM) {
+	TEST("fix, log and off fail the floor");
+	if (probe_cmdline_ima_ok("ima_appraise=fix") != -EPERM ||
+	    probe_cmdline_ima_ok("ima_appraise=log") != -EPERM ||
+	    probe_cmdline_ima_ok("ima_appraise=off") != -EPERM) {
 		FAIL("non-enforcing mode accepted");
 		return;
 	}
 	PASS();
 
-	TEST("first ima_appraise token wins, mirroring the agent gate");
+	TEST("last ima_appraise token wins, as in the kernel");
 	if (probe_cmdline_ima_ok("ima_appraise=log ima_appraise=enforce") !=
-	    -EPERM) {
-		FAIL("second token consulted");
+		    0 ||
+	    probe_cmdline_ima_ok("ima_appraise=enforce ima_appraise=fix") !=
+		    -EPERM) {
+		FAIL("an earlier token decided");
 		return;
 	}
 	PASS();
 
-	TEST("prefix tokens do not match (ima_appraise_x=enforce)");
-	if (probe_cmdline_ima_ok("ima_appraise_x=enforce") != -EPERM) {
+	TEST("prefix tokens do not match (ima_appraise_x=off)");
+	if (probe_cmdline_ima_ok("ima_appraise_x=off") != 0) {
 		FAIL("prefix matched");
 		return;
 	}
@@ -1497,9 +1499,9 @@ static void test_ima_mode_blocking(void)
 		PASS();
 
 	TEST("without Secure Boot the parameter is the answer");
-	if (!probe_ima_mode_blocking(0, "ro quiet ima_appraise=fix"))
-		FAIL("a honoured fix mode was refused");
-	else if (probe_ima_mode_blocking(0, "ro quiet ima_appraise=log"))
+	if (!probe_ima_mode_blocking(0, "ro quiet ima_appraise=enforce"))
+		FAIL("a honoured enforce mode was refused");
+	else if (probe_ima_mode_blocking(0, "ro quiet ima_appraise=fix"))
 		FAIL("a non-blocking mode passed");
 	else
 		PASS();

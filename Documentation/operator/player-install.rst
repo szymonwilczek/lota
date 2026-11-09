@@ -171,10 +171,10 @@ What the stages do
    kernel is selected at boot. It reports work to do while any installed kernel
    is missing the helper. Requires a reboot.
 #. **Kernel integrity floor** -- appends the missing ones of
-   ``ima_appraise=fix``, ``module.sig_enforce=1`` and ``lockdown=integrity`` to
-   the boot entries via grubby. It reports those parameters and nothing more:
-   the appraisal *mode* is not the floor on its own, and the rules it applies
-   to are the next stage. On a Secure Boot host the appraisal parameter is left
+   ``ima_appraise=enforce``, ``module.sig_enforce=1`` and
+   ``lockdown=integrity`` to the boot entries via grubby. It reports those
+   parameters and nothing more: the appraisal *mode* is not the floor on its
+   own, and the rules it applies to are the next stage. On a Secure Boot host the appraisal parameter is left
    out, because the kernel discards ``ima_appraise=`` there and appraises in
    its own built-in blocking mode -- writing it would describe a mode that is
    not the machine's. Signature content stays distribution or
