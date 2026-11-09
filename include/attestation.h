@@ -113,14 +113,6 @@ struct lota_tpm_evidence {
 	 */
 	uint8_t nonce[LOTA_NONCE_SIZE];
 
-	/*
-	 * SHA-256 of the EK public key, or of the AIK public key on a TPM that
-	 * yields no EK. The verifier identifies the host by the pseudonym in
-	 * the AIK certificate; this field only enters the binding nonce, so the
-	 * quote covers it.
-	 */
-	uint8_t hardware_id[LOTA_HARDWARE_ID_SIZE];
-
 	/* Incremented on every AIK rotation */
 	uint64_t aik_generation;
 

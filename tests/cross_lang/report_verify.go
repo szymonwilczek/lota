@@ -112,9 +112,6 @@ func main() {
 		fail("nonce = %x, want %x (a stale ek_certificate field would shift this)",
 			report.TPM.Nonce[:8], pattern(0x55, 8))
 	}
-	if !bytes.Equal(report.TPM.HardwareID[:], pattern(0x66, types.HardwareIDSize)) {
-		fail("hardware_id = %x, want %x", report.TPM.HardwareID[:8], pattern(0x66, 8))
-	}
 	if report.TPM.AIKGeneration != 0x0102030405060708 {
 		fail("aik_generation = %#016x, want 0x0102030405060708", report.TPM.AIKGeneration)
 	}

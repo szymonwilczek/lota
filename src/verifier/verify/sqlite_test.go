@@ -851,7 +851,6 @@ func createSQLiteTestReportWithKey(t testing.TB, clientID string, nonce [32]byte
 	if t != nil {
 		t.Helper()
 	}
-	hwID := sha256.Sum256([]byte(clientID))
 
 	// fixed struct plus the event log length prefix;
 	// mandatory ESRT section is appended at the end
@@ -895,7 +894,6 @@ func createSQLiteTestReportWithKey(t testing.TB, clientID string, nonce [32]byte
 	// TPMS_ATTEST with binding nonce including security-relevant report fields
 	bindingReport := &types.AttestationReport{}
 	bindingReport.Header.Flags = productionFlags
-	copy(bindingReport.TPM.HardwareID[:], hwID[:])
 	bindingReport.System.IOMMU.Vendor = 0x8086
 	bindingReport.System.IOMMU.Flags = 0x07
 	bindingReport.System.IOMMU.UnitCount = 2
@@ -937,10 +935,6 @@ func createSQLiteTestReportWithKey(t testing.TB, clientID string, nonce [32]byte
 	// nonce
 	copy(buf[offset:], nonce[:])
 	offset += types.NonceSize
-
-	// hardware_id (stable per-client identity)
-	copy(buf[offset:offset+types.HardwareIDSize], hwID[:])
-	offset += types.HardwareIDSize
 
 	// aik_generation
 	binary.LittleEndian.PutUint64(buf[offset:], 1)

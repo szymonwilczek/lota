@@ -193,7 +193,6 @@ func encodeFuzzReportSpec(s *fuzzReportSpec) []byte {
 // only the policy-relevant contents vary, so VerifyReport's decision is
 // driven by its trust logic rather than by malformed-input rejection
 func buildSignedReport(s *fuzzReportSpec, clientID string, challengeNonce [types.NonceSize]byte, key *rsa.PrivateKey) []byte {
-	hwID := sha256.Sum256([]byte(clientID))
 	// fixed struct plus the event log length prefix;
 	// mandatory ESRT section is appended at the end
 	buf := make([]byte, types.FixedReportSize+4)
@@ -223,7 +222,6 @@ func buildSignedReport(s *fuzzReportSpec, clientID string, challengeNonce [types
 	// report (see ComputeAttestationBindingNonce)
 	bindingReport := &types.AttestationReport{}
 	bindingReport.Header.Flags = s.flags
-	copy(bindingReport.TPM.HardwareID[:], hwID[:])
 	copy(bindingReport.System.KernelHash[:], s.kernelHash[:])
 	copy(bindingReport.System.AgentHash[:], s.agentHash[:])
 	bindingReport.System.IOMMU.Vendor = s.iommu.vendor
@@ -265,8 +263,6 @@ func buildSignedReport(s *fuzzReportSpec, clientID string, challengeNonce [types
 
 	copy(buf[offset:], challengeNonce[:])
 	offset += types.NonceSize
-	copy(buf[offset:offset+types.HardwareIDSize], hwID[:])
-	offset += types.HardwareIDSize
 	binary.LittleEndian.PutUint64(buf[offset:], s.aikGen)
 	offset += 8
 

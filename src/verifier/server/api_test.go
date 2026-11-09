@@ -311,7 +311,6 @@ func serverFixturePCR14() [32]byte {
 // builds a complete attestation report with valid TPM quote signature
 func buildSignedReport(t *testing.T, clientID string, nonce [32]byte, pcr14 [32]byte, key *rsa.PrivateKey) []byte {
 	t.Helper()
-	hwID := sha256.Sum256([]byte(clientID))
 
 	// fixed struct plus the event log length prefix;
 	// mandatory ESRT section is appended at the end
@@ -354,7 +353,6 @@ func buildSignedReport(t *testing.T, clientID string, nonce [32]byte, pcr14 [32]
 
 	bindingReport := &types.AttestationReport{}
 	bindingReport.Header.Flags = serverFixtureFlags
-	copy(bindingReport.TPM.HardwareID[:], hwID[:])
 	for i := 0; i < types.HashSize; i++ {
 		bindingReport.System.KernelHash[i] = byte(0xAA ^ i)
 		bindingReport.System.AgentHash[i] = byte(0xBB ^ i)
@@ -402,10 +400,6 @@ func buildSignedReport(t *testing.T, clientID string, nonce [32]byte, pcr14 [32]
 	// nonce
 	copy(buf[offset:], nonce[:])
 	offset += types.NonceSize
-
-	// hardware_id (32 bytes, stable per-client identity)
-	copy(buf[offset:offset+types.HardwareIDSize], hwID[:])
-	offset += types.HardwareIDSize
 
 	// aik_generation
 	binary.LittleEndian.PutUint64(buf[offset:], 1)

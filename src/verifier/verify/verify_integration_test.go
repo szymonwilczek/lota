@@ -138,7 +138,6 @@ func createValidReportWithEventLog(t *testing.T, clientID string, nonce [32]byte
 	pcrMask, flags uint32, agentHash [types.HashSize]byte, eventLog []byte,
 ) []byte {
 	t.Helper()
-	hwID := sha256.Sum256([]byte(clientID))
 
 	// fixed struct plus the event log length prefix;
 	// mandatory ESRT section is appended at the end
@@ -181,7 +180,6 @@ func createValidReportWithEventLog(t *testing.T, clientID string, nonce [32]byte
 
 	bindingReport := &types.AttestationReport{}
 	bindingReport.Header.Flags = flags
-	copy(bindingReport.TPM.HardwareID[:], hwID[:])
 	for i := 0; i < types.HashSize; i++ {
 		bindingReport.System.KernelHash[i] = byte(0xAA ^ i)
 	}
@@ -229,10 +227,6 @@ func createValidReportWithEventLog(t *testing.T, clientID string, nonce [32]byte
 	// nonce
 	copy(buf[offset:], nonce[:])
 	offset += types.NonceSize
-
-	// hardware_id (32 bytes, stable per-client identity)
-	copy(buf[offset:offset+types.HardwareIDSize], hwID[:])
-	offset += types.HardwareIDSize
 
 	// aik_generation
 	binary.LittleEndian.PutUint64(buf[offset:], 1)
@@ -656,7 +650,6 @@ func TestIntegration_ConcurrentFirstAttestationSameClient(t *testing.T) {
 
 // helper for concurrent test
 func createValidReportWithKey(clientID string, nonce [32]byte, pcr14 [32]byte, key *rsa.PrivateKey) []byte {
-	hwID := sha256.Sum256([]byte(clientID))
 	// fixed struct plus the event log length prefix;
 	// mandatory ESRT section is appended at the end
 	buf := make([]byte, types.FixedReportSize+4)
@@ -697,7 +690,6 @@ func createValidReportWithKey(clientID string, nonce [32]byte, pcr14 [32]byte, k
 
 	bindingReport := &types.AttestationReport{}
 	bindingReport.Header.Flags = productionFlags
-	copy(bindingReport.TPM.HardwareID[:], hwID[:])
 	for i := 0; i < types.HashSize; i++ {
 		bindingReport.System.KernelHash[i] = byte(0xAA ^ i)
 		bindingReport.System.AgentHash[i] = byte(0xBB ^ i)
@@ -736,8 +728,6 @@ func createValidReportWithKey(clientID string, nonce [32]byte, pcr14 [32]byte, k
 
 	copy(buf[offset:], nonce[:])
 	offset += types.NonceSize
-	copy(buf[offset:offset+types.HardwareIDSize], hwID[:])
-	offset += types.HardwareIDSize
 	// aik_generation
 	binary.LittleEndian.PutUint64(buf[offset:], 1)
 	offset += 8

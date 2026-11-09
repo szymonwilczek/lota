@@ -368,19 +368,6 @@ static int build_attestation_report(const struct verifier_challenge *challenge,
 			report->header.flags |= LOTA_REPORT_FLAG_IMA_APPRAISAL;
 	}
 
-	ret = tpm_get_hardware_id(&g_agent.tpm_ctx, report->tpm.hardware_id);
-	if (ret < 0) {
-		fprintf(stderr, "Warning: Failed to get hardware ID: %s\n",
-			tpm_strerror(ret));
-		memset(report->tpm.hardware_id, 0,
-		       sizeof(report->tpm.hardware_id));
-	} else if (ret == 1) {
-		lota_notice(
-			"Hardware ID derived from the AIK: this TPM yielded no endorsement key");
-	} else {
-		lota_dbg("Hardware ID derived from the EK");
-	}
-
 	ret = tpm_get_current_kernel_path(&g_agent.tpm_ctx, kernel_path,
 					  sizeof(kernel_path));
 	if (ret == 0) {
@@ -477,8 +464,6 @@ static int build_attestation_report(const struct verifier_challenge *challenge,
 		if (EVP_DigestInit_ex(md, EVP_sha256(), NULL) != 1 ||
 		    EVP_DigestUpdate(md, challenge->nonce, LOTA_NONCE_SIZE) !=
 			    1 ||
-		    EVP_DigestUpdate(md, report->tpm.hardware_id,
-				     LOTA_HARDWARE_ID_SIZE) != 1 ||
 		    EVP_DigestUpdate(md, flags_le, sizeof(flags_le)) != 1 ||
 		    EVP_DigestUpdate(md, report->system.kernel_hash,
 				     sizeof(report->system.kernel_hash)) != 1 ||

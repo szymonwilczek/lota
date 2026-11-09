@@ -223,7 +223,7 @@ type ReportHeader struct {
 }
 
 // TPMEvidence is struct lota_tpm_evidence (include/attestation.h),
-// 5466 bytes on the wire.
+// 5434 bytes on the wire.
 type TPMEvidence struct {
 	PCRValues       [PCRCount][HashSize]byte
 	PCRMask         uint32
@@ -236,7 +236,6 @@ type TPMEvidence struct {
 	AIKCertificate  [MaxAIKCertSize]byte
 	AIKCertSize     uint16
 	Nonce           [NonceSize]byte
-	HardwareID      [HardwareIDSize]byte
 	AIKGeneration   uint64
 	PrevAIKPublic   [MaxAIKPubSize]byte
 	PrevAIKSize     uint16
@@ -321,15 +320,15 @@ var (
 )
 
 // MinReportSize is a report with empty variable sections: Header(16) +
-// TPM(5466) + System(396) + event_log_size(4) + ESRT(28) + mok_list_size(4).
-const MinReportSize = 5914
+// TPM(5434) + System(396) + event_log_size(4) + ESRT(28) + mok_list_size(4).
+const MinReportSize = 5882
 
 // MaxReportWireSize caps a report before the verifier allocates for it. A
 // firmware event log takes most of it, and dbx grows over a machine's life.
 const MaxReportWireSize = 256 * 1024
 
-// FixedReportSize is Header(16) + TPM(5466) + System(396).
-const FixedReportSize = 5878
+// FixedReportSize is Header(16) + TPM(5434) + System(396).
+const FixedReportSize = 5846
 
 // ParseReport parses a wire report, refusing any version but ReportVersion.
 func ParseReport(data []byte) (*AttestationReport, error) {
@@ -394,8 +393,6 @@ func ParseReport(data []byte) (*AttestationReport, error) {
 	}
 	copy(report.TPM.Nonce[:], data[offset:offset+NonceSize])
 	offset += NonceSize
-	copy(report.TPM.HardwareID[:], data[offset:offset+HardwareIDSize])
-	offset += HardwareIDSize
 	report.TPM.AIKGeneration = binary.LittleEndian.Uint64(data[offset:])
 	offset += 8
 	copy(report.TPM.PrevAIKPublic[:], data[offset:offset+MaxAIKPubSize])

@@ -245,8 +245,8 @@ Active threats
      - Clock and storage availability are operational dependencies for replay
        tracking.
    * - Agent-asserted report metadata
-     - The attestation binding nonce covers hardware identity, signed flags,
-       kernel hash, agent hash, and IOMMU status before verification of
+     - The attestation binding nonce covers the signed flags, kernel hash,
+       agent hash, and IOMMU status before verification of
        ``TPMS_ATTEST.extraData``.
      - Metadata outside that binding must not be promoted to security decisions
        without extending the binding.

@@ -82,8 +82,6 @@ int main(void)
 
 	for (size_t i = 0; i < sizeof(report.tpm.nonce); i++)
 		report.tpm.nonce[i] = (uint8_t)(0x55 ^ i);
-	for (size_t i = 0; i < sizeof(report.tpm.hardware_id); i++)
-		report.tpm.hardware_id[i] = (uint8_t)(0x66 ^ i);
 	report.tpm.aik_generation = 0x0102030405060708ULL;
 	for (size_t i = 0; i < sizeof(report.tpm.prev_aik_public); i++)
 		report.tpm.prev_aik_public[i] = (uint8_t)(0x77 ^ i);

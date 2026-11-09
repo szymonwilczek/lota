@@ -25,6 +25,9 @@ type fixedChunkReader struct {
 	idx    int
 }
 
+const zeroIdentity = "00000000000000000000000000000000" +
+	"00000000000000000000000000000000"
+
 func newTestNonceStore(lifetime time.Duration) *NonceStore {
 	cfg := DefaultNonceStoreConfig()
 	cfg.Lifetime = lifetime
@@ -96,7 +99,7 @@ func TestNonceStore_GenerateAndVerify(t *testing.T) {
 	report.TPM.AttestSize = uint16(len(createMockAttestWithNonce(testBindingNonce(report, challenge.Nonce))))
 	copy(report.TPM.AttestData[:], createMockAttestWithNonce(testBindingNonce(report, challenge.Nonce)))
 
-	err = store.VerifyNonce(report, "binding-1", hex.EncodeToString(report.TPM.HardwareID[:]))
+	err = store.VerifyNonce(report, "binding-1", zeroIdentity)
 	if err != nil {
 		t.Fatalf("Nonce verification failed for valid report: %v", err)
 	}
@@ -118,14 +121,14 @@ func TestNonceStore_OneTimeUse(t *testing.T) {
 	copy(report.TPM.AttestData[:], createMockAttestWithNonce(testBindingNonce(report, challenge.Nonce)))
 
 	// should succeed
-	err := store.VerifyNonce(report, "binding-1", hex.EncodeToString(report.TPM.HardwareID[:]))
+	err := store.VerifyNonce(report, "binding-1", zeroIdentity)
 	if err != nil {
 		t.Fatalf("First verification failed: %v", err)
 	}
 	t.Log("✓ First verification succeeded")
 
 	// MUST FAIL
-	err = store.VerifyNonce(report, "binding-1", hex.EncodeToString(report.TPM.HardwareID[:]))
+	err = store.VerifyNonce(report, "binding-1", zeroIdentity)
 	if err == nil {
 		t.Fatal("SECURITY VIOLATION: Second verification succeeded - replay attack possible!")
 	}
@@ -148,7 +151,7 @@ func TestNonceStore_Expiration(t *testing.T) {
 	time.Sleep(150 * time.Millisecond)
 
 	// should fail
-	err := store.VerifyNonce(report, "binding-1", hex.EncodeToString(report.TPM.HardwareID[:]))
+	err := store.VerifyNonce(report, "binding-1", zeroIdentity)
 	if err == nil {
 		t.Fatal("SECURITY: Expired nonce was accepted!")
 	}
@@ -169,7 +172,7 @@ func TestNonceStore_UnknownNonce(t *testing.T) {
 	report.TPM.AttestSize = uint16(len(createMockAttestWithNonce(testBindingNonce(report, report.TPM.Nonce))))
 	copy(report.TPM.AttestData[:], createMockAttestWithNonce(testBindingNonce(report, report.TPM.Nonce)))
 
-	err := store.VerifyNonce(report, "binding-1", hex.EncodeToString(report.TPM.HardwareID[:]))
+	err := store.VerifyNonce(report, "binding-1", zeroIdentity)
 	if err == nil {
 		t.Fatal("SECURITY: Unknown nonce was accepted!")
 	}
@@ -190,7 +193,8 @@ func TestNonceStore_ClientBinding(t *testing.T) {
 	report.TPM.AttestSize = uint16(len(createMockAttestWithNonce(testBindingNonce(report, challenge.Nonce))))
 	copy(report.TPM.AttestData[:], createMockAttestWithNonce(testBindingNonce(report, challenge.Nonce)))
 
-	err := store.VerifyNonce(report, "binding-2", hex.EncodeToString(report.TPM.HardwareID[:])) // wrong binding ID
+	// wrong binding ID
+	err := store.VerifyNonce(report, "binding-2", zeroIdentity)
 	if err == nil {
 		t.Fatal("SECURITY: Nonce accepted for wrong binding ID!")
 	}
@@ -352,7 +356,7 @@ func TestNonceStore_NonceMismatchInAttest(t *testing.T) {
 	report.TPM.AttestSize = uint16(len(createMockAttestWithNonce(wrongNonce)))
 	copy(report.TPM.AttestData[:], createMockAttestWithNonce(wrongNonce))
 
-	err := store.VerifyNonce(report, "binding-1", hex.EncodeToString(report.TPM.HardwareID[:]))
+	err := store.VerifyNonce(report, "binding-1", zeroIdentity)
 	if err == nil {
 		t.Fatal("SECURITY VIOLATION: Accepted report with mismatched nonces!")
 	}
@@ -373,7 +377,7 @@ func TestNonceStore_UsedNonceHistory(t *testing.T) {
 	copy(report.TPM.AttestData[:], createMockAttestWithNonce(testBindingNonce(report, challenge.Nonce)))
 
 	// first use - should succeed
-	err := store.VerifyNonce(report, "client1", hex.EncodeToString(report.TPM.HardwareID[:]))
+	err := store.VerifyNonce(report, "client1", zeroIdentity)
 	if err != nil {
 		t.Fatalf("First verification failed: %v", err)
 	}
@@ -384,7 +388,7 @@ func TestNonceStore_UsedNonceHistory(t *testing.T) {
 	}
 
 	// same report should mention "already used"
-	err = store.VerifyNonce(report, "binding-1", hex.EncodeToString(report.TPM.HardwareID[:]))
+	err = store.VerifyNonce(report, "binding-1", zeroIdentity)
 	if err == nil {
 		t.Fatal("SECURITY VIOLATION: Used nonce was accepted on replay!")
 	}
@@ -414,7 +418,7 @@ func TestNonceStore_UsedNonceHistoryMax(t *testing.T) {
 		report.TPM.AttestSize = uint16(len(createMockAttestWithNonce(testBindingNonce(report, challenge.Nonce))))
 		copy(report.TPM.AttestData[:], createMockAttestWithNonce(testBindingNonce(report, challenge.Nonce)))
 
-		err = store.VerifyNonce(report, "binding-1", hex.EncodeToString(report.TPM.HardwareID[:]))
+		err = store.VerifyNonce(report, "binding-1", zeroIdentity)
 		if err != nil {
 			t.Fatalf("Verification %d failed: %v", i, err)
 		}
@@ -488,10 +492,11 @@ func TestNonceStore_RateLimitWindow(t *testing.T) {
 		// consume to free pending slot
 		report := &types.AttestationReport{}
 		copy(report.TPM.Nonce[:], challenge.Nonce[:])
-		copy(report.TPM.HardwareID[:], hwID[:])
 		report.TPM.AttestSize = uint16(len(createMockAttestWithNonce(testBindingNonce(report, challenge.Nonce))))
 		copy(report.TPM.AttestData[:], createMockAttestWithNonce(testBindingNonce(report, challenge.Nonce)))
-		if err := store.VerifyNonce(report, fmt.Sprintf("binding-rate-%d", i), hex.EncodeToString(report.TPM.HardwareID[:])); err != nil {
+		if err := store.VerifyNonce(report,
+			fmt.Sprintf("binding-rate-%d", i),
+			hex.EncodeToString(hwID[:])); err != nil {
 			t.Fatalf("Verify %d should have succeeded: %v", i, err)
 		}
 	}
@@ -503,10 +508,10 @@ func TestNonceStore_RateLimitWindow(t *testing.T) {
 	}
 	report := &types.AttestationReport{}
 	copy(report.TPM.Nonce[:], challenge.Nonce[:])
-	copy(report.TPM.HardwareID[:], hwID[:])
 	report.TPM.AttestSize = uint16(len(createMockAttestWithNonce(testBindingNonce(report, challenge.Nonce))))
 	copy(report.TPM.AttestData[:], createMockAttestWithNonce(testBindingNonce(report, challenge.Nonce)))
-	err = store.VerifyNonce(report, "binding-rate-3", hex.EncodeToString(report.TPM.HardwareID[:]))
+	err = store.VerifyNonce(report, "binding-rate-3",
+		hex.EncodeToString(hwID[:]))
 	if err == nil {
 		t.Fatal("SECURITY: Should have rejected verify exceeding identity rate limit!")
 	}
@@ -521,10 +526,10 @@ func TestNonceStore_RateLimitWindow(t *testing.T) {
 	}
 	report = &types.AttestationReport{}
 	copy(report.TPM.Nonce[:], challenge.Nonce[:])
-	copy(report.TPM.HardwareID[:], hwID[:])
 	report.TPM.AttestSize = uint16(len(createMockAttestWithNonce(testBindingNonce(report, challenge.Nonce))))
 	copy(report.TPM.AttestData[:], createMockAttestWithNonce(testBindingNonce(report, challenge.Nonce)))
-	if err := store.VerifyNonce(report, "binding-rate-4", hex.EncodeToString(report.TPM.HardwareID[:])); err != nil {
+	if err := store.VerifyNonce(report, "binding-rate-4",
+		hex.EncodeToString(hwID[:])); err != nil {
 		t.Fatalf("Verify after window reset should succeed: %v", err)
 	}
 
@@ -553,10 +558,10 @@ func TestNonceStore_MonotonicCounter(t *testing.T) {
 
 		report := &types.AttestationReport{}
 		copy(report.TPM.Nonce[:], challenge.Nonce[:])
-		copy(report.TPM.HardwareID[:], hwID[:])
 		report.TPM.AttestSize = uint16(len(createMockAttestWithNonce(testBindingNonce(report, challenge.Nonce))))
 		copy(report.TPM.AttestData[:], createMockAttestWithNonce(testBindingNonce(report, challenge.Nonce)))
-		if err := store.VerifyNonce(report, bindingID, hex.EncodeToString(report.TPM.HardwareID[:])); err != nil {
+		if err := store.VerifyNonce(report, bindingID,
+			hex.EncodeToString(hwID[:])); err != nil {
 			t.Fatalf("VerifyNonce(%d) failed: %v", i, err)
 		}
 
@@ -637,7 +642,7 @@ func TestNonceStore_ClientPendingTracking(t *testing.T) {
 	copy(report.TPM.Nonce[:], challenge.Nonce[:])
 	report.TPM.AttestSize = uint16(len(createMockAttestWithNonce(testBindingNonce(report, challenge.Nonce))))
 	copy(report.TPM.AttestData[:], createMockAttestWithNonce(testBindingNonce(report, challenge.Nonce)))
-	store.VerifyNonce(report, clientID, hex.EncodeToString(report.TPM.HardwareID[:]))
+	store.VerifyNonce(report, clientID, zeroIdentity)
 
 	if store.ClientPendingCount(clientID) != 1 {
 		t.Errorf("After verify: got %d, want 1", store.ClientPendingCount(clientID))
@@ -678,7 +683,8 @@ func TestNonceStore_ConcurrentSafety(t *testing.T) {
 				report.TPM.AttestSize = uint16(len(createMockAttestWithNonce(testBindingNonce(report, challenge.Nonce))))
 				copy(report.TPM.AttestData[:], createMockAttestWithNonce(testBindingNonce(report, challenge.Nonce)))
 
-				if err := store.VerifyNonce(report, clientID, hex.EncodeToString(report.TPM.HardwareID[:])); err != nil {
+				if err := store.VerifyNonce(report, clientID,
+					zeroIdentity); err != nil {
 					errCh <- fmt.Errorf("client %d, iter %d: verify failed: %w", clientNum, j, err)
 					return
 				}
@@ -770,7 +776,8 @@ func TestNonceStore_TableDriven(t *testing.T) {
 			report.TPM.AttestSize = uint16(len(createMockAttestWithNonce(testBindingNonce(report, challenge.Nonce))))
 			copy(report.TPM.AttestData[:], createMockAttestWithNonce(testBindingNonce(report, challenge.Nonce)))
 
-			err := store.VerifyNonce(report, tc.clientVerify, hex.EncodeToString(report.TPM.HardwareID[:]))
+			err := store.VerifyNonce(report, tc.clientVerify,
+				zeroIdentity)
 
 			if tc.wantErr && err == nil {
 				t.Error("Expected error, got nil")

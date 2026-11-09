@@ -229,7 +229,7 @@ func VerifyPCRDigestParsed(attest *TPMSAttest, pcrValues *[types.PCRCount][types
 // ComputeAttestationBindingNonce returns the quote extraData that binds the
 // report fields the quote signature does not cover:
 //
-//	SHA-256(challengeNonce || hardwareID || signedFlags ||
+//	SHA-256(challengeNonce || signedFlags ||
 //		kernelHash || agentHash || iommuStatus)
 //
 // signedFlags is Header.Flags without FlagTPMQuoteOK, which the agent sets
@@ -244,11 +244,6 @@ func ComputeAttestationBindingNonce(challengeNonce [types.NonceSize]byte, report
 
 	h := sha256.New()
 	h.Write(challengeNonce[:])
-	if report != nil {
-		h.Write(report.TPM.HardwareID[:])
-	} else {
-		h.Write(make([]byte, types.HardwareIDSize))
-	}
 	h.Write(flagsLE[:])
 	if report != nil {
 		h.Write(report.System.KernelHash[:])

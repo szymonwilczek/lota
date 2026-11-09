@@ -73,11 +73,6 @@ func createTestReportBytes() []byte {
 		buf[offset+i] = byte(0xAA ^ i)
 	}
 	offset += NonceSize
-	// hardware_id (32 bytes) - SHA-256 of EK public key
-	for i := 0; i < HardwareIDSize; i++ {
-		buf[offset+i] = byte(0xDD ^ i)
-	}
-	offset += HardwareIDSize
 	// aik_generation (8)
 	binary.LittleEndian.PutUint64(buf[offset:], 1)
 	offset += 8
@@ -294,8 +289,7 @@ func TestParseReport_FieldOffsetsMatchCLayout(t *testing.T) {
 		offAIKCert       = offAIKPublicSize + 2
 		offAIKCertSize   = offAIKCert + MaxAIKCertSize
 		offNonce         = offAIKCertSize + 2
-		offHardwareID    = offNonce + NonceSize
-		offAIKGeneration = offHardwareID + HardwareIDSize
+		offAIKGeneration = offNonce + NonceSize
 		offPrevAIKPublic = offAIKGeneration + 8
 		offPrevAIKSize   = offPrevAIKPublic + MaxAIKPubSize
 		offQuoteSigAlg   = offPrevAIKSize + 2
@@ -316,7 +310,7 @@ func TestParseReport_FieldOffsetsMatchCLayout(t *testing.T) {
 			t.Fatalf("%s: got %d, want %d", msg, got, want)
 		}
 	}
-	assertEqual(tpmEnd-tpmBase, 5466, "TPM evidence section")
+	assertEqual(tpmEnd-tpmBase, 5434, "TPM evidence section")
 	assertEqual(offFixedEnd, FixedReportSize, "fixed section")
 
 	// byte-slice fields: write a marker, parse, require it in the field
@@ -332,7 +326,6 @@ func TestParseReport_FieldOffsetsMatchCLayout(t *testing.T) {
 		{"TPM.AIKPublic", offAIKPublic, 16, func(r *AttestationReport) []byte { return r.TPM.AIKPublic[:16] }},
 		{"TPM.AIKCertificate", offAIKCert, 16, func(r *AttestationReport) []byte { return r.TPM.AIKCertificate[:16] }},
 		{"TPM.Nonce", offNonce, NonceSize, func(r *AttestationReport) []byte { return r.TPM.Nonce[:] }},
-		{"TPM.HardwareID", offHardwareID, HardwareIDSize, func(r *AttestationReport) []byte { return r.TPM.HardwareID[:] }},
 		{"TPM.PrevAIKPublic", offPrevAIKPublic, 16, func(r *AttestationReport) []byte { return r.TPM.PrevAIKPublic[:16] }},
 		{"System.KernelHash", offKernelHash, HashSize, func(r *AttestationReport) []byte { return r.System.KernelHash[:] }},
 		{"System.AgentHash", offAgentHash, HashSize, func(r *AttestationReport) []byte { return r.System.AgentHash[:] }},

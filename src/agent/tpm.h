@@ -890,21 +890,6 @@ int tpm_get_ek_cert_chain(struct tpm_context *ctx, uint8_t *buf,
 			  size_t buf_size, size_t *out_size);
 
 /**
- * tpm_get_hardware_id() - Compute the hardware identifier.
- * @ctx: Initialized TPM context.
- * @hardware_id: LOTA_HARDWARE_ID_SIZE bytes.
- *
- * SHA-256 of the EK's public unique field: the RSA modulus, or ECC X and Y.
- * With no EK at the persistent handle the key is recreated from its template,
- * giving the same value. When the TPM yields no EK, SHA-256 of the AIK's DER
- * SubjectPublicKeyInfo.
- *
- * Return: 0 from the EK, 1 from the AIK, -ENOKEY with neither, or a negative
- * errno.
- */
-int tpm_get_hardware_id(struct tpm_context *ctx, uint8_t *hardware_id);
-
-/**
  * tpm_aik_load_metadata() - Load the AIK rotation metadata.
  * @ctx: Initialized TPM context; @ctx->aik_meta_path, or TPM_AIK_META_PATH.
  *
