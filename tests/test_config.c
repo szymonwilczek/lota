@@ -259,7 +259,7 @@ static void test_config_load_basic_values(void)
 				   "mode = enforce\n"
 				   "strict_mmap = true\n"
 				   "block_ptrace = yes\n"
-				   "attest_interval = 300\n"
+				   "attest_interval = 240\n"
 				   "aik_handle = 0x81010003\n"
 				   "seal_aik_auth = true\n"
 				   "seal_aik_auth_strict = true\n"
@@ -294,8 +294,8 @@ static void test_config_load_basic_values(void)
 		FAIL("block_ptrace != true");
 		return;
 	}
-	if (cfg.attest_interval != 300) {
-		FAIL("attest_interval != 300");
+	if (cfg.attest_interval != 240) {
+		FAIL("attest_interval != 240");
 		return;
 	}
 	if (cfg.aik_handle != 0x81010003) {
@@ -949,9 +949,8 @@ static void test_config_load_port_bounds(void)
 }
 
 /*
- * Interval above the ceiling mints tokens whose valid_until sits past every
- * relying party's freshness window, so the agent runs and every token it produces
- * is refused.
+ * Interval above the ceiling mints tokens whose valid_until sits past the token
+ * age the SDK verifiers accept, so only their clock skew keeps them verifiable.
  * The mistake has to be caught where it is made.
  */
 static void test_config_load_attest_interval_bounds(void)

@@ -257,9 +257,9 @@ static int parse_attest_interval(const char *arg, int *interval)
 		fprintf(stderr,
 			"Invalid interval: %ld exceeds the "
 			"maximum of %d seconds; beyond it "
-			"every minted token outlives the "
-			"freshness window a relying party "
-			"accepts\n",
+			"a minted token outlives the token "
+			"age the SDK verifiers accept and "
+			"spends their clock skew\n",
 			v, MAX_ATTEST_INTERVAL);
 		return -EINVAL;
 	}

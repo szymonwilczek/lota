@@ -24,6 +24,7 @@
 #include <openssl/types.h>
 #include <openssl/x509.h>
 
+#include "../include/lota_server.h"
 #include "../src/agent/attest.h"
 #include "../src/agent/attest_targets.h"
 
@@ -291,6 +292,17 @@ static void test_effective_interval(void)
 	      "a configured cadence wins over the default");
 	CHECK(attest_effective_interval(45, 0, true) == 45,
 	      "a configured cadence runs the loop without profiles too");
+}
+
+/* A verifier whose clock runs behind still accepts the latest token. */
+static void test_ceiling_leaves_the_clock_skew(void)
+{
+	long valid_in = MAX_ATTEST_INTERVAL + ATTEST_TOKEN_VALIDITY_SLACK_SEC;
+	long behind = LOTA_SERVER_MAX_CLOCK_SKEW_SEC;
+
+	CHECK(valid_in + behind <= LOTA_SERVER_MAX_TOKEN_AGE_SEC +
+					   LOTA_SERVER_MAX_CLOCK_SKEW_SEC,
+	      "a token at the ceiling passes a verifier a full skew behind");
 }
 
 /*
@@ -623,6 +635,7 @@ int main(void)
 	test_token_only_publisher();
 	test_more_profiles_than_room();
 	test_effective_interval();
+	test_ceiling_leaves_the_clock_skew();
 	test_env_overrides_stop_at_the_deployment();
 	test_target_reports();
 	test_wait_for_a_first_session_is_announced();

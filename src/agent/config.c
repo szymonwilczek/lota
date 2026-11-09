@@ -230,8 +230,9 @@ static int check_attest_interval(long v, const char *key, const char *filepath,
 		return 0;
 
 	fprintf(stderr,
-		"%s:%d: %s %ld out of range (0 or %d-%d; above %d the minted "
-		"tokens outlive every relying party's freshness window)\n",
+		"%s:%d: %s %ld out of range (0 or %d-%d; above %d a minted "
+		"token outlives the token age the SDK verifiers accept and "
+		"spends their clock skew)\n",
 		filepath, lineno, key, v, MIN_ATTEST_INTERVAL,
 		MAX_ATTEST_INTERVAL, MAX_ATTEST_INTERVAL);
 	return -1;
