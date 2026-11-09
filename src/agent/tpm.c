@@ -1613,6 +1613,23 @@ int tpm_test_save_new_key_metadata(struct tpm_context *ctx)
 }
 #endif
 
+/* Replacing a shared key invalidates the certificate that names it. */
+static int aik_check_shared_replace(struct tpm_context *ctx)
+{
+	int ret;
+
+	if (!ctx->aik_meta_loaded) {
+		ret = tpm_aik_load_metadata(ctx);
+		if (ret < 0)
+			return ret;
+	}
+
+	if (tpm_aik_key_is_shared(ctx) && !ctx->aik_allow_shared_key_replace)
+		return -ENOTSUP;
+
+	return 0;
+}
+
 int tpm_provision_aik(struct tpm_context *ctx)
 {
 	int ret;
@@ -1718,6 +1735,10 @@ int tpm_reprovision_aik(struct tpm_context *ctx, bool *out_key_changed)
 		if (ret < 0)
 			return ret;
 		had_name = true;
+
+		ret = aik_check_shared_replace(ctx);
+		if (ret < 0)
+			return ret;
 	}
 
 	ret = tpm_aik_reprovision_with_auth(ctx, had == 1 ? 1 : 0);
@@ -5422,6 +5443,11 @@ int tpm_test_seal_refusal_errno(struct tpm_context *ctx, uint32_t pcr_mask,
 
 	memcpy(meta.pcr_digest, pcr_digest, sizeof(meta.pcr_digest));
 	return seal_refusal_errno(ctx, &meta, (TSS2_RC)rc, err);
+}
+
+int tpm_test_aik_check_shared_replace(struct tpm_context *ctx)
+{
+	return aik_check_shared_replace(ctx);
 }
 
 int tpm_test_esys_reconnect(struct tpm_context *ctx)

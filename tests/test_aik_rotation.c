@@ -2004,6 +2004,54 @@ static void test_failed_bind_keeps_the_bound_publisher(void)
 	PASS();
 }
 
+static void test_reprovision_reads_the_record_first(void)
+{
+	struct tpm_context ctx;
+	int ret;
+
+	TEST("reprovision loads the record and refuses a shared key");
+	make_ctx(&ctx);
+	ctx.aik_meta.magic = TPM_AIK_META_MAGIC;
+	ctx.aik_meta.version = TPM_AIK_META_VERSION;
+	ctx.aik_meta.generation = 3;
+	ctx.aik_meta.key_derivation = TPM_AIK_KEY_DERIVATION_SHARED;
+	ctx.aik_meta_loaded = true;
+	if (tpm_aik_save_metadata(&ctx) != 0) {
+		FAIL("save returned error");
+		return;
+	}
+
+	/* a bind leaves the record unloaded */
+	memset(&ctx.aik_meta, 0, sizeof(ctx.aik_meta));
+	ctx.aik_meta_loaded = false;
+	memset(ctx.aik_profile_id, 'c', LOTA_PROFILE_ID_LEN - 1);
+
+	ret = tpm_test_aik_check_shared_replace(&ctx);
+	if (ret != -ENOTSUP) {
+		FAIL("a shared key was let through");
+		return;
+	}
+	if (!ctx.aik_meta_loaded || ctx.aik_meta.generation != 3) {
+		FAIL("the record was not loaded");
+		return;
+	}
+
+	tpm_aik_allow_shared_key_replace(&ctx, true);
+	ret = tpm_test_aik_check_shared_replace(&ctx);
+	tpm_aik_allow_shared_key_replace(&ctx, false);
+	if (ret != 0) {
+		FAIL("enrollment could not replace a shared key");
+		return;
+	}
+
+	ctx.aik_meta.key_derivation = TPM_AIK_KEY_DERIVATION_PER_PUBLISHER;
+	if (tpm_test_aik_check_shared_replace(&ctx) != 0) {
+		FAIL("the publisher's own key was refused");
+		return;
+	}
+	PASS();
+}
+
 static int g_esys_session;
 
 void __wrap_Esys_Finalize(ESYS_CONTEXT **esys_ctx);
@@ -2103,6 +2151,7 @@ int main(void)
 	test_refused_unseal_with_unmoved_pcrs_is_the_blob();
 	test_failed_bind_keeps_the_bound_publisher();
 	test_reconnect_keeps_the_aik_name();
+	test_reprovision_reads_the_record_first();
 	test_self_hash_pin_round_trip();
 	test_tpm_strerror_maps_lota_private();
 	test_clock_state_save_load_round_trip();

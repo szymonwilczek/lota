@@ -827,7 +827,8 @@ int do_reprovision_aik(void)
 		ret = tpm_reprovision_aik(&g_agent.tpm_ctx, &key_changed);
 		if (ret < 0) {
 			fprintf(stderr, "  %s: %s\n", entries[i].id,
-				tpm_strerror(ret));
+				ret == -ENOTSUP ? TPM_AIK_SHARED_KEY_ADVICE :
+						  tpm_strerror(ret));
 			failed++;
 			continue;
 		}
