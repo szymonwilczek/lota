@@ -2302,22 +2302,22 @@ int tpm_firmware_refuses_attestation(const struct tpm_context *ctx)
  * and the agent anchors its derivations on it.
  *
  * @present, when given, receives whether a usable handoff was there: the
- * agent's evidence that the lock helper ran this boot. A short handoff counts
- * as absent.
+ * agent's evidence that the lock helper ran this boot. A handoff of any other
+ * length counts as absent.
  *
  * The baseline is not trust input: a tampered file makes the agent's own
  * derivations miss the real PCR14.
  *
  * Returns: 0 or negative errno; @out is zeroed when no usable handoff exists.
  */
-static int read_pcr14_baseline(uint8_t out[LOTA_HASH_SIZE], int *present)
+static int read_pcr14_baseline(const char *path, uint8_t out[LOTA_HASH_SIZE],
+			       int *present)
 {
 	memset(out, 0, LOTA_HASH_SIZE);
 	if (present)
 		*present = 0;
 
-	int fd = open(LOTA_PCR14_BASELINE_PATH,
-		      O_RDONLY | O_CLOEXEC | O_NOFOLLOW);
+	int fd = open(path, O_RDONLY | O_CLOEXEC | O_NOFOLLOW);
 	if (fd < 0) {
 		if (errno == ENOENT)
 			return 0;
@@ -2330,7 +2330,7 @@ static int read_pcr14_baseline(uint8_t out[LOTA_HASH_SIZE], int *present)
 		return err;
 	}
 
-	uint8_t buf[LOTA_HASH_SIZE];
+	uint8_t buf[LOTA_HASH_SIZE + 1];
 	size_t n = fread(buf, 1, sizeof(buf), f);
 	int read_err = ferror(f);
 	fclose(f);
@@ -2341,7 +2341,7 @@ static int read_pcr14_baseline(uint8_t out[LOTA_HASH_SIZE], int *present)
 		fprintf(stderr,
 			"PCR14 boot-commitment: ignoring malformed baseline handoff "
 			"(%zu bytes at %s)\n",
-			n, LOTA_PCR14_BASELINE_PATH);
+			n, path);
 		memset(out, 0, LOTA_HASH_SIZE);
 		return 0;
 	}
@@ -2556,7 +2556,8 @@ int tpm_extend_boot_commitment(struct tpm_context *ctx,
 	uint8_t baseline[LOTA_HASH_SIZE];
 	int lock_ran = 0;
 
-	ret = read_pcr14_baseline(baseline, &lock_ran);
+	ret = read_pcr14_baseline(LOTA_PCR14_BASELINE_PATH, baseline,
+				  &lock_ran);
 	if (ret < 0)
 		return ret;
 
@@ -5370,6 +5371,12 @@ int tpm_seal_evict_primary(struct tpm_context *ctx)
 }
 
 #ifdef LOTA_TPM_TESTING
+int tpm_test_read_pcr14_baseline(const char *path, uint8_t out[LOTA_HASH_SIZE],
+				 int *present)
+{
+	return read_pcr14_baseline(path, out, present);
+}
+
 int tpm_test_rc_is_stale_object_record(uint32_t rc)
 {
 	return tss2_rc_is_stale_object_record((TSS2_RC)rc) ? 1 : 0;

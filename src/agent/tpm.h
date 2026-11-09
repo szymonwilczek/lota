@@ -1239,6 +1239,9 @@ int tpm_aik_handle_holds_profile_key(struct tpm_context *ctx);
 typedef int (*tpm_test_prop_reader_fn)(struct tpm_context *ctx, TPM2_PT prop,
 				       uint32_t *out_val);
 
+int tpm_test_read_pcr14_baseline(const char *path, uint8_t out[LOTA_HASH_SIZE],
+				 int *present);
+
 /*
  * Pure helpers: the Name comparison behind tpm_aik_object_replaced(), and
  * the profile comparison deciding whether a bind carries a cached key across.
