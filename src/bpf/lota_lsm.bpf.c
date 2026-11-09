@@ -71,6 +71,10 @@ char LICENSE[] SEC("license") = "GPL";
 #define S_IFCHR 0020000
 #endif
 
+#ifndef S_PRIVATE
+#define S_PRIVATE (1 << 9)
+#endif
+
 #ifndef VM_WRITE
 #define VM_WRITE 0x00000002
 #endif
@@ -2129,12 +2133,33 @@ int BPF_PROG(lota_mmap_file, struct file *file, unsigned long reqprot,
 	return 0;
 }
 
+/* the file shmem_zero_setup() gives a shared anonymous mapping */
+static __always_inline int is_shared_anon_file(struct file *file)
+{
+	union {
+		char str[9];
+		u64 word;
+	} name = {};
+	const unsigned char *dname;
+
+	if (!(BPF_CORE_READ(file, f_inode, i_flags) & S_PRIVATE))
+		return 0;
+
+	dname = BPF_CORE_READ(file, f_path.dentry, d_name.name);
+	if (bpf_probe_read_kernel_str(name.str, sizeof(name.str), dname) !=
+	    sizeof(name.str))
+		return 0;
+
+	return name.word == *(const u64 *)"dev/zero";
+}
+
 /* ======================================================================
  * LSM hook: file_mprotect
  *
  * The refusals of mmap_file for a protection change to executable; a VMA
  * with VM_WRITE or VM_MAYWRITE counts as writable. A shared anonymous mapping
- * carries a shmem file here and takes the file refusals.
+ * carries a shmem file here, a private /dev/zero mapping its file without
+ * vm_ops; both take the anonymous refusals.
  * ====================================================================== */
 SEC("lsm/file_mprotect")
 int BPF_PROG(lota_file_mprotect, struct vm_area_struct *vma,
@@ -2156,7 +2181,7 @@ int BPF_PROG(lota_file_mprotect, struct vm_area_struct *vma,
 	/* a direct read keeps vm_file trusted for the fs-verity kfunc */
 	file = vma->vm_file;
 
-	if (!file) {
+	if (!file || !BPF_CORE_READ(vma, vm_ops) || is_shared_anon_file(file)) {
 		int anon_blocked = 0;
 		int emit_event = 0;
 
