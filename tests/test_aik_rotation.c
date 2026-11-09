@@ -1107,6 +1107,58 @@ static void test_lockout_flag_lifecycle(void)
 	PASS();
 }
 
+static uint32_t g_mock_permanent;
+
+static int mock_prop_reader_permanent(struct tpm_context *ctx, TPM2_PT prop,
+				      uint32_t *out_val)
+{
+	(void)ctx;
+	if (prop != TPM2_PT_PERMANENT || !out_val)
+		return -EINVAL;
+	*out_val = g_mock_permanent;
+	return 0;
+}
+
+static TSS2_RC success_thunk(void *u)
+{
+	(void)u;
+	return TSS2_RC_SUCCESS;
+}
+
+static void test_lockout_survives_auth_free_success(void)
+{
+	struct tpm_context ctx;
+	int ret;
+
+	TEST("success keeps the lockout flag while inLockout is set");
+	make_ctx(&ctx);
+	ctx.lockout_active = true;
+	ctx.lockout_first_seen = 1000;
+
+	tpm_test_set_prop_reader(mock_prop_reader_permanent);
+	g_mock_permanent = TPMA_PERMANENT_INLOCKOUT;
+	ret = tpm_test_call_with_backoff_array(&ctx, success_thunk, NULL, NULL,
+					       NULL, 0);
+	if (ret != 0 || !tpm_is_locked_out(&ctx) ||
+	    ctx.lockout_first_seen != 1000) {
+		tpm_test_reset_prop_reader();
+		FAIL("flag cleared while the TPM reports inLockout");
+		return;
+	}
+
+	g_mock_permanent = 0;
+	ret = tpm_test_call_with_backoff_array(&ctx, success_thunk, NULL, NULL,
+					       NULL, 0);
+	tpm_test_reset_prop_reader();
+	if (ret != 0 || tpm_is_locked_out(&ctx) ||
+	    ctx.lockout_first_seen != 0) {
+		FAIL("flag kept after the TPM left lockout");
+		return;
+	}
+
+	PASS();
+}
+
 /*
  * Boot-time self_hash buffer round-trip.
  *
@@ -1813,6 +1865,7 @@ int main(void)
 	test_rc_nv_space();
 	test_rc_tcti_layer();
 	test_lockout_flag_lifecycle();
+	test_lockout_survives_auth_free_success();
 	test_self_hash_pin_round_trip();
 	test_tpm_strerror_maps_lota_private();
 	test_clock_state_save_load_round_trip();

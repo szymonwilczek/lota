@@ -318,8 +318,8 @@ struct tpm_context {
 	 * that was clear, lockout_first_seen, and counts in
 	 * lockout_event_count.
 	 * A successful tpm_call_with_backoff() or TPM_CALL_RETRY clears the
-	 * first two, an auth-free call on a TPM still locked out among them;
-	 * so does tpm_reset_lockout_state().
+	 * first two when TPM_PT_PERMANENT then reads without inLockout;
+	 * tpm_reset_lockout_state() clears them without asking the TPM.
 	 * Neither touches the count. tpm_init() zeroes all three.
 	 */
 	bool lockout_active;
@@ -1019,8 +1019,9 @@ int tpm_read_event_log(uint8_t *buf, size_t buf_size, size_t *out_size);
  * @ctx: TPM context.
  *
  * Return: true after TPM2_RC_LOCKOUT until a successful
- * tpm_call_with_backoff() or TPM_CALL_RETRY, or tpm_reset_lockout_state();
- * the TPM can still be locked out when it reads false.
+ * tpm_call_with_backoff() or TPM_CALL_RETRY finds inLockout clear,
+ * or tpm_reset_lockout_state(); the TPM can still be locked out when
+ * it reads false.
  */
 bool tpm_is_locked_out(const struct tpm_context *ctx);
 

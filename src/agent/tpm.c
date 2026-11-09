@@ -255,12 +255,24 @@ static void tpm_record_lockout(struct tpm_context *ctx)
 	}
 }
 
+/*
+ * A call that needs no DA-protected authorization succeeds in lockout, so ask
+ * the TPM before clearing. The flag is down during the read, which goes
+ * through tpm_call_with_backoff() and so back here.
+ */
 static void tpm_clear_lockout(struct tpm_context *ctx)
 {
+	uint32_t perm = 0;
+
 	if (!ctx || !ctx->lockout_active)
 		return;
 
 	ctx->lockout_active = false;
+	if (tpm_read_prop(ctx, TPM2_PT_PERMANENT, &perm) != 0 ||
+	    (perm & TPMA_PERMANENT_INLOCKOUT)) {
+		ctx->lockout_active = true;
+		return;
+	}
 	ctx->lockout_first_seen = 0;
 }
 
