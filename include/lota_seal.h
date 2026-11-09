@@ -54,16 +54,16 @@ extern "C" {
 #define LOTA_SEAL_BOOT_COMMITMENT_PCR 14u
 
 /*
- * Default PCR set: PCRs 0-7, the firmware and boot-path measurements, Secure
- * Boot included. A change in any of them invalidates the seal, and on a shim
- * and GRUB host PCR 4 holds the kernel image, so a kernel upgrade does. A
- * powered-off disk in someone else's hands unseals nothing: the blob loads only
- * under this TPM's primary key.
+ * Default PCR set: PCRs 0, 1 and 7, the firmware code, its configuration and
+ * the Secure Boot state. A change in any of them invalidates the seal. PCR 4,
+ * which holds the kernel image on a shim and GRUB host, is left out, so a
+ * kernel upgrade does not. A powered-off disk in someone else's hands unseals
+ * nothing: the blob loads only under this TPM's primary key.
  *
  * PCR 14 is left out: it moves when the agent is updated, so binding it would
  * cost every sealed secret on the host at every upgrade.
  */
-#define LOTA_SEAL_DEFAULT_PCR_MASK 0xFFu
+#define LOTA_SEAL_DEFAULT_PCR_MASK 0x83u
 
 /*
  * The default set plus PCR 14, the agent's boot commitment. This binds a boot

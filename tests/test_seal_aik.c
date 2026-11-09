@@ -531,14 +531,14 @@ static void test_mask_selection_default(void)
 	uint8_t sel[3];
 	uint32_t count = 0;
 
-	TEST("mask->selection: default mask sets PCR 0-7 and not PCR14");
+	TEST("mask->selection: default mask sets PCR 0, 1, 7 and not PCR14");
 	if (tpm_test_pcr_mask_to_selection(LOTA_SEAL_DEFAULT_PCR_MASK, sel,
 					   &count) != 0) {
 		FAIL("call");
 		return;
 	}
-	/* PCR 0-7 -> byte0 = 0xFF; nothing above, so byte1 and byte2 stay 0 */
-	if (count != 1 || sel[0] != 0xFF || sel[1] != 0x00 || sel[2] != 0x00) {
+	/* PCR 0, 1, 7 -> byte0 = 0x83; byte1 and byte2 stay 0 */
+	if (count != 1 || sel[0] != 0x83 || sel[1] != 0x00 || sel[2] != 0x00) {
 		FAIL("bitmap mismatch");
 		return;
 	}
@@ -555,14 +555,14 @@ static void test_mask_selection_agent_bound(void)
 	uint8_t sel[3];
 	uint32_t count = 0;
 
-	TEST("mask->selection: agent-bound mask adds PCR14 to PCR 0-7");
+	TEST("mask->selection: agent-bound mask adds PCR14 to PCR 0, 1, 7");
 	if (tpm_test_pcr_mask_to_selection(LOTA_SEAL_AGENT_BOUND_PCR_MASK, sel,
 					   &count) != 0) {
 		FAIL("call");
 		return;
 	}
-	/* PCR 0-7 -> byte0 = 0xFF; PCR14 -> byte1 bit6 = 0x40; byte2 = 0 */
-	if (count != 1 || sel[0] != 0xFF || sel[1] != 0x40 || sel[2] != 0x00) {
+	/* PCR 0, 1, 7 -> byte0 = 0x83; PCR14 -> byte1 bit6 = 0x40; byte2 = 0 */
+	if (count != 1 || sel[0] != 0x83 || sel[1] != 0x40 || sel[2] != 0x00) {
 		FAIL("bitmap mismatch");
 		return;
 	}
