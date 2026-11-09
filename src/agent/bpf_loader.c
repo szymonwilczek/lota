@@ -2008,21 +2008,24 @@ int bpf_loader_pin_mapped_object(struct bpf_loader_ctx *ctx, const char *path,
 		ret = pin_record(ctx, slot.dev, slot.ino);
 		if (ret < 0)
 			return ret;
-		*guarded = 1;
-		return 0;
 	}
 
 	/* not provably the mapped bytes: leave unmeasured */
 	if (slot.seen != LOTA_EXE_MAP_SEEN_OK) {
-		lota_dbg("mapped object not pinned: %s (%s)", path,
+		lota_dbg("mapped object not guarded: %s (%s)", path,
 			 slot.seen == LOTA_EXE_MAP_SEEN_CHANGED ?
 				 "written since it was mapped" :
 				 "no record of it being mapped");
 		return 0;
 	}
 	if (slot.writers > 0) {
-		lota_dbg("mapped object not pinned: %s (%u writer%s)", path,
+		lota_dbg("mapped object not guarded: %s (%u writer%s)", path,
 			 slot.writers, slot.writers == 1 ? "" : "s");
+		return 0;
+	}
+
+	if (slot.guard) {
+		*guarded = 1;
 		return 0;
 	}
 

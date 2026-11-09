@@ -1314,7 +1314,8 @@ $(BUILD_DIR)/test_bpf_loader_open_fails_closed: TEST_LDLIBS += \
 	-Wl,--wrap=ring_buffer__new \
 	-Wl,--wrap=bpf_map_get_next_key \
 	-Wl,--wrap=bpf_map_lookup_elem \
-	-Wl,--wrap=bpf_map_delete_elem
+	-Wl,--wrap=bpf_map_delete_elem \
+	-Wl,--wrap=bpf_map_update_elem
 
 $(BUILD_DIR)/test_bpf_object_preflight: TEST_LDLIBS += -Wl,--wrap=policy_verify_buffer
 

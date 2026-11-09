@@ -106,9 +106,9 @@ int bpf_loader_hash_file(struct bpf_loader_ctx *ctx, const char *path,
  * @expect_ino: st_ino the open must resolve to.
  * @guarded: Set to 1 when the file is pinned and may be measured, 0 otherwise.
  *
- * Pins the inode of this open. @guarded stays 0 when the file has no mapping
- * record, changed since it was mapped, or is open for writing. Held until a
- * bpf_loader_pin_sweep() misses it.
+ * Pins the inode of this open. A file with no mapping record, changed since it
+ * was mapped, or open for writing leaves @guarded 0: no pin is set, and one an
+ * earlier round set stays. Held until a bpf_loader_pin_sweep() misses it.
  *
  * Return: 0 or a negative errno.
  */
