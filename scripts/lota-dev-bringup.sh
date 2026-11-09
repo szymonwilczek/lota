@@ -156,7 +156,10 @@ else
     warn "fsverity utility not installed; install fsverity-utils and re-run"
 fi
 
-if grep -qE 'ima_appraise=enforce' /proc/cmdline 2>/dev/null; then
+# the kernel keeps the last one
+ima_mode=$({ grep -oE '(^| )ima_appraise=[^ ]*' /proc/cmdline 2>/dev/null ||
+    true; } | tail -n 1 | sed 's/^ *ima_appraise=//')
+if [[ "$ima_mode" == enforce ]]; then
     info "IMA appraisal already in an enforcing mode"
 else
     warn "kernel cmdline lacks ima_appraise=enforce; the agent will"

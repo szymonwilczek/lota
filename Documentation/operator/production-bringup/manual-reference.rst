@@ -115,8 +115,9 @@ signature-type ``security.ima`` xattr.
 3. IMA appraisal policy
 =======================
 
-The agent parses ``/proc/cmdline`` and refuses to start unless
-``ima_appraise=enforce`` (block on integrity failure) is present.
+The agent parses ``/proc/cmdline`` and refuses to start unless the last
+``ima_appraise=`` on it, the one the kernel keeps, is ``enforce`` (block on
+integrity failure).
 ``ima_appraise=fix`` writes missing xattrs and lets the access through, and
 ``log`` and ``off`` do not block either, so none of them satisfies the
 kernel floor.

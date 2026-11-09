@@ -81,6 +81,26 @@ static void test_mode_fix_is_refused(void)
 		PASS();
 }
 
+static void test_last_mode_decides(void)
+{
+	TEST("the last ima_appraise= decides the mode");
+
+	write_file(policy_path, policy_appraises_exec);
+
+	write_file(cmdline_path, "ro ima_appraise=enforce ima_appraise=off\n");
+	if (bpf_loader_ima_appraisal_active(cmdline_path, policy_path, 0) ==
+	    0) {
+		FAIL("enforce then off passed the gate");
+		return;
+	}
+
+	write_file(cmdline_path, "ro ima_appraise=off ima_appraise=enforce\n");
+	if (bpf_loader_ima_appraisal_active(cmdline_path, policy_path, 0) != 0)
+		FAIL("off then enforce was refused");
+	else
+		PASS();
+}
+
 static void test_mode_absent_is_refused(void)
 {
 	TEST("no ima_appraise= at all is refused");
@@ -295,6 +315,7 @@ int main(void)
 
 	test_mode_off_is_refused();
 	test_mode_fix_is_refused();
+	test_last_mode_decides();
 	test_mode_absent_is_refused();
 	test_blocking_mode_with_empty_scope_is_refused();
 	test_blocking_mode_with_exec_scope_passes();

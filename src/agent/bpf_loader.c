@@ -448,6 +448,7 @@ int bpf_loader_ima_appraisal_active(const char *cmdline_path,
 {
 	char buf[4096];
 	size_t len = 0;
+	const char *val = NULL;
 	char *tok;
 	char *save = NULL;
 	int read_err = 0;
@@ -472,25 +473,22 @@ int bpf_loader_ima_appraisal_active(const char *cmdline_path,
 	if (buf[len - 1] == '\n')
 		buf[len - 1] = '\0';
 
+	/* the kernel keeps the last one */
 	for (tok = strtok_r(buf, " \t", &save); tok;
 	     tok = strtok_r(NULL, " \t", &save)) {
-		const char *val;
-
-		if (strncmp(tok, "ima_appraise=", 13) != 0)
-			continue;
-		val = tok + 13;
-		if (strcmp(val, "enforce") != 0)
-			return -EPERM;
-
-		ret = ima_policy_appraises_exec(policy_path, &read_err);
-		if (ret == -EACCES)
-			/* debug, not warn: asked every round */
-			lota_dbg("IMA appraisal mode is %s but %s could not "
-				 "be read (%s), so the scope is unknown",
-				 val, policy_path, strerror(-read_err));
-		return ret;
+		if (strncmp(tok, "ima_appraise=", 13) == 0)
+			val = tok + 13;
 	}
-	return -EPERM;
+	if (!val || strcmp(val, "enforce") != 0)
+		return -EPERM;
+
+	ret = ima_policy_appraises_exec(policy_path, &read_err);
+	if (ret == -EACCES)
+		/* debug, not warn: asked every round */
+		lota_dbg("IMA appraisal mode is %s but %s could not "
+			 "be read (%s), so the scope is unknown",
+			 val, policy_path, strerror(-read_err));
+	return ret;
 }
 
 int bpf_loader_kernel_module_sig_enforced(const char *sig_enforce_path)
