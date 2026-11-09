@@ -137,16 +137,7 @@ static int ipc_request_terminate_protected(uint32_t pid, uint32_t sig,
 
 	if (resp.result != LOTA_IPC_OK) {
 		close(fd);
-		switch (resp.result) {
-		case LOTA_IPC_ERR_NOT_PROTECTED:
-			return -EINVAL;
-		case LOTA_IPC_ERR_TARGET_REFUSED:
-			return -EPERM;
-		case LOTA_IPC_ERR_BAD_REQUEST:
-			return -ESRCH;
-		default:
-			return -EACCES;
-		}
+		return terminate_result_errno(resp.result);
 	}
 
 	if (resp.payload_len != sizeof(body)) {
@@ -260,6 +251,13 @@ int diagnostics_dispatch(struct cli_options *opts, struct lota_config *cfg)
 			fprintf(stderr,
 				"The agent refused to end PID %u: it belongs "
 				"to another user, so ending it needs root. Its "
+				"journal names the reason.\n",
+				opts->terminate_protected_pid);
+			return 1;
+		}
+		if (tret == -EIO) {
+			fprintf(stderr,
+				"The agent could not signal PID %u. Its "
 				"journal names the reason.\n",
 				opts->terminate_protected_pid);
 			return 1;

@@ -8,6 +8,7 @@
  * Copyright (C) 2026 Szymon Wilczek
  */
 
+#include <errno.h>
 #include <stdio.h>
 #include <string.h>
 
@@ -19,6 +20,27 @@ int main(void)
 	char buf[256];
 
 	printf("=== what --terminate-protected reports ===\n\n");
+
+	TEST("each refusal maps to its own errno");
+	if (terminate_result_errno(LOTA_IPC_ERR_NOT_PROTECTED) == -EINVAL &&
+	    terminate_result_errno(LOTA_IPC_ERR_TARGET_REFUSED) == -EPERM &&
+	    terminate_result_errno(LOTA_IPC_ERR_BAD_REQUEST) == -ESRCH &&
+	    terminate_result_errno(LOTA_IPC_ERR_ACCESS_DENIED) == -EACCES)
+		PASS();
+	else
+		FAIL("a refusal is mapped to another one's errno");
+
+	TEST("a signal that failed in the agent is not an ownership refusal");
+	if (terminate_result_errno(LOTA_IPC_ERR_INTERNAL) == -EIO)
+		PASS();
+	else
+		FAIL("LOTA_IPC_ERR_INTERNAL is not -EIO");
+
+	TEST("a code the verb does not answer with is a protocol error");
+	if (terminate_result_errno(LOTA_IPC_ERR_RATE_LIMITED) == -EPROTO)
+		PASS();
+	else
+		FAIL("an unexpected code is read as a refusal");
 
 	TEST("ending the only protected process claims no other");
 	terminate_sent_message(14418, false, 0, buf, sizeof(buf));
