@@ -507,6 +507,97 @@ static void test_bus_words_agree_on_a_real_bus(void)
 		PASS();
 }
 
+struct introspect_reply {
+	bool done;
+	char *xml;
+};
+
+static int on_introspect_reply(sd_bus_message *m, void *userdata,
+			       sd_bus_error *error)
+{
+	struct introspect_reply *reply = userdata;
+	const char *xml = NULL;
+
+	(void)error;
+	reply->done = true;
+	if (!sd_bus_message_is_method_error(m, NULL) &&
+	    sd_bus_message_read(m, "s", &xml) >= 0 && xml)
+		reply->xml = strdup(xml);
+	return 0;
+}
+
+/*
+ * sd-bus refuses a method without SD_BUS_VTABLE_UNPRIVILEGED to a caller
+ * of another uid without CAP_SYS_ADMIN, and marks it in the introspection
+ * data with the org.freedesktop.systemd1.Privileged annotation.
+ */
+static void test_get_token_answers_the_lota_group(void)
+{
+	struct introspect_reply reply = { 0 };
+	struct dbus_context *ctx;
+	sd_bus *client = NULL;
+	char *method = NULL;
+	char *end = NULL;
+	int ret;
+
+	TEST("GetToken is not marked privileged on the bus");
+
+	if (private_bus_start() < 0) {
+		printf("SKIP (no dbus-daemon)\n");
+		tests_passed++;
+		return;
+	}
+
+	ret = sd_bus_open_system(&client);
+	if (ret < 0) {
+		private_bus_stop();
+		printf("SKIP (cannot open the private bus)\n");
+		tests_passed++;
+		return;
+	}
+
+	ctx = dbus_init(&test_ipc);
+	if (!ctx) {
+		sd_bus_flush_close_unref(client);
+		private_bus_stop();
+		FAIL("cannot register the agent on the private bus");
+		return;
+	}
+
+	ret = sd_bus_call_method_async(client, NULL, LOTA_DBUS_BUS_NAME,
+				       LOTA_DBUS_OBJECT_PATH,
+				       "org.freedesktop.DBus.Introspectable",
+				       "Introspect", on_introspect_reply,
+				       &reply, "");
+
+	for (int i = 0; ret >= 0 && i < 200 && !reply.done; i++) {
+		dbus_process(ctx, 0);
+		if (sd_bus_process(client, NULL) > 0)
+			continue;
+		sd_bus_wait(client, 10 * 1000);
+	}
+
+	dbus_cleanup(ctx);
+	sd_bus_flush_close_unref(client);
+	private_bus_stop();
+
+	if (reply.xml)
+		method = strstr(reply.xml, "<method name=\"GetToken\">");
+	if (method)
+		end = strstr(method, "</method>");
+
+	if (!end)
+		FAIL("introspection does not describe GetToken");
+	else if (memmem(method, (size_t)(end - method),
+			"org.freedesktop.systemd1.Privileged",
+			strlen("org.freedesktop.systemd1.Privileged")))
+		FAIL("GetToken answers root only");
+	else
+		PASS();
+
+	free(reply.xml);
+}
+
 int main(void)
 {
 	printf("=== LOTA D-Bus Unit Tests ===\n\n");
@@ -527,6 +618,7 @@ int main(void)
 	test_init_system_bus();
 	test_signal_reaches_a_real_bus();
 	test_bus_words_agree_on_a_real_bus();
+	test_get_token_answers_the_lota_group();
 	test_double_cleanup();
 
 	printf("\n=== Results: %d/%d passed ===\n", tests_passed, tests_run);
