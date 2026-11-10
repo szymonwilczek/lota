@@ -1355,37 +1355,6 @@ void config_dump(const struct lota_config *cfg, FILE *fp)
 	}
 }
 
-/*
- * Counts every `[profile` in @text into *out_count, comments included.
- * Returns 1 when one is labelled @name, else 0.
- */
-static int profile_section_scan(const char *text, const char *name,
-				int *out_count)
-{
-	const char *p = text;
-	int count = 0;
-	int found = 0;
-
-	while ((p = strstr(p, "[profile")) != NULL) {
-		const char *q = strchr(p, '"');
-		const char *r = q ? strchr(q + 1, '"') : NULL;
-
-		count++;
-		if (q && r && name) {
-			size_t len = (size_t)(r - q - 1);
-
-			if (len == strlen(name) &&
-			    strncmp(q + 1, name, len) == 0)
-				found = 1;
-		}
-		p += 8;
-	}
-
-	if (out_count)
-		*out_count = count;
-	return found;
-}
-
 static int profile_section_render(const struct lota_profile *p, char *buf,
 				  size_t cap)
 {
@@ -1442,14 +1411,15 @@ static int profile_section_render(const struct lota_profile *p, char *buf,
 	return n;
 }
 
-int config_profile_append_text(const char *existing,
+static int profile_append_text(const char *label, const char *existing,
 			       const struct lota_profile *p, char *out,
 			       size_t out_cap)
 {
+	struct lota_config *cur;
 	char section[1024];
 	size_t existing_len;
-	int count = 0;
 	int rendered;
+	int ret;
 
 	if (!existing || !p || !out || out_cap == 0)
 		return -EINVAL;
@@ -1465,42 +1435,68 @@ int config_profile_append_text(const char *existing,
 		}
 	}
 
-	/*
-	 * "ca_cert = <path>" as a substring of the text counts as the publisher
-	 * being present, under any label: a second section with the anchor
-	 * would resolve to the same profile directory.
-	 */
-	{
-		char probe[PATH_MAX + 64];
-		int n = snprintf(probe, sizeof(probe), "ca_cert = %s",
-				 p->ca_cert);
+	existing_len = strlen(existing);
+	cur = config_new();
+	if (!cur)
+		return -ENOMEM;
+	if (existing_len > 0) {
+		FILE *f = fmemopen((void *)existing, existing_len, "r");
 
-		if (n > 0 && (size_t)n < sizeof(probe) &&
-		    strstr(existing, probe) != NULL) {
-			if (strlen(existing) >= out_cap)
-				return -EOVERFLOW;
-			memcpy(out, existing, strlen(existing) + 1);
-			return 0;
+		if (!f) {
+			ret = -errno;
+			config_free(cur);
+			return ret;
+		}
+		ret = config_load_stream(cur, f, label);
+		fclose(f);
+		if (ret < 0) {
+			config_free(cur);
+			return -EBADMSG;
 		}
 	}
 
-	if (profile_section_scan(existing, p->name, &count))
-		return -EEXIST;
+	/*
+	 * A second section with the same ca_cert would resolve to the same
+	 * profile directory, so the publisher counts as present under any
+	 * label.
+	 */
+	ret = 1;
+	for (int i = 0; i < cur->profile_count && ret == 1; i++)
+		if (strcmp(cur->profiles[i].ca_cert, p->ca_cert) == 0)
+			ret = 0;
+	for (int i = 0; i < cur->profile_count && ret == 1; i++)
+		if (strcmp(cur->profiles[i].name, p->name) == 0)
+			ret = -EEXIST;
+	if (ret == 1 && cur->profile_count >= LOTA_CONFIG_MAX_PROFILES)
+		ret = -E2BIG;
+	config_free(cur);
 
-	if (count >= LOTA_CONFIG_MAX_PROFILES)
-		return -E2BIG;
+	if (ret == 0) {
+		if (existing_len >= out_cap)
+			return -EOVERFLOW;
+		memcpy(out, existing, existing_len + 1);
+		return 0;
+	}
+	if (ret < 0)
+		return ret;
 
 	rendered = profile_section_render(p, section, sizeof(section));
 	if (rendered < 0)
 		return rendered;
 
-	existing_len = strlen(existing);
 	if (existing_len + (size_t)rendered + 1 > out_cap)
 		return -EOVERFLOW;
 
 	memcpy(out, existing, existing_len);
 	memcpy(out + existing_len, section, (size_t)rendered + 1);
 	return 1;
+}
+
+int config_profile_append_text(const char *existing,
+			       const struct lota_profile *p, char *out,
+			       size_t out_cap)
+{
+	return profile_append_text("(text)", existing, p, out, out_cap);
 }
 
 int config_profile_append(const char *path, const struct lota_profile *p)
@@ -1536,7 +1532,7 @@ int config_profile_append(const char *path, const struct lota_profile *p)
 		return -ENOMEM;
 	}
 
-	ret = config_profile_append_text(existing, p, updated, cap);
+	ret = profile_append_text(path, existing, p, updated, cap);
 	free(existing);
 	if (ret <= 0) {
 		free(updated);

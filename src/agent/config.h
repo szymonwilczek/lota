@@ -293,14 +293,14 @@ int config_profile_defect(const struct lota_profile *p, char *why,
  * @out: Receives @existing unchanged, then the section.
  * @out_cap: Size of @out.
  *
- * @existing is searched as plain text, so a comment counts, and for the ca_cert
- * so do a top-level key and a longer path starting with @p's.
+ * @existing is read with the configuration parser; the profiles it yields are
+ * the ones compared against @p.
  *
  * Return: 1 when the section was appended; 0, with @out holding @existing, when
- * "ca_cert = " and @p's path occur in the text; -EEXIST when "[profile" with
- * the quoted label occurs; -E2BIG when "[profile" occurs
- * LOTA_CONFIG_MAX_PROFILES times or more; -EOVERFLOW when the section or the
- * result does not fit; or the errors of config_profile_defect().
+ * a profile has @p's ca_cert; -EEXIST when a profile has @p's name; -E2BIG
+ * when @existing holds LOTA_CONFIG_MAX_PROFILES profiles; -EBADMSG when
+ * @existing does not parse; -EOVERFLOW when the section or the result does not
+ * fit; -ENOMEM; or the errors of config_profile_defect().
  */
 int config_profile_append_text(const char *existing,
 			       const struct lota_profile *p, char *out,
@@ -313,8 +313,8 @@ int config_profile_append_text(const char *existing,
  *
  * Writes @path.new, reads it back with config_load() and renames it into place.
  *
- * Return: as config_profile_append_text(); -EBADMSG when the read-back fails,
- * with @path untouched; or another negative errno.
+ * Return: as config_profile_append_text(); -EBADMSG also when the read-back
+ * fails, with @path untouched; or another negative errno.
  */
 int config_profile_append(const char *path, const struct lota_profile *p);
 

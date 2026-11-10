@@ -246,6 +246,98 @@ int main(void)
 	}
 
 	{
+		/* the file is read the way the agent reads it: only a parsed
+		 * profile names a publisher or takes a slot */
+		const char *bases[] = {
+			"[profile \"old\"]\nca = ca.old.example\n"
+			"ca_cert = /etc/lota/studio-a.pem.old\n"
+			"verifier = v.old.example\n",
+			"# ca_cert = /etc/lota/studio-a.pem\n",
+			"ca_cert = /etc/lota/studio-a.pem\n",
+			"# [profile \"studio-a\"]\n",
+		};
+		static const char *const what[] = {
+			"a longer anchor path is another publisher",
+			"a commented ca_cert is no publisher",
+			"the top-level ca_cert is no publisher",
+			"a commented section takes no name or slot",
+		};
+		char acc[16384];
+		char next[16384];
+		size_t i;
+		int n;
+
+		for (i = 0; i < sizeof(bases) / sizeof(bases[0]); i++) {
+			rc = config_profile_append_text(bases[i], &p, out,
+							sizeof(out));
+			CHECK(rc == 1 && loads_back(out) == 0, what[i]);
+		}
+
+		rc = config_profile_append_text(
+			"[profile \"other\"]\nca=ca.other.example\n"
+			"ca_cert=/etc/lota/studio-a.pem\nverifier=v.example\n",
+			&p, out, sizeof(out));
+		CHECK(rc == 0, "ca_cert= with no spaces names the publisher");
+
+		rc = config_profile_append_text(
+			"[ profile \"studio-a\"]\nca = ca.other.example\n"
+			"ca_cert = /etc/lota/other.pem\nverifier = v.example\n",
+			&p, out, sizeof(out));
+		CHECK(rc == -EEXIST,
+		      "a spaced header still holds the publisher's name");
+
+		acc[0] = '\0';
+		for (n = 0; n < LOTA_CONFIG_MAX_PROFILES; n++) {
+			size_t len = strlen(acc);
+
+			snprintf(acc + len, sizeof(acc) - len,
+				 "[ profile \"p%d\"]\nca = ca.example\n"
+				 "ca_cert = /etc/lota/p%d.pem\n"
+				 "verifier = v.example\n",
+				 n, n);
+		}
+		rc = config_profile_append_text(acc, &p, out, sizeof(out));
+		CHECK(rc == -E2BIG, "spaced headers count toward the cap");
+
+		rc = config_profile_append_text("not a key line\n", &p, out,
+						sizeof(out));
+		CHECK(rc == -EBADMSG, "a text that does not parse is refused");
+
+		/* the shipped example: its commented sections are not
+		 * profiles */
+		{
+			FILE *f = fopen("configs/lota.conf.example", "re");
+			size_t len = 0;
+
+			CHECK(f != NULL, "the example configuration is read");
+			if (f) {
+				len = fread(acc, 1, sizeof(acc) - 1, f);
+				fclose(f);
+			}
+			acc[len] = '\0';
+			for (n = 0; n < 3; n++) {
+				char nm[32];
+				char anchor[64];
+				struct lota_profile e;
+
+				snprintf(nm, sizeof(nm), "publisher-%c",
+					 'a' + n);
+				snprintf(anchor, sizeof(anchor),
+					 "/etc/lota/own-%d.pem", n);
+				e = mkprofile(nm, "ca.example", anchor,
+					      "v.example");
+				rc = config_profile_append_text(acc, &e, next,
+								sizeof(next));
+				if (rc != 1)
+					break;
+				snprintf(acc, sizeof(acc), "%s", next);
+			}
+			CHECK(n == 3 && loads_back(acc) == 0,
+			      "three publishers are added to the example");
+		}
+	}
+
+	{
 		char small[64];
 
 		rc = config_profile_append_text("attest_interval = 60\n", &p,
