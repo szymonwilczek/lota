@@ -20,9 +20,52 @@
 #include <stdbool.h>
 
 #include "test.h"
+#include "../src/agent/agent.h"
 #include "../src/agent/attest.h"
+#include "../src/agent/cli.h"
 #include "../src/agent/config.h"
+#include "../src/agent/journal.h"
+#include "../src/agent/main_utils.h"
 #include "../src/agent/policy_pubkey.h"
+#include "../src/agent/tpm.h"
+
+/* What cli.c reaches outside the parser */
+struct agent_globals g_agent;
+
+void journal_set_level(int priority)
+{
+	(void)priority;
+}
+
+int parse_mode(const char *mode_str)
+{
+	if (mode_str && strcmp(mode_str, "enforce") == 0)
+		return LOTA_MODE_ENFORCE;
+	if (mode_str && strcmp(mode_str, "monitor") == 0)
+		return LOTA_MODE_MONITOR;
+	return -1;
+}
+
+void print_usage(const char *prog, const char *default_bpf_path,
+		 int default_verifier_port)
+{
+	(void)prog;
+	(void)default_bpf_path;
+	(void)default_verifier_port;
+}
+
+int tpm_set_kernel_path(struct tpm_context *ctx, const char *path)
+{
+	(void)ctx;
+	(void)path;
+	return 0;
+}
+
+const char *tpm_strerror(int err)
+{
+	(void)err;
+	return "stub";
+}
 
 static char tmpdir[64];
 
@@ -2485,6 +2528,65 @@ static void test_config_load_from_fd(void)
 	PASS();
 }
 
+static int cli_parse_argv(const char *const *args, int n,
+			  struct cli_options *opts, struct lota_config *cfg)
+{
+	char *argv[8];
+
+	for (int i = 0; i < n; i++)
+		argv[i] = (char *)args[i];
+	argv[n] = NULL;
+	config_init(cfg);
+	return cli_parse(n, argv, opts, cfg);
+}
+
+static void test_cli_config_spellings(void)
+{
+	struct cli_options opts;
+	struct lota_config *cfg;
+	char path[PATH_MAX];
+	char joined[PATH_MAX + 16];
+	char fused[PATH_MAX + 8];
+
+	TEST("every --config spelling getopt accepts loads that file");
+
+	write_config("cli_monitor.conf", "mode = monitor\n");
+	config_path("cli_monitor.conf", path, sizeof(path));
+	snprintf(joined, sizeof(joined), "--config=%s", path);
+	snprintf(fused, sizeof(fused), "-f%s", path);
+
+	const char *const forms[][3] = {
+		{ "lota-agent", "--config", path },
+		{ "lota-agent", joined, NULL },
+		{ "lota-agent", fused, NULL },
+		{ "lota-agent", "--conf", path },
+		{ "lota-agent", "-tf", path },
+	};
+
+	cfg = config_new();
+	if (!cfg) {
+		FAIL("out of memory");
+		return;
+	}
+	for (size_t i = 0; i < sizeof(forms) / sizeof(forms[0]); i++) {
+		int n = forms[i][2] ? 3 : 2;
+
+		if (cli_parse_argv(forms[i], n, &opts, cfg) != 0) {
+			FAIL(forms[i][1]);
+			config_free(cfg);
+			return;
+		}
+		if (strcmp(cfg->mode, "monitor") != 0 || !opts.config_path ||
+		    strcmp(opts.config_path, path) != 0) {
+			FAIL(forms[i][1]);
+			config_free(cfg);
+			return;
+		}
+	}
+	config_free(cfg);
+	PASS();
+}
+
 int main(void)
 {
 	printf("=== LOTA Config Parser Tests ===\n\n");
@@ -2550,6 +2652,7 @@ int main(void)
 		test_policy_pubkey_resolve,
 		test_config_load_mixed_comments,
 		test_config_load_from_fd,
+		test_cli_config_spellings,
 	};
 
 	for (size_t i = 0; i < sizeof(tests) / sizeof(tests[0]); i++)

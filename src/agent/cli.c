@@ -274,6 +274,8 @@ static int parse_attest_interval(const char *arg, int *interval)
 int cli_parse(int argc, char **argv, struct cli_options *opts,
 	      struct lota_config *cfg)
 {
+	static const char optstring[] =
+		"f:ZticSEaI:s:p:C:KF:b:m:MPJYXR:L:A:dD:G:g:V:k:Q:h";
 	int opt;
 
 	static struct option long_options[] = {
@@ -349,22 +351,22 @@ int cli_parse(int argc, char **argv, struct cli_options *opts,
 	 * the file loads first: the flags below overwrite its values and add to
 	 * its lists
 	 */
-	for (int i = 1; i < argc; i++) {
-		if ((strcmp(argv[i], "--config") == 0 ||
-		     strcmp(argv[i], "-f") == 0) &&
-		    i + 1 < argc) {
-			opts->config_path = argv[++i];
-		}
+	opterr = 0;
+	optind = 0;
+	while ((opt = getopt_long(argc, argv, optstring, long_options, NULL)) !=
+	       -1) {
+		if (opt == 'f')
+			opts->config_path = optarg;
 	}
+	opterr = 1;
+	optind = 0;
 
 	int rc = load_config_into_options(opts, cfg);
 	if (rc != 0)
 		return rc;
 
-	while ((opt = getopt_long(
-			argc, argv,
-			"f:ZticSEaI:s:p:C:KF:b:m:MPJYXR:L:A:dD:G:g:V:k:Q:h",
-			long_options, NULL)) != -1) {
+	while ((opt = getopt_long(argc, argv, optstring, long_options, NULL)) !=
+	       -1) {
 		switch (opt) {
 		case 't':
 			opts->test_tpm_flag = 1;
@@ -665,7 +667,6 @@ int cli_parse(int argc, char **argv, struct cli_options *opts,
 			opts->policy_pubkey_path = optarg;
 			break;
 		case 'f':
-			/* the pre-scan reads the two-argument spellings only */
 			break;
 		case 'Z':
 			opts->dump_config_flag = 1;
