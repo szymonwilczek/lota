@@ -4,8 +4,9 @@
 #
 # tests/integration/test_trust_pong_freeze_streak.sh
 #
-# trust_pong freezes after two consecutive UNTRUSTED verdicts, as its
-# overlay and both demo READMEs promise; one flaky verdict must not.
+# trust_pong freezes after two consecutive UNTRUSTED heartbeats, as its
+# overlay and both demo READMEs promise; one flaky heartbeat must not,
+# however often it is polled.
 # Driven through the binary: the rule lives in the render loop.
 #
 # Requires:
@@ -40,7 +41,8 @@ cleanup() {
 }
 trap cleanup EXIT
 
-# One verdict per /state request; the last one repeats once exhausted.
+# One "<state> <updated_at_unix>" line per /state request; the last one
+# repeats once exhausted. A new updated_at_unix is a new heartbeat.
 cat >"$WORK_DIR/verdict_server.py" <<'PY'
 import sys
 from http.server import BaseHTTPRequestHandler, HTTPServer
@@ -62,11 +64,13 @@ class Handler(BaseHTTPRequestHandler):
         if not self.path.startswith("/state"):
             self.send_error(404)
             return
-        state = states[len(served)] if len(served) < len(states) else states[-1]
-        served.append(state)
+        line = states[len(served)] if len(served) < len(states) else states[-1]
+        state, at = line.split()
+        served.append(line)
         with open(sys.argv[2], "a") as log:
-            log.write(state + "\n")
-        self._json('{"state":"%s","license":"lota-demo-CS2-clone"}' % state)
+            log.write(line + "\n")
+        self._json('{"state":"%s","license":"lota-demo-CS2-clone",'
+                   '"updated_at_unix":%s}' % (state, at))
 
     def do_POST(self):
         # refuse the nonce handshake; the client stays OFFLINE and polls
@@ -118,7 +122,8 @@ served_count() { grep -c . "$WORK_DIR/$1/served"; }
 freeze_line() { grep 'session terminated after' "$WORK_DIR/$1/stderr"; }
 
 # one UNTRUSTED between TRUSTED ones: absorbed
-run_case one-untrusted 8 TRUSTED TRUSTED UNTRUSTED TRUSTED TRUSTED TRUSTED
+run_case one-untrusted 8 "TRUSTED 1" "TRUSTED 2" "UNTRUSTED 3" "TRUSTED 4" \
+         "TRUSTED 5" "TRUSTED 6"
 if [[ $(served_count one-untrusted) -lt 4 ]]; then
     echo "[trust-pong] one-untrusted: the client asked for $(served_count one-untrusted) verdicts, too few to judge" >&2
     failures=$((failures + 1))
@@ -130,8 +135,22 @@ else
     echo "[trust-pong] ok: one UNTRUSTED response leaves the session running"
 fi
 
+# one UNTRUSTED heartbeat polled again and again: absorbed
+run_case one-heartbeat 8 "TRUSTED 1" "UNTRUSTED 2"
+if [[ $(served_count one-heartbeat) -lt 4 ]]; then
+    echo "[trust-pong] one-heartbeat: too few polls to judge" >&2
+    failures=$((failures + 1))
+elif freeze_line one-heartbeat >/dev/null; then
+    echo "[trust-pong] FAIL: one UNTRUSTED heartbeat ended the session:" >&2
+    freeze_line one-heartbeat >&2
+    failures=$((failures + 1))
+else
+    echo "[trust-pong] ok: one UNTRUSTED heartbeat, polled again, is absorbed"
+fi
+
 # two in a row: session ends
-run_case two-untrusted 8 TRUSTED UNTRUSTED UNTRUSTED TRUSTED TRUSTED TRUSTED
+run_case two-untrusted 8 "TRUSTED 1" "UNTRUSTED 2" "UNTRUSTED 3" "TRUSTED 4" \
+         "TRUSTED 5" "TRUSTED 6"
 if ! freeze_line two-untrusted >/dev/null; then
     echo "[trust-pong] FAIL: two consecutive UNTRUSTED responses did not end the session" >&2
     sed -n '1,20p' "$WORK_DIR/two-untrusted/stderr" >&2

@@ -23,7 +23,7 @@ examples/demo/setup.sh and arms <demo-dir>/tamper.marker.
 
 While the marker is armed every heartbeat returns UNTRUSTED, so
 trust_pong flips its banner to red and (after two consecutive UNTRUSTED
-ticks) freezes the play field. Press Ctrl-C or send SIGTERM to disarm
+heartbeats) freezes the play field. Press Ctrl-C or send SIGTERM to disarm
 and restore the green TRUSTED state on the next heartbeat.
 EOF
 }
@@ -120,7 +120,7 @@ log "arming tamper marker"
 note "marker: $MARKER"
 : >"$MARKER"
 note "next heartbeat (cadence depends on demo_anticheat --interval) will return UNTRUSTED"
-note "trust_pong needs two consecutive UNTRUSTED ticks to freeze the play field"
+note "trust_pong freezes after two consecutive UNTRUSTED heartbeats"
 
 if [ -n "$HOLD_SEC" ]; then
     log "holding for ${HOLD_SEC}s, then auto-disarming"
