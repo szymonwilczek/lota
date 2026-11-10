@@ -229,11 +229,8 @@ int probe_esrt_system_firmware_present_at(const char *base);
  * probe_cmdline_ima_ok() - Whether a cmdline leaves ima_appraise=enforce.
  * @cmdline: kernel command line.
  *
- * The last ima_appraise= token decides; with none the kernel keeps its
- * default, enforce.
- *
- * Return: 0 for enforce, -EPERM otherwise, -EINVAL for NULL,
- * -E2BIG for a cmdline of 4096 bytes or more.
+ * Return: 0 when lota_ima_cmdline_enforce() returns 1, -EPERM otherwise,
+ * -EINVAL for NULL.
  */
 int probe_cmdline_ima_ok(const char *cmdline);
 

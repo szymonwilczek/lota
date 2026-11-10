@@ -337,6 +337,49 @@ static void test_secure_boot_judge(void)
 		PASS();
 }
 
+/* each cmdline as the kernel splits and matches it */
+static void test_cmdline_mode_as_the_kernel_reads_it(void)
+{
+	static const struct {
+		const char *cmdline;
+		int enforce;
+	} cases[] = {
+		{ "ro quiet\n", 1 },
+		{ "ima_appraise=fix\n", 0 },
+		{ "ima_appraise=off -- ima_appraise=enforce", 0 },
+		{ "ima_appraise=enforce -- ima_appraise=fix", 1 },
+		{ "\"--\" ima_appraise=fix", 1 },
+		{ "--x ima_appraise=fix", 0 },
+		{ "ima_appraise=enforcex", 1 },
+		{ "ima_appraise=fixme", 0 },
+		{ "ima_appraise=bogus", 1 },
+		{ "ima_appraise=", 1 },
+		{ "ima-appraise=log", 0 },
+		{ "ima_appraise=\"fix\"", 0 },
+		{ "\"ima_appraise=off\"", 0 },
+		{ "x=\"a ima_appraise=fix b\"", 1 },
+		{ "ima_appraise_x=off", 1 },
+	};
+
+	TEST("the cmdline mode is read as the kernel reads it");
+	for (size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); i++) {
+		if (lota_ima_cmdline_enforce(cases[i].cmdline) !=
+		    cases[i].enforce) {
+			FAIL(cases[i].cmdline);
+			return;
+		}
+	}
+
+	write_file(policy_path, policy_appraises_exec);
+	write_file(cmdline_path,
+		   "ro ima_appraise=off -- ima_appraise=enforce\n");
+	if (bpf_loader_ima_appraisal_active(cmdline_path, policy_path, 0) !=
+	    -EPERM)
+		FAIL("an ima_appraise= past -- decided the gate");
+	else
+		PASS();
+}
+
 /* a raw BTF holding one int-returning function named @func */
 static int write_btf(const char *path, const char *func)
 {
@@ -419,6 +462,7 @@ int main(void)
 	test_rule_shapes();
 	test_secure_boot_judge();
 	test_appraise_built_from_btf();
+	test_cmdline_mode_as_the_kernel_reads_it();
 
 	unlink(cmdline_path);
 	unlink(policy_path);

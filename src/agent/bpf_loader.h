@@ -361,8 +361,8 @@ bool bpf_loader_integrity_config_satisfied(const struct integrity_data *cfg);
 
 /**
  * bpf_loader_ima_appraisal_active() - Do mode and policy appraise exec?
- * @cmdline_path: Kernel cmdline carrying ima_appraise=, the mode. With none
- *	the kernel keeps its default, enforce.
+ * @cmdline_path: Kernel cmdline, read by lota_ima_cmdline_enforce() for the
+ *	mode.
  * @policy_path: Loaded IMA policy carrying the func= rules, the scope.
  * @secureboot: Non-zero when this host booted with Secure Boot on. The kernel
  *	then keeps its built-in mode, enforce, and @cmdline_path is not read.

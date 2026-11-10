@@ -161,9 +161,46 @@ check "a re-run names the flag that would reset the state" \
 
 # the IMA policy step reads the loaded rules the way the agent does
 IMA_RUNTIME="$ROOT/sys/kernel/security/ima/policy"
-mkdir -p "$(dirname "$IMA_RUNTIME")"
-printf '%s\n' 'dont_appraise fsmagic=0x9fa0' \
-    'appraise func=POLICY_CHECK appraise_type=imasig' >"$IMA_RUNTIME"
+CMDLINE="$ROOT/proc/cmdline"
+EFIVARS="$ROOT/sys/firmware/efi/efivars"
+SB_VAR="$EFIVARS/SecureBoot-8be4df61-93ca-11d2-aa0d-00e098032b8c"
+MOK_VAR="$EFIVARS/MokSBStateRT-605dab50-e046-4300-abb6-3dd810dd8b23"
+mkdir -p "$(dirname "$IMA_RUNTIME")" "$(dirname "$CMDLINE")" "$EFIVARS"
+no_exec_rules() {
+    printf '%s\n' 'dont_appraise fsmagic=0x9fa0' \
+        'appraise func=POLICY_CHECK appraise_type=imasig' >"$IMA_RUNTIME"
+}
+loads_policy() {
+    local out
+    no_exec_rules
+    out=$(run_bringup) || true
+    says "$out" "loading IMA appraisal policy" &&
+        grep -q "^appraise func=BPRM_CHECK" "$IMA_RUNTIME"
+}
+refuses_policy() {
+    local out
+    no_exec_rules
+    out=$(run_bringup) || true
+    says "$out" "not loading" &&
+        ! grep -q "^appraise func=BPRM_CHECK" "$IMA_RUNTIME"
+}
+
+printf 'ro quiet\n' >"$CMDLINE"
+check "the default enforce does not get the shipped rules" refuses_policy
+printf 'ro ima_appraise=enforcex\n' >"$CMDLINE"
+check "an unknown ima_appraise= value is enforce" refuses_policy
+printf 'ro ima_appraise=off -- ima_appraise=fix\n' >"$CMDLINE"
+check "ima_appraise=off gets the shipped rules" loads_policy
+printf 'ro ima_appraise=enforce -- ima_appraise=fix\n' >"$CMDLINE"
+check "an ima_appraise= past -- does not count" refuses_policy
+printf 'ro ima_appraise=fix\n' >"$CMDLINE"
+printf '\x06\x00\x00\x00\x01' >"$SB_VAR"
+check "Secure Boot keeps enforce whatever ima_appraise= says" refuses_policy
+printf '\x06\x00\x00\x00\x01' >"$MOK_VAR"
+check "shim's insecure mode leaves ima_appraise= in force" loads_policy
+rm -f "$SB_VAR" "$MOK_VAR"
+
+no_exec_rules
 ima_out=$(run_bringup) || true
 check "dont_appraise and POLICY_CHECK alone get the shipped rules" \
     says "$ima_out" "loading IMA appraisal policy"

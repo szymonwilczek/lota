@@ -185,6 +185,16 @@ static void test_cmdline_ima(void)
 	}
 	PASS();
 
+	TEST("ima_appraise= past -- and unknown values read as in the kernel");
+	if (probe_cmdline_ima_ok("ima_appraise=off -- ima_appraise=enforce") !=
+		    -EPERM ||
+	    probe_cmdline_ima_ok("ima_appraise=enforcex") != 0 ||
+	    probe_cmdline_ima_ok("ima_appraise=fixme") != -EPERM) {
+		FAIL("the mode differs from the kernel's");
+		return;
+	}
+	PASS();
+
 	TEST("prefix tokens do not match (ima_appraise_x=off)");
 	if (probe_cmdline_ima_ok("ima_appraise_x=off") != 0) {
 		FAIL("prefix matched");

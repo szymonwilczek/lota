@@ -441,26 +441,9 @@ void probe_secureboot_guidance(int is_virtual, char *out, size_t cap)
 
 int probe_cmdline_ima_ok(const char *cmdline)
 {
-	char buf[4096];
-	const char *val = "enforce";
-	char *save = NULL;
-	char *tok;
-	size_t len;
-
 	if (!cmdline)
 		return -EINVAL;
-	len = strlen(cmdline);
-	if (len >= sizeof(buf))
-		return -E2BIG;
-	memcpy(buf, cmdline, len + 1);
-
-	/* the kernel keeps the last one; with none, its default enforce */
-	for (tok = strtok_r(buf, " \t", &save); tok;
-	     tok = strtok_r(NULL, " \t", &save)) {
-		if (strncmp(tok, "ima_appraise=", 13) == 0)
-			val = tok + 13;
-	}
-	return strcmp(val, "enforce") == 0 ? 0 : -EPERM;
+	return lota_ima_cmdline_enforce(cmdline) ? 0 : -EPERM;
 }
 
 static int rule_demands_signed_policy(const char *rule)

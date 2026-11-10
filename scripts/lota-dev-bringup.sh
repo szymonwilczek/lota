@@ -13,8 +13,8 @@
 #
 # Environment:
 #   LOTA_BRINGUP_ROOT
-#     Prefix the /etc, /usr, /var, /run and /sys paths with this directory, for
-#     tests; root is then not required. /proc/cmdline, systemd and the TPM are
+#     Prefix the /etc, /usr, /var, /run, /proc and /sys paths with this
+#     directory, for tests; root is then not required. systemd and the TPM are
 #     not redirected.
 
 set -euo pipefail
@@ -35,16 +35,16 @@ EOF
 do_reset=false
 for arg in "$@"; do
     case "$arg" in
-    --reset) do_reset=true ;;
-    -h | --help)
-        usage
-        exit 0
-        ;;
-    *)
-        echo "lota-dev-bringup: unknown option: $arg" >&2
-        usage >&2
-        exit 2
-        ;;
+        --reset) do_reset=true ;;
+        -h | --help)
+            usage
+            exit 0
+            ;;
+        *)
+            echo "lota-dev-bringup: unknown option: $arg" >&2
+            usage >&2
+            exit 2
+            ;;
     esac
 done
 
@@ -69,6 +69,10 @@ PID_FILE="$BRINGUP_ROOT/run/lota/lota-agent.pid"
 AGENT_HELD_BY=""
 IMA_POLICY_SRC="$(dirname "$0")/../configs/ima/lota-ima-policy"
 IMA_POLICY_RUNTIME="$BRINGUP_ROOT/sys/kernel/security/ima/policy"
+CMDLINE="$BRINGUP_ROOT/proc/cmdline"
+EFIVARS="$BRINGUP_ROOT/sys/firmware/efi/efivars"
+SB_VAR="SecureBoot-8be4df61-93ca-11d2-aa0d-00e098032b8c"
+MOK_VAR="MokSBStateRT-605dab50-e046-4300-abb6-3dd810dd8b23"
 
 info() { printf '[lota-dev-bringup] %s\n' "$*"; }
 warn() { printf '[lota-dev-bringup] WARN: %s\n' "$*" >&2; }
@@ -96,7 +100,7 @@ PROFILE_COUNT=$(read_define "$PROFILE_HEADER" LOTA_PROFILE_MAX_AIK_HANDLES)
 PROFILE_RANGE=""
 if [[ -n "$PROFILE_BASE" && -n "$PROFILE_COUNT" ]]; then
     PROFILE_RANGE=$(printf '%s-0x%08x' "$PROFILE_BASE" \
-        $((PROFILE_BASE + PROFILE_COUNT - 1)))
+                           $((PROFILE_BASE + PROFILE_COUNT - 1)))
 fi
 
 ensure_artifact "$AGENT_BIN"
@@ -113,8 +117,8 @@ else
 fi
 
 if [[ -f "$BPF_SIG" ]] && [[ -f "$POLICY_PUB" ]] &&
-    "$AGENT_BIN" --verify-policy "$BPF_OBJ" \
-        --policy-pubkey "$POLICY_PUB" >/dev/null 2>&1; then
+       "$AGENT_BIN" --verify-policy "$BPF_OBJ" \
+                    --policy-pubkey "$POLICY_PUB" >/dev/null 2>&1; then
     info "BPF object signature already valid, skipping --sign-policy"
 else
     info "signing $BPF_OBJ"
@@ -139,7 +143,7 @@ if ! grep -Eq "^[[:space:]]*policy_pubkey[[:space:]]*=" "$LOTA_CONF"; then
     # the agent refuses a group- or world-writable config
     rm -f "$LOTA_CONF.new"
     (umask 077 && awk -v key="policy_pubkey = $POLICY_PUB" \
-        -v note="# Added by lota-dev-bringup" '
+                      -v note="# Added by lota-dev-bringup" '
         !done && /^[[:space:]]*\[/ { print note; print key; print ""; done = 1 }
         { print }
         END { if (!done) { print ""; print note; print key } }
@@ -154,17 +158,64 @@ else
     info "policy_pubkey already configured, leaving $LOTA_CONF alone"
 fi
 
-# the kernel keeps the last one; with none, its default enforce
-ima_mode=$({ grep -oE '(^| )ima_appraise=[^ ]*' /proc/cmdline 2>/dev/null ||
-    true; } | tail -n 1 | sed 's/^ *ima_appraise=//')
-if [[ -z "$ima_mode" || "$ima_mode" == enforce ]]; then
-    info "IMA appraisal already in an enforcing mode"
+# an efivar as decimal bytes: 4 attribute bytes, then the value
+efivar_bytes() {
+    od -An -tu1 -v "$EFIVARS/$1" 2>/dev/null | tr -s ' \n' ' '
+}
+
+# bpf_loader_secure_boot_judge(): SecureBoot=1, shim not in insecure mode
+secure_boot_on() {
+    local -a sb mok
+    read -ra sb <<<"$(efivar_bytes "$SB_VAR")"
+    [[ ${#sb[@]} -ge 5 && ${sb[4]} -eq 1 ]] || return 1
+    read -ra mok <<<"$(efivar_bytes "$MOK_VAR")"
+    ! [[ ${#mok[@]} -ge 5 && $((mok[0] & 1)) -eq 0 && ${mok[4]} -eq 1 ]]
+}
+
+# the value lota_ima_cmdline_enforce() reads: the last ima_appraise= before --
+ima_cmdline_value() {
+    awk '{
+        s = $0; n = length(s); i = 1
+        while (i <= n) {
+            while (i <= n && substr(s, i, 1) ~ /[ \t\n]/) i++
+            if (i > n) break
+            lead = substr(s, i, 1) == "\""; q = lead; i += lead; start = i
+            while (i <= n) {
+                c = substr(s, i, 1)
+                if (!q && c ~ /[ \t\n]/) break
+                if (c == "\"") q = !q
+                i++
+            }
+            tok = substr(s, start, i - start)
+            if (lead && substr(tok, length(tok)) == "\"")
+                tok = substr(tok, 1, length(tok) - 1)
+            eq = index(tok, "=")
+            if (!eq && tok == "--") break
+            if (!eq) continue
+            name = substr(tok, 1, eq - 1); gsub(/-/, "_", name)
+            if (name != "ima_appraise") continue
+            val = substr(tok, eq + 1); sub(/^"/, "", val); set = 1
+        }
+    } END { if (set) print val }' "$CMDLINE" 2>/dev/null || true
+}
+
+if secure_boot_on; then
+    ima_mode=enforce
+    info "IMA appraisal in enforce: Secure Boot makes the kernel ignore"
+    info "ima_appraise="
 else
-    warn "kernel cmdline sets ima_appraise=$ima_mode; tokens will say"
-    warn "KERNEL_APPRAISAL is clear. fix and log do not block on"
-    warn "integrity failures"
-    warn "(enforce on a rootfs without IMA signatures blocks every exec;"
-    warn "see Documentation/operator/production-bringup/index.rst before using it)"
+    ima_value=$(ima_cmdline_value)
+    case "$ima_value" in
+        off* | log* | fix*) ima_mode=${ima_value:0:3} ;;
+        *) ima_mode=enforce ;;
+    esac
+    if [[ "$ima_mode" == enforce ]]; then
+        info "IMA appraisal in enforce"
+    else
+        warn "kernel cmdline sets ima_appraise=$ima_value; tokens will say"
+        warn "KERNEL_APPRAISAL is clear. $ima_mode does not block on"
+        warn "integrity failures"
+    fi
 fi
 
 # the agent's test: an appraise rule whose first func= is BPRM_CHECK, or none
@@ -183,6 +234,10 @@ if [[ -f "$IMA_POLICY_SRC" ]]; then
         warn "$IMA_POLICY_SRC over rules that may already be there"
     elif appraises_exec <<<"$ima_rules"; then
         info "IMA policy already appraises exec"
+    elif [[ "$ima_mode" == enforce ]]; then
+        warn "not loading $IMA_POLICY_SRC: in enforce its rules refuse, until"
+        warn "reboot, every exec and executable mmap of a file without an IMA"
+        warn "signature outside the pseudo filesystems and tmpfs it exempts"
     else
         info "loading IMA appraisal policy from $IMA_POLICY_SRC"
         if ! cat "$IMA_POLICY_SRC" >"$IMA_POLICY_RUNTIME" 2>/dev/null; then
@@ -195,8 +250,8 @@ fi
 state_files() {
     [[ -d "$STATE_DIR" ]] || return 0
     find "$STATE_DIR" -mindepth 1 -maxdepth 1 \
-        \( -name 'aik*' -o -name 'clock*' -o -name 'boot_commit*' \
-        -o -name 'snapshot*' \) 2>/dev/null || true
+         \( -name 'aik*' -o -name 'clock*' -o -name 'boot_commit*' \
+         -o -name 'snapshot*' \) 2>/dev/null || true
 }
 
 # Active unit, or a live pid in the daemon's pid file: after a refused
@@ -205,7 +260,7 @@ agent_is_running() {
     local pid=""
 
     if command -v systemctl >/dev/null 2>&1 &&
-        systemctl is-active --quiet lota-agent.service; then
+            systemctl is-active --quiet lota-agent.service; then
         AGENT_HELD_BY="lota-agent.service is active"
         return 0
     fi
