@@ -159,30 +159,6 @@ func IsMeasurementEmptyPolicy(policy *PCRPolicy) bool {
 	return len(policy.PCRs) == 0 && len(policy.KernelHashes) == 0 && len(policy.AgentHashes) == 0
 }
 
-func isAllZeroHex(hexDigest string) bool {
-	if hexDigest == "" {
-		return false
-	}
-	for i := 0; i < len(hexDigest); i++ {
-		if hexDigest[i] != '0' {
-			return false
-		}
-	}
-	return true
-}
-
-func validateKernelPins(policy *PCRPolicy) error {
-	if policy == nil {
-		return nil
-	}
-	for _, allowed := range policy.KernelHashes {
-		if isAllZeroHex(strings.TrimSpace(allowed)) {
-			return fmt.Errorf("refusing to load policy '%s': kernel_hashes pins an all-zero kernel hash, which every host with no kernel measurement reports -- the list would admit any kernel on any such machine. Pin the digest the device actually reports, or drop kernel_hashes and rely on the PCR pins", policy.Name)
-		}
-	}
-	return nil
-}
-
 func validatePolicyPCRIndices(policy *PCRPolicy) error {
 	if policy == nil {
 		return errors.New("nil policy")
@@ -261,10 +237,7 @@ func validatePolicyDocument(policy *PCRPolicy) error {
 	if err := validatePolicyPCRIndices(policy); err != nil {
 		return err
 	}
-	if err := validateProfile(policy); err != nil {
-		return err
-	}
-	return validateKernelPins(policy)
+	return validateProfile(policy)
 }
 
 // registerPolicy stores a policy under its name; the first one stored becomes

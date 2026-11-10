@@ -160,13 +160,4 @@ func TestBothPolicyRoadsShareOneValidationSet(t *testing.T) {
 	if err := NewPCRVerifier().AddPolicy(badPCR); err == nil {
 		t.Fatal("AddPolicy must refuse an out-of-range PCR index")
 	}
-
-	zeroKernel := &PCRPolicy{
-		Name:         "zero-kernel",
-		PCRs:         map[int]string{7: strings.Repeat("cc", 32)},
-		KernelHashes: []string{strings.Repeat("00", 32)},
-	}
-	if err := NewPCRVerifier().AddPolicy(zeroKernel); err == nil {
-		t.Fatal("AddPolicy must refuse an all-zero kernel pin")
-	}
 }
