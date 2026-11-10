@@ -27,6 +27,7 @@
 
 #include "test.h"
 #include "../installer/install.h"
+#include "../installer/run.h"
 
 static char note[4096];
 
@@ -308,6 +309,64 @@ static void test_only_a_boot_path_stage_waits_for_the_reboot(void)
 	PASS();
 }
 
+/* Set once the child says its TERM trap is in place */
+static int child_ready;
+
+static void sink_line(void *ud, const char *text)
+{
+	(void)ud;
+	if (strstr(text, "ready"))
+		child_ready = 1;
+}
+
+static void sink_status(void *ud, const char *label, int running,
+			enum ui_result r, double secs)
+{
+	(void)ud;
+	(void)label;
+	(void)running;
+	(void)r;
+	(void)secs;
+}
+
+static void sink_tick(void *ud)
+{
+	(void)ud;
+}
+
+static int abort_once_ready(void *ud)
+{
+	(void)ud;
+	return child_ready;
+}
+
+/* A child that answers the abort's SIGTERM with exit 0 has not finished */
+static void test_an_aborted_command_is_not_a_success(void)
+{
+	static const char *const argv[] = {
+		"sh", "-c",
+		"trap 'kill $!; exit 0' TERM; echo ready; sleep 5 & wait", NULL
+	};
+	const struct ui_sink sink = {
+		.line = sink_line,
+		.status = sink_status,
+		.tick = sink_tick,
+		.abort = abort_once_ready,
+	};
+	struct ui ui;
+	int rc;
+
+	TEST("a command the user aborted does not report 0");
+	memset(&ui, 0, sizeof(ui));
+	ui.sink = &sink;
+	rc = run_cmd(&ui, "abort", argv);
+	if (rc == 0) {
+		FAIL("the aborted command reads as done");
+		return;
+	}
+	PASS();
+}
+
 int main(void)
 {
 	printf("\n=== lota-install: the unattended checkpoint ===\n");
@@ -325,6 +384,7 @@ int main(void)
 	test_every_explanation_is_spaced();
 	test_every_title_is_spaced();
 	test_only_a_boot_path_stage_waits_for_the_reboot();
+	test_an_aborted_command_is_not_a_success();
 
 	printf("\nPassed: %d / %d\n", tests_passed, tests_run);
 	return tests_passed == tests_run ? 0 : 1;

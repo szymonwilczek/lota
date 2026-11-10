@@ -73,6 +73,7 @@ int run_cmd(struct ui *ui, const char *label, const char *const argv[])
 	char buf[1024];
 	struct pollfd pfd;
 	pid_t pid = -1;
+	int aborted = 0;
 	int fd = -1;
 	int ret;
 	int code;
@@ -89,8 +90,10 @@ int run_cmd(struct ui *ui, const char *label, const char *const argv[])
 		int ready;
 
 		if (ui->sink && ui->sink->abort &&
-		    ui->sink->abort(ui->sink->ud))
+		    ui->sink->abort(ui->sink->ud)) {
 			kill(pid, SIGTERM);
+			aborted = 1;
+		}
 
 		ready = poll(&pfd, 1, RUN_TICK_MS);
 		if (ready < 0) {
@@ -117,6 +120,8 @@ int run_cmd(struct ui *ui, const char *label, const char *const argv[])
 	close(fd);
 
 	code = wait_exit_code(pid);
+	if (aborted && code == 0)
+		code = 128 + SIGTERM;
 	ui_live_end(ui, code == 0 ? UI_OK : UI_FAIL);
 	return code;
 }
