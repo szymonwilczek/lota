@@ -313,8 +313,8 @@ int config_profile_append_text(const char *existing,
  *
  * Writes @path.new, reads it back with config_load() and renames it into place.
  *
- * Return: as config_profile_append_text(); -EBADMSG also when the read-back
- * fails, with @path untouched; or another negative errno.
+ * Return: as config_profile_append_text(); -EPROTO when the read-back fails,
+ * with @path untouched; or another negative errno.
  */
 int config_profile_append(const char *path, const struct lota_profile *p);
 

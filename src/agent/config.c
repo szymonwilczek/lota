@@ -513,6 +513,13 @@ int config_profile_defect(const struct lota_profile *p, char *why,
 		snprintf(why, why_cap, "the verifier host %s", sub);
 		return -EILSEQ;
 	}
+	if (!p->token_only && strcmp(p->verifier, "none") == 0) {
+		snprintf(why, why_cap,
+			 "the verifier host is none, which the parser reads as "
+			 "no verifier; leave out --server for a publisher who "
+			 "runs none");
+		return -EILSEQ;
+	}
 
 	return 0;
 }
@@ -1625,7 +1632,7 @@ int config_profile_append(const char *path, const struct lota_profile *p)
 				"reading the replacement back.\n",
 				path, path);
 			unlink(tmp_path);
-			return -EBADMSG;
+			return -EPROTO;
 		}
 	}
 

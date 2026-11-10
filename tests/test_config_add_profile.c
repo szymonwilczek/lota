@@ -338,6 +338,24 @@ int main(void)
 	}
 
 	{
+		/* a verifier host spelled none is the token-only key to the
+		 * parser, so the writer refuses it with or without a port */
+		static const int ports[] = { 8443, 9000 };
+		struct lota_profile n;
+		size_t i;
+
+		for (i = 0; i < sizeof(ports) / sizeof(ports[0]); i++) {
+			n = mkprofile("studio-n", "ca.studio-n.example",
+				      "/etc/lota/studio-n.pem", "none");
+			n.verifier_port = ports[i];
+			rc = config_profile_append_text("", &n, out,
+							sizeof(out));
+			CHECK(rc == -EILSEQ,
+			      "a verifier host named none is refused");
+		}
+	}
+
+	{
 		char small[64];
 
 		rc = config_profile_append_text("attest_interval = 60\n", &p,
