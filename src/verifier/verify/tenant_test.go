@@ -133,7 +133,8 @@ func TestIntegration_TenantCertAttests(t *testing.T) {
 
 	// verifier keys client state by the certificate CN
 	// (the device pseudonym), not by the challenge ID
-	info, found := verifier.ClientInfo(testPseudonym("tenant-client-ok"))
+	info, found := clientInfoOf(t, verifier,
+		testPseudonym("tenant-client-ok"))
 	if !found {
 		t.Fatal("client not found after attestation")
 	}
@@ -151,7 +152,8 @@ func TestIntegration_NoOUCertIsDefaultTenant(t *testing.T) {
 		t.Fatalf("result = %d, want VerifyOK", result.Result)
 	}
 
-	info, found := verifier.ClientInfo(testPseudonym("tenant-client-plain"))
+	info, found := clientInfoOf(t, verifier,
+		testPseudonym("tenant-client-plain"))
 	if !found {
 		t.Fatal("client not found after attestation")
 	}

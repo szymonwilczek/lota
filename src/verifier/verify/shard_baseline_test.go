@@ -72,7 +72,7 @@ func TestShardedBaselineDistributionAndRouting(t *testing.T) {
 
 	// specific client's baseline is retrievable and matches its PCR
 	id := "client-000042"
-	b := s.GetBaseline(id)
+	b := baselineOf(t, s, id)
 	if b == nil {
 		t.Fatalf("GetBaseline(%s) = nil", id)
 	}
@@ -86,7 +86,7 @@ func TestShardedBaselineTenantAndClear(t *testing.T) {
 	s, _ := newShardedMemoryBaselines(3)
 	id := "tenant-client"
 	s.CheckAndUpdate(id, pcrOf(7))
-	if s.GetBaseline(id) == nil {
+	if baselineOf(t, s, id) == nil {
 		t.Fatal("baseline not established")
 	}
 
@@ -104,7 +104,7 @@ func TestShardedBaselineTenantAndClear(t *testing.T) {
 	if err := s.ClearBaseline(id); err != nil {
 		t.Fatalf("ClearBaseline: %v", err)
 	}
-	if s.GetBaseline(id) != nil {
+	if baselineOf(t, s, id) != nil {
 		t.Fatal("baseline survived ClearBaseline")
 	}
 }

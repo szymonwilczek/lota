@@ -181,7 +181,8 @@ func (s *SQLiteBaselineStore) CheckAndUpdateAgentHash(clientID string,
 	}
 }
 
-func (s *SQLiteBaselineStore) GetBaseline(clientID string) *ClientBaseline {
+func (s *SQLiteBaselineStore) GetBaseline(clientID string,
+) (*ClientBaseline, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
@@ -193,8 +194,11 @@ func (s *SQLiteBaselineStore) GetBaseline(clientID string) *ClientBaseline {
 		"SELECT pcr14, first_seen, last_seen, attest_count FROM baselines WHERE client_id = ?",
 		clientID,
 	).Scan(&storedPCR14, &firstSeen, &lastSeen, &attestCount)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
 	if err != nil {
-		return nil
+		return nil, err
 	}
 
 	var pcr14 [types.HashSize]byte
@@ -207,12 +211,13 @@ func (s *SQLiteBaselineStore) GetBaseline(clientID string) *ClientBaseline {
 		FirstSeen:   firstSeen,
 		LastSeen:    lastSeen,
 		AttestCount: attestCount,
-	}
+	}, nil
 }
 
 // GetBootBaseline implements BootBaselineReader.
 // A row with NULL boot columns has no boot baseline.
-func (s *SQLiteBaselineStore) GetBootBaseline(clientID string) *BootBaseline {
+func (s *SQLiteBaselineStore) GetBootBaseline(clientID string,
+) (*BootBaseline, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
@@ -224,11 +229,14 @@ func (s *SQLiteBaselineStore) GetBootBaseline(clientID string) *BootBaseline {
 		"SELECT pcr0, pcr1, pcr7, boot_first_seen, boot_last_seen FROM baselines WHERE client_id = ?",
 		clientID,
 	).Scan(&pcr0, &pcr1, &pcr7, &bootFirst, &bootLast)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
 	if err != nil {
-		return nil
+		return nil, err
 	}
 	if len(pcr0) == 0 && len(pcr1) == 0 && len(pcr7) == 0 {
-		return nil
+		return nil, nil
 	}
 
 	out := BootBaseline{}
@@ -247,7 +255,7 @@ func (s *SQLiteBaselineStore) GetBootBaseline(clientID string) *BootBaseline {
 	if bootLast.Valid {
 		out.LastSeen = bootLast.Time
 	}
-	return &out
+	return &out, nil
 }
 
 func (s *SQLiteBaselineStore) ClearBaseline(clientID string) error {

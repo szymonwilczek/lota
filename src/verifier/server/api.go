@@ -211,11 +211,22 @@ func scopedToTenants(p *Principal) bool {
 
 // clientTenant returns the tenant of a client, the default tenant when
 // ClientInfo finds none.
-func (h *APIHandler) clientTenant(clientID string) string {
-	if info, found := h.verifier.ClientInfo(clientID); found {
-		return info.Tenant
+func (h *APIHandler) clientTenant(clientID string) (string, error) {
+	info, found, err := h.verifier.ClientInfo(clientID)
+	if err != nil {
+		return "", err
 	}
-	return verify.DefaultTenant
+	if found {
+		return info.Tenant, nil
+	}
+	return verify.DefaultTenant, nil
+}
+
+// writeStoreError answers a request the baseline store could not serve.
+func (h *APIHandler) writeStoreError(w http.ResponseWriter, err error) {
+	h.log.Error("baseline store read failed", "error", err)
+	writeJSONStatus(w, http.StatusInternalServerError,
+		errorResponse{Error: "database unavailable"})
 }
 
 func withPrincipal(r *http.Request, p *Principal) *http.Request {
@@ -468,7 +479,12 @@ func (h *APIHandler) handleStats(w http.ResponseWriter, r *http.Request) {
 
 		registered := 0
 		for _, id := range h.verifier.ListClients() {
-			if info, found := h.verifier.ClientInfo(id); found && p.AllowsTenant(info.Tenant) {
+			info, found, err := h.verifier.ClientInfo(id)
+			if err != nil {
+				h.writeStoreError(w, err)
+				return
+			}
+			if found && p.AllowsTenant(info.Tenant) {
 				registered++
 			}
 		}
@@ -531,7 +547,12 @@ func (h *APIHandler) handleListClients(w http.ResponseWriter, r *http.Request) {
 		all := h.verifier.ListClients()
 		visible := make([]string, 0, len(all))
 		for _, id := range all {
-			if info, found := h.verifier.ClientInfo(id); found && p.AllowsTenant(info.Tenant) {
+			info, found, err := h.verifier.ClientInfo(id)
+			if err != nil {
+				h.writeStoreError(w, err)
+				return
+			}
+			if found && p.AllowsTenant(info.Tenant) {
 				visible = append(visible, id)
 			}
 		}
@@ -567,7 +588,12 @@ func (h *APIHandler) handleListClients(w http.ResponseWriter, r *http.Request) {
 
 	instanceOnly := make([]string, 0)
 	for _, id := range h.verifier.ListClients() {
-		if !h.verifier.IsDurableClient(id) {
+		durable, err := h.verifier.IsDurableClient(id)
+		if err != nil {
+			h.writeStoreError(w, err)
+			return
+		}
+		if !durable {
 			instanceOnly = append(instanceOnly, id)
 		}
 	}
@@ -614,7 +640,11 @@ func (h *APIHandler) handleClientInfo(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	info, found := h.verifier.ClientInfo(clientID)
+	info, found, err := h.verifier.ClientInfo(clientID)
+	if err != nil {
+		h.writeStoreError(w, err)
+		return
+	}
 	if !found {
 		writeJSONStatus(w, http.StatusNotFound, errorResponse{Error: "client not found"})
 		return
@@ -739,13 +769,18 @@ func (h *APIHandler) handleRevokeClient(w http.ResponseWriter, r *http.Request, 
 		return
 	}
 
-	tenant := h.clientTenant(clientID)
+	tenant, err := h.clientTenant(clientID)
+	if err != nil {
+		h.writeStoreError(w, err)
+		return
+	}
 	if !principalAllowsTenant(requestPrincipal(r), tenant) {
 		writeJSONStatus(w, http.StatusNotFound, errorResponse{Error: "client not found"})
 		return
 	}
 
-	err := revStore.Revoke(tenant, clientID, store.RevocationReason(req.Reason), req.Actor, req.Note)
+	err = revStore.Revoke(tenant, clientID,
+		store.RevocationReason(req.Reason), req.Actor, req.Note)
 	if err != nil {
 		if err == store.ErrAlreadyRevoked {
 			writeJSONStatus(w, http.StatusConflict, errorResponse{Error: "client is already revoked"})
@@ -1494,7 +1529,12 @@ func (h *APIHandler) handleReanchorReviewList(w http.ResponseWriter, r *http.Req
 	if p := requestPrincipal(r); scopedToTenants(p) {
 		visible := make([]string, 0, len(clients))
 		for _, id := range clients {
-			if p.AllowsTenant(h.clientTenant(id)) {
+			tenant, err := h.clientTenant(id)
+			if err != nil {
+				h.writeStoreError(w, err)
+				return
+			}
+			if p.AllowsTenant(tenant) {
 				visible = append(visible, id)
 			}
 		}
@@ -1534,7 +1574,11 @@ func (h *APIHandler) handleReanchorReviewAck(w http.ResponseWriter, r *http.Requ
 
 	logID := sanitizeLogField(clientID)
 
-	tenant := h.clientTenant(clientID)
+	tenant, err := h.clientTenant(clientID)
+	if err != nil {
+		h.writeStoreError(w, err)
+		return
+	}
 	if !principalAllowsTenant(requestPrincipal(r), tenant) {
 		writeJSONStatus(w, http.StatusNotFound, errorResponse{Error: "client not found"})
 		return
@@ -1608,7 +1652,11 @@ func (h *APIHandler) handleForceReanchor(w http.ResponseWriter, r *http.Request)
 
 	logID := sanitizeLogField(clientID)
 
-	tenant := h.clientTenant(clientID)
+	tenant, err := h.clientTenant(clientID)
+	if err != nil {
+		h.writeStoreError(w, err)
+		return
+	}
 	if !principalAllowsTenant(requestPrincipal(r), tenant) {
 		writeJSONStatus(w, http.StatusNotFound, errorResponse{Error: "client not found"})
 		return
@@ -1665,7 +1713,11 @@ func (h *APIHandler) handleDeleteClient(w http.ResponseWriter, r *http.Request, 
 	logID := sanitizeLogField(clientID)
 
 	// resolve the tenant before the delete removes the baseline row
-	tenant := h.clientTenant(clientID)
+	tenant, err := h.clientTenant(clientID)
+	if err != nil {
+		h.writeStoreError(w, err)
+		return
+	}
 	if !principalAllowsTenant(requestPrincipal(r), tenant) {
 		writeJSONStatus(w, http.StatusNotFound, errorResponse{Error: "client not found"})
 		return

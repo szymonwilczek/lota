@@ -124,12 +124,15 @@ func TestClientInfoReportsTheFleetsLastAttestation(t *testing.T) {
 	baseline.CheckAndUpdate("host-0001", pcr14)
 	baseline.CheckAndUpdate("host-0001", pcr14)
 
-	record := baseline.GetBaseline("host-0001")
+	record, err := baseline.GetBaseline("host-0001")
+	if err != nil {
+		t.Fatalf("GetBaseline: %v", err)
+	}
 	if record == nil || record.LastSeen.IsZero() {
 		t.Fatal("the shared record must carry when the client last attested")
 	}
 
-	info, found := v.ClientInfo("host-0001")
+	info, found := clientInfoOf(t, v, "host-0001")
 	if !found {
 		t.Fatal("a client with a baseline must be known to every instance")
 	}

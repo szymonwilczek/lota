@@ -15,6 +15,39 @@ import (
 	"github.com/szymonwilczek/lota/verifier/types"
 )
 
+// baselineOf reads the client's baseline; a store error fails the test.
+func baselineOf(t *testing.T, s BaselineStorer, id string) *ClientBaseline {
+	t.Helper()
+	b, err := s.GetBaseline(id)
+	if err != nil {
+		t.Fatalf("GetBaseline(%s): %v", id, err)
+	}
+	return b
+}
+
+// bootBaselineOf reads the client's boot baseline; a store error fails
+// the test.
+func bootBaselineOf(t *testing.T, s BootBaselineReader,
+	id string,
+) *BootBaseline {
+	t.Helper()
+	b, err := s.GetBootBaseline(id)
+	if err != nil {
+		t.Fatalf("GetBootBaseline(%s): %v", id, err)
+	}
+	return b
+}
+
+// clientInfoOf reads the client's record; a store error fails the test.
+func clientInfoOf(t *testing.T, v *Verifier, id string) (*ClientInfo, bool) {
+	t.Helper()
+	info, found, err := v.ClientInfo(id)
+	if err != nil {
+		t.Fatalf("ClientInfo(%s): %v", id, err)
+	}
+	return info, found
+}
+
 func boot(pcr0, pcr1, pcr7 byte) BootBaseline {
 	var b BootBaseline
 	for i := range b.PCR0 {
@@ -84,10 +117,10 @@ func TestBootBaseline_MemoryClearBaselineDropsAllState(t *testing.T) {
 	// SQL stores keep all client state in one row, so their DELETE drops
 	// the PCR14 baseline, boot baseline and re-anchor bookkeeping together
 	// in-memory store must match or forced re-anchor leaves stale boot pin behind
-	if bs.GetBaseline("c3") != nil {
+	if baselineOf(t, bs, "c3") != nil {
 		t.Error("PCR14 baseline survived ClearBaseline")
 	}
-	if bs.GetBootBaseline("c3") != nil {
+	if bootBaselineOf(t, bs, "c3") != nil {
 		t.Error("boot baseline survived ClearBaseline")
 	}
 	if st := bs.GetReanchorState("c3"); st.Present {
@@ -121,7 +154,7 @@ func TestLifecycle_BootBaselineOnlyClient(t *testing.T) {
 	if err := v.ForceReanchor("c9"); err != nil {
 		t.Fatalf("ForceReanchor failed: %v", err)
 	}
-	if bs.GetBootBaseline("c9") != nil {
+	if bootBaselineOf(t, bs, "c9") != nil {
 		t.Error("boot baseline survived forced re-anchor")
 	}
 
@@ -129,7 +162,7 @@ func TestLifecycle_BootBaselineOnlyClient(t *testing.T) {
 	if err := v.DeleteClient("c9"); err != nil {
 		t.Fatalf("DeleteClient failed: %v", err)
 	}
-	if bs.GetBootBaseline("c9") != nil {
+	if bootBaselineOf(t, bs, "c9") != nil {
 		t.Error("boot baseline survived delete")
 	}
 }
@@ -221,12 +254,12 @@ func TestBootBaseline_SQLiteDetectsMismatch(t *testing.T) {
 
 func TestBootBaseline_MemoryGetBootBaselineNilWhenUnpinned(t *testing.T) {
 	bs := NewBaselineStore()
-	if got := bs.GetBootBaseline("never-seen"); got != nil {
+	if got := bootBaselineOf(t, bs, "never-seen"); got != nil {
 		t.Fatalf("expected nil for unpinned client, got %+v", got)
 	}
 
 	bs.CheckAndUpdateBootPCRs("c1", boot(0x10, 0x11, 0x17))
-	got := bs.GetBootBaseline("c1")
+	got := bootBaselineOf(t, bs, "c1")
 	if got == nil {
 		t.Fatal("expected populated baseline after first use")
 	}
@@ -244,7 +277,7 @@ func TestBootBaseline_SQLiteGetBootBaselineNilWhenUnpinned(t *testing.T) {
 	defer db.Close()
 	bs := NewSQLiteBaselineStore(db)
 
-	if got := bs.GetBootBaseline("never-seen"); got != nil {
+	if got := bootBaselineOf(t, bs, "never-seen"); got != nil {
 		t.Fatalf("expected nil for unpinned client, got %+v", got)
 	}
 
@@ -252,11 +285,11 @@ func TestBootBaseline_SQLiteGetBootBaselineNilWhenUnpinned(t *testing.T) {
 	pcr14[0] = 0xCC
 	bs.CheckAndUpdate("c1", pcr14)
 	// row exists but boot columns still NULL -> nil
-	if got := bs.GetBootBaseline("c1"); got != nil {
+	if got := bootBaselineOf(t, bs, "c1"); got != nil {
 		t.Fatalf("expected nil while boot columns NULL, got %+v", got)
 	}
 	bs.CheckAndUpdateBootPCRs("c1", boot(0x30, 0x31, 0x37))
-	got := bs.GetBootBaseline("c1")
+	got := bootBaselineOf(t, bs, "c1")
 	if got == nil {
 		t.Fatal("expected populated baseline after first use")
 	}
@@ -664,7 +697,8 @@ func TestPinnedRegister_MemoryRefusesAMovedPCR14(t *testing.T) {
 	if o.AgentHashBaseline == nil || o.AgentHashBaseline.PCR14 != pcr14 {
 		t.Fatal("a refusal has to carry the register the client pinned")
 	}
-	if b := bs.GetBaseline("c"); b == nil || b.PCR14 != pcr14 || b.AttestCount != 2 {
+	if b := baselineOf(t, bs, "c"); b == nil || b.PCR14 != pcr14 ||
+		b.AttestCount != 2 {
 		t.Fatalf("refused round wrote state: %+v", b)
 	}
 }
@@ -696,7 +730,8 @@ func TestPinnedRegister_SQLiteRefusesAMovedPCR14(t *testing.T) {
 	if o.AgentHashBaseline == nil || o.AgentHashBaseline.PCR14 != pcr14 {
 		t.Fatal("a refusal has to carry the register the client pinned")
 	}
-	if b := bs.GetBaseline("c"); b == nil || b.PCR14 != pcr14 || b.AttestCount != 2 {
+	if b := baselineOf(t, bs, "c"); b == nil || b.PCR14 != pcr14 ||
+		b.AttestCount != 2 {
 		t.Fatalf("refused round wrote state: %+v", b)
 	}
 }
@@ -839,7 +874,7 @@ func checkRepinPCR14(t *testing.T, bs pcr14RepinStore) {
 	if err := bs.RepinPCR14("c", from, to, log, time.Now()); err != nil {
 		t.Fatalf("RepinPCR14: %v", err)
 	}
-	if got := bs.GetBaseline("c").PCR14; got != to {
+	if got := baselineOf(t, bs, "c").PCR14; got != to {
 		t.Fatalf("pin not moved: %x", got)
 	}
 	if st := bs.GetReanchorState("c"); !bytes.Equal(st.EventLogBaseline, log) {

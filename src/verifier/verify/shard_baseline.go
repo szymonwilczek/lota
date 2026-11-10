@@ -65,7 +65,8 @@ func (s *ShardedBaselineStore) CheckAndUpdate(clientID string, pcr14 [types.Hash
 	return s.shardFor(clientID).CheckAndUpdate(clientID, pcr14)
 }
 
-func (s *ShardedBaselineStore) GetBaseline(clientID string) *ClientBaseline {
+func (s *ShardedBaselineStore) GetBaseline(clientID string,
+) (*ClientBaseline, error) {
 	return s.shardFor(clientID).GetBaseline(clientID)
 }
 
@@ -101,7 +102,8 @@ func (s *ShardedBaselineStore) CheckAndUpdateBootPCRs(clientID string, boot Boot
 	return s.shardFor(clientID).CheckAndUpdateBootPCRs(clientID, boot)
 }
 
-func (s *ShardedBaselineStore) GetBootBaseline(clientID string) *BootBaseline {
+func (s *ShardedBaselineStore) GetBootBaseline(clientID string,
+) (*BootBaseline, error) {
 	return s.shardFor(clientID).GetBootBaseline(clientID)
 }
 

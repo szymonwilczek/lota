@@ -15,6 +15,7 @@ import (
 	"crypto/sha256"
 	"crypto/x509"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"sync"
 	"testing"
@@ -117,14 +118,14 @@ func TestSQLiteBaseline_GetBaseline(t *testing.T) {
 	bs := NewSQLiteBaselineStore(db)
 
 	// non-existent
-	if bs.GetBaseline("nobody") != nil {
+	if baselineOf(t, bs, "nobody") != nil {
 		t.Error("Expected nil for non-existent client")
 	}
 
 	pcr14 := [types.HashSize]byte{0xDE, 0xAD}
 	bs.CheckAndUpdate("get-client", pcr14)
 
-	baseline := bs.GetBaseline("get-client")
+	baseline := baselineOf(t, bs, "get-client")
 	if baseline == nil {
 		t.Fatal("Expected non-nil baseline")
 	}
@@ -133,6 +134,42 @@ func TestSQLiteBaseline_GetBaseline(t *testing.T) {
 	}
 
 	t.Log("✓ Baseline retrieval works")
+}
+
+// A store that cannot answer is not a store without the client.
+func TestSQLiteBaseline_ClosedDBIsAnError(t *testing.T) {
+	db, err := store.OpenDB(":memory:")
+	if err != nil {
+		t.Fatalf("OpenDB failed: %v", err)
+	}
+	bs := NewSQLiteBaselineStore(db)
+	bs.CheckAndUpdate("c", [types.HashSize]byte{0x11})
+
+	cfg := DefaultConfig()
+	cfg.BaselineStore = bs
+	v := NewVerifier(cfg, newCertVerifier(t))
+	db.Close()
+
+	if b, err := bs.GetBaseline("c"); err == nil {
+		t.Errorf("GetBaseline on a closed db: %+v, no error", b)
+	}
+	if b, err := bs.GetBootBaseline("c"); err == nil {
+		t.Errorf("GetBootBaseline on a closed db: %+v, no error", b)
+	}
+	if _, _, err := v.ClientInfo("c"); err == nil {
+		t.Error("ClientInfo on a closed db returned no error")
+	}
+	for name, op := range map[string]func(string) error{
+		"ForceReanchor":             v.ForceReanchor,
+		"DeleteClient":              v.DeleteClient,
+		"AcknowledgeReanchorReview": v.AcknowledgeReanchorReview,
+	} {
+		err := op("c")
+		if err == nil || errors.Is(err, ErrUnknownClient) {
+			t.Errorf("%s on a closed db: %v, want the store error",
+				name, err)
+		}
+	}
 }
 
 func TestSQLiteBaseline_ClearBaseline(t *testing.T) {
@@ -151,7 +188,7 @@ func TestSQLiteBaseline_ClearBaseline(t *testing.T) {
 
 	bs.ClearBaseline("clear-client")
 
-	if bs.GetBaseline("clear-client") != nil {
+	if baselineOf(t, bs, "clear-client") != nil {
 		t.Error("Baseline should be nil after clear")
 	}
 
@@ -235,7 +272,7 @@ func TestSQLiteBaseline_Persistence(t *testing.T) {
 	// second instance (simulates restart)
 	bs2 := NewSQLiteBaselineStore(db)
 
-	baseline := bs2.GetBaseline("persist-client")
+	baseline := baselineOf(t, bs2, "persist-client")
 	if baseline == nil {
 		t.Fatal("Baseline lost after 'restart'!")
 	}

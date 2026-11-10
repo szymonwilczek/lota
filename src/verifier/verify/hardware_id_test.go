@@ -99,7 +99,7 @@ func TestClientInfoNamesTheHardwareIdentity(t *testing.T) {
 		t.Fatalf("result = %d, want VerifyOK", result.Result)
 	}
 
-	info, found := verifier.ClientInfo(testPseudonym(clientID))
+	info, found := clientInfoOf(t, verifier, testPseudonym(clientID))
 	if !found {
 		t.Fatal("ClientInfo(pseudonym) not found")
 	}

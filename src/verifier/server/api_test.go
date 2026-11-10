@@ -1618,7 +1618,7 @@ func TestForceReanchor_ClearsBaselineAndAudits(t *testing.T) {
 	mux, v := setupTestAPIWithKey(t, "test-admin-key")
 	clientID := attestTestClient(t, v, "force-reanchor")
 
-	info, found := v.ClientInfo(clientID)
+	info, found := clientInfoOf(t, v, clientID)
 	if !found || info.PCR14Baseline == "" {
 		t.Fatalf("expected a pinned baseline before re-anchor, got %+v", info)
 	}
@@ -1634,7 +1634,7 @@ func TestForceReanchor_ClearsBaselineAndAudits(t *testing.T) {
 		t.Fatalf("expected 200, got %d: %s", rr.Code, rr.Body.String())
 	}
 
-	info, found = v.ClientInfo(clientID)
+	info, found = clientInfoOf(t, v, clientID)
 	if !found {
 		t.Fatal("client disappeared after re-anchor")
 	}
@@ -1726,7 +1726,7 @@ func TestDeleteClient_RemovesTrustState(t *testing.T) {
 	// nonce-store history (monotonic counter) survives on purpose,
 	// so the client may still be listed
 	// trust material must be gone
-	if info, found := v.ClientInfo(clientID); found {
+	if info, found := clientInfoOf(t, v, clientID); found {
 		if info.PCR14Baseline != "" {
 			t.Errorf("baseline survived delete: %s", info.PCR14Baseline)
 		}
@@ -1896,4 +1896,15 @@ func TestMethodRefusalNamesTheMethodsTheEndpointTakes(t *testing.T) {
 			t.Errorf("Allow = %q, missing the %s this path serves", allow, method)
 		}
 	}
+}
+
+// clientInfoOf reads the client's record; a store error fails the test.
+func clientInfoOf(t *testing.T, v *verify.Verifier, id string,
+) (*verify.ClientInfo, bool) {
+	t.Helper()
+	info, found, err := v.ClientInfo(id)
+	if err != nil {
+		t.Fatalf("ClientInfo(%s): %v", id, err)
+	}
+	return info, found
 }

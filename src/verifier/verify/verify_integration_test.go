@@ -987,7 +987,7 @@ func TestClientInfo_BaselineOnlyClientIsFound(t *testing.T) {
 	pcr14[0] = 0x42
 	baselines.CheckAndUpdate("restart-survivor", pcr14)
 
-	info, found := verifier.ClientInfo("restart-survivor")
+	info, found := clientInfoOf(t, verifier, "restart-survivor")
 	if !found {
 		t.Fatal("client with a stored baseline reported as not found")
 	}

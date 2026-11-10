@@ -245,7 +245,7 @@ func TestVerify_OutOfBandPinIsNotAdoptedFromTheReport(t *testing.T) {
 		t.Fatalf("the refusal does not name the empty column: %v", err)
 	}
 
-	b := v.baselineStore.GetBaseline(key)
+	b := baselineOf(t, v.baselineStore, key)
 	if b == nil {
 		t.Fatal("the baseline row is gone")
 	}
@@ -285,7 +285,7 @@ func TestAgentHashRepin_RefusesRowWithNoPinnedHash(t *testing.T) {
 		t.Fatalf("the refusal does not name the empty column: %v", err)
 	}
 
-	b := bs.GetBaseline(clientID)
+	b := baselineOf(t, bs, clientID)
 	if b == nil || b.PCR14 != operatorPCR14 {
 		t.Fatal("the operator's PCR 14 pin was replaced by the refused re-pin")
 	}

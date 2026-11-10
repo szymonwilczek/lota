@@ -108,7 +108,8 @@ type BaselineStorer interface {
 	CheckAndUpdate(clientID string, pcr14 [types.HashSize]byte) (TOFUResult, *ClientBaseline)
 
 	// GetBaseline returns the client's baseline, nil when it has none.
-	GetBaseline(clientID string) *ClientBaseline
+	// A store failure is an error, never a missing baseline.
+	GetBaseline(clientID string) (*ClientBaseline, error)
 
 	// ClearBaseline removes the client's baseline. Archived baselines stay.
 	ClearBaseline(clientID string) error
@@ -165,10 +166,10 @@ type BootBaselineStorer interface {
 
 // BootBaselineReader is implemented by baseline stores that read a client's
 // boot baseline without writing it. GetBootBaseline returns nil for a client
-// with none. Under RequireBootEnrollment a stored boot baseline enrolls the
-// client.
+// with none, an error on a store failure. Under RequireBootEnrollment a
+// stored boot baseline enrolls the client.
 type BootBaselineReader interface {
-	GetBootBaseline(clientID string) *BootBaseline
+	GetBootBaseline(clientID string) (*BootBaseline, error)
 }
 
 // TenantStorer is implemented by baseline stores that keep the CA-assigned
@@ -396,22 +397,23 @@ func (s *BaselineStore) CheckAndUpdate(clientID string, pcr14 [types.HashSize]by
 }
 
 // GetBaseline implements BaselineStorer.
-func (s *BaselineStore) GetBaseline(clientID string) *ClientBaseline {
+func (s *BaselineStore) GetBaseline(clientID string) (*ClientBaseline, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	return s.baselines[clientID]
+	return s.baselines[clientID], nil
 }
 
 // GetBootBaseline implements BootBaselineReader with a copy.
-func (s *BaselineStore) GetBootBaseline(clientID string) *BootBaseline {
+func (s *BaselineStore) GetBootBaseline(clientID string,
+) (*BootBaseline, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	b, ok := s.bootBaselines[clientID]
 	if !ok {
-		return nil
+		return nil, nil
 	}
 	out := *b
-	return &out
+	return &out, nil
 }
 
 // GetReanchorState implements ReanchorStorer. Present is false when the

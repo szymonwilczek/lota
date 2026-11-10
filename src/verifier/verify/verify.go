@@ -614,8 +614,16 @@ func (v *Verifier) VerifyReportFrom(challengeID, remoteAddr string, reportData [
 	// resolved with the gate off too: the pin logs it.
 	bootPin := v.bootBaselineRoad(tenant, bootFacts)
 	if bootPin.allowedBy == "" && v.requireBootEnrollment {
-		if reader, ok := v.baselineStore.(BootBaselineReader); ok &&
-			reader.GetBootBaseline(clientID) != nil {
+		enrolled, err := v.hasBootBaseline(clientID)
+		if err != nil {
+			clog.Error("boot baseline store error, refusing "+
+				"attestation", "error", err)
+			v.metrics.Rejections.Inc("baseline_error")
+			result.Result = types.VerifyInternalError
+			return result, errors.New(
+				"FAIL_BASELINE_ERROR: baseline store error")
+		}
+		if enrolled {
 			bootPin.allowedBy = "baseline store enrollment"
 		}
 	}
@@ -961,8 +969,8 @@ type ClientInfo struct {
 }
 
 // ClientInfo returns the client's record; false when it has no baseline and
-// a zero ClientCounter.
-func (v *Verifier) ClientInfo(clientID string) (*ClientInfo, bool) {
+// a zero ClientCounter. A baseline store failure is an error.
+func (v *Verifier) ClientInfo(clientID string) (*ClientInfo, bool, error) {
 	info := &ClientInfo{
 		ClientID: clientID,
 	}
@@ -983,8 +991,12 @@ func (v *Verifier) ClientInfo(clientID string) (*ClientInfo, bool) {
 	info.PendingChallenges = v.nonceStore.ClientPendingCount(clientID)
 
 	// the baseline record is shared; the nonce history is this instance's
+	baseline, err := v.baselineStore.GetBaseline(clientID)
+	if err != nil {
+		return nil, false, err
+	}
 	hasBaseline := false
-	if baseline := v.baselineStore.GetBaseline(clientID); baseline != nil {
+	if baseline != nil {
 		hasBaseline = true
 		info.PCR14Baseline = hex.EncodeToString(baseline.PCR14[:])
 		info.AttestCount = baseline.AttestCount
@@ -1018,10 +1030,10 @@ func (v *Verifier) ClientInfo(clientID string) (*ClientInfo, bool) {
 	}
 
 	if info.MonotonicCounter == 0 && !hasBaseline {
-		return nil, false
+		return nil, false, nil
 	}
 
-	return info, true
+	return info, true, nil
 }
 
 // ListClients returns every known client: the durable baseline record first,
@@ -1072,8 +1084,9 @@ func (v *Verifier) CountDurableClients() int {
 }
 
 // IsDurableClient reports whether the client has a durable record.
-func (v *Verifier) IsDurableClient(clientID string) bool {
-	return v.baselineStore.GetBaseline(clientID) != nil
+func (v *Verifier) IsDurableClient(clientID string) (bool, error) {
+	baseline, err := v.baselineStore.GetBaseline(clientID)
+	return baseline != nil, err
 }
 
 // RevocationStore returns the revocation store, nil when not enforced.
@@ -1261,8 +1274,8 @@ func (v *Verifier) AcknowledgeReanchorReview(clientID string) error {
 	if !ok {
 		return fmt.Errorf("baseline store does not support self-service re-anchor")
 	}
-	if v.baselineStore.GetBaseline(clientID) == nil && !v.hasBootBaseline(clientID) {
-		return ErrUnknownClient
+	if err := v.knownClient(clientID); err != nil {
+		return err
 	}
 	return rs.AcknowledgeLFAReview(clientID)
 }
@@ -1271,17 +1284,41 @@ func (v *Verifier) AcknowledgeReanchorReview(clientID string) error {
 // when the target client has no baseline.
 var ErrUnknownClient = errors.New("unknown client")
 
-func (v *Verifier) hasBootBaseline(clientID string) bool {
+func (v *Verifier) hasBootBaseline(clientID string) (bool, error) {
 	br, ok := v.baselineStore.(BootBaselineReader)
-	return ok && br.GetBootBaseline(clientID) != nil
+	if !ok {
+		return false, nil
+	}
+	boot, err := br.GetBootBaseline(clientID)
+	return boot != nil, err
+}
+
+// knownClient returns ErrUnknownClient for a client with neither baseline,
+// the store error when the store cannot say.
+func (v *Verifier) knownClient(clientID string) error {
+	baseline, err := v.baselineStore.GetBaseline(clientID)
+	if err != nil {
+		return err
+	}
+	if baseline != nil {
+		return nil
+	}
+	boot, err := v.hasBootBaseline(clientID)
+	if err != nil {
+		return err
+	}
+	if !boot {
+		return ErrUnknownClient
+	}
+	return nil
 }
 
 // ForceReanchor clears the client's baseline, so its next attestation pins
 // afresh under the active policy.
 func (v *Verifier) ForceReanchor(clientID string) error {
 	// the in-memory store keeps the boot baseline apart
-	if v.baselineStore.GetBaseline(clientID) == nil && !v.hasBootBaseline(clientID) {
-		return ErrUnknownClient
+	if err := v.knownClient(clientID); err != nil {
+		return err
 	}
 	if err := v.baselineStore.ClearBaseline(clientID); err != nil {
 		return err
@@ -1293,8 +1330,8 @@ func (v *Verifier) ForceReanchor(clientID string) error {
 // DeleteClient clears the client's baseline and its nonce store state.
 // Revocations and bans stay.
 func (v *Verifier) DeleteClient(clientID string) error {
-	if v.baselineStore.GetBaseline(clientID) == nil && !v.hasBootBaseline(clientID) {
-		return ErrUnknownClient
+	if err := v.knownClient(clientID); err != nil {
+		return err
 	}
 	if err := v.baselineStore.ClearBaseline(clientID); err != nil {
 		return err

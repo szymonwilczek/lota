@@ -335,8 +335,8 @@ func (c *mokRepinCase) try() bool {
 	return c.v.tryMOKRepin(slog.Default(), c.id, "", c.pinned, c.pcr14, c.report, c.facts)
 }
 
-func (c *mokRepinCase) pinnedNow() [types.HashSize]byte {
-	return c.v.baselineStore.GetBaseline(c.id).PCR14
+func (c *mokRepinCase) pinnedNow(t *testing.T) [types.HashSize]byte {
+	return baselineOf(t, c.v.baselineStore, c.id).PCR14
 }
 
 func TestTryMOKRepin_FollowsAnEnrolledKey(t *testing.T) {
@@ -344,7 +344,7 @@ func TestTryMOKRepin_FollowsAnEnrolledKey(t *testing.T) {
 	if !c.try() {
 		t.Fatal("a change confined to the MOK list must re-pin")
 	}
-	if c.pinnedNow() != c.pcr14 {
+	if c.pinnedNow(t) != c.pcr14 {
 		t.Fatal("pin did not move to the reported register")
 	}
 	st := c.v.baselineStore.(ReanchorStorer).GetReanchorState(c.id)
@@ -382,14 +382,14 @@ func TestTryMOKRepin_Refusals(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			c := newMOKRepinCase(t, tt.profile, tt.current)
-			before := c.pinnedNow()
+			before := c.pinnedNow(t)
 			if tt.mutate != nil {
 				tt.mutate(c)
 			}
 			if c.try() {
 				t.Fatal("re-pinned")
 			}
-			if c.pinnedNow() != before {
+			if c.pinnedNow(t) != before {
 				t.Fatal("refusal moved the pin")
 			}
 		})
@@ -409,7 +409,7 @@ func TestTryMOKRepin_RaceRefused(t *testing.T) {
 	if c.try() {
 		t.Fatal("re-pinned over a moved row")
 	}
-	if c.pinnedNow() != other {
+	if c.pinnedNow(t) != other {
 		t.Fatal("race refusal moved the pin")
 	}
 }

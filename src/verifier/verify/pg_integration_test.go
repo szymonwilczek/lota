@@ -77,7 +77,7 @@ func TestPostgresBaselineAtomic(t *testing.T) {
 		&BootBaseline{PCR0: fill(9), PCR1: fill(1), PCR7: fill(7)}); o.BootResult != TOFUMismatch {
 		t.Fatalf("boot drift: got %v", o.BootResult)
 	}
-	if bb := s.GetBootBaseline("c1"); bb == nil || bb.PCR0 != fill(0) {
+	if bb := bootBaselineOf(t, s, "c1"); bb == nil || bb.PCR0 != fill(0) {
 		t.Fatal("GetBootBaseline")
 	}
 
@@ -164,11 +164,12 @@ func TestPostgresUsedNonce(t *testing.T) {
 }
 
 // TestPostgresBaselineInspection covers the monitoring-facing reads and
-// the operator reset path: GetBaseline, ListClients, Stats, ClearBaseline.
+// the operator reset path: GetBaseline, ListClients, Stats, ClearBaseline,
+// and a closed database read as an error.
 func TestPostgresBaselineInspection(t *testing.T) {
 	s := pgBaselineStore(t)
 
-	if s.GetBaseline("absent") != nil {
+	if baselineOf(t, s, "absent") != nil {
 		t.Fatal("GetBaseline on unknown client should be nil")
 	}
 
@@ -182,7 +183,7 @@ func TestPostgresBaselineInspection(t *testing.T) {
 		t.Fatal("match ins-a")
 	}
 
-	b := s.GetBaseline("ins-a")
+	b := baselineOf(t, s, "ins-a")
 	if b == nil || b.PCR14 != fill(0x14) || b.AttestCount != 2 {
 		t.Fatalf("GetBaseline ins-a: %+v", b)
 	}
@@ -201,11 +202,20 @@ func TestPostgresBaselineInspection(t *testing.T) {
 	}
 
 	s.ClearBaseline("ins-a")
-	if s.GetBaseline("ins-a") != nil {
+	if baselineOf(t, s, "ins-a") != nil {
 		t.Fatal("ClearBaseline left a row behind")
 	}
 	if got := s.ListClients(); len(got) != 1 || got[0] != "ins-b" {
 		t.Fatalf("ListClients after clear: %v", got)
+	}
+
+	// a store that cannot answer is not a store without the client
+	s.db.Close()
+	if b, err := s.GetBaseline("ins-b"); err == nil {
+		t.Errorf("GetBaseline on a closed db: %+v, no error", b)
+	}
+	if b, err := s.GetBootBaseline("ins-b"); err == nil {
+		t.Errorf("GetBootBaseline on a closed db: %+v, no error", b)
 	}
 }
 
@@ -245,7 +255,7 @@ func TestPostgresBootPCRsPinnedAfterPCR14Row(t *testing.T) {
 	if r, _ := s.CheckAndUpdate("boot-unpinned", fill(0x14)); r != TOFUFirstUse {
 		t.Fatal("PCR14 first use boot-unpinned")
 	}
-	if s.GetBootBaseline("boot-unpinned") != nil {
+	if bootBaselineOf(t, s, "boot-unpinned") != nil {
 		t.Fatal("unpinned row should have no boot baseline yet")
 	}
 	if r, _ := s.CheckAndUpdateBootPCRs("boot-unpinned", boot); r != TOFUFirstUse {
@@ -525,7 +535,8 @@ func TestPG_AgentHashRepinRefusesRowWithNoPinnedHash(t *testing.T) {
 		t.Fatalf("expected ErrAgentHashNotPinned, got %v", err)
 	}
 
-	if b := bs.GetBaseline(clientID); b == nil || b.PCR14 != operatorPCR14 {
+	if b := baselineOf(t, bs, clientID); b == nil ||
+		b.PCR14 != operatorPCR14 {
 		t.Fatal("the operator's PCR 14 pin was replaced by the refused re-pin")
 	}
 }
