@@ -363,7 +363,7 @@ func buildSignedReport(t *testing.T, clientID string, nonce [32]byte, pcr14 [32]
 	copy(bindingReport.System.IOMMU.CmdlineParam[:], []byte("intel_iommu=on"))
 
 	bindingNonce := verify.ComputeAttestationBindingNonce(nonce, bindingReport)
-	attestData := buildTPMSAttest(bindingNonce[:], pcrDigest)
+	attestData := buildTPMSAttest(bindingNonce[:], pcrDigest, 0x00004083)
 
 	hash := sha256.Sum256(attestData)
 	signature, err := rsa.SignPKCS1v15(rand.Reader, key, crypto.SHA256, hash[:])
@@ -552,7 +552,7 @@ func buildMinimalEventLog() []byte {
 }
 
 // builds minimal TPMS_ATTEST with embedded nonce and PCR digest
-func buildTPMSAttest(nonce []byte, pcrDigest []byte) []byte {
+func buildTPMSAttest(nonce, pcrDigest []byte, pcrMask uint32) []byte {
 	buf := make([]byte, 0, 128)
 
 	// Magic: TPM_GENERATED_VALUE
@@ -573,9 +573,9 @@ func buildTPMSAttest(nonce []byte, pcrDigest []byte) []byte {
 	buf = append(buf, 0x00, 0x00, 0x00, 0x01) // count
 	buf = append(buf, 0x00, 0x0b)             // SHA256
 	buf = append(buf, 0x03)                   // sizeofSelect
-	buf = append(buf, 0x03, 0x00, 0x40)       // PCR 0,1,14
-	buf = append(buf, 0x00, 0x20)             // digest size
-	buf = append(buf, pcrDigest[:32]...)      // PCR digest
+	buf = append(buf, byte(pcrMask), byte(pcrMask>>8), byte(pcrMask>>16))
+	buf = append(buf, 0x00, 0x20)        // digest size
+	buf = append(buf, pcrDigest[:32]...) // PCR digest
 
 	return buf
 }

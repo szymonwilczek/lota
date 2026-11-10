@@ -227,7 +227,8 @@ func buildSignedReport(s *fuzzReportSpec, clientID string, challengeNonce [types
 		nonceForBinding[0] ^= 0xFF // valid envelope, wrong nonce -> nonce gate
 	}
 	bindingNonce := ComputeAttestationBindingNonce(nonceForBinding, bindingReport)
-	attestData := createTPMSAttestWithNonce(bindingNonce[:], pcrDigest)
+	attestData := createTPMSAttestWithNonce(bindingNonce[:],
+		pcrDigest, s.pcrMask)
 
 	hash := sha256.Sum256(attestData)
 	signature, _ := rsa.SignPKCS1v15(rand.Reader, key, crypto.SHA256, hash[:])

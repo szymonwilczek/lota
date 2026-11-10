@@ -393,6 +393,51 @@ func TestVerifyPCRDigest_Match(t *testing.T) {
 	t.Log("✓ PCR digest correctly verified against reported values")
 }
 
+// A quote over other PCRs than the report names must not vouch for the
+// report's values, even when its digest is computed over them.
+func TestVerifyPCRDigest_SelectionMustMatchMask(t *testing.T) {
+	const pcrMask = uint32(0x4283) // PCR 0,1,7,9,14
+	var pcrValues [types.PCRCount][types.HashSize]byte
+	for i := range pcrValues {
+		pcrValues[i][0] = byte(i)
+	}
+	h := sha256.New()
+	for _, i := range []int{0, 1, 7, 9, 14} {
+		h.Write(pcrValues[i][:])
+	}
+	digest := h.Sum(nil)
+
+	blobWithSelect := func(sel []byte) []byte {
+		blob := buildTestAttestBlob(digest)
+		// digest, its size, select
+		cut := len(blob) - len(digest) - 2 - 4
+		out := append([]byte{}, blob[:cut]...)
+		out = append(out, byte(len(sel)))
+		out = append(out, sel...)
+		out = append(out, 0x00, 0x20)
+		return append(out, digest...)
+	}
+
+	blob := blobWithSelect([]byte{0x83, 0x42, 0x00})
+	if err := verifyPCRDigestBlob(blob, &pcrValues,
+		pcrMask); err != nil {
+		t.Fatalf("a quote over the report's PCRs was refused: %v", err)
+	}
+	for _, sel := range [][]byte{
+		{0x83, 0x40, 0x00},
+		{0x07, 0x00, 0x00},
+		{},
+		{0xff, 0xff, 0xff},
+	} {
+		err := verifyPCRDigestBlob(blobWithSelect(sel), &pcrValues,
+			pcrMask)
+		if err == nil {
+			t.Errorf("selection % x passed for mask 0x%04X",
+				sel, pcrMask)
+		}
+	}
+}
+
 func TestVerifyPCRDigest_Mismatch(t *testing.T) {
 	t.Log("SECURITY TEST: Detecting tampered PCR values")
 	t.Log("CRITICAL: A malicious agent sending fake PCR values must be caught")

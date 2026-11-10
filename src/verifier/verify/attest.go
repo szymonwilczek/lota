@@ -190,9 +190,39 @@ func VerifyNonceInAttest(attestData, expectedNonce []byte) error {
 	return nil
 }
 
-// VerifyPCRDigestParsed checks that the SHA-256 of the masked PCR values,
-// in index order, equals the PCR digest of a parsed quote. A quote over a bank
-// other than SHA-256 is refused: the report carries SHA-256 values alone.
+// quoteSelectMask returns the PCRs a TPML_PCR_SELECTION of one selection
+// covers.
+func quoteSelectMask(sel []byte) (uint32, error) {
+	if len(sel) < 7 || binary.BigEndian.Uint32(sel[0:4]) != 1 {
+		return 0, errors.New(
+			"quote PCR selection is not a single selection")
+	}
+	bitmap := sel[7:]
+	if len(bitmap) != int(sel[6]) {
+		return 0, errors.New("quote PCR selection is malformed")
+	}
+
+	var mask uint32
+	for i, b := range bitmap {
+		for bit := 0; bit < 8; bit++ {
+			if b&(1<<bit) == 0 {
+				continue
+			}
+			pcr := i*8 + bit
+			if pcr >= types.PCRCount {
+				return 0, fmt.Errorf("quote selects PCR %d, "+
+					"beyond the report", pcr)
+			}
+			mask |= uint32(1) << pcr
+		}
+	}
+	return mask, nil
+}
+
+// VerifyPCRDigestParsed checks that the quote selects exactly the PCRs in
+// pcrMask and that the SHA-256 of their values, in index order, equals its
+// PCR digest. A quote over a bank other than SHA-256 is refused: the report
+// carries SHA-256 values alone.
 func VerifyPCRDigestParsed(attest *TPMSAttest, pcrValues *[types.PCRCount][types.HashSize]byte, pcrMask uint32) error {
 	if attest == nil {
 		return errors.New("nil TPMS_ATTEST")
@@ -209,6 +239,14 @@ func VerifyPCRDigestParsed(attest *TPMSAttest, pcrValues *[types.PCRCount][types
 	if attest.QuoteInfo.PCRHashAlg != types.TPMAlgSHA256 {
 		return fmt.Errorf("unsupported PCR bank hash 0x%04X: the LOTA wire format pins PCR values at SHA-256 (%d bytes); rebuild the agent or the quote with a SHA-256 PCR selection",
 			attest.QuoteInfo.PCRHashAlg, types.HashSize)
+	}
+	quoted, err := quoteSelectMask(attest.QuoteInfo.PCRSelect)
+	if err != nil {
+		return err
+	}
+	if quoted != pcrMask {
+		return fmt.Errorf("quote PCR selection 0x%06X does not "+
+			"match the report PCR mask 0x%06X", quoted, pcrMask)
 	}
 
 	h := sha256.New()

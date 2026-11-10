@@ -265,7 +265,7 @@ func buildTPMSAttest(nonce, digest []byte) []byte {
 		0x00, 0x00, 0x00, 0x01, // selection count
 		0x00, 0x0b, // TPM_ALG_SHA256
 		0x03,             // sizeofSelect
-		0x83, 0x40, 0x00, // PCR 0,1,7 | PCR 14
+		0x83, 0x42, 0x00, // PCR 0,1,7 | PCR 9,14
 		0x00, 0x20) // digest size
 	buf = append(buf, digest[:32]...)
 

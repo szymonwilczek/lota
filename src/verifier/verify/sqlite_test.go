@@ -899,7 +899,8 @@ func createSQLiteTestReportWithKey(t testing.TB, clientID string, nonce [32]byte
 	bindingReport.System.IOMMU.UnitCount = 2
 	copy(bindingReport.System.IOMMU.CmdlineParam[:], []byte("intel_iommu=on"))
 	bindingNonce := ComputeAttestationBindingNonce(nonce, bindingReport)
-	attestData := createTPMSAttestWithNonce(bindingNonce[:], pcrDigest)
+	attestData := createTPMSAttestWithNonce(bindingNonce[:],
+		pcrDigest, productionPCRMask)
 	hash := sha256.Sum256(attestData)
 	signature, err := rsa.SignPKCS1v15(rand.Reader, key, crypto.SHA256, hash[:])
 	if err != nil {
