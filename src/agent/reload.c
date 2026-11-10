@@ -611,6 +611,11 @@ static void warn_startup_only(const struct lota_config *cfg,
 		lota_warn("kernel_path changes on the next start; keeping "
 			  "'%s'",
 			  cfg->kernel_path);
+	if (new_cfg->policy_pubkey[0] &&
+	    strcmp(new_cfg->policy_pubkey, cfg->policy_pubkey) != 0)
+		lota_warn("policy_pubkey is read on the next start; verifying "
+			  "with '%s'",
+			  cfg->policy_pubkey);
 	if (new_cfg->aik_handle != cfg->aik_handle)
 		lota_warn("aik_handle changes on the next start; keeping "
 			  "0x%08x",
@@ -653,8 +658,6 @@ static void sync_config_snapshot(
 	memcpy(cfg->pid_file, new_cfg->pid_file, sizeof(cfg->pid_file));
 	memcpy(cfg->signing_key, new_cfg->signing_key,
 	       sizeof(cfg->signing_key));
-	memcpy(cfg->policy_pubkey, new_cfg->policy_pubkey,
-	       sizeof(cfg->policy_pubkey));
 	cfg->trust_lib_count = trust_lib_count;
 	for (int k = 0; k < trust_lib_count; k++) {
 		copy_path(cfg->trust_libs[k], trust_libs[k]);

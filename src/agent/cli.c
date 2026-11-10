@@ -684,6 +684,14 @@ int cli_parse(int argc, char **argv, struct cli_options *opts,
 			"Warning: policy_pubkey %s is not readable: %s\n",
 			cfg->policy_pubkey, strerror(errno));
 
+	if (!opts->policy_pubkey_path)
+		cfg->policy_pubkey[0] = '\0';
+	else if (opts->policy_pubkey_path != cfg->policy_pubkey &&
+		 copy_string_checked("policy_pubkey", cfg->policy_pubkey,
+				     sizeof(cfg->policy_pubkey),
+				     opts->policy_pubkey_path) < 0)
+		return 1;
+
 	return 0;
 }
 
@@ -784,19 +792,6 @@ int cli_dump_config(struct cli_options *opts, struct lota_config *cfg)
 		}
 	} else {
 		cfg->signing_key[0] = '\0';
-	}
-
-	if (opts->policy_pubkey_path) {
-		if (opts->policy_pubkey_path != cfg->policy_pubkey) {
-			if (copy_string_checked("policy_pubkey",
-						cfg->policy_pubkey,
-						sizeof(cfg->policy_pubkey),
-						opts->policy_pubkey_path) < 0) {
-				return 1;
-			}
-		}
-	} else {
-		cfg->policy_pubkey[0] = '\0';
 	}
 
 	cfg->trust_lib_count = g_trust_lib_count;

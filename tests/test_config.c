@@ -2806,6 +2806,38 @@ static void test_cli_policy_pubkey_unreadable(void)
 	PASS();
 }
 
+static void test_cli_policy_pubkey_into_config(void)
+{
+	struct cli_options opts;
+	struct lota_config *cfg;
+	char path[PATH_MAX];
+	char key[PATH_MAX];
+
+	TEST("the key the start resolves is the one the snapshot holds");
+
+	write_config("cli_nokey.conf", "");
+	write_config("cli_flag.pub", "");
+	config_path("cli_nokey.conf", path, sizeof(path));
+	config_path("cli_flag.pub", key, sizeof(key));
+	cfg = config_new();
+	if (!cfg) {
+		FAIL("out of memory");
+		return;
+	}
+
+	const char *const argv[] = { "lota-agent", "--config", path,
+				     "--policy-pubkey", key };
+
+	if (cli_parse_argv(argv, 5, &opts, cfg) != 0) {
+		FAIL("the command line is refused");
+	} else if (strcmp(cfg->policy_pubkey, key) != 0) {
+		FAIL("--policy-pubkey does not reach the snapshot");
+	} else {
+		PASS();
+	}
+	config_free(cfg);
+}
+
 int main(void)
 {
 	printf("=== LOTA Config Parser Tests ===\n\n");
@@ -2876,6 +2908,7 @@ int main(void)
 		test_cli_attest_interval_bounds,
 		test_cli_trust_lib_path,
 		test_cli_policy_pubkey_unreadable,
+		test_cli_policy_pubkey_into_config,
 	};
 
 	for (size_t i = 0; i < sizeof(tests) / sizeof(tests[0]); i++)

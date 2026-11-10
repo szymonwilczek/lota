@@ -33,6 +33,7 @@
 #include "../src/agent/config.h"
 #include "../src/agent/journal.h"
 #include "../src/agent/main_utils.h"
+#include "../src/agent/policy_sign.h"
 #include "../src/agent/reload.h"
 #include "../src/agent/sdnotify.h"
 
@@ -827,6 +828,94 @@ static void test_startup_only_keys_are_reported(void)
 	PASS();
 }
 
+/*
+ * A downgrade is checked with the key the daemon started with, which need
+ * not be named in the file; the snapshot keeps that key after the reload.
+ */
+static void test_downgrade_uses_the_startup_key(void)
+{
+	char trust_libs[LOTA_CONFIG_MAX_LIBS][PATH_MAX] = { { 0 } };
+	uint32_t *protect_pids = NULL;
+	int trust_lib_count = 0, protect_pid_count = 0;
+	char dir[] = "/tmp/lota-reload-key-XXXXXX";
+	char priv[PATH_MAX], pub[PATH_MAX], other[PATH_MAX],
+		other_pub[PATH_MAX];
+	char path[PATH_MAX], sig[PATH_MAX + 8];
+	struct lota_config *cfg = NULL;
+	int mode = LOTA_MODE_ENFORCE;
+	bool t = true, f = false;
+	int rc;
+
+	TEST("a signed downgrade uses the key resolved at start");
+
+	if (!mkdtemp(dir)) {
+		FAIL("mkdtemp");
+		return;
+	}
+	snprintf(priv, sizeof(priv), "%s/k.pem", dir);
+	snprintf(pub, sizeof(pub), "%s/k.pub", dir);
+	snprintf(other, sizeof(other), "%s/o.pem", dir);
+	snprintf(other_pub, sizeof(other_pub), "%s/o.pub", dir);
+	if (policy_sign_generate_keypair(priv, pub) < 0 ||
+	    policy_sign_generate_keypair(other, other_pub) < 0 ||
+	    write_config(path, sizeof(path), "mode = monitor\n") < 0) {
+		FAIL("setup");
+		goto out;
+	}
+	snprintf(sig, sizeof(sig), "%s.sig", path);
+	cfg = config_new();
+	if (!cfg) {
+		FAIL("out of memory");
+		goto out;
+	}
+	snprintf(cfg->mode, sizeof(cfg->mode), "enforce");
+	snprintf(cfg->policy_pubkey, sizeof(cfg->policy_pubkey), "%s", pub);
+
+	if (policy_sign_file(path, other, sig) < 0) {
+		FAIL("sign");
+		goto out;
+	}
+	seed_runtime(trust_libs, &trust_lib_count, &protect_pids,
+		     &protect_pid_count);
+	rc = agent_reload_config(path, cfg, &mode, &t, &f, &t, &f, &f,
+				 &protect_pids, &protect_pid_count, trust_libs,
+				 &trust_lib_count);
+	free(protect_pids);
+	protect_pids = NULL;
+	if (rc >= 0 || mode != LOTA_MODE_ENFORCE) {
+		FAIL("a signature by another key downgrades");
+		goto out;
+	}
+
+	if (policy_sign_file(path, priv, sig) < 0) {
+		FAIL("sign");
+		goto out;
+	}
+	seed_runtime(trust_libs, &trust_lib_count, &protect_pids,
+		     &protect_pid_count);
+	rc = agent_reload_config(path, cfg, &mode, &t, &f, &t, &f, &f,
+				 &protect_pids, &protect_pid_count, trust_libs,
+				 &trust_lib_count);
+	if (rc != 0 || mode != LOTA_MODE_MONITOR)
+		FAIL("the signed downgrade is refused");
+	else if (strcmp(cfg->policy_pubkey, pub) != 0)
+		FAIL("the reload replaced the key with the file's");
+	else
+		PASS();
+
+out:
+	journal_set_level(LOG_DEBUG);
+	free(protect_pids);
+	config_free(cfg);
+	unlink(path);
+	unlink(sig);
+	unlink(priv);
+	unlink(pub);
+	unlink(other);
+	unlink(other_pub);
+	rmdir(dir);
+}
+
 int main(void)
 {
 	printf("=== reload keeps command-line enforcement state ===\n\n");
@@ -840,6 +929,7 @@ int main(void)
 	test_reload_applies_an_unchanged_log_level();
 	test_strict_without_allow_verity_stays_off();
 	test_startup_only_keys_are_reported();
+	test_downgrade_uses_the_startup_key();
 
 	printf("\n=== %d/%d passed ===\n", tests_passed, tests_run);
 	return tests_passed == tests_run ? 0 : 1;
