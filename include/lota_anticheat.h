@@ -235,6 +235,7 @@ struct lota_ac_session;
 
 /**
  * lota_ac_init() - Create an anti-cheat session.
+ * @cfg: The session's configuration; struct_size set by the caller.
  *
  * Direct mode connects to the agent, file mode locates the Wine hook directory.
  *
@@ -253,6 +254,8 @@ struct lota_ac_session *lota_ac_init(const struct lota_ac_config *cfg);
  * errno for the measure helpers, LOTA_AC_ERR_* otherwise. The renderers,
  * lota_ac_get_state() and lota_ac_shutdown() leave it alone. Thread-local, as a
  * title and its launcher can share a process.
+ *
+ * Return: The code the last such call left.
  */
 int lota_ac_last_error(void);
 
@@ -265,12 +268,14 @@ int lota_ac_last_error(void);
 const char *lota_ac_strerror(int err);
 
 /**
- * lota_ac_shutdown() - Destroy a session; NULL is accepted.
+ * lota_ac_shutdown() - Destroy a session.
+ * @session: From lota_ac_init(), or NULL.
  */
 void lota_ac_shutdown(struct lota_ac_session *session);
 
 /**
  * lota_ac_get_state() - Current session state.
+ * @session: From lota_ac_init(), or NULL.
  *
  * Local telemetry: client memory can be hooked, so a server trusts only
  * lota_ac_verify_heartbeat().
@@ -281,6 +286,8 @@ enum lota_ac_state lota_ac_get_state(const struct lota_ac_session *session);
 
 /**
  * lota_ac_get_info() - Local session telemetry.
+ * @session: From lota_ac_init().
+ * @info: Filled on success.
  *
  * Not authoritative, as with lota_ac_get_state().
  *
@@ -291,6 +298,7 @@ int lota_ac_get_info(const struct lota_ac_session *session,
 
 /**
  * lota_ac_tick() - Refresh session state from the agent or the hook files.
+ * @session: From lota_ac_init().
  *
  * Return: 0 on success, negative errno on failure.
  */
@@ -298,6 +306,9 @@ int lota_ac_tick(struct lota_ac_session *session);
 
 /**
  * lota_ac_heartbeat() - Generate a heartbeat packet.
+ * @session: From lota_ac_init().
+ * @buf: Receives the packet.
+ * @buflen: Size of @buf.
  * @written: The packet size, on success.
  *
  * Refreshes the state first. The token nonce binds sequence, timestamp, session
@@ -312,6 +323,10 @@ int lota_ac_heartbeat(struct lota_ac_session *session, uint8_t *buf,
 
 /**
  * lota_ac_boot_evidence() - Fetch the boot evidence for this session's tokens.
+ * @session: From lota_ac_init().
+ * @buf: Receives the evidence.
+ * @buflen: Size of @buf.
+ * @written: The evidence size, on success.
  *
  * Layout in lota_token.h, from the agent in direct mode or the hook's
  * lota-boot-evidence.bin in file mode. Send it with a heartbeat. A buffer of
@@ -326,6 +341,9 @@ int lota_ac_boot_evidence(struct lota_ac_session *session, uint8_t *buf,
 
 /**
  * lota_ac_compute_game_binding_hash() - Expected game hash for a server.
+ * @game_id: The title's game_id, as in lota_ac_config.
+ * @exe_path: The title's main executable.
+ * @out: Receives the hash.
  *
  *   SHA-256("lota-ac-game-binding:v1\\0" || game_id ||
  *           SHA-256(executable-bytes))
@@ -370,6 +388,7 @@ int lota_ac_compute_game_binding_hash(const char *game_id, const char *exe_path,
 
 /**
  * lota_ac_compute_runtime_measure() - Measure the calling process's live image.
+ * @out: Receives the digest.
  *
  * Return: 0 on success, -EINVAL on a NULL argument, -ENOMEM on allocation
  * failure, -E2BIG with too many objects or segments in one, -EIO on a digest
@@ -386,6 +405,8 @@ typedef int (*lota_ac_runtime_object_fn)(const char *path, void *user);
 
 /**
  * lota_ac_list_runtime_objects() - Enumerate what the runtime measure covers.
+ * @fn: Called with each object's path.
+ * @user: Passed to @fn.
  *
  * Use it to capture the trusted runtime manifest.
  *
@@ -397,6 +418,9 @@ int lota_ac_list_runtime_objects(lota_ac_runtime_object_fn fn, void *user);
 
 /**
  * lota_ac_compute_expected_runtime_measure_set() - Measure of ELF files.
+ * @paths: The ELF files the image is made of.
+ * @count: Number of @paths.
+ * @out: Receives the digest.
  *
  * Objects are keyed by file basename and sorted, so the order of @paths does
  * not matter. A file with no executable PT_LOAD segment contributes nothing.
@@ -411,15 +435,22 @@ int lota_ac_compute_expected_runtime_measure_set(
 
 /**
  * lota_ac_compute_expected_runtime_measure() - Runtime measure of a single ELF.
+ * @exe_path: The ELF file.
+ * @out: Receives the digest.
  *
  * Same as lota_ac_compute_expected_runtime_measure_set(&exe_path, 1, out).
+ *
+ * Return: As lota_ac_compute_expected_runtime_measure_set().
  */
 int lota_ac_compute_expected_runtime_measure(
 	const char *exe_path, uint8_t out[LOTA_AC_RUNTIME_MEASURE_SIZE]);
 
 /**
  * lota_ac_verify_heartbeat() - Verify a heartbeat packet.
+ * @data: The packet.
+ * @len: Size of @data.
  * @aik_pub_der: Mandatory; unverified claims are attacker-controlled.
+ * @aik_pub_len: Size of @aik_pub_der.
  * @expected_game_id_hash: See lota_ac_compute_game_binding_hash().
  * @expected_runtime_measure: See lota_ac_compute_expected_runtime_measure().
  *                            Also bound into the nonce.
@@ -443,6 +474,8 @@ int lota_ac_verify_heartbeat(
  * @info: From lota_ac_verify_heartbeat() on the heartbeat the evidence came
  *        with;
  *        the evidence counts only for the boot that quote signed.
+ * @evidence: From lota_ac_boot_evidence().
+ * @len: Size of @evidence.
  * @secure_boot: 1 if the firmware measured Secure Boot on before the boot
  *               loader, else 0.
  *
