@@ -16,6 +16,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
+#include <syslog.h>
 #include <unistd.h>
 #include <sys/types.h>
 
@@ -84,6 +85,21 @@ static void set_str(char *dst, size_t dst_size, const char *src)
 
 	memcpy(dst, src, len);
 	dst[len] = '\0';
+}
+
+int config_log_priority(const char *name)
+{
+	if (!name)
+		return -1;
+	if (strcmp(name, "error") == 0)
+		return LOG_ERR;
+	if (strcmp(name, "warn") == 0)
+		return LOG_WARNING;
+	if (strcmp(name, "info") == 0)
+		return LOG_INFO;
+	if (strcmp(name, "debug") == 0)
+		return LOG_DEBUG;
+	return -1;
 }
 
 static int validate_path_value(const char *key, const char *value,
@@ -956,6 +972,13 @@ static int apply_key(struct lota_config *cfg, const char *key,
 	}
 
 	if (strcmp(key, "log_level") == 0 || strcmp(key, "log-level") == 0) {
+		if (config_log_priority(value) < 0) {
+			fprintf(stderr,
+				"%s:%d: invalid log_level '%s' (valid: "
+				"error/warn/info/debug)\n",
+				filepath, lineno, value);
+			return -1;
+		}
 		set_str(cfg->log_level, sizeof(cfg->log_level), value);
 		return 0;
 	}

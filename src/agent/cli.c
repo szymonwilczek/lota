@@ -19,6 +19,7 @@
 #include "agent.h"
 #include "attest.h"
 #include "config.h"
+#include "journal.h"
 #include "main_utils.h"
 #include "parse_utils.h"
 #include "path_validate.h"
@@ -154,6 +155,8 @@ static int load_config_into_options(struct cli_options *opts,
 			strerror(-cfg_ret));
 		return 1;
 	}
+
+	journal_set_level(config_log_priority(cfg->log_level));
 
 	opts->server_addr = cfg->server;
 	opts->server_port = cfg->port;

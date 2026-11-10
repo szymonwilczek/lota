@@ -15,6 +15,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
+#include <syslog.h>
 #include <unistd.h>
 #include <stdbool.h>
 
@@ -763,6 +764,52 @@ static void test_config_load_invalid_mode(void)
 	config_init(&cfg);
 	if (config_load(&cfg, path) != -EINVAL) {
 		FAIL("mode = maintenance is not a mode");
+		return;
+	}
+
+	PASS();
+}
+
+static void test_config_load_invalid_log_level(void)
+{
+	static const char *const names[] = { "error", "warn", "info", "debug" };
+	static const int prios[] = { LOG_ERR, LOG_WARNING, LOG_INFO,
+				     LOG_DEBUG };
+	struct lota_config cfg;
+	char path[PATH_MAX];
+
+	TEST("config_load refuses an unknown log_level");
+
+	for (size_t i = 0; i < sizeof(names) / sizeof(names[0]); i++) {
+		if (config_log_priority(names[i]) != prios[i]) {
+			FAIL(names[i]);
+			return;
+		}
+	}
+	if (config_log_priority("inof") != -1 ||
+	    config_log_priority("") != -1) {
+		FAIL("an unknown name maps to a priority");
+		return;
+	}
+
+	write_config("loglevel_bad.conf", "log_level = inof\n");
+	config_path("loglevel_bad.conf", path, sizeof(path));
+	config_init(&cfg);
+	if (config_load(&cfg, path) != -EINVAL) {
+		FAIL("log_level = inof loads");
+		return;
+	}
+	if (strcmp(cfg.log_level, "info") != 0) {
+		FAIL("log_level changed on invalid input");
+		return;
+	}
+
+	write_config("loglevel_warn.conf", "log_level = warn\n");
+	config_path("loglevel_warn.conf", path, sizeof(path));
+	config_init(&cfg);
+	if (config_load(&cfg, path) != 0 ||
+	    strcmp(cfg.log_level, "warn") != 0) {
+		FAIL("log_level = warn refused");
 		return;
 	}
 
@@ -2471,6 +2518,7 @@ int main(void)
 		test_config_load_invalid_boolean,
 		test_config_load_bench,
 		test_config_load_invalid_mode,
+		test_config_load_invalid_log_level,
 		test_config_load_whitespace_trimming,
 		test_config_load_unknown_keys,
 		test_config_load_malformed_lines,

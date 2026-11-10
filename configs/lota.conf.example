@@ -148,9 +148,7 @@ pid_file = /run/lota/lota-agent.pid
 
 # ---- Logging -------------------------------------------------------------
 
-# Log level: debug, info, warn or error; any other value is accepted and means
-# debug. Only a reload that changes it applies it; the agent starts logging at
-# debug.
+# Log level: debug, info, warn or error.
 log_level = info
 
 # ---- Trusted libraries ---------------------------------------------------

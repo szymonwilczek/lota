@@ -720,18 +720,9 @@ int agent_reload_config(const char *config_path, struct lota_config *cfg,
 					  block_ptrace, strict_modules,
 					  block_anon_exec);
 
-	if (new_cfg->log_level[0] &&
-	    strcmp(new_cfg->log_level, cfg->log_level) != 0) {
-		int lvl = LOG_DEBUG;
-		if (strcmp(new_cfg->log_level, "error") == 0)
-			lvl = LOG_ERR;
-		else if (strcmp(new_cfg->log_level, "warn") == 0)
-			lvl = LOG_WARNING;
-		else if (strcmp(new_cfg->log_level, "info") == 0)
-			lvl = LOG_INFO;
-		journal_set_level(lvl);
+	journal_set_level(config_log_priority(new_cfg->log_level));
+	if (strcmp(new_cfg->log_level, cfg->log_level) != 0)
 		lota_info("Log level changed to %s", new_cfg->log_level);
-	}
 
 	merge_command_line_state(new_cfg);
 

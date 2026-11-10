@@ -22,6 +22,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <fcntl.h>
 #include <sys/stat.h>
 #include <unistd.h>
 
@@ -30,6 +31,7 @@
 #include "../src/agent/bpf_loader.h"
 #include "../src/agent/cli.h"
 #include "../src/agent/config.h"
+#include "../src/agent/journal.h"
 #include "../src/agent/main_utils.h"
 #include "../src/agent/reload.h"
 #include "../src/agent/sdnotify.h"
@@ -544,6 +546,76 @@ static void test_fifo_is_refused_without_waiting(void)
 	unlink(path);
 }
 
+/* Whether lota_info() still reaches stderr */
+static int info_is_logged(void)
+{
+	char buf[256];
+	int saved, fd;
+	ssize_t n;
+
+	fd = open("/tmp", O_TMPFILE | O_RDWR, 0600);
+	if (fd < 0)
+		return -1;
+	fflush(stderr);
+	saved = dup(STDERR_FILENO);
+	if (saved < 0 || dup2(fd, STDERR_FILENO) < 0) {
+		close(fd);
+		if (saved >= 0)
+			close(saved);
+		return -1;
+	}
+	lota_info("probe");
+	fflush(stderr);
+	dup2(saved, STDERR_FILENO);
+	close(saved);
+	n = pread(fd, buf, sizeof(buf), 0);
+	close(fd);
+	return n > 0;
+}
+
+static void test_reload_applies_an_unchanged_log_level(void)
+{
+	char trust_libs[LOTA_CONFIG_MAX_LIBS][PATH_MAX] = { { 0 } };
+	uint32_t *protect_pids = NULL;
+	int trust_lib_count = 0, protect_pid_count = 0;
+	struct lota_config *cfg;
+	char path[PATH_MAX];
+	int mode = LOTA_MODE_ENFORCE;
+	bool t = true, f = false;
+
+	TEST("a reload applies log_level even when it did not change");
+
+	if (write_config(path, sizeof(path), NULL) < 0) {
+		FAIL("cannot write a config under /tmp");
+		return;
+	}
+
+	cfg = config_new();
+	if (!cfg) {
+		FAIL("out of memory");
+		unlink(path);
+		return;
+	}
+	snprintf(cfg->mode, sizeof(cfg->mode), "enforce");
+	snprintf(cfg->log_level, sizeof(cfg->log_level), "error");
+	seed_runtime(trust_libs, &trust_lib_count, &protect_pids,
+		     &protect_pid_count);
+	journal_set_level(LOG_DEBUG);
+
+	agent_reload_config(path, cfg, &mode, &t, &f, &t, &t, &f, &protect_pids,
+			    &protect_pid_count, trust_libs, &trust_lib_count);
+
+	if (info_is_logged() != 0)
+		FAIL("log_level = error still lets info through");
+	else
+		PASS();
+
+	journal_set_level(LOG_DEBUG);
+	config_free(cfg);
+	free(protect_pids);
+	unlink(path);
+}
+
 int main(void)
 {
 	printf("=== reload keeps command-line enforcement state ===\n\n");
@@ -554,6 +626,7 @@ int main(void)
 	test_command_line_switch_survives_reload();
 	test_switch_not_asked_for_follows_the_file();
 	test_fifo_is_refused_without_waiting();
+	test_reload_applies_an_unchanged_log_level();
 
 	printf("\n=== %d/%d passed ===\n", tests_passed, tests_run);
 	return tests_passed == tests_run ? 0 : 1;

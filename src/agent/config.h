@@ -163,14 +163,19 @@ struct lota_config {
 	struct lota_profile profiles[LOTA_CONFIG_MAX_PROFILES];
 	int profile_count;
 
-	/*
-	 * "error", "warn", "info"; any other non-empty value means debug.
-	 * Only a reload that changes the value applies it.
-	 */
+	/* "error", "warn", "info" or "debug" */
 	char log_level[16];
 };
 
 void config_init(struct lota_config *cfg);
+
+/**
+ * config_log_priority() - Syslog priority of a log_level value.
+ * @name: "error", "warn", "info" or "debug".
+ *
+ * Return: LOG_ERR, LOG_WARNING, LOG_INFO or LOG_DEBUG; -1 for any other name.
+ */
+int config_log_priority(const char *name);
 
 /**
  * config_new() - Allocate a config and apply the defaults.
