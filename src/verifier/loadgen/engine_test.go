@@ -213,6 +213,34 @@ func TestStormAgainstLiveServer(t *testing.T) {
 	}
 }
 
+type failingWriter struct{}
+
+func (failingWriter) Write([]byte) (int, error) {
+	return 0, errors.New("no space left on device")
+}
+
+// A write the attestation log refuses fails the run,
+// so a log that lost attestations never passes for a complete one.
+func TestStormFailsOnAttestationLogWriteError(t *testing.T) {
+	fleet := testFleet(t, 2)
+	addr, tlsCfg := startTestServer(t, fleet)
+
+	cfg := &runConfig{
+		Server:   addr,
+		TLS:      tlsCfg,
+		Fleet:    fleet,
+		Agents:   2,
+		Mode:     modeStorm,
+		InFlight: 2,
+		Timeout:  10 * time.Second,
+		AttestW:  failingWriter{},
+	}
+	_, err := run(context.Background(), cfg)
+	if err == nil || !strings.Contains(err.Error(), "no space left") {
+		t.Fatalf("run: %v, want the attestation log write error", err)
+	}
+}
+
 // Steady mode re-attests on the interval:
 // with 2 agents over ~1s at 300ms interval every attempt must be OK and each
 // agent must attest more than once (registration round + steady rounds)

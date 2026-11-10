@@ -214,7 +214,10 @@ func run(ctx context.Context, cfg *runConfig) (*summary, error) {
 		return nil, fmt.Errorf("agent count %d outside fleet size %d", cfg.Agents, len(cfg.Fleet.Agents))
 	}
 	col := newCollector(cfg.Agents)
-	var attestMu sync.Mutex
+	var (
+		attestMu  sync.Mutex
+		attestErr error // first attestation log write error
+	)
 
 	attest := func(agent int) {
 		a := cfg.Fleet.Agents[agent]
@@ -233,8 +236,12 @@ func run(ctx context.Context, cfg *runConfig) (*summary, error) {
 					ValidUntil: result.ValidUntil,
 				})
 				if merr == nil {
+					line = append(line, '\n')
 					attestMu.Lock()
-					fmt.Fprintf(cfg.AttestW, "%s\n", line)
+					_, werr := cfg.AttestW.Write(line)
+					if attestErr == nil {
+						attestErr = werr
+					}
 					attestMu.Unlock()
 				}
 			}
@@ -258,6 +265,9 @@ func run(ctx context.Context, cfg *runConfig) (*summary, error) {
 	stopProgress()
 	if err != nil {
 		return nil, err
+	}
+	if attestErr != nil {
+		return nil, fmt.Errorf("write attestation log: %w", attestErr)
 	}
 	return col.summarize(cfg, started, time.Now()), nil
 }
