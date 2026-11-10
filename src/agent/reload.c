@@ -188,7 +188,18 @@ static void apply_runtime_flags_transactional(
 	bool old_block_ptrace = *block_ptrace;
 	bool old_strict_modules = *strict_modules;
 	bool old_block_anon_exec = *block_anon_exec;
+	bool want_strict_exec = new_cfg->strict_exec;
+	bool want_strict_modules = new_cfg->strict_modules;
 	bool runtime_flags_failed = false;
+
+	if (*cli_runtime_allow_verity_count() == 0 &&
+	    ((want_strict_exec && !*strict_exec) ||
+	     (want_strict_modules && !*strict_modules))) {
+		lota_warn("Strict exec/modules requested but no allow_verity "
+			  "entries are configured; keeping them off");
+		want_strict_exec = want_strict_exec && *strict_exec;
+		want_strict_modules = want_strict_modules && *strict_modules;
+	}
 
 	if (new_cfg->strict_mmap != *strict_mmap) {
 		if (bpf_loader_set_config(&g_agent.bpf_ctx,
@@ -212,23 +223,22 @@ static void apply_runtime_flags_transactional(
 		}
 	}
 
-	if (!runtime_flags_failed && new_cfg->strict_exec != *strict_exec) {
+	if (!runtime_flags_failed && want_strict_exec != *strict_exec) {
 		if (bpf_loader_set_config(&g_agent.bpf_ctx,
 					  LOTA_CFG_STRICT_EXEC,
-					  new_cfg->strict_exec ? 1 : 0) == 0) {
-			*strict_exec = new_cfg->strict_exec;
+					  want_strict_exec ? 1 : 0) == 0) {
+			*strict_exec = want_strict_exec;
 		} else {
 			lota_err("Failed to apply strict exec on reload");
 			runtime_flags_failed = true;
 		}
 	}
 
-	if (!runtime_flags_failed &&
-	    new_cfg->strict_modules != *strict_modules) {
-		if (bpf_loader_set_config(
-			    &g_agent.bpf_ctx, LOTA_CFG_STRICT_MODULES,
-			    new_cfg->strict_modules ? 1 : 0) == 0) {
-			*strict_modules = new_cfg->strict_modules;
+	if (!runtime_flags_failed && want_strict_modules != *strict_modules) {
+		if (bpf_loader_set_config(&g_agent.bpf_ctx,
+					  LOTA_CFG_STRICT_MODULES,
+					  want_strict_modules ? 1 : 0) == 0) {
+			*strict_modules = want_strict_modules;
 		} else {
 			lota_err("Failed to apply strict modules on reload");
 			runtime_flags_failed = true;

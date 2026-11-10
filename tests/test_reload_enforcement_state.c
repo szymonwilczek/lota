@@ -123,13 +123,22 @@ int parse_mode(const char *mode_str)
 	return -1;
 }
 
+/* Keys this test's stub was asked to turn on */
+static uint32_t stub_config_on;
+static int stub_allow_verity_count;
+
 int bpf_loader_set_config(struct bpf_loader_ctx *ctx, uint32_t key,
 			  uint32_t value)
 {
 	(void)ctx;
-	(void)key;
-	(void)value;
+	if (value && key < 32)
+		stub_config_on |= 1u << key;
 	return 0;
+}
+
+int *cli_runtime_allow_verity_count(void)
+{
+	return &stub_allow_verity_count;
 }
 
 int sdnotify_ready(void)
@@ -616,6 +625,88 @@ static void test_reload_applies_an_unchanged_log_level(void)
 	unlink(path);
 }
 
+/*
+ * strict_exec and strict_modules gate on the allow_verity set, which a reload
+ * does not change: with no entry the start refuses them, so a reload keeps
+ * them off.
+ */
+static void test_strict_without_allow_verity_stays_off(void)
+{
+	static const int counts[] = { 0, 1 };
+
+	TEST("a reload turns strict exec/modules on only with allow_verity");
+
+	for (size_t i = 0; i < sizeof(counts) / sizeof(counts[0]); i++) {
+		char trust_libs[LOTA_CONFIG_MAX_LIBS][PATH_MAX] = { { 0 } };
+		uint32_t *protect_pids = NULL;
+		int trust_lib_count = 0, protect_pid_count = 0;
+		struct lota_config *cfg;
+		char path[PATH_MAX];
+		char log[512] = "";
+		int mode = LOTA_MODE_ENFORCE;
+		bool strict_mmap = false, strict_exec = false;
+		bool block_ptrace = false, strict_modules = false;
+		bool block_anon_exec = false;
+		bool on = counts[i] > 0;
+		int saved, fd;
+
+		if (write_config(path, sizeof(path),
+				 "log_level = warn\n"
+				 "strict_exec = true\n"
+				 "strict_modules = true\n") < 0) {
+			FAIL("cannot write a config under /tmp");
+			return;
+		}
+		cfg = config_new();
+		fd = open("/tmp", O_TMPFILE | O_RDWR, 0600);
+		saved = dup(STDERR_FILENO);
+		if (!cfg || fd < 0 || saved < 0) {
+			FAIL("setup");
+			config_free(cfg);
+			unlink(path);
+			return;
+		}
+		snprintf(cfg->mode, sizeof(cfg->mode), "enforce");
+		seed_runtime(trust_libs, &trust_lib_count, &protect_pids,
+			     &protect_pid_count);
+		stub_allow_verity_count = counts[i];
+		stub_config_on = 0;
+
+		fflush(stderr);
+		dup2(fd, STDERR_FILENO);
+		agent_reload_config(path, cfg, &mode, &strict_mmap,
+				    &strict_exec, &block_ptrace,
+				    &strict_modules, &block_anon_exec,
+				    &protect_pids, &protect_pid_count,
+				    trust_libs, &trust_lib_count);
+		fflush(stderr);
+		dup2(saved, STDERR_FILENO);
+		close(saved);
+		if (pread(fd, log, sizeof(log) - 1, 0) < 0)
+			log[0] = '\0';
+		close(fd);
+		journal_set_level(LOG_DEBUG);
+		stub_allow_verity_count = 0;
+		config_free(cfg);
+		free(protect_pids);
+		unlink(path);
+
+		bool asked = stub_config_on & ((1u << LOTA_CFG_STRICT_EXEC) |
+					       (1u << LOTA_CFG_STRICT_MODULES));
+
+		if (strict_exec != on || strict_modules != on || asked != on) {
+			FAIL(on ? "switches stay off with allow_verity" :
+				  "switches turn on without allow_verity");
+			return;
+		}
+		if (!on && !strstr(log, "allow_verity")) {
+			FAIL("the switches stay off without a warning");
+			return;
+		}
+	}
+	PASS();
+}
+
 int main(void)
 {
 	printf("=== reload keeps command-line enforcement state ===\n\n");
@@ -627,6 +718,7 @@ int main(void)
 	test_switch_not_asked_for_follows_the_file();
 	test_fifo_is_refused_without_waiting();
 	test_reload_applies_an_unchanged_log_level();
+	test_strict_without_allow_verity_stays_off();
 
 	printf("\n=== %d/%d passed ===\n", tests_passed, tests_run);
 	return tests_passed == tests_run ? 0 : 1;
