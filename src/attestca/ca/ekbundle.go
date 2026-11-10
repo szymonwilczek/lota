@@ -209,8 +209,8 @@ func readSingleCertPEM(path string) (der, pemBytes []byte, err error) {
 	return certDER, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: certDER}), nil
 }
 
-// rejectUnpinnedCerts fails on a .pem file in dir that pinned does not name;
-// other files and subdirectories are not checked.
+// rejectUnpinnedCerts fails on a .pem file in dir, in any letter case,
+// that pinned does not name; other files and subdirectories are not checked.
 func rejectUnpinnedCerts(dir string, pinned map[string]struct{}) error {
 	ents, err := os.ReadDir(dir)
 	if err != nil {
@@ -222,7 +222,7 @@ func rejectUnpinnedCerts(dir string, pinned map[string]struct{}) error {
 			continue
 		}
 		name := ent.Name()
-		if !strings.HasSuffix(name, ".pem") {
+		if !strings.EqualFold(filepath.Ext(name), ".pem") {
 			continue
 		}
 		if _, ok := pinned[name]; !ok {

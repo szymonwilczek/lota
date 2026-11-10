@@ -6,6 +6,7 @@ package ca
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -87,11 +88,20 @@ func TestLoadEKRootBundleRejectsUnpinnedStray(t *testing.T) {
 	dir := writeBundle(t, roots)
 
 	stray := makeRoot(t, "stray-root")
-	if err := os.WriteFile(filepath.Join(dir, "stray.pem"), pemBlock("CERTIFICATE", stray.der), 0o644); err != nil {
-		t.Fatalf("write stray: %v", err)
-	}
-	if _, err := LoadEKRootBundle(dir); err == nil {
-		t.Fatal("accepted a bundle with an unpinned stray certificate")
+	for _, name := range []string{"stray.pem", "stray.PEM"} {
+		path := filepath.Join(dir, name)
+		der := pemBlock("CERTIFICATE", stray.der)
+		if err := os.WriteFile(path, der, 0o644); err != nil {
+			t.Fatalf("write stray: %v", err)
+		}
+		_, err := LoadEKRootBundle(dir)
+		if !errors.Is(err, ErrEKBundleUnpinned) {
+			t.Fatalf("%s: err = %v, want ErrEKBundleUnpinned",
+				name, err)
+		}
+		if err := os.Remove(path); err != nil {
+			t.Fatalf("remove stray: %v", err)
+		}
 	}
 }
 
