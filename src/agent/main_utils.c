@@ -27,10 +27,6 @@
 #include "sdnotify.h"
 #include "steam_runtime.h"
 
-#ifndef EAUTH
-#define EAUTH 80
-#endif
-
 const char *mode_to_string(int mode)
 {
 	switch (mode) {
@@ -400,7 +396,7 @@ int handle_policy_ops(const struct policy_ops_args *args)
 			printf("Signature valid: %s\n",
 			       args->verify_policy_file);
 			return 0;
-		} else if (ret == -EAUTH) {
+		} else if (ret == -EKEYREJECTED) {
 			fprintf(stderr, "Signature INVALID: %s\n",
 				args->verify_policy_file);
 			return 1;

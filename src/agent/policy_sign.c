@@ -17,11 +17,6 @@
 #include <unistd.h>
 #include <openssl/types.h>
 
-/* Linux has no EAUTH, and 80 is ELIBBAD there. */
-#ifndef EAUTH
-#define EAUTH 80
-#endif
-
 static uint8_t *read_file_contents(const char *path, size_t *out_len,
 				   int *err_out)
 {
@@ -300,7 +295,7 @@ int policy_verify_buffer(const uint8_t *data, size_t data_len,
 	    1) {
 		ret = 0;
 	} else {
-		ret = -EAUTH;
+		ret = -EKEYREJECTED;
 	}
 
 out:
@@ -374,7 +369,7 @@ int policy_verify_file(const char *file_path, const char *pubkey_pem_path,
 	fclose(f);
 
 	if (nread != POLICY_SIG_SIZE)
-		return -EAUTH;
+		return -EKEYREJECTED;
 
 	int read_err = 0;
 	data = read_file_contents(file_path, &data_len, &read_err);

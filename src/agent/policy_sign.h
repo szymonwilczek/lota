@@ -4,7 +4,6 @@
  *
  * A signature is the raw POLICY_SIG_SIZE bytes in a file of its own. Keys are
  * PEM: PKCS#8 for the private key, SubjectPublicKeyInfo for the public one.
- * EAUTH is 80 where the C library does not define it.
  *
  * Copyright (C) 2026 Szymon Wilczek
  */
@@ -52,8 +51,8 @@ int policy_sign_file(const char *file_path, const char *privkey_pem_path,
  * @pubkey_pem_path: The public key.
  * @sig_path: The signature; bytes past POLICY_SIG_SIZE are ignored.
  *
- * Return: 0 for a valid signature; -EAUTH for an invalid one or a signature
- * shorter than POLICY_SIG_SIZE; otherwise as policy_sign_file().
+ * Return: 0 for a valid signature; -EKEYREJECTED for an invalid one or a
+ * signature shorter than POLICY_SIG_SIZE; otherwise as policy_sign_file().
  */
 int policy_verify_file(const char *file_path, const char *pubkey_pem_path,
 		       const char *sig_path);
@@ -78,8 +77,8 @@ int policy_sign_buffer(const uint8_t *data, size_t data_len,
  * @pubkey_pem_path: The public key.
  * @sig: POLICY_SIG_SIZE bytes.
  *
- * Return: 0 for a valid signature, -EAUTH for an invalid one, -EINVAL for
- * a NULL argument, -ENOENT when the key cannot be read or is not Ed25519,
+ * Return: 0 for a valid signature, -EKEYREJECTED for an invalid one, -EINVAL
+ * for a NULL argument, -ENOENT when the key cannot be read or is not Ed25519,
  * -ENOMEM, or -EIO.
  */
 int policy_verify_buffer(const uint8_t *data, size_t data_len,

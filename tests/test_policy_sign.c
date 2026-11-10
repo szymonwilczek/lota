@@ -20,10 +20,6 @@
 #include "test.h"
 #include "../src/agent/policy_sign.h"
 
-#ifndef EAUTH
-#define EAUTH 80
-#endif
-
 /* temp directory for test artifacts */
 static char tmpdir[64];
 
@@ -169,8 +165,8 @@ static void test_verify_buffer_tampered(void)
 	msg[0] = 'X';
 
 	ret = policy_verify_buffer(msg, sizeof(msg) - 1, pub, sig);
-	if (ret != -EAUTH) {
-		FAIL("expected -EAUTH for tampered data");
+	if (ret != -EKEYREJECTED) {
+		FAIL("expected -EKEYREJECTED for tampered data");
 		return;
 	}
 	PASS();
@@ -208,8 +204,8 @@ static void test_verify_buffer_wrong_key(void)
 
 	/* verify with key2 -> should fail */
 	ret = policy_verify_buffer(msg, sizeof(msg) - 1, pub2, sig);
-	if (ret != -EAUTH) {
-		FAIL("expected -EAUTH for wrong key");
+	if (ret != -EKEYREJECTED) {
+		FAIL("expected -EKEYREJECTED for wrong key");
 		return;
 	}
 	PASS();
@@ -288,8 +284,8 @@ static void test_verify_file_tampered(void)
 	write_file(yaml_path, tampered, strlen(tampered));
 
 	ret = policy_verify_file(yaml_path, pub, sig_path);
-	if (ret != -EAUTH) {
-		FAIL("expected -EAUTH for tampered file");
+	if (ret != -EKEYREJECTED) {
+		FAIL("expected -EKEYREJECTED for tampered file");
 		return;
 	}
 	PASS();
@@ -321,8 +317,8 @@ static void test_verify_file_truncated_sig(void)
 	write_file(sig_path, short_sig, sizeof(short_sig));
 
 	ret = policy_verify_file(yaml_path, pub, sig_path);
-	if (ret != -EAUTH) {
-		FAIL("expected -EAUTH for truncated sig");
+	if (ret != -EKEYREJECTED) {
+		FAIL("expected -EKEYREJECTED for truncated sig");
 		return;
 	}
 	PASS();

@@ -22,10 +22,6 @@
 #include "sdnotify.h"
 #include "lota.h"
 
-#ifndef EAUTH
-#define EAUTH 80
-#endif
-
 static void copy_path(char dst[PATH_MAX], const char *src)
 {
 	size_t len = strnlen(src, PATH_MAX - 1);
@@ -113,7 +109,7 @@ verify_reload_downgrade_authorization_fd(int config_fd, const char *config_path,
 		lota_err("Refusing ENFORCE mode downgrade on reload: "
 			 "policy_pubkey is not "
 			 "configured");
-		return -EAUTH;
+		return -EKEYREJECTED;
 	}
 
 	sig_path_len = strlen(cfg_path) + 5; /* .sig + NUL */
@@ -149,7 +145,7 @@ verify_reload_downgrade_authorization_fd(int config_fd, const char *config_path,
 			close(sig_fd);
 			free(cfg_data);
 			free(sig_path);
-			return -EAUTH;
+			return -EKEYREJECTED;
 		}
 
 		{
@@ -158,7 +154,7 @@ verify_reload_downgrade_authorization_fd(int config_fd, const char *config_path,
 				close(sig_fd);
 				free(cfg_data);
 				free(sig_path);
-				return -EAUTH;
+				return -EKEYREJECTED;
 			}
 		}
 	}
