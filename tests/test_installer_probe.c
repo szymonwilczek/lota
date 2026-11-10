@@ -1516,6 +1516,18 @@ static void test_ima_scope_stage_verdicts(void)
 	else
 		PASS();
 
+	TEST("a kernel without IMA appraisal is reported, not stopped");
+	scope = (struct probe_ima_scope){ .scope = PROBE_IMA_SCOPE_EXEC,
+					  .no_appraisal = 1,
+					  .is_root = 1 };
+	if (probe_ima_scope_stage(&scope, note, sizeof(note)) != STAGE_DONE)
+		FAIL("a host the agent starts on was blocked by the installer");
+	else if (!strstr(note, "no IMA appraisal") ||
+		 strstr(note, "tokens can say"))
+		FAIL("appraise read as appraisal on a kernel without it");
+	else
+		PASS();
+
 	TEST("a kernel publishing no policy is reported, not stopped");
 	scope = (struct probe_ima_scope){ .scope = -ENOTSUP, .is_root = 1 };
 	if (probe_ima_scope_stage(&scope, note, sizeof(note)) != STAGE_DONE)

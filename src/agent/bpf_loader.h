@@ -399,9 +399,11 @@ int bpf_loader_secure_boot_enabled(void);
  * bpf_loader_kernel_appraises_exec() - Does this host appraise executables?
  *
  * bpf_loader_ima_appraisal_active() on the booted cmdline, the loaded policy
- * and this host's Secure Boot state.
+ * and this host's Secure Boot state, once lota_ima_appraise_built() finds
+ * appraisal in the booted kernel.
  *
- * Return: as for bpf_loader_ima_appraisal_active().
+ * Return: -EOPNOTSUPP when lota_ima_appraise_built() does not return 1,
+ * otherwise as for bpf_loader_ima_appraisal_active().
  */
 int bpf_loader_kernel_appraises_exec(void);
 

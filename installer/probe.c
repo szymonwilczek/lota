@@ -23,6 +23,7 @@
 
 #include <linux/fsverity.h>
 
+#include "../include/lota_ima_appraise.h"
 #include "../include/lota_ima_policy_scope.h"
 #include "../include/lota_ima_xattr.h"
 
@@ -537,6 +538,11 @@ int probe_cmdline_has_token(const char *cmdline, const char *token)
 			return 1;
 	}
 	return 0;
+}
+
+int probe_ima_appraise_built(void)
+{
+	return lota_ima_appraise_built(LOTA_VMLINUX_BTF_PATH);
 }
 
 int probe_ima_mode_blocking(int secureboot, const char *cmdline)
@@ -1178,6 +1184,14 @@ enum stage_state probe_ima_scope_stage(const struct probe_ima_scope *s,
 	if (!s) {
 		snprintf(note, cap, "The loaded IMA policy could not be read.");
 		return STAGE_ERROR;
+	}
+
+	if (s->no_appraisal) {
+		snprintf(note, cap,
+			 "The booted kernel has no IMA appraisal (its BTF has "
+			 "no ima_appraise_measurement()), so every token says "
+			 "KERNEL_APPRAISAL is clear.");
+		return STAGE_DONE;
 	}
 
 	if (s->scope == PROBE_IMA_SCOPE_EXEC) {

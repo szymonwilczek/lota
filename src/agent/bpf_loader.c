@@ -29,6 +29,7 @@
 #include <linux/openat2.h>
 
 #include "../../include/lota.h"
+#include "../../include/lota_ima_appraise.h"
 #include "../../include/lota_ima_policy_scope.h"
 #include "bpf_loader.h"
 #include "cgroup_guard.h"
@@ -597,6 +598,12 @@ static int tpm_device_selinux_label_ok(void)
 
 int bpf_loader_kernel_appraises_exec(void)
 {
+	static int built = -1;
+
+	if (built < 0)
+		built = lota_ima_appraise_built(LOTA_VMLINUX_BTF_PATH) == 1;
+	if (!built)
+		return -EOPNOTSUPP;
 	return bpf_loader_ima_appraisal_active(
 		IMA_CMDLINE_PATH, IMA_POLICY_PATH,
 		bpf_loader_secure_boot_enabled() == 0);
@@ -640,6 +647,8 @@ int bpf_loader_verify_kernel_runtime_hardening(bool allow_mutable_rootfs)
 			  ret == -EPERM ?
 				  "ima_appraise= on the kernel cmdline is not "
 				  "enforce" :
+			  ret == -EOPNOTSUPP ?
+				  "the kernel BTF does not show IMA appraisal" :
 				  "the kernel cmdline could not be read");
 
 	ret = tpm_device_selinux_label_ok();

@@ -43,6 +43,7 @@ struct probe_ima_scope {
 	int secureboot;
 	int agent_signed; /* agent binary carries a signed security.ima */
 	int is_root;
+	int no_appraisal; /* probe_ima_appraise_built() returned 0 */
 };
 
 /**
@@ -244,6 +245,13 @@ int probe_cmdline_ima_ok(const char *cmdline);
  * Return: 1 or 0.
  */
 int probe_cmdline_has_token(const char *cmdline, const char *token);
+
+/**
+ * probe_ima_appraise_built() - lota_ima_appraise_built() on the booted kernel.
+ *
+ * Return: as for lota_ima_appraise_built().
+ */
+int probe_ima_appraise_built(void);
 
 /**
  * probe_ima_mode_blocking() - Nonzero @secureboot, or a cmdline that passes

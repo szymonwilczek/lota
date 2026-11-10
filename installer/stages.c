@@ -546,8 +546,10 @@ struct floor_state {
 	int ima_ok;
 	int sig_ok;
 	int lockdown_ok;
-	int appraised; /* scope not PROBE_IMA_SCOPE_NONE, unreadable too */
+	/* ima_built, and a scope not PROBE_IMA_SCOPE_NONE, unreadable too */
+	int appraised;
 	int secureboot;
+	int ima_built; /* probe_ima_appraise_built() is not 0 */
 };
 
 static int booted_ima_appraised(void)
@@ -563,10 +565,13 @@ static void booted_floor(struct floor_state *st)
 	st->secureboot = probe_secureboot() == 1;
 	if (probe_read_text("/proc/cmdline", cmdline, sizeof(cmdline)) < 0)
 		cmdline[0] = '\0';
-	st->ima_ok = probe_ima_mode_blocking(st->secureboot, cmdline);
+	/* a kernel without appraisal has no mode to set */
+	st->ima_built = probe_ima_appraise_built() != 0;
+	st->ima_ok = !st->ima_built ||
+		     probe_ima_mode_blocking(st->secureboot, cmdline);
 	st->sig_ok = probe_module_sig_enforced() == 0;
 	st->lockdown_ok = probe_lockdown_restrictive() == 0;
-	st->appraised = booted_ima_appraised();
+	st->appraised = st->ima_built && booted_ima_appraised();
 }
 
 static enum stage_state st_cmdline_probe(struct install_ctx *ctx, char *note,
@@ -578,6 +583,13 @@ static enum stage_state st_cmdline_probe(struct install_ctx *ctx, char *note,
 	(void)ctx;
 
 	booted_floor(&st);
+	if (!st.ima_built && st.sig_ok && st.lockdown_ok) {
+		snprintf(note, cap,
+			 "Booted kernel has no IMA appraisal, so no "
+			 "ima_appraise= mode applies, and carries signed "
+			 "modules and lockdown.");
+		return STAGE_DONE;
+	}
 	if (st.ima_ok && st.sig_ok && st.lockdown_ok) {
 		snprintf(note, cap,
 			 "Booted kernel appraises in a blocking mode%s, and "
@@ -592,7 +604,7 @@ static enum stage_state st_cmdline_probe(struct install_ctx *ctx, char *note,
 
 	/* configured for the next boot? */
 	if (grubby_default_args(args, sizeof(args)) == 0) {
-		int ima_cfg = probe_cmdline_ima_ok(args) == 0;
+		int ima_cfg = !st.ima_built || probe_cmdline_ima_ok(args) == 0;
 		int sig_cfg =
 			st.sig_ok ||
 			probe_cmdline_has_token(args, "module.sig_enforce=1");
@@ -660,6 +672,7 @@ static enum stage_state st_ima_scope_probe(struct install_ctx *ctx, char *note,
 	scope.scope = probe_ima_policy_scope(PROBE_IMA_POLICY_PATH,
 					     &scope.policy_signed);
 	scope.secureboot = probe_secureboot() == 1;
+	scope.no_appraisal = probe_ima_appraise_built() == 0;
 	scope.agent_signed = probe_file_ima_signed(PATH_AGENT_BIN) == 1;
 
 	return probe_ima_scope_stage(&scope, note, cap);

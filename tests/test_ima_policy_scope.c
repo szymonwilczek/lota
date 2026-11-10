@@ -14,6 +14,7 @@
  * a single machine cannot present.
  */
 
+#include <bpf/btf.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <stdio.h>
@@ -21,6 +22,7 @@
 #include <unistd.h>
 
 #include "test.h"
+#include "../include/lota_ima_appraise.h"
 #include "../include/lota_ima_policy_scope.h"
 #include "../src/agent/bpf_loader.h"
 
@@ -335,6 +337,66 @@ static void test_secure_boot_judge(void)
 		PASS();
 }
 
+/* a raw BTF holding one int-returning function named @func */
+static int write_btf(const char *path, const char *func)
+{
+	struct btf *btf = btf__new_empty();
+	const void *raw;
+	__u32 size;
+	int proto;
+	int ret = -EIO;
+	int fd;
+
+	if (!btf)
+		return -ENOMEM;
+	proto = btf__add_func_proto(btf, btf__add_int(btf, "int", 4,
+						      BTF_INT_SIGNED));
+	if (proto > 0 && btf__add_func(btf, func, BTF_FUNC_GLOBAL, proto) > 0 &&
+	    (raw = btf__raw_data(btf, &size))) {
+		fd = open(path, O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0600);
+		if (fd >= 0) {
+			if (write(fd, raw, size) == (ssize_t)size)
+				ret = 0;
+			close(fd);
+		}
+	}
+	btf__free(btf);
+	return ret;
+}
+
+static void test_appraise_built_from_btf(void)
+{
+	char path[64];
+
+	snprintf(path, sizeof(path), "/tmp/lota-ima-btf-%d", (int)getpid());
+
+	TEST("a kernel BTF with ima_appraise_measurement() appraises");
+	if (write_btf(path, "ima_appraise_measurement") != 0)
+		FAIL("could not write the BTF");
+	else if (lota_ima_appraise_built(path) != 1)
+		FAIL("the function was not found");
+	else
+		PASS();
+
+	TEST("a kernel BTF without it, CONFIG_IMA_APPRAISE=n, does not");
+	if (write_btf(path, "ima_must_appraise_stub") != 0)
+		FAIL("could not write the BTF");
+	else if (lota_ima_appraise_built(path) != 0)
+		FAIL("a BTF without the function read as appraising");
+	else
+		PASS();
+
+	TEST("an unparsable kernel BTF is an error");
+	if (write_file(path, "not btf") != 0)
+		FAIL("could not write the file");
+	else if (lota_ima_appraise_built(path) >= 0)
+		FAIL("garbage read as a BTF");
+	else
+		PASS();
+
+	unlink(path);
+}
+
 int main(void)
 {
 	printf("=== IMA appraisal scope tests ===\n\n");
@@ -356,6 +418,7 @@ int main(void)
 	test_secureboot_ignores_the_cmdline_mode();
 	test_rule_shapes();
 	test_secure_boot_judge();
+	test_appraise_built_from_btf();
 
 	unlink(cmdline_path);
 	unlink(policy_path);
