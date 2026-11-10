@@ -339,7 +339,6 @@ func cmdDevices(ctx *cmdContext, stderr io.Writer, args []string) error {
 		kv(ctx.stdout, "last attestation", info.LastAttestation)
 		kv(ctx.stdout, "attestation count", info.AttestCount)
 		kv(ctx.stdout, "monotonic counter", info.MonotonicCounter)
-		kv(ctx.stdout, "pending challenges", info.PendingChallenges)
 		kv(ctx.stdout, "pcr14 baseline", info.PCR14Baseline)
 		if keys := info.MachineKeys; keys != nil {
 			kv(ctx.stdout, "mok state", keys.MOKState)

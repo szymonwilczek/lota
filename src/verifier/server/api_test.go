@@ -1141,6 +1141,13 @@ func TestIntegrationAPI_MultipleAttestationsSameClient(t *testing.T) {
 	rec := httptest.NewRecorder()
 	mux.ServeHTTP(rec, req)
 
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(rec.Body.Bytes(), &raw); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if _, ok := raw["pending_challenges"]; ok {
+		t.Error("client info carries a per-client pending_challenges")
+	}
 	var resp clientInfoResponse
 	json.NewDecoder(rec.Body).Decode(&resp)
 
@@ -1152,9 +1159,6 @@ func TestIntegrationAPI_MultipleAttestationsSameClient(t *testing.T) {
 	}
 	if resp.LastAttestation == "" {
 		t.Errorf("Expected non-empty last_attestation for persistent ID")
-	}
-	if resp.PendingChallenges != 0 {
-		t.Errorf("pending_challenges: got %d, want 0 (all consumed)", resp.PendingChallenges)
 	}
 
 	// verify global stats

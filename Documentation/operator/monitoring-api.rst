@@ -258,7 +258,6 @@ register anything with the verifier. ::
      "last_attestation_unix": 1782986400,
      "attestation_count": 7,
      "monotonic_counter": 7,
-     "pending_challenges": 0,
      "pcr14_baseline": "cafe...",
      "first_seen": "2026-06-30T08:00:00Z",
      "first_seen_unix": 1782806400,
@@ -293,23 +292,16 @@ out of band carries the registered identity there instead, beside whatever
 client id it chose.
 
 Everything above is read from the state the deployment shares -- the durable
-per-client record -- except two fields, which are this instance's own:
+per-client record -- except ``monotonic_counter``, which is this instance's
+own: the nonce sequence this process has seen from the client. It is not
+compared against anything, so it gates nothing; it resets when the instance
+restarts and differs between instances at the same moment. It is not a
+replay or reordering indicator for a fleet.
 
-``monotonic_counter``
-   the nonce sequence this process has seen from the client. It is not
-   compared against anything, so it gates nothing; it resets when the instance
-   restarts and differs between instances at the same moment. It is not a
-   replay or reordering indicator for a fleet.
-
-``pending_challenges``
-   the challenges this instance is holding for the client right now. A
-   challenge lives where the connection is, so an instance the client is not
-   talking to reports none.
-
-Behind a load balancer, read either of those from one pinned instance or not
-at all. ``last_attestation``, ``attestation_count``, ``first_seen``,
-``tenant``, ``revoked``, ``pcr14_baseline`` and ``machine_keys`` are the fleet's answer and are
-the same on every instance.
+Behind a load balancer, read it from one pinned instance or not at all.
+``last_attestation``, ``attestation_count``, ``first_seen``, ``tenant``,
+``revoked``, ``pcr14_baseline`` and ``machine_keys`` are the fleet's answer
+and are the same on every instance.
 
 Revocations
 ===========

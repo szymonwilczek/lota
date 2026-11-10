@@ -512,17 +512,6 @@ func (ns *NonceStore) ClientCounter(clientID string) uint64 {
 	return 0
 }
 
-// ClientPendingCount returns the binding's outstanding challenges.
-func (ns *NonceStore) ClientPendingCount(clientID string) int {
-	ns.mu.RLock()
-	defer ns.mu.RUnlock()
-
-	if cs, ok := ns.bindingChallenges[clientID]; ok {
-		return cs.pendingCount
-	}
-	return 0
-}
-
 func (ns *NonceStore) ClientLastAttestation(clientID string) time.Time {
 	ns.mu.RLock()
 	defer ns.mu.RUnlock()
@@ -539,7 +528,6 @@ func (ns *NonceStore) ForgetClient(clientID string) {
 	defer ns.mu.Unlock()
 
 	delete(ns.identityChallenges, clientID)
-	delete(ns.bindingChallenges, clientID)
 }
 
 // ListActiveClients returns the identities the store holds state for.

@@ -993,18 +993,18 @@ func (v *Verifier) Stats() Stats {
 
 // ClientInfo is what the verifier knows about one client.
 type ClientInfo struct {
-	ClientID          string
-	HardwareID        string // hex-encoded
-	Revoked           bool
-	RevocationReason  string
-	LastAttestation   time.Time
-	AttestCount       uint64
-	MonotonicCounter  uint64
-	PendingChallenges int
-	PCR14Baseline     string // hex-encoded
-	FirstSeen         time.Time
-	Tenant            string       // CA-assigned; DefaultTenant when never stamped
-	MachineKeys       *MachineKeys // nil until an attestation recorded them
+	ClientID         string
+	HardwareID       string // hex-encoded
+	Revoked          bool
+	RevocationReason string
+	LastAttestation  time.Time
+	AttestCount      uint64
+	MonotonicCounter uint64
+	PCR14Baseline    string // hex-encoded
+	FirstSeen        time.Time
+	// CA-assigned; DefaultTenant when never stamped
+	Tenant      string
+	MachineKeys *MachineKeys // nil until an attestation recorded them
 }
 
 // ClientInfo returns the client's record; false when it has no baseline and
@@ -1031,7 +1031,6 @@ func (v *Verifier) ClientInfo(clientID string) (*ClientInfo, bool, error) {
 
 	// per-instance nonce state, not comparable across instances
 	info.MonotonicCounter = v.nonceStore.ClientCounter(clientID)
-	info.PendingChallenges = v.nonceStore.ClientPendingCount(clientID)
 
 	// the baseline record is shared; the nonce history is this instance's
 	baseline, err := v.baselineStore.GetBaseline(clientID)

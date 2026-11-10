@@ -245,19 +245,18 @@ func (c *Client) ListClients(limit, offset int) (*ClientPage, error) {
 
 // ClientInfo is the GET /api/v1/clients/{id} response.
 type ClientInfo struct {
-	ClientID          string `json:"client_id"`
-	Tenant            string `json:"tenant,omitempty"`
-	HardwareID        string `json:"hardware_id,omitempty"`
-	Revoked           bool   `json:"revoked"`
-	RevocationReason  string `json:"revocation_reason,omitempty"`
-	LastAttestation   string `json:"last_attestation,omitempty"`
-	LastAttestUnix    int64  `json:"last_attestation_unix,omitempty"`
-	AttestCount       uint64 `json:"attestation_count"`
-	MonotonicCounter  uint64 `json:"monotonic_counter"`
-	PendingChallenges int    `json:"pending_challenges"`
-	PCR14Baseline     string `json:"pcr14_baseline,omitempty"`
-	FirstSeen         string `json:"first_seen,omitempty"`
-	FirstSeenUnix     int64  `json:"first_seen_unix,omitempty"`
+	ClientID         string `json:"client_id"`
+	Tenant           string `json:"tenant,omitempty"`
+	HardwareID       string `json:"hardware_id,omitempty"`
+	Revoked          bool   `json:"revoked"`
+	RevocationReason string `json:"revocation_reason,omitempty"`
+	LastAttestation  string `json:"last_attestation,omitempty"`
+	LastAttestUnix   int64  `json:"last_attestation_unix,omitempty"`
+	AttestCount      uint64 `json:"attestation_count"`
+	MonotonicCounter uint64 `json:"monotonic_counter"`
+	PCR14Baseline    string `json:"pcr14_baseline,omitempty"`
+	FirstSeen        string `json:"first_seen,omitempty"`
+	FirstSeenUnix    int64  `json:"first_seen_unix,omitempty"`
 
 	MachineKeys *MachineKeys `json:"machine_keys,omitempty"`
 }

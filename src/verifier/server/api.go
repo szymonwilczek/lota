@@ -398,19 +398,18 @@ type clientListResponse struct {
 }
 
 type clientInfoResponse struct {
-	ClientID          string `json:"client_id"`
-	Tenant            string `json:"tenant"`
-	HardwareID        string `json:"hardware_id,omitempty"`
-	Revoked           bool   `json:"revoked"`
-	RevocationReason  string `json:"revocation_reason,omitempty"`
-	LastAttestation   string `json:"last_attestation,omitempty"`
-	LastAttestUnix    int64  `json:"last_attestation_unix,omitempty"`
-	AttestCount       uint64 `json:"attestation_count"`
-	MonotonicCounter  uint64 `json:"monotonic_counter"`
-	PendingChallenges int    `json:"pending_challenges"`
-	PCR14Baseline     string `json:"pcr14_baseline,omitempty"`
-	FirstSeen         string `json:"first_seen,omitempty"`
-	FirstSeenUnix     int64  `json:"first_seen_unix,omitempty"`
+	ClientID         string `json:"client_id"`
+	Tenant           string `json:"tenant"`
+	HardwareID       string `json:"hardware_id,omitempty"`
+	Revoked          bool   `json:"revoked"`
+	RevocationReason string `json:"revocation_reason,omitempty"`
+	LastAttestation  string `json:"last_attestation,omitempty"`
+	LastAttestUnix   int64  `json:"last_attestation_unix,omitempty"`
+	AttestCount      uint64 `json:"attestation_count"`
+	MonotonicCounter uint64 `json:"monotonic_counter"`
+	PCR14Baseline    string `json:"pcr14_baseline,omitempty"`
+	FirstSeen        string `json:"first_seen,omitempty"`
+	FirstSeenUnix    int64  `json:"first_seen_unix,omitempty"`
 
 	MachineKeys *verify.MachineKeys `json:"machine_keys,omitempty"`
 }
@@ -656,16 +655,15 @@ func (h *APIHandler) handleClientInfo(w http.ResponseWriter, r *http.Request) {
 	}
 
 	resp := clientInfoResponse{
-		ClientID:          info.ClientID,
-		Tenant:            info.Tenant,
-		HardwareID:        info.HardwareID,
-		Revoked:           info.Revoked,
-		RevocationReason:  info.RevocationReason,
-		AttestCount:       info.AttestCount,
-		MonotonicCounter:  info.MonotonicCounter,
-		PendingChallenges: info.PendingChallenges,
-		PCR14Baseline:     info.PCR14Baseline,
-		MachineKeys:       info.MachineKeys,
+		ClientID:         info.ClientID,
+		Tenant:           info.Tenant,
+		HardwareID:       info.HardwareID,
+		Revoked:          info.Revoked,
+		RevocationReason: info.RevocationReason,
+		AttestCount:      info.AttestCount,
+		MonotonicCounter: info.MonotonicCounter,
+		PCR14Baseline:    info.PCR14Baseline,
+		MachineKeys:      info.MachineKeys,
 	}
 
 	if !info.LastAttestation.IsZero() {
