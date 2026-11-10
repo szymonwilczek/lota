@@ -270,6 +270,7 @@ int cli_parse(int argc, char **argv, struct cli_options *opts,
 {
 	static const char optstring[] =
 		"f:ZticSEaI:s:p:C:KF:b:m:MPJYXR:L:A:dD:G:g:V:k:Q:h";
+	bool pubkey_flag = false;
 	int opt;
 
 	static struct option long_options[] = {
@@ -661,6 +662,7 @@ int cli_parse(int argc, char **argv, struct cli_options *opts,
 			break;
 		case 'Q':
 			opts->policy_pubkey_path = optarg;
+			pubkey_flag = true;
 			break;
 		case 'f':
 			break;
@@ -674,6 +676,13 @@ int cli_parse(int argc, char **argv, struct cli_options *opts,
 			return (opt == 'h') ? -1 : 1;
 		}
 	}
+
+	if (!pubkey_flag && cfg->policy_pubkey[0] &&
+	    opts->policy_pubkey_path != cfg->policy_pubkey &&
+	    access(cfg->policy_pubkey, R_OK) != 0)
+		fprintf(stderr,
+			"Warning: policy_pubkey %s is not readable: %s\n",
+			cfg->policy_pubkey, strerror(errno));
 
 	return 0;
 }

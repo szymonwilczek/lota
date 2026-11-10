@@ -2746,6 +2746,66 @@ static void test_cli_trust_lib_path(void)
 	PASS();
 }
 
+static void test_cli_policy_pubkey_unreadable(void)
+{
+	struct cli_options opts;
+	struct lota_config *cfg;
+	char path[PATH_MAX];
+	char log_path[PATH_MAX];
+	char log[512] = "";
+	int saved, fd, rc;
+	bool quiet;
+
+	TEST("an unreadable policy_pubkey is reported with its errno");
+
+	write_config("cli_pubkey.conf",
+		     "policy_pubkey = /nonexistent/named.pub\n");
+	config_path("cli_pubkey.conf", path, sizeof(path));
+	config_path("cli_pubkey.log", log_path, sizeof(log_path));
+	cfg = config_new();
+	saved = dup(STDERR_FILENO);
+	fd = open(log_path, O_RDWR | O_CREAT | O_TRUNC | O_CLOEXEC, 0600);
+	if (!cfg || saved < 0 || fd < 0) {
+		FAIL("setup");
+		config_free(cfg);
+		return;
+	}
+
+	const char *const argv[] = { "lota-agent", "--config", path,
+				     "--policy-pubkey",
+				     "/nonexistent/flag.pub" };
+
+	fflush(stderr);
+	dup2(fd, STDERR_FILENO);
+	rc = cli_parse_argv(argv, 5, &opts, cfg);
+	fflush(stderr);
+	quiet = lseek(fd, 0, SEEK_END) == 0;
+	rc = rc ?: cli_parse_argv(argv, 3, &opts, cfg);
+	fflush(stderr);
+	dup2(saved, STDERR_FILENO);
+	close(saved);
+	if (pread(fd, log, sizeof(log) - 1, 0) < 0)
+		log[0] = '\0';
+	close(fd);
+	unlink(log_path);
+	config_free(cfg);
+
+	if (rc != 0) {
+		FAIL("the configuration is refused");
+		return;
+	}
+	if (!quiet) {
+		FAIL("warned about the file key under --policy-pubkey");
+		return;
+	}
+	if (!strstr(log, "/nonexistent/named.pub") ||
+	    !strstr(log, strerror(ENOENT))) {
+		FAIL(log);
+		return;
+	}
+	PASS();
+}
+
 int main(void)
 {
 	printf("=== LOTA Config Parser Tests ===\n\n");
@@ -2815,6 +2875,7 @@ int main(void)
 		test_cli_config_spellings,
 		test_cli_attest_interval_bounds,
 		test_cli_trust_lib_path,
+		test_cli_policy_pubkey_unreadable,
 	};
 
 	for (size_t i = 0; i < sizeof(tests) / sizeof(tests[0]); i++)
