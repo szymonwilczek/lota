@@ -480,10 +480,15 @@ int main(int argc, char **argv)
 	if (rc != 0)
 		return rc;
 
-	uint8_t *secret = malloc(strlen(secret_b64));
+	uint8_t *secret = malloc(strlen(secret_b64) + 1);
 	size_t secret_len = 0;
-	if (!secret || base64_decode(secret_b64, secret, strlen(secret_b64),
-				     &secret_len) != 0) {
+	if (!secret) {
+		fprintf(stderr, "ci-attest: out of memory\n");
+		free(secret_b64);
+		return EXIT_OUTPUT;
+	}
+	if (base64_decode(secret_b64, secret, strlen(secret_b64),
+			  &secret_len) != 0) {
 		fprintf(stderr, "ci-attest: released secret is not base64\n");
 		free(secret);
 		free(secret_b64);
