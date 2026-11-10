@@ -11,9 +11,7 @@
 #include <sys/types.h>
 
 #include "../../include/lota.h"
-#include "agent.h"
 #include "event.h"
-#include "hash_verify.h"
 #include "ipc.h"
 #include "journal.h"
 #include "kill_report.h"
@@ -113,11 +111,9 @@ int handle_exec_event(void *ctx, void *data, size_t len)
 	struct lota_exec_event event_copy;
 	struct lota_exec_event *event = &event_copy;
 	const char *event_type_str;
-	uint8_t content_hash[LOTA_HASH_SIZE];
 	char hash_hex[LOTA_HASH_SIZE * 2 + 1];
 	char comm_safe[LOTA_MAX_COMM_LEN];
 	char filename_safe[LOTA_MAX_PATH_LEN];
-	int has_file = 0;
 	bool is_exec = false;
 	(void)ctx;
 
@@ -129,10 +125,7 @@ int handle_exec_event(void *ctx, void *data, size_t len)
 	event->comm[LOTA_MAX_COMM_LEN - 1] = '\0';
 	event->filename[LOTA_MAX_PATH_LEN - 1] = '\0';
 
-	/*
-	 * Any process names its comm and its paths. The hash path opens the raw
-	 * filename.
-	 */
+	/* any process names its comm and its paths */
 	lota_str_sanitize(event->comm, comm_safe, sizeof(comm_safe));
 	lota_str_sanitize(event->filename, filename_safe,
 			  sizeof(filename_safe));
@@ -140,29 +133,23 @@ int handle_exec_event(void *ctx, void *data, size_t len)
 	switch (event->event_type) {
 	case LOTA_EVENT_EXEC:
 		event_type_str = "EXEC";
-		has_file = 1;
 		is_exec = true;
 		break;
 	case LOTA_EVENT_EXEC_BLOCKED:
 		event_type_str = "EXEC_BLOCKED";
-		has_file = 1;
 		is_exec = true;
 		break;
 	case LOTA_EVENT_MODULE_LOAD:
 		event_type_str = "MODULE";
-		has_file = 1;
 		break;
 	case LOTA_EVENT_MODULE_BLOCKED:
 		event_type_str = "BLOCKED";
-		has_file = 1;
 		break;
 	case LOTA_EVENT_MOUNT_BLOCKED:
 		event_type_str = "MOUNT_BLOCKED";
-		has_file = 1;
 		break;
 	case LOTA_EVENT_MMAP_EXEC:
 		event_type_str = "MMAP_EXEC";
-		has_file = 1;
 		if (event->flags & LOTA_EVENT_FLAG_PROTECTED) {
 			ipc_runtime_coverage_forget();
 			remeasure_protected_image(event);
@@ -170,7 +157,6 @@ int handle_exec_event(void *ctx, void *data, size_t len)
 		break;
 	case LOTA_EVENT_MMAP_BLOCKED:
 		event_type_str = "MMAP_BLOCKED";
-		has_file = 1;
 		if (event->flags & LOTA_EVENT_FLAG_PROTECTED) {
 			ipc_runtime_coverage_forget();
 			remeasure_protected_image(event);
@@ -242,26 +228,13 @@ int handle_exec_event(void *ctx, void *data, size_t len)
 		break;
 	}
 
-	if (has_file && event->filename[0] == '/') {
-		const uint8_t *digest = NULL;
-
-		if (is_exec) {
-			if (hash_is_nonzero(event->hash))
-				digest = event->hash;
-		} else if (hash_verify_event(&g_agent.hash_ctx, event,
-					     content_hash) == 0) {
-			digest = content_hash;
-		}
-
-		if (digest) {
-			format_sha256(digest, hash_hex);
-			lota_info(
-				"[%llu] %s %s: %s verity32=%s (pid=%u, uid=%u)",
-				(unsigned long long)event->timestamp_ns,
-				event_type_str, comm_safe, filename_safe,
-				hash_hex, event->pid, event->uid);
-			return 0;
-		}
+	if (is_exec && hash_is_nonzero(event->hash)) {
+		format_sha256(event->hash, hash_hex);
+		lota_info("[%llu] %s %s: %s verity32=%s (pid=%u, uid=%u)",
+			  (unsigned long long)event->timestamp_ns,
+			  event_type_str, comm_safe, filename_safe, hash_hex,
+			  event->pid, event->uid);
+		return 0;
 	}
 
 	lota_info("[%llu] %s %s: %s (pid=%u, uid=%u)",

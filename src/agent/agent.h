@@ -17,7 +17,6 @@
 #include "bpf_loader.h"
 #include "container_watch.h"
 #include "dbus.h"
-#include "hash_verify.h"
 #include "ipc.h"
 #include "tpm.h"
 
@@ -32,7 +31,6 @@ struct agent_globals {
 	struct tpm_context tpm_ctx;
 	struct bpf_loader_ctx bpf_ctx;
 	struct ipc_context ipc_ctx;
-	struct hash_verify_ctx hash_ctx;
 	struct dbus_context *dbus_ctx;
 	struct container_watch container_watch;
 	int mode;

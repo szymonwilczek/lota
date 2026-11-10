@@ -157,7 +157,6 @@ AGENT_SRCS := $(AGENT_DIR)/main.c \
               $(AGENT_DIR)/report.c \
               $(AGENT_DIR)/esrt.c \
               $(AGENT_DIR)/moklist.c \
-              $(AGENT_DIR)/hash_verify.c \
               $(AGENT_DIR)/daemon.c \
               $(AGENT_DIR)/shutdown.c \
               $(AGENT_DIR)/policy.c \
@@ -1400,9 +1399,6 @@ $(BUILD_DIR)/test_flag_names: TEST_LDLIBS := $(TEST_LIBSDK)
 $(BUILD_DIR)/test_hardening: $(AGENT_DIR)/hardening.c $(AGENT_DIR)/journal.c
 $(BUILD_DIR)/test_hardening: TEST_LDLIBS := -lseccomp -lsystemd -pthread
 
-$(BUILD_DIR)/test_hash_verify: $(AGENT_DIR)/hash_verify.c
-$(BUILD_DIR)/test_hash_verify: TEST_LDLIBS := -lcrypto
-
 $(BUILD_DIR)/test_ima_xattr: $(INC_DIR)/lota_ima_xattr.h
 
 $(BUILD_DIR)/test_initramfs_lock: src/initramfs/lota-pcr14-lock.c
@@ -1718,7 +1714,7 @@ VALGRIND ?= valgrind
 VALGRIND_FLAGS := --error-exitcode=1 --leak-check=full \
 	--errors-for-leak-kinds=definite,indirect --track-origins=yes -q
 VALGRIND_UNIT_BINS := \
-	test_hash_verify test_dbus test_systemd test_packaging \
+	test_dbus test_systemd test_packaging \
 	test_steam_runtime test_container_watch test_token_gate test_wine_hook \
 	test_daemon test_daemon_start_status test_signal_shutdown \
 	test_daemon_loop test_config test_config_alloc test_subscribe \
