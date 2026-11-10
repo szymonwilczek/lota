@@ -837,11 +837,9 @@ static int verify_bpf_object_signature(const char *bpf_obj_path,
 		goto out;
 	}
 
-	nread = fread(sig, 1, POLICY_SIG_SIZE, f);
-	if (nread != POLICY_SIG_SIZE) {
-		ret = -EKEYREJECTED;
+	ret = policy_sig_read(fileno(f), sig);
+	if (ret < 0)
 		goto out;
-	}
 
 	ret = policy_verify_buffer(obj_data, obj_len, bpf_pubkey_pem_path, sig);
 	if (ret == 0) {

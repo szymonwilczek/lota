@@ -324,6 +324,45 @@ static void test_verify_file_truncated_sig(void)
 	PASS();
 }
 
+static void test_verify_file_sig_size(void)
+{
+	static const size_t sizes[] = { POLICY_SIG_SIZE - 1, POLICY_SIG_SIZE,
+					POLICY_SIG_SIZE + 1 };
+	char priv[PATH_MAX], pub[PATH_MAX];
+	char yaml_path[PATH_MAX], sig_path[PATH_MAX];
+	const char *content = "name: size-test\n";
+	uint8_t sig[POLICY_SIG_SIZE + 1] = { 0 };
+	int ret;
+
+	TEST("verify file takes a signature of exactly POLICY_SIG_SIZE bytes");
+	make_paths("size", priv, pub, sizeof(priv));
+	snprintf(yaml_path, sizeof(yaml_path), "%s/size.yaml", tmpdir);
+	snprintf(sig_path, sizeof(sig_path), "%s/size.yaml.sig", tmpdir);
+
+	if (policy_sign_generate_keypair(priv, pub) != 0) {
+		FAIL("keygen failed");
+		return;
+	}
+	write_file(yaml_path, content, strlen(content));
+	if (policy_sign_buffer((const uint8_t *)content, strlen(content), priv,
+			       sig) != 0) {
+		FAIL("sign failed");
+		return;
+	}
+
+	for (size_t i = 0; i < sizeof(sizes) / sizeof(sizes[0]); i++) {
+		write_file(sig_path, sig, sizes[i]);
+		ret = policy_verify_file(yaml_path, pub, sig_path);
+		if (ret != (sizes[i] == POLICY_SIG_SIZE ? 0 : -EKEYREJECTED)) {
+			FAIL(sizes[i] < POLICY_SIG_SIZE	 ? "63 bytes" :
+			     sizes[i] == POLICY_SIG_SIZE ? "64 bytes" :
+							   "65 bytes");
+			return;
+		}
+	}
+	PASS();
+}
+
 static void test_sign_buffer_null_args(void)
 {
 	char priv[PATH_MAX], pub[PATH_MAX];
@@ -593,6 +632,7 @@ int main(void)
 	test_sign_verify_file();
 	test_verify_file_tampered();
 	test_verify_file_truncated_sig();
+	test_verify_file_sig_size();
 	test_sign_buffer_null_args();
 	test_verify_buffer_null_args();
 	test_sign_file_null_args();

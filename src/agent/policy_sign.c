@@ -348,28 +348,51 @@ int policy_sign_file(const char *file_path, const char *privkey_pem_path,
 	return 0;
 }
 
+int policy_sig_read(int fd, uint8_t sig[POLICY_SIG_SIZE])
+{
+	size_t got = 0;
+	uint8_t extra;
+	ssize_t n;
+
+	while (got < POLICY_SIG_SIZE) {
+		n = read(fd, sig + got, POLICY_SIG_SIZE - got);
+		if (n < 0 && errno == EINTR)
+			continue;
+		if (n < 0)
+			return -errno;
+		if (n == 0)
+			return -EKEYREJECTED;
+		got += (size_t)n;
+	}
+
+	do {
+		n = read(fd, &extra, 1);
+	} while (n < 0 && errno == EINTR);
+	if (n < 0)
+		return -errno;
+	return n == 0 ? 0 : -EKEYREJECTED;
+}
+
 int policy_verify_file(const char *file_path, const char *pubkey_pem_path,
 		       const char *sig_path)
 {
 	uint8_t *data = NULL;
 	size_t data_len = 0;
 	uint8_t sig[POLICY_SIG_SIZE];
-	FILE *f = NULL;
-	size_t nread;
+	int fd;
 	int ret;
 
 	if (!file_path || !pubkey_pem_path || !sig_path)
 		return -EINVAL;
 
-	f = fopen(sig_path, "rb");
-	if (!f)
+	fd = open(sig_path, O_RDONLY | O_CLOEXEC);
+	if (fd < 0)
 		return -errno ? -errno : -ENOENT;
 
-	nread = fread(sig, 1, POLICY_SIG_SIZE, f);
-	fclose(f);
-
-	if (nread != POLICY_SIG_SIZE)
-		return -EKEYREJECTED;
+	ret = policy_sig_read(fd, sig);
+	close(fd);
+	if (ret < 0)
+		return ret;
 
 	int read_err = 0;
 	data = read_file_contents(file_path, &data_len, &read_err);

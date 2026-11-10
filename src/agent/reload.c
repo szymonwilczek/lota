@@ -139,26 +139,13 @@ verify_reload_downgrade_authorization_fd(int config_fd, const char *config_path,
 		return ret;
 	}
 
-	{
-		ssize_t n = read(sig_fd, sig, sizeof(sig));
-		if (n != (ssize_t)sizeof(sig)) {
-			close(sig_fd);
-			free(cfg_data);
-			free(sig_path);
-			return -EKEYREJECTED;
-		}
-
-		{
-			uint8_t extra;
-			if (read(sig_fd, &extra, 1) != 0) {
-				close(sig_fd);
-				free(cfg_data);
-				free(sig_path);
-				return -EKEYREJECTED;
-			}
-		}
-	}
+	ret = policy_sig_read(sig_fd, sig);
 	close(sig_fd);
+	if (ret < 0) {
+		free(cfg_data);
+		free(sig_path);
+		return ret;
+	}
 
 	ret = policy_verify_buffer(cfg_data, cfg_len, cfg->policy_pubkey, sig);
 	free(cfg_data);

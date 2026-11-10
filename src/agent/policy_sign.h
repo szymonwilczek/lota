@@ -46,13 +46,24 @@ int policy_sign_file(const char *file_path, const char *privkey_pem_path,
 		     const char *sig_path);
 
 /**
+ * policy_sig_read() - Read a signature file.
+ * @fd: The open signature file.
+ * @sig: Receives POLICY_SIG_SIZE bytes.
+ *
+ * Return: 0; -EKEYREJECTED when the file holds fewer or more than
+ * POLICY_SIG_SIZE bytes; or a negative errno from read().
+ */
+int policy_sig_read(int fd, uint8_t sig[POLICY_SIG_SIZE]);
+
+/**
  * policy_verify_file() - Check a detached signature of a file.
  * @file_path: The signed file.
  * @pubkey_pem_path: The public key.
- * @sig_path: The signature; bytes past POLICY_SIG_SIZE are ignored.
+ * @sig_path: The signature.
  *
  * Return: 0 for a valid signature; -EKEYREJECTED for an invalid one or a
- * signature shorter than POLICY_SIG_SIZE; otherwise as policy_sign_file().
+ * signature file of another size than POLICY_SIG_SIZE; otherwise as
+ * policy_sign_file().
  */
 int policy_verify_file(const char *file_path, const char *pubkey_pem_path,
 		       const char *sig_path);
