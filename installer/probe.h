@@ -37,6 +37,34 @@ enum stage_state probe_agent_service_stage(const struct probe_service_state *s,
 
 #define PROBE_IMA_POLICY_PATH "/sys/kernel/security/ima/policy"
 
+struct probe_floor {
+	int ima_ok;
+	int sig_ok;
+	int lockdown_ok;
+	/* ima_built, and a scope not PROBE_IMA_SCOPE_NONE, unreadable too */
+	int appraised;
+	int secureboot;
+	int ima_built; /* probe_ima_appraise_built() is not 0 */
+	int appraises; /* probe_ima_policy_appraises() is not 0 */
+};
+
+/**
+ * probe_cmdline_next_boot_stage() - Cmdline stage verdict for the next boot.
+ * @st:   booted floor with at least one of ima_ok, sig_ok and lockdown_ok
+ *        clear.
+ * @args: default kernel cmdline from grubby, or NULL when unread.
+ * @note: filled with the reason for the verdict.
+ * @cap:  size of @note.
+ *
+ * Return: STAGE_ERROR when @st or @note is NULL. With @st->appraises set and
+ * @st->ima_ok clear, STAGE_BLOCKED when @args puts IMA appraisal in enforce
+ * or ima_ok is the only one clear. Otherwise STAGE_REBOOT when @args carries
+ * the floor, else STAGE_PENDING.
+ */
+enum stage_state probe_cmdline_next_boot_stage(const struct probe_floor *st,
+					       const char *args, char *note,
+					       size_t cap);
+
 struct probe_ima_scope {
 	int scope; /* enum probe_ima_scope_state, or -errno from the read */
 	int policy_signed; /* policy writes are appraised against a signature */
@@ -72,6 +100,15 @@ enum probe_ima_scope_state {
  * Return: enum probe_ima_scope_state, or -errno when the file cannot be read.
  */
 int probe_ima_policy_scope(const char *policy_path, int *policy_signed);
+
+/**
+ * probe_ima_policy_appraises() - Does the loaded IMA policy appraise anything?
+ * @policy_path: policy file.
+ *
+ * Return: 1 when a rule has the appraise action, whatever its func=,
+ * 0 when none has, -errno when the file cannot be read.
+ */
+int probe_ima_policy_appraises(const char *policy_path);
 
 enum probe_verity {
 	PROBE_VERITY_ENABLED = 0,

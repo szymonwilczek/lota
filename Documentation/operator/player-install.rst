@@ -173,8 +173,13 @@ What the stages do
    own, and the rules it applies to are the next stage. On a Secure Boot host the appraisal parameter is left
    out, because the kernel discards ``ima_appraise=`` there and appraises in
    its own built-in blocking mode -- writing it would describe a mode that is
-   not the machine's. Signature content stays distribution or
-   operator-supplied (see the production bring-up guide). Requires a reboot.
+   not the machine's. It is left out, too, while the loaded IMA policy has an
+   ``appraise`` rule on any hook, or cannot be read: ``enforce`` would refuse,
+   from the next boot, each file those rules reach without a valid signature
+   or hash, so the stage stops and says so, also when the boot entries
+   already put appraisal in enforce. Signature content stays
+   distribution or operator-supplied (see the production bring-up guide).
+   Requires a reboot.
 #. **IMA appraisal scope** -- the previous stage sets the appraisal *mode*, and
    the kernel applies that mode only to the rules its loaded policy carries. A
    policy whose ``appraise`` rules reach no executable appraises nothing, so

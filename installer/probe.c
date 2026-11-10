@@ -501,6 +501,24 @@ int probe_ima_policy_scope(const char *policy_path, int *policy_signed)
 	return found ? PROBE_IMA_SCOPE_EXEC : PROBE_IMA_SCOPE_NONE;
 }
 
+int probe_ima_policy_appraises(const char *policy_path)
+{
+	char line[LOTA_IMA_POLICY_RULE_MAX];
+	FILE *fp;
+	int found = 0;
+
+	if (!policy_path)
+		return -EINVAL;
+	fp = fopen(policy_path, "re");
+	if (!fp)
+		return -errno;
+	while (!found && fgets(line, sizeof(line), fp))
+		found = strncmp(line, "appraise", 8) == 0 &&
+			(line[8] == ' ' || line[8] == '\t' || line[8] == '\n');
+	fclose(fp);
+	return found;
+}
+
 int probe_cmdline_has_token(const char *cmdline, const char *token)
 {
 	char buf[4096];
@@ -1159,6 +1177,64 @@ enum stage_state probe_agent_service_stage(const struct probe_service_state *s,
 
 	snprintf(note, cap, "lota-agent.service is ACTIVE and enabled.");
 	return STAGE_DONE;
+}
+
+enum stage_state probe_cmdline_next_boot_stage(const struct probe_floor *st,
+					       const char *args, char *note,
+					       size_t cap)
+{
+	if (!st || !note)
+		return STAGE_ERROR;
+	if (args) {
+		int ima_cfg = !st->ima_built || probe_cmdline_ima_ok(args) == 0;
+		int sig_cfg =
+			st->sig_ok ||
+			probe_cmdline_has_token(args, "module.sig_enforce=1");
+		int lock_cfg =
+			st->lockdown_ok ||
+			probe_cmdline_has_token(args, "lockdown=integrity");
+
+		if (ima_cfg && !st->ima_ok && st->appraises) {
+			snprintf(
+				note, cap,
+				"The default kernel cmdline puts IMA appraisal "
+				"in enforce, and the loaded IMA policy has "
+				"appraise rules, or cannot be read: the next "
+				"boot would refuse each file they reach "
+				"without a valid signature or hash. Keep the "
+				"booted ima_appraise= mode on it until they "
+				"carry one.");
+			return STAGE_BLOCKED;
+		}
+		if (ima_cfg && sig_cfg && lock_cfg) {
+			snprintf(note, cap,
+				 "kernel cmdline is configured. "
+				 "The floor takes effect on the "
+				 "next boot");
+			return STAGE_REBOOT;
+		}
+	}
+
+	if (!st->ima_ok && st->appraises && st->sig_ok && st->lockdown_ok) {
+		snprintf(note, cap,
+			 "The loaded IMA policy has appraise rules, or cannot "
+			 "be read, and the booted mode refuses nothing they "
+			 "reach. ima_appraise=enforce would refuse, from the "
+			 "next boot, each of those files without a valid "
+			 "signature or hash, so it is not added. Add it once "
+			 "they carry one.");
+		return STAGE_BLOCKED;
+	}
+
+	snprintf(note, cap, "Booted kernel lacks:%s%s%s%s",
+		 st->ima_ok ? "" : " ima_appraise",
+		 st->sig_ok ? "" : " module.sig_enforce",
+		 st->lockdown_ok ? "" : " lockdown",
+		 !st->ima_ok && st->appraises ?
+			 " (ima_appraise=enforce is not added: the loaded "
+			 "IMA policy has appraise rules, or cannot be read)" :
+			 "");
+	return STAGE_PENDING;
 }
 
 enum stage_state probe_ima_scope_stage(const struct probe_ima_scope *s,

@@ -542,23 +542,13 @@ static int grubby_default_args(char *buf, size_t cap)
 	return 0;
 }
 
-struct floor_state {
-	int ima_ok;
-	int sig_ok;
-	int lockdown_ok;
-	/* ima_built, and a scope not PROBE_IMA_SCOPE_NONE, unreadable too */
-	int appraised;
-	int secureboot;
-	int ima_built; /* probe_ima_appraise_built() is not 0 */
-};
-
 static int booted_ima_appraised(void)
 {
 	return probe_ima_policy_scope(PROBE_IMA_POLICY_PATH, NULL) !=
 	       PROBE_IMA_SCOPE_NONE;
 }
 
-static void booted_floor(struct floor_state *st)
+static void booted_floor(struct probe_floor *st)
 {
 	char cmdline[4096];
 
@@ -572,12 +562,13 @@ static void booted_floor(struct floor_state *st)
 	st->sig_ok = probe_module_sig_enforced() == 0;
 	st->lockdown_ok = probe_lockdown_restrictive() == 0;
 	st->appraised = st->ima_built && booted_ima_appraised();
+	st->appraises = probe_ima_policy_appraises(PROBE_IMA_POLICY_PATH) != 0;
 }
 
 static enum stage_state st_cmdline_probe(struct install_ctx *ctx, char *note,
 					 size_t cap)
 {
-	struct floor_state st;
+	struct probe_floor st;
 	char args[4096];
 
 	(void)ctx;
@@ -602,41 +593,20 @@ static enum stage_state st_cmdline_probe(struct install_ctx *ctx, char *note,
 		return STAGE_DONE;
 	}
 
-	/* configured for the next boot? */
-	if (grubby_default_args(args, sizeof(args)) == 0) {
-		int ima_cfg = !st.ima_built || probe_cmdline_ima_ok(args) == 0;
-		int sig_cfg =
-			st.sig_ok ||
-			probe_cmdline_has_token(args, "module.sig_enforce=1");
-		int lock_cfg =
-			st.lockdown_ok ||
-			probe_cmdline_has_token(args, "lockdown=integrity");
-
-		if (ima_cfg && sig_cfg && lock_cfg) {
-			snprintf(note, cap,
-				 "kernel cmdline is configured. "
-				 "The floor takes effect on the "
-				 "next boot");
-			return STAGE_REBOOT;
-		}
-	}
-
-	snprintf(note, cap, "Booted kernel lacks:%s%s%s",
-		 st.ima_ok ? "" : " ima_appraise",
-		 st.sig_ok ? "" : " module.sig_enforce",
-		 st.lockdown_ok ? "" : " lockdown");
-	return STAGE_PENDING;
+	return probe_cmdline_next_boot_stage(
+		&st, grubby_default_args(args, sizeof(args)) == 0 ? args : NULL,
+		note, cap);
 }
 
 static int st_cmdline_apply(struct install_ctx *ctx)
 {
-	struct floor_state st;
+	struct probe_floor st;
 	char args[256] = "";
 	int rc;
 
 	booted_floor(&st);
 
-	if (!st.ima_ok)
+	if (!st.ima_ok && !st.appraises)
 		strcat(args, "ima_appraise=enforce ");
 	if (!st.sig_ok)
 		strcat(args, "module.sig_enforce=1 ");
@@ -1330,7 +1300,7 @@ static const char telemetry_summary[] =
 enum stage_state install_selfcheck_probe(struct install_ctx *ctx, char *note,
 					 size_t cap)
 {
-	struct floor_state st;
+	struct probe_floor st;
 	struct profile_paths paths;
 	int days = 0;
 	int rc;
@@ -1381,7 +1351,7 @@ enum stage_state install_selfcheck_probe(struct install_ctx *ctx, char *note,
 
 int install_self_check(struct install_ctx *ctx)
 {
-	struct floor_state st;
+	struct probe_floor st;
 	struct profile_paths paths;
 	int days = 0;
 	int ok = 1;
@@ -1651,8 +1621,10 @@ const struct stage install_stages[] = {
 			"enforce mode lets a token say KERNEL_APPRAISAL; "
 			"without it the agent starts with a warning. "
 			"This step appends the missing parameters to the boot "
-			"entries via grubby. They appear in /etc/default/grub and "
-			"take effect on the next boot. "
+			"entries via grubby, ima_appraise=enforce only while "
+			"the loaded IMA policy has no appraise rule. They "
+			"appear in /etc/default/grub and take effect on the "
+			"next boot. "
 			"Removing them restores the previous behaviour.",
 		.probe = st_cmdline_probe,
 		.apply = st_cmdline_apply,

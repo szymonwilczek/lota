@@ -1615,7 +1615,126 @@ static void test_ima_policy_scope_reader(void)
 	else
 		PASS();
 
+	TEST("any appraise rule, on any hook, keeps enforce off the cmdline");
+	{
+		static const struct {
+			const char *policy;
+			int want;
+		} cases[] = {
+			{ "measure func=BPRM_CHECK\n"
+			  "dont_appraise fsmagic=0x9fa0\n",
+			  0 },
+			{ "appraise func=MMAP_CHECK mask=MAY_EXEC "
+			  "appraise_type=imasig \n",
+			  1 },
+			{ "appraise func=POLICY_CHECK appraise_type=imasig \n",
+			  1 },
+			{ "appraise fowner=0\n", 1 },
+			{ "", 0 },
+		};
+		int bad = -1;
+
+		for (size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); i++) {
+			size_t len = strlen(cases[i].policy);
+
+			fd = open(path, O_WRONLY | O_CREAT | O_TRUNC, 0600);
+			if (fd < 0 ||
+			    write(fd, cases[i].policy, len) != (ssize_t)len ||
+			    probe_ima_policy_appraises(path) != cases[i].want) {
+				bad = (int)i;
+				if (fd >= 0)
+					close(fd);
+				break;
+			}
+			close(fd);
+		}
+		if (bad >= 0)
+			FAIL("a policy was read wrong for its appraise rules");
+		else if (probe_ima_policy_appraises(
+				 "/nonexistent/ima/policy") != -ENOENT)
+			FAIL("an unreadable policy gave no errno");
+		else
+			PASS();
+	}
+
 	unlink(path);
+}
+
+static void test_cmdline_next_boot_verdicts(void)
+{
+	static const struct {
+		struct probe_floor st;
+		const char *args;
+		enum stage_state want;
+		const char *note;
+	} cases[] = {
+		{ { .sig_ok = 1,
+		    .lockdown_ok = 1,
+		    .ima_built = 1,
+		    .appraises = 1 },
+		  "ro ima_appraise=enforce",
+		  STAGE_BLOCKED,
+		  "puts IMA appraisal in enforce" },
+		{ { .sig_ok = 1,
+		    .lockdown_ok = 1,
+		    .ima_built = 1,
+		    .appraises = 1 },
+		  "ro quiet",
+		  STAGE_BLOCKED,
+		  "puts IMA appraisal in enforce" },
+		{ { .lockdown_ok = 1, .ima_built = 1, .appraises = 1 },
+		  "ro ima_appraise=enforce",
+		  STAGE_BLOCKED,
+		  "puts IMA appraisal in enforce" },
+		{ { .sig_ok = 1,
+		    .lockdown_ok = 1,
+		    .ima_built = 1,
+		    .appraises = 1 },
+		  "ro ima_appraise=fix",
+		  STAGE_BLOCKED,
+		  "so it is not added" },
+		{ { .lockdown_ok = 1, .ima_built = 1, .appraises = 1 },
+		  "ro ima_appraise=fix",
+		  STAGE_PENDING,
+		  "is not added" },
+		{ { .sig_ok = 1, .lockdown_ok = 1, .ima_built = 1 },
+		  "ro ima_appraise=enforce",
+		  STAGE_REBOOT,
+		  "is configured" },
+		{ { .ima_ok = 1,
+		    .lockdown_ok = 1,
+		    .secureboot = 1,
+		    .ima_built = 1,
+		    .appraises = 1 },
+		  "ro module.sig_enforce=1",
+		  STAGE_REBOOT,
+		  "is configured" },
+		{ { .lockdown_ok = 1, .ima_built = 1 },
+		  NULL,
+		  STAGE_PENDING,
+		  "lacks: ima_appraise module" },
+	};
+	char note[512];
+	int bad = -1;
+
+	TEST("cmdline stage never sends a policy that appraises into enforce");
+	for (size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); i++) {
+		note[0] = '\0';
+		if (probe_cmdline_next_boot_stage(&cases[i].st, cases[i].args,
+						  note, sizeof(note)) !=
+			    cases[i].want ||
+		    !strstr(note, cases[i].note)) {
+			bad = (int)i;
+			break;
+		}
+	}
+	if (bad >= 0)
+		FAIL("a floor and cmdline got the wrong verdict");
+	else if (probe_cmdline_next_boot_stage(NULL, "ro", note,
+					       sizeof(note)) != STAGE_ERROR)
+		FAIL("a missing floor was not an error");
+	else
+		PASS();
 }
 
 int main(void)
@@ -1649,6 +1768,7 @@ int main(void)
 	test_ima_mode_blocking();
 	test_ima_scope_stage_verdicts();
 	test_ima_policy_scope_reader();
+	test_cmdline_next_boot_verdicts();
 	test_named_files();
 
 	printf("%d/%d tests passed\n", tests_passed, tests_run);
