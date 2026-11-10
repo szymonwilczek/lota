@@ -8,10 +8,12 @@
 #include <dlfcn.h>
 #include <errno.h>
 #include <fcntl.h>
+#include <link.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
+#include <sys/wait.h>
 #include <time.h>
 #include <unistd.h>
 #include <openssl/evp.h>
@@ -282,6 +284,89 @@ static void test_runtime_measure_counts_a_vdso_named_object(void)
 		PASS();
 	}
 	dlclose(h);
+}
+
+#define LOADER_CHILD_ENV "LOTA_TEST_LOADER_CHILD"
+
+/* the child: 0 if both refuse with -ENOTSUP, 10 if both measure */
+__attribute__((constructor)) static void loader_child(void)
+{
+	uint8_t m[LOTA_AC_RUNTIME_MEASURE_SIZE];
+	struct rt_path_collect c = { .max = EXPECTED_RT_MAX_OBJS };
+	int mret, lret;
+
+	if (!getenv(LOADER_CHILD_ENV))
+		return;
+	c.paths = calloc(EXPECTED_RT_MAX_OBJS, LOTA_AC_RUNTIME_PATH_MAX);
+	if (!c.paths)
+		_exit(1);
+	mret = lota_ac_compute_runtime_measure(m);
+	lret = lota_ac_list_runtime_objects(rt_path_collect_cb, &c);
+	if (mret == -ENOTSUP && lret == -ENOTSUP && c.count == 0)
+		_exit(0);
+	_exit(mret == 0 && lret == 0 && c.count > 0 ? 10 : 1);
+}
+
+static int interp_cb(struct dl_phdr_info *info, size_t size, void *data)
+{
+	(void)size;
+	for (ElfW(Half) i = 0; i < info->dlpi_phnum; i++) {
+		if (info->dlpi_phdr[i].p_type == PT_INTERP) {
+			*(const char **)data =
+				(const char *)(info->dlpi_addr +
+					       info->dlpi_phdr[i].p_vaddr);
+			break;
+		}
+	}
+	return 1;
+}
+
+static int run_loader_child(const char *loader, const char *self)
+{
+	int status;
+	pid_t pid = fork();
+
+	if (pid < 0)
+		return -1;
+	if (pid == 0) {
+		setenv(LOADER_CHILD_ENV, "1", 1);
+		if (loader)
+			execl(loader, loader, self, (char *)NULL);
+		else
+			execl(self, self, (char *)NULL);
+		_exit(127);
+	}
+	if (waitpid(pid, &status, 0) != pid || !WIFEXITED(status))
+		return -1;
+	return WEXITSTATUS(status);
+}
+
+/* run as "ld.so program", /proc/self/exe names the loader, not the title */
+static void test_runtime_measure_refuses_a_loader_start(void)
+{
+	const char *loader = NULL;
+	char self[LOTA_AC_RUNTIME_PATH_MAX];
+	ssize_t n;
+	int direct, through;
+
+	TEST("runtime measure: a start through ld.so is refused");
+
+	dl_iterate_phdr(interp_cb, &loader);
+	n = readlink("/proc/self/exe", self, sizeof(self) - 1);
+	if (!loader || n < 0) {
+		FAIL("setup");
+		return;
+	}
+	self[n] = '\0';
+
+	direct = run_loader_child(NULL, self);
+	through = run_loader_child(loader, self);
+	if (direct != 10)
+		FAIL("a direct start was not measured");
+	else if (through != 0)
+		FAIL("a start through ld.so was not refused");
+	else
+		PASS();
 }
 
 static int build_bound_heartbeat_packet(uint8_t *out, size_t out_cap,
@@ -2659,6 +2744,7 @@ int main(void)
 	test_info_agrees_with_state();
 	test_session_id_unique();
 	test_runtime_measure_counts_a_vdso_named_object();
+	test_runtime_measure_refuses_a_loader_start();
 
 	cleanup_test_dir();
 

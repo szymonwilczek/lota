@@ -375,7 +375,8 @@ int lota_ac_compute_game_binding_hash(const char *game_id, const char *exe_path,
  *
  * Return: 0 on success, -EINVAL on a NULL argument, -ENOMEM on allocation
  * failure, -E2BIG with too many objects or segments in one, -EIO on a digest
- * failure, -ENOENT if no file-backed executable object is found.
+ * failure, -ENOENT if no file-backed executable object is found, -ENOTSUP if
+ * the process was started by running the dynamic loader on the executable.
  */
 int lota_ac_compute_runtime_measure(uint8_t out[LOTA_AC_RUNTIME_MEASURE_SIZE]);
 
@@ -390,8 +391,9 @@ typedef int (*lota_ac_runtime_object_fn)(const char *path, void *user);
  *
  * Use it to capture the trusted runtime manifest.
  *
- * Return: 0 on success or when @fn stops early, -EINVAL on a NULL @fn, negative
- * errno if the main executable path cannot be resolved.
+ * Return: 0 on success or when @fn stops early, -EINVAL on a NULL @fn, -ENOTSUP
+ * if the process was started by running the dynamic loader on the executable,
+ * negative errno if the main executable path cannot be resolved.
  */
 int lota_ac_list_runtime_objects(lota_ac_runtime_object_fn fn, void *user);
 

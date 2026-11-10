@@ -440,14 +440,29 @@ static int rt_is_vdso(const struct dl_phdr_info *info)
 }
 
 /*
+ * The kernel hands a dynamic executable its interpreter's base. Run as
+ * "ld.so program", the kernel ran the loader and /proc/self/exe names it.
+ */
+static int rt_started_by_loader(const struct dl_phdr_info *info)
+{
+	for (ElfW(Half) i = 0; i < info->dlpi_phnum; i++) {
+		if (info->dlpi_phdr[i].p_type == PT_INTERP)
+			return getauxval(AT_BASE) == 0;
+	}
+	return 0;
+}
+
+/*
  * Index 0 is the main executable, which glibc lists unnamed.
- * Return: 1 to measure, 0 to skip.
+ * Return: 1 to measure, 0 to skip, -ENOTSUP if its file is unknown.
  */
 static int rt_object_identity(struct dl_phdr_info *info, unsigned index,
 			      const char *self_exe, const char **path_out,
 			      const char **soname_out)
 {
 	if (index == 0) {
+		if (rt_started_by_loader(info))
+			return -ENOTSUP;
 		*path_out = self_exe;
 		*soname_out = rt_basename(self_exe);
 		return 1;
@@ -482,7 +497,12 @@ static int rt_collect_cb(struct dl_phdr_info *info, size_t size, void *data)
 
 	(void)size;
 
-	if (!rt_object_identity(info, index, ctx->self_exe, &path, &soname))
+	rc = rt_object_identity(info, index, ctx->self_exe, &path, &soname);
+	if (rc < 0) {
+		ctx->err = rc;
+		return 1;
+	}
+	if (!rc)
 		return 0;
 
 	rc = rt_live_object_digest(info, digest, &has_exec);
@@ -538,6 +558,7 @@ struct rt_list_ctx {
 	unsigned index;
 	const char *self_exe;
 	int stop;
+	int err;
 };
 
 static int rt_list_cb(struct dl_phdr_info *info, size_t size, void *data)
@@ -546,12 +567,18 @@ static int rt_list_cb(struct dl_phdr_info *info, size_t size, void *data)
 	const char *path = NULL;
 	const char *soname = NULL;
 	unsigned index = ctx->index++;
+	int rc;
 
 	(void)size;
 
 	if (ctx->stop)
 		return 1;
-	if (!rt_object_identity(info, index, ctx->self_exe, &path, &soname))
+	rc = rt_object_identity(info, index, ctx->self_exe, &path, &soname);
+	if (rc < 0) {
+		ctx->err = rc;
+		return 1;
+	}
+	if (!rc)
 		return 0;
 
 	if (ctx->fn(path, ctx->user) != 0) {
@@ -580,7 +607,7 @@ int lota_ac_list_runtime_objects(lota_ac_runtime_object_fn fn, void *user)
 	ctx.self_exe = self_exe;
 
 	dl_iterate_phdr(rt_list_cb, &ctx);
-	return ac_ret(0);
+	return ac_ret(ctx.err);
 }
 
 static int pread_full(int fd, void *buf, size_t len, off_t off)
