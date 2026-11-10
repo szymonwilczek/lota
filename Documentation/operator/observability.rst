@@ -96,7 +96,10 @@ Metric                                          Type      Meaning
                                                           change), ``escalate``
                                                           (refused, device blocked until an operator
                                                           acts), ``forced`` (operator-forced via the
-                                                          monitoring API).
+                                                          monitoring API), ``agent_hash`` (agent pin
+                                                          moved to an allow-listed build),
+                                                          ``agent_hash_escalate`` (agent re-pin
+                                                          refused).
 ``lota_connection_errors_total``                counter   Protocol-level errors on the attestation port.
                                                           A peer that connects and leaves without
                                                           speaking -- a health check, a scanner -- is

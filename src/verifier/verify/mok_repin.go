@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/szymonwilczek/lota/verifier/logging"
+	"github.com/szymonwilczek/lota/verifier/metrics"
 	"github.com/szymonwilczek/lota/verifier/types"
 )
 
@@ -118,7 +119,7 @@ func (v *Verifier) tryMOKRepin(clog *slog.Logger, clientID, tenant string,
 
 	escalate := func(reason string) bool {
 		logging.Security(clog, "PCR14 re-pin escalated to operator", "reason", reason)
-		v.metrics.Reanchors.Inc("escalate")
+		v.metrics.Reanchors.Inc(metrics.OutcomeEscalate)
 		return false
 	}
 
@@ -157,6 +158,6 @@ func (v *Verifier) tryMOKRepin(clog *slog.Logger, clientID, tenant string,
 		"changed", changed,
 		"pinned_pcr14", FormatPCR14(pinned),
 		"pcr14", FormatPCR14(pcr14))
-	v.metrics.Reanchors.Inc("mok")
+	v.metrics.Reanchors.Inc(metrics.OutcomeMOK)
 	return true
 }

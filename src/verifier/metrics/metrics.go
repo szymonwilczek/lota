@@ -160,6 +160,23 @@ func (h *Histogram) Sum() float64 {
 // rejection labels that name no verdict
 var internalRejectionReasons = []string{"baseline_error"}
 
+// lota_reanchors_total outcome labels
+const (
+	OutcomeStrong            = "strong"
+	OutcomeLFA               = "lfa"
+	OutcomeMOK               = "mok"
+	OutcomeForced            = "forced"
+	OutcomeEscalate          = "escalate"
+	OutcomeAgentHash         = "agent_hash"
+	OutcomeAgentHashEscalate = "agent_hash_escalate"
+)
+
+// every lota_reanchors_total outcome, seeded at zero
+var reanchorOutcomes = []string{
+	OutcomeStrong, OutcomeLFA, OutcomeMOK, OutcomeForced, OutcomeEscalate,
+	OutcomeAgentHash, OutcomeAgentHashEscalate,
+}
+
 // Export renders the metrics in the Prometheus text exposition format.
 func (m *Metrics) Export() string {
 	var b strings.Builder
@@ -182,7 +199,7 @@ func (m *Metrics) Export() string {
 	writeLabeledCounter(&b, "lota_reanchors_total",
 		"Total baseline re-anchors by outcome", "outcome",
 		m.Reanchors.Values(),
-		[]string{"strong", "lfa", "mok", "forced", "escalate"})
+		reanchorOutcomes)
 
 	writeCounter(&b, "lota_connection_errors_total",
 		"Total protocol-level connection errors",

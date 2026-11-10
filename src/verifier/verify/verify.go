@@ -1182,14 +1182,14 @@ func (v *Verifier) tryReanchor(clog *slog.Logger, clientID, tenant string,
 			if errors.Is(err, ErrReanchorRateLimited) {
 				// a concurrent round re-anchored first
 				logging.Security(clog, "boot baseline re-anchor escalated (rate limit raced)", "reason", reason)
-				v.metrics.Reanchors.Inc("escalate")
+				v.metrics.Reanchors.Inc(metrics.OutcomeEscalate)
 				return false
 			}
 			clog.Warn("re-anchor archive failed", "error", err)
 			return false
 		}
 		logging.Security(clog, "boot baseline re-anchored (strong path)", "reason", reason)
-		v.metrics.Reanchors.Inc("strong")
+		v.metrics.Reanchors.Inc(metrics.OutcomeStrong)
 		return true
 	case ReanchorLFA:
 		// applied at once and flagged, see ListReanchorReview
@@ -1198,18 +1198,18 @@ func (v *Verifier) tryReanchor(clog *slog.Logger, clientID, tenant string,
 			if errors.Is(err, ErrReanchorRateLimited) {
 				// a concurrent round re-anchored first
 				logging.Security(clog, "boot baseline re-anchor escalated (rate limit raced)", "reason", reason)
-				v.metrics.Reanchors.Inc("escalate")
+				v.metrics.Reanchors.Inc(metrics.OutcomeEscalate)
 				return false
 			}
 			clog.Warn("re-anchor archive failed", "error", err)
 			return false
 		}
 		logging.Security(clog, "ALERT: boot baseline re-anchored on the low-firmware-assurance path (operator review recommended)", "reason", reason)
-		v.metrics.Reanchors.Inc("lfa")
+		v.metrics.Reanchors.Inc(metrics.OutcomeLFA)
 		return true
 	default:
 		logging.Security(clog, "boot baseline re-anchor escalated to operator", "reason", reason)
-		v.metrics.Reanchors.Inc("escalate")
+		v.metrics.Reanchors.Inc(metrics.OutcomeEscalate)
 		return false
 	}
 }
@@ -1241,7 +1241,7 @@ func (v *Verifier) tryAgentHashRepin(clog *slog.Logger, clientID, tenant string,
 			hex.EncodeToString(report.System.AgentHash[:]),
 			"note",
 			"the row comes from an out-of-band PCR 14 pin; pin this client's agent hash or clear the baseline to re-enroll it")
-		v.metrics.Reanchors.Inc("agent_hash_escalate")
+		v.metrics.Reanchors.Inc(metrics.OutcomeAgentHashEscalate)
 		return false
 	}
 
@@ -1261,7 +1261,8 @@ func (v *Verifier) tryAgentHashRepin(clog *slog.Logger, clientID, tenant string,
 				st.LastRepinAt.Add(AgentHashRepinMinInterval).UTC().Format(time.RFC3339),
 				"note",
 				"the reported build is on this policy's allow-list; wait for the interval or re-anchor this client")
-			v.metrics.Reanchors.Inc("agent_hash_escalate")
+			v.metrics.Reanchors.Inc(
+				metrics.OutcomeAgentHashEscalate)
 		}
 		return false
 	}
@@ -1271,7 +1272,8 @@ func (v *Verifier) tryAgentHashRepin(clog *slog.Logger, clientID, tenant string,
 		if errors.Is(err, ErrAgentHashRepinRateLimited) {
 			// a concurrent round re-pinned first
 			logging.Security(clog, "agent_hash re-pin escalated (rate limit raced)")
-			v.metrics.Reanchors.Inc("agent_hash_escalate")
+			v.metrics.Reanchors.Inc(
+				metrics.OutcomeAgentHashEscalate)
 			return false
 		}
 		clog.Warn("agent_hash re-pin archive failed", "error", err)
@@ -1282,7 +1284,7 @@ func (v *Verifier) tryAgentHashRepin(clog *slog.Logger, clientID, tenant string,
 		"new_agent_hash", hex.EncodeToString(report.System.AgentHash[:]),
 		"repin_count", st.RepinCount+1,
 		"note", "package update; the outgoing hash is archived and PCR 14 moved with it")
-	v.metrics.Reanchors.Inc("agent_hash")
+	v.metrics.Reanchors.Inc(metrics.OutcomeAgentHash)
 	return true
 }
 
@@ -1359,7 +1361,7 @@ func (v *Verifier) ForceReanchor(clientID string) error {
 	if err := v.baselineStore.ClearBaseline(clientID); err != nil {
 		return err
 	}
-	v.metrics.Reanchors.Inc("forced")
+	v.metrics.Reanchors.Inc(metrics.OutcomeForced)
 	return nil
 }
 
