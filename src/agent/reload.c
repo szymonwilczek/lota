@@ -754,14 +754,19 @@ int agent_reload_config(const char *config_path, struct lota_config *cfg,
 	close(cfg_fd);
 
 	if (new_mode >= 0 && new_mode != *mode) {
-		if (bpf_loader_set_mode(&g_agent.bpf_ctx, new_mode) == 0) {
-			lota_info("Mode changed: %s -> %s",
-				  mode_to_string(*mode),
-				  mode_to_string(new_mode));
-			*mode = new_mode;
-		} else {
-			lota_err("Failed to apply new mode");
+		int mode_ret = bpf_loader_set_mode(&g_agent.bpf_ctx, new_mode);
+
+		if (mode_ret < 0) {
+			lota_err("Failed to apply new mode: %s; keeping the "
+				 "previous configuration",
+				 strerror(-mode_ret));
+			config_free(new_cfg);
+			sdnotify_ready();
+			return mode_ret;
 		}
+		lota_info("Mode changed: %s -> %s", mode_to_string(*mode),
+			  mode_to_string(new_mode));
+		*mode = new_mode;
 	}
 
 	keep_command_line_switches(new_cfg);

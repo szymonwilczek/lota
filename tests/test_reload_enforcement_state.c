@@ -94,11 +94,13 @@ int bpf_loader_unprotect_pid(struct bpf_loader_ctx *ctx, uint32_t pid)
 	return -ENOENT;
 }
 
+static int stub_set_mode_ret;
+
 int bpf_loader_set_mode(struct bpf_loader_ctx *ctx, uint32_t mode)
 {
 	(void)ctx;
 	(void)mode;
-	return 0;
+	return stub_set_mode_ret;
 }
 
 /*
@@ -916,6 +918,61 @@ out:
 	rmdir(dir);
 }
 
+/* A mode the BPF layer refuses fails the reload before anything else */
+static void test_failed_mode_change_fails_the_reload(void)
+{
+	char trust_libs[LOTA_CONFIG_MAX_LIBS][PATH_MAX] = { { 0 } };
+	uint32_t *protect_pids = NULL;
+	int trust_lib_count = 0, protect_pid_count = 0;
+	struct lota_config *cfg;
+	char path[PATH_MAX];
+	int mode = LOTA_MODE_MONITOR;
+	bool strict_mmap = false, f = false;
+	int rc;
+
+	TEST("a mode change the BPF layer refuses fails the reload");
+
+	if (write_config(path, sizeof(path),
+			 "strict_mmap = true\n"
+			 "trust_lib = /usr/lib/from-the-file.so\n") < 0) {
+		FAIL("cannot write a config under /tmp");
+		return;
+	}
+	cfg = config_new();
+	if (!cfg) {
+		FAIL("out of memory");
+		unlink(path);
+		return;
+	}
+	snprintf(cfg->mode, sizeof(cfg->mode), "monitor");
+	seed_runtime(trust_libs, &trust_lib_count, &protect_pids,
+		     &protect_pid_count);
+	stub_set_mode_ret = -EIO;
+	stub_config_on = 0;
+
+	rc = agent_reload_config(path, cfg, &mode, &strict_mmap, &f, &f, &f, &f,
+				 &protect_pids, &protect_pid_count, trust_libs,
+				 &trust_lib_count);
+	stub_set_mode_ret = 0;
+	journal_set_level(LOG_DEBUG);
+
+	if (rc != -EIO)
+		FAIL("the reload reports success");
+	else if (mode != LOTA_MODE_MONITOR || strcmp(cfg->mode, "monitor"))
+		FAIL("the mode moved");
+	else if (strict_mmap || stub_config_on)
+		FAIL("a switch was applied");
+	else if (trust_lib_count != 1 ||
+		 stub_holds_lib("/usr/lib/from-the-file.so"))
+		FAIL("the trusted libraries were reloaded");
+	else
+		PASS();
+
+	config_free(cfg);
+	free(protect_pids);
+	unlink(path);
+}
+
 int main(void)
 {
 	printf("=== reload keeps command-line enforcement state ===\n\n");
@@ -930,6 +987,7 @@ int main(void)
 	test_strict_without_allow_verity_stays_off();
 	test_startup_only_keys_are_reported();
 	test_downgrade_uses_the_startup_key();
+	test_failed_mode_change_fails_the_reload();
 
 	printf("\n=== %d/%d passed ===\n", tests_passed, tests_run);
 	return tests_passed == tests_run ? 0 : 1;
