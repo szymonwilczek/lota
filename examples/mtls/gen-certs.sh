@@ -30,7 +30,7 @@ case "${1:-}" in
 -server) what="server" ;;
 -producer) what="producer" ;;
 -h | --help)
-	sed -n '2,30p' "$0"
+	sed -n '2,/^$/p' "$0"
 	exit 0
 	;;
 *)
