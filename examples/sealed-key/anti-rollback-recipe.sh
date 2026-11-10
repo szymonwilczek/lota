@@ -11,17 +11,23 @@
 
 set -euo pipefail
 
-# On exit whatever is at NV_INDEX and PARENT_HANDLE is removed, even when
-# this run did not create it.
+# On exit the counter and parent this run created are removed.
 NV_INDEX="${NV_INDEX:-0x1500016}"
 PARENT_HANDLE="${PARENT_HANDLE:-0x81000010}"
 PCR_LIST="${PCR_LIST:-sha256:0,7}"
 
 WORK="$(mktemp -d /tmp/lota-antiroll.XXXXXX)"
+nv_defined=false
+parent_persisted=false
 
 cleanup() {
-	tpm2_evictcontrol -C o -c "$PARENT_HANDLE" >/dev/null 2>&1 || true
-	tpm2_nvundefine -C o "$NV_INDEX" >/dev/null 2>&1 || true
+	if $parent_persisted; then
+		tpm2_evictcontrol -C o -c "$PARENT_HANDLE" >/dev/null 2>&1 ||
+			true
+	fi
+	if $nv_defined; then
+		tpm2_nvundefine -C o "$NV_INDEX" >/dev/null 2>&1 || true
+	fi
 	rm -rf "$WORK"
 }
 trap cleanup EXIT
@@ -39,6 +45,7 @@ cd "$WORK"
 echo "==> Define a monotonic counter at $NV_INDEX and prime it"
 tpm2_nvdefine -C o "$NV_INDEX" -s 8 \
 	-a "nt=counter|ownerread|ownerwrite|authread|authwrite" >/dev/null
+nv_defined=true
 tpm2_nvincrement -C o "$NV_INDEX"
 tpm2_nvread -C o "$NV_INDEX" -o operand.bin 2>/dev/null
 echo "    seal-time counter: $(xxd -p operand.bin)"
@@ -47,6 +54,7 @@ echo "==> Persist a storage parent and free the transient slots"
 # A persistent parent leaves the transient slots free for tpm2_load.
 tpm2_createprimary -C o -g sha256 -G ecc -c prim.ctx >/dev/null
 tpm2_evictcontrol -C o -c prim.ctx "$PARENT_HANDLE" >/dev/null
+parent_persisted=true
 tpm2_flushcontext -t >/dev/null
 
 echo "==> Build the compound policy: PolicyPCR AND PolicyNV(counter <= now)"
