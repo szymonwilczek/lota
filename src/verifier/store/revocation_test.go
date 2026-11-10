@@ -377,6 +377,85 @@ func TestSQLiteAuditLog(t *testing.T) {
 	testAuditLog(t, l, "SQLite")
 }
 
+// A failed audit write rolls back the change it records,
+// so a retry finds nothing to collide with and lands both.
+func TestSQLiteEnforcement_AuditFailureRollsBack(t *testing.T) {
+	db, err := OpenDB(t.TempDir() + "/audit-fail.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	audit := NewSQLiteAuditLog(db)
+	rev := NewSQLiteRevocationStore(db, audit)
+	ban := NewSQLiteBanStore(db, audit)
+	hw := [32]byte{0xAD}
+	banned := func(t *testing.T, s BanStore, hw [32]byte) bool {
+		_, ok := bannedOf(t, s, "default", hw)
+		return ok
+	}
+
+	breakAudit := func() {
+		t.Helper()
+		_, err := db.Exec(`CREATE TRIGGER audit_down BEFORE INSERT
+			ON audit_log
+			BEGIN SELECT RAISE(ABORT, 'audit down'); END`)
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	fixAudit := func() {
+		t.Helper()
+		if _, err := db.Exec("DROP TRIGGER audit_down"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	steps := []struct {
+		name string
+		do   func() error
+		held func() bool
+	}{
+		{"revoke", func() error {
+			return rev.Revoke("default", "c1", RevocationCheating,
+				"op", "")
+		}, func() bool { _, ok := revokedOf(t, rev, "c1"); return ok }},
+		{"ban", func() error {
+			return ban.BanHardware("default", hw,
+				RevocationCheating, "op", "")
+		}, func() bool { return banned(t, ban, hw) }},
+		{"unrevoke", func() error {
+			return rev.Unrevoke("c1", "appeal", "op", "")
+		}, func() bool {
+			_, ok := revokedOf(t, rev, "c1")
+			return !ok
+		}},
+		{"unban", func() error {
+			return ban.UnbanHardware("default", hw, "appeal", "op",
+				"")
+		}, func() bool { return !banned(t, ban, hw) }},
+	}
+	for i, st := range steps {
+		breakAudit()
+		if err := st.do(); err == nil {
+			t.Fatalf("%s with the audit down: no error", st.name)
+		}
+		if st.held() {
+			t.Fatalf("%s with the audit down: the change stayed",
+				st.name)
+		}
+		fixAudit()
+		if err := st.do(); err != nil {
+			t.Fatalf("%s retry: %v", st.name, err)
+		}
+		if !st.held() {
+			t.Fatalf("%s retry: the change is missing", st.name)
+		}
+		entries := audit.Query(0)
+		if len(entries) != i+1 || entries[0].Action != st.name {
+			t.Fatalf("%s retry: audit %+v", st.name, entries)
+		}
+	}
+}
+
 func TestFormatParseHardwareID(t *testing.T) {
 	original := [32]byte{
 		0xDE, 0xAD, 0xBE, 0xEF, 0x01, 0x02, 0x03, 0x04,

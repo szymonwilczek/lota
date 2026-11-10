@@ -25,35 +25,38 @@ func NewSQLiteRevocationStore(db *sql.DB, auditLog AuditLog) *SQLiteRevocationSt
 	return &SQLiteRevocationStore{db: db, auditLog: auditLog}
 }
 
-func (s *SQLiteRevocationStore) Revoke(tenant, clientID string, reason RevocationReason, revokedBy, note string) error {
+func (s *SQLiteRevocationStore) Revoke(tenant, clientID string, reason RevocationReason, revokedBy, note string) (err error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	var existing string
-	err := s.db.QueryRow("SELECT client_id FROM revocations WHERE client_id = ?", clientID).Scan(&existing)
-	if err == nil {
-		return ErrAlreadyRevoked
-	}
-	if err != sql.ErrNoRows {
+	tx, err := s.db.Begin()
+	if err != nil {
 		return err
 	}
+	defer func() {
+		if err != nil {
+			err = rollbackOnErr(tx, err)
+		}
+	}()
 
-	now := time.Now().UTC()
-	_, err = s.db.Exec(
-		"INSERT INTO revocations (client_id, tenant, reason, revoked_at, revoked_by, note) VALUES (?, ?, ?, ?, ?, ?)",
-		clientID, tenant, string(reason), now, revokedBy, note,
+	res, err := tx.Exec(
+		"INSERT OR IGNORE INTO revocations (client_id, tenant, "+
+			"reason, revoked_at, revoked_by, note) "+
+			"VALUES (?, ?, ?, ?, ?, ?)",
+		clientID, tenant, string(reason), time.Now().UTC(), revokedBy,
+		note,
 	)
 	if err != nil {
 		return err
 	}
-
-	if s.auditLog != nil {
-		if err := s.auditLog.Log(tenant, "revoke", clientID, string(reason), revokedBy, note); err != nil {
-			return err
-		}
+	if n, err := res.RowsAffected(); err != nil {
+		return err
+	} else if n == 0 {
+		return ErrAlreadyRevoked
 	}
 
-	return nil
+	return commitAudited(tx, s.auditLog, tenant, "revoke", clientID,
+		string(reason), revokedBy, note)
 }
 
 func (s *SQLiteRevocationStore) IsRevoked(clientID string,
@@ -78,39 +81,33 @@ func (s *SQLiteRevocationStore) IsRevoked(clientID string,
 	return &entry, true, nil
 }
 
-func (s *SQLiteRevocationStore) Unrevoke(clientID, reason, actor, note string) error {
+func (s *SQLiteRevocationStore) Unrevoke(clientID, reason, actor, note string) (err error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	// fetch the tenant before the delete so the audit entry records it
-	var tenant string
-	if err := s.db.QueryRow("SELECT tenant FROM revocations WHERE client_id = ?", clientID).Scan(&tenant); err != nil {
-		if err == sql.ErrNoRows {
-			return ErrNotRevoked
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if err != nil {
+			err = rollbackOnErr(tx, err)
 		}
-		return err
-	}
+	}()
 
-	result, err := s.db.Exec("DELETE FROM revocations WHERE client_id = ?", clientID)
-	if err != nil {
-		return err
-	}
-
-	rows, err := result.RowsAffected()
-	if err != nil {
-		return fmt.Errorf("failed to read affected rows after unrevoke: %w", err)
-	}
-	if rows == 0 {
+	// deleted row carries the tenant the audit entry records
+	var tenant string
+	err = tx.QueryRow("DELETE FROM revocations WHERE client_id = ? "+
+		"RETURNING tenant", clientID).Scan(&tenant)
+	if errors.Is(err, sql.ErrNoRows) {
 		return ErrNotRevoked
 	}
-
-	if s.auditLog != nil {
-		if err := s.auditLog.Log(tenant, "unrevoke", clientID, reason, actor, note); err != nil {
-			return err
-		}
+	if err != nil {
+		return err
 	}
 
-	return nil
+	return commitAudited(tx, s.auditLog, tenant, "unrevoke", clientID,
+		reason, actor, note)
 }
 
 func (s *SQLiteRevocationStore) ListRevocations() []RevocationEntry {
@@ -149,33 +146,35 @@ func NewSQLiteBanStore(db *sql.DB, auditLog AuditLog) *SQLiteBanStore {
 	return &SQLiteBanStore{db: db, auditLog: auditLog}
 }
 
-func (s *SQLiteBanStore) BanHardware(tenant string, hardwareID [32]byte, reason RevocationReason, bannedBy, note string) error {
-	var existing []byte
-	err := s.db.QueryRow("SELECT hardware_id FROM hardware_bans WHERE tenant = ? AND hardware_id = ?",
-		tenant, hardwareID[:]).Scan(&existing)
-	if err == nil {
-		return ErrAlreadyBanned
-	}
-	if err != sql.ErrNoRows {
+func (s *SQLiteBanStore) BanHardware(tenant string, hardwareID [32]byte, reason RevocationReason, bannedBy, note string) (err error) {
+	tx, err := s.db.Begin()
+	if err != nil {
 		return err
 	}
+	defer func() {
+		if err != nil {
+			err = rollbackOnErr(tx, err)
+		}
+	}()
 
-	now := time.Now().UTC()
-	_, err = s.db.Exec(
-		"INSERT INTO hardware_bans (tenant, hardware_id, reason, banned_at, banned_by, note) VALUES (?, ?, ?, ?, ?, ?)",
-		tenant, hardwareID[:], string(reason), now, bannedBy, note,
+	res, err := tx.Exec(
+		"INSERT OR IGNORE INTO hardware_bans (tenant, hardware_id, "+
+			"reason, banned_at, banned_by, note) "+
+			"VALUES (?, ?, ?, ?, ?, ?)",
+		tenant, hardwareID[:], string(reason), time.Now().UTC(),
+		bannedBy, note,
 	)
 	if err != nil {
 		return err
 	}
-
-	if s.auditLog != nil {
-		if err := s.auditLog.Log(tenant, "ban", FormatHardwareID(hardwareID), string(reason), bannedBy, note); err != nil {
-			return err
-		}
+	if n, err := res.RowsAffected(); err != nil {
+		return err
+	} else if n == 0 {
+		return ErrAlreadyBanned
 	}
 
-	return nil
+	return commitAudited(tx, s.auditLog, tenant, "ban",
+		FormatHardwareID(hardwareID), string(reason), bannedBy, note)
 }
 
 func (s *SQLiteBanStore) IsBanned(tenant string, hardwareID [32]byte,
@@ -201,9 +200,19 @@ func (s *SQLiteBanStore) IsBanned(tenant string, hardwareID [32]byte,
 	return &entry, true, nil
 }
 
-func (s *SQLiteBanStore) UnbanHardware(tenant string, hardwareID [32]byte, reason, actor, note string) error {
-	result, err := s.db.Exec("DELETE FROM hardware_bans WHERE tenant = ? AND hardware_id = ?",
-		tenant, hardwareID[:])
+func (s *SQLiteBanStore) UnbanHardware(tenant string, hardwareID [32]byte, reason, actor, note string) (err error) {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if err != nil {
+			err = rollbackOnErr(tx, err)
+		}
+	}()
+
+	result, err := tx.Exec("DELETE FROM hardware_bans "+
+		"WHERE tenant = ? AND hardware_id = ?", tenant, hardwareID[:])
 	if err != nil {
 		return err
 	}
@@ -216,13 +225,8 @@ func (s *SQLiteBanStore) UnbanHardware(tenant string, hardwareID [32]byte, reaso
 		return ErrNotBanned
 	}
 
-	if s.auditLog != nil {
-		if err := s.auditLog.Log(tenant, "unban", FormatHardwareID(hardwareID), reason, actor, note); err != nil {
-			return err
-		}
-	}
-
-	return nil
+	return commitAudited(tx, s.auditLog, tenant, "unban",
+		FormatHardwareID(hardwareID), reason, actor, note)
 }
 
 func (s *SQLiteBanStore) ListBans() []BanEntry {
@@ -360,6 +364,18 @@ func (l *SQLiteAuditLog) Log(tenant, action, targetID, reason, actor, note strin
 
 	_, err := l.db.Exec(
 		"INSERT INTO audit_log (timestamp, tenant, action, target_id, reason, actor, note) VALUES (?, ?, ?, ?, ?, ?, ?)",
+		time.Now().UTC(), tenant, action, targetID, reason, actor, note,
+	)
+	return err
+}
+
+func (l *SQLiteAuditLog) logTx(tx *sql.Tx,
+	tenant, action, targetID, reason, actor, note string,
+) error {
+	_, err := tx.Exec(
+		"INSERT INTO audit_log (timestamp, tenant, action, "+
+			"target_id, reason, actor, note) "+
+			"VALUES (?, ?, ?, ?, ?, ?, ?)",
 		time.Now().UTC(), tenant, action, targetID, reason, actor, note,
 	)
 	return err
