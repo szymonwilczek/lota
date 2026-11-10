@@ -216,24 +216,24 @@ func (c *Client) Stats() (*Stats, error) {
 	return &s, nil
 }
 
-// ClientPage is one page of the GET /api/v1/clients listing.
+// ClientPage is one page of the GET /api/v1/clients listing. Next is the
+// after cursor of the following page, empty on the last one.
 type ClientPage struct {
 	Clients []string `json:"clients"`
 	Count   int      `json:"count"`
-	Total   int      `json:"total"`
-	Limit   int      `json:"limit"`
-	Offset  int      `json:"offset"`
+	Next    string   `json:"next,omitempty"`
 }
 
-// ListClients fetches one page of registered client IDs.
-// Zero limit and offset defer to the server defaults.
-func (c *Client) ListClients(limit, offset int) (*ClientPage, error) {
+// ListClients fetches up to limit client IDs that sort after after.
+// A zero limit defers to the server default; an empty after starts at
+// the first client.
+func (c *Client) ListClients(limit int, after string) (*ClientPage, error) {
 	q := url.Values{}
+	if after != "" {
+		q.Set("after", after)
+	}
 	if limit > 0 {
 		q.Set("limit", strconv.Itoa(limit))
-	}
-	if offset > 0 {
-		q.Set("offset", strconv.Itoa(offset))
 	}
 
 	var page ClientPage

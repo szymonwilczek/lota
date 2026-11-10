@@ -41,7 +41,7 @@ Global flags:
 Commands:
   health                                  verifier health check
   stats                                   verification statistics
-  devices list [-limit N] [-offset N]     list registered client IDs
+  devices list [-limit N] [-after ID]     list registered client IDs
   devices show <client-id>                per-client details
   revoke <client-id> -reason R -actor A [-note S]
                                           revoke a client's AIK
@@ -299,12 +299,13 @@ func cmdDevices(ctx *cmdContext, stderr io.Writer, args []string) error {
 		fs := flag.NewFlagSet("devices list", flag.ContinueOnError)
 		fs.SetOutput(stderr)
 		limit := fs.Int("limit", 0, "page size (server default 100)")
-		offset := fs.Int("offset", 0, "page start")
+		after := fs.String("after", "",
+			"list the clients after this ID")
 		if err := fs.Parse(args[1:]); err != nil {
 			return errUsage
 		}
 
-		page, err := ctx.api.ListClients(*limit, *offset)
+		page, err := ctx.api.ListClients(*limit, *after)
 		if err != nil {
 			return err
 		}
@@ -314,8 +315,10 @@ func cmdDevices(ctx *cmdContext, stderr io.Writer, args []string) error {
 		for _, id := range page.Clients {
 			fmt.Fprintln(ctx.stdout, id)
 		}
-		fmt.Fprintf(stderr, "%d of %d clients (limit %d, offset %d)\n",
-			page.Count, page.Total, page.Limit, page.Offset)
+		fmt.Fprintf(stderr, "%d clients\n", page.Count)
+		if page.Next != "" {
+			fmt.Fprintf(stderr, "next page: -after %s\n", page.Next)
+		}
 		return nil
 
 	case "show":

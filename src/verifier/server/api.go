@@ -32,7 +32,6 @@ const (
 	maxJSONBodyBytes = 1 << 20
 	maxJSONDepth     = 64
 	maxJSONTokens    = 32768
-	maxClientOffset  = 10000
 	maxDetailChars   = 2048
 )
 
@@ -389,12 +388,12 @@ type statsResponse struct {
 	Tenants           []string `json:"tenants,omitempty"`
 }
 
+// clientListResponse is one page of clients; Next is the after cursor of
+// the following page, empty on the last one.
 type clientListResponse struct {
 	Clients []string `json:"clients"`
 	Count   int      `json:"count"`
-	Total   int      `json:"total"`
-	Limit   int      `json:"limit"`
-	Offset  int      `json:"offset"`
+	Next    string   `json:"next,omitempty"`
 }
 
 type clientInfoResponse struct {
@@ -534,99 +533,36 @@ func (h *APIHandler) handleListClients(w http.ResponseWriter, r *http.Request) {
 		maxLimit     = 1000
 	)
 
-	limit, offset, err := parsePagination(r, defaultLimit, maxLimit)
-	if err != nil {
-		writeJSONStatus(w, http.StatusBadRequest, errorResponse{Error: err.Error()})
-		return
-	}
-
-	// the store pages the global view only,
-	// so a scoped key pages the filtered list here
-	if p := requestPrincipal(r); scopedToTenants(p) {
-		all := h.verifier.ListClients()
-		visible := make([]string, 0, len(all))
-		for _, id := range all {
-			info, found, err := h.verifier.ClientInfo(id)
-			if err != nil {
-				h.writeStoreError(w, err)
-				return
-			}
-			if found && p.AllowsTenant(info.Tenant) {
-				visible = append(visible, id)
-			}
-		}
-		sort.Strings(visible)
-
-		page := []string{}
-		if offset < len(visible) {
-			end := offset + limit
-			if end > len(visible) {
-				end = len(visible)
-			}
-			page = visible[offset:end]
-		}
-		writeJSON(w, clientListResponse{
-			Clients: page,
-			Count:   len(page),
-			Total:   len(visible),
-			Limit:   limit,
-			Offset:  offset,
+	q := r.URL.Query()
+	if q.Has("offset") {
+		writeJSONStatus(w, http.StatusBadRequest, errorResponse{
+			Error: "offset pagination is not supported for " +
+				"clients; use the after cursor",
 		})
 		return
 	}
 
-	// clients with a baseline first, then those only this instance knows
-	total := h.verifier.CountDurableClients()
+	limit := defaultLimit
+	parsed, err := strconv.Atoi(q.Get("limit"))
+	if err == nil && parsed > 0 {
+		limit = min(parsed, maxLimit)
+	}
 
-	clients, err := h.verifier.DurableClientsPage(limit, offset)
+	var tenants []string
+	if p := requestPrincipal(r); scopedToTenants(p) {
+		tenants = sortedTenantSet(p)
+	}
+
+	clients, err := h.verifier.ClientsPage(tenants, q.Get("after"), limit)
 	if err != nil {
-		h.log.Error("failed to list clients page", "error", err)
-		writeJSONStatus(w, http.StatusInternalServerError, errorResponse{Error: "database unavailable"})
+		h.writeStoreError(w, err)
 		return
 	}
 
-	instanceOnly := make([]string, 0)
-	for _, id := range h.verifier.ListClients() {
-		durable, err := h.verifier.IsDurableClient(id)
-		if err != nil {
-			h.writeStoreError(w, err)
-			return
-		}
-		if !durable {
-			instanceOnly = append(instanceOnly, id)
-		}
+	resp := clientListResponse{Clients: clients, Count: len(clients)}
+	if len(clients) == limit {
+		resp.Next = clients[len(clients)-1]
 	}
-	sort.Strings(instanceOnly)
-	total += len(instanceOnly)
-
-	if len(clients) < limit {
-		instanceOffset := 0
-		if offset > total-len(instanceOnly) {
-			instanceOffset = offset - (total - len(instanceOnly))
-		}
-
-		if instanceOffset < len(instanceOnly) {
-			need := limit - len(clients)
-			end := instanceOffset + need
-			if end > len(instanceOnly) {
-				end = len(instanceOnly)
-			}
-			clients = append(clients, instanceOnly[instanceOffset:end]...)
-		}
-	}
-
-	if clients == nil {
-		clients = []string{}
-	}
-
-	resp := clientListResponse{
-		Clients: clients,
-		Count:   len(clients),
-		Total:   total,
-		Limit:   limit,
-		Offset:  offset,
-	}
-
 	writeJSON(w, resp)
 }
 
@@ -916,33 +852,6 @@ type banListResponse struct {
 	Total  int           `json:"total"`
 	Limit  int           `json:"limit"`
 	NextID string        `json:"next_id,omitempty"`
-}
-
-func parsePagination(r *http.Request, defaultLimit, maxLimit int) (limit, offset int, err error) {
-	limit = defaultLimit
-	offset = 0
-
-	if l := r.URL.Query().Get("limit"); l != "" {
-		if parsed, err := strconv.Atoi(l); err == nil && parsed > 0 {
-			limit = parsed
-		}
-	}
-
-	if o := r.URL.Query().Get("offset"); o != "" {
-		if parsed, err := strconv.Atoi(o); err == nil && parsed >= 0 {
-			offset = parsed
-		}
-	}
-
-	if limit > maxLimit {
-		limit = maxLimit
-	}
-
-	if offset > maxClientOffset {
-		return 0, 0, fmt.Errorf("offset exceeds maximum (%d)", maxClientOffset)
-	}
-
-	return limit, offset, nil
 }
 
 func (h *APIHandler) handleBanHardware(w http.ResponseWriter, r *http.Request) {

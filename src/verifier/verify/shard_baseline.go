@@ -83,6 +83,37 @@ func (s *ShardedBaselineStore) ListClients() []string {
 	return all
 }
 
+// ListClientsAfter asks every shard for a page and merges them; a client
+// lives on one shard, so the merge has no duplicates.
+func (s *ShardedBaselineStore) ListClientsAfter(tenants []string,
+	after string, limit int,
+) ([]string, error) {
+	pages := make([][]string, len(s.shards))
+	for i, sh := range s.shards {
+		page, err := sh.ListClientsAfter(tenants, after, limit)
+		if err != nil {
+			return nil, err
+		}
+		pages[i] = page
+	}
+
+	merged := []string{}
+	for len(merged) < limit {
+		best := -1
+		for i, p := range pages {
+			if len(p) > 0 && (best < 0 || p[0] < pages[best][0]) {
+				best = i
+			}
+		}
+		if best < 0 {
+			break
+		}
+		merged = append(merged, pages[best][0])
+		pages[best] = pages[best][1:]
+	}
+	return merged, nil
+}
+
 func (s *ShardedBaselineStore) Stats() BaselineStats {
 	var agg BaselineStats
 	for _, sh := range s.shards {

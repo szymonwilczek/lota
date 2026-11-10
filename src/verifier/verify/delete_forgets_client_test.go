@@ -4,6 +4,7 @@
 package verify
 
 import (
+	"slices"
 	"testing"
 	"time"
 
@@ -48,5 +49,47 @@ func TestDeleteTakesTheClientOutOfTheListing(t *testing.T) {
 	}
 	if got := v.nonceStore.ClientLastAttestation(clientID); !got.IsZero() {
 		t.Fatalf("the deleted client kept its last-attestation time (%v)", got)
+	}
+}
+
+// A global page takes the clients only this instance knows in the same ID
+// order as the durable ones; a tenant page takes the durable ones only.
+func TestClientsPageMergesInstanceOnlyClients(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.RequireBootEnrollment = false
+	v := NewVerifier(cfg, nil)
+
+	for i, id := range []string{"host-b", "host-d"} {
+		var pcr14 [types.HashSize]byte
+		pcr14[0] = byte(i + 1)
+		v.baselineStore.CheckAndUpdate(id, pcr14)
+	}
+	v.nonceStore.mu.Lock()
+	for _, id := range []string{"host-a", "host-c", "host-d"} {
+		v.nonceStore.identityChallenges[id] = clientState{
+			attestCounter: 1,
+		}
+	}
+	v.nonceStore.mu.Unlock()
+
+	for _, tc := range []struct {
+		tenants []string
+		after   string
+		want    []string
+	}{
+		{nil, "", []string{"host-a", "host-b"}},
+		{nil, "host-b", []string{"host-c", "host-d"}},
+		{nil, "host-d", []string{}},
+		{[]string{DefaultTenant}, "", []string{"host-b", "host-d"}},
+	} {
+		got, err := v.ClientsPage(tc.tenants, tc.after, 2)
+		if err != nil {
+			t.Fatalf("ClientsPage(%v, %q): %v", tc.tenants,
+				tc.after, err)
+		}
+		if !slices.Equal(got, tc.want) {
+			t.Errorf("ClientsPage(%v, %q) = %v, want %v",
+				tc.tenants, tc.after, got, tc.want)
+		}
 	}
 }

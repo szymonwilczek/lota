@@ -98,11 +98,11 @@ restart, so it refuses to take a decision it would forget.
 Pagination
 ----------
 
-``GET /api/v1/clients`` uses ``limit``/``offset`` (limit default 100,
-maximum 1000; offset above 10000 is a **400**). ``GET /api/v1/bans`` is
-keyset-paged: ``limit`` plus a ``next_id`` cursor returned by the
-previous page; passing ``offset`` there is a **400**. The log endpoints
-take only ``limit``.
+``GET /api/v1/clients`` is keyset-paged: ``limit`` (default 100, maximum
+1000) plus an ``after`` cursor, the ``next`` the previous page returned.
+``GET /api/v1/bans`` is keyset-paged the same way with a ``next_id``
+cursor. Passing ``offset`` to either is a **400**. The log endpoints take
+only ``limit``.
 
 Endpoint summary
 ================
@@ -223,22 +223,25 @@ Device inventory
 GET /api/v1/clients
 -------------------
 
-Reader. Query: ``limit``, ``offset`` (see Pagination). **200**::
+Reader. Query: ``limit``, ``after`` (see Pagination). **200**::
 
    {
      "clients": ["host-0001", "host-0002"],
      "count": 2,
-     "total": 2,
-     "limit": 100,
-     "offset": 0
+     "next": "host-0002"
    }
+
+Clients come in client ID order, those after ``after``. ``next`` is present
+when the page is full: pass it as ``after`` for the following page. A page
+with no ``next`` is the last one.
 
 The list is the durable per-client record -- the baseline every instance of a
 deployment shares -- so behind a load balancer every instance answers it the
-same way, and the answer survives a restart. ``total`` counts that record plus
-the sessions this instance is holding that have no baseline pinned yet; those
-are appended after the record, so a client mid-handshake is listed once and
-only until its first baseline is written.
+same way, and the answer survives a restart. A global key also gets the
+sessions this instance is holding that have no baseline pinned yet, in the
+same ID order, so a client mid-handshake is listed once and only until its
+first baseline is written. A tenant-scoped key gets the durable record of its
+tenants only.
 
 GET /api/v1/clients/{id}
 ------------------------

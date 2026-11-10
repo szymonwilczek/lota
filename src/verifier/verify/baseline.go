@@ -6,9 +6,13 @@ package verify
 
 import (
 	"crypto/sha256"
+	"database/sql"
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"slices"
+	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -116,13 +120,67 @@ type BaselineStorer interface {
 
 	ListClients() []string
 
+	// ListClientsAfter returns up to limit clients with a baseline whose ID
+	// sorts after after, in ID order. A non-nil tenants keeps the clients
+	// of those tenants only.
+	ListClientsAfter(tenants []string, after string, limit int) ([]string,
+		error)
+
 	Stats() BaselineStats
 }
 
-// PagedClientLister is implemented by baseline stores that can page
-// the client listing in one query.
-type PagedClientLister interface {
-	ListClientsPage(limit, offset int) ([]string, error)
+// tenantMatches reports whether tenant is in tenants; nil matches every
+// tenant and an empty tenant is DefaultTenant.
+func tenantMatches(tenant string, tenants []string) bool {
+	if tenants == nil {
+		return true
+	}
+	if tenant == "" {
+		tenant = DefaultTenant
+	}
+	return slices.Contains(tenants, tenant)
+}
+
+// clientsAfterQuery builds the SQL of ListClientsAfter;
+// ph returns the placeholder of the n-th argument.
+func clientsAfterQuery(tenants []string, after string, limit int,
+	ph func(n int) string,
+) (q string, args []any) {
+	args = []any{after}
+	q = "SELECT client_id FROM baselines WHERE client_id > " + ph(1)
+	if tenants != nil {
+		set := make([]string, 0, len(tenants)+1)
+		for _, t := range tenants {
+			args = append(args, t)
+			set = append(set, ph(len(args)))
+			if t == DefaultTenant {
+				args = append(args, "")
+				set = append(set, ph(len(args)))
+			}
+		}
+		if len(set) == 0 {
+			q += " AND 0 = 1"
+		} else {
+			q += " AND tenant IN (" + strings.Join(set, ", ") + ")"
+		}
+	}
+	args = append(args, limit)
+	q += " ORDER BY client_id LIMIT " + ph(len(args))
+	return q, args
+}
+
+// scanClientIDs reads the client_id column of rows.
+func scanClientIDs(rows *sql.Rows) ([]string, error) {
+	defer rows.Close()
+	clients := []string{}
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		clients = append(clients, id)
+	}
+	return clients, rows.Err()
 }
 
 // ClientBaseline is the pinned PCR14 and agent hash of a client.
@@ -673,6 +731,25 @@ func (s *BaselineStore) ListClients() []string {
 		clients = append(clients, id)
 	}
 	return clients
+}
+
+func (s *BaselineStore) ListClientsAfter(tenants []string, after string,
+	limit int,
+) ([]string, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	clients := []string{}
+	for id := range s.baselines {
+		if id > after && tenantMatches(s.tenants[id], tenants) {
+			clients = append(clients, id)
+		}
+	}
+	sort.Strings(clients)
+	if len(clients) > limit {
+		clients = clients[:limit]
+	}
+	return clients, nil
 }
 
 // BaselineStats counts the clients and dates their first baselines.

@@ -5,6 +5,7 @@ package verify
 
 import (
 	"fmt"
+	"slices"
 	"testing"
 
 	"github.com/szymonwilczek/lota/verifier/types"
@@ -120,4 +121,81 @@ func TestShardedBaselineStableRouting(t *testing.T) {
 	if res, _ := s.CheckAndUpdate(id, pcrOf(1)); res != TOFUMatch {
 		t.Fatalf("second = %v, want TOFUMatch (routing not stable)", res)
 	}
+}
+
+type tenantBaselines interface {
+	BaselineStorer
+	TenantStorer
+}
+
+// pageAll walks ListClientsAfter in pages of size.
+func pageAll(t *testing.T, s BaselineStorer, tenants []string,
+	size int,
+) []string {
+	t.Helper()
+	all := []string{}
+	after := ""
+	for {
+		page, err := s.ListClientsAfter(tenants, after, size)
+		if err != nil {
+			t.Fatalf("ListClientsAfter(%q): %v", after, err)
+		}
+		all = append(all, page...)
+		if len(page) < size {
+			return all
+		}
+		after = page[len(page)-1]
+	}
+}
+
+// checkCursorPaging seeds clients, every third in tenant acme,
+// and walks the listing with a cursor for every tenant set.
+func checkCursorPaging(t *testing.T, s tenantBaselines, clients int) {
+	t.Helper()
+	var all, acme, rest []string
+	for i := range clients {
+		id := fmt.Sprintf("client-%04d", i)
+		s.CheckAndUpdate(id, pcrOf(i))
+		all = append(all, id)
+		if i%3 == 0 {
+			if err := s.SetClientTenant(id, "acme"); err != nil {
+				t.Fatalf("SetClientTenant: %v", err)
+			}
+			acme = append(acme, id)
+		} else {
+			rest = append(rest, id)
+		}
+	}
+
+	for _, tc := range []struct {
+		name    string
+		tenants []string
+		want    []string
+	}{
+		{"every tenant", nil, all},
+		{"acme", []string{"acme"}, acme},
+		{"default", []string{DefaultTenant}, rest},
+		{"both", []string{"acme", DefaultTenant}, all},
+		{"none", []string{}, []string{}},
+	} {
+		got := pageAll(t, s, tc.tenants, 7)
+		if !slices.Equal(got, tc.want) {
+			t.Errorf("%s: paged %d clients, want %d in ID order",
+				tc.name, len(got), len(tc.want))
+		}
+	}
+
+	page, err := s.ListClientsAfter(nil, all[len(all)-1], 7)
+	if err != nil || len(page) != 0 {
+		t.Errorf("past the end: %v, %v; want an empty page", page, err)
+	}
+}
+
+func TestShardedBaselineCursorPaging(t *testing.T) {
+	s, _ := newShardedMemoryBaselines(4)
+	checkCursorPaging(t, s, 200)
+}
+
+func TestMemoryBaselineCursorPaging(t *testing.T) {
+	checkCursorPaging(t, NewBaselineStore(), 50)
 }

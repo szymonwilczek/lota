@@ -101,8 +101,10 @@ func TestAPITenantScoping_ClientListingFiltered(t *testing.T) {
 	if len(clients) != 1 || clients[0] != "acme-client" {
 		t.Fatalf("scoped client list = %v, want only acme-client", clients)
 	}
-	if total, _ := body["total"].(float64); total != 1 {
-		t.Fatalf("scoped total = %v, want 1", body["total"])
+	count, _ := body["count"].(float64)
+	if count != 1 || body["next"] != nil {
+		t.Fatalf("scoped page = %v, want one client, no cursor",
+			body)
 	}
 }
 

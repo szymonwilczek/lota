@@ -71,9 +71,9 @@ func TestListClientsServesTheDurableRecord(t *testing.T) {
 	mux := inventoryFixture(t, "host-0001", "host-0002")
 
 	resp := listClients(t, mux, "")
-	if resp.Total != 2 || len(resp.Clients) != 2 {
-		t.Fatalf("clients=%v count=%d total=%d; want the two clients the shared state holds",
-			resp.Clients, resp.Count, resp.Total)
+	if resp.Count != 2 || len(resp.Clients) != 2 || resp.Next != "" {
+		t.Fatalf("page = %+v; want the two clients the shared state "+
+			"holds", resp)
 	}
 	if resp.Clients[0] != "host-0001" || resp.Clients[1] != "host-0002" {
 		t.Fatalf("clients=%v; want host-0001 and host-0002 in order", resp.Clients)
@@ -84,19 +84,24 @@ func TestListClientsServesTheDurableRecord(t *testing.T) {
 func TestListClientsPagesTheDurableRecord(t *testing.T) {
 	mux := inventoryFixture(t, "host-0001", "host-0002", "host-0003")
 
-	first := listClients(t, mux, "?limit=2&offset=0")
-	if first.Total != 3 || len(first.Clients) != 2 || first.Clients[0] != "host-0001" {
-		t.Fatalf("first page = %+v; want two of three, starting at host-0001", first)
+	first := listClients(t, mux, "?limit=2")
+	if len(first.Clients) != 2 || first.Clients[0] != "host-0001" ||
+		first.Next != "host-0002" {
+		t.Fatalf("first page = %+v; want host-0001, host-0002, a "+
+			"cursor", first)
 	}
 
-	second := listClients(t, mux, "?limit=2&offset=2")
-	if second.Total != 3 || len(second.Clients) != 1 || second.Clients[0] != "host-0003" {
-		t.Fatalf("second page = %+v; want the remaining host-0003", second)
+	second := listClients(t, mux, "?limit=2&after="+first.Next)
+	if len(second.Clients) != 1 || second.Clients[0] != "host-0003" ||
+		second.Next != "" {
+		t.Fatalf("second page = %+v; want host-0003, no cursor",
+			second)
 	}
 
-	past := listClients(t, mux, "?limit=2&offset=10")
-	if len(past.Clients) != 0 || past.Total != 3 {
-		t.Fatalf("page past the end = %+v; want no clients and the same total", past)
+	past := listClients(t, mux, "?limit=2&after=host-0003")
+	if len(past.Clients) != 0 || past.Next != "" {
+		t.Fatalf("page past the end = %+v; want no clients, no cursor",
+			past)
 	}
 }
 

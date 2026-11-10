@@ -19,6 +19,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strconv"
 	"time"
 
 	"github.com/szymonwilczek/lota/verifier/types"
@@ -377,24 +378,16 @@ func (s *PostgresBaselineStore) ListClients() []string {
 	return clients
 }
 
-// ListClientsPage returns one page of client IDs, ordered by client ID.
-func (s *PostgresBaselineStore) ListClientsPage(limit, offset int) ([]string, error) {
-	rows, err := s.db.Query(
-		"SELECT client_id FROM baselines ORDER BY client_id LIMIT $1 OFFSET $2", limit, offset)
+func (s *PostgresBaselineStore) ListClientsAfter(tenants []string,
+	after string, limit int,
+) ([]string, error) {
+	q, args := clientsAfterQuery(tenants, after, limit,
+		func(n int) string { return "$" + strconv.Itoa(n) })
+	rows, err := s.db.Query(q, args...)
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
-
-	clients := []string{}
-	for rows.Next() {
-		var id string
-		if err := rows.Scan(&id); err != nil {
-			return nil, err
-		}
-		clients = append(clients, id)
-	}
-	return clients, rows.Err()
+	return scanClientIDs(rows)
 }
 
 func (s *PostgresBaselineStore) Stats() BaselineStats {

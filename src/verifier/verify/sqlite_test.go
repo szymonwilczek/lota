@@ -225,6 +225,22 @@ func TestSQLiteBaseline_ListClients(t *testing.T) {
 	t.Log("✓ ListClients returns all baseline clients")
 }
 
+func TestSQLiteBaseline_CursorPaging(t *testing.T) {
+	open := func() *SQLiteBaselineStore {
+		db, err := store.OpenDB(":memory:")
+		if err != nil {
+			t.Fatalf("OpenDB failed: %v", err)
+		}
+		t.Cleanup(func() { db.Close() })
+		return NewSQLiteBaselineStore(db)
+	}
+
+	checkCursorPaging(t, open(), 50)
+
+	shards := []BaselineStorer{open(), open(), open()}
+	checkCursorPaging(t, NewShardedBaselineStore(shards), 120)
+}
+
 func TestSQLiteBaseline_Stats(t *testing.T) {
 	t.Log("TEST: SQLite baseline statistics")
 

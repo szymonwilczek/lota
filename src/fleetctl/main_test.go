@@ -206,7 +206,7 @@ func TestHealthDegradedExitsNonzero(t *testing.T) {
 func TestDevicesListPrintsIDs(t *testing.T) {
 	f := newFakeAPI(t, map[string]string{
 		"GET /api/v1/clients": `{"clients":["host1","host2"],"count":2,
-			"total":2,"limit":100,"offset":0}`,
+			"next":"host2"}`,
 	})
 
 	code, out, errOut := runCLI(t, noEnv, "-server", f.srv.URL, "devices", "list")
@@ -216,7 +216,7 @@ func TestDevicesListPrintsIDs(t *testing.T) {
 	if out != "host1\nhost2\n" {
 		t.Fatalf("stdout = %q, want bare IDs for scripting", out)
 	}
-	if !strings.Contains(errOut, "2 of 2 clients") {
+	if !strings.Contains(errOut, "2 clients\nnext page: -after host2") {
 		t.Fatalf("stderr = %q, want the page summary", errOut)
 	}
 }

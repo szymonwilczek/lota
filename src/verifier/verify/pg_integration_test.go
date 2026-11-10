@@ -239,6 +239,10 @@ func TestPostgresBaselineInspection(t *testing.T) {
 // TestPostgresBootPCRsPinnedAfterPCR14Row covers the standalone boot-PCR pin:
 // fail-closed before the PCR14 row exists, first use, match, drift,
 // and a row whose boot columns are still unpinned.
+func TestPostgresCursorPaging(t *testing.T) {
+	checkCursorPaging(t, pgBaselineStore(t), 50)
+}
+
 func TestPostgresBootPCRsPinnedAfterPCR14Row(t *testing.T) {
 	s := pgBaselineStore(t)
 	boot := BootBaseline{PCR0: fill(0xA0), PCR1: fill(0xA1), PCR7: fill(0xA7)}

@@ -1101,28 +1101,45 @@ func (v *Verifier) ListClients() []string {
 	return clients
 }
 
-// DurableClientsPage returns one page of the durable client record,
-// ordered by client ID.
-func (v *Verifier) DurableClientsPage(limit, offset int) ([]string, error) {
-	if pager, ok := v.baselineStore.(PagedClientLister); ok {
-		return pager.ListClientsPage(limit, offset)
+// ClientsPage returns up to limit clients whose ID sorts after after,
+// in ID order. A non-nil tenants keeps the durable clients of those
+// tenants; nil also takes the clients only this instance knows.
+func (v *Verifier) ClientsPage(tenants []string, after string, limit int,
+) ([]string, error) {
+	page, err := v.baselineStore.ListClientsAfter(tenants, after, limit)
+	if err != nil || tenants != nil {
+		return page, err
 	}
 
-	all := v.baselineStore.ListClients()
-	sort.Strings(all)
-	if offset >= len(all) {
-		return []string{}, nil
+	var local []string
+	for _, id := range v.nonceStore.ListActiveClients() {
+		if id <= after {
+			continue
+		}
+		durable, err := v.IsDurableClient(id)
+		if err != nil {
+			return nil, err
+		}
+		if !durable {
+			local = append(local, id)
+		}
 	}
-	end := offset + limit
-	if end > len(all) {
-		end = len(all)
+	if len(local) == 0 {
+		return page, nil
 	}
-	return all[offset:end], nil
-}
+	sort.Strings(local)
 
-// CountDurableClients returns the number of clients with a durable record.
-func (v *Verifier) CountDurableClients() int {
-	return v.baselineStore.Stats().TotalClients
+	merged := make([]string, 0, len(page)+len(local))
+	for len(merged) < limit && (len(page) > 0 || len(local) > 0) {
+		if len(local) == 0 || (len(page) > 0 && page[0] < local[0]) {
+			merged = append(merged, page[0])
+			page = page[1:]
+		} else {
+			merged = append(merged, local[0])
+			local = local[1:]
+		}
+	}
+	return merged, nil
 }
 
 // IsDurableClient reports whether the client has a durable record.
