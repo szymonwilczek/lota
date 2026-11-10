@@ -135,8 +135,21 @@ if [[ ! -f "$LOTA_CONF" ]]; then
 fi
 if ! grep -Eq "^[[:space:]]*policy_pubkey[[:space:]]*=" "$LOTA_CONF"; then
     info "wiring policy_pubkey = $POLICY_PUB into $LOTA_CONF"
-    printf '\n# Added by lota-dev-bringup\npolicy_pubkey = %s\n' \
-        "$POLICY_PUB" >>"$LOTA_CONF"
+    # every key after a [profile] header belongs to that profile
+    # the agent refuses a group- or world-writable config
+    rm -f "$LOTA_CONF.new"
+    (umask 077 && awk -v key="policy_pubkey = $POLICY_PUB" \
+        -v note="# Added by lota-dev-bringup" '
+        !done && /^[[:space:]]*\[/ { print note; print key; print ""; done = 1 }
+        { print }
+        END { if (!done) { print ""; print note; print key } }
+    ' "$LOTA_CONF" >"$LOTA_CONF.new")
+    "$AGENT_BIN" --config "$LOTA_CONF.new" --dump-config >/dev/null || {
+        rm -f "$LOTA_CONF.new"
+        fail "the agent refuses $LOTA_CONF once edited; left unchanged"
+    }
+    cat "$LOTA_CONF.new" >"$LOTA_CONF"
+    rm -f "$LOTA_CONF.new"
 else
     info "policy_pubkey already configured, leaving $LOTA_CONF alone"
 fi
