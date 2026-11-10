@@ -260,6 +260,8 @@ struct lota_client *lota_connect(void);
 /**
  * lota_connect_opts() - lota_connect() with custom options.
  * @opts: socket path, timeout and publisher; NULL for the defaults.
+ *
+ * Return: as for lota_connect().
  */
 struct lota_client *lota_connect_opts(const struct lota_connect_opts *opts);
 
@@ -287,6 +289,7 @@ void lota_disconnect(struct lota_client *client);
 
 /**
  * lota_get_fd() - Get the underlying socket file descriptor.
+ * @client: connection from lota_connect().
  *
  * Return: the descriptor, -1 without a client.
  */
@@ -294,6 +297,7 @@ int lota_get_fd(struct lota_client *client);
 
 /**
  * lota_set_request_timeout() - Set the deadline for a request's answer.
+ * @client: connection from lota_connect().
  * @timeout_ms: milliseconds a request may wait for its answer, above 0.
  *
  * The connect timeout bounds reaching the local socket. An answer can take
@@ -307,6 +311,7 @@ int lota_set_request_timeout(struct lota_client *client, int timeout_ms);
 
 /**
  * lota_ping() - Check that the agent is responsive.
+ * @client: connection from lota_connect().
  * @uptime_sec: receives the agent's uptime; may be NULL.
  *
  * Return: LOTA_OK, or a negative LOTA_ERR_*.
@@ -315,6 +320,7 @@ int lota_ping(struct lota_client *client, uint64_t *uptime_sec);
 
 /**
  * lota_protect_self() - Register the calling process as protected.
+ * @client: connection from lota_connect().
  *
  * The agent checks that the connection's SO_PEERCRED PID is the target and that
  * its start time still matches, so a recycled PID cannot use a prior
@@ -337,6 +343,8 @@ int lota_protect_self(struct lota_client *client);
 
 /**
  * lota_get_status() - Get the current attestation status.
+ * @client: connection from lota_connect().
+ * @status: receives the status.
  *
  * Return: LOTA_OK, or a negative LOTA_ERR_*.
  */
@@ -344,6 +352,7 @@ int lota_get_status(struct lota_client *client, struct lota_status *status);
 
 /**
  * lota_is_attested() - Check LOTA_FLAG_ATTESTED through lota_get_status().
+ * @client: connection from lota_connect().
  *
  * Return: 1 if attested, 0 otherwise or on error.
  */
@@ -351,6 +360,7 @@ int lota_is_attested(struct lota_client *client);
 
 /**
  * lota_get_token() - Get an attestation token for server verification.
+ * @client: connection from lota_connect().
  * @nonce: 32-byte challenge from the server; what stops the server accepting a
  *         replayed token. NULL for none.
  * @token: receives the token; release it with lota_token_free().
@@ -370,6 +380,7 @@ void lota_token_free(struct lota_token *token);
 
 /**
  * lota_token_serialized_size() - Calculate the serialized size of a token.
+ * @token: token from lota_get_token().
  *
  * Return: bytes needed, 0 if the token is invalid.
  */
@@ -377,6 +388,9 @@ size_t lota_token_serialized_size(const struct lota_token *token);
 
 /**
  * lota_token_serialize() - Serialize a token to its wire format.
+ * @token: token from lota_get_token().
+ * @buf: receives the wire bytes.
+ * @buflen: size of @buf.
  * @written: receives the bytes written; may be NULL.
  *
  * The server verifies the result with lota_server_verify_token().
@@ -389,7 +403,9 @@ int lota_token_serialize(const struct lota_token *token, uint8_t *buf,
 
 /**
  * lota_get_boot_evidence() - Fetch the evidence behind a token's boot PCRs.
+ * @client: connection from lota_connect().
  * @buf: LOTA_BOOT_EVIDENCE_MAX_SIZE (lota_token.h) holds any.
+ * @buflen: size of @buf.
  * @written: receives the bytes written; may be NULL.
  *
  * The values of the PCRs a token quotes and the PCR 7 events behind them, in
@@ -416,7 +432,10 @@ typedef void (*lota_status_callback_fn)(const struct lota_status *status,
 
 /**
  * lota_subscribe() - Subscribe to status change notifications.
+ * @client: connection from lota_connect().
  * @event_mask: LOTA_EVENT_* bitmask.
+ * @callback: receives each notification.
+ * @user_data: passed to @callback.
  *
  * @callback runs from lota_poll_events() and from other SDK calls that read a
  * notification. @event_mask is narrowed to the events the agent publishes to
@@ -432,6 +451,7 @@ int lota_subscribe(struct lota_client *client, uint32_t event_mask,
 
 /**
  * lota_unsubscribe() - Stop notifications on this connection.
+ * @client: connection from lota_connect().
  *
  * Return: LOTA_OK, or a negative LOTA_ERR_*.
  */
@@ -439,6 +459,7 @@ int lota_unsubscribe(struct lota_client *client);
 
 /**
  * lota_poll_events() - Dispatch pending notifications to the callback.
+ * @client: connection from lota_connect().
  * @timeout_ms: maximum wait; 0 does not block, -1 blocks indefinitely.
  *
  * Return: notifications dispatched, or a negative LOTA_ERR_*.
@@ -550,6 +571,7 @@ struct lota_registry {
 
 /**
  * lota_get_registry() - Fetch what the last token round found in a process.
+ * @client: connection from lota_connect().
  * @pid: a protected process the caller owns, any one for root.
  * @out: receives a registry to release with lota_registry_free().
  *
@@ -575,6 +597,7 @@ void lota_registry_free(struct lota_registry *reg);
 
 /**
  * lota_strerror() - Describe a LOTA_ERR_* code.
+ * @error: LOTA_ERR_* code.
  *
  * Return: a static string.
  */
@@ -597,6 +620,8 @@ const char *lota_sdk_version(void);
 /**
  * lota_flags_to_string() - Write flags as "ATTESTED,TPM_OK,BPF_LOADED".
  * @flags: LOTA_FLAG_* bitmask.
+ * @buf: receives the string.
+ * @buflen: size of @buf.
  *
  * Return: bytes written without the terminator, or a negative LOTA_ERR_*.
  */

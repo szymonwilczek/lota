@@ -30,6 +30,7 @@ static inline void lota__runtime_digest_bzero(void *ptr, size_t len)
 /**
  * lota_validate_canonical_protect_pid_list() - Check the order of a PID list.
  * @pids: the list, may be NULL if @pid_count is 0.
+ * @pid_count: entries in @pids.
  *
  * Return: 0 if strictly increasing, -EINVAL otherwise.
  */
@@ -51,6 +52,7 @@ static inline int lota_validate_canonical_protect_pid_list(const uint32_t *pids,
 /**
  * lota_compute_runtime_protect_digest() - Compute the digest of the PID set.
  * @pids: sorted PIDs.
+ * @pid_count: entries in @pids and @registry_digests.
  * @registry_digests: one digest per entry of @pids; the agent passes zeroes
  *                    for a process it could not measure and a coverage flag
  *                    says so.
