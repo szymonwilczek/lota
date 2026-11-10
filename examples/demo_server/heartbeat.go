@@ -365,7 +365,7 @@ func (s *demoServer) checkFreshness(hdr *lachHeader) (string, bool) {
 		// #nosec G115 -- positive, and capped where the flag is parsed
 		maxAge = uint64(s.maxHeartbeatAge / time.Second)
 	}
-	if maxAge > 0 && now-hdr.timestamp > maxAge {
+	if maxAge > 0 && hdr.timestamp < now && now-hdr.timestamp > maxAge {
 		return "heartbeat too old", false
 	}
 
