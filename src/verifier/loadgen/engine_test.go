@@ -21,6 +21,7 @@ import (
 	"encoding/pem"
 	"errors"
 	"fmt"
+	"io"
 	"math/big"
 	"net"
 	"os"
@@ -309,6 +310,70 @@ func TestRunAgainstDeadServer(t *testing.T) {
 	}
 	if sum.AgentsNeverOK != 2 {
 		t.Errorf("agents_never_ok = %d, want 2", sum.AgentsNeverOK)
+	}
+}
+
+// -timeout bounds the whole attestation: a server that spends most of it
+// on the handshake and then stays silent fails the round at the deadline,
+// not a full timeout after the handshake.
+func TestAttestOnceTimeoutCoversDialAndExchange(t *testing.T) {
+	certPath, keyPath := writeServerTLS(t, t.TempDir())
+	cert, err := tls.LoadX509KeyPair(certPath, keyPath)
+	if err != nil {
+		t.Fatalf("LoadX509KeyPair: %v", err)
+	}
+	const timeout = 600 * time.Millisecond
+	srvCfg := &tls.Config{
+		Certificates: []tls.Certificate{cert},
+		MinVersion:   tls.VersionTLS13,
+		GetConfigForClient: func(*tls.ClientHelloInfo) (*tls.Config,
+			error,
+		) {
+			time.Sleep(timeout * 2 / 3)
+			return nil, nil
+		},
+	}
+	ln, err := tls.Listen("tcp", "127.0.0.1:0", srvCfg)
+	if err != nil {
+		t.Fatalf("Listen: %v", err)
+	}
+	t.Cleanup(func() { ln.Close() })
+	go func() {
+		for {
+			c, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			// finish the handshake, then send nothing
+			go func() {
+				defer c.Close()
+				_, _ = io.Copy(io.Discard, c)
+			}()
+		}
+	}()
+
+	pemBytes, err := os.ReadFile(certPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	roots := x509.NewCertPool()
+	roots.AppendCertsFromPEM(pemBytes)
+	cfg := &runConfig{
+		Server: ln.Addr().String(),
+		TLS: &tls.Config{RootCAs: roots,
+			MinVersion: tls.VersionTLS13},
+		Fleet:   testFleet(t, 1),
+		Timeout: timeout,
+	}
+	start := time.Now()
+	_, err = attestOnce(cfg, cfg.Fleet.Agents[0])
+	elapsed := time.Since(start)
+	if err == nil {
+		t.Fatal("attestOnce against a silent server succeeded")
+	}
+	if elapsed > timeout*7/5 {
+		t.Fatalf("attestOnce took %v with -timeout %v",
+			elapsed, timeout)
 	}
 }
 

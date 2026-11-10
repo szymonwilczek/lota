@@ -337,13 +337,15 @@ func runStorm(ctx context.Context, cfg *runConfig, attest func(agent int)) {
 }
 
 func attestOnce(cfg *runConfig, a *synth.Agent) (*types.VerifyResult, error) {
-	dialer := &net.Dialer{Timeout: cfg.Timeout}
+	// one deadline from dial to result
+	deadline := time.Now().Add(cfg.Timeout)
+	dialer := &net.Dialer{Deadline: deadline}
 	conn, err := tls.DialWithDialer(dialer, "tcp", cfg.Server, cfg.TLS)
 	if err != nil {
 		return nil, fmt.Errorf("dial: %w", err)
 	}
 	defer conn.Close()
-	if err := conn.SetDeadline(time.Now().Add(cfg.Timeout)); err != nil {
+	if err := conn.SetDeadline(deadline); err != nil {
 		return nil, fmt.Errorf("deadline: %w", err)
 	}
 
