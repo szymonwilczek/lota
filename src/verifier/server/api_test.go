@@ -1769,8 +1769,9 @@ func TestDeleteClient_RevocationSurvives(t *testing.T) {
 
 	// deletion must not shed the revocation:
 	// re-enrolled client with the same identity stays revoked
-	if _, revoked := v.RevocationStore().IsRevoked(clientID); !revoked {
-		t.Error("revocation did not survive client deletion")
+	_, revoked, err := v.RevocationStore().IsRevoked(clientID)
+	if err != nil || !revoked {
+		t.Errorf("revocation did not survive client deletion: %v", err)
 	}
 }
 

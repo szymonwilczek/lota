@@ -6,6 +6,7 @@ package store
 
 import (
 	"database/sql"
+	"errors"
 	"fmt"
 	"sync"
 	"time"
@@ -55,7 +56,8 @@ func (s *SQLiteRevocationStore) Revoke(tenant, clientID string, reason Revocatio
 	return nil
 }
 
-func (s *SQLiteRevocationStore) IsRevoked(clientID string) (*RevocationEntry, bool) {
+func (s *SQLiteRevocationStore) IsRevoked(clientID string,
+) (*RevocationEntry, bool, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
@@ -65,12 +67,15 @@ func (s *SQLiteRevocationStore) IsRevoked(clientID string) (*RevocationEntry, bo
 		"SELECT client_id, tenant, reason, revoked_at, revoked_by, note FROM revocations WHERE client_id = ?",
 		clientID,
 	).Scan(&entry.ClientID, &entry.Tenant, &reason, &entry.RevokedAt, &entry.RevokedBy, &entry.Note)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, false, nil
+	}
 	if err != nil {
-		return nil, false
+		return nil, false, err
 	}
 
 	entry.Reason = RevocationReason(reason)
-	return &entry, true
+	return &entry, true, nil
 }
 
 func (s *SQLiteRevocationStore) Unrevoke(clientID, reason, actor, note string) error {
@@ -173,7 +178,8 @@ func (s *SQLiteBanStore) BanHardware(tenant string, hardwareID [32]byte, reason 
 	return nil
 }
 
-func (s *SQLiteBanStore) IsBanned(tenant string, hardwareID [32]byte) (*BanEntry, bool) {
+func (s *SQLiteBanStore) IsBanned(tenant string, hardwareID [32]byte,
+) (*BanEntry, bool, error) {
 	var entry BanEntry
 	var hwid []byte
 	var reason string
@@ -181,15 +187,18 @@ func (s *SQLiteBanStore) IsBanned(tenant string, hardwareID [32]byte) (*BanEntry
 		"SELECT tenant, hardware_id, reason, banned_at, banned_by, note FROM hardware_bans WHERE tenant = ? AND hardware_id = ?",
 		tenant, hardwareID[:],
 	).Scan(&entry.Tenant, &hwid, &reason, &entry.BannedAt, &entry.BannedBy, &entry.Note)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, false, nil
+	}
 	if err != nil {
-		return nil, false
+		return nil, false, err
 	}
 
 	if len(hwid) == 32 {
 		copy(entry.HardwareID[:], hwid)
 	}
 	entry.Reason = RevocationReason(reason)
-	return &entry, true
+	return &entry, true, nil
 }
 
 func (s *SQLiteBanStore) UnbanHardware(tenant string, hardwareID [32]byte, reason, actor, note string) error {

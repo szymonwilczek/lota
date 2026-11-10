@@ -222,9 +222,9 @@ func (h *APIHandler) clientTenant(clientID string) (string, error) {
 	return verify.DefaultTenant, nil
 }
 
-// writeStoreError answers a request the baseline store could not serve.
+// writeStoreError answers a request a store could not serve.
 func (h *APIHandler) writeStoreError(w http.ResponseWriter, err error) {
-	h.log.Error("baseline store read failed", "error", err)
+	h.log.Error("store read failed", "error", err)
 	writeJSONStatus(w, http.StatusInternalServerError,
 		errorResponse{Error: "database unavailable"})
 }
@@ -830,7 +830,11 @@ func (h *APIHandler) handleUnrevokeClient(w http.ResponseWriter, r *http.Request
 
 	// a revocation in another tenant reads as absent
 	if scopedToTenants(requestPrincipal(r)) {
-		entry, revoked := revStore.IsRevoked(clientID)
+		entry, revoked, err := revStore.IsRevoked(clientID)
+		if err != nil {
+			h.writeStoreError(w, err)
+			return
+		}
 		if !revoked || !principalAllowsTenant(requestPrincipal(r), entry.Tenant) {
 			writeJSONStatus(w, http.StatusNotFound, errorResponse{Error: "client is not revoked"})
 			return

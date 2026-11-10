@@ -6,6 +6,7 @@ package store
 
 import (
 	"database/sql"
+	"errors"
 	"fmt"
 	"slices"
 	"strconv"
@@ -58,7 +59,8 @@ func (s *PostgresRevocationStore) Revoke(tenant, clientID string, reason Revocat
 	return nil
 }
 
-func (s *PostgresRevocationStore) IsRevoked(clientID string) (*RevocationEntry, bool) {
+func (s *PostgresRevocationStore) IsRevoked(clientID string,
+) (*RevocationEntry, bool, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
@@ -68,12 +70,15 @@ func (s *PostgresRevocationStore) IsRevoked(clientID string) (*RevocationEntry, 
 		"SELECT client_id, tenant, reason, revoked_at, revoked_by, note FROM revocations WHERE client_id = $1",
 		clientID,
 	).Scan(&entry.ClientID, &entry.Tenant, &reason, &entry.RevokedAt, &entry.RevokedBy, &entry.Note)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, false, nil
+	}
 	if err != nil {
-		return nil, false
+		return nil, false, err
 	}
 
 	entry.Reason = RevocationReason(reason)
-	return &entry, true
+	return &entry, true, nil
 }
 
 func (s *PostgresRevocationStore) Unrevoke(clientID, reason, actor, note string) error {
@@ -164,7 +169,8 @@ func (s *PostgresBanStore) BanHardware(tenant string, hardwareID [32]byte, reaso
 	return nil
 }
 
-func (s *PostgresBanStore) IsBanned(tenant string, hardwareID [32]byte) (*BanEntry, bool) {
+func (s *PostgresBanStore) IsBanned(tenant string, hardwareID [32]byte,
+) (*BanEntry, bool, error) {
 	var entry BanEntry
 	var hwid []byte
 	var reason string
@@ -172,15 +178,18 @@ func (s *PostgresBanStore) IsBanned(tenant string, hardwareID [32]byte) (*BanEnt
 		"SELECT tenant, hardware_id, reason, banned_at, banned_by, note FROM hardware_bans WHERE tenant = $1 AND hardware_id = $2",
 		tenant, hardwareID[:],
 	).Scan(&entry.Tenant, &hwid, &reason, &entry.BannedAt, &entry.BannedBy, &entry.Note)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, false, nil
+	}
 	if err != nil {
-		return nil, false
+		return nil, false, err
 	}
 
 	if len(hwid) == 32 {
 		copy(entry.HardwareID[:], hwid)
 	}
 	entry.Reason = RevocationReason(reason)
-	return &entry, true
+	return &entry, true, nil
 }
 
 func (s *PostgresBanStore) UnbanHardware(tenant string, hardwareID [32]byte, reason, actor, note string) error {

@@ -59,8 +59,9 @@ type RevocationStore interface {
 	// if the client is revoked.
 	Revoke(tenant, clientID string, reason RevocationReason, revokedBy, note string) error
 
-	// IsRevoked returns the client's revocation and true, or nil and false.
-	IsRevoked(clientID string) (*RevocationEntry, bool)
+	// IsRevoked returns the client's revocation and true, nil and false
+	// when there is none, or an error when the store cannot tell.
+	IsRevoked(clientID string) (*RevocationEntry, bool, error)
 
 	// Unrevoke removes the client's revocation and logs reason and actor
 	// to the audit trail. It returns ErrNotRevoked if the client is not

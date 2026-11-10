@@ -463,7 +463,12 @@ func (v *Verifier) VerifyReportFrom(challengeID, remoteAddr string, reportData [
 
 	// revocation and bans are checked before the nonce is consumed
 	if v.revocationStore != nil {
-		if entry, revoked := v.revocationStore.IsRevoked(clientID); revoked {
+		entry, revoked, err := v.revocationStore.IsRevoked(clientID)
+		if err != nil {
+			return v.refuseOnListError(clog, result,
+				"revocation", err)
+		}
+		if revoked {
 			v.revokedAttests.Add(1)
 			v.metrics.Rejections.Inc("revoked")
 			logging.Security(clog, "attestation rejected: AIK revoked",
@@ -475,7 +480,11 @@ func (v *Verifier) VerifyReportFrom(challengeID, remoteAddr string, reportData [
 
 	// a ban holds in the tenant it was recorded in alone
 	if v.banStore != nil {
-		if entry, banned := v.banStore.IsBanned(tenant, identity); banned {
+		entry, banned, err := v.banStore.IsBanned(tenant, identity)
+		if err != nil {
+			return v.refuseOnListError(clog, result, "ban", err)
+		}
+		if banned {
 			v.bannedAttests.Add(1)
 			v.metrics.Rejections.Inc("banned")
 			logging.Security(clog, "attestation rejected: hardware banned",
@@ -1010,7 +1019,11 @@ func (v *Verifier) ClientInfo(clientID string) (*ClientInfo, bool, error) {
 	}
 
 	if v.revocationStore != nil {
-		if entry, revoked := v.revocationStore.IsRevoked(clientID); revoked {
+		entry, revoked, err := v.revocationStore.IsRevoked(clientID)
+		if err != nil {
+			return nil, false, err
+		}
+		if revoked {
 			info.Revoked = true
 			info.RevocationReason = string(entry.Reason)
 		}
@@ -1212,6 +1225,18 @@ func (v *Verifier) tryReanchor(clog *slog.Logger, clientID, tenant string,
 		v.metrics.Reanchors.Inc(metrics.OutcomeEscalate)
 		return false
 	}
+}
+
+// refuseOnListError refuses an attestation whose revocation or ban lookup
+// failed: a store that cannot answer does not clear the client.
+func (v *Verifier) refuseOnListError(clog *slog.Logger,
+	result *types.VerifyResult, list string, err error,
+) (*types.VerifyResult, error) {
+	clog.Error(list+" store error, refusing attestation", "error", err)
+	v.metrics.Rejections.Inc(
+		types.VerifyResultString(types.VerifyInternalError))
+	result.Result = types.VerifyInternalError
+	return result, fmt.Errorf("%s store error", list)
 }
 
 // tryAgentHashRepin moves a mismatched agent_hash pin, with its PCR 14, to the

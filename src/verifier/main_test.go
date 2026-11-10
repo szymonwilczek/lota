@@ -162,8 +162,10 @@ func TestEnforcementStoresOutliveTheProcessThatWroteThem(t *testing.T) {
 	}
 	defer reopened.Close()
 	second := sqliteEnforcementStores(reopened, slog.New(slog.NewTextHandler(io.Discard, nil)), metrics.New())
-	if _, banned := second.bans.IsBanned("default", hwid); !banned {
-		t.Error("the ban did not survive a reopen of the state database")
+	_, banned, err := second.bans.IsBanned("default", hwid)
+	if err != nil || !banned {
+		t.Errorf("the ban did not survive a reopen of the state "+
+			"database: %v", err)
 	}
 	if entries := second.audit.Query(10); len(entries) != 1 || entries[0].Action != "ban" {
 		t.Errorf("audit entries after a reopen = %+v, want the ban", entries)
