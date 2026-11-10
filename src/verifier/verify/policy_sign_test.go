@@ -13,8 +13,10 @@ import (
 	"crypto/rand"
 	"crypto/x509"
 	"encoding/pem"
+	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -195,74 +197,102 @@ func TestVerifyPolicySignature_EmptyMessage(t *testing.T) {
 	}
 }
 
-func TestVerifyPolicyFile_Valid(t *testing.T) {
+const signedPolicyYAML = "name: signed-test\npcrs:\n  0: \"" +
+	"b6d107af0ef8a52065f6d3c344cfc811920fa81b28dd4c746ea1ad55464c5b61\"\n"
+
+// writes the policy and, when sig is non-nil, its detached signature
+func writeSignedPolicy(t *testing.T, dir string, content, sig []byte) string {
+	t.Helper()
+
+	yamlPath := filepath.Join(dir, "policy.yaml")
+	if err := os.WriteFile(yamlPath, content, 0o644); err != nil {
+		t.Fatalf("write policy: %v", err)
+	}
+	if sig != nil {
+		err := os.WriteFile(yamlPath+".sig", sig, 0o644)
+		if err != nil {
+			t.Fatalf("write signature: %v", err)
+		}
+	}
+	return yamlPath
+}
+
+func signedPolicyVerifier(t *testing.T, pubPath string) *PCRVerifier {
+	t.Helper()
+
+	pub, err := LoadPolicyPublicKey(pubPath)
+	if err != nil {
+		t.Fatalf("load public key: %v", err)
+	}
+	v := NewPCRVerifier()
+	v.SetPolicyPublicKey(pub)
+	return v
+}
+
+func TestLoadPolicySigned_Valid(t *testing.T) {
 	dir := t.TempDir()
 	privPath, pubPath := writeKeyPair(t, dir)
 
-	content := []byte("name: file-test\npcrs:\n  0: deadbeef\n")
-	yamlPath := filepath.Join(dir, "policy.yaml")
-	os.WriteFile(yamlPath, content, 0o644)
+	content := []byte(signedPolicyYAML)
+	path := writeSignedPolicy(t, dir, content,
+		signData(t, content, privPath))
 
-	sig := signData(t, content, privPath)
-	sigPath := yamlPath + ".sig"
-	os.WriteFile(sigPath, sig, 0o644)
-
-	pub, _ := LoadPolicyPublicKey(pubPath)
-	if err := VerifyPolicyFile(yamlPath, pub); err != nil {
-		t.Fatalf("expected valid file sig, got: %v", err)
+	err := signedPolicyVerifier(t, pubPath).LoadPolicy(path)
+	if err != nil {
+		t.Fatalf("expected signed policy to load, got: %v", err)
 	}
 }
 
-func TestVerifyPolicyFile_Tampered(t *testing.T) {
+func TestLoadPolicySigned_Tampered(t *testing.T) {
 	dir := t.TempDir()
 	privPath, pubPath := writeKeyPair(t, dir)
 
-	content := []byte("name: tamper-test\n")
-	yamlPath := filepath.Join(dir, "policy.yaml")
-	os.WriteFile(yamlPath, content, 0o644)
-
+	content := []byte(signedPolicyYAML)
 	sig := signData(t, content, privPath)
-	sigPath := yamlPath + ".sig"
-	os.WriteFile(sigPath, sig, 0o644)
+	path := writeSignedPolicy(t, dir,
+		[]byte(strings.Replace(signedPolicyYAML, "signed-test",
+			"TAMPERED", 1)), sig)
 
-	// tamper
-	os.WriteFile(yamlPath, []byte("name: TAMPERED\n"), 0o644)
-
-	pub, _ := LoadPolicyPublicKey(pubPath)
-	err := VerifyPolicyFile(yamlPath, pub)
-	if err == nil {
-		t.Fatal("expected error for tampered file")
+	err := signedPolicyVerifier(t, pubPath).LoadPolicy(path)
+	if !errors.Is(err, ErrInvalidSignature) {
+		t.Fatalf("expected ErrInvalidSignature, got: %v", err)
 	}
 }
 
-func TestVerifyPolicyFile_MissingSig(t *testing.T) {
+func TestLoadPolicySigned_MissingSig(t *testing.T) {
 	dir := t.TempDir()
 	_, pubPath := writeKeyPair(t, dir)
 
-	yamlPath := filepath.Join(dir, "policy.yaml")
-	os.WriteFile(yamlPath, []byte("name: no-sig\n"), 0o644)
-	// no .sig file
+	path := writeSignedPolicy(t, dir, []byte(signedPolicyYAML), nil)
 
-	pub, _ := LoadPolicyPublicKey(pubPath)
-	err := VerifyPolicyFile(yamlPath, pub)
-	if err == nil {
-		t.Fatal("expected error for missing sig file")
+	err := signedPolicyVerifier(t, pubPath).LoadPolicy(path)
+	if !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("expected missing signature error, got: %v", err)
 	}
 }
 
-func TestVerifyPolicyFile_TruncatedSig(t *testing.T) {
+func TestLoadPolicySigned_TruncatedSig(t *testing.T) {
 	dir := t.TempDir()
 	_, pubPath := writeKeyPair(t, dir)
 
-	yamlPath := filepath.Join(dir, "policy.yaml")
-	os.WriteFile(yamlPath, []byte("name: short-sig\n"), 0o644)
+	path := writeSignedPolicy(t, dir, []byte(signedPolicyYAML),
+		[]byte("short"))
 
-	sigPath := yamlPath + ".sig"
-	os.WriteFile(sigPath, []byte("short"), 0o644)
+	err := signedPolicyVerifier(t, pubPath).LoadPolicy(path)
+	if !errors.Is(err, ErrBadSigSize) {
+		t.Fatalf("expected ErrBadSigSize, got: %v", err)
+	}
+}
 
-	pub, _ := LoadPolicyPublicKey(pubPath)
-	err := VerifyPolicyFile(yamlPath, pub)
-	if err == nil {
-		t.Fatal("expected error for truncated sig")
+func TestLoadPolicy_TooLarge(t *testing.T) {
+	dir := t.TempDir()
+
+	content := []byte(signedPolicyYAML + "#" +
+		strings.Repeat("x", PolicyMaxFileSize) + "\n")
+	path := writeSignedPolicy(t, dir, content, nil)
+
+	err := NewPCRVerifier().LoadPolicy(path)
+	if !errors.Is(err, ErrFileTooLarge) {
+		t.Fatalf("expected ErrFileTooLarge, got: %v", err)
 	}
 }

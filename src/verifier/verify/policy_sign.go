@@ -16,7 +16,7 @@ import (
 // PolicySigSize is the size of a raw Ed25519 signature.
 const PolicySigSize = 64
 
-// PolicyMaxFileSize bounds the policy file VerifyPolicyFile reads.
+// PolicyMaxFileSize bounds the policy file LoadPolicy reads.
 const PolicyMaxFileSize = 64 * 1024
 
 var (
@@ -62,34 +62,4 @@ func VerifyPolicySignature(data, sig []byte, pubKey ed25519.PublicKey) error {
 	}
 
 	return nil
-}
-
-// VerifyPolicyFile verifies policyPath against the detached signature in
-// policyPath+".sig", the form lota-agent --sign-policy writes.
-func VerifyPolicyFile(policyPath string, pubKey ed25519.PublicKey) error {
-	data, err := readBoundedFile(policyPath, PolicyMaxFileSize)
-	if err != nil {
-		return fmt.Errorf("read policy: %w", err)
-	}
-
-	sigPath := policyPath + ".sig"
-	sig, err := os.ReadFile(sigPath)
-	if err != nil {
-		return fmt.Errorf("read signature file: %w", err)
-	}
-
-	return VerifyPolicySignature(data, sig, pubKey)
-}
-
-func readBoundedFile(path string, maxSize int64) ([]byte, error) {
-	info, err := os.Stat(path)
-	if err != nil {
-		return nil, err
-	}
-
-	if info.Size() > maxSize {
-		return nil, ErrFileTooLarge
-	}
-
-	return os.ReadFile(path)
 }
