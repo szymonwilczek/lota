@@ -2035,7 +2035,57 @@ static void test_the_status_file_names_the_refused_object(void)
 	}
 
 	atomic_store(&g_hook.self_protected, 0);
-	g_hook.refused_object[0] = '\0';
+	g_refusal->object[0] = '\0';
+	PASS();
+}
+
+/* A forked child's refusal survives the parent's next status write. */
+static void test_a_child_refusal_reaches_the_parent_status(void)
+{
+	struct lota_status status;
+	char path[PATH_MAX];
+	char buf[1024];
+	int wstatus;
+	pid_t pid;
+	ssize_t n;
+
+	TEST("a forked child's refusal reaches the parent's status file");
+
+	snprintf(path, sizeof(path), "%s/status_child_refused", tmpdir);
+	snprintf(g_hook.status_path, sizeof(g_hook.status_path), "%s", path);
+	hook_share_refusal();
+
+	pid = fork();
+	if (pid < 0) {
+		FAIL("fork failed");
+		return;
+	}
+	if (pid == 0) {
+		hook_record_refusal("/opt/game/lib/libchild.so");
+		_exit(0);
+	}
+	if (waitpid(pid, &wstatus, 0) != pid || !WIFEXITED(wstatus)) {
+		FAIL("the child did not exit");
+		return;
+	}
+
+	memset(&status, 0, sizeof(status));
+	status.flags = LOTA_FLAG_ATTESTED;
+	if (write_status(&status) != 0) {
+		FAIL("write_status failed");
+		return;
+	}
+	n = read_file_contents(path, buf, sizeof(buf));
+	g_refusal->object[0] = '\0';
+	if (n <= 0) {
+		FAIL("read failed");
+		return;
+	}
+	if (!strstr(buf, "LOTA_REFUSED_OBJECT=/opt/game/lib/libchild.so")) {
+		FAIL("the parent's status dropped the child's refusal");
+		return;
+	}
+
 	PASS();
 }
 
@@ -2049,7 +2099,7 @@ static void test_the_loader_wrapper_hands_back_what_it_got(void)
 
 	g_hook.log_level = HOOK_LOG_SILENT;
 	atomic_store(&g_hook.self_protected, 1);
-	g_hook.refused_object[0] = '\0';
+	g_refusal->object[0] = '\0';
 
 	handle = dlopen("libm.so.6", RTLD_NOW);
 	if (!handle) {
@@ -2058,7 +2108,7 @@ static void test_the_loader_wrapper_hands_back_what_it_got(void)
 		return;
 	}
 	dlclose(handle);
-	if (g_hook.refused_object[0]) {
+	if (g_refusal->object[0]) {
 		atomic_store(&g_hook.self_protected, 0);
 		FAIL("a load that succeeded was recorded as a refusal");
 		return;
@@ -2071,7 +2121,7 @@ static void test_the_loader_wrapper_hands_back_what_it_got(void)
 		FAIL("a load of nothing returned a handle");
 		return;
 	}
-	if (g_hook.refused_object[0]) {
+	if (g_refusal->object[0]) {
 		atomic_store(&g_hook.self_protected, 0);
 		FAIL("a missing file was recorded as a gate refusal");
 		return;
@@ -2093,13 +2143,13 @@ static void test_the_loader_wrapper_hands_back_what_it_got(void)
 		FAIL("an object with no segments returned a handle");
 		return;
 	}
-	if (strcmp(g_hook.refused_object, broken) != 0) {
+	if (strcmp(g_refusal->object, broken) != 0) {
 		FAIL("a failed load of an object that is there went unrecorded");
 		return;
 	}
 
 	unlink(broken);
-	g_hook.refused_object[0] = '\0';
+	g_refusal->object[0] = '\0';
 	PASS();
 }
 
@@ -2212,7 +2262,7 @@ static void test_a_refusal_publishes_itself(void)
 
 	n = read_file_contents(path, buf, sizeof(buf));
 	unlink(broken);
-	g_hook.refused_object[0] = '\0';
+	g_refusal->object[0] = '\0';
 	if (n <= 0) {
 		FAIL("no status file to read");
 		return;
@@ -2586,6 +2636,7 @@ int main(void)
 	test_the_first_refresh_registers();
 	test_a_gate_refusal_is_told_apart_from_a_missing_file();
 	test_the_status_file_names_the_refused_object();
+	test_a_child_refusal_reaches_the_parent_status();
 	test_the_loader_wrapper_hands_back_what_it_got();
 	test_a_registration_publishes_itself();
 	test_a_refusal_publishes_itself();

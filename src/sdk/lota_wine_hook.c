@@ -77,8 +77,6 @@ static struct {
 	char snapshot_path[PATH_MAX]; /* atomic snapshot file (flags + token) */
 	char evidence_path[PATH_MAX];
 	pid_t init_pid;
-	char refused_object[256]; /* last object that would not load */
-	time_t refused_at;
 	struct lota_status last_status; /* the last one the agent gave */
 	atomic_int have_status;
 	atomic_int offline_errno; /* the refusal already reported, negated */
@@ -88,6 +86,15 @@ static struct {
 	atomic_int offline_published; /* HOOK_LOST_* published, or 0 */
 	atomic_int evidence_written; /* the evidence is on disk */
 } g_hook;
+
+/* The last object that would not load. */
+struct hook_refusal {
+	char object[256];
+	time_t at;
+};
+
+static struct hook_refusal g_own_refusal;
+static struct hook_refusal *g_refusal = &g_own_refusal;
 
 /* Why the hook holds no connection: offline, or the agent said no. */
 #define HOOK_LOST_AGENT 1
@@ -663,12 +670,12 @@ static int write_status_payload(const struct lota_status *status, int offline)
 	if (len < 0 || (size_t)len >= sizeof(buf))
 		return -ENOMEM;
 
-	if (g_hook.refused_object[0]) {
+	if (g_refusal->object[0]) {
 		int add = snprintf(buf + len, sizeof(buf) - (size_t)len,
 				   "LOTA_REFUSED_OBJECT=%s\n"
 				   "LOTA_REFUSED_AT=%lu\n",
-				   g_hook.refused_object,
-				   (unsigned long)g_hook.refused_at);
+				   g_refusal->object,
+				   (unsigned long)g_refusal->at);
 
 		if (add < 0 || (size_t)(len + add) >= sizeof(buf))
 			return -ENOMEM;
@@ -1164,9 +1171,18 @@ static bool hook_refusal_is_gate(const char *path)
 /* For the status file. */
 static void hook_record_refusal(const char *path)
 {
-	snprintf(g_hook.refused_object, sizeof(g_hook.refused_object), "%s",
-		 path);
-	g_hook.refused_at = time(NULL);
+	snprintf(g_refusal->object, sizeof(g_refusal->object), "%s", path);
+	g_refusal->at = time(NULL);
+}
+
+/* so a forked child's refusal outlives the parent's next status write */
+static void hook_share_refusal(void)
+{
+	void *map = mmap(NULL, sizeof(*g_refusal), PROT_READ | PROT_WRITE,
+			 MAP_SHARED | MAP_ANONYMOUS, -1, 0);
+
+	if (map != MAP_FAILED)
+		g_refusal = map;
 }
 
 /*
@@ -1386,10 +1402,9 @@ static void hook_child_after_fork(void)
 	g_hook.init_pid = 0;
 	/*
 	 * The child starts no refresh thread and registers nothing: it
-	 * carries the protection the parent had at the fork. An exec the
-	 * hook activates in registers it.
+	 * carries the protection the parent had at the fork, and the latch
+	 * with it. An exec the hook activates in registers it.
 	 */
-	atomic_store(&g_hook.self_protected, 0);
 
 	hook_offline_clear();
 }
@@ -1445,6 +1460,7 @@ __attribute__((constructor)) static void lota_wine_hook_init(void)
 		g_hook.refresh_sec);
 
 	g_hook.init_pid = getpid();
+	hook_share_refusal();
 	pthread_atfork(NULL, NULL, hook_child_after_fork);
 
 	/*
