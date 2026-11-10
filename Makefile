@@ -1375,7 +1375,8 @@ $(BUILD_DIR)/test_container_watch: $(AGENT_DIR)/container_watch.c
 
 $(BUILD_DIR)/test_daemon: $(AGENT_DIR)/daemon.c
 $(BUILD_DIR)/test_daemon_exit_status: $(AGENT_DIR)/exit_status.c
-$(BUILD_DIR)/test_daemon_loop: $(AGENT_DIR)/daemon_loop_telemetry.c
+$(BUILD_DIR)/test_daemon_loop: $(AGENT_DIR)/daemon_loop_telemetry.c \
+	$(AGENT_DIR)/daemon_loop.c
 
 $(BUILD_DIR)/test_daemon_start_status: $(AGENT_BIN)
 $(BUILD_DIR)/test_daemon_start_status: TEST_CFLAGS := -DAGENT_BIN_PATH='"$(AGENT_BIN)"'

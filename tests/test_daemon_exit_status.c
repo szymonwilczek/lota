@@ -135,6 +135,9 @@ static void test_a_served_daemon_carries_its_own_status(void)
 	TEST("a daemon that served exits 0");
 	if (rc != 0)
 		FAIL("a clean stop did not exit 0");
+	else if (lota_daemon_exit_status(-EBADF, TPM_PCR14_ALREADY_COMMITTED) !=
+		 -EBADF)
+		FAIL("a failed event loop exits 0");
 	else
 		PASS();
 }

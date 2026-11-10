@@ -168,10 +168,12 @@ int agent_run_event_loop(struct agent_loop_ctx *ctx)
 		int nfds = epoll_wait(ctx->epoll_fd, events, 16, timeout);
 
 		if (nfds < 0) {
-			if (errno == EINTR)
+			int err = errno;
+
+			if (err == EINTR)
 				continue;
-			lota_err("epoll_wait failed: %s", strerror(errno));
-			break;
+			lota_err("epoll_wait failed: %s", strerror(err));
+			return -err;
 		}
 
 		poll_event_loss(ctx, &last_lost, &last_loss_poll_ns);

@@ -55,7 +55,7 @@ struct agent_loop_ctx {
  * SIGTERM, SIGINT and the IPC shutdown request end the loop, and so does
  * a failing epoll_wait(), with an error logged.
  *
- * Return: 0.
+ * Return: 0 when asked to stop, or the negative errno of epoll_wait().
  */
 int agent_run_event_loop(struct agent_loop_ctx *ctx);
 
