@@ -686,21 +686,28 @@ static void hook_cache_status(const struct lota_status *status)
 	atomic_store(&g_hook.have_status, 1);
 }
 
-/* rewrite the status file from the cache; no-op before the first status */
+/*
+ * Rewrite the status file from the cache, or as offline while the agent
+ * is lost; no-op before the first status.
+ */
 static void hook_publish_state(void)
 {
-	struct lota_status status;
+	struct lota_status status = { 0 };
 	int ret;
 
-	if (!atomic_load(&g_hook.have_status))
-		return;
+	if (atomic_load(&g_hook.offline_published)) {
+		ret = write_status_payload(&status, 1);
+	} else {
+		if (!atomic_load(&g_hook.have_status))
+			return;
 
-	pthread_once(&g_status_lock_once, status_lock_init);
-	pthread_mutex_lock(&g_status_lock);
-	status = g_hook.last_status;
-	pthread_mutex_unlock(&g_status_lock);
+		pthread_once(&g_status_lock_once, status_lock_init);
+		pthread_mutex_lock(&g_status_lock);
+		status = g_hook.last_status;
+		pthread_mutex_unlock(&g_status_lock);
 
-	ret = write_status(&status);
+		ret = write_status(&status);
+	}
 	if (ret < 0)
 		LOG_DBG("write_status: %s", strerror(-ret));
 }

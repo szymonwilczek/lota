@@ -1401,6 +1401,41 @@ static void test_offline_clear_arms_the_next_disconnect(void)
 	PASS();
 }
 
+/* a refusal or a registration between agents must not revive the cache */
+static void test_a_republish_while_offline_stays_offline(void)
+{
+	struct lota_status status;
+	char buf[1024];
+
+	TEST("offline publish: a republish keeps the agent lost");
+
+	offline_paths("republish");
+	hook_offline_clear();
+
+	memset(&status, 0, sizeof(status));
+	status.flags = LOTA_FLAG_ATTESTED;
+	status.valid_until = 1;
+	hook_cache_status(&status);
+	hook_offline_publish();
+	hook_publish_state();
+	hook_offline_clear();
+	atomic_store(&g_hook.have_status, 0);
+
+	if (read_file_contents(offline_status, buf, sizeof(buf)) <= 0) {
+		FAIL("read failed");
+		return;
+	}
+	if (!strstr(buf, "LOTA_OFFLINE=1")) {
+		FAIL("the republish reports the agent as reachable");
+		return;
+	}
+	if (!strstr(buf, "LOTA_ATTESTED=0")) {
+		FAIL("the republish restored the cached verdict");
+		return;
+	}
+	PASS();
+}
+
 /* lota_poll_events() returns a count; only below zero is a failure */
 static void test_a_quiet_wait_is_not_a_failure(void)
 {
@@ -2479,6 +2514,7 @@ int main(void)
 	test_offline_publish_replaces_the_last_good_status();
 	test_offline_publish_writes_once_per_episode();
 	test_offline_clear_arms_the_next_disconnect();
+	test_a_republish_while_offline_stays_offline();
 
 	/* process activation policy */
 	test_policy_default_skips_usr_bin();
