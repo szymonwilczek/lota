@@ -593,6 +593,7 @@ func (s *BaselineStore) ClearBaseline(clientID string) error {
 	delete(s.bootBaselines, clientID)
 	delete(s.reanchor, clientID)
 	delete(s.tenants, clientID)
+	delete(s.kernelHashes, clientID)
 	delete(s.machineKeys, clientID)
 	return nil
 }

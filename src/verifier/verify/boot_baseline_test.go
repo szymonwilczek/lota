@@ -72,6 +72,10 @@ func TestBootBaseline_MemoryClearBaselineDropsAllState(t *testing.T) {
 	if err := bs.RecordBootEvidence("c3", []byte("event-log"), 7, true); err != nil {
 		t.Fatalf("RecordBootEvidence failed: %v", err)
 	}
+	_, _, err := bs.RecordKernelHash("c3", [types.HashSize]byte{0x09})
+	if err != nil {
+		t.Fatalf("RecordKernelHash failed: %v", err)
+	}
 
 	if err := bs.ClearBaseline("c3"); err != nil {
 		t.Fatalf("ClearBaseline failed: %v", err)
@@ -92,6 +96,14 @@ func TestBootBaseline_MemoryClearBaselineDropsAllState(t *testing.T) {
 
 	if res, _ := bs.CheckAndUpdateBootPCRs("c3", boot(0x40, 0x41, 0x47)); res != TOFUFirstUse {
 		t.Fatalf("expected TOFUFirstUse after clear, got %v", res)
+	}
+	bs.CheckAndUpdate("c3", pcr14)
+	prev, had, err := bs.RecordKernelHash("c3", [types.HashSize]byte{0x0a})
+	if err != nil {
+		t.Fatalf("RecordKernelHash failed: %v", err)
+	}
+	if had {
+		t.Errorf("kernel hash %x survived ClearBaseline", prev)
 	}
 }
 
