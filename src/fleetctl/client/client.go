@@ -165,6 +165,7 @@ func decodeAPIError(resp *http.Response) error {
 // has none and answers "ok".
 type Health struct {
 	Status    string `json:"status"`
+	Mode      string `json:"mode,omitempty"`
 	Uptime    string `json:"uptime"`
 	UptimeSec int64  `json:"uptime_sec"`
 	TLS       struct {

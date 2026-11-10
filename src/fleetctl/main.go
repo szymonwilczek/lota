@@ -245,6 +245,7 @@ func cmdHealth(ctx *cmdContext, args []string) (int, error) {
 		}
 	} else {
 		kv(ctx.stdout, "status", h.Status)
+		kv(ctx.stdout, "mode", h.Mode)
 		kv(ctx.stdout, "uptime", h.Uptime)
 		fmt.Fprintf(ctx.stdout, "tls listening: %v (%s)\n", h.TLS.Listening, h.TLS.Address)
 	}

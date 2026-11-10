@@ -113,6 +113,22 @@ func TestServerFromEnvironment(t *testing.T) {
 	}
 }
 
+func TestHealthShowsReportOnlyMode(t *testing.T) {
+	f := newFakeAPI(t, map[string]string{
+		"GET /health": `{"status":"ok","mode":"reporting",` +
+			`"uptime":"1s","tls":{"listening":false,"address":""}}`,
+	})
+
+	code, out, _ := runCLI(t, noEnv, "-server", f.srv.URL, "health")
+	if code != exitOK || !strings.Contains(out, "mode: reporting") {
+		t.Fatalf("exit = %d, output lacks the mode:\n%s", code, out)
+	}
+	code, out, _ = runCLI(t, noEnv, "-server", f.srv.URL, "-json", "health")
+	if code != exitOK || !strings.Contains(out, `"mode": "reporting"`) {
+		t.Fatalf("exit = %d, JSON lacks the mode:\n%s", code, out)
+	}
+}
+
 func TestAPIKeyFromEnvironment(t *testing.T) {
 	f := newFakeAPI(t, map[string]string{
 		"GET /api/v1/stats": `{}`,
