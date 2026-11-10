@@ -707,6 +707,126 @@ static void test_strict_without_allow_verity_stays_off(void)
 	PASS();
 }
 
+/* Runs one reload of @extra over a default snapshot and returns its log */
+static int reload_log(const char *extra, struct lota_config *cfg, char *log,
+		      size_t len)
+{
+	char trust_libs[LOTA_CONFIG_MAX_LIBS][PATH_MAX] = { { 0 } };
+	uint32_t *protect_pids = NULL;
+	int trust_lib_count = 0, protect_pid_count = 0;
+	char path[PATH_MAX];
+	int mode = LOTA_MODE_ENFORCE;
+	bool t = true, f = false;
+	int saved, fd, rc;
+	ssize_t n;
+
+	if (write_config(path, sizeof(path), extra) < 0)
+		return -1;
+	fd = open("/tmp", O_TMPFILE | O_RDWR, 0600);
+	saved = dup(STDERR_FILENO);
+	if (fd < 0 || saved < 0) {
+		if (fd >= 0)
+			close(fd);
+		if (saved >= 0)
+			close(saved);
+		unlink(path);
+		return -1;
+	}
+	snprintf(cfg->mode, sizeof(cfg->mode), "enforce");
+	seed_runtime(trust_libs, &trust_lib_count, &protect_pids,
+		     &protect_pid_count);
+
+	fflush(stderr);
+	dup2(fd, STDERR_FILENO);
+	rc = agent_reload_config(path, cfg, &mode, &t, &f, &t, &f, &f,
+				 &protect_pids, &protect_pid_count, trust_libs,
+				 &trust_lib_count);
+	fflush(stderr);
+	dup2(saved, STDERR_FILENO);
+	close(saved);
+	n = pread(fd, log, len - 1, 0);
+	log[n > 0 ? n : 0] = '\0';
+	close(fd);
+	journal_set_level(LOG_DEBUG);
+	free(protect_pids);
+	unlink(path);
+	return rc;
+}
+
+/*
+ * These keys are read once at start; a reload that sees them changed says so
+ * and keeps the snapshot at what the daemon runs with.
+ */
+static void test_startup_only_keys_are_reported(void)
+{
+	static const char *const keys[] = {
+		"kernel_path",
+		"aik_handle",
+		"seal_aik_auth",
+		"seal_aik_auth_strict",
+		"seal_persistent_primary",
+		"container_listener_uid",
+		"bench",
+	};
+	struct lota_config *cfg;
+	char log[4096];
+	uint32_t handle;
+
+	TEST("a reload reports the keys that change only on the next start");
+
+	cfg = config_new();
+	if (!cfg) {
+		FAIL("out of memory");
+		return;
+	}
+	handle = cfg->aik_handle;
+
+	if (reload_log("log_level = warn\n", cfg, log, sizeof(log)) != 0) {
+		FAIL("the unchanged file is refused");
+		config_free(cfg);
+		return;
+	}
+	for (size_t i = 0; i < sizeof(keys) / sizeof(keys[0]); i++) {
+		if (strstr(log, keys[i])) {
+			FAIL("an unchanged key is reported");
+			config_free(cfg);
+			return;
+		}
+	}
+
+	if (reload_log("log_level = warn\n"
+		       "kernel_path = /boot/vmlinuz-test\n"
+		       "aik_handle = 0x81010003\n"
+		       "seal_aik_auth = true\n"
+		       "seal_aik_auth_strict = true\n"
+		       "seal_persistent_primary = true\n"
+		       "container_listener_uid = 1000\n"
+		       "bench = true\n",
+		       cfg, log, sizeof(log)) != 0) {
+		FAIL("the changed file is refused");
+		config_free(cfg);
+		return;
+	}
+	for (size_t i = 0; i < sizeof(keys) / sizeof(keys[0]); i++) {
+		char want[64];
+
+		snprintf(want, sizeof(want), "%s changes on the next start",
+			 keys[i]);
+		if (!strstr(log, want)) {
+			FAIL(keys[i]);
+			config_free(cfg);
+			return;
+		}
+	}
+	if (cfg->aik_handle != handle) {
+		FAIL("the snapshot takes the new aik_handle");
+		config_free(cfg);
+		return;
+	}
+	config_free(cfg);
+	PASS();
+}
+
 int main(void)
 {
 	printf("=== reload keeps command-line enforcement state ===\n\n");
@@ -719,6 +839,7 @@ int main(void)
 	test_fifo_is_refused_without_waiting();
 	test_reload_applies_an_unchanged_log_level();
 	test_strict_without_allow_verity_stays_off();
+	test_startup_only_keys_are_reported();
 
 	printf("\n=== %d/%d passed ===\n", tests_passed, tests_run);
 	return tests_passed == tests_run ? 0 : 1;

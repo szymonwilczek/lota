@@ -588,6 +588,44 @@ static void reload_trust_libs(const struct lota_config *new_cfg,
 	free(old_trust_libs);
 }
 
+static void warn_startup_switch(const char *key, bool now, bool next)
+{
+	if (next != now)
+		lota_warn("%s changes on the next start; keeping it %s", key,
+			  now ? "on" : "off");
+}
+
+static void warn_startup_only(const struct lota_config *cfg,
+			      const struct lota_config *new_cfg)
+{
+	warn_startup_switch("bench", cfg->bench, new_cfg->bench);
+	warn_startup_switch("seal_aik_auth", cfg->seal_aik_auth,
+			    new_cfg->seal_aik_auth);
+	warn_startup_switch("seal_aik_auth_strict", cfg->seal_aik_auth_strict,
+			    new_cfg->seal_aik_auth_strict);
+	warn_startup_switch("seal_persistent_primary",
+			    cfg->seal_persistent_primary,
+			    new_cfg->seal_persistent_primary);
+
+	if (strcmp(new_cfg->kernel_path, cfg->kernel_path) != 0)
+		lota_warn("kernel_path changes on the next start; keeping "
+			  "'%s'",
+			  cfg->kernel_path);
+	if (new_cfg->aik_handle != cfg->aik_handle)
+		lota_warn("aik_handle changes on the next start; keeping "
+			  "0x%08x",
+			  cfg->aik_handle);
+	if (new_cfg->container_listener_uid_count !=
+		    cfg->container_listener_uid_count ||
+	    memcmp(new_cfg->container_listener_uids,
+		   cfg->container_listener_uids,
+		   (size_t)cfg->container_listener_uid_count *
+			   sizeof(cfg->container_listener_uids[0])) != 0)
+		lota_warn("container_listener_uid changes on the next start; "
+			  "keeping %d entries",
+			  cfg->container_listener_uid_count);
+}
+
 static void sync_config_snapshot(
 	struct lota_config *cfg, const struct lota_config *new_cfg, int mode,
 	bool strict_mmap, bool strict_exec, bool block_ptrace,
@@ -611,7 +649,6 @@ static void sync_config_snapshot(
 	cfg->strict_modules = strict_modules;
 	cfg->block_anon_exec = block_anon_exec;
 	cfg->attest_interval = new_cfg->attest_interval;
-	cfg->aik_handle = new_cfg->aik_handle;
 	cfg->daemon = new_cfg->daemon;
 	memcpy(cfg->pid_file, new_cfg->pid_file, sizeof(cfg->pid_file));
 	memcpy(cfg->signing_key, new_cfg->signing_key,
@@ -742,9 +779,7 @@ int agent_reload_config(const char *config_path, struct lota_config *cfg,
 	reload_trust_libs(new_cfg, trust_libs, trust_lib_count);
 	lota_info("Trusted libs reloaded (%d entries)", *trust_lib_count);
 
-	if (new_cfg->bench != cfg->bench)
-		lota_warn("bench changes on the next start; keeping it %s",
-			  cfg->bench ? "on" : "off");
+	warn_startup_only(cfg, new_cfg);
 
 	if (new_cfg->allow_verity_count != cfg->allow_verity_count) {
 		lota_warn("allow_verity changes require restart; keeping "
