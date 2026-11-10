@@ -13,6 +13,7 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <getopt.h>
+#include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -371,6 +372,7 @@ int main(int argc, char **argv)
 		{ NULL, 0, NULL, 0 },
 	};
 
+	bool bad_usage = false;
 	int opt;
 	while ((opt = getopt_long(argc, argv, "g:o:s:c:t:h", longopts, NULL)) !=
 	       -1) {
@@ -394,12 +396,18 @@ int main(int argc, char **argv)
 			usage(argv[0]);
 			return 0;
 		default:
-			usage(argv[0]);
-			return EXIT_USAGE;
+			bad_usage = true;
+			break;
 		}
 	}
 
-	if (!opts.gate || !opts.out_path) {
+	if (opts.out_path && unlink(opts.out_path) != 0 && errno != ENOENT) {
+		fprintf(stderr, "ci-attest: cannot remove %s: %s\n",
+			opts.out_path, strerror(errno));
+		return EXIT_OUTPUT;
+	}
+
+	if (bad_usage || !opts.gate || !opts.out_path) {
 		usage(argv[0]);
 		return EXIT_USAGE;
 	}
