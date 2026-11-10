@@ -7,8 +7,6 @@ package verify
 import (
 	"errors"
 	"time"
-
-	"github.com/szymonwilczek/lota/verifier/types"
 )
 
 // ErrAgentHashRepinRateLimited is returned by a store's
@@ -44,34 +42,25 @@ const (
 	AgentHashNoRefusal AgentHashRefusal = iota
 	// AgentHashNoAllowList means the policy lists no build.
 	AgentHashNoAllowList
-	// AgentHashNotAllowed means the reported build is not listed.
-	AgentHashNotAllowed
-	// AgentHashTooSoon means the reported build is listed and the client
-	// re-pinned less than AgentHashRepinMinInterval ago.
+	// AgentHashTooSoon means the client re-pinned less than
+	// AgentHashRepinMinInterval ago.
 	AgentHashTooSoon
 )
 
 // agentHashDecision answers whether a client whose reported agent hash differs
 // from its pinned one may re-pin to the reported hash: only when the policy
-// allow-list names it and the interval has passed. The reported hash is the
+// has an allow-list and the interval has passed. The reported hash is the
 // binary that extended PCR 14 this boot, since MatchLockedBootCommitmentPCR14
 // derived the quoted register from it. With an empty allow-list the pin
-// stands.
-//
-// The allow-list test is agentHashAllowed, the predicate of the policy gate
-// in verifyAgainstPolicy.
+// stands. A build off a non-empty list never gets here: the policy gate in
+// verifyAgainstPolicy refused it first.
 func agentHashDecision(
-	reported [types.HashSize]byte,
 	allowedHashes []string,
 	lastRepin time.Time,
 	now time.Time,
 ) (AgentHashVerdict, AgentHashRefusal) {
 	if len(allowedHashes) == 0 {
 		return AgentHashEscalate, AgentHashNoAllowList
-	}
-
-	if !agentHashAllowed(reported, allowedHashes) {
-		return AgentHashEscalate, AgentHashNotAllowed
 	}
 
 	if !lastRepin.IsZero() && now.Sub(lastRepin) < AgentHashRepinMinInterval {

@@ -1246,8 +1246,8 @@ func (v *Verifier) tryAgentHashRepin(clog *slog.Logger, clientID, tenant string,
 	}
 
 	now := time.Now()
-	verdict, refusal := agentHashDecision(report.System.AgentHash,
-		policy.AgentHashes, st.LastRepinAt, now)
+	verdict, refusal := agentHashDecision(policy.AgentHashes,
+		st.LastRepinAt, now)
 
 	if verdict != AgentHashRepin {
 		// an unlisted build already failed the policy gate
