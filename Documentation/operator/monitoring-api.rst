@@ -422,8 +422,10 @@ POST /api/v1/clients/{id}/reanchor
 ----------------------------------
 
 Admin. The operator-forced re-baseline: drops the client's stored PCR14
-and boot baselines so the next attestation re-establishes trust. The
-AIK registration is untouched. Body: ``reason`` and ``actor`` required,
+and boot baselines so the next attestation re-establishes trust. Without
+``--allow-tofu-boot-baseline`` that attestation may pin the PCR 0/1/7 state
+it reports, once, on this consent; a client delete withdraws it. The AIK
+registration is untouched. Body: ``reason`` and ``actor`` required,
 ``note`` optional. **200**::
 
    {"status": "reanchored", "client_id": "host-0001"}

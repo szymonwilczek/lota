@@ -116,8 +116,10 @@ Lifecycle actions
 stored PCR14 and boot baselines so the next attestation re-establishes
 trust. Use it after a legitimate platform change (board swap, firmware
 update) that the self-service re-anchor refuses or is not enabled for.
-The action is audited (``reanchor``) and counted in the forced re-anchor
-metric.
+Without ``--allow-tofu-boot-baseline`` the forced re-anchor is the operator's
+consent for the next attestation to pin the PCR 0/1/7 state it reports,
+once; ``delete`` withdraws that consent. The action is audited
+(``reanchor``) and counted in the forced re-anchor metric.
 
 ``delete`` removes the client's verifier-side trust state: the baselines and
 the AIK registration, on every storage backend. The device keeps its

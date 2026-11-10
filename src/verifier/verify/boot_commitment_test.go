@@ -174,7 +174,7 @@ func TestMemoryAtomicAttestation_FirstUseSeedsBothHalves(t *testing.T) {
 		boot.PCR7[i] = 0xB7
 	}
 
-	out := bs.CheckAndUpdateAttestation("atomic-c1", pcr14, agentHash, boot)
+	out := bs.CheckAndUpdateAttestation("atomic-c1", pcr14, agentHash, boot, false)
 	if out.AgentHashResult != TOFUFirstUse {
 		t.Fatalf("agent_hash first-use: got %v, want TOFUFirstUse", out.AgentHashResult)
 	}
@@ -191,7 +191,7 @@ func TestMemoryAtomicAttestation_FirstUseSeedsBothHalves(t *testing.T) {
 		rogue.PCR1[i] = 0xBB
 		rogue.PCR7[i] = 0xCC
 	}
-	out2 := bs.CheckAndUpdateAttestation("atomic-c1", pcr14, agentHash, rogue)
+	out2 := bs.CheckAndUpdateAttestation("atomic-c1", pcr14, agentHash, rogue, false)
 	if out2.AgentHashResult != TOFUMatch {
 		t.Fatalf("second-round agent_hash: got %v, want TOFUMatch", out2.AgentHashResult)
 	}
@@ -225,7 +225,7 @@ func TestMemoryAtomicAttestation_BootMismatchPreservesAgentHashRow(t *testing.T)
 		rogue.PCR0[i] = 0x99
 	}
 
-	first := bs.CheckAndUpdateAttestation("atomic-c2", pcr14, agentHash, good)
+	first := bs.CheckAndUpdateAttestation("atomic-c2", pcr14, agentHash, good, false)
 	if first.AgentHashResult != TOFUFirstUse || first.BootResult != TOFUFirstUse {
 		t.Fatalf("seed call: agent=%v boot=%v",
 			first.AgentHashResult, first.BootResult)
@@ -235,7 +235,7 @@ func TestMemoryAtomicAttestation_BootMismatchPreservesAgentHashRow(t *testing.T)
 			first.AgentHashBaseline.AttestCount)
 	}
 
-	bad := bs.CheckAndUpdateAttestation("atomic-c2", pcr14, agentHash, rogue)
+	bad := bs.CheckAndUpdateAttestation("atomic-c2", pcr14, agentHash, rogue, false)
 	if bad.BootResult != TOFUMismatch {
 		t.Fatalf("rogue boot must mismatch, got %v", bad.BootResult)
 	}
@@ -243,7 +243,7 @@ func TestMemoryAtomicAttestation_BootMismatchPreservesAgentHashRow(t *testing.T)
 	// re-attest with good pins; attest_count must still increment from
 	// 1 (the seed write) to 2, proving the mismatch did not bump the
 	// counter behind the operator's back.
-	good2 := bs.CheckAndUpdateAttestation("atomic-c2", pcr14, agentHash, good)
+	good2 := bs.CheckAndUpdateAttestation("atomic-c2", pcr14, agentHash, good, false)
 	if good2.AgentHashResult != TOFUMatch || good2.BootResult != TOFUMatch {
 		t.Fatalf("recovery call: agent=%v boot=%v",
 			good2.AgentHashResult, good2.BootResult)

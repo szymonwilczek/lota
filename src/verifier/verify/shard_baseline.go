@@ -27,6 +27,7 @@ type baselineShard interface {
 	PCR14RepinStorer
 	KernelHashRecorder
 	MachineKeysRecorder
+	ForcedReanchorStorer
 }
 
 // ShardedBaselineStore partitions baseline state across shards.
@@ -108,9 +109,10 @@ func (s *ShardedBaselineStore) GetBootBaseline(clientID string,
 }
 
 func (s *ShardedBaselineStore) CheckAndUpdateAttestation(clientID string,
-	pcr14, agentHash [types.HashSize]byte, boot *BootBaseline,
+	pcr14, agentHash [types.HashSize]byte, boot *BootBaseline, consent bool,
 ) AttestationOutcome {
-	return s.shardFor(clientID).CheckAndUpdateAttestation(clientID, pcr14, agentHash, boot)
+	return s.shardFor(clientID).CheckAndUpdateAttestation(clientID, pcr14,
+		agentHash, boot, consent)
 }
 
 func (s *ShardedBaselineStore) CheckAndUpdateAgentHash(clientID string,
@@ -184,4 +186,18 @@ func (s *ShardedBaselineStore) ListLFAReviewPending() []string {
 
 func (s *ShardedBaselineStore) AcknowledgeLFAReview(clientID string) error {
 	return s.shardFor(clientID).AcknowledgeLFAReview(clientID)
+}
+
+func (s *ShardedBaselineStore) MarkForcedReanchor(clientID string) error {
+	return s.shardFor(clientID).MarkForcedReanchor(clientID)
+}
+
+func (s *ShardedBaselineStore) HasForcedReanchor(clientID string,
+) (bool, error) {
+	return s.shardFor(clientID).HasForcedReanchor(clientID)
+}
+
+func (s *ShardedBaselineStore) TakeForcedReanchor(clientID string,
+) (bool, error) {
+	return s.shardFor(clientID).TakeForcedReanchor(clientID)
 }

@@ -378,11 +378,11 @@ func TestSQLiteAtomicAttestation_ConcurrentSeed(t *testing.T) {
 	start := make(chan struct{})
 	go func() {
 		<-start
-		resCh <- result{out: bs.CheckAndUpdateAttestation(clientID, pcr14, agentHash, bootA)}
+		resCh <- result{out: bs.CheckAndUpdateAttestation(clientID, pcr14, agentHash, bootA, false)}
 	}()
 	go func() {
 		<-start
-		resCh <- result{out: bs.CheckAndUpdateAttestation(clientID, pcr14, agentHash, bootB)}
+		resCh <- result{out: bs.CheckAndUpdateAttestation(clientID, pcr14, agentHash, bootB, false)}
 	}()
 	close(start)
 
@@ -442,7 +442,7 @@ func TestSQLiteAtomicAttestation_RecoversFromBootMismatch(t *testing.T) {
 		rogue.PCR0[i] = 0xEE
 	}
 
-	first := bs.CheckAndUpdateAttestation(clientID, pcr14, agentHash, good)
+	first := bs.CheckAndUpdateAttestation(clientID, pcr14, agentHash, good, false)
 	if first.AgentHashResult != TOFUFirstUse || first.BootResult != TOFUFirstUse {
 		t.Fatalf("seed: %+v", first)
 	}
@@ -450,12 +450,12 @@ func TestSQLiteAtomicAttestation_RecoversFromBootMismatch(t *testing.T) {
 		t.Fatalf("seed attest_count: got %d want 1", first.AgentHashBaseline.AttestCount)
 	}
 
-	bad := bs.CheckAndUpdateAttestation(clientID, pcr14, agentHash, rogue)
+	bad := bs.CheckAndUpdateAttestation(clientID, pcr14, agentHash, rogue, false)
 	if bad.BootResult != TOFUMismatch {
 		t.Fatalf("rogue boot must mismatch: %+v", bad)
 	}
 
-	recovered := bs.CheckAndUpdateAttestation(clientID, pcr14, agentHash, good)
+	recovered := bs.CheckAndUpdateAttestation(clientID, pcr14, agentHash, good, false)
 	if recovered.AgentHashResult != TOFUMatch || recovered.BootResult != TOFUMatch {
 		t.Fatalf("recovery: %+v", recovered)
 	}

@@ -273,6 +273,7 @@ func recordedDetail(err error) string {
 type bootBaselineRoad struct {
 	allowedBy string // logged as allowed_by; empty = not authenticated
 	note      string
+	consent   bool // the pin spends a forced re-anchor consent
 }
 
 // bootBaselineRoad resolves the policy roads; the caller checks the store.
@@ -288,6 +289,33 @@ func (v *Verifier) bootBaselineRoad(tenant string, bootFacts *BootFacts) bootBas
 		}
 	}
 	return bootBaselineRoad{}
+}
+
+// storeBootRoad resolves the store roads: an enrolled boot baseline, else a
+// forced re-anchor consent, which the pin spends.
+func (v *Verifier) storeBootRoad(clientID string) (bootBaselineRoad, error) {
+	enrolled, err := v.hasBootBaseline(clientID)
+	if err != nil {
+		return bootBaselineRoad{}, err
+	}
+	if enrolled {
+		road := bootBaselineRoad{allowedBy: "baseline store enrollment"}
+		return road, nil
+	}
+	fr, ok := v.baselineStore.(ForcedReanchorStorer)
+	if !ok {
+		return bootBaselineRoad{}, nil
+	}
+	forced, err := fr.HasForcedReanchor(clientID)
+	if err != nil || !forced {
+		return bootBaselineRoad{}, err
+	}
+	return bootBaselineRoad{
+		allowedBy: "operator force-reanchor",
+		note: "the operator consented to pin the firmware state " +
+			"this host reported",
+		consent: true,
+	}, nil
 }
 
 // VerifyReportFrom verifies a report and records the address it came from;
@@ -609,12 +637,13 @@ func (v *Verifier) VerifyReportFrom(challengeID, remoteAddr string, reportData [
 		PCR7: report.TPM.PCRValues[7],
 	}
 
-	// Enrollment gate: a first-use PCR 0/1/7 row needs a policy road or an
-	// enrolled store row while RequireBootEnrollment holds. The road is
-	// resolved with the gate off too: the pin logs it.
+	// Enrollment gate: a first-use PCR 0/1/7 row needs a policy road, an
+	// enrolled store row or an operator's forced re-anchor while
+	// RequireBootEnrollment holds. The road is resolved with the gate off
+	// too: the pin logs it.
 	bootPin := v.bootBaselineRoad(tenant, bootFacts)
 	if bootPin.allowedBy == "" && v.requireBootEnrollment {
-		enrolled, err := v.hasBootBaseline(clientID)
+		road, err := v.storeBootRoad(clientID)
 		if err != nil {
 			clog.Error("boot baseline store error, refusing "+
 				"attestation", "error", err)
@@ -623,9 +652,7 @@ func (v *Verifier) VerifyReportFrom(challengeID, remoteAddr string, reportData [
 			return result, errors.New(
 				"FAIL_BASELINE_ERROR: baseline store error")
 		}
-		if enrolled {
-			bootPin.allowedBy = "baseline store enrollment"
-		}
+		bootPin = road
 	}
 	if bootPin.allowedBy == "" {
 		if v.requireBootEnrollment {
@@ -643,7 +670,8 @@ func (v *Verifier) VerifyReportFrom(challengeID, remoteAddr string, reportData [
 	}
 
 	outcome := atomicStore.CheckAndUpdateAttestation(
-		clientID, pcr14, report.System.AgentHash, bootPtr)
+		clientID, pcr14, report.System.AgentHash, bootPtr,
+		bootPin.consent)
 
 	switch outcome.AgentHashResult {
 	case TOFUFirstUse:
@@ -658,7 +686,8 @@ func (v *Verifier) VerifyReportFrom(challengeID, remoteAddr string, reportData [
 		if v.tryAgentHashRepin(clog, clientID, tenant, pcr14, report) {
 			// the mismatch aborted the transaction; re-run it
 			outcome = atomicStore.CheckAndUpdateAttestation(
-				clientID, pcr14, report.System.AgentHash, bootPtr)
+				clientID, pcr14, report.System.AgentHash, bootPtr,
+				bootPin.consent)
 			if outcome.AgentHashResult != TOFUMatch {
 				logging.Security(clog, "agent_hash re-pin did not settle; refusing",
 					"agent_hash", hex.EncodeToString(report.System.AgentHash[:]))
@@ -712,7 +741,8 @@ func (v *Verifier) VerifyReportFrom(challengeID, remoteAddr string, reportData [
 		if v.tryMOKRepin(clog, clientID, tenant, pinned, pcr14, report, bootFacts) {
 			// the mismatch aborted the transaction; re-run it on the moved pin
 			outcome = atomicStore.CheckAndUpdateAttestation(
-				clientID, pcr14, report.System.AgentHash, bootPtr)
+				clientID, pcr14, report.System.AgentHash, bootPtr,
+				bootPin.consent)
 			if outcome.PCR14Result == TOFUMatch {
 				break
 			}
@@ -1314,11 +1344,17 @@ func (v *Verifier) knownClient(clientID string) error {
 }
 
 // ForceReanchor clears the client's baseline, so its next attestation pins
-// afresh under the active policy.
+// afresh under the active policy. Under RequireBootEnrollment that
+// attestation passes the enrollment gate once on the operator's consent.
 func (v *Verifier) ForceReanchor(clientID string) error {
 	// the in-memory store keeps the boot baseline apart
 	if err := v.knownClient(clientID); err != nil {
 		return err
+	}
+	if fr, ok := v.baselineStore.(ForcedReanchorStorer); ok {
+		if err := fr.MarkForcedReanchor(clientID); err != nil {
+			return err
+		}
 	}
 	if err := v.baselineStore.ClearBaseline(clientID); err != nil {
 		return err
@@ -1327,11 +1363,16 @@ func (v *Verifier) ForceReanchor(clientID string) error {
 	return nil
 }
 
-// DeleteClient clears the client's baseline and its nonce store state.
-// Revocations and bans stay.
+// DeleteClient clears the client's baseline, a forced re-anchor consent and
+// its nonce store state. Revocations and bans stay.
 func (v *Verifier) DeleteClient(clientID string) error {
 	if err := v.knownClient(clientID); err != nil {
 		return err
+	}
+	if fr, ok := v.baselineStore.(ForcedReanchorStorer); ok {
+		if _, err := fr.TakeForcedReanchor(clientID); err != nil {
+			return err
+		}
 	}
 	if err := v.baselineStore.ClearBaseline(clientID); err != nil {
 		return err

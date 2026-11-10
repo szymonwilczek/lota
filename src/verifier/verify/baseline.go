@@ -211,10 +211,13 @@ type AttestationOutcome struct {
 // agent hash, PCR14 and boot pins of one attestation under one write lock,
 // so a concurrent attestation cannot pin PCR0, PCR1 and PCR7 between them.
 // A nil boot leaves the boot baseline untouched. Any mismatch writes nothing.
+// With consent, a first boot pin spends the client's forced re-anchor consent
+// in the same transaction; with no consent left it writes nothing and reads
+// TOFUError.
 type AtomicBaselineStorer interface {
 	CheckAndUpdateAttestation(clientID string,
 		pcr14, agentHash [types.HashSize]byte,
-		boot *BootBaseline) AttestationOutcome
+		boot *BootBaseline, consent bool) AttestationOutcome
 }
 
 // ReanchorState is a client's re-anchor bookkeeping: the event log captured
@@ -285,6 +288,20 @@ type AgentHashRepinState struct {
 	LastRepinAt time.Time
 }
 
+// ForcedReanchorStorer is optionally implemented by baseline stores that keep
+// an operator's forced re-anchor as a one-time consent: under
+// RequireBootEnrollment the client's next attestation pins PCR 0/1/7 afresh.
+// The consent outlives ClearBaseline and is spent by the attestation that
+// pins with it.
+type ForcedReanchorStorer interface {
+	// MarkForcedReanchor records the consent for clientID.
+	MarkForcedReanchor(clientID string) error
+	// HasForcedReanchor reports whether clientID holds the consent.
+	HasForcedReanchor(clientID string) (bool, error)
+	// TakeForcedReanchor removes the consent; true when there was one.
+	TakeForcedReanchor(clientID string) (bool, error)
+}
+
 // KernelHashRecorder is optionally implemented by baseline stores that keep
 // the kernel hash a client last reported.
 //
@@ -337,6 +354,7 @@ type BaselineStore struct {
 	tenants       map[string]string          // clientID -> CA-assigned tenant
 	kernelHashes  map[string][types.HashSize]byte
 	machineKeys   map[string][]byte
+	forced        map[string]struct{} // clientID -> forced consent
 }
 
 // NewBaselineStore returns an empty in-memory baseline store.
@@ -348,6 +366,7 @@ func NewBaselineStore() *BaselineStore {
 		tenants:       make(map[string]string),
 		kernelHashes:  make(map[string][types.HashSize]byte),
 		machineKeys:   make(map[string][]byte),
+		forced:        make(map[string]struct{}),
 	}
 }
 
@@ -598,6 +617,31 @@ func (s *BaselineStore) ClearBaseline(clientID string) error {
 	return nil
 }
 
+// MarkForcedReanchor implements ForcedReanchorStorer.
+func (s *BaselineStore) MarkForcedReanchor(clientID string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.forced[clientID] = struct{}{}
+	return nil
+}
+
+// HasForcedReanchor implements ForcedReanchorStorer.
+func (s *BaselineStore) HasForcedReanchor(clientID string) (bool, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	_, ok := s.forced[clientID]
+	return ok, nil
+}
+
+// TakeForcedReanchor implements ForcedReanchorStorer.
+func (s *BaselineStore) TakeForcedReanchor(clientID string) (bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	_, ok := s.forced[clientID]
+	delete(s.forced, clientID)
+	return ok, nil
+}
+
 // SetClientTenant implements TenantStorer.
 func (s *BaselineStore) SetClientTenant(clientID, tenant string) error {
 	s.mu.Lock()
@@ -728,16 +772,29 @@ func (s *BaselineStore) CheckAndUpdateBootPCRs(clientID string, boot BootBaselin
 // mutex.
 func (s *BaselineStore) CheckAndUpdateAttestation(clientID string,
 	pcr14, agentHash [types.HashSize]byte,
-	boot *BootBaseline,
+	boot *BootBaseline, consent bool,
 ) AttestationOutcome {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	now := time.Now()
 	outcome := AttestationOutcome{BootProvided: boot != nil, PCR14Result: TOFUError}
+	spent := func() bool {
+		if _, ok := s.forced[clientID]; !ok {
+			outcome.AgentHashResult = TOFUError
+			outcome.PCR14Result = TOFUError
+			outcome.BootResult = TOFUError
+			return false
+		}
+		delete(s.forced, clientID)
+		return true
+	}
 
 	existing, exists := s.baselines[clientID]
 	if !exists {
+		if boot != nil && consent && !spent() {
+			return outcome
+		}
 		b := &ClientBaseline{
 			PCR14:       pcr14,
 			AgentHash:   agentHash,
@@ -791,6 +848,9 @@ func (s *BaselineStore) CheckAndUpdateAttestation(clientID string,
 	if boot != nil {
 		existingBoot, hasBoot := s.bootBaselines[clientID]
 		if !hasBoot {
+			if consent && !spent() {
+				return outcome
+			}
 			outcome.BootResult = TOFUFirstUse
 		} else if existingBoot.PCR0 != boot.PCR0 ||
 			existingBoot.PCR1 != boot.PCR1 ||

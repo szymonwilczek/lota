@@ -462,7 +462,7 @@ func (s *SQLiteBaselineStore) CheckAndUpdateBootPCRs(clientID string, boot BootB
 // connection. A branch that does not commit rolls back.
 func (s *SQLiteBaselineStore) CheckAndUpdateAttestation(clientID string,
 	pcr14, agentHash [types.HashSize]byte,
-	boot *BootBaseline,
+	boot *BootBaseline, consent bool,
 ) AttestationOutcome {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -501,6 +501,24 @@ func (s *SQLiteBaselineStore) CheckAndUpdateAttestation(clientID string,
 		}
 	}()
 
+	spent := func() bool {
+		res, err := conn.ExecContext(ctx,
+			"DELETE FROM forced_reanchors WHERE client_id = ?", clientID)
+		var n int64
+		if err == nil {
+			n, err = res.RowsAffected()
+		}
+		if err != nil || n == 0 {
+			slog.Error("attestation tx: forced re-anchor consent not spent",
+				"client_id", clientID, "error", err)
+			outcome.AgentHashResult = TOFUError
+			outcome.PCR14Result = TOFUError
+			outcome.BootResult = TOFUError
+			return false
+		}
+		return true
+	}
+
 	var (
 		storedPCR14, storedAgentHash       []byte
 		storedPCR0, storedPCR1, storedPCR7 []byte
@@ -520,6 +538,9 @@ func (s *SQLiteBaselineStore) CheckAndUpdateAttestation(clientID string,
 	switch {
 	case err == sql.ErrNoRows:
 		if boot != nil {
+			if consent && !spent() {
+				return outcome
+			}
 			if _, err := conn.ExecContext(ctx, `
 				INSERT INTO baselines (
 					client_id, pcr14, agent_hash, first_seen, last_seen,
@@ -632,6 +653,9 @@ func (s *SQLiteBaselineStore) CheckAndUpdateAttestation(clientID string,
 	bootZero := len(storedPCR0) == 0 && len(storedPCR1) == 0 && len(storedPCR7) == 0
 	if boot != nil {
 		if bootZero {
+			if consent && !spent() {
+				return outcome
+			}
 			outcome.BootResult = TOFUFirstUse
 		} else {
 			var storedBoot BootBaseline
@@ -1042,6 +1066,45 @@ func (s *SQLiteBaselineStore) AcknowledgeLFAReview(clientID string) error {
 		return ErrNoReviewPending
 	}
 	return nil
+}
+
+// MarkForcedReanchor implements ForcedReanchorStorer.
+func (s *SQLiteBaselineStore) MarkForcedReanchor(clientID string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	_, err := s.db.Exec(
+		"INSERT OR IGNORE INTO forced_reanchors (client_id) VALUES (?)",
+		clientID)
+	return err
+}
+
+// HasForcedReanchor implements ForcedReanchorStorer.
+func (s *SQLiteBaselineStore) HasForcedReanchor(clientID string,
+) (bool, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	var one int
+	err := s.db.QueryRow(
+		"SELECT 1 FROM forced_reanchors WHERE client_id = ?", clientID).
+		Scan(&one)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, nil
+	}
+	return err == nil, err
+}
+
+// TakeForcedReanchor implements ForcedReanchorStorer.
+func (s *SQLiteBaselineStore) TakeForcedReanchor(clientID string,
+) (bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	res, err := s.db.Exec(
+		"DELETE FROM forced_reanchors WHERE client_id = ?", clientID)
+	if err != nil {
+		return false, err
+	}
+	n, err := res.RowsAffected()
+	return n > 0, err
 }
 
 // RecordKernelHash implements KernelHashRecorder.
