@@ -660,7 +660,7 @@ func generateTestCert() error {
 	return nil
 }
 
-// writePEMFile writes block to path, creating it with perm.
+// writePEMFile writes block to path with perm, also on a file that exists.
 func writePEMFile(path string, perm os.FileMode, block *pem.Block) (err error) {
 	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, perm)
 	if err != nil {
@@ -671,5 +671,9 @@ func writePEMFile(path string, perm os.FileMode, block *pem.Block) (err error) {
 			err = cerr
 		}
 	}()
+	// before the write, so a key never sits under looser bits
+	if err := f.Chmod(perm); err != nil {
+		return err
+	}
 	return pem.Encode(f, block)
 }
