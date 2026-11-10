@@ -208,6 +208,10 @@ func TestValidateAIKRejectsBadTemplates(t *testing.T) {
 		{"not fixedTPM", func(p *tpm2.Public) { p.Attributes &^= tpm2.FlagFixedTPM }},
 		{"wrong name alg", func(p *tpm2.Public) { p.NameAlg = tpm2.AlgSHA1 }},
 		{"small key", func(p *tpm2.Public) { p.RSAParameters.KeyBits = 1024 }},
+		{"short modulus", func(p *tpm2.Public) {
+			r := p.RSAParameters
+			r.ModulusRaw = r.ModulusRaw[:128]
+		}},
 		{"not rsassa", func(p *tpm2.Public) { p.RSAParameters.Sign.Alg = tpm2.AlgRSAPSS }},
 	}
 

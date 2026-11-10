@@ -93,6 +93,9 @@ func validateAIKTemplate(pub tpm2.Public) error {
 	if pub.RSAParameters.KeyBits < MinEKKeyBits {
 		return fmt.Errorf("%w: %d-bit key", ErrAIKTemplate, pub.RSAParameters.KeyBits)
 	}
+	if n := pub.RSAParameters.Modulus().BitLen(); n < MinEKKeyBits {
+		return fmt.Errorf("%w: %d-bit modulus", ErrAIKTemplate, n)
+	}
 	if pub.RSAParameters.Sign == nil || pub.RSAParameters.Sign.Alg != tpm2.AlgRSASSA {
 		return fmt.Errorf("%w: signing scheme is not RSASSA", ErrAIKTemplate)
 	}
