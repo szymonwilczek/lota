@@ -249,21 +249,13 @@ static int parse_attest_interval(const char *arg, int *interval)
 		fprintf(stderr, "Invalid interval: %s\n", arg);
 		return -EINVAL;
 	}
-	if (v != 0 && v < MIN_ATTEST_INTERVAL) {
+	if (v != 0 && (v < MIN_ATTEST_INTERVAL || v > MAX_ATTEST_INTERVAL)) {
 		fprintf(stderr,
-			"Warning: interval %ld too low, using "
-			"minimum %d seconds\n",
-			v, MIN_ATTEST_INTERVAL);
-		v = MIN_ATTEST_INTERVAL;
-	}
-	if (v > MAX_ATTEST_INTERVAL) {
-		fprintf(stderr,
-			"Invalid interval: %ld exceeds the "
-			"maximum of %d seconds; beyond it "
-			"a minted token outlives the token "
-			"age the SDK verifiers accept and "
-			"spends their clock skew\n",
-			v, MAX_ATTEST_INTERVAL);
+			"--attest-interval %ld out of range (0 or %d-%d; above "
+			"%d a minted token outlives the token age the SDK "
+			"verifiers accept and spends their clock skew)\n",
+			v, MIN_ATTEST_INTERVAL, MAX_ATTEST_INTERVAL,
+			MAX_ATTEST_INTERVAL);
 		return -EINVAL;
 	}
 

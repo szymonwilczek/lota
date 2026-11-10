@@ -2658,6 +2658,46 @@ static void test_cli_config_spellings(void)
 	PASS();
 }
 
+static void test_cli_attest_interval_bounds(void)
+{
+	static const struct {
+		const char *arg;
+		int ret;
+		int interval;
+	} cases[] = {
+		{ "29", 1, 0 },	   { "30", 0, 30 }, { "0", 0, 0 },
+		{ "240", 0, 240 }, { "241", 1, 0 },
+	};
+	struct cli_options opts;
+	struct lota_config *cfg;
+	char path[PATH_MAX];
+
+	TEST("--attest-interval refuses what the file refuses");
+
+	write_config("cli_empty.conf", "");
+	config_path("cli_empty.conf", path, sizeof(path));
+	cfg = config_new();
+	if (!cfg) {
+		FAIL("out of memory");
+		return;
+	}
+	for (size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); i++) {
+		const char *const args[] = { "lota-agent", "--config", path,
+					     "--attest-interval",
+					     cases[i].arg };
+
+		if (cli_parse_argv(args, 5, &opts, cfg) != cases[i].ret ||
+		    (cases[i].ret == 0 &&
+		     opts.attest_interval != cases[i].interval)) {
+			FAIL(cases[i].arg);
+			config_free(cfg);
+			return;
+		}
+	}
+	config_free(cfg);
+	PASS();
+}
+
 int main(void)
 {
 	printf("=== LOTA Config Parser Tests ===\n\n");
@@ -2725,6 +2765,7 @@ int main(void)
 		test_config_load_mixed_comments,
 		test_config_load_from_fd,
 		test_cli_config_spellings,
+		test_cli_attest_interval_bounds,
 	};
 
 	for (size_t i = 0; i < sizeof(tests) / sizeof(tests[0]); i++)
