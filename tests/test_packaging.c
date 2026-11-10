@@ -656,6 +656,29 @@ static void test_selinux_agent_reads_filesystem_types(void)
 }
 
 /*
+ * A binary linked with its own relro flags misses the noexecstack and
+ * separate-code the shared set carries.
+ */
+static void test_every_binary_links_hardened(void)
+{
+	static char mk[262144];
+	const char *first;
+
+	TEST("make: every binary links with the shared hardening flags");
+
+	if (!slurp_shipped("Makefile", mk, sizeof(mk))) {
+		FAIL("could not read the Makefile");
+		return;
+	}
+	first = strstr(mk, "-z,relro");
+	if (!first || strstr(first + 1, "-z,relro")) {
+		FAIL("a binary links outside HARDENING_LDFLAGS");
+		return;
+	}
+	PASS();
+}
+
+/*
  * The agent reads no kernel symbol table: every ksym of the BPF object
  * resolves through BTF.
  */
@@ -1297,6 +1320,7 @@ int main(void)
 	test_selinux_agent_reaches_user_namespaces();
 	test_selinux_agent_reads_filesystem_types();
 	test_selinux_agent_skips_the_symbol_table();
+	test_every_binary_links_hardened();
 	test_installer_labels_the_config_directory();
 	test_upgrade_reloads_the_selinux_module();
 	test_both_hooks_drive_bringup();
