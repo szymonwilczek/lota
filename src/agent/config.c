@@ -312,6 +312,7 @@ static int apply_profile_key(struct lota_profile *p, const char *key,
 			return -1;
 		}
 		p->verifier_port = (int)v;
+		p->verifier_port_set = true;
 		return 0;
 	}
 	if (strcmp(key, "pin_sha256") == 0 || strcmp(key, "pin-sha256") == 0) {
@@ -626,8 +627,7 @@ static int validate_profiles(const struct lota_config *cfg,
 			errors++;
 		}
 
-		if (p->token_only &&
-		    p->verifier_port != LOTA_DEFAULT_VERIFIER_PORT) {
+		if (p->token_only && p->verifier_port_set) {
 			fprintf(stderr,
 				"%s: profile '%s' says verifier = none and "
 				"still sets verifier_port\n",

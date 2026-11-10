@@ -75,6 +75,7 @@ struct lota_profile {
 	 */
 	char verifier[256];
 	int verifier_port;
+	bool verifier_port_set;
 	bool token_only;
 
 	/*

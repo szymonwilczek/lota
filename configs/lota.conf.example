@@ -196,7 +196,7 @@ log_level = info
 # them, but the profile still enrolls, holds its own AIK and renews that key's
 # certificate, which their backend chains a token to. The verifier key is
 # required, so a missing one is refused rather than read as none, and a
-# verifier_port other than 8443 is refused alongside none.
+# verifier_port is refused alongside none.
 #
 # [profile "publisher-a"]
 # ca = ca.publisher-a.example

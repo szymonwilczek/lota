@@ -1377,6 +1377,18 @@ static void test_config_load_profile_incomplete(void)
 		FAIL("a port for a verifier declared absent was accepted");
 		return;
 	}
+	write_config("profile_tokenonly_port.conf",
+		     "[profile \"alpha\"]\n"
+		     "ca = ca.alpha.example\n"
+		     "ca_cert = /etc/lota/alpha.pem\n"
+		     "verifier_port = 8443\n"
+		     "verifier = none\n");
+	config_init(&cfg);
+	ret = config_load(&cfg, path);
+	if (ret != -EINVAL) {
+		FAIL("the default verifier port beside none was accepted");
+		return;
+	}
 	PASS();
 
 	TEST("config_load rejects an empty profile section");
