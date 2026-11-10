@@ -279,6 +279,35 @@ static void test_every_title_is_spaced(void)
 	PASS();
 }
 
+/*
+ * A stage outside the boot chain that still probes pending after its apply
+ * has not worked, whatever an earlier stage did to the boot chain.
+ */
+static void test_only_a_boot_path_stage_waits_for_the_reboot(void)
+{
+	struct install_ctx ctx;
+	const struct stage *fence;
+	const struct stage *cmdline;
+
+	TEST("pending after apply waits for the reboot only on the boot path");
+	memset(&ctx, 0, sizeof(ctx));
+	ctx.reboot_needed = 1;
+	fence = &install_stages[stage_named("SELinux fence on the TPM device")];
+	cmdline = &install_stages[stage_named(
+		"Kernel integrity floor on the cmdline")];
+	if (install_stage_after_apply(fence, &ctx, STAGE_PENDING) !=
+	    STAGE_PENDING) {
+		FAIL("a failed SELinux stage reads as waiting for the reboot");
+		return;
+	}
+	if (install_stage_after_apply(cmdline, &ctx, STAGE_PENDING) !=
+	    STAGE_REBOOT) {
+		FAIL("the cmdline stage does not wait for the reboot");
+		return;
+	}
+	PASS();
+}
+
 int main(void)
 {
 	printf("\n=== lota-install: the unattended checkpoint ===\n");
@@ -295,6 +324,7 @@ int main(void)
 	test_applied_changes_only_a_satisfied_stage();
 	test_every_explanation_is_spaced();
 	test_every_title_is_spaced();
+	test_only_a_boot_path_stage_waits_for_the_reboot();
 
 	printf("\nPassed: %d / %d\n", tests_passed, tests_run);
 	return tests_passed == tests_run ? 0 : 1;

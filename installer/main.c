@@ -565,9 +565,8 @@ int main(int argc, char **argv)
 			}
 			ctx.applied = 1;
 			applied = 1;
-			st = s->probe(&ctx, note, sizeof(note));
-			if (st == STAGE_PENDING && ctx.reboot_needed)
-				st = STAGE_REBOOT;
+			st = install_stage_after_apply(
+				s, &ctx, s->probe(&ctx, note, sizeof(note)));
 		}
 
 		switch (st) {

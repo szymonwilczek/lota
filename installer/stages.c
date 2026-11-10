@@ -1575,6 +1575,15 @@ enum ui_result install_stage_result(enum stage_state st, int applied)
 	}
 }
 
+enum stage_state install_stage_after_apply(const struct stage *s,
+					   const struct install_ctx *ctx,
+					   enum stage_state st)
+{
+	if (st == STAGE_PENDING && s->boot_path && ctx->reboot_needed)
+		return STAGE_REBOOT;
+	return st;
+}
+
 const struct stage install_stages[] = {
 	{
 		.title = "Preflight: Hardware and Host Requirements",
