@@ -602,14 +602,15 @@ int probe_lockdown_restrictive(void)
 static void read_pcr14_baseline_at(const char *path,
 				   uint8_t out[PROBE_HASH_SIZE])
 {
+	uint8_t buf[PROBE_HASH_SIZE + 1];
 	int fd;
 
 	memset(out, 0, PROBE_HASH_SIZE);
 	fd = open(path, O_RDONLY | O_CLOEXEC);
 	if (fd < 0)
 		return;
-	if (read(fd, out, PROBE_HASH_SIZE) != PROBE_HASH_SIZE)
-		memset(out, 0, PROBE_HASH_SIZE);
+	if (read(fd, buf, sizeof(buf)) == PROBE_HASH_SIZE)
+		memcpy(out, buf, PROBE_HASH_SIZE);
 	close(fd);
 }
 

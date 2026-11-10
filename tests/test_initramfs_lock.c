@@ -8,10 +8,12 @@
  */
 
 #include <errno.h>
+#include <fcntl.h>
 #include <openssl/evp.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
+#include <unistd.h>
 #include <openssl/types.h>
 
 #include "test.h"
@@ -19,6 +21,7 @@
 #define HASH_SIZE 32
 
 int lota_initramfs_lock_commit(uint8_t out_digest[HASH_SIZE]);
+int lota_initramfs_lock_read_baseline(const char *path, uint8_t out[HASH_SIZE]);
 
 static int reference_commit(uint8_t out[HASH_SIZE])
 {
@@ -72,11 +75,57 @@ static void test_commit_rejects_null_output(void)
 	PASS();
 }
 
+static void test_baseline_read_takes_exactly_one_digest(void)
+{
+	static const size_t lens[] = { HASH_SIZE, HASH_SIZE - 1,
+				       HASH_SIZE + 1 };
+	static const int want[] = { 1, 0, 0 };
+	uint8_t buf[HASH_SIZE + 1];
+	uint8_t out[HASH_SIZE];
+	char path[64];
+
+	TEST("a saved baseline is read only at exactly 32 bytes");
+	snprintf(path, sizeof(path), "/tmp/lota-lock-base.%d", (int)getpid());
+	memset(buf, 0x5a, sizeof(buf));
+	for (size_t i = 0; i < sizeof(lens) / sizeof(lens[0]); i++) {
+		int fd = open(path, O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC,
+			      0600);
+
+		if (fd < 0 || write(fd, buf, lens[i]) != (ssize_t)lens[i]) {
+			if (fd >= 0)
+				close(fd);
+			unlink(path);
+			FAIL("could not write the fixture");
+			return;
+		}
+		close(fd);
+		memset(out, 0, sizeof(out));
+		if (lota_initramfs_lock_read_baseline(path, out) != want[i]) {
+			unlink(path);
+			FAIL("a baseline of the wrong length was taken");
+			return;
+		}
+		if (want[i] && memcmp(out, buf, HASH_SIZE) != 0) {
+			unlink(path);
+			FAIL("the baseline bytes were not copied");
+			return;
+		}
+	}
+	unlink(path);
+	if (lota_initramfs_lock_read_baseline("/nonexistent/lota-base", out) !=
+	    0) {
+		FAIL("a missing baseline was not read as absent");
+		return;
+	}
+	PASS();
+}
+
 int main(void)
 {
 	printf("=== initramfs lock tests ===\n");
 	test_commit_matches_reference();
 	test_commit_rejects_null_output();
+	test_baseline_read_takes_exactly_one_digest();
 
 	printf("\nResult: %d/%d tests passed\n", tests_passed, tests_run);
 	return tests_passed == tests_run ? 0 : 1;

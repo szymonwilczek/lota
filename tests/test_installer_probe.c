@@ -124,6 +124,22 @@ static void test_pcr14_lock_value_baseline_aware(void)
 		return;
 	}
 	PASS();
+
+	TEST("PCR14 lock value reads a baseline one byte too long as absent");
+	{
+		uint8_t longer[PROBE_HASH_SIZE + 1];
+
+		memcpy(longer, baseline, sizeof(baseline));
+		longer[PROBE_HASH_SIZE] = 0x0a;
+		write_raw_file(path, longer, sizeof(longer));
+	}
+	probe_pcr14_lock_value_at(path, got);
+	unlink(path);
+	if (memcmp(got, zero_expect, sizeof(zero_expect)) != 0) {
+		FAIL("a 33-byte baseline was taken from its first 32 bytes");
+		return;
+	}
+	PASS();
 }
 
 static void test_hex_to_bytes(void)
