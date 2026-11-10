@@ -75,16 +75,26 @@ static int parse_mode_strict(const char *value)
 	return -1;
 }
 
-/* Truncates what does not fit. */
-static void set_str(char *dst, size_t dst_size, const char *src)
+/* Leaves @dst unchanged when @src does not fit. */
+static int set_str(char *dst, size_t dst_size, const char *src)
 {
 	size_t len = strlen(src);
 
 	if (len >= dst_size)
-		len = dst_size - 1;
+		return -1;
 
-	memcpy(dst, src, len);
-	dst[len] = '\0';
+	memcpy(dst, src, len + 1);
+	return 0;
+}
+
+static int set_value(char *dst, size_t dst_size, const char *key,
+		     const char *value, const char *filepath, int lineno)
+{
+	if (set_str(dst, dst_size, value) == 0)
+		return 0;
+	fprintf(stderr, "%s:%d: %s is too long (%zu bytes, max %zu)\n",
+		filepath, lineno, key, strlen(value), dst_size - 1);
+	return -1;
 }
 
 int config_log_priority(const char *name)
@@ -260,8 +270,8 @@ static int apply_profile_key(struct lota_profile *p, const char *key,
 			     int lineno)
 {
 	if (strcmp(key, "ca") == 0) {
-		set_str(p->ca, sizeof(p->ca), value);
-		return 0;
+		return set_value(p->ca, sizeof(p->ca), key, value, filepath,
+				 lineno);
 	}
 	if (strcmp(key, "ca_port") == 0 || strcmp(key, "ca-port") == 0) {
 		long v;
@@ -278,8 +288,8 @@ static int apply_profile_key(struct lota_profile *p, const char *key,
 		if (validate_path_value("ca_cert", value, filepath, lineno) !=
 		    0)
 			return -1;
-		set_str(p->ca_cert, sizeof(p->ca_cert), value);
-		return 0;
+		return set_value(p->ca_cert, sizeof(p->ca_cert), key, value,
+				 filepath, lineno);
 	}
 	if (strcmp(key, "verifier") == 0) {
 		if (strcmp(value, "none") == 0) {
@@ -288,8 +298,8 @@ static int apply_profile_key(struct lota_profile *p, const char *key,
 			return 0;
 		}
 		p->token_only = false;
-		set_str(p->verifier, sizeof(p->verifier), value);
-		return 0;
+		return set_value(p->verifier, sizeof(p->verifier), key, value,
+				 filepath, lineno);
 	}
 	if (strcmp(key, "verifier_port") == 0 ||
 	    strcmp(key, "verifier-port") == 0) {
@@ -314,8 +324,8 @@ static int apply_profile_key(struct lota_profile *p, const char *key,
 				filepath, lineno, value);
 			return -1;
 		}
-		set_str(p->pin_sha256, sizeof(p->pin_sha256), value);
-		return 0;
+		return set_value(p->pin_sha256, sizeof(p->pin_sha256), key,
+				 value, filepath, lineno);
 	}
 	if (strcmp(key, "reporting") == 0) {
 		if (strcmp(value, "session") == 0) {
@@ -634,8 +644,8 @@ static int apply_key(struct lota_config *cfg, const char *key,
 		     const char *value, const char *filepath, int lineno)
 {
 	if (strcmp(key, "server") == 0) {
-		set_str(cfg->server, sizeof(cfg->server), value);
-		return 0;
+		return set_value(cfg->server, sizeof(cfg->server), key, value,
+				 filepath, lineno);
 	}
 	if (strcmp(key, "port") == 0) {
 		long v;
@@ -652,8 +662,8 @@ static int apply_key(struct lota_config *cfg, const char *key,
 		if (validate_path_value("ca_cert", value, filepath, lineno) !=
 		    0)
 			return -1;
-		set_str(cfg->ca_cert, sizeof(cfg->ca_cert), value);
-		return 0;
+		return set_value(cfg->ca_cert, sizeof(cfg->ca_cert), key, value,
+				 filepath, lineno);
 	}
 	if (strcmp(key, "no_verify_tls") == 0 ||
 	    strcmp(key, "no-verify-tls") == 0) {
@@ -675,8 +685,8 @@ static int apply_key(struct lota_config *cfg, const char *key,
 				filepath, lineno, value);
 			return -1;
 		}
-		set_str(cfg->pin_sha256, sizeof(cfg->pin_sha256), value);
-		return 0;
+		return set_value(cfg->pin_sha256, sizeof(cfg->pin_sha256), key,
+				 value, filepath, lineno);
 	}
 
 	if (strcmp(key, "allow_verity") == 0 ||
@@ -691,8 +701,10 @@ static int apply_key(struct lota_config *cfg, const char *key,
 		if (validate_path_value("allow_verity", value, filepath,
 					lineno) != 0)
 			return -1;
-		set_str(cfg->allow_verity[cfg->allow_verity_count],
-			sizeof(cfg->allow_verity[0]), value);
+		if (set_value(cfg->allow_verity[cfg->allow_verity_count],
+			      sizeof(cfg->allow_verity[0]), key, value,
+			      filepath, lineno) != 0)
+			return -1;
 		cfg->allow_verity_count++;
 		return 0;
 	}
@@ -701,8 +713,8 @@ static int apply_key(struct lota_config *cfg, const char *key,
 		if (validate_path_value("bpf_path", value, filepath, lineno) !=
 		    0)
 			return -1;
-		set_str(cfg->bpf_path, sizeof(cfg->bpf_path), value);
-		return 0;
+		return set_value(cfg->bpf_path, sizeof(cfg->bpf_path), key,
+				 value, filepath, lineno);
 	}
 	if (strcmp(key, "mode") == 0) {
 		if (parse_mode_strict(value) != 0) {
@@ -712,8 +724,8 @@ static int apply_key(struct lota_config *cfg, const char *key,
 				filepath, lineno, value);
 			return -1;
 		}
-		set_str(cfg->mode, sizeof(cfg->mode), value);
-		return 0;
+		return set_value(cfg->mode, sizeof(cfg->mode), key, value,
+				 filepath, lineno);
 	}
 	if (strcmp(key, "strict_mmap") == 0 ||
 	    strcmp(key, "strict-mmap") == 0) {
@@ -861,8 +873,8 @@ static int apply_key(struct lota_config *cfg, const char *key,
 		if (validate_path_value("kernel_path", value, filepath,
 					lineno) != 0)
 			return -1;
-		set_str(cfg->kernel_path, sizeof(cfg->kernel_path), value);
-		return 0;
+		return set_value(cfg->kernel_path, sizeof(cfg->kernel_path),
+				 key, value, filepath, lineno);
 	}
 
 	if (strcmp(key, "daemon") == 0) {
@@ -880,8 +892,8 @@ static int apply_key(struct lota_config *cfg, const char *key,
 		if (validate_path_value("pid_file", value, filepath, lineno) !=
 		    0)
 			return -1;
-		set_str(cfg->pid_file, sizeof(cfg->pid_file), value);
-		return 0;
+		return set_value(cfg->pid_file, sizeof(cfg->pid_file), key,
+				 value, filepath, lineno);
 	}
 
 	if (strcmp(key, "signing_key") == 0 ||
@@ -889,16 +901,16 @@ static int apply_key(struct lota_config *cfg, const char *key,
 		if (validate_path_value("signing_key", value, filepath,
 					lineno) != 0)
 			return -1;
-		set_str(cfg->signing_key, sizeof(cfg->signing_key), value);
-		return 0;
+		return set_value(cfg->signing_key, sizeof(cfg->signing_key),
+				 key, value, filepath, lineno);
 	}
 	if (strcmp(key, "policy_pubkey") == 0 ||
 	    strcmp(key, "policy-pubkey") == 0) {
 		if (validate_path_value("policy_pubkey", value, filepath,
 					lineno) != 0)
 			return -1;
-		set_str(cfg->policy_pubkey, sizeof(cfg->policy_pubkey), value);
-		return 0;
+		return set_value(cfg->policy_pubkey, sizeof(cfg->policy_pubkey),
+				 key, value, filepath, lineno);
 	}
 
 	if (strcmp(key, "trust_lib") == 0 || strcmp(key, "trust-lib") == 0) {
@@ -912,8 +924,10 @@ static int apply_key(struct lota_config *cfg, const char *key,
 		if (validate_path_value("trust_lib", value, filepath, lineno) !=
 		    0)
 			return -1;
-		set_str(cfg->trust_libs[cfg->trust_lib_count],
-			sizeof(cfg->trust_libs[0]), value);
+		if (set_value(cfg->trust_libs[cfg->trust_lib_count],
+			      sizeof(cfg->trust_libs[0]), key, value, filepath,
+			      lineno) != 0)
+			return -1;
 		cfg->trust_lib_count++;
 		return 0;
 	}
@@ -979,8 +993,8 @@ static int apply_key(struct lota_config *cfg, const char *key,
 				filepath, lineno, value);
 			return -1;
 		}
-		set_str(cfg->log_level, sizeof(cfg->log_level), value);
-		return 0;
+		return set_value(cfg->log_level, sizeof(cfg->log_level), key,
+				 value, filepath, lineno);
 	}
 
 	return 1;

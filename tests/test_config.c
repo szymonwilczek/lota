@@ -859,6 +859,65 @@ static void test_config_load_invalid_log_level(void)
 	PASS();
 }
 
+static void test_config_load_value_too_long(void)
+{
+	struct lota_config cfg;
+	char path[PATH_MAX];
+	char value[sizeof(cfg.server) + 1];
+	char text[2 * sizeof(value) + 64];
+
+	TEST("config_load refuses a value longer than its field");
+
+	memset(value, 'a', sizeof(cfg.server));
+	value[sizeof(cfg.server)] = '\0';
+	snprintf(text, sizeof(text), "server = %s\n", value);
+	write_config("long_server.conf", text);
+	config_path("long_server.conf", path, sizeof(path));
+	config_init(&cfg);
+	if (config_load(&cfg, path) != -EINVAL) {
+		FAIL("a server one byte too long loads");
+		return;
+	}
+
+	value[sizeof(cfg.server) - 1] = '\0';
+	snprintf(text, sizeof(text), "server = %s\n", value);
+	write_config("long_server.conf", text);
+	config_init(&cfg);
+	if (config_load(&cfg, path) != 0 || strcmp(cfg.server, value) != 0) {
+		FAIL("a server that fits is refused or changed");
+		return;
+	}
+
+	memset(value, 'b', sizeof(cfg.profiles[0].verifier));
+	value[sizeof(cfg.profiles[0].verifier)] = '\0';
+	snprintf(text, sizeof(text),
+		 "[profile \"p\"]\nca = ca.p.example\n"
+		 "ca_cert = /etc/lota/p.pem\nverifier = %s\n",
+		 value);
+	write_config("long_verifier.conf", text);
+	config_path("long_verifier.conf", path, sizeof(path));
+	config_init(&cfg);
+	if (config_load(&cfg, path) != -EINVAL) {
+		FAIL("a profile verifier one byte too long loads");
+		return;
+	}
+
+	value[sizeof(cfg.profiles[0].verifier) - 1] = '\0';
+	snprintf(text, sizeof(text),
+		 "[profile \"p\"]\nca = ca.p.example\n"
+		 "ca_cert = /etc/lota/p.pem\nverifier = %s\n",
+		 value);
+	write_config("long_verifier.conf", text);
+	config_init(&cfg);
+	if (config_load(&cfg, path) != 0 ||
+	    strcmp(cfg.profiles[0].verifier, value) != 0) {
+		FAIL("a profile verifier that fits is refused or changed");
+		return;
+	}
+
+	PASS();
+}
+
 static void test_config_load_whitespace_trimming(void)
 {
 	struct lota_config cfg;
@@ -2621,6 +2680,7 @@ int main(void)
 		test_config_load_bench,
 		test_config_load_invalid_mode,
 		test_config_load_invalid_log_level,
+		test_config_load_value_too_long,
 		test_config_load_whitespace_trimming,
 		test_config_load_unknown_keys,
 		test_config_load_malformed_lines,
