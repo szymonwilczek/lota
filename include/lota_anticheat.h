@@ -40,10 +40,6 @@ extern "C" {
 #define LOTA_AC_DOMAIN_VERSION_V1 1u
 #define LOTA_AC_DOMAIN_VERSION_CURRENT LOTA_AC_DOMAIN_VERSION_V1
 
-/* heartbeat output filenames */
-#define LOTA_AC_FILE_EAC "lota-ac-eac.bin"
-#define LOTA_AC_FILE_BATTLEYE "lota-ac-battleye.bin"
-
 enum lota_ac_provider {
 	LOTA_AC_PROVIDER_EAC = 1,
 	LOTA_AC_PROVIDER_BATTLEYE = 2,
