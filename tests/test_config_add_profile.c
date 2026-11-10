@@ -356,6 +356,38 @@ int main(void)
 	}
 
 	{
+		/* a port after the host is not split off: it would reach the
+		 * resolver as part of the name */
+		struct lota_profile h;
+
+		h = mkprofile("studio-h", "ca.studio-h.example:9999",
+			      "/etc/lota/studio-h.pem", "v.example");
+		rc = config_profile_append_text("", &h, out, sizeof(out));
+		CHECK(rc == -EILSEQ, "a CA host with a port is refused");
+
+		h = mkprofile("studio-h", "ca.studio-h.example",
+			      "/etc/lota/studio-h.pem", "v.example:9000");
+		rc = config_profile_append_text("", &h, out, sizeof(out));
+		CHECK(rc == -EILSEQ, "a verifier host with a port is refused");
+
+		h = mkprofile("studio-h", "[fd00::1]:9999",
+			      "/etc/lota/studio-h.pem", "fd00::2");
+		rc = config_profile_append_text("", &h, out, sizeof(out));
+		CHECK(rc == -EILSEQ, "a bracketed CA host is refused");
+
+		h = mkprofile("studio-h", "fd00::1", "/etc/lota/studio-h.pem",
+			      "[fd00::2]:9000");
+		rc = config_profile_append_text("", &h, out, sizeof(out));
+		CHECK(rc == -EILSEQ, "a bracketed verifier host is refused");
+
+		h = mkprofile("studio-h", "fd00::1", "/etc/lota/studio-h.pem",
+			      "fd00::2");
+		rc = config_profile_append_text("", &h, out, sizeof(out));
+		CHECK(rc == 1 && loads_back(out) == 0,
+		      "IPv6 literals are written");
+	}
+
+	{
 		char small[64];
 
 		rc = config_profile_append_text("attest_interval = 60\n", &p,

@@ -446,6 +446,17 @@ static int value_defect(const char *key, const char *value, char *why,
 	return 0;
 }
 
+/*
+ * host:port or [v6]:port; a bare IPv6 literal has two colons or more and
+ * the resolver takes no brackets.
+ */
+static bool host_has_port(const char *host)
+{
+	const char *c = strchr(host, ':');
+
+	return host[0] == '[' || (c && c == strrchr(host, ':'));
+}
+
 int config_profile_defect(const struct lota_profile *p, char *why,
 			  size_t why_cap)
 {
@@ -472,6 +483,13 @@ int config_profile_defect(const struct lota_profile *p, char *why,
 
 	if (value_defect("ca", p->ca, sub, sizeof(sub))) {
 		snprintf(why, why_cap, "the CA host %s", sub);
+		return -EILSEQ;
+	}
+	if (host_has_port(p->ca)) {
+		snprintf(why, why_cap,
+			 "the CA host carries a port after ':' or brackets, "
+			 "which the resolver does not strip; pass the bare "
+			 "host and the port with --ca-port");
 		return -EILSEQ;
 	}
 
@@ -511,6 +529,13 @@ int config_profile_defect(const struct lota_profile *p, char *why,
 	if (!p->token_only && p->verifier[0] &&
 	    value_defect("verifier", p->verifier, sub, sizeof(sub))) {
 		snprintf(why, why_cap, "the verifier host %s", sub);
+		return -EILSEQ;
+	}
+	if (!p->token_only && host_has_port(p->verifier)) {
+		snprintf(why, why_cap,
+			 "the verifier host carries a port after ':' or "
+			 "brackets, which the resolver does not strip; pass "
+			 "the bare host and the port with --port");
 		return -EILSEQ;
 	}
 	if (!p->token_only && strcmp(p->verifier, "none") == 0) {
