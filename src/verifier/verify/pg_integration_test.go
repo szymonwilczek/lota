@@ -11,6 +11,7 @@ package verify
 
 import (
 	"bytes"
+	"database/sql"
 	"errors"
 	"os"
 	"sync"
@@ -441,7 +442,9 @@ func TestPostgresAttestationIndependentClientsDoNotSerialize(t *testing.T) {
 		t.Fatalf("begin blocker tx: %v", err)
 	}
 	defer func() {
-		if err := tx.Rollback(); err != nil {
+		// the success path rolled back already
+		err := tx.Rollback()
+		if err != nil && !errors.Is(err, sql.ErrTxDone) {
 			t.Logf("blocker rollback: %v", err)
 		}
 	}()
