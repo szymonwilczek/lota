@@ -82,9 +82,13 @@ static struct {
 	atomic_int publisher_errno; /* the publisher refusal already reported */
 	atomic_int token_errno; /* the token refusal already reported */
 	atomic_int self_protected;
-	atomic_int offline_published;
+	atomic_int offline_published; /* HOOK_LOST_* published, or 0 */
 	atomic_int evidence_written; /* the evidence is on disk */
 } g_hook;
+
+/* Why the hook holds no connection: offline, or the agent said no. */
+#define HOOK_LOST_AGENT 1
+#define HOOK_LOST_PUBLISHER 2
 
 /* Guards last_status against the loader thread reading it. */
 static pthread_mutex_t g_status_lock;
@@ -687,16 +691,17 @@ static void hook_cache_status(const struct lota_status *status)
 }
 
 /*
- * Rewrite the status file from the cache, or as offline while the agent
- * is lost; no-op before the first status.
+ * Rewrite the status file from the cache, or zeroed while no connection
+ * is held; no-op before the first status.
  */
 static void hook_publish_state(void)
 {
 	struct lota_status status = { 0 };
+	int lost = atomic_load(&g_hook.offline_published);
 	int ret;
 
-	if (atomic_load(&g_hook.offline_published)) {
-		ret = write_status_payload(&status, 1);
+	if (lost) {
+		ret = write_status_payload(&status, lost == HOOK_LOST_AGENT);
 	} else {
 		if (!atomic_load(&g_hook.have_status))
 			return;
@@ -721,24 +726,29 @@ static void drop_token_files(void)
 	atomic_store(&g_hook.evidence_written, 0);
 }
 
-/* LOTA_OFFLINE=1 in the status file, the token files gone */
-static void publish_offline_status(void)
+/* a zeroed status, LOTA_OFFLINE=@offline, the token files gone */
+static void publish_offline_status(int offline)
 {
-	struct lota_status offline = { 0 };
+	struct lota_status zero = { 0 };
 	int ret;
 
-	ret = write_status_payload(&offline, 1);
+	ret = write_status_payload(&zero, offline);
 	if (ret < 0)
 		LOG_WRN("write_status (offline): %s", strerror(-ret));
 	drop_token_files();
 }
 
-/* One OFFLINE per disconnect; hook_offline_clear() re-arms it on connect. */
-static void hook_offline_publish(void)
+/*
+ * One write per disconnect and reason; hook_offline_clear() re-arms it on
+ * connect. @refused: the agent answered and refused the publisher.
+ */
+static void hook_offline_publish(bool refused)
 {
-	if (atomic_exchange(&g_hook.offline_published, 1))
+	int lost = refused ? HOOK_LOST_PUBLISHER : HOOK_LOST_AGENT;
+
+	if (atomic_exchange(&g_hook.offline_published, lost) == lost)
 		return;
-	publish_offline_status();
+	publish_offline_status(lost == HOOK_LOST_AGENT);
 }
 
 static void hook_offline_clear(void)
@@ -987,8 +997,11 @@ static void hook_report_publisher(int err)
 			g_hook.publisher, lota_strerror(err));
 }
 
-/* warn on the first refusal and each new reason; repeats stay at debug */
-static void hook_report_unreachable(void)
+/*
+ * Warn on the first refusal and each new reason; repeats stay at debug.
+ * Return: true if the agent answered and refused the publisher.
+ */
+static bool hook_report_unreachable(void)
 {
 	char path[PATH_MAX];
 	const char *why;
@@ -998,7 +1011,7 @@ static void hook_report_unreachable(void)
 	err = lota_connect_last_error();
 	if (err != LOTA_OK && err != LOTA_ERR_CONNECTION_FAILED) {
 		hook_report_publisher(err);
-		return;
+		return true;
 	}
 
 	err = hook_probe_socket(path, sizeof(path));
@@ -1007,7 +1020,7 @@ static void hook_report_unreachable(void)
 	if (atomic_exchange(&g_hook.offline_errno, err) == err) {
 		LOG_DBG("agent still unreachable at %s: %s", path,
 			strerror(-err));
-		return;
+		return false;
 	}
 
 	if (why)
@@ -1016,6 +1029,7 @@ static void hook_report_unreachable(void)
 	else
 		LOG_WRN("cannot reach the agent at %s: %s", path,
 			strerror(-err));
+	return false;
 }
 
 /* Not 64 hex chars: reported and dropped, the launch goes on unnamed */
@@ -1192,8 +1206,7 @@ static void refresh_once(void)
 	if (!g_hook.client) {
 		g_hook.client = hook_connect();
 		if (!g_hook.client) {
-			hook_report_unreachable();
-			hook_offline_publish();
+			hook_offline_publish(hook_report_unreachable());
 			return;
 		}
 		hook_offline_clear();
@@ -1215,7 +1228,7 @@ static void refresh_once(void)
 		LOG_DBG("get_status: %s -> reconnecting", lota_strerror(ret));
 		lota_disconnect(g_hook.client);
 		g_hook.client = NULL;
-		hook_offline_publish();
+		hook_offline_publish(false);
 		return;
 	}
 
@@ -1292,9 +1305,10 @@ static void *refresh_thread_fn(void *arg)
 		if (!g_hook.client) {
 			g_hook.client = hook_connect();
 			if (!g_hook.client) {
-				hook_report_unreachable();
+				bool refused = hook_report_unreachable();
+
 				LOG_DBG("retrying in %ds", g_hook.refresh_sec);
-				hook_offline_publish();
+				hook_offline_publish(refused);
 				sleep(g_hook.refresh_sec);
 				continue;
 			}

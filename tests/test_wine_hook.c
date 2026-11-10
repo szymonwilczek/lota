@@ -1330,7 +1330,7 @@ static void test_offline_publish_replaces_the_last_good_status(void)
 		return;
 	}
 
-	hook_offline_publish();
+	hook_offline_publish(false);
 
 	if (read_file_contents(offline_status, buf, sizeof(buf)) <= 0) {
 		FAIL("read failed");
@@ -1362,13 +1362,13 @@ static void test_offline_publish_writes_once_per_episode(void)
 	offline_paths("repeat");
 	hook_offline_clear();
 
-	hook_offline_publish();
+	hook_offline_publish(false);
 	if (touch_file(offline_token, "token") != 0) {
 		FAIL("setup failed");
 		return;
 	}
 
-	hook_offline_publish();
+	hook_offline_publish(false);
 
 	if (access(offline_token, F_OK) != 0) {
 		FAIL("the same episode published twice");
@@ -1384,7 +1384,7 @@ static void test_offline_clear_arms_the_next_disconnect(void)
 	offline_paths("rearm");
 	hook_offline_clear();
 
-	hook_offline_publish();
+	hook_offline_publish(false);
 	if (touch_file(offline_token, "token") != 0) {
 		FAIL("setup failed");
 		return;
@@ -1392,7 +1392,7 @@ static void test_offline_clear_arms_the_next_disconnect(void)
 
 	/* what a successful connect does */
 	hook_offline_clear();
-	hook_offline_publish();
+	hook_offline_publish(false);
 
 	if (access(offline_token, F_OK) == 0) {
 		FAIL("the second disconnect never reached the sink");
@@ -1416,7 +1416,7 @@ static void test_a_republish_while_offline_stays_offline(void)
 	status.flags = LOTA_FLAG_ATTESTED;
 	status.valid_until = 1;
 	hook_cache_status(&status);
-	hook_offline_publish();
+	hook_offline_publish(false);
 	hook_publish_state();
 	hook_offline_clear();
 	atomic_store(&g_hook.have_status, 0);
@@ -1431,6 +1431,45 @@ static void test_a_republish_while_offline_stays_offline(void)
 	}
 	if (!strstr(buf, "LOTA_ATTESTED=0")) {
 		FAIL("the republish restored the cached verdict");
+		return;
+	}
+	PASS();
+}
+
+/* a publisher refusal is the agent saying no, not an agent gone */
+static void test_a_publisher_refusal_is_not_offline(void)
+{
+	char buf[1024];
+
+	TEST("offline publish: a publisher refusal is no lost agent");
+
+	offline_paths("refused");
+	hook_offline_clear();
+
+	if (touch_file(offline_token, "token") != 0) {
+		FAIL("setup failed");
+		return;
+	}
+	hook_offline_publish(true);
+	hook_publish_state();
+	if (read_file_contents(offline_status, buf, sizeof(buf)) <= 0) {
+		FAIL("read failed");
+		return;
+	}
+	if (!strstr(buf, "LOTA_OFFLINE=0") || !strstr(buf, "LOTA_ATTESTED=0")) {
+		FAIL("the refusal was published as a lost agent");
+		return;
+	}
+	if (access(offline_token, F_OK) == 0) {
+		FAIL("the token survived the refusal");
+		return;
+	}
+
+	hook_offline_publish(false);
+	hook_offline_clear();
+	if (read_file_contents(offline_status, buf, sizeof(buf)) <= 0 ||
+	    !strstr(buf, "LOTA_OFFLINE=1")) {
+		FAIL("an agent lost after the refusal stayed reachable");
 		return;
 	}
 	PASS();
@@ -2515,6 +2554,7 @@ int main(void)
 	test_offline_publish_writes_once_per_episode();
 	test_offline_clear_arms_the_next_disconnect();
 	test_a_republish_while_offline_stays_offline();
+	test_a_publisher_refusal_is_not_offline();
 
 	/* process activation policy */
 	test_policy_default_skips_usr_bin();
