@@ -5,6 +5,7 @@
  * Copyright (C) 2026 Szymon Wilczek
  */
 
+#include <dlfcn.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <stdio.h>
@@ -26,6 +27,10 @@
 #include "lota_token.h"
 #include "lota_wine_hook.h"
 #include "token_forge.h"
+
+#ifndef LOTA_SDK_LIB_PATH
+#define LOTA_SDK_LIB_PATH "build/liblotagaming.so"
+#endif
 
 static char test_dir[256];
 
@@ -228,6 +233,55 @@ static int expected_runtime_measure_test(uint8_t out[32])
 	free(vec);
 	free(c.paths);
 	return ret;
+}
+
+/* an object is the vDSO by its address, not by a name a file can carry */
+static void test_runtime_measure_counts_a_vdso_named_object(void)
+{
+	char path[512];
+	char cmd[1024];
+	uint8_t before[LOTA_AC_RUNTIME_MEASURE_SIZE];
+	uint8_t after[LOTA_AC_RUNTIME_MEASURE_SIZE];
+	struct rt_path_collect c = {};
+	int listed = 0, vdso = 0;
+	void *h;
+
+	TEST("runtime measure: an object named linux-vdso* is measured");
+
+	snprintf(path, sizeof(path), "%s/linux-vdso-test.so", test_dir);
+	snprintf(cmd, sizeof(cmd), "cp %s %s", LOTA_SDK_LIB_PATH, path);
+	if (system(cmd) != 0 || lota_ac_compute_runtime_measure(before) != 0) {
+		FAIL("setup");
+		return;
+	}
+	h = dlopen(path, RTLD_NOW | RTLD_LOCAL);
+	if (!h) {
+		FAIL(dlerror());
+		return;
+	}
+
+	c.paths = calloc(EXPECTED_RT_MAX_OBJS, LOTA_AC_RUNTIME_PATH_MAX);
+	c.max = EXPECTED_RT_MAX_OBJS;
+	if (c.paths &&
+	    lota_ac_list_runtime_objects(rt_path_collect_cb, &c) == 0)
+		for (size_t i = 0; i < c.count; i++) {
+			listed |= strcmp(c.paths[i], path) == 0;
+			vdso |= strcmp(c.paths[i], "linux-vdso.so.1") == 0;
+		}
+	free(c.paths);
+
+	if (lota_ac_compute_runtime_measure(after) != 0) {
+		FAIL("measure failed");
+	} else if (!listed) {
+		FAIL("the object is not listed");
+	} else if (vdso) {
+		FAIL("the vDSO is listed");
+	} else if (memcmp(before, after, sizeof(before)) == 0) {
+		FAIL("the object left the measure unchanged");
+	} else {
+		PASS();
+	}
+	dlclose(h);
 }
 
 static int build_bound_heartbeat_packet(uint8_t *out, size_t out_cap,
@@ -2604,6 +2658,7 @@ int main(void)
 	test_required_flags_cannot_drop_attested();
 	test_info_agrees_with_state();
 	test_session_id_unique();
+	test_runtime_measure_counts_a_vdso_named_object();
 
 	cleanup_test_dir();
 

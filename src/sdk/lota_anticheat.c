@@ -12,6 +12,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/auxv.h>
 #include <sys/random.h>
 #include <sys/stat.h>
 #include <time.h>
@@ -255,11 +256,6 @@ static const char *rt_basename(const char *path)
 	return slash ? slash + 1 : path;
 }
 
-static int rt_starts_with(const char *s, const char *prefix)
-{
-	return strncmp(s, prefix, strlen(prefix)) == 0;
-}
-
 static int runtime_measure_update_seg_hdr(EVP_MD_CTX *md, uint64_t vaddr,
 					  uint64_t offset, uint64_t filesz)
 {
@@ -433,6 +429,16 @@ static int rt_resolve_self_exe(char *buf, size_t len)
 	return 0;
 }
 
+/* the loader points the vDSO's program headers into the kernel's image */
+static int rt_is_vdso(const struct dl_phdr_info *info)
+{
+	unsigned long ehdr = getauxval(AT_SYSINFO_EHDR);
+	const ElfW(Ehdr) *eh = (const ElfW(Ehdr) *)ehdr;
+
+	return eh && (const void *)info->dlpi_phdr ==
+			     (const void *)(ehdr + eh->e_phoff);
+}
+
 /*
  * Index 0 is the main executable, which glibc lists unnamed.
  * Return: 1 to measure, 0 to skip.
@@ -446,13 +452,10 @@ static int rt_object_identity(struct dl_phdr_info *info, unsigned index,
 		*soname_out = rt_basename(self_exe);
 		return 1;
 	}
-	if (!info->dlpi_name || info->dlpi_name[0] == '\0')
+	if (!info->dlpi_name || info->dlpi_name[0] == '\0' || rt_is_vdso(info))
 		return 0;
 
 	const char *base = rt_basename(info->dlpi_name);
-	if (rt_starts_with(base, "linux-vdso") ||
-	    rt_starts_with(base, "linux-gate"))
-		return 0;
 
 	*path_out = info->dlpi_name;
 	*soname_out = base;
