@@ -595,14 +595,20 @@ func TestLFAReview_MemoryAndSQLite(t *testing.T) {
 	if len(bs.ListLFAReviewPending()) != 0 {
 		t.Error("review should be cleared after acknowledge (in-memory)")
 	}
-	// strong re-anchor must not leave the client on the review list
-	// (past the LFA interval so the second re-anchor is admitted)
-	if err := bs.ArchiveAndReanchor("c", boot(3, 2, 7), []byte("l"), 800, true, false, "strong",
-		t0.Add(ReanchorMinIntervalLFA+time.Hour)); err != nil {
+	// an unacknowledged LFA re-anchor is cleared by a strong one
+	// (each past the previous interval so it is admitted)
+	t1 := t0.Add(ReanchorMinIntervalLFA + time.Hour)
+	if err := bs.ArchiveAndReanchor("c", boot(3, 2, 7), []byte("l"),
+		0, false, true, "lfa", t1); err != nil {
+		t.Fatal(err)
+	}
+	if err := bs.ArchiveAndReanchor("c", boot(4, 2, 7), []byte("l"),
+		800, true, false, "strong",
+		t1.Add(ReanchorMinIntervalLFA+time.Hour)); err != nil {
 		t.Fatal(err)
 	}
 	if len(bs.ListLFAReviewPending()) != 0 {
-		t.Error("strong re-anchor must not flag for review")
+		t.Error("strong re-anchor must clear the review flag")
 	}
 
 	// SQLite: same contract

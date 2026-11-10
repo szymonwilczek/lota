@@ -461,9 +461,7 @@ func (s *BaselineStore) ArchiveAndReanchor(clientID string, boot BootBaseline,
 	st.ESRTVersion = esrtVersion
 	st.ESRTCapable = st.ESRTCapable || esrtCapable
 	st.LFA = lfa
-	if lfa {
-		st.LFAReviewPending = true
-	}
+	st.LFAReviewPending = lfa
 	st.ReanchorCount++
 	st.LastReanchorAt = now
 	s.reanchor[clientID] = st
