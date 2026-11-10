@@ -1345,6 +1345,7 @@ static void *refresh_thread_fn(void *arg)
 				g_hook.client = NULL;
 			}
 			subscribed = false;
+			atomic_store(&g_hook.evidence_written, 0);
 			/* avoid tight loop on persistent failure */
 			sleep(1);
 		} else if (hook_poll_failed(ret)) {
