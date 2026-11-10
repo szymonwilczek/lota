@@ -118,7 +118,7 @@ static int validate_path_value(const char *key, const char *value,
 	if (!key || !value)
 		return -1;
 
-	/* passes: clears a single-value key, adds an empty list entry */
+	/* passes: clears a single-value key */
 	if (value[0] == '\0')
 		return 0;
 
@@ -145,6 +145,17 @@ static int validate_path_value(const char *key, const char *value,
 	/* the string's shape only: no symlink is resolved */
 
 	return 0;
+}
+
+static int validate_list_value(const char *key, const char *value,
+			       const char *filepath, int lineno)
+{
+	if (value[0] == '\0') {
+		fprintf(stderr, "%s:%d: invalid %s: empty path\n", filepath,
+			lineno, key);
+		return -1;
+	}
+	return validate_path_value(key, value, filepath, lineno);
 }
 
 static int config_validate_file_security(int fd, const char *filepath)
@@ -698,7 +709,7 @@ static int apply_key(struct lota_config *cfg, const char *key,
 			return -1;
 		}
 
-		if (validate_path_value("allow_verity", value, filepath,
+		if (validate_list_value("allow_verity", value, filepath,
 					lineno) != 0)
 			return -1;
 		if (set_value(cfg->allow_verity[cfg->allow_verity_count],
@@ -921,7 +932,7 @@ static int apply_key(struct lota_config *cfg, const char *key,
 			return -1;
 		}
 
-		if (validate_path_value("trust_lib", value, filepath, lineno) !=
+		if (validate_list_value("trust_lib", value, filepath, lineno) !=
 		    0)
 			return -1;
 		if (set_value(cfg->trust_libs[cfg->trust_lib_count],

@@ -90,8 +90,10 @@ static int validate_path_arg(const char *key, const char *p)
 {
 	if (!key || !p)
 		return -EINVAL;
-	if (p[0] == '\0')
+	if (p[0] == '\0') {
+		fprintf(stderr, "Invalid %s: empty path\n", key);
 		return -EINVAL;
+	}
 	if (lota_str_has_control(p)) {
 		fprintf(stderr, "Invalid %s: contains control characters\n",
 			key);
@@ -581,6 +583,8 @@ int cli_parse(int argc, char **argv, struct cli_options *opts,
 			g_cli_protect_pids[g_cli_protect_pid_count++] = v;
 		} break;
 		case 'L':
+			if (validate_path_arg("trust-lib", optarg) < 0)
+				return 1;
 			if (g_trust_lib_count < LOTA_CONFIG_MAX_LIBS) {
 				if (copy_string_checked(
 					    "trust-lib",

@@ -1036,7 +1036,7 @@ static void test_config_load_empty_value(void)
 	char path[PATH_MAX];
 	int ret;
 
-	TEST("config_load allows empty value (clears field)");
+	TEST("config_load clears a field on an empty value, not a list");
 	write_config("emptyval.conf", "ca_cert = /some/path\n"
 				      "ca_cert =\n");
 	config_path("emptyval.conf", path, sizeof(path));
@@ -1048,6 +1048,20 @@ static void test_config_load_empty_value(void)
 	}
 	if (cfg.ca_cert[0] != '\0') {
 		FAIL("ca_cert not empty after clear");
+		return;
+	}
+
+	write_config("emptyval_list.conf", "trust_lib =\n");
+	config_path("emptyval_list.conf", path, sizeof(path));
+	config_init(&cfg);
+	if (config_load(&cfg, path) != -EINVAL || cfg.trust_lib_count != 0) {
+		FAIL("an empty trust_lib entry loads");
+		return;
+	}
+	write_config("emptyval_list.conf", "allow_verity =\n");
+	config_init(&cfg);
+	if (config_load(&cfg, path) != -EINVAL || cfg.allow_verity_count != 0) {
+		FAIL("an empty allow_verity entry loads");
 		return;
 	}
 	PASS();
@@ -2698,6 +2712,40 @@ static void test_cli_attest_interval_bounds(void)
 	PASS();
 }
 
+static void test_cli_trust_lib_path(void)
+{
+	static const char *const bad[] = { "", "lib/libx.so",
+					   "/usr/lib/../libx.so" };
+	struct cli_options opts;
+	struct lota_config *cfg;
+	char path[PATH_MAX];
+
+	TEST("--trust-lib refuses what --allow-verity refuses");
+
+	write_config("cli_empty.conf", "");
+	config_path("cli_empty.conf", path, sizeof(path));
+	cfg = config_new();
+	if (!cfg) {
+		FAIL("out of memory");
+		return;
+	}
+	for (size_t i = 0; i < sizeof(bad) / sizeof(bad[0]); i++) {
+		const char *const lib[] = { "lota-agent", "--config", path,
+					    "--trust-lib", bad[i] };
+		const char *const verity[] = { "lota-agent", "--config", path,
+					       "--allow-verity", bad[i] };
+
+		if (cli_parse_argv(verity, 5, &opts, cfg) != 1 ||
+		    cli_parse_argv(lib, 5, &opts, cfg) != 1) {
+			FAIL(bad[i]);
+			config_free(cfg);
+			return;
+		}
+	}
+	config_free(cfg);
+	PASS();
+}
+
 int main(void)
 {
 	printf("=== LOTA Config Parser Tests ===\n\n");
@@ -2766,6 +2814,7 @@ int main(void)
 		test_config_load_from_fd,
 		test_cli_config_spellings,
 		test_cli_attest_interval_bounds,
+		test_cli_trust_lib_path,
 	};
 
 	for (size_t i = 0; i < sizeof(tests) / sizeof(tests[0]); i++)
