@@ -137,10 +137,8 @@ func TestNonceStore_OneTimeUse(t *testing.T) {
 }
 
 func TestNonceStore_Expiration(t *testing.T) {
-	t.Log("SECURITY TEST: Nonce expiration (TTL)")
-	t.Log("Prevents use of stale challenges")
-
 	store := newTestNonceStore(100 * time.Millisecond)
+	store.Close() // only the test sweeps
 	challenge, _ := store.GenerateChallenge("binding-1", 0x00004003)
 
 	report := &types.AttestationReport{}
@@ -155,8 +153,26 @@ func TestNonceStore_Expiration(t *testing.T) {
 	if err == nil {
 		t.Fatal("SECURITY: Expired nonce was accepted!")
 	}
+	if got := bindingPending(store, "binding-1"); got != 0 {
+		t.Errorf("binding pending after expiry: got %d, want 0", got)
+	}
 
-	t.Logf("✓ Correctly rejected expired nonce: %v", err)
+	// once the expired entry is gone, a late round is not called a replay
+	for _, sweep := range []bool{false, true} {
+		late, _ := store.GenerateChallenge("binding-1", 0x00004003)
+		r := &types.AttestationReport{}
+		copy(r.TPM.Nonce[:], late.Nonce[:])
+		time.Sleep(150 * time.Millisecond)
+		if sweep {
+			store.cleanup()
+		} else {
+			store.VerifyNonce(r, "binding-1", zeroIdentity)
+		}
+		err = store.VerifyNonce(r, "binding-1", zeroIdentity)
+		if err == nil || err.Error() != "unknown or expired nonce" {
+			t.Errorf("late round (sweep=%v): got %v", sweep, err)
+		}
+	}
 }
 
 func TestNonceStore_UnknownNonce(t *testing.T) {

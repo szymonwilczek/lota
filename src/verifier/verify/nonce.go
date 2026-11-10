@@ -307,11 +307,11 @@ func (ns *NonceStore) VerifyNonce(report *types.AttestationReport, bindingID, id
 	entry, exists := ns.pending[key]
 	if !exists {
 		ns.mu.Unlock()
-		return errors.New("unknown nonce - possible replay attack")
+		return errors.New("unknown or expired nonce")
 	}
 
 	if time.Since(entry.createdAt) > ns.lifetime {
-		delete(ns.pending, key)
+		ns.consumeLocked(key, entry.bindingID)
 		ns.mu.Unlock()
 		return errors.New("nonce expired")
 	}
@@ -354,7 +354,7 @@ func (ns *NonceStore) VerifyNonce(report *types.AttestationReport, bindingID, id
 	ns.mu.Lock()
 	if _, still := ns.pending[key]; !still {
 		ns.mu.Unlock()
-		return errors.New("unknown nonce - possible replay attack")
+		return errors.New("unknown or expired nonce")
 	}
 	ns.consumeLocked(key, entry.bindingID)
 
