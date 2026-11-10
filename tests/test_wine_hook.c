@@ -35,7 +35,24 @@
 #include <sys/wait.h>
 #include <unistd.h>
 
+#include <sys/mman.h>
+
 #include "test.h"
+
+/* the gate's answer to the hook's probe mapping, 0 = the real mmap */
+static int test_mmap_errno;
+
+static void *test_mmap(void *addr, size_t len, int prot, int flags, int fd,
+		       off_t off)
+{
+	if (test_mmap_errno) {
+		errno = test_mmap_errno;
+		return MAP_FAILED;
+	}
+	return mmap(addr, len, prot, flags, fd, off);
+}
+
+#define hook_mmap test_mmap
 #include "../src/sdk/lota_wine_hook.c"
 int lota_protect_main(int argc, char **argv);
 #define main lota_protect_main
@@ -1220,6 +1237,25 @@ static int touch_file(const char *path, const char *body)
 	return 0;
 }
 
+/* an object the loader maps but cannot load: a header and nothing else */
+static int touch_object(const char *path)
+{
+	ElfW(Ehdr) eh = __ehdr_start;
+	int fd = open(path, O_WRONLY | O_CREAT | O_TRUNC, 0600);
+
+	if (fd < 0)
+		return -errno;
+	eh.e_type = ET_DYN;
+	eh.e_phnum = 0;
+	eh.e_shnum = 0;
+	if (write(fd, &eh, sizeof(eh)) != (ssize_t)sizeof(eh)) {
+		close(fd);
+		return -EIO;
+	}
+	close(fd);
+	return 0;
+}
+
 static char offline_status[sizeof(g_hook.status_path)];
 static char offline_token[sizeof(g_hook.token_path)];
 static char offline_snapshot[sizeof(g_hook.snapshot_path)];
@@ -1788,25 +1824,46 @@ static void test_the_first_refresh_registers(void)
 }
 
 /*
- * Reading dlerror() would consume the caller's message, so the hook judges
- * the object: an existing readable path was refused, an absent one is missing.
+ * Reading dlerror() would consume the caller's message, so the hook maps
+ * the object once more: only a mapping refused with EPERM is the gate.
  */
 static void test_a_gate_refusal_is_told_apart_from_a_missing_file(void)
 {
 	char present[PATH_MAX];
+	char garbage[PATH_MAX];
 	char absent[PATH_MAX];
 
 	TEST("a gate refusal is told apart from a missing file");
 
 	snprintf(present, sizeof(present), "%s/libpresent.so", tmpdir);
+	snprintf(garbage, sizeof(garbage), "%s/libgarbage.so", tmpdir);
 	snprintf(absent, sizeof(absent), "%s/libabsent.so", tmpdir);
-	if (touch_file(present, "not really an ELF") != 0) {
+	if (touch_object(present) != 0 ||
+	    touch_file(garbage, "not really an ELF") != 0) {
 		FAIL("could not create the test object");
 		return;
 	}
 
+	test_mmap_errno = EPERM;
 	if (!hook_refusal_is_gate(present)) {
-		FAIL("an object that is there was refused, not missing");
+		test_mmap_errno = 0;
+		FAIL("an object the gate would not map was not a refusal");
+		return;
+	}
+	if (hook_refusal_is_gate(garbage)) {
+		test_mmap_errno = 0;
+		FAIL("a file that is not an object was blamed on the gate");
+		return;
+	}
+	test_mmap_errno = ENODEV;
+	if (hook_refusal_is_gate(present)) {
+		test_mmap_errno = 0;
+		FAIL("a mapping failure other than EPERM was a refusal");
+		return;
+	}
+	test_mmap_errno = 0;
+	if (hook_refusal_is_gate(present)) {
+		FAIL("an object that maps was blamed on the gate");
 		return;
 	}
 	if (hook_refusal_is_gate(absent)) {
@@ -1823,6 +1880,7 @@ static void test_a_gate_refusal_is_told_apart_from_a_missing_file(void)
 	}
 
 	unlink(present);
+	unlink(garbage);
 	PASS();
 }
 
@@ -1909,18 +1967,20 @@ static void test_the_loader_wrapper_hands_back_what_it_got(void)
 		return;
 	}
 
-	/* an object that is there and did not load: what a refusal is */
+	/* an object the gate would not map: what a refusal is */
 	snprintf(broken, sizeof(broken), "%s/libbroken.so", tmpdir);
-	if (touch_file(broken, "not really an ELF") != 0) {
+	if (touch_object(broken) != 0) {
 		atomic_store(&g_hook.self_protected, 0);
 		FAIL("could not create the test object");
 		return;
 	}
+	test_mmap_errno = EPERM;
 	handle = dlopen(broken, RTLD_NOW);
+	test_mmap_errno = 0;
 	atomic_store(&g_hook.self_protected, 0);
 	if (handle) {
 		dlclose(handle);
-		FAIL("a file that is not an object returned a handle");
+		FAIL("an object with no segments returned a handle");
 		return;
 	}
 	if (strcmp(g_hook.refused_object, broken) != 0) {
@@ -2022,19 +2082,21 @@ static void test_a_refusal_publishes_itself(void)
 	stop_mock_agent(agent);
 
 	snprintf(broken, sizeof(broken), "%s/libpublish.so", tmpdir);
-	if (touch_file(broken, "not really an ELF") != 0) {
+	if (touch_object(broken) != 0) {
 		atomic_store(&g_hook.self_protected, 0);
 		FAIL("could not create the test object");
 		return;
 	}
 
 	atomic_store(&g_hook.self_protected, 1);
+	test_mmap_errno = EPERM;
 	handle = dlopen(broken, RTLD_NOW);
+	test_mmap_errno = 0;
 	atomic_store(&g_hook.self_protected, 0);
 	if (handle) {
 		dlclose(handle);
 		unlink(broken);
-		FAIL("a file that is not an object returned a handle");
+		FAIL("an object with no segments returned a handle");
 		return;
 	}
 

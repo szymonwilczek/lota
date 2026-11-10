@@ -22,9 +22,11 @@
 
 #include <ctype.h>
 #include <dlfcn.h>
+#include <elf.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <limits.h>
+#include <link.h>
 #include <pthread.h>
 #include <signal.h>
 #include <stdatomic.h>
@@ -32,7 +34,9 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/mman.h>
 #include <sys/stat.h>
+#include <sys/statvfs.h>
 #include <sys/types.h>
 #include <time.h>
 #include <unistd.h>
@@ -1079,17 +1083,54 @@ static void hook_register_self(void)
 	hook_publish_state();
 }
 
+#ifndef hook_mmap
+#define hook_mmap mmap
+#endif
+
+extern const ElfW(Ehdr) __ehdr_start __attribute__((visibility("hidden")));
+
+/* a shared object of the class and machine the loader maps here */
+static bool hook_object_is_loadable(int fd)
+{
+	ElfW(Ehdr) eh;
+
+	return pread(fd, &eh, sizeof(eh), 0) == (ssize_t)sizeof(eh) &&
+	       memcmp(eh.e_ident, ELFMAG, SELFMAG) == 0 &&
+	       eh.e_ident[EI_CLASS] == __ehdr_start.e_ident[EI_CLASS] &&
+	       eh.e_machine == __ehdr_start.e_machine && eh.e_type == ET_DYN;
+}
+
 /*
  * Was a failed load the gate's refusal? Reading dlerror() would consume
- * the title's message, so judge the object: an existing readable path
- * counts as refused whatever the real error, a bare name never does.
+ * the title's message, so map the object executable once more: the gate
+ * refuses that mapping with EPERM, as does a noexec mount. A file the
+ * loader would not map is not mapped here either. A bare name goes
+ * unchecked: the hook does not know which file the loader picked.
  */
 static bool hook_refusal_is_gate(const char *path)
 {
+	bool refused = false;
+	struct statvfs sv;
+	void *map;
+	int fd;
+
 	if (!path || !strchr(path, '/'))
 		return false;
 
-	return access(path, R_OK) == 0;
+	fd = open(path, O_RDONLY | O_CLOEXEC);
+	if (fd < 0)
+		return false;
+	if (hook_object_is_loadable(fd) && fstatvfs(fd, &sv) == 0 &&
+	    !(sv.f_flag & ST_NOEXEC)) {
+		map = hook_mmap(NULL, 1, PROT_READ | PROT_EXEC, MAP_PRIVATE, fd,
+				0);
+		if (map == MAP_FAILED)
+			refused = errno == EPERM;
+		else
+			munmap(map, 1);
+	}
+	close(fd);
+	return refused;
 }
 
 /* For the status file. */
