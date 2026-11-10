@@ -757,8 +757,8 @@ static void hook_offline_clear(void)
 static int LOTA_UNUSED write_snapshot(uint32_t flags, const uint8_t *token_wire,
 				      size_t token_size)
 {
-	uint8_t buf[sizeof(struct lota_snapshot_wire_hdr) + 2048];
-	if (!token_wire || token_size == 0 || token_size > 2048)
+	uint8_t buf[LOTA_SNAPSHOT_HEADER_SIZE + LOTA_TOKEN_MAX_SIZE];
+	if (!token_wire || token_size == 0 || token_size > LOTA_TOKEN_MAX_SIZE)
 		return -EINVAL;
 
 	uint8_t *p = buf;
@@ -871,7 +871,7 @@ static void write_boot_evidence(struct lota_client *client)
  */
 static int write_token(struct lota_client *client, uint32_t flags)
 {
-	uint8_t wire[2048];
+	uint8_t wire[LOTA_TOKEN_MAX_SIZE];
 	size_t written = 0;
 	int ret;
 

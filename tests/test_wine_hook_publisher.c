@@ -31,6 +31,7 @@
 #include "test.h"
 #include "lota_gaming.h"
 #include "lota_ipc.h"
+#include "lota_snapshot.h"
 #include "lota_wine_hook.h"
 
 #ifndef LOTA_HOOK_LIB_PATH
@@ -49,6 +50,7 @@
 #define MOCK_ATTEST_SIZE 64
 #define MOCK_SIG_SIZE 64
 #define MOCK_EVIDENCE_SIZE 48
+#define MOCK_PIDS LOTA_IPC_TOKEN_MAX_PROTECT_PIDS
 
 static char tmpdir[64]; /* short: paths built from it must fit */
 static char sock_path[104];
@@ -119,11 +121,15 @@ static void record_profile(const uint8_t *id, size_t len)
 	fclose(f);
 }
 
-/* Shape only: the SDK parses it, nothing verifies it */
+/*
+ * Shape only: the SDK parses it, nothing verifies it. Every PID slot is
+ * filled, so the token is as large as the agent issues.
+ */
 static int mock_send_token(int fd)
 {
-	uint8_t payload[sizeof(struct lota_ipc_token) + MOCK_ATTEST_SIZE +
-			MOCK_SIG_SIZE];
+	uint8_t payload[sizeof(struct lota_ipc_token) +
+			MOCK_PIDS * (4 + LOTA_IPC_TOKEN_REGISTRY_DIGEST_SIZE) +
+			MOCK_ATTEST_SIZE + MOCK_SIG_SIZE];
 	struct lota_ipc_token hdr;
 
 	memset(payload, 0xa5, sizeof(payload));
@@ -136,8 +142,8 @@ static int mock_send_token(int fd)
 	hdr.sig_alg = 0x0014; /* TPM2_ALG_RSASSA */
 	hdr.hash_alg = 0x000b; /* TPM2_ALG_SHA256 */
 	hdr.pcr_mask = 1u << 14;
-	hdr.protect_pid_count = 0;
-	hdr.pid_list_size = 0;
+	hdr.protect_pid_count = MOCK_PIDS;
+	hdr.pid_list_size = MOCK_PIDS * 4;
 	hdr.runtime_protect_version = LOTA_IPC_RUNTIME_PROTECT_V1;
 
 	memcpy(payload, &hdr, sizeof(hdr));
@@ -470,7 +476,8 @@ static void test_the_hook_exports_the_dir_it_chose(int child)
 
 static void test_a_named_publisher_gets_a_token(void)
 {
-	struct stat st;
+	char snapshot[PATH_MAX];
+	struct stat st, snap;
 
 	TEST("a named publisher gets this title a token");
 
@@ -481,6 +488,14 @@ static void test_a_named_publisher_gets_a_token(void)
 
 	if (st.st_size <= 0) {
 		FAIL("the token file is empty");
+		return;
+	}
+
+	snprintf(snapshot, sizeof(snapshot), "%s/%s", named_dir,
+		 LOTA_HOOK_SNAPSHOT_FILE);
+	if (stat(snapshot, &snap) != 0 ||
+	    snap.st_size != st.st_size + LOTA_SNAPSHOT_HEADER_SIZE) {
+		FAIL("the snapshot does not carry the token");
 		return;
 	}
 
