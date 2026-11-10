@@ -1401,8 +1401,8 @@ __attribute__((constructor)) static void lota_wine_hook_init(void)
 	snprintf(g_hook.evidence_path, sizeof(g_hook.evidence_path), "%s/%s",
 		 g_hook.token_dir, LOTA_HOOK_BOOT_EVIDENCE_FILE);
 
-	/* for the consumer's discovery; a preset value stays */
-	setenv(LOTA_HOOK_ENV_TOKEN_DIR, g_hook.token_dir, 0);
+	/* for the consumer's discovery */
+	setenv(LOTA_HOOK_ENV_TOKEN_DIR, g_hook.token_dir, 1);
 
 	LOG_INF("initializing (token_dir=%s, refresh=%ds)", g_hook.token_dir,
 		g_hook.refresh_sec);

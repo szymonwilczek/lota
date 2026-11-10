@@ -341,6 +341,45 @@ static int run_unnamed_publisher(void)
 	return 0;
 }
 
+/*
+ * A child loads the hook with an override that is a file. Return: 0 if the
+ * variable names the directory the hook fell back to, 1 if not, -1.
+ */
+static int run_unusable_token_dir(void)
+{
+	char xdg[96];
+	char file[96];
+	char want[128];
+	const char *got;
+	pid_t pid;
+	int status;
+
+	snprintf(xdg, sizeof(xdg), "%s/xdg", tmpdir);
+	snprintf(file, sizeof(file), "%s/notadir", tmpdir);
+	snprintf(want, sizeof(want), "%s/%s", xdg, LOTA_HOOK_TOKEN_DIR_NAME);
+	if (mkdir(xdg, 0700) != 0)
+		return -1;
+	status = open(file, O_WRONLY | O_CREAT | O_TRUNC, 0600);
+	if (status < 0)
+		return -1;
+	close(status);
+
+	fflush(NULL);
+	pid = fork();
+	if (pid < 0)
+		return -1;
+	if (pid == 0) {
+		setenv("XDG_RUNTIME_DIR", xdg, 1);
+		if (load_hook(file, TITLE_PUBLISHER, "silent") != 0)
+			_exit(93);
+		got = getenv(LOTA_HOOK_ENV_TOKEN_DIR);
+		_exit(got && strcmp(got, want) == 0 ? 0 : 1);
+	}
+	if (waitpid(pid, &status, 0) < 0 || !WIFEXITED(status))
+		return -1;
+	return WEXITSTATUS(status);
+}
+
 /* Hook output */
 
 static int wait_for_file(const char *path, int timeout_sec)
@@ -417,6 +456,18 @@ static void test_the_hook_names_the_title_s_publisher(void)
 	PASS();
 }
 
+/* the consumer finds the token through the variable the hook leaves */
+static void test_the_hook_exports_the_dir_it_chose(int child)
+{
+	TEST("the hook exports the token dir it fell back to");
+
+	if (child != 0) {
+		printf("FAIL: child status %d\n", child);
+		return;
+	}
+	PASS();
+}
+
 static void test_a_named_publisher_gets_a_token(void)
 {
 	struct stat st;
@@ -485,6 +536,7 @@ int main(void)
 	char template[] = "/tmp/lota-hook-pub-XXXXXX";
 	pid_t agent;
 	int failures;
+	int unusable;
 
 	printf("\n=== Wine hook publisher identity ===\n\n");
 
@@ -514,6 +566,7 @@ int main(void)
 		printf("  cannot start the mock agent: %s\n", strerror(errno));
 		return 2;
 	}
+	unusable = run_unusable_token_dir();
 
 	if (run_unnamed_publisher() != 0) {
 		printf("  cannot drive the unnamed-publisher launch: %s\n",
@@ -536,6 +589,7 @@ int main(void)
 	test_a_named_publisher_gets_a_token();
 	test_the_evidence_lands_next_to_the_token();
 	test_the_refusal_reaches_the_player_s_log();
+	test_the_hook_exports_the_dir_it_chose(unusable);
 
 	kill(agent, SIGKILL);
 	waitpid(agent, NULL, 0);

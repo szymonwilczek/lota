@@ -1896,9 +1896,8 @@ static void test_integration_wine_artifacts_consumed_by_eac(void)
  * writes -- $XDG_RUNTIME_DIR/lota-hook -- and not in $XDG_RUNTIME_DIR/lota,
  * which belongs to the daemon and holds the container socket.
  */
-static void test_auto_token_dir_is_the_hooks_dir(void)
+static void auto_token_dir_is_the_hooks_dir(const char *env)
 {
-	TEST("auto-detected token dir is the hook's, not the daemon's");
 	char xdg[512];
 	char hookdir[600];
 	char daemondir[600];
@@ -1921,7 +1920,10 @@ static void test_auto_token_dir_is_the_hooks_dir(void)
 	write_mock_snapshot(hookdir, attested_flags);
 
 	setenv("XDG_RUNTIME_DIR", xdg, 1);
-	unsetenv("LOTA_HOOK_TOKEN_DIR");
+	if (env)
+		setenv("LOTA_HOOK_TOKEN_DIR", env, 1);
+	else
+		unsetenv("LOTA_HOOK_TOKEN_DIR");
 
 	struct lota_ac_config cfg = {
 		.struct_size = sizeof(cfg),
@@ -1931,6 +1933,7 @@ static void test_auto_token_dir_is_the_hooks_dir(void)
 	};
 	struct lota_ac_session *s = lota_ac_init(&cfg);
 
+	unsetenv("LOTA_HOOK_TOKEN_DIR");
 	if (saved[0])
 		setenv("XDG_RUNTIME_DIR", saved, 1);
 	else
@@ -1947,6 +1950,19 @@ static void test_auto_token_dir_is_the_hooks_dir(void)
 	}
 	lota_ac_shutdown(s);
 	PASS();
+}
+
+static void test_auto_token_dir_is_the_hooks_dir(void)
+{
+	TEST("auto-detected token dir is the hook's, not the daemon's");
+	auto_token_dir_is_the_hooks_dir(NULL);
+}
+
+/* the hook skips an empty override, so the consumer does too */
+static void test_empty_token_dir_override_is_skipped(void)
+{
+	TEST("an empty LOTA_HOOK_TOKEN_DIR is no override");
+	auto_token_dir_is_the_hooks_dir("");
 }
 
 static void test_integration_eac_detects_agent_death(void)
@@ -2727,6 +2743,7 @@ int main(void)
 	printf("\nIntegration:\n");
 	test_integration_wine_artifacts_consumed_by_eac();
 	test_auto_token_dir_is_the_hooks_dir();
+	test_empty_token_dir_override_is_skipped();
 	test_integration_eac_detects_agent_death();
 	test_integration_eac_detects_attestation_loss();
 

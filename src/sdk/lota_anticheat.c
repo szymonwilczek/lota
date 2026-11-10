@@ -967,8 +967,10 @@ out:
  *           $XDG_RUNTIME_DIR/lota-hook > /tmp/lota-<uid>
  *
  * The producer's order (src/sdk/lota_wine_hook.c) below cfg->token_dir.
- * The producer skips an empty or unusable $LOTA_HOOK_TOKEN_DIR; here any set
- * value wins. The last two count only if the directory exists.
+ * The producer skips an empty or unusable $LOTA_HOOK_TOKEN_DIR and sets it
+ * to the directory it chose; here any non-empty value wins. An empty
+ * cfg->token_dir skips $LOTA_HOOK_TOKEN_DIR too. The last two count only
+ * if the directory exists.
  * $XDG_RUNTIME_DIR/lota is the agent's: it holds the container socket at
  * root:lota 0750.
  */
@@ -983,7 +985,7 @@ static int resolve_token_dir(const struct lota_ac_config *cfg, char *out,
 	if (!dir)
 		dir = getenv("LOTA_HOOK_TOKEN_DIR");
 
-	if (dir) {
+	if (dir && dir[0]) {
 		if (strlen(dir) >= outlen)
 			return -ENAMETOOLONG;
 		strncpy(out, dir, outlen - 1);
