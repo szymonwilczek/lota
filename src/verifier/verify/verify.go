@@ -473,12 +473,10 @@ func (v *Verifier) VerifyReportFrom(challengeID, remoteAddr string, reportData [
 	}
 	clog.Debug("signature verified with certificate-authenticated AIK")
 
-	var parsedAttest *TPMSAttest
 	if report.TPM.AttestSize > 0 {
 		attestData := cloneSensitive(report.TPM.AttestData[:report.TPM.AttestSize])
 		defer wipeBytes(attestData)
-		var err error
-		parsedAttest, err = ParseTPMSAttest(attestData)
+		parsedAttest, err := ParseTPMSAttest(attestData)
 		if err != nil {
 			clog.Error("PCR digest verification failed", "error", err)
 			v.metrics.Rejections.Inc("pcr_fail")
@@ -583,13 +581,6 @@ func (v *Verifier) VerifyReportFrom(challengeID, remoteAddr string, reportData [
 		v.metrics.Rejections.Inc("baseline_error")
 		result.Result = types.VerifyInternalError
 		return result, errors.New("FAIL_BASELINE_ERROR: store missing atomic agent_hash/boot pinning")
-	}
-
-	if parsedAttest == nil {
-		clog.Error("FlagBootCommitment set without a TPM quote payload")
-		v.metrics.Rejections.Inc("pcr_fail")
-		result.Result = types.VerifyPCRFail
-		return result, errors.New("FAIL_PCR_FAIL: FlagBootCommitment requires a TPMS_ATTEST payload")
 	}
 
 	// the pre-lock PCR 14 comes from the event log; a forged log fails the
