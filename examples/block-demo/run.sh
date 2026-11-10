@@ -4,7 +4,8 @@
 #
 # Runs block_victim on evil.so against a lota-agent already running in
 # enforce mode with strict_mmap; the --test-* modes attach no BPF.
-# Exits 0 when dlopen of evil.so fails, 1 when it loads, 2 otherwise.
+# Exits 0 when the mapping of evil.so is refused only once the victim
+# is protected, 1 when it loads, 2 otherwise.
 # The build root is $BUILD_DIR, else $LOTA_BUILD_DIR, else build/ in the tree.
 
 set -euo pipefail
@@ -35,7 +36,7 @@ since_ts=$(date +%s)
 
 echo "[block-demo] launching victim against $SOCKET"
 set +e
-"$VICTIM_BIN" "$EVIL_SO"
+"$VICTIM_BIN"
 victim_rc=$?
 set -e
 

@@ -85,7 +85,7 @@ Expected output on a successful block:
 
    [victim] pid=12345 evil=/.../build/examples/evil.so
    [victim] registered self into protected_pids
-   [victim] dlopen blocked: /.../build/examples/evil.so: cannot ...
+   [victim] dlopen blocked: /.../build/examples/evil.so: failed to map segment from shared object
    [block-demo] kernel-side journal since the demo started:
      lota-agent[...]: BPF event: MMAP_BLOCKED pid=12345 path=evil.so
    [block-demo] PASS: evil.so blocked by BPF LSM gate
