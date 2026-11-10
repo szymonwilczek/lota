@@ -145,7 +145,15 @@ static int read_at(int dirfd, const char *name, char *buf, size_t size)
 			break;
 		len += (size_t)n;
 		if (len == size - 1) {
-			ret = -EMSGSIZE;
+			char extra;
+
+			do {
+				n = read(fd, &extra, 1);
+			} while (n < 0 && errno == EINTR);
+			if (n < 0)
+				ret = -errno;
+			else if (n > 0)
+				ret = -EMSGSIZE;
 			break;
 		}
 	}
