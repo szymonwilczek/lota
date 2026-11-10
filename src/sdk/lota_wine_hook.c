@@ -34,6 +34,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <poll.h>
+#include <sys/eventfd.h>
 #include <sys/mman.h>
 #include <sys/stat.h>
 #include <sys/statvfs.h>
@@ -61,6 +63,7 @@ enum hook_log_level {
 static struct {
 	struct lota_client *client;
 	pthread_t thread;
+	int wake_fd;
 	atomic_int running;
 	atomic_int thread_started;
 	int log_level;
@@ -1259,6 +1262,20 @@ static bool hook_poll_failed(int ret)
 /* flags change rarely; every attestation round moves counts and validity */
 #define HOOK_EVENT_MASK (LOTA_EVENT_STATUS | LOTA_EVENT_ATTEST)
 
+/* Return: 1 if @fd is readable, 0 on timeout, -1 once woken to stop. */
+static int hook_wait(int fd, int sec)
+{
+	struct pollfd p[2] = {
+		{ .fd = g_hook.wake_fd, .events = POLLIN },
+		{ .fd = fd, .events = POLLIN },
+	};
+	int ms = sec > INT_MAX / 1000 ? INT_MAX : sec * 1000;
+
+	if (poll(p, fd >= 0 ? 2 : 1, ms) <= 0)
+		return 0;
+	return p[0].revents ? -1 : 1;
+}
+
 static void hook_status_cb(const struct lota_status *status, uint32_t events,
 			   void *user_data)
 {
@@ -1309,7 +1326,7 @@ static void *refresh_thread_fn(void *arg)
 
 				LOG_DBG("retrying in %ds", g_hook.refresh_sec);
 				hook_offline_publish(refused);
-				sleep(g_hook.refresh_sec);
+				hook_wait(-1, g_hook.refresh_sec);
 				continue;
 			}
 			hook_offline_clear();
@@ -1329,9 +1346,14 @@ static void *refresh_thread_fn(void *arg)
 		hook_register_self();
 
 		if (subscribed) {
-			ret = lota_poll_events(g_hook.client, 5000);
+			ret = hook_wait(lota_get_fd(g_hook.client), 5);
+			if (ret > 0)
+				ret = lota_poll_events(g_hook.client, 0);
+			else
+				ret = LOTA_OK;
 		} else {
-			sleep(g_hook.refresh_sec);
+			if (hook_wait(-1, g_hook.refresh_sec) < 0)
+				continue;
 			refresh_once();
 			ret = g_hook.client ? LOTA_OK : LOTA_ERR_NOT_CONNECTED;
 		}
@@ -1347,7 +1369,7 @@ static void *refresh_thread_fn(void *arg)
 			subscribed = false;
 			atomic_store(&g_hook.evidence_written, 0);
 			/* avoid tight loop on persistent failure */
-			sleep(1);
+			hook_wait(-1, 1);
 		} else if (hook_poll_failed(ret)) {
 			LOG_DBG("poll error: %s", lota_strerror(ret));
 		}
@@ -1430,6 +1452,12 @@ __attribute__((constructor)) static void lota_wine_hook_init(void)
 	 * retries every refresh_sec while the agent is unreachable.
 	 * The constructor does no agent I/O.
 	 */
+	g_hook.wake_fd = eventfd(0, EFD_CLOEXEC);
+	if (g_hook.wake_fd < 0) {
+		LOG_ERR("eventfd: %s", strerror(errno));
+		return;
+	}
+
 	g_hook.running = 1;
 	if (pthread_create(&g_hook.thread, NULL, refresh_thread_fn, NULL) !=
 	    0) {
@@ -1455,6 +1483,7 @@ __attribute__((destructor)) static void lota_wine_hook_fini(void)
 	g_hook.running = 0;
 
 	if (g_hook.thread_started) {
+		eventfd_write(g_hook.wake_fd, 1);
 		pthread_join(g_hook.thread, NULL);
 		g_hook.thread_started = 0;
 	}

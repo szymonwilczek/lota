@@ -60,6 +60,7 @@ static char token_path[PATH_MAX];
 static char evidence_path[PATH_MAX];
 static char profile_path[PATH_MAX];
 static char log_path[PATH_MAX];
+static char exit_dir[96];
 
 /* Mock agent */
 
@@ -401,6 +402,44 @@ static int wait_for_file(const char *path, int timeout_sec)
 	return -1;
 }
 
+/*
+ * A child with an active hook exits once its token is out.
+ * Return: the milliseconds from the token to the child's end, or -1.
+ */
+static long run_exit_after_token(void)
+{
+	char token[PATH_MAX];
+	struct timespec t0, t1;
+	pid_t pid;
+
+	snprintf(token, sizeof(token), "%s/%s", exit_dir, LOTA_HOOK_TOKEN_FILE);
+
+	fflush(NULL);
+	pid = fork();
+	if (pid < 0)
+		return -1;
+	if (pid == 0) {
+		if (load_hook(exit_dir, TITLE_PUBLISHER, "silent") != 0)
+			_exit(93);
+		if (wait_for_file(token, 10) < 0)
+			_exit(94);
+		/* lets the refresh thread reach its wait for events */
+		usleep(300000);
+		exit(0);
+	}
+	if (wait_for_file(token, 10) < 0) {
+		kill(pid, SIGKILL);
+		waitpid(pid, NULL, 0);
+		return -1;
+	}
+	clock_gettime(CLOCK_MONOTONIC, &t0);
+	if (waitpid(pid, NULL, 0) < 0)
+		return -1;
+	clock_gettime(CLOCK_MONOTONIC, &t1);
+	return (t1.tv_sec - t0.tv_sec) * 1000 +
+	       (t1.tv_nsec - t0.tv_nsec) / 1000000;
+}
+
 /* Recorded identity as lowercase hex, or "" */
 static void read_profile(char *out, size_t out_sz)
 {
@@ -469,6 +508,22 @@ static void test_the_hook_exports_the_dir_it_chose(int child)
 
 	if (child != 0) {
 		printf("FAIL: child status %d\n", child);
+		return;
+	}
+	PASS();
+}
+
+/* a launch chain's helpers come and go; the hook must not hold them up */
+static void test_an_active_hook_does_not_delay_exit(long ms)
+{
+	TEST("an active hook lets its process exit at once");
+
+	if (ms < 0) {
+		FAIL("the exiting child never got a token");
+		return;
+	}
+	if (ms > 2000) {
+		printf("FAIL: exit took %ld ms\n", ms);
 		return;
 	}
 	PASS();
@@ -552,6 +607,7 @@ int main(void)
 	pid_t agent;
 	int failures;
 	int unusable;
+	long exit_ms;
 
 	printf("\n=== Wine hook publisher identity ===\n\n");
 
@@ -566,12 +622,14 @@ int main(void)
 	snprintf(profile_path, sizeof(profile_path), "%s/selected.profile",
 		 tmpdir);
 	snprintf(log_path, sizeof(log_path), "%s/unnamed.log", tmpdir);
+	snprintf(exit_dir, sizeof(exit_dir), "%s/exit", tmpdir);
 	snprintf(token_path, sizeof(token_path), "%s/%s", named_dir,
 		 LOTA_HOOK_TOKEN_FILE);
 	snprintf(evidence_path, sizeof(evidence_path), "%s/%s", named_dir,
 		 LOTA_HOOK_BOOT_EVIDENCE_FILE);
 
-	if (mkdir(named_dir, 0700) != 0 || mkdir(unnamed_dir, 0700) != 0) {
+	if (mkdir(named_dir, 0700) != 0 || mkdir(unnamed_dir, 0700) != 0 ||
+	    mkdir(exit_dir, 0700) != 0) {
 		perror("mkdir");
 		return 1;
 	}
@@ -582,6 +640,7 @@ int main(void)
 		return 2;
 	}
 	unusable = run_unusable_token_dir();
+	exit_ms = run_exit_after_token();
 
 	if (run_unnamed_publisher() != 0) {
 		printf("  cannot drive the unnamed-publisher launch: %s\n",
@@ -605,6 +664,7 @@ int main(void)
 	test_the_evidence_lands_next_to_the_token();
 	test_the_refusal_reaches_the_player_s_log();
 	test_the_hook_exports_the_dir_it_chose(unusable);
+	test_an_active_hook_does_not_delay_exit(exit_ms);
 
 	kill(agent, SIGKILL);
 	waitpid(agent, NULL, 0);
