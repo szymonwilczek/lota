@@ -138,9 +138,9 @@ install: all
 	@echo "  3. Create config in /etc/lota/"
 	@echo "  4. Run: restorecon -Rv /usr/bin/lota-agent /usr/lib/lota /etc/lota"
 	@echo ""
-	@echo "Tunables (adjust with setsebool, current defaults shown):"
+	@echo "Tunables (adjust with setsebool):"
 	@for bool in $(TUNABLES); do \
-		echo "  $$bool"; \
+		echo "  $$(getsebool $$bool)"; \
 	done
 
 .PHONY: uninstall
