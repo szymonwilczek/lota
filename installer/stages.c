@@ -19,6 +19,7 @@
 #include "probe.h"
 #include "run.h"
 #include "ui.h"
+#include "../include/lota_secure_boot.h"
 #include "../src/agent/policy_pubkey.h"
 #include "../src/agent/profile.h"
 
@@ -106,8 +107,18 @@ static enum stage_state st_preflight_probe(struct install_ctx *ctx, char *note,
 				 "state, so a host without it cannot attest.");
 		return STAGE_BLOCKED;
 	}
-	if (sb == 0) {
+	if (sb == LOTA_SECURE_BOOT_OFF || sb == LOTA_SECURE_BOOT_SETUP_MODE) {
 		probe_secureboot_guidance(host_is_virtual(), note, cap);
+		return STAGE_BLOCKED;
+	}
+	if (sb == LOTA_SECURE_BOOT_SHIM_INSECURE) {
+		snprintf(note, cap,
+			 "Secure Boot is on in the firmware, but shim "
+			 "validation is disabled (MokSBStateRT), so the "
+			 "kernel boots as if Secure Boot were off. Run "
+			 "'mokutil --enable-validation', reboot, confirm "
+			 "the request in MokManager, and re-run "
+			 "lota-install.");
 		return STAGE_BLOCKED;
 	}
 	if (sb < 0) {
@@ -552,7 +563,7 @@ static void booted_floor(struct probe_floor *st)
 {
 	char cmdline[4096];
 
-	st->secureboot = probe_secureboot() == 1;
+	st->secureboot = probe_secureboot() == LOTA_SECURE_BOOT_ON;
 	if (probe_read_text("/proc/cmdline", cmdline, sizeof(cmdline)) < 0)
 		cmdline[0] = '\0';
 	/* a kernel without appraisal has no mode to set */
@@ -641,7 +652,7 @@ static enum stage_state st_ima_scope_probe(struct install_ctx *ctx, char *note,
 	scope.is_root = geteuid() == 0;
 	scope.scope = probe_ima_policy_scope(PROBE_IMA_POLICY_PATH,
 					     &scope.policy_signed);
-	scope.secureboot = probe_secureboot() == 1;
+	scope.secureboot = probe_secureboot() == LOTA_SECURE_BOOT_ON;
 	scope.no_appraisal = probe_ima_appraise_built() == 0;
 	scope.agent_signed = probe_file_ima_signed(PATH_AGENT_BIN) == 1;
 

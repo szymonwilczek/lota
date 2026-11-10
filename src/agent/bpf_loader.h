@@ -375,23 +375,10 @@ int bpf_loader_ima_appraisal_active(const char *cmdline_path,
 				    const char *policy_path, int secureboot);
 
 /**
- * bpf_loader_secure_boot_judge() - Secure Boot state from two efivarfs reads.
- * @sb: SecureBoot variable, 4 bytes of attributes then the value.
- * @sb_len: Bytes read into @sb, or a negative errno.
- * @mok: shim's MokSBStateRT variable, same layout.
- * @mok_len: Bytes read into @mok, or a negative errno.
- *
- * Return: 0 when SecureBoot is 1 and MokSBStateRT does not put shim in
- * insecure mode, -EPERM when either says off, -EIO for a short @sb,
- * or @sb_len.
- */
-int bpf_loader_secure_boot_judge(const uint8_t *sb, ssize_t sb_len,
-				 const uint8_t *mok, ssize_t mok_len);
-
-/**
  * bpf_loader_secure_boot_enabled() - Check the UEFI Secure Boot state.
  *
- * Return: bpf_loader_secure_boot_judge() over the efivarfs variables.
+ * Return: 0 when lota_secure_boot_read() finds Secure Boot on, -EPERM for
+ * any other state, or its negative errno.
  */
 int bpf_loader_secure_boot_enabled(void);
 

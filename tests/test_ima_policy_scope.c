@@ -18,12 +18,14 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
 
 #include "test.h"
 #include "../include/lota_ima_appraise.h"
 #include "../include/lota_ima_policy_scope.h"
+#include "../include/lota_secure_boot.h"
 #include "../src/agent/bpf_loader.h"
 
 static char cmdline_path[64];
@@ -291,50 +293,83 @@ static void test_secureboot_ignores_the_cmdline_mode(void)
 		PASS();
 }
 
-/*
- * What an unappraised kernel costs, which is not the same on every host.
- * The agent starts on one that binds its binary in the kernel and says so in
- * the token; on a host where the binary's only claim is a signature nobody
- * appraises, the same policy is fatal.
- */
+/* a volatile efivar holding @value */
+static void write_efivar(const char *path, uint8_t value)
+{
+	const uint8_t var[5] = { 0x06, 0, 0, 0, value };
+	int fd = open(path, O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0600);
+
+	if (fd < 0)
+		return;
+	if (write(fd, var, sizeof(var)) != (ssize_t)sizeof(var))
+		fprintf(stderr, "short write to %s\n", path);
+	close(fd);
+}
+
+/* each efivar combination as the EFI stub judges it */
 static void test_secure_boot_judge(void)
 {
-	static const uint8_t sb_on[5] = { 0x06, 0, 0, 0, 1 };
-	static const uint8_t sb_off[5] = { 0x06, 0, 0, 0, 0 };
-	static const uint8_t mok_nv[5] = { 0x07, 0, 0, 0, 1 };
-	static const uint8_t mok_rt[5] = { 0x06, 0, 0, 0, 1 };
-	static const uint8_t mok_rt_zero[5] = { 0x06, 0, 0, 0, 0 };
+	static const uint8_t on[5] = { 0x06, 0, 0, 0, 1 };
+	static const uint8_t off[5] = { 0x06, 0, 0, 0, 0 };
+	static const uint8_t nv_on[5] = { 0x07, 0, 0, 0, 1 };
+	static const struct {
+		const uint8_t *sb, *setup, *mok;
+		ssize_t sb_len, setup_len, mok_len;
+		int want;
+	} cases[] = {
+		{ on, NULL, NULL, 5, -ENOENT, -ENOENT, LOTA_SECURE_BOOT_ON },
+		{ on, off, off, 5, 5, 5, LOTA_SECURE_BOOT_ON },
+		{ on, on, NULL, 5, 5, -ENOENT, LOTA_SECURE_BOOT_SETUP_MODE },
+		{ on, on, NULL, 5, 4, -ENOENT, LOTA_SECURE_BOOT_ON },
+		{ on, off, on, 5, 5, 5, LOTA_SECURE_BOOT_SHIM_INSECURE },
+		{ on, off, nv_on, 5, 5, 5, LOTA_SECURE_BOOT_ON },
+		{ on, off, on, 5, 5, 4, LOTA_SECURE_BOOT_ON },
+		{ on, on, on, 5, 5, 5, LOTA_SECURE_BOOT_SETUP_MODE },
+		{ off, on, on, 5, 5, 5, LOTA_SECURE_BOOT_OFF },
+		{ on, NULL, NULL, 4, -ENOENT, -ENOENT, -EIO },
+		{ NULL, NULL, NULL, -ENOENT, -ENOENT, -ENOENT, -ENOENT },
+	};
+	char dir[] = "/tmp/lota-efivars-XXXXXX";
+	char path[128];
+	int bad = -1;
 
-	TEST("SecureBoot=1 without MokSBStateRT is on");
-	if (bpf_loader_secure_boot_judge(sb_on, 5, NULL, -ENOENT) != 0)
-		FAIL("a missing shim variable turned it off");
+	TEST("SecureBoot, SetupMode and MokSBStateRT read as the stub does");
+	for (size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); i++) {
+		if (lota_secure_boot_judge(cases[i].sb, cases[i].sb_len,
+					   cases[i].setup, cases[i].setup_len,
+					   cases[i].mok,
+					   cases[i].mok_len) != cases[i].want) {
+			bad = (int)i;
+			break;
+		}
+	}
+	if (bad >= 0)
+		FAIL("an efivar combination was judged wrong");
 	else
 		PASS();
 
-	TEST("a NON_VOLATILE MokSBStateRT=1 is ignored, as by the kernel");
-	if (bpf_loader_secure_boot_judge(sb_on, 5, mok_nv, 5) != 0)
-		FAIL("a non-volatile variable turned it off");
-	else
-		PASS();
-
-	TEST("a volatile MokSBStateRT=1 is shim's insecure mode");
-	if (bpf_loader_secure_boot_judge(sb_on, 5, mok_rt, 5) != -EPERM)
-		FAIL("insecure mode read as on");
-	else if (bpf_loader_secure_boot_judge(sb_on, 5, mok_rt_zero, 5) != 0)
-		FAIL("MokSBStateRT=0 turned it off");
-	else if (bpf_loader_secure_boot_judge(sb_on, 5, mok_rt, 4) != 0)
-		FAIL("a short shim variable turned it off");
-	else
-		PASS();
-
-	TEST("SecureBoot=0, short or unread is not on");
-	if (bpf_loader_secure_boot_judge(sb_off, 5, NULL, -ENOENT) != -EPERM ||
-	    bpf_loader_secure_boot_judge(sb_on, 4, NULL, -ENOENT) != -EIO ||
-	    bpf_loader_secure_boot_judge(sb_on, -ENOENT, NULL, -ENOENT) !=
-		    -ENOENT)
-		FAIL("the SecureBoot variable was misread");
-	else
-		PASS();
+	TEST("the state is read from an efivarfs directory");
+	if (!mkdtemp(dir)) {
+		FAIL("mkdtemp");
+		return;
+	}
+	snprintf(path, sizeof(path), "%s/%s", dir, LOTA_EFIVAR_SECURE_BOOT);
+	write_efivar(path, 1);
+	if (lota_secure_boot_read(dir) != LOTA_SECURE_BOOT_ON) {
+		FAIL("SecureBoot=1 alone was not on");
+	} else {
+		snprintf(path, sizeof(path), "%s/%s", dir,
+			 LOTA_EFIVAR_SETUP_MODE);
+		write_efivar(path, 1);
+		if (lota_secure_boot_read(dir) != LOTA_SECURE_BOOT_SETUP_MODE)
+			FAIL("SetupMode=1 was not read");
+		else
+			PASS();
+		unlink(path);
+	}
+	snprintf(path, sizeof(path), "%s/%s", dir, LOTA_EFIVAR_SECURE_BOOT);
+	unlink(path);
+	rmdir(dir);
 }
 
 /* each cmdline as the kernel splits and matches it */

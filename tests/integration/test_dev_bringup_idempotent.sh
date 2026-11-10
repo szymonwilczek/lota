@@ -165,6 +165,7 @@ CMDLINE="$ROOT/proc/cmdline"
 EFIVARS="$ROOT/sys/firmware/efi/efivars"
 SB_VAR="$EFIVARS/SecureBoot-8be4df61-93ca-11d2-aa0d-00e098032b8c"
 MOK_VAR="$EFIVARS/MokSBStateRT-605dab50-e046-4300-abb6-3dd810dd8b23"
+SETUP_VAR="$EFIVARS/SetupMode-8be4df61-93ca-11d2-aa0d-00e098032b8c"
 mkdir -p "$(dirname "$IMA_RUNTIME")" "$(dirname "$CMDLINE")" "$EFIVARS"
 no_exec_rules() {
     printf '%s\n' 'dont_appraise fsmagic=0x9fa0' \
@@ -198,7 +199,10 @@ printf '\x06\x00\x00\x00\x01' >"$SB_VAR"
 check "Secure Boot keeps enforce whatever ima_appraise= says" refuses_policy
 printf '\x06\x00\x00\x00\x01' >"$MOK_VAR"
 check "shim's insecure mode leaves ima_appraise= in force" loads_policy
-rm -f "$SB_VAR" "$MOK_VAR"
+rm -f "$MOK_VAR"
+printf '\x06\x00\x00\x00\x01' >"$SETUP_VAR"
+check "setup mode leaves ima_appraise= in force" loads_policy
+rm -f "$SB_VAR" "$MOK_VAR" "$SETUP_VAR"
 
 no_exec_rules
 ima_out=$(run_bringup) || true

@@ -191,10 +191,10 @@ int probe_firmware_is_uefi(void);
 int probe_firmware_is_uefi_at(const char *dir);
 
 /**
- * probe_secureboot() - Read the SecureBoot variable.
+ * probe_secureboot() - lota_secure_boot_read() on the booted host.
  *
- * Return: 1 when enabled, 0 when not, -errno on read failure (-ENOENT when
- * the variable is absent).
+ * Return: as for lota_secure_boot_read(), -ENOENT when the SecureBoot
+ * variable is absent.
  */
 int probe_secureboot(void);
 
@@ -290,7 +290,7 @@ int probe_ima_appraise_built(void);
 /**
  * probe_ima_mode_blocking() - Nonzero @secureboot, or a cmdline that passes
  * probe_cmdline_ima_ok().
- * @secureboot: probe_secureboot() result.
+ * @secureboot: nonzero when probe_secureboot() returned LOTA_SECURE_BOOT_ON.
  * @cmdline:    kernel command line.
  *
  * Return: 1 when @secureboot is nonzero or @cmdline passes

@@ -72,6 +72,7 @@ IMA_POLICY_RUNTIME="$BRINGUP_ROOT/sys/kernel/security/ima/policy"
 CMDLINE="$BRINGUP_ROOT/proc/cmdline"
 EFIVARS="$BRINGUP_ROOT/sys/firmware/efi/efivars"
 SB_VAR="SecureBoot-8be4df61-93ca-11d2-aa0d-00e098032b8c"
+SETUP_VAR="SetupMode-8be4df61-93ca-11d2-aa0d-00e098032b8c"
 MOK_VAR="MokSBStateRT-605dab50-e046-4300-abb6-3dd810dd8b23"
 
 info() { printf '[lota-dev-bringup] %s\n' "$*"; }
@@ -163,11 +164,13 @@ efivar_bytes() {
     od -An -tu1 -v "$EFIVARS/$1" 2>/dev/null | tr -s ' \n' ' '
 }
 
-# bpf_loader_secure_boot_judge(): SecureBoot=1, shim not in insecure mode
+# lota_secure_boot_judge(): SecureBoot=1, not in setup mode, shim validating
 secure_boot_on() {
-    local -a sb mok
+    local -a sb setup mok
     read -ra sb <<<"$(efivar_bytes "$SB_VAR")"
     [[ ${#sb[@]} -ge 5 && ${sb[4]} -eq 1 ]] || return 1
+    read -ra setup <<<"$(efivar_bytes "$SETUP_VAR")"
+    [[ ${#setup[@]} -ge 5 && ${setup[4]} -eq 1 ]] && return 1
     read -ra mok <<<"$(efivar_bytes "$MOK_VAR")"
     ! [[ ${#mok[@]} -ge 5 && $((mok[0] & 1)) -eq 0 && ${mok[4]} -eq 1 ]]
 }

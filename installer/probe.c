@@ -26,6 +26,7 @@
 #include "../include/lota_ima_appraise.h"
 #include "../include/lota_ima_policy_scope.h"
 #include "../include/lota_ima_xattr.h"
+#include "../include/lota_secure_boot.h"
 
 #include <openssl/evp.h>
 #include <openssl/x509.h>
@@ -172,7 +173,6 @@ int probe_file_ima_signed(const char *path)
 #define EFI_GLOBAL_GUID "8be4df61-93ca-11d2-aa0d-00e098032b8c"
 #define EFI_FIRMWARE_DIR "/sys/firmware/efi"
 #define EFIVARS_DIR "/sys/firmware/efi/efivars/"
-#define SECUREBOOT_EFIVAR EFIVARS_DIR "SecureBoot-" EFI_GLOBAL_GUID
 #define SETUPMODE_EFIVAR EFIVARS_DIR "SetupMode-" EFI_GLOBAL_GUID
 #define OSINDICATIONS_SUPPORTED_EFIVAR \
 	EFIVARS_DIR "OsIndicationsSupported-" EFI_GLOBAL_GUID
@@ -247,7 +247,7 @@ int probe_firmware_is_uefi(void)
 
 int probe_secureboot(void)
 {
-	return probe_efivar_flag_at(SECUREBOOT_EFIVAR);
+	return lota_secure_boot_read(LOTA_EFIVARS_DIR);
 }
 
 int probe_secureboot_setup_mode(void)
