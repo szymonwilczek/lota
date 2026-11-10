@@ -920,6 +920,33 @@ static void test_installer_probe_asks_about_ports(void)
 }
 
 /*
+ * semanage port -a on a port another type names writes a local record that
+ * shadows that type for every domain, so apply labels only what the probe
+ * reports as unnamed.
+ */
+static void test_installer_leaves_a_named_port_alone(void)
+{
+	static char src[262144];
+	const char *start, *end, *call, *add;
+
+	TEST("installer: the SELinux stage leaves a port a type names alone");
+
+	if (!slurp_shipped("installer/stages.c", src, sizeof(src))) {
+		FAIL("could not open installer/stages.c");
+		return;
+	}
+	start = strstr(src, "static int st_selinux_apply(");
+	end = start ? strstr(start, "\n}\n") : NULL;
+	call = start ? strstr(start, "probe_port_needs_label(") : NULL;
+	add = start ? strstr(start, "\"lota_port_t\"") : NULL;
+	if (!end || !add || add > end || !call || call > end) {
+		FAIL("apply relabels a port another type already names");
+		return;
+	}
+	PASS();
+}
+
+/*
  * SECLABEL{selinux} is applied when udev adds the device, so a trigger that
  * sends the default change event re-runs the rules and moves no label.
  * The step reports success and leaves both nodes where they were.
@@ -1231,6 +1258,7 @@ int main(void)
 	test_agent_unit_skips_userdb();
 	test_agent_unit_outwaits_the_shutdown();
 	test_installer_probe_asks_about_ports();
+	test_installer_leaves_a_named_port_alone();
 	test_installer_relabel_reapplies_the_device_labels();
 	test_static_cli_is_built_without_cgo();
 	test_shared_key_refusal_survives_several_publishers();
