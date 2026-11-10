@@ -656,6 +656,50 @@ static void test_selinux_agent_reads_filesystem_types(void)
 }
 
 /*
+ * The agent reads no kernel symbol table: every ksym of the BPF object
+ * resolves through BTF.
+ */
+static void test_selinux_agent_skips_the_symbol_table(void)
+{
+	static char policy[65536];
+
+	TEST("selinux: the agent gets no read on the kernel symbol table");
+
+	if (!slurp_shipped("selinux/lota.te", policy, sizeof(policy))) {
+		FAIL("could not read selinux/lota.te");
+		return;
+	}
+	if (strstr(policy, "files_read_all_files(lota_agent_t)") ||
+	    strstr(policy, "file_type:file") ||
+	    strstr(policy, "system_map_t:file") ||
+	    !strstr(policy, "{ file_type -shadow_t -system_map_t }:file")) {
+		FAIL("lota_agent_t may read /proc/kallsyms and System.map");
+		return;
+	}
+	PASS();
+}
+
+/* no title maps /etc/shadow, and the agent reads it nowhere else */
+static void test_selinux_agent_skips_shadow(void)
+{
+	static char policy[65536];
+
+	TEST("selinux: the agent gets no read on the shadow file");
+
+	if (!slurp_shipped("selinux/lota.te", policy, sizeof(policy))) {
+		FAIL("could not read selinux/lota.te");
+		return;
+	}
+	if (strstr(policy, "auth_read_shadow") ||
+	    strstr(policy, "shadow_t:file") ||
+	    !strstr(policy, "{ file_type -shadow_t -system_map_t }:file")) {
+		FAIL("lota_agent_t may read /etc/shadow");
+		return;
+	}
+	PASS();
+}
+
+/*
  * A client stats the socket before it connects, so write alone leaves it with
  * EACCES on the system socket.
  */
@@ -1249,8 +1293,10 @@ int main(void)
 	test_selinux_container_listener_is_shipped();
 	test_selinux_gaming_client_reaches_container_socket();
 	test_selinux_status_client_stats_socket();
+	test_selinux_agent_skips_shadow();
 	test_selinux_agent_reaches_user_namespaces();
 	test_selinux_agent_reads_filesystem_types();
+	test_selinux_agent_skips_the_symbol_table();
 	test_installer_labels_the_config_directory();
 	test_upgrade_reloads_the_selinux_module();
 	test_both_hooks_drive_bringup();
