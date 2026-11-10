@@ -122,8 +122,10 @@ check "the root line is classed as a trust anchor" \
       test "$(class_of "$root_pin" "$out")" = "root"
 check "the fetched intermediate is classed as path material" \
       test "$(class_of "$int_pin" "$out")" = "intermediate"
-check "every drafted line names where it was fetched from" \
-      bash -c "! grep -q 'REPLACE_WITH_VENDOR_PUBLISHED_URL' <<<'$out'"
+check "no drafted line names an http URL the update tool refuses" \
+      bash -c "! grep -q 'http://' <<<'$out'"
+check "a certificate fetched over http leaves its URL to the operator" \
+      grep -q "$int_pin .* REPLACE_WITH_VENDOR_PUBLISHED_URL" <<<"$out"
 
 # A certificate the chip carries is supplied with the enrollment request,
 # so pinning it is redundant: the tool must climb through it without drafting
