@@ -400,6 +400,7 @@ static int parse_log_level(const char *s)
 static int token_dir_candidate(int n)
 {
 	const char *env;
+	size_t len;
 
 	switch (n) {
 	case 0:
@@ -407,6 +408,9 @@ static int token_dir_candidate(int n)
 		if (!env || !env[0])
 			return -ENOENT;
 		snprintf(g_hook.token_dir, sizeof(g_hook.token_dir), "%s", env);
+		len = strlen(g_hook.token_dir);
+		while (len > 1 && g_hook.token_dir[len - 1] == '/')
+			g_hook.token_dir[--len] = '\0';
 		return 0;
 	case 1:
 		env = getenv("XDG_RUNTIME_DIR");

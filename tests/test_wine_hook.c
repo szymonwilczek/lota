@@ -476,6 +476,42 @@ static void test_ensure_token_dir_rejects_symlink(void)
 	PASS();
 }
 
+/* a trailing slash makes open() follow the link despite O_NOFOLLOW */
+static void test_token_dir_override_trailing_slash_symlink(void)
+{
+	char target[sizeof(g_hook.token_dir)];
+	char linkpath[sizeof(g_hook.token_dir)];
+	char env[sizeof(g_hook.token_dir) + 2];
+	int ret;
+
+	TEST("a token dir override with a trailing slash is still no symlink");
+
+	snprintf(target, sizeof(target), "%s/slash_real", tmpdir);
+	snprintf(linkpath, sizeof(linkpath), "%s/slash_link", tmpdir);
+	if (mkdir(target, 0700) != 0 || symlink(target, linkpath) != 0) {
+		FAIL("setup");
+		return;
+	}
+	snprintf(env, sizeof(env), "%s//", linkpath);
+	setenv("LOTA_HOOK_TOKEN_DIR", env, 1);
+
+	ret = token_dir_candidate(0);
+	unsetenv("LOTA_HOOK_TOKEN_DIR");
+	if (ret != 0) {
+		FAIL("the override was not offered");
+		return;
+	}
+	g_hook.log_level = HOOK_LOG_SILENT;
+	ret = ensure_token_dir(NULL);
+	g_hook.log_level = HOOK_LOG_WARN;
+
+	if (ret != -ELOOP && ret != -ENOTDIR) {
+		FAIL("the symlink was followed");
+		return;
+	}
+	PASS();
+}
+
 static void test_ensure_token_dir_existing_mode_tightened(void)
 {
 	struct stat st;
@@ -2418,6 +2454,7 @@ int main(void)
 	test_ensure_token_dir_exists();
 	test_ensure_token_dir_not_a_dir();
 	test_ensure_token_dir_rejects_symlink();
+	test_token_dir_override_trailing_slash_symlink();
 	test_ensure_token_dir_existing_mode_tightened();
 	test_a_repaired_token_dir_mode_is_reported();
 	test_an_untouched_token_dir_reports_no_repair();
