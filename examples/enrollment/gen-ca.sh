@@ -4,8 +4,9 @@
 #
 # Writes into $1 (default ./ca) the attestation CA's key and certificate,
 # its device-pseudonym secret and its TLS listener key and certificate.
-# A pair whose key exists is skipped with its certificate, present or not,
-# and an existing pseudonym.key is kept. The EK manufacturer roots are not
+# An existing key is kept and a missing certificate is issued again from
+# it; a new key gets a new certificate, and a new ca.key a new tls.crt.
+# An existing pseudonym.key is kept. The EK manufacturer roots are not
 # made here.
 
 set -euo pipefail
@@ -17,11 +18,14 @@ umask 077
 
 if [ ! -f ca.key ]; then
     openssl genpkey -algorithm EC -pkeyopt ec_paramgen_curve:P-256 -out ca.key
+    rm -f ca.crt tls.crt
+fi
+if [ ! -f ca.crt ]; then
     openssl req -x509 -new -key ca.key -days 1825 -out ca.crt \
 	    -subj "/CN=lota-attest-ca" \
 	    -addext "basicConstraints=critical,CA:TRUE" \
 	    -addext "keyUsage=critical,keyCertSign,cRLSign"
-    echo "generated CA key + cert"
+    echo "generated CA cert"
 fi
 
 # The HMAC key of the device id over the EK modulus, with a named tenant
@@ -36,6 +40,9 @@ fi
 # can be replaced without moving any host to a new profile.
 if [ ! -f tls.key ]; then
     openssl genpkey -algorithm EC -pkeyopt ec_paramgen_curve:P-256 -out tls.key
+    rm -f tls.crt
+fi
+if [ ! -f tls.crt ]; then
     openssl req -new -key tls.key -out tls.csr -subj "/CN=lota-attest-ca"
     openssl x509 -req -in tls.csr -days 825 -sha256 \
 	    -CA ca.crt -CAkey ca.key -CAcreateserial -out tls.crt \
@@ -44,7 +51,7 @@ if [ ! -f tls.key ]; then
 			      "keyUsage=critical,digitalSignature,keyEncipherment" \
 			      "extendedKeyUsage=serverAuth")
     rm -f tls.csr
-    echo "generated server TLS key + cert, issued by ca.crt"
+    echo "generated server TLS cert, issued by ca.crt"
 fi
 
 echo

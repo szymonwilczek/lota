@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: MIT
 # Copyright (C) 2026 Szymon Wilczek
 #
-# What the shipped CA example hands an operator, driven through the script itself.
+# What the shipped CA examples hand an operator, driven through the scripts.
 #
 # The publisher a host answers to is the SHA-256 of the SubjectPublicKeyInfo of
 # whatever file --ca-cert names, and the agent verifies the CA server's TLS chain
@@ -14,6 +14,7 @@
 #
 # Requires:
 #   - examples/enrollment/gen-ca.sh
+#   - examples/mtls/gen-certs.sh
 #   - openssl
 #
 # Runs unprivileged and writes only into a temporary directory.
@@ -24,11 +25,14 @@ export LC_ALL=C
 
 REPO_DIR=$(cd "$(dirname "$0")/../.." && pwd)
 GEN_CA="$REPO_DIR/examples/enrollment/gen-ca.sh"
+GEN_CERTS="$REPO_DIR/examples/mtls/gen-certs.sh"
 
-if [[ ! -x "$GEN_CA" ]]; then
-    echo "[ca-material] missing artifact: $GEN_CA" >&2
-    exit 2
-fi
+for f in "$GEN_CA" "$GEN_CERTS"; do
+    if [[ ! -x "$f" ]]; then
+	echo "[ca-material] missing artifact: $f" >&2
+	exit 2
+    fi
+done
 if ! command -v openssl >/dev/null 2>&1; then
     echo "[ca-material] openssl not found" >&2
     exit 2
@@ -122,6 +126,36 @@ tls_before_rotation_differs() {
 }
 check "the listener has an identity of its own, which is not the anchor's" \
       tls_before_rotation_differs
+
+# A certificate lost next to its key is issued again from that key.
+lost_certs_come_back() {
+    rm -f "$CA_DIR/ca.crt" "$CA_DIR/tls.crt"
+    "$GEN_CA" "$CA_DIR" >/dev/null &&
+	test -s "$CA_DIR/ca.crt" &&
+	test "$(spki_id "$CA_DIR/ca.crt")" = "$before" &&
+	openssl verify -CAfile "$CA_DIR/ca.crt" "$CA_DIR/tls.crt" >/dev/null
+}
+check "a lost anchor and listener certificate come back from their keys" \
+      lost_certs_come_back
+
+# A single leaf is issued only from an existing provisioning CA.
+leaf_without_ca_refused() {
+    ! OUT_DIR="$WORK_DIR/mtls" "$GEN_CERTS" -server >/dev/null 2>&1 &&
+	test ! -e "$WORK_DIR/mtls/ca.key" &&
+	test ! -e "$WORK_DIR/mtls/server.crt"
+}
+check "gen-certs -server without ca.key is refused" leaf_without_ca_refused
+
+leaf_chains_to_existing_ca() {
+    OUT_DIR="$WORK_DIR/mtls" "$GEN_CERTS" >/dev/null 2>&1 &&
+	rm -f "$WORK_DIR/mtls/ca.crt" &&
+	OUT_DIR="$WORK_DIR/mtls" "$GEN_CERTS" -server >/dev/null 2>&1 &&
+	openssl verify -CAfile "$WORK_DIR/mtls/ca.crt" \
+		"$WORK_DIR/mtls/producer.crt" "$WORK_DIR/mtls/server.crt" \
+		>/dev/null
+}
+check "gen-certs -server reissues a lost ca.crt from ca.key" \
+      leaf_chains_to_existing_ca
 
 # What the script tells the operator to do with each file has to name
 # the anchor, since that is the file the identity may be bound to.
