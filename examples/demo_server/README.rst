@@ -53,10 +53,9 @@ Flags
 |                                  |                                    | the full-coverage flag  |
 |                                  |                                    | (see below)             |
 +----------------------------------+------------------------------------+-------------------------+
-| ``--require-kernel-appraisal``   | off                                | refuse a token from a   |
-|                                  |                                    | host whose kernel       |
-|                                  |                                    | appraises nothing       |
-|                                  |                                    | (see below)             |
+| ``--require-kernel-appraisal``   | off                                | refuse a token without  |
+|                                  |                                    | the kernel-appraisal    |
+|                                  |                                    | flag (see below)        |
 +----------------------------------+------------------------------------+-------------------------+
 | ``--tls-cert`` / ``--tls-key``   | (none)                             | PEM server keypair;     |
 |                                  |                                    | enables HTTPS           |

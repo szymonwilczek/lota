@@ -1379,7 +1379,7 @@ int install_self_check(struct install_ctx *ctx)
 
 		ui_kv(&ctx->ui, "Kernel integrity floor",
 		      floor_ok && !st.appraised ?
-			      "Satisfied (the kernel appraises nothing; every "
+			      "Satisfied (no exec appraisal LOTA counts; every "
 			      "token says so)" :
 		      floor_ok ? "Satisfied" :
 				 "NOT satisfied");

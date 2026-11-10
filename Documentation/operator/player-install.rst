@@ -181,10 +181,11 @@ What the stages do
    distribution or operator-supplied (see the production bring-up guide).
    Requires a reboot.
 #. **IMA appraisal scope** -- the previous stage sets the appraisal *mode*, and
-   the kernel applies that mode only to the rules its loaded policy carries. A
-   policy whose ``appraise`` rules reach no executable appraises nothing, so
-   this stage reads ``/sys/kernel/security/ima/policy`` and reports what the
-   kernel covers. It loads no rules of its own. An IMA rule cannot name a path,
+   the kernel applies that mode only to the rules its loaded policy carries.
+   Tokens say ``LOTA_FLAG_KERNEL_APPRAISAL`` only for an ``appraise`` rule on
+   ``BPRM_CHECK`` or one without ``func=``, so this stage reads
+   ``/sys/kernel/security/ima/policy`` and reports whether one is there. It
+   loads no rules of its own. An IMA rule cannot name a path,
    so the rule that appraises the agent appraises every executable it matches,
    and on a Secure Boot host that happens in ``enforce`` -- the kernel discards
    ``ima_appraise=`` there whatever the cmdline asks for -- which on a root

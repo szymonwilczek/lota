@@ -69,11 +69,11 @@ kernel in its default, ``enforce``.
 ``log`` and ``off`` do not block either, so none of them sets
 ``LOTA_FLAG_KERNEL_APPRAISAL``.
 
-Appraisal applies only to the ``func=`` rules the loaded policy contains, so a host
-booted ``ima_appraise=enforce`` whose policy carries no ``appraise func=BPRM_CHECK``
-rule appraises no executable at all.
-The agent reads ``/sys/kernel/security/ima/policy`` as well and counts
-appraisal only when a rule there reaches an exec.
+Appraisal applies only to the ``func=`` rules the loaded policy contains. The
+agent reads ``/sys/kernel/security/ima/policy`` as well and counts appraisal
+only for an ``appraise`` rule on ``BPRM_CHECK`` or one without ``func=``.
+``MMAP_CHECK`` appraises an ELF at exec but not a ``#!`` script, which only
+``BPRM_CHECK`` appraises, so it is not counted.
 
 .. code-block:: sh
 

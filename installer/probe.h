@@ -87,8 +87,8 @@ enum stage_state probe_ima_scope_stage(const struct probe_ima_scope *s,
 				       char *note, size_t cap);
 
 enum probe_ima_scope_state {
-	PROBE_IMA_SCOPE_EXEC = 0, /* a rule reaches an executable */
-	PROBE_IMA_SCOPE_NONE = 1, /* readable, and appraises no executable */
+	PROBE_IMA_SCOPE_EXEC = 0, /* appraise rule on BPRM_CHECK or no func= */
+	PROBE_IMA_SCOPE_NONE = 1, /* readable, and no such rule */
 };
 
 /**
