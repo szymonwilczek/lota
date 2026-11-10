@@ -112,6 +112,9 @@ func reanchorDecision(in ReanchorInputs) (verdict ReanchorVerdict, reason string
 			return ReanchorEscalate, "firmware version below vendor anti-rollback floor"
 		}
 		switch {
+		case !in.ESRTCapable:
+			// no baseline version to have moved forward from
+			verdict = ReanchorLFA
 		case in.CurrentESRT.FWVersion > in.BaselineESRTVersion:
 			verdict = ReanchorAllow
 		case in.CurrentESRT.FWVersion == in.BaselineESRTVersion:

@@ -135,6 +135,15 @@ func TestReanchorDecision(t *testing.T) {
 			want: ReanchorLFA,
 		},
 		{
+			name: "ESRT first appears = LFA",
+			in: ReanchorInputs{
+				BaselineEventLog: base,
+				CurrentParsed:    mustParse(base),
+				CurrentESRT:      esrt(785), ESRTCapable: false,
+			},
+			want: ReanchorLFA,
+		},
+		{
 			name: "ESRT disappeared after being capable = escalate",
 			in: ReanchorInputs{
 				BaselineEventLog: base,
