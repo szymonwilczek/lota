@@ -209,12 +209,16 @@ void print_usage(const char *prog, const char *default_bpf_path,
 	printf("                    certificate renewal)\n");
 	printf("  --attest-interval SECS\n");
 	printf("                    Continuous attestation interval in seconds\n");
-	printf("                    (default: 0=one-shot, else %d-%d; above "
-	       "%d\n",
-	       MIN_ATTEST_INTERVAL, MAX_ATTEST_INTERVAL, MAX_ATTEST_INTERVAL);
-	printf("                    the minted tokens outlive every relying "
-	       "party's\n");
-	printf("                    freshness window)\n");
+	printf("                    (%d-%d; default 0: one-shot with --server "
+	       "or the\n",
+	       MIN_ATTEST_INTERVAL, MAX_ATTEST_INTERVAL);
+	printf("                    file's server key, %d s with publishers or "
+	       "none\n",
+	       DEFAULT_ATTEST_INTERVAL);
+	printf("                    named; above %d the minted tokens outlive "
+	       "every\n",
+	       MAX_ATTEST_INTERVAL);
+	printf("                    relying party's freshness window)\n");
 	printf("  --server HOST     Verifier server address (default: "
 	       "none)\n");
 	printf("  --port PORT       Verifier server port (default: %d)\n",
