@@ -278,7 +278,7 @@ type bootBaselineRoad struct {
 // bootBaselineRoad resolves the policy roads; the caller checks the store.
 func (v *Verifier) bootBaselineRoad(tenant string, bootFacts *BootFacts) bootBaselineRoad {
 	if v.pcrVerifier.PolicyDeclaresBootPCRsForTenant(tenant) {
-		return bootBaselineRoad{allowedBy: "signed policy PCR0/1/7 pins"}
+		return bootBaselineRoad{allowedBy: "policy PCR0/1/7 pins"}
 	}
 	if v.pcrVerifier.PolicyRequiresSecureBootForTenant(tenant) &&
 		SecureBootAnchored(bootFacts) {

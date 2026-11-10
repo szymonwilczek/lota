@@ -778,6 +778,24 @@ func TestVerify_AnchoredBootPinNamesItsAnchor(t *testing.T) {
 	}
 }
 
+// The pin road does not claim a signature: --policy-pubkey is optional.
+func TestBootBaselineRoad_PolicyPinsClaimNoSignature(t *testing.T) {
+	v := NewVerifier(DefaultConfig(), newCertVerifier(t))
+	policy := &PCRPolicy{
+		Name:        "pinned",
+		PCRs:        map[int]string{0: "aa", 1: "bb", 7: "cc"},
+		AgentHashes: []string{"de"},
+	}
+	if err := v.AddPolicy(policy); err != nil {
+		t.Fatalf("AddPolicy: %v", err)
+	}
+
+	got := v.bootBaselineRoad("", nil).allowedBy
+	if got != "policy PCR0/1/7 pins" {
+		t.Fatalf("allowed_by = %q", got)
+	}
+}
+
 type pcr14RepinStore interface {
 	BaselineStorer
 	BootBaselineStorer
