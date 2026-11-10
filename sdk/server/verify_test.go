@@ -115,7 +115,8 @@ func TestSerializeParseRoundtrip(t *testing.T) {
 	signature := []byte("fake-signature-for-testing")
 
 	tok, err := SerializeToken(validUntil, flags, nonce,
-		TPMAlgRSASSA, 0x000B, 0x4001, policyDigest, runtimeDigest, 0, 0, nil, nil, attestData, signature)
+		TPMAlgRSASSA, 0x000B, 0x4001, policyDigest, runtimeDigest, 7, 0,
+		nil, nil, attestData, signature)
 	if err != nil {
 		t.Fatalf("SerializeToken: %v", err)
 	}
@@ -149,6 +150,10 @@ func TestSerializeParseRoundtrip(t *testing.T) {
 	}
 	if claims.SigAlg != TPMAlgRSASSA {
 		t.Errorf("SigAlg = 0x%04X, want 0x%04X", claims.SigAlg, TPMAlgRSASSA)
+	}
+	if claims.RuntimeProtectEpoch != 7 {
+		t.Errorf("RuntimeProtectEpoch = %d, want 7",
+			claims.RuntimeProtectEpoch)
 	}
 }
 

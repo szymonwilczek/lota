@@ -261,8 +261,7 @@ func tpmHashAlgToCryptoHash(hashAlg uint16) (crypto.Hash, error) {
 }
 
 // ParseToken decodes a token without verifying it, so its claims prove
-// nothing. PCRDigest is filled when the quote parses; RuntimeProtectEpoch is
-// left zero.
+// nothing. PCRDigest is filled when the quote parses.
 func ParseToken(tokenData []byte) (*Claims, error) {
 	hdr, err := parseWireHeader(tokenData)
 	if err != nil {
@@ -281,6 +280,7 @@ func ParseToken(tokenData []byte) (*Claims, error) {
 		PCRMask:              hdr.pcrMask,
 		PolicyDigest:         hdr.policy,
 		RuntimeProtectDigest: hdr.runtimeProtectDigest,
+		RuntimeProtectEpoch:  hdr.runtimeProtectEpoch,
 		ProtectPIDCount:      hdr.protectPIDCount,
 		StoppedMS:            hdr.stoppedMS,
 		SigAlg:               hdr.sigAlg,
