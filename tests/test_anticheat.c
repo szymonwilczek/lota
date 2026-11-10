@@ -12,7 +12,9 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/socket.h>
 #include <sys/stat.h>
+#include <sys/un.h>
 #include <sys/wait.h>
 #include <time.h>
 #include <unistd.h>
@@ -851,6 +853,62 @@ static void test_state_no_files(void)
 		lota_ac_shutdown(s);
 		return;
 	}
+	if (lota_ac_last_error() != LOTA_AC_ERR_NO_AGENT) {
+		FAIL("expected LOTA_AC_ERR_NO_AGENT");
+		lota_ac_shutdown(s);
+		return;
+	}
+	if (lota_ac_tick(s) != -ENOENT) {
+		FAIL("tick did not return -ENOENT");
+		lota_ac_shutdown(s);
+		return;
+	}
+	lota_ac_shutdown(s);
+	PASS();
+}
+
+static void test_state_malformed_snapshot(void)
+{
+	static const char junk[] = "not a snapshot";
+	char dir[512], path[600];
+	int fd;
+
+	TEST("state: unreadable snapshot -> ERROR, MALFORMED");
+	snprintf(dir, sizeof(dir), "%s/garbled", test_dir);
+	mkdir(dir, 0700);
+	snprintf(path, sizeof(path), "%s/%s", dir, LOTA_SNAPSHOT_FILE_NAME);
+	fd = open(path, O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0600);
+	if (fd < 0 ||
+	    write(fd, junk, sizeof(junk) - 1) != (ssize_t)(sizeof(junk) - 1)) {
+		if (fd >= 0)
+			close(fd);
+		FAIL("cannot write the snapshot");
+		return;
+	}
+	close(fd);
+
+	struct lota_ac_config cfg = {
+		.struct_size = sizeof(cfg),
+		.provider = LOTA_AC_PROVIDER_EAC,
+		.game_id = "test-garbled",
+		.token_dir = dir,
+	};
+	struct lota_ac_session *s = lota_ac_init(&cfg);
+	if (!s) {
+		FAIL("init failed");
+		return;
+	}
+	if (lota_ac_get_state(s) != LOTA_AC_STATE_ERROR ||
+	    lota_ac_last_error() != LOTA_AC_ERR_MALFORMED) {
+		FAIL("expected ERROR with LOTA_AC_ERR_MALFORMED");
+		lota_ac_shutdown(s);
+		return;
+	}
+	if (lota_ac_tick(s) != -EIO) {
+		FAIL("tick did not return -EIO");
+		lota_ac_shutdown(s);
+		return;
+	}
 	lota_ac_shutdown(s);
 	PASS();
 }
@@ -1471,6 +1529,54 @@ static void test_last_error_no_agent(void)
 	PASS();
 }
 
+/* the publisher is checked once connected; listening is enough */
+static void test_last_error_bad_publisher(void)
+{
+	struct sockaddr_un addr = { .sun_family = AF_UNIX };
+	struct lota_ac_session *s;
+	int fd;
+
+	TEST("last_error: a malformed publisher is an invalid argument");
+	if (snprintf(addr.sun_path, sizeof(addr.sun_path), "%s/pub.sock",
+		     test_dir) >= (int)sizeof(addr.sun_path)) {
+		FAIL("the socket path does not fit");
+		return;
+	}
+	unlink(addr.sun_path);
+	fd = socket(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0);
+	if (fd < 0 || bind(fd, (struct sockaddr *)&addr, sizeof(addr)) != 0 ||
+	    listen(fd, 1) != 0) {
+		FAIL("cannot listen on a unix socket");
+		if (fd >= 0)
+			close(fd);
+		return;
+	}
+
+	struct lota_ac_config cfg = {
+		.struct_size = sizeof(cfg),
+		.provider = LOTA_AC_PROVIDER_EAC,
+		.game_id = "test-direct",
+		.direct = 1,
+		.socket_path = addr.sun_path,
+		.publisher_profile = "zz",
+	};
+	s = lota_ac_init(&cfg);
+	close(fd);
+	unlink(addr.sun_path);
+
+	if (!s) {
+		FAIL("init returned NULL");
+		return;
+	}
+	if (lota_ac_last_error() != LOTA_AC_ERR_INVALID_ARG) {
+		FAIL("expected LOTA_AC_ERR_INVALID_ARG");
+		lota_ac_shutdown(s);
+		return;
+	}
+	lota_ac_shutdown(s);
+	PASS();
+}
+
 /*
  * A beat that cannot be produced says which half failed.
  * The heartbeat path has ten distinct -EIO returns, and the one word
@@ -1998,8 +2104,8 @@ static void test_integration_eac_detects_agent_death(void)
 		return;
 	}
 
-	if (lota_ac_tick(s) != 0) {
-		FAIL("tick reported error");
+	if (lota_ac_tick(s) != -ENOENT) {
+		FAIL("tick did not report the missing snapshot");
 		lota_ac_shutdown(s);
 		return;
 	}
@@ -2701,6 +2807,7 @@ int main(void)
 	test_state_required_flags();
 	test_state_required_flags_met();
 	test_state_no_files();
+	test_state_malformed_snapshot();
 
 	printf("\nHeartbeat Wire Format:\n");
 	test_heartbeat_game_id_hash_domain_separated();
@@ -2729,6 +2836,7 @@ int main(void)
 	printf("\nWhy a call failed:\n");
 	test_last_error_init_causes();
 	test_last_error_no_agent();
+	test_last_error_bad_publisher();
 	test_last_error_heartbeat_causes();
 	test_last_error_measure_helpers();
 	test_last_error_session_calls();

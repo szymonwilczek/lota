@@ -1117,6 +1117,8 @@ static int ac_error_from_connect(int connect_err)
 		return LOTA_AC_ERR_ACCESS_DENIED;
 	case LOTA_ERR_RATE_LIMITED:
 		return LOTA_AC_ERR_RATE_LIMITED;
+	case LOTA_ERR_INVALID_ARG:
+		return LOTA_AC_ERR_INVALID_ARG;
 	default:
 		return LOTA_AC_ERR_NO_AGENT;
 	}
@@ -1316,6 +1318,10 @@ int lota_ac_tick(struct lota_ac_session *session)
 			}
 			session->lota_flags = 0;
 			session->token_len = 0;
+			session->state = LOTA_AC_STATE_ERROR;
+			ac_fail(sret == -ENOENT ? LOTA_AC_ERR_NO_AGENT :
+						  LOTA_AC_ERR_MALFORMED);
+			return sret;
 		}
 	}
 

@@ -238,9 +238,11 @@ struct lota_ac_session;
  *
  * Direct mode connects to the agent, file mode locates the Wine hook directory.
  *
+ * A direct-mode session that found no agent never connects later: a host that
+ * gets ready takes a new session.
+ *
  * Return: The session, in LOTA_AC_STATE_ERROR if it got no verdict. NULL on
- * error. lota_ac_last_error() holds the reason, LOTA_AC_ERR_OK if the verdict
- * is missing because a snapshot could not be read.
+ * error. lota_ac_last_error() holds the reason.
  */
 struct lota_ac_session *lota_ac_init(const struct lota_ac_config *cfg);
 
