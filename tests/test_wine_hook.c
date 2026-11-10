@@ -2380,6 +2380,73 @@ static void test_lota_protect_refused_does_not_start(void)
 	PASS();
 }
 
+/* the thread asks again every cycle; the player's log hears it once */
+static void test_a_repeated_registration_refusal_warns_once(void)
+{
+	char logpath[PATH_MAX];
+	char line[256];
+	int saved, fd, warned = 0;
+	pid_t agent;
+	FILE *f;
+
+	TEST("a refused registration asked again warns once");
+
+	mock_protect_result = LOTA_IPC_ERR_ACCESS_DENIED;
+	agent = start_mock_agent();
+	mock_protect_result = LOTA_IPC_OK;
+	if (agent < 0) {
+		if (mock_errno_is_sandbox(mock_agent_errno)) {
+			SKIP("no unix socket in this sandbox");
+			return;
+		}
+		FAIL("mock agent did not start");
+		return;
+	}
+
+	hook_state_for_mock_agent("refused");
+	g_hook.client = hook_connect();
+	if (!g_hook.client) {
+		stop_mock_agent(agent);
+		FAIL("hook did not connect to the mock agent");
+		return;
+	}
+
+	snprintf(logpath, sizeof(logpath), "%s/refused.log", tmpdir);
+	fd = open(logpath, O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0600);
+	fflush(stderr);
+	saved = dup(STDERR_FILENO);
+	if (fd >= 0 && saved >= 0)
+		dup2(fd, STDERR_FILENO);
+	g_hook.log_level = HOOK_LOG_WARN;
+	for (int i = 0; i < 3; i++)
+		hook_register_self();
+	g_hook.log_level = HOOK_LOG_SILENT;
+	fflush(stderr);
+	if (saved >= 0) {
+		dup2(saved, STDERR_FILENO);
+		close(saved);
+	}
+	if (fd >= 0)
+		close(fd);
+
+	lota_disconnect(g_hook.client);
+	g_hook.client = NULL;
+	stop_mock_agent(agent);
+	atomic_store(&g_hook.protect_errno, 0);
+
+	f = fopen(logpath, "r");
+	while (f && fgets(line, sizeof(line), f))
+		warned += strstr(line, "lota_protect_self") != NULL;
+	if (f)
+		fclose(f);
+
+	if (warned != 1) {
+		printf("FAIL: %d warnings\n", warned);
+		return;
+	}
+	PASS();
+}
+
 /* no agent: the game starts, and the agent's absence is what reports it */
 static void test_lota_protect_without_agent_starts(void)
 {
@@ -2644,6 +2711,7 @@ int main(void)
 	/* lota-protect: protected before the program's first instruction */
 	test_lota_protect_protects_then_starts();
 	test_lota_protect_refused_does_not_start();
+	test_a_repeated_registration_refusal_warns_once();
 	test_lota_protect_without_agent_starts();
 
 	/* how the refresh thread reads a poll */

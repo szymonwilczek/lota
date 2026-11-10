@@ -82,6 +82,7 @@ static struct {
 	atomic_int offline_errno; /* the refusal already reported, negated */
 	atomic_int publisher_errno; /* the publisher refusal already reported */
 	atomic_int token_errno; /* the token refusal already reported */
+	atomic_int protect_errno; /* the registration refusal reported */
 	atomic_int self_protected;
 	atomic_int offline_published; /* HOOK_LOST_* published, or 0 */
 	atomic_int evidence_written; /* the evidence is on disk */
@@ -1109,7 +1110,10 @@ static void hook_register_self(void)
 
 	ret = lota_protect_self(g_hook.client);
 	if (ret != LOTA_OK) {
-		LOG_WRN("lota_protect_self: %s", lota_strerror(ret));
+		if (atomic_exchange(&g_hook.protect_errno, ret) == ret)
+			LOG_DBG("lota_protect_self: %s", lota_strerror(ret));
+		else
+			LOG_WRN("lota_protect_self: %s", lota_strerror(ret));
 		return;
 	}
 
