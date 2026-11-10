@@ -18,6 +18,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
 #include <unistd.h>
 
 #include "../src/agent/config.h"
@@ -387,6 +388,41 @@ int main(void)
 			CHECK(rc == 1, "the publisher is appended to the file");
 			CHECK(profiles_in_file(path) == 1,
 			      "the file the writer left holds the publisher");
+
+			/* the replacement keeps the live file's mode and owner,
+			 * and a stale replacement does not stand in the way */
+			{
+				struct lota_profile r = mkprofile(
+					"studio-r", "ca.studio-r.example",
+					"/etc/lota/studio-r.pem",
+					"verifier.studio-r.example");
+				struct lota_profile t = mkprofile(
+					"studio-t", "ca.studio-t.example",
+					"/etc/lota/studio-t.pem",
+					"verifier.studio-t.example");
+				struct stat st;
+
+				CHECK(chmod(path, 0600) == 0,
+				      "the live file is made 0600");
+				rc = config_profile_append(path, &r);
+				CHECK(rc == 1 && stat(path, &st) == 0 &&
+					      (st.st_mode & 07777) == 0600 &&
+					      st.st_uid == geteuid(),
+				      "the replaced file keeps 0600 and owner");
+
+				CHECK(write_file(tmp_path, "stale\n") == 0 &&
+					      chmod(tmp_path, 0664) == 0,
+				      "a stale 0664 .new is staged");
+				rc = config_profile_append(path, &t);
+				CHECK(rc == 1 && profiles_in_file(path) == 3,
+				      "a stale .new does not block it");
+
+				unlink(path);
+				rc = config_profile_append(path, &r);
+				CHECK(rc == 1 && stat(path, &st) == 0 &&
+					      (st.st_mode & 07777) == 0644,
+				      "a file created from nothing is 0644");
+			}
 
 			unlink(path);
 			unlink(tmp_path);

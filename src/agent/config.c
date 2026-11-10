@@ -1549,14 +1549,39 @@ int config_profile_append(const char *path, const struct lota_profile *p)
 		return -ENAMETOOLONG;
 	}
 
-	int tmp_flags = O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC;
+	struct stat live;
+	bool have_live = stat(path, &live) == 0;
+
+	if (!have_live && errno != ENOENT) {
+		ret = -errno;
+		free(updated);
+		return ret;
+	}
+	if (unlink(tmp_path) < 0 && errno != ENOENT) {
+		ret = -errno;
+		free(updated);
+		return ret;
+	}
+
+	int tmp_flags = O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC;
 #ifdef O_NOFOLLOW
 	tmp_flags |= O_NOFOLLOW;
 #endif
 
-	fd = open(tmp_path, tmp_flags, 0644);
+	fd = open(tmp_path, tmp_flags, 0600);
 	if (fd < 0) {
 		ret = -errno;
+		free(updated);
+		return ret;
+	}
+
+	ret = have_live ? fchown(fd, live.st_uid, live.st_gid) : 0;
+	if (ret == 0)
+		ret = fchmod(fd, have_live ? live.st_mode & 07777 : 0644);
+	if (ret < 0) {
+		ret = -errno;
+		close(fd);
+		unlink(tmp_path);
 		free(updated);
 		return ret;
 	}
