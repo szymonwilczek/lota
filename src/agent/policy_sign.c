@@ -176,7 +176,9 @@ int policy_sign_generate_keypair(const char *privkey_pem_path,
 		goto out;
 
 	{
-		int pk_fd = open(privkey_pem_path, O_WRONLY | O_CREAT | O_TRUNC,
+		int pk_fd = open(privkey_pem_path,
+				 O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW |
+					 O_CLOEXEC,
 				 0600);
 		if (pk_fd < 0) {
 			ret = -errno;
@@ -186,41 +188,54 @@ int policy_sign_generate_keypair(const char *privkey_pem_path,
 		if (!f) {
 			ret = -errno;
 			close(pk_fd);
-			goto out;
+			goto out_unlink;
 		}
 	}
 
 	if (!PEM_write_PrivateKey(f, pkey, NULL, NULL, 0, NULL, NULL)) {
 		fclose(f);
-		goto out;
+		goto out_unlink;
 	}
-	fclose(f);
+	if (fclose(f) != 0) {
+		ret = -errno;
+		goto out_unlink;
+	}
 	f = NULL;
 
 	{
-		int pub_fd = open(pubkey_pem_path, O_WRONLY | O_CREAT | O_TRUNC,
+		int pub_fd = open(pubkey_pem_path,
+				  O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW |
+					  O_CLOEXEC,
 				  0644);
 		if (pub_fd < 0) {
 			ret = -errno;
-			goto out;
+			goto out_unlink;
 		}
 		f = fdopen(pub_fd, "w");
 		if (!f) {
 			ret = -errno;
 			close(pub_fd);
-			goto out;
+			goto out_unlink_both;
 		}
 	}
 
 	if (!PEM_write_PUBKEY(f, pkey)) {
 		fclose(f);
-		goto out;
+		goto out_unlink_both;
 	}
-	fclose(f);
+	if (fclose(f) != 0) {
+		ret = -errno;
+		goto out_unlink_both;
+	}
 	f = NULL;
 
 	ret = 0;
+	goto out;
 
+out_unlink_both:
+	unlink(pubkey_pem_path);
+out_unlink:
+	unlink(privkey_pem_path);
 out:
 	EVP_PKEY_free(pkey);
 	EVP_PKEY_CTX_free(ctx);

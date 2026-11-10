@@ -24,10 +24,11 @@
  * @privkey_pem_path: Receives the private key, created with mode 0600.
  * @pubkey_pem_path: Receives the public key, created with mode 0644.
  *
- * The umask applies to both modes. A file that exists is truncated and keeps
- * its mode.
+ * The umask applies to both modes. A failure leaves neither file written by
+ * this call in place.
  *
- * Return: 0, -EINVAL for a NULL path, or another negative errno.
+ * Return: 0, -EINVAL for a NULL path, -EEXIST when either path exists, or
+ * another negative errno.
  */
 int policy_sign_generate_keypair(const char *privkey_pem_path,
 				 const char *pubkey_pem_path);

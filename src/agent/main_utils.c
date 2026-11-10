@@ -12,6 +12,7 @@
 #include <unistd.h>
 #include <stdbool.h>
 #include <stdint.h>
+#include <sys/stat.h>
 
 #include "../../include/lota.h"
 #include "../../include/lota_ipc.h"
@@ -341,6 +342,16 @@ int handle_policy_ops(const struct policy_ops_args *args)
 			 args->gen_signing_key_prefix);
 
 		ret = policy_sign_generate_keypair(priv_path, pub_path);
+		if (ret == -EEXIST) {
+			struct stat st;
+
+			fprintf(stderr,
+				"Failed to generate keypair: %s already "
+				"exists\n",
+				lstat(priv_path, &st) == 0 ? priv_path :
+							     pub_path);
+			return 1;
+		}
 		if (ret < 0) {
 			fprintf(stderr, "Failed to generate keypair: %s\n",
 				strerror(-ret));

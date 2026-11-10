@@ -16,6 +16,7 @@
 #include <string.h>
 #include <unistd.h>
 #include <stdint.h>
+#include <sys/stat.h>
 
 #include "test.h"
 #include "../src/agent/policy_sign.h"
@@ -45,6 +46,17 @@ static void make_paths(const char *base, char *priv, char *pub, size_t len)
 {
 	snprintf(priv, len, "%s/%s.key", tmpdir, base);
 	snprintf(pub, len, "%s/%s.pub", tmpdir, base);
+}
+
+static int path_absent(const char *path)
+{
+	int fd = open(path, O_RDONLY | O_CLOEXEC);
+
+	if (fd >= 0) {
+		close(fd);
+		return 0;
+	}
+	return errno == ENOENT;
 }
 
 static int write_file(const char *path, const void *data, size_t len)
@@ -363,6 +375,46 @@ static void test_verify_file_sig_size(void)
 	PASS();
 }
 
+static void test_keygen_refuses_existing_file(void)
+{
+	char priv[PATH_MAX], pub[PATH_MAX], buf[8] = "";
+	struct stat st;
+	int fd;
+
+	TEST("keygen refuses a path that exists and leaves it as it was");
+	make_paths("exist", priv, pub, sizeof(priv));
+
+	write_file(priv, "old\n", 4);
+	chmod(priv, 0644);
+	if (policy_sign_generate_keypair(priv, pub) != -EEXIST) {
+		FAIL("an existing private key is overwritten");
+		return;
+	}
+	fd = open(priv, O_RDONLY | O_CLOEXEC);
+	if (fd < 0 || read(fd, buf, sizeof(buf) - 1) != 4 ||
+	    strcmp(buf, "old\n") != 0 || fstat(fd, &st) != 0 ||
+	    (st.st_mode & 0777) != 0644 || !path_absent(pub)) {
+		if (fd >= 0)
+			close(fd);
+		FAIL("the existing private key changed");
+		return;
+	}
+	close(fd);
+	unlink(priv);
+
+	write_file(pub, "old\n", 4);
+	if (policy_sign_generate_keypair(priv, pub) != -EEXIST) {
+		FAIL("an existing public key is overwritten");
+		return;
+	}
+	if (!path_absent(priv)) {
+		FAIL("half a keypair is left behind");
+		return;
+	}
+	unlink(pub);
+	PASS();
+}
+
 static void test_sign_buffer_null_args(void)
 {
 	char priv[PATH_MAX], pub[PATH_MAX];
@@ -633,6 +685,7 @@ int main(void)
 	test_verify_file_tampered();
 	test_verify_file_truncated_sig();
 	test_verify_file_sig_size();
+	test_keygen_refuses_existing_file();
 	test_sign_buffer_null_args();
 	test_verify_buffer_null_args();
 	test_sign_file_null_args();
