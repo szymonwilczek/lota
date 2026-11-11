@@ -415,11 +415,16 @@ func (s *demoServer) recordVerdict(sessionHex, gameHashHex, verdict, license,
 		}
 	}
 	if gameHashHex != "" {
+		var seq uint64
+		if prev, ok := s.verdict[gameHashHex]; ok {
+			seq = prev.verdictSeq
+		}
 		s.verdict[gameHashHex] = &sessionState{
 			lastVerdict: verdict,
 			lastLicense: license,
 			lastReason:  reason,
 			updatedAt:   now,
+			verdictSeq:  seq + 1,
 		}
 	}
 }
