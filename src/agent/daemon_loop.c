@@ -237,11 +237,6 @@ int agent_run_event_loop(struct agent_loop_ctx *ctx)
 				}
 			} else if (events[i].data.fd ==
 				   ipc_get_fd(ctx->ipc_ctx)) {
-				/*
-				 * A record the gate queued before its refusal
-				 * returned is read before a request about it.
-				 */
-				bpf_loader_consume(ctx->bpf_ctx);
 				ipc_process(ctx->ipc_ctx, 0);
 			} else if (ctx->dbus_ctx &&
 				   events[i].data.fd ==

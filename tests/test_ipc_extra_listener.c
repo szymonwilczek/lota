@@ -139,6 +139,17 @@ int bpf_loader_born_protected(struct bpf_loader_ctx *ctx, uint32_t pid,
 	return 0;
 }
 
+int bpf_loader_get_refusal(struct bpf_loader_ctx *ctx, int pidfd,
+			   uint64_t *at_ns, char *object, size_t len)
+{
+	(void)ctx;
+	(void)pidfd;
+	(void)at_ns;
+	(void)object;
+	(void)len;
+	return -ENOENT;
+}
+
 int bpf_loader_instance_stopped_ms(struct bpf_loader_ctx *ctx, uint32_t pid,
 				   uint64_t *ms)
 {

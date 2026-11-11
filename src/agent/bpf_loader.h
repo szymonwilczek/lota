@@ -40,6 +40,7 @@ struct bpf_loader_ctx {
 	int instance_fd;
 	int instance_stops_fd;
 	int born_protected_fd;
+	int refusal_fd;
 	int allow_verity_digest_fd;
 	int exe_hash_slots_fd;
 	int mapped_exec_fd;
@@ -448,6 +449,23 @@ int bpf_loader_adopt_instance_member(struct bpf_loader_ctx *ctx, uint32_t pid);
  */
 int bpf_loader_instance_stopped_ms(struct bpf_loader_ctx *ctx, uint32_t pid,
 				   uint64_t *ms);
+
+/**
+ * bpf_loader_get_refusal() - The last executable mapping refused a process.
+ * @ctx: Loaded context.
+ * @pidfd: The process, as a pidfd.
+ * @at_ns: Set to when, CLOCK_MONOTONIC.
+ * @object: Set to the file's path, or its name; NUL-terminated.
+ * @len: Size of @object.
+ *
+ * The gate keeps it on the process until a later refusal replaces it,
+ * so a process that took the PID later has none. Untouched on an error.
+ *
+ * Return: 0, -ENOENT when none is kept or the process is gone,
+ * or a negative errno.
+ */
+int bpf_loader_get_refusal(struct bpf_loader_ctx *ctx, int pidfd,
+			   uint64_t *at_ns, char *object, size_t len);
 
 /**
  * bpf_loader_born_protected() - Was @pid's image executed under protection?

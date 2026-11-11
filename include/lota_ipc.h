@@ -551,7 +551,8 @@ struct lota_ipc_registry_actor {
  * GET_REFUSAL response payload
  *
  * The last file the gate refused the calling process to map executable
- * while it was protected, all zero when the agent keeps none.
+ * while it was protected, all zero when the gate keeps none.
+ * The caller is the process that opened the connection, named by its pidfd.
  * @object is the file's path, or only its name for a memory file
  * or when the gate could not give the path; NUL-terminated.
  */

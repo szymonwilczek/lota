@@ -431,12 +431,10 @@ int lota_get_boot_evidence(struct lota_client *client, uint8_t *buf,
  * @at_ns: receives the CLOCK_MONOTONIC time of the refusal, 0 when there was
  *         none; may be NULL.
  *
- * The agent keeps the last refusal of a process that was protected when the
- * gate refused it, a dependency the loader pulled in as much as the object
- * the process asked for, and answers it only to that process. A process
- * given its PID in the refusal's clock tick, or across a suspend before the
- * agent read the refusal, is taken for it. A refusal the gate left out of
- * its events is not kept.
+ * The gate keeps the last refusal of a process that was protected when it
+ * refused it, a dependency the loader pulled in as much as the object the
+ * process asked for, and the agent answers with the refusal of the process
+ * that opened @client: one given its PID later has none.
  *
  * Return: LOTA_OK, LOTA_ERR_BUFFER_TOO_SMALL when @object cannot hold the
  * name, or another negative LOTA_ERR_*.

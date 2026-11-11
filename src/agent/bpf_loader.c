@@ -89,6 +89,13 @@ struct lota_instance_stops {
 	uint64_t total_ns;
 };
 
+struct lota_refusal_entry {
+	uint32_t lock;
+	uint32_t pad;
+	uint64_t at_ns;
+	char object[LOTA_MAX_PATH_LEN];
+};
+
 #define LOTA_TASK_AUTH_ADMIN (1U << 0)
 #define LOTA_TASK_AUTH_AGENT (1U << 1)
 
@@ -701,6 +708,7 @@ int bpf_loader_init(struct bpf_loader_ctx *ctx)
 	ctx->instance_fd = -1;
 	ctx->instance_stops_fd = -1;
 	ctx->born_protected_fd = -1;
+	ctx->refusal_fd = -1;
 	ctx->allow_verity_digest_fd = -1;
 	ctx->exe_hash_slots_fd = -1;
 	ctx->mapped_exec_fd = -1;
@@ -1124,6 +1132,20 @@ int bpf_loader_load(struct bpf_loader_ctx *ctx, const char *bpf_obj_path,
 		}
 	}
 
+	/* optional: without it GET_REFUSAL names nothing */
+	ctx->refusal_fd =
+		bpf_object__find_map_fd_by_name(ctx->obj, "lota_refusal");
+	if (ctx->refusal_fd < 0) {
+		ctx->refusal_fd = -1;
+	} else {
+		err = harden_fd_cloexec(ctx->refusal_fd, "lota_refusal map");
+		if (err < 0) {
+			lota_err("Failed to harden lota_refusal map fd: %s",
+				 strerror(-err));
+			goto err_close;
+		}
+	}
+
 	/* required: without it cgroup.kill ends the agent past the signal gate */
 	ctx->guarded_files_fd =
 		bpf_object__find_map_fd_by_name(ctx->obj, "guarded_files");
@@ -1387,6 +1409,7 @@ void bpf_loader_cleanup(struct bpf_loader_ctx *ctx)
 	ctx->protected_pids_fd = -1;
 	ctx->instance_fd = -1;
 	ctx->instance_stops_fd = -1;
+	ctx->refusal_fd = -1;
 	ctx->allow_verity_digest_fd = -1;
 	ctx->exe_hash_slots_fd = -1;
 	ctx->mapped_exec_fd = -1;
@@ -2302,6 +2325,27 @@ static void close_instance_stops(struct bpf_loader_ctx *ctx, uint32_t pid)
 	}
 	close(pidfd);
 #endif
+}
+
+int bpf_loader_get_refusal(struct bpf_loader_ctx *ctx, int pidfd,
+			   uint64_t *at_ns, char *object, size_t len)
+{
+	struct lota_refusal_entry entry;
+
+	if (!ctx || !at_ns || !object || len == 0)
+		return -EINVAL;
+	if (!ctx->loaded || ctx->refusal_fd < 0)
+		return -ENOENT;
+
+	/* the lock: a refusal in another thread does not tear this one */
+	if (bpf_map_lookup_elem_flags(ctx->refusal_fd, &pidfd, &entry,
+				      BPF_F_LOCK) < 0)
+		return -errno;
+
+	entry.object[sizeof(entry.object) - 1] = '\0';
+	snprintf(object, len, "%s", entry.object);
+	*at_ns = entry.at_ns;
+	return 0;
 }
 
 int bpf_loader_born_protected(struct bpf_loader_ctx *ctx, uint32_t pid,
