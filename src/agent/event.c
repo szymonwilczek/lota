@@ -158,6 +158,8 @@ int handle_exec_event(void *ctx, void *data, size_t len)
 	case LOTA_EVENT_MMAP_BLOCKED:
 		event_type_str = "MMAP_BLOCKED";
 		if (event->flags & LOTA_EVENT_FLAG_PROTECTED) {
+			ipc_note_refusal(event->tgid, event->timestamp_ns,
+					 filename_safe);
 			ipc_runtime_coverage_forget();
 			remeasure_protected_image(event);
 		}
@@ -222,6 +224,11 @@ int handle_exec_event(void *ctx, void *data, size_t len)
 		break;
 	case LOTA_EVENT_ANON_EXEC_BLOCKED:
 		event_type_str = "ANON_EXEC_BLOCKED";
+		/* only a protected task is refused; a memory file has a name */
+		if (strcmp(event->filename, "(anon-exec)") != 0 &&
+		    strcmp(event->filename, "(anon-mprotect-exec)") != 0)
+			ipc_note_refusal(event->tgid, event->timestamp_ns,
+					 filename_safe);
 		break;
 	default:
 		event_type_str = "UNKNOWN";

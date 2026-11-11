@@ -982,6 +982,54 @@ int lota_get_boot_evidence(struct lota_client *client, uint8_t *buf,
 	return LOTA_OK;
 }
 
+int lota_get_refusal(struct lota_client *client, char *object, size_t len,
+		     uint64_t *at_ns)
+{
+	struct lota_ipc_request req;
+	struct lota_ipc_response resp;
+	struct lota_ipc_refusal r;
+	size_t got = 0;
+	size_t n;
+	int ret;
+
+	if (!client)
+		return LOTA_ERR_NOT_CONNECTED;
+	if (!object || len == 0)
+		return LOTA_ERR_INVALID_ARG;
+
+	memset(&req, 0, sizeof(req));
+	req.magic = LOTA_IPC_MAGIC;
+	req.version = LOTA_IPC_VERSION;
+	req.cmd = LOTA_IPC_CMD_GET_REFUSAL;
+
+	ret = send_request(client, &req, NULL, 0);
+	if (ret < 0)
+		return (ret == -ETIMEDOUT) ? LOTA_ERR_TIMEOUT :
+					     LOTA_ERR_PROTOCOL;
+
+	ret = recv_response(client, &resp, &r, sizeof(r), &got);
+	if (ret == LOTA_ERR_BUFFER_TOO_SMALL)
+		return LOTA_ERR_PROTOCOL;
+	if (ret < 0)
+		return (ret == -ETIMEDOUT) ? LOTA_ERR_TIMEOUT :
+					     LOTA_ERR_PROTOCOL;
+	if (resp.result != LOTA_IPC_OK)
+		return ipc_result_to_error(resp.result);
+	if (got != sizeof(r))
+		return LOTA_ERR_PROTOCOL;
+
+	n = strnlen(r.object, sizeof(r.object));
+	if (n == sizeof(r.object))
+		return LOTA_ERR_PROTOCOL;
+	if (n >= len)
+		return LOTA_ERR_BUFFER_TOO_SMALL;
+
+	memcpy(object, r.object, n + 1);
+	if (at_ns)
+		*at_ns = r.at_ns;
+	return LOTA_OK;
+}
+
 void lota_token_free(struct lota_token *token)
 {
 	if (!token)

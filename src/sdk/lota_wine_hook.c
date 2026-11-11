@@ -22,11 +22,9 @@
 
 #include <ctype.h>
 #include <dlfcn.h>
-#include <elf.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <limits.h>
-#include <link.h>
 #include <pthread.h>
 #include <signal.h>
 #include <stdatomic.h>
@@ -38,7 +36,6 @@
 #include <sys/eventfd.h>
 #include <sys/mman.h>
 #include <sys/stat.h>
-#include <sys/statvfs.h>
 #include <sys/types.h>
 #include <time.h>
 #include <unistd.h>
@@ -1122,56 +1119,6 @@ static void hook_register_self(void)
 	hook_publish_state();
 }
 
-#ifndef hook_mmap
-#define hook_mmap mmap
-#endif
-
-extern const ElfW(Ehdr) __ehdr_start __attribute__((visibility("hidden")));
-
-/* a shared object of the class and machine the loader maps here */
-static bool hook_object_is_loadable(int fd)
-{
-	ElfW(Ehdr) eh;
-
-	return pread(fd, &eh, sizeof(eh), 0) == (ssize_t)sizeof(eh) &&
-	       memcmp(eh.e_ident, ELFMAG, SELFMAG) == 0 &&
-	       eh.e_ident[EI_CLASS] == __ehdr_start.e_ident[EI_CLASS] &&
-	       eh.e_machine == __ehdr_start.e_machine && eh.e_type == ET_DYN;
-}
-
-/*
- * Was a failed load the gate's refusal? Reading dlerror() would consume
- * the title's message, so map the object executable once more: the gate
- * refuses that mapping with EPERM, as does a noexec mount. A file the
- * loader would not map is not mapped here either. A bare name goes
- * unchecked: the hook does not know which file the loader picked.
- */
-static bool hook_refusal_is_gate(const char *path)
-{
-	bool refused = false;
-	struct statvfs sv;
-	void *map;
-	int fd;
-
-	if (!path || !strchr(path, '/'))
-		return false;
-
-	fd = open(path, O_RDONLY | O_CLOEXEC);
-	if (fd < 0)
-		return false;
-	if (hook_object_is_loadable(fd) && fstatvfs(fd, &sv) == 0 &&
-	    !(sv.f_flag & ST_NOEXEC)) {
-		map = hook_mmap(NULL, 1, PROT_READ | PROT_EXEC, MAP_PRIVATE, fd,
-				0);
-		if (map == MAP_FAILED)
-			refused = errno == EPERM;
-		else
-			munmap(map, 1);
-	}
-	close(fd);
-	return refused;
-}
-
 /* For the status file. */
 static void hook_record_refusal(const char *path)
 {
@@ -1189,14 +1136,61 @@ static void hook_share_refusal(void)
 		g_refusal = map;
 }
 
+static uint64_t hook_now_ns(void)
+{
+	struct timespec ts;
+
+	clock_gettime(CLOCK_MONOTONIC, &ts);
+	return (uint64_t)ts.tv_sec * 1000000000ULL + (uint64_t)ts.tv_nsec;
+}
+
+/*
+ * Ask the agent what the gate refused this process since @since_ns:
+ * the object dlopen() named or a dependency the loader pulled in.
+ * Reading dlerror() would consume the title's message.
+ * A connection of its own: the refresh thread holds the other.
+ */
+static void hook_report_refusal(uint64_t since_ns)
+{
+	char object[sizeof(g_refusal->object)];
+	struct lota_connect_opts opts;
+	struct lota_client *client;
+	uint64_t at_ns = 0;
+	int ret;
+
+	memset(&opts, 0, sizeof(opts));
+	opts.struct_size = sizeof(opts);
+	if (g_hook.socket_path[0])
+		opts.socket_path = g_hook.socket_path;
+	opts.timeout_ms = LOTA_HOOK_CONNECT_TIMEOUT_MS;
+
+	client = lota_connect_opts(&opts);
+	if (!client)
+		return;
+	lota_set_request_timeout(client, LOTA_HOOK_REQUEST_TIMEOUT_MS);
+	ret = lota_get_refusal(client, object, sizeof(object), &at_ns);
+	lota_disconnect(client);
+	if (ret != LOTA_OK || at_ns < since_ns)
+		return;
+
+	hook_record_refusal(object);
+	hook_publish_state();
+	LOG_ERR("%s did not load while this process is in LOTA's protected "
+		"set -- a protected process may map only objects the agent "
+		"allows, so cover this one (fs-verity digest or trusted_libs)",
+		object);
+}
+
 /*
  * Report a gate refusal on stderr and in the status file;
- * the handle and the pending dlerror() are the real dlopen()'s, untouched.
+ * the handle, the pending dlerror() and errno are the real dlopen()'s.
  */
 LOTA_HOOK_EXPORT void *dlopen(const char *file, int mode)
 {
 	static void *(*real_dlopen)(const char *, int);
+	uint64_t since_ns;
 	void *handle;
+	int saved_errno;
 
 	if (!real_dlopen) {
 		real_dlopen = dlsym(RTLD_NEXT, "dlopen");
@@ -1206,17 +1200,14 @@ LOTA_HOOK_EXPORT void *dlopen(const char *file, int mode)
 		}
 	}
 
+	since_ns = hook_now_ns();
 	handle = real_dlopen(file, mode);
 	if (handle || !atomic_load(&g_hook.self_protected))
 		return handle;
 
-	if (hook_refusal_is_gate(file)) {
-		hook_record_refusal(file);
-		hook_publish_state();
-		LOG_ERR("%s did not load while this process is in LOTA's protected set -- a protected process may map only objects the agent allows, so cover this one (fs-verity digest or trusted_libs)",
-			file);
-	}
-
+	saved_errno = errno;
+	hook_report_refusal(since_ns);
+	errno = saved_errno;
 	return handle;
 }
 

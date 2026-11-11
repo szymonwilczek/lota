@@ -242,6 +242,19 @@ void ipc_set_policy(struct ipc_context *ctx, uint32_t keys);
 uint32_t ipc_host_status_flags(const struct ipc_context *ctx);
 
 /**
+ * ipc_note_refusal() - Keep an executable mapping the gate refused.
+ * @tgid: The protected process refused.
+ * @at_ns: When, CLOCK_MONOTONIC.
+ * @object: The file's path, or its name; cut to fit.
+ *
+ * LOTA_IPC_CMD_GET_REFUSAL answers it to @tgid, until a later refusal of
+ * @tgid replaces it. A process given the PID later does not get it, unless
+ * it started in the refusal's clock tick or across a suspend before this
+ * call. A full table drops the oldest refusal.
+ */
+void ipc_note_refusal(uint32_t tgid, uint64_t at_ns, const char *object);
+
+/**
  * ipc_runtime_coverage_forget() - Drop the cached coverage verdict.
  *
  * The next read walks the protected set again.

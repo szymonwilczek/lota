@@ -2991,6 +2991,56 @@ static void handle_get_registry(struct ipc_client *client,
 	client->send_offset = 0;
 }
 
+static struct protect_refusal_slot g_refusals[LOTA_MAX_PROTECTED_PIDS];
+
+void ipc_note_refusal(uint32_t tgid, uint64_t at_ns, const char *object)
+{
+	struct timespec boot;
+	struct timespec mono;
+	uint64_t at_boot_ns;
+	uint64_t ticks = 0;
+	long hz = sysconf(_SC_CLK_TCK);
+
+	/* gone already: nobody is left to ask */
+	if (read_pid_start_time_ticks((pid_t)tgid, &ticks) < 0 || ticks == 0)
+		return;
+	/* the start time counts from boot, the refusal's clock only awake */
+	if (hz <= 0 || clock_gettime(CLOCK_BOOTTIME, &boot) != 0 ||
+	    clock_gettime(CLOCK_MONOTONIC, &mono) != 0)
+		return;
+	at_boot_ns = at_ns +
+		     ((uint64_t)boot.tv_sec - (uint64_t)mono.tv_sec) *
+			     1000000000ULL +
+		     (uint64_t)boot.tv_nsec - (uint64_t)mono.tv_nsec;
+	if (protect_started_after(ticks, 1000000000ULL / (uint64_t)hz,
+				  at_boot_ns))
+		return;
+	protect_refusal_record(g_refusals, LOTA_MAX_PROTECTED_PIDS, tgid, ticks,
+			       at_ns, object);
+}
+
+/* the caller's own last refused file, all zero when none is kept */
+static void handle_get_refusal(struct ipc_client *client)
+{
+	struct lota_ipc_response *resp = (void *)client->send_buf;
+	struct lota_ipc_refusal out = { 0 };
+	const struct lota_ipc_refusal *r;
+
+	r = protect_refusal_find(g_refusals, LOTA_MAX_PROTECTED_PIDS,
+				 (uint32_t)client->peer_pid,
+				 client->peer_start_time_ticks);
+	if (r && client->peer_start_time_ticks)
+		out = *r;
+
+	memcpy(client->send_buf + LOTA_IPC_RESPONSE_SIZE, &out, sizeof(out));
+	resp->magic = LOTA_IPC_MAGIC;
+	resp->version = LOTA_IPC_VERSION;
+	resp->result = LOTA_IPC_OK;
+	resp->payload_len = sizeof(out);
+	client->send_len = LOTA_IPC_RESPONSE_SIZE + sizeof(out);
+	client->send_offset = 0;
+}
+
 static bool pidfd_exited(int pidfd)
 {
 	struct pollfd pfd = { .fd = pidfd, .events = POLLIN };
@@ -3228,6 +3278,10 @@ static void process_request(struct ipc_context *ctx, struct ipc_client *client)
 
 	case LOTA_IPC_CMD_GET_REGISTRY:
 		handle_get_registry(client, payload, payload_len);
+		break;
+
+	case LOTA_IPC_CMD_GET_REFUSAL:
+		handle_get_refusal(client);
 		break;
 
 	case LOTA_IPC_CMD_SHUTDOWN:

@@ -2158,11 +2158,14 @@ int BPF_PROG(lota_mmap_file, struct file *file, unsigned long reqprot,
 
 		bpf_get_current_comm(event->comm, sizeof(event->comm));
 
+		/* the path names the object the player has to cover */
+		int ret_path = bpf_d_path((struct path *)&file->f_path,
+					  event->filename,
+					  sizeof(event->filename));
 		struct dentry *dentry = BPF_CORE_READ(file, f_path.dentry);
 		const unsigned char *name = NULL;
-		int ret_path = -1;
 
-		if (dentry) {
+		if (ret_path < 0 && dentry) {
 			name = BPF_CORE_READ(dentry, d_name.name);
 			if (name) {
 				ret_path = bpf_probe_read_kernel_str(
