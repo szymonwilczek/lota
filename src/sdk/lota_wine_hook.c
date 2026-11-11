@@ -87,12 +87,37 @@ static struct {
 
 /* The last object that would not load. */
 struct hook_refusal {
+	pthread_mutex_t lock; /* shared by the forked children with the map */
 	char object[256];
 	time_t at;
 };
 
 static struct hook_refusal g_own_refusal;
 static struct hook_refusal *g_refusal = &g_own_refusal;
+static pthread_once_t g_own_refusal_once = PTHREAD_ONCE_INIT;
+
+static void own_refusal_init(void)
+{
+	pthread_mutex_init(&g_own_refusal.lock, NULL);
+}
+
+/*
+ * A child that died holding the lock may have left the object half
+ * written: drop it until the next refusal.
+ */
+static int hook_refusal_lock(void)
+{
+	int ret;
+
+	pthread_once(&g_own_refusal_once, own_refusal_init);
+	ret = pthread_mutex_lock(&g_refusal->lock);
+
+	if (ret == EOWNERDEAD) {
+		g_refusal->object[0] = '\0';
+		ret = pthread_mutex_consistent(&g_refusal->lock);
+	}
+	return ret;
+}
 
 /* Why the hook holds no connection: offline, or the agent said no. */
 #define HOOK_LOST_AGENT 1
@@ -646,7 +671,9 @@ static int atomic_write(const char *path, const void *data, size_t len)
  */
 static int write_status_payload(const struct lota_status *status, int offline)
 {
+	char object[sizeof(g_refusal->object)] = "";
 	char buf[1024];
+	time_t at = 0;
 	int len;
 
 	len = snprintf(buf, sizeof(buf),
@@ -668,12 +695,17 @@ static int write_status_payload(const struct lota_status *status, int offline)
 	if (len < 0 || (size_t)len >= sizeof(buf))
 		return -ENOMEM;
 
-	if (g_refusal->object[0]) {
+	if (hook_refusal_lock() == 0) {
+		memcpy(object, g_refusal->object, sizeof(object));
+		at = g_refusal->at;
+		pthread_mutex_unlock(&g_refusal->lock);
+	}
+
+	if (object[0]) {
 		int add = snprintf(buf + len, sizeof(buf) - (size_t)len,
 				   "LOTA_REFUSED_OBJECT=%s\n"
 				   "LOTA_REFUSED_AT=%lu\n",
-				   g_refusal->object,
-				   (unsigned long)g_refusal->at);
+				   object, (unsigned long)at);
 
 		if (add < 0 || (size_t)(len + add) >= sizeof(buf))
 			return -ENOMEM;
@@ -1122,18 +1154,36 @@ static void hook_register_self(void)
 /* For the status file. */
 static void hook_record_refusal(const char *path)
 {
+	if (hook_refusal_lock() != 0)
+		return;
 	snprintf(g_refusal->object, sizeof(g_refusal->object), "%s", path);
 	g_refusal->at = time(NULL);
+	pthread_mutex_unlock(&g_refusal->lock);
 }
 
 /* so a forked child's refusal outlives the parent's next status write */
 static void hook_share_refusal(void)
 {
-	void *map = mmap(NULL, sizeof(*g_refusal), PROT_READ | PROT_WRITE,
-			 MAP_SHARED | MAP_ANONYMOUS, -1, 0);
+	struct hook_refusal *map = mmap(NULL, sizeof(*g_refusal),
+					PROT_READ | PROT_WRITE,
+					MAP_SHARED | MAP_ANONYMOUS, -1, 0);
+	pthread_mutexattr_t attr;
 
-	if (map != MAP_FAILED)
-		g_refusal = map;
+	if (map == MAP_FAILED)
+		return;
+	if (pthread_mutexattr_init(&attr) != 0) {
+		munmap(map, sizeof(*map));
+		return;
+	}
+	if (pthread_mutexattr_setpshared(&attr, PTHREAD_PROCESS_SHARED) != 0 ||
+	    pthread_mutexattr_setrobust(&attr, PTHREAD_MUTEX_ROBUST) != 0 ||
+	    pthread_mutex_init(&map->lock, &attr) != 0) {
+		pthread_mutexattr_destroy(&attr);
+		munmap(map, sizeof(*map));
+		return;
+	}
+	pthread_mutexattr_destroy(&attr);
+	g_refusal = map;
 }
 
 static uint64_t hook_now_ns(void)

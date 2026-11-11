@@ -25,6 +25,7 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <limits.h>
+#include <pthread.h>
 #include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -34,7 +35,6 @@
 #include <sys/un.h>
 #include <sys/wait.h>
 #include <unistd.h>
-
 
 #include "test.h"
 
@@ -2013,6 +2013,134 @@ static void test_a_child_refusal_reaches_the_parent_status(void)
 	PASS();
 }
 
+#define TORN_WRITERS 4
+#define TORN_ROUNDS 20000
+
+/* one path per writer, each a long run of the writer's own letter */
+static void torn_path(char *buf, size_t len, int writer)
+{
+	size_t off = (size_t)snprintf(buf, len, "/opt/game/lib/");
+
+	memset(buf + off, 'a' + writer, len - off - 1);
+	buf[len - 1] = '\0';
+}
+
+static void *torn_writer(void *arg)
+{
+	char path[200];
+
+	torn_path(path, sizeof(path), (int)(long)arg);
+	for (int i = 0; i < TORN_ROUNDS; i++)
+		hook_record_refusal(path);
+	return NULL;
+}
+
+/* Threads and forked children record at once; the status names one whole. */
+static void test_a_concurrent_refusal_is_never_torn(void)
+{
+	struct lota_status status = { .flags = LOTA_FLAG_ATTESTED };
+	char paths[TORN_WRITERS][200];
+	pthread_t threads[2];
+	pid_t children[2];
+	char path[PATH_MAX];
+	char buf[1024];
+	int torn = 0;
+	int seen = 0;
+
+	TEST("a refusal recorded concurrently reaches the status whole");
+
+	snprintf(path, sizeof(path), "%s/status_torn", tmpdir);
+	snprintf(g_hook.status_path, sizeof(g_hook.status_path), "%s", path);
+	hook_share_refusal();
+	for (int w = 0; w < TORN_WRITERS; w++)
+		torn_path(paths[w], sizeof(paths[w]), w);
+
+	for (int c = 0; c < 2; c++) {
+		children[c] = fork();
+		if (children[c] == 0) {
+			torn_writer((void *)(long)(2 + c));
+			_exit(0);
+		}
+	}
+	for (int t = 0; t < 2; t++)
+		pthread_create(&threads[t], NULL, torn_writer, (void *)(long)t);
+
+	for (int i = 0; i < 2000; i++) {
+		char *line;
+		char *end;
+		int whole = 0;
+
+		if (write_status(&status) != 0 ||
+		    read_file_contents(path, buf, sizeof(buf)) <= 0)
+			continue;
+		line = strstr(buf, "LOTA_REFUSED_OBJECT=");
+		if (!line)
+			continue;
+		line += strlen("LOTA_REFUSED_OBJECT=");
+		end = strchr(line, '\n');
+		if (end)
+			*end = '\0';
+		seen++;
+		for (int w = 0; w < TORN_WRITERS; w++)
+			whole |= strcmp(line, paths[w]) == 0;
+		torn += !whole;
+	}
+
+	for (int t = 0; t < 2; t++)
+		pthread_join(threads[t], NULL);
+	for (int c = 0; c < 2; c++)
+		waitpid(children[c], NULL, 0);
+	g_refusal->object[0] = '\0';
+
+	if (!seen) {
+		FAIL("no status named a refusal");
+		return;
+	}
+	if (torn) {
+		printf("    %d of %d names torn\n", torn, seen);
+		FAIL("the status named a torn refusal");
+		return;
+	}
+	PASS();
+}
+
+/* A child dead inside the lock leaves no half name and no stuck lock. */
+static void test_a_child_dead_in_the_lock_frees_it(void)
+{
+	pid_t pid;
+
+	TEST("a child that died holding the refusal lock does not stop it");
+
+	hook_share_refusal();
+	pid = fork();
+	if (pid == 0) {
+		pthread_mutex_lock(&g_refusal->lock);
+		snprintf(g_refusal->object, sizeof(g_refusal->object),
+			 "/opt/ga");
+		_exit(0);
+	}
+	waitpid(pid, NULL, 0);
+
+	if (hook_refusal_lock() != 0) {
+		FAIL("the lock stayed dead");
+		return;
+	}
+	if (g_refusal->object[0]) {
+		pthread_mutex_unlock(&g_refusal->lock);
+		FAIL("the half written name was kept");
+		return;
+	}
+	pthread_mutex_unlock(&g_refusal->lock);
+
+	hook_record_refusal("/opt/game/lib/libnext.so");
+	if (strcmp(g_refusal->object, "/opt/game/lib/libnext.so") != 0) {
+		FAIL("the next refusal was not recorded");
+		return;
+	}
+	g_refusal->object[0] = '\0';
+	PASS();
+}
+
 /* Nothing the hook does to explain a refusal may change what loads. */
 static void test_the_loader_wrapper_hands_back_what_it_got(void)
 {
@@ -2677,6 +2805,8 @@ int main(void)
 	test_the_first_refresh_registers();
 	test_the_status_file_names_the_refused_object();
 	test_a_child_refusal_reaches_the_parent_status();
+	test_a_concurrent_refusal_is_never_torn();
+	test_a_child_dead_in_the_lock_frees_it();
 	test_the_loader_wrapper_hands_back_what_it_got();
 	test_a_refused_dependency_is_named();
 	test_a_registration_publishes_itself();
