@@ -1063,6 +1063,33 @@ func (s *PostgresBaselineStore) RepinPCR14(clientID string,
 	return nil
 }
 
+// RepinBootEntries moves the pinned PCR 1 and the boot evidence.
+// The WHERE on the old boot registers is the race guard.
+func (s *PostgresBaselineStore) RepinBootEntries(clientID string,
+	from BootBaseline, pcr1 [types.HashSize]byte, eventLog []byte,
+	now time.Time,
+) error {
+	res, err := s.db.ExecContext(context.Background(),
+		`UPDATE baselines SET pcr1 = $1, eventlog_baseline = $2,
+		   boot_last_seen = $3
+		 WHERE client_id = $4 AND pcr0 = $5 AND pcr1 = $6
+		   AND pcr7 = $7`,
+		pcr1[:], eventLog, now.UTC(), clientID,
+		from.PCR0[:], from.PCR1[:], from.PCR7[:],
+	)
+	if err != nil {
+		return err
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if n == 0 {
+		return ErrBootEntryRepinRaced
+	}
+	return nil
+}
+
 // RecordBootEvidence implements ReanchorStorer.
 func (s *PostgresBaselineStore) RecordBootEvidence(clientID string,
 	eventLog []byte, esrtVersion uint32, esrtPresent bool,

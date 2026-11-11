@@ -808,7 +808,9 @@ func (v *Verifier) VerifyReportFrom(challengeID, remoteAddr string, reportData [
 		case TOFUMatch:
 			clog.Debug("boot PCRs match baseline")
 		case TOFUMismatch:
-			if v.tryReanchor(clog, clientID, tenant, bootPtr, report, bootFacts) {
+			if v.tryReanchor(clog, clientID, tenant,
+				outcome.BootBaseline, bootPtr, report,
+				bootFacts) {
 				break
 			}
 			exp0, exp1, exp7 := bootPtr.PCR0, bootPtr.PCR1, bootPtr.PCR7
@@ -1174,10 +1176,11 @@ func (v *Verifier) selfServiceReanchorForTenant(tenant string) bool {
 
 // tryReanchor re-pins a drifted PCR 0/1/7 baseline when reanchorDecision
 // allows it on the strong or the LFA path, and returns true only on a re-pin.
-// It needs self-service re-anchor on, require_secureboot and a trusted Secure
-// Boot anchor.
+// A drift confined to the boot entries re-pins PCR 1 alone, outside the
+// re-anchor rate limit. It needs self-service re-anchor on,
+// require_secureboot and a trusted Secure Boot anchor.
 func (v *Verifier) tryReanchor(clog *slog.Logger, clientID, tenant string,
-	boot *BootBaseline, report *types.AttestationReport,
+	pinned, boot *BootBaseline, report *types.AttestationReport,
 	bootFacts *BootFacts,
 ) bool {
 	if !v.selfServiceReanchorForTenant(tenant) {
@@ -1192,6 +1195,15 @@ func (v *Verifier) tryReanchor(clog *slog.Logger, clientID, tenant string,
 	}
 
 	st := rs.GetReanchorState(clientID)
+	if pinned != nil && pinned.PCR0 == boot.PCR0 &&
+		pinned.PCR7 == boot.PCR7 {
+		repinned, done := v.tryBootEntryRepin(clog, clientID, *pinned,
+			boot.PCR1, st.EventLogBaseline, report, bootFacts)
+		if done {
+			return repinned
+		}
+	}
+
 	now := time.Now()
 	verdict, reason := reanchorDecision(ReanchorInputs{
 		BaselineEventLog:    st.EventLogBaseline,
@@ -1246,6 +1258,52 @@ func (v *Verifier) tryReanchor(clog *slog.Logger, clientID, tenant string,
 		v.metrics.Reanchors.Inc(metrics.OutcomeEscalate)
 		return false
 	}
+}
+
+// tryBootEntryRepin moves the pinned PCR 1 to pcr1 when the boot entries are
+// all that moved in it. done is false when the drift is not such a change,
+// and the firmware re-anchor decides.
+//
+// The log on record must replay to the pinned PCR 1, so the diff runs against
+// the boot the pin came from.
+func (v *Verifier) tryBootEntryRepin(clog *slog.Logger, clientID string,
+	pinned BootBaseline, pcr1 [types.HashSize]byte, pinnedLog []byte,
+	report *types.AttestationReport, bootFacts *BootFacts,
+) (repinned, done bool) {
+	bs, ok := v.baselineStore.(BootEntryRepinStorer)
+	if !ok || len(pinnedLog) == 0 || bootFacts.Parsed == nil {
+		return false, false
+	}
+	pinnedParsed, err := ParseEventLog(pinnedLog)
+	if err != nil {
+		return false, false
+	}
+	replay, err := ReplayEventLog(pinnedParsed)
+	if err != nil || replay.PCRValues[1] != pinned.PCR1 {
+		return false, false
+	}
+	if bootEntryPCR1Change(pinnedParsed, bootFacts.Parsed) != nil {
+		return false, false
+	}
+
+	err = bs.RepinBootEntries(clientID, pinned, pcr1, report.EventLog,
+		time.Now())
+	if err != nil {
+		if errors.Is(err, ErrBootEntryRepinRaced) {
+			logging.Security(clog, "boot entry re-pin escalated "+
+				"(pinned boot moved)")
+			v.metrics.Reanchors.Inc(metrics.OutcomeEscalate)
+			return false, true
+		}
+		clog.Warn("boot entry re-pin failed", "error", err)
+		return false, true
+	}
+	logging.Security(clog,
+		"boot baseline PCR 1 re-pinned after a boot entry change",
+		"pinned_pcr1", hex.EncodeToString(pinned.PCR1[:]),
+		"pcr1", hex.EncodeToString(pcr1[:]))
+	v.metrics.Reanchors.Inc(metrics.OutcomeBootEntries)
+	return true, true
 }
 
 // refuseOnListError refuses an attestation whose revocation or ban lookup

@@ -292,6 +292,10 @@ func TestPostgresRepinPCR14(t *testing.T) {
 	checkRepinPCR14(t, pgBaselineStore(t))
 }
 
+func TestPostgresRepinBootEntries(t *testing.T) {
+	checkRepinBootEntries(t, pgBaselineStore(t))
+}
+
 func TestPostgresReanchor(t *testing.T) {
 	bs := pgBaselineStore(t)
 	cid := "reanchor-pg"

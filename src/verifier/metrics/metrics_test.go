@@ -212,7 +212,8 @@ func TestExport_ReanchorOutcomes(t *testing.T) {
 	m := New()
 
 	output := m.Export()
-	outcomes := []string{"strong", "lfa", "mok", "forced", "escalate",
+	outcomes := []string{"strong", "lfa", "mok", "boot_entries",
+		"forced", "escalate",
 		"agent_hash", "agent_hash_escalate"}
 	got := strings.Count(output, "lota_reanchors_total{")
 	if got != len(outcomes) {

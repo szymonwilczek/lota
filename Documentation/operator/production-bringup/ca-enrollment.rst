@@ -327,6 +327,18 @@ counted in the ``lfa`` re-anchor metric.
 If a reviewed re-anchor looks wrong, revoke or ban the device through the
 existing endpoints.
 
+A change confined to the boot entries (``efibootmgr``, a second operating
+system, firmware adding a disk or USB entry) moves PCR 1 without touching the
+firmware. When PCR 0 and PCR 7 match the pin and the only PCR 1 events that
+differ from the boot log on record are ``BootOrder`` and ``Boot####`` variables
+whose data matches their digest, the verifier re-pins PCR 1 and the log in
+place. This spends neither rate limit and adds nothing to the review queue: a
+boot entry only selects a loader, and Secure Boot, pinned in PCR 7, still
+decides which loader may start. Each re-pin is logged at security level and
+counted in the ``boot_entries`` re-anchor metric. A PCR 1 change that also
+moves other events (SMBIOS tables, platform configuration flags after a RAM or
+CPU swap) takes the firmware path above.
+
 The same profile follows a MOK change. Enrolling or deleting a Machine Owner
 Key (``mokutil``, a DKMS or akmods signing key) moves only the ``MokList``,
 ``MokListX`` and ``MokListTrusted`` events shim measures into PCR 14, and so

@@ -638,6 +638,30 @@ func (s *BaselineStore) RepinPCR14(clientID string,
 	return nil
 }
 
+// RepinBootEntries moves the pinned PCR 1 and the boot evidence (in-memory).
+func (s *BaselineStore) RepinBootEntries(clientID string, from BootBaseline,
+	pcr1 [types.HashSize]byte, eventLog []byte, now time.Time,
+) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	b, ok := s.bootBaselines[clientID]
+	if !ok || b.PCR0 != from.PCR0 || b.PCR1 != from.PCR1 ||
+		b.PCR7 != from.PCR7 {
+		return ErrBootEntryRepinRaced
+	}
+	st := s.reanchor[clientID]
+	if st == nil {
+		st = &ReanchorState{}
+		s.reanchor[clientID] = st
+	}
+	b.PCR1 = pcr1
+	b.LastSeen = now
+	st.Present = true
+	st.EventLogBaseline = append([]byte(nil), eventLog...)
+	return nil
+}
+
 // RecordBootEvidence implements ReanchorStorer.
 func (s *BaselineStore) RecordBootEvidence(clientID string, eventLog []byte,
 	esrtVersion uint32, esrtPresent bool,
