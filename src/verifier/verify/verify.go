@@ -1101,6 +1101,11 @@ func (v *Verifier) ListClients() []string {
 	return clients
 }
 
+// CountClients counts the durable clients of tenants.
+func (v *Verifier) CountClients(tenants []string) (int, error) {
+	return v.baselineStore.CountClients(tenants)
+}
+
 // ClientsPage returns up to limit clients whose ID sorts after after,
 // in ID order. A non-nil tenants keeps the durable clients of those
 // tenants; nil also takes the clients only this instance knows.

@@ -390,6 +390,16 @@ func (s *PostgresBaselineStore) ListClientsAfter(tenants []string,
 	return scanClientIDs(rows)
 }
 
+func (s *PostgresBaselineStore) CountClients(tenants []string) (int, error) {
+	q, args := countClientsQuery(tenants,
+		func(n int) string { return "$" + strconv.Itoa(n) })
+	var n int
+	if err := s.db.QueryRow(q, args...).Scan(&n); err != nil {
+		return 0, err
+	}
+	return n, nil
+}
+
 func (s *PostgresBaselineStore) Stats() BaselineStats {
 	stats := BaselineStats{}
 

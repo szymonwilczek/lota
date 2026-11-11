@@ -350,6 +350,18 @@ func (s *SQLiteBaselineStore) ListClientsAfter(tenants []string,
 	return scanClientIDs(rows)
 }
 
+func (s *SQLiteBaselineStore) CountClients(tenants []string) (int, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	q, args := countClientsQuery(tenants, func(int) string { return "?" })
+	var n int
+	if err := s.db.QueryRow(q, args...).Scan(&n); err != nil {
+		return 0, err
+	}
+	return n, nil
+}
+
 func (s *SQLiteBaselineStore) Stats() BaselineStats {
 	s.mu.RLock()
 	defer s.mu.RUnlock()

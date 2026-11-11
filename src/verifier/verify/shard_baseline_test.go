@@ -183,6 +183,11 @@ func checkCursorPaging(t *testing.T, s tenantBaselines, clients int) {
 			t.Errorf("%s: paged %d clients, want %d in ID order",
 				tc.name, len(got), len(tc.want))
 		}
+		if n, err := s.CountClients(tc.tenants); err != nil ||
+			n != len(tc.want) {
+			t.Errorf("%s: CountClients = %d, %v; want %d",
+				tc.name, n, err, len(tc.want))
+		}
 	}
 
 	page, err := s.ListClientsAfter(nil, all[len(all)-1], 7)

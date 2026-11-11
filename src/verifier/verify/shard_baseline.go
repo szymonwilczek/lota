@@ -114,6 +114,19 @@ func (s *ShardedBaselineStore) ListClientsAfter(tenants []string,
 	return merged, nil
 }
 
+// CountClients sums the shards; a client lives on one shard.
+func (s *ShardedBaselineStore) CountClients(tenants []string) (int, error) {
+	total := 0
+	for _, sh := range s.shards {
+		n, err := sh.CountClients(tenants)
+		if err != nil {
+			return 0, err
+		}
+		total += n
+	}
+	return total, nil
+}
+
 func (s *ShardedBaselineStore) Stats() BaselineStats {
 	var agg BaselineStats
 	for _, sh := range s.shards {

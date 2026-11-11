@@ -126,6 +126,10 @@ type BaselineStorer interface {
 	ListClientsAfter(tenants []string, after string, limit int) ([]string,
 		error)
 
+	// CountClients counts the clients with a baseline,
+	// of tenants only when tenants is non-nil.
+	CountClients(tenants []string) (int, error)
+
 	Stats() BaselineStats
 }
 
@@ -141,32 +145,48 @@ func tenantMatches(tenant string, tenants []string) bool {
 	return slices.Contains(tenants, tenant)
 }
 
+// baselineTenantFilter appends to q the predicate keeping the baselines of
+// tenants, with tenantMatches semantics;
+// ph returns the placeholder of the n-th argument.
+func baselineTenantFilter(q string, args []any, tenants []string,
+	ph func(n int) string,
+) (query string, queryArgs []any) {
+	if tenants == nil {
+		return q, args
+	}
+	set := make([]string, 0, len(tenants)+1)
+	for _, t := range tenants {
+		args = append(args, t)
+		set = append(set, ph(len(args)))
+		if t == DefaultTenant {
+			args = append(args, "")
+			set = append(set, ph(len(args)))
+		}
+	}
+	if len(set) == 0 {
+		return q + " AND 0 = 1", args
+	}
+	return q + " AND tenant IN (" + strings.Join(set, ", ") + ")", args
+}
+
 // clientsAfterQuery builds the SQL of ListClientsAfter;
 // ph returns the placeholder of the n-th argument.
 func clientsAfterQuery(tenants []string, after string, limit int,
 	ph func(n int) string,
 ) (q string, args []any) {
-	args = []any{after}
-	q = "SELECT client_id FROM baselines WHERE client_id > " + ph(1)
-	if tenants != nil {
-		set := make([]string, 0, len(tenants)+1)
-		for _, t := range tenants {
-			args = append(args, t)
-			set = append(set, ph(len(args)))
-			if t == DefaultTenant {
-				args = append(args, "")
-				set = append(set, ph(len(args)))
-			}
-		}
-		if len(set) == 0 {
-			q += " AND 0 = 1"
-		} else {
-			q += " AND tenant IN (" + strings.Join(set, ", ") + ")"
-		}
-	}
+	q, args = baselineTenantFilter(
+		"SELECT client_id FROM baselines WHERE client_id > "+ph(1),
+		[]any{after}, tenants, ph)
 	args = append(args, limit)
 	q += " ORDER BY client_id LIMIT " + ph(len(args))
 	return q, args
+}
+
+// countClientsQuery builds the SQL of CountClients.
+func countClientsQuery(tenants []string, ph func(n int) string,
+) (q string, args []any) {
+	return baselineTenantFilter(
+		"SELECT COUNT(*) FROM baselines WHERE 1 = 1", nil, tenants, ph)
 }
 
 // scanClientIDs reads the client_id column of rows.
@@ -750,6 +770,19 @@ func (s *BaselineStore) ListClientsAfter(tenants []string, after string,
 		clients = clients[:limit]
 	}
 	return clients, nil
+}
+
+func (s *BaselineStore) CountClients(tenants []string) (int, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	n := 0
+	for id := range s.baselines {
+		if tenantMatches(s.tenants[id], tenants) {
+			n++
+		}
+	}
+	return n, nil
 }
 
 // BaselineStats counts the clients and dates their first baselines.
