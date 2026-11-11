@@ -43,7 +43,7 @@ if [ ! -f tls.key ]; then
     rm -f tls.crt
 fi
 if [ ! -f tls.crt ]; then
-    openssl req -new -key tls.key -out tls.csr -subj "/CN=lota-attest-ca"
+    openssl req -new -key tls.key -out tls.csr -subj "/CN=lota-attest-listener"
     openssl x509 -req -in tls.csr -days 825 -sha256 \
 	    -CA ca.crt -CAkey ca.key -CAcreateserial -out tls.crt \
 	    -extfile <(printf '%s\n%s\n%s\n' \

@@ -81,7 +81,7 @@ openssl req -new -x509 -days 365 "${PROVIDERS[@]}" \
 openssl genpkey -algorithm EC -pkeyopt ec_paramgen_curve:P-256 \
     -out "$OUT_DIR/tls.key" >/dev/null 2>&1
 openssl req -new -key "$OUT_DIR/tls.key" -out "$OUT_DIR/tls.csr" \
-    -subj "/CN=lota-attest-ca" >/dev/null 2>&1
+    -subj "/CN=lota-attest-listener" >/dev/null 2>&1
 openssl x509 -req -in "$OUT_DIR/tls.csr" -days 825 -sha256 "${PROVIDERS[@]}" \
     -CA "$OUT_DIR/ca.crt" -CAkey "$KEY_URI" -CAcreateserial \
     -out "$OUT_DIR/tls.crt" \
