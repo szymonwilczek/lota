@@ -200,7 +200,6 @@ static int load_config_into_options(struct cli_options *opts,
 
 	opts->daemon_flag = cfg->daemon ? 1 : 0;
 	opts->pid_file_path = cfg->pid_file;
-	opts->signing_key_path = cfg->signing_key[0] ? cfg->signing_key : NULL;
 	opts->policy_pubkey_path = policy_pubkey_resolve(
 		cfg->policy_pubkey[0] ? cfg->policy_pubkey : NULL,
 		LOTA_POLICY_PUBKEY_OVERRIDE, LOTA_ENFORCEMENT_PUBKEY_PATH);
@@ -271,6 +270,9 @@ int cli_parse(int argc, char **argv, struct cli_options *opts,
 	static const char optstring[] =
 		"f:ZticSEaI:s:p:C:KF:b:m:MPJYXR:L:A:dD:G:g:V:k:Q:h";
 	bool pubkey_flag = false;
+	bool offline = false;
+	bool dump = false;
+	bool help = false;
 	int opt;
 
 	static struct option long_options[] = {
@@ -343,8 +345,10 @@ int cli_parse(int argc, char **argv, struct cli_options *opts,
 	opts->config_file_mode = -1;
 
 	/*
-	 * the file loads first: the flags below overwrite its values and add to
-	 * its lists
+	 * The file loads first: the flags below overwrite its values and add to
+	 * its lists. --help skips it, and so do --gen-signing-key,
+	 * --sign-policy and --verify-policy unless --dump-config asks for the
+	 * file, so the host's configuration does not change their result.
 	 */
 	opterr = 0;
 	optind = 0;
@@ -352,13 +356,27 @@ int cli_parse(int argc, char **argv, struct cli_options *opts,
 	       -1) {
 		if (opt == 'f')
 			opts->config_path = optarg;
+		else if (opt == 'G' || opt == 'g' || opt == 'V')
+			offline = true;
+		else if (opt == 'Z')
+			dump = true;
+		else if (opt == 'h')
+			help = true;
 	}
+	offline = help || (offline && !dump);
 	opterr = 1;
 	optind = 0;
 
-	int rc = load_config_into_options(opts, cfg);
-	if (rc != 0)
-		return rc;
+	if (offline) {
+		opts->policy_pubkey_path =
+			policy_pubkey_resolve(NULL, LOTA_POLICY_PUBKEY_OVERRIDE,
+					      LOTA_ENFORCEMENT_PUBKEY_PATH);
+	} else {
+		int rc = load_config_into_options(opts, cfg);
+
+		if (rc != 0)
+			return rc;
+	}
 
 	while ((opt = getopt_long(argc, argv, optstring, long_options, NULL)) !=
 	       -1) {
@@ -780,18 +798,6 @@ int cli_dump_config(struct cli_options *opts, struct lota_config *cfg)
 					opts->pid_file_path) < 0) {
 			return 1;
 		}
-	}
-
-	if (opts->signing_key_path) {
-		if (opts->signing_key_path != cfg->signing_key) {
-			if (copy_string_checked("signing_key", cfg->signing_key,
-						sizeof(cfg->signing_key),
-						opts->signing_key_path) < 0) {
-				return 1;
-			}
-		}
-	} else {
-		cfg->signing_key[0] = '\0';
 	}
 
 	cfg->trust_lib_count = g_trust_lib_count;

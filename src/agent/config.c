@@ -939,14 +939,6 @@ static int apply_key(struct lota_config *cfg, const char *key,
 				 value, filepath, lineno);
 	}
 
-	if (strcmp(key, "signing_key") == 0 ||
-	    strcmp(key, "signing-key") == 0) {
-		if (validate_path_value("signing_key", value, filepath,
-					lineno) != 0)
-			return -1;
-		return set_value(cfg->signing_key, sizeof(cfg->signing_key),
-				 key, value, filepath, lineno);
-	}
 	if (strcmp(key, "policy_pubkey") == 0 ||
 	    strcmp(key, "policy-pubkey") == 0) {
 		if (validate_path_value("policy_pubkey", value, filepath,
@@ -1325,8 +1317,6 @@ void config_dump(const struct lota_config *cfg, FILE *fp)
 		cfg->seal_aik_auth_strict ? "true" : "false");
 
 	fprintf(fp, "\n# Policy signing\n");
-	if (cfg->signing_key[0])
-		fprintf(fp, "signing_key = %s\n", cfg->signing_key);
 	if (cfg->policy_pubkey[0])
 		fprintf(fp, "policy_pubkey = %s\n", cfg->policy_pubkey);
 

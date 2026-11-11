@@ -138,9 +138,6 @@ pid_file = /run/lota/lota-agent.pid
 
 # ---- Policy signing ------------------------------------------------------
 
-# Ed25519 private key --sign-policy signs with
-# signing_key = /etc/lota/policy.key
-
 # Ed25519 public key the enforcement object's signature is checked against.
 # The agent takes the first readable one of this path, /etc/lota/policy.pub
 # and /usr/lib/lota/enforcement.pub, so an unreadable path here is skipped.

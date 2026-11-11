@@ -139,7 +139,6 @@ struct lota_config {
 	char pid_file[PATH_MAX];
 
 	/* Policy signing */
-	char signing_key[PATH_MAX];
 	char policy_pubkey[PATH_MAX];
 
 	/* Trusted libraries */

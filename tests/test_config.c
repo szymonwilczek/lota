@@ -199,10 +199,6 @@ static void test_config_init_defaults(void)
 		FAIL("ca_cert not empty");
 		return;
 	}
-	if (cfg.signing_key[0] != '\0') {
-		FAIL("signing_key not empty");
-		return;
-	}
 	if (cfg.policy_pubkey[0] != '\0') {
 		FAIL("policy_pubkey not empty");
 		return;
@@ -378,7 +374,6 @@ static void test_config_load_string_fields(void)
 		"pin_sha256 = aabb112200000000000000000000000000000000000000000000000000000000\n"
 		"bpf_path = /opt/lota/custom.bpf.o\n"
 		"pid_file = /var/run/lota.pid\n"
-		"signing_key = /etc/lota/sign.key\n"
 		"policy_pubkey = /etc/lota/sign.pub\n");
 	config_path("strings.conf", path, sizeof(path));
 	config_init(&cfg);
@@ -405,10 +400,6 @@ static void test_config_load_string_fields(void)
 		FAIL("pid_file mismatch");
 		return;
 	}
-	if (strcmp(cfg.signing_key, "/etc/lota/sign.key") != 0) {
-		FAIL("signing_key mismatch");
-		return;
-	}
 	if (strcmp(cfg.policy_pubkey, "/etc/lota/sign.pub") != 0) {
 		FAIL("policy_pubkey mismatch");
 		return;
@@ -433,7 +424,6 @@ static void test_config_load_hyphen_keys(void)
 		"attest-interval = 120\n"
 		"aik-handle = 0x81020001\n"
 		"pid-file = /tmp/test.pid\n"
-		"signing-key = /tmp/sign.key\n"
 		"policy-pubkey = /tmp/sign.pub\n"
 		"trust-lib = /usr/lib/libfoo.so\n"
 		"protect-pid = 42\n"
@@ -477,10 +467,6 @@ static void test_config_load_hyphen_keys(void)
 	}
 	if (strcmp(cfg.pid_file, "/tmp/test.pid") != 0) {
 		FAIL("pid-file");
-		return;
-	}
-	if (strcmp(cfg.signing_key, "/tmp/sign.key") != 0) {
-		FAIL("signing-key");
 		return;
 	}
 	if (strcmp(cfg.policy_pubkey, "/tmp/sign.pub") != 0) {
@@ -1201,6 +1187,22 @@ static void test_config_load_refuses_aik_ttl(void)
 	config_init(&cfg);
 	if (config_load(&cfg, path) != -EINVAL) {
 		FAIL("aik_ttl was accepted");
+		return;
+	}
+	PASS();
+}
+
+static void test_config_load_refuses_signing_key(void)
+{
+	struct lota_config cfg;
+	char path[PATH_MAX];
+
+	TEST("config_load refuses signing_key");
+	write_config("signing_key.conf", "signing_key = /etc/lota/sign.key\n");
+	config_path("signing_key.conf", path, sizeof(path));
+	config_init(&cfg);
+	if (config_load(&cfg, path) != -EINVAL) {
+		FAIL("signing_key was accepted");
 		return;
 	}
 	PASS();
@@ -2355,7 +2357,6 @@ static void test_config_load_all_known_keys(void)
 		"aik_handle = 0x81010005\n"
 		"daemon = true\n"
 		"pid_file = /all/pid\n"
-		"signing_key = /all/sign.key\n"
 		"policy_pubkey = /all/sign.pub\n"
 		"trust_lib = /all/lib1.so\n"
 		"trust_lib = /all/lib2.so\n"
@@ -2421,10 +2422,6 @@ static void test_config_load_all_known_keys(void)
 	}
 	if (strcmp(cfg.pid_file, "/all/pid") != 0) {
 		FAIL("pid_file");
-		return;
-	}
-	if (strcmp(cfg.signing_key, "/all/sign.key") != 0) {
-		FAIL("signing_key");
 		return;
 	}
 	if (strcmp(cfg.policy_pubkey, "/all/sign.pub") != 0) {
@@ -2806,6 +2803,124 @@ static void test_cli_policy_pubkey_unreadable(void)
 	PASS();
 }
 
+/* A host file the daemon would refuse does not stop the file commands */
+static void test_cli_file_commands_skip_the_config(void)
+{
+	struct cli_options opts;
+	struct lota_config *cfg;
+	char path[PATH_MAX];
+	int saved, fd, rc;
+
+	TEST("key and signature commands do not read the config file");
+
+	write_config("cli_broken.conf", "aik_ttl = 0\n");
+	config_path("cli_broken.conf", path, sizeof(path));
+	cfg = config_new();
+	saved = dup(STDOUT_FILENO);
+	fd = open("/dev/null", O_WRONLY | O_CLOEXEC);
+	if (!cfg || saved < 0 || fd < 0) {
+		FAIL("setup");
+		config_free(cfg);
+		return;
+	}
+
+	const char *const status[] = { "lota-agent", "--config", path,
+				       "--status" };
+	const char *const gen[] = { "lota-agent", "--config", path,
+				    "--gen-signing-key", "/nonexistent/key" };
+	const char *const sign[] = {
+		"lota-agent",	   "--config",	       path,
+		"--sign-policy",   "/nonexistent/obj", "--signing-key",
+		"/nonexistent/key"
+	};
+	const char *const verify[] = { "lota-agent", "--config", path,
+				       "--verify-policy", "/nonexistent/obj" };
+	const char *const help[] = { "lota-agent", "--config", path, "--help" };
+
+	fflush(stdout);
+	dup2(fd, STDOUT_FILENO);
+	if (cli_parse_argv(status, 4, &opts, cfg) == 0) {
+		rc = -2;
+	} else if (cli_parse_argv(gen, 5, &opts, cfg) != 0 ||
+		   !opts.gen_signing_key_prefix) {
+		rc = 1;
+	} else if (cli_parse_argv(sign, 7, &opts, cfg) != 0 ||
+		   !opts.sign_policy_file || !opts.signing_key_path) {
+		rc = 2;
+	} else if (cli_parse_argv(verify, 5, &opts, cfg) != 0 ||
+		   !opts.verify_policy_file) {
+		rc = 3;
+	} else if (cli_parse_argv(help, 4, &opts, cfg) != -1) {
+		rc = 4;
+	} else {
+		rc = 0;
+	}
+	fflush(stdout);
+	dup2(saved, STDOUT_FILENO);
+	close(saved);
+	close(fd);
+	config_free(cfg);
+
+	if (rc == -2)
+		FAIL("the daemon accepted the key the file commands must skip");
+	else if (rc)
+		FAIL(rc == 1 ? "--gen-signing-key read the file" :
+		     rc == 2 ? "--sign-policy read the file" :
+		     rc == 3 ? "--verify-policy read the file" :
+			       "--help read the file");
+	else
+		PASS();
+}
+
+static void test_cli_dump_with_a_file_command_reads_the_config(void)
+{
+	struct cli_options opts;
+	struct lota_config *cfg;
+	char path[PATH_MAX];
+	int saved, fd, rc, help_rc;
+
+	TEST("--dump-config next to a file command reads the config file");
+
+	write_config("cli_dump_broken.conf", "aik_ttl = 0\n");
+	config_path("cli_dump_broken.conf", path, sizeof(path));
+	cfg = config_new();
+	if (!cfg) {
+		FAIL("setup");
+		return;
+	}
+
+	const char *const argv[] = {
+		"lota-agent",	 "--config",	    path,
+		"--dump-config", "--verify-policy", "/nonexistent/obj"
+	};
+
+	const char *const help[] = { "lota-agent", "--config", path,
+				     "--dump-config", "--help" };
+
+	rc = cli_parse_argv(argv, 6, &opts, cfg);
+	saved = dup(STDOUT_FILENO);
+	fd = open("/dev/null", O_WRONLY | O_CLOEXEC);
+	fflush(stdout);
+	if (saved >= 0 && fd >= 0)
+		dup2(fd, STDOUT_FILENO);
+	help_rc = cli_parse_argv(help, 5, &opts, cfg);
+	fflush(stdout);
+	if (saved >= 0) {
+		dup2(saved, STDOUT_FILENO);
+		close(saved);
+	}
+	if (fd >= 0)
+		close(fd);
+	config_free(cfg);
+
+	if (rc == 0)
+		FAIL("the dump left out the file it was given");
+	else if (help_rc != -1)
+		FAIL("--help read the file next to --dump-config");
+	else
+		PASS();
+}
+
 static void test_cli_policy_pubkey_into_config(void)
 {
 	struct cli_options opts;
@@ -2881,6 +2996,7 @@ int main(void)
 		test_config_load_port_bounds,
 		test_config_load_attest_interval_bounds,
 		test_config_load_refuses_aik_ttl,
+		test_config_load_refuses_signing_key,
 		test_config_load_profiles,
 		test_config_profile_reporting,
 		test_config_load_profile_incomplete,
@@ -2909,6 +3025,8 @@ int main(void)
 		test_cli_trust_lib_path,
 		test_cli_policy_pubkey_unreadable,
 		test_cli_policy_pubkey_into_config,
+		test_cli_file_commands_skip_the_config,
+		test_cli_dump_with_a_file_command_reads_the_config,
 	};
 
 	for (size_t i = 0; i < sizeof(tests) / sizeof(tests[0]); i++)

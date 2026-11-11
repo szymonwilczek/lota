@@ -111,8 +111,10 @@ struct cli_options {
  * @out: Receives the options.
  * @cfg: Receives the config file; @out points into it.
  *
- * Loads --config or the default path, then layers the flags on top. Also sets
- * g_agent.mode and the AIK handle, sealing flags and kernel path in
+ * Loads --config or the default path, then layers the flags on top;
+ * --help loads no file, nor do --gen-signing-key, --sign-policy and
+ * --verify-policy unless --dump-config is given.
+ * Also sets g_agent.mode and the AIK handle, sealing flags and kernel path in
  * g_agent.tpm_ctx, and fills the lists behind the accessors below.
  *
  * Return: 0 on success, -1 after printing help for --help, or a positive

@@ -639,8 +639,6 @@ static void sync_config_snapshot(
 	cfg->attest_interval = new_cfg->attest_interval;
 	cfg->daemon = new_cfg->daemon;
 	memcpy(cfg->pid_file, new_cfg->pid_file, sizeof(cfg->pid_file));
-	memcpy(cfg->signing_key, new_cfg->signing_key,
-	       sizeof(cfg->signing_key));
 	cfg->trust_lib_count = trust_lib_count;
 	for (int k = 0; k < trust_lib_count; k++) {
 		copy_path(cfg->trust_libs[k], trust_libs[k]);
