@@ -228,6 +228,19 @@ int ipc_socket_watch_fd(const struct ipc_context *ctx)
 	return -1;
 }
 
+int ipc_status_timeout_ms(const struct ipc_context *ctx, uint64_t now_ns)
+{
+	(void)ctx;
+	(void)now_ns;
+	return -1;
+}
+
+void ipc_status_tick(struct ipc_context *ctx, uint64_t now_ns)
+{
+	(void)ctx;
+	(void)now_ns;
+}
+
 int sdnotify_reloading(void)
 {
 	return 0;
