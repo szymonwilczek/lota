@@ -169,10 +169,12 @@ int bpf_loader_instance_stopped_ms(struct bpf_loader_ctx *ctx, uint32_t pid,
 	return 0;
 }
 
-int bpf_loader_adopt_instance_member(struct bpf_loader_ctx *ctx, uint32_t pid)
+int bpf_loader_adopt_instance_member(struct bpf_loader_ctx *ctx, uint32_t pid,
+				     struct bpf_instance_member *member)
 {
 	(void)ctx;
 	(void)pid;
+	(void)member;
 	return 0;
 }
 

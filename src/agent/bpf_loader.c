@@ -2151,14 +2151,15 @@ int bpf_loader_protect_pid(struct bpf_loader_ctx *ctx, uint32_t pid)
 	return 0;
 }
 
-int bpf_loader_adopt_instance_member(struct bpf_loader_ctx *ctx, uint32_t pid)
+int bpf_loader_adopt_instance_member(struct bpf_loader_ctx *ctx, uint32_t pid,
+				     struct bpf_instance_member *member)
 {
 	struct protected_pid_entry value = { 0 };
 	struct lota_instance_entry entry;
 	int pidfd;
 	int ret;
 
-	if (!ctx || !ctx->loaded || pid == 0)
+	if (!ctx || !ctx->loaded || pid == 0 || !member)
 		return -EINVAL;
 
 	if (ctx->protected_pids_fd < 0 || ctx->instance_fd < 0)
@@ -2195,6 +2196,9 @@ int bpf_loader_adopt_instance_member(struct bpf_loader_ctx *ctx, uint32_t pid)
 		ret = -errno;
 		goto out;
 	}
+	member->start_ticks = value.start_time_ticks;
+	member->root_tgid = entry.root_tgid;
+	member->root_start_ticks = entry.root_start_ticks;
 	ret = 1;
 out:
 	close(pidfd);

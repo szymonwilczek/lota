@@ -26,9 +26,9 @@ bool token_gate_needs_attested(uint32_t view_flags);
  * @failing_pid: The protected process that could not be measured.
  * @requesting_pid: The process asking for the token.
  *
- * The token's runtime digest covers every protected process on the host, so
- * refusing over another process's failure would let a local program stop token
- * issuance for other titles by protecting itself from an unmeasurable binary.
+ * The round measures every protected process on the host, so refusing over
+ * another process's failure would let a local program stop token issuance for
+ * other titles by protecting itself from an unmeasurable binary.
  *
  * Return: true when the process that cannot be measured is the one asking.
  */

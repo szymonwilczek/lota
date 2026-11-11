@@ -82,7 +82,8 @@ enum lota_ipc_result {
 	LOTA_IPC_ERR_TARGET_REFUSED = 0x0E,
 	/*
 	 * the caller's own executable has no measurable identity; another
-	 * protected process without one clears LOTA_STATUS_IMAGE_FULLY_MEASURED
+	 * process of the token without one clears
+	 * LOTA_STATUS_IMAGE_FULLY_MEASURED
 	 */
 	LOTA_IPC_ERR_UNMEASURABLE_SELF = 0x0F,
 	/* this agent holds no TPM to sign a token with */
@@ -118,8 +119,9 @@ enum lota_ipc_result {
  */
 #define LOTA_STATUS_TOKEN_ONLY (1 << 8)
 /*
- * Every file-backed executable mapping of every protected process was measured.
- * Clear when an object could not be measured or nothing is protected.
+ * Every file-backed executable mapping of every protected process was measured,
+ * in a token of every one it carries. Clear when an object could not be
+ * measured or nothing is protected.
  */
 #define LOTA_STATUS_IMAGE_FULLY_MEASURED (1 << 9)
 /*
@@ -208,8 +210,9 @@ struct lota_ipc_status {
  * hostname.
  *
  * Later answers on the connection are that publisher's: GET_TOKEN quotes with
- * their AIK and GET_STATUS reports their verifier's verdict. A connection that
- * never sends this gets the host-wide answers.
+ * their AIK over the processes protected for them, and GET_STATUS reports
+ * their verifier's verdict. A connection that never sends this gets
+ * the host-wide answers.
  */
 struct lota_ipc_set_profile {
 	uint8_t profile_id[32];

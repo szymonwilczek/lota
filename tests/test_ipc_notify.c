@@ -157,10 +157,12 @@ int bpf_loader_instance_stopped_ms(struct bpf_loader_ctx *ctx, uint32_t pid,
  */
 static pid_t terminate_victim;
 
-int bpf_loader_adopt_instance_member(struct bpf_loader_ctx *ctx, uint32_t pid)
+int bpf_loader_adopt_instance_member(struct bpf_loader_ctx *ctx, uint32_t pid,
+				     struct bpf_instance_member *member)
 {
 	(void)ctx;
 	(void)pid;
+	(void)member;
 	if (terminate_victim > 0) {
 		kill(terminate_victim, SIGKILL);
 		waitpid(terminate_victim, NULL, 0);
