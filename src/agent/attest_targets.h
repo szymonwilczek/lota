@@ -103,6 +103,16 @@ struct attest_target {
 	int enroll_backoff;
 	uint64_t next_enroll_ms;
 
+	/*
+	 * Its certificate does not name the key at its handle and the loop
+	 * enrolls it again, so its titles read LOTA_STATUS_REENROLLING.
+	 */
+	bool reenrolling;
+	/* Said it is not enrolled again unattended; an agreement clears it */
+	bool reenroll_refused_announced;
+	int reenroll_backoff;
+	uint64_t next_reenroll_ms;
+
 	/* a session opened or closed: the loop reacts on its next pass */
 	bool session_changed;
 };
@@ -171,6 +181,53 @@ enum attest_cert_say {
  */
 enum attest_cert_say attest_target_note_cert_match(struct attest_target *t,
 						   int match_rc);
+
+/* what the loop does about a certificate that does not name the key */
+enum attest_reenroll {
+	ATTEST_REENROLL_NOW = 0,
+	ATTEST_REENROLL_WAIT, /* the last attempt failed and backs off */
+	ATTEST_REENROLL_REFUSED, /* no agreement recorded: log it */
+	ATTEST_REENROLL_REFUSED_SILENT, /* the same, already logged */
+};
+
+/**
+ * attest_target_reenroll_decide() - Enroll @t again for the key now present?
+ * @t: The target, whose certificate does not name the key at its handle.
+ * @consent_rc: profile_consent_time() for @t.
+ * @now_ms: Now, on the monotonic clock.
+ *
+ * Sets @t->reenrolling unless the answer is a refusal.
+ *
+ * Return: what to do.
+ */
+enum attest_reenroll attest_target_reenroll_decide(struct attest_target *t,
+						   int consent_rc,
+						   uint64_t now_ms);
+
+/**
+ * attest_target_reenroll_failed() - Back off @t after a failed attempt.
+ * @t: The target.
+ * @now_ms: Now, on the monotonic clock.
+ *
+ * Return: seconds until the next attempt.
+ */
+int attest_target_reenroll_failed(struct attest_target *t, uint64_t now_ms);
+
+/**
+ * attest_target_reenroll_wait() - Seconds until @t's next round.
+ * @t: The target, whose certificate does not name the key at its handle.
+ * @now_ms: Now, on the monotonic clock.
+ *
+ * Return: seconds until the next re-enrollment attempt while one is backed
+ * off, else @t->interval.
+ */
+int attest_target_reenroll_wait(const struct attest_target *t, uint64_t now_ms);
+
+/**
+ * attest_target_reenroll_clear() - Forget @t's re-enrollment state.
+ * @t: The target, whose certificate names the key at its handle again.
+ */
+void attest_target_reenroll_clear(struct attest_target *t);
 
 /**
  * attest_targets_take_wakeups() - Make due now every target a title asked for.

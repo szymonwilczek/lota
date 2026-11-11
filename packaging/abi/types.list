@@ -98,6 +98,7 @@ macro LOTA_FLAG_STRICT_MODULES                 = 131072
 macro LOTA_FLAG_BLOCK_ANON_EXEC                = 262144
 macro LOTA_FLAG_BLOCK_PTRACE                   = 524288
 macro LOTA_FLAG_AGENT_RESTARTED                = 1048576
+macro LOTA_FLAG_REENROLLING                    = 2097152
 macro LOTA_FLAG_EVENTS_LOST                    = 64
 macro LOTA_EVENT_STATUS                        = 1
 macro LOTA_EVENT_ATTEST                        = 2

@@ -156,6 +156,12 @@ enum lota_ipc_result {
  */
 #define LOTA_STATUS_AGENT_RESTARTED (1 << 20)
 /*
+ * The certificate of the publisher this connection named does not name the
+ * attestation key at its handle, and the attestation loop is enrolling it
+ * again; with none named, that holds for a publisher of this host.
+ */
+#define LOTA_STATUS_REENROLLING (1 << 21)
+/*
  * This agent ended a protected process for its owner or root. Set until the
  * agent ends, in the status word and the token alike, so a session ended
  * locally can be told from a process that vanished. A restart shows as
@@ -347,7 +353,8 @@ struct lota_ipc_notify {
 struct lota_ipc_attest_verdict {
 	uint8_t profile_id[32]; /* SHA-256 of the publisher CA anchor SPKI */
 	uint8_t attested; /* the verifier accepted the last report */
-	uint8_t reserved[7];
+	uint8_t reenrolling; /* LOTA_STATUS_REENROLLING for this publisher */
+	uint8_t reserved[6];
 	uint64_t valid_until; /* Unix timestamp the verdict lapses at */
 } __attribute__((packed));
 

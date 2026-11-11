@@ -864,7 +864,7 @@ const char *net_result_str(uint32_t result)
 		       "certificate, so the publisher has nothing to identify "
 		       "it by. The enrolment did not finish or its "
 		       "certificate is not on disk. Run lota-agent --reenroll "
-		       "--ca-cert <their anchor>";
+		       "--publisher <their ID>";
 	case VERIFY_CERTIFICATE_VALIDITY:
 		return "FAIL - This host's attestation certificate is outside "
 		       "the window it is valid in. Either it has expired, "
@@ -872,13 +872,13 @@ const char *net_result_str(uint32_t result)
 		       "like, or this machine's clock is behind the "
 		       "publisher's and the certificate is not valid yet. The "
 		       "quote itself is not in question. Check the clock, then "
-		       "run lota-agent --reenroll --ca-cert <their anchor>";
+		       "run lota-agent --reenroll --publisher <their ID>";
 	case VERIFY_IDENTITY_FAIL:
 		return "FAIL - The certificate this host presented does not "
 		       "certify the key it signed with, so the publisher "
 		       "cannot tell which machine this is. A TPM clear leaves "
-		       "exactly this. Run lota-agent --reenroll --ca-cert "
-		       "<their anchor>";
+		       "exactly this. Run lota-agent --reenroll --publisher "
+		       "<their ID>";
 	default:
 		return "FAIL - Unknown error";
 	}

@@ -96,7 +96,7 @@ The most common failures, with the gate that produced them:
   key of its own``. The host was enrolled by a build that gave every publisher
   the same TPM key. A key cannot be rewritten in place, so the agent refuses
   to attest with it and the fix is one command per publisher:
-  ``sudo lota-agent --reenroll --ca-cert <their anchor>``. The attestation
+  ``sudo lota-agent --reenroll --publisher <their ID>``. The attestation
   key is not part of the device ID, so the CA certifies the new key under the
   existing one and each verifier keeps the baseline it holds.
   Nothing has been spent: the refusal happens before the boot commitment, so
@@ -680,7 +680,7 @@ them:
     enrolled with  yes -- but the record cannot be read (Operation not supported)
                    /var/lib/lota/profiles/<id>/enroll_state.dat
                    the key and certificate below were issued against it;
-                   restore it, or re-enroll: lota-agent --reenroll --ca-cert <their anchor>
+                   restore it, or re-enroll: lota-agent --reenroll --publisher <id>
 
 When any profile is in that state the summary says so, because the key count
 underneath is then what the machine stores.

@@ -8,6 +8,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "attest.h"
 #include "attest_targets.h"
 
 bool attest_target_should_announce_wait(struct attest_target *t)
@@ -132,6 +133,10 @@ static void carry_live_state(struct attest_target *to,
 	to->enroll_pending = from->enroll_pending;
 	to->enroll_backoff = from->enroll_backoff;
 	to->next_enroll_ms = from->next_enroll_ms;
+	to->reenrolling = from->reenrolling;
+	to->reenroll_refused_announced = from->reenroll_refused_announced;
+	to->reenroll_backoff = from->reenroll_backoff;
+	to->next_reenroll_ms = from->next_reenroll_ms;
 }
 
 enum attest_cert_say attest_target_note_cert_match(struct attest_target *t,
@@ -157,6 +162,54 @@ enum attest_cert_say attest_target_note_cert_match(struct attest_target *t,
 		return ATTEST_CERT_SILENT;
 	t->key_mismatch_announced = false;
 	return ATTEST_CERT_MATCHES_AGAIN;
+}
+
+enum attest_reenroll attest_target_reenroll_decide(struct attest_target *t,
+						   int consent_rc,
+						   uint64_t now_ms)
+{
+	if (consent_rc < 0) {
+		t->reenrolling = false;
+		if (t->reenroll_refused_announced)
+			return ATTEST_REENROLL_REFUSED_SILENT;
+		t->reenroll_refused_announced = true;
+		return ATTEST_REENROLL_REFUSED;
+	}
+
+	t->reenroll_refused_announced = false;
+	t->reenrolling = true;
+	return now_ms < t->next_reenroll_ms ? ATTEST_REENROLL_WAIT :
+					      ATTEST_REENROLL_NOW;
+}
+
+int attest_target_reenroll_failed(struct attest_target *t, uint64_t now_ms)
+{
+	int shift = t->reenroll_backoff;
+	int delay;
+
+	if (shift > 5)
+		shift = 5;
+	t->reenroll_backoff++;
+	delay = ATTEST_BACKOFF_BASE_SEC * (1 << shift);
+	if (delay > MAX_BACKOFF_SECONDS)
+		delay = MAX_BACKOFF_SECONDS;
+	t->next_reenroll_ms = now_ms + (uint64_t)delay * 1000;
+	return delay;
+}
+
+int attest_target_reenroll_wait(const struct attest_target *t, uint64_t now_ms)
+{
+	if (!t->reenrolling || t->next_reenroll_ms <= now_ms)
+		return t->interval;
+	return (int)((t->next_reenroll_ms - now_ms + 999) / 1000);
+}
+
+void attest_target_reenroll_clear(struct attest_target *t)
+{
+	t->reenrolling = false;
+	t->reenroll_refused_announced = false;
+	t->reenroll_backoff = 0;
+	t->next_reenroll_ms = 0;
 }
 
 bool attest_targets_take_wakeups(struct attest_target *targets, size_t count,

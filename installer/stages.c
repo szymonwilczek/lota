@@ -1197,8 +1197,12 @@ static int st_enroll_apply(struct install_ctx *ctx)
 	if (rc == 0 && days >= 0)
 		return record_fleet_publisher(ctx);
 	if (rc == 0) {
-		const char *const rv[] = { PATH_AGENT_BIN, "--reenroll",
-					   "--ca-cert", ctx->opts.ca_cert,
+		const char *const rv[] = { PATH_AGENT_BIN,
+					   "--reenroll",
+					   "--publisher",
+					   paths.id,
+					   "--ca-cert",
+					   ctx->opts.ca_cert,
 					   NULL };
 
 		rc = run_cmd(&ctx->ui,

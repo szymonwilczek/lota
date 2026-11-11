@@ -11,6 +11,7 @@
 #include <fcntl.h>
 #include <limits.h>
 #include <openssl/crypto.h>
+#include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -122,8 +123,7 @@ static void report_ca_setup_failed(const char *server, int port,
 {
 	fprintf(stderr,
 		"Failed to set up the TLS channel to the CA at %s:%d: %s.\n"
-		"What it is built from is the certificate named by "
-		"--ca-cert%s%s%s.\n",
+		"What it is built from is the CA certificate%s%s%s.\n",
 		server, port, net_strerror(ret), ca_cert ? " (" : "",
 		ca_cert ? ca_cert : "", ca_cert ? ")" : "");
 }
@@ -135,8 +135,7 @@ static void report_ca_unreachable(const char *server, int port,
 		fprintf(stderr,
 			"The attestation CA at %s:%d answered, and "
 			"this host refused the TLS connection: %s.\n"
-			"What decides that is the certificate named by "
-			"--ca-cert%s%s%s.\n",
+			"What decides that is the CA certificate%s%s%s.\n",
 			server, port, net_strerror(ret), ca_cert ? " (" : "",
 			ca_cert ? ca_cert : "", ca_cert ? ")" : "");
 	else
@@ -370,6 +369,7 @@ static void persist_enroll_state(const struct profile_paths *paths,
 				 const char *ca_cert, int skip_verify,
 				 const uint8_t *pin, const char *token)
 {
+	char abs_cert[PATH_MAX];
 	struct enroll_state st;
 
 	memset(&st, 0, sizeof(st));
@@ -377,8 +377,10 @@ static void persist_enroll_state(const struct profile_paths *paths,
 	st.no_verify_tls = skip_verify ? 1 : 0;
 	if (server)
 		snprintf(st.ca_server, sizeof(st.ca_server), "%s", server);
+	/* --reenroll reads the anchor from any working directory */
 	if (ca_cert)
-		snprintf(st.ca_cert, sizeof(st.ca_cert), "%s", ca_cert);
+		snprintf(st.ca_cert, sizeof(st.ca_cert), "%s",
+			 realpath(ca_cert, abs_cert) ? abs_cert : ca_cert);
 	if (token)
 		snprintf(st.enroll_token, sizeof(st.enroll_token), "%s", token);
 	if (pin) {
@@ -739,25 +741,78 @@ int do_enroll(const char *server, int port, const char *ca_cert,
 	return ret == 0 ? 0 : 1;
 }
 
-int do_reenroll(const char *ca_cert, const char *ca_server, int ca_port)
+/* --allow-publisher runs before enrollment: no anchor to derive the id */
+static int paths_from_id(const char *profile_id, struct profile_paths *out)
+{
+	return profile_paths_from_id(LOTA_PROFILE_BASE_DIR, profile_id, out);
+}
+
+/*
+ * Whether the key at the handle is the one the certificate names; nothing
+ * else listed changes when it is replaced. UNKNOWN when it cannot be asked.
+ */
+enum publisher_key_status {
+	PUBLISHER_KEY_UNKNOWN = 0,
+	PUBLISHER_KEY_MATCHES,
+	PUBLISHER_KEY_MISMATCH,
+	PUBLISHER_KEY_ABSENT, /* no key at the handle */
+};
+
+static enum publisher_key_status publisher_key_status(const char *id)
 {
 	struct profile_paths paths;
+	uint8_t spki[LOTA_MAX_AIK_PUB_SIZE];
+	size_t spki_len = 0;
+
+	if (paths_from_id(id, &paths) < 0)
+		return PUBLISHER_KEY_UNKNOWN;
+
+	if (tpm_bind_profile(&g_agent.tpm_ctx, &paths) < 0)
+		return PUBLISHER_KEY_UNKNOWN;
+
+	if (tpm_aik_load_metadata(&g_agent.tpm_ctx) < 0)
+		return PUBLISHER_KEY_UNKNOWN;
+
+	if (tpm_aik_key_present(&g_agent.tpm_ctx) == 0)
+		return PUBLISHER_KEY_ABSENT;
+
+	if (tpm_get_aik_public(&g_agent.tpm_ctx, spki, sizeof(spki),
+			       &spki_len) < 0)
+		return PUBLISHER_KEY_UNKNOWN;
+
+	switch (aik_cert_matches_key(paths.aik_cert, spki, spki_len)) {
+	case 0:
+		return PUBLISHER_KEY_MATCHES;
+	case -EKEYREJECTED:
+		return PUBLISHER_KEY_MISMATCH;
+	default:
+		return PUBLISHER_KEY_UNKNOWN;
+	}
+}
+
+/*
+ * Enroll @paths again with the endpoint, anchor and token its record holds.
+ * Return: 0, or 1 with the reason on stderr.
+ */
+static int reenroll_profile(const struct profile_paths *paths,
+			    const char *ca_server, int ca_port,
+			    const char *ca_cert)
+{
+	char anchor_id[LOTA_PROFILE_ID_LEN];
 	struct enroll_state st;
+	const char *anchor;
 	const char *server;
 	int port;
 	int ret;
 
-	if (resolve_profile(ca_cert, &paths) < 0)
-		return 1;
-
-	ret = enroll_state_load_path(paths.enroll_state, &st);
+	ret = enroll_state_load_path(paths->enroll_state, &st);
 	if (ret == -ENOENT) {
 		fprintf(stderr,
-			"No saved enrollment for this CA at %s.\n"
-			"Run --enroll once with --ca-server and the same "
-			"--ca-cert first; --reenroll then reuses that "
-			"endpoint.\n",
-			paths.enroll_state);
+			"Publisher %s was never enrolled here, so there is no "
+			"endpoint to reuse.\nEnroll it once: lota-agent "
+			"--enroll --ca-server <host> --ca-cert <their "
+			"anchor>\n",
+			paths->id);
 		return 1;
 	}
 	if (ret < 0) {
@@ -767,8 +822,8 @@ int do_reenroll(const char *ca_cert, const char *ca_server, int ca_port)
 		/* unreadable, not absent: the endpoint to reuse is inside it */
 		fprintf(stderr,
 			"The enrollment record at %s could not be read (%s).\n",
-			paths.enroll_state, strerror(-ret));
-		if (enroll_state_peek(paths.enroll_state, &magic, &version) ==
+			paths->enroll_state, strerror(-ret));
+		if (enroll_state_peek(paths->enroll_state, &magic, &version) ==
 		    0)
 			fprintf(stderr,
 				"It holds magic 0x%08X version %u; this build "
@@ -785,12 +840,37 @@ int do_reenroll(const char *ca_cert, const char *ca_server, int ca_port)
 		return 1;
 	}
 
-	/* the anchor selected this record, so a stale path in it is unused */
+	/* the anchor must still name the profile the record is stored in */
+	anchor = ca_cert ? ca_cert : st.ca_cert;
+	ret = profile_id_from_anchor(anchor, anchor_id, sizeof(anchor_id));
+	if (ret < 0 || strcmp(anchor_id, paths->id) != 0) {
+		if (ca_cert)
+			fprintf(stderr, "The anchor %s %s publisher %s.\n",
+				ca_cert,
+				ret < 0 ?
+					"cannot be read, so it does not name" :
+					"does not name",
+				paths->id);
+		else
+			fprintf(stderr,
+				"The anchor the enrollment of publisher %s "
+				"names, %s, %s.\nName it: lota-agent "
+				"--reenroll --publisher %s --ca-cert <their "
+				"anchor>\n",
+				paths->id,
+				st.ca_cert[0] ? st.ca_cert : "(none)",
+				ret < 0 ? "cannot be read" :
+					  "names another publisher now",
+				paths->id);
+		OPENSSL_cleanse(&st, sizeof(st));
+		return 1;
+	}
+
 	server = enroll_endpoint_server(st.ca_server, ca_server);
 	port = enroll_endpoint_port(st.ca_port, ca_port);
 
 	printf("=== Re-enrolling with %s:%d (profile %s) ===\n", server, port,
-	       paths.id);
+	       paths->id);
 	if (enroll_endpoint_source(ca_server, ca_port) ==
 	    ENROLL_ENDPOINT_FROM_COMMAND_LINE)
 		printf("The record names %s:%d; this run uses the endpoint "
@@ -799,7 +879,7 @@ int do_reenroll(const char *ca_cert, const char *ca_server, int ca_port)
 		       st.ca_server, st.ca_port);
 	printf("\n");
 
-	ret = run_enrollment(&paths, server, port, ca_cert, st.no_verify_tls,
+	ret = run_enrollment(paths, server, port, anchor, st.no_verify_tls,
 			     st.has_pin ? st.pin_sha256 : NULL,
 			     st.enroll_token[0] ? st.enroll_token : NULL);
 	OPENSSL_cleanse(&st, sizeof(st));
@@ -809,10 +889,104 @@ int do_reenroll(const char *ca_cert, const char *ca_server, int ca_port)
 	return ret == 0 ? 0 : 1;
 }
 
-/* --allow-publisher runs before enrollment: no anchor to derive the id */
-static int paths_from_id(const char *profile_id, struct profile_paths *out)
+int do_reenroll(const char *profile_id, const char *ca_server, int ca_port,
+		const char *ca_cert)
 {
-	return profile_paths_from_id(LOTA_PROFILE_BASE_DIR, profile_id, out);
+	struct publisher_entry *entries = NULL;
+	enum publisher_key_status *status = NULL;
+	struct profile_paths paths;
+	size_t count = 0;
+	size_t tried = 0;
+	size_t failed = 0;
+	size_t unchecked = 0;
+	int ret;
+
+	setvbuf(stdout, NULL, _IOLBF, 0);
+
+	if (profile_id) {
+		if (paths_from_id(profile_id, &paths) < 0) {
+			fprintf(stderr,
+				"ERROR: '%s' is not a publisher identity.\n",
+				profile_id);
+			return 1;
+		}
+		if (access(paths.dir, F_OK) != 0) {
+			fprintf(stderr,
+				"This machine does not answer to publisher "
+				"%s.\nSee lota-agent --list-publishers for "
+				"the ones it does.\n",
+				paths.id);
+			return 1;
+		}
+		return reenroll_profile(&paths, ca_server, ca_port, ca_cert);
+	}
+
+	if ((ca_server && ca_server[0]) || ca_port > 0 || ca_cert) {
+		fprintf(stderr, "ERROR: --ca-server, --ca-port and --ca-cert "
+				"move one publisher; name it with --publisher "
+				"ID.\n");
+		return 1;
+	}
+
+	ret = publishers_list_alloc(LOTA_PROFILE_BASE_DIR, &entries, &count);
+	if (ret < 0) {
+		fprintf(stderr, "Failed to read %s: %s\n",
+			LOTA_PROFILE_BASE_DIR, strerror(-ret));
+		return 1;
+	}
+
+	status = calloc(count ? count : 1, sizeof(*status));
+	if (!status) {
+		free(entries);
+		return 1;
+	}
+
+	ret = tpm_init(&g_agent.tpm_ctx);
+	if (ret < 0) {
+		fprintf(stderr, "Failed to initialize TPM: %s\n",
+			tpm_strerror(ret));
+		free(status);
+		free(entries);
+		return 1;
+	}
+	for (size_t i = 0; i < count; i++) {
+		if (!entries[i].enrolled && !entries[i].enroll_unreadable)
+			status[i] = PUBLISHER_KEY_MATCHES;
+		else if (entries[i].enrolled && entries[i].has_aik_handle &&
+			 entries[i].has_cert)
+			status[i] = publisher_key_status(entries[i].id);
+	}
+	tpm_cleanup(&g_agent.tpm_ctx);
+
+	for (size_t i = 0; i < count; i++) {
+		int rc = 1;
+
+		/* UNKNOWN may be a TPM error, not a lost key */
+		if (status[i] == PUBLISHER_KEY_UNKNOWN) {
+			unchecked++;
+			printf("Publisher %s: not checked; lota-agent "
+			       "--reenroll --publisher %s re-enrolls it or "
+			       "says why not\n\n",
+			       entries[i].id, entries[i].id);
+			continue;
+		}
+		if (status[i] == PUBLISHER_KEY_MATCHES)
+			continue;
+		tried++;
+		if (paths_from_id(entries[i].id, &paths) == 0)
+			rc = reenroll_profile(&paths, NULL, 0, NULL);
+		if (rc != 0)
+			failed++;
+		printf("Publisher %s: %s\n\n", entries[i].id,
+		       rc == 0 ? "re-enrolled" : "not re-enrolled");
+	}
+	free(status);
+	free(entries);
+
+	if (tried == 0 && unchecked == 0)
+		printf("Every enrolled publisher's certificate names the key "
+		       "at its handle; nothing to re-enroll.\n");
+	return failed || unchecked ? 1 : 0;
 }
 
 int do_allow_publisher(const char *profile_id)
@@ -1054,45 +1228,6 @@ int do_add_publisher(const char *config_path, const char *name,
 	}
 }
 
-/*
- * Whether the key at the handle is the one the certificate names; nothing
- * else listed changes when it is replaced. UNKNOWN when it cannot be asked.
- */
-enum publisher_key_status {
-	PUBLISHER_KEY_UNKNOWN = 0,
-	PUBLISHER_KEY_MATCHES,
-	PUBLISHER_KEY_MISMATCH,
-};
-
-static enum publisher_key_status publisher_key_status(const char *id)
-{
-	struct profile_paths paths;
-	uint8_t spki[LOTA_MAX_AIK_PUB_SIZE];
-	size_t spki_len = 0;
-
-	if (paths_from_id(id, &paths) < 0)
-		return PUBLISHER_KEY_UNKNOWN;
-
-	if (tpm_bind_profile(&g_agent.tpm_ctx, &paths) < 0)
-		return PUBLISHER_KEY_UNKNOWN;
-
-	if (tpm_aik_load_metadata(&g_agent.tpm_ctx) < 0)
-		return PUBLISHER_KEY_UNKNOWN;
-
-	if (tpm_get_aik_public(&g_agent.tpm_ctx, spki, sizeof(spki),
-			       &spki_len) < 0)
-		return PUBLISHER_KEY_UNKNOWN;
-
-	switch (aik_cert_matches_key(paths.aik_cert, spki, spki_len)) {
-	case 0:
-		return PUBLISHER_KEY_MATCHES;
-	case -EKEYREJECTED:
-		return PUBLISHER_KEY_MISMATCH;
-	default:
-		return PUBLISHER_KEY_UNKNOWN;
-	}
-}
-
 static void print_publisher(const struct publisher_entry *e,
 			    enum publisher_key_status key_status)
 {
@@ -1122,7 +1257,8 @@ static void print_publisher(const struct publisher_entry *e,
 		printf("                 the key and certificate below were "
 		       "issued against it;\n"
 		       "                 restore it, or re-enroll: lota-agent "
-		       "--reenroll --ca-cert <their anchor>\n");
+		       "--reenroll --publisher %s\n",
+		       e->id);
 	} else {
 		printf("  enrolled with  not yet\n");
 	}
@@ -1154,7 +1290,8 @@ static void print_publisher(const struct publisher_entry *e,
 		       "key this certificate\n                 was issued "
 		       "over, so every quote is refused. Re-enroll this\n"
 		       "                 publisher: lota-agent --reenroll "
-		       "--ca-cert <their anchor>\n");
+		       "--publisher %s\n",
+		       e->id);
 
 	/* a re-keyed pin names another profile; this one holds a dead slot */
 	{

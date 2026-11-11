@@ -154,6 +154,13 @@ enum lota_error {
 #define LOTA_FLAG_AGENT_RESTARTED (1 << 20)
 
 /*
+ * The publisher's certificate does not name this host's attestation key,
+ * as after a TPM clear, and the agent is enrolling the host with them again.
+ * LOTA_FLAG_ATTESTED stays clear until that completes.
+ */
+#define LOTA_FLAG_REENROLLING (1 << 21)
+
+/*
  * The kernel left an event out of the agent's log: the agent did not keep up,
  * or something produced more events than the log takes. Refusals still hold and
  * the token's lists are kept apart from that log. Set until the agent ends; it

@@ -277,6 +277,8 @@ static char test_socket[108];
 /* The loop's tallies, as its sync header carries them */
 static uint32_t rounds_completed;
 static uint32_t rounds_failed;
+/* the next sync reports the publisher as being enrolled again */
+static bool sync_reenrolling;
 
 static int listener_open(void)
 {
@@ -421,6 +423,7 @@ static int sync_round(struct ipc_context *ctx, int fd, uint32_t host_flags,
 	}
 	verdict.attested = attested ? 1 : 0;
 	verdict.valid_until = attested ? (uint64_t)time(NULL) + 3600 : 0;
+	verdict.reenrolling = sync_reenrolling ? 1 : 0;
 
 	memcpy(buf, &sync, sizeof(sync));
 	memcpy(buf + sizeof(sync), &verdict, sizeof(verdict));
@@ -611,6 +614,43 @@ static void test_a_cleared_lockout_clears_the_word(struct ipc_context *ctx,
 	PASS();
 }
 
+/* A title is told the host enrolls again, not only that it is not attested */
+static void test_a_reenrollment_reaches_the_word(struct ipc_context *ctx,
+						 int loop_fd)
+{
+	uint32_t result = 0;
+
+	TEST("the loop's re-enrollment reaches the status word and clears");
+
+	sync_reenrolling = true;
+	if (sync_round(ctx, loop_fd, 0, false) < 0) {
+		FAIL("sync refused");
+		goto out;
+	}
+	if (!(ctx->status_flags & LOTA_STATUS_REENROLLING) ||
+	    (ctx->status_flags & LOTA_STATUS_ATTESTED)) {
+		FAIL("a host enrolling again is not reported as such");
+		goto out;
+	}
+	if (token_result(ctx, &result) < 0 || result == LOTA_IPC_OK) {
+		FAIL("a host enrolling again is handed a token");
+		goto out;
+	}
+
+	sync_reenrolling = false;
+	if (sync_round(ctx, loop_fd, 0, true) < 0) {
+		FAIL("sync refused");
+		goto out;
+	}
+	if (ctx->status_flags & LOTA_STATUS_REENROLLING) {
+		FAIL("the bit outlived the re-enrollment");
+		goto out;
+	}
+	PASS();
+out:
+	sync_reenrolling = false;
+}
+
 int main(void)
 {
 	struct ipc_context ctx;
@@ -660,6 +700,7 @@ int main(void)
 	test_a_lapsed_verdict_does_not_hide_the_lockout(&ctx, loop_fd);
 	test_a_cleared_lockout_clears_the_word(&ctx, loop_fd);
 	test_a_stale_latch_does_not_outlive_the_lockout(&ctx, loop_fd);
+	test_a_reenrollment_reaches_the_word(&ctx, loop_fd);
 
 	close(loop_fd);
 	ipc_cleanup(&ctx);

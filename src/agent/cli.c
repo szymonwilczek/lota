@@ -291,6 +291,7 @@ int cli_parse(int argc, char **argv, struct cli_options *opts,
 		{ "attest-interval", required_argument, NULL, 'I' },
 		{ "enroll", no_argument, NULL, 1004 },
 		{ "reenroll", no_argument, NULL, 1014 },
+		{ "publisher", required_argument, NULL, 1047 },
 		{ "enroll-token-file", required_argument, NULL, 1015 },
 		{ "allow-publisher", required_argument, NULL, 1016 },
 		{ "add-publisher", required_argument, NULL, 1040 },
@@ -426,12 +427,16 @@ int cli_parse(int argc, char **argv, struct cli_options *opts,
 		} break;
 		case 'C':
 			opts->ca_cert_path = optarg;
+			opts->ca_cert_given = true;
 			break;
 		case 1004:
 			opts->enroll_flag = 1;
 			break;
 		case 1014:
 			opts->reenroll_flag = 1;
+			break;
+		case 1047:
+			opts->reenroll_publisher = optarg;
 			break;
 		case 1015:
 			opts->enroll_token_file = optarg;

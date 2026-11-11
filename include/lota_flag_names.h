@@ -41,6 +41,7 @@ static const struct lota_flag_name lota_flag_names[] = {
 	{ LOTA_STATUS_BLOCK_PTRACE, "BLOCK_PTRACE" },
 	{ LOTA_STATUS_AGENT_RESTARTED, "AGENT_RESTARTED" },
 	{ LOTA_STATUS_EVENTS_LOST, "EVENTS_LOST" },
+	{ LOTA_STATUS_REENROLLING, "REENROLLING" },
 };
 
 /* The bits lota-agent --status names and the SDK does not */

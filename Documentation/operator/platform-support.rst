@@ -385,10 +385,12 @@ for, so a clear leaves a host one step from a verdict that means something
 else. Any fleet tooling that treats ``resetCount`` as monotonic reads a cleared
 host as a rolled-back one.
 
-For LOTA that means every publisher enrollment on the host is gone and each has
-to be re-established with ``lota-agent --reenroll --ca-cert <their anchor>``.
-The anchor is enough -- the profile is resolved from it -- and the next round
-after a re-enrollment verifies.
+For LOTA that means every publisher's attestation key on the host is gone. The
+attestation loop enrolls each publisher consent is recorded for again on its
+own, with the endpoint, anchor and token its first enrollment recorded; the
+rest wait for ``lota-agent --reenroll``, which re-enrolls every publisher whose
+certificate no longer names the key at its handle. The next round after a
+re-enrollment verifies.
 
 **The agent refuses this state, and it does so before any quote.** The key at
 each publisher's handle is no longer the key their certificate was issued over,
