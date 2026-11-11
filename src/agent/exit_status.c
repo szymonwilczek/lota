@@ -50,5 +50,5 @@ int lota_daemon_exit_status(int rc, enum tpm_pcr14_state commitment)
 	if (commitment_refused(commitment))
 		return LOTA_EXIT_OPERATOR_ACTION;
 
-	return rc;
+	return 1;
 }

@@ -19,11 +19,11 @@
 
 /**
  * lota_daemon_exit_status() - Map the daemon's result to its exit status.
- * @rc: What run_daemon() returned: 0 or a negative errno.
+ * @rc: What run_daemon() returned: an exit status or a negative errno.
  * @commitment: The PCR 14 verdict of the same run.
  *
- * Return: LOTA_EXIT_OPERATOR_ACTION for -ENOTSUP or a refused boot commitment,
- * else @rc.
+ * Return: @rc when it is not negative, LOTA_EXIT_OPERATOR_ACTION for -ENOTSUP
+ * or a refused boot commitment, else 1.
  */
 int lota_daemon_exit_status(int rc, enum tpm_pcr14_state commitment);
 

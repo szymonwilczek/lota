@@ -200,7 +200,7 @@ static int run_daemon(const struct run_daemon_params *params)
 			 "was spent; the host keeps the agent it is running "
 			 "and PCR 14 is untouched. %s",
 			 startup_refusal_advice(ret));
-		return ret;
+		return LOTA_EXIT_OPERATOR_ACTION;
 	}
 
 	/* bpf_loader_load() verifies again the bytes it hands the kernel */
@@ -211,7 +211,7 @@ static int run_daemon(const struct run_daemon_params *params)
 			 "it is running and PCR 14 is untouched. Re-sign the "
 			 "object for the configured key and start again.",
 			 bpf_path, strerror(-ret));
-		return ret;
+		return LOTA_EXIT_OPERATOR_ACTION;
 	}
 
 	ret = bpf_loader_check_object_integrity_layout(bpf_path);
@@ -220,7 +220,7 @@ static int run_daemon(const struct run_daemon_params *params)
 			 "commitment was spent. The host keeps the agent it is "
 			 "running and PCR 14 is untouched.",
 			 bpf_path);
-		return ret;
+		return LOTA_EXIT_OPERATOR_ACTION;
 	}
 
 	wd_enabled = sdnotify_watchdog_enabled(&wd_usec);
