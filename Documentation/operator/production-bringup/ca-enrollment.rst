@@ -272,10 +272,9 @@ The run prints the endpoint it dialled (and the recorded one, when they
 differ) and records the new one once the CA certifies the key. The CA session
 opens before anything on the host changes, so an unreachable CA or a refused
 anchor costs no TPM object, slot or dictionary-attack attempt, and the run
-says ``Nothing on this host was changed: no key was created or replaced, and
-no certificate was written``. Only the consent record stays, for the next
-attempt to reuse. Otherwise the shared-key re-enrollment below would leave a
-key no certificate names.
+says ``No key was created or replaced, and no certificate was written``.
+Only the consent record stays, for the next attempt to reuse. Otherwise the
+shared-key re-enrollment below would leave a key no certificate names.
 
 A certificate that expires anyway (CA unreachable through the final third,
 or agent not running) is refused with ``FAIL - This host's attestation

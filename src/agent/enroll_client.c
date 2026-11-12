@@ -553,9 +553,8 @@ static int run_enrollment(const struct profile_paths *paths, const char *server,
 	printf("Reaching the CA at %s:%d...\n", server, port);
 	ret = ca_session_opens(server, port, ca_cert, skip_verify, pin);
 	if (ret < 0) {
-		fprintf(stderr,
-			"Nothing on this host was changed: no key was created "
-			"or replaced, and no certificate was written.\n");
+		fprintf(stderr, "No key was created or replaced, and no "
+				"certificate was written.\n");
 		net_cleanup();
 		return ret;
 	}
