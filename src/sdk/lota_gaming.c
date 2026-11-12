@@ -333,6 +333,8 @@ static int ipc_result_to_error(uint32_t result)
 		return LOTA_ERR_TPM_LOCKED;
 	case LOTA_IPC_ERR_NOT_PROTECTED:
 		return LOTA_ERR_NOT_PROTECTED;
+	case LOTA_IPC_ERR_TOO_MANY_PROTECTED_PIDS:
+		return LOTA_ERR_TOO_MANY_PROCESSES;
 	case LOTA_IPC_ERR_TPM_FAILURE:
 	case LOTA_IPC_ERR_INTERNAL:
 	default:
@@ -1647,6 +1649,8 @@ const char *lota_strerror(int error)
 		return "The TPM on this machine is locked out after too many failed authorizations and signs nothing until it is cleared";
 	case LOTA_ERR_NOT_PROTECTED:
 		return "The last token round did not measure that process";
+	case LOTA_ERR_TOO_MANY_PROCESSES:
+		return "More processes are protected than one token lists";
 	default:
 		return "Unknown error";
 	}

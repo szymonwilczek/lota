@@ -79,6 +79,7 @@ enum lota_error size=4
 	LOTA_ERR_NO_KEY_SLOT                     = -17
 	LOTA_ERR_TPM_LOCKED                      = -18
 	LOTA_ERR_NOT_PROTECTED                   = -19
+	LOTA_ERR_TOO_MANY_PROCESSES              = -20
 macro LOTA_FLAG_ATTESTED                       = 1
 macro LOTA_FLAG_TPM_OK                         = 2
 macro LOTA_FLAG_IOMMU_OK                       = 4

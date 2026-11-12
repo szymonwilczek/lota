@@ -69,6 +69,11 @@ enum lota_error {
 	 * protected it, or it exited before the round reached it.
 	 */
 	LOTA_ERR_NOT_PROTECTED = -19,
+	/*
+	 * The caller's instance holds more protected processes than one token
+	 * lists; a token is issued again once enough of them exit.
+	 */
+	LOTA_ERR_TOO_MANY_PROCESSES = -20,
 };
 
 #define LOTA_FLAG_ATTESTED (1 << 0)
@@ -378,7 +383,8 @@ int lota_is_attested(struct lota_client *client);
  *
  * Return: LOTA_OK, LOTA_ERR_NOT_ATTESTED if no valid attestation exists,
  * LOTA_ERR_UNKNOWN_PROFILE if the connection named no publisher on a host that
- * answers for several, or another negative LOTA_ERR_*.
+ * answers for several, LOTA_ERR_TOO_MANY_PROCESSES past the token's process
+ * limit, or another negative LOTA_ERR_*.
  */
 int lota_get_token(struct lota_client *client, const uint8_t *nonce,
 		   struct lota_token *token);
