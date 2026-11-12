@@ -1134,20 +1134,9 @@ static bool enroll_target_if_needed(struct attest_target *t)
 		return true;
 	}
 
-	{
-		int shift = t->enroll_backoff;
-		int delay;
-
-		if (shift > 5)
-			shift = 5;
-		t->enroll_backoff++;
-		delay = ATTEST_BACKOFF_BASE_SEC * (1 << shift);
-		if (delay > MAX_BACKOFF_SECONDS)
-			delay = MAX_BACKOFF_SECONDS;
-		t->next_enroll_ms = now_ms + (uint64_t)delay * 1000;
-		lota_warn("Enrollment with %s:%d failed (%s); retry in %ds",
-			  t->ca, t->ca_port, strerror(-ret), delay);
-	}
+	lota_warn("Enrollment with %s:%d failed (%s); retry in %ds", t->ca,
+		  t->ca_port, strerror(-ret),
+		  attest_target_enroll_failed(t, monotonic_ms()));
 	return false;
 }
 
@@ -1295,16 +1284,8 @@ static void renew_target_cert_if_due(struct attest_target *t)
 	}
 
 	{
-		int shift = t->renew_backoff;
-		int delay;
+		int delay = attest_target_renew_failed(t, mono_ms);
 
-		if (shift > 5)
-			shift = 5;
-		t->renew_backoff++;
-		delay = ATTEST_BACKOFF_BASE_SEC * (1 << shift);
-		if (delay > MAX_BACKOFF_SECONDS)
-			delay = MAX_BACKOFF_SECONDS;
-		t->next_renew_ms = mono_ms + (uint64_t)delay * 1000;
 		lota_warn("AIK certificate renewal failed for %s%s (%s); "
 			  "retry in %ds, cert expires in %lld s",
 			  t->label, attest_target_renew_at(t, at, sizeof(at)),
@@ -1359,7 +1340,7 @@ static int attest_target_round(struct attest_target *t, int skip_verify,
 	if (!enroll_target_if_needed(t)) {
 		t->attested = false;
 		t->valid_until = 0;
-		return t->interval;
+		return attest_target_enroll_wait(t, monotonic_ms());
 	}
 
 	ret = bind_target(t);

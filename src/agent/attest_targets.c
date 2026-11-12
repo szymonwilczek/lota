@@ -183,26 +183,60 @@ enum attest_reenroll attest_target_reenroll_decide(struct attest_target *t,
 					      ATTEST_REENROLL_NOW;
 }
 
+/* Seconds before the next attempt, doubling per failure counted in @backoff */
+static int backoff_next(int *backoff)
+{
+	int shift = *backoff > 5 ? 5 : *backoff;
+	int delay = ATTEST_BACKOFF_BASE_SEC * (1 << shift);
+
+	(*backoff)++;
+	return delay > MAX_BACKOFF_SECONDS ? MAX_BACKOFF_SECONDS : delay;
+}
+
+static int wait_until(const struct attest_target *t, uint64_t due_ms,
+		      uint64_t now_ms)
+{
+	if (due_ms <= now_ms)
+		return t->interval;
+	return (int)((due_ms - now_ms + 999) / 1000);
+}
+
+int attest_target_enroll_failed(struct attest_target *t, uint64_t now_ms)
+{
+	int delay = backoff_next(&t->enroll_backoff);
+
+	t->next_enroll_ms = now_ms + (uint64_t)delay * 1000;
+	return delay;
+}
+
+int attest_target_enroll_wait(const struct attest_target *t, uint64_t now_ms)
+{
+	return wait_until(t, t->next_enroll_ms, now_ms);
+}
+
+int attest_target_renew_failed(struct attest_target *t, uint64_t now_ms)
+{
+	int delay = backoff_next(&t->renew_backoff);
+
+	if (delay < t->interval)
+		delay = t->interval;
+	t->next_renew_ms = now_ms + (uint64_t)delay * 1000;
+	return delay;
+}
+
 int attest_target_reenroll_failed(struct attest_target *t, uint64_t now_ms)
 {
-	int shift = t->reenroll_backoff;
-	int delay;
+	int delay = backoff_next(&t->reenroll_backoff);
 
-	if (shift > 5)
-		shift = 5;
-	t->reenroll_backoff++;
-	delay = ATTEST_BACKOFF_BASE_SEC * (1 << shift);
-	if (delay > MAX_BACKOFF_SECONDS)
-		delay = MAX_BACKOFF_SECONDS;
 	t->next_reenroll_ms = now_ms + (uint64_t)delay * 1000;
 	return delay;
 }
 
 int attest_target_reenroll_wait(const struct attest_target *t, uint64_t now_ms)
 {
-	if (!t->reenrolling || t->next_reenroll_ms <= now_ms)
+	if (!t->reenrolling)
 		return t->interval;
-	return (int)((t->next_reenroll_ms - now_ms + 999) / 1000);
+	return wait_until(t, t->next_reenroll_ms, now_ms);
 }
 
 void attest_target_reenroll_clear(struct attest_target *t)

@@ -208,6 +208,37 @@ enum attest_reenroll attest_target_reenroll_decide(struct attest_target *t,
 						   uint64_t now_ms);
 
 /**
+ * attest_target_enroll_failed() - Back off @t after a failed first enrollment.
+ * @t: The target.
+ * @now_ms: Now, on the monotonic clock.
+ *
+ * Return: seconds until the next attempt.
+ */
+int attest_target_enroll_failed(struct attest_target *t, uint64_t now_ms);
+
+/**
+ * attest_target_enroll_wait() - Seconds until @t's next round.
+ * @t: The target, not enrolled.
+ * @now_ms: Now, on the monotonic clock.
+ *
+ * Return: seconds until the next enrollment attempt while one is backed off,
+ * else @t->interval.
+ */
+int attest_target_enroll_wait(const struct attest_target *t, uint64_t now_ms);
+
+/**
+ * attest_target_renew_failed() - Back off @t after a failed AIK renewal.
+ * @t: The target.
+ * @now_ms: Now, on the monotonic clock.
+ *
+ * Renewal is tried in a round, so the delay is never shorter than
+ * @t->interval.
+ *
+ * Return: seconds until the next attempt.
+ */
+int attest_target_renew_failed(struct attest_target *t, uint64_t now_ms);
+
+/**
  * attest_target_reenroll_failed() - Back off @t after a failed attempt.
  * @t: The target.
  * @now_ms: Now, on the monotonic clock.
