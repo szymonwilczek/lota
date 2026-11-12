@@ -214,9 +214,10 @@ struct lota_ipc_status {
  * hostname.
  *
  * Later answers on the connection are that publisher's: GET_TOKEN quotes with
- * their AIK over the processes protected for them, and GET_STATUS reports
- * their verifier's verdict. A connection that never sends this gets
- * the host-wide answers.
+ * their AIK and GET_STATUS reports their verifier's verdict. The name selects
+ * the key and the verdict and does not authenticate the title: a token carries
+ * the processes of the caller's own instance, whichever publisher it names.
+ * A connection that never sends this gets the host-wide verdict.
  */
 struct lota_ipc_set_profile {
 	uint8_t profile_id[32];
@@ -403,7 +404,6 @@ struct lota_ipc_pid_request {
 /* PROTECT_PID response payload */
 struct lota_ipc_policy_update {
 	uint8_t policy_digest[32];
-	uint32_t protect_pid_count;
 	uint32_t _reserved1;
 } __attribute__((packed));
 
@@ -422,7 +422,8 @@ struct lota_ipc_terminate_request {
 struct lota_ipc_terminate_response {
 	uint32_t pid;
 	uint32_t signal;
-	uint32_t other_protect_pid_count; /* protected set minus @pid */
+	/* the other protected processes of @pid's instance */
+	uint32_t other_protect_pid_count;
 	uint32_t _reserved1;
 } __attribute__((packed));
 
@@ -431,7 +432,7 @@ struct lota_ipc_terminate_response {
  *
  * Asks for what the last token round found in @pid, from entry @start on:
  * the code objects, then the actors.
- * Answered for the owner of the process or root.
+ * Answered for the owner of the process calling from its instance.
  */
 struct lota_ipc_registry_request {
 	uint32_t pid;

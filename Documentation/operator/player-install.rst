@@ -375,8 +375,8 @@ The agent can also deliver the signal on request, and record that it did::
 
 It answers for whoever ``kill(2)`` would already have allowed -- the owner of
 the process, or root -- so a player ends their own game as themselves, with no
-``sudo``. It reports how many other processes are still protected, not
-counting the one it signalled. Nothing else widens: only ``SIGTERM`` and
+``sudo``. It reports how many other processes in the signalled one's process
+tree are still protected. Nothing else widens: only ``SIGTERM`` and
 ``SIGKILL`` are relayed, a process nobody protected is refused, and the agent
 will not end itself this way.
 

@@ -350,13 +350,13 @@ per-request argument, because a title plays for one publisher: after it,
 ``GET_TOKEN`` quotes with that publisher's AIK and ``GET_STATUS`` answers with
 that publisher's verdict and validity window.
 
-The token carries the processes protected for that publisher: the ones named
-on a connection bound to it and the members of their instances. Its PID list,
-``runtime_protect_digest``, coverage flags and the per-token limit are taken
-over that part of the set, so one publisher's title neither sees another's
-processes nor loses coverage to them. A process named on a connection bound to
-no publisher, or protected by the startup policy, is carried by the host-wide
-answer and, on a host that serves one publisher, by that publisher's token.
+The token carries the processes of the caller's own instance, the one the
+kernel isolates it in. Its PID list, ``runtime_protect_digest``, coverage flags
+and the per-token limit are taken over that part of the set, so one title
+neither sees another instance's processes nor loses coverage to them, whichever
+publisher either one names. The publisher's name selects the AIK and the
+verdict and does not authenticate the title. A caller outside every instance,
+one that is not protected, gets a token of no processes.
 
 Three rules the agent holds to:
 
@@ -565,8 +565,9 @@ reordered or rewritten does not hash to the token's value. A list from another
 round does not either, so a relying party that checks the hash needs no further
 pairing; the ``round`` field only keeps the pages of one listing together.
 
-The owner of the process or root may read its registry, the callers that could
-read its ``maps`` themselves. A process the last round did not measure is
+The owner of the process may read its registry from inside the process's
+instance, the callers that could read its ``maps`` themselves; root outside the
+instance is refused too. A process the last round did not measure is
 answered ``LOTA_IPC_ERR_NOT_PROTECTED``.
 
 ``lota_get_registry()`` in ``liblotagaming`` fetches every page and starts over

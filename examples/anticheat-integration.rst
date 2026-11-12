@@ -318,8 +318,8 @@ Worth being precise about, because it decides what you can build on it:
 
 * Which code objects the process mapped executable since it was protected,
   the unmeasured ones and those it already dropped included.
-  ``lota_get_registry()`` lists them for a protected PID as the last token
-  round found them: size, inode and, where one was taken, the digest; the
+  ``lota_get_registry()`` lists them for a protected PID of the caller's own
+  instance as the last token round found them: size, inode and, where one was taken, the digest; the
   path for an object still mapped, ``LOTA_REGISTRY_OBJECT_UNMAPPED`` and the
   file's name for one that is gone. A refused mapping is listed too.
   ``LOTA_REGISTRY_OBJECT_WRITABLE`` says another process could write the

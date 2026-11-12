@@ -8,6 +8,7 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <limits.h>
+#include <poll.h>
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -2204,6 +2205,46 @@ out:
 	close(pidfd);
 	return ret;
 #endif
+}
+
+int bpf_loader_task_instance(struct bpf_loader_ctx *ctx, int pidfd,
+			     uint32_t pid, uint32_t *root_tgid,
+			     uint64_t *root_start_ticks)
+{
+	struct protected_pid_entry value = { 0 };
+	struct lota_instance_entry entry;
+	struct pollfd pfd = { .fd = pidfd, .events = POLLIN };
+	uint64_t ticks = 0;
+
+	if (!ctx || !ctx->loaded || pidfd < 0 || pid == 0 || !root_tgid ||
+	    !root_start_ticks)
+		return -EINVAL;
+
+	if (ctx->protected_pids_fd < 0 || ctx->instance_fd < 0)
+		return -ENOTSUP;
+
+	if (bpf_map_lookup_elem(ctx->instance_fd, &pidfd, &entry) == 0) {
+		*root_tgid = entry.root_tgid;
+		*root_start_ticks = entry.root_start_ticks;
+		return 1;
+	}
+	if (errno != ENOENT)
+		return -errno;
+
+	if (read_pid_start_time_ticks(pid, &ticks) < 0 || ticks == 0)
+		return 0;
+	if (bpf_map_lookup_elem(ctx->protected_pids_fd, &pid, &value) < 0)
+		return errno == ENOENT ? 0 : -errno;
+	if (value.start_time_ticks != ticks)
+		return 0;
+
+	/* still alive: the start time read was its own, not a successor's */
+	if (poll(&pfd, 1, 0) != 0)
+		return 0;
+
+	*root_tgid = pid;
+	*root_start_ticks = ticks;
+	return 1;
 }
 
 int bpf_loader_probe_protect_pid(uint32_t pid)

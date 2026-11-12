@@ -45,7 +45,7 @@ int main(void)
 	TEST("ending the only protected process claims no other");
 	terminate_sent_message(14418, false, 0, buf, sizeof(buf));
 	if (strstr(buf, "SIGTERM") && strstr(buf, "14418") &&
-	    strstr(buf, "no other process is protected"))
+	    strstr(buf, "no other process in its process tree is protected"))
 		PASS();
 	else
 		FAIL(buf);
@@ -59,14 +59,16 @@ int main(void)
 
 	TEST("one other protected process is reported as another");
 	terminate_sent_message(14418, false, 1, buf, sizeof(buf));
-	if (strstr(buf, "1 other process is still protected"))
+	if (strstr(buf,
+		   "1 other process in its process tree is still protected"))
 		PASS();
 	else
 		FAIL(buf);
 
 	TEST("several others are counted in the plural");
 	terminate_sent_message(14418, false, 3, buf, sizeof(buf));
-	if (strstr(buf, "3 other processes are still protected"))
+	if (strstr(buf,
+		   "3 other processes in its process tree are still protected"))
 		PASS();
 	else
 		FAIL(buf);
@@ -77,42 +79,6 @@ int main(void)
 		PASS();
 	else
 		FAIL(buf);
-
-	TEST("the process being ended is not counted among the others");
-	{
-		const uint32_t set[] = { 900, 14418, 1200 };
-
-		if (terminate_others_protected(set, 3, 14418) == 2)
-			PASS();
-		else
-			FAIL("the target is still in the count");
-	}
-
-	TEST("ending the only protected process leaves no others");
-	{
-		const uint32_t set[] = { 14418 };
-
-		if (terminate_others_protected(set, 1, 14418) == 0)
-			PASS();
-		else
-			FAIL("the set it was the only member of counted one");
-	}
-
-	TEST("a target that is no longer in the set does not shrink it");
-	{
-		const uint32_t set[] = { 900, 1200 };
-
-		if (terminate_others_protected(set, 2, 14418) == 2)
-			PASS();
-		else
-			FAIL("a member was dropped for a pid that is not there");
-	}
-
-	TEST("an empty set counts nothing");
-	if (terminate_others_protected(NULL, 0, 14418) == 0)
-		PASS();
-	else
-		FAIL("an empty set counted somebody");
 
 	TEST("a caller without a buffer is not written to");
 	terminate_sent_message(1, false, 0, NULL, 0);

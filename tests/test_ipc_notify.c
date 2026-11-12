@@ -63,21 +63,26 @@ void tpm_reset_lockout_state(struct tpm_context *ctx)
 	(void)ctx;
 }
 
+/* set while a test signs tokens: an empty quote over the asked PCRs */
+static bool tpm_signs;
+
 int tpm_quote(struct tpm_context *ctx, const uint8_t *nonce, uint32_t pcr_mask,
 	      struct tpm_quote_response *response)
 {
 	(void)ctx;
 	(void)nonce;
-	(void)pcr_mask;
-	(void)response;
-	return -ENOTSUP;
+	if (!tpm_signs)
+		return -ENOTSUP;
+	memset(response, 0, sizeof(*response));
+	response->pcr_mask = pcr_mask;
+	return 0;
 }
 
 int tpm_bind_profile(struct tpm_context *ctx, const struct profile_paths *paths)
 {
 	(void)ctx;
 	(void)paths;
-	return -ENOTSUP;
+	return tpm_signs ? 0 : -ENOTSUP;
 }
 
 int boot_evidence_collect(struct tpm_context *tpm, uint32_t pcr_mask,
@@ -141,6 +146,29 @@ int bpf_loader_get_refusal(struct bpf_loader_ctx *ctx, int pidfd,
 	(void)object;
 	(void)len;
 	return -ENOENT;
+}
+
+/* The instance root of each PID a test places; any other PID has none */
+static struct {
+	uint32_t pid;
+	uint32_t root;
+} instance_of[4];
+
+int bpf_loader_task_instance(struct bpf_loader_ctx *ctx, int pidfd,
+			     uint32_t pid, uint32_t *root_tgid,
+			     uint64_t *root_start_ticks)
+{
+	(void)ctx;
+	(void)pidfd;
+	for (size_t i = 0; i < sizeof(instance_of) / sizeof(instance_of[0]);
+	     i++) {
+		if (instance_of[i].pid == 0 || instance_of[i].pid != pid)
+			continue;
+		*root_tgid = instance_of[i].root;
+		*root_start_ticks = 1;
+		return 1;
+	}
+	return 0;
 }
 
 int bpf_loader_instance_stopped_ms(struct bpf_loader_ctx *ctx, uint32_t pid,
@@ -1210,13 +1238,15 @@ static void protected_forget(void)
 	g_agent.policy_protect_pid_count = 0;
 }
 
-static int terminate_request(struct ipc_context *ctx, pid_t pid,
-			     uint32_t *result)
+/* TERMINATE_PROTECTED for @pid; @others, if set, gets the count it reports */
+static int terminate_request_counted(struct ipc_context *ctx, pid_t pid,
+				     uint32_t *result, uint32_t *others)
 {
 	struct lota_ipc_terminate_request req = {
 		.pid = (uint32_t)pid,
 		.signal = SIGTERM,
 	};
+	struct lota_ipc_terminate_response body;
 	struct lota_ipc_response resp;
 	uint8_t payload[LOTA_IPC_MAX_PAYLOAD];
 	int fd, ret;
@@ -1232,7 +1262,19 @@ static int terminate_request(struct ipc_context *ctx, pid_t pid,
 	close(fd);
 	if (ret == 0)
 		*result = resp.result;
+	if (ret == 0 && others && resp.result == LOTA_IPC_OK) {
+		if (resp.payload_len < sizeof(body))
+			return -EIO;
+		memcpy(&body, payload, sizeof(body));
+		*others = body.other_protect_pid_count;
+	}
 	return ret;
+}
+
+static int terminate_request(struct ipc_context *ctx, pid_t pid,
+			     uint32_t *result)
+{
+	return terminate_request_counted(ctx, pid, result, NULL);
 }
 
 static void test_terminate_reaches_the_target(struct ipc_context *ctx)
@@ -1575,6 +1617,284 @@ out:
 	profile_forget(&two[1]);
 }
 
+/* The PIDs a token for this process carries, bound to @id or to no one */
+static int token_pids(struct ipc_context *ctx, const uint8_t *id,
+		      uint32_t *pids, uint32_t max, uint32_t *count)
+{
+	struct lota_ipc_token_request req;
+	struct lota_ipc_set_profile set;
+	struct lota_ipc_response resp = { 0 };
+	uint8_t payload[LOTA_IPC_MAX_PAYLOAD];
+	struct lota_ipc_token token;
+	int fd, ret = 0;
+
+	fd = client_open();
+	if (fd < 0)
+		return fd;
+
+	if (id) {
+		memset(&set, 0, sizeof(set));
+		memcpy(set.profile_id, id, sizeof(set.profile_id));
+		ret = send_request(fd, LOTA_IPC_CMD_SET_PROFILE, &set,
+				   sizeof(set));
+		if (ret == 0)
+			ret = read_frame(ctx, fd, &resp, payload,
+					 sizeof(payload), 64);
+		if (ret == 0 && resp.result != LOTA_IPC_OK)
+			ret = -EACCES;
+	}
+	memset(&req, 0, sizeof(req));
+	if (ret == 0)
+		ret = send_request(fd, LOTA_IPC_CMD_GET_TOKEN, &req,
+				   sizeof(req));
+	if (ret == 0)
+		ret = read_frame(ctx, fd, &resp, payload, sizeof(payload), 64);
+	close(fd);
+	if (ret < 0)
+		return ret;
+	if (resp.result != LOTA_IPC_OK)
+		return -(int)resp.result;
+	if (resp.payload_len < sizeof(token))
+		return -EIO;
+	memcpy(&token, payload, sizeof(token));
+	if (token.protect_pid_count > max ||
+	    sizeof(token) + token.protect_pid_count * sizeof(uint32_t) >
+		    resp.payload_len)
+		return -E2BIG;
+	for (uint32_t i = 0; i < token.protect_pid_count; i++)
+		memcpy(&pids[i], payload + sizeof(token) + i * sizeof(uint32_t),
+		       sizeof(uint32_t));
+	*count = token.protect_pid_count;
+	return 0;
+}
+
+/* The answer GET_REGISTRY gives this process for page 0 of @pid */
+static int registry_result(struct ipc_context *ctx, pid_t pid, uint32_t *result)
+{
+	struct lota_ipc_registry_request req = { .pid = (uint32_t)pid };
+	struct lota_ipc_response resp;
+	uint8_t payload[LOTA_IPC_MAX_PAYLOAD];
+	int fd, ret;
+
+	fd = client_open();
+	if (fd < 0)
+		return fd;
+
+	ret = send_request(fd, LOTA_IPC_CMD_GET_REGISTRY, &req, sizeof(req));
+	if (ret == 0)
+		ret = read_frame(ctx, fd, &resp, payload, sizeof(payload), 64);
+	close(fd);
+	if (ret == 0)
+		*result = resp.result;
+	return ret;
+}
+
+/* Fork a title of @id that protects itself; its PID, or -1 */
+static pid_t game_started(struct ipc_context *ctx, const uint8_t id[32])
+{
+	uint32_t result = 0xFFFFFFFF;
+	int ready[2];
+	pid_t pid;
+
+	if (pipe(ready) < 0)
+		return -1;
+	pid = fork();
+	if (pid == 0) {
+		close(ready[0]);
+		game_child(id, ready[1]);
+	}
+	close(ready[1]);
+	if (pid < 0) {
+		close(ready[0]);
+		return -1;
+	}
+
+	for (int i = 0; i < 256; i++) {
+		struct pollfd pfd = { .fd = ready[0], .events = POLLIN };
+
+		if (poll(&pfd, 1, 0) > 0) {
+			if (read(ready[0], &result, sizeof(result)) !=
+			    sizeof(result))
+				result = 0xFFFFFFFF;
+			break;
+		}
+		ipc_process(ctx, 10);
+	}
+	close(ready[0]);
+
+	if (result != LOTA_IPC_OK) {
+		kill(pid, SIGKILL);
+		waitpid(pid, NULL, 0);
+		return -1;
+	}
+	return pid;
+}
+
+/*
+ * A token and GET_REGISTRY answer for the caller's own instance. Here the test
+ * process shares an instance with a title of one publisher; a title of the
+ * other publisher, same uid, runs in an instance of its own.
+ */
+static void test_token_holds_the_callers_instance(struct ipc_context *ctx,
+						  struct attest_target *one)
+{
+	static struct tpm_context tpm_stub;
+	struct attest_target two[2];
+	bool saved_snapshot = g_agent.policy_snapshot_set;
+	bool saved_digest = g_agent.policy_digest_set;
+	uint32_t saved_flags = ctx->status_flags;
+	uint32_t pids[8], count = 0, mine_reg = 0, theirs_reg = 0;
+	pid_t mine = -1, theirs = -1, sibling = -1, gone;
+	uint32_t result = 0, others = 0;
+	const char *why = NULL;
+
+	TEST("a token and the registry answer only for the caller's instance");
+
+	two[0] = *one;
+	if (profile_init(&two[1], other_profile_hex) < 0) {
+		FAIL("cannot record the second publisher's consent");
+		return;
+	}
+	for (int i = 0; i < 2; i++) {
+		two[i].attested = true;
+		two[i].valid_until = (uint64_t)time(NULL) + 3600;
+	}
+	ipc_set_profiles(ctx, two, 2);
+	ipc_update_status(ctx, LOTA_STATUS_TPM_OK | LOTA_STATUS_ATTESTED, 0);
+	ipc_set_tpm(ctx, &tpm_stub, 0x1);
+	tpm_signs = true;
+	g_agent.policy_snapshot_set = 1;
+	g_agent.policy_digest_set = 1;
+
+	mine = game_started(ctx, test_profile_id);
+	theirs = game_started(ctx, other_profile_id);
+	if (mine < 0 || theirs < 0) {
+		why = "a title could not protect itself";
+		goto out;
+	}
+	instance_of[0].pid = (uint32_t)getpid();
+	instance_of[0].root = (uint32_t)mine;
+	instance_of[1].pid = (uint32_t)mine;
+	instance_of[1].root = (uint32_t)mine;
+	instance_of[2].pid = (uint32_t)theirs;
+	instance_of[2].root = (uint32_t)theirs;
+
+	/* naming the other title's publisher reaches none of its processes */
+	if (token_pids(ctx, other_profile_id, pids, 8, &count) < 0) {
+		why = "no token for a caller naming the other publisher";
+		goto out;
+	}
+	if (count != 1 || pids[0] != (uint32_t)mine) {
+		why = "a token named for the other publisher left its instance";
+		goto out;
+	}
+	if (registry_result(ctx, mine, &mine_reg) < 0 ||
+	    registry_result(ctx, theirs, &theirs_reg) < 0) {
+		why = "no GET_REGISTRY answer";
+		goto out;
+	}
+	if (mine_reg != LOTA_IPC_OK) {
+		why = "GET_REGISTRY refused a process of the caller's instance";
+		goto out;
+	}
+	if (theirs_reg != LOTA_IPC_ERR_ACCESS_DENIED) {
+		why = "GET_REGISTRY answered for another instance";
+		goto out;
+	}
+
+	/* naming no one, on a host of one publisher */
+	ipc_set_profiles(ctx, two, 1);
+	if (token_pids(ctx, NULL, pids, 8, &count) < 0) {
+		why = "no token for an unnamed caller";
+		goto out;
+	}
+	if (count != 1 || pids[0] != (uint32_t)mine) {
+		why = "an unnamed caller's token left its instance";
+		goto out;
+	}
+
+	/* a caller of no instance reads no one's processes */
+	instance_of[0].pid = 0;
+	if (token_pids(ctx, NULL, pids, 8, &count) < 0) {
+		why = "no token for a caller of no instance";
+		goto out;
+	}
+	if (count != 0) {
+		why = "a caller of no instance got protected PIDs";
+		goto out;
+	}
+	if (registry_result(ctx, mine, &mine_reg) < 0 ||
+	    mine_reg != LOTA_IPC_ERR_ACCESS_DENIED) {
+		why = "GET_REGISTRY answered a caller of no instance";
+		goto out;
+	}
+
+	/* ending one process counts the rest of its instance only */
+	sibling = game_started(ctx, test_profile_id);
+	if (sibling < 0) {
+		why = "a second process of the title could not protect itself";
+		goto out;
+	}
+	instance_of[3].pid = (uint32_t)sibling;
+	instance_of[3].root = (uint32_t)mine;
+	if (terminate_request_counted(ctx, sibling, &result, &others) < 0 ||
+	    result != LOTA_IPC_OK) {
+		why = "the second process of the title was not ended";
+		goto out;
+	}
+	waitpid(sibling, NULL, 0);
+	sibling = -1;
+	if (others != 1) {
+		why = "other processes counted past the target's instance";
+		goto out;
+	}
+
+	/* a measured process that exited has no registry */
+	instance_of[0].pid = (uint32_t)getpid();
+	if (token_pids(ctx, NULL, pids, 8, &count) < 0 ||
+	    registry_result(ctx, mine, &mine_reg) < 0 ||
+	    mine_reg != LOTA_IPC_OK) {
+		why = "no registry for the caller's live title";
+		goto out;
+	}
+	kill(mine, SIGKILL);
+	waitpid(mine, NULL, 0);
+	gone = mine;
+	mine = -1;
+	if (registry_result(ctx, gone, &mine_reg) < 0 ||
+	    mine_reg != LOTA_IPC_ERR_NOT_PROTECTED) {
+		why = "GET_REGISTRY answered for a process that exited";
+		goto out;
+	}
+
+out:
+	if (why)
+		FAIL(why);
+	else
+		PASS();
+	memset(instance_of, 0, sizeof(instance_of));
+	if (sibling > 0) {
+		kill(sibling, SIGKILL);
+		waitpid(sibling, NULL, 0);
+	}
+	for (int i = 0; i < 2; i++) {
+		pid_t pid = i ? theirs : mine;
+
+		if (pid > 0) {
+			kill(pid, SIGKILL);
+			waitpid(pid, NULL, 0);
+		}
+	}
+	tpm_signs = false;
+	ipc_set_tpm(ctx, NULL, 0);
+	protected_forget();
+	g_agent.policy_snapshot_set = saved_snapshot;
+	g_agent.policy_digest_set = saved_digest;
+	ctx->status_flags = saved_flags;
+	ipc_set_profiles(ctx, one, 1);
+	profile_forget(&two[1]);
+}
+
 /*
  * A title hears STATUS when its own word moves: not when the host verdict
  * moves for another publisher, and also when only its publisher's moves.
@@ -1766,6 +2086,7 @@ int main(void)
 	test_terminate_flags_the_owner_publisher(&ctx, profiles);
 	test_status_push_follows_the_title_word(&ctx, profiles);
 	test_terminate_from_nested_namespace(&ctx);
+	test_token_holds_the_callers_instance(&ctx, profiles);
 
 	ipc_cleanup(&ctx);
 	profile_forget(profiles);

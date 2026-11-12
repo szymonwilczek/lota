@@ -238,14 +238,15 @@ struct lota_connect_opts {
 	/*
 	 * Hex SHA-256 of the publisher's attestation-CA trust anchor
 	 * SubjectPublicKeyInfo. Selects the AIK that signs this connection's
-	 * tokens, the protected processes they carry and the verdict
-	 * lota_is_attested() reports.
+	 * tokens and the verdict lota_is_attested() reports. It does not
+	 * authenticate the title: a token carries the processes of the
+	 * caller's own instance, whichever publisher it names.
 	 *
-	 * With NULL, a single-publisher host answers with its one profile,
-	 * the whole protected set and the host-wide verdict; a host that answers
-	 * for several refuses a token. The connection fails when the agent
-	 * cannot answer for the publisher named: falling back would hand the
-	 * title another publisher's evidence.
+	 * With NULL, a single-publisher host answers with its one profile and
+	 * the host-wide verdict; a host that answers for several refuses a
+	 * token. The connection fails when the agent cannot answer for the
+	 * publisher named: falling back would hand the title another
+	 * publisher's evidence.
 	 */
 	const char *publisher_profile;
 };
@@ -603,7 +604,7 @@ struct lota_registry {
 /**
  * lota_get_registry() - Fetch what the last token round found in a process.
  * @client: connection from lota_connect().
- * @pid: a protected process the caller owns, any one for root.
+ * @pid: a protected process the caller owns, of the caller's own instance.
  * @out: receives a registry to release with lota_registry_free().
  *
  * Objects the agent could not measure are listed too. The LOTA_REGISTRY_* flags
@@ -614,8 +615,8 @@ struct lota_registry {
  * A relying party checks both before trusting the list.
  *
  * Return: LOTA_OK, LOTA_ERR_NOT_PROTECTED for a process the last round did not
- * measure, LOTA_ERR_ACCESS_DENIED for somebody else's, or another negative
- * LOTA_ERR_*.
+ * measure, LOTA_ERR_ACCESS_DENIED for one of another owner or instance,
+ * or another negative LOTA_ERR_*.
  */
 int lota_get_registry(struct lota_client *client, uint32_t pid,
 		      struct lota_registry **out);
