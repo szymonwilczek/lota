@@ -31,10 +31,7 @@ enum lota_ipc_cmd {
 	LOTA_IPC_CMD_GET_STATUS = 0x02, /* Attestation status */
 	LOTA_IPC_CMD_GET_TOKEN = 0x03, /* Signed attestation token */
 	LOTA_IPC_CMD_SUBSCRIBE = 0x04, /* Subscribe to status changes */
-	LOTA_IPC_CMD_PROTECT_PID =
-		0x05, /* Add a protected PID (own PID, or privileged actor) */
-	LOTA_IPC_CMD_UNPROTECT_PID =
-		0x06, /* Remove a protected PID (privileged actor) */
+	LOTA_IPC_CMD_PROTECT_PID = 0x05, /* Protect the calling process */
 	LOTA_IPC_CMD_SHUTDOWN = 0x07, /* Stop the agent (privileged actor) */
 	LOTA_IPC_CMD_SET_PROFILE =
 		0x08, /* Bind this connection to one publisher profile */
@@ -398,12 +395,12 @@ struct lota_ipc_attest_sync_response {
 	(sizeof(struct lota_ipc_attest_sync_response) + \
 	 LOTA_IPC_MAX_PROFILES * sizeof(struct lota_ipc_profile_demand))
 
-/* PROTECT_PID / UNPROTECT_PID request payload */
+/* PROTECT_PID request payload; @pid is 0, the agent takes the caller's own */
 struct lota_ipc_pid_request {
 	uint32_t pid;
 } __attribute__((packed));
 
-/* PROTECT_PID / UNPROTECT_PID response payload */
+/* PROTECT_PID response payload */
 struct lota_ipc_policy_update {
 	uint8_t policy_digest[32];
 	uint32_t protect_pid_count;

@@ -72,7 +72,7 @@ The most common failures, with the gate that produced them:
   client can select. Neither reads the host's configuration to do it, so a
   ``/etc/lota/lota.conf`` this user cannot open is reported and stepped over;
   ``--config`` names a file that must load. Neither server enforces anything,
-  so ``PROTECT_PID`` and ``UNPROTECT_PID`` are refused there with
+  so ``PROTECT_PID`` is refused there with
   ``LOTA_IPC_ERR_NO_ENFORCEMENT`` (``LOTA_ERR_NO_ENFORCEMENT`` in the SDK):
   runtime PID policy is a change to what the enforcement object holds, and only
   a daemon that applied a startup policy has one.

@@ -12,8 +12,8 @@ as a structured event on the agent's journal and the BPF ring buffer.
 
 ``security_mmap_file`` and the matching ``security_file_mprotect`` gate are
 scoped to opted-in tasks tracked in the ``protected_pids`` BPF map. A process
-that has not been registered (via ``LOTA_IPC_CMD_PROTECT_PID`` or the
-``--protect-pid`` / ``protect_pid =`` CLI/config knobs) bypasses the verdict
+that has not been registered (by itself, through ``lota_protect_self()``, or
+by the ``--protect-pid`` / ``protect_pid =`` CLI/config knobs) bypasses the verdict
 and is only logged. The scope keeps ``strict_mmap = enforce`` host-safe even
 when the trust set is empty, while still catching every dlopen / LD_PRELOAD /
 mprotect(PROT_EXEC) attempt inside the game process.

@@ -713,7 +713,6 @@ int lota_protect_self(struct lota_client *client)
 		return LOTA_ERR_NOT_CONNECTED;
 
 	memset(&body, 0, sizeof(body));
-	body.pid = (uint32_t)getpid();
 
 	memset(&req, 0, sizeof(req));
 	req.magic = LOTA_IPC_MAGIC;

@@ -2710,52 +2710,6 @@ static int pid_set_add(const uint32_t *pids, int count, uint32_t pid,
 	return 0;
 }
 
-static int pid_set_remove(const uint32_t *pids, int count, uint32_t pid,
-			  uint32_t **out, int *out_count)
-{
-	if (!out || !out_count)
-		return -EINVAL;
-	*out = NULL;
-	*out_count = 0;
-	if (count < 0)
-		return -EINVAL;
-	if (pid == 0)
-		return -EINVAL;
-
-	if (!pid_set_contains(pids, count, pid)) {
-		uint32_t *copy = NULL;
-		if (count > 0) {
-			copy = calloc((size_t)count, sizeof(uint32_t));
-			if (!copy)
-				return -ENOMEM;
-			memcpy(copy, pids, (size_t)count * sizeof(uint32_t));
-		}
-		*out = copy;
-		*out_count = count;
-		return 0;
-	}
-
-	uint32_t *new_pids = NULL;
-	if (count - 1 > 0) {
-		new_pids = calloc((size_t)count - 1, sizeof(uint32_t));
-		if (!new_pids)
-			return -ENOMEM;
-	}
-
-	int w = 0;
-	for (int i = 0; i < count; i++) {
-		if (pids[i] == pid)
-			continue;
-		if (new_pids)
-			new_pids[w] = pids[i];
-		w++;
-	}
-
-	*out = new_pids;
-	*out_count = count - 1;
-	return 0;
-}
-
 /*
  * 0 when @pid has no tracer. A process under one is refused protection:
  * the LSM stops new attaches, not the one already there.
@@ -2778,14 +2732,11 @@ static int protect_target_untraced(uint32_t pid)
 
 /* @pid is protected for the publisher @client named */
 static void protect_owner_note_add(const struct ipc_client *client,
-				   uint32_t pid, bool self_target)
+				   uint32_t pid, uint64_t ticks)
 {
 	const char *publisher = client->profile ? client->profile->paths.id :
 						  NULL;
-	uint64_t ticks = client->peer_start_time_ticks;
 
-	if (!self_target && read_pid_start_time_ticks((pid_t)pid, &ticks) < 0)
-		return;
 	if (protect_owner_note(&g_protect_owners, pid, ticks, pid, ticks,
 			       publisher) < 0)
 		lota_warn("PID %u is protected for no publisher: owner table "
@@ -2793,207 +2744,54 @@ static void protect_owner_note_add(const struct ipc_client *client,
 			  pid);
 }
 
-static void handle_protect_pid_update(struct ipc_context *ctx,
-				      struct ipc_client *client,
-				      const uint8_t *payload,
-				      uint32_t payload_len, bool add)
+static bool pidfd_exited(int pidfd)
+{
+	struct pollfd pfd = { .fd = pidfd, .events = POLLIN };
+
+	return poll(&pfd, 1, 0) > 0;
+}
+
+/*
+ * The PID of the process @pidfd names, in the agent's PID namespace, from the
+ * "Pid:" line of its fdinfo. The kernel prints -1 there once that process is
+ * reaped and 0 when it runs in a PID namespace outside the agent's.
+ */
+static int pidfd_own_pid(int pidfd, uint32_t *out)
+{
+	char path[64];
+	char line[128];
+	FILE *fp;
+	long v = 0;
+	bool found = false;
+
+	snprintf(path, sizeof(path), "/proc/self/fdinfo/%d", pidfd);
+	fp = fopen(path, "r");
+	if (!fp)
+		return -errno;
+	while (fgets(line, sizeof(line), fp)) {
+		char *end = NULL;
+
+		if (strncmp(line, "Pid:\t", 5) != 0)
+			continue;
+		errno = 0;
+		v = strtol(line + 5, &end, 10);
+		found = errno == 0 && end != line + 5;
+		break;
+	}
+	fclose(fp);
+
+	if (!found)
+		return -EINVAL;
+	if (v <= 0 || v > INT_MAX)
+		return -ESRCH;
+	*out = (uint32_t)v;
+	return 0;
+}
+
+static void protect_pid_reply(struct ipc_client *client)
 {
 	struct lota_ipc_response *resp = (void *)client->send_buf;
-	struct lota_ipc_pid_request req;
 	struct lota_ipc_policy_update *out;
-	uint32_t pid;
-	uint32_t *new_pids = NULL;
-	int new_count = 0;
-	int ret;
-	int had;
-	bool mutated = false;
-	bool self_target;
-
-	(void)ctx;
-
-	if (payload_len < sizeof(req)) {
-		build_error_response(client, LOTA_IPC_ERR_BAD_REQUEST);
-		return;
-	}
-	memcpy(&req, payload, sizeof(req));
-	pid = req.pid;
-	if (pid == 0 || pid > INT_MAX) {
-		build_error_response(client, LOTA_IPC_ERR_BAD_REQUEST);
-		return;
-	}
-
-	/*
-	 * Protecting one's own PID only tightens enforcement: it needs the live
-	 * PID identity and no privilege. Another target and every UNPROTECT_PID
-	 * need ipc_client_is_privileged().
-	 */
-	self_target = add && (req.pid == (uint32_t)client->peer_pid);
-
-	if (self_target) {
-		uint64_t current_ticks = 0;
-
-		if (client->peer_start_time_ticks == 0 ||
-		    read_pid_start_time_ticks(client->peer_pid,
-					      &current_ticks) < 0 ||
-		    current_ticks != client->peer_start_time_ticks) {
-			lota_warn("PROTECT_SELF denied for uid=%d pid=%d "
-				  "(stale PID identity)",
-				  client->peer_uid, client->peer_pid);
-			build_error_response(client,
-					     LOTA_IPC_ERR_ACCESS_DENIED);
-			return;
-		}
-	} else if (!ipc_client_is_privileged(ctx, client)) {
-		lota_warn("%s denied for uid=%d pid=%d target=%u",
-			  add ? "PROTECT_PID" : "UNPROTECT_PID",
-			  client->peer_uid, client->peer_pid, pid);
-		build_error_response(client, LOTA_IPC_ERR_ACCESS_DENIED);
-		return;
-	}
-
-	if (add && check_protect_pid_rate_limit(client->peer_uid) < 0) {
-		lota_warn(
-			"rate limited PROTECT_PID for uid=%d pid=%d target=%u",
-			client->peer_uid, client->peer_pid, pid);
-		build_error_response(client, LOTA_IPC_ERR_RATE_LIMITED);
-		return;
-	}
-
-	/*
-	 * Runtime PID policy changes what the startup policy left behind.
-	 * An agent that applied none has nothing to change.
-	 */
-	if (!g_agent.policy_snapshot_set) {
-		lota_warn(
-			"Refusing PROTECT_PID for uid=%d pid=%d target=%u: this agent applied no startup policy, so it enforces nothing and has no runtime PID policy to change",
-			client->peer_uid, client->peer_pid, pid);
-		build_error_response(client, LOTA_IPC_ERR_NO_ENFORCEMENT);
-		return;
-	}
-
-	if (!g_agent.policy_digest_set) {
-		lota_err(
-			"Refusing PROTECT_PID for uid=%d pid=%d target=%u: the startup policy is applied but its digest is unset, which nothing should be able to produce",
-			client->peer_uid, client->peer_pid, pid);
-		build_error_response(client, LOTA_IPC_ERR_INTERNAL);
-		return;
-	}
-
-	/* judge the no-op against the running processes */
-	runtime_protect_catch_up();
-
-	had = pid_set_contains(g_agent.policy_protect_pids,
-			       g_agent.policy_protect_pid_count, pid);
-
-	/* idempotent no-op: return current digest */
-	if ((add && had) || (!add && !had)) {
-		if (add)
-			protect_owner_note_add(client, pid, self_target);
-		resp->magic = LOTA_IPC_MAGIC;
-		resp->version = LOTA_IPC_VERSION;
-		resp->result = LOTA_IPC_OK;
-		resp->payload_len = sizeof(*out);
-		out = (void *)(client->send_buf + LOTA_IPC_RESPONSE_SIZE);
-		memcpy(out->policy_digest, g_agent.policy_digest,
-		       sizeof(out->policy_digest));
-		out->protect_pid_count =
-			(uint32_t)g_agent.policy_protect_pid_count;
-		out->_reserved1 = 0;
-		client->send_len = LOTA_IPC_RESPONSE_SIZE + sizeof(*out);
-		client->send_offset = 0;
-		return;
-	}
-
-	if (g_agent.policy_protect_epoch == UINT64_MAX) {
-		lota_err("Refusing runtime PID policy mutation: protect epoch "
-			 "exhausted");
-		build_error_response(client, LOTA_IPC_ERR_INTERNAL);
-		return;
-	}
-
-	if (add) {
-		uint32_t required_slots =
-			(uint32_t)g_agent.policy_protect_pid_count +
-			(had ? 0u : 1u);
-
-		if (required_slots > LOTA_MAX_PROTECTED_PIDS) {
-			lota_warn("Refusing PROTECT_PID %u: protected PID map "
-				  "capacity reached "
-				  "(%d)",
-				  pid, LOTA_MAX_PROTECTED_PIDS);
-			build_error_response(client, LOTA_IPC_ERR_BAD_REQUEST);
-			return;
-		}
-	}
-
-	if (add) {
-		ret = bpf_loader_protect_pid(&g_agent.bpf_ctx, pid);
-		if (ret < 0) {
-			lota_err("Failed to protect PID %u (IPC): %s", pid,
-				 strerror(-ret));
-			build_error_response(client, LOTA_IPC_ERR_INTERNAL);
-			return;
-		}
-
-		/*
-		 * Read after the map holds the process, so no attach lands
-		 * between the check and the protection: a tracer seen now
-		 * was attached before it, and stays.
-		 */
-		ret = protect_target_untraced(pid);
-		if (ret < 0) {
-			if (bpf_loader_unprotect_pid(&g_agent.bpf_ctx, pid) < 0)
-				lota_err("Failed to withdraw protection from "
-					 "PID %u",
-					 pid);
-			build_error_response(client,
-					     LOTA_IPC_ERR_ACCESS_DENIED);
-			return;
-		}
-		mutated = true;
-	} else {
-		ret = bpf_loader_unprotect_pid(&g_agent.bpf_ctx, pid);
-		if (ret < 0) {
-			lota_err("Failed to unprotect PID %u (IPC): %s", pid,
-				 strerror(-ret));
-			build_error_response(client, LOTA_IPC_ERR_INTERNAL);
-			return;
-		}
-		mutated = true;
-	}
-
-	if (add) {
-		ret = pid_set_add(g_agent.policy_protect_pids,
-				  g_agent.policy_protect_pid_count, pid,
-				  &new_pids, &new_count);
-	} else {
-		ret = pid_set_remove(g_agent.policy_protect_pids,
-				     g_agent.policy_protect_pid_count, pid,
-				     &new_pids, &new_count);
-	}
-	if (ret < 0) {
-		lota_err("PID set update failed: %s", strerror(-ret));
-		goto rollback_bpf;
-	}
-
-	{
-		agent_globals_lock(&g_agent);
-		if (g_agent.policy_protect_pids) {
-			OPENSSL_cleanse(
-				g_agent.policy_protect_pids,
-				(size_t)g_agent.policy_protect_pid_count *
-					sizeof(uint32_t));
-			free(g_agent.policy_protect_pids);
-		}
-		g_agent.policy_protect_pids = new_pids;
-		g_agent.policy_protect_pid_count = new_count;
-		g_agent.policy_protect_epoch += 1;
-		agent_globals_unlock(&g_agent);
-		new_pids = NULL;
-		new_count = 0;
-	}
-	if (add)
-		protect_owner_note_add(client, pid, self_target);
 
 	resp->magic = LOTA_IPC_MAGIC;
 	resp->version = LOTA_IPC_VERSION;
@@ -3006,22 +2804,177 @@ static void handle_protect_pid_update(struct ipc_context *ctx,
 	out->_reserved1 = 0;
 	client->send_len = LOTA_IPC_RESPONSE_SIZE + sizeof(*out);
 	client->send_offset = 0;
+}
 
-	return;
+/*
+ * 0 when @pid still names the process @pidfd holds, with @ticks its start
+ * time. Asked after the map holds @pid: a process alive then keeps its PID.
+ */
+static int protect_target_live(int pidfd, uint32_t pid, uint64_t *ticks)
+{
+	if (read_pid_start_time_ticks((pid_t)pid, ticks) < 0 ||
+	    pidfd_exited(pidfd)) {
+		lota_warn("Refusing PROTECT_PID %u: the process exited", pid);
+		return -ESRCH;
+	}
+	return 0;
+}
 
-rollback_bpf:
-	if (mutated) {
-		if (add) {
-			(void)bpf_loader_unprotect_pid(&g_agent.bpf_ctx, pid);
-		} else {
-			(void)bpf_loader_protect_pid(&g_agent.bpf_ctx, pid);
+static void protect_peer(struct ipc_client *client, int pidfd, uint32_t pid)
+{
+	uint32_t *new_pids = NULL;
+	int new_count = 0;
+	uint64_t ticks = 0;
+	int ret;
+
+	if (check_protect_pid_rate_limit(client->peer_uid) < 0) {
+		lota_warn("rate limited PROTECT_PID for uid=%d pid=%u",
+			  client->peer_uid, pid);
+		build_error_response(client, LOTA_IPC_ERR_RATE_LIMITED);
+		return;
+	}
+
+	/*
+	 * Runtime PID policy changes what the startup policy left behind.
+	 * An agent that applied none has nothing to change.
+	 */
+	if (!g_agent.policy_snapshot_set) {
+		lota_warn("Refusing PROTECT_PID for uid=%d pid=%u: this agent "
+			  "applied no startup policy, so it enforces nothing "
+			  "and has no runtime PID policy to change",
+			  client->peer_uid, pid);
+		build_error_response(client, LOTA_IPC_ERR_NO_ENFORCEMENT);
+		return;
+	}
+
+	if (!g_agent.policy_digest_set) {
+		lota_err("Refusing PROTECT_PID for uid=%d pid=%u: the startup "
+			 "policy is applied but its digest is unset, which "
+			 "nothing should be able to produce",
+			 client->peer_uid, pid);
+		build_error_response(client, LOTA_IPC_ERR_INTERNAL);
+		return;
+	}
+
+	/* judge the no-op against the running processes */
+	runtime_protect_catch_up();
+
+	/* idempotent no-op: return current digest */
+	if (pid_set_contains(g_agent.policy_protect_pids,
+			     g_agent.policy_protect_pid_count, pid)) {
+		if (protect_target_live(pidfd, pid, &ticks) < 0) {
+			build_error_response(client,
+					     LOTA_IPC_ERR_ACCESS_DENIED);
+			return;
 		}
+		protect_owner_note_add(client, pid, ticks);
+		protect_pid_reply(client);
+		return;
 	}
-	if (new_pids) {
-		OPENSSL_cleanse(new_pids, (size_t)new_count * sizeof(uint32_t));
-		free(new_pids);
+
+	if (g_agent.policy_protect_epoch == UINT64_MAX) {
+		lota_err("Refusing runtime PID policy mutation: protect epoch "
+			 "exhausted");
+		build_error_response(client, LOTA_IPC_ERR_INTERNAL);
+		return;
 	}
-	build_error_response(client, LOTA_IPC_ERR_INTERNAL);
+
+	if ((uint32_t)g_agent.policy_protect_pid_count + 1u >
+	    LOTA_MAX_PROTECTED_PIDS) {
+		lota_warn("Refusing PROTECT_PID %u: protected PID map "
+			  "capacity reached "
+			  "(%d)",
+			  pid, LOTA_MAX_PROTECTED_PIDS);
+		build_error_response(client, LOTA_IPC_ERR_BAD_REQUEST);
+		return;
+	}
+
+	ret = bpf_loader_protect_pid(&g_agent.bpf_ctx, pid);
+	if (ret < 0) {
+		lota_err("Failed to protect PID %u (IPC): %s", pid,
+			 strerror(-ret));
+		build_error_response(client, LOTA_IPC_ERR_INTERNAL);
+		return;
+	}
+
+	/*
+	 * Read after the map holds the process, so no attach lands
+	 * between the check and the protection: a tracer seen now
+	 * was attached before it, and stays.
+	 */
+	if (protect_target_untraced(pid) < 0 ||
+	    protect_target_live(pidfd, pid, &ticks) < 0) {
+		if (bpf_loader_unprotect_pid(&g_agent.bpf_ctx, pid) < 0)
+			lota_err("Failed to withdraw protection from "
+				 "PID %u",
+				 pid);
+		build_error_response(client, LOTA_IPC_ERR_ACCESS_DENIED);
+		return;
+	}
+
+	ret = pid_set_add(g_agent.policy_protect_pids,
+			  g_agent.policy_protect_pid_count, pid, &new_pids,
+			  &new_count);
+	if (ret < 0) {
+		lota_err("PID set update failed: %s", strerror(-ret));
+		(void)bpf_loader_unprotect_pid(&g_agent.bpf_ctx, pid);
+		build_error_response(client, LOTA_IPC_ERR_INTERNAL);
+		return;
+	}
+
+	agent_globals_lock(&g_agent);
+	if (g_agent.policy_protect_pids) {
+		OPENSSL_cleanse(g_agent.policy_protect_pids,
+				(size_t)g_agent.policy_protect_pid_count *
+					sizeof(uint32_t));
+		free(g_agent.policy_protect_pids);
+	}
+	g_agent.policy_protect_pids = new_pids;
+	g_agent.policy_protect_pid_count = new_count;
+	g_agent.policy_protect_epoch += 1;
+	agent_globals_unlock(&g_agent);
+
+	protect_owner_note_add(client, pid, ticks);
+	protect_pid_reply(client);
+}
+
+/*
+ * The process that connected protects itself. Its PID comes from the socket,
+ * in the agent's namespace; a PID in the request is refused.
+ */
+static void handle_protect_pid(struct ipc_client *client,
+			       const uint8_t *payload, uint32_t payload_len)
+{
+	struct lota_ipc_pid_request req;
+	socklen_t len = sizeof(int);
+	uint32_t pid = 0;
+	int pidfd = -1;
+
+	if (payload_len < sizeof(req)) {
+		build_error_response(client, LOTA_IPC_ERR_BAD_REQUEST);
+		return;
+	}
+	memcpy(&req, payload, sizeof(req));
+	if (req.pid != 0) {
+		build_error_response(client, LOTA_IPC_ERR_BAD_REQUEST);
+		return;
+	}
+
+	if (getsockopt(client->fd, SOL_SOCKET, SO_PEERPIDFD, &pidfd, &len) <
+		    0 ||
+	    pidfd_own_pid(pidfd, &pid) < 0) {
+		lota_warn("PROTECT_PID denied for uid=%d pid=%d: the process "
+			  "is gone or runs in a PID namespace outside the "
+			  "agent's",
+			  client->peer_uid, client->peer_pid);
+		if (pidfd >= 0)
+			close(pidfd);
+		build_error_response(client, LOTA_IPC_ERR_ACCESS_DENIED);
+		return;
+	}
+
+	protect_peer(client, pidfd, pid);
+	close(pidfd);
 }
 
 /* The real uid of @pid, from /proc/<pid>/status */
@@ -3130,13 +3083,6 @@ static void handle_get_refusal(struct ipc_client *client)
 	resp->payload_len = sizeof(out);
 	client->send_len = LOTA_IPC_RESPONSE_SIZE + sizeof(out);
 	client->send_offset = 0;
-}
-
-static bool pidfd_exited(int pidfd)
-{
-	struct pollfd pfd = { .fd = pidfd, .events = POLLIN };
-
-	return poll(&pfd, 1, 0) > 0;
 }
 
 /*
@@ -3350,13 +3296,7 @@ static void process_request(struct ipc_context *ctx, struct ipc_client *client)
 		break;
 
 	case LOTA_IPC_CMD_PROTECT_PID:
-		handle_protect_pid_update(ctx, client, payload, payload_len,
-					  true);
-		break;
-
-	case LOTA_IPC_CMD_UNPROTECT_PID:
-		handle_protect_pid_update(ctx, client, payload, payload_len,
-					  false);
+		handle_protect_pid(client, payload, payload_len);
 		break;
 
 	case LOTA_IPC_CMD_SYNC_ATTEST:

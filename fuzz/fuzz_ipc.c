@@ -123,10 +123,13 @@ static size_t build_frames(const uint8_t *data, size_t size, uint8_t *out,
 			   size_t out_cap)
 {
 	static const uint32_t cmds[] = {
-		LOTA_IPC_CMD_PING,	  LOTA_IPC_CMD_GET_STATUS,
-		LOTA_IPC_CMD_GET_TOKEN,	  LOTA_IPC_CMD_SUBSCRIBE,
-		LOTA_IPC_CMD_PROTECT_PID, LOTA_IPC_CMD_UNPROTECT_PID,
-		LOTA_IPC_CMD_SHUTDOWN,	  0xDEADBEEF /* unknown cmd path */
+		LOTA_IPC_CMD_PING,
+		LOTA_IPC_CMD_GET_STATUS,
+		LOTA_IPC_CMD_GET_TOKEN,
+		LOTA_IPC_CMD_SUBSCRIBE,
+		LOTA_IPC_CMD_PROTECT_PID,
+		LOTA_IPC_CMD_SHUTDOWN,
+		0xDEADBEEF /* unknown cmd path */
 	};
 	size_t in = 0;
 	size_t off = 0;

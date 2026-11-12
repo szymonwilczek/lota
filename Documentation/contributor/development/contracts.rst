@@ -417,7 +417,7 @@ its own session, and its owner can end it with an ordinary signal anyway.
 
 The handler applies ``kill(2)``'s own rule -- the owner of the target, or root
 -- and nothing wider. It deliberately does **not** call
-``ipc_client_is_privileged()``, which ``UNPROTECT_PID`` and ``SHUTDOWN`` do:
+``ipc_client_is_privileged()``, which ``SHUTDOWN`` does:
 that gate demands a caller whose executable is on the operator's verity
 allowlist, which is empty on a default install, so requiring it here would
 reproduce the dead end the command exists to end. What keeps the widening

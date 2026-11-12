@@ -333,9 +333,9 @@ int lota_ping(struct lota_client *client, uint64_t *uptime_sec);
  * lota_protect_self() - Register the calling process as protected.
  * @client: connection from lota_connect().
  *
- * The agent checks that the connection's SO_PEERCRED PID is the target and that
- * its start time still matches, so a recycled PID cannot use a prior
- * registration. No trusted executable is needed: opting in to stricter
+ * The agent protects the process that opened the connection, by its pidfd from
+ * SO_PEERPIDFD, under its PID in the agent's PID namespace; no PID crosses the
+ * socket. No trusted executable is needed: opting in to stricter
  * enforcement is not a privilege escalation. A second call from the same task
  * leaves the runtime PID set alone and, unless rate limited, returns LOTA_OK.
  *
@@ -346,9 +346,10 @@ int lota_ping(struct lota_client *client, uint64_t *uptime_sec);
  * Under strict_mmap a protected task maps only files with an allowed fs-verity
  * digest or a trusted_libs inode.
  *
- * Return: LOTA_OK, LOTA_ERR_ACCESS_DENIED if the PID identity check fails or a
- * tracer already holds the process, LOTA_ERR_RATE_LIMITED if the caller's UID
- * exceeded the rate window, or another negative LOTA_ERR_*.
+ * Return: LOTA_OK, LOTA_ERR_ACCESS_DENIED if the process exited, runs in a PID
+ * namespace outside the agent's or a tracer already holds it,
+ * LOTA_ERR_RATE_LIMITED if the caller's UID exceeded the rate window,
+ * or another negative LOTA_ERR_*.
  */
 int lota_protect_self(struct lota_client *client);
 

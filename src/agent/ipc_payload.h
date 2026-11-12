@@ -40,7 +40,6 @@ static inline bool ipc_payload_len_valid(uint32_t cmd, uint32_t payload_len)
 		return payload_len == sizeof(struct lota_ipc_subscribe_request);
 
 	case LOTA_IPC_CMD_PROTECT_PID:
-	case LOTA_IPC_CMD_UNPROTECT_PID:
 		return payload_len == sizeof(struct lota_ipc_pid_request);
 
 	case LOTA_IPC_CMD_SET_PROFILE:
