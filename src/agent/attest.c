@@ -1193,7 +1193,7 @@ static int reenroll_target(struct attest_target *t)
 		ret = -EKEYREJECTED;
 	}
 
-	delay = attest_target_reenroll_failed(t, now_ms);
+	delay = attest_target_reenroll_failed(t, monotonic_ms());
 	lota_warn("Re-enrollment failed (%s); retry in %ds. Publisher: %s",
 		  strerror(-ret), delay, t->label);
 	return -EKEYREJECTED;
