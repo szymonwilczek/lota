@@ -447,7 +447,17 @@ func (h *APIHandler) handleHealth(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *APIHandler) handleStats(w http.ResponseWriter, r *http.Request) {
-	stats := h.verifier.Stats()
+	p := requestPrincipal(r)
+	var tenants []string
+	if scopedToTenants(p) {
+		tenants = sortedTenantSet(p)
+	}
+
+	stats, err := h.verifier.Stats(tenants)
+	if err != nil {
+		h.writeStoreError(w, err)
+		return
+	}
 
 	resp := statsResponse{
 		PendingChallenges: &stats.PendingChallenges,
@@ -471,35 +481,9 @@ func (h *APIHandler) handleStats(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// fleet-wide counters cannot be split per tenant, so they are omitted
-	if p := requestPrincipal(r); scopedToTenants(p) {
+	if tenants != nil {
 		resp.TenantScoped = true
-		resp.Tenants = sortedTenantSet(p)
-
-		var err error
-		resp.RegisteredClients, err = h.verifier.CountClients(resp.Tenants)
-		if err != nil {
-			h.writeStoreError(w, err)
-			return
-		}
-
-		resp.ActiveRevocations = 0
-		if revStore := h.verifier.RevocationStore(); revStore != nil {
-			resp.ActiveRevocations, err = revStore.CountRevocationsIn(resp.Tenants)
-			if err != nil {
-				h.writeStoreError(w, err)
-				return
-			}
-		}
-
-		resp.ActiveBans = 0
-		if banStr := h.verifier.BanStore(); banStr != nil {
-			resp.ActiveBans, err = banStr.CountBansIn(resp.Tenants)
-			if err != nil {
-				h.writeStoreError(w, err)
-				return
-			}
-		}
-
+		resp.Tenants = tenants
 		resp.PendingChallenges = nil
 		resp.UsedNonces = nil
 		resp.TotalAttestations = nil
@@ -616,7 +600,11 @@ func (h *APIHandler) handleMetrics(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	stats := h.verifier.Stats()
+	stats, err := h.verifier.Stats(nil)
+	if err != nil {
+		h.writeStoreError(w, err)
+		return
+	}
 	h.metrics.PendingChallenges.Store(int64(stats.PendingChallenges))
 	h.metrics.RegisteredClients.Store(int64(stats.RegisteredClients))
 	h.metrics.ActiveRevocations.Store(int64(stats.ActiveRevocations))

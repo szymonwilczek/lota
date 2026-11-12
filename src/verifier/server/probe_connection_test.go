@@ -71,7 +71,8 @@ func TestBareConnectIsNotAFailedAttestation(t *testing.T) {
 	// a run that stays at zero waits it out.
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
-		if m.ConnectionErrors.Value() > 0 || v.Stats().PendingChallenges > 0 {
+		if m.ConnectionErrors.Value() > 0 ||
+			mustStats(t, v).PendingChallenges > 0 {
 			break
 		}
 		time.Sleep(20 * time.Millisecond)
@@ -82,10 +83,19 @@ func TestBareConnectIsNotAFailedAttestation(t *testing.T) {
 			probes, got)
 	}
 
-	if got := v.Stats().PendingChallenges; got != 0 {
+	if got := mustStats(t, v).PendingChallenges; got != 0 {
 		t.Errorf("%d probe connections left %d challenges pending, want 0",
 			probes, got)
 	}
+}
+
+func mustStats(t *testing.T, v *verify.Verifier) verify.Stats {
+	t.Helper()
+	s, err := v.Stats(nil)
+	if err != nil {
+		t.Fatalf("Stats: %v", err)
+	}
+	return s
 }
 
 // A checker that completes TLS, reads the challenge and closes without a report
@@ -124,7 +134,7 @@ func TestUnansweredChallengeIsReleased(t *testing.T) {
 			probes, got)
 	}
 
-	if got := v.Stats().PendingChallenges; got != 0 {
+	if got := mustStats(t, v).PendingChallenges; got != 0 {
 		t.Errorf("%d unanswered challenges left %d pending, want 0", probes, got)
 	}
 }

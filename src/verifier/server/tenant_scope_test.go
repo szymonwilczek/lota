@@ -13,6 +13,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/szymonwilczek/lota/verifier/metrics"
 	"github.com/szymonwilczek/lota/verifier/store"
 	"github.com/szymonwilczek/lota/verifier/verify"
 )
@@ -198,6 +199,45 @@ func TestAPITenantScoping_StatsStoreFailureIsAnError(t *testing.T) {
 	code, _ := f.do(t, "GET", "/api/v1/stats", "acme-key")
 	if code != http.StatusInternalServerError {
 		t.Fatalf("scoped stats over a closed store: %d, want 500", code)
+	}
+}
+
+// apiWithoutTable serves the API over a SQLite verifier whose table is gone.
+func apiWithoutTable(t *testing.T, table string) *http.ServeMux {
+	t.Helper()
+	db := testDB(t)
+	audit := store.NewSQLiteAuditLog(db)
+	cfg := verify.DefaultConfig()
+	cfg.BaselineStore = verify.NewSQLiteBaselineStore(db)
+	cfg.RevocationStore = store.NewSQLiteRevocationStore(db, audit)
+	cfg.BanStore = store.NewSQLiteBanStore(db, audit)
+	v := verify.NewVerifier(cfg, nil)
+	mux := http.NewServeMux()
+	srv := &Server{verifier: v, addr: ":8443"}
+	NewAPIHandler(mux, v, srv, audit, nil, metrics.New(), nil, "", "")
+
+	if _, err := db.Exec("DROP TABLE " + table); err != nil {
+		t.Fatalf("drop %s: %v", table, err)
+	}
+	return mux
+}
+
+// The fleet-wide counts are errors too, on /metrics as on /api/v1/stats.
+func TestAPIStats_StoreFailureIsAnError(t *testing.T) {
+	tables := []string{"baselines", "revocations", "hardware_bans"}
+	targets := []string{"/api/v1/stats", "/metrics"}
+
+	for _, table := range tables {
+		mux := apiWithoutTable(t, table)
+		for _, target := range targets {
+			req := httptest.NewRequest("GET", target, nil)
+			rr := httptest.NewRecorder()
+			mux.ServeHTTP(rr, req)
+			if rr.Code != http.StatusInternalServerError {
+				t.Errorf("%s without %s: %d, want 500",
+					target, table, rr.Code)
+			}
+		}
 	}
 }
 
