@@ -98,7 +98,7 @@ struct verifier_result {
 /*
  * Transport errors no errno names, above the errno range and apart from the
  * TPM codes at 4097; net_strerror() renders them. A socket errno, when there
- * is one, is returned instead.
+ * is one, is what gets returned.
  */
 #define LOTA_ERR_NET_PEER_CLOSED 4353 /* TLS shutdown mid-exchange */
 #define LOTA_ERR_NET_PEER_GONE 4354 /* EOF with no shutdown and no errno */
@@ -116,8 +116,7 @@ struct verifier_result {
 const char *net_err_name(int err);
 
 /**
- * net_err_is_tls() - Whether TLS refused, rather than the peer being
- * unreachable.
+ * net_err_is_tls() - Whether the failure came from TLS.
  * @err: The code, of either sign.
  *
  * Return: nonzero for the LOTA_ERR_NET_TLS* codes.

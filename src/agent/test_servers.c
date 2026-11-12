@@ -93,9 +93,9 @@ int run_ipc_test_server(const struct lota_config *cfg)
 		return 1;
 	}
 	/*
-	 * Size the token the way the attestation loop does, so relying party
-	 * verifies what the test server hands out instead of refusing it as
-	 * living implausibly long.
+	 * Size the token the way the attestation loop does, so the relying
+	 * party accepts what the test server hands out; a token living
+	 * implausibly long is refused.
 	 */
 	valid_until = (uint64_t)(time(NULL) + LOTA_SERVER_MAX_TOKEN_AGE_SEC);
 
@@ -199,9 +199,9 @@ int run_signed_ipc_test_server(const struct lota_config *cfg)
 	printf("AIK ready\n\n");
 
 	/*
-	 * size the token the way the attestation loop does, so relying party
-	 * verifies what the test server hands out instead of refusing it as
-	 * living implausibly long
+	 * size the token the way the attestation loop does, so the relying
+	 * party accepts what the test server hands out; a token living
+	 * implausibly long is refused
 	 */
 	valid_until = (uint64_t)(time(NULL) + LOTA_SERVER_MAX_TOKEN_AGE_SEC);
 

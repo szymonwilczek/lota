@@ -359,8 +359,8 @@ struct tpm_context {
  * tpm_init() - Initialize a TPM context.
  * @ctx: Context to initialize; pair with tpm_cleanup().
  *
- * Opens /dev/tpmrm0. With @ctx->allow_env_tpm_overrides, LOTA_TCTI goes to the
- * TSS2 TCTI loader instead and LOTA_AIK_META_PATH redirects the AIK files.
+ * Opens /dev/tpmrm0. With @ctx->allow_env_tpm_overrides, a set LOTA_TCTI goes
+ * to the TSS2 TCTI loader and LOTA_AIK_META_PATH redirects the AIK files.
  *
  * Return: 0, -EINVAL on a LOTA_AIK_META_PATH that is relative, holds ".." or
  * a disallowed character, or another negative errno.

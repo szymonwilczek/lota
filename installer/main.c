@@ -306,8 +306,8 @@ static int do_pause(struct install_ctx *ctx)
 	ui_text(&ctx->ui,
 		"On the way down the agent poisons its TPM measurement slot "
 		"(PCR 14) on purpose, so this boot can no longer attest. That "
-		"is the security contract, not a fault: resuming therefore "
-		"needs a reboot (see --resume).");
+		"is the security contract: resuming therefore needs a reboot "
+		"(see --resume).");
 	ui_text(&ctx->ui,
 		"A game the agent protects ends with it, so save and close "
 		"any that is running first.");
@@ -420,8 +420,7 @@ static int do_resume(struct install_ctx *ctx)
 	ui_text(&ctx->ui,
 		"Resuming LOTA means rebooting. When the agent paused it "
 		"poisoned PCR 14, and that slot only clears on a hardware "
-		"reset - so same-boot re-attestation is impossible by design, "
-		"not a limitation to work around.");
+		"reset - so same-boot re-attestation is impossible by design.");
 	ui_text(&ctx->ui,
 		"After the reboot the agent starts on its own (socket-"
 		"activated), re-measures into a fresh PCR 14, and attests "

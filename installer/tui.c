@@ -533,7 +533,7 @@ static const char barrier_text[] =
 	"\n"
 	"Reboot, run the same lota-install command again, and it resumes "
 	"exactly where it left off: every finished stage is detected from "
-	"live system state, not from a state file.";
+	"live system state.";
 
 static const char done_text[] =
 	"LOTA install complete.\n"

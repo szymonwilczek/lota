@@ -10,8 +10,8 @@
 # of the types those headers declare.
 #
 # This gate compares all of it against the baseline checked in under packaging/abi/
-# and fails when they drift, so widening or breaking the surface is deliberate edit
-# to that baseline rather than side effect of making a helper non-static.
+# and fails when they drift, so widening or breaking the surface takes a deliberate
+# edit to that baseline.
 #
 # It then stages a prefix holding exactly what the packages install and builds
 # against it the way an integrator does: each public header on its own,

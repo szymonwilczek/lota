@@ -169,9 +169,9 @@ int policy_emit(const struct policy_snapshot *snap, FILE *out)
 		}
 	}
 	fprintf(out,
-		"# PCR14 (LOTA boot-commitment) is intentionally omitted: it is\n"
-		"# validated by the verifier's boot-commitment derivation, not a\n"
-		"# static pin, and changes on every boot.\n");
+		"# PCR14 (LOTA boot-commitment) is omitted: it changes on\n"
+		"# every boot, and the verifier checks it through its\n"
+		"# boot-commitment derivation.\n");
 	fprintf(out, "\n");
 
 	fprintf(out, "# Allowed kernel images (SHA-256)\n");

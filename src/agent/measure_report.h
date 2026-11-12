@@ -192,9 +192,8 @@ static inline void measure_report_line(char *out, size_t cap, int answer,
 	case MEASURE_ANSWER_ABSENT:
 		snprintf(out, cap,
 			 "runtime image measurement failed for pid=%u, which "
-			 "is not the caller (pid=%u): the token reports "
-			 "partial coverage rather than refusing every title "
-			 "on this host: %s",
+			 "is not the caller (pid=%u); the token reports "
+			 "partial coverage: %s",
 			 pid, caller_pid, reason);
 		return;
 	case MEASURE_ANSWER_PARTIAL:

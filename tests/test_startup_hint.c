@@ -33,12 +33,12 @@ int main(void)
 	else
 		PASS();
 
-	TEST("--protect-pid is named as a startup option that did nothing");
+	TEST("--protect-pid is named as read at startup and doing nothing");
 	startup_busy_message(true, buf, sizeof(buf));
 	if (!strstr(buf, "--protect-pid"))
 		FAIL("the flag the operator passed is not mentioned");
-	else if (!strstr(buf, "startup option"))
-		FAIL("nothing says it is not a request to the running daemon");
+	else if (!strstr(buf, "read only at startup"))
+		FAIL("nothing says the running daemon does not read it");
 	else if (!strstr(buf, "did nothing"))
 		FAIL("nothing says the flag had no effect");
 	else

@@ -713,8 +713,8 @@ static int apply_key(struct lota_config *cfg, const char *key,
 		fprintf(stderr,
 			"%s:%d: no_verify_tls is a security-critical option "
 			"and cannot\n"
-			"be set via config file. Use --no-verify-tls CLI flag "
-			"instead.\n",
+			"be set via config file. Pass --no-verify-tls on the "
+			"command line.\n",
 			filepath, lineno);
 		return -1;
 	}

@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: MIT
 # nfpm config for the lota-verifier package (relying-party service)
 #
-# For operators who run the verifier on host rather than as the container image.
+# For operators who run the verifier as a host service.
 name: lota-verifier
 arch: amd64
 platform: linux

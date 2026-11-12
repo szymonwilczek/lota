@@ -42,7 +42,7 @@ run_host() {
 }
 
 # Command lines of the section's literal blocks, continuations joined;
-# a block that starts with output rather than a command is skipped
+# a block that starts with output is skipped
 page_commands() {
     awk '
 	{ l[NR] = $0 }

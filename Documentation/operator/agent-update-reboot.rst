@@ -55,7 +55,7 @@ client flipping between blessed builds faster than a distribution ships them is
 visible. A second update reaching a host inside that window is refused even though
 its hash is listed, and the verifier says which refusal it is::
 
-    agent_hash re-pin refused by the per-client interval, not by the allow-list
+    agent_hash re-pin refused: the per-client interval has not elapsed
       reported_agent_hash=... last_repin_at=... interval_elapses_at=...
 
 Wait for the stated time, or re-anchor the device

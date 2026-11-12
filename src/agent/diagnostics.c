@@ -401,10 +401,10 @@ int diagnostics_dispatch(struct cli_options *opts, struct lota_config *cfg)
 		}
 		if (opts->no_verify_tls && opts->ca_cert_path) {
 			fprintf(stderr,
-				"Warning: --ca-cert is not verified against "
-				"when --no-verify-tls is set; it still names "
-				"the publisher profile the AIK certificate is "
-				"read from\n");
+				"Warning: with --no-verify-tls the server "
+				"certificate is not checked against --ca-cert; "
+				"--ca-cert still names the publisher profile "
+				"the AIK certificate is read from\n");
 		}
 		if (cfg && cfg->profile_count > 0) {
 			if (opts->server_overridden) {

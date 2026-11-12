@@ -76,11 +76,11 @@ Environment:
                     session sets it; an account without one has no
                     container socket and no token directory, which
                     the checks that read it report as such.
-  LOTA_AGENT_SOCKET The agent's socket, checked instead of
-                    /run/lota/lota.sock.
+  LOTA_AGENT_SOCKET The agent's socket to check (default
+                    /run/lota/lota.sock).
   LOTA_SETUP_DROPIN_DIR
-                    Write the --install-systemd-dropin file under this
-                    directory instead of /etc/systemd/system. For
+                    Directory for the --install-systemd-dropin file
+                    (default /etc/systemd/system). For
                     package staging and tests: no systemd on this host
                     is configured, so root is not required either.
 EOF
@@ -545,8 +545,8 @@ echo "  The wrapper binds ${runtime_dir}/lota (the socket) and"
 echo "  ${runtime_dir}/${HOOK_TOKEN_DIR_NAME} (its own output)"
 echo "  into the container, and creates the second one first, so"
 echo "  neither path has to be named here.  A title needing a socket"
-echo "  somewhere else takes LOTA_HOOK_SOCKET, and the wrapper binds"
-echo "  the directory that one is in instead."
+echo "  somewhere else takes LOTA_HOOK_SOCKET, and the wrapper then"
+echo "  binds the directory that socket is in."
 echo ""
 echo "  For a host-side launch outside the pressure-vessel"
 echo "  container (a native binary you run directly):"

@@ -118,8 +118,8 @@ func NewAPIHandler(mux *http.ServeMux, verifier *verify.Verifier, srv *Server, a
 	h.handle(mux, "DELETE /api/v1/bans/", h.requireAdmin(h.handleUnbanHardware),
 		"DELETE /api/v1/bans/{id}")
 
-	// catch-all, so 404/405 use the error envelope instead of the mux's
-	// plain text; not via handle(), as it is no endpoint to list
+	// catch-all, so 404/405 use the error envelope; not via handle(),
+	// as it is no endpoint to list
 	mux.HandleFunc("/", h.handleUnmatched(mux))
 
 	return h
@@ -368,7 +368,7 @@ type healthResponse struct {
 }
 
 // statsResponse keeps fleet-wide counters as pointers, so a tenant-scoped
-// response omits them instead of reporting zero.
+// response can omit them.
 type statsResponse struct {
 	PendingChallenges *int     `json:"pending_challenges,omitempty"`
 	UsedNonces        *int     `json:"used_nonces,omitempty"`
@@ -956,7 +956,8 @@ func (h *APIHandler) handleUnbanHardware(w http.ResponseWriter, r *http.Request)
 	// a tenant in the query would otherwise be ignored without a word
 	if r.URL.Query().Has("tenant") {
 		writeJSONStatus(w, http.StatusBadRequest, errorResponse{
-			Error: "tenant is a body field on this endpoint, not a query parameter",
+			Error: "tenant goes in the request body on " +
+				"this endpoint",
 		})
 		return
 	}

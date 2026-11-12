@@ -801,8 +801,8 @@ const char *net_result_str(uint32_t result)
 		       "re-anchored";
 	case VERIFY_REVOKED:
 		return "FAIL - This host's attestation key was revoked by the "
-		       "publisher's administrator; re-enrollment is their "
-		       "decision, not this machine's";
+		       "publisher's administrator, who decides on "
+		       "re-enrollment";
 	case VERIFY_BANNED:
 		return "FAIL - This machine is banned by the publisher's "
 		       "administrator; nothing on it changes that answer";

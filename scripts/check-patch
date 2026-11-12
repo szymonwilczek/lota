@@ -46,8 +46,7 @@ Checks:
     which CI never is),
   - every Go module in the tree named by the linted-module list,
   - no compiled binary among the tracked files,
-  - no test or example script naming the default build directory instead of
-    the one the build used,
+  - no test or example script hardcoding the default build directory,
   - include hygiene when C changes (skipped if clang-include-cleaner or
     bear is missing),
   - sparse semantic analysis when C changes (blocking; skipped if sparse
@@ -715,8 +714,7 @@ check_unit_tests() {
 # Include hygiene:
 # Every header used directly, no transitive deps.
 # Heavy (a full bear-built compile database), so it only runs when the patch
-# touches C, and skips when the tooling is absent rather than forcing every
-# contributor to install it
+# touches C, and skips when the tooling is absent
 #
 # Public API/ABI:
 # SDK's exported symbols, sonames, installed header set and type layout,

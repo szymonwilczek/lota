@@ -206,7 +206,7 @@ int handle_exec_event(void *ctx, void *data, size_t len)
 			  event->target_pid, filename_safe, event->pid,
 			  event->uid);
 		return 0;
-	/* no signal, so no target pid: name the file instead */
+	/* no signal, so no target pid: the line names the file */
 	case LOTA_EVENT_KILL_GUARD_BLOCKED:
 		lota_info("[%llu] KILL_BLOCKED %s -> %s (pid=%u, uid=%u)",
 			  (unsigned long long)event->timestamp_ns, comm_safe,

@@ -103,7 +103,8 @@ scan_c_or_go() {
 	    report "$path:$lineno: $macro falls back to $DEFAULT_DIR/ and no recipe defines it; compile this test with -D$macro='\"\$(BUILD_DIR)/...\"'"
 	    continue
 	fi
-	report "$path:$lineno: names the default build directory; take the path from the build rather than from \"$DEFAULT_DIR/\""
+	report "$path:$lineno: names the default build directory\
+ \"$DEFAULT_DIR/\"; take the path from the build"
     done < <(strip_comments "$path")
 }
 

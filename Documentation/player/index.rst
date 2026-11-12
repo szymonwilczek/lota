@@ -424,8 +424,7 @@ away the same way::
     is the only way down.
     [lota-install] On the way down the agent poisons its TPM measurement slot
     (PCR 14) on purpose, so this boot can no longer attest. That is the
-    security contract, not a fault: resuming therefore needs a reboot (see
-    --resume).
+    security contract: resuming therefore needs a reboot (see --resume).
     [lota-install] A game the agent protects ends with it, so save and close
     any that is running first.
     [lota-install] Pause the agent now? [y/N, q to quit]

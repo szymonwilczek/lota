@@ -768,8 +768,8 @@ certificate renewal dials from then on, presenting the anchor the profile is
 configured with. Every renewal line therefore names the recorded address, and
 a profile whose keys have since been pointed somewhere else is reported once::
 
-   ...: the enrollment records old-ca.example:8444, which is where renewal
-   dials, not the CA this profile is configured with; run --enroll
+   ...: renewal dials old-ca.example:8444 from the enrollment record, while
+   this profile is configured with ca.example:8444; run --enroll
    --ca-server ca.example --ca-port 8444 --ca-cert /etc/lota/ca.crt to
    move it
 

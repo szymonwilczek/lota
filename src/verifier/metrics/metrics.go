@@ -216,7 +216,7 @@ func (m *Metrics) Export() string {
 		m.AttestationLogFailed.Value())
 
 	writeCounter(&b, "lota_attestation_log_events_lost_total",
-		"Lost decision records that were events rather than trusted rounds",
+		"Lost decision records of events (trusted rounds excluded)",
 		m.AttestationLogEventsLost.Value())
 
 	writeCounter(&b, "lota_attestations_failed_total",

@@ -589,13 +589,13 @@ static void test_secureboot_remediation(void)
 	}
 	PASS();
 
-	TEST("a guest is sent to the VM definition, not into a menu");
+	TEST("a guest is sent to its OVMF image");
 	probe_secureboot_remediation("QEMU Standard PC", 1, 0, 1, msg,
 				     sizeof(msg));
 	if (!strstr(msg, "OVMF") ||
 	    strstr(msg, "systemctl reboot --firmware-setup") ||
 	    strstr(msg, "Security or Boot")) {
-		FAIL("guest told to open a menu it does not have");
+		FAIL("guest given the physical-machine advice");
 		return;
 	}
 	PASS();
