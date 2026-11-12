@@ -31,16 +31,15 @@ extern "C" {
  *   92      32    runtime_protect_digest
  *                         (SHA-256 over canonical protected PID runtime set)
  *   124     4     protect_pid_count
- *   128     8     runtime_protect_epoch (monotonic PID-set mutation id)
- *   136     2     pid_list_size  (bytes, must be protect_pid_count * 4)
- *   138     2     attest_size    (TPMS_ATTEST blob size)
- *   140     2     sig_size       (TPM signature size)
- *   142     2     runtime_protect_version (1 = PID set + registry digests)
- *   144     8     stopped_ms     (time the caller's instance stood stopped)
+ *   128     2     pid_list_size  (bytes, must be protect_pid_count * 4)
+ *   130     2     attest_size    (TPMS_ATTEST blob size)
+ *   132     2     sig_size       (TPM signature size)
+ *   134     2     runtime_protect_version (1 = PID set + registry digests)
+ *   136     8     stopped_ms     (time the caller's instance stood stopped)
  *   ---     ---   --------------------------------
- *   152     var   protected_pids[protect_pid_count] (little-endian uint32)
- *   152+P   var   protected_registry_digests[protect_pid_count][32]
- *   152+P+I var   attest_data[attest_size]
+ *   144     var   protected_pids[protect_pid_count] (little-endian uint32)
+ *   144+P   var   protected_registry_digests[protect_pid_count][32]
+ *   144+P+I var   attest_data[attest_size]
  *   ...     var   signature[sig_size]
  *
  * runtime_protect_digest covers each PID and its registry digest, so the quote
@@ -49,12 +48,12 @@ extern "C" {
  */
 #define LOTA_TOKEN_MAGIC 0x4B544F4C /* "LOTK" in memory (little-endian) */
 #define LOTA_TOKEN_VERSION 0x0001
-#define LOTA_TOKEN_HEADER_SIZE 152
+#define LOTA_TOKEN_HEADER_SIZE 144
 /*
  * Copy of LOTA_IPC_TOKEN_MAX_PROTECT_PIDS, as lota_ipc.h is not installed.
  * src/sdk/lota_gaming.c asserts they match.
  */
-#define LOTA_TOKEN_MAX_PROTECT_PIDS 180
+#define LOTA_TOKEN_MAX_PROTECT_PIDS 181
 #define LOTA_TOKEN_MAX_PID_LIST_SIZE (LOTA_TOKEN_MAX_PROTECT_PIDS * 4)
 #define LOTA_TOKEN_REGISTRY_DIGEST_SIZE 32
 
@@ -83,7 +82,6 @@ struct lota_token_wire {
 	uint8_t policy_digest[32];
 	uint8_t runtime_protect_digest[32];
 	uint32_t protect_pid_count;
-	uint64_t runtime_protect_epoch;
 	uint16_t pid_list_size;
 	uint16_t attest_size;
 	uint16_t sig_size;

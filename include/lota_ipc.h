@@ -251,7 +251,6 @@ struct lota_ipc_token {
 	uint8_t policy_digest[32]; /* SHA-256 over enforcement startup policy */
 	uint8_t runtime_protect_digest[32]; /* SHA-256 over runtime set */
 	uint32_t protect_pid_count; /* Number of protected PIDs in payload */
-	uint64_t runtime_protect_epoch; /* Monotonic PID-set mutation id */
 	uint16_t pid_list_size; /* Bytes for protected_pids[] */
 	uint16_t runtime_protect_version; /* 1 = PID set + registry digests */
 	uint64_t stopped_ms; /* Time the caller's instance stood stopped */

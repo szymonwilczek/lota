@@ -1784,7 +1784,6 @@ static void handle_get_token(struct ipc_context *ctx, struct ipc_client *client,
 
 	memcpy(token->runtime_protect_digest, runtime_protect_digest,
 	       sizeof(token->runtime_protect_digest));
-	token->runtime_protect_epoch = g_agent.policy_protect_epoch;
 	token->protect_pid_count = token_pid_count;
 	token->pid_list_size = pid_list_size;
 	token->runtime_protect_version = LOTA_IPC_RUNTIME_PROTECT_V1;
@@ -1805,11 +1804,12 @@ static void handle_get_token(struct ipc_context *ctx, struct ipc_client *client,
 	}
 	token->stopped_ms = stopped_ms;
 
-	ret = lota_compute_token_quote_nonce(
-		token->valid_until, token->flags, token->pcr_mask,
-		token->client_nonce, token->policy_digest,
-		token->runtime_protect_digest, token->runtime_protect_epoch,
-		token->stopped_ms, binding_nonce);
+	ret = lota_compute_token_quote_nonce(token->valid_until, token->flags,
+					     token->pcr_mask,
+					     token->client_nonce,
+					     token->policy_digest,
+					     token->runtime_protect_digest,
+					     token->stopped_ms, binding_nonce);
 	if (ret < 0) {
 		lota_err("token quote nonce computation failed: %s",
 			 strerror(-ret));

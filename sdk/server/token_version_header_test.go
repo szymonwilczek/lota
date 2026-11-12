@@ -40,7 +40,7 @@ func acceptedRuntimeProtectVersions(t *testing.T) []int {
 	for v := 0; v <= 4; v++ {
 		probe := make([]byte, len(tok))
 		copy(probe, tok)
-		binary.LittleEndian.PutUint16(probe[142:144], uint16(v))
+		binary.LittleEndian.PutUint16(probe[134:136], uint16(v))
 		if _, err := ParseToken(probe); err == nil {
 			accepted = append(accepted, v)
 		}

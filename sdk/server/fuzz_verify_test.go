@@ -25,11 +25,13 @@ func FuzzParseToken(f *testing.F) {
 	attestData := []byte("fake-attest")
 	sig := []byte("fake-sig")
 	validTok, _ := SerializeToken(validUntil, 0x07, nonce,
-		TPMAlgRSASSA, 0x000B, 0x4001, policyDigest, runtimeDigest, 0, 0, nil, nil, attestData, sig)
+		TPMAlgRSASSA, 0x000B, 0x4001, policyDigest, runtimeDigest, 0,
+		nil, nil, attestData, sig)
 	f.Add(validTok)
 
 	// seed 2: header-only (no attest/sig)
-	headerOnly, _ := SerializeToken(200, 0, [32]byte{}, 0, 0, 0, policyDigest, runtimeDigest, 0, 0, nil, nil, nil, nil)
+	headerOnly, _ := SerializeToken(200, 0, [32]byte{}, 0, 0, 0,
+		policyDigest, runtimeDigest, 0, nil, nil, nil, nil)
 	f.Add(headerOnly)
 
 	// seed 3: too short
@@ -70,12 +72,14 @@ func FuzzParseWireHeader(f *testing.F) {
 	nonce := [32]byte{}
 	policyDigest := [32]byte{}
 	runtimeDigest := computeRuntimeProtectDigest(nil, nil)
-	tok, _ := SerializeToken(0, 0, nonce, 0, 0, 0, policyDigest, runtimeDigest, 0, 0, nil, nil, nil, nil)
+	tok, _ := SerializeToken(0, 0, nonce, 0, 0, 0, policyDigest,
+		runtimeDigest, 0, nil, nil, nil, nil)
 	f.Add(tok)
 
 	// with payload
 	tok2, _ := SerializeToken(200, 0x07, nonce, TPMAlgRSASSA, 0x000B, 0x4001,
-		policyDigest, runtimeDigest, 0, 0, nil, nil, make([]byte, 64), make([]byte, 32))
+		policyDigest, runtimeDigest, 0, nil, nil, make([]byte, 64),
+		make([]byte, 32))
 	f.Add(tok2)
 
 	f.Add([]byte{})

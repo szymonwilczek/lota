@@ -640,7 +640,7 @@ value is what ties every other field in the token to the signature:
 
    extraData = SHA256(valid_until || flags || pcr_mask || nonce ||
                       policy_digest || runtime_protect_digest ||
-                      runtime_protect_epoch || stopped_ms)
+                      stopped_ms)
 
 Integers are little-endian. Three implementations must agree on it byte for
 byte: the agent that builds the quote
