@@ -449,11 +449,18 @@ reaching it. A target that has exited by the time its owner is read, or has
 been reaped by the time the signal is sent, answers
 ``LOTA_IPC_ERR_BAD_REQUEST``.
 
-``LOTA_STATUS_PROTECTED_TERMINATED`` is then set for the rest of the boot. It
-is kept beside ``status_flags`` rather than inside it, because that word is
-republished wholesale on every attestation round; ``ipc_update_status`` folds
-it back in, so the status answer, the token and the D-Bus property carry it
-from one source. That agreement is load-bearing: the anti-cheat heartbeat
+The caller must run in the agent's PID namespace, since ``pid`` is read in it;
+one whose pidfd fdinfo lists more than one ``NSpid`` is refused with
+``LOTA_IPC_ERR_ACCESS_DENIED``.
+
+``LOTA_STATUS_PROTECTED_TERMINATED`` is then set for the rest of the boot: in
+the host's answer, and in the answers of the publisher the target was protected
+for, taken from the owner table before the signal. The host's bit is kept
+beside ``status_flags``, because that word is republished wholesale on every
+attestation round; ``ipc_update_status`` folds it back in. The publisher's bit
+lives on its profile, and ``client_attestation_view`` gives a connection that
+named a publisher that one in place of the host's, so the status answer, the
+token and the notification of one connection carry it from one source. That agreement is load-bearing: the anti-cheat heartbeat
 binds the flags it read from ``GET_STATUS`` into the nonce the token is quoted
 over, so a bit set in one and not the other surfaces as a nonce mismatch.
 

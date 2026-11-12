@@ -115,6 +115,9 @@ struct attest_target {
 
 	/* a session opened or closed: the loop reacts on its next pass */
 	bool session_changed;
+
+	/* The agent ended a process protected for this publisher */
+	bool protected_terminated;
 };
 
 /* what to log about a target's certificate renewal */

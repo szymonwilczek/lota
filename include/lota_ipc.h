@@ -159,10 +159,11 @@ enum lota_ipc_result {
  */
 #define LOTA_STATUS_REENROLLING (1 << 21)
 /*
- * This agent ended a protected process for its owner or root. Set until the
- * agent ends, in the status word and the token alike, so a session ended
- * locally can be told from a process that vanished. A restart shows as
- * AGENT_RESTARTED.
+ * This agent ended a protected process for its owner or root: one protected
+ * for the publisher this connection named, or any one when it named none.
+ * Set until the agent ends, in the status word and the token alike,
+ * so a session ended locally can be told from a process that vanished.
+ * A restart shows as AGENT_RESTARTED.
  */
 #define LOTA_STATUS_PROTECTED_TERMINATED (1 << 10)
 

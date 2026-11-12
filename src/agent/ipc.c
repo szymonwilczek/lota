@@ -217,6 +217,7 @@ struct ipc_client {
 	uint32_t event_mask; /* LOTA_IPC_EVENT_* subscription mask */
 	bool notify_pending; /* notification queued behind current send */
 	uint32_t pending_events; /* accumulated LOTA_IPC_EVENT_* while busy */
+	uint32_t told_flags; /* status word of the last answer it was pushed */
 	bool shutdown_on_flush; /* trigger graceful daemon stop after reply */
 
 	/* per-connection GET_TOKEN budget, a fixed window like the uid table */
@@ -875,6 +876,7 @@ static void build_notification(struct ipc_context *ctx,
 
 	client_attestation_view(ctx, client, &flags, &valid_until);
 	flags = runtime_coverage_fold(flags);
+	client->told_flags = flags;
 
 	resp->magic = LOTA_IPC_MAGIC;
 	resp->version = LOTA_IPC_VERSION;
@@ -950,9 +952,9 @@ static void handle_ping(struct ipc_context *ctx, struct ipc_client *client)
 
 /*
  * The attestation answer this connection gets: the host's, unless it named a
- * publisher. Then that publisher decides ATTESTED, REENROLLING and
- * valid_until, and one without a verifier also sets TOKEN_ONLY.
- * The other bits stay the host's.
+ * publisher. Then that publisher decides ATTESTED, REENROLLING,
+ * PROTECTED_TERMINATED and valid_until, and one without a verifier also
+ * sets TOKEN_ONLY. The other bits stay the host's.
  */
 static void client_attestation_view(const struct ipc_context *ctx,
 				    const struct ipc_client *client,
@@ -968,6 +970,11 @@ static void client_attestation_view(const struct ipc_context *ctx,
 		*flags |= LOTA_STATUS_REENROLLING;
 	else
 		*flags &= ~(uint32_t)LOTA_STATUS_REENROLLING;
+
+	if (client->profile->protected_terminated)
+		*flags |= LOTA_STATUS_PROTECTED_TERMINATED;
+	else
+		*flags &= ~(uint32_t)LOTA_STATUS_PROTECTED_TERMINATED;
 
 	/* never reported to, so this host holds no verdict of theirs */
 	if (client->profile->token_only) {
@@ -1174,7 +1181,21 @@ uint32_t ipc_host_status_flags(const struct ipc_context *ctx)
 	return runtime_coverage_fold(ctx->status_flags);
 }
 
-/* Announce the host word when it differs from the one last announced */
+/* The word @client reads now, as GET_STATUS answers it */
+static uint32_t client_status_word(const struct ipc_context *ctx,
+				   const struct ipc_client *client)
+{
+	uint64_t valid_until;
+	uint32_t flags;
+
+	client_attestation_view(ctx, client, &flags, &valid_until);
+	return runtime_coverage_fold(flags);
+}
+
+/*
+ * Push STATUS to each subscriber whose word moved since its last push,
+ * and announce the host word on the bus when it moved.
+ */
 static void publish_status(struct ipc_context *ctx)
 {
 	uint32_t flags = ipc_host_status_flags(ctx);
@@ -1184,11 +1205,16 @@ static void publish_status(struct ipc_context *ctx)
 	agent_globals_unlock(&g_agent);
 	ctx->published_forgets = g_coverage.forgets;
 
+	for (struct ipc_client *c = ctx->client_list; c; c = c->next) {
+		if (c->subscribed &&
+		    client_status_word(ctx, c) != c->told_flags)
+			push_notify(ctx, c, LOTA_IPC_EVENT_STATUS);
+	}
+
 	if (flags == ctx->published_flags)
 		return;
 
 	ctx->published_flags = flags;
-	notify_subscribers(ctx, LOTA_IPC_EVENT_STATUS);
 	dbus_emit_status_changed(ctx->dbus);
 }
 
@@ -2363,7 +2389,6 @@ static void handle_subscribe(struct ipc_context *ctx, struct ipc_client *client,
 {
 	struct lota_ipc_response *resp = (void *)client->send_buf;
 	struct lota_ipc_subscribe_request sub;
-	(void)ctx;
 
 	if (payload_len < sizeof(sub)) {
 		build_error_response(client, LOTA_IPC_ERR_BAD_REQUEST);
@@ -2390,6 +2415,7 @@ static void handle_subscribe(struct ipc_context *ctx, struct ipc_client *client,
 
 		client->subscribed = true;
 		client->event_mask = mask;
+		client->told_flags = client_status_word(ctx, client);
 	}
 
 	resp->magic = LOTA_IPC_MAGIC;
@@ -2755,14 +2781,19 @@ static bool pidfd_exited(int pidfd)
  * The PID of the process @pidfd names, in the agent's PID namespace, from the
  * "Pid:" line of its fdinfo. The kernel prints -1 there once that process is
  * reaped and 0 when it runs in a PID namespace outside the agent's.
+ * @nested, when set, says whether "NSpid:" lists more than that PID,
+ * i.e. the process runs in a PID namespace below the agent's.
  */
-static int pidfd_own_pid(int pidfd, uint32_t *out)
+static int pidfd_own_pid(int pidfd, uint32_t *out, bool *nested)
 {
 	char path[64];
 	char line[128];
 	FILE *fp;
 	long v = 0;
 	bool found = false;
+
+	if (nested)
+		*nested = false;
 
 	snprintf(path, sizeof(path), "/proc/self/fdinfo/%d", pidfd);
 	fp = fopen(path, "r");
@@ -2771,12 +2802,15 @@ static int pidfd_own_pid(int pidfd, uint32_t *out)
 	while (fgets(line, sizeof(line), fp)) {
 		char *end = NULL;
 
+		if (nested && strncmp(line, "NSpid:\t", 7) == 0) {
+			*nested = strchr(line + 7, '\t') != NULL;
+			continue;
+		}
 		if (strncmp(line, "Pid:\t", 5) != 0)
 			continue;
 		errno = 0;
 		v = strtol(line + 5, &end, 10);
 		found = errno == 0 && end != line + 5;
-		break;
 	}
 	fclose(fp);
 
@@ -2962,7 +2996,7 @@ static void handle_protect_pid(struct ipc_client *client,
 
 	if (getsockopt(client->fd, SOL_SOCKET, SO_PEERPIDFD, &pidfd, &len) <
 		    0 ||
-	    pidfd_own_pid(pidfd, &pid) < 0) {
+	    pidfd_own_pid(pidfd, &pid, NULL) < 0) {
 		lota_warn("PROTECT_PID denied for uid=%d pid=%d: the process "
 			  "is gone or runs in a PID namespace outside the "
 			  "agent's",
@@ -3102,7 +3136,13 @@ static void handle_terminate_protected(struct ipc_context *ctx,
 	struct lota_ipc_terminate_response *out;
 	struct terminate_request decision_input = { 0 };
 	enum terminate_decision decision;
+	char owner[LOTA_PROFILE_ID_LEN];
+	socklen_t len = sizeof(int);
 	uint32_t target_uid = 0;
+	uint64_t ticks = 0;
+	uint32_t caller = 0;
+	bool nested = true;
+	int caller_fd = -1;
 	int pidfd;
 	int uid_ret;
 
@@ -3117,6 +3157,20 @@ static void handle_terminate_protected(struct ipc_context *ctx,
 		return;
 	}
 
+	/* @req.pid is read in the agent's PID namespace */
+	if (getsockopt(client->fd, SOL_SOCKET, SO_PEERPIDFD, &caller_fd, &len) <
+		    0 ||
+	    pidfd_own_pid(caller_fd, &caller, &nested) < 0 || nested) {
+		if (caller_fd >= 0)
+			close(caller_fd);
+		lota_warn("TERMINATE_PROTECTED denied for uid=%d pid=%d: send "
+			  "it from the host's PID namespace",
+			  client->peer_uid, client->peer_pid);
+		build_error_response(client, LOTA_IPC_ERR_ACCESS_DENIED);
+		return;
+	}
+	close(caller_fd);
+
 #ifndef SYS_pidfd_open
 #define SYS_pidfd_open 434
 #endif
@@ -3129,6 +3183,8 @@ static void handle_terminate_protected(struct ipc_context *ctx,
 	}
 
 	uid_ret = read_pid_real_uid((pid_t)req.pid, &target_uid);
+	if (uid_ret == 0)
+		uid_ret = read_pid_start_time_ticks((pid_t)req.pid, &ticks);
 	if (uid_ret == 0 && pidfd_exited(pidfd))
 		uid_ret = -ESRCH;
 	if (uid_ret < 0) {
@@ -3167,6 +3223,9 @@ static void handle_terminate_protected(struct ipc_context *ctx,
 		return;
 	}
 
+	snprintf(owner, sizeof(owner), "%s",
+		 protect_owner_publisher(&g_protect_owners, req.pid, ticks));
+
 	if (syscall(SYS_pidfd_send_signal, pidfd, (int)req.signal, NULL, 0) <
 	    0) {
 		int err = errno;
@@ -3189,10 +3248,15 @@ static void handle_terminate_protected(struct ipc_context *ctx,
 	/*
 	 * The status word says until the agent ends that a protected process
 	 * was ended here: a session closed locally differs from one that
-	 * vanished.
+	 * vanished. A publisher's titles see it for that publisher's processes.
 	 */
 	ctx->protected_terminated = true;
 	ctx->status_flags |= LOTA_STATUS_PROTECTED_TERMINATED;
+	for (size_t i = 0; owner[0] && i < ctx->profile_count; i++) {
+		if (ctx->profiles[i].has_profile &&
+		    strcmp(ctx->profiles[i].paths.id, owner) == 0)
+			ctx->profiles[i].protected_terminated = true;
+	}
 	publish_status(ctx);
 
 	resp->magic = LOTA_IPC_MAGIC;

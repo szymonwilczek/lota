@@ -137,6 +137,7 @@ static void carry_live_state(struct attest_target *to,
 	to->reenroll_refused_announced = from->reenroll_refused_announced;
 	to->reenroll_backoff = from->reenroll_backoff;
 	to->next_reenroll_ms = from->next_reenroll_ms;
+	to->protected_terminated = from->protected_terminated;
 }
 
 enum attest_cert_say attest_target_note_cert_match(struct attest_target *t,

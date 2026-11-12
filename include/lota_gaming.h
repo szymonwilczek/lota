@@ -101,11 +101,10 @@ enum lota_error {
 #define LOTA_FLAG_IMAGE_FULLY_MEASURED (1 << 9)
 
 /*
- * A protected process was ended through this agent, for its owner or root. An
- * ordinary signal reaches it as well; this route leaves a record. The flag is
- * host-wide; the protected set the token carries shows which of the publisher's
- * own processes left. Set until the agent ends; a restart shows as
- * LOTA_FLAG_AGENT_RESTARTED.
+ * A protected process was ended through this agent, for its owner or root:
+ * one protected for the publisher the connection named, or any one when it
+ * named none. An ordinary signal reaches it as well; this route leaves a
+ * record. Set until the agent ends; a restart shows as LOTA_FLAG_AGENT_RESTARTED.
  */
 #define LOTA_FLAG_PROTECTED_TERMINATED (1 << 10)
 

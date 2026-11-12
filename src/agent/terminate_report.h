@@ -20,8 +20,9 @@
  * diagnostics.c words its message from the errno.
  *
  * Return: -EINVAL not protected, -EPERM a target the verb does not end,
- * -ESRCH no such process, -EACCES not the caller's to end, -EIO the signal
- * failed in the agent, -EPROTO any other code.
+ * -ESRCH no such process, -EACCES not the caller's to end or a caller
+ * outside the agent's PID namespace, -EIO the signal failed in the agent,
+ * -EPROTO any other code.
  */
 static inline int terminate_result_errno(uint32_t result)
 {
