@@ -880,6 +880,11 @@ static int reenroll_profile(const struct profile_paths *paths,
 			     st.has_pin ? st.pin_sha256 : NULL,
 			     st.enroll_token[0] ? st.enroll_token : NULL);
 	OPENSSL_cleanse(&st, sizeof(st));
+	if (ret == -LOTA_ERR_NET_TLS_CERT)
+		fprintf(stderr,
+			"Name the publisher's current anchor: lota-agent "
+			"--reenroll --publisher %s --ca-cert <their anchor>\n",
+			paths->id);
 
 	printf("\n=== Re-enrollment %s ===\n",
 	       ret == 0 ? "Successful" : "Failed");

@@ -3,6 +3,7 @@
 #ifndef LOTA_NET_H
 #define LOTA_NET_H
 
+#include <limits.h>
 #include <stddef.h>
 #include <stdint.h>
 
@@ -22,6 +23,7 @@ typedef struct ssl_ctx_st SSL_CTX;
  * @skip_verify: Certificate and hostname checks are off.
  * @pin_sha256: SHA-256 of the DER certificate the peer must present.
  * @has_pin: Nonzero when @pin_sha256 is set.
+ * @anchor: The trust anchor file, empty for the system trust store.
  */
 struct net_context {
 	SSL_CTX *ssl_ctx;
@@ -33,6 +35,7 @@ struct net_context {
 	int skip_verify;
 	uint8_t pin_sha256[LOTA_PIN_SHA256_LEN];
 	int has_pin;
+	char anchor[PATH_MAX];
 };
 
 /**
