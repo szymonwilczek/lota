@@ -1202,7 +1202,14 @@ enum stage_state probe_cmdline_next_boot_stage(const struct probe_floor *st,
 				"boot would refuse each file they reach "
 				"without a valid signature or hash. Keep the "
 				"booted ima_appraise= mode on it until they "
-				"carry one.");
+				"carry one.%s%s%s%s",
+				sig_cfg && lock_cfg ?
+					"" :
+					" Once it is kept, rerunning the "
+					"installer adds:",
+				sig_cfg ? "" : " module.sig_enforce=1",
+				lock_cfg ? "" : " lockdown=integrity",
+				sig_cfg && lock_cfg ? "" : ".");
 			return STAGE_BLOCKED;
 		}
 		if (ima_cfg && sig_cfg && lock_cfg) {
