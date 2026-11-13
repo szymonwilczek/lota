@@ -181,7 +181,8 @@ The TPM verbs are described in :doc:`tpm`.
 
 ``--test-tpm``, ``-t``
   Reports on the TPM operations and exits. It creates no persistent key; it
-  skips the quote when the attestation handle is free.
+  skips the quote when the attestation handle is free. When PCR 14 waits for
+  this boot's commitment, it extends the register as the daemon does.
 
 ``--seal``
   Reads a secret from standard input, seals it to the PCR state and writes
@@ -196,20 +197,22 @@ The TPM verbs are described in :doc:`tpm`.
 ``--seal-pcrs MASK``
   The PCR mask for ``--seal``, in C notation (``0x83``, ``131``). It is not
   empty and names no PCR above 23. Default 0x83: PCRs 0, 1 and 7. 0x4083
-  adds PCR 14, which binds the secret to this agent binary, so an upgrade
-  of the agent makes it unreadable.
+  adds PCR 14, which binds the secret to a boot state that includes the
+  agent's commitment: any process with TPM access unseals while the
+  registers match, and an upgrade of the agent makes it unreadable.
 
 ``--seal-aik-auth``
   Seals the AIK authorization value to the current boot state.
 
 ``--reprovision-aik``
   Rotates the AIK authorization value and seals it again after a change of
-  the boot state. The publisher's enrollment follows with ``--reenroll``.
+  the boot state. The key stays the same; when one changes, the command
+  names the ``--reenroll --publisher`` command for it.
 
 ``--seal-persist-primary``
-  Stores the seal storage primary key at a persistent handle, so seal and
-  unseal skip ``CreatePrimary``. It needs ``seal_persistent_primary = true``
-  in the configuration.
+  Stores the seal storage primary key at a persistent handle. Seal and
+  unseal use it, and skip ``CreatePrimary``, with
+  ``seal_persistent_primary = true`` in the configuration.
 
 ``--seal-evict-primary``
   Removes that key. Blobs sealed before stay valid.
