@@ -827,6 +827,7 @@ check-docs-strict:
 		exit 1; \
 	}
 	$(Q)scripts/check-license-boundary.sh --doc-packages >/dev/null
+	$(Q)tests/integration/test_kerneldoc_warnings.sh >/dev/null
 	$(Q)tmp=$$(mktemp -d) && \
 	trap 'rm -rf "$$tmp"' EXIT && \
 	$(MAKE) -C Documentation html BUILDDIR="$$tmp" \
@@ -1624,6 +1625,11 @@ test-unit: all $(TEST_BINS)
 		tests/integration/test_license_boundary_scripts.sh; \
 	else \
 		echo "SKIP: test_license_boundary_scripts.sh (no python3)"; \
+	fi
+	@if command -v sphinx-build >/dev/null 2>&1; then \
+		tests/integration/test_kerneldoc_warnings.sh; \
+	else \
+		echo "SKIP: test_kerneldoc_warnings.sh (no sphinx-build)"; \
 	fi
 	@if command -v pkg-config >/dev/null 2>&1; then \
 		tests/integration/test_examples_optional_deps.sh; \

@@ -9,6 +9,10 @@
 
 import os
 import pathlib
+import sys
+
+# in-tree extensions live in Documentation/sphinx/
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent / "sphinx"))
 
 # -- Project information ------------------------------------------------------
 
@@ -50,7 +54,10 @@ ref = os.environ.get("LOTA_DOCS_REF", "").strip() or "main"
 
 # -- General configuration ----------------------------------------------------
 
-extensions: list[str] = ["sphinx.ext.extlinks"]
+extensions: list[str] = ["sphinx.ext.extlinks", "kerneldoc"]
+
+# linkage and inline macros the headers put before a prototype
+c_id_attributes = ["LOTA_EB_INLINE", "LOTA_HOOK_EXPORT"]
 
 # :ghsrc:`path/to/file` links a repository-relative path to its source on
 # GitHub, pinned to the branch this build documents (see ref above)
