@@ -1437,7 +1437,6 @@ static int profile_append_text(const char *label, const char *existing,
 			       size_t out_cap)
 {
 	struct lota_config *cur;
-	char section[1024];
 	size_t existing_len;
 	int rendered;
 	int ret;
@@ -1501,15 +1500,13 @@ static int profile_append_text(const char *label, const char *existing,
 	if (ret < 0)
 		return ret;
 
-	rendered = profile_section_render(p, section, sizeof(section));
+	if (existing_len >= out_cap)
+		return -EOVERFLOW;
+	memcpy(out, existing, existing_len);
+	rendered = profile_section_render(p, out + existing_len,
+					  out_cap - existing_len);
 	if (rendered < 0)
 		return rendered;
-
-	if (existing_len + (size_t)rendered + 1 > out_cap)
-		return -EOVERFLOW;
-
-	memcpy(out, existing, existing_len);
-	memcpy(out + existing_len, section, (size_t)rendered + 1);
 	return 1;
 }
 

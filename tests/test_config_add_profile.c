@@ -205,6 +205,36 @@ int main(void)
 	}
 
 	{
+		/* every field at its longest still writes a file that loads */
+		char path[] = "/tmp/lota_add_profile_XXXXXX";
+		struct lota_profile w;
+		size_t len;
+		int fd;
+
+		w = mkprofile("studio-w", "", "", "");
+		memset(w.name, 'w', sizeof(w.name) - 1);
+		memset(w.ca, 'c', sizeof(w.ca) - 1);
+		memset(w.verifier, 'v', sizeof(w.verifier) - 1);
+		memset(w.pin_sha256, 'a', 64);
+		w.attest_interval = 240;
+		len = LOTA_CONFIG_MAX_LINE - 2 - strlen("ca_cert = ");
+		w.ca_cert[0] = '/';
+		memset(w.ca_cert + 1, 'a', len - 1);
+		w.ca_cert[len] = '\0';
+
+		fd = mkstemp(path);
+		CHECK(fd >= 0, "a scratch config is created");
+		if (fd >= 0) {
+			close(fd);
+			rc = config_profile_append(path, &w);
+			CHECK(rc == 1, "a section with every field full fits");
+			CHECK(profiles_in_file(path) == 1,
+			      "the full section loads back");
+			unlink(path);
+		}
+	}
+
+	{
 		/* stop at the cap rather than writing file the parser
 		 * will reject on the next start */
 		char acc[16384];
