@@ -144,6 +144,7 @@ Contents
 
 * :doc:`Command line <command-line>`
 * :doc:`Configuration <configuration>`
+* :doc:`Publishers <publishers>`
 * :doc:`Agent lifecycle <lifecycle>`
 * :doc:`TPM <tpm>`
 * :doc:`Protected processes <protection>`
@@ -158,6 +159,7 @@ Contents
 
    command-line
    configuration
+   publishers
    lifecycle
    tpm
    protection

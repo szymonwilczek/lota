@@ -166,7 +166,8 @@ Publisher profiles
 
 A ``[profile "name"]`` header opens a profile, and every key up to the next
 header belongs to it. A profile describes one publisher: its CA, which
-enrolls the host, and its verifier, which takes the reports.
+enrolls the host, and its verifier, which takes the reports
+(:doc:`publishers`).
 
 The name is not empty, is shorter than 64 characters and holds no ``"`` and
 no control character. A file has at most 8 profiles and no two with the same
