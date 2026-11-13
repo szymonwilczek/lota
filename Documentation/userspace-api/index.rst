@@ -9,6 +9,8 @@ Userspace API
   build against, and what a change to it costs.
 * :doc:`Gaming SDK <gaming>` -- the client library of a game process.
 * :doc:`Server SDK <server>` -- token verification on the relying party.
+* :doc:`Anti-cheat SDK <anticheat>` -- heartbeat sessions and their
+  verification.
 
 .. toctree::
    :hidden:
@@ -16,3 +18,4 @@ Userspace API
    stability
    gaming
    server
+   anticheat
