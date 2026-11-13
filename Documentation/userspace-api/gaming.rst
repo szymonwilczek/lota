@@ -7,7 +7,7 @@ Gaming SDK
 
 ``liblotagaming.so`` is the client library a game process links to talk to the
 local agent: it reads the host's attestation status, puts the process under
-protection, fetches a token the game server verifies with the server SDK, and
+protection, fetches a token the game server verifies with :doc:`server`, and
 lists what a protected process mapped. The header is ``lota_gaming.h``
 (:ghsrc:`include/lota_gaming.h`), the implementation
 :ghsrc:`src/sdk/lota_gaming.c`, and the pkg-config module ``lota-gaming``:
@@ -257,11 +257,11 @@ the status ``flags`` at issue time, the ``nonce`` the quote answers,
 ``protected_pids`` and ``protected_registry_digests``, each of
 ``protect_pid_count`` entries, ``attest_data`` of ``attest_size`` bytes and
 ``signature`` of ``signature_len`` bytes. ``lota_token_free()`` releases them.
-What each field means on the wire is on the server SDK page.
+What each field means on the wire is in :doc:`server`.
 
 ``LOTA_TOKEN_MAX_SIZE`` is in ``lota_token.h``, which ``lota_gaming.h`` does
-not include. The wire format and what the server checks are on the server
-SDK page; how the agent builds a token and how often it issues one are
+not include. The wire format and what the server checks are in
+:doc:`server`; how the agent builds a token and how often it issues one are
 in :doc:`../agent/tokens`.
 
 ``lota_get_boot_evidence()`` returns the values of the PCRs a token quotes and
