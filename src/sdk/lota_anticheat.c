@@ -99,7 +99,7 @@ static int ac_fail(int err)
 static int compute_heartbeat_nonce(
 	uint8_t out_nonce[LOTA_NONCE_SIZE],
 	const uint8_t session_id[LOTA_AC_SESSION_ID_SIZE], uint8_t provider,
-	uint32_t sequence, uint32_t lota_flags, uint64_t timestamp,
+	uint32_t sequence, uint64_t timestamp,
 	const uint8_t game_id_hash[LOTA_AC_GAME_HASH_SIZE],
 	const uint8_t runtime_measure[LOTA_AC_RUNTIME_MEASURE_SIZE],
 	uint32_t domain_version);
@@ -825,14 +825,13 @@ int lota_ac_compute_expected_runtime_measure(
 static int compute_heartbeat_nonce(
 	uint8_t out_nonce[LOTA_NONCE_SIZE],
 	const uint8_t session_id[LOTA_AC_SESSION_ID_SIZE], uint8_t provider,
-	uint32_t sequence, uint32_t lota_flags, uint64_t timestamp,
+	uint32_t sequence, uint64_t timestamp,
 	const uint8_t game_id_hash[LOTA_AC_GAME_HASH_SIZE],
 	const uint8_t runtime_measure[LOTA_AC_RUNTIME_MEASURE_SIZE],
 	uint32_t domain_version)
 {
 	const struct lota_ac_domain_strings *dom;
 	uint8_t le32[4];
-	uint8_t flags_le[4];
 	uint8_t le64[8];
 	uint8_t ver_le[4];
 	EVP_MD_CTX *ctx;
@@ -851,7 +850,6 @@ static int compute_heartbeat_nonce(
 		return -ENOMEM;
 
 	lota__write_le32(le32, sequence);
-	lota__write_le32(flags_le, lota_flags);
 	lota__write_le64(le64, timestamp);
 	lota__write_le32(ver_le, domain_version);
 
@@ -861,7 +859,6 @@ static int compute_heartbeat_nonce(
 	     EVP_DigestUpdate(ctx, session_id, LOTA_AC_SESSION_ID_SIZE) &&
 	     EVP_DigestUpdate(ctx, &provider, sizeof(provider)) &&
 	     EVP_DigestUpdate(ctx, le32, sizeof(le32)) &&
-	     EVP_DigestUpdate(ctx, flags_le, sizeof(flags_le)) &&
 	     EVP_DigestUpdate(ctx, le64, sizeof(le64)) &&
 	     EVP_DigestUpdate(ctx, game_id_hash, LOTA_AC_GAME_HASH_SIZE) &&
 	     EVP_DigestUpdate(ctx, ver_le, sizeof(ver_le)) &&
@@ -1346,6 +1343,7 @@ int lota_ac_heartbeat(struct lota_ac_session *session, uint8_t *buf,
 	uint32_t sequence;
 	uint8_t heartbeat_nonce[LOTA_NONCE_SIZE];
 	uint8_t runtime_measure[LOTA_AC_RUNTIME_MEASURE_SIZE];
+	int ret;
 
 	g_ac_error = LOTA_AC_ERR_OK;
 
@@ -1363,26 +1361,11 @@ int lota_ac_heartbeat(struct lota_ac_session *session, uint8_t *buf,
 		return -EOPNOTSUPP;
 	}
 
-	/*
-	 * GET_STATUS only: lota_ac_tick() also fetches a token, which takes a
-	 * second slot of the agent's GET_TOKEN rate limit (ipc.c) on every beat.
-	 */
 	if (!session->client) {
 		ac_fail(session->connect_error ? session->connect_error :
 						 LOTA_AC_ERR_NO_AGENT);
 		return -ENOTCONN;
 	}
-
-	struct lota_status status;
-	int ret = lota_get_status(session->client, &status);
-	if (ret != LOTA_OK) {
-		session->state = LOTA_AC_STATE_ERROR;
-		ac_fail(ret == LOTA_ERR_CONNECTION_FAILED ?
-				LOTA_AC_ERR_NO_AGENT :
-				LOTA_AC_ERR_STATUS);
-		return -EIO;
-	}
-	session->lota_flags = status.flags;
 
 	timestamp = (uint64_t)time(NULL);
 	sequence = session->heartbeat_seq;
@@ -1399,8 +1382,8 @@ int lota_ac_heartbeat(struct lota_ac_session *session, uint8_t *buf,
 
 	ret = compute_heartbeat_nonce(heartbeat_nonce, session->session_id,
 				      (uint8_t)session->provider, sequence,
-				      session->lota_flags, timestamp,
-				      session->game_id_hash, runtime_measure,
+				      timestamp, session->game_id_hash,
+				      runtime_measure,
 				      LOTA_AC_DOMAIN_VERSION_CURRENT);
 	if (ret < 0) {
 		ac_fail(LOTA_AC_ERR_INTERNAL);
@@ -1424,11 +1407,13 @@ int lota_ac_heartbeat(struct lota_ac_session *session, uint8_t *buf,
 				return -EIO;
 			}
 
+			/* a lost agent fails here as LOTA_ERR_PROTOCOL */
+			if (ret == LOTA_ERR_TIMEOUT || ret == LOTA_ERR_PROTOCOL)
+				session->state = LOTA_AC_STATE_ERROR;
+
 			/* an integrator fixes this one by beating slower */
 			ac_fail(ret == LOTA_ERR_RATE_LIMITED ?
 					LOTA_AC_ERR_RATE_LIMITED :
-				ret == LOTA_ERR_CONNECTION_FAILED ?
-					LOTA_AC_ERR_NO_AGENT :
 					LOTA_AC_ERR_TOKEN);
 			return -EIO;
 		}
@@ -1661,8 +1646,8 @@ int lota_ac_verify_heartbeat(
 		return ac_ret(LOTA_AC_ERR_MALFORMED);
 
 	ret = compute_heartbeat_nonce(expected_nonce, data + 8, provider,
-				      sequence, heartbeat_lota_flags, timestamp,
-				      data + 40, data + 78, domain_version);
+				      sequence, timestamp, data + 40, data + 78,
+				      domain_version);
 	if (ret < 0)
 		return ac_ret(LOTA_AC_ERR_CRYPTO);
 
@@ -1682,7 +1667,7 @@ int lota_ac_verify_heartbeat(
 	if (CRYPTO_memcmp(claims.nonce, expected_nonce, LOTA_NONCE_SIZE) != 0)
 		return ac_ret(LOTA_AC_ERR_NONCE_FAIL);
 
-	/* the nonce covers the header's flags: they must equal the token's */
+	/* only the token's flags are signed */
 	if (heartbeat_lota_flags != claims.flags)
 		return ac_ret(LOTA_AC_ERR_MALFORMED);
 

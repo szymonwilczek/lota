@@ -311,8 +311,10 @@ int lota_ac_tick(struct lota_ac_session *session);
  * @buflen: Size of @buf.
  * @written: The packet size, on success.
  *
- * Refreshes the state first. The token nonce binds sequence, timestamp, session
- * and game, which takes a live token, so file mode has no heartbeat.
+ * A token sets the state from its flags. A token request that times out or
+ * fails with LOTA_ERR_PROTOCOL, as one to a lost agent does, sets
+ * LOTA_AC_STATE_ERROR. The token nonce binds sequence, timestamp, session and
+ * game, which takes a live token, so file mode has no heartbeat.
  *
  * Return: 0 on success, -EINVAL for bad arguments, -ENOTCONN without an agent,
  * -ENODATA if no token is available, -ENOSPC if @buf is too small, -EOPNOTSUPP

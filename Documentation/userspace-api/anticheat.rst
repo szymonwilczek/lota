@@ -94,11 +94,13 @@ frees the session.
 Heartbeats
 ==========
 
-``lota_ac_heartbeat()`` builds one packet in direct mode. Each call asks the
-agent for its status, measures the process's loaded code, computes the
-heartbeat nonce and asks for a token over it, so a beat costs one token of
-the agent's rate limit (:doc:`../agent/tokens`). The sequence number starts
-at 0 and grows by one with each packet built. File mode returns
+``lota_ac_heartbeat()`` builds one packet in direct mode. Each call measures
+the process's loaded code, computes the heartbeat nonce and asks the agent
+for a token over it, so a beat costs one token of the agent's rate limit
+(:doc:`../agent/tokens`). The token sets the state from its flags; a token
+request that times out or fails with ``LOTA_ERR_PROTOCOL``, as one to a lost
+agent does, sets ``LOTA_AC_STATE_ERROR``. The sequence number starts at 0 and
+grows by one with each packet built. File mode returns
 ``-EOPNOTSUPP``: the hook's token was issued with no nonce, so it cannot carry
 a heartbeat's.
 
@@ -129,11 +131,12 @@ The heartbeat nonce is
 .. code-block:: text
 
    SHA256("lota-ac-heartbeat:v1\0" || session_id || provider ||
-          sequence || lota_flags || timestamp || game_id_hash ||
-          domain_version || runtime_measure)
+          sequence || timestamp || game_id_hash || domain_version ||
+          runtime_measure)
 
-with integers little-endian, so the TPM signature covers every header field
-but ``magic``, ``version``, ``total_size`` and ``token_size``.
+with integers little-endian. The header's ``lota_flags`` are the token's,
+which the TPM signs with the token, so the signature covers every header
+field but ``magic``, ``version``, ``total_size`` and ``token_size``.
 ``domain_version`` selects the pair of domain strings used for the nonce and
 the game binding; ``LOTA_AC_DOMAIN_VERSION_V1`` is the only one.
 
@@ -394,7 +397,7 @@ return a negative ``errno`` and leave the ``LOTA_AC_ERR_*`` reason in
      - The agent refused a status request.
    * - -1021
      - ``LOTA_AC_ERR_TOKEN``
-     - The agent refused a token.
+     - The agent refused a token, or the request for one failed.
    * - -1022
      - ``LOTA_AC_ERR_MEASURE``
      - The runtime measure failed.

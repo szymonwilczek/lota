@@ -147,13 +147,13 @@ static int compute_game_id_hash_test(const char *game_id, uint8_t out[32])
 
 static int compute_hb_nonce_test(uint8_t out[32], const uint8_t session_id[16],
 				 uint8_t provider, uint32_t sequence,
-				 uint32_t flags, uint64_t timestamp,
+				 uint64_t timestamp,
 				 const uint8_t game_hash[32],
 				 const uint8_t runtime_measure[32],
 				 uint32_t domain_version)
 {
 	static const char domain[] = "lota-ac-heartbeat:v1";
-	uint8_t seq_le[4], flags_le[4], ts_le[8], ver_le[4];
+	uint8_t seq_le[4], ts_le[8], ver_le[4];
 	EVP_MD_CTX *ctx = EVP_MD_CTX_new();
 	unsigned int out_len = 32;
 	int ok;
@@ -162,7 +162,6 @@ static int compute_hb_nonce_test(uint8_t out[32], const uint8_t session_id[16],
 		return -ENOMEM;
 
 	write_le32(seq_le, sequence);
-	write_le32(flags_le, flags);
 	write_le32(ver_le, domain_version);
 	for (int i = 0; i < 8; i++)
 		ts_le[i] = (uint8_t)((timestamp >> (8 * i)) & 0xFF);
@@ -172,7 +171,6 @@ static int compute_hb_nonce_test(uint8_t out[32], const uint8_t session_id[16],
 	     EVP_DigestUpdate(ctx, session_id, 16) &&
 	     EVP_DigestUpdate(ctx, &provider, 1) &&
 	     EVP_DigestUpdate(ctx, seq_le, sizeof(seq_le)) &&
-	     EVP_DigestUpdate(ctx, flags_le, sizeof(flags_le)) &&
 	     EVP_DigestUpdate(ctx, ts_le, sizeof(ts_le)) &&
 	     EVP_DigestUpdate(ctx, game_hash, 32) &&
 	     EVP_DigestUpdate(ctx, ver_le, sizeof(ver_le)) &&
@@ -399,7 +397,7 @@ static int build_bound_heartbeat_packet(uint8_t *out, size_t out_cap,
 	 */
 	if (lota_ac_compute_runtime_measure(runtime_measure) != 0)
 		return -EIO;
-	if (compute_hb_nonce_test(nonce, session_id, provider, sequence, flags,
+	if (compute_hb_nonce_test(nonce, session_id, provider, sequence,
 				  timestamp, game_hash, runtime_measure,
 				  LOTA_AC_DOMAIN_VERSION_CURRENT) != 0)
 		return -EIO;
@@ -2466,8 +2464,8 @@ static int build_signed_heartbeat_packet(
 		return -EIO;
 	if (lota_ac_compute_runtime_measure(out_rm) != 0)
 		return -EIO;
-	if (compute_hb_nonce_test(nonce, session_id, provider, 0, flags,
-				  timestamp, out_game_hash, out_rm,
+	if (compute_hb_nonce_test(nonce, session_id, provider, 0, timestamp,
+				  out_game_hash, out_rm,
 				  LOTA_AC_DOMAIN_VERSION_CURRENT) != 0)
 		return -EIO;
 
@@ -2685,7 +2683,13 @@ static void test_file_mode_full_protected_set(void)
 	lota_ac_shutdown(s);
 }
 
-/* Answer GET_STATUS and GET_TOKEN with the full protected set */
+/* Hang up on a GET_TOKEN that carries a nonce */
+static int full_set_hangup_on_nonce;
+
+/*
+ * Answer GET_STATUS and GET_TOKEN with the full protected set.
+ * The status word carries a bit the token's flags do not.
+ */
 static void full_set_agent_serve(int fd)
 {
 	static uint8_t token[LOTA_IPC_TOKEN_HEADER_SIZE +
@@ -2697,7 +2701,9 @@ static void full_set_agent_serve(int fd)
 		.version = LOTA_IPC_VERSION,
 		.result = LOTA_IPC_OK,
 	};
-	struct lota_ipc_status status = { .flags = 0x07 };
+	struct lota_ipc_status status = {
+		.flags = 0x07 | LOTA_FLAG_UPDATE_PENDING,
+	};
 	struct lota_ipc_token hdr = {
 		.valid_until = (uint64_t)time(NULL) + 60,
 		.flags = 0x07,
@@ -2727,6 +2733,11 @@ static void full_set_agent_serve(int fd)
 			payload = &status;
 			resp.payload_len = sizeof(status);
 		} else if (req.cmd == LOTA_IPC_CMD_GET_TOKEN) {
+			static const uint8_t zero[32];
+
+			if (full_set_hangup_on_nonce &&
+			    memcmp(token_req.nonce, zero, sizeof(zero)) != 0)
+				break;
 			memcpy(hdr.client_nonce, token_req.nonce, 32);
 			memset(token, 0x5A, sizeof(token));
 			memcpy(token, &hdr, sizeof(hdr));
@@ -2744,6 +2755,31 @@ static void full_set_agent_serve(int fd)
 			     (ssize_t)resp.payload_len))
 			break;
 	}
+}
+
+/* The token in @pkt answers the nonce its header fields give */
+static int heartbeat_nonce_matches(const uint8_t *pkt, size_t len)
+{
+	struct lota_server_claims claims;
+	uint8_t nonce[32];
+	uint32_t sequence = (uint32_t)pkt[24] | (uint32_t)pkt[25] << 8 |
+			    (uint32_t)pkt[26] << 16 | (uint32_t)pkt[27] << 24;
+	uint32_t flags = (uint32_t)pkt[28] | (uint32_t)pkt[29] << 8 |
+			 (uint32_t)pkt[30] << 16 | (uint32_t)pkt[31] << 24;
+	uint64_t timestamp = 0;
+
+	for (int i = 7; i >= 0; i--)
+		timestamp = timestamp << 8 | pkt[32 + i];
+	if (compute_hb_nonce_test(nonce, pkt + 8, pkt[5], sequence, timestamp,
+				  pkt + 40, pkt + 78,
+				  LOTA_AC_DOMAIN_VERSION_CURRENT) != 0)
+		return 0;
+	if (lota_server_parse_token(pkt + LOTA_AC_HEADER_SIZE,
+				    len - LOTA_AC_HEADER_SIZE,
+				    &claims) != LOTA_SERVER_OK)
+		return 0;
+	return memcmp(claims.nonce, nonce, sizeof(nonce)) == 0 &&
+	       claims.flags == flags;
 }
 
 static void test_direct_mode_full_protected_set(void)
@@ -2771,12 +2807,18 @@ static void test_direct_mode_full_protected_set(void)
 			close(fd);
 		return;
 	}
+	/* the second connection loses the agent on the heartbeat's token */
 	agent = fork();
 	if (agent == 0) {
-		int c = accept(fd, NULL, NULL);
+		for (int n = 0; n < 2; n++) {
+			int c = accept(fd, NULL, NULL);
 
-		if (c >= 0)
+			if (c < 0)
+				break;
+			full_set_hangup_on_nonce = n;
 			full_set_agent_serve(c);
+			close(c);
+		}
 		_exit(0);
 	}
 	close(fd);
@@ -2803,6 +2845,34 @@ static void test_direct_mode_full_protected_set(void)
 			FAIL("heartbeat failed");
 		} else if (written <= LOTA_AC_HEADER_SIZE + 1608) {
 			FAIL("the heartbeat does not carry the whole token");
+		} else {
+			PASS();
+		}
+
+		TEST("direct mode: the heartbeat nonce follows its header");
+		if (ret != 0)
+			FAIL("no heartbeat was built");
+		else if (!heartbeat_nonce_matches(buf, written))
+			FAIL("the token's nonce or flags are not the header's");
+		else
+			PASS();
+		lota_ac_shutdown(s);
+	}
+
+	TEST("direct mode: a heartbeat that loses the agent sets ERROR");
+	s = lota_ac_init(&cfg);
+	if (!s) {
+		FAIL("init returned NULL");
+	} else if (lota_ac_get_state(s) != LOTA_AC_STATE_TRUSTED) {
+		FAIL("preconditions: the session did not start TRUSTED");
+		lota_ac_shutdown(s);
+	} else {
+		ret = lota_ac_heartbeat(s, buf, sizeof(buf), &written);
+		if (ret != -EIO || lota_ac_last_error() != LOTA_AC_ERR_TOKEN) {
+			printf("(rc=%d, err=%d) ", ret, lota_ac_last_error());
+			FAIL("expected -EIO and LOTA_AC_ERR_TOKEN");
+		} else if (lota_ac_get_state(s) != LOTA_AC_STATE_ERROR) {
+			FAIL("the session stayed in its old state");
 		} else {
 			PASS();
 		}

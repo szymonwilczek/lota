@@ -309,12 +309,8 @@ func TestHeartbeat_UntrustedOnFlagMismatch(t *testing.T) {
 	key, _ := rsa.GenerateKey(rand.Reader, 2048)
 	s := newTestServer(t, key)
 	pkt := newSignedHeartbeat(t, key, nil)
-	// rewrite header flags so they differ from the signed token, but keep
-	// the rest of the nonce-bound fields intact. Verification of the token
-	// itself succeeds (the producer used the original flags for the
-	// nonce binding too, so flipping the header alone changes nothing
-	// in the signed payload); the demo server then catches the
-	// mismatch in its post-verify guard.
+	// the heartbeat nonce does not cover the header flags, so the token
+	// still verifies and the post-verify guard catches the mismatch
 	hdr, _, err := parseHeartbeat(pkt)
 	if err != nil {
 		t.Fatalf("parse: %v", err)
@@ -323,7 +319,8 @@ func TestHeartbeat_UntrustedOnFlagMismatch(t *testing.T) {
 	binary.LittleEndian.PutUint32(pkt[28:32], hdr.lotaFlags)
 
 	resp := decodeVerdict(t, postHeartbeat(s, pkt))
-	if resp.State != verdictUntrust {
+	if resp.State != verdictUntrust ||
+		resp.Reason != "header flags do not match signed token" {
 		t.Fatalf("state=%s reason=%s", resp.State, resp.Reason)
 	}
 }
