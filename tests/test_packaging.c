@@ -678,6 +678,9 @@ static void test_every_binary_links_hardened(void)
 	PASS();
 }
 
+/* the read the runtime image measurement holds on mapped files */
+#define MEASURE_READ_RULE "{ file_type -security_file_type -system_map_t }:file"
+
 /*
  * The agent reads no kernel symbol table: every ksym of the BPF object
  * resolves through BTF.
@@ -695,19 +698,22 @@ static void test_selinux_agent_skips_the_symbol_table(void)
 	if (strstr(policy, "files_read_all_files(lota_agent_t)") ||
 	    strstr(policy, "file_type:file") ||
 	    strstr(policy, "system_map_t:file") ||
-	    !strstr(policy, "{ file_type -shadow_t -system_map_t }:file")) {
+	    !strstr(policy, MEASURE_READ_RULE)) {
 		FAIL("lota_agent_t may read /proc/kallsyms and System.map");
 		return;
 	}
 	PASS();
 }
 
-/* no title maps /etc/shadow, and the agent reads it nowhere else */
-static void test_selinux_agent_skips_shadow(void)
+/*
+ * The agent reads no security file: shadow, keytabs, home records,
+ * the audit log. One a title maps stays unmeasured.
+ */
+static void test_selinux_agent_skips_security_files(void)
 {
 	static char policy[65536];
 
-	TEST("selinux: the agent gets no read on the shadow file");
+	TEST("selinux: the agent gets no read on security files");
 
 	if (!slurp_shipped("selinux/lota.te", policy, sizeof(policy))) {
 		FAIL("could not read selinux/lota.te");
@@ -715,8 +721,9 @@ static void test_selinux_agent_skips_shadow(void)
 	}
 	if (strstr(policy, "auth_read_shadow") ||
 	    strstr(policy, "shadow_t:file") ||
-	    !strstr(policy, "{ file_type -shadow_t -system_map_t }:file")) {
-		FAIL("lota_agent_t may read /etc/shadow");
+	    strstr(policy, "security_file_type:file") ||
+	    !strstr(policy, MEASURE_READ_RULE)) {
+		FAIL("lota_agent_t may read /etc/shadow or a keytab");
 		return;
 	}
 	PASS();
@@ -1343,7 +1350,7 @@ int main(void)
 	test_selinux_container_listener_is_shipped();
 	test_selinux_gaming_client_reaches_container_socket();
 	test_selinux_status_client_stats_socket();
-	test_selinux_agent_skips_shadow();
+	test_selinux_agent_skips_security_files();
 	test_selinux_agent_reaches_user_namespaces();
 	test_selinux_agent_reads_filesystem_types();
 	test_selinux_agent_skips_the_symbol_table();

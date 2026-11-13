@@ -105,13 +105,18 @@ kernel_read_proc_symlinks(lota_agent_t)
 
 # Runtime image measurement opens each executable mapping of a protected
 # process through /proc/<pid>/map_files and measures it with
-# FS_IOC_MEASURE_VERITY; what the title maps decides the type.
+# FS_IOC_MEASURE_VERITY; what the title maps decides the type. A library
+# or other mapping of a security file (shadow, keytabs, home records) or
+# of System.map stays unmeasured and clears IMAGE_FULLY_MEASURED.
+# A title whose executable is one cannot be measured: asking for a token,
+# it is refused.
 gen_require(`
-	attribute file_type;
-	type shadow_t, system_map_t;
+	attribute file_type, security_file_type;
+	type system_map_t;
 ')
 allow lota_agent_t file_type:dir list_dir_perms;
-allow lota_agent_t { file_type -shadow_t -system_map_t }:file read_file_perms;
+allow lota_agent_t { file_type -security_file_type -system_map_t }:file
+	read_file_perms;
 
 # fstatfs() of each mapping feeds the road for a title without fs-verity
 fs_getattr_all_fs(lota_agent_t)
