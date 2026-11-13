@@ -21,7 +21,7 @@ Contents
 * :doc:`Local patch checks and the PR quality gate <../../process/patch-checks>` --
   ``check-patch``, ``format-patch``, and the documentation hints.
 * :doc:`How the fuzzers work <../../dev-tools/fuzzing>` -- Go, C, and Syzkaller fuzzing.
-* :doc:`BPF LSM program coding <bpf-coding>` -- verifier-acceptance rules and
+* :doc:`BPF LSM program coding <../../bpf/coding>` -- verifier-acceptance rules and
   device/inode identity in the kernel programs.
 * :doc:`Cross-component contracts <contracts>` -- wire-format, store-migration,
   and installer-probe surfaces two components must keep in sync.
@@ -37,7 +37,7 @@ Contents
    ../../dev-tools/testing
    ../../process/patch-checks
    ../../dev-tools/fuzzing
-   bpf-coding
+   ../../bpf/coding
    contracts
    ../../process/license-boundary
    ../../userspace-api/stability
