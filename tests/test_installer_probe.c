@@ -1435,6 +1435,75 @@ static void test_named_files(void)
 }
 
 /*
+ * The initrd stage holds an image current only when its helper is the
+ * installed one byte for byte; an upgrade changes the bytes, not the name.
+ */
+static void test_file_equals(void)
+{
+	char tmp[] = "/tmp/lota_equals_XXXXXX";
+	static char body[6000];
+	static char other[6000];
+	int fd;
+
+	for (size_t i = 0; i < sizeof(body); i++)
+		body[i] = (char)(i * 7);
+	memcpy(other, body, sizeof(other));
+	other[5000] ^= 1;
+
+	fd = mkstemp(tmp);
+	if (fd >= 0) {
+		if (write(fd, body, sizeof(body)) != (ssize_t)sizeof(body)) {
+			close(fd);
+			unlink(tmp);
+			fd = -1;
+		} else {
+			close(fd);
+		}
+	}
+
+	TEST("a file equal to the buffer matches");
+	if (fd < 0)
+		FAIL("cannot create a temporary file");
+	else if (probe_file_equals(tmp, body, sizeof(body)) != 1)
+		FAIL("equal bytes were reported as different");
+	else
+		PASS();
+
+	TEST("a file of another length does not match");
+	if (fd < 0)
+		FAIL("cannot create a temporary file");
+	else if (probe_file_equals(tmp, body, sizeof(body) - 1) != 0 ||
+		 probe_file_equals(tmp, body, 0) != 0)
+		FAIL("a length mismatch was reported as equal");
+	else
+		PASS();
+
+	TEST("one byte changed past the first read does not match");
+	if (fd < 0)
+		FAIL("cannot create a temporary file");
+	else if (probe_file_equals(tmp, other, sizeof(other)) != 0)
+		FAIL("a changed byte was reported as equal");
+	else
+		PASS();
+
+	TEST("a missing file is an error");
+	if (probe_file_equals("/nonexistent/lota-pcr14-lock", body,
+			      sizeof(body)) != -ENOENT)
+		FAIL("a missing file did not report ENOENT");
+	else
+		PASS();
+
+	TEST("a directory does not match");
+	if (probe_file_equals("/", body, 0) != 0)
+		FAIL("a directory was reported as equal");
+	else
+		PASS();
+
+	if (fd >= 0)
+		unlink(tmp);
+}
+
+/*
  * The mode half of the floor. A Secure Boot kernel refuses to be told the mode,
  * so on the hosts LOTA supports the parameter describes nothing and the installer
  * has no business writing it.
@@ -1809,6 +1878,7 @@ int main(void)
 	test_ima_policy_scope_reader();
 	test_cmdline_next_boot_verdicts();
 	test_named_files();
+	test_file_equals();
 
 	printf("%d/%d tests passed\n", tests_passed, tests_run);
 	return tests_passed == tests_run ? 0 : 1;

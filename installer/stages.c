@@ -421,25 +421,36 @@ static int st_trust_apply(struct install_ctx *ctx)
 	return 0;
 }
 
-#define INITRD_LIST_CAP 65536
-
-/* NULL @image: the running kernel's image */
-static int initrd_has_lock_module(const char *image)
+/*
+ * NULL @image: the running kernel's image. An upgrade replaces the helper on
+ * disk only, so an image is current when its copy is byte for byte the same.
+ */
+static int initrd_has_lock_helper(const char *image)
 {
-	const char *const argv[] = { "lsinitrd", image, NULL };
-	char *out = malloc(INITRD_LIST_CAP);
+	/* lsinitrd -f names the file without its leading '/' */
+	const char *const argv[] = { "lsinitrd", "-f", &PATH_LOCK_HELPER[1],
+				     image, NULL };
+	struct stat st;
+	size_t cap;
+	size_t len;
+	char *out;
 	int rc;
 
+	if (stat(PATH_LOCK_HELPER, &st) < 0)
+		return -errno;
+	/* one byte past the helper tells a longer copy apart */
+	cap = (size_t)st.st_size + 2;
+	out = malloc(cap);
 	if (!out)
 		return -ENOMEM;
 
-	rc = run_capture(argv, out, INITRD_LIST_CAP);
+	rc = run_capture_len(argv, out, cap, &len);
 	if (rc != 0) {
 		free(out);
 		return -EIO;
 	}
 
-	rc = strstr(out, "lota-pcr14-lock") != NULL;
+	rc = probe_file_equals(PATH_LOCK_HELPER, out, len);
 	free(out);
 	return rc;
 }
@@ -457,34 +468,38 @@ static enum stage_state st_initrd_probe(struct install_ctx *ctx, char *note,
 
 	if (probe_installed_kernels(kernels, PROBE_MAX_KERNELS, &count) < 0 ||
 	    count == 0) {
-		int has = initrd_has_lock_module(NULL);
+		int has = initrd_has_lock_helper(NULL);
 
 		if (has < 0) {
 			snprintf(note, cap,
-				 "lsinitrd failed. Cannot inspect the "
-				 "current initramfs.");
+				 "Cannot compare the current initramfs with "
+				 "%s: %s.",
+				 PATH_LOCK_HELPER,
+				 has == -EIO ? "lsinitrd failed" :
+					       strerror(-has));
 			return STAGE_ERROR;
 		}
 		if (has) {
 			snprintf(note, cap,
-				 "lota-pcr14-lock is inside the current "
-				 "kernel's initramfs.");
+				 "The current kernel's initramfs holds the "
+				 "installed lota-pcr14-lock.");
 			return STAGE_DONE;
 		}
 		snprintf(note, cap,
-			 "Current initramfs does not contain the "
-			 "PCR14 lock helper.");
+			 "The current initramfs holds no PCR14 lock helper, or "
+			 "one other than the installed %s.",
+			 PATH_LOCK_HELPER);
 		return STAGE_PENDING;
 	}
 
 	for (size_t i = 0; i < count; i++) {
-		int has = initrd_has_lock_module(kernels[i].image);
+		int has = initrd_has_lock_helper(kernels[i].image);
 
 		if (has < 0) {
-			snprintf(note, cap,
-				 "lsinitrd failed on %s. Cannot inspect that "
-				 "kernel's initramfs.",
-				 kernels[i].image);
+			snprintf(note, cap, "Cannot compare %s with %s: %s.",
+				 kernels[i].image, PATH_LOCK_HELPER,
+				 has == -EIO ? "lsinitrd failed" :
+					       strerror(-has));
 			return STAGE_ERROR;
 		}
 		if (has)
@@ -500,17 +515,18 @@ static enum stage_state st_initrd_probe(struct install_ctx *ctx, char *note,
 
 	if (missing == 0) {
 		snprintf(note, cap,
-			 "lota-pcr14-lock is inside the initramfs of all %zu "
-			 "installed kernel(s).",
+			 "The initramfs of all %zu installed kernel(s) holds "
+			 "the installed lota-pcr14-lock.",
 			 count);
 		return STAGE_DONE;
 	}
 
 	snprintf(note, cap,
 		 "%zu of %zu installed kernel(s) have no PCR14 lock helper in "
-		 "their initramfs: %s. Booting one of them leaves this machine "
-		 "with no boot commitment.",
-		 missing, count, missing_names);
+		 "their initramfs, or one other than the installed %s: %s. "
+		 "Booting one with none leaves this machine with no boot "
+		 "commitment.",
+		 missing, count, PATH_LOCK_HELPER, missing_names);
 	return STAGE_PENDING;
 }
 
@@ -1623,7 +1639,8 @@ const struct stage install_stages[] = {
 			"/boot/initramfs-*.img - the standard file every kernel update "
 			"also rewrites - and requires a reboot to take effect. A kernel "
 			"installed later picks the helper up from the packaged dracut "
-			"module on its own.",
+			"module on its own; an upgrade of the helper reaches "
+			"an existing initramfs only through this step.",
 		.probe = st_initrd_probe,
 		.apply = st_initrd_apply,
 		.boot_path = 1,

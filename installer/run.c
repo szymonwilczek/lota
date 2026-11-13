@@ -128,14 +128,23 @@ int run_cmd(struct ui *ui, const char *label, const char *const argv[])
 
 int run_capture(const char *const argv[], char *out, size_t cap)
 {
+	size_t len;
+
+	return run_capture_len(argv, out, cap, &len);
+}
+
+int run_capture_len(const char *const argv[], char *out, size_t cap,
+		    size_t *len)
+{
 	size_t used = 0;
 	pid_t pid = -1;
 	int fd = -1;
 	int ret;
 
-	if (!out || cap < 1)
+	if (!out || cap < 1 || !len)
 		return -EINVAL;
 	out[0] = '\0';
+	*len = 0;
 
 	ret = spawn_child(argv, &fd, &pid);
 	if (ret < 0)
@@ -162,6 +171,7 @@ int run_capture(const char *const argv[], char *out, size_t cap)
 		}
 	}
 	out[used] = '\0';
+	*len = used;
 	close(fd);
 
 	return wait_exit_code(pid);

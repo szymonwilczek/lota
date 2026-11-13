@@ -164,8 +164,10 @@ What the stages do
    enforcement object.
 #. **Initramfs PCR14 lock** -- regenerates the initramfs of every installed
    kernel so the PCR14 lock helper runs before any regular userspace, whichever
-   kernel is selected at boot. It reports work to do while any installed kernel
-   is missing the helper. Requires a reboot.
+   kernel is selected at boot. It reports work to do while the initramfs of
+   any installed kernel holds no helper, or one whose bytes differ from the
+   installed ``/usr/lib/lota/lota-pcr14-lock``: a package upgrade replaces
+   the helper on disk, not in an existing initramfs. Requires a reboot.
 #. **Kernel integrity floor** -- appends the missing ones of
    ``ima_appraise=enforce``, ``module.sig_enforce=1`` and
    ``lockdown=integrity`` to the boot entries via grubby. It reports those

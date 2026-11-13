@@ -36,4 +36,16 @@ int run_cmd(struct ui *ui, const char *label, const char *const argv[]);
  */
 int run_capture(const char *const argv[], char *out, size_t cap);
 
+/**
+ * run_capture_len() - run_capture() that also reports how much it kept.
+ * @argv: as run_capture().
+ * @out:  as run_capture(); may hold NUL bytes.
+ * @cap:  size of @out.
+ * @len:  receives the bytes kept in @out, the terminating NUL excluded.
+ *
+ * Return: as run_capture(); -EINVAL also for a NULL @len.
+ */
+int run_capture_len(const char *const argv[], char *out, size_t cap,
+		    size_t *len);
+
 #endif /* LOTA_INSTALL_RUN_H */
