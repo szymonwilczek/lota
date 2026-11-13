@@ -79,26 +79,15 @@ static void test_hostname_mismatch(const char *ca_path)
 	struct net_context ctx;
 	int ret;
 
-	ret = net_context_init(&ctx, "wrong.example.com", TEST_PORT, ca_path, 0,
-			       NULL);
+	/* the server certificate names localhost, not its address */
+	ret = net_context_init(&ctx, "127.0.0.1", TEST_PORT, ca_path, 0, NULL);
 	if (ret < 0) {
 		test_result("hostname mismatch: init", 0);
 		return;
 	}
 
-	net_context_cleanup(&ctx);
-
-	/* IP address which wont match the DNS SAN "localhost" if cert
-	 * was generated without IP SAN */
-	ret = net_context_init(&ctx, "127.0.0.1", TEST_PORT, ca_path, 0, NULL);
-	if (ret < 0) {
-		test_result("hostname mismatch (IP vs DNS): init", 0);
-		return;
-	}
-
-	(void)net_connect(&ctx);
-	printf("    (note: cert has IP:127.0.0.1 SAN, so this may pass)\n");
-	test_result("hostname verification is active", 1);
+	test_result("hostname mismatch is rejected",
+		    net_connect(&ctx) == -LOTA_ERR_NET_TLS_CERT);
 	net_context_cleanup(&ctx);
 }
 
@@ -292,7 +281,8 @@ int main(int argc, char *argv[])
 	printf("=== LOTA TLS Certificate Verification Tests ===\n");
 	printf("CA cert: %s\n", ca_path);
 	printf("Server: localhost:%d\n\n", TEST_PORT);
-	printf("Note: requires openssl s_server running on port %d\n",
+	printf("Note: requires openssl s_server running on port %d, with a\n"
+	       "certificate whose only SAN is DNS:localhost\n",
 	       TEST_PORT);
 	printf("  openssl s_server -accept %d -cert server.pem -key server.key "
 	       "-tls1_3 -www -quiet\n\n",
