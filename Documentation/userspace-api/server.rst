@@ -20,8 +20,8 @@ and returns the signed claims. The header is ``lota_server.h``
       $(pkg-config --libs lota-server)
 
 The library uses OpenSSL and talks to no agent, TPM or verifier. A server
-written in Go uses the ``sdk/server`` module, which verifies tokens and boot
-evidence by the same rules and has no registry digest.
+written in Go uses the ``sdk/server`` module (:doc:`go-sdk`), which verifies
+tokens and boot evidence by the same rules and has no registry digest.
 
 The AIK
 =======

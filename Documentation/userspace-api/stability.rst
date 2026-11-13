@@ -210,8 +210,8 @@ Go module
 
 ``github.com/szymonwilczek/lota/sdk/server`` (:ghsrc:`sdk/server`) is the one
 public Go module: the token verification of ``liblotaserver.so`` for a server
-written in Go. The workspace in :ghsrc:`go.work` holds other modules,
-which build the repository's own programs and change without notice:
+written in Go (:doc:`go-sdk`). The workspace in :ghsrc:`go.work` holds other
+modules, which build the repository's own programs and change without notice:
 
 .. list-table::
    :header-rows: 1

@@ -13,6 +13,7 @@ Userspace API
   verification.
 * :doc:`Wine hook <wine-hook>` -- attestation files for a title under Wine
   or Proton.
+* :doc:`Go SDK <go-sdk>` -- token and boot evidence verification in Go.
 
 .. toctree::
    :hidden:
@@ -22,3 +23,4 @@ Userspace API
    server
    anticheat
    wine-hook
+   go-sdk
