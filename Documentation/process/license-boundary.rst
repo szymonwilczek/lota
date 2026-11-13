@@ -110,4 +110,4 @@ build tweak:
 Packaging carries the same boundary. ``lota-agent`` declares
 ``MIT AND GPL-2.0-only`` because it ships the BPF object alongside MIT
 userspace; every other package is ``MIT``. A packaging convenience must not
-blur that -- see :doc:`../../operator/packages`.
+blur that -- see :doc:`../operator/packages`.

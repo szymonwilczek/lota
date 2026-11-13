@@ -10,7 +10,7 @@ issues for exploitable vulnerabilities.
 
 * :doc:`Threat model <threat-model>` -- what LOTA protects, what it enforces,
   and what is out of scope.
-* :doc:`Security reporting <reporting>` -- how to report a vulnerability.
+* :doc:`Security reporting <../process/security-bugs>` -- how to report a vulnerability.
 * :doc:`Reproducible builds <reproducible-builds>` -- rebuild a release and
   verify its signature.
 * :doc:`Attestation CA signing key <ca-key>` -- key ceremony, rotation, and
@@ -20,6 +20,6 @@ issues for exploitable vulnerabilities.
    :hidden:
 
    threat-model
-   reporting
+   ../process/security-bugs
    reproducible-builds
    ca-key

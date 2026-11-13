@@ -18,5 +18,5 @@ This pointer is identical on both branches.
   `Documentation/contributor/development/index.rst
   <Documentation/contributor/development/index.rst>`_.
 * **Branch model and release flow:** see
-  `Documentation/contributor/branching.rst
-  <Documentation/contributor/branching.rst>`_.
+  `Documentation/process/branching.rst
+  <Documentation/process/branching.rst>`_.

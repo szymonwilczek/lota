@@ -175,7 +175,7 @@ main() {
 
 	if ((FAILURES != 0)); then
 		printf 'check-license-boundary: %d violation(s)\n' "$FAILURES" >&2
-		printf 'see Documentation/contributor/development/license-boundary.rst\n' >&2
+		printf 'see Documentation/process/license-boundary.rst\n' >&2
 		return 1
 	fi
 

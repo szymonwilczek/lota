@@ -30,10 +30,10 @@ New contributor or automated assistant
 Development happens on ``lota-next``. Open pull requests there, not against
 ``main``.
 
-* :doc:`Contribution rules <contributor/contributing>`
+* :doc:`Contribution rules <process/contributing>`
 * :doc:`Development and testing policy <contributor/development/index>`
-* :doc:`Branch and release flow <contributor/branching>`
-* :doc:`Code of Conduct <contributor/code-of-conduct>`
+* :doc:`Branch and release flow <process/branching>`
+* :doc:`Code of Conduct <process/code-of-conduct>`
 * Local patch checks: :ghsrc:`scripts/check-patch`
 * Commit message rewrapper: :ghsrc:`scripts/format-patch`
 
@@ -59,7 +59,7 @@ Start with the threat model and the reporting policy. Do not file public
 issues for exploitable vulnerabilities.
 
 * :doc:`Threat model <security/threat-model>`
-* :doc:`Security reporting <security/reporting>`
+* :doc:`Security reporting <process/security-bugs>`
 * :doc:`Reproducible release verification <security/reproducible-builds>`
 * :doc:`Attestation CA signing key <security/ca-key>`
 * :doc:`Production bring-up <operator/production-bringup/index>`
@@ -116,7 +116,7 @@ Packaging must preserve the security contract. Release artifacts are
 reproducible and verified against signed manifests.
 
 * :doc:`Reproducible builds <security/reproducible-builds>`
-* :doc:`Release and branch flow <contributor/branching>`
+* :doc:`Release and branch flow <process/branching>`
 * :doc:`Production install gates <operator/production-bringup/index>`
 * SELinux policy: :ghsrc:`selinux/README.rst`
 * systemd units: :ghsrc:`systemd/`

@@ -7,4 +7,4 @@ contact_links:
       Covers the attestation chain, TPM enrollment, verifier policy, BPF LSM
       enforcement, release integrity, and SDK token validation.
       Encrypted-email fallback and the GPG fingerprint are in the security
-      policy (Documentation/security/reporting.rst).
+      policy (Documentation/process/security-bugs.rst).

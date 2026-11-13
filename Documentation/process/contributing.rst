@@ -53,7 +53,7 @@ intended one.
 
 Subjects, pull request titles, and branch names are at most 75 columns, and
 body text is wrapped to 75 columns. ``scripts/format-patch`` rewraps a body;
-see :doc:`development/patch-checks` for the lines that keep their length.
+see :doc:`patch-checks` for the lines that keep their length.
 
 Commit bodies for ALL changes should state::
 
@@ -96,7 +96,7 @@ Broaden validation when the change touches a wider surface:
 * SELinux policy: rebuild the module and inspect the resulting AVC behavior on
   an enforcing system.
 
-The full testing policy is in :doc:`development/index`.
+The full testing policy is in :doc:`../contributor/development/index`.
 
 Reporting issues
 ================
@@ -109,7 +109,7 @@ and reproducible.
 
 Suspected vulnerability never goes in a public issue. Use the **Private Security
 Reporting** link in the new-issue chooser, which opens a private GitHub advisory;
-the encrypted-email fallback and GPG fingerprint are in the :doc:`security policy <../security/reporting>`.
+the encrypted-email fallback and GPG fingerprint are in the :doc:`security policy <security-bugs>`.
 
 Pull request expectations
 =========================

@@ -15,7 +15,7 @@ commit signatures, message and patch whitespace, clang-format, gofmt,
 golangci-lint, the absence of compiled files in the index, the full
 build, include hygiene, the license boundary
 (:doc:`license-boundary`), the public API and ABI surface
-(:doc:`api-stability`), the diagnostics the documentation quotes, the strict
+(:doc:`../contributor/development/api-stability`), the diagnostics the documentation quotes, the strict
 documentation build, and -- when the patch touches C -- the Sparse, Smatch and
 Coccinelle analyzers and the stack-frame ceiling described below.
 
@@ -216,5 +216,5 @@ Scripts are split by audience: developer-workflow tooling (``check-*``,
 ``format-patch``, the CI gate scripts) maps to the contributor docs above,
 while operator provisioning and host bring-up scripts (``lota-*``,
 ``setup-fsverity.sh``) are deployment steps and map to the operator-facing
-:doc:`production bring-up <../../operator/production-bringup/index>` and the
+:doc:`production bring-up <../operator/production-bringup/index>` and the
 relevant example READMEs instead.

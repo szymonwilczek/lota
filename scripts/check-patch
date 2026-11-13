@@ -893,7 +893,7 @@ check_license_boundary() {
     else
         printf '%s\n' "$output" | sed 's/^/  /' >&2
         fail "license-boundary" \
-             "an MIT file must not depend on a GPL-2.0-only one; see Documentation/contributor/development/license-boundary.rst."
+             "an MIT file must not depend on a GPL-2.0-only one; see Documentation/process/license-boundary.rst."
     fi
 }
 
