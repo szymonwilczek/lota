@@ -22,10 +22,10 @@ Parsing
 
 The agent reads ``/etc/lota/lota.conf``, or the file ``--config`` names,
 before the options; an option then replaces the value from the file, and a
-list option adds to the file's list. A missing default
-file is no error; a missing file named by ``--config`` ends the command with
-``Config file not found:``. A default file the user cannot read gives a
-warning, and the command goes on with the defaults.
+list option adds to the file's list (:doc:`configuration`). A missing
+default file is no error; a missing file named by ``--config`` ends the
+command with ``Config file not found:``. A default file the user cannot read
+gives a warning, and the command goes on with the defaults.
 
 ``--help``, ``--gen-signing-key``, ``--sign-policy`` and ``--verify-policy``
 do not read the file, so its contents do not change their result; with

@@ -44,8 +44,8 @@ fails ends the start with the exit status listed below.
 
 #. It sets ``PR_SET_NO_NEW_PRIVS`` and clears ``PR_SET_DUMPABLE``; every
    invocation of the binary does this.
-#. It reads ``/etc/lota/lota.conf`` and the command line. A one-shot verb
-   runs here and exits.
+#. It reads ``/etc/lota/lota.conf`` (:doc:`configuration`) and the command
+   line. A one-shot verb runs here and exits.
 #. It refuses a ``--mode`` weaker than the file's ``enforce`` without
    ``--insecure-allow-mode-downgrade``.
 #. With ``--daemon`` it detaches; from then on its messages reach the
@@ -143,6 +143,7 @@ Contents
 ========
 
 * :doc:`Command line <command-line>`
+* :doc:`Configuration <configuration>`
 * :doc:`Agent lifecycle <lifecycle>`
 * :doc:`TPM <tpm>`
 * :doc:`Protected processes <protection>`
@@ -156,6 +157,7 @@ Contents
    :hidden:
 
    command-line
+   configuration
    lifecycle
    tpm
    protection
