@@ -184,6 +184,23 @@ static void test_value_reports_both_properties(void)
 		PASS();
 }
 
+/* an empty file names no state; it is not a read that failed */
+static void test_empty_state_is_refused_not_retried(void)
+{
+	TEST("an empty floor file is a refusal, not a failed read");
+
+	write_file(sig_enforce_path, "");
+	write_file(lockdown_path, "");
+
+	if (bpf_loader_kernel_module_sig_enforced(sig_enforce_path) != -EPERM)
+		FAIL("an empty sig_enforce reads as a failed read");
+	else if (bpf_loader_kernel_lockdown_restrictive(lockdown_path) !=
+		 -EPERM)
+		FAIL("an empty lockdown file reads as a failed read");
+	else
+		PASS();
+}
+
 int main(void)
 {
 	printf("=== Kernel integrity baseline tests ===\n\n");
@@ -198,6 +215,7 @@ int main(void)
 	test_unenforced_module_signatures_are_refused();
 	test_lockdown_off_is_refused();
 	test_unreadable_state_is_refused();
+	test_empty_state_is_refused_not_retried();
 	test_value_reports_both_properties();
 
 	unlink(sig_enforce_path);

@@ -297,7 +297,8 @@ int bpf_loader_verify_integrity_config(struct bpf_loader_ctx *ctx);
  * bpf_loader_kernel_module_sig_enforced() - Are module signatures enforced?
  * @sig_enforce_path: sysfs file carrying the module.sig_enforce parameter.
  *
- * Return: 0 when enforced, a negative errno otherwise.
+ * Return: 0 when enforced, -EPERM when the file says otherwise or is empty,
+ * else the errno of its open or read.
  */
 int bpf_loader_kernel_module_sig_enforced(const char *sig_enforce_path);
 
@@ -305,7 +306,8 @@ int bpf_loader_kernel_module_sig_enforced(const char *sig_enforce_path);
  * bpf_loader_kernel_lockdown_restrictive() - Is lockdown on?
  * @lockdown_path: securityfs file carrying the lockdown state.
  *
- * Return: 0 in integrity or confidentiality mode, a negative errno otherwise.
+ * Return: 0 in integrity or confidentiality mode, -EPERM in another or for
+ * a file that names none, else the errno of its open or read.
  */
 int bpf_loader_kernel_lockdown_restrictive(const char *lockdown_path);
 
@@ -330,8 +332,9 @@ int bpf_loader_build_integrity_config(struct integrity_data *cfg,
  * @key_size: Set to the map's key size.
  * @value_size: Set to the map's value size.
  *
- * Return: 0, -EIO when the object cannot be opened, -ENOENT when it carries no
- * integrity map, or -EINVAL on a NULL argument.
+ * Return: 0, the libbpf error when the object cannot be opened (-EIO when it
+ * sets none), -ENOENT when it carries no integrity map, or -EINVAL on a NULL
+ * argument.
  */
 int bpf_loader_object_integrity_layout(const char *bpf_obj_path,
 				       uint32_t *key_size,

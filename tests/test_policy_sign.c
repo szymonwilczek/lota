@@ -11,11 +11,15 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <limits.h>
+#include <openssl/evp.h>
+#include <openssl/pem.h>
+#include <openssl/types.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
 #include <stdint.h>
+#include <sys/resource.h>
 #include <sys/stat.h>
 
 #include "test.h"
@@ -670,6 +674,100 @@ static void test_verify_missing_sig_file(void)
 	PASS();
 }
 
+/* out of descriptors, the key is not missing: a restart may clear it */
+static void test_verify_unopened_key_names_errno(void)
+{
+	char priv[PATH_MAX], pub[PATH_MAX];
+	uint8_t sig[POLICY_SIG_SIZE];
+	const uint8_t msg[] = "name: no-fd\n";
+	struct rlimit old, low;
+	int ret;
+
+	TEST("verify_buffer reports why the key could not be opened");
+	make_paths("nofd", priv, pub, sizeof(priv));
+
+	if (policy_sign_generate_keypair(priv, pub) != 0 ||
+	    policy_sign_buffer(msg, sizeof(msg) - 1, priv, sig) != 0 ||
+	    getrlimit(RLIMIT_NOFILE, &old) != 0) {
+		FAIL("setup failed");
+		return;
+	}
+
+	low = old;
+	low.rlim_cur = 3;
+	if (setrlimit(RLIMIT_NOFILE, &low) != 0) {
+		FAIL("setrlimit failed");
+		return;
+	}
+	ret = policy_verify_buffer(msg, sizeof(msg) - 1, pub, sig);
+	setrlimit(RLIMIT_NOFILE, &old);
+
+	if (ret != -EMFILE) {
+		FAIL("descriptor exhaustion did not return -EMFILE");
+		return;
+	}
+	PASS();
+}
+
+/* a key file that holds no Ed25519 key: a restart cannot clear it */
+static void test_verify_non_ed25519_key_is_invalid(void)
+{
+	char priv[PATH_MAX], pub[PATH_MAX];
+	uint8_t sig[POLICY_SIG_SIZE];
+	const uint8_t msg[] = "name: not-ed25519\n";
+	const char garbage[] = "-----BEGIN PUBLIC KEY-----\nnot a key\n"
+			       "-----END PUBLIC KEY-----\n";
+	EVP_PKEY *x25519 = NULL;
+	EVP_PKEY_CTX *ctx;
+	FILE *f;
+	int fd;
+	int ret;
+
+	TEST("verify_buffer returns -EINVAL for a key that is not Ed25519");
+	make_paths("notkey", priv, pub, sizeof(priv));
+
+	if (policy_sign_generate_keypair(priv, pub) != 0 ||
+	    policy_sign_buffer(msg, sizeof(msg) - 1, priv, sig) != 0 ||
+	    write_file(pub, garbage, sizeof(garbage) - 1) != 0) {
+		FAIL("setup failed");
+		return;
+	}
+	ret = policy_verify_buffer(msg, sizeof(msg) - 1, pub, sig);
+	if (ret != -EINVAL) {
+		FAIL("an unparsable key did not return -EINVAL");
+		return;
+	}
+
+	ctx = EVP_PKEY_CTX_new_id(EVP_PKEY_X25519, NULL);
+	if (!ctx || EVP_PKEY_keygen_init(ctx) <= 0 ||
+	    EVP_PKEY_keygen(ctx, &x25519) <= 0) {
+		EVP_PKEY_CTX_free(ctx);
+		FAIL("X25519 keygen failed");
+		return;
+	}
+	EVP_PKEY_CTX_free(ctx);
+	fd = open(pub, O_WRONLY | O_CREAT | O_TRUNC, 0600);
+	f = fd >= 0 ? fdopen(fd, "w") : NULL;
+	if (!f || PEM_write_PUBKEY(f, x25519) != 1) {
+		if (f)
+			fclose(f);
+		else if (fd >= 0)
+			close(fd);
+		EVP_PKEY_free(x25519);
+		FAIL("writing the X25519 key failed");
+		return;
+	}
+	fclose(f);
+	EVP_PKEY_free(x25519);
+
+	ret = policy_verify_buffer(msg, sizeof(msg) - 1, pub, sig);
+	if (ret != -EINVAL) {
+		FAIL("an X25519 key did not return -EINVAL");
+		return;
+	}
+	PASS();
+}
+
 int main(void)
 {
 	printf("=== LOTA Policy Signing Tests ===\n\n");
@@ -695,6 +793,8 @@ int main(void)
 	test_empty_message();
 	test_sig_file_size();
 	test_verify_missing_sig_file();
+	test_verify_unopened_key_names_errno();
+	test_verify_non_ed25519_key_is_invalid();
 
 	cleanup_tmpdir();
 

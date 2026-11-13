@@ -1195,7 +1195,7 @@ TEST_LOADER_SRCS := $(addprefix $(AGENT_DIR)/,bpf_loader.c journal.c policy_sign
 TEST_NET_SRCS := $(addprefix $(AGENT_DIR)/,net.c journal.c pin.c)
 TEST_SDK_SRCS := $(addprefix $(SDK_DIR)/,lota_anticheat.c lota_gaming.c lota_server.c)
 TEST_STARTUP_SRCS := $(AGENT_DIR)/startup_policy.c $(TEST_LOADER_SRCS) $(TEST_CONFIG_SRCS) \
-	$(AGENT_DIR)/policy_pubkey.c
+	$(AGENT_DIR)/policy_pubkey.c $(AGENT_DIR)/exit_status.c
 TEST_TPM_SRCS := $(addprefix $(AGENT_DIR)/,tpm.c tpm_errno.c seal_envelope.c profile.c)
 TEST_INSTALLER_SRCS := installer/stages.c installer/probe.c installer/run.c installer/ui.c \
 	$(AGENT_DIR)/policy_pubkey.c $(AGENT_DIR)/profile.c

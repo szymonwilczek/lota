@@ -63,8 +63,8 @@ int policy_sig_read(int fd, uint8_t sig[POLICY_SIG_SIZE]);
  * @sig_path: The signature.
  *
  * Return: 0 for a valid signature; -EKEYREJECTED for an invalid one or a
- * signature file of another size than POLICY_SIG_SIZE; otherwise as
- * policy_sign_file().
+ * signature file of another size than POLICY_SIG_SIZE; for the key as
+ * policy_verify_buffer(); otherwise as policy_sign_file().
  */
 int policy_verify_file(const char *file_path, const char *pubkey_pem_path,
 		       const char *sig_path);
@@ -90,8 +90,8 @@ int policy_sign_buffer(const uint8_t *data, size_t data_len,
  * @sig: POLICY_SIG_SIZE bytes.
  *
  * Return: 0 for a valid signature, -EKEYREJECTED for an invalid one, -EINVAL
- * for a NULL argument, -ENOENT when the key cannot be read or is not Ed25519,
- * -ENOMEM, or -EIO.
+ * for a NULL argument or a key that is not Ed25519, the errno when the key
+ * cannot be opened, -ENOMEM, or -EIO.
  */
 int policy_verify_buffer(const uint8_t *data, size_t data_len,
 			 const char *pubkey_pem_path, const uint8_t *sig);

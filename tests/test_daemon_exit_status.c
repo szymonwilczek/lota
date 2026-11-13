@@ -163,6 +163,39 @@ static void test_refused_host_configuration_needs_an_operator(void)
 		PASS();
 }
 
+/*
+ * A startup check that could not read its input exits 1 and is retried;
+ * one that refused what it read exits for an operator.
+ */
+static void test_a_startup_check_that_could_not_read_is_retried(void)
+{
+	static const int transient[] = { EIO,	 EMFILE, ENFILE, ENOMEM,
+					 EAGAIN, EINTR,	 EBUSY };
+	static const int refused[] = { EKEYREJECTED, ENOENT, EINVAL,
+				       EBADMSG,	     ENOSPC, ENOTSUP,
+				       ENODATA,	     EACCES, 4003 };
+	size_t i;
+
+	TEST("a startup check that could not read exits 1");
+	for (i = 0; i < sizeof(transient) / sizeof(*transient); i++) {
+		if (lota_startup_check_exit_status(-transient[i]) != 1) {
+			FAIL(strerror(transient[i]));
+			return;
+		}
+	}
+	PASS();
+
+	TEST("a startup check that refused what it read exits for an operator");
+	for (i = 0; i < sizeof(refused) / sizeof(*refused); i++) {
+		if (lota_startup_check_exit_status(-refused[i]) !=
+		    LOTA_EXIT_OPERATOR_ACTION) {
+			FAIL(strerror(refused[i]));
+			return;
+		}
+	}
+	PASS();
+}
+
 /* A daemon that served and stopped carries its own status out. */
 static void test_a_served_daemon_carries_its_own_status(void)
 {
@@ -280,6 +313,7 @@ int main(void)
 	test_no_errno_reaches_the_exit_status();
 	test_a_refusal_before_the_commitment_needs_an_operator();
 	test_refused_host_configuration_needs_an_operator();
+	test_a_startup_check_that_could_not_read_is_retried();
 	test_a_served_daemon_carries_its_own_status();
 	test_the_unit_prevents_restarting_on_that_status();
 	test_the_unit_does_not_retry_a_running_instance();

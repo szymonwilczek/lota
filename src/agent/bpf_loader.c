@@ -309,7 +309,7 @@ int bpf_loader_object_integrity_layout(const char *bpf_obj_path,
 
 	obj = bpf_object__open_file(bpf_obj_path, NULL);
 	if (!obj)
-		return -EIO;
+		return errno ? -errno : -EIO;
 
 	map = bpf_object__find_map_by_name(obj, "integrity_cfg");
 	if (!map) {
@@ -391,16 +391,12 @@ static int read_text_file(const char *path, char *buf, size_t buf_size,
 int bpf_loader_kernel_lockdown_restrictive(const char *lockdown_path)
 {
 	char buf[256];
-	size_t len = 0;
 	char *lb;
 	char *rb;
 
-	int ret = read_text_file(lockdown_path, buf, sizeof(buf), &len);
+	int ret = read_text_file(lockdown_path, buf, sizeof(buf), NULL);
 	if (ret < 0)
 		return ret;
-
-	if (len == 0)
-		return -EIO;
 
 	lb = strchr(buf, '[');
 	rb = lb ? strchr(lb + 1, ']') : NULL;
@@ -483,13 +479,10 @@ int bpf_loader_ima_appraisal_active(const char *cmdline_path,
 
 int bpf_loader_kernel_module_sig_enforced(const char *sig_enforce_path)
 {
-	char buf[16];
-	size_t len = 0;
-	int ret = read_text_file(sig_enforce_path, buf, sizeof(buf), &len);
+	char buf[16] = { 0 };
+	int ret = read_text_file(sig_enforce_path, buf, sizeof(buf), NULL);
 	if (ret < 0)
 		return ret;
-	if (len == 0)
-		return -EIO;
 	if (buf[0] == 'Y' || buf[0] == '1')
 		return 0;
 	return -EPERM;
@@ -566,26 +559,37 @@ int bpf_loader_kernel_appraises_exec(void)
 		bpf_loader_secure_boot_enabled() == 0);
 }
 
+/* -EPERM and -ENOENT are the state of @path; anything else, its read */
+static void report_kernel_floor(enum lota_kernel_floor which, bool secureboot,
+				const char *path, int err)
+{
+	char msg[512];
+
+	if (err != -EPERM && err != -ENOENT) {
+		lota_err("Cannot read %s: %s", path, strerror(-err));
+		return;
+	}
+	kernel_floor_message(which, secureboot, msg, sizeof(msg));
+	lota_err("%s", msg);
+}
+
 int bpf_loader_verify_kernel_runtime_hardening(bool allow_mutable_rootfs)
 {
 	bool secureboot = bpf_loader_secure_boot_enabled() == 0;
-	char floor_msg[512];
 	int ret;
 
 	ret = bpf_loader_kernel_lockdown_restrictive(LOTA_KERNEL_LOCKDOWN_PATH);
 	if (ret < 0) {
-		kernel_floor_message(LOTA_KERNEL_FLOOR_LOCKDOWN, secureboot,
-				     floor_msg, sizeof(floor_msg));
-		lota_err("%s", floor_msg);
+		report_kernel_floor(LOTA_KERNEL_FLOOR_LOCKDOWN, secureboot,
+				    LOTA_KERNEL_LOCKDOWN_PATH, ret);
 		return ret;
 	}
 
 	ret = bpf_loader_kernel_module_sig_enforced(
 		LOTA_MODULE_SIG_ENFORCE_PATH);
 	if (ret < 0) {
-		kernel_floor_message(LOTA_KERNEL_FLOOR_MODULE_SIG, secureboot,
-				     floor_msg, sizeof(floor_msg));
-		lota_err("%s", floor_msg);
+		report_kernel_floor(LOTA_KERNEL_FLOOR_MODULE_SIG, secureboot,
+				    LOTA_MODULE_SIG_ENFORCE_PATH, ret);
 		return ret;
 	}
 

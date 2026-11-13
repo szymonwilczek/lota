@@ -52,3 +52,18 @@ int lota_daemon_exit_status(int rc, enum tpm_pcr14_state commitment)
 
 	return 1;
 }
+
+int lota_startup_check_exit_status(int err)
+{
+	switch (err) {
+	case -EIO:
+	case -EMFILE:
+	case -ENFILE:
+	case -ENOMEM:
+	case -EAGAIN:
+	case -EINTR:
+	case -EBUSY:
+		return 1;
+	}
+	return LOTA_EXIT_OPERATOR_ACTION;
+}

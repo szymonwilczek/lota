@@ -27,4 +27,13 @@
  */
 int lota_daemon_exit_status(int rc, enum tpm_pcr14_state commitment);
 
+/**
+ * lota_startup_check_exit_status() - Exit status of a failed startup check.
+ * @err: The negative errno of a check run before the boot commitment.
+ *
+ * Return: 1 for -EIO, -EMFILE, -ENFILE, -ENOMEM, -EAGAIN, -EINTR or -EBUSY,
+ * which a restart may clear, else LOTA_EXIT_OPERATOR_ACTION.
+ */
+int lota_startup_check_exit_status(int err);
+
 #endif /* LOTA_EXIT_STATUS_H */
