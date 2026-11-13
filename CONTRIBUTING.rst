@@ -18,6 +18,6 @@ See also:
 * `Branch model and release flow
   <Documentation/process/branching.rst>`_
 * `Developer and testing policy
-  <Documentation/contributor/development/index.rst>`_
+  <Documentation/dev-tools/index.rst>`_
 * `Code of Conduct <Documentation/process/code-of-conduct.rst>`_
 * `Security policy <Documentation/process/security-bugs.rst>`_

@@ -96,7 +96,7 @@ Broaden validation when the change touches a wider surface:
 * SELinux policy: rebuild the module and inspect the resulting AVC behavior on
   an enforcing system.
 
-The full testing policy is in :doc:`../contributor/development/index`.
+The full testing policy is in :doc:`../dev-tools/index`.
 
 Reporting issues
 ================

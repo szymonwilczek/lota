@@ -31,7 +31,7 @@ Development happens on ``lota-next``. Open pull requests there, not against
 ``main``.
 
 * :doc:`Contribution rules <process/contributing>`
-* :doc:`Development and testing policy <contributor/development/index>`
+* :doc:`Development and testing policy <dev-tools/index>`
 * :doc:`Branch and release flow <process/branching>`
 * :doc:`Code of Conduct <process/code-of-conduct>`
 * Local patch checks: :ghsrc:`scripts/check-patch`
@@ -87,7 +87,7 @@ measurement path, initramfs PCR14 lock, SELinux policy, and the Syzkaller
 harness.
 
 * :doc:`Production bring-up <admin-guide/bringup/index>`
-* :doc:`Kernel test policy <contributor/development/index>`
+* :doc:`Kernel test policy <dev-tools/index>`
 * SELinux policy: :ghsrc:`selinux/README.rst`
 * Syzkaller harness: :ghsrc:`syzkaller/README.rst`
 * Runtime remeasurement example: :ghsrc:`examples/runtime_remeasure/README.rst`
@@ -127,7 +127,12 @@ reproducible and verified against signed manifests.
    :hidden:
 
    player/index
-   contributor/index
-   operator/index
+   process/index
+   dev-tools/index
+   admin-guide/index
+   agent/index
+   verifier/index
+   bpf/index
+   userspace-api/index
    security/index
    performance/index

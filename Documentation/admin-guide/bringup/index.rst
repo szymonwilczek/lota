@@ -45,5 +45,3 @@ Contents
    ca-enrollment
    sealed-keys
    limitations
-   ../../dev-tools/vm-testing
-   ../../agent/lifecycle

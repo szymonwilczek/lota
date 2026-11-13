@@ -20,6 +20,5 @@ issues for exploitable vulnerabilities.
    :hidden:
 
    threat-model
-   ../process/security-bugs
    reproducible-builds
    ca-key

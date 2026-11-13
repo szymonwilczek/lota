@@ -774,7 +774,7 @@ Validation status
 =================
 
 The software paths are covered by local build, unit, fuzz, and integration
-tests as documented in :doc:`../contributor/development/index`.
+tests as documented in :doc:`../dev-tools/index`.
 
 Hardware TPM validation remains required for release claims that depend on
 physical TPM behavior. swtpm validation is useful for protocol and regression
