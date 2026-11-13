@@ -27,6 +27,7 @@
 #include <poll.h>
 #include <sys/syscall.h>
 #include <openssl/crypto.h>
+#include <stddef.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -3839,6 +3840,20 @@ int ipc_recheck_socket(struct ipc_context *ctx)
 	return ipc_rebind_primary(ctx);
 }
 
+static bool fd_bound_to_primary(int fd)
+{
+	struct sockaddr_un addr = { 0 };
+	socklen_t len = sizeof(addr);
+
+	if (getsockname(fd, (struct sockaddr *)&addr, &len) < 0 ||
+	    addr.sun_family != AF_UNIX ||
+	    len <= offsetof(struct sockaddr_un, sun_path))
+		return false;
+
+	return strncmp(addr.sun_path, LOTA_IPC_SOCKET_PATH,
+		       sizeof(addr.sun_path)) == 0;
+}
+
 int ipc_init_activated(struct ipc_context *ctx, int fd)
 {
 	struct epoll_event ev;
@@ -3864,6 +3879,16 @@ int ipc_init_activated(struct ipc_context *ctx, int fd)
 		lota_err("set_nonblocking(activated fd) failed: %s",
 			 strerror(-ret));
 		return ret;
+	}
+
+	/* the initramfs lock may have created the directory first */
+	if (fd_bound_to_primary(fd)) {
+		ret = ensure_socket_dir();
+		if (ret < 0) {
+			lota_err("cannot secure %s: %s", SOCKET_DIR,
+				 strerror(-ret));
+			return ret;
+		}
 	}
 
 	ctx->listen_fd = fd;

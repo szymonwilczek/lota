@@ -20,11 +20,11 @@ Sockets
 =======
 
 The socket is ``/run/lota/lota.sock``, mode 0660, owner root and group
-``lota``. The daemon that binds the socket itself sets the directory
-``/run/lota`` to mode 0750 with the same owner and group; under socket
-activation the directory keeps the mode it was created with, 0755 and
-``root:root`` when the initramfs lock created it (:doc:`lifecycle`). With
-no group ``lota`` the socket stays root's and the agent warns.
+``lota``. The daemon sets the directory ``/run/lota`` to mode 0750 with the
+same owner and group, whether it binds the socket or takes it from
+``lota-agent.socket``, and refuses to start when the directory is not
+root's. With no group ``lota`` the socket stays root's and the agent
+warns.
 
 ``lota-agent.socket`` may hand the socket over; the daemon then takes it
 from systemd and binds nothing. Otherwise the daemon binds the path itself,

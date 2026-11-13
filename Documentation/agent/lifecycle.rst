@@ -15,9 +15,7 @@ Units
 
 ``lota-agent.socket``
   Listens on ``/run/lota/lota.sock``, mode 0660, owner ``root:lota``, and
-  starts ``lota-agent.service`` (:doc:`ipc`). ``DirectoryMode=0750`` applies
-  only to a ``/run/lota`` systemd creates; at a boot where the initramfs
-  lock ran, the lock created it first, mode 0755, owner ``root:root``.
+  starts ``lota-agent.service`` (:doc:`ipc`).
   ``RemoveOnStop=yes`` unlinks the socket when the unit stops.
 
 ``lota-agent.service``
