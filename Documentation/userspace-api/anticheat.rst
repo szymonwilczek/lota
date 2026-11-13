@@ -212,9 +212,10 @@ Snapshot file
 =============
 
 In file mode the session reads ``lota-attestation.bin``
-(``LOTA_SNAPSHOT_FILE_NAME``) in the token directory, which the Wine hook
-writes. ``lota_snapshot.h`` (:ghsrc:`include/lota_snapshot.h`) gives its
-16-byte header, little-endian, followed by the token:
+(``LOTA_SNAPSHOT_FILE_NAME``) in the token directory, which the
+:doc:`wine-hook` writes. ``lota_snapshot.h``
+(:ghsrc:`include/lota_snapshot.h`) gives its 16-byte header, little-endian,
+followed by the token:
 
 .. list-table::
    :header-rows: 1

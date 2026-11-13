@@ -11,6 +11,8 @@ Userspace API
 * :doc:`Server SDK <server>` -- token verification on the relying party.
 * :doc:`Anti-cheat SDK <anticheat>` -- heartbeat sessions and their
   verification.
+* :doc:`Wine hook <wine-hook>` -- attestation files for a title under Wine
+  or Proton.
 
 .. toctree::
    :hidden:
@@ -19,3 +21,4 @@ Userspace API
    gaming
    server
    anticheat
+   wine-hook
