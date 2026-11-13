@@ -33,7 +33,8 @@ Attestation loop
 One-shot commands
   Every other verb, such as ``--status``, ``--enroll`` or ``--seal``, does
   its work and exits. ``--status``, ``--shutdown`` and
-  ``--terminate-protected`` talk to the running daemon over the IPC socket.
+  ``--terminate-protected`` talk to the running daemon over the IPC socket
+  (:doc:`command-line`).
 
 Daemon startup
 ==============
@@ -141,6 +142,7 @@ Files
 Contents
 ========
 
+* :doc:`Command line <command-line>`
 * :doc:`Agent lifecycle <lifecycle>`
 * :doc:`TPM <tpm>`
 * :doc:`Protected processes <protection>`
@@ -153,6 +155,7 @@ Contents
 .. toctree::
    :hidden:
 
+   command-line
    lifecycle
    tpm
    protection
