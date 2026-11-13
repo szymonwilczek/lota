@@ -1,0 +1,655 @@
+.. SPDX-License-Identifier: MIT
+.. Copyright (C) 2026 Szymon Wilczek
+
+===============
+Agent lifecycle
+===============
+
+Agent restart requires reboot
+=============================
+
+The agent's ``lota_task_kill`` LSM hook blocks ``SIGTERM`` and ``SIGKILL``
+delivered from any other task -- including PID 1 -- because the hook treats the
+agent itself as a protected target. This is the load-bearing surface that
+prevents a local-root attacker from killing the agent out of band, dropping the
+BPF coverage, and swapping a tampered binary into place before the next
+attestation.
+
+A write to a cgroup's ``cgroup.kill`` kills every task in it without passing
+a signal hook, and a write to its ``cgroup.freeze`` stops them the same way.
+The agent therefore refuses write opens of both files of its own cgroup and
+of every ancestor to any task it has not authorised.
+``systemctl kill lota-agent`` and ``systemctl stop`` past its timeout take
+the first road and ``systemctl freeze lota-agent`` the second, so ``enforce``
+refuses them like a raw ``kill`` and logs::
+
+  KILL_BLOCKED systemd -> (cgroup.kill) (pid=1, uid=0)
+  KILL_BLOCKED systemd -> (cgroup.freeze) (pid=1, uid=0)
+
+At startup the agent logs the files it guards::
+
+  Kill guard armed on 4 cgroup file(s) above /system.slice/lota-agent.service
+
+It refuses to start when it cannot resolve them. A host without a unified
+cgroup hierarchy has none to guard and logs that. Writing the agent's pid into
+any other cgroup's ``cgroup.procs`` or ``tasks`` file ends the agent and every
+protected process before the move takes effect. systemd restarts the agent, and
+its status and token then carry ``AGENT_RESTARTED``, and the agent logs::
+
+  AGENT_MOVED bash moved the agent pid=812 to drive (pid=4410, uid=0)
+
+**This applies in every mode.** The enforcement mode switches policy, and an
+agent that can be killed is one whose measurements stop without a trace, so
+``monitor`` refuses the signal and the cgroup file writes exactly as
+``enforce`` does. The way to stop the agent is ``lota-agent --shutdown``.
+The refused signal is logged with the sender's pid, uid and command, so a
+supervisor that cannot stop the agent is diagnosable from the journal.
+
+``--shutdown`` is a clean stop: PCR 14 is poisoned, and the next agent start in
+that boot says the host is paused. Evaluating the agent in ``monitor`` therefore
+takes a reboot between runs, as in ``enforce``.
+
+The trade-off is that ``systemctl restart lota-agent`` does **not** bring the
+host back the way it does for other units. Stopping works: ``ExecStop`` is
+``/usr/bin/lota-agent --shutdown``, which sends a privileged IPC command that
+exits the daemon loop cleanly, and a caller running as the agent's own uid is
+authorised on a default install. ``--shutdown`` returns only once the daemon
+has exited, so the unit is stopped when ``systemctl`` says it is. What does not
+work is the *start* half: it is refused with exit 78, and the unit stays
+failed until the reboot.
+
+Stopping the agent poisons PCR 14, deliberately. The boot commitment cannot be
+re-extended once spent, so an agent started again in the same boot refuses at
+self-measurement and says the host is paused. That is the property that makes
+a pause visible to every relying party.
+
+So the two supported paths are:
+
+#. **Stop now, resume at a reboot.** ``systemctl stop lota-agent``,
+   ``lota-agent --shutdown`` and ``lota-install --pause`` all take the same
+   route and all end enforcement immediately. Attestation resumes at the next
+   boot and not before. This is the intended way to pause a host. The route is
+   ``ExecStop``, not a signal and not a cgroup kill, so it is unaffected by
+   either refusal above.
+#. **Cold reboot.** If the IPC path is unreachable and the process is not
+   merely wedged (socket gone, kernel deadlock), reboot the host. PID 1 has no
+   kill bypass, since any grace window would be attack surface for an
+   init-domain compromise; schedule updates with a maintenance reboot.
+
+A wedged agent ends itself
+==========================
+
+The kill refusal applies to systemd's watchdog too, so the remedy runs inside
+the process. ``lota-agent.service`` arms a 60 s watchdog, and a supervisor
+thread pings it while the main loop advances. After half the interval with no
+progress it holds the ping, so systemd records the stall too, and after a full
+interval it ends the process::
+
+  Watchdog: the main loop has not advanced in 30000 ms, holding the ping
+  Watchdog: the main loop has not advanced in 60000 ms, past the 60000 ms
+  interval. Ending the process from inside: the signal systemd sends is
+  refused by this agent's own kill guard.
+
+The agent sends itself ``SIGKILL``: ``lota_task_kill`` delivers a signal to
+the sender's own thread group, and a kill is a dirty stop that keeps the PCR 14
+boot commitment, so ``Restart=on-failure`` brings enforcement back in the same
+boot instead of the paused state a clean shutdown leaves.
+
+systemd's own escalation is refused at both ``SIGABRT`` and ``SIGKILL``, so no
+``WatchdogSignal=`` is set. A journal showing the unit ``failed`` with
+``Unit process N remains running after unit stopped`` means the supervisor is
+wedged too: cold reboot.
+
+Restarting ``lota-agent.socket`` is not one of those paths and does not need
+to be. The socket unit carries ``RemoveOnStop=yes``, so a restart unlinks the
+socket the running agent is bound to and binds a new one at the same name --
+and a listening file descriptor outlives its path, so the agent goes on
+accepting on a socket no title can reach while every other signal stays green.
+The agent watches the directory for exactly this and rebinds the path itself,
+logging ``IPC socket ... was replaced; rebound``. systemd also tries to start
+the service while the running agent still holds it -- it cannot kill that agent
+either -- and the start refuses on the PID file with exit status 3, which the
+unit lists in ``RestartPreventExitStatus``: the unit lands failed with one line
+saying an instance is already running, instead of retrying every five seconds
+for the rest of the boot. The daemon that is serving is unaffected, and
+``systemctl reset-failed lota-agent`` clears the state once the socket work is
+done. An operator who changes
+``SocketMode``, ``SocketGroup`` or ``Backlog`` therefore gets the new settings
+at the next agent start and a working IPC path in the meantime.
+
+A configuration change that only the daemon's own state depends on does not
+need either path: ``systemctl try-reload-or-restart lota-agent lota-attest``
+picks up a newly added publisher without stopping anything. Settings the agent reads once at startup,
+such as ``container_listener_uid``, take effect at the next boot instead.
+
+The socket that setting asks for is a separate matter from the setting itself.
+``/run/user/<uid>`` belongs to a login, so the agent creates
+``/run/user/<uid>/lota/lota.sock`` when the registered user logs in and
+releases it when the last session closes; no restart is involved, and none
+should be attempted, since stopping the agent spends the boot's PCR 14
+commitment. The socket is handed to the ``lota`` group at mode 0660, so an
+account outside that group cannot open it even though it is there.
+``lota-steam-setup --verify``, run from the user's own session, reports both
+halves: whether the socket exists and whether that account can open it. When
+it cannot, the tool prints the socket's ownership and points at the agent's
+own message (``journalctl -u lota-agent | grep chown``), because a socket the
+agent could not hand to the group looks identical from the outside to one it
+did. The socket's directory is the group's too (mode 0750), so for an outside
+account the tool says it cannot look inside and names the group, rather than
+calling the socket absent. When the socket is absent it names the two things
+that produce one -- a registered UID and a boot since it was registered -- and
+does not suggest restarting the agent. Run from an account with no login
+session, and so no ``XDG_RUNTIME_DIR``, it reports that it has no runtime
+directory for the socket or the token directory, points at the account that
+starts Steam, and still runs the rest of its checks to a non-zero exit.
+
+The socket is the agent's half of the container path; the hook's half is a
+directory of the player's own. It writes ``lota-status``,
+``lota-token.bin``, ``lota-attestation.bin`` and
+``lota-boot-evidence.bin`` into ``$XDG_RUNTIME_DIR/lota-hook`` -- not into
+``$XDG_RUNTIME_DIR/lota``, which the agent owns as ``root:lota`` and which a
+process running as the player cannot write. Under pressure-vessel both directories must be bound into the
+container; ``lota-proton-hook`` creates the token directory and shares both
+before the container is built. ``--verify`` also reports the token directory,
+and names the ``/tmp/lota-<uid>`` fallback the hook takes when a leftover in
+the runtime directory belongs to somebody else.
+
+Single-operator hosts can reach the same listener by the other road:
+``lota-steam-setup --install-systemd-dropin`` writes
+``/etc/systemd/system/lota-agent.service.d/10-xdg-runtime.conf``, which pins
+``XDG_RUNTIME_DIR`` for the service so the agent builds the listener under
+that user's runtime directory. That directory names the login it belongs to,
+so the listener follows it the same way the configuration key's does: the
+agent starts before anyone has logged in, and the socket is laid down when
+logind creates the directory. It is read at startup like the configuration
+key, so it lands at the next boot, and the verb restarts nothing to shorten
+that: ``lota-agent.socket`` triggers the service and the service requires the
+socket, so restarting either one runs the graceful shutdown and spends the
+boot's PCR 14 commitment -- the host then attests again only after a reboot,
+which is the wait the restart was meant to avoid. Reboot, then run
+``lota-steam-setup --verify`` from the operator's session.
+
+A diagnostic server started beside the daemon leaves that socket alone.
+``--test-ipc`` and ``--test-signed`` read the same ``container_listener_uid``
+setting and would bind the same path, so each probes it first and refuses one
+another agent is still answering on, naming the uid that keeps its listener.
+The refusal is what keeps the path usable: the socket is laid down by a login
+event, so a name taken and then removed under a user who never logged out is
+not rebuilt until that session ends or the host reboots.
+
+Continuous attestation
+======================
+
+``lota-agent.service`` only enforces locally (BPF LSM, PCR14 commitment); it
+does not attest. A deployed host proves its state through a second unit,
+``lota-attest.service``, which runs ``lota-agent --attest`` fire-and-forget and
+renews the CA-issued AIK certificate before it expires. It is a separate unit
+on purpose: the attestation loop is network-facing, so isolating it from the
+enforcement daemon keeps that security core on a tight seccomp and capability
+profile. The attest unit itself runs with no effective capabilities at all
+(``SecureBits=noroot-locked`` with an empty ambient set), reaches the TPM only
+through ``DeviceAllow``, and cannot load BPF or disable enforcement. A
+compromise of the attest process at worst stops fresh attestations, which the
+verifier sees as staleness and marks untrusted.
+
+The unit arms a 60 s systemd watchdog: the attest loop pings it on a cadence
+independent of ``attest_interval``, so a loop wedged on the TPM or a stalled
+TLS socket misses the deadline and systemd restarts it. Every pass through the
+loop pings when one is owed, so a sleep cut short by a session or a reload
+pings like an expired one, and a long round is pinged before it starts. The
+target gap is half the deadline, leaving room for one slow round.
+
+Between an agent upgrade and the reboot after it, PCR 14 commits to the old
+build and the loop's startup self-measurement refuses every start. That status
+is in ``RestartPreventExitStatus``, so the unit stays ``failed`` instead of
+cycling in ``activating``, and the journal ends on the line saying to reboot.
+
+A round that fails names the stage it failed at in the journal -- setting up
+TLS, reaching the verifier, building or sending the report, or the verdict
+itself -- alongside the failure count and the backoff:
+
+.. code-block:: text
+
+   Attestation round failed at connecting to the verifier: Connection refused
+   Attestation FAILED for verifier.example:9443 (attempt 1, backoff 10s)
+
+The stage is what separates a host that cannot reach its verifier from one the
+verifier is refusing, and it is reported whether or not anything is reading the
+loop's progress output.
+
+After the stage comes the condition. A failure the socket reported keeps its
+errno (``Connection refused``, ``Connection reset by peer``, ``Broken pipe``);
+the rest are named by the agent: a peer that closed the connection before the
+exchange finished, a peer that went away without closing it, a TLS protocol
+failure on an established connection. None is reported as
+``Input/output error``.
+
+Which unit a title talks to
+---------------------------
+
+``lota-agent.service`` owns ``/run/lota/lota.sock``, and it is the only unit
+that does. It is the always-on one, it is what ``lota-agent.socket`` activates,
+and it holds everything about the machine a title asks after: the BPF LSM
+state, the enforcement policy digest a token carries, the Secure Boot and IOMMU
+findings, and the publisher list a title selects from.
+
+What it does not hold is a verifier's verdict, so the attestation loop connects
+to that same socket as a local peer and trades state with it once per round --
+verdicts out, sessions and enrollment requests in. That exchange is refused
+unless the peer is the same agent binary running as the same user, and it is
+never something an integrator sends: the SDK has no such call.
+
+The loop also passes on a TPM dictionary-attack lockout. It asks the chip for
+a quote every round, while the daemon may go long without a TPM call, so the
+status word carries ``LOTA_STATUS_TPM_LOCKOUT`` from whichever process saw it
+first. A title asking for a token meanwhile gets the lockout code
+(``LOTA_ERR_TPM_LOCKED`` in the SDK, ``LOTA_AC_ERR_TPM_LOCKOUT`` in the
+anti-cheat wrapper), not a generic error, and can back off. The lockout is
+checked before the verdict: it is why the verdict lapsed, and "not attested"
+would invite a retry that cannot succeed.
+
+Two consequences worth knowing:
+
+* **Stopping ``lota-attest.service`` does not stop a title from getting an
+  answer.** The socket stays up and enforcement keeps running; what goes stale
+  is the verdict, which is exactly what a verifier is watching for. Session-gated
+  publishers stop being reported to, which is the safe direction.
+* **Stopping ``lota-agent.service`` takes the socket down with it.** A title
+  gets a connection failure rather than a wrong answer, and the attest loop
+  keeps attesting and retries the link every 30 s. Session gating and runtime
+  enrollment are off for that window, and the loop says so in the journal.
+
+The verifier, port, CA certificate and cadence come from
+``/etc/lota/lota.conf`` (``server``, ``port``, ``ca_cert``, ``attest_interval``);
+no attestation flags are hardcoded in the unit. A zero ``attest_interval``
+means this host never chose a cadence: with a ``[profile]`` list it attests to
+every configured publisher at the default 240 s, and only a host with no
+profile at all falls back to attesting once to ``server`` and exiting. A host
+that names neither runs the loop with no target: it reports nothing and waits
+for the reload that names its first publisher. A
+non-zero value has to fall between the floor and the ceiling the agent prints
+in ``--help``; the agent refuses to start on anything else, since an interval
+past the ceiling mints tokens that sit outside every relying party's freshness
+window.
+
+``ca_cert`` must point at a path the hardened unit can read. Both units run
+with ``ProtectSystem=strict`` and with ``/home`` and ``/root`` inaccessible, so
+a certificate left in an operator home directory (the ``--ca-cert ~/tls.crt``
+used for a manual ``--enroll``) is invisible to them. Copy the verifier CA certificate under
+``/etc/lota`` (root-owned, the unit mounts it read-only) and point ``ca_cert``
+there, for example::
+
+   sudo install -m 0644 verifier-ca.crt /etc/lota/verifier-ca.crt
+   # then in /etc/lota/lota.conf: ca_cert = /etc/lota/verifier-ca.crt
+
+A host that answers to more than one publisher lists them as ``[profile "name"]``
+sections instead. Each section names the attestation CA it enrolls against, the
+trust anchor that CA is verified with, the verifier it reports to, and
+optionally its own cadence; ``ca_port`` and ``verifier_port`` default to the
+same ports as the top-level keys. A profile missing the CA, the anchor or the
+verifier is refused at load, and every anchor has to satisfy the same
+readability constraint as the top-level ``ca_cert`` above.
+
+**Every port named here has to carry the SELinux label on an enforcing host.**
+The confined agent may connect only to ports labelled ``lota_port_t``;
+``lota-install`` labels the endpoints it was given, and one added afterwards --
+a second publisher, a verifier moved to another port -- needs::
+
+   sudo semanage port -a -t lota_port_t -p tcp <port>
+
+Without it every round fails with ``Permission denied`` against a server that
+is running and that a shell on the same host can reach. The agent names the
+port and this command when it happens; see :ghsrc:`selinux/README.rst` for why
+the labels are assigned one port at a time.
+
+``verifier = none`` is how a profile says that publisher runs no verifier and
+checks the tokens their titles fetch in their own backend. Nothing is reported
+to them and this host holds no verdict of theirs, so their titles read the
+token, not the attested bit. Issuance follows that: the attested gate
+applies to a publisher who runs a verifier, and a token-only publisher's gate
+is that the host can quote at all -- enrolled, AIK loaded, TPM not locked out.
+The token carries ``LOTA_STATUS_TOKEN_ONLY`` so the backend knows the attested
+bit is not a verdict of theirs, and a freshness window the agent bounds itself
+(the default cadence, since there is no round to take one from); the profile still enrolls, holds its own
+AIK and renews that key's certificate, which is what the publisher's backend
+chains a token to. It has to be said rather than left out -- an omitted
+``verifier`` stays a refused config, so a typo cannot turn a publisher who
+expects reports into one who silently receives none -- and ``verifier_port``
+must not accompany it.
+
+Adding a publisher does not have to be a text edit. ``lota-agent
+--add-publisher`` writes the section, which is how a game's installer registers
+the publisher it ships for::
+
+    sudo lota-agent --add-publisher ca.studio.example --ca-port 8444 \
+        --ca-cert /etc/lota/studio.pem \
+        --server verifier.studio.example --port 8443 \
+        --publisher-name studio
+
+``--server`` is what names that publisher's verifier, and leaving it out is how
+the token-only publisher is written: the section gets ``verifier = none`` and no
+port, and nothing is reported to them from this machine. The command says which
+of the two it wrote, since the difference is whether any evidence leaves the
+host::
+
+    sudo lota-agent --add-publisher ca.studio.example --ca-port 8444 \
+        --ca-cert /etc/lota/studio.pem --publisher-name studio
+
+The section is written with ``reporting = session``: reports leave only while a
+title of that publisher's runs. An operator-owned host that should report
+whether or not anything is running passes ``--reporting continuous``, which is
+what ``lota-install --ca-server`` writes for the fleet it enrols into.
+
+**The anchor has to live where the units can read it.** ``--add-publisher``
+reads the file to derive the publisher's identity, but the two units are what
+read it from then on, and both run with ``PrivateTmp=yes`` -- so an anchor
+under ``/tmp`` or ``/var/tmp`` is readable from a shell and absent to them. The
+publisher then loads with no profile: it is counted on reload, and a title
+naming it is refused as though the host had never heard of it. The command
+warns when the path it was given is one of those, and the units say which
+anchor they could not read, on reload as well as at startup. ``/etc/lota/`` is
+the ordinary place for it.
+
+The rest of the file is copied through untouched and the section is appended,
+so whatever the operator put there survives. A publisher is its trust anchor
+rather than its label: adding the same anchor again is a no-op whichever name
+it carries, and a label already spoken for by a different anchor is refused
+with a note to pass another ``--publisher-name``.
+
+**The writer holds itself to the parser's rules.** A label is 1 to 63
+characters with no control characters and no quote -- the quote is what ends
+the section header -- and the hosts and the trust anchor may carry no control
+character, no leading or trailing space and no line longer than the parser
+reads. A value that breaks one of those is refused by name, with the character
+at fault, and nothing is written: the alternative is a command that reports
+success and leaves a file the next start cannot load. The trust anchor must be
+an absolute path for the same reason, since that is what the parser accepts.
+
+**And it reads the result back before it replaces the file.** The text already
+in ``lota.conf`` is copied through unexamined, so a file that had stopped
+parsing for some other reason -- a hand edit, a package that half-replaced it
+-- would be appended to and installed, and the host would come up with no
+publishers and no enforcement settings at all. Nothing reaches that state
+through the command line, because every invocation loads the configuration
+before it runs a verb and refuses on a file that does not parse, naming the
+line. The writer does not lean on that: it loads the replacement with the
+parser before the rename and leaves the live file untouched if the result does
+not read back.
+
+**It records no consent.** Nothing enrols with the publisher until somebody at
+the machine runs the ``--allow-publisher`` command it prints. That separation
+is deliberate: an installer must not be able to agree, on the player's behalf,
+to a publisher holding an attestation key on their hardware.
+
+**A running host has to be told, and two units read this file.** The daemon
+answers titles from the publisher list it read when it started, so one added
+since is unknown to it and a title naming it is refused with
+``LOTA_ERR_UNKNOWN_PROFILE``. The attestation loop builds its target list the
+same way, so a publisher it has not been told about is never reported to --
+which shows up as a verifier that simply never hears from the host. One command
+covers both::
+
+   sudo systemctl try-reload-or-restart lota-agent lota-attest
+
+Both take SIGHUP: the daemon re-reads ``lota.conf`` and hands the new list to
+the socket, and the loop rebuilds its targets between rounds, reporting to the
+new publisher immediately in case a title of theirs is already running. Neither
+touches enforcement, PCR 14 or any existing enrollment, and a publisher that
+was already there keeps its cadence, its session state and its failure backoff.
+``try-`` is what makes it one command on every host: a unit that is not running
+is skipped. A host past ``lota-install`` runs both, the loop with no target
+until its first publisher. It is the command ``--add-publisher`` prints
+alongside the consent line. A rebuild that
+fails leaves the previous list in place.
+
+Every key below a section header belongs to that section, so the top-level keys
+go above the first profile and nothing top-level may follow one.
+``lota-agent --dump-config`` prints profiles last for the same reason, which is
+also what makes its output loadable again. See :ghsrc:`configs/lota.conf.example`
+for a worked pair of profiles.
+
+The section name is a label for the operator. A profile is identified by its
+trust anchor's public key, so a publisher moving their CA to another address
+keeps the same profile, and two publishers sharing a hostname cannot collide.
+Publisher policy stays with the publisher: a profile grants no publisher any
+say over this host's enforcement.
+
+The list is what the attestation loop reports to. Every profile's verifier gets
+its own report on that profile's cadence, signed with that publisher's own AIK,
+and each profile carries its own failure state -- one unreachable verifier
+backs off its own reporting and leaves the others on schedule. Since the list
+replaces the single verifier rather than adding to it, ``--server`` and
+``--pin-sha256`` are refused while profiles are configured, as is a top-level
+``pin_sha256``; each profile is anchored by its own ``ca_cert``.
+
+A profile pins its verifier's certificate with its own ``pin_sha256`` key, the
+64-character SHA-256 fingerprint that verifier presents. Pinning is per
+publisher because the certificate is: one fingerprint matches at most one
+verifier, so a host-level pin would authenticate the publisher it was measured
+against and fail every other at TLS time, before any verdict. A profile that
+states no pin trusts its ``ca_cert`` alone, which is the default.
+
+A title says which publisher it plays for, and gets that publisher's answers.
+It names the profile by the lowercase hex SHA-256 of that publisher's CA trust
+anchor SubjectPublicKeyInfo -- the identity the profile directory is named
+after, which the publisher knows about their own CA -- through
+``publisher_profile`` in ``struct lota_connect_opts`` or
+``struct lota_ac_config``. The connection's tokens are then signed by that
+publisher's AIK, and the attested state it reads is that publisher's verifier's
+verdict rather than every publisher on the host agreeing. Naming a publisher
+this machine holds no enrollment for fails the connection: handing a title
+another publisher's evidence under its own name would be worse than telling it
+plainly.
+
+A title that names nobody -- which is every enterprise integration, where the
+host has one publisher -- gets the first profile's token and the host-wide
+answer: attested only while **every** configured publisher is satisfied, with
+the window closing at the earliest of theirs. Publishers who run no verifier
+are left out of that answer, since a host holds no verdict for a publisher it
+never reports to. On a host where no publisher runs one, that answer carries
+``LOTA_FLAG_TOKEN_ONLY`` so a title reads "nothing is verified here, check the
+token you fetched" rather than "this machine failed".
+
+**A profile reports only while a title of its publisher is running.** That is
+what ``reporting`` selects, and ``session`` is a profile's default: a report is
+the only thing that leaves the machine, and a verifier receiving one every few
+minutes from boot to poweroff learns when the player's machine is on, for a
+game that is closed. A session is a title's connection to the agent, so it ends
+when the process does, whether it exited or was killed. Set
+``reporting = continuous`` on a profile whose fleet the operator owns and whose
+continuous stream is the point; the single-verifier configuration keeps that
+behaviour unchanged.
+
+Enforcement and the PCR 14 boot commitment are never gated. They are local,
+they send nothing, and they are what lets a session's first quote still prove
+the whole boot-to-now window: the quote is a fresh signed read of state that
+already existed. On-demand *enforcement* would prove nothing, which is why only
+reporting follows the session.
+
+Neither is the enrollment ceremony. Every configured publisher is enrolled
+with and has its certificate renewed on the host's cadence, whether or not a
+title of theirs is running. Waiting for a session would leave
+a session-gated publisher unreachable: a title cannot select a publisher this
+machine never enrolled with, so the session that would trigger the enrollment
+could never be opened. What the gate withholds is the report, not the key.
+
+While no title of a publisher's is running, that publisher has no live verdict:
+the agent stops reporting to them and reports the host as not attested for
+them. A title that names no publisher reads the host-wide answer, which is now
+every *currently reporting* publisher agreeing -- and not attested when nothing
+is reporting at all, since nothing is being checked.
+
+**A title that names no publisher also opens no session**, so it does not start
+anybody reporting either. On a host where every profile is session-gated, which
+is the consumer default, such a title reads not-attested for as long as it is
+the only one running. That is deliberate -- a session is a title saying which
+publisher it plays for, and reporting follows it -- and it makes naming the
+publisher part of integrating, not an optimisation. The anti-cheat producer
+reference takes ``--publisher``; see :ghsrc:`examples/anticheat-integration.rst`.
+
+The status answer's last-attestation time is zero until this host attests,
+so an all-session-gated machine reports zero until a title runs. After that
+it holds the time of the last round, not of the last status read. Whether
+the host is attested *now* is the attested flag beside it and its validity
+window.
+
+**Nothing enrolls with a publisher until somebody here agrees to it.** An
+attestation key is a stable handle that publisher can recognise this machine
+by, so the decision to hand one out is recorded before the key exists, in the
+profile directory. ``lota-agent --allow-publisher <hex>`` writes it, naming the
+publisher by the SHA-256 of their CA anchor's SubjectPublicKeyInfo -- the same
+identity everything else uses. ``lota-agent --enroll`` records it too: somebody
+with root named that CA and asked for the key, which is the same decision made
+a different way, and it keeps one rule for the agent to enforce.
+
+A title that names a publisher this machine has no attestation-key slot for is
+refused at connect too, with ``LOTA_IPC_ERR_NO_KEY_SLOT``
+(``LOTA_ERR_NO_KEY_SLOT`` in the SDK). The publisher is known here and somebody
+agreed to it; what is exhausted is the handle range, so no retry frees one and
+somebody at the machine has to forget a publisher or reclaim a handle. It is
+answered at connect, because every token in such a session would fail the same
+way.
+
+A title that selects a publisher nobody has agreed to is refused with a
+distinct error (``LOTA_ERR_CONSENT_REQUIRED``, readable through
+``lota_connect_last_error()``) rather than a generic failure, because it is a
+screen to show the player rather than a fault to report. Whatever shows that
+screen calls ``--allow-publisher`` when they accept.
+
+**What this machine holds for whom is inspectable, and revocable.**
+``lota-agent --list-publishers`` shows every publisher with anything stored
+here: when it was agreed to, where it enrolled, which TPM handle holds its
+attestation key and how much validity that key's certificate has left. It ends
+with what the machine has room for -- the keys held, the TPM's own persistent
+capacity and this build's maximum -- so the ceiling is readable before it is
+met; :doc:`tpm` covers what sets it.
+
+A profile whose pinned certificate now names another publisher, as after a TLS
+listener certificate is re-issued over a new key, is marked ``SUPERSEDED`` with
+that publisher. Nothing reaches it, yet it holds its attestation key and a slot
+until ``--forget-publisher`` frees them.
+
+A profile whose enrollment record cannot be read is reported as holding one,
+not as never having enrolled. The record is what says where a publisher
+enrolled, and the attestation key and certificate stored beside it were issued
+against it, so a build that cannot read it must not print ``not yet`` above
+them:
+
+.. code-block:: text
+
+    enrolled with  yes -- but the record cannot be read (Operation not supported)
+                   /var/lib/lota/profiles/<id>/enroll_state.dat
+                   the key and certificate below were issued against it;
+                   restore it, or re-enroll: lota-agent --reenroll --publisher <id>
+
+When any profile is in that state the summary says so, because the key count
+underneath is then what the machine stores.
+
+"Every publisher" is not bounded by that maximum. A profile directory is
+created the moment somebody agrees to a publisher, before any enrollment, and
+nothing prunes it, so a host that has been used carries more directories than
+it holds keys -- and the listing walks all of them, including the ones that
+hold a consent record and nothing else. The counts under it are over the same
+full set, which is what makes them worth reading on a host near its capacity.
+The listing also says how much of the attestation-key handle range is left.
+This build hands out eight handles, ``0x81010010`` to ``0x81010017``, and a
+slot goes two ways: a profile here records it, or the TPM holds an object at it
+that no profile records -- left by a wiped profile, a failed eviction, an
+earlier build or another program. The allocator steps over the second kind, so
+those slots are gone until somebody reclaims them, and the listing names each
+handle and says what it costs. Without that line a host with five keys and eight
+handles reads as having three slots free while having none, and the first symptom
+is the next publisher failing to bind. :doc:`tpm` covers the TPM's
+own capacity, which is the other half of the ceiling.
+
+``lota-agent --forget-publisher <hex>`` destroys that key and deletes the rest,
+in that order -- a key with no directory left to name it would be worse than
+either state alone, so nothing is deleted if the eviction fails. An identity
+this machine never answered to is refused: a mistyped identity would otherwise
+confirm a removal that did not happen while the real publisher stayed enrolled.
+
+The key it destroys is the one it can show belongs to that publisher. The
+attestation key is derived from the TPM's hierarchy seed and a template
+carrying the publisher's identity, so the agent derives it again and compares
+TPM Names before evicting anything. A handle holding something else -- another
+program's key, an object left by an earlier build -- is left alone: the
+publisher is still forgotten, and the command says the slot stays claimed by
+whatever holds it. Destroying a persistent object cannot be undone, and the
+handle is a slot, not an identity.
+
+Forgetting is about the identity, not about refusing the publisher. A profile
+still in ``lota.conf`` can be agreed to again, and enrolls with a **new** key
+that the old evidence cannot be linked to.
+
+**Forgetting and provisioning are safe to do under a running agent.** The
+handle number a forgotten publisher used is free again, so the next publisher
+provisioned takes it -- the number is a slot, not an identity. A running agent
+reads the key at a slot by its TPM Name, so nothing one publisher had cached is
+carried across to another that takes their slot.
+Where the key at a bound slot is genuinely a different one -- another
+publisher's, or the same publisher's after a TPM clear rebases the seed their
+key derives from -- the agent drops what it cached for the old key and writes
+``The attestation key for <title> is not the one bound earlier`` to the
+journal. Re-enrolling the same publisher is silent, and that is right: their
+key is derived, so it comes back identical. No restart is needed for any of
+it, and none should be spent: the agent's PCR 14 commitment is made once per
+boot, so restarting the daemon puts the host out of attestation until it
+reboots. Should the agent's own TPM session refuse the handle after such a
+change -- the session caches what stood there, and the cache is process
+state -- the agent opens a new session over the same device and asks again,
+which is why a key swapped underneath a running agent shows up as one journal
+line.
+
+**Enrollment with a profile's publisher is a runtime action.** A profile that
+names a CA (``ca``, ``ca_port``, ``ca_cert``) and has never enrolled is
+enrolled by the agent itself: when the loop first reaches that publisher, and
+immediately when a title selects it, which is the moment that matters on a
+player's machine. Until it completes, that publisher's status is not attested
+and the agent sends no report to their verifier -- evidence with no certificate
+to chain is refused anyway. A failing CA backs off rather than being retried
+every round, and the other publishers keep their cadence throughout. Once it
+completes, that publisher is renewed like any other from the same round on: the
+loop resolves the renewal from the enrollment record each pass, so a publisher
+it enrolled itself needs no reload to keep its short-lived certificate.
+
+Operator fleets that enroll at install time are unaffected: ``lota-agent
+--enroll`` writes the same record, and a profile that already has one is never
+re-enrolled. An enrollment token cannot be presented on the *first* enrollment
+the loop performs (a publisher admitting players has no way to hand each of
+them a secret in advance), so a CA that requires one has to be enrolled
+against with ``--enroll --enroll-token-file``. Afterwards the token is part of
+the record and every renewal replays it, which is what keeps a token-gated CA
+issuing to the host without an operator.
+
+**The record, not the configuration, says where a renewal goes.** ``ca`` and
+``ca_port`` are what the host enrolls against the first time; the endpoint the
+enrollment reached is written into the profile and is what the daemon's
+certificate renewal dials from then on, presenting the anchor the profile is
+configured with. Every renewal line therefore names the recorded address, and
+a profile whose keys have since been pointed somewhere else is reported once::
+
+   ...: renewal dials old-ca.example:8444 from the enrollment record, while
+   this profile is configured with ca.example:8444; run --enroll
+   --ca-server ca.example --ca-port 8444 --ca-cert /etc/lota/ca.crt to
+   move it
+
+``--reenroll`` reuses the recorded endpoint; ``--ca-server``/``--ca-port``
+override it for a moved CA, and the new endpoint is recorded once the CA
+certifies the key. An unreachable CA changes nothing on the host.
+
+``lota-attest.service`` has no start condition. On a host that names no
+publisher yet the loop runs with no target and reports nothing; the reload that
+names the first one starts reporting, and the loop enrolls with a publisher the
+first time a title of theirs asks. After enrollment it renews the certificate
+automatically. ``lota-install`` enables and starts it; on a host brought up by
+hand:
+
+.. code-block:: sh
+
+   sudo systemctl enable --now lota-attest.service
+
+Installing the package enables nothing. ``lota-install`` enables the units it
+brings up -- the agent socket, the enforcement daemon and the attestation
+loop -- so a host that has not been through bring-up runs neither, and a
+``dnf install`` on a machine nobody is sitting at cannot start enforcing on
+its own.

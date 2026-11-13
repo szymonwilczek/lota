@@ -46,3 +46,4 @@ Contents
    sealed-keys
    post-bringup
    ../../dev-tools/vm-testing
+   ../../agent/lifecycle

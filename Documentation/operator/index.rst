@@ -68,3 +68,4 @@ Related deployment material lives next to the code:
    dnf-repo
    fleet-cli
    ../verifier/monitoring-api
+   ../agent/tpm

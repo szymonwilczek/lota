@@ -43,3 +43,9 @@ Contents
    ../../userspace-api/stability
    ../../verifier/report-format
    ../../verifier/store
+   ../../agent/protection
+   ../../agent/boot-evidence
+   ../../agent/ipc
+   ../../agent/tokens
+   ../../agent/journal
+   ../../agent/runtime-measurement

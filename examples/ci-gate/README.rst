@@ -171,7 +171,7 @@ In order, and each one refuses on its own:
    rather than "denied".
 4. **The token is not implausibly long-lived.** ``--max-token-life`` is
    the gate's own window inside the one both verifiers already apply; see
-   ``Documentation/contributor/development/contracts.rst``.
+   ``Documentation/agent/tokens.rst``.
 
 What this reference does **not** do
 ===================================
