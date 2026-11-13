@@ -132,7 +132,8 @@ static int extend_over(const uint8_t base[HASH_SIZE],
  */
 static int write_baseline(const uint8_t base[HASH_SIZE])
 {
-	if (mkdir(BASELINE_DIR, 0755) != 0 && errno != EEXIST)
+	/* lota-agent sets 0750 root:lota; the initramfs has no group lota */
+	if (mkdir(BASELINE_DIR, 0711) != 0 && errno != EEXIST)
 		return -errno;
 	int fd = open(BASELINE_PATH, O_WRONLY | O_CREAT | O_TRUNC | O_NOFOLLOW,
 		      0600);
