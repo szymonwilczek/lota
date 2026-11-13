@@ -12,7 +12,7 @@
  *
  * Adding a function means a new version node (LOTA_ANTICHEAT_1.1) below this one;
  * removing or changing one is an ABI break and bumps LOTA_ABI_MAJOR.
- * See Documentation/contributor/development/api-stability.rst
+ * See Documentation/userspace-api/stability.rst
  *
  * Copyright (C) 2026 Szymon Wilczek
  */

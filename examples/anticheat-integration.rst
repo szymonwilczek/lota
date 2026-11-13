@@ -95,7 +95,7 @@ carries the gaming and server SDK inside it, so a producer calling only
 ``lota_ac_*`` links one thing; add ``lota-gaming`` or ``lota-server`` when
 the same binary calls those APIs directly. The frozen surface those
 modules describe is in
-``Documentation/contributor/development/api-stability.rst``.
+``Documentation/userspace-api/stability.rst``.
 
 What you must change
 ====================

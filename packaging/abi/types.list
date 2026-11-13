@@ -1,6 +1,6 @@
 # Layout of the public types, as the compiler reports it.
 # Regenerate with `make abi-baseline`; the diff is the review signal.
-# See Documentation/contributor/development/api-stability.rst
+# See Documentation/userspace-api/stability.rst
 macro LOTA_AC_MAGIC                            = 1279345480
 macro LOTA_AC_VERSION                          = 1
 macro LOTA_AC_HEADER_SIZE                      = 110

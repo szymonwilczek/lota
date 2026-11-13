@@ -736,7 +736,7 @@ check_abi() {
     else
         printf '%s\n' "$output" | sed 's/^/  /' >&2
         fail "abi" \
-             "a deliberate surface change updates packaging/abi (make abi-baseline) and Documentation/contributor/development/api-stability.rst."
+             "a deliberate surface change updates packaging/abi (make abi-baseline) and Documentation/userspace-api/stability.rst."
     fi
 }
 

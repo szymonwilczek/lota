@@ -27,7 +27,7 @@ Contents
   and installer-probe surfaces two components must keep in sync.
 * :doc:`The license boundary <../../process/license-boundary>` -- which zone each path
   belongs to, and the one-way dependency rule the gate enforces.
-* :doc:`Public API and ABI surface <api-stability>` -- what an integrator may
+* :doc:`Public API and ABI surface <../../userspace-api/stability>` -- what an integrator may
   build against, and what a change to it costs.
 
 .. toctree::
@@ -40,4 +40,4 @@ Contents
    bpf-coding
    contracts
    ../../process/license-boundary
-   api-stability
+   ../../userspace-api/stability

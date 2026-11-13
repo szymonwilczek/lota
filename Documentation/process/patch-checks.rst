@@ -15,7 +15,7 @@ commit signatures, message and patch whitespace, clang-format, gofmt,
 golangci-lint, the absence of compiled files in the index, the full
 build, include hygiene, the license boundary
 (:doc:`license-boundary`), the public API and ABI surface
-(:doc:`../contributor/development/api-stability`), the diagnostics the documentation quotes, the strict
+(:doc:`../userspace-api/stability`), the diagnostics the documentation quotes, the strict
 documentation build, and -- when the patch touches C -- the Sparse, Smatch and
 Coccinelle analyzers and the stack-frame ceiling described below.
 
