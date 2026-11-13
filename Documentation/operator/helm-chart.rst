@@ -69,7 +69,7 @@ Provide this material before installing:
   and bans (unset by default). Each named entry reaches the verifier as
   ``LOTA_READER_API_KEY`` or ``LOTA_ADMIN_API_KEY``, so no key appears in the
   pod's argv. Turning the API on without the Secret is refused at render time;
-  see :doc:`monitoring-api` for what each tier may call.
+  see :doc:`../verifier/monitoring-api` for what each tier may call.
 * **PCR policy choice (required).** Either enable ``policy.enabled`` and point
   ``policy.existingConfigMap`` or ``policy.existingSecret`` at the policy file
   (set ``policy.pubKey`` when an Ed25519 ``policy.pub`` accompanies it), or set

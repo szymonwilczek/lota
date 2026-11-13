@@ -111,7 +111,7 @@ Two fields of ``GET /api/v1/clients/{id}`` are the answering instance's own and
 differ between the two on purpose: ``pending_challenges``, which counts the
 challenges that instance is holding, and ``monotonic_counter``, the nonce
 sequence it has seen. Everything else is the fleet's answer. See
-`Documentation/operator/monitoring-api.rst <../../Documentation/operator/monitoring-api.rst>`_.
+`Documentation/verifier/monitoring-api.rst <../../Documentation/verifier/monitoring-api.rst>`_.
 
 Production deltas
 -----------------

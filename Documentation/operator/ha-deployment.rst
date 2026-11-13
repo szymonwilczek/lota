@@ -69,7 +69,7 @@ The consequences:
   ``GET /api/v1/clients`` is a fleet inventory, and it survives a restart.
 * ``GET /api/v1/clients/{id}`` answers from the same shared record, including
   when the client last attested. ``monotonic_counter`` stays this
-  instance's, and :doc:`monitoring-api` says what it is worth.
+  instance's, and :doc:`../verifier/monitoring-api` says what it is worth.
 
 What Postgres adds over ``--db`` is the shared state above, not certificate
 verification: every backend verifies AIK certificates the same way. Run each

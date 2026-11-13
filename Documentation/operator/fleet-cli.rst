@@ -13,7 +13,7 @@ re-anchors, and the audit and attestation logs.
 
 The CLI is a pure API client. It shares no code with the verifier, so any
 ``lota-fleet`` build works against any verifier that speaks the documented
-endpoint contract (:doc:`monitoring-api`), and it can run from an operator
+endpoint contract (:doc:`../verifier/monitoring-api`), and it can run from an operator
 workstation that has network access to the monitoring API only.
 
 Building

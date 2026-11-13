@@ -41,3 +41,5 @@ Contents
    contracts
    ../../process/license-boundary
    ../../userspace-api/stability
+   ../../verifier/report-format
+   ../../verifier/store
