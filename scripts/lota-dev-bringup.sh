@@ -69,6 +69,7 @@ PID_FILE="$BRINGUP_ROOT/run/lota/lota-agent.pid"
 AGENT_HELD_BY=""
 IMA_POLICY_SRC="$(dirname "$0")/../configs/ima/lota-ima-policy"
 IMA_POLICY_RUNTIME="$BRINGUP_ROOT/sys/kernel/security/ima/policy"
+VMLINUX_BTF="$BRINGUP_ROOT/sys/kernel/btf/vmlinux"
 CMDLINE="$BRINGUP_ROOT/proc/cmdline"
 EFIVARS="$BRINGUP_ROOT/sys/firmware/efi/efivars"
 SB_VAR="SecureBoot-8be4df61-93ca-11d2-aa0d-00e098032b8c"
@@ -202,7 +203,14 @@ ima_cmdline_value() {
     } END { if (set) print val }' "$CMDLINE" 2>/dev/null || true
 }
 
-if secure_boot_on; then
+# as lota_ima_appraise_built(): without CONFIG_IMA_APPRAISE,
+# ima_appraise_measurement() has no BTF entry and no appraise rule refuses
+if ! grep -qa ima_appraise_measurement "$VMLINUX_BTF" 2>/dev/null; then
+    ima_mode=none
+    warn "kernel does not appraise files (no ima_appraise_measurement in"
+    warn "$VMLINUX_BTF); tokens will say KERNEL_APPRAISAL is clear, and"
+    warn "the IMA policy is not loaded"
+elif secure_boot_on; then
     ima_mode=enforce
     info "IMA appraisal in enforce: Secure Boot makes the kernel ignore"
     info "ima_appraise="
@@ -231,7 +239,7 @@ appraises_exec() {
     } END { exit !found }'
 }
 
-if [[ -f "$IMA_POLICY_SRC" ]]; then
+if [[ "$ima_mode" != none && -f "$IMA_POLICY_SRC" ]]; then
     if ! ima_rules=$(cat "$IMA_POLICY_RUNTIME" 2>/dev/null); then
         warn "$IMA_POLICY_RUNTIME cannot be read; not loading"
         warn "$IMA_POLICY_SRC over rules that may already be there"
