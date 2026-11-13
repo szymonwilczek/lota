@@ -286,6 +286,36 @@ func TestVerifyToken_TruncatedAttestRejected(t *testing.T) {
 	}
 }
 
+func TestVerifyToken_BadAttestMagic(t *testing.T) {
+	key := generateTestKey(t)
+
+	nonce := [32]byte{0x5C}
+	validUntil := uint64(time.Now().Add(2 * time.Minute).Unix())
+	flags := uint32(0x07)
+	pcrMask := uint32(0x4001)
+	policyDigest := [32]byte{0x11, 0x22, 0x33}
+	runtimeDigest := computeRuntimeProtectDigest(nil, nil)
+
+	expectedNonce := ComputeTokenQuoteNonce(validUntil, flags, pcrMask,
+		nonce, policyDigest, runtimeDigest, 0)
+	attest := buildFakeTPMSAttest(expectedNonce[:], pcrMask,
+		bytes.Repeat([]byte{0x42}, 32))
+	attest[0] ^= 0xFF
+
+	signature := signAttest(t, key, attest)
+	tok, err := SerializeToken(validUntil, flags, nonce,
+		TPMAlgRSASSA, TPMAlgSHA256, pcrMask, policyDigest,
+		runtimeDigest, 0, nil, nil, attest, signature)
+	if err != nil {
+		t.Fatalf("SerializeToken: %v", err)
+	}
+
+	_, err = VerifyToken(tok, &key.PublicKey, nonce[:])
+	if !errors.Is(err, ErrAttestParse) || !errors.Is(err, ErrBadMagic) {
+		t.Fatalf("expected ErrAttestParse and ErrBadMagic: %v", err)
+	}
+}
+
 func TestVerifyToken_ExpiredToken(t *testing.T) {
 	key := generateTestKey(t)
 
