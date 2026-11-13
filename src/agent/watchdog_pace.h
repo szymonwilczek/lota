@@ -48,7 +48,8 @@ static inline void watchdog_pace_mark(struct watchdog_pace *pace,
  * @pace: the schedule.
  * @now_ms: the caller's clock, in ms.
  *
- * Owed at half the deadline, so one slow round still fits the rest.
+ * Owed at half the deadline, which leaves the other half to work begun
+ * just before then.
  *
  * Return: false without a deadline; true from half the deadline since
  * the last ping, or when @now_ms is before it.
