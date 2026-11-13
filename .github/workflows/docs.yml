@@ -5,10 +5,12 @@ on:
     branches: [main, lota-next]
     paths:
       - 'Documentation/**'
+      - 'scripts/check-license-boundary.sh'
       - '.github/workflows/docs.yml'
   pull_request:
     paths:
       - 'Documentation/**'
+      - 'scripts/check-license-boundary.sh'
       - '.github/workflows/docs.yml'
 
 permissions:
@@ -38,6 +40,10 @@ jobs:
 
       - name: Install documentation toolchain
         run: pip install -r Documentation/requirements.txt
+
+      # every documentation package must be permissively licensed
+      - name: Check the documentation toolchain licenses
+        run: scripts/check-license-boundary.sh --doc-packages
 
       # reStructuredText style/markup lint
       # Fails the job on any finding
