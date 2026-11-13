@@ -434,12 +434,12 @@ static int value_defect(const char *key, const char *value, char *why,
 		return -EILSEQ;
 	}
 
-	line = strlen(key) + strlen(" = ") + strlen(value) + 1;
-	if (line >= LOTA_CONFIG_MAX_LINE) {
+	line = strlen(key) + strlen(" = ") + strlen(value);
+	if (line > LOTA_CONFIG_MAX_LINE - 2) {
 		snprintf(why, why_cap,
 			 "needs a %zu-character line; the parser reads at most "
 			 "%d",
-			 line, LOTA_CONFIG_MAX_LINE - 1);
+			 line, LOTA_CONFIG_MAX_LINE - 2);
 		return -EILSEQ;
 	}
 
@@ -1059,9 +1059,8 @@ static int config_load_stream(struct lota_config *cfg, FILE *f,
 		len = strlen(line);
 		if (len > 0 && line[len - 1] != '\n' && !feof(f)) {
 			int ch;
-			fprintf(stderr,
-				"%s:%d: line exceeds %d characters, skipping\n",
-				filepath, lineno, LOTA_CONFIG_MAX_LINE - 1);
+			fprintf(stderr, "%s:%d: line exceeds %d characters\n",
+				filepath, lineno, LOTA_CONFIG_MAX_LINE - 2);
 			errors++;
 			while ((ch = fgetc(f)) != EOF && ch != '\n')
 				;
