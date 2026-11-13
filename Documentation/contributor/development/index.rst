@@ -14,13 +14,13 @@ See :doc:`../../process/branching` for the full model and the release flow.
 Contents
 ========
 
-* :doc:`Where the checks run <where-checks-run>` -- CI triggers, the Go
+* :doc:`Where the checks run <../../dev-tools/ci>` -- CI triggers, the Go
   toolchain, and dependency rules.
-* :doc:`Testing policy <testing-policy>` -- test layers and the
+* :doc:`Testing policy <../../dev-tools/testing>` -- test layers and the
   surface-specific contracts they pin.
 * :doc:`Local patch checks and the PR quality gate <../../process/patch-checks>` --
   ``check-patch``, ``format-patch``, and the documentation hints.
-* :doc:`How the fuzzers work <fuzzing>` -- Go, C, and Syzkaller fuzzing.
+* :doc:`How the fuzzers work <../../dev-tools/fuzzing>` -- Go, C, and Syzkaller fuzzing.
 * :doc:`BPF LSM program coding <bpf-coding>` -- verifier-acceptance rules and
   device/inode identity in the kernel programs.
 * :doc:`Cross-component contracts <contracts>` -- wire-format, store-migration,
@@ -33,10 +33,10 @@ Contents
 .. toctree::
    :hidden:
 
-   where-checks-run
-   testing-policy
+   ../../dev-tools/ci
+   ../../dev-tools/testing
    ../../process/patch-checks
-   fuzzing
+   ../../dev-tools/fuzzing
    bpf-coding
    contracts
    ../../process/license-boundary
