@@ -103,7 +103,7 @@ On each host, once the new hash is pinned in the verifier tier:
    PCR 14.
 #. **Confirm attestation.** The agent attests with its new hash, which the
    verifier now trusts, and returns ``VERIFY_OK``. The post-reboot checks in
-   :doc:`production-bringup/post-bringup` apply unchanged.
+   :doc:`bringup/limitations` apply unchanged.
 
 After the fleet has fully moved
 ===============================

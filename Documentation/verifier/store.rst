@@ -27,7 +27,7 @@ destructive migration fails the build, and ``PgTargetSchemaVersion`` /
 to operators by ``lota-verifier --print-versions``).
 
 The operator-facing side of this contract is
-:doc:`../operator/protocol-versions`.
+:doc:`../admin-guide/protocol-versions`.
 
 The ``ReanchorStorer`` interface (``verify/baseline.go``) has three backends
 (in-memory, SQLite, Postgres) that must stay behaviourally identical; the
@@ -171,7 +171,7 @@ are partitioned across N databases (``verify/shard.go``,
 
 Fleet-global, read-mostly state (revocations, bans, audit, attestation
 log) is not sharded; it lives on the first shard, the control database.
-The operator-facing side is :doc:`../operator/ha-deployment`.
+The operator-facing side is :doc:`../admin-guide/ha-deployment`.
 
 Connection pool and group commit
 ================================
@@ -185,7 +185,7 @@ the database's ``max_connections``, which is shared by every instance's
 pool (and every shard's, since each shard is a separate database). The
 default stays conservative (20) so an untuned multi-instance deployment
 cannot exhaust ``max_connections``; raising it is an operator trade against
-that budget, documented in :doc:`../operator/ha-deployment`.
+that budget, documented in :doc:`../admin-guide/ha-deployment`.
 
 The value is validated rather than trusted. A pool below 1 is refused at
 startup: ``database/sql`` reads 0 as *unlimited*, and the store's own

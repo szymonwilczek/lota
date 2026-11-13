@@ -22,7 +22,7 @@ Installing
 
 The agent still fails closed and is not started by the package. Complete the
 host bring-up with ``lota-install`` as for any other install path; see
-:doc:`production-bringup/index`.
+:doc:`bringup/index`.
 
 Rebuilding from the source RPM
 ==============================

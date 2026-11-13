@@ -19,7 +19,7 @@ import (
 // The fingerprint must be the one the CA compares, and with no certificate
 // the pipeline must fail rather than print a digest of nothing.
 
-const caEnrollmentPage = "../../../Documentation/operator/production-bringup/ca-enrollment.rst"
+const caEnrollmentPage = "../../../Documentation/admin-guide/bringup/ca-enrollment.rst"
 
 func pageShellBlocks(t *testing.T) []string {
 	t.Helper()

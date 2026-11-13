@@ -1082,7 +1082,8 @@ static bool next_command(FILE *fp, char *cmd, size_t cmd_size)
  */
 static void test_static_cli_is_built_without_cgo(void)
 {
-	static const char *const page = "Documentation/operator/fleet-cli.rst";
+	static const char *const page =
+		"Documentation/admin-guide/fleet-cli.rst";
 	FILE *fp;
 	char cmd[4096];
 	bool claims_static = false;

@@ -11,7 +11,7 @@
   ],
   "title": "LOTA Verifier",
   "uid": "lota-verifier",
-  "description": "Reference dashboard for the LOTA verifier: fleet attestation health, integrity signals, and verifier capacity. Ships with deploy/observability; see Documentation/operator/observability.rst.",
+  "description": "Reference dashboard for the LOTA verifier: fleet attestation health, integrity signals, and verifier capacity. Ships with deploy/observability; see Documentation/admin-guide/observability.rst.",
   "tags": ["lota", "attestation"],
   "editable": true,
   "graphTooltip": 1,

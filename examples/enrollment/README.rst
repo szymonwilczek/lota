@@ -159,7 +159,7 @@ Notes for production
   required either way: the verifier has no derivation for a PCR 14 that the
   initramfs lock did not pin. A real deployment also loads a signed policy
   that pins PCR 0/1/7; see `Production Bringup
-  <../../Documentation/operator/production-bringup/index.rst>`_
+  <../../Documentation/admin-guide/bringup/index.rst>`_
   and `policies/ <../../policies/README.rst>`_.
 - The CA holds no TPM and stores no per-host secret beyond the in-flight
   challenge. Run one per fleet (or per region); every verifier that should

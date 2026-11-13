@@ -11,7 +11,7 @@ baselined on one instance is known to another, and a revocation or ban on one
 is enforced by all. This example stands two instances up against one
 Postgres so the shared-state behaviour can be observed without a full fleet.
 
-See `Documentation/operator/ha-deployment.rst <../../Documentation/operator/ha-deployment.rst>`_ for the
+See `Documentation/admin-guide/ha-deployment.rst <../../Documentation/admin-guide/ha-deployment.rst>`_ for the
 topology and the shared-state requirements, and
 `examples/enrollment/ <../enrollment>`__ for the CA + attestation ceremony
 this example reuses.

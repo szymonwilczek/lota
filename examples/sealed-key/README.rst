@@ -150,4 +150,4 @@ The same primitive backs an opt-in at-rest hardening of the agent's own AIK
 userAuth. Enabling ``seal_aik_auth_strict`` in ``lota.conf`` stores the auth
 only sealed to the boot state, so a captured disk no longer yields it even to
 an attacker holding the same TPM. See the "Sealed keys" -
-`Documentation/operator/production-bringup/sealed-keys.rst <../../Documentation/operator/production-bringup/sealed-keys.rst>`_.
+`Documentation/admin-guide/bringup/sealed-keys.rst <../../Documentation/admin-guide/bringup/sealed-keys.rst>`_.

@@ -43,9 +43,9 @@ Operator
 Production operation starts with the bring-up document. The agent
 intentionally fails closed when required gates are missing.
 
-* :doc:`Production bring-up <operator/production-bringup/index>`
-* :doc:`Guided install (lota-install) <operator/player-install>`
-* :doc:`Verifier deployment topologies (HA) <operator/ha-deployment>`
+* :doc:`Production bring-up <admin-guide/bringup/index>`
+* :doc:`Guided install (lota-install) <admin-guide/lota-install>`
+* :doc:`Verifier deployment topologies (HA) <admin-guide/ha-deployment>`
 * PCR policy templates: :ghsrc:`policies/README.rst`
 * SELinux policy: :ghsrc:`selinux/README.rst`
 * EK root bundles: :ghsrc:`configs/ek-roots/README.rst`
@@ -62,7 +62,7 @@ issues for exploitable vulnerabilities.
 * :doc:`Security reporting <process/security-bugs>`
 * :doc:`Reproducible release verification <security/reproducible-builds>`
 * :doc:`Attestation CA signing key <security/ca-key>`
-* :doc:`Production bring-up <operator/production-bringup/index>`
+* :doc:`Production bring-up <admin-guide/bringup/index>`
 * :doc:`Performance evaluation <performance/evaluation>`
 
 TPM or attestation engineer
@@ -74,7 +74,7 @@ commitment.
 
 * :doc:`Threat model <security/threat-model>`
 * :doc:`Attestation CA signing key <security/ca-key>`
-* :doc:`Production bring-up <operator/production-bringup/index>`
+* :doc:`Production bring-up <admin-guide/bringup/index>`
 * Enrollment example: :ghsrc:`examples/enrollment/README.rst`
 * EK root bundles: :ghsrc:`configs/ek-roots/README.rst`
 * PCR policy documentation: :ghsrc:`policies/README.rst`
@@ -86,7 +86,7 @@ The kernel-facing surface lives in the BPF LSM object, loader, runtime
 measurement path, initramfs PCR14 lock, SELinux policy, and the Syzkaller
 harness.
 
-* :doc:`Production bring-up <operator/production-bringup/index>`
+* :doc:`Production bring-up <admin-guide/bringup/index>`
 * :doc:`Kernel test policy <contributor/development/index>`
 * SELinux policy: :ghsrc:`selinux/README.rst`
 * Syzkaller harness: :ghsrc:`syzkaller/README.rst`
@@ -117,7 +117,7 @@ reproducible and verified against signed manifests.
 
 * :doc:`Reproducible builds <security/reproducible-builds>`
 * :doc:`Release and branch flow <process/branching>`
-* :doc:`Production install gates <operator/production-bringup/index>`
+* :doc:`Production install gates <admin-guide/bringup/index>`
 * SELinux policy: :ghsrc:`selinux/README.rst`
 * systemd units: :ghsrc:`systemd/`
 * udev rules: :ghsrc:`configs/udev/99-lota-tpm.rules`

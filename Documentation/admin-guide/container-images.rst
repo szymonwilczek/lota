@@ -73,7 +73,7 @@ relevant knobs are make variables:
 
 The build is reproducible: ``SOURCE_DATE_EPOCH`` is pinned to the HEAD commit
 time, matching the rest of the reproducible-build posture
-(:doc:`/security/reproducible-builds`). Each image carries an SPDX SBOM and
+(:doc:`../security/reproducible-builds`). Each image carries an SPDX SBOM and
 OCI ``version``/``source``/``licence`` labels.
 
 To inspect an image locally with Podman, without pushing to a registry, point
@@ -139,7 +139,7 @@ names both roads to a binary that carries the support -- the tagged host build
 and this image variant -- so a token configuration pointed at the wrong tag
 stops at startup.
 
-:doc:`production-bringup/ca-enrollment` covers the flags themselves and the
+:doc:`bringup/ca-enrollment` covers the flags themselves and the
 key ceremony.
 
 Verifying provenance

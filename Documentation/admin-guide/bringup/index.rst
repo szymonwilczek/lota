@@ -20,7 +20,7 @@ kernel cmdline provisioned at install, IMA policy from
 This document is the operator/fleet reference. Somebody installing the agent on
 one machine by hand uses the guided, reboot-resumable ``lota-install`` instead --
 same gates, consent prompts and live-state probes -- see
-:doc:`../player-install`, including the list of inputs
+:doc:`../lota-install`, including the list of inputs
 the operator must ship for it.
 
 Contents
@@ -34,7 +34,7 @@ Contents
   enrolling a host, and the re-anchor and rotation surfaces.
 * :doc:`Sealed keys (offline local attestation) <sealed-keys>` -- sealing
   secrets to boot state and anti-rollback.
-* :doc:`What still fails, and operational constraints <post-bringup>` --
+* :doc:`What still fails, and operational constraints <limitations>` --
   post-bring-up failures, the dev-path threat model, and restart/VM caveats.
 
 .. toctree::
@@ -44,6 +44,6 @@ Contents
    manual-reference
    ca-enrollment
    sealed-keys
-   post-bringup
+   limitations
    ../../dev-tools/vm-testing
    ../../agent/lifecycle

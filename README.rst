@@ -54,8 +54,8 @@ Quick start
 * Install LOTA on your PC: see
   `Documentation/player/index.rst <Documentation/player/index.rst>`_
 * Bring up a production host: see
-  `Documentation/operator/production-bringup/index.rst
-  <Documentation/operator/production-bringup/index.rst>`_
+  `Documentation/admin-guide/bringup/index.rst
+  <Documentation/admin-guide/bringup/index.rst>`_
 * Build the tree: ``make all``
 * Report a vulnerability: see `SECURITY.md <SECURITY.md>`_
 * Contribute a patch: see `CONTRIBUTING.rst <CONTRIBUTING.rst>`_

@@ -342,7 +342,7 @@ against a known-good baseline. Three paths satisfy that contract:
    blocked -- but flags the device for post-fact operator review
    (``GET /api/v1/reanchor/review``, cleared with
    ``POST /api/v1/clients/{id}/reanchor-review-ack``). See
-   `Production Bringup <../Documentation/operator/production-bringup/index.rst>`_.
+   `Production Bringup <../Documentation/admin-guide/bringup/index.rst>`_.
    This is a diverse-fleet convenience only; do not enable it where raw PCR 0/1/7 are pinned in policy.
 
 Fleet profile

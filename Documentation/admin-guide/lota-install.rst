@@ -7,7 +7,7 @@ LOTA guided install (``lota-install``)
 
 ``lota-install`` is the single-machine path onto a LOTA-attested host: one guided,
 reboot-resumable command instead of the operator checklist in
-:doc:`production-bringup/index`. It drives the
+:doc:`bringup/index`. It drives the
 same hard requirements the agent enforces at startup, but it explains every
 change before making it, asks for consent, and survives the reboot the install
 inherently needs.
@@ -24,7 +24,7 @@ The three install surfaces and their audiences:
    * - ``lota-install``
      - Somebody installing one machine by hand
      - Guided stages, consent prompts, reboot resume
-   * - :doc:`production bring-up <production-bringup/index>`
+   * - :doc:`production bring-up <bringup/index>`
      - Operator bringing up fleet hosts, CA and verifier
      - Full manual reference
    * - ``scripts/lota-dev-bringup.sh``
@@ -434,3 +434,12 @@ report to the operator's verifier carries:
 During enrollment only, the attestation CA additionally receives the TPM's EK
 certificate. No file contents, browsing data or account identity are read or
 transmitted.
+
+Installer probes and agent gates
+================================
+
+The guided installer's stage probes (``installer/probe.c``) must mirror the
+agent's startup gates in ``src/agent/bpf_loader.c``. When a gate changes,
+change the matching probe and the pinned parser tests in
+``tests/test_installer_probe.c`` (part of ``make test-unit``); otherwise the
+installer reports a host green that the agent would refuse to run on.

@@ -9,9 +9,9 @@ The verifier exposes a REST monitoring and fleet-management API on the
 listener configured with ``--http-addr``. This page is the wire contract:
 paths, methods, authentication tiers, request payloads, response shapes
 and status codes. For task-oriented usage prefer the
-:doc:`lota-fleet CLI <../operator/fleet-cli>`, which wraps every endpoint below; the
+:doc:`lota-fleet CLI <../admin-guide/fleet-cli>`, which wraps every endpoint below; the
 operational semantics of enrollment, re-anchoring and revocation are
-covered in :doc:`../operator/production-bringup/ca-enrollment`.
+covered in :doc:`../admin-guide/bringup/ca-enrollment`.
 
 Conventions
 ===========
@@ -75,7 +75,7 @@ bans, audit entries, attestation records, and the results of the ban and
 unban verbs -- carries a ``tenant``. A deployment that assigns no tenants
 reads ``default`` there on every record, which is the tenant an
 unassigned device belongs to, not a missing value. See
-:doc:`../operator/multi-tenancy`.
+:doc:`../admin-guide/multi-tenancy`.
 
 State an instance does not hold
 -------------------------------
@@ -163,7 +163,7 @@ while the process is still there. The window defaults to zero -- the API
 goes as soon as it is idle -- and behind a load balancer it belongs at one
 health-check interval or more.
 
-A reporting instance (``--report-only``, :doc:`../operator/ha-deployment`) answers **200**
+A reporting instance (``--report-only``, :doc:`../admin-guide/ha-deployment`) answers **200**
 with ``"mode": "reporting"`` and ``"listening": false``: it binds no
 attestation listener by design, so the missing listener is the shape of the
 deployment and not a fault. ``mode`` is absent on an instance that attests, so
@@ -448,7 +448,7 @@ GET /api/v1/reanchor/review
 ---------------------------
 
 Reader. Clients that re-anchored on the Low-Firmware-Assurance path and
-await operator review (see :doc:`../operator/production-bringup/ca-enrollment`).
+await operator review (see :doc:`../admin-guide/bringup/ca-enrollment`).
 **200**::
 
    {"pending_review": ["host-0001"], "count": 1}

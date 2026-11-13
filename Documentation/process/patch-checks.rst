@@ -216,5 +216,5 @@ Scripts are split by audience: developer-workflow tooling (``check-*``,
 ``format-patch``, the CI gate scripts) maps to the contributor docs above,
 while operator provisioning and host bring-up scripts (``lota-*``,
 ``setup-fsverity.sh``) are deployment steps and map to the operator-facing
-:doc:`production bring-up <../operator/production-bringup/index>` and the
+:doc:`production bring-up <../admin-guide/bringup/index>` and the
 relevant example READMEs instead.

@@ -166,5 +166,5 @@ Enrollment
 Assigning tenants at enrollment is a property of the attestation CA: the
 enterprise path adds a tenant column to the EK pin manifest, and the gaming
 path issues a per-tenant enrollment token. See
-:doc:`production-bringup/ca-enrollment` for
+:doc:`bringup/ca-enrollment` for
 the enrollment ceremony these hook into.

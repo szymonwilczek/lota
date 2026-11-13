@@ -29,7 +29,7 @@ Either pass ``--bench`` on the command line or set it in
 The key is read at startup only. ``systemctl reload lota-agent`` leaves
 it as it was and logs ``bench changes on the next start``; on a host
 where PCR 14 binds the agent, the next start is the next boot (see
-:doc:`../operator/agent-update-reboot`). A daemon that starts without
+:doc:`../admin-guide/agent-update`). A daemon that starts without
 it removes a ``bench.json`` an earlier run left behind.
 
 Where it shows

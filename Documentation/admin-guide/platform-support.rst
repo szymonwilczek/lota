@@ -103,7 +103,7 @@ Firmware and boot
    * - UEFI + Secure Boot
      - The reference target. shim measures the MOK state into PCR 14 before the
        initramfs, and the boot commitment is baseline-aware over it (see
-       :doc:`production-bringup/ca-enrollment`). The verifier replays the TPM
+       :doc:`bringup/ca-enrollment`). The verifier replays the TPM
        event log and establishes Secure Boot from the log rather than the
        self-report. A boot chain without shim (own PK/KEK/db, a directly signed
        systemd-boot or UKI) measures nothing into PCR 14; the boot commitment
@@ -111,7 +111,7 @@ Firmware and boot
    * - UEFI without Secure Boot
      - The agent runs, but the firmware root of trust is weaker. Pass
        ``lockdown=integrity`` on the kernel command line so the BPF-load gate is
-       satisfied (see :doc:`production-bringup/gate-matrix`).
+       satisfied (see :doc:`bringup/gate-matrix`).
    * - Legacy BIOS / CSM
      - **Unsupported.** BIOS measures neither the firmware and Secure Boot
        state the verifier pins nor an EFI variable the event log can carry, so

@@ -17,7 +17,7 @@
 /*
  * Attestation report wire version. The verifier accepts exactly one, so agents
  * and verifiers cross a layout change together.
- * See Documentation/operator/protocol-versions.rst.
+ * See Documentation/admin-guide/protocol-versions.rst.
  */
 #define LOTA_REPORT_VERSION_MAJOR 1
 #define LOTA_REPORT_VERSION_MINOR 0

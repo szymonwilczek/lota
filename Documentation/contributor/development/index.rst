@@ -23,8 +23,6 @@ Contents
 * :doc:`How the fuzzers work <../../dev-tools/fuzzing>` -- Go, C, and Syzkaller fuzzing.
 * :doc:`BPF LSM program coding <../../bpf/coding>` -- verifier-acceptance rules and
   device/inode identity in the kernel programs.
-* :doc:`Cross-component contracts <contracts>` -- wire-format, store-migration,
-  and installer-probe surfaces two components must keep in sync.
 * :doc:`The license boundary <../../process/license-boundary>` -- which zone each path
   belongs to, and the one-way dependency rule the gate enforces.
 * :doc:`Public API and ABI surface <../../userspace-api/stability>` -- what an integrator may
@@ -38,7 +36,6 @@ Contents
    ../../process/patch-checks
    ../../dev-tools/fuzzing
    ../../bpf/coding
-   contracts
    ../../process/license-boundary
    ../../userspace-api/stability
    ../../verifier/report-format

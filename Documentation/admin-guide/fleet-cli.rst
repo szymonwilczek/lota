@@ -133,7 +133,7 @@ removing a device cannot shed a ban. The action is audited
 
 ``reanchor-review`` is the post-fact review queue for self-service
 re-anchors taken on the Low-Firmware-Assurance path; see the enrollment
-document (:doc:`production-bringup/ca-enrollment`) for when the verifier
+document (:doc:`bringup/ca-enrollment`) for when the verifier
 puts a client in that queue. ``reanchor-review ack`` takes ``-reason`` and
 ``-actor`` like the other trust changes, because it is the record that a
 person looked; a client with nothing queued is refused, so an
@@ -237,5 +237,5 @@ tenant, are omitted -- the verifier leaves them out of the response, so
 ``--json`` prints an object without those keys.
 
 Tenants are assigned by the attestation CA at enrollment and written into the
-device certificate; see :doc:`production-bringup/ca-enrollment` for the
+device certificate; see :doc:`bringup/ca-enrollment` for the
 assignment mechanism.
