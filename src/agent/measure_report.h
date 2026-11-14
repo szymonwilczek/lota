@@ -24,6 +24,13 @@
 
 #define MEASURE_REPORT_STATEMENT_MAX STANDING_ANSWER_STATEMENT_MAX
 
+/* the longest line format of measure_report_line() */
+#define MEASURE_REPORT_ABSENT_FMT                                        \
+	"runtime image measurement failed for pid=%u, which is not the " \
+	"caller (pid=%u); the token reports partial coverage: %s"
+/* room its text takes before the reason, with two 10-digit pids */
+#define MEASURE_REPORT_PREFIX_MAX (sizeof(MEASURE_REPORT_ABSENT_FMT) + 2 * 10)
+
 /**
  * enum measure_answer - A round's verdict on one protected process.
  * @MEASURE_ANSWER_MEASURED: every mapped object measured.
@@ -190,11 +197,8 @@ static inline void measure_report_line(char *out, size_t cap, int answer,
 			 pid, reason);
 		return;
 	case MEASURE_ANSWER_ABSENT:
-		snprintf(out, cap,
-			 "runtime image measurement failed for pid=%u, which "
-			 "is not the caller (pid=%u); the token reports "
-			 "partial coverage: %s",
-			 pid, caller_pid, reason);
+		snprintf(out, cap, MEASURE_REPORT_ABSENT_FMT, pid, caller_pid,
+			 reason);
 		return;
 	case MEASURE_ANSWER_PARTIAL:
 		snprintf(out, cap,

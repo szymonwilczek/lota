@@ -56,6 +56,9 @@ Every token round measures the code each protected process has mapped
 * ``runtime image measurement failed for the requesting pid=P: why``, at
   ``error``: the round is refused.
 
+The ``why`` part names the object; a path longer than 319 bytes, of the
+executable or of a mapped object, is cut to ``...`` and its last 316 bytes.
+
 A line is written when the process's answer differs from its last one,
 answer and text compared, so a new unmeasurable object in the same answer
 is written too. The first answer for a process is written unless it is

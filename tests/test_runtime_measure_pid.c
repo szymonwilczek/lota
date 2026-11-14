@@ -21,6 +21,9 @@
 #include <sys/mman.h>
 #include <sys/resource.h>
 #include <sys/sysmacros.h>
+#include <sys/stat.h>
+#include <sys/wait.h>
+#include <signal.h>
 
 #include "test.h"
 #include "../src/agent/runtime_image_measure.h"
@@ -179,6 +182,149 @@ static int digest_is_zero(const uint8_t d[32])
 	return 1;
 }
 
+static void test_long_path_keeps_tail(void)
+{
+	char path[401];
+	char out[LOTA_RT_MAP_PATH_MAX];
+	size_t len;
+
+	TEST("a path past the buffer keeps its tail, marked");
+	memset(path, 'd', sizeof(path) - 1);
+	path[0] = '/';
+	memcpy(path + sizeof(path) - 10, "/game.bin", 10);
+	lota_rt_path_keep_tail(path, out, sizeof(out));
+	len = strlen(out);
+	if (len != sizeof(out) - 1 ||
+	    strncmp(out, LOTA_RT_PATH_CUT, strlen(LOTA_RT_PATH_CUT)) != 0 ||
+	    strcmp(out + len - 9, "/game.bin") != 0 ||
+	    strcmp(out + strlen(LOTA_RT_PATH_CUT),
+		   path + strlen(path) - (len - strlen(LOTA_RT_PATH_CUT))) !=
+		    0) {
+		FAIL(out);
+		return;
+	}
+
+	lota_rt_path_keep_tail("/usr/bin/game", out, sizeof(out));
+	if (strcmp(out, "/usr/bin/game") != 0) {
+		FAIL("a short path is changed");
+		return;
+	}
+	PASS();
+}
+
+static int copy_file(const char *from, const char *to)
+{
+	char buf[8192];
+	ssize_t n;
+	int in, out, ret = 0;
+
+	in = open(from, O_RDONLY | O_CLOEXEC);
+	if (in < 0)
+		return -1;
+	out = open(to, O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC, 0755);
+	if (out < 0) {
+		close(in);
+		return -1;
+	}
+	while ((n = read(in, buf, sizeof(buf))) > 0)
+		if (write(out, buf, (size_t)n) != n)
+			ret = -1;
+	if (n < 0)
+		ret = -1;
+	close(in);
+	if (close(out) != 0)
+		ret = -1;
+	return ret;
+}
+
+/* each component is 100 bytes: four of them put the path past the buffer */
+static void test_long_path_process_is_measured(void)
+{
+	static struct lota_rt_object_record objs[LOTA_RUNTIME_IMAGE_MAX_MODULES];
+	char dir[PATH_MAX], exe[PATH_MAX] = "", link[PATH_MAX];
+	size_t n = 0, len, root_len;
+	uint8_t digest[32];
+	int found = 0, ret = -1, d = 0;
+	pid_t pid = -1;
+
+	TEST("a process at a path past the buffer is measured, tail kept");
+	snprintf(dir, sizeof(dir), "/tmp/lota-longpath.XXXXXX");
+	if (!mkdtemp(dir)) {
+		FAIL("mkdtemp");
+		return;
+	}
+	root_len = strlen(dir);
+	for (d = 0; d < 4; d++) {
+		len = strlen(dir);
+		if (len + 102 >= sizeof(dir))
+			goto out;
+		dir[len] = '/';
+		memset(dir + len + 1, 'd', 100);
+		dir[len + 101] = '\0';
+		if (mkdir(dir, 0700) != 0) {
+			dir[len] = '\0';
+			goto out;
+		}
+	}
+	len = strlen(dir);
+	if (len + sizeof("/game.bin") > sizeof(exe))
+		goto out;
+	memcpy(exe, dir, len);
+	memcpy(exe + len, "/game.bin", sizeof("/game.bin"));
+	if (copy_file("/bin/sleep", exe) != 0)
+		goto out;
+
+	pid = fork();
+	if (pid == 0) {
+		execl(exe, "game.bin", "30", (char *)NULL);
+		_exit(127);
+	}
+	if (pid < 0)
+		goto out;
+	for (int i = 0; i < 200; i++) {
+		char proc[64];
+		ssize_t l;
+
+		snprintf(proc, sizeof(proc), "/proc/%d/exe", (int)pid);
+		l = readlink(proc, link, sizeof(link) - 1);
+		if (l > 0) {
+			link[l] = '\0';
+			if (strcmp(link, exe) == 0)
+				break;
+		}
+		usleep(10000);
+	}
+
+	ret = lota_runtime_measure_pid_objects(pid, digest, NULL, NULL, objs,
+					       &n);
+	for (size_t i = 0; i < n; i++) {
+		len = strlen(objs[i].entry.path);
+		if (strcmp(objs[i].entry.soname, "game.bin") == 0 &&
+		    len == sizeof(objs[i].entry.path) - 1 &&
+		    strncmp(objs[i].entry.path, LOTA_RT_PATH_CUT,
+			    strlen(LOTA_RT_PATH_CUT)) == 0 &&
+		    strcmp(objs[i].entry.path + len - 9, "/game.bin") == 0)
+			found = 1;
+	}
+
+out:
+	if (pid > 0) {
+		kill(pid, SIGKILL);
+		waitpid(pid, NULL, 0);
+	}
+	if (exe[0])
+		unlink(exe);
+	while (strlen(dir) > root_len) {
+		rmdir(dir);
+		*strrchr(dir, '/') = '\0';
+	}
+	rmdir(dir);
+	if (ret != -ENAMETOOLONG && found)
+		PASS();
+	else
+		FAIL("long path refused or not cut to its tail");
+}
+
 int main(void)
 {
 	uint8_t digest[32];
@@ -187,6 +333,9 @@ int main(void)
 	int ret;
 
 	printf("Kernel-anchored per-process measurement tests:\n");
+
+	test_long_path_keeps_tail();
+	test_long_path_process_is_measured();
 
 	TEST("measure_pid never reports success with an absent digest");
 	memset(digest, 0, sizeof(digest));

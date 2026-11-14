@@ -131,6 +131,30 @@ int main(void)
 	else
 		FAIL("deleted suffix left on the path");
 
+	TEST("a path past the buffer keeps its tail and its soname");
+	{
+		char line[640];
+		char path[421];
+		size_t len;
+
+		memset(path, 'd', sizeof(path) - 1);
+		path[0] = '/';
+		memcpy(path + sizeof(path) - 10, "/game.bin", 10);
+		snprintf(line, sizeof(line),
+			 "55a3c0e00000-55a3c0e21000 r-xp 00001000 fd:01 "
+			 "1234567 %s (deleted)\n",
+			 path);
+		rc = lota_rt_parse_maps_line(line, &e);
+		len = strlen(e.path);
+		if (rc == 1 && strcmp(e.soname, "game.bin") == 0 &&
+		    len == sizeof(e.path) - 1 &&
+		    strncmp(e.path, "...", 3) == 0 &&
+		    strcmp(e.path + 3, path + strlen(path) - (len - 3)) == 0)
+			PASS();
+		else
+			FAIL("long path refused or not cut to its tail");
+	}
+
 	TEST("deleted suffix is stripped from soname");
 	rc = lota_rt_parse_maps_line(
 		"55a3c0e00000-55a3c0e21000 r-xp 00001000 fd:01 1234567 "
