@@ -9,11 +9,13 @@ Verifier
 host that connects, checks the TPM quote and the boot evidence in the reply
 against the attestation CA, the PCR policy and the host's pinned baseline, and
 answers with a verdict. The agent turns a passing verdict into the tokens a
-title reads. The source is under :ghsrc:`src/verifier`.
+title reads. Its options are in :doc:`command-line`, and the source is under
+:ghsrc:`src/verifier`.
 
 .. toctree::
    :maxdepth: 1
 
+   command-line
    report-format
    store
    monitoring-api

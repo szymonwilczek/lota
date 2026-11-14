@@ -591,7 +591,7 @@ Verifier side
 Each verifier of the publisher names the CA certificate with
 ``-aik-ca-cert`` and refuses a report whose AIK certificate does not chain
 to it; ``-aik-crl`` revokes single AIK certificates
-(:ghsrc:`src/verifier/main.go`). The baseline re-anchor paths and the
+(:doc:`../../verifier/command-line`). The baseline re-anchor paths and the
 operator actions on a client are in :doc:`../../verifier/index`.
 
 The commands below run from any host that reaches the verifier's monitoring
