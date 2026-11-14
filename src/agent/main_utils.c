@@ -186,9 +186,11 @@ void print_usage(const char *prog, const char *default_bpf_path,
 	       "one\n");
 	printf("                    publisher, named by the SHA-256 of their "
 	       "CA\n");
-	printf("                    trust anchor's public key. Nothing "
+	printf("                    trust anchor's public key. The agent "
 	       "enrolls\n");
-	printf("                    with a publisher before this\n");
+	printf("                    with no publisher on its own before "
+	       "this;\n");
+	printf("                    --enroll records it too\n");
 	printf("  --list-publishers Show every publisher this machine "
 	       "answers to,\n");
 	printf("                    what it stores for each and when it was "

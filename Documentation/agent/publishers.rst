@@ -209,7 +209,8 @@ Listing
 those that hold a consent record alone; consent creates the directory and
 nothing removes it but ``--forget-publisher``. For each it prints:
 
-* the time of consent, or that nothing enrolls without it;
+* the time of consent, or that the agent does not enroll the publisher on
+  its own without it;
 * the CA endpoint it enrolled with, ``not yet``, or that the record does not
   read, with the file and the ``--reenroll`` command;
 * the AIK handle and the certificate's remaining validity;

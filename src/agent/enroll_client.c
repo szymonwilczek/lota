@@ -1257,7 +1257,8 @@ static void print_publisher(const struct publisher_entry *e,
 		strftime(when, sizeof(when), "%Y-%m-%d %H:%M:%SZ", &tm);
 		printf("  agreed to      %s\n", when);
 	} else {
-		printf("  agreed to      no (nothing enrolls until it is)\n");
+		printf("  agreed to      no (the agent does not enroll it on "
+		       "its own)\n");
 	}
 
 	if (e->enrolled) {
