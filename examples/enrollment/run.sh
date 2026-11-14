@@ -26,29 +26,64 @@ POLICY="${POLICY:-$HERE/../../policies/testing.yaml}"
 CA_ADDR="${CA_ADDR:-127.0.0.1:8444}"
 VERIFIER_ADDR="${VERIFIER_ADDR:-127.0.0.1:9443}"
 
+# a listener on the host itself or on a wildcard address holds host:port;
+# any listener on the port holds a wildcard or empty host
 addr_in_use() {
-    local host=${1%%:*} port=${1##*:}
+    local host=${1%:*} port=${1##*:}
 
     if command -v ss >/dev/null 2>&1; then
-        ss -ltnH "sport = :$port" 2>/dev/null | grep -q .
+        ss -ltnH "sport = :$port" 2>/dev/null | awk -v h="$host" '
+            function bare(a) {
+                sub(/%[^\]]*/, "", a)
+                gsub(/^\[|\]$/, "", a)
+                return a
+            }
+            {
+                a = $4
+                sub(/:[^:]*$/, "", a)
+                a = bare(a)
+                w = bare(h)
+                if (w == "localhost" && (a == "127.0.0.1" || a == "::1"))
+                    f = 1
+                if (a == w || a == "0.0.0.0" || a == "::" || a == "*" ||
+                    w == "" || w == "0.0.0.0" || w == "::")
+                    f = 1
+            }
+            END { exit !f }'
         return
     fi
-    (exec 3<>"/dev/tcp/$host/$port") 2>/dev/null
+    (exec 3<>"/dev/tcp/${host:-127.0.0.1}/$port") 2>/dev/null
 }
 
+# the hint is the first free port of the next 100 on the same host,
+# other than the port the demo's other address takes
 refuse_if_taken() {
-    local var=$1 addr=$2
+    local var=$1 addr=$2 other=${3##*:}
+    local host=${addr%:*} port=${addr##*:} try free=""
 
     addr_in_use "$addr" || return 0
     echo "$addr is already in use, and the demo will not take it from" \
          "whatever holds it." >&2
+    if [[ "$port" =~ ^[0-9]+$ ]]; then
+        for ((try = port + 1; try <= 65535 && try <= port + 100; try++)); do
+            [ "$try" = "$other" ] && continue
+            if ! addr_in_use "$host:$try"; then
+                free=$try
+                break
+            fi
+        done
+    fi
+    if [ -z "$free" ]; then
+        echo "Set $var to a free host:port." >&2
+        exit 1
+    fi
     echo "Give the demo an address of its own:" >&2
-    echo "  $var=127.0.0.1:1${addr##*:} ./$(basename "$0")" >&2
+    echo "  $var=$host:$free ./$(basename "$0")" >&2
     exit 1
 }
 
-refuse_if_taken CA_ADDR "$CA_ADDR"
-refuse_if_taken VERIFIER_ADDR "$VERIFIER_ADDR"
+refuse_if_taken CA_ADDR "$CA_ADDR" "$VERIFIER_ADDR"
+refuse_if_taken VERIFIER_ADDR "$VERIFIER_ADDR" "$CA_ADDR"
 
 agent="$BIN/lota-agent"
 ca="$BIN/lota-attest-ca"
