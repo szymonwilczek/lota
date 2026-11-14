@@ -94,7 +94,9 @@ void print_usage(const char *prog, const char *default_bpf_path,
 	       "re-enrolling)\n");
 	printf("  --reprovision-aik Rotate + re-seal the AIK auth after a "
 	       "boot-state\n");
-	printf("                    change (strict recovery); then re-enroll\n");
+	printf("                    change (strict recovery); names a "
+	       "--reenroll only\n");
+	printf("                    for a key that moved\n");
 	printf("  --seal-persist-primary\n");
 	printf("                    Persist the seal storage primary at a handle "
 	       "so\n");
