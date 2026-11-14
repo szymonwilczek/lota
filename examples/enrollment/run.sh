@@ -19,8 +19,7 @@ BUILD_DIR="${LOTA_BUILD_DIR:-$HERE/../../build}"
 BIN="${BIN:-$BUILD_DIR}"
 CA_DIR="${CA_DIR:-$HERE/ca}"
 EK_ROOT="${EK_ROOT:?set it to a manufacturer root, or a pinned bundle dir}"
-RUN_DIR="${RUN_DIR:-$(mktemp -d "${TMPDIR:-/tmp}/lota-enrollment.XXXXXX")}"
-STATE_DB="${STATE_DB:-$RUN_DIR/verifier-state.sqlite}"
+RUN_DIR="${RUN_DIR:-}"
 POLICY="${POLICY:-$HERE/../../policies/testing.yaml}"
 
 CA_ADDR="${CA_ADDR:-127.0.0.1:8444}"
@@ -103,7 +102,13 @@ done
     echo "missing verifier policy: $POLICY" >&2
     exit 1
 }
-mkdir -p "$RUN_DIR"
+# made after the refusals, so a refused start leaves no directory
+if [ -n "$RUN_DIR" ]; then
+    mkdir -p "$RUN_DIR"
+else
+    RUN_DIR=$(mktemp -d "${TMPDIR:-/tmp}/lota-enrollment.XXXXXX")
+fi
+STATE_DB="${STATE_DB:-$RUN_DIR/verifier-state.sqlite}"
 
 # the publisher id: SHA-256 of ca.crt's SPKI
 publisher_id() {

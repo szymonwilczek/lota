@@ -106,9 +106,9 @@ Running the demo
 
 ``RUN_DIR``, ``STATE_DB``, ``POLICY``
   The verifier's working directory, a new ``lota-enrollment.*`` under
-  ``$TMPDIR`` or ``/tmp`` by default; its state database, by default
-  ``verifier-state.sqlite`` there; and its policy, by default
-  ``policies/testing.yaml``.
+  ``$TMPDIR`` or ``/tmp`` by default, made once the checks pass; its state
+  database, by default ``verifier-state.sqlite`` there; and its policy, by
+  default ``policies/testing.yaml``. The directory is kept after the run.
 
 The script then runs four steps:
 
