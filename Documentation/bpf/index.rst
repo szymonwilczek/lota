@@ -39,7 +39,7 @@ After the load, in this order:
    refused in every mode``.
 #. ``guarded_files`` gets the ``cgroup.kill`` and ``cgroup.freeze`` files of
    the agent's cgroup and its ancestors, and is frozen. With no unified
-   cgroup hierarchy, or no such file, the map stays empty and is not frozen.
+   cgroup hierarchy, or no such file, the map is frozen empty.
 #. The startup policy writes ``lota_config`` (`Mode and switches`_).
 #. Each program is attached. The start fails when one does not attach, or
    when any of ``lota_ptrace_access_check``, ``lota_agent_exit``,
@@ -282,7 +282,7 @@ Maps
      - Trusted libraries by device and inode (``trust_lib``).
    * - ``guarded_files``
      - hash, 64
-     - Guarded cgroup files, written at load.
+     - Guarded cgroup files, written at load and frozen.
    * - ``mapped_exec``
      - hash, 16384
      - Files the agent pinned while they are mapped.

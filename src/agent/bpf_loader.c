@@ -636,13 +636,14 @@ int bpf_loader_verify_kernel_runtime_hardening(bool allow_mutable_rootfs)
 /*
  * Arm guarded_files with the agent's cgroup.kill and cgroup.freeze and each
  * ancestor's: a write there SIGKILLs or stops the agent past lota_task_kill.
- * No unified hierarchy is not a failure; any other error is.
+ * The map is frozen, empty or not. No unified hierarchy is not a failure; any
+ * other error is.
  */
 static int arm_kill_guard(struct bpf_loader_ctx *ctx)
 {
 	struct cgroup_guard_file files[LOTA_CGROUP_GUARD_MAX];
 	char cgroup_path[PATH_MAX];
-	int count;
+	int count = 0;
 	int ret;
 
 	ret = cgroup_guard_self_path("/proc/self/cgroup", cgroup_path,
@@ -650,7 +651,7 @@ static int arm_kill_guard(struct bpf_loader_ctx *ctx)
 	if (ret == -ENOENT) {
 		lota_info(
 			"No unified cgroup hierarchy: no cgroup road to guard");
-		return 0;
+		goto freeze;
 	}
 	if (ret < 0) {
 		lota_err("Failed to read the agent's own cgroup: %s",
@@ -668,7 +669,7 @@ static int arm_kill_guard(struct bpf_loader_ctx *ctx)
 	if (count == 0) {
 		lota_info("cgroup %s carries no cgroup.kill or cgroup.freeze",
 			  cgroup_path);
-		return 0;
+		goto freeze;
 	}
 
 	for (int i = 0; i < count; i++) {
@@ -685,6 +686,7 @@ static int arm_kill_guard(struct bpf_loader_ctx *ctx)
 		}
 	}
 
+freeze:
 	if (bpf_map_freeze(ctx->guarded_files_fd) < 0) {
 		ret = -errno;
 		lota_err("Failed to freeze guarded_files map: %s",
@@ -692,8 +694,9 @@ static int arm_kill_guard(struct bpf_loader_ctx *ctx)
 		return ret;
 	}
 
-	lota_info("Kill guard armed on %d cgroup file(s) above %s", count,
-		  cgroup_path);
+	if (count > 0)
+		lota_info("Kill guard armed on %d cgroup file(s) above %s",
+			  count, cgroup_path);
 	return 0;
 }
 
