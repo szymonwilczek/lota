@@ -54,9 +54,9 @@ it from ``MODULE``. It then:
 
 #. writes 32 random bytes to ``pseudonym.key``, unless the file exists.
 
-Files are created with umask 077. Run the script on a directory without
-``tokens/``: a second run adds another token with the same label, and the
-later steps pick a token by its label alone. The script ends by printing the
+Files are created with umask 077. The script refuses a directory whose
+``tokens/`` already holds a token, since the later steps pick a token by its
+label alone. The script ends by printing the
 build and run commands with the module it found and a build directory from
 ``BUILD_DIR``, else ``LOTA_BUILD_DIR``, else ``build/`` of the repository.
 
