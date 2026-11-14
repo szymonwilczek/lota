@@ -1620,6 +1620,22 @@ int tpm_provision_aik(struct tpm_context *ctx)
 	return tpm_aik_save_new_key_metadata(ctx);
 }
 
+int tpm_load_aik(struct tpm_context *ctx)
+{
+	int ret;
+
+	if (!ctx || !ctx->initialized)
+		return -EINVAL;
+
+	ret = aik_exists(ctx, NULL);
+	if (ret < 0)
+		return ret;
+	if (ret == 0)
+		return -ENXIO;
+
+	return tpm_aik_load_auth(ctx);
+}
+
 /* The key did not change: a loaded record is written back as it is. */
 static int tpm_aik_save_auth_rotation_metadata(struct tpm_context *ctx)
 {

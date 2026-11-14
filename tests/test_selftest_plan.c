@@ -123,6 +123,17 @@ static void test_the_tally_counts_what_it_is_told(void)
 	      "a pass, a failure and a skip are counted apart");
 }
 
+/* a key with no authorization record is left for the daemon to rotate */
+static void test_load_plan(void)
+{
+	CHECK(selftest_aik_load_plan(0) == SELFTEST_AIK_LOAD_QUOTE,
+	      "a loaded authorization is quoted with");
+	CHECK(selftest_aik_load_plan(-ENOENT) == SELFTEST_AIK_LOAD_SKIP,
+	      "a key with no authorization record is skipped");
+	CHECK(selftest_aik_load_plan(-EIO) == SELFTEST_AIK_LOAD_FAIL,
+	      "a failed load is a failure");
+}
+
 /* --test-tpm checks PCR 14 and leaves it to the daemon to extend */
 static void test_check_writes_nothing(void)
 {
@@ -158,6 +169,7 @@ int main(void)
 	test_nothing_failed_is_success();
 	test_the_tally_counts_what_it_is_told();
 	test_check_writes_nothing();
+	test_load_plan();
 
 	if (g_failures) {
 		fprintf(stderr, "\n%d test(s) failed\n", g_failures);

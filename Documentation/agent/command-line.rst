@@ -181,7 +181,7 @@ TPM and sealing
 The TPM verbs are described in :doc:`tpm`.
 
 ``--test-tpm``, ``-t``
-  Reports on the TPM operations and exits. It creates no persistent key; it
+  Reports on the TPM operations and exits. It creates or replaces no key; it
   skips the quote when the attestation handle is free. It checks PCR 14
   against this binary's commitment and never extends it.
 

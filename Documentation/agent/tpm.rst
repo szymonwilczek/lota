@@ -313,9 +313,12 @@ Diagnostics
 
 It ends with how many steps passed, failed and were skipped, and exits 1
 when one failed. It says before a quote that a rejected authorization costs
-one dictionary-attack attempt. It creates no key at an empty handle, but
-gives a key with no authorization record a fresh value, as provisioning
-does.
+one dictionary-attack attempt. It creates no key at an empty handle and
+replaces none: a key with no authorization record is skipped. The daemon
+gives a publisher's key a fresh value when it binds a ``lota.conf`` profile
+of that publisher, and the host key one when it runs with no publisher
+bound. It gives none to a key in the profile store that no profile
+names.
 
 ``--test-signed`` serves the IPC socket with tokens signed by the TPM, in a
 simulated attested state. It claims the socket before it opens the TPM, so

@@ -433,6 +433,17 @@ int tpm_quote(struct tpm_context *ctx, const uint8_t *nonce, uint32_t pcr_mask,
 int tpm_provision_aik(struct tpm_context *ctx);
 
 /**
+ * tpm_load_aik() - Load the key at @ctx->aik_handle and its authorization.
+ * @ctx: Initialized TPM context.
+ *
+ * Evicts, creates and writes nothing.
+ *
+ * Return: 0, -ENXIO with no object at the handle, -ENOENT with no
+ * authorization record, or another negative errno.
+ */
+int tpm_load_aik(struct tpm_context *ctx);
+
+/**
  * tpm_bind_profile() - Point the context at one publisher's AIK.
  * @ctx: Initialized TPM context with an ESYS connection.
  * @paths: The publisher profile, from profile_paths_from_anchor().

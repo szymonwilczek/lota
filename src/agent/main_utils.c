@@ -59,7 +59,7 @@ void print_usage(const char *prog, const char *default_bpf_path,
 	printf("                    (default: %s)\n", LOTA_CONFIG_DEFAULT_PATH);
 	printf("  --dump-config     Print loaded configuration and exit\n");
 	printf("  --test-tpm        Report on TPM operations and exit.\n"
-	       "                    Creates no persistent key: the quote is\n"
+	       "                    Creates or replaces no key: the quote is\n"
 	       "                    skipped when the attestation handle is\n"
 	       "                    free, since a key made here would\n"
 	       "                    outlive the command. Checks PCR 14\n"

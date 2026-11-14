@@ -70,13 +70,28 @@ static void selftest_quote_one_key(struct selftest_tally *tally,
 		printf("Using the attestation key at handle 0x%08X...\n",
 		       handle);
 
-	ret = tpm_provision_aik(&g_agent.tpm_ctx);
-	selftest_record(tally, ret);
-	if (ret < 0) {
+	ret = tpm_load_aik(&g_agent.tpm_ctx);
+	switch (selftest_aik_load_plan(ret)) {
+	case SELFTEST_AIK_LOAD_QUOTE:
+		selftest_record(tally, ret);
+		break;
+	case SELFTEST_AIK_LOAD_SKIP:
+		/* bind_target() and the daemon's startup provision the key */
+		printf("The key at 0x%08X has no authorization record; this "
+		       "command does not replace it. lota-agent.service gives "
+		       "it a fresh one when %s.\n",
+		       handle,
+		       whose ? "it binds a lota.conf profile of this "
+			       "publisher" :
+			       "it runs with no publisher bound");
+		/* the key and the quote */
+		selftest_skip(tally);
+		selftest_skip(tally);
+		return;
+	case SELFTEST_AIK_LOAD_FAIL:
+		selftest_record(tally, ret);
 		fprintf(stderr, "AIK could not be loaded: %s\n",
 			tpm_strerror(ret));
-		fprintf(stderr,
-			"Note: May require owner hierarchy authorization\n");
 		printf("Skipped: there is no attestation key to quote with.\n");
 		selftest_skip(tally);
 		return;
