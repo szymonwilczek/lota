@@ -334,6 +334,8 @@ Policy signing
   signature of the enforcement object. Without it the agent takes
   ``policy_pubkey`` from the file, then ``/etc/lota/policy.pub``, then
   ``/usr/lib/lota/enforcement.pub``, the first one it can read.
+  ``--verify-policy``, which does not read the file, starts at
+  ``/etc/lota/policy.pub``.
 
 Environment
 ===========

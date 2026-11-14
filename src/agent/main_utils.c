@@ -315,15 +315,16 @@ void print_usage(const char *prog, const char *default_bpf_path,
 	       "PREFIX.pub\n");
 	printf("  --sign-policy FILE --signing-key KEY\n");
 	printf("                    Sign policy YAML, write detached FILE.sig\n");
-	printf("  --verify-policy FILE --policy-pubkey PUB\n");
+	printf("  --verify-policy FILE [--policy-pubkey PUB]\n");
 	printf("                    Verify detached Ed25519 signature on FILE\n");
+	printf("                    Without --policy-pubkey: %s, then\n",
+	       LOTA_POLICY_PUBKEY_OVERRIDE);
+	printf("                    %s\n", LOTA_ENFORCEMENT_PUBKEY_PATH);
 	printf("  --signing-key PATH   Ed25519 private key (PEM) for signing\n");
 	printf("  --policy-pubkey PATH Ed25519 public key (PEM) for "
 	       "verification\n");
 	printf("                    Reused for BOTH policy YAML signatures and\n");
 	printf("                    BPF object signatures (.bpf.o.sig).\n");
-	printf("                    Use a separate option/config if you want\n");
-	printf("                    distinct keypairs for policy vs BPF.\n");
 	printf("\n");
 	printf("  --help            Show this help\n");
 }
@@ -396,7 +397,10 @@ int handle_policy_ops(const struct policy_ops_args *args)
 
 		if (!args->policy_pubkey_path) {
 			fprintf(stderr,
-				"--verify-policy requires --policy-pubkey\n");
+				"--verify-policy needs --policy-pubkey, or a "
+				"readable %s or %s\n",
+				LOTA_POLICY_PUBKEY_OVERRIDE,
+				LOTA_ENFORCEMENT_PUBKEY_PATH);
 			return 1;
 		}
 
