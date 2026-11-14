@@ -140,7 +140,13 @@ func run(listen string, cfg *runConfig, log *slog.Logger) error {
 		return fmt.Errorf("at least one of -ek-root-bundle or -ek-root is required")
 	}
 
-	// enroll ignores a non-positive value and keeps its default
+	// enroll and the issuer ignore a non-positive value
+	// and keep their default
+	if cfg.aikCertTTL <= 0 {
+		return fmt.Errorf("-aik-cert-ttl must be positive (got %s); "+
+			"omit the flag for the default of %s",
+			cfg.aikCertTTL, ca.DefaultAIKCertTTL)
+	}
 	if cfg.sessionTTL <= 0 {
 		return fmt.Errorf("-session-ttl must be positive (got %s); omit the flag for the default of %s",
 			cfg.sessionTTL, enroll.DefaultSessionTTL)

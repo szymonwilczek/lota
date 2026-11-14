@@ -108,8 +108,7 @@ An option takes one dash or two. A duration is a Go duration such as
   A manufacturer CRL, PEM or DER (`EK revocation`_). Repeatable.
 
 ``-aik-cert-ttl DURATION``
-  Lifetime of an issued AIK certificate. Default ``24h``. A value of zero or
-  less issues certificates of ``24h``.
+  Lifetime of an issued AIK certificate. Default ``24h``; must be positive.
 
 ``-session-ttl DURATION``
   How long a challenge stays open for its answer (`Sessions and limits`_).

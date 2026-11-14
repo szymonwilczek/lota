@@ -16,6 +16,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/szymonwilczek/lota/attestca/ca"
 	"github.com/szymonwilczek/lota/attestca/enroll"
 )
 
@@ -31,6 +32,7 @@ func hsmConfig(mutate func(*runConfig)) *runConfig {
 		ekRootBundle: "/nonexistent/ek-roots",
 		sessionTTL:   enroll.DefaultSessionTTL,
 		maxPending:   enroll.DefaultMaxPending,
+		aikCertTTL:   ca.DefaultAIKCertTTL,
 	}
 	mutate(cfg)
 	return cfg
@@ -105,12 +107,17 @@ func TestNeitherKeySourceNamesCaKey(t *testing.T) {
 	}
 }
 
-// A non-positive -session-ttl or -max-pending is refused by flag name
+// A non-positive -aik-cert-ttl, -session-ttl or -max-pending
+// is refused by flag name
 func TestNonPositiveCeilingIsRefusedByName(t *testing.T) {
 	cases := map[string]struct {
 		mutate func(*runConfig)
 		flag   string
 	}{
+		"-aik-cert-ttl 0": {
+			mutate: func(c *runConfig) { c.aikCertTTL = 0 },
+			flag:   "-aik-cert-ttl",
+		},
 		"-session-ttl 0": {
 			mutate: func(c *runConfig) { c.sessionTTL = 0 },
 			flag:   "-session-ttl",
