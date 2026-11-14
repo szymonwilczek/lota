@@ -171,8 +171,9 @@ Publishers
   when consent was given.
 
 ``--forget-publisher HEX``
-  Destroys the publisher's AIK and everything stored for it. The publisher
-  needs consent and a new key to be answered again.
+  Evicts the publisher's AIK and deletes everything stored for it. The
+  publisher needs consent and enrollment to be answered again, and gets the
+  same key back until the owner hierarchy is cleared.
 
 TPM and sealing
 ===============

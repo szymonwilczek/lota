@@ -405,7 +405,7 @@ int do_list_publishers(void);
  *
  * Evicts the profile's AIK unless another object holds its handle, then
  * removes the profile directory. A configured profile enrolls again only with
- * new consent and a new key.
+ * new consent, under the same derived key.
  *
  * Return: exit code 0 or 1; nothing is removed when the key cannot be checked
  * or evicted.

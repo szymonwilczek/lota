@@ -227,7 +227,7 @@ records.
 Forgetting
 ==========
 
-``lota-agent --forget-publisher ID`` destroys the publisher's attestation key
+``lota-agent --forget-publisher ID`` evicts the publisher's attestation key
 and deletes its profile directory, consent included. It refuses an identity
 the host holds no directory for.
 

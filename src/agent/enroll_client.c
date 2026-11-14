@@ -1544,8 +1544,9 @@ forget:
 
 	printf("Publisher %s forgotten.\n", paths.id);
 	if (had_key)
-		printf("Its attestation key is destroyed; that identity "
-		       "cannot be handed back.\n");
+		printf("Its attestation key is evicted. Agreed to again, the "
+		       "publisher gets the same\npublic key back until the "
+		       "TPM owner hierarchy is cleared.\n");
 	if (foreign_key)
 		printf("The key at 0x%08X is not this publisher's, so it was "
 		       "left alone.\nThat slot stays claimed by whatever "
@@ -1553,7 +1554,7 @@ forget:
 		       "handles\nin the range nothing here records.\n",
 		       handle);
 	printf("A title of theirs can ask again, and will need consent and a "
-	       "new key.\n");
+	       "new enrollment.\n");
 	return 0;
 }
 
