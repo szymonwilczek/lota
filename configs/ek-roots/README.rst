@@ -135,9 +135,11 @@ SHA-256 of its DER with the pin. Any refusal exits 1 before anything is
 written into the output directory. On success it installs the manifest and every
 certificate with mode 0644 and prints ``wrote %d pinned certificate(s)``.
 
-The script writes the files it builds and removes none. A certificate
-whose line was dropped stays in the directory, and when its name ends in
-``.pem`` the CA refuses the bundle as unpinned; remove the file by hand.
+On success the script also removes every ``.pem`` entry in the directory
+other than a directory, in any letter case and a symbolic link included,
+that the new manifest does not name, since the CA refuses such a bundle as
+unpinned. A link is removed, not the file it points to; other files and
+directories are left alone.
 
 Path material
 =============
