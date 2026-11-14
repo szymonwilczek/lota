@@ -51,6 +51,10 @@ char LICENSE[] SEC("license") = "GPL";
 #define MS_BIND 4096
 #endif
 
+#ifndef MS_MOVE
+#define MS_MOVE 8192
+#endif
+
 #ifndef LOTA_O_ACCMODE
 #define LOTA_O_ACCMODE 00000003
 #endif
@@ -1174,7 +1178,7 @@ static __always_inline void report_blocked_mount(const char *what, u32 len)
 	inc_stat(STAT_EVENTS_SENT);
 }
 
-/* enforce mode, strict_mmap: refuse a bind mount over a trusted library */
+/* enforce mode, strict_mmap: refuse a bind or move onto a trusted library */
 SEC("lsm/sb_mount")
 int BPF_PROG(lota_sb_mount, const char *dev_name, const struct path *path,
 	     const char *type, unsigned long flags, void *data, int ret)
@@ -1190,7 +1194,7 @@ int BPF_PROG(lota_sb_mount, const char *dev_name, const struct path *path,
 	if (ret != 0)
 		return -EPERM;
 
-	if (!(flags & MS_BIND))
+	if (!(flags & (MS_BIND | MS_MOVE)))
 		return 0;
 
 	mode = get_mode();
@@ -1214,7 +1218,10 @@ int BPF_PROG(lota_sb_mount, const char *dev_name, const struct path *path,
 	if (!is_trusted_inode(inode))
 		return 0;
 
-	report_blocked_mount("bind mount over a trusted file", 31);
+	if (flags & MS_BIND)
+		report_blocked_mount("bind mount over a trusted file", 31);
+	else
+		report_blocked_mount("move mount over a trusted file", 31);
 	return -EPERM;
 }
 

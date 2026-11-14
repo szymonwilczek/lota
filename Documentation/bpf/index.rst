@@ -153,7 +153,7 @@ Files and mounts
 
 ``lsm/sb_mount``, ``lsm/move_mount``
   In ``enforce`` mode with ``strict_mmap``, refuse a ``mount(2)`` with
-  ``MS_BIND`` and a ``move_mount(2)`` over a trusted library
+  ``MS_BIND`` or ``MS_MOVE`` and a ``move_mount(2)`` onto a trusted library
   (``MOUNT_BLOCKED``).
 
 ``lsm.s/file_post_open``

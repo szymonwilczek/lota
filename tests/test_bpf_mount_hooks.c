@@ -2,7 +2,8 @@
 /*
  * A bind mount over a trusted library can be made through either mount API:
  * mount(2), which reaches security_sb_mount(), or open_tree(2) followed by
- * move_mount(2), which reaches security_move_mount().
+ * move_mount(2), which reaches security_move_mount(). mount(2) with MS_MOVE
+ * moves a mount onto it and reaches only security_sb_mount().
  * They take the same privilege and have the same effect, so an enforcement
  * object that watches one of them refuses nothing an attacker cannot simply
  * ask for the other way.
@@ -23,6 +24,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include <sys/mount.h>
 
 #include <linux/bpf.h>
 
@@ -133,6 +135,40 @@ static int reserves_ringbuf(Elf *elf, const char *prog_name)
 		memcpy(&insn, insns + i * sizeof(insn), sizeof(insn));
 		if (insn.code == (BPF_JMP | BPF_CALL) && insn.src_reg == 0 &&
 		    insn.imm == BPF_FUNC_RINGBUF_RESERVE)
+			return 1;
+	}
+
+	return 0;
+}
+
+/*
+ * Whether @prog_name masks a register with every bit of @bits:
+ * the flag test of a hook that acts on any of them.
+ */
+static int masks_bits(Elf *elf, const char *prog_name, unsigned int bits)
+{
+	const char *insns;
+	struct bpf_insn insn;
+	Elf_Data *data;
+	GElf_Sym sym;
+	size_t count;
+
+	if (!find_symbol(elf, prog_name, &sym) ||
+	    GELF_ST_TYPE(sym.st_info) != STT_FUNC)
+		return 0;
+
+	data = elf_getdata(elf_getscn(elf, sym.st_shndx), NULL);
+	if (!data || !data->d_buf || sym.st_value + sym.st_size > data->d_size)
+		return 0;
+
+	insns = (const char *)data->d_buf + sym.st_value;
+	count = sym.st_size / sizeof(insn);
+
+	for (size_t i = 0; i < count; i++) {
+		memcpy(&insn, insns + i * sizeof(insn), sizeof(insn));
+		if ((insn.code == (BPF_ALU64 | BPF_AND | BPF_K) ||
+		     insn.code == (BPF_ALU | BPF_AND | BPF_K)) &&
+		    ((unsigned int)insn.imm & bits) == bits)
 			return 1;
 	}
 
@@ -292,6 +328,9 @@ int main(void)
 	      "the legacy mount(2) path is hooked");
 	CHECK(has_section(elf, "lsm/move_mount"),
 	      "the open_tree/move_mount path is hooked");
+
+	CHECK(masks_bits(elf, "lota_sb_mount", MS_BIND | MS_MOVE),
+	      "mount(2) is checked for MS_BIND and MS_MOVE alike");
 
 	CHECK(has_map(elf, "trusted_libs"),
 	      "the trusted libraries themselves are keyed");
