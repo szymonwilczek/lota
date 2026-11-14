@@ -5,60 +5,61 @@
 Multi-tenancy
 =============
 
-Single verifier can serve several isolated tenants -- separate enterprise
-fleets, or individual game titles behind one anti-cheat backend -- so that one
-tenant never sees or affects another. This page describes how a tenant is
-assigned, what it scopes, and how an operator configures scoped access to the
-monitoring API.
+One verifier serves several tenants: separate fleets, or the titles behind
+one anti-cheat backend. A tenant has its own policy, its own bans and its own
+operators, and a key scoped to it sees none of another tenant's records. The
+reasoning is in :doc:`../security/threat-model`.
 
-The security rationale is in the
-:doc:`threat model <../security/threat-model>`; this page is the operator
-configuration reference.
+The tenant
+==========
 
-How a tenant is assigned
-========================
+The attestation CA assigns a device its tenant at enrollment, from an
+enrollment token or from the EK manifest ("Tenants" in
+:doc:`bringup/ca-enrollment`). It writes the tenant into the AIK certificate
+as the subject's one ``OrganizationalUnit``, and leaves it out for
+``default``. The host has no say in it.
 
-The tenant is **not** chosen by the host. The attestation CA assigns it at
-enrollment and writes it into the AIK certificate subject as a single
-``OrganizationalUnit`` (OU). The verifier reads the tenant only after it has
-verified the certificate chain, so a host cannot forge or change its own
-tenancy.
+The verifier reads it once the certificate chain is checked
+(:ghsrc:`src/verifier/verify/tenant.go`):
 
-* A certificate with **no OU** maps to the reserved ``default`` tenant.
-* A certificate with **one valid OU** maps to that tenant.
-* A certificate with a **malformed or ambiguous** OU (an invalid name, or more
-  than one OU) is rejected fail-closed, before any state is written.
+* no ``OrganizationalUnit``: the tenant is ``default``;
+* one, a valid name: that tenant;
+* two or more, or an invalid name: the round is refused with
+  ``identity_fail`` and logged at security level as ``AIK certificate
+  carries an invalid tenant``.
 
-A tenant name is 1 to 64 characters of lowercase letters, digits, and
-inner dashes (``[a-z0-9-]``, no leading or trailing dash). The reserved name
-``default`` is the tenant of every client that predates multi-tenancy and every
-client enrolled without a tenant OU.
+A tenant name is 1 to 64 lowercase letters, digits and dashes, with no dash
+first or last. The CA, the policy ``tenant:`` key and the key file accept the
+same names.
 
-What the tenant scopes
-======================
+The CA derives the device pseudonym, the client ID, from the tenant and the
+EK, so one TPM enrolled in two tenants is two clients with unrelated IDs. A
+revocation of one, a ban of one, or a baseline of one leaves the other
+untouched.
 
-Tenancy scopes stored state and enforcement decisions. It does **not** change
-the cryptographic root of trust, which is per device regardless of tenant.
+What a tenant holds
+===================
 
-Hardware bans
--------------
+Policy
+  The policy bound to the tenant (`Policies`_), else the active policy.
 
-Hardware bans are **strictly per tenant**. A hardware identity banned in one
-tenant is untouched in every other tenant; there is no cross-tenant or global
-ban. A ban issued through the API names its tenant explicitly (defaulting to
-``default``), and attestation rejects a client only for a ban recorded in that
-client's own tenant.
+Bans
+  A ban names a tenant and a pseudonym, and refuses ``banned`` in that tenant
+  alone. There is no ban across tenants.
 
-Both verbs name the tenant the same way, in the request body: a ban is
-identified by ``(tenant, hardware_id)``, so an administrator scoped to one
-tenant lifts what it imposed by sending the same field back. ``tenant`` is not
-a query parameter on either verb, and passing it as one is refused.
+Records
+  The client's baseline, its revocation, the audit rows about it and its
+  decision log rows carry its tenant, and each listing of the monitoring API
+  filters on it.
 
-Per-tenant PCR policy
----------------------
+A client's baseline takes its tenant on its first passing round, and reads
+``default`` until then. The trust roots, the CRLs, the nonce history and
+the verifier's limits are shared by every tenant.
 
-A PCR policy may bind itself to a tenant by adding a ``tenant:`` key to the
-policy document:
+Policies
+========
+
+A policy binds itself to a tenant with a ``tenant:`` key:
 
 .. code-block:: yaml
 
@@ -66,105 +67,74 @@ policy document:
    tenant: acme
    require_secureboot: true
    require_lockdown: true
-   # ... pcrs, agent_hashes, ...
 
-A client whose certificate carries the ``acme`` tenant is then verified against
-``acme-strict``; clients in tenants with no bound policy fall back to the
-verifier's active policy. A tenant binds to at most one policy. Because the
-binding lives inside the signed policy document, a signed policy authenticates
-its own scope: an operator cannot silently re-point a tenant by editing an
-unsigned side file.
+Each ``--policy`` loads one file (:doc:`../verifier/command-line`):
 
-One verifier process carries as many policies as ``--policy`` is given, and the
-flag may be repeated:
-
-.. code-block:: bash
+.. code-block:: sh
 
    lota-verifier --policy fleet-base.yaml \
                  --policy acme-strict.yaml \
                  --policy beta-relaxed.yaml
 
-The first document is the active policy and therefore the fallback; the rest
-are reachable only through the tenant they bind, so the verifier warns at
-startup about one that binds none. Every document is validated the same way
-whichever position it holds, and two of them may not share a ``name:``.
+The first file is the active policy. It verifies every client whose tenant
+binds no policy, and may itself bind one. Every file is checked the same way
+wherever it stands. The verifier refuses to start on two files with one
+``name:``, two bound to one tenant, or a ``tenant:`` that is not a valid
+name. At startup it logs each binding as ``tenant bound to policy`` and
+warns about a file past the first that binds no tenant, since no client
+reaches it.
 
-Scoped state
-------------
+With ``--policy-pubkey`` each file carries its own signature, which covers
+its ``tenant:`` key (:ghsrc:`policies/README.rst`).
 
-Revocations, PCR14/boot baselines, the audit log and the attestation log all
-carry the tenant, so every operator listing and every mutation can be scoped to
-the caller's tenant set.
+Scoped keys
+===========
 
-Scoped monitoring-API keys
-==========================
-
-The monitoring API supports per-operator keys, each with a role and a tenant
-set, loaded from a file named by ``--api-keys-file``:
+``--api-keys-file`` holds the monitoring API keys scoped to tenants:
 
 .. code-block:: yaml
 
    keys:
-     - key_sha256: 5e884898da28047151d0e56f8dc6292773603d0d6aabbdd62a11ef721d1542d8
+     - key_sha256: 2c26b46b68ffc68ff99b453c1d30413413422d706483bfa0f98a5e886266e7ae
        role: admin
        tenants: ["acme"]
-     - key_sha256: 6b86b273ff34fce19d6b804eff5a3f5747ada4eaa22f1d49c01e52ddb7875b4b
+     - key_sha256: fcde2b2edba56bf408601fb721fe9b5c338d10ee429ea04fae5511b68fbf8fb9
        role: reader
        tenants: ["acme", "beta"]
-     - key_sha256: d4735e3a265e16eee03f59718b9b5d03019c07d8b6c51f90da3a666eec13ab35
+     - key_sha256: baa5a0964d3320fbc0c6a922140453c8513ea24ab8fd0577034804a967248096
        role: reader
        tenants: ["*"]
 
-Each entry carries:
+``key_sha256``
+  The SHA-256 of the bearer token, 64 hex digits. The token itself is not in
+  the file; ``printf %s "$KEY" | sha256sum`` gives the digest.
 
-* ``key_sha256`` -- the SHA-256 of the bearer token, as 64 lowercase
-  hex characters. The plaintext key is never written to the file. Compute it
-  with, for example, ``printf %s "$KEY" | sha256sum``.
-* ``role`` -- ``reader`` (read-only endpoints) or ``admin`` (mutating
-  endpoints too). Admin implies reader.
-* ``tenants`` -- the tenants the key may see and act on, or ``["*"]`` for every
-  tenant.
+``role``
+  ``reader`` for the ``GET`` routes, ``admin`` for every route.
 
-The whole file is validated on load: a single bad entry -- a malformed hash, an
-unknown role, an empty or invalid tenant list, a duplicate hash -- fails the
-load. Sending the verifier ``SIGHUP`` reloads the file; if the reload fails the
-previous key set stays in place, so a bad edit cannot lock operators out.
+``tenants``
+  The tenants the key sees and acts in; ``"*"`` for all of them.
 
-Scoping behavior
-----------------
+The file loads whole or not at all (:ghsrc:`src/verifier/server/apikeys.go`).
+A file with no key, an unknown key, a second YAML document, a digest of the
+wrong length, a digest listed twice, an unknown role, an empty tenant list or
+an invalid tenant name stops the verifier at startup. On ``SIGHUP`` it is
+read again; a file that fails keeps the previous keys in force.
 
-A scoped key sees only its tenants' resources:
+The keys from ``LOTA_READER_API_KEY`` and ``LOTA_ADMIN_API_KEY`` cover every
+tenant. A key for one tenant goes in the file, and the file alone satisfies
+the key a non-loopback monitoring API needs.
 
-* listings (clients, revocations, bans, audit, attestations, re-anchor review)
-  are filtered to the key's tenant set;
-* a request naming a client or resource outside the key's tenant set is
-  answered as **404**, not 403, so the key cannot probe another tenant's
-  namespace or even confirm that a foreign client exists;
-* a ban or unban into a tenant outside the key's set is refused;
-* ``/api/v1/stats`` returns tenant-narrowed counts and flags itself
-  ``tenant_scoped``; the fleet-wide attestation counters, which are not
-  attributable per tenant, are absent from a scoped response --
-  ``total_attestations``, ``successful_attestations``, ``failed_attestations``,
-  ``revoked_attestations``, ``banned_attestations``, ``used_nonces`` and
-  ``pending_challenges`` are not keys in the JSON object at all, so a parser
-  reads "not reported" instead of "none";
-* ``/metrics`` is refused (403) for a tenant-scoped key: the Prometheus
-  exposition is fleet-wide and carries no tenant dimension, so only a
-  global-scope key (environment key or ``tenants: ["*"]``) can scrape it.
+A key scoped to tenants (:doc:`../verifier/monitoring-api`):
 
-The environment keys ``LOTA_ADMIN_API_KEY`` and ``LOTA_READER_API_KEY`` are
-**global-scope** by design: they carry no tenant list, so they see every
-tenant. That makes them the convenient single-operator default and the wrong
-tool for delegating a tenant -- per-tenant scoping is expressible only in the
-key file. A scoped key file may be used alone, without either environment key,
-and is sufficient to satisfy the authentication requirement that a non-loopback
-API bind enforces.
+* lists the clients, revocations, bans, re-anchor reviews, audit rows and
+  decision rows of its tenants;
+* gets 404 ``client not found`` for a client of another tenant, as for an
+  unknown one;
+* gets 403 ``tenant not permitted for this key`` for a ban or an unban in
+  another tenant;
+* reads ``/api/v1/stats`` with the counts of its tenants and without the
+  counters that hold no tenant;
+* gets 403 on ``/metrics``, which holds no tenant.
 
-Enrollment
-==========
-
-Assigning tenants at enrollment is a property of the attestation CA: the
-enterprise path adds a tenant column to the EK pin manifest, and the gaming
-path issues a per-tenant enrollment token. See
-:doc:`bringup/ca-enrollment` for
-the enrollment ceremony these hook into.
+``tenant`` in a ban or an unban goes in the body, ``default`` when left out.
