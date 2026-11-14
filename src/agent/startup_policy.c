@@ -547,7 +547,8 @@ int agent_apply_startup_policy(const struct agent_startup_policy *policy)
 		goto out_fail;
 	}
 	cfg_lock_bpf_applied = 1;
-	lota_info("BPF map lock: ON (non-agent writes to LOTA maps denied)");
+	lota_info("BPF lock: ON (LOTA map descriptors and link detach refused "
+		  "to other processes)");
 
 	ret = bpf_loader_verify_integrity_config(&g_agent.bpf_ctx);
 	if (ret < 0) {
@@ -568,7 +569,7 @@ int agent_apply_startup_policy(const struct agent_startup_policy *policy)
 			goto out_fail;
 		}
 		cfg_strict_mmap_applied = 1;
-		lota_info("Strict mmap enforcement: ON");
+		lota_info("Strict mmap: armed");
 	}
 
 	if (policy->allow_verity_count > 0) {
@@ -659,7 +660,7 @@ allowlist_done:
 			goto out_fail;
 		}
 		cfg_strict_exec_applied = 1;
-		lota_info("Strict exec enforcement: ON");
+		lota_info("Strict exec: armed");
 	}
 
 	if (policy->block_ptrace) {
@@ -671,7 +672,7 @@ allowlist_done:
 			goto out_fail;
 		}
 		cfg_block_ptrace_applied = 1;
-		lota_info("Global ptrace blocking: ON");
+		lota_info("Global ptrace blocking: armed");
 	}
 
 	if (policy->strict_modules) {
@@ -683,7 +684,7 @@ allowlist_done:
 			goto out_fail;
 		}
 		cfg_strict_modules_applied = 1;
-		lota_info("Strict modules enforcement: ON");
+		lota_info("Strict modules: armed");
 	}
 
 	if (policy->block_anon_exec) {
@@ -695,7 +696,7 @@ allowlist_done:
 			goto out_fail;
 		}
 		cfg_block_anon_exec_applied = 1;
-		lota_info("Anonymous executable mappings: BLOCKED");
+		lota_info("Anonymous executable mapping block: armed");
 	}
 
 	ret = bpf_loader_set_mode(&g_agent.bpf_ctx, mode);
