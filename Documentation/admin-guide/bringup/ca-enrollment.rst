@@ -5,311 +5,585 @@
 Attestation CA enrollment
 =========================
 
-The verifier authenticates an agent only through a certificate issued by the
-attestation CA (``lota-attest-ca``), so each host enrolls once before it can
-attest. Enrollment runs the TPM 2.0 credential-activation ceremony: the CA
-verifies the EK certificate chains to a trusted manufacturer root, proves the
-AIK and that EK share one TPM, and issues a short-lived AIK certificate whose
-subject is the device pseudonym. The EK is presented only to the CA; verifiers
-never see it.
+``lota-attest-ca`` is a publisher's enrollment service. It checks that a
+host's endorsement key (EK) certificate chains to a TPM manufacturer the
+operator trusts, proves by credential activation that the attestation key
+(AIK) the host presents lives in the same TPM, and issues a certificate for
+that AIK. A verifier trusts the AIK certificates of the CA certificates its
+``-aik-ca-cert`` names (:ghsrc:`src/verifier/main.go`), so a host attests to
+a publisher after it enrolls with that publisher's CA.
 
-Stand up the CA with your CA key, the trusted manufacturer EK roots and a server
-TLS keypair (:ghsrc:`examples/enrollment/gen-ca.sh` generates the CA material).
-Production fleets span several TPM manufacturers, so trust a pin-enforced
-multi-vendor bundle with ``-ek-root-bundle``; the CA fails closed if any pinned
-certificate is missing, mismatched, unpinned, or classed as something it is not
-(see :ghsrc:`configs/ek-roots/README.rst` for how to materialize one):
+This page covers the CA. The host's side of the exchange is in
+:doc:`../../agent/tpm`, profiles and renewal in
+:doc:`../../agent/publishers`, and the agent's options in
+:doc:`../../agent/command-line`.
 
-.. code-block:: sh
+Running the CA
+==============
 
-    lota-attest-ca -listen :8444 \
-        -ca-cert ca.crt -ca-key ca.key \
-        -tls-cert tls.crt -tls-key tls.key \
-        -pseudonym-key pseudonym.key \
-        -ek-root-bundle /var/lib/lota/ek-roots
+The CA needs its own certificate and signing key, a TLS key pair for its
+listener, a pseudonym key and at least one trusted EK root
+(:ghsrc:`src/attestca/main.go`):
 
-``-ek-root <file>`` adds operator-supplied anchors (for example a swtpm CA in
-the enrollment demo) on top of the bundle; pass either or both.
+.. code-block:: console
 
-A bundle entry is either a trust anchor or path material, and the manifest says
-which. A firmware TPM sends the certificates its chip carries with the
-enrollment request, but the ones above those are published only by the vendor,
-so the operator pins them as intermediates: they complete the route to an
-anchored root without becoming anchors themselves. The startup line reports
-both counts (``ek_roots``, ``ek_intermediates``); a platform that enrols with
-``ek_intermediates=0`` and fails once its bundle is drafted properly is
-generally missing exactly those links.
+   $ lota-attest-ca -ca-cert ca.crt -ca-key ca.key \
+         -tls-cert tls.crt -tls-key tls.key \
+         -pseudonym-key pseudonym.key \
+         -ek-root-bundle /var/lib/lota/ek-roots
 
-Pair the bundle with the manufacturers' EK revocation feeds: ``-ek-crl <file>``
-(repeatable) loads a manufacturer CRL, enrollment rejects a revoked EK, and
-SIGHUP reloads a rewritten feed in place. See the "Manufacturer CRLs" section of
-:ghsrc:`configs/ek-roots/README.rst`.
+:ghsrc:`examples/enrollment/gen-ca.sh` writes a CA certificate and key, a
+pseudonym key and a listener certificate issued by that CA. The agent checks
+the listener certificate against the certificate its ``--ca-cert`` names,
+and checks that it is issued to the host name or address the agent dials
+(:ghsrc:`src/agent/net.c`). A listener certificate issued from the CA key
+passes the first check.
 
-Two ceilings bound what an unauthenticated peer can hold open: ``-max-pending``
-caps concurrent half-finished enrollments (default 4096, then the
-concurrency-limit status), ``-session-ttl`` how long one survives unanswered
-(default 2 minutes). Lower them on a public CA. A non-positive value stops the
-CA at startup. Both are logged on the startup line beside ``aik_cert_ttl``.
+The CA logs to standard error. Once it listens it logs
+``lota-attest-ca listening`` with these fields:
+
+``address``
+  The address it listens on.
+
+``ek_roots``, ``ek_intermediates``
+  The EK certificates it trusts as roots and holds as intermediates
+  (`EK trust`_).
+
+``ek_crls``
+  The manufacturer CRLs loaded (`EK revocation`_).
+
+``aik_cert_ttl``, ``session_ttl``, ``max_pending``
+  The values of the options of those names.
+
+The ``lota-attest-ca`` package installs the binary as
+``/usr/bin/lota-attest-ca`` and ships no systemd unit
+(:ghsrc:`packaging/nfpm/lota-attest-ca.yaml`). Container images are in
+:doc:`../container-images`.
+
+Options
+=======
+
+An option takes one dash or two. A duration is a Go duration such as
+``90s`` or ``12h``. ``-h`` prints the options and exits 0.
+
+``-listen ADDR``
+  TCP address of the TLS listener. Default ``:8444``.
+
+``-ca-cert FILE``
+  PEM CA certificate that signs AIK certificates. Required. It must be a CA
+  certificate (``CA:TRUE``) and match the signing key.
+
+``-ca-key FILE``
+  PKCS#8 PEM signing key of the CA: ECDSA, Ed25519 or RSA. Required when no
+  ``-ca-key-pkcs11-*`` option is given, refused beside one. For development
+  only (`CA signing key`_).
+
+``-ca-key-pkcs11-module FILE``
+  PKCS#11 module that holds the CA key. Required when any other
+  ``-ca-key-pkcs11-*`` option is given.
+
+``-ca-key-pkcs11-token LABEL``
+  Label of the token that holds the key. Required with a module.
+
+``-ca-key-pkcs11-label LABEL``, ``-ca-key-pkcs11-id HEX``
+  The key pair, by ``CKA_LABEL`` or by ``CKA_ID`` in hex. One of them is
+  required with a module; with both, the key matches both.
+
+``-tls-cert FILE``, ``-tls-key FILE``
+  PEM certificate and key of the listener. Required.
+
+``-pseudonym-key FILE``
+  Secret the device ID is derived under (`Issued certificate`_). Required;
+  the file holds at least 16 bytes, all of which are used.
+
+``-ek-root-bundle DIR``
+  A pinned EK root bundle (`EK trust`_).
+
+``-ek-root FILE``
+  A PEM file of trusted EK roots. Each ``CERTIFICATE`` block is read and
+  other blocks are skipped. Repeatable. At least one of ``-ek-root`` and
+  ``-ek-root-bundle`` is required; both may be given.
+
+``-ek-crl FILE``
+  A manufacturer CRL, PEM or DER (`EK revocation`_). Repeatable.
+
+``-aik-cert-ttl DURATION``
+  Lifetime of an issued AIK certificate. Default ``24h``. A value of zero or
+  less issues certificates of ``24h``.
+
+``-session-ttl DURATION``
+  How long a challenge stays open for its answer (`Sessions and limits`_).
+  Default ``2m``; must be positive.
+
+``-max-pending N``
+  Most challenges open at one time. Default 4096; at least 1.
+
+``-tenant-manifest FILE``
+  EK-to-tenant manifest (`Tenants`_).
+
+``-tenant-manifest-strict``
+  Refuses an EK the manifest does not list. Requires ``-tenant-manifest``.
+
+``-enrollment-tokens FILE``
+  Token-to-tenant file (`Enrollment tokens`_).
+
+``-require-enrollment-token``
+  Refuses an enrollment that presents no token. Requires
+  ``-enrollment-tokens``.
+
+The CA reads every file once, at startup. Only the CRL files are read
+again, on ``SIGHUP`` (`Signals`_).
+
+Environment
+===========
+
+``LOTA_CA_PKCS11_PIN``
+  User PIN of the PKCS#11 token. Required with ``-ca-key-pkcs11-module``.
 
 CA signing key
 ==============
 
-The CA signing key is the anchor every issued AIK certificate chains to, so the
-CA loads it as a ``crypto.Signer`` and checks the signer's public key against
-the CA certificate at startup -- a key that does not match the certificate is
-refused, whether it comes from a file or an external store.
+Every AIK certificate the CA issues is signed with this key, and a verifier
+trusts what it signs. The CA compares the key's public half with the CA
+certificate at startup and stops on
+``CA private key does not match CA certificate``, for a file and for a
+token alike (:ghsrc:`src/attestca/ca/issuer.go`).
 
-The source is selectable: an on-disk PKCS#8 PEM (``-ca-key``) for development,
-or an external key store that never exposes the private key for production. The
-sections below cover the production options.
+``-ca-key`` reads the key from a file in the clear. The CA starts with it and
+logs ``using on-disk CA signing key -- development-only fallback; hold the
+CA key in an HSM in production``. The custody of the key, its rotation and a
+two-tier CA are in :doc:`../../security/ca-key`.
 
-``-ca-key`` is a **development-only fallback**. The key sits in the clear on the
-host, so a host compromise yields the fleet's signing root. The CA logs a loud
-warning at startup whenever it is used, and it is never the production default:
-a production CA holds the key in an HSM (next section) and keeps ``-ca-key`` for
-local bring-up and tests only.
+PKCS#11 token
+-------------
 
-CA signing key in an HSM (PKCS#11)
-----------------------------------
+With ``-ca-key-pkcs11-*`` the key stays in an HSM, or in SoftHSM for
+tests, and the CA signs through the module
+(:ghsrc:`src/attestca/casigner_pkcs11.go`). The PIN is read from the
+environment, so it stays out of the argument list:
 
-A production CA holds its signing key in a PKCS#11 token (an HSM, or SoftHSM for
-tests) so the private key never leaves the device. This needs a PKCS#11-enabled
-build of the CA -- the default binary is pure-Go and has no PKCS#11 support:
+.. code-block:: console
+
+   # export LOTA_CA_PKCS11_PIN=1234
+   # lota-attest-ca -ca-cert ca.crt \
+         -ca-key-pkcs11-module /usr/lib64/softhsm/libsofthsm2.so \
+         -ca-key-pkcs11-token lota-ca -ca-key-pkcs11-label lota-ca-key \
+         -tls-cert tls.crt -tls-key tls.key \
+         -pseudonym-key pseudonym.key \
+         -ek-root-bundle /var/lib/lota/ek-roots
+
+The CA logs ``using PKCS#11 CA signing key`` with the module and the token.
+:ghsrc:`examples/hsm-ca/README.rst` sets up a SoftHSM token for this.
+
+Token support needs cgo and is built only with the ``pkcs11`` tag:
+
+.. code-block:: console
+
+   $ make attest-ca GO_TAGS=pkcs11
+
+The default build, which the packages carry, and the default container image
+stop with ``this lota-attest-ca was built without PKCS#11 support`` when
+they are given ``-ca-key-pkcs11-module`` and no ``-ca-key`` and the other
+options pass their checks, and name both roads to one that has it
+(:ghsrc:`src/attestca/casigner_nopkcs11.go`). A CA asked for a token never
+falls back to ``-ca-key``.
+
+The token refusals, each fatal at startup:
+
+``pkcs11: -ca-key-pkcs11-module and -ca-key-pkcs11-token are required``
+  The token label is missing.
+
+``pkcs11: a key selector is required``
+  Neither ``-ca-key-pkcs11-label`` nor ``-ca-key-pkcs11-id`` is given.
+
+``pkcs11: token PIN is required in LOTA_CA_PKCS11_PIN``
+  The variable is unset or empty.
+
+``pkcs11: -ca-key-pkcs11-id is not hex:``
+  The id does not decode as hex.
+
+``pkcs11: open token %q via %s:``
+  The module does not load, no token has that label, or the login with the
+  PIN fails; the module's error follows.
+
+``pkcs11: find key pair:``
+  No key pair on the token matches the selector, or the search failed.
+
+EK trust
+========
+
+The CA trusts an EK certificate that chains to a trusted root
+(:ghsrc:`src/attestca/ca/issuer.go`). Roots come from ``-ek-root`` files and
+from the bundle, whose manifest pins each certificate by SHA-256 and classes
+it as a root or an intermediate (:ghsrc:`src/attestca/ca/ekbundle.go`). The
+bundle format, its refusals and the scripts that build it are in
+:ghsrc:`configs/ek-roots/README.rst`; a bundle that fails to load stops the
+CA with ``load ek-root-bundle``.
+
+An intermediate is path material: it links a leaf to a root and anchors
+nothing. An ``-ek-root`` certificate whose subject differs from its issuer
+is both an anchor and path material. The host sends with its EK certificate
+the intermediates its TPM stores, at most 8 certificates and 8192 bytes,
+and the CA uses them as path material too. A route ends at a trusted root;
+a root the host sends anchors nothing. Every certificate of the route that
+the host does not send has to be among the trusted roots and intermediates.
+
+Begin checks the EK certificate in this order, and stops at the first
+failure:
+
+#. It parses.
+#. The current time is inside its validity.
+#. It chains to a trusted root, through trusted and sent intermediates.
+   When the route breaks at an issuer that neither the CA nor the host
+   holds, the error names it: ``nothing pinned or supplied issues %q, so
+   the path stops there``.
+#. A CRL of its issuer does not list it (`EK revocation`_).
+#. It carries the TCG EK OID ``2.23.133.8.1`` as an extended key usage or a
+   certificate policy.
+#. Its key is RSA of at least 2048 bits.
+#. The modulus does not carry the ROCA fingerprint (CVE-2017-15361)
+   (:ghsrc:`src/attestca/ca/roca.go`), whether or not a CRL lists the key.
+
+Each failure is sent as status 2 (`Status codes`_), except a stale CRL.
+The CA logs which check failed (`Diagnostics`_).
+
+EK revocation
+-------------
+
+``-ek-crl`` loads a manufacturer CRL (:ghsrc:`src/crl/crl.go`). A file holds
+one DER CRL, or PEM blocks of which only ``X509 CRL`` blocks are read. Each
+CRL must:
+
+* carry ``nextUpdate``;
+* be signed with RSA PKCS#1 or PSS over SHA-256, SHA-384 or SHA-512, with
+  ECDSA over the same, or with Ed25519;
+* be signed by a trusted root or intermediate whose subject matches its
+  issuer. A version 3 signer must carry ``CA:TRUE``, and a signer with a
+  key usage extension must allow ``cRLSign``.
+
+A CRL that fails any of these stops the CA at startup with
+``failed to load CRL``.
+
+A serial a CRL of the EK's issuer lists is refused, stale CRLs included.
+When every CRL of that issuer is past its ``nextUpdate``, every EK of that
+issuer is refused with status 9 until a fresh CRL is loaded. An issuer with
+no CRL loaded is not checked. Only the EK certificate is checked; the
+intermediates above it are not.
+
+Rewrite the file and send ``SIGHUP`` to load a fresh CRL.
+
+AIK checks
+==========
+
+The host sends the AIK as a ``TPMT_PUBLIC``
+(:ghsrc:`src/attestca/credential/credential.go`). The CA refuses it with
+status 3 unless it is an RSA key with:
+
+* name algorithm SHA-256;
+* attributes ``fixedTPM``, ``fixedParent``, ``sensitiveDataOrigin``,
+  ``userWithAuth``, ``restricted`` and ``sign``, and not ``decrypt``;
+* a key size and a modulus of at least 2048 bits;
+* the RSASSA signing scheme.
+
+The challenge wraps a 32-byte secret to the EK, bound to the AIK's name, by
+``MakeCredential``. Only a TPM that holds both the EK and a key of that name
+recovers it with ``ActivateCredential``.
+
+Issued certificate
+==================
+
+The certificate is signed by the CA key, with the CA certificate as its
+issuer (:ghsrc:`src/attestca/ca/issuer.go`):
+
+* serial: a random number below 2\ :sup:`128`;
+* subject ``CommonName``: the device ID;
+* subject ``OrganizationalUnit``: the tenant, absent for ``default``;
+* validity: from one minute before issue to ``-aik-cert-ttl`` after it;
+* key usage ``digitalSignature``, ``CA:FALSE``.
+
+The device ID is the lowercase hex HMAC-SHA256, under the pseudonym key, of
+the EK's RSA modulus. For a tenant other than ``default`` the input is the
+tenant name, a zero byte and the modulus
+(:ghsrc:`src/attestca/enroll/enroll.go`). The AIK is not an input, so a host
+that enrolls again with a new AIK keeps its device ID. The ID changes with
+another TPM or another tenant, and a new pseudonym key changes the ID of
+every device.
+
+Tenants
+=======
+
+The CA assigns each device a tenant and writes it into the certificate it
+signs, so a host cannot choose its own. How a verifier scopes its state by
+tenant is in :doc:`../multi-tenancy`.
+
+``-tenant-manifest`` maps EKs to tenants
+(:ghsrc:`src/attestca/enroll/tenant.go`). One entry per line, an EK
+fingerprint and a tenant name; blank lines and lines starting with ``#``
+are skipped:
+
+.. code-block:: text
+
+   # <ek_sha256> <tenant>
+   3b1f...c7  acme
+   9a20...4e  beta
+
+The fingerprint is the hex SHA-256 of the EK's RSA modulus, in either case.
+Read the RSA EK certificate off the TPM; the shell, not ``sudo``, creates
+``ek.der``, so the next step can open it:
 
 .. code-block:: sh
 
-    make BUILD_DIR=/var/tmp/lota-build attest-ca GO_TAGS=pkcs11   # cgo + PKCS#11
-
-A containerised CA takes the same road through the ``-hsm`` variant of the
-published image, which is that build on a base with a loader under it; the
-default image tag has no PKCS#11 support and refuses the flags below. See
-:doc:`../container-images`.
-
-Point the CA at the token instead of ``-ca-key``. The PIN is read from the
-environment, never a flag, so it stays out of the process argument list:
-
-.. code-block:: sh
-
-    export LOTA_CA_PKCS11_PIN=...                 # token user PIN
-    lota-attest-ca -listen :8444 \
-        -ca-cert ca.crt \
-        -ca-key-pkcs11-module /usr/lib64/softhsm/libsofthsm2.so \
-        -ca-key-pkcs11-token lota-ca \
-        -ca-key-pkcs11-label lota-ca-key \
-        -tls-cert tls.crt -tls-key tls.key \
-        -pseudonym-key pseudonym.key \
-        -ek-root-bundle /var/lib/lota/ek-roots
-
-Select the key by ``-ca-key-pkcs11-label`` (CKA_LABEL) or ``-ca-key-pkcs11-id``
-(CKA_ID, hex). The CA checks the token key's public key against ``ca.crt`` at
-startup and refuses to run on a mismatch, the same check applied to an on-disk
-key, so a wrong token or label cannot sign under the CA identity.
-
-A CA without PKCS#11 compiled in refuses a token key at key setup, and names both
-roads to a build that has it: ``make attest-ca GO_TAGS=pkcs11`` on a host, and the
-``-hsm`` image tag in a container.
-
-``-ca-key`` and the ``-ca-key-pkcs11-*`` flags are mutually exclusive, and that
-is answered on **any** of the four: passing ``-ca-key`` beside a token, label or
-id is refused just as it is beside the module, and the error names the flags it
-found. A selector given without ``-ca-key-pkcs11-module`` is refused by name as
-well, because nothing has been told which module to open -- the CA never falls
-back to an on-disk key when a token was asked for, since that failure would
-hand the fleet's trust root to a file the operator believed they had
-overridden.
-
-The CA key ceremony, rotation, and the offline-root / online-intermediate
-topology are covered in :doc:`the CA key page <../../security/ca-key>`.
-
-Materializing the EK root bundle
---------------------------------
-
-The bundle ships empty: the supported set is every TPM whose EK certificate
-chains to a root you can verify and pin, not a fixed vendor list. Build it from
-the platforms you actually attest -- draft a sources line from a host's EK
-certificate, verify each pin out of band against the vendor's published value,
-then materialize the bundle:
-
-.. code-block:: sh
-
-    # walk the EK cert's issuer chain to the self-signed root and draft a line
     sudo tpm2_nvread 0x01c00002 > ek.der
-    cp configs/ek-roots/sources.example sources
-    scripts/lota-ek-root-pin.sh ek.der >>sources
 
-    # after verifying each pin out of band, fetch and pin the roots
-    scripts/lota-ek-roots-update.sh sources /var/lib/lota/ek-roots
-
-The redirect leaves ``ek.der`` owned by the operator, so later steps need no
-``sudo``; ``sudo tpm2_nvread -o`` would leave a file only root can open.
-``lota-ek-root-pin.sh`` fingerprints what the network returned without
-vouching for it; confirm the pin with the vendor before it enters ``sources``.
-
-The bundle does not have to cover the whole path. A TPM that stores
-manufacturer intermediates of its own presents them with the enrollment
-request, and the CA uses them to complete a route to a pinned root -- never to
-anchor one. What the bundle must carry is every certificate on the path the
-device does not: on Intel PTT that is the root and the two OnDie intermediates
-below it, with the three nearest the leaf coming off the chip.
-
-See :ghsrc:`configs/ek-roots/README.rst` for the full flow.
-
-Enrolling a host
-================
-
-Enroll the agent once per host (the daemon then renews the certificate on its
-own before the TTL, default 24h, expires):
+and print its fingerprint:
 
 .. code-block:: sh
 
-    sudo lota-agent --enroll --ca-server ca.example --ca-port 8444 \
-        --ca-cert ca.crt
-    # stores the issued certificate and the CA endpoint in the publisher
-    # profile the trust anchor names, under /var/lib/lota/profiles/
+    modulus=$(openssl x509 -inform DER -in ek.der -noout -modulus) &&
+        printf '%s' "${modulus#Modulus=}" | xxd -r -p | sha256sum
 
-``--ca-cert`` is required, and it must be the **CA anchor** -- the certificate
-whose key signs AIK certificates -- not the listener certificate the CA serves
-TLS with. Beyond verifying the TLS peer, the trust anchor is what names the
-publisher: the profile directory is the SHA-256 of the anchor's
-SubjectPublicKeyInfo, so a host answering to several publishers keeps one AIK,
-one certificate and one enrollment record per publisher and no publisher can
-correlate the host through a shared identity. The endpoint is deliberately not
-the identity -- an address is mutable and two publishers can share a hostname,
-while reissuing the CA certificate over the same key keeps the profile.
+A tenant name is 1 to 64 lowercase letters, digits and dashes, with no dash
+at either end. The manifest fails to load, and the CA stops with
+``tenant manifest:``, on:
 
-When the TLS layer refuses the connection -- the ``--ca-cert`` anchor does not
-verify the listener's certificate, or that certificate is not the pinned one --
-the agent says the CA answered, this host refused it, and names the
-``--ca-cert`` file. Only a CA that could not be reached gets the advice to
-confirm ``lota-attest-ca`` is running and reachable.
+* ``line %d: expected "<ek_sha256> <tenant>"``
+* ``line %d: ek_sha256 must be 64 hex characters``
+* ``line %d: duplicate ek_sha256``
+* ``line %d: invalid tenant %q``
+* ``tenant manifest %s lists no devices``
 
-A CA that refuses the enrollment says why in the agent's own output.
-Each refusal prints the status the CA sent and the sentence
-that goes with it -- an endorsement key that is not accepted here, an
-attestation key template that is not, a challenge the CA no longer holds, a
-CA that is at its concurrency limit, a token that was not recognised -- along
-with whether the answer is worth retrying. An internal error is a CA fault a
-later attempt may clear; a rejected endorsement key is refused every time; a
-stale manufacturer CRL is neither, and lifts once an operator refreshes the
-feed and signals the CA. A status the agent has no name for is printed as a
-number and said to be one, which is what an older agent meeting a newer CA
-looks like.
+An EK the manifest does not list gets the ``default`` tenant. With
+``-tenant-manifest-strict`` it is refused instead, with status 2, and the
+manifest is a list of the EKs allowed to enroll. With no manifest every
+device gets ``default``. The CA logs ``tenant manifest loaded`` with the
+path and the strict flag.
 
-An enrollment that fails at the CA keeps its profile directory, recorded handle
-and attestation key; enrolling again with the same anchor reuses them. Publisher
-slots are limited, so the failure names the profile it holds and the verb that
-frees it. A different certificate is a different publisher and takes another
-slot.
+Enrollment tokens
+=================
 
-The agent says so when it can tell. Both ``--enroll`` and ``--add-publisher``
-warn when the file named is not a CA certificate, naming what a re-key of it
-would cost; an anchor produces no such line. It is a warning rather than a
-refusal, because a self-signed leaf is a legitimate pin for a deployment that
-wants one and nothing in the file says which was meant.
+A token assigns a tenant to a device whose EK the operator does not know in
+advance (:ghsrc:`src/attestca/enroll/token.go`). The host presents it with
+Begin, inside the TLS session. The CA stores only token digests, in a file
+of the manifest's shape:
 
-Pinning the listener certificate costs slots silently. It is rotated on a
-schedule, and a rotation with a new key changes the SPKI, so every host starts a
-second profile: another AIK in another TPM persistent slot, consent recorded
-again, the old profile left unread. The publisher's CA names a device by its
-endorsement key and sees one device with two live attestation certificates;
-the host spends two of its eight slots on one publisher, and seven rotations
-fill them all. ``--forget-publisher`` returns a slot. An enrollment that finds
-another profile at the same CA host and port says so, naming it when its anchor
-path is the certificate now pinned, and ``--list-publishers`` marks a profile
-whose pinned certificate now names another publisher. Issue the listener from
-the CA and pass the CA, as :ghsrc:`examples/enrollment/gen-ca.sh` does.
+.. code-block:: text
 
-The AIK is part of the profile, not shared across it. Each publisher's
-enrollment provisions its own key, in its own TPM persistent slot, with its own
-rotation metadata and userAuth -- a shared key would be a stable handle two
-publishers could correlate the same machine through. The slot is taken from a
-bounded range (``0x81010010`` upwards, sized to the profile limit), recorded in
-the profile so a config edit cannot shift a publisher onto another one's key,
-and a slot already holding an object the host did not record is skipped rather
-than evicted. A host that runs out of the range refuses the enrollment instead
-of reusing a key; persistent slots are shared with everything else on the
-machine, so raising the ceiling is a deliberate act, not an automatic one.
+   # <token_sha256> <tenant>
+   5e88...12  game-alpha
+   a71c...09  game-beta
 
-The first enrollment records the CA endpoint in that profile, so the running
-agent renews the certificate on its own against that endpoint as it nears
-expiry (it re-enrolls once the cert enters its final third of validity, backing
-off when the CA is unreachable). The renewal is automatic whenever an endpoint
-is on disk, so an enrolled host needs no scheduled ``--reenroll``. The same
-guided command stays available as a manual override -- before the certificate
-TTL expires, or after ``--reprovision-aik`` replaces the AIK. Alone it
-re-enrolls each publisher whose certificate does not name the key at its
-handle; ``--publisher`` names one, by the ID ``--list-publishers`` prints:
+The digest is the hex SHA-256 of the token's bytes:
 
-.. code-block:: sh
+.. code-block:: console
 
-    sudo lota-agent --reenroll --publisher <id>
+   $ printf %s "$TOKEN" | sha256sum
 
-The anchor is the one the enrollment record names; the first enrollment
-records it as an absolute path. An anchor moved since is named with
-``--publisher <id> --ca-cert <path>``, and must be that publisher's.
+The file fails to load on the same line errors with ``token_sha256``, and on
+``enrollment token file %s lists no tokens``; the CA stops with
+``enrollment tokens:``. It logs ``enrollment tokens loaded`` with the path
+and the require flag.
 
-``--reenroll`` needs the endpoint the first enrollment recorded. With no
-record it points at ``--enroll``; with an unreadable one it names the file,
-its magic and version against the build's, and the way out: restore the file,
-or enroll again naming the endpoint. The attestation key is kept either way;
-enrollment reissues only its certificate.
+The tenant comes from:
 
-The running agent draws the same line: an unreadable record refuses the round
-with ``Enrollment record for publisher <id> is unreadable``, naming the file
-and the way out, instead of enrolling over it, and the renewal line says the
-endpoint is inside that record.
+* a presented token: the tenant its digest is listed with. A token that is
+  not listed, or is presented to a CA without ``-enrollment-tokens``, is
+  refused with status 8. The manifest and ``default`` are not consulted.
+* no token, with ``-require-enrollment-token``: refused with status 8.
+* no token otherwise: the manifest, as in `Tenants`_.
 
-A CA that has moved is named on the command line. ``--ca-server`` and
-``--ca-port`` override the recorded endpoint per field, so a port alone keeps
-the recorded host:
+The agent presents a token from ``--enroll-token-file`` and records it for
+renewal (:doc:`../../agent/command-line`). To rotate a token, list the new
+digest beside the old one, restart the CA, ship the new token, then remove
+the old digest and restart again. Removing a digest stops further
+enrollments with that token and leaves the certificates issued with it
+alone.
 
-.. code-block:: sh
+Sessions and limits
+===================
 
-    sudo lota-agent --reenroll --publisher <id> \
-        --ca-server ca.example --ca-port 8545
+Begin checks the EK, then the AIK, then assigns the tenant, and only then
+wraps the challenge and opens a session
+(:ghsrc:`src/attestca/enroll/enroll.go`). A refused EK, AIK or tenant takes
+no session.
 
-The run prints the endpoint it dialled (and the recorded one, when they
-differ) and records the new one once the CA certifies the key. The CA session
-opens before anything on the host changes, so an unreachable CA or a refused
-anchor costs no TPM object, slot or dictionary-attack attempt, and the run
-says ``No key was created or replaced, and no certificate was written``.
-Only the consent record stays, for the next attempt to reuse. Otherwise the
-shared-key re-enrollment below would leave a key no certificate names.
+A session lives ``-session-ttl``. Begin first drops the sessions older than
+that, then refuses with status 7 once ``-max-pending`` remain. Complete
+removes the session before it checks it, so an expired session or a wrong
+secret spends the challenge, and the host starts again with Begin.
 
-A certificate that expires anyway (CA unreachable through the final third,
-or agent not running) is refused with ``FAIL - This host's attestation
-certificate is outside the window it is valid in``, counted as
-``certificate_validity``; the quote is not in question. A certificate not
-valid *yet* gets the same verdict and means the host clock is behind the
-publisher's: check the clock before re-enrolling.
+The listener (:ghsrc:`src/attestca/server/server.go`):
 
-A host that never finished enrolling presents no certificate and is refused
-as ``certificate_missing``, not as a signature failure: the TPM is not at
-fault. The fix is the same ``--reenroll`` run.
+* serves one enrollment per connection;
+* holds at most 256 connections; a connection past that is closed with no
+  reply;
+* allows each message 15 seconds to arrive and each reply 15 seconds to be
+  written;
+* counts Begin requests per source IP address in a fixed window of one
+  minute; past 10 in a window, Begin gets status 7. It tracks at most 4096
+  addresses; a Begin from another address while 4096 windows are open gets
+  status 7.
 
-It is also the command that moves a host onto per-publisher keys. An AIK
-created before the publisher's identity entered the TPM creation template is
-one key shared by every publisher enrolled on that host, and a TPM key cannot
-be rewritten in place, so the agent refuses such a record instead of carrying
-it forward and says which publisher it belongs to, at daemon startup and once
-on the attestation pass that binds that publisher. No round is attempted for
-that publisher until the record names a key of its own; other publishers keep
-reporting, however many publishers the host serves. Re-enrolling that profile
-gives it its own key under the same device ID: an HMAC over the endorsement
-key's modulus, keyed by the CA's pseudonym key, with a non-``default`` tenant
-mixed in. The attestation key is not an input, so the verifier keeps its
-baseline; the ID changes only with another TPM, tenant or pseudonym key.
+These limits have no option. Lower ``-max-pending`` and ``-session-ttl`` on
+a CA that any host can reach.
 
-Point every verifier at the CA root:
+Protocol
+========
 
-.. code-block:: sh
+The agent and the CA exchange four messages over TLS 1.2 or later; the CA
+asks for no client certificate (:ghsrc:`src/attestca/wire/wire.go`,
+:ghsrc:`include/lota_enroll.h`). Each message is a 32-bit big-endian length
+and a body of at most 16 KiB. A body opens with the magic ``0x4C434145``
+(``LCAE``) and a 16-bit version, then holds its fields in order. A byte
+field is a 16-bit length and the bytes; integers are big-endian.
 
-    lota-verifier -aik-ca-cert ca.crt ...
+BeginRequest
+  EK certificate (DER, ≤ 2048 bytes), AIK ``TPMT_PUBLIC`` (≤ 1024), token
+  (≤ 128, empty for none), a 16-bit count of intermediates (≤ 8) and each
+  intermediate (DER, ≤ 2048, ≤ 8192 in total).
 
-A host that has not enrolled (no AIK certificate) is refused under the
-production ``--require-cert`` default.
+ChallengeReply
+  16-bit status, session ID (32 hex characters, ≤ 64), credential blob
+  (≤ 1024), encrypted secret (≤ 512).
 
-See :ghsrc:`examples/enrollment/README.rst` for the full end-to-end walk-through.
+CompleteRequest
+  Session ID (≤ 64), recovered secret (≤ 64).
+
+ResultReply
+  16-bit status, AIK certificate (DER, ≤ 4096), device ID (64 hex
+  characters, ≤ 128).
+
+Version 1 is the only one, and the CA answers in the version of the
+request. A message longer than 16 KiB, or a body with another magic, an
+unknown version, a field over its bound or trailing bytes, does not decode:
+the CA logs it and closes the connection with no reply.
+
+Status codes
+------------
+
+.. list-table::
+   :header-rows: 1
+   :widths: 6 22 72
+
+   * - Code
+     - Name
+     - Sent when
+   * - 0
+     - ``OK``
+     - The step succeeded.
+   * - 1
+     - ``BAD_REQUEST``
+     - Defined; the CA does not send it.
+   * - 2
+     - ``EK_REJECTED``
+     - The EK certificate fails a check of `EK trust`_, is revoked, holds no
+       RSA key, or a strict manifest does not list it.
+   * - 3
+     - ``AIK_REJECTED``
+     - The AIK fails `AIK checks`_.
+   * - 4
+     - ``ACTIVATION_FAIL``
+     - The secret in CompleteRequest is not the one wrapped.
+   * - 5
+     - ``UNKNOWN_SESSION``
+     - The session is unknown, already used, or older than
+       ``-session-ttl``.
+   * - 6
+     - ``INTERNAL_ERROR``
+     - Any other failure, such as a failed signature.
+   * - 7
+     - ``RATE_LIMITED``
+     - The source address is over its Begin limit, or ``-max-pending``
+       sessions are open.
+   * - 8
+     - ``TOKEN_REJECTED``
+     - The token is unknown, or required and absent.
+   * - 9
+     - ``CRL_STALE``
+     - Every CRL of the EK's issuer is past its ``nextUpdate``.
+
+Status 7 clears once the window or a session ends, and status 9 once a
+fresh CRL is loaded. After status 4 or 5 the host starts again with Begin.
+The agent prints the status and its meaning
+(:ghsrc:`src/agent/enroll_client.c`), and for status 8 sent to an agent that
+presented no token adds ``; this CA requires --enroll-token-file``.
+
+Signals
+=======
+
+``SIGHUP``
+  Reloads the ``-ek-crl`` files. On success the CA logs
+  ``SIGHUP: EK CRL feed reloaded`` with ``loaded_crls``. When any file fails,
+  it logs ``SIGHUP: EK CRL reload failed; keeping previous set`` and keeps
+  checking against the set it had.
+
+``SIGINT``, ``SIGTERM``
+  The CA closes the listener, waits for the open connections to end and
+  exits 0.
+
+Diagnostics
+===========
+
+A startup failure logs ``lota-attest-ca failed`` with the error and exits 1.
+A malformed option exits 2. The errors on the options:
+
+``specify either -ca-key or -ca-key-pkcs11-*, not both (given: -ca-key, %s)``
+  ``-ca-key`` and a PKCS#11 option are both given; the PKCS#11 options found
+  are listed.
+
+``-ca-key-pkcs11-module is required with %s``
+  A token, label or id is given without the module.
+
+``missing required -%s``
+  ``-ca-cert``, ``-tls-cert``, ``-tls-key``, ``-pseudonym-key``, or
+  ``-ca-key`` without PKCS#11, is not given.
+
+``at least one of -ek-root-bundle or -ek-root is required``
+  No EK root is given.
+
+``-session-ttl must be positive (got %s)``
+  The session lifetime is zero or negative.
+
+``-max-pending must be at least 1 (got %d)``
+  The session limit is below 1.
+
+``-tenant-manifest-strict requires -tenant-manifest``
+  The strict switch is given without a manifest.
+
+``-require-enrollment-token requires -enrollment-tokens``
+  The switch is given without a token file.
+
+The other errors name what failed to load: ``read ca-cert:``,
+``read ca-key:``, ``read ek-root %s:``, ``read pseudonym-key:``,
+``issuer:`` (the CA certificate, its key, an EK root or a CRL),
+``enrollment service:`` (``pseudonym key too short``),
+``server TLS keypair:`` and ``listen %s:``.
+
+Each enrollment logs one line, with the peer address in ``remote``:
+
+``enroll issued AIK certificate``
+  Success, with ``device_id``, logged before the reply is written.
+
+``enroll begin rejected``, ``enroll complete rejected``
+  A refusal, with the ``status`` sent and the ``error``. For status 2 the
+  error says which EK check failed.
+
+``enroll begin rate-limited``
+  Status 7 for the source address.
+
+``enroll begin read failed``, ``enroll complete read failed``
+  The message did not arrive or did not decode. No reply is sent.
+
+``enroll challenge write failed``
+  The challenge could not be written, and the CA closes the connection.
+
+Verifier side
+=============
+
+Each verifier of the publisher names the CA certificate with
+``-aik-ca-cert`` and refuses a report whose AIK certificate does not chain
+to it; ``-aik-crl`` revokes single AIK certificates
+(:ghsrc:`src/verifier/main.go`). The verifier's options are in
+:doc:`../../verifier/index`.
 
 Self-service re-anchor (diverse-fleet profile)
 ==============================================
@@ -422,200 +696,3 @@ Revocations and hardware bans are keyed separately and survive the delete,
 so removing a client cannot be used to shed either -- a revoked identity
 that re-enrolls is still revoked.
 
-When a publisher's key stops matching its certificate
-=====================================================
-
-A publisher profile holds three things that have to agree: the persistent
-handle its attestation key occupies, the authorization stored beside it, and
-the certificate the CA issued over that key. A TPM clear replaces the key, and
-so does any verb pointed at a handle a profile already owns.
-
-When they disagree, the TPM refuses to sign and **each refusal spends a
-dictionary-attack attempt**. The counter drains slowly -- one attempt every two
-hours on a typical firmware TPM, against a ceiling of 32 -- so a host that
-retried a wrong credential could walk itself into a lockout that needs a
-``lockoutAuth`` the machine does not hold.
-
-The agent therefore compares the key at the handle against the certificate
-before it quotes, which costs no authorization and no attempt, and refuses the
-round when they differ:
-
-.. code-block:: text
-
-    ERR: The attestation key at this publisher's handle is not the key their
-         certificate was issued over, so every quote would be refused by the
-         TPM and each refusal spends a dictionary-attack attempt. No round is
-         attempted until they issue a certificate for the key that is here
-         now. A TPM clear does this. Publisher: ...
-
-``--list-publishers`` reports the same state, since it is the surface to check
-first -- everything else it prints survives the key being replaced:
-
-.. code-block:: text
-
-    1feba674...
-      attestation key at TPM handle 0x81010010
-      certificate    39566 s of validity left
-      BROKEN         the key at that handle is not the key this certificate
-                     was issued over, so every quote is refused. Re-enroll
-                     this publisher: lota-agent --reenroll --publisher <id>
-
-The remedy is to re-enroll that publisher, which issues a certificate for the
-key the TPM holds now. Where consent to the publisher is recorded, the
-attestation loop does it in the same round, with the endpoint, anchor and token
-the enrollment recorded, and reports ``REENROLLING`` in the status word until
-the certificate names the key; a failed attempt is retried with backoff. With
-no consent recorded it says so once, names ``lota-agent --reenroll
---publisher <id>``, and the publisher stays not attested. The agent picks a
-manual re-enrollment up on its next round, with no restart.
-
-Both this refusal and a TPM authorization failure are said **once** and do not
-shorten the interval. A credential that is wrong is wrong on the next attempt
-too, so a backoff would only raise the rate at which nothing can happen -- and
-where the TPM is the one refusing, raise the rate at which the host spends
-attempts. The target keeps its ordinary cadence, the publisher stays listed as
-not attested, and the agent says so again only when the state changes: when the
-key and the certificate agree once more, or when a round succeeds. A
-configuration reload does not re-announce either, because the configuration
-file is not what changed.
-
-Other publishers are unaffected. Each has its own key, schedule and failure
-state, so one publisher standing still does not slow, stop or silence the
-rest -- which the log shows by continuing to report their enrollment and
-renewal work as usual.
-
-Assigning tenants at enrollment
-===============================
-
-A multi-tenant deployment gives each enrolled device a tenant, which the
-verifier then uses to scope that device's bans, revocations, baselines, logs,
-and PCR policy. The tenant is assigned by the CA at enrollment and written into
-the issued AIK certificate as a single ``OrganizationalUnit``; the verifier
-reads it only after verifying the certificate chain, so a host cannot choose
-its own tenant.
-
-The enterprise path resolves the tenant from an EK-to-tenant manifest. The
-manifest is a text file, one entry per line, mapping an endorsement-key
-fingerprint to a tenant name; blank lines and lines beginning with ``#`` are
-ignored:
-
-.. code-block:: text
-
-    # <ek_sha256> <tenant>
-    3b1f...c7  acme
-    9a20...4e  beta
-
-The fingerprint is the SHA-256 of the endorsement key's public modulus. For
-the ``ek.der`` read in `Materializing the EK root bundle`_:
-
-.. code-block:: sh
-
-    modulus=$(openssl x509 -inform DER -in ek.der -noout -modulus) &&
-        printf '%s' "${modulus#Modulus=}" | xxd -r -p | sha256sum
-
-The ``&&`` stops a failed read; without it ``sha256sum`` hashes nothing and
-prints ``e3b0c442...``, a plausible fingerprint that matches no TPM.
-
-Point the CA at the manifest with ``--tenant-manifest``:
-
-.. code-block:: sh
-
-    lota-attest-ca ... --tenant-manifest /etc/lota/tenants.txt
-
-An endorsement key with no manifest entry lands in the reserved ``default``
-tenant, which is encoded as the absence of an ``OrganizationalUnit`` so
-single-tenant deployments keep issuing byte-identical subjects. Add
-``--tenant-manifest-strict`` to refuse enrollment for any endorsement key
-absent from the manifest; the manifest then doubles as an EK allowlist. A
-strict rejection happens before the credential challenge is wrapped, so a
-barred device never consumes an enrollment session.
-
-A barred device is told its endorsement key was rejected, as is a key that
-does not chain to a pinned root, one its manufacturer's CRL revokes and one
-whose modulus carries the ROCA fingerprint. Each is a verdict on the key that
-a retry does not change; the CA log names which one applied, and for a chain
-that could not be built, the certificate the path needed next -- on a firmware
-TPM usually a vendor intermediate the bundle does not pin. An internal-error
-status means the CA could not serve the request and a later attempt may
-succeed. A lapsed CRL feed has a status of its own.
-
-The device pseudonym in the certificate ``CommonName`` mixes in a named
-tenant, so one TPM enrolling into two tenants yields two distinct device IDs
-and never collides in the verifier's per-tenant state. A device that moves to
-a new tenant is therefore a new identity there and re-enrolls from scratch.
-The ``default`` tenant keeps the pseudonym derivation used before tenant
-assignment, so devices enrolled by an older CA re-enroll under the same
-device ID and keep their verifier-side state.
-
-The verifier reads this tenant from the certificate and scopes the device's
-bans, revocations, PCR policy, and operator-API visibility to it. See
-:doc:`../multi-tenancy` for how tenancy scopes verifier
-state and how to configure scoped monitoring-API access.
-
-Assigning tenants with enrollment tokens
-========================================
-
-An EK manifest presumes the operator knows every endorsement key up front,
-which a consumer deployment cannot: a game title enrolls machines the operator
-has never seen. Those deployments hand each tenant's install flow a shared
-*enrollment token*, an opaque secret string the agent presents with its begin
-request; the CA resolves the tenant from the token instead of the EK.
-
-The CA never stores tokens, only their digests. Mint a token per tenant, hand
-it to that tenant's distribution channel, and record its SHA-256 in a
-token-to-tenant file with the same shape as the manifest:
-
-.. code-block:: sh
-
-    printf %s "$TOKEN" | sha256sum
-
-.. code-block:: text
-
-    # <token_sha256> <tenant>
-    5e88...12  game-alpha
-    a71c...09  game-beta
-
-Point the CA at the file with ``--enrollment-tokens``:
-
-.. code-block:: sh
-
-    lota-attest-ca ... --enrollment-tokens /etc/lota/enroll-tokens.txt
-
-A presented token is an explicit tenant assignment and fails closed: a token
-matching no entry (or any token on a CA without ``--enrollment-tokens``) is
-refused with a token rejection before the credential challenge is wrapped, and
-never falls back to the EK manifest or the default tenant. Only a token-less
-enrollment takes the EK-manifest path, so both mechanisms can serve one CA.
-Add ``--require-enrollment-token`` to refuse token-less enrollments outright;
-the token set is then the sole admission control, which is the consumer shape
-where no enrolling EK is known in advance.
-
-On the device, store the token in a root-only file (never on a command line,
-where it would be visible in ``ps`` and shell history) and point ``--enroll``
-at it:
-
-.. code-block:: sh
-
-    sudo install -m 600 /dev/null /etc/lota/enroll.token
-    printf %s "$TOKEN" | sudo tee /etc/lota/enroll.token >/dev/null
-    sudo lota-agent --enroll --ca-server ca.example --ca-port 8444 \
-        --ca-cert /etc/lota/ca.crt \
-        --enroll-token-file /etc/lota/enroll.token
-
-The token must be 1 to 128 printable, non-whitespace ASCII characters; a
-trailing newline in the file is tolerated. A successful enrollment persists
-the token (not the file path) in the profile's root-only enrollment record
-next to the CA endpoint, so ``--reenroll`` and the daemon's automatic certificate
-renewal keep presenting it without further operator input. Re-run
-``--enroll`` with a new token file to replace it.
-
-Rotate a token by minting a new one, adding its digest to the file alongside
-the old entry (both then enroll into the tenant), shipping the new token to
-the install flow, and deleting the old digest once the rollout completes.
-Removing a digest stops future enrollments with that token but does not
-revoke certificates it already produced; revoke those at the verifier.
-
-Wire compatibility: an agent that presents no token keeps speaking protocol
-version 1, so upgraded agents interoperate with an old CA, and the CA answers
-each request in the version it arrived with, so old agents interoperate with
-an upgraded CA. The token travels only inside the enrollment TLS channel.
