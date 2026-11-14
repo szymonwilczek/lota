@@ -246,7 +246,9 @@ clients with a baseline in its tenants.
      }
    }
 
-An empty field is left out. A client is found when it has a baseline or this
+``client_id``, ``tenant``, ``revoked``, ``attestation_count`` and
+``monotonic_counter`` are always present; another field is left out when
+empty. A client is found when it has a baseline or this
 instance has challenged it; else the answer is 404 ``client not found``.
 
 ``hardware_id``
