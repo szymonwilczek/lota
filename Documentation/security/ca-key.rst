@@ -1,94 +1,105 @@
 .. SPDX-License-Identifier: MIT
 .. Copyright (C) 2026 Szymon Wilczek
 
-========================================================
-Attestation CA signing key: ceremony, rotation, topology
-========================================================
+==========================
+Attestation CA signing key
+==========================
 
-The attestation CA's signing key is the trust anchor every issued AIK
-certificate chains to, and every verifier pins it (``--aik-ca-cert``). It is
-the highest-value secret in a LOTA deployment: whoever can sign with it can mint
-an AIK certificate the whole fleet trusts. Treat it accordingly -- keep it in an
-HSM (see :doc:`../admin-guide/bringup/index`, "CA signing key in an HSM"), never
-on a daily-driver host, and gate access to it.
-
-How ``lota-attest-ca`` loads the key is covered in the bring-up guide; this
-document is the key-lifecycle reference: the generation ceremony, rotation, and
-the offline-root / online-intermediate topology.
+Every AIK certificate ``lota-attest-ca`` issues is signed with one key, and
+every verifier of the fleet trusts the certificates it pins with
+``--aik-ca-cert``. Whoever signs with that key mints AIK certificates the
+fleet accepts. The CA loads the key from a file or from a PKCS#11 token
+(:doc:`../admin-guide/bringup/ca-enrollment`, "PKCS#11 token"); on a file
+key it logs ``using on-disk CA signing key -- development-only fallback``.
+This page covers the life of the key: the ceremony, rotation, compromise and
+a two-tier layout.
 
 Key ceremony
 ============
 
-The goal of the ceremony is a CA key that no single person can exfiltrate and
-that is bound to a certificate before it ever signs.
+#. Generate the key pair inside the token, marked non-extractable, so the
+   private key has no plaintext form outside the device.
 
-#. **Generate in the HSM, non-exportable.** Create the key pair inside the HSM
-   so the private key has no plaintext form outside the device. Do not import a
-   software-generated key unless an offline ceremony requires it (then generate
-   on an air-gapped host and import under wrap). Record the public key.
-#. **Dual control.** Initialise the token and generate the key under at least
-   two-person control (split SO/user PINs or the HSM's quorum/M-of-N
-   authorisation). No one person should hold both the token authorisation and
-   physical access.
-#. **Bind a certificate.** Issue the CA certificate from the key (the HSM signs
-   its own certificate request) before the key signs anything else.
-   ``lota-attest-ca`` checks the token key against this certificate at startup
-   and refuses to run on a mismatch.
-#. **Back up under wrap.** Follow the HSM's backup procedure (wrapped-key export
-   to a backup HSM, or a quorum-encrypted blob). A CA key with no backup is a
-   single hardware failure away from re-enrolling the fleet.
-#. **Audit.** Keep the HSM audit log: every use of the key, every authorisation.
-   The CA itself logs each start and the key source.
+#. Put the token under dual control: split security officer and user PINs,
+   or the device's M-of-N authorisation, so no one person holds both the
+   authorisation and physical access.
+
+#. Issue the CA certificate for that key before the key signs anything else.
+   It must carry ``CA:TRUE``; ``lota-attest-ca`` refuses to start on a
+   certificate that is not a CA or whose public key differs from the key's
+   (:ghsrc:`src/attestca/ca/issuer.go`).
+
+#. Back the key up by the device's wrapped export to a second token. A lost
+   key without a backup means enrolling every host against a new one.
+
+#. Keep the device's audit log. The CA logs the module and the token it
+   signs through at each start (``using PKCS#11 CA signing key``).
 
 Rotation
 ========
 
-Issued AIK certificates are short-lived (``-aik-cert-ttl``, default 24h) and
-hosts re-enroll before expiry, so rotating the CA key does **not** require
-touching every host at once -- it requires the fleet's verifiers to trust the
-new CA key, then a re-enrollment pass within one certificate lifetime.
+AIK certificates live for ``-aik-cert-ttl``, 24 hours by default, and the
+agent renews one in the last third of its lifetime
+(:doc:`../agent/publishers`). A rotation therefore needs the verifiers to
+trust both keys for one certificate lifetime:
 
-#. Stand up the new CA key and certificate (a fresh ceremony as above).
-#. Distribute the new CA certificate to every verifier. ``--aik-ca-cert`` is
-   repeatable, so during the overlap a verifier trusts **both** the old and the
-   new CA certificate and accepts AIK certificates from either.
-#. Re-enroll hosts against the new CA. A new CA key is a new publisher
-   identity, so this is a fresh ``--enroll`` against the new trust anchor
-   rather than a ``--reenroll`` of the old profile: the profile is named after
-   the anchor's public key. Within one ``-aik-cert-ttl`` window every live host
-   holds an AIK certificate signed by the new key.
-#. Drop the old CA certificate from the verifiers once no unexpired AIK
-   certificate was issued by the old key.
+#. Generate the new key and certificate as above.
 
-A *compromised* CA key is a faster path: stop the CA, drop the old CA
-certificate from verifiers immediately (every AIK it signed is now untrusted),
-and re-enroll the fleet against a new key. Individual compromised AIK
-certificates are revoked out of band with ``--aik-crl`` without a full CA
-rotation. The certificate that signs the CRL must carry the ``cRLSign`` key
-usage; the verifier refuses the CRL otherwise and does not start.
+#. Add the new certificate to every verifier. ``--aik-ca-cert`` may be
+   repeated, and a verifier reads it only at start, so restart each one
+   after the change.
 
-Offline root, online intermediate
-=================================
+#. Move ``lota-attest-ca`` to the new key and certificate. Renewals and
+   enrollments from then on are signed by the new key.
 
-The online ``lota-attest-ca`` is reachable and signs continuously, so its key
-is the more exposed one. A two-tier PKI bounds that exposure: keep a **root CA
-key offline** (an air-gapped HSM, used only at ceremonies) and have it issue an
-**intermediate CA certificate** to the online CA.
+#. Once ``-aik-cert-ttl`` has passed since the CA stopped signing with the
+   old key, remove the old certificate from the verifiers and restart them.
 
-* The intermediate key lives in the online CA's HSM; ``lota-attest-ca`` runs
-  with ``-ca-cert`` set to the intermediate certificate and signs AIK leaves
-  with the intermediate key. ``NewIssuer`` accepts any ``CA:TRUE`` certificate,
-  so an intermediate works as the CA certificate without code changes.
-* Verifiers pin the **intermediate** certificate with ``--aik-ca-cert``. The
-  verifier trusts each pinned certificate directly (it does not chain an AIK
-  through an unpinned root), so the certificate the online CA signs with is the
-  one to pin, not the offline root.
-* To rotate the online tier, the offline root issues a **new** intermediate;
-  deploy its certificate to the verifiers (pin both during the overlap, as in
-  rotation above) and move the online CA to the new intermediate key. The
-  offline root key never goes online, so compromising the online host costs an
-  intermediate, not the fleet's root of trust.
+The agent names a publisher by the public key of the certificate it trusts
+the CA's TLS endpoint with (:doc:`../agent/publishers`); the signing key
+plays no part in it. A rotation that keeps that certificate keeps every
+host's profile. One that replaces it makes the CA a new publisher to each
+host, which enrolls again with ``--enroll`` and the new ``--ca-cert``. In
+:ghsrc:`examples/enrollment/gen-ca.sh` and
+:ghsrc:`examples/hsm-ca/setup-token.sh` that certificate is the CA
+certificate, and its key issues the listener certificate, so there a
+rotation keeps the profiles only while the old key issues the listener
+certificate.
 
-A single-tier deployment (the online CA holds a self-signed root) is simpler and
-fine for a small fleet; the two-tier topology is the option to reach for when
-the online CA's exposure is the concern an enterprise PKI review raises.
+Compromise
+==========
+
+A leaked signing key mints certificates for any AIK. Stop the CA, remove
+its certificate from every verifier and restart them: each AIK certificate
+it signed then fails the chain check. Re-enroll the fleet against a new key.
+
+A single leaked AIK does not need a new CA key. The verifier refuses an AIK
+certificate listed in a CRL given with ``--aik-crl``, reloaded on
+``SIGHUP``. Each CRL must be signed by a certificate pinned with
+``--aik-ca-cert``; a version 3 signer must carry ``CA:TRUE``, and a signer
+with a key usage extension must allow ``cRLSign``. A CRL that fails to load
+stops the verifier at start, and keeps the previous set on ``SIGHUP``
+(:ghsrc:`src/verifier/store/aik.go`, :ghsrc:`src/crl/crl.go`).
+
+Two-tier layout
+===============
+
+The online CA signs on every enrollment, so its key is the exposed one. A
+root key kept offline, used only at ceremonies, can issue an intermediate
+certificate to the online CA:
+
+* ``lota-attest-ca`` runs with ``-ca-cert`` set to the intermediate
+  certificate and its key in the token. The CA checks it as any CA
+  certificate: ``CA:TRUE`` and a public key matching the key.
+
+* Each verifier pins the intermediate. It verifies an AIK certificate
+  against the pinned certificates alone, with no intermediate pool
+  (:ghsrc:`src/verifier/store/aik.go`), so a pinned offline root without
+  the intermediate verifies nothing the online CA signs. A CRL signed by the
+  root needs the root pinned as well.
+
+* To rotate the online tier, the root issues a new intermediate, and the
+  rotation above applies to it.
+
+A leaked online key then costs the intermediate, and the root issues the
+next one.
