@@ -5,10 +5,13 @@
  * maps and atomics so it can be unit-tested in user space.
  *
  * In ENFORCE mode each event type has its own one-second window, so one
- * flooding type cannot spend another's budget. Blocked events get the larger
- * cap, still finite so self-induced denials cannot fill the ring faster than
- * user space drains it; the stats map counts them regardless, so only per-event
- * detail is dropped.
+ * flooding type cannot spend another's budget. The refusals of a write to a
+ * guarded cgroup file or a mapped executable and of an open of /dev/mem,
+ * /dev/kmem, /dev/port or another process's memory take the ENFORCE window in
+ * any mode; the other events budgeted here take it in ENFORCE only. Blocked
+ * events get the larger cap, still finite so self-induced denials cannot fill
+ * the ring faster than user space drains it; the stats map counts them
+ * regardless, so only per-event detail is dropped.
  *
  * All types share one ring, so past the pressure watermark a type that spent
  * its share of the window yields to quieter ones.
@@ -29,10 +32,10 @@
 
 /**
  * lota_event_budget_limit() - Emission cap of an event class per window.
- * @enforce: The mode is enforce.
+ * @enforce: The event takes the ENFORCE window.
  * @blocked: The class is refused operations, else permitted ones.
  *
- * Return: the cap, or 0 when unbounded, as everything is outside ENFORCE.
+ * Return: the cap, or 0 (unbounded) when @enforce is zero.
  */
 LOTA_EB_INLINE unsigned int lota_event_budget_limit(unsigned int enforce,
 						    int blocked)
