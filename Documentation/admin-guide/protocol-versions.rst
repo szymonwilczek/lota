@@ -5,191 +5,123 @@
 Protocol versions
 =================
 
-LOTA deployment is three cooperating programs that version independently: the
-on-host **agent**, the **verifier**, and the **attestation CA**. They are almost
-never upgraded in lockstep -- an operator rolls the verifier tier on its own
-cadence, and an agent fleet (especially a player fleet the operator does not
-control) updates whenever its hosts happen to. This document states how each
-protocol surface is versioned and which combinations interoperate.
+The agent, the verifier and the attestation CA are released and upgraded
+apart. What must agree are the three interfaces between them, each with its
+own version:
 
-It is written for operators planning a deployment and for contributors changing
-a wire format or the database schema.
+================= ================ ============================================
+Interface         Between          Rule
+================= ================ ============================================
+Attestation       agent, verifier  One version; the verifier accepts its own
+                                   alone.
+Enrollment        agent, CA        One version per frame; the CA answers in
+                                   the version it was asked in.
+Schema            verifier,        A version and a fingerprint; migrations are
+                  database         appended and never destructive.
+================= ================ ============================================
 
-What actually has to match
-==========================
+A release that keeps the three leaves the others to upgrade on their own
+time.
 
-The three programs do not share one version number. They share three *protocol*
-surfaces, and only the endpoints of each surface have to agree:
+Attestation
+===========
 
-.. list-table::
-   :header-rows: 1
-   :widths: 26 22 26 26
+Every frame of a round carries the report version, ``LOTA_REPORT_VERSION`` in
+the agent and ``ReportVersion`` in the verifier, 1.0.0
+(:doc:`../verifier/report-format`).
 
-   * - Surface
-     - Endpoints
-     - Versioned by
-     - Break tolerance
-   * - Attestation
-     - agent - verifier
-     - report wire version
-     - Strict: exact equality
-   * - Enrollment
-     - agent - CA
-     - enrollment wire version
-     - Negotiated: additive, back-compatible
-   * - Persistent schema
-     - verifier - database
-     - schema version
-     - Additive: appended, never destructive
+* The verifier refuses a report of another version with ``old_version``,
+  once the report holds the 5360 bytes of its fixed part; a shorter one is
+  ``report_malformed`` whatever its version. A report that does not parse in
+  its version is ``report_malformed`` too.
+* The agent does not read the version of the challenge or the result.
+* The version changes with the layout: a field added, removed or moved, or a
+  section added. A release that keeps the layout keeps the version.
 
-Because the surfaces are independent, a verifier upgrade does not require an
-agent upgrade, and a CA upgrade does not require either -- provided each surface
-stays inside the tolerance below.
+A layout change is crossed by the agents and the verifiers together. Either
+the fleet upgrades in one window after the verifiers, or a second verifier
+endpoint takes the new version while the hosts move to it.
 
-Attestation protocol (agent - verifier)
-=======================================
+The PCR mask, the boot commitment and the initramfs lock are not negotiated:
+every report carries them and the verifier requires them. A new derivation
+takes a flag bit of its own.
 
-The attestation report carries a fixed wire version (``ReportVersion``, today
-``0x00010000`` = wire **1.0.0**). The verifier checks it for **exact equality**
-and rejects a mismatch with the ``old_version`` verdict; there is no partial
-acceptance of a report from a wire the verifier does not implement. This is
-deliberate: the report is the security-load-bearing message, so the verifier
-refuses to guess at a layout it was not built to parse.
+Enrollment
+==========
 
-That verdict covers the version field alone. Any other parse failure (a
-truncated section, a length prefix past the end, foreign magic) is
-``report_malformed``: a link or peer problem, not an agent to upgrade, and not
-counted among agents still behind during a rollout.
+Each enrollment frame carries its version, 1
+(:ghsrc:`src/attestca/wire/wire.go`, ``LOTA_ENROLL_VERSION`` in
+:ghsrc:`include/lota_enroll.h`).
 
-Consequences:
+* The agent sends the newest version it speaks. The CA answers in the
+  version of the request.
+* Each side refuses a version its build does not implement, and a frame with
+  bytes past its last field.
+* A field every frame of a version carries, empty when unused: the
+  enrollment token and the EK chain are a zero length and a zero count when a
+  host has none.
 
-* The report wire version changes **only** on a breaking layout change, not on
-  every release. Two releases that share a report wire version interoperate on
-  the attestation path regardless of their release numbers.
-* When the wire version *is* bumped, agents and verifiers must cross that
-  boundary together. Move the verifier tier to the new wire first (it accepts
-  only the new version), then the agents -- or run the two wire versions on
-  separate verifier endpoints during the transition. A flag-day is unavoidable
-  for a breaking report change; that is the cost the strict check pays for not
-  parsing an unknown security message.
+A CA that speaks a new version answers the hosts on the old one, so the CA
+goes first and the agents follow.
 
-The report's ``pcr_mask`` and its boot-commitment and initramfs-lock flags are
-not negotiated. Every agent emits the full set and the verifier requires it, so
-a report that omits one is refused inside its own wire version rather than
-handled by a policy switch. A future derivation gets its own flag and challenge
-capability bit; the existing bits do not change meaning.
+Schema
+======
 
-Enrollment protocol (agent - CA)
-================================
+Each backend carries its list of migrations, and a database records the ones
+applied ("Schema" in :doc:`../verifier/store`). A migration is appended,
+never edited, and adds a table, a column or an index; it drops, renames and
+retypes nothing. The tests in :ghsrc:`src/verifier/store/migrations_test.go`
+refuse one that does. Instances on the older build keep using the columns
+they know while a newer one migrates the database
+(:doc:`ha-deployment`).
 
-The enrollment wire also carries a version, but it is **additive and
-negotiated**, not strict. The rule the project follows:
+At startup the verifier logs ``schema_version`` and checks the database
+against its own build:
 
-* A new field comes with a bumped enrollment version and is on the wire in
-  every frame of that version, empty when unused. An agent sends the newest
-  version it speaks; the CA **mirrors the version of the request it
-  received** in its replies.
-* A new CA therefore answers an old agent in the old wire, so the CA tier can
-  move first. A peer refuses a version its build does not implement.
-* A frame with bytes after its last field is refused, whatever its version.
-  Skipping them would take a newer frame for an older one and drop its new
-  fields, such as an enrollment token.
+``database schema is newer than this build``
+  The database holds a migration this build does not. Run the newer build,
+  or restore a backup taken at this one.
 
-One version is in service currently. The enrollment token (tenant) and the EK
-certificate chain (manufacturer intermediates of a firmware TPM) do not
-change it: a request without them writes a zero-length token and a zero
-chain count. Adopting tenancy or enrolling a firmware TPM changes no
-version.
+``database schema was written by a different build``
+  The fingerprint differs: two builds hold different migrations at one
+  version. Run the build that wrote it.
 
-Consequence: today the CA and the agent fleet can be brought up in either
-order. After a future version bump, deploy the CA before the agents that send
-it; older agents keep enrolling against the new CA.
+``database schema is not the shape this build creates``
+  A table is missing or extra. The answer names them.
 
-Persistent schema (verifier - database)
-=======================================
+A database that records no fingerprint gets this build's, with a warning,
+once its tables match. A ``--report-only`` instance applies nothing and
+refuses a database behind its own version.
 
-The verifier creates its database at its final shape: both backends ship **one
-consolidated migration**, so a fresh SQLite file or Postgres database reaches the
-current schema in a single step.
+The SQLite and Postgres versions count their own migrations and need not
+match.
 
-The schema evolves from there by **appending** to that history, never by editing
-the shipped entry. An appended migration must be **additive**: it may add a
-table, a column, or an index; it may not drop or rename one, or retype a column
-in place. ``migrations_test.go`` enforces this mechanically, so a destructive
-migration fails the build.
-
-The additive rule is what lets a multi-instance deployment share one database
-(see :doc:`Verifier deployment topologies <ha-deployment>`):
-
-* Whichever instance starts first applies the pending migration, under a Postgres
-  advisory lock, so exactly one instance applies each one and the rest attach to
-  the migrated schema.
-* The instances already operating the database keep working through the change,
-  because they only ever read and write the columns they already knew; an added
-  column is invisible to them.
-
-The SQLite and Postgres histories are versioned independently -- each number
-counts its own backend's entries. There is no parity requirement between the two.
-
-What identifies a schema
-------------------------
-
-The version number identifies a schema only while the schema it names does not
-change, and before 1.0 the consolidated entry is still being rewritten in
-place. Two builds can therefore create different databases that both report
-version 1. The verifier records a second marker beside the number: the
-**fingerprint** of the migration text it applied, printed by
-``--print-versions`` next to each target.
-
-At startup the verifier holds the database it opened to both markers, and
-refuses when either disagrees:
-
-* **a version this build has never applied** -- the database was written by a
-  newer build. Run that build, or restore a backup taken at this one's
-  version. This is the rollback case, and refusing it at startup is the point:
-  a binary that starts and fails at the first statement against a table it
-  does not have has already passed its health check.
-* **a fingerprint that is not this build's** -- the two builds' migrations
-  differ at the same version number, so the columns underneath are not the
-  ones this binary writes.
-* **tables that are not the ones these migrations create** -- the same check
-  for a database written before fingerprints were recorded, naming what is
-  missing and what is there in addition.
-
-A database created by an older build that recorded no fingerprint has one
-written for it on the first open, with a warning saying so; its shape is
-verified against this build's tables in the same pass.
-
-Reading the versions a binary reports
-=====================================
-
-Every version an operator needs is printed by the verifier itself:
+Reading the versions
+====================
 
 .. code-block:: console
 
    $ lota-verifier --print-versions
    attestation report wire:  1.0.0
-   postgres schema target:   1 (4b3645b29d8a)
-   sqlite schema target:     1 (c43317ff56f1)
+   postgres schema target:   1 (<fingerprint>)
+   sqlite schema target:     1 (<fingerprint>)
    minimum TLS:              1.3
 
-* **attestation report wire** is the number that must match the agent fleet's
-  report wire; compare it across an agent and a verifier release before assuming
-  they attest.
-* **postgres schema target** and **sqlite schema target** are the schema this
-  binary builds a database up to, followed by the fingerprint of the migration
-  text that reaches it. Compare the number against the live database (logged as
-  ``schema_version`` at startup) to see whether starting this binary runs a
-  migration, and the fingerprint against the one a refusal names to see which
-  build wrote the database in front of you.
+``attestation report wire``
+  The version the agents must send.
 
-Release numbering
-=================
+``postgres schema target``, ``sqlite schema target``
+  The version this build migrates a database to, and the first 12 hex digits
+  of its migrations' fingerprint. A target above the ``schema_version`` a
+  running instance logs means this build migrates the database. A refusal
+  names both fingerprints, to compare with this one.
 
-LOTA release numbers follow semantic versioning, with the pre-1.0 caveat that
-the public surface is still stabilising: until 1.0, a minor bump may change a
-protocol wire or the schema, and this document (plus the release notes) is the
-authority on which surface moved. From 1.0 on, a breaking change to any of the
-three surfaces above is a major bump. The release number is not itself a
-compatibility check -- the three protocol versions are; the release number only
-tells you *where to look* for a surface that moved.
+``minimum TLS``
+  The lowest TLS version the attestation listener accepts.
+
+Releases
+========
+
+A release number is not a compatibility check: the three versions above
+are, and the release notes say which one a release moves. Until 1.0 a minor
+release may move one.
