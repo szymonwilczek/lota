@@ -224,10 +224,11 @@ Cgroups
 The bpf syscall
 ---------------
 
-With ``LOTA_CFG_LOCK_BPF`` set, ``lsm/bpf_map`` refuses a descriptor of a
-map to all but the agent when the map's name is one of the object's map
-names, and ``lsm/bpf`` refuses ``BPF_LINK_DETACH``. The name is the whole
-test, so a map of another program with one of these names is refused too.
+With ``LOTA_CFG_LOCK_BPF`` set, in every mode, ``lsm/bpf_map`` refuses a
+descriptor of a map the object declares in ``.maps`` to all but the agent,
+and ``lsm/bpf`` refuses ``BPF_LINK_DETACH``. The hook compares the map's
+address with those maps, so a map of another program with the same name
+stays open, and so does the frozen map of the object's string constants.
 
 Maps
 ====

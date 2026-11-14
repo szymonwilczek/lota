@@ -7,6 +7,10 @@
  * object that watches one of them refuses nothing an attacker cannot simply
  * ask for the other way.
  *
+ * With lock_bpf, lsm/bpf_map refuses a descriptor of a map the object declares
+ * in .maps. A map name is any process's to pick, so the hook compares
+ * addresses.
+ *
  * These read the built object rather than a live kernel: the question is which
  * hooks the object carries, which is answerable without root and without
  * loading anything.
@@ -16,6 +20,7 @@
 
 #include <fcntl.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
 
@@ -150,6 +155,113 @@ static int has_map(Elf *elf, const char *map_name)
 	return sym.st_shndx == elf_ndxscn(maps);
 }
 
+/*
+ * Whether the map address loaded at byte @off of @code is compared with
+ * another register by the next instruction, the 16-byte ld_imm64 aside.
+ */
+static int compared_at(const Elf_Data *code, GElf_Addr off)
+{
+	struct bpf_insn ld, cmp;
+	unsigned char op;
+
+	if (!code->d_buf || off + 3 * sizeof(ld) > code->d_size)
+		return 0;
+
+	memcpy(&ld, (const char *)code->d_buf + off, sizeof(ld));
+	memcpy(&cmp, (const char *)code->d_buf + off + 2 * sizeof(ld),
+	       sizeof(cmp));
+	op = BPF_OP(cmp.code);
+
+	return ld.code == (BPF_LD | BPF_IMM | BPF_DW) &&
+	       BPF_CLASS(cmp.code) == BPF_JMP && BPF_SRC(cmp.code) == BPF_X &&
+	       (op == BPF_JEQ || op == BPF_JNE) &&
+	       (cmp.dst_reg == ld.dst_reg || cmp.src_reg == ld.dst_reg);
+}
+
+/*
+ * Whether @section compares a register with the address of every map in
+ * .maps: a relocated ld_imm64 of the map followed by a jeq or jne.
+ */
+static int compares_every_map(Elf *elf, const char *section)
+{
+	Elf_Scn *maps = find_section(elf, ".maps");
+	Elf_Scn *prog = find_section(elf, section);
+	Elf_Scn *scn = NULL;
+	Elf_Data *code;
+	Elf_Data *syms = NULL;
+	GElf_Shdr symhdr = { 0 };
+	unsigned char *seen;
+	size_t nsyms = 0;
+	int total = 0;
+
+	if (!maps || !prog)
+		return 0;
+
+	code = elf_getdata(prog, NULL);
+	if (!code)
+		return 0;
+
+	while ((scn = elf_nextscn(elf, scn)) != NULL) {
+		GElf_Shdr shdr;
+
+		if (gelf_getshdr(scn, &shdr) && shdr.sh_type == SHT_SYMTAB &&
+		    shdr.sh_entsize) {
+			syms = elf_getdata(scn, NULL);
+			symhdr = shdr;
+			nsyms = shdr.sh_size / shdr.sh_entsize;
+		}
+	}
+
+	if (!syms || !nsyms)
+		return 0;
+
+	seen = calloc(nsyms, 1);
+	if (!seen)
+		return 0;
+
+	while ((scn = elf_nextscn(elf, scn)) != NULL) {
+		GElf_Shdr shdr;
+		Elf_Data *data;
+
+		if (!gelf_getshdr(scn, &shdr) || shdr.sh_type != SHT_REL ||
+		    shdr.sh_info != elf_ndxscn(prog))
+			continue;
+
+		data = elf_getdata(scn, NULL);
+		for (size_t i = 0; data && shdr.sh_entsize &&
+				   i < shdr.sh_size / shdr.sh_entsize;
+		     i++) {
+			GElf_Rel rel;
+			size_t idx;
+
+			if (!gelf_getrel(data, (int)i, &rel))
+				continue;
+			idx = GELF_R_SYM(rel.r_info);
+			if (idx < nsyms && compared_at(code, rel.r_offset))
+				seen[idx] = 1;
+		}
+	}
+
+	for (size_t i = 0; i < nsyms; i++) {
+		GElf_Sym sym;
+
+		if (!gelf_getsym(syms, (int)i, &sym) ||
+		    sym.st_shndx != elf_ndxscn(maps) ||
+		    GELF_ST_TYPE(sym.st_info) != STT_OBJECT)
+			continue;
+		if (!seen[i]) {
+			fprintf(stderr, "  %s compares no %s\n", section,
+				elf_strptr(elf, symhdr.sh_link, sym.st_name));
+			total = 0;
+			break;
+		}
+		total++;
+	}
+
+	free(seen);
+	return total > 0;
+}
+
 int main(void)
 {
 	const char *path = BPF_OBJ_PATH;
@@ -191,6 +303,9 @@ int main(void)
 	      "a refused mount(2) bind leaves a record");
 	CHECK(reserves_ringbuf(elf, "lota_move_mount"),
 	      "a refused move_mount leaves a record");
+
+	CHECK(compares_every_map(elf, "lsm/bpf_map"),
+	      "lsm/bpf_map compares the map with each map in .maps");
 
 	elf_end(elf);
 	close(fd);
