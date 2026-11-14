@@ -19,7 +19,7 @@ copy, so no drift.
 
 | Harness | Production code under test |
 |---|---|
-| `fuzz_devt.c` | `include/lota_devt.h` (`LOTA_DEVT_MAJOR/MINOR/MKDEV`, `lota_devt_from_st`) |
+| `fuzz_devt.c` | `include/lota_devt.h` (`LOTA_DEVT_MAJOR/MINOR/MKDEV`) |
 | `fuzz_event_budget.c` | `include/lota_event_budget.h` (`lota_event_budget_limit/window_expired/exhausted`) |
 
 ## Mirror (drift-guarded)
