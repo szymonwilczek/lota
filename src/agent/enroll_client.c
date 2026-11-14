@@ -1483,7 +1483,8 @@ int do_forget_publisher(const char *profile_id)
 	}
 
 	if (profile_aik_handle_load(&paths, &handle) == 0) {
-		int owns;
+		int held;
+		int owns = 0;
 
 		ret = tpm_init(&g_agent.tpm_ctx);
 		if (ret < 0) {
@@ -1499,24 +1500,31 @@ int do_forget_publisher(const char *profile_id)
 		 * Evict only this publisher's own key: an object that replaced
 		 * it at the handle belongs to whoever put it there.
 		 */
-		owns = tpm_bind_profile(&g_agent.tpm_ctx, &paths) == 0 ?
-			       tpm_aik_handle_holds_profile_key(
-				       &g_agent.tpm_ctx) :
-			       -EIO;
-		if (owns < 0) {
+		held = tpm_handle_holds_object(&g_agent.tpm_ctx, handle);
+		if (held == 1)
+			owns = tpm_bind_profile(&g_agent.tpm_ctx, &paths) == 0 ?
+				       tpm_aik_handle_holds_profile_key(
+					       &g_agent.tpm_ctx) :
+				       -EIO;
+		switch (forget_key_plan(held, owns)) {
+		case FORGET_KEY_UNKNOWN:
 			fprintf(stderr,
 				"Could not check what the key at 0x%08X is "
 				"(%s).\nNothing was deleted: destroying an "
 				"object this publisher may not own cannot be "
 				"undone.\n",
-				handle, tpm_strerror(owns));
+				handle, tpm_strerror(held < 0 ? held : owns));
 			tpm_cleanup(&g_agent.tpm_ctx);
 			return 1;
-		}
-		if (owns == 0) {
+		case FORGET_KEY_NONE:
+			tpm_cleanup(&g_agent.tpm_ctx);
+			goto forget;
+		case FORGET_KEY_FOREIGN:
 			foreign_key = true;
 			tpm_cleanup(&g_agent.tpm_ctx);
 			goto forget;
+		case FORGET_KEY_EVICT:
+			break;
 		}
 
 		ret = tpm_evict_profile_aik(&g_agent.tpm_ctx, handle);
