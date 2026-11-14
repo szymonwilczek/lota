@@ -591,69 +591,8 @@ Verifier side
 Each verifier of the publisher names the CA certificate with
 ``-aik-ca-cert`` and refuses a report whose AIK certificate does not chain
 to it; ``-aik-crl`` revokes single AIK certificates
-(:ghsrc:`src/verifier/main.go`). The verifier's options are in
-:doc:`../../verifier/index`.
-
-Self-service re-anchor (diverse-fleet profile)
-==============================================
-
-On the diverse-fleet profile (a policy with ``require_secureboot``), a
-legitimate firmware update shifts PCR 0/1 and would otherwise reject the host
-until an operator clears its baseline. ``profile: consumer`` in the policy lets
-the verifier re-pin the per-device baseline itself when the drift preserves the
-Secure Boot root of trust (PK/KEK/db unchanged, ``dbx`` append-only, Secure Boot
-still on, firmware version not rolled back); a hardware platform that reports no
-firmware version (``ESRT``, common on DIY boards flashed with the vendor tool
-rather than a UEFI capsule) takes a Low-Firmware-Assurance path. The LFA
-re-anchor also applies automatically -- the player is never blocked waiting on
-the operator -- but it flags the device for post-fact review: list flagged
-devices with ``GET /api/v1/reanchor/review`` and clear one after inspecting it
-with ``POST /api/v1/clients/{clientID}/reanchor-review-ack`` (``actor`` and
-``reason`` required). Each LFA re-anchor is also logged at security level and
-counted in the ``lfa`` re-anchor metric.
-If a reviewed re-anchor looks wrong, revoke or ban the device through the
-existing endpoints.
-
-A change confined to the boot entries (``efibootmgr``, a second operating
-system, firmware adding a disk or USB entry) moves PCR 1 without touching the
-firmware. When PCR 0 and PCR 7 match the pin and the only PCR 1 events that
-differ from the boot log on record are ``BootOrder`` and ``Boot####`` variables
-whose data matches their digest, the verifier re-pins PCR 1 and the log in
-place. This spends neither rate limit and adds nothing to the review queue: a
-boot entry only selects a loader, and Secure Boot, pinned in PCR 7, still
-decides which loader may start. Each re-pin is logged at security level and
-counted in the ``boot_entries`` re-anchor metric. A PCR 1 change that also
-moves other events (SMBIOS tables, platform configuration flags after a RAM or
-CPU swap) takes the firmware path above.
-
-The same profile follows a MOK change. Enrolling or deleting a Machine Owner
-Key (``mokutil``, a DKMS or akmods signing key) moves only the ``MokList``,
-``MokListX`` and ``MokListTrusted`` events shim measures into PCR 14, and so
-the pinned PCR 14 itself. When every other PCR 14 event of the boot log on
-record is unchanged in count, type, name and digest, and a moved ``MokList``
-matches the list the agent sent, the verifier re-pins PCR 14 and the log in
-place. A MOK change already needs a physical confirmation in MokManager at the
-next boot, so the path has no rate limit and no review queue; each re-pin is
-logged at security level and counted in the ``mok`` re-anchor metric, and the
-log line names the events that moved. Any other change to PCR 14 is escalated
-as before.
-
-The profile lives in the policy because it describes the fleet, not the
-deployment, and one verifier can serve several tenants and therefore several
-fleets. ``enterprise`` (and an unset profile) leaves the path off, which is
-right where firmware drift is a finding and re-baselining stays a deliberate
-operator action. ``--enable-self-service-reanchor`` remains as an override in
-both directions for an operator who has to contradict a policy they cannot
-immediately re-sign; left unset, each policy decides for itself.
-
-Operator-forced re-anchor and client removal
-============================================
-
-Deliberate counterpart of the self-service path works on every profile
-and needs no verifier flag. When a platform change is legitimate but the
-self-service re-anchor refuses it (or the profile does not enable it), drop
-the device's pinned baselines through the admin API; the next attestation
-re-establishes trust per the active TOFU/policy configuration.
+(:ghsrc:`src/verifier/main.go`). The baseline re-anchor paths and the
+operator actions on a client are in :doc:`../../verifier/index`.
 
 The commands below run from any host that reaches the verifier's monitoring
 API. Off the verifier's host that API is HTTPS under the verifier's
@@ -676,17 +615,7 @@ The verifier answers:
 
     {"status": "reanchored", "client_id": "<client-id>"}
 
-``actor`` and ``reason`` are required and land in the audit log with the
-optional ``note``; a request missing either gets **400** and changes nothing.
-The action is also logged at security level and counted in the ``forced``
-re-anchor metric. The enrollment is untouched -- the host keeps attesting with
-its enrolled AIK identity.
-
-To remove a device from the fleet entirely (decommissioned host, or trust
-state that must be rebuilt from scratch), delete the client. This drops the
-baselines and any AIK-store registration only; a running host keeps its
-certificate and is re-baselined at its next heartbeat. Revoke it first to keep
-it out. ``actor`` and ``reason`` are required, ``note`` is optional:
+To delete the client:
 
 .. code-block:: sh
 
@@ -700,8 +629,3 @@ The verifier answers:
 .. code-block:: json
 
     {"status": "deleted", "client_id": "<client-id>"}
-
-Revocations and hardware bans are keyed separately and survive the delete,
-so removing a client cannot be used to shed either -- a revoked identity
-that re-enrolls is still revoked.
-

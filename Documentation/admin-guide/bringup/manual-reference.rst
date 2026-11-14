@@ -237,7 +237,7 @@ baseline and therefore the final PCR14, so an enrolled host reports an
 it -- the same review gate a firmware change goes through, since enrolling a MOK
 key is a security-relevant boot-chain change. Under ``profile: consumer`` the
 verifier re-pins a change that moved only the MOK lists itself (see
-"Self-service re-anchor" in :doc:`ca-enrollment`); anything else in PCR14
+"Machine Owner Keys" in :doc:`../../verifier/index`); anything else in PCR14
 still needs the operator. The agent therefore provisions its AIK before
 ``self_measure()`` runs; attestations issued before ``--enroll`` fall back to
 the unauthenticated clock and must be rebound on the next start. A re-install
