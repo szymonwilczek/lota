@@ -940,9 +940,18 @@ out:
 	return rc;
 }
 
+static void seal_primary_foreign(void)
+{
+	fprintf(stderr,
+		"0x%08X holds an object that is not the seal primary; it is "
+		"left alone\n",
+		TPM_SEAL_PRIMARY_HANDLE);
+}
+
 int do_seal_persist_primary(void)
 {
 	bool already = false;
+	int record_err = 0;
 	int ret;
 
 	setenv("TSS2_LOG", "all+none", 0);
@@ -954,8 +963,12 @@ int do_seal_persist_primary(void)
 		return 1;
 	}
 
-	ret = tpm_seal_persist_primary(&g_agent.tpm_ctx, &already);
+	ret = tpm_seal_persist_primary(&g_agent.tpm_ctx, &already, &record_err);
 	tpm_cleanup(&g_agent.tpm_ctx);
+	if (ret == -EEXIST) {
+		seal_primary_foreign();
+		return 1;
+	}
 	if (ret < 0) {
 		fprintf(stderr, "Could not persist the seal primary: %s\n",
 			tpm_strerror(ret));
@@ -966,6 +979,14 @@ int do_seal_persist_primary(void)
 		fprintf(stderr, "Seal storage primary already persisted.\n");
 	else
 		fprintf(stderr, "Seal storage primary persisted.\n");
+	if (record_err < 0) {
+		fprintf(stderr,
+			"Its Name could not be recorded in %s: %s. Seal and "
+			"unseal use 0x%08X only while that record names it.\n",
+			TPM_SEAL_PRIMARY_NAME_PATH, strerror(-record_err),
+			TPM_SEAL_PRIMARY_HANDLE);
+		return 1;
+	}
 	if (!g_agent.tpm_ctx.seal_persistent_primary)
 		fprintf(stderr,
 			"Set seal_persistent_primary=true in lota.conf for "
@@ -975,6 +996,7 @@ int do_seal_persist_primary(void)
 
 int do_seal_evict_primary(void)
 {
+	int record_err = 0;
 	int ret;
 
 	setenv("TSS2_LOG", "all+none", 0);
@@ -986,11 +1008,15 @@ int do_seal_evict_primary(void)
 		return 1;
 	}
 
-	ret = tpm_seal_evict_primary(&g_agent.tpm_ctx);
+	ret = tpm_seal_evict_primary(&g_agent.tpm_ctx, &record_err);
 	tpm_cleanup(&g_agent.tpm_ctx);
 	if (ret == -ENOENT) {
 		fprintf(stderr,
 			"No persistent seal storage primary to evict.\n");
+		return 1;
+	}
+	if (ret == -EEXIST) {
+		seal_primary_foreign();
 		return 1;
 	}
 	if (ret < 0) {
@@ -1001,5 +1027,11 @@ int do_seal_evict_primary(void)
 
 	fprintf(stderr, "Seal storage primary evicted (sealed blobs stay "
 			"valid).\n");
+	if (record_err < 0) {
+		fprintf(stderr,
+			"Its Name record %s could not be removed: %s.\n",
+			TPM_SEAL_PRIMARY_NAME_PATH, strerror(-record_err));
+		return 1;
+	}
 	return 0;
 }

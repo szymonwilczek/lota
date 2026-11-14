@@ -211,12 +211,15 @@ The TPM verbs are described in :doc:`tpm`.
   names the ``--reenroll --publisher`` command for it.
 
 ``--seal-persist-primary``
-  Stores the seal storage primary key at a persistent handle. Seal and
-  unseal use it, and skip ``CreatePrimary``, with
-  ``seal_persistent_primary = true`` in the configuration.
+  Stores the seal storage primary key at a persistent handle and records its
+  Name. Seal and unseal use it, and skip ``CreatePrimary``, with
+  ``seal_persistent_primary = true`` in the configuration, while its Name
+  matches the record. A handle that holds another object is left alone and
+  the command exits 1.
 
 ``--seal-evict-primary``
-  Removes that key. Blobs sealed before stay valid.
+  Removes that key and its record. Blobs sealed before stay valid. A handle
+  that holds another object is left alone and the command exits 1.
 
 Diagnostics
 ===========

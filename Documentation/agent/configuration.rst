@@ -127,7 +127,8 @@ column says what ``SIGHUP`` does with a changed value (`Reloading`_).
      - Next start.
    * - ``seal_persistent_primary``
      - Boolean, default false: seal under the persistent primary key in
-       place of a transient one (:doc:`tpm`).
+       place of a transient one, while its Name matches the one
+       ``--seal-persist-primary`` recorded (:doc:`tpm`).
      - Next start.
    * - ``kernel_path``
      - Path of the kernel image the report names. Default

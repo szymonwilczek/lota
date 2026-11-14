@@ -18,6 +18,7 @@
 #include <limits.h>
 #include <stdbool.h>
 #include <stdint.h>
+#include <string.h>
 #include <tss2/tss2_esys.h>
 #include <tss2/tss2_tcti.h>
 #include <time.h>
@@ -117,9 +118,12 @@ const char *tpm_strerror(int err);
  * Esys_CreatePrimary, which costs one key derivation per call and no slot.
  * --seal-persist-primary with seal_persistent_primary in lota.conf reuses
  * the persisted object. Both are the same key (owner hierarchy, fixed template,
- * empty unique), so blobs sealed either way unseal the other way.
+ * empty unique), so blobs sealed either way unseal the other way. The persisted
+ * object is used only while its Name matches the one --seal-persist-primary
+ * recorded at TPM_SEAL_PRIMARY_NAME_PATH.
  */
 #define TPM_SEAL_PRIMARY_HANDLE 0x81010003
+#define TPM_SEAL_PRIMARY_NAME_PATH "/var/lib/lota/seal_primary.name"
 
 /* Hash algorithm for PCR bank */
 #define TPM_HASH_ALG TPM2_ALG_SHA256
@@ -1070,24 +1074,51 @@ int tpm_unseal_secret_envelope(struct tpm_context *ctx, const uint8_t *blob,
 			       size_t *out_len);
 
 /**
+ * tpm_seal_primary_name_equal() - Whether two object Names are the same.
+ * @a: A Name.
+ * @b: Another Name.
+ *
+ * Return: true when both sizes and bytes match.
+ */
+static inline bool tpm_seal_primary_name_equal(const TPM2B_NAME *a,
+					       const TPM2B_NAME *b)
+{
+	return a->size == b->size && a->size <= sizeof(a->name) &&
+	       memcmp(a->name, b->name, a->size) == 0;
+}
+
+/**
  * tpm_seal_persist_primary() - Persist the seal storage primary.
  * @ctx: Initialized TPM context.
- * @already: If non-NULL, set when an object was already at the handle.
+ * @already: If non-NULL, set when the seal primary was already at the handle.
+ * @record_err: If non-NULL, set to the negative errno of a failed write of
+ *              the Name record, or 0.
  *
- * Return: 0 in both cases, or a negative errno / LOTA_ERR_TPM_*.
+ * An object at TPM_SEAL_PRIMARY_HANDLE is compared with the derived primary by
+ * Name. Either way the Name is written to TPM_SEAL_PRIMARY_NAME_PATH: seal and
+ * unseal use the object only while that record names it.
+ *
+ * Return: 0 with the primary at the handle, also when only the record failed,
+ * -EEXIST when the handle holds another object, which is left alone, or a
+ * negative errno / LOTA_ERR_TPM_*.
  */
-int tpm_seal_persist_primary(struct tpm_context *ctx, bool *already);
+int tpm_seal_persist_primary(struct tpm_context *ctx, bool *already,
+			     int *record_err);
 
 /**
  * tpm_seal_evict_primary() - Remove the persistent seal storage primary.
  * @ctx: Initialized TPM context.
+ * @record_err: If non-NULL, set to the negative errno of a failed removal of
+ *              the Name record, or 0.
  *
- * Sealed blobs still unseal: the derived primary is the same key.
+ * Sealed blobs still unseal: the derived primary is the same key. The Name
+ * record at TPM_SEAL_PRIMARY_NAME_PATH is removed with it.
  *
- * Return: 0, -ENOENT with nothing persisted, or a negative errno /
- * LOTA_ERR_TPM_*.
+ * Return: 0 with the primary evicted, also when only the record stayed,
+ * -ENOENT with nothing persisted, -EEXIST when the handle holds another
+ * object, which is left alone, or a negative errno / LOTA_ERR_TPM_*.
  */
-int tpm_seal_evict_primary(struct tpm_context *ctx);
+int tpm_seal_evict_primary(struct tpm_context *ctx, int *record_err);
 
 /**
  * tpm_handle_holds_object() - Does this TPM have an object at @handle?

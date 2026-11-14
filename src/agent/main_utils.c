@@ -100,11 +100,16 @@ void print_usage(const char *prog, const char *default_bpf_path,
 	       "so\n");
 	printf("                    seal/unseal skip per-op CreatePrimary (needs "
 	       "\n");
-	printf("                    seal_persistent_primary=true in lota.conf)\n");
+	printf("                    seal_persistent_primary=true in lota.conf);"
+	       "\n");
+	printf("                    refuses a handle that holds another "
+	       "object\n");
 	printf("  --seal-evict-primary\n");
 	printf("                    Remove the persistent seal storage primary "
 	       "(sealed\n");
-	printf("                    blobs stay valid)\n");
+	printf("                    blobs stay valid); refuses a handle that "
+	       "holds\n");
+	printf("                    another object\n");
 	printf("  --test-ipc        Run IPC server with simulated attested "
 	       "state\n");
 	printf("                    (no TPM: status, D-Bus and profile "

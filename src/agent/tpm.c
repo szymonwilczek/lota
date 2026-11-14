@@ -4467,10 +4467,95 @@ static int seal_primary_lookup_persistent(struct tpm_context *ctx,
 	return tss2_rc_to_errno(rc);
 }
 
+static int seal_primary_name_of(struct tpm_context *ctx, ESYS_TR object,
+				TPM2B_NAME *out)
+{
+	return tpm_object_name(ctx, object, out->name, sizeof(out->name),
+			       &out->size);
+}
+
+/* Return: 1 when @existing is the primary the template derives, 0, or -errno */
+static int seal_primary_is_ours(struct tpm_context *ctx, ESYS_TR existing)
+{
+	TPM2B_NAME at_handle;
+	TPM2B_NAME derived;
+	ESYS_TR transient = ESYS_TR_NONE;
+	int ret;
+
+	ret = seal_primary_name_of(ctx, existing, &at_handle);
+	if (ret < 0)
+		return ret;
+
+	ret = seal_create_primary_derive(ctx, &transient);
+	if (ret < 0)
+		return ret;
+	ret = seal_primary_name_of(ctx, transient, &derived);
+	Esys_FlushContext(ctx->esys_ctx, transient);
+	if (ret < 0)
+		return ret;
+
+	return tpm_seal_primary_name_equal(&at_handle, &derived) ? 1 : 0;
+}
+
+static int seal_primary_name_save(const TPM2B_NAME *name)
+{
+	const char *path = TPM_SEAL_PRIMARY_NAME_PATH;
+	char tmp[PATH_MAX];
+	int fd;
+	int ret;
+
+	ret = mkdirs(path, 0755);
+	if (ret < 0)
+		return ret;
+	if (snprintf(tmp, sizeof(tmp), "%s.tmp.XXXXXX", path) >=
+	    (int)sizeof(tmp))
+		return -ENAMETOOLONG;
+
+	fd = mkstemp(tmp);
+	if (fd < 0)
+		return -errno;
+	if (fchmod(fd, 0644) != 0 ||
+	    write(fd, name->name, name->size) != (ssize_t)name->size ||
+	    fsync(fd) != 0) {
+		ret = errno ? -errno : -EIO;
+		close(fd);
+		unlink(tmp);
+		return ret;
+	}
+	close(fd);
+
+	if (rename(tmp, path) != 0) {
+		ret = -errno;
+		unlink(tmp);
+		return ret;
+	}
+	return 0;
+}
+
+static int seal_primary_name_load(TPM2B_NAME *out)
+{
+	uint8_t buf[sizeof(out->name) + 1];
+	ssize_t n;
+	int fd;
+
+	fd = open(TPM_SEAL_PRIMARY_NAME_PATH, O_RDONLY | O_CLOEXEC);
+	if (fd < 0)
+		return -errno;
+	n = read(fd, buf, sizeof(buf));
+	close(fd);
+	if (n <= 0 || (size_t)n > sizeof(out->name))
+		return -EINVAL;
+
+	out->size = (UINT16)n;
+	memcpy(out->name, buf, (size_t)n);
+	return 0;
+}
+
 /*
- * Acquire a seal storage primary. When the operator opted into a persistent
- * primary and one exists, reuse it (no CreatePrimary); otherwise derive it
- * per op. *persistent records which, so the caller releases it correctly.
+ * Acquire a seal storage primary. With seal_persistent_primary set, the object
+ * at the handle is used only while its Name is the one --seal-persist-primary
+ * recorded; otherwise the primary is derived per operation. *persistent
+ * records which, so the caller releases it correctly.
  */
 static int seal_acquire_primary(struct tpm_context *ctx, ESYS_TR *out_handle,
 				bool *persistent)
@@ -4478,13 +4563,22 @@ static int seal_acquire_primary(struct tpm_context *ctx, ESYS_TR *out_handle,
 	*persistent = false;
 
 	if (ctx->seal_persistent_primary) {
-		int ret = seal_primary_lookup_persistent(ctx, out_handle);
+		TPM2B_NAME recorded = { 0 };
+		TPM2B_NAME at_handle;
+		ESYS_TR existing = ESYS_TR_NONE;
+		int ret = seal_primary_lookup_persistent(ctx, &existing);
+
 		if (ret < 0)
 			return ret;
-		if (ret == 1) {
+		if (ret == 1 && seal_primary_name_load(&recorded) == 0 &&
+		    seal_primary_name_of(ctx, existing, &at_handle) == 0 &&
+		    tpm_seal_primary_name_equal(&recorded, &at_handle)) {
+			*out_handle = existing;
 			*persistent = true;
 			return 0;
 		}
+		if (ret == 1)
+			tpm_tr_close(ctx, &existing);
 	}
 	return seal_create_primary_derive(ctx, out_handle);
 }
@@ -5079,8 +5173,10 @@ out_kek:
 	return ret;
 }
 
-int tpm_seal_persist_primary(struct tpm_context *ctx, bool *already)
+int tpm_seal_persist_primary(struct tpm_context *ctx, bool *already,
+			     int *record_err)
 {
+	TPM2B_NAME name;
 	ESYS_TR primary = ESYS_TR_NONE;
 	ESYS_TR existing = ESYS_TR_NONE;
 	ESYS_TR persistent = ESYS_TR_NONE;
@@ -5089,6 +5185,8 @@ int tpm_seal_persist_primary(struct tpm_context *ctx, bool *already)
 
 	if (already)
 		*already = false;
+	if (record_err)
+		*record_err = 0;
 	if (!ctx || !ctx->esys_ctx || !ctx->initialized)
 		return -EINVAL;
 
@@ -5096,10 +5194,17 @@ int tpm_seal_persist_primary(struct tpm_context *ctx, bool *already)
 	if (ret < 0)
 		return ret;
 	if (ret == 1) {
+		ret = seal_primary_is_ours(ctx, existing);
+		if (ret == 1)
+			ret = seal_primary_name_of(ctx, existing, &name);
+		else if (ret == 0)
+			ret = -EEXIST;
 		tpm_tr_close(ctx, &existing);
+		if (ret < 0)
+			return ret;
 		if (already)
 			*already = true;
-		return 0;
+		goto record;
 	}
 
 	ret = seal_create_primary_derive(ctx, &primary);
@@ -5115,7 +5220,14 @@ int tpm_seal_persist_primary(struct tpm_context *ctx, bool *already)
 	if (rc != TSS2_RC_SUCCESS)
 		return tss2_rc_to_errno(rc);
 
+	ret = seal_primary_name_of(ctx, persistent, &name);
 	tpm_tr_close(ctx, &persistent);
+	if (ret < 0)
+		return ret;
+record:
+	ret = seal_primary_name_save(&name);
+	if (ret < 0 && record_err)
+		*record_err = ret;
 	return 0;
 }
 
@@ -5156,13 +5268,15 @@ int tpm_evict_profile_aik(struct tpm_context *ctx, uint32_t handle)
 	return 0;
 }
 
-int tpm_seal_evict_primary(struct tpm_context *ctx)
+int tpm_seal_evict_primary(struct tpm_context *ctx, int *record_err)
 {
 	ESYS_TR existing = ESYS_TR_NONE;
 	ESYS_TR persistent = ESYS_TR_NONE;
 	TSS2_RC rc;
 	int ret;
 
+	if (record_err)
+		*record_err = 0;
 	if (!ctx || !ctx->esys_ctx || !ctx->initialized)
 		return -EINVAL;
 
@@ -5171,6 +5285,12 @@ int tpm_seal_evict_primary(struct tpm_context *ctx)
 		return ret;
 	if (ret == 0)
 		return -ENOENT;
+
+	ret = seal_primary_is_ours(ctx, existing);
+	if (ret <= 0) {
+		tpm_tr_close(ctx, &existing);
+		return ret < 0 ? ret : -EEXIST;
+	}
 
 	TPM_CALL_RETRY(ctx, rc,
 		       Esys_EvictControl(ctx->esys_ctx, ESYS_TR_RH_OWNER,
@@ -5183,6 +5303,9 @@ int tpm_seal_evict_primary(struct tpm_context *ctx)
 	}
 
 	tpm_tr_close(ctx, &persistent);
+	if (unlink(TPM_SEAL_PRIMARY_NAME_PATH) != 0 && errno != ENOENT &&
+	    record_err)
+		*record_err = -errno;
 	return 0;
 }
 
