@@ -26,6 +26,10 @@ import (
 	"github.com/szymonwilczek/lota/attestca/server"
 )
 
+// onDiskKeyDoc is the page, from the repository root, that the on-disk key
+// warning names: it covers the PKCS#11 token
+const onDiskKeyDoc = "Documentation/admin-guide/bringup/ca-enrollment.rst"
+
 type stringList []string
 
 func (s *stringList) String() string { return fmt.Sprint(*s) }
@@ -186,7 +190,7 @@ func run(listen string, cfg *runConfig, log *slog.Logger) error {
 
 		log.Warn("using on-disk CA signing key -- development-only fallback; "+
 			"hold the CA key in an HSM in production",
-			"flag", "-ca-key", "doc", "Documentation/admin-guide/bringup/index.rst")
+			"flag", "-ca-key", "doc", onDiskKeyDoc)
 	}
 
 	var ekRootPEMs, ekIntermediatePEMs [][]byte

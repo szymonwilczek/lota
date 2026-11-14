@@ -12,6 +12,8 @@ package main
 import (
 	"io"
 	"log/slog"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -175,5 +177,13 @@ func TestStartupLineCarriesBothCeilings(t *testing.T) {
 	if fields["max_pending"] != 32 {
 		t.Errorf("max_pending on the startup line is %v, want the 32 that was passed",
 			fields["max_pending"])
+	}
+}
+
+// The on-disk key warning names a page that exists
+func TestOnDiskKeyDocExists(t *testing.T) {
+	page := filepath.Join("..", "..", onDiskKeyDoc)
+	if _, err := os.Stat(page); err != nil {
+		t.Fatalf("the warning names a missing page: %v", err)
 	}
 }

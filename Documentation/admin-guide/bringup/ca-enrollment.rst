@@ -150,8 +150,8 @@ token alike (:ghsrc:`src/attestca/ca/issuer.go`).
 
 ``-ca-key`` reads the key from a file in the clear. The CA starts with it and
 logs ``using on-disk CA signing key -- development-only fallback; hold the
-CA key in an HSM in production``. The custody of the key, its rotation and a
-two-tier CA are in :doc:`../../security/ca-key`.
+CA key in an HSM in production`` with this page as ``doc``. The custody of
+the key, its rotation and a two-tier CA are in :doc:`../../security/ca-key`.
 
 PKCS#11 token
 -------------
