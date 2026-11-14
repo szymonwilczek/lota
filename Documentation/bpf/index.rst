@@ -369,9 +369,9 @@ the window yields to quieter ones (:ghsrc:`include/lota_event_budget.h`).
 Statistics
 ==========
 
-``stats`` counts executions, mappings, refusals, the agent's ``ptrace``
-read checks, events sent, ring-buffer drops, events suppressed or yielded
-by the budget, signal-0 probes, and the entries ``exec_history``,
+``stats`` counts executions, mappings, refusals, ``ptrace`` access checks,
+events sent, ring-buffer drops, events suppressed or yielded by the budget,
+signal-0 probes, and the entries ``exec_history``,
 ``instance_actors`` and ``instance_stops`` could not store. When the daemon
 leaves its event loop it logs them on one line that starts ``Shutdown
 statistics: exec=``, without the suppressed events, ``STAT_EXEC_BLOCKED``,

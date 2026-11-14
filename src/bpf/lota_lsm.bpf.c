@@ -2462,14 +2462,14 @@ int BPF_PROG(lota_ptrace_access_check, struct task_struct *child,
 	if (ret != 0)
 		return -EPERM;
 
+	inc_stat(STAT_PTRACE_ATTEMPTS);
+
 	lota_mode = get_mode();
 
 	child_pid = BPF_CORE_READ(child, pid);
 
-	if (lota_ptrace_agent_read_exempt(mode, is_current_lota_agent_task())) {
-		inc_stat(STAT_PTRACE_ATTEMPTS);
+	if (lota_ptrace_agent_read_exempt(mode, is_current_lota_agent_task()))
 		return 0;
-	}
 
 	target_protected = task_instance(child, &target_id);
 	if (target_protected) {
