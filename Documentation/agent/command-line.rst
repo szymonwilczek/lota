@@ -230,7 +230,8 @@ Diagnostics
 
 ``--export-policy``, ``-E``
   Writes a YAML policy of the running system to standard output, for the
-  verifier. It opens the TPM and performs the self-measurement.
+  verifier. It opens the TPM and reads the PCRs it exports; it does not
+  extend PCR 14.
 
 ``--test-ipc``, ``-c``
   Runs the IPC server without a TPM, in a simulated attested state, until
