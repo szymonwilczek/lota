@@ -260,7 +260,7 @@ int test_tpm(void)
 		}
 	}
 
-	printf("\nReading PCR %d before extend...\n", LOTA_PCR_SELF);
+	printf("\nReading PCR %d...\n", LOTA_PCR_SELF);
 	ret = tpm_read_pcr(&g_agent.tpm_ctx, LOTA_PCR_SELF, TPM2_ALG_SHA256,
 			   pcr_value);
 	selftest_record(&tally, ret);
@@ -268,29 +268,21 @@ int test_tpm(void)
 		fprintf(stderr, "Failed to read PCR %d: %s\n", LOTA_PCR_SELF,
 			tpm_strerror(ret));
 	} else {
-		print_hex("PCR 14 (before)", pcr_value, LOTA_HASH_SIZE);
+		print_hex("PCR 14", pcr_value, LOTA_HASH_SIZE);
 	}
 
-	printf("\nExtending self-hash into PCR %d...\n", LOTA_PCR_SELF);
-	ret = self_measure(&g_agent.tpm_ctx);
+	printf("\nChecking PCR %d against this binary's commitment...\n",
+	       LOTA_PCR_SELF);
+	ret = self_check_commitment(&g_agent.tpm_ctx);
 	selftest_record(&tally, ret);
-	if (ret < 0) {
-		fprintf(stderr, "Self-measurement failed: %s\n",
-			strerror(-ret));
-	} else {
-		printf("Self-measurement successful\n");
-	}
-
-	printf("\nReading PCR %d after extend...\n", LOTA_PCR_SELF);
-	ret = tpm_read_pcr(&g_agent.tpm_ctx, LOTA_PCR_SELF, TPM2_ALG_SHA256,
-			   pcr_value);
-	selftest_record(&tally, ret);
-	if (ret < 0) {
-		fprintf(stderr, "Failed to read PCR %d: %s\n", LOTA_PCR_SELF,
-			tpm_strerror(ret));
-	} else {
-		print_hex("PCR 14 (after)", pcr_value, LOTA_HASH_SIZE);
-	}
+	if (ret < 0)
+		fprintf(stderr, "PCR 14 check FAILED: %s\n", strerror(-ret));
+	else if (g_agent.tpm_ctx.boot_commitment_state ==
+		 TPM_PCR14_AWAITING_EXTEND)
+		printf("PCR 14 waits for this boot's commitment; the daemon "
+		       "extends it at startup\n");
+	else
+		printf("PCR 14 holds this binary's commitment\n");
 
 	printf("\n=== AIK and Quote Test ===\n\n");
 

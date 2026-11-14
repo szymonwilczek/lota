@@ -2517,8 +2517,8 @@ enum tpm_pcr14_state tpm_classify_pcr14(const struct tpm_pcr14_observation *obs)
 	return TPM_PCR14_MUTATED_IN_SESSION;
 }
 
-int tpm_extend_boot_commitment(struct tpm_context *ctx,
-			       const uint8_t self_hash[])
+static int boot_commitment_run(struct tpm_context *ctx,
+			       const uint8_t self_hash[], bool write)
 {
 	TSS2_RC rc;
 	uint8_t commit[LOTA_HASH_SIZE];
@@ -2538,7 +2538,8 @@ int tpm_extend_boot_commitment(struct tpm_context *ctx,
 		return -ENOTSUP;
 	}
 
-	ctx->boot_commitment_locked = false;
+	if (write)
+		ctx->boot_commitment_locked = false;
 
 	/*
 	 * From TPM2_ReadClock: a quote obfuscates clockInfo per signing key,
@@ -2613,15 +2614,16 @@ int tpm_extend_boot_commitment(struct tpm_context *ctx,
 
 	switch (ctx->boot_commitment_state) {
 	case TPM_PCR14_AWAITING_EXTEND:
-		ret = tpm_pcr_extend(ctx, TPM_BOOT_COMMITMENT_PCR, commit);
-		if (ret < 0)
-			return ret;
-		save_commitment_snapshot(ctx, expected_locked_pcr14, self_hash,
-					 reset_count, restart_count);
-		ctx->boot_commitment_locked = true;
-		return 0;
-
 	case TPM_PCR14_ALREADY_COMMITTED:
+		if (!tpm_boot_commitment_writes(ctx->boot_commitment_state,
+						write))
+			return 0;
+		if (ctx->boot_commitment_state == TPM_PCR14_AWAITING_EXTEND) {
+			ret = tpm_pcr_extend(ctx, TPM_BOOT_COMMITMENT_PCR,
+					     commit);
+			if (ret < 0)
+				return ret;
+		}
 		save_commitment_snapshot(ctx, expected_locked_pcr14, self_hash,
 					 reset_count, restart_count);
 		ctx->boot_commitment_locked = true;
@@ -2748,6 +2750,18 @@ int tpm_extend_boot_commitment(struct tpm_context *ctx,
 	}
 
 	return -EBADMSG;
+}
+
+int tpm_extend_boot_commitment(struct tpm_context *ctx,
+			       const uint8_t self_hash[])
+{
+	return boot_commitment_run(ctx, self_hash, true);
+}
+
+int tpm_observe_boot_commitment(struct tpm_context *ctx,
+				const uint8_t self_hash[])
+{
+	return boot_commitment_run(ctx, self_hash, false);
 }
 
 int tpm_get_aik_public(struct tpm_context *ctx, uint8_t *buf, size_t buf_size,

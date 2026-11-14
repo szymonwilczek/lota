@@ -327,8 +327,9 @@ struct tpm_context {
 	bool boot_commitment_locked;
 
 	/*
-	 * Verdict from the last tpm_extend_boot_commitment() call: names
-	 * the refusal behind -EBADMSG. Meaningless before the first call.
+	 * Verdict from the last tpm_extend_boot_commitment() or
+	 * tpm_observe_boot_commitment() call: names the refusal behind
+	 * -EBADMSG. Meaningless before the first call.
 	 */
 	enum tpm_pcr14_state boot_commitment_state;
 
@@ -761,6 +762,36 @@ tpm_classify_pcr14(const struct tpm_pcr14_observation *obs);
  */
 int tpm_extend_boot_commitment(struct tpm_context *ctx,
 			       const uint8_t self_hash[]);
+
+/**
+ * tpm_observe_boot_commitment() - Check PCR14 against the agent binary.
+ * @ctx: Initialized TPM context.
+ * @self_hash: SHA-256 of the running agent binary.
+ *
+ * As tpm_extend_boot_commitment(), with the same verdict and refusal
+ * messages, but it extends nothing, saves no snapshot and leaves
+ * @ctx->boot_commitment_locked as it is.
+ *
+ * Return: as for tpm_extend_boot_commitment().
+ */
+int tpm_observe_boot_commitment(struct tpm_context *ctx,
+				const uint8_t self_hash[]);
+
+/**
+ * tpm_boot_commitment_writes() - Whether a verdict changes the TPM or disk.
+ * @state: Verdict from tpm_classify_pcr14().
+ * @write: false for tpm_observe_boot_commitment().
+ *
+ * Return: true when @write is set and @state is TPM_PCR14_AWAITING_EXTEND,
+ * which extends and saves the snapshot, or TPM_PCR14_ALREADY_COMMITTED, which
+ * saves it.
+ */
+static inline bool tpm_boot_commitment_writes(enum tpm_pcr14_state state,
+					      bool write)
+{
+	return write && (state == TPM_PCR14_AWAITING_EXTEND ||
+			 state == TPM_PCR14_ALREADY_COMMITTED);
+}
 
 /**
  * tpm_get_self_hash() - Return the agent hash self_measure() captured.

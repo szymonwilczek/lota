@@ -10,9 +10,9 @@
 /**
  * test_tpm() - Probe the TPM: --test-tpm.
  *
- * Reads PCRs 0, 1, 10 and 14, hashes the kernel and the agent, runs
- * self_measure(), which extends PCR 14 when it holds this boot's initramfs
- * lock value, and quotes with each key the host attests with.
+ * Reads PCRs 0, 1, 10 and 14, hashes the kernel and the agent, checks PCR 14
+ * against this binary's commitment without extending it, and quotes with each
+ * key the host attests with.
  *
  * Return: 0, -EIO when a step failed, or the tpm_init() error.
  */

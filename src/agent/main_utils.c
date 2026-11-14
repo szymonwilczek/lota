@@ -62,7 +62,8 @@ void print_usage(const char *prog, const char *default_bpf_path,
 	       "                    Creates no persistent key: the quote is\n"
 	       "                    skipped when the attestation handle is\n"
 	       "                    free, since a key made here would\n"
-	       "                    outlive the command\n");
+	       "                    outlive the command. Checks PCR 14\n"
+	       "                    without extending it\n");
 	printf("  --test-iommu      Test IOMMU verification and exit\n");
 	printf("  --seal            Seal a secret read from stdin to the PCR "
 	       "state;\n");
@@ -670,7 +671,7 @@ int ipc_init_or_activate(struct ipc_context *ctx)
 	return ipc_init(ctx);
 }
 
-int self_measure(struct tpm_context *ctx)
+static int boot_commitment(struct tpm_context *ctx, bool write)
 {
 	uint8_t self_hash[LOTA_HASH_SIZE];
 	int fd;
@@ -693,7 +694,8 @@ int self_measure(struct tpm_context *ctx)
 	 * No clock counter goes in: a TPM obfuscates resetCount and
 	 * restartCount per signing key.
 	 */
-	ret = tpm_extend_boot_commitment(ctx, self_hash);
+	ret = write ? tpm_extend_boot_commitment(ctx, self_hash) :
+		      tpm_observe_boot_commitment(ctx, self_hash);
 	if (ret < 0) {
 		/* every refusal is -EBADMSG; the state names it */
 		if (ret == -EBADMSG) {
@@ -741,10 +743,22 @@ int self_measure(struct tpm_context *ctx)
 		}
 		return ret;
 	}
+	if (!write)
+		return 0;
 
 	/* reports carry the committed hash even after the file is replaced */
 	memcpy(ctx->self_hash, self_hash, LOTA_HASH_SIZE);
 	ctx->self_hash_ready = true;
 
 	return (int)tpm_boot_commitment_outcome(ctx->boot_commitment_state);
+}
+
+int self_measure(struct tpm_context *ctx)
+{
+	return boot_commitment(ctx, true);
+}
+
+int self_check_commitment(struct tpm_context *ctx)
+{
+	return boot_commitment(ctx, false);
 }

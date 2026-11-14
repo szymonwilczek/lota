@@ -305,10 +305,9 @@ Diagnostics
 #. Open the TPM and run ``TPM2_SelfTest``.
 #. Read PCRs 0, 1 and 10.
 #. Hash the kernel image and the agent binary.
-#. Read PCR 14, perform the self-measurement and read PCR 14 again. When
-   the register waits for this boot's commitment, the self-measurement
-   extends it, as the daemon does at startup; a daemon started later in the
-   same boot then reports ``AGENT_RESTARTED``.
+#. Read PCR 14 and check it against this binary's commitment without
+   extending it: a daemon started later in the same boot still makes the
+   extend.
 #. Quote PCRs 0, 1 and 14 with each publisher's key, or with the host AIK
    when no publisher holds a key. A handle with no object is skipped.
 

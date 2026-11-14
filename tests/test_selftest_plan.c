@@ -15,9 +15,12 @@
  */
 
 #include <errno.h>
+#include <stdbool.h>
+#include <stddef.h>
 #include <stdio.h>
 
 #include "../src/agent/selftest.h"
+#include "../src/agent/tpm.h"
 
 static int g_failures;
 
@@ -120,6 +123,29 @@ static void test_the_tally_counts_what_it_is_told(void)
 	      "a pass, a failure and a skip are counted apart");
 }
 
+/* --test-tpm checks PCR 14 and leaves it to the daemon to extend */
+static void test_check_writes_nothing(void)
+{
+	static const enum tpm_pcr14_state states[] = {
+		TPM_PCR14_AWAITING_EXTEND,    TPM_PCR14_ALREADY_COMMITTED,
+		TPM_PCR14_LOCK_MISSING,	      TPM_PCR14_SPENT_BY_SHUTDOWN,
+		TPM_PCR14_BINARY_CHANGED,     TPM_PCR14_HANDOFF_CHANGED,
+		TPM_PCR14_UNATTRIBUTABLE,     TPM_PCR14_TAMPERED_BEFORE_START,
+		TPM_PCR14_MUTATED_IN_SESSION, TPM_PCR14_STATE_ROLLBACK,
+	};
+	bool any = false;
+
+	for (size_t i = 0; i < sizeof(states) / sizeof(states[0]); i++)
+		any |= tpm_boot_commitment_writes(states[i], false);
+	CHECK(!any, "a check writes neither PCR 14 nor the snapshot");
+	CHECK(tpm_boot_commitment_writes(TPM_PCR14_AWAITING_EXTEND, true),
+	      "the daemon extends a register awaiting the commitment");
+	CHECK(tpm_boot_commitment_writes(TPM_PCR14_ALREADY_COMMITTED, true),
+	      "the daemon saves the snapshot over a held commitment");
+	CHECK(!tpm_boot_commitment_writes(TPM_PCR14_BINARY_CHANGED, true),
+	      "a refused verdict writes nothing");
+}
+
 int main(void)
 {
 	printf("=== --test-tpm attestation-key plan ===\n");
@@ -131,6 +157,7 @@ int main(void)
 	test_a_failed_section_is_not_success();
 	test_nothing_failed_is_success();
 	test_the_tally_counts_what_it_is_told();
+	test_check_writes_nothing();
 
 	if (g_failures) {
 		fprintf(stderr, "\n%d test(s) failed\n", g_failures);

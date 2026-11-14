@@ -182,8 +182,8 @@ The TPM verbs are described in :doc:`tpm`.
 
 ``--test-tpm``, ``-t``
   Reports on the TPM operations and exits. It creates no persistent key; it
-  skips the quote when the attestation handle is free. When PCR 14 waits for
-  this boot's commitment, it extends the register as the daemon does.
+  skips the quote when the attestation handle is free. It checks PCR 14
+  against this binary's commitment and never extends it.
 
 ``--seal``
   Reads a secret from standard input, seals it to the PCR state and writes
