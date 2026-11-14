@@ -207,7 +207,17 @@ The token refusals, each fatal at startup:
   PIN fails; the module's error follows.
 
 ``pkcs11: find key pair:``
-  No key pair on the token matches the selector, or the search failed.
+  The search on the token failed; the module's error follows.
+
+``pkcs11: no key pair on token %q matches label %q, id %q``
+  Nothing on the token carries that label or id.
+
+``pkcs11: %d key pairs on token %q match label %q, id %q; ...``
+  The selector names more than one key pair. The message ends with the
+  selector left to give: ``-ca-key-pkcs11-id`` without an id,
+  ``-ca-key-pkcs11-label`` without a label, each followed by ``or give each
+  its own id`` for pairs that share it too, and ``they share that label and
+  id; give each its own id`` when both are given.
 
 EK trust
 ========

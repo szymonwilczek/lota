@@ -29,6 +29,7 @@ import (
 	"encoding/pem"
 	"math/big"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -151,4 +152,41 @@ func mustThrowawayRootPEM(t *testing.T) []byte {
 		t.Fatalf("throwaway root cert: %v", err)
 	}
 	return pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})
+}
+
+func TestPickKeyPairNamesOneKey(t *testing.T) {
+	c := pkcs11KeyConfig{token: "lota-ca", label: "ca-key"}
+
+	got, err := pickKeyPair([]string{"only"}, c)
+	if err != nil || got != "only" {
+		t.Fatalf("one pair: got %q, %v", got, err)
+	}
+
+	_, err = pickKeyPair([]string(nil), c)
+	want := `no key pair on token "lota-ca" matches label "ca-key"`
+	if err == nil || !strings.Contains(err.Error(), want) {
+		t.Fatalf("no pair: %v", err)
+	}
+
+	_, err = pickKeyPair([]string{"a", "b"}, c)
+	if err == nil || !strings.Contains(err.Error(), "2 key pairs") ||
+		!strings.Contains(err.Error(), "-ca-key-pkcs11-id") ||
+		!strings.Contains(err.Error(), "give each its own id") {
+		t.Fatalf("two pairs: %v", err)
+	}
+
+	_, err = pickKeyPair([]string{"a", "b"},
+		pkcs11KeyConfig{token: "lota-ca", id: "01"})
+	if err == nil ||
+		!strings.Contains(err.Error(), "-ca-key-pkcs11-label") ||
+		!strings.Contains(err.Error(), "give each its own id") {
+		t.Fatalf("two pairs by id: %v", err)
+	}
+
+	_, err = pickKeyPair([]string{"a", "b"},
+		pkcs11KeyConfig{token: "lota-ca", label: "ca-key", id: "01"})
+	if err == nil || strings.Contains(err.Error(), "select one with") ||
+		!strings.Contains(err.Error(), "give each its own id") {
+		t.Fatalf("two pairs by label and id: %v", err)
+	}
 }
