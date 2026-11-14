@@ -1,264 +1,189 @@
 .. SPDX-License-Identifier: MIT
 .. Copyright (C) 2026 Szymon Wilczek
 
+=================================
 EK manufacturer root trust bundle
 =================================
 
-The attestation CA accepts an Endorsement Key certificate only if it chains to
-a TPM manufacturer root the operator trusts. Production fleets span several
-manufacturers, so the trust set is a *bundle* of vendor roots.
+``lota-attest-ca`` accepts an endorsement key certificate only when it
+chains to a TPM manufacturer root the operator trusts. A fleet with several
+manufacturers trusts a bundle of their roots: a directory the CA loads with
+``-ek-root-bundle DIR``, in which a manifest pins every certificate by its
+SHA-256. How the CA uses the bundle is in `ca-enrollment.rst
+<../../Documentation/admin-guide/bringup/ca-enrollment.rst>`_.
 
-What this directory ships is **not** vendor certificates -- it is the machinery
-that turns operator-verified roots into a pin-enforced bundle:
+This directory holds no certificates. It holds ``sources.example``, the
+template of the file the bundle is built from, and this description. Two
+scripts do the work:
 
-- ``sources.example`` -- the per-vendor template: one line per certificate,
-  carrying the SHA-256 fingerprint you verified out of band, the file it is
-  written under, whether it is a trust anchor or path material, and where it
-  was fetched.
-- ``lota-ek-roots-update.sh`` (in ``scripts/``) -- fetches each certificate,
-  refuses any download whose fingerprint does not match the pin you recorded,
-  and writes the populated bundle directory.
+``scripts/lota-ek-root-pin.sh``
+  Walks an EK certificate up to its self-signed root and drafts a sources
+  line for each certificate the bundle has to pin.
 
-The CA loads the populated bundle with ``-ek-root-bundle <dir>`` and is
-**fail-closed**: every pin in the bundle manifest must resolve to a present
-certificate whose SHA-256 matches, and any unpinned certificate dropped into
-the directory is rejected. A swapped or injected root therefore cannot widen
-the trusted manufacturer set without the change showing up as a pin edit in
-version control.
+``scripts/lota-ek-roots-update.sh``
+  Fetches each certificate of a sources file, refuses one whose SHA-256
+  differs from its pin, and writes the bundle.
 
-Why no roots ship here
-----------------------
+A pin is worth what its source is. The project ships none, because a
+fingerprint taken over a download proves only that the download matches
+itself. Check each pin against a value the manufacturer publishes apart
+from the certificate.
 
-The bundle ships empty by design. A pin is only worth anything if it was
-verified **out of band** against a source the vendor controls -- a signed
-advisory, a release note, a fingerprint the manufacturer publishes separately
-from the download. That verification is an act the operator performs against
-their own platforms; the project cannot stand in for it, and a fingerprint
-computed over a blob the project happened to download is worth nothing (a man
-in the middle hands you a matching pair).
+Bundle
+======
 
-Two manufacturers publish a root over a channel an operator can verify and pin
-directly: **Infineon** (OPTIGA TPM root via its PKI host) and
-**STMicroelectronics** (ST TPM EK root via GlobalSign, ST app note TN1330). The
-others do not reduce to a single shippable anchor:
+The bundle directory holds ``ek-roots.manifest`` and one PEM file per
+certificate. Each manifest line that is not blank and does not start with
+``#`` reads::
 
-- **Intel** runs two PKIs -- the legacy discrete / early-PTT roots
-  (historically at ``upgrades.intel.com``) and the `Intel OnDie
-  CA <https://software.intel.com/sites/manageability/AMT_Implementation_and_Reference_Guide/default.htm?turl=WordDocuments%2FODCA.htm>`__
-  used by modern CSME firmware TPM (PTT) on Tiger Lake and later. A CSME PTT EK
-  cert (issuer ``CSME <SoC> PTT``) chains through the OnDie CA root
-  (``https://tsci.intel.com/content/OnDieCA/certs/OnDie_CA_RootCA_Certificate.cer``),
-  not the legacy root, so which root to pin depends on the platform -- walk the
-  EK cert's chain to be sure.
-- **AMD fTPM** and AMD-based **vTPM** EK certificates chain under Microsoft's
-  TPM PKI on most platforms, not an AMD root, and many AMD fTPMs ship with no
-  EK certificate in NV at all -- there is nothing to pin until you have an EK
-  cert whose chain you can walk.
+	<sha256>  <filename>  <class>  [label...]
 
-So the supported hardware set is not a fixed vendor list. It is **every TPM
-whose EK certificate chains to a root you can verify and pin** -- which on real
-platforms is determined by walking an actual EK certificate up to its
-self-signed root, not by trusting a name in a table.
+``sha256``
+  The SHA-256 of the certificate's DER, 64 hex characters in either case.
 
-Finding the root for a platform
--------------------------------
+``filename``
+  A bare file name in the directory. The file must hold exactly one PEM
+  ``CERTIFICATE`` block; blocks of other types are skipped.
 
-Take an EK certificate from a host you mean to attest and walk its issuer chain
-to the self-signed root. **Read the certificates the chip carries first**: on a
-firmware TPM the EK certificate has no Authority Information Access extension at
-all, so there is no URL to follow from the leaf, and the certificates above it
-live in NV at ``0x01c00100`` -- concatenated DER, no separators, published
-nowhere else. AIA appears only from the certificates above those, so the walk
-starts at the top of what the chip gave you, not at the EK.
+``class``
+  ``root`` for a self-signed certificate, which anchors a chain, or
+  ``intermediate`` for one that is not self-signed, which the CA builds a
+  path through and never anchors at.
 
-.. code:: sh
+``label``
+  Free text.
 
-   # discrete TPM / Intel PTT: the EK cert lives in TPM NV
-   sudo tpm2_nvreadpublic                      # find the 0x01c0xxxx EK cert index
-   sudo tpm2_nvread 0x01c00002 -o ek.der       # RSA EK (0x01c0000a = ECC)
-   sudo tpm2_nvread 0x01c00100 -o nvchain.bin  # the certificates above it, if any
-   openssl x509 -in ek.der -inform DER -noout -issuer -ext authorityInfoAccess
-   # a discrete TPM usually answers with a "CA Issuers" URL here;
-   # Intel PTT answers "No extensions in certificate", which is what nvchain.bin is for.
-   # From the highest certificate you now hold, follow each "CA Issuers" URL up
-   # until issuer == subject (the root), then:
-   openssl x509 -in root.der -inform DER -outform DER | sha256sum  # the pin
+The CA refuses to start on a bundle with a missing or empty manifest, a
+malformed line, a pin or file name on two lines, a missing file, a file that
+does not hold exactly one certificate, a certificate whose SHA-256 is not its
+pin, a ``root`` that is not self-signed or an ``intermediate`` that is, no
+``root`` line, or a ``.pem`` file, in any letter case, that no line names
+(``src/attestca/ca/ekbundle.go``). Files with other extensions and
+subdirectories are not checked. An extra certificate therefore cannot widen
+the trusted set without a manifest line.
 
-Guessing filenames at a vendor's distribution point is not a substitute; Intel's
-returns ``AccessDenied`` for anything not linked from a certificate.
+Sources file
+============
 
-On a Windows host the chain comes from PowerShell (admin):
-``Get-TpmEndorsementKeyInfo -HashAlgorithm Sha256`` exposes
-``ManufacturerCertificates`` and ``AdditionalCertificates``; export each
-(``[IO.File]::WriteAllBytes(...,$c.RawData)``) and walk the same way.
+``scripts/lota-ek-roots-update.sh`` reads lines of the form::
 
-``scripts/lota-ek-root-pin.sh`` does all of it. Hand it the EK certificate and,
-where the chip carries one, the NV blob: it splits the blob, climbs through the
-certificates the device has, follows the AIA chain from the highest of them to
-the self-signed root, and drafts a sources line for **every certificate you
-have to pin** -- the root, and each certificate the walk had to fetch, because
-the device carries none of those and the CA has no way to obtain them.
+	<sha256>  <filename>  <class>  <url>  [label...]
 
-.. code:: sh
+The URL is where the script fetches the certificate. The script refuses the
+file when a line has fewer than four fields, a pin is ``REPLACE_ME`` or not
+64 hex characters, a file name is not bare, is ``ek-roots.manifest``, or
+appears twice, a class is neither ``root`` nor ``intermediate``, no line is
+``root``, or no line is given at all. Copy ``sources.example`` and add the
+lines; an unedited copy has none.
 
-   sudo tpm2_nvread 0x01c00002 -o ek.der
-   scripts/lota-ek-root-pin.sh ek.der                        # discrete TPM
-   # de0e...99b  acme-tpm-root-ca.pem     root          https://...  Acme TPM Root CA
-   # 4f7c...11a  acme-tpm-issuing-ca.pem  intermediate  https://...  Acme TPM Issuing CA
+Finding the certificates to pin
+===============================
 
-   sudo tpm2_nvread 0x01c00100 -o nvchain.bin                # firmware TPM
-   scripts/lota-ek-root-pin.sh --nv-chain nvchain.bin ek.der
-   # on-chip chain: 3 certificate(s) from nvchain.bin
-   # root: ...,OU=OnDie CA Root Cert Signing,CN=www.intel.com
-   # beb40bb7...fc24  c-us-st-ca-...-cn-www-intel-com.pem  root  https://tsci.intel.com/...
-   # intermediate: ...,OU=OnDie CA CSME Intermediate CA,...
-   # ...  ou-ondie-ca-csme-intermediate-ca-....pem  intermediate  https://tsci.intel.com/...
+Read the EK certificate from the TPM first. The RSA EK certificate is at NV
+index ``0x01c00002``, the ECC one at ``0x01c0000a``. A TPM that also stores
+the certificates above its EK keeps them at ``0x01c00100`` as concatenated
+DER:
 
-An Intel PTT platform draws three lines: the OnDie root and the two
-intermediates between it and the certificates the chip carries. Pin the root
-alone and enrollment fails at the topmost on-chip certificate, with an error
-that blames the endorsement key.
+.. code-block:: console
 
-A certificate the walk found in the NV blob gets no line: the device sends it
-with its enrollment request, so pinning it buys nothing.
+	# tpm2_nvread 0x01c00002 -o ek.der
+	# tpm2_nvread 0x01c00100 -o nvchain.bin
 
-Without the blob on a firmware TPM the tool stops where the operator would, and
-says which NV index to read.
+The agent sends the certificates at ``0x01c00100`` with its enrollment
+request and prints their count (``EK certificate chain: %zu manufacturer
+intermediate(s) from the TPM``). Then run the pin script::
 
-The pins it prints are over what the network returned -- it does **not** vouch
-for them. The pin you record is the SHA-256 over each certificate's DER
-**after** you have confirmed it against the vendor's published value -- never
-the value the download alone hands you.
+	scripts/lota-ek-root-pin.sh [--nv-chain FILE] <ek-cert | -> [output-dir]
 
-Provisioning a bundle
----------------------
+It reads the EK certificate in DER or PEM, or from standard input for ``-``.
+``--nv-chain`` takes the certificates the TPM stores, as concatenated DER or
+a PEM bundle. From the EK the script climbs to each issuer: first one from
+the chain file whose signature verifies the certificate, otherwise the
+certificate at the first ``CA Issuers`` URL of its Authority Information
+Access extension, over HTTP or HTTPS. It stops at a self-signed
+certificate, and fails after 10 hops, at a certificate with no issuer in the
+chain file and no ``CA Issuers`` URL, or at a URL of another scheme:
 
-1. Copy the template and add the lines your fleet's EK certificates need --
-   ``lota-ek-root-pin.sh`` drafts them from a platform's EK certificate, one
-   per certificate that must be pinned. Fill each ``pin`` with the SHA-256 you
-   verified out of band (a vendor advisory, a signed release note -- never the
-   download itself):
+.. code-block:: console
 
-   .. code:: sh
+	$ scripts/lota-ek-root-pin.sh --nv-chain nvchain.bin ek.der >>sources
 
-      cp sources.example sources
-      scripts/lota-ek-root-pin.sh ek.der >>sources   # draft the lines, then verify each pin
-      $EDITOR sources
+Standard output carries one line per certificate to pin: the root, and each
+certificate the walk fetched. Another certificate from the chain file gets no
+line, as the host sends it. The file name is derived from the subject. A
+line for a certificate taken from the chain file or fetched over HTTP gets
+``REPLACE_WITH_VENDOR_PUBLISHED_URL`` for its URL, as the update script
+fetches over HTTPS alone. Comments go to standard
+error, and with ``output-dir`` each certificate that gets a line is written
+there as PEM.
 
-   Every line carries a class: ``root`` for a self-signed manufacturer root,
-   ``intermediate`` for a certificate that only completes a path to one. A
-   sources file with no ``root`` line is refused -- it anchors nothing.
+The pins are computed over what the network returned. Check each against
+the manufacturer's published value before the line goes into a sources
+file.
 
-2. Materialize the bundle. The tool downloads each certificate, re-checks its
-   fingerprint against your pin, and fails closed on any mismatch:
+Building the bundle
+===================
 
-   .. code:: sh
+.. code-block:: console
 
-      scripts/lota-ek-roots-update.sh sources /var/lib/lota/ek-roots
+	$ scripts/lota-ek-roots-update.sh sources /var/lib/lota/ek-roots
+	# lota-attest-ca -ek-root-bundle /var/lib/lota/ek-roots ...
 
-3. Point the CA at it:
+For each line the script fetches the URL with ``curl`` over HTTPS and TLS 1.2
+or later, converts the certificate from DER or PEM to PEM, and compares the
+SHA-256 of its DER with the pin. Any refusal exits 1 before anything is
+written into the output directory. On success it installs the manifest and every
+certificate with mode 0644 and prints ``wrote %d pinned certificate(s)``.
 
-   .. code:: sh
+The script writes the files it builds and removes none. A certificate
+whose line was dropped stays in the directory, and when its name ends in
+``.pem`` the CA refuses the bundle as unpinned; remove the file by hand.
 
-      lota-attest-ca -ek-root-bundle /var/lib/lota/ek-roots ...
+Path material
+=============
 
-Intermediate CAs
-----------------
+A route from an EK certificate to a root uses two sources of path
+material: the certificates the host sends from ``0x01c00100``, at most 8,
+and the bundle's intermediates. Neither anchors a route, so a self-signed
+certificate the host sends counts for nothing. Every certificate of the route
+that the host does not send needs an ``intermediate`` line. When one is
+missing, enrollment fails with ``EK certificate does not chain to a trusted
+manufacturer root``, and the error names the issuer the route stops at.
 
-Real manufacturer EK PKIs are commonly three-level: the EK leaf is issued by an
-intermediate CA which in turn chains to the self-signed root. A firmware TPM
-goes deeper -- an Intel PTT EK leaf sits six levels below the OnDie root -- and
-keeps the certificates nearest the leaf in its own NV, published nowhere else.
-
-The path is therefore built from two sources. The device presents whatever its
-TPM stores at NV index ``0x01c00100`` with the enrollment request, and the CA
-uses those certificates as path material only: they can complete a route to a
-root the operator pinned, and they can never become an anchor, so a host that
-presents its own self-signed root is refused exactly as one presenting nothing.
-Everything else has to come from the bundle: **the bundle must include every
-intermediate on the path that the device does not carry**, pinned in the
-manifest with class ``intermediate``. Both halves are load-bearing -- a
-platform whose on-chip certificates cover only part of the gap still needs the
-rest pinned.
-
-A bundled intermediate is path material and nothing more. It completes a route
-that still has to terminate at a certificate classed ``root``, so pinning one
-does not quietly narrow the trusted set to a single manufacturer branch, and it
-cannot stand in for the root it hangs from: a bundle that pins only
-intermediates is refused at load, because it anchors no chain. Deliberately
-trusting one branch instead of everything under a root is a different decision,
-made by pinning that branch's certificate as a ``root`` -- which the loader
-refuses unless the certificate really is self-signed. Pinning an intermediate
-the device also presents is harmless: the CA opens no connection while it
-verifies an EK, so the path costs the same however it is assembled. The fetch
-a pinned intermediate saves is one the AIA walk makes when the bundle is
-built, not one an enrollment makes. What pinning it does buy is a device that
-presents no intermediates at all: the path is already complete without them.
-
-Revocation of a bundled intermediate by its parent root is not evaluated during
-EK verification: the CA checks EK leaves against the manufacturer CRL feed,
-never the bundle against itself. Treat a bundled intermediate with the same
-care as a root -- pin it from an out-of-band source, and drop its manifest line
-if the manufacturer revokes it.
-
-The AIA walk that finds the root passes through each intermediate on the way,
-and ``lota-ek-root-pin.sh`` drafts a line for every one of them it had to
-fetch -- which is exactly the set the device does not present itself. A missing
-intermediate surfaces as an ``ErrEKChain`` rejection on genuine hardware;
-``lota-agent --enroll`` reports how many intermediates the TPM supplied, which
-is what tells the two halves of the path apart. The
-manufacturer CRL feed (below) has the same dependency: CRLs covering EK leaves
-are signed by the issuing intermediate, so the feed loads only when that
-intermediate is bundled.
-
-Updating
---------
-
-Adding, removing, or rotating a vendor certificate is a manifest edit: change
-the relevant line in ``sources``, re-run ``lota-ek-roots-update.sh``, and
-commit the resulting fingerprint change. Because the CA pins every entry, the
-diff in the manifest is the audit trail for any change to the trusted set.
-
-A vendor that rotates its root publishes the new fingerprint; record it as a
-new line (keep the old one until every host with the older EK is retired so
-both chains keep verifying through the overlap).
+An ``intermediate`` line does not narrow the trust to its branch, since the
+route still has to reach a ``root``. A bundled intermediate is not checked
+against a CRL: the CA checks the EK certificate alone
+(``src/crl/crl.go``). To stop trusting an intermediate, remove its line
+and its file.
 
 Manufacturer CRLs
------------------
+=================
 
-Root bundle without the matching revocation feed is half a trust anchor:
-manufacturers revoke EK certificates in bulk (the ROCA / CVE-2017-15361
-advisory revoked millions of Infineon EKs whose private key is recoverable from
-the public modulus), and an EK with a recoverable key lets a software attacker
-complete credential activation without any TPM. Pass each manufacturer CRL to
-the CA with ``-ek-crl <file>`` (repeatable; PEM or DER, a file may bundle
-several PEM blocks):
+``-ek-crl FILE`` gives the CA a manufacturer CRL, and may be repeated. A
+file holds one DER CRL or PEM blocks, of which only ``X509 CRL`` blocks are
+read:
 
-.. code:: sh
+.. code-block:: console
 
-   lota-attest-ca -ek-root-bundle /var/lib/lota/ek-roots \
-       -ek-crl /var/lib/lota/ek-crls/infineon.crl ...
+	# lota-attest-ca -ek-root-bundle /var/lib/lota/ek-roots \
+		-ek-crl /var/lib/lota/ek-crls/vendor.crl ...
 
-Each CRL must be signed by a certificate present in the loaded EK trust set --
-anchors and pinned path material alike; manufacturers that issue EK
-certificates through an intermediate CA sign their CRLs with that intermediate,
-so the intermediate must be part of the bundle for the feed to load.
+Each CRL must be signed by a root or intermediate of the trust set whose
+subject matches its issuer, carry ``NextUpdate``, and use RSA, RSA-PSS or
+ECDSA with SHA-256, SHA-384 or SHA-512, or Ed25519. A CRL signed by an
+intermediate loads only when that intermediate is bundled or given with
+``-ek-root``. A CRL that fails
+any of these stops the CA at start. On ``SIGHUP`` the CA reloads every CRL
+and, when one fails, keeps the previous set.
 
-The CA fails closed at startup on a CRL that does not verify, omits
-``NextUpdate``, or uses a weak signature algorithm, and an issuer whose every
-loaded CRL is past ``NextUpdate`` is refused at enrollment time with its own
-status, distinct from a rejected endorsement key and from a CA fault: the host
-is told the feed needs refreshing.
+Enrollment refuses an EK certificate listed in a loaded CRL with status 2,
+and one whose issuer has only CRLs past ``NextUpdate`` with status 9. An
+issuer with no CRL is not checked. The CRL distribution point is usually in
+the EK certificate:
 
-An issuer with no configured CRL is accepted (standard RFC 5280 semantics) --
-ship the feed for every manufacturer that publishes one.
+.. code-block:: console
 
-Independently of any CRL, the CA rejects an EK whose RSA modulus carries the
-ROCA fingerprint itself -- the weakness is intrinsic to the key, so a lagging
-or unconfigured feed does not reopen that hole.
+	$ openssl x509 -in ek.der -inform DER -noout -ext crlDistributionPoints
 
-Refresh a feed by rewriting the file atomically and sending the daemon SIGHUP;
-a refresh that fails validation keeps the previous set active. The CRL
-distribution point is usually listed in the EK certificate's
-``crlDistributionPoints`` extension
-(``openssl x509 -in ek.der -inform DER -noout -ext crlDistributionPoints``).
+The CA also refuses an EK whose RSA modulus carries the ROCA fingerprint,
+with or without a CRL (``src/attestca/ca/roca.go``).
