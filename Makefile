@@ -2211,6 +2211,7 @@ help:
 	@$(HELP_ROW) fuzz-regress "Replay the committed C fuzz reproducers"
 	@$(HELP_ROW) fuzz-agent "Build IPC/agent fuzz target"
 	@$(HELP_ROW) fuzz-config "Build config parser fuzz target"
+	@$(HELP_ROW) fuzz-enroll "Build enrollment reply decoder fuzz target"
 	@$(HELP_ROW) fuzz-seal-envelope "Build sealed-envelope parser/AEAD fuzz target"
 	@$(HELP_ROW) fuzz-tpm-attest "Build TPM attestation-structure fuzz target"
 	@$(HELP_ROW) fuzz-policy-sign "Build policy signature-verify fuzz target"
