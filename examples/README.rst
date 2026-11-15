@@ -1,63 +1,116 @@
 .. SPDX-License-Identifier: MIT
 .. Copyright (C) 2026 Szymon Wilczek
 
-LOTA examples
-=============
+========
+Examples
+========
 
-End-to-end integration material that demonstrates how the framework is deployed
-in a real game stack. Every subdirectory under ``examples/`` is intentionally a
-single-purpose component; they are wired together by ``examples/demo/setup.sh``
-once every piece is in tree.
+The programs and scripts under ``examples/`` show LOTA from the side of the
+software that relies on it: a game client, a game server, an anti-cheat
+heartbeat, a CI step and the deployments around the verifier. Each
+directory has a ``README.rst`` with what it runs, what it needs and what
+it prints.
 
-+---------------------+-------------------------------------------------------+
-| Directory           | Role                                                  |
-+=====================+=======================================================+
-| ``enrollment/``     | Privacy CA enrollment end-to-end: stand up            |
-|                     | ``lota-attest-ca``, enroll an AIK via credential      |
-|                     | activation, attest to a verifier that trusts only the |
-|                     | CA root.                                              |
-+---------------------+-------------------------------------------------------+
-| ``ci-gate/``        | Enterprise reference: a CI/CD step proves its host is  |
-|                     | attested before a relying party releases a secret to   |
-|                     | it. Fail-closed, exit-code driven, with a rootless     |
-|                     | swTPM-backed end-to-end run.                           |
-+---------------------+-------------------------------------------------------+
-| ``demo_server/``    | Go reference server: nonce issuance + heartbeat       |
-|                     | verification                                          |
-+---------------------+-------------------------------------------------------+
-| ``demo_anticheat/`` | C heartbeat producer driven by the anti-cheat SDK     |
-+---------------------+-------------------------------------------------------+
-| ``demo_game/``      | SDL2 client (``trust_pong``) that mirrors the server  |
-|                     | verdict                                               |
-+---------------------+-------------------------------------------------------+
-| ``demo/``           | End-to-end deploy + tampering scenario + asciinema    |
-|                     | cast                                                  |
-+---------------------+-------------------------------------------------------+
-| ``cs2/``            | Proton / CS2 integration smoke note                   |
-+---------------------+-------------------------------------------------------+
-| ``block-demo/``     | Self-protecting victim + dummy evil.so; proves the    |
-|                     | BPF LSM gate rejects an unauthorised dlopen           |
-|                     | end-to-end.                                           |
-+---------------------+-------------------------------------------------------+
-| ``sealed-key/``     | Offline sealed-key round-trip: seal a secret to the   |
-|                     | boot/PCR state, unseal it, and prove it fails closed  |
-|                     | after the state changes.                              |
-+---------------------+-------------------------------------------------------+
-| ``ha-postgres/``    | Multi-instance verifier on a shared Postgres backend: |
-|                     | two instances share enforcement state via             |
-|                     | ``--pg-dsn``, so a client enrolled on one is known    |
-|                     | to the other.                                         |
-+---------------------+-------------------------------------------------------+
+Directories
+===========
 
-``anticheat-integration.rst`` is the map for a studio forking the
-game-side material: what to copy, what to consume, what must change, and
-where the licence line falls.
+.. list-table::
+   :header-rows: 1
+   :widths: 22 78
 
-The whole tree is built with ``make examples`` from the repository root. The
-target is opt-in: ``make all`` does not depend on it, so the agent build stays
-the same speed it has always been.
+   * - Directory
+     - Content
+   * - `demo/ <demo/README.rst>`_
+     - ``setup.sh`` runs ``demo_server``, ``demo_anticheat`` and
+       ``trust_pong`` against an agent on a software TPM;
+       ``demo_tamper.sh`` makes the heartbeat fail on demand.
+   * - `demo_server/ <demo_server/README.rst>`_
+     - Go server that issues nonces, verifies heartbeats and reports the
+       verdict to the game client (``demo_server``).
+   * - `demo_anticheat/ <demo_anticheat/README.rst>`_
+     - C heartbeat producer built on the anti-cheat SDK
+       (``demo_anticheat``).
+   * - `demo_game/ <demo_game/README.rst>`_
+     - SDL2 client that shows the server's verdict (``trust_pong``).
+   * - `block-demo/ <block-demo/README.rst>`_
+     - A protected process that maps a library outside the trust set
+       (``block_victim``, ``evil.so``).
+   * - `runtime_remeasure/ <runtime_remeasure/README.rst>`_
+     - Computes the runtime measurement of a process image without an
+       agent, verifier or TPM (``runtime_remeasure``).
+   * - `ci-gate/ <ci-gate/README.rst>`_
+     - A CI step that proves its host is attested before a relying party
+       releases a secret (``lota-ci-attest``, ``lota-release-gate``).
+   * - `cs2/ <cs2/README.rst>`_
+     - The Wine and Proton hook in a Steam title, with failure scenarios
+       under ``cs2/scenarios/``.
+   * - `enrollment/ <enrollment/README.rst>`_
+     - Enrollment of an AIK with ``lota-attest-ca`` and attestation to a
+       verifier that trusts only the CA.
+   * - `hsm-ca/ <hsm-ca/README.rst>`_
+     - ``lota-attest-ca`` with its signing key in a PKCS#11 token.
+   * - `mtls/ <mtls/README.rst>`_
+     - The heartbeat producer and the server over mutual TLS.
+   * - `ha-postgres/ <ha-postgres/README.rst>`_
+     - Two verifiers sharing one Postgres database.
+   * - `sealed-key/ <sealed-key/README.rst>`_
+     - A secret sealed to the boot state and unsealed offline.
 
-The demo dependencies that are not LOTA's own -- SDL2 and libcurl -- are
-optional. An example that needs a package the host does not have prints a
-``SKIP:`` line naming what to install, and the rest of the tree is built;
-``examples/optional-deps.mk`` is where a fragment declares what it needs.
+`anticheat-integration.rst <anticheat-integration.rst>`_ describes what a
+studio forking the anti-cheat reference copies, links against and has to
+change.
+
+Building
+========
+
+``make examples`` from the repository root builds the C and Go examples
+into ``$(BUILD_DIR)/examples/``, by default ``build/examples/``. The
+``all`` target does not include them.
+
+The target runs ``sdk-stage`` first, which installs the public headers,
+the SDK libraries and their ``.pc`` files under ``$(BUILD_DIR)/stage/``
+in ``include/lota/``, ``lib64/`` and ``lib64/pkgconfig/``, the directories
+the ``lota-sdk`` and ``lota-sdk-devel`` packages install into under
+``/usr``. Each ``examples/*/Makefile.fragment`` then compiles against that
+prefix through ``pkg-config`` and links with an ``rpath`` to its
+``lib64/``. ``make`` stops at the first fragment that fails. After the
+fragments, ``demo_server`` is built with ``go build`` when ``go`` is
+installed; otherwise the target prints
+``SKIP: demo_server (go not installed or stub absent)``.
+
+``make examples-clean`` removes ``$(BUILD_DIR)/examples/`` and runs each
+fragment's ``clean`` rule.
+
+Optional dependencies
+---------------------
+
+SDL2 and libcurl are not required to build LOTA. A fragment that needs
+them sets ``LOTA_OPTIONAL_PKGS`` and includes
+`optional-deps.mk <optional-deps.mk>`_, which sets ``LOTA_OPTIONAL_OK`` to
+``yes`` when ``pkg-config`` finds every listed package. Without them the
+fragment prints a ``SKIP:`` line naming the packages to install, and the
+other fragments still build:
+
+.. list-table::
+   :header-rows: 1
+   :widths: 30 25 45
+
+   * - Fragment
+     - Needs
+     - Without it
+   * - ``demo_game``
+     - ``sdl2``, ``libcurl``
+     - ``trust_pong`` is skipped
+   * - ``demo_anticheat``
+     - ``libcurl``
+     - ``demo_anticheat`` is skipped
+   * - ``ci-gate``
+     - ``libcurl``
+     - ``lota-ci-attest`` is skipped; ``lota-release-gate`` is built
+   * - ``ci-gate``
+     - ``go``
+     - ``lota-release-gate`` is skipped
+
+`test_examples_optional_deps.sh
+<../tests/integration/test_examples_optional_deps.sh>`_ hides one
+package at a time and checks that the rest of the tree builds.
