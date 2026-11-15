@@ -2183,7 +2183,7 @@ help:
 	@$(HELP_ROW) sanitizer-build "Build CI-safe userspace under ASan/UBSan"
 	@$(HELP_ROW) valgrind-unit "Run unit tests under valgrind memcheck"
 	@$(HELP_ROW) valgrind-smoke "Run CLI smoke paths under valgrind memcheck"
-	@$(HELP_ROW) check-includes "Fail on transitive (unused-direct) #includes"
+	@$(HELP_ROW) check-includes "Fail on unused #includes"
 	@$(HELP_ROW) check-el9-decls "Syntax-check the C tree against el9 headers"
 	@$(HELP_ROW) check-player-build "Run the player build+install in clean Fedora"
 	@$(HELP_ROW) check-abi "Fail on public SDK symbol/header/layout drift"
