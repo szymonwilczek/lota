@@ -277,7 +277,7 @@ main() {
     local rc=0
     local ai_assisted=0
     local commit branch
-    local -a commits checked_commits
+    local -a commits=() checked_commits=()
 
     if [[ ${1:-} == "--pr-diff" ]]; then
 	mode="pr-diff"

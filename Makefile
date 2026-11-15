@@ -1621,6 +1621,7 @@ test-unit: all $(TEST_BINS)
 	@tests/integration/test_dev_bringup_idempotent.sh
 	@tests/integration/test_installer_status_stages.sh
 	@tests/integration/test_package_manifest_lists.sh
+	@tests/integration/test_pr_quality_skipped_range.sh
 	@if command -v python3 >/dev/null 2>&1; then \
 		tests/integration/test_license_boundary_scripts.sh; \
 	else \
