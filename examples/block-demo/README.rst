@@ -1,132 +1,123 @@
 .. SPDX-License-Identifier: MIT
 .. Copyright (C) 2026 Szymon Wilczek
 
-block-demo: evidence that LOTA blocks unauthorised code loads
-=============================================================
+==========
+block-demo
+==========
 
-This directory ships the minimal end-to-end proof that the BPF LSM strict_mmap
-gate actually rejects a hostile shared object inside a process that opted into
-LOTA's runtime enforcement.
-
-Two artifacts are built under ``make examples``:
-
-+---------------------------------+-------------------------------------------+
-| Artifact                        | Purpose                                   |
-+=================================+===========================================+
-| ``build/examples/evil.so``      | Tiny shared object whose                  |
-|                                 | ``__attribute__((constructor))`` only     |
-|                                 | writes to stderr. Never executes during a |
-|                                 | successful block (``security_mmap_file``  |
-|                                 | returns ``-EPERM`` before the loader maps |
-|                                 | the .so), so the message is the canary    |
-|                                 | that fires on a regression.               |
-+---------------------------------+-------------------------------------------+
-| ``build/examples/block_victim`` | Self-protecting process. Calls            |
-|                                 | ``lota_protect_self()`` to land in        |
-|                                 | ``protected_pids``, then ``dlopen()``\ s  |
-|                                 | the evil object. Exit code reports        |
-|                                 | whether the gate fired.                   |
-+---------------------------------+-------------------------------------------+
+``block_victim`` puts itself in the protected set of the agent and then
+``dlopen()``\ s ``evil.so``, a library outside the trust set. With the
+agent in ``enforce`` mode and ``strict_mmap`` on, the ``mmap_file``
+program refuses the executable mapping of the library before its
+constructor runs. ``run.sh`` runs the victim and reports the result.
 
 Building
---------
+========
 
-.. code:: sh
+``make examples`` builds two files into ``build/examples/``:
 
-   make all examples
+``block_victim``
+  Links ``lota-gaming`` from the staged SDK (see
+  `Building <../README.rst>`__) and ``libdl``.
 
-The fragment is wired into the top-level ``make examples`` target, so the
-artifacts land in ``build/examples/`` next to the other demo binaries.
+``evil.so``
+  A shared object whose constructor only prints
+  ``evil.so: loaded into pid <pid>`` to stderr, so a load that gets
+  through is harmless and visible.
 
-Bring-up requirements
----------------------
+The agent
+=========
 
-The diagnostic ``--test-ipc`` / ``--test-signed`` paths do **not** load the BPF
-object. The block-demo needs the LSM hooks live, so the agent must be running
-through the production daemon entry (no ``--test-*`` flag) with:
+The ``--test-*`` modes of the agent load no BPF, so the demo needs the
+daemon itself with, in ``lota.conf`` (see
+`configuration <../../Documentation/agent/configuration.rst>`_):
 
-- ``mode = enforce``
-- ``strict_mmap = true`` (the lota.conf default)
-- BPF object loadable: either signed via ``make sign-bpf`` and pointed at by
-  ``bpf_path``, or the agent invoked with the signing-skip override the build
-  documents.
-- A reachable verifier or the matching ``--no-verify-tls`` insecure flag for a
-  sandbox host. The verifier wiring is outside this demo's scope; see the
-  top-level README for the full production bring-up.
+.. code-block:: text
 
-The demo binary then registers itself through the SDK on first connect, so the
-agent does not need a pre-populated ``protect_pid`` entry.
+   mode = enforce
+   strict_mmap = true
 
-Running the demo
-----------------
+``strict_mmap`` is off by default. With it, a protected process is
+refused an executable mapping that is writable, or whose file is neither
+an ``allow_verity`` entry nor a ``trust_lib`` entry; ``evil.so`` is
+neither. The program is described in `the BPF programs
+<../../Documentation/bpf/index.rst>`_ and the protected set in
+`protection <../../Documentation/agent/protection.rst>`_.
 
-With the agent live in enforce mode:
+Running
+=======
 
-.. code:: sh
+.. code-block:: console
 
-   examples/block-demo/run.sh
+   $ examples/block-demo/run.sh
 
-For an out-of-tree build (e.g. inside a VM with the repo virtiofs-mounted
-read-only and artefacts under ``/var/tmp/lota-build``), point the script at the
-alternate build root through the environment:
+The script runs ``block_victim`` on ``build/examples/evil.so``. A build
+elsewhere is named by ``BUILD_DIR``, else ``LOTA_BUILD_DIR``:
 
-.. code:: sh
+.. code-block:: console
 
-   BUILD_DIR=/var/tmp/lota-build sudo -E examples/block-demo/run.sh
+   $ BUILD_DIR=/var/tmp/lota-build examples/block-demo/run.sh
 
-Unset, ``BUILD_DIR`` follows ``LOTA_BUILD_DIR`` -- the directory a make recipe
-exports as the one that build used -- and then ``$REPO_DIR/build`` to match the
-Makefile default. The same override works for
-``tests/integration/test_bpf_gates.sh``.
+A refused load prints:
 
-Expected output on a successful block:
+.. code-block:: text
 
-::
-
-   [victim] pid=12345 evil=/.../build/examples/evil.so
+   [block-demo] launching victim against /run/lota/lota.sock
+   [victim] pid=<pid> evil=<build>/examples/evil.so
    [victim] registered self into protected_pids
-   [victim] dlopen blocked: /.../build/examples/evil.so: failed to map segment from shared object
-   [block-demo] agent journal for pid 12345:
-   ... [...] MMAP_BLOCKED block_victim: evil.so (pid=12345, uid=...)
+   [victim] dlopen blocked: <dlerror text>
+
+   [block-demo] agent journal for pid <pid>:
+   <prefix> [<ns>] MMAP_BLOCKED block_victim: <file> (pid=<pid>, uid=<uid>)
+
    [block-demo] PASS: evil.so blocked by BPF LSM gate
 
-A ``FAIL`` line plus exit code ``1`` means the loader successfully mapped the
-.so; the constructor's ``evil.so: loaded into pid N`` message will be in stderr
-above it. If you see that, the gate did not fire -- audit the agent's mode, the
-``strict_mmap`` flag, and confirm the BPF object actually attached
-(``journalctl -u lota-agent | grep "BPF programs attached"``).
+The journal lines are those of ``journalctl -t lota-agent`` since the
+script started that name the victim with ``MMAP_BLOCKED`` or
+``ANON_EXEC_BLOCKED``. An agent that does not log to the journal, or a
+user who cannot read it, leaves none, and the script says so; the exit
+code does not depend on them.
 
-What the demo proves
---------------------
+.. list-table::
+   :header-rows: 1
+   :widths: 10 90
 
-- ``security_mmap_file`` blocks file-backed ``PROT_EXEC`` mappings for
-  processes in ``protected_pids`` regardless of how the .so was reachable
-  (LD_PRELOAD-equivalent path: ``dlopen`` from the victim itself).
-- The block fires before the dynamic loader runs the constructor, so even a
-  malicious .so that tries to be useful on first call never gets the chance.
-- A second process that does NOT call ``lota_protect_self()`` remains
-  unaffected -- run the victim twice, comment out the SDK call in one copy, see
-  the difference.
+   * - Exit
+     - Meaning
+   * - 0
+     - ``PASS``: the victim could map ``evil.so`` executable before it was
+       protected, and ``dlopen()`` failed with ``failed to map segment``
+       after.
+   * - 1
+     - ``[block-demo] FAIL: evil.so loaded (gate did not fire)``. The
+       constructor line and
+       ``[victim] FAIL: dlopen succeeded, evil.so constructor ran``
+       come before it.
+   * - 2
+     - A file is missing, ``/run/lota/lota.sock`` is not a socket, or the
+       victim ended with another status, a signal included:
+       ``[block-demo] INCONCLUSIVE: victim exit=<status>``.
 
-What the demo does NOT prove
-----------------------------
+block_victim
+============
 
-The cross-process attack surface (a sibling process attaching ptrace to the
-game or reading ``/proc/<game>/mem``) is gated, and signals recorded, by
-separate LSM hooks in the same BPF object:
+.. code-block:: console
 
-+------------------------------+---------------------------------+------------------------------+
-| Hook                         | Source                          | Scope                        |
-+==============================+=================================+==============================+
-| ``lota_ptrace_access_check`` | ``src/bpf/lota_lsm.bpf.c``      | ``is_protected_task(child)`` |
-|                              |                                 | rejects every external       |
-|                              |                                 | ptrace/peek against a        |
-|                              |                                 | registered PID.              |
-+------------------------------+---------------------------------+------------------------------+
-| ``lota_task_kill``           | ``src/bpf/lota_lsm.bpf.c``      | Records every signal at a    |
-|                              |                                 | registered PID; refuses only |
-|                              |                                 | signals to the agent.        |
-+------------------------------+---------------------------------+------------------------------+
+   $ build/examples/block_victim [PATH | --sleep]
 
-Those are covered by ``tests/integration/test_bpf_gates.sh`` (see the top-level
-``tests/integration/`` directory), not this demo.
+``PATH`` is the library to load, default ``/tmp/evil.so``. The victim
+first maps one page of it ``PROT_READ | PROT_EXEC`` while unprotected,
+so a file that cannot be mapped executable at all, such as one on a
+``noexec`` mount, is not taken for a refusal. It then connects with
+``lota_connect()``, calls ``lota_protect_self()`` and loads the library
+with ``dlopen(RTLD_NOW)``.
+
+It exits 0 when ``dlopen()`` fails with ``failed to map segment``, 1 when
+the library loads, and 2 when the first mapping, the connection,
+``lota_protect_self()`` or ``dlopen()`` fails for another reason, with
+a line on stderr.
+
+``--sleep`` protects the process and holds it until stdin closes, then
+exits 0. ``tests/integration/test_bpf_gates.sh`` uses it as the target of
+its ``ptrace`` and signal stages, and runs ``run.sh`` for its
+``mmap_file`` stage.
