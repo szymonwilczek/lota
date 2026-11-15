@@ -1,38 +1,30 @@
 .. SPDX-License-Identifier: MIT
 .. Copyright (C) 2026 Szymon Wilczek
 
-=====================
+====================
 The license boundary
-=====================
+====================
 
-LOTA is dual-licensed, and the split is a design constraint rather than an
-accident of history. It exists so that a company or a game studio can build a
-product on top of LOTA and ship it closed:
+LOTA is licensed in two zones. The code an adopter embeds and ships is MIT,
+so a product built on it can stay closed. The code that attaches to kernel
+interfaces is GPL-2.0-only, as the kernel requires.
 
-* **MIT** covers everything an adopter embeds: the SDK, the agent userspace,
-  the verifier, the attestation CA, the installer, and the headers those share
-  with the BPF program.
-* **GPL-2.0-only** covers the kernel-facing BPF programs, because the kernel
-  interfaces they attach to require it.
+The zone holds only while dependencies point one way: **a GPL-2.0-only file
+may depend on an MIT file; an MIT file never depends on a GPL-2.0-only
+file.** A definition the MIT zone needs therefore lives in an MIT file.
 
-The promise only holds while dependencies run in one direction.
+License identifiers
+===================
 
-The rule
-========
+Every source file names its license with an ``SPDX-License-Identifier`` tag
+in its first 10 lines, as a comment in the file's own syntax::
 
-**A GPL-2.0-only file may include an MIT file. An MIT file may not depend on a
-GPL-2.0-only file.**
+    /* SPDX-License-Identifier: MIT */           C and headers
+    // SPDX-License-Identifier: MIT              Go
+    # SPDX-License-Identifier: MIT               scripts, after the shebang
 
-The asymmetry is the whole point. A GPL program is free to consume permissively
-licensed sources; the reverse pulls copyleft into the zone an adopter was told
-they could close. There are no exemptions: an MIT file that needs something
-from the GPL zone means either the dependency belongs in the MIT zone, or the
-consumer belongs in the GPL zone.
-
-Every source file must also name its license with an
-``SPDX-License-Identifier`` tag in its first few lines. An unlabelled file
-belongs to no zone and would escape the rule entirely, so the gate treats a
-missing tag as a violation rather than assuming a default.
+The value is exactly ``MIT`` or ``GPL-2.0-only``. A file without a tag, or
+with any other expression, fails the gate described below.
 
 The zones
 =========
@@ -43,92 +35,125 @@ The zones
 
    * - Path
      - License
-     - Why
-   * - ``src/bpf/*.bpf.c``
+     - Contents
+   * - ``src/bpf/lota_lsm.bpf.c``
      - GPL-2.0-only
-     - Attaches to kernel LSM hooks and calls GPL-only kfuncs. The object also
-       declares ``SEC("license") = "GPL"``, which is the kernel's requirement
-       of the loaded program and is separate from the licensing of the headers
-       it read.
-   * - ``include/lota.h``, ``include/lota_devt.h``,
-       ``include/lota_event_budget.h``
-     - MIT
-     - The contract the BPF program and the agent share: LOTA's own constants,
-       enums and exchange structs. Nothing is derived from kernel source, so
-       nothing here requires GPL, and the MIT zone can therefore depend on it.
-   * - ``src/agent/``, ``src/sdk/``, ``installer/``
-     - MIT
-     - The on-host code an adopter ships. The initramfs PCR14 lock helper is
-       here too: it links tss2 and OpenSSL, not kernel headers.
-   * - ``src/verifier/``, ``src/attestca/``, ``src/crl/``,
-       ``src/fleetctl/``
-     - MIT
-     - Server-side Go services and libraries.
+     - The BPF LSM program. It attaches to kernel LSM hooks and declares
+       ``SEC("license") = "GPL"``, which the kernel reads when it loads the
+       program.
+   * - ``selinux/lota.te``, ``lota.fc``, ``lota.if``, ``Makefile``
+     - GPL-2.0-only
+     - The SELinux policy module sources and their ``Makefile``.
+   * - ``.clang-format``
+     - GPL-2.0-only
+     - The formatting configuration.
    * - ``include/vmlinux.h``
-     - (generated)
-     - Produced from the running kernel's BTF by ``bpftool``. Not project
-       source; exempt from the gate, and never edited by hand.
+     - none
+     - Generated from the running kernel's BTF by ``bpftool``. It is not
+       edited and is exempt from the gate.
+   * - Every other tagged file
+     - MIT
+     - The agent, SDK, verifier, attestation CA, installer, the initramfs
+       PCR 14 lock helper (``src/initramfs/``), tools, tests and scripts.
+
+The BPF program includes three MIT headers, ``include/lota.h``,
+``include/lota_devt.h`` and ``include/lota_event_budget.h``. They hold the
+constants, enums and structures the program and the agent exchange, so both
+zones build against the same definitions.
 
 The gate
 ========
 
-``scripts/check-license-boundary.sh`` enforces the rule mechanically:
+``scripts/check-license-boundary.sh`` checks the tracked tree:
 
-.. code-block:: sh
+.. code-block:: console
 
-   make check-license-boundary
+   $ make check-license-boundary
+   check-license-boundary: clean (663 files, 3 documentation packages)
 
-It reads the SPDX tag of every tracked ``.c``, ``.h`` and ``.go`` file, then
-resolves each dependency the way the toolchain does -- a quoted C ``#include``
-against the including file's directory and then ``-Iinclude``, and an
-intra-project Go import against the module paths declared in the ``go.mod``
-files. A dependency that leaves the tree (libc, libbpf, tss2, third-party Go
-modules) is not the boundary's concern and is ignored.
+It reads the tag of every tracked ``.c``, ``.h``, ``.go``, ``.py``, ``.pl``
+and ``.pm`` file and of every tracked file whose first line is a shebang.
+Other files are not zoned, which leaves the policy sources under
+``selinux/`` and ``.clang-format`` unchecked.
 
-Scripts are source too: every tracked ``.py``, ``.pl`` and ``.pm`` file and
-every file that starts with a shebang needs a tag. An MIT Python or Perl file
-must not import a GPL-2.0-only module in the tree, resolved next to the
-importing file and then from the repository root. An MIT script must not name
-a GPL-2.0-only script by its path either, since that is how it would run it.
+For each MIT file it then resolves the dependencies that stay in the tree:
 
-The documentation toolchain is a dependency of the documentation build, so
-every package in ``Documentation/requirements.txt`` must carry a permissive
-license: MIT, BSD, Apache-2.0, ISC or PSF. The gate reads it from the installed
-package's metadata (``License-Expression``, then ``License``, then the
-``License ::`` classifiers) with ``python3``, or with ``$PYTHON`` when set.
-Without the packages installed it prints that they were not checked and passes;
-``--doc-packages`` makes that a failure. ``make check-docs-strict`` and the
-documentation CI job run it that way, after the toolchain is installed.
+* A quoted C ``#include``, first next to the including file, then under
+  ``include/``. An angle-bracket include is not resolved.
+* A Go import under ``github.com/szymonwilczek/``, against the module paths
+  in the tracked ``go.mod`` files. Every ``.go`` file in the imported
+  package directory counts.
+* A Python ``import`` or ``from ... import``, as ``<name>.py`` or
+  ``<name>/__init__.py``, first next to the importing file, then from the
+  repository root.
+* A Perl ``use`` or ``require``, as the matching ``.pm`` file, in the same
+  order.
+* For a script, the path of any GPL-2.0-only script written in it, since
+  that is how a script runs another.
 
-``tests/integration/test_license_boundary_scripts.sh`` drives these cases on a
-throwaway tree.
+A dependency that resolves to a GPL-2.0-only file is a violation. A
+dependency outside the tree, such as libc, libbpf, tss2 or a third-party Go
+module, is not checked.
 
-``scripts/check-patch`` runs the gate on every patch, so a violation fails the
-same local check as a formatting or build error, and the ``license-boundary``
-CI job runs it on every push and pull request. The gate needs no compiler or
-compile database, which is why it is not gated on the patch touching C: an SPDX
-tag can be dropped by an edit anywhere in the tree.
+Documentation toolchain
+-----------------------
 
-Working with the rule
-=====================
+Every package listed in ``Documentation/requirements.txt`` carries a
+permissive license: MIT, BSD, Apache-2.0, ISC or PSF. An expression that
+names GPL in any form fails. The gate reads the installed package's
+metadata with ``python3``, or with ``$PYTHON`` when it is set, taking
+``License-Expression``, else a ``License`` field of at most 64 characters,
+else the ``License ::`` classifiers.
 
-When the gate reports a violation, the fix is a licensing decision, not a
-build tweak:
+A package that is not installed is listed as not checked and the gate
+passes. With ``--doc-packages`` it fails instead.
 
-* **A definition the MIT zone needs is in a GPL file.** If the definition is
-  LOTA's own -- a constant, an enum, a struct the two sides exchange -- it
-  belongs in an MIT header, like the three shared contract headers above. If it
-  genuinely derives from kernel source, it cannot cross into the MIT zone at
-  all and the consumer needs restructuring.
-* **A new file has no SPDX tag.** Add one. MIT unless the file is a BPF program
-  or otherwise kernel-derived.
-* **A new Go module.** No action needed: the gate reads ``go.mod`` files, so a
-  new module's imports resolve as soon as it exists.
-* **A documentation package is not permissive.** Drop it from
-  ``Documentation/requirements.txt``; a GPL tool cannot be vendored or run
-  from an MIT script instead.
+Results
+-------
 
-Packaging carries the same boundary. ``lota-agent`` declares
-``MIT AND GPL-2.0-only`` because it ships the BPF object alongside MIT
-userspace; every other package is ``MIT``. A packaging convenience must not
-blur that -- see :doc:`../admin-guide/packages`.
+The gate exits 0 and prints the counts of zoned files and read packages when
+the tree is clean. It exits 1 when it finds a violation: each one is printed
+on standard error, followed by the total and a pointer to this page. An
+unknown option exits 2.
+
+Where it runs
+-------------
+
+* ``make check-license-boundary`` runs it once.
+* ``scripts/check-patch`` runs it on every invocation, whatever the patch
+  touches (:doc:`patch-checks`).
+* The ``license-boundary`` job of the CI workflow runs it on every push to
+  ``main`` or ``lota-next`` and on every pull request.
+* ``make check-docs-strict`` and the documentation workflow run it with
+  ``--doc-packages``, after the documentation toolchain is installed.
+
+``tests/integration/test_license_boundary_scripts.sh``, part of
+``make test-unit``, runs the gate on throwaway trees: a Python import, a
+script run by path, a missing tag, and non-permissive or missing
+documentation packages. It is skipped without ``python3``.
+
+Fixing a violation
+==================
+
+The fix is a licensing decision:
+
+* **An MIT file needs a definition from a GPL-2.0-only file.** When the
+  definition is LOTA's own, such as a constant, an enum or an exchanged
+  structure, move it into an MIT header and include that header from both
+  sides. A definition derived from kernel source stays in the GPL-2.0-only
+  zone, and the MIT consumer is restructured so that it does not need it.
+* **A file has no tag.** Add one: ``MIT``, unless the file attaches to a
+  kernel interface or derives from kernel source.
+* **A documentation package is not permissive.** Remove it from
+  ``Documentation/requirements.txt``.
+
+A new Go module needs no change to the gate, which reads the ``go.mod``
+files on every run.
+
+Packages
+========
+
+``lota-agent`` is licensed ``MIT AND GPL-2.0-only``: it ships the BPF object
+and the compiled SELinux module next to MIT userspace. ``lota-verifier``,
+``lota-attest-ca``, ``lota-sdk`` and ``lota-sdk-devel`` are ``MIT``. Both
+package manifests state the same licenses (:doc:`../admin-guide/packages`).
