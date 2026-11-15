@@ -1062,23 +1062,24 @@ func (s *SQLiteBaselineStore) RecordBootEvidence(clientID string,
 }
 
 // ListLFAReviewPending implements ReanchorStorer.
-func (s *SQLiteBaselineStore) ListLFAReviewPending() []string {
+func (s *SQLiteBaselineStore) ListLFAReviewPending() ([]string, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	rows, err := s.db.Query(
 		"SELECT client_id FROM baselines WHERE lfa_review_pending = 1 ORDER BY client_id")
 	if err != nil {
-		return nil
+		return nil, err
 	}
 	defer rows.Close()
 	var out []string
 	for rows.Next() {
 		var id string
-		if rows.Scan(&id) == nil {
-			out = append(out, id)
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
 		}
+		out = append(out, id)
 	}
-	return out
+	return out, rows.Err()
 }
 
 // AcknowledgeLFAReview implements ReanchorStorer.

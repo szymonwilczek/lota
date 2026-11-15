@@ -140,7 +140,7 @@ func TestReanchorReviewAckRefusesWhatItCannotRecord(t *testing.T) {
 			if got := len(f.audit.Query(0)); got != 0 {
 				t.Fatalf("a refused acknowledgement wrote %d audit row(s)", got)
 			}
-			if len(f.store.ListLFAReviewPending()) != 1 {
+			if len(lfaPending(t, f.store)) != 1 {
 				t.Fatal("a refused acknowledgement took the client off the review queue")
 			}
 		})
@@ -161,7 +161,7 @@ func TestReanchorReviewAckRecordsWhoLooked(t *testing.T) {
 	if resp["status"] != "reviewed" || resp["client_id"] != "queued" {
 		t.Fatalf("answer %v, want the reviewed client", resp)
 	}
-	if len(f.store.ListLFAReviewPending()) != 0 {
+	if len(lfaPending(t, f.store)) != 0 {
 		t.Fatal("the client is still queued after an accepted acknowledgement")
 	}
 
