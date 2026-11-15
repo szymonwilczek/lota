@@ -1,428 +1,267 @@
 .. SPDX-License-Identifier: MIT
 .. Copyright (C) 2026 Szymon Wilczek
 
-==========================================
+=========================================
 Integrating LOTA into an anti-cheat stack
-==========================================
+=========================================
 
-The anti-cheat reference is four programs under ``examples/`` plus the two
-SDK libraries they link. This page is the map for a studio or an
-anti-cheat vendor forking it: what each piece is for, which of them you
-copy and which you consume, what you must change, and where the licence
-line falls.
+The anti-cheat reference is a producer and a backend under ``examples/``,
+built on the SDK libraries. This page is the map for a studio or an
+anti-cheat vendor building on them: what each piece is, what a fork has to
+change, what a heartbeat costs, and what a verified token says. The
+functions themselves are described in
+`the anti-cheat SDK <../Documentation/userspace-api/anticheat.rst>`_ and
+`the gaming SDK <../Documentation/userspace-api/gaming.rst>`_.
 
-Everything named here is MIT. **You can fork this closed.** That is the
-point of the project's split, stated in the licensing section of the top
-level ``README.rst``: the BPF programs that attach to kernel hooks are
-GPL-2.0-only and stay on the host, while the SDK, the agent userspace and
-every example below are MIT, so what you embed and ship is yours to keep.
-Every source file carries its ``SPDX-License-Identifier``, so the zone a
-file belongs to is readable from the file.
+Userspace, the SDK and every example are MIT; the BPF programs are
+GPL-2.0-only and run on the host (see `Licensing <../README.rst>`_). Each
+source file names its licence in its ``SPDX-License-Identifier``.
 
-What each piece is
-==================
+The pieces
+==========
 
 .. list-table::
    :header-rows: 1
-   :widths: 26 16 58
+   :widths: 30 12 58
 
    * - Piece
-     - You
+     - Use
      - Role
    * - ``liblota_anticheat.so``
      - link
-     - Session state and signed heartbeats. Your producer's whole LOTA
-       dependency.
-   * - ``liblotaserver.so`` / ``sdk/server`` (Go)
+     - Sessions and heartbeats on the producer, heartbeat verification
+       on a C backend.
+   * - ``liblotaserver.so``, ``sdk/server`` (Go)
      - link
-     - Token verification for your backend. C and Go implementations of
-       one contract; use whichever your server is written in.
-   * - ``examples/demo_anticheat/``
-     - **fork**
-     - Reference producer: opens a session, mints heartbeats, ships them.
-       ~500 lines of C, and the file you start from.
-   * - ``examples/demo_server/``
-     - **fork**
-     - Reference backend: issues nonces, decodes heartbeats, verifies
-       tokens, keeps a verdict.
-   * - ``examples/demo_game/``
+     - Token verification for a backend, in C or Go (see
+       `the server SDK <../Documentation/userspace-api/server.rst>`_ and
+       `the Go SDK <../Documentation/userspace-api/go-sdk.rst>`_).
+   * - `demo_anticheat/ <demo_anticheat/README.rst>`_
+     - fork
+     - The producer: opens a session, builds heartbeats, posts them.
+   * - `demo_server/ <demo_server/README.rst>`_
+     - fork
+     - The backend, in Go: decodes a heartbeat, verifies its token with
+       ``VerifyToken()`` and keeps a verdict.
+   * - `demo_game/ <demo_game/README.rst>`_
      - read
-     - How a game process reads its own trust state to show the player.
-   * - ``examples/cs2/``
+     - A game client that learns its verdict from the backend.
+   * - `cs2/ <cs2/README.rst>`_
      - read
-     - The Proton/Wine path, for a Windows-build game running under
-       Steam Play.
-   * - ``examples/runtime_remeasure/``
+     - A Windows title under Proton, with the Wine hook.
+   * - `runtime_remeasure/ <runtime_remeasure/README.rst>`_
      - read
-     - How the runtime measurement is derived, if you need to reason
-       about what it covers.
+     - The runtime measure of the heartbeat, computed and compared.
 
-The producer and the backend are the two you fork. The rest is
-documentation with a compiler.
+The flow
+========
 
-The shape of the integration
-============================
+1. The game host runs the agent. It holds the TPM and answers the local
+   socket; the producer does not talk to the TPM.
+2. The producer opens a session with ``lota_ac_init()``, naming the
+   provider, the game id and the publisher, and calls
+   ``lota_ac_heartbeat()`` on a timer. Each heartbeat is a header with the
+   session id, sequence, timestamp, game binding hash and runtime measure,
+   and a token the TPM signed over a nonce derived from that header.
+3. The backend verifies the heartbeat: ``lota_ac_verify_heartbeat()`` in C,
+   or, as ``demo_server`` does, a decoded header and ``VerifyToken()``
+   with the nonce recomputed from it.
+4. The backend decides. ``lota_ac_verify_heartbeat()`` reports a verified
+   heartbeat ``TRUSTED`` when the signed flags carry
+   ``LOTA_FLAG_ATTESTED`` and ``UNTRUSTED`` otherwise.
+   ``VerifyToken()`` requires no flag, so ``demo_server`` calls a
+   verified heartbeat ``TRUSTED`` whatever its flags, unless its
+   ``-require`` options name some (see
+   `demo_server <demo_server/README.rst>`__). A backend that requires
+   more reads the flags of the token. What a verdict leads to in the game
+   is the backend's policy and is not in this repository.
 
-1. **The game host runs the LOTA agent.** It owns the TPM, attests, and
-   answers the local socket. Your producer does not talk to a TPM.
-2. **Your producer opens a session** with ``lota_ac_init()``, naming the
-   provider and the game id, and calls ``lota_ac_heartbeat()`` on a timer.
-   Each heartbeat wraps a TPM-signed token in a small header that binds
-   your game id and session.
-3. **Your backend verifies.** It issues a nonce, decodes the heartbeat,
-   and calls ``lota_ac_verify_heartbeat()`` (C) or ``VerifyToken`` (Go)
-   against the AIK it has on record for that client.
-4. **Your backend decides.** LOTA reports what the host is; the gameplay
-   consequence -- kick, queue separation, flag for review -- is yours and
-   is deliberately not in this repository. A packet that verifies is called
-   trusted only if the signed status word says the host is attested; a backend
-   that wants more than attestation reads ``info.lota_flags``, which carries
-   that same word, and judges it.
+Building
+========
 
-Build against the package, not the tree
-=======================================
+``lota-sdk-devel`` installs the headers and the ``pkg-config`` modules
+(see `the public surface <../Documentation/userspace-api/stability.rst>`_):
 
-Both reference programs build the way your build will: through
-``pkg-config`` against the installed ``lota-sdk-devel``.
+.. code-block:: console
 
-.. code:: sh
+   $ cc $(pkg-config --cflags lota-anticheat) -o producer producer.c \
+         $(pkg-config --libs lota-anticheat)
 
-   cc $(pkg-config --cflags lota-anticheat) -o producer producer.c \
-      $(pkg-config --libs lota-anticheat)
+A producer that calls only ``lota_ac_*`` links ``lota-anticheat`` alone;
+one that also calls ``lota_*`` of the gaming SDK, as ``demo_anticheat``
+does, adds ``lota-gaming``.
 
-``lota-anticheat`` is the only LOTA module on that line. The library
-carries the gaming and server SDK inside it, so a producer calling only
-``lota_ac_*`` links one thing; add ``lota-gaming`` or ``lota-server`` when
-the same binary calls those APIs directly. The frozen surface those
-modules describe is in
-``Documentation/userspace-api/stability.rst``.
-
-What you must change
-====================
-
-Forking the producer without touching these leaves you with the demo, not
-an integration:
+What a fork changes
+===================
 
 .. list-table::
    :header-rows: 1
-   :widths: 30 70
+   :widths: 25 75
 
-   * - Thing
-     - What it has to become
+   * - Item
+     - What it becomes
    * - Game id
-     - Your title's identifier. It is hashed into every heartbeat with
-       the producer binary's digest, so the backend can tell your
-       producer from another build of it.
-   * - Provider id
-     - ``LOTA_AC_PROVIDER_EAC`` or ``LOTA_AC_PROVIDER_BATTLEYE`` today.
-       An in-house stack picks one and keeps it consistent with the
-       backend.
+     - The title's identifier, 1 to 63 bytes. The game binding hash covers
+       it with the SHA-256 of the executable, and the backend computes the
+       hash it expects from the executable it ships.
+   * - Provider
+     - ``LOTA_AC_PROVIDER_EAC`` or ``LOTA_AC_PROVIDER_BATTLEYE``. The value
+       goes into every heartbeat and carries no other meaning.
+   * - Publisher
+     - ``publisher_profile``, the id ``lota-agent --list-publishers``
+       prints: the SHA-256 of the SubjectPublicKeyInfo of the CA anchor
+       (see `publishers <../Documentation/agent/publishers.rst>`_). A
+       host enrolled with several publishers refuses a session that names
+       none, and on a host whose publishers are all session-gated a title
+       that names none reads not attested. A title under the Wine hook
+       sets ``LOTA_HOOK_PUBLISHER``.
    * - Transport
-     - The demo POSTs to an HTTP endpoint with libcurl. Yours goes over
-       whatever channel your client already has, authenticated the way
-       that channel already is.
-   * - Nonce source
-     - The demo asks the reference server. Yours comes from your session
-       service, and it must be per-session and single-use, or the
-       heartbeat proves only that a host was attested at some point.
-   * - AIK trust
-     - The demo trusts one key from a file. Yours comes from enrolment
-       records -- see ``examples/enrollment/README.rst`` -- so the
-       backend knows which TPM belongs to which account.
-   * - Publisher selection
-     - ``--publisher <hex>`` in the demo; ``publisher_profile`` in
-       ``struct lota_ac_config`` for you, and not optional. Naming the
-       publisher is what opens a session for them, and a session-gated
-       host -- the consumer default -- reports only while one is open.
-       A producer that names nobody is never attested for anybody and
-       every beat reads ``NOT_ATTESTED``; a host that answers for
-       several publishers refuses its token requests outright. The id is
-       the hex SHA-256 of your CA anchor's SubjectPublicKeyInfo, which
-       your installer already knows because ``--add-publisher`` prints
-       it. A Wine/Proton title sets it in ``LOTA_HOOK_PUBLISHER`` on the
-       launch line.
-   * - Token directory
-     - ``token_dir`` in ``struct lota_ac_config``, or ``NULL`` to
-       auto-detect. Auto-detection follows the producer exactly:
-       ``$LOTA_HOOK_TOKEN_DIR``, then ``$XDG_RUNTIME_DIR/lota-hook``,
-       then ``/tmp/lota-<uid>``. It is never ``$XDG_RUNTIME_DIR/lota``,
-       which the agent owns as ``root:lota`` for the container socket --
-       a directory the player cannot write, so no producer puts a token
-       there. If your launcher sets the directory itself, set it on both
-       sides or export ``LOTA_HOOK_TOKEN_DIR`` before the title starts,
-       and remember a pressure-vessel container has to have that
-       directory bind-mounted into it.
-   * - Verdict handling
-     - The demo prints. Yours is your anti-cheat policy.
-   * - Heartbeat interval
-     - The demo beats every 5 seconds, which is a measured choice rather
-       than a round number: see below.
+     - ``demo_anticheat`` posts over HTTP with libcurl. A fork uses the
+       channel the client already has.
+   * - Freshness
+     - The backend issues no nonce for a heartbeat: the producer derives
+       it from the header. ``lota_ac_verify_heartbeat()`` accepts a
+       timestamp within 120 seconds of the clock of the backend and keeps
+       no state, so a backend that refuses a repeated packet records the
+       last ``sequence`` of each ``session_id``, as ``demo_server`` does.
+   * - AIK
+     - ``demo_server`` trusts one key from a file. A backend takes the AIK
+       of each account from its enrolment records (see
+       `enrollment/ <enrollment/README.rst>`_).
+   * - Mode
+     - ``direct`` 1 talks to the agent and builds heartbeats. ``direct`` 0
+       reads the files of the Wine hook from ``token_dir`` and builds
+       none: the token of the hook answers no nonce.
+   * - Interval
+     - ``demo_anticheat`` beats every 5 seconds; see below.
 
 What a heartbeat costs
 ======================
 
-Every heartbeat mints a token, and every token is a fresh ``TPM2_Quote`` --
-a blocking operation on a device the whole machine shares. On the validation
-host, an Intel PTT firmware TPM, ``lota_get_token()`` measured **48 ms
-median** end to end through the SDK against the running daemon. Treat that as
-the order of magnitude for a consumer laptop; an earlier measurement on the
-same host recorded roughly three times more, and no hardware is promised to
-be fast. :doc:`../Documentation/agent/tpm` carries the
-numbers and the method.
+Each heartbeat asks the agent for a token, and each token is a TPM quote,
+a blocking operation on a device the whole machine shares. In direct mode
+``lota_ac_tick()`` asks for one as well. The calls belong on a thread of
+their own or the network tick, never on a frame or render loop.
 
-Three rules follow, and they are the reason the reference beats at 5 seconds:
+The agent issues 20 tokens per connection and 60 per uid in a 60-second
+window (see `tokens <../Documentation/agent/tokens.rst>`_). A session
+holds one connection, so a 5-second heartbeat takes 12 of its 20. Every
+title of the player runs as the same uid and shares the 60.
+``LOTA_AC_ERR_RATE_LIMITED`` means the producer beats faster than the
+agent issues tokens; a longer interval clears it, a retry does not.
 
-* **Never call it from a frame loop, a render thread or anything with a
-  deadline.** Tens of milliseconds is several frames. Beat from your own
-  thread or your existing network tick.
-* **Hold the token you have.** A token is valid for a window; fetching a new
-  one per request wastes the device and buys nothing, since the nonce is what
-  binds a token to a challenge.
-* **Beat no faster than you need.** The agent enforces 20 token requests per
-  session per minute and 60 per uid per minute; at 5 seconds a title uses 12
-  of its 20, which leaves room for a second title of yours on the same
-  machine. ``LOTA_AC_ERR_RATE_LIMITED`` means the producer is beating faster
-  than the agent issues, and the fix is the interval, not a retry loop.
+Errors
+======
 
-Telling your bug from the player's state
-========================================
+``lota_ac_init()`` returns ``NULL`` and ``lota_ac_heartbeat()`` a negative
+``errno``, and the errno alone does not tell the causes apart.
+``lota_ac_last_error()`` names the cause on the calling thread and
+``lota_ac_strerror()`` words it; the codes are listed in
+`Errors <../Documentation/userspace-api/anticheat.rst>`__.
 
-``lota_ac_init()`` returns ``NULL`` and ``lota_ac_heartbeat()`` returns a
-negative errno for a dozen unrelated reasons, and the errno alone does not
-separate them: ten distinct refusals in the heartbeat path share
-``-EIO``. ``lota_ac_last_error()`` names the one that happened, on the
-calling thread, and ``lota_ac_strerror()`` renders it.
-
-Every call that returns a value to check sets it, success included, so it
-always describes the call just made.
-
-``lota_ac_strerror()`` renders either space. ``LOTA_AC_ERR_*`` codes sit past
-any errno value, so the function can tell one of its own verdicts from a
-``-EIO`` a file read produced and describes each in its own terms -- printing
-its output for whatever a call returned is always right, including for the
-measure helpers, which answer in errno.
-
-.. code:: c
+.. code-block:: c
 
    struct lota_ac_session *s = lota_ac_init(&cfg);
+
    if (!s)
            log("cannot start: %s", lota_ac_strerror(lota_ac_last_error()));
 
-The split to build on is which side the cause is on. ``CONFIG_SIZE``,
-``GAME_ID``, ``PROVIDER`` and ``INVALID_ARG`` are your code: they cannot be
-fixed by anything the player does, and a shipped build should never produce
-them. ``NO_AGENT``, ``CONSENT_REQUIRED``, ``UNKNOWN_PROFILE``,
-``NOT_ATTESTED`` and ``TOKEN_DIR`` are the state of that machine, and each
-has a different thing to tell the player -- install the agent, agree to your
-publisher, wait for the first verdict. ``NOT_ATTESTED`` while the flags
-``lota_get_status()`` returns carry ``LOTA_FLAG_REENROLLING`` is a host whose
-attestation key is gone, as after a TPM clear, and that the agent is enrolling
-with you again on its own: tell the player to wait, not to act.
-``TPM_LOCKOUT`` is the machine too,
-but no retry clears it: the chip signs nothing until its dictionary-attack
-lockout lapses or somebody at the machine clears it, which is what to tell
-the player instead of beating again. ``RATE_LIMITED`` is neither: it means
-the producer is beating faster than the agent issues tokens, and the fix is
-the interval.
+The codes split by where the cause is:
 
-A session whose agent is unreachable is **returned**, not refused, in
-``LOTA_AC_STATE_ERROR``: the title has something to show and can beat again
-once the host is ready. ``lota_ac_last_error()`` names that case too, so
-"not ready yet" is never mistaken for a configuration the library rejected.
+* In the producer: ``CONFIG_SIZE``, ``GAME_ID``, ``PROVIDER``,
+  ``INVALID_ARG``. Nothing the player does changes them.
+* On the player's machine: ``NO_AGENT``, ``CONSENT_REQUIRED``,
+  ``UNKNOWN_PROFILE``, ``NOT_ATTESTED``, ``TOKEN_DIR``,
+  ``TPM_LOCKOUT``. ``NOT_ATTESTED`` with ``LOTA_FLAG_REENROLLING`` in the
+  status is a host enrolling again, as after a TPM clear, which completes
+  without the player. ``TPM_LOCKOUT`` lasts until the dictionary-attack
+  lockout of the TPM lapses or is cleared.
+* In the interval: ``RATE_LIMITED``.
 
-What "last attested" means on a player's machine
-===============================================
+In direct mode a session whose connection fails is not ``NULL``: it is
+returned in ``LOTA_AC_STATE_ERROR``, so the title has a state to show,
+and ``lota_ac_last_error()`` names the cause, ``NO_AGENT`` when no agent
+answers. It never connects later: the title opens another session once
+the agent answers.
 
-``last_attest_time`` from ``lota_get_status()`` is ``0`` until the host
-attests. On a session-gated host, the consumer default, that holds until a
-title of the publisher runs. ``0`` is a state, not an error; render it as
-"never", not as the epoch, as ``tests/demo_sdk.c`` does.
+``last_attest_time`` of ``lota_get_status()`` is 0 until the host first
+attests, which on a session-gated host waits for a title of the
+publisher, and it does not move while nothing attests. Whether the host is
+attested is ``LOTA_FLAG_ATTESTED`` with ``valid_until``.
 
-The field is the last successful round and stands still while nothing
-attests, so its age is not a liveness signal. "Attested right now" is
-``LOTA_FLAG_ATTESTED`` with ``valid_until``; the agent drops the flag when
-the publisher's last session closes.
+The files of the Wine hook
+==========================
 
-An agent that goes away mid-session
-===================================
+A reader of ``lota-status`` reads ``LOTA_OFFLINE`` before
+``LOTA_ATTESTED``. When the hook loses the agent it writes
+``LOTA_OFFLINE=1`` with the other fields at zero and removes the token
+files, so ``LOTA_ATTESTED`` alone reads a lost agent as a refusal. A
+missing file is offline too. The files are described in
+`the Wine hook <../Documentation/userspace-api/wine-hook.rst>`_, and
+`verify-attested.sh <cs2/scenarios/README.rst>`_ reads them this way.
 
-An integrator reading the hook's file sink sees the same event through
-``lota-status``, and the field that carries it is ``LOTA_OFFLINE``, not
-``LOTA_ATTESTED``. When the hook loses the agent it rewrites the file with
-``LOTA_OFFLINE=1`` and a zeroed payload, and unlinks ``lota-token.bin``,
-``lota-attestation.bin`` and ``lota-boot-evidence.bin``, which cannot be
-trusted past the disconnect.
-The write happens once per disconnect: the hook retries the connection for
-as long as the process lives, and a reconnect that succeeds publishes live
-state again, so a file that stops changing is not a signal.
+Protection
+==========
 
-Two rules follow for anything that polls the sink:
+``lota_ac_init()`` does not put the producer in the protected set; the
+producer calls ``lota_protect_self()``, as ``demo_anticheat
+--protect-self`` does, or starts under ``lota-protect``. A token then
+carries the measurement the agent made of the process (see
+`runtime measurement <../Documentation/agent/runtime-measurement.rst>`_).
 
-* **Read ``LOTA_OFFLINE`` before ``LOTA_ATTESTED``.** The offline payload is
-  zeroed, so a reader that looks only at ``LOTA_ATTESTED`` reads a lost agent
-  as a refusal the agent never issued. OFFLINE ("the hook cannot reach the
-  agent") and UNTRUSTED ("the agent says no") call for different treatment,
-  and the marker is the only thing that separates them.
-* **Treat a missing file as OFFLINE too.** The hook never ran, the container
-  view does not include the sink, or the session detached cleanly.
+With the agent in ``enforce`` mode and ``strict_mmap`` on, a protected
+process maps executable only files that an ``allow_verity`` or a
+``trust_lib`` entry covers. Anything else fails, in ``dlopen()`` as
+``failed to map segment from shared object``, and the agent logs
+``MMAP_BLOCKED``. A process protected by ``lota-protect`` from its first
+instruction needs an entry for every object it loads, its own libraries
+included; one that protects itself later needs entries only for what it
+maps after. ``lota_get_refusal()`` returns the last refused object.
 
-``examples/cs2/scenarios/verify-attested.sh`` is the minimal consumer of both
-signals and ships with the demo; the ``agent-down`` walk-through beside it
-drives the transition and asserts what lands on disk.
+What a verified token says
+==========================
 
-When your producer joins the protected set
-==========================================
+The signature over the challenge says a TPM of the host whose AIK the
+backend holds signed this status, for this nonce: a replayed token or one
+from another machine fails. What the token carries is described in
+`the gaming SDK <../Documentation/userspace-api/gaming.rst>`__ and
+`the server SDK <../Documentation/userspace-api/server.rst>`__; for a
+backend, these parts decide most:
 
-A token says the producer was in the protected set only if the producer put
-itself there: ``lota_ac_init()`` does not register the process; the reference
-calls ``lota_protect_self()`` behind ``--protect-self``.
+* The flags. ``LOTA_FLAG_IMAGE_FULLY_MEASURED`` says every executable
+  mapping of every protected process was measured, and is clear when
+  nothing is protected; ``LOTA_FLAG_IMAGE_CONTENT_HASHED`` says an object
+  without fs-verity was measured by its content.
+  ``LOTA_FLAG_PROTECTED_TERMINATED``, ``LOTA_FLAG_AGENT_RESTARTED``,
+  ``LOTA_FLAG_REENROLLING`` and the policy bits 14 to 19 describe the
+  agent and its policy.
+* The protected PIDs and a registry digest for each. ``lota_get_registry()``
+  returns the list a digest covers: the objects the process mapped
+  executable and the processes that reached it.
+  ``lota_server_registry_digest()`` recomputes the digest, so a list that
+  does not match is not the one the token describes.
+* ``stopped_ms``, the time a thread of the title's instance stood
+  stopped.
+* The quoted boot PCRs, by digest. ``lota_ac_boot_evidence()`` fetches the
+  values and the PCR 7 events behind them, and
+  ``lota_ac_verify_boot_evidence()`` or ``VerifyBootEvidence()`` reads
+  Secure Boot from them (see
+  `boot evidence <../Documentation/agent/boot-evidence.rst>`_).
 
-Under ``strict_mmap`` a registered process may map an executable file only if
-its fs-verity digest is allowed or its inode is in ``trusted_libs``; anything
-else is ``-EPERM``, its own libraries included. ``lota-protect`` registers a
-program before it runs, so on such a host every object the title loads needs
-an allowed digest (``LOTA_FLAG_IMAGE_FULLY_MEASURED`` on the far side).
+LOTA reports the state of the platform and does not judge it: which flags,
+objects and actors a backend accepts is its policy. The runtime measure in
+the heartbeat header is computed inside the game process, which the player
+controls; what the agent measured from outside is in the token.
 
-A refusal surfaces as ``dlopen()`` failing with "failed to map segment from
-shared object"; the agent journal has the matching ``MMAP_BLOCKED`` line. The
-Wine hook also reports it on the title's stderr and as ``LOTA_REFUSED_OBJECT``
-in its status file. A producer registering itself should read a load failure
-after registering the same way, not as a corrupt install.
-``LOTA_REFUSED_OBJECT`` and ``LOTA_PROTECTED`` are written when they happen,
-not on the next agent status event, which a steady host never sends.
+Trying it
+=========
 
-What the token actually proves
-==============================
+.. code-block:: console
 
-Worth being precise about, because it decides what you can build on it:
+   $ make all examples
+   $ examples/demo_anticheat/run.sh
 
-* The host booted a measured, policy-conforming state, and a TPM on that
-  host signed a statement to that effect **for the challenge you issued**.
-  A replayed or borrowed token fails, and so does one from a different
-  machine.
-* The producer process was in the protected set at the time, and the
-  runtime measurement covers its loaded objects -- every one of them when
-  the token carries ``LOTA_FLAG_IMAGE_FULLY_MEASURED``, and otherwise the
-  subset the kernel holds an fs-verity digest for. The flag is never set by
-  a round with nothing to measure, so requiring it refuses a host with an
-  empty protected set. A stock distribution ships its libraries without one,
-  so partial coverage is the normal case and full coverage is something a
-  platform provides. Whether you require it is your policy; what the agent
-  guarantees either way is that the producer's own executable was measured,
-  and that nothing unmeasured was folded in as if it had been.
-
-* Which road measured that executable. Without fs-verity, as for a store
-  install, the kernel hashes its content while it runs and cannot be
-  written, and the token carries ``LOTA_FLAG_IMAGE_CONTENT_HASHED``.
-  Refusing that flag demands fs-verity, at the cost of every such install.
-
-* Which code objects the process mapped executable since it was protected,
-  the unmeasured ones and those it already dropped included.
-  ``lota_get_registry()`` lists them for a protected PID of the caller's own
-  instance as the last token round found them: size, inode and, where one was taken, the digest; the
-  path for an object still mapped, ``LOTA_REGISTRY_OBJECT_UNMAPPED`` and the
-  file's name for one that is gone. A refused mapping is listed too.
-  ``LOTA_REGISTRY_OBJECT_WRITABLE`` says another process could write the
-  object's pages while the title ran them, such as a helper holding a
-  memfd that no seal keeps from writes, or a file open for write or mapped
-  shared and writable; ``LOTA_REGISTRY_OBJECT_MEMORY``
-  says the code has no file on disk. A digest of such an object shows the
-  pages at the round only.
-  ``LOTA_REGISTRY_HISTORY_LOST`` says the kernel lost a record and the list
-  may miss an object. ``LOTA_REGISTRY_TRUNCATED`` says the process maps more
-  objects than one measurement holds: the excess is unmeasured, and an object
-  listed as unmapped may be part of it. The token does not carry the list, it binds it:
-  ``lota_server_registry_digest()`` hashes the flags, every object and every
-  actor in the order listed, and the result equals the registry digest the token holds for
-  that process. A list that does not hash to it, short of an object or with
-  one rewritten, is not the one the token describes.
-
-* Whether the list covers the whole life of the image.
-  ``LOTA_REGISTRY_FROM_EXEC`` says the image was executed under protection, as
-  with ``lota-protect``. Without it the list starts at the moment protection
-  did, so a library loaded and dropped before that is not there. A process the
-  title forked and that never executed lacks the flag too, its parent's history
-  can be gone. The flag is in the hash; the agent refuses nothing without it.
-
-* Which processes reached the title: from outside through a unix socket,
-  such as one asking the title's ``wineserver`` to write into its memory, and
-  from inside by reading, writing or signalling another of its processes,
-  such as ``wineserver`` writing into the game. The registry lists each one
-  after the objects: its PID, uid, executable, command name, the title
-  process it reached, how (``LOTA_REGISTRY_ACTOR_*``) and how many times.
-  ``LOTA_REGISTRY_ACTOR_ANON_EXEC`` is a process of the title making its own
-  anonymous memory executable, code with no object to list: a JIT does it, and
-  so does injected code. ``LOTA_REGISTRY_ACTORS_LOST`` says the list may miss
-  one. The agent refuses nothing; whether an actor is expected, say the
-  launcher, is your policy. The actors are in the same hash, so a list with one
-  dropped does not match.
-
-* Whether a process protected for your publisher was ended through the agent
-  on that host since it booted. The agent relays a termination only for the
-  process's owner or root, and ``LOTA_FLAG_PROTECTED_TERMINATED`` says on every
-  later token of your publisher that it happened; a termination of another
-  publisher's process does not set it there, and an ordinary signal ends the
-  process too, without the flag. Read together with the protected set the
-  token carries, it is how a session that ended locally is told apart from a
-  process that vanished.
-
-* Whether the agent answering is the first of that boot.
-  ``LOTA_FLAG_AGENT_RESTARTED`` says an earlier agent ended without a shutdown
-  and was started again; whatever it recorded, ``PROTECTED_TERMINATED``
-  included, ended with it, so a token with this bit vouches for nothing before
-  the restart.
-
-* Whether anything outlived the agent. A protected process ends with the agent,
-  however the agent ended, and moving the agent to another cgroup ends both, so
-  a session that goes quiet together with its agent is the design at work rather
-  than evidence of anything. A session that goes quiet alone may be a stalled
-  title, which the next item can tell you once it answers again.
-
-* How long the title stood. ``stopped_ms`` is the time any thread of its
-  instance stood stopped: a frozen cgroup, job control, a tracer inside the
-  instance. It only grows while the process at the root of the instance lives,
-  so compare two tokens. A suspend leaves its own freeze in it, not the sleep.
-  LOTA holds no threshold: what gap is too long is your policy. A process in no
-  instance reads 0, and so does one whose root has ended. A title slowed down
-  rather than stopped does not show here.
-
-* Whether the agent's log is whole. ``LOTA_FLAG_EVENTS_LOST`` says the kernel
-  left an event out of it: the agent did not keep up, or something produced more
-  events than the log takes. Refusals still happened and the lists in the token
-  are kept apart from that log. The bit can arrive a second or more after the
-  loss, and what it is worth is your policy.
-
-* Whether Secure Boot was on, without a verifier of your own. The token
-  quotes the boot PCRs by their digest alone. ``lota_ac_boot_evidence()``
-  fetches their values and the PCR 7 events behind them, from the agent or
-  from the hook's ``lota-boot-evidence.bin``; send it with a heartbeat, and
-  ``lota_ac_verify_boot_evidence()`` reads Secure Boot from it with the info
-  ``lota_ac_verify_heartbeat()`` filled, or ``VerifyBootEvidence`` (Go) with
-  the claims ``VerifyToken`` returned. Evidence that is not the boot the
-  quote signed is refused, so a host cannot edit it. The quoted PCRs hold
-  still for a boot, so one copy serves every heartbeat until the player
-  reboots.
-
-It does **not** prove the player is not cheating. It proves the platform
-underneath is what it claims to be, which removes the layer where a cheat
-would otherwise be invisible to you: a tampered kernel, an unsigned
-module, a patched loader. Cheats that live entirely in your process are
-still your problem, and are still where your existing detection works.
-
-Try it before you fork
-======================
-
-.. code:: sh
-
-   make all examples
-   ./examples/demo_anticheat/run.sh
-
-That runs the whole chain -- swTPM, agent, backend, producer -- with no
-root and no real TPM, and asserts both the trusted path and a tampered
-heartbeat being refused on the signature. It is the fastest way to see the
-shape of the integration end to end, and it is a reasonable first thing to
-keep working after you fork.
-
-For the Windows-build-under-Proton case, ``examples/cs2/README.rst`` walks
-through the hook, the Steam launch options, and the scenarios it was
-exercised against.
+``run.sh`` runs the agent on a software TPM, ``demo_server`` and
+``demo_anticheat`` without root, and checks a trusted heartbeat and a
+tampered one refused on its signature (see
+`demo_anticheat <demo_anticheat/README.rst>`_).
