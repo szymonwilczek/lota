@@ -5,13 +5,9 @@
 Code of Conduct
 ===============
 
-This code applies to project spaces: issues, pull requests, discussions,
-security reports and review comments.
-
-The full Code of Conduct -- scope, expected behavior, enforcement, and
-reporting -- lives in `Documentation/process/code-of-conduct.rst
+The code of conduct covers issues, pull requests, review comments and
+security reports. It lives in `Documentation/process/code-of-conduct.rst
 <Documentation/process/code-of-conduct.rst>`_.
 
-Conduct issues can be reported to ``swilczek.lx@gmail.com``.
-
-Security vulnerabilities should follow `SECURITY.md <SECURITY.md>`_, not this process.
+Conduct issues go to ``swilczek.lx@gmail.com``. A security vulnerability is
+reported as described in `SECURITY.md <SECURITY.md>`_.
