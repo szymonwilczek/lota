@@ -1,235 +1,278 @@
 .. SPDX-License-Identifier: MIT
 .. Copyright (C) 2026 Szymon Wilczek
 
-==============
-Testing policy
-==============
+=======
+Testing
+=======
+
+The C code is tested by programs under ``tests/`` and shell scripts under
+``tests/integration/``, the Go modules by ``go test``. The table lists what
+runs them; the CI jobs that do so are in :doc:`ci`.
 
 .. list-table::
    :header-rows: 1
-   :widths: 12 44 44
+   :widths: 40 60
 
-   * - Layer
-     - What
-     - How
-   * - Unit
-     - Go (``verifier``, ``attestca``, ``sdk/server``) and C (agent, SDK)
-     - ``make test-unit``, ``go test ./...``
-   * - Sanitizers
-     - ASan / UBSan on the C side
-     - ``SANITIZE=address,undefined make test-unit``
-   * - Memory
-     - valgrind memcheck
-     - ``make valgrind-unit``, ``make valgrind-smoke``
-   * - Fuzz (Go)
-     - verifier / SDK / attest-CA parsers of untrusted bytes
-     - ``go test -run x -fuzz=Fuzz... ./...``
-   * - Postgres
-     - verifier store/session backends against a real server
-     - ``go test -tags pg_integration -p 1 ./store/ ./verify/`` with
-       ``LOTA_TEST_PG_DSN``; CI job ``postgres-integration``
-   * - Fuzz (C)
-     - IPC, config, TLS-pin, wire, enrollment-reply decoders,
-       sealed-envelope parser/AEAD, TPM attest unmarshal, policy signature
-       verify, server SDK token verify, TPM2B response/credential unmarshal
-     - ``make fuzz-all``, then run a target from the build directory;
-       ``make fuzz-regress`` replays the committed reproducers
-   * - Kernel
-     - BPF LSM live in a guest
-     - Syzkaller harness ``lota_bpf_fuzz`` (see :ghsrc:`syzkaller/README.rst`)
-   * - Repro
-     - bit-for-bit build
-     - ``make reproducible-build``; gated in CI
-   * - Includes
-     - every header used directly, no transitive deps
-     - ``make check-includes``
-   * - Declarations
-     - every symbol declared by a header the unit includes, on el9 too
-     - ``make check-el9-decls``
-   * - Packaging
-     - the nfpm configs and the RPM spec ship the same files
-     - ``make check-package-manifests``
-   * - Documentation references
-     - comments and pages name symbols and commands that exist
-     - ``make check-doc-references``
-   * - Player build
-     - the player page's build-from-source commands install in a clean
-       Fedora
-     - ``make check-player-build``; CI job ``player-build``
-   * - Benchmarks
-     - every benchmark builds and runs; either target fails when its runner
-       does (numbers come from a pinned host, see
-       :ghsrc:`benchmarks/README.rst`)
-     - ``make bench-c``, ``make bench-go``; CI job ``benchmarks``
+   * - Command
+     - Runs
+   * - ``make test-unit`` (``make test``)
+     - the C unit tests, the integration scripts and the cross-language
+       checks, after ``make all``
+   * - ``go test ./...`` in a Go module
+     - that module's Go tests
+   * - ``make SANITIZE=address,undefined test-unit``
+     - ``make test-unit`` under the sanitizers
+   * - ``make valgrind-unit``, ``make valgrind-smoke``
+     - unit tests and command-line paths under valgrind memcheck
+   * - ``go test -tags pg_integration`` in ``src/verifier``
+     - the store and session tests against a live Postgres
+   * - ``scripts/check-go-coverage.sh``
+     - ``go test -cover`` in every Go module, against recorded floors
+   * - ``make test-hardware``
+     - the agent's IOMMU and TPM self-tests, as root
+   * - ``make fuzz-all``, ``make fuzz-regress``
+     - the C fuzz targets (:doc:`fuzzing`)
+   * - ``make bench-c``, ``make bench-go``
+     - the micro-benchmarks (:doc:`../performance/index`)
 
-LeakSanitizer attaches to the process's threads with ptrace before it scans.
-On a host that refuses the attach (a LOTA agent enforcing ``block_ptrace``
-refuses it for every task) the scan aborts, and libFuzzer records the abort as
-a crash. Each C fuzz target probes the attach at start-up and, where it is
-refused, prints ``leak detection is off for this process`` and runs without
-it. Leaks are caught only on hosts that allow the attach.
+Unit and integration tests
+==========================
 
-Commit a fuzz failure's reproducer in the commit before the fix, so that
-commit fails and the fix makes it pass:
+``make test-unit`` builds ``all`` and every test program, then runs:
 
-* **Go.** ``go test -fuzz`` writes the input to ``testdata/fuzz/<FuzzTarget>/``
-  in the package; plain ``go test`` replays it. Commit the file as written.
-* **C.** libFuzzer writes ``crash-<sha1>`` (or ``leak-``, ``timeout-``) into its
-  working directory. Copy it to ``fuzz/regressions/<make-target>/`` under a
-  name that says what it caught, and check that it fails the unfixed target.
-  ``make fuzz-regress`` replays them; the ``fuzz`` CI job and
-  ``scripts/check-patch`` run it.
-* **Kernel.** ``syz-manager`` keeps each crash, with a reproducer when it can
-  derive one, under ``crashes/`` in its work directory; nothing in tree replays
-  the BPF programs. Report the crash with that reproducer, and have the fix
-  carry a test that drives the same hook, such as
-  ``tests/integration/test_bpf_gates.sh``.
+* every program built from ``tests/test_*.c``, except those listed in
+  ``TEST_MANUAL`` (`Tests that need a live system`_). The loop stops at the
+  first program that exits non-zero.
+* the scripts under ``tests/integration/`` that run without root or a
+  running agent. A script whose tool is missing (``openssl``, ``python3``,
+  ``go``, ``clang``, ``pkg-config``, ``sphinx-build``, ``softhsm2-util``)
+  is not run, and the target prints ``SKIP:`` with the reason.
+* two cross-language checks. ``tests/cross_lang/test_gen.go`` signs a token
+  with the Go server SDK and ``test_cross_lang_verify`` verifies it with the
+  C one. ``test_cross_lang_report_gen`` writes an attestation report with
+  the agent's serializer and ``tests/cross_lang/report_verify.go`` parses
+  it with the verifier's. Both need ``go``.
+
+The Go tests are not part of ``make test-unit``.
+
+A script reads the build directory from ``LOTA_BUILD_DIR``, which the make
+recipe exports. A script that drives one binary also takes its path from the
+environment, such as ``LOTA_INSTALL_BIN`` for ``lota-install`` or
+``LOTA_TRUST_PONG`` for the ``trust_pong`` example.
 
 Adding a C test
 ---------------
 
-The ``Makefile`` builds every ``tests/test_*.c``. A test that needs more than
-its own source declares it in the test section::
+The ``Makefile`` builds every ``tests/test_*.c`` into
+``$(BUILD_DIR)/test_<name>``. A test that needs more than its own source
+declares it in the test section::
 
    $(BUILD_DIR)/test_foo: $(AGENT_DIR)/foo.c
    $(BUILD_DIR)/test_foo: TEST_CFLAGS := -DFOO
    $(BUILD_DIR)/test_foo: TEST_LDLIBS := -lcrypto
 
-``make test-unit`` runs every test except those in ``TEST_MANUAL``, which need
-a live agent, a server or generated input.
+``-DLOTA_INTERNAL_TESTS`` exposes the agent's test entry points
+(``src/agent/agent_internal.h``).
+A new test is run by ``make test-unit`` unless it is added to
+``TEST_MANUAL``, and under valgrind only once it is added to
+``VALGRIND_UNIT_BINS``.
 
-Package manifests
-=================
+Tests that need a live system
+-----------------------------
 
-LOTA describes its packages twice: the nfpm configs under ``packaging/nfpm``,
-which ``make packages`` and the release workflow build, and
-``packaging/rpm/lota.spec``, which COPR builds. A host gets whichever one
-produced the package it installed, so a file listed by only one is absent on
-half the fleet with nothing to report it.
+``TEST_MANUAL`` lists the programs the loop leaves out: ``test_sdk_ipc``,
+``test_ipc_client``, ``test_ipc_dos``, ``demo_sdk`` and ``test_tls_verify``,
+which need a server, and ``hook_preload_target``,
+``test_cross_lang_report_gen`` and ``test_cross_lang_verify``, which other
+tests run.
 
-``make check-package-manifests`` compares the set of installed paths per
-package. Directories that only hold other listed paths are ignored on both
-sides -- rpm needs a ``%dir`` line where nfpm creates the directory along the
-way -- so a directory a package deliberately ships empty is still compared.
-Modes and ownership are not: the two manifests express them too differently,
-so a path that carries permissions worth having still needs a human to read
-both entries. The spec's ``Version`` and the head of its ``%changelog`` must
-be the ``@VERSION@`` and ``@CHANGELOG@`` placeholders ``make srpm`` fills from
-``VERSION``, so a version bump changes ``VERSION`` alone.
+* When ``/run/lota/lota.sock`` exists, ``make test-unit`` also runs
+  ``test_sdk_ipc``, ``test_ipc_client status`` and ``demo_sdk`` against the
+  agent behind it. ``make test-sdk`` prints how to start an agent with
+  ``--test-ipc`` for them. ``test_ipc_dos`` opens more than 64 connections
+  to such an agent and is only run by hand.
+* ``test_tls_verify`` needs ``openssl s_server`` on port 9443 with a
+  certificate whose only SAN is ``DNS:localhost``. ``make test-unit`` runs
+  it when ``LOTA_RUN_TLS_TESTS`` is set, or when
+  ``/tmp/lota-tls-test/ca.pem`` exists and a server listens on 9443. The
+  program takes another CA file as its argument.
+* ``make test-hardware`` runs ``lota-agent --test-iommu`` and
+  ``lota-agent --test-tpm`` (:doc:`../agent/command-line`), as root.
+* ``tests/integration/test_bpf_gates.sh`` drives the BPF LSM gates scoped to
+  protected processes against an agent enforcing with BPF attached. It needs
+  root and ``make all examples``, and no make target runs it.
 
-Provides and Requires are compared too. rpmbuild derives
-``Provides: pkgconfig(<name>)`` from every shipped ``.pc`` file and nfpm does
-not, so the nfpm config declares it. A subpackage the spec pins to one build of
-a sibling, such as the devel package to its runtime, is pinned in nfpm as well.
+Sanitizers and valgrind
+=======================
 
-``make install`` is compared too, under ``/usr/share/lota`` only: the
-installer's stages read from there, so every file the packages ship under it
-must also be placed by ``make install``.
+``SANITIZE=<list>`` adds ``-fsanitize=<list>`` to the compile and link flags
+of the host C code, not the BPF object, with
+``-fno-sanitize-recover=all``, so a finding aborts the process and fails the
+test. CI runs ``make test-unit`` with ``SANITIZE=address,undefined``, under
+gcc and clang, and with ``SANITIZE=thread``.
 
-Adding a file to a package therefore means adding it in three places: the
-install rule in the ``Makefile``, the nfpm config for its package, and the
-matching ``%files`` section of the spec.
+``make sanitizer-build`` builds ``all``, the examples, the C benchmark,
+``lota-bench`` and the syzkaller loader under ``address,undefined`` and runs
+nothing.
+
+``make valgrind-unit`` runs the programs in ``VALGRIND_UNIT_BINS`` under
+``$(VALGRIND)`` (default ``valgrind``) with::
+
+   --error-exitcode=1 --leak-check=full
+   --errors-for-leak-kinds=definite,indirect --track-origins=yes -q
+
+``test_hardening`` is left out: valgrind cannot run its seccomp filters.
+``make valgrind-smoke`` runs ``lota-agent --help`` with an empty
+configuration file, and ``--help`` of the ``demo_anticheat`` and
+``trust_pong`` examples when they are built, with the same flags.
+
+Go tests
+========
+
+Each Go module (``src/verifier``, ``src/attestca``, ``sdk/server``,
+``src/crl``, ``src/fleetctl`` and the two example modules) is tested on its
+own with ``go test ./...`` in its directory.
+
+Postgres-backed tests
+---------------------
+
+The verifier's Postgres store and session code is tested only under the
+``pg_integration`` build tag, against a live server named by
+``LOTA_TEST_PG_DSN``:
+
+.. code-block:: console
+
+   $ podman run -d -e POSTGRES_USER=lota -e POSTGRES_PASSWORD=lota \
+   >     -e POSTGRES_DB=lota -p 55432:5432 docker.io/library/postgres:16-alpine
+   $ cd src/verifier
+   $ LOTA_TEST_PG_DSN="postgres://lota:lota@127.0.0.1:55432/lota?sslmode=disable" \
+   >     go test -tags pg_integration -p 1 -count=1 ./store/ ./verify/
+
+``-p 1`` is needed: both packages truncate the tables of the one database.
+Without ``LOTA_TEST_PG_DSN`` the tests skip.
+
+Two variables enable more cases; without them those cases skip, and CI
+sets neither:
+
+* ``LOTA_TEST_PG_SHARD_DSNS``: two databases, comma separated, for the
+  sharded store tests, which check which database answered.
+* ``LOTA_TEST_PG_EMPTY_DSN``: a database no verifier has built, for the
+  read-only open refusal.
+
+Go coverage ratchet
+-------------------
+
+``scripts/check-go-coverage.sh`` runs ``go test -cover ./...`` in
+``src/verifier``, ``src/attestca``, ``sdk/server``, ``src/crl`` and
+``src/fleetctl`` and compares each package with its floor in
+``.github/go-coverage-baseline``, or the file given as its argument. It
+exits 1 when a package falls below its floor, or when a package with a
+non-zero floor reports no coverage, and 2 when the baseline file is
+missing.
+
+With ``LOTA_TEST_PG_DSN`` set it adds ``-tags pg_integration -p 1`` for
+``src/verifier``. The floors of the ``store`` and ``verify`` packages
+assume those tests ran; without the variable both fall below them. The
+floors are raised as tests land and never lowered.
+
+Tree gates
+==========
+
+These targets check the tree as a whole. ``scripts/check-patch`` runs each
+when a patch touches its inputs (:doc:`../process/patch-checks`).
 
 Include hygiene
-===============
+---------------
 
-Every translation unit must include the headers it uses directly and no
-others; a header reached only transitively through another include is a
-defect. ``make check-includes`` enforces this. It builds a compile database
-with ``bear`` and runs ``clang-include-cleaner`` over every C source the build
-knows about (``all``, ``examples``, ``test-bins``, ``fuzz-all``, ``bench-c``,
-``syzkaller-fuzz-loader``). The gate fails on any header pulled in but not used
-directly.
+``make check-includes`` runs ``scripts/check-includes.sh``. It builds a
+compile database at ``build/compile_commands.json`` with ``bear`` over
+``make -B -k`` of ``all``, ``examples``, ``test-bins``, ``fuzz-all``,
+``bench-c``, ``lota-bench`` and ``syzkaller-fuzz-loader``, and keeps the
+first entry of a file compiled twice. It then runs
+``clang-include-cleaner`` over every C file in the database except
+``src/bpf/``, and fails on each include the tool reports as unused. A header
+reached only through another include is not reported.
 
-| ``scripts/fix-includes.sh [file.c ...]`` rewrites the include lists automatically with
-| ``include-what-you-use``. With no arguments it processes the whole database.
+Some headers are exempt, because the tool reports them wrongly:
 
-| Always review the diff and rebuild: the tools cannot see symbols reached only
-  through a macro or behind conditional compilation, so an
-  include needed only that way must carry an
-| ``// IWYU pragma: keep`` comment (see ``tests/test_seal_aik.c`` for practice example).
+* ``<errno.h>``, ``<sys/types.h>``, ``<unistd.h>``, ``<getopt.h>``,
+  ``<termios.h>``, ``<sys/time.h>`` and ``<sys/socket.h>``, whose symbols
+  it credits to the glibc and kernel uapi implementation headers.
+* ``SDL*.h``: SDL's public header is ``<SDL.h>``, and the others are
+  implementation detail.
+* ``<systemd/sd-bus-protocol.h>``, whose symbols systemd moves between it
+  and ``<systemd/sd-bus.h>`` across releases.
 
-A few exemptions live in both ``scripts/check-includes.sh`` and the local
-``.clangd``, and must stay in sync:
+``scripts/fix-includes.sh [file.c ...]`` rewrites the include lists with
+``include-what-you-use``, over the whole database when given no file. The
+mapping files under ``scripts/iwyu/`` keep the SDL and TSS2 umbrella
+headers. The tool does not see a symbol used only through a macro or under
+conditional compilation, so review the diff and rebuild; an include needed
+that way carries ``// IWYU pragma: keep``, as in ``tests/test_seal_aik.c``.
 
-* The C/POSIX headers ``clang-include-cleaner`` mis-attributes to the glibc /
-  kernel-uapi implementation headers (``bits/``, ``asm-generic/``) -- it
-  reports the public ``<errno.h>``, ``<sys/types.h>`` and friends as unused.
-  The idiomatic public headers are kept and that fixed set is exempted.
-* Library umbrellas (``<SDL.h>``, the TSS2 ESYS headers) whose granular
-  sub-headers are implementation detail; the umbrella the code includes is kept
-  via the mapping files under ``scripts/iwyu/``.
-* ``<systemd/sd-bus-protocol.h>``, whose symbols systemd relocates between
-  releases: ``SD_BUS_NAME_REPLACE_EXISTING`` sits in ``<systemd/sd-bus.h>`` on
-  systemd 255 (Ubuntu 24.04) but in ``sd-bus-protocol.h`` on 259 (Fedora 44),
-  so the header reads as used on one and unused on the other. It is exempted
-  instead of churned per systemd version.
-* The generated ``include/vmlinux.h`` and the BPF program (``src/bpf/``) are
-  skipped: the host analyzer cannot model a ``-target bpf`` unit.
+The gate needs ``clang-include-cleaner`` (clang-tools-extra) and ``bear``,
+and exits 1 without them. The fixer needs ``include-what-you-use``,
+``iwyu_tool.py``, ``fix_includes.py`` and ``bear``.
 
-Requires ``clang-include-cleaner`` (clang-tools-extra), ``bear``, and -- for
-the fixer -- ``include-what-you-use``.
+Package manifests
+-----------------
 
-Declarations on a second toolchain
-==================================
+Packages are described twice: by the nfpm configs under ``packaging/nfpm``,
+which ``make packages`` and the release workflow build, and by
+``packaging/rpm/lota.spec``, which COPR builds
+(:doc:`../admin-guide/packages`). ``make check-package-manifests`` runs
+``scripts/check-package-manifests.sh``, which fails when:
 
-The include gate reports a header that is included and not used. It does not
-report a symbol used without the header that declares it when another header
-on the build host provides that declaration. Fedora's ``<seccomp.h>`` includes
-``<stdlib.h>`` and el9's does not, so a file that calls ``malloc`` without
-including ``<stdlib.h>`` compiles on Fedora and fails on el9.
-``make check-el9-decls`` compiles every C translation unit ``-fsyntax-only``
-against el9 headers with the flags the build uses, and reports every unit that
-fails.
+* the two manifests ship different installed paths for a package. A
+  directory that only holds other listed paths is dropped from both sides,
+  so a directory shipped empty is still compared. Modes and ownership are
+  not compared.
+* their Requires differ by name, apart from those rpmbuild derives from
+  sonames, which the nfpm config lists by hand.
+* a sibling is pinned to one build (``=``) in one manifest and not in the
+  other.
+* an nfpm config's ``pkgconfig(<name>)`` provides and its shipped ``.pc``
+  files differ. rpmbuild derives the provides from the files and nfpm does
+  not.
+* a package's ``Summary`` is not the first line of its nfpm description,
+  or its ``%description`` is not the rest.
+* the spec's ``Version`` or newest ``%changelog`` entry is not the
+  ``@VERSION@`` or ``@CHANGELOG@`` placeholder that ``make srpm`` fills
+  from ``VERSION``.
+* the spec ships a file ``make install`` writes only when it exists, and no
+  target the spec's ``%build`` runs produces it.
+* a path under ``/var/lib/lota``, ``/etc/lota``, ``/usr/lib/lota`` or
+  ``/usr/share/lota`` has no parent directory a package owns.
+* a shipped unit is not stopped by both ``%systemd_preun`` and the nfpm
+  pre-remove script.
+* the packages ship a file under ``/usr/share/lota`` that ``make install``
+  does not place.
+* ``LOTA_REPO_BASEURL`` or a ``lota.repo`` or ``RPM-GPG-KEY-lota`` address
+  in a page is not under ``<site>/rpm``, where ``<site>`` is ``_site`` in
+  ``Documentation/conf.py``.
 
-The gate needs ``podman`` and a network, spawns the container itself, and
-mounts the checkout read-only -- a syntax-only sweep writes nothing. CI runs
-it in the ``el9-decls`` job, inside the same image. The BPF program is skipped:
-it is built ``-target bpf`` against a generated ``vmlinux.h``, not against el9
-headers.
+A file added to a package is therefore added to the ``Makefile`` install
+rule, the nfpm config and the spec's ``%files``.
 
 The player page's build in a clean Fedora
-=========================================
+-----------------------------------------
 
-The player page lists the packages a build from source needs, and a
-development host cannot check that list: it already carries every package an
-earlier build wanted. The 32-bit half of the Wine hook is where this bites: a
-missing multilib package skips the half instead of failing the build, and
-``make install`` then refuses the tree.
+A development host already has every package an earlier build needed, so it
+cannot show a package the player page leaves out.
+``make check-player-build`` runs ``scripts/check-player-build.sh``. It
+starts ``registry.fedoraproject.org/fedora:44`` (``LOTA_PLAYER_IMAGE``
+overrides it) and runs the commands of the *Building it yourself* section
+of ``Documentation/player/index.rst``, read from the page. A copy of the
+tree under test replaces the ``git clone``, and ``sudo`` is dropped, since
+the container runs as root.
 
-``make check-player-build`` runs the commands of the page's *Building it
-yourself* section in a clean ``registry.fedoraproject.org/fedora:44``. It
-reads them from the page, so the two cannot drift; the clone is replaced by a
-copy of the tree under test, and ``sudo`` is dropped, as the container runs as
-root. It passes when the install leaves the installer, the Steam helpers and
-both halves of the hook in place; a failing step prints its number and the
-tail of its output.
+A failing step prints its number and the last 20 lines of its output. After
+the last step the script checks that ``/usr/bin/lota-install``,
+``/usr/bin/lota-steam-setup``, ``/usr/bin/lota-proton-hook`` and both
+``liblota_wine_hook.so.1`` builds, under ``/usr/lib64`` and ``/usr/lib``,
+are installed. A missing 32-bit package makes the build skip the 32-bit
+hook, and ``make install`` then refuses the tree on x86_64.
 
-The gate needs ``podman`` and a network. CI runs it in the ``player-build``
-job inside the same image, with nothing installed before the page's list; the
-checkout uses the REST API rather than install ``git`` early.
-
-Postgres-backed tests and the coverage ratchet
-==============================================
-
-The multi-instance verifier ships a Postgres backend (``jackc/pgx/v5``,
-pure-Go, stdlib ``database/sql`` driver). Its store and session code is
-compiled into every build but only exercised by tests behind the
-``pg_integration`` build tag, which need a live server:
-
-.. code-block:: bash
-
-    podman run -d -e POSTGRES_USER=lota -e POSTGRES_PASSWORD=lota \
-      -e POSTGRES_DB=lota -p 55432:5432 docker.io/library/postgres:16-alpine
-    cd src/verifier
-    LOTA_TEST_PG_DSN="postgres://lota:lota@127.0.0.1:55432/lota?sslmode=disable" \
-      go test -tags pg_integration -p 1 -count=1 ./store/ ./verify/
-
-Use ``-p 1``: both packages truncate tables in one shared database, and pick a
-host port that is actually free -- a foreign Postgres already bound to the port
-answers with confusing auth failures. The coverage ratchet
-(``scripts/check-go-coverage.sh``) enables the tag for ``src/verifier`` when
-``LOTA_TEST_PG_DSN`` is set; the CI ``go-coverage-ratchet`` job provides a
-postgres service, so the recorded floors for the ``store`` and ``verify``
-packages assume the Postgres tests ran. Without the DSN the script still works
-but those two packages report lower coverage than their floors.
+The script needs podman and network access. With
+``LOTA_PLAYER_IN_CONTAINER=1`` it runs in place, from ``LOTA_PLAYER_SRC``
+(default ``/src``), as the CI job does inside a Fedora 44 image.
