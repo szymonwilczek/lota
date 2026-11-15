@@ -1,460 +1,264 @@
 .. SPDX-License-Identifier: MIT
 .. Copyright (C) 2026 Szymon Wilczek
 
+==============
 demo_anticheat
 ==============
 
-Reference heartbeat producer for the LOTA end-to-end demo.
-
-The process opens an ``lota_ac_session`` in direct mode against the local LOTA
-agent, mints LACH heartbeats via ``lota_ac_heartbeat()``, and POSTs them to the
-demo server with ``libcurl``. It is the smallest possible C reference for an
-EAC- or BattlEye-style integrator: every production-relevant decision (provider
-id, game id, socket path, heartbeat interval) is a flag.
-
-Build with ``make examples`` from the repository root. The binary lands at
-``build/examples/demo_anticheat``.
-
-``run.sh`` looks for the binaries in ``BIN`` and ``EXAMPLES_BIN`` if set,
-else in ``$LOTA_BUILD_DIR``, else in ``build/``.
-
-It builds the way a studio's build does: through ``pkg-config`` against the
-**installed** SDK, never against the build tree. ``make examples`` first
-lays the package contents out under ``build/stage`` (the ``sdk-stage``
-target), so the flags come from the same ``.pc`` files ``lota-sdk-devel``
-ships:
-
-.. code:: sh
-
-   cc $(pkg-config --cflags lota-anticheat) -o producer producer.c \
-      $(pkg-config --libs lota-anticheat) $(pkg-config --libs libcurl)
-
-``lota-anticheat`` is the only LOTA module on that line: the library
-carries the gaming and server SDK inside it, so a producer that only calls
-``lota_ac_*`` links one thing. Add ``lota-gaming`` or ``lota-server`` when
-the same binary also calls those APIs directly.
-
-``libcurl`` is not LOTA's own and a host is not expected to have it. Without
-``libcurl-devel`` ``make examples`` prints ``SKIP: demo_anticheat (install
-libcurl-devel)`` and builds the rest of the tree.
-
-Which half of the evidence you run
-----------------------------------
-
-A publisher adopts either half, and the choice is a real fork with a direct
-privacy consequence for the player. Both work today; pick one before writing
-the integration, because it decides what your backend has to be able to do.
-
-**Light -- tokens only.** Your game backend receives the tokens titles fetch
-and verifies them itself: ``lota_server_verify_token()`` in
-``include/lota_server.h``, or ``VerifyToken`` in the Go server SDK. What that
-buys is the TPM's signature over the attestation flags and the PCR digest,
-bound to a nonce you issued, chained to the AIK certificate your attestation
-CA issued that machine. You run a CA and nothing else. **Nothing is reported
-from the player's machine to you** -- no attestation report, no TPM event log,
-no runtime manifest -- so the machine holds no verdict of yours, and
-``lota_is_attested()`` answers ``0`` with ``LOTA_FLAG_TOKEN_ONLY`` set. Read
-that flag: it distinguishes "nobody verifies here, check the token yourself"
-from "this machine failed verification", which look identical in the attested
-bit alone. The host is configured for you with ``verifier = none`` in that
-publisher's profile.
-
-The TPM vouches for the PCR digest, the nonce and the machine behind that
-certificate. The flags are the agent's statement, and a local root can sign its
-own (see ``Documentation/security/threat-model.rst``). So watch ``pcr_digest``
-from the claims for a change on each device, keep a ban on the device identity
-your CA derives from the EK, and judge play on your server.
-
-That digest differs between machines, and a firmware or agent update moves it.
-It shows that a device changed, not that Secure Boot was on when you first saw
-it: that takes the event log, which only the deep half reports.
-
-**Deep -- a verifier and a policy.** The agent sends full attestation reports
-to a verifier you run, on your own cadence, and that verifier judges them
-against a policy: boot PCR pins, the agent-hash allow-list, the firmware
-floor, revocation, and how a kernel or firmware update is allowed to
-re-anchor. Strongest judgement, and the one that can refuse a machine for a
-reason no single token expresses. It costs you the verifier and its policy,
-and it costs the player the report: the PCR values, the event log and the
-runtime manifest reach you every interval a title of yours runs.
-``lota_is_attested()`` then answers with your verifier's verdict.
-
-Both paths use the same enrollment: a per-publisher AIK, minted on the
-player's machine and certified by your CA, which no other publisher can
-correlate against. Both are per publisher, so a player's machine can serve one
-of each without either arrangement changing for the other. Moving from light
-to deep later is a configuration change on the host and a verifier you stand
-up; nothing in the title has to change except which answer it reads.
-
-Configuring the session
------------------------
-
-``struct lota_ac_config`` starts with ``struct_size``, which the caller sets to
-its own ``sizeof``. That is what lets the structure gain members after 1.0
-without a second entry point: the library reads only the members the caller's
-size covers, so a game built against a newer header than the library it links
-keeps working. A configuration that leaves the field zero is refused rather
-than guessed at -- reading members the caller never wrote is what the field
-exists to prevent -- so an integrator copying this reference should copy the
-first line with it:
-
-.. code-block:: c
-
-   struct lota_ac_config cfg = {
-           .struct_size = sizeof(cfg),
-           .provider = LOTA_AC_PROVIDER_EAC,
-           .game_id = "trust-pong",
-           .direct = 1,
-   };
-
-``struct lota_connect_opts`` carries the same first member for the same
-reason, on the rare path where a game opens the agent connection itself
-instead of letting ``lota_ac_init()`` do it.
-
-On a player's machine, which may hold enrollments with several publishers, set
-``publisher_profile`` to the lowercase hex SHA-256 of your own attestation CA's
-trust anchor SubjectPublicKeyInfo:
-
-.. code-block:: sh
-
-   openssl x509 -in ca-tls.crt -pubkey -noout \
-       | openssl pkey -pubin -outform der \
-       | sha256sum
-
-The session's tokens are then signed by the AIK that machine enrolled with
-*your* CA, and its attested state is your verifier's verdict rather than every
-publisher on the host agreeing. Leave it NULL on a single-publisher host. A
-machine that holds no enrollment for the named publisher fails the connection
-rather than answering with another publisher's evidence.
-
-A machine that answers for several publishers refuses a token to a session
-that named none with ``LOTA_ERR_UNKNOWN_PROFILE``, since a token is signed with
-one publisher's key. A build shipped to both kinds of machine names its
-publisher always.
-
-Nothing enrolls with a publisher until somebody on that machine agrees to it,
-so a first run there fails the connection with ``LOTA_ERR_CONSENT_REQUIRED``
-(read it with ``lota_connect_last_error()``; ``lota_ac_init()`` returns NULL
-and the same call answers why). That is a screen to show, not an error to
-report: say what your verifier would receive, and call ``lota-agent
---allow-publisher <your hex>`` when the player accepts. Distinguish it from
-``LOTA_ERR_CONNECTION_FAILED``, which means no agent is installed at all::
-
-   struct lota_client *c = lota_connect_opts(&opts);
-
-   if (!c) {
-           switch (lota_connect_last_error()) {
-           case LOTA_ERR_CONSENT_REQUIRED:  /* ask the player */
-           case LOTA_ERR_UNKNOWN_PROFILE:   /* consented, not enrolled yet */
-           case LOTA_ERR_CONNECTION_FAILED: /* no agent on this machine */
-           case LOTA_ERR_TIMEOUT:           /* agent busy, try again */
-           case LOTA_ERR_INVALID_ARG:       /* this title's request was bad */
-           default:
-                   break;
-           }
-   }
-
-``LOTA_ERR_INVALID_ARG`` is the one that is not about the player: the identity
-was malformed, the options were not sized, or the agent refused the request
-itself. It never means the publisher is unknown to that machine, so a title
-that hits it should report a fault rather than send the player to a consent
-screen.
-
-``LOTA_ERR_TIMEOUT`` (the agent is busy past the deadline, measuring a title
-that is starting, say) and ``LOTA_ERR_CONNECTION_FAILED`` (it hung up before
-answering) say nothing about the publisher; connect again.
-
-End-to-end proof
-----------------
-
-``./run.sh`` verifies the whole path without root and without a real TPM: a
-throwaway swTPM, ``lota-agent`` under ``systemd-socket-activate`` so it
-listens in ``/tmp`` instead of ``/run/lota``, the reference server on the
-AIK that TPM provisioned, and two assertions -- a heartbeat from an attested
-host is ``TRUSTED``, and a heartbeat whose signature byte was flipped is
-``UNTRUSTED`` with the server naming the signature as the reason.
-
-Requires ``swtpm``, ``swtpm_setup``, ``tpm2_readpublic`` and
-``systemd-socket-activate``. Set ``KEEP_LOGS=1`` to keep the run directory
-for inspection.
-
-Flags
------
-
-+-----------------------------+-------------------------------------+------------------------------+
-| Flag                        | Default                             | Meaning                      |
-+=============================+=====================================+==============================+
-| ``--server URL``            | ``http://127.0.0.1:7443/heartbeat`` | demo server ``/heartbeat``   |
-|                             |                                     | endpoint                     |
-+-----------------------------+-------------------------------------+------------------------------+
-| ``--game-id ID``            | ``trust-pong``                      | game id stamped into the     |
-|                             |                                     | LACH header                  |
-+-----------------------------+-------------------------------------+------------------------------+
-| ``--socket PATH``           | (default agent socket)              | override the agent UNIX      |
-|                             |                                     | socket path                  |
-+-----------------------------+-------------------------------------+------------------------------+
-| ``--provider eac/battleye`` | ``eac``                             | anti-cheat provider id       |
-|                             |                                     | stamped into the LACH header |
-+-----------------------------+-------------------------------------+------------------------------+
-| ``--interval SEC``          | ``5``                               | seconds between heartbeats;  |
-|                             |                                     | also                         |
-|                             |                                     | ``$LOTA_DEMO_INTERVAL_SEC``  |
-+-----------------------------+-------------------------------------+------------------------------+
-| ``--once``                  | off                                 | fire a single heartbeat,     |
-|                             |                                     | exit with the                |
-|                             |                                     | server-reported state        |
-+-----------------------------+-------------------------------------+------------------------------+
-| ``--tamper-marker PATH``    | (none)                              | flip a token byte when PATH  |
-|                             |                                     | exists; also                 |
-|                             |                                     | ``$LOTA_DEMO_TAMPER_MARKER`` |
-+-----------------------------+-------------------------------------+------------------------------+
-| ``--print-runtime-objects`` | off                                 | print the runtime manifest   |
-|                             |                                     | (loaded object paths) and    |
-|                             |                                     | exit                         |
-+-----------------------------+-------------------------------------+------------------------------+
-| ``--ca-cert PATH``          | (none)                              | provisioning CA that signs   |
-|                             |                                     | the server cert (mTLS,       |
-|                             |                                     | ``https://`` server)         |
-+-----------------------------+-------------------------------------+------------------------------+
-| ``--client-cert PATH``      | (none)                              | producer mTLS certificate;   |
-|                             |                                     | set with ``--client-key``    |
-+-----------------------------+-------------------------------------+------------------------------+
-| ``--client-key PATH``       | (none)                              | producer mTLS private key;   |
-|                             |                                     | set with ``--client-cert``   |
-+-----------------------------+-------------------------------------+------------------------------+
-| ``--help``                  | n/a                                 | print usage and exit         |
-+-----------------------------+-------------------------------------+------------------------------+
-
-Mutual TLS
-----------
-
-When the demo server runs with TLS (``https://`` ``--server`` URL), point the
-producer at the provisioning CA so it verifies the server, and present the
-producer certificate so the server can require a provisioned client:
-
-.. code:: sh
-
-   demo_anticheat --server https://127.0.0.1:7443/heartbeat \
-                  --ca-cert mtls/ca.crt \
-                  --client-cert mtls/producer.crt \
-                  --client-key mtls/producer.key
-
-Peer and hostname verification stay on, so the producer refuses to ship a
-heartbeat to an unauthenticated server. ``examples/mtls/gen-certs.sh``
-provisions the keypairs; see
-```examples/mtls/README.rst`` <../mtls/README.rst>`__.
-
-Re-measurement runtime manifest
--------------------------------
-
-Each heartbeat carries a runtime measurement of the producer's live image
-
-- the main binary plus every shared library it loads. The server reproduces the
-  expected value from the set of ELF files that make up that runtime. Capture
-  the list once with ``--print-runtime-objects`` and hand it to the server:
-
-.. code:: sh
-
-   demo_anticheat --print-runtime-objects > runtime-manifest.txt
-   demo_server --anticheat-runtime-manifest runtime-manifest.txt ...
-
-Being measured at all
----------------------
-
-Runtime measurement covers the processes in the agent's **protected set**, and
-nothing joins it by accident: a process asks, with ``lota_protect_self()``.
-This reference makes that opt-in, because it also brings a requirement (below)
-that a stock host does not meet:
-
-.. code:: sh
-
-   demo_anticheat --once --protect-self
-
-Without it the producer is an ordinary client: its heartbeats still carry a
-TPM-signed token for the host, but nothing in them speaks for this process's
-own code. An anti-cheat integration wants the opposite, so a real one calls it
-at startup and keeps the connection for the life of the process -- the
-protected set is keyed by PID, and the agent drops a PID when its process
-exits.
-
-How much of the runtime a measurement covers
---------------------------------------------
-
-Once a process is protected, the agent measures its mapped objects from the
-kernel side, and it can only measure an object the kernel holds an fs-verity
-digest for. A
-distribution that ships its libraries without one therefore leaves part of the
-runtime unmeasurable, and that is the common case on a stock host today.
-
-The measurement does not paper over it. Objects with no digest are left out of
-the fold and counted, and the token carries
-``LOTA_FLAG_IMAGE_FULLY_MEASURED`` only when the round had a process to
-measure and nothing was left out -- a host protecting nothing measured
-nothing, and that is not full coverage. Requiring
-full coverage is the publisher's policy call:
-
-.. code:: sh
-
-   # accept partial coverage (default here)
-   demo_anticheat --once --protect-self
-
-   # the producer refuses to call itself trusted without full coverage
-   demo_anticheat --once --protect-self --require-full-image
-
-   # the publisher refuses it, which is where the decision belongs
-   demo_server --require-full-image ...
-
-The two are different statements. ``--require-full-image`` on the producer
-sets ``required_flags``, so the *client's* own session state reads
-``UNTRUSTED`` -- useful for a launcher that wants to say so before a round
-starts. That field only adds to the bar: ``LOTA_AC_STATE_TRUSTED`` means the
-host is attested, so a session that names no extra flag still needs
-``LOTA_FLAG_ATTESTED`` and a host with a live agent and no verdict from anybody
-reads ``UNTRUSTED``. ``lota_ac_get_info()`` reports the same state and a
-``trusted`` field derived from it; both are local telemetry, and neither is the
-verdict a backend acts on. The verdict a backend acts on is the server's, so a publisher that
-means it sets the flag on the server: the token carries the coverage bit, the
-signature covers it, and the reason names the missing flag.
-
-Two properties are not a policy choice, and the agent refuses a token when
-either fails: something has to have been measured, and the producer's **own
-executable** has to be one of the objects measured -- that binary is the one
-a publisher ships and can make measurable. The refusal names that case,
-``LOTA_ERR_UNMEASURABLE_SELF``.
-
-A machine whose agent holds no TPM is refused for a different reason and says
-so: ``LOTA_ERR_NO_TPM``. Signing is the whole of a token, so there is nothing
-to hand back and an unsigned one is never issued. It is not a TPM that failed
-and not a generic agent error, and it is the one refusal no retry improves --
-the answer is the same until the title runs against an agent that has a TPM.
-
-The refusal stops there. A *different* protected process that cannot be
-measured never refuses this caller: any program on the machine may ask to be
-protected, so folding somebody else's packaging into this answer would let one
-unmeasurable binary stop token issuance for every title on the host. Such a
-process is reported instead -- its digest is absent from the fold and the token
-carries ``LOTA_FLAG_IMAGE_FULLY_MEASURED`` clear -- which leaves the decision
-with the publisher who has to make it.
-
-On the backend side, ``lota_server_verify_token()`` recomputes the runtime
-measurement from the token's own protected-PID list and registry digests and
-compares it against the value inside the TPM signature. A mismatch is
-``LOTA_SERVER_ERR_RUNTIME_IMAGE`` -- its own code, distinct from the two nonce
-checks, because it is the signal that a protected process's code did not
-reconcile and it is the one an anti-cheat backend alerts on.
-
-Making your own objects measurable
-----------------------------------
-
-The same object list feeds both the server's expected measurement and the
-step that gives those objects a digest:
-
-.. code:: sh
-
-   demo_anticheat --print-runtime-objects > runtime-manifest.txt
-   sudo lota-install --verity-manifest runtime-manifest.txt
-
-``lota-install`` enables fs-verity on each listed object and reports what it
-did. Every line has to be an absolute path with no ``..`` component: the step
-runs as root and a digest cannot be taken back off an inode, so a line that
-would walk somewhere else is named and counted as a failure. A digest lives on
-the inode, so **replacing a file drops it**: run this again after shipping a new
-build, and expect the objects that belong to the distribution (``libc``, ``libcurl``
-and the rest) to lose theirs on the next package update.
-Those are not yours to keep verity on -- what the manifest is for is the binaries
-your title ships.
-
-When a measurement is refused
------------------------------
-
-The agent log names the object by path and its role in the process:
-
-.. code:: text
-
-   runtime image measurement failed for pid=2039:
-     /usr/lib64/libcurl.so.4, an object the process has mapped,
-     carries no fs-verity digest
-     (enable fs-verity on it, or drop the process from the protected set)
-
-   runtime image measurement failed for the requesting pid=2039:
-     the process's own executable /opt/title/bin/producer
-     carries a 48-byte fs-verity digest;
-     LOTA takes SHA-256 (32) or SHA-512 (64)
-
-A mapped object leaves the token issuable with partial coverage; the
-process's own executable refuses it outright.
-
-The heartbeat surfaces the same condition as ``-ENODATA``, which the producer
-prints as ``lota_ac_heartbeat: No data available``. That errno also covers a
-host that is simply not attested yet for the publisher in question, so read
-the agent log before converting anything.
+``demo_anticheat`` is the heartbeat producer of the demo. It opens a
+direct-mode session of the
+`anti-cheat SDK <../../Documentation/userspace-api/anticheat.rst>`_
+against the local agent, builds a heartbeat with ``lota_ac_heartbeat()``
+at a fixed interval and posts it to
+`demo_server <../demo_server/README.rst>`_ with libcurl. The game client,
+`trust_pong <../demo_game/README.rst>`_, is a separate process and learns
+the verdict from the server.
+
+Building
+========
+
+``make examples`` builds ``build/examples/demo_anticheat`` when
+``pkg-config`` finds ``libcurl``; otherwise it prints
+``SKIP: demo_anticheat (install libcurl-devel)``. The fragment takes its
+flags from the staged SDK (see `Building <../README.rst>`__), as a
+studio's build takes them from the installed one:
+
+.. code-block:: console
+
+   $ cc $(pkg-config --cflags lota-anticheat lota-gaming libcurl) \
+         -o producer heartbeat_loop.c \
+         $(pkg-config --libs lota-anticheat lota-gaming libcurl)
+
+``lota-gaming`` is on the line because the producer calls
+``lota_connect_opts()`` and ``lota_protect_self()`` itself; a producer
+that calls only ``lota_ac_*`` links ``lota-anticheat`` alone.
+
+Running
+=======
+
+.. code-block:: console
+
+   $ build/examples/demo_anticheat --server http://127.0.0.1:7443/heartbeat
+
+.. list-table::
+   :header-rows: 1
+   :widths: 30 25 45
+
+   * - Option
+     - Default
+     - Meaning
+   * - ``-s``, ``--server URL``
+     - ``http://127.0.0.1:7443/heartbeat``
+     - The full URL heartbeats are posted to.
+   * - ``-g``, ``--game-id ID``
+     - ``trust-pong``
+     - Game id of the session.
+   * - ``-S``, ``--socket PATH``
+     - discovery
+     - Agent socket, as in ``lota_connect_opts()`` (see
+       `the gaming SDK <../../Documentation/userspace-api/gaming.rst>`_).
+   * - ``-u``, ``--publisher HEX``
+     - none
+     - Publisher profile of the session, the id
+       ``lota-agent --list-publishers`` prints (see
+       `publishers <../../Documentation/agent/publishers.rst>`_).
+   * - ``-p``, ``--provider NAME``
+     - ``eac``
+     - ``eac``, ``battleye`` or ``be``; written into every heartbeat.
+   * - ``-i``, ``--interval SEC``
+     - 5
+     - Seconds between heartbeats, 1 to 3599.
+   * - ``-1``, ``--once``
+     -
+     - Send one heartbeat and exit with its verdict.
+   * - ``-P``, ``--protect-self``
+     -
+     - Put the process in the protected set of the agent first.
+   * - ``-F``, ``--require-full-image``
+     -
+     - Add ``LOTA_FLAG_IMAGE_FULLY_MEASURED`` to ``required_flags`` of the
+       session.
+   * - ``-T``, ``--tamper-marker PATH``
+     - none
+     - Corrupt each heartbeat sent while ``PATH`` exists.
+   * - ``-O``, ``--print-runtime-objects``
+     -
+     - Print the objects of the runtime measurement and exit.
+   * - ``-A``, ``--ca-cert PATH``
+     - system CAs
+     - CA that verifies an ``https://`` server.
+   * - ``-E``, ``--client-cert PATH``; ``-K``, ``--client-key PATH``
+     - none
+     - Client certificate and key, together.
+   * - ``-h``, ``--help``
+     -
+     - Print the usage to stderr and exit 0.
+
+``LOTA_DEMO_INTERVAL_SEC`` sets the interval when it is 1 to 3599 and is
+ignored otherwise; ``LOTA_DEMO_TAMPER_MARKER`` sets the marker. Options
+take precedence over both.
+
+At start the producer prints one line to stderr, wrapped here:
+
+.. code-block:: text
+
+   demo_anticheat: producer up (server=<url> game=<id> provider=<name>
+       interval=<n>s once=<yes|no> tamper_marker=<path|(none)>)
+
+and then one line per heartbeat, with ``reason`` only when the server
+sent one:
+
+.. code-block:: text
+
+   demo_anticheat: seq=<n> state=<state> latency=<ms>ms http=<code>
+       reason="<reason>"
+
+``state`` and ``reason`` are copied from the answer of the server
+without decoding escapes, ``?`` when there is no ``state``. A heartbeat
+that cannot be built prints
+``demo_anticheat: lota_ac_heartbeat: <SDK error> (<errno text>)`` and one
+that cannot be posted ``demo_anticheat: curl: <error>``; the producer
+goes on with the next one. SIGINT and SIGTERM end the wait between two
+heartbeats, within a second, with
+``demo_anticheat: shutdown requested, exiting``.
 
 Exit codes
 ----------
 
-In ``--once`` mode the process return code mirrors the server verdict so
-``setup.sh`` can use the call as a liveness check without parsing stderr:
+.. list-table::
+   :header-rows: 1
+   :widths: 10 90
 
-==== ============================================================
-Code Meaning
-==== ============================================================
-0    ``TRUSTED``
-1    ``UNTRUSTED``
-2    ``REJECT``
-3    transport-level failure (no agent, no server, libcurl error)
-64   usage / CLI error
-==== ============================================================
+   * - Code
+     - Meaning
+   * - 0
+     - ``TRUSTED``; ``--help``; ``--print-runtime-objects`` done.
+   * - 1
+     - ``UNTRUSTED``.
+   * - 2
+     - ``REJECT``.
+   * - 3
+     - The heartbeat was not built or not posted, the answer has no known
+       ``state``, or the session, libcurl, ``--protect-self`` or
+       ``--print-runtime-objects`` failed.
+   * - 64
+     - An unknown option or a bad value: ``--provider``, ``--interval``,
+       or one of ``--client-cert`` and ``--client-key`` without the
+       other. The usage follows on stderr.
 
-In continuous mode the process loops forever and exits cleanly on SIGINT or
-SIGTERM, propagating the last verdict as the exit code.
+With ``--once`` the code is that of the one heartbeat. Without it the
+producer runs until SIGINT or SIGTERM and exits with the code of the last
+heartbeat.
 
-Logging
--------
+Protection
+==========
 
-Each tick writes one line to stderr:
+``--protect-self`` opens a second connection to the agent, with the same
+socket and publisher, and calls ``lota_protect_self()`` on it before the
+session starts; the session keeps its own connection. The agent then
+measures the code the process maps into every token it issues, as
+described in `runtime measurement
+<../../Documentation/agent/runtime-measurement.rst>`_. The producer prints
+one line, wrapped here:
 
-::
+.. code-block:: text
 
-   demo_anticheat: seq=<n> state=<verdict> latency=<ms> http=<status> [reason="..."]
+   demo_anticheat: protected (pid=<pid>); every token now folds this
+       process's measured code
 
-The format is intentionally pipe-friendly so the operator can ``| awk`` it
-during the live demo without an extra parser.
+and exits 3 with ``demo_anticheat: --protect-self: cannot reach the agent
+(<error>)`` or ``demo_anticheat: --protect-self refused: <error>``. The
+connection stays open for the life of the process, which keeps it in the
+set.
 
-.. _integration-notes-vs-eac--battleye:
+``--require-full-image`` changes only the state of the session, which
+the producer does not print: its lines and exit code stay the verdict of
+the server. ``demo_server -require-full-image`` makes the same demand on
+the server.
 
-Integration notes vs EAC / BattlEye
------------------------------------
+The runtime manifest
+====================
 
-- **Process model.** Real anti-cheat clients ship a long-lived helper next to
-  the game. ``demo_anticheat`` reproduces that model: the process is
-  independent of the SDL2 client, and the two communicate only through the demo
-  server's verdict state.
-- **Provider id.** EAC and BattlEye allocate different provider identifiers
-  (``1`` and ``2`` here). The LACH wire stamps the value into byte 5 of the
-  header so a verifier that bridges both vendors can route per-provider without
-  re-deriving from the socket path.
-- **Session id.** The ``lota_ac_session`` mints its own 16-byte session id at
-  init time. That id is independent from the game-server session id served by
-  ``POST /nonce`` -- the two are bridged on the server side through
-  ``game_id_hash``, which lets multiple producers per game converge on the same
-  verdict without sharing state.
-- **Replay defence.** The producer's monotonic sequence is the primary replay
-  defence on the wire. The demo server keeps a per-session high-water mark and
-  rejects any heartbeat at or below it.
+``--print-runtime-objects`` prints, one path per line, the main binary and
+each shared library the process maps, as
+``lota_ac_list_runtime_objects()`` lists them. The list is the manifest
+the server computes the expected measurement from, and the one
+``lota-install --verity-manifest`` enables fs-verity on (see
+`lota-install <../../Documentation/admin-guide/lota-install.rst>`_):
 
-Tamper hook
------------
+.. code-block:: console
 
-``--tamper-marker PATH`` (or ``LOTA_DEMO_TAMPER_MARKER=PATH``) arms a per-tick
-poll: when the file at ``PATH`` exists at heartbeat time, the producer XORs
-``0xFF`` into the **last** byte of the packet, which is the tail of the TPM
-signature. Both the LACH header and the token's own header stay well-formed,
-so the server parses everything and then fails the signature check: it
-answers ``UNTRUSTED`` with the signature-verify error string surfaced from
-``sdk/server.VerifyToken``, rather than the wire-format reject branch.
+   $ build/examples/demo_anticheat --print-runtime-objects \
+         > runtime-manifest.txt
+   $ demo_server -aik-pub aik.pem \
+         -anticheat-binary build/examples/demo_anticheat \
+         -anticheat-runtime-manifest runtime-manifest.txt
 
-The first byte of the token is not a usable target -- it is the token magic,
-and corrupting it exercises the parser instead of the integrity check. This is
-the integration point that ``examples/demo/demo_tamper.sh`` uses to flip the
-live demo's banner from green TRUSTED to red INTEGRITY LOSS without touching
-the agent process or the swtpm sandbox.
+Mutual TLS
+==========
+
+libcurl verifies the peer and the host name of an ``https://`` server, by
+the CAs of the system or the one ``--ca-cert`` names. With
+``--client-cert`` and ``--client-key`` the producer presents its own
+certificate, which ``demo_server -client-ca`` requires.
+`mtls/ <../mtls/README.rst>`_ creates the certificates.
+
+Tamper marker
+=============
+
+When the marker path exists as a heartbeat is sent, the producer XORs the
+last byte of the packet with ``0xFF`` and prints:
+
+.. code-block:: text
+
+   demo_anticheat: tamper marker <path> present, flipped signature byte
+       at offset <n>
+
+The last byte belongs to the signature of the token. The header and the
+token still parse, so the server answers ``UNTRUSTED`` with the signature
+error of ``VerifyToken()``. The marker is checked at every heartbeat;
+`demo_tamper.sh <../demo/README.rst>`_ creates and removes it during the
+live demo.
+
+run.sh
+======
+
+``run.sh`` drives the producer and the server against an agent on a
+software TPM, without root, and checks two verdicts. It needs ``swtpm``,
+``swtpm_setup``, ``tpm2_readpublic``, ``systemd-socket-activate`` and
+``make all examples``:
+
+.. code-block:: console
+
+   $ examples/demo_anticheat/run.sh
+
+It works in ``/tmp/lota-anticheat.XXXXXX`` and prints one line per step:
+
+1. ``swtpm`` on TCP port ``TPM_PORT`` (42531), its control channel on
+   the next port.
+2. ``lota-agent --test-signed`` under ``systemd-socket-activate`` on
+   ``lota.sock`` in the run directory, with an empty configuration file
+   and the AIK metadata in the run directory.
+3. One heartbeat to start the agent and provision the AIK, whose public
+   key ``tpm2_readpublic`` then exports from handle ``0x81010002``, and
+   the runtime manifest.
+4. ``demo_server`` on ``SERVER_ADDR`` (``127.0.0.1:7543``) with that AIK,
+   binary and manifest; one heartbeat must exit 0.
+5. One heartbeat with the tamper marker present must exit 1, print
+   ``UNTRUSTED`` and leave ``signature`` in the server log.
+
+The run ends with:
+
+.. code-block:: text
+
+   PASS: the reference verifies an attested host and refuses a tampered token
+
+A missing binary or command, or a failed step, prints a line
+starting ``missing`` or ``FAIL:``, plus the logs of a failed step 4, and
+exits 1. A ``swtpm_setup`` that fails ends the script with its own exit
+status and no such line.
+
+``LOTA_BUILD_DIR`` (``build``), ``BIN`` (the build directory) and
+``EXAMPLES_BIN`` (its ``examples/``) say where the binaries are.
+``TPM_PORT`` and ``SERVER_ADDR`` move the listeners. The run directory is
+removed at exit unless ``KEEP_LOGS`` is set, which prints its path.
