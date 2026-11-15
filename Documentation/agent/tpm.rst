@@ -26,8 +26,9 @@ resource manager, ``/dev/tpmrm0``, with the TSS2 ESYS library; the code is
        two apart.
    * - swTPM
      - Development
-     - Fresh state on every start and no lockout, so it says nothing about
-       capacity or lockout on a real chip (:doc:`../dev-tools/vm-testing`).
+     - State kept in a file on the host and no lockout, so it says nothing
+       about capacity or lockout on a real chip
+       (:doc:`../dev-tools/vm-testing`).
 
 ``LOTA_TCTI`` names another TCTI and ``LOTA_AIK_META_PATH`` another host AIK
 record. The one-shot verbs and an ``--attest`` that sends one report read
