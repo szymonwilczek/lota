@@ -1,447 +1,618 @@
 .. SPDX-License-Identifier: MIT
 .. Copyright (C) 2026 Szymon Wilczek
 
-======================================
-LOTA guided install (``lota-install``)
-======================================
+=============================
+Guided install (lota-install)
+=============================
 
-``lota-install`` is the single-machine path onto a LOTA-attested host: one guided,
-reboot-resumable command instead of the operator checklist in
-:doc:`bringup/index`. It drives the
-same hard requirements the agent enforces at startup, but it explains every
-change before making it, asks for consent, and survives the reboot the install
-inherently needs.
+``lota-install`` brings one machine up as a LOTA-attested host. It runs a
+fixed list of stages; each stage probes the live state of the machine, and a
+stage that is not satisfied explains the change it makes and asks before it
+makes it. A run stops for the reboot the boot-path stages need, and the same
+command run again after it starts over from the probes, so it continues at the
+first stage still unmet. The stages are in :ghsrc:`installer/stages.c`, the
+probes in :ghsrc:`installer/probe.c` and the options in
+:ghsrc:`installer/main.c`.
 
-The three install surfaces and their audiences:
+The installer ships in the agent package as ``/usr/bin/lota-install``, and the
+package's post-install script runs it (`Package installs`_). The same
+requirements by hand, for fleet hosts, are in :doc:`bringup/index`; the walk
+through for a player is :doc:`../player/index`.
 
-.. list-table::
-   :header-rows: 1
-   :widths: 28 32 40
+Usage
+=====
 
-   * - Tool
-     - Audience
-     - Scope
-   * - ``lota-install``
-     - Somebody installing one machine by hand
-     - Guided stages, consent prompts, reboot resume
-   * - :doc:`production bring-up <bringup/index>`
-     - Operator bringing up fleet hosts, CA and verifier
-     - Full manual reference
-   * - ``scripts/lota-dev-bringup.sh``
-     - Contributor iterating on a dev host
-     - Generates a throwaway signing key. Never for production.
+::
 
-This page is the reference: it states what each stage does and why, and
-assumes the reader knows what a TPM and an initramfs are. Somebody installing
-LOTA on their own PC to play a game wants
-:doc:`../player/index` instead, which walks the same tool
-end to end and explains the terms as it goes.
+   lota-install [options]
 
-Running it
-==========
+.. code-block:: console
 
-.. code-block:: sh
+   $ sudo lota-install --ca-server ca.example --ca-port 8443 \
+         --ca-cert publisher-ca.pem --verifier verifier.example
+   $ sudo lota-install --status
 
-    sudo lota-install \
-        --ca-server ca.example --ca-port 8444 --ca-cert /path/to/ca.crt \
-        --verifier verifier.example
+A run that changes the machine needs root; without it the installer prints
+``lota-install changes system state and must run as root`` and exits 2.
+``--status`` runs as any user.
 
-CA/verifier endpoints and the trust material paths come from the operator's
-install instructions (see "What the operator must ship" below).
+Options
+=======
 
-``lota-install --status`` prints a read-only report of every step without
-changing anything, and its step numbers are the ones the guided install shows.
-A stage the installer can satisfy reads ``pending``; one that needs an action
-the installer must not take -- Secure Boot enabled in firmware, an operator's
-SELinux module, IMA signatures -- reads ``BLOCKED``, because a report that
-calls both "pending" reads as work about to happen.
+Operator inputs
+---------------
 
-The last step is the self-check, which is where an install answers "did this
-work". The report says what it can see without acting -- the kernel integrity
-floor, the service, and the AIK certificate
--- and stops there: the attestation round-trip is an action and belongs to an
-install, so no report sends one.
+``--ca-server HOST``, ``--ca-port PORT``
+  The attestation CA the enrollment stage enrolls with. Without
+  ``--ca-port`` the agent's default, 8444, applies
+  (:doc:`../agent/command-line`).
 
-* ``--yes`` skips the per-stage prompts,
-* ``--plain`` disables the TUI for logs and scripting,
-* ``--unattended`` is the mode a package post-install hook runs in. It implies
-  ``--yes --plain``, does nothing at all inside a container or image build (the
-  host that eventually boots the image is the one bring-up belongs to), and
-  **leaves the two boot-path stages alone** -- the initramfs PCR 14 lock and
-  the kernel integrity floor -- stopping at the reboot checkpoint, where it
-  names each boot-path stage still to run and the one command that runs them.
-  A host that wants them unattended too opts in before installing, with
-  ``/etc/lota/auto-bringup`` or ``LOTA_AUTO_BRINGUP=1``; exactly ``1``, since
-  a hook inherits whatever environment the transaction had and reading ``0``
-  as consent is how a machine ends up with a boot path nobody chose.
+``--ca-cert FILE``
+  The CA's certificate, PEM or DER. It names the publisher the host enrolls
+  with: the profile under ``/var/lib/lota/profiles/`` is derived from it
+  (:doc:`../agent/publishers`). Without it the enrollment stage has nothing to
+  do.
 
-On an interactive terminal ``lota-install`` is a full-screen application
-(alternate screen): a stage list on the left, a details pane explaining the selected
-stage, and an output pane streaming what every command actually does.
-The initial system probe runs before the screen takeover and its
-per-stage results stay in the scrollback. Nothing scrolls away and the layout
-follows terminal resizes. Keys:
+``--verifier HOST``, ``--verifier-port PORT``
+  The verifier the publisher reports to, and the verifier of the self-check.
 
-.. list-table::
-   :header-rows: 1
-   :widths: 40 60
+``--policy-pubkey FILE``
+  The key the enforcement object's signature is verified against
+  (`Enforcement trust material`_). Without it the key is the one the agent
+  resolves on its own.
 
-   * - Key
-     - Action
-   * - ``up``/``down`` or ``j``/``k``
-     - Select a stage
-   * - ``Enter``
-     - Run the selected stage (dialog explains the change and asks first)
-   * - ``a``
-     - Run every pending stage in order
-   * - ``y`` / ``n``
-     - Answer the confirmation dialog
-   * - ``r``
-     - Re-probe all stages
-   * - ``PgUp``/``PgDn`` or ``Ctrl-U``/``Ctrl-D``
-     - Scroll the output pane
-   * - ``q``, ``Ctrl-C``
-     - Quit (``Ctrl-C`` first aborts a running command)
+``--selinux-module FILE``
+  The compiled LOTA SELinux module. Default
+  ``/usr/share/lota/selinux/lota.pp``, which the agent package ships.
 
-The original scrollback is restored on exit and a one-line result is printed
-to the normal screen: complete (exit ``0``), reboot required (``10``) or
-re-run to continue (``1``). Without a TTY, or with ``--plain``, the same stages
-run as a sequential prompted flow suitable for logs and scripts. There a stage
-with work to do prints what it found after ``Before this stage:`` and ends
-``applied``; a stage with nothing to do reports ``already satisfied``. An
-upgrade that brings a binary without fs-verity thus shows that stage as
-``applied``. Prompts take ``y`` or ``n`` (``q`` quits) and the bracket shows
-what Enter means: yes for a stage, no for ``--pause`` and ``--resume``, whose
-yes cannot be undone in the same boot. An unrecognised answer is asked again
-and never proceeds.
+Each file named by ``--ca-cert``, ``--policy-pubkey``, ``--selinux-module``
+and ``--verity-manifest`` must be readable before anything runs; otherwise
+the run names the option, the path and the error, and exits 2. The default
+SELinux module is not checked there.
 
-Exit codes:
+Behaviour
+---------
 
-* ``0`` -- complete: every stage is satisfied, the same answer ``--status``
-  gives with exit ``0``;
-* ``1`` -- failed, blocked on missing input, or stopped before the end;
-* ``2`` -- usage;
-* ``10`` -- reboot required: reboot and re-run the same command, the installer
-  detects the finished stages from live system state and continues at the
-  first unmet one;
-* ``11`` -- ``--unattended`` only: host-local setup is done and the boot-path
-  stages it names are left to a person, so the host is not finished. Run
-  ``sudo lota-install`` to complete it.
+``--status``
+  Probes every stage and the self-check, prints each verdict and changes
+  nothing. It ends with the count of stages that need work. Exit status 0
+  when every stage and the self-check are satisfied or not applicable, 1
+  otherwise. Without root some probes
+  cannot read what they need, and the run says so first.
 
-There is no state file to corrupt: every done-condition is probed from the
-system itself (installed files, the fs-verity bit, the initramfs content,
-``/proc/cmdline``, PCR 14 via sysfs, the certificate's validity window), and the
-probes mirror the agent's own startup gates, so the installer cannot report
-green on a host the agent would refuse.
+``--yes``
+  Applies each pending stage without asking.
 
-What the stages do
+``--plain``
+  Line output in place of the interactive view (`Interactive view`_).
+
+``--unattended``
+  For a package post-install script; implies ``--yes`` and ``--plain``
+  (`Package installs`_). It cannot be combined with ``--pause``, ``--resume``
+  or ``--status``.
+
+``--verity-manifest FILE``
+  Enables fs-verity on the files the manifest lists, and runs nothing else
+  (`fs-verity manifest`_). It cannot be combined with ``--pause``,
+  ``--resume``, ``--status`` or ``--unattended``.
+
+``--pause``, ``--resume``
+  Stop the agent, and reboot to start it again (`Pause and resume`_).
+  ``--pause``, ``--resume`` and ``--status`` exclude each other.
+
+``-h``, ``--help``, ``--version``
+  Print the usage or the version and exit 0.
+
+An argument that is not an option is a usage error.
+
+Exit status
+-----------
+
+``0``
+  The install completed, or the action asked for succeeded.
+
+``1``
+  A stage is blocked, failed or was declined, or the self-check failed. With
+  ``--status``, a stage needs work. With ``--verity-manifest``, a file was
+  not done; with ``--pause`` or ``--resume``, its command failed.
+
+``2``
+  A usage error, a named file that cannot be read, a run that needs root
+  without it, or a run with no terminal to ask on and no ``--yes``.
+
+``10``
+  A reboot is required. Running the same command after it continues the
+  install.
+
+``11``
+  ``--unattended`` left the boot-path stages to a person.
+
+A run
+=====
+
+Each stage probe answers with one of:
+
+done
+  Satisfied. The run moves on.
+
+pending
+  The stage's change can satisfy it now. The run prints the stage's
+  explanation and ``Before this stage:`` with the probe's reason, and asks
+  ``Apply this stage?`` (default yes). After the change the stage is probed
+  again and must be satisfied; a boot-path stage still pending after a
+  change to the boot chain in this run waits for the reboot.
+
+needs reboot
+  Satisfied only after a reboot. At the reboot checkpoint this ends the run
+  with exit 10; elsewhere the run moves on and the checkpoint stops it.
+
+blocked
+  Needs something the installer does not do: a firmware setting, a package, a
+  key. The run prints what, and exits 1.
+
+failed
+  The probe could not read the state, or the change failed. Exit 1.
+
+Declining a stage ends the run with ``Aborted at your request.`` and exit 1;
+nothing after it runs. In plain mode the question takes ``y``, ``yes``,
+``n``, ``no``, ``q`` or ``quit``, and an empty line takes the default. Three
+answers it cannot read decline the stage. Standard input that is not a
+terminal, without ``--yes``, is refused with exit 2 before any stage runs.
+
+The stages run in this order: preflight, package files, enforcement trust
+material, the initramfs lock, the kernel integrity floor, the IMA appraisal
+scope, the SELinux fence, the reboot checkpoint, the agent service,
+enrollment and firmware-update readiness. The self-check ends a run in which
+every stage is satisfied.
+
+Interactive view
+----------------
+
+When standard output and standard input are terminals, ``TERM`` is not
+``dumb`` and ``--plain`` is not given, the run probes every stage, prints the
+verdicts, and opens a full-screen view: the stage list, the selected stage's
+details and the output of the commands it runs. ``NO_COLOR`` turns colour
+off. A terminal that cannot be switched to raw mode falls back to plain
+output.
+
+``↑``, ``↓``, ``j``, ``k``
+  Select a stage. The view opens on the first unmet one.
+
+``Enter``
+  Run the selected stage, or the self-check on its row once every stage is
+  satisfied. A pending stage asks for ``y`` or ``Enter``; ``n`` or ``Esc``
+  cancels.
+
+``a``
+  Run the stages from the first unmet one, asking before each change unless
+  ``--yes`` was given, and the self-check once all are satisfied. It stops at
+  a stage it cannot apply and at the reboot checkpoint.
+
+``r``
+  Probe every stage again.
+
+``PgUp``, ``PgDn``, ``Ctrl-U``, ``Ctrl-D``
+  Scroll the output.
+
+``q``, ``Ctrl-C``
+  Quit. The exit status is 0 after a passed self-check, 10 when a reboot is
+  pending and every stage before the checkpoint is satisfied or waits for
+  it, and 1 otherwise; a closing line says which. While a stage runs a
+  command, ``Ctrl-C`` stops that command and the view stays open.
+
+Stages
+======
+
+Preflight
+---------
+
+``Preflight: Hardware and Host Requirements``. Blocked when:
+
+* there is no ``/dev/tpmrm0`` or ``/dev/tpm0``;
+* the machine booted through legacy BIOS;
+* the firmware has no Secure Boot variable;
+* Secure Boot is off or the firmware is in setup mode, with the steps for
+  this machine: ``systemctl reboot --firmware-setup`` when the firmware takes
+  it, the OVMF Secure Boot build on a virtual machine, and restoring the
+  platform keys in setup mode;
+* shim validation is off (``MokSBStateRT``), with the ``mokutil
+  --enable-validation`` step;
+* ``dracut``, ``grubby``, ``systemctl``, ``udevadm`` or ``lsinitrd`` is
+  missing.
+
+The stage changes nothing.
+
+Package files
+-------------
+
+``LOTA Package Artifacts``. Blocked until these exist:
+
+* ``/usr/bin/lota-agent``;
+* ``/usr/lib/lota/lota_lsm.bpf.o``;
+* ``/usr/lib/lota/lota-pcr14-lock``;
+* ``lota-agent.service`` and ``lota-agent.socket`` in
+  ``/usr/lib/systemd/system/``;
+* ``/usr/lib/udev/rules.d/99-lota-tpm.rules``;
+* ``/usr/lib/dracut/modules.d/90lota/module-setup.sh``.
+
+Enforcement trust material
+--------------------------
+
+``Enforcement trust material``. The agent loads the BPF enforcement object
+only when its signature verifies (:doc:`../agent/configuration`). The key is
+the first of:
+
+#. ``--policy-pubkey``;
+#. ``policy_pubkey`` in ``/etc/lota/lota.conf``, read with the agent's
+   parser: the last line in either spelling, when the file it names is
+   readable;
+#. ``/etc/lota/policy.pub``, the key of a fleet that signs enforcement
+   itself, when readable;
+#. ``/usr/lib/lota/enforcement.pub``, the key the package ships beside the
+   object.
+
+The stage runs ``lota-agent --verify-policy /usr/lib/lota/lota_lsm.bpf.o``,
+with ``--policy-pubkey`` when one was given. It is blocked when the agent
+would refuse ``lota.conf``, when no key is readable, when
+``/usr/lib/lota/lota_lsm.bpf.o.sig`` is missing, and when the signature does
+not verify; the last names the key, where it came from and, when there is one,
+the key the agent would take without it. The installer generates no key and
+signs nothing.
+
+With ``--policy-pubkey`` the stage is done only when the ``policy_pubkey``
+line of ``lota.conf`` names the file given. Otherwise it is pending and names
+the key the agent verifies against until then, and a line naming a file that
+is not readable. Its change creates ``/etc/lota/`` and ``lota.conf`` (mode
+0644) when missing, and writes ``policy_pubkey = FILE`` after the top-level
+keys, ahead of the first ``[profile`` section, so the agent takes it. The new
+file keeps the owner, mode and SELinux label of the old one and replaces it
+only when the agent's parser reads the key back.
+
+Initramfs lock
+--------------
+
+``Boot-time PCR14 lock in the initramfs``. ``lota-pcr14-lock`` runs in the
+initramfs and extends PCR 14 before the agent starts
+(:doc:`../agent/lifecycle`). For each release in ``/lib/modules`` with a
+``/boot/initramfs-<release>.img``, the stage reads the helper out of the
+image with ``lsinitrd`` and compares it byte for byte with the installed
+``/usr/lib/lota/lota-pcr14-lock``. With no such pair it compares the running
+kernel's initramfs. A missing or different copy leaves the stage pending,
+naming the releases.
+
+The change runs ``dracut -f --regenerate-all``. A kernel installed later gets
+the helper from the dracut module; a new helper reaches an existing image
+only through this stage. Boot path.
+
+Kernel integrity floor
+----------------------
+
+``Kernel integrity floor on the cmdline``. The agent refuses to start unless
+module signatures are enforced (``/sys/module/module/parameters/sig_enforce``)
+and lockdown is ``integrity`` or ``confidentiality``. Without IMA appraisal of
+executables it starts with a warning, and every token has
+``KERNEL_APPRAISAL`` clear (:doc:`../agent/tokens`).
+
+The stage reads the booted kernel. The IMA mode counts as blocking under
+Secure Boot, where the kernel takes its built-in mode and ignores
+``ima_appraise=``, and otherwise when the command line sets
+``ima_appraise=enforce``; a kernel built without IMA appraisal has no mode to
+set. When the booted kernel has all three, the stage is done.
+
+Otherwise it reads the default boot entry with ``grubby --info=DEFAULT``.
+When that entry already carries the arguments the change would add, the
+stage needs a reboot.
+When the loaded IMA policy has an ``appraise`` rule, or cannot be read, and
+the booted mode blocks nothing, ``ima_appraise=enforce`` would refuse from the
+next boot every file such a rule reaches without a valid signature or hash:
+the stage leaves it out, and is blocked when it is the only thing missing or
+when the default entry carries it already.
+
+The change runs ``grubby --update-kernel=ALL --args`` with the missing ones of
+``ima_appraise=enforce``, ``module.sig_enforce=1`` and
+``lockdown=integrity``. They apply from the next boot. Boot path.
+
+IMA appraisal scope
+-------------------
+
+``IMA appraisal scope``. The kernel applies the appraisal mode to the rules
+of its loaded policy, ``/sys/kernel/security/ima/policy``. A token sets
+``KERNEL_APPRAISAL`` only for an ``appraise`` rule on ``BPRM_CHECK`` or one
+without ``func=``. The stage reports whether the policy has one and, when it
+has none, whether the policy demands signed rules (``appraise
+func=POLICY_CHECK appraise_type=imasig``).
+
+It loads no rules: a rule cannot name a path, so a rule that appraises the
+agent appraises every executable it matches, and under Secure Boot in
+enforce. The rules come with signed executables, from IMA-signed packages or
+an image pipeline ("IMA appraisal policy" in
+:doc:`bringup/manual-reference`). The stage is always done, except without
+root, where the policy cannot be read.
+
+SELinux fence
+-------------
+
+``SELinux fence on the TPM device``. Done when:
+
+* ``/dev/tpmrm0`` and ``/dev/tpm0``, those present, are
+  ``lota_tpm_device_t``;
+* ``/usr/bin/lota-agent`` is ``lota_agent_exec_t``;
+* ``/var/lib/lota`` is ``lota_var_t`` and ``/etc/lota`` is ``lota_etc_t``,
+  when present;
+* ``--ca-port`` and ``--verifier-port``, those given, need no port label.
+
+A file system without SELinux labels passes each label check. A port that
+cannot be checked, without ``semanage`` or when ``semanage port -l`` fails, is
+not met. The stage is blocked when the ``lota`` module is not loaded and the
+module file does not exist, and is otherwise pending with each check that is
+not met.
+
+The change:
+
+#. ``semodule -i`` the module file, when ``semodule -l`` does not list
+   ``lota``;
+#. ``udevadm control --reload-rules``, then ``udevadm trigger --action=add``
+   on both TPM nodes: the udev rule's ``SECLABEL`` applies on an add event
+   only;
+#. ``restorecon /usr/bin/lota-agent``;
+#. ``semanage port -a -t lota_port_t -p tcp`` for each port given that is
+   neither ``lota_port_t`` nor ``http_port_t`` and is not listed alone under
+   another type; a failure here does not fail the stage;
+#. ``restorecon -R`` on ``/var/lib/lota`` and ``/etc/lota``, when present.
+
+It does not change the SELinux mode. A loaded module is kept, and a done
+stage says that ``--selinux-module`` was not loaded. The policy is
+:ghsrc:`selinux/README.rst`.
+
+Reboot checkpoint
+-----------------
+
+``Reboot checkpoint``. It needs a reboot when an earlier stage of this run
+needs one, and names those stages: the ones that rebuilt the initramfs or
+changed the kernel command line in this run as changes to the boot chain, and
+the others as configured and taking effect on the next boot. Without such a
+stage it reads PCR 14 from sysfs:
+
+* the lock value alone: done;
+* another value with the agent running: done, this boot's agent commitment;
+* another value with no lock run this boot (no ``/run/lota/pcr14_baseline``),
+  as from shim's MOK measurement: needs a reboot;
+* another value after the lock ran, a stale agent value: needs a reboot;
+* zero, the lock has not run: needs a reboot.
+
+An agent paused this boot (`Pause and resume`_) needs a reboot whatever
+PCR 14 holds. An agent that already refused to start this boot, with nothing
+changed in this run, is blocked: its reason is in ``journalctl -u lota-agent
+-b``, and a reboot does not change it.
+
+Stopping here prints ``Reboot is required before the install can continue:``
+with the reason, and exits 10.
+
+Agent service
+-------------
+
+``LOTA agent service``. Pending until ``lota-agent.service`` runs and
+``lota-agent.service``, ``lota-agent.socket`` and ``lota-attest.service`` are
+enabled. The change runs ``systemctl daemon-reload``, ``systemctl enable
+--now lota-agent.socket lota-agent.service`` and ``systemctl enable --now
+lota-attest.service``. When the agent does not come up, the stage prints the
+last 15 lines of ``journalctl -u lota-agent -b`` and fails. The units are in
+:doc:`../agent/lifecycle`.
+
+Enrollment
+----------
+
+``Enrollment with a publisher's attestation CA``. Without ``--ca-cert`` the
+stage is done: the agent enrolls with each publisher when a title first asks
+for it (:doc:`../agent/publishers`). With it, the stage reads the AIK
+certificate of the profile ``--ca-cert`` names:
+
+* missing, with ``--ca-server``: pending; the change runs ``lota-agent
+  --enroll --ca-server HOST [--ca-port PORT] --ca-cert FILE``;
+* missing, without ``--ca-server``: blocked;
+* expired: pending; the change runs ``lota-agent --reenroll --publisher ID
+  --ca-cert FILE``;
+* valid, with ``--ca-server`` and no profile in ``lota.conf`` whose
+  ``ca_cert`` names the same publisher: pending;
+* valid otherwise: done, with the days left.
+
+After an enrollment or a renewal, or for a valid certificate with no profile,
+the change with ``--ca-server`` records the publisher, unless ``lota.conf``
+has it:
+
+::
+
+   lota-agent --add-publisher HOST [--ca-port PORT] --ca-cert FILE \
+       [--server VERIFIER [--port PORT]] --reporting continuous
+
+``--server`` and ``--port`` are passed only when ``--verifier`` was given.
+The run then reloads the agent with ``systemctl try-reload-or-restart
+lota-agent.service lota-attest.service``. The options are in
+:doc:`../agent/command-line`.
+
+Firmware-update readiness
+-------------------------
+
+``Firmware-update readiness``. Reports whether the ESRT has a system
+firmware entry (``fw_type`` 1 under ``/sys/firmware/efi/esrt/entries``). On a
+verifier that re-anchors without an operator, a firmware update with a
+higher version re-pins on the strong path; with no version, on the
+low-firmware-assurance path, which lists the client for operator review
+("Re-anchor" in :doc:`../verifier/index`). The stage changes nothing and is
+always done.
+
+Self-check
+----------
+
+``Self-check & summary``. It prints the kernel integrity floor, whether
+``lota-agent.service`` is active, the AIK certificate of ``--ca-cert``, the
+ESRT state, and then attests:
+
+* with ``--ca-server``, ``--ca-cert`` and ``--verifier``, and the publisher
+  recorded in ``lota.conf``: it waits up to 90 seconds for an ``Attested``
+  status of ``lota-attest.service`` counting at least the profiles that
+  report continuously, and at least one; after a reload in this run, the
+  status must also differ from the one before the reload;
+* with profiles in ``lota.conf`` otherwise: no round, since each publisher
+  has its own verifier; it names ``lota-agent --list-publishers``;
+* with no profile and ``--verifier``: one round of ``lota-agent --attest
+  --server VERIFIER``, with ``--port`` and ``--ca-cert`` when given;
+* with neither: no round.
+
+It fails when the floor is not met, the service is not active, the certificate
+of ``--ca-cert`` is not valid, ``lota.conf`` cannot be read whole, the wait
+times out or the round fails, and prints ``Self-check failed.`` with exit 1.
+The run ends with the list of what each attestation report carries
+(`What leaves the machine`_).
+
+Under ``--status`` the self-check row reports readiness and attests nothing.
+
+Package installs
+================
+
+The agent package's post-install script
+(:ghsrc:`packaging/nfpm/scripts/agent-postinstall.sh`, and ``%post agent`` in
+:ghsrc:`packaging/rpm/lota.spec`) runs ``lota-install --unattended`` after the
+package files are in place, and ignores its exit status.
+
+A run with ``--unattended``:
+
+* exits 0 at once in a container (``systemd-detect-virt --container``) and on a
+  machine without ``/sys/firmware/efi``, such as an image build;
+* runs the host-local stages;
+* leaves the initramfs lock and the kernel integrity floor to a person, marked
+  pending, unless ``/etc/lota/auto-bringup`` exists or ``LOTA_AUTO_BRINGUP`` is
+  ``1``;
+* stops at the reboot checkpoint, when a stage was left, with exit 11 and the
+  names of those stages and ``sudo lota-install`` to finish them;
+* after a blocked stage adds ``Package install itself succeeded.``.
+
+With no stage left, it stops at the checkpoint with exit 10 when the boot
+chain changed, and otherwise continues through the agent service and the
+self-check like any other run.
+
+fs-verity manifest
 ==================
 
-#. **Preflight** -- TPM 2.0 device present, UEFI Secure Boot enabled, required
-   tooling installed. Secure Boot off is a hard stop: the verifier proves it
-   from the TPM event log and rejects hosts without it (MOK-signed custom
-   kernels keep working). It is also the one requirement nobody but the person
-   at the keyboard can satisfy, so the blocked stage prints a route instead of
-   a rule: the machine as DMI names it, ``systemctl reboot --firmware-setup``
-   where the firmware honours that request, then the startup screen's key for
-   when it is refused (the request is an EFI variable write, which a full store
-   answers with ``Cannot allocate memory``), the "restore the factory keys"
-   step in setup mode, and that enabling Secure Boot leaves distribution
-   kernels bootable. A guest is sent to its VM definition instead, since a
-   virtual machine has no firmware menu of its own -- ``systemd-detect-virt``
-   decides that, so the installer keeps no list of hypervisors. Everything in
-   that message is read off the machine; the installer names no per-vendor
-   menu path or setup key, because those differ between firmware revisions of
-   a single model and a confidently wrong instruction costs more than a
-   general one.
-#. **Package artifacts** -- agent binary, BPF object, systemd units, udev rule
-   and dracut module are installed. The installer does not build or download
-   anything. Missing artifacts mean the LOTA package has not been installed yet.
-#. **Operator trust material** -- the BPF object's signature verifies against
-   the operator's public key, and ``/etc/lota/lota.conf`` points the agent at
-   that key. Fail-closed: the installer never generates a signing key on this
-   host -- a locally generated key would let local malware re-sign a tampered
-   enforcement object.
-#. **Initramfs PCR14 lock** -- regenerates the initramfs of every installed
-   kernel so the PCR14 lock helper runs before any regular userspace, whichever
-   kernel is selected at boot. It reports work to do while the initramfs of
-   any installed kernel holds no helper, or one whose bytes differ from the
-   installed ``/usr/lib/lota/lota-pcr14-lock``: a package upgrade replaces
-   the helper on disk, not in an existing initramfs. Requires a reboot.
-#. **Kernel integrity floor** -- appends the missing ones of
-   ``ima_appraise=enforce``, ``module.sig_enforce=1`` and
-   ``lockdown=integrity`` to the boot entries via grubby. It reports those
-   parameters and nothing more: the appraisal *mode* is not the floor on its
-   own, and the rules it applies to are the next stage. On a Secure Boot host the appraisal parameter is left
-   out, because the kernel discards ``ima_appraise=`` there and appraises in
-   its own built-in blocking mode -- writing it would describe a mode that is
-   not the machine's. It is left out, too, while the loaded IMA policy has an
-   ``appraise`` rule on any hook, or cannot be read: ``enforce`` would refuse,
-   from the next boot, each file those rules reach without a valid signature
-   or hash, so the stage stops and says so, also when the boot entries
-   already put appraisal in enforce. Signature content stays
-   distribution or operator-supplied (see the production bring-up guide).
-   Requires a reboot.
-#. **IMA appraisal scope** -- the previous stage sets the appraisal *mode*, and
-   the kernel applies that mode only to the rules its loaded policy carries.
-   Tokens say ``LOTA_FLAG_KERNEL_APPRAISAL`` only for an ``appraise`` rule on
-   ``BPRM_CHECK`` or one without ``func=``, so this stage reads
-   ``/sys/kernel/security/ima/policy`` and reports whether one is there. It
-   loads no rules of its own. An IMA rule cannot name a path,
-   so the rule that appraises the agent appraises every executable it matches,
-   and on a Secure Boot host that happens in ``enforce`` -- the kernel discards
-   ``ima_appraise=`` there whatever the cmdline asks for -- which on a root
-   filesystem without IMA signatures means refusing every executable at the
-   next boot. What such a host is missing is the signatures, not a rule set:
-   IMA-signed distribution packages with the distribution's certificate on the
-   ``.ima`` keyring, or an operator image pipeline that signs the executable
-   closure and enrols its certificate.
+A title's runtime measurement covers only files with an fs-verity digest
+(:doc:`../agent/runtime-measurement`). ``--verity-manifest FILE`` enables it
+on the files FILE lists, one absolute path per line; blank lines and lines
+starting with ``#`` are skipped, and a path with a ``..`` component is an
+error. It needs root (exit 2 without).
 
-   **A host without an exec appraise rule still finishes the install.** The stage
-   says what the machine gives up, and every token it hands out carries
-   ``LOTA_FLAG_KERNEL_APPRAISAL`` clear, which is what a publisher or a
-   verifier policy (``require_ima_appraisal``) reads. A kernel built without
-   ``CONFIG_IMA_READ_POLICY`` publishes no policy at all, so the scope cannot
-   be read and both the stage and the agent say so.
-#. **SELinux fence** -- loads the LOTA policy module if needed and re-triggers
-   udev so ``/dev/tpm*`` carries the LOTA-only label.
-#. **Reboot checkpoint** -- stops with exit 10 until the boot-chain changes are
-   live and PCR 14 carries this boot's initramfs lock. A host whose agent has
-   already run and refused to start this boot is told that instead: the
-   register carries the extend of that attempt, and the next boot meets the
-   same refusal, so the checkpoint names ``journalctl -u lota-agent -b``.
-   A pause is the exception: an agent stopped with ``lota-install --pause`` or
-   ``lota-agent --shutdown`` spent the register on purpose and refuses to start
-   until the next boot, so the checkpoint asks for that reboot, as
-   ``--resume`` does. It reads the pause from the flag the agent records in
-   ``/var/lib/lota/clock_state.dat``, while PCR 14 still holds the value the
-   agent left.
-   PCR 14 only resets on a hardware reset, so this cannot be skipped. On a
-   Secure Boot machine PCR 14 is already non-zero before any of this -- shim
-   measures the MOK variables into it -- and the checkpoint says.
-#. **Agent service** -- enables and starts ``lota-agent.service`` and its
-   socket.
-#. **Enrollment** -- the TPM proves itself to a publisher's attestation CA
-   (credential activation) and receives a short-lived AIK certificate, one per
-   publisher. Naming a CA here (``--ca-server`` with ``--ca-cert``) enrolls
-   with it during the install, which is what an operator provisioning a fleet
-   wants, and records that CA in ``/etc/lota/lota.conf`` as a publisher
-   profile with ``reporting = continuous``, reporting to the ``--verifier``
-   given, or to nobody without one. That profile is what the attestation loop
-   reports to after the install and what a title names to reach the fleet's
-   CA; a host that enrolled without it is enrolled with a publisher nothing
-   reports to, and running the installer again with the same flags records
-   it. Naming none is the normal single-machine case and is not a blocked
-   stage: the publisher is whoever they buy a title from, so the agent enrolls
-   with each publisher the first time a title asks for one. Either way the
-   running agent renews the certificate on its own against the endpoint
-   recorded in the profile, and ``lota-agent --reenroll`` stays as a manual
-   fallback.
+Each file already carrying a digest is left alone. The others get SHA-256
+with 4096-byte blocks. A file on a file system without fs-verity, or one the
+ioctl refuses, is reported and counted. The run ends with the counts of the
+files enabled, already carrying a digest and not done, and exits 1 when any
+was not done.
 
-   Each publisher's key is derived from that publisher's identity, so the
-   certificates they hold carry different public keys and no two of them can
-   name this machine from what their own CA issued. That is the whole of the
-   guarantee, and it is worth being precise about the rest: a publisher whose
-   titles check tokens can read the boot PCR values and the Secure Boot
-   measurements behind them, and one who runs a **verifier** also receives
-   the firmware measurements and the event log, which names the disk the host
-   boots from. Two publishers can compare what they each legitimately
-   received and conclude it is one machine; the event log only adds the disk.
-   Choosing between the two is the privacy decision in this design;
-   ``lota-agent --list-publishers`` says which of them this machine answers
-   to and ``--forget-publisher`` takes one back.
+The digest belongs to the inode: a file replaced by an update has none until
+the manifest runs again.
 
-Run ends with a self-check (integrity floor, fs-verity, service, certificate,
-and an attestation round-trip) and a plain-language summary of exactly what
-telemetry leaves the machine.
+Pause and resume
+================
 
-Who performs that round-trip depends on whether the host answers to
-publishers. A fleet install that recorded its CA with a ``--verifier`` is
-proven by the attestation loop, since the loop is what reports to that
-verifier from then on: the self-check waits up to 90 seconds for the loop's
-status to name every continuously reporting publisher as attested, and fails
-with the last status it read otherwise. On a machine with no publisher
-profiles, ``--verifier`` names the one verifier and the self-check runs a
-round against it; with no ``--verifier``, the first title launch performs it. **On a machine that has
-publisher profiles, the publishers are the agent's target list** -- each with
-its own trust anchor, verifier and cadence -- so no single verifier stands for
-them and the self-check says so instead of naming one. That is not a host
-failing to attest: a ``--verifier`` passed alongside profiles is reported as
-unused, and a publisher whose titles gate on a session is reported to when one
-of their titles runs.
+``--pause`` runs ``lota-agent --shutdown`` after asking ``Pause the agent
+now?`` (default no, and none with ``--yes``), and needs root (exit 2
+without). Declined, it exits 0 and changes nothing. The agent refuses
+signals, and its shutdown extends PCR 14 so the boot cannot attest again
+(:doc:`../agent/lifecycle`). A title the agent protects ends with it. The
+exit status is 1 when ``lota-agent --shutdown`` fails.
 
-What the operator must ship
+``--resume`` explains that the agent starts again only after a reboot, and
+as root asks ``Reboot now to resume?`` (default no) and runs ``systemctl
+reboot``, exiting 1 when it fails. Without root, or declined, it prints the
+command and exits 0. It says what starts the agent after the reboot: an
+enabled ``lota-agent.service`` with the boot, an enabled ``lota-agent.socket``
+alone on the first connection, and with neither, that nothing does until
+``sudo lota-install`` enables the service.
+
+A protected title is ended with ``lota-agent --terminate-protected``
+(:doc:`../agent/protection`).
+
+Titles under Proton or Wine
 ===========================
 
-A guided install needs these inputs, all fail-closed:
+A Windows title reaches the agent through ``liblota_wine_hook.so``, which
+Steam preloads through the launch option ``lota-proton-hook %command%``
+(:doc:`../userspace-api/wine-hook`). ``lota-steam-setup``
+(:ghsrc:`scripts/lota-steam-setup`) checks the setup of the account that
+starts Steam and prints that launch option.
 
-* nothing for **enforcement**: the agent package ships the BPF object, its
-  ``.sig`` and the public key at ``/usr/lib/lota/enforcement.pub``, because
-  enforcement is host-owned and signed by whoever built the package. All three
-  are replaced together by an upgrade. A fleet that signs it with its own key
-  re-signs the object and puts its key at ``/etc/lota/policy.pub``, which no
-  package owns and the agent prefers whenever it is there;
-* optionally an **attestation CA endpoint** (``--ca-server``, ``--ca-port``)
-  and its **trust anchor** (``--ca-cert``), to enroll during the install. Both
-  or neither: an anchor without an endpoint has nothing to enroll against. A
-  guided install normally passes neither and lets the agent enroll with each
-  publisher when a title first asks;
-* optionally the **verifier endpoint** (``--verifier``, ``--verifier-port``): the
-  verifier the recorded profile reports to, or with no CA named, the one the
-  final round-trip runs against;
-* compiled **SELinux module** (``lota.pp``, default
-  ``/usr/share/lota/selinux/lota.pp``, override with ``--selinux-module``) on
-  SELinux-enforcing distributions.
+Without options it checks, in order:
 
-Every one of those options names a file, and a path reaches the installer only
-by being typed. One that cannot be read is refused before any stage runs,
-naming the option, the path and the reason::
+* ``XDG_RUNTIME_DIR`` is set and exists;
+* the agent socket (``LOTA_AGENT_SOCKET``, default ``/run/lota/lota.sock``)
+  exists and this account can open it;
+* the group ``lota`` exists and the account is in it;
+* the hook library in ``/usr/lib64`` or ``/usr/local/lib64`` and in
+  ``/usr/lib`` or ``/usr/local/lib``; one of the two halves alone is a
+  warning, since Steam's launch chain loads both;
+* the container socket ``$XDG_RUNTIME_DIR/lota/lota.sock``, after creating
+  ``$XDG_RUNTIME_DIR/lota/`` (mode 0750, group ``lota``);
+* the token directory ``$XDG_RUNTIME_DIR/lota-hook``, which must be a
+  directory this account owns when it exists.
 
-    lota-install: Cannot read --policy-pubkey /etc/lota/ploicy.pub (No such file or directory)
+It then prints the launch option, and the ``LD_PRELOAD`` line for a title
+started outside the Steam Runtime container. The exit status is 1 when a
+check other than the hook library failed.
 
-The refusal is the same for ``--ca-cert``, ``--policy-pubkey``,
-``--selinux-module`` and ``--verity-manifest``, in ``--status`` as well as in a
-real run, so a typo never turns into a report about the host. It applies to
-what the operator typed and not to the built-in defaults: a packaged SELinux
-module that is not installed is a fact about the machine, and the stage that
-wants it says so.
+``--verify``
+  The same checks, without creating the container socket directory.
 
-A run that finds the SELinux labels already in place says that the module named
-on the command line was not loaded.
+``--register-uid``
+  Adds ``container_listener_uid = UID`` to ``/etc/lota/lota.conf``
+  (``LOTA_CONF``), with ``UID`` from ``SUDO_UID``, ahead of the first
+  ``[profile`` section, or at the end without one
+  (:doc:`../agent/configuration`). A UID already there is left alone. It
+  needs root through ``sudo`` from the account: a root login has no
+  ``SUDO_UID``. The edited file must pass
+  ``lota-agent --dump-config``, or the original is restored. The agent reads
+  the key at startup, so the container socket appears after the next boot,
+  when the account logs in.
 
-The RPM and DEB post-install hook drives this same stage engine
-(``lota-install --unattended``), so installing the package leaves the
-host-local half of bring-up already done and this command finishes the boot
-path. Building from a release tree instead (``sudo make install``) does none of
-it, and every stage below is then this command's work.
+``--install-systemd-dropin``
+  Writes ``/etc/systemd/system/lota-agent.service.d/10-xdg-runtime.conf``
+  (``LOTA_SETUP_DROPIN_DIR``), which sets ``XDG_RUNTIME_DIR=/run/user/UID``
+  for the agent, and runs ``systemctl daemon-reload`` unless
+  ``LOTA_SETUP_DROPIN_DIR`` is set. It needs ``SUDO_UID`` as well, and root
+  unless ``LOTA_SETUP_DROPIN_DIR`` is set. For a host with one such account;
+  it cannot be given with ``--register-uid``. It applies at the next boot.
 
-Titles that run under Proton or Wine
-====================================
+``-h``, ``--help``
+  Print the usage.
 
-A Windows title reaches the agent through a Linux-side bridge
-(``liblota_wine_hook.so``), because a DLL inside the Wine prefix cannot open a
-host socket. Steam has to be told to preload it, which is one line pasted into
-that title's launch options -- ``lota-steam-setup`` prints the exact string.
-Container mounts are not pasted: ``lota-proton-hook`` adds the socket and
-token directories to ``PRESSURE_VESSEL_FILESYSTEMS_RW`` itself.
+An unknown option exits 1.
 
-``lota-proton-hook`` starts the launch through ``lota-protect``, which has the
-agent protect it before anything of the title runs; every process the launch
-creates is protected with it. A launch a debugger already holds is refused
-and does not start. With no agent answering, the title starts unprotected,
-and no token lists it among the protected processes.
+What leaves the machine
+=======================
 
-The bridge is installed once per word size on x86_64: Steam's launch chain
-mixes 64- and 32-bit processes that all inherit ``LD_PRELOAD``, so
-``lota-proton-hook`` names it through ld.so's ``$LIB`` token. With only one
-half installed, Steam logs a loader error on every launch.
-``lota-steam-setup`` reports which halves it found.
+Every run that reaches the self-check prints a list of what leaves the
+machine. Each attestation report to a verifier carries
+(:doc:`../verifier/report-format`):
 
-A title running inside a Proton container reaches the agent through a
-per-user socket, and ``lota-steam-setup --register-uid`` records the account
-that needs one. The agent reads that setting when it starts, so it takes
-effect at the **next boot**: the command says so before it edits anything.
-Nothing stops the running agent to force it -- stopping the agent spends this
-boot's attestation and would cost a reboot regardless.
+* the PCR values and a TPM quote over them;
+* the AIK public key and the AIK certificate, whose subject is the device
+  pseudonym the CA issued;
+* the agent hash, the kernel measurement digest and the kernel path;
+* the IOMMU state;
+* the security state flags: TPM quote, IOMMU, boot measurement, Secure Boot,
+  kernel lockdown, module signatures, IMA appraisal, the PCR 14 boot
+  commitment and initramfs lock, whether the agent's LSM is loaded and
+  enforcing, which of its mmap, exec, module, anonymous-exec and ptrace
+  rules are on, bench mode and lost events;
+* the boot event log, with the kernel command line and the disk UUIDs on it;
+* the ESRT system firmware entry, or a mark that the platform has none;
+* the shim MOK list, empty when it cannot be read.
 
-After that boot the socket follows the login rather than the agent: it is
-created when the registered account logs in and released when its last
-session ends. ``lota-steam-setup --verify``, run from that account, is the
-check -- it reports the socket as ready only when this account can open it,
-and prints the ownership when it cannot, which is the case an account
-outside the ``lota`` group lands in. Nor can that account look into the
-group's directory holding the socket; the check names the group.
+The attestation CA receives the endorsement key certificate during
+enrollment.
 
-An account with no login session (a service account, ``sudo -u``, cron) has
-no ``$XDG_RUNTIME_DIR``. Each check that needs it reports that, and the run
-still reaches its verdict.
+Probes and agent gates
+======================
 
-It is the only step in this document that asks anyone to type something, and
-it stays until Steam supports a compatibility-tool layer that composes with
-the player's Proton choice rather than replacing it. A publisher shipping
-their own launcher avoids it entirely by setting the same variables on the
-process they spawn. The reasoning, and the three alternatives that were
-examined and rejected, are in :ghsrc:`examples/cs2/README.rst`.
-
-When a title will not close
-===========================
-
-A protected game takes signals like any other process: a terminal, a task
-manager or Steam's own *Stop* ends it. Killing a game does not cheat in it;
-the session simply ends. Only the agent refuses signals.
-
-The agent can also deliver the signal on request, and record that it did::
-
-    lota-agent --terminate-protected <pid>
-    lota-agent --terminate-protected <pid> --force   # SIGKILL
-
-It answers for whoever ``kill(2)`` would already have allowed -- the owner of
-the process, or root -- so a player ends their own game as themselves, with no
-``sudo``. It reports how many other processes in the signalled one's process
-tree are still protected. Nothing else widens: only ``SIGTERM`` and
-``SIGKILL`` are relayed, a process nobody protected is refused, and the agent
-will not end itself this way.
-
-The exchange is that the host says so. Every relayed termination is journalled
-with the target, its owner and the caller, and the host reports
-``PROTECTED_TERMINATED`` in its status and in every token of that game's
-publisher until it reboots.
-An agent that ends some other way and is started again in the same boot has
-lost that record, and reports ``AGENT_RESTARTED`` until the reboot instead.
-A publisher then sees a session that was ended on the machine rather than a
-process that silently disappeared -- closing a hung game is the ordinary reason
-for it, and what says *which* process left is the protected set the token
-already carries.
-
-A protected game ends with the agent, however the agent ended, since nothing
-vouches for the game afterwards. It cannot be suspended from outside (``^Z``
-from its terminal, ``kill -STOP``), and it leaves no core file: a crash with no
-handler of its own ends it instead.
-
-Pausing and removing
-====================
-
-* **Pause:** ``sudo lota-install --pause`` (a wrapper over
-  ``lota-agent --shutdown``). The agent deliberately cannot be killed (the
-  kill-block is the anti-tamper surface), and the graceful shutdown poisons PCR
-  14 before unloading -- so **resume requires a reboot**. That is the security
-  contract, not a bug: same-boot re-attestation after a shutdown would let a
-  tampered session pose as the original one. A protected game still running
-  ends with the agent.
-* **Resume:** ``sudo lota-install --resume`` explains that resuming is a reboot
-  and offers to reboot now (default no); the socket-activated agent then
-  starts on its own and re-measures into a fresh PCR 14.
-* **Remove:** take the host off the kernel floor (drop the cmdline parameters)
-  and disable the service. The agent then refuses to run and the host simply
-  stops attesting. The design degrades gracefully: ``disabled`` means
-  ``fails attestation``, never ``agent runs without its guarantees``.
-
-What leaves this machine
-========================
-
-Shown by the installer at the end of every run, repeated here. Each attestation
-report to the operator's verifier carries:
-
-* TPM PCR values and a TPM-signed quote,
-* Boot event log (which includes the kernel command line and therefore disk
-  UUIDs),
-* Agent and kernel image hashes,
-* IOMMU status,
-* Recent process-execution telemetry from the BPF layer (binary paths, hashes,
-  PIDs, UIDs),
-* Stable device identifier derived by hashing the TPM endorsement key's public
-  name,
-* AIK certificate whose subject is a CA-issued pseudonym.
-
-During enrollment only, the attestation CA additionally receives the TPM's EK
-certificate. No file contents, browsing data or account identity are read or
-transmitted.
-
-Installer probes and agent gates
-================================
-
-The guided installer's stage probes (``installer/probe.c``) must mirror the
-agent's startup gates in ``src/agent/bpf_loader.c``. When a gate changes,
-change the matching probe and the pinned parser tests in
-``tests/test_installer_probe.c`` (part of ``make test-unit``); otherwise the
-installer reports a host green that the agent would refuse to run on.
+The floor and SELinux probes check what the agent checks at startup in
+:ghsrc:`src/agent/bpf_loader.c`. A change to a startup check needs the
+matching probe changed, and its tests in ``tests/test_installer_probe.c``
+(``make test-unit``); a probe left behind reports a host ready that the agent
+refuses.
