@@ -1638,6 +1638,11 @@ test-unit: all $(TEST_BINS)
 	else \
 		echo "SKIP: test_examples_optional_deps.sh (no pkg-config)"; \
 	fi
+	@if [ -x $(EXAMPLES_BUILD_DIR)/demo_anticheat ]; then \
+		tests/integration/test_examples_cli.sh; \
+	else \
+		echo "SKIP: test_examples_cli.sh (run 'make examples')"; \
+	fi
 	@if [ -x $(EXAMPLES_BUILD_DIR)/trust_pong ] && command -v python3 >/dev/null 2>&1; then \
 		tests/integration/test_trust_pong_freeze_streak.sh; \
 	else \

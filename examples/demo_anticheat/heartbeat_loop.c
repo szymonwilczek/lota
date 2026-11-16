@@ -157,6 +157,19 @@ static int parse_provider(const char *s, enum lota_ac_provider *out)
 	return -EINVAL;
 }
 
+static int parse_interval(const char *s, unsigned int *out)
+{
+	char *end;
+	long v;
+
+	errno = 0;
+	v = strtol(s, &end, 10);
+	if (end == s || *end != '\0' || errno || v <= 0 || v >= 3600)
+		return -EINVAL;
+	*out = (unsigned int)v;
+	return 0;
+}
+
 static int parse_args(int argc, char **argv, struct demo_options *opt)
 {
 	opt->server_url = DEMO_DEFAULT_URL;
@@ -174,10 +187,11 @@ static int parse_args(int argc, char **argv, struct demo_options *opt)
 	opt->protect_self = false;
 
 	const char *env_interval = getenv("LOTA_DEMO_INTERVAL_SEC");
-	if (env_interval && *env_interval) {
-		long v = strtol(env_interval, NULL, 10);
-		if (v > 0 && v < 3600)
-			opt->interval_sec = (unsigned int)v;
+	if (env_interval && *env_interval &&
+	    parse_interval(env_interval, &opt->interval_sec) != 0) {
+		fprintf(stderr, "bad LOTA_DEMO_INTERVAL_SEC %s\n",
+			env_interval);
+		return -EINVAL;
 	}
 
 	const char *env_marker = getenv("LOTA_DEMO_TAMPER_MARKER");
@@ -224,15 +238,12 @@ static int parse_args(int argc, char **argv, struct demo_options *opt)
 				return -EINVAL;
 			}
 			break;
-		case 'i': {
-			long v = strtol(optarg, NULL, 10);
-			if (v <= 0 || v >= 3600) {
+		case 'i':
+			if (parse_interval(optarg, &opt->interval_sec) != 0) {
 				fprintf(stderr, "bad --interval %s\n", optarg);
 				return -EINVAL;
 			}
-			opt->interval_sec = (unsigned int)v;
 			break;
-		}
 		case '1':
 			opt->once = true;
 			break;

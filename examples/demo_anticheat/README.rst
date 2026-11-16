@@ -90,9 +90,11 @@ Running
      -
      - Print the usage to stderr and exit 0.
 
-``LOTA_DEMO_INTERVAL_SEC`` sets the interval when it is 1 to 3599 and is
-ignored otherwise; ``LOTA_DEMO_TAMPER_MARKER`` sets the marker. Options
-take precedence over both.
+``LOTA_DEMO_INTERVAL_SEC`` sets the interval, 1 to 3599 like
+``--interval``; any other value, ``5s`` among them, ends the producer with
+``bad LOTA_DEMO_INTERVAL_SEC <value>``, even beside ``--interval``.
+``LOTA_DEMO_TAMPER_MARKER`` sets the marker. Options take precedence over
+both.
 
 At start the producer prints one line to stderr, wrapped here:
 
@@ -139,8 +141,8 @@ Exit codes
        ``--print-runtime-objects`` failed.
    * - 64
      - An unknown option or a bad value: ``--provider``, ``--interval``,
-       or one of ``--client-cert`` and ``--client-key`` without the
-       other. The usage follows on stderr.
+       ``LOTA_DEMO_INTERVAL_SEC``, or one of ``--client-cert`` and
+       ``--client-key`` without the other. The usage follows on stderr.
 
 With ``--once`` the code is that of the one heartbeat. Without it the
 producer runs until SIGINT or SIGTERM and exits with the code of the last
