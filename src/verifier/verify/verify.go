@@ -14,8 +14,10 @@ import (
 	"log/slog"
 	"runtime"
 	"sort"
+	"strings"
 	"sync/atomic"
 	"time"
+	"unicode/utf8"
 
 	"github.com/szymonwilczek/lota/verifier/logging"
 	"github.com/szymonwilczek/lota/verifier/metrics"
@@ -256,15 +258,23 @@ func certificateVerdict(err error) uint32 {
 // The reason quotes report data, so it is capped when written.
 const MaxRecordedDetail = 2048
 
-// recordedDetail returns err as one sanitized, bounded line for the decision
-// log. An accepted round (nil err) records an empty reason.
+// recordedDetail returns err as one sanitized, valid UTF-8 line of at most
+// MaxRecordedDetail bytes for the decision log; a longer one is cut on a rune
+// boundary and ends in "...[truncated]". An accepted round (nil err) records
+// an empty reason.
 func recordedDetail(err error) string {
 	if err == nil {
 		return ""
 	}
-	detail := logging.SanitizeField(err.Error())
+	detail := strings.ToValidUTF8(logging.SanitizeField(err.Error()),
+		"\uFFFD")
 	if len(detail) > MaxRecordedDetail {
-		detail = detail[:MaxRecordedDetail]
+		const marker = "...[truncated]"
+		cut := MaxRecordedDetail - len(marker)
+		for cut > 0 && !utf8.RuneStart(detail[cut]) {
+			cut--
+		}
+		detail = detail[:cut] + marker
 	}
 	return detail
 }

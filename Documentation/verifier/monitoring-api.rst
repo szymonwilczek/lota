@@ -495,12 +495,14 @@ first. The query values:
 ``client_id``
   One client.
 
-``details`` is the verifier's reason for the verdict, absent on a pass. It
-is cut at 2048 bytes, which can split a multibyte character, with control
-characters below U+0020 but the tab, and DEL, turned to spaces and HTML
-escaped. On a round refused before the pseudonym and tenant in its certificate
-were read, ``hardware_id`` is absent and ``client_id`` holds the challenge
-ID, not the client's. A read writes the buffered rounds first.
+``details`` is the verifier's reason for the verdict, absent on a pass. The
+verifier records at most 2048 bytes of it: a longer one is cut on a character
+boundary and ends in ``...[truncated]``, and a byte that is not UTF-8 reads
+U+FFFD. Control characters below U+0020 but the tab, and DEL, are turned to
+spaces, and the text is HTML escaped. On a round refused before the pseudonym
+and tenant in its certificate were read, ``hardware_id`` is absent and
+``client_id`` holds the challenge ID, not the client's. A read writes the
+buffered rounds first.
 
 For a key scoped to tenants, the audit and decision logs are read up to
 ``limit`` and then filtered, so a page may come back short.

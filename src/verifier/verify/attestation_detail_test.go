@@ -5,9 +5,11 @@
 package verify
 
 import (
+	"errors"
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/szymonwilczek/lota/verifier/store"
 	"github.com/szymonwilczek/lota/verifier/types"
@@ -101,6 +103,32 @@ func TestRecordedReasonIsBounded(t *testing.T) {
 	}
 	if strings.ContainsAny(record.Details, "\r\n") {
 		t.Error("recorded reason carries a line break, so one record can forge another")
+	}
+}
+
+func TestRecordedReasonIsValidUTF8(t *testing.T) {
+	const marker = "...[truncated]"
+	// a two-byte rune straddles the cut
+	long := strings.Repeat("a", MaxRecordedDetail-len(marker)-1) + "é" +
+		strings.Repeat("b", 1000)
+	got := recordedDetail(errors.New(long))
+	if !utf8.ValidString(got) {
+		t.Error("cut reason is not valid UTF-8")
+	}
+	if len(got) > MaxRecordedDetail {
+		t.Errorf("cut reason is %d bytes, want at most %d",
+			len(got), MaxRecordedDetail)
+	}
+	if !strings.HasSuffix(got, marker) {
+		t.Errorf("cut reason does not end in %q", marker)
+	}
+
+	stray := recordedDetail(errors.New("denied parameters [\xff]"))
+	if !utf8.ValidString(stray) {
+		t.Errorf("reason with a stray byte: %q is not UTF-8", stray)
+	}
+	if got := recordedDetail(errors.New("short")); got != "short" {
+		t.Errorf("short reason: got %q, want it unchanged", got)
 	}
 }
 
