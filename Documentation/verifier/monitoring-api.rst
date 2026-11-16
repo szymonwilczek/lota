@@ -85,8 +85,7 @@ Every body is JSON but that of ``/metrics``, and every error is one object::
    * - 405 ``method not allowed on this endpoint; see the Allow header``
      - The path takes other methods, named in ``Allow``.
    * - 500 ``database unavailable``
-     - A store read failed. The cause is logged, not answered, but on the ban
-       list, whose failed page read answers 400 with the store's error.
+     - A store read failed. The cause is logged, not answered.
    * - 500 ``internal error``
      - A store write failed. The cause is logged.
    * - 503 ``... not configured``
@@ -373,8 +372,9 @@ action ``unban``; log line ``hardware unbanned``.
 
 ``limit`` is 100 by default and at most 1000; one that is not a positive
 number is refused with 400 ``invalid limit``. A page followed by another
-carries ``next_id``, passed back as the ``next_id`` query value. ``offset``
-is refused with 400. ``total`` counts every ban the key may see.
+carries ``next_id``, passed back as the ``next_id`` query value; one that
+does not decode is refused with 400 ``invalid next_id``. ``offset`` is
+refused with 400. ``total`` counts every ban the key may see.
 
 Baselines
 =========
