@@ -80,9 +80,16 @@ func New(cfg Config) (*Client, error) {
 		if !pool.AppendCertsFromPEM(cfg.CACertPEM) {
 			return nil, errors.New("no certificates parsed from the CA PEM")
 		}
-		httpc.Transport = &http.Transport{
-			TLSClientConfig: &tls.Config{RootCAs: pool, MinVersion: tls.VersionTLS12},
+		base, ok := http.DefaultTransport.(*http.Transport)
+		if !ok {
+			return nil, errors.New("http.DefaultTransport is not an *http.Transport")
 		}
+		tr := base.Clone()
+		tr.TLSClientConfig = &tls.Config{
+			RootCAs:    pool,
+			MinVersion: tls.VersionTLS12,
+		}
+		httpc.Transport = tr
 	}
 
 	return &Client{

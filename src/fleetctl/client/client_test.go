@@ -11,10 +11,12 @@ package client
 
 import (
 	"encoding/json"
+	"encoding/pem"
 	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -73,6 +75,32 @@ func TestNewRejectsBadConfig(t *testing.T) {
 				t.Fatalf("New(%+v) accepted invalid config", tc.cfg)
 			}
 		})
+	}
+}
+
+func TestCAKeepsDefaultTransport(t *testing.T) {
+	h := func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"status":"ok"}`))
+	}
+	srv := httptest.NewTLSServer(http.HandlerFunc(h))
+	t.Cleanup(srv.Close)
+	caPEM := pem.EncodeToMemory(&pem.Block{
+		Type:  "CERTIFICATE",
+		Bytes: srv.Certificate().Raw,
+	})
+
+	c, err := New(Config{ServerURL: srv.URL, CACertPEM: caPEM})
+	if err != nil {
+		t.Fatal(err)
+	}
+	tr, ok := c.httpc.Transport.(*http.Transport)
+	if !ok || tr.Proxy == nil || reflect.ValueOf(tr.Proxy).Pointer() !=
+		reflect.ValueOf(http.ProxyFromEnvironment).Pointer() {
+		t.Fatal("a CA transport drops the proxy from the environment")
+	}
+	if h, err := c.Health(); err != nil || h.Status != "ok" {
+		t.Fatalf("Health() = %+v, %v", h, err)
 	}
 }
 

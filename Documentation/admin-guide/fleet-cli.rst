@@ -38,7 +38,10 @@ Global options
 ``-server URL``
   The API base URL, ``http`` or ``https`` with a host. Without the option,
   ``LOTA_FLEET_SERVER``; without either, ``http://127.0.0.1:8080``. A path in
-  the URL prefixes every route, and a trailing ``/`` is dropped.
+  the URL prefixes every route, and a trailing ``/`` is dropped. A request
+  goes through the proxy that ``HTTPS_PROXY`` or ``HTTP_PROXY`` (or the
+  lower-case name) gives for its scheme, except to a host listed in
+  ``NO_PROXY`` and to ``localhost`` or a loopback IP.
 
 ``-key-file PATH``
   A file holding the API key, sent as ``Authorization: Bearer <key>``.
