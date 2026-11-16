@@ -108,7 +108,10 @@ a reader always sees one complete version of a file.
      * - ``LOTA_ATTEST_COUNT``, ``LOTA_FAIL_COUNT``
        - The agent's round counters.
      * - ``LOTA_UPDATED``
-       - Unix time the file was written.
+       - Unix time the file was written. A running hook rewrites the file
+         about once in ``LOTA_HOOK_REFRESH_SEC`` with nothing new to say
+         too, so a time several periods old means that no hook writes it
+         any more.
      * - ``LOTA_PID``
        - The process that wrote it.
      * - ``LOTA_PROTECTED``

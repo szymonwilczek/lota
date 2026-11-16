@@ -757,6 +757,44 @@ static void test_write_status_attested(void)
 	PASS();
 }
 
+/* a hook that has nothing new to say still rewrites LOTA_UPDATED */
+static void test_status_heartbeat(void)
+{
+	struct lota_status status = { .flags = LOTA_FLAG_ATTESTED };
+	char path[PATH_MAX], buf[1024];
+
+	TEST("heartbeat: rewrites a status refresh_sec old, not a fresh one");
+
+	snprintf(path, sizeof(path), "%s/status_beat", tmpdir);
+	snprintf(g_hook.status_path, sizeof(g_hook.status_path), "%s", path);
+	g_hook.refresh_sec = 60;
+	atomic_store(&g_hook.offline_published, 0);
+	hook_cache_status(&status);
+
+	atomic_store(&g_hook.status_written, (long)time(NULL));
+	hook_status_heartbeat();
+	if (access(path, F_OK) == 0) {
+		FAIL("a status written just now was rewritten");
+		goto out;
+	}
+
+	atomic_store(&g_hook.status_written, (long)time(NULL) - 60);
+	hook_status_heartbeat();
+	if (read_file_contents(path, buf, sizeof(buf)) <= 0 ||
+	    !strstr(buf, "LOTA_ATTESTED=1")) {
+		FAIL("a status refresh_sec old was not rewritten");
+		goto out;
+	}
+	if (time(NULL) - atomic_load(&g_hook.status_written) > 1) {
+		FAIL("the rewrite did not move the write time");
+		goto out;
+	}
+	PASS();
+out:
+	atomic_store(&g_hook.have_status, 0);
+	unlink(path);
+}
+
 static void test_write_status_not_attested(void)
 {
 	char buf[1024];
@@ -2789,6 +2827,7 @@ int main(void)
 	test_write_status_attested();
 	test_write_status_not_attested();
 	test_write_status_zero_flags();
+	test_status_heartbeat();
 	test_write_status_marks_online_branch();
 	test_write_status_payload_offline_marker();
 
