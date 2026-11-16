@@ -102,7 +102,8 @@ its banner, over a strip in green for ``TRUSTED``, amber for
 Esc, Q or closing the window ends ``trust_pong``, and with it the run.
 On exit, including SIGINT and SIGTERM, the runner sends
 ``lota-agent --shutdown``, stops the background processes and
-``swtpm`` and removes the sandbox. With ``--keep-tmp`` it prints
+``swtpm`` and removes the sandbox; SIGINT ends the run with status 130,
+SIGTERM with 143, before any later step. With ``--keep-tmp`` it prints
 ``kept tmp dir: <sandbox>`` and leaves the sandbox in place.
 
 Triggering the failure path
