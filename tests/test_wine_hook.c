@@ -795,6 +795,20 @@ out:
 	unlink(path);
 }
 
+static void test_rate_limit_reason(void)
+{
+	const char *why = hook_token_reason(LOTA_ERR_RATE_LIMITED);
+
+	TEST("token reason: a rate limit names its scope and the retry");
+
+	if (!why || !strstr(why, "this user or this session") ||
+	    !strstr(why, "the next refresh asks again")) {
+		FAIL(why ? why : "no reason");
+		return;
+	}
+	PASS();
+}
+
 static void test_write_status_not_attested(void)
 {
 	char buf[1024];
@@ -2828,6 +2842,7 @@ int main(void)
 	test_write_status_not_attested();
 	test_write_status_zero_flags();
 	test_status_heartbeat();
+	test_rate_limit_reason();
 	test_write_status_marks_online_branch();
 	test_write_status_payload_offline_marker();
 

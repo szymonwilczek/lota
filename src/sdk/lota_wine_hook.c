@@ -854,7 +854,9 @@ static const char *LOTA_UNUSED hook_token_reason(int err)
 	case LOTA_ERR_TPM_LOCKED:
 		return "the TPM is in lockout and signs nothing until it recovers";
 	case LOTA_ERR_RATE_LIMITED:
-		return "the agent is issuing tokens faster than it allows";
+		return "tokens are requested faster than the agent issues them"
+		       " -- for this user or this session; the next refresh"
+		       " asks again";
 	default:
 		return NULL;
 	}
