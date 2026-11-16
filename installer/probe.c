@@ -33,8 +33,11 @@
 
 int probe_read_text(const char *path, char *buf, size_t cap)
 {
-	ssize_t got;
+	size_t got = 0;
+	ssize_t n;
+	char more;
 	int fd;
+	int err;
 
 	if (!path || !buf || cap < 2)
 		return -EINVAL;
@@ -43,10 +46,28 @@ int probe_read_text(const char *path, char *buf, size_t cap)
 	if (fd < 0)
 		return -errno;
 
-	got = read(fd, buf, cap - 1);
+	/* a short read is no end of file: fill @buf, then one byte tells EOF */
+	for (;;) {
+		if (got < cap - 1)
+			n = read(fd, buf + got, cap - 1 - got);
+		else
+			n = read(fd, &more, 1);
+		if (n < 0 && errno == EINTR)
+			continue;
+		if (n < 0) {
+			err = -errno;
+			close(fd);
+			return err;
+		}
+		if (n == 0)
+			break;
+		if (got == cap - 1) {
+			close(fd);
+			return -EFBIG;
+		}
+		got += (size_t)n;
+	}
 	close(fd);
-	if (got < 0)
-		return -errno;
 
 	buf[got] = '\0';
 	if (got > 0 && buf[got - 1] == '\n') {

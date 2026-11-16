@@ -6,11 +6,16 @@
  * A fleet install enrolls with the operator's CA. Unless it also records that
  * CA as a publisher profile in lota.conf, the loop has nothing to report to
  * after the reboot, and the daemon does not know the publisher it enrolled with.
+ * The self-check waits for a report to every profile that reports
+ * continuously.
  */
 
+#include <errno.h>
 #include <fcntl.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
 #include <unistd.h>
 #include <openssl/evp.h>
 #include <openssl/pem.h>
@@ -123,6 +128,46 @@ static void test_recorded(void)
 		return;
 	}
 	PASS();
+
+	/* a profile past the reader's buffer is not "no profile" */
+	TEST("a lota.conf too large to read whole is an error");
+	{
+		char *big = malloc(20000);
+		size_t n;
+		int bad;
+
+		if (!big) {
+			FAIL("out of memory");
+			return;
+		}
+		memset(big, '#', 17000);
+		big[16999] = '\n';
+		n = 17000;
+		n += snprintf(big + n, 20000 - n,
+			      "[profile \"fleet\"]\nca = ca.fleet.example\n"
+			      "ca_cert = %s\nverifier = none\n",
+			      anchor);
+		big[n] = '\0';
+		bad = write_conf(big) < 0 ||
+		      installer_profile_recorded(conf, anchor) != -EFBIG;
+		free(big);
+		if (bad) {
+			FAIL("an oversized file read as no profile");
+			return;
+		}
+	}
+	PASS();
+
+	TEST("a lota.conf that cannot be read is an error");
+	unlink(conf);
+	if (mkdir(conf, 0700) < 0 ||
+	    installer_profile_recorded(conf, anchor) >= 0) {
+		rmdir(conf);
+		FAIL("an unreadable file read as no profile");
+		return;
+	}
+	rmdir(conf);
+	PASS();
 }
 
 static int argv_has(const char *const *argv, const char *a, const char *b)
@@ -135,6 +180,28 @@ static int argv_has(const char *const *argv, const char *a, const char *b)
 		return argv[i + 1] && strcmp(argv[i + 1], b) == 0;
 	}
 	return 0;
+}
+
+static void test_loop_expected(void)
+{
+	TEST("the loop wait expects a report per continuous profile");
+	if (write_conf("[profile \"fleet\"]\nreporting = continuous\n"
+		       "verifier = v.fleet.example\n"
+		       "[profile \"fleet2\"]\nreporting = continuous\n"
+		       "verifier = v.fleet2.example\n") < 0 ||
+	    installer_loop_reports_expected(conf) != 2) {
+		FAIL("profiles in lota.conf not counted");
+		return;
+	}
+	PASS();
+
+	TEST("the loop wait expects one report without lota.conf");
+	unlink(conf);
+	if (installer_loop_reports_expected(conf) != 1) {
+		FAIL("a missing lota.conf is not one report");
+		return;
+	}
+	PASS();
 }
 
 static void test_add_publisher_argv(void)
@@ -209,6 +276,7 @@ int main(void)
 	EVP_PKEY_free(b);
 
 	test_recorded();
+	test_loop_expected();
 	test_add_publisher_argv();
 
 	unlink(anchor);

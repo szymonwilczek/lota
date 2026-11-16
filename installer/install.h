@@ -109,10 +109,20 @@ enum trust_key_source {
  * A profile matches when its ca_cert resolves to the same profile id as
  * @anchor, whatever its path.
  *
- * Return: 1 when a profile matches, -ENOMEM when scratch space cannot be
- * allocated, otherwise 0.
+ * Return: 1 when a profile matches; 0 when none does, @conf_path does not
+ * exist or @anchor resolves to no profile id; otherwise -errno (-EFBIG for
+ * a file too large to read whole).
  */
 int installer_profile_recorded(const char *conf_path, const char *anchor);
+
+/**
+ * installer_loop_reports_expected() - Reports one attestation round sends.
+ * @conf_path: the configuration.
+ *
+ * Return: the profiles that report continuously, at least 1, or -errno for
+ * a configuration that exists and cannot be read whole.
+ */
+int installer_loop_reports_expected(const char *conf_path);
 
 #define INSTALLER_ADD_PUBLISHER_ARGC 14 /* terminator included */
 

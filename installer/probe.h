@@ -128,7 +128,8 @@ enum probe_pcr14 {
  * @buf:  NUL-terminated output, one trailing newline stripped.
  * @cap:  size of @buf; at least 2.
  *
- * Return: bytes in @buf, or -errno.
+ * Return: bytes in @buf, -EFBIG when the file does not fit in @buf, or
+ * -errno.
  */
 int probe_read_text(const char *path, char *buf, size_t cap);
 

@@ -1021,9 +1021,15 @@ int installer_profile_recorded(const char *conf_path, const char *anchor)
 	if (!s)
 		return -ENOMEM;
 
-	if (profile_paths_from_anchor(anchor, &s->want) < 0 ||
-	    probe_read_text(conf_path, s->buf, sizeof(s->buf)) < 0)
+	if (profile_paths_from_anchor(anchor, &s->want) < 0)
 		goto out;
+	ret = probe_read_text(conf_path, s->buf, sizeof(s->buf));
+	if (ret < 0) {
+		if (ret == -ENOENT)
+			ret = 0;
+		goto out;
+	}
+	ret = 0;
 
 	count = probe_conf_buf_profile_count(s->buf);
 	for (int i = 0; i < count; i++) {
@@ -1255,28 +1261,37 @@ static int st_enroll_apply(struct install_ctx *ctx)
 #define SELFCHECK_LOOP_WAIT_SEC 90
 #define SELFCHECK_LOOP_POLL_SEC 2
 
+int installer_loop_reports_expected(const char *conf_path)
+{
+	const size_t cap = 16384;
+	char *conf = calloc(1, cap);
+	int rc;
+
+	if (!conf)
+		return -ENOMEM;
+	rc = probe_read_text(conf_path, conf, cap);
+	if (rc >= 0)
+		rc = probe_conf_buf_continuous_count(conf);
+	else if (rc == -ENOENT)
+		rc = 0;
+	free(conf);
+	return rc < 0 ? rc : rc > 1 ? rc : 1;
+}
+
 static int wait_for_loop_report(struct install_ctx *ctx)
 {
 	const char *const argv[] = { "systemctl", "show",
 				     "-p",	  "StatusText",
 				     "--value",	  "lota-attest.service",
 				     NULL };
-	const size_t conf_cap = 16384;
 	char status[512] = { 0 };
-	int expected = 1;
-	char *conf;
+	int expected = installer_loop_reports_expected(PATH_LOTA_CONF);
 
-	/* inlined into install_self_check(), whose frame cannot hold it */
-	conf = calloc(1, conf_cap);
-	if (!conf) {
+	if (expected < 0) {
 		ui_text(&ctx->ui, "Cannot read %s (%s)", PATH_LOTA_CONF,
-			strerror(ENOMEM));
-		return -ENOMEM;
+			strerror(-expected));
+		return expected;
 	}
-	if (probe_read_text(PATH_LOTA_CONF, conf, conf_cap) == 0 &&
-	    probe_conf_buf_continuous_count(conf) > expected)
-		expected = probe_conf_buf_continuous_count(conf);
-	free(conf);
 
 	ui_text(&ctx->ui,
 		"Waiting up to %d s for the attestation loop to report to the "
@@ -1446,6 +1461,14 @@ after_cert:
 		      "one needs operator approval)");
 
 	profiles = probe_conf_profile_count(PATH_LOTA_CONF);
+	if (profiles < 0 && profiles != -ENOENT) {
+		char why[128];
+
+		snprintf(why, sizeof(why), "NOT readable: %s",
+			 strerror(-profiles));
+		ui_kv(&ctx->ui, PATH_LOTA_CONF, why);
+		ok = 0;
+	}
 	if (profiles < 0)
 		profiles = 0;
 

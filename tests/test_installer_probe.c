@@ -1153,6 +1153,62 @@ static void test_conf_profile_count(void)
 	PASS();
 }
 
+static void test_read_text(void)
+{
+	char path[64];
+	char buf[16];
+	int fd;
+
+	snprintf(path, sizeof(path), "/tmp/lota-inst-read.%d", (int)getpid());
+
+	TEST("read_text: a missing file is -ENOENT");
+	unlink(path);
+	if (probe_read_text(path, buf, sizeof(buf)) != -ENOENT) {
+		FAIL("missing file not -ENOENT");
+		return;
+	}
+	PASS();
+
+	TEST("read_text: a file that fills the buffer exactly is read");
+	fd = open(path, O_WRONLY | O_CREAT | O_TRUNC, 0600);
+	if (fd < 0 || write(fd, "0123456789abcde", 15) != 15) {
+		FAIL("cannot write the file");
+		goto out;
+	}
+	close(fd);
+	if (probe_read_text(path, buf, sizeof(buf)) != 15 ||
+	    strcmp(buf, "0123456789abcde") != 0) {
+		FAIL("exact fit not read whole");
+		goto out;
+	}
+	PASS();
+
+	TEST("read_text: a file larger than the buffer is -EFBIG");
+	fd = open(path, O_WRONLY | O_APPEND);
+	if (fd < 0 || write(fd, "f", 1) != 1) {
+		FAIL("cannot extend the file");
+		goto out;
+	}
+	close(fd);
+	if (probe_read_text(path, buf, sizeof(buf)) != -EFBIG) {
+		FAIL("oversized file not -EFBIG");
+		goto out;
+	}
+	PASS();
+
+	TEST("read_text: a directory is an error");
+	unlink(path);
+	if (mkdir(path, 0700) < 0 ||
+	    probe_read_text(path, buf, sizeof(buf)) >= 0) {
+		FAIL("directory read as text");
+		goto out;
+	}
+	PASS();
+out:
+	unlink(path);
+	rmdir(path);
+}
+
 /*
  * The self-check proves the host attests. It did that by spawning the agent
  * with --server, which names one verifier -- a combination the agent refuses
@@ -1856,6 +1912,7 @@ int main(void)
 	test_cmdline_token();
 	test_conf_key();
 	test_conf_profile_count();
+	test_read_text();
 	test_selfcheck_plan();
 	test_conf_profile_anchor();
 	test_conf_continuous_count();
