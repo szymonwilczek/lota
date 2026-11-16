@@ -5,237 +5,308 @@
 Fleet CLI (lota-fleet)
 ======================
 
-``lota-fleet`` is the operator command-line front end for the verifier's
-REST monitoring API. It covers the fleet lifecycle that otherwise requires
-hand-written ``curl``: device inventory, AIK revocations, hardware bans,
-operator-forced re-anchor, client removal, review of Low-Firmware-Assurance
-re-anchors, and the audit and attestation logs.
+``lota-fleet`` calls the verifier's monitoring API
+(:doc:`../verifier/monitoring-api`) from the command line: the client
+inventory, revocations, hardware bans, forced re-anchors, client deletes, the
+low-firmware-assurance review list, and the audit and decision logs. It
+talks HTTP to the API alone and needs no access to the verifier's host or
+store. The commands are in :ghsrc:`src/fleetctl/main.go`, the requests in
+:ghsrc:`src/fleetctl/client/client.go`.
 
-The CLI is a pure API client. It shares no code with the verifier, so any
-``lota-fleet`` build works against any verifier that speaks the documented
-endpoint contract (:doc:`../verifier/monitoring-api`), and it can run from an operator
-workstation that has network access to the monitoring API only.
+``make fleet-cli`` builds ``build/lota-fleet``, a static binary with no
+module dependencies. ``make all`` and the packages leave it out.
 
-Building
-========
+Usage
+=====
 
 ::
 
-   make fleet-cli
+   lota-fleet [global options] <command> [subcommand] [<id>] [command options]
 
-produces ``build/lota-fleet``. The binary is static pure-Go with no
-dependencies outside the standard library.
+The options take one or two leading dashes. A command that names a client or
+a hardware ID takes it first, before its options: ``revoke <client-id>
+-reason R -actor A``.
 
-Connecting and authenticating
-=============================
+.. code-block:: console
 
-The monitoring API is the verifier's ``--http-addr`` listener. The CLI
-takes the base URL from ``--server`` or the ``LOTA_FLEET_SERVER``
-environment variable (default ``http://127.0.0.1:8080``).
+   $ export LOTA_FLEET_SERVER=https://verifier.example:8080
+   $ lota-fleet -tls-ca verifier-ca.crt -key-file fleet-reader.key stats
 
-The API has two Bearer-token tiers, matching the verifier's
-``LOTA_READER_API_KEY`` and ``LOTA_ADMIN_API_KEY``: a reader key covers
-the read-only endpoints (stats, listings, logs), the
-admin key additionally unlocks the mutating ones (revoke, ban, re-anchor,
-delete, review acknowledgement). Give the CLI whichever tier the task
-needs:
+Global options
+==============
 
-* ``LOTA_FLEET_API_KEY`` environment variable, or
-* ``--key-file PATH`` pointing at a file that holds the key (trailing
-  whitespace is trimmed); the file takes precedence.
+``-server URL``
+  The API base URL, ``http`` or ``https`` with a host. Without the option,
+  ``LOTA_FLEET_SERVER``; without either, ``http://127.0.0.1:8080``. A path in
+  the URL prefixes every route, and a trailing ``/`` is dropped.
 
-There is deliberately no ``--key <value>`` flag: a key in ``argv`` is
-visible to every user on the machine through the process list.
+``-key-file PATH``
+  A file holding the API key, sent as ``Authorization: Bearer <key>``.
+  Whitespace around the key in the file is trimmed. Without the option the
+  key is ``LOTA_FLEET_API_KEY``, taken as it is; with neither, no
+  ``Authorization`` header is sent. There is no option that takes the key
+  itself: an argument shows in the process list, which other users of the
+  machine read unless ``/proc`` is mounted with ``hidepid``.
 
-For an https ``--server`` (the API behind a TLS-terminating proxy),
-``--tls-ca PATH`` adds PEM roots to trust. Plain HTTP is fine on loopback;
-the verifier itself refuses a non-loopback HTTP bind without a configured
-API key.
+``-tls-ca PATH``
+  PEM certificates that replace the system roots for an ``https`` server.
+  The verifier serves HTTPS on any address other than a loopback IP
+  (:doc:`../verifier/command-line`), so this names the CA that issued its
+  ``--cert``. Without the option, or with an empty file, the system roots
+  apply.
+
+``-timeout DURATION``
+  The time allowed for each request, as a Go duration such as ``10s``.
+  Default ``30s``; ``0`` means the default, and a negative value sets no
+  limit.
+
+``-json``
+  Prints the response as JSON in place of the text below (`Output`_). The
+  action commands print text either way.
+
+``-h`` before the command prints the usage, and among the options of a
+command that takes options, those options; both exit 2. In the place of a
+client or hardware ID, ``-h`` is taken as the ID: ``ban -h`` asks for
+``-reason``, and ``revoke -h -reason admin -actor A`` revokes a client named
+``-h``. ``ban x -h`` prints the options of ``ban``.
+
+The key a command needs is the role of its route: a reader key for the
+listings, an admin key for the actions ("Authentication" in
+:doc:`../verifier/monitoring-api`).
 
 Commands
 ========
 
-::
+.. list-table::
+   :header-rows: 1
+   :widths: 50 10 40
 
-   lota-fleet [global flags] <command> [command flags] [args]
+   * - Command
+     - Role
+     - Route
+   * - ``health``
+     - none
+     - ``GET /health``
+   * - ``stats``
+     - reader
+     - ``GET /api/v1/stats``
+   * - ``devices list [-limit N] [-after ID]``
+     - reader
+     - ``GET /api/v1/clients``
+   * - ``devices show <client-id>``
+     - reader
+     - ``GET /api/v1/clients/{id}``
+   * - ``revoke <client-id> -reason R -actor A [-note S]``
+     - admin
+     - ``POST /api/v1/clients/{id}/revoke``
+   * - ``unrevoke <client-id> -reason R -actor A [-note S]``
+     - admin
+     - ``DELETE /api/v1/clients/{id}/revoke``
+   * - ``revocations [-tenant T]``
+     - reader
+     - ``GET /api/v1/revocations``
+   * - ``ban <hardware-id> -reason R -actor A [-tenant T] [-note S]``
+     - admin
+     - ``POST /api/v1/bans``
+   * - ``unban <hardware-id> -reason R -actor A [-tenant T] [-note S]``
+     - admin
+     - ``DELETE /api/v1/bans/{id}``
+   * - ``bans [-limit N] [-next-id CURSOR] [-tenant T]``
+     - reader
+     - ``GET /api/v1/bans``
+   * - ``reanchor <client-id> -reason R -actor A [-note S]``
+     - admin
+     - ``POST /api/v1/clients/{id}/reanchor``
+   * - ``delete <client-id> -reason R -actor A [-note S]``
+     - admin
+     - ``DELETE /api/v1/clients/{id}``
+   * - ``reanchor-review list``
+     - reader
+     - ``GET /api/v1/reanchor/review``
+   * - ``reanchor-review ack <client-id> -reason R -actor A [-note S]``
+     - admin
+     - ``POST /api/v1/clients/{id}/reanchor-review-ack``
+   * - ``audit [-limit N] [-tenant T]``
+     - reader
+     - ``GET /api/v1/audit``
+   * - ``attests [-limit N] [-tenant T]``
+     - reader
+     - ``GET /api/v1/attestations``
 
-================================================================  ========
-Command                                                           API tier
-================================================================  ========
-``health``                                                        none
-``stats``                                                         reader
-``devices list [-limit N] [-after ID]``                           reader
-``devices show <client-id>``                                      reader
-``revoke <client-id> -reason R -actor A [-note S]``               admin
-``unrevoke <client-id> -reason R -actor A [-note S]``             admin
-``revocations``                                                   reader
-``ban <hardware-id> -reason R -actor A [-note S]``                admin
-``unban <hardware-id> -reason R -actor A [-note S]``              admin
-``bans [-limit N] [-next-id CURSOR]``                             reader
-``reanchor <client-id> -reason R -actor A [-note S]``             admin
-``delete <client-id> -reason R -actor A [-note S]``               admin
-``reanchor-review list``                                          reader
-``reanchor-review ack <client-id> -reason R -actor A [-note S]``  admin
-``audit [-limit N]``                                              reader
-``attests [-limit N]``                                            reader
-================================================================  ========
+What each route does, the answers it gives and the audit row it writes are
+in :doc:`../verifier/monitoring-api`; the effect of a re-anchor, a delete, a
+revocation and a ban on the client's next round is in "Operator actions" of
+:doc:`../verifier/index`.
 
-``-reason`` on ``revoke`` must be one of the server's revocation reasons:
-``cheating``, ``compromised``, ``hardware_change`` or ``admin``. ``-actor`` is
-the administrator identity recorded in the audit log.
+Actions
+-------
 
-**Every command that changes a client's trust state requires ``-actor`` and
-``-reason``**, and the audit row carries both. There is one rule rather than
-one per verb.
+``-reason``, ``-actor`` and ``-note`` fill the fields of the same names in
+the request body. ``lota-fleet`` refuses an action without ``-reason`` or
+``-actor``. The verifier takes one of ``cheating``, ``compromised``,
+``hardware_change`` and ``admin`` as the reason of a revoke or a ban, and
+free text elsewhere.
 
-Lifting a restriction is attributed on the same terms as imposing one:
-restoring a machine that was banned for cheating is the act a fleet most wants
-signed -- banning one is the reversible, conservative direction -- so a trail
-that names who imposed a restriction must also name who lifted it. And
-``delete``, which removes a client's trust state entirely, is the last action
-to leave unattributed.
+``ban`` and ``unban`` send ``-tenant`` in the body; without it the verifier
+uses the tenant ``default`` (:doc:`multi-tenancy`). A hardware ID is the
+device pseudonym that ``devices show`` prints as ``hardware id`` and the
+decision log holds as ``hardware_id``.
 
-Only ``revoke`` takes a fixed vocabulary. Everywhere else ``-reason`` is free
-text, because "why was this machine let back in" and "why was this one
-removed" have no enumerable answer.
+On success each action prints one line:
 
-Global ``--json`` prints the raw API response instead of the human
-rendering, for scripting against the full field set.
+``revoke``, ``unrevoke``
+  ``revoked <client-id> (<reason>)``, ``unrevoked <client-id> (<reason>)``
 
-Exit codes: 0 on success, 1 when the operation fails **or reports a
-negative result** (a degraded ``health``), 2 on a usage error.
-``devices list`` and ``reanchor-review list`` print bare IDs on stdout
-(page summaries, and the ``-after`` of the next page, go to stderr), so
-their output pipes cleanly into further tooling. An empty review queue
-therefore prints its count and nothing else: a queue with nothing in it
-and a command that did nothing are not the same answer.
+``ban``, ``unban``
+  ``banned <hardware-id> in tenant <tenant> (<reason>)``, ``unbanned
+  <hardware-id> in tenant <tenant> (<reason>)``
 
-Lifecycle actions
-=================
+``reanchor``
+  ``reanchored <client-id>: baselines cleared, next attestation
+  re-establishes trust``
 
-``reanchor`` is the operator-forced re-baseline: it drops the client's
-stored PCR14 and boot baselines so the next attestation re-establishes
-trust. Use it after a legitimate platform change (board swap, firmware
-update) that the self-service re-anchor refuses or is not enabled for.
-Without ``--allow-tofu-boot-baseline`` the forced re-anchor is the operator's
-consent for the next attestation to pin the PCR 0/1/7 state it reports,
-once; ``delete`` withdraws that consent. The action is audited
-(``reanchor``) and counted in the forced re-anchor metric.
+``delete``
+  ``deleted <client-id>: trust state removed, revocations and bans kept``
 
-``delete`` removes the client's verifier-side trust state: the baselines and
-the AIK registration, on every storage backend. The device keeps its
-certificate, so a running host returns at its next heartbeat and is
-re-baselined on what it measures then. Use ``revoke`` (or a hardware ban) to
-keep a host out. A deleted client leaves ``devices list`` immediately.
-Revocations and hardware bans are keyed separately and **survive the delete**:
-removing a device cannot shed a ban. The action is audited
-(``delete_client``).
+``reanchor-review ack``
+  ``reviewed <client-id>``
 
-``reanchor-review`` is the post-fact review queue for self-service
-re-anchors taken on the Low-Firmware-Assurance path; see "Re-anchor" in
-:doc:`../verifier/index` for when the verifier puts a client in that queue.
-``reanchor-review ack`` takes ``-reason`` and
-``-actor`` like the other trust changes, because it is the record that a
-person looked; a client with nothing queued is refused, so an
-acknowledgement cannot stand for a review that never happened. It is
-audited (``reanchor_review_ack``).
+``ban`` and ``unban`` print ``in the default tenant`` when ``-tenant`` is not
+given.
+
+Listings
+--------
+
+``-limit``
+  The ``limit`` query value; a value of 0 or less is not sent, and the
+  verifier uses its default. ``audit`` and ``attests`` send no other query
+  value, so they read the newest rows.
+
+``-after``, ``-next-id``
+  The cursor of the next page, which ``devices list`` and ``bans`` print on
+  standard error as ``next page: -after <id>`` and ``more results: -next-id
+  <cursor>``. Under ``-json`` it is the ``next`` and ``next_id`` field of the
+  page, and standard error stays empty.
+
+``-tenant``
+  Keeps the rows of one tenant, in the table and under ``-json``. The filter
+  runs in ``lota-fleet`` over the rows the verifier sent, so a page can come
+  back short or empty while more rows exist. The verifier answers a key
+  scoped to tenants with the rows of its tenants alone; the filter narrows
+  the view of a key that sees more.
+
+Output
+======
+
+``health``
+  ``status``, ``mode`` when the verifier sends one, ``uptime``, and ``tls
+  listening: <true|false> (<address>)``.
+
+``stats``
+  ``name: value`` lines: ``registered clients``, ``active policy``,
+  ``loaded policies``, the attestation counters, ``active revocations``,
+  ``active bans``, ``pending challenges``, ``used nonces`` and ``uptime``
+  (``GET /api/v1/stats``). A key scoped to tenants gets ``tenant scoped:
+  true`` and ``tenants`` first, and no line for a counter the verifier left
+  out.
+
+``devices list``, ``reanchor-review list``
+  One client ID per line on standard output. The count goes to standard
+  error, as ``<n> clients`` and ``<n> client(s) awaiting re-anchor review``,
+  so standard output holds the IDs alone.
+
+``devices show``
+  ``client``, ``tenant``, ``hardware id``, ``revoked``, ``revocation reason``,
+  ``first seen``, ``last attestation``, ``attestation count``, ``monotonic
+  counter`` and ``pcr14 baseline``, a field the verifier left empty
+  omitted. With machine keys on record, ``mok state`` and one ``mok key`` and
+  ``db key`` line per key: its type, SHA-256 and subject.
+
+``revocations``, ``bans``, ``audit``, ``attests``
+  A table with the columns below. ``attests`` gives the duration in
+  milliseconds with one decimal.
+
+  ================ ===============================================================
+  Command          Columns
+  ================ ===============================================================
+  ``revocations``  ``CLIENT TENANT REASON REVOKED AT BY NOTE``
+  ``bans``         ``HARDWARE ID TENANT REASON BANNED AT BY NOTE``
+  ``audit``        ``TIME TENANT ACTION TARGET ACTOR REASON NOTE``
+  ``attests``      ``TIME TENANT CLIENT RESULT MS DETAILS``
+  ================ ===============================================================
+
+``-json`` prints the response as ``lota-fleet`` decoded it, indented. A field
+it does not read is left out: ``kernel_hash``, ``last_seen`` and ``rounds``
+of a decision row. ``revocations``, ``reanchor-review list``, ``audit`` and
+``attests`` print the array of rows without the ``count`` beside it;
+``bans`` prints the page with ``count`` set to the rows kept by ``-tenant``.
+
+Exit status
+===========
+
+``0``
+  Success.
+
+``1``
+  The request failed or the verifier refused it, or ``health`` read a
+  status other than ``ok``. A refusal prints ``lota-fleet: API error: HTTP
+  <code>: <message>``, with the message of the verifier's error object, or
+  ``lota-fleet: API error: HTTP <code>`` alone when the body holds none, as
+  from a server other than the verifier or plain HTTP sent to its HTTPS
+  port. A key file or ``-tls-ca`` file that cannot be read, a server URL
+  that is not ``http`` or ``https`` or has no host, a non-empty ``-tls-ca``
+  file with an ``http`` server, and a CA file with no certificate also exit
+  1. These are checked after the global options and before the command, so
+  they win over a usage error in the command, and a missing command or an
+  unknown global option wins over them.
+
+``2``
+  A usage error: no command, an unknown command or subcommand, an unknown
+  option or a value it cannot parse, a missing ``-reason`` or ``-actor``, a
+  missing or extra argument, and ``-h``.
+
+``health`` prints its answer before exiting 1, so a script can test the
+status alone:
+
+.. code-block:: sh
+
+   lota-fleet health >/dev/null || echo "verifier degraded" >&2
 
 Examples
 ========
 
-Revoke a compromised host and confirm::
+Revoke a client and list the revocations:
 
-   export LOTA_FLEET_SERVER=http://verifier.internal:8080
-   lota-fleet --key-file /etc/lota/fleet-admin.key \
-       revoke host-0142 -reason compromised -actor alice@ops \
-       -note "IR ticket 8841"
-   lota-fleet --key-file /etc/lota/fleet-reader.key revocations
+.. code-block:: console
 
-The revoked host says so itself. Its next round fails at the verifier's
-verdict, and ``journalctl -u lota-attest`` on the machine reads::
+   $ lota-fleet -key-file fleet-admin.key revoke "$CLIENT_ID" \
+         -reason compromised -actor ops@example.com -note "incident 42"
+   $ lota-fleet -key-file fleet-reader.key revocations
 
-   Attestation round failed at the verifier's verdict: FAIL - This host's
-   attestation key was revoked by the publisher's administrator, who
-   decides on re-enrollment
+Ban the hardware behind the failed rounds of one tenant:
 
-A banned hardware ID reads the same way, naming the ban. Both are worth
-knowing before a support call: the machine is obeying an administrative
-decision, and nothing done locally to it changes the answer.
-The reason recorded with the revocation (``compromised`` above)
-stays on the verifier -- the host is told the state, not the case for it.
+.. code-block:: console
 
-Ban the hardware behind a refused round. The decision log names the hardware
-identity of every round that got as far as authenticating its certificate, and
-that value is what ``ban`` takes::
+   $ lota-fleet -key-file fleet-reader.key -json attests -limit 50 -tenant acme \
+         | jq -r '.[] | select(.result != "ok") | .hardware_id // empty'
+   $ lota-fleet -key-file fleet-admin.key ban "$HARDWARE_ID" -tenant acme \
+         -reason cheating -actor ops@example.com
 
-   lota-fleet --key-file /etc/lota/fleet-reader.key --json attests -limit 50 \
-       | jq -r '.[] | select(.result != "ok") | "\(.result) \(.hardware_id)"'
-   lota-fleet --key-file /etc/lota/fleet-admin.key \
-       ban 924a27af...41fa7 -reason cheating -actor alice@ops
+Re-anchor a client after a planned firmware update:
 
-``devices show`` prints the same identity as ``hardware id`` for a single host.
-The table ``attests`` prints without ``--json`` names the client; under the
-Privacy CA flow the client id *is* the hardware identity, because the pseudonym
-the CA issues is that identity.
+.. code-block:: console
 
-``devices show`` also lists the keys the host trusts: ``db key`` for firmware
-db, ``mok key`` for the MOK list, and ``mok state`` for whether that list is
-proven against the measured boot. LOTA draws no verdict from these keys; the
-verifier logs a change and the operator decides what it means.
+   $ lota-fleet -key-file fleet-admin.key reanchor "$CLIENT_ID" \
+         -reason "firmware update" -actor ops@example.com
 
-Re-baseline a host after a planned firmware update::
+Walk every client ID:
 
-   lota-fleet --key-file /etc/lota/fleet-admin.key \
-       reanchor host-0142 -reason "BIOS 2.4 rollout" -actor alice@ops \
-             -note "fleet-wide firmware update"
+.. code-block:: sh
 
-Decommission a host::
-
-   lota-fleet --key-file /etc/lota/fleet-admin.key \
-       delete host-0142 -reason decommissioned -actor alice@ops \
-             -note "returned to vendor"
-
-Check the fleet from a script::
-
-   lota-fleet health || alert "verifier degraded"
-   lota-fleet --json stats | jq .failed_attestations
-
-Multi-tenancy
-=============
-
-When the verifier serves several tenants, the CLI is tenant-aware.
-
-Hardware bans are per tenant. ``ban`` and ``unban`` take a ``-tenant`` flag
-naming the tenant the ban lives in; omitting it uses the server's ``default``
-tenant. A ban in one tenant never affects another, so the tenant is part of
-the ban's identity::
-
-   lota-fleet --key-file /etc/lota/fleet-admin.key \
-       ban <hardware-id> -tenant acme -reason cheating -actor alice@ops
-   lota-fleet --key-file /etc/lota/fleet-admin.key \
-       unban <hardware-id> -tenant acme -reason "appeal upheld" \
-             -actor alice@ops
-
-Both verbs send the tenant in the request body, which is where the API takes
-it on either one, so an administrator whose key is scoped to a single tenant
-lifts what it imposed.
-
-The listing commands (``revocations``, ``bans``, ``audit``, ``attests``) print
-a ``TENANT`` column, and ``devices show`` and ``stats`` report the tenant. Those listings also accept a ``-tenant`` flag that filters
-the displayed rows to one tenant, in the table and the ``--json`` rendering
-alike. This filter is applied client-side, for an
-operator holding a broad key who wants to narrow the view: the verifier
-already scopes every response to the tenants the API key is allowed to see, so
-a tenant-scoped key needs no ``-tenant`` flag to stay within its bounds. A
-request that names a client or ban outside the key's tenant set is answered as
-not found.
-
-``stats`` from a tenant-scoped key reports ``tenant scoped: true`` and the
-tenant list, and narrows the client, revocation, and ban counts to those
-tenants; the fleet-wide attestation counters, which are not attributable per
-tenant, are omitted -- the verifier leaves them out of the response, so
-``--json`` prints an object without those keys.
-
-Tenants are assigned by the attestation CA at enrollment and written into the
-device certificate; see :doc:`bringup/ca-enrollment` for the
-assignment mechanism.
+   after=
+   while :; do
+       lota-fleet -key-file fleet-reader.key devices list -limit 1000 \
+           ${after:+-after "$after"} 2>page.err
+       after=$(sed -n 's/^next page: -after //p' page.err)
+       [ -n "$after" ] || break
+   done
