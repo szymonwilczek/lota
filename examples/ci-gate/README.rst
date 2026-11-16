@@ -165,8 +165,8 @@ Options take one dash or two:
      - How long an issued challenge can be spent.
    * - ``-max-token-life DURATION``
      - ``15m``
-     - Refuse a token whose remaining validity exceeds this; 0 disables
-       the check.
+     - Refuse a token whose remaining validity exceeds this, or that
+       never expires; 0 disables the check.
    * - ``-tls-cert PATH``, ``-tls-key PATH``
      - none
      - PEM certificate and key; either one makes the gate serve HTTPS,
@@ -236,6 +236,8 @@ The body is ``{"nonce": "<base64>", "token": "<base64>"}`` of at most
      - ``verified token carries a different nonce``
    * - The token carries every flag of ``-require``.
      - ``host is missing required state: <flags>``
+   * - The token expires, unless ``-max-token-life`` is 0.
+     - ``token never expires; -max-token-life 0 accepts it``
    * - The validity left is at most ``-max-token-life``.
      - ``token outlives the gate's window: <left> remaining, limit
        <limit>``
@@ -248,7 +250,9 @@ leaves the nonce unspent. ``VerifyToken()`` and its errors are described
 in `the Go SDK <../../Documentation/userspace-api/go-sdk.rst>`_. It refuses
 a token that expires more than 360 seconds ahead of the clock of the
 gate, so a ``-max-token-life`` of 6 minutes or more refuses no token it
-accepted. A token whose expiry is 0 passes the check at any value.
+accepted that expires. The agent issues a token whose expiry is 0, one
+that never expires, for a publisher with no verdict; the gate accepts it
+only with ``-max-token-life 0``.
 
 The gate trusts one AIK; an enrolled fleet is checked by a verifier, as
 in `enrollment/ <../enrollment/README.rst>`_.

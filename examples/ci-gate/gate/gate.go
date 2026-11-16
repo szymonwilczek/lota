@@ -156,6 +156,11 @@ func (g *gate) handleRelease(w http.ResponseWriter, r *http.Request) {
 
 	// Claims carry no issue time, so maxLife caps the remaining validity.
 	if g.maxLife > 0 {
+		if claims.ExpiresAt.Unix() == 0 {
+			g.deny(w, req.Nonce, "token never expires; "+
+				"-max-token-life 0 accepts it")
+			return
+		}
 		remaining := time.Until(claims.ExpiresAt)
 		if remaining > g.maxLife {
 			g.deny(w, req.Nonce, fmt.Sprintf(

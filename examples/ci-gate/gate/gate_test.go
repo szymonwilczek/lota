@@ -35,6 +35,7 @@ type tokenOpts struct {
 	nonce      [32]byte
 	signWith   *rsa.PrivateKey
 	corruptSig bool
+	noExpiry   bool // valid_until 0
 }
 
 func newGate(t *testing.T, key *rsa.PrivateKey, required uint32,
@@ -55,6 +56,9 @@ func mintToken(t *testing.T, opts tokenOpts) []byte {
 	t.Helper()
 
 	validUntil := uint64(time.Now().Add(opts.validFor).Unix())
+	if opts.noExpiry {
+		validUntil = 0
+	}
 	pcrMask := uint32(0x4083)
 	policyDigest := [32]byte{0xA1, 0xB2, 0xC3}
 	runtimeDigest := verifysdk.ComputeRuntimeProtectDigest(nil, nil)
@@ -364,6 +368,33 @@ func TestRelease_RefusesTokenOutlivingTheWindow(t *testing.T) {
 	}
 	if !strings.Contains(resp.Reason, "outlives") {
 		t.Fatalf("reason %q", resp.Reason)
+	}
+}
+
+func TestRelease_TokenWithoutExpiryNeedsNoLifeLimit(t *testing.T) {
+	key, _ := rsa.GenerateKey(rand.Reader, 2048)
+	for _, tc := range []struct {
+		maxLife time.Duration
+		want    int
+	}{{15 * time.Minute, http.StatusForbidden}, {0, http.StatusOK}} {
+		g := newGate(t, key, flagAttested, tc.maxLife)
+		nonce := requestNonce(t, g)
+		token := mintToken(t, tokenOpts{
+			flags:    flagAttested,
+			nonce:    nonce,
+			signWith: key,
+			noExpiry: true,
+		})
+
+		code, resp := postRelease(g, nonce, token)
+		if code != tc.want {
+			t.Fatalf("-max-token-life %s: status %d reason %q",
+				tc.maxLife, code, resp.Reason)
+		}
+		if code == http.StatusForbidden &&
+			!strings.Contains(resp.Reason, "never expires") {
+			t.Fatalf("reason %q", resp.Reason)
+		}
 	}
 }
 

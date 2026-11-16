@@ -36,7 +36,8 @@ func main() {
 	nonceTTL := flag.Duration("nonce-ttl", 60*time.Second,
 		"how long an issued challenge stays spendable")
 	maxLife := flag.Duration("max-token-life", 15*time.Minute,
-		"refuse a token whose remaining validity exceeds this (0 disables)")
+		"refuse a token that never expires or whose remaining "+
+			"validity exceeds this (0 disables)")
 	tlsCert := flag.String("tls-cert", "", "PEM certificate; enables HTTPS")
 	tlsKey := flag.String("tls-key", "", "PEM private key for --tls-cert")
 	flag.Parse()
