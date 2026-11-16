@@ -85,6 +85,84 @@ names_missing_openssl() {
 }
 check "ci-gate run.sh names a missing openssl" names_missing_openssl
 
+# verify-attested.sh: a status left by a hook that is gone, and a file
+# the hook writes after the watcher started
+VERIFY="$REPO_DIR/examples/cs2/scenarios/verify-attested.sh"
+HOOK_DIR="$WORK_DIR/hook"
+HOOK_ENV=(env -u XDG_RUNTIME_DIR -u LOTA_HOOK_REFRESH_SEC)
+write_status() {
+    mkdir -p "$HOOK_DIR"
+    printf 'LOTA_ATTESTED=1\nLOTA_OFFLINE=0\nLOTA_UPDATED=%s\n' "$1" \
+        >"$HOOK_DIR/lota-status"
+}
+verify_once() {
+    "${HOOK_ENV[@]}" LOTA_HOOK_TOKEN_DIR="$HOOK_DIR/" \
+        "$BASH" "$VERIFY" --once "$@"
+}
+reads() {
+    local want="$1" out
+    shift
+    out=$(verify_once "$@" 2>&1) || true
+    [[ "$out" == *" $want" ]] || {
+        echo "  got: $out"
+        return 1
+    }
+}
+write_status "$(date +%s)"
+check "verify-attested reads a fresh status as TRUSTED" reads TRUSTED
+write_status $(($(date +%s) - 181))
+check "verify-attested reads a status 181s old as stale" \
+    reads "OFFLINE (stale)"
+check "verify-attested --max-age 300 takes a status 181s old" \
+    reads TRUSTED --max-age 300
+check "verify-attested exits 2 on a stale status" \
+    exits_with 2 "${HOOK_ENV[@]}" LOTA_HOOK_TOKEN_DIR="$HOOK_DIR" \
+    "$BASH" "$VERIFY" --once
+# a status 25s old against 3 x the period the hook takes
+reads_refresh() {
+    local out
+    out=$("${HOOK_ENV[@]}" LOTA_HOOK_REFRESH_SEC="$1" \
+        LOTA_HOOK_TOKEN_DIR="$HOOK_DIR" "$BASH" "$VERIFY" --once 2>&1) ||
+        true
+    [[ "$out" == *" $2" ]] || {
+        echo "  got: $out"
+        return 1
+    }
+}
+write_status $(($(date +%s) - 25))
+check "verify-attested reads LOTA_HOOK_REFRESH_SEC=08 as 8" \
+    reads_refresh 08 "OFFLINE (stale)"
+check "verify-attested reads LOTA_HOOK_REFRESH_SEC=5s as 5" \
+    reads_refresh 5s "OFFLINE (stale)"
+check "verify-attested reads LOTA_HOOK_REFRESH_SEC=10 as 10" \
+    reads_refresh 10 TRUSTED
+write_status $(($(date +%s) - 200))
+check "verify-attested reads LOTA_HOOK_REFRESH_SEC=2147483648 as 60" \
+    reads_refresh 2147483648 "OFFLINE (stale)"
+check "verify-attested refuses --max-age 0" \
+    exits_with 64 "$BASH" "$VERIFY" --once --max-age 0
+
+finds_late_file() {
+    local log="$WORK_DIR/watch.log" pid ok=1
+    rm -rf "$HOOK_DIR"
+    "${HOOK_ENV[@]}" LOTA_HOOK_TOKEN_DIR="$HOOK_DIR" \
+        "$BASH" "$VERIFY" >"$log" 2>&1 &
+    pid=$!
+    sleep 2
+    write_status "$(date +%s)"
+    for _ in $(seq 1 50); do
+        grep -q ' TRUSTED$' "$log" && ok=0 && break
+        sleep 0.1
+    done
+    kill "$pid" 2>/dev/null
+    wait "$pid" 2>/dev/null || true
+    grep -q "watching $HOOK_DIR/lota-status" "$log" || ok=1
+    [[ $ok -eq 0 ]] || sed 's/^/  /' "$log"
+    return $ok
+}
+check "verify-attested finds a status written after it started" \
+    finds_late_file
+
 echo ""
 if [[ $failures -gt 0 ]]; then
     echo "[examples-cli] $failures check(s) failed"

@@ -26,7 +26,7 @@ verify-attested.sh
 .. code-block:: console
 
    $ examples/cs2/scenarios/verify-attested.sh [--interval SEC]
-         [--status-path PATH] [--once]
+         [--status-path PATH] [--max-age SEC] [--once]
 
 .. list-table::
    :header-rows: 1
@@ -41,6 +41,10 @@ verify-attested.sh
    * - ``--status-path PATH``
      - see below
      - The status file.
+   * - ``--max-age SEC``
+     - see below
+     - Oldest ``LOTA_UPDATED`` still read as a verdict, an integer of at
+       least 1.
    * - ``--once``
      -
      - Print the verdict once and exit with its code.
@@ -48,11 +52,18 @@ verify-attested.sh
      -
      - Print the usage and exit 0.
 
-Without ``--status-path`` the script takes the first of
-``$XDG_RUNTIME_DIR/lota-hook/lota-status``,
-``/run/user/<uid>/lota-hook/lota-status`` and
-``/tmp/lota-<uid>/lota-status`` that exists when it starts, and the last
-of them when none does. It does not look again later.
+Without ``--status-path`` each read takes the first ``lota-status`` that
+exists in ``$LOTA_HOOK_TOKEN_DIR``, ``$XDG_RUNTIME_DIR/lota-hook``
+(``/run/user/<uid>/lota-hook`` when ``XDG_RUNTIME_DIR`` is unset) and
+``/tmp/lota-<uid>``, the order in which the hook settles its token
+directory, and reads ``OFFLINE`` when none exists. A watcher started
+before the title picks the file up once the hook writes it.
+
+``--max-age`` defaults to three times the period the hook reads from
+``LOTA_HOOK_REFRESH_SEC``, 60 when that is unset or not positive, and to
+15 at least. A running hook rewrites the file about
+once in that period, so a ``LOTA_UPDATED`` older than ``--max-age``
+means that no hook writes it any more.
 
 The verdict is read in this order:
 
@@ -64,6 +75,8 @@ The verdict is read in this order:
      - Status file
    * - ``OFFLINE``
      - Missing, or ``LOTA_OFFLINE=1``.
+   * - ``OFFLINE (stale)``
+     - ``LOTA_UPDATED`` missing or older than ``--max-age``.
    * - ``TRUSTED``
      - ``LOTA_ATTESTED=1``.
    * - ``UNTRUSTED``
@@ -73,10 +86,11 @@ The verdict is read in this order:
 
 The hook zeroes the file when it loses the agent, so ``LOTA_OFFLINE`` is
 read first: a zeroed file would otherwise read as ``UNTRUSTED``. The
-script prints ``watching <path>, polling every <n>s (Ctrl-C to stop)``,
-two lines on the refresh of the hook, and then one line, ``<HH:MM:SS>
-<verdict>``, each time the verdict changes. ``--once`` prints one such
-line.
+script prints ``polling every <n>s (Ctrl-C to stop)`` and two lines on
+the refresh of the hook. It then prints ``watching <path>``, or
+``watching no status file``, each time the file it reads changes, and
+``<HH:MM:SS> <verdict>`` each time the verdict changes. ``--once`` prints
+one verdict line.
 
 .. list-table::
    :header-rows: 1
@@ -89,12 +103,13 @@ line.
    * - 1
      - ``--once`` and ``UNTRUSTED``.
    * - 2
-     - ``--once`` and ``OFFLINE``.
+     - ``--once`` and ``OFFLINE`` or ``OFFLINE (stale)``.
    * - 64
      - An unknown option, an option without its value, or an
-       ``--interval`` that is not an integer of at least 1.
+       ``--interval`` or ``--max-age`` that is not an integer of at
+       least 1.
 
-The hook leaves the status file in place when the title exits, so the
-last verdict stays after the title is gone. ``LOTA_UPDATED`` and
-``LOTA_PID`` in the file tell when, and by which process, it was written
-(see `Files <../../../Documentation/userspace-api/wine-hook.rst>`_).
+The hook leaves the status file in place when the title exits; the
+verdict turns ``OFFLINE (stale)`` once ``--max-age`` has passed since
+the last write (see
+`Files <../../../Documentation/userspace-api/wine-hook.rst>`_).

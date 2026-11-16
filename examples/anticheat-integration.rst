@@ -196,7 +196,9 @@ A reader of ``lota-status`` reads ``LOTA_OFFLINE`` before
 ``LOTA_ATTESTED``. When the hook loses the agent it writes
 ``LOTA_OFFLINE=1`` with the other fields at zero and removes the token
 files, so ``LOTA_ATTESTED`` alone reads a lost agent as a refusal. A
-missing file is offline too. The files are described in
+missing file is offline too, and so is one whose ``LOTA_UPDATED`` is
+several ``LOTA_HOOK_REFRESH_SEC`` periods old: the file stays after the
+title exits, and no hook rewrites it. The files are described in
 `the Wine hook <../Documentation/userspace-api/wine-hook.rst>`_, and
 `verify-attested.sh <cs2/scenarios/README.rst>`_ reads them this way.
 

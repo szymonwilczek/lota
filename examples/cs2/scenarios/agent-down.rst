@@ -43,22 +43,22 @@ socket unit are stopped. Like the daemon it opens the socket of each
 Running it
 ==========
 
-Start ``--test-signed`` as above and launch CS2 with the launch option of
-`Counter-Strike 2 under Proton <../README.rst>`_. Once the title runs,
-follow the verdict in a terminal with
-`verify-attested.sh <README.rst>`_. The watcher picks the status file
-when it starts: started before the hook has written the file, it watches
-``/tmp/lota-<uid>/lota-status`` and stays at ``OFFLINE``.
+Start ``--test-signed`` as above, follow the verdict in a terminal with
+`verify-attested.sh <README.rst>`_ and launch CS2 with the launch option
+of `Counter-Strike 2 under Proton <../README.rst>`_:
 
 .. code-block:: console
 
    $ examples/cs2/scenarios/verify-attested.sh
-   watching /run/user/<uid>/lota-hook/lota-status, polling every 1s
-       (Ctrl-C to stop)
+   polling every 1s (Ctrl-C to stop)
    <two lines on the refresh of the hook>
+   watching no status file
+   <time> OFFLINE
+   watching /run/user/<uid>/lota-hook/lota-status
    <time> TRUSTED
 
-The first line is wrapped here.
+The first two verdict lines appear only when the watcher starts before
+the hook has written the file.
 
 1. Stop the agent: ``Ctrl-C`` in the terminal of ``--test-signed``. The
    hook logs
@@ -87,7 +87,9 @@ The first line is wrapped here.
    files again, and the watcher prints ``TRUSTED``.
 
 3. Quit the title. The hook leaves the status file and the token files in
-   place, so the watcher keeps the last verdict.
+   place, and no hook rewrites them: the watcher keeps the last verdict
+   until ``--max-age``, three minutes by default, has passed since the
+   last write, and then prints ``OFFLINE (stale)``.
 
 What it shows
 =============
