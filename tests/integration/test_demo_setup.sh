@@ -80,6 +80,11 @@ check "the agent reads an empty lota.conf of the run" \
 check "that file is created empty" \
     says "$dry" 'install -m 0600 /dev/null /tmp/lota-demo.DRYRUN/lota.conf'
 
+dry=$(PATH="$STUB_BIN:$PATH" SUDO_USER=player SDL_VIDEODRIVER=dummy \
+    "$SETUP" --dry-run --no-build 2>&1 || true)
+check "the game under sudo keeps the SDL_ variables" \
+    says "$dry" 'sudo -u player env .* SDL_VIDEODRIVER=dummy .*trust_pong'
+
 if [[ -S /run/lota/lota.sock ]]; then
     echo "SKIP: signal checks (an agent socket exists on this host)"
 else

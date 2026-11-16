@@ -84,10 +84,10 @@ and the runtime directory of the run.
 7. **Game.** ``trust_pong --server <url> --game-id <game-id>`` runs in
    the foreground. Under ``sudo`` it runs as ``SUDO_USER`` with
    ``DISPLAY``, ``WAYLAND_DISPLAY``, ``XAUTHORITY``,
-   ``DBUS_SESSION_BUS_ADDRESS`` and ``XDG_RUNTIME_DIR``, the last one
-   defaulting to ``/run/user/<uid>``; otherwise it runs as root with the
-   ``XDG_RUNTIME_DIR`` of the runner, or the sandbox ``runtime/`` when
-   that is unset.
+   ``DBUS_SESSION_BUS_ADDRESS``, every exported ``SDL_*`` variable and
+   ``XDG_RUNTIME_DIR``, the last one defaulting to ``/run/user/<uid>``;
+   otherwise it runs as root with the ``XDG_RUNTIME_DIR`` of the runner,
+   or the sandbox ``runtime/`` when that is unset.
 
 Each producer heartbeat prints one line to ``logs/demo_anticheat.log``,
 with a ``reason="..."`` field when the server gave one:

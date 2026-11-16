@@ -470,6 +470,7 @@ launch_game() {
 	local user_runtime
 	local -a game_env
 	local -a cmd
+	local v
 
 	log "Step 7/7: launch trust_pong"
 	note "close the window or press Esc/Q to tear the demo down"
@@ -480,6 +481,9 @@ launch_game() {
 		"XAUTHORITY=${XAUTHORITY:-}"
 		"DBUS_SESSION_BUS_ADDRESS=${DBUS_SESSION_BUS_ADDRESS:-}"
 	)
+	for v in $(compgen -e SDL_); do
+		game_env+=("$v=${!v}")
+	done
 
 	demo_user="${SUDO_USER:-}"
 	if [ -n "$demo_user" ] && [ "$demo_user" != "root" ] &&
