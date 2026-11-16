@@ -22,6 +22,11 @@
 #include "attest_targets.h"
 #include "config.h"
 
+#define FIXTURE_STATUS                                                      \
+	(LOTA_STATUS_ATTESTED | LOTA_STATUS_TPM_OK | LOTA_STATUS_IOMMU_OK | \
+	 LOTA_STATUS_BPF_LOADED)
+#define FIXTURE_RENEW_SEC 60
+
 /*
  * Hand the IPC layer the publishers the configuration names.
  *
@@ -36,7 +41,7 @@
  */
 static void bind_configured_profiles(const struct lota_config *cfg,
 				     struct attest_target *targets, size_t max,
-				     size_t *count, uint64_t valid_until)
+				     size_t *count)
 {
 	int ret;
 
@@ -56,22 +61,37 @@ static void bind_configured_profiles(const struct lota_config *cfg,
 	 * It has no profile, server or CA: no client can select it and nothing
 	 * is dialled.
 	 */
-	for (size_t i = 0; i < *count; i++) {
+	for (size_t i = 0; i < *count; i++)
 		targets[i].attested = true;
-		targets[i].valid_until = valid_until;
-	}
 
 	if (*count == 0 && max > 0) {
 		memset(&targets[0], 0, sizeof(targets[0]));
 		snprintf(targets[0].label, sizeof(targets[0].label),
 			 "diagnostic fixture");
 		targets[0].attested = true;
-		targets[0].valid_until = valid_until;
 		*count = 1;
 		printf("Serving the simulated verdict under one synthetic publisher.\n");
 	}
 
 	ipc_set_profiles(&g_agent.ipc_ctx, targets, *count);
+}
+
+/*
+ * Renew the fixture verdict once FIXTURE_RENEW_SEC or less of it is left,
+ * to the longest token age a relying party accepts before clock skew.
+ */
+static void renew_fixture(struct attest_target *targets, size_t count,
+			  uint64_t *valid_until)
+{
+	uint64_t now = (uint64_t)time(NULL);
+
+	if (*valid_until > now + FIXTURE_RENEW_SEC)
+		return;
+
+	*valid_until = now + LOTA_SERVER_MAX_TOKEN_AGE_SEC;
+	for (size_t i = 0; i < count; i++)
+		targets[i].valid_until = *valid_until;
+	ipc_update_status(&g_agent.ipc_ctx, FIXTURE_STATUS, *valid_until);
 }
 
 int run_ipc_test_server(const struct lota_config *cfg)
@@ -83,7 +103,7 @@ int run_ipc_test_server(const struct lota_config *cfg)
 	static struct attest_target targets[LOTA_CONFIG_MAX_PROFILES];
 	size_t target_count;
 	int ret;
-	uint64_t valid_until;
+	uint64_t valid_until = 0;
 	printf("=== IPC Test Server (No TPM) ===\n\n");
 	printf("Starting IPC server for testing...\n");
 	ret = ipc_init_or_activate(&g_agent.ipc_ctx);
@@ -92,22 +112,13 @@ int run_ipc_test_server(const struct lota_config *cfg)
 			strerror(-ret));
 		return 1;
 	}
-	/*
-	 * Size the token the way the attestation loop does, so the relying
-	 * party accepts what the test server hands out; a token living
-	 * implausibly long is refused.
-	 */
-	valid_until = (uint64_t)(time(NULL) + LOTA_SERVER_MAX_TOKEN_AGE_SEC);
 
 	bind_configured_profiles(cfg, targets, LOTA_CONFIG_MAX_PROFILES,
-				 &target_count, valid_until);
+				 &target_count);
 	setup_container_listener(&g_agent.ipc_ctx, cfg);
 	setup_dbus(&g_agent.ipc_ctx);
 
-	ipc_update_status(&g_agent.ipc_ctx,
-			  LOTA_STATUS_ATTESTED | LOTA_STATUS_TPM_OK |
-				  LOTA_STATUS_IOMMU_OK | LOTA_STATUS_BPF_LOADED,
-			  valid_until);
+	renew_fixture(targets, target_count, &valid_until);
 	ipc_set_mode(&g_agent.ipc_ctx, LOTA_MODE_MONITOR);
 	ipc_record_attestation(&g_agent.ipc_ctx, true);
 
@@ -131,6 +142,7 @@ int run_ipc_test_server(const struct lota_config *cfg)
 	sdnotify_ready();
 
 	while (g_agent.running) {
+		renew_fixture(targets, target_count, &valid_until);
 		ipc_process(&g_agent.ipc_ctx, 1000);
 		dbus_process(g_agent.dbus_ctx, 0);
 	}
@@ -148,7 +160,7 @@ int run_signed_ipc_test_server(const struct lota_config *cfg)
 	static struct attest_target targets[LOTA_CONFIG_MAX_PROFILES];
 	size_t target_count;
 	int ret;
-	uint64_t valid_until;
+	uint64_t valid_until = 0;
 	printf("=== IPC Test Server (Signed Tokens) ===\n\n");
 
 	/* socket first, because it is the only thing here that can refuse */
@@ -198,25 +210,15 @@ int run_signed_ipc_test_server(const struct lota_config *cfg)
 	}
 	printf("AIK ready\n\n");
 
-	/*
-	 * size the token the way the attestation loop does, so the relying
-	 * party accepts what the test server hands out; a token living
-	 * implausibly long is refused
-	 */
-	valid_until = (uint64_t)(time(NULL) + LOTA_SERVER_MAX_TOKEN_AGE_SEC);
-
 	bind_configured_profiles(cfg, targets, LOTA_CONFIG_MAX_PROFILES,
-				 &target_count, valid_until);
+				 &target_count);
 	setup_container_listener(&g_agent.ipc_ctx, cfg);
 	setup_dbus(&g_agent.ipc_ctx);
 
 	ipc_set_tpm(&g_agent.ipc_ctx, &g_agent.tpm_ctx,
 		    (1U << 0) | (1U << 1) | (1U << LOTA_PCR_SELF));
 
-	ipc_update_status(&g_agent.ipc_ctx,
-			  LOTA_STATUS_ATTESTED | LOTA_STATUS_TPM_OK |
-				  LOTA_STATUS_IOMMU_OK | LOTA_STATUS_BPF_LOADED,
-			  valid_until);
+	renew_fixture(targets, target_count, &valid_until);
 	ipc_set_mode(&g_agent.ipc_ctx, LOTA_MODE_MONITOR);
 	ipc_record_attestation(&g_agent.ipc_ctx, true);
 
@@ -238,6 +240,7 @@ int run_signed_ipc_test_server(const struct lota_config *cfg)
 	sdnotify_ready();
 
 	while (g_agent.running) {
+		renew_fixture(targets, target_count, &valid_until);
 		ipc_process(&g_agent.ipc_ctx, 1000);
 		dbus_process(g_agent.dbus_ctx, 0);
 	}
