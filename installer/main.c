@@ -42,9 +42,11 @@ static void usage(FILE *out)
 		"  --verifier HOST        Verifier for the final self-check\n"
 		"  --verifier-port PORT   Verifier port\n"
 		"  --policy-pubkey FILE   Key the enforcement object is verified\n"
-		"                         against. Default: %s when a fleet\n"
-		"                         put its own key there, otherwise the\n"
-		"                         key the package shipped at %s\n"
+		"                         against. Default: the readable key\n"
+		"                         policy_pubkey in %s names,\n"
+		"                         else %s when a fleet put\n"
+		"                         its own key there, else the key the\n"
+		"                         package shipped at %s\n"
 		"  --selinux-module FILE  Compiled LOTA SELinux module\n"
 		"                         (default %s)\n"
 		"\n"
@@ -56,9 +58,10 @@ static void usage(FILE *out)
 		"  --unattended           For a package post-install hook:\n"
 		"                         implies --yes --plain, leaves the\n"
 		"                         boot path alone unless this host\n"
-		"                         opted in (%s)\n"
+		"                         opted in (%s\n"
 		"                         or LOTA_AUTO_BRINGUP=1), and stops\n"
-		"                         at the reboot checkpoint\n"
+		"                         at the reboot checkpoint when it\n"
+		"                         left a stage or needs a reboot\n"
 		"  --verity-manifest FILE Enable fs-verity on every object\n"
 		"                         listed in FILE (one absolute path\n"
 		"                         per line, '#' comments), then stop.\n"
@@ -78,7 +81,7 @@ static void usage(FILE *out)
 		"            2 usage, 10 reboot required (re-run to resume),\n"
 		"            11 boot-path stages left to a person\n"
 		"            (--unattended).\n",
-		PATH_POLICY_PUB_OVERRIDE, PATH_ENFORCEMENT_PUB,
+		PATH_LOTA_CONF, PATH_POLICY_PUB_OVERRIDE, PATH_ENFORCEMENT_PUB,
 		PATH_SELINUX_PP_DEFAULT, PATH_AUTO_BRINGUP);
 }
 
