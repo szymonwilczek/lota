@@ -62,12 +62,13 @@ and the runtime directory of the run.
 4. **Agent.** ``lota-agent --test-signed`` starts with ``LOTA_TCTI`` set
    to ``swtpm:host=127.0.0.1,port=<tpm-port>``, ``LOTA_AIK_META_PATH`` to
    ``aik/aik_meta.dat`` and ``XDG_RUNTIME_DIR`` to ``runtime/`` in the
-   sandbox. The agent takes the two ``LOTA_*`` variables on its one-shot
-   commands, ``--test-signed`` among them; the daemon and a continuous
-   ``--attest`` ignore them. The runner waits up to 20 seconds for
-   ``/run/lota/lota.sock``, then exports the public part of the AIK at
-   handle ``0x81010002`` to ``aik/aik.pem``, retrying for up to 30
-   seconds.
+   sandbox, and with ``--config lota.conf``, an empty file there, so the
+   ``/etc/lota/lota.conf`` of the host does not apply. The agent takes the
+   two ``LOTA_*`` variables on its one-shot commands, ``--test-signed``
+   among them; the daemon and a continuous ``--attest`` ignore them.
+   The runner waits up to 20 seconds for ``/run/lota/lota.sock``, then
+   exports the public part of the AIK at handle ``0x81010002`` to
+   ``aik/aik.pem``, retrying for up to 30 seconds.
 
 5. **Server.** ``demo_anticheat --print-runtime-objects`` writes
    ``runtime-manifest.txt``, and ``demo_server`` starts with the exported
@@ -144,6 +145,8 @@ The sandbox
 
    * - Path
      - Content
+   * - ``lota.conf``
+     - Empty configuration of the agent
    * - ``swtpm/``
      - TPM state and ``swtpm.pid``
    * - ``aik/aik_meta.dat``

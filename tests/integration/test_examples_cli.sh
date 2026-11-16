@@ -101,6 +101,38 @@ names_missing_openssl() {
 }
 check "ci-gate run.sh names a missing openssl" names_missing_openssl
 
+# the agent run.sh starts reads an empty lota.conf of the run
+printf '#!/bin/sh\nexit 0\n' >"$STUB_BIN/openssl"
+chmod 0755 "$STUB_BIN/openssl"
+for tool in mktemp seq sleep install kill rm mkdir cat grep tail; do
+    ln -s "$(command -v "$tool")" "$STUB_BIN/$tool"
+done
+cat >"$STUB_BIN/systemd-socket-activate" <<'STUB'
+#!/bin/bash
+conf=$(printf '%s\n' "$@" | grep -A1 -x -- --config | tail -n1)
+{ printf '%s\n' "$*"; [ -f "$conf" ] && [ ! -s "$conf" ] && echo empty; } \
+    >"$ACTIVATE_CALL"
+STUB
+chmod 0755 "$STUB_BIN/systemd-socket-activate"
+agent_reads_empty_conf() {
+    local pid
+    export ACTIVATE_CALL="$WORK_DIR/activate.call"
+    rm -f "$ACTIVATE_CALL"
+    PATH="$STUB_BIN" LOTA_BUILD_DIR="$BUILD_DIR" TPM_PORT=1 \
+        "$BASH" "$REPO_DIR/examples/ci-gate/run.sh" >/dev/null 2>&1 &
+    pid=$!
+    for _ in $(seq 1 50); do
+        [[ -s "$ACTIVATE_CALL" ]] && break
+        sleep 0.1
+    done
+    kill "$pid" 2>/dev/null
+    wait "$pid" 2>/dev/null || true
+    grep -q -- '--config /tmp/lota-ci-gate\.[^ ]*/lota.conf --test-signed' \
+        "$ACTIVATE_CALL" && grep -qx empty "$ACTIVATE_CALL"
+}
+check "ci-gate run.sh gives the agent an empty lota.conf" \
+    agent_reads_empty_conf
+
 # verify-attested.sh: a status left by a hook that is gone, and a file
 # the hook writes after the watcher started
 VERIFY="$REPO_DIR/examples/cs2/scenarios/verify-attested.sh"

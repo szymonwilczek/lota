@@ -276,10 +276,9 @@ It works in ``/tmp/lota-ci-gate.XXXXXX`` and prints one line per step:
 1. ``swtpm`` on TCP port ``TPM_PORT`` (42521), its control channel on the
    next port.
 2. ``lota-agent --test-signed`` under ``systemd-socket-activate`` on
-   ``lota.sock`` in the run directory, with the AIK metadata there too.
-   It names no configuration file, so the agent reads
-   ``/etc/lota/lota.conf`` when that exists and, when it cannot read it,
-   goes on with the defaults.
+   ``lota.sock`` in the run directory, with the AIK metadata there too,
+   and an empty ``lota.conf`` there as its configuration, so the
+   ``/etc/lota/lota.conf`` of the host does not apply.
 3. One run of the step, with no gate up, starts the agent and provisions
    the AIK, whose public key ``tpm2_readpublic`` then exports from handle
    ``0x81010002``.

@@ -67,11 +67,14 @@ SWTPM_PID=$!
 sleep 1
 
 echo "== 2/5 start lota-agent on a socket-activated path =="
-# The activated listener keeps the agent off /run/lota.
+# The activated listener keeps the agent off /run/lota, the empty config off
+# the host's /etc/lota/lota.conf.
+install -m 0600 /dev/null "$RUN_DIR/lota.conf"
 systemd-socket-activate -l "$RUN_DIR/lota.sock" \
 	-E LOTA_TCTI="$TCTI" \
 	-E LOTA_AIK_META_PATH="$RUN_DIR/aik_meta.dat" \
-	"$agent" --test-signed >"$RUN_DIR/agent.log" 2>&1 &
+	"$agent" --config "$RUN_DIR/lota.conf" --test-signed \
+	>"$RUN_DIR/agent.log" 2>&1 &
 AGENT_PID=$!
 
 for _ in $(seq 1 30); do

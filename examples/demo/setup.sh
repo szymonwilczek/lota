@@ -368,11 +368,13 @@ start_agent() {
 	local log_file
 
 	log "Step 4/7: start lota-agent against swtpm"
+	run_or_print install -m 0600 /dev/null "$TMP_DIR/lota.conf"
 	start_bg agent env \
 		LOTA_TCTI="$TCTI" \
 		LOTA_AIK_META_PATH="$AIK_DIR/aik_meta.dat" \
 		XDG_RUNTIME_DIR="$RUNTIME_DIR" \
-		"$BUILD_DIR/lota-agent" --test-signed
+		"$BUILD_DIR/lota-agent" --config "$TMP_DIR/lota.conf" \
+		--test-signed
 
 	if [ "$DRY_RUN" -eq 1 ]; then
 		return
