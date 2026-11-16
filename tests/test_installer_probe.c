@@ -232,29 +232,6 @@ static void test_cmdline_token(void)
 	PASS();
 }
 
-static void test_conf_key(void)
-{
-	TEST("conf scan finds an uncommented key = value line");
-	if (probe_conf_buf_has_key("# policy_pubkey = /x\n"
-				   "  policy_pubkey = /etc/lota/policy.pub\n",
-				   "policy_pubkey") != 1) {
-		FAIL("key not found");
-		return;
-	}
-	PASS();
-
-	TEST("conf scan ignores comments, prefixes and bare words");
-	if (probe_conf_buf_has_key("# policy_pubkey = /x\n", "policy_pubkey") !=
-		    0 ||
-	    probe_conf_buf_has_key("policy_pubkey_extra = /x\n",
-				   "policy_pubkey") != 0 ||
-	    probe_conf_buf_has_key("policy_pubkey\n", "policy_pubkey") != 0) {
-		FAIL("false positive");
-		return;
-	}
-	PASS();
-}
-
 static void write_text_file(const char *dir, const char *name, const char *val)
 {
 	char path[512];
@@ -1910,7 +1887,6 @@ int main(void)
 	test_hex_to_bytes();
 	test_cmdline_ima();
 	test_cmdline_token();
-	test_conf_key();
 	test_conf_profile_count();
 	test_read_text();
 	test_selfcheck_plan();

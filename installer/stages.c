@@ -20,6 +20,7 @@
 #include "run.h"
 #include "ui.h"
 #include "../include/lota_secure_boot.h"
+#include "../src/agent/config.h"
 #include "../src/agent/policy_pubkey.h"
 #include "../src/agent/profile.h"
 
@@ -296,32 +297,90 @@ void installer_trust_refusal(char *buf, size_t cap, const char *key,
 		 key, installer_trust_key_source_says(src), either, obj);
 }
 
-static const char *trust_key_in_use(const struct install_ctx *ctx,
-				    char *conf_buf, size_t conf_cap,
-				    enum trust_key_source *src,
-				    const char **configured)
+int installer_conf_pubkey(const char *conf_path, char *key, size_t cap)
 {
-	*configured = NULL;
-	if (probe_conf_value(PATH_LOTA_CONF, "policy_pubkey", conf_buf,
-			     conf_cap) == 1)
-		*configured = conf_buf;
+	struct lota_config *cfg = config_new();
+	int rc;
 
-	return installer_trust_key(ctx->opts.policy_pubkey, *configured,
-				   PATH_POLICY_PUB_OVERRIDE,
-				   PATH_ENFORCEMENT_PUB, src);
+	key[0] = '\0';
+	if (!cfg)
+		return -ENOMEM;
+	rc = config_load(cfg, conf_path);
+	if (rc == -ENOENT) {
+		rc = 0;
+	} else if (rc == 0 && cfg->policy_pubkey[0]) {
+		rc = -ENAMETOOLONG;
+		if (strlen(cfg->policy_pubkey) < cap) {
+			strcpy(key, cfg->policy_pubkey);
+			rc = 1;
+		}
+	}
+	config_free(cfg);
+	return rc;
+}
+
+enum stage_state installer_trust_named(const char *named,
+				       const char *conf_pubkey,
+				       const char *override_path,
+				       const char *packaged_path, char *note,
+				       size_t cap)
+{
+	enum trust_key_source src = TRUST_KEY_NONE;
+	const char *used;
+	char gone[PATH_MAX + 64] = "";
+
+	if (conf_pubkey && same_file(conf_pubkey, named)) {
+		snprintf(note, cap, "Signature verifies, %s names the key",
+			 PATH_LOTA_CONF);
+		return STAGE_DONE;
+	}
+
+	used = installer_trust_key(NULL, conf_pubkey, override_path,
+				   packaged_path, &src);
+	if (conf_pubkey && used != conf_pubkey)
+		snprintf(gone, sizeof(gone),
+			 " It names %s, which is not readable.", conf_pubkey);
+	if (!used)
+		snprintf(note, cap,
+			 "Signature verifies against the key you named. %s "
+			 "still needs the policy_pubkey line for it, and the "
+			 "agent has no key until then.%s",
+			 PATH_LOTA_CONF, gone);
+	else
+		snprintf(note, cap,
+			 "Signature verifies against the key you named. %s "
+			 "still needs the policy_pubkey line for it, and the "
+			 "agent verifies against %s (%s) until then.%s",
+			 PATH_LOTA_CONF, used,
+			 installer_trust_key_source_says(src), gone);
+	return STAGE_PENDING;
 }
 
 static enum stage_state st_trust_probe(struct install_ctx *ctx, char *note,
 				       size_t cap)
 {
 	enum trust_key_source src = TRUST_KEY_NONE;
+	const char *configured = NULL;
 	char conf_key[PATH_MAX];
-	const char *configured;
-	const char *key = trust_key_in_use(ctx, conf_key, sizeof(conf_key),
-					   &src, &configured);
+	const char *key;
 	char sig[512];
 	char out[4096];
 	int rc;
+
+	rc = installer_conf_pubkey(PATH_LOTA_CONF, conf_key, sizeof(conf_key));
+	if (rc < 0) {
+		snprintf(note, cap,
+			 "Cannot load %s (%s), and the agent fails to start on "
+			 "it. 'lota-agent --dump-config' names each line it "
+			 "refuses.",
+			 PATH_LOTA_CONF, strerror(-rc));
+		return STAGE_BLOCKED;
+	}
+	if (rc == 1)
+		configured = conf_key;
+	key = installer_trust_key(ctx->opts.policy_pubkey, configured,
+				  PATH_POLICY_PUB_OVERRIDE,
+				  PATH_ENFORCEMENT_PUB, &src);
 
 	snprintf(sig, sizeof(sig), "%s.sig", PATH_BPF_OBJ);
 
@@ -373,17 +432,9 @@ static enum stage_state st_trust_probe(struct install_ctx *ctx, char *note,
 			 installer_trust_key_source_says(src));
 		return STAGE_DONE;
 	}
-	rc = probe_conf_has_key(PATH_LOTA_CONF, "policy_pubkey");
-	if (rc == 1) {
-		snprintf(note, cap, "Signature verifies, %s names the key",
-			 PATH_LOTA_CONF);
-		return STAGE_DONE;
-	}
-	snprintf(note, cap,
-		 "Signature verifies against the key you named. %s still needs "
-		 "the policy_pubkey reference.",
-		 PATH_LOTA_CONF);
-	return STAGE_PENDING;
+	return installer_trust_named(ctx->opts.policy_pubkey, configured,
+				     PATH_POLICY_PUB_OVERRIDE,
+				     PATH_ENFORCEMENT_PUB, note, cap);
 }
 
 static int st_trust_apply(struct install_ctx *ctx)

@@ -183,6 +183,37 @@ const char *installer_trust_fallback(const char *key, enum trust_key_source src,
 				     const char *packaged_path);
 
 /**
+ * installer_conf_pubkey() - policy_pubkey line of a configuration file.
+ * @conf_path: the file, read with the agent's parser.
+ * @key:       set to the path the last line in either spelling names,
+ *             readable or not.
+ * @cap:       size of @key.
+ *
+ * Return: 1 with @key set, 0 when the file or the line is missing,
+ * or the -errno of a file the agent fails to start on; the parser names
+ * each refused line on stderr.
+ */
+int installer_conf_pubkey(const char *conf_path, char *key, size_t cap);
+
+/**
+ * installer_trust_named() - State of the trust stage with --policy-pubkey.
+ * @named:         the --policy-pubkey path; its signature verifies.
+ * @conf_pubkey:   as for installer_trust_key().
+ * @override_path: as for installer_trust_key().
+ * @packaged_path: as for installer_trust_key().
+ * @note:          set to what the stage reports.
+ * @cap:           size of @note.
+ *
+ * Return: STAGE_DONE when @conf_pubkey is the same file as @named,
+ * otherwise STAGE_PENDING with the key the agent verifies against until then.
+ */
+enum stage_state installer_trust_named(const char *named,
+				       const char *conf_pubkey,
+				       const char *override_path,
+				       const char *packaged_path, char *note,
+				       size_t cap);
+
+/**
  * installer_trust_refusal() - Note for an object @key does not verify.
  * @buf:      output buffer.
  * @cap:      size of @buf.

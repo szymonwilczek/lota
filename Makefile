@@ -261,10 +261,11 @@ $(INITRAMFS_LOCK_BIN): src/initramfs/lota-pcr14-lock.c | $(BUILD_DIR)
 # profile directory the agent enrolls into.
 INSTALLER_SRCS := installer/main.c installer/stages.c installer/tui.c \
 	installer/ui.c installer/run.c installer/probe.c \
+	$(AGENT_DIR)/config.c $(AGENT_DIR)/io_utils.c $(AGENT_DIR)/pin.c \
 	$(AGENT_DIR)/policy_pubkey.c $(AGENT_DIR)/profile.c
 $(INSTALLER_BIN): $(INSTALLER_SRCS) installer/install.h installer/probe.h \
 		installer/run.h installer/tui.h installer/ui.h \
-		$(AGENT_DIR)/profile.h | $(BUILD_DIR)
+		$(AGENT_DIR)/config.h $(AGENT_DIR)/profile.h | $(BUILD_DIR)
 	$(QUIET_CC)
 	$(Q)$(CC) $(CFLAGS) -DLOTA_INSTALL_VERSION=\"$(LOTA_VERSION_STRING)\" \
 		-o $@ $(INSTALLER_SRCS) -pie $(HARDENING_LDFLAGS) -lbpf -lcrypto
@@ -1207,6 +1208,7 @@ TEST_STARTUP_SRCS := $(AGENT_DIR)/startup_policy.c $(TEST_LOADER_SRCS) $(TEST_CO
 	$(AGENT_DIR)/policy_pubkey.c $(AGENT_DIR)/exit_status.c
 TEST_TPM_SRCS := $(addprefix $(AGENT_DIR)/,tpm.c tpm_errno.c seal_envelope.c profile.c)
 TEST_INSTALLER_SRCS := installer/stages.c installer/probe.c installer/run.c installer/ui.c \
+	$(AGENT_DIR)/config.c $(AGENT_DIR)/io_utils.c $(AGENT_DIR)/pin.c \
 	$(AGENT_DIR)/policy_pubkey.c $(AGENT_DIR)/profile.c
 
 $(BUILD_DIR)/test_agent_bench_file: $(AGENT_DIR)/bench.c $(AGENT_DIR)/io_utils.c

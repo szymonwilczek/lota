@@ -371,49 +371,6 @@ int probe_selinux_tpm_label(void);
 int probe_cert_days_left(const char *der_path, int *days_left);
 
 /**
- * probe_conf_buf_has_key() - Whether a configuration sets a key.
- * @buf: configuration text.
- * @key: exact key.
- *
- * Return: 1 when a "key = value" line exists, otherwise 0.
- */
-int probe_conf_buf_has_key(const char *buf, const char *key);
-
-/**
- * probe_conf_buf_value() - Value of a configuration key.
- * @buf: configuration text.
- * @key: exact key.
- * @out: receives the value.
- * @cap: size of @out.
- *
- * Return: 1, or 0 with @out empty when the key is absent, empty or its
- * value does not fit.
- */
-int probe_conf_buf_value(const char *buf, const char *key, char *out,
-			 size_t cap);
-
-/**
- * probe_conf_value() - probe_conf_buf_value() on a file.
- * @conf_path: configuration file.
- * @key:       exact key.
- * @out:       receives the value.
- * @cap:       size of @out.
- *
- * Return: as probe_conf_buf_value(); 0 when the file cannot be read.
- */
-int probe_conf_value(const char *conf_path, const char *key, char *out,
-		     size_t cap);
-
-/**
- * probe_conf_has_key() - probe_conf_buf_has_key() on a file.
- * @conf_path: configuration file.
- * @key:       exact key.
- *
- * Return: 1, 0, or -errno.
- */
-int probe_conf_has_key(const char *conf_path, const char *key);
-
-/**
  * probe_conf_buf_profile_count() - Number of [profile "name"] sections.
  * @buf: configuration text.
  *

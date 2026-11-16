@@ -8,6 +8,8 @@
  * Keys are real files in a temporary directory.
  * The refusal names the key the agent would fall back to, or none when the
  * failing key is the packaged one.
+ * With --policy-pubkey the stage passes only on a policy_pubkey line of the
+ * configuration that names that key, read with the agent's parser.
  */
 
 #include <fcntl.h>
@@ -23,6 +25,7 @@ static char dir[] = "/tmp/lota-trust-key-XXXXXX";
 static char conf_key[256];
 static char override_key[256];
 static char packaged_key[256];
+static char conf_path[256];
 
 static int write_file(const char *path)
 {
@@ -35,6 +38,22 @@ static int write_file(const char *path)
 		return -1;
 	}
 	fputs("key\n", f);
+	fclose(f);
+	return 0;
+}
+
+static int write_conf(const char *text)
+{
+	int fd =
+		open(conf_path, O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0600);
+	FILE *f = fd < 0 ? NULL : fdopen(fd, "w");
+
+	if (!f) {
+		if (fd >= 0)
+			close(fd);
+		return -1;
+	}
+	fputs(text, f);
 	fclose(f);
 	return 0;
 }
@@ -287,6 +306,96 @@ static void test_a_named_key_falls_back_to_what_the_agent_resolves(void)
 	PASS();
 }
 
+/* the agent takes the last line in either spelling, readable or not */
+static void test_the_conf_line_is_the_agents_last_one(void)
+{
+	char text[1024];
+	char key[256];
+	int rc;
+
+	TEST("policy_pubkey: the last line in either spelling");
+	snprintf(text, sizeof(text),
+		 "policy_pubkey = %s\npolicy-pubkey = %s/gone.pub\n", conf_key,
+		 dir);
+	if (write_conf(text)) {
+		FAIL("write");
+		return;
+	}
+	rc = installer_conf_pubkey(conf_path, key, sizeof(key));
+	if (rc != 1 || !strstr(key, "/gone.pub")) {
+		FAIL(key);
+		return;
+	}
+	PASS();
+
+	TEST("policy_pubkey: none without a line or a file");
+	if (write_conf("log_level = info\n") ||
+	    installer_conf_pubkey(conf_path, key, sizeof(key)) != 0 || key[0]) {
+		FAIL("a line was found");
+		return;
+	}
+	unlink(conf_path);
+	if (installer_conf_pubkey(conf_path, key, sizeof(key)) != 0) {
+		FAIL("a missing file is an error");
+		return;
+	}
+	PASS();
+
+	TEST("policy_pubkey: a file the agent refuses is an error");
+	if (write_conf("no_such_key = 1\n") ||
+	    installer_conf_pubkey(conf_path, key, sizeof(key)) >= 0) {
+		FAIL("refused file read as a configuration");
+		return;
+	}
+	unlink(conf_path);
+	PASS();
+}
+
+/* without the line the stage is pending, even when the key is the fallback */
+static void test_a_named_key_needs_its_line(void)
+{
+	TEST("--policy-pubkey with no line is pending");
+	if (installer_trust_named(packaged_key, NULL, override_key,
+				  packaged_key, note,
+				  sizeof(note)) != STAGE_PENDING ||
+	    !says("still needs the policy_pubkey line") ||
+	    !says(override_key)) {
+		FAIL(note);
+		return;
+	}
+	PASS();
+
+	TEST("--policy-pubkey named by the line is done");
+	if (installer_trust_named(conf_key, conf_key, override_key,
+				  packaged_key, note,
+				  sizeof(note)) != STAGE_DONE) {
+		FAIL(note);
+		return;
+	}
+	PASS();
+
+	TEST("--policy-pubkey with a line naming another key is pending");
+	if (installer_trust_named(override_key, conf_key, override_key,
+				  packaged_key, note,
+				  sizeof(note)) != STAGE_PENDING ||
+	    !says(conf_key)) {
+		FAIL(note);
+		return;
+	}
+	PASS();
+
+	TEST("--policy-pubkey with a line naming a gone key says so");
+	if (installer_trust_named(conf_key, "/nonexistent/gone.pub",
+				  override_key, packaged_key, note,
+				  sizeof(note)) != STAGE_PENDING ||
+	    !says("/nonexistent/gone.pub, which is not readable") ||
+	    !says(override_key)) {
+		FAIL(note);
+		return;
+	}
+	PASS();
+}
+
 int main(void)
 {
 	static void (*const tests[])(void) = {
@@ -302,6 +411,8 @@ int main(void)
 		test_a_configured_key_falls_through_to_the_override,
 		test_the_override_falls_through_to_the_package,
 		test_a_named_key_falls_back_to_what_the_agent_resolves,
+		test_the_conf_line_is_the_agents_last_one,
+		test_a_named_key_needs_its_line,
 	};
 	size_t i;
 
@@ -314,6 +425,7 @@ int main(void)
 	snprintf(conf_key, sizeof(conf_key), "%s/configured.pub", dir);
 	snprintf(override_key, sizeof(override_key), "%s/policy.pub", dir);
 	snprintf(packaged_key, sizeof(packaged_key), "%s/enforcement.pub", dir);
+	snprintf(conf_path, sizeof(conf_path), "%s/lota.conf", dir);
 	if (write_file(conf_key) || write_file(override_key) ||
 	    write_file(packaged_key)) {
 		perror("write");
