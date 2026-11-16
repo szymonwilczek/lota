@@ -12,6 +12,7 @@ import (
 	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
+	"math"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -601,13 +602,96 @@ func TestState_VerdictSeqCountsEveryVerdict(t *testing.T) {
 		return st
 	}
 
-	s.recordVerdictWithLicense("", hash, verdictUntrust, "", "first")
+	s.recordVerdict("", hash, verdictUntrust, "", "first", &lachHeader{})
 	first := state()
-	s.recordVerdictWithLicense("", hash, verdictUntrust, "", "second")
+	s.recordVerdict("", hash, verdictUntrust, "", "second", &lachHeader{})
 	second := state()
 
 	if first.VerdictSeq == 0 || second.VerdictSeq != first.VerdictSeq+1 {
 		t.Fatalf("verdict_seq = %d then %d, want n then n+1",
 			first.VerdictSeq, second.VerdictSeq)
+	}
+}
+
+func gameState(t *testing.T, s *demoServer) stateResponse {
+	t.Helper()
+	url := "/state?game_id=" + testGameID
+	r := httptest.NewRequest(http.MethodGet, url, nil)
+	w := httptest.NewRecorder()
+	s.handleState(w, r)
+	var st stateResponse
+	if err := json.NewDecoder(w.Body).Decode(&st); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	return st
+}
+
+/* only a packet that proved something changes /state or a session */
+func TestHeartbeat_UnverifiedPacketLeavesNoState(t *testing.T) {
+	key, _ := rsa.GenerateKey(rand.Reader, 2048)
+	other, _ := rsa.GenerateKey(rand.Reader, 2048)
+	s := newTestServer(t, key)
+
+	for i := range 2 {
+		pkt := newSignedHeartbeat(t, other, func(h *lachHeader) {
+			h.sessionID[0] = byte(0xA0 + i)
+		})
+		r := decodeVerdict(t, postHeartbeat(s, pkt))
+		if r.State != verdictUntrust {
+			t.Fatalf("junk token: state=%s", r.State)
+		}
+	}
+	unknown := newSignedHeartbeat(t, key, func(h *lachHeader) {
+		h.gameIDHash = computeGameBindingHash("other-game",
+			testAnticheatExeDigest)
+	})
+	_ = decodeVerdict(t, postHeartbeat(s, unknown))
+	stale := newSignedHeartbeat(t, other, func(h *lachHeader) {
+		h.timestamp = uint64(time.Now().Unix()) + 120
+	})
+	_ = decodeVerdict(t, postHeartbeat(s, stale))
+
+	if st := gameState(t, s); st.State != "PENDING" {
+		t.Fatalf("/state = %s after unverified packets", st.State)
+	}
+	if len(s.verdict) != 0 || len(s.sessions) != 0 {
+		t.Fatalf("verdicts %d, sessions %d, want none",
+			len(s.verdict), len(s.sessions))
+	}
+}
+
+func TestHeartbeat_FailedTokenKeepsSessionSequence(t *testing.T) {
+	key, _ := rsa.GenerateKey(rand.Reader, 2048)
+	other, _ := rsa.GenerateKey(rand.Reader, 2048)
+	s := newTestServer(t, key)
+	post := func(pkt []byte) heartbeatResponse {
+		return decodeVerdict(t, postHeartbeat(s, pkt))
+	}
+
+	first := newSignedHeartbeat(t, key, nil)
+	if r := post(first); r.State != verdictTrusted {
+		t.Fatalf("first: state=%s reason=%s", r.State, r.Reason)
+	}
+	forged := newSignedHeartbeat(t, other, func(h *lachHeader) {
+		h.sequence = math.MaxUint32
+	})
+	if r := post(forged); r.State != verdictUntrust {
+		t.Fatalf("forged: state=%s", r.State)
+	}
+	if st := gameState(t, s); st.State != verdictUntrust {
+		t.Fatalf("/state = %s after a failed token", st.State)
+	}
+	for _, st := range s.sessions {
+		if st.lastSeq != 1 {
+			t.Fatalf("lastSeq = %d after a failed token, want 1",
+				st.lastSeq)
+		}
+	}
+
+	next := newSignedHeartbeat(t, key, func(h *lachHeader) {
+		h.sequence = 2
+	})
+	if r := post(next); r.State != verdictTrusted {
+		t.Fatalf("next: state=%s reason=%s", r.State, r.Reason)
 	}
 }

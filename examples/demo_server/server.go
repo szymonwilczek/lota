@@ -50,6 +50,7 @@ type sessionState struct {
 	lastReason    string // repeated by /state, empty when trusted
 	updatedAt     time.Time
 	verdictSeq    uint64 // verdicts recorded for a game; 0 for a session
+	verified      bool   // a session that passed a token check
 }
 
 type demoServer struct {
