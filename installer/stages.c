@@ -973,7 +973,7 @@ static int agent_start_failed(void)
 	return run_capture(failed, out, sizeof(out)) == 0;
 }
 
-static void read_service_state(struct probe_service_state *s)
+void install_service_state(struct probe_service_state *s)
 {
 	s->agent_active = agent_service_active();
 	s->agent_enabled = unit_enabled("lota-agent.service");
@@ -1012,7 +1012,7 @@ static enum stage_state st_agent_probe(struct install_ctx *ctx, char *note,
 
 	(void)ctx;
 
-	read_service_state(&state);
+	install_service_state(&state);
 	return probe_agent_service_stage(&state, note, cap);
 }
 
@@ -1675,6 +1675,21 @@ void install_reboot_required(char *buf, size_t cap, const char *note)
 	snprintf(buf, cap,
 		 "Reboot is required before the install can continue: %s%s",
 		 note ? note : "", stop ? "" : ".");
+}
+
+const char *install_resume_start(const struct probe_service_state *s)
+{
+	if (s->agent_enabled)
+		return "After the reboot the agent starts with the boot, "
+		       "re-measures into a fresh PCR 14, and attests again. "
+		       "Nothing else is needed.";
+	if (s->socket_enabled)
+		return "After the reboot the agent starts on the first "
+		       "connection to lota-agent.socket, re-measures into a "
+		       "fresh PCR 14, and attests again.";
+	return "Nothing starts the agent after the reboot: neither "
+	       "lota-agent.service nor lota-agent.socket is enabled. Run "
+	       "'sudo lota-install' to enable it.";
 }
 
 void install_stage_waits_reboot(struct install_ctx *ctx, int stage)

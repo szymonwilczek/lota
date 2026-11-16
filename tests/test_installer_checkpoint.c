@@ -23,6 +23,9 @@
  * own, and stage notes mostly end in a full stop already. The checkpoint names
  * the stages that wait for the boot, and says the run changed the boot chain
  * only when it did: a floor configured before the run is not its change.
+ *
+ * --resume says what starts the agent after its reboot from the units that
+ * are enabled, and says so when nothing does.
  */
 
 #include <stdio.h>
@@ -32,6 +35,7 @@
 
 #include "test.h"
 #include "../installer/install.h"
+#include "../installer/probe.h"
 #include "../installer/run.h"
 
 static char note[4096];
@@ -416,6 +420,42 @@ static void test_a_rebuilt_initramfs_is_a_change(void)
 	PASS();
 }
 
+static void test_resume_names_what_starts_the_agent(void)
+{
+	struct probe_service_state st;
+	const char *say;
+
+	TEST("resume: an enabled service starts the agent with the boot");
+	memset(&st, 0, sizeof(st));
+	st.agent_enabled = 1;
+	st.socket_enabled = 1;
+	say = install_resume_start(&st);
+	if (!strstr(say, "starts with the boot") || strstr(say, "socket")) {
+		FAIL(say);
+		return;
+	}
+	PASS();
+
+	TEST("resume: a socket alone starts it on the first connection");
+	st.agent_enabled = 0;
+	say = install_resume_start(&st);
+	if (!strstr(say, "first connection to lota-agent.socket")) {
+		FAIL(say);
+		return;
+	}
+	PASS();
+
+	TEST("resume: with neither enabled nothing starts the agent");
+	st.socket_enabled = 0;
+	say = install_resume_start(&st);
+	if (!strstr(say, "Nothing starts the agent") ||
+	    !strstr(say, "sudo lota-install")) {
+		FAIL(say);
+		return;
+	}
+	PASS();
+}
+
 /* Set once the child says its TERM trap is in place */
 static int child_ready;
 
@@ -494,6 +534,7 @@ int main(void)
 	test_only_a_boot_path_stage_waits_for_the_reboot();
 	test_a_configured_floor_is_no_change();
 	test_a_rebuilt_initramfs_is_a_change();
+	test_resume_names_what_starts_the_agent();
 	test_an_aborted_command_is_not_a_success();
 
 	printf("\nPassed: %d / %d\n", tests_passed, tests_run);

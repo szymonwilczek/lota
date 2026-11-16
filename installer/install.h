@@ -266,6 +266,23 @@ void install_stage_waits_reboot(struct install_ctx *ctx, int stage);
  */
 void install_reboot_note(char *buf, size_t cap, const struct install_ctx *ctx);
 
+struct probe_service_state;
+
+/**
+ * install_service_state() - Read the agent, socket and attest unit states.
+ * @s: receives the states.
+ */
+void install_service_state(struct probe_service_state *s);
+
+/**
+ * install_resume_start() - What starts the agent after a --resume reboot.
+ * @s: the unit states.
+ *
+ * Return: a sentence for the enabled service, else the enabled socket,
+ * else one that says nothing starts the agent.
+ */
+const char *install_resume_start(const struct probe_service_state *s);
+
 /**
  * install_stage_result() - Outcome a stage reports.
  * @st:      the stage's latest probe verdict.

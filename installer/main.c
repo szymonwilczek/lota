@@ -416,15 +416,14 @@ static int do_verity_manifest(struct install_ctx *ctx)
 static int do_resume(struct install_ctx *ctx)
 {
 	const char *const argv[] = { "systemctl", "reboot", NULL };
+	struct probe_service_state state;
 
 	ui_text(&ctx->ui,
 		"Resuming LOTA means rebooting. When the agent paused it "
 		"poisoned PCR 14, and that slot only clears on a hardware "
 		"reset - so same-boot re-attestation is impossible by design.");
-	ui_text(&ctx->ui,
-		"After the reboot the agent starts on its own (socket-"
-		"activated), re-measures into a fresh PCR 14, and attests "
-		"again. Nothing else is needed.");
+	install_service_state(&state);
+	ui_text(&ctx->ui, "%s", install_resume_start(&state));
 	ui_text(&ctx->ui,
 		"A host left paused still boots normally; the agent simply "
 		"refuses to run until then (fail-closed), so pausing never "
