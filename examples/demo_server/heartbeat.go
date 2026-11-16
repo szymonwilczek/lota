@@ -114,12 +114,13 @@ func (s *demoServer) handleHeartbeat(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if s.aik == nil {
+		const reason = "no AIK configured"
 		s.recordVerdict(sessionHex, gameHashHex,
-			verdictReject, game.licenseID, "no AIK configured", nil)
+			verdictReject, game.licenseID, reason, nil)
 		logf("session=%s seq=%d state=REJECT reason=%q",
-			sessionHex, hdr.sequence, "server has no AIK configured")
+			sessionHex, hdr.sequence, reason)
 		writeJSON(w, http.StatusServiceUnavailable, heartbeatResponse{
-			State: verdictReject, Reason: "no AIK configured",
+			State: verdictReject, Reason: reason,
 		})
 		return
 	}
@@ -137,13 +138,13 @@ func (s *demoServer) handleHeartbeat(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if claims.Flags != hdr.lotaFlags {
+		const reason = "header flags do not match signed token"
 		s.recordVerdict(sessionHex, gameHashHex, verdictUntrust,
-			game.licenseID,
-			"header flags do not match signed token", hdr)
+			game.licenseID, reason, hdr)
 		logf("session=%s seq=%d state=UNTRUSTED reason=%q",
-			sessionHex, hdr.sequence, "flag mismatch")
+			sessionHex, hdr.sequence, reason)
 		writeJSON(w, http.StatusOK, heartbeatResponse{
-			State: verdictUntrust, Reason: "header flags do not match signed token",
+			State: verdictUntrust, Reason: reason,
 		})
 		return
 	}

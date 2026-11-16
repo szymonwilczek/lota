@@ -15,6 +15,8 @@ import (
 	"math"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -323,6 +325,51 @@ func TestHeartbeat_UntrustedOnFlagMismatch(t *testing.T) {
 	if resp.State != verdictUntrust ||
 		resp.Reason != "header flags do not match signed token" {
 		t.Fatalf("state=%s reason=%s", resp.State, resp.Reason)
+	}
+}
+
+// stdoutOf returns what f prints with logf.
+func stdoutOf(t *testing.T, f func()) string {
+	t.Helper()
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("pipe: %v", err)
+	}
+	saved := os.Stdout
+	os.Stdout = w
+	f()
+	os.Stdout = saved
+	w.Close()
+	var out bytes.Buffer
+	_, _ = out.ReadFrom(r)
+	r.Close()
+	return out.String()
+}
+
+func TestHeartbeat_LogsTheReasonItAnswers(t *testing.T) {
+	key, _ := rsa.GenerateKey(rand.Reader, 2048)
+	for _, tc := range []struct {
+		name  string
+		setup func(s *demoServer, pkt []byte)
+	}{
+		{"no AIK", func(s *demoServer, _ []byte) { s.aik = nil }},
+		{"flag mismatch", func(_ *demoServer, pkt []byte) {
+			pkt[28] ^= 0x01
+		}},
+	} {
+		s := newTestServer(t, key)
+		pkt := newSignedHeartbeat(t, key, nil)
+		tc.setup(s, pkt)
+
+		var resp heartbeatResponse
+		log := stdoutOf(t, func() {
+			resp = decodeVerdict(t, postHeartbeat(s, pkt))
+		})
+		want := "reason=" + strconv.Quote(resp.Reason)
+		if resp.Reason == "" || !strings.Contains(log, want) {
+			t.Fatalf("%s: answered %q, logged %q",
+				tc.name, resp.Reason, log)
+		}
 	}
 }
 
