@@ -74,10 +74,6 @@ Running
    * - ``-P``, ``--protect-self``
      -
      - Put the process in the protected set of the agent first.
-   * - ``-F``, ``--require-full-image``
-     -
-     - Add ``LOTA_FLAG_IMAGE_FULLY_MEASURED`` to ``required_flags`` of the
-       session.
    * - ``-T``, ``--tamper-marker PATH``
      - none
      - Corrupt each heartbeat sent while ``PATH`` exists.
@@ -171,10 +167,9 @@ and exits 3 with ``demo_anticheat: --protect-self: cannot reach the agent
 connection stays open for the life of the process, which keeps it in the
 set.
 
-``--require-full-image`` changes only the state of the session, which
-the producer does not print: its lines and exit code stay the verdict of
-the server. ``demo_server -require-full-image`` makes the same demand on
-the server.
+The producer demands no token flags of its own: its lines and exit code
+are the verdict of the server, and ``demo_server -require-full-image``
+makes a server demand ``LOTA_FLAG_IMAGE_FULLY_MEASURED``.
 
 The runtime manifest
 ====================
