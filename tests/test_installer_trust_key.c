@@ -10,6 +10,7 @@
  * failing key is the packaged one.
  * With --policy-pubkey the stage passes only on a policy_pubkey line of the
  * configuration that names that key, read with the agent's parser.
+ * The line the installer writes for it goes above the profile sections.
  */
 
 #include <fcntl.h>
@@ -396,6 +397,42 @@ static void test_a_named_key_needs_its_line(void)
 	PASS();
 }
 
+/* the line goes above the profiles, and the agent reads it back */
+static void test_the_line_is_written_where_the_agent_reads_it(void)
+{
+	char text[1024];
+	char key[256];
+
+	TEST("policy_pubkey written above a profile section");
+	snprintf(text, sizeof(text),
+		 "policy_pubkey = %s\n\n[profile \"demo\"]\n"
+		 "ca = 192.0.2.10\nca_cert = /etc/lota/demo-ca.crt\n"
+		 "verifier = 192.0.2.10\n",
+		 conf_key);
+	if (write_conf(text) ||
+	    installer_conf_set_pubkey(conf_path, override_key) != 0) {
+		FAIL("not written");
+		return;
+	}
+	if (installer_conf_pubkey(conf_path, key, sizeof(key)) != 1 ||
+	    strcmp(key, override_key) != 0) {
+		FAIL(key);
+		return;
+	}
+	PASS();
+
+	TEST("policy_pubkey written to a missing configuration");
+	unlink(conf_path);
+	if (installer_conf_set_pubkey(conf_path, conf_key) != 0 ||
+	    installer_conf_pubkey(conf_path, key, sizeof(key)) != 1 ||
+	    strcmp(key, conf_key) != 0) {
+		FAIL(key);
+		return;
+	}
+	unlink(conf_path);
+	PASS();
+}
+
 int main(void)
 {
 	static void (*const tests[])(void) = {
@@ -413,6 +450,7 @@ int main(void)
 		test_a_named_key_falls_back_to_what_the_agent_resolves,
 		test_the_conf_line_is_the_agents_last_one,
 		test_a_named_key_needs_its_line,
+		test_the_line_is_written_where_the_agent_reads_it,
 	};
 	size_t i;
 

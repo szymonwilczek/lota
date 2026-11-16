@@ -21,6 +21,7 @@
 #include "ui.h"
 #include "../include/lota_secure_boot.h"
 #include "../src/agent/config.h"
+#include "../src/agent/io_utils.h"
 #include "../src/agent/policy_pubkey.h"
 #include "../src/agent/profile.h"
 
@@ -437,39 +438,115 @@ static enum stage_state st_trust_probe(struct install_ctx *ctx, char *note,
 				     PATH_ENFORCEMENT_PUB, note, cap);
 }
 
+/* the new line lands above the first section, where top-level keys go */
+static int conf_pubkey_text(const char *conf, const char *key, char *out,
+			    size_t cap)
+{
+	const char *at = conf;
+	const char *sep = "";
+	size_t n;
+
+	while (*at) {
+		const char *p = at + strspn(at, " \t");
+
+		if (*p == '[')
+			break;
+		at = strchrnul(at, '\n');
+		if (*at)
+			at++;
+	}
+	n = (size_t)(at - conf);
+	if (!*conf)
+		sep = "# LOTA agent configuration (created by lota-install)\n";
+	else if (!n)
+		sep = "";
+	else if (conf[n - 1] != '\n')
+		sep = "\n\n";
+	else if (n < 2 || conf[n - 2] != '\n')
+		sep = "\n";
+	if ((size_t)snprintf(out, cap,
+			     "%.*s%s# Key the enforcement object's signature "
+			     "is verified against.\npolicy_pubkey = %s\n%s%s",
+			     (int)n, conf, sep, key, *at ? "\n" : "",
+			     at) >= cap)
+		return -EOVERFLOW;
+	return 0;
+}
+
+int installer_conf_set_pubkey(const char *conf_path, const char *key)
+{
+	const size_t cap = 2 * LOTA_CONFIG_MAX_FILE + PATH_MAX;
+	char tmp[PATH_MAX];
+	char got[PATH_MAX];
+	struct stat sb;
+	char *conf;
+	char *out;
+	size_t len;
+	int rc;
+	int fd;
+
+	if (snprintf(tmp, sizeof(tmp), "%s.new", conf_path) >= (int)sizeof(tmp))
+		return -ENAMETOOLONG;
+	conf = calloc(1, LOTA_CONFIG_MAX_FILE + 1);
+	out = malloc(cap);
+	if (!conf || !out) {
+		rc = -ENOMEM;
+		goto out;
+	}
+	rc = lota_read_file_bounded(conf_path, conf, LOTA_CONFIG_MAX_FILE,
+				    &len);
+	if (rc < 0)
+		goto out;
+	conf[len] = '\0';
+	rc = conf_pubkey_text(conf, key, out, cap);
+	if (rc < 0)
+		goto out;
+
+	unlink(tmp);
+	fd = open(tmp, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC,
+		  0644);
+	if (fd < 0) {
+		rc = -errno;
+		goto out;
+	}
+	rc = 0;
+	if (stat(conf_path, &sb) == 0 &&
+	    (fchown(fd, sb.st_uid, sb.st_gid) != 0 ||
+	     fchmod(fd, sb.st_mode & 07777) != 0))
+		rc = -errno;
+	if (rc == 0)
+		rc = lota_write_full(fd, out, strlen(out));
+	if (rc == 0 && fsync(fd) != 0)
+		rc = -errno;
+	close(fd);
+	/* the agent reads the line back, or the file stays as it was */
+	if (rc == 0 && (installer_conf_pubkey(tmp, got, sizeof(got)) != 1 ||
+			strcmp(got, key) != 0))
+		rc = -EPROTO;
+	if (rc == 0) {
+		rc = lota_copy_xattr(conf_path, tmp, "security.selinux");
+		if (rc == -ENOENT)
+			rc = 0;
+	}
+	if (rc == 0 && rename(tmp, conf_path) != 0)
+		rc = -errno;
+	if (rc < 0)
+		unlink(tmp);
+out:
+	free(conf);
+	free(out);
+	return rc;
+}
+
 static int st_trust_apply(struct install_ctx *ctx)
 {
-	struct stat sb;
-	int fresh;
-	int fd;
-	FILE *f;
-
 	if (!ctx->opts.policy_pubkey)
 		return 0;
 
 	if (mkdir(PATH_LOTA_CONF_DIR, 0755) != 0 && errno != EEXIST)
 		return -errno;
-
-	fresh = stat(PATH_LOTA_CONF, &sb) != 0 || sb.st_size == 0;
-	/* fopen("a") would create 0666 */
-	fd = open(PATH_LOTA_CONF, O_WRONLY | O_CREAT | O_APPEND | O_CLOEXEC,
-		  0644);
-	if (fd < 0)
-		return -errno;
-	f = fdopen(fd, "a");
-	if (!f) {
-		close(fd);
-		return -errno;
-	}
-	if (fresh)
-		fprintf(f, "# LOTA agent configuration (created by "
-			   "lota-install)\n");
-	fprintf(f,
-		"\n# Key the enforcement object's signature is verified "
-		"against.\npolicy_pubkey = %s\n",
-		ctx->opts.policy_pubkey);
-	fclose(f);
-	return 0;
+	return installer_conf_set_pubkey(PATH_LOTA_CONF,
+					 ctx->opts.policy_pubkey);
 }
 
 /*

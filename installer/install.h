@@ -198,6 +198,21 @@ const char *installer_trust_fallback(const char *key, enum trust_key_source src,
 int installer_conf_pubkey(const char *conf_path, char *key, size_t cap);
 
 /**
+ * installer_conf_set_pubkey() - Add a policy_pubkey line to a configuration.
+ * @conf_path: the file; a missing one is created.
+ * @key:       the path the line names.
+ *
+ * The line goes above the first section, so it stays a top-level key and
+ * follows any earlier policy_pubkey line. The file keeps its owner, mode and
+ * SELinux label, and is replaced only when the agent's parser reads @key back
+ * from it.
+ *
+ * Return: 0, -EPROTO when the read-back fails, with @conf_path untouched,
+ * or another -errno.
+ */
+int installer_conf_set_pubkey(const char *conf_path, const char *key);
+
+/**
  * installer_trust_named() - State of the trust stage with --policy-pubkey.
  * @named:         the --policy-pubkey path; its signature verifies.
  * @conf_pubkey:   as for installer_trust_key().
