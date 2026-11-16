@@ -10,6 +10,7 @@
 #include <fcntl.h>
 #include <link.h>
 #include <signal.h>
+#include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -906,6 +907,156 @@ static void test_state_malformed_snapshot(void)
 	}
 	if (lota_ac_tick(s) != -EIO) {
 		FAIL("tick did not return -EIO");
+		lota_ac_shutdown(s);
+		return;
+	}
+	lota_ac_shutdown(s);
+	PASS();
+}
+
+/* the token's valid_until, rewritten in place */
+static int age_snapshot_token(const char *dir, uint64_t valid_until)
+{
+	char path[600];
+	uint8_t le[8];
+	FILE *f;
+	int ok;
+
+	snprintf(path, sizeof(path), "%s/%s", dir, LOTA_SNAPSHOT_FILE_NAME);
+	for (int i = 0; i < 8; i++)
+		le[i] = (uint8_t)(valid_until >> (8 * i));
+	f = fopen(path, "r+");
+	if (!f)
+		return -1;
+	ok = fseek(f, LOTA_SNAPSHOT_HEADER_SIZE + 8, SEEK_SET) == 0 &&
+	     fwrite(le, sizeof(le), 1, f) == 1;
+	return fclose(f) == 0 && ok ? 0 : -1;
+}
+
+/*
+ * A snapshot stays on disk after the agent stops. Its token says how long
+ * the verdict holds; past that the file is no verdict at all.
+ */
+static void test_state_expired_snapshot(void)
+{
+	char dir[512];
+
+	TEST("state: snapshot whose token expired -> ERROR, NO_AGENT");
+	snprintf(dir, sizeof(dir), "%s/expired", test_dir);
+	mkdir(dir, 0700);
+	write_mock_snapshot(dir, 0x07);
+	if (age_snapshot_token(dir, (uint64_t)time(NULL) - 1) < 0) {
+		FAIL("cannot age the snapshot");
+		return;
+	}
+
+	struct lota_ac_config cfg = {
+		.struct_size = sizeof(cfg),
+		.provider = LOTA_AC_PROVIDER_EAC,
+		.game_id = "test-expired",
+		.token_dir = dir,
+	};
+	struct lota_ac_session *s = lota_ac_init(&cfg);
+	if (!s) {
+		FAIL("init failed");
+		return;
+	}
+	if (lota_ac_get_state(s) != LOTA_AC_STATE_ERROR ||
+	    lota_ac_last_error() != LOTA_AC_ERR_NO_AGENT) {
+		FAIL("expected ERROR with LOTA_AC_ERR_NO_AGENT");
+		lota_ac_shutdown(s);
+		return;
+	}
+	if (lota_ac_tick(s) != -ESTALE) {
+		FAIL("tick did not return -ESTALE");
+		lota_ac_shutdown(s);
+		return;
+	}
+
+	write_mock_snapshot(dir, 0x07);
+	if (lota_ac_tick(s) != 0 ||
+	    lota_ac_get_state(s) != LOTA_AC_STATE_TRUSTED) {
+		FAIL("a renewed snapshot did not read TRUSTED");
+		lota_ac_shutdown(s);
+		return;
+	}
+	lota_ac_shutdown(s);
+	PASS();
+}
+
+/* Ticks @s with stderr in @path; returns the tick's result. */
+static int tick_capturing_stderr(struct lota_ac_session *s, const char *path)
+{
+	int saved, fd, ret;
+
+	fflush(stderr);
+	saved = dup(STDERR_FILENO);
+	fd = open(path, O_WRONLY | O_CREAT | O_TRUNC, 0600);
+	if (saved < 0 || fd < 0)
+		return -EIO;
+	dup2(fd, STDERR_FILENO);
+	close(fd);
+	ret = lota_ac_tick(s);
+	fflush(stderr);
+	dup2(saved, STDERR_FILENO);
+	close(saved);
+	return ret;
+}
+
+static bool file_contains(const char *path, const char *what)
+{
+	char buf[1024] = { 0 };
+	FILE *f = fopen(path, "r");
+	size_t n;
+
+	if (!f)
+		return false;
+	n = fread(buf, 1, sizeof(buf) - 1, f);
+	fclose(f);
+	buf[n] = '\0';
+	return strstr(buf, what) != NULL;
+}
+
+/*
+ * One warning per failure, not per session: a title that started before
+ * the hook wrote a snapshot still hears that the token later expired.
+ */
+static void test_state_each_snapshot_failure_warns_once(void)
+{
+	char dir[512], log[600];
+
+	TEST("state: a new snapshot failure warns once");
+	snprintf(dir, sizeof(dir), "%s/warn", test_dir);
+	snprintf(log, sizeof(log), "%s/warn.log", test_dir);
+	mkdir(dir, 0700);
+
+	struct lota_ac_config cfg = {
+		.struct_size = sizeof(cfg),
+		.provider = LOTA_AC_PROVIDER_EAC,
+		.game_id = "test-warn",
+		.token_dir = dir,
+	};
+	struct lota_ac_session *s = lota_ac_init(&cfg);
+	if (!s) {
+		FAIL("init failed");
+		return;
+	}
+
+	write_mock_snapshot(dir, 0x07);
+	if (age_snapshot_token(dir, (uint64_t)time(NULL) - 1) < 0) {
+		FAIL("cannot age the snapshot");
+		lota_ac_shutdown(s);
+		return;
+	}
+	if (tick_capturing_stderr(s, log) != -ESTALE ||
+	    !file_contains(log, "its token has expired")) {
+		FAIL("an expiry after a missing file was not warned of");
+		lota_ac_shutdown(s);
+		return;
+	}
+	if (tick_capturing_stderr(s, log) != -ESTALE ||
+	    file_contains(log, "snapshot read failed")) {
+		FAIL("the same failure was warned of twice");
 		lota_ac_shutdown(s);
 		return;
 	}
@@ -3100,6 +3251,8 @@ int main(void)
 	test_state_required_flags_met();
 	test_state_no_files();
 	test_state_malformed_snapshot();
+	test_state_expired_snapshot();
+	test_state_each_snapshot_failure_warns_once();
 
 	printf("\nHeartbeat Wire Format:\n");
 	test_heartbeat_game_id_hash_domain_separated();

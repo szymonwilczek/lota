@@ -134,7 +134,7 @@ struct lota_ac_session {
 	char token_path[512];
 	char snapshot_path[512];
 	char evidence_path[512];
-	int snapshot_warned;
+	int snapshot_error; /* last read failure warned of */
 
 	/* cached token (wire format) */
 	uint8_t token_buf[LOTA_AC_MAX_TOKEN];
@@ -175,10 +175,16 @@ static int read_snapshot(struct lota_ac_session *session)
 
 	uint32_t flags = read_le32_u(buf + 8);
 	uint32_t token_size = read_le32_u(buf + 12);
-	if (token_size == 0 || token_size > LOTA_AC_MAX_TOKEN)
+	if (token_size < LOTA_TOKEN_HEADER_SIZE ||
+	    token_size > LOTA_AC_MAX_TOKEN)
 		return -EIO;
 	if ((size_t)n < LOTA_SNAPSHOT_HEADER_SIZE + (size_t)token_size)
 		return -EIO;
+
+	/* the file stays on disk after the hook that renews it stops */
+	if (read_le64_u(buf + LOTA_SNAPSHOT_HEADER_SIZE + 8) <=
+	    (uint64_t)time(NULL))
+		return -ESTALE;
 
 	session->lota_flags = flags;
 	memcpy(session->token_buf, buf + LOTA_SNAPSHOT_HEADER_SIZE, token_size);
@@ -1309,20 +1315,24 @@ int lota_ac_tick(struct lota_ac_session *session)
 	} else {
 		int sret = read_snapshot(session);
 		if (sret < 0) {
-			if (!session->snapshot_warned) {
+			if (session->snapshot_error != sret) {
 				fprintf(stderr,
 					"lota-ac: snapshot read failed (%s): %s\n",
 					session->snapshot_path,
-					strerror(-sret));
-				session->snapshot_warned = 1;
+					sret == -ESTALE ?
+						"its token has expired" :
+						strerror(-sret));
+				session->snapshot_error = sret;
 			}
 			session->lota_flags = 0;
 			session->token_len = 0;
 			session->state = LOTA_AC_STATE_ERROR;
-			ac_fail(sret == -ENOENT ? LOTA_AC_ERR_NO_AGENT :
-						  LOTA_AC_ERR_MALFORMED);
+			ac_fail(sret == -ENOENT || sret == -ESTALE ?
+					LOTA_AC_ERR_NO_AGENT :
+					LOTA_AC_ERR_MALFORMED);
 			return sret;
 		}
+		session->snapshot_error = 0;
 	}
 
 	if (session->token_len > 0 || session->lota_flags != 0)
