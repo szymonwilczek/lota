@@ -69,7 +69,8 @@ lota-ci-attest
      - CA that verifies an ``https://`` gate.
    * - ``-t``, ``--timeout SEC``
      - 15
-     - Limit of each request to the gate.
+     - Limit of each request to the gate, a whole number of seconds
+       above 0.
    * - ``-h``, ``--help``
      -
      - Print the usage to stderr and exit 0.
@@ -104,8 +105,9 @@ Exit codes
    * - 0
      - The secret is in ``--out``; ``--help``.
    * - 2
-     - An unknown option, an option without its value, or no ``--gate``
-       or ``--out``. The usage follows on stderr.
+     - An unknown option, an option without its value, a bad
+       ``--timeout``, or no ``--gate`` or ``--out``. The usage follows on
+       stderr.
    * - 3
      - ``ci-attest: no LOTA agent on this host; cannot attest``.
    * - 4

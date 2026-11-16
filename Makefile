@@ -1638,7 +1638,8 @@ test-unit: all $(TEST_BINS)
 	else \
 		echo "SKIP: test_examples_optional_deps.sh (no pkg-config)"; \
 	fi
-	@if [ -x $(EXAMPLES_BUILD_DIR)/demo_anticheat ]; then \
+	@if [ -x $(EXAMPLES_BUILD_DIR)/demo_anticheat ] && \
+	    [ -x $(EXAMPLES_BUILD_DIR)/lota-ci-attest ]; then \
 		tests/integration/test_examples_cli.sh; \
 	else \
 		echo "SKIP: test_examples_cli.sh (run 'make examples')"; \

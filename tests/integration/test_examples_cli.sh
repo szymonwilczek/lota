@@ -20,13 +20,17 @@ REPO_DIR=$(cd "$(dirname "$0")/../.." && pwd)
 BUILD_DIR="${BUILD_DIR:-${LOTA_BUILD_DIR:-$REPO_DIR/build}}"
 EXAMPLES_DIR="$BUILD_DIR/examples"
 DEMO_AC="$EXAMPLES_DIR/demo_anticheat"
+CI_ATTEST="$EXAMPLES_DIR/lota-ci-attest"
 
-for f in "$DEMO_AC"; do
+for f in "$DEMO_AC" "$CI_ATTEST"; do
     if [[ ! -x "$f" ]]; then
         echo "[examples-cli] missing artifact: $f" >&2
         exit 2
     fi
 done
+
+WORK_DIR=$(mktemp -d)
+trap 'rm -rf "$WORK_DIR"' EXIT
 
 failures=0
 
@@ -58,6 +62,12 @@ check "demo_anticheat refuses LOTA_DEMO_INTERVAL_SEC=5s" \
       exits_with 64 env LOTA_DEMO_INTERVAL_SEC=5s "$DEMO_AC" --once
 check "demo_anticheat refuses LOTA_DEMO_INTERVAL_SEC=abc" \
       exits_with 64 env LOTA_DEMO_INTERVAL_SEC=abc "$DEMO_AC" --once
+
+for t in abc 0 -1 5s; do
+    check "lota-ci-attest refuses --timeout $t" \
+        exits_with 2 "$CI_ATTEST" --gate http://127.0.0.1:9 \
+        --out "$WORK_DIR/secret" --timeout "$t"
+done
 
 echo ""
 if [[ $failures -gt 0 ]]; then

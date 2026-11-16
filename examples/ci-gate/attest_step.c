@@ -389,9 +389,19 @@ int main(int argc, char **argv)
 		case 'c':
 			opts.ca_cert = optarg;
 			break;
-		case 't':
-			opts.timeout_sec = strtol(optarg, NULL, 10);
+		case 't': {
+			char *end;
+
+			errno = 0;
+			opts.timeout_sec = strtol(optarg, &end, 10);
+			if (end == optarg || *end != '\0' || errno == ERANGE ||
+			    opts.timeout_sec <= 0) {
+				fprintf(stderr, "ci-attest: bad --timeout %s\n",
+					optarg);
+				bad_usage = true;
+			}
 			break;
+		}
 		case 'h':
 			usage(argv[0]);
 			return 0;
