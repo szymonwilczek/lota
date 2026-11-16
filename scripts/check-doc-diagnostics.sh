@@ -83,38 +83,43 @@ def unescape(text):
 	return "".join(out)
 
 
-STRING = re.compile(r'"((?:[^"\\]|\\.)*)"')
+# One pass over the source: a quote inside a comment or a character literal
+# opens no string, so '"' cannot pair the literals after it wrongly.
+C_TOKEN = (r"//[^\n]*|/\*.*?\*/"
+           r"|'(?:[^'\\\n]|\\.)*'"
+           r'|"((?:[^"\\\n]|\\.)*)"')
+C_LEXER = re.compile(C_TOKEN, re.S)
+# Go adds raw strings; a rune lexes as a character literal.
+GO_LEXER = re.compile(C_TOKEN + r"|`([^`]*)`", re.S)
 # between adjacent literals: whitespace, comments, macro line continuations
 GAP = re.compile(r"(?:\s|\\\n|/\*.*?\*/|//[^\n]*\n)*", re.S)
 
 
 def c_messages(path, text):
 	messages = []
-	pos = 0
-	while True:
-		match = STRING.search(text, pos)
-		if not match:
-			break
-		parts = [unescape(match.group(1))]
+	parts = []
+	end = 0
+	for match in C_LEXER.finditer(text):
+		if match.group(1) is None:
+			continue
+		if parts and not GAP.fullmatch(text, end, match.start()):
+			messages.append("".join(parts))
+			parts = []
+		parts.append(unescape(match.group(1)))
 		end = match.end()
-		while True:
-			gap = GAP.match(text, end)
-			nxt = STRING.match(text, gap.end())
-			if not nxt:
-				break
-			parts.append(unescape(nxt.group(1)))
-			end = nxt.end()
+	if parts:
 		messages.append("".join(parts))
-		pos = end
 	return messages
 
 
-BACKTICK = re.compile(r"`([^`]*)`", re.S)
-
-
 def go_messages(path, text):
-	return ([unescape(m.group(1)) for m in STRING.finditer(text)]
-	        + [m.group(1) for m in BACKTICK.finditer(text)])
+	messages = []
+	for match in GO_LEXER.finditer(text):
+		if match.group(1) is not None:
+			messages.append(unescape(match.group(1)))
+		elif match.group(2) is not None:
+			messages.append(match.group(2))
+	return messages
 
 
 SPECIFIER = re.compile(r"%[-+ #0-9.*']*(?:hh|h|ll|l|L|z|j|t)?[a-zA-Z%]")
@@ -137,6 +142,7 @@ def message_table():
 	table = []
 	for path in tracked("src/*.c", "src/*.h", "src/*.go",
 	                    "tools/*.c", "tools/*.go",
+	                    "installer/*.c", "installer/*.h", "include/*.h",
 	                    "examples/*.c", "examples/*.h", "examples/*.go"):
 		text = open(path, encoding="utf-8", errors="replace").read()
 		reader = go_messages if path.endswith(".go") else c_messages
@@ -146,6 +152,8 @@ def message_table():
 			table.append(message)
 	# shell scripts and makefile recipes print their text verbatim: no parsing
 	for path in tracked("scripts/*.sh", "scripts/lota-*",
+	                    "examples/*.sh", "examples/*.py",
+	                    "packaging/nfpm/scripts/*.sh",
 	                    "Makefile", "*/Makefile", "*/Makefile.fragment",
 	                    "*.mk", "*/*.mk"):
 		if os.path.isdir(path):
