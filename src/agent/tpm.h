@@ -520,6 +520,17 @@ bool tpm_aik_key_is_shared(const struct tpm_context *ctx);
 	"under the device ID this host already has."
 
 /**
+ * tpm_aik_no_record_advice() - What recovers a key whose record is missing.
+ * @ctx: TPM context the key was looked up with.
+ * @buf: Receives the advice, truncated to @len.
+ * @len: Size of @buf.
+ *
+ * For tpm_aik_load_metadata() returning -EKEYREVOKED.
+ */
+void tpm_aik_no_record_advice(const struct tpm_context *ctx, char *buf,
+			      size_t len);
+
+/**
  * tpm_aik_key_present() - Does the TPM hold a key at this profile's handle?
  * @ctx: Initialized TPM context.
  *

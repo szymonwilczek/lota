@@ -184,6 +184,41 @@ static void test_absent_metadata_claims_nothing(void)
 }
 
 /*
+ * A key with no record names the files to restore: in strict sealing the
+ * authorization is kept only in the sealed file.
+ */
+static void test_no_record_advice_names_what_recovers(void)
+{
+	static const char fmt[] =
+		"The attestation key at 0x81010002 has no record: restore %s "
+		"and %s beside it from a backup, or write a new record with "
+		"lota-agent --reprovision-aik.";
+	struct tpm_context ctx;
+	char want[1024];
+	char got[1024];
+
+	TEST("a key with no record is told what recovers it");
+	make_ctx(&ctx);
+	ctx.aik_handle = 0x81010002;
+	tpm_aik_no_record_advice(&ctx, got, sizeof(got));
+	snprintf(want, sizeof(want), fmt, ctx.aik_meta_path, "aik_auth.dat");
+	if (strcmp(got, want) != 0) {
+		FAIL(got);
+		return;
+	}
+
+	ctx.seal_aik_auth_strict = true;
+	tpm_aik_no_record_advice(&ctx, got, sizeof(got));
+	snprintf(want, sizeof(want), fmt, ctx.aik_meta_path, "aik_auth.sealed");
+	if (strcmp(got, want) != 0) {
+		FAIL(got);
+		return;
+	}
+
+	PASS();
+}
+
+/*
  * The other half: a host upgraded from a build where every publisher used
  * one key still has that record, and it still has to mean what it says,
  * or the enrollment path stops replacing a key it must replace.
@@ -2146,6 +2181,7 @@ int main(void)
 	test_metadata_unused_bytes_are_ignored();
 	test_metadata_key_derivation_round_trip();
 	test_absent_metadata_claims_nothing();
+	test_no_record_advice_names_what_recovers();
 	test_recorded_shared_key_still_reads_shared();
 	test_shared_replacement_needs_a_key();
 	test_provisioning_names_an_orphaned_cert();

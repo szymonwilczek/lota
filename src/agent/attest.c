@@ -780,6 +780,14 @@ resolve_attest_profile(const char *ca_cert, struct profile_paths *storage)
 	return storage;
 }
 
+static void report_no_record(const char *label)
+{
+	char advice[1024];
+
+	tpm_aik_no_record_advice(&g_agent.tpm_ctx, advice, sizeof(advice));
+	lota_err("%s Publisher: %s", advice, label);
+}
+
 /* A bind can drop the AIK record, which provisioning reads for a shared key */
 static int provision_bound_aik(void)
 {
@@ -863,6 +871,15 @@ int do_attest(const char *server, int port, const char *ca_cert,
 	printf("Checking AIK...\n");
 	key_present = tpm_aik_key_present(&g_agent.tpm_ctx);
 	ret = provision_bound_aik();
+	if (ret == -EKEYREVOKED && !g_agent.tpm_ctx.aik_meta_loaded) {
+		char label[300];
+
+		snprintf(label, sizeof(label), "%s:%d", server, port);
+		report_no_record(label);
+		tpm_cleanup(&g_agent.tpm_ctx);
+		net_cleanup();
+		return LOTA_EXIT_OPERATOR_ACTION;
+	}
 	if (ret < 0) {
 		fprintf(stderr, "Failed to provision AIK: %s\n",
 			tpm_strerror(ret));
@@ -1020,8 +1037,11 @@ static int bind_target(struct attest_target *t)
 			}
 			return ret;
 		}
-		lota_err("AIK unavailable for %s: %s", t->label,
-			 tpm_strerror(ret));
+		if (ret == -EKEYREVOKED && !g_agent.tpm_ctx.aik_meta_loaded)
+			report_no_record(t->label);
+		else
+			lota_err("AIK unavailable for %s: %s", t->label,
+				 tpm_strerror(ret));
 		return ret;
 	}
 
@@ -1589,6 +1609,10 @@ static int aik_ready_for(const struct attest_target *first)
 	lota_info("Checking AIK");
 	key_present = tpm_aik_key_present(&g_agent.tpm_ctx);
 	ret = provision_bound_aik();
+	if (ret == -EKEYREVOKED && !g_agent.tpm_ctx.aik_meta_loaded) {
+		report_no_record(first->label);
+		return ret;
+	}
 	if (ret < 0) {
 		lota_err("Failed to provision AIK: %s", tpm_strerror(ret));
 		return ret;
@@ -1675,10 +1699,15 @@ static int continuous_attest_run(const struct lota_config *cfg,
 	status_flags |= LOTA_STATUS_TPM_OK;
 
 	/* no key is made for a host that names nobody to quote for */
-	if (target_count > 0 && aik_ready_for(&targets[0]) < 0) {
-		tpm_cleanup(&g_agent.tpm_ctx);
-		net_cleanup();
-		return 1;
+	if (target_count > 0) {
+		ret = aik_ready_for(&targets[0]);
+		if (ret < 0) {
+			tpm_cleanup(&g_agent.tpm_ctx);
+			net_cleanup();
+			/* the same record is read again on a restart */
+			return ret == -EKEYREVOKED ? LOTA_EXIT_OPERATOR_ACTION :
+						     1;
+		}
 	}
 
 	lota_info("Performing self-measurement");

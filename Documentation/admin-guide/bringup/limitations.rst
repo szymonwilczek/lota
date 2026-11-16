@@ -24,10 +24,12 @@ The most common failures, with the gate that produced them:
   means a key at ``/etc/lota/policy.pub`` (or one named by ``policy_pubkey``)
   is taking precedence and did not sign this object: move it aside to fall back
   to the packaged one, or re-sign the object with the fleet key.
-* ``Failed to load AIK metadata: Key has been revoked``. The TPM has a
-  persistent AIK but the operator wiped ``/var/lib/lota``. Either restore the
-  metadata backup or evict the AIK handle and reboot so the agent re-provisions
-  clean.
+* ``The attestation key at 0x`` *handle* ``has no record``. The TPM has a
+  persistent AIK but its record, ``aik_meta.dat`` in ``/var/lib/lota`` or in
+  the publisher's profile, is gone. The agent and ``lota-agent --attest`` exit
+  with status 78, so their units are not restarted. Restore the record and the
+  authorization file the line names from a backup, or run ``lota-agent
+  --reprovision-aik`` to write a new record and authorization for the key.
 * ``PCR14 holds an unexpected value``. Cold reboot. PCR14 only resets on
   hardware reset; warm reboot keeps the value. On UEFI Secure Boot this also
   appears when the ``90lota`` initramfs lock did not run: shim leaves the MOK

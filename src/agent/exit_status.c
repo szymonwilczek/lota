@@ -46,6 +46,10 @@ int lota_daemon_exit_status(int rc, enum tpm_pcr14_state commitment)
 	if (rc == -ENOTSUP)
 		return LOTA_EXIT_OPERATOR_ACTION;
 
+	/* an AIK record missing or blank on disk: a restart reads the same */
+	if (rc == -EKEYREVOKED)
+		return LOTA_EXIT_OPERATOR_ACTION;
+
 	/* each restart would set up IPC, the TPM and the AIK again first */
 	if (commitment_refused(commitment))
 		return LOTA_EXIT_OPERATOR_ACTION;

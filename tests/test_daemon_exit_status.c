@@ -164,6 +164,22 @@ static void test_refused_host_configuration_needs_an_operator(void)
 }
 
 /*
+ * A key in the TPM whose record is missing from disk: a restart reads the
+ * same directory and refuses the same key.
+ */
+static void test_a_key_with_no_record_needs_an_operator(void)
+{
+	int rc = lota_daemon_exit_status(-EKEYREVOKED,
+					 TPM_PCR14_AWAITING_EXTEND);
+
+	TEST("a key with no record exits for an operator");
+	if (rc != LOTA_EXIT_OPERATOR_ACTION)
+		FAIL("-EKEYREVOKED exits for a restart");
+	else
+		PASS();
+}
+
+/*
  * A startup check that could not read its input exits 1 and is retried;
  * one that refused what it read exits for an operator.
  */
@@ -313,6 +329,7 @@ int main(void)
 	test_no_errno_reaches_the_exit_status();
 	test_a_refusal_before_the_commitment_needs_an_operator();
 	test_refused_host_configuration_needs_an_operator();
+	test_a_key_with_no_record_needs_an_operator();
 	test_a_startup_check_that_could_not_read_is_retried();
 	test_a_served_daemon_carries_its_own_status();
 	test_the_unit_prevents_restarting_on_that_status();
