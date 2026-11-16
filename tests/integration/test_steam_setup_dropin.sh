@@ -101,6 +101,17 @@ check "the verb says nothing it does stops the running agent" \
 check "the verb does not claim the listener is already there" \
       denies "$out" 'drop-in active'
 
+# A directory that cannot be created ends the verb, with no success line.
+: >"$WORK_DIR/not-a-dir"
+rc=0
+bad_out=$(PATH="$WORK_DIR/bin:$PATH" \
+	  LOTA_SETUP_DROPIN_DIR="$WORK_DIR/not-a-dir/lota-agent.service.d" \
+	  SUDO_UID=1234 \
+	  "$SETUP" --install-systemd-dropin 2>&1) || rc=$?
+check "an unwritable drop-in directory fails the verb" test "$rc" -eq 1
+check "the failure is named" says "$bad_out" '\[FAIL\] cannot create'
+check "no success line follows it" denies "$bad_out" 'drop-in installed'
+
 if [[ $failures -gt 0 ]]; then
     echo ""
     echo "--- verb output ---"
