@@ -58,7 +58,10 @@ that handle in place of ``0x81010002``.
 
 ``sudo scripts/lota-dev-bringup.sh --reset`` does a narrower reset: it
 removes the ``aik*``, ``clock*``, ``boot_commit*`` and ``snapshot*`` state
-files, evicts ``0x81010002`` and ``0x81010003``, and leaves the
+files, evicts the AIK at the ``aik_handle`` the agent reads from
+``/etc/lota/lota.conf`` (``0x81010002`` by default), runs
+``lota-agent --seal-evict-primary``, which leaves an object at
+``0x81010003`` alone unless it is LOTA's seal primary, and leaves the
 per-publisher AIKs and their profiles in place. It refuses while
 ``lota-agent.service`` or ``lota-attest.service`` is active, or while the
 daemon's pid file names a live process.

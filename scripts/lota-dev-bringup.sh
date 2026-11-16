@@ -95,8 +95,6 @@ read_define() {
         "$1" 2>/dev/null | head -1
 }
 
-AIK_HANDLE=$(read_define "$TPM_HEADER" TPM_AIK_HANDLE)
-SEAL_HANDLE=$(read_define "$TPM_HEADER" TPM_SEAL_PRIMARY_HANDLE)
 PROFILE_BASE=$(read_define "$TPM_HEADER" TPM_AIK_PROFILE_HANDLE_BASE)
 PROFILE_COUNT=$(read_define "$PROFILE_HEADER" LOTA_PROFILE_MAX_AIK_HANDLES)
 PROFILE_RANGE=""
@@ -314,23 +312,31 @@ else
         rm -f "$stale_file"
     done
 
-    if [[ -z "$AIK_HANDLE" || -z "$SEAL_HANDLE" ]]; then
-        fail "could not read the persistent handles from $TPM_HEADER"
-    fi
+    dump=$("$AGENT_BIN" --config "$LOTA_CONF" --dump-config) ||
+        fail "the agent cannot read $LOTA_CONF"
+    AIK_HANDLE=$(sed -n 's/^aik_handle = \(0x[0-9A-Fa-f]\+\)$/\1/p' \
+        <<<"$dump")
+    [[ -n "$AIK_HANDLE" ]] ||
+        fail "no aik_handle in the agent's view of $LOTA_CONF"
 
     if command -v tpm2_evictcontrol >/dev/null 2>&1; then
-        for handle in "$AIK_HANDLE" "$SEAL_HANDLE"; do
-            if tpm2_evictcontrol -C o -c "$handle" 2>/dev/null; then
-                info "evicted persistent object at $handle"
-            fi
-        done
+        if tpm2_evictcontrol -C o -c "$AIK_HANDLE" 2>/dev/null; then
+            info "evicted the AIK at $AIK_HANDLE"
+        fi
         if [[ -n "$PROFILE_RANGE" ]]; then
             info "leaving the per-profile AIKs at $PROFILE_RANGE in"
             info "  place; a publisher's key goes when its profile does"
         fi
     else
-        warn "tpm2-tools not installed; persistent handles cannot be evicted"
+        warn "tpm2-tools not installed; the AIK cannot be evicted"
         warn "install tpm2-tools and re-run if PCR14 errors persist"
+    fi
+
+    if seal_out=$("$AGENT_BIN" --config "$LOTA_CONF" \
+        --seal-evict-primary 2>&1); then
+        info "evicted the seal primary"
+    else
+        info "seal primary not evicted: $seal_out"
     fi
 fi
 
