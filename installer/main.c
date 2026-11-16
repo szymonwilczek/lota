@@ -599,6 +599,8 @@ int main(int argc, char **argv)
 		case STAGE_PENDING:
 			ui_stage_result(&ctx.ui, UI_FAIL, s->title,
 					"still unmet after applying");
+			ui_text(&ctx.ui, "%s%s", note,
+				ends_in_stop(note) ? "" : ".");
 			return EXIT_INSTALL_FAIL;
 		}
 	}

@@ -985,7 +985,7 @@ static void test_installer_probe_asks_about_ports(void)
 	}
 	start = strstr(src, "static enum stage_state st_selinux_probe(");
 	end = start ? strstr(start, "\n}\n") : NULL;
-	call = start ? strstr(start, "selinux_port_pending(") : NULL;
+	call = start ? strstr(start, "selinux_port_unmet(") : NULL;
 	if (!end || !call || call > end) {
 		FAIL("a later run with a new port skips the labelling");
 		return;

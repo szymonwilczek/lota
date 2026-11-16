@@ -779,34 +779,43 @@ static int selinux_module_loaded(void)
 	return 0;
 }
 
-static int selinux_port_pending(const struct install_ctx *ctx)
+static void selinux_port_unmet(const struct install_ctx *ctx,
+			       struct probe_selinux_unmet *u)
 {
 	static char out[65536];
 	const char *const argv[] = { "semanage", "port", "-l", NULL };
-	const char *const ports[] = { ctx->opts.ca_port,
-				      ctx->opts.verifier_port };
+	const char *ca = ctx->opts.ca_port;
+	const char *ver = ctx->opts.verifier_port;
 
-	if ((!ctx->opts.ca_port && !ctx->opts.verifier_port) ||
-	    !tool_exists("semanage") ||
-	    run_capture(argv, out, sizeof(out)) != 0)
-		return 0;
-
-	for (size_t i = 0; i < sizeof(ports) / sizeof(ports[0]); i++) {
-		if (ports[i] && probe_port_needs_label(out, ports[i]) > 0)
-			return 1;
+	if (!ca && !ver)
+		return;
+	if (!tool_exists("semanage")) {
+		u->port_check = "semanage is not installed";
+		return;
 	}
-	return 0;
+	if (run_capture(argv, out, sizeof(out)) != 0) {
+		u->port_check = "semanage port -l failed";
+		return;
+	}
+	if (ca && probe_port_needs_label(out, ca) > 0)
+		u->ca_port = ca;
+	if (ver && probe_port_needs_label(out, ver) > 0)
+		u->ver_port = ver;
 }
 
 static enum stage_state st_selinux_probe(struct install_ctx *ctx, char *note,
 					 size_t cap)
 {
+	struct probe_selinux_unmet u = { 0 };
 	int dev = probe_selinux_tpm_label();
 
-	if (dev == 0 && label_ok(PATH_AGENT_BIN, "lota_agent_exec_t") &&
-	    label_ok_if_present(PATH_LOTA_STATE_DIR, "lota_var_t") &&
-	    label_ok_if_present(PATH_LOTA_CONF_DIR, "lota_etc_t") &&
-	    !selinux_port_pending(ctx)) {
+	u.tpm = dev != 0;
+	u.agent = !label_ok(PATH_AGENT_BIN, "lota_agent_exec_t");
+	u.state = !label_ok_if_present(PATH_LOTA_STATE_DIR, "lota_var_t");
+	u.conf = !label_ok_if_present(PATH_LOTA_CONF_DIR, "lota_etc_t");
+	selinux_port_unmet(ctx, &u);
+
+	if (probe_selinux_unmet_note(&u, NULL, 0) == 0) {
 		snprintf(note, cap,
 			 "TPM device, agent binary, state directory and config "
 			 "directory carry the LOTA SELinux labels.%s",
@@ -837,7 +846,7 @@ static enum stage_state st_selinux_probe(struct install_ctx *ctx, char *note,
 		return STAGE_BLOCKED;
 	}
 
-	snprintf(note, cap, "SELinux labels not yet applied.");
+	probe_selinux_unmet_note(&u, note, cap);
 	return STAGE_PENDING;
 }
 

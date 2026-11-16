@@ -672,6 +672,55 @@ cleanup:
  * A port only a range covers looks typed but the agent is refused there,
  * and a port another service owns cannot be taken with semanage port -a.
  */
+static void test_selinux_unmet_note(void)
+{
+	struct probe_selinux_unmet u = { 0 };
+	char note[512];
+
+	TEST("selinux: a missing port label names the port alone");
+	u.ca_port = "8444";
+	if (probe_selinux_unmet_note(&u, note, sizeof(note)) != 1 ||
+	    !strstr(note, "CA port 8444") || !strstr(note, "semanage port") ||
+	    strstr(note, "binary") || strstr(note, "TPM")) {
+		FAIL(note);
+		return;
+	}
+	PASS();
+
+	TEST("selinux: each unmet check is named");
+	memset(&u, 0, sizeof(u));
+	u.tpm = 1;
+	u.conf = 1;
+	u.ver_port = "8443";
+	if (probe_selinux_unmet_note(&u, note, sizeof(note)) != 3 ||
+	    !strstr(note, "TPM device") || !strstr(note, "config directory") ||
+	    !strstr(note, "verifier port 8443") || strstr(note, "state")) {
+		FAIL(note);
+		return;
+	}
+	PASS();
+
+	TEST("selinux: a port that cannot be checked is unmet");
+	memset(&u, 0, sizeof(u));
+	u.port_check = "semanage is not installed";
+	if (probe_selinux_unmet_note(&u, note, sizeof(note)) != 1 ||
+	    !strstr(note, "Cannot check the port labels: semanage is not "
+			  "installed.")) {
+		FAIL(note);
+		return;
+	}
+	PASS();
+
+	TEST("selinux: every check met is no note");
+	memset(&u, 0, sizeof(u));
+	if (probe_selinux_unmet_note(&u, note, sizeof(note)) != 0 ||
+	    note[0] != '\0') {
+		FAIL(note);
+		return;
+	}
+	PASS();
+}
+
 static void test_port_needs_label(void)
 {
 	static const char listing[] =
@@ -1902,6 +1951,7 @@ int main(void)
 	test_auto_bringup_opt_in();
 	test_manifest_line();
 	test_port_needs_label();
+	test_selinux_unmet_note();
 	test_installed_kernels();
 	test_barrier_stage_verdicts();
 	test_agent_paused_reader();

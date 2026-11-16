@@ -163,6 +163,37 @@ int probe_fsverity_enable(const char *path);
 int probe_manifest_line(const char *line, char *out, size_t cap);
 
 /**
+ * struct probe_selinux_unmet - SELinux fence checks a probe found unmet.
+ * @tpm:        a TPM node carries another label.
+ * @agent:      the agent binary is not lota_agent_exec_t.
+ * @state:      the state directory is not lota_var_t.
+ * @conf:       the configuration directory is not lota_etc_t.
+ * @ca_port:    the --ca-port that needs a label, or NULL.
+ * @ver_port:   the --verifier-port that needs a label, or NULL.
+ * @port_check: why the ports given cannot be checked, or NULL.
+ */
+struct probe_selinux_unmet {
+	int tpm;
+	int agent;
+	int state;
+	int conf;
+	const char *ca_port;
+	const char *ver_port;
+	const char *port_check;
+};
+
+/**
+ * probe_selinux_unmet_note() - Name the unmet SELinux fence checks.
+ * @u:    the checks.
+ * @note: receives the note, empty when every check is met.
+ * @cap:  size of @note.
+ *
+ * Return: the number of unmet checks.
+ */
+int probe_selinux_unmet_note(const struct probe_selinux_unmet *u, char *note,
+			     size_t cap);
+
+/**
  * probe_port_needs_label() - Whether a tcp port needs an SELinux label.
  * @listing: output of `semanage port -l`.
  * @port:    decimal port.

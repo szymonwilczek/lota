@@ -1471,6 +1471,55 @@ static int port_row_lists(const char *row, unsigned long want, char *type,
 	return found;
 }
 
+int probe_selinux_unmet_note(const struct probe_selinux_unmet *u, char *note,
+			     size_t cap)
+{
+	char item[6][96];
+	size_t used = 0;
+	int i, n = 0;
+
+	if (u->tpm)
+		snprintf(item[n++], sizeof(item[0]),
+			 "the TPM device label (lota_tpm_device_t)");
+	if (u->agent)
+		snprintf(item[n++], sizeof(item[0]),
+			 "the agent binary label (lota_agent_exec_t)");
+	if (u->state)
+		snprintf(item[n++], sizeof(item[0]),
+			 "the state directory label (lota_var_t)");
+	if (u->conf)
+		snprintf(item[n++], sizeof(item[0]),
+			 "the config directory label (lota_etc_t)");
+	if (u->ca_port)
+		snprintf(item[n++], sizeof(item[0]),
+			 "the CA port %s label (semanage port)", u->ca_port);
+	if (u->ver_port)
+		snprintf(item[n++], sizeof(item[0]),
+			 "the verifier port %s label (semanage port)",
+			 u->ver_port);
+
+	if (!note || cap == 0)
+		return n + !!u->port_check;
+	note[0] = '\0';
+	if (n) {
+		used = (size_t)snprintf(note, cap, "Not in place yet: ");
+		for (i = 0; i < n && used < cap; i++)
+			used += (size_t)snprintf(note + used, cap - used,
+						 "%s%s",
+						 i == 0	    ? "" :
+						 i == n - 1 ? " and " :
+							      ", ",
+						 item[i]);
+		if (used < cap)
+			used += (size_t)snprintf(note + used, cap - used, ".");
+	}
+	if (u->port_check && used < cap)
+		snprintf(note + used, cap - used,
+			 "%sCannot check the port labels: %s.", n ? " " : "",
+			 u->port_check);
+	return n + !!u->port_check;
+}
+
 int probe_port_needs_label(const char *listing, const char *port)
 {
 	unsigned long want;
