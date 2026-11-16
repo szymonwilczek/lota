@@ -104,6 +104,18 @@ check "the verb does not claim the listener is already there" \
 check "the usage names the directory the drop-in goes in" \
       says "$("$SETUP" --help)" '/etc/systemd/system/lota-agent.service.d)'
 
+# Both verbs at once: refused before either writes anything.
+rm -rf "$dropin_dir"
+rc=0
+both_out=$(PATH="$WORK_DIR/bin:$PATH" \
+	   LOTA_SETUP_DROPIN_DIR="$dropin_dir" \
+	   SUDO_UID=1234 \
+	   "$SETUP" --install-systemd-dropin --register-uid 2>&1) || rc=$?
+check "the two verbs together are refused" test "$rc" -eq 1
+check "the refusal says they are alternatives" \
+      says "$both_out" 'are alternatives'
+check "neither verb wrote anything" test ! -e "$dropin_dir"
+
 # A directory that cannot be created ends the verb, with no success line.
 : >"$WORK_DIR/not-a-dir"
 rc=0

@@ -67,8 +67,8 @@ Options:
                               when that user logs in. The agent reads
                               the setting at startup, so it takes
                               effect at the next boot. Supersedes the
-                              drop-in on multi-user hosts. Requires
-                              root.
+                              drop-in on multi-user hosts, and is
+                              refused beside it. Requires root.
   --help                      Show this help message
 
 Environment:
@@ -337,6 +337,11 @@ while [[ $# -gt 0 ]]; do
             ;;
     esac
 done
+
+if $install_dropin && $register_uid; then
+    fail "--install-systemd-dropin and --register-uid are alternatives; --register-uid supersedes the drop-in"
+    exit 1
+fi
 
 install_systemd_dropin() {
     local uid dropin_dir dropin redirected=false
