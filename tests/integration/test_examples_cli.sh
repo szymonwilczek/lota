@@ -5,7 +5,7 @@
 # tests/integration/test_examples_cli.sh
 #
 # The example programs refuse a bad value instead of reading a number off
-# its front.
+# its front, and the example scripts name a missing tool before they start.
 #
 # Requires:
 #   - bash, and the examples built ('make examples')
@@ -68,6 +68,22 @@ for t in abc 0 -1 5s; do
         exits_with 2 "$CI_ATTEST" --gate http://127.0.0.1:9 \
         --out "$WORK_DIR/secret" --timeout "$t"
 done
+
+# run.sh with every tool but openssl on PATH
+STUB_BIN="$WORK_DIR/bin"
+mkdir -p "$STUB_BIN"
+ln -s "$(command -v dirname)" "$STUB_BIN/dirname"
+for tool in swtpm swtpm_setup tpm2_readpublic systemd-socket-activate; do
+    printf '#!/bin/sh\nexit 0\n' >"$STUB_BIN/$tool"
+    chmod 0755 "$STUB_BIN/$tool"
+done
+names_missing_openssl() {
+    local out rc=0
+    out=$(PATH="$STUB_BIN" LOTA_BUILD_DIR="$BUILD_DIR" \
+        "$BASH" "$REPO_DIR/examples/ci-gate/run.sh" 2>&1) || rc=$?
+    [[ "$rc" -eq 1 ]] && grep -q "missing command: openssl" <<<"$out"
+}
+check "ci-gate run.sh names a missing openssl" names_missing_openssl
 
 echo ""
 if [[ $failures -gt 0 ]]; then

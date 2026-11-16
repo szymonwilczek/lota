@@ -297,12 +297,10 @@ The run ends with:
 
    PASS: the gate releases to an attested host and refuses everything else
 
-A missing binary, a missing command other than
-``openssl``, or a failed step prints a line starting ``missing`` or
-``FAIL:``, plus the log of the gate when step 4 is refused, and exits 1.
-A ``swtpm_setup`` that fails ends the script with its own exit status and
-no such line.
-A missing ``openssl`` ends step 5 with no line of its own.
+A missing binary, a missing command or a failed step prints a line
+starting ``missing`` or ``FAIL:``, plus the log of the gate when step 4 is
+refused, and exits 1. A ``swtpm_setup`` that fails ends the script with
+its own exit status and no such line.
 
 ``LOTA_BUILD_DIR`` (``build``), ``BIN`` (the build directory) and
 ``EXAMPLES_BIN`` (its ``examples/``) say where the binaries are.

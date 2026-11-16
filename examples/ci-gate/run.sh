@@ -29,7 +29,7 @@ for b in "$agent" "$gate" "$step"; do
 	}
 done
 
-for c in swtpm swtpm_setup tpm2_readpublic systemd-socket-activate; do
+for c in swtpm swtpm_setup tpm2_readpublic systemd-socket-activate openssl; do
 	command -v "$c" >/dev/null 2>&1 || {
 		echo "missing command: $c" >&2
 		exit 1
