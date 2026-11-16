@@ -668,9 +668,12 @@ func (v *Verifier) VerifyReportFrom(challengeID, remoteAddr string, reportData [
 			logging.Security(clog, "boot baseline not enrolled; refusing TOFU first-use",
 				"policy", v.pcrVerifier.PolicyNameForTenant(tenant),
 				"hint", "load a signed policy that pins PCR0/PCR1/PCR7 for this fleet, enable require_secureboot for diverse fleets, or run with --allow-tofu-boot-baseline")
-			v.metrics.Rejections.Inc("baseline_error")
+			v.metrics.Rejections.Inc(types.VerifyResultString(
+				types.VerifyPolicyRequirement))
 			result.Result = types.VerifyPolicyRequirement
-			return result, errors.New("FAIL_BASELINE_ERROR: boot baseline not enrolled (TOFU first-use refused under RequireBootEnrollment)")
+			return result, errors.New("FAIL_POLICY_REQUIREMENT: " +
+				"boot baseline not enrolled (TOFU first-use " +
+				"refused under RequireBootEnrollment)")
 		}
 		bootPin = bootBaselineRoad{
 			allowedBy: "--allow-tofu-boot-baseline",

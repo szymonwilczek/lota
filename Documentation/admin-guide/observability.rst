@@ -111,10 +111,9 @@ Baseline errors
 ---------------
 
 ``baseline_error`` counts a round the baseline store failed, answered
-``internal_error``, and a first-use boot baseline refused for having no
-enrollment road, answered ``policy_requirement`` (:doc:`../verifier/index`).
-Both count under ``baseline_error`` alone: ``reason`` ``policy_requirement``
-is exported, and no round counts under it.
+``internal_error``. A first-use boot baseline refused for having no
+enrollment road counts under ``policy_requirement``
+(:doc:`../verifier/index`).
 
 Re-anchor outcomes
 ------------------
@@ -293,15 +292,11 @@ concurrent round.
 LotaBaselineStoreErrors
 -----------------------
 
-``baseline_error`` counted: the baseline store failed, or a host with no
-boot baseline had no enrollment road (`Baseline errors`_).
+``baseline_error`` counted: the baseline store failed (`Baseline errors`_).
 
-#. ``GET /api/v1/attestations?result=policy_requirement`` lists the hosts
-   refused for the enrollment road; :doc:`../verifier/index` gives the
-   roads.
-#. Otherwise, check the database: the connection, the disk, whether it
-   takes writes. The verifier log names the failed operation. Refused hosts
-   pass on their next round once the store answers.
+#. Check the database: the connection, the disk, whether it takes writes.
+   The verifier log names the failed operation. Refused hosts pass on their
+   next round once the store answers.
 
 .. _alert-lotaattestationfailureratiohigh:
 
