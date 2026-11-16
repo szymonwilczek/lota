@@ -2205,6 +2205,8 @@ static void test_the_loader_wrapper_hands_back_what_it_got(void)
 static void test_a_refused_dependency_is_named(void)
 {
 	const char *dep = "/opt/game/lib/libdep.so";
+	char logpath[PATH_MAX], log[1024];
+	int fd, saved;
 	pid_t agent;
 
 	TEST("a refused dependency is named, not the object asked for");
@@ -2226,12 +2228,34 @@ static void test_a_refused_dependency_is_named(void)
 	atomic_store(&g_hook.self_protected, 1);
 	g_refusal->object[0] = '\0';
 
+	snprintf(logpath, sizeof(logpath), "%s/dependency.log", tmpdir);
+	fd = open(logpath, O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0600);
+	fflush(stderr);
+	saved = dup(STDERR_FILENO);
+	if (fd >= 0 && saved >= 0)
+		dup2(fd, STDERR_FILENO);
+	g_hook.log_level = HOOK_LOG_ERROR;
 	(void)dlopen("/nonexistent/lota-trusted-title.so", RTLD_NOW);
+	g_hook.log_level = HOOK_LOG_SILENT;
+	fflush(stderr);
+	if (saved >= 0) {
+		dup2(saved, STDERR_FILENO);
+		close(saved);
+	}
+	if (fd >= 0)
+		close(fd);
 	stop_mock_agent(agent);
 	if (strcmp(g_refusal->object, dep) != 0) {
 		atomic_store(&g_hook.self_protected, 0);
 		mock_refusal_object[0] = '\0';
 		FAIL("the refused dependency went unnamed");
+		return;
+	}
+	if (read_file_contents(logpath, log, sizeof(log)) <= 0 ||
+	    !strstr(log, "an allow_verity or trust_lib entry in lota.conf")) {
+		atomic_store(&g_hook.self_protected, 0);
+		mock_refusal_object[0] = '\0';
+		FAIL("the refusal named no lota.conf key");
 		return;
 	}
 

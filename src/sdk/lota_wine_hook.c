@@ -1227,7 +1227,8 @@ static void hook_report_refusal(uint64_t since_ns)
 	hook_publish_state();
 	LOG_ERR("%s did not load while this process is in LOTA's protected "
 		"set -- a protected process may map only objects the agent "
-		"allows, so cover this one (fs-verity digest or trusted_libs)",
+		"allows, so cover this one with an allow_verity or trust_lib "
+		"entry in lota.conf",
 		object);
 }
 
