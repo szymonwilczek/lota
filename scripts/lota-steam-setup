@@ -80,7 +80,8 @@ Environment:
                     /run/lota/lota.sock).
   LOTA_SETUP_DROPIN_DIR
                     Directory for the --install-systemd-dropin file
-                    (default /etc/systemd/system). For
+                    (default
+                    /etc/systemd/system/lota-agent.service.d). For
                     package staging and tests: no systemd on this host
                     is configured, so root is not required either.
 EOF

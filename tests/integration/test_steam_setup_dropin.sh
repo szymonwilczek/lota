@@ -101,6 +101,9 @@ check "the verb says nothing it does stops the running agent" \
 check "the verb does not claim the listener is already there" \
       denies "$out" 'drop-in active'
 
+check "the usage names the directory the drop-in goes in" \
+      says "$("$SETUP" --help)" '/etc/systemd/system/lota-agent.service.d)'
+
 # A directory that cannot be created ends the verb, with no success line.
 : >"$WORK_DIR/not-a-dir"
 rc=0
