@@ -52,8 +52,7 @@ Global options
   PEM certificates that replace the system roots for an ``https`` server.
   The verifier serves HTTPS on any address other than a loopback IP
   (:doc:`../verifier/command-line`), so this names the CA that issued its
-  ``--cert``. Without the option, or with an empty file, the system roots
-  apply.
+  ``--cert``. Without the option the system roots apply.
 
 ``-timeout DURATION``
   The time allowed for each request, as a Go duration such as ``10s``.
@@ -254,11 +253,11 @@ Exit status
   ``lota-fleet: API error: HTTP <code>`` alone when the body holds none, as
   from a server other than the verifier or plain HTTP sent to its HTTPS
   port. A key file or ``-tls-ca`` file that cannot be read, a server URL
-  that is not ``http`` or ``https`` or has no host, a non-empty ``-tls-ca``
-  file with an ``http`` server, and a CA file with no certificate also exit
-  1. These are checked after the global options and before the command, so
-  they win over a usage error in the command, and a missing command or an
-  unknown global option wins over them.
+  that is not ``http`` or ``https`` or has no host, ``-tls-ca`` with an
+  ``http`` server, and a CA file that is empty or holds no certificate also
+  exit 1. These are checked after the global options and before the
+  command, so they win over a usage error in the command, and a missing
+  command or an unknown global option wins over them.
 
 ``2``
   A usage error: no command, an unknown command or subcommand, an unknown
