@@ -27,6 +27,7 @@
 #include "../include/lota_ima_policy_scope.h"
 #include "../include/lota_ima_xattr.h"
 #include "../include/lota_secure_boot.h"
+#include "../src/agent/config.h"
 
 #include <openssl/evp.h>
 #include <openssl/x509.h>
@@ -881,12 +882,16 @@ int probe_conf_buf_profile_count(const char *buf)
 
 int probe_conf_profile_count(const char *conf_path)
 {
-	char buf[16384] = { 0 };
-	int ret = probe_read_text(conf_path, buf, sizeof(buf));
+	char *buf = calloc(1, LOTA_CONFIG_MAX_FILE + 1);
+	int ret;
 
-	if (ret < 0)
-		return ret;
-	return probe_conf_buf_profile_count(buf);
+	if (!buf)
+		return -ENOMEM;
+	ret = probe_read_text(conf_path, buf, LOTA_CONFIG_MAX_FILE + 1);
+	if (ret >= 0)
+		ret = probe_conf_buf_profile_count(buf);
+	free(buf);
+	return ret;
 }
 
 /* 1 and the value in @out when @line sets @key; '-' reads as '_' */

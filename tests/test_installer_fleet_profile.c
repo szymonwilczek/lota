@@ -23,6 +23,7 @@
 
 #include "test.h"
 #include "../installer/install.h"
+#include "../src/agent/config.h"
 
 static char dir[] = "/tmp/lota-fleet-profile-XXXXXX";
 static char anchor[256];
@@ -129,10 +130,39 @@ static void test_recorded(void)
 	}
 	PASS();
 
+	/* the installer reads as much of lota.conf as the agent writes */
+	TEST("a profile 64 KiB into lota.conf is found");
+	{
+		char *big = malloc(70000);
+		size_t n = 65536;
+		int bad;
+
+		if (!big) {
+			FAIL("out of memory");
+			return;
+		}
+		memset(big, '#', n);
+		big[n - 1] = '\n';
+		n += snprintf(big + n, 70000 - n,
+			      "[profile \"fleet\"]\nca = ca.fleet.example\n"
+			      "ca_cert = %s\nverifier = none\n",
+			      anchor);
+		big[n] = '\0';
+		bad = write_conf(big) < 0 ||
+		      installer_profile_recorded(conf, anchor) != 1;
+		free(big);
+		if (bad) {
+			FAIL("a profile past 16 KiB was not read");
+			return;
+		}
+	}
+	PASS();
+
 	/* a profile past the reader's buffer is not "no profile" */
 	TEST("a lota.conf too large to read whole is an error");
 	{
-		char *big = malloc(20000);
+		const size_t cap = LOTA_CONFIG_MAX_FILE + 1024;
+		char *big = malloc(cap);
 		size_t n;
 		int bad;
 
@@ -140,10 +170,11 @@ static void test_recorded(void)
 			FAIL("out of memory");
 			return;
 		}
-		memset(big, '#', 17000);
-		big[16999] = '\n';
-		n = 17000;
-		n += snprintf(big + n, 20000 - n,
+		/* config_profile_append() refuses one this large as well */
+		memset(big, '#', LOTA_CONFIG_MAX_FILE);
+		big[LOTA_CONFIG_MAX_FILE - 1] = '\n';
+		n = LOTA_CONFIG_MAX_FILE;
+		n += snprintf(big + n, cap - n,
 			      "[profile \"fleet\"]\nca = ca.fleet.example\n"
 			      "ca_cert = %s\nverifier = none\n",
 			      anchor);

@@ -1150,7 +1150,7 @@ static int enroll_profile(const struct install_ctx *ctx,
 struct profile_recorded_scratch {
 	struct profile_paths want;
 	struct profile_paths have;
-	char buf[16384];
+	char buf[LOTA_CONFIG_MAX_FILE + 1];
 	char path[PATH_MAX];
 };
 
@@ -1409,7 +1409,7 @@ static int st_enroll_apply(struct install_ctx *ctx)
 
 int installer_loop_reports_expected(const char *conf_path)
 {
-	const size_t cap = 16384;
+	const size_t cap = LOTA_CONFIG_MAX_FILE + 1;
 	char *conf = calloc(1, cap);
 	int rc;
 
