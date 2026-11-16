@@ -174,7 +174,8 @@ func TestMemoryAtomicAttestation_FirstUseSeedsBothHalves(t *testing.T) {
 		boot.PCR7[i] = 0xB7
 	}
 
-	out := bs.CheckAndUpdateAttestation("atomic-c1", pcr14, agentHash, boot, false)
+	out := bs.CheckAndUpdateAttestation("atomic-c1", DefaultTenant, pcr14,
+		agentHash, boot, false)
 	if out.AgentHashResult != TOFUFirstUse {
 		t.Fatalf("agent_hash first-use: got %v, want TOFUFirstUse", out.AgentHashResult)
 	}
@@ -191,7 +192,8 @@ func TestMemoryAtomicAttestation_FirstUseSeedsBothHalves(t *testing.T) {
 		rogue.PCR1[i] = 0xBB
 		rogue.PCR7[i] = 0xCC
 	}
-	out2 := bs.CheckAndUpdateAttestation("atomic-c1", pcr14, agentHash, rogue, false)
+	out2 := bs.CheckAndUpdateAttestation("atomic-c1", DefaultTenant, pcr14,
+		agentHash, rogue, false)
 	if out2.AgentHashResult != TOFUMatch {
 		t.Fatalf("second-round agent_hash: got %v, want TOFUMatch", out2.AgentHashResult)
 	}
@@ -225,7 +227,8 @@ func TestMemoryAtomicAttestation_BootMismatchPreservesAgentHashRow(t *testing.T)
 		rogue.PCR0[i] = 0x99
 	}
 
-	first := bs.CheckAndUpdateAttestation("atomic-c2", pcr14, agentHash, good, false)
+	first := bs.CheckAndUpdateAttestation("atomic-c2", DefaultTenant, pcr14,
+		agentHash, good, false)
 	if first.AgentHashResult != TOFUFirstUse || first.BootResult != TOFUFirstUse {
 		t.Fatalf("seed call: agent=%v boot=%v",
 			first.AgentHashResult, first.BootResult)
@@ -235,7 +238,8 @@ func TestMemoryAtomicAttestation_BootMismatchPreservesAgentHashRow(t *testing.T)
 			first.AgentHashBaseline.AttestCount)
 	}
 
-	bad := bs.CheckAndUpdateAttestation("atomic-c2", pcr14, agentHash, rogue, false)
+	bad := bs.CheckAndUpdateAttestation("atomic-c2", DefaultTenant, pcr14,
+		agentHash, rogue, false)
 	if bad.BootResult != TOFUMismatch {
 		t.Fatalf("rogue boot must mismatch, got %v", bad.BootResult)
 	}
@@ -243,7 +247,8 @@ func TestMemoryAtomicAttestation_BootMismatchPreservesAgentHashRow(t *testing.T)
 	// re-attest with good pins; attest_count must still increment from
 	// 1 (the seed write) to 2, proving the mismatch did not bump the
 	// counter behind the operator's back.
-	good2 := bs.CheckAndUpdateAttestation("atomic-c2", pcr14, agentHash, good, false)
+	good2 := bs.CheckAndUpdateAttestation("atomic-c2", DefaultTenant, pcr14,
+		agentHash, good, false)
 	if good2.AgentHashResult != TOFUMatch || good2.BootResult != TOFUMatch {
 		t.Fatalf("recovery call: agent=%v boot=%v",
 			good2.AgentHashResult, good2.BootResult)
@@ -537,4 +542,56 @@ func appendU64BE(buf []byte, v uint64) []byte {
 	var tmp [8]byte
 	binary.BigEndian.PutUint64(tmp[:], v)
 	return append(buf, tmp[:]...)
+}
+
+// checkRefusedFirstUseKeepsTenant pins a client of tenant acme, refuses
+// its next round on a moved boot PCR, and lists it under acme alone.
+func checkRefusedFirstUseKeepsTenant(t *testing.T, s interface {
+	AtomicBaselineStorer
+	BaselineStorer
+}) {
+	t.Helper()
+	var pcr14, agentHash [types.HashSize]byte
+	pcr14[0], agentHash[0] = 0x14, 0x44
+	boot := &BootBaseline{}
+	boot.PCR0[0] = 0xB0
+	moved := &BootBaseline{}
+	moved.PCR0[0] = 0xAA
+
+	out := s.CheckAndUpdateAttestation("tenant-c1", "acme", pcr14,
+		agentHash, boot, false)
+	if out.BootResult != TOFUFirstUse {
+		t.Fatalf("first round: boot %v, want TOFUFirstUse",
+			out.BootResult)
+	}
+	out = s.CheckAndUpdateAttestation("tenant-c1", "acme", pcr14,
+		agentHash, moved, false)
+	if out.BootResult != TOFUMismatch {
+		t.Fatalf("moved boot PCR: boot %v, want TOFUMismatch",
+			out.BootResult)
+	}
+	out = s.CheckAndUpdateAttestation("tenant-c2", "acme", pcr14,
+		agentHash, nil, false)
+	if out.PCR14Result != TOFUFirstUse {
+		t.Fatalf("no boot: PCR 14 %v, want TOFUFirstUse",
+			out.PCR14Result)
+	}
+
+	for _, tc := range []struct {
+		tenant string
+		want   int
+	}{{"acme", 2}, {DefaultTenant, 0}} {
+		got, err := s.ListClientsAfter([]string{tc.tenant}, "", 10)
+		if err != nil {
+			t.Fatalf("ListClientsAfter(%s): %v", tc.tenant, err)
+		}
+		if len(got) != tc.want {
+			t.Errorf("ListClientsAfter(%s) = %v, want %d clients",
+				tc.tenant, got, tc.want)
+		}
+	}
+}
+
+func TestMemoryAtomicAttestation_FirstUseKeepsTenant(t *testing.T) {
+	checkRefusedFirstUseKeepsTenant(t, NewBaselineStore())
 }

@@ -703,15 +703,20 @@ func TestPinnedRegister_MemoryRefusesAMovedPCR14(t *testing.T) {
 	agentHash := [types.HashSize]byte{0xA1}
 	boot := &BootBaseline{PCR0: [types.HashSize]byte{0}, PCR1: [types.HashSize]byte{1}, PCR7: [types.HashSize]byte{7}}
 
-	if o := bs.CheckAndUpdateAttestation("c", pcr14, agentHash, boot, false); o.PCR14Result != TOFUFirstUse {
+	o := bs.CheckAndUpdateAttestation("c", DefaultTenant, pcr14,
+		agentHash, boot, false)
+	if o.PCR14Result != TOFUFirstUse {
 		t.Fatalf("first use: pcr14 = %v", o.PCR14Result)
 	}
-	if o := bs.CheckAndUpdateAttestation("c", pcr14, agentHash, boot, false); o.PCR14Result != TOFUMatch {
+	o = bs.CheckAndUpdateAttestation("c", DefaultTenant, pcr14,
+		agentHash, boot, false)
+	if o.PCR14Result != TOFUMatch {
 		t.Fatalf("match: pcr14 = %v", o.PCR14Result)
 	}
 
 	moved := [types.HashSize]byte{0x15}
-	o := bs.CheckAndUpdateAttestation("c", moved, agentHash, boot, false)
+	o = bs.CheckAndUpdateAttestation("c", DefaultTenant, moved, agentHash,
+		boot, false)
 	if o.PCR14Result != TOFUMismatch {
 		t.Fatalf("moved register: pcr14 = %v, want TOFUMismatch", o.PCR14Result)
 	}
@@ -736,15 +741,20 @@ func TestPinnedRegister_SQLiteRefusesAMovedPCR14(t *testing.T) {
 	agentHash := [types.HashSize]byte{0xA1}
 	boot := &BootBaseline{PCR0: [types.HashSize]byte{0}, PCR1: [types.HashSize]byte{1}, PCR7: [types.HashSize]byte{7}}
 
-	if o := bs.CheckAndUpdateAttestation("c", pcr14, agentHash, boot, false); o.PCR14Result != TOFUFirstUse {
+	o := bs.CheckAndUpdateAttestation("c", DefaultTenant, pcr14,
+		agentHash, boot, false)
+	if o.PCR14Result != TOFUFirstUse {
 		t.Fatalf("first use: pcr14 = %v", o.PCR14Result)
 	}
-	if o := bs.CheckAndUpdateAttestation("c", pcr14, agentHash, boot, false); o.PCR14Result != TOFUMatch {
+	o = bs.CheckAndUpdateAttestation("c", DefaultTenant, pcr14,
+		agentHash, boot, false)
+	if o.PCR14Result != TOFUMatch {
 		t.Fatalf("match: pcr14 = %v", o.PCR14Result)
 	}
 
 	moved := [types.HashSize]byte{0x15}
-	o := bs.CheckAndUpdateAttestation("c", moved, agentHash, boot, false)
+	o = bs.CheckAndUpdateAttestation("c", DefaultTenant, moved, agentHash,
+		boot, false)
 	if o.PCR14Result != TOFUMismatch {
 		t.Fatalf("moved register: pcr14 = %v, want TOFUMismatch", o.PCR14Result)
 	}
@@ -1031,7 +1041,8 @@ func checkForcedReanchorPin(t *testing.T, s forcedPinStore) {
 	bootA := &BootBaseline{PCR0: [types.HashSize]byte{0xA0}}
 	bootB := &BootBaseline{PCR0: [types.HashSize]byte{0xB0}}
 
-	o := s.CheckAndUpdateAttestation("no-consent", pcr14, agentHash, bootA, true)
+	o := s.CheckAndUpdateAttestation("no-consent", DefaultTenant, pcr14,
+		agentHash, bootA, true)
 	if o.AgentHashResult != TOFUError || o.BootResult != TOFUError {
 		t.Fatalf("pin without a consent: %+v", o)
 	}
@@ -1045,8 +1056,8 @@ func checkForcedReanchorPin(t *testing.T, s forcedPinStore) {
 	outs := make(chan AttestationOutcome, 2)
 	for _, boot := range []*BootBaseline{bootA, bootB} {
 		go func() {
-			outs <- s.CheckAndUpdateAttestation("racing", pcr14,
-				agentHash, boot, true)
+			outs <- s.CheckAndUpdateAttestation("racing",
+				DefaultTenant, pcr14, agentHash, boot, true)
 		}()
 	}
 	pins := 0

@@ -241,6 +241,15 @@ func TestSQLiteBaseline_CursorPaging(t *testing.T) {
 	checkCursorPaging(t, NewShardedBaselineStore(shards), 120)
 }
 
+func TestSQLiteAtomicAttestation_FirstUseKeepsTenant(t *testing.T) {
+	db, err := store.OpenDB(":memory:")
+	if err != nil {
+		t.Fatalf("OpenDB failed: %v", err)
+	}
+	t.Cleanup(func() { db.Close() })
+	checkRefusedFirstUseKeepsTenant(t, NewSQLiteBaselineStore(db))
+}
+
 func TestSQLiteBaseline_Stats(t *testing.T) {
 	t.Log("TEST: SQLite baseline statistics")
 
@@ -394,11 +403,13 @@ func TestSQLiteAtomicAttestation_ConcurrentSeed(t *testing.T) {
 	start := make(chan struct{})
 	go func() {
 		<-start
-		resCh <- result{out: bs.CheckAndUpdateAttestation(clientID, pcr14, agentHash, bootA, false)}
+		resCh <- result{out: bs.CheckAndUpdateAttestation(clientID,
+			DefaultTenant, pcr14, agentHash, bootA, false)}
 	}()
 	go func() {
 		<-start
-		resCh <- result{out: bs.CheckAndUpdateAttestation(clientID, pcr14, agentHash, bootB, false)}
+		resCh <- result{out: bs.CheckAndUpdateAttestation(clientID,
+			DefaultTenant, pcr14, agentHash, bootB, false)}
 	}()
 	close(start)
 
@@ -458,7 +469,8 @@ func TestSQLiteAtomicAttestation_RecoversFromBootMismatch(t *testing.T) {
 		rogue.PCR0[i] = 0xEE
 	}
 
-	first := bs.CheckAndUpdateAttestation(clientID, pcr14, agentHash, good, false)
+	first := bs.CheckAndUpdateAttestation(clientID, DefaultTenant, pcr14,
+		agentHash, good, false)
 	if first.AgentHashResult != TOFUFirstUse || first.BootResult != TOFUFirstUse {
 		t.Fatalf("seed: %+v", first)
 	}
@@ -466,12 +478,14 @@ func TestSQLiteAtomicAttestation_RecoversFromBootMismatch(t *testing.T) {
 		t.Fatalf("seed attest_count: got %d want 1", first.AgentHashBaseline.AttestCount)
 	}
 
-	bad := bs.CheckAndUpdateAttestation(clientID, pcr14, agentHash, rogue, false)
+	bad := bs.CheckAndUpdateAttestation(clientID, DefaultTenant, pcr14,
+		agentHash, rogue, false)
 	if bad.BootResult != TOFUMismatch {
 		t.Fatalf("rogue boot must mismatch: %+v", bad)
 	}
 
-	recovered := bs.CheckAndUpdateAttestation(clientID, pcr14, agentHash, good, false)
+	recovered := bs.CheckAndUpdateAttestation(clientID, DefaultTenant,
+		pcr14, agentHash, good, false)
 	if recovered.AgentHashResult != TOFUMatch || recovered.BootResult != TOFUMatch {
 		t.Fatalf("recovery: %+v", recovered)
 	}

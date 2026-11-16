@@ -313,7 +313,8 @@ func newMOKRepinCase(t *testing.T, profile string, current []EventLogEntry) *mok
 	c := &mokRepinCase{v: v, id: "mok-client"}
 	c.pinned = DeriveLockedBootCommitmentPCR14(PCR14BaselineFromEventLog(pinnedParsed), agent)
 	b := boot(0x10, 0x11, 0x17)
-	v.baselineStore.(AtomicBaselineStorer).CheckAndUpdateAttestation(c.id, c.pinned, agent, &b, false)
+	v.baselineStore.(AtomicBaselineStorer).CheckAndUpdateAttestation(c.id,
+		DefaultTenant, c.pinned, agent, &b, false)
 	if err := v.baselineStore.(ReanchorStorer).RecordBootEvidence(c.id, pinnedLog, 0, false); err != nil {
 		t.Fatal(err)
 	}

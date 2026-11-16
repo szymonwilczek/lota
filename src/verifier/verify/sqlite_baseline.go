@@ -464,7 +464,7 @@ func (s *SQLiteBaselineStore) CheckAndUpdateBootPCRs(clientID string, boot BootB
 // blocks until COMMIT or ROLLBACK, up to busy_timeout. The transaction runs
 // on one db.Conn() because BEGIN, the statements and COMMIT must share a
 // connection. A branch that does not commit rolls back.
-func (s *SQLiteBaselineStore) CheckAndUpdateAttestation(clientID string,
+func (s *SQLiteBaselineStore) CheckAndUpdateAttestation(clientID, tenant string,
 	pcr14, agentHash [types.HashSize]byte,
 	boot *BootBaseline, consent bool,
 ) AttestationOutcome {
@@ -549,11 +549,11 @@ func (s *SQLiteBaselineStore) CheckAndUpdateAttestation(clientID string,
 				INSERT INTO baselines (
 					client_id, pcr14, agent_hash, first_seen, last_seen,
 					attest_count, pcr0, pcr1, pcr7, boot_first_seen,
-					boot_last_seen
-				) VALUES (?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?)`,
+					boot_last_seen, tenant
+				) VALUES (?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?)`,
 				clientID, pcr14[:], agentHash[:], now.UTC(), now.UTC(),
 				boot.PCR0[:], boot.PCR1[:], boot.PCR7[:],
-				now.UTC(), now.UTC()); err != nil {
+				now.UTC(), now.UTC(), tenant); err != nil {
 				slog.Error("attestation tx: INSERT (with boot) failed",
 					"client_id", clientID, "error", err)
 				outcome.AgentHashResult = TOFUError
@@ -574,9 +574,10 @@ func (s *SQLiteBaselineStore) CheckAndUpdateAttestation(clientID string,
 			if _, err := conn.ExecContext(ctx, `
 				INSERT INTO baselines (
 					client_id, pcr14, agent_hash, first_seen, last_seen,
-					attest_count
-				) VALUES (?, ?, ?, ?, ?, 1)`,
-				clientID, pcr14[:], agentHash[:], now.UTC(), now.UTC()); err != nil {
+					attest_count, tenant
+				) VALUES (?, ?, ?, ?, ?, 1, ?)`,
+				clientID, pcr14[:], agentHash[:], now.UTC(),
+				now.UTC(), tenant); err != nil {
 				slog.Error("attestation tx: INSERT (agent_hash only) failed",
 					"client_id", clientID, "error", err)
 				outcome.AgentHashResult = TOFUError

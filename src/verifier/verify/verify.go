@@ -682,7 +682,7 @@ func (v *Verifier) VerifyReportFrom(challengeID, remoteAddr string, reportData [
 	}
 
 	outcome := atomicStore.CheckAndUpdateAttestation(
-		clientID, pcr14, report.System.AgentHash, bootPtr,
+		clientID, tenant, pcr14, report.System.AgentHash, bootPtr,
 		bootPin.consent)
 
 	switch outcome.AgentHashResult {
@@ -698,7 +698,8 @@ func (v *Verifier) VerifyReportFrom(challengeID, remoteAddr string, reportData [
 		if v.tryAgentHashRepin(clog, clientID, tenant, pcr14, report) {
 			// the mismatch aborted the transaction; re-run it
 			outcome = atomicStore.CheckAndUpdateAttestation(
-				clientID, pcr14, report.System.AgentHash, bootPtr,
+				clientID, tenant, pcr14,
+				report.System.AgentHash, bootPtr,
 				bootPin.consent)
 			if outcome.AgentHashResult != TOFUMatch {
 				logging.Security(clog, "agent_hash re-pin did not settle; refusing",
@@ -753,7 +754,8 @@ func (v *Verifier) VerifyReportFrom(challengeID, remoteAddr string, reportData [
 		if v.tryMOKRepin(clog, clientID, tenant, pinned, pcr14, report, bootFacts) {
 			// the mismatch aborted the transaction; re-run it on the moved pin
 			outcome = atomicStore.CheckAndUpdateAttestation(
-				clientID, pcr14, report.System.AgentHash, bootPtr,
+				clientID, tenant, pcr14,
+				report.System.AgentHash, bootPtr,
 				bootPin.consent)
 			if outcome.PCR14Result == TOFUMatch {
 				break
