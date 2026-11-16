@@ -66,6 +66,8 @@ struct install_ctx {
 	struct install_opts opts;
 	struct ui ui;
 	int reboot_needed;
+	unsigned int reboot_stages; /* bit per stage that waits for the boot */
+	unsigned int boot_changed; /* bit per stage that changed the boot */
 	int applied; /* a stage was applied during this run */
 	/* loop status before this run reloaded it; empty if it did not */
 	char loop_status_before[256];
@@ -246,6 +248,23 @@ int install_unattended_checkpoint(char *buf, size_t cap, const int *deferred,
  * @note: reason given by the stage that asked for the reboot; may be NULL.
  */
 void install_reboot_required(char *buf, size_t cap, const char *note);
+
+/**
+ * install_stage_waits_reboot() - Record a stage that waits for the next boot.
+ * @ctx:   the run.
+ * @stage: index into install_stages.
+ */
+void install_stage_waits_reboot(struct install_ctx *ctx, int stage);
+
+/**
+ * install_reboot_note() - Why the barrier waits for a reboot.
+ * @buf: receives the note.
+ * @cap: size of @buf.
+ * @ctx: the run; names the stages whose apply changed the boot chain in it
+ *       (boot_changed), then the others install_stage_waits_reboot()
+ *       recorded.
+ */
+void install_reboot_note(char *buf, size_t cap, const struct install_ctx *ctx);
 
 /**
  * install_stage_result() - Outcome a stage reports.

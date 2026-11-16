@@ -251,7 +251,7 @@ static int run_status(struct install_ctx *ctx)
 			blocked++;
 		/* st_barrier_probe() reads reboot_needed */
 		if (st == STAGE_REBOOT)
-			ctx->reboot_needed = 1;
+			install_stage_waits_reboot(ctx, i);
 	}
 
 	{
@@ -581,7 +581,7 @@ int main(int argc, char **argv)
 				print_reboot_box(&ctx, note);
 				return EXIT_INSTALL_REBOOT;
 			}
-			ctx.reboot_needed = 1;
+			install_stage_waits_reboot(&ctx, i);
 			break;
 		case STAGE_BLOCKED:
 			ui_stage_result(&ctx.ui, UI_BLOCKED, s->title, NULL);

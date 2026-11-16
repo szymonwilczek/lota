@@ -20,7 +20,9 @@
  * sections of struct lota_attestation_report and nothing it does not carry.
  *
  * A run that stops for a reboot quotes the stage's reason in a sentence of its
- * own, and stage notes mostly end in a full stop already.
+ * own, and stage notes mostly end in a full stop already. The checkpoint names
+ * the stages that wait for the boot, and says the run changed the boot chain
+ * only when it did: a floor configured before the run is not its change.
  */
 
 #include <stdio.h>
@@ -353,6 +355,67 @@ static void test_only_a_boot_path_stage_waits_for_the_reboot(void)
 	PASS();
 }
 
+static enum stage_state barrier_note(struct install_ctx *ctx)
+{
+	const struct stage *b =
+		&install_stages[stage_named("Reboot checkpoint")];
+
+	return b->probe(ctx, note, sizeof(note));
+}
+
+static void test_a_configured_floor_is_no_change(void)
+{
+	struct install_ctx ctx;
+	int floor = stage_named("Kernel integrity floor on the cmdline");
+
+	TEST("a floor set before this run is not named as a change");
+	memset(&ctx, 0, sizeof(ctx));
+	install_stage_waits_reboot(&ctx, floor);
+	if (barrier_note(&ctx) != STAGE_REBOOT) {
+		FAIL("the checkpoint does not wait for the reboot");
+		return;
+	}
+	if (says("changed") || !says(install_stages[floor].title) ||
+	    !says("is configured and takes effect on the next boot")) {
+		FAIL(note);
+		return;
+	}
+	PASS();
+}
+
+static void test_a_rebuilt_initramfs_is_a_change(void)
+{
+	struct install_ctx ctx;
+	int lock = stage_named("Boot-time PCR14 lock in the initramfs");
+	int floor = stage_named("Kernel integrity floor on the cmdline");
+	char want[256];
+
+	TEST("a run that rebuilt the initramfs names what waits");
+	memset(&ctx, 0, sizeof(ctx));
+	/* the lock probes DONE after dracut, the floor waits from before */
+	ctx.reboot_needed = 1;
+	ctx.boot_changed = 1u << lock;
+	install_stage_waits_reboot(&ctx, floor);
+	if (barrier_note(&ctx) != STAGE_REBOOT) {
+		FAIL("the checkpoint does not wait for the reboot");
+		return;
+	}
+	snprintf(want, sizeof(want), "This run changed the boot chain: '%s'.",
+		 install_stages[lock].title);
+	if (!says(want) || says("IMA")) {
+		FAIL(note);
+		return;
+	}
+	snprintf(want, sizeof(want),
+		 "'%s' is configured and takes effect on the next boot.",
+		 install_stages[floor].title);
+	if (!says(want)) {
+		FAIL(note);
+		return;
+	}
+	PASS();
+}
+
 /* Set once the child says its TERM trap is in place */
 static int child_ready;
 
@@ -429,6 +492,8 @@ int main(void)
 	test_every_title_is_spaced();
 	test_the_report_summary_matches_the_report();
 	test_only_a_boot_path_stage_waits_for_the_reboot();
+	test_a_configured_floor_is_no_change();
+	test_a_rebuilt_initramfs_is_a_change();
 	test_an_aborted_command_is_not_a_success();
 
 	printf("\nPassed: %d / %d\n", tests_passed, tests_run);

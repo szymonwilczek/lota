@@ -581,6 +581,15 @@ static enum stage_state st_initrd_probe(struct install_ctx *ctx, char *note,
 	return STAGE_PENDING;
 }
 
+/* names the stage whose @apply changed the boot chain in this run */
+static void boot_changed_by(struct install_ctx *ctx,
+			    int (*apply)(struct install_ctx *))
+{
+	for (int i = 0; i < install_stage_count; i++)
+		if (install_stages[i].apply == apply)
+			ctx->boot_changed |= 1u << i;
+}
+
 static int st_initrd_apply(struct install_ctx *ctx)
 {
 	const char *const argv[] = { "dracut", "-f", "--regenerate-all", NULL };
@@ -592,6 +601,7 @@ static int st_initrd_apply(struct install_ctx *ctx)
 	if (rc != 0)
 		return rc > 0 ? -EIO : rc;
 	ctx->reboot_needed = 1;
+	boot_changed_by(ctx, st_initrd_apply);
 	return 0;
 }
 
@@ -706,6 +716,7 @@ static int st_cmdline_apply(struct install_ctx *ctx)
 	if (rc != 0)
 		return rc > 0 ? -EIO : rc;
 	ctx->reboot_needed = 1;
+	boot_changed_by(ctx, st_cmdline_apply);
 	return 0;
 }
 
@@ -967,9 +978,7 @@ static enum stage_state st_barrier_probe(struct install_ctx *ctx, char *note,
 	int pcr;
 
 	if (ctx->reboot_needed) {
-		snprintf(note, cap,
-			 "Earlier stages changed the boot chain "
-			 "(initramfs or kernel cmdline).");
+		install_reboot_note(note, cap, ctx);
 		return STAGE_REBOOT;
 	}
 
@@ -1614,22 +1623,30 @@ static enum stage_state st_firmware_readiness_probe(struct install_ctx *ctx,
 	return STAGE_DONE;
 }
 
-int install_unattended_checkpoint(char *buf, size_t cap, const int *deferred,
-				  int n)
+/* 'A', 'B' and 'C' */
+static void stage_list(char *buf, size_t cap, const int *idx, int n)
 {
-	char left[1024] = "";
 	size_t used = 0;
 	int i;
 
-	for (i = 0; i < n && used < sizeof(left); i++) {
+	buf[0] = '\0';
+	for (i = 0; i < n && used < cap; i++) {
 		const char *sep = i == 0 ? "" : i == n - 1 ? " and " : ", ";
-		int w = snprintf(left + used, sizeof(left) - used, "%s'%s'",
-				 sep, install_stages[deferred[i]].title);
+		int w = snprintf(buf + used, cap - used, "%s'%s'", sep,
+				 install_stages[idx[i]].title);
 
 		if (w < 0)
 			break;
 		used += (size_t)w;
 	}
+}
+
+int install_unattended_checkpoint(char *buf, size_t cap, const int *deferred,
+				  int n)
+{
+	char left[1024];
+
+	stage_list(left, sizeof(left), deferred, n);
 
 	snprintf(buf, cap,
 		 "Host-local setup is done. What is left changes how this "
@@ -1649,6 +1666,45 @@ void install_reboot_required(char *buf, size_t cap, const char *note)
 	snprintf(buf, cap,
 		 "Reboot is required before the install can continue: %s%s",
 		 note ? note : "", stop ? "" : ".");
+}
+
+void install_stage_waits_reboot(struct install_ctx *ctx, int stage)
+{
+	ctx->reboot_needed = 1;
+	if (stage >= 0 && stage < install_stage_count)
+		ctx->reboot_stages |= 1u << stage;
+}
+
+void install_reboot_note(char *buf, size_t cap, const struct install_ctx *ctx)
+{
+	int changed[INSTALL_MAX_TUI_STAGES], waits[INSTALL_MAX_TUI_STAGES];
+	char list[1024];
+	int i, nc = 0, nw = 0;
+	size_t used = 0;
+
+	for (i = 0; i < install_stage_count; i++) {
+		if (ctx->boot_changed & (1u << i))
+			changed[nc++] = i;
+		else if (ctx->reboot_stages & (1u << i))
+			waits[nw++] = i;
+	}
+
+	buf[0] = '\0';
+	if (nc) {
+		stage_list(list, sizeof(list), changed, nc);
+		used = (size_t)snprintf(buf, cap,
+					"This run changed the boot chain: %s.",
+					list);
+	}
+	if (nw && used < cap) {
+		stage_list(list, sizeof(list), waits, nw);
+		snprintf(buf + used, cap - used,
+			 "%s%s %s configured and %s effect on the next boot.",
+			 nc ? " " : "", list, nw == 1 ? "is" : "are",
+			 nw == 1 ? "takes" : "take");
+	}
+	if (!nc && !nw)
+		snprintf(buf, cap, "A stage waits for the next boot.");
 }
 
 enum ui_result install_stage_result(enum stage_state st, int applied)
