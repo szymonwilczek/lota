@@ -1640,6 +1640,9 @@ test-unit: all $(TEST_BINS)
 	fi
 	@if [ -x $(EXAMPLES_BUILD_DIR)/demo_anticheat ] && \
 	    [ -x $(EXAMPLES_BUILD_DIR)/lota-ci-attest ] && \
+	    [ -x $(EXAMPLES_BUILD_DIR)/demo_server ] && \
+	    [ -x $(EXAMPLES_BUILD_DIR)/lota-release-gate ] && \
+	    [ -x $(BUILD_DIR)/lota-agent ] && \
 	    [ -x $(EXAMPLES_BUILD_DIR)/runtime_remeasure ]; then \
 		tests/integration/test_examples_cli.sh; \
 	else \

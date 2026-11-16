@@ -54,11 +54,15 @@ fail() {
 	echo "FAIL: $*" >&2
 	exit 1
 }
+trap 'fail "line $LINENO: $BASH_COMMAND exited $?"' ERR
 
 echo "== 1/5 start a throwaway swTPM =="
 mkdir -p "$RUN_DIR/tpm"
 swtpm_setup --tpm2 --tpmstate "$RUN_DIR/tpm" --createek --decryption \
-	--overwrite >"$RUN_DIR/swtpm_setup.log" 2>&1
+	--overwrite >"$RUN_DIR/swtpm_setup.log" 2>&1 || {
+	cat "$RUN_DIR/swtpm_setup.log" >&2
+	fail "swtpm_setup failed"
+}
 swtpm socket --tpm2 --tpmstate "dir=$RUN_DIR/tpm" \
 	--server "type=tcp,port=$TPM_PORT" \
 	--ctrl "type=tcp,port=$((TPM_PORT + 1))" \
@@ -139,11 +143,10 @@ GATE_PID=$!
 sleep 1
 
 cp "$RUN_DIR/released" "$RUN_DIR/refused"
-set +e
+rc=0
 "$step" --gate "http://$GATE_ADDR" --socket "$RUN_DIR/lota.sock" \
-	--out "$RUN_DIR/refused" >"$RUN_DIR/step-negative.log" 2>&1
-rc=$?
-set -e
+	--out "$RUN_DIR/refused" >"$RUN_DIR/step-negative.log" 2>&1 ||
+	rc=$?
 
 [ "$rc" -ne 0 ] || fail "an untrusted host was released the secret"
 [ "$rc" -eq 6 ] || fail "expected exit 6 (refused), got $rc"
@@ -153,10 +156,9 @@ grep -q "release refused" "$RUN_DIR/gate-negative.log" ||
 echo "   refused, nothing written, refusal audited"
 
 cp "$RUN_DIR/released" "$RUN_DIR/misused"
-set +e
-"$step" --out "$RUN_DIR/misused" --no-such-flag >/dev/null 2>&1
-rc=$?
-set -e
+rc=0
+"$step" --out "$RUN_DIR/misused" --no-such-flag >/dev/null 2>&1 ||
+	rc=$?
 [ "$rc" -eq 2 ] || fail "expected exit 2 (usage), got $rc"
 [ ! -e "$RUN_DIR/misused" ] || fail "a misused step left a file"
 echo "   misused, nothing written"

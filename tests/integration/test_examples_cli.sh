@@ -133,6 +133,30 @@ agent_reads_empty_conf() {
 check "ci-gate run.sh gives the agent an empty lota.conf" \
     agent_reads_empty_conf
 
+# a step that fails names itself, swtpm_setup with its log
+FAIL_BIN="$WORK_DIR/failbin"
+cp -P -r "$STUB_BIN" "$FAIL_BIN"
+fails_named() {
+    local script="$1" tool="$2" want="$3" out rc=0
+    rm -f "$FAIL_BIN/$tool"
+    printf '#!/bin/sh\necho %s-log-line\nexit 3\n' "$tool" \
+        >"$FAIL_BIN/$tool"
+    chmod 0755 "$FAIL_BIN/$tool"
+    out=$(PATH="$FAIL_BIN" LOTA_BUILD_DIR="$BUILD_DIR" \
+        "$BASH" "$REPO_DIR/examples/$script/run.sh" 2>&1) || rc=$?
+    rm -f "$FAIL_BIN/$tool"
+    ln -s "$STUB_BIN/$tool" "$FAIL_BIN/$tool"
+    [[ "$rc" -eq 1 ]] && grep -q -- "$want" <<<"$out"
+}
+for script in ci-gate demo_anticheat; do
+    check "$script run.sh prints the log of a failed swtpm_setup" \
+        fails_named "$script" swtpm_setup swtpm_setup-log-line
+    check "$script run.sh names a failed swtpm_setup" \
+        fails_named "$script" swtpm_setup "FAIL: swtpm_setup failed"
+    check "$script run.sh names any other command that fails" \
+        fails_named "$script" install "FAIL: line [0-9]*: install .* exited 3"
+done
+
 # verify-attested.sh: a status left by a hook that is gone, and a file
 # the hook writes after the watcher started
 VERIFY="$REPO_DIR/examples/cs2/scenarios/verify-attested.sh"

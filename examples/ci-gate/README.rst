@@ -299,8 +299,9 @@ The run ends with:
 
 A missing binary, a missing command or a failed step prints a line
 starting ``missing`` or ``FAIL:``, plus the log of the gate when step 4 is
-refused, and exits 1. A ``swtpm_setup`` that fails ends the script with
-its own exit status and no such line.
+refused, and exits 1. A ``swtpm_setup`` that fails prints its log before
+``FAIL: swtpm_setup failed``; any other command that fails prints
+``FAIL: line <n>: <command> exited <status>``.
 
 ``LOTA_BUILD_DIR`` (``build``), ``BIN`` (the build directory) and
 ``EXAMPLES_BIN`` (its ``examples/``) say where the binaries are.
