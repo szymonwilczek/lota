@@ -220,7 +220,7 @@ static int run_manifest(const char *manifest)
 {
 	uint8_t live[LOTA_AC_RUNTIME_MEASURE_SIZE];
 	uint8_t set[LOTA_AC_RUNTIME_MEASURE_SIZE];
-	char line[LOTA_AC_RUNTIME_PATH_MAX];
+	char line[LOTA_AC_RUNTIME_PATH_MAX + 1];
 	char (*paths)[LOTA_AC_RUNTIME_PATH_MAX] = NULL;
 	const char **vec = NULL;
 	size_t count = 0;

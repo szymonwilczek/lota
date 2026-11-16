@@ -77,8 +77,8 @@ mapped; the vDSO is left out.
 
 ``--manifest`` reads one path per line, skipping blank lines and lines
 starting with ``#``, and trimming spaces and tabs around each path. It
-refuses an empty manifest, more than 512 paths and a line of 4095
-characters or more. The output of ``--list-objects``, or of
+refuses an empty manifest, more than 512 paths and a line of more than
+4095 characters, the newline left out. The output of ``--list-objects``, or of
 ``demo_anticheat --print-runtime-objects`` for that program, is such a
 manifest, and ``demo_server -anticheat-runtime-manifest`` takes the same
 format (see `demo_server <../demo_server/README.rst>`_).

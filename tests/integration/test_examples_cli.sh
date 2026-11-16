@@ -21,8 +21,9 @@ BUILD_DIR="${BUILD_DIR:-${LOTA_BUILD_DIR:-$REPO_DIR/build}}"
 EXAMPLES_DIR="$BUILD_DIR/examples"
 DEMO_AC="$EXAMPLES_DIR/demo_anticheat"
 CI_ATTEST="$EXAMPLES_DIR/lota-ci-attest"
+REMEASURE="$EXAMPLES_DIR/runtime_remeasure"
 
-for f in "$DEMO_AC" "$CI_ATTEST"; do
+for f in "$DEMO_AC" "$CI_ATTEST" "$REMEASURE"; do
     if [[ ! -x "$f" ]]; then
         echo "[examples-cli] missing artifact: $f" >&2
         exit 2
@@ -68,6 +69,21 @@ for t in abc 0 -1 5s; do
         exits_with 2 "$CI_ATTEST" --gate http://127.0.0.1:9 \
         --out "$WORK_DIR/secret" --timeout "$t"
 done
+
+# a manifest line as long as a path may be, and one character longer
+long_path() { printf '/%*s' "$(($1 - 1))" '' | tr ' ' a; }
+takes_line() {
+    local len="$1" nl="$2" m="$WORK_DIR/manifest" out
+    printf "%s$nl" "$(long_path "$len")" >"$m"
+    out=$("$REMEASURE" --manifest "$m" 2>&1 </dev/null) || true
+    ! grep -q 'line exceeds\|path too long' <<<"$out"
+}
+check "runtime_remeasure takes a 4095-character line" takes_line 4095 '\n'
+check "runtime_remeasure takes one with no newline" takes_line 4095 ''
+check "runtime_remeasure refuses a 4096-character line" \
+    eval '! takes_line 4096 "\n"'
+check "runtime_remeasure refuses one with no newline" \
+    eval '! takes_line 4096 ""'
 
 # run.sh with every tool but openssl on PATH
 STUB_BIN="$WORK_DIR/bin"
