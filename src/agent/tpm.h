@@ -511,7 +511,7 @@ int tpm_aik_profile_unique(const char *profile_id, uint8_t out[LOTA_HASH_SIZE],
  */
 bool tpm_aik_key_is_shared(const struct tpm_context *ctx);
 
-/* Shared-key refusal; the attest loop appends the publisher. */
+/* Shared-key refusal; each caller names the publisher beside it. */
 #define TPM_AIK_SHARED_KEY_ADVICE                                             \
 	"This publisher's attestation key was created before each publisher " \
 	"got a key of its own, so it is byte for byte the key every other "   \

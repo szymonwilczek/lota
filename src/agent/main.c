@@ -412,7 +412,9 @@ static int run_daemon(const struct run_daemon_params *params)
 		}
 
 		if (tpm_aik_key_is_shared(&g_agent.tpm_ctx)) {
-			lota_err("%s", TPM_AIK_SHARED_KEY_ADVICE);
+			/* only the bound profile reads shared: targets[0] */
+			lota_err("%s The agent exits until then. Publisher: %s",
+				 TPM_AIK_SHARED_KEY_ADVICE, targets[0].label);
 			ret = -ENOTSUP;
 			goto cleanup_tpm;
 		}
