@@ -226,7 +226,8 @@ The body is ``{"nonce": "<base64>", "token": "<base64>"}`` of at most
    * - The token is base64 and not empty.
      - ``token is not base64-encoded``
    * - The gate holds the nonce: it issued it, it has not been spent,
-       and no ``POST /nonce`` came after it expired.
+       and no ``POST /nonce`` came once it had been expired for
+       ``-nonce-ttl``.
      - ``nonce was not issued by this gate``
    * - The nonce has not expired.
      - ``nonce expired before the token arrived``

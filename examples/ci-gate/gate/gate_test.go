@@ -421,6 +421,34 @@ func TestRelease_RefusesExpiredNonce(t *testing.T) {
 	}
 }
 
+// a nonce stays known for one TTL past its expiry, whatever is issued
+func TestNonceStore_ExpiredNonceStaysKnownForOneTTL(t *testing.T) {
+	now := time.Unix(1_000_000, 0)
+	s := newNonceStore(time.Minute)
+	s.now = func() time.Time { return now }
+
+	for _, tc := range []struct {
+		late time.Duration
+		want error
+	}{
+		{90 * time.Second, errStaleNonce},
+		{150 * time.Second, errUnknownNonce},
+	} {
+		now = time.Unix(1_000_000, 0)
+		a, _, err := s.issue()
+		if err != nil {
+			t.Fatalf("issue: %v", err)
+		}
+		now = now.Add(tc.late)
+		if _, _, err := s.issue(); err != nil {
+			t.Fatalf("issue: %v", err)
+		}
+		if err := s.consume(a); !errors.Is(err, tc.want) {
+			t.Fatalf("%s late: %v, want %v", tc.late, err, tc.want)
+		}
+	}
+}
+
 func TestRelease_RefusesMalformedInput(t *testing.T) {
 	key, _ := rsa.GenerateKey(rand.Reader, 2048)
 	g := newGate(t, key, flagAttested, 15*time.Minute)
