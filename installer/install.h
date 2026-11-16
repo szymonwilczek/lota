@@ -229,6 +229,9 @@ enum stage_state install_stage_after_apply(const struct stage *s,
 					   const struct install_ctx *ctx,
 					   enum stage_state st);
 
+/* what every attestation report carries, as the player is told */
+extern const char install_telemetry_summary[];
+
 extern const struct stage install_stages[];
 extern const int install_stage_count;
 

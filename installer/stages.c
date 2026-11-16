@@ -1308,20 +1308,23 @@ static int wait_for_loop_report(struct install_ctx *ctx)
 	return -1;
 }
 
-static const char telemetry_summary[] =
+const char install_telemetry_summary[] =
 	"Every attestation report sent to the operator's verifier "
 	"contains:\n"
 	"  - TPM PCR values and a TPM-signed quote over them\n"
+	"  - AIK public key and AIK certificate, whose subject is the "
+	"device pseudonym the attestation CA issued\n"
+	"  - Agent hash, kernel measurement digest and the kernel path\n"
+	"  - IOMMU state\n"
+	"  - Security state flags: TPM quote, IOMMU, boot measurement, Secure "
+	"Boot, kernel lockdown, module signatures, IMA appraisal, PCR 14 boot "
+	"commitment and initramfs lock, whether the agent's LSM is loaded and "
+	"enforcing, which of its mmap, exec, module, anonymous-exec and "
+	"ptrace rules are on, bench mode and lost events\n"
 	"  - Boot event log (firmware and bootloader measurements, "
 	"including the kernel command line, which carries disk UUIDs)\n"
-	"  - Agent and kernel image hashes and the kernel path\n"
-	"  - IOMMU status and counts + hashes of recently executed "
-	"binaries with their paths, PIDs and UIDs (the BPF telemetry the "
-	"anti-cheat verdict is based on)\n"
-	"  - Stable device identifier derived by hashing the TPM "
-	"endorsement key's public name (the key itself never leaves the "
-	"TPM)\n"
-	"  - AIK certificate, whose subject is a CA-issued pseudonym\n"
+	"  - ESRT system firmware entry, or a mark that the platform has none\n"
+	"  - Shim MOK list, empty when it cannot be read\n"
 	"During enrollment only, the attestation CA (never the verifier) "
 	"additionally receives the TPM's EK certificate to prove the TPM "
 	"is genuine.\n"
@@ -1512,7 +1515,7 @@ after_cert:
 		break;
 	}
 
-	ui_explain(&ctx->ui, telemetry_summary);
+	ui_explain(&ctx->ui, install_telemetry_summary);
 	return ok ? 0 : -1;
 }
 

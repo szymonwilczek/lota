@@ -16,6 +16,9 @@
  * A stage the run applied says so in words of its own, apart from a stage that
  * found nothing to do, so an upgrade transcript shows what the upgrade redid.
  *
+ * The summary of what a report carries, shown before enrollment, lists the
+ * sections of struct lota_attestation_report and nothing it does not carry.
+ *
  * A run that stops for a reboot quotes the stage's reason in a sentence of its
  * own, and stage notes mostly end in a full stop already.
  */
@@ -284,6 +287,47 @@ static void test_every_title_is_spaced(void)
  * A stage outside the boot chain that still probes pending after its apply
  * has not worked, whatever an earlier stage did to the boot chain.
  */
+static void test_the_report_summary_matches_the_report(void)
+{
+	static const char *const carried[] = {
+		"PCR values",
+		"quote",
+		"AIK public key",
+		"AIK certificate",
+		"Agent hash",
+		"kernel measurement digest",
+		"IOMMU",
+		"Security state flags",
+		"event log",
+		"ESRT",
+		"MOK list",
+		"TPM quote",
+		"LSM is loaded",
+		"bench mode",
+		"lost events",
+		"has none",
+		"empty when it cannot be read",
+		"ptrace rules",
+	};
+	static const char *const absent[] = { "recently executed", "PIDs",
+					      "endorsement key's public",
+					      "policy keys" };
+	size_t i;
+
+	TEST("the report summary lists the sections a report carries");
+	for (i = 0; i < sizeof(carried) / sizeof(carried[0]); i++)
+		if (!strstr(install_telemetry_summary, carried[i])) {
+			FAIL(carried[i]);
+			return;
+		}
+	for (i = 0; i < sizeof(absent) / sizeof(absent[0]); i++)
+		if (strstr(install_telemetry_summary, absent[i])) {
+			FAIL(absent[i]);
+			return;
+		}
+	PASS();
+}
+
 static void test_only_a_boot_path_stage_waits_for_the_reboot(void)
 {
 	struct install_ctx ctx;
@@ -383,6 +427,7 @@ int main(void)
 	test_applied_changes_only_a_satisfied_stage();
 	test_every_explanation_is_spaced();
 	test_every_title_is_spaced();
+	test_the_report_summary_matches_the_report();
 	test_only_a_boot_path_stage_waits_for_the_reboot();
 	test_an_aborted_command_is_not_a_success();
 
