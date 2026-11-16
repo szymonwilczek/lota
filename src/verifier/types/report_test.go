@@ -673,3 +673,56 @@ func TestParseReport_MokList(t *testing.T) {
 		t.Errorf("oversized list: got %v, want ErrInvalidSize", err)
 	}
 }
+
+func reportWithSections(t *testing.T, logSize, mokSize int) []byte {
+	t.Helper()
+	base := createTestReportBytes()
+	data := append([]byte(nil), base[:FixedReportSize]...)
+	data = binary.LittleEndian.AppendUint32(data, uint32(logSize))
+	data = append(data, make([]byte, logSize)...)
+	data = append(data, make([]byte, ESRTWireSize)...)
+	data = binary.LittleEndian.AppendUint32(data, uint32(mokSize))
+	data = append(data, make([]byte, mokSize)...)
+	binary.LittleEndian.PutUint32(data[8:12], uint32(len(data)))
+	return data
+}
+
+func TestParseReport_SectionLimits(t *testing.T) {
+	const logSize = 300 * 1024
+	data := reportWithSections(t, logSize, 0)
+	if len(data) > MaxReportWireSize {
+		t.Fatalf("300 KiB event log: %d bytes, over the frame cap %d",
+			len(data), MaxReportWireSize)
+	}
+	report, err := ParseReport(data)
+	if err != nil {
+		t.Fatalf("300 KiB event log: %v", err)
+	}
+	if len(report.EventLog) != logSize {
+		t.Fatalf("EventLog: got %d bytes, want %d",
+			len(report.EventLog), logSize)
+	}
+
+	full := reportWithSections(t, MaxEventLogSize, MaxMokListSize)
+	if len(full) != MaxReportWireSize {
+		t.Fatalf("both sections full: %d bytes, frame cap %d",
+			len(full), MaxReportWireSize)
+	}
+	if _, err := ParseReport(full); err != nil {
+		t.Fatalf("both sections full: %v", err)
+	}
+
+	for _, tc := range []struct {
+		name         string
+		log, mokList int
+	}{
+		{"event log over its limit", MaxEventLogSize + 1, 0},
+		{"MOK list over its limit", 0, MaxMokListSize + 1},
+	} {
+		_, err := ParseReport(reportWithSections(t, tc.log, tc.mokList))
+		if !errors.Is(err, ErrInvalidSize) {
+			t.Errorf("%s: got %v, want ErrInvalidSize",
+				tc.name, err)
+		}
+	}
+}
