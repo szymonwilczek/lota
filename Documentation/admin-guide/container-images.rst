@@ -5,108 +5,118 @@
 Container images
 ================
 
-The two server-side services, the verifier and the attestation CA, ship as
-OCI container images so the relying-party tier can be deployed without
-reproducing the host build toolchain on every distribution. The on-host agent
-is **not** containerised: it touches the TPM, the kernel BPF LSM and the
-initramfs, and stays a native package.
+The verifier and the attestation CA ship as OCI images built with `ko
+<https://ko.build>`_. The agent needs the host's TPM, BPF LSM and initramfs,
+and ships only as a package (:doc:`packages`).
 
-The images are plain OCI artifacts. They are built with `ko
-<https://ko.build>`_, not a Dockerfile, and the build pipeline does not need
-the Docker daemon. An operator can run the published image with Podman or
-Docker -- the artifact is the same either way.
+The images
+==========
 
-What is in the image
-====================
+.. list-table::
+   :header-rows: 1
+   :widths: 45 30 25
 
-Both services build as pure-Go static binaries (``modernc.org/sqlite``,
-``jackc/pgx`` -- no cgo), so the default image of each is the binary on the
-**nonroot distroless static** base: no shell, no libc and no package manager,
-which keeps the CVE surface that enterprise scanners report close to zero. The
-service therefore runs as an unprivileged user, and any writable state must be
-supplied through a mounted volume.
+   * - Image
+     - Base
+     - Platforms
+   * - ``ghcr.io/szymonwilczek/lota/verifier:VERSION``
+     - ``gcr.io/distroless/static:nonroot``
+     - ``linux/amd64``, ``linux/arm64``
+   * - ``ghcr.io/szymonwilczek/lota/attestca:VERSION``
+     - ``gcr.io/distroless/static:nonroot``
+     - ``linux/amd64``, ``linux/arm64``
+   * - ``ghcr.io/szymonwilczek/lota/attestca:VERSION-hsm``
+     - ``gcr.io/distroless/cc-debian13:nonroot``
+     - ``linux/amd64``
 
-The attestation CA ships as two images. The default tag carries the pure-Go
-build described above, whose only signing key is an on-disk PEM -- the
-development fallback. A production CA holds its key in a PKCS#11 token, and
-that path is a cgo build that dlopens the vendor's module, so it cannot live
-on a base with no loader. It ships as the ``-hsm`` variant tag of the same
-repository::
+Each tag also exists as ``latest`` and ``latest-hsm``. The configurations
+are :ghsrc:`src/verifier/.ko.yaml`, :ghsrc:`src/attestca/.ko.yaml` and
+:ghsrc:`packaging/ko/attestca-hsm/.ko.yaml`.
 
-   ghcr.io/szymonwilczek/lota/attestca:<version>        pure-Go, static, on-disk key
-   ghcr.io/szymonwilczek/lota/attestca:<version>-hsm    PKCS#11, cgo, key in a token
+The verifier and the default CA are static builds with cgo off, on a base
+with no shell and no libc. They run as an unprivileged user, so the state
+they write lives on a mounted volume.
 
-The HSM image sits on **nonroot distroless cc**, which carries glibc,
-``libstdc++`` and ``libcrypto`` -- what a PKCS#11 module is usually linked
-against -- and nothing else: still no shell and no package manager. The module
-is the operator's own and is mounted read-only, together with any library of
-its own the base does not carry. cgo has no cross-compiler in this build, so
-the HSM image is ``linux/amd64`` only; the pure-Go image keeps both
-architectures.
+The ``-hsm`` CA is built with cgo and the ``pkcs11`` tag, on a base that
+carries glibc, and loads the operator's PKCS#11 module with ``dlopen``. The
+module needs a glibc no newer than the base's; a library of its own that
+the base lacks is mounted beside it and named in ``LD_LIBRARY_PATH``.
 
-The module is loaded with ``dlopen``, so the base's glibc has to be at least
-as new as the glibc the module was built against, and its own dependencies
-have to be reachable -- mount them beside it and name the directory in
-``LD_LIBRARY_PATH``. A module from a distribution newer than the base fails to
-load with a version lookup error naming the symbol version it wanted; the
-answer is a module built for an older glibc, not a flag.
+The default CA has no PKCS#11 support. A ``-ca-key-pkcs11-*`` flag without
+``-ca-key-pkcs11-module`` is refused as incomplete; with the module named,
+the CA reads ``-ca-cert`` and exits::
+
+   CA PKCS#11 key: this lota-attest-ca was built without PKCS#11 support;
+   build one with `make attest-ca GO_TAGS=pkcs11`, or run the -hsm tag of
+   the attestca image, which carries it
 
 Building
 ========
 
-::
+.. code-block:: sh
 
    make container-images
 
-builds and publishes all three: the verifier, the pure-Go CA and the HSM CA.
-``make container-image-attest-ca-hsm`` builds the last on its own. The
-relevant knobs are make variables:
+builds the three images and pushes them to ``KO_DOCKER_REPO``
+(``ghcr.io/szymonwilczek/lota``) as ``verifier`` and ``attestca``;
+``make container-image-verifier``, ``container-image-attest-ca`` and
+``container-image-attest-ca-hsm`` build one. The variables:
 
-* ``KO_DOCKER_REPO`` -- destination registry prefix. With ``-B`` the images are
-  named ``$KO_DOCKER_REPO/verifier`` and ``$KO_DOCKER_REPO/attestca``.
-* ``KO_IMAGE_TAGS`` -- comma-separated tags (default ``<version>,latest``).
-* ``KO_PLATFORMS`` -- target platforms (default ``linux/amd64,linux/arm64``).
-* ``KO_HSM_PLATFORMS`` -- the same for the HSM image (default ``linux/amd64``;
-  its cgo build has no cross-compiler here).
-* ``KO_HSM_TAG_SUFFIX`` -- the variant tag the HSM image is published under
-  (default ``-hsm``), appended to each tag in ``KO_IMAGE_TAGS``.
+``KO_IMAGE_TAGS``
+  Tags, comma-separated. Default ``VERSION,latest``.
 
-The build is reproducible: ``SOURCE_DATE_EPOCH`` is pinned to the HEAD commit
-time, matching the rest of the reproducible-build posture
-(:doc:`../security/reproducible-builds`). Each image carries an SPDX SBOM and
-OCI ``version``/``source``/``licence`` labels.
+``KO_PLATFORMS``
+  Platforms of the static images. Default ``linux/amd64,linux/arm64``.
 
-To inspect an image locally with Podman, without pushing to a registry, point
-ko at an OCI layout instead::
+``KO_HSM_PLATFORMS``
+  Platforms of the ``-hsm`` image. Default ``linux/amd64``, since cgo does
+  not cross-compile in this build.
 
-   cd src/verifier && ko build --oci-layout-path=/tmp/v .
-   skopeo copy oci:/tmp/v containers-storage:localhost/lota-verifier
+``KO_HSM_TAG_SUFFIX``
+  Appended to each tag of the ``-hsm`` image. Default ``-hsm``.
 
-Running with Podman
-===================
+``SOURCE_DATE_EPOCH`` is the commit time of ``HEAD``, or
+``REPRO_SOURCE_DATE_EPOCH`` outside a checkout
+(:doc:`../security/reproducible-builds`). Each image carries an SPDX SBOM
+and the ``org.opencontainers.image.version``, ``source`` and ``licenses``
+labels.
 
-The verifier needs its state on a writable volume and exposes its listener
-port. A minimal rootless Podman invocation::
+``KO_DOCKER_REPO=ko.local`` loads the images into the local Docker daemon.
+For Podman, ko writes an OCI layout that ``skopeo`` copies::
+
+   cd src/verifier
+   KO_DOCKER_REPO=example.invalid/lota ko build -B --push=false \
+       --platform=linux/amd64 --oci-layout-path=/tmp/lota-verifier .
+   skopeo copy oci:/tmp/lota-verifier containers-storage:localhost/lota-verifier
+
+Running the verifier
+====================
+
+The verifier refuses to start without a TLS certificate and key, an
+attestation-CA root and a policy (:doc:`../verifier/command-line`). With
+them in ``/etc/lota-verifier`` on the host:
+
+.. code-block:: sh
 
    podman run --rm \
        -v lota-verifier-state:/var/lib/lota \
+       -v /etc/lota-verifier:/etc/lota-verifier:ro,Z \
        -p 8443:8443 \
-       ghcr.io/szymonwilczek/lota/verifier:latest \
-       --state-db /var/lib/lota/verifier-state.sqlite
+       ghcr.io/szymonwilczek/lota/verifier:VERSION \
+       --cert /etc/lota-verifier/tls.crt --key /etc/lota-verifier/tls.key \
+       --aik-ca-cert /etc/lota-verifier/aik-ca.crt \
+       --policy /etc/lota-verifier/policy.yaml
 
-Run the service under systemd with a Quadlet ``.container`` unit so it is
-managed the same way as the host-native agent. The CA image follows the same
-shape, with the CA signing material mounted read-only.
+The state database defaults to ``/var/lib/lota/verifier-state.sqlite``.
+Several instances share a Postgres database through ``--pg-dsn`` or
+``LOTA_PG_DSN`` (:doc:`ha-deployment`).
 
-For more than one verifier instance, the images slot into the Postgres-backed
-topology unchanged: point each container at the shared database with
-``--pg-dsn`` (or ``LOTA_PG_DSN``). See :doc:`ha-deployment`.
+Running the HSM CA
+==================
 
-Running the HSM image
-=====================
+The CA reads the PIN from ``LOTA_CA_PKCS11_PIN`` only:
 
-Mount the module and the token store, pass the PIN through the environment so
-it stays out of the process argument list, and point the CA at the token::
+.. code-block:: sh
 
    podman run --rm \
        -v /opt/hsm:/hsm:ro,Z \
@@ -114,7 +124,7 @@ it stays out of the process argument list, and point the CA at the token::
        -e LOTA_CA_PKCS11_PIN \
        -e LD_LIBRARY_PATH=/hsm/lib \
        -p 8444:8444 \
-       ghcr.io/szymonwilczek/lota/attestca:latest-hsm \
+       ghcr.io/szymonwilczek/lota/attestca:VERSION-hsm \
        -ca-cert /var/lib/lota/ca.crt \
        -ca-key-pkcs11-module /hsm/module.so \
        -ca-key-pkcs11-token lota-ca \
@@ -123,37 +133,23 @@ it stays out of the process argument list, and point the CA at the token::
        -pseudonym-key /var/lib/lota/pseudonym.key \
        -ek-root-bundle /var/lib/lota/ek-roots
 
-``/opt/hsm`` here holds the module, the libraries it needs that the base does
-not carry, and the token store or client configuration it reads. On SELinux
-the mount needs a label the container can read (``:Z`` above); without one the
-CA stops on a permission-denied error reading its own material, before it ever
-opens the token.
+``/opt/hsm`` holds the module, the libraries it needs and the configuration
+it reads; a module that takes its configuration from the environment, as
+SoftHSM does from ``SOFTHSM2_CONF``, needs that variable passed as well.
+:doc:`bringup/ca-enrollment` covers the flags and the key.
 
-A module that reads its configuration from the environment needs that variable
-passed too -- SoftHSM's ``SOFTHSM2_CONF`` is the example, and a networked HSM
-client usually needs its own configuration file mounted and its appliance
-reachable from the pod.
+Verifying an image
+==================
 
-The default image tag refuses every ``-ca-key-pkcs11-*`` flag at key setup and
-names both roads to a binary that carries the support -- the tagged host build
-and this image variant -- so a token configuration pointed at the wrong tag
-stops at startup.
+The release workflow signs each version tag with cosign, without a key,
+under the workflow's identity:
 
-:doc:`bringup/ca-enrollment` covers the flags themselves and the
-key ceremony.
+.. code-block:: sh
 
-Verifying provenance
-====================
+   cosign verify \
+       --certificate-identity-regexp \
+         '^https://github\.com/szymonwilczek/lota/\.github/workflows/release\.yml@refs/tags/v' \
+       --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+       ghcr.io/szymonwilczek/lota/verifier:VERSION
 
-Release images are signed with cosign over their digest, alongside the
-existing ``SHA256SUMS`` signing for the source artifacts. Verify before
-running::
-
-   cosign verify ghcr.io/szymonwilczek/lota/verifier:latest
-
-Each published tag is signed, the HSM variant included::
-
-   cosign verify ghcr.io/szymonwilczek/lota/attestca:latest-hsm
-
-The attached SBOM lets a scanner enumerate the (deliberately minimal) image
-contents.
+The same command verifies ``attestca:VERSION`` and ``attestca:VERSION-hsm``.
