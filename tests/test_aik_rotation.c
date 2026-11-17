@@ -1670,32 +1670,50 @@ static void test_refused_unseal_with_unmoved_pcrs_is_the_blob(void)
 	moved[0] ^= 1;
 
 	if (tpm_test_seal_refusal_errno(&ctx, 0x83, same, TPM2_RC_INTEGRITY,
-					-EIO) != -EBADMSG) {
+					-EIO, true) != -EBADMSG) {
 		FAIL("an integrity refusal with unmoved PCRs");
 		return;
 	}
 	if (tpm_test_seal_refusal_errno(&ctx, 0x83, same, TPM2_RC_POLICY_FAIL,
-					-LOTA_ERR_TPM_POLICY_FAIL) !=
-	    -EBADMSG) {
+					-LOTA_ERR_TPM_POLICY_FAIL,
+					true) != -EBADMSG) {
 		FAIL("a policy refusal with unmoved PCRs");
 		return;
 	}
 	if (tpm_test_seal_refusal_errno(&ctx, 0x83, moved, TPM2_RC_POLICY_FAIL,
-					-LOTA_ERR_TPM_POLICY_FAIL) !=
-	    -LOTA_ERR_TPM_POLICY_FAIL) {
+					-LOTA_ERR_TPM_POLICY_FAIL,
+					true) != -LOTA_ERR_TPM_POLICY_FAIL) {
 		FAIL("moved PCRs read as a rejected blob");
 		return;
 	}
 	if (tpm_test_seal_refusal_errno(&ctx, 0x83, same,
-					TSS2_ESYS_RC_GENERAL_FAILURE,
-					-EIO) != -EIO) {
+					TSS2_ESYS_RC_GENERAL_FAILURE, -EIO,
+					true) != -EIO) {
 		FAIL("a stack error read as a TPM refusal");
 		return;
 	}
 	if (tpm_test_seal_refusal_errno(&ctx, 0x83, same, TPM2_RC_LOCKOUT,
-					-LOTA_ERR_TPM_LOCKED) !=
-	    -LOTA_ERR_TPM_LOCKED) {
+					-LOTA_ERR_TPM_LOCKED,
+					true) != -LOTA_ERR_TPM_LOCKED) {
 		FAIL("a lockout read as a rejected blob");
+		return;
+	}
+
+	/* a load refused by the TPM is the blob's, whatever the PCRs hold */
+	if (tpm_test_seal_refusal_errno(&ctx, 0x83, moved, TPM2_RC_INTEGRITY,
+					-EIO, false) != -EBADMSG) {
+		FAIL("a refused load with moved PCRs read as boot state");
+		return;
+	}
+	if (tpm_test_seal_refusal_errno(&ctx, 0x83, same, TPM2_RC_INTEGRITY,
+					-EIO, false) != -EBADMSG) {
+		FAIL("a refused load with unmoved PCRs");
+		return;
+	}
+	if (tpm_test_seal_refusal_errno(&ctx, 0x83, moved,
+					TSS2_ESYS_RC_GENERAL_FAILURE, -EIO,
+					false) != -EIO) {
+		FAIL("a stack error on load read as a TPM refusal");
 		return;
 	}
 	PASS();

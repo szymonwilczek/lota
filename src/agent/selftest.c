@@ -615,6 +615,10 @@ int do_unseal(void)
 			fprintf(stderr,
 				"(the host may not be in the sealed boot "
 				"state)\n");
+		else
+			fprintf(stderr,
+				"(the blob is damaged, or was sealed on "
+				"another TPM)\n");
 		goto out;
 	}
 

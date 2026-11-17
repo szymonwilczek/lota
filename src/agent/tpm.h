@@ -1035,7 +1035,8 @@ int tpm_seal_secret(struct tpm_context *ctx, const uint8_t *secret,
  * Runs over an encrypted PolicyPCR session.
  *
  * Return: 0, -EINVAL/-EMSGSIZE on a header lota_seal_parse_header() refuses,
- * -EBADMSG on a body that does not unmarshal or that the TPM refuses while the
+ * -EBADMSG on a body that does not unmarshal, that the TPM refuses to load
+ * (damaged, or sealed on another TPM), or whose unseal it refuses while the
  * PCRs still hash to the header's pcr_digest, -ENOSPC on a small @out_secret,
  * -LOTA_ERR_TPM_POLICY_FAIL or -EIO on any other refusal of the policy or the
  * object, or a negative errno / LOTA_ERR_TPM_*.
@@ -1242,8 +1243,8 @@ int tpm_test_read_pcr14_baseline(const char *path, uint8_t out[LOTA_HASH_SIZE],
 int tpm_test_aik_check_shared_replace(struct tpm_context *ctx);
 int tpm_test_esys_reconnect(struct tpm_context *ctx);
 int tpm_test_seal_refusal_errno(struct tpm_context *ctx, uint32_t pcr_mask,
-				const uint8_t *pcr_digest, uint32_t rc,
-				int err);
+				const uint8_t *pcr_digest, uint32_t rc, int err,
+				bool loaded);
 
 /*
  * Pure helpers: the Name comparison behind tpm_aik_object_replaced(), and

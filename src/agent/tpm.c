@@ -4778,10 +4778,14 @@ out:
 	return ret;
 }
 
-/* PCRs that still match the seal-time digest put a TPM refusal on the blob */
+/*
+ * A TPM refusal of the load is the blob's: damaged, or sealed under another
+ * TPM's primary. After the load, PCRs that still match the seal-time digest
+ * put the refusal on the blob too.
+ */
 static int seal_refusal_errno(struct tpm_context *ctx,
 			      const struct lota_seal_meta *meta, TSS2_RC rc,
-			      int err)
+			      int err, bool loaded)
 {
 	uint8_t now[LOTA_SEAL_PCR_DIGEST_SIZE];
 
@@ -4789,6 +4793,8 @@ static int seal_refusal_errno(struct tpm_context *ctx,
 		return err;
 	if (!tpm_rc_layer_is_tpm(rc))
 		return err;
+	if (!loaded)
+		return -EBADMSG;
 	if (seal_compute_pcr_digest(ctx, meta->pcr_mask, now) < 0)
 		return err;
 	if (memcmp(now, meta->pcr_digest, sizeof(now)) != 0)
@@ -4950,6 +4956,7 @@ int tpm_unseal_secret(struct tpm_context *ctx, const uint8_t *blob,
 		.keyBits.aes = 128,
 		.mode.aes = TPM2_ALG_CFB,
 	};
+	bool loaded = false;
 	size_t off;
 	TSS2_RC rc;
 	int ret;
@@ -4987,6 +4994,7 @@ int tpm_unseal_secret(struct tpm_context *ctx, const uint8_t *blob,
 		ret = tss2_rc_to_errno(rc);
 		goto out;
 	}
+	loaded = true;
 
 	/*
 	 * Policy session salted by the primary and carrying response-parameter
@@ -5053,7 +5061,7 @@ out:
 	if (sealed != ESYS_TR_NONE)
 		Esys_FlushContext(ctx->esys_ctx, sealed);
 	seal_release_primary(ctx, primary, primary_persistent);
-	return seal_refusal_errno(ctx, &meta, rc, ret);
+	return seal_refusal_errno(ctx, &meta, rc, ret, loaded);
 }
 
 int tpm_seal_secret_envelope(struct tpm_context *ctx, const uint8_t *payload,
@@ -5330,12 +5338,13 @@ int tpm_test_read_pcr14_baseline(const char *path, uint8_t out[LOTA_HASH_SIZE],
 }
 
 int tpm_test_seal_refusal_errno(struct tpm_context *ctx, uint32_t pcr_mask,
-				const uint8_t *pcr_digest, uint32_t rc, int err)
+				const uint8_t *pcr_digest, uint32_t rc, int err,
+				bool loaded)
 {
 	struct lota_seal_meta meta = { .pcr_mask = pcr_mask };
 
 	memcpy(meta.pcr_digest, pcr_digest, sizeof(meta.pcr_digest));
-	return seal_refusal_errno(ctx, &meta, (TSS2_RC)rc, err);
+	return seal_refusal_errno(ctx, &meta, (TSS2_RC)rc, err, loaded);
 }
 
 int tpm_test_aik_check_shared_replace(struct tpm_context *ctx)
