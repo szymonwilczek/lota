@@ -1,226 +1,223 @@
 .. SPDX-License-Identifier: MIT
 .. Copyright (C) 2026 Szymon Wilczek
 
-=======================================
-Sealed keys (offline local attestation)
-=======================================
+===========
+Sealed keys
+===========
 
-Remote attestation proves state to a verifier over the network. Sealing is the
-local counterpart: the TPM releases a secret only when the host booted into the
-expected state, with no verifier round-trip. It is a local boundary the TPM
-enforces -- useful for single-player / offline DRM and for at-rest key storage
--- but it does **not** replace remote attestation for competitive multiplayer,
-where the attacker owns the box.
+A sealed secret is one the TPM releases only while chosen PCRs hold the
+values they held when it was sealed. The check runs on the host, with no
+verifier. ``lota-agent`` seals two kinds of secret: one an operator hands it
+with ``--seal``, and the authorization of its own attestation keys. The
+objects and blob formats are described in :doc:`../../agent/tpm`.
 
-Seal a secret to the current boot state and recover it later:
-
-.. code-block:: sh
-
-    # Seal: secret in on stdin, sealed blob out on stdout (root only).
-    printf '%s' "$PER_TITLE_KEY" | sudo lota-agent --seal > title.sealed
-
-    # Unseal: only succeeds when the host is in the sealed PCR state.
-    sudo lota-agent --unseal < title.sealed
-
-The default PCR set is the platform: the firmware code, its configuration and
-the Secure Boot state, PCRs 0, 1 and 7. The threat at-rest sealing answers is a
-powered-off disk in someone else's hands, and the blob loads only under this
-TPM's primary key. A firmware or Secure Boot change makes the unseal fail
-closed. A kernel upgrade does not: PCR 4, which holds the kernel image on a shim
-and GRUB host, is not in the set.
-
-**PCR 14 is deliberately not in the default set.** It is LOTA's boot
-commitment, and its value is a function of the agent binary: it is stable from
-boot to boot, and it moves when the agent is updated. Binding it would make
-every agent upgrade destroy every sealed secret on the host, while adding
-nothing against a stolen disk.
-
-Ask for it explicitly with ``--seal-pcrs 0x4083`` when you want a secret a
-swapped agent cannot read and you accept losing it at each upgrade; pick any
-other set the same way (for example ``--seal-pcrs 0xC1`` for PCRs 0, 6 and 7).
-
-To harden the agent's own AIK userAuth at rest, enable sealing in ``lota.conf``:
-
-.. code-block:: ini
-
-    seal_aik_auth = true          # keep a sealed copy, prefer it on load
-    seal_aik_auth_strict = true   # store ONLY sealed; no plaintext on disk
-
-``strict`` removes the plaintext sidecar, so a captured disk no longer yields
-the AIK auth even to an attacker with the same TPM in a different boot state.
-It protects this value and not the key: ``userAuth`` is no input to a primary,
-so a local root can create the same key with an authorization of its own.
-Leave both keys at their default ``false`` to keep the existing
-plaintext-sidecar behaviour.
-
-An already-enrolled host adopts sealing without re-enrolling:
-
-.. code-block:: sh
-
-    # Set the keys in lota.conf, then seal the current auths in place:
-    sudo lota-agent --seal-aik-auth
-
-**It seals every key the host attests with, and says how many.** A host that
-answers to publishers holds one attestation key per publisher, each with its
-own authorization, so the count is what tells an operator the adoption covered
-the fleet rather than one key. The second line is read back off the disk after
-the fact, not stated from the configuration:
-
-.. code-block:: text
-
-    Sealed the authorization of 6 attestation keys to the platform state.
-    6 still keep a plaintext copy beside the sealed one; set
-    seal_aik_auth_strict to drop it.
-
-A host with no publishers -- an operator-owned fleet reporting to a single
-verifier -- has one key, the pre-profile default, and seals that. On a host
-with publishers that key belongs to nobody and is left alone.
-
-Any key that could not be sealed is named with the state its authorization is
-actually in, read off the disk before the attempt, and the command exits
-non-zero. A key that is already sealed with no plaintext copy is the exception:
-there was nothing left to seal, which is the hardened state, so it is reported
-as such and does not take the exit status with it. Re-running the verb on a fleet
-that is already strict therefore succeeds.
-
-``--reprovision-aik`` walks the same set: it rotates every publisher's
-authorization, and reports whether the new authorizations were sealed or
-written in the clear, read back.
-
-The *key* usually does not move. It is a primary derived from the hierarchy
-seed and a template carrying the publisher's identity; ``userAuth`` is not an
-input, so the same chip and publisher give the same key back. The verb compares
-the object's TPM Name before and after and reports which happened. An unmoved
-key leaves every certificate valid. A key that did change (a different
-template, as when moving a host onto per-publisher keys) is named with its
-publisher, to be re-enrolled against that publisher's CA. The rotation counter
-behind the D-Bus surface advances only for a moved key; an authorization
-rotation is recorded separately.
-
-What a refused unseal is about
-==============================
-
-An unseal is refused either by the file or by the TPM, with opposite remedies.
-
-The blob's framing is checked before the TPM is opened, and a refusal names
-the field: a blob opens with ``LSEL`` and an envelope with ``LENV``, then a
-version, a PCR selection and the two body lengths, which must fill the file
-exactly.
-
-.. code-block:: text
-
-    $ sudo lota-agent --unseal < truncated.sealed
-    Not a sealed blob this build can read: the declared bodies do not fill
-    the file exactly (1300, expected 1301).
-
-Look at the file, not the host: a truncated transfer, a copy cut from a larger
-archive, or a blob from a build with different framing.
-
-Key material behind the header that does not decode is the file's fault too:
-
-.. code-block:: text
-
-    $ sudo lota-agent --unseal < damaged.sealed
-    Unseal failed: Bad message
-
-A TPM refusal is what sealing exists for:
-
-.. code-block:: text
-
-    $ sudo lota-agent --unseal < title.sealed
-    Unseal failed: TPM policy not satisfied (host not in the sealed boot/PCR state)
-
-The sealed PCRs no longer hold their seal-time values: a firmware update, a
-Secure Boot change or, under the agent-bound mask, an agent upgrade. When the
-TPM refuses without naming a cause, the command prints a separate line pointing
-at the boot state.
-
-Auditing a fleet
+Sealing a secret
 ================
 
-Do not take a verb's word for it. ``--list-publishers`` reports how each
-publisher's authorization is kept at rest, which is the question sealing exists
-to answer:
-
-.. code-block:: text
-
-    key auth       sealed to the platform state, no plaintext copy
-    key auth       sealed, and a plaintext copy is kept beside it
-    key auth       plaintext on disk, not sealed
-    key auth       none stored
-
-Only the first is hardened. The second means sealing was adopted without
-``seal_aik_auth_strict``, so a copy is still readable from a captured disk --
-sealing a second copy protects nothing while the first one remains. The line
-reads the two files and nothing else, so it needs no TPM and reports the state
-rather than the intent.
-
-The sealed AIK auth is bound to the platform set, so a reboot and an agent
-upgrade both recover it. That is what makes ``strict`` usable at all: were the
-agent binary in the policy, a routine update would leave every host without an
-AIK authorization and force a re-enrollment with every publisher.
-
-The trade-off of ``strict``: a legitimate firmware or Secure Boot change makes
-the sealed auth unrecoverable. The agent will then **not** silently rotate the
-enrolled AIK; it reports the PolicyPCR mismatch and waits for an explicit
-recovery. Rotate and re-seal deliberately, then re-enroll:
-
+``--seal`` reads the secret from standard input and writes the blob to
+standard output; ``--unseal`` does the reverse:
 
 .. code-block:: sh
 
-    sudo lota-agent --reprovision-aik
-    sudo lota-agent --enroll --ca-server ca.example --ca-port 8444 --ca-cert ca.crt
+   printf '%s' "$TITLE_KEY" | sudo lota-agent --seal > title.sealed
+   sudo lota-agent --unseal < title.sealed
 
-An authorization the agent cannot read is never a reason to replace the key
-===========================================================================
+A secret of up to 128 bytes is sealed whole. One of up to 64 KiB is
+encrypted with AES-256-GCM under a random key, and that key is sealed; the
+blob is then an envelope. An empty secret is refused. On success the
+command reports the sizes on standard error, with ``(envelope)`` after an
+envelope::
 
-The rule is wider than the sealed case. The only failure that provisions a new
-attestation key is a record that is *absent*: no ``aik_auth.dat`` and no
-``aik_auth.sealed``, which leaves the key on the chip with no authorization
-anywhere and no way to use it again. Every other failure -- a record at a
-version this build does not read, a short write, a wrong magic, an all-zero
-secret, a sealed blob that will not unseal -- describes a record that exists
-and a key that still works, so the agent reports it and stops:
+   Sealed <N>-byte secret to a <M>-byte blob.
 
-.. code-block:: text
+The blob opens only on the TPM that sealed it. Another TPM refuses to load
+it, whatever its PCRs hold, and the unseal fails as for a damaged blob
+(`A refused unseal`_).
 
-    SECURITY: the attestation key's authorization could not be read
-              (Operation not supported). The key is left as it is.
-    SECURITY: /var/lib/lota/profiles/<id>/aik_auth.dat holds magic 0x41545541
-              version 2; this build reads magic 0x41545541 version 1.
+Choosing the PCRs
+=================
 
-Replacing the key there would destroy the enrolled identity and orphan the
-certificate issued over it, and no backup brings it back: what a backup holds
-is the authorization, and the key it authorized is gone from the chip. Restore
-the record, or replace the key deliberately with ``--forget-publisher``,
-``--allow-publisher`` and ``--enroll`` -- which issues a new certificate,
-because the current one names the key being replaced.
+``--seal-pcrs MASK`` selects the PCRs, bit *n* for PCR *n*, in C notation.
+The mask is not empty and names no PCR above 23
+(:doc:`../../agent/command-line`).
 
-With sealing on and no sealed copy yet, the same rule reads the plaintext
-sidecar as the record it is: the agent refuses rather than rotating, and names
-``--seal-aik-auth`` as the way to seal what the host already has.
+``0x83``, the default
+  PCRs 0, 1 and 7: the firmware, its configuration and the Secure Boot
+  state. A firmware update or a Secure Boot change makes the secret
+  unreadable. A kernel update does not, as PCR 4 is left out.
 
-Anti-rollback: what sealing binds, and what it does not
-=======================================================
+``0x4083``
+  Adds PCR 14, the agent's boot commitment. An agent update then makes the
+  secret unreadable too. The mask binds a boot state, not a process: any
+  process with access to the TPM unseals while the registers match.
 
-LOTA sealing binds a secret to a boot/PCR **state**, and that is the intended
-contract. A few consequences worth stating plainly:
+A secret sealed to a PCR that changes from boot to boot opens only in the
+boot that sealed it.
 
-* **Replaying a recurring good state is by design.** Rebooting into the same
-  expected state releases the key every time. For offline DRM and at-rest
-  storage that is the whole point.
-* **A different (tampered) state fails closed.** A firmware or Secure Boot
-  change moves the bound PCRs and the unseal is denied. An agent change does
-  not, unless the secret was sealed with the agent-bound mask above.
-* **What PCR binding does** *not* **cover:** revoking an *old* secret version
-  while the host can still reproduce the PCR state it was sealed against -- i.e.
-  a key/version *downgrade*. PCR binding has no notion of "newer than".
+A refused unseal
+================
 
-LOTA core does not version or revoke sealed secrets, so it deliberately ships no
-monotonic-counter machinery (NV counters are a scarce, global TPM resource, and
-a compound PolicyPCR+PolicyNV path cannot be validated on the target hardware
-until the hardware bring-up above). If your use case *does* need downgrade
-protection, bind the secret to a TPM NV monotonic counter in addition to the
-PCRs and bump the counter to revoke.
+``--unseal`` checks the blob's framing before it opens the TPM, and names
+the field it refuses::
 
-Complete, tested tpm2-tools recipe is in :ghsrc:`examples/sealed-key/anti-rollback-recipe.sh`.
+   Not a sealed blob this build can read: the declared bodies do not fill
+   the file exactly (1300, expected 1301).
+
+The other reasons are a file shorter than the header, a foreign magic, an
+unknown version, a set reserved byte, an empty or out-of-range PCR
+selection, a digest algorithm other than SHA-256, and a body length out of
+range. Each is a fault of the file: a cut transfer, a truncated copy, or a
+blob from a build with another format.
+
+When the TPM refuses to load the blob, or refuses to unseal it while the
+PCRs still hold their seal-time values, the blob itself is at fault::
+
+   Unseal failed: Bad message
+   (the blob is damaged, or was sealed on another TPM)
+
+Any other refusal is followed by a line pointing at the boot state. A PCR
+that moved since the seal reads::
+
+   Unseal failed: TPM policy not satisfied
+   (the host may not be in the sealed boot state)
+
+The secret comes back once the host boots into the sealed state again. A
+firmware or Secure Boot change that stays has no way back; seal the secret
+anew from its source.
+
+Attestation key authorization
+=============================
+
+Each attestation key has a 32-byte authorization value, kept in plaintext in
+``aik_auth.dat`` beside the key's record (:doc:`../../agent/tpm`). Two
+configuration keys seal it to PCRs 0, 1 and 7
+(:doc:`../../agent/configuration`):
+
+``seal_aik_auth = true``
+  Writes ``aik_auth.sealed`` beside the plaintext file and reads the sealed
+  copy first. When the sealed copy does not open, the agent reads the
+  plaintext file, so a firmware update leaves the host attesting.
+
+``seal_aik_auth_strict = true``
+  Writes the sealed copy and removes the plaintext file. The agent reads
+  only the sealed copy, so a captured disk does not yield the value.
+
+Both default to false. With both off, writing an authorization removes an
+``aik_auth.sealed`` left from an earlier setting, so turning sealing back on
+does not seal an old value. The mask leaves PCR 14 out, so an agent update
+keeps the authorization readable. Sealing protects the value, not the key: the
+authorization is no input to the key's derivation, so a local root can
+create the same key with an authorization of its own.
+
+Adopting sealing
+----------------
+
+The keys take effect for authorizations written afterwards. To seal the
+ones a host already holds, set them and run:
+
+.. code-block:: sh
+
+   sudo lota-agent --seal-aik-auth
+
+It seals the authorization of every publisher's key, or of the host key on
+a host with no publishers, and reports the count, then reads the disk back
+to count the plaintext copies left::
+
+   Sealed the authorization of 3 attestation keys to the platform state.
+   3 still keep a plaintext copy beside the sealed one; set
+   seal_aik_auth_strict to drop them.
+
+A key whose sealed copy opens is sealed again and counted, so a second run
+on a strict host reports the count followed by::
+
+   No plaintext copy remains on disk.
+
+A key that could not be sealed, the host key included, is named with the
+error and the state its authorization is in, and the command exits 1. When
+that state is sealed with no plaintext copy and the TPM refused the sealed
+copy, a second line says the sealed copy did not open and names
+``--reprovision-aik`` (`After a boot-state change`_).
+
+Auditing
+--------
+
+``--list-publishers`` prints a ``key auth`` line per publisher, read from the
+two files without the TPM:
+
+``sealed to the platform state, no plaintext copy``
+  Strict: the only state a captured disk does not give away.
+
+``sealed, and a plaintext copy is kept beside it``
+  ``seal_aik_auth`` without strict, or sealing adopted before strict was set.
+
+``plaintext on disk, not sealed``
+  Sealing is off, or was turned on after the value was written and
+  ``--seal-aik-auth`` was not run.
+
+``none stored``
+  No authorization on disk.
+
+After a boot-state change
+-------------------------
+
+Without strict, a firmware or Secure Boot change leaves the sealed copy
+unreadable and the agent reads the plaintext file. Run ``--seal-aik-auth``
+to seal the value to the new state.
+
+With strict there is no other copy, and the agent refuses the key at start
+with ``SECURITY:`` lines naming the cause and the sealed file. Draw a new
+authorization:
+
+.. code-block:: sh
+
+   sudo lota-agent --reprovision-aik
+
+It replaces the authorization of every key the host attests with and
+writes each one sealed. It then compares each enrolled publisher's key with
+the certificate stored for it, and the host key's TPM Name with the one
+before. The key derives from the TPM's seed and the publisher's template,
+so it is normally the same key, and the command ends::
+
+   No certificate is stale: each still names the key it was issued over.
+
+The certificates stay valid and no re-enrollment is needed. Then start
+``lota-agent.service`` again. Only when a certificate names another key
+does the command print ``Their certificates are now stale -- re-enroll
+each:`` followed by a ``lota-agent --reenroll --publisher`` command for
+each such publisher, and ``lota-agent --enroll`` when the host key's Name
+changed. An enrolled publisher whose certificate is missing or cannot be
+read is listed under ``could not be checked:`` with the reason, and the
+``No certificate is stale`` line is not printed.
+
+An unreadable authorization
+===========================
+
+The agent creates a new authorization at start only when the key exists and
+no record of its authorization does: neither ``aik_auth.dat`` nor
+``aik_auth.sealed``. A record that exists and does not load, at a version
+this build does not read, too short, or sealed and not opening, leaves the
+key as it is and stops with::
+
+   SECURITY: the attestation key's authorization could not be read
+   (<cause>). The key is left as it is.
+
+The next lines give the magic and version the plaintext record holds
+beside the ones this build reads, and whether the sealed copy is present.
+Restore the record from a backup, or run ``--reprovision-aik``
+(`After a boot-state change`_). It does not read the old authorization: it
+gives the same key a new one, and the key's certificate stays valid.
+
+When sealing is on and the plaintext record has no sealed copy beside it,
+the last line names ``--seal-aik-auth`` instead, to seal the record the host
+already has.
+
+What sealing does not cover
+===========================
+
+A secret opens every time the host boots into the state it was sealed to.
+Sealing has no notion of a newer secret, so an old blob still opens while
+the host can reproduce its PCR state; the agent neither versions nor
+revokes sealed secrets. A secret that must be revocable needs a TPM NV
+monotonic counter in its policy beside the PCRs, bumped to revoke.
+:ghsrc:`examples/sealed-key/anti-rollback-recipe.sh` builds one with
+``tpm2-tools`` (:ghsrc:`examples/sealed-key/README.rst`).
