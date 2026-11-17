@@ -31,6 +31,16 @@ render() {
     "$HELM" template "$RELEASE" "$CHART_PACKAGE" "${BASE_VALUES[@]}" "$@"
 }
 
+# True when the render fails with a message holding $1
+refused_with() {
+    local want=$1 out
+    shift
+    if out=$(render "$@" 2>&1); then
+        return 1
+    fi
+    grep -qF -- "$want" <<<"$out"
+}
+
 # Print release-named Secrets/ConfigMaps a pod references but the release does
 # not create; such a pod stays in CreateContainerConfigError
 dangling_release_refs() {
@@ -108,6 +118,24 @@ else
         fail=1
         echo "FAIL: replicaCount 3 with no shared backend renders"
         echo "  each replica would keep enforcement state the others cannot see"
+    fi
+
+    # policy.enabled mounts exactly one source; none or two must be refused,
+    # by the chart's own message, not by some other refusal
+    if ! refused_with "neither policy.existingSecret nor" \
+        --set replicaCount=1 --set policy.existingSecret=; then
+        fail=1
+        echo "FAIL: policy.enabled with no policy Secret or ConfigMap is not"
+        echo "  refused for it; the API server rejects the Deployment, whose"
+        echo "  policy volume names no Secret"
+    fi
+
+    if ! refused_with "policy.existingConfigMap are both set" \
+        --set replicaCount=1 \
+        --set policy.existingConfigMap=example-policy-cm; then
+        fail=1
+        echo "FAIL: policy.enabled with a policy Secret and a ConfigMap is not"
+        echo "  refused for it; the ConfigMap is mounted and the Secret ignored"
     fi
 
     # A pod's API bind is non-loopback, which the verifier refuses to start

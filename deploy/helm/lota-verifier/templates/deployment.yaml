@@ -11,6 +11,18 @@
 {{- if and .Values.policy.enabled .Values.allowPermissivePolicy }}
 {{- fail "policy.enabled and allowPermissivePolicy are mutually exclusive: choose a real policy or the permissive built-in, not both." }}
 {{- end }}
+{{- $policySecret := .Values.policy.existingSecret }}
+{{- $policyConfigMap := .Values.policy.existingConfigMap }}
+{{- if and .Values.policy.enabled (not (or $policySecret $policyConfigMap)) }}
+{{- fail (print "policy.enabled is set but neither policy.existingSecret "
+	"nor policy.existingConfigMap is: the policy volume would name no "
+	"Secret, and the API server refuses such a Deployment. Name the "
+	"Secret or the ConfigMap that holds policy.yaml.") }}
+{{- end }}
+{{- if and .Values.policy.enabled $policySecret $policyConfigMap }}
+{{- fail (print "policy.existingSecret and policy.existingConfigMap are "
+	"both set: the pod mounts one policy. Name only one.") }}
+{{- end }}
 {{- if and .Values.httpApi.enabled (not .Values.httpApi.auth.existingSecret) }}
 {{- fail "httpApi.enabled is set but httpApi.auth.existingSecret is unset: every bind in a pod is non-loopback, and the verifier refuses a non-loopback monitoring API with no key -- which aborts startup and takes the attestation listener down with it. Set httpApi.auth.existingSecret to a Secret holding the API key(s), or leave httpApi.enabled false." }}
 {{- end }}
