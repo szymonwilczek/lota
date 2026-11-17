@@ -199,7 +199,7 @@ check: check-deps
 .PHONY: verify
 verify:
 	@echo -e "$(BLUE)Verifying installed policy...$(NC)"
-	@semodule -l | grep -q "^lota" && \
+	@semodule -l | grep -qx lota && \
 		echo -e "$(GREEN)lota module: installed$(NC)" || \
 		echo -e "$(RED)lota module: NOT installed$(NC)"
 	@semanage port -l | grep -q "lota_port_t" && \
