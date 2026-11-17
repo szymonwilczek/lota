@@ -303,27 +303,6 @@ jobs:
       - name: Build every fuzz target and replay the committed reproducers
         run: make -o include/vmlinux.h fuzz-regress
 
-  el9-decls:
-    name: declarations against el9 headers
-    runs-on: ubuntu-24.04
-    container:
-      image: quay.io/rockylinux/rockylinux:9@sha256:8101994123cf3d0a8fee517bee7f39e555c7d92bd2d9eb3303cc988a0eeed00f
-    steps:
-      - name: Install git for checkout
-        run: dnf -y install git tar
-
-      - name: Checkout
-        uses: actions/checkout@v4
-        with:
-          persist-credentials: false
-
-      - name: Compile every C unit -fsyntax-only against el9 headers
-        # the job already runs inside the image the gate would spawn
-        env:
-          LOTA_DECLS_IN_CONTAINER: '1'
-          LOTA_DECLS_SRC: ${{ github.workspace }}
-        run: sh scripts/check-el9-decls.sh
-
   player-build:
     name: player page build in a clean Fedora
     runs-on: ubuntu-24.04
@@ -461,7 +440,6 @@ jobs:
             tests/integration/test_hsm_ca_example.sh \
             src/initramfs/90lota/module-setup.sh
           shellcheck -s sh -S error \
-            scripts/check-el9-decls.sh \
             scripts/check-player-build.sh \
             scripts/veristat-gate.sh \
             packaging/nfpm/scripts/agent-postinstall.sh

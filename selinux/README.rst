@@ -98,7 +98,7 @@ Prerequisites
 
 .. code:: bash
 
-   # Fedora/RHEL
+   # Fedora
    sudo dnf install selinux-policy-devel policycoreutils-python-utils
 
    # Verify SELinux is enforcing
@@ -164,16 +164,15 @@ its parent directory implies. ``lota-agent --add-publisher`` replaces
 replacement, so a correctly labelled config stays correct even under a
 directory that is not; it prints a warning naming ``restorecon`` if it cannot.
 
-Cross-distribution portability
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+Base policy portability
+~~~~~~~~~~~~~~~~~~~~~~~
 
-The module loads on both the Fedora and the RHEL family. Types that exist
-only on newer kernels are guarded so a base policy that lacks them still
-links the module: ``pidfs_t`` (pidfs, kernel 6.9+) is referenced inside an
-``optional_policy`` block, so on the RHEL family (el9, kernel 5.14, whose
-base policy has no ``pidfs_t``) the block is dropped and the rest of the
-module loads. Build the module against the target distribution's
-``selinux-policy-devel`` so the compiled ``lota.pp`` matches its policy.
+Types that only newer base policies define are guarded so a policy that
+lacks them still links the module: ``pidfs_t`` (pidfs, kernel 6.9+) is
+referenced inside an ``optional_policy`` block, which is dropped when the
+base policy has no ``pidfs_t``, and the rest of the module loads. Build the
+module against the target's ``selinux-policy-devel`` so the compiled
+``lota.pp`` matches its policy.
 
 Configuration Tunables
 ----------------------

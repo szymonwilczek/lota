@@ -773,42 +773,6 @@ check_includes() {
     fi
 }
 
-# Second toolchain:
-# Every C translation unit must compile against a libc whose headers pull in
-# nothing extra. Spawns an el9 container, so it only runs when the patch touches
-# C and podman is there.
-check_el9_decls() {
-    local path
-    local touches_c=0
-
-    for path in "$@"; do
-        case "$path" in
-            *.c | *.h)
-                touches_c=1
-                break
-                ;;
-        esac
-    done
-
-    if ((touches_c == 0)); then
-        pass "el9-decls"
-        return
-    fi
-
-    if ! command -v podman >/dev/null 2>&1; then
-        skip "el9-decls" \
-             "install podman to compile the tree against el9 headers."
-        return
-    fi
-
-    if scripts/check-el9-decls.sh; then
-        pass "el9-decls"
-    else
-        fail "el9-decls" \
-             "include the header that declares the symbol; el9 does not pull it in."
-    fi
-}
-
 # Player build:
 # the player page's build commands must install in a clean Fedora.
 # Spawns a container, so it runs only when the patch touches the page
@@ -1319,7 +1283,6 @@ main() {
     check_lint_go_coverage
     check_unit_tests
     check_includes "${changed_files[@]}"
-    check_el9_decls "${changed_files[@]}"
     check_player_build "${changed_files[@]}"
     check_license_boundary
     check_test_build_dir
