@@ -101,15 +101,15 @@ Versioned shared libraries for the gaming, anti-cheat and server SDKs and the
 Proton/Steam hook. Install lota-sdk-devel to build against them.
 
 %package sdk-devel
-Summary:        LOTA SDK headers and shared libraries
+Summary:        LOTA SDK development files
 License:        MIT
 Requires:       %{name}-sdk%{?_isa} = %{version}-%{release}
 Requires:       pkgconfig(libcrypto)
 
 %description sdk-devel
-Headers and shared libraries for the gaming, anti-cheat and server SDKs,
-with the Proton/Steam integration helpers. MIT, so a studio or vendor can
-build a proprietary product on top.
+Headers, the .so linker aliases and the pkg-config files for building
+against the gaming, anti-cheat and server SDKs and the Wine hook.
+Requires lota-sdk.
 
 %prep
 %autosetup -n %{name}-%{version}

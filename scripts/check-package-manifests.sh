@@ -24,6 +24,9 @@
 # Provides and Requires must match too: nfpm declares the pkgconfig(<name>)
 # rpmbuild derives from each shipped .pc, and pins every sibling the spec pins.
 #
+# A package's Summary is the first line of its nfpm description,
+# and its %description the rest.
+#
 # LOTA_REPO_BASEURL and every address a page prints are the one the docs deploy
 # serves.
 #
@@ -545,6 +548,55 @@ check_sibling_version_locks() {
 
 check_sibling_version_locks
 
+# The nfpm description of config $1, without its indent and trailing blanks
+nfpm_description() {
+    awk '
+		/^description:[ \t]*\|/ { in_desc = 1; next }
+		in_desc && /^[^ \t]/ { exit }
+		in_desc { sub(/^  /, ""); print }
+	' "$1" | sed -e :a -e '/^\n*$/{$d;N;ba' -e '}'
+}
+
+# Summary: of `%package $1`, then its %description without trailing blanks
+spec_description() {
+    local section=$1
+
+    awk -v section="$section" '
+		$0 ~ "^%package[ \t]+" section "$" { in_pkg = 1; next }
+		in_pkg && /^Summary:/ {
+			sub(/^Summary:[ \t]*/, "")
+			print
+			in_pkg = 0
+			next
+		}
+		$0 ~ "^%description[ \t]+" section "$" { in_desc = 1; next }
+		in_desc && /^%/ { exit }
+		in_desc { print }
+	' "$SPEC" | sed -e :a -e '/^\n*$/{$d;N;ba' -e '}'
+}
+
+check_descriptions() {
+    local cfg pkg section
+
+    for cfg in "$NFPM_DIR"/*.yaml; do
+        pkg=$(awk '/^name:[ \t]*/ { sub(/^name:[ \t]*/, ""); print; exit }' \
+                  "$cfg")
+        [ -n "$pkg" ] || continue
+        section=${pkg#lota-}
+
+        [ "$(nfpm_description "$cfg")" = "$(spec_description "$section")" ] &&
+            continue
+
+        fail=1
+        echo "FAIL: ${pkg} reads differently depending on which manifest" \
+             "built it"
+        diff <(nfpm_description "$cfg") <(spec_description "$section") |
+            sed -n 's/^</  nfpm:/p; s/^>/  spec:/p' || true
+    done
+}
+
+check_descriptions
+
 # Paths the `install` target writes, one per line, with DESTDIR empty.
 # Variables are expanded as in guarded_installs; a destination ending in /
 # takes the source's name. Destinations built by a shell loop or a make
@@ -698,9 +750,10 @@ check_repo_address
 
 if [ "$fail" -ne 0 ]; then
     echo
-    echo "The two manifests must list the same installed paths per package and"
-    echo "promise the same provides and dependencies, the spec must take its"
-    echo "version from ${VERSION_FILE}, and it must produce every file it claims."
+    echo "The two manifests must list the same installed paths per package,"
+    echo "promise the same provides and dependencies and describe each"
+    echo "package alike, the spec must take its version from ${VERSION_FILE},"
+    echo "and it must produce every file it claims."
     echo "The repository address is the one the site serves, everywhere."
     exit 1
 fi

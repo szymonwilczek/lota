@@ -12,6 +12,9 @@
 # Each case edits a copy of what the gate reads, never the checkout.
 # The last case is the control: a dependency really removed must still fail.
 #
+# A Summary or %description the spec words apart from the nfpm description
+# fails the gate.
+#
 # The same manifests take every file from ./build, so `make packages` with
 # another BUILD_DIR must stop before it builds anything.
 #
@@ -119,6 +122,38 @@ if gate_passes; then
 else
     echo "PASS: a dependency genuinely taken out is still caught"
 fi
+
+echo "=== what each manifest says a package is ==="
+
+# Replace the first line of file equal to what
+replace_line() {
+    local file="$1" what="$2" text="$3"
+
+    awk -v what="$what" -v text="$text" '
+		$0 == what && !done { print text; done = 1; next }
+		{ print }
+	' "$WORK_DIR/tree/$file" >"$WORK_DIR/edited"
+    mv "$WORK_DIR/edited" "$WORK_DIR/tree/$file"
+}
+
+gate_fails_on_description() {
+    ! gate_passes &&
+	grep -q 'lota-sdk-devel reads differently' "$WORK_DIR/gate.out"
+}
+
+fixture
+replace_line packaging/rpm/lota.spec \
+	     "Summary:        LOTA SDK development files" \
+	     "Summary:        LOTA SDK headers and shared libraries"
+check "a Summary the nfpm description does not open with fails" \
+      gate_fails_on_description
+
+fixture
+replace_line packaging/rpm/lota.spec \
+	     "Requires lota-sdk." \
+	     "Requires lota-sdk and ships the Proton/Steam helpers."
+check "a %description that differs from the nfpm description fails" \
+      gate_fails_on_description
 
 echo "=== make packages with another BUILD_DIR ==="
 
