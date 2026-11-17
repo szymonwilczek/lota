@@ -797,6 +797,9 @@ int do_reprovision_aik(void)
 	unsigned keys_moved = 0;
 	unsigned failed = 0;
 	bool key_changed = false;
+	bool *moved = NULL;
+	bool host_moved = false;
+	bool stale = false;
 	int rc = 1;
 	int ret;
 
@@ -807,6 +810,12 @@ int do_reprovision_aik(void)
 		fprintf(stderr, "Failed to read %s: %s\n",
 			LOTA_PROFILE_BASE_DIR, strerror(-ret));
 		return 1;
+	}
+
+	moved = calloc(count ? count : 1, sizeof(*moved));
+	if (!moved) {
+		fprintf(stderr, "Out of memory\n");
+		goto out;
 	}
 
 	ret = tpm_init(&g_agent.tpm_ctx);
@@ -840,8 +849,10 @@ int do_reprovision_aik(void)
 			continue;
 		}
 		rotated++;
-		if (key_changed)
+		if (key_changed) {
 			keys_moved++;
+			moved[i] = true;
+		}
 	}
 
 	if (publishers_default_key_in_use(count)) {
@@ -853,8 +864,10 @@ int do_reprovision_aik(void)
 			goto out;
 		}
 		rotated++;
-		if (key_changed)
+		if (key_changed) {
 			keys_moved++;
+			host_moved = true;
+		}
 	}
 
 	tpm_cleanup(&g_agent.tpm_ctx);
@@ -910,24 +923,26 @@ int do_reprovision_aik(void)
 	}
 
 	/* a certificate names a key: it is stale only where the key moved */
+	for (size_t i = 0; i < count; i++)
+		stale |= moved[i] && entries[i].enrolled;
+	stale |= host_moved;
+
 	if (keys_moved == 0) {
 		fprintf(stderr,
 			"No certificate is stale: each still names the key it "
 			"was issued over.\n");
-	} else if (count > 0) {
+	} else if (stale) {
 		fprintf(stderr,
 			"Their certificates are now stale -- re-enroll each:\n");
 		for (size_t i = 0; i < count; i++)
-			if (entries[i].has_aik_handle && entries[i].enrolled)
+			if (moved[i] && entries[i].enrolled)
 				fprintf(stderr,
 					"  lota-agent --reenroll --publisher "
 					"%s\n",
 					entries[i].id);
-	} else {
-		fprintf(stderr,
-			"The previous AIK certificate is now stale -- "
-			"re-enroll:\n"
-			"  lota-agent --enroll --ca-server <host> ...\n");
+		if (host_moved)
+			fprintf(stderr, "  lota-agent --enroll --ca-server "
+					"<host> ...\n");
 	}
 
 	if (failed) {
@@ -936,6 +951,7 @@ int do_reprovision_aik(void)
 	}
 	rc = 0;
 out:
+	free(moved);
 	free(entries);
 	return rc;
 }
