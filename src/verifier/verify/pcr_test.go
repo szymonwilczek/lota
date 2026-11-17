@@ -583,6 +583,82 @@ pcrs:
 	t.Logf("Invalid YAML correctly rejected: %v", err)
 }
 
+func TestLoadPolicy_RejectsMalformedDocument(t *testing.T) {
+	pin := "pcrs:\n  0: \"" + strings.Repeat("ab", 32) + "\"\n"
+	short := strings.Repeat("ab", 31)
+	nonhex := strings.Repeat("zz", 32)
+	cases := map[string]string{
+		"unknown key": "name: typo\n" + pin +
+			"require_secure_boot: true\n",
+		"second document": "name: first\n" + pin +
+			"---\nname: second\n",
+		"second document after an empty one": "name: first\n" + pin +
+			"---\n---\nname: second\n",
+		"placeholder PCR value": "name: placeholder\n" +
+			"pcrs:\n  0: \"REPLACE_WITH_REAL_PCR0\"\n",
+		"short kernel hash": "name: short\n" +
+			"kernel_hashes:\n  - \"" + short + "\"\n",
+		"non-hex agent hash": "name: nonhex\n" +
+			"agent_hashes:\n  - \"" + nonhex + "\"\n",
+	}
+	for name, content := range cases {
+		t.Run(name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "policy.yaml")
+			err := os.WriteFile(path, []byte(content), 0o644)
+			if err != nil {
+				t.Fatalf("write policy: %v", err)
+			}
+			verifier := NewPCRVerifier()
+			verifier.SetAllowPermissivePolicy(true)
+			verifier.SetAllowUnpinnedAgent(true)
+			if verifier.LoadPolicy(path) == nil {
+				t.Fatal("malformed policy was accepted")
+			}
+		})
+	}
+}
+
+func TestLoadPolicy_NamesLowestBadPCR(t *testing.T) {
+	content := "name: placeholders\npcrs:\n" +
+		"  7: \"REPLACE_WITH_PCR7\"\n" +
+		"  1: \"REPLACE_WITH_PCR1\"\n" +
+		"  0: \"REPLACE_WITH_PCR0\"\n"
+	path := filepath.Join(t.TempDir(), "policy.yaml")
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatalf("write policy: %v", err)
+	}
+	for range 20 {
+		err := NewPCRVerifier().LoadPolicy(path)
+		if err == nil || !strings.Contains(err.Error(), "PCR 0 value") {
+			t.Fatalf("LoadPolicy = %v, want PCR 0 named", err)
+		}
+	}
+}
+
+func TestLoadPolicy_UpperCaseDigestsMatchReports(t *testing.T) {
+	agent := strings.Repeat("ab", 32)
+	pcr0 := strings.Repeat("cd", 32)
+	content := "name: upper\npcrs:\n  0: \"" + strings.ToUpper(pcr0) +
+		"\"\nagent_hashes:\n  - \"" + strings.ToUpper(agent) + "\"\n" +
+		"---\n"
+	path := filepath.Join(t.TempDir(), "policy.yaml")
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatalf("write policy: %v", err)
+	}
+	verifier := NewPCRVerifier()
+	if err := verifier.LoadPolicy(path); err != nil {
+		t.Fatalf("LoadPolicy: %v", err)
+	}
+	policy, ok := verifier.GetActivePolicyConfig()
+	if !ok {
+		t.Fatal("no active policy")
+	}
+	if policy.PCRs[0] != pcr0 || policy.AgentHashes[0] != agent {
+		t.Fatalf("digests not lower-cased: pcr0=%q agent=%q",
+			policy.PCRs[0], policy.AgentHashes[0])
+	}
+}
+
 func TestPCRVerifier_LoadPolicy_MeasurementEmptyRejectedUnlessAllowed(t *testing.T) {
 	t.Log("SECURITY TEST: LoadPolicy rejects measurement-empty policy unless explicitly allowed")
 

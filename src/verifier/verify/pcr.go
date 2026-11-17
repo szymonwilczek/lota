@@ -206,7 +206,7 @@ func (v *PCRVerifier) LoadPolicy(path string) error {
 	}
 
 	var policy PCRPolicy
-	if err := yaml.Unmarshal(data, &policy); err != nil {
+	if err := DecodeYAMLDocument(data, &policy); err != nil {
 		return fmt.Errorf("failed to parse policy: %w", err)
 	}
 	if err := validatePolicyDocument(&policy); err != nil {
@@ -233,8 +233,96 @@ func (v *PCRVerifier) AddPolicy(policy *PCRPolicy) error {
 	return v.registerPolicy(policy)
 }
 
+// ErrExtraYAMLDocument reports a file holding a second YAML document with
+// content.
+var ErrExtraYAMLDocument = errors.New("more than one YAML document")
+
+// DecodeYAMLDocument decodes the first YAML document of data into out;
+// a key out does not name is an error.
+// Empty documents after it, as a trailing "---" gives, are accepted.
+func DecodeYAMLDocument(data []byte, out any) error {
+	dec := yaml.NewDecoder(bytes.NewReader(data))
+	dec.KnownFields(true)
+	if err := dec.Decode(out); err != nil {
+		if errors.Is(err, io.EOF) {
+			return nil
+		}
+		return err
+	}
+	for {
+		var doc yaml.Node
+		err := dec.Decode(&doc)
+		if errors.Is(err, io.EOF) {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		if !emptyYAMLDocument(&doc) {
+			return ErrExtraYAMLDocument
+		}
+	}
+}
+
+func emptyYAMLDocument(doc *yaml.Node) bool {
+	for _, n := range doc.Content {
+		if n.Kind != yaml.ScalarNode || n.Tag != "!!null" {
+			return false
+		}
+	}
+	return true
+}
+
+// normalizeDigestHex returns s in lower case when it is a SHA-256 digest in
+// hex.
+func normalizeDigestHex(s string) (string, bool) {
+	s = strings.ToLower(s)
+	if len(s) != 2*types.HashSize {
+		return "", false
+	}
+	if _, err := hex.DecodeString(s); err != nil {
+		return "", false
+	}
+	return s, true
+}
+
+// validatePolicyDigests lower-cases every pinned digest in place:
+// reports are compared with the lower-case hex encoding.
+func validatePolicyDigests(policy *PCRPolicy) error {
+	const badPCR = "policy '%s': PCR %d value %q is not 64 hex digits"
+	const badEntry = "policy '%s': %s entry %q is not 64 hex digits"
+	for _, idx := range slices.Sorted(maps.Keys(policy.PCRs)) {
+		val := policy.PCRs[idx]
+		norm, ok := normalizeDigestHex(val)
+		if !ok {
+			return fmt.Errorf(badPCR, policy.Name, idx, val)
+		}
+		policy.PCRs[idx] = norm
+	}
+	for _, list := range []struct {
+		key    string
+		hashes []string
+	}{
+		{"kernel_hashes", policy.KernelHashes},
+		{"agent_hashes", policy.AgentHashes},
+	} {
+		for i, val := range list.hashes {
+			norm, ok := normalizeDigestHex(val)
+			if !ok {
+				return fmt.Errorf(badEntry, policy.Name,
+					list.key, val)
+			}
+			list.hashes[i] = norm
+		}
+	}
+	return nil
+}
+
 func validatePolicyDocument(policy *PCRPolicy) error {
 	if err := validatePolicyPCRIndices(policy); err != nil {
+		return err
+	}
+	if err := validatePolicyDigests(policy); err != nil {
 		return err
 	}
 	return validateProfile(policy)
