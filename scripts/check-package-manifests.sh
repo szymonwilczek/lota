@@ -21,8 +21,10 @@
 # Every shipped unit must be stopped by both %systemd_preun and the nfpm
 # preremove script, or it outlives its deleted binary.
 #
-# Provides and Requires must match too: nfpm declares the pkgconfig(<name>)
-# rpmbuild derives from each shipped .pc, and pins every sibling the spec pins.
+# Requires match by name both ways, apart from those rpmbuild derives from
+# sonames, which nfpm has to spell out (soname_requires). A sibling is pinned
+# to one build in both manifests or in neither. nfpm provides pkgconfig(<name>)
+# for exactly the .pc files it ships, as rpmbuild derives them.
 #
 # A package's Summary is the first line of its nfpm description,
 # and its %description the rest.
@@ -496,6 +498,17 @@ check_pkgconfig_provides() {
             echo "  so the two channels hand an integrator different contracts;"
             echo "  add it under overrides.rpm.provides in ${cfg}"
         done < <(nfpm_paths "$cfg" | grep '^/usr/lib64/pkgconfig/.*\.pc$' || true)
+
+        while read -r name; do
+            [ -n "$name" ] || continue
+            nfpm_paths "$cfg" | grep -qxF "/usr/lib64/pkgconfig/${name}.pc" &&
+                continue
+
+            fail=1
+            echo "FAIL: ${pkg} provides pkgconfig(${name}) and ships no" \
+                 "${name}.pc"
+            echo "  the spec build derives no such provide"
+        done < <(sed -n 's/^pkgconfig(\(.*\))$/\1/p' <<<"$provides")
     done
 }
 
@@ -512,7 +525,7 @@ spec_locked_siblings() {
 			line = $0
 			sub(/^Requires:[ \t]*/, "", line)
 			# a bare sibling requirement is no lock
-			if (line !~ /=[ \t]*%\{version\}/)
+			if (line !~ /[^<>]=[ \t]*%\{version\}/)
 				next
 			sub(/%\{name\}/, "lota", line)
 			sub(/%\{\?_isa\}.*/, "", line)
@@ -534,8 +547,8 @@ check_sibling_version_locks() {
         while read -r sibling; do
             [ -n "$sibling" ] || continue
 
-            # any version constraint; the release is spelled differently
-            grep -qE "^${sibling}(\(|[ \t]*[=<>])" <<<"$depends" && continue
+            # an = pin; the release is spelled differently
+            grep -qE "^${sibling}[ \t]*=" <<<"$depends" && continue
 
             fail=1
             echo "FAIL: ${SPEC} locks ${pkg} to one build of ${sibling} and ${cfg} does not"
@@ -543,10 +556,95 @@ check_sibling_version_locks() {
             echo "  ${sibling} at another, so the .so symlink points at a soname"
             echo "  the installed headers were not written against"
         done < <(spec_locked_siblings "$section")
+
+        # the other direction: a pin only nfpm makes
+        while read -r sibling; do
+            [ -n "$sibling" ] || continue
+            grep -qxF "$sibling" < <(spec_locked_siblings "$section") &&
+                continue
+
+            fail=1
+            echo "FAIL: ${cfg} locks ${pkg} to one build of ${sibling} and" \
+                 "${SPEC} does not"
+        done < <(sed -n 's/^\(lota-[a-z-]*\)[ \t]*=.*/\1/p' <<<"$depends")
     done
 }
 
 check_sibling_version_locks
+
+# Requires rpmbuild derives from the sonames a package links,
+# which nfpm lists by name
+soname_requires() {
+    case $1 in
+        lota-agent) printf '%s\n' tpm2-tss libbpf openssl-libs libseccomp ;;
+        lota-sdk) printf '%s\n' openssl-libs ;;
+    esac
+}
+
+# Names `%package $1` requires, versions and %{?_isa} dropped;
+# %{?systemd_requires} counts as systemd
+spec_requires() {
+    local section=$1
+
+    awk -v section="$section" '
+		$0 ~ "^%package[ \t]+" section "$" { in_pkg = 1; next }
+		/^%package[ \t]/ || /^%description[ \t]/ { in_pkg = 0 }
+		!in_pkg { next }
+		/^%\{\?systemd_requires\}/ { print "systemd"; next }
+		/^Requires(\([a-z,]*\))?:/ {
+			sub(/^Requires(\([a-z,]*\))?:[ \t]*/, "")
+			gsub(/%\{name\}/, "lota")
+			gsub(/%\{\?_isa\}/, "")
+			sub(/[ \t]*[=<>].*/, "")
+			print
+		}
+	' "$SPEC" | sort -u
+}
+
+check_requires() {
+    local cfg pkg section name nfpm_req spec_req implied
+
+    for cfg in "$NFPM_DIR"/*.yaml; do
+        pkg=$(awk '/^name:[ \t]*/ { sub(/^name:[ \t]*/, ""); print; exit }' \
+                  "$cfg")
+        [ -n "$pkg" ] || continue
+        section=${pkg#lota-}
+
+        nfpm_req=$(nfpm_rpm_list "$cfg" depends |
+                   sed 's/[ \t]*[=<>].*//' | sort -u)
+        spec_req=$(spec_requires "$section")
+        implied=$(soname_requires "$pkg")
+
+        while read -r name; do
+            [ -n "$name" ] || continue
+            grep -qxF "$name" <<<"$nfpm_req" && continue
+            fail=1
+            echo "FAIL: ${SPEC} makes ${pkg} require ${name} and" \
+                 "${cfg} does not"
+        done <<<"$spec_req"
+
+        while read -r name; do
+            [ -n "$name" ] || continue
+            grep -qxF "$name" <<<"$spec_req" && continue
+            grep -qxF "$name" <<<"$implied" && continue
+            fail=1
+            echo "FAIL: ${cfg} makes ${pkg} require ${name} and" \
+                 "${SPEC} does not"
+            echo "  if rpmbuild derives it from a soname, list it in" \
+                 "soname_requires"
+        done <<<"$nfpm_req"
+
+        while read -r name; do
+            [ -n "$name" ] || continue
+            grep -qxF "$name" <<<"$nfpm_req" && continue
+            fail=1
+            echo "FAIL: soname_requires lists ${name} for ${pkg} and" \
+                 "${cfg} does not require it"
+        done <<<"$implied"
+    done
+}
+
+check_requires
 
 # The nfpm description of config $1, without its indent and trailing blanks
 nfpm_description() {
