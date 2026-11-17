@@ -635,6 +635,36 @@ out:
 	return rc;
 }
 
+/* the host key keeps its records beside TPM_AIK_META_PATH */
+static enum profile_aik_auth_state host_aik_auth_state(void)
+{
+	static const char meta[] = TPM_AIK_META_PATH;
+	struct profile_paths paths;
+	size_t dir_len = (size_t)(strrchr(meta, '/') - meta);
+
+	memset(&paths, 0, sizeof(paths));
+	memcpy(paths.dir, meta, dir_len);
+	return profile_aik_auth_state(&paths);
+}
+
+/*
+ * A refused sealed copy with no plaintext beside it leaves the key with
+ * no readable authorization; a busy TPM or a failed write does not.
+ */
+static void report_reseal_failure(const char *label, int err,
+				  enum profile_aik_auth_state before)
+{
+	fprintf(stderr, "  %s: %s (its authorization is %s)\n", label,
+		tpm_strerror(err), profile_aik_auth_state_str(before));
+	if (before == PROFILE_AIK_AUTH_SEALED &&
+	    (err == -LOTA_ERR_TPM_POLICY_FAIL || err == -EBADMSG))
+		fprintf(stderr,
+			"  %s: the sealed copy did not open; run "
+			"--reprovision-aik to give the key a new "
+			"authorization\n",
+			label);
+}
+
 /* read back after the verb, so the count is what is stored */
 static unsigned aik_auth_exposed_count(const struct publisher_entry *entries,
 				       size_t count)
@@ -658,7 +688,6 @@ int do_seal_aik_auth(void)
 	struct publisher_entry *entries = NULL;
 	size_t count = 0;
 	unsigned sealed = 0;
-	unsigned strict = 0;
 	unsigned failed = 0;
 	int rc = 1;
 	int ret;
@@ -701,20 +730,7 @@ int do_seal_aik_auth(void)
 
 		ret = tpm_aik_reseal_auth(&g_agent.tpm_ctx);
 		if (ret < 0) {
-			/* already strict: nothing to seal, so not a failure */
-			if (!profile_aik_auth_needs_sealing(before) &&
-			    before != PROFILE_AIK_AUTH_NONE) {
-				fprintf(stderr,
-					"  %s: already %s, so there was "
-					"nothing to seal\n",
-					entries[i].id,
-					profile_aik_auth_state_str(before));
-				strict++;
-				continue;
-			}
-			fprintf(stderr, "  %s: %s (its authorization is %s)\n",
-				entries[i].id, tpm_strerror(ret),
-				profile_aik_auth_state_str(before));
+			report_reseal_failure(entries[i].id, ret, before);
 			failed++;
 			continue;
 		}
@@ -722,34 +738,28 @@ int do_seal_aik_auth(void)
 	}
 
 	if (publishers_default_key_in_use(count)) {
+		enum profile_aik_auth_state before = host_aik_auth_state();
+
 		ret = tpm_aik_reseal_auth(&g_agent.tpm_ctx);
 		if (ret < 0) {
-			fprintf(stderr, "Could not seal AIK auth: %s\n",
-				tpm_strerror(ret));
-			tpm_cleanup(&g_agent.tpm_ctx);
-			goto out;
+			report_reseal_failure("host key", ret, before);
+			failed++;
+		} else {
+			sealed++;
 		}
-		sealed++;
 	}
 
 	tpm_cleanup(&g_agent.tpm_ctx);
 
-	if (sealed == 0 && strict > 0) {
-		fprintf(stderr,
-			"Nothing to seal: %u attestation key%s already hold "
-			"the authorization sealed with no plaintext copy.\n",
-			strict, strict == 1 ? "" : "s");
-		rc = failed ? 1 : 0;
-		goto out;
-	}
-
-	if (sealed == 0) {
+	if (sealed == 0 && failed == 0) {
 		fprintf(stderr,
 			"No attestation key to seal: this host holds none "
 			"yet. Enroll with a publisher first.\n");
-		rc = failed ? 1 : 0;
+		rc = 0;
 		goto out;
 	}
+	if (sealed == 0)
+		goto report;
 
 	fprintf(stderr,
 		"Sealed the authorization of %u attestation key%s to the "
@@ -770,12 +780,7 @@ int do_seal_aik_auth(void)
 			fprintf(stderr, "No plaintext copy remains on disk.\n");
 	}
 
-	if (strict)
-		fprintf(stderr,
-			"%u already held the authorization sealed with no "
-			"plaintext copy, so there was nothing to seal.\n",
-			strict);
-
+report:
 	if (failed) {
 		fprintf(stderr,
 			"%u could not be sealed; the line for each names the "

@@ -266,14 +266,6 @@ const char *profile_aik_auth_state_str(enum profile_aik_auth_state state);
 bool profile_aik_auth_exposed(enum profile_aik_auth_state state);
 
 /**
- * profile_aik_auth_needs_sealing() - Whether a plaintext copy is left to seal.
- * @state: State.
- *
- * Return: true for PLAINTEXT and BOTH.
- */
-bool profile_aik_auth_needs_sealing(enum profile_aik_auth_state state);
-
-/**
  * profile_consent_record() - Record consent to answer to this publisher.
  * @paths: Profile; its directory is created.
  * @by: Uid recorded beside the time.
