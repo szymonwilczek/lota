@@ -5,153 +5,163 @@
 Platform support
 ================
 
-LOTA has two halves with different platform coupling. The **verifier** and
-**attestation CA** are distro-independent Go services: they run from the native
-RPMs or the distroless container images on any Linux the container or binary
-targets, and platform support does not constrain them. The **agent** is coupled
-to the host: it drives the TPM, loads a BPF LSM program, and installs an
-initramfs module, so its support is defined per distribution family, firmware
-and TPM. The tables below describe the agent.
+The verifier and the attestation CA are Go services with no tie to the host
+they run on; they ship as RPMs and as container images
+(:doc:`container-images`). The agent drives the TPM, loads a BPF LSM object
+and adds a dracut module to the initramfs, so it runs only where the
+firmware, the kernel and the packaging meet the requirements below.
 
-Support tiers
-=============
+Minimal requirements
+====================
 
 .. list-table::
    :header-rows: 1
-   :widths: 20 80
+   :widths: 30 30 40
 
-   * - Tier
-     - Meaning
-   * - Supported
-     - The full bring-up and attestation path runs on the platform, and it is
-       the reference environment the packaging and documentation describe.
-   * - Experimental
-     - The packages build and install from the same nfpm configs and dracut
-       module as the supported platform, and the packaging is exercised there
-       in CI. Parts of the bring-up path may be verified on the platform, but
-       it is not the reference environment and a capability the supported
-       platform has may be missing -- the row says which.
-   * - Unsupported
-     - The platform needs packaging or a boot-integration model LOTA does not
-       carry. The agent has no path there.
+   * - Requirement
+     - Minimum
+     - Command to check
+   * - Firmware
+     - UEFI with Secure Boot on
+     - ``mokutil --sb-state``
+   * - TPM
+     - TPM 2.0
+     - ``ls /dev/tpmrm0``
+   * - Kernel
+     - 6.19
+     - ``uname -r``
+   * - Kernel lockdown
+     - ``integrity``
+     - ``cat /sys/kernel/security/lockdown``
+   * - Module signatures
+     - enforced
+     - ``cat /sys/module/module/parameters/sig_enforce``
+   * - Active LSMs
+     - ``bpf`` in the list
+     - ``cat /sys/kernel/security/lsm``
+   * - Initramfs generator
+     - dracut
+     - ``dracut --version``
+
+``lota-install`` checks the firmware and the TPM before it changes anything
+(:doc:`lota-install`). The agent checks lockdown, module signatures and the
+boot path every time it starts (:doc:`../agent/index`).
 
 Distributions
 =============
 
 .. list-table::
    :header-rows: 1
-   :widths: 26 30 16 28
+   :widths: 25 15 60
 
-   * - Distribution family
-     - Packaging
+   * - Distribution
      - Tier
-     - Notes
+     - What runs there
    * - Fedora
-     - RPM + dracut ``90lota``
      - Supported
-     - The reference agent platform. Fedora 44 ships ``module.sig_enforce=1``
-       and the kernel lockdown the startup gates require.
-   * - RHEL / Rocky / AlmaLinux (el9+)
-     - RPM + dracut ``90lota`` (same nfpm configs)
-     - Experimental
-     - The RPM/dracut family the agent targets beyond Fedora. The RPMs build
-       and install on el9 and el10 userspaces, and on el10 the agent enrolls,
-       commits the boot state to PCR 14 and passes its TPM attestation. On el9
-       the agent's ``fsverity-utils`` dependency is served by EPEL rather than
-       the distribution, so that repository has to be enabled first. The
-       BPF LSM does not arm on the el-family kernels, however -- see the
-       Kernel section below -- so runtime enforcement stays a Fedora-class
-       capability there.
-   * - Debian / Ubuntu
-     - separate ``initramfs-tools`` packaging
+     - CI builds the code and runs the unit tests on Fedora 43 and 44,
+       builds the packages on Fedora 44, and loads the enforcement object
+       through the kernel's BPF verifier on the Fedora kernel in a virtual
+       machine (:ghsrc:`scripts/veristat-gate.sh`).
+   * - RHEL, Rocky Linux, AlmaLinux
      - Unsupported
-     - A different initramfs generator than dracut; the ``90lota`` module does
-       not apply.
-   * - Arch / SteamOS / immutable (A/B) distributions
-     - none
+     - Their kernels are below the floor in `Kernel`_; CI does not build
+       there.
+   * - Debian, Ubuntu
      - Unsupported
-     - A different update and root-filesystem model than the packaged
-       bring-up assumes.
+     - They build the initramfs with ``initramfs-tools``; the dracut module
+       ``90lota`` does not apply.
+   * - Arch, SteamOS, image-based A/B systems
+     - Unsupported
+     - No packaging.
 
 Kernel
 ======
 
-The agent's BPF LSM enforcement needs a kernel new enough for its
-``file_mprotect`` gate. That gate reads the mapped file through
-``vm_area_struct::vm_file`` and hands it to the fs-verity digest kfunc, which
-the verifier only accepts when the pointer is trusted. The kernel began marking
-that field access trusted around **6.18**; measured with ``veristat`` against
-live kernels, 6.17 rejects the program and 6.19 accepts it. The RHEL-family
-kernels are below that floor -- el9 ships 5.14 (which additionally lacks the
-fs-verity kfunc entirely) and el10 ships 6.12, where 12 of the 13 programs
-verify and only ``file_mprotect`` is rejected. Because one rejected program
-fails the whole object, the LSM does not load. The agent still enrolls,
-commits PCR 14 and completes its TPM attestation on those kernels; only the
-runtime BPF-LSM layer is unavailable. Lowering that layer to make the object
-load on an older kernel is not offered: runtime enforcement requires a
-Fedora-class kernel, not a reduced program set.
+Version
+-------
+
+The ``file_mprotect`` program hands the file of the mapping,
+``vma->vm_file``, to ``bpf_get_fsverity_digest()``
+(:ghsrc:`src/bpf/lota_lsm.bpf.c`). The BPF verifier accepts that only when
+it trusts the pointer, and the kernel marks ``vm_file`` trusted from 6.19.
+``bpf_get_fsverity_digest()`` itself first appeared in 6.8. When one
+program of the object is refused, none of them loads, and the daemon start
+ends with ``Failed to load BPF program``.
+
+To check another kernel, boot it in a virtual machine and run
+``scripts/veristat-gate.sh`` on the object as root.
+
+Lockdown and module signatures
+------------------------------
+
+The daemon refuses to start with exit status 78 unless
+``/sys/kernel/security/lockdown`` shows ``[integrity]`` or
+``[confidentiality]`` and ``/sys/module/module/parameters/sig_enforce``
+reads ``Y`` (:ghsrc:`src/agent/bpf_loader.c`). Under Secure Boot a kernel
+with ``CONFIG_IMA_ARCH_POLICY`` enforces module signatures on its own; a
+kernel that does not lock itself down under Secure Boot needs
+``lockdown=integrity`` on the command line, and ``module.sig_enforce=1``
+works the same for signatures. With Secure Boot on, the refusal names the
+missing parameter; with it off, it points to the firmware setting.
+
+Exec appraisal
+--------------
+
+When IMA does not appraise executables the daemon starts and logs ``Exec
+appraisal is not established on this host``; every token then reports
+``KERNEL_APPRAISAL`` clear (:doc:`lota-install`).
+
+BPF LSM
+-------
+
+The kernel needs ``CONFIG_BPF_LSM`` and ``bpf`` in its active LSM list,
+which the ``lsm=`` parameter sets when the built-in list lacks it, and BTF
+at ``/sys/kernel/btf/vmlinux``.
 
 Firmware and boot
 =================
 
-.. list-table::
-   :header-rows: 1
-   :widths: 26 74
+UEFI with Secure Boot
+  The supported path. The verifier proves Secure Boot from the event log
+  and can pin the first boot baseline on that proof (:doc:`../verifier/index`).
+  The value PCR 14 holds before the initramfs lock, which shim's Machine
+  Owner Key list goes into, is part of the commitment.
 
-   * - Boot path
-     - Behaviour
-   * - UEFI + Secure Boot
-     - The reference target. shim measures the MOK state into PCR 14 before the
-       initramfs, and the boot commitment is baseline-aware over it (see
-       :doc:`bringup/ca-enrollment`). The verifier replays the TPM
-       event log and establishes Secure Boot from the log rather than the
-       self-report. A boot chain without shim (own PK/KEK/db, a directly signed
-       systemd-boot or UKI) measures nothing into PCR 14; the boot commitment
-       then chains onto a zero baseline, which is supported.
-   * - UEFI without Secure Boot
-     - The agent runs, but the firmware root of trust is weaker. Pass
-       ``lockdown=integrity`` on the kernel command line so the BPF-load gate is
-       satisfied (see :doc:`bringup/gate-matrix`).
-   * - Legacy BIOS / CSM
-     - **Unsupported.** BIOS measures neither the firmware and Secure Boot
-       state the verifier pins nor an EFI variable the event log can carry, so
-       a BIOS host cannot produce the evidence an attestation is built from.
-       The installer refuses such a host, the initramfs helper refuses to lock
-       PCR 14 on it, the agent refuses to form a boot commitment, and the
-       verifier rejects the report. Switch the firmware out of legacy/CSM mode
-       and reinstall.
+UEFI with Secure Boot off
+  ``lota-install`` stops at its first stage with the steps to turn Secure
+  Boot on. Setup mode and disabled shim validation stop it the same way. A
+  host brought up by hand still needs the kernel floor above, and the
+  verifier pins its first boot baseline only on a policy that pins PCR 0, 1
+  and 7, a baseline already in its store, an operator re-anchor, or
+  ``--allow-tofu-boot-baseline``. A policy with ``require_secureboot``
+  refuses it.
 
-Which registers a policy can pin
---------------------------------
+Legacy BIOS or CSM
+  Unsupported, since BIOS measures no EFI variable into the event log.
+  ``lota-install`` stops at its first stage, the initramfs helper
+  ``lota-pcr14-lock`` exits 13, the daemon logs ``This host cannot attest:
+  it did not boot via UEFI.``, and the verifier answers ``pcr_fail``.
 
-A policy that pins a PCR is asking that register to hold still. Not all of them
-do, and which ones move is a property of the boot path.
+Registers a policy can pin
+==========================
 
-.. list-table::
-   :header-rows: 1
-   :widths: 20 80
+``lota-agent --export-policy`` writes PCR 0, 1, 4, 7 and 11
+(:ghsrc:`src/agent/policy.c`). It leaves out:
 
-   * - Register
-     - Stability
-   * - PCR 0, 1, 7
-     - Stable across kernel upgrades and across a machine-owner key change.
-       These are what a boot-state pin is built from.
-   * - PCR 14
-     - The LOTA commitment, derived over the platform baseline. On a shim host
-       the baseline carries the MOK state, so enrolling a machine-owner key
-       moves it while PCR 7 does not -- an enrolled host then reports an
-       integrity mismatch until an operator re-anchors it. That is the review
-       gate a boot-chain change is meant to pass through, not a fault.
-   * - PCR 4, 8, 9, 10
-     - Move with a kernel upgrade, and on a GRUB host **also move with boot
-       history**. ``grubenv`` is measured into PCR 9 and GRUB rewrites it every
-       boot; GRUB's menu logic branches on ``boot_success``, so PCR 8 records a
-       different command sequence after an interrupted boot. Two boots of one
-       kernel, with the kernel and initramfs digests byte-identical, differ in
-       both. A pin on either re-pins after every unclean shutdown.
+PCR 8 and 9
+  GRUB measures its commands into PCR 8 and the files it reads, ``grubenv``
+  among them, into PCR 9, and it rewrites ``grubenv`` at boot. Two boots of
+  one kernel can differ in both. The verifier checks the command line
+  against the PCR 8 events and the kernel image against ``kernel_hashes``
+  (:ghsrc:`policies/README.rst`).
 
-A consumer fleet pins none of these and is unaffected by a kernel upgrade: the
-upgrade touches neither the boot baseline nor the PCR 14 commitment, so the
-host keeps attesting with nothing to re-anchor. An enterprise fleet that pins
-PCR 4, 8, 9 or 10 refuses the host after the upgrade, correctly by its own
-rules, and the operator updates the pins.
+PCR 14
+  The verifier holds it per client, as the baseline of each host.
+
+Independent of the policy, the verifier pins PCR 0, 1 and 7 and PCR 14 per
+client. The kernel image goes into neither, so a kernel upgrade moves no
+baseline; a policy that pins PCR 4 or lists kernel hashes needs the new
+values. A change to the Machine Owner Keys moves PCR 14 and leaves PCR 7
+as it was; the verifier re-pins it when the event log shows only that change
+and the tenant allows self-service re-anchor (:doc:`../verifier/index`).
