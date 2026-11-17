@@ -19,8 +19,10 @@
 # state.
 #
 # PCR 0 holds the firmware, PCR 1 its configuration, PCR 7 the Secure Boot
-# state; a kernel signed by the same key leaves PCR 7 as it was. PCR 8 holds
-# the GRUB kernel command line; on systemd-boot or a UKI it is in PCR 12.
+# state; a kernel signed by the same key leaves PCR 7 as it was. Leave PCR 8
+# out: GRUB measures there commands whose arguments carry grubenv values, so
+# it differs between healthy boots; require_cmdline_policy checks the command
+# line instead.
 # Leave PCR 14 out: the verifier checks it against the boot commitment
 # derived from the agent hash.
 
@@ -39,21 +41,19 @@ profile: enterprise
 #
 # Identical machines: uncomment and pin PCR 0/1/7; a device that does not
 # match is refused. Machines with their own firmware each: leave them
-# commented out, since a pin matches one device only and PCR 8 hashes the
-# per-machine root=UUID; require_secureboot and require_cmdline_policy below
-# check every device the same way, and profile: consumer re-pins a baseline
-# after a firmware update. Do not use consumer with raw PCR 0/1/7 pins.
+# commented out, since a pin matches one device only; require_secureboot and
+# require_cmdline_policy below check every device the same way, and profile:
+# consumer re-pins a baseline after a firmware update. Do not use consumer
+# with raw PCR 0/1/7 pins.
 pcrs:
   # 0: "REPLACE_WITH_REAL_PCR0_FROM_lota-agent_--export-policy"
   # 1: "REPLACE_WITH_REAL_PCR1_FROM_lota-agent_--export-policy"
   # 7: "REPLACE_WITH_REAL_PCR7_FROM_lota-agent_--export-policy"
-  # PCR 8 (identical machines, GRUB only; pin 12 on systemd-boot/UKI):
-  # 8: "REPLACE_WITH_REAL_PCR8_FROM_lota-agent_--export-policy"
 
 # Kernel image digests as the boot loader measured them into PCR 9. When
 # the list is set, a device whose quote does not cover a measured kernel
 # image in PCR 9, or whose image is not listed, is refused. Every kernel
-# update needs a new entry; PCR 7 and PCR 8 bind the kernel without one.
+# update needs a new entry. Empty leaves the kernel image unbound.
 kernel_hashes: []
 
 # SHA-256 of each agent binary the fleet runs; add one per agent release.

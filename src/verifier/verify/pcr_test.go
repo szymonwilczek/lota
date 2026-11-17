@@ -7,6 +7,7 @@ package verify
 import (
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -613,6 +614,40 @@ func TestLoadPolicy_RejectsMalformedDocument(t *testing.T) {
 			verifier.SetAllowUnpinnedAgent(true)
 			if verifier.LoadPolicy(path) == nil {
 				t.Fatal("malformed policy was accepted")
+			}
+		})
+	}
+}
+
+// The shipped templates load once their placeholders hold digests, and pin
+// no PCR 8: GRUB measures there commands whose arguments carry grubenv
+// values, so it moves between healthy boots.
+func TestPolicyTemplatesLoadWithoutPCR8(t *testing.T) {
+	placeholder := regexp.MustCompile(`"REPLACE_WITH_[^"]*"`)
+	digest := `"` + strings.Repeat("ab", 32) + `"`
+	dir := "../../../policies"
+	templates := []string{"testing.yaml", "production.yaml", "strict.yaml"}
+	for _, name := range templates {
+		t.Run(name, func(t *testing.T) {
+			data, err := os.ReadFile(filepath.Join(dir, name))
+			if err != nil {
+				t.Fatalf("read template: %v", err)
+			}
+			path := filepath.Join(t.TempDir(), name)
+			filled := placeholder.ReplaceAll(data, []byte(digest))
+			err = os.WriteFile(path, filled, 0o644)
+			if err != nil {
+				t.Fatalf("write policy: %v", err)
+			}
+			verifier := NewPCRVerifier()
+			verifier.SetAllowPermissivePolicy(true)
+			verifier.SetAllowUnpinnedAgent(true)
+			if err := verifier.LoadPolicy(path); err != nil {
+				t.Fatalf("LoadPolicy: %v", err)
+			}
+			policy, _ := verifier.GetActivePolicyConfig()
+			if _, ok := policy.PCRs[8]; ok {
+				t.Fatal("template pins PCR 8")
 			}
 		})
 	}
