@@ -1,10 +1,8 @@
 # ko build configuration for the LOTA attestation CA OCI image.
 #
-# Default attest-CA build is pure Go and links static.
-# pkcs11/HSM signing path is an opt-in cgo build (GO_TAGS=pkcs11) that
-# needs a PKCS#11 module at runtime, so it is deliberately left out of
-# the image -- HSM adopters run the CA on a host with their module,
-# not in this container.
+# Pure Go, linked static, without the pkcs11 tag. The HSM signing path is
+# the -hsm image, built from packaging/ko/attestca-hsm by
+# `make container-image-attest-ca-hsm`.
 #
 # ko builds reproducible distroless image without a Dockerfile or the
 # Docker daemon; build it through `make container-image-attest-ca`.
