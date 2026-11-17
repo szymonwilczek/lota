@@ -22,8 +22,8 @@
  * @rc: What run_daemon() returned: an exit status or a negative errno.
  * @commitment: The PCR 14 verdict of the same run.
  *
- * Return: @rc when it is not negative, LOTA_EXIT_OPERATOR_ACTION for -ENOTSUP
- * or a refused boot commitment, else 1.
+ * Return: @rc when it is not negative, LOTA_EXIT_OPERATOR_ACTION for -ENOTSUP,
+ * -EKEYREVOKED or a refused boot commitment, else 1.
  */
 int lota_daemon_exit_status(int rc, enum tpm_pcr14_state commitment);
 
