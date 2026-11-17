@@ -16,9 +16,9 @@ daemon checks them in :doc:`../../agent/index`.
 * :doc:`Startup checks <gate-matrix>` -- what the daemon checks before it
   starts, what a failed check does, and ``scripts/lota-dev-bringup.sh``,
   which meets them on a development host.
-* :doc:`Manual steps <manual-reference>` -- the policy signing key and the
-  signed object, the IMA policy, the label of the TPM device, and clearing
-  the agent's TPM state.
+* :doc:`Manual steps <manual-reference>` -- the enforcement key, the
+  SELinux module and the label of the TPM device, the initramfs lock, the
+  kernel command line, the IMA policy, and clearing the agent's state.
 * :doc:`Attestation CA enrollment <ca-enrollment>` -- the CA of a publisher
   and enrolling a host with it.
 * :doc:`Sealed keys <sealed-keys>` -- secrets the TPM releases only in an
