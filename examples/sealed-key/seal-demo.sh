@@ -38,7 +38,7 @@ fi
 
 echo "==> 3. Bind to a single PCR, then change it -> unseal must fail"
 # PCR 16 is the resettable debug PCR, so extending it costs no other seal;
-# the default set is PCRs 0-7.
+# the default set is PCRs 0, 1 and 7.
 printf '%s' "$PER_TITLE_KEY" | "$AGENT" --seal-pcrs 0x10000 --seal \
 	                                >"$WORK/title-pcr16.sealed"
 echo "    sealed to PCR16; extending PCR16 to simulate a state change..."
