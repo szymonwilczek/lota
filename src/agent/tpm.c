@@ -3937,11 +3937,9 @@ static void tpm_aik_report_auth_load_failure(struct tpm_context *ctx,
 			"this host already has.\n");
 	else
 		fprintf(stderr,
-			"SECURITY: restore the record, or replace the key "
-			"deliberately with --forget-publisher, "
-			"--allow-publisher and --enroll -- which issues a new "
-			"certificate, because the current one names the key "
-			"that is being replaced.\n");
+			"SECURITY: restore the record from a backup, or run "
+			"--reprovision-aik, which gives the same key a new "
+			"authorization; its certificate stays valid.\n");
 }
 
 int tpm_aik_reseal_auth(struct tpm_context *ctx)
