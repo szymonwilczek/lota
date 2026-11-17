@@ -53,9 +53,15 @@ Host checks
      - A cold reboot after the initramfs carries ``lota``
        (:doc:`../../agent/lifecycle`).
    * - The kernel loads and attaches the enforcement object
-     - The start ends with ``Failed to load BPF program`` or ``Failed to
-       attach BPF programs``, below the BPF library's own message.
-     - A kernel at or above the floor (:doc:`../platform-support`).
+     - ``Failed to load BPF program`` or ``Failed to attach BPF programs``,
+       with the BPF library's own lines around it. A refused load adds ``A
+       restart does not change the object or the kernel, so the agent stays
+       stopped.`` and exits 78.
+     - A kernel at or above the floor (:doc:`../platform-support`). The
+       load and the attach follow the PCR 14 extend: after a failed load a
+       start in the same boot carries ``AGENT_RESTARTED`` until reboot,
+       after a failed attach the start is refused until reboot
+       (:doc:`../../agent/lifecycle`).
 
 Each refusal is a line at error level in ``journalctl -u lota-agent``. A
 check that fails on a transient error, such as ``EIO`` or ``ENOMEM``, exits

@@ -36,4 +36,15 @@ int lota_daemon_exit_status(int rc, enum tpm_pcr14_state commitment);
  */
 int lota_startup_check_exit_status(int err);
 
+/**
+ * lota_bpf_load_refusal() - Classify a failed load of the enforcement object.
+ * @err: The negative errno bpf_loader_load() returned.
+ *
+ * A restart does not change the object or the kernel the load failed on.
+ *
+ * Return: @err for an errno lota_startup_check_exit_status() retries,
+ * else -ENOTSUP.
+ */
+int lota_bpf_load_refusal(int err);
+
 #endif /* LOTA_EXIT_STATUS_H */
