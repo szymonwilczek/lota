@@ -6,10 +6,9 @@ Measuring a game with ``lota-bench``
 =====================================
 
 ``lota-bench`` (:ghsrc:`tools/lota-bench`) measures what LOTA costs a
-player: it samples the cost of a running game and of the LOTA services
-next to it, keeps the frame times MangoHud logged for the same run, and
-writes both to files that can be shared and compared. It is a
-contributor tool, built from the tree and not shipped in the packages.
+running game. It samples the game and the LOTA services from their cgroups,
+keeps the frame times MangoHud logged for the same run, and writes the
+session to files that can be attached to an issue and compared.
 
 Building
 ========
@@ -17,41 +16,71 @@ Building
 .. code-block:: console
 
    $ make lota-bench
-   $ sudo make install-lota-bench                 # /usr/local/bin
+   $ sudo make install-lota-bench
    $ make install-lota-bench LOTA_BENCH_PREFIX=~/.local
+
+The binary is ``build/lota-bench``. ``install-lota-bench`` copies it to
+``bin/`` under ``LOTA_BENCH_PREFIX``, default ``/usr/local``. No package
+ships it.
+
+Commands
+========
+
+``lota-bench run DIR [options]``
+  Takes the next run of the session in DIR (`Running a session`_).
+
+``lota-bench report FILE``
+  Sets the configurations of a result or a summary side by side
+  (`Reading a session`_).
+
+``lota-bench issue FILE``
+  Prints the report and the summary as the body of an issue
+  (`Sharing a session`_).
+
+``lota-bench validate FILE``
+  Checks a plan, run, result or summary file (`Validating a file`_).
+
+``lota-bench frames LOG``
+  Summarises the frame times of a MangoHud log (`Frame times`_).
+
+``lota-bench --version``, ``--help``, ``-h``
+  Print the version or the usage and exit with 0.
+
+A missing or unknown command, a wrong number of arguments and a bad or
+out-of-range option exit with 2; any other failure exits with 1.
 
 Where the numbers come from
 ===========================
 
-Every number is read from cgroup v2 files, never from ``/proc/<pid>``. A
-protected title and the agent itself refuse every ptrace access from
-outside, reads included, and the agent records each refusal; a meter
-that read ``/proc/<pid>`` would show up in the agent's log as a process
-trying to read the game. The cgroup files need no ptrace access and read
-the same whether LOTA is stopped, running, or protecting the game.
+The game and the LOTA services are measured through cgroup v2 files;
+``lota-bench`` looks up no PID and reads nothing under ``/proc/<pid>``.
+The agent refuses a read of its own ``/proc`` and of a protected title's
+from outside the title's instance (:ghsrc:`src/bpf/lota_lsm.bpf.c`), so a
+meter that read them would fail on the very configuration it measures. A
+cgroup file reads the same whether LOTA is stopped, running or protecting
+the game.
 
 Three sources are sampled:
 
 ``game``
-   The transient scope ``lota-bench-game.scope`` the game's launch
-   options start it in (see `Running a session`_), under the user's
-   ``app.slice``. It is found by name, so no PID of the game is ever
-   looked up.
+   The transient scope ``lota-bench-game.scope`` that the game's launch
+   options start it in, under ``app.slice`` of the user's manager, or
+   straight under the manager where systemd puts it there. It is found by
+   name.
 
 ``lota-agent``, ``lota-attest``
    The cgroups of ``lota-agent.service`` and ``lota-attest.service``
-   under ``system.slice``. They are looked up again at every sample, so
-   a service stopped or started during a run shows as ``null`` in the
-   samples it was absent from.
+   under ``system.slice``. They are looked up again at every sample, so a
+   service that is not running is ``null`` in that sample.
 
-Each source carries the same fourteen metrics:
+Each source carries fourteen metrics:
 
 .. list-table::
    :header-rows: 1
 
-   * - key
-     - file
-     - field
+   * - Key
+     - File
+     - Field
    * - ``cpu_usage_usec``
      - ``cpu.stat``
      - ``usage_usec``
@@ -95,38 +124,32 @@ Each source carries the same fourteen metrics:
      - ``io.stat``
      - ``wios``, summed over devices
 
-Counters are cumulative since the cgroup was created; a consumer takes
-differences between samples. A metric whose file or field is missing
-(a controller not enabled for the cgroup, a kernel without
-``memory.peak``) is ``null``, never ``0``.
+The counters are cumulative since the cgroup was created. A metric whose
+file or field is missing, a controller not enabled for the cgroup or a
+kernel without ``memory.peak``, is ``null``. An empty ``io.stat`` is a
+cgroup that has done no I/O, and its four metrics are ``0``.
 
 Frame times
 ===========
 
-The cgroup files say what the game cost the machine; how smooth it ran
-comes from MangoHud, which runs inside the game and logs one row per
-frame. Because the log is written from inside, it reads the same whether
-the game is protected or not. Turn logging on in the MangoHud
-configuration or through ``MANGOHUD_CONFIG``:
+The cgroups say what the game cost the machine; how smoothly it ran comes
+from MangoHud, which runs inside the game and logs a row per frame. The
+log is written from inside the game, so it reads the same whether the game
+is protected or not. Logging is set in the MangoHud configuration or in
+``MANGOHUD_CONFIG``:
 
 .. code-block:: console
 
    $ MANGOHUD_CONFIG=output_folder=$HOME/mangologs,autostart_log=5,log_duration=600 \
          mangohud ./game
 
-For a Steam title, put ``MANGOHUD_CONFIG=... mangohud %command%`` in the
-launch options. ``log_interval`` must stay at its default of ``0``: with
-an interval the log holds one row per interval, frame times between rows
-are lost, and ``lota-bench`` refuses the log. ``log_duration`` can end
-the title along with the log, so save before it runs out. ``steam
--applaunch`` starts the launcher of a title that has one, and the launch
-options wrap that launcher; start such a title from the Steam window and
-pick the entry without it. The log is summarised with:
+``lota-bench run`` prints the launch options that set it for a session. A
+log is summarised with:
 
 .. code-block:: console
 
-   $ lota-bench frames ~/mangologs/game_<date>.csv
-   .../game_<date>.csv: 107912 frames in 600.004 s
+   $ lota-bench frames mangologs/example.csv
+   mangologs/example.csv: 107912 frames in 600.004 s
      mean             5.560 ms    179.9 fps
      median           5.561 ms    179.8 fps
      p99              5.663 ms    176.6 fps
@@ -136,30 +159,31 @@ pick the entry without it. The log is summarised with:
      max              9.904 ms    101.0 fps
      stutters  0 frames over twice the median
 
-Only the ``frametime`` and ``elapsed`` columns are read, found by name
-in the column row; the description of the machine MangoHud writes above
-that row is skipped and never copied. Frame times are kept in
-microseconds, truncating the rest.
+The header row is the first of the first 16 lines that names a
+``frametime`` and an ``elapsed`` column; the lines above it, where MangoHud
+describes the machine, are skipped and never copied. Only those two
+columns are read. ``frametime`` is in milliseconds and kept in
+microseconds, the rest truncated; ``elapsed`` is in nanoseconds.
 
 ``p99`` and ``p99.9``
-   The nearest-rank percentiles: the frame time that 99% (99.9%) of
-   frames are at or under. These are what MangoHud's own summary calls
-   the 1% and 0.1% minimum fps.
+   The nearest-rank percentiles: the frame time that 99 % (99.9 %) of
+   frames are at or under.
 
 ``1% low`` and ``0.1% low``
-   The mean of the slowest 1% (0.1%) of frames, at least one frame. A
-   handful of long frames moves these where it barely moves a
-   percentile.
+   The mean of the slowest 1 % (0.1 %) of frames, at least one frame. A
+   few long frames move these where they barely move a percentile.
 
 ``stutters``
    Frames longer than twice the median.
 
-A log is refused when no row among its first 16 names the
-``frametime`` and ``elapsed`` columns, when a row has a different number
-of columns than that row, when a frame time is not a plain decimal
-number of milliseconds or ``elapsed`` goes back, or when the frames
-cover less than half of the time the log spans, which is what a log
-with an interval looks like. A refusal names the line.
+The log is refused, with the line named, when no header row is found, when
+a row has more or fewer columns than the header, when a frame time is not
+a decimal number of milliseconds or ``elapsed`` not a whole number of
+nanoseconds, when ``elapsed`` goes back, or when it holds no frame. A log
+whose frame times add up to less than half of the time ``elapsed`` spans
+is refused too: it is logged once per ``log_interval``, not once per
+frame, and the message says to set ``log_interval=0``. A log is at most
+1 GiB and 4 194 304 frames (:ghsrc:`tools/lota-bench/frames.h`).
 
 Running a session
 =================
@@ -176,19 +200,18 @@ A session measures one title in three configurations:
    The agent running and protecting the title through
    ``lota-proton-hook``.
 
-It is a warm-up run in ``A`` followed by rounds of ``A``, ``B`` and
-``C``, so drift over the session (a warming machine, a filling shader
-cache) falls on every configuration alike. Moving between
-configurations can take a reboot, so ``lota-bench run`` takes one run a
-call and keeps the session in a directory. The first call names the
-title and starts it:
+It is a warm-up run in ``A`` followed by rounds of ``A``, ``B`` and ``C``,
+so drift over the session, a warming machine or a filling shader cache,
+falls on every configuration alike. Moving between configurations can take
+a reboot, so ``lota-bench run`` takes one run a call and keeps the session
+in a directory. The first call names the title and starts the warm-up:
 
 .. code-block:: console
 
    $ lota-bench run ~/bench/example --game "Example Title" --proton 9.0 \
          --settings "high, 1440p"
-   The session begins in /home/user/bench/example: 7 runs of 60 s.
-   Run 0 of 6, configuration A (warm-up). Set the game's launch options to:
+   The session begins in /home/user/bench/example: 10 runs of 60 s.
+   Run 0 of 9, configuration A (warm-up). Set the game's launch options to:
 
      MANGOHUD_CONFIG=output_folder=/home/user/bench/example,autostart_log=30,log_duration=60 systemd-run --user --scope --unit=lota-bench-game mangohud %command%
 
@@ -196,134 +219,185 @@ title and starts it:
    play as you would for 60 s from there.
    Waiting for the game; Ctrl+C gives up.
 
-``--rounds`` (default 3), ``--duration-s`` (default 60),
-``--settle-s`` (default 30) and ``--interval-ms`` (default 1000) set the
-rest of the plan. A loading screen makes the tail of the frame times
-noise, so the frame log starts ``--settle-s`` after the game; the
-cgroups measure the whole run, so what starting the game costs still
-counts. ``--proton``,
-``--game-version`` and ``--settings`` only describe the run. Every later
-call is ``lota-bench run DIR`` alone and takes the next run the plan
-calls for; options given to a session that has begun are refused. The
-directory's full path goes into ``MANGOHUD_CONFIG`` and the launch
-options, so it may hold only letters, digits and ``/ . _ - +``.
+The options that start a session:
 
-The first launch after a reboot finds a cold page cache and an agent in
-its first attestation rounds, and moving to ``B`` is where a reboot
-falls, so a run taken there would charge that cost to ``B`` alone. The session
-keeps the boot it last ran in, in ``boot_id``. A call in another boot
-is a warm-up: it goes as a run does, in the configuration of the next
-run, and keeps nothing. The next call takes that run.
+``--game TITLE``
+  The title. Required.
 
-Each call first checks that LOTA is where the run needs it and, when it
-is not, says how to get it there and exits:
+``--proton V``, ``--game-version V``, ``--settings TEXT``
+  Describe the run and change nothing in it.
+
+``--rounds N``
+  Rounds of ``A``, ``B`` and ``C``, 2 to 10, default 3.
+
+``--settle-s N``
+  Seconds from the game's start to the frame log, 1 to 600, default 30. A
+  loading screen makes the tail of the frame times noise, so the frame log
+  starts after it; the cgroups sample from the start, so what starting the
+  game costs still counts.
+
+``--duration-s N``
+  Seconds of the frame log, 10 to 3600, default 60.
+
+``--interval-ms N``
+  The sampling interval, 100 to 60000 milliseconds, default 1000.
+
+``run --help`` lists them and exits with 0.
+
+A run samples ``settle-s`` plus ``duration-s`` seconds; it holds at most
+14 400 samples and a session at most 43 200, and a plan past either is
+refused with a hint to lengthen ``--interval-ms``. Every later call is
+``lota-bench run DIR`` alone and takes the next run the plan calls for;
+options given to a directory that holds a session are refused. The
+directory is created with mode 0755, less the umask. Its full path goes into
+``MANGOHUD_CONFIG`` and the launch options, so it may hold only letters,
+digits and ``/ . _ - +``.
+
+LOTA in each configuration
+--------------------------
+
+Each call first checks that LOTA is where the run needs it, by the
+presence of the units' cgroups, and when it is not, prints how to get it
+there and exits with 1:
 
 .. code-block:: console
 
    $ sudo systemctl stop lota-attest lota-agent.socket lota-agent    # A
    $ sudo systemctl start lota-agent.socket lota-agent               # B, C
 
-The socket is stopped with the agent because the agent is socket
-activated: any client, ``lota-bench`` included, would start it again.
-In ``A`` ``lota-bench`` never touches the socket. Where PCR 14 binds the
-agent, stopping it spends the boot's commitment, and the agent refuses
-to start again until a reboot, which also brings attestation back; on
-such a host every run in ``B`` that follows an ``A`` begins with a
-reboot. In ``B`` and ``C`` the agent's status is read from the
-socket, which takes membership of the ``lota`` group; the agent's
-figures need it to run with ``--bench`` (``BENCH`` among the flags
-``lota-agent --status`` prints), and a run without them says so. For
-``C`` the printed launch options carry ``lota-proton-hook`` in front of
-``mangohud``; without ``--bench`` nothing tells whether the title was
-in fact protected.
+The socket goes with the agent because the agent is socket activated: any
+client, ``lota-bench`` included, would start it again. In ``A``,
+``lota-bench`` never connects to the socket. Where PCR 14 binds the agent,
+an agent stopped once does not start again until a reboot; on such a host
+every ``B`` run that follows an ``A`` run begins with a reboot.
 
-Once the scope appears the run is sampled for ``settle_s`` and
-``duration_s`` seconds together,
-then ``lota-bench`` asks to quit the game and waits for the scope to go.
-``lota-bench`` runs as the user, at nice 10 and idle I/O priority, and
-reads nothing but cgroup files, the agent's snapshot and its own
-directory. A run is not kept, and the next call takes it again, when:
-
-- the game quits before they are up, or Ctrl+C stops the run;
-- LOTA left the state of the configuration during the run: the agent
-  or attestation ran in ``A``, or the agent went away in ``B`` or
-  ``C``;
-- a ``C`` run with agent figures protected nothing, which means
-  ``lota-proton-hook`` is missing from the launch options, or a ``B``
-  run protected the title.
+In ``B`` and ``C`` the agent's status is read from its socket, which takes
+membership of the ``lota`` group. The agent's figures need the agent to
+run with ``--bench`` (:doc:`agent-bench`), shown as ``BENCH`` among the
+flags ``lota-agent --status`` prints; without it the run has no agent
+figures, and ``lota-bench`` says so. For ``C`` the printed launch options
+put ``lota-proton-hook`` in front of ``mangohud``.
 
 A call also refuses to go on while a ``lota-bench-game.scope`` is still
-running, and when the machine described in the plan changed (another
-kernel, GPU or driver): a session compares like with like, so that
-takes a new session.
+running, and when the machine changed since the plan was written: another
+CPU model or thread count, another set of GPUs or GPU drivers, another
+kernel release, distribution, TPM driver or SELinux mode. A session
+compares like with like, so that takes a new session.
 
-The run's MangoHud log is the newest ``.csv`` in the directory written
-since the game started; it is summarised into the run and kept as
-``frames-NN.csv``. Without one the run has no frame times. Each file is
-written aside, read back by the same validator as ``lota-bench
-validate``, and only then given its name, so a session directory never
-holds a half-written file. After the last run the same call joins the
-plan and every run into ``result.json``, and the session is complete.
+After a reboot
+--------------
+
+The first launch after a reboot finds a cold page cache and an agent in
+its first attestation rounds, and the move to ``B`` is where a reboot
+falls, so a run taken there would charge that cost to ``B`` alone. The
+session keeps the boot it last ran in, in ``boot_id``. A call in another
+boot, past run 0, is a warm-up: it goes as the next run goes, in its
+configuration, and keeps nothing. The call after it takes that run.
+
+A run
+-----
+
+Once the scope appears, ``lota-bench`` samples it for ``settle-s`` plus
+``duration-s`` seconds, at nice 10 and idle I/O priority. In ``B`` and
+``C`` it also reads the agent's snapshot at every sample. It then prints
+``Run N is measured. Quit the game.`` and waits for the scope to go.
+
+A run is not kept, and the next call takes it again, when:
+
+- the game quits before the time is up, or ``SIGINT`` or ``SIGTERM`` stops
+  the run;
+- the agent or attestation ran during an ``A`` run, or the agent was not
+  running in every sample of a ``B`` or ``C`` run;
+- a ``C`` run with agent figures protected nothing, which means
+  ``lota-proton-hook`` is missing from the launch options, or a ``B`` run
+  protected the title.
+
+The run's MangoHud log is the newest ``.csv`` in the session directory
+written since the game started. It is summarised into the run and kept as
+``frames-NN.csv``; without one the run has no frame times. Each file is
+written aside, read back by the validator of ``lota-bench validate``, and
+only then given its name, so a session directory never holds a
+half-written file. After the last run the same call joins the plan and
+every run into ``result.json``, and the session is complete; a call on a
+complete session says so and exits with 0.
 
 Reading a session
 =================
 
-``lota-bench report`` reads a result or a summary and sets the three
-configurations side by side:
+``lota-bench report`` reads a result or a summary:
 
 .. code-block:: console
 
    $ lota-bench report ~/bench/example/result.json
    Example Title: 3 rounds of A B C, 60 s a run after 30 s to settle
-   ...
-                                        A               B               C         B-A         C-A
-   frame time median ms          6.94 ±0.02      6.95 ±0.01      6.97 ±0.03     +0.01 ~     +0.03 ~
-   game CPU %                   182.4 ±1.3      183.0 ±0.9      183.6 ±1.1       +0.6 ~      +1.2 ~
-   lota-agent CPU %              0.00 ±0.00      0.08 ±0.01      0.11 ±0.01     +0.08       +0.11
-   ...
 
-Every row is one figure of a run, and for each configuration the median
-of its runs, the warm-up left out. A median rather than a mean lets one
-disturbed run (an update in the background, a shader compiled late)
-pass without moving the figure. The ``±`` is half the range of those
-runs: how far apart runs of the same configuration already are. A
-difference from ``A`` no larger than the two spreads together is marked
-``~``, noise: the session cannot tell it from the runs disagreeing among
-themselves, and more rounds are what would.
+     proton     9.0
+     settings   high, 1440p
+     cpu        Example CPU 8-Core
+     gpu        Example GPU
+     kernel     6.0.0
+     distro     example 1
+     tpm        tpm_example
+     selinux    enforcing
+     lota-bench 1.0.0
+     agent      enforce
+
+                                        A               B               C         B-A         C-A
+   frame time median ms        6.94 ±0.02      6.95 ±0.01      6.97 ±0.03     +0.01 ~     +0.03 ~
+   frame time p99 ms           8.12 ±0.10      8.15 ±0.07      8.21 ±0.12     +0.03 ~     +0.09 ~
+   frame time 1% low ms        9.40 ±0.21      9.44 ±0.18      9.52 ±0.25     +0.04 ~     +0.12 ~
+   game CPU %                  182.4 ±1.3      183.0 ±0.9      183.6 ±1.1      +0.6 ~      +1.2 ~
+   game memory MiB               4210 ±12         4214 ±9        4219 ±15        +4 ~        +9 ~
+   lota-agent CPU %            0.00 ±0.00      0.08 ±0.01      0.11 ±0.01     +0.08       +0.11
+   lota-attest CPU %           0.00 ±0.00      0.01 ±0.00      0.01 ±0.00     +0.01       +0.01
+   lota-agent memory MiB         0.0 ±0.0       18.2 ±0.3       41.6 ±1.2     +18.2       +41.6
+   BPF programs us/s             0.0 ±0.0      310.5 ±8.2      402.7 ±9.9    +310.5      +402.7
+
+   Each figure is the median of the configuration's runs, warm-up left out,
+   ± half their range. ~ marks a difference within the two spreads: noise.
+
+Each figure is the median of a configuration's runs, the warm-up left out,
+so one disturbed run, an update in the background or a shader compiled
+late, does not move it. The ``±`` is half the range of those runs: how far
+apart runs of one configuration already are. A difference from ``A`` no
+larger than the two spreads together is marked ``~``, noise: the session
+cannot tell it from the runs disagreeing among themselves, and more rounds
+are what would.
 
 ``frame time median``, ``p99``, ``1% low``, in ms
    From the run's MangoHud log, as ``lota-bench frames`` defines them.
-   Lower is better.
-   A game held to the display's refresh by vsync hides what it spends:
-   the frame time stays on the refresh interval while the CPU has room.
-   For such a game the CPU rows give the cost, and the frame times only
-   show that nothing got worse.
+   Lower is better. A game held to the display's refresh by vsync keeps its
+   frame time on the refresh interval while the CPU has room; for such a
+   game the CPU rows give the cost, and the frame times show that nothing
+   got worse.
 
 ``game CPU``, ``lota-agent CPU``, ``lota-attest CPU``, in %
    The CPU time the cgroup accrued over the run, as a share of one CPU:
-   ``cpu_usec / (wall_ms * 10)``. A game busy on two CPUs shows
-   ``200``. The services stopped in ``A`` count as ``0``, and so does
-   attestation while it is not running.
+   ``cpu_usec / (wall_ms * 10)``. A game busy on two CPUs shows ``200``.
+   Both services count as ``0`` in ``A``, and attestation as ``0`` in a
+   run where it did not run.
 
 ``game memory``, ``lota-agent memory``, in MiB
-   The highest ``memory.current`` of the run.
-   The agent's figure in ``C`` counts the page cache of the game's files
-   it reads to hash them, which the kernel takes back under pressure.
-   ``file`` in the unit's ``memory.stat`` tells it from ``anon``, the
-   memory the agent holds.
+   The highest ``memory.current`` of the run; the agent's is ``0`` in
+   ``A``. The agent's figure in ``C`` counts the page cache of the game's
+   files it reads to hash them, which the kernel takes back under
+   pressure; ``file`` in the unit's ``memory.stat`` tells it from
+   ``anon``.
 
-``BPF programs``, in µs/s
-   The time the agent's BPF programs ran during the run, for every
-   second of it: ``bpf_run_ns / wall_ms``. It needs the agent under
-   ``--bench``, which turns on the counting
-   (:doc:`agent-bench`). The time is spent in the processes the hooks
-   run in, the game's among them, so it is already part of their CPU
-   time rather than added to it.
+``BPF programs``, in us/s
+   The time the agent's BPF programs ran during the run, per second of it:
+   ``bpf_run_ns / wall_ms``. It needs the agent under ``--bench``, and is
+   ``0`` in ``A``. The programs run in the processes their hooks fire in,
+   the game's among them, so the time is part of their CPU time, not
+   added to it.
 
-A figure some runs of a configuration lack is marked ``*``, one none of
-them has is ``-``. When the power settings (governor, platform profile,
-supply) changed across the session, the report says so: runs under
-different settings do not compare.
+A figure some runs of a configuration lack is marked ``*``, and one none
+of them has is ``-``. The ``agent`` line lists the agent modes of the
+``B`` and ``C`` runs, with ``, some runs without --bench`` when that is so.
+When a run ran under other power settings than run 0, another CPU
+governor, platform profile or power supply, the report ends with
+``Run N ran under other power settings than run 0; the session is not
+comparable run to run.``
 
 Sharing a session
 -----------------
@@ -337,20 +411,19 @@ takes the figures from:
 
    $ lota-bench issue ~/bench/example/result.json > issue.md
 
-The summary is read back by the validator before anything is printed,
-so the block holds only what ``lota-bench validate`` accepts, and the
-whole body must fit the 65536 characters an issue holds; a session of
-the most rounds takes about half of that.
+The summary is read back by the validator before anything is printed, so
+the block holds only what ``lota-bench validate`` accepts. The body is at
+most 65 536 bytes (:ghsrc:`tools/lota-bench/report.h`); a longer one is
+refused.
 
 The files of a session
 ======================
 
-A session lives in one directory and is made of three kinds of file:
-``plan.json`` says what is measured and on what machine, each
-``run-NN.json`` holds one run, and ``result.json`` joins the plan and
-every run once the last run is in. A summary is a result without its
-samples, small enough to paste into an issue. Each file is one JSON
-object that starts with the same three keys:
+A session directory holds ``plan.json``, what is measured and on what
+machine; ``run-NN.json``, one per run; ``result.json``, the plan and every
+run once the last run is in; ``boot_id``; and the kept frame logs. A
+summary is a result without its samples, small enough to paste into an
+issue. Each JSON file is one object that starts with the same three keys:
 
 .. code-block:: text
 
@@ -361,9 +434,8 @@ object that starts with the same three keys:
      ...
    }
 
-``schema_version`` is ``1``; a change a reader of version 1 would
-misread raises it. ``kind`` is ``plan``, ``run``, ``result`` or
-``summary`` and comes before every key it governs.
+``kind`` is ``plan``, ``run``, ``result`` or ``summary``, and comes before
+every key after it.
 
 The plan
 --------
@@ -388,24 +460,18 @@ The plan
    The ``lota-bench`` that wrote the plan.
 
 ``machine``
-   What the numbers depend on: the CPU model and its thread count, the
-   memory, up to four GPUs by PCI id with the name ``pci.ids`` gives
-   them and the driver bound to them, the kernel release, the
+   The CPU model and thread count from ``/proc/cpuinfo``, the memory from
+   ``/proc/meminfo``, up to four GPUs by PCI id with the name ``pci.ids``
+   gives them and the driver bound to them, the kernel release, the
    distribution as ``ID VERSION_ID`` from ``os-release``, the driver of
-   the TPM (``none`` without one) and the SELinux mode.
+   ``tpm0`` (``none`` without one) and the SELinux mode.
 
 ``game``
-   The title, and the Proton, game version and settings it ran with.
-   Only the title is required.
+   The title, and the Proton, game version and settings it ran with. Only
+   the title is required.
 
 ``rounds``, ``settle_s``, ``duration_s``, ``interval_ms``
-   A session is a warm-up run followed by ``rounds`` rounds of one run
-   in each configuration (``A``, ``B``, ``C``), 2 to 10 rounds. Each run
-   samples for ``settle_s`` seconds, 1 to 600, in which the frame log
-   does not run, and then ``duration_s`` seconds, 10 to 3600, every
-   ``interval_ms`` milliseconds, 100 to 60000. A run holds at most 14400
-   samples and a session at most 43200, so a plan that would plan more
-   is refused.
+   The options of the first call, with their ranges.
 
 A run
 -----
@@ -421,7 +487,7 @@ A run
       "lota-agent": {...}, "lota-attest": null},
      {"t_ms": 1000, ...}
     ],
-    "sample_count": 90, "wall_ms": 90004, "end": "duration",
+    "sample_count": 91, "wall_ms": 90004, "end": "duration",
     "totals": {"game": {"cpu_usec": ..., "memory_max_bytes": ...,
                         "pgfault": ..., "pgmajfault": ...,
                         "io_read_bytes": ..., "io_write_bytes": ...},
@@ -436,58 +502,59 @@ A run
              "max_rss_bytes": 3}}
 
 ``index``, ``config``, ``warmup``
-   Run 0 is the warm-up, in ``A``; run ``i`` after it is in ``A``,
-   ``B`` and ``C`` in turn.
+   Run 0 is the warm-up, in ``A``; the runs after it are in ``A``, ``B``
+   and ``C`` in turn.
 
 ``mode``, ``agent_bench``
-   The agent's mode as its status reports it, ``none`` while it is
-   stopped, and whether it runs with ``--bench``.
+   The agent's mode as its status reports it, ``none`` in ``A``, and
+   whether it runs with ``--bench``.
 
 ``power``
-   The CPU frequency governor, the platform profile and whether the
-   machine ran on ``ac`` or ``battery`` (``unknown`` when it cannot
-   tell).
+   The CPU frequency governor of ``cpu0``, the ACPI platform profile, and
+   whether the machine ran on ``ac`` or ``battery``, ``unknown`` when it
+   cannot tell.
 
 ``samples``
    One sample every ``interval_ms``. ``t_ms`` is milliseconds since the
-   first sample and strictly increases. Each source is ``null`` while
-   its cgroup is absent, or an object holding every metric.
+   first sample and increases. Each source is ``null`` while its cgroup is
+   absent, or an object holding every metric.
 
 ``end``
-   Why sampling stopped: ``duration``, ``game-gone`` or ``sample-cap``.
-   An ``interrupted`` run is not kept.
+   Why sampling stopped: ``duration``, or ``sample-cap`` at 14 400
+   samples. A ``game-gone`` or ``interrupted`` run is not kept.
 
 ``totals``
-   Each source over the whole run: the CPU time and the faults and I/O
-   it accrued, and the highest ``memory.current``. A source whose cgroup
-   was never there is ``null``.
+   Each source over the whole run: the CPU time, faults and I/O accrued
+   between samples, and the highest ``memory.current``. A cgroup that
+   appears after the first sample, or whose counter goes back, counts in
+   full from then. A source whose cgroup was never there is ``null``.
 
 ``agent``
-   From the snapshots the agent writes under ``--bench``: the time and
-   runs of its BPF programs during the run, the memory its BPF maps
-   lock, and the most processes it protected at once. ``null`` when no
-   snapshot could be read.
+   From the agent's snapshots: the time and runs of its BPF programs
+   between the first and the last snapshot of the run, the most memory its
+   BPF maps locked, and the most processes it protected at once. ``null``
+   when no snapshot could be read or the agent ran without ``--bench``.
 
 ``frames``
-   The MangoHud log of the run, summarised as ``lota-bench frames``
-   does, in microseconds; ``null`` without a log.
+   The run's MangoHud log, summarised as ``lota-bench frames`` does, in
+   microseconds; ``null`` without a log.
 
 ``self``
    The sampler's own user and system CPU time and peak resident set.
 
-In ``result.json`` each run is an element of ``runs`` in the same form;
-a summary leaves out every ``samples``.
+In ``result.json`` each run is an element of ``runs`` in the same form; a
+summary leaves out every ``samples``.
 
 Text
 ----
 
-Apart from the names of the fixed sets above, a file carries text in a
-few named fields only: the machine's, the game's and the power
-settings'. Each is cleaned when it is read: printable ASCII only, with
-``/``, ``\`` and ``"`` turned into ``_``, blanks collapsed and trimmed,
-at most 64 characters. No path, host name, user name, process name or
-command line is ever written, which is what makes a file safe to attach
-to a public issue or pull request.
+Apart from the names of the fixed sets above, a file carries text only in
+the machine's, the game's and the power settings' fields and in
+``version``. Each is cleaned when it is read: printable ASCII only, with
+``/``, ``\`` and ``"`` turned into ``_``, blanks collapsed and trimmed, at
+most 64 bytes (:ghsrc:`tools/lota-bench/field.c`). No path, host name,
+user name, process name or command line is written, which is what makes a
+file fit to attach to a public issue.
 
 Validating a file
 =================
@@ -497,15 +564,15 @@ Validating a file
    $ lota-bench validate result.json
    result.json: valid result, 10 runs of Example Title
 
-``validate`` accepts exactly what ``lota-bench`` writes and nothing
-more: every key known and present once, every name one of its fixed
-set, every text field as cleaning leaves it, every number an unsigned
-64-bit integer, nothing after the object, and the file at most 64 MiB.
-A session must also add up: as many runs as its rounds make, each in
-its place and in the configuration that place calls for, and each
-showing the state of LOTA that configuration stands for. An ``A`` run
-saw no agent, a ``B`` or ``C`` run saw it running, a ``C`` run with
-agent figures protected at least one process and a ``B`` run none. A
+``validate`` accepts what ``lota-bench`` writes and nothing more: every
+key known and present once, every name one of its fixed set, every text
+field as cleaning leaves it, every number an unsigned integer, nothing
+after the object, and the file at most 64 MiB. A session must also add
+up: as many runs as its rounds make, each in its place and in the
+configuration that place calls for, ``sample_count`` matching the samples,
+and each run showing the state of LOTA its configuration stands for. An
+``A`` run had no agent, a ``B`` or ``C`` run had it running, a ``C`` run
+with agent figures protected at least one process and a ``B`` run none. A
 refusal names the byte offset of the first problem:
 
 .. code-block:: console
@@ -513,7 +580,8 @@ refusal names the byte offset of the first problem:
    $ lota-bench validate edited.json
    edited.json: invalid: offset 57: unknown key "path"
 
-Because the validator is what stands between a contributed file and the
-tree, it is fuzzed: ``make fuzz-bench-result`` builds the harness, which
-also checks that no accepted input carries a ``/`` or a ``\``. The
-MangoHud log reader has its own harness, ``make fuzz-bench-frames``.
+The validator is what stands between a contributed file and the tree, so
+it is fuzzed: ``make fuzz-bench-result`` builds the harness, which also
+checks that no accepted input carries a ``/`` or a ``\``
+(:ghsrc:`fuzz/fuzz_bench_result.c`). The MangoHud log reader has its own,
+``make fuzz-bench-frames``.
