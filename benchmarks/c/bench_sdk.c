@@ -19,6 +19,7 @@
 #include <unistd.h>
 #include <stdint.h>
 #include <stdio.h>
+#include <sys/statvfs.h>
 #include <sys/types.h>
 
 #include "cbench.h"
@@ -92,6 +93,18 @@ static int make_exe_file(struct sdk_ctx *x)
 	int fd = mkstemp(x->exe_path);
 	if (fd < 0) {
 		fprintf(stderr, "bench_sdk: cannot create a file in /tmp\n");
+		return -1;
+	}
+
+	struct statvfs st;
+	if (fstatvfs(fd, &st) == 0 && st.f_frsize &&
+	    x->exe_bytes / st.f_frsize + !!(x->exe_bytes % st.f_frsize) >
+		    st.f_bavail) {
+		fprintf(stderr,
+			"bench_sdk: a %zu KiB file does not fit in /tmp\n",
+			kib);
+		close(fd);
+		unlink(x->exe_path);
 		return -1;
 	}
 

@@ -101,7 +101,8 @@ C benchmarks
 ``game_binding_hash``
    ``lota_ac_compute_game_binding_hash()`` over a file of
    ``BENCH_EXE_KIB`` KiB (default 1024), written under ``/tmp`` at start
-   and removed at exit.
+   and removed at exit. A size that does not fit in the free space of
+   ``/tmp`` is refused, and the runner exits with 1.
 
 ``token_serialize``
    ``lota_token_serialize()`` of a token with a 120-byte quote and a
