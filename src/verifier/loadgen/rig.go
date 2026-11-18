@@ -37,6 +37,15 @@ func writeRig(dir string, agents, keyPool int, tenant string) error {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return fmt.Errorf("create rig directory: %w", err)
 	}
+	d, err := os.Open(dir)
+	if err != nil {
+		return fmt.Errorf("open rig directory: %w", err)
+	}
+	err = d.Chmod(0o700)
+	d.Close()
+	if err != nil {
+		return fmt.Errorf("chmod rig directory: %w", err)
+	}
 
 	ca, err := synth.NewCA()
 	if err != nil {
@@ -76,11 +85,36 @@ func writeRig(dir string, agents, keyPool int, tenant string) error {
 		{rigMetaFile, append(meta, '\n'), 0o644},
 	}
 	for _, f := range files {
-		if err := os.WriteFile(filepath.Join(dir, f.name), f.data, f.mode); err != nil {
+		path := filepath.Join(dir, f.name)
+		if err := writeRigFile(path, f.data, f.mode); err != nil {
 			return fmt.Errorf("write %s: %w", f.name, err)
 		}
 	}
 	return nil
+}
+
+// writeRigFile writes data to a new file of mode and renames it onto path,
+// so a descriptor still open on the old file never reads the new data.
+func writeRigFile(path string, data []byte, mode os.FileMode) error {
+	f, err := os.CreateTemp(filepath.Dir(path), ".rig-*")
+	if err != nil {
+		return err
+	}
+	tmp := f.Name()
+	err = f.Chmod(mode)
+	if err == nil {
+		_, err = f.Write(data)
+	}
+	if cerr := f.Close(); err == nil {
+		err = cerr
+	}
+	if err == nil {
+		err = os.Rename(tmp, path)
+	}
+	if err != nil {
+		os.Remove(tmp)
+	}
+	return err
 }
 
 // loadRig rebuilds the fleet from dir. agents <= 0 means the setup size,

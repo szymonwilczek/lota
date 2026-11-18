@@ -5,6 +5,7 @@
 package main
 
 import (
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -48,6 +49,57 @@ func TestRigRoundTrip(t *testing.T) {
 		}
 		if !fleet2.Agents[i].Key.Equal(fleet.Agents[i].Key) {
 			t.Errorf("agent %d key changed across loads", i)
+		}
+	}
+}
+
+func TestRigSetupAgainSetsModes(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "rig")
+	if err := writeRig(dir, 2, 1, ""); err != nil {
+		t.Fatalf("writeRig: %v", err)
+	}
+	want := map[string]os.FileMode{
+		rigCACertFile: 0o644, rigCAKeyFile: 0o600, rigKeysFile: 0o600,
+		rigPolicyFile: 0o644, rigMetaFile: 0o644,
+	}
+	for name := range want {
+		path := filepath.Join(dir, name)
+		if err := os.Chmod(path, 0o666); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.Chmod(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	oldKey, err := os.ReadFile(filepath.Join(dir, rigCAKeyFile))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// a reader that opened ca.key while it was 0666
+	held, err := os.Open(filepath.Join(dir, rigCAKeyFile))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer held.Close()
+
+	if err := writeRig(dir, 2, 1, ""); err != nil {
+		t.Fatalf("writeRig again: %v", err)
+	}
+	got, err := io.ReadAll(held)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != string(oldKey) {
+		t.Error("a descriptor opened before setup reads the new CA key")
+	}
+	want["."] = os.ModeDir | 0o700
+	for name, mode := range want {
+		fi, err := os.Stat(filepath.Join(dir, name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := fi.Mode() & (os.ModeDir | os.ModePerm); got != mode {
+			t.Errorf("%s mode %v, want %v", name, got, mode)
 		}
 	}
 }
