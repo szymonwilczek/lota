@@ -5,20 +5,14 @@
 Security
 ========
 
-Start with the threat model and the reporting policy. Do not file public
-issues for exploitable vulnerabilities.
-
-* :doc:`Threat model <threat-model>` -- what LOTA protects, what it enforces,
-  and what is out of scope.
-* :doc:`Security reporting <../process/security-bugs>` -- how to report a vulnerability.
-* :doc:`Reproducible builds <reproducible-builds>` -- rebuild a release and
-  verify its signature.
-* :doc:`Attestation CA signing key <ca-key>` -- key ceremony, rotation, and
-  topology.
+These pages cover what an attestation from LOTA proves and against whom,
+the signing key of the attestation CA, and how a release is checked against
+its source. A vulnerability is reported privately, as
+:doc:`../process/security-bugs` describes.
 
 .. toctree::
-   :hidden:
+   :maxdepth: 1
 
    threat-model
-   reproducible-builds
    ca-key
+   reproducible-builds
