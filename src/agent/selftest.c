@@ -779,10 +779,11 @@ int do_seal_aik_auth(void)
 
 		if (exposed)
 			fprintf(stderr,
-				"%u still keep a plaintext copy beside the "
+				"%u still keep%s a plaintext copy beside the "
 				"sealed one; set seal_aik_auth_strict to drop "
-				"it.\n",
-				exposed);
+				"%s.\n",
+				exposed, exposed == 1 ? "s" : "",
+				exposed == 1 ? "it" : "them");
 		else
 			fprintf(stderr, "No plaintext copy remains on disk.\n");
 	}
@@ -925,8 +926,8 @@ int do_reprovision_aik(void)
 				"platform state, with no plaintext copy.\n");
 		else
 			fprintf(stderr,
-				"%u of the new authorization%s on disk in the "
-				"clear; run --seal-aik-auth to seal %s.\n",
+				"%u new authorization%s on disk in the clear; "
+				"run --seal-aik-auth to seal %s.\n",
 				exposed, exposed == 1 ? " is" : "s are",
 				exposed == 1 ? "it" : "them");
 	}
