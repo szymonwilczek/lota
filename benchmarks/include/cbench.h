@@ -20,7 +20,8 @@
  *
  * Write into cbench_sink to defeat dead-code elimination. Set cbench_failed
  * when the measured call fails: the figures then time the error path, and
- * the runner exits non-zero.
+ * the runner exits non-zero. cbench_run() sets it when it cannot allocate
+ * the samples.
  */
 #ifndef LOTA_CBENCH_H
 #define LOTA_CBENCH_H
@@ -54,7 +55,7 @@ static inline uint64_t cbench_now_ns(void)
 static inline size_t cbench_envu(const char *name, size_t dflt)
 {
 	const char *v = getenv(name);
-	if (!v || !*v)
+	if (!v || *v < '0' || *v > '9')
 		return dflt;
 	char *end = NULL;
 	unsigned long long n = strtoull(v, &end, 10);
@@ -117,6 +118,7 @@ static inline void cbench_run(const char *suite, const char *name, cbench_fn fn,
 	double *samples = (double *)malloc(reps * sizeof(double));
 	if (!samples) {
 		fprintf(stderr, "cbench: OOM\n");
+		cbench_failed = 1;
 		return;
 	}
 	for (size_t r = 0; r < reps; r++) {

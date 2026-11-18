@@ -174,8 +174,8 @@ int main(void)
 	unlink(x.exe_path);
 	if (cbench_failed) {
 		fprintf(stderr,
-			"bench_sdk: a measured call failed, the figures "
-			"are not a measurement\n");
+			"bench_sdk: a benchmark failed, the figures are "
+			"not a measurement\n");
 		return 1;
 	}
 	return 0;

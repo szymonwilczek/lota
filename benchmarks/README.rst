@@ -144,8 +144,10 @@ the calls per second at the median.
      - 1024
      - the size of the hashed file, in KiB
 
-For the four numeric variables, an empty value, a value of zero, or one
-that ``strtoull(3)`` does not read to its end leaves the default.
+For the four numeric variables, a value that does not start with a digit,
+has characters after the number, or is zero leaves the default. When the
+samples of a benchmark cannot be allocated, the harness prints ``cbench:
+OOM`` and skips it, and the runner exits with 1.
 ``make bench-c`` removes ``c-sdk.json`` and sets ``BENCH_JSON`` to it. An
 object carries ``suite``, ``name``, ``median_ns``, ``p99_ns``, ``min_ns``,
 ``stddev_ns``, ``ops_per_sec``, ``samples`` and ``batch``.
