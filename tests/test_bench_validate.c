@@ -373,6 +373,13 @@ static const struct rejection rejections[] = {
 	  "frames without a frame"),
 	R("an A run with LOTA", T_RESULT, "\"agent_bench\": false",
 	  "\"agent_bench\": true", "LOTA ran during an A run"),
+	/* the warm-up's totals, the first in the result */
+	R("an A run with lota-attest", T_RESULT,
+	  "\"lota-attest\": null},\n   \"agent\"",
+	  "\"lota-attest\": {\"cpu_usec\": 10, \"memory_max_bytes\": null, "
+	  "\"pgfault\": null, \"pgmajfault\": null, \"io_read_bytes\": null, "
+	  "\"io_write_bytes\": null}},\n   \"agent\"",
+	  "LOTA ran during an A run"),
 	R("a B run that protected the title", T_RESULT, "\"protected_max\": 0",
 	  "\"protected_max\": 1", "the title was protected in a B run"),
 	R("a run out of place", T_RESULT, "{\"index\": 1,", "{\"index\": 2,",
