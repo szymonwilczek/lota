@@ -528,13 +528,18 @@ int probe_pcr14_lock_ran(void);
 /* probe_pcr14_lock_ran() for baseline file @baseline_path */
 int probe_pcr14_lock_ran_at(const char *baseline_path);
 
+/* probe_agent_paused_at() results besides 0 */
+#define PROBE_AGENT_PAUSED 1
+#define PROBE_AGENT_SPENT_BY_ERROR 2
+
 /**
- * probe_agent_paused_at() - Whether PCR 14 was spent on a requested shutdown.
+ * probe_agent_paused_at() - Whether the agent spent PCR 14 this boot.
  * @snapshot_path: the agent's clock-state snapshot.
  * @live:          live PCR 14.
  *
- * Return: 1 when the snapshot records a pause and @live holds the PCR 14 it
- * recorded, otherwise 0.
+ * Return: when @live holds the PCR 14 the snapshot recorded,
+ * PROBE_AGENT_PAUSED for a requested shutdown and PROBE_AGENT_SPENT_BY_ERROR
+ * for a failed run; otherwise 0.
  */
 int probe_agent_paused_at(const char *snapshot_path,
 			  const uint8_t live[PROBE_HASH_SIZE]);
@@ -552,9 +557,10 @@ int probe_agent_paused(void);
  * @note:         filled with the reason for the verdict.
  * @cap:          size of @note.
  *
- * Return: STAGE_BLOCKED when the agent failed and is not active (after the
- * paused case), STAGE_DONE for PROBE_PCR14_LOCK_ONLY or for
- * PROBE_PCR14_OTHER with the agent active, otherwise STAGE_REBOOT.
+ * Return: STAGE_BLOCKED when the agent is not active and spent PCR 14 on an
+ * error or failed (after the paused case), STAGE_DONE for
+ * PROBE_PCR14_LOCK_ONLY or for PROBE_PCR14_OTHER with the agent active,
+ * otherwise STAGE_REBOOT.
  */
 enum stage_state probe_pcr14_barrier_stage(int pcr_state, int lock_ran,
 					   int agent_active, int agent_failed,

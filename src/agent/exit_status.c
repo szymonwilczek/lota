@@ -24,6 +24,7 @@ static bool commitment_refused(enum tpm_pcr14_state state)
 		return false;
 	case TPM_PCR14_LOCK_MISSING:
 	case TPM_PCR14_SPENT_BY_SHUTDOWN:
+	case TPM_PCR14_SPENT_BY_ERROR:
 	case TPM_PCR14_BINARY_CHANGED:
 	case TPM_PCR14_TAMPERED_BEFORE_START:
 	case TPM_PCR14_MUTATED_IN_SESSION:

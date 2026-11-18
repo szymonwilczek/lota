@@ -4,6 +4,7 @@
 #include "shutdown.h"
 
 #include <errno.h>
+#include <stdbool.h>
 #include <string.h>
 #include <sys/random.h>
 #include <stdint.h>
@@ -14,7 +15,7 @@
 #include "agent.h"
 #include "journal.h"
 
-int poison_runtime_pcr(struct tpm_context *ctx)
+int poison_runtime_pcr(struct tpm_context *ctx, bool requested)
 {
 	uint8_t poison_digest[LOTA_HASH_SIZE];
 	size_t off = 0;
@@ -57,7 +58,10 @@ int poison_runtime_pcr(struct tpm_context *ctx)
 		if (tpm_read_pcr(ctx, LOTA_PCR_SELF, TPM_HASH_ALG,
 				 snap.pcr14) == 0) {
 			snap.saved_at = (int64_t)time(NULL);
-			snap.flags |= LOTA_CLOCK_STATE_FLAG_SHUTDOWN_POISON;
+			snap.flags |=
+				requested ?
+					LOTA_CLOCK_STATE_FLAG_SHUTDOWN_POISON :
+					LOTA_CLOCK_STATE_FLAG_ERROR_POISON;
 			(void)tpm_clock_state_save(ctx, &snap);
 		}
 	}
@@ -74,7 +78,7 @@ int agent_poison_runtime_pcr_before_bpf_unload(struct tpm_context *tpm,
 	if (!tpm || !bpf || !tpm->initialized || !bpf->loaded)
 		return current_ret;
 
-	poison_ret = poison_runtime_pcr(tpm);
+	poison_ret = poison_runtime_pcr(tpm, current_ret == 0);
 	if (poison_ret < 0) {
 		lota_err("Failed to poison runtime PCR before BPF unload: %s",
 			 strerror(-poison_ret));

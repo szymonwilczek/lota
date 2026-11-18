@@ -436,6 +436,35 @@ static void test_the_two_accepting_verdicts_are_told_apart(void)
 	PASS();
 }
 
+/* A poisoned register names the cause the snapshot recorded */
+static void test_poison_records_its_cause(void)
+{
+	struct scenario s;
+
+	TEST("a poison after a failed run is not read as a requested stop");
+
+	if (build_committed_boot(&s, RESTART_AT_EXTEND) < 0)
+		FAIL("failed to derive the register value");
+	fill(s.current, 0xD3);
+	memcpy(s.prev.pcr14, s.current, LOTA_HASH_SIZE);
+
+	s.prev.flags = LOTA_CLOCK_STATE_FLAG_INITRAMFS_LOCK |
+		       LOTA_CLOCK_STATE_FLAG_SHUTDOWN_POISON;
+	if (tpm_classify_pcr14(&s.obs) != TPM_PCR14_SPENT_BY_SHUTDOWN)
+		FAIL("a requested stop must read as one");
+
+	s.prev.flags = LOTA_CLOCK_STATE_FLAG_INITRAMFS_LOCK |
+		       LOTA_CLOCK_STATE_FLAG_ERROR_POISON;
+	if (tpm_classify_pcr14(&s.obs) != TPM_PCR14_SPENT_BY_ERROR)
+		FAIL("a failed run must not read as a requested stop");
+
+	/* the register moved on since the poison: neither cause applies */
+	fill(s.current, 0x6E);
+	if (tpm_classify_pcr14(&s.obs) != TPM_PCR14_MUTATED_IN_SESSION)
+		FAIL("an extend after the poison must read as a mutation");
+	PASS();
+}
+
 static int write_handoff(const char *path, size_t len)
 {
 	uint8_t buf[LOTA_HASH_SIZE + 1];
@@ -499,6 +528,7 @@ int main(void)
 	test_a_replaced_handoff_is_not_a_foreign_extend();
 	test_reset_count_advance_is_not_a_resume();
 	test_the_two_accepting_verdicts_are_told_apart();
+	test_poison_records_its_cause();
 	test_handoff_of_another_length_is_absent();
 
 	if (g_failures == 0) {

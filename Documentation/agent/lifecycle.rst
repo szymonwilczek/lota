@@ -75,6 +75,9 @@ Anything else
   The start is refused with exit status 78. The message names the case:
 
   * a shutdown on this host spent the commitment: reboot;
+  * an earlier agent of this boot failed after loading its BPF program,
+    which spends the commitment on the way out: fix the error its log
+    names and reboot;
   * the initramfs lock did not run: rebuild the initramfs
     (``dracut -f --add lota``) and cold reboot;
   * the commitment belongs to another agent binary, as after an upgrade:
