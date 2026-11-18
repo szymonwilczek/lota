@@ -683,10 +683,12 @@ static void report_unchecked_cert(const char *id,
 			tpm_strerror(res->err));
 }
 
-/* the host key keeps its records beside TPM_AIK_META_PATH */
-static enum profile_aik_auth_state host_aik_auth_state(void)
+/* the host key keeps its records beside its metadata file */
+static enum profile_aik_auth_state
+host_aik_auth_state(const struct tpm_context *ctx)
 {
-	static const char meta[] = TPM_AIK_META_PATH;
+	const char *meta = ctx->aik_meta_path[0] ? ctx->aik_meta_path :
+						   TPM_AIK_META_PATH;
 	struct profile_paths paths;
 	size_t dir_len = (size_t)(strrchr(meta, '/') - meta);
 
@@ -729,7 +731,7 @@ static unsigned aik_auth_exposed_count(const struct publisher_entry *entries,
 			exposed++;
 	}
 	if (publishers_default_key_in_use(count) &&
-	    profile_aik_auth_exposed(host_aik_auth_state()))
+	    profile_aik_auth_exposed(host_aik_auth_state(&g_agent.tpm_ctx)))
 		exposed++;
 	return exposed;
 }
@@ -789,7 +791,8 @@ int do_seal_aik_auth(void)
 	}
 
 	if (publishers_default_key_in_use(count)) {
-		enum profile_aik_auth_state before = host_aik_auth_state();
+		enum profile_aik_auth_state before =
+			host_aik_auth_state(&g_agent.tpm_ctx);
 
 		ret = tpm_aik_reseal_auth(&g_agent.tpm_ctx);
 		if (ret < 0) {
