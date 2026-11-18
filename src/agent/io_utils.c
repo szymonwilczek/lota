@@ -95,6 +95,11 @@ int lota_read_file_bounded(const char *path, void *buf, size_t max,
 		close(fd);
 		return ret;
 	}
+	/* a directory may report size 0, which would read as no file */
+	if (S_ISDIR(st.st_mode)) {
+		close(fd);
+		return -EISDIR;
+	}
 	if ((uintmax_t)st.st_size > (uintmax_t)max) {
 		close(fd);
 		return -EMSGSIZE;
