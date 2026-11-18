@@ -684,6 +684,9 @@ static unsigned aik_auth_exposed_count(const struct publisher_entry *entries,
 		if (profile_aik_auth_exposed(profile_aik_auth_state(&paths)))
 			exposed++;
 	}
+	if (publishers_default_key_in_use(count) &&
+	    profile_aik_auth_exposed(host_aik_auth_state()))
+		exposed++;
 	return exposed;
 }
 
@@ -914,12 +917,7 @@ int do_reprovision_aik(void)
 	{
 		unsigned exposed = aik_auth_exposed_count(entries, count);
 
-		if (count == 0)
-			fprintf(stderr,
-				"Set seal_aik_auth in lota.conf and run "
-				"--seal-aik-auth to seal the new "
-				"authorization at rest.\n");
-		else if (exposed == 0)
+		if (exposed == 0)
 			fprintf(stderr,
 				"Every new authorization is sealed to the "
 				"platform state, with no plaintext copy.\n");
