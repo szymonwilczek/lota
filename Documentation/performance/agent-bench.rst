@@ -94,8 +94,8 @@ The snapshot is ``/run/lota/bench.json``, mode 0640, owned by root and the
    ``run_stats`` is ``false`` when the kernel refused to count run time,
    and the counts then stand still.
    ``maps`` is the number of maps and ``maps_memlock`` the memory they are
-   charged for. At most 32 programs are listed, and ``progs_dropped``
-   counts the rest.
+   charged for. At most 32 programs are listed; ``progs_dropped`` counts
+   the programs past them and those whose counters cannot be read.
 
 ``protected``
    One sum over every process in the protected set: how many there are,

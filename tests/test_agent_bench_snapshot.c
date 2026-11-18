@@ -13,6 +13,10 @@
 #include <string.h>
 #include <unistd.h>
 
+#include <bpf/bpf.h>
+#include <bpf/libbpf.h>
+
+#include "../src/agent/bench_bpf.h"
 #include "../src/agent/bench_snapshot.h"
 
 static int g_failures;
@@ -260,6 +264,98 @@ static void proc_at(struct bench_proc *p, uint64_t start, uint64_t cpu,
 	p->pss_kb = pss;
 }
 
+/* a BPF object of three loaded programs, the second without info */
+struct bpf_program {
+	int fd;
+	const char *name;
+};
+
+struct bpf_object {
+	struct bpf_program progs[3];
+};
+
+static struct bpf_object k_obj = { { { 3, "lota_bprm_check" },
+				     { 4, "lota_file_open" },
+				     { 5, "lota_mmap" } } };
+
+struct bpf_program *bpf_object__next_program(const struct bpf_object *obj,
+					     struct bpf_program *prog)
+{
+	struct bpf_program *first = (struct bpf_program *)obj->progs;
+
+	if (!prog)
+		return first;
+	return prog + 1 < first + 3 ? prog + 1 : NULL;
+}
+
+int bpf_program__fd(const struct bpf_program *prog)
+{
+	return prog->fd;
+}
+
+const char *bpf_program__name(const struct bpf_program *prog)
+{
+	return prog->name;
+}
+
+int bpf_prog_get_info_by_fd(int prog_fd, struct bpf_prog_info *info,
+			    __u32 *info_len)
+{
+	(void)info_len;
+	if (prog_fd == 4) {
+		errno = EPERM;
+		return -EPERM;
+	}
+	info->run_time_ns = 100 * (__u64)prog_fd;
+	info->run_cnt = prog_fd;
+	return 0;
+}
+
+struct bpf_map *bpf_object__next_map(const struct bpf_object *obj,
+				     const struct bpf_map *map)
+{
+	(void)obj;
+	(void)map;
+	return NULL;
+}
+
+int bpf_map__fd(const struct bpf_map *map)
+{
+	(void)map;
+	return -1;
+}
+
+int bpf_enable_stats(enum bpf_stats_type type)
+{
+	(void)type;
+	return -1;
+}
+
+int bpf_loader_protected_pids(const struct bpf_loader_ctx *ctx, uint32_t *pid,
+			      uint64_t *start, size_t max)
+{
+	(void)ctx;
+	(void)pid;
+	(void)start;
+	(void)max;
+	return 0;
+}
+
+static void test_bpf_sample(void)
+{
+	static struct bpf_loader_ctx ctx;
+	static struct bench_bpf b;
+
+	ctx.loaded = true;
+	ctx.obj = &k_obj;
+	CHECK(bench_bpf_sample(&ctx, true, &b) && b.prog_count == 2 &&
+		      b.prog_dropped == 1 &&
+		      !strcmp(b.progs[0].name, "lota_bprm_check") &&
+		      !strcmp(b.progs[1].name, "lota_mmap") &&
+		      b.progs[1].run_ns == 500 && b.progs[1].run_cnt == 5,
+	      "a program whose info cannot be read is counted as dropped");
+}
+
 static void test_protected_fold(void)
 {
 	static struct bench_protected bp;
@@ -453,6 +549,7 @@ int main(void)
 	test_read_self();
 	test_format();
 	test_format_bpf();
+	test_bpf_sample();
 	test_protected_fold();
 	test_protected_sample();
 	test_format_protected();
