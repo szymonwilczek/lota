@@ -359,6 +359,64 @@ static void test_the_unit_stops_a_failure_that_repeats(void)
 		PASS();
 }
 
+/* @unit's first @key= line with its continuations joined; false when none */
+static bool unit_logical_line(const char *unit, const char *key, char *out,
+			      size_t cap)
+{
+	size_t len = strlen(key);
+	char line[512];
+	bool found = false;
+	bool more = false;
+	FILE *fp = open_unit(unit);
+
+	if (!fp)
+		return false;
+	out[0] = '\0';
+	while (fgets(line, sizeof(line), fp)) {
+		size_t n;
+
+		if (!found &&
+		    (strncmp(line, key, len) != 0 || line[len] != '='))
+			continue;
+		if (found && !more)
+			break;
+		found = true;
+		n = strcspn(line, "\n");
+		more = n > 0 && line[n - 1] == '\\';
+		if (more)
+			n--;
+		strncat(out, line,
+			cap - strlen(out) - 1 < n ? cap - strlen(out) - 1 : n);
+	}
+	fclose(fp);
+
+	return found;
+}
+
+/*
+ * A connection queued on lota-agent.socket starts the unit again after
+ * a refusal; the unit stops the socket on that status alone.
+ */
+static void test_the_unit_stops_its_socket_on_that_status(void)
+{
+	char cmd[1024];
+	char status[64];
+
+	snprintf(status, sizeof(status), "\"$$EXIT_STATUS\" = %d",
+		 LOTA_EXIT_OPERATOR_ACTION);
+	TEST("the packaged unit stops its socket on that status");
+	if (!unit_logical_line("lota-agent.service", "ExecStopPost", cmd,
+			       sizeof(cmd)))
+		FAIL("the unit has no ExecStopPost");
+	else if (!strstr(cmd, "\"$$EXIT_CODE\" = exited") ||
+		 !strstr(cmd, status))
+		FAIL("the stop is not conditioned on exit status 78");
+	else if (!strstr(cmd, "systemctl --no-block stop lota-agent.socket"))
+		FAIL("the socket is not stopped without blocking");
+	else
+		PASS();
+}
+
 /*
  * The second status the unit has to know about.
  *
@@ -426,6 +484,7 @@ int main(void)
 	test_a_served_daemon_carries_its_own_status();
 	test_the_unit_prevents_restarting_on_that_status();
 	test_the_unit_stops_a_failure_that_repeats();
+	test_the_unit_stops_its_socket_on_that_status();
 	test_the_unit_does_not_retry_a_running_instance();
 	test_the_attest_unit_stops_on_a_spent_commitment();
 	test_the_two_no_retry_statuses_differ();

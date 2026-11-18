@@ -35,6 +35,11 @@ Restart=on-failure
 RestartSec=5s
 # 78: only an operator can clear it; 3: another agent holds the PID file
 RestartPreventExitStatus=78 3
+# A connection queued on the socket starts the unit again after each 78 until
+# the start limit. --no-block: stopping the socket stops this unit too.
+ExecStopPost=/bin/sh -c '[ "$$EXIT_CODE" = exited ] && \
+	[ "$$EXIT_STATUS" = 78 ] && \
+	exec /usr/bin/systemctl --no-block stop lota-agent.socket; exit 0'
 
 User=root
 Group=root

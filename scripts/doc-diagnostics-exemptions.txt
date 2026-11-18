@@ -33,3 +33,6 @@ Connection reset by peer
 
 # systemd's line after a refused watchdog kill; not a literal in this tree.
 Unit process N remains running after unit stopped
+
+# systemctl's line when the unit's start job is cancelled; not agent output.
+Job for lota-agent.service canceled.
