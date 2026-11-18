@@ -499,8 +499,9 @@ int bpf_loader_secure_boot_enabled(void)
 
 /*
  * Returns 0 when each TPM device present carries lota_tpm_device_t, the type
- * configs/udev/99-lota-tpm.rules sets at device add, -ENOENT when none is
- * present, another negative errno otherwise.
+ * configs/udev/99-lota-tpm.rules sets at device add, or when getxattr() finds
+ * no SELinux label to check, -ENOENT when none is present, another negative
+ * errno otherwise.
  *
  * Reads the xattr: no libselinux at link time, and the label reads the same in
  * permissive mode.
@@ -518,8 +519,14 @@ static int tpm_device_selinux_label_ok(void)
 		if (got < 0) {
 			if (errno == ENOENT)
 				continue;
-			if (errno == ENOTSUP) {
-				/* no SELinux xattrs here, no label to check */
+			if (errno == ENOTSUP)
+				return 0;
+			/* a loaded SELinux policy answers with a context */
+			if (errno == ENODATA) {
+				lota_warn("%s has no SELinux label and SELinux "
+					  "has no policy loaded: TPM device "
+					  "label not checked",
+					  tpm_paths[i]);
 				return 0;
 			}
 			lota_err("getxattr(security.selinux) failed on %s: %s",
