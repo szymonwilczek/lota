@@ -18,7 +18,9 @@
  *   static void my_op(void *ctx, size_t iters);
  *   cbench_run("suite", "my_op", my_op, ctx);
  *
- * Write into cbench_sink to defeat dead-code elimination.
+ * Write into cbench_sink to defeat dead-code elimination. Set cbench_failed
+ * when the measured call fails: the figures then time the error path, and
+ * the runner exits non-zero.
  */
 #ifndef LOTA_CBENCH_H
 #define LOTA_CBENCH_H
@@ -37,6 +39,8 @@
 
 /* Sink to prevent the compiler from optimizing the measured work away. */
 static volatile uint64_t cbench_sink;
+
+static int cbench_failed;
 
 typedef void (*cbench_fn)(void *ctx, size_t iters);
 

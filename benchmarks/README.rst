@@ -47,9 +47,9 @@ The output goes to the terminal and to ``benchmarks/results/``:
    * - ``c-sdk.json``
      - one JSON object per C benchmark
 
-Each run replaces the files. A target exits with the status of the runner
-it started; a runner that fails leaves its file behind, and the target
-reports that the file is not a measurement.
+Each run replaces the files. A runner that exits non-zero leaves its file
+behind, the target reports that the file is not a measurement, and
+``make`` fails.
 
 ``benchmarks/scripts/run_all.sh`` prints the kernel, the CPU model and the
 Go version, runs ``make bench-c`` and ``make bench-go`` with
@@ -161,8 +161,8 @@ In CI
 The ``benchmarks`` job of ``.github/workflows/ci.yml`` runs ``make
 bench-c`` with ``BENCH_REPS=3``, ``BENCH_TARGET_MS=1`` and
 ``BENCH_EXE_KIB=64``, and ``make bench-go BENCH_COUNT=1 BENCH_TIME=1x``. It
-fails when a benchmark does not build or does not run. The runners are
-shared, so their timings are not figures.
+fails when a benchmark does not build or its runner exits non-zero. The
+runners are shared, so their timings are not figures.
 
 Taking figures
 ==============

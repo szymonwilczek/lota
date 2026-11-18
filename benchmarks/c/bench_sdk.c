@@ -43,6 +43,8 @@ static void bench_game_binding_hash(void *c, size_t iters)
 		if (lota_ac_compute_game_binding_hash("lota-demo-CS2-clone",
 						      x->exe_path, out) == 0)
 			cbench_sink += out[0];
+		else
+			cbench_failed = 1;
 	}
 }
 
@@ -55,6 +57,8 @@ static void bench_token_serialize(void *c, size_t iters)
 		if (lota_token_serialize(&x->tok, buf, sizeof(buf), &written) ==
 		    LOTA_OK)
 			cbench_sink += buf[0] + written;
+		else
+			cbench_failed = 1;
 	}
 }
 
@@ -66,6 +70,8 @@ static void bench_token_parse(void *c, size_t iters)
 		if (lota_server_parse_token(x->ser, x->ser_len, &claims) ==
 		    LOTA_SERVER_OK)
 			cbench_sink += claims.flags;
+		else
+			cbench_failed = 1;
 	}
 }
 
@@ -166,5 +172,11 @@ int main(void)
 	free(x.tok.attest_data);
 	free(x.tok.signature);
 	unlink(x.exe_path);
+	if (cbench_failed) {
+		fprintf(stderr,
+			"bench_sdk: a measured call failed, the figures "
+			"are not a measurement\n");
+		return 1;
+	}
 	return 0;
 }
