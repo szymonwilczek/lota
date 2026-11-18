@@ -5,95 +5,201 @@
 Reproducible builds
 ===================
 
-LOTA is part of an anti-cheat trust chain, so it must be provable -- not
-assumed -- that a shipped ``lota-agent`` is the one built from its tagged
-source. Every release is built reproducibly and its artifact hashes are signed,
-so anyone can rebuild a tag and confirm the bytes match what the project
-shipped.
+A release is built so that a checkout of its tag, built again with the same
+toolchain, gives the same bytes. The release workflow
+(:ghsrc:`.github/workflows/release.yml`) hashes the artifacts into a
+``SHA256SUMS`` manifest and signs the manifest with cosign, so a user can
+check that the artifacts came from the tag and from that workflow.
 
-What makes the build reproducible
-=================================
+The build
+=========
 
-The build output depends only on the source tree, not on where or when it was
-built:
+.. code-block:: console
 
-* **C and BPF** are compiled with ``-ffile-prefix-map=$(CURDIR)=.``, so the
-  absolute build directory is not embedded in DWARF (``DW_AT_comp_dir``) or
-  ``__FILE__``.
-* **Go** (``lota-verifier``, ``lota-attest-ca``) is built with ``-trimpath``,
-  which strips the module and build paths the toolchain would otherwise bake
-  in. ``lota-fleet`` adds ``CGO_ENABLED=0``, which removes the build host's
-  libc from the result as well: the operator reference calls that binary
-  static, and a cgo build links whatever glibc the builder happened to have.
-* ``make reproducible-build`` pins the remaining environmental inputs:
-  ``SOURCE_DATE_EPOCH`` (default: the HEAD commit time), ``TZ=UTC`` and
-  ``LC_ALL=C``. Outside a git checkout, such as a release tarball, there is no
-  commit time, so this target and the container-image targets refuse to run.
-  Pass the source's release date::
+   $ make reproducible-build
 
-      make reproducible-build REPRO_SOURCE_DATE_EPOCH=$(date -u -d 2026-01-31 +%s)
+builds ``make all`` with three variables exported
+(:ghsrc:`Makefile`):
 
-These flags are always ON for every build. ``make reproducible-build`` only
-adds the timestamp/timezone/locale pins. CI rebuilds the tree twice, from
-different paths and under different time zones, and fails if any artifact
-differs (``.github/workflows/reproducible-builds.yml``).
+``SOURCE_DATE_EPOCH``
+  ``REPRO_SOURCE_DATE_EPOCH`` when it is set, in a checkout or outside
+  one; otherwise the commit time of ``HEAD``. Without either the target
+  stops::
+
+     reproducible-build: no commit time to read and REPRO_SOURCE_DATE_EPOCH is unset.
+
+``TZ``
+  ``UTC``.
+
+``LC_ALL``
+  ``C``.
+
+It ends with::
+
+   Reproducible build complete (SOURCE_DATE_EPOCH=..., TZ=UTC, LC_ALL=C)
+
+The container image targets take the same ``SOURCE_DATE_EPOCH``
+(:doc:`../admin-guide/container-images`).
+
+Timestamps
+----------
+
+No source embeds the time of the build: nothing uses ``__DATE__`` or
+``__TIME__``, and no code reads ``SOURCE_DATE_EPOCH``.
+
+Absolute paths
+--------------
+
+C and BPF objects are compiled with ``-ffile-prefix-map=$(CURDIR)=.``, and
+the Go binaries with ``-trimpath``, so the directory of the checkout leaves
+no trace in the output.
+
+Version control
+---------------
+
+``go build`` stamps each Go binary with the commit it was built from: the
+revision, the commit time, and whether the tree had changes. ``go version
+-m`` prints the stamp:
+
+.. code-block:: console
+
+   $ go version -m build/lota-verifier | grep vcs
+           build   vcs=git
+           build   vcs.revision=...
+           build   vcs.time=...
+           build   vcs.modified=false
+
+A tree with an untracked or changed file is stamped ``vcs.modified=true``.
+``build/`` is ignored by git, so a build into it leaves the stamp at
+``false``; a ``BUILD_DIR`` outside ``.gitignore`` does not. A tree with no
+git checkout, such as an extracted source archive, gets no stamp, and its Go
+binaries differ from the release. ``make`` rebuilds a Go binary only when
+its sources change, so a binary keeps the stamp of the build that wrote it;
+a check starts from an empty ``build/``.
+
+Version
+-------
+
+``lota-agent``, ``lota-install``, the four shared libraries and the 32-bit
+hook carry the version from ``VERSION``. ``LOTA_VERSION_STRING`` on the
+``make`` command line replaces it, and changes their bytes.
+``lota-pcr14-lock``, the Go binaries and the BPF object carry no version.
 
 Toolchain
----------
+=========
 
-Bit-for-bit equality holds for a given toolchain. The canonical toolchain is
-the one in CI: ``ubuntu-24.04`` with its ``clang``/``llvm`` and ``gcc``, Go
-pinned by ``src/verifier/go.mod``, and ``libbpf v1.4.6``. A different compiler
-version can produce a different (still correct) binary; match the toolchain to
-match the bytes.
+The output depends on the compiler, the linker, Go and libbpf, so a rebuild
+uses the versions the release used. The release workflow builds on GitHub's
+``ubuntu-24.04`` runner with the distribution's GCC, Clang and LLVM, libbpf
+v1.4.6 built from source and the newest Go 1.26 release from the Go
+project. A distribution's build of the same Go release is another toolchain:
+``go version`` names its experiments after the version, such as
+``X:nodwarf5``. The released files name the compiler and Go versions:
 
-Reproduce a release
-===================
+.. code-block:: console
 
-.. code-block:: sh
+   $ readelf -p .comment lota-agent
+   $ go version lota-verifier
 
-    git checkout vX.Y.Z          # the released tag
-    make reproducible-build      # builds into ./build
-    cd build && sha256sum -- \
-      lota-agent lota-install lota-verifier lota-attest-ca lota-pcr14-lock \
-      liblotagaming.so liblotaserver.so liblota_wine_hook.so \
-      liblota_anticheat.so lota_lsm.bpf.o
+The BPF object carries no ``.comment``; its Clang is the one of the runner
+image, which the workflow run log names.
 
-The Wine hook's 32-bit half, ``liblota_wine_hook-i386.so``, is hashed with the
-rest; rebuilding it needs ``glibc-devel.i686`` and ``libatomic.i686``.
+On x86_64, ``make all`` builds the 32-bit half of the Wine hook when the
+compiler links a ``-m32`` program. That needs a 32-bit C library and
+``libatomic``: on Ubuntu ``gcc-multilib``, on Fedora ``glibc-devel.i686``
+and ``libatomic.i686``. Without them the build ends with::
 
-Compare the hashes against the ``SHA256SUMS`` attached to the release. Or, with
-the release's ``SHA256SUMS`` next to the rebuilt artifacts:
+   note: the 32-bit half of the Wine hook needs a multilib toolchain (...); this tree cannot be installed as it is
 
-.. code-block:: sh
+and gives no ``build/lib32/liblota_wine_hook.so``, so the manifest's 32-bit
+hook cannot be checked.
 
-    sha256sum -c SHA256SUMS
+CI builds every pull request and every push to ``main`` and ``lota-next``
+twice, from two paths and in two time zones, and
+compares the files of the manifest except ``lota-install``, the 32-bit hook
+and ``VERSION`` (:ghsrc:`.github/workflows/reproducible-builds.yml`,
+:doc:`../dev-tools/ci`).
 
-Verify the signature
-====================
+Reproducing a release
+=====================
 
-The release ``SHA256SUMS`` is signed with cosign keyless (Sigstore). The
-``SHA256SUMS.cosign.bundle`` carries the ephemeral certificate and the Rekor
-transparency-log proof, so no key distribution is needed -- only the workflow
-identity and the OIDC issuer:
+Build the tag in a fresh clone, into ``build/``:
 
-.. code-block:: sh
+.. code-block:: console
 
-    cosign verify-blob \
-      --bundle SHA256SUMS.cosign.bundle \
-      --certificate-identity-regexp \
-        '^https://github\.com/szymonwilczek/lota/\.github/workflows/release\.yml@refs/tags/v' \
-      --certificate-oidc-issuer https://token.actions.githubusercontent.com \
-      SHA256SUMS
+   $ git clone https://github.com/szymonwilczek/lota.git
+   $ cd lota
+   $ git checkout vVERSION
+   $ make reproducible-build
 
-A valid signature proves the manifest -- and therefore every artifact whose
-hash it lists -- was produced by the release workflow at a ``v*`` tag. Verify
-the signature first, then check the artifact hashes against the manifest.
+The release workflow runs ``make check-version-tag`` before the build. On a
+commit with a tag, it stops when ``VERSION`` is not the tag without its
+``v``::
+
+   ERROR: VERSION (...) does not match current git tag ...
+
+The manifest names twelve files: ``lota-agent``, ``lota-install``,
+``lota-verifier``, ``lota-attest-ca``, ``lota-pcr14-lock``,
+``liblotagaming.so``, ``liblotaserver.so``, ``liblota_wine_hook.so``,
+``liblota_anticheat.so``, ``lota_lsm.bpf.o``, ``liblota_wine_hook-i386.so``
+and ``VERSION``. All but two are in ``build/`` under those names; the 32-bit
+hook is ``build/lib32/liblota_wine_hook.so``, and ``VERSION`` is at the top
+of the tree. Put them beside the others and check the hashes:
+
+.. code-block:: console
+
+   $ cd build
+   $ cp lib32/liblota_wine_hook.so liblota_wine_hook-i386.so
+   $ cp ../VERSION .
+   $ sha256sum -c /path/to/SHA256SUMS
+
+Verifying the signature
+=======================
+
+The release workflow signs ``SHA256SUMS`` with cosign without a key, under
+the workflow's GitHub identity. ``SHA256SUMS.cosign.bundle``, attached to
+the release, carries the signing certificate and the proof of its entry in
+the Rekor transparency log:
+
+.. code-block:: console
+
+   $ cosign verify-blob \
+         --bundle SHA256SUMS.cosign.bundle \
+         --certificate-identity-regexp \
+           '^https://github\.com/szymonwilczek/lota/\.github/workflows/release\.yml@refs/tags/v' \
+         --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+         SHA256SUMS
+
+A valid signature says that the release workflow, run for a ``v`` tag,
+produced the manifest. Verify it before checking the artifacts against the
+manifest.
 
 Scope
 =====
 
-The signed manifest covers the binaries and shared libraries plus the BPF
-object. The detached BPF signature (``lota_lsm.bpf.o.sig``) is produced by the
-operator's own signing key at deploy time (``make sign-bpf``), not by the
-release workflow, so it is not part of the release manifest.
+The manifest covers the twelve files above. Other jobs of the same
+workflow attach the packages and the Helm chart to the release, and push
+the container images to ``ghcr.io``:
+
+Packages
+  Built in a ``fedora:44`` container with ``make all``, not
+  ``reproducible-build``, so their binaries are not the ones the manifest
+  lists. The job signs the BPF object with the project's enforcement key
+  (``make sign-bpf``) and the packages and repository with its GPG key
+  (:doc:`../admin-guide/dnf-repo`).
+
+Container images
+  Built with ko and signed with cosign under the same identity, and not
+  attached to the release (:doc:`../admin-guide/container-images`). The
+  ``lota-attest-ca`` of the manifest is built without PKCS#11 and loads its
+  signing key from a file only; the ``-hsm`` tag of the ``attestca`` image
+  carries the PKCS#11 build (:doc:`ca-key`).
+
+Helm chart
+  Packaged, pushed to ``ghcr.io`` and attached to the release, unsigned
+  (:doc:`../admin-guide/helm-chart`).
+
+The release has no ``lota_lsm.bpf.o.sig``. The agent loads the BPF object
+only with a signature its enforcement key verifies (:doc:`../bpf/index`), so
+a deployment that installs the manifest's object signs it with its own key,
+``make sign-bpf`` (:doc:`../admin-guide/packages`).
