@@ -79,13 +79,21 @@ static void bench_token_parse(void *c, size_t iters)
 static int make_exe_file(struct sdk_ctx *x)
 {
 	size_t kib = cbench_envu("BENCH_EXE_KIB", 1024); /* 1 MiB default */
+
+	if (kib > SIZE_MAX / 1024) {
+		fprintf(stderr, "bench_sdk: BENCH_EXE_KIB %zu is too large\n",
+			kib);
+		return -1;
+	}
 	x->exe_bytes = kib * 1024;
 
 	snprintf(x->exe_path, sizeof(x->exe_path),
 		 "/tmp/lota_bench_exe.XXXXXX");
 	int fd = mkstemp(x->exe_path);
-	if (fd < 0)
+	if (fd < 0) {
+		fprintf(stderr, "bench_sdk: cannot create a file in /tmp\n");
 		return -1;
+	}
 
 	uint8_t chunk[4096];
 	for (size_t i = 0; i < sizeof(chunk); i++)
@@ -96,6 +104,8 @@ static int make_exe_file(struct sdk_ctx *x)
 		size_t n = remaining < sizeof(chunk) ? remaining :
 						       sizeof(chunk);
 		if (write(fd, chunk, n) != (ssize_t)n) {
+			fprintf(stderr, "bench_sdk: cannot write %s\n",
+				x->exe_path);
 			close(fd);
 			unlink(x->exe_path);
 			return -1;
@@ -153,10 +163,8 @@ int main(void)
 	struct sdk_ctx x;
 	memset(&x, 0, sizeof(x));
 
-	if (make_exe_file(&x) != 0) {
-		fprintf(stderr, "bench_sdk: failed to stage exe file\n");
+	if (make_exe_file(&x) != 0)
 		return 1;
-	}
 	if (build_token(&x) != 0) {
 		fprintf(stderr, "bench_sdk: failed to build token\n");
 		unlink(x.exe_path);
