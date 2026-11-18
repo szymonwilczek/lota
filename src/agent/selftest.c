@@ -884,13 +884,15 @@ int do_reprovision_aik(void)
 
 	tpm_cleanup(&g_agent.tpm_ctx);
 
-	if (rotated == 0) {
+	if (rotated == 0 && failed == 0) {
 		fprintf(stderr,
 			"No attestation key to rotate: this host holds none "
 			"yet.\n");
-		rc = failed ? 1 : 0;
+		rc = 0;
 		goto out;
 	}
+	if (rotated == 0)
+		goto report;
 
 	/* usually only the auth moved: userAuth does not derive the key */
 	if (keys_moved == rotated)
@@ -952,6 +954,7 @@ int do_reprovision_aik(void)
 					"<host> ...\n");
 	}
 
+report:
 	if (failed) {
 		fprintf(stderr, "%u could not be rotated.\n", failed);
 		goto out;
