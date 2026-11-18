@@ -97,6 +97,7 @@ static int make_exe_file(struct sdk_ctx *x)
 						       sizeof(chunk);
 		if (write(fd, chunk, n) != (ssize_t)n) {
 			close(fd);
+			unlink(x->exe_path);
 			return -1;
 		}
 		remaining -= n;
