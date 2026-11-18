@@ -3689,6 +3689,7 @@ static int tpm_aik_save_auth(struct tpm_context *ctx,
 			     const uint8_t auth[TPM_AIK_AUTH_SIZE])
 {
 	bool seal = ctx && (ctx->seal_aik_auth || ctx->seal_aik_auth_strict);
+	char sealed[PATH_MAX];
 	int ret;
 
 	if (!ctx || !auth)
@@ -3707,7 +3708,17 @@ static int tpm_aik_save_auth(struct tpm_context *ctx,
 		return 0;
 	}
 
-	return tpm_aik_save_auth_plaintext(ctx, auth);
+	ret = tpm_aik_save_auth_plaintext(ctx, auth);
+	if (ret < 0 || seal)
+		return ret;
+
+	/* a sealed copy left from before holds the old value */
+	ret = tpm_aik_auth_sealed_path_for_ctx(ctx, sealed, sizeof(sealed));
+	if (ret < 0)
+		return ret;
+	if (unlink(sealed) < 0 && errno != ENOENT)
+		return -errno;
+	return 0;
 }
 
 /*
