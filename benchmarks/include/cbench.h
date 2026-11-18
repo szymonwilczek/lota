@@ -5,9 +5,8 @@
  *
  * Auto-calibrates a batch size so each measured run lasts ~BENCH_TARGET_MS,
  * amortizing clock_gettime() overhead, then collects BENCH_REPS ns/op
- * samples and reports min / median / p90 / p99 / mean / stddev and ops/sec.
- * This mirrors how Go's testing.B and kernel userspace microbenchmarks pick
- * an iteration count and report a distribution rather than a single timing.
+ * samples and reports the median, p99, min and stddev, and ops/sec at the
+ * median.
  *
  * Tunables (environment):
  *   BENCH_REPS       measured samples per benchmark   (default 50)
