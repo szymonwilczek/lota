@@ -889,6 +889,7 @@ int do_reprovision_aik(void)
 
 	for (size_t i = 0; i < count; i++) {
 		struct profile_paths paths;
+		int had;
 
 		if (!entries[i].has_aik_handle)
 			continue;
@@ -902,6 +903,7 @@ int do_reprovision_aik(void)
 			continue;
 		}
 
+		had = tpm_aik_key_present(&g_agent.tpm_ctx);
 		ret = tpm_reprovision_aik(&g_agent.tpm_ctx, &key_changed);
 		if (ret < 0) {
 			fprintf(stderr, "  %s: %s\n", entries[i].id,
@@ -911,14 +913,13 @@ int do_reprovision_aik(void)
 			continue;
 		}
 		rotated++;
-		if (key_changed)
+		if (key_changed && had == 1)
 			keys_moved++;
 		if (entries[i].enrolled)
 			cert_err[i] = aik_cert_check(&g_agent.tpm_ctx, &paths);
 	}
 
 	if (publishers_default_key_in_use(count)) {
-		/* with no key before, there is no Name to compare */
 		host_had = tpm_aik_key_present(&g_agent.tpm_ctx);
 		ret = tpm_reprovision_aik(&g_agent.tpm_ctx, &key_changed);
 		if (ret < 0) {
@@ -928,9 +929,9 @@ int do_reprovision_aik(void)
 			goto out;
 		}
 		rotated++;
-		if (key_changed) {
+		if (key_changed && host_had == 1) {
 			keys_moved++;
-			host_moved = host_had == 1;
+			host_moved = true;
 		}
 	}
 
@@ -946,7 +947,10 @@ int do_reprovision_aik(void)
 	if (rotated == 0)
 		goto report;
 
-	/* usually only the auth moved: userAuth does not derive the key */
+	/*
+	 * Usually only the auth moved: userAuth does not derive the key. A key
+	 * made where none was has no Name to compare and is not counted moved.
+	 */
 	if (keys_moved == rotated)
 		fprintf(stderr, "Rotated %u attestation key%s.\n", rotated,
 			rotated == 1 ? "" : "s");
