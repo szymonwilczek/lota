@@ -63,7 +63,7 @@ Quick start
 Documentation
 =============
 
-The documentation, organised by reader role, is at
+The documentation, grouped by what the reader does with LOTA, is at
 https://lota.szymon-wilczek.me and under
 `Documentation/ <Documentation/index.rst>`_.
 
