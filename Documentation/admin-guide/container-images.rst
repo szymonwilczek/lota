@@ -87,6 +87,7 @@ them in ``/etc/lota-verifier`` on the host:
 .. code-block:: sh
 
    podman run --rm \
+       --userns=keep-id:uid=65532,gid=65532 \
        -v lota-verifier-state:/var/lib/lota \
        -v /etc/lota-verifier:/etc/lota-verifier:ro,Z \
        -p 8443:8443 \
