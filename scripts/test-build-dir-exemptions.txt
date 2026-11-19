@@ -6,3 +6,9 @@
 
 # builds the CA under its own mktemp root
 tests/integration/test_attestca_pkcs11_build.sh:$WORK_DIR/build
+
+# checks that make packages refuses a BUILD_DIR other than ./build
+tests/integration/test_package_manifest_lists.sh:other than ./build
+tests/integration/test_package_manifest_lists.sh:packages builds from ./build
+tests/integration/test_package_manifest_lists.sh:packages takes ./build
+tests/integration/test_package_manifest_lists.sh:"$REPO_DIR/build/."
