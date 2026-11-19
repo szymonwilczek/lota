@@ -538,19 +538,12 @@ $(VERIFIER_BIN): $(wildcard $(SRC_DIR)/verifier/*.go $(SRC_DIR)/verifier/**/*.go
 	$(QUIET_GO)
 	$(Q)cd $(SRC_DIR)/verifier && env GOCACHE=$(GOCACHE) go build -trimpath -o $(abspath $@) .
 
-# GO_TAGS=pkcs11 builds the CA's HSM signing-key support (needs cgo).
-# The stamp is rewritten only when GO_TAGS changes, so a new tag set rebuilds it.
-GO_TAGS ?=
-ATTESTCA_TAGS_STAMP := $(BUILD_DIR)/.attestca-tags
-$(ATTESTCA_TAGS_STAMP): FORCE | $(BUILD_DIR)
-	$(Q)printf '%s\n' '$(GO_TAGS)' | cmp -s - $@ 2>/dev/null || printf '%s\n' '$(GO_TAGS)' >$@
-
-.PHONY: FORCE
-FORCE:
-
-$(ATTESTCA_BIN): $(wildcard $(SRC_DIR)/attestca/*.go $(SRC_DIR)/attestca/**/*.go $(SRC_DIR)/crl/*.go) $(ATTESTCA_TAGS_STAMP) | $(BUILD_DIR)
+# cgo: the PKCS#11 signer dlopens the token's module
+$(ATTESTCA_BIN): $(wildcard $(SRC_DIR)/attestca/*.go \
+		$(SRC_DIR)/attestca/**/*.go $(SRC_DIR)/crl/*.go) | $(BUILD_DIR)
 	$(QUIET_GO)
-	$(Q)cd $(SRC_DIR)/attestca && env GOCACHE=$(GOCACHE) go build -trimpath $(if $(GO_TAGS),-tags $(GO_TAGS),) -o $(abspath $@) .
+	$(Q)cd $(SRC_DIR)/attestca && env GOCACHE=$(GOCACHE) CGO_ENABLED=1 \
+		go build -trimpath -o $(abspath $@) .
 
 # CGO_ENABLED=0 keeps the binary static, free of the build host's glibc.
 $(FLEETCTL_BIN): $(wildcard $(SRC_DIR)/fleetctl/*.go $(SRC_DIR)/fleetctl/**/*.go) | $(BUILD_DIR)
@@ -701,36 +694,24 @@ KO_LABELS := \
 	--image-label org.opencontainers.image.version=$(PROJECT_VERSION) \
 	--image-label org.opencontainers.image.source=https://github.com/szymonwilczek/lota \
 	--image-label org.opencontainers.image.licenses=MIT
+# amd64 only for the CA: cgo does not cross-compile here
+KO_CA_PLATFORMS ?= linux/amd64
 KO_BUILD = env KO_DOCKER_REPO=$(KO_DOCKER_REPO) SOURCE_DATE_EPOCH=$(REPRO_SOURCE_DATE_EPOCH) \
-	$(KO) build -B --sbom=spdx --platform=$(KO_PLATFORMS) --tags=$(KO_IMAGE_TAGS) $(KO_LABELS)
-
-# amd64 only: cgo does not cross-compile here
-KO_HSM_CONFIG := $(CURDIR)/packaging/ko/attestca-hsm
-KO_HSM_PLATFORMS ?= linux/amd64
-KO_HSM_TAG_SUFFIX ?= -hsm
-KO_COMMA := ,
-KO_HSM_IMAGE_TAGS ?= $(subst $(KO_COMMA),$(KO_HSM_TAG_SUFFIX)$(KO_COMMA),$(KO_IMAGE_TAGS))$(KO_HSM_TAG_SUFFIX)
-KO_BUILD_HSM = env KO_CONFIG_PATH=$(KO_HSM_CONFIG) KO_DOCKER_REPO=$(KO_DOCKER_REPO) \
-	SOURCE_DATE_EPOCH=$(REPRO_SOURCE_DATE_EPOCH) \
-	$(KO) build -B --sbom=spdx --platform=$(KO_HSM_PLATFORMS) --tags=$(KO_HSM_IMAGE_TAGS) $(KO_LABELS)
+	$(KO) build -B --sbom=spdx --tags=$(KO_IMAGE_TAGS) $(KO_LABELS)
 
 .PHONY: container-images
-container-images: container-image-verifier container-image-attest-ca container-image-attest-ca-hsm
+container-images: container-image-verifier container-image-attest-ca
 
 .PHONY: container-image-verifier
 container-image-verifier:
 	$(require_source_date_epoch)
-	$(Q)cd $(SRC_DIR)/verifier && $(KO_BUILD) .
+	$(Q)cd $(SRC_DIR)/verifier && $(KO_BUILD) --platform=$(KO_PLATFORMS) .
 
 .PHONY: container-image-attest-ca
 container-image-attest-ca:
 	$(require_source_date_epoch)
-	$(Q)cd $(SRC_DIR)/attestca && $(KO_BUILD) .
-
-.PHONY: container-image-attest-ca-hsm
-container-image-attest-ca-hsm:
-	$(require_source_date_epoch)
-	$(Q)cd $(SRC_DIR)/attestca && $(KO_BUILD_HSM) .
+	$(Q)cd $(SRC_DIR)/attestca && \
+		$(KO_BUILD) --platform=$(KO_CA_PLATFORMS) .
 
 HELM ?= helm
 KUBECONFORM ?= kubeconform
@@ -1696,9 +1677,9 @@ test-unit: all $(TEST_BINS)
 		echo "SKIP: test_trust_pong_freeze_streak.sh (run 'make examples', needs python3)"; \
 	fi
 	@if command -v go >/dev/null 2>&1 && command -v cc >/dev/null 2>&1; then \
-		tests/integration/test_attestca_build_tags.sh; \
+		tests/integration/test_attestca_pkcs11_build.sh; \
 	else \
-		echo "SKIP: test_attestca_build_tags.sh (no go or C compiler)"; \
+		echo "SKIP: test_attestca_pkcs11_build.sh (no go or cc)"; \
 	fi
 	@if command -v clang >/dev/null 2>&1; then \
 		tests/integration/test_fuzz_leak_detection.sh; \
@@ -2220,7 +2201,6 @@ help:
 	@$(HELP_ROW) packages "Build native RPMs via nfpm"
 	@$(HELP_ROW) package-lint "rpmlint the built RPMs (gating)"
 	@$(HELP_ROW) container-images "Build distroless verifier + attest-CA images"
-	@$(HELP_ROW) container-image-attest-ca-hsm "Build the PKCS#11 (HSM) attest-CA image"
 	@$(HELP_ROW) srpm "Build a source RPM from HEAD (COPR / rpmbuild)"
 	@$(HELP_ROW) rpm-sign "GPG-sign RPMs in PKG_DIR (LOTA_RPM_GPG_NAME)"
 	@$(HELP_ROW) dnf-repo "Build a signed dnf repository under REPO_DIR"

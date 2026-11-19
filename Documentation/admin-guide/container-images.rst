@@ -23,32 +23,23 @@ The images
      - ``gcr.io/distroless/static:nonroot``
      - ``linux/amd64``, ``linux/arm64``
    * - ``ghcr.io/szymonwilczek/lota/attestca:VERSION``
-     - ``gcr.io/distroless/static:nonroot``
-     - ``linux/amd64``, ``linux/arm64``
-   * - ``ghcr.io/szymonwilczek/lota/attestca:VERSION-hsm``
      - ``gcr.io/distroless/cc-debian13:nonroot``
      - ``linux/amd64``
 
-Each tag also exists as ``latest`` and ``latest-hsm``. The configurations
-are :ghsrc:`src/verifier/.ko.yaml`, :ghsrc:`src/attestca/.ko.yaml` and
-:ghsrc:`packaging/ko/attestca-hsm/.ko.yaml`.
+Each tag also exists as ``latest``. The configurations are
+:ghsrc:`src/verifier/.ko.yaml` and :ghsrc:`src/attestca/.ko.yaml`. Both
+images run as uid 65532, so the state they write lives on a mounted volume.
+Under rootless Podman, ``--userns=keep-id:uid=65532,gid=65532`` runs that
+uid as the user who starts Podman, and every mounted file must be readable
+by that user.
 
-The verifier and the default CA are static builds with cgo off, on a base
-with no shell and no libc. They run as an unprivileged user, so the state
-they write lives on a mounted volume.
+The verifier is a static build with cgo off, on a base with no shell and no
+libc.
 
-The ``-hsm`` CA is built with cgo and the ``pkcs11`` tag, on a base that
-carries glibc, and loads the operator's PKCS#11 module with ``dlopen``. The
-module needs a glibc no newer than the base's; a library of its own that
-the base lacks is mounted beside it and named in ``LD_LIBRARY_PATH``.
-
-The default CA has no PKCS#11 support. A ``-ca-key-pkcs11-*`` flag without
-``-ca-key-pkcs11-module`` is refused as incomplete; with the module named,
-the CA reads ``-ca-cert`` and exits::
-
-   CA PKCS#11 key: this lota-attest-ca was built without PKCS#11 support;
-   build one with `make attest-ca GO_TAGS=pkcs11`, or run the -hsm tag of
-   the attestca image, which carries it
+The CA is built with cgo, on a base that carries glibc, and loads the
+operator's PKCS#11 module with ``dlopen``. The module needs a glibc no newer
+than the base's; a library of its own that the base lacks is mounted beside
+it and named in ``LD_LIBRARY_PATH``.
 
 Building
 ========
@@ -57,23 +48,20 @@ Building
 
    make container-images
 
-builds the three images and pushes them to ``KO_DOCKER_REPO``
+builds both images and pushes them to ``KO_DOCKER_REPO``
 (``ghcr.io/szymonwilczek/lota``) as ``verifier`` and ``attestca``;
-``make container-image-verifier``, ``container-image-attest-ca`` and
-``container-image-attest-ca-hsm`` build one. The variables:
+``make container-image-verifier`` and ``container-image-attest-ca`` build
+one. The variables:
 
 ``KO_IMAGE_TAGS``
   Tags, comma-separated. Default ``VERSION,latest``.
 
 ``KO_PLATFORMS``
-  Platforms of the static images. Default ``linux/amd64,linux/arm64``.
+  Platforms of the verifier image. Default ``linux/amd64,linux/arm64``.
 
-``KO_HSM_PLATFORMS``
-  Platforms of the ``-hsm`` image. Default ``linux/amd64``, since cgo does
-  not cross-compile in this build.
-
-``KO_HSM_TAG_SUFFIX``
-  Appended to each tag of the ``-hsm`` image. Default ``-hsm``.
+``KO_CA_PLATFORMS``
+  Platforms of the CA image. Default ``linux/amd64``, since cgo does not
+  cross-compile in this build.
 
 ``SOURCE_DATE_EPOCH`` is ``REPRO_SOURCE_DATE_EPOCH`` when it is set to a
 non-empty value, otherwise the commit time of ``HEAD``
@@ -111,20 +99,22 @@ The state database defaults to ``/var/lib/lota/verifier-state.sqlite``.
 Several instances share a Postgres database through ``--pg-dsn`` or
 ``LOTA_PG_DSN`` (:doc:`ha-deployment`).
 
-Running the HSM CA
-==================
+Running the CA with a token
+===========================
 
-The CA reads the PIN from ``LOTA_CA_PKCS11_PIN`` only:
+The CA reads the PIN from ``LOTA_CA_PKCS11_PIN`` only. With the token in
+``/opt/hsm`` and the CA material in ``/etc/lota-ca`` on the host:
 
 .. code-block:: sh
 
    podman run --rm \
+       --userns=keep-id:uid=65532,gid=65532 \
        -v /opt/hsm:/hsm:ro,Z \
-       -v lota-ca-material:/var/lib/lota:ro,Z \
+       -v /etc/lota-ca:/var/lib/lota:ro,Z \
        -e LOTA_CA_PKCS11_PIN \
        -e LD_LIBRARY_PATH=/hsm/lib \
        -p 8444:8444 \
-       ghcr.io/szymonwilczek/lota/attestca:VERSION-hsm \
+       ghcr.io/szymonwilczek/lota/attestca:VERSION \
        -ca-cert /var/lib/lota/ca.crt \
        -ca-key-pkcs11-module /hsm/module.so \
        -ca-key-pkcs11-token lota-ca \
@@ -136,7 +126,9 @@ The CA reads the PIN from ``LOTA_CA_PKCS11_PIN`` only:
 ``/opt/hsm`` holds the module, the libraries it needs and the configuration
 it reads; a module that takes its configuration from the environment, as
 SoftHSM does from ``SOFTHSM2_CONF``, needs that variable passed as well.
-:doc:`bringup/ca-enrollment` covers the flags and the key.
+``/var/lib/lota/ek-roots`` is a pinned EK root bundle, a directory with its
+``ek-roots.manifest``. :doc:`bringup/ca-enrollment` covers the flags, the
+bundle and the key.
 
 Verifying an image
 ==================
@@ -152,4 +144,4 @@ under the workflow's identity:
        --certificate-oidc-issuer https://token.actions.githubusercontent.com \
        ghcr.io/szymonwilczek/lota/verifier:VERSION
 
-The same command verifies ``attestca:VERSION`` and ``attestca:VERSION-hsm``.
+The same command verifies ``attestca:VERSION``.

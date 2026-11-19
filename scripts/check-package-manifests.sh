@@ -578,6 +578,7 @@ soname_requires() {
     case $1 in
         lota-agent) printf '%s\n' tpm2-tss libbpf openssl-libs libseccomp ;;
         lota-sdk) printf '%s\n' openssl-libs ;;
+        lota-attest-ca) printf '%s\n' glibc ;;
     esac
 }
 

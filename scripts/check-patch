@@ -1158,14 +1158,13 @@ check_helm_chart() {
 }
 
 # Published images must offer the key road their documentation claims.
-# Only run when the ko configs, Makefile, the release or the check changed.
+# Only run when the ko configs, Makefile or the check changed.
 check_container_images() {
     local path touched=1 output
 
     for path in "$@"; do
         case "$path" in
-            src/attestca/.ko.yaml | src/verifier/.ko.yaml | packaging/ko/* | \
-                Makefile | .github/workflows/release.yml | \
+            src/attestca/.ko.yaml | src/verifier/.ko.yaml | Makefile | \
                 scripts/check-container-images.sh)
                 touched=0
                 ;;

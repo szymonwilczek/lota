@@ -2,8 +2,10 @@
 # SPDX-License-Identifier: MIT
 # Copyright (C) 2026 Szymon Wilczek
 #
-# Check that the published images offer the CA key roads they document: a PEM
-# key on the static images, a PKCS#11 token on the HSM image.
+# Check that the published images are built as documented: the verifier
+# static without cgo, the CA with cgo on distroless cc-debian13, whose glibc
+# loader can dlopen a PKCS#11 module, and make container-images building the
+# CA image.
 # Reads the build configuration, not a built image.
 
 set -euo pipefail
@@ -12,8 +14,6 @@ cd "$(dirname "$0")/.."
 
 CA_CONFIG=src/attestca/.ko.yaml
 VERIFIER_CONFIG=src/verifier/.ko.yaml
-HSM_CONFIG=packaging/ko/attestca-hsm/.ko.yaml
-RELEASE_WORKFLOW=.github/workflows/release.yml
 
 fail=0
 
@@ -31,38 +31,26 @@ check() {
 has() { [[ -f $1 ]] && grep -qF -- "$2" "$1"; }
 lacks() { [[ -f $1 ]] && ! grep -qF -- "$2" "$1"; }
 
-# Pure-Go images: static, no cgo, no tags, on distroless static
-for config in "$VERIFIER_CONFIG" "$CA_CONFIG"; do
-    check "$config builds without cgo" has "$config" "CGO_ENABLED=0"
-    check "$config sits on the static base" has "$config" "distroless/static"
-    check "$config selects no build tags" lacks "$config" "-tags"
-done
+# Verifier: static, no cgo, no tags, on distroless static
+check "$VERIFIER_CONFIG builds without cgo" \
+    has "$VERIFIER_CONFIG" "CGO_ENABLED=0"
+check "$VERIFIER_CONFIG sits on the static base" \
+    has "$VERIFIER_CONFIG" "distroless/static"
+check "$VERIFIER_CONFIG selects no build tags" \
+    lacks "$VERIFIER_CONFIG" "-tags"
 
-# HSM image dlopens a PKCS#11 module: needs tag, cgo and a base with a loader
-check "an HSM-capable CA image is configured" test -f "$HSM_CONFIG"
-check "the HSM image selects the pkcs11 tag" has "$HSM_CONFIG" "-tags=pkcs11"
-check "the HSM image is built with cgo" has "$HSM_CONFIG" "CGO_ENABLED=1"
-check "the HSM image does not sit on the static base" lacks "$HSM_CONFIG" "distroless/static"
+# CA dlopens a PKCS#11 module: needs cgo and the glibc of cc-debian13
+check "$CA_CONFIG is built with cgo" has "$CA_CONFIG" "CGO_ENABLED=1"
+check "$CA_CONFIG sits on the cc base" \
+    grep -qE '^defaultBaseImage: gcr\.io/distroless/cc-debian13:' "$CA_CONFIG"
+check "$CA_CONFIG overrides no base" lacks "$CA_CONFIG" "baseImageOverrides"
+check "$CA_CONFIG selects no build tags" lacks "$CA_CONFIG" "-tags"
 
-# make container-images must publish it
-check "make container-images builds the HSM image" \
-    grep -qE '^container-images:.*container-image-attest-ca-hsm' Makefile
-check "the HSM image has a target of its own" \
-    grep -qE '^container-image-attest-ca-hsm:' Makefile
-
-# The release must sign the HSM tag the Makefile names
-suffix=$(sed -n 's/^KO_HSM_TAG_SUFFIX *?*= *//p' Makefile | head -1)
-if [[ -z $suffix ]]; then
-    echo "FAIL: the Makefile names no tag suffix for the HSM image"
-    fail=1
-else
-    echo "PASS: the HSM image tag suffix is ${suffix}"
-    check "the release signs the ${suffix} image" \
-        grep -qF -- "$suffix" "$RELEASE_WORKFLOW"
-fi
+check "make container-images builds the CA image" \
+    grep -qE '^container-images:.*container-image-attest-ca( |$)' Makefile
 
 if ((fail != 0)); then
-    echo "container-images: the image set does not offer the key roads it documents" >&2
+    echo "container-images: an image is not built as documented" >&2
     exit 1
 fi
 echo "container-images: OK"

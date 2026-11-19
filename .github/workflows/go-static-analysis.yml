@@ -163,7 +163,7 @@ jobs:
           LOTA_TEST_PKCS11_MODULE: /usr/lib/softhsm/libsofthsm2.so
           LOTA_TEST_PKCS11_TOKEN: lota-ca
           LOTA_CA_PKCS11_PIN: "1234"
-        run: go test -tags pkcs11 -run TestPKCS11SignerIssuesAIK -count=1 -v .
+        run: go test -run TestPKCS11SignerIssuesAIK -count=1 -v .
 
   go-coverage:
     name: go-coverage-ratchet

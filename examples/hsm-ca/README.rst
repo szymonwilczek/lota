@@ -13,16 +13,14 @@ options are the same for a hardware token; they are described in
 token", and the life of the key in `ca-key.rst
 <../../Documentation/security/ca-key.rst>`_.
 
-The default build has no PKCS#11 support. Build the CA with the ``pkcs11``
-tag, which needs cgo:
+Every build of the CA carries the PKCS#11 signer: the binary from the release
+manifest, the package and the ``attestca`` image (`container-images.rst
+<../../Documentation/admin-guide/container-images.rst>`_). From a checkout,
+which needs cgo:
 
 .. code-block:: console
 
-	$ make attest-ca GO_TAGS=pkcs11
-
-A change of ``GO_TAGS`` rebuilds the CA. The ``-hsm`` container image is
-that build (`container-images.rst
-<../../Documentation/admin-guide/container-images.rst>`_).
+	$ make attest-ca
 
 Token and CA material
 =====================
