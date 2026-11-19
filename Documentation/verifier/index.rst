@@ -12,8 +12,18 @@ answers with a verdict. The agent turns a passing verdict into the tokens a
 title reads. Its options are in :doc:`command-line`, and the source is under
 :ghsrc:`src/verifier`.
 
+Contents
+========
+
+* :doc:`command-line` -- the options of ``lota-verifier``.
+* :doc:`report-format` -- the challenge, report and result frames of a
+  round.
+* :doc:`store` -- the storage backends and the state the verifier keeps.
+* :doc:`monitoring-api` -- health, metrics, the client inventory, the logs
+  and the operator actions over HTTP.
+
 .. toctree::
-   :maxdepth: 1
+   :hidden:
 
    command-line
    report-format

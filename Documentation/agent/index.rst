@@ -11,10 +11,43 @@ boot, and answers with TPM quotes: tokens for a local title over the IPC
 socket, and attestation reports for the verifier of each enrolled publisher.
 The source is under :ghsrc:`src/agent`.
 
-The same binary serves several roles, chosen by its command line.
+Contents
+========
+
+* :doc:`command-line` -- the verbs and options of ``lota-agent``.
+* :doc:`configuration` -- ``/etc/lota/lota.conf`` and its keys.
+* :doc:`publishers` -- the profile of each publisher: its AIK, CA and verifier.
+* :doc:`lifecycle` -- the units, the PCR 14 commitment and stopping the agent.
+* :doc:`tpm` -- what the agent requires of the TPM and keeps in it.
+* :doc:`protection` -- how a title asks for protection and what the BPF LSM
+  keeps out of it.
+* :doc:`boot-evidence` -- the PCR values and PCR 7 events a relying party
+  checks against a token.
+* :doc:`ipc` -- the socket protocol and the D-Bus interface.
+* :doc:`tokens` -- the quote a title hands to its server.
+* :doc:`journal` -- where the agent's messages go and when they repeat.
+* :doc:`runtime-measurement` -- the digest of the code a protected
+  process maps.
+
+.. toctree::
+   :hidden:
+
+   command-line
+   configuration
+   publishers
+   lifecycle
+   tpm
+   protection
+   boot-evidence
+   ipc
+   tokens
+   journal
+   runtime-measurement
 
 Roles
 =====
+
+The same binary serves several roles, chosen by its command line.
 
 Enforcement daemon
   ``lota-agent`` with no verb, run by ``lota-agent.service``. It loads and
@@ -138,33 +171,3 @@ Files
    * - ``/etc/dbus-1/system.d/org.lota.Agent1.conf``
      - The bus policy: root alone owns the name; root and group ``lota``
        talk to it.
-
-Contents
-========
-
-* :doc:`Command line <command-line>`
-* :doc:`Configuration <configuration>`
-* :doc:`Publishers <publishers>`
-* :doc:`Agent lifecycle <lifecycle>`
-* :doc:`TPM <tpm>`
-* :doc:`Protected processes <protection>`
-* :doc:`Boot evidence <boot-evidence>`
-* :doc:`IPC <ipc>`
-* :doc:`Tokens <tokens>`
-* :doc:`Agent journal <journal>`
-* :doc:`Runtime image measurement <runtime-measurement>`
-
-.. toctree::
-   :hidden:
-
-   command-line
-   configuration
-   publishers
-   lifecycle
-   tpm
-   protection
-   boot-evidence
-   ipc
-   tokens
-   journal
-   runtime-measurement
