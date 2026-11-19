@@ -58,7 +58,7 @@ jobs:
       - name: Build the tree twice under different environments
         # Both builds use the canonical reproducible-build target, which pins
         # SOURCE_DATE_EPOCH (the shared .git gives both copies the same HEAD
-        # commit time), TZ and locale.
+        # commit time), TZ and locale, into build/ as a release does.
         # They run from separate source paths and under different outer time
         # zones on purpose: the target must neutralize that environment,
         # so any path or timestamp that leaks into an artifact shows up as
@@ -67,8 +67,31 @@ jobs:
           set -eu
           cp -a "$GITHUB_WORKSPACE" /tmp/build-a
           cp -a "$GITHUB_WORKSPACE" /tmp/build-b
-          (cd /tmp/build-a && TZ=UTC make BUILD_DIR=out reproducible-build)
-          (cd /tmp/build-b && TZ=Asia/Tokyo make BUILD_DIR=out reproducible-build)
+          (cd /tmp/build-a && TZ=UTC make reproducible-build &&
+            make release-manifest)
+          (cd /tmp/build-b && TZ=Asia/Tokyo make reproducible-build &&
+            make release-manifest)
+
+      - name: Check the version control stamp
+        # a release is built from a clean checkout;
+        # a Go binary stamped vcs.modified=true differs from it
+        run: |
+          set -eu
+          go_bins=0
+          for f in /tmp/build-a/build/release/* /tmp/build-b/build/release/*; do
+            info=$(go version -m "$f" 2>/dev/null) || continue
+            go_bins=$((go_bins + 1))
+            if ! printf '%s\n' "$info" |
+              grep -qx '[[:space:]]*build[[:space:]]*vcs.modified=false'; then
+              printf '%s\n' "$info" | grep vcs || true
+              echo "::error::$f is not stamped vcs.modified=false"
+              exit 1
+            fi
+          done
+          if [ "$go_bins" -eq 0 ]; then
+            echo "::error::no Go binary in the staged release"
+            exit 1
+          fi
 
       - name: Compare artifacts
         # Enforced: any non-reproducible artifact fails the job. The build
@@ -77,36 +100,24 @@ jobs:
         run: |
           set -u
           mkdir -p repro-report
-          artifacts="lota-agent lota-verifier lota-attest-ca lota-pcr14-lock \
-            liblotagaming.so liblotaserver.so liblota_wine_hook.so \
-            liblota_anticheat.so lota_lsm.bpf.o"
-          differ=0
-          missing=0
-          for a in $artifacts; do
-            fa="/tmp/build-a/out/$a"
-            fb="/tmp/build-b/out/$a"
-            if [ ! -e "$fa" ] || [ ! -e "$fb" ]; then
-              echo "MISSING: $a (expected artifact not built)"
-              missing=1
-              continue
-            fi
-            if cmp -s "$fa" "$fb"; then
-              echo "reproducible: $a"
-            else
-              echo "DIFFERS: $a"
-              differ=1
-              diffoscope --text "repro-report/$a.txt" "$fa" "$fb" || true
+          a=/tmp/build-a/build
+          b=/tmp/build-b/build
+          cat "$a/SHA256SUMS"
+          if cmp -s "$a/SHA256SUMS" "$b/SHA256SUMS"; then
+            echo "build is bit-for-bit reproducible"
+            exit 0
+          fi
+          diff "$a/SHA256SUMS" "$b/SHA256SUMS"
+          for f in "$a"/release/*; do
+            n=${f##*/}
+            if ! cmp -s "$f" "$b/release/$n"; then
+              diffoscope --text "repro-report/$n.txt" \
+                "$f" "$b/release/$n" || true
             fi
           done
-          if [ "$missing" -ne 0 ]; then
-            echo "::error::an expected artifact was not built; the matrix is stale"
-            exit 1
-          fi
-          if [ "$differ" -ne 0 ]; then
-            echo "::error::build is not bit-for-bit reproducible; see the reproducibility-report artifact"
-            exit 1
-          fi
-          echo "build is bit-for-bit reproducible"
+          echo "::error::build is not bit-for-bit reproducible;" \
+            "see the reproducibility-report artifact"
+          exit 1
 
       - name: Upload reproducibility report
         if: always()

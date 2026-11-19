@@ -212,11 +212,12 @@ Security analysis
 Reproducibility and units
 =========================
 
-``reproducible-builds.yml`` runs ``make reproducible-build`` in two copies
-of the tree, one with ``TZ=UTC`` and one with ``TZ=Asia/Tokyo``, and
-compares the agent, verifier, attestation CA, ``lota-pcr14-lock``, the four
-shared libraries and the BPF object byte for byte. A missing or differing
-artifact fails the job; diffoscope reports for the differences are uploaded.
+``reproducible-builds.yml`` runs ``make reproducible-build`` and
+``make release-manifest`` in two copies of the tree, one with ``TZ=UTC``
+and one with ``TZ=Asia/Tokyo``, and compares the two manifests. The job
+fails when a file of the manifest is missing, when the manifests differ,
+and when a Go binary in either copy is not stamped ``vcs.modified=false``;
+diffoscope reports for the differing files are uploaded.
 :doc:`../security/reproducible-builds` covers verifying a release.
 
 ``systemd-validate.yml`` runs ``systemd-analyze verify`` on the agent's

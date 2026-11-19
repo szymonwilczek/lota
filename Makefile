@@ -584,6 +584,44 @@ reproducible-build:
 	$(Q)$(MAKE) all
 	@echo "Reproducible build complete (SOURCE_DATE_EPOCH=$(REPRO_SOURCE_DATE_EPOCH), TZ=UTC, LC_ALL=C)"
 
+# The files of the release manifest, as name=source: release.yml and
+# reproducible-builds.yml stage and hash this list.
+RELEASE_DIR ?= $(BUILD_DIR)/release
+RELEASE_MANIFEST ?= $(BUILD_DIR)/SHA256SUMS
+RELEASE_ARTIFACTS := \
+	VERSION=VERSION \
+	lota-agent=$(AGENT_BIN) \
+	lota-install=$(INSTALLER_BIN) \
+	lota-verifier=$(VERIFIER_BIN) \
+	lota-attest-ca=$(ATTESTCA_BIN) \
+	lota-pcr14-lock=$(INITRAMFS_LOCK_BIN) \
+	liblotagaming.so=$(SDK_LIB) \
+	liblotaserver.so=$(SERVER_SDK_LIB) \
+	liblota_wine_hook.so=$(WINE_HOOK_LIB) \
+	liblota_wine_hook-i386.so=$(BUILD_DIR)/lib32/liblota_wine_hook.so \
+	liblota_anticheat.so=$(ANTICHEAT_LIB) \
+	lota_lsm.bpf.o=$(BPF_OBJ)
+RELEASE_NAMES := $(sort $(foreach a,$(RELEASE_ARTIFACTS),\
+	$(firstword $(subst =, ,$(a)))))
+
+.PHONY: release-stage
+release-stage: check-hook32
+	$(Q)rm -rf -- '$(RELEASE_DIR)' && mkdir -p -- '$(RELEASE_DIR)'
+	$(Q)for a in $(RELEASE_ARTIFACTS); do \
+		src=$${a#*=}; \
+		test -f "$$src" || { \
+			echo "$@: $$src is missing;" \
+				"run make reproducible-build first" >&2; \
+			exit 1; \
+		}; \
+		cp -- "$$src" '$(RELEASE_DIR)'/"$${a%%=*}" || exit 1; \
+	done
+
+.PHONY: release-manifest
+release-manifest: release-stage
+	$(Q)cd '$(RELEASE_DIR)' && \
+		sha256sum -- $(RELEASE_NAMES) >'$(abspath $(RELEASE_MANIFEST))'
+
 NFPM ?= nfpm
 RPMLINT ?= rpmlint
 # rpm spelling of the version (- as ~); exact sibling depends need it
@@ -2240,6 +2278,8 @@ help:
 	@echo ""
 	@echo "Release targets:"
 	@$(HELP_ROW) reproducible-build "Build all with pinned timestamp/TZ/locale"
+	@$(HELP_ROW) release-stage "Copy the manifest's files into RELEASE_DIR"
+	@$(HELP_ROW) release-manifest "Stage and hash into RELEASE_MANIFEST"
 	@echo ""
 	@echo "Documentation targets (Sphinx, see Documentation/conf.py):"
 	@$(HELP_ROW) htmldocs "Build HTML docs (-W) into Documentation/_build"
