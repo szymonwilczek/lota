@@ -22,9 +22,9 @@ builds ``make all`` with three variables exported
 (:ghsrc:`Makefile`):
 
 ``SOURCE_DATE_EPOCH``
-  ``REPRO_SOURCE_DATE_EPOCH`` when it is set, in a checkout or outside
-  one; otherwise the commit time of ``HEAD``. Without either the target
-  stops::
+  ``REPRO_SOURCE_DATE_EPOCH`` when it is set to a non-empty value, in a
+  checkout or outside one; otherwise the commit time of ``HEAD``. Without
+  either the target stops::
 
      reproducible-build: no commit time to read and REPRO_SOURCE_DATE_EPOCH is unset.
 

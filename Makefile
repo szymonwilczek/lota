@@ -562,8 +562,11 @@ $(LOADGEN_BIN): $(wildcard $(SRC_DIR)/verifier/loadgen/*.go $(SRC_DIR)/verifier/
 	$(Q)cd $(SRC_DIR)/verifier && env GOCACHE=$(GOCACHE) go build -trimpath -o $(abspath $@) ./loadgen
 
 # SOURCE_DATE_EPOCH for reproducible-build and the images:
-# the HEAD commit time. Without a git checkout, set REPRO_SOURCE_DATE_EPOCH.
-REPRO_SOURCE_DATE_EPOCH ?= $(shell git -C $(CURDIR) log -1 --pretty=%ct 2>/dev/null)
+# REPRO_SOURCE_DATE_EPOCH when not blank, else the HEAD commit time.
+ifeq ($(strip $(REPRO_SOURCE_DATE_EPOCH)),)
+override REPRO_SOURCE_DATE_EPOCH = \
+	$(shell git -C $(CURDIR) log -1 --pretty=%ct 2>/dev/null)
+endif
 
 define require_source_date_epoch
 	@test -n "$(REPRO_SOURCE_DATE_EPOCH)" || { \
