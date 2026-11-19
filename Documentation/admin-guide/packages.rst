@@ -71,6 +71,10 @@ that verifies it (:doc:`bringup/manual-reference`). It writes the RPMs to
 runs ``rpmlint`` with :ghsrc:`packaging/nfpm/lota.rpmlintrc` and fails on an
 error that file does not filter. Without ``rpmlint`` the lint is skipped.
 
+The release RPMs are built this way in a pinned builder image, and their
+files are hashed into a signed manifest
+(:doc:`../security/reproducible-builds`).
+
 Installing
 ==========
 

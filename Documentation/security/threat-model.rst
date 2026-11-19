@@ -191,7 +191,8 @@ Threats
    * - A swapped release artifact
      - A reproducible build and a signed manifest
        (:doc:`reproducible-builds`).
-     - The packages are built by another job and are not in the manifest.
+     - The packages are built with Fedora's toolchain, not the one of the
+       first manifest, and are checked against a second one.
 
 Identity and linkability
 ========================

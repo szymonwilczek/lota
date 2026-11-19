@@ -1,0 +1,39 @@
+# SPDX-License-Identifier: MIT
+# Packages of the RPM builder image, by name.
+
+# make all
+git
+make
+gcc
+clang
+llvm
+pkgconf-pkg-config
+libbpf-devel
+elfutils-libelf-devel
+zlib-devel
+tpm2-tss-devel
+openssl-devel
+systemd-devel
+libseccomp-devel
+dbus-devel
+golang
+# the 32-bit Wine hook
+glibc-devel.i686
+libatomic.i686
+# the SELinux module
+selinux-policy-devel
+
+# make packages, dnf-repo and the second manifest
+rpm-build
+rpm-sign
+rpmlint
+createrepo_c
+gnupg2
+openssl
+tar
+
+# the release upload
+gh
+
+# the updates archive keeps each locked version installable
+fedora-repos-archive

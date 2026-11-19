@@ -141,6 +141,8 @@ jobs:
       contents: read
       packages: write    # push to ghcr.io
       id-token: write    # OIDC token for cosign keyless signing
+    outputs:
+      image: ${{ steps.rpm-builder.outputs.image }}
     env:
       KO_DOCKER_REPO: ghcr.io/${{ github.repository_owner }}/lota
     steps:
@@ -186,6 +188,23 @@ jobs:
             cosign sign --yes "${KO_DOCKER_REPO}/${image}:${TAG#v}"
           done
 
+      - name: Build, push and sign the RPM builder image
+        id: rpm-builder
+        env:
+          REGISTRY_USER: ${{ github.actor }}
+          REGISTRY_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -eu
+          image="$KO_DOCKER_REPO/rpm-builder:${TAG#v}"
+          printf '%s' "$REGISTRY_TOKEN" |
+            docker login ghcr.io -u "$REGISTRY_USER" --password-stdin
+          make rpm-builder CONTAINER_ENGINE=docker RPM_BUILDER_TAG="$image"
+          docker push "$image"
+          ref=$(docker inspect --format '{{index .RepoDigests 0}}' "$image")
+          cosign sign --yes "$ref"
+          echo "image=$ref" >>"$GITHUB_OUTPUT"
+
   helm:
     name: package and push Helm chart
     needs: release
@@ -224,30 +243,26 @@ jobs:
 
   rpms:
     name: build, sign and publish RPMs
-    needs: release
+    needs: [release, images]
     runs-on: ubuntu-24.04
     # RPM signing key lives in dedicated environment so its secrets
     # are scoped to the release job and can carry protection rules
     environment: release
     permissions:
       contents: write    # upload the packages and repo to the release
+      packages: read     # pull the builder image
+      id-token: write    # OIDC token for cosign keyless signing
     container:
-      image: fedora:44@sha256:6c75d5bf57cb0fa5aa4b92c6a83c86c791644496d9ac230de7711f5b8ec3b898
+      # the RPM builder digest the images job pushed and signed
+      image: ${{ needs.images.outputs.image }} # zizmor: ignore[unpinned-images]
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ github.token }}
     env:
       RPM_GPG_PRIVATE_KEY: ${{ secrets.RPM_GPG_PRIVATE_KEY }}
       RPM_GPG_PASSPHRASE: ${{ secrets.RPM_GPG_PASSPHRASE }}
       RPM_GPG_NAME: ${{ vars.RPM_GPG_NAME }}
     steps:
-      - name: Install toolchain and packaging tools
-        run: |
-          dnf -y install \
-            git make gcc clang llvm pkgconf-pkg-config \
-            libbpf-devel elfutils-libelf-devel zlib-devel \
-            tpm2-tss-devel openssl-devel systemd-devel libseccomp-devel \
-            dbus-devel golang selinux-policy-devel \
-            glibc-devel.i686 libatomic.i686 \
-            rpm-build rpm-sign rpmlint createrepo_c gnupg2 gh openssl
-
       - name: Checkout
         uses: actions/checkout@v4
         with:
@@ -256,10 +271,8 @@ jobs:
       - name: Mark workspace as a safe git directory
         run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
 
-      - name: Install nfpm
-        run: |
-          GOTOOLCHAIN=auto go install github.com/goreleaser/nfpm/v2/cmd/nfpm@latest
-          echo "$(go env GOPATH)/bin" >>"$GITHUB_PATH"
+      - name: Reproducible build
+        run: make reproducible-build
 
       - name: Sign the enforcement object
         env:
@@ -275,8 +288,8 @@ jobs:
           printf '%s' "$BPF_SIGNING_KEY" >"$RUNNER_TEMP/enforcement.key"
           openssl pkey -in "$RUNNER_TEMP/enforcement.key" -pubout \
             -out "$RUNNER_TEMP/enforcement.pub"
-          make all
-          make sign-bpf SIGNING_KEY="$RUNNER_TEMP/enforcement.key"
+          make sign-bpf SIGNING_KEY="$RUNNER_TEMP/enforcement.key" \
+            SIGNING_PUBKEY="$RUNNER_TEMP/enforcement.pub"
 
       - name: Build the RPMs
         run: |
@@ -287,6 +300,19 @@ jobs:
       - name: Drop the enforcement signing key
         if: always()
         run: shred -u "$RUNNER_TEMP/enforcement.key" 2>/dev/null || true
+
+      - name: Hash the RPMs
+        run: |
+          set -eu
+          make release-manifest-fedora RELEASE_FEDORA_DIR=release-fedora \
+            RELEASE_FEDORA_MANIFEST=SHA256SUMS-fedora
+          cat SHA256SUMS-fedora
+
+      - name: Sign the RPM manifest (keyless)
+        run: |
+          cosign sign-blob --yes \
+            --bundle SHA256SUMS-fedora.cosign.bundle \
+            SHA256SUMS-fedora
 
       - name: Import the signing key
         # preset the passphrase into gpg-agent so both rpmsign and the repomd
@@ -320,4 +346,5 @@ jobs:
           set -eu
           tar -czf "lota-dnf-repo-${TAG#v}.tar.gz" -C build/dnf-repo .
           gh release upload "$TAG" \
-            build/packages/*.rpm "lota-dnf-repo-${TAG#v}.tar.gz" --clobber
+            build/packages/*.rpm "lota-dnf-repo-${TAG#v}.tar.gz" \
+            SHA256SUMS-fedora SHA256SUMS-fedora.cosign.bundle --clobber
