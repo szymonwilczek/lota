@@ -70,7 +70,7 @@ func TestParseTPMSAttest_ValidQuote(t *testing.T) {
 			t.Errorf("Magic mismatch: got 0x%08X, want 0x%08X",
 				attest.Magic, TPMGeneratedValue)
 		}
-		t.Logf("✓ Magic value correct (0x%08X = TPM_GENERATED_VALUE)", attest.Magic)
+		t.Logf("Magic value correct (0x%08X = TPM_GENERATED_VALUE)", attest.Magic)
 	})
 
 	// TPM_ST_ATTEST_QUOTE
@@ -79,7 +79,7 @@ func TestParseTPMSAttest_ValidQuote(t *testing.T) {
 			t.Errorf("Type mismatch: got 0x%04X, want 0x%04X",
 				attest.Type, TPMSTAttestQuote)
 		}
-		t.Logf("✓ Attestation type correct (0x%04X = TPM_ST_ATTEST_QUOTE)", attest.Type)
+		t.Logf("Attestation type correct (0x%04X = TPM_ST_ATTEST_QUOTE)", attest.Type)
 	})
 
 	t.Run("QualifiedSigner", func(t *testing.T) {
@@ -87,7 +87,7 @@ func TestParseTPMSAttest_ValidQuote(t *testing.T) {
 			t.Errorf("QualifiedSigner length: got %d, want 34",
 				len(attest.QualifiedSigner))
 		}
-		t.Logf("✓ QualifiedSigner parsed (%d bytes)", len(attest.QualifiedSigner))
+		t.Logf("QualifiedSigner parsed (%d bytes)", len(attest.QualifiedSigner))
 	})
 
 	// nonce extraction
@@ -102,7 +102,7 @@ func TestParseTPMSAttest_ValidQuote(t *testing.T) {
 			t.Errorf("ExtraData (nonce) mismatch:\n  got:  %x\n  want: %x",
 				attest.ExtraData, expectedNonce)
 		}
-		t.Logf("✓ Nonce correctly extracted from extraData")
+		t.Logf("Nonce correctly extracted from extraData")
 	})
 
 	t.Run("ClockInfo", func(t *testing.T) {
@@ -118,7 +118,7 @@ func TestParseTPMSAttest_ValidQuote(t *testing.T) {
 		if !attest.ClockInfo.Safe {
 			t.Error("Safe flag should be true")
 		}
-		t.Logf("✓ ClockInfo parsed correctly")
+		t.Logf("ClockInfo parsed correctly")
 	})
 
 	t.Run("FirmwareVersion", func(t *testing.T) {
@@ -127,7 +127,7 @@ func TestParseTPMSAttest_ValidQuote(t *testing.T) {
 			t.Errorf("FirmwareVersion: got 0x%X, want 0x%X",
 				attest.FirmwareVersion, expected)
 		}
-		t.Logf("✓ FirmwareVersion correct")
+		t.Logf("FirmwareVersion correct")
 	})
 
 	t.Run("QuoteInfo", func(t *testing.T) {
@@ -138,7 +138,7 @@ func TestParseTPMSAttest_ValidQuote(t *testing.T) {
 			t.Errorf("PCRDigest length: got %d, want 32",
 				len(attest.QuoteInfo.PCRDigest))
 		}
-		t.Logf("✓ QuoteInfo with PCR digest parsed")
+		t.Logf("QuoteInfo with PCR digest parsed")
 	})
 }
 
@@ -155,7 +155,7 @@ func TestParseTPMSAttest_InvalidMagic(t *testing.T) {
 		t.Fatal("Expected error for invalid magic, got nil")
 	}
 
-	t.Logf("✓ Correctly rejected invalid magic: %v", err)
+	t.Logf("Correctly rejected invalid magic: %v", err)
 }
 
 func TestParseTPMSAttest_TruncatedData(t *testing.T) {
@@ -179,7 +179,7 @@ func TestParseTPMSAttest_TruncatedData(t *testing.T) {
 			if err == nil {
 				t.Errorf("Expected error for truncated data (%d bytes)", tc.length)
 			} else {
-				t.Logf("✓ Correctly rejected %d-byte blob: %v", tc.length, err)
+				t.Logf("Correctly rejected %d-byte blob: %v", tc.length, err)
 			}
 		})
 	}
@@ -202,7 +202,7 @@ func TestVerifyNonceInAttest_Match(t *testing.T) {
 		t.Fatalf("Nonce verification failed for matching nonce: %v", err)
 	}
 
-	t.Log("✓ Matching nonce correctly verified")
+	t.Log("Matching nonce correctly verified")
 }
 
 func TestVerifyNonceInAttest_Mismatch(t *testing.T) {
@@ -218,7 +218,7 @@ func TestVerifyNonceInAttest_Mismatch(t *testing.T) {
 		t.Fatal("Expected error for mismatched nonce, got nil")
 	}
 
-	t.Logf("✓ Correctly rejected mismatched nonce: %v", err)
+	t.Logf("Correctly rejected mismatched nonce: %v", err)
 }
 
 // Table-driven test for various TPMS_ATTEST edge cases
@@ -390,7 +390,7 @@ func TestVerifyPCRDigest_Match(t *testing.T) {
 		t.Fatalf("PCR digest should match: %v", err)
 	}
 
-	t.Log("✓ PCR digest correctly verified against reported values")
+	t.Log("PCR digest correctly verified against reported values")
 }
 
 // A quote over other PCRs than the report names must not vouch for the
@@ -468,7 +468,7 @@ func TestVerifyPCRDigest_Mismatch(t *testing.T) {
 		t.Fatal("Expected error for tampered PCR values, got nil")
 	}
 
-	t.Logf("✓ Correctly detected tampered PCR values: %v", err)
+	t.Logf("Correctly detected tampered PCR values: %v", err)
 }
 
 // TestVerifyPCRDigestParsed_NilAttest pins the new parsed entry
@@ -655,5 +655,5 @@ func TestVerifyPCRDigest_InvalidAttest(t *testing.T) {
 		t.Fatal("Expected error for invalid attestation data, got nil")
 	}
 
-	t.Logf("✓ Correctly rejected invalid attestation data: %v", err)
+	t.Logf("Correctly rejected invalid attestation data: %v", err)
 }

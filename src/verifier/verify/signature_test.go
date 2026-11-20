@@ -50,7 +50,7 @@ func TestRSASSAVerifier_ValidSignature(t *testing.T) {
 		t.Fatalf("Signature verification failed: %v", err)
 	}
 
-	t.Log("✓ Valid RSASSA signature correctly verified")
+	t.Log("Valid RSASSA signature correctly verified")
 }
 
 func TestRSASSAVerifier_InvalidSignature(t *testing.T) {
@@ -73,7 +73,7 @@ func TestRSASSAVerifier_InvalidSignature(t *testing.T) {
 		t.Fatal("SECURITY VIOLATION: Invalid signature was accepted!")
 	}
 
-	t.Logf("✓ Correctly rejected corrupted signature: %v", err)
+	t.Logf("Correctly rejected corrupted signature: %v", err)
 }
 
 func TestRSASSAVerifier_WrongKey(t *testing.T) {
@@ -97,7 +97,7 @@ func TestRSASSAVerifier_WrongKey(t *testing.T) {
 		t.Fatal("SECURITY VIOLATION: Signature verified with wrong key!")
 	}
 
-	t.Logf("✓ Correctly rejected signature from wrong AIK: %v", err)
+	t.Logf("Correctly rejected signature from wrong AIK: %v", err)
 }
 
 func TestRSASSAVerifier_ModifiedAttestData(t *testing.T) {
@@ -120,7 +120,7 @@ func TestRSASSAVerifier_ModifiedAttestData(t *testing.T) {
 		t.Fatal("SECURITY VIOLATION: Modified data accepted with original signature!")
 	}
 
-	t.Logf("✓ Correctly detected data modification: %v", err)
+	t.Logf("Correctly detected data modification: %v", err)
 }
 
 func TestRSASSAVerifier_NilKey(t *testing.T) {
@@ -133,7 +133,7 @@ func TestRSASSAVerifier_NilKey(t *testing.T) {
 		t.Error("Expected error for nil key")
 	}
 
-	t.Logf("✓ Correctly handled nil key: %v", err)
+	t.Logf("Correctly handled nil key: %v", err)
 }
 
 func TestRSAPSSVerifier_ValidSignature(t *testing.T) {
@@ -161,7 +161,7 @@ func TestRSAPSSVerifier_ValidSignature(t *testing.T) {
 		t.Fatalf("PSS signature verification failed: %v", err)
 	}
 
-	t.Log("✓ Valid RSASSA-PSS signature correctly verified")
+	t.Log("Valid RSASSA-PSS signature correctly verified")
 }
 
 func TestRSAPSSVerifier_InvalidSignature(t *testing.T) {
@@ -182,7 +182,7 @@ func TestRSAPSSVerifier_InvalidSignature(t *testing.T) {
 		t.Fatal("SECURITY: Invalid PSS signature was accepted!")
 	}
 
-	t.Logf("✓ Correctly rejected corrupted PSS signature")
+	t.Logf("Correctly rejected corrupted PSS signature")
 }
 
 func TestVerifyReportSignature_ValidReport(t *testing.T) {
@@ -207,7 +207,7 @@ func TestVerifyReportSignature_ValidReport(t *testing.T) {
 		t.Fatalf("Report signature verification failed: %v", err)
 	}
 
-	t.Log("✓ Report signature correctly verified")
+	t.Log("Report signature correctly verified")
 }
 
 func TestVerifyReportSignature_NoSignature(t *testing.T) {
@@ -221,7 +221,7 @@ func TestVerifyReportSignature_NoSignature(t *testing.T) {
 		t.Fatal("SECURITY: Report without signature was accepted!")
 	}
 
-	t.Logf("✓ Correctly rejected unsigned report: %v", err)
+	t.Logf("Correctly rejected unsigned report: %v", err)
 }
 
 func TestVerifyReportSignature_NoAttestData(t *testing.T) {
@@ -236,7 +236,7 @@ func TestVerifyReportSignature_NoAttestData(t *testing.T) {
 		t.Fatal("SECURITY: Report without attest data was accepted!")
 	}
 
-	t.Logf("✓ Correctly rejected report without attest data: %v", err)
+	t.Logf("Correctly rejected report without attest data: %v", err)
 }
 
 func TestVerifyReportSignature_PSSSignature(t *testing.T) {
@@ -263,7 +263,7 @@ func TestVerifyReportSignature_PSSSignature(t *testing.T) {
 		t.Fatalf("PSS report signature verification failed: %v", err)
 	}
 
-	t.Log("✓ Report with PSS signature correctly verified")
+	t.Log("Report with PSS signature correctly verified")
 }
 
 func TestVerifyReportSignature_SHA384FromQuoteSigMetadata(t *testing.T) {
@@ -289,7 +289,7 @@ func TestVerifyReportSignature_SHA384FromQuoteSigMetadata(t *testing.T) {
 		t.Fatalf("SHA-384 report signature verification failed: %v", err)
 	}
 
-	t.Log("✓ Report with SHA-384 quote-signature metadata correctly verified")
+	t.Log("Report with SHA-384 quote-signature metadata correctly verified")
 }
 
 func TestVerifyReportSignature_SHA512FromQuoteSigMetadata(t *testing.T) {
@@ -315,7 +315,7 @@ func TestVerifyReportSignature_SHA512FromQuoteSigMetadata(t *testing.T) {
 		t.Fatalf("SHA-512 report signature verification failed: %v", err)
 	}
 
-	t.Log("✓ Report with SHA-512 quote-signature metadata correctly verified")
+	t.Log("Report with SHA-512 quote-signature metadata correctly verified")
 }
 
 func TestVerifyReportSignature_PCRHashAlgMismatchStillVerifies(t *testing.T) {
@@ -411,7 +411,7 @@ func TestParseRSAPublicKey_RejectsSmallKey(t *testing.T) {
 		t.Fatal("SECURITY: 1024-bit RSA key was accepted!")
 	}
 
-	t.Logf("✓ Correctly rejected small key: %v", err)
+	t.Logf("Correctly rejected small key: %v", err)
 }
 
 func BenchmarkRSASSAVerify(b *testing.B) {

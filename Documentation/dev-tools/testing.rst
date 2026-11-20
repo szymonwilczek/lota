@@ -18,6 +18,8 @@ runs them; the CI jobs that do so are in :doc:`ci`.
    * - ``make test-unit`` (``make test``)
      - the C unit tests, the integration scripts and the cross-language
        checks, after ``make all``
+   * - ``make test-go``
+     - the Go tests of every Go module
    * - ``go test ./...`` in a Go module
      - that module's Go tests
    * - ``make SANITIZE=address,undefined test-unit``
@@ -52,7 +54,7 @@ Unit and integration tests
   the agent's serializer and ``tests/cross_lang/report_verify.go`` parses
   it with the verifier's. Both need ``go``.
 
-The Go tests are not part of ``make test-unit``.
+The Go tests are not part of ``make test-unit``; ``make test-go`` runs them.
 
 A script reads the build directory from ``LOTA_BUILD_DIR``, which the make
 recipe exports. A script that drives one binary also takes its path from the
@@ -64,9 +66,10 @@ Test output
 
 Every program runs, whatever the one before it returned.
 ``make test-unit`` collects the results in
-``$(BUILD_DIR)/test-summary.tsv`` and ends with ``tests/lib/summary.sh``,
-which prints the totals and every failed test and fails the target.
-``LOTA_TEST_COLOR`` is ``always``, ``never`` or ``auto``.
+``$(BUILD_DIR)/test-summary.tsv``, ``make test-go`` in
+``$(BUILD_DIR)/test-go-summary.tsv``, and each ends with
+``tests/lib/summary.sh``, which prints the totals and every failed test and
+fails the target. ``LOTA_TEST_COLOR`` is ``always``, ``never`` or ``auto``.
 
 Adding a C test
 ---------------
@@ -142,7 +145,9 @@ Go tests
 
 Each Go module (``src/verifier``, ``src/attestca``, ``sdk/server``,
 ``src/crl``, ``src/fleetctl`` and the two example modules) is tested on its
-own with ``go test ./...`` in its directory.
+own with ``go test ./...`` in its directory. ``make test-go`` runs every
+module through ``tests/lib/go-test.sh``, passing ``GO_TEST_FLAGS`` to
+``go test``.
 
 Postgres-backed tests
 ---------------------

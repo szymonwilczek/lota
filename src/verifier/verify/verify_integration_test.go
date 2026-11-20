@@ -365,12 +365,12 @@ func TestIntegration_FullAttestationFlow_TOFU(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to generate challenge: %v", err)
 	}
-	t.Logf("✓ Challenge generated with nonce: %x...", challenge.Nonce[:8])
+	t.Logf("Challenge generated with nonce: %x...", challenge.Nonce[:8])
 
 	pcr14 := fixturePCR14()
 
 	reportData := createValidReport(t, clientID, challenge.Nonce, pcr14)
-	t.Logf("✓ Report created (%d bytes)", len(reportData))
+	t.Logf("Report created (%d bytes)", len(reportData))
 
 	result, err := verifier.VerifyReportFrom(clientID, "", reportData)
 	if err != nil {
@@ -381,7 +381,7 @@ func TestIntegration_FullAttestationFlow_TOFU(t *testing.T) {
 		t.Errorf("Expected VerifyOK, got result code %d", result.Result)
 	}
 
-	t.Log("✓ Full attestation flow completed successfully")
+	t.Log("Full attestation flow completed successfully")
 }
 
 func TestIntegration_SubsequentAttestation(t *testing.T) {
@@ -401,7 +401,7 @@ func TestIntegration_SubsequentAttestation(t *testing.T) {
 	if err != nil || result1.Result != types.VerifyOK {
 		t.Fatalf("First attestation failed: %v (result=%d)", err, result1.Result)
 	}
-	t.Log("✓ First attestation established baseline")
+	t.Log("First attestation established baseline")
 
 	// should match baseline
 	challenge2, _ := verifier.GenerateChallenge(clientID)
@@ -410,7 +410,7 @@ func TestIntegration_SubsequentAttestation(t *testing.T) {
 	if err != nil || result2.Result != types.VerifyOK {
 		t.Fatalf("Second attestation failed: %v (result=%d)", err, result2.Result)
 	}
-	t.Log("✓ Subsequent attestation matched baseline")
+	t.Log("Subsequent attestation matched baseline")
 }
 
 func TestIntegration_PCR14BaselineViolation(t *testing.T) {
@@ -431,7 +431,7 @@ func TestIntegration_PCR14BaselineViolation(t *testing.T) {
 	if result1.Result != types.VerifyOK {
 		t.Fatalf("Baseline establishment failed")
 	}
-	t.Logf("✓ Baseline established: PCR14 = %x...", originalPCR14[:8])
+	t.Logf("Baseline established: PCR14 = %x...", originalPCR14[:8])
 
 	// MODIFIED PCR14
 	challenge2, _ := verifier.GenerateChallenge(clientID)
@@ -457,7 +457,7 @@ func TestIntegration_PCR14BaselineViolation(t *testing.T) {
 		t.Error("Expected error message for PCR14 mismatch")
 	}
 
-	t.Logf("✓ SECURITY: PCR14 tampering correctly detected: %v", err)
+	t.Logf("SECURITY: PCR14 tampering correctly detected: %v", err)
 }
 
 func TestIntegration_NonceReplayAttack(t *testing.T) {
@@ -477,7 +477,7 @@ func TestIntegration_NonceReplayAttack(t *testing.T) {
 	if err != nil || result1.Result != types.VerifyOK {
 		t.Fatalf("First submission failed: %v", err)
 	}
-	t.Log("✓ First submission accepted")
+	t.Log("First submission accepted")
 
 	// REPLAY ATTEMPT - same report again
 	result2, err := verifier.VerifyReportFrom(clientID, "", reportData)
@@ -489,7 +489,7 @@ func TestIntegration_NonceReplayAttack(t *testing.T) {
 			types.VerifyNonceFail, result2.Result)
 	}
 
-	t.Logf("✓ SECURITY: Replay attack correctly blocked: %v", err)
+	t.Logf("SECURITY: Replay attack correctly blocked: %v", err)
 }
 
 func TestIntegration_InvalidSignature(t *testing.T) {
@@ -518,7 +518,7 @@ func TestIntegration_InvalidSignature(t *testing.T) {
 			types.VerifySigFail, result.Result)
 	}
 
-	t.Logf("✓ SECURITY: Invalid signature correctly rejected: %v", err)
+	t.Logf("SECURITY: Invalid signature correctly rejected: %v", err)
 }
 
 func TestIntegration_ConcurrentClients(t *testing.T) {
@@ -583,7 +583,7 @@ func TestIntegration_ConcurrentClients(t *testing.T) {
 		t.Errorf("Only %d/%d clients succeeded", successCount, numClients)
 	}
 
-	t.Logf("✓ All %d concurrent attestations completed successfully", numClients)
+	t.Logf("All %d concurrent attestations completed successfully", numClients)
 }
 
 func TestIntegration_ConcurrentFirstAttestationSameClient(t *testing.T) {
@@ -780,7 +780,7 @@ func TestIntegration_ChallengePCRMask(t *testing.T) {
 		t.Errorf("PCR mask: got 0x%08X, want 0x%08X", challenge.PCRMask, expectedMask)
 	}
 
-	t.Logf("✓ Challenge PCR mask correct: 0x%08X (PCR 0,1,7,9,14)", challenge.PCRMask)
+	t.Logf("Challenge PCR mask correct: 0x%08X (PCR 0,1,7,9,14)", challenge.PCRMask)
 }
 
 // TestVerify_RejectsMissingBootPCRs asserts that the verifier refuses any attestation

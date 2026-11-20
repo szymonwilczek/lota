@@ -1798,6 +1798,18 @@ test-unit: all $(TEST_BINS)
 	@echo ""
 	@echo "Tests complete. Run 'make test-hardware' (as root) for hardware tests."
 
+.PHONY: test-go
+test-go: export LOTA_TEST_SUMMARY := $(abspath $(BUILD_DIR))/test-go-summary.tsv
+test-go:
+	@mkdir -p $(BUILD_DIR)
+	@rm -f "$$LOTA_TEST_SUMMARY"
+	@for m in $(LINT_GO_MODULES); do \
+		echo "==> go test $$m"; \
+		( cd $$m && $(CURDIR)/tests/lib/go-test.sh $(GO_TEST_FLAGS) ./... ); \
+		printf 'R\t%s\t%d\n' "$$m" $$? >>"$$LOTA_TEST_SUMMARY"; \
+	done
+	@tests/lib/summary.sh "$$LOTA_TEST_SUMMARY"
+
 .PHONY: test-hardware
 test-hardware: $(AGENT_BIN)
 	@echo "=== Agent hardware tests (require root) ==="
@@ -2273,6 +2285,7 @@ help:
 	@echo "Test targets:"
 	@$(HELP_ROW) test "Run unit and best-effort integration tests"
 	@$(HELP_ROW) test-unit "Same as test; builds required artifacts first"
+	@$(HELP_ROW) test-go "Run the Go tests of every module"
 	@$(HELP_ROW) test-sdk "Print SDK integration-test instructions"
 	@$(HELP_ROW) test-hardware "Run IOMMU/TPM hardware tests (root required)"
 	@$(HELP_ROW) sanitizer-build "Build CI-safe userspace under ASan/UBSan"
