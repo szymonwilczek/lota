@@ -32,7 +32,8 @@ overrides:
 contents:
   # each glob captures the versioned library and its soname symlink
   # (libX.so.MAJOR.MINOR.PATCH and libX.so.MAJOR
-  # unversioned libX.so linker symlink is shipped by lota-sdk-devel
+  # unversioned libX.so linker symlink is shipped by lota-sdk-devel,
+  # except for the hook, which nothing links
   - src: ./build/liblotagaming.so.*
     dst: /usr/lib64/
     file_info:

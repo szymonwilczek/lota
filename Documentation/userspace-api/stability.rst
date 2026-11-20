@@ -126,9 +126,9 @@ Soname and ABI version
 installed library; its value is 1 and the full ABI version is
 ``LOTA_ABI_MAJOR.0.0``. Both are independent of the release in ``VERSION``.
 A library is installed as ``libX.so.1.0.0``, with the soname ``libX.so.1`` and
-the linker name ``libX.so`` as symlinks to it. The 32-bit Wine hook in
-``/usr/lib`` gets no linker name, because the loader opens it by soname and
-nothing links against it.
+the linker name ``libX.so`` as symlinks to it. The Wine hook gets no linker
+name, in ``/usr/lib64`` or in ``/usr/lib``, because the loader opens it by
+soname and nothing links against it.
 
 Changing the surface
 ====================

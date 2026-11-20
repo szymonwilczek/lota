@@ -35,7 +35,7 @@ overrides:
       - pkgconfig(libcrypto)
 
 contents:
-  # unversioned libX.so linker symlinks only;
+  # unversioned libX.so linker symlinks only, none for the preloaded hook;
   # nfpm preserves each as the symlink the build made
   # (libX.so -> libX.so.MAJOR.MINOR.PATCH)
   # versioned targets are shipped by lota-sdk
@@ -43,8 +43,6 @@ contents:
     dst: /usr/lib64/liblotagaming.so
   - src: ./build/liblotaserver.so
     dst: /usr/lib64/liblotaserver.so
-  - src: ./build/liblota_wine_hook.so
-    dst: /usr/lib64/liblota_wine_hook.so
   - src: ./build/liblota_anticheat.so
     dst: /usr/lib64/liblota_anticheat.so
   - src: ./include/lota_gaming.h

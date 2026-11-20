@@ -287,7 +287,6 @@ fi
 %{_includedir}/lota/lota_snapshot.h
 %{_libdir}/liblotagaming.so
 %{_libdir}/liblotaserver.so
-%{_libdir}/liblota_wine_hook.so
 %{_libdir}/liblota_anticheat.so
 %{_libdir}/pkgconfig/lota-gaming.pc
 %{_libdir}/pkgconfig/lota-server.pc

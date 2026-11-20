@@ -57,12 +57,8 @@ LOTA_HOOK_LIB="${LOTA_HOOK_LIB_PATH:-}"
 
 IFS=: read -r -a lota_hook_roots <<<"${LOTA_HOOK_LIB_ROOTS:-/usr:/usr/local}"
 
-# the soname too: the bare .so ships in -devel
 hook_candidates() {
-    lota_hook_cands=(
-        "$1/liblota_wine_hook.so"
-        "$1"/liblota_wine_hook.so.[0-9]*
-    )
+    lota_hook_cands=("$1"/liblota_wine_hook.so.[0-9]*)
 }
 
 # <root>/$LIB/<name> when lib64/ and lib/ carry one name; else hook_single()

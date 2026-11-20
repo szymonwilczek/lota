@@ -381,7 +381,9 @@ for lib in "${LIBRARIES[@]}"; do
     [[ -f "$BUILD_DIR/$lib.so.$ABI_VERSION" ]] || continue
     cp "$BUILD_DIR/$lib.so.$ABI_VERSION" "$PREFIX/lib64/"
     ln -sf "$lib.so.$ABI_VERSION" "$PREFIX/lib64/$lib.so.$ABI_MAJOR"
-    ln -sf "$lib.so.$ABI_VERSION" "$PREFIX/lib64/$lib.so"
+    # as installed: nothing links the hook, so it has no linker name
+    [[ $lib == liblota_wine_hook ]] ||
+	ln -sf "$lib.so.$ABI_VERSION" "$PREFIX/lib64/$lib.so"
 done
 
 for header in "${PUBLIC_HEADERS[@]}"; do
