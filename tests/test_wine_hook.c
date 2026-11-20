@@ -1528,76 +1528,6 @@ static void test_a_refusal_is_a_failure(void)
 	PASS();
 }
 
-static void test_hook_active_when_not_started(void)
-{
-	TEST("lota_hook_active() returns 0 when not initialized");
-
-	g_hook.thread_started = 0;
-	g_hook.running = 0;
-
-	if (lota_hook_active() != 0) {
-		FAIL("expected 0");
-		return;
-	}
-	PASS();
-}
-
-static void test_hook_status_path_when_set(void)
-{
-	TEST("lota_hook_status_path() returns path when set");
-
-	snprintf(g_hook.status_path, sizeof(g_hook.status_path),
-		 "/run/user/1000/lota-hook/lota-status");
-
-	const char *p = lota_hook_status_path();
-	if (!p || strcmp(p, "/run/user/1000/lota-hook/lota-status") != 0) {
-		FAIL("wrong path");
-		return;
-	}
-	PASS();
-}
-
-static void test_hook_status_path_when_empty(void)
-{
-	TEST("lota_hook_status_path() returns NULL when empty");
-
-	g_hook.status_path[0] = '\0';
-
-	if (lota_hook_status_path() != NULL) {
-		FAIL("expected NULL");
-		return;
-	}
-	PASS();
-}
-
-static void test_hook_token_path_when_set(void)
-{
-	TEST("lota_hook_token_path() returns path when set");
-
-	snprintf(g_hook.token_path, sizeof(g_hook.token_path),
-		 "/run/user/1000/lota-hook/lota-token.bin");
-
-	const char *p = lota_hook_token_path();
-	if (!p || strcmp(p, "/run/user/1000/lota-hook/lota-token.bin") != 0) {
-		FAIL("wrong path");
-		return;
-	}
-	PASS();
-}
-
-static void test_hook_token_path_when_empty(void)
-{
-	TEST("lota_hook_token_path() returns NULL when empty");
-
-	g_hook.token_path[0] = '\0';
-
-	if (lota_hook_token_path() != NULL) {
-		FAIL("expected NULL");
-		return;
-	}
-	PASS();
-}
-
 /* mock agent: a child answers the SDK and logs each command id it gets */
 static char mock_socket[104];
 static char mock_cmdlog[PATH_MAX];
@@ -2900,13 +2830,6 @@ int main(void)
 	test_a_quiet_wait_is_not_a_failure();
 	test_a_delivered_event_is_not_a_failure();
 	test_a_refusal_is_a_failure();
-
-	/* exported query functions */
-	test_hook_active_when_not_started();
-	test_hook_status_path_when_set();
-	test_hook_status_path_when_empty();
-	test_hook_token_path_when_set();
-	test_hook_token_path_when_empty();
 
 	cleanup_tmpdir();
 

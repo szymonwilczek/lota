@@ -33,8 +33,8 @@ is :ghsrc:`packaging/abi/public-headers.list`.
    * - ``lota_anticheat.h``
      - The session and heartbeat API of ``liblota_anticheat.so``.
    * - ``lota_wine_hook.h``
-     - The accessors of ``liblota_wine_hook.so``, its environment variables
-       and the names of the files it writes.
+     - The environment variables of ``liblota_wine_hook.so`` and the names
+       of the files it writes.
    * - ``lota_token.h``
      - The wire formats of the token and of the boot evidence.
    * - ``lota_snapshot.h``
@@ -73,7 +73,7 @@ Libraries and pkg-config modules
    * - ``liblota_wine_hook.so``
      - ``lota_wine_hook.h``
      - ``lota-wine-hook``
-     - ``LOTA_HOOK_EXPORT``
+     - ``dlopen()`` only
 
 The modules are generated from :ghsrc:`packaging/pkgconfig` and installed into
 ``/usr/lib64/pkgconfig``:
@@ -95,20 +95,21 @@ object, so a program that calls one function links the whole API.
 Exported symbols
 ----------------
 
-A shared library exports the functions its header declares, and the Wine
-hook ``dlopen()`` besides (below). Three libraries filter their symbols through
-the linker version script named in the table, with every other symbol ``local``.
-``liblota_anticheat.so`` links the gaming and server objects in, and
-``liblota_wine_hook.so`` the gaming object, so that one file ships; their copies
-stay local, because a second global ``lota_connect()`` in a process that also
-loads ``liblotagaming.so`` would bind each caller to the copy the link order
-picks. A program that calls the gaming or the server API links that library.
+A shared library exports the functions its header declares; the Wine hook
+declares none and exports only ``dlopen()`` (below). Three libraries filter
+their symbols through the linker version script named in the table, with
+every other symbol ``local``. ``liblota_anticheat.so`` links the gaming and
+server objects in, and ``liblota_wine_hook.so`` the gaming object, so that
+one file ships; their copies stay local, because a second global
+``lota_connect()`` in a process that also loads ``liblotagaming.so`` would
+bind each caller to the copy the link order picks. A program that calls the
+gaming or the server API links that library.
 
 The Wine hook defines ``dlopen()`` so that it can report an object the
 runtime gate refused, and callers reach ``dlopen`` through glibc's version
 node. A version script would hide the wrapper behind that node, so the hook
-is compiled with ``-fvisibility=hidden`` and marks each export
-``LOTA_HOOK_EXPORT``. The wrapper returns what the real ``dlopen()``
+is compiled with ``-fvisibility=hidden`` and marks the wrapper alone
+visible. The wrapper returns what the real ``dlopen()``
 returned, with ``dlerror()`` and ``errno`` left as it left them, and is not
 part of the API.
 
