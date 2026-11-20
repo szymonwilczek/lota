@@ -27,17 +27,7 @@
 
 #include "../src/agent/net.h"
 
-static int g_failures;
-
-#define CHECK(cond, msg)                                    \
-	do {                                                \
-		if (!(cond)) {                              \
-			fprintf(stderr, "FAIL: %s\n", msg); \
-			g_failures++;                       \
-		} else {                                    \
-			printf("PASS: %s\n", msg);          \
-		}                                           \
-	} while (0)
+#include "test.h"
 
 /* name_connect is audited in both causes, so ausearch has the refusal too */
 static bool claims_no_avc(const char *hint)
@@ -90,27 +80,33 @@ int main(void)
 	char buf[512];
 	const char *hint;
 
-	printf("=== refused connect hint tests ===\n\n");
+	test_begin("connect hint");
 
 	if (make_root(enforcing, sizeof(enforcing), "1\n", "1 1") < 0 ||
 	    make_root(permissive, sizeof(permissive), "0\n", "1 1") < 0 ||
 	    make_root(tunable_off, sizeof(tunable_off), "1\n", "0 0") < 0 ||
 	    make_root(no_module, sizeof(no_module), "1\n", NULL) < 0) {
-		fprintf(stderr, "FAIL: could not create temp files\n");
+		FAIL("could not create temp files");
 		return 1;
 	}
 
 	hint = net_connect_refusal_hint(EACCES, 8573, enforcing, buf,
 					sizeof(buf));
-	CHECK(hint != NULL, "an enforcing host gets a cause for EACCES");
+	TEST("an enforcing host gets a cause for EACCES");
+	if (hint == NULL)
+		FAIL("expected: hint != NULL");
 	if (hint) {
-		CHECK(strstr(hint, "semanage port -a -t lota_port_t -p tcp "
-				   "8573") != NULL,
-		      "the command names the port that was refused");
-		CHECK(!claims_no_avc(hint),
-		      "the port cause does not deny the logged AVC");
-		CHECK(strstr(hint, "setsebool") == NULL,
-		      "a labelled-port cause does not offer the boolean");
+		TEST("the command names the port that was refused");
+		if (strstr(hint, "semanage port -a -t lota_port_t -p tcp "
+				 "8573") == NULL)
+			FAIL("expected: strstr(hint, \"semanage port -a -t "
+			     "lota_port_t -p tcp \" \"8573\") != NULL");
+		TEST("the port cause does not deny the logged AVC");
+		if (claims_no_avc(hint))
+			FAIL("expected: !claims_no_avc(hint)");
+		TEST("a labelled-port cause does not offer the boolean");
+		if (strstr(hint, "setsebool") != NULL)
+			FAIL("expected: strstr(hint, \"setsebool\") == NULL");
 	}
 
 	/*
@@ -119,57 +115,77 @@ int main(void)
 	 */
 	hint = net_connect_refusal_hint(EACCES, 8573, tunable_off, buf,
 					sizeof(buf));
-	CHECK(hint != NULL, "the tunable being off is a cause worth naming");
+	TEST("the tunable being off is a cause worth naming");
+	if (hint == NULL)
+		FAIL("expected: hint != NULL");
 	if (hint) {
-		CHECK(strstr(hint, "lota_network_attest") != NULL,
-		      "the sentence names the tunable that refuses the connect");
-		CHECK(strstr(hint, "setsebool -P lota_network_attest on") !=
-			      NULL,
-		      "the command turns the tunable back on");
-		CHECK(!claims_no_avc(hint),
-		      "the tunable cause does not deny the logged AVC");
-		CHECK(strstr(hint, "semanage port -a") == NULL,
-		      "the operator is not sent to relabel a port instead");
+		TEST("the sentence names the tunable that refuses the connect");
+		if (strstr(hint, "lota_network_attest") == NULL)
+			FAIL("expected: strstr(hint, \"lota_network_attest\") != NULL");
+		TEST("the command turns the tunable back on");
+		if (strstr(hint, "setsebool -P lota_network_attest on") == NULL)
+			FAIL("expected: strstr(hint, \"setsebool -P "
+			     "lota_network_attest on\") != NULL");
+		TEST("the tunable cause does not deny the logged AVC");
+		if (claims_no_avc(hint))
+			FAIL("expected: !claims_no_avc(hint)");
+		TEST("the operator is not sent to relabel a port instead");
+		if (strstr(hint, "semanage port -a") != NULL)
+			FAIL("expected: strstr(hint, \"semanage port -a\") == NULL");
 	}
 
 	/* Neither cause can be established, so both are named and neither is asserted */
 	hint = net_connect_refusal_hint(EACCES, 8573, no_module, buf,
 					sizeof(buf));
-	CHECK(hint != NULL,
-	      "a host with no readable tunable still gets a cause");
+	TEST("a host with no readable tunable still gets a cause");
+	if (hint == NULL)
+		FAIL("expected: hint != NULL");
 	if (hint) {
-		CHECK(!claims_no_avc(hint),
-		      "the unread cause does not deny the logged AVC");
-		CHECK(strstr(hint, "semanage port -a -t lota_port_t -p tcp "
+		TEST("the unread cause does not deny the logged AVC");
+		if (claims_no_avc(hint))
+			FAIL("expected: !claims_no_avc(hint)");
+		TEST("both candidates are named when neither can be read");
+		if (!(strstr(hint, "semanage port -a -t lota_port_t -p tcp "
 				   "8573") != NULL &&
-			      strstr(hint, "setsebool -P lota_network_attest "
-					   "on") != NULL,
-		      "both candidates are named when neither can be read");
+		      strstr(hint, "setsebool -P lota_network_attest "
+				   "on") != NULL))
+			FAIL("expected: strstr(hint, \"semanage port -a -t "
+			     "lota_port_t -p tcp \" \"8573\") != NULL && strstr(hint, "
+			     "\"setsebool -P lota_network_attest \" \"on\") != NULL");
 	}
 
 	/* Permissive means the denial did not happen, so this EACCES came from
 	 * somewhere else and the port label is the wrong thing to name */
-	CHECK(net_connect_refusal_hint(EACCES, 8573, permissive, buf,
-				       sizeof(buf)) == NULL,
-	      "a permissive host is not told to label a port");
+	TEST("a permissive host is not told to label a port");
+	if (net_connect_refusal_hint(EACCES, 8573, permissive, buf,
+				     sizeof(buf)) != NULL)
+		FAIL("expected: net_connect_refusal_hint(EACCES, 8573, "
+		     "permissive, buf, sizeof(buf)) == NULL");
 
-	CHECK(net_connect_refusal_hint(EACCES, 8573,
-				       "/tmp/lota-selinuxfs-does-not-exist",
-				       buf, sizeof(buf)) == NULL,
-	      "a host without SELinux is not told to label a port");
+	TEST("a host without SELinux is not told to label a port");
+	if (net_connect_refusal_hint(EACCES, 8573,
+				     "/tmp/lota-selinuxfs-does-not-exist", buf,
+				     sizeof(buf)) != NULL)
+		FAIL("expected: net_connect_refusal_hint(EACCES, 8573, "
+		     "\"/tmp/lota-selinuxfs-does-not-exist\", buf, "
+		     "sizeof(buf)) == NULL");
 
-	CHECK(net_connect_refusal_hint(ECONNREFUSED, 8573, enforcing, buf,
-				       sizeof(buf)) == NULL,
-	      "a refused connection is not blamed on the policy");
-	CHECK(net_connect_refusal_hint(EHOSTUNREACH, 8573, enforcing, buf,
-				       sizeof(buf)) == NULL,
-	      "an unreachable host is not blamed on the policy");
+	TEST("a refused connection is not blamed on the policy");
+	if (net_connect_refusal_hint(ECONNREFUSED, 8573, enforcing, buf,
+				     sizeof(buf)) != NULL)
+		FAIL("expected: net_connect_refusal_hint(ECONNREFUSED, 8573, "
+		     "enforcing, buf, sizeof(buf)) == NULL");
+	TEST("an unreachable host is not blamed on the policy");
+	if (net_connect_refusal_hint(EHOSTUNREACH, 8573, enforcing, buf,
+				     sizeof(buf)) != NULL)
+		FAIL("expected: net_connect_refusal_hint(EHOSTUNREACH, 8573, "
+		     "enforcing, buf, sizeof(buf)) == NULL");
 
 	/* half a semanage command is worse than none: the operator would run it */
-	CHECK(net_connect_refusal_hint(EACCES, 8573, enforcing, buf, 32) ==
-		      NULL,
-	      "a truncated command is not offered");
+	TEST("a truncated command is not offered");
+	if (net_connect_refusal_hint(EACCES, 8573, enforcing, buf, 32) != NULL)
+		FAIL("expected: net_connect_refusal_hint(EACCES, 8573, "
+		     "enforcing, buf, 32) == NULL");
 
-	printf("\n%s\n", g_failures ? "FAILURES" : "All tests passed");
-	return g_failures ? 1 : 0;
+	return test_end();
 }

@@ -19,17 +19,7 @@
 
 #include "../src/agent/enroll.h"
 
-static int g_failures;
-
-#define CHECK(cond, msg)                                    \
-	do {                                                \
-		if (!(cond)) {                              \
-			fprintf(stderr, "FAIL: %s\n", msg); \
-			g_failures++;                       \
-		} else {                                    \
-			printf("PASS: %s\n", msg);          \
-		}                                           \
-	} while (0)
+#include "test.h"
 
 static const char *tmp_path(void)
 {
@@ -54,20 +44,36 @@ static void test_roundtrip(void)
 	snprintf(in.ca_cert, sizeof(in.ca_cert), "/etc/lota/ca-tls.crt");
 	snprintf(in.enroll_token, sizeof(in.enroll_token), "game-alpha-token");
 
-	CHECK(enroll_state_save_path(path, &in) == 0, "save state");
+	TEST("save state");
+	if (enroll_state_save_path(path, &in) != 0)
+		FAIL("expected: enroll_state_save_path(path, &in) == 0");
 
 	memset(&out, 0, sizeof(out));
-	CHECK(enroll_state_load_path(path, &out) == 0, "load state");
+	TEST("load state");
+	if (enroll_state_load_path(path, &out) != 0)
+		FAIL("expected: enroll_state_load_path(path, &out) == 0");
 
-	CHECK(out.ca_port == 8444, "port round-trips");
-	CHECK(out.has_pin == 1, "has_pin round-trips");
-	CHECK(memcmp(out.pin_sha256, in.pin_sha256, sizeof(in.pin_sha256)) == 0,
-	      "pin round-trips");
-	CHECK(strcmp(out.ca_server, "ca.example") == 0, "server round-trips");
-	CHECK(strcmp(out.ca_cert, "/etc/lota/ca-tls.crt") == 0,
-	      "ca_cert round-trips");
-	CHECK(strcmp(out.enroll_token, "game-alpha-token") == 0,
-	      "enrollment token round-trips");
+	TEST("port round-trips");
+	if (out.ca_port != 8444)
+		FAIL("expected: out.ca_port == 8444");
+	TEST("has_pin round-trips");
+	if (out.has_pin != 1)
+		FAIL("expected: out.has_pin == 1");
+	TEST("pin round-trips");
+	if (memcmp(out.pin_sha256, in.pin_sha256, sizeof(in.pin_sha256)) != 0)
+		FAIL("expected: memcmp(out.pin_sha256, in.pin_sha256, "
+		     "sizeof(in.pin_sha256)) == 0");
+	TEST("server round-trips");
+	if (strcmp(out.ca_server, "ca.example") != 0)
+		FAIL("expected: strcmp(out.ca_server, \"ca.example\") == 0");
+	TEST("ca_cert round-trips");
+	if (strcmp(out.ca_cert, "/etc/lota/ca-tls.crt") != 0)
+		FAIL("expected: strcmp(out.ca_cert, \"/etc/lota/ca-tls.crt\") "
+		     "== 0");
+	TEST("enrollment token round-trips");
+	if (strcmp(out.enroll_token, "game-alpha-token") != 0)
+		FAIL("expected: strcmp(out.enroll_token, "
+		     "\"game-alpha-token\") == 0");
 
 	unlink(path);
 }
@@ -77,7 +83,9 @@ static void test_missing_is_enoent(void)
 	struct enroll_state out;
 	int ret = enroll_state_load_path("/tmp/lota-enroll-state-absent.XXXXXX",
 					 &out);
-	CHECK(ret == -ENOENT, "absent state load returns -ENOENT");
+	TEST("absent state load returns -ENOENT");
+	if (ret != -ENOENT)
+		FAIL("expected: ret == -ENOENT");
 }
 
 static void test_rejects_other_version_record(void)
@@ -95,29 +103,39 @@ static void test_rejects_other_version_record(void)
 	snprintf(in.ca_server, sizeof(in.ca_server), "ca.example");
 
 	fd = open(path, O_WRONLY | O_CREAT | O_TRUNC, 0600);
-	CHECK(fd >= 0, "open other-version record");
+	TEST("open other-version record");
+	if (fd < 0)
+		FAIL("expected: fd >= 0");
 	if (fd >= 0) {
-		CHECK(write(fd, &in, short_size) == (ssize_t)short_size,
-		      "write other-version record");
+		TEST("write other-version record");
+		if (write(fd, &in, short_size) != (ssize_t)short_size)
+			FAIL("expected: write(fd, &in, short_size) == "
+			     "(ssize_t)short_size");
 		close(fd);
 	}
 
 	memset(&out, 0xFF, sizeof(out));
 	/* -ENOTSUP, not -ENOENT: re-enrolling would overwrite the certificate */
-	CHECK(enroll_state_load_path(path, &out) == -ENOTSUP,
-	      "a record at a version this build does not read says so");
+	TEST("a record at a version this build does not read says so");
+	if (enroll_state_load_path(path, &out) != -ENOTSUP)
+		FAIL("expected: enroll_state_load_path(path, &out) == -ENOTSUP");
 
 	/* short record claiming the current version is refused too */
 	fd = open(path, O_WRONLY | O_CREAT | O_TRUNC, 0600);
-	CHECK(fd >= 0, "reopen for short current-version record");
+	TEST("reopen for short current-version record");
+	if (fd < 0)
+		FAIL("expected: fd >= 0");
 	if (fd >= 0) {
 		in.version = LOTA_ENROLL_STATE_VERSION;
-		CHECK(write(fd, &in, short_size) == (ssize_t)short_size,
-		      "write truncated current record");
+		TEST("write truncated current record");
+		if (write(fd, &in, short_size) != (ssize_t)short_size)
+			FAIL("expected: write(fd, &in, short_size) == "
+			     "(ssize_t)short_size");
 		close(fd);
 	}
-	CHECK(enroll_state_load_path(path, &out) == -EIO,
-	      "a record shorter than the record says so");
+	TEST("a record shorter than the record says so");
+	if (enroll_state_load_path(path, &out) != -EIO)
+		FAIL("expected: enroll_state_load_path(path, &out) == -EIO");
 
 	unlink(path);
 }
@@ -125,16 +143,21 @@ static void test_rejects_other_version_record(void)
 static void test_record_presence(void)
 {
 	/* a missing file is the only answer that means "nothing is there" */
-	CHECK(enroll_state_record_present(-ENOENT) == 0,
-	      "no file means no record");
-	CHECK(enroll_state_record_present(0) == 1,
-	      "a record that loads is one");
-	CHECK(enroll_state_record_present(-ENOTSUP) == 1,
-	      "a version this build cannot read is still a record");
-	CHECK(enroll_state_record_present(-EIO) == 1,
-	      "a short record is still a record");
-	CHECK(enroll_state_record_present(-EINVAL) == 1,
-	      "bytes that are not the record are still on disk");
+	TEST("no file means no record");
+	if (enroll_state_record_present(-ENOENT) != 0)
+		FAIL("expected: enroll_state_record_present(-ENOENT) == 0");
+	TEST("a record that loads is one");
+	if (enroll_state_record_present(0) != 1)
+		FAIL("expected: enroll_state_record_present(0) == 1");
+	TEST("a version this build cannot read is still a record");
+	if (enroll_state_record_present(-ENOTSUP) != 1)
+		FAIL("expected: enroll_state_record_present(-ENOTSUP) == 1");
+	TEST("a short record is still a record");
+	if (enroll_state_record_present(-EIO) != 1)
+		FAIL("expected: enroll_state_record_present(-EIO) == 1");
+	TEST("bytes that are not the record are still on disk");
+	if (enroll_state_record_present(-EINVAL) != 1)
+		FAIL("expected: enroll_state_record_present(-EINVAL) == 1");
 }
 
 static void test_rejects_bad_magic(void)
@@ -145,18 +168,23 @@ static void test_rejects_bad_magic(void)
 
 	memset(&in, 0, sizeof(in));
 	in.ca_port = 8444;
-	CHECK(enroll_state_save_path(path, &in) == 0, "save for corruption");
+	TEST("save for corruption");
+	if (enroll_state_save_path(path, &in) != 0)
+		FAIL("expected: enroll_state_save_path(path, &in) == 0");
 
 	/* corrupt the magic in place; the load must fail closed */
 	f = fopen(path, "r+b");
-	CHECK(f != NULL, "reopen state");
+	TEST("reopen state");
+	if (f == NULL)
+		FAIL("expected: f != NULL");
 	if (f) {
 		uint32_t bad = 0xDEADBEEF;
 		fwrite(&bad, sizeof(bad), 1, f);
 		fclose(f);
 	}
-	CHECK(enroll_state_load_path(path, &out) == -EINVAL,
-	      "bad magic rejected");
+	TEST("bad magic rejected");
+	if (enroll_state_load_path(path, &out) != -EINVAL)
+		FAIL("expected: enroll_state_load_path(path, &out) == -EINVAL");
 
 	unlink(path);
 }
@@ -167,15 +195,20 @@ static void test_rejects_truncated(void)
 	struct enroll_state out;
 	int fd = open(path, O_WRONLY | O_CREAT | O_TRUNC, 0600);
 
-	CHECK(fd >= 0, "open truncated");
+	TEST("open truncated");
+	if (fd < 0)
+		FAIL("expected: fd >= 0");
 	if (fd >= 0) {
 		uint8_t half[8] = { 0 };
-		CHECK(write(fd, half, sizeof(half)) == (ssize_t)sizeof(half),
-		      "write truncated");
+		TEST("write truncated");
+		if (write(fd, half, sizeof(half)) != (ssize_t)sizeof(half))
+			FAIL("expected: write(fd, half, sizeof(half)) == "
+			     "(ssize_t)sizeof(half)");
 		close(fd);
 	}
-	CHECK(enroll_state_load_path(path, &out) == -EINVAL,
-	      "short file rejected");
+	TEST("short file rejected");
+	if (enroll_state_load_path(path, &out) != -EINVAL)
+		FAIL("expected: enroll_state_load_path(path, &out) == -EINVAL");
 
 	unlink(path);
 }
@@ -184,12 +217,20 @@ static void test_null_args(void)
 {
 	struct enroll_state st;
 	memset(&st, 0, sizeof(st));
-	CHECK(enroll_state_save_path(NULL, &st) == -EINVAL, "save NULL path");
-	CHECK(enroll_state_save_path("/tmp/x", NULL) == -EINVAL,
-	      "save NULL st");
-	CHECK(enroll_state_load_path(NULL, &st) == -EINVAL, "load NULL path");
-	CHECK(enroll_state_load_path("/tmp/x", NULL) == -EINVAL,
-	      "load NULL out");
+	TEST("save NULL path");
+	if (enroll_state_save_path(NULL, &st) != -EINVAL)
+		FAIL("expected: enroll_state_save_path(NULL, &st) == -EINVAL");
+	TEST("save NULL st");
+	if (enroll_state_save_path("/tmp/x", NULL) != -EINVAL)
+		FAIL("expected: enroll_state_save_path(\"/tmp/x\", NULL) == "
+		     "-EINVAL");
+	TEST("load NULL path");
+	if (enroll_state_load_path(NULL, &st) != -EINVAL)
+		FAIL("expected: enroll_state_load_path(NULL, &st) == -EINVAL");
+	TEST("load NULL out");
+	if (enroll_state_load_path("/tmp/x", NULL) != -EINVAL)
+		FAIL("expected: enroll_state_load_path(\"/tmp/x\", NULL) == "
+		     "-EINVAL");
 }
 
 /*
@@ -205,91 +246,134 @@ static void test_renew_anchor_prefers_the_configured_one(void)
 {
 	const char *chosen = NULL;
 
-	CHECK(enroll_renew_anchor("/etc/lota/publisher-ca.crt",
+	TEST("configured anchor wins over the recorded one");
+	if (!(enroll_renew_anchor("/etc/lota/publisher-ca.crt",
 				  "/var/tmp/rig/ca.crt", &chosen) == 0 &&
-		      strcmp(chosen, "/etc/lota/publisher-ca.crt") == 0,
-	      "configured anchor wins over the recorded one");
+	      strcmp(chosen, "/etc/lota/publisher-ca.crt") == 0))
+		FAIL("expected: enroll_renew_anchor(\"/etc/lota/publisher-ca.crt\", "
+		     "\"/var/tmp/rig/ca.crt\", &chosen) == 0 && "
+		     "strcmp(chosen, \"/etc/lota/publisher-ca.crt\") == 0");
 
 	chosen = NULL;
-	CHECK(enroll_renew_anchor(NULL, "/var/tmp/rig/ca.crt", &chosen) == 0 &&
-		      strcmp(chosen, "/var/tmp/rig/ca.crt") == 0,
-	      "recorded anchor carries a target with none configured");
+	TEST("recorded anchor carries a target with none configured");
+	if (!(enroll_renew_anchor(NULL, "/var/tmp/rig/ca.crt", &chosen) == 0 &&
+	      strcmp(chosen, "/var/tmp/rig/ca.crt") == 0))
+		FAIL("expected: enroll_renew_anchor(NULL, "
+		     "\"/var/tmp/rig/ca.crt\", &chosen) == 0 && "
+		     "strcmp(chosen, \"/var/tmp/rig/ca.crt\") == 0");
 
 	chosen = NULL;
-	CHECK(enroll_renew_anchor("", "/var/tmp/rig/ca.crt", &chosen) == 0 &&
-		      strcmp(chosen, "/var/tmp/rig/ca.crt") == 0,
-	      "empty configured anchor is not an anchor");
+	TEST("empty configured anchor is not an anchor");
+	if (!(enroll_renew_anchor("", "/var/tmp/rig/ca.crt", &chosen) == 0 &&
+	      strcmp(chosen, "/var/tmp/rig/ca.crt") == 0))
+		FAIL("expected: enroll_renew_anchor(\"\", "
+		     "\"/var/tmp/rig/ca.crt\", &chosen) == 0 && "
+		     "strcmp(chosen, \"/var/tmp/rig/ca.crt\") == 0");
 
 	chosen = NULL;
-	CHECK(enroll_renew_anchor("", "", &chosen) == -ENOENT && !chosen,
-	      "no anchor at all is reported, not guessed");
+	TEST("no anchor at all is reported, not guessed");
+	if (!(enroll_renew_anchor("", "", &chosen) == -ENOENT && !chosen))
+		FAIL("expected: enroll_renew_anchor(\"\", \"\", &chosen) == "
+		     "-ENOENT && !chosen");
 
-	CHECK(enroll_renew_anchor("/etc/lota/publisher-ca.crt",
-				  "/var/tmp/rig/ca.crt", NULL) == -EINVAL,
-	      "NULL output is refused");
+	TEST("NULL output is refused");
+	if (enroll_renew_anchor("/etc/lota/publisher-ca.crt",
+				"/var/tmp/rig/ca.crt", NULL) != -EINVAL)
+		FAIL("expected: enroll_renew_anchor(\"/etc/lota/publisher-ca.crt\", "
+		     "\"/var/tmp/rig/ca.crt\", NULL) == -EINVAL");
 }
 
 static void test_nothing_given_keeps_the_recorded_endpoint(void)
 {
-	CHECK(enroll_endpoint_source(NULL, 0) == ENROLL_ENDPOINT_FROM_RECORD,
-	      "a bare --reenroll dials the recorded endpoint");
-	CHECK(strcmp(enroll_endpoint_server("ca.example", NULL),
-		     "ca.example") == 0,
-	      "the recorded host stands when none was given");
-	CHECK(enroll_endpoint_port(8545, 0) == 8545,
-	      "the recorded port stands when none was given");
-	CHECK(enroll_endpoint_source("", 0) == ENROLL_ENDPOINT_FROM_RECORD,
-	      "an empty host is not a host that was named");
-	CHECK(strcmp(enroll_endpoint_server("ca.example", ""), "ca.example") ==
-		      0,
-	      "an empty host does not displace the recorded one");
+	TEST("a bare --reenroll dials the recorded endpoint");
+	if (enroll_endpoint_source(NULL, 0) != ENROLL_ENDPOINT_FROM_RECORD)
+		FAIL("expected: enroll_endpoint_source(NULL, 0) == "
+		     "ENROLL_ENDPOINT_FROM_RECORD");
+	TEST("the recorded host stands when none was given");
+	if (strcmp(enroll_endpoint_server("ca.example", NULL), "ca.example") !=
+	    0)
+		FAIL("expected: strcmp(enroll_endpoint_server(\"ca.example\", "
+		     "NULL), \"ca.example\") == 0");
+	TEST("the recorded port stands when none was given");
+	if (enroll_endpoint_port(8545, 0) != 8545)
+		FAIL("expected: enroll_endpoint_port(8545, 0) == 8545");
+	TEST("an empty host is not a host that was named");
+	if (enroll_endpoint_source("", 0) != ENROLL_ENDPOINT_FROM_RECORD)
+		FAIL("expected: enroll_endpoint_source(\"\", 0) == "
+		     "ENROLL_ENDPOINT_FROM_RECORD");
+	TEST("an empty host does not displace the recorded one");
+	if (strcmp(enroll_endpoint_server("ca.example", ""), "ca.example") != 0)
+		FAIL("expected: strcmp(enroll_endpoint_server(\"ca.example\", "
+		     "\"\"), \"ca.example\") == 0");
 }
 
 static void test_a_given_endpoint_wins(void)
 {
-	CHECK(enroll_endpoint_source("ca.new", 9000) ==
-		      ENROLL_ENDPOINT_FROM_COMMAND_LINE,
-	      "a host and port on the command line are what the run dials");
-	CHECK(strcmp(enroll_endpoint_server("ca.old", "ca.new"), "ca.new") == 0,
-	      "the given host displaces the recorded one");
-	CHECK(enroll_endpoint_port(8546, 8545) == 8545,
-	      "the given port displaces the recorded one");
+	TEST("a host and port on the command line are what the run dials");
+	if (enroll_endpoint_source("ca.new", 9000) !=
+	    ENROLL_ENDPOINT_FROM_COMMAND_LINE)
+		FAIL("expected: enroll_endpoint_source(\"ca.new\", 9000) == "
+		     "ENROLL_ENDPOINT_FROM_COMMAND_LINE");
+	TEST("the given host displaces the recorded one");
+	if (strcmp(enroll_endpoint_server("ca.old", "ca.new"), "ca.new") != 0)
+		FAIL("expected: strcmp(enroll_endpoint_server(\"ca.old\", "
+		     "\"ca.new\"), \"ca.new\") == 0");
+	TEST("the given port displaces the recorded one");
+	if (enroll_endpoint_port(8546, 8545) != 8545)
+		FAIL("expected: enroll_endpoint_port(8546, 8545) == 8545");
 }
 
 /* A field not given keeps the recorded value. */
 static void test_either_field_alone_is_an_endpoint(void)
 {
-	CHECK(enroll_endpoint_source(NULL, 8545) ==
-		      ENROLL_ENDPOINT_FROM_COMMAND_LINE,
-	      "a port alone is an endpoint the command line named");
-	CHECK(enroll_endpoint_source("ca.new", 0) ==
-		      ENROLL_ENDPOINT_FROM_COMMAND_LINE,
-	      "a host alone is an endpoint the command line named");
-	CHECK(strcmp(enroll_endpoint_server("ca.old", NULL), "ca.old") == 0 &&
-		      enroll_endpoint_port(8546, 8545) == 8545,
-	      "a port alone keeps the recorded host");
-	CHECK(strcmp(enroll_endpoint_server("ca.old", "ca.new"), "ca.new") ==
-			      0 &&
-		      enroll_endpoint_port(8546, 0) == 8546,
-	      "a host alone keeps the recorded port");
+	TEST("a port alone is an endpoint the command line named");
+	if (enroll_endpoint_source(NULL, 8545) !=
+	    ENROLL_ENDPOINT_FROM_COMMAND_LINE)
+		FAIL("expected: enroll_endpoint_source(NULL, 8545) == "
+		     "ENROLL_ENDPOINT_FROM_COMMAND_LINE");
+	TEST("a host alone is an endpoint the command line named");
+	if (enroll_endpoint_source("ca.new", 0) !=
+	    ENROLL_ENDPOINT_FROM_COMMAND_LINE)
+		FAIL("expected: enroll_endpoint_source(\"ca.new\", 0) == "
+		     "ENROLL_ENDPOINT_FROM_COMMAND_LINE");
+	TEST("a port alone keeps the recorded host");
+	if (!(strcmp(enroll_endpoint_server("ca.old", NULL), "ca.old") == 0 &&
+	      enroll_endpoint_port(8546, 8545) == 8545))
+		FAIL("expected: strcmp(enroll_endpoint_server(\"ca.old\", "
+		     "NULL), \"ca.old\") == 0 && enroll_endpoint_port(8546, "
+		     "8545) == 8545");
+	TEST("a host alone keeps the recorded port");
+	if (!(strcmp(enroll_endpoint_server("ca.old", "ca.new"), "ca.new") ==
+		      0 &&
+	      enroll_endpoint_port(8546, 0) == 8546))
+		FAIL("expected: strcmp(enroll_endpoint_server(\"ca.old\", "
+		     "\"ca.new\"), \"ca.new\") == 0 && "
+		     "enroll_endpoint_port(8546, 0) == 8546");
 }
 
 /* an empty handle holds no key at all, not someone else's */
 static void test_forget_key_plan(void)
 {
-	CHECK(forget_key_plan(0, 0) == FORGET_KEY_NONE,
-	      "forget: an empty handle is neither evicted nor foreign");
-	CHECK(forget_key_plan(1, 1) == FORGET_KEY_EVICT,
-	      "forget: the publisher's own key is evicted");
-	CHECK(forget_key_plan(1, 0) == FORGET_KEY_FOREIGN,
-	      "forget: another object at the handle is left alone");
-	CHECK(forget_key_plan(-EIO, 0) == FORGET_KEY_UNKNOWN &&
-		      forget_key_plan(1, -EIO) == FORGET_KEY_UNKNOWN,
-	      "forget: a handle that cannot be checked removes nothing");
+	TEST("forget: an empty handle is neither evicted nor foreign");
+	if (forget_key_plan(0, 0) != FORGET_KEY_NONE)
+		FAIL("expected: forget_key_plan(0, 0) == FORGET_KEY_NONE");
+	TEST("forget: the publisher's own key is evicted");
+	if (forget_key_plan(1, 1) != FORGET_KEY_EVICT)
+		FAIL("expected: forget_key_plan(1, 1) == FORGET_KEY_EVICT");
+	TEST("forget: another object at the handle is left alone");
+	if (forget_key_plan(1, 0) != FORGET_KEY_FOREIGN)
+		FAIL("expected: forget_key_plan(1, 0) == FORGET_KEY_FOREIGN");
+	TEST("forget: a handle that cannot be checked removes nothing");
+	if (!(forget_key_plan(-EIO, 0) == FORGET_KEY_UNKNOWN &&
+	      forget_key_plan(1, -EIO) == FORGET_KEY_UNKNOWN))
+		FAIL("expected: forget_key_plan(-EIO, 0) == "
+		     "FORGET_KEY_UNKNOWN && forget_key_plan(1, -EIO) == "
+		     "FORGET_KEY_UNKNOWN");
 }
 
 int main(void)
 {
+	test_begin("enroll state");
 	test_forget_key_plan();
 	test_nothing_given_keeps_the_recorded_endpoint();
 	test_a_given_endpoint_wins();
@@ -303,10 +387,5 @@ int main(void)
 	test_rejects_truncated();
 	test_null_args();
 
-	if (g_failures) {
-		fprintf(stderr, "\n%d test(s) failed\n", g_failures);
-		return 1;
-	}
-	printf("\nAll enroll_state tests passed\n");
-	return 0;
+	return test_end();
 }

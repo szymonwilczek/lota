@@ -23,17 +23,7 @@
 #include "../src/agent/kernel_image.h"
 #include "../src/agent/tpm.h"
 
-static int g_failures;
-
-#define CHECK(cond, msg)                                    \
-	do {                                                \
-		if (!(cond)) {                              \
-			fprintf(stderr, "FAIL: %s\n", msg); \
-			g_failures++;                       \
-		} else {                                    \
-			printf("PASS: %s\n", msg);          \
-		}                                           \
-	} while (0)
+#include "test.h"
 
 #define LOG_MAX 4096
 
@@ -147,14 +137,22 @@ static void test_kernel_digest_survives_a_reboot(void)
 	grub_boot_log(&first, 0x01);
 	grub_boot_log(&second, 0xfe);
 
-	CHECK(kernel_image_from_event_log(first.buf, first.len, &a) == 0,
-	      "a GRUB log yields the kernel image");
-	CHECK(kernel_image_from_event_log(second.buf, second.len, &s) == 0,
-	      "the next boot of the same kernel yields it too");
-	CHECK(memcmp(a.digest, s.digest, LOTA_HASH_SIZE) == 0,
-	      "the kernel digest is the same across two boots");
-	CHECK(strcmp(a.path, "(hd0,gpt2)/vmlinuz-6.19.4-200.fc44") == 0,
-	      "the path is the one the bootloader wrote");
+	TEST("a GRUB log yields the kernel image");
+	if (kernel_image_from_event_log(first.buf, first.len, &a) != 0)
+		FAIL("expected: kernel_image_from_event_log(first.buf, "
+		     "first.len, &a) == 0");
+	TEST("the next boot of the same kernel yields it too");
+	if (kernel_image_from_event_log(second.buf, second.len, &s) != 0)
+		FAIL("expected: kernel_image_from_event_log(second.buf, "
+		     "second.len, &s) == 0");
+	TEST("the kernel digest is the same across two boots");
+	if (memcmp(a.digest, s.digest, LOTA_HASH_SIZE) != 0)
+		FAIL("expected: memcmp(a.digest, s.digest, LOTA_HASH_SIZE) == "
+		     "0");
+	TEST("the path is the one the bootloader wrote");
+	if (strcmp(a.path, "(hd0,gpt2)/vmlinuz-6.19.4-200.fc44") != 0)
+		FAIL("expected: strcmp(a.path, "
+		     "\"(hd0,gpt2)/vmlinuz-6.19.4-200.fc44\") == 0");
 }
 
 static void test_no_kernel_image_is_not_a_zero_digest(void)
@@ -166,8 +164,10 @@ static void test_no_kernel_image_is_not_a_zero_digest(void)
 	add_event(&b, 9, 0x0000000D, 0x01, "(hd0,gpt2)/grub2/grubenv");
 	add_event(&b, 9, 0x0000000D, 0x02, "(hd0,gpt2)/initramfs-6.19.4.img");
 
-	CHECK(kernel_image_from_event_log(b.buf, b.len, &img) == -ENOENT,
-	      "a log measuring no kernel says so rather than answering zeros");
+	TEST("a log measuring no kernel says so rather than answering zeros");
+	if (kernel_image_from_event_log(b.buf, b.len, &img) != -ENOENT)
+		FAIL("expected: kernel_image_from_event_log(b.buf, b.len, "
+		     "&img) == -ENOENT");
 }
 
 static void test_two_kernels_are_refused(void)
@@ -179,8 +179,10 @@ static void test_two_kernels_are_refused(void)
 	add_event(&b, 9, 0x0000000D, 0x51, "(hd0,gpt2)/vmlinuz-6.19.4");
 	add_event(&b, 9, 0x0000000D, 0x52, "(hd0,gpt2)/vmlinuz-6.18.9");
 
-	CHECK(kernel_image_from_event_log(b.buf, b.len, &img) == -EEXIST,
-	      "two different kernel images are refused, not resolved");
+	TEST("two different kernel images are refused, not resolved");
+	if (kernel_image_from_event_log(b.buf, b.len, &img) != -EEXIST)
+		FAIL("expected: kernel_image_from_event_log(b.buf, b.len, "
+		     "&img) == -EEXIST");
 }
 
 static void test_one_kernel_measured_twice_is_one_answer(void)
@@ -192,8 +194,10 @@ static void test_one_kernel_measured_twice_is_one_answer(void)
 	add_event(&b, 9, 0x0000000D, 0x51, "(hd0,gpt2)/vmlinuz-6.19.4");
 	add_event(&b, 9, 0x0000000D, 0x51, "(hd0,gpt2)/vmlinuz-6.19.4");
 
-	CHECK(kernel_image_from_event_log(b.buf, b.len, &img) == 0,
-	      "the same image measured twice is not a conflict");
+	TEST("the same image measured twice is not a conflict");
+	if (kernel_image_from_event_log(b.buf, b.len, &img) != 0)
+		FAIL("expected: kernel_image_from_event_log(b.buf, b.len, "
+		     "&img) == 0");
 }
 
 static void test_kernel_outside_pcr9_is_not_the_answer(void)
@@ -207,8 +211,10 @@ static void test_kernel_outside_pcr9_is_not_the_answer(void)
 	 * PCR 9, so a record elsewhere is not it. */
 	add_event(&b, 4, 0x0000000D, 0x51, "(hd0,gpt2)/vmlinuz-6.19.4");
 
-	CHECK(kernel_image_from_event_log(b.buf, b.len, &img) == -ENOENT,
-	      "an EV_IPL kernel record on another PCR is not read as the pin");
+	TEST("an EV_IPL kernel record on another PCR is not read as the pin");
+	if (kernel_image_from_event_log(b.buf, b.len, &img) != -ENOENT)
+		FAIL("expected: kernel_image_from_event_log(b.buf, b.len, "
+		     "&img) == -ENOENT");
 }
 
 static void test_sha1_only_kernel_is_its_own_answer(void)
@@ -219,8 +225,10 @@ static void test_sha1_only_kernel_is_its_own_answer(void)
 	begin_log(&b);
 	add_sha1_event(&b, 9, 0x0000000D, "(hd0,gpt2)/vmlinuz-6.19.4");
 
-	CHECK(kernel_image_from_event_log(b.buf, b.len, &img) == -ENOMSG,
-	      "a kernel measured without SHA-256 is reported as that, not as absent");
+	TEST("a kernel measured without SHA-256 is reported as that, not as absent");
+	if (kernel_image_from_event_log(b.buf, b.len, &img) != -ENOMSG)
+		FAIL("expected: kernel_image_from_event_log(b.buf, b.len, "
+		     "&img) == -ENOMSG");
 }
 
 /* the verifier refuses the whole log over one such record */
@@ -233,8 +241,10 @@ static void test_a_sha1_only_record_refuses_the_log(void)
 	add_sha1_event(&b, 9, 0x0000000D, "(hd0,gpt2)/vmlinuz-6.19.4");
 	add_event(&b, 9, 0x0000000D, 0x51, "(hd0,gpt2)/vmlinuz-6.19.4");
 
-	CHECK(kernel_image_from_event_log(b.buf, b.len, &img) == -ENOMSG,
-	      "a SHA-1-only kernel record refuses the log beside a good one");
+	TEST("a SHA-1-only kernel record refuses the log beside a good one");
+	if (kernel_image_from_event_log(b.buf, b.len, &img) != -ENOMSG)
+		FAIL("expected: kernel_image_from_event_log(b.buf, b.len, "
+		     "&img) == -ENOMSG");
 }
 
 static void test_an_overlong_kernel_path_refuses_the_log(void)
@@ -250,9 +260,11 @@ static void test_an_overlong_kernel_path_refuses_the_log(void)
 	begin_log(&b);
 	add_event(&b, 9, 0x0000000D, 0x51, path);
 
-	CHECK(kernel_image_from_event_log(b.buf, b.len, &img) == -ENAMETOOLONG,
-	      "a kernel path too long to export refuses the log, as the "
-	      "verifier does");
+	TEST("a kernel path too long to export refuses the log, as the "
+	     "verifier does");
+	if (kernel_image_from_event_log(b.buf, b.len, &img) != -ENAMETOOLONG)
+		FAIL("expected: kernel_image_from_event_log(b.buf, b.len, "
+		     "&img) == -ENAMETOOLONG");
 }
 
 static void test_a_log_that_does_not_parse_is_not_an_absent_kernel(void)
@@ -261,17 +273,25 @@ static void test_a_log_that_does_not_parse_is_not_an_absent_kernel(void)
 	struct kernel_image img;
 	uint8_t junk[8] = { 0 };
 
-	CHECK(kernel_image_from_event_log(junk, sizeof(junk), &img) == -EINVAL,
-	      "bytes that are not a log are refused rather than read as empty");
+	TEST("bytes that are not a log are refused rather than read as empty");
+	if (kernel_image_from_event_log(junk, sizeof(junk), &img) != -EINVAL)
+		FAIL("expected: kernel_image_from_event_log(junk, "
+		     "sizeof(junk), &img) == -EINVAL");
 
 	grub_boot_log(&b, 0x01);
-	CHECK(kernel_image_from_event_log(b.buf, b.len - 8, &img) == -EINVAL,
-	      "a truncated log is refused rather than answered from its prefix");
+	TEST("a truncated log is refused rather than answered from its prefix");
+	if (kernel_image_from_event_log(b.buf, b.len - 8, &img) != -EINVAL)
+		FAIL("expected: kernel_image_from_event_log(b.buf, b.len - 8, "
+		     "&img) == -EINVAL");
 
-	CHECK(kernel_image_from_event_log(NULL, 0, &img) == -EINVAL,
-	      "no log is -EINVAL");
-	CHECK(kernel_image_from_event_log(b.buf, b.len, NULL) == -EINVAL,
-	      "nowhere to put the answer is -EINVAL");
+	TEST("no log is -EINVAL");
+	if (kernel_image_from_event_log(NULL, 0, &img) != -EINVAL)
+		FAIL("expected: kernel_image_from_event_log(NULL, 0, &img) == "
+		     "-EINVAL");
+	TEST("nowhere to put the answer is -EINVAL");
+	if (kernel_image_from_event_log(b.buf, b.len, NULL) != -EINVAL)
+		FAIL("expected: kernel_image_from_event_log(b.buf, b.len, "
+		     "NULL) == -EINVAL");
 }
 
 static void test_an_unknown_digest_algorithm_stops_the_walk(void)
@@ -290,23 +310,33 @@ static void test_an_unknown_digest_algorithm_stops_the_walk(void)
 	put_u32(&b, 8);
 	put_bytes(&b, "vmlinuz", 8);
 
-	CHECK(kernel_image_from_event_log(b.buf, b.len, &img) == -EINVAL,
-	      "a digest whose size is unknown stops the walk instead of sliding it");
+	TEST("a digest whose size is unknown stops the walk instead of sliding it");
+	if (kernel_image_from_event_log(b.buf, b.len, &img) != -EINVAL)
+		FAIL("expected: kernel_image_from_event_log(b.buf, b.len, "
+		     "&img) == -EINVAL");
 }
 
 static void test_which_paths_name_a_kernel(void)
 {
-	CHECK(kernel_image_path_names_kernel("(hd0,gpt2)/vmlinuz-6.19.4"),
-	      "vmlinuz under a bootloader path");
-	CHECK(kernel_image_path_names_kernel("/boot/kernel-6.19.4"),
-	      "kernel under a unix path");
-	CHECK(kernel_image_path_names_kernel("bzImage"), "a bare bzImage");
-	CHECK(!kernel_image_path_names_kernel(
-		      "(hd0,gpt2)/initramfs-6.19.4.img"),
-	      "an initramfs does not name a kernel");
-	CHECK(!kernel_image_path_names_kernel("(hd0,gpt2)/grub2/grubenv"),
-	      "grubenv does not name a kernel");
-	CHECK(!kernel_image_path_names_kernel(NULL), "no path names no kernel");
+	TEST("vmlinuz under a bootloader path");
+	if (!kernel_image_path_names_kernel("(hd0,gpt2)/vmlinuz-6.19.4"))
+		FAIL("expected: kernel_image_path_names_kernel(\"(hd0,gpt2)/vmlinuz-6.19.4\")");
+	TEST("kernel under a unix path");
+	if (!kernel_image_path_names_kernel("/boot/kernel-6.19.4"))
+		FAIL("expected: kernel_image_path_names_kernel(\"/boot/kernel-6.19.4\")");
+	TEST("a bare bzImage");
+	if (!kernel_image_path_names_kernel("bzImage"))
+		FAIL("expected: kernel_image_path_names_kernel(\"bzImage\")");
+	TEST("an initramfs does not name a kernel");
+	if (kernel_image_path_names_kernel("(hd0,gpt2)/initramfs-6.19.4.img"))
+		FAIL("expected: !kernel_image_path_names_kernel( "
+		     "\"(hd0,gpt2)/initramfs-6.19.4.img\")");
+	TEST("grubenv does not name a kernel");
+	if (kernel_image_path_names_kernel("(hd0,gpt2)/grub2/grubenv"))
+		FAIL("expected: !kernel_image_path_names_kernel(\"(hd0,gpt2)/grub2/grubenv\")");
+	TEST("no path names no kernel");
+	if (kernel_image_path_names_kernel(NULL))
+		FAIL("expected: !kernel_image_path_names_kernel(NULL)");
 }
 
 /* UEFI_VARIABLE_DATA for an EFI global variable with a one-byte value */
@@ -373,33 +403,51 @@ static void test_evidence_carries_pcr7_events_in_order(void)
 		memset(g_pcrs[i], 0xA0 + i, LOTA_HASH_SIZE);
 
 	firmware_boot_log(&b);
-	CHECK(boot_evidence_encode(b.buf, b.len, EVIDENCE_MASK, g_pcrs, out,
-				   sizeof(out), &len) == 0,
-	      "a firmware log yields boot evidence");
-	CHECK(le16_at(out) == LOTA_BOOT_EVIDENCE_VERSION,
-	      "the evidence names its version");
-	CHECK(le16_at(out + 2) == 4,
-	      "every extended PCR 7 event is carried, EV_NO_ACTION is not");
-	CHECK(out[4] == 0x83 && out[5] == 0x40 && out[6] == 0 && out[7] == 0,
-	      "the evidence names the token's PCR mask");
-	CHECK(out[8] == 0xA0 && out[8 + 32] == 0xA1 && out[8 + 64] == 0xA7 &&
-		      out[8 + 96] == 0xAE,
-	      "the PCR values follow the mask, lowest first");
+	TEST("a firmware log yields boot evidence");
+	if (boot_evidence_encode(b.buf, b.len, EVIDENCE_MASK, g_pcrs, out,
+				 sizeof(out), &len) != 0)
+		FAIL("expected: boot_evidence_encode(b.buf, b.len, "
+		     "EVIDENCE_MASK, g_pcrs, out, sizeof(out), &len) == 0");
+	TEST("the evidence names its version");
+	if (le16_at(out) != LOTA_BOOT_EVIDENCE_VERSION)
+		FAIL("expected: le16_at(out) == LOTA_BOOT_EVIDENCE_VERSION");
+	TEST("every extended PCR 7 event is carried, EV_NO_ACTION is not");
+	if (le16_at(out + 2) != 4)
+		FAIL("expected: le16_at(out + 2) == 4");
+	TEST("the evidence names the token's PCR mask");
+	if (!(out[4] == 0x83 && out[5] == 0x40 && out[6] == 0 && out[7] == 0))
+		FAIL("expected: out[4] == 0x83 && out[5] == 0x40 && out[6] == "
+		     "0 && out[7] == 0");
+	TEST("the PCR values follow the mask, lowest first");
+	if (!(out[8] == 0xA0 && out[8 + 32] == 0xA1 && out[8 + 64] == 0xA7 &&
+	      out[8 + 96] == 0xAE))
+		FAIL("expected: out[8] == 0xA0 && out[8 + 32] == 0xA1 && "
+		     "out[8 + 64] == 0xA7 && out[8 + 96] == 0xAE");
 
 	off = LOTA_BOOT_EVIDENCE_HEADER_SIZE + 4 * LOTA_HASH_SIZE;
-	CHECK(out[off] == 0x03 && le16_at(out + off + 32) == sb_len &&
-		      memcmp(out + off + 34, var, sb_len) == 0,
-	      "the SecureBoot event carries its data");
+	TEST("the SecureBoot event carries its data");
+	if (!(out[off] == 0x03 && le16_at(out + off + 32) == sb_len &&
+	      memcmp(out + off + 34, var, sb_len) == 0))
+		FAIL("expected: out[off] == 0x03 && le16_at(out + off + 32) "
+		     "== sb_len && memcmp(out + off + 34, var, sb_len) == 0");
 	off += LOTA_BOOT_EVIDENCE_EVENT_SIZE + sb_len;
-	CHECK(out[off] == 0x04 && le16_at(out + off + 32) == 0,
-	      "another variable carries its digest only");
+	TEST("another variable carries its digest only");
+	if (!(out[off] == 0x04 && le16_at(out + off + 32) == 0))
+		FAIL("expected: out[off] == 0x04 && le16_at(out + off + 32) "
+		     "== 0");
 	off += LOTA_BOOT_EVIDENCE_EVENT_SIZE;
-	CHECK(out[off] == 0x05 && le16_at(out + off + 32) == 0,
-	      "the separator carries its digest only");
+	TEST("the separator carries its digest only");
+	if (!(out[off] == 0x05 && le16_at(out + off + 32) == 0))
+		FAIL("expected: out[off] == 0x05 && le16_at(out + off + 32) "
+		     "== 0");
 	off += LOTA_BOOT_EVIDENCE_EVENT_SIZE;
-	CHECK(out[off] == 0x06, "events after the separator are carried");
+	TEST("events after the separator are carried");
+	if (out[off] != 0x06)
+		FAIL("expected: out[off] == 0x06");
 	off += LOTA_BOOT_EVIDENCE_EVENT_SIZE;
-	CHECK(len == off, "nothing follows the last event");
+	TEST("nothing follows the last event");
+	if (len != off)
+		FAIL("expected: len == off");
 }
 
 static void test_evidence_refusals(void)
@@ -409,22 +457,33 @@ static void test_evidence_refusals(void)
 	size_t len = 0;
 
 	firmware_boot_log(&b);
-	CHECK(boot_evidence_encode(b.buf, b.len, EVIDENCE_MASK & ~(1u << 7),
-				   g_pcrs, out, sizeof(out), &len) == -EINVAL,
-	      "a mask without PCR 7 has no evidence to give");
-	CHECK(boot_evidence_encode(b.buf, b.len, EVIDENCE_MASK, g_pcrs, out,
-				   100, &len) == -ENOSPC,
-	      "evidence that does not fit is refused, not cut");
+	TEST("a mask without PCR 7 has no evidence to give");
+	if (boot_evidence_encode(b.buf, b.len, EVIDENCE_MASK & ~(1u << 7),
+				 g_pcrs, out, sizeof(out), &len) != -EINVAL)
+		FAIL("expected: boot_evidence_encode(b.buf, b.len, "
+		     "EVIDENCE_MASK & ~(1u << 7), g_pcrs, out, sizeof(out), "
+		     "&len) == -EINVAL");
+	TEST("evidence that does not fit is refused, not cut");
+	if (boot_evidence_encode(b.buf, b.len, EVIDENCE_MASK, g_pcrs, out, 100,
+				 &len) != -ENOSPC)
+		FAIL("expected: boot_evidence_encode(b.buf, b.len, "
+		     "EVIDENCE_MASK, g_pcrs, out, 100, &len) == -ENOSPC");
 
 	add_sha1_event(&b, 7, EV_VAR_AUTHORITY, "sha1 only");
-	CHECK(boot_evidence_encode(b.buf, b.len, EVIDENCE_MASK, g_pcrs, out,
-				   sizeof(out), &len) == -ENOMSG,
-	      "a PCR 7 event with no SHA-256 digest cannot be replayed");
+	TEST("a PCR 7 event with no SHA-256 digest cannot be replayed");
+	if (boot_evidence_encode(b.buf, b.len, EVIDENCE_MASK, g_pcrs, out,
+				 sizeof(out), &len) != -ENOMSG)
+		FAIL("expected: boot_evidence_encode(b.buf, b.len, "
+		     "EVIDENCE_MASK, g_pcrs, out, sizeof(out), &len) == "
+		     "-ENOMSG");
 
 	b.len -= 3;
-	CHECK(boot_evidence_encode(b.buf, b.len, EVIDENCE_MASK, g_pcrs, out,
-				   sizeof(out), &len) == -EINVAL,
-	      "a log that does not parse yields no evidence");
+	TEST("a log that does not parse yields no evidence");
+	if (boot_evidence_encode(b.buf, b.len, EVIDENCE_MASK, g_pcrs, out,
+				 sizeof(out), &len) != -EINVAL)
+		FAIL("expected: boot_evidence_encode(b.buf, b.len, "
+		     "EVIDENCE_MASK, g_pcrs, out, sizeof(out), &len) == "
+		     "-EINVAL");
 }
 
 /* boot_evidence_collect() is linked, not driven: it needs a TPM */
@@ -447,7 +506,7 @@ int tpm_read_event_log(uint8_t *buf, size_t buf_size, size_t *out_size)
 
 int main(void)
 {
-	printf("=== Kernel image (event log) tests ===\n\n");
+	test_begin("kernel image");
 
 	test_kernel_digest_survives_a_reboot();
 	test_no_kernel_image_is_not_a_zero_digest();
@@ -463,6 +522,5 @@ int main(void)
 	test_evidence_carries_pcr7_events_in_order();
 	test_evidence_refusals();
 
-	printf("\n%s\n", g_failures ? "FAILURES" : "All tests passed");
-	return g_failures ? 1 : 0;
+	return test_end();
 }

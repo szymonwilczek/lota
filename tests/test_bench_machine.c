@@ -184,7 +184,6 @@ static void test_machine(void)
 		FAIL("unnamed gpu");
 		return;
 	}
-	PASS();
 }
 
 static void test_missing(void)
@@ -208,7 +207,6 @@ static void test_missing(void)
 		FAIL("field set");
 		return;
 	}
-	PASS();
 }
 
 static void test_virtual_tpm(void)
@@ -227,10 +225,9 @@ static void test_virtual_tpm(void)
 	bench_machine_read(fd, &m);
 	close(fd);
 	if (strcmp(m.tpm.s, "virtual") != 0 || m.selinux != BSE_PERMISSIVE) {
-		FAIL(m.tpm.s);
+		FAIL("%s", m.tpm.s);
 		return;
 	}
-	PASS();
 }
 
 static void test_diff(void)
@@ -260,7 +257,6 @@ static void test_diff(void)
 		FAIL("gpu");
 		return;
 	}
-	PASS();
 }
 
 static void test_power(void)
@@ -292,7 +288,6 @@ static void test_power(void)
 		FAIL("on ac");
 		return;
 	}
-	PASS();
 }
 
 static void test_no_supply(void)
@@ -314,19 +309,17 @@ static void test_no_supply(void)
 		FAIL("set");
 		return;
 	}
-	PASS();
 }
 
 int main(void)
 {
+	test_begin("bench machine");
 	char cmd[256];
 
 	if (!mkdtemp(root)) {
 		perror("mkdtemp");
 		return 1;
 	}
-
-	printf("lota-bench machine reader:\n");
 
 	make_machine();
 	test_machine();
@@ -340,6 +333,5 @@ int main(void)
 	if (system(cmd) != 0)
 		fprintf(stderr, "cleanup of %s failed\n", root);
 
-	printf("%d/%d tests passed\n", tests_passed, tests_run);
-	return tests_passed == tests_run ? 0 : 1;
+	return test_end();
 }

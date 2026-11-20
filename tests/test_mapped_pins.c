@@ -15,10 +15,8 @@
 static void check(const char *name, int ok, const char *why)
 {
 	TEST(name);
-	if (ok)
-		PASS();
-	else
-		FAIL(why);
+	if (!ok)
+		FAIL("%s", why);
 }
 
 static int kept_has(const struct mapped_exec_pin *pins, size_t kept,
@@ -124,7 +122,7 @@ static void test_nothing_reached(void)
 
 int main(void)
 {
-	printf("\n=== mapped pin release tests ===\n\n");
+	test_begin("mapped pins");
 
 	test_find();
 	test_release();
@@ -132,6 +130,5 @@ int main(void)
 	test_everything_reached();
 	test_nothing_reached();
 
-	printf("\n%d/%d passed\n", tests_passed, tests_run);
-	return tests_passed == tests_run ? 0 : 1;
+	return test_end();
 }

@@ -73,7 +73,6 @@ static void test_serialize_roundtrip(void)
 		FAIL("field mismatch");
 		return;
 	}
-	PASS();
 }
 
 static void test_serialize_rejects_bad_fields(void)
@@ -109,7 +108,6 @@ static void test_serialize_rejects_bad_fields(void)
 		FAIL("NULL meta");
 		return;
 	}
-	PASS();
 }
 
 static void test_parse_rejects_malformed(void)
@@ -158,7 +156,6 @@ static void test_parse_rejects_malformed(void)
 		FAIL("short body");
 		return;
 	}
-	PASS();
 }
 
 /* same refusal vocabulary as the direct blob */
@@ -238,8 +235,6 @@ static void test_parse_names_the_field_it_refused(void)
 		FAIL("trailing slack");
 		return;
 	}
-
-	PASS();
 }
 
 /* read off written bytes; LSEL twin in test_seal_blob.c */
@@ -253,7 +248,6 @@ static void test_magic_is_the_four_bytes_the_header_names(void)
 		FAIL("the blob does not start with LENV");
 		return;
 	}
-	PASS();
 }
 
 static void test_is_envelope(void)
@@ -285,7 +279,6 @@ static void test_is_envelope(void)
 		FAIL("short buffer misdetected");
 		return;
 	}
-	PASS();
 }
 
 static void test_aead_roundtrip(void)
@@ -326,7 +319,6 @@ static void test_aead_roundtrip(void)
 		FAIL("plaintext mismatch");
 		return;
 	}
-	PASS();
 }
 
 static void test_aead_rejects_tamper(void)
@@ -396,7 +388,6 @@ static void test_aead_rejects_tamper(void)
 		FAIL("AAD tamper accepted");
 		return;
 	}
-	PASS();
 }
 
 static void test_aead_rejects_bad_args(void)
@@ -422,12 +413,11 @@ static void test_aead_rejects_bad_args(void)
 		FAIL("open zero len");
 		return;
 	}
-	PASS();
 }
 
 int main(void)
 {
-	printf("Running LOTA sealed-envelope tests...\n\n");
+	test_begin("seal envelope");
 
 	test_serialize_roundtrip();
 	test_serialize_rejects_bad_fields();
@@ -439,6 +429,5 @@ int main(void)
 	test_aead_rejects_tamper();
 	test_aead_rejects_bad_args();
 
-	printf("\n%d/%d tests passed\n", tests_passed, tests_run);
-	return tests_passed == tests_run ? 0 : 1;
+	return test_end();
 }

@@ -11,7 +11,6 @@
 #include <errno.h>
 #include <stdbool.h>
 #include <stdint.h>
-#include <stdio.h>
 
 #include "test.h"
 #include "../src/agent/agent.h"
@@ -65,8 +64,6 @@ static void test_validator_refuses_the_host_and_not_the_run(void)
 		FAIL("a host below the floor was accepted");
 	else if (ret != -ENOTSUP)
 		FAIL("the refusal is one systemd restarts into every five seconds");
-	else
-		PASS();
 }
 
 /* appraisal scope reaches no executable: -ENOENT, as a missing file */
@@ -85,8 +82,6 @@ static void test_a_scope_refusal_is_not_a_missing_file(void)
 
 	if (ret != -ENOTSUP)
 		FAIL("the refusal keeps an errno that says try again");
-	else
-		PASS();
 }
 
 /* lockdown unreadable: the read, not the host, failed */
@@ -105,8 +100,6 @@ static void test_a_failed_read_is_not_a_refusal(void)
 
 	if (ret != -EIO)
 		FAIL("a failed read reads as a host below the floor");
-	else
-		PASS();
 }
 
 /* the apply path asks the floor again, after the commitment is spent */
@@ -127,8 +120,6 @@ static void test_the_apply_path_refuses_the_same_way(void)
 		FAIL("the apply path never asked the kernel floor");
 	else if (ret != -ENOTSUP)
 		FAIL("the same refusal means something else in the apply path");
-	else
-		PASS();
 }
 
 /* A host that meets the floor is not refused for it. */
@@ -149,13 +140,11 @@ static void test_a_host_that_meets_the_floor_passes(void)
 		FAIL("a policy with nothing else in it was refused");
 	else if (floor_calls != 1)
 		FAIL("the validator never asked the kernel floor");
-	else
-		PASS();
 }
 
 int main(void)
 {
-	printf("=== What a refused kernel floor tells the supervisor ===\n\n");
+	test_begin("startup refusal status");
 
 	test_validator_refuses_the_host_and_not_the_run();
 	test_a_scope_refusal_is_not_a_missing_file();
@@ -163,6 +152,5 @@ int main(void)
 	test_the_apply_path_refuses_the_same_way();
 	test_a_host_that_meets_the_floor_passes();
 
-	printf("\n=== %d/%d passed ===\n", tests_passed, tests_run);
-	return tests_passed == tests_run ? 0 : 1;
+	return test_end();
 }

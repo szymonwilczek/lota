@@ -117,18 +117,14 @@ static void test_figures(void)
 		FAIL("no frame time row");
 	else if (!strstr(line, "10.10 ±0.10") || !strstr(line, "10.20 ±0.10") ||
 		 !strstr(line, "12.00 ±0.00"))
-		FAIL(line);
-	else
-		PASS();
+		FAIL("%s", line);
 
 	TEST("a difference within the spreads is noise, a larger one not");
 	if (!text || !row(text, "frame time median ms", line, sizeof(line)))
 		FAIL("no frame time row");
 	else if (!strstr(line, "+0.10 ~") || !strstr(line, "+1.90  ") ||
 		 strstr(line, "+1.90 ~"))
-		FAIL(line);
-	else
-		PASS();
+		FAIL("%s", line);
 
 	TEST("CPU is a share of one CPU, BPF time microseconds a second");
 	if (!text || !row(text, "game CPU %", line, sizeof(line)) ||
@@ -140,8 +136,6 @@ static void test_figures(void)
 	else if (!row(text, "BPF programs us/s", line, sizeof(line)) ||
 		 !strstr(line, "2.0 ±0.0"))
 		FAIL("BPF time");
-	else
-		PASS();
 	free(text);
 }
 
@@ -158,14 +152,12 @@ static void test_missing(void)
 	if (!text || !row(text, "frame time median ms", line, sizeof(line)))
 		FAIL("no frame time row");
 	else if (!strstr(line, "10.30 ±0.00*"))
-		FAIL(line);
+		FAIL("%s", line);
 	else if (!row(text, "game memory MiB", line, sizeof(line)) ||
 		 strstr(line, "±"))
 		FAIL("a figure without runs");
 	else if (!strstr(text, "* not every run"))
 		FAIL("no note on the mark");
-	else
-		PASS();
 	free(text);
 
 	TEST("runs under other power settings are called out");
@@ -174,8 +166,6 @@ static void test_missing(void)
 	text = report();
 	if (!text || !strstr(text, "Run 4 ran under other power settings"))
 		FAIL("not called out");
-	else
-		PASS();
 	free(text);
 }
 
@@ -206,7 +196,7 @@ static void test_issue(void)
 	json = text ? strstr(text, open_block) : NULL;
 	end = json ? strstr(json + sizeof(open_block) - 1, "```\n") : NULL;
 	if (!back || ret || !json || !end) {
-		FAIL(ret ? err : "no lota-bench block");
+		FAIL("%s", ret ? err : "no lota-bench block");
 	} else if (strncmp(text, "```text\nExample Title: ", 23) ||
 		   end[4] != '\0') {
 		FAIL("not the report, then the block");
@@ -214,11 +204,9 @@ static void test_issue(void)
 		json += sizeof(open_block) - 1;
 		if (bench_validate(json, (size_t)(end - json), back, err,
 				   sizeof(err)))
-			FAIL(err);
+			FAIL("%s", err);
 		else if (back->kind != BK_SUMMARY || back->nruns != NRUNS)
 			FAIL("not the session's summary");
-		else
-			PASS();
 	}
 	free(text);
 
@@ -251,9 +239,7 @@ static void test_issue(void)
 	doc->plan.machine.ngpus = BENCH_MAX_GPUS;
 	text = issue(&ret, err, sizeof(err));
 	if (ret)
-		FAIL(err);
-	else
-		PASS();
+		FAIL("%s", err);
 	free(text);
 
 	TEST("a session that does not read back is not put in an issue");
@@ -262,15 +248,13 @@ static void test_issue(void)
 	text = issue(&ret, err, sizeof(err));
 	if (ret != -EINVAL || !strstr(err, "does not read back"))
 		FAIL("an invalid summary was written");
-	else
-		PASS();
 	free(text);
 	free(back);
 }
 
 int main(void)
 {
-	printf("lota-bench report:\n");
+	test_begin("bench report");
 
 	doc = malloc(sizeof(*doc));
 	if (!doc)
@@ -280,6 +264,5 @@ int main(void)
 	test_issue();
 	free(doc);
 
-	printf("%d/%d tests passed\n", tests_passed, tests_run);
-	return tests_passed == tests_run ? 0 : 1;
+	return test_end();
 }

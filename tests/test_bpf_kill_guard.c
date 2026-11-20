@@ -13,21 +13,11 @@
 
 #include <bpf/libbpf.h>
 
+#include "test.h"
+
 #ifndef BPF_OBJ_PATH
 #define BPF_OBJ_PATH "build/lota_lsm.bpf.o"
 #endif
-
-static int g_failures;
-
-#define CHECK(cond, msg)                                    \
-	do {                                                \
-		if (!(cond)) {                              \
-			fprintf(stderr, "FAIL: %s\n", msg); \
-			g_failures++;                       \
-		} else {                                    \
-			printf("PASS: %s\n", msg);          \
-		}                                           \
-	} while (0)
 
 #define BPF_FUNC_RINGBUF_RESERVE 131 /* bpf_ringbuf_reserve() helper id */
 
@@ -114,45 +104,49 @@ int main(void)
 	struct bpf_map *guarded;
 	const char *path = BPF_OBJ_PATH;
 
-	printf("=== cgroup kill-guard coverage in %s ===\n", path);
+	test_begin("bpf kill guard");
 
 	libbpf_set_print(NULL);
 	obj = bpf_object__open_file(path, NULL);
 	if (!obj) {
-		fprintf(stderr, "FAIL: cannot open %s\n", path);
+		FAIL("cannot open %s", path);
 		return 1;
 	}
 
 	guarded = find_map(obj, "guarded_files");
-	CHECK(guarded != NULL,
-	      "the object carries the files a write must not open");
+	TEST("the object carries the files a write must not open");
+	if (guarded == NULL)
+		FAIL("expected: guarded != NULL");
 
 	/* same key as trusted_libs: superblock dev + inode */
 	if (guarded) {
-		CHECK(bpf_map__type(guarded) == BPF_MAP_TYPE_HASH,
-		      "the guarded set is looked up, not iterated");
-		CHECK(bpf_map__key_size(guarded) == 2 * sizeof(unsigned long),
-		      "a guarded file is keyed by superblock device and inode");
-		CHECK(bpf_map__value_size(guarded) == sizeof(unsigned int),
-		      "the value says which guard the entry carries");
+		TEST("the guarded set is looked up, not iterated");
+		if (bpf_map__type(guarded) != BPF_MAP_TYPE_HASH)
+			FAIL("expected: bpf_map__type(guarded) == BPF_MAP_TYPE_HASH");
+		TEST("a guarded file is keyed by superblock device and inode");
+		if (!(bpf_map__key_size(guarded) == 2 * sizeof(unsigned long)))
+			FAIL("expected: bpf_map__key_size(guarded) == 2 * "
+			     "sizeof(unsigned long)");
+		TEST("the value says which guard the entry carries");
+		if (bpf_map__value_size(guarded) != sizeof(unsigned int))
+			FAIL("expected: bpf_map__value_size(guarded) == "
+			     "sizeof(unsigned int)");
 	}
 
 	/* a refused cgroup.kill write must reach the operator */
-	CHECK(reserves_ringbuf(obj, "lota_file_open"),
-	      "a refused open leaves a record");
+	TEST("a refused open leaves a record");
+	if (!reserves_ringbuf(obj, "lota_file_open"))
+		FAIL("expected: reserves_ringbuf(obj, \"lota_file_open\")");
 
 	/* bpf(cmd, attr, size, kernel), then the previous program's verdict */
-	CHECK(reads_ctx_slot(obj, "lota_bpf", 4 * 8),
-	      "the bpf hook reads the verdict after the kernel argument");
-	CHECK(!reads_ctx_slot(obj, "lota_bpf", 3 * 8),
-	      "the bpf hook does not refuse on the kernel argument");
+	TEST("the bpf hook reads the verdict after the kernel argument");
+	if (!reads_ctx_slot(obj, "lota_bpf", 4 * 8))
+		FAIL("expected: reads_ctx_slot(obj, \"lota_bpf\", 4 * 8)");
+	TEST("the bpf hook does not refuse on the kernel argument");
+	if (reads_ctx_slot(obj, "lota_bpf", 3 * 8))
+		FAIL("expected: !reads_ctx_slot(obj, \"lota_bpf\", 3 * 8)");
 
 	bpf_object__close(obj);
 
-	if (g_failures) {
-		fprintf(stderr, "\n%d test(s) failed\n", g_failures);
-		return 1;
-	}
-	printf("\nAll cgroup kill-guard coverage tests passed\n");
-	return 0;
+	return test_end();
 }

@@ -21,17 +21,7 @@
 #include "../src/agent/enroll.h"
 #include "lota_enroll.h"
 
-static int g_failures;
-
-#define CHECK(cond, msg)                                    \
-	do {                                                \
-		if (!(cond)) {                              \
-			fprintf(stderr, "FAIL: %s\n", msg); \
-			g_failures++;                       \
-		} else {                                    \
-			printf("PASS: %s\n", msg);          \
-		}                                           \
-	} while (0)
+#include "test.h"
 
 static void test_encode_begin_layout(void)
 {
@@ -47,9 +37,12 @@ static void test_encode_begin_layout(void)
 				 0x00, 0x00, /* no token */
 				 0x00, 0x00 }; /* no intermediates */
 
-	CHECK(n == (ssize_t)sizeof(want), "encode_begin length");
-	CHECK(n > 0 && memcmp(out, want, sizeof(want)) == 0,
-	      "encode_begin byte layout matches the Go wire format");
+	TEST("encode_begin length");
+	if (n != (ssize_t)sizeof(want))
+		FAIL("expected: n == (ssize_t)sizeof(want)");
+	TEST("encode_begin byte layout matches the Go wire format");
+	if (!(n > 0 && memcmp(out, want, sizeof(want)) == 0))
+		FAIL("expected: n > 0 && memcmp(out, want, sizeof(want)) == 0");
 }
 
 static void test_encode_begin_bounds(void)
@@ -58,24 +51,33 @@ static void test_encode_begin_bounds(void)
 	const uint8_t ek[4] = { 0 };
 	const uint8_t aik[1] = { 0 };
 
-	CHECK(enroll_encode_begin(out, sizeof(out), ek, sizeof(ek), aik,
-				  sizeof(aik), NULL, 0, NULL, 0) == -ENOSPC,
-	      "encode_begin rejects an undersized buffer");
+	TEST("encode_begin rejects an undersized buffer");
+	if (enroll_encode_begin(out, sizeof(out), ek, sizeof(ek), aik,
+				sizeof(aik), NULL, 0, NULL, 0) != -ENOSPC)
+		FAIL("expected: enroll_encode_begin(out, sizeof(out), ek, "
+		     "sizeof(ek), aik, sizeof(aik), NULL, 0, NULL, 0) == "
+		     "-ENOSPC");
 
 	uint8_t big_out[8192];
 	uint8_t big_ek[LOTA_ENROLL_MAX_EK_CERT + 1];
 	memset(big_ek, 0, sizeof(big_ek));
-	CHECK(enroll_encode_begin(big_out, sizeof(big_out), big_ek,
-				  sizeof(big_ek), aik, sizeof(aik), NULL, 0,
-				  NULL, 0) == -EMSGSIZE,
-	      "encode_begin rejects an oversized EK certificate");
+	TEST("encode_begin rejects an oversized EK certificate");
+	if (enroll_encode_begin(big_out, sizeof(big_out), big_ek,
+				sizeof(big_ek), aik, sizeof(aik), NULL, 0, NULL,
+				0) != -EMSGSIZE)
+		FAIL("expected: enroll_encode_begin(big_out, sizeof(big_out), "
+		     "big_ek, sizeof(big_ek), aik, sizeof(aik), NULL, 0, "
+		     "NULL, 0) == -EMSGSIZE");
 
 	uint8_t big_token[LOTA_ENROLL_MAX_TOKEN + 1];
 	memset(big_token, 't', sizeof(big_token));
-	CHECK(enroll_encode_begin(big_out, sizeof(big_out), ek, sizeof(ek), aik,
-				  sizeof(aik), big_token, sizeof(big_token),
-				  NULL, 0) == -EMSGSIZE,
-	      "encode_begin rejects an oversized token");
+	TEST("encode_begin rejects an oversized token");
+	if (enroll_encode_begin(big_out, sizeof(big_out), ek, sizeof(ek), aik,
+				sizeof(aik), big_token, sizeof(big_token), NULL,
+				0) != -EMSGSIZE)
+		FAIL("expected: enroll_encode_begin(big_out, sizeof(big_out), "
+		     "ek, sizeof(ek), aik, sizeof(aik), big_token, "
+		     "sizeof(big_token), NULL, 0) == -EMSGSIZE");
 }
 
 static void test_encode_begin_token_layout(void)
@@ -95,9 +97,12 @@ static void test_encode_begin_token_layout(void)
 				 0x00, 0x02, 't',  'k', /* the token */
 				 0x00, 0x00 }; /* no intermediates */
 
-	CHECK(n == (ssize_t)sizeof(want), "encode_begin token length");
-	CHECK(n > 0 && memcmp(out, want, sizeof(want)) == 0,
-	      "encode_begin token byte layout matches the Go wire format");
+	TEST("encode_begin token length");
+	if (n != (ssize_t)sizeof(want))
+		FAIL("expected: n == (ssize_t)sizeof(want)");
+	TEST("encode_begin token byte layout matches the Go wire format");
+	if (!(n > 0 && memcmp(out, want, sizeof(want)) == 0))
+		FAIL("expected: n > 0 && memcmp(out, want, sizeof(want)) == 0");
 }
 
 static void test_encode_complete(void)
@@ -110,9 +115,11 @@ static void test_encode_complete(void)
 	const uint8_t want[] = { 0x4C, 0x43, 0x41, 0x45, 0x00, 0x01,
 				 0x00, 0x04, 's',  'e',	 's',  's',
 				 0x00, 0x04, 0x01, 0x02, 0x03, 0x04 };
-	CHECK(n == (ssize_t)sizeof(want) &&
-		      memcmp(out, want, sizeof(want)) == 0,
-	      "encode_complete byte layout");
+	TEST("encode_complete byte layout");
+	if (!(n == (ssize_t)sizeof(want) &&
+	      memcmp(out, want, sizeof(want)) == 0))
+		FAIL("expected: n == (ssize_t)sizeof(want) && memcmp(out, "
+		     "want, sizeof(want)) == 0");
 }
 
 static void test_decode_challenge(void)
@@ -127,15 +134,25 @@ static void test_decode_challenge(void)
 	struct enroll_challenge ch;
 	int ret = enroll_decode_challenge(body, sizeof(body), &ch);
 
-	CHECK(ret == 0, "decode_challenge succeeds");
-	CHECK(ch.status == LOTA_ENROLL_STATUS_OK, "challenge status OK");
-	CHECK(strcmp(ch.session_id, "abc") == 0, "challenge session id");
-	CHECK(ch.cred_blob_len == 2 && ch.cred_blob[0] == 0x01 &&
-		      ch.cred_blob[1] == 0x02,
-	      "challenge credential blob");
-	CHECK(ch.enc_secret_len == 2 && ch.enc_secret[0] == 0x03 &&
-		      ch.enc_secret[1] == 0x04,
-	      "challenge encrypted secret");
+	TEST("decode_challenge succeeds");
+	if (ret != 0)
+		FAIL("expected: ret == 0");
+	TEST("challenge status OK");
+	if (ch.status != LOTA_ENROLL_STATUS_OK)
+		FAIL("expected: ch.status == LOTA_ENROLL_STATUS_OK");
+	TEST("challenge session id");
+	if (strcmp(ch.session_id, "abc") != 0)
+		FAIL("expected: strcmp(ch.session_id, \"abc\") == 0");
+	TEST("challenge credential blob");
+	if (!(ch.cred_blob_len == 2 && ch.cred_blob[0] == 0x01 &&
+	      ch.cred_blob[1] == 0x02))
+		FAIL("expected: ch.cred_blob_len == 2 && ch.cred_blob[0] == "
+		     "0x01 && ch.cred_blob[1] == 0x02");
+	TEST("challenge encrypted secret");
+	if (!(ch.enc_secret_len == 2 && ch.enc_secret[0] == 0x03 &&
+	      ch.enc_secret[1] == 0x04))
+		FAIL("expected: ch.enc_secret_len == 2 && ch.enc_secret[0] == "
+		     "0x03 && ch.enc_secret[1] == 0x04");
 }
 
 static void test_decode_result(void)
@@ -146,12 +163,20 @@ static void test_decode_result(void)
 	struct enroll_result res;
 	int ret = enroll_decode_result(body, sizeof(body), &res);
 
-	CHECK(ret == 0, "decode_result succeeds");
-	CHECK(res.status == LOTA_ENROLL_STATUS_OK, "result status OK");
-	CHECK(res.aik_cert_len == 2 && res.aik_cert[0] == 0x30 &&
-		      res.aik_cert[1] == 0x82,
-	      "result AIK certificate bytes");
-	CHECK(strcmp(res.device_id, "dev") == 0, "result device id");
+	TEST("decode_result succeeds");
+	if (ret != 0)
+		FAIL("expected: ret == 0");
+	TEST("result status OK");
+	if (res.status != LOTA_ENROLL_STATUS_OK)
+		FAIL("expected: res.status == LOTA_ENROLL_STATUS_OK");
+	TEST("result AIK certificate bytes");
+	if (!(res.aik_cert_len == 2 && res.aik_cert[0] == 0x30 &&
+	      res.aik_cert[1] == 0x82))
+		FAIL("expected: res.aik_cert_len == 2 && res.aik_cert[0] == "
+		     "0x30 && res.aik_cert[1] == 0x82");
+	TEST("result device id");
+	if (strcmp(res.device_id, "dev") != 0)
+		FAIL("expected: strcmp(res.device_id, \"dev\") == 0");
 }
 
 static void test_decode_rejects_malformed(void)
@@ -160,16 +185,20 @@ static void test_decode_rejects_malformed(void)
 
 	const uint8_t bad_magic[] = { 0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x00,
 				      0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 };
-	CHECK(enroll_decode_challenge(bad_magic, sizeof(bad_magic), &ch) ==
-		      -EPROTO,
-	      "decode rejects bad magic");
+	TEST("decode rejects bad magic");
+	if (enroll_decode_challenge(bad_magic, sizeof(bad_magic), &ch) !=
+	    -EPROTO)
+		FAIL("expected: enroll_decode_challenge(bad_magic, "
+		     "sizeof(bad_magic), &ch) == -EPROTO");
 
 	const uint8_t bad_version[] = { 0x4C, 0x43, 0x41, 0x45, 0x00,
 					0xFF, 0x00, 0x00, 0x00, 0x00,
 					0x00, 0x00, 0x00, 0x00 };
-	CHECK(enroll_decode_challenge(bad_version, sizeof(bad_version), &ch) ==
-		      -EPROTONOSUPPORT,
-	      "decode rejects bad version");
+	TEST("decode rejects bad version");
+	if (enroll_decode_challenge(bad_version, sizeof(bad_version), &ch) !=
+	    -EPROTONOSUPPORT)
+		FAIL("expected: enroll_decode_challenge(bad_version, "
+		     "sizeof(bad_version), &ch) == -EPROTONOSUPPORT");
 
 	/* any other version, the old shape selectors included, is a newer CA */
 	uint8_t reply[] = {
@@ -179,8 +208,10 @@ static void test_decode_rejects_malformed(void)
 		0x00, 0x01, 0x01, /* credential blob */
 		0x00, 0x01, 0x02 /* encrypted secret */
 	};
-	CHECK(enroll_decode_challenge(reply, sizeof(reply), &ch) == 0,
-	      "decode accepts the version in service");
+	TEST("decode accepts the version in service");
+	if (enroll_decode_challenge(reply, sizeof(reply), &ch) != 0)
+		FAIL("expected: enroll_decode_challenge(reply, sizeof(reply), "
+		     "&ch) == 0");
 
 	static const uint8_t newer[] = { 0x00, 0x02, 0x03, 0x04 };
 
@@ -190,21 +221,27 @@ static void test_decode_rejects_malformed(void)
 		snprintf(msg, sizeof(msg), "decode refuses version %u",
 			 newer[i]);
 		reply[5] = newer[i];
-		CHECK(enroll_decode_challenge(reply, sizeof(reply), &ch) ==
-			      -EPROTONOSUPPORT,
-		      msg);
+		TEST(msg);
+		if (enroll_decode_challenge(reply, sizeof(reply), &ch) !=
+		    -EPROTONOSUPPORT)
+			FAIL("expected: enroll_decode_challenge(reply, sizeof(reply), "
+			     "&ch) == -EPROTONOSUPPORT");
 	}
 
 	const uint8_t truncated[] = { 0x4C, 0x43, 0x41, 0x45, 0x00, 0x01, 0x00 };
-	CHECK(enroll_decode_challenge(truncated, sizeof(truncated), &ch) < 0,
-	      "decode rejects truncated frame");
+	TEST("decode rejects truncated frame");
+	if (enroll_decode_challenge(truncated, sizeof(truncated), &ch) >= 0)
+		FAIL("expected: enroll_decode_challenge(truncated, "
+		     "sizeof(truncated), &ch) < 0");
 
 	/* session id length claims 0x0400 bytes, far beyond the cap */
 	const uint8_t oversize[] = { 0x4C, 0x43, 0x41, 0x45, 0x00,
 				     0x01, 0x00, 0x00, 0x04, 0x00 };
-	CHECK(enroll_decode_challenge(oversize, sizeof(oversize), &ch) ==
-		      -EMSGSIZE,
-	      "decode rejects an oversized field length");
+	TEST("decode rejects an oversized field length");
+	if (enroll_decode_challenge(oversize, sizeof(oversize), &ch) !=
+	    -EMSGSIZE)
+		FAIL("expected: enroll_decode_challenge(oversize, "
+		     "sizeof(oversize), &ch) == -EMSGSIZE");
 }
 
 /* trailing bytes in a reply are refused, not skipped */
@@ -225,30 +262,37 @@ static void test_decode_rejects_trailing_bytes(void)
 	struct enroll_challenge ch;
 	struct enroll_result res;
 
-	CHECK(enroll_decode_challenge(challenge, sizeof(challenge), &ch) == 0 &&
-		      enroll_decode_result(result, sizeof(result), &res) == 0,
-	      "both replies decode whole");
+	TEST("both replies decode whole");
+	if (!(enroll_decode_challenge(challenge, sizeof(challenge), &ch) == 0 &&
+	      enroll_decode_result(result, sizeof(result), &res) == 0))
+		FAIL("expected: enroll_decode_challenge(challenge, "
+		     "sizeof(challenge), &ch) == 0 && "
+		     "enroll_decode_result(result, sizeof(result), &res) == 0");
 
 	memcpy(padded, challenge, sizeof(challenge));
 	padded[sizeof(challenge)] = 0x00;
-	CHECK(enroll_decode_challenge(padded, sizeof(challenge) + 1, &ch) ==
-		      -EBADMSG,
-	      "a challenge with a trailing byte is refused");
+	TEST("a challenge with a trailing byte is refused");
+	if (enroll_decode_challenge(padded, sizeof(challenge) + 1, &ch) !=
+	    -EBADMSG)
+		FAIL("expected: enroll_decode_challenge(padded, "
+		     "sizeof(challenge) + 1, &ch) == -EBADMSG");
 
 	memcpy(padded, result, sizeof(result));
 	padded[sizeof(result)] = 0x00;
-	CHECK(enroll_decode_result(padded, sizeof(result) + 1, &res) ==
-		      -EBADMSG,
-	      "a result with a trailing byte is refused");
+	TEST("a result with a trailing byte is refused");
+	if (enroll_decode_result(padded, sizeof(result) + 1, &res) != -EBADMSG)
+		FAIL("expected: enroll_decode_result(padded, sizeof(result) + "
+		     "1, &res) == -EBADMSG");
 
 	/* a whole appended field, as a newer CA would send */
 	memcpy(padded, result, sizeof(result));
 	padded[sizeof(result)] = 0x00;
 	padded[sizeof(result) + 1] = 0x01;
 	padded[sizeof(result) + 2] = 0xFF;
-	CHECK(enroll_decode_result(padded, sizeof(result) + 3, &res) ==
-		      -EBADMSG,
-	      "a result with an appended field is refused");
+	TEST("a result with an appended field is refused");
+	if (enroll_decode_result(padded, sizeof(result) + 3, &res) != -EBADMSG)
+		FAIL("expected: enroll_decode_result(padded, sizeof(result) + "
+		     "3, &res) == -EBADMSG");
 }
 
 /*
@@ -275,9 +319,12 @@ static void test_encode_begin_chain_layout(void)
 				 0x00, 0x03, 0x30, 0x01, 0xDD,
 				 0x00, 0x03, 0x30, 0x01, 0xEE };
 
-	CHECK(n == (ssize_t)sizeof(want), "encode_begin chain length");
-	CHECK(n > 0 && memcmp(out, want, sizeof(want)) == 0,
-	      "encode_begin chain byte layout matches the Go wire format");
+	TEST("encode_begin chain length");
+	if (n != (ssize_t)sizeof(want))
+		FAIL("expected: n == (ssize_t)sizeof(want)");
+	TEST("encode_begin chain byte layout matches the Go wire format");
+	if (!(n > 0 && memcmp(out, want, sizeof(want)) == 0))
+		FAIL("expected: n > 0 && memcmp(out, want, sizeof(want)) == 0");
 }
 
 /*
@@ -292,24 +339,36 @@ static void test_encode_begin_version_is_the_agents(void)
 	const struct enroll_cert_ref chain[] = { { cert, sizeof(cert) } };
 	uint8_t out[64];
 
-	CHECK(enroll_encode_begin(out, sizeof(out), ek, sizeof(ek), aik,
+	TEST("a request with neither field names the agent's version");
+	if (!(enroll_encode_begin(out, sizeof(out), ek, sizeof(ek), aik,
 				  sizeof(aik), NULL, 0, NULL, 0) > 0 &&
-		      out[4] == 0x00 && out[5] == LOTA_ENROLL_VERSION,
-	      "a request with neither field names the agent's version");
-	CHECK(enroll_encode_begin(out, sizeof(out), ek, sizeof(ek), aik,
+	      out[4] == 0x00 && out[5] == LOTA_ENROLL_VERSION))
+		FAIL("expected: enroll_encode_begin(out, sizeof(out), ek, "
+		     "sizeof(ek), aik, sizeof(aik), NULL, 0, NULL, 0) > 0 && "
+		     "out[4] == 0x00 && out[5] == LOTA_ENROLL_VERSION");
+	TEST("a token does not move the version");
+	if (!(enroll_encode_begin(out, sizeof(out), ek, sizeof(ek), aik,
 				  sizeof(aik), token, sizeof(token), NULL,
 				  0) > 0 &&
-		      out[5] == LOTA_ENROLL_VERSION,
-	      "a token does not move the version");
-	CHECK(enroll_encode_begin(out, sizeof(out), ek, sizeof(ek), aik,
+	      out[5] == LOTA_ENROLL_VERSION))
+		FAIL("expected: enroll_encode_begin(out, sizeof(out), ek, "
+		     "sizeof(ek), aik, sizeof(aik), token, sizeof(token), "
+		     "NULL, 0) > 0 && out[5] == LOTA_ENROLL_VERSION");
+	TEST("a chain does not move the version");
+	if (!(enroll_encode_begin(out, sizeof(out), ek, sizeof(ek), aik,
 				  sizeof(aik), NULL, 0, chain, 1) > 0 &&
-		      out[5] == LOTA_ENROLL_VERSION,
-	      "a chain does not move the version");
-	CHECK(enroll_encode_begin(out, sizeof(out), ek, sizeof(ek), aik,
+	      out[5] == LOTA_ENROLL_VERSION))
+		FAIL("expected: enroll_encode_begin(out, sizeof(out), ek, "
+		     "sizeof(ek), aik, sizeof(aik), NULL, 0, chain, 1) > 0 && "
+		     "out[5] == LOTA_ENROLL_VERSION");
+	TEST("both fields together do not move the version");
+	if (!(enroll_encode_begin(out, sizeof(out), ek, sizeof(ek), aik,
 				  sizeof(aik), token, sizeof(token), chain,
 				  1) > 0 &&
-		      out[5] == LOTA_ENROLL_VERSION,
-	      "both fields together do not move the version");
+	      out[5] == LOTA_ENROLL_VERSION))
+		FAIL("expected: enroll_encode_begin(out, sizeof(out), ek, "
+		     "sizeof(ek), aik, sizeof(aik), token, sizeof(token), "
+		     "chain, 1) > 0 && out[5] == LOTA_ENROLL_VERSION");
 }
 
 /*
@@ -325,14 +384,19 @@ static void test_begin_and_complete_agree_on_version(void)
 	uint8_t begin[64];
 	uint8_t complete[64];
 
-	CHECK(enroll_encode_complete(complete, sizeof(complete), "s", ek,
-				     sizeof(ek)) > 0,
-	      "encode_complete succeeds");
-	CHECK(enroll_encode_begin(begin, sizeof(begin), ek, sizeof(ek), aik,
+	TEST("encode_complete succeeds");
+	if (enroll_encode_complete(complete, sizeof(complete), "s", ek,
+				   sizeof(ek)) <= 0)
+		FAIL("expected: enroll_encode_complete(complete, "
+		     "sizeof(complete), \"s\", ek, sizeof(ek)) > 0");
+	TEST("begin and complete share one preamble");
+	if (!(enroll_encode_begin(begin, sizeof(begin), ek, sizeof(ek), aik,
 				  sizeof(aik), token, sizeof(token), chain,
 				  1) > 0 &&
-		      memcmp(begin, complete, 6) == 0,
-	      "begin and complete share one preamble");
+	      memcmp(begin, complete, 6) == 0))
+		FAIL("expected: enroll_encode_begin(begin, sizeof(begin), ek, "
+		     "sizeof(ek), aik, sizeof(aik), token, sizeof(token), "
+		     "chain, 1) > 0 && memcmp(begin, complete, 6) == 0");
 }
 
 /*
@@ -352,18 +416,23 @@ static void test_encode_begin_chain_bounds(void)
 		chain[i].der = cert;
 		chain[i].len = sizeof(cert);
 	}
-	CHECK(enroll_encode_begin(out, sizeof(out), ek, sizeof(ek), aik,
-				  sizeof(aik), NULL, 0, chain,
-				  LOTA_ENROLL_MAX_EK_CHAIN_CERTS + 1) ==
-		      -EMSGSIZE,
-	      "encode_begin rejects too many intermediates");
+	TEST("encode_begin rejects too many intermediates");
+	if (enroll_encode_begin(
+		    out, sizeof(out), ek, sizeof(ek), aik, sizeof(aik), NULL, 0,
+		    chain, LOTA_ENROLL_MAX_EK_CHAIN_CERTS + 1) != -EMSGSIZE)
+		FAIL("expected: enroll_encode_begin(out, sizeof(out), ek, "
+		     "sizeof(ek), aik, sizeof(aik), NULL, 0, chain, "
+		     "LOTA_ENROLL_MAX_EK_CHAIN_CERTS + 1) == -EMSGSIZE");
 
 	memset(big_cert, 0, sizeof(big_cert));
 	chain[0].der = big_cert;
 	chain[0].len = sizeof(big_cert);
-	CHECK(enroll_encode_begin(out, sizeof(out), ek, sizeof(ek), aik,
-				  sizeof(aik), NULL, 0, chain, 1) == -EMSGSIZE,
-	      "encode_begin rejects an oversized intermediate");
+	TEST("encode_begin rejects an oversized intermediate");
+	if (enroll_encode_begin(out, sizeof(out), ek, sizeof(ek), aik,
+				sizeof(aik), NULL, 0, chain, 1) != -EMSGSIZE)
+		FAIL("expected: enroll_encode_begin(out, sizeof(out), ek, "
+		     "sizeof(ek), aik, sizeof(aik), NULL, 0, chain, 1) == "
+		     "-EMSGSIZE");
 }
 
 /*
@@ -383,17 +452,27 @@ static void test_split_cert_chain(void)
 	struct enroll_cert_ref certs[LOTA_ENROLL_MAX_EK_CHAIN_CERTS];
 	size_t count = 0;
 
-	CHECK(enroll_split_cert_chain(blob, sizeof(blob), certs,
-				      LOTA_ENROLL_MAX_EK_CHAIN_CERTS,
-				      &count) == 0,
-	      "split accepts a concatenated certificate blob");
-	CHECK(count == 3, "split finds every certificate in the blob");
-	CHECK(count == 3 && certs[0].der == blob && certs[0].len == 4,
-	      "split sizes a short-form certificate");
-	CHECK(count == 3 && certs[1].der == blob + 4 && certs[1].len == 7,
-	      "split sizes a long-form certificate");
-	CHECK(count == 3 && certs[2].der == blob + 11 && certs[2].len == 3,
-	      "split sizes the last certificate");
+	TEST("split accepts a concatenated certificate blob");
+	if (enroll_split_cert_chain(blob, sizeof(blob), certs,
+				    LOTA_ENROLL_MAX_EK_CHAIN_CERTS,
+				    &count) != 0)
+		FAIL("expected: enroll_split_cert_chain(blob, sizeof(blob), "
+		     "certs, LOTA_ENROLL_MAX_EK_CHAIN_CERTS, &count) == 0");
+	TEST("split finds every certificate in the blob");
+	if (count != 3)
+		FAIL("expected: count == 3");
+	TEST("split sizes a short-form certificate");
+	if (!(count == 3 && certs[0].der == blob && certs[0].len == 4))
+		FAIL("expected: count == 3 && certs[0].der == blob && "
+		     "certs[0].len == 4");
+	TEST("split sizes a long-form certificate");
+	if (!(count == 3 && certs[1].der == blob + 4 && certs[1].len == 7))
+		FAIL("expected: count == 3 && certs[1].der == blob + 4 && "
+		     "certs[1].len == 7");
+	TEST("split sizes the last certificate");
+	if (!(count == 3 && certs[2].der == blob + 11 && certs[2].len == 3))
+		FAIL("expected: count == 3 && certs[2].der == blob + 11 && "
+		     "certs[2].len == 3");
 }
 
 /*
@@ -410,31 +489,43 @@ static void test_split_cert_chain_tolerates_junk(void)
 	struct enroll_cert_ref certs[LOTA_ENROLL_MAX_EK_CHAIN_CERTS];
 	size_t count = 99;
 
-	CHECK(enroll_split_cert_chain(padded, sizeof(padded), certs,
+	TEST("trailing NV padding ends the list");
+	if (!(enroll_split_cert_chain(padded, sizeof(padded), certs,
 				      LOTA_ENROLL_MAX_EK_CHAIN_CERTS,
 				      &count) == 0 &&
-		      count == 1,
-	      "trailing NV padding ends the list");
+	      count == 1))
+		FAIL("expected: enroll_split_cert_chain(padded, "
+		     "sizeof(padded), certs, LOTA_ENROLL_MAX_EK_CHAIN_CERTS, "
+		     "&count) == 0 && count == 1");
 
 	count = 99;
-	CHECK(enroll_split_cert_chain(junk, sizeof(junk), certs,
+	TEST("a blob holding no certificate yields none");
+	if (!(enroll_split_cert_chain(junk, sizeof(junk), certs,
 				      LOTA_ENROLL_MAX_EK_CHAIN_CERTS,
 				      &count) == 0 &&
-		      count == 0,
-	      "a blob holding no certificate yields none");
+	      count == 0))
+		FAIL("expected: enroll_split_cert_chain(junk, sizeof(junk), "
+		     "certs, LOTA_ENROLL_MAX_EK_CHAIN_CERTS, &count) == 0 && "
+		     "count == 0");
 
 	count = 99;
-	CHECK(enroll_split_cert_chain(truncated, sizeof(truncated), certs,
+	TEST("a certificate running past the blob is dropped");
+	if (!(enroll_split_cert_chain(truncated, sizeof(truncated), certs,
 				      LOTA_ENROLL_MAX_EK_CHAIN_CERTS,
 				      &count) == 0 &&
-		      count == 0,
-	      "a certificate running past the blob is dropped");
+	      count == 0))
+		FAIL("expected: enroll_split_cert_chain(truncated, "
+		     "sizeof(truncated), certs, "
+		     "LOTA_ENROLL_MAX_EK_CHAIN_CERTS, &count) == 0 && count "
+		     "== 0");
 
 	count = 99;
-	CHECK(enroll_split_cert_chain(NULL, 0, certs,
-				      LOTA_ENROLL_MAX_EK_CHAIN_CERTS,
-				      &count) == -EINVAL,
-	      "split rejects a NULL blob");
+	TEST("split rejects a NULL blob");
+	if (enroll_split_cert_chain(NULL, 0, certs,
+				    LOTA_ENROLL_MAX_EK_CHAIN_CERTS,
+				    &count) != -EINVAL)
+		FAIL("expected: enroll_split_cert_chain(NULL, 0, certs, "
+		     "LOTA_ENROLL_MAX_EK_CHAIN_CERTS, &count) == -EINVAL");
 }
 
 /*
@@ -450,10 +541,12 @@ static void test_split_cert_chain_bounds(void)
 	struct enroll_cert_ref certs[LOTA_ENROLL_MAX_EK_CHAIN_CERTS];
 	size_t count = 0;
 
-	CHECK(enroll_split_cert_chain(blob, sizeof(blob), certs, 2, &count) ==
-			      0 &&
-		      count == 2,
-	      "split stops at the caller's array");
+	TEST("split stops at the caller's array");
+	if (!(enroll_split_cert_chain(blob, sizeof(blob), certs, 2, &count) ==
+		      0 &&
+	      count == 2))
+		FAIL("expected: enroll_split_cert_chain(blob, sizeof(blob), "
+		     "certs, 2, &count) == 0 && count == 2");
 
 	/*
 	 * one certificate one byte past the per-certificate cap:
@@ -468,11 +561,15 @@ static void test_split_cert_chain_bounds(void)
 	oversized[2] = (uint8_t)((body >> 8) & 0xFFu);
 	oversized[3] = (uint8_t)(body & 0xFFu);
 	count = 99;
-	CHECK(enroll_split_cert_chain(oversized, sizeof(oversized), certs,
+	TEST("split drops a certificate past the per-certificate cap");
+	if (!(enroll_split_cert_chain(oversized, sizeof(oversized), certs,
 				      LOTA_ENROLL_MAX_EK_CHAIN_CERTS,
 				      &count) == 0 &&
-		      count == 0,
-	      "split drops a certificate past the per-certificate cap");
+	      count == 0))
+		FAIL("expected: enroll_split_cert_chain(oversized, "
+		     "sizeof(oversized), certs, "
+		     "LOTA_ENROLL_MAX_EK_CHAIN_CERTS, &count) == 0 && count "
+		     "== 0");
 }
 
 static const char *write_token_file(const char *content, size_t len)
@@ -499,36 +596,51 @@ static void test_token_from_file(void)
 	const char *path;
 
 	path = write_token_file("game-alpha-token\n", 17);
-	CHECK(path && enroll_token_from_file(path, token, sizeof(token)) == 0,
-	      "token file with trailing newline loads");
-	CHECK(strcmp(token, "game-alpha-token") == 0,
-	      "trailing newline trimmed");
+	TEST("token file with trailing newline loads");
+	if (!(path && enroll_token_from_file(path, token, sizeof(token)) == 0))
+		FAIL("expected: path && enroll_token_from_file(path, token, "
+		     "sizeof(token)) == 0");
+	TEST("trailing newline trimmed");
+	if (strcmp(token, "game-alpha-token") != 0)
+		FAIL("expected: strcmp(token, \"game-alpha-token\") == 0");
 
 	path = write_token_file("  \n", 3);
-	CHECK(path && enroll_token_from_file(path, token, sizeof(token)) ==
-			      -EINVAL,
-	      "whitespace-only token file rejected");
+	TEST("whitespace-only token file rejected");
+	if (!(path &&
+	      enroll_token_from_file(path, token, sizeof(token)) == -EINVAL))
+		FAIL("expected: path && enroll_token_from_file(path, token, "
+		     "sizeof(token)) == -EINVAL");
 
 	path = write_token_file("bad token\n", 10);
-	CHECK(path && enroll_token_from_file(path, token, sizeof(token)) ==
-			      -EINVAL,
-	      "inner whitespace rejected");
+	TEST("inner whitespace rejected");
+	if (!(path &&
+	      enroll_token_from_file(path, token, sizeof(token)) == -EINVAL))
+		FAIL("expected: path && enroll_token_from_file(path, token, "
+		     "sizeof(token)) == -EINVAL");
 
 	char big[LOTA_ENROLL_MAX_TOKEN + 2];
 	memset(big, 't', sizeof(big));
 	big[sizeof(big) - 1] = '\n';
 	path = write_token_file(big, sizeof(big));
-	CHECK(path && enroll_token_from_file(path, token, sizeof(token)) ==
-			      -EMSGSIZE,
-	      "oversized token rejected");
+	TEST("oversized token rejected");
+	if (!(path &&
+	      enroll_token_from_file(path, token, sizeof(token)) == -EMSGSIZE))
+		FAIL("expected: path && enroll_token_from_file(path, token, "
+		     "sizeof(token)) == -EMSGSIZE");
 
-	CHECK(enroll_token_from_file("/nonexistent/lota-token", token,
-				     sizeof(token)) == -ENOENT,
-	      "missing token file is -ENOENT");
-	CHECK(enroll_token_from_file(NULL, token, sizeof(token)) == -EINVAL,
-	      "NULL path rejected");
-	CHECK(enroll_token_from_file("/tmp/x", token, 4) == -EINVAL,
-	      "undersized output buffer rejected");
+	TEST("missing token file is -ENOENT");
+	if (enroll_token_from_file("/nonexistent/lota-token", token,
+				   sizeof(token)) != -ENOENT)
+		FAIL("expected: enroll_token_from_file(\"/nonexistent/lota-token\", "
+		     "token, sizeof(token)) == -ENOENT");
+	TEST("NULL path rejected");
+	if (enroll_token_from_file(NULL, token, sizeof(token)) != -EINVAL)
+		FAIL("expected: enroll_token_from_file(NULL, token, "
+		     "sizeof(token)) == -EINVAL");
+	TEST("undersized output buffer rejected");
+	if (enroll_token_from_file("/tmp/x", token, 4) != -EINVAL)
+		FAIL("expected: enroll_token_from_file(\"/tmp/x\", token, 4) "
+		     "== -EINVAL");
 
 	if (path)
 		unlink(path);
@@ -536,7 +648,7 @@ static void test_token_from_file(void)
 
 int main(void)
 {
-	printf("=== enrollment wire codec tests ===\n");
+	test_begin("enroll wire");
 	test_encode_begin_layout();
 	test_encode_begin_token_layout();
 	test_encode_begin_bounds();
@@ -554,10 +666,5 @@ int main(void)
 	test_split_cert_chain_bounds();
 	test_token_from_file();
 
-	if (g_failures) {
-		fprintf(stderr, "\n%d test(s) failed\n", g_failures);
-		return 1;
-	}
-	printf("\nAll enrollment wire codec tests passed\n");
-	return 0;
+	return test_end();
 }

@@ -14,21 +14,10 @@
  * Copyright (C) 2026 Szymon Wilczek
  */
 #include <signal.h>
-#include <stdio.h>
 
 #include "../src/agent/terminate_policy.h"
 
-static int g_failures;
-
-#define CHECK(cond, msg)                                    \
-	do {                                                \
-		if (!(cond)) {                              \
-			fprintf(stderr, "FAIL: %s\n", msg); \
-			g_failures++;                       \
-		} else {                                    \
-			printf("PASS: %s\n", msg);          \
-		}                                           \
-	} while (0)
+#include "test.h"
 
 /* request that is allowed, which each case below then spoils one field of */
 static struct terminate_request base_request(void)
@@ -47,29 +36,35 @@ static struct terminate_request base_request(void)
 
 int main(void)
 {
-	printf("=== protected-process termination policy tests ===\n\n");
+	test_begin("terminate policy");
 
 	{
 		struct terminate_request req = base_request();
 
-		CHECK(terminate_policy_decide(&req) == TERMINATE_ALLOW,
-		      "the owner of a protected process may end it");
+		TEST("the owner of a protected process may end it");
+		if (terminate_policy_decide(&req) != TERMINATE_ALLOW)
+			FAIL("expected: terminate_policy_decide(&req) == "
+			     "TERMINATE_ALLOW");
 	}
 
 	{
 		struct terminate_request req = base_request();
 
 		req.caller_uid = 0;
-		CHECK(terminate_policy_decide(&req) == TERMINATE_ALLOW,
-		      "root may end a protected process it does not own");
+		TEST("root may end a protected process it does not own");
+		if (terminate_policy_decide(&req) != TERMINATE_ALLOW)
+			FAIL("expected: terminate_policy_decide(&req) == "
+			     "TERMINATE_ALLOW");
 	}
 
 	{
 		struct terminate_request req = base_request();
 
 		req.signal = SIGKILL;
-		CHECK(terminate_policy_decide(&req) == TERMINATE_ALLOW,
-		      "SIGKILL is a termination");
+		TEST("SIGKILL is a termination");
+		if (terminate_policy_decide(&req) != TERMINATE_ALLOW)
+			FAIL("expected: terminate_policy_decide(&req) == "
+			     "TERMINATE_ALLOW");
 	}
 
 	/*
@@ -81,22 +76,30 @@ int main(void)
 		struct terminate_request req = base_request();
 
 		req.signal = SIGUSR1;
-		CHECK(terminate_policy_decide(&req) == TERMINATE_DENY_SIGNAL,
-		      "a signal that is not a termination is refused");
+		TEST("a signal that is not a termination is refused");
+		if (terminate_policy_decide(&req) != TERMINATE_DENY_SIGNAL)
+			FAIL("expected: terminate_policy_decide(&req) == "
+			     "TERMINATE_DENY_SIGNAL");
 		req.signal = 0;
-		CHECK(terminate_policy_decide(&req) == TERMINATE_DENY_SIGNAL,
-		      "an existence probe is refused: kill(2) already answers it");
+		TEST("an existence probe is refused: kill(2) already answers it");
+		if (terminate_policy_decide(&req) != TERMINATE_DENY_SIGNAL)
+			FAIL("expected: terminate_policy_decide(&req) == "
+			     "TERMINATE_DENY_SIGNAL");
 		req.signal = SIGSTOP;
-		CHECK(terminate_policy_decide(&req) == TERMINATE_DENY_SIGNAL,
-		      "stopping a protected process is not ending it");
+		TEST("stopping a protected process is not ending it");
+		if (terminate_policy_decide(&req) != TERMINATE_DENY_SIGNAL)
+			FAIL("expected: terminate_policy_decide(&req) == "
+			     "TERMINATE_DENY_SIGNAL");
 	}
 
 	{
 		struct terminate_request req = base_request();
 
 		req.caller_uid = 1001;
-		CHECK(terminate_policy_decide(&req) == TERMINATE_DENY_OWNER,
-		      "a stranger to the process is refused, as kill(2) would refuse them");
+		TEST("a stranger to the process is refused, as kill(2) would refuse them");
+		if (terminate_policy_decide(&req) != TERMINATE_DENY_OWNER)
+			FAIL("expected: terminate_policy_decide(&req) == "
+			     "TERMINATE_DENY_OWNER");
 	}
 
 	/*
@@ -108,9 +111,11 @@ int main(void)
 		struct terminate_request req = base_request();
 
 		req.target_is_protected = false;
-		CHECK(terminate_policy_decide(&req) ==
-			      TERMINATE_DENY_NOT_PROTECTED,
-		      "a process nobody protected is not this verb's business");
+		TEST("a process nobody protected is not this verb's business");
+		if (terminate_policy_decide(&req) !=
+		    TERMINATE_DENY_NOT_PROTECTED)
+			FAIL("expected: terminate_policy_decide(&req) == "
+			     "TERMINATE_DENY_NOT_PROTECTED");
 	}
 
 	/*
@@ -124,25 +129,33 @@ int main(void)
 
 		req.target_pid = req.agent_pid;
 		req.caller_uid = 0;
-		CHECK(terminate_policy_decide(&req) == TERMINATE_DENY_AGENT,
-		      "the agent is not terminated through the verb it serves");
+		TEST("the agent is not terminated through the verb it serves");
+		if (terminate_policy_decide(&req) != TERMINATE_DENY_AGENT)
+			FAIL("expected: terminate_policy_decide(&req) == "
+			     "TERMINATE_DENY_AGENT");
 	}
 
 	{
 		struct terminate_request req = base_request();
 
 		req.target_pid = 0;
-		CHECK(terminate_policy_decide(&req) == TERMINATE_DENY_TARGET,
-		      "PID 0 is a process group, not a process");
+		TEST("PID 0 is a process group, not a process");
+		if (terminate_policy_decide(&req) != TERMINATE_DENY_TARGET)
+			FAIL("expected: terminate_policy_decide(&req) == "
+			     "TERMINATE_DENY_TARGET");
 		req.target_pid = 1;
 		req.caller_uid = 0;
 		req.target_uid = 0;
-		CHECK(terminate_policy_decide(&req) == TERMINATE_DENY_TARGET,
-		      "PID 1 is refused even to root: no title is init");
+		TEST("PID 1 is refused even to root: no title is init");
+		if (terminate_policy_decide(&req) != TERMINATE_DENY_TARGET)
+			FAIL("expected: terminate_policy_decide(&req) == "
+			     "TERMINATE_DENY_TARGET");
 	}
 
-	CHECK(terminate_policy_decide(NULL) == TERMINATE_DENY_TARGET,
-	      "a missing request is refused rather than assumed");
+	TEST("a missing request is refused rather than assumed");
+	if (terminate_policy_decide(NULL) != TERMINATE_DENY_TARGET)
+		FAIL("expected: terminate_policy_decide(NULL) == "
+		     "TERMINATE_DENY_TARGET");
 
 	/*
 	 * Caller sees a wire code, not the sentence, so the code has to separate
@@ -151,22 +164,31 @@ int main(void)
 	 * live run had the agent's own PID and PID 1 both reported as
 	 * "belongs to another user"
 	 */
-	CHECK(terminate_decision_result(TERMINATE_DENY_NOT_PROTECTED) ==
-		      LOTA_IPC_ERR_NOT_PROTECTED,
-	      "an unprotected target has a code of its own");
-	CHECK(terminate_decision_result(TERMINATE_DENY_TARGET) ==
-		      LOTA_IPC_ERR_TARGET_REFUSED,
-	      "a target this verb does not speak for has a code of its own");
-	CHECK(terminate_decision_result(TERMINATE_DENY_AGENT) ==
-		      LOTA_IPC_ERR_TARGET_REFUSED,
-	      "the agent is refused as a target, not as a caller");
-	CHECK(terminate_decision_result(TERMINATE_DENY_OWNER) ==
-		      LOTA_IPC_ERR_ACCESS_DENIED,
-	      "a caller who does not own the process is denied access");
-	CHECK(terminate_decision_result(TERMINATE_DENY_SIGNAL) ==
-		      LOTA_IPC_ERR_ACCESS_DENIED,
-	      "a signal outside the two relayed is denied access");
+	TEST("an unprotected target has a code of its own");
+	if (terminate_decision_result(TERMINATE_DENY_NOT_PROTECTED) !=
+	    LOTA_IPC_ERR_NOT_PROTECTED)
+		FAIL("expected: terminate_decision_result(TERMINATE_DENY_NOT_PROTECTED) "
+		     "== LOTA_IPC_ERR_NOT_PROTECTED");
+	TEST("a target this verb does not speak for has a code of its own");
+	if (terminate_decision_result(TERMINATE_DENY_TARGET) !=
+	    LOTA_IPC_ERR_TARGET_REFUSED)
+		FAIL("expected: terminate_decision_result(TERMINATE_DENY_TARGET) "
+		     "== LOTA_IPC_ERR_TARGET_REFUSED");
+	TEST("the agent is refused as a target, not as a caller");
+	if (terminate_decision_result(TERMINATE_DENY_AGENT) !=
+	    LOTA_IPC_ERR_TARGET_REFUSED)
+		FAIL("expected: terminate_decision_result(TERMINATE_DENY_AGENT) "
+		     "== LOTA_IPC_ERR_TARGET_REFUSED");
+	TEST("a caller who does not own the process is denied access");
+	if (terminate_decision_result(TERMINATE_DENY_OWNER) !=
+	    LOTA_IPC_ERR_ACCESS_DENIED)
+		FAIL("expected: terminate_decision_result(TERMINATE_DENY_OWNER) "
+		     "== LOTA_IPC_ERR_ACCESS_DENIED");
+	TEST("a signal outside the two relayed is denied access");
+	if (terminate_decision_result(TERMINATE_DENY_SIGNAL) !=
+	    LOTA_IPC_ERR_ACCESS_DENIED)
+		FAIL("expected: terminate_decision_result(TERMINATE_DENY_SIGNAL) "
+		     "== LOTA_IPC_ERR_ACCESS_DENIED");
 
-	printf("\n%s\n", g_failures ? "FAILURES" : "All tests passed");
-	return g_failures ? 1 : 0;
+	return test_end();
 }

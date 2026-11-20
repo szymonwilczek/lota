@@ -56,11 +56,9 @@ static void test_plain(void)
 	TEST("a per-frame log yields every frame");
 
 	if (!log || parse(log, &f, err, sizeof(err))) {
-		FAIL(log ? err : "open_memstream");
+		FAIL("%s", log ? err : "open_memstream");
 	} else if (f.n != 50 || f.us[0] != 16000 || f.us[49] != 16000) {
 		FAIL("wrong frames");
-	} else {
-		PASS();
 	}
 	bench_frames_free(&f);
 	free(log);
@@ -77,11 +75,9 @@ static void test_versioned(void)
 	TEST("a log with version headers is read past them");
 
 	if (!log || parse(log, &f, err, sizeof(err)))
-		FAIL(log ? err : "open_memstream");
+		FAIL("%s", log ? err : "open_memstream");
 	else if (f.n != 10)
 		FAIL("wrong frame count");
-	else
-		PASS();
 	bench_frames_free(&f);
 	free(log);
 }
@@ -97,11 +93,9 @@ static void test_column_order(void)
 	TEST("columns are found by name, not position");
 
 	if (parse(log, &f, err, sizeof(err)))
-		FAIL(err);
+		FAIL("%s", err);
 	else if (f.n != 2 || f.us[1] != 5000)
 		FAIL("wrong frames");
-	else
-		PASS();
 	bench_frames_free(&f);
 }
 
@@ -117,11 +111,9 @@ static void test_fraction(void)
 	TEST("frame times keep microseconds and drop the rest");
 
 	if (parse(log, &f, err, sizeof(err)))
-		FAIL(err);
+		FAIL("%s", err);
 	else if (f.us[0] != 5556 || f.us[1] != 500 || f.us[2] != 7000)
 		FAIL("wrong frame times");
-	else
-		PASS();
 	bench_frames_free(&f);
 }
 
@@ -137,9 +129,7 @@ static void test_interval_log(void)
 		FAIL("open_memstream");
 	} else if (parse(log, &f, err, sizeof(err)) != -EINVAL ||
 		   !strstr(err, "log_interval=0")) {
-		FAIL(err[0] ? err : "accepted");
-	} else {
-		PASS();
+		FAIL("%s", err[0] ? err : "accepted");
 	}
 	bench_frames_free(&f);
 	free(log);
@@ -204,10 +194,9 @@ static void test_rejections(void)
 		}
 		if (!strstr(err, r->says)) {
 			snprintf(msg, sizeof(msg), "says \"%s\"", err);
-			FAIL(msg);
+			FAIL("%s", msg);
 			continue;
 		}
-		PASS();
 	}
 }
 
@@ -235,8 +224,6 @@ static void test_stats(void)
 	    s.low_1pct_us != 37000 || s.low_01pct_us != 100000 ||
 	    s.max_us != 100000 || s.stutters != 10)
 		FAIL("wrong statistics");
-	else
-		PASS();
 }
 
 static void test_stats_one_frame(void)
@@ -254,13 +241,11 @@ static void test_stats_one_frame(void)
 	if (s.median_us != 4000 || s.p999_us != 4000 ||
 	    s.low_01pct_us != 4000 || s.stutters != 0)
 		FAIL("wrong statistics");
-	else
-		PASS();
 }
 
 int main(void)
 {
-	printf("lota-bench MangoHud log reader:\n");
+	test_begin("bench frames");
 
 	test_plain();
 	test_versioned();
@@ -271,6 +256,5 @@ int main(void)
 	test_stats();
 	test_stats_one_frame();
 
-	printf("%d/%d tests passed\n", tests_passed, tests_run);
-	return tests_passed == tests_run ? 0 : 1;
+	return test_end();
 }

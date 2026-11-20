@@ -1,17 +1,9 @@
 /* SPDX-License-Identifier: MIT */
 /* Copyright (C) 2026 Szymon Wilczek */
 #include <errno.h>
-#include <stdio.h>
-#include <stdlib.h>
 
 #include "../src/agent/bpf_loader.h"
-
-#define PASS() printf("PASS\n")
-#define FAIL(fmt, ...)                                    \
-	do {                                              \
-		printf("FAIL: " fmt "\n", ##__VA_ARGS__); \
-		exit(1);                                  \
-	} while (0)
+#include "test.h"
 
 /*
  * Pin the load/attach split contract. bpf_loader_attach() must refuse
@@ -21,37 +13,34 @@
  */
 static void test_attach_refuses_before_load(void)
 {
-	printf("Testing bpf_loader_attach refuses unloaded context...\n");
-
 	struct bpf_loader_ctx ctx;
-	int ret = bpf_loader_init(&ctx);
+	int ret;
+
+	TEST("bpf_loader_init leaves the context unloaded");
+	ret = bpf_loader_init(&ctx);
 	if (ret != 0) {
 		FAIL("bpf_loader_init returned %d", ret);
+		return;
 	}
-	if (ctx.loaded) {
+	if (ctx.loaded)
 		FAIL("bpf_loader_init left ctx.loaded = true");
-	}
-	if (ctx.attached) {
+	if (ctx.attached)
 		FAIL("bpf_loader_init left ctx.attached = true");
-	}
 
+	TEST("bpf_loader_attach refuses an unloaded context");
 	ret = bpf_loader_attach(&ctx);
-	if (ret != -EINVAL) {
-		FAIL("bpf_loader_attach on unloaded ctx returned %d, want "
-		     "-EINVAL",
-		     ret);
-	}
+	if (ret != -EINVAL)
+		FAIL("returned %d, want -EINVAL", ret);
 
+	TEST("bpf_loader_attach refuses NULL");
 	ret = bpf_loader_attach(NULL);
-	if (ret != -EINVAL) {
-		FAIL("bpf_loader_attach(NULL) returned %d, want -EINVAL", ret);
-	}
-
-	PASS();
+	if (ret != -EINVAL)
+		FAIL("returned %d, want -EINVAL", ret);
 }
 
 int main(void)
 {
+	test_begin("loader attach");
 	test_attach_refuses_before_load();
-	return 0;
+	return test_end();
 }

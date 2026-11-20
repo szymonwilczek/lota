@@ -32,8 +32,7 @@ static void setup_tmpdir(void)
 {
 	snprintf(tmpdir, sizeof(tmpdir), "/tmp/lota_test_sign_XXXXXX");
 	if (!mkdtemp(tmpdir)) {
-		fprintf(stderr, "Failed to create temp dir: %s\n",
-			strerror(errno));
+		FAIL("Failed to create temp dir: %s", strerror(errno));
 		exit(1);
 	}
 }
@@ -99,7 +98,6 @@ static void test_generate_keypair(void)
 		FAIL("public key file missing");
 		return;
 	}
-	PASS();
 }
 
 static void test_generate_keypair_null_args(void)
@@ -114,7 +112,6 @@ static void test_generate_keypair_null_args(void)
 		FAIL("expected -EINVAL");
 		return;
 	}
-	PASS();
 
 	TEST("generate keypair null pubkey");
 	ret = policy_sign_generate_keypair(pub, NULL);
@@ -122,7 +119,6 @@ static void test_generate_keypair_null_args(void)
 		FAIL("expected -EINVAL");
 		return;
 	}
-	PASS();
 }
 
 static void test_sign_verify_buffer(void)
@@ -152,7 +148,6 @@ static void test_sign_verify_buffer(void)
 		FAIL("verify_buffer failed on valid sig");
 		return;
 	}
-	PASS();
 }
 
 static void test_verify_buffer_tampered(void)
@@ -185,7 +180,6 @@ static void test_verify_buffer_tampered(void)
 		FAIL("expected -EKEYREJECTED for tampered data");
 		return;
 	}
-	PASS();
 }
 
 static void test_verify_buffer_wrong_key(void)
@@ -224,7 +218,6 @@ static void test_verify_buffer_wrong_key(void)
 		FAIL("expected -EKEYREJECTED for wrong key");
 		return;
 	}
-	PASS();
 }
 
 static void test_sign_verify_file(void)
@@ -267,7 +260,6 @@ static void test_sign_verify_file(void)
 		FAIL("verify_file failed on valid sig");
 		return;
 	}
-	PASS();
 }
 
 static void test_verify_file_tampered(void)
@@ -304,7 +296,6 @@ static void test_verify_file_tampered(void)
 		FAIL("expected -EKEYREJECTED for tampered file");
 		return;
 	}
-	PASS();
 }
 
 static void test_verify_file_truncated_sig(void)
@@ -337,7 +328,6 @@ static void test_verify_file_truncated_sig(void)
 		FAIL("expected -EKEYREJECTED for truncated sig");
 		return;
 	}
-	PASS();
 }
 
 static void test_verify_file_sig_size(void)
@@ -370,13 +360,12 @@ static void test_verify_file_sig_size(void)
 		write_file(sig_path, sig, sizes[i]);
 		ret = policy_verify_file(yaml_path, pub, sig_path);
 		if (ret != (sizes[i] == POLICY_SIG_SIZE ? 0 : -EKEYREJECTED)) {
-			FAIL(sizes[i] < POLICY_SIG_SIZE	 ? "63 bytes" :
-			     sizes[i] == POLICY_SIG_SIZE ? "64 bytes" :
-							   "65 bytes");
+			FAIL("%s", sizes[i] < POLICY_SIG_SIZE  ? "63 bytes" :
+				   sizes[i] == POLICY_SIG_SIZE ? "64 bytes" :
+								 "65 bytes");
 			return;
 		}
 	}
-	PASS();
 }
 
 static void test_keygen_refuses_existing_file(void)
@@ -416,7 +405,6 @@ static void test_keygen_refuses_existing_file(void)
 		return;
 	}
 	unlink(pub);
-	PASS();
 }
 
 static void test_sign_buffer_null_args(void)
@@ -435,7 +423,6 @@ static void test_sign_buffer_null_args(void)
 		FAIL("expected -EINVAL");
 		return;
 	}
-	PASS();
 
 	TEST("sign_buffer rejects null key path");
 	ret = policy_sign_buffer(msg, sizeof(msg) - 1, NULL, sig);
@@ -443,7 +430,6 @@ static void test_sign_buffer_null_args(void)
 		FAIL("expected -EINVAL");
 		return;
 	}
-	PASS();
 
 	TEST("sign_buffer rejects null sig_out");
 	ret = policy_sign_buffer(msg, sizeof(msg) - 1, priv, NULL);
@@ -451,7 +437,6 @@ static void test_sign_buffer_null_args(void)
 		FAIL("expected -EINVAL");
 		return;
 	}
-	PASS();
 }
 
 static void test_verify_buffer_null_args(void)
@@ -471,7 +456,6 @@ static void test_verify_buffer_null_args(void)
 		FAIL("expected -EINVAL");
 		return;
 	}
-	PASS();
 
 	TEST("verify_buffer rejects null key path");
 	ret = policy_verify_buffer(msg, sizeof(msg) - 1, NULL, sig);
@@ -479,7 +463,6 @@ static void test_verify_buffer_null_args(void)
 		FAIL("expected -EINVAL");
 		return;
 	}
-	PASS();
 
 	TEST("verify_buffer rejects null sig");
 	ret = policy_verify_buffer(msg, sizeof(msg) - 1, pub, NULL);
@@ -487,7 +470,6 @@ static void test_verify_buffer_null_args(void)
 		FAIL("expected -EINVAL");
 		return;
 	}
-	PASS();
 }
 
 static void test_sign_file_null_args(void)
@@ -498,7 +480,6 @@ static void test_sign_file_null_args(void)
 		FAIL("expected -EINVAL");
 		return;
 	}
-	PASS();
 
 	TEST("sign_file rejects null key_path");
 	ret = policy_sign_file("/tmp/f", NULL, "/tmp/s");
@@ -506,7 +487,6 @@ static void test_sign_file_null_args(void)
 		FAIL("expected -EINVAL");
 		return;
 	}
-	PASS();
 
 	TEST("sign_file rejects null sig_path");
 	ret = policy_sign_file("/tmp/f", "/tmp/k", NULL);
@@ -514,7 +494,6 @@ static void test_sign_file_null_args(void)
 		FAIL("expected -EINVAL");
 		return;
 	}
-	PASS();
 }
 
 static void test_verify_file_null_args(void)
@@ -525,7 +504,6 @@ static void test_verify_file_null_args(void)
 		FAIL("expected -EINVAL");
 		return;
 	}
-	PASS();
 
 	TEST("verify_file rejects null key_path");
 	ret = policy_verify_file("/tmp/f", NULL, "/tmp/s");
@@ -533,7 +511,6 @@ static void test_verify_file_null_args(void)
 		FAIL("expected -EINVAL");
 		return;
 	}
-	PASS();
 
 	TEST("verify_file rejects null sig_path");
 	ret = policy_verify_file("/tmp/f", "/tmp/k", NULL);
@@ -541,7 +518,6 @@ static void test_verify_file_null_args(void)
 		FAIL("expected -EINVAL");
 		return;
 	}
-	PASS();
 }
 
 static void test_sign_file_nonexistent(void)
@@ -561,7 +537,6 @@ static void test_sign_file_nonexistent(void)
 		FAIL("expected failure for nonexistent file");
 		return;
 	}
-	PASS();
 }
 
 static void test_sign_nonexistent_key(void)
@@ -580,7 +555,6 @@ static void test_sign_nonexistent_key(void)
 		FAIL("expected failure for nonexistent key");
 		return;
 	}
-	PASS();
 }
 
 static void test_empty_message(void)
@@ -605,7 +579,6 @@ static void test_empty_message(void)
 		FAIL("verify_buffer failed on empty");
 		return;
 	}
-	PASS();
 }
 
 static void test_sig_file_size(void)
@@ -644,10 +617,9 @@ static void test_sig_file_size(void)
 		char msg[64];
 		snprintf(msg, sizeof(msg), "sig size is %ld, expected %d",
 			 fsize, POLICY_SIG_SIZE);
-		FAIL(msg);
+		FAIL("%s", msg);
 		return;
 	}
-	PASS();
 }
 
 static void test_verify_missing_sig_file(void)
@@ -671,7 +643,6 @@ static void test_verify_missing_sig_file(void)
 		FAIL("expected failure for missing sig file");
 		return;
 	}
-	PASS();
 }
 
 /* out of descriptors, the key is not missing: a restart may clear it */
@@ -706,7 +677,6 @@ static void test_verify_unopened_key_names_errno(void)
 		FAIL("descriptor exhaustion did not return -EMFILE");
 		return;
 	}
-	PASS();
 }
 
 /* a key file that holds no Ed25519 key: a restart cannot clear it */
@@ -765,12 +735,11 @@ static void test_verify_non_ed25519_key_is_invalid(void)
 		FAIL("an X25519 key did not return -EINVAL");
 		return;
 	}
-	PASS();
 }
 
 int main(void)
 {
-	printf("=== LOTA Policy Signing Tests ===\n\n");
+	test_begin("policy sign");
 
 	setup_tmpdir();
 
@@ -798,6 +767,5 @@ int main(void)
 
 	cleanup_tmpdir();
 
-	printf("\n=== Results: %d/%d passed ===\n", tests_passed, tests_run);
-	return (tests_passed == tests_run) ? 0 : 1;
+	return test_end();
 }

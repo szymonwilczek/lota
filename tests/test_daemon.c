@@ -104,8 +104,6 @@ static void test_pidfile_create_remove(void)
 		FAIL("PID file not removed");
 		return;
 	}
-
-	PASS();
 }
 
 static void test_pidfile_double_lock(void)
@@ -128,7 +126,7 @@ static void test_pidfile_double_lock(void)
 	if (fd2 != -EEXIST) {
 		char msg[128];
 		snprintf(msg, sizeof(msg), "expected -EEXIST, got %d", fd2);
-		FAIL(msg);
+		FAIL("%s", msg);
 		if (fd2 >= 0)
 			close(fd2);
 		pidfile_remove(path, fd1);
@@ -136,7 +134,6 @@ static void test_pidfile_double_lock(void)
 	}
 
 	pidfile_remove(path, fd1);
-	PASS();
 }
 
 static void test_pidfile_lock_release_on_close(void)
@@ -164,12 +161,11 @@ static void test_pidfile_lock_release_on_close(void)
 		char msg[128];
 		snprintf(msg, sizeof(msg), "second pidfile_create failed: %d",
 			 fd2);
-		FAIL(msg);
+		FAIL("%s", msg);
 		return;
 	}
 
 	pidfile_remove(path, fd2);
-	PASS();
 }
 
 /* resolve only: creating the default would clobber a running agent's file */
@@ -188,7 +184,7 @@ static void test_pidfile_default_path(void)
 		char msg[256];
 		snprintf(msg, sizeof(msg), "resolved to %s, expected %s",
 			 resolved, DAEMON_DEFAULT_PID_FILE);
-		FAIL(msg);
+		FAIL("%s", msg);
 		return;
 	}
 	/* a relative default would land in whatever directory started us */
@@ -196,7 +192,6 @@ static void test_pidfile_default_path(void)
 		FAIL("the default path is not absolute");
 		return;
 	}
-	PASS();
 }
 
 static void test_pidfile_explicit_path_is_kept(void)
@@ -213,7 +208,6 @@ static void test_pidfile_explicit_path_is_kept(void)
 		FAIL("caller path was not returned unchanged");
 		return;
 	}
-	PASS();
 }
 
 static void test_pidfile_creates_parent_dir(void)
@@ -231,7 +225,7 @@ static void test_pidfile_creates_parent_dir(void)
 		char msg[128];
 		snprintf(msg, sizeof(msg), "pidfile_create failed: %d (%s)", fd,
 			 strerror(-fd));
-		FAIL(msg);
+		FAIL("%s", msg);
 		return;
 	}
 
@@ -252,7 +246,6 @@ static void test_pidfile_creates_parent_dir(void)
 	}
 
 	pidfile_remove(path, fd);
-	PASS();
 }
 
 static void test_pidfile_rejects_symlink_path(void)
@@ -309,11 +302,9 @@ static void test_pidfile_rejects_symlink_path(void)
 
 	if (strcmp(before, "SAFE") != 0) {
 		snprintf(after, sizeof(after), "target modified: '%s'", before);
-		FAIL(after);
+		FAIL("%s", after);
 		return;
 	}
-
-	PASS();
 }
 
 static long elapsed_ms(const struct timespec *from)
@@ -372,10 +363,9 @@ static void test_pidfile_wait_missing(void)
 		char msg[64];
 
 		snprintf(msg, sizeof(msg), "expected 0, got %d", ret);
-		FAIL(msg);
+		FAIL("%s", msg);
 		return;
 	}
-	PASS();
 }
 
 static void test_pidfile_wait_stale(void)
@@ -400,10 +390,9 @@ static void test_pidfile_wait_stale(void)
 		char msg[64];
 
 		snprintf(msg, sizeof(msg), "expected 0, got %d", ret);
-		FAIL(msg);
+		FAIL("%s", msg);
 		return;
 	}
-	PASS();
 }
 
 static void test_pidfile_wait_until_holder_exits(void)
@@ -434,10 +423,9 @@ static void test_pidfile_wait_until_holder_exits(void)
 		snprintf(msg, sizeof(msg),
 			 "expected 0 after the holder exits, got %d in %ld ms",
 			 ret, ms);
-		FAIL(msg);
+		FAIL("%s", msg);
 		return;
 	}
-	PASS();
 }
 
 static void test_pidfile_wait_times_out(void)
@@ -470,10 +458,9 @@ static void test_pidfile_wait_times_out(void)
 		snprintf(msg, sizeof(msg),
 			 "expected -ETIMEDOUT after ~300 ms, got %d in %ld ms",
 			 ret, ms);
-		FAIL(msg);
+		FAIL("%s", msg);
 		return;
 	}
-	PASS();
 }
 
 static void test_signal_install(void)
@@ -489,7 +476,7 @@ static void test_signal_install(void)
 		char msg[128];
 		snprintf(msg, sizeof(msg), "daemon_install_signals failed: %d",
 			 ret);
-		FAIL(msg);
+		FAIL("%s", msg);
 		return;
 	}
 
@@ -514,8 +501,6 @@ static void test_signal_install(void)
 			return;
 		}
 	}
-
-	PASS();
 }
 
 static void test_signal_null_args(void)
@@ -528,11 +513,9 @@ static void test_signal_null_args(void)
 	if (ret != -EINVAL) {
 		char msg[128];
 		snprintf(msg, sizeof(msg), "expected -EINVAL, got %d", ret);
-		FAIL(msg);
+		FAIL("%s", msg);
 		return;
 	}
-
-	PASS();
 }
 
 static void test_sighup_sets_reload(void)
@@ -556,8 +539,6 @@ static void test_sighup_sets_reload(void)
 		FAIL("running flag should still be 1");
 		return;
 	}
-
-	PASS();
 }
 
 static void test_sigterm_clears_running(void)
@@ -585,9 +566,7 @@ static void test_sigterm_clears_running(void)
 	int status;
 	waitpid(child, &status, 0);
 
-	if (WIFEXITED(status) && WEXITSTATUS(status) == 0) {
-		PASS();
-	} else {
+	if (!(WIFEXITED(status) && WEXITSTATUS(status) == 0)) {
 		FAIL("child did not exit cleanly with running=0");
 	}
 }
@@ -636,9 +615,7 @@ static void test_daemonize(void)
 	if (f) {
 		int daemon_pid = 0;
 		if (fscanf(f, "%d", &daemon_pid) == 1) {
-			if (daemon_pid != child && daemon_pid != getpid()) {
-				PASS();
-			} else {
+			if (!(daemon_pid != child && daemon_pid != getpid())) {
 				FAIL("daemon PID should differ from "
 				     "child and parent");
 			}
@@ -653,7 +630,7 @@ static void test_daemonize(void)
 
 int main(void)
 {
-	printf("=== Daemon Module Tests ===\n\n");
+	test_begin("daemon");
 
 	setup_tmp_dir();
 
@@ -681,6 +658,5 @@ int main(void)
 
 	cleanup_tmp_dir();
 
-	printf("\n=== Results: %d/%d passed ===\n", tests_passed, tests_run);
-	return (tests_passed == tests_run) ? 0 : 1;
+	return test_end();
 }

@@ -16,17 +16,7 @@
 
 #include "../src/agent/bench.h"
 
-static int g_failures;
-
-#define CHECK(cond, msg)                                    \
-	do {                                                \
-		if (!(cond)) {                              \
-			fprintf(stderr, "FAIL: %s\n", msg); \
-			g_failures++;                       \
-		} else {                                    \
-			printf("PASS: %s\n", msg);          \
-		}                                           \
-	} while (0)
+#include "test.h"
 
 static char g_dir[] = "/tmp/lota-bench-file-XXXXXX";
 static char g_path[PATH_MAX];
@@ -84,8 +74,10 @@ static int commit(const char *body)
 
 static void test_fixed_path(void)
 {
-	CHECK(strcmp(LOTA_BENCH_PATH, "/run/lota/bench.json") == 0,
-	      "the snapshot path is /run/lota/bench.json");
+	TEST("the snapshot path is /run/lota/bench.json");
+	if (strcmp(LOTA_BENCH_PATH, "/run/lota/bench.json") != 0)
+		FAIL("expected: strcmp(LOTA_BENCH_PATH, "
+		     "\"/run/lota/bench.json\") == 0");
 }
 
 static void test_replaces_whole(void)
@@ -93,13 +85,20 @@ static void test_replaces_whole(void)
 	char buf[64];
 
 	cleanup();
-	CHECK(commit("{\"seq\":1}\n") == 0, "first snapshot written");
-	CHECK(commit("{}\n") == 0, "second snapshot written");
-	CHECK(read_file(g_path, buf, sizeof(buf)) == 0 &&
-		      strcmp(buf, "{}\n") == 0,
-	      "a snapshot replaces the previous one whole");
-	CHECK(access(g_tmp, F_OK) < 0 && errno == ENOENT,
-	      "no temporary file is left behind");
+	TEST("first snapshot written");
+	if (commit("{\"seq\":1}\n") != 0)
+		FAIL("expected: commit(\"{\\\"seq\\\":1}\\n\") == 0");
+	TEST("second snapshot written");
+	if (commit("{}\n") != 0)
+		FAIL("expected: commit(\"{}\\n\") == 0");
+	TEST("a snapshot replaces the previous one whole");
+	if (!(read_file(g_path, buf, sizeof(buf)) == 0 &&
+	      strcmp(buf, "{}\n") == 0))
+		FAIL("expected: read_file(g_path, buf, sizeof(buf)) == 0 && "
+		     "strcmp(buf, \"{}\\n\") == 0");
+	TEST("no temporary file is left behind");
+	if (!(access(g_tmp, F_OK) < 0 && errno == ENOENT))
+		FAIL("expected: access(g_tmp, F_OK) < 0 && errno == ENOENT");
 }
 
 static void test_stale_tmp_symlink(void)
@@ -107,13 +106,23 @@ static void test_stale_tmp_symlink(void)
 	char buf[64];
 
 	cleanup();
-	CHECK(write_file(g_decoy, "decoy\n") == 0, "decoy written");
-	CHECK(symlink(g_decoy, g_tmp) == 0, "symlink planted at .bench.tmp");
-	CHECK(commit("{}\n") == 0, "snapshot written past a stale symlink");
-	CHECK(read_file(g_decoy, buf, sizeof(buf)) == 0 &&
-		      strcmp(buf, "decoy\n") == 0,
-	      "the symlink target is untouched");
-	CHECK(is_regular(g_path), "bench.json is a regular file");
+	TEST("decoy written");
+	if (write_file(g_decoy, "decoy\n") != 0)
+		FAIL("expected: write_file(g_decoy, \"decoy\\n\") == 0");
+	TEST("symlink planted at .bench.tmp");
+	if (symlink(g_decoy, g_tmp) != 0)
+		FAIL("expected: symlink(g_decoy, g_tmp) == 0");
+	TEST("snapshot written past a stale symlink");
+	if (commit("{}\n") != 0)
+		FAIL("expected: commit(\"{}\\n\") == 0");
+	TEST("the symlink target is untouched");
+	if (!(read_file(g_decoy, buf, sizeof(buf)) == 0 &&
+	      strcmp(buf, "decoy\n") == 0))
+		FAIL("expected: read_file(g_decoy, buf, sizeof(buf)) == 0 && "
+		     "strcmp(buf, \"decoy\\n\") == 0");
+	TEST("bench.json is a regular file");
+	if (!is_regular(g_path))
+		FAIL("expected: is_regular(g_path)");
 }
 
 static void test_target_symlink(void)
@@ -121,13 +130,23 @@ static void test_target_symlink(void)
 	char buf[64];
 
 	cleanup();
-	CHECK(write_file(g_decoy, "decoy\n") == 0, "decoy written");
-	CHECK(symlink(g_decoy, g_path) == 0, "symlink planted at bench.json");
-	CHECK(commit("{}\n") == 0, "snapshot written over a symlink");
-	CHECK(read_file(g_decoy, buf, sizeof(buf)) == 0 &&
-		      strcmp(buf, "decoy\n") == 0,
-	      "the symlink target is untouched");
-	CHECK(is_regular(g_path), "the symlink is replaced, not followed");
+	TEST("decoy written");
+	if (write_file(g_decoy, "decoy\n") != 0)
+		FAIL("expected: write_file(g_decoy, \"decoy\\n\") == 0");
+	TEST("symlink planted at bench.json");
+	if (symlink(g_decoy, g_path) != 0)
+		FAIL("expected: symlink(g_decoy, g_path) == 0");
+	TEST("snapshot written over a symlink");
+	if (commit("{}\n") != 0)
+		FAIL("expected: commit(\"{}\\n\") == 0");
+	TEST("the symlink target is untouched");
+	if (!(read_file(g_decoy, buf, sizeof(buf)) == 0 &&
+	      strcmp(buf, "decoy\n") == 0))
+		FAIL("expected: read_file(g_decoy, buf, sizeof(buf)) == 0 && "
+		     "strcmp(buf, \"decoy\\n\") == 0");
+	TEST("the symlink is replaced, not followed");
+	if (!is_regular(g_path))
+		FAIL("expected: is_regular(g_path)");
 }
 
 static int fds_on_snapshot(void)
@@ -157,9 +176,12 @@ static int fds_on_snapshot(void)
 static void test_no_fd_held(void)
 {
 	cleanup();
-	CHECK(commit("{}\n") == 0, "snapshot written");
-	CHECK(fds_on_snapshot() == 0,
-	      "no descriptor to the file or its directory outlives a write");
+	TEST("snapshot written");
+	if (commit("{}\n") != 0)
+		FAIL("expected: commit(\"{}\\n\") == 0");
+	TEST("no descriptor to the file or its directory outlives a write");
+	if (fds_on_snapshot() != 0)
+		FAIL("expected: fds_on_snapshot() == 0");
 }
 
 static void test_overflow_skips(void)
@@ -168,19 +190,30 @@ static void test_overflow_skips(void)
 	char buf[64];
 
 	cleanup();
-	CHECK(commit("{\"seq\":1}\n") == 0, "snapshot written");
+	TEST("snapshot written");
+	if (commit("{\"seq\":1}\n") != 0)
+		FAIL("expected: commit(\"{\\\"seq\\\":1}\\n\") == 0");
 
 	memset(big, 'x', sizeof(big) - 1);
 	big[sizeof(big) - 1] = '\0';
 	bench_append(&g_w, "%s", big);
-	CHECK(g_w.len < LOTA_BENCH_MAX, "the buffer never grows past the cap");
-	CHECK(bench_commit_in(&g_w, g_dir) == -EMSGSIZE,
-	      "an oversized snapshot is refused");
-	CHECK(g_w.skipped == 1, "the dropped snapshot is counted");
-	CHECK(read_file(g_path, buf, sizeof(buf)) == 0 &&
-		      strcmp(buf, "{\"seq\":1}\n") == 0,
-	      "the previous snapshot stays in place");
-	CHECK(commit("{}\n") == 0, "the writer recovers after a drop");
+	TEST("the buffer never grows past the cap");
+	if (g_w.len >= LOTA_BENCH_MAX)
+		FAIL("expected: g_w.len < LOTA_BENCH_MAX");
+	TEST("an oversized snapshot is refused");
+	if (bench_commit_in(&g_w, g_dir) != -EMSGSIZE)
+		FAIL("expected: bench_commit_in(&g_w, g_dir) == -EMSGSIZE");
+	TEST("the dropped snapshot is counted");
+	if (g_w.skipped != 1)
+		FAIL("expected: g_w.skipped == 1");
+	TEST("the previous snapshot stays in place");
+	if (!(read_file(g_path, buf, sizeof(buf)) == 0 &&
+	      strcmp(buf, "{\"seq\":1}\n") == 0))
+		FAIL("expected: read_file(g_path, buf, sizeof(buf)) == 0 && "
+		     "strcmp(buf, \"{\\\"seq\\\":1}\\n\") == 0");
+	TEST("the writer recovers after a drop");
+	if (commit("{}\n") != 0)
+		FAIL("expected: commit(\"{}\\n\") == 0");
 }
 
 static void test_mode(void)
@@ -189,21 +222,33 @@ static void test_mode(void)
 	mode_t old = umask(0077);
 
 	cleanup();
-	CHECK(commit("{}\n") == 0, "snapshot written under umask 0077");
+	TEST("snapshot written under umask 0077");
+	if (commit("{}\n") != 0)
+		FAIL("expected: commit(\"{}\\n\") == 0");
 	umask(old);
-	CHECK(stat(g_path, &st) == 0 && (st.st_mode & 07777) == 0640,
-	      "the snapshot is 0640 whatever the umask");
-	CHECK(st.st_gid == getegid(), "the snapshot carries the reader group");
+	TEST("the snapshot is 0640 whatever the umask");
+	if (!(stat(g_path, &st) == 0 && (st.st_mode & 07777) == 0640))
+		FAIL("expected: stat(g_path, &st) == 0 && (st.st_mode & "
+		     "07777) == 0640");
+	TEST("the snapshot carries the reader group");
+	if (st.st_gid != getegid())
+		FAIL("expected: st.st_gid == getegid()");
 }
 
 static void test_fifo_not_read(void)
 {
 	cleanup();
-	CHECK(mkfifo(g_path, 0600) == 0, "FIFO planted at bench.json");
+	TEST("FIFO planted at bench.json");
+	if (mkfifo(g_path, 0600) != 0)
+		FAIL("expected: mkfifo(g_path, 0600) == 0");
 	alarm(5);
-	CHECK(commit("{}\n") == 0, "snapshot written over a FIFO");
+	TEST("snapshot written over a FIFO");
+	if (commit("{}\n") != 0)
+		FAIL("expected: commit(\"{}\\n\") == 0");
 	alarm(0);
-	CHECK(is_regular(g_path), "the FIFO is replaced, never opened");
+	TEST("the FIFO is replaced, never opened");
+	if (!is_regular(g_path))
+		FAIL("expected: is_regular(g_path)");
 }
 
 static void test_missing_dir(void)
@@ -212,14 +257,17 @@ static void test_missing_dir(void)
 
 	snprintf(gone, sizeof(gone), "%s/absent", g_dir);
 	bench_append(&g_w, "{}\n");
-	CHECK(bench_commit_in(&g_w, gone) == -ENOENT,
-	      "a missing directory is reported");
-	CHECK(g_w.len == 0, "the buffer is reset after a failed write");
+	TEST("a missing directory is reported");
+	if (bench_commit_in(&g_w, gone) != -ENOENT)
+		FAIL("expected: bench_commit_in(&g_w, gone) == -ENOENT");
+	TEST("the buffer is reset after a failed write");
+	if (g_w.len != 0)
+		FAIL("expected: g_w.len == 0");
 }
 
 int main(void)
 {
-	printf("=== agent bench file tests ===\n\n");
+	test_begin("agent bench file");
 
 	if (!mkdtemp(g_dir)) {
 		perror("mkdtemp");
@@ -244,7 +292,5 @@ int main(void)
 	cleanup();
 	rmdir(g_dir);
 
-	printf("\n%s: %d failure(s)\n", g_failures ? "FAILED" : "OK",
-	       g_failures);
-	return g_failures ? 1 : 0;
+	return test_end();
 }

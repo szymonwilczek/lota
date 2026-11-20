@@ -55,7 +55,6 @@ static void test_mask_validation(void)
 		FAIL("single PCR14 rejected");
 		return;
 	}
-	PASS();
 }
 
 /*
@@ -71,7 +70,6 @@ static void test_default_mask_contents(void)
 		FAIL("mask mismatch");
 		return;
 	}
-	PASS();
 }
 
 /*
@@ -88,7 +86,6 @@ static void test_default_mask_excludes_the_boot_commitment(void)
 		FAIL("default mask binds the agent-identity register");
 		return;
 	}
-	PASS();
 }
 
 /*
@@ -113,7 +110,6 @@ static void test_agent_bound_mask_is_separate_and_named(void)
 		FAIL("agent-bound mask rejected");
 		return;
 	}
-	PASS();
 }
 
 /* read off written bytes; LENV twin in test_seal_envelope.c */
@@ -132,7 +128,6 @@ static void test_magic_is_the_four_bytes_the_header_names(void)
 		FAIL("the blob does not start with LSEL");
 		return;
 	}
-	PASS();
 }
 
 static void test_serialize_roundtrip(void)
@@ -169,7 +164,6 @@ static void test_serialize_roundtrip(void)
 		FAIL("field mismatch");
 		return;
 	}
-	PASS();
 }
 
 static void test_serialize_rejects_bad_fields(void)
@@ -211,7 +205,6 @@ static void test_serialize_rejects_bad_fields(void)
 		FAIL("NULL meta");
 		return;
 	}
-	PASS();
 }
 
 /* build a valid blob, then let the caller corrupt it before parsing */
@@ -307,8 +300,6 @@ static void test_parse_names_the_field_it_refused(void)
 		FAIL("priv_len over the maximum");
 		return;
 	}
-
-	PASS();
 }
 
 /* one byte short or long are both -EMSGSIZE; *why tells them apart */
@@ -346,8 +337,6 @@ static void test_parse_names_a_length_that_does_not_add_up(void)
 		FAIL("short body");
 		return;
 	}
-
-	PASS();
 }
 
 /* no reason text may blame the boot state: the blob never reached a TPM */
@@ -374,7 +363,6 @@ static void test_reason_text_is_about_the_file(void)
 			return;
 		}
 	}
-	PASS();
 }
 
 static void test_parse_rejects_truncated(void)
@@ -389,7 +377,6 @@ static void test_parse_rejects_truncated(void)
 		FAIL("expected -EMSGSIZE");
 		return;
 	}
-	PASS();
 }
 
 static void test_parse_rejects_bad_magic(void)
@@ -404,7 +391,6 @@ static void test_parse_rejects_bad_magic(void)
 		FAIL("expected -EINVAL");
 		return;
 	}
-	PASS();
 }
 
 static void test_parse_rejects_bad_version(void)
@@ -419,7 +405,6 @@ static void test_parse_rejects_bad_version(void)
 		FAIL("expected -EINVAL");
 		return;
 	}
-	PASS();
 }
 
 static void test_parse_rejects_nonzero_reserved(void)
@@ -440,7 +425,6 @@ static void test_parse_rejects_nonzero_reserved(void)
 		FAIL("reserved@14");
 		return;
 	}
-	PASS();
 }
 
 static void test_parse_rejects_bad_mask_alg(void)
@@ -461,7 +445,6 @@ static void test_parse_rejects_bad_mask_alg(void)
 		FAIL("bad alg");
 		return;
 	}
-	PASS();
 }
 
 static void test_parse_rejects_length_mismatch(void)
@@ -480,7 +463,6 @@ static void test_parse_rejects_length_mismatch(void)
 		FAIL("short body");
 		return;
 	}
-	PASS();
 }
 
 static void test_parse_rejects_zero_lengths(void)
@@ -501,12 +483,11 @@ static void test_parse_rejects_zero_lengths(void)
 		FAIL("zero priv_len");
 		return;
 	}
-	PASS();
 }
 
 int main(void)
 {
-	printf("Running LOTA sealed-blob format tests...\n\n");
+	test_begin("seal blob");
 
 	test_mask_validation();
 	test_default_mask_contents();
@@ -526,6 +507,5 @@ int main(void)
 	test_parse_rejects_length_mismatch();
 	test_parse_rejects_zero_lengths();
 
-	printf("\n%d/%d tests passed\n", tests_passed, tests_run);
-	return tests_passed == tests_run ? 0 : 1;
+	return test_end();
 }

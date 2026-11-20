@@ -28,17 +28,7 @@
 
 #include "../src/agent/net.h"
 
-static int g_failures;
-
-#define CHECK(cond, msg)                                    \
-	do {                                                \
-		if (!(cond)) {                              \
-			fprintf(stderr, "FAIL: %s\n", msg); \
-			g_failures++;                       \
-		} else {                                    \
-			printf("PASS: %s\n", msg);          \
-		}                                           \
-	} while (0)
+#include "test.h"
 
 static long g_serial = 1;
 
@@ -111,7 +101,7 @@ static int anchor_accepts(const char *anchor_path, X509 *leaf, int *err_out)
 	memset(&ctx, 0, sizeof(ctx));
 	if (net_context_init(&ctx, "127.0.0.1", 8443, anchor_path, 0, NULL) <
 	    0) {
-		fprintf(stderr, "net_context_init(%s) failed\n", anchor_path);
+		FAIL("net_context_init(%s) failed", anchor_path);
 		return -1;
 	}
 
@@ -281,19 +271,19 @@ int main(void)
 	char ca_pem[128], leaf_pem[128], self_pem[128];
 	int err = 0;
 
-	printf("=== pinned anchor tests ===\n");
+	test_begin("tls anchor");
 
 	if (!ca_key || !leaf_key || !self_key || !mkdtemp(dir)) {
-		fprintf(stderr, "setup failed\n");
-		return 1;
+		FAIL("setup failed");
+		return test_end();
 	}
 
 	ca = make_cert(ca_key, "LOTA test CA", NULL, NULL, 1);
 	leaf = make_cert(leaf_key, "verifier.test", ca, ca_key, 0);
 	self = make_cert(self_key, "verifier.test", NULL, NULL, 0);
 	if (!ca || !leaf || !self) {
-		fprintf(stderr, "certificate generation failed\n");
-		return 1;
+		FAIL("certificate generation failed");
+		return test_end();
 	}
 
 	snprintf(ca_pem, sizeof(ca_pem), "%s/ca.pem", dir);
@@ -301,59 +291,73 @@ int main(void)
 	snprintf(self_pem, sizeof(self_pem), "%s/self.pem", dir);
 	if (write_pem(ca_pem, ca) < 0 || write_pem(leaf_pem, leaf) < 0 ||
 	    write_pem(self_pem, self) < 0) {
-		fprintf(stderr, "writing the certificates failed\n");
-		return 1;
+		FAIL("writing the certificates failed");
+		return test_end();
 	}
 
-	CHECK(anchor_accepts(ca_pem, leaf, &err) == 1,
-	      "a CA anchor accepts the certificate it issued");
+	TEST("a CA anchor accepts the certificate it issued");
+	if (anchor_accepts(ca_pem, leaf, &err) != 1)
+		FAIL("expected: anchor_accepts(ca_pem, leaf, &err) == 1");
 
 	/* its issuer is not in the store; the pin ends the chain */
-	CHECK(anchor_accepts(leaf_pem, leaf, &err) == 1,
-	      "a pinned CA-issued listener certificate is its own anchor");
+	TEST("a pinned CA-issued listener certificate is its own anchor");
+	if (anchor_accepts(leaf_pem, leaf, &err) != 1)
+		FAIL("expected: anchor_accepts(leaf_pem, leaf, &err) == 1");
 
-	CHECK(anchor_accepts(self_pem, self, &err) == 1,
-	      "a pinned self-signed listener certificate still verifies");
+	TEST("a pinned self-signed listener certificate still verifies");
+	if (anchor_accepts(self_pem, self, &err) != 1)
+		FAIL("expected: anchor_accepts(self_pem, self, &err) == 1");
 
-	CHECK(anchor_accepts(self_pem, leaf, &err) == 0,
-	      "a pinned certificate does not vouch for a different one");
+	TEST("a pinned certificate does not vouch for a different one");
+	if (anchor_accepts(self_pem, leaf, &err) != 0)
+		FAIL("expected: anchor_accepts(self_pem, leaf, &err) == 0");
 
 	signal(SIGPIPE, SIG_IGN);
-	CHECK(connect_verified(self_pem, leaf, leaf_key) ==
-		      -LOTA_ERR_NET_TLS_CERT,
-	      "a listener certificate another CA issued is a certificate "
-	      "failure, not a failed handshake");
-	CHECK(connect_verified(ca_pem, leaf, leaf_key) ==
-		      -LOTA_ERR_NET_TLS_CERT,
-	      "a listener certificate for another name is a certificate "
-	      "failure, not a failed handshake");
+	TEST("a listener certificate another CA issued is a certificate "
+	     "failure, not a failed handshake");
+	if (connect_verified(self_pem, leaf, leaf_key) !=
+	    -LOTA_ERR_NET_TLS_CERT)
+		FAIL("expected: connect_verified(self_pem, leaf, leaf_key) == "
+		     "-LOTA_ERR_NET_TLS_CERT");
+	TEST("a listener certificate for another name is a certificate "
+	     "failure, not a failed handshake");
+	if (connect_verified(ca_pem, leaf, leaf_key) != -LOTA_ERR_NET_TLS_CERT)
+		FAIL("expected: connect_verified(ca_pem, leaf, leaf_key) == "
+		     "-LOTA_ERR_NET_TLS_CERT");
 
 	{
 		char log[2048];
 
 		connect_logged(self_pem, leaf, leaf_key, log, sizeof(log));
-		CHECK(strstr(log, self_pem) != NULL,
-		      "a certificate failure names the anchor it was checked "
-		      "against");
-		CHECK(strstr(log, "--no-verify-tls") == NULL &&
-			      strstr(log, "--ca-cert") == NULL,
-		      "a certificate failure advises no flag");
+		TEST("a certificate failure names the anchor it was checked "
+		     "against");
+		if (strstr(log, self_pem) == NULL)
+			FAIL("expected: strstr(log, self_pem) != NULL");
+		TEST("a certificate failure advises no flag");
+		if (!(strstr(log, "--no-verify-tls") == NULL &&
+		      strstr(log, "--ca-cert") == NULL))
+			FAIL("expected: strstr(log, \"--no-verify-tls\") == NULL && "
+			     "strstr(log, \"--ca-cert\") == NULL");
 
 		connect_logged(NULL, leaf, leaf_key, log, sizeof(log));
-		CHECK(strstr(log, "against the system trust store") != NULL,
-		      "without an anchor the failure names the system trust "
-		      "store");
+		TEST("without an anchor the failure names the system trust "
+		     "store");
+		if (strstr(log, "against the system trust store") == NULL)
+			FAIL("expected: strstr(log, \"against the system trust "
+			     "store\") != NULL");
 	}
 
 	{
 		long ms;
 		int ret = read_silent(self, self_key, &ms);
 
-		CHECK(ret == -ETIMEDOUT,
-		      "a peer silent after the handshake times the read out");
+		TEST("a peer silent after the handshake times the read out");
+		if (ret != -ETIMEDOUT)
+			FAIL("expected: ret == -ETIMEDOUT");
 		/* SO_RCVTIMEO once, not again in a poll after it */
-		CHECK(ms >= 0 && ms < 5000,
-		      "a silent peer's read ends with the socket timeout");
+		TEST("a silent peer's read ends with the socket timeout");
+		if (!(ms >= 0 && ms < 5000))
+			FAIL("expected: ms >= 0 && ms < 5000");
 	}
 
 	X509_free(ca);
@@ -367,10 +371,5 @@ int main(void)
 	unlink(self_pem);
 	rmdir(dir);
 
-	if (g_failures) {
-		fprintf(stderr, "\n%d test(s) failed\n", g_failures);
-		return 1;
-	}
-	printf("\nAll pinned anchor tests passed\n");
-	return 0;
+	return test_end();
 }

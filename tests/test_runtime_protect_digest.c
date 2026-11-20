@@ -11,7 +11,6 @@
  */
 
 #include <stdint.h>
-#include <stdio.h>
 #include <string.h>
 #include <openssl/evp.h>
 #include <errno.h>
@@ -55,75 +54,59 @@ fail:
 
 int main(void)
 {
+	test_begin("runtime protect digest");
 	uint32_t pids[2] = { 1234, 5678 };
 	uint8_t registry[2][32];
 	uint8_t a[32], b[32], ref[32];
-
-	printf("Runtime protect digest tests:\n");
 
 	memset(registry[0], 0xa1, 32);
 	memset(registry[1], 0xb2, 32);
 
 	TEST("matches independent reference layout");
-	if (lota_compute_runtime_protect_digest(pids, registry, 2, a) == 0 &&
-	    reference(pids, registry, 2, ref) == 0 && memcmp(a, ref, 32) == 0)
-		PASS();
-	else
+	if (!(lota_compute_runtime_protect_digest(pids, registry, 2, a) == 0 &&
+	      reference(pids, registry, 2, ref) == 0 &&
+	      memcmp(a, ref, 32) == 0))
 		FAIL("layout drift");
 
 	TEST("is deterministic");
-	if (lota_compute_runtime_protect_digest(pids, registry, 2, b) == 0 &&
-	    memcmp(a, b, 32) == 0)
-		PASS();
-	else
+	if (!(lota_compute_runtime_protect_digest(pids, registry, 2, b) == 0 &&
+	      memcmp(a, b, 32) == 0))
 		FAIL("non-deterministic");
 
 	TEST("PID change alters digest");
 	pids[1] = 5679;
-	if (lota_compute_runtime_protect_digest(pids, registry, 2, b) == 0 &&
-	    memcmp(a, b, 32) != 0)
-		PASS();
-	else
+	if (!(lota_compute_runtime_protect_digest(pids, registry, 2, b) == 0 &&
+	      memcmp(a, b, 32) != 0))
 		FAIL("pid not bound");
 	pids[1] = 5678;
 
 	TEST("registry digest change alters digest");
 	registry[1][0] ^= 0xff;
-	if (lota_compute_runtime_protect_digest(pids, registry, 2, b) == 0 &&
-	    memcmp(a, b, 32) != 0)
-		PASS();
-	else
+	if (!(lota_compute_runtime_protect_digest(pids, registry, 2, b) == 0 &&
+	      memcmp(a, b, 32) != 0))
 		FAIL("registry digest not bound");
 	registry[1][0] ^= 0xff;
 
 	TEST("PID count change alters digest");
-	if (lota_compute_runtime_protect_digest(pids, registry, 1, b) == 0 &&
-	    memcmp(a, b, 32) != 0)
-		PASS();
-	else
+	if (!(lota_compute_runtime_protect_digest(pids, registry, 1, b) == 0 &&
+	      memcmp(a, b, 32) != 0))
 		FAIL("count not bound");
 
 	TEST("rejects unsorted PID list");
 	{
 		uint32_t bad[2] = { 5678, 1234 };
-		if (lota_compute_runtime_protect_digest(bad, registry, 2, b) ==
+		if (lota_compute_runtime_protect_digest(bad, registry, 2, b) !=
 		    -EINVAL)
-			PASS();
-		else
 			FAIL("accepted unsorted");
 	}
 
 	TEST("rejects NULL registry array with non-zero count");
-	if (lota_compute_runtime_protect_digest(pids, NULL, 2, b) == -EINVAL)
-		PASS();
-	else
+	if (lota_compute_runtime_protect_digest(pids, NULL, 2, b) != -EINVAL)
 		FAIL("accepted NULL registry digests");
 
 	TEST("empty set yields a defined digest");
-	if (lota_compute_runtime_protect_digest(NULL, NULL, 0, b) == 0 &&
-	    reference(NULL, NULL, 0, ref) == 0 && memcmp(b, ref, 32) == 0)
-		PASS();
-	else
+	if (!(lota_compute_runtime_protect_digest(NULL, NULL, 0, b) == 0 &&
+	      reference(NULL, NULL, 0, ref) == 0 && memcmp(b, ref, 32) == 0))
 		FAIL("empty set rejected");
 
 	TEST("matches the cross-language known-answer vector");
@@ -146,14 +129,10 @@ int main(void)
 		uint8_t ki[2][32];
 		memset(ki[0], 0xAA, 32);
 		memset(ki[1], 0xBB, 32);
-		if (lota_compute_runtime_protect_digest(kp, ki, 2, b) == 0 &&
-		    memcmp(b, kat, 32) == 0)
-			PASS();
-		else
+		if (!(lota_compute_runtime_protect_digest(kp, ki, 2, b) == 0 &&
+		      memcmp(b, kat, 32) == 0))
 			FAIL("KAT mismatch");
 	}
 
-	printf("\n%d/%d runtime protect digest tests passed\n", tests_passed,
-	       tests_run);
-	return tests_passed == tests_run ? 0 : 1;
+	return test_end();
 }

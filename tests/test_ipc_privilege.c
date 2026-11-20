@@ -13,31 +13,9 @@
  * they asked for, on top of the uid check rather than instead of it.
  */
 
-#include <stdio.h>
-
 #include "../src/agent/ipc_privilege.h"
 
-static int g_failures;
-static const char *g_current_test;
-
-#define TEST(name)                                 \
-	do {                                       \
-		g_current_test = name;             \
-		printf("[ RUN      ] %s\n", name); \
-	} while (0)
-
-#define PASS()                                               \
-	do {                                                 \
-		printf("[       OK ] %s\n", g_current_test); \
-	} while (0)
-
-#define FAIL(fmt, ...)                                                        \
-	do {                                                                  \
-		fprintf(stderr, "[  FAILED  ] %s: " fmt "\n", g_current_test, \
-			##__VA_ARGS__);                                       \
-		g_failures++;                                                 \
-		return;                                                       \
-	} while (0)
+#include "test.h"
 
 /*
  * On a default install the allowlist is empty, so a rule that requires membership
@@ -49,7 +27,6 @@ static void test_default_install_can_stop_the_agent(void)
 
 	if (!ipc_privilege_granted(true, true, 0, false))
 		FAIL("a stock host cannot stop its own agent");
-	PASS();
 }
 
 /*
@@ -59,11 +36,12 @@ static void test_other_uid_is_refused(void)
 {
 	TEST("another uid is refused whether or not an allowlist exists");
 
-	if (ipc_privilege_granted(false, true, 0, false))
+	if (ipc_privilege_granted(false, true, 0, false)) {
 		FAIL("a foreign uid was granted on an empty allowlist");
+		return;
+	}
 	if (ipc_privilege_granted(false, true, 2, true))
 		FAIL("a foreign uid was granted on a populated allowlist");
-	PASS();
 }
 
 /*
@@ -74,11 +52,12 @@ static void test_recycled_pid_is_refused(void)
 {
 	TEST("a pid that no longer matches its start time is refused");
 
-	if (ipc_privilege_granted(true, false, 0, false))
+	if (ipc_privilege_granted(true, false, 0, false)) {
 		FAIL("a recycled pid was granted on an empty allowlist");
+		return;
+	}
 	if (ipc_privilege_granted(true, false, 2, true))
 		FAIL("a recycled pid was granted on a populated allowlist");
-	PASS();
 }
 
 /*
@@ -89,24 +68,21 @@ static void test_allowlist_narrows_when_configured(void)
 {
 	TEST("a configured allowlist still refuses an unlisted executable");
 
-	if (ipc_privilege_granted(true, true, 2, false))
+	if (ipc_privilege_granted(true, true, 2, false)) {
 		FAIL("an unlisted executable was granted");
+		return;
+	}
 	if (!ipc_privilege_granted(true, true, 2, true))
 		FAIL("a listed executable was refused");
-	PASS();
 }
 
 int main(void)
 {
+	test_begin("ipc privilege");
 	test_default_install_can_stop_the_agent();
 	test_other_uid_is_refused();
 	test_recycled_pid_is_refused();
 	test_allowlist_narrows_when_configured();
 
-	if (g_failures == 0) {
-		printf("\nAll tests passed.\n");
-		return 0;
-	}
-	fprintf(stderr, "\n%d test(s) failed.\n", g_failures);
-	return 1;
+	return test_end();
 }

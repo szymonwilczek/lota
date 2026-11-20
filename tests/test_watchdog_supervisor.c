@@ -10,7 +10,6 @@
 #include <errno.h>
 #include <signal.h>
 #include <stdint.h>
-#include <stdio.h>
 #include <stdlib.h>
 #include <sys/wait.h>
 #include <time.h>
@@ -18,17 +17,7 @@
 
 #include "../src/agent/watchdog.h"
 
-static int g_failures;
-
-#define CHECK(cond, msg)                                    \
-	do {                                                \
-		if (!(cond)) {                              \
-			fprintf(stderr, "FAIL: %s\n", msg); \
-			g_failures++;                       \
-		} else {                                    \
-			printf("PASS: %s\n", msg);          \
-		}                                           \
-	} while (0)
+#include "test.h"
 
 #define NSEC_PER_USEC 1000ULL
 #define NSEC_PER_MSEC 1000000ULL
@@ -50,32 +39,46 @@ static void test_verdicts(void)
 	uint64_t deadline = WD_USEC * NSEC_PER_USEC;
 	uint64_t now = 1000ULL * NSEC_PER_MSEC * 1000ULL;
 
-	CHECK(watchdog_verdict_for(now, now, deadline) == WATCHDOG_PING,
-	      "a loop that advanced just now pings the watchdog");
+	TEST("a loop that advanced just now pings the watchdog");
+	if (watchdog_verdict_for(now, now, deadline) != WATCHDOG_PING)
+		FAIL("expected: watchdog_verdict_for(now, now, deadline) == "
+		     "WATCHDOG_PING");
 
-	CHECK(watchdog_verdict_for(now, now - (deadline / 2 - 1), deadline) ==
-		      WATCHDOG_PING,
-	      "a loop inside the ping contract still pings");
+	TEST("a loop inside the ping contract still pings");
+	if (watchdog_verdict_for(now, now - (deadline / 2 - 1), deadline) !=
+	    WATCHDOG_PING)
+		FAIL("expected: watchdog_verdict_for(now, now - (deadline / 2 "
+		     "- 1), deadline) == WATCHDOG_PING");
 
-	CHECK(watchdog_verdict_for(now, now - deadline / 2, deadline) ==
-		      WATCHDOG_HOLD,
-	      "a loop that missed its ping contract holds the ping");
+	TEST("a loop that missed its ping contract holds the ping");
+	if (watchdog_verdict_for(now, now - deadline / 2, deadline) !=
+	    WATCHDOG_HOLD)
+		FAIL("expected: watchdog_verdict_for(now, now - deadline / 2, "
+		     "deadline) == WATCHDOG_HOLD");
 
-	CHECK(watchdog_verdict_for(now, now - deadline, deadline) ==
-		      WATCHDOG_TERMINATE,
-	      "a loop stalled for the whole interval ends the process");
+	TEST("a loop stalled for the whole interval ends the process");
+	if (watchdog_verdict_for(now, now - deadline, deadline) !=
+	    WATCHDOG_TERMINATE)
+		FAIL("expected: watchdog_verdict_for(now, now - deadline, "
+		     "deadline) == WATCHDOG_TERMINATE");
 
-	CHECK(watchdog_verdict_for(now, now - deadline * 4, deadline) ==
-		      WATCHDOG_TERMINATE,
-	      "a loop stalled well past the interval ends the process");
+	TEST("a loop stalled well past the interval ends the process");
+	if (watchdog_verdict_for(now, now - deadline * 4, deadline) !=
+	    WATCHDOG_TERMINATE)
+		FAIL("expected: watchdog_verdict_for(now, now - deadline * 4, "
+		     "deadline) == WATCHDOG_TERMINATE");
 
 	/* beats are read unlocked: a torn read must not kill a live agent */
-	CHECK(watchdog_verdict_for(now, now + deadline, deadline) ==
-		      WATCHDOG_PING,
-	      "a beat from the future is not a wedge");
+	TEST("a beat from the future is not a wedge");
+	if (watchdog_verdict_for(now, now + deadline, deadline) !=
+	    WATCHDOG_PING)
+		FAIL("expected: watchdog_verdict_for(now, now + deadline, "
+		     "deadline) == WATCHDOG_PING");
 
-	CHECK(watchdog_verdict_for(now, now - deadline, 0) == WATCHDOG_PING,
-	      "no deadline configured is never a wedge");
+	TEST("no deadline configured is never a wedge");
+	if (watchdog_verdict_for(now, now - deadline, 0) != WATCHDOG_PING)
+		FAIL("expected: watchdog_verdict_for(now, now - deadline, 0) "
+		     "== WATCHDOG_PING");
 }
 
 /*
@@ -95,16 +98,22 @@ static void test_wedged_process_ends_itself(void)
 			sleep_ms(50);
 	}
 
-	CHECK(pid > 0, "the wedged-agent child forked");
+	TEST("the wedged-agent child forked");
+	if (pid <= 0)
+		FAIL("expected: pid > 0");
 	if (pid <= 0)
 		return;
 
-	CHECK(waitpid(pid, &status, 0) == pid,
-	      "the wedged agent did not outlive its watchdog interval");
-	CHECK(WIFSIGNALED(status),
-	      "the wedged agent was ended by a signal, not a clean exit");
-	CHECK(WIFSIGNALED(status) && WTERMSIG(status) == SIGKILL,
-	      "the signal the supervisor sent is SIGKILL");
+	TEST("the wedged agent did not outlive its watchdog interval");
+	if (waitpid(pid, &status, 0) != pid)
+		FAIL("expected: waitpid(pid, &status, 0) == pid");
+	TEST("the wedged agent was ended by a signal, not a clean exit");
+	if (!WIFSIGNALED(status))
+		FAIL("expected: WIFSIGNALED(status)");
+	TEST("the signal the supervisor sent is SIGKILL");
+	if (!(WIFSIGNALED(status) && WTERMSIG(status) == SIGKILL))
+		FAIL("expected: WIFSIGNALED(status) && WTERMSIG(status) == "
+		     "SIGKILL");
 }
 
 /* A loop that keeps advancing is left alone for several intervals. */
@@ -124,28 +133,27 @@ static void test_live_process_is_left_alone(void)
 		_exit(0);
 	}
 
-	CHECK(pid > 0, "the live-agent child forked");
+	TEST("the live-agent child forked");
+	if (pid <= 0)
+		FAIL("expected: pid > 0");
 	if (pid <= 0)
 		return;
 
-	CHECK(waitpid(pid, &status, 0) == pid, "the live agent was reaped");
-	CHECK(WIFEXITED(status) && WEXITSTATUS(status) == 0,
-	      "an agent whose loop advances is not ended by its supervisor");
+	TEST("the live agent was reaped");
+	if (waitpid(pid, &status, 0) != pid)
+		FAIL("expected: waitpid(pid, &status, 0) == pid");
+	TEST("an agent whose loop advances is not ended by its supervisor");
+	if (!(WIFEXITED(status) && WEXITSTATUS(status) == 0))
+		FAIL("expected: WIFEXITED(status) && WEXITSTATUS(status) == 0");
 }
 
 int main(void)
 {
-	printf("=== watchdog supervisor tests ===\n");
+	test_begin("watchdog supervisor");
 
 	test_verdicts();
 	test_wedged_process_ends_itself();
 	test_live_process_is_left_alone();
 
-	if (g_failures) {
-		fprintf(stderr, "\n%d test(s) failed\n", g_failures);
-		return 1;
-	}
-
-	printf("\nAll watchdog supervisor tests passed\n");
-	return 0;
+	return test_end();
 }

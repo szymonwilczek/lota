@@ -169,8 +169,6 @@ static void test_plan_layout(void)
 		FAIL("the write reported failure");
 	else if (strcmp(buf, expected_plan) != 0)
 		FAIL("output differs from the documented layout");
-	else
-		PASS();
 	free(buf);
 }
 
@@ -195,8 +193,6 @@ static void test_run_layout(void)
 		FAIL("a write reported failure");
 	else if (strcmp(buf, expected_run) != 0)
 		FAIL("output differs from the documented layout");
-	else
-		PASS();
 	free(buf);
 }
 
@@ -247,8 +243,6 @@ static void test_session(void)
 	else if (!strstr(sum, "\"warmup\": true") ||
 		 !strstr(sum, "\"rounds\": 3"))
 		FAIL("a summary lost the plan or a run");
-	else
-		PASS();
 	free(res);
 	free(sum);
 	free(d);
@@ -265,8 +259,7 @@ static void test_full_device(void)
 	fd = open("/dev/full", O_WRONLY | O_CLOEXEC);
 	f = fd < 0 ? NULL : fdopen(fd, "w");
 	if (!f) {
-		printf("SKIP (no /dev/full)\n");
-		tests_run--;
+		SKIP("no /dev/full");
 		return;
 	}
 	write_run(f, ret);
@@ -274,8 +267,6 @@ static void test_full_device(void)
 
 	if (ret[3] != -EIO)
 		FAIL("the end of a lost run is reported as written");
-	else
-		PASS();
 }
 
 static void test_names(void)
@@ -298,7 +289,6 @@ static void test_names(void)
 			}
 		}
 	}
-	PASS();
 }
 
 static void test_schedule(void)
@@ -319,12 +309,11 @@ static void test_schedule(void)
 			return;
 		}
 	}
-	PASS();
 }
 
 int main(void)
 {
-	printf("lota-bench result writer:\n");
+	test_begin("bench result");
 
 	test_plan_layout();
 	test_run_layout();
@@ -333,6 +322,5 @@ int main(void)
 	test_names();
 	test_schedule();
 
-	printf("%d/%d tests passed\n", tests_passed, tests_run);
-	return tests_passed == tests_run ? 0 : 1;
+	return test_end();
 }

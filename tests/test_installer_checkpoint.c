@@ -47,7 +47,7 @@ static int stage_named(const char *title)
 	for (i = 0; i < install_stage_count; i++)
 		if (strcmp(install_stages[i].title, title) == 0)
 			return i;
-	fprintf(stderr, "no stage titled '%s'\n", title);
+	FAIL("no stage titled '%s'", title);
 	exit(1);
 }
 
@@ -67,7 +67,7 @@ static int names_only(const int *deferred, int n)
 		for (j = 0; j < n; j++)
 			left |= deferred[j] == i;
 		if (says(install_stages[i].title) != left) {
-			FAIL(note);
+			FAIL("%s", note);
 			return 0;
 		}
 	}
@@ -86,11 +86,10 @@ static void test_one_deferred_stage_is_named_alone(void)
 	d[0] = stage_named("Kernel integrity floor on the cmdline");
 	install_unattended_checkpoint(note, sizeof(note), d, 1);
 	if (says("initramfs") || says("IMA")) {
-		FAIL(note);
+		FAIL("%s", note);
 		return;
 	}
-	if (names_only(d, 1))
-		PASS();
+	names_only(d, 1);
 }
 
 static void test_the_initramfs_stage_alone(void)
@@ -101,11 +100,10 @@ static void test_the_initramfs_stage_alone(void)
 	d[0] = stage_named("Boot-time PCR14 lock in the initramfs");
 	install_unattended_checkpoint(note, sizeof(note), d, 1);
 	if (says("integrity floor") || says("IMA")) {
-		FAIL(note);
+		FAIL("%s", note);
 		return;
 	}
-	if (names_only(d, 1))
-		PASS();
+	names_only(d, 1);
 }
 
 static void test_two_deferred_stages_are_both_named(void)
@@ -117,11 +115,10 @@ static void test_two_deferred_stages_are_both_named(void)
 	d[1] = stage_named("Kernel integrity floor on the cmdline");
 	install_unattended_checkpoint(note, sizeof(note), d, 2);
 	if (says("IMA")) {
-		FAIL(note);
+		FAIL("%s", note);
 		return;
 	}
-	if (names_only(d, 2))
-		PASS();
+	names_only(d, 2);
 }
 
 /*
@@ -141,10 +138,9 @@ static void test_a_deferral_is_not_success(void)
 
 		snprintf(msg, sizeof(msg), "exit %d, want %d", rc,
 			 EXIT_INSTALL_DEFERRED);
-		FAIL(msg);
+		FAIL("%s", msg);
 		return;
 	}
-	PASS();
 }
 
 static void test_the_codes_are_distinct(void)
@@ -161,7 +157,6 @@ static void test_the_codes_are_distinct(void)
 				FAIL("two outcomes share a code");
 				return;
 			}
-	PASS();
 }
 
 static void reboot_sentence_ends_once(const char *reason)
@@ -173,11 +168,9 @@ static void reboot_sentence_ends_once(const char *reason)
 	len = strlen(buf);
 	if (!strstr(buf, "Reboot is required") ||
 	    !strstr(buf, "hardware reset"))
-		FAIL(buf);
+		FAIL("%s", buf);
 	else if (len < 2 || buf[len - 1] != '.' || buf[len - 2] == '.')
-		FAIL(buf);
-	else
-		PASS();
+		FAIL("%s", buf);
 }
 
 static void test_a_reboot_reason_that_ends_in_a_stop(void)
@@ -199,23 +192,20 @@ static void test_an_applied_stage_says_so(void)
 
 	TEST("a stage applied in this run is not already satisfied");
 	if (r == UI_DONE || strcmp(ui_result_word(r), done) == 0) {
-		FAIL(ui_result_word(r));
+		FAIL("%s", ui_result_word(r));
 		return;
 	}
 	if (!strstr(ui_result_word(r), "applied")) {
-		FAIL(ui_result_word(r));
+		FAIL("%s", ui_result_word(r));
 		return;
 	}
-	PASS();
 }
 
 static void test_an_untouched_stage_keeps_its_word(void)
 {
 	TEST("a stage with nothing to do is still already satisfied");
 	if (install_stage_result(STAGE_DONE, 0) != UI_DONE)
-		FAIL(ui_result_word(install_stage_result(STAGE_DONE, 0)));
-	else
-		PASS();
+		FAIL("%s", ui_result_word(install_stage_result(STAGE_DONE, 0)));
 }
 
 static void test_applied_changes_only_a_satisfied_stage(void)
@@ -229,10 +219,10 @@ static void test_applied_changes_only_a_satisfied_stage(void)
 	for (i = 0; i < sizeof(other) / sizeof(other[0]); i++)
 		if (install_stage_result(other[i], 1) !=
 		    install_stage_result(other[i], 0)) {
-			FAIL(ui_result_word(install_stage_result(other[i], 1)));
+			FAIL("%s",
+			     ui_result_word(install_stage_result(other[i], 1)));
 			return;
 		}
-	PASS();
 }
 
 /*
@@ -252,7 +242,6 @@ static const char *run_together(const char *s)
 
 static void test_every_explanation_is_spaced(void)
 {
-	char msg[64];
 	int bad = 0;
 
 	TEST("no stage explanation runs two sentences together");
@@ -265,16 +254,11 @@ static void test_every_explanation_is_spaced(void)
 		/* enough either side of the join to find it in the source */
 		if (at - text > 12)
 			at -= 12;
-		printf("\n       stage %d: ...%.30s...", i + 1, at);
+		FAIL("stage %d: ...%.30s...", i + 1, at);
 		bad++;
 	}
-	if (!bad) {
-		PASS();
-		return;
-	}
-	snprintf(msg, sizeof(msg), "%d explanation(s) above", bad);
-	printf("\n      ");
-	FAIL(msg);
+	if (bad)
+		FAIL("%d explanation(s) above", bad);
 }
 
 static void test_every_title_is_spaced(void)
@@ -282,11 +266,10 @@ static void test_every_title_is_spaced(void)
 	TEST("no stage title runs two sentences together");
 	for (int i = 0; i < install_stage_count; i++) {
 		if (run_together(install_stages[i].title)) {
-			FAIL(install_stages[i].title);
+			FAIL("%s", install_stages[i].title);
 			return;
 		}
 	}
-	PASS();
 }
 
 /*
@@ -323,15 +306,14 @@ static void test_the_report_summary_matches_the_report(void)
 	TEST("the report summary lists the sections a report carries");
 	for (i = 0; i < sizeof(carried) / sizeof(carried[0]); i++)
 		if (!strstr(install_telemetry_summary, carried[i])) {
-			FAIL(carried[i]);
+			FAIL("%s", carried[i]);
 			return;
 		}
 	for (i = 0; i < sizeof(absent) / sizeof(absent[0]); i++)
 		if (strstr(install_telemetry_summary, absent[i])) {
-			FAIL(absent[i]);
+			FAIL("%s", absent[i]);
 			return;
 		}
-	PASS();
 }
 
 static void test_only_a_boot_path_stage_waits_for_the_reboot(void)
@@ -356,7 +338,6 @@ static void test_only_a_boot_path_stage_waits_for_the_reboot(void)
 		FAIL("the cmdline stage does not wait for the reboot");
 		return;
 	}
-	PASS();
 }
 
 static enum stage_state barrier_note(struct install_ctx *ctx)
@@ -381,10 +362,9 @@ static void test_a_configured_floor_is_no_change(void)
 	}
 	if (says("changed") || !says(install_stages[floor].title) ||
 	    !says("is configured and takes effect on the next boot")) {
-		FAIL(note);
+		FAIL("%s", note);
 		return;
 	}
-	PASS();
 }
 
 static void test_a_rebuilt_initramfs_is_a_change(void)
@@ -407,17 +387,16 @@ static void test_a_rebuilt_initramfs_is_a_change(void)
 	snprintf(want, sizeof(want), "This run changed the boot chain: '%s'.",
 		 install_stages[lock].title);
 	if (!says(want) || says("IMA")) {
-		FAIL(note);
+		FAIL("%s", note);
 		return;
 	}
 	snprintf(want, sizeof(want),
 		 "'%s' is configured and takes effect on the next boot.",
 		 install_stages[floor].title);
 	if (!says(want)) {
-		FAIL(note);
+		FAIL("%s", note);
 		return;
 	}
-	PASS();
 }
 
 static void test_resume_names_what_starts_the_agent(void)
@@ -431,29 +410,26 @@ static void test_resume_names_what_starts_the_agent(void)
 	st.socket_enabled = 1;
 	say = install_resume_start(&st);
 	if (!strstr(say, "starts with the boot") || strstr(say, "socket")) {
-		FAIL(say);
+		FAIL("%s", say);
 		return;
 	}
-	PASS();
 
 	TEST("resume: a socket alone starts it on the first connection");
 	st.agent_enabled = 0;
 	say = install_resume_start(&st);
 	if (!strstr(say, "first connection to lota-agent.socket")) {
-		FAIL(say);
+		FAIL("%s", say);
 		return;
 	}
-	PASS();
 
 	TEST("resume: with neither enabled nothing starts the agent");
 	st.socket_enabled = 0;
 	say = install_resume_start(&st);
 	if (!strstr(say, "Nothing starts the agent") ||
 	    !strstr(say, "sudo lota-install")) {
-		FAIL(say);
+		FAIL("%s", say);
 		return;
 	}
-	PASS();
 }
 
 /* Set once the child says its TERM trap is in place */
@@ -511,12 +487,11 @@ static void test_an_aborted_command_is_not_a_success(void)
 		FAIL("the aborted command reads as done");
 		return;
 	}
-	PASS();
 }
 
 int main(void)
 {
-	printf("\n=== lota-install: the unattended checkpoint ===\n");
+	test_begin("installer checkpoint");
 
 	test_one_deferred_stage_is_named_alone();
 	test_the_initramfs_stage_alone();
@@ -537,6 +512,5 @@ int main(void)
 	test_resume_names_what_starts_the_agent();
 	test_an_aborted_command_is_not_a_success();
 
-	printf("\nPassed: %d / %d\n", tests_passed, tests_run);
-	return tests_passed == tests_run ? 0 : 1;
+	return test_end();
 }

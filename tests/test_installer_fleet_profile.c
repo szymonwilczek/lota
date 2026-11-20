@@ -92,7 +92,6 @@ static void test_recorded(void)
 		FAIL("missing file read as recorded");
 		return;
 	}
-	PASS();
 
 	TEST("a top-level ca_cert is not a publisher profile");
 	snprintf(text, sizeof(text), "ca_cert = %s\n", anchor);
@@ -101,7 +100,6 @@ static void test_recorded(void)
 		FAIL("top-level anchor read as a profile");
 		return;
 	}
-	PASS();
 
 	TEST("another publisher's profile does not record this one");
 	snprintf(text, sizeof(text),
@@ -113,7 +111,6 @@ static void test_recorded(void)
 		FAIL("a different key read as the same publisher");
 		return;
 	}
-	PASS();
 
 	/* a publisher is its key, not the path its anchor was copied to */
 	TEST("the same key under another path is recorded");
@@ -128,7 +125,6 @@ static void test_recorded(void)
 		FAIL("the recorded profile was not found");
 		return;
 	}
-	PASS();
 
 	/* the installer reads as much of lota.conf as the agent writes */
 	TEST("a profile 64 KiB into lota.conf is found");
@@ -156,7 +152,6 @@ static void test_recorded(void)
 			return;
 		}
 	}
-	PASS();
 
 	/* a profile past the reader's buffer is not "no profile" */
 	TEST("a lota.conf too large to read whole is an error");
@@ -187,7 +182,6 @@ static void test_recorded(void)
 			return;
 		}
 	}
-	PASS();
 
 	TEST("a lota.conf that cannot be read is an error");
 	unlink(conf);
@@ -198,7 +192,6 @@ static void test_recorded(void)
 		return;
 	}
 	rmdir(conf);
-	PASS();
 }
 
 static int argv_has(const char *const *argv, const char *a, const char *b)
@@ -224,7 +217,6 @@ static void test_loop_expected(void)
 		FAIL("profiles in lota.conf not counted");
 		return;
 	}
-	PASS();
 
 	TEST("the loop wait expects one report without lota.conf");
 	unlink(conf);
@@ -232,7 +224,6 @@ static void test_loop_expected(void)
 		FAIL("a missing lota.conf is not one report");
 		return;
 	}
-	PASS();
 }
 
 static void test_add_publisher_argv(void)
@@ -258,7 +249,6 @@ static void test_add_publisher_argv(void)
 		FAIL("the profile would not name the fleet's verifier");
 		return;
 	}
-	PASS();
 
 	TEST("no verifier writes a publisher that runs none");
 	o.verifier = NULL;
@@ -269,7 +259,6 @@ static void test_add_publisher_argv(void)
 		FAIL("a verifier was named that nobody gave");
 		return;
 	}
-	PASS();
 
 	TEST("an unset CA port is left to the agent's default");
 	o.ca_port = NULL;
@@ -278,7 +267,6 @@ static void test_add_publisher_argv(void)
 		FAIL("a CA port was named that nobody gave");
 		return;
 	}
-	PASS();
 }
 
 int main(void)
@@ -286,7 +274,7 @@ int main(void)
 	EVP_PKEY *a;
 	EVP_PKEY *b;
 
-	printf("=== installer fleet profile ===\n");
+	test_begin("installer fleet profile");
 
 	if (!mkdtemp(dir))
 		return 1;
@@ -300,8 +288,8 @@ int main(void)
 	if (!a || !b || write_anchor(anchor, a, "fleet") < 0 ||
 	    write_anchor(anchor_copy, a, "fleet") < 0 ||
 	    write_anchor(other, b, "other") < 0) {
-		fprintf(stderr, "cannot mint anchors\n");
-		return 1;
+		FAIL("cannot mint anchors");
+		return test_end();
 	}
 	EVP_PKEY_free(a);
 	EVP_PKEY_free(b);
@@ -316,6 +304,5 @@ int main(void)
 	unlink(conf);
 	rmdir(dir);
 
-	printf("\nPassed: %d / %d\n", tests_passed, tests_run);
-	return tests_passed == tests_run ? 0 : 1;
+	return test_end();
 }

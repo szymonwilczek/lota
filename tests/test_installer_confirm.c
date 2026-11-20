@@ -14,18 +14,7 @@
 
 #include "../installer/ui.h"
 
-static int g_failures;
-
-#define CHECK(cond, msg)                                    \
-	do {                                                \
-		if (!(cond)) {                              \
-			fprintf(stderr, "FAIL: %s\n", msg); \
-			g_failures++;                       \
-		} else {                                    \
-			printf("PASS: %s\n", msg);          \
-		}                                           \
-		fflush(stdout);                             \
-	} while (0)
+#include "test.h"
 
 /*
  * Feed @input to ui_confirm() with default @def; its prompt lands in @out.
@@ -99,12 +88,21 @@ static void test_no_declines(void)
 {
 	char seen[1024];
 
-	CHECK(ask("n\n", seen, sizeof(seen)) == 0, "\"n\" declines");
-	CHECK(ask("N\n", seen, sizeof(seen)) == 0, "\"N\" declines");
-	CHECK(ask("no\n", seen, sizeof(seen)) == 0, "\"no\" declines");
-	CHECK(ask("No\n", seen, sizeof(seen)) == 0, "\"No\" declines");
-	CHECK(ask("  n \n", seen, sizeof(seen)) == 0,
-	      "\"n\" declines with spaces around it");
+	TEST("\"n\" declines");
+	if (ask("n\n", seen, sizeof(seen)) != 0)
+		FAIL("expected: ask(\"n\\n\", seen, sizeof(seen)) == 0");
+	TEST("\"N\" declines");
+	if (ask("N\n", seen, sizeof(seen)) != 0)
+		FAIL("expected: ask(\"N\\n\", seen, sizeof(seen)) == 0");
+	TEST("\"no\" declines");
+	if (ask("no\n", seen, sizeof(seen)) != 0)
+		FAIL("expected: ask(\"no\\n\", seen, sizeof(seen)) == 0");
+	TEST("\"No\" declines");
+	if (ask("No\n", seen, sizeof(seen)) != 0)
+		FAIL("expected: ask(\"No\\n\", seen, sizeof(seen)) == 0");
+	TEST("\"n\" declines with spaces around it");
+	if (ask("  n \n", seen, sizeof(seen)) != 0)
+		FAIL("expected: ask(\"  n \\n\", seen, sizeof(seen)) == 0");
 }
 
 /* Quitting keeps the meaning it always had. */
@@ -112,10 +110,18 @@ static void test_quit_declines(void)
 {
 	char seen[1024];
 
-	CHECK(ask("q\n", seen, sizeof(seen)) == 0, "\"q\" declines");
-	CHECK(ask("Q\n", seen, sizeof(seen)) == 0, "\"Q\" declines");
-	CHECK(ask("quit\n", seen, sizeof(seen)) == 0, "\"quit\" declines");
-	CHECK(ask("", seen, sizeof(seen)) == 0, "end of input declines");
+	TEST("\"q\" declines");
+	if (ask("q\n", seen, sizeof(seen)) != 0)
+		FAIL("expected: ask(\"q\\n\", seen, sizeof(seen)) == 0");
+	TEST("\"Q\" declines");
+	if (ask("Q\n", seen, sizeof(seen)) != 0)
+		FAIL("expected: ask(\"Q\\n\", seen, sizeof(seen)) == 0");
+	TEST("\"quit\" declines");
+	if (ask("quit\n", seen, sizeof(seen)) != 0)
+		FAIL("expected: ask(\"quit\\n\", seen, sizeof(seen)) == 0");
+	TEST("end of input declines");
+	if (ask("", seen, sizeof(seen)) != 0)
+		FAIL("expected: ask(\"\", seen, sizeof(seen)) == 0");
 }
 
 /* Yes proceeds, spelled either way. */
@@ -123,9 +129,15 @@ static void test_yes_proceeds(void)
 {
 	char seen[1024];
 
-	CHECK(ask("y\n", seen, sizeof(seen)) == 1, "\"y\" proceeds");
-	CHECK(ask("Y\n", seen, sizeof(seen)) == 1, "\"Y\" proceeds");
-	CHECK(ask("yes\n", seen, sizeof(seen)) == 1, "\"yes\" proceeds");
+	TEST("\"y\" proceeds");
+	if (ask("y\n", seen, sizeof(seen)) != 1)
+		FAIL("expected: ask(\"y\\n\", seen, sizeof(seen)) == 1");
+	TEST("\"Y\" proceeds");
+	if (ask("Y\n", seen, sizeof(seen)) != 1)
+		FAIL("expected: ask(\"Y\\n\", seen, sizeof(seen)) == 1");
+	TEST("\"yes\" proceeds");
+	if (ask("yes\n", seen, sizeof(seen)) != 1)
+		FAIL("expected: ask(\"yes\\n\", seen, sizeof(seen)) == 1");
 }
 
 /* An unrecognised answer is asked again; running out of input declines. */
@@ -133,14 +145,19 @@ static void test_unknown_never_proceeds(void)
 {
 	char seen[1024];
 
-	CHECK(ask("maybe\n", seen, sizeof(seen)) == 0,
-	      "an unrecognised answer does not proceed");
-	CHECK(ask("maybe\nmaybe\nmaybe\nmaybe\n", seen, sizeof(seen)) == 0,
-	      "repeated unrecognised answers do not proceed");
-	CHECK(ask("maybe\ny\n", seen, sizeof(seen)) == 1,
-	      "an unrecognised answer is asked again, and yes then proceeds");
-	CHECK(ask("maybe\nn\n", seen, sizeof(seen)) == 0,
-	      "an unrecognised answer is asked again, and no then declines");
+	TEST("an unrecognised answer does not proceed");
+	if (ask("maybe\n", seen, sizeof(seen)) != 0)
+		FAIL("expected: ask(\"maybe\\n\", seen, sizeof(seen)) == 0");
+	TEST("repeated unrecognised answers do not proceed");
+	if (ask("maybe\nmaybe\nmaybe\nmaybe\n", seen, sizeof(seen)) != 0)
+		FAIL("expected: ask(\"maybe\\nmaybe\\nmaybe\\nmaybe\\n\", "
+		     "seen, sizeof(seen)) == 0");
+	TEST("an unrecognised answer is asked again, and yes then proceeds");
+	if (ask("maybe\ny\n", seen, sizeof(seen)) != 1)
+		FAIL("expected: ask(\"maybe\\ny\\n\", seen, sizeof(seen)) == 1");
+	TEST("an unrecognised answer is asked again, and no then declines");
+	if (ask("maybe\nn\n", seen, sizeof(seen)) != 0)
+		FAIL("expected: ask(\"maybe\\nn\\n\", seen, sizeof(seen)) == 0");
 }
 
 /* Enter takes the caller's default; under UI_DEFAULT_NO it declines. */
@@ -148,14 +165,22 @@ static void test_enter_takes_the_default(void)
 {
 	char seen[1024];
 
-	CHECK(ask_def("\n", UI_DEFAULT_YES, seen, sizeof(seen)) == 1,
-	      "Enter proceeds where the default is yes");
-	CHECK(ask_def("\n", UI_DEFAULT_NO, seen, sizeof(seen)) == 0,
-	      "Enter declines where the default is no");
-	CHECK(ask_def("y\n", UI_DEFAULT_NO, seen, sizeof(seen)) == 1,
-	      "yes still proceeds where the default is no");
-	CHECK(ask_def("n\n", UI_DEFAULT_YES, seen, sizeof(seen)) == 0,
-	      "no still declines where the default is yes");
+	TEST("Enter proceeds where the default is yes");
+	if (ask_def("\n", UI_DEFAULT_YES, seen, sizeof(seen)) != 1)
+		FAIL("expected: ask_def(\"\\n\", UI_DEFAULT_YES, seen, "
+		     "sizeof(seen)) == 1");
+	TEST("Enter declines where the default is no");
+	if (ask_def("\n", UI_DEFAULT_NO, seen, sizeof(seen)) != 0)
+		FAIL("expected: ask_def(\"\\n\", UI_DEFAULT_NO, seen, "
+		     "sizeof(seen)) == 0");
+	TEST("yes still proceeds where the default is no");
+	if (ask_def("y\n", UI_DEFAULT_NO, seen, sizeof(seen)) != 1)
+		FAIL("expected: ask_def(\"y\\n\", UI_DEFAULT_NO, seen, "
+		     "sizeof(seen)) == 1");
+	TEST("no still declines where the default is yes");
+	if (ask_def("n\n", UI_DEFAULT_YES, seen, sizeof(seen)) != 0)
+		FAIL("expected: ask_def(\"n\\n\", UI_DEFAULT_YES, seen, "
+		     "sizeof(seen)) == 0");
 }
 
 static void test_prompt_names_the_answers(void)
@@ -163,19 +188,25 @@ static void test_prompt_names_the_answers(void)
 	char seen[1024];
 
 	(void)ask_def("y\n", UI_DEFAULT_YES, seen, sizeof(seen));
-	CHECK(strstr(seen, "Apply this stage?") != NULL,
-	      "the prompt is printed");
-	CHECK(strstr(seen, "Y/n") != NULL,
-	      "the bracket names yes and no, and which one Enter takes");
-	CHECK(strstr(seen, "q") != NULL, "the bracket still names quit");
+	TEST("the prompt is printed");
+	if (strstr(seen, "Apply this stage?") == NULL)
+		FAIL("expected: strstr(seen, \"Apply this stage?\") != NULL");
+	TEST("the bracket names yes and no, and which one Enter takes");
+	if (strstr(seen, "Y/n") == NULL)
+		FAIL("expected: strstr(seen, \"Y/n\") != NULL");
+	TEST("the bracket still names quit");
+	if (strstr(seen, "q") == NULL)
+		FAIL("expected: strstr(seen, \"q\") != NULL");
 
 	(void)ask_def("y\n", UI_DEFAULT_NO, seen, sizeof(seen));
-	CHECK(strstr(seen, "y/N") != NULL,
-	      "a question that defaults to no says so in the bracket");
+	TEST("a question that defaults to no says so in the bracket");
+	if (strstr(seen, "y/N") == NULL)
+		FAIL("expected: strstr(seen, \"y/N\") != NULL");
 }
 
 int main(void)
 {
+	test_begin("installer confirm");
 	test_no_declines();
 	test_quit_declines();
 	test_yes_proceeds();
@@ -183,10 +214,5 @@ int main(void)
 	test_enter_takes_the_default();
 	test_prompt_names_the_answers();
 
-	if (g_failures) {
-		fprintf(stderr, "\n%d check(s) failed\n", g_failures);
-		return 1;
-	}
-	printf("\nAll installer confirm tests passed\n");
-	return 0;
+	return test_end();
 }

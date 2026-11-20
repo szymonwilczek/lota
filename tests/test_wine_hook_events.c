@@ -320,7 +320,7 @@ static int load_hook(void)
 
 	hook_lib = dlopen(LOTA_HOOK_LIB_PATH, RTLD_NOW);
 	if (!hook_lib) {
-		printf("  dlopen(%s): %s\n", LOTA_HOOK_LIB_PATH, dlerror());
+		FAIL("dlopen(%s): %s", LOTA_HOOK_LIB_PATH, dlerror());
 		return -1;
 	}
 
@@ -341,12 +341,9 @@ static void test_the_subscription_covers_an_attestation_round(void)
 	}
 
 	if (!((uint32_t)mask & LOTA_IPC_EVENT_ATTEST)) {
-		printf("FAIL: mask 0x%08x has no attestation bit\n",
-		       (uint32_t)mask);
+		FAIL("mask 0x%08x has no attestation bit", (uint32_t)mask);
 		return;
 	}
-
-	PASS();
 }
 
 /*
@@ -369,21 +366,18 @@ static void test_a_local_publish_keeps_the_notified_status(void)
 
 	count = status_field("LOTA_ATTEST_COUNT");
 	if (count != (long)FRESH_ATTEST_COUNT) {
-		printf("FAIL: published count %ld, agent is at %u\n", count,
-		       FRESH_ATTEST_COUNT);
+		FAIL("published count %ld, agent is at %u", count,
+		     FRESH_ATTEST_COUNT);
 		return;
 	}
-
-	PASS();
 }
 
 int main(void)
 {
 	pid_t agent;
 	char template[] = "/tmp/lota-hook-events-XXXXXX";
-	int failures;
 
-	printf("\n=== Wine hook event subscription ===\n\n");
+	test_begin("wine hook events");
 
 	if (!mkdtemp(template)) {
 		perror("mkdtemp");
@@ -398,18 +392,18 @@ int main(void)
 
 	agent = start_mock_agent();
 	if (agent < 0) {
-		printf("  cannot start the mock agent: %s\n", strerror(errno));
-		return 2;
+		FAIL("cannot start the mock agent: %s", strerror(errno));
+		return test_end();
 	}
 
 	if (load_hook() != 0) {
 		kill(agent, SIGKILL);
 		waitpid(agent, NULL, 0);
-		return 2;
+		return test_end();
 	}
 
 	if (wait_for_file(status_path, 10) < 0)
-		printf("  the hook published nothing\n");
+		FAIL("the hook published nothing");
 
 	test_the_subscription_covers_an_attestation_round();
 	test_a_local_publish_keeps_the_notified_status();
@@ -418,10 +412,7 @@ int main(void)
 	waitpid(agent, NULL, 0);
 	unlink(sock_path);
 
-	printf("\n%d/%d passed\n\n", tests_passed, tests_run);
-	failures = tests_run - tests_passed;
-
 	/* the hook's destructor would join its thread on a dead agent */
 	fflush(stdout);
-	_exit(failures ? 1 : 0);
+	_exit(test_end());
 }

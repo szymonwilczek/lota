@@ -27,12 +27,11 @@
 #include <stdio.h>
 #include <string.h>
 #include <sys/types.h>
+#include <unistd.h>
 
 #include "../../include/attestation.h"
 #include "lota.h"
-
-#define BOLD "\033[1m"
-#define RESET "\033[0m"
+#include "../test.h"
 
 #define OUT_PATH "/tmp/lota_cross_report.bin"
 
@@ -50,7 +49,7 @@ int main(void)
 	size_t expected;
 	FILE *f;
 
-	printf(BOLD "\n=== C -> Go Attestation Report Layout ===\n\n" RESET);
+	test_begin("cross lang report gen");
 
 	memset(&report, 0, sizeof(report));
 	memset(&esrt, 0, sizeof(esrt));
@@ -106,10 +105,10 @@ int main(void)
 	/* event log length excludes the terminating NUL */
 	expected = calculate_report_size((uint32_t)(sizeof(event_log) - 1),
 					 (uint32_t)(sizeof(mok_list) - 1));
+	TEST("calculate_report_size fits the buffer");
 	if (expected == 0 || expected > sizeof(buf)) {
-		fprintf(stderr, "report_gen: bad computed size %zu\n",
-			expected);
-		return 1;
+		FAIL("computed size %zu", expected);
+		return test_end();
 	}
 	report.header.report_size = (uint32_t)expected;
 
@@ -118,49 +117,43 @@ int main(void)
 				     (const uint8_t *)mok_list,
 				     (uint32_t)(sizeof(mok_list) - 1), buf,
 				     sizeof(buf));
+	TEST("serialize_report writes the computed size");
 	if (wire_size < 0) {
-		fprintf(stderr, "report_gen: serialize_report failed: %zd\n",
-			wire_size);
-		return 1;
+		FAIL("serialize_report failed: %zd", wire_size);
+		return test_end();
 	}
 	if ((size_t)wire_size != expected) {
-		fprintf(stderr,
-			"report_gen: serialized %zd bytes, calculate said %zu\n",
-			wire_size, expected);
-		return 1;
+		FAIL("serialized %zd bytes, computed %zu", wire_size, expected);
+		return test_end();
 	}
 
 	/* ESRT section is mandatory: NULL must be refused */
+	TEST("serialize_report refuses a NULL ESRT");
 	if (serialize_report(&report, (const uint8_t *)event_log,
 			     (uint32_t)(sizeof(event_log) - 1), NULL,
 			     (const uint8_t *)mok_list,
 			     (uint32_t)(sizeof(mok_list) - 1), buf,
-			     sizeof(buf)) != -EINVAL) {
-		fprintf(stderr,
-			"report_gen: serialize_report accepted a NULL ESRT\n");
-		return 1;
-	}
+			     sizeof(buf)) != -EINVAL)
+		FAIL("NULL ESRT accepted");
 
+	TEST("report written to " OUT_PATH);
 	int fd = open(OUT_PATH, O_WRONLY | O_CREAT | O_TRUNC, 0644);
 	if (fd < 0) {
-		perror("report_gen: open");
-		return 1;
+		FAIL("open: %s", strerror(errno));
+		return test_end();
 	}
 	f = fdopen(fd, "wb");
 	if (!f) {
-		perror("report_gen: fdopen");
-		return 1;
+		FAIL("fdopen: %s", strerror(errno));
+		close(fd);
+		return test_end();
 	}
 	if (fwrite(buf, 1, (size_t)wire_size, f) != (size_t)wire_size) {
-		perror("report_gen: fwrite");
+		FAIL("fwrite: %s", strerror(errno));
 		fclose(f);
-		return 1;
+		return test_end();
 	}
 	fclose(f);
 
-	printf("[C] report serialized: %zd bytes (fixed struct %zu + sections) -> %s\n",
-	       wire_size, sizeof(struct lota_attestation_report), OUT_PATH);
-	printf("[C] wire version 0x%08X, event log %zu bytes, ESRT present=%u\n",
-	       report.header.version, sizeof(event_log) - 1, esrt.present);
-	return 0;
+	return test_end();
 }

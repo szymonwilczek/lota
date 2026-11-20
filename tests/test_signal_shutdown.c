@@ -31,25 +31,7 @@
 #include "../src/agent/tpm.h"
 #include "lota.h"
 
-static int tests_run;
-static int tests_passed;
-
-#define TEST(name)                                         \
-	do {                                               \
-		tests_run++;                               \
-		printf("  [%2d] %-55s ", tests_run, name); \
-	} while (0)
-
-#define PASS()                    \
-	do {                      \
-		tests_passed++;   \
-		printf("PASS\n"); \
-	} while (0)
-
-#define FAIL(fmt, ...)                                    \
-	do {                                              \
-		printf("FAIL: " fmt "\n", ##__VA_ARGS__); \
-	} while (0)
+#include "test.h"
 
 static volatile sig_atomic_t sig_running = 1;
 static volatile sig_atomic_t sig_reload;
@@ -262,7 +244,6 @@ static void test_sigterm_mid_round_reaches_poison_cleanup(void)
 		goto cleanup_pipes;
 	}
 
-	PASS();
 	goto cleanup_pipes;
 
 cleanup_thread:
@@ -303,8 +284,6 @@ static void test_poison_cleanup_is_gated_on_loaded_bpf(void)
 		FAIL("PCR extend should not run before BPF load");
 		return;
 	}
-
-	PASS();
 }
 
 static void test_poison_after_an_error_is_not_a_requested_stop(void)
@@ -335,18 +314,15 @@ static void test_poison_after_an_error_is_not_a_requested_stop(void)
 		FAIL("a failed run recorded flags 0x%x", saved_flags);
 		return;
 	}
-
-	PASS();
 }
 
 int main(void)
 {
-	printf("=== LOTA signal shutdown tests ===\n\n");
+	test_begin("signal shutdown");
 
 	test_sigterm_mid_round_reaches_poison_cleanup();
 	test_poison_cleanup_is_gated_on_loaded_bpf();
 	test_poison_after_an_error_is_not_a_requested_stop();
 
-	printf("\n=== Results: %d/%d passed ===\n", tests_passed, tests_run);
-	return (tests_passed == tests_run) ? 0 : 1;
+	return test_end();
 }

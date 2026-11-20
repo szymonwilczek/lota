@@ -134,7 +134,6 @@ static void test_emit_full_snapshot(void)
 		FAIL("missing description field");
 		return;
 	}
-	PASS();
 }
 
 static void test_emit_metadata_comments(void)
@@ -162,7 +161,6 @@ static void test_emit_metadata_comments(void)
 		FAIL("missing generator comment");
 		return;
 	}
-	PASS();
 }
 
 static void test_emit_pcr_values(void)
@@ -212,8 +210,6 @@ static void test_emit_pcr_values(void)
 		FAIL("missing pcrs: section");
 		return;
 	}
-
-	PASS();
 }
 
 static void test_emit_kernel_hash(void)
@@ -270,8 +266,6 @@ static void test_emit_kernel_hash(void)
 		FAIL("a file the agent read is attributed the digest");
 		return;
 	}
-
-	PASS();
 }
 
 static void test_emit_agent_hash(void)
@@ -302,8 +296,6 @@ static void test_emit_agent_hash(void)
 		FAIL("missing agent path comment");
 		return;
 	}
-
-	PASS();
 }
 
 static void test_emit_security_flags(void)
@@ -343,8 +335,6 @@ static void test_emit_security_flags(void)
 		FAIL("require_ima_appraisal should follow the host");
 		return;
 	}
-
-	PASS();
 }
 
 static void test_emit_no_pcrs(void)
@@ -371,8 +361,6 @@ static void test_emit_no_pcrs(void)
 		FAIL("expected 'pcrs: {}' for no valid PCRs");
 		return;
 	}
-
-	PASS();
 }
 
 static void test_emit_no_kernel_hash(void)
@@ -406,8 +394,6 @@ static void test_emit_no_kernel_hash(void)
 		FAIL("the empty list does not say why it is empty");
 		return;
 	}
-
-	PASS();
 }
 
 /*
@@ -452,8 +438,6 @@ static void test_emit_never_offers_a_register_as_the_kernel_pin(void)
 		FAIL("the empty list does not say the log could not be parsed");
 		return;
 	}
-
-	PASS();
 }
 
 static void test_emit_no_agent_hash(void)
@@ -476,8 +460,6 @@ static void test_emit_no_agent_hash(void)
 		FAIL("expected 'agent_hashes: []'");
 		return;
 	}
-
-	PASS();
 }
 
 static void test_emit_all_security_disabled(void)
@@ -516,8 +498,6 @@ static void test_emit_all_security_disabled(void)
 		FAIL("require_lockdown should be false");
 		return;
 	}
-
-	PASS();
 }
 
 static void test_emit_all_security_enabled(void)
@@ -560,8 +540,6 @@ static void test_emit_all_security_enabled(void)
 		FAIL("require_lockdown should be true");
 		return;
 	}
-
-	PASS();
 }
 
 static void test_emit_null_args(void)
@@ -582,8 +560,6 @@ static void test_emit_null_args(void)
 		FAIL("expected -EINVAL for NULL output");
 		return;
 	}
-
-	PASS();
 }
 
 static void test_emit_verifier_fields(void)
@@ -624,12 +600,10 @@ static void test_emit_verifier_fields(void)
 			char msg[128];
 			snprintf(msg, sizeof(msg), "missing required key: %s",
 				 required_keys[i]);
-			FAIL(msg);
+			FAIL("%s", msg);
 			return;
 		}
 	}
-
-	PASS();
 }
 
 static void test_emit_spdx_header(void)
@@ -651,8 +625,6 @@ static void test_emit_spdx_header(void)
 		FAIL("missing SPDX header");
 		return;
 	}
-
-	PASS();
 }
 
 static void test_emit_partial_pcrs(void)
@@ -694,8 +666,6 @@ static void test_emit_partial_pcrs(void)
 		FAIL("PCR 14 should be absent (invalid)");
 		return;
 	}
-
-	PASS();
 }
 
 static void test_export_pcrs_omit_grub_registers(void)
@@ -735,15 +705,12 @@ static void test_export_pcrs_omit_grub_registers(void)
 			return;
 		}
 	}
-
-	PASS();
 }
 
 int main(void)
 {
-	printf("\n=== LOTA Policy Export - Test Suite ===\n\n");
+	test_begin("policy export");
 
-	printf("YAML Serialization:\n");
 	test_emit_full_snapshot();
 	test_emit_metadata_comments();
 	test_emit_pcr_values();
@@ -751,7 +718,6 @@ int main(void)
 	test_emit_agent_hash();
 	test_emit_security_flags();
 
-	printf("\nEdge Cases:\n");
 	test_emit_no_pcrs();
 	test_emit_no_kernel_hash();
 	test_emit_never_offers_a_register_as_the_kernel_pin();
@@ -760,21 +726,12 @@ int main(void)
 	test_emit_all_security_disabled();
 	test_emit_all_security_enabled();
 
-	printf("\nError Handling:\n");
 	test_emit_null_args();
 
-	printf("\nVerifier Compatibility:\n");
 	test_emit_verifier_fields();
 	test_emit_spdx_header();
 
-	printf("\nExport PCR selection:\n");
 	test_export_pcrs_omit_grub_registers();
 
-	printf("\n=== Results: %d/%d passed", tests_passed, tests_run);
-	if (tests_passed < tests_run) {
-		printf(" (%d FAILED)", tests_run - tests_passed);
-	}
-	printf(" ===\n\n");
-
-	return tests_passed < tests_run ? 1 : 0;
+	return test_end();
 }

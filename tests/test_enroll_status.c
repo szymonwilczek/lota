@@ -15,17 +15,7 @@
 
 #include "../src/agent/enroll.h"
 
-static int g_failures;
-
-#define CHECK(cond, msg)                                    \
-	do {                                                \
-		if (!(cond)) {                              \
-			fprintf(stderr, "FAIL: %s\n", msg); \
-			g_failures++;                       \
-		} else {                                    \
-			printf("PASS: %s\n", msg);          \
-		}                                           \
-	} while (0)
+#include "test.h"
 
 /* every refusal the wire can carry, and the name it is known by */
 static const struct {
@@ -48,7 +38,7 @@ int main(void)
 	size_t i, j;
 	char msg[128];
 
-	printf("=== enrollment refusal messages ===\n\n");
+	test_begin("enroll status");
 
 	for (i = 0; i < sizeof(refusals) / sizeof(refusals[0]); i++) {
 		const char *text = lota_enroll_status_text(refusals[i].status);
@@ -56,7 +46,9 @@ int main(void)
 		snprintf(msg, sizeof(msg),
 			 "%s is explained rather than numbered",
 			 refusals[i].name);
-		CHECK(text != NULL && text[0] != '\0', msg);
+		TEST(msg);
+		if (!(text != NULL && text[0] != '\0'))
+			FAIL("expected: text != NULL && text[0] != '\\0'");
 
 		if (!text)
 			continue;
@@ -65,7 +57,10 @@ int main(void)
 		 * a sentence that only repeats it tells the operator nothing */
 		snprintf(msg, sizeof(msg), "%s says more than its own number",
 			 refusals[i].name);
-		CHECK(strlen(text) > 16 && strstr(text, "status") == NULL, msg);
+		TEST(msg);
+		if (!(strlen(text) > 16 && strstr(text, "status") == NULL))
+			FAIL("expected: strlen(text) > 16 && strstr(text, \"status\") "
+			     "== NULL");
 	}
 
 	/* two refusals sharing a sentence means one of them is unexplained */
@@ -84,21 +79,26 @@ int main(void)
 			snprintf(msg, sizeof(msg),
 				 "%s and %s do not share one sentence",
 				 refusals[i].name, refusals[j].name);
-			CHECK(0, msg);
+			TEST(msg);
+			if (!0)
+				FAIL("expected: 0");
 		}
 	}
 
 	/* a CA newer than this agent: the caller prints the number and says so,
 	 * which it can only do if it can tell the two apart */
-	CHECK(lota_enroll_status_text(10) == NULL,
-	      "a status this build does not know has no sentence");
-	CHECK(lota_enroll_status_text(65535) == NULL,
-	      "a status far outside the range has no sentence either");
+	TEST("a status this build does not know has no sentence");
+	if (lota_enroll_status_text(10) != NULL)
+		FAIL("expected: lota_enroll_status_text(10) == NULL");
+	TEST("a status far outside the range has no sentence either");
+	if (lota_enroll_status_text(65535) != NULL)
+		FAIL("expected: lota_enroll_status_text(65535) == NULL");
 
 	/* success is not a refusal and is never rendered as one */
-	CHECK(lota_enroll_status_text(LOTA_ENROLL_STATUS_OK) == NULL,
-	      "the OK status is not an explanation of a refusal");
+	TEST("the OK status is not an explanation of a refusal");
+	if (lota_enroll_status_text(LOTA_ENROLL_STATUS_OK) != NULL)
+		FAIL("expected: lota_enroll_status_text(LOTA_ENROLL_STATUS_OK) "
+		     "== NULL");
 
-	printf("\n%s\n", g_failures ? "FAILURES" : "All tests passed");
-	return g_failures ? 1 : 0;
+	return test_end();
 }

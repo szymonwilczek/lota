@@ -22,7 +22,7 @@ int main(void)
 {
 	char buf[512];
 
-	printf("=== daemon startup refusal ===\n\n");
+	test_begin("startup hint");
 
 	TEST("a plain refusal names the PID file lock");
 	startup_busy_message(false, buf, sizeof(buf));
@@ -30,8 +30,6 @@ int main(void)
 		FAIL("the refusal does not say why");
 	else if (strstr(buf, "--protect-pid"))
 		FAIL("a caller that asked for nothing is told about a flag");
-	else
-		PASS();
 
 	TEST("--protect-pid is named as read at startup and doing nothing");
 	startup_busy_message(true, buf, sizeof(buf));
@@ -41,15 +39,11 @@ int main(void)
 		FAIL("nothing says the running daemon does not read it");
 	else if (!strstr(buf, "did nothing"))
 		FAIL("nothing says the flag had no effect");
-	else
-		PASS();
 
 	TEST("the way to protect a running process is named");
 	startup_busy_message(true, buf, sizeof(buf));
 	if (!strstr(buf, "lota_protect_self"))
 		FAIL("the SDK call that protects a live process is missing");
-	else
-		PASS();
 
 	TEST("a short buffer is still terminated");
 	{
@@ -60,10 +54,7 @@ int main(void)
 		startup_busy_message(true, buf, small);
 		if (strlen(buf) >= small)
 			FAIL("the message overran the buffer");
-		else
-			PASS();
 	}
 
-	printf("\n=== %d/%d passed ===\n", tests_passed, tests_run);
-	return tests_passed == tests_run ? 0 : 1;
+	return test_end();
 }

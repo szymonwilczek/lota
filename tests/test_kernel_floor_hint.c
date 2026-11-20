@@ -29,22 +29,16 @@ static void test_lockdown_off_secureboot_names_the_firmware(void)
 
 	if (!strstr(buf, "Secure Boot"))
 		FAIL("the switch that decides the floor is not named");
-	else
-		PASS();
 
 	TEST("and says it is a firmware setting");
 
 	if (!strstr(buf, "firmware"))
 		FAIL("the player is not told where the setting lives");
-	else
-		PASS();
 
 	TEST("and does not send the player to the kernel command line");
 
 	if (strstr(buf, "lockdown=") || strstr(buf, "command line"))
 		FAIL("a lever this host does not carry was named anyway");
-	else
-		PASS();
 }
 
 static void test_lockdown_on_secureboot_names_the_cmdline(void)
@@ -56,8 +50,6 @@ static void test_lockdown_on_secureboot_names_the_cmdline(void)
 
 	if (!strstr(buf, "lockdown="))
 		FAIL("the lever this host does have was not named");
-	else
-		PASS();
 }
 
 static void test_module_sig_reads_the_host_the_same_way(void)
@@ -69,8 +61,6 @@ static void test_module_sig_reads_the_host_the_same_way(void)
 
 	if (!strstr(buf, "Secure Boot") || strstr(buf, "module.sig_enforce="))
 		FAIL("the same host was given a different answer");
-	else
-		PASS();
 
 	TEST("module signatures refused with Secure Boot on names the "
 	     "parameter");
@@ -80,8 +70,6 @@ static void test_module_sig_reads_the_host_the_same_way(void)
 
 	if (!strstr(buf, "module.sig_enforce"))
 		FAIL("the lever this host does have was not named");
-	else
-		PASS();
 }
 
 static void test_every_message_says_what_is_missing(void)
@@ -103,8 +91,6 @@ static void test_every_message_says_what_is_missing(void)
 					     sizeof(buf));
 			if (!strstr(buf, cases[i].what))
 				FAIL("the reason was traded for the remedy");
-			else
-				PASS();
 		}
 	}
 }
@@ -119,27 +105,21 @@ static void test_advice_matches_what_an_edit_can_repair(void)
 
 	if (strstr(startup_refusal_advice(-ENOTSUP), "Correct the policy"))
 		FAIL("the one action a player can take removes the property");
-	else
-		PASS();
 
 	TEST("and is told the refusal is the host's state");
 
 	if (!strstr(startup_refusal_advice(-ENOTSUP), "host"))
 		FAIL("nothing says why editing will not help");
-	else
-		PASS();
 
 	TEST("a policy that cannot be applied still says to correct it");
 
 	if (!strstr(startup_refusal_advice(-EINVAL), "Correct the policy"))
 		FAIL("the refusal an edit does repair lost its advice");
-	else
-		PASS();
 }
 
 int main(void)
 {
-	printf("=== kernel floor hint tests ===\n\n");
+	test_begin("kernel floor hint");
 
 	test_lockdown_off_secureboot_names_the_firmware();
 	test_lockdown_on_secureboot_names_the_cmdline();
@@ -147,6 +127,5 @@ int main(void)
 	test_every_message_says_what_is_missing();
 	test_advice_matches_what_an_edit_can_repair();
 
-	printf("\n=== %d/%d passed ===\n", tests_passed, tests_run);
-	return tests_passed == tests_run ? 0 : 1;
+	return test_end();
 }

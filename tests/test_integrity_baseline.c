@@ -72,8 +72,6 @@ static void test_hardened_kernel_is_satisfied(void)
 	build(&cfg);
 	if (!bpf_loader_integrity_config_satisfied(&cfg))
 		FAIL("a kernel meeting the baseline was refused");
-	else
-		PASS();
 }
 
 /*
@@ -112,8 +110,6 @@ static void test_baseline_is_the_hardening_gate_verdict(void)
 			}
 		}
 	}
-
-	PASS();
 }
 
 static void test_unenforced_module_signatures_are_refused(void)
@@ -128,8 +124,6 @@ static void test_unenforced_module_signatures_are_refused(void)
 	build(&cfg);
 	if (bpf_loader_integrity_config_satisfied(&cfg))
 		FAIL("a kernel loading unsigned modules passed the baseline");
-	else
-		PASS();
 }
 
 static void test_lockdown_off_is_refused(void)
@@ -144,8 +138,6 @@ static void test_lockdown_off_is_refused(void)
 	build(&cfg);
 	if (bpf_loader_integrity_config_satisfied(&cfg))
 		FAIL("a kernel outside lockdown passed the baseline");
-	else
-		PASS();
 }
 
 /* A property nobody published is not a property that holds */
@@ -161,8 +153,6 @@ static void test_unreadable_state_is_refused(void)
 	build(&cfg);
 	if (bpf_loader_integrity_config_satisfied(&cfg))
 		FAIL("an unreadable kernel state passed the baseline");
-	else
-		PASS();
 }
 
 /* The value carries the verdict, so the two roads can be compared */
@@ -180,8 +170,6 @@ static void test_value_reports_both_properties(void)
 		FAIL("enforced module signatures were not reported");
 	else if (cfg.lockdown)
 		FAIL("lockdown was reported on a kernel outside it");
-	else
-		PASS();
 }
 
 /* an empty file names no state; it is not a read that failed */
@@ -197,13 +185,11 @@ static void test_empty_state_is_refused_not_retried(void)
 	else if (bpf_loader_kernel_lockdown_restrictive(lockdown_path) !=
 		 -EPERM)
 		FAIL("an empty lockdown file reads as a failed read");
-	else
-		PASS();
 }
 
 int main(void)
 {
-	printf("=== Kernel integrity baseline tests ===\n\n");
+	test_begin("integrity baseline");
 
 	snprintf(sig_enforce_path, sizeof(sig_enforce_path),
 		 "/tmp/lota-sigenf-%d", (int)getpid());
@@ -221,6 +207,5 @@ int main(void)
 	unlink(sig_enforce_path);
 	unlink(lockdown_path);
 
-	printf("\n=== %d/%d passed ===\n", tests_passed, tests_run);
-	return tests_passed == tests_run ? 0 : 1;
+	return test_end();
 }

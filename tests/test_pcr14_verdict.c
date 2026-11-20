@@ -32,27 +32,7 @@
 #include "../src/agent/agent_internal.h" // IWYU pragma: keep
 #include "../src/agent/tpm.h"
 
-static int g_failures;
-static const char *g_current_test;
-
-#define TEST(name)                                 \
-	do {                                       \
-		g_current_test = name;             \
-		printf("[ RUN      ] %s\n", name); \
-	} while (0)
-
-#define PASS()                                               \
-	do {                                                 \
-		printf("[       OK ] %s\n", g_current_test); \
-	} while (0)
-
-#define FAIL(fmt, ...)                                                        \
-	do {                                                                  \
-		fprintf(stderr, "[  FAILED  ] %s: " fmt "\n", g_current_test, \
-			##__VA_ARGS__);                                       \
-		g_failures++;                                                 \
-		return;                                                       \
-	} while (0)
+#include "test.h"
 
 /* What the caller anchors on when the lock left no baseline behind */
 static const uint8_t k_zero_baseline[LOTA_HASH_SIZE] = { 0 };
@@ -148,8 +128,10 @@ static void test_lock_missing_on_a_shim_host(void)
 
 	TEST("no lock this boot reads as a missing lock, not as tampering");
 
-	if (build_committed_boot(&s, RESTART_AT_EXTEND) < 0)
+	if (build_committed_boot(&s, RESTART_AT_EXTEND) < 0) {
 		FAIL("failed to derive the register value");
+		return;
+	}
 
 	/* shim measured the MOK state; the lock helper never ran,
 	 * so it left no baseline and the caller anchors on zeroes */
@@ -159,9 +141,10 @@ static void test_lock_missing_on_a_shim_host(void)
 	s.obs.lock_ran = 0;
 	s.obs.prev = NULL;
 
-	if (tpm_classify_pcr14(&s.obs) != TPM_PCR14_LOCK_MISSING)
+	if (tpm_classify_pcr14(&s.obs) != TPM_PCR14_LOCK_MISSING) {
 		FAIL("a boot with no lock must not read as tamper");
-	PASS();
+		return;
+	}
 
 	/*
 	 * The guard: with the lock having run, a register matching neither
@@ -171,14 +154,17 @@ static void test_lock_missing_on_a_shim_host(void)
 	 */
 	TEST("with the lock run, an unexplained register is still refused");
 
-	if (build_committed_boot(&s, RESTART_AT_EXTEND) < 0)
+	if (build_committed_boot(&s, RESTART_AT_EXTEND) < 0) {
 		FAIL("failed to derive the register value");
+		return;
+	}
 	fill(s.current, 0x77);
 	s.obs.lock_ran = 1;
 
-	if (tpm_classify_pcr14(&s.obs) != TPM_PCR14_MUTATED_IN_SESSION)
+	if (tpm_classify_pcr14(&s.obs) != TPM_PCR14_MUTATED_IN_SESSION) {
 		FAIL("a foreign extend must still read as a mutation");
-	PASS();
+		return;
+	}
 
 	/*
 	 * And a host that booted without shim keeps working: PCR 14 is 0^32,
@@ -186,8 +172,10 @@ static void test_lock_missing_on_a_shim_host(void)
 	 */
 	TEST("a non-shim host with no lock still reads as a missing lock");
 
-	if (build_committed_boot(&s, RESTART_AT_EXTEND) < 0)
+	if (build_committed_boot(&s, RESTART_AT_EXTEND) < 0) {
 		FAIL("failed to derive the register value");
+		return;
+	}
 	memset(s.current, 0, LOTA_HASH_SIZE);
 	s.obs.baseline = k_zero_baseline;
 	s.obs.lock_ran = 0;
@@ -195,7 +183,6 @@ static void test_lock_missing_on_a_shim_host(void)
 
 	if (tpm_classify_pcr14(&s.obs) != TPM_PCR14_LOCK_MISSING)
 		FAIL("a pristine register with no lock is a missing lock");
-	PASS();
 }
 
 /*
@@ -208,12 +195,13 @@ static void test_warm_restart_is_committed(void)
 
 	TEST("an agent restart in an unchanged boot reads as committed");
 
-	if (build_committed_boot(&s, RESTART_AT_EXTEND) < 0)
+	if (build_committed_boot(&s, RESTART_AT_EXTEND) < 0) {
 		FAIL("failed to derive the register value");
+		return;
+	}
 
 	if (tpm_classify_pcr14(&s.obs) != TPM_PCR14_ALREADY_COMMITTED)
 		FAIL("a warm restart must read as already committed");
-	PASS();
 }
 
 /*
@@ -228,15 +216,16 @@ static void test_foreign_extend_is_still_refused(void)
 
 	TEST("a register extended by another writer is still refused");
 
-	if (build_committed_boot(&s, RESTART_AT_EXTEND) < 0)
+	if (build_committed_boot(&s, RESTART_AT_EXTEND) < 0) {
 		FAIL("failed to derive the register value");
+		return;
+	}
 
 	/* somebody extended PCR14; the snapshot still holds our value */
 	fill(s.current, 0x77);
 
 	if (tpm_classify_pcr14(&s.obs) != TPM_PCR14_MUTATED_IN_SESSION)
 		FAIL("a foreign extend must read as a mutation");
-	PASS();
 }
 
 /*
@@ -250,8 +239,10 @@ static void test_resume_does_not_license_a_new_binary(void)
 
 	TEST("a resume does not admit a binary PCR14 never committed to");
 
-	if (build_committed_boot(&s, RESTART_AT_EXTEND + 1) < 0)
+	if (build_committed_boot(&s, RESTART_AT_EXTEND + 1) < 0) {
 		FAIL("failed to derive the register value");
+		return;
+	}
 
 	/*
 	 * Different binary is running now, so what this instance derives is not
@@ -260,16 +251,19 @@ static void test_resume_does_not_license_a_new_binary(void)
 	 */
 	fill(s.self_hash, 0xB0);
 	if (tpm_derive_locked_pcr14(s.self_hash, k_baseline,
-				    s.expected_locked) < 0)
+				    s.expected_locked) < 0) {
 		FAIL("failed to derive the register value");
+		return;
+	}
 
 	enum tpm_pcr14_state got = tpm_classify_pcr14(&s.obs);
 
-	if (got == TPM_PCR14_ALREADY_COMMITTED)
+	if (got == TPM_PCR14_ALREADY_COMMITTED) {
 		FAIL("a resume must not accept a different agent binary");
+		return;
+	}
 	if (got != TPM_PCR14_BINARY_CHANGED)
 		FAIL("a changed binary must be named as such");
-	PASS();
 }
 
 /*
@@ -289,21 +283,27 @@ static void test_a_replaced_handoff_is_not_a_foreign_extend(void)
 
 	TEST("a replaced baseline handoff is named, not called a foreign extend");
 
-	if (build_committed_boot(&s, RESTART_AT_EXTEND) < 0)
+	if (build_committed_boot(&s, RESTART_AT_EXTEND) < 0) {
 		FAIL("failed to derive the register value");
+		return;
+	}
 
 	/* same register, same binary; only the handoff file changed */
 	s.obs.baseline = forged;
-	if (tpm_derive_locked_pcr14(s.self_hash, forged, s.expected_locked) < 0)
+	if (tpm_derive_locked_pcr14(s.self_hash, forged, s.expected_locked) <
+	    0) {
 		FAIL("failed to derive from the forged handoff");
+		return;
+	}
 
 	got = tpm_classify_pcr14(&s.obs);
 
-	if (got == TPM_PCR14_MUTATED_IN_SESSION)
+	if (got == TPM_PCR14_MUTATED_IN_SESSION) {
 		FAIL("an untouched register reported as extended by somebody else");
+		return;
+	}
 	if (got != TPM_PCR14_HANDOFF_CHANGED)
 		FAIL("the handoff is not named as what moved");
-	PASS();
 }
 
 /*
@@ -317,8 +317,10 @@ static void test_reset_count_advance_is_not_a_resume(void)
 
 	TEST("an advanced resetCount is not read as a resume");
 
-	if (build_committed_boot(&s, RESTART_AT_EXTEND) < 0)
+	if (build_committed_boot(&s, RESTART_AT_EXTEND) < 0) {
 		FAIL("failed to derive the register value");
+		return;
+	}
 
 	/*
 	 * Snapshot was written before the most recent hardware reset,
@@ -333,7 +335,6 @@ static void test_reset_count_advance_is_not_a_resume(void)
 
 	if (tpm_classify_pcr14(&s.obs) != TPM_PCR14_TAMPERED_BEFORE_START)
 		FAIL("an advanced resetCount must read as pre-start tamper");
-	PASS();
 }
 
 /*
@@ -352,8 +353,10 @@ static void test_forged_snapshot_cannot_fake_a_resume(void)
 
 	TEST("a forged clock-state snapshot cannot fake a resume");
 
-	if (build_committed_boot(&s, RESTART_AT_EXTEND + 1) < 0)
+	if (build_committed_boot(&s, RESTART_AT_EXTEND + 1) < 0) {
 		FAIL("failed to derive the register value");
+		return;
+	}
 
 	/* somebody extended PCR14 with a value of their choosing ... */
 	fill(s.current, 0x5c);
@@ -362,11 +365,12 @@ static void test_forged_snapshot_cannot_fake_a_resume(void)
 
 	got = tpm_classify_pcr14(&s.obs);
 
-	if (got == TPM_PCR14_ALREADY_COMMITTED)
+	if (got == TPM_PCR14_ALREADY_COMMITTED) {
 		FAIL("a forged snapshot was allowed to explain the register");
+		return;
+	}
 	if (got != TPM_PCR14_HANDOFF_CHANGED)
 		FAIL("a forged snapshot must refuse through the verdict whose evidence it copies");
-	PASS();
 }
 
 /*
@@ -380,12 +384,13 @@ static void test_resume_reads_as_committed(void)
 
 	TEST("a resume reads as committed without a candidate scan");
 
-	if (build_committed_boot(&s, RESTART_AT_EXTEND + 1) < 0)
+	if (build_committed_boot(&s, RESTART_AT_EXTEND + 1) < 0) {
 		FAIL("failed to derive the register value");
+		return;
+	}
 
 	if (tpm_classify_pcr14(&s.obs) != TPM_PCR14_ALREADY_COMMITTED)
 		FAIL("a resume must read as already committed");
-	PASS();
 }
 
 /*
@@ -402,15 +407,16 @@ static void test_commitment_present_after_a_cold_boot_is_refused(void)
 
 	TEST("a commitment already present after a cold boot is refused");
 
-	if (build_committed_boot(&s, RESTART_AT_EXTEND) < 0)
+	if (build_committed_boot(&s, RESTART_AT_EXTEND) < 0) {
 		FAIL("failed to derive the register value");
+		return;
+	}
 
 	/* snapshot was written before the most recent hardware reset */
 	s.prev.reset_count = RESET_COUNT - 1;
 
 	if (tpm_classify_pcr14(&s.obs) != TPM_PCR14_TAMPERED_BEFORE_START)
 		FAIL("a commitment extended before the agent ran was accepted");
-	PASS();
 }
 
 /*
@@ -423,17 +429,20 @@ static void test_the_two_accepting_verdicts_are_told_apart(void)
 	TEST("an extend and a commitment already held are named apart");
 
 	if (tpm_boot_commitment_outcome(TPM_PCR14_AWAITING_EXTEND) !=
-	    TPM_BOOT_COMMITMENT_EXTENDED)
+	    TPM_BOOT_COMMITMENT_EXTENDED) {
 		FAIL("the state that extends must report an extend");
+		return;
+	}
 
 	if (tpm_boot_commitment_outcome(TPM_PCR14_ALREADY_COMMITTED) !=
-	    TPM_BOOT_COMMITMENT_ALREADY_HELD)
+	    TPM_BOOT_COMMITMENT_ALREADY_HELD) {
 		FAIL("a warm restart must not report an extend");
+		return;
+	}
 
 	if (tpm_boot_commitment_outcome(TPM_PCR14_UNATTRIBUTABLE) !=
 	    TPM_BOOT_COMMITMENT_EXTENDED)
 		FAIL("a refused state must not claim a commitment it never saw");
-	PASS();
 }
 
 /* A poisoned register names the cause the snapshot recorded */
@@ -443,26 +452,31 @@ static void test_poison_records_its_cause(void)
 
 	TEST("a poison after a failed run is not read as a requested stop");
 
-	if (build_committed_boot(&s, RESTART_AT_EXTEND) < 0)
+	if (build_committed_boot(&s, RESTART_AT_EXTEND) < 0) {
 		FAIL("failed to derive the register value");
+		return;
+	}
 	fill(s.current, 0xD3);
 	memcpy(s.prev.pcr14, s.current, LOTA_HASH_SIZE);
 
 	s.prev.flags = LOTA_CLOCK_STATE_FLAG_INITRAMFS_LOCK |
 		       LOTA_CLOCK_STATE_FLAG_SHUTDOWN_POISON;
-	if (tpm_classify_pcr14(&s.obs) != TPM_PCR14_SPENT_BY_SHUTDOWN)
+	if (tpm_classify_pcr14(&s.obs) != TPM_PCR14_SPENT_BY_SHUTDOWN) {
 		FAIL("a requested stop must read as one");
+		return;
+	}
 
 	s.prev.flags = LOTA_CLOCK_STATE_FLAG_INITRAMFS_LOCK |
 		       LOTA_CLOCK_STATE_FLAG_ERROR_POISON;
-	if (tpm_classify_pcr14(&s.obs) != TPM_PCR14_SPENT_BY_ERROR)
+	if (tpm_classify_pcr14(&s.obs) != TPM_PCR14_SPENT_BY_ERROR) {
 		FAIL("a failed run must not read as a requested stop");
+		return;
+	}
 
 	/* the register moved on since the poison: neither cause applies */
 	fill(s.current, 0x6E);
 	if (tpm_classify_pcr14(&s.obs) != TPM_PCR14_MUTATED_IN_SESSION)
 		FAIL("an extend after the poison must read as a mutation");
-	PASS();
 }
 
 static int write_handoff(const char *path, size_t len)
@@ -491,8 +505,10 @@ static void test_handoff_of_another_length_is_absent(void)
 
 	TEST("a handoff longer than one digest counts as absent");
 
-	if (!mkdtemp(dir))
+	if (!mkdtemp(dir)) {
 		FAIL("mkdtemp");
+		return;
+	}
 	snprintf(path, sizeof(path), "%s/baseline", dir);
 
 	ret = write_handoff(path, LOTA_HASH_SIZE);
@@ -503,6 +519,7 @@ static void test_handoff_of_another_length_is_absent(void)
 		unlink(path);
 		rmdir(dir);
 		FAIL("a digest-sized handoff is not read back");
+		return;
 	}
 
 	ret = write_handoff(path, LOTA_HASH_SIZE + 1);
@@ -513,11 +530,11 @@ static void test_handoff_of_another_length_is_absent(void)
 	if (ret != 0 || present != 0 ||
 	    memcmp(out, k_zero_baseline, LOTA_HASH_SIZE) != 0)
 		FAIL("a longer handoff is taken as the baseline");
-	PASS();
 }
 
 int main(void)
 {
+	test_begin("pcr14 verdict");
 	test_lock_missing_on_a_shim_host();
 	test_warm_restart_is_committed();
 	test_resume_reads_as_committed();
@@ -531,10 +548,5 @@ int main(void)
 	test_poison_records_its_cause();
 	test_handoff_of_another_length_is_absent();
 
-	if (g_failures == 0) {
-		printf("\nAll tests passed.\n");
-		return 0;
-	}
-	fprintf(stderr, "\n%d test(s) failed.\n", g_failures);
-	return 1;
+	return test_end();
 }

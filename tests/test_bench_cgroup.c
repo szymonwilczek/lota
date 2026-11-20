@@ -107,7 +107,6 @@ static void test_full_cgroup(void)
 		FAIL("io.stat is not summed over devices");
 		goto out;
 	}
-	PASS();
 out:
 	close(fd);
 }
@@ -132,7 +131,6 @@ static void test_controllers_off(void)
 		FAIL("a metric without its file is set");
 		goto out;
 	}
-	PASS();
 out:
 	close(fd);
 }
@@ -147,8 +145,6 @@ static void test_gone(void)
 	fd = mkcg("gone");
 	if (bench_cgroup_read(fd, &s) != -ENOENT)
 		FAIL("an empty directory reads as a cgroup");
-	else
-		PASS();
 	close(fd);
 }
 
@@ -183,7 +179,6 @@ static void test_malformed_values(void)
 		FAIL("a well-formed line after bad ones is lost");
 		goto out;
 	}
-	PASS();
 out:
 	close(fd);
 }
@@ -213,7 +208,6 @@ static void test_io_wrap(void)
 		FAIL("the other io sums are lost");
 		goto out;
 	}
-	PASS();
 out:
 	close(fd);
 }
@@ -237,7 +231,6 @@ static void test_empty_io_stat(void)
 		FAIL("an idle cgroup has no io metrics");
 		goto out;
 	}
-	PASS();
 out:
 	close(fd);
 }
@@ -254,19 +247,17 @@ static void test_names(void)
 			return;
 		}
 	}
-	PASS();
 }
 
 int main(void)
 {
+	test_begin("bench cgroup");
 	char cmd[256];
 
 	if (!mkdtemp(root)) {
 		perror("mkdtemp");
 		return 1;
 	}
-
-	printf("lota-bench cgroup reader:\n");
 
 	test_full_cgroup();
 	test_controllers_off();
@@ -280,6 +271,5 @@ int main(void)
 	if (system(cmd) != 0)
 		fprintf(stderr, "cleanup of %s failed\n", root);
 
-	printf("%d/%d tests passed\n", tests_passed, tests_run);
-	return tests_passed == tests_run ? 0 : 1;
+	return test_end();
 }

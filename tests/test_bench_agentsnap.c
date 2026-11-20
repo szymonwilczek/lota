@@ -46,7 +46,6 @@ static void test_full(void)
 		FAIL("wrong sums");
 		return;
 	}
-	PASS();
 }
 
 static void test_nulls(void)
@@ -65,7 +64,6 @@ static void test_nulls(void)
 		FAIL("empty bpf");
 		return;
 	}
-	PASS();
 }
 
 static void test_refused(void)
@@ -87,11 +85,10 @@ static void test_refused(void)
 	TEST("malformed snapshots are refused and leave zeros");
 	for (size_t i = 0; i < sizeof(bad) / sizeof(bad[0]); i++) {
 		if (parse(bad[i], &s) != -EINVAL || s.seq || s.run_ns) {
-			FAIL(bad[i]);
+			FAIL("%s", bad[i]);
 			return;
 		}
 	}
-	PASS();
 }
 
 static void put(const char *name, const char *body, size_t len)
@@ -142,21 +139,19 @@ static void test_read(void)
 		FAIL("oversized");
 		goto out;
 	}
-	PASS();
 out:
 	close(fd);
 }
 
 int main(void)
 {
+	test_begin("bench agentsnap");
 	char cmd[256];
 
 	if (!mkdtemp(dir)) {
 		perror("mkdtemp");
 		return 1;
 	}
-
-	printf("lota-bench agent snapshot reader:\n");
 
 	test_full();
 	test_nulls();
@@ -167,6 +162,5 @@ int main(void)
 	if (system(cmd) != 0)
 		fprintf(stderr, "cleanup of %s failed\n", dir);
 
-	printf("%d/%d tests passed\n", tests_passed, tests_run);
-	return tests_passed == tests_run ? 0 : 1;
+	return test_end();
 }

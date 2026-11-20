@@ -107,8 +107,6 @@ static void expect_path_named(const char *what, const char *args,
 		FAIL("the run was not refused for the path it was given");
 		return;
 	}
-
-	PASS();
 }
 
 /* A file that is there must not be turned into a refusal */
@@ -129,8 +127,6 @@ static void expect_not_refused(const char *what, const char *args)
 		FAIL("a readable file was refused as a usage error");
 		return;
 	}
-
-	PASS();
 }
 
 static void expect_help_text(void)
@@ -154,17 +150,16 @@ static void expect_help_text(void)
 		FAIL("the default key order leaves out lota.conf");
 		return;
 	}
-	PASS();
 }
 
 int main(void)
 {
 	if (access(LOTA_INSTALL_BIN, X_OK) != 0) {
-		printf("SKIP: %s is not built\n", LOTA_INSTALL_BIN);
+		SKIP("%s is not built", LOTA_INSTALL_BIN);
 		return 0;
 	}
 
-	printf("=== lota-install: a named file that is not there ===\n\n");
+	test_begin("installer named paths");
 
 	expect_path_named("--ca-cert names the file it cannot read",
 			  "--status --ca-cert /nonexistent/lota-ca.crt",
@@ -187,6 +182,5 @@ int main(void)
 
 	expect_help_text();
 
-	printf("\n=== %d/%d passed ===\n", tests_passed, tests_run);
-	return tests_passed == tests_run ? 0 : 1;
+	return test_end();
 }

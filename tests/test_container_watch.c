@@ -72,7 +72,7 @@ static void setup_root(void)
 {
 	snprintf(root, sizeof(root), "/tmp/lota_test_cwatch_XXXXXX");
 	if (!mkdtemp(root)) {
-		fprintf(stderr, "mkdtemp failed: %s\n", strerror(errno));
+		FAIL("mkdtemp failed: %s", strerror(errno));
 		exit(1);
 	}
 }
@@ -83,8 +83,7 @@ static void login(uint32_t uid)
 
 	snprintf(path, sizeof(path), "%s/%u", root, uid);
 	if (mkdir(path, 0700) < 0 && errno != EEXIST) {
-		fprintf(stderr, "mkdir(%s) failed: %s\n", path,
-			strerror(errno));
+		FAIL("mkdir(%s) failed: %s", path, strerror(errno));
 		exit(1);
 	}
 }
@@ -95,8 +94,7 @@ static void logout(uint32_t uid)
 
 	snprintf(path, sizeof(path), "%s/%u", root, uid);
 	if (rmdir(path) < 0 && errno != ENOENT) {
-		fprintf(stderr, "rmdir(%s) failed: %s\n", path,
-			strerror(errno));
+		FAIL("rmdir(%s) failed: %s", path, strerror(errno));
 		exit(1);
 	}
 }
@@ -152,8 +150,6 @@ static void test_binds_existing_login(void)
 
 	if (log.bound_count != 1 || log.bound[0] != PLAYER_UID)
 		FAIL("the logged-in UID was not bound");
-	else
-		PASS();
 
 	container_watch_cleanup(&w);
 	logout(PLAYER_UID);
@@ -194,8 +190,6 @@ static void test_binds_login_after_start(void)
 		FAIL("processing the login failed");
 	else if (log.bound_count != 1 || log.bound[0] != PLAYER_UID)
 		FAIL("the login did not produce a listener");
-	else
-		PASS();
 
 	container_watch_cleanup(&w);
 	logout(PLAYER_UID);
@@ -234,8 +228,6 @@ static void test_rebinds_second_login(void)
 
 	if (log.bound_count != 2)
 		FAIL("the second login did not produce a listener");
-	else
-		PASS();
 
 	container_watch_cleanup(&w);
 	logout(PLAYER_UID);
@@ -275,8 +267,6 @@ static void test_rebinds_replaced_runtime_dir(void)
 
 	if (log.unbound_count != 1 || log.bound_count != 2)
 		FAIL("the listener stayed in the replaced directory");
-	else
-		PASS();
 
 	container_watch_cleanup(&w);
 out:
@@ -305,8 +295,6 @@ static void test_ignores_unconfigured_uid(void)
 
 	if (log.bound_count != 0)
 		FAIL("bound a UID that was never configured");
-	else
-		PASS();
 
 	container_watch_cleanup(&w);
 	logout(OTHER_UID);
@@ -342,8 +330,6 @@ static void test_retries_failed_bind(void)
 		FAIL("the retry failed");
 	else if (log.bound_count != 1)
 		FAIL("the failed bind was never retried");
-	else
-		PASS();
 
 	container_watch_cleanup(&w);
 	logout(PLAYER_UID);
@@ -371,8 +357,6 @@ static void test_a_runtime_dir_names_the_login_to_watch(void)
 		FAIL("the runtime directory named no single login");
 	else if (uids[0] != 1000)
 		FAIL("the wrong login was planned for");
-	else
-		PASS();
 }
 
 /* A configuration that names UIDs answers for itself, runtime dir or not. */
@@ -390,8 +374,6 @@ static void test_configured_uids_win_over_the_runtime_dir(void)
 		FAIL("the configured UIDs were not the plan");
 	else if (uids[0] != 1001 || uids[1] != 1002)
 		FAIL("the plan is not the configured UIDs");
-	else
-		PASS();
 }
 
 /*
@@ -418,8 +400,6 @@ static void test_a_foreign_runtime_dir_names_no_login(void)
 			 0 ||
 		 uid != 1000)
 		FAIL("a trailing slash lost the login");
-	else
-		PASS();
 }
 
 /* Nothing to go on at all is a plan of nothing, not a guess. */
@@ -431,8 +411,6 @@ static void test_no_configuration_and_no_runtime_dir_plans_nothing(void)
 	if (container_watch_plan(NULL, 0, NULL, uids,
 				 LOTA_CONFIG_MAX_CONTAINER_LISTENERS) != 0)
 		FAIL("something was planned out of nothing");
-	else
-		PASS();
 }
 
 /*
@@ -459,12 +437,11 @@ static void test_a_login_not_made_yet_is_not_a_failure(void)
 		FAIL("a bind that worked was called pending");
 		return;
 	}
-	PASS();
 }
 
 int main(void)
 {
-	printf("=== LOTA container listener tracking tests ===\n\n");
+	test_begin("container watch");
 
 	setup_root();
 
@@ -482,6 +459,5 @@ int main(void)
 
 	cleanup_root();
 
-	printf("\n%d/%d tests passed\n", tests_passed, tests_run);
-	return tests_passed == tests_run ? 0 : 1;
+	return test_end();
 }

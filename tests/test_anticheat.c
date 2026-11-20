@@ -261,7 +261,7 @@ static void test_runtime_measure_counts_a_vdso_named_object(void)
 	}
 	h = dlopen(path, RTLD_NOW | RTLD_LOCAL);
 	if (!h) {
-		FAIL(dlerror());
+		FAIL("%s", dlerror());
 		return;
 	}
 
@@ -283,8 +283,6 @@ static void test_runtime_measure_counts_a_vdso_named_object(void)
 		FAIL("the vDSO is listed");
 	} else if (memcmp(before, after, sizeof(before)) == 0) {
 		FAIL("the object left the measure unchanged");
-	} else {
-		PASS();
 	}
 	dlclose(h);
 }
@@ -368,8 +366,6 @@ static void test_runtime_measure_refuses_a_loader_start(void)
 		FAIL("a direct start was not measured");
 	else if (through != 0)
 		FAIL("a start through ld.so was not refused");
-	else
-		PASS();
 }
 
 static int build_bound_heartbeat_packet(uint8_t *out, size_t out_cap,
@@ -437,8 +433,6 @@ static void test_init_null_config(void)
 	if (s) {
 		FAIL("returned non-NULL");
 		lota_ac_shutdown(s);
-	} else {
-		PASS();
 	}
 }
 
@@ -458,8 +452,6 @@ static void test_init_struct_size(void)
 	if (s) {
 		FAIL("a config that never set struct_size was accepted");
 		lota_ac_shutdown(s);
-	} else {
-		PASS();
 	}
 
 	TEST("init: undersized struct_size -> NULL");
@@ -472,8 +464,6 @@ static void test_init_struct_size(void)
 	if (s) {
 		FAIL("a config smaller than the 1.0 surface was accepted");
 		lota_ac_shutdown(s);
-	} else {
-		PASS();
 	}
 
 	TEST("init: struct_size from a newer caller is accepted");
@@ -486,7 +476,6 @@ static void test_init_struct_size(void)
 	if (!s) {
 		FAIL("a caller built against a newer header was refused");
 	} else {
-		PASS();
 		lota_ac_shutdown(s);
 	}
 }
@@ -503,8 +492,6 @@ static void test_init_empty_game_id(void)
 	if (s) {
 		FAIL("returned non-NULL");
 		lota_ac_shutdown(s);
-	} else {
-		PASS();
 	}
 }
 
@@ -520,8 +507,6 @@ static void test_init_null_game_id(void)
 	if (s) {
 		FAIL("returned non-NULL");
 		lota_ac_shutdown(s);
-	} else {
-		PASS();
 	}
 }
 
@@ -540,8 +525,6 @@ static void test_init_game_id_too_long(void)
 	if (s) {
 		FAIL("returned non-NULL");
 		lota_ac_shutdown(s);
-	} else {
-		PASS();
 	}
 }
 
@@ -558,8 +541,6 @@ static void test_init_invalid_provider(void)
 	if (s) {
 		FAIL("returned non-NULL");
 		lota_ac_shutdown(s);
-	} else {
-		PASS();
 	}
 }
 
@@ -586,7 +567,6 @@ static void test_init_eac_file_mode(void)
 		return;
 	}
 	lota_ac_shutdown(s);
-	PASS();
 }
 
 static void test_init_eac_file_mode_snapshot_only(void)
@@ -613,7 +593,6 @@ static void test_init_eac_file_mode_snapshot_only(void)
 		return;
 	}
 	lota_ac_shutdown(s);
-	PASS();
 }
 
 static void test_init_battleye_file_mode(void)
@@ -638,14 +617,12 @@ static void test_init_battleye_file_mode(void)
 		return;
 	}
 	lota_ac_shutdown(s);
-	PASS();
 }
 
 static void test_shutdown_null(void)
 {
 	TEST("shutdown(NULL) does not crash");
 	lota_ac_shutdown(NULL);
-	PASS();
 }
 
 static void test_get_state_null(void)
@@ -655,7 +632,6 @@ static void test_get_state_null(void)
 		FAIL("expected IDLE");
 		return;
 	}
-	PASS();
 }
 
 static void test_get_info_null(void)
@@ -666,7 +642,6 @@ static void test_get_info_null(void)
 		FAIL("expected -EINVAL");
 		return;
 	}
-	PASS();
 }
 
 static void test_get_info_null_info(void)
@@ -691,7 +666,6 @@ static void test_get_info_null_info(void)
 		return;
 	}
 	lota_ac_shutdown(s);
-	PASS();
 }
 
 static void test_get_info_fields(void)
@@ -720,34 +694,32 @@ static void test_get_info_fields(void)
 	int ok = 1;
 	if (info.provider != LOTA_AC_PROVIDER_EAC) {
 		ok = 0;
-		printf("(provider) ");
+		FAIL("provider differs");
 	}
 	/* 0x07 carries ATTESTED, so the session is trusted and says so */
 	if (info.state != LOTA_AC_STATE_TRUSTED) {
 		ok = 0;
-		printf("(state) ");
+		FAIL("state differs");
 	}
 	if (info.session_start == 0) {
 		ok = 0;
-		printf("(start) ");
+		FAIL("start differs");
 	}
 	if (info.lota_flags != 0x07) {
 		ok = 0;
-		printf("(flags) ");
+		FAIL("flags differs");
 	}
 	if (info.trusted != 1) {
 		ok = 0;
-		printf("(trusted) ");
+		FAIL("trusted differs");
 	}
 	if (info.heartbeat_seq != 0) {
 		ok = 0;
-		printf("(seq) ");
+		FAIL("seq differs");
 	}
 
 	lota_ac_shutdown(s);
-	if (ok)
-		PASS();
-	else
+	if (!ok)
 		FAIL("field mismatch");
 }
 
@@ -774,7 +746,6 @@ static void test_state_untrusted_zero_flags(void)
 		return;
 	}
 	lota_ac_shutdown(s);
-	PASS();
 }
 
 static void test_state_required_flags(void)
@@ -801,7 +772,6 @@ static void test_state_required_flags(void)
 		return;
 	}
 	lota_ac_shutdown(s);
-	PASS();
 }
 
 static void test_state_required_flags_met(void)
@@ -827,7 +797,6 @@ static void test_state_required_flags_met(void)
 		return;
 	}
 	lota_ac_shutdown(s);
-	PASS();
 }
 
 static void test_state_no_files(void)
@@ -865,7 +834,6 @@ static void test_state_no_files(void)
 		return;
 	}
 	lota_ac_shutdown(s);
-	PASS();
 }
 
 static void test_state_malformed_snapshot(void)
@@ -911,7 +879,6 @@ static void test_state_malformed_snapshot(void)
 		return;
 	}
 	lota_ac_shutdown(s);
-	PASS();
 }
 
 /* the token's valid_until, rewritten in place */
@@ -981,7 +948,6 @@ static void test_state_expired_snapshot(void)
 		return;
 	}
 	lota_ac_shutdown(s);
-	PASS();
 }
 
 /* Ticks @s with stderr in @path; returns the tick's result. */
@@ -1061,7 +1027,6 @@ static void test_state_each_snapshot_failure_warns_once(void)
 		return;
 	}
 	lota_ac_shutdown(s);
-	PASS();
 }
 
 static int test_sha256(const void *data, size_t len, uint8_t out[32])
@@ -1097,8 +1062,6 @@ static void test_heartbeat_game_id_hash_domain_separated(void)
 		FAIL("hash matches legacy SHA-256(game_id)");
 		return;
 	}
-
-	PASS();
 }
 
 static void test_heartbeat_buf_too_small(void)
@@ -1123,9 +1086,7 @@ static void test_heartbeat_buf_too_small(void)
 	int ret = lota_ac_heartbeat(s, buf, sizeof(buf), &written);
 	lota_ac_shutdown(s);
 
-	if (ret == -EOPNOTSUPP)
-		PASS();
-	else
+	if (ret != -EOPNOTSUPP)
 		FAIL("expected -EOPNOTSUPP");
 }
 
@@ -1153,9 +1114,7 @@ static void test_heartbeat_null_args(void)
 			ok = 0;
 		lota_ac_shutdown(s);
 	}
-	if (ok)
-		PASS();
-	else
+	if (!ok)
 		FAIL("did not return -EINVAL");
 }
 
@@ -1191,8 +1150,6 @@ static void test_verify_roundtrip(void)
 		FAIL("expected LOTA_AC_ERR_INVALID_ARG");
 		return;
 	}
-
-	PASS();
 }
 
 static void test_verify_battleye_roundtrip(void)
@@ -1225,7 +1182,6 @@ static void test_verify_battleye_roundtrip(void)
 		FAIL("expected LOTA_AC_ERR_INVALID_ARG");
 		return;
 	}
-	PASS();
 }
 
 static void test_verify_rejects_game_hash_mismatch(void)
@@ -1250,8 +1206,6 @@ static void test_verify_rejects_game_hash_mismatch(void)
 		FAIL("expected LOTA_AC_ERR_MALFORMED");
 		return;
 	}
-
-	PASS();
 }
 
 static void test_verify_null_data(void)
@@ -1266,7 +1220,6 @@ static void test_verify_null_data(void)
 		FAIL("expected LOTA_AC_ERR_INVALID_ARG");
 		return;
 	}
-	PASS();
 }
 
 static void test_verify_null_info(void)
@@ -1281,7 +1234,6 @@ static void test_verify_null_info(void)
 		FAIL("expected LOTA_AC_ERR_INVALID_ARG");
 		return;
 	}
-	PASS();
 }
 
 static void test_verify_truncated(void)
@@ -1297,7 +1249,6 @@ static void test_verify_truncated(void)
 		FAIL("expected LOTA_AC_ERR_MALFORMED");
 		return;
 	}
-	PASS();
 }
 
 static void test_verify_bad_magic(void)
@@ -1323,7 +1274,6 @@ static void test_verify_bad_magic(void)
 		FAIL("expected LOTA_AC_ERR_MALFORMED");
 		return;
 	}
-	PASS();
 }
 
 static void test_verify_bad_version(void)
@@ -1349,7 +1299,6 @@ static void test_verify_bad_version(void)
 		FAIL("expected LOTA_AC_ERR_VERSION");
 		return;
 	}
-	PASS();
 }
 
 static void test_verify_bad_provider(void)
@@ -1375,7 +1324,6 @@ static void test_verify_bad_provider(void)
 		FAIL("expected LOTA_AC_ERR_MALFORMED");
 		return;
 	}
-	PASS();
 }
 
 static void test_verify_size_mismatch(void)
@@ -1401,7 +1349,6 @@ static void test_verify_size_mismatch(void)
 		FAIL("expected LOTA_AC_ERR_MALFORMED");
 		return;
 	}
-	PASS();
 }
 
 static void test_verify_header_flags_tamper_rejected(void)
@@ -1438,8 +1385,6 @@ static void test_verify_header_flags_tamper_rejected(void)
 		FAIL("expected LOTA_AC_ERR_INVALID_ARG");
 		return;
 	}
-
-	PASS();
 }
 
 static void test_verify_rejects_unknown_domain_version(void)
@@ -1471,7 +1416,6 @@ static void test_verify_rejects_unknown_domain_version(void)
 		FAIL("expected LOTA_AC_ERR_VERSION");
 		return;
 	}
-	PASS();
 }
 
 static void test_verify_rejects_runtime_measure_mismatch(void)
@@ -1507,7 +1451,6 @@ static void test_verify_rejects_runtime_measure_mismatch(void)
 		FAIL("expected LOTA_AC_ERR_RUNTIME_IMAGE");
 		return;
 	}
-	PASS();
 }
 
 static void test_verify_rejects_runtime_field_tamper(void)
@@ -1544,7 +1487,6 @@ static void test_verify_rejects_runtime_field_tamper(void)
 		FAIL("expected LOTA_AC_ERR_RUNTIME_IMAGE");
 		return;
 	}
-	PASS();
 }
 
 static void test_direct_mode_no_agent(void)
@@ -1568,7 +1510,6 @@ static void test_direct_mode_no_agent(void)
 		return;
 	}
 	lota_ac_shutdown(s);
-	PASS();
 }
 
 /*
@@ -1591,7 +1532,6 @@ static void test_last_error_init_causes(void)
 		FAIL("expected LOTA_AC_ERR_INVALID_ARG");
 		return;
 	}
-	PASS();
 
 	TEST("last_error: an unset struct_size names the struct size");
 	memset(&cfg, 0, sizeof(cfg));
@@ -1602,7 +1542,6 @@ static void test_last_error_init_causes(void)
 		FAIL("expected LOTA_AC_ERR_CONFIG_SIZE");
 		return;
 	}
-	PASS();
 
 	TEST("last_error: a missing game_id names the game_id");
 	memset(&cfg, 0, sizeof(cfg));
@@ -1614,7 +1553,6 @@ static void test_last_error_init_causes(void)
 		FAIL("expected LOTA_AC_ERR_GAME_ID");
 		return;
 	}
-	PASS();
 
 	/* the cause that cost the four attempts: a zeroed provider */
 	TEST("last_error: a provider nobody set names the provider");
@@ -1626,7 +1564,6 @@ static void test_last_error_init_causes(void)
 		FAIL("expected LOTA_AC_ERR_PROVIDER");
 		return;
 	}
-	PASS();
 
 	TEST("last_error: a session that started says nothing failed");
 	memset(&cfg, 0, sizeof(cfg));
@@ -1648,7 +1585,6 @@ static void test_last_error_init_causes(void)
 		}
 		lota_ac_shutdown(s);
 	}
-	PASS();
 }
 
 /*
@@ -1677,7 +1613,6 @@ static void test_last_error_no_agent(void)
 		return;
 	}
 	lota_ac_shutdown(s);
-	PASS();
 }
 
 /* the publisher is checked once connected; listening is enough */
@@ -1725,7 +1660,6 @@ static void test_last_error_bad_publisher(void)
 		return;
 	}
 	lota_ac_shutdown(s);
-	PASS();
 }
 
 /*
@@ -1754,7 +1688,6 @@ static void test_last_error_heartbeat_causes(void)
 		lota_ac_shutdown(s);
 		return;
 	}
-	PASS();
 
 	TEST("last_error: a beat with no agent behind it names the agent");
 	if (!s) {
@@ -1767,7 +1700,6 @@ static void test_last_error_heartbeat_causes(void)
 		lota_ac_shutdown(s);
 		return;
 	}
-	PASS();
 
 	lota_ac_shutdown(s);
 }
@@ -1794,9 +1726,9 @@ static int last_error_is(int expected, const char *what)
 		return 1;
 
 	if (got == LOTA_AC_ERR_CONFIG_SIZE)
-		printf("FAIL (%s left the seeded error behind)\n", what);
+		FAIL("(%s left the seeded error behind)", what);
 	else
-		printf("FAIL (%s left %d, expected %d)\n", what, got, expected);
+		FAIL("(%s left %d, expected %d)", what, got, expected);
 	return 0;
 }
 
@@ -1818,7 +1750,6 @@ static void test_last_error_measure_helpers(void)
 	lota_ac_compute_game_binding_hash(NULL, "/proc/self/exe", game_hash);
 	if (!last_error_is(-EINVAL, "compute_game_binding_hash"))
 		return;
-	PASS();
 
 	TEST("last_error: a binding hash that was computed clears the last");
 	seed_stale_error();
@@ -1829,14 +1760,12 @@ static void test_last_error_measure_helpers(void)
 	}
 	if (!last_error_is(LOTA_AC_ERR_OK, "compute_game_binding_hash"))
 		return;
-	PASS();
 
 	TEST("last_error: a runtime measure of nowhere is invalid");
 	seed_stale_error();
 	lota_ac_compute_runtime_measure(NULL);
 	if (!last_error_is(-EINVAL, "compute_runtime_measure"))
 		return;
-	PASS();
 
 	TEST("last_error: a runtime measure that was taken clears the last");
 	seed_stale_error();
@@ -1846,14 +1775,12 @@ static void test_last_error_measure_helpers(void)
 	}
 	if (!last_error_is(LOTA_AC_ERR_OK, "compute_runtime_measure"))
 		return;
-	PASS();
 
 	TEST("last_error: an enumeration with no callback is invalid");
 	seed_stale_error();
 	lota_ac_list_runtime_objects(NULL, NULL);
 	if (!last_error_is(-EINVAL, "list_runtime_objects"))
 		return;
-	PASS();
 
 	TEST("last_error: an enumeration that ran clears the last");
 	seed_stale_error();
@@ -1864,14 +1791,12 @@ static void test_last_error_measure_helpers(void)
 	}
 	if (!last_error_is(LOTA_AC_ERR_OK, "list_runtime_objects"))
 		return;
-	PASS();
 
 	TEST("last_error: an expected measure over no paths is invalid");
 	seed_stale_error();
 	lota_ac_compute_expected_runtime_measure(NULL, measure);
 	if (!last_error_is(-EINVAL, "compute_expected_runtime_measure"))
 		return;
-	PASS();
 
 	TEST("last_error: an expected measure that was computed clears it");
 	seed_stale_error();
@@ -1882,7 +1807,6 @@ static void test_last_error_measure_helpers(void)
 	}
 	if (!last_error_is(LOTA_AC_ERR_OK, "compute_expected_runtime_measure"))
 		return;
-	PASS();
 }
 
 /* the session-bound calls, two of which an integrator polls in a loop */
@@ -1901,14 +1825,12 @@ static void test_last_error_session_calls(void)
 	lota_ac_get_info(NULL, &info);
 	if (!last_error_is(-EINVAL, "get_info"))
 		return;
-	PASS();
 
 	TEST("last_error: a refresh of no session is invalid");
 	seed_stale_error();
 	lota_ac_tick(NULL);
 	if (!last_error_is(-EINVAL, "tick"))
 		return;
-	PASS();
 
 	cfg.token_dir = test_dir;
 	s = lota_ac_init(&cfg);
@@ -1929,7 +1851,6 @@ static void test_last_error_session_calls(void)
 		lota_ac_shutdown(s);
 		return;
 	}
-	PASS();
 
 	TEST("last_error: a refresh that ran clears the last");
 	seed_stale_error();
@@ -1942,7 +1863,6 @@ static void test_last_error_session_calls(void)
 		lota_ac_shutdown(s);
 		return;
 	}
-	PASS();
 
 	lota_ac_shutdown(s);
 }
@@ -1960,7 +1880,6 @@ static void test_last_error_verify_heartbeat(void)
 	lota_ac_verify_heartbeat(NULL, 0, NULL, 0, game_hash, measure, &info);
 	if (!last_error_is(LOTA_AC_ERR_INVALID_ARG, "verify_heartbeat"))
 		return;
-	PASS();
 
 	TEST("last_error: a verdict on a packet that is not one names it");
 	seed_stale_error();
@@ -1968,7 +1887,6 @@ static void test_last_error_verify_heartbeat(void)
 				 &info);
 	if (!last_error_is(LOTA_AC_ERR_MALFORMED, "verify_heartbeat"))
 		return;
-	PASS();
 }
 
 /* a code an integrator logs is worth a sentence; a number is not one */
@@ -2014,14 +1932,12 @@ static void test_last_error_strings(void)
 			}
 		}
 	}
-	PASS();
 
 	TEST("strerror: a code from a newer library still prints");
 	if (!unknown || !unknown[0]) {
 		FAIL("no fallback string");
 		return;
 	}
-	PASS();
 }
 
 static void test_state_str(void)
@@ -2041,9 +1957,7 @@ static void test_state_str(void)
 		ok = 0;
 	if (strcmp(lota_ac_state_str(99), "unknown") != 0)
 		ok = 0;
-	if (ok)
-		PASS();
-	else
+	if (!ok)
 		FAIL("string mismatch");
 }
 
@@ -2058,9 +1972,7 @@ static void test_provider_str(void)
 		ok = 0;
 	if (strcmp(lota_ac_provider_str(99), "unknown") != 0)
 		ok = 0;
-	if (ok)
-		PASS();
-	else
+	if (!ok)
 		FAIL("string mismatch");
 }
 
@@ -2071,7 +1983,6 @@ static void test_tick_null(void)
 		FAIL("expected -EINVAL");
 		return;
 	}
-	PASS();
 }
 
 /*
@@ -2145,7 +2056,6 @@ static void test_integration_wine_artifacts_consumed_by_eac(void)
 	}
 
 	lota_ac_shutdown(s);
-	PASS();
 }
 
 /*
@@ -2206,7 +2116,6 @@ static void auto_token_dir_is_the_hooks_dir(const char *env)
 		return;
 	}
 	lota_ac_shutdown(s);
-	PASS();
 }
 
 static void test_auto_token_dir_is_the_hooks_dir(void)
@@ -2274,7 +2183,6 @@ static void test_integration_eac_detects_agent_death(void)
 	}
 
 	lota_ac_shutdown(s);
-	PASS();
 }
 
 static void test_integration_eac_detects_attestation_loss(void)
@@ -2319,7 +2227,6 @@ static void test_integration_eac_detects_attestation_loss(void)
 	}
 
 	lota_ac_shutdown(s);
-	PASS();
 }
 
 static void test_session_id_unique(void)
@@ -2348,9 +2255,7 @@ static void test_session_id_unique(void)
 	lota_ac_shutdown(s1);
 	lota_ac_shutdown(s2);
 
-	if (memcmp(i1.session_id, i2.session_id, LOTA_AC_SESSION_ID_SIZE) != 0)
-		PASS();
-	else
+	if (memcmp(i1.session_id, i2.session_id, LOTA_AC_SESSION_ID_SIZE) == 0)
 		FAIL("same session_id");
 }
 
@@ -2389,8 +2294,6 @@ static void test_unattested_host_is_not_trusted(void)
 		FAIL("a host that never attested is called trusted");
 	else if (lota_ac_get_state(s) != LOTA_AC_STATE_UNTRUSTED)
 		FAIL("expected UNTRUSTED");
-	else
-		PASS();
 
 	lota_ac_shutdown(s);
 }
@@ -2421,8 +2324,6 @@ static void test_required_flags_cannot_drop_attested(void)
 
 	if (lota_ac_get_state(s) != LOTA_AC_STATE_UNTRUSTED)
 		FAIL("a requirement that omits ATTESTED trusted the host");
-	else
-		PASS();
 
 	lota_ac_shutdown(s);
 }
@@ -2472,8 +2373,6 @@ static void test_info_agrees_with_state(void)
 		FAIL("info.state disagrees with get_state");
 	else if (!info.trusted)
 		FAIL("info.trusted is clear on a trusted session");
-	else
-		PASS();
 
 	lota_ac_shutdown(s);
 }
@@ -2527,13 +2426,11 @@ static void test_errno_is_not_rendered_as_a_verdict(void)
 
 	for (i = 0; i < sizeof(helper_errnos) / sizeof(helper_errnos[0]); i++) {
 		if (renders_as_a_verdict(-helper_errnos[i])) {
-			printf("(errno %d) ", helper_errnos[i]);
-			FAIL("an errno renders as one of this library's codes");
+			FAIL("an errno renders as one of this library's codes: errno %d",
+			     helper_errnos[i]);
 			return;
 		}
 	}
-
-	PASS();
 }
 
 /* The guard: no code may occupy a number an errno could occupy */
@@ -2546,13 +2443,11 @@ static void test_error_codes_sit_outside_the_errno_range(void)
 	for (i = 0; i < sizeof(ac_error_codes) / sizeof(ac_error_codes[0]);
 	     i++) {
 		if (ac_error_codes[i] > -256) {
-			printf("(%d) ", ac_error_codes[i]);
-			FAIL("a code sits where an errno sits");
+			FAIL("a code sits where an errno sits: %d",
+			     ac_error_codes[i]);
 			return;
 		}
 	}
-
-	PASS();
 }
 
 /*
@@ -2580,12 +2475,10 @@ static void test_measure_failure_does_not_render_as_a_verdict(void)
 	}
 
 	if (renders_as_a_verdict(rc)) {
-		printf("(%s) ", lota_ac_strerror(rc));
-		FAIL("the failure is reported as a heartbeat verdict");
+		FAIL("the failure is reported as a heartbeat verdict: %s",
+		     lota_ac_strerror(rc));
 		return;
 	}
-
-	PASS();
 }
 
 /*
@@ -2713,8 +2606,7 @@ static void test_verified_unattested_host_is_not_trusted(void)
 	ret = verified_state(LOTA_FLAG_TPM_OK | LOTA_FLAG_IOMMU_OK, 0, &state,
 			     &trusted);
 	if (ret != LOTA_AC_ERR_OK) {
-		printf("(rc=%d) ", ret);
-		FAIL("preconditions: the packet did not verify");
+		FAIL("preconditions: the packet did not verify: rc=%d", ret);
 		return;
 	}
 
@@ -2722,8 +2614,6 @@ static void test_verified_unattested_host_is_not_trusted(void)
 		FAIL("a host that never attested verified as trusted");
 	else if (state != LOTA_AC_STATE_UNTRUSTED)
 		FAIL("expected UNTRUSTED");
-	else
-		PASS();
 }
 
 static void test_verified_attested_host_is_trusted(void)
@@ -2737,15 +2627,12 @@ static void test_verified_attested_host_is_trusted(void)
 	ret = verified_state(LOTA_FLAG_ATTESTED | LOTA_FLAG_TPM_OK, 0, &state,
 			     &trusted);
 	if (ret != LOTA_AC_ERR_OK) {
-		printf("(rc=%d) ", ret);
-		FAIL("preconditions: the packet did not verify");
+		FAIL("preconditions: the packet did not verify: rc=%d", ret);
 		return;
 	}
 
 	if (!trusted || state != LOTA_AC_STATE_TRUSTED)
 		FAIL("an attested host did not verify as trusted");
-	else
-		PASS();
 }
 
 static void test_verified_full_protected_set(void)
@@ -2759,12 +2646,9 @@ static void test_verified_full_protected_set(void)
 	ret = verified_state(LOTA_FLAG_ATTESTED | LOTA_FLAG_TPM_OK,
 			     LOTA_TOKEN_MAX_PROTECT_PIDS, &state, &trusted);
 	if (ret != LOTA_AC_ERR_OK) {
-		printf("(rc=%d) ", ret);
-		FAIL("the packet did not verify");
+		FAIL("the packet did not verify: rc=%d", ret);
 	} else if (!trusted || state != LOTA_AC_STATE_TRUSTED) {
 		FAIL("an attested host did not verify as trusted");
-	} else {
-		PASS();
 	}
 }
 
@@ -2824,12 +2708,10 @@ static void test_file_mode_full_protected_set(void)
 
 	ret = lota_ac_tick(s);
 	if (ret != 0) {
-		printf("(rc=%d, err=%d) ", ret, lota_ac_last_error());
-		FAIL("the snapshot was refused");
+		FAIL("the snapshot was refused: rc=%d, err=%d", ret,
+		     lota_ac_last_error());
 	} else if (lota_ac_get_state(s) != LOTA_AC_STATE_TRUSTED) {
 		FAIL("expected TRUSTED");
-	} else {
-		PASS();
 	}
 	lota_ac_shutdown(s);
 }
@@ -2992,12 +2874,10 @@ static void test_direct_mode_full_protected_set(void)
 	} else {
 		ret = lota_ac_heartbeat(s, buf, sizeof(buf), &written);
 		if (ret != 0) {
-			printf("(rc=%d, err=%d) ", ret, lota_ac_last_error());
-			FAIL("heartbeat failed");
+			FAIL("heartbeat failed: rc=%d, err=%d", ret,
+			     lota_ac_last_error());
 		} else if (written <= LOTA_AC_HEADER_SIZE + 1608) {
 			FAIL("the heartbeat does not carry the whole token");
-		} else {
-			PASS();
 		}
 
 		TEST("direct mode: the heartbeat nonce follows its header");
@@ -3005,8 +2885,6 @@ static void test_direct_mode_full_protected_set(void)
 			FAIL("no heartbeat was built");
 		else if (!heartbeat_nonce_matches(buf, written))
 			FAIL("the token's nonce or flags are not the header's");
-		else
-			PASS();
 		lota_ac_shutdown(s);
 	}
 
@@ -3020,12 +2898,10 @@ static void test_direct_mode_full_protected_set(void)
 	} else {
 		ret = lota_ac_heartbeat(s, buf, sizeof(buf), &written);
 		if (ret != -EIO || lota_ac_last_error() != LOTA_AC_ERR_TOKEN) {
-			printf("(rc=%d, err=%d) ", ret, lota_ac_last_error());
-			FAIL("expected -EIO and LOTA_AC_ERR_TOKEN");
+			FAIL("expected -EIO and LOTA_AC_ERR_TOKEN: rc=%d, err=%d",
+			     ret, lota_ac_last_error());
 		} else if (lota_ac_get_state(s) != LOTA_AC_STATE_ERROR) {
 			FAIL("the session stayed in its old state");
-		} else {
-			PASS();
 		}
 		lota_ac_shutdown(s);
 	}
@@ -3078,31 +2954,26 @@ static void test_boot_evidence_file_mode(void)
 	if (ret != 0 || written != sizeof(want) ||
 	    memcmp(got, want, sizeof(want)) != 0)
 		FAIL("the evidence is not the file's");
-	else
-		PASS();
 
 	TEST("boot evidence: a buffer too small is refused");
 	ret = lota_ac_boot_evidence(s, got, 16, &written);
-	if (ret == -ENOSPC && lota_ac_last_error() == LOTA_AC_ERR_INVALID_ARG)
-		PASS();
-	else
+	if (!(ret == -ENOSPC &&
+	      lota_ac_last_error() == LOTA_AC_ERR_INVALID_ARG))
 		FAIL("a short buffer was filled");
 
 	TEST("boot evidence: no file means no evidence");
 	unlink(path);
 	ret = lota_ac_boot_evidence(s, got, sizeof(got), &written);
-	if (ret == -ENODATA && lota_ac_last_error() == LOTA_AC_ERR_NO_EVIDENCE)
-		PASS();
-	else
+	if (!(ret == -ENODATA &&
+	      lota_ac_last_error() == LOTA_AC_ERR_NO_EVIDENCE))
 		FAIL("a missing file was not NO_EVIDENCE");
 
 	TEST("boot evidence: NULL arguments are refused");
-	if (lota_ac_boot_evidence(NULL, got, sizeof(got), &written) ==
-		    -EINVAL &&
-	    lota_ac_boot_evidence(s, NULL, sizeof(got), &written) == -EINVAL &&
-	    lota_ac_boot_evidence(s, got, sizeof(got), NULL) == -EINVAL)
-		PASS();
-	else
+	if (!(lota_ac_boot_evidence(NULL, got, sizeof(got), &written) ==
+		      -EINVAL &&
+	      lota_ac_boot_evidence(s, NULL, sizeof(got), &written) ==
+		      -EINVAL &&
+	      lota_ac_boot_evidence(s, got, sizeof(got), NULL) == -EINVAL))
 		FAIL("a NULL argument was accepted");
 
 	lota_ac_shutdown(s);
@@ -3126,10 +2997,9 @@ static void test_boot_evidence_no_agent(void)
 		FAIL("init returned NULL");
 		return;
 	}
-	if (lota_ac_boot_evidence(s, buf, sizeof(buf), &written) == -ENOTCONN &&
-	    lota_ac_last_error() == LOTA_AC_ERR_NO_AGENT)
-		PASS();
-	else
+	if (!(lota_ac_boot_evidence(s, buf, sizeof(buf), &written) ==
+		      -ENOTCONN &&
+	      lota_ac_last_error() == LOTA_AC_ERR_NO_AGENT))
 		FAIL("expected -ENOTCONN and NO_AGENT");
 	lota_ac_shutdown(s);
 }
@@ -3193,41 +3063,34 @@ static void test_verify_boot_evidence(void)
 
 	TEST("verify boot evidence: Secure Boot reads on");
 	ret = lota_ac_verify_boot_evidence(&info, buf, len, &sb);
-	if (ret == LOTA_AC_ERR_OK && sb == 1)
-		PASS();
-	else
-		FAIL(lota_ac_strerror(ret));
+	if (!(ret == LOTA_AC_ERR_OK && sb == 1))
+		FAIL("%s", lota_ac_strerror(ret));
 
 	TEST("verify boot evidence: another boot's digest is refused");
 	info.pcr_digest[0] ^= 1;
 	sb = -1;
 	ret = lota_ac_verify_boot_evidence(&info, buf, len, &sb);
 	info.pcr_digest[0] ^= 1;
-	if (ret == LOTA_AC_ERR_BAD_EVIDENCE && sb == 0 &&
-	    lota_ac_last_error() == LOTA_AC_ERR_BAD_EVIDENCE)
-		PASS();
-	else
+	if (!(ret == LOTA_AC_ERR_BAD_EVIDENCE && sb == 0 &&
+	      lota_ac_last_error() == LOTA_AC_ERR_BAD_EVIDENCE))
 		FAIL("evidence of another boot passed");
 
 	TEST("verify boot evidence: NULL arguments are refused");
-	if (lota_ac_verify_boot_evidence(NULL, buf, len, &sb) ==
-		    LOTA_AC_ERR_INVALID_ARG &&
-	    lota_ac_verify_boot_evidence(&info, NULL, len, &sb) ==
-		    LOTA_AC_ERR_INVALID_ARG &&
-	    lota_ac_verify_boot_evidence(&info, buf, len, NULL) ==
-		    LOTA_AC_ERR_INVALID_ARG)
-		PASS();
-	else
+	if (!(lota_ac_verify_boot_evidence(NULL, buf, len, &sb) ==
+		      LOTA_AC_ERR_INVALID_ARG &&
+	      lota_ac_verify_boot_evidence(&info, NULL, len, &sb) ==
+		      LOTA_AC_ERR_INVALID_ARG &&
+	      lota_ac_verify_boot_evidence(&info, buf, len, NULL) ==
+		      LOTA_AC_ERR_INVALID_ARG))
 		FAIL("a NULL argument was accepted");
 }
 
 int main(void)
 {
-	printf("=== LOTA Anti-Cheat Compatibility Tests ===\n\n");
+	test_begin("anticheat");
 
 	setup_test_dir();
 
-	printf("Config Validation:\n");
 	test_init_null_config();
 	test_init_struct_size();
 	test_init_empty_game_id();
@@ -3235,7 +3098,6 @@ int main(void)
 	test_init_game_id_too_long();
 	test_init_invalid_provider();
 
-	printf("\nSession Lifecycle:\n");
 	test_init_eac_file_mode();
 	test_init_eac_file_mode_snapshot_only();
 	test_init_battleye_file_mode();
@@ -3245,7 +3107,6 @@ int main(void)
 	test_get_info_null_info();
 	test_get_info_fields();
 
-	printf("\nState Machine:\n");
 	test_state_untrusted_zero_flags();
 	test_state_required_flags();
 	test_state_required_flags_met();
@@ -3254,12 +3115,10 @@ int main(void)
 	test_state_expired_snapshot();
 	test_state_each_snapshot_failure_warns_once();
 
-	printf("\nHeartbeat Wire Format:\n");
 	test_heartbeat_game_id_hash_domain_separated();
 	test_heartbeat_buf_too_small();
 	test_heartbeat_null_args();
 
-	printf("\nHeartbeat Verification:\n");
 	test_verify_roundtrip();
 	test_verify_battleye_roundtrip();
 	test_verify_rejects_game_hash_mismatch();
@@ -3275,10 +3134,8 @@ int main(void)
 	test_verify_rejects_runtime_measure_mismatch();
 	test_verify_rejects_runtime_field_tamper();
 
-	printf("\nDirect Mode:\n");
 	test_direct_mode_no_agent();
 
-	printf("\nWhy a call failed:\n");
 	test_last_error_init_causes();
 	test_last_error_no_agent();
 	test_last_error_bad_publisher();
@@ -3288,19 +3145,16 @@ int main(void)
 	test_last_error_verify_heartbeat();
 	test_last_error_strings();
 
-	printf("\nBoot evidence:\n");
 	test_boot_evidence_file_mode();
 	test_boot_evidence_no_agent();
 	test_verify_boot_evidence();
 
-	printf("\nIntegration:\n");
 	test_integration_wine_artifacts_consumed_by_eac();
 	test_auto_token_dir_is_the_hooks_dir();
 	test_empty_token_dir_override_is_skipped();
 	test_integration_eac_detects_agent_death();
 	test_integration_eac_detects_attestation_loss();
 
-	printf("\nMisc:\n");
 	test_state_str();
 	test_provider_str();
 	test_tick_null();
@@ -3321,10 +3175,5 @@ int main(void)
 
 	cleanup_test_dir();
 
-	printf("\n=== Results: %d/%d passed", tests_passed, tests_run);
-	if (tests_passed < tests_run)
-		printf(" (%d FAILED)", tests_run - tests_passed);
-	printf(" ===\n\n");
-
-	return tests_passed < tests_run ? 1 : 0;
+	return test_end();
 }

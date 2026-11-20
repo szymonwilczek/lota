@@ -302,8 +302,6 @@ static void test_command_line_trust_lib_survives_reload(void)
 		FAIL("the reload dropped it, so the hooks have nothing to refuse");
 	else if (trust_lib_count != 1)
 		FAIL("the daemon's own count no longer names it");
-	else
-		PASS();
 
 	config_free(cfg);
 	free(protect_pids);
@@ -348,8 +346,6 @@ static void test_command_line_protect_pid_survives_reload(void)
 		FAIL("the reload emptied the protected set");
 	else if (protect_pid_count != 1)
 		FAIL("the daemon's own count no longer names it");
-	else
-		PASS();
 
 	config_free(cfg);
 	free(protect_pids);
@@ -402,8 +398,6 @@ static void test_config_removal_still_takes_effect(void)
 		FAIL("a removal in the file did not take effect");
 	else if (!stub_holds_lib(flag_lib))
 		FAIL("the command-line entry went with it");
-	else
-		PASS();
 
 	config_free(cfg);
 	free(protect_pids);
@@ -455,8 +449,6 @@ static void test_command_line_switch_survives_reload(void)
 
 	if (!strict_exec)
 		FAIL("the reload turned strict exec off");
-	else
-		PASS();
 
 	config_free(cfg);
 	free(protect_pids);
@@ -504,8 +496,6 @@ static void test_switch_not_asked_for_follows_the_file(void)
 
 	if (strict_exec)
 		FAIL("the file no longer decides a switch nobody passed");
-	else
-		PASS();
 
 	config_free(cfg);
 	free(protect_pids);
@@ -550,8 +540,6 @@ static void test_fifo_is_refused_without_waiting(void)
 
 	if (ret != -EINVAL)
 		FAIL("expected -EINVAL");
-	else
-		PASS();
 
 	config_free(cfg);
 	free(protect_pids);
@@ -619,8 +607,6 @@ static void test_reload_applies_an_unchanged_log_level(void)
 
 	if (info_is_logged() != 0)
 		FAIL("log_level = error still lets info through");
-	else
-		PASS();
 
 	journal_set_level(LOG_DEBUG);
 	config_free(cfg);
@@ -698,7 +684,8 @@ static void test_strict_without_allow_verity_stays_off(void)
 					       (1u << LOTA_CFG_STRICT_MODULES));
 
 		if (strict_exec != on || strict_modules != on || asked != on) {
-			FAIL(on ? "switches stay off with allow_verity" :
+			FAIL("%s",
+			     on ? "switches stay off with allow_verity" :
 				  "switches turn on without allow_verity");
 			return;
 		}
@@ -707,7 +694,6 @@ static void test_strict_without_allow_verity_stays_off(void)
 			return;
 		}
 	}
-	PASS();
 }
 
 /* Runs one reload of @extra over a default snapshot and returns its log */
@@ -816,7 +802,7 @@ static void test_startup_only_keys_are_reported(void)
 		snprintf(want, sizeof(want), "%s changes on the next start",
 			 keys[i]);
 		if (!strstr(log, want)) {
-			FAIL(keys[i]);
+			FAIL("%s", keys[i]);
 			config_free(cfg);
 			return;
 		}
@@ -827,7 +813,6 @@ static void test_startup_only_keys_are_reported(void)
 		return;
 	}
 	config_free(cfg);
-	PASS();
 }
 
 /*
@@ -902,8 +887,6 @@ static void test_downgrade_uses_the_startup_key(void)
 		FAIL("the signed downgrade is refused");
 	else if (strcmp(cfg->policy_pubkey, pub) != 0)
 		FAIL("the reload replaced the key with the file's");
-	else
-		PASS();
 
 out:
 	journal_set_level(LOG_DEBUG);
@@ -965,8 +948,6 @@ static void test_failed_mode_change_fails_the_reload(void)
 	else if (trust_lib_count != 1 ||
 		 stub_holds_lib("/usr/lib/from-the-file.so"))
 		FAIL("the trusted libraries were reloaded");
-	else
-		PASS();
 
 	config_free(cfg);
 	free(protect_pids);
@@ -975,7 +956,7 @@ static void test_failed_mode_change_fails_the_reload(void)
 
 int main(void)
 {
-	printf("=== reload keeps command-line enforcement state ===\n\n");
+	test_begin("reload enforcement state");
 
 	test_command_line_trust_lib_survives_reload();
 	test_command_line_protect_pid_survives_reload();
@@ -989,6 +970,5 @@ int main(void)
 	test_downgrade_uses_the_startup_key();
 	test_failed_mode_change_fails_the_reload();
 
-	printf("\n=== %d/%d passed ===\n", tests_passed, tests_run);
-	return tests_passed == tests_run ? 0 : 1;
+	return test_end();
 }

@@ -200,7 +200,7 @@ static void test_long_path_keeps_tail(void)
 	    strcmp(out + strlen(LOTA_RT_PATH_CUT),
 		   path + strlen(path) - (len - strlen(LOTA_RT_PATH_CUT))) !=
 		    0) {
-		FAIL(out);
+		FAIL("%s", out);
 		return;
 	}
 
@@ -209,7 +209,6 @@ static void test_long_path_keeps_tail(void)
 		FAIL("a short path is changed");
 		return;
 	}
-	PASS();
 }
 
 static int copy_file(const char *from, const char *to)
@@ -319,20 +318,17 @@ out:
 		*strrchr(dir, '/') = '\0';
 	}
 	rmdir(dir);
-	if (ret != -ENAMETOOLONG && found)
-		PASS();
-	else
+	if (!(ret != -ENAMETOOLONG && found))
 		FAIL("long path refused or not cut to its tail");
 }
 
 int main(void)
 {
+	test_begin("runtime measure pid");
 	uint8_t digest[32];
 	struct lota_runtime_measure_failure mfail;
 	struct lota_runtime_measure_coverage cov;
 	int ret;
-
-	printf("Kernel-anchored per-process measurement tests:\n");
 
 	test_long_path_keeps_tail();
 	test_long_path_process_is_measured();
@@ -346,9 +342,7 @@ int main(void)
 	 * Either way it must never return success while leaving the digest
 	 * unset.
 	 */
-	if (ret < 0 || !digest_is_zero(digest))
-		PASS();
-	else
+	if (!(ret < 0 || !digest_is_zero(digest)))
 		FAIL("success with zero digest");
 
 	/*
@@ -356,21 +350,15 @@ int main(void)
 	 * refusal with no object named is the state this test exists to keep out.
 	 */
 	TEST("a refused measurement names the object that stopped it");
-	if (ret == 0 || mfail.soname[0] != '\0')
-		PASS();
-	else
+	if (!(ret == 0 || mfail.soname[0] != '\0'))
 		FAIL("refused with no object named");
 
 	TEST("measure_pid rejects a nonexistent process");
-	if (lota_runtime_measure_pid(-1, digest, NULL, NULL) < 0)
-		PASS();
-	else
+	if (lota_runtime_measure_pid(-1, digest, NULL, NULL) >= 0)
 		FAIL("accepted bad pid");
 
 	TEST("measure_pid rejects NULL output");
-	if (lota_runtime_measure_pid(getpid(), NULL, NULL, NULL) < 0)
-		PASS();
-	else
+	if (lota_runtime_measure_pid(getpid(), NULL, NULL, NULL) >= 0)
 		FAIL("accepted NULL output");
 
 	TEST("open_mapping rejects an unbacked range");
@@ -380,9 +368,7 @@ int main(void)
 
 		memset(&e, 0, sizeof(e));
 		strcpy(e.soname, "none");
-		if (lota_rt_open_mapping(AT_FDCWD, &e, &st) == -EINVAL)
-			PASS();
-		else
+		if (lota_rt_open_mapping(AT_FDCWD, &e, &st) != -EINVAL)
 			FAIL("accepted unbacked range");
 	}
 
@@ -402,9 +388,7 @@ int main(void)
 		for (size_t i = 0; i < n; i++)
 			if (strcmp(objs[i].entry.path, exe) == 0)
 				found = 1;
-		if (n > 0 && found)
-			PASS();
-		else
+		if (!(n > 0 && found))
 			FAIL("own executable missing from the objects");
 	}
 
@@ -414,9 +398,7 @@ int main(void)
 
 		if (lota_runtime_measure_pid_objects(getpid(), digest, NULL,
 						     NULL, objs,
-						     NULL) == -EINVAL)
-			PASS();
-		else
+						     NULL) != -EINVAL)
 			FAIL("accepted objects without a count");
 	}
 
@@ -538,9 +520,7 @@ int main(void)
 			      len == sizeof(struct lota_ipc_registry_page);
 		}
 		registry_clear(&cur);
-		if (ok)
-			PASS();
-		else
+		if (!ok)
 			FAIL("registry paging lost or misdescribed an object");
 	}
 
@@ -597,9 +577,7 @@ int main(void)
 		n = registry_merge_history(objs, 2, 3, keys, vals, 5, 7, 99,
 					   &overflow);
 		ok &= n == 3 && overflow;
-		if (ok)
-			PASS();
-		else
+		if (!ok)
 			FAIL("history merge kept, lost or misnamed an object");
 	}
 
@@ -654,9 +632,7 @@ int main(void)
 		n = registry_collect_actors(out, 1, keys, vals, 4, 7, 99,
 					    &overflow);
 		ok &= n == 1 && overflow;
-		if (ok)
-			PASS();
-		else
+		if (!ok)
 			FAIL("actor collection kept, lost or misnamed an actor");
 	}
 
@@ -762,9 +738,7 @@ int main(void)
 		      memcmp(other, want, 32) != 0;
 		EVP_MD_CTX_free(md);
 		registry_clear(&cur);
-		if (ok)
-			PASS();
-		else
+		if (!ok)
 			FAIL("the pages do not hash to the token's entry");
 	}
 
@@ -781,11 +755,9 @@ int main(void)
 			  -ENOMEM;
 		free(e);
 		maps_reads = 0;
-		if (ret == 0 && n > 2 &&
-		    lota_runtime_coverage_pid(getpid(), &cov) == 0 &&
-		    cov.measured + cov.unmeasurable == n && maps_reads == 2)
-			PASS();
-		else
+		if (!(ret == 0 && n > 2 &&
+		      lota_runtime_coverage_pid(getpid(), &cov) == 0 &&
+		      cov.measured + cov.unmeasurable == n && maps_reads == 2))
 			FAIL("maps read once per object");
 	}
 
@@ -795,9 +767,7 @@ int main(void)
 		maps_reads = 0;
 		ret = lota_runtime_measure_pid(getpid(), digest, &cov, NULL);
 		lota_rt_set_content_hasher(NULL);
-		if (ret == 0 && cov.unmeasurable > 1 && maps_reads == 2)
-			PASS();
-		else
+		if (!(ret == 0 && cov.unmeasurable > 1 && maps_reads == 2))
 			FAIL("maps read once per object");
 	}
 
@@ -810,14 +780,11 @@ int main(void)
 		if (fd >= 0 && ftruncate(fd, MAPPING_SIZE) == 0)
 			m = mmap(NULL, MAPPING_SIZE, PROT_READ | PROT_EXEC,
 				 MAP_PRIVATE, fd, 0);
-		if (m == MAP_FAILED) {
-			PASS();
-		} else if (lota_runtime_coverage_pid(getpid(), &cov) == 0 &&
-			   cov.unmeasurable > 0) {
-			PASS();
-		} else {
-			FAIL("a file on tmpfs stopped the walk");
-		}
+		if (m != MAP_FAILED)
+			if (!(lota_runtime_coverage_pid(getpid(), &cov) == 0 &&
+			      cov.unmeasurable > 0)) {
+				FAIL("a file on tmpfs stopped the walk");
+			}
 		if (m != MAP_FAILED)
 			munmap(m, MAPPING_SIZE);
 		if (fd >= 0) {
@@ -848,9 +815,7 @@ int main(void)
 			if (strcmp(objs[i].entry.path, path) == 0)
 				flags = objs[i].history_flags;
 		}
-		if (m == MAP_FAILED || flags == LOTA_EXEC_HISTORY_MEMORY)
-			PASS();
-		else
+		if (!(m == MAP_FAILED || flags == LOTA_EXEC_HISTORY_MEMORY))
 			FAIL("no memory flag on a file on tmpfs");
 		if (m != MAP_FAILED)
 			munmap(m, MAPPING_SIZE);
@@ -867,9 +832,7 @@ int main(void)
 		(void)lota_runtime_coverage_pid(getpid(), &cov);
 		(void)lota_runtime_measure_pid(getpid(), digest, NULL, NULL);
 		(void)lota_runtime_coverage_pid(-1, &cov);
-		if (before >= 0 && next_fd() == before)
-			PASS();
-		else
+		if (!(before >= 0 && next_fd() == before))
 			FAIL("descriptor left open");
 	}
 
@@ -888,26 +851,20 @@ int main(void)
 		TEST("a mapping replaced by the check is a gap");
 		before_second_maps_read = replace_mapping;
 		maps_reads = 0;
-		if (mapping != MAP_FAILED && walk_leaves_gap(path))
-			PASS();
-		else
+		if (!(mapping != MAP_FAILED && walk_leaves_gap(path)))
 			FAIL("not a gap");
 
 		TEST("a mapping gone by the check is a gap");
 		before_second_maps_read = unmap_mapping;
 		maps_reads = 0;
-		if (mapping != MAP_FAILED &&
-		    lota_runtime_coverage_pid(getpid(), &cov) == 0 &&
-		    cov.unmeasurable > 0)
-			PASS();
-		else
+		if (!(mapping != MAP_FAILED &&
+		      lota_runtime_coverage_pid(getpid(), &cov) == 0 &&
+		      cov.unmeasurable > 0))
 			FAIL("not a gap");
 		before_second_maps_read = NULL;
 
 		TEST("a stale walk leaves no mapping open");
-		if (next_fd() == before)
-			PASS();
-		else
+		if (next_fd() != before)
 			FAIL("descriptor left open");
 
 		if (fd >= 0)
@@ -928,11 +885,9 @@ int main(void)
 
 		TEST("a mapping that will not open is a gap");
 		refuse_open = path;
-		if (m != MAP_FAILED && walk_leaves_gap(path) &&
-		    lota_runtime_coverage_pid(getpid(), &cov) == 0 &&
-		    cov.unmeasurable > 0)
-			PASS();
-		else
+		if (!(m != MAP_FAILED && walk_leaves_gap(path) &&
+		      lota_runtime_coverage_pid(getpid(), &cov) == 0 &&
+		      cov.unmeasurable > 0))
 			FAIL("not a gap");
 		refuse_open = NULL;
 
@@ -957,9 +912,7 @@ int main(void)
 						   &refused);
 		lota_rt_set_content_hasher(NULL);
 		refuse_open = NULL;
-		if (refusal == -EACCES && strcmp(refused.path, exe) == 0)
-			PASS();
-		else
+		if (!(refusal == -EACCES && strcmp(refused.path, exe) == 0))
 			FAIL("the executable did not stop the walk");
 	}
 
@@ -975,10 +928,8 @@ int main(void)
 		refusal = lota_runtime_measure_pid(getpid(), digest, &cov,
 						   &refused);
 		refuse_exe_stat = 0;
-		if (refusal == -EACCES && strcmp(refused.path, exe) == 0 &&
-		    refused.role == LOTA_RT_ROLE_EXECUTABLE)
-			PASS();
-		else
+		if (!(refusal == -EACCES && strcmp(refused.path, exe) == 0 &&
+		      refused.role == LOTA_RT_ROLE_EXECUTABLE))
 			FAIL("the refusal names nothing");
 	}
 
@@ -1003,9 +954,7 @@ int main(void)
 				(void)setrlimit(RLIMIT_NOFILE, &old);
 			}
 		}
-		if (measured == -EMFILE && counted == -EMFILE)
-			PASS();
-		else
+		if (!(measured == -EMFILE && counted == -EMFILE))
 			FAIL("read the agent's own limit as a gap");
 	}
 
@@ -1051,18 +1000,15 @@ int main(void)
 				unlink(many_path[i]);
 		}
 		lota_rt_failure_reason(&mfail, -ENODATA, why, sizeof(why));
-		if (ok && ret == 0 && n == COUNT && cov.measured >= 1 &&
-		    cov.past_limit > 0 && walk.past_limit == cov.past_limit &&
-		    walk.unmeasurable >= cov.past_limit &&
-		    cov.measured + cov.unmeasurable == COUNT + cov.past_limit &&
-		    mfail.past_limit == cov.past_limit &&
-		    strstr(why, "past the"))
-			PASS();
-		else
+		if (!(ok && ret == 0 && n == COUNT && cov.measured >= 1 &&
+		      cov.past_limit > 0 && walk.past_limit == cov.past_limit &&
+		      walk.unmeasurable >= cov.past_limit &&
+		      cov.measured + cov.unmeasurable ==
+			      COUNT + cov.past_limit &&
+		      mfail.past_limit == cov.past_limit &&
+		      strstr(why, "past the")))
 			FAIL("measurement refused the whole process");
 	}
 
-	printf("\n%d/%d kernel-anchored measurement tests passed\n",
-	       tests_passed, tests_run);
-	return tests_passed == tests_run ? 0 : 1;
+	return test_end();
 }

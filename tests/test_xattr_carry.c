@@ -24,18 +24,7 @@
 
 #include "../src/agent/io_utils.h"
 
-static int g_failures;
-static int g_skipped;
-
-#define CHECK(cond, msg)                                    \
-	do {                                                \
-		if (!(cond)) {                              \
-			fprintf(stderr, "FAIL: %s\n", msg); \
-			g_failures++;                       \
-		} else {                                    \
-			printf("PASS: %s\n", msg);          \
-		}                                           \
-	} while (0)
+#include "test.h"
 
 #define TEST_ATTR "user.lota_test_label"
 
@@ -62,49 +51,52 @@ int main(void)
 	char got[64];
 	ssize_t n;
 
-	printf("=== extended attribute carry tests ===\n\n");
+	test_begin("xattr carry");
 
 	if (make_file(from, sizeof(from)) < 0 ||
 	    make_file(to, sizeof(to)) < 0) {
-		fprintf(stderr, "FAIL: could not create temp files\n");
+		FAIL("could not create temp files");
 		return 1;
 	}
 
 	if (setxattr(from, TEST_ATTR, "lota_etc_t", 10, 0) < 0) {
-		printf("SKIP: %s cannot hold a user extended attribute (%s)\n",
-		       from, strerror(errno));
-		g_skipped = 1;
+		SKIP("%s cannot hold a user extended attribute (%s)", from,
+		     strerror(errno));
 		goto out;
 	}
 
-	CHECK(lota_copy_xattr(from, to, TEST_ATTR) == 0,
-	      "the attribute is carried to the replacement");
+	TEST("the attribute is carried to the replacement");
+	if (lota_copy_xattr(from, to, TEST_ATTR) != 0)
+		FAIL("expected: lota_copy_xattr(from, to, TEST_ATTR) == 0");
 	n = getxattr(to, TEST_ATTR, got, sizeof(got));
-	CHECK(n == 10 && memcmp(got, "lota_etc_t", 10) == 0,
-	      "the replacement holds exactly what the original held");
+	TEST("the replacement holds exactly what the original held");
+	if (!(n == 10 && memcmp(got, "lota_etc_t", 10) == 0))
+		FAIL("expected: n == 10 && memcmp(got, \"lota_etc_t\", 10) == "
+		     "0");
 
 	/* a file that carries nothing leaves the destination alone */
 	if (removexattr(from, TEST_ATTR) == 0) {
-		CHECK(lota_copy_xattr(from, to, TEST_ATTR) == 0,
-		      "a source without the attribute is not an error");
-		CHECK(getxattr(to, TEST_ATTR, got, sizeof(got)) == 10,
-		      "and the destination keeps what it already had");
+		TEST("a source without the attribute is not an error");
+		if (lota_copy_xattr(from, to, TEST_ATTR) != 0)
+			FAIL("expected: lota_copy_xattr(from, to, TEST_ATTR) == 0");
+		TEST("and the destination keeps what it already had");
+		if (getxattr(to, TEST_ATTR, got, sizeof(got)) != 10)
+			FAIL("expected: getxattr(to, TEST_ATTR, got, sizeof(got)) == "
+			     "10");
 	}
 
-	CHECK(lota_copy_xattr("/tmp/lota-xattr-does-not-exist", to,
-			      TEST_ATTR) == -ENOENT,
-	      "a source that does not exist is reported");
-	CHECK(lota_copy_xattr(from, to, NULL) == -EINVAL,
-	      "an unnamed attribute is refused");
+	TEST("a source that does not exist is reported");
+	if (lota_copy_xattr("/tmp/lota-xattr-does-not-exist", to, TEST_ATTR) !=
+	    -ENOENT)
+		FAIL("expected: lota_copy_xattr(\"/tmp/lota-xattr-does-not-exist\", "
+		     "to, TEST_ATTR) == -ENOENT");
+	TEST("an unnamed attribute is refused");
+	if (lota_copy_xattr(from, to, NULL) != -EINVAL)
+		FAIL("expected: lota_copy_xattr(from, to, NULL) == -EINVAL");
 
 out:
 	unlink(from);
 	unlink(to);
 
-	if (g_skipped && !g_failures) {
-		printf("\nSkipped: the filesystem holds no user attributes\n");
-		return 0;
-	}
-	printf("\n%s\n", g_failures ? "FAILURES" : "All tests passed");
-	return g_failures ? 1 : 0;
+	return test_end();
 }

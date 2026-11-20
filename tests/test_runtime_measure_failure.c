@@ -48,27 +48,23 @@ static void make_failure(struct lota_runtime_measure_failure *f,
 
 int main(void)
 {
+	test_begin("runtime measure failure");
 	struct lota_runtime_measure_failure f;
 	char buf[512];
-
-	printf("Runtime image measurement failure tests:\n");
 
 	TEST("an object without fs-verity is named");
 	make_failure(&f, "libcurl.so.4", 0, ENODATA);
 	lota_rt_failure_reason(&f, -ENODATA, buf, sizeof(buf));
-	if (strstr(buf, "libcurl.so.4") && strstr(buf, "no fs-verity digest"))
-		PASS();
-	else
-		FAIL(buf);
+	if (!(strstr(buf, "libcurl.so.4") &&
+	      strstr(buf, "no fs-verity digest")))
+		FAIL("%s", buf);
 
 	TEST("an unsupported digest length names both sizes");
 	make_failure(&f, "libfoo.so.1", 48, EINVAL);
 	lota_rt_failure_reason(&f, -EINVAL, buf, sizeof(buf));
-	if (strstr(buf, "libfoo.so.1") && strstr(buf, "48-byte") &&
-	    strstr(buf, "SHA-256") && strstr(buf, "SHA-512"))
-		PASS();
-	else
-		FAIL(buf);
+	if (!(strstr(buf, "libfoo.so.1") && strstr(buf, "48-byte") &&
+	      strstr(buf, "SHA-256") && strstr(buf, "SHA-512")))
+		FAIL("%s", buf);
 
 	/* tmpfs, FUSE: the ioctl fails, and fs-verity cannot be enabled there */
 	TEST("a filesystem without the ioctl is named, with no advice");
@@ -86,61 +82,47 @@ int main(void)
 			    strstr(buf, "enable"))
 				ok = 0;
 		}
-		if (ok)
-			PASS();
-		else
-			FAIL(buf);
+		if (!ok)
+			FAIL("%s", buf);
 	}
 
 	TEST("an executable's refusal keeps the walk's cause");
 	make_failure_at(&f, "game.bin", "/mnt/game.bin",
 			LOTA_RT_ROLE_EXECUTABLE, 0, -EINVAL);
 	lota_rt_failure_reason(&f, -ENODATA, buf, sizeof(buf));
-	if (strstr(buf, "own executable") &&
-	    strstr(buf, "filesystem without fs-verity"))
-		PASS();
-	else
-		FAIL(buf);
+	if (!(strstr(buf, "own executable") &&
+	      strstr(buf, "filesystem without fs-verity")))
+		FAIL("%s", buf);
 
 	TEST("a closed content road is named whatever verity answered");
 	make_failure(&f, "game.dll", 0, -ENOTTY);
 	f.road_err = -EIO;
 	lota_rt_failure_reason(&f, -ENOTTY, buf, sizeof(buf));
-	if (strstr(buf, "would not hash") && strstr(buf, strerror(EIO)))
-		PASS();
-	else
-		FAIL(buf);
+	if (!(strstr(buf, "would not hash") && strstr(buf, strerror(EIO))))
+		FAIL("%s", buf);
 
 	TEST("any other errno still names the object");
 	make_failure(&f, "libbar.so.2", 0, EACCES);
 	lota_rt_failure_reason(&f, -EACCES, buf, sizeof(buf));
-	if (strstr(buf, "libbar.so.2") && strstr(buf, strerror(EACCES)))
-		PASS();
-	else
-		FAIL(buf);
+	if (!(strstr(buf, "libbar.so.2") && strstr(buf, strerror(EACCES))))
+		FAIL("%s", buf);
 
 	TEST("a failure before any object renders the errno alone");
 	make_failure(&f, NULL, 0, ESRCH);
 	lota_rt_failure_reason(&f, -ESRCH, buf, sizeof(buf));
-	if (strcmp(buf, strerror(ESRCH)) == 0)
-		PASS();
-	else
-		FAIL(buf);
+	if (strcmp(buf, strerror(ESRCH)) != 0)
+		FAIL("%s", buf);
 
 	TEST("a NULL failure renders the errno alone");
 	lota_rt_failure_reason(NULL, -ENOMEM, buf, sizeof(buf));
-	if (strcmp(buf, strerror(ENOMEM)) == 0)
-		PASS();
-	else
-		FAIL(buf);
+	if (strcmp(buf, strerror(ENOMEM)) != 0)
+		FAIL("%s", buf);
 
 	TEST("a positive errno reads the same as a negative one");
 	make_failure(&f, "libcurl.so.4", 0, ENODATA);
 	lota_rt_failure_reason(&f, ENODATA, buf, sizeof(buf));
-	if (strstr(buf, "no fs-verity digest"))
-		PASS();
-	else
-		FAIL(buf);
+	if (!strstr(buf, "no fs-verity digest"))
+		FAIL("%s", buf);
 
 	/* The full path says which copy of a name needs fs-verity */
 	TEST("a failing object is named by path");
@@ -148,10 +130,8 @@ int main(void)
 			"/usr/lib64/ld-linux-x86-64.so.2",
 			LOTA_RT_ROLE_MAPPED_OBJECT, 0, ENODATA);
 	lota_rt_failure_reason(&f, -ENODATA, buf, sizeof(buf));
-	if (strstr(buf, "/usr/lib64/ld-linux-x86-64.so.2"))
-		PASS();
-	else
-		FAIL(buf);
+	if (!strstr(buf, "/usr/lib64/ld-linux-x86-64.so.2"))
+		FAIL("%s", buf);
 
 	TEST("two copies of one name read as different objects");
 	{
@@ -166,10 +146,8 @@ int main(void)
 				"ld-linux-x86-64.so.2",
 				LOTA_RT_ROLE_MAPPED_OBJECT, 0, ENODATA);
 		lota_rt_failure_reason(&f, -ENODATA, other, sizeof(other));
-		if (strcmp(buf, other) != 0)
-			PASS();
-		else
-			FAIL(buf);
+		if (strcmp(buf, other) == 0)
+			FAIL("%s", buf);
 	}
 
 	/* The role says whether the token was refused or only marked partial */
@@ -177,49 +155,40 @@ int main(void)
 	make_failure_at(&f, "cs2", "/games/csgo/game/bin/linuxsteamrt64/cs2",
 			LOTA_RT_ROLE_EXECUTABLE, 0, ENODATA);
 	lota_rt_failure_reason(&f, -ENODATA, buf, sizeof(buf));
-	if (strstr(buf, "own executable") &&
-	    strstr(buf, "/games/csgo/game/bin/linuxsteamrt64/cs2"))
-		PASS();
-	else
-		FAIL(buf);
+	if (!(strstr(buf, "own executable") &&
+	      strstr(buf, "/games/csgo/game/bin/linuxsteamrt64/cs2")))
+		FAIL("%s", buf);
 
 	TEST("an object the process mapped is named as such");
 	make_failure_at(&f, "libsteam_api.so", "/games/csgo/libsteam_api.so",
 			LOTA_RT_ROLE_MAPPED_OBJECT, 0, ENODATA);
 	lota_rt_failure_reason(&f, -ENODATA, buf, sizeof(buf));
-	if (strstr(buf, "mapped") && !strstr(buf, "own executable"))
-		PASS();
-	else
-		FAIL(buf);
+	if (!(strstr(buf, "mapped") && !strstr(buf, "own executable")))
+		FAIL("%s", buf);
 
 	TEST("an unopened mapping claims neither role");
 	make_failure_at(&f, "libmystery.so", "/opt/x/libmystery.so",
 			LOTA_RT_ROLE_UNKNOWN, 0, EACCES);
 	lota_rt_failure_reason(&f, -EACCES, buf, sizeof(buf));
-	if (strstr(buf, "/opt/x/libmystery.so") &&
-	    !strstr(buf, "own executable") && !strstr(buf, "mapped"))
-		PASS();
-	else
-		FAIL(buf);
+	if (!(strstr(buf, "/opt/x/libmystery.so") &&
+	      !strstr(buf, "own executable") && !strstr(buf, "mapped")))
+		FAIL("%s", buf);
 
 	TEST("an unsupported digest length still names the path and the role");
 	make_failure_at(&f, "cs2", "/games/csgo/game/bin/linuxsteamrt64/cs2",
 			LOTA_RT_ROLE_EXECUTABLE, 48, EINVAL);
 	lota_rt_failure_reason(&f, -EINVAL, buf, sizeof(buf));
-	if (strstr(buf, "/games/csgo/game/bin/linuxsteamrt64/cs2") &&
-	    strstr(buf, "own executable") && strstr(buf, "48-byte"))
-		PASS();
-	else
-		FAIL(buf);
+	if (!(strstr(buf, "/games/csgo/game/bin/linuxsteamrt64/cs2") &&
+	      strstr(buf, "own executable") && strstr(buf, "48-byte")))
+		FAIL("%s", buf);
 
 	TEST("a failure with no path falls back to the object's name");
 	make_failure_at(&f, "libcurl.so.4", NULL, LOTA_RT_ROLE_UNKNOWN, 0,
 			ENODATA);
 	lota_rt_failure_reason(&f, -ENODATA, buf, sizeof(buf));
-	if (strstr(buf, "libcurl.so.4") && strstr(buf, "no fs-verity digest"))
-		PASS();
-	else
-		FAIL(buf);
+	if (!(strstr(buf, "libcurl.so.4") &&
+	      strstr(buf, "no fs-verity digest")))
+		FAIL("%s", buf);
 
 	/* no file can take a digest, so no fs-verity advice */
 	TEST("memory with no file is named as such, with no fs-verity advice");
@@ -227,11 +196,9 @@ int main(void)
 			LOTA_RT_ROLE_MAPPED_OBJECT, 0, ENODATA);
 	f.no_file = 1;
 	lota_rt_failure_reason(&f, -ENODATA, buf, sizeof(buf));
-	if (strstr(buf, "/memfd:a-mapping") && strstr(buf, "no file") &&
-	    !strstr(buf, "enable fs-verity"))
-		PASS();
-	else
-		FAIL(buf);
+	if (!(strstr(buf, "/memfd:a-mapping") && strstr(buf, "no file") &&
+	      !strstr(buf, "enable fs-verity")))
+		FAIL("%s", buf);
 
 	/*
 	 * Coverage is the relying party's call, but two properties are the host's:
@@ -243,39 +210,29 @@ int main(void)
 		TEST("full coverage is issuable");
 		cov.measured = 37;
 		cov.unmeasurable = 0;
-		if (lota_rt_coverage_verdict(&cov, 1) == 0)
-			PASS();
-		else
+		if (lota_rt_coverage_verdict(&cov, 1) != 0)
 			FAIL("refused a complete measurement");
 
 		TEST("partial coverage is issuable");
 		cov.measured = 3;
 		cov.unmeasurable = 34;
-		if (lota_rt_coverage_verdict(&cov, 1) == 0)
-			PASS();
-		else
+		if (lota_rt_coverage_verdict(&cov, 1) != 0)
 			FAIL("refused a partial measurement");
 
 		TEST("nothing measured is refused");
 		cov.measured = 0;
 		cov.unmeasurable = 37;
-		if (lota_rt_coverage_verdict(&cov, 0) == -ENODATA)
-			PASS();
-		else
+		if (lota_rt_coverage_verdict(&cov, 0) != -ENODATA)
 			FAIL("issued an empty measurement");
 
 		TEST("an unmeasurable executable is refused");
 		cov.measured = 36;
 		cov.unmeasurable = 1;
-		if (lota_rt_coverage_verdict(&cov, 0) == -ENODATA)
-			PASS();
-		else
+		if (lota_rt_coverage_verdict(&cov, 0) != -ENODATA)
 			FAIL("issued without the title's own code");
 
 		TEST("a NULL coverage is refused");
-		if (lota_rt_coverage_verdict(NULL, 1) == -EINVAL)
-			PASS();
-		else
+		if (lota_rt_coverage_verdict(NULL, 1) != -EINVAL)
 			FAIL("accepted NULL coverage");
 	}
 
@@ -283,12 +240,9 @@ int main(void)
 	char small[16];
 	make_failure(&f, "libcurl.so.4", 0, ENODATA);
 	lota_rt_failure_reason(&f, -ENODATA, small, sizeof(small));
-	if (small[sizeof(small) - 1] == '\0' && strlen(small) < sizeof(small))
-		PASS();
-	else
+	if (!(small[sizeof(small) - 1] == '\0' &&
+	      strlen(small) < sizeof(small)))
 		FAIL("overran the buffer");
 
-	printf("\n%d/%d runtime measurement failure tests passed\n",
-	       tests_passed, tests_run);
-	return tests_passed == tests_run ? 0 : 1;
+	return test_end();
 }

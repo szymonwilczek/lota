@@ -23,7 +23,7 @@
 
 #include "../src/agent/config.h"
 
-static int g_failures;
+#include "test.h"
 
 /* the text the writer produced, read back the way the agent reads it at the next
  * start: a section that does not load is a host that does not come up */
@@ -89,15 +89,17 @@ static int write_file(const char *path, const char *text)
 	return fclose(f) == 0 ? 0 : -EIO;
 }
 
-#define CHECK(cond, msg)                                    \
-	do {                                                \
-		if (!(cond)) {                              \
-			fprintf(stderr, "FAIL: %s\n", msg); \
-			g_failures++;                       \
-		} else {                                    \
-			printf("PASS: %s\n", msg);          \
-		}                                           \
-	} while (0)
+static int stat_open(const char *path, struct stat *st)
+{
+	int fd = open(path, O_RDONLY | O_CLOEXEC);
+	int rc;
+
+	if (fd < 0)
+		return -1;
+	rc = fstat(fd, st);
+	close(fd);
+	return rc;
+}
 
 static struct lota_profile mkprofile(const char *name, const char *ca,
 				     const char *anchor, const char *verifier)
@@ -121,7 +123,7 @@ int main(void)
 	struct lota_profile p, q;
 	int rc;
 
-	printf("=== lota.conf profile append tests ===\n\n");
+	test_begin("config add profile");
 
 	p = mkprofile("studio-a", "ca.studio-a.example",
 		      "/etc/lota/studio-a.pem", "verifier.studio-a.example");
@@ -130,13 +132,20 @@ int main(void)
 		const char *base = "attest_interval = 60\n";
 
 		rc = config_profile_append_text(base, &p, out, sizeof(out));
-		CHECK(rc == 1, "a first profile is appended");
-		CHECK(strstr(out, "attest_interval = 60") != NULL,
-		      "what was already in the file is left alone");
-		CHECK(strstr(out, "[profile \"studio-a\"]") != NULL,
-		      "the section header names the publisher");
-		CHECK(strstr(out, "ca_cert = /etc/lota/studio-a.pem") != NULL,
-		      "the trust anchor is written");
+		TEST("a first profile is appended");
+		if (rc != 1)
+			FAIL("expected: rc == 1");
+		TEST("what was already in the file is left alone");
+		if (strstr(out, "attest_interval = 60") == NULL)
+			FAIL("expected: strstr(out, \"attest_interval = 60\") != NULL");
+		TEST("the section header names the publisher");
+		if (strstr(out, "[profile \"studio-a\"]") == NULL)
+			FAIL("expected: strstr(out, \"[profile \\\"studio-a\\\"]\") "
+			     "!= NULL");
+		TEST("the trust anchor is written");
+		if (strstr(out, "ca_cert = /etc/lota/studio-a.pem") == NULL)
+			FAIL("expected: strstr(out, \"ca_cert = "
+			     "/etc/lota/studio-a.pem\") != NULL");
 	}
 
 	{
@@ -146,7 +155,9 @@ int main(void)
 		config_profile_append_text("attest_interval = 60\n", &p, once,
 					   sizeof(once));
 		rc = config_profile_append_text(once, &p, out, sizeof(out));
-		CHECK(rc == 0, "appending the same publisher again is a no-op");
+		TEST("appending the same publisher again is a no-op");
+		if (rc != 0)
+			FAIL("expected: rc == 0");
 	}
 
 	{
@@ -161,8 +172,9 @@ int main(void)
 				 "/etc/lota/studio-a.pem",
 				 "verifier.studio-a.example");
 		rc = config_profile_append_text(once, &same, out, sizeof(out));
-		CHECK(rc == 0,
-		      "the same anchor under a different label is a no-op");
+		TEST("the same anchor under a different label is a no-op");
+		if (rc != 0)
+			FAIL("expected: rc == 0");
 	}
 
 	{
@@ -175,8 +187,9 @@ int main(void)
 		q = mkprofile("studio-a", "ca.other.example",
 			      "/etc/lota/other.pem", "verifier.other.example");
 		rc = config_profile_append_text(once, &q, out, sizeof(out));
-		CHECK(rc == -EEXIST,
-		      "a different publisher under an existing name is refused");
+		TEST("a different publisher under an existing name is refused");
+		if (rc != -EEXIST)
+			FAIL("expected: rc == -EEXIST");
 	}
 
 	{
@@ -195,13 +208,18 @@ int main(void)
 
 		rc = config_profile_append_text("mode = enforce\n", &t, out,
 						sizeof(out));
-		CHECK(rc == 1, "a publisher with no verifier is appended");
-		CHECK(strstr(out, "verifier = none") != NULL,
-		      "the section says the publisher runs no verifier");
-		CHECK(strstr(out, "verifier_port") == NULL,
-		      "no port is written for a verifier declared absent");
-		CHECK(loads_back(out) == 0,
-		      "the section the writer produced loads back");
+		TEST("a publisher with no verifier is appended");
+		if (rc != 1)
+			FAIL("expected: rc == 1");
+		TEST("the section says the publisher runs no verifier");
+		if (strstr(out, "verifier = none") == NULL)
+			FAIL("expected: strstr(out, \"verifier = none\") != NULL");
+		TEST("no port is written for a verifier declared absent");
+		if (strstr(out, "verifier_port") != NULL)
+			FAIL("expected: strstr(out, \"verifier_port\") == NULL");
+		TEST("the section the writer produced loads back");
+		if (loads_back(out) != 0)
+			FAIL("expected: loads_back(out) == 0");
 	}
 
 	{
@@ -223,13 +241,18 @@ int main(void)
 		w.ca_cert[len] = '\0';
 
 		fd = mkstemp(path);
-		CHECK(fd >= 0, "a scratch config is created");
+		TEST("a scratch config is created");
+		if (fd < 0)
+			FAIL("expected: fd >= 0");
 		if (fd >= 0) {
 			close(fd);
 			rc = config_profile_append(path, &w);
-			CHECK(rc == 1, "a section with every field full fits");
-			CHECK(profiles_in_file(path) == 1,
-			      "the full section loads back");
+			TEST("a section with every field full fits");
+			if (rc != 1)
+				FAIL("expected: rc == 1");
+			TEST("the full section loads back");
+			if (profiles_in_file(path) != 1)
+				FAIL("expected: profiles_in_file(path) == 1");
 			unlink(path);
 		}
 	}
@@ -260,8 +283,9 @@ int main(void)
 				break;
 			snprintf(acc, sizeof(acc), "%s", next);
 		}
-		CHECK(i == LOTA_CONFIG_MAX_PROFILES,
-		      "the cap is reached, not exceeded");
+		TEST("the cap is reached, not exceeded");
+		if (i != LOTA_CONFIG_MAX_PROFILES)
+			FAIL("expected: i == LOTA_CONFIG_MAX_PROFILES");
 
 		{
 			struct lota_profile f =
@@ -270,8 +294,9 @@ int main(void)
 
 			rc = config_profile_append_text(acc, &f, next,
 							sizeof(next));
-			CHECK(rc == -E2BIG,
-			      "the profile past the cap is refused");
+			TEST("the profile past the cap is refused");
+			if (rc != -E2BIG)
+				FAIL("expected: rc == -E2BIG");
 		}
 	}
 
@@ -300,21 +325,26 @@ int main(void)
 		for (i = 0; i < sizeof(bases) / sizeof(bases[0]); i++) {
 			rc = config_profile_append_text(bases[i], &p, out,
 							sizeof(out));
-			CHECK(rc == 1 && loads_back(out) == 0, what[i]);
+			TEST(what[i]);
+			if (!(rc == 1 && loads_back(out) == 0))
+				FAIL("expected: rc == 1 && loads_back(out) == 0");
 		}
 
 		rc = config_profile_append_text(
 			"[profile \"other\"]\nca=ca.other.example\n"
 			"ca_cert=/etc/lota/studio-a.pem\nverifier=v.example\n",
 			&p, out, sizeof(out));
-		CHECK(rc == 0, "ca_cert= with no spaces names the publisher");
+		TEST("ca_cert= with no spaces names the publisher");
+		if (rc != 0)
+			FAIL("expected: rc == 0");
 
 		rc = config_profile_append_text(
 			"[ profile \"studio-a\"]\nca = ca.other.example\n"
 			"ca_cert = /etc/lota/other.pem\nverifier = v.example\n",
 			&p, out, sizeof(out));
-		CHECK(rc == -EEXIST,
-		      "a spaced header still holds the publisher's name");
+		TEST("a spaced header still holds the publisher's name");
+		if (rc != -EEXIST)
+			FAIL("expected: rc == -EEXIST");
 
 		acc[0] = '\0';
 		for (n = 0; n < LOTA_CONFIG_MAX_PROFILES; n++) {
@@ -327,11 +357,15 @@ int main(void)
 				 n, n);
 		}
 		rc = config_profile_append_text(acc, &p, out, sizeof(out));
-		CHECK(rc == -E2BIG, "spaced headers count toward the cap");
+		TEST("spaced headers count toward the cap");
+		if (rc != -E2BIG)
+			FAIL("expected: rc == -E2BIG");
 
 		rc = config_profile_append_text("not a key line\n", &p, out,
 						sizeof(out));
-		CHECK(rc == -EBADMSG, "a text that does not parse is refused");
+		TEST("a text that does not parse is refused");
+		if (rc != -EBADMSG)
+			FAIL("expected: rc == -EBADMSG");
 
 		/* the shipped example: its commented sections are not
 		 * profiles */
@@ -339,7 +373,9 @@ int main(void)
 			FILE *f = fopen("configs/lota.conf.example", "re");
 			size_t len = 0;
 
-			CHECK(f != NULL, "the example configuration is read");
+			TEST("the example configuration is read");
+			if (f == NULL)
+				FAIL("expected: f != NULL");
 			if (f) {
 				len = fread(acc, 1, sizeof(acc) - 1, f);
 				fclose(f);
@@ -362,8 +398,9 @@ int main(void)
 					break;
 				snprintf(acc, sizeof(acc), "%s", next);
 			}
-			CHECK(n == 3 && loads_back(acc) == 0,
-			      "three publishers are added to the example");
+			TEST("three publishers are added to the example");
+			if (!(n == 3 && loads_back(acc) == 0))
+				FAIL("expected: n == 3 && loads_back(acc) == 0");
 		}
 	}
 
@@ -380,8 +417,9 @@ int main(void)
 			n.verifier_port = ports[i];
 			rc = config_profile_append_text("", &n, out,
 							sizeof(out));
-			CHECK(rc == -EILSEQ,
-			      "a verifier host named none is refused");
+			TEST("a verifier host named none is refused");
+			if (rc != -EILSEQ)
+				FAIL("expected: rc == -EILSEQ");
 		}
 	}
 
@@ -393,28 +431,37 @@ int main(void)
 		h = mkprofile("studio-h", "ca.studio-h.example:9999",
 			      "/etc/lota/studio-h.pem", "v.example");
 		rc = config_profile_append_text("", &h, out, sizeof(out));
-		CHECK(rc == -EILSEQ, "a CA host with a port is refused");
+		TEST("a CA host with a port is refused");
+		if (rc != -EILSEQ)
+			FAIL("expected: rc == -EILSEQ");
 
 		h = mkprofile("studio-h", "ca.studio-h.example",
 			      "/etc/lota/studio-h.pem", "v.example:9000");
 		rc = config_profile_append_text("", &h, out, sizeof(out));
-		CHECK(rc == -EILSEQ, "a verifier host with a port is refused");
+		TEST("a verifier host with a port is refused");
+		if (rc != -EILSEQ)
+			FAIL("expected: rc == -EILSEQ");
 
 		h = mkprofile("studio-h", "[fd00::1]:9999",
 			      "/etc/lota/studio-h.pem", "fd00::2");
 		rc = config_profile_append_text("", &h, out, sizeof(out));
-		CHECK(rc == -EILSEQ, "a bracketed CA host is refused");
+		TEST("a bracketed CA host is refused");
+		if (rc != -EILSEQ)
+			FAIL("expected: rc == -EILSEQ");
 
 		h = mkprofile("studio-h", "fd00::1", "/etc/lota/studio-h.pem",
 			      "[fd00::2]:9000");
 		rc = config_profile_append_text("", &h, out, sizeof(out));
-		CHECK(rc == -EILSEQ, "a bracketed verifier host is refused");
+		TEST("a bracketed verifier host is refused");
+		if (rc != -EILSEQ)
+			FAIL("expected: rc == -EILSEQ");
 
 		h = mkprofile("studio-h", "fd00::1", "/etc/lota/studio-h.pem",
 			      "fd00::2");
 		rc = config_profile_append_text("", &h, out, sizeof(out));
-		CHECK(rc == 1 && loads_back(out) == 0,
-		      "IPv6 literals are written");
+		TEST("IPv6 literals are written");
+		if (!(rc == 1 && loads_back(out) == 0))
+			FAIL("expected: rc == 1 && loads_back(out) == 0");
 	}
 
 	{
@@ -422,8 +469,9 @@ int main(void)
 
 		rc = config_profile_append_text("attest_interval = 60\n", &p,
 						small, sizeof(small));
-		CHECK(rc == -EOVERFLOW,
-		      "a buffer too small is refused rather than truncated");
+		TEST("a buffer too small is refused rather than truncated");
+		if (rc != -EOVERFLOW)
+			FAIL("expected: rc == -EOVERFLOW");
 	}
 
 	/*
@@ -444,30 +492,36 @@ int main(void)
 				   "verifier.studio-a.example");
 		rc = config_profile_append_text(base, &forged, out,
 						sizeof(out));
-		CHECK(rc == -EILSEQ,
-		      "a label carrying a quote and a newline is refused");
+		TEST("a label carrying a quote and a newline is refused");
+		if (rc != -EILSEQ)
+			FAIL("expected: rc == -EILSEQ");
 
 		forged = mkprofile("say \"cheese\"", "ca.studio-a.example",
 				   "/etc/lota/studio-a.pem",
 				   "verifier.studio-a.example");
 		rc = config_profile_append_text(base, &forged, out,
 						sizeof(out));
-		CHECK(rc == -EILSEQ, "a label carrying a quote is refused");
+		TEST("a label carrying a quote is refused");
+		if (rc != -EILSEQ)
+			FAIL("expected: rc == -EILSEQ");
 
 		forged = mkprofile("two\nlines", "ca.studio-a.example",
 				   "/etc/lota/studio-a.pem",
 				   "verifier.studio-a.example");
 		rc = config_profile_append_text(base, &forged, out,
 						sizeof(out));
-		CHECK(rc == -EILSEQ,
-		      "a label carrying a control character is refused");
+		TEST("a label carrying a control character is refused");
+		if (rc != -EILSEQ)
+			FAIL("expected: rc == -EILSEQ");
 
 		forged = mkprofile("", "ca.studio-a.example",
 				   "/etc/lota/studio-a.pem",
 				   "verifier.studio-a.example");
 		rc = config_profile_append_text(base, &forged, out,
 						sizeof(out));
-		CHECK(rc == -EINVAL, "a profile with no label is refused");
+		TEST("a profile with no label is refused");
+		if (rc != -EINVAL)
+			FAIL("expected: rc == -EINVAL");
 	}
 
 	/*
@@ -487,23 +541,27 @@ int main(void)
 				   "verifier.studio-c.example");
 		rc = config_profile_append_text(base, &forged, out,
 						sizeof(out));
-		CHECK(rc == -EILSEQ, "a CA host carrying a newline is refused");
+		TEST("a CA host carrying a newline is refused");
+		if (rc != -EILSEQ)
+			FAIL("expected: rc == -EILSEQ");
 
 		forged = mkprofile("studio-c", "ca.studio-c.example",
 				   "/etc/lota/studio-c.pem",
 				   "v.example\nreporting = continuous");
 		rc = config_profile_append_text(base, &forged, out,
 						sizeof(out));
-		CHECK(rc == -EILSEQ,
-		      "a verifier host carrying a newline is refused");
+		TEST("a verifier host carrying a newline is refused");
+		if (rc != -EILSEQ)
+			FAIL("expected: rc == -EILSEQ");
 
 		forged = mkprofile("studio-c", "ca.studio-c.example",
 				   "/etc/lota/c.pem\nmode = permissive",
 				   "verifier.studio-c.example");
 		rc = config_profile_append_text(base, &forged, out,
 						sizeof(out));
-		CHECK(rc == -EILSEQ,
-		      "a trust anchor carrying a newline is refused");
+		TEST("a trust anchor carrying a newline is refused");
+		if (rc != -EILSEQ)
+			FAIL("expected: rc == -EILSEQ");
 
 		/* the parser refuses a relative ca_cert, so the writer cannot
 		 * emit one either */
@@ -511,8 +569,9 @@ int main(void)
 				   "studio-c.pem", "verifier.studio-c.example");
 		rc = config_profile_append_text(base, &forged, out,
 						sizeof(out));
-		CHECK(rc == -EILSEQ,
-		      "a trust anchor that is not an absolute path is refused");
+		TEST("a trust anchor that is not an absolute path is refused");
+		if (rc != -EILSEQ)
+			FAIL("expected: rc == -EILSEQ");
 	}
 
 	/*
@@ -529,37 +588,50 @@ int main(void)
 		char path[] = "/tmp/lota_add_profile_file_XXXXXX";
 		int fd = mkstemp(path);
 
-		CHECK(fd >= 0, "a temporary configuration file is created");
+		TEST("a temporary configuration file is created");
+		if (fd < 0)
+			FAIL("expected: fd >= 0");
 		if (fd >= 0) {
 			char tmp_path[PATH_MAX];
 
 			close(fd);
 
 			/* a section the parser refuses: a profile with no ca */
-			CHECK(write_file(path,
-					 "[profile \"half-written\"]\n") == 0,
-			      "a configuration that does not parse is staged");
-			CHECK(profiles_in_file(path) < 0,
-			      "the staged configuration does not load");
+			TEST("a configuration that does not parse is staged");
+			if (write_file(path, "[profile \"half-written\"]\n") !=
+			    0)
+				FAIL("expected: write_file(path, \"[profile "
+				     "\\\"half-written\\\"]\\n\") == 0");
+			TEST("the staged configuration does not load");
+			if (profiles_in_file(path) >= 0)
+				FAIL("expected: profiles_in_file(path) < 0");
 
 			rc = config_profile_append(path, &p);
-			CHECK(rc == -EBADMSG,
-			      "appending to a configuration that does not parse is refused");
-			CHECK(profiles_in_file(path) < 0,
-			      "the refusal left the file as it was");
+			TEST("appending to a configuration that does not parse is refused");
+			if (rc != -EBADMSG)
+				FAIL("expected: rc == -EBADMSG");
+			TEST("the refusal left the file as it was");
+			if (profiles_in_file(path) >= 0)
+				FAIL("expected: profiles_in_file(path) < 0");
 
 			snprintf(tmp_path, sizeof(tmp_path), "%s.new", path);
-			CHECK(access(tmp_path, F_OK) != 0,
-			      "the refused replacement is not left behind");
+			TEST("the refused replacement is not left behind");
+			if (access(tmp_path, F_OK) == 0)
+				FAIL("expected: access(tmp_path, F_OK) != 0");
 
 			/* the ordinary path still writes, and what it wrote is
 			 * what the next start reads */
-			CHECK(write_file(path, "attest_interval = 60\n") == 0,
-			      "a loadable configuration is staged");
+			TEST("a loadable configuration is staged");
+			if (write_file(path, "attest_interval = 60\n") != 0)
+				FAIL("expected: write_file(path, \"attest_interval = 60\\n\") "
+				     "== 0");
 			rc = config_profile_append(path, &p);
-			CHECK(rc == 1, "the publisher is appended to the file");
-			CHECK(profiles_in_file(path) == 1,
-			      "the file the writer left holds the publisher");
+			TEST("the publisher is appended to the file");
+			if (rc != 1)
+				FAIL("expected: rc == 1");
+			TEST("the file the writer left holds the publisher");
+			if (profiles_in_file(path) != 1)
+				FAIL("expected: profiles_in_file(path) == 1");
 
 			/* the replacement keeps the live file's mode and owner,
 			 * and a stale replacement does not stand in the way */
@@ -574,26 +646,34 @@ int main(void)
 					"verifier.studio-t.example");
 				struct stat st;
 
-				CHECK(chmod(path, 0600) == 0,
-				      "the live file is made 0600");
+				TEST("the live file is made 0600");
+				if (chmod(path, 0600) != 0)
+					FAIL("expected: chmod(path, 0600) == 0");
 				rc = config_profile_append(path, &r);
-				CHECK(rc == 1 && stat(path, &st) == 0 &&
-					      (st.st_mode & 07777) == 0600 &&
-					      st.st_uid == geteuid(),
-				      "the replaced file keeps 0600 and owner");
+				TEST("the replaced file keeps 0600 and owner");
+				if (!(rc == 1 && stat_open(path, &st) == 0 &&
+				      (st.st_mode & 07777) == 0600 &&
+				      st.st_uid == geteuid()))
+					FAIL("expected: rc == 1 && stat_open(path, &st) == 0 && "
+					     "(st.st_mode & 07777) == 0600 && st.st_uid == geteuid()");
 
-				CHECK(write_file(tmp_path, "stale\n") == 0 &&
-					      chmod(tmp_path, 0664) == 0,
-				      "a stale 0664 .new is staged");
+				TEST("a stale 0664 .new is staged");
+				if (!(write_file(tmp_path, "stale\n") == 0 &&
+				      chmod(tmp_path, 0664) == 0))
+					FAIL("expected: write_file(tmp_path, \"stale\\n\") == 0 && "
+					     "chmod(tmp_path, 0664) == 0");
 				rc = config_profile_append(path, &t);
-				CHECK(rc == 1 && profiles_in_file(path) == 3,
-				      "a stale .new does not block it");
+				TEST("a stale .new does not block it");
+				if (!(rc == 1 && profiles_in_file(path) == 3))
+					FAIL("expected: rc == 1 && profiles_in_file(path) == 3");
 
 				unlink(path);
 				rc = config_profile_append(path, &r);
-				CHECK(rc == 1 && stat(path, &st) == 0 &&
-					      (st.st_mode & 07777) == 0644,
-				      "a file created from nothing is 0644");
+				TEST("a file created from nothing is 0644");
+				if (!(rc == 1 && stat_open(path, &st) == 0 &&
+				      (st.st_mode & 07777) == 0644))
+					FAIL("expected: rc == 1 && stat_open(path, &st) == 0 && "
+					     "(st.st_mode & 07777) == 0644");
 			}
 
 			unlink(path);
@@ -601,6 +681,5 @@ int main(void)
 		}
 	}
 
-	printf("\n%s\n", g_failures ? "FAILURES" : "All tests passed");
-	return g_failures ? 1 : 0;
+	return test_end();
 }

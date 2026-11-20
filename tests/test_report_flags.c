@@ -10,21 +10,10 @@
  *
  * Copyright (C) 2026 Szymon Wilczek
  */
-#include <stdio.h>
 
 #include "../src/agent/report_flags.h"
 
-static int g_failures;
-
-#define CHECK(cond, msg)                                    \
-	do {                                                \
-		if (!(cond)) {                              \
-			fprintf(stderr, "FAIL: %s\n", msg); \
-			g_failures++;                       \
-		} else {                                    \
-			printf("PASS: %s\n", msg);          \
-		}                                           \
-	} while (0)
+#include "test.h"
 
 #define ENF LOTA_REPORT_FLAG_ENFORCE
 #define BPF LOTA_REPORT_FLAG_BPF_ACTIVE
@@ -44,86 +33,117 @@ int main(void)
 {
 	uint32_t f;
 
-	printf("=== report enforcement flag tests ===\n\n");
+	test_begin("report flags");
 
 	f = flags_for(true, LOTA_MODE_ENFORCE, LOTA_STATUS_BPF_LOADED);
-	CHECK(f == (ENF | BPF), "daemon enforcing with its LSM loaded: both");
+	TEST("daemon enforcing with its LSM loaded: both");
+	if (f != (ENF | BPF))
+		FAIL("expected: f == (ENF | BPF)");
 
 	f = flags_for(true, LOTA_MODE_MONITOR, LOTA_STATUS_BPF_LOADED);
-	CHECK(f == BPF, "daemon in monitor mode: BPF_ACTIVE, no ENFORCE");
+	TEST("daemon in monitor mode: BPF_ACTIVE, no ENFORCE");
+	if (f != BPF)
+		FAIL("expected: f == BPF");
 
 	/* a mode with nothing attached blocks nothing */
 	f = flags_for(true, LOTA_MODE_ENFORCE, 0);
-	CHECK(f == 0, "enforce mode without the LSM loaded: neither");
+	TEST("enforce mode without the LSM loaded: neither");
+	if (f != 0)
+		FAIL("expected: f == 0");
 
 	/* no answer is no daemon, whatever the reporter was configured with */
 	f = flags_for(false, LOTA_MODE_ENFORCE, LOTA_STATUS_BPF_LOADED);
-	CHECK(f == 0, "daemon not reached: neither");
+	TEST("daemon not reached: neither");
+	if (f != 0)
+		FAIL("expected: f == 0");
 
 	f = flags_for(false, LOTA_MODE_ENFORCE, 0);
-	CHECK(f == 0, "daemon not reached, nothing known: neither");
+	TEST("daemon not reached, nothing known: neither");
+	if (f != 0)
+		FAIL("expected: f == 0");
 
-	CHECK(report_enforcement_flags(NULL) == 0, "no view: neither");
+	TEST("no view: neither");
+	if (report_enforcement_flags(NULL) != 0)
+		FAIL("expected: report_enforcement_flags(NULL) == 0");
 
 	f = flags_for(true, LOTA_MODE_ENFORCE,
 		      LOTA_STATUS_BPF_LOADED | LOTA_STATUS_BENCH);
-	CHECK(f == (ENF | BPF | LOTA_REPORT_FLAG_BENCH),
-	      "daemon on --bench: BENCH beside the enforcement bits");
+	TEST("daemon on --bench: BENCH beside the enforcement bits");
+	if (f != (ENF | BPF | LOTA_REPORT_FLAG_BENCH))
+		FAIL("expected: f == (ENF | BPF | LOTA_REPORT_FLAG_BENCH)");
 
 	f = flags_for(true, LOTA_MODE_MONITOR, LOTA_STATUS_BENCH);
-	CHECK(f == LOTA_REPORT_FLAG_BENCH,
-	      "--bench without the LSM loaded: BENCH alone");
+	TEST("--bench without the LSM loaded: BENCH alone");
+	if (f != LOTA_REPORT_FLAG_BENCH)
+		FAIL("expected: f == LOTA_REPORT_FLAG_BENCH");
 
 	f = flags_for(false, LOTA_MODE_ENFORCE, LOTA_STATUS_BENCH);
-	CHECK(f == 0, "daemon not reached: no BENCH");
+	TEST("daemon not reached: no BENCH");
+	if (f != 0)
+		FAIL("expected: f == 0");
 
 	f = flags_for(true, LOTA_MODE_ENFORCE, LOTA_STATUS_BPF_LOADED);
-	CHECK(!(f & LOTA_REPORT_FLAG_BENCH), "no --bench: no BENCH");
+	TEST("no --bench: no BENCH");
+	if (f & LOTA_REPORT_FLAG_BENCH)
+		FAIL("expected: !(f & LOTA_REPORT_FLAG_BENCH)");
 
 	/* a daemon that lost its LSM after the loss still says so */
 	f = flags_for(true, LOTA_MODE_ENFORCE,
 		      LOTA_STATUS_BPF_LOADED | LOTA_STATUS_EVENTS_LOST);
-	CHECK(f == (ENF | BPF | LOTA_REPORT_FLAG_EVENTS_LOST),
-	      "events lost: EVENTS_LOST beside the enforcement bits");
+	TEST("events lost: EVENTS_LOST beside the enforcement bits");
+	if (f != (ENF | BPF | LOTA_REPORT_FLAG_EVENTS_LOST))
+		FAIL("expected: f == (ENF | BPF | "
+		     "LOTA_REPORT_FLAG_EVENTS_LOST)");
 
 	f = flags_for(true, LOTA_MODE_MONITOR, LOTA_STATUS_EVENTS_LOST);
-	CHECK(f == LOTA_REPORT_FLAG_EVENTS_LOST,
-	      "events lost without the LSM loaded: EVENTS_LOST alone");
+	TEST("events lost without the LSM loaded: EVENTS_LOST alone");
+	if (f != LOTA_REPORT_FLAG_EVENTS_LOST)
+		FAIL("expected: f == LOTA_REPORT_FLAG_EVENTS_LOST");
 
 	f = flags_for(false, LOTA_MODE_ENFORCE, LOTA_STATUS_EVENTS_LOST);
-	CHECK(f == 0, "daemon not reached: no EVENTS_LOST");
+	TEST("daemon not reached: no EVENTS_LOST");
+	if (f != 0)
+		FAIL("expected: f == 0");
 
 	f = flags_for(true, LOTA_MODE_ENFORCE, LOTA_STATUS_BPF_LOADED);
-	CHECK(!(f & LOTA_REPORT_FLAG_EVENTS_LOST), "no loss: no EVENTS_LOST");
+	TEST("no loss: no EVENTS_LOST");
+	if (f & LOTA_REPORT_FLAG_EVENTS_LOST)
+		FAIL("expected: !(f & LOTA_REPORT_FLAG_EVENTS_LOST)");
 
 	/* the daemon's policy keys reach the report under enforce only */
 	f = flags_for(true, LOTA_MODE_ENFORCE,
 		      LOTA_STATUS_BPF_LOADED | LOTA_STATUS_STRICT_MMAP |
 			      LOTA_STATUS_BLOCK_PTRACE);
-	CHECK(f == (ENF | BPF | LOTA_REPORT_FLAG_STRICT_MMAP |
-		    LOTA_REPORT_FLAG_BLOCK_PTRACE),
-	      "enforcing daemon: its keys beside ENFORCE");
+	TEST("enforcing daemon: its keys beside ENFORCE");
+	if (f != (ENF | BPF | LOTA_REPORT_FLAG_STRICT_MMAP |
+		  LOTA_REPORT_FLAG_BLOCK_PTRACE))
+		FAIL("expected: f == (ENF | BPF | "
+		     "LOTA_REPORT_FLAG_STRICT_MMAP | "
+		     "LOTA_REPORT_FLAG_BLOCK_PTRACE)");
 
 	f = flags_for(true, LOTA_MODE_ENFORCE,
 		      LOTA_STATUS_BPF_LOADED | LOTA_STATUS_STRICT_EXEC |
 			      LOTA_STATUS_STRICT_MODULES |
 			      LOTA_STATUS_BLOCK_ANON_EXEC);
-	CHECK(f == (ENF | BPF | LOTA_REPORT_FLAG_STRICT_EXEC |
-		    LOTA_REPORT_FLAG_STRICT_MODULES |
-		    LOTA_REPORT_FLAG_BLOCK_ANON_EXEC),
-	      "enforcing daemon: the other three keys");
+	TEST("enforcing daemon: the other three keys");
+	if (f != (ENF | BPF | LOTA_REPORT_FLAG_STRICT_EXEC |
+		  LOTA_REPORT_FLAG_STRICT_MODULES |
+		  LOTA_REPORT_FLAG_BLOCK_ANON_EXEC))
+		FAIL("expected: f == (ENF | BPF | "
+		     "LOTA_REPORT_FLAG_STRICT_EXEC | "
+		     "LOTA_REPORT_FLAG_STRICT_MODULES | "
+		     "LOTA_REPORT_FLAG_BLOCK_ANON_EXEC)");
 
 	f = flags_for(true, LOTA_MODE_MONITOR,
 		      LOTA_STATUS_BPF_LOADED | LOTA_STATUS_STRICT_MMAP);
-	CHECK(f == BPF, "monitor: no key, whatever the word says");
+	TEST("monitor: no key, whatever the word says");
+	if (f != BPF)
+		FAIL("expected: f == BPF");
 
 	f = flags_for(true, LOTA_MODE_ENFORCE, LOTA_STATUS_STRICT_MMAP);
-	CHECK(f == 0, "enforce without the LSM loaded: no key");
+	TEST("enforce without the LSM loaded: no key");
+	if (f != 0)
+		FAIL("expected: f == 0");
 
-	if (g_failures) {
-		fprintf(stderr, "\n%d failure(s)\n", g_failures);
-		return 1;
-	}
-	printf("\nAll tests passed\n");
-	return 0;
+	return test_end();
 }

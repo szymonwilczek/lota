@@ -33,6 +33,7 @@ static const char *self_basename(char *buf, size_t len)
 
 int main(void)
 {
+	test_begin("runtime image collect");
 	struct lota_rt_map_entry e;
 	struct lota_rt_map_entry entries[LOTA_RUNTIME_IMAGE_MAX_MODULES];
 	char exe[PATH_MAX];
@@ -41,18 +42,14 @@ int main(void)
 	uint32_t past = 0;
 	int rc;
 
-	printf("Runtime image mapping enumeration tests:\n");
-
 	TEST("file-backed executable mapping is selected");
 	rc = lota_rt_parse_maps_line(
 		"55a3c0e00000-55a3c0e21000 r-xp 00001000 fd:01 1234567 "
 		"/usr/bin/foo\n",
 		&e);
-	if (rc == 1 && strcmp(e.soname, "foo") == 0 && e.ino == 1234567ULL &&
-	    e.dev_major == 0xfd && e.dev_minor == 0x01 &&
-	    e.start == 0x55a3c0e00000UL && e.end == 0x55a3c0e21000UL)
-		PASS();
-	else
+	if (!(rc == 1 && strcmp(e.soname, "foo") == 0 && e.ino == 1234567ULL &&
+	      e.dev_major == 0xfd && e.dev_minor == 0x01 &&
+	      e.start == 0x55a3c0e00000UL && e.end == 0x55a3c0e21000UL))
 		FAIL("not selected / wrong fields");
 
 	TEST("read-only mapping is skipped");
@@ -60,9 +57,7 @@ int main(void)
 		"7f0000000000-7f0000001000 r--p 00000000 fd:01 2222 "
 		"/usr/lib/libc.so.6\n",
 		&e);
-	if (rc == 0)
-		PASS();
-	else
+	if (rc != 0)
 		FAIL("selected non-exec mapping");
 
 	TEST("writable data mapping is skipped");
@@ -70,34 +65,26 @@ int main(void)
 		"7f0000002000-7f0000003000 rw-p 00002000 fd:01 2222 "
 		"/usr/lib/libc.so.6\n",
 		&e);
-	if (rc == 0)
-		PASS();
-	else
+	if (rc != 0)
 		FAIL("selected writable mapping");
 
 	TEST("anonymous executable mapping is skipped");
 	rc = lota_rt_parse_maps_line(
 		"7f0000004000-7f0000005000 r-xp 00000000 00:00 0 \n", &e);
-	if (rc == 0)
-		PASS();
-	else
+	if (rc != 0)
 		FAIL("selected anonymous exec");
 
 	TEST("vDSO region is skipped");
 	rc = lota_rt_parse_maps_line(
 		"7ffff7fc1000-7ffff7fc3000 r-xp 00000000 00:00 0 [vdso]\n", &e);
-	if (rc == 0)
-		PASS();
-	else
+	if (rc != 0)
 		FAIL("selected vdso");
 
 	TEST("special bracketed region is skipped");
 	rc = lota_rt_parse_maps_line(
 		"7f0000006000-7f0000007000 r-xp 00000000 fd:01 55 [heap]\n",
 		&e);
-	if (rc == 0)
-		PASS();
-	else
+	if (rc != 0)
 		FAIL("selected bracketed region");
 
 	/* Two copies of one library under different roots are two objects */
@@ -106,9 +93,7 @@ int main(void)
 		"55a3c0e00000-55a3c0e21000 r-xp 00001000 fd:01 1234567 "
 		"/usr/bin/foo\n",
 		&e);
-	if (rc == 1 && strcmp(e.path, "/usr/bin/foo") == 0)
-		PASS();
-	else
+	if (!(rc == 1 && strcmp(e.path, "/usr/bin/foo") == 0))
 		FAIL("path not kept");
 
 	TEST("a path with spaces is kept whole");
@@ -116,9 +101,7 @@ int main(void)
 		"55a3c0e00000-55a3c0e21000 r-xp 00001000 fd:01 1234567 "
 		"/opt/game dir/game bin\n",
 		&e);
-	if (rc == 1 && strcmp(e.path, "/opt/game dir/game bin") == 0)
-		PASS();
-	else
+	if (!(rc == 1 && strcmp(e.path, "/opt/game dir/game bin") == 0))
 		FAIL("path with spaces not preserved");
 
 	TEST("deleted suffix is stripped from the path too");
@@ -126,9 +109,7 @@ int main(void)
 		"55a3c0e00000-55a3c0e21000 r-xp 00001000 fd:01 1234567 "
 		"/tmp/game.bin (deleted)\n",
 		&e);
-	if (rc == 1 && strcmp(e.path, "/tmp/game.bin") == 0)
-		PASS();
-	else
+	if (!(rc == 1 && strcmp(e.path, "/tmp/game.bin") == 0))
 		FAIL("deleted suffix left on the path");
 
 	TEST("a path past the buffer keeps its tail and its soname");
@@ -146,12 +127,10 @@ int main(void)
 			 path);
 		rc = lota_rt_parse_maps_line(line, &e);
 		len = strlen(e.path);
-		if (rc == 1 && strcmp(e.soname, "game.bin") == 0 &&
-		    len == sizeof(e.path) - 1 &&
-		    strncmp(e.path, "...", 3) == 0 &&
-		    strcmp(e.path + 3, path + strlen(path) - (len - 3)) == 0)
-			PASS();
-		else
+		if (!(rc == 1 && strcmp(e.soname, "game.bin") == 0 &&
+		      len == sizeof(e.path) - 1 &&
+		      strncmp(e.path, "...", 3) == 0 &&
+		      strcmp(e.path + 3, path + strlen(path) - (len - 3)) == 0))
 			FAIL("long path refused or not cut to its tail");
 	}
 
@@ -160,9 +139,7 @@ int main(void)
 		"55a3c0e00000-55a3c0e21000 r-xp 00001000 fd:01 1234567 "
 		"/tmp/game.bin (deleted)\n",
 		&e);
-	if (rc == 1 && strcmp(e.soname, "game.bin") == 0)
-		PASS();
-	else
+	if (!(rc == 1 && strcmp(e.soname, "game.bin") == 0))
 		FAIL("deleted suffix not stripped");
 
 	TEST("basename keeps embedded spaces");
@@ -170,16 +147,12 @@ int main(void)
 		"55a3c0e00000-55a3c0e21000 r-xp 00001000 fd:01 1234567 "
 		"/opt/game dir/game bin\n",
 		&e);
-	if (rc == 1 && strcmp(e.soname, "game bin") == 0)
-		PASS();
-	else
+	if (!(rc == 1 && strcmp(e.soname, "game bin") == 0))
 		FAIL("basename with spaces not preserved");
 
 	TEST("malformed line is rejected");
 	rc = lota_rt_parse_maps_line("not a maps line\n", &e);
-	if (rc < 0)
-		PASS();
-	else
+	if (rc >= 0)
 		FAIL("accepted malformed line");
 
 	TEST("collector finds the process's own executable");
@@ -192,9 +165,7 @@ int main(void)
 			if (strcmp(entries[i].soname, self) == 0)
 				found = 1;
 		}
-		if (found)
-			PASS();
-		else
+		if (!found)
 			FAIL("own exe not in collected set");
 	} else {
 		FAIL("collect failed");
@@ -213,9 +184,7 @@ int main(void)
 					dup = 1;
 			}
 		}
-		if (!dup)
-			PASS();
-		else
+		if (dup)
 			FAIL("duplicate inode in set");
 	}
 
@@ -225,14 +194,10 @@ int main(void)
 		uint32_t past_all = past;
 
 		rc = lota_rt_collect_exec_maps(getpid(), entries, 1, &n, &past);
-		if (past_all == 0 && all > 1 && rc == 0 && n == 1 &&
-		    past >= all - 1)
-			PASS();
-		else
+		if (!(past_all == 0 && all > 1 && rc == 0 && n == 1 &&
+		      past >= all - 1))
 			FAIL("capacity lost or refused a mapping");
 	}
 
-	printf("\n%d/%d runtime image enumeration tests passed\n", tests_passed,
-	       tests_run);
-	return tests_passed == tests_run ? 0 : 1;
+	return test_end();
 }

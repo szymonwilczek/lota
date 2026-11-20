@@ -19,17 +19,7 @@
 #include "../src/agent/cgroup_guard.h"
 #include "../src/agent/sb_dev.h"
 
-static int g_failures;
-
-#define CHECK(cond, msg)                                    \
-	do {                                                \
-		if (!(cond)) {                              \
-			fprintf(stderr, "FAIL: %s\n", msg); \
-			g_failures++;                       \
-		} else {                                    \
-			printf("PASS: %s\n", msg);          \
-		}                                           \
-	} while (0)
+#include "test.h"
 
 static char g_tmpdir[64];
 
@@ -39,7 +29,7 @@ static void write_file(const char *path, const char *content)
 	FILE *f = fd < 0 ? NULL : fdopen(fd, "w");
 
 	if (!f) {
-		fprintf(stderr, "cannot write %s: %s\n", path, strerror(errno));
+		FAIL("cannot write %s: %s", path, strerror(errno));
 		if (fd >= 0)
 			close(fd);
 		exit(1);
@@ -63,7 +53,7 @@ static void make_cgroup_dir(const char *rel, int with_kill_file)
 
 	snprintf(path, sizeof(path), "%s%s", g_tmpdir, rel);
 	if (mkdir(path, 0755) != 0 && errno != EEXIST) {
-		fprintf(stderr, "cannot mkdir %s: %s\n", path, strerror(errno));
+		FAIL("cannot mkdir %s: %s", path, strerror(errno));
 		exit(1);
 	}
 	if (!with_kill_file)
@@ -98,30 +88,38 @@ static void test_self_path(void)
 
 	write_file(proc_path, "0::/system.slice/lota-agent.service\n");
 	ret = cgroup_guard_self_path(proc_path, out, sizeof(out));
-	CHECK(ret == 0 && strcmp(out, "/system.slice/lota-agent.service") == 0,
-	      "the unified-hierarchy record names the agent's cgroup");
+	TEST("the unified-hierarchy record names the agent's cgroup");
+	if (!(ret == 0 && strcmp(out, "/system.slice/lota-agent.service") == 0))
+		FAIL("expected: ret == 0 && strcmp(out, "
+		     "\"/system.slice/lota-agent.service\") == 0");
 
 	/* hybrid host: v1 controller records come first */
 	write_file(proc_path, "3:devices:/system.slice\n"
 			      "1:name=systemd:/system.slice/other.service\n"
 			      "0::/system.slice/lota-agent.service\n");
 	ret = cgroup_guard_self_path(proc_path, out, sizeof(out));
-	CHECK(ret == 0 && strcmp(out, "/system.slice/lota-agent.service") == 0,
-	      "v1 controller records are not mistaken for the unified one");
+	TEST("v1 controller records are not mistaken for the unified one");
+	if (!(ret == 0 && strcmp(out, "/system.slice/lota-agent.service") == 0))
+		FAIL("expected: ret == 0 && strcmp(out, "
+		     "\"/system.slice/lota-agent.service\") == 0");
 
 	write_file(proc_path, "3:devices:/system.slice\n");
 	ret = cgroup_guard_self_path(proc_path, out, sizeof(out));
-	CHECK(ret == -ENOENT,
-	      "a host with no unified hierarchy is reported, not guessed at");
+	TEST("a host with no unified hierarchy is reported, not guessed at");
+	if (ret != -ENOENT)
+		FAIL("expected: ret == -ENOENT");
 
 	write_file(proc_path, "0::/system.slice/../other.service\n");
 	ret = cgroup_guard_self_path(proc_path, out, sizeof(out));
-	CHECK(ret == -EINVAL, "a record that walks upwards is refused");
+	TEST("a record that walks upwards is refused");
+	if (ret != -EINVAL)
+		FAIL("expected: ret == -EINVAL");
 
 	write_file(proc_path, "0::/system.slice/lota-agent.service\n");
 	ret = cgroup_guard_self_path(proc_path, out, 8);
-	CHECK(ret == -ENAMETOOLONG,
-	      "a path longer than the caller's buffer is refused, not cut");
+	TEST("a path longer than the caller's buffer is refused, not cut");
+	if (ret != -ENAMETOOLONG)
+		FAIL("expected: ret == -ENAMETOOLONG");
 }
 
 static void test_collect(void)
@@ -139,16 +137,25 @@ static void test_collect(void)
 
 	ret = cgroup_guard_collect(root, "/system.slice/lota-agent.service",
 				   files, LOTA_CGROUP_GUARD_MAX);
-	CHECK(ret == 3, "the agent's cgroup and both ancestors are collected");
+	TEST("the agent's cgroup and both ancestors are collected");
+	if (ret != 3)
+		FAIL("expected: ret == 3");
 	if (ret == 3) {
-		CHECK(files[0].ino ==
-			      ino_of("/root/system.slice/lota-agent.service"),
-		      "the agent's own cgroup.kill comes first");
-		CHECK(files[1].ino == ino_of("/root/system.slice") &&
-			      files[2].ino == ino_of("/root"),
-		      "each ancestor's cgroup.kill follows it");
-		CHECK(files[0].dev != 0 && files[0].dev == files[2].dev,
-		      "every file carries the hierarchy's superblock device");
+		TEST("the agent's own cgroup.kill comes first");
+		if (files[0].ino !=
+		    ino_of("/root/system.slice/lota-agent.service"))
+			FAIL("expected: files[0].ino == "
+			     "ino_of(\"/root/system.slice/lota-agent.service\")");
+		TEST("each ancestor's cgroup.kill follows it");
+		if (!(files[1].ino == ino_of("/root/system.slice") &&
+		      files[2].ino == ino_of("/root")))
+			FAIL("expected: files[1].ino == "
+			     "ino_of(\"/root/system.slice\") && files[2].ino == "
+			     "ino_of(\"/root\")");
+		TEST("every file carries the hierarchy's superblock device");
+		if (!(files[0].dev != 0 && files[0].dev == files[2].dev))
+			FAIL("expected: files[0].dev != 0 && files[0].dev == "
+			     "files[2].dev");
 	}
 
 	/* the root cgroup has no cgroup.kill */
@@ -157,19 +164,26 @@ static void test_collect(void)
 	make_cgroup_dir("/noroot/system.slice", 1);
 	ret = cgroup_guard_collect(noroot, "/system.slice", files,
 				   LOTA_CGROUP_GUARD_MAX);
-	CHECK(ret == 1, "a level with no cgroup.kill is skipped, not fatal");
+	TEST("a level with no cgroup.kill is skipped, not fatal");
+	if (ret != 1)
+		FAIL("expected: ret == 1");
 
 	ret = cgroup_guard_collect(root, "/system.slice/lota-agent.service",
 				   files, 2);
-	CHECK(ret == -ENOSPC,
-	      "more kill files than the caller can hold is refused, not cut");
+	TEST("more kill files than the caller can hold is refused, not cut");
+	if (ret != -ENOSPC)
+		FAIL("expected: ret == -ENOSPC");
 
 	ret = cgroup_guard_collect(root, "/system.slice/../other", files,
 				   LOTA_CGROUP_GUARD_MAX);
-	CHECK(ret == -EINVAL, "a cgroup path that walks upwards is refused");
+	TEST("a cgroup path that walks upwards is refused");
+	if (ret != -EINVAL)
+		FAIL("expected: ret == -EINVAL");
 
 	ret = cgroup_guard_collect(root, "/", files, LOTA_CGROUP_GUARD_MAX);
-	CHECK(ret == 1, "the root of the hierarchy is one level, not two");
+	TEST("the root of the hierarchy is one level, not two");
+	if (ret != 1)
+		FAIL("expected: ret == 1");
 }
 
 /* cgroup.freeze stops the agent past every signal hook as cgroup.kill ends it */
@@ -189,25 +203,34 @@ static void test_collect_freeze(void)
 	snprintf(root, sizeof(root), "%s/froot", g_tmpdir);
 	ret = cgroup_guard_collect(root, "/system.slice/lota-agent.service",
 				   files, LOTA_CGROUP_GUARD_MAX);
-	CHECK(ret == 4, "both files of both levels are collected");
+	TEST("both files of both levels are collected");
+	if (ret != 4)
+		FAIL("expected: ret == 4");
 	if (ret == 4) {
-		CHECK(files[0].kind == LOTA_GUARD_CGROUP_KILL &&
-			      files[1].kind == LOTA_GUARD_CGROUP_FREEZE,
-		      "each level gives its kill file, then its freeze file");
-		CHECK(files[1].ino ==
-			      ino_of_file(
-				      "/froot/system.slice/lota-agent.service",
-				      "cgroup.freeze"),
-		      "the agent's own cgroup.freeze is guarded");
-		CHECK(files[3].ino == ino_of_file("/froot/system.slice",
-						  "cgroup.freeze"),
-		      "an ancestor's cgroup.freeze is guarded");
+		TEST("each level gives its kill file, then its freeze file");
+		if (!(files[0].kind == LOTA_GUARD_CGROUP_KILL &&
+		      files[1].kind == LOTA_GUARD_CGROUP_FREEZE))
+			FAIL("expected: files[0].kind == LOTA_GUARD_CGROUP_KILL && "
+			     "files[1].kind == LOTA_GUARD_CGROUP_FREEZE");
+		TEST("the agent's own cgroup.freeze is guarded");
+		if (files[1].ino !=
+		    ino_of_file("/froot/system.slice/lota-agent.service",
+				"cgroup.freeze"))
+			FAIL("expected: files[1].ino == ino_of_file( "
+			     "\"/froot/system.slice/lota-agent.service\", "
+			     "\"cgroup.freeze\")");
+		TEST("an ancestor's cgroup.freeze is guarded");
+		if (files[3].ino !=
+		    ino_of_file("/froot/system.slice", "cgroup.freeze"))
+			FAIL("expected: files[3].ino == "
+			     "ino_of_file(\"/froot/system.slice\", \"cgroup.freeze\")");
 	}
 
 	ret = cgroup_guard_collect(root, "/system.slice/lota-agent.service",
 				   files, 3);
-	CHECK(ret == -ENOSPC,
-	      "a freeze file past the caller's room is refused");
+	TEST("a freeze file past the caller's room is refused");
+	if (ret != -ENOSPC)
+		FAIL("expected: ret == -ENOSPC");
 }
 
 int main(void)
@@ -223,7 +246,7 @@ int main(void)
 	}
 	snprintf(g_tmpdir, sizeof(g_tmpdir), "%s", tmpl);
 
-	printf("=== cgroup kill-guard tests ===\n");
+	test_begin("cgroup guard");
 
 	test_self_path();
 
@@ -236,14 +259,12 @@ int main(void)
 	} else {
 		if (fd >= 0)
 			close(fd);
-		printf("SKIP: collection (no superblock device for %s)\n",
-		       g_tmpdir);
+		SKIP("collection (no superblock device for %s)", g_tmpdir);
 	}
 
 	snprintf(cmd, sizeof(cmd), "rm -rf %s", g_tmpdir);
 	if (system(cmd) != 0)
 		fprintf(stderr, "warning: could not remove %s\n", g_tmpdir);
 
-	printf("=== %s ===\n", g_failures ? "FAILURES" : "all passed");
-	return g_failures ? 1 : 0;
+	return test_end();
 }

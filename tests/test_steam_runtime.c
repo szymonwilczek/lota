@@ -32,7 +32,7 @@ static void setup_tmpdir(void)
 {
 	snprintf(tmpdir, sizeof(tmpdir), "/tmp/lota_test_srt_XXXXXX");
 	if (!mkdtemp(tmpdir)) {
-		fprintf(stderr, "mkdtemp failed: %s\n", strerror(errno));
+		FAIL("mkdtemp failed: %s", strerror(errno));
 		exit(1);
 	}
 }
@@ -138,7 +138,6 @@ static void test_detect_clean_host(void)
 		FAIL("steam flag set");
 		return;
 	}
-	PASS();
 }
 
 static void test_detect_soldier_container(void)
@@ -176,7 +175,6 @@ static void test_detect_soldier_container(void)
 		FAIL("wrong app_id");
 		return;
 	}
-	PASS();
 }
 
 static void test_detect_sniper_via_base(void)
@@ -203,7 +201,6 @@ static void test_detect_sniper_via_base(void)
 		FAIL("no pv flag");
 		return;
 	}
-	PASS();
 }
 
 static void test_detect_medic_container(void)
@@ -226,7 +223,6 @@ static void test_detect_medic_container(void)
 		FAIL("wrong type");
 		return;
 	}
-	PASS();
 }
 
 static void test_detect_heavy_container(void)
@@ -249,7 +245,6 @@ static void test_detect_heavy_container(void)
 		FAIL("wrong type");
 		return;
 	}
-	PASS();
 }
 
 static void test_detect_unknown_container(void)
@@ -276,7 +271,6 @@ static void test_detect_unknown_container(void)
 		FAIL("no pv flag");
 		return;
 	}
-	PASS();
 }
 
 static void test_detect_xdg_runtime_dir(void)
@@ -307,7 +301,6 @@ static void test_detect_xdg_runtime_dir(void)
 		FAIL("no socket path");
 		return;
 	}
-	PASS();
 }
 
 static void test_detect_proton(void)
@@ -330,7 +323,6 @@ static void test_detect_proton(void)
 		FAIL("no proton flag");
 		return;
 	}
-	PASS();
 }
 
 static void test_detect_null_arg(void)
@@ -342,7 +334,6 @@ static void test_detect_null_arg(void)
 		FAIL("wrong return");
 		return;
 	}
-	PASS();
 }
 
 static void test_detect_instance_id(void)
@@ -367,7 +358,6 @@ static void test_detect_instance_id(void)
 		FAIL("wrong id");
 		return;
 	}
-	PASS();
 }
 
 static void test_detect_compat_data_path(void)
@@ -395,7 +385,6 @@ static void test_detect_compat_data_path(void)
 		FAIL("wrong compat path");
 		return;
 	}
-	PASS();
 }
 
 static void test_type_str_all(void)
@@ -433,7 +422,6 @@ static void test_type_str_all(void)
 		FAIL("unknown");
 		return;
 	}
-	PASS();
 }
 
 static void test_socket_dir_with_xdg(void)
@@ -458,7 +446,6 @@ static void test_socket_dir_with_xdg(void)
 		FAIL("wrong path");
 		return;
 	}
-	PASS();
 }
 
 static void test_socket_dir_no_xdg(void)
@@ -472,7 +459,6 @@ static void test_socket_dir_no_xdg(void)
 		FAIL("expected -ENOENT");
 		return;
 	}
-	PASS();
 }
 
 static void test_socket_dir_null_buf(void)
@@ -484,7 +470,6 @@ static void test_socket_dir_null_buf(void)
 		FAIL("expected -EINVAL");
 		return;
 	}
-	PASS();
 }
 
 static void test_socket_dir_tiny_buf(void)
@@ -503,7 +488,6 @@ static void test_socket_dir_tiny_buf(void)
 		FAIL("expected -ENAMETOOLONG");
 		return;
 	}
-	PASS();
 }
 
 static void test_socket_path_with_xdg(void)
@@ -526,7 +510,6 @@ static void test_socket_path_with_xdg(void)
 		FAIL("wrong path");
 		return;
 	}
-	PASS();
 }
 
 static void test_socket_path_no_xdg(void)
@@ -540,7 +523,6 @@ static void test_socket_path_no_xdg(void)
 		FAIL("expected -ENOENT");
 		return;
 	}
-	PASS();
 }
 
 static void test_ensure_dir_creates(void)
@@ -569,7 +551,6 @@ static void test_ensure_dir_creates(void)
 		FAIL("wrong mode");
 		return;
 	}
-	PASS();
 }
 
 /*
@@ -603,7 +584,6 @@ static void test_ensure_dir_mode_under_restrictive_umask(void)
 		FAIL("umask decided the mode, so the group is locked out");
 		return;
 	}
-	PASS();
 }
 
 static void test_ensure_dir_exists(void)
@@ -615,7 +595,6 @@ static void test_ensure_dir_exists(void)
 		FAIL("returned error");
 		return;
 	}
-	PASS();
 }
 
 static void test_ensure_dir_not_a_dir(void)
@@ -635,7 +614,6 @@ static void test_ensure_dir_not_a_dir(void)
 		FAIL("expected -ENOTDIR");
 		return;
 	}
-	PASS();
 }
 
 static void test_ensure_dir_symlink_leaves_target(void)
@@ -664,7 +642,6 @@ static void test_ensure_dir_symlink_leaves_target(void)
 		FAIL("the symlink target changed mode");
 		return;
 	}
-	PASS();
 }
 
 static void test_ensure_dir_null(void)
@@ -676,7 +653,6 @@ static void test_ensure_dir_null(void)
 		FAIL("expected -EINVAL");
 		return;
 	}
-	PASS();
 }
 
 static void test_ensure_dir_empty(void)
@@ -688,7 +664,6 @@ static void test_ensure_dir_empty(void)
 		FAIL("expected -EINVAL");
 		return;
 	}
-	PASS();
 }
 
 /*
@@ -724,12 +699,6 @@ static int ensure_dir_quietly(const char *dir, gid_t gid, long *said)
 	*said = lseek(fileno(cap), 0, SEEK_END);
 	fclose(cap);
 	return ret;
-}
-
-static void SKIP(const char *msg)
-{
-	tests_passed++;
-	printf("SKIP (%s)\n", msg);
 }
 
 /* a group the caller is not in, which only root could hand anything to */
@@ -771,7 +740,6 @@ static void test_ensure_dir_own_gid(void)
 		FAIL("wrote to stderr");
 		return;
 	}
-	PASS();
 }
 
 static void test_ensure_dir_foreign_gid_quiet(void)
@@ -798,7 +766,6 @@ static void test_ensure_dir_foreign_gid_quiet(void)
 		FAIL("wrote to stderr, so the caller cannot keep a pending login quiet");
 		return;
 	}
-	PASS();
 }
 
 static void test_ensure_dir_missing_parent_quiet(void)
@@ -819,7 +786,6 @@ static void test_ensure_dir_missing_parent_quiet(void)
 		FAIL("wrote to stderr");
 		return;
 	}
-	PASS();
 }
 
 static void test_log_info_null(void)
@@ -827,7 +793,6 @@ static void test_log_info_null(void)
 	TEST("log_info: NULL pointer does not crash");
 
 	steam_runtime_log_info(NULL);
-	PASS();
 }
 
 static void test_log_info_prints(void)
@@ -857,13 +822,11 @@ static void test_log_info_prints(void)
 		dup2(saved_fd, STDERR_FILENO);
 		close(saved_fd);
 	}
-
-	PASS();
 }
 
 int main(void)
 {
-	printf("=== LOTA Steam Runtime Unit Tests ===\n\n");
+	test_begin("steam runtime");
 
 	setup_tmpdir();
 	clear_steam_env();
@@ -913,6 +876,5 @@ int main(void)
 	restore_steam_env();
 	cleanup_tmpdir();
 
-	printf("\n=== Results: %d/%d passed ===\n", tests_passed, tests_run);
-	return (tests_passed == tests_run) ? 0 : 1;
+	return test_end();
 }

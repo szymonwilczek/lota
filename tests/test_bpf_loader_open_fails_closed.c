@@ -24,17 +24,7 @@
 #include "../src/agent/bpf_loader.h"
 #include "../src/agent/policy_sign.h"
 
-static int g_failures;
-
-#define CHECK(cond, msg)                                    \
-	do {                                                \
-		if (!(cond)) {                              \
-			fprintf(stderr, "FAIL: %s\n", msg); \
-			g_failures++;                       \
-		} else {                                    \
-			printf("PASS: %s\n", msg);          \
-		}                                           \
-	} while (0)
+#include "test.h"
 
 /* --wrap targets need external linkage */
 int __wrap_policy_verify_buffer(const uint8_t *data, size_t data_len,
@@ -290,8 +280,9 @@ static void test_exec_history_walk(void)
 	memset(&ctx, 0, sizeof(ctx));
 	ctx.exec_history_fd = -1;
 	ret = bpf_loader_exec_history(&ctx, fake_alive, &keys, &vals, &n);
-	CHECK(ret == -ENOENT && n == 0 && !keys && !vals,
-	      "an object without the exec history reports it missing");
+	TEST("an object without the exec history reports it missing");
+	if (!(ret == -ENOENT && n == 0 && !keys && !vals))
+		FAIL("expected: ret == -ENOENT && n == 0 && !keys && !vals");
 
 	fake_map_reset(sizeof(key), sizeof(val));
 	for (uint32_t tgid = 1; tgid <= 4; tgid++) {
@@ -306,16 +297,23 @@ static void test_exec_history_walk(void)
 
 	ctx.exec_history_fd = FAKE_MAP_FD;
 	ret = bpf_loader_exec_history(&ctx, fake_alive, &keys, &vals, &n);
-	CHECK(ret == 0 && n == 1,
-	      "the exec history keeps only the processes still running");
-	CHECK(n == 1 && keys[0].tgid == 1 && keys[0].ino == 11 &&
-		      vals[0].size == 1,
-	      "a kept entry keeps its key and value together");
-	CHECK(n == 1 && vals[0].name[sizeof(vals[0].name) - 1] == '\0',
-	      "a kept name is terminated");
-	CHECK(g_map.deletes == 3 && g_map.gone[1] && g_map.gone[2] &&
-		      g_map.gone[3],
-	      "an exited process and a reused PID lose their entries");
+	TEST("the exec history keeps only the processes still running");
+	if (!(ret == 0 && n == 1))
+		FAIL("expected: ret == 0 && n == 1");
+	TEST("a kept entry keeps its key and value together");
+	if (!(n == 1 && keys[0].tgid == 1 && keys[0].ino == 11 &&
+	      vals[0].size == 1))
+		FAIL("expected: n == 1 && keys[0].tgid == 1 && keys[0].ino == "
+		     "11 && vals[0].size == 1");
+	TEST("a kept name is terminated");
+	if (!(n == 1 && vals[0].name[sizeof(vals[0].name) - 1] == '\0'))
+		FAIL("expected: n == 1 && vals[0].name[sizeof(vals[0].name) - "
+		     "1] == '\\0'");
+	TEST("an exited process and a reused PID lose their entries");
+	if (!(g_map.deletes == 3 && g_map.gone[1] && g_map.gone[2] &&
+	      g_map.gone[3]))
+		FAIL("expected: g_map.deletes == 3 && g_map.gone[1] && "
+		     "g_map.gone[2] && g_map.gone[3]");
 	free(keys);
 	free(vals);
 }
@@ -345,11 +343,14 @@ static void test_exec_history_past_first_buffer(void)
 	memset(&ctx, 0, sizeof(ctx));
 	ctx.exec_history_fd = FAKE_MAP_FD;
 	ret = bpf_loader_exec_history(&ctx, fake_alive, &keys, &vals, &n);
-	CHECK(ret == 0 && n == FAKE_MAP_SLOTS,
-	      "a history longer than the first buffer is read whole");
+	TEST("a history longer than the first buffer is read whole");
+	if (!(ret == 0 && n == FAKE_MAP_SLOTS))
+		FAIL("expected: ret == 0 && n == FAKE_MAP_SLOTS");
 	for (size_t i = 0; i < n; i++)
 		together = together && keys[i].ino == i && vals[i].size == i;
-	CHECK(together, "growing keeps keys and values together");
+	TEST("growing keeps keys and values together");
+	if (!together)
+		FAIL("expected: together");
 	free(keys);
 	free(vals);
 }
@@ -389,27 +390,39 @@ static void test_born_protected(void)
 	ctx.protected_pids_fd = FAKE_MAP_FD;
 
 	g_task_marked = 0;
-	CHECK(bpf_loader_born_protected(&ctx, pid, ticks) == 0,
-	      "a process without the mark did not start under protection");
+	TEST("a process without the mark did not start under protection");
+	if (bpf_loader_born_protected(&ctx, pid, ticks) != 0)
+		FAIL("expected: bpf_loader_born_protected(&ctx, pid, ticks) "
+		     "== 0");
 
 	g_task_marked = 1;
-	CHECK(bpf_loader_born_protected(&ctx, pid, ticks) == 1,
-	      "the mark is read for the process it was asked about");
-	CHECK(bpf_loader_born_protected(&ctx, pid, ticks + 1) == 0,
-	      "a successor on the same PID does not lend its mark");
-	CHECK(bpf_loader_born_protected(&ctx, pid, 0) == 0,
-	      "an unread start time claims nothing");
+	TEST("the mark is read for the process it was asked about");
+	if (bpf_loader_born_protected(&ctx, pid, ticks) != 1)
+		FAIL("expected: bpf_loader_born_protected(&ctx, pid, ticks) "
+		     "== 1");
+	TEST("a successor on the same PID does not lend its mark");
+	if (bpf_loader_born_protected(&ctx, pid, ticks + 1) != 0)
+		FAIL("expected: bpf_loader_born_protected(&ctx, pid, ticks + "
+		     "1) == 0");
+	TEST("an unread start time claims nothing");
+	if (bpf_loader_born_protected(&ctx, pid, 0) != 0)
+		FAIL("expected: bpf_loader_born_protected(&ctx, pid, 0) == 0");
 
 	ctx.born_protected_fd = -1;
-	CHECK(bpf_loader_born_protected(&ctx, pid, ticks) == 0,
-	      "without the map nothing is claimed");
+	TEST("without the map nothing is claimed");
+	if (bpf_loader_born_protected(&ctx, pid, ticks) != 0)
+		FAIL("expected: bpf_loader_born_protected(&ctx, pid, ticks) "
+		     "== 0");
 	ctx.born_protected_fd = FAKE_TASK_FD;
 
 	fake_map_reset(sizeof(pid), sizeof(val));
 	fake_map_put(&pid, &val);
-	CHECK(bpf_loader_unprotect_pid(&ctx, pid) == 0 && g_task_marked == 0 &&
-		      bpf_loader_born_protected(&ctx, pid, ticks) == 0,
-	      "withdrawing protection takes the mark with it");
+	TEST("withdrawing protection takes the mark with it");
+	if (!(bpf_loader_unprotect_pid(&ctx, pid) == 0 && g_task_marked == 0 &&
+	      bpf_loader_born_protected(&ctx, pid, ticks) == 0))
+		FAIL("expected: bpf_loader_unprotect_pid(&ctx, pid) == 0 && "
+		     "g_task_marked == 0 && bpf_loader_born_protected(&ctx, "
+		     "pid, ticks) == 0");
 }
 
 static void test_refusal(void)
@@ -423,30 +436,42 @@ static void test_refusal(void)
 	ctx.loaded = true;
 	ctx.refusal_fd = -1;
 	memcpy(object, "untouched", 10);
-	CHECK(bpf_loader_get_refusal(&ctx, 3, &at_ns, object, sizeof(object)) ==
-			      -ENOENT &&
-		      at_ns == 0 && strcmp(object, "untouched") == 0,
-	      "without the map no refusal is named");
+	TEST("without the map no refusal is named");
+	if (!(bpf_loader_get_refusal(&ctx, 3, &at_ns, object, sizeof(object)) ==
+		      -ENOENT &&
+	      at_ns == 0 && strcmp(object, "untouched") == 0))
+		FAIL("expected: bpf_loader_get_refusal(&ctx, 3, &at_ns, "
+		     "object, sizeof(object)) == -ENOENT && at_ns == 0 && "
+		     "strcmp(object, \"untouched\") == 0");
 
 	ctx.refusal_fd = FAKE_REFUSAL_FD;
 	g_refusal_pidfd = 5;
 	g_refusal.at_ns = 1234;
 	memset(g_refusal.object, 'a', sizeof(g_refusal.object));
-	CHECK(bpf_loader_get_refusal(&ctx, 4, &at_ns, object, sizeof(object)) ==
-			      -ENOENT &&
-		      at_ns == 0 && strcmp(object, "untouched") == 0,
-	      "another process's pidfd gets none of the refusal");
+	TEST("another process's pidfd gets none of the refusal");
+	if (!(bpf_loader_get_refusal(&ctx, 4, &at_ns, object, sizeof(object)) ==
+		      -ENOENT &&
+	      at_ns == 0 && strcmp(object, "untouched") == 0))
+		FAIL("expected: bpf_loader_get_refusal(&ctx, 4, &at_ns, "
+		     "object, sizeof(object)) == -ENOENT && at_ns == 0 && "
+		     "strcmp(object, \"untouched\") == 0");
 
-	CHECK(bpf_loader_get_refusal(&ctx, 5, &at_ns, object, sizeof(object)) ==
-			      0 &&
-		      at_ns == 1234 && strlen(object) == 255 &&
-		      g_refusal_flags == BPF_F_LOCK,
-	      "the refusal is read whole under the lock and terminated");
+	TEST("the refusal is read whole under the lock and terminated");
+	if (!(bpf_loader_get_refusal(&ctx, 5, &at_ns, object, sizeof(object)) ==
+		      0 &&
+	      at_ns == 1234 && strlen(object) == 255 &&
+	      g_refusal_flags == BPF_F_LOCK))
+		FAIL("expected: bpf_loader_get_refusal(&ctx, 5, &at_ns, "
+		     "object, sizeof(object)) == 0 && at_ns == 1234 && "
+		     "strlen(object) == 255 && g_refusal_flags == BPF_F_LOCK");
 
-	CHECK(bpf_loader_get_refusal(&ctx, 5, &at_ns, small, sizeof(small)) ==
-			      0 &&
-		      strcmp(small, "aaaaaaa") == 0,
-	      "a short buffer takes the start of the object");
+	TEST("a short buffer takes the start of the object");
+	if (!(bpf_loader_get_refusal(&ctx, 5, &at_ns, small, sizeof(small)) ==
+		      0 &&
+	      strcmp(small, "aaaaaaa") == 0))
+		FAIL("expected: bpf_loader_get_refusal(&ctx, 5, &at_ns, "
+		     "small, sizeof(small)) == 0 && strcmp(small, "
+		     "\"aaaaaaa\") == 0");
 }
 
 static int pin_once(struct bpf_loader_ctx *ctx, const char *path,
@@ -478,7 +503,9 @@ static void test_pin_answer(void)
 
 	fd = mkstemp(path);
 	if (fd < 0 || fstat(fd, &st) < 0) {
-		CHECK(0, "a file to pin exists");
+		TEST("a file to pin exists");
+		if (!0)
+			FAIL("expected: 0");
 		return;
 	}
 	close(fd);
@@ -489,23 +516,36 @@ static void test_pin_answer(void)
 	ctx.mapped_exec_fd = FAKE_PIN_FD;
 	g_pin_updates = 0;
 
-	CHECK(pin_once(&ctx, path, &st, 0, LOTA_EXE_MAP_SEEN_OK, 0) == 1 &&
-		      g_pin_updates == 1 && ctx.pin_count == 1,
-	      "an unwritten mapped file is pinned and guarded");
-	CHECK(pin_once(&ctx, path, &st, 0, LOTA_EXE_MAP_SEEN_OK, 1) == 0 &&
-		      g_pin_updates == 1,
-	      "a file open for write is not pinned");
+	TEST("an unwritten mapped file is pinned and guarded");
+	if (!(pin_once(&ctx, path, &st, 0, LOTA_EXE_MAP_SEEN_OK, 0) == 1 &&
+	      g_pin_updates == 1 && ctx.pin_count == 1))
+		FAIL("expected: pin_once(&ctx, path, &st, 0, "
+		     "LOTA_EXE_MAP_SEEN_OK, 0) == 1 && g_pin_updates == 1 && "
+		     "ctx.pin_count == 1");
+	TEST("a file open for write is not pinned");
+	if (!(pin_once(&ctx, path, &st, 0, LOTA_EXE_MAP_SEEN_OK, 1) == 0 &&
+	      g_pin_updates == 1))
+		FAIL("expected: pin_once(&ctx, path, &st, 0, "
+		     "LOTA_EXE_MAP_SEEN_OK, 1) == 0 && g_pin_updates == 1");
 
-	CHECK(pin_once(&ctx, path, &st, 1, LOTA_EXE_MAP_SEEN_OK, 0) == 1,
-	      "a pin an earlier round set guards an unwritten file");
-	CHECK(pin_once(&ctx, path, &st, 1, LOTA_EXE_MAP_SEEN_OK, 1) == 0,
-	      "a pin does not guard a file a descriptor opened before it "
-	      "writes");
-	CHECK(pin_once(&ctx, path, &st, 1, LOTA_EXE_MAP_SEEN_CHANGED, 0) == 0,
-	      "a pin does not guard a file written since it was mapped");
-	CHECK(g_pin_updates == 1 && ctx.pin_count == 1 &&
-		      ctx.pins[0].round == ctx.pin_round,
-	      "an unguarded earlier pin stays recorded for this round");
+	TEST("a pin an earlier round set guards an unwritten file");
+	if (pin_once(&ctx, path, &st, 1, LOTA_EXE_MAP_SEEN_OK, 0) != 1)
+		FAIL("expected: pin_once(&ctx, path, &st, 1, "
+		     "LOTA_EXE_MAP_SEEN_OK, 0) == 1");
+	TEST("a pin does not guard a file a descriptor opened before it "
+	     "writes");
+	if (pin_once(&ctx, path, &st, 1, LOTA_EXE_MAP_SEEN_OK, 1) != 0)
+		FAIL("expected: pin_once(&ctx, path, &st, 1, "
+		     "LOTA_EXE_MAP_SEEN_OK, 1) == 0");
+	TEST("a pin does not guard a file written since it was mapped");
+	if (pin_once(&ctx, path, &st, 1, LOTA_EXE_MAP_SEEN_CHANGED, 0) != 0)
+		FAIL("expected: pin_once(&ctx, path, &st, 1, "
+		     "LOTA_EXE_MAP_SEEN_CHANGED, 0) == 0");
+	TEST("an unguarded earlier pin stays recorded for this round");
+	if (!(g_pin_updates == 1 && ctx.pin_count == 1 &&
+	      ctx.pins[0].round == ctx.pin_round))
+		FAIL("expected: g_pin_updates == 1 && ctx.pin_count == 1 && "
+		     "ctx.pins[0].round == ctx.pin_round");
 
 	free(ctx.pins);
 	unlink(path);
@@ -524,8 +564,9 @@ static void test_instance_actors_walk(void)
 	memset(&ctx, 0, sizeof(ctx));
 	ctx.instance_actors_fd = -1;
 	ret = bpf_loader_instance_actors(&ctx, fake_alive, &keys, &vals, &n);
-	CHECK(ret == -ENOENT && n == 0 && !keys && !vals,
-	      "an object without the actor record reports it missing");
+	TEST("an object without the actor record reports it missing");
+	if (!(ret == -ENOENT && n == 0 && !keys && !vals))
+		FAIL("expected: ret == -ENOENT && n == 0 && !keys && !vals");
 
 	/* the root decides whether an actor stays, not the actor */
 	fake_map_reset(sizeof(key), sizeof(val));
@@ -543,18 +584,25 @@ static void test_instance_actors_walk(void)
 
 	ctx.instance_actors_fd = FAKE_MAP_FD;
 	ret = bpf_loader_instance_actors(&ctx, fake_alive, &keys, &vals, &n);
-	CHECK(ret == 0 && n == 1,
-	      "the actor record keeps only instances still running");
-	CHECK(n == 1 && keys[0].root_tgid == 1 && keys[0].actor_tgid == 2 &&
-		      vals[0].count == 1,
-	      "a kept actor keeps its key and value together");
-	CHECK(n == 1 && vals[0].comm[sizeof(vals[0].comm) - 1] == '\0' &&
-		      vals[0].owner_comm[sizeof(vals[0].owner_comm) - 1] ==
-			      '\0',
-	      "kept actor names are terminated");
-	CHECK(g_map.deletes == 3 && g_map.gone[1] && g_map.gone[2] &&
-		      g_map.gone[3],
-	      "an exited root and a reused root PID lose their actors");
+	TEST("the actor record keeps only instances still running");
+	if (!(ret == 0 && n == 1))
+		FAIL("expected: ret == 0 && n == 1");
+	TEST("a kept actor keeps its key and value together");
+	if (!(n == 1 && keys[0].root_tgid == 1 && keys[0].actor_tgid == 2 &&
+	      vals[0].count == 1))
+		FAIL("expected: n == 1 && keys[0].root_tgid == 1 && "
+		     "keys[0].actor_tgid == 2 && vals[0].count == 1");
+	TEST("kept actor names are terminated");
+	if (!(n == 1 && vals[0].comm[sizeof(vals[0].comm) - 1] == '\0' &&
+	      vals[0].owner_comm[sizeof(vals[0].owner_comm) - 1] == '\0'))
+		FAIL("expected: n == 1 && vals[0].comm[sizeof(vals[0].comm) - "
+		     "1] == '\\0' && vals[0].owner_comm[sizeof(vals[0].owner_comm) "
+		     "- 1] == '\\0'");
+	TEST("an exited root and a reused root PID lose their actors");
+	if (!(g_map.deletes == 3 && g_map.gone[1] && g_map.gone[2] &&
+	      g_map.gone[3]))
+		FAIL("expected: g_map.deletes == 3 && g_map.gone[1] && "
+		     "g_map.gone[2] && g_map.gone[3]");
 	free(keys);
 	free(vals);
 }
@@ -565,17 +613,17 @@ static void write_file(const char *path, const void *data, size_t len)
 	FILE *f;
 
 	if (fd < 0) {
-		fprintf(stderr, "FAIL: open %s: %s\n", path, strerror(errno));
+		FAIL("open %s: %s", path, strerror(errno));
 		exit(1);
 	}
 	f = fdopen(fd, "wb");
 	if (!f) {
 		close(fd);
-		fprintf(stderr, "FAIL: fdopen %s: %s\n", path, strerror(errno));
+		FAIL("fdopen %s: %s", path, strerror(errno));
 		exit(1);
 	}
 	if (len && fwrite(data, 1, len, f) != len) {
-		fprintf(stderr, "FAIL: fwrite %s\n", path);
+		FAIL("fwrite %s", path);
 		fclose(f);
 		exit(1);
 	}
@@ -592,6 +640,7 @@ static int sample_handler(void *ctx, void *data, size_t len)
 
 int main(void)
 {
+	test_begin("bpf loader open fails closed");
 	const char *obj_path = "/tmp/lota_test_open_fails_closed.o";
 	const char *sig_path = "/tmp/lota_test_open_fails_closed.o.sig";
 	const char *pubkey_path = "dummy-pubkey.pem";
@@ -606,10 +655,15 @@ int main(void)
 	memset(&ctx, 0, sizeof(ctx));
 	errno = 0;
 	ret = bpf_loader_load(&ctx, obj_path, pubkey_path);
-	CHECK(ret < 0, "an object the library refused to open is a failure");
-	CHECK(!ctx.loaded,
-	      "a refused open leaves the context reporting nothing loaded");
-	CHECK(ctx.obj == NULL, "a refused open leaves no object behind");
+	TEST("an object the library refused to open is a failure");
+	if (ret >= 0)
+		FAIL("expected: ret < 0");
+	TEST("a refused open leaves the context reporting nothing loaded");
+	if (ctx.loaded)
+		FAIL("expected: !ctx.loaded");
+	TEST("a refused open leaves no object behind");
+	if (ctx.obj != NULL)
+		FAIL("expected: ctx.obj == NULL");
 
 	/* context as a successful load leaves it; the attach is refused */
 	memset(&ctx, 0, sizeof(ctx));
@@ -617,17 +671,21 @@ int main(void)
 	ctx.loaded = true;
 	errno = 0;
 	ret = bpf_loader_attach(&ctx);
-	CHECK(ret < 0, "a program the library refused to attach is a failure");
-	CHECK(!ctx.attached,
-	      "a refused attach leaves the context reporting nothing attached");
+	TEST("a program the library refused to attach is a failure");
+	if (ret >= 0)
+		FAIL("expected: ret < 0");
+	TEST("a refused attach leaves the context reporting nothing attached");
+	if (ctx.attached)
+		FAIL("expected: !ctx.attached");
 
 	memset(&ctx, 0, sizeof(ctx));
 	ctx.loaded = true;
 	ctx.ringbuf_fd = 3;
 	errno = 0;
 	ret = bpf_loader_setup_ringbuf(&ctx, sample_handler, NULL);
-	CHECK(ret < 0,
-	      "a ring buffer the library refused to make is a failure");
+	TEST("a ring buffer the library refused to make is a failure");
+	if (ret >= 0)
+		FAIL("expected: ret < 0");
 
 	unlink(obj_path);
 	unlink(sig_path);
@@ -639,10 +697,5 @@ int main(void)
 	test_refusal();
 	test_pin_answer();
 
-	if (g_failures) {
-		printf("Failed: %d\n", g_failures);
-		return 1;
-	}
-	printf("All checks passed\n");
-	return 0;
+	return test_end();
 }

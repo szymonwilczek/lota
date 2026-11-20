@@ -260,7 +260,7 @@ static int load_hook(void)
 
 	hook_lib = dlopen(LOTA_HOOK_LIB_PATH, RTLD_NOW);
 	if (!hook_lib) {
-		printf("  dlopen(%s): %s\n", LOTA_HOOK_LIB_PATH, dlerror());
+		FAIL("dlopen(%s): %s", LOTA_HOOK_LIB_PATH, dlerror());
 		return -1;
 	}
 
@@ -279,18 +279,16 @@ static void test_a_slow_answer_is_not_an_absent_agent(void)
 	count = status_field("LOTA_ATTEST_COUNT");
 
 	if (offline != 0) {
-		printf("FAIL: published OFFLINE=%ld for an agent that answered\n",
-		       offline);
+		FAIL("published OFFLINE=%ld for an agent that answered",
+		     offline);
 		return;
 	}
 
 	if (count != (long)AGENT_ATTEST_COUNT) {
-		printf("FAIL: published count %ld, agent answered %u\n", count,
-		       AGENT_ATTEST_COUNT);
+		FAIL("published count %ld, agent answered %u", count,
+		     AGENT_ATTEST_COUNT);
 		return;
 	}
-
-	PASS();
 }
 
 /*
@@ -305,21 +303,17 @@ static void test_the_connection_survives_a_slow_answer(void)
 
 	accepts = count_accepts();
 	if (accepts != 1) {
-		printf("FAIL: %d connections for one agent that answers\n",
-		       accepts);
+		FAIL("%d connections for one agent that answers", accepts);
 		return;
 	}
-
-	PASS();
 }
 
 int main(void)
 {
 	pid_t agent;
 	char template[] = "/tmp/lota-hook-slow-XXXXXX";
-	int failures;
 
-	printf("\n=== Wine hook against a slow agent ===\n\n");
+	test_begin("wine hook slow agent");
 
 	if (!mkdtemp(template)) {
 		perror("mkdtemp");
@@ -333,19 +327,19 @@ int main(void)
 
 	agent = start_mock_agent();
 	if (agent < 0) {
-		printf("  cannot start the mock agent: %s\n", strerror(errno));
-		return 2;
+		FAIL("cannot start the mock agent: %s", strerror(errno));
+		return test_end();
 	}
 
 	if (load_hook() != 0) {
 		kill(agent, SIGKILL);
 		waitpid(agent, NULL, 0);
-		return 2;
+		return test_end();
 	}
 
 	/* the answer plus the retry a hook that gave up would have made */
 	if (wait_for_status(20) < 0)
-		printf("  the hook published nothing\n");
+		FAIL("the hook published nothing");
 	sleep(AGENT_THINK_SEC + 3);
 
 	test_a_slow_answer_is_not_an_absent_agent();
@@ -355,10 +349,7 @@ int main(void)
 	waitpid(agent, NULL, 0);
 	unlink(sock_path);
 
-	printf("\n%d/%d passed\n\n", tests_passed, tests_run);
-	failures = tests_run - tests_passed;
-
 	/* the hook's destructor would join its thread on a dead agent */
 	fflush(stdout);
-	_exit(failures ? 1 : 0);
+	_exit(test_end());
 }

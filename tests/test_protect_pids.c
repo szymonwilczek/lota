@@ -14,22 +14,11 @@
  * Copyright (C) 2026 Szymon Wilczek
  */
 #include <errno.h>
-#include <stdio.h>
 #include <string.h>
 
 #include "../src/agent/protect_pids.h"
 
-static int g_failures;
-
-#define CHECK(cond, msg)                                    \
-	do {                                                \
-		if (!(cond)) {                              \
-			fprintf(stderr, "FAIL: %s\n", msg); \
-			g_failures++;                       \
-		} else {                                    \
-			printf("PASS: %s\n", msg);          \
-		}                                           \
-	} while (0)
+#include "test.h"
 
 /* stand-in for /proc: any pid in the list below is running */
 struct fake_procfs {
@@ -84,11 +73,14 @@ static void test_adopt(void)
 
 		ret = protect_pids_adopt(set, 1, cands, 5, fake_adopt, &in, 8,
 					 out, &out_count);
-		CHECK(ret == 2 && out_count == 3 && out[0] == 10 &&
-			      out[1] == 11 && out[2] == 13,
-		      "the members of an instance join after the root");
-		CHECK(in.calls == 4,
-		      "a process already in the set is not asked about again");
+		TEST("the members of an instance join after the root");
+		if (!(ret == 2 && out_count == 3 && out[0] == 10 &&
+		      out[1] == 11 && out[2] == 13))
+			FAIL("expected: ret == 2 && out_count == 3 && out[0] == 10 && "
+			     "out[1] == 11 && out[2] == 13");
+		TEST("a process already in the set is not asked about again");
+		if (in.calls != 4)
+			FAIL("expected: in.calls == 4");
 	}
 
 	{
@@ -99,8 +91,9 @@ static void test_adopt(void)
 
 		ret = protect_pids_adopt(set, 1, cands, 2, fake_adopt, &in, 8,
 					 out, &out_count);
-		CHECK(ret == 0 && out_count == 1,
-		      "no member adopts nothing, so the epoch stays");
+		TEST("no member adopts nothing, so the epoch stays");
+		if (!(ret == 0 && out_count == 1))
+			FAIL("expected: ret == 0 && out_count == 1");
 	}
 
 	{
@@ -110,8 +103,9 @@ static void test_adopt(void)
 
 		ret = protect_pids_adopt(NULL, 0, cands, 2, fake_adopt, &in, 8,
 					 out, &out_count);
-		CHECK(ret == 1 && out_count == 1 && out[0] == 21,
-		      "a process that exits mid-sweep is skipped, not fatal");
+		TEST("a process that exits mid-sweep is skipped, not fatal");
+		if (!(ret == 1 && out_count == 1 && out[0] == 21))
+			FAIL("expected: ret == 1 && out_count == 1 && out[0] == 21");
 	}
 
 	{
@@ -122,19 +116,24 @@ static void test_adopt(void)
 
 		ret = protect_pids_adopt(set, 2, cands, 2, fake_adopt, &in, 3,
 					 out, &out_count);
-		CHECK(ret == 1 && out_count == 3 && in.calls == 1,
-		      "adoption stops at the capacity of the set");
+		TEST("adoption stops at the capacity of the set");
+		if (!(ret == 1 && out_count == 3 && in.calls == 1))
+			FAIL("expected: ret == 1 && out_count == 3 && in.calls == 1");
 	}
 
 	{
 		struct fake_instance in = { NULL, 0, 0, 0 };
 
-		CHECK(protect_pids_adopt(NULL, 0, NULL, 0, NULL, &in, 8, out,
-					 &out_count) < 0,
-		      "a missing membership predicate is refused");
-		CHECK(protect_pids_adopt(NULL, 3, NULL, 0, fake_adopt, &in, 2,
-					 out, &out_count) < 0,
-		      "a set larger than the capacity is refused");
+		TEST("a missing membership predicate is refused");
+		if (protect_pids_adopt(NULL, 0, NULL, 0, NULL, &in, 8, out,
+				       &out_count) >= 0)
+			FAIL("expected: protect_pids_adopt(NULL, 0, NULL, 0, NULL, "
+			     "&in, 8, out, &out_count) < 0");
+		TEST("a set larger than the capacity is refused");
+		if (protect_pids_adopt(NULL, 3, NULL, 0, fake_adopt, &in, 2,
+				       out, &out_count) >= 0)
+			FAIL("expected: protect_pids_adopt(NULL, 3, NULL, 0, "
+			     "fake_adopt, &in, 2, out, &out_count) < 0");
 	}
 }
 
@@ -154,45 +153,70 @@ static void test_owners(void)
 	protect_owner_note(&t, 201, 2010, 200, 2000, NULL);
 	protect_owner_note(&t, 300, 3000, 300, 3000, NULL);
 
-	CHECK(strcmp(protect_owner_publisher(&t, 100, 1000), PUB_A) == 0 &&
-		      strcmp(protect_owner_publisher(&t, 200, 2000), PUB_B) ==
-			      0,
-	      "a process named on a publisher's connection is theirs");
-	CHECK(strcmp(protect_owner_publisher(&t, 101, 1010), PUB_A) == 0 &&
-		      strcmp(protect_owner_publisher(&t, 201, 2010), PUB_B) ==
-			      0,
-	      "an adopted member is its instance root's publisher's");
-	CHECK(protect_owner_publisher(&t, 300, 3000)[0] == '\0' &&
-		      protect_owner_publisher(&t, 400, 4000)[0] == '\0',
-	      "a process named for no publisher, or never named, is no one's");
-	CHECK(protect_owner_publisher(&t, 100, 1001)[0] == '\0',
-	      "a later process on the PID is not the earlier one's");
+	TEST("a process named on a publisher's connection is theirs");
+	if (!(strcmp(protect_owner_publisher(&t, 100, 1000), PUB_A) == 0 &&
+	      strcmp(protect_owner_publisher(&t, 200, 2000), PUB_B) == 0))
+		FAIL("expected: strcmp(protect_owner_publisher(&t, 100, "
+		     "1000), PUB_A) == 0 && "
+		     "strcmp(protect_owner_publisher(&t, 200, 2000), PUB_B) "
+		     "== 0");
+	TEST("an adopted member is its instance root's publisher's");
+	if (!(strcmp(protect_owner_publisher(&t, 101, 1010), PUB_A) == 0 &&
+	      strcmp(protect_owner_publisher(&t, 201, 2010), PUB_B) == 0))
+		FAIL("expected: strcmp(protect_owner_publisher(&t, 101, "
+		     "1010), PUB_A) == 0 && "
+		     "strcmp(protect_owner_publisher(&t, 201, 2010), PUB_B) "
+		     "== 0");
+	TEST("a process named for no publisher, or never named, is no one's");
+	if (!(protect_owner_publisher(&t, 300, 3000)[0] == '\0' &&
+	      protect_owner_publisher(&t, 400, 4000)[0] == '\0'))
+		FAIL("expected: protect_owner_publisher(&t, 300, 3000)[0] == "
+		     "'\\0' && protect_owner_publisher(&t, 400, 4000)[0] == "
+		     "'\\0'");
+	TEST("a later process on the PID is not the earlier one's");
+	if (protect_owner_publisher(&t, 100, 1001)[0] != '\0')
+		FAIL("expected: protect_owner_publisher(&t, 100, 1001)[0] == "
+		     "'\\0'");
 
 	protect_owner_note(&t, 101, 1010, 101, 1010, PUB_B);
-	CHECK(strcmp(protect_owner_publisher(&t, 101, 1010), PUB_B) == 0,
-	      "a member that names itself for a publisher is that publisher's");
+	TEST("a member that names itself for a publisher is that publisher's");
+	if (strcmp(protect_owner_publisher(&t, 101, 1010), PUB_B) != 0)
+		FAIL("expected: strcmp(protect_owner_publisher(&t, 101, "
+		     "1010), PUB_B) == 0");
 	protect_owner_note(&t, 100, 1000, 100, 1000, PUB_B);
-	CHECK(strcmp(protect_owner_publisher(&t, 100, 1000), PUB_A) == 0,
-	      "a second name does not move a process to another publisher");
+	TEST("a second name does not move a process to another publisher");
+	if (strcmp(protect_owner_publisher(&t, 100, 1000), PUB_A) != 0)
+		FAIL("expected: strcmp(protect_owner_publisher(&t, 100, "
+		     "1000), PUB_A) == 0");
 
 	protect_owner_note(&t, 300, 3001, 300, 3001, PUB_A);
-	CHECK(t.n == 5 && strcmp(protect_owner_publisher(&t, 300, 3001),
-				 PUB_A) == 0,
-	      "a reused PID replaces the entry of the process it outlived");
+	TEST("a reused PID replaces the entry of the process it outlived");
+	if (!(t.n == 5 &&
+	      strcmp(protect_owner_publisher(&t, 300, 3001), PUB_A) == 0))
+		FAIL("expected: t.n == 5 && "
+		     "strcmp(protect_owner_publisher(&t, 300, 3001), PUB_A) "
+		     "== 0");
 
 	protect_owners_retain(&t, set + 1, 4);
-	CHECK(t.n == 5 && strcmp(protect_owner_publisher(&t, 201, 2010),
-				 PUB_B) == 0,
-	      "an exited root stays while a member of it is protected");
+	TEST("an exited root stays while a member of it is protected");
+	if (!(t.n == 5 &&
+	      strcmp(protect_owner_publisher(&t, 201, 2010), PUB_B) == 0))
+		FAIL("expected: t.n == 5 && "
+		     "strcmp(protect_owner_publisher(&t, 201, 2010), PUB_B) "
+		     "== 0");
 
 	protect_owners_retain(&t, set + 2, 2);
-	CHECK(t.n == 2 && !protect_owner_find(&t, 100, 1000) &&
-		      !protect_owner_find(&t, 101, 1010),
-	      "an entry no protected process needs is dropped");
+	TEST("an entry no protected process needs is dropped");
+	if (!(t.n == 2 && !protect_owner_find(&t, 100, 1000) &&
+	      !protect_owner_find(&t, 101, 1010)))
+		FAIL("expected: t.n == 2 && !protect_owner_find(&t, 100, "
+		     "1000) && !protect_owner_find(&t, 101, 1010)");
 
 	t.n = t.cap;
-	CHECK(protect_owner_note(&t, 999, 1, 999, 1, PUB_A) == -ENOSPC,
-	      "a full table refuses an entry");
+	TEST("a full table refuses an entry");
+	if (protect_owner_note(&t, 999, 1, 999, 1, PUB_A) != -ENOSPC)
+		FAIL("expected: protect_owner_note(&t, 999, 1, 999, 1, PUB_A) "
+		     "== -ENOSPC");
 }
 
 int main(void)
@@ -201,7 +225,7 @@ int main(void)
 	int out_count = 0;
 	int ret;
 
-	printf("=== protected-PID reap tests ===\n\n");
+	test_begin("protect pids");
 
 	{
 		const uint32_t set[] = { 10, 20, 30 };
@@ -210,8 +234,9 @@ int main(void)
 
 		ret = protect_pids_reap(set, 3, fake_alive, &fs, out,
 					&out_count);
-		CHECK(ret == 0 && out_count == 3,
-		      "a set where every process is running is left alone");
+		TEST("a set where every process is running is left alone");
+		if (!(ret == 0 && out_count == 3))
+			FAIL("expected: ret == 0 && out_count == 3");
 	}
 
 	{
@@ -221,9 +246,11 @@ int main(void)
 
 		ret = protect_pids_reap(set, 3, fake_alive, &fs, out,
 					&out_count);
-		CHECK(ret == 1 && out_count == 2 && out[0] == 10 &&
-			      out[1] == 30,
-		      "an exited process is dropped and the survivors keep their order");
+		TEST("an exited process is dropped and the survivors keep their order");
+		if (!(ret == 1 && out_count == 2 && out[0] == 10 &&
+		      out[1] == 30))
+			FAIL("expected: ret == 1 && out_count == 2 && out[0] == 10 && "
+			     "out[1] == 30");
 	}
 
 	{
@@ -233,8 +260,9 @@ int main(void)
 
 		ret = protect_pids_reap(set, 2, fake_alive, &fs, out,
 					&out_count);
-		CHECK(ret == 1 && out_count == 0,
-		      "a set whose every process has exited reaps to empty");
+		TEST("a set whose every process has exited reaps to empty");
+		if (!(ret == 1 && out_count == 0))
+			FAIL("expected: ret == 1 && out_count == 0");
 	}
 
 	{
@@ -242,8 +270,9 @@ int main(void)
 
 		ret = protect_pids_reap(NULL, 0, fake_alive, &fs, out,
 					&out_count);
-		CHECK(ret == 0 && out_count == 0,
-		      "an empty set reaps to empty");
+		TEST("an empty set reaps to empty");
+		if (!(ret == 0 && out_count == 0))
+			FAIL("expected: ret == 0 && out_count == 0");
 	}
 
 	/*
@@ -259,28 +288,35 @@ int main(void)
 
 		ret = protect_pids_reap(set, 1, fake_alive, &fs, out,
 					&out_count);
-		CHECK(ret == 0, "no reap reports no change");
+		TEST("no reap reports no change");
+		if (ret != 0)
+			FAIL("expected: ret == 0");
 
 		fs.live_count = 0;
 		ret = protect_pids_reap(set, 1, fake_alive, &fs, out,
 					&out_count);
-		CHECK(ret == 1, "a reap reports a change");
+		TEST("a reap reports a change");
+		if (ret != 1)
+			FAIL("expected: ret == 1");
 	}
 
 	{
 		const uint32_t set[] = { 1, 2 };
 		struct fake_procfs fs = { NULL, 0 };
 
-		CHECK(protect_pids_reap(set, 2, NULL, &fs, out, &out_count) < 0,
-		      "a missing liveness predicate is refused rather than assumed");
-		CHECK(protect_pids_reap(set, -1, fake_alive, &fs, out,
-					&out_count) < 0,
-		      "a negative count is refused");
+		TEST("a missing liveness predicate is refused rather than assumed");
+		if (protect_pids_reap(set, 2, NULL, &fs, out, &out_count) >= 0)
+			FAIL("expected: protect_pids_reap(set, 2, NULL, &fs, out, "
+			     "&out_count) < 0");
+		TEST("a negative count is refused");
+		if (protect_pids_reap(set, -1, fake_alive, &fs, out,
+				      &out_count) >= 0)
+			FAIL("expected: protect_pids_reap(set, -1, fake_alive, &fs, "
+			     "out, &out_count) < 0");
 	}
 
 	test_adopt();
 	test_owners();
 
-	printf("\n%s\n", g_failures ? "FAILURES" : "All tests passed");
-	return g_failures ? 1 : 0;
+	return test_end();
 }

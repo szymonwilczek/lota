@@ -11,24 +11,12 @@
  * Copyright (C) 2026 Szymon Wilczek
  */
 
-#include <stdio.h>
-
 #include "../include/lota.h"
+
+#include "test.h"
 
 /* PTRACE_MODE_READ from include/linux/ptrace.h, the other half of the pair */
 #define PTRACE_MODE_READ 0x01
-
-static int g_failures;
-
-#define CHECK(cond, msg)                                    \
-	do {                                                \
-		if (!(cond)) {                              \
-			fprintf(stderr, "FAIL: %s\n", msg); \
-			g_failures++;                       \
-		} else {                                    \
-			printf("PASS: %s\n", msg);          \
-		}                                           \
-	} while (0)
 
 #define DENIED(ptrace_mode, lota_mode, block, is_agent, is_protected)       \
 	lota_ptrace_denied((ptrace_mode), (lota_mode), (block), (is_agent), \
@@ -42,29 +30,40 @@ static int g_failures;
  */
 static void test_read_is_allowed_with_the_key_on(void)
 {
-	CHECK(!DENIED(PTRACE_MODE_READ, LOTA_MODE_ENFORCE, 1, 0, 0),
-	      "a read of an unprotected task is allowed with block_ptrace on");
-	CHECK(!DENIED(0, LOTA_MODE_ENFORCE, 1, 0, 0),
-	      "an access asking for neither flag is not an attach");
+	TEST("a read of an unprotected task is allowed with block_ptrace on");
+	if (DENIED(PTRACE_MODE_READ, LOTA_MODE_ENFORCE, 1, 0, 0))
+		FAIL("expected: !DENIED(PTRACE_MODE_READ, LOTA_MODE_ENFORCE, "
+		     "1, 0, 0)");
+	TEST("an access asking for neither flag is not an attach");
+	if (DENIED(0, LOTA_MODE_ENFORCE, 1, 0, 0))
+		FAIL("expected: !DENIED(0, LOTA_MODE_ENFORCE, 1, 0, 0)");
 }
 
 /* The half the key is named for */
 static void test_attach_is_refused_with_the_key_on(void)
 {
-	CHECK(DENIED(LOTA_PTRACE_MODE_ATTACH, LOTA_MODE_ENFORCE, 1, 0, 0),
-	      "an attach on an unprotected task is refused with block_ptrace on");
-	CHECK(DENIED(LOTA_PTRACE_MODE_ATTACH | PTRACE_MODE_READ,
-		     LOTA_MODE_ENFORCE, 1, 0, 0),
-	      "an attach that also asks to read is still an attach");
+	TEST("an attach on an unprotected task is refused with block_ptrace on");
+	if (!DENIED(LOTA_PTRACE_MODE_ATTACH, LOTA_MODE_ENFORCE, 1, 0, 0))
+		FAIL("expected: DENIED(LOTA_PTRACE_MODE_ATTACH, "
+		     "LOTA_MODE_ENFORCE, 1, 0, 0)");
+	TEST("an attach that also asks to read is still an attach");
+	if (!DENIED(LOTA_PTRACE_MODE_ATTACH | PTRACE_MODE_READ,
+		    LOTA_MODE_ENFORCE, 1, 0, 0))
+		FAIL("expected: DENIED(LOTA_PTRACE_MODE_ATTACH | "
+		     "PTRACE_MODE_READ, LOTA_MODE_ENFORCE, 1, 0, 0)");
 }
 
 /* Turning the key off leaves both modes to the kernel */
 static void test_the_key_off_refuses_nothing(void)
 {
-	CHECK(!DENIED(LOTA_PTRACE_MODE_ATTACH, LOTA_MODE_ENFORCE, 0, 0, 0),
-	      "an attach is allowed with block_ptrace off");
-	CHECK(!DENIED(PTRACE_MODE_READ, LOTA_MODE_ENFORCE, 0, 0, 0),
-	      "a read is allowed with block_ptrace off");
+	TEST("an attach is allowed with block_ptrace off");
+	if (DENIED(LOTA_PTRACE_MODE_ATTACH, LOTA_MODE_ENFORCE, 0, 0, 0))
+		FAIL("expected: !DENIED(LOTA_PTRACE_MODE_ATTACH, "
+		     "LOTA_MODE_ENFORCE, 0, 0, 0)");
+	TEST("a read is allowed with block_ptrace off");
+	if (DENIED(PTRACE_MODE_READ, LOTA_MODE_ENFORCE, 0, 0, 0))
+		FAIL("expected: !DENIED(PTRACE_MODE_READ, LOTA_MODE_ENFORCE, "
+		     "0, 0, 0)");
 }
 
 /*
@@ -73,10 +72,14 @@ static void test_the_key_off_refuses_nothing(void)
  */
 static void test_the_global_rule_is_enforce_only(void)
 {
-	CHECK(!DENIED(LOTA_PTRACE_MODE_ATTACH, LOTA_MODE_MONITOR, 1, 0, 0),
-	      "monitor mode refuses no attach on an unprotected task");
-	CHECK(!DENIED(PTRACE_MODE_READ, LOTA_MODE_MONITOR, 1, 0, 0),
-	      "monitor mode refuses no read on an unprotected task");
+	TEST("monitor mode refuses no attach on an unprotected task");
+	if (DENIED(LOTA_PTRACE_MODE_ATTACH, LOTA_MODE_MONITOR, 1, 0, 0))
+		FAIL("expected: !DENIED(LOTA_PTRACE_MODE_ATTACH, "
+		     "LOTA_MODE_MONITOR, 1, 0, 0)");
+	TEST("monitor mode refuses no read on an unprotected task");
+	if (DENIED(PTRACE_MODE_READ, LOTA_MODE_MONITOR, 1, 0, 0))
+		FAIL("expected: !DENIED(PTRACE_MODE_READ, LOTA_MODE_MONITOR, "
+		     "1, 0, 0)");
 }
 
 /*
@@ -86,34 +89,52 @@ static void test_the_global_rule_is_enforce_only(void)
  */
 static void test_a_protected_target_refuses_both_modes(void)
 {
-	CHECK(DENIED(PTRACE_MODE_READ, LOTA_MODE_ENFORCE, 1, 0, 1),
-	      "a read of a protected task is refused");
-	CHECK(DENIED(LOTA_PTRACE_MODE_ATTACH, LOTA_MODE_ENFORCE, 1, 0, 1),
-	      "an attach on a protected task is refused");
-	CHECK(DENIED(PTRACE_MODE_READ, LOTA_MODE_ENFORCE, 0, 0, 1),
-	      "a protected task is refused with block_ptrace off");
-	CHECK(DENIED(PTRACE_MODE_READ, LOTA_MODE_MONITOR, 0, 0, 1),
-	      "a protected task is refused in monitor mode");
+	TEST("a read of a protected task is refused");
+	if (!DENIED(PTRACE_MODE_READ, LOTA_MODE_ENFORCE, 1, 0, 1))
+		FAIL("expected: DENIED(PTRACE_MODE_READ, LOTA_MODE_ENFORCE, "
+		     "1, 0, 1)");
+	TEST("an attach on a protected task is refused");
+	if (!DENIED(LOTA_PTRACE_MODE_ATTACH, LOTA_MODE_ENFORCE, 1, 0, 1))
+		FAIL("expected: DENIED(LOTA_PTRACE_MODE_ATTACH, "
+		     "LOTA_MODE_ENFORCE, 1, 0, 1)");
+	TEST("a protected task is refused with block_ptrace off");
+	if (!DENIED(PTRACE_MODE_READ, LOTA_MODE_ENFORCE, 0, 0, 1))
+		FAIL("expected: DENIED(PTRACE_MODE_READ, LOTA_MODE_ENFORCE, "
+		     "0, 0, 1)");
+	TEST("a protected task is refused in monitor mode");
+	if (!DENIED(PTRACE_MODE_READ, LOTA_MODE_MONITOR, 0, 0, 1))
+		FAIL("expected: DENIED(PTRACE_MODE_READ, LOTA_MODE_MONITOR, "
+		     "0, 0, 1)");
 }
 
 /* Monitor lifts policy, and isolation of a protected task is not policy */
 static void test_monitor_keeps_the_protected_rule(void)
 {
-	CHECK(DENIED(PTRACE_MODE_READ, LOTA_MODE_MONITOR, 1, 0, 1),
-	      "monitor refuses a read of a protected task");
-	CHECK(DENIED(LOTA_PTRACE_MODE_ATTACH, LOTA_MODE_MONITOR, 0, 0, 1),
-	      "monitor refuses an attach on a protected task");
+	TEST("monitor refuses a read of a protected task");
+	if (!DENIED(PTRACE_MODE_READ, LOTA_MODE_MONITOR, 1, 0, 1))
+		FAIL("expected: DENIED(PTRACE_MODE_READ, LOTA_MODE_MONITOR, "
+		     "1, 0, 1)");
+	TEST("monitor refuses an attach on a protected task");
+	if (!DENIED(LOTA_PTRACE_MODE_ATTACH, LOTA_MODE_MONITOR, 0, 0, 1))
+		FAIL("expected: DENIED(LOTA_PTRACE_MODE_ATTACH, "
+		     "LOTA_MODE_MONITOR, 0, 0, 1)");
 }
 
 /* The agent is never a target, in any mode, whatever the key says */
 static void test_the_agent_is_never_a_target(void)
 {
-	CHECK(DENIED(PTRACE_MODE_READ, LOTA_MODE_ENFORCE, 0, 1, 0),
-	      "a read of the agent is refused with block_ptrace off");
-	CHECK(DENIED(LOTA_PTRACE_MODE_ATTACH, LOTA_MODE_MONITOR, 0, 1, 0),
-	      "an attach on the agent is refused in monitor mode");
-	CHECK(DENIED(PTRACE_MODE_READ, LOTA_MODE_MONITOR, 0, 1, 0),
-	      "a read of the agent is refused in monitor mode");
+	TEST("a read of the agent is refused with block_ptrace off");
+	if (!DENIED(PTRACE_MODE_READ, LOTA_MODE_ENFORCE, 0, 1, 0))
+		FAIL("expected: DENIED(PTRACE_MODE_READ, LOTA_MODE_ENFORCE, "
+		     "0, 1, 0)");
+	TEST("an attach on the agent is refused in monitor mode");
+	if (!DENIED(LOTA_PTRACE_MODE_ATTACH, LOTA_MODE_MONITOR, 0, 1, 0))
+		FAIL("expected: DENIED(LOTA_PTRACE_MODE_ATTACH, "
+		     "LOTA_MODE_MONITOR, 0, 1, 0)");
+	TEST("a read of the agent is refused in monitor mode");
+	if (!DENIED(PTRACE_MODE_READ, LOTA_MODE_MONITOR, 0, 1, 0))
+		FAIL("expected: DENIED(PTRACE_MODE_READ, LOTA_MODE_MONITOR, "
+		     "0, 1, 0)");
 }
 
 /*
@@ -122,22 +143,32 @@ static void test_the_agent_is_never_a_target(void)
  */
 static void test_the_agent_read_exemption(void)
 {
-	CHECK(lota_ptrace_agent_read_exempt(PTRACE_MODE_READ, 1),
-	      "the agent is exempt for a read");
-	CHECK(!lota_ptrace_agent_read_exempt(LOTA_PTRACE_MODE_ATTACH, 1),
-	      "the agent is not exempt for an attach");
-	CHECK(!lota_ptrace_agent_read_exempt(PTRACE_MODE_READ, 0),
-	      "a task that is not the agent gets no exemption");
+	TEST("the agent is exempt for a read");
+	if (!lota_ptrace_agent_read_exempt(PTRACE_MODE_READ, 1))
+		FAIL("expected: lota_ptrace_agent_read_exempt(PTRACE_MODE_READ, "
+		     "1)");
+	TEST("the agent is not exempt for an attach");
+	if (lota_ptrace_agent_read_exempt(LOTA_PTRACE_MODE_ATTACH, 1))
+		FAIL("expected: !lota_ptrace_agent_read_exempt(LOTA_PTRACE_MODE_ATTACH, "
+		     "1)");
+	TEST("a task that is not the agent gets no exemption");
+	if (lota_ptrace_agent_read_exempt(PTRACE_MODE_READ, 0))
+		FAIL("expected: !lota_ptrace_agent_read_exempt(PTRACE_MODE_READ, "
+		     "0)");
 }
 
 static void test_attach_is_recognised_by_its_flag(void)
 {
-	CHECK(lota_ptrace_is_attach(LOTA_PTRACE_MODE_ATTACH),
-	      "the attach flag is an attach");
-	CHECK(!lota_ptrace_is_attach(PTRACE_MODE_READ),
-	      "the read flag is not an attach");
-	CHECK(lota_ptrace_is_attach(LOTA_PTRACE_MODE_ATTACH | PTRACE_MODE_READ),
-	      "an access carrying both flags is an attach");
+	TEST("the attach flag is an attach");
+	if (!lota_ptrace_is_attach(LOTA_PTRACE_MODE_ATTACH))
+		FAIL("expected: lota_ptrace_is_attach(LOTA_PTRACE_MODE_ATTACH)");
+	TEST("the read flag is not an attach");
+	if (lota_ptrace_is_attach(PTRACE_MODE_READ))
+		FAIL("expected: !lota_ptrace_is_attach(PTRACE_MODE_READ)");
+	TEST("an access carrying both flags is an attach");
+	if (!lota_ptrace_is_attach(LOTA_PTRACE_MODE_ATTACH | PTRACE_MODE_READ))
+		FAIL("expected: lota_ptrace_is_attach(LOTA_PTRACE_MODE_ATTACH "
+		     "| PTRACE_MODE_READ)");
 }
 
 /* CLONE_VM | CLONE_VFORK, what posix_spawn() passes */
@@ -151,22 +182,29 @@ static void test_attach_is_recognised_by_its_flag(void)
  */
 static void test_a_child_inherits_protection(void)
 {
-	CHECK(lota_clone_inherits_protection(0, 1),
-	      "a fork of a protected process is protected");
-	CHECK(lota_clone_inherits_protection(SPAWN_FLAGS, 1),
-	      "a posix_spawn() child of a protected process is protected");
-	CHECK(!lota_clone_inherits_protection(0, 0),
-	      "a fork of an unprotected process is not protected");
-	CHECK(!lota_clone_inherits_protection(SPAWN_FLAGS, 0),
-	      "a spawn of an unprotected process is not protected");
+	TEST("a fork of a protected process is protected");
+	if (!lota_clone_inherits_protection(0, 1))
+		FAIL("expected: lota_clone_inherits_protection(0, 1)");
+	TEST("a posix_spawn() child of a protected process is protected");
+	if (!lota_clone_inherits_protection(SPAWN_FLAGS, 1))
+		FAIL("expected: lota_clone_inherits_protection(SPAWN_FLAGS, 1)");
+	TEST("a fork of an unprotected process is not protected");
+	if (lota_clone_inherits_protection(0, 0))
+		FAIL("expected: !lota_clone_inherits_protection(0, 0)");
+	TEST("a spawn of an unprotected process is not protected");
+	if (lota_clone_inherits_protection(SPAWN_FLAGS, 0))
+		FAIL("expected: !lota_clone_inherits_protection(SPAWN_FLAGS, "
+		     "0)");
 }
 
 /* A thread is covered through its leader and takes no mark of its own */
 static void test_a_thread_takes_no_mark(void)
 {
-	CHECK(!lota_clone_inherits_protection(
-		      THREAD_SHARE_FLAGS | LOTA_CLONE_THREAD, 1),
-	      "a thread of a protected process takes no mark");
+	TEST("a thread of a protected process takes no mark");
+	if (lota_clone_inherits_protection(
+		    THREAD_SHARE_FLAGS | LOTA_CLONE_THREAD, 1))
+		FAIL("expected: !lota_clone_inherits_protection( "
+		     "THREAD_SHARE_FLAGS | LOTA_CLONE_THREAD, 1)");
 }
 
 /*
@@ -175,28 +213,42 @@ static void test_a_thread_takes_no_mark(void)
  */
 static void test_a_tracer_from_outside_stops_creation(void)
 {
-	CHECK(lota_clone_refused(1, 1, 0),
-	      "a protected process traced from outside creates nothing");
-	CHECK(!lota_clone_refused(1, 1, 1),
-	      "a protected process traced from inside its instance creates");
-	CHECK(!lota_clone_refused(1, 0, 0),
-	      "an untraced protected process creates");
-	CHECK(!lota_clone_refused(0, 1, 0),
-	      "a traced unprotected process is not this rule's business");
+	TEST("a protected process traced from outside creates nothing");
+	if (!lota_clone_refused(1, 1, 0))
+		FAIL("expected: lota_clone_refused(1, 1, 0)");
+	TEST("a protected process traced from inside its instance creates");
+	if (lota_clone_refused(1, 1, 1))
+		FAIL("expected: !lota_clone_refused(1, 1, 1)");
+	TEST("an untraced protected process creates");
+	if (lota_clone_refused(1, 0, 0))
+		FAIL("expected: !lota_clone_refused(1, 0, 0)");
+	TEST("a traced unprotected process is not this rule's business");
+	if (lota_clone_refused(0, 1, 0))
+		FAIL("expected: !lota_clone_refused(0, 1, 0)");
 }
 
 static void test_access_inside_an_instance(void)
 {
-	CHECK(lota_inside_instance(1, 100, 5000, 1, 100, 5000),
-	      "two processes of one instance are inside it");
-	CHECK(!lota_inside_instance(1, 100, 5000, 1, 200, 5000),
-	      "another instance's process is outside");
-	CHECK(!lota_inside_instance(1, 100, 5000, 1, 100, 6000),
-	      "a recycled root tgid names another instance");
-	CHECK(!lota_inside_instance(0, 100, 5000, 1, 100, 5000),
-	      "an unprotected actor is outside every instance");
-	CHECK(!lota_inside_instance(1, 100, 5000, 0, 100, 5000),
-	      "an unprotected target is in no instance");
+	TEST("two processes of one instance are inside it");
+	if (!lota_inside_instance(1, 100, 5000, 1, 100, 5000))
+		FAIL("expected: lota_inside_instance(1, 100, 5000, 1, 100, "
+		     "5000)");
+	TEST("another instance's process is outside");
+	if (lota_inside_instance(1, 100, 5000, 1, 200, 5000))
+		FAIL("expected: !lota_inside_instance(1, 100, 5000, 1, 200, "
+		     "5000)");
+	TEST("a recycled root tgid names another instance");
+	if (lota_inside_instance(1, 100, 5000, 1, 100, 6000))
+		FAIL("expected: !lota_inside_instance(1, 100, 5000, 1, 100, "
+		     "6000)");
+	TEST("an unprotected actor is outside every instance");
+	if (lota_inside_instance(0, 100, 5000, 1, 100, 5000))
+		FAIL("expected: !lota_inside_instance(0, 100, 5000, 1, 100, "
+		     "5000)");
+	TEST("an unprotected target is in no instance");
+	if (lota_inside_instance(1, 100, 5000, 0, 100, 5000))
+		FAIL("expected: !lota_inside_instance(1, 100, 5000, 0, 100, "
+		     "5000)");
 }
 
 /* the hook passes a target inside the actor's instance as unprotected */
@@ -204,12 +256,16 @@ static void test_an_attach_inside_the_instance_is_allowed(void)
 {
 	int inside = lota_inside_instance(1, 100, 5000, 1, 100, 5000);
 
-	CHECK(!lota_ptrace_denied(LOTA_PTRACE_MODE_ATTACH, LOTA_MODE_MONITOR, 0,
-				  0, !inside),
-	      "an attach inside the instance is not refused");
-	CHECK(lota_ptrace_denied(LOTA_PTRACE_MODE_ATTACH, LOTA_MODE_MONITOR, 0,
-				 1, !inside),
-	      "the agent stays refused to every instance");
+	TEST("an attach inside the instance is not refused");
+	if (lota_ptrace_denied(LOTA_PTRACE_MODE_ATTACH, LOTA_MODE_MONITOR, 0, 0,
+			       !inside))
+		FAIL("expected: !lota_ptrace_denied(LOTA_PTRACE_MODE_ATTACH, "
+		     "LOTA_MODE_MONITOR, 0, 0, !inside)");
+	TEST("the agent stays refused to every instance");
+	if (!lota_ptrace_denied(LOTA_PTRACE_MODE_ATTACH, LOTA_MODE_MONITOR, 0,
+				1, !inside))
+		FAIL("expected: lota_ptrace_denied(LOTA_PTRACE_MODE_ATTACH, "
+		     "LOTA_MODE_MONITOR, 0, 1, !inside)");
 }
 
 #define PROC_NAME(s) (s), (unsigned int)(sizeof(s) - 1)
@@ -217,30 +273,44 @@ static void test_an_attach_inside_the_instance_is_allowed(void)
 /* /proc entries a CAP_PERFMON reader would get past the ptrace verdict */
 static void test_proc_entries_that_read_memory(void)
 {
-	CHECK(lota_proc_entry_reads_mm(PROC_NAME("maps")), "maps reads memory");
-	CHECK(lota_proc_entry_reads_mm(PROC_NAME("smaps_rollup")),
-	      "smaps_rollup reads memory");
-	CHECK(lota_proc_entry_reads_mm(PROC_NAME("pagemap")),
-	      "pagemap reads memory");
-	CHECK(lota_proc_entry_reads_mm(PROC_NAME("environ")),
-	      "environ reads memory");
-	CHECK(lota_proc_entry_reads_mm(PROC_NAME("auxv")), "auxv reads memory");
-	CHECK(lota_proc_entry_reads_mm(PROC_NAME("map_files")),
-	      "map_files lists the mappings");
-	CHECK(!lota_proc_entry_reads_mm(PROC_NAME("status")),
-	      "status only names the process");
-	CHECK(!lota_proc_entry_reads_mm(PROC_NAME("cmdline")),
-	      "cmdline stays readable for ps");
-	CHECK(!lota_proc_entry_reads_mm(PROC_NAME("cgroup")),
-	      "cgroup stays readable for systemd");
-	CHECK(!lota_proc_entry_reads_mm("mapsx", 4 + 1),
-	      "a longer name is another entry");
-	CHECK(!lota_proc_entry_reads_mm("map", 3), "a prefix is another entry");
+	TEST("maps reads memory");
+	if (!lota_proc_entry_reads_mm(PROC_NAME("maps")))
+		FAIL("expected: lota_proc_entry_reads_mm(PROC_NAME(\"maps\"))");
+	TEST("smaps_rollup reads memory");
+	if (!lota_proc_entry_reads_mm(PROC_NAME("smaps_rollup")))
+		FAIL("expected: lota_proc_entry_reads_mm(PROC_NAME(\"smaps_rollup\"))");
+	TEST("pagemap reads memory");
+	if (!lota_proc_entry_reads_mm(PROC_NAME("pagemap")))
+		FAIL("expected: lota_proc_entry_reads_mm(PROC_NAME(\"pagemap\"))");
+	TEST("environ reads memory");
+	if (!lota_proc_entry_reads_mm(PROC_NAME("environ")))
+		FAIL("expected: lota_proc_entry_reads_mm(PROC_NAME(\"environ\"))");
+	TEST("auxv reads memory");
+	if (!lota_proc_entry_reads_mm(PROC_NAME("auxv")))
+		FAIL("expected: lota_proc_entry_reads_mm(PROC_NAME(\"auxv\"))");
+	TEST("map_files lists the mappings");
+	if (!lota_proc_entry_reads_mm(PROC_NAME("map_files")))
+		FAIL("expected: lota_proc_entry_reads_mm(PROC_NAME(\"map_files\"))");
+	TEST("status only names the process");
+	if (lota_proc_entry_reads_mm(PROC_NAME("status")))
+		FAIL("expected: !lota_proc_entry_reads_mm(PROC_NAME(\"status\"))");
+	TEST("cmdline stays readable for ps");
+	if (lota_proc_entry_reads_mm(PROC_NAME("cmdline")))
+		FAIL("expected: !lota_proc_entry_reads_mm(PROC_NAME(\"cmdline\"))");
+	TEST("cgroup stays readable for systemd");
+	if (lota_proc_entry_reads_mm(PROC_NAME("cgroup")))
+		FAIL("expected: !lota_proc_entry_reads_mm(PROC_NAME(\"cgroup\"))");
+	TEST("a longer name is another entry");
+	if (lota_proc_entry_reads_mm("mapsx", 4 + 1))
+		FAIL("expected: !lota_proc_entry_reads_mm(\"mapsx\", 4 + 1)");
+	TEST("a prefix is another entry");
+	if (lota_proc_entry_reads_mm("map", 3))
+		FAIL("expected: !lota_proc_entry_reads_mm(\"map\", 3)");
 }
 
 int main(void)
 {
-	printf("=== ptrace policy tests ===\n");
+	test_begin("ptrace policy");
 	test_proc_entries_that_read_memory();
 	test_read_is_allowed_with_the_key_on();
 	test_attach_is_refused_with_the_key_on();
@@ -257,10 +327,5 @@ int main(void)
 	test_access_inside_an_instance();
 	test_an_attach_inside_the_instance_is_allowed();
 
-	if (g_failures) {
-		fprintf(stderr, "\n%d test(s) failed\n", g_failures);
-		return 1;
-	}
-	printf("\nAll ptrace policy tests passed\n");
-	return 0;
+	return test_end();
 }

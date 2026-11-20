@@ -28,17 +28,7 @@
 #include "../src/agent/attest.h"
 #include "../src/agent/attest_targets.h"
 
-static int g_failures;
-
-#define CHECK(cond, msg)                                    \
-	do {                                                \
-		if (!(cond)) {                              \
-			fprintf(stderr, "FAIL: %s\n", msg); \
-			g_failures++;                       \
-		} else {                                    \
-			printf("PASS: %s\n", msg);          \
-		}                                           \
-	} while (0)
+#include "test.h"
 
 /* self-signed anchor, so target can resolve real profile identity */
 static int write_anchor(const char *path)
@@ -94,35 +84,55 @@ static void test_single_verifier(void)
 
 	memset(&cfg, 0, sizeof(cfg));
 
-	CHECK(attest_targets_build(&cfg, "verifier.example", 8443, NULL, 300,
+	TEST("no profiles leaves the single verifier as the only target");
+	if (!(attest_targets_build(&cfg, "verifier.example", 8443, NULL, 300,
 				   targets, LOTA_CONFIG_MAX_PROFILES,
 				   &count) == 0 &&
-		      count == 1,
-	      "no profiles leaves the single verifier as the only target");
-	CHECK(strcmp(targets[0].server, "verifier.example") == 0 &&
-		      targets[0].port == 8443 && targets[0].interval == 300,
-	      "the single target carries the caller's endpoint and cadence");
-	CHECK(!targets[0].has_profile && targets[0].profile_error == 0,
-	      "no anchor is not an error, it is a host without a publisher");
-	CHECK(!targets[0].session_gated,
-	      "the single verifier keeps the continuous stream it always had");
-	CHECK(strcmp(targets[0].label, "verifier.example:8443") == 0,
-	      "the target names itself the way its log lines will");
+	      count == 1))
+		FAIL("expected: attest_targets_build(&cfg, "
+		     "\"verifier.example\", 8443, NULL, 300, targets, "
+		     "LOTA_CONFIG_MAX_PROFILES, &count) == 0 && count == 1");
+	TEST("the single target carries the caller's endpoint and cadence");
+	if (!(strcmp(targets[0].server, "verifier.example") == 0 &&
+	      targets[0].port == 8443 && targets[0].interval == 300))
+		FAIL("expected: strcmp(targets[0].server, "
+		     "\"verifier.example\") == 0 && targets[0].port == 8443 "
+		     "&& targets[0].interval == 300");
+	TEST("no anchor is not an error, it is a host without a publisher");
+	if (!(!targets[0].has_profile && targets[0].profile_error == 0))
+		FAIL("expected: !targets[0].has_profile && "
+		     "targets[0].profile_error == 0");
+	TEST("the single verifier keeps the continuous stream it always had");
+	if (targets[0].session_gated)
+		FAIL("expected: !targets[0].session_gated");
+	TEST("the target names itself the way its log lines will");
+	if (strcmp(targets[0].label, "verifier.example:8443") != 0)
+		FAIL("expected: strcmp(targets[0].label, "
+		     "\"verifier.example:8443\") == 0");
 
-	CHECK(attest_targets_build(&cfg, NULL, 8443, NULL, 300, targets,
-				   LOTA_CONFIG_MAX_PROFILES, &count) == -EINVAL,
-	      "a single target with no verifier is refused");
+	TEST("a single target with no verifier is refused");
+	if (attest_targets_build(&cfg, NULL, 8443, NULL, 300, targets,
+				 LOTA_CONFIG_MAX_PROFILES, &count) != -EINVAL)
+		FAIL("expected: attest_targets_build(&cfg, NULL, 8443, NULL, "
+		     "300, targets, LOTA_CONFIG_MAX_PROFILES, &count) == "
+		     "-EINVAL");
 	/* what the CLI hands over when neither a file nor --server named one */
-	CHECK(attest_targets_build(&cfg, "", 8443, NULL, 300, targets,
-				   LOTA_CONFIG_MAX_PROFILES, &count) == -EINVAL,
-	      "an empty verifier name is no verifier either");
+	TEST("an empty verifier name is no verifier either");
+	if (attest_targets_build(&cfg, "", 8443, NULL, 300, targets,
+				 LOTA_CONFIG_MAX_PROFILES, &count) != -EINVAL)
+		FAIL("expected: attest_targets_build(&cfg, \"\", 8443, NULL, "
+		     "300, targets, LOTA_CONFIG_MAX_PROFILES, &count) == "
+		     "-EINVAL");
 
 	/* NULL config is the same case as config with no profiles */
-	CHECK(attest_targets_build(NULL, "verifier.example", 8443, NULL, 300,
+	TEST("no config at all still yields the single target");
+	if (!(attest_targets_build(NULL, "verifier.example", 8443, NULL, 300,
 				   targets, LOTA_CONFIG_MAX_PROFILES,
 				   &count) == 0 &&
-		      count == 1,
-	      "no config at all still yields the single target");
+	      count == 1))
+		FAIL("expected: attest_targets_build(NULL, "
+		     "\"verifier.example\", 8443, NULL, 300, targets, "
+		     "LOTA_CONFIG_MAX_PROFILES, &count) == 0 && count == 1");
 }
 
 static void test_profiles_replace_the_single_verifier(void)
@@ -135,7 +145,9 @@ static void test_profiles_replace_the_single_verifier(void)
 	snprintf(anchor, sizeof(anchor), "/tmp/lota-targets-anchor.%d.der",
 		 getpid());
 	if (write_anchor(anchor) != 0) {
-		CHECK(0, "write an anchor");
+		TEST("write an anchor");
+		if (!0)
+			FAIL("expected: 0");
 		return;
 	}
 
@@ -164,38 +176,54 @@ static void test_profiles_replace_the_single_verifier(void)
 	/* profile B states no cadence and inherits the host's */
 	cfg.profiles[1].attest_interval = 0;
 
-	CHECK(attest_targets_build(&cfg, "host-level.example", 1234, NULL, 300,
+	TEST("the profile list is the target list");
+	if (!(attest_targets_build(&cfg, "host-level.example", 1234, NULL, 300,
 				   targets, LOTA_CONFIG_MAX_PROFILES,
 				   &count) == 0 &&
-		      count == 2,
-	      "the profile list is the target list");
-	CHECK(strcmp(targets[0].server, "a.example") == 0 &&
-		      targets[0].port == 8443 &&
-		      strcmp(targets[1].server, "b.example") == 0 &&
-		      targets[1].port == 9443,
-	      "the host-level verifier is replaced, not added to");
-	CHECK(targets[0].interval == 60,
-	      "a profile keeps the cadence it states");
-	CHECK(targets[1].interval == 300,
-	      "a profile that states none inherits the host's");
+	      count == 2))
+		FAIL("expected: attest_targets_build(&cfg, "
+		     "\"host-level.example\", 1234, NULL, 300, targets, "
+		     "LOTA_CONFIG_MAX_PROFILES, &count) == 0 && count == 2");
+	TEST("the host-level verifier is replaced, not added to");
+	if (!(strcmp(targets[0].server, "a.example") == 0 &&
+	      targets[0].port == 8443 &&
+	      strcmp(targets[1].server, "b.example") == 0 &&
+	      targets[1].port == 9443))
+		FAIL("expected: strcmp(targets[0].server, \"a.example\") == 0 "
+		     "&& targets[0].port == 8443 && strcmp(targets[1].server, "
+		     "\"b.example\") == 0 && targets[1].port == 9443");
+	TEST("a profile keeps the cadence it states");
+	if (targets[0].interval != 60)
+		FAIL("expected: targets[0].interval == 60");
+	TEST("a profile that states none inherits the host's");
+	if (targets[1].interval != 300)
+		FAIL("expected: targets[1].interval == 300");
 
-	CHECK(targets[0].has_profile && targets[0].profile_error == 0 &&
-		      strlen(targets[0].paths.id) == LOTA_PROFILE_ID_LEN - 1,
-	      "a readable anchor resolves the publisher profile");
-	CHECK(!targets[1].has_profile && targets[1].profile_error == -ENOENT,
-	      "an unreadable anchor still reports, and says why it has no "
-	      "profile");
+	TEST("a readable anchor resolves the publisher profile");
+	if (!(targets[0].has_profile && targets[0].profile_error == 0 &&
+	      strlen(targets[0].paths.id) == LOTA_PROFILE_ID_LEN - 1))
+		FAIL("expected: targets[0].has_profile && "
+		     "targets[0].profile_error == 0 && "
+		     "strlen(targets[0].paths.id) == LOTA_PROFILE_ID_LEN - 1");
+	TEST("an unreadable anchor still reports, and says why it has no "
+	     "profile");
+	if (!(!targets[1].has_profile && targets[1].profile_error == -ENOENT))
+		FAIL("expected: !targets[1].has_profile && "
+		     "targets[1].profile_error == -ENOENT");
 
 	/*
 	 * CA travels with the target because enrollment is runtime action:
 	 * host that meets publisher for the first time while title is running
 	 * has to know where to enroll without being told again.
 	 */
-	CHECK(strcmp(targets[0].ca, "ca.a.example") == 0 &&
-		      targets[0].ca_port == 8444,
-	      "a target carries the CA its publisher enrolls against");
-	CHECK(targets[1].ca[0] == '\0',
-	      "a profile that names no CA carries none");
+	TEST("a target carries the CA its publisher enrolls against");
+	if (!(strcmp(targets[0].ca, "ca.a.example") == 0 &&
+	      targets[0].ca_port == 8444))
+		FAIL("expected: strcmp(targets[0].ca, \"ca.a.example\") == 0 "
+		     "&& targets[0].ca_port == 8444");
+	TEST("a profile that names no CA carries none");
+	if (targets[1].ca[0] != '\0')
+		FAIL("expected: targets[1].ca[0] == '\\0'");
 
 	/*
 	 * Reporting is exfiltration, so publisher gets it only while title of
@@ -204,8 +232,10 @@ static void test_profiles_replace_the_single_verifier(void)
 	 * the single-verifier path keeps it, because that is the deployment
 	 * the stream was the feature for
 	 */
-	CHECK(targets[0].session_gated && !targets[1].session_gated,
-	      "each profile carries its own reporting mode");
+	TEST("each profile carries its own reporting mode");
+	if (!(targets[0].session_gated && !targets[1].session_gated))
+		FAIL("expected: targets[0].session_gated && "
+		     "!targets[1].session_gated");
 
 	unlink(anchor);
 }
@@ -233,22 +263,32 @@ static void test_token_only_publisher(void)
 		 "/tmp/lota-targets-absent.XXXXXX");
 	cfg.profiles[0].token_only = true;
 
-	CHECK(attest_targets_build(&cfg, "host-level.example", 1234, NULL, 300,
+	TEST("a publisher with no verifier is still a target");
+	if (!(attest_targets_build(&cfg, "host-level.example", 1234, NULL, 300,
 				   targets, LOTA_CONFIG_MAX_PROFILES,
 				   &count) == 0 &&
-		      count == 1,
-	      "a publisher with no verifier is still a target");
-	CHECK(targets[0].token_only && targets[0].server[0] == '\0',
-	      "the target says it reports to nobody and names no verifier");
-	CHECK(strcmp(targets[0].ca, "ca.light.example") == 0 &&
-		      targets[0].ca_port == 8444,
-	      "the CA it enrolls against travels with it, since renewal does "
-	      "not stop");
-	CHECK(strstr(targets[0].label, "ca.light.example:8444") != NULL,
-	      "its log lines name the CA, there being no verifier to name");
-	CHECK(strstr(targets[0].label, "enrolled") == NULL,
-	      "the label names the configured CA without claiming the host "
-	      "enrolled there");
+	      count == 1))
+		FAIL("expected: attest_targets_build(&cfg, "
+		     "\"host-level.example\", 1234, NULL, 300, targets, "
+		     "LOTA_CONFIG_MAX_PROFILES, &count) == 0 && count == 1");
+	TEST("the target says it reports to nobody and names no verifier");
+	if (!(targets[0].token_only && targets[0].server[0] == '\0'))
+		FAIL("expected: targets[0].token_only && targets[0].server[0] "
+		     "== '\\0'");
+	TEST("the CA it enrolls against travels with it, since renewal does "
+	     "not stop");
+	if (!(strcmp(targets[0].ca, "ca.light.example") == 0 &&
+	      targets[0].ca_port == 8444))
+		FAIL("expected: strcmp(targets[0].ca, \"ca.light.example\") "
+		     "== 0 && targets[0].ca_port == 8444");
+	TEST("its log lines name the CA, there being no verifier to name");
+	if (strstr(targets[0].label, "ca.light.example:8444") == NULL)
+		FAIL("expected: strstr(targets[0].label, "
+		     "\"ca.light.example:8444\") != NULL");
+	TEST("the label names the configured CA without claiming the host "
+	     "enrolled there");
+	if (strstr(targets[0].label, "enrolled") != NULL)
+		FAIL("expected: strstr(targets[0].label, \"enrolled\") == NULL");
 }
 
 static void test_more_profiles_than_room(void)
@@ -265,10 +305,12 @@ static void test_more_profiles_than_room(void)
 		cfg.profiles[i].verifier_port = 8443;
 	}
 
-	CHECK(attest_targets_build(&cfg, NULL, 0, NULL, 300, targets, 2,
+	TEST("a list that does not fit is refused rather than truncated");
+	if (!(attest_targets_build(&cfg, NULL, 0, NULL, 300, targets, 2,
 				   &count) == -E2BIG &&
-		      count == 0,
-	      "a list that does not fit is refused rather than truncated");
+	      count == 0))
+		FAIL("expected: attest_targets_build(&cfg, NULL, 0, NULL, "
+		     "300, targets, 2, &count) == -E2BIG && count == 0");
 }
 
 /*
@@ -280,30 +322,35 @@ static void test_more_profiles_than_room(void)
  */
 static void test_effective_interval(void)
 {
-	CHECK(attest_effective_interval(0, 0, true) == 0,
-	      "a single verifier and no interval stays a one-shot");
-	CHECK(attest_effective_interval(0, 0, false) == DEFAULT_ATTEST_INTERVAL,
-	      "naming nothing runs the loop, which waits for a publisher");
-	CHECK(attest_effective_interval(0, 1, false) == DEFAULT_ATTEST_INTERVAL,
-	      "one publisher and no interval attests at the default cadence");
-	CHECK(attest_effective_interval(0, 8, true) == DEFAULT_ATTEST_INTERVAL,
-	      "several publishers and no interval do the same");
-	CHECK(attest_effective_interval(45, 3, false) == 45,
-	      "a configured cadence wins over the default");
-	CHECK(attest_effective_interval(45, 0, true) == 45,
-	      "a configured cadence runs the loop without profiles too");
+	TEST("a single verifier and no interval stays a one-shot");
+	if (attest_effective_interval(0, 0, true) != 0)
+		FAIL("expected: attest_effective_interval(0, 0, true) == 0");
+	TEST("naming nothing runs the loop, which waits for a publisher");
+	if (attest_effective_interval(0, 0, false) != DEFAULT_ATTEST_INTERVAL)
+		FAIL("expected: attest_effective_interval(0, 0, false) == "
+		     "DEFAULT_ATTEST_INTERVAL");
+	TEST("one publisher and no interval attests at the default cadence");
+	if (attest_effective_interval(0, 1, false) != DEFAULT_ATTEST_INTERVAL)
+		FAIL("expected: attest_effective_interval(0, 1, false) == "
+		     "DEFAULT_ATTEST_INTERVAL");
+	TEST("several publishers and no interval do the same");
+	if (attest_effective_interval(0, 8, true) != DEFAULT_ATTEST_INTERVAL)
+		FAIL("expected: attest_effective_interval(0, 8, true) == "
+		     "DEFAULT_ATTEST_INTERVAL");
+	TEST("a configured cadence wins over the default");
+	if (attest_effective_interval(45, 3, false) != 45)
+		FAIL("expected: attest_effective_interval(45, 3, false) == 45");
+	TEST("a configured cadence runs the loop without profiles too");
+	if (attest_effective_interval(45, 0, true) != 45)
+		FAIL("expected: attest_effective_interval(45, 0, true) == 45");
 }
 
 /* A verifier whose clock runs behind still accepts the latest token. */
-static void test_ceiling_leaves_the_clock_skew(void)
-{
-	long valid_in = MAX_ATTEST_INTERVAL + ATTEST_TOKEN_VALIDITY_SLACK_SEC;
-	long behind = LOTA_SERVER_MAX_CLOCK_SKEW_SEC;
-
-	CHECK(valid_in + behind <= LOTA_SERVER_MAX_TOKEN_AGE_SEC +
-					   LOTA_SERVER_MAX_CLOCK_SKEW_SEC,
-	      "a token at the ceiling passes a verifier a full skew behind");
-}
+_Static_assert(MAX_ATTEST_INTERVAL + ATTEST_TOKEN_VALIDITY_SLACK_SEC +
+			       LOTA_SERVER_MAX_CLOCK_SKEW_SEC <=
+		       LOTA_SERVER_MAX_TOKEN_AGE_SEC +
+			       LOTA_SERVER_MAX_CLOCK_SKEW_SEC,
+	       "a token at the ceiling passes a verifier a full skew behind");
 
 /*
  * A deployment (continuous attestation, lota-attest.service) must not take
@@ -312,19 +359,25 @@ static void test_ceiling_leaves_the_clock_skew(void)
  */
 static void test_env_overrides_stop_at_the_deployment(void)
 {
-	CHECK(attest_env_overrides_allowed(0, 0, 0, false),
-	      "a verb that is not --attest is interactive");
-	CHECK(attest_env_overrides_allowed(1, 0, 0, true),
-	      "--attest to a named verifier with neither cadence nor "
-	      "publishers is a one-shot");
-	CHECK(!attest_env_overrides_allowed(1, 0, 0, false),
-	      "--attest that names nothing is the loop, so overrides stop");
-	CHECK(!attest_env_overrides_allowed(1, 0, 1, true),
-	      "one publisher and no interval is the loop, so overrides stop");
-	CHECK(!attest_env_overrides_allowed(1, 45, 0, true),
-	      "a configured cadence is the loop without publishers too");
-	CHECK(!attest_env_overrides_allowed(1, 45, 3, false),
-	      "the deployed shape takes neither variable");
+	TEST("a verb that is not --attest is interactive");
+	if (!attest_env_overrides_allowed(0, 0, 0, false))
+		FAIL("expected: attest_env_overrides_allowed(0, 0, 0, false)");
+	TEST("--attest to a named verifier with neither cadence nor "
+	     "publishers is a one-shot");
+	if (!attest_env_overrides_allowed(1, 0, 0, true))
+		FAIL("expected: attest_env_overrides_allowed(1, 0, 0, true)");
+	TEST("--attest that names nothing is the loop, so overrides stop");
+	if (attest_env_overrides_allowed(1, 0, 0, false))
+		FAIL("expected: !attest_env_overrides_allowed(1, 0, 0, false)");
+	TEST("one publisher and no interval is the loop, so overrides stop");
+	if (attest_env_overrides_allowed(1, 0, 1, true))
+		FAIL("expected: !attest_env_overrides_allowed(1, 0, 1, true)");
+	TEST("a configured cadence is the loop without publishers too");
+	if (attest_env_overrides_allowed(1, 45, 0, true))
+		FAIL("expected: !attest_env_overrides_allowed(1, 45, 0, true)");
+	TEST("the deployed shape takes neither variable");
+	if (attest_env_overrides_allowed(1, 45, 3, false))
+		FAIL("expected: !attest_env_overrides_allowed(1, 45, 3, false)");
 }
 
 /*
@@ -339,32 +392,39 @@ static void test_target_reports(void)
 	struct attest_target t;
 
 	memset(&t, 0, sizeof(t));
-	CHECK(attest_target_reports(&t),
-	      "a plain publisher is reported to every round");
+	TEST("a plain publisher is reported to every round");
+	if (!attest_target_reports(&t))
+		FAIL("expected: attest_target_reports(&t)");
 
 	memset(&t, 0, sizeof(t));
 	t.token_only = true;
-	CHECK(!attest_target_reports(&t),
-	      "a publisher who runs no verifier is never reported to");
+	TEST("a publisher who runs no verifier is never reported to");
+	if (attest_target_reports(&t))
+		FAIL("expected: !attest_target_reports(&t)");
 
 	memset(&t, 0, sizeof(t));
 	t.session_gated = true;
 	t.sessions = 0;
-	CHECK(!attest_target_reports(&t),
-	      "a session-gated publisher with no title running is not reported to");
+	TEST("a session-gated publisher with no title running is not reported to");
+	if (attest_target_reports(&t))
+		FAIL("expected: !attest_target_reports(&t)");
 
 	t.sessions = 1;
-	CHECK(attest_target_reports(&t),
-	      "the same publisher is reported to while a title of theirs runs");
+	TEST("the same publisher is reported to while a title of theirs runs");
+	if (!attest_target_reports(&t))
+		FAIL("expected: attest_target_reports(&t)");
 
 	memset(&t, 0, sizeof(t));
 	t.token_only = true;
 	t.session_gated = true;
 	t.sessions = 3;
-	CHECK(!attest_target_reports(&t),
-	      "running no verifier outranks a live session");
+	TEST("running no verifier outranks a live session");
+	if (attest_target_reports(&t))
+		FAIL("expected: !attest_target_reports(&t)");
 
-	CHECK(!attest_target_reports(NULL), "no target is reported to");
+	TEST("no target is reported to");
+	if (attest_target_reports(NULL))
+		FAIL("expected: !attest_target_reports(NULL)");
 }
 
 /*
@@ -389,30 +449,36 @@ static void test_wait_for_a_first_session_is_announced(void)
 	t.session_gated = true;
 	t.sessions = 0;
 
-	CHECK(attest_target_should_announce_wait(&t),
-	      "a session-gated target with no session yet says so");
-	CHECK(!attest_target_should_announce_wait(&t),
-	      "and says it once, not every round");
+	TEST("a session-gated target with no session yet says so");
+	if (!attest_target_should_announce_wait(&t))
+		FAIL("expected: attest_target_should_announce_wait(&t)");
+	TEST("and says it once, not every round");
+	if (attest_target_should_announce_wait(&t))
+		FAIL("expected: !attest_target_should_announce_wait(&t)");
 
 	memset(&t, 0, sizeof(t));
 	t.session_gated = true;
 	t.sessions = 1;
-	CHECK(!attest_target_should_announce_wait(&t),
-	      "a target with a live session is not waiting for one");
+	TEST("a target with a live session is not waiting for one");
+	if (attest_target_should_announce_wait(&t))
+		FAIL("expected: !attest_target_should_announce_wait(&t)");
 
 	memset(&t, 0, sizeof(t));
 	t.sessions = 0;
-	CHECK(!attest_target_should_announce_wait(&t),
-	      "a publisher that does not gate on sessions is not waiting");
+	TEST("a publisher that does not gate on sessions is not waiting");
+	if (attest_target_should_announce_wait(&t))
+		FAIL("expected: !attest_target_should_announce_wait(&t)");
 
 	memset(&t, 0, sizeof(t));
 	t.session_gated = true;
 	t.token_only = true;
-	CHECK(!attest_target_should_announce_wait(&t),
-	      "a publisher who runs no verifier is not waiting to report");
+	TEST("a publisher who runs no verifier is not waiting to report");
+	if (attest_target_should_announce_wait(&t))
+		FAIL("expected: !attest_target_should_announce_wait(&t)");
 
-	CHECK(!attest_target_should_announce_wait(NULL),
-	      "no target is waiting");
+	TEST("no target is waiting");
+	if (attest_target_should_announce_wait(NULL))
+		FAIL("expected: !attest_target_should_announce_wait(NULL)");
 }
 
 /* an enrollment record that appears at runtime enables renewal */
@@ -423,37 +489,56 @@ static void test_renewal_follows_the_record(void)
 	memset(&t, 0, sizeof(t));
 	t.has_profile = true;
 
-	CHECK(attest_target_resolve_renew(&t, NULL, 0) == ATTEST_RENEW_OFF &&
-		      !t.auto_renew,
-	      "a publisher with no enrollment record cannot renew unattended");
-	CHECK(attest_target_resolve_renew(&t, NULL, 0) == ATTEST_RENEW_SILENT,
-	      "and is told so once, not on every pass");
+	TEST("a publisher with no enrollment record cannot renew unattended");
+	if (!(attest_target_resolve_renew(&t, NULL, 0) == ATTEST_RENEW_OFF &&
+	      !t.auto_renew))
+		FAIL("expected: attest_target_resolve_renew(&t, NULL, 0) == "
+		     "ATTEST_RENEW_OFF && !t.auto_renew");
+	TEST("and is told so once, not on every pass");
+	if (attest_target_resolve_renew(&t, NULL, 0) != ATTEST_RENEW_SILENT)
+		FAIL("expected: attest_target_resolve_renew(&t, NULL, 0) == "
+		     "ATTEST_RENEW_SILENT");
 
-	CHECK(attest_target_resolve_renew(&t, "ca.example", 8444) ==
-			      ATTEST_RENEW_ENABLED &&
-		      t.auto_renew,
-	      "a record that appears while the loop runs enables renewal with "
-	      "no reload");
-	CHECK(strcmp(t.renew_ca, "ca.example") == 0 && t.renew_ca_port == 8444,
-	      "the target carries the endpoint that renewal will dial");
-	CHECK(attest_target_resolve_renew(&t, "ca.example", 8444) ==
-		      ATTEST_RENEW_SILENT,
-	      "a decision that has not changed says nothing");
+	TEST("a record that appears while the loop runs enables renewal with "
+	     "no reload");
+	if (!(attest_target_resolve_renew(&t, "ca.example", 8444) ==
+		      ATTEST_RENEW_ENABLED &&
+	      t.auto_renew))
+		FAIL("expected: attest_target_resolve_renew(&t, "
+		     "\"ca.example\", 8444) == ATTEST_RENEW_ENABLED && "
+		     "t.auto_renew");
+	TEST("the target carries the endpoint that renewal will dial");
+	if (!(strcmp(t.renew_ca, "ca.example") == 0 && t.renew_ca_port == 8444))
+		FAIL("expected: strcmp(t.renew_ca, \"ca.example\") == 0 && "
+		     "t.renew_ca_port == 8444");
+	TEST("a decision that has not changed says nothing");
+	if (attest_target_resolve_renew(&t, "ca.example", 8444) !=
+	    ATTEST_RENEW_SILENT)
+		FAIL("expected: attest_target_resolve_renew(&t, "
+		     "\"ca.example\", 8444) == ATTEST_RENEW_SILENT");
 
-	CHECK(attest_target_resolve_renew(&t, NULL, 0) == ATTEST_RENEW_OFF &&
-		      !t.auto_renew && t.renew_ca[0] == '\0',
-	      "a record that goes away disables renewal and leaves no address "
-	      "behind");
+	TEST("a record that goes away disables renewal and leaves no address "
+	     "behind");
+	if (!(attest_target_resolve_renew(&t, NULL, 0) == ATTEST_RENEW_OFF &&
+	      !t.auto_renew && t.renew_ca[0] == '\0'))
+		FAIL("expected: attest_target_resolve_renew(&t, NULL, 0) == "
+		     "ATTEST_RENEW_OFF && !t.auto_renew && t.renew_ca[0] == "
+		     "'\\0'");
 
 	memset(&t, 0, sizeof(t));
-	CHECK(attest_target_resolve_renew(&t, "ca.example", 8444) ==
-			      ATTEST_RENEW_OFF &&
-		      !t.auto_renew,
-	      "a target with no publisher profile has no certificate to renew");
+	TEST("a target with no publisher profile has no certificate to renew");
+	if (!(attest_target_resolve_renew(&t, "ca.example", 8444) ==
+		      ATTEST_RENEW_OFF &&
+	      !t.auto_renew))
+		FAIL("expected: attest_target_resolve_renew(&t, "
+		     "\"ca.example\", 8444) == ATTEST_RENEW_OFF && "
+		     "!t.auto_renew");
 
-	CHECK(attest_target_resolve_renew(NULL, "ca.example", 8444) ==
-		      ATTEST_RENEW_SILENT,
-	      "no target, nothing to decide");
+	TEST("no target, nothing to decide");
+	if (attest_target_resolve_renew(NULL, "ca.example", 8444) !=
+	    ATTEST_RENEW_SILENT)
+		FAIL("expected: attest_target_resolve_renew(NULL, "
+		     "\"ca.example\", 8444) == ATTEST_RENEW_SILENT");
 }
 
 /* a configured CA that differs from the recorded endpoint is reported once */
@@ -467,33 +552,41 @@ static void test_a_moved_ca_is_reported(void)
 	t.ca_port = 8444;
 
 	attest_target_resolve_renew(&t, "ca.example", 8444);
-	CHECK(!attest_target_should_announce_renew_move(&t),
-	      "a profile enrolled where it is configured has nothing to say");
+	TEST("a profile enrolled where it is configured has nothing to say");
+	if (attest_target_should_announce_renew_move(&t))
+		FAIL("expected: !attest_target_should_announce_renew_move(&t)");
 
 	attest_target_resolve_renew(&t, "old-ca.example", 8444);
-	CHECK(attest_target_should_announce_renew_move(&t),
-	      "a record naming another host is reported");
-	CHECK(!attest_target_should_announce_renew_move(&t),
-	      "and reported once, not on every pass");
+	TEST("a record naming another host is reported");
+	if (!attest_target_should_announce_renew_move(&t))
+		FAIL("expected: attest_target_should_announce_renew_move(&t)");
+	TEST("and reported once, not on every pass");
+	if (attest_target_should_announce_renew_move(&t))
+		FAIL("expected: !attest_target_should_announce_renew_move(&t)");
 
 	attest_target_resolve_renew(&t, "ca.example", 8599);
-	CHECK(attest_target_should_announce_renew_move(&t),
-	      "the port is half of the endpoint, so a moved port is reported "
-	      "too");
+	TEST("the port is half of the endpoint, so a moved port is reported "
+	     "too");
+	if (!attest_target_should_announce_renew_move(&t))
+		FAIL("expected: attest_target_should_announce_renew_move(&t)");
 
 	attest_target_resolve_renew(&t, "ca.example", 8444);
-	CHECK(!attest_target_should_announce_renew_move(&t),
-	      "an endpoint that agrees again is silent");
+	TEST("an endpoint that agrees again is silent");
+	if (attest_target_should_announce_renew_move(&t))
+		FAIL("expected: !attest_target_should_announce_renew_move(&t)");
 	attest_target_resolve_renew(&t, "old-ca.example", 8444);
-	CHECK(attest_target_should_announce_renew_move(&t),
-	      "and a later divergence is reported afresh");
+	TEST("and a later divergence is reported afresh");
+	if (!attest_target_should_announce_renew_move(&t))
+		FAIL("expected: attest_target_should_announce_renew_move(&t)");
 
 	attest_target_resolve_renew(&t, NULL, 0);
-	CHECK(!attest_target_should_announce_renew_move(&t),
-	      "a publisher that cannot renew has no endpoint to disagree with");
+	TEST("a publisher that cannot renew has no endpoint to disagree with");
+	if (attest_target_should_announce_renew_move(&t))
+		FAIL("expected: !attest_target_should_announce_renew_move(&t)");
 
-	CHECK(!attest_target_should_announce_renew_move(NULL),
-	      "no target, nothing to compare");
+	TEST("no target, nothing to compare");
+	if (attest_target_should_announce_renew_move(NULL))
+		FAIL("expected: !attest_target_should_announce_renew_move(NULL)");
 }
 
 /* no renewal clause when a token-only label already names the endpoint */
@@ -509,30 +602,42 @@ static void test_the_renewal_endpoint_is_said_once(void)
 	t.ca_port = 8444;
 
 	attest_target_resolve_renew(&t, "ca.example", 8444);
-	CHECK(attest_target_renew_at(&t, at, sizeof(at))[0] == '\0',
-	      "a token-only label that already names the endpoint gets no "
-	      "second copy of it");
+	TEST("a token-only label that already names the endpoint gets no "
+	     "second copy of it");
+	if (attest_target_renew_at(&t, at, sizeof(at))[0] != '\0')
+		FAIL("expected: attest_target_renew_at(&t, at, sizeof(at))[0] "
+		     "== '\\0'");
 
 	attest_target_resolve_renew(&t, "old-ca.example", 8444);
-	CHECK(strcmp(attest_target_renew_at(&t, at, sizeof(at)),
-		     ", renewing at old-ca.example:8444") == 0,
-	      "an endpoint the label does not name is written out");
+	TEST("an endpoint the label does not name is written out");
+	if (strcmp(attest_target_renew_at(&t, at, sizeof(at)),
+		   ", renewing at old-ca.example:8444") != 0)
+		FAIL("expected: strcmp(attest_target_renew_at(&t, at, "
+		     "sizeof(at)), \", renewing at old-ca.example:8444\") == 0");
 
 	t.token_only = false;
 	attest_target_resolve_renew(&t, "ca.example", 8444);
-	CHECK(strcmp(attest_target_renew_at(&t, at, sizeof(at)),
-		     ", renewing at ca.example:8444") == 0,
-	      "a publisher with a verifier is labelled by it, so the CA is "
-	      "always written out");
+	TEST("a publisher with a verifier is labelled by it, so the CA is "
+	     "always written out");
+	if (strcmp(attest_target_renew_at(&t, at, sizeof(at)),
+		   ", renewing at ca.example:8444") != 0)
+		FAIL("expected: strcmp(attest_target_renew_at(&t, at, "
+		     "sizeof(at)), \", renewing at ca.example:8444\") == 0");
 
 	attest_target_resolve_renew(&t, NULL, 0);
-	CHECK(attest_target_renew_at(&t, at, sizeof(at))[0] == '\0',
-	      "a target that cannot renew names no endpoint");
+	TEST("a target that cannot renew names no endpoint");
+	if (attest_target_renew_at(&t, at, sizeof(at))[0] != '\0')
+		FAIL("expected: attest_target_renew_at(&t, at, sizeof(at))[0] "
+		     "== '\\0'");
 
-	CHECK(attest_target_renew_at(NULL, at, sizeof(at))[0] == '\0',
-	      "no target, no endpoint");
-	CHECK(attest_target_renew_at(&t, NULL, 0)[0] == '\0',
-	      "no room, no endpoint");
+	TEST("no target, no endpoint");
+	if (attest_target_renew_at(NULL, at, sizeof(at))[0] != '\0')
+		FAIL("expected: attest_target_renew_at(NULL, at, "
+		     "sizeof(at))[0] == '\\0'");
+	TEST("no room, no endpoint");
+	if (attest_target_renew_at(&t, NULL, 0)[0] != '\0')
+		FAIL("expected: attest_target_renew_at(&t, NULL, 0)[0] == "
+		     "'\\0'");
 }
 
 /*
@@ -558,12 +663,16 @@ static void test_each_profile_pins_its_own_verifier(void)
 	snprintf(anchor, sizeof(anchor), "/tmp/lota-targets-pin.%d.der",
 		 getpid());
 	if (write_anchor(anchor) != 0) {
-		CHECK(0, "write an anchor");
+		TEST("write an anchor");
+		if (!0)
+			FAIL("expected: 0");
 		return;
 	}
 	if (lota_pin_sha256_parse(pin_a, want_a) != 0 ||
 	    lota_pin_sha256_parse(pin_b, want_b) != 0) {
-		CHECK(0, "parse the expected pins");
+		TEST("parse the expected pins");
+		if (!0)
+			FAIL("expected: 0");
 		return;
 	}
 
@@ -605,23 +714,35 @@ static void test_each_profile_pins_its_own_verifier(void)
 	snprintf(cfg.profiles[2].ca, sizeof(cfg.profiles[2].ca),
 		 "ca.c.example");
 
-	CHECK(attest_targets_build(&cfg, NULL, 0, NULL, 300, targets,
+	TEST("a pinned profile list builds");
+	if (!(attest_targets_build(&cfg, NULL, 0, NULL, 300, targets,
 				   LOTA_CONFIG_MAX_PROFILES, &count) == 0 &&
-		      count == 3,
-	      "a pinned profile list builds");
+	      count == 3))
+		FAIL("expected: attest_targets_build(&cfg, NULL, 0, NULL, "
+		     "300, targets, LOTA_CONFIG_MAX_PROFILES, &count) == 0 && "
+		     "count == 3");
 
-	CHECK(targets[0].has_pin && memcmp(targets[0].pin_sha256, want_a,
-					   LOTA_PIN_SHA256_LEN) == 0,
-	      "a profile's pin reaches its own target");
-	CHECK(targets[1].has_pin && memcmp(targets[1].pin_sha256, want_b,
-					   LOTA_PIN_SHA256_LEN) == 0,
-	      "the second publisher carries its own pin, not the first's");
-	CHECK(memcmp(targets[0].pin_sha256, targets[1].pin_sha256,
-		     LOTA_PIN_SHA256_LEN) != 0,
-	      "two publishers do not share one certificate");
-	CHECK(!targets[2].has_pin,
-	      "a profile that names no pin is unpinned, whatever the "
-	      "host-level key says");
+	TEST("a profile's pin reaches its own target");
+	if (!(targets[0].has_pin &&
+	      memcmp(targets[0].pin_sha256, want_a, LOTA_PIN_SHA256_LEN) == 0))
+		FAIL("expected: targets[0].has_pin && "
+		     "memcmp(targets[0].pin_sha256, want_a, "
+		     "LOTA_PIN_SHA256_LEN) == 0");
+	TEST("the second publisher carries its own pin, not the first's");
+	if (!(targets[1].has_pin &&
+	      memcmp(targets[1].pin_sha256, want_b, LOTA_PIN_SHA256_LEN) == 0))
+		FAIL("expected: targets[1].has_pin && "
+		     "memcmp(targets[1].pin_sha256, want_b, "
+		     "LOTA_PIN_SHA256_LEN) == 0");
+	TEST("two publishers do not share one certificate");
+	if (memcmp(targets[0].pin_sha256, targets[1].pin_sha256,
+		   LOTA_PIN_SHA256_LEN) == 0)
+		FAIL("expected: memcmp(targets[0].pin_sha256, "
+		     "targets[1].pin_sha256, LOTA_PIN_SHA256_LEN) != 0");
+	TEST("a profile that names no pin is unpinned, whatever the "
+	     "host-level key says");
+	if (targets[2].has_pin)
+		FAIL("expected: !targets[2].has_pin");
 
 	unlink(anchor);
 }
@@ -632,26 +753,38 @@ static void test_an_unreadable_cert_confirms_nothing(void)
 	struct attest_target t;
 
 	memset(&t, 0, sizeof(t));
-	CHECK(attest_target_note_cert_match(&t, -EKEYREJECTED) ==
-		      ATTEST_CERT_MISMATCH,
-	      "a foreign key is reported");
-	CHECK(attest_target_note_cert_match(&t, -EINVAL) ==
-			      ATTEST_CERT_UNREADABLE &&
-		      t.key_mismatch_announced,
-	      "an unreadable certificate keeps the mismatch");
-	CHECK(attest_target_note_cert_match(&t, -EINVAL) == ATTEST_CERT_SILENT,
-	      "an unreadable certificate is reported once");
-	CHECK(attest_target_note_cert_match(&t, 0) ==
-			      ATTEST_CERT_MATCHES_AGAIN &&
-		      !t.key_mismatch_announced,
-	      "only a certificate naming the key clears the mismatch");
-	CHECK(attest_target_note_cert_match(&t, -EINVAL) ==
-		      ATTEST_CERT_UNREADABLE,
-	      "a certificate that broke again is reported again");
+	TEST("a foreign key is reported");
+	if (attest_target_note_cert_match(&t, -EKEYREJECTED) !=
+	    ATTEST_CERT_MISMATCH)
+		FAIL("expected: attest_target_note_cert_match(&t, "
+		     "-EKEYREJECTED) == ATTEST_CERT_MISMATCH");
+	TEST("an unreadable certificate keeps the mismatch");
+	if (!(attest_target_note_cert_match(&t, -EINVAL) ==
+		      ATTEST_CERT_UNREADABLE &&
+	      t.key_mismatch_announced))
+		FAIL("expected: attest_target_note_cert_match(&t, -EINVAL) == "
+		     "ATTEST_CERT_UNREADABLE && t.key_mismatch_announced");
+	TEST("an unreadable certificate is reported once");
+	if (attest_target_note_cert_match(&t, -EINVAL) != ATTEST_CERT_SILENT)
+		FAIL("expected: attest_target_note_cert_match(&t, -EINVAL) == "
+		     "ATTEST_CERT_SILENT");
+	TEST("only a certificate naming the key clears the mismatch");
+	if (!(attest_target_note_cert_match(&t, 0) ==
+		      ATTEST_CERT_MATCHES_AGAIN &&
+	      !t.key_mismatch_announced))
+		FAIL("expected: attest_target_note_cert_match(&t, 0) == "
+		     "ATTEST_CERT_MATCHES_AGAIN && !t.key_mismatch_announced");
+	TEST("a certificate that broke again is reported again");
+	if (attest_target_note_cert_match(&t, -EINVAL) !=
+	    ATTEST_CERT_UNREADABLE)
+		FAIL("expected: attest_target_note_cert_match(&t, -EINVAL) == "
+		     "ATTEST_CERT_UNREADABLE");
 	attest_target_note_cert_match(&t, -EKEYREJECTED);
-	CHECK(attest_target_note_cert_match(&t, -EINVAL) ==
-		      ATTEST_CERT_UNREADABLE,
-	      "a certificate read as a foreign key's counts as read");
+	TEST("a certificate read as a foreign key's counts as read");
+	if (attest_target_note_cert_match(&t, -EINVAL) !=
+	    ATTEST_CERT_UNREADABLE)
+		FAIL("expected: attest_target_note_cert_match(&t, -EINVAL) == "
+		     "ATTEST_CERT_UNREADABLE");
 }
 
 /* A title asking for an enrolled publisher wakes the loop once, not forever. */
@@ -664,21 +797,30 @@ static void test_a_request_wakes_the_loop_once(void)
 	t[1].next_due_ms = 9000;
 	t[1].enroll_pending = true;
 
-	CHECK(attest_targets_take_wakeups(t, 2, 100) && t[1].next_due_ms == 100,
-	      "a pending enrollment makes its target due now");
-	CHECK(t[0].next_due_ms == 9000,
-	      "a target nobody asked for keeps its slot");
+	TEST("a pending enrollment makes its target due now");
+	if (!(attest_targets_take_wakeups(t, 2, 100) &&
+	      t[1].next_due_ms == 100))
+		FAIL("expected: attest_targets_take_wakeups(t, 2, 100) && "
+		     "t[1].next_due_ms == 100");
+	TEST("a target nobody asked for keeps its slot");
+	if (t[0].next_due_ms != 9000)
+		FAIL("expected: t[0].next_due_ms == 9000");
 
 	t[1].next_due_ms = 5000;
-	CHECK(!attest_targets_take_wakeups(t, 2, 200) &&
-		      t[1].next_due_ms == 5000,
-	      "the request is spent once served");
+	TEST("the request is spent once served");
+	if (!(!attest_targets_take_wakeups(t, 2, 200) &&
+	      t[1].next_due_ms == 5000))
+		FAIL("expected: !attest_targets_take_wakeups(t, 2, 200) && "
+		     "t[1].next_due_ms == 5000");
 
 	t[0].session_changed = true;
-	CHECK(attest_targets_take_wakeups(t, 2, 300) &&
-		      !attest_targets_take_wakeups(t, 2, 400) &&
-		      t[0].next_due_ms == 300,
-	      "a session change wakes the loop once too");
+	TEST("a session change wakes the loop once too");
+	if (!(attest_targets_take_wakeups(t, 2, 300) &&
+	      !attest_targets_take_wakeups(t, 2, 400) &&
+	      t[0].next_due_ms == 300))
+		FAIL("expected: attest_targets_take_wakeups(t, 2, 300) && "
+		     "!attest_targets_take_wakeups(t, 2, 400) && "
+		     "t[0].next_due_ms == 300");
 }
 
 /* A lost key is enrolled again only for a publisher somebody agreed to. */
@@ -688,31 +830,44 @@ static void test_a_lost_key_is_enrolled_again_with_consent(void)
 	int delay;
 
 	memset(&t, 0, sizeof(t));
-	CHECK(attest_target_reenroll_decide(&t, 0, 1000) ==
-			      ATTEST_REENROLL_NOW &&
-		      t.reenrolling,
-	      "recorded consent enrolls again at once and says so");
+	TEST("recorded consent enrolls again at once and says so");
+	if (!(attest_target_reenroll_decide(&t, 0, 1000) ==
+		      ATTEST_REENROLL_NOW &&
+	      t.reenrolling))
+		FAIL("expected: attest_target_reenroll_decide(&t, 0, 1000) == "
+		     "ATTEST_REENROLL_NOW && t.reenrolling");
 
 	delay = attest_target_reenroll_failed(&t, 1000);
-	CHECK(delay > 0 && attest_target_reenroll_decide(&t, 0, 1001) ==
-				   ATTEST_REENROLL_WAIT,
-	      "a failed attempt waits out its backoff");
-	CHECK(attest_target_reenroll_decide(&t, 0,
-					    1000 + (uint64_t)delay * 1000) ==
-		      ATTEST_REENROLL_NOW,
-	      "the attempt is made again once the backoff lapses");
+	TEST("a failed attempt waits out its backoff");
+	if (!(delay > 0 && attest_target_reenroll_decide(&t, 0, 1001) ==
+				   ATTEST_REENROLL_WAIT))
+		FAIL("expected: delay > 0 && "
+		     "attest_target_reenroll_decide(&t, 0, 1001) == "
+		     "ATTEST_REENROLL_WAIT");
+	TEST("the attempt is made again once the backoff lapses");
+	if (attest_target_reenroll_decide(&t, 0,
+					  1000 + (uint64_t)delay * 1000) !=
+	    ATTEST_REENROLL_NOW)
+		FAIL("expected: attest_target_reenroll_decide(&t, 0, 1000 + "
+		     "(uint64_t)delay * 1000) == ATTEST_REENROLL_NOW");
 	t.interval = 240;
-	CHECK(attest_target_reenroll_wait(&t, 1500) == delay,
-	      "the next round comes when the backoff lapses");
-	CHECK(attest_target_reenroll_failed(&t, 2000) > delay,
-	      "each failure waits longer");
+	TEST("the next round comes when the backoff lapses");
+	if (attest_target_reenroll_wait(&t, 1500) != delay)
+		FAIL("expected: attest_target_reenroll_wait(&t, 1500) == delay");
+	TEST("each failure waits longer");
+	if (attest_target_reenroll_failed(&t, 2000) <= delay)
+		FAIL("expected: attest_target_reenroll_failed(&t, 2000) > "
+		     "delay");
 
 	attest_target_reenroll_clear(&t);
-	CHECK(!t.reenrolling && t.next_reenroll_ms == 0 &&
-		      t.reenroll_backoff == 0,
-	      "a certificate that names the key ends the re-enrollment");
-	CHECK(attest_target_reenroll_wait(&t, 3000) == 240,
-	      "without a backoff the round keeps its interval");
+	TEST("a certificate that names the key ends the re-enrollment");
+	if (!(!t.reenrolling && t.next_reenroll_ms == 0 &&
+	      t.reenroll_backoff == 0))
+		FAIL("expected: !t.reenrolling && t.next_reenroll_ms == 0 && "
+		     "t.reenroll_backoff == 0");
+	TEST("without a backoff the round keeps its interval");
+	if (attest_target_reenroll_wait(&t, 3000) != 240)
+		FAIL("expected: attest_target_reenroll_wait(&t, 3000) == 240");
 }
 
 /* A failed enrollment comes back when it said it would. */
@@ -723,17 +878,22 @@ static void test_a_failed_enrollment_returns_on_its_backoff(void)
 
 	memset(&t, 0, sizeof(t));
 	t.interval = 240;
-	CHECK(attest_target_enroll_wait(&t, 1000) == 240,
-	      "with nothing backed off the round keeps its interval");
+	TEST("with nothing backed off the round keeps its interval");
+	if (attest_target_enroll_wait(&t, 1000) != 240)
+		FAIL("expected: attest_target_enroll_wait(&t, 1000) == 240");
 
 	delay = attest_target_enroll_failed(&t, 1000);
-	CHECK(delay > 0 && delay < 240 &&
-		      attest_target_enroll_wait(&t, 1000) == delay,
-	      "the next round comes when the enrollment backoff lapses");
-	CHECK(attest_target_enroll_failed(&t, 2000) > delay,
-	      "each failed enrollment waits longer");
-	CHECK(attest_target_enroll_wait(&t, 1000000) == 240,
-	      "a lapsed backoff leaves the interval");
+	TEST("the next round comes when the enrollment backoff lapses");
+	if (!(delay > 0 && delay < 240 &&
+	      attest_target_enroll_wait(&t, 1000) == delay))
+		FAIL("expected: delay > 0 && delay < 240 && "
+		     "attest_target_enroll_wait(&t, 1000) == delay");
+	TEST("each failed enrollment waits longer");
+	if (attest_target_enroll_failed(&t, 2000) <= delay)
+		FAIL("expected: attest_target_enroll_failed(&t, 2000) > delay");
+	TEST("a lapsed backoff leaves the interval");
+	if (attest_target_enroll_wait(&t, 1000000) != 240)
+		FAIL("expected: attest_target_enroll_wait(&t, 1000000) == 240");
 }
 
 /* A failed renewal is retried in a round, never sooner than it comes. */
@@ -743,13 +903,16 @@ static void test_a_failed_renewal_waits_a_round(void)
 
 	memset(&t, 0, sizeof(t));
 	t.interval = 240;
-	CHECK(attest_target_renew_failed(&t, 1000) == 240 &&
-		      t.next_renew_ms == 1000 + 240 * 1000,
-	      "a backoff below the interval waits the interval");
+	TEST("a backoff below the interval waits the interval");
+	if (!(attest_target_renew_failed(&t, 1000) == 240 &&
+	      t.next_renew_ms == 1000 + 240 * 1000))
+		FAIL("expected: attest_target_renew_failed(&t, 1000) == 240 "
+		     "&& t.next_renew_ms == 1000 + 240 * 1000");
 
 	t.interval = 5;
-	CHECK(attest_target_renew_failed(&t, 1000) > 5,
-	      "a backoff above the interval is kept");
+	TEST("a backoff above the interval is kept");
+	if (attest_target_renew_failed(&t, 1000) <= 5)
+		FAIL("expected: attest_target_renew_failed(&t, 1000) > 5");
 }
 
 /* Without consent the loop says why once and leaves the host alone. */
@@ -759,22 +922,32 @@ static void test_no_consent_is_said_once(void)
 
 	memset(&t, 0, sizeof(t));
 	t.reenrolling = true;
-	CHECK(attest_target_reenroll_decide(&t, -ENOENT, 1000) ==
-			      ATTEST_REENROLL_REFUSED &&
-		      !t.reenrolling,
-	      "no consent refuses and does not report re-enrolling");
-	CHECK(attest_target_reenroll_decide(&t, -ENOENT, 2000) ==
-		      ATTEST_REENROLL_REFUSED_SILENT,
-	      "the refusal is said once");
-	CHECK(attest_target_reenroll_decide(&t, -EIO, 3000) ==
-		      ATTEST_REENROLL_REFUSED_SILENT,
-	      "an unreadable consent record is no consent");
+	TEST("no consent refuses and does not report re-enrolling");
+	if (!(attest_target_reenroll_decide(&t, -ENOENT, 1000) ==
+		      ATTEST_REENROLL_REFUSED &&
+	      !t.reenrolling))
+		FAIL("expected: attest_target_reenroll_decide(&t, -ENOENT, "
+		     "1000) == ATTEST_REENROLL_REFUSED && !t.reenrolling");
+	TEST("the refusal is said once");
+	if (attest_target_reenroll_decide(&t, -ENOENT, 2000) !=
+	    ATTEST_REENROLL_REFUSED_SILENT)
+		FAIL("expected: attest_target_reenroll_decide(&t, -ENOENT, "
+		     "2000) == ATTEST_REENROLL_REFUSED_SILENT");
+	TEST("an unreadable consent record is no consent");
+	if (attest_target_reenroll_decide(&t, -EIO, 3000) !=
+	    ATTEST_REENROLL_REFUSED_SILENT)
+		FAIL("expected: attest_target_reenroll_decide(&t, -EIO, 3000) "
+		     "== ATTEST_REENROLL_REFUSED_SILENT");
 
-	CHECK(attest_target_reenroll_decide(&t, 0, 4000) ==
-			      ATTEST_REENROLL_NOW &&
-		      attest_target_reenroll_decide(&t, -ENOENT, 5000) ==
-			      ATTEST_REENROLL_REFUSED,
-	      "an agreement in between makes a later refusal said again");
+	TEST("an agreement in between makes a later refusal said again");
+	if (!(attest_target_reenroll_decide(&t, 0, 4000) ==
+		      ATTEST_REENROLL_NOW &&
+	      attest_target_reenroll_decide(&t, -ENOENT, 5000) ==
+		      ATTEST_REENROLL_REFUSED))
+		FAIL("expected: attest_target_reenroll_decide(&t, 0, 4000) == "
+		     "ATTEST_REENROLL_NOW && "
+		     "attest_target_reenroll_decide(&t, -ENOENT, 5000) == "
+		     "ATTEST_REENROLL_REFUSED");
 }
 
 /* A reload keeps what the agent recorded about a publisher's processes. */
@@ -783,27 +956,32 @@ static void test_a_reload_keeps_the_termination_record(void)
 	struct attest_target t[1];
 	size_t n = 0;
 
-	CHECK(attest_targets_build(NULL, "verifier.example", 8443, NULL, 300, t,
+	TEST("one verifier builds one target");
+	if (!(attest_targets_build(NULL, "verifier.example", 8443, NULL, 300, t,
 				   1, &n) == 0 &&
-		      n == 1,
-	      "one verifier builds one target");
+	      n == 1))
+		FAIL("expected: attest_targets_build(NULL, "
+		     "\"verifier.example\", 8443, NULL, 300, t, 1, &n) == 0 "
+		     "&& n == 1");
 	t[0].protected_terminated = true;
-	CHECK(attest_targets_rebuild(NULL, "verifier.example", 8443, NULL, 300,
+	TEST("the rebuilt target still says a process was ended");
+	if (!(attest_targets_rebuild(NULL, "verifier.example", 8443, NULL, 300,
 				     t, 1, &n) == 0 &&
-		      n == 1 && t[0].protected_terminated,
-	      "the rebuilt target still says a process was ended");
+	      n == 1 && t[0].protected_terminated))
+		FAIL("expected: attest_targets_rebuild(NULL, "
+		     "\"verifier.example\", 8443, NULL, 300, t, 1, &n) == 0 "
+		     "&& n == 1 && t[0].protected_terminated");
 }
 
 int main(void)
 {
-	printf("=== Attestation target list tests ===\n\n");
+	test_begin("attest targets");
 
 	test_single_verifier();
 	test_profiles_replace_the_single_verifier();
 	test_token_only_publisher();
 	test_more_profiles_than_room();
 	test_effective_interval();
-	test_ceiling_leaves_the_clock_skew();
 	test_env_overrides_stop_at_the_deployment();
 	test_target_reports();
 	test_wait_for_a_first_session_is_announced();
@@ -819,6 +997,5 @@ int main(void)
 	test_no_consent_is_said_once();
 	test_a_reload_keeps_the_termination_record();
 
-	printf("\n%s\n", g_failures ? "FAILURES" : "All tests passed");
-	return g_failures ? 1 : 0;
+	return test_end();
 }

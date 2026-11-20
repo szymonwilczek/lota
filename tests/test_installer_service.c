@@ -12,23 +12,12 @@
  * The verdict is a pure function of the probe answers: no systemd here.
  */
 
-#include <stdio.h>
 #include <string.h>
 
 #include "../installer/install.h"
 #include "../installer/probe.h"
 
-static int g_failures;
-
-#define CHECK(cond, msg)                                    \
-	do {                                                \
-		if (!(cond)) {                              \
-			fprintf(stderr, "FAIL: %s\n", msg); \
-			g_failures++;                       \
-		} else {                                    \
-			printf("PASS: %s\n", msg);          \
-		}                                           \
-	} while (0)
+#include "test.h"
 
 static const struct probe_service_state all_good = {
 	.agent_active = 1,
@@ -42,10 +31,14 @@ static void test_active_and_enabled_is_done(void)
 {
 	char note[256] = { 0 };
 
-	CHECK(probe_agent_service_stage(&all_good, note, sizeof(note)) ==
-		      STAGE_DONE,
-	      "an active, enabled host is satisfied");
-	CHECK(note[0] != '\0', "the satisfied verdict still carries a note");
+	TEST("an active, enabled host is satisfied");
+	if (probe_agent_service_stage(&all_good, note, sizeof(note)) !=
+	    STAGE_DONE)
+		FAIL("expected: probe_agent_service_stage(&all_good, note, "
+		     "sizeof(note)) == STAGE_DONE");
+	TEST("the satisfied verdict still carries a note");
+	if (note[0] == '\0')
+		FAIL("expected: note[0] != '\\0'");
 }
 
 /*
@@ -61,25 +54,29 @@ static void test_active_but_not_enabled_is_pending(void)
 	s = all_good;
 	s.agent_enabled = 0;
 	note[0] = '\0';
-	CHECK(probe_agent_service_stage(&s, note, sizeof(note)) ==
-		      STAGE_PENDING,
-	      "a running but unenabled agent is not satisfied");
-	CHECK(strstr(note, "reboot") != NULL,
-	      "the note says the agent will not survive a reboot");
+	TEST("a running but unenabled agent is not satisfied");
+	if (probe_agent_service_stage(&s, note, sizeof(note)) != STAGE_PENDING)
+		FAIL("expected: probe_agent_service_stage(&s, note, "
+		     "sizeof(note)) == STAGE_PENDING");
+	TEST("the note says the agent will not survive a reboot");
+	if (strstr(note, "reboot") == NULL)
+		FAIL("expected: strstr(note, \"reboot\") != NULL");
 
 	s = all_good;
 	s.socket_enabled = 0;
 	note[0] = '\0';
-	CHECK(probe_agent_service_stage(&s, note, sizeof(note)) ==
-		      STAGE_PENDING,
-	      "an unenabled socket is not satisfied");
+	TEST("an unenabled socket is not satisfied");
+	if (probe_agent_service_stage(&s, note, sizeof(note)) != STAGE_PENDING)
+		FAIL("expected: probe_agent_service_stage(&s, note, "
+		     "sizeof(note)) == STAGE_PENDING");
 
 	s = all_good;
 	s.attest_enabled = 0;
 	note[0] = '\0';
-	CHECK(probe_agent_service_stage(&s, note, sizeof(note)) ==
-		      STAGE_PENDING,
-	      "an unenabled attestation loop is not satisfied");
+	TEST("an unenabled attestation loop is not satisfied");
+	if (probe_agent_service_stage(&s, note, sizeof(note)) != STAGE_PENDING)
+		FAIL("expected: probe_agent_service_stage(&s, note, "
+		     "sizeof(note)) == STAGE_PENDING");
 }
 
 /*
@@ -93,29 +90,27 @@ static void test_inactive_is_reported_apart(void)
 	char unenabled[256] = { 0 };
 
 	s.agent_active = 0;
-	CHECK(probe_agent_service_stage(&s, stopped, sizeof(stopped)) ==
-		      STAGE_PENDING,
-	      "a stopped agent is not satisfied");
+	TEST("a stopped agent is not satisfied");
+	if (probe_agent_service_stage(&s, stopped, sizeof(stopped)) !=
+	    STAGE_PENDING)
+		FAIL("expected: probe_agent_service_stage(&s, stopped, "
+		     "sizeof(stopped)) == STAGE_PENDING");
 
 	s = all_good;
 	s.agent_enabled = 0;
 	probe_agent_service_stage(&s, unenabled, sizeof(unenabled));
 
-	CHECK(strcmp(stopped, unenabled) != 0,
-	      "a stopped host and an unenabled one do not read alike");
+	TEST("a stopped host and an unenabled one do not read alike");
+	if (strcmp(stopped, unenabled) == 0)
+		FAIL("expected: strcmp(stopped, unenabled) != 0");
 }
 
 int main(void)
 {
-	printf("=== installer agent-service verdict tests ===\n");
+	test_begin("installer service");
 	test_active_and_enabled_is_done();
 	test_active_but_not_enabled_is_pending();
 	test_inactive_is_reported_apart();
 
-	if (g_failures) {
-		fprintf(stderr, "\n%d test(s) failed\n", g_failures);
-		return 1;
-	}
-	printf("\nAll installer agent-service verdict tests passed\n");
-	return 0;
+	return test_end();
 }

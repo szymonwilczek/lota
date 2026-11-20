@@ -9,28 +9,10 @@
  * packaging deciding whether another title's publisher gets an answer.
  */
 
-#include <stdio.h>
-
 #include "../include/lota_ipc.h"
 #include "../src/agent/token_gate.h"
 
-static int g_failures;
-static const char *g_current;
-
-#define TEST(name)                                 \
-	do {                                       \
-		g_current = name;                  \
-		printf("[ RUN      ] %s\n", name); \
-	} while (0)
-
-#define PASS() printf("[       OK ] %s\n", g_current)
-
-#define FAIL(msg)                                                         \
-	do {                                                              \
-		fprintf(stderr, "[  FAILED  ] %s: %s\n", g_current, msg); \
-		g_failures++;                                             \
-		return;                                                   \
-	} while (0)
+#include "test.h"
 
 /*
  * A publisher who runs a verifier is answered with that verifier's verdict,
@@ -40,11 +22,12 @@ static void test_verifier_publisher_still_needs_a_verdict(void)
 {
 	TEST("a publisher with a verifier still needs a verdict");
 
-	if (!token_gate_needs_attested(0))
+	if (!token_gate_needs_attested(0)) {
 		FAIL("a publisher who reports was answered without a verdict");
+		return;
+	}
 	if (!token_gate_needs_attested(LOTA_STATUS_TPM_OK))
 		FAIL("a publisher who reports was answered without a verdict");
-	PASS();
 }
 
 /*
@@ -56,14 +39,15 @@ static void test_token_only_publisher_is_answered(void)
 {
 	TEST("a token-only publisher does not need a verdict it cannot have");
 
-	if (token_gate_needs_attested(LOTA_STATUS_TOKEN_ONLY))
+	if (token_gate_needs_attested(LOTA_STATUS_TOKEN_ONLY)) {
 		FAIL("a token-only publisher was asked for a verdict that "
 		     "cannot exist");
+		return;
+	}
 	if (token_gate_needs_attested(LOTA_STATUS_TOKEN_ONLY |
 				      LOTA_STATUS_TPM_OK))
 		FAIL("a token-only publisher was asked for a verdict that "
 		     "cannot exist");
-	PASS();
 }
 
 /*
@@ -77,7 +61,6 @@ static void test_own_measurement_failure_refuses(void)
 	if (!token_gate_failure_is_fatal(4242, 4242))
 		FAIL("a caller was issued a token over its own unmeasurable "
 		     "executable");
-	PASS();
 }
 
 /*
@@ -90,20 +73,15 @@ static void test_another_process_does_not_decide_this_token(void)
 
 	if (token_gate_failure_is_fatal(8255, 4242))
 		FAIL("one title's packaging refused another title's token");
-	PASS();
 }
 
 int main(void)
 {
+	test_begin("token gate");
 	test_verifier_publisher_still_needs_a_verdict();
 	test_token_only_publisher_is_answered();
 	test_own_measurement_failure_refuses();
 	test_another_process_does_not_decide_this_token();
 
-	if (g_failures == 0) {
-		printf("\nAll tests passed.\n");
-		return 0;
-	}
-	fprintf(stderr, "\n%d test(s) failed.\n", g_failures);
-	return 1;
+	return test_end();
 }

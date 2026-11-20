@@ -140,7 +140,6 @@ static void test_translating_domains_are_dma_remapping(void)
 		FAIL("DMA remapping is not established from the domains");
 		return;
 	}
-	PASS();
 }
 
 /* identity (passthrough) domains remap nothing, units or not */
@@ -163,7 +162,6 @@ static void test_identity_domains_are_not_dma_remapping(void)
 		FAIL("passthrough was reported as DMA remapping");
 		return;
 	}
-	PASS();
 }
 
 /* No units, no groups: the honest answer is that nothing was verified */
@@ -183,7 +181,6 @@ static void test_a_host_without_an_iommu_verifies_nothing(void)
 		FAIL("a flag was set with no evidence for it");
 		return;
 	}
-	PASS();
 }
 
 /* interrupt remapping is read from the chip names in /proc/interrupts */
@@ -207,7 +204,6 @@ static void test_irq_remapping_comes_from_the_interrupt_table(void)
 		FAIL("remapped interrupts were not recognised");
 		return;
 	}
-	PASS();
 }
 
 /* And the same table with no remapped chip says so */
@@ -227,7 +223,6 @@ static void test_unremapped_interrupts_say_so(void)
 		FAIL("interrupt remapping was claimed without evidence");
 		return;
 	}
-	PASS();
 }
 
 /* the options the booted kernel itself acts on, and only those */
@@ -274,17 +269,16 @@ static void test_cmdline_is_read_as_the_kernel_reads_it(void)
 		set = status.flags & IOMMU_FLAG_CMDLINE_SET;
 		strict = status.flags & IOMMU_FLAG_STRICT;
 		if (set != cases[i].set || strict != cases[i].strict) {
-			printf("    %s", cases[i].cmdline);
+			FAIL("%s", cases[i].cmdline);
 			FAIL("enabled or strict differs from the kernel");
 			return;
 		}
 	}
-	PASS();
 }
 
 int main(void)
 {
-	printf("=== IOMMU evidence tests ===\n\n");
+	test_begin("iommu evidence");
 
 	snprintf(g_root, sizeof(g_root), "/tmp/lota-iommu-%d", (int)getpid());
 
@@ -297,6 +291,5 @@ int main(void)
 
 	rmtree(g_root);
 
-	printf("\n=== %d/%d passed ===\n", tests_passed, tests_run);
-	return tests_passed == tests_run ? 0 : 1;
+	return test_end();
 }

@@ -31,12 +31,6 @@
 static char test_socket[64];
 static int mock_server_errno;
 
-static void SKIP(const char *msg)
-{
-	tests_passed++;
-	printf("SKIP (%s)\n", msg);
-}
-
 static int socket_errno_is_sandbox(int err)
 {
 	return err == EPERM || err == EACCES || err == EROFS;
@@ -73,8 +67,6 @@ static void test_subscribe_request_format(void)
 		FAIL("event mask STATUS|ATTEST should be 0x03");
 		return;
 	}
-
-	PASS();
 }
 
 static void test_notify_format(void)
@@ -94,7 +86,7 @@ static void test_notify_format(void)
 		char msg[64];
 		snprintf(msg, sizeof(msg), "notify should be 36 bytes, got %zu",
 			 sizeof(notify));
-		FAIL(msg);
+		FAIL("%s", msg);
 		return;
 	}
 
@@ -103,8 +95,6 @@ static void test_notify_format(void)
 		FAIL("LOTA_IPC_NOTIFY should be 0x80");
 		return;
 	}
-
-	PASS();
 }
 
 static void test_event_constants(void)
@@ -117,8 +107,6 @@ static void test_event_constants(void)
 		FAIL("IPC and SDK event constants mismatch");
 		return;
 	}
-
-	PASS();
 }
 
 static void test_subscribe_unsubscribe_mask(void)
@@ -138,8 +126,6 @@ static void test_subscribe_unsubscribe_mask(void)
 		FAIL("EVENT_ALL should be 0xFFFFFFFF");
 		return;
 	}
-
-	PASS();
 }
 
 static int send_response(int fd, uint32_t result, const void *payload,
@@ -464,7 +450,7 @@ static void test_subscribe_and_poll(void)
 		char msg[64];
 		snprintf(msg, sizeof(msg), "subscribe failed: %s",
 			 lota_strerror(ret));
-		FAIL(msg);
+		FAIL("%s", msg);
 		lota_disconnect(client);
 		wait_server(server);
 		return;
@@ -475,7 +461,7 @@ static void test_subscribe_and_poll(void)
 		char msg[64];
 		snprintf(msg, sizeof(msg),
 			 "expected >= 2 notifications, got %d", ret);
-		FAIL(msg);
+		FAIL("%s", msg);
 		lota_disconnect(client);
 		wait_server(server);
 		return;
@@ -509,11 +495,9 @@ static void test_subscribe_and_poll(void)
 		char msg[64];
 		snprintf(msg, sizeof(msg), "server exited with code %d",
 			 srv_ret);
-		FAIL(msg);
+		FAIL("%s", msg);
 		return;
 	}
-
-	PASS();
 }
 
 static void test_interleaved_notification(void)
@@ -566,7 +550,7 @@ static void test_interleaved_notification(void)
 		char msg[64];
 		snprintf(msg, sizeof(msg), "ping failed: %s",
 			 lota_strerror(ret));
-		FAIL(msg);
+		FAIL("%s", msg);
 		lota_disconnect(client);
 		wait_server(server);
 		return;
@@ -576,7 +560,7 @@ static void test_interleaved_notification(void)
 		char msg[64];
 		snprintf(msg, sizeof(msg), "uptime should be 42, got %lu",
 			 (unsigned long)uptime);
-		FAIL(msg);
+		FAIL("%s", msg);
 		lota_disconnect(client);
 		wait_server(server);
 		return;
@@ -588,7 +572,7 @@ static void test_interleaved_notification(void)
 		snprintf(msg, sizeof(msg),
 			 "expected 1 interleaved notification, got %d",
 			 counter);
-		FAIL(msg);
+		FAIL("%s", msg);
 		lota_disconnect(client);
 		wait_server(server);
 		return;
@@ -603,7 +587,6 @@ static void test_interleaved_notification(void)
 
 	lota_disconnect(client);
 	wait_server(server);
-	PASS();
 }
 
 static void test_unsubscribe(void)
@@ -648,7 +631,7 @@ static void test_unsubscribe(void)
 		char msg[64];
 		snprintf(msg, sizeof(msg), "unsubscribe failed: %s",
 			 lota_strerror(ret));
-		FAIL(msg);
+		FAIL("%s", msg);
 		lota_disconnect(client);
 		wait_server(server);
 		return;
@@ -660,11 +643,9 @@ static void test_unsubscribe(void)
 		char msg[64];
 		snprintf(msg, sizeof(msg), "server exited with code %d",
 			 srv_ret);
-		FAIL(msg);
+		FAIL("%s", msg);
 		return;
 	}
-
-	PASS();
 }
 
 static void test_subscribe_null_client(void)
@@ -676,8 +657,6 @@ static void test_subscribe_null_client(void)
 		FAIL("expected LOTA_ERR_NOT_CONNECTED");
 		return;
 	}
-
-	PASS();
 }
 
 static void test_subscribe_no_callback(void)
@@ -701,7 +680,6 @@ static void test_subscribe_no_callback(void)
 
 	if (c)
 		lota_disconnect(c);
-	PASS();
 }
 
 static void test_poll_null_client(void)
@@ -713,8 +691,6 @@ static void test_poll_null_client(void)
 		FAIL("expected LOTA_ERR_NOT_CONNECTED");
 		return;
 	}
-
-	PASS();
 }
 
 static void test_poll_no_data(void)
@@ -766,7 +742,6 @@ static void test_poll_no_data(void)
 	/* no crash, no hang */
 	lota_disconnect(client);
 	wait_server(server);
-	PASS();
 }
 
 static void test_poll_infinite_wait(void)
@@ -816,7 +791,6 @@ static void test_poll_infinite_wait(void)
 
 	lota_disconnect(client);
 	wait_server(server);
-	PASS();
 }
 
 static void test_raw_subscribe_protocol(void)
@@ -912,8 +886,6 @@ static void test_raw_subscribe_protocol(void)
 		goto out;
 	}
 
-	PASS();
-
 out:
 	close(sv[0]);
 	close(sv[1]);
@@ -1006,8 +978,6 @@ static void test_raw_notification_protocol(void)
 		}
 	}
 
-	PASS();
-
 out:
 	close(sv[0]);
 	close(sv[1]);
@@ -1054,9 +1024,7 @@ static void test_reply_before_hangup(void)
 	lota_disconnect(client);
 	wait_server(server);
 	if (ret != LOTA_OK || uptime != 7)
-		FAIL(lota_strerror(ret));
-	else
-		PASS();
+		FAIL("%s", lota_strerror(ret));
 }
 
 /* How a mock registry listing breaks the wire contract */
@@ -1169,7 +1137,7 @@ static void serve_registry(int client_fd, uint64_t torn_round,
 			   enum registry_fault fault)
 {
 	struct lota_ipc_request req;
-	struct lota_ipc_registry_request body;
+	struct lota_ipc_registry_request body = { 0 };
 	uint8_t buf[LOTA_IPC_MAX_PAYLOAD];
 	int served = 0;
 
@@ -1300,12 +1268,11 @@ static void test_registry_pages(void)
 	    reg->actors[1].owner_tgid != 4243 ||
 	    strcmp(reg->actors[1].comm, "actor1") != 0 ||
 	    strcmp(reg->actors[1].owner_comm, "wineserver") != 0) {
-		FAIL(lota_strerror(ret));
+		FAIL("%s", lota_strerror(ret));
 		lota_registry_free(reg);
 		return;
 	}
 	lota_registry_free(reg);
-	PASS();
 }
 
 static void test_registry_torn(void)
@@ -1321,12 +1288,11 @@ static void test_registry_torn(void)
 		return;
 	}
 	if (ret != LOTA_OK || !reg || reg->round != 2 || reg->count != 5) {
-		FAIL(lota_strerror(ret));
+		FAIL("%s", lota_strerror(ret));
 		lota_registry_free(reg);
 		return;
 	}
 	lota_registry_free(reg);
-	PASS();
 }
 
 static void test_registry_refusals(void)
@@ -1340,61 +1306,47 @@ static void test_registry_refusals(void)
 	if (skipped)
 		SKIP("AF_UNIX mock server not permitted");
 	else if (ret != LOTA_ERR_PROTOCOL || reg)
-		FAIL(lota_strerror(ret));
-	else
-		PASS();
+		FAIL("%s", lota_strerror(ret));
 
 	TEST("get_registry refuses an entry flag it does not know");
 	ret = fetch_registry(server_registry_bad_entry_flag, &reg, &skipped);
 	if (skipped)
 		SKIP("AF_UNIX mock server not permitted");
 	else if (ret != LOTA_ERR_PROTOCOL || reg)
-		FAIL(lota_strerror(ret));
-	else
-		PASS();
+		FAIL("%s", lota_strerror(ret));
 
 	TEST("get_registry refuses a listing flag it does not know");
 	ret = fetch_registry(server_registry_bad_flag, &reg, &skipped);
 	if (skipped)
 		SKIP("AF_UNIX mock server not permitted");
 	else if (ret != LOTA_ERR_PROTOCOL || reg)
-		FAIL(lota_strerror(ret));
-	else
-		PASS();
+		FAIL("%s", lota_strerror(ret));
 
 	TEST("get_registry refuses an actor kind it does not know");
 	ret = fetch_registry(server_registry_bad_actor_kind, &reg, &skipped);
 	if (skipped)
 		SKIP("AF_UNIX mock server not permitted");
 	else if (ret != LOTA_ERR_PROTOCOL || reg)
-		FAIL(lota_strerror(ret));
-	else
-		PASS();
+		FAIL("%s", lota_strerror(ret));
 
 	TEST("get_registry refuses an actor name without its end");
 	ret = fetch_registry(server_registry_bad_actor_comm, &reg, &skipped);
 	if (skipped)
 		SKIP("AF_UNIX mock server not permitted");
 	else if (ret != LOTA_ERR_PROTOCOL || reg)
-		FAIL(lota_strerror(ret));
-	else
-		PASS();
+		FAIL("%s", lota_strerror(ret));
 
 	TEST("get_registry names a process the round did not measure");
 	ret = fetch_registry(server_registry_not_protected, &reg, &skipped);
 	if (skipped)
 		SKIP("AF_UNIX mock server not permitted");
 	else if (ret != LOTA_ERR_NOT_PROTECTED || reg)
-		FAIL(lota_strerror(ret));
-	else
-		PASS();
+		FAIL("%s", lota_strerror(ret));
 
 	TEST("get_registry refuses a missing client or output");
-	if (lota_get_registry(NULL, 1, &reg) == LOTA_ERR_NOT_CONNECTED &&
-	    lota_get_registry((struct lota_client *)&reg, 1, NULL) ==
-		    LOTA_ERR_INVALID_ARG)
-		PASS();
-	else
+	if (!(lota_get_registry(NULL, 1, &reg) == LOTA_ERR_NOT_CONNECTED &&
+	      lota_get_registry((struct lota_client *)&reg, 1, NULL) ==
+		      LOTA_ERR_INVALID_ARG))
 		FAIL("accepted a missing argument");
 }
 
@@ -1468,29 +1420,23 @@ static void test_boot_evidence(void)
 	}
 	if (ret != LOTA_OK || written != 64 || buf[0] != 0 || buf[63] != 63)
 		FAIL("evidence lost or cut");
-	else
-		PASS();
 
 	TEST("get_boot_evidence refuses a buffer too small");
 	ret = fetch_boot_evidence(server_boot_evidence, buf, 16, &written,
 				  &skipped);
 	if (ret != LOTA_ERR_BUFFER_TOO_SMALL)
 		FAIL("short buffer not reported");
-	else
-		PASS();
 
 	TEST("get_boot_evidence passes NO_TPM through");
 	ret = fetch_boot_evidence(server_boot_evidence_no_tpm, buf, sizeof(buf),
 				  &written, &skipped);
 	if (ret != LOTA_ERR_NO_TPM)
 		FAIL("refusal not mapped");
-	else
-		PASS();
 }
 
 int main(void)
 {
-	printf("=== SUBSCRIBE / Push Notification Tests ===\n\n");
+	test_begin("subscribe");
 
 	snprintf(test_socket, sizeof(test_socket), "/tmp/lota_ts_%d.sock",
 		 getpid());
@@ -1525,6 +1471,5 @@ int main(void)
 	test_registry_refusals();
 	test_boot_evidence();
 
-	printf("\n=== Results: %d/%d passed ===\n", tests_passed, tests_run);
-	return (tests_passed == tests_run) ? 0 : 1;
+	return test_end();
 }

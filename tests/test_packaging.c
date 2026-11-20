@@ -60,7 +60,6 @@ static void test_packaged_unit_does_not_set_mode(void)
 		FAIL("ExecStart must not pass --mode (would override cfg.mode)");
 		return;
 	}
-	PASS();
 }
 
 static FILE *open_shipped(const char *rel)
@@ -114,7 +113,6 @@ static void test_attest_unit_config_driven(void)
 		FAIL("ExecStart must not pin --attest-interval or --mode");
 		return;
 	}
-	PASS();
 }
 
 /*
@@ -159,7 +157,6 @@ static void test_attest_unit_isolated(void)
 		FAIL("a condition keeps the unit stopped after enrollment");
 		return;
 	}
-	PASS();
 }
 
 /*
@@ -185,7 +182,6 @@ static void test_no_preset_is_shipped(void)
 		FAIL("a systemd preset is shipped again; installing a package must enable nothing");
 		return;
 	}
-	PASS();
 }
 
 /*
@@ -220,7 +216,6 @@ static void test_installer_enables_the_units(void)
 		FAIL("installer does not enable all three units");
 		return;
 	}
-	PASS();
 }
 
 /*
@@ -268,11 +263,10 @@ static void test_documented_selinux_interfaces_exist(void)
 			snprintf(msg, sizeof(msg),
 				 "%s is documented and not defined",
 				 documented[i]);
-			FAIL(msg);
+			FAIL("%s", msg);
 			return;
 		}
 	}
-	PASS();
 }
 
 static void test_selinux_interfaces_are_installed(void)
@@ -315,7 +309,6 @@ static void test_selinux_interfaces_are_installed(void)
 		FAIL("the package ships no lota.if, so a packaged host cannot call the interfaces");
 		return;
 	}
-	PASS();
 }
 
 /*
@@ -389,7 +382,7 @@ static void test_selinux_reports_every_tunable(void)
 					msg, sizeof(msg),
 					"%.40s is named in the Makefile, so a hand-kept list is back",
 					tunables[i]);
-				FAIL(msg);
+				FAIL("%s", msg);
 				return;
 			}
 		}
@@ -408,10 +401,9 @@ static void test_selinux_reports_every_tunable(void)
 			msg, sizeof(msg),
 			"only %d target walks TUNABLES; verify and the install banner both must",
 			iterating_targets);
-		FAIL(msg);
+		FAIL("%s", msg);
 		return;
 	}
-	PASS();
 }
 
 /*
@@ -447,7 +439,6 @@ static void test_selinux_policy_carries_no_portcon(void)
 		}
 		fclose(fp);
 	}
-	PASS();
 }
 
 /*
@@ -539,7 +530,6 @@ static void test_selinux_container_listener_is_shipped(void)
 			return;
 		}
 	}
-	PASS();
 }
 
 static void test_selinux_gaming_client_reaches_container_socket(void)
@@ -592,11 +582,10 @@ static void test_selinux_gaming_client_reaches_container_socket(void)
 			snprintf(msg, sizeof(msg),
 				 "%s grants no access to the per-user socket",
 				 road[i]);
-			FAIL(msg);
+			FAIL("%s", msg);
 			return;
 		}
 	}
-	PASS();
 }
 
 /* whole file into caller's buffer, NUL-terminated; 0 when it cannot be read */
@@ -631,7 +620,6 @@ static void test_selinux_agent_reaches_user_namespaces(void)
 		FAIL("no cap_userns rule: Proton titles stay out of reach");
 		return;
 	}
-	PASS();
 }
 
 /*
@@ -652,7 +640,6 @@ static void test_selinux_agent_reads_filesystem_types(void)
 		FAIL("no filesystem getattr: a title without verity loses its token");
 		return;
 	}
-	PASS();
 }
 
 /*
@@ -675,7 +662,6 @@ static void test_every_binary_links_hardened(void)
 		FAIL("a binary links outside HARDENING_LDFLAGS");
 		return;
 	}
-	PASS();
 }
 
 /* the read the runtime image measurement holds on mapped files */
@@ -702,7 +688,6 @@ static void test_selinux_agent_skips_the_symbol_table(void)
 		FAIL("lota_agent_t may read /proc/kallsyms and System.map");
 		return;
 	}
-	PASS();
 }
 
 /*
@@ -726,7 +711,6 @@ static void test_selinux_agent_skips_security_files(void)
 		FAIL("lota_agent_t may read /etc/shadow or a keytab");
 		return;
 	}
-	PASS();
 }
 
 /*
@@ -752,7 +736,6 @@ static void test_selinux_status_client_stats_socket(void)
 	}
 	for (size_t i = 0; i + strlen(want) <= len; i++) {
 		if (strncmp(body + i, want, strlen(want)) == 0) {
-			PASS();
 			return;
 		}
 	}
@@ -824,7 +807,6 @@ static void test_installer_labels_the_config_directory(void)
 		FAIL("no restorecon reaches the config directory");
 		return;
 	}
-	PASS();
 }
 
 /*
@@ -845,7 +827,6 @@ static void test_agent_unit_skips_userdb(void)
 		FAIL("a group lookup logs an AVC per userdb socket");
 		return;
 	}
-	PASS();
 }
 
 /*
@@ -873,7 +854,6 @@ static void test_agent_unit_outwaits_the_shutdown(void)
 		FAIL("systemd stops waiting before --shutdown does");
 		return;
 	}
-	PASS();
 }
 
 /*
@@ -903,7 +883,6 @@ static void test_upgrade_reloads_the_selinux_module(void)
 			return;
 		}
 	}
-	PASS();
 }
 
 /*
@@ -935,7 +914,6 @@ static void test_both_hooks_drive_bringup(void)
 			return;
 		}
 	}
-	PASS();
 }
 
 /*
@@ -965,7 +943,6 @@ static void test_both_manifests_own_the_config_directory(void)
 		FAIL("the nfpm package leaves /etc/lota to whoever writes first");
 		return;
 	}
-	PASS();
 }
 
 /*
@@ -990,7 +967,6 @@ static void test_installer_probe_asks_about_ports(void)
 		FAIL("a later run with a new port skips the labelling");
 		return;
 	}
-	PASS();
 }
 
 /*
@@ -1017,7 +993,6 @@ static void test_installer_leaves_a_named_port_alone(void)
 		FAIL("apply relabels a port another type already names");
 		return;
 	}
-	PASS();
 }
 
 /*
@@ -1050,7 +1025,6 @@ static void test_installer_relabel_reapplies_the_device_labels(void)
 		FAIL("the udev trigger does not name both TPM nodes");
 		return;
 	}
-	PASS();
 }
 
 /*
@@ -1104,7 +1078,6 @@ static void test_static_cli_is_built_without_cgo(void)
 
 	if (!claims_static) {
 		/* the page no longer promises it; nothing to hold the recipe to */
-		PASS();
 		return;
 	}
 
@@ -1127,7 +1100,6 @@ static void test_static_cli_is_built_without_cgo(void)
 		FAIL("the recipe builds a dynamically linked binary");
 		return;
 	}
-	PASS();
 }
 
 /*
@@ -1167,7 +1139,6 @@ static void test_shared_key_refusal_survives_several_publishers(void)
 		FAIL("the key is asked for before the publisher's record is read");
 		return;
 	}
-	PASS();
 }
 
 /*
@@ -1216,7 +1187,6 @@ static void test_probe_quotes_the_keys_the_host_attests_with(void)
 		FAIL("the probe quotes without binding a publisher's profile");
 		return;
 	}
-	PASS();
 }
 
 /*
@@ -1268,7 +1238,6 @@ static void test_enrollment_reaches_the_ca_before_it_spends_a_key(void)
 		FAIL("the session is declared open without connecting");
 		return;
 	}
-	PASS();
 }
 
 /* A command-line endpoint beats the recorded one; a stale one spends the key. */
@@ -1305,7 +1274,6 @@ static void test_reenroll_dials_what_the_command_line_named(void)
 		FAIL("the run never says which endpoint it dialled");
 		return;
 	}
-	PASS();
 }
 
 /* An expired certificate is refreshed with the installer's anchor. */
@@ -1332,12 +1300,11 @@ static void test_installer_reenrolls_with_its_anchor(void)
 		FAIL("an anchor moved since enrollment fails the refresh");
 		return;
 	}
-	PASS();
 }
 
 int main(void)
 {
-	printf("=== LOTA Packaging Tests ===\n\n");
+	test_begin("packaging");
 
 	test_packaged_unit_does_not_set_mode();
 	test_attest_unit_config_driven();
@@ -1372,6 +1339,5 @@ int main(void)
 	test_reenroll_dials_what_the_command_line_named();
 	test_installer_reenrolls_with_its_anchor();
 
-	printf("\n=== Results: %d/%d passed ===\n", tests_passed, tests_run);
-	return (tests_passed == tests_run) ? 0 : 1;
+	return test_end();
 }

@@ -16,9 +16,9 @@
 
 #include "lota_ipc.h"
 #include "lota_token.h"
+#include "test.h"
 
 #include <stddef.h>
-#include <stdio.h>
 
 #define LOTA_IPC_TOKEN_FIXED_SIZE                                 \
 	(LOTA_IPC_TOKEN_HEADER_SIZE + LOTA_IPC_TOKEN_MAX_ATTEST + \
@@ -51,45 +51,26 @@ _Static_assert(LOTA_IPC_TOKEN_MAX_SIZE <= LOTA_IPC_MAX_PAYLOAD,
 
 int main(void)
 {
-	size_t full = LOTA_IPC_TOKEN_FIXED_SIZE +
-		      (size_t)LOTA_IPC_TOKEN_MAX_PROTECT_PIDS *
-			      LOTA_IPC_TOKEN_PROTECT_ENTRY_SIZE;
-	int fail = 0;
-
-	printf("ipc token protected-PID cap: %u PIDs, worst-case %zu/%u bytes\n",
-	       (unsigned)LOTA_IPC_TOKEN_MAX_PROTECT_PIDS, full,
-	       (unsigned)LOTA_IPC_MAX_PAYLOAD);
-	printf("wire token protected-PID cap: %u PIDs, worst-case %zu/%u bytes\n",
-	       (unsigned)LOTA_TOKEN_MAX_PROTECT_PIDS,
-	       (size_t)LOTA_TOKEN_WORST_CASE_SIZE,
-	       (unsigned)LOTA_TOKEN_MAX_SIZE);
+	test_begin("ipc token cap");
 
 	/* the wire cap is the IPC-derived cap */
-	if (LOTA_TOKEN_MAX_PROTECT_PIDS != LOTA_IPC_TOKEN_MAX_PROTECT_PIDS) {
-		printf("FAIL: wire cap %u != IPC-derived cap %u\n",
-		       (unsigned)LOTA_TOKEN_MAX_PROTECT_PIDS,
-		       (unsigned)LOTA_IPC_TOKEN_MAX_PROTECT_PIDS);
-		fail = 1;
-	}
-	if (LOTA_TOKEN_MAX_PID_LIST_SIZE != LOTA_IPC_TOKEN_MAX_PID_LIST_SIZE) {
-		printf("FAIL: wire PID list %u != IPC PID list %u bytes\n",
-		       (unsigned)LOTA_TOKEN_MAX_PID_LIST_SIZE,
-		       (unsigned)LOTA_IPC_TOKEN_MAX_PID_LIST_SIZE);
-		fail = 1;
-	}
+	TEST("wire protected-PID cap is the IPC-derived cap");
+	if (LOTA_TOKEN_MAX_PROTECT_PIDS != LOTA_IPC_TOKEN_MAX_PROTECT_PIDS)
+		FAIL("wire cap %u, IPC-derived cap %u",
+		     (unsigned)LOTA_TOKEN_MAX_PROTECT_PIDS,
+		     (unsigned)LOTA_IPC_TOKEN_MAX_PROTECT_PIDS);
+	TEST("wire PID list size is the IPC PID list size");
+	if (LOTA_TOKEN_MAX_PID_LIST_SIZE != LOTA_IPC_TOKEN_MAX_PID_LIST_SIZE)
+		FAIL("wire PID list %u, IPC PID list %u bytes",
+		     (unsigned)LOTA_TOKEN_MAX_PID_LIST_SIZE,
+		     (unsigned)LOTA_IPC_TOKEN_MAX_PID_LIST_SIZE);
 
 	/* LOTA_TOKEN_MAX_SIZE must fit a full token */
-	if ((size_t)LOTA_TOKEN_MAX_SIZE < LOTA_TOKEN_WORST_CASE_SIZE) {
-		printf("FAIL: advertised max %u bytes is below the %zu-byte "
-		       "worst-case token\n",
-		       (unsigned)LOTA_TOKEN_MAX_SIZE,
-		       (size_t)LOTA_TOKEN_WORST_CASE_SIZE);
-		fail = 1;
-	}
+	TEST("advertised token maximum fits the worst-case token");
+	if ((size_t)LOTA_TOKEN_MAX_SIZE < LOTA_TOKEN_WORST_CASE_SIZE)
+		FAIL("advertised max %u bytes, worst case %zu",
+		     (unsigned)LOTA_TOKEN_MAX_SIZE,
+		     (size_t)LOTA_TOKEN_WORST_CASE_SIZE);
 
-	if (fail)
-		return 1;
-	printf("token protected-PID cap: one source, %u PIDs\n",
-	       (unsigned)LOTA_TOKEN_MAX_PROTECT_PIDS);
-	return 0;
+	return test_end();
 }

@@ -1651,9 +1651,14 @@ test-bins: $(TEST_BINS)
 test: test-unit
 
 .PHONY: test-unit
+test-unit: export LOTA_TEST_SUMMARY := $(abspath $(BUILD_DIR))/test-summary.tsv
 test-unit: all $(TEST_BINS)
-	@echo "=== Running unit tests ==="
-	@set -e; for t in $(TEST_RUN); do $$t; done
+	@rm -f "$$LOTA_TEST_SUMMARY"
+	@for t in $(TEST_RUN); do \
+		$$t 3>>"$$LOTA_TEST_SUMMARY"; \
+		printf 'R\t%s\t%d\n' "$${t##*/}" $$? >>"$$LOTA_TEST_SUMMARY"; \
+	done
+	@tests/lib/summary.sh "$$LOTA_TEST_SUMMARY"
 	@echo ""
 	@echo "=== Running integration tests (best effort) ==="
 	@if [ -x $(AGENT_BIN) ] && command -v openssl >/dev/null 2>&1; then \

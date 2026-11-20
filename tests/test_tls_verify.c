@@ -13,29 +13,19 @@
  */
 
 #include <errno.h>
-#include <stdio.h>
 #include <string.h>
 #include <stdint.h>
 
 #include "../src/agent/net.h"
+#include "test.h"
 
 #define TEST_PORT 9443
-#define GREEN "\033[32m"
-#define RED "\033[31m"
-#define RESET "\033[0m"
-
-static int tests_passed = 0;
-static int tests_failed = 0;
 
 static void test_result(const char *name, int passed)
 {
-	if (passed) {
-		printf("  %s[PASS]%s %s\n", GREEN, RESET, name);
-		tests_passed++;
-	} else {
-		printf("  %s[FAIL]%s %s\n", RED, RESET, name);
-		tests_failed++;
-	}
+	TEST(name);
+	if (!passed)
+		FAIL("condition not met");
 }
 
 static void test_system_ca_rejects_selfsigned(void)
@@ -278,24 +268,17 @@ int main(int argc, char *argv[])
 	if (argc > 1)
 		ca_path = argv[1];
 
-	printf("=== LOTA TLS Certificate Verification Tests ===\n");
-	printf("CA cert: %s\n", ca_path);
-	printf("Server: localhost:%d\n\n", TEST_PORT);
-	printf("Note: requires openssl s_server running on port %d, with a\n"
-	       "certificate whose only SAN is DNS:localhost\n",
-	       TEST_PORT);
-	printf("  openssl s_server -accept %d -cert server.pem -key server.key "
-	       "-tls1_3 -www -quiet\n\n",
-	       TEST_PORT);
-
+	/*
+	 * The connection tests need openssl s_server on TEST_PORT with a
+	 * certificate whose only SAN is DNS:localhost.
+	 */
+	test_begin("tls verify");
 	net_init();
 
-	printf("--- Input validation tests ---\n");
 	test_null_server();
 	test_bad_ca_path();
 	test_skip_verify_stored();
 
-	printf("\n--- Certificate pinning tests ---\n");
 	test_pin_stored_in_context();
 	test_null_pin_no_pinning();
 	test_parse_pin_valid_hex();
@@ -304,21 +287,14 @@ int main(int argc, char *argv[])
 	test_parse_pin_with_spaces();
 	test_parse_pin_invalid();
 
-	printf("\n--- TLS connection tests (require running server) ---\n");
 	test_system_ca_rejects_selfsigned();
 
-	printf("    (reconnecting...)\n");
 	test_skip_verify();
 
-	printf("    (reconnecting...)\n");
 	test_custom_ca_accepts(ca_path);
 
-	printf("    (reconnecting...)\n");
 	test_hostname_mismatch(ca_path);
 
-	printf("\n=== Results: %d passed, %d failed ===\n", tests_passed,
-	       tests_failed);
-
 	net_cleanup();
-	return tests_failed > 0 ? 1 : 0;
+	return test_end();
 }

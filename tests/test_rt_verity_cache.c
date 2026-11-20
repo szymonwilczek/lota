@@ -11,7 +11,6 @@
  */
 
 #include <stdint.h>
-#include <stdio.h>
 #include <string.h>
 
 #include "test.h"
@@ -41,19 +40,16 @@ static struct lota_verity_digest_key make_digest(uint8_t fill, uint32_t len)
 
 int main(void)
 {
+	test_begin("rt verity cache");
 	static struct lota_rt_verity_cache cache;
 	struct lota_verity_digest_key got;
 	struct lota_rt_verity_key key;
-
-	printf("fs-verity digest cache tests:\n");
 
 	lota_rt_verity_cache_clear(&cache);
 	key = make_key(64, 1000, 4096, 100, 200);
 
 	TEST("an unknown object misses");
-	if (lota_rt_verity_cache_get(&cache, &key, &got) == 0)
-		PASS();
-	else
+	if (lota_rt_verity_cache_get(&cache, &key, &got) != 0)
 		FAIL("hit on an empty cache");
 
 	TEST("a stored digest is served back");
@@ -67,10 +63,9 @@ int main(void)
 		lota_rt_verity_cache_put(&cache, &key, &d);
 	}
 	memset(&got, 0, sizeof(got));
-	if (lota_rt_verity_cache_get(&cache, &key, &got) == 1 &&
-	    got.len == LOTA_VERITY_DIGEST_SHA512_SIZE && got.digest[0] == 0xAB)
-		PASS();
-	else
+	if (!(lota_rt_verity_cache_get(&cache, &key, &got) == 1 &&
+	      got.len == LOTA_VERITY_DIGEST_SHA512_SIZE &&
+	      got.digest[0] == 0xAB))
 		FAIL("stored digest not served");
 
 	/* every identity field has to be part of what "the same object" means */
@@ -78,9 +73,7 @@ int main(void)
 	{
 		struct lota_rt_verity_key other =
 			make_key(64, 1001, 4096, 100, 200);
-		if (lota_rt_verity_cache_get(&cache, &other, &got) == 0)
-			PASS();
-		else
+		if (lota_rt_verity_cache_get(&cache, &other, &got) != 0)
 			FAIL("served another inode's digest");
 	}
 
@@ -88,9 +81,7 @@ int main(void)
 	{
 		struct lota_rt_verity_key other =
 			make_key(65, 1000, 4096, 100, 200);
-		if (lota_rt_verity_cache_get(&cache, &other, &got) == 0)
-			PASS();
-		else
+		if (lota_rt_verity_cache_get(&cache, &other, &got) != 0)
 			FAIL("served another filesystem's digest");
 	}
 
@@ -98,9 +89,7 @@ int main(void)
 	{
 		struct lota_rt_verity_key other =
 			make_key(64, 1000, 8192, 100, 200);
-		if (lota_rt_verity_cache_get(&cache, &other, &got) == 0)
-			PASS();
-		else
+		if (lota_rt_verity_cache_get(&cache, &other, &got) != 0)
 			FAIL("served a digest across a size change");
 	}
 
@@ -110,10 +99,8 @@ int main(void)
 			make_key(64, 1000, 4096, 101, 200);
 		struct lota_rt_verity_key ns =
 			make_key(64, 1000, 4096, 100, 201);
-		if (lota_rt_verity_cache_get(&cache, &other, &got) == 0 &&
-		    lota_rt_verity_cache_get(&cache, &ns, &got) == 0)
-			PASS();
-		else
+		if (!(lota_rt_verity_cache_get(&cache, &other, &got) == 0 &&
+		      lota_rt_verity_cache_get(&cache, &ns, &got) == 0))
 			FAIL("served a digest across an mtime change");
 	}
 
@@ -123,11 +110,9 @@ int main(void)
 			make_digest(0xCD, LOTA_VERITY_DIGEST_SHA256_SIZE);
 		lota_rt_verity_cache_put(&cache, &key, &d);
 		memset(&got, 0, sizeof(got));
-		if (lota_rt_verity_cache_get(&cache, &key, &got) == 1 &&
-		    got.len == LOTA_VERITY_DIGEST_SHA256_SIZE &&
-		    got.digest[0] == 0xCD)
-			PASS();
-		else
+		if (!(lota_rt_verity_cache_get(&cache, &key, &got) == 1 &&
+		      got.len == LOTA_VERITY_DIGEST_SHA256_SIZE &&
+		      got.digest[0] == 0xCD))
 			FAIL("kept the superseded digest");
 	}
 
@@ -138,9 +123,7 @@ int main(void)
 		struct lota_verity_digest_key d = make_digest(0xEE, 48);
 		d.len = 48;
 		lota_rt_verity_cache_put(&cache, &bad, &d);
-		if (lota_rt_verity_cache_get(&cache, &bad, &got) == 0)
-			PASS();
-		else
+		if (lota_rt_verity_cache_get(&cache, &bad, &got) != 0)
 			FAIL("cached an unsupported digest length");
 	}
 
@@ -165,20 +148,14 @@ int main(void)
 				served++;
 		}
 		/* eviction is expected; serving a wrong digest is not */
-		if (served > 0 && served <= LOTA_RT_VERITY_CACHE_ENTRIES)
-			PASS();
-		else
+		if (!(served > 0 && served <= LOTA_RT_VERITY_CACHE_ENTRIES))
 			FAIL("cache grew past its bound");
 	}
 
 	TEST("a NULL cache is safe");
 	lota_rt_verity_cache_put(NULL, &key, &got);
-	if (lota_rt_verity_cache_get(NULL, &key, &got) == 0)
-		PASS();
-	else
+	if (lota_rt_verity_cache_get(NULL, &key, &got) != 0)
 		FAIL("hit on a NULL cache");
 
-	printf("\n%d/%d fs-verity digest cache tests passed\n", tests_passed,
-	       tests_run);
-	return tests_passed == tests_run ? 0 : 1;
+	return test_end();
 }

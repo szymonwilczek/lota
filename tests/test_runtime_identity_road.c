@@ -47,10 +47,9 @@ static void expect_guarded(const char *name, enum lota_rt_identity_road want,
 
 		snprintf(reason, sizeof(reason), "road %d, wanted %d", (int)got,
 			 (int)want);
-		FAIL(reason);
+		FAIL("%s", reason);
 		return;
 	}
-	PASS();
 }
 
 /* unguarded object */
@@ -166,10 +165,9 @@ static void expect_no_file(const char *name, int want, unsigned long magic,
 {
 	TEST(name);
 	if (lota_rt_object_has_no_file(magic, nlink) != want) {
-		FAIL(want ? "read as a file" : "read as memory");
+		FAIL("%s", want ? "read as a file" : "read as memory");
 		return;
 	}
-	PASS();
 }
 
 /*
@@ -198,7 +196,6 @@ static void expect_memory_flags(const char *name, uint32_t want,
 		FAIL("wrong flags");
 		return;
 	}
-	PASS();
 }
 
 /* what the kernel would have noted, had it seen the mapping */
@@ -230,7 +227,7 @@ static void test_memory_flags_of_an_older_mapping(void)
 
 int main(void)
 {
-	printf("\n=== LOTA runtime identity road tests ===\n\n");
+	test_begin("runtime identity road");
 
 	test_verity_wins();
 	test_own_executable_is_hashed();
@@ -243,6 +240,5 @@ int main(void)
 	test_memory_with_no_name_is_no_file();
 	test_memory_flags_of_an_older_mapping();
 
-	printf("\n=== Results: %d/%d passed ===\n\n", tests_passed, tests_run);
-	return tests_passed == tests_run ? 0 : 1;
+	return test_end();
 }

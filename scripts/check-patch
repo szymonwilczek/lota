@@ -701,12 +701,16 @@ check_unit_tests() {
     local output
 
     if output="$(env GOCACHE="${GOCACHE:-/tmp/lota-gocache}" \
-        make BUILD_DIR="${BUILD_DIR:-/tmp/lota-build}" test-unit 2>&1)"; then
+        LOTA_TEST_COLOR=never make BUILD_DIR="${BUILD_DIR:-/tmp/lota-build}" test-unit 2>&1)"; then
         pass "unit tests"
         return
     fi
 
-    printf '%s\n' "$output" | grep -E 'FAIL|Results:' | sed 's/^/  /' >&2
+    printf '%s\n' "$output" |
+        awk '/^  \[ *[0-9]+\] .* FAIL$/ { p = 1; print; next }
+             p && /^        / { print; next }
+             { p = 0 }
+             /^make: \*\*\*|^  [0-9]+ groups, |^  FAIL  /' | sed 's/^/  /' >&2
     fail "unit tests" \
          "run env GOCACHE=/tmp/lota-gocache make BUILD_DIR=/tmp/lota-build test-unit and fix the failing assertion."
 }

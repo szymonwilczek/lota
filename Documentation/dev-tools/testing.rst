@@ -41,8 +41,7 @@ Unit and integration tests
 ``make test-unit`` builds ``all`` and every test program, then runs:
 
 * every program built from ``tests/test_*.c``, except those listed in
-  ``TEST_MANUAL`` (`Tests that need a live system`_). The loop stops at the
-  first program that exits non-zero.
+  ``TEST_MANUAL`` (`Tests that need a live system`_).
 * the scripts under ``tests/integration/`` that run without root or a
   running agent. A script whose tool is missing (``openssl``, ``python3``,
   ``go``, ``clang``, ``pkg-config``, ``sphinx-build``, ``softhsm2-util``)
@@ -60,8 +59,20 @@ recipe exports. A script that drives one binary also takes its path from the
 environment, such as ``LOTA_INSTALL_BIN`` for ``lota-install`` or
 ``LOTA_TRUST_PONG`` for the ``trust_pong`` example.
 
+Test output
+-----------
+
+Every program runs, whatever the one before it returned.
+``make test-unit`` collects the results in
+``$(BUILD_DIR)/test-summary.tsv`` and ends with ``tests/lib/summary.sh``,
+which prints the totals and every failed test and fails the target.
+``LOTA_TEST_COLOR`` is ``always``, ``never`` or ``auto``.
+
 Adding a C test
 ---------------
+
+A test program reports through ``TEST()``, ``FAIL()`` and ``SKIP()`` of
+``tests/test.h``; its header shows their use.
 
 The ``Makefile`` builds every ``tests/test_*.c`` into
 ``$(BUILD_DIR)/test_<name>``. A test that needs more than its own source
