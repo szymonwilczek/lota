@@ -104,7 +104,8 @@ Also in ``ci.yml``, each a single ``make`` target or script:
 * ``doc-diagnostics``: ``make check-doc-diagnostics`` and
   ``make check-config-commands``,
 * ``syzkaller-matrix``, ``header-paths``, ``test-build-dir``,
-  ``license-boundary``: the ``make check-*`` target of the same name,
+  ``test-names``, ``license-boundary``: the ``make check-*`` target of the
+  same name,
 * ``shellcheck``: ``shellcheck -S error`` over two fixed lists of scripts
   and integration tests, one with ``-s bash`` and one with ``-s sh``,
 * ``yamllint``: ``policies/``, ``.github/``, ``.golangci.yml`` and

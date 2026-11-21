@@ -416,6 +416,7 @@ jobs:
             scripts/check-abi.sh \
             scripts/check-package-manifests.sh \
             scripts/check-test-build-dir.sh \
+            scripts/check-test-names.sh \
             scripts/verify-rpm-release.sh \
             examples/demo/setup.sh \
             examples/ci-gate/run.sh \
@@ -505,6 +506,18 @@ jobs:
 
       - name: Check the tests read the build directory the build used
         run: make check-test-build-dir
+
+  test-names:
+    name: test names
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Check every test name and group header fits its columns
+        run: make check-test-names
 
   license-boundary:
     name: license-boundary

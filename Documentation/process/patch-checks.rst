@@ -149,6 +149,11 @@ test-build-dir
   ``build`` directory that is not the tree's goes in
   ``scripts/test-build-dir-exemptions.txt``.
 
+test-names
+  ``scripts/check-test-names.sh``: no test name in ``tests/`` is cut
+  short in the report, and no script's group header is wider than it. A
+  name built at run time is not checked.
+
 doc-diagnostics
   Every sentence-shaped inline literal in the documentation is a message
   the source can print, except a literal listed in

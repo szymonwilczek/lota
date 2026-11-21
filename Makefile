@@ -956,6 +956,10 @@ check-license-boundary:
 check-test-build-dir:
 	@scripts/check-test-build-dir.sh
 
+.PHONY: check-test-names
+check-test-names:
+	@scripts/check-test-names.sh
+
 .PHONY: check-doc-diagnostics
 check-doc-diagnostics:
 	$(Q)out=$$(tests/integration/test_doc_diagnostics.sh) || \
@@ -2262,6 +2266,7 @@ help:
 	@$(HELP_ROW) check-doc-diagnostics "Fail on a quoted message no program can print"
 	@$(HELP_ROW) check-config-commands "Fail on a shipped config's unresolved command"
 	@$(HELP_ROW) check-test-build-dir "Fail on test/demo naming default build dir"
+	@$(HELP_ROW) check-test-names "Fail on a test name or group header too wide"
 	@$(HELP_ROW) check-syzkaller-matrix "Fail on an LSM program missing from the matrix"
 	@$(HELP_ROW) check-header-paths "Fail on an installed header's dangling path"
 	@$(HELP_ROW) abi-baseline "Rewrite packaging/abi for a deliberate change"

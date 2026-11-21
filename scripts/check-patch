@@ -879,6 +879,19 @@ check_test_build_dir() {
     fi
 }
 
+# Test names:
+# Runs on every patch: the names live in tests the patch may not touch.
+check_test_names() {
+    local output
+    if output="$(scripts/check-test-names.sh 2>&1)"; then
+        pass "test-names"
+    else
+        printf '%s\n' "$output" | sed 's/^/  /' >&2
+        fail "test-names" \
+             "shorten the test name to 63 characters, or the group name until its header fits 80 columns."
+    fi
+}
+
 # Doc-quoted diagnostics:
 # A message quoted in the documentation must be one the tree can print.
 # Runs unconditionally: a patch that only reworded a message breaks
@@ -1289,6 +1302,7 @@ main() {
     check_player_build "${changed_files[@]}"
     check_license_boundary
     check_test_build_dir
+    check_test_names
     check_doc_diagnostics
     check_config_commands
     check_docs_strict
