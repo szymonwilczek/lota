@@ -281,7 +281,7 @@ static void test_a_replaced_handoff_is_not_a_foreign_extend(void)
 	struct scenario s;
 	enum tpm_pcr14_state got;
 
-	TEST("a replaced baseline handoff is named, not called a foreign extend");
+	TEST("a replaced baseline handoff is named, not a foreign extend");
 
 	if (build_committed_boot(&s, RESTART_AT_EXTEND) < 0) {
 		FAIL("failed to derive the register value");

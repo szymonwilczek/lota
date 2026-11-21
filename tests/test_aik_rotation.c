@@ -1110,7 +1110,7 @@ static void test_self_hash_pin_round_trip(void)
 	uint8_t out[LOTA_HASH_SIZE];
 	int ret;
 
-	TEST("tpm_get_self_hash gates on self_hash_ready and round-trips bytes");
+	TEST("tpm_get_self_hash gates on self_hash_ready, round-trips bytes");
 	make_ctx(&ctx);
 
 	ret = tpm_get_self_hash(&ctx, out);
@@ -1239,8 +1239,7 @@ static void test_call_with_backoff_no_leak_on_retry(void)
  */
 static void test_call_with_backoff_respects_wallclock_budget(void)
 {
-	TEST("tpm_call_with_backoff cumulative sleep stays under watchdog "
-	     "budget");
+	TEST("tpm_call_with_backoff sleeps less than the watchdog budget");
 	void *slot = NULL;
 	struct backoff_thunk_state state = {
 		.calls = 0,

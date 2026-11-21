@@ -109,7 +109,7 @@ static void test_identity_is_not_compared_against_stat_device(void)
 	struct lota_rt_map_entry enumerated = mapping(0, 36, 2626486);
 	struct lota_rt_map_entry observed = mapping(0, 36, 2626486);
 
-	TEST("a mapping whose stat device differs from its maps device is accepted");
+	TEST("a mapping whose stat and maps devices differ is accepted");
 	if (lota_rt_mapping_identity_ok(&enumerated, &observed, 2626486) != 1)
 		FAIL("expected: lota_rt_mapping_identity_ok(&enumerated, "
 		     "&observed, 2626486) == 1");

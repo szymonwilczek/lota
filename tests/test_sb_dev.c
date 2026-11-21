@@ -297,7 +297,7 @@ static void test_mountinfo_parse(void)
 		     "dev == LOTA_DEVT_MKDEV(0, 35)");
 
 	dev = 0;
-	TEST("a second subvolume of the same filesystem resolves to the same device");
+	TEST("two subvolumes of one filesystem resolve to the same device");
 	if (!(sb_dev_from_mountinfo(path, 61, &dev) == 0 &&
 	      dev == LOTA_DEVT_MKDEV(0, 35)))
 		FAIL("expected: sb_dev_from_mountinfo(path, 61, &dev) == 0 && "

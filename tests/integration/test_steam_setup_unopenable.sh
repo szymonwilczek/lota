@@ -91,7 +91,7 @@ denies "$shut_out" "\[OK\] *LOTA agent socket" || FAIL "%s" "$shut_out"
 TEST "it is reported as one this account cannot open"
 says "$shut_out" "agent socket exists but this account cannot open it" ||
     FAIL "%s" "$shut_out"
-TEST "a socket behind a directory it cannot enter is not called missing"
+TEST "a socket in a directory it cannot enter is not called missing"
 denies "$shut_out" "Container socket not found" || FAIL "%s" "$shut_out"
 TEST "nor is the account sent to register and reboot"
 denies "$shut_out" "register-uid" || FAIL "%s" "$shut_out"

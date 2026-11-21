@@ -366,7 +366,7 @@ static void test_efivar_payload(void)
 	 * Telling the second case to do the first is the kind of confidently
 	 * wrong step this project refuses to ship.
 	 */
-	TEST("UEFI is detected from the firmware directory, not from SecureBoot");
+	TEST("UEFI is detected from the firmware directory, not SecureBoot");
 	if (probe_firmware_is_uefi_at(dir) != 1) {
 		FAIL("an existing firmware directory not read as UEFI");
 		goto cleanup;
@@ -1200,7 +1200,7 @@ static void test_selfcheck_plan(void)
 		return;
 	}
 
-	TEST("configured publishers are the target list, so no verifier is named");
+	TEST("configured publishers are the targets, so no verifier is named");
 	if (probe_selfcheck_plan("verifier.example", 5, false) !=
 	    SELFCHECK_PUBLISHERS_REPORT) {
 		FAIL("the self-check still names one verifier");

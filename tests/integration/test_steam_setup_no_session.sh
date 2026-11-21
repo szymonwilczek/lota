@@ -54,7 +54,7 @@ TEST "the run reaches the launch options it prints"
 says "$verify_out" 'Steam Launch Options' || FAIL "%s" "$verify_out"
 TEST "the run reaches its own verdict"
 says "$verify_out" 'issue(s) detected' || FAIL "%s" "$verify_out"
-TEST "the launch options are not passed off as this account's to paste"
+TEST "launch options are not passed off as this account's to paste"
 says "$verify_out" "paths below are this account's own" ||
     FAIL "%s" "$verify_out"
 

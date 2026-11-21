@@ -914,7 +914,7 @@ static void test_policy_default_activates_snap_and_flatpak(void)
 
 static void test_policy_empty_exe_defaults_to_activate(void)
 {
-	TEST("policy: empty exe falls back to activate (read_self_exe failure)");
+	TEST("policy: empty exe falls back to activate (read_self_exe fails)");
 	if (!(policy_should_activate("", NULL, NULL) &&
 	      policy_should_activate(NULL, NULL, NULL)))
 		FAIL("empty/NULL exe must fall back to activate");

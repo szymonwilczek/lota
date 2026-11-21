@@ -133,7 +133,7 @@ int main(void)
 	TEST("verdict 5 names the protocol version");
 	if (strstr(net_result_str(5), "version") == NULL)
 		FAIL("expected: strstr(net_result_str(5), \"version\") != NULL");
-	TEST("verdict 21 says the report could not be read and does not advise an upgrade");
+	TEST("verdict 21 says the report is unreadable, advising no upgrade");
 	if (!(strstr(net_result_str(21), "read") != NULL &&
 	      strstr(net_result_str(21), "version") == NULL))
 		FAIL("expected: strstr(net_result_str(21), \"read\") != NULL "
@@ -181,12 +181,12 @@ int main(void)
 	}
 
 	/* the report says whether the LSM was loaded; the sentence follows */
-	TEST("verdict 17 on a report with the LSM loaded says it is not enforcing");
+	TEST("verdict 17 with the LSM loaded says it is not enforcing");
 	if (strstr(net_verdict_str(17, LOTA_REPORT_FLAG_BPF_ACTIVE),
 		   "not enforcing") == NULL)
 		FAIL("expected: strstr(net_verdict_str(17, "
 		     "LOTA_REPORT_FLAG_BPF_ACTIVE), \"not enforcing\") != NULL");
-	TEST("verdict 17 on a report without the LSM says the daemon is not running");
+	TEST("verdict 17 without the LSM says the daemon is not running");
 	if (!(strstr(net_verdict_str(17, 0), "is loaded") == NULL &&
 	      strstr(net_verdict_str(17, 0), "not running") != NULL))
 		FAIL("expected: strstr(net_verdict_str(17, 0), \"is loaded\") "

@@ -407,7 +407,7 @@ static void test_emit_never_offers_a_register_as_the_kernel_pin(void)
 	struct policy_snapshot snap;
 	char *yaml;
 
-	TEST("policy_emit - an unreadable log does not fall back to a register");
+	TEST("policy_emit - an unreadable log never falls back to a register");
 
 	memset(&snap, 0, sizeof(snap));
 	snprintf(snap.name, sizeof(snap.name), "bad-log");

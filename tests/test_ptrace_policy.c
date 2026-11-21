@@ -42,7 +42,7 @@ static void test_read_is_allowed_with_the_key_on(void)
 /* The half the key is named for */
 static void test_attach_is_refused_with_the_key_on(void)
 {
-	TEST("an attach on an unprotected task is refused with block_ptrace on");
+	TEST("an attach to an unprotected task is refused under block_ptrace");
 	if (!DENIED(LOTA_PTRACE_MODE_ATTACH, LOTA_MODE_ENFORCE, 1, 0, 0))
 		FAIL("expected: DENIED(LOTA_PTRACE_MODE_ATTACH, "
 		     "LOTA_MODE_ENFORCE, 1, 0, 0)");

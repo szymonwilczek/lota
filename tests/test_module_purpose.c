@@ -171,7 +171,7 @@ static void test_kernel_integrity_holds_in_every_mode(void)
 /* With the baseline met and strict_modules off, firmware is the kernel's */
 static void test_firmware_is_policy(void)
 {
-	TEST("enforce takes firmware outside the allowlist without strict_modules");
+	TEST("enforce takes firmware off the allowlist without strict_modules");
 	if (FROM_FILE(KERNEL_PURPOSE_FIRMWARE, 1, 0, 1, 0))
 		FAIL("expected: !FROM_FILE(KERNEL_PURPOSE_FIRMWARE, 1, 0, 1, "
 		     "0)");

@@ -897,7 +897,7 @@ static void test_both_hooks_drive_bringup(void)
 	};
 	static char src[65536];
 
-	TEST("packaging: both post-install hooks run lota-install --unattended");
+	TEST("packaging: the post-install hooks run lota-install --unattended");
 
 	for (size_t i = 0; i < sizeof(hooks) / sizeof(hooks[0]); i++) {
 		if (!slurp_shipped(hooks[i], src, sizeof(src))) {

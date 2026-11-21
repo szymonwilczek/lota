@@ -392,8 +392,7 @@ static void test_paths_and_directory(void)
 	if (!(stat(paths.dir, &st) == 0 && S_ISDIR(st.st_mode)))
 		FAIL("expected: stat(paths.dir, &st) == 0 && "
 		     "S_ISDIR(st.st_mode)");
-	TEST("profile directory is root-only: the record carries the "
-	     "enrollment token");
+	TEST("profile directory is root-only: the record holds the token");
 	if ((st.st_mode & 0777) != 0700)
 		FAIL("expected: (st.st_mode & 0777) == 0700");
 	TEST("creating an existing profile directory is a no-op");
@@ -1266,7 +1265,7 @@ static void test_a_listing_that_does_not_fit_is_refused(void)
 			     "&& profile_consent_record(&paths, 0) == 0");
 	}
 
-	TEST("a listing that cannot hold every profile is refused, not cut short");
+	TEST("a listing too small for every profile is refused, not cut short");
 	if (publishers_list(base, entries, bound, &count) != -ENOBUFS)
 		FAIL("expected: publishers_list(base, entries, bound, &count) "
 		     "== -ENOBUFS");

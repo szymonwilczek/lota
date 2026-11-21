@@ -52,7 +52,7 @@ says "$out" "LOTA agent socket not found at $WORK_DIR/absent.sock" ||
     FAIL "%s" "$out"
 TEST "the player is not told to start the agent by hand"
 denies "$out" "lota-agent --daemon" || FAIL "%s" "$out"
-TEST "the player is sent to the installer, which says what brings it back"
+TEST "the player is sent to the installer to bring the agent back"
 says "$out" "sudo lota-install" || FAIL "%s" "$out"
 
 test_end

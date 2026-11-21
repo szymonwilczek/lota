@@ -532,8 +532,7 @@ static void test_pin_answer(void)
 	if (pin_once(&ctx, path, &st, 1, LOTA_EXE_MAP_SEEN_OK, 0) != 1)
 		FAIL("expected: pin_once(&ctx, path, &st, 1, "
 		     "LOTA_EXE_MAP_SEEN_OK, 0) == 1");
-	TEST("a pin does not guard a file a descriptor opened before it "
-	     "writes");
+	TEST("a pin does not guard a file an earlier descriptor writes");
 	if (pin_once(&ctx, path, &st, 1, LOTA_EXE_MAP_SEEN_OK, 1) != 0)
 		FAIL("expected: pin_once(&ctx, path, &st, 1, "
 		     "LOTA_EXE_MAP_SEEN_OK, 1) == 0");

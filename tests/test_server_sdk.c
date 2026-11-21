@@ -39,8 +39,7 @@
 static void test_verify_tampered_registry_digest_is_named(
 	EVP_PKEY *key, const uint8_t *aik_der, size_t aik_len)
 {
-	TEST("lota_server_verify_token - tampered registry digest is not a "
-	     "nonce failure");
+	TEST("lota_server_verify_token - tampered digest is no nonce failure");
 
 	uint64_t now = (uint64_t)time(NULL);
 	uint8_t nonce[32] = { 0 };
@@ -201,7 +200,7 @@ static void test_serialize_requires_protect_version(void)
 
 static void test_serialize_total_size_within_u16(void)
 {
-	TEST("lota_token_serialize - total_size stays within uint16 wire field");
+	TEST("lota_token_serialize - total_size fits the uint16 wire field");
 
 	struct lota_token token;
 	memset(&token, 0, sizeof(token));
@@ -418,7 +417,7 @@ static void test_verify_with_expected_nonce(EVP_PKEY *key,
 					    const uint8_t *aik_der,
 					    size_t aik_len)
 {
-	TEST("lota_server_verify_token — correct expected_nonce");
+	TEST("lota_server_verify_token - correct expected_nonce");
 
 	uint64_t now = (uint64_t)time(NULL);
 	uint8_t nonce[32] = { 0x01, 0x02, 0x03 };
@@ -445,7 +444,7 @@ static void test_verify_with_expected_nonce(EVP_PKEY *key,
 static void test_verify_wrong_nonce(EVP_PKEY *key, const uint8_t *aik_der,
 				    size_t aik_len)
 {
-	TEST("lota_server_verify_token — wrong expected_nonce → NONCE_FAIL");
+	TEST("lota_server_verify_token - wrong expected_nonce -> NONCE_FAIL");
 
 	uint64_t now = (uint64_t)time(NULL);
 	uint8_t nonce[32] = { 0x01, 0x02, 0x03 };
@@ -474,7 +473,7 @@ static void test_verify_wrong_nonce(EVP_PKEY *key, const uint8_t *aik_der,
 static void test_verify_bad_signature(EVP_PKEY *key, const uint8_t *aik_der,
 				      size_t aik_len)
 {
-	TEST("lota_server_verify_token — wrong AIK key → SIG_FAIL");
+	TEST("lota_server_verify_token - wrong AIK key -> SIG_FAIL");
 	(void)key; /* original key, not used directly */
 
 	/* DIFFERENT key to sign with */
@@ -511,7 +510,7 @@ static void test_verify_bad_signature(EVP_PKEY *key, const uint8_t *aik_der,
 static void test_verify_tampered_flags(EVP_PKEY *key, const uint8_t *aik_der,
 				       size_t aik_len)
 {
-	TEST("lota_server_verify_token - tampered flags → NONCE_FAIL");
+	TEST("lota_server_verify_token - tampered flags -> NONCE_FAIL");
 
 	uint64_t now = (uint64_t)time(NULL);
 	uint8_t nonce[32] = { 0 };
@@ -543,7 +542,7 @@ static void test_verify_tampered_stopped_ms(EVP_PKEY *key,
 					    const uint8_t *aik_der,
 					    size_t aik_len)
 {
-	TEST("lota_server_verify_token - tampered stopped_ms → NONCE_FAIL");
+	TEST("lota_server_verify_token - tampered stopped_ms -> NONCE_FAIL");
 
 	uint64_t now = (uint64_t)time(NULL);
 	uint8_t nonce[32] = { 0 };
@@ -574,7 +573,7 @@ static void test_verify_tampered_stopped_ms(EVP_PKEY *key,
 static void test_verify_tampered_pcr_mask(EVP_PKEY *key, const uint8_t *aik_der,
 					  size_t aik_len)
 {
-	TEST("lota_server_verify_token - tampered pcr_mask → NONCE_FAIL");
+	TEST("lota_server_verify_token - tampered pcr_mask -> NONCE_FAIL");
 
 	uint64_t now = (uint64_t)time(NULL);
 	uint8_t nonce[32] = { 0 };
@@ -742,7 +741,7 @@ static void test_verify_beyond_freshness_window(EVP_PKEY *key,
 						const uint8_t *aik_der,
 						size_t aik_len)
 {
-	TEST("lota_server_verify_token - beyond freshness window -> ERR_FUTURE");
+	TEST("lota_server_verify_token - past freshness window -> ERR_FUTURE");
 
 	uint64_t now = (uint64_t)time(NULL);
 	uint8_t nonce[32] = { 0 };

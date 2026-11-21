@@ -205,8 +205,7 @@ static void test_profiles_replace_the_single_verifier(void)
 		FAIL("expected: targets[0].has_profile && "
 		     "targets[0].profile_error == 0 && "
 		     "strlen(targets[0].paths.id) == LOTA_PROFILE_ID_LEN - 1");
-	TEST("an unreadable anchor still reports, and says why it has no "
-	     "profile");
+	TEST("an unreadable anchor reports and says why it has no profile");
 	if (!(!targets[1].has_profile && targets[1].profile_error == -ENOENT))
 		FAIL("expected: !targets[1].has_profile && "
 		     "targets[1].profile_error == -ENOENT");
@@ -275,8 +274,7 @@ static void test_token_only_publisher(void)
 	if (!(targets[0].token_only && targets[0].server[0] == '\0'))
 		FAIL("expected: targets[0].token_only && targets[0].server[0] "
 		     "== '\\0'");
-	TEST("the CA it enrolls against travels with it, since renewal does "
-	     "not stop");
+	TEST("the CA it enrolls against travels with it, as renewal goes on");
 	if (!(strcmp(targets[0].ca, "ca.light.example") == 0 &&
 	      targets[0].ca_port == 8444))
 		FAIL("expected: strcmp(targets[0].ca, \"ca.light.example\") "
@@ -285,8 +283,7 @@ static void test_token_only_publisher(void)
 	if (strstr(targets[0].label, "ca.light.example:8444") == NULL)
 		FAIL("expected: strstr(targets[0].label, "
 		     "\"ca.light.example:8444\") != NULL");
-	TEST("the label names the configured CA without claiming the host "
-	     "enrolled there");
+	TEST("the label names the CA without claiming the host enrolled there");
 	if (strstr(targets[0].label, "enrolled") != NULL)
 		FAIL("expected: strstr(targets[0].label, \"enrolled\") == NULL");
 }
@@ -362,8 +359,7 @@ static void test_env_overrides_stop_at_the_deployment(void)
 	TEST("a verb that is not --attest is interactive");
 	if (!attest_env_overrides_allowed(0, 0, 0, false))
 		FAIL("expected: attest_env_overrides_allowed(0, 0, 0, false)");
-	TEST("--attest to a named verifier with neither cadence nor "
-	     "publishers is a one-shot");
+	TEST("--attest to a verifier with no cadence or publisher is one-shot");
 	if (!attest_env_overrides_allowed(1, 0, 0, true))
 		FAIL("expected: attest_env_overrides_allowed(1, 0, 0, true)");
 	TEST("--attest that names nothing is the loop, so overrides stop");
@@ -405,7 +401,7 @@ static void test_target_reports(void)
 	memset(&t, 0, sizeof(t));
 	t.session_gated = true;
 	t.sessions = 0;
-	TEST("a session-gated publisher with no title running is not reported to");
+	TEST("a session-gated publisher with no title running gets no report");
 	if (attest_target_reports(&t))
 		FAIL("expected: !attest_target_reports(&t)");
 
@@ -499,8 +495,7 @@ static void test_renewal_follows_the_record(void)
 		FAIL("expected: attest_target_resolve_renew(&t, NULL, 0) == "
 		     "ATTEST_RENEW_SILENT");
 
-	TEST("a record that appears while the loop runs enables renewal with "
-	     "no reload");
+	TEST("a record that appears mid-loop enables renewal with no reload");
 	if (!(attest_target_resolve_renew(&t, "ca.example", 8444) ==
 		      ATTEST_RENEW_ENABLED &&
 	      t.auto_renew))
@@ -517,8 +512,7 @@ static void test_renewal_follows_the_record(void)
 		FAIL("expected: attest_target_resolve_renew(&t, "
 		     "\"ca.example\", 8444) == ATTEST_RENEW_SILENT");
 
-	TEST("a record that goes away disables renewal and leaves no address "
-	     "behind");
+	TEST("a record that goes away disables renewal and leaves no address");
 	if (!(attest_target_resolve_renew(&t, NULL, 0) == ATTEST_RENEW_OFF &&
 	      !t.auto_renew && t.renew_ca[0] == '\0'))
 		FAIL("expected: attest_target_resolve_renew(&t, NULL, 0) == "
@@ -565,8 +559,7 @@ static void test_a_moved_ca_is_reported(void)
 		FAIL("expected: !attest_target_should_announce_renew_move(&t)");
 
 	attest_target_resolve_renew(&t, "ca.example", 8599);
-	TEST("the port is half of the endpoint, so a moved port is reported "
-	     "too");
+	TEST("the port is half the endpoint, so a moved port is reported too");
 	if (!attest_target_should_announce_renew_move(&t))
 		FAIL("expected: attest_target_should_announce_renew_move(&t)");
 
@@ -602,8 +595,7 @@ static void test_the_renewal_endpoint_is_said_once(void)
 	t.ca_port = 8444;
 
 	attest_target_resolve_renew(&t, "ca.example", 8444);
-	TEST("a token-only label that already names the endpoint gets no "
-	     "second copy of it");
+	TEST("a token-only label naming the endpoint gets no second copy");
 	if (attest_target_renew_at(&t, at, sizeof(at))[0] != '\0')
 		FAIL("expected: attest_target_renew_at(&t, at, sizeof(at))[0] "
 		     "== '\\0'");
@@ -617,8 +609,7 @@ static void test_the_renewal_endpoint_is_said_once(void)
 
 	t.token_only = false;
 	attest_target_resolve_renew(&t, "ca.example", 8444);
-	TEST("a publisher with a verifier is labelled by it, so the CA is "
-	     "always written out");
+	TEST("a verifier labels its publisher, so the CA is always written");
 	if (strcmp(attest_target_renew_at(&t, at, sizeof(at)),
 		   ", renewing at ca.example:8444") != 0)
 		FAIL("expected: strcmp(attest_target_renew_at(&t, at, "
@@ -739,8 +730,7 @@ static void test_each_profile_pins_its_own_verifier(void)
 		   LOTA_PIN_SHA256_LEN) == 0)
 		FAIL("expected: memcmp(targets[0].pin_sha256, "
 		     "targets[1].pin_sha256, LOTA_PIN_SHA256_LEN) != 0");
-	TEST("a profile that names no pin is unpinned, whatever the "
-	     "host-level key says");
+	TEST("a profile naming no pin is unpinned, whatever the host key says");
 	if (targets[2].has_pin)
 		FAIL("expected: !targets[2].has_pin");
 

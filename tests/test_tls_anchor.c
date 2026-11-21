@@ -313,14 +313,12 @@ int main(void)
 		FAIL("expected: anchor_accepts(self_pem, leaf, &err) == 0");
 
 	signal(SIGPIPE, SIG_IGN);
-	TEST("a listener certificate another CA issued is a certificate "
-	     "failure, not a failed handshake");
+	TEST("foreign-CA cert: a certificate failure, not a failed handshake");
 	if (connect_verified(self_pem, leaf, leaf_key) !=
 	    -LOTA_ERR_NET_TLS_CERT)
 		FAIL("expected: connect_verified(self_pem, leaf, leaf_key) == "
 		     "-LOTA_ERR_NET_TLS_CERT");
-	TEST("a listener certificate for another name is a certificate "
-	     "failure, not a failed handshake");
+	TEST("wrong-name cert: a certificate failure, not a failed handshake");
 	if (connect_verified(ca_pem, leaf, leaf_key) != -LOTA_ERR_NET_TLS_CERT)
 		FAIL("expected: connect_verified(ca_pem, leaf, leaf_key) == "
 		     "-LOTA_ERR_NET_TLS_CERT");

@@ -36,8 +36,7 @@ static void test_existing_key_is_used(void)
 /* a free handle is the case that caught this finding */
 static void test_free_handle_creates_nothing(void)
 {
-	TEST("a free handle leaves the probe without a key rather than "
-	     "provisioning one");
+	TEST("a free handle leaves the probe without a key, not provisioning");
 	if (selftest_aik_plan(0) != SELFTEST_AIK_SKIP)
 		FAIL("expected: selftest_aik_plan(0) == SELFTEST_AIK_SKIP");
 }
@@ -48,8 +47,7 @@ static void test_free_handle_creates_nothing(void)
  */
 static void test_unreadable_tpm_creates_nothing(void)
 {
-	TEST("an unreadable handle is not treated as an invitation to "
-	     "provision");
+	TEST("an unreadable handle is not taken as an invitation to provision");
 	if (selftest_aik_plan(-5) != SELFTEST_AIK_SKIP)
 		FAIL("expected: selftest_aik_plan(-5) == SELFTEST_AIK_SKIP");
 }
@@ -73,8 +71,7 @@ static void test_publisher_keys_are_what_is_quoted(void)
 
 static void test_no_publisher_leaves_the_pre_profile_key(void)
 {
-	TEST("with no publisher holding a key the pre-profile records are "
-	     "the ones that describe this host");
+	TEST("with no publisher key the pre-profile records describe the host");
 	if (selftest_quote_key(0) != SELFTEST_QUOTE_PRE_PROFILE)
 		FAIL("expected: selftest_quote_key(0) == "
 		     "SELFTEST_QUOTE_PRE_PROFILE");

@@ -541,7 +541,7 @@ static int probe_protect_pid(struct ipc_context *ctx)
 
 static void test_protect_pid_is_not_an_internal_error(void)
 {
-	TEST("a server that enforces nothing does not call it an internal error");
+	TEST("a server enforcing nothing does not call it an internal error");
 
 	if (protect_result == LOTA_IPC_ERR_INTERNAL) {
 		FAIL("a structural refusal is reported as a broken daemon");
@@ -863,7 +863,7 @@ static void test_unnamed_publisher_refusal_is_logged(void)
 /* lota_anticheat.h: a title on a single-publisher machine names nobody */
 static void test_one_publisher_still_answers_an_unnamed_caller(void)
 {
-	TEST("a host serving one publisher still answers a request naming none");
+	TEST("a host with one publisher still answers a request naming none");
 
 	if (unnamed_result == LOTA_IPC_ERR_UNKNOWN_PROFILE) {
 		FAIL("the only publisher on the host was treated as ambiguous");

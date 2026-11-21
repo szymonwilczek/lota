@@ -454,7 +454,7 @@ static void test_state_files_at_an_unknown_version(void)
 	char path[512];
 	int rc;
 
-	TEST("every version-guarded state file refuses a version it cannot read");
+	TEST("every version-guarded state file refuses an unreadable version");
 	init_ctx(&ctx);
 
 	/* clock_state.dat: refused, and the caller carries on without it */

@@ -83,7 +83,7 @@ if [[ -s $OUT_DIR/tls.crt && -s $OUT_DIR/ca.crt ]]; then
     grep -q "DNS:localhost" <<<"$(openssl x509 -in "$OUT_DIR/tls.crt" -noout -text)" || FAIL
 fi
 
-TEST "it prints the token configuration the CA needs in its environment"
+TEST "it prints the token settings the CA needs in its environment"
 grep -q "SOFTHSM2_CONF" "$WORK_DIR/setup.log" || FAIL
 
 # a second token under the label would leave the CA to pick one by label

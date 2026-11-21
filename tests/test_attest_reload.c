@@ -171,13 +171,11 @@ int main(void)
 	if (!(count == 2 && strcmp(targets[1].server, "v.beta.example") == 0))
 		FAIL("expected: count == 2 && strcmp(targets[1].server, "
 		     "\"v.beta.example\") == 0");
-	TEST("a publisher that is still configured keeps its schedule and "
-	     "sessions");
+	TEST("a publisher still configured keeps its schedule and sessions");
 	if (!(targets[0].sessions == 2 && targets[0].next_due_ms == 123456))
 		FAIL("expected: targets[0].sessions == 2 && "
 		     "targets[0].next_due_ms == 123456");
-	TEST("and keeps its failure state, so a reload is not a way to clear "
-	     "a backoff");
+	TEST("and keeps its failure state, so a reload clears no backoff");
 	if (!(targets[0].consecutive_failures == 3 &&
 	      targets[0].backoff_sec == 40 && targets[0].attested))
 		FAIL("expected: targets[0].consecutive_failures == 3 && "
@@ -201,8 +199,7 @@ int main(void)
 		TEST("a rebuild from a loaded config keeps both publishers");
 		if (!(rc == 0 && count == 2))
 			FAIL("expected: rc == 0 && count == 2");
-		TEST("and keeps the verdict and sessions, so a SIGHUP does not "
-		     "read as a host that stopped being attested");
+		TEST("and keeps verdict and sessions across a SIGHUP");
 		if (!(targets[0].attested && targets[0].valid_until == 987654 &&
 		      targets[0].sessions == 1))
 			FAIL("expected: targets[0].attested && targets[0].valid_until "

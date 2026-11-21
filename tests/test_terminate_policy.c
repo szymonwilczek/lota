@@ -96,7 +96,7 @@ int main(void)
 		struct terminate_request req = base_request();
 
 		req.caller_uid = 1001;
-		TEST("a stranger to the process is refused, as kill(2) would refuse them");
+		TEST("a stranger to the process is refused, as by kill(2)");
 		if (terminate_policy_decide(&req) != TERMINATE_DENY_OWNER)
 			FAIL("expected: terminate_policy_decide(&req) == "
 			     "TERMINATE_DENY_OWNER");

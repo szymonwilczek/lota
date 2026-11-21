@@ -136,7 +136,7 @@ tls_before_rotation_differs() {
     listener_id=$(spki_id "$CA_DIR/tls.crt")
     [[ "$anchor_id" != "$listener_id" ]]
 }
-TEST "the listener has an identity of its own, which is not the anchor's"
+TEST "the listener has an identity of its own, not the anchor's"
 tls_before_rotation_differs || FAIL
 
 # A certificate lost next to its key is issued again from that key.
@@ -147,7 +147,7 @@ lost_certs_come_back() {
 	test "$(spki_id "$CA_DIR/ca.crt")" = "$before" &&
 	quiet openssl verify -CAfile "$CA_DIR/ca.crt" "$CA_DIR/tls.crt"
 }
-TEST "a lost anchor and listener certificate come back from their keys"
+TEST "a lost anchor and listener cert come back from their keys"
 lost_certs_come_back || FAIL
 
 # A self-signed listener left by an older script, which ca.crt does not
@@ -190,7 +190,7 @@ leaf_chains_to_existing_ca || FAIL
 
 # What the script tells the operator to do with each file has to name
 # the anchor, since that is the file the identity may be bound to.
-TEST "the script does not tell the operator to enroll against the listener"
+TEST "the script never has the operator enroll against the listener"
 bash -c "! grep -q -- '--ca-cert tls.crt' '$GEN_CA'" || FAIL
 
 test_end

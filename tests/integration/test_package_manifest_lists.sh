@@ -117,7 +117,7 @@ gate_passes || gate_failed
 
 fixture
 insert_above "$AGENT_YAML" "lota-sdk = " ""
-TEST "a blank line inside depends leaves the entries under it in place"
+TEST "a blank line in depends leaves the entries under it in place"
 gate_passes || gate_failed
 
 # Control: a reader that skips too much passes this too

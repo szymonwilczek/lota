@@ -69,7 +69,7 @@ static void test_own_measurement_failure_refuses(void)
  */
 static void test_another_process_does_not_decide_this_token(void)
 {
-	TEST("another process's measurement failure does not decide this token");
+	TEST("another process's failed measurement does not decide this token");
 
 	if (token_gate_failure_is_fatal(8255, 4242))
 		FAIL("one title's packaging refused another title's token");

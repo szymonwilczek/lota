@@ -62,8 +62,7 @@ static void test_module_sig_reads_the_host_the_same_way(void)
 	if (!strstr(buf, "Secure Boot") || strstr(buf, "module.sig_enforce="))
 		FAIL("the same host was given a different answer");
 
-	TEST("module signatures refused with Secure Boot on names the "
-	     "parameter");
+	TEST("module signature refused under Secure Boot names the parameter");
 
 	kernel_floor_message(LOTA_KERNEL_FLOOR_MODULE_SIG, true, buf,
 			     sizeof(buf));
