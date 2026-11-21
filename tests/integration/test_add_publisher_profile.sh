@@ -21,6 +21,9 @@
 
 set -euo pipefail
 
+. "$(dirname "$0")/../lib/test.sh"
+test_begin "add publisher profile"
+
 # assertions grep the agent's own messages, and strerror() is localised
 export LC_ALL=C
 
@@ -29,29 +32,16 @@ BUILD_DIR="${BUILD_DIR:-${LOTA_BUILD_DIR:-$REPO_DIR/build}}"
 AGENT_BIN="$BUILD_DIR/lota-agent"
 
 if [[ ! -x "$AGENT_BIN" ]]; then
-    echo "[add-publisher] missing artifact: $AGENT_BIN" >&2
-    exit 2
+    FAIL "missing artifact: %s" "$AGENT_BIN"
+    test_end
 fi
 if ! command -v openssl >/dev/null 2>&1; then
-    echo "[add-publisher] openssl not found" >&2
-    exit 2
+    FAIL "openssl not found"
+    test_end
 fi
 
 WORK_DIR=$(mktemp -d)
-trap 'rm -rf "$WORK_DIR"' EXIT
-
-failures=0
-
-check() {
-    local msg="$1"
-    shift
-    if "$@"; then
-	echo "PASS: $msg"
-    else
-	echo "FAIL: $msg"
-	failures=$((failures + 1))
-    fi
-}
+test_cleanup 'rm -rf "$WORK_DIR"'
 
 has_line() { grep -qx "$2" "$1"; }
 lacks() { ! grep -q "$2" "$1"; }
@@ -77,13 +67,14 @@ printf 'mode = enforce\n' >"$conf"
 out=$("$AGENT_BIN" --add-publisher ca.tokenonly.example --ca-port 8564 \
 	           --ca-cert "$tokenonly_pem" --publisher-name tokenonly \
 	           --config "$conf" 2>&1)
-check "the section says the publisher runs no verifier" \
-      has_line "$conf" 'verifier = none'
-check "no port is written for a verifier declared absent" \
-      lacks "$conf" 'verifier_port'
-check "the command says nothing is reported from this machine" \
-      says "$out" 'no verifier'
-check "the config the command wrote loads" loads "$conf"
+TEST "the section says the publisher runs no verifier"
+has_line "$conf" 'verifier = none' || FAIL
+TEST "no port is written for a verifier declared absent"
+lacks "$conf" 'verifier_port' || FAIL
+TEST "the command says nothing is reported from this machine"
+says "$out" 'no verifier' || FAIL "%s" "$out"
+TEST "the config the command wrote loads"
+loads "$conf" || FAIL
 
 # A publisher who runs one: the verifier and its port are the operator's,
 # and the section has to carry both.
@@ -95,13 +86,14 @@ out=$("$AGENT_BIN" --add-publisher ca.reporting.example --ca-port 8564 \
 	           --ca-cert "$reporting_pem" --publisher-name reporting \
 	           --server verifier.reporting.example --port 9443 \
 	           --config "$conf" 2>&1)
-check "the section names the verifier the operator gave" \
-      has_line "$conf" 'verifier = verifier.reporting.example'
-check "the section carries that verifier's port" \
-      has_line "$conf" 'verifier_port = 9443'
-check "the command names the verifier it wrote" \
-      says "$out" 'verifier.reporting.example'
-check "the config the command wrote loads" loads "$conf"
+TEST "the section names the verifier the operator gave"
+has_line "$conf" 'verifier = verifier.reporting.example' || FAIL
+TEST "the section carries that verifier's port"
+has_line "$conf" 'verifier_port = 9443' || FAIL
+TEST "the command names the verifier it wrote"
+says "$out" 'verifier.reporting.example' || FAIL "%s" "$out"
+TEST "the config the command wrote loads"
+loads "$conf" || FAIL
 
 # A config that exists and holds nothing: an installer that created the file
 # before configuring it, or an operator who cleared it.
@@ -115,11 +107,12 @@ out=$("$AGENT_BIN" --add-publisher ca.empty.example --ca-port 8564 \
 	           --ca-cert "$empty_pem" --publisher-name empty \
 	           --server verifier.empty.example \
 	           --config "$conf" 2>&1) || rc=$?
-check "a publisher is added to a config file that is empty" test "$rc" -eq 0
-check "the section is written into the empty file" \
-      has_line "$conf" 'verifier = verifier.empty.example'
-check "the config the command wrote loads" loads "$conf"
-[[ $rc -eq 0 ]] || echo "  reported: $out"
+TEST "a publisher is added to a config file that is empty"
+test "$rc" -eq 0 || FAIL "exit %d: %s" "$rc" "$out"
+TEST "the section is written into the empty file"
+has_line "$conf" 'verifier = verifier.empty.example' || FAIL
+TEST "the config the command wrote loads"
+loads "$conf" || FAIL
 
 # An operator-owned host reports whether or not a title runs:
 # a fleet verifier that hears only during a session hears nothing.
@@ -132,11 +125,12 @@ out=$("$AGENT_BIN" --add-publisher ca.fleet.example \
 	           --ca-cert "$fleet_pem" --publisher-name fleet \
 	           --server verifier.fleet.example --reporting continuous \
 	           --config "$conf" 2>&1) || rc=$?
-check "a continuous publisher is added" test "$rc" -eq 0
-check "the section reports continuously" \
-      has_line "$conf" 'reporting = continuous'
-check "the config the command wrote loads" loads "$conf"
-[[ $rc -eq 0 ]] || echo "  reported: $out"
+TEST "a continuous publisher is added"
+test "$rc" -eq 0 || FAIL "exit %d: %s" "$rc" "$out"
+TEST "the section reports continuously"
+has_line "$conf" 'reporting = continuous' || FAIL
+TEST "the config the command wrote loads"
+loads "$conf" || FAIL
 
 # A typo must not quietly fall back to session reporting.
 typo_pem=$(anchor typo)
@@ -148,9 +142,10 @@ out=$("$AGENT_BIN" --add-publisher ca.typo.example \
 	           --ca-cert "$typo_pem" --publisher-name typo \
 	           --server verifier.typo.example --reporting continous \
 	           --config "$conf" 2>&1) || rc=$?
-check "an unknown reporting mode is refused" test "$rc" -ne 0
-check "nothing is written for an unknown reporting mode" \
-      lacks "$conf" 'typo'
+TEST "an unknown reporting mode is refused"
+test "$rc" -ne 0 || FAIL "exit %d: %s" "$rc" "$out"
+TEST "nothing is written for an unknown reporting mode"
+lacks "$conf" 'typo' || FAIL
 
 # A profile whose anchor moved away may be the publisher being added,
 # so a second profile of the same CA is not appended beside it.
@@ -169,10 +164,13 @@ out=$("$AGENT_BIN" --add-publisher ca.moved.example --ca-port 8564 \
 	           --ca-cert "$WORK_DIR/moved-new.pem" \
 	           --server verifier.moved.example \
 	           --config "$conf" 2>&1) || rc=$?
-check "an unreadable anchor of the same CA is refused" test "$rc" -ne 0
-check "the refusal names the profile and the anchor to point it at" \
-      says "$out" "Profile \"moved\" in $conf names the anchor $moved_pem"
-check "nothing is appended beside it" test "$(cksum <"$conf")" = "$before"
+TEST "an unreadable anchor of the same CA is refused"
+test "$rc" -ne 0 || FAIL "exit %d: %s" "$rc" "$out"
+TEST "the refusal names the profile and the anchor to point it at"
+says "$out" "Profile \"moved\" in $conf names the anchor $moved_pem" ||
+    FAIL "%s" "$out"
+TEST "nothing is appended beside it"
+test "$(cksum <"$conf")" = "$before" || FAIL
 
 other_pem=$(anchor other)
 rc=0
@@ -180,12 +178,9 @@ out=$("$AGENT_BIN" --add-publisher ca.other.example --ca-port 8564 \
 	           --ca-cert "$other_pem" --publisher-name other \
 	           --server verifier.other.example \
 	           --config "$conf" 2>&1) || rc=$?
-check "another CA's publisher is added beside it" test "$rc" -eq 0
-check "its section is written" has_line "$conf" 'ca = ca.other.example'
-[[ $rc -eq 0 ]] || echo "  reported: $out"
+TEST "another CA's publisher is added beside it"
+test "$rc" -eq 0 || FAIL "exit %d: %s" "$rc" "$out"
+TEST "its section is written"
+has_line "$conf" 'ca = ca.other.example' || FAIL
 
-if [[ $failures -ne 0 ]]; then
-    echo "FAILURES: $failures"
-    exit 1
-fi
-echo "All tests passed"
+test_end

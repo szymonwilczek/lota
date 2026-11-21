@@ -15,12 +15,15 @@
 
 set -euo pipefail
 
+. "$(dirname "$0")/../lib/test.sh"
+test_begin "pr quality range"
+
 export LC_ALL=C
 
 REPO_DIR=$(cd "$(dirname "$0")/../.." && pwd)
 
 WORK_DIR=$(mktemp -d)
-trap 'rm -rf "$WORK_DIR"' EXIT
+test_cleanup 'rm -rf "$WORK_DIR"'
 
 export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1
 export GIT_AUTHOR_NAME=Test GIT_AUTHOR_EMAIL=test@example.com
@@ -46,21 +49,15 @@ git commit -q -m "gate" -m "Signed-off-by: Test <test@example.com>"
 gate=$(git rev-parse HEAD)
 git merge -q --no-ff --no-edit side
 
-if ! out=$(scripts/check-pr-quality.sh --pr-diff "$gate" HEAD 2>&1); then
-    printf '%s\n' "$out" >&2
-    echo "[pr-quality-skipped-range] FAIL: a skipped range did not pass" >&2
-    exit 1
-fi
-if [[ $out != *"passed for 0 checked commit(s)"* ]]; then
-    printf '%s\n' "$out" >&2
-    echo "[pr-quality-skipped-range] FAIL: unexpected summary" >&2
-    exit 1
-fi
+rc=0
+out=$(scripts/check-pr-quality.sh --pr-diff "$gate" HEAD 2>&1) || rc=$?
+TEST "a skipped range passes"
+[[ $rc -eq 0 ]] || FAIL "exit %d: %s" "$rc" "$out"
+TEST "the summary counts no checked commit"
+[[ $out == *"passed for 0 checked commit(s)"* ]] || FAIL "%s" "$out"
 
 # control: without --pr-diff the side commit is checked and fails
-if scripts/check-pr-quality.sh "$base" HEAD >/dev/null 2>&1; then
-    echo "[pr-quality-skipped-range] FAIL: missing sign-off passed" >&2
-    exit 1
-fi
+TEST "a missing sign-off fails without --pr-diff"
+! scripts/check-pr-quality.sh "$base" HEAD >/dev/null 2>&1 || FAIL
 
-echo "[pr-quality-skipped-range] all cases passed"
+test_end

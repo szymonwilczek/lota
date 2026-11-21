@@ -19,35 +19,25 @@
 
 set -euo pipefail
 
+. "$(dirname "$0")/../lib/test.sh"
+test_begin "ek roots update bundle"
+
 export LC_ALL=C
 
 REPO_DIR=$(cd "$(dirname "$0")/../.." && pwd)
 UPDATE_TOOL="$REPO_DIR/scripts/lota-ek-roots-update.sh"
 
 if [[ ! -x "$UPDATE_TOOL" ]]; then
-    echo "[ek-roots-update] missing artifact: $UPDATE_TOOL" >&2
-    exit 2
+    FAIL "missing artifact: %s" "$UPDATE_TOOL"
+    test_end
 fi
 if ! command -v openssl >/dev/null 2>&1; then
-    echo "[ek-roots-update] openssl not found" >&2
-    exit 2
+    FAIL "openssl not found"
+    test_end
 fi
 
 WORK_DIR=$(mktemp -d)
-trap 'rm -rf "$WORK_DIR"' EXIT
-
-failures=0
-
-check() {
-    local msg="$1"
-    shift
-    if "$@"; then
-	echo "PASS: $msg"
-    else
-	echo "FAIL: $msg"
-	failures=$((failures + 1))
-    fi
-}
+test_cleanup 'rm -rf "$WORK_DIR"'
 
 cd "$WORK_DIR"
 mkdir -p www bin
@@ -108,64 +98,74 @@ run_update() {
 
 rc=0
 run_update sources.ok bundle >out.txt 2>&1 || rc=$?
-check "a sources file with an anchor and path material materializes" \
-      test "$rc" -eq 0
-check "the anchor is written" test -f bundle/vendor-root.pem
-check "the path material is written" test -f bundle/vendor-issuing.pem
-check "the manifest classes the anchor" \
-      grep -qE "^$root_pin[[:space:]]+vendor-root\.pem[[:space:]]+root[[:space:]]" bundle/ek-roots.manifest
-check "the manifest classes the path material" \
-      grep -qE "^$int_pin[[:space:]]+vendor-issuing\.pem[[:space:]]+intermediate[[:space:]]" bundle/ek-roots.manifest
+TEST "a sources file with an anchor and path material materializes"
+test "$rc" -eq 0 ||
+    FAIL "exit %d: %s" "$rc" "$(sed -n '1,10p' out.txt)"
+TEST "the anchor is written"
+test -f bundle/vendor-root.pem || FAIL
+TEST "the path material is written"
+test -f bundle/vendor-issuing.pem || FAIL
+TEST "the manifest classes the anchor"
+grep -qE "^$root_pin[[:space:]]+vendor-root\.pem[[:space:]]+root[[:space:]]" bundle/ek-roots.manifest || FAIL
+TEST "the manifest classes the path material"
+grep -qE "^$int_pin[[:space:]]+vendor-issuing\.pem[[:space:]]+intermediate[[:space:]]" bundle/ek-roots.manifest || FAIL
 
 # A bundle of intermediates anchors nothing. Refusing it here names the problem;
 # letting it through moves the same failure to CA startup.
 echo "$int_pin  vendor-issuing.pem  intermediate  https://example.invalid/int.der  Example TPM Issuing CA" >sources.noanchor
 rc=0
 run_update sources.noanchor bundle-noanchor >noanchor.txt 2>&1 || rc=$?
-check "a sources file with no anchor is refused" test "$rc" -ne 0
-check "the refusal says the bundle anchors no chain" \
-      grep -qi "anchors no chain" noanchor.txt
+TEST "a sources file with no anchor is refused"
+test "$rc" -ne 0 || FAIL
+TEST "the refusal says the bundle anchors no chain"
+grep -qi "anchors no chain" noanchor.txt || FAIL
 
 # An unclassed line is not a line whose class can be guessed: it is a line
 # written against a format that no longer exists.
 echo "$root_pin  vendor-root.pem  https://example.invalid/root.der  Example TPM Root CA" >sources.unclassed
 rc=0
 run_update sources.unclassed bundle-unclassed >unclassed.txt 2>&1 || rc=$?
-check "a line carrying no class is refused" test "$rc" -ne 0
+TEST "a line carrying no class is refused"
+test "$rc" -ne 0 || FAIL
 
 echo "$root_pin  vendor-root.pem  anchor  https://example.invalid/root.der  Example TPM Root CA" >sources.badclass
 rc=0
 run_update sources.badclass bundle-badclass >badclass.txt 2>&1 || rc=$?
-check "a line carrying an unknown class is refused" test "$rc" -ne 0
-check "the refusal names the classes it accepts" \
-      grep -qi "must be root or intermediate" badclass.txt
+TEST "a line carrying an unknown class is refused"
+test "$rc" -ne 0 || FAIL
+TEST "the refusal names the classes it accepts"
+grep -qi "must be root or intermediate" badclass.txt || FAIL
 
 # The pin is still the gate: a fetched certificate that does not match it is
 # refused whatever its class says.
 echo "$int_pin  vendor-root.pem  root  https://example.invalid/root.der  Example TPM Root CA" >sources.mismatch
 rc=0
 run_update sources.mismatch bundle-mismatch >mismatch.txt 2>&1 || rc=$?
-check "a fingerprint mismatch is still refused" test "$rc" -ne 0
+TEST "a fingerprint mismatch is still refused"
+test "$rc" -ne 0 || FAIL
 
 # the CA reads whatever file the manifest names, .pem or not
 printf '%s  vendor-root.crt  root  %s  Example TPM Root CA\n' \
 	"$root_pin" https://example.invalid/root.der >sources.crt
 rc=0
 run_update sources.crt bundle-crt >crt.txt 2>&1 || rc=$?
-check "a sources line naming a .crt file materializes" test "$rc" -eq 0
-check "the .crt file the manifest names is written" \
-	test -f bundle-crt/vendor-root.crt
+TEST "a sources line naming a .crt file materializes"
+test "$rc" -eq 0 ||
+    FAIL "exit %d: %s" "$rc" "$(sed -n '1,10p' crt.txt)"
+TEST "the .crt file the manifest names is written"
+test -f bundle-crt/vendor-root.crt || FAIL
 
 # each file the bundle holds comes from one sources line
 printf '%s  ek-roots.manifest  root  %s  Example TPM Root CA\n' \
 	"$root_pin" https://example.invalid/root.der >sources.manifest
 rc=0
 run_update sources.manifest bundle-manifest >manifest.txt 2>&1 || rc=$?
-check "a line naming the manifest is refused" test "$rc" -ne 0
-check "the refusal names the line" \
-	grep -q "manifest's own name" manifest.txt
-check "a refused line writes no manifest" \
-	test ! -e bundle-manifest/ek-roots.manifest
+TEST "a line naming the manifest is refused"
+test "$rc" -ne 0 || FAIL
+TEST "the refusal names the line"
+grep -q "manifest's own name" manifest.txt || FAIL
+TEST "a refused line writes no manifest"
+test ! -e bundle-manifest/ek-roots.manifest || FAIL
 
 {
     printf '%s  vendor-root.pem  root  %s  Example TPM Root CA\n' \
@@ -175,10 +175,12 @@ check "a refused line writes no manifest" \
 } >sources.dup
 rc=0
 run_update sources.dup bundle-dup >dup.txt 2>&1 || rc=$?
-check "two lines naming one file are refused" test "$rc" -ne 0
-check "the refusal names the repeated line" \
-	grep -q "appears on two lines" dup.txt
-check "a repeated file writes no bundle" test ! -e bundle-dup/vendor-root.pem
+TEST "two lines naming one file are refused"
+test "$rc" -ne 0 || FAIL
+TEST "the refusal names the repeated line"
+grep -q "appears on two lines" dup.txt || FAIL
+TEST "a repeated file writes no bundle"
+test ! -e bundle-dup/vendor-root.pem || FAIL
 
 # a dropped line takes its .pem with it; other files stay
 run_update sources.ok bundle-drop >drop1.txt 2>&1
@@ -190,21 +192,22 @@ printf '%s  vendor-root.pem  root  %s  Example TPM Root CA\n' \
 	"$root_pin" https://example.invalid/root.der >sources.drop
 rc=0
 run_update sources.drop bundle-drop >drop2.txt 2>&1 || rc=$?
-check "a second run without a line materializes" test "$rc" -eq 0
-check "the dropped line's .pem is removed" \
-	test ! -e bundle-drop/vendor-issuing.pem
-check "an unnamed .pem in another letter case is removed" \
-	test ! -e bundle-drop/OLD.PEM
-check "the removal is reported" \
-	grep -q "removed vendor-issuing.pem: not in the manifest" drop2.txt
-check "the kept line's .pem stays" test -f bundle-drop/vendor-root.pem
-check "a file that is not .pem stays" test -f bundle-drop/notes.txt
-check "an unnamed .pem link is removed" test ! -L bundle-drop/link.pem
-check "a directory named .pem stays" test -d bundle-drop/dir.pem
+TEST "a second run without a line materializes"
+test "$rc" -eq 0 ||
+    FAIL "exit %d: %s" "$rc" "$(sed -n '1,10p' drop2.txt)"
+TEST "the dropped line's .pem is removed"
+test ! -e bundle-drop/vendor-issuing.pem || FAIL
+TEST "an unnamed .pem in another letter case is removed"
+test ! -e bundle-drop/OLD.PEM || FAIL
+TEST "the removal is reported"
+grep -q "removed vendor-issuing.pem: not in the manifest" drop2.txt || FAIL
+TEST "the kept line's .pem stays"
+test -f bundle-drop/vendor-root.pem || FAIL
+TEST "a file that is not .pem stays"
+test -f bundle-drop/notes.txt || FAIL
+TEST "an unnamed .pem link is removed"
+test ! -L bundle-drop/link.pem || FAIL
+TEST "a directory named .pem stays"
+test -d bundle-drop/dir.pem || FAIL
 
-if [[ $failures -ne 0 ]]; then
-    echo "FAILURES: $failures"
-    sed -n '1,10p' out.txt 2>/dev/null
-    exit 1
-fi
-echo "All tests passed"
+test_end

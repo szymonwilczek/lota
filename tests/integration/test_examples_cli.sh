@@ -14,6 +14,9 @@
 
 set -euo pipefail
 
+. "$(dirname "$0")/../lib/test.sh"
+test_begin "examples cli"
+
 export LC_ALL=C
 
 REPO_DIR=$(cd "$(dirname "$0")/../.." && pwd)
@@ -25,26 +28,13 @@ REMEASURE="$EXAMPLES_DIR/runtime_remeasure"
 
 for f in "$DEMO_AC" "$CI_ATTEST" "$REMEASURE"; do
     if [[ ! -x "$f" ]]; then
-        echo "[examples-cli] missing artifact: $f" >&2
-        exit 2
+        FAIL "missing artifact: %s" "$f"
+        test_end
     fi
 done
 
 WORK_DIR=$(mktemp -d)
-trap 'rm -rf "$WORK_DIR"' EXIT
-
-failures=0
-
-check() {
-    local msg="$1"
-    shift
-    if "$@"; then
-        echo "PASS: $msg"
-    else
-        echo "FAIL: $msg"
-        failures=$((failures + 1))
-    fi
-}
+test_cleanup 'rm -rf "$WORK_DIR"'
 
 # exits_with CODE CMD...: CMD exits CODE
 exits_with() {
@@ -52,22 +42,22 @@ exits_with() {
     shift
     "$@" >/dev/null 2>&1 </dev/null || rc=$?
     [[ "$rc" -eq "$want" ]] || {
-        echo "  $*: exit $rc, want $want"
+        FAIL "%s: exit %d, want %d" "$*" "$rc" "$want"
         return 1
     }
 }
 
-check "demo_anticheat refuses --interval 5s" \
-      exits_with 64 "$DEMO_AC" --interval 5s --once
-check "demo_anticheat refuses LOTA_DEMO_INTERVAL_SEC=5s" \
-      exits_with 64 env LOTA_DEMO_INTERVAL_SEC=5s "$DEMO_AC" --once
-check "demo_anticheat refuses LOTA_DEMO_INTERVAL_SEC=abc" \
-      exits_with 64 env LOTA_DEMO_INTERVAL_SEC=abc "$DEMO_AC" --once
+TEST "demo_anticheat refuses --interval 5s"
+exits_with 64 "$DEMO_AC" --interval 5s --once || FAIL
+TEST "demo_anticheat refuses LOTA_DEMO_INTERVAL_SEC=5s"
+exits_with 64 env LOTA_DEMO_INTERVAL_SEC=5s "$DEMO_AC" --once || FAIL
+TEST "demo_anticheat refuses LOTA_DEMO_INTERVAL_SEC=abc"
+exits_with 64 env LOTA_DEMO_INTERVAL_SEC=abc "$DEMO_AC" --once || FAIL
 
 for t in abc 0 -1 5s; do
-    check "lota-ci-attest refuses --timeout $t" \
-        exits_with 2 "$CI_ATTEST" --gate http://127.0.0.1:9 \
-        --out "$WORK_DIR/secret" --timeout "$t"
+    TEST "lota-ci-attest refuses --timeout $t"
+    exits_with 2 "$CI_ATTEST" --gate http://127.0.0.1:9 \
+        --out "$WORK_DIR/secret" --timeout "$t" || FAIL
 done
 
 # a manifest line as long as a path may be, and one character longer
@@ -78,12 +68,14 @@ takes_line() {
     out=$("$REMEASURE" --manifest "$m" 2>&1 </dev/null) || true
     ! grep -q 'line exceeds\|path too long' <<<"$out"
 }
-check "runtime_remeasure takes a 4095-character line" takes_line 4095 '\n'
-check "runtime_remeasure takes one with no newline" takes_line 4095 ''
-check "runtime_remeasure refuses a 4096-character line" \
-    eval '! takes_line 4096 "\n"'
-check "runtime_remeasure refuses one with no newline" \
-    eval '! takes_line 4096 ""'
+TEST "runtime_remeasure takes a 4095-character line"
+takes_line 4095 '\n' || FAIL
+TEST "runtime_remeasure takes one with no newline"
+takes_line 4095 '' || FAIL
+TEST "runtime_remeasure refuses a 4096-character line"
+eval '! takes_line 4096 "\n"' || FAIL
+TEST "runtime_remeasure refuses one with no newline"
+eval '! takes_line 4096 ""' || FAIL
 
 # run.sh with every tool but openssl on PATH
 STUB_BIN="$WORK_DIR/bin"
@@ -99,7 +91,8 @@ names_missing_openssl() {
         "$BASH" "$REPO_DIR/examples/ci-gate/run.sh" 2>&1) || rc=$?
     [[ "$rc" -eq 1 ]] && grep -q "missing command: openssl" <<<"$out"
 }
-check "ci-gate run.sh names a missing openssl" names_missing_openssl
+TEST "ci-gate run.sh names a missing openssl"
+names_missing_openssl || FAIL
 
 # the agent run.sh starts reads an empty lota.conf of the run
 printf '#!/bin/sh\nexit 0\n' >"$STUB_BIN/openssl"
@@ -130,8 +123,8 @@ agent_reads_empty_conf() {
     grep -q -- '--config /tmp/lota-ci-gate\.[^ ]*/lota.conf --test-signed' \
         "$ACTIVATE_CALL" && grep -qx empty "$ACTIVATE_CALL"
 }
-check "ci-gate run.sh gives the agent an empty lota.conf" \
-    agent_reads_empty_conf
+TEST "ci-gate run.sh gives the agent an empty lota.conf"
+agent_reads_empty_conf || FAIL
 
 # a step that fails names itself, swtpm_setup with its log
 FAIL_BIN="$WORK_DIR/failbin"
@@ -149,12 +142,12 @@ fails_named() {
     [[ "$rc" -eq 1 ]] && grep -q -- "$want" <<<"$out"
 }
 for script in ci-gate demo_anticheat; do
-    check "$script run.sh prints the log of a failed swtpm_setup" \
-        fails_named "$script" swtpm_setup swtpm_setup-log-line
-    check "$script run.sh names a failed swtpm_setup" \
-        fails_named "$script" swtpm_setup "FAIL: swtpm_setup failed"
-    check "$script run.sh names any other command that fails" \
-        fails_named "$script" install "FAIL: line [0-9]*: install .* exited 3"
+    TEST "$script run.sh prints the log of a failed swtpm_setup"
+    fails_named "$script" swtpm_setup swtpm_setup-log-line || FAIL
+    TEST "$script run.sh names a failed swtpm_setup"
+    fails_named "$script" swtpm_setup "FAIL: swtpm_setup failed" || FAIL
+    TEST "$script run.sh names any other command that fails"
+    fails_named "$script" install "FAIL: line [0-9]*: install .* exited 3" || FAIL
 done
 
 # verify-attested.sh: a status left by a hook that is gone, and a file
@@ -176,20 +169,21 @@ reads() {
     shift
     out=$(verify_once "$@" 2>&1) || true
     [[ "$out" == *" $want" ]] || {
-        echo "  got: $out"
+        FAIL "got: %s" "$out"
         return 1
     }
 }
 write_status "$(date +%s)"
-check "verify-attested reads a fresh status as TRUSTED" reads TRUSTED
+TEST "verify-attested reads a fresh status as TRUSTED"
+reads TRUSTED || FAIL
 write_status $(($(date +%s) - 181))
-check "verify-attested reads a status 181s old as stale" \
-    reads "OFFLINE (stale)"
-check "verify-attested --max-age 300 takes a status 181s old" \
-    reads TRUSTED --max-age 300
-check "verify-attested exits 2 on a stale status" \
-    exits_with 2 "${HOOK_ENV[@]}" LOTA_HOOK_TOKEN_DIR="$HOOK_DIR" \
-    "$BASH" "$VERIFY" --once
+TEST "verify-attested reads a status 181s old as stale"
+reads "OFFLINE (stale)" || FAIL
+TEST "verify-attested --max-age 300 takes a status 181s old"
+reads TRUSTED --max-age 300 || FAIL
+TEST "verify-attested exits 2 on a stale status"
+exits_with 2 "${HOOK_ENV[@]}" LOTA_HOOK_TOKEN_DIR="$HOOK_DIR" \
+    "$BASH" "$VERIFY" --once || FAIL
 # a status 25s old against 3 x the period the hook takes
 reads_refresh() {
     local out
@@ -197,22 +191,22 @@ reads_refresh() {
         LOTA_HOOK_TOKEN_DIR="$HOOK_DIR" "$BASH" "$VERIFY" --once 2>&1) ||
         true
     [[ "$out" == *" $2" ]] || {
-        echo "  got: $out"
+        FAIL "got: %s" "$out"
         return 1
     }
 }
 write_status $(($(date +%s) - 25))
-check "verify-attested reads LOTA_HOOK_REFRESH_SEC=08 as 8" \
-    reads_refresh 08 "OFFLINE (stale)"
-check "verify-attested reads LOTA_HOOK_REFRESH_SEC=5s as 5" \
-    reads_refresh 5s "OFFLINE (stale)"
-check "verify-attested reads LOTA_HOOK_REFRESH_SEC=10 as 10" \
-    reads_refresh 10 TRUSTED
+TEST "verify-attested reads LOTA_HOOK_REFRESH_SEC=08 as 8"
+reads_refresh 08 "OFFLINE (stale)" || FAIL
+TEST "verify-attested reads LOTA_HOOK_REFRESH_SEC=5s as 5"
+reads_refresh 5s "OFFLINE (stale)" || FAIL
+TEST "verify-attested reads LOTA_HOOK_REFRESH_SEC=10 as 10"
+reads_refresh 10 TRUSTED || FAIL
 write_status $(($(date +%s) - 200))
-check "verify-attested reads LOTA_HOOK_REFRESH_SEC=2147483648 as 60" \
-    reads_refresh 2147483648 "OFFLINE (stale)"
-check "verify-attested refuses --max-age 0" \
-    exits_with 64 "$BASH" "$VERIFY" --once --max-age 0
+TEST "verify-attested reads LOTA_HOOK_REFRESH_SEC=2147483648 as 60"
+reads_refresh 2147483648 "OFFLINE (stale)" || FAIL
+TEST "verify-attested refuses --max-age 0"
+exits_with 64 "$BASH" "$VERIFY" --once --max-age 0 || FAIL
 
 finds_late_file() {
     local log="$WORK_DIR/watch.log" pid ok=1
@@ -232,12 +226,7 @@ finds_late_file() {
     [[ $ok -eq 0 ]] || sed 's/^/  /' "$log"
     return $ok
 }
-check "verify-attested finds a status written after it started" \
-    finds_late_file
+TEST "verify-attested finds a status written after it started"
+finds_late_file || FAIL
 
-echo ""
-if [[ $failures -gt 0 ]]; then
-    echo "[examples-cli] $failures check(s) failed"
-    exit 1
-fi
-echo "[examples-cli] all checks passed"
+test_end

@@ -13,17 +13,20 @@
 
 set -euo pipefail
 
+. "$(dirname "$0")/../lib/test.sh"
+test_begin "bench targets"
+
 export LC_ALL=C
 
 REPO_DIR=$(cd "$(dirname "$0")/../.." && pwd)
 
 if ! command -v go >/dev/null 2>&1; then
-    echo "[bench-targets] go not installed" >&2
-    exit 2
+    FAIL "go not installed"
+    test_end
 fi
 
 WORK_DIR=$(mktemp -d)
-trap 'rm -rf "$WORK_DIR"' EXIT
+test_cleanup 'rm -rf "$WORK_DIR"'
 
 RESULTS="$WORK_DIR/results"
 mkdir -p "$RESULTS"
@@ -73,25 +76,24 @@ run_make() {
 }
 
 fail() {
-    echo "[bench-targets] FAIL: $1" >&2
-    sed -n '1,40p' "$WORK_DIR/${2}.log" >&2 || true
-    exit 1
+    FAIL "%s" "$1"
+    FAIL "%s" "$(sed -n '1,40p' "$WORK_DIR/${2}.log")"
 }
 
-echo "[bench-targets] a C runner that succeeds leaves the target green"
+TEST "a C runner that succeeds leaves the target green"
 make_c_runner "$WORK_DIR/bench_ok" 0
 rc=$(run_make bench-c BENCH_C_BIN="$WORK_DIR/bench_ok")
 [[ "$rc" == 0 ]] || fail "make bench-c reported $rc for a runner that succeeded" bench-c
 grep -q "stand-in runner" "$RESULTS/c-sdk.txt" ||
     fail "make bench-c wrote no results file" bench-c
 
-echo "[bench-targets] a C runner that fails takes the target down"
+TEST "a C runner that fails takes the target down"
 make_c_runner "$WORK_DIR/bench_bad" 3
 rc=$(run_make bench-c BENCH_C_BIN="$WORK_DIR/bench_bad")
 [[ "$rc" != 0 ]] ||
     fail "make bench-c reported success for a runner that exited 3" bench-c
 
-echo "[bench-targets] a Go benchmark that runs leaves the target green"
+TEST "a Go benchmark that runs leaves the target green"
 make_go_module "$WORK_DIR/go-ok" false
 rc=$(run_make bench-go GO_BENCH_MODULES="$WORK_DIR/go-ok" \
 	      BENCH_COUNT=1 BENCH_TIME=1x)
@@ -99,11 +101,11 @@ rc=$(run_make bench-go GO_BENCH_MODULES="$WORK_DIR/go-ok" \
 grep -q "BenchmarkStandIn" "$RESULTS/go-$(echo "$WORK_DIR/go-ok" | tr '/' '-').txt" ||
     fail "make bench-go wrote no results file" bench-go
 
-echo "[bench-targets] a Go benchmark that fails takes the target down"
+TEST "a Go benchmark that fails takes the target down"
 make_go_module "$WORK_DIR/go-bad" true
 rc=$(run_make bench-go GO_BENCH_MODULES="$WORK_DIR/go-bad" \
 	      BENCH_COUNT=1 BENCH_TIME=1x)
 [[ "$rc" != 0 ]] ||
     fail "make bench-go reported success for a benchmark that refused to run" bench-go
 
-echo "[bench-targets] PASS"
+test_end

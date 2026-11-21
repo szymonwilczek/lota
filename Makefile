@@ -908,7 +908,8 @@ check-docs-strict:
 		exit 1; \
 	}
 	$(Q)scripts/check-license-boundary.sh --doc-packages >/dev/null
-	$(Q)tests/integration/test_kerneldoc_warnings.sh >/dev/null
+	$(Q)out=$$(tests/integration/test_kerneldoc_warnings.sh) || \
+		{ printf '%s\n' "$$out"; exit 1; }
 	$(Q)tmp=$$(mktemp -d) && \
 	trap 'rm -rf "$$tmp"' EXIT && \
 	$(MAKE) -C Documentation html BUILDDIR="$$tmp" \
@@ -957,7 +958,8 @@ check-test-build-dir:
 
 .PHONY: check-doc-diagnostics
 check-doc-diagnostics:
-	$(Q)tests/integration/test_doc_diagnostics.sh >/dev/null
+	$(Q)out=$$(tests/integration/test_doc_diagnostics.sh) || \
+		{ printf '%s\n' "$$out"; exit 1; }
 	@scripts/check-doc-diagnostics.sh
 
 .PHONY: check-config-commands
@@ -1650,6 +1652,12 @@ test-bins: $(TEST_BINS)
 .PHONY: test
 test: test-unit
 
+# $(call test_run,CMD): CMD's exit status goes to the summary
+test_run = $(1); printf 'R\t%s\t%d\n' '$(notdir $(firstword $(1)))' $$? \
+	>>"$$LOTA_TEST_SUMMARY"
+# $(call test_skip,GROUP,PATH,REASON): GROUP as one skipped test
+test_skip = tests/lib/skip.sh '$(1)' '$(2)' '$(3)'
+
 .PHONY: test-unit
 test-unit: export LOTA_TEST_SUMMARY := $(abspath $(BUILD_DIR))/test-summary.tsv
 test-unit: all $(TEST_BINS)
@@ -1658,145 +1666,101 @@ test-unit: all $(TEST_BINS)
 		$$t 3>>"$$LOTA_TEST_SUMMARY"; \
 		printf 'R\t%s\t%d\n' "$${t##*/}" $$? >>"$$LOTA_TEST_SUMMARY"; \
 	done
-	@tests/lib/summary.sh "$$LOTA_TEST_SUMMARY"
-	@echo ""
-	@echo "=== Running integration tests (best effort) ==="
 	@if [ -x $(AGENT_BIN) ] && command -v openssl >/dev/null 2>&1; then \
-		tests/integration/test_add_publisher_profile.sh; \
-	else \
-		echo "SKIP: test_add_publisher_profile.sh (no agent binary or openssl)"; \
-	fi
+		$(call test_run,tests/integration/test_add_publisher_profile.sh); \
+	else $(call test_skip,add publisher profile,tests/integration/test_add_publisher_profile.sh,no agent binary or openssl); fi
 	@if command -v openssl >/dev/null 2>&1; then \
-		tests/integration/test_enrollment_ca_material.sh; \
-	else \
-		echo "SKIP: test_enrollment_ca_material.sh (no openssl)"; \
-	fi
-	@tests/integration/test_enrollment_example_ports.sh
+		$(call test_run,tests/integration/test_enrollment_ca_material.sh); \
+	else $(call test_skip,enrollment ca material,tests/integration/test_enrollment_ca_material.sh,no openssl); fi
+	@$(call test_run,tests/integration/test_enrollment_example_ports.sh)
 	@if command -v openssl >/dev/null 2>&1; then \
-		tests/integration/test_enrollment_example_teardown.sh; \
-	else \
-		echo "SKIP: test_enrollment_example_teardown.sh (no openssl)"; \
-	fi
+		$(call test_run,tests/integration/test_enrollment_example_teardown.sh); \
+	else $(call test_skip,example teardown,tests/integration/test_enrollment_example_teardown.sh,no openssl); fi
 	@if command -v openssl >/dev/null 2>&1; then \
-		tests/integration/test_ek_root_pin_nv_chain.sh; \
-	else \
-		echo "SKIP: test_ek_root_pin_nv_chain.sh (no openssl)"; \
-	fi
+		$(call test_run,tests/integration/test_ek_root_pin_nv_chain.sh); \
+	else $(call test_skip,ek root pin nv chain,tests/integration/test_ek_root_pin_nv_chain.sh,no openssl); fi
 	@if command -v openssl >/dev/null 2>&1 && command -v python3 >/dev/null 2>&1; then \
-		tests/integration/test_ek_root_pin_bundle_lines.sh; \
-	else \
-		echo "SKIP: test_ek_root_pin_bundle_lines.sh (no openssl or python3)"; \
-	fi
+		$(call test_run,tests/integration/test_ek_root_pin_bundle_lines.sh); \
+	else $(call test_skip,ek root bundle lines,tests/integration/test_ek_root_pin_bundle_lines.sh,no openssl or python3); fi
 	@if command -v openssl >/dev/null 2>&1; then \
-		tests/integration/test_ek_roots_update_bundle.sh; \
-	else \
-		echo "SKIP: test_ek_roots_update_bundle.sh (no openssl)"; \
-	fi
-	@tests/integration/test_steam_setup_dropin.sh
-	@tests/integration/test_steam_setup_no_session.sh
-	@tests/integration/test_steam_setup_unopenable.sh
-	@tests/integration/test_steam_setup_no_agent.sh
-	@tests/integration/test_steam_setup_register_uid.sh
-	@tests/integration/test_proton_hook_disable.sh
-	@tests/integration/test_proton_hook_shares.sh
-	@tests/integration/test_proton_hook_abi.sh
-	@tests/integration/test_proton_hook_activation.sh
-	@tests/integration/test_hook_container_report.sh
-	@tests/integration/test_report_wire_sizes.sh
-	@tests/integration/test_dev_bringup_idempotent.sh
-	@tests/integration/test_demo_setup.sh
-	@tests/integration/test_installer_status_stages.sh
-	@tests/integration/test_package_manifest_lists.sh
-	@tests/integration/test_verify_rpm_release.sh
-	@tests/integration/test_pr_quality_skipped_range.sh
+		$(call test_run,tests/integration/test_ek_roots_update_bundle.sh); \
+	else $(call test_skip,ek roots update bundle,tests/integration/test_ek_roots_update_bundle.sh,no openssl); fi
+	@$(call test_run,tests/integration/test_steam_setup_dropin.sh)
+	@$(call test_run,tests/integration/test_steam_setup_no_session.sh)
+	@$(call test_run,tests/integration/test_steam_setup_unopenable.sh)
+	@$(call test_run,tests/integration/test_steam_setup_no_agent.sh)
+	@$(call test_run,tests/integration/test_steam_setup_register_uid.sh)
+	@$(call test_run,tests/integration/test_proton_hook_disable.sh)
+	@$(call test_run,tests/integration/test_proton_hook_shares.sh)
+	@$(call test_run,tests/integration/test_proton_hook_abi.sh)
+	@$(call test_run,tests/integration/test_proton_hook_activation.sh)
+	@$(call test_run,tests/integration/test_hook_container_report.sh)
+	@$(call test_run,tests/integration/test_report_wire_sizes.sh)
+	@$(call test_run,tests/integration/test_dev_bringup_idempotent.sh)
+	@$(call test_run,tests/integration/test_demo_setup.sh)
+	@$(call test_run,tests/integration/test_installer_status_stages.sh)
+	@$(call test_run,tests/integration/test_package_manifest_lists.sh)
+	@$(call test_run,tests/integration/test_verify_rpm_release.sh)
+	@$(call test_run,tests/integration/test_pr_quality_skipped_range.sh)
 	@if command -v python3 >/dev/null 2>&1; then \
-		tests/integration/test_license_boundary_scripts.sh; \
-	else \
-		echo "SKIP: test_license_boundary_scripts.sh (no python3)"; \
-	fi
+		$(call test_run,tests/integration/test_license_boundary_scripts.sh); \
+	else $(call test_skip,license boundary,tests/integration/test_license_boundary_scripts.sh,no python3); fi
 	@if command -v sphinx-build >/dev/null 2>&1; then \
-		tests/integration/test_kerneldoc_warnings.sh; \
-	else \
-		echo "SKIP: test_kerneldoc_warnings.sh (no sphinx-build)"; \
-	fi
+		$(call test_run,tests/integration/test_kerneldoc_warnings.sh); \
+	else $(call test_skip,kerneldoc warnings,tests/integration/test_kerneldoc_warnings.sh,no sphinx-build); fi
 	@if command -v pkg-config >/dev/null 2>&1; then \
-		tests/integration/test_examples_optional_deps.sh; \
-	else \
-		echo "SKIP: test_examples_optional_deps.sh (no pkg-config)"; \
-	fi
+		$(call test_run,tests/integration/test_examples_optional_deps.sh); \
+	else $(call test_skip,examples optional deps,tests/integration/test_examples_optional_deps.sh,no pkg-config); fi
 	@if [ -x $(EXAMPLES_BUILD_DIR)/demo_anticheat ] && \
 	    [ -x $(EXAMPLES_BUILD_DIR)/lota-ci-attest ] && \
 	    [ -x $(EXAMPLES_BUILD_DIR)/demo_server ] && \
 	    [ -x $(EXAMPLES_BUILD_DIR)/lota-release-gate ] && \
 	    [ -x $(BUILD_DIR)/lota-agent ] && \
 	    [ -x $(EXAMPLES_BUILD_DIR)/runtime_remeasure ]; then \
-		tests/integration/test_examples_cli.sh; \
-	else \
-		echo "SKIP: test_examples_cli.sh (run 'make examples')"; \
-	fi
+		$(call test_run,tests/integration/test_examples_cli.sh); \
+	else $(call test_skip,examples cli,tests/integration/test_examples_cli.sh,run 'make examples'); fi
 	@if [ -x $(EXAMPLES_BUILD_DIR)/trust_pong ] && command -v python3 >/dev/null 2>&1; then \
-		tests/integration/test_trust_pong_freeze_streak.sh; \
-	else \
-		echo "SKIP: test_trust_pong_freeze_streak.sh (run 'make examples', needs python3)"; \
-	fi
+		$(call test_run,tests/integration/test_trust_pong_freeze_streak.sh); \
+	else $(call test_skip,trust pong streak,tests/integration/test_trust_pong_freeze_streak.sh,run 'make examples' and install python3); fi
 	@if command -v go >/dev/null 2>&1 && command -v cc >/dev/null 2>&1; then \
-		tests/integration/test_attestca_pkcs11_build.sh; \
-	else \
-		echo "SKIP: test_attestca_pkcs11_build.sh (no go or cc)"; \
-	fi
+		$(call test_run,tests/integration/test_attestca_pkcs11_build.sh); \
+	else $(call test_skip,attestca pkcs11 build,tests/integration/test_attestca_pkcs11_build.sh,no go or cc); fi
 	@if command -v clang >/dev/null 2>&1; then \
-		tests/integration/test_fuzz_leak_detection.sh; \
-	else \
-		echo "SKIP: test_fuzz_leak_detection.sh (no clang)"; \
-	fi
+		$(call test_run,tests/integration/test_fuzz_leak_detection.sh); \
+	else $(call test_skip,fuzz leak detection,tests/integration/test_fuzz_leak_detection.sh,no clang); fi
 	@if command -v go >/dev/null 2>&1; then \
-		tests/integration/test_bench_targets.sh; \
-	else \
-		echo "SKIP: test_bench_targets.sh (no go)"; \
-	fi
-	@tests/integration/test_veristat_gate.sh
-	@if command -v softhsm2-util >/dev/null 2>&1 && command -v pkcs11-tool >/dev/null 2>&1 && \
-		command -v openssl >/dev/null 2>&1; then \
-		tests/integration/test_hsm_ca_example.sh; \
-	else \
-		echo "SKIP: test_hsm_ca_example.sh (no softhsm2-util, pkcs11-tool or openssl)"; \
-	fi
+		$(call test_run,tests/integration/test_bench_targets.sh); \
+	else $(call test_skip,bench targets,tests/integration/test_bench_targets.sh,no go); fi
+	@$(call test_run,tests/integration/test_veristat_gate.sh)
+	@if command -v softhsm2-util >/dev/null 2>&1 && \
+	    command -v pkcs11-tool >/dev/null 2>&1 && \
+	    command -v openssl >/dev/null 2>&1; then \
+		$(call test_run,tests/integration/test_hsm_ca_example.sh); \
+	else $(call test_skip,hsm ca example,tests/integration/test_hsm_ca_example.sh,no softhsm2-util or pkcs11-tool or openssl); fi
 	@if [ -S /run/lota/lota.sock ]; then \
-		$(BUILD_DIR)/test_sdk_ipc; \
-		$(BUILD_DIR)/test_ipc_client status; \
-		$(BUILD_DIR)/demo_sdk; \
-	else \
-		echo "SKIP: SDK/IPC tests (agent socket not found)"; \
-	fi
+		$(call test_run,$(BUILD_DIR)/test_sdk_ipc); \
+		$(call test_run,$(BUILD_DIR)/test_ipc_client status); \
+		$(call test_run,$(BUILD_DIR)/demo_sdk); \
+	else $(call test_skip,sdk ipc,tests/test_sdk_ipc.c,agent socket not found); fi
 	@if [ -n "$$LOTA_RUN_TLS_TESTS" ]; then \
-		$(BUILD_DIR)/test_tls_verify; \
-	elif [ -f /tmp/lota-tls-test/ca.pem ]; then \
-		if command -v ss >/dev/null 2>&1; then \
-			if ss -lnt | grep -q ":9443 "; then $(BUILD_DIR)/test_tls_verify /tmp/lota-tls-test/ca.pem; else echo "SKIP: test_tls_verify (no server on 9443)"; fi; \
-		elif command -v nc >/dev/null 2>&1; then \
-			if nc -z 127.0.0.1 9443; then $(BUILD_DIR)/test_tls_verify /tmp/lota-tls-test/ca.pem; else echo "SKIP: test_tls_verify (no server on 9443)"; fi; \
-		else \
-			echo "SKIP: test_tls_verify (no ss/nc to check server)"; \
-		fi; \
-	else \
-		echo "SKIP: test_tls_verify (missing /tmp/lota-tls-test/ca.pem)"; \
-	fi
+		$(call test_run,$(BUILD_DIR)/test_tls_verify); \
+	elif [ ! -f /tmp/lota-tls-test/ca.pem ]; then \
+		$(call test_skip,tls verify,tests/test_tls_verify.c,missing /tmp/lota-tls-test/ca.pem); \
+	elif { command -v ss >/dev/null 2>&1 && ss -lnt | grep -q ":9443 "; } || \
+	     { command -v nc >/dev/null 2>&1 && nc -z 127.0.0.1 9443; }; then \
+		$(call test_run,$(BUILD_DIR)/test_tls_verify /tmp/lota-tls-test/ca.pem); \
+	else $(call test_skip,tls verify,tests/test_tls_verify.c,no server on 9443); fi
 	@if command -v go >/dev/null 2>&1; then \
-		cd sdk/server && go run ../../tests/cross_lang/test_gen.go && \
-		cd $(CURDIR) && $(BUILD_DIR)/test_cross_lang_verify; \
-	else \
-		echo "SKIP: test_gen.go (go not installed)"; \
-	fi
-	@echo ""
-	@$(BUILD_DIR)/test_cross_lang_report_gen
+		if (cd sdk/server && go run ../../tests/cross_lang/test_gen.go); then \
+			$(call test_run,$(BUILD_DIR)/test_cross_lang_verify); \
+		else printf 'R\t%s\t%d\n' test_gen.go $$? >>"$$LOTA_TEST_SUMMARY"; fi; \
+	else $(call test_skip,cross lang verify,tests/cross_lang/test_verify.c,no go); fi
+	@$(call test_run,$(BUILD_DIR)/test_cross_lang_report_gen)
 	@if command -v go >/dev/null 2>&1; then \
-		cd $(SRC_DIR)/verifier && \
-		go run ../../tests/cross_lang/report_verify.go; \
-	else \
-		echo "SKIP: report_verify.go (go not installed)"; \
-	fi
-	@echo ""
-	@echo "Tests complete. Run 'make test-hardware' (as root) for hardware tests."
+		(cd $(SRC_DIR)/verifier && go run ../../tests/cross_lang/report_verify.go); \
+		printf 'R\t%s\t%d\n' report_verify.go $$? >>"$$LOTA_TEST_SUMMARY"; \
+	else $(call test_skip,cross lang report verify,tests/cross_lang/report_verify.go,no go); fi
+	@tests/lib/summary.sh "$$LOTA_TEST_SUMMARY"
 
 .PHONY: test-go
 test-go: export LOTA_TEST_SUMMARY := $(abspath $(BUILD_DIR))/test-go-summary.tsv

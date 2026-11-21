@@ -14,31 +14,21 @@
 
 set -euo pipefail
 
+. "$(dirname "$0")/../lib/test.sh"
+test_begin "demo setup"
+
 export LC_ALL=C
 
 REPO_DIR=$(cd "$(dirname "$0")/../.." && pwd)
 SETUP="$REPO_DIR/examples/demo/setup.sh"
 
 if [[ ! -x "$SETUP" ]]; then
-    echo "[demo-setup] missing artifact: $SETUP" >&2
-    exit 2
+    FAIL "missing artifact: %s" "$SETUP"
+    test_end
 fi
 
 WORK_DIR=$(mktemp -d)
-trap 'rm -rf "$WORK_DIR"' EXIT
-
-failures=0
-
-check() {
-    local msg="$1"
-    shift
-    if "$@"; then
-        echo "PASS: $msg"
-    else
-        echo "FAIL: $msg"
-        failures=$((failures + 1))
-    fi
-}
+test_cleanup 'rm -rf "$WORK_DIR"'
 
 says() { grep -q -e "$2" <<<"$1"; }
 denies() { ! grep -q -e "$2" <<<"$1"; }
@@ -68,34 +58,31 @@ signal_ends_run() {
     rc=0
     wait "$pid" || rc=$?
     signal_out=$(cat "$out")
-    [[ "$rc" -eq "$want" ]] || {
-        echo "  $sig: exit $rc, want $want"
-        return 1
-    }
+    [[ "$rc" -eq "$want" ]] || FAIL "%s: exit %d, want %d" "$sig" "$rc" "$want"
 }
 
 dry=$(PATH="$STUB_BIN:$PATH" "$SETUP" --dry-run --no-build 2>&1 || true)
-check "the agent reads an empty lota.conf of the run" \
-    says "$dry" 'lota-agent --config /tmp/lota-demo.DRYRUN/lota.conf'
-check "that file is created empty" \
-    says "$dry" 'install -m 0600 /dev/null /tmp/lota-demo.DRYRUN/lota.conf'
+TEST "the agent reads an empty lota.conf of the run"
+says "$dry" 'lota-agent --config /tmp/lota-demo.DRYRUN/lota.conf' ||
+    FAIL "%s" "$dry"
+TEST "that file is created empty"
+says "$dry" 'install -m 0600 /dev/null /tmp/lota-demo.DRYRUN/lota.conf' ||
+    FAIL "%s" "$dry"
 
 dry=$(PATH="$STUB_BIN:$PATH" SUDO_USER=player SDL_VIDEODRIVER=dummy \
     "$SETUP" --dry-run --no-build 2>&1 || true)
-check "the game under sudo keeps the SDL_ variables" \
-    says "$dry" 'sudo -u player env .* SDL_VIDEODRIVER=dummy .*trust_pong'
+TEST "the game under sudo keeps the SDL_ variables"
+says "$dry" 'sudo -u player env .* SDL_VIDEODRIVER=dummy .*trust_pong' ||
+    FAIL "%s" "$dry"
 
 if [[ -S /run/lota/lota.sock ]]; then
-    echo "SKIP: signal checks (an agent socket exists on this host)"
+    TEST "signal checks"
+    SKIP "an agent socket exists on this host"
 else
-    check "TERM at a pause exits 143" signal_ends_run TERM 143
-    check "TERM at a pause runs no later step" \
-          denies "$signal_out" "Step 2/7"
+    TEST "TERM at a pause exits 143"
+    signal_ends_run TERM 143
+    TEST "TERM at a pause runs no later step"
+    denies "$signal_out" "Step 2/7" || FAIL "%s" "$signal_out"
 fi
 
-echo ""
-if [[ $failures -gt 0 ]]; then
-    echo "[demo-setup] $failures check(s) failed"
-    exit 1
-fi
-echo "[demo-setup] all checks passed"
+test_end

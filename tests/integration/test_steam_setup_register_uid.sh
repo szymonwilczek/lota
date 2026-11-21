@@ -20,6 +20,9 @@
 
 set -euo pipefail
 
+. "$(dirname "$0")/../lib/test.sh"
+test_begin "steam register uid"
+
 # The assertions grep the script's own messages.
 export LC_ALL=C
 
@@ -30,31 +33,18 @@ AGENT_BIN="$BUILD_DIR/lota-agent"
 
 for f in "$SETUP" "$AGENT_BIN"; do
     if [[ ! -x "$f" ]]; then
-	echo "[steam-setup-register-uid] missing artifact: $f" >&2
-	exit 2
+	FAIL "missing artifact: %s" "$f"
+	test_end
     fi
 done
 
 if ! unshare -r true 2>/dev/null; then
-    echo "SKIP: [steam-setup-register-uid] no unprivileged user namespace"
-    exit 0
+    SKIP "no unprivileged user namespace"
+    test_end
 fi
 
 WORK_DIR=$(mktemp -d)
-trap 'rm -rf "$WORK_DIR"' EXIT
-
-failures=0
-
-check() {
-    local msg="$1"
-    shift
-    if "$@"; then
-	echo "PASS: $msg"
-    else
-	echo "FAIL: $msg"
-	failures=$((failures + 1))
-    fi
-}
+test_cleanup 'rm -rf "$WORK_DIR"'
 
 # root in a namespace of its own, the operator a made-up uid
 register() {
@@ -73,26 +63,30 @@ conf="$WORK_DIR/etc/lota.conf"
 
 rc=0
 out=$(register "$conf") || rc=$?
-check "an absent lota.conf is registered into" test "$rc" -eq 0
-check "the uid is written" has_line "$conf" 'container_listener_uid = 4242'
-check "the file is created 0644" mode_is "$conf" 644
-check "the config the command wrote loads" loads "$conf"
-check "no backup is left behind" test ! -e "$conf.lota-steam-setup.bak"
-[[ $rc -eq 0 ]] || echo "  reported: $out"
+TEST "an absent lota.conf is registered into"
+test "$rc" -eq 0 || FAIL "exit %d: %s" "$rc" "$out"
+TEST "the uid is written"
+has_line "$conf" 'container_listener_uid = 4242' || FAIL
+TEST "the file is created 0644"
+mode_is "$conf" 644 || FAIL
+TEST "the config the command wrote loads"
+loads "$conf" || FAIL
+TEST "no backup is left behind"
+test ! -e "$conf.lota-steam-setup.bak" || FAIL
 
 rc=0
 out=$(register "$conf") || rc=$?
-check "a second run finds the uid registered" says "$out" 'already registered'
+TEST "a second run finds the uid registered"
+says "$out" 'already registered' || FAIL "%s" "$out"
 
 # No directory: nothing installed LOTA here.
 rc=0
 out=$(register "$WORK_DIR/none/lota.conf") || rc=$?
-check "a missing config directory is refused" test "$rc" -ne 0
-check "the refusal says LOTA is not installed" says "$out" 'install LOTA'
-check "nothing is created for a missing directory" test ! -e "$WORK_DIR/none"
+TEST "a missing config directory is refused"
+test "$rc" -ne 0 || FAIL "exit %d: %s" "$rc" "$out"
+TEST "the refusal says LOTA is not installed"
+says "$out" 'install LOTA' || FAIL "%s" "$out"
+TEST "nothing is created for a missing directory"
+test ! -e "$WORK_DIR/none" || FAIL
 
-if [[ $failures -ne 0 ]]; then
-    echo "FAILURES: $failures"
-    exit 1
-fi
-echo "All tests passed"
+test_end

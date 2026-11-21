@@ -35,14 +35,17 @@
 
 set -euo pipefail
 
+. "$(dirname "$0")/../lib/test.sh"
+test_begin "bpf gates"
+
 # Stage 2 asserts on the kernel's EPERM string emitted by strace. strerror() is localised, so for example a pl_PL host prints
 # and the English grep misses a gate that fired correctly.
 # Pin the C locale so the errno string is byte-stable on every host.
 export LC_ALL=C
 
 if [[ $EUID -ne 0 ]]; then
-    echo "[bpf-gates] must run as root (ptrace + BPF visibility)" >&2
-    exit 2
+    FAIL "must run as root (ptrace + BPF visibility)"
+    test_end
 fi
 
 REPO_DIR=$(cd "$(dirname "$0")/../.." && pwd)
@@ -52,16 +55,16 @@ EVIL_SO="$BUILD_DIR/examples/evil.so"
 SOCKET="/run/lota/lota.sock"
 
 if [[ ! -S "$SOCKET" ]]; then
-    echo "[bpf-gates] agent socket not found: $SOCKET" >&2
-    echo "[bpf-gates] start lota-agent in enforce mode first" >&2
-    exit 2
+    FAIL "agent socket not found: %s" "$SOCKET"
+    FAIL "start lota-agent in enforce mode first"
+    test_end
 fi
 
 for f in "$VICTIM_BIN" "$EVIL_SO"; do
     if [[ ! -f "$f" ]]; then
-	echo "[bpf-gates] missing artifact: $f" >&2
-	echo "[bpf-gates] run 'make all examples' first" >&2
-	exit 2
+	FAIL "missing artifact: %s" "$f"
+	FAIL "run 'make all examples' first"
+	test_end
     fi
 done
 
@@ -73,33 +76,18 @@ done
 # key off the protected-PID set, not the actor's credentials, so a
 # root victim is the strongest target: it proves a root attacker is
 # still rejected.
-PASS=0
-FAIL=0
-
-note() { printf '[bpf-gates] %s\n' "$*"; }
-ok() {
-    printf '[bpf-gates] \033[32mPASS\033[0m %s\n' "$*"
-    PASS=$((PASS + 1))
-}
-bad() {
-    printf '[bpf-gates] \033[31mFAIL\033[0m %s\n' "$*" >&2
-    FAIL=$((FAIL + 1))
-}
 
 #
 # Stage 1: security_mmap_file -- file-backed PROT_EXEC mapping
 # of an unauthorised .so from inside a protected process.
 #
-note "stage 1: security_mmap_file (delegated to block-demo run.sh)"
-if "$VICTIM_BIN" >/dev/null 2>&1; then
-    ok "mmap_file blocks unauthorised dlopen from protected task"
-else
-    rc=$?
-    if [[ $rc -eq 1 ]]; then
-	bad "mmap_file allowed evil.so (gate did not fire)"
-    else
-	bad "mmap_file stage inconclusive (rc=$rc)"
-    fi
+TEST "mmap_file blocks an unauthorised dlopen from a protected task"
+rc=0
+"$VICTIM_BIN" >/dev/null 2>&1 || rc=$?
+if [[ $rc -eq 1 ]]; then
+    FAIL "mmap_file allowed evil.so (gate did not fire)"
+elif [[ $rc -ne 0 ]]; then
+    FAIL "mmap_file stage inconclusive (rc=%d)" "$rc"
 fi
 
 #
@@ -109,7 +97,7 @@ fi
 # strace binary as a probe. The kernel returns -EPERM, strace
 # exits non-zero with "Operation not permitted".
 #
-note "stage 2: ptrace_access_check (external attach to protected PID)"
+TEST "ptrace_access_check rejects an attach with EPERM"
 # Feed the victim's stdin from a FIFO we keep open, so it outlives
 # stage 2 until stage 3 signals it.
 VICTIM_FIFO=$(mktemp -u /tmp/bpf-gates-victim.fifo.XXXXXX)
@@ -130,9 +118,9 @@ done
 
 if ! grep -q "registered self into protected_pids" \
      /tmp/bpf-gates-victim.log 2>/dev/null; then
-    bad "victim never registered (no ptrace stage)"
+    FAIL "victim never registered (no ptrace stage)"
 elif ! kill -0 "$VICTIM_PID" 2>/dev/null; then
-    bad "victim PID $VICTIM_PID already dead before ptrace stage"
+    FAIL "victim PID %d already dead before ptrace stage" "$VICTIM_PID"
 else
     # strace returns 0 only on a successful attach + detach. Under
     # the LSM gate it returns non-zero with "Operation not permitted"
@@ -142,13 +130,11 @@ else
     if timeout 2 strace -p "$VICTIM_PID" -e trace=none \
 	       -o /dev/null </dev/null \
 	       2>/tmp/bpf-gates-strace.err; then
-	bad "ptrace attach succeeded against protected PID"
-    elif grep -q "Operation not permitted\|EPERM" \
-	      /tmp/bpf-gates-strace.err; then
-	ok "ptrace attach rejected with EPERM"
-    else
-	bad "ptrace stage inconclusive; strace err:"
-	cat /tmp/bpf-gates-strace.err >&2
+	FAIL "ptrace attach succeeded against protected PID"
+    elif ! grep -q "Operation not permitted\|EPERM" \
+	   /tmp/bpf-gates-strace.err; then
+	FAIL "ptrace stage inconclusive; strace err:"
+	FAIL "%s" "$(cat /tmp/bpf-gates-strace.err)"
     fi
 fi
 
@@ -158,29 +144,20 @@ fi
 # a killed title cheats in nothing, so the signal is delivered
 # and recorded.
 #
-note "stage 3: task_kill (external signal to protected PID)"
+TEST "task_kill delivers SIGKILL to a protected PID"
 if ! kill -KILL "$VICTIM_PID" 2>/tmp/bpf-gates-kill.err; then
-    bad "SIGKILL to protected PID refused:"
-    cat /tmp/bpf-gates-kill.err >&2
+    FAIL "SIGKILL to protected PID refused:"
+    FAIL "%s" "$(cat /tmp/bpf-gates-kill.err)"
 else
     set +e
     wait "$VICTIM_PID" 2>/dev/null
     rc=$?
     set -e
-    if [[ $rc -eq 137 ]]; then
-	ok "SIGKILL delivered to protected PID"
-    else
-	bad "victim did not die of SIGKILL (rc=$rc)"
-    fi
+    [[ $rc -eq 137 ]] || FAIL "victim did not die of SIGKILL (rc=%d)" "$rc"
 fi
 
 exec {VICTIM_IN}>&-
 wait "$VICTIM_PID" 2>/dev/null || true
 rm -f "$VICTIM_FIFO"
 
-echo ""
-note "summary: ${PASS} passed, ${FAIL} failed"
-if [[ $FAIL -eq 0 ]]; then
-    exit 0
-fi
-exit 1
+test_end

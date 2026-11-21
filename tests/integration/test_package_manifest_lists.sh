@@ -28,6 +28,9 @@
 
 set -euo pipefail
 
+. "$(dirname "$0")/../lib/test.sh"
+test_begin "package manifest lists"
+
 export LC_ALL=C
 
 REPO_DIR=$(cd "$(dirname "$0")/../.." && pwd)
@@ -38,26 +41,13 @@ DEVEL_YAML=packaging/nfpm/lota-sdk-devel.yaml
 for f in "$GATE" "$AGENT_YAML" "$DEVEL_YAML" Makefile VERSION \
     Documentation/conf.py; do
     if [[ ! -e "$REPO_DIR/$f" ]]; then
-	echo "[package-manifest-lists] missing file: $f" >&2
-	exit 2
+	FAIL "missing file: %s" "$f"
+	test_end
     fi
 done
 
 WORK_DIR=$(mktemp -d)
-trap 'rm -rf "$WORK_DIR"' EXIT
-
-failures=0
-
-check() {
-    local msg="$1"
-    shift
-    if "$@"; then
-	echo "PASS: $msg"
-    else
-	echo "FAIL: $msg"
-	failures=$((failures + 1))
-    fi
-}
+test_cleanup 'rm -rf "$WORK_DIR"'
 
 # Fresh copy of everything the gate reads; cases share nothing
 fixture() {
@@ -72,6 +62,10 @@ fixture() {
 # Gate verdict on the fixture; output kept for the failure report
 gate_passes() {
     "$WORK_DIR/tree/$GATE" >"$WORK_DIR/gate.out" 2>&1
+}
+
+gate_failed() {
+    FAIL "%s" "$(tail -n 20 "$WORK_DIR/gate.out")"
 }
 
 # Insert text above the first line of file containing what
@@ -103,41 +97,34 @@ replace_line() {
     mv "$WORK_DIR/edited" "$WORK_DIR/tree/$file"
 }
 
-echo "=== what a commented manifest list reads as ==="
-
 # Unedited copy must pass, or the cases below test the copy
 fixture
-check "the fixture tree passes the gate unedited" gate_passes
+TEST "the fixture tree passes the gate unedited"
+gate_passes || gate_failed
 
 # lota-sdk = is the version lock the gate checks against the spec
 fixture
 insert_above "$AGENT_YAML" "lota-sdk = " \
 	     "      # the player page tells the reader to run what this ships"
-check "a comment inside depends leaves the entries under it in place" \
-      gate_passes
+TEST "a comment inside depends leaves the entries under it in place"
+gate_passes || gate_failed
 
 fixture
 insert_above "$DEVEL_YAML" "pkgconfig(lota-server)" \
 	     "      # the server half, for a title's own back end"
-check "a comment inside provides leaves the entries under it in place" \
-      gate_passes
+TEST "a comment inside provides leaves the entries under it in place"
+gate_passes || gate_failed
 
 fixture
 insert_above "$AGENT_YAML" "lota-sdk = " ""
-check "a blank line inside depends leaves the entries under it in place" \
-      gate_passes
+TEST "a blank line inside depends leaves the entries under it in place"
+gate_passes || gate_failed
 
 # Control: a reader that skips too much passes this too
 fixture
 drop_line "$AGENT_YAML" "lota-sdk = "
-if gate_passes; then
-    echo "FAIL: a dependency genuinely taken out is still caught"
-    failures=$((failures + 1))
-else
-    echo "PASS: a dependency genuinely taken out is still caught"
-fi
-
-echo "=== what one manifest promises and the other does not ==="
+TEST "a dependency genuinely taken out is still caught"
+! gate_passes || gate_failed
 
 # Fails, naming what
 gate_fails_with() {
@@ -146,52 +133,50 @@ gate_fails_with() {
 
 fixture
 insert_above "$AGENT_YAML" "lota-sdk = " "      - fsverity-utils"
-check "a Requires only nfpm makes fails" \
-      gate_fails_with "lota-agent require fsverity-utils and packaging/rpm"
+TEST "a Requires only nfpm makes fails"
+gate_fails_with "lota-agent require fsverity-utils and packaging/rpm" || gate_failed
 
 fixture
 drop_line "$AGENT_YAML" "      - dracut"
-check "a Requires only the spec makes fails" \
-      gate_fails_with "makes lota-agent require dracut and packaging/nfpm"
+TEST "a Requires only the spec makes fails"
+gate_fails_with "makes lota-agent require dracut and packaging/nfpm" || gate_failed
 
 fixture
 drop_line "$AGENT_YAML" "      - libseccomp"
-check "a soname Requires nfpm leaves out fails" \
-      gate_fails_with "soname_requires lists libseccomp for lota-agent"
+TEST "a soname Requires nfpm leaves out fails"
+gate_fails_with "soname_requires lists libseccomp for lota-agent" || gate_failed
 
 fixture
 replace_line packaging/rpm/lota.spec \
 	     "Requires:       %{name}-sdk%{?_isa} = %{version}-%{release}" \
 	     "Requires:       %{name}-sdk%{?_isa}"
-check "a sibling pin only nfpm makes fails" \
-      gate_fails_with "lota-agent to one build of lota-sdk and packaging/rpm"
+TEST "a sibling pin only nfpm makes fails"
+gate_fails_with "lota-agent to one build of lota-sdk and packaging/rpm" || gate_failed
 
 fixture
 replace_line "$AGENT_YAML" "      - lota-sdk = \${LOTA_RPM_VERSION}" \
 	     "      - lota-sdk >= \${LOTA_RPM_VERSION}"
-check "a lower bound in nfpm against a spec pin fails" \
-      gate_fails_with "lota-agent to one build of lota-sdk and packaging/nfpm"
+TEST "a lower bound in nfpm against a spec pin fails"
+gate_fails_with "lota-agent to one build of lota-sdk and packaging/nfpm" || gate_failed
 
 fixture
 replace_line packaging/rpm/lota.spec \
 	     "Requires:       %{name}-sdk%{?_isa} = %{version}-%{release}" \
 	     "Requires:       %{name}-sdk%{?_isa} >= %{version}-%{release}"
-check "a lower bound in the spec against an nfpm pin fails" \
-      gate_fails_with "lota-agent to one build of lota-sdk and packaging/rpm"
+TEST "a lower bound in the spec against an nfpm pin fails"
+gate_fails_with "lota-agent to one build of lota-sdk and packaging/rpm" || gate_failed
 
 fixture
 insert_above packaging/rpm/lota.spec "Requires:       dracut" \
 	     "Requires(post): coreutils"
-check "a scriptlet Requires only the spec makes fails" \
-      gate_fails_with "makes lota-agent require coreutils and packaging/nfpm"
+TEST "a scriptlet Requires only the spec makes fails"
+gate_fails_with "makes lota-agent require coreutils and packaging/nfpm" || gate_failed
 
 fixture
 insert_above "$DEVEL_YAML" "pkgconfig(lota-server)" \
 	     "      - pkgconfig(lota-made-up)"
-check "a pkgconfig() provide with no .pc behind it fails" \
-      gate_fails_with "provides pkgconfig(lota-made-up) and ships no"
-
-echo "=== what each manifest says a package is ==="
+TEST "a pkgconfig() provide with no .pc behind it fails"
+gate_fails_with "provides pkgconfig(lota-made-up) and ships no" || gate_failed
 
 gate_fails_on_description() {
     ! gate_passes &&
@@ -202,30 +187,26 @@ fixture
 replace_line packaging/rpm/lota.spec \
 	     "Summary:        LOTA SDK development files" \
 	     "Summary:        LOTA SDK headers and shared libraries"
-check "a Summary the nfpm description does not open with fails" \
-      gate_fails_on_description
+TEST "a Summary the nfpm description does not open with fails"
+gate_fails_on_description || gate_failed
 
 fixture
 replace_line packaging/rpm/lota.spec \
 	     "Requires lota-sdk." \
 	     "Requires lota-sdk and ships the Proton/Steam helpers."
-check "a %description that differs from the nfpm description fails" \
-      gate_fails_on_description
+TEST "a %description that differs from the nfpm description fails"
+gate_fails_on_description || gate_failed
 
-echo "=== make packages with another BUILD_DIR ==="
-
+TEST "packages refuses a BUILD_DIR other than ./build"
 if make -C "$REPO_DIR" -n BUILD_DIR="$WORK_DIR/out" packages \
 	>"$WORK_DIR/gate.out" 2>&1; then
-    echo "FAIL: packages refuses another BUILD_DIR"
-    failures=$((failures + 1))
+    gate_failed
 # A refusal from the recipe would follow the recipes of all it needs
 elif ! grep -q 'packages builds from ' "$WORK_DIR/gate.out" ||
 	grep -v -e 'packages builds from ' -e 'ing directory' \
 	    "$WORK_DIR/gate.out" | grep -q .; then
-    echo "FAIL: packages refuses another BUILD_DIR before a build"
-    failures=$((failures + 1))
-else
-    echo "PASS: packages refuses another BUILD_DIR"
+    FAIL "not refused before a build"
+    gate_failed
 fi
 
 DEFAULT_DIR=$(sed -n 's/^BUILD_DIR[[:space:]]*:=[[:space:]]*//p' \
@@ -235,15 +216,7 @@ packages_dry_run() {
 	>"$WORK_DIR/gate.out" 2>&1 || true
     ! grep -q 'packages builds from ' "$WORK_DIR/gate.out"
 }
-check "packages takes the default BUILD_DIR however it is spelled" \
-      packages_dry_run "$REPO_DIR/$DEFAULT_DIR/."
+TEST "packages takes the default BUILD_DIR however it is spelled"
+packages_dry_run "$REPO_DIR/$DEFAULT_DIR/." || gate_failed
 
-echo ""
-if [[ $failures -eq 0 ]]; then
-    echo "[package-manifest-lists] OK"
-    exit 0
-fi
-echo "[package-manifest-lists] $failures check(s) failed" >&2
-echo "last gate output:" >&2
-cat "$WORK_DIR/gate.out" >&2
-exit 1
+test_end

@@ -23,31 +23,21 @@
 
 set -euo pipefail
 
+. "$(dirname "$0")/../lib/test.sh"
+test_begin "proton hook disable"
+
 export LC_ALL=C
 
 REPO_DIR=$(cd "$(dirname "$0")/../.." && pwd)
 WRAPPER="$REPO_DIR/scripts/lota-proton-hook"
 
 if [[ ! -x "$WRAPPER" ]]; then
-    echo "[proton-hook-disable] missing artifact: $WRAPPER" >&2
-    exit 2
+    FAIL "missing artifact: %s" "$WRAPPER"
+    test_end
 fi
 
 WORK_DIR=$(mktemp -d)
-trap 'rm -rf "$WORK_DIR"' EXIT
-
-failures=0
-
-check() {
-    local msg="$1"
-    shift
-    if "$@"; then
-        echo "PASS: $msg"
-    else
-        echo "FAIL: $msg"
-        failures=$((failures + 1))
-    fi
-}
+test_cleanup 'rm -rf "$WORK_DIR"'
 
 says() { grep -qi -- "$2" <<<"$1"; }
 denies() { ! grep -qi -- "$2" <<<"$1"; }
@@ -107,44 +97,51 @@ run_wrapper() {
     return $rc
 }
 
-echo "=== lota-proton-hook: the switches that keep the hook out ==="
-
 # the default: the library is found and preloaded
 run_wrapper LOTA_HOOK_QUIET=
-check "unset: the wrapper preloads the library" says "$out" "LD_PRELOAD=\[$LIB\]"
-check "unset: no warning is printed" denies "$err" "LOTA_HOOK_DISABLE"
+TEST "unset: the wrapper preloads the library"
+says "$out" "LD_PRELOAD=\[$LIB\]" || FAIL "%s" "$out"
+TEST "unset: no warning is printed"
+denies "$err" "LOTA_HOOK_DISABLE" || FAIL "%s" "$err"
 
 # the documented value
 run_wrapper LOTA_HOOK_DISABLE=1
-check "DISABLE=1: LD_PRELOAD reaches the game empty" says "$out" 'LD_PRELOAD=\[\]'
-check "DISABLE=1: the library is not preloaded" denies "$out" "$LIB"
-check "DISABLE=1: one warning names the switch" says "$err" "LOTA_HOOK_DISABLE"
+TEST "DISABLE=1: LD_PRELOAD reaches the game empty"
+says "$out" 'LD_PRELOAD=\[\]' || FAIL "%s" "$out"
+TEST "DISABLE=1: the library is not preloaded"
+denies "$out" "$LIB" || FAIL "%s" "$out"
+TEST "DISABLE=1: one warning names the switch"
+says "$err" "LOTA_HOOK_DISABLE" || FAIL "%s" "$err"
 
 # Count the wrapper's own lines, not every line on the channel:
 # the stub library is not loadable, so when it does reach LD_PRELOAD the dynamic
 # loader writes a line of its own, and counting those would score a wrapper that
 # said nothing.
-check "DISABLE=1: the wrapper writes one line" \
-    test "$(grep -c "^lota-proton-hook:" <<<"$err")" -eq 1
+TEST "DISABLE=1: the wrapper writes one line"
+test "$(grep -c "^lota-proton-hook:" <<<"$err")" -eq 1 || FAIL
 
 # the value the library also accepts, so the two layers agre
 run_wrapper LOTA_HOOK_DISABLE=true
-check "DISABLE=true: LD_PRELOAD reaches the game empty" says "$out" 'LD_PRELOAD=\[\]'
-check "DISABLE=true: one warning names the switch" says "$err" "LOTA_HOOK_DISABLE"
+TEST "DISABLE=true: LD_PRELOAD reaches the game empty"
+says "$out" 'LD_PRELOAD=\[\]' || FAIL "%s" "$out"
+TEST "DISABLE=true: one warning names the switch"
+says "$err" "LOTA_HOOK_DISABLE" || FAIL "%s" "$err"
 
 # anything else is not the switch:
 #   an unset-shaped value must not disable the hook,
 #   or a player who exports 0 loses attestation silently
 run_wrapper LOTA_HOOK_DISABLE=0
-check "DISABLE=0: the library is still preloaded" says "$out" "LD_PRELOAD=\[$LIB\]"
+TEST "DISABLE=0: the library is still preloaded"
+says "$out" "LD_PRELOAD=\[$LIB\]" || FAIL "%s" "$out"
 run_wrapper LOTA_HOOK_DISABLE=""
-check "DISABLE=empty: the library is still preloaded" says "$out" "LD_PRELOAD=\[$LIB\]"
+TEST "DISABLE=empty: the library is still preloaded"
+says "$out" "LD_PRELOAD=\[$LIB\]" || FAIL "%s" "$out"
 
 # player's own LD_PRELOAD survives the pass-through untouched:
 #   the switch removes LOTA from the launch, not everything else
 run_wrapper LOTA_HOOK_DISABLE=1 LD_PRELOAD=/lib64/libfoo.so
-check "DISABLE=1: an existing LD_PRELOAD is passed through" \
-    says "$out" 'LD_PRELOAD=\[/lib64/libfoo.so\]'
+TEST "DISABLE=1: an existing LD_PRELOAD is passed through"
+says "$out" 'LD_PRELOAD=\[/lib64/libfoo.so\]' || FAIL "%s" "$out"
 
 # the other documented fallback still behaves, and says something different:
 #   the two paths must not be told apart by guesswork
@@ -152,31 +149,35 @@ set +e
 missing_err=$(env LOTA_HOOK_LIB_PATH="$WORK_DIR/no-such-hook.so" \
     "$WRAPPER" /bin/true 2>&1 >/dev/null)
 set -e
-check "missing library: the wrapper still warns" says "$missing_err" "not found"
-check "missing library: the warning is not the disable one" \
-    denies "$missing_err" "LOTA_HOOK_DISABLE"
+TEST "missing library: the wrapper still warns"
+says "$missing_err" "not found" || FAIL "%s" "$missing_err"
+TEST "missing library: the warning is not the disable one"
+denies "$missing_err" "LOTA_HOOK_DISABLE" || FAIL "%s" "$missing_err"
 
 # the launch itself goes through lota-protect, arguments intact
 rm -f "$MARK"
 run_wrapper LOTA_HOOK_QUIET=
-check "unset: the command runs through lota-protect" protected
+TEST "unset: the command runs through lota-protect"
+protected || FAIL
 set +e
 args_out=$(env LOTA_HOOK_LIB_PATH="$LIB" \
     "$WRAPPER" /bin/sh -c 'printf "[%s]" "$@"' sh "a b" "" c 2>/dev/null)
 set -e
-check "unset: no argument is split or dropped" \
-    test "$args_out" = '[a b][][c]'
+TEST "unset: no argument is split or dropped"
+test "$args_out" = '[a b][][c]' || FAIL
 
 rm -f "$MARK"
 run_wrapper LOTA_HOOK_DISABLE=1
-check "DISABLE=1: lota-protect is skipped as well" unprotected
+TEST "DISABLE=1: lota-protect is skipped as well"
+unprotected || FAIL
 
 rm -f "$MARK"
 set +e
 env LOTA_HOOK_LIB_PATH="$WORK_DIR/no-such-hook.so" \
     "$WRAPPER" /bin/true >/dev/null 2>&1
 set -e
-check "missing library: the launch is still protected" protected
+TEST "missing library: the launch is still protected"
+protected || FAIL
 
 rm -f "$MARK"
 set +e
@@ -184,14 +185,9 @@ noprotect_err=$(env LOTA_PROTECT_PATH="$WORK_DIR/no-such-protect" \
     LOTA_HOOK_LIB_PATH="$LIB" "$WRAPPER" /bin/true 2>&1 >/dev/null)
 noprotect_rc=$?
 set -e
-check "no lota-protect: the command still runs" test "$noprotect_rc" -eq 0
-check "no lota-protect: the wrapper says it is unprotected" \
-    says "$noprotect_err" "starting unprotected"
+TEST "no lota-protect: the command still runs"
+test "$noprotect_rc" -eq 0 || FAIL
+TEST "no lota-protect: the wrapper says it is unprotected"
+says "$noprotect_err" "starting unprotected" || FAIL "%s" "$noprotect_err"
 
-echo ""
-if [[ $failures -eq 0 ]]; then
-    echo "[proton-hook-disable] OK"
-    exit 0
-fi
-echo "[proton-hook-disable] $failures check(s) failed" >&2
-exit 1
+test_end

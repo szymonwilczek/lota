@@ -21,6 +21,9 @@
 
 set -euo pipefail
 
+. "$(dirname "$0")/../lib/test.sh"
+test_begin "proton hook activation"
+
 # paths compare byte for byte
 export LC_ALL=C
 
@@ -28,25 +31,12 @@ REPO_DIR=$(cd "$(dirname "$0")/../.." && pwd)
 WRAPPER="$REPO_DIR/scripts/lota-proton-hook"
 
 if [[ ! -x "$WRAPPER" ]]; then
-    echo "[proton-hook-activation] missing artifact: $WRAPPER" >&2
-    exit 2
+    FAIL "missing artifact: %s" "$WRAPPER"
+    test_end
 fi
 
 WORK_DIR=$(mktemp -d)
-trap 'rm -rf "$WORK_DIR"' EXIT
-
-failures=0
-
-check() {
-    local msg="$1"
-    shift
-    if "$@"; then
-	echo "PASS: $msg"
-    else
-	echo "FAIL: $msg"
-	failures=$((failures + 1))
-    fi
-}
+test_cleanup 'rm -rf "$WORK_DIR"'
 
 # The hook's match: an entry covers itself and every path under it
 covers() {
@@ -95,8 +85,6 @@ run_wrapper() {
     return $rc
 }
 
-echo "=== lota-proton-hook: which processes of a launch are the title ==="
-
 # Client helpers beside the library folder; the title dir has a space
 STEAM="$WORK_DIR/Steam"
 GAME="$STEAM/steamapps/common/A Title With Spaces"
@@ -107,92 +95,89 @@ mkdir -p "$GAME/bin" "$TOOL/bin" "$PROTON/files/bin" "$STEAM/ubuntu12_32"
 # 1. Steam describes the launch: the title directory is pinned.
 run_wrapper STEAM_COMPAT_INSTALL_PATH="$GAME" \
 	    STEAM_COMPAT_TOOL_PATHS="$PROTON:$TOOL"
-check "the title's program is one the hook attests" \
-      covers "$pin" "$GAME/bin/title"
+TEST "the title's program is one the hook attests"
+covers "$pin" "$GAME/bin/title" || FAIL
 
 # 2. Proton runs from the tool paths, not the title directory.
-check "so is the compatibility tool that runs it" \
-      covers "$pin" "$PROTON/files/bin/wine64-preloader"
-check "and the container runtime beside it" \
-      covers "$pin" "$TOOL/bin/pressure-vessel-wrap"
+TEST "so is the compatibility tool that runs it"
+covers "$pin" "$PROTON/files/bin/wine64-preloader" || FAIL
+TEST "and the container runtime beside it"
+covers "$pin" "$TOOL/bin/pressure-vessel-wrap" || FAIL
 
 # 3. Client helpers are in neither.
-check "the client's helpers are not" \
-      lacks "$pin" "$STEAM/ubuntu12_32/reaper"
-check "nor is the client directory they sit in" \
-      lacks "$pin" "$STEAM/steam.sh"
+TEST "the client's helpers are not"
+lacks "$pin" "$STEAM/ubuntu12_32/reaper" || FAIL
+TEST "nor is the client directory they sit in"
+lacks "$pin" "$STEAM/steam.sh" || FAIL
 
 # 4. Steam's colon list becomes the hook's comma list, one entry each.
-check "every tool the launch names is pinned on its own" \
-      names "$pin" "$PROTON"
-check "and so is the title" names "$pin" "$GAME"
+TEST "every tool the launch names is pinned on its own"
+names "$pin" "$PROTON" || FAIL
+TEST "and so is the title"
+names "$pin" "$GAME" || FAIL
 
 # 5. A pin the player set wins.
 run_wrapper STEAM_COMPAT_INSTALL_PATH="$GAME" \
 	    STEAM_COMPAT_TOOL_PATHS="$TOOL" \
 	    LOTA_HOOK_ACTIVATE_PATH="/opt/games"
-check "a pin the player set is left alone" test "$pin" = "/opt/games"
+TEST "a pin the player set is left alone"
+test "$pin" = "/opt/games" || FAIL
 
 # 6. Outside Steam: no pin, the hook's own policy decides.
 run_wrapper
-check "a launch Steam knows nothing about is left unpinned" \
-      test "$pin" = "<unset>"
+TEST "a launch Steam knows nothing about is left unpinned"
+test "$pin" = "<unset>" || FAIL
 
 # 7. No install path, no pin: an empty one matches all or nothing.
 run_wrapper STEAM_COMPAT_TOOL_PATHS="$TOOL"
-check "a launch that names no title is left unpinned" \
-      test "$pin" = "<unset>"
+TEST "a launch that names no title is left unpinned"
+test "$pin" = "<unset>" || FAIL
 
 run_wrapper STEAM_COMPAT_INSTALL_PATH="$GAME"
-check "a launch that names no tool still pins the title" \
-      covers "$pin" "$GAME/bin/title"
+TEST "a launch that names no tool still pins the title"
+covers "$pin" "$GAME/bin/title" || FAIL
 
 # 8. An empty element matches every path; it is dropped.
 run_wrapper STEAM_COMPAT_INSTALL_PATH="$GAME" \
 	    STEAM_COMPAT_TOOL_PATHS="$TOOL::$PROTON"
-check "an empty tool path is dropped rather than pinned" \
-      lacks "$pin" "/anything/at/all"
-check "and the tools around it survive" names "$pin" "$PROTON"
+TEST "an empty tool path is dropped rather than pinned"
+lacks "$pin" "/anything/at/all" || FAIL
+TEST "and the tools around it survive"
+names "$pin" "$PROTON" || FAIL
 
 # 9. Without a trailing separator an entry covers a sibling title.
 run_wrapper STEAM_COMPAT_INSTALL_PATH="$GAME" \
 	    STEAM_COMPAT_TOOL_PATHS="$TOOL"
-check "a title whose name merely starts the same is not attested" \
-      lacks "$pin" "$GAME II/bin/title"
+TEST "a title whose name merely starts the same is not attested"
+lacks "$pin" "$GAME II/bin/title" || FAIL
 
 # 10. Every Wine process runs the pinned loader; the title's directory,
 #     as Wine sees it, tells them apart. A library is a drive of its own
 #     in the prefix, so the directory starts at the library root.
 run_wrapper STEAM_COMPAT_INSTALL_PATH="$GAME" \
 	    STEAM_COMPAT_TOOL_PATHS="$PROTON:$TOOL"
-check "the title's directory is named from its library root" \
-      test "$prog" = "steamapps/common/A Title With Spaces/"
+TEST "the title's directory is named from its library root"
+test "$prog" = "steamapps/common/A Title With Spaces/" || FAIL
 
 run_wrapper STEAM_COMPAT_INSTALL_PATH="$GAME/" \
 	    STEAM_COMPAT_TOOL_PATHS="$PROTON"
-check "a trailing separator does not double" \
-      test "$prog" = "steamapps/common/A Title With Spaces/"
+TEST "a trailing separator does not double"
+test "$prog" = "steamapps/common/A Title With Spaces/" || FAIL
 
 # 11. A title outside any library is reached through the root drive.
 run_wrapper STEAM_COMPAT_INSTALL_PATH="$WORK_DIR/Games/Shortcut" \
 	    STEAM_COMPAT_TOOL_PATHS="$PROTON"
-check "a title outside a library is named by its host path" \
-      test "$prog" = "$WORK_DIR/Games/Shortcut/"
+TEST "a title outside a library is named by its host path"
+test "$prog" = "$WORK_DIR/Games/Shortcut/" || FAIL
 
 # 12. As with the pin: a set value wins; no install path, no program.
 run_wrapper STEAM_COMPAT_INSTALL_PATH="$GAME" \
 	    LOTA_HOOK_ACTIVATE_PROGRAM="games/mine/"
-check "a title directory the player set is left alone" \
-      test "$prog" = "games/mine/"
+TEST "a title directory the player set is left alone"
+test "$prog" = "games/mine/" || FAIL
 
 run_wrapper STEAM_COMPAT_TOOL_PATHS="$PROTON"
-check "a launch that names no title names no program" \
-      test "$prog" = "<unset>"
+TEST "a launch that names no title names no program"
+test "$prog" = "<unset>" || FAIL
 
-echo ""
-if [[ $failures -eq 0 ]]; then
-    echo "[proton-hook-activation] OK"
-    exit 0
-fi
-echo "[proton-hook-activation] $failures check(s) failed" >&2
-exit 1
+test_end

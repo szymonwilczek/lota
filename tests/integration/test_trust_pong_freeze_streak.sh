@@ -18,6 +18,9 @@
 
 set -uo pipefail
 
+. "$(dirname "$0")/../lib/test.sh"
+test_begin "trust pong streak"
+
 export LC_ALL=C
 
 REPO_DIR=$(cd "$(dirname "$0")/../.." && pwd)
@@ -25,12 +28,12 @@ BUILD_DIR="${BUILD_DIR:-${LOTA_BUILD_DIR:-$REPO_DIR/build}}"
 GAME_BIN="${LOTA_TRUST_PONG:-$BUILD_DIR/examples/trust_pong}"
 
 if ! command -v python3 >/dev/null 2>&1; then
-    echo "[trust-pong] python3 not installed" >&2
-    exit 2
+    FAIL "python3 not installed"
+    test_end
 fi
 if [[ ! -x "$GAME_BIN" ]]; then
-    echo "[trust-pong] $GAME_BIN not built; run 'make examples'" >&2
-    exit 2
+    FAIL "%s not built; run 'make examples'" "$GAME_BIN"
+    test_end
 fi
 
 WORK_DIR=$(mktemp -d)
@@ -39,7 +42,7 @@ cleanup() {
     [[ -n "$SERVER_PID" ]] && kill "$SERVER_PID" 2>/dev/null
     rm -rf "$WORK_DIR"
 }
-trap cleanup EXIT
+test_cleanup cleanup
 
 # One "<state> <verdict_seq> <updated_at_unix>" line per /state request;
 # the last one repeats once exhausted.
@@ -87,8 +90,6 @@ with open(sys.argv[3], "w") as f:
 httpd.serve_forever()
 PY
 
-failures=0
-
 run_case() { # <label> <seconds> <state>...
     local label="$1" seconds="$2"
     shift 2
@@ -106,7 +107,7 @@ run_case() { # <label> <seconds> <state>...
         sleep 0.1
     done
     if [[ -z "$port" ]]; then
-        echo "[trust-pong] $label: verdict server never bound" >&2
+        FAIL "%s: verdict server never bound" "$label"
         return 1
     fi
 
@@ -122,75 +123,50 @@ run_case() { # <label> <seconds> <state>...
 served_count() { grep -c . "$WORK_DIR/$1/served"; }
 freeze_line() { grep 'session terminated after' "$WORK_DIR/$1/stderr"; }
 
+stderr_of() { sed -n '1,20p' "$WORK_DIR/$1/stderr"; }
+
 # one UNTRUSTED between TRUSTED ones: absorbed
+TEST "one UNTRUSTED response leaves the session running"
 run_case one-untrusted 8 "TRUSTED 1 1" "TRUSTED 2 2" "UNTRUSTED 3 3" \
          "TRUSTED 4 4" "TRUSTED 5 5" "TRUSTED 6 6"
 if [[ $(served_count one-untrusted) -lt 4 ]]; then
-    echo "[trust-pong] one-untrusted: the client asked for $(served_count one-untrusted) verdicts, too few to judge" >&2
-    failures=$((failures + 1))
+    FAIL "the client asked for %d verdicts, too few to judge" \
+         "$(served_count one-untrusted)"
 elif freeze_line one-untrusted >/dev/null; then
-    echo "[trust-pong] FAIL: one UNTRUSTED response ended the session:" >&2
-    freeze_line one-untrusted >&2
-    failures=$((failures + 1))
-else
-    echo "[trust-pong] ok: one UNTRUSTED response leaves the session running"
+    FAIL "%s" "$(freeze_line one-untrusted)"
 fi
 
 # one UNTRUSTED heartbeat polled again and again: absorbed
+TEST "one UNTRUSTED heartbeat, polled again, is absorbed"
 run_case one-heartbeat 8 "TRUSTED 1 1" "UNTRUSTED 2 2"
 if [[ $(served_count one-heartbeat) -lt 4 ]]; then
-    echo "[trust-pong] one-heartbeat: too few polls to judge" >&2
-    failures=$((failures + 1))
+    FAIL "too few polls to judge"
 elif freeze_line one-heartbeat >/dev/null; then
-    echo "[trust-pong] FAIL: one UNTRUSTED heartbeat ended the session:" >&2
-    freeze_line one-heartbeat >&2
-    failures=$((failures + 1))
-else
-    echo "[trust-pong] ok: one UNTRUSTED heartbeat, polled again, is absorbed"
+    FAIL "%s" "$(freeze_line one-heartbeat)"
 fi
 
 # two in a row: session ends
+TEST "two consecutive UNTRUSTED responses end the session"
 run_case two-untrusted 8 "TRUSTED 1 1" "UNTRUSTED 2 2" "UNTRUSTED 3 3" \
          "TRUSTED 4 4" "TRUSTED 5 5" "TRUSTED 6 6"
 if ! freeze_line two-untrusted >/dev/null; then
-    echo "[trust-pong] FAIL: two consecutive UNTRUSTED responses did not end the session" >&2
-    sed -n '1,20p' "$WORK_DIR/two-untrusted/stderr" >&2
-    failures=$((failures + 1))
+    FAIL "%s" "$(stderr_of two-untrusted)"
 elif ! freeze_line two-untrusted | grep -q 'after 2 consecutive'; then
-    echo "[trust-pong] FAIL: the session ended on a streak that is not two:" >&2
-    freeze_line two-untrusted >&2
-    failures=$((failures + 1))
-else
-    echo "[trust-pong] ok: two consecutive UNTRUSTED responses end the session"
+    FAIL "a streak that is not two: %s" "$(freeze_line two-untrusted)"
 fi
 
 # two in a row within one second: session ends
+TEST "two UNTRUSTED heartbeats in one second end the session"
 run_case same-second 8 "TRUSTED 1 1" "UNTRUSTED 2 2" "UNTRUSTED 3 2" \
          "TRUSTED 4 3" "TRUSTED 5 3"
-if ! freeze_line same-second | grep -q 'after 2 consecutive'; then
-    echo "[trust-pong] FAIL: two UNTRUSTED heartbeats in one second" \
-         "did not end the session" >&2
-    sed -n '1,20p' "$WORK_DIR/same-second/stderr" >&2
-    failures=$((failures + 1))
-else
-    echo "[trust-pong] ok: two UNTRUSTED heartbeats in one second end" \
-         "the session"
-fi
+freeze_line same-second | grep -q 'after 2 consecutive' ||
+    FAIL "%s" "$(stderr_of same-second)"
 
 # a restarted server numbers its verdicts from 1 again
+TEST "a heartbeat after a server restart is counted"
 run_case restart 8 "UNTRUSTED 1 10" "PENDING 0 0" "PENDING 0 0" \
          "UNTRUSTED 1 12"
-if ! freeze_line restart | grep -q 'after 2 consecutive'; then
-    echo "[trust-pong] FAIL: an UNTRUSTED heartbeat after a server restart" \
-         "was not counted" >&2
-    sed -n '1,20p' "$WORK_DIR/restart/stderr" >&2
-    failures=$((failures + 1))
-else
-    echo "[trust-pong] ok: a heartbeat after a server restart is counted"
-fi
+freeze_line restart | grep -q 'after 2 consecutive' ||
+    FAIL "%s" "$(stderr_of restart)"
 
-if [[ $failures -ne 0 ]]; then
-    echo "[trust-pong] $failures check(s) failed" >&2
-    exit 1
-fi
-echo "[trust-pong] PASS"
+test_end

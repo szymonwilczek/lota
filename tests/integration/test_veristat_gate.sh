@@ -20,13 +20,16 @@
 
 set -euo pipefail
 
+. "$(dirname "$0")/../lib/test.sh"
+test_begin "veristat gate"
+
 export LC_ALL=C
 
 REPO_DIR=$(cd "$(dirname "$0")/../.." && pwd)
 GATE="$REPO_DIR/scripts/veristat-gate.sh"
 
 WORK_DIR=$(mktemp -d)
-trap 'rm -rf "$WORK_DIR"' EXIT
+test_cleanup 'rm -rf "$WORK_DIR"'
 
 STUBS="$WORK_DIR/bin"
 mkdir -p "$STUBS"
@@ -132,9 +135,7 @@ run_gate() {
 }
 
 fail() {
-    echo "[veristat-gate] FAIL: $1" >&2
-    sed -n '1,60p' "$WORK_DIR/$2.out" >&2 || true
-    exit 1
+    FAIL "%s\n%s" "$1" "$(sed -n '1,60p' "$WORK_DIR/$2.out")"
 }
 
 # the lines between a group header naming $1 and the next ::endgroup::
@@ -146,13 +147,13 @@ group_block() {
 	' "$2"
 }
 
-echo "[veristat-gate] an object that passes leaves the gate green"
+TEST "an object that passes leaves the gate green"
 rc=$(run_gate pass)
 [[ "$rc" == 0 ]] || fail "gate reported $rc for an object that passes" pass
 grep -q "all programs pass the kernel verifier" "$WORK_DIR/pass.out" ||
     fail "gate did not say every program passed" pass
 
-echo "[veristat-gate] a rejection prints the verifier's own log"
+TEST "a rejection prints the verifier's own log"
 rc=$(run_gate reject)
 [[ "$rc" == 1 ]] || fail "gate reported $rc for a rejected program" reject
 grep -q "::error::veristat: the BPF verifier rejected:.*lota_task_free" \
@@ -164,7 +165,7 @@ grep -q "R1 invalid mem access 'scalar'" <<<"$block" ||
 grep -q "lota_lsm.bpf.c:2089" <<<"$block" ||
     fail "the log block for lota_task_free names no source line" reject
 
-echo "[veristat-gate] no block contradicts the summary above it"
+TEST "no block contradicts the summary above it"
 if grep -Eq -- '(^| )-v|--verbose' "$WORK_DIR/reject/veristat.args"; then
     fail "gate asked veristat for verbose output: $(tr '\n' ';' <"$WORK_DIR/reject/veristat.args")" reject
 fi
@@ -172,7 +173,7 @@ if grep -Eq '^ *0 +0 +failure' "$WORK_DIR/reject.out"; then
     fail "gate printed a zeroed failure row" reject
 fi
 
-echo "[veristat-gate] a load that fails before the verifier is not a rejection"
+TEST "a load that fails before the verifier is not a rejection"
 rc=$(run_gate setup)
 [[ "$rc" == 1 ]] || fail "gate reported $rc for a load that never reached the verifier" setup
 if grep -q "verifier rejected" "$WORK_DIR/setup.out"; then
@@ -185,7 +186,7 @@ grep -q "map 'events': failed to create: -EPERM" "$WORK_DIR/setup.out" ||
 grep -q "lota-agent" "$WORK_DIR/setup.out" ||
     fail "gate did not name the enforcing agent as a cause to check" setup
 
-echo "[veristat-gate] an unprivileged run says so"
+TEST "an unprivileged run says so"
 rc=$(run_gate unpriv)
 [[ "$rc" == 1 ]] || fail "gate reported $rc for an unprivileged run" unpriv
 if grep -q "verifier rejected" "$WORK_DIR/unpriv.out"; then
@@ -194,7 +195,7 @@ fi
 grep -q "not running as root" "$WORK_DIR/unpriv.out" ||
     fail "gate did not say it lacks root" unpriv
 
-echo "[veristat-gate] a failure the whole-object load does not reproduce says so"
+TEST "a failure the whole-object load does not reproduce says so"
 rc=$(run_gate loads)
 [[ "$rc" == 1 ]] || fail "gate reported $rc for a failure veristat reports" loads
 if grep -q "verifier rejected" "$WORK_DIR/loads.out"; then
@@ -203,4 +204,4 @@ fi
 grep -q "the whole object loads with every program accepted" "$WORK_DIR/loads.out" ||
 	fail "gate did not say the object loads" loads
 
-echo "[veristat-gate] PASS"
+test_end

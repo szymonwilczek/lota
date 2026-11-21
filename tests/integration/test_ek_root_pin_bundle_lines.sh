@@ -23,19 +23,22 @@
 
 set -euo pipefail
 
+. "$(dirname "$0")/../lib/test.sh"
+test_begin "ek root bundle lines"
+
 export LC_ALL=C
 
 REPO_DIR=$(cd "$(dirname "$0")/../.." && pwd)
 PIN_TOOL="$REPO_DIR/scripts/lota-ek-root-pin.sh"
 
 if [[ ! -x "$PIN_TOOL" ]]; then
-    echo "[ek-root-pin-lines] missing artifact: $PIN_TOOL" >&2
-    exit 2
+    FAIL "missing artifact: %s" "$PIN_TOOL"
+    test_end
 fi
 for tool in openssl curl python3; do
     if ! command -v "$tool" >/dev/null 2>&1; then
-	echo "[ek-root-pin-lines] $tool not found" >&2
-	exit 2
+	FAIL "%s not found" "$tool"
+	test_end
     fi
 done
 
@@ -45,20 +48,7 @@ cleanup() {
     [[ -n "$SERVER_PID" ]] && kill "$SERVER_PID" 2>/dev/null
     rm -rf "$WORK_DIR"
 }
-trap cleanup EXIT
-
-failures=0
-
-check() {
-    local msg="$1"
-    shift
-    if "$@"; then
-	echo "PASS: $msg"
-    else
-	echo "FAIL: $msg"
-	failures=$((failures + 1))
-    fi
-}
+test_cleanup cleanup
 
 cd "$WORK_DIR"
 mkdir -p www
@@ -110,40 +100,36 @@ class_of() {
 rc=0
 out=$("$PIN_TOOL" ek.der 2>"$WORK_DIR/err.txt") || rc=$?
 
-check "the tool resolves the root over the distribution point" test "$rc" -eq 0
+TEST "the tool resolves the root over the distribution point"
+test "$rc" -eq 0 ||
+    FAIL "exit %d: %s" "$rc" "$(sed -n '1,10p' "$WORK_DIR/err.txt")"
 
 # One line, for the root, and the operator is never told that the issuing CA
 # has to be pinned too. The chain then breaks at the leaf's issuer.
-check "it drafts a line for the root" \
-      bash -c "grep -q '$root_pin' <<<'$out'"
-check "it drafts a line for the intermediate it had to fetch" \
-      bash -c "grep -q '$int_pin' <<<'$out'"
-check "the root line is classed as a trust anchor" \
-      test "$(class_of "$root_pin" "$out")" = "root"
-check "the fetched intermediate is classed as path material" \
-      test "$(class_of "$int_pin" "$out")" = "intermediate"
-check "no drafted line names an http URL the update tool refuses" \
-      bash -c "! grep -q 'http://' <<<'$out'"
-check "a certificate fetched over http leaves its URL to the operator" \
-      grep -q "$int_pin .* REPLACE_WITH_VENDOR_PUBLISHED_URL" <<<"$out"
+TEST "it drafts a line for the root"
+bash -c "grep -q '$root_pin' <<<'$out'" || FAIL
+TEST "it drafts a line for the intermediate it had to fetch"
+bash -c "grep -q '$int_pin' <<<'$out'" || FAIL
+TEST "the root line is classed as a trust anchor"
+test "$(class_of "$root_pin" "$out")" = "root" || FAIL
+TEST "the fetched intermediate is classed as path material"
+test "$(class_of "$int_pin" "$out")" = "intermediate" || FAIL
+TEST "no drafted line names an http URL the update tool refuses"
+bash -c "! grep -q 'http://' <<<'$out'" || FAIL
+TEST "a certificate fetched over http leaves its URL to the operator"
+grep -q "$int_pin .* REPLACE_WITH_VENDOR_PUBLISHED_URL" <<<"$out" || FAIL
 
 # A certificate the chip carries is supplied with the enrollment request,
 # so pinning it is redundant: the tool must climb through it without drafting
 # a line for it.
 rc=0
 out=$("$PIN_TOOL" --nv-chain www/int.der ek.der 2>"$WORK_DIR/err2.txt") || rc=$?
-check "the tool climbs a chain the device carries" test "$rc" -eq 0
-check "it drafts no line for a certificate the device supplies" \
-      bash -c "! grep -q '$int_pin' <<<'$out'"
-check "it still drafts the root the device does not carry" \
-      bash -c "grep -q '$root_pin' <<<'$out'"
+TEST "the tool climbs a chain the device carries"
+test "$rc" -eq 0 ||
+    FAIL "exit %d: %s" "$rc" "$(sed -n '1,10p' "$WORK_DIR/err2.txt")"
+TEST "it drafts no line for a certificate the device supplies"
+bash -c "! grep -q '$int_pin' <<<'$out'" || FAIL
+TEST "it still drafts the root the device does not carry"
+bash -c "grep -q '$root_pin' <<<'$out'" || FAIL
 
-if [[ $failures -ne 0 ]]; then
-    echo "FAILURES: $failures"
-    echo "--- stdout ---"
-    printf '%s\n' "$out"
-    echo "--- stderr ---"
-    sed -n '1,10p' "$WORK_DIR/err.txt" 2>/dev/null
-    exit 1
-fi
-echo "All tests passed"
+test_end

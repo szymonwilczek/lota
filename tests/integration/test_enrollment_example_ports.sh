@@ -15,6 +15,9 @@
 
 set -euo pipefail
 
+. "$(dirname "$0")/../lib/test.sh"
+test_begin "enrollment ports"
+
 export LC_ALL=C
 
 REPO_DIR=$(cd "$(dirname "$0")/../.." && pwd)
@@ -22,40 +25,31 @@ RUN_SH="$REPO_DIR/examples/enrollment/run.sh"
 README="$REPO_DIR/examples/enrollment/README.rst"
 
 if [[ ! -x "$RUN_SH" ]]; then
-    echo "[example-ports] missing artifact: $RUN_SH" >&2
-    exit 2
+    FAIL "missing artifact: %s" "$RUN_SH"
+    test_end
 fi
-
-failures=0
-
-check() {
-    local msg="$1"
-    shift
-    if "$@"; then
-        echo "PASS: $msg"
-    else
-        echo "FAIL: $msg"
-        failures=$((failures + 1))
-    fi
-}
 
 # like BIN, CA_DIR and the other inputs
 overridable() {
     grep -Eq "^$1=\"\\\$\{$1:-" "$RUN_SH"
 }
 
-check "CA_ADDR comes from the environment" overridable CA_ADDR
-check "VERIFIER_ADDR comes from the environment" overridable VERIFIER_ADDR
+TEST "CA_ADDR comes from the environment"
+overridable CA_ADDR || FAIL
+TEST "VERIFIER_ADDR comes from the environment"
+overridable VERIFIER_ADDR || FAIL
 
 # the header lists the knobs a reader sets
 header_names() {
     head -n 30 "$RUN_SH" | grep -q "$1"
 }
 
-check "the script header names CA_ADDR" header_names CA_ADDR
-check "the script header names VERIFIER_ADDR" header_names VERIFIER_ADDR
-check "the README names both addresses" \
-    bash -c "grep -q 'CA_ADDR' '$README' && grep -q 'VERIFIER_ADDR' '$README'"
+TEST "the script header names CA_ADDR"
+header_names CA_ADDR || FAIL
+TEST "the script header names VERIFIER_ADDR"
+header_names VERIFIER_ADDR || FAIL
+TEST "the README names both addresses"
+bash -c "grep -q 'CA_ADDR' '$README' && grep -q 'VERIFIER_ADDR' '$README'" || FAIL
 
 # a listener the test owns, on a port the kernel picked; its pid is LISTENER
 LISTENER=""
@@ -168,24 +162,22 @@ empty_host_is_taken() {
 }
 
 if command -v python3 >/dev/null 2>&1; then
-    check "a taken address is named and refused before anything starts" \
-        port_collision_is_named
-    check "the suggested port is not the other address's port" \
-        hint_skips_the_other_address
+    TEST "a taken address is named and refused before anything starts"
+    port_collision_is_named || FAIL
+    TEST "the suggested port is not the other address's port"
+    hint_skips_the_other_address || FAIL
     if command -v ss >/dev/null 2>&1; then
-        check "a listener on another host does not take the address" \
-            other_host_is_not_taken
-        check "a listener on the port takes an address with no host" \
-            empty_host_is_taken
+        TEST "a listener on another host does not take the address"
+        other_host_is_not_taken || FAIL
+        TEST "a listener on the port takes an address with no host"
+        empty_host_is_taken || FAIL
     else
-        echo "SKIP: other host case (no ss)"
+        TEST "other host case"
+        SKIP "no ss"
     fi
 else
-    echo "SKIP: port collision cases (no python3)"
+    TEST "port collision cases"
+    SKIP "no python3"
 fi
 
-if [[ $failures -ne 0 ]]; then
-    echo "FAILURES: $failures"
-    exit 1
-fi
-echo "All tests passed"
+test_end

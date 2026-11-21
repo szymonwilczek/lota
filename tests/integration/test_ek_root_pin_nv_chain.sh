@@ -19,35 +19,25 @@
 
 set -euo pipefail
 
+. "$(dirname "$0")/../lib/test.sh"
+test_begin "ek root pin nv chain"
+
 export LC_ALL=C
 
 REPO_DIR=$(cd "$(dirname "$0")/../.." && pwd)
 PIN_TOOL="$REPO_DIR/scripts/lota-ek-root-pin.sh"
 
 if [[ ! -x "$PIN_TOOL" ]]; then
-    echo "[ek-root-pin] missing artifact: $PIN_TOOL" >&2
-    exit 2
+    FAIL "missing artifact: %s" "$PIN_TOOL"
+    test_end
 fi
 if ! command -v openssl >/dev/null 2>&1; then
-    echo "[ek-root-pin] openssl not found" >&2
-    exit 2
+    FAIL "openssl not found"
+    test_end
 fi
 
 WORK_DIR=$(mktemp -d)
-trap 'rm -rf "$WORK_DIR"' EXIT
-
-failures=0
-
-check() {
-    local msg="$1"
-    shift
-    if "$@"; then
-	echo "PASS: $msg"
-    else
-	echo "FAIL: $msg"
-	failures=$((failures + 1))
-    fi
-}
+test_cleanup 'rm -rf "$WORK_DIR"'
 
 cd "$WORK_DIR"
 
@@ -79,32 +69,31 @@ cat int.der root.der >nvchain.bin
 
 expected_pin=$(openssl x509 -in root.pem -outform DER | sha256sum | cut -d' ' -f1)
 
-check "the EK leaf really carries no AIA" \
-      bash -c "! openssl x509 -in ek.pem -noout -ext authorityInfoAccess 2>/dev/null | grep -q 'CA Issuers'"
+TEST "the EK leaf really carries no AIA"
+bash -c "! openssl x509 -in ek.pem -noout -ext authorityInfoAccess 2>/dev/null | grep -q 'CA Issuers'" || FAIL
 
 # The tool must climb through the on-chip certificates without a network hop.
 rc=0
 out=$("$PIN_TOOL" --nv-chain nvchain.bin ek.der 2>"$WORK_DIR/err.txt") || rc=$?
 
-check "the tool resolves a root from the on-chip chain" test "$rc" -eq 0
-check "it prints the root's pin" bash -c "grep -q '$expected_pin' <<<'$out'"
+TEST "the tool resolves a root from the on-chip chain"
+test "$rc" -eq 0 ||
+    FAIL "exit %d: %s" "$rc" "$(sed -n '1,10p' "$WORK_DIR/err.txt")"
+TEST "it prints the root's pin"
+bash -c "grep -q '$expected_pin' <<<'$out'" || FAIL
 
 # The pin is over the root, not over an intermediate that happens to be in
 # the blob: pinning an intermediate is a different, narrower decision.
 int_pin=$(openssl x509 -in int.pem -outform DER | sha256sum | cut -d' ' -f1)
-check "it does not stop at the intermediate" \
-      bash -c "! grep -q '$int_pin' <<<'$out'"
+TEST "it does not stop at the intermediate"
+bash -c "! grep -q '$int_pin' <<<'$out'" || FAIL
 
 # A blob that carries no path to a root leaves the operator where they were,
 # and has to say so.
 cat int.der >partial.bin
 rc=0
 "$PIN_TOOL" --nv-chain partial.bin ek.der >/dev/null 2>&1 || rc=$?
-check "a chain that reaches no root is refused" test "$rc" -ne 0
+TEST "a chain that reaches no root is refused"
+test "$rc" -ne 0 || FAIL
 
-if [[ $failures -ne 0 ]]; then
-    echo "FAILURES: $failures"
-    sed -n '1,10p' "$WORK_DIR/err.txt" 2>/dev/null
-    exit 1
-fi
-echo "All tests passed"
+test_end

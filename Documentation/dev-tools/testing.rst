@@ -47,7 +47,7 @@ Unit and integration tests
 * the scripts under ``tests/integration/`` that run without root or a
   running agent. A script whose tool is missing (``openssl``, ``python3``,
   ``go``, ``clang``, ``pkg-config``, ``sphinx-build``, ``softhsm2-util``)
-  is not run, and the target prints ``SKIP:`` with the reason.
+  is reported as skipped.
 * two cross-language checks. ``tests/cross_lang/test_gen.go`` signs a token
   with the Go server SDK and ``test_cross_lang_verify`` verifies it with the
   C one. ``test_cross_lang_report_gen`` writes an attestation report with
@@ -64,7 +64,7 @@ environment, such as ``LOTA_INSTALL_BIN`` for ``lota-install`` or
 Test output
 -----------
 
-Every program runs, whatever the one before it returned.
+Every program and script runs, whatever the one before it returned.
 ``make test-unit`` collects the results in
 ``$(BUILD_DIR)/test-summary.tsv``, ``make test-go`` in
 ``$(BUILD_DIR)/test-go-summary.tsv``, and each ends with
@@ -90,6 +90,15 @@ declares it in the test section::
 A new test is run by ``make test-unit`` unless it is added to
 ``TEST_MANUAL``, and under valgrind only once it is added to
 ``VALGRIND_UNIT_BINS``.
+
+Adding an integration test
+--------------------------
+
+A script reports through ``tests/lib/test.sh``, the shell form of
+``tests/test.h``; its header shows its use. A script run by
+``make test-unit`` goes in the recipe through ``$(call test_run,...)``, and
+a missing tool is reported through
+``$(call test_skip,<group>,<path>,<reason>)``.
 
 Tests that need a live system
 -----------------------------
