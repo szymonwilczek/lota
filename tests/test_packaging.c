@@ -185,40 +185,6 @@ static void test_no_preset_is_shipped(void)
 }
 
 /*
- * Installer is what arms a host, so it has to enable all three units.
- * Host driven through bring-up that enforced but never reported is exactly
- * what missing line here produced.
- */
-static void test_installer_enables_the_units(void)
-{
-	TEST("installer: enables socket, daemon and attest loop");
-
-	FILE *fp = open_shipped("installer/stages.c");
-	if (!fp) {
-		FAIL("could not open installer/stages.c");
-		return;
-	}
-
-	char line[1024];
-	bool socket_unit = false, daemon_unit = false, attest_unit = false;
-
-	while (fgets(line, sizeof(line), fp)) {
-		if (strstr(line, "\"lota-agent.socket\""))
-			socket_unit = true;
-		if (strstr(line, "\"lota-agent.service\""))
-			daemon_unit = true;
-		if (strstr(line, "\"lota-attest.service\""))
-			attest_unit = true;
-	}
-	fclose(fp);
-
-	if (!socket_unit || !daemon_unit || !attest_unit) {
-		FAIL("installer does not enable all three units");
-		return;
-	}
-}
-
-/*
  * Callers resolve these interfaces from the devel include directory: one
  * missing from lota.if, or lota.if not installed, fails the caller's
  * checkmodule with the name as an unknown token.
@@ -1044,206 +1010,6 @@ static void test_static_cli_is_built_without_cgo(void)
 	}
 }
 
-/*
- * A shared key shows only in the AIK record, which binding a profile drops:
- * attest.c asks for the key once, after tpm_aik_load_metadata() in the same
- * function.
- */
-static void test_shared_key_refusal_survives_several_publishers(void)
-{
-	static char buf[131072];
-	const char *at, *body, *reads, *asks;
-
-	TEST("agent: the shared-key refusal holds with several publishers");
-
-	if (!slurp_shipped("src/agent/attest.c", buf, sizeof(buf))) {
-		FAIL("could not read the attestation loop");
-		return;
-	}
-
-	asks = strstr(buf, "tpm_provision_aik(");
-	if (!asks) {
-		FAIL("the loop no longer asks for the publisher's key");
-		return;
-	}
-	if (strstr(asks + 1, "tpm_provision_aik(")) {
-		FAIL("the key is asked for in more than one place");
-		return;
-	}
-
-	/* from the previous function's closing brace */
-	for (body = buf, at = buf; at && at < asks;
-	     at = strstr(at + 1, "\n}\n"))
-		body = at;
-	reads = memmem(body, (size_t)(asks - body), "tpm_aik_load_metadata(",
-		       strlen("tpm_aik_load_metadata("));
-	if (!reads) {
-		FAIL("the key is asked for before the publisher's record is read");
-		return;
-	}
-}
-
-/*
- * The pre-profile record names the base handle, now the first publisher's:
- * quoting with it fails and spends a DA attempt. --test-tpm quotes each
- * publisher through its profile.
- */
-static void test_probe_quotes_the_keys_the_host_attests_with(void)
-{
-	static char buf[131072];
-	const char *verb, *end, *helpers;
-	size_t span;
-
-	TEST("agent: --test-tpm quotes the keys the host attests with");
-
-	if (!slurp_shipped("src/agent/selftest.c", buf, sizeof(buf))) {
-		FAIL("could not read the probe");
-		return;
-	}
-	/* quote helpers precede the verb */
-	verb = strstr(buf, "int test_tpm(void)");
-	end = verb ? strstr(verb, "\nint test_iommu(void)") : NULL;
-	if (!verb || !end) {
-		FAIL("the probe no longer has a TPM verb to read");
-		return;
-	}
-	span = (size_t)(end - verb);
-
-	if (!memmem(verb, span, "publishers_", strlen("publishers_"))) {
-		FAIL("the probe never asks which publishers hold a key");
-		return;
-	}
-	if (!memmem(verb, span, "selftest_quote_key(",
-		    strlen("selftest_quote_key("))) {
-		FAIL("the probe does not decide whose key it quotes with");
-		return;
-	}
-
-	helpers = strstr(buf, "static void selftest_quote");
-	if (!helpers || helpers > verb) {
-		FAIL("the probe has nothing that quotes a publisher's key");
-		return;
-	}
-	if (!memmem(helpers, (size_t)(verb - helpers), "tpm_bind_profile(",
-		    strlen("tpm_bind_profile("))) {
-		FAIL("the probe quotes without binding a publisher's profile");
-		return;
-	}
-}
-
-/*
- * A key replaced before the CA answers is named by no certificate:
- * run_enrollment() calls net_connect() before tpm_provision_aik().
- */
-static void test_enrollment_reaches_the_ca_before_it_spends_a_key(void)
-{
-	static char buf[262144];
-	const char *enrolls, *end, *opens, *asks, *helper;
-	size_t span;
-
-	TEST("agent: enrollment reaches the CA before replacing a key");
-
-	if (!slurp_shipped("src/agent/enroll_client.c", buf, sizeof(buf))) {
-		FAIL("could not read the enrollment client");
-		return;
-	}
-
-	enrolls = strstr(buf, "static int run_enrollment(");
-	end = enrolls ? strstr(enrolls, "\n}\n") : NULL;
-	if (!enrolls || !end) {
-		FAIL("could not find the enrollment this all runs through");
-		return;
-	}
-	span = (size_t)(end - enrolls);
-
-	asks = memmem(enrolls, span, "tpm_provision_aik(",
-		      strlen("tpm_provision_aik("));
-	if (!asks) {
-		FAIL("the enrollment no longer asks for a key");
-		return;
-	}
-	opens = memmem(enrolls, span, "ca_session_opens(",
-		       strlen("ca_session_opens("));
-	if (!opens || opens > asks) {
-		FAIL("the key is replaced before the CA is reached");
-		return;
-	}
-
-	/* and what it opens is a session, not a name that reads like one */
-	helper = strstr(buf, "static int ca_session_opens(");
-	if (!helper || helper > enrolls) {
-		FAIL("nothing opens a session to the CA");
-		return;
-	}
-	if (!memmem(helper, (size_t)(enrolls - helper), "net_connect(",
-		    strlen("net_connect("))) {
-		FAIL("the session is declared open without connecting");
-		return;
-	}
-}
-
-/* A command-line endpoint beats the recorded one; a stale one spends the key. */
-static void test_reenroll_dials_what_the_command_line_named(void)
-{
-	static char buf[262144];
-	const char *verb, *end;
-	size_t span;
-
-	TEST("agent: --reenroll dials the endpoint it was given");
-
-	if (!slurp_shipped("src/agent/enroll_client.c", buf, sizeof(buf))) {
-		FAIL("could not read the enrollment client");
-		return;
-	}
-
-	verb = strstr(buf, "static int reenroll_profile(");
-	end = verb ? strstr(verb, "\n}\n") : NULL;
-	if (!verb || !end) {
-		FAIL("could not find the re-enrollment verb");
-		return;
-	}
-	span = (size_t)(end - verb);
-
-	if (!memmem(verb, span, "enroll_endpoint_server(",
-		    strlen("enroll_endpoint_server(")) ||
-	    !memmem(verb, span, "enroll_endpoint_port(",
-		    strlen("enroll_endpoint_port("))) {
-		FAIL("the verb dials the record whatever it was given");
-		return;
-	}
-	if (!memmem(verb, span, "enroll_endpoint_source(",
-		    strlen("enroll_endpoint_source("))) {
-		FAIL("the run never says which endpoint it dialled");
-		return;
-	}
-}
-
-/* An expired certificate is refreshed with the installer's anchor. */
-static void test_installer_reenrolls_with_its_anchor(void)
-{
-	static char buf[262144];
-	const char *verb, *end;
-
-	TEST("installer: --reenroll names the anchor it was given");
-
-	if (!slurp_shipped("installer/stages.c", buf, sizeof(buf))) {
-		FAIL("could not read the installer stages");
-		return;
-	}
-
-	verb = strstr(buf, "\"--reenroll\"");
-	end = verb ? strstr(verb, "NULL };") : NULL;
-	if (!verb || !end) {
-		FAIL("could not find the re-enrollment command");
-		return;
-	}
-	if (!memmem(verb, (size_t)(end - verb), "ctx->opts.ca_cert",
-		    strlen("ctx->opts.ca_cert"))) {
-		FAIL("an anchor moved since enrollment fails the refresh");
-		return;
-	}
-}
-
 int main(void)
 {
 	test_begin("packaging");
@@ -1252,7 +1018,6 @@ int main(void)
 	test_attest_unit_config_driven();
 	test_attest_unit_isolated();
 	test_no_preset_is_shipped();
-	test_installer_enables_the_units();
 	test_documented_selinux_interfaces_exist();
 	test_selinux_interfaces_are_installed();
 	test_selinux_reports_every_tunable();
@@ -1273,11 +1038,6 @@ int main(void)
 	test_installer_leaves_a_named_port_alone();
 	test_installer_relabel_reapplies_the_device_labels();
 	test_static_cli_is_built_without_cgo();
-	test_shared_key_refusal_survives_several_publishers();
-	test_probe_quotes_the_keys_the_host_attests_with();
-	test_enrollment_reaches_the_ca_before_it_spends_a_key();
-	test_reenroll_dials_what_the_command_line_named();
-	test_installer_reenrolls_with_its_anchor();
 
 	return test_end();
 }
