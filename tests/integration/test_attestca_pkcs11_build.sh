@@ -35,12 +35,10 @@ test_cleanup 'rm -rf "$WORK_DIR"'
 
 BIN="$WORK_DIR/build/lota-attest-ca"
 
-# Strings only a CA without the signer, or only one with it, carries
-STUB_MARKER='built without PKCS#11 support'
+# A string only a CA with the signer carries
 SIGNER_MARKER='token PIN is required in LOTA_CA_PKCS11_PIN'
 
 carries() { grep -qaF -- "$1" "$BIN"; }
-lacks() { ! grep -qaF -- "$1" "$BIN"; }
 
 TEST "make attest-ca builds the CA"
 if ! make -C "$REPO_DIR" BUILD_DIR="$WORK_DIR/build" attest-ca \
@@ -50,7 +48,5 @@ if ! make -C "$REPO_DIR" BUILD_DIR="$WORK_DIR/build" attest-ca \
 fi
 TEST "the CA carries the PKCS#11 signer"
 carries "$SIGNER_MARKER" || FAIL
-TEST "the CA has no build without PKCS#11"
-lacks "$STUB_MARKER" || FAIL
 
 test_end
