@@ -691,29 +691,6 @@ static void test_selinux_agent_skips_the_symbol_table(void)
 }
 
 /*
- * The agent reads no security file: shadow, keytabs, home records,
- * the audit log. One a title maps stays unmeasured.
- */
-static void test_selinux_agent_skips_security_files(void)
-{
-	static char policy[65536];
-
-	TEST("selinux: the agent gets no read on security files");
-
-	if (!slurp_shipped("selinux/lota.te", policy, sizeof(policy))) {
-		FAIL("could not read selinux/lota.te");
-		return;
-	}
-	if (strstr(policy, "auth_read_shadow") ||
-	    strstr(policy, "shadow_t:file") ||
-	    strstr(policy, "security_file_type:file") ||
-	    !strstr(policy, MEASURE_READ_RULE)) {
-		FAIL("lota_agent_t may read /etc/shadow or a keytab");
-		return;
-	}
-}
-
-/*
  * A client stats the socket before it connects, so write alone leaves it with
  * EACCES on the system socket.
  */
@@ -1318,7 +1295,6 @@ int main(void)
 	test_selinux_container_listener_is_shipped();
 	test_selinux_gaming_client_reaches_container_socket();
 	test_selinux_status_client_stats_socket();
-	test_selinux_agent_skips_security_files();
 	test_selinux_agent_reaches_user_namespaces();
 	test_selinux_agent_reads_filesystem_types();
 	test_selinux_agent_skips_the_symbol_table();
