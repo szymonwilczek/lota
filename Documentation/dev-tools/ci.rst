@@ -50,6 +50,10 @@ Build and tests
 ``ci.yml`` holds the C build, the tests and the tree gates. Each job is
 independent; only ``examples`` waits for ``build``.
 
+``build``, ``fedora-build``, ``sanitizers``, ``sanitizers-clang``,
+``sanitizers-thread``, ``sanitizers-fedora`` and ``golangci-lint`` copy the
+output of ``tests/lib/summary.sh`` to their summary page.
+
 ``build``
   ``make all`` and ``make test-unit`` on Ubuntu 22.04 and 24.04, with
   ``CLANG=clang-22`` and libbpf built from source.
@@ -159,14 +163,13 @@ fetched and needs no version tag.
 ``golangci-lint``
   Fails when ``go mod tidy`` changes a ``go.mod`` or ``go.sum`` in
   ``src/verifier``, ``src/attestca``, ``sdk/server``, ``src/crl`` or
-  ``src/fleetctl``. Runs ``go test ./...`` in ``src/verifier``,
-  ``src/attestca``, ``src/crl`` and ``src/fleetctl``, then golangci-lint
-  v2.12.2 in those four modules, ``sdk/server``, ``examples/demo_server``
-  and ``examples/ci-gate/gate``.
+  ``src/fleetctl``. Runs ``make test-go``, then golangci-lint v2.12.2 in
+  ``src/verifier``, ``src/attestca``, ``src/crl``, ``src/fleetctl``,
+  ``sdk/server``, ``examples/demo_server`` and ``examples/ci-gate/gate``.
 
 ``pkcs11-softhsm``
   Initialises a SoftHSM token and runs ``TestPKCS11SignerIssuesAIK`` in
-  ``src/attestca``, which ``go test ./...`` skips without a token.
+  ``src/attestca``, which ``make test-go`` skips without a token.
 
 ``go-coverage``
   ``scripts/check-go-coverage.sh`` with a Postgres service, so the
@@ -190,7 +193,7 @@ Security analysis
   C and Go databases with the ``security-extended`` and
   ``security-and-quality`` suites and ``.github/codeql/codeql-config.yml``.
   The C database is built from the same targets as ``clang-analyzer``,
-  the Go database by ``go test ./...`` in the modules gosec scans.
+  the Go database by ``make test-go``.
 
 ``actionlint``, ``zizmor``
   Lint the workflow files.
