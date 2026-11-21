@@ -219,19 +219,49 @@ static void test_is_unix_socket_real(void)
 
 static void test_journal_level_filter(void)
 {
+	char out[512] = { 0 };
+	FILE *log;
+	int saved;
+	size_t n;
+
 	TEST("journal: level filter suppresses debug");
 
 	unsetenv("JOURNAL_STREAM");
 	unsetenv("INVOCATION_ID");
 	journal_init("test");
+
+	log = tmpfile();
+	saved = dup(STDERR_FILENO);
+	if (!log || saved < 0) {
+		if (log)
+			fclose(log);
+		if (saved >= 0)
+			close(saved);
+		FAIL("cannot capture stderr");
+		return;
+	}
+	fflush(stderr);
+	dup2(fileno(log), STDERR_FILENO);
+
 	journal_set_level(LOG_WARNING);
+	lota_dbg("below-debug");
+	lota_info("below-info");
+	lota_warn("kept-warn");
+	lota_err("kept-err");
+	journal_set_level(LOG_DEBUG);
 
-	lota_dbg("this should be suppressed");
-	lota_info("this should be suppressed");
-	lota_warn("this should be emitted");
-	lota_err("this should be emitted");
+	fflush(stderr);
+	dup2(saved, STDERR_FILENO);
+	close(saved);
+	rewind(log);
+	n = fread(out, 1, sizeof(out) - 1, log);
+	out[n] = '\0';
+	fclose(log);
 
-	journal_set_level(LOG_DEBUG); /* restore */
+	if (strstr(out, "below-debug") || strstr(out, "below-info"))
+		FAIL("a message below the level was printed: %s", out);
+	else if (!strstr(out, "kept-warn") || !strstr(out, "kept-err"))
+		FAIL("a message at the level was dropped: %s", out);
 }
 
 int main(void)
