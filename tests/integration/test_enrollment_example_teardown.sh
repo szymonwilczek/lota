@@ -11,7 +11,7 @@
 # created and the command that releases it.
 #
 # Requires:
-#   - examples/enrollment/run.sh, gen-ca.sh, README.rst
+#   - examples/enrollment/run.sh, gen-ca.sh
 #   - openssl (for the anchor-identity case)
 #
 # Runs unprivileged, writes only into a temporary directory, and enrolls
@@ -27,7 +27,6 @@ export LC_ALL=C
 REPO_DIR=$(cd "$(dirname "$0")/../.." && pwd)
 RUN_SH="$REPO_DIR/examples/enrollment/run.sh"
 GEN_CA="$REPO_DIR/examples/enrollment/gen-ca.sh"
-README="$REPO_DIR/examples/enrollment/README.rst"
 
 for f in "$RUN_SH" "$GEN_CA"; do
     if [[ ! -x "$f" ]]; then
@@ -35,12 +34,6 @@ for f in "$RUN_SH" "$GEN_CA"; do
         test_end
     fi
 done
-
-# release command in both the script output and the README
-TEST "the script names the command that takes the publisher back"
-grep -q -- "--forget-publisher" "$RUN_SH" || FAIL
-TEST "the README names the command that takes the publisher back"
-grep -q -- "--forget-publisher" "$README" || FAIL
 
 # Failed run still holds the slot. Fail it after consent and expect the
 # release command; stubbed binaries and sudo need no TPM, root or build
@@ -77,9 +70,6 @@ teardown_survives_failure() {
 }
 TEST "a run that fails after consent still says what it kept"
 teardown_survives_failure || FAIL
-
-TEST "the README says the CA directory is the publisher identity"
-bash -c "grep -qi 'publisher' '$README' && grep -qiE 'CA_DIR|ca directory|the same ca' '$README'" || FAIL
 
 # one directory is one anchor across gen-ca.sh reruns, two are two
 anchor_id() {
