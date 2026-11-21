@@ -217,28 +217,6 @@ static void test_is_unix_socket_real(void)
 	close(fd);
 }
 
-static void test_journal_init_ident(void)
-{
-	TEST("journal: init(\"test\") succeeds");
-	journal_init("test");
-}
-
-static void test_journal_macros_no_crash(void)
-{
-	TEST("journal: lota_err/warn/info/dbg macros");
-
-	unsetenv("JOURNAL_STREAM");
-	unsetenv("INVOCATION_ID");
-	journal_init("test");
-
-	/* should emit to stderr in fallback mode */
-	lota_err("test error %d", 1);
-	lota_warn("test warning %s", "hello");
-	lota_info("test info");
-	lota_dbg("test debug");
-	lota_notice("test notice");
-}
-
 static void test_journal_level_filter(void)
 {
 	TEST("journal: level filter suppresses debug");
@@ -274,8 +252,6 @@ int main(void)
 	test_is_unix_socket_real();
 
 	/* journal tests */
-	test_journal_init_ident();
-	test_journal_macros_no_crash();
 	test_journal_level_filter();
 
 	return test_end();

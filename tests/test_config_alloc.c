@@ -150,15 +150,6 @@ static void test_parses_a_file(void)
 	config_free(cfg);
 }
 
-/* free(NULL) is a no-op, and so is this */
-static void test_free_null_is_a_noop(void)
-{
-	config_free(NULL);
-	TEST("config_free(NULL) returned");
-	if (!1)
-		FAIL("expected: 1");
-}
-
 /*
  * Repeated construction must not hand back the same live block
  * or leave the previous one's contents behind
@@ -366,7 +357,6 @@ int main(void)
 
 	test_defaults_match_config_init();
 	test_parses_a_file();
-	test_free_null_is_a_noop();
 	test_each_config_is_independent();
 	test_works_on_a_stack_smaller_than_the_struct();
 

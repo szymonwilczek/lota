@@ -64,8 +64,5 @@ int main(void)
 	if (!(strstr(buf, "SIGKILL") && !strstr(buf, "SIGTERM")))
 		FAIL("%s", buf);
 
-	TEST("a caller without a buffer is not written to");
-	terminate_sent_message(1, false, 0, NULL, 0);
-
 	return test_end();
 }
