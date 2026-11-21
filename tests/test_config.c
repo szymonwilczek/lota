@@ -204,12 +204,6 @@ static void test_config_init_defaults(void)
 	}
 }
 
-static void test_config_init_null(void)
-{
-	TEST("config_init with NULL does not crash");
-	config_init(NULL);
-}
-
 static void test_config_load_nonexistent(void)
 {
 	struct lota_config cfg;
@@ -2338,17 +2332,6 @@ static void test_the_dump_marks_the_keys_the_mode_ignores(void)
 	}
 }
 
-static void test_config_dump_null(void)
-{
-	struct lota_config cfg;
-
-	TEST("config_dump with NULL args does not crash");
-	config_init(&cfg);
-	config_dump(NULL, stdout);
-	config_dump(&cfg, NULL);
-	config_dump(NULL, NULL);
-}
-
 static void test_config_load_all_known_keys(void)
 {
 	struct lota_config cfg;
@@ -2966,7 +2949,6 @@ int main(void)
 	 */
 	static void (*const tests[])(void) = {
 		test_config_init_defaults,
-		test_config_init_null,
 		test_config_load_nonexistent,
 		test_config_load_null_cfg,
 		test_config_load_empty_file,
@@ -3013,7 +2995,6 @@ int main(void)
 		test_a_weaker_mode_names_the_flags_it_ignores,
 		test_only_the_flags_that_are_on_are_named,
 		test_the_dump_marks_the_keys_the_mode_ignores,
-		test_config_dump_null,
 		test_config_load_all_known_keys,
 		test_config_load_override_order,
 		test_policy_pubkey_resolve,

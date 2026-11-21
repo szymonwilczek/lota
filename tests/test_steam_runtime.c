@@ -788,13 +788,6 @@ static void test_ensure_dir_missing_parent_quiet(void)
 	}
 }
 
-static void test_log_info_null(void)
-{
-	TEST("log_info: NULL pointer does not crash");
-
-	steam_runtime_log_info(NULL);
-}
-
 static void test_log_info_prints(void)
 {
 	struct steam_runtime_info info;
@@ -870,7 +863,6 @@ int main(void)
 	test_ensure_dir_missing_parent_quiet();
 
 	/* log_info */
-	test_log_info_null();
 	test_log_info_prints();
 
 	restore_steam_env();

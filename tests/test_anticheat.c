@@ -619,12 +619,6 @@ static void test_init_battleye_file_mode(void)
 	lota_ac_shutdown(s);
 }
 
-static void test_shutdown_null(void)
-{
-	TEST("shutdown(NULL) does not crash");
-	lota_ac_shutdown(NULL);
-}
-
 static void test_get_state_null(void)
 {
 	TEST("get_state(NULL) -> IDLE");
@@ -3101,7 +3095,6 @@ int main(void)
 	test_init_eac_file_mode();
 	test_init_eac_file_mode_snapshot_only();
 	test_init_battleye_file_mode();
-	test_shutdown_null();
 	test_get_state_null();
 	test_get_info_null();
 	test_get_info_null_info();

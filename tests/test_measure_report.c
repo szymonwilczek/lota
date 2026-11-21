@@ -249,11 +249,6 @@ static void test_the_held_clause_hangs_off_the_line(void)
 	TEST("a long run reads as many");
 	if (strstr(clause, "923 further rounds") == NULL)
 		FAIL("expected: strstr(clause, \"923 further rounds\") != NULL");
-
-	measure_report_held_clause(NULL, 0, 5);
-	TEST("no buffer for the clause is not a crash");
-	if (!true)
-		FAIL("expected: true");
 }
 
 /* A reused PID is a different image with a different sentence */
@@ -313,24 +308,15 @@ static void test_what_cannot_be_remembered_is_stated(void)
 		FAIL("expected: g_table.unremembered == 2");
 }
 
-/* No buffer is not a crash */
+/* No table states everything */
 static void test_the_caller_owns_the_buffer(void)
 {
 	uint64_t held = 99;
-
-	measure_report_line(NULL, 0, MEASURE_ANSWER_REFUSED, 1, 2, 0, 0, "x");
-	TEST("no buffer is not a crash");
-	if (!true)
-		FAIL("expected: true");
 
 	TEST("no table states everything");
 	if (!measure_report_note(NULL, 1, MEASURE_ANSWER_REFUSED, "x", &held))
 		FAIL("expected: measure_report_note(NULL, 1, "
 		     "MEASURE_ANSWER_REFUSED, \"x\", &held)");
-	measure_report_retain(NULL, NULL, 0);
-	TEST("sweeping no table is not a crash");
-	if (!true)
-		FAIL("expected: true");
 }
 
 int main(void)

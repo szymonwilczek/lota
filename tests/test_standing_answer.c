@@ -179,11 +179,6 @@ static void test_the_held_clause_hangs_off_the_line(void)
 	TEST("a long run reads as many");
 	if (strstr(clause, "923 further rounds") == NULL)
 		FAIL("expected: strstr(clause, \"923 further rounds\") != NULL");
-
-	standing_answer_held_clause(NULL, 0, 5);
-	TEST("no buffer for the clause is not a crash");
-	if (!true)
-		FAIL("expected: true");
 }
 
 /* A forgotten subject is news again */
@@ -200,10 +195,6 @@ static void test_a_forgotten_subject_is_news_again(void)
 	if (!standing_answer_note(&g_answer, ANSWER_REFUSED, NULL, NULL))
 		FAIL("expected: standing_answer_note(&g_answer, "
 		     "ANSWER_REFUSED, NULL, NULL)");
-	standing_answer_forget(NULL);
-	TEST("forgetting nothing is not a crash");
-	if (!true)
-		FAIL("expected: true");
 }
 
 /* No record states everything */

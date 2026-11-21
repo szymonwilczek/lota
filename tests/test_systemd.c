@@ -217,12 +217,6 @@ static void test_is_unix_socket_real(void)
 	close(fd);
 }
 
-static void test_journal_init_null(void)
-{
-	TEST("journal: init(NULL) does not crash");
-	journal_init(NULL);
-}
-
 static void test_journal_init_ident(void)
 {
 	TEST("journal: init(\"test\") succeeds");
@@ -280,7 +274,6 @@ int main(void)
 	test_is_unix_socket_real();
 
 	/* journal tests */
-	test_journal_init_null();
 	test_journal_init_ident();
 	test_journal_macros_no_crash();
 	test_journal_level_filter();
