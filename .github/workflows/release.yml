@@ -270,7 +270,7 @@ jobs:
 
       - name: Install nfpm
         run: |
-          go install github.com/goreleaser/nfpm/v2/cmd/nfpm@latest
+          GOTOOLCHAIN=auto go install github.com/goreleaser/nfpm/v2/cmd/nfpm@latest
           echo "$(go env GOPATH)/bin" >>"$GITHUB_PATH"
 
       - name: Sign the enforcement object

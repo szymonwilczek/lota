@@ -52,7 +52,7 @@ install_toolchain() {
 		openssl-devel systemd-devel libseccomp-devel dbus-devel \
 		golang selinux-policy-devel rpm-build \
 		glibc-devel.i686 libatomic.i686
-	go install github.com/goreleaser/nfpm/v2/cmd/nfpm@latest
+	GOTOOLCHAIN=auto go install github.com/goreleaser/nfpm/v2/cmd/nfpm@latest
 }
 
 build_rpms() {
