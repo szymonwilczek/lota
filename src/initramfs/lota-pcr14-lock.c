@@ -20,11 +20,8 @@
  *
  *     SHA256("LOTA-PCR14-INITRAMFS-LOCK-v1")
  *
- *   The lock deliberately does not bind resetCount/restartCount. Those
- *   counters are included by the later lota-agent boot commitment, after
- *   userspace is up and close to the quote. Keeping the initramfs step
- *   counter-stable avoids false failures when restartCount moves between
- *   initramfs and attestation. Once locked, any further extension by an
+ *   The digest folds in no clock counter: a TPM obfuscates resetCount and
+ *   restartCount per signing key. Once locked, any further extension by an
  *   untrusted userspace process produces a value the verifier cannot
  *   match, so the attestation fails closed.
  *
@@ -51,8 +48,8 @@
  *   TPM error, unsupported TSS2 layer, failure to persist the baseline, or PCR14
  *   mutating away from the recorded baseline after the first run, all surface as
  *   non-zero exit.
- *   initramfs systemd unit that wraps this helper is ordered before sysroot.mount /
- *   initrd-root-fs.target so non-zero exit aborts the transition to the real root.
+ *   initrd.target only wants the wrapping unit, so the boot carries on with PCR14
+ *   unlocked. lota-agent then refuses to start, so attestation fails closed.
  *
  * Cleanup model
  *   Helper records the baseline at BASELINE_PATH on the /run tmpfs and otherwise
@@ -102,8 +99,8 @@
  * is legacy BIOS/CSM boot. LOTA requires UEFI:
  * Verifier refuses a report whose event log proves no UEFI firmware ran,
  * and PCR 0/1/7 carry nothing on such host.
- * Refusing here aborts the boot transition (the initramfs unit is ordered before
- * initrd-root-fs.target) instead of handing the agent a chain that can never attest.
+ * Refusing here leaves PCR14 unlocked, and the agent names that instead of
+ * attesting a chain that can never verify.
  *
  * Deliberately duplicated rather than shared with the agent's check:
  * this helper is standalone initramfs binary that links only tss2 and OpenSSL,
@@ -121,29 +118,20 @@ static const char *device_path(void)
 }
 #endif
 
-int lota_initramfs_lock_commit(uint32_t reset_count, uint32_t restart_count,
-			       uint8_t out_digest[HASH_SIZE]);
+int lota_initramfs_lock_commit(uint8_t out_digest[HASH_SIZE]);
 
 /*
  * lota_initramfs_lock_commit - reproduce the domain-separated digest
  *
  * Exposed with normal C linkage so unit tests can call into the same
- * byte-for-byte derivation used by the standalone helper without
- * re-marshalling the inputs. resetCount and restartCount are accepted for
- * API compatibility with the agent helper, but they are intentionally not
- * part of the initramfs lock digest. Freshness is bound later by the agent
- * boot-commitment derivation in src/agent/tpm.c.
+ * byte-for-byte derivation used by the standalone helper.
  *
  * Returns: 0 on success, negative errno on failure.
  */
-int lota_initramfs_lock_commit(uint32_t reset_count, uint32_t restart_count,
-			       uint8_t out_digest[HASH_SIZE])
+int lota_initramfs_lock_commit(uint8_t out_digest[HASH_SIZE])
 {
 	if (!out_digest)
 		return -EINVAL;
-
-	(void)reset_count;
-	(void)restart_count;
 
 	EVP_MD_CTX *md = EVP_MD_CTX_new();
 	if (!md)
@@ -339,24 +327,8 @@ int main(int argc, char **argv)
 		return 5;
 	}
 
-	TPMS_TIME_INFO *time_info = NULL;
-	rc = Esys_ReadClock(esys, ESYS_TR_NONE, ESYS_TR_NONE, ESYS_TR_NONE,
-			    &time_info);
-	if (rc != TSS2_RC_SUCCESS) {
-		fprintf(stderr,
-			"lota-pcr14-lock: Esys_ReadClock failed: 0x%08x\n", rc);
-		Esys_Finalize(&esys);
-		Tss2_Tcti_Finalize(tcti);
-		free(tcti);
-		return 6;
-	}
-	uint32_t reset_count = time_info->clockInfo.resetCount;
-	uint32_t restart_count = time_info->clockInfo.restartCount;
-	Esys_Free(time_info);
-
 	uint8_t commit[HASH_SIZE];
-	int crc =
-		lota_initramfs_lock_commit(reset_count, restart_count, commit);
+	int crc = lota_initramfs_lock_commit(commit);
 	if (crc < 0) {
 		fprintf(stderr,
 			"lota-pcr14-lock: digest derivation failed (errno %d)\n",
@@ -455,10 +427,7 @@ int main(int argc, char **argv)
 				exit_code = 10;
 			} else {
 				fprintf(stderr,
-					"lota-pcr14-lock: PCR14 locked over baseline "
-					"(observed resetCount=%u restartCount=%u)\n",
-					(unsigned)reset_count,
-					(unsigned)restart_count);
+					"lota-pcr14-lock: PCR14 locked over baseline\n");
 			}
 		}
 	}
