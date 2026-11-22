@@ -1716,9 +1716,7 @@ int config_profile_append(const char *path, const struct lota_profile *p)
 	 * Temporary file took its SELinux type from this directory,
 	 * not from the file it is about to replace.
 	 * Where the two differ -- a packaged lota.conf under an unlabelled
-	 * /etc/lota -- the rename would hand the agent a config it may not
-	 * read, and the policy dontaudits that denial, so the host would
-	 * simply not come up.
+	 * /etc/lota -- the rename would silently change the config's type.
 	 *
 	 * A destination that refuses the attribute is not a reason to throw
 	 * away a correct config: the writer says so and the operator can

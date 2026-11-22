@@ -2,10 +2,9 @@
 /*
  * Unit tests for the sentence a refused connect carries.
  *
- * The confined agent may reach only ports labelled lota_port_t, and the denial
- * is dontaudit'ed: connect() returns EACCES, no AVC is logged, and the operator
- * is left with "Permission denied" against a server that is running and reachable
- * from a shell on the same host.
+ * The confined agent may reach only ports labelled lota_port_t: connect()
+ * returns EACCES and the operator is left with "Permission denied" against a
+ * server that is running and reachable from a shell on the same host.
  *
  * Two causes, opposite remedies: a port without the LOTA label,
  * or lota_network_attest off. With the boolean off the port advice misleads:
@@ -19,6 +18,7 @@
  */
 #include <errno.h>
 #include <fcntl.h>
+#include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -38,6 +38,12 @@ static int g_failures;
 			printf("PASS: %s\n", msg);          \
 		}                                           \
 	} while (0)
+
+/* name_connect is audited in both causes, so ausearch has the refusal too */
+static bool claims_no_avc(const char *hint)
+{
+	return strstr(hint, "dontaudit") || strstr(hint, "no AVC");
+}
 
 static int put(const char *path, const char *content)
 {
@@ -101,9 +107,8 @@ int main(void)
 		CHECK(strstr(hint, "semanage port -a -t lota_port_t -p tcp "
 				   "8573") != NULL,
 		      "the command names the port that was refused");
-		CHECK(strstr(hint, "dontaudit") != NULL ||
-			      strstr(hint, "no AVC") != NULL,
-		      "the sentence says why nothing was logged");
+		CHECK(!claims_no_avc(hint),
+		      "the port cause does not deny the logged AVC");
 		CHECK(strstr(hint, "setsebool") == NULL,
 		      "a labelled-port cause does not offer the boolean");
 	}
@@ -121,6 +126,8 @@ int main(void)
 		CHECK(strstr(hint, "setsebool -P lota_network_attest on") !=
 			      NULL,
 		      "the command turns the tunable back on");
+		CHECK(!claims_no_avc(hint),
+		      "the tunable cause does not deny the logged AVC");
 		CHECK(strstr(hint, "semanage port -a") == NULL,
 		      "the operator is not sent to relabel a port instead");
 	}
@@ -131,6 +138,8 @@ int main(void)
 	CHECK(hint != NULL,
 	      "a host with no readable tunable still gets a cause");
 	if (hint) {
+		CHECK(!claims_no_avc(hint),
+		      "the unread cause does not deny the logged AVC");
 		CHECK(strstr(hint, "semanage port -a -t lota_port_t -p tcp "
 				   "8573") != NULL &&
 			      strstr(hint, "setsebool -P lota_network_attest "

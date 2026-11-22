@@ -7,7 +7,7 @@
  * carried.
  * On an SELinux host whose /etc/lota is not itself labelled, a rewritten
  * lota.conf therefore comes back as etc_t where the packaged file was
- * lota_etc_t -- and the policy dontaudits the denial, so nothing says so.
+ * lota_etc_t.
  *
  * The attribute name is a parameter: production carries security.selinux,
  * which an unprivileged process may not set, and these tests carry one they
