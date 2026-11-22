@@ -18,32 +18,13 @@
 #include <stdint.h>
 #include <sys/types.h>
 
+#include "test.h"
 #include "lota_anticheat.h"
 #include "lota_gaming.h"
 #include "lota_snapshot.h"
 #include "lota_server.h"
 #include "lota_token.h"
 #include "token_forge.h"
-
-static int tests_run;
-static int tests_passed;
-
-#define TEST(name)                                        \
-	do {                                              \
-		tests_run++;                              \
-		printf("  [%2d] %-55s", tests_run, name); \
-	} while (0)
-
-#define PASS()                    \
-	do {                      \
-		tests_passed++;   \
-		printf("PASS\n"); \
-	} while (0)
-
-#define FAIL(reason)                           \
-	do {                                   \
-		printf("FAIL (%s)\n", reason); \
-	} while (0)
 
 static char test_dir[256];
 

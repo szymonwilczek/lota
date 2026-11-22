@@ -24,6 +24,7 @@
 #include <string.h>
 #include <unistd.h>
 
+#include "test.h"
 #include "../src/agent/agent.h"
 #include "../src/agent/bpf_loader.h"
 #include "../src/agent/cli.h"
@@ -178,26 +179,6 @@ uint32_t cli_startup_switch_mask(void)
 {
 	return cli_switch_mask;
 }
-
-static int tests_run;
-static int tests_passed;
-
-#define TEST(name)                                         \
-	do {                                               \
-		tests_run++;                               \
-		printf("  [%2d] %-58s ", tests_run, name); \
-	} while (0)
-
-#define PASS()                    \
-	do {                      \
-		tests_passed++;   \
-		printf("PASS\n"); \
-	} while (0)
-
-#define FAIL(msg)                          \
-	do {                               \
-		printf("FAIL: %s\n", msg); \
-	} while (0)
 
 static const char *const flag_lib = "/usr/local/lib/from-the-command-line.so";
 static const uint32_t flag_pid = 4242;

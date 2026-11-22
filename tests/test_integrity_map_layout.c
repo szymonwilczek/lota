@@ -20,6 +20,7 @@
 #include <stdio.h>
 #include <unistd.h>
 
+#include "test.h"
 #include "../include/lota.h"
 #include "../src/agent/bpf_loader.h"
 
@@ -30,26 +31,6 @@
 #ifndef LEGACY_BPF_OBJ
 #define LEGACY_BPF_OBJ "build/legacy_integrity_map.bpf.o"
 #endif
-
-static int tests_run;
-static int tests_passed;
-
-#define TEST(name)                                         \
-	do {                                               \
-		tests_run++;                               \
-		printf("  [%2d] %-58s ", tests_run, name); \
-	} while (0)
-
-#define PASS()                    \
-	do {                      \
-		tests_passed++;   \
-		printf("PASS\n"); \
-	} while (0)
-
-#define FAIL(msg)                          \
-	do {                               \
-		printf("FAIL: %s\n", msg); \
-	} while (0)
 
 /* The object this tree builds is the one the agent was compiled against. */
 static void test_the_trees_object_matches_this_build(void)

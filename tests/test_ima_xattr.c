@@ -15,27 +15,8 @@
 #include <stdint.h>
 #include <stdio.h>
 
+#include "test.h"
 #include "../include/lota_ima_xattr.h"
-
-static int tests_run;
-static int tests_passed;
-
-#define TEST(name)                                         \
-	do {                                               \
-		tests_run++;                               \
-		printf("  [%2d] %-55s ", tests_run, name); \
-	} while (0)
-
-#define PASS()                    \
-	do {                      \
-		tests_passed++;   \
-		printf("PASS\n"); \
-	} while (0)
-
-#define FAIL(msg)                          \
-	do {                               \
-		printf("FAIL: %s\n", msg); \
-	} while (0)
 
 static void test_signature_types_accepted(void)
 {

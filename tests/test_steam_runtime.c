@@ -22,27 +22,8 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
+#include "test.h"
 #include "../src/agent/steam_runtime.h"
-
-static int tests_run;
-static int tests_passed;
-
-#define TEST(name)                                        \
-	do {                                              \
-		tests_run++;                              \
-		printf("  [%d] %-55s ", tests_run, name); \
-	} while (0)
-
-#define PASS()                    \
-	do {                      \
-		tests_passed++;   \
-		printf("PASS\n"); \
-	} while (0)
-
-#define FAIL(msg)                          \
-	do {                               \
-		printf("FAIL: %s\n", msg); \
-	} while (0)
 
 /* temp directory for test artifacts */
 static char tmpdir[64];
