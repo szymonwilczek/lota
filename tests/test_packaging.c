@@ -751,6 +751,36 @@ static void test_installer_labels_the_config_directory(void)
 }
 
 /*
+ * An upgrade replaces lota.pp under a module the policy store keeps its own copy
+ * of, so a rule the new agent depends on stays out until something reloads it.
+ */
+static void test_upgrade_reloads_the_selinux_module(void)
+{
+	static const char *const hooks[] = {
+		"packaging/nfpm/scripts/agent-postinstall.sh",
+		"packaging/rpm/lota.spec"
+	};
+	static char src[65536];
+
+	TEST("packaging: an upgrade reloads a loaded SELinux module");
+
+	for (size_t i = 0; i < sizeof(hooks) / sizeof(hooks[0]); i++) {
+		const char *loaded;
+
+		if (!slurp_shipped(hooks[i], src, sizeof(src))) {
+			FAIL("could not read a post-install hook");
+			return;
+		}
+		loaded = strstr(src, "semodule -l");
+		if (!loaded || !strstr(loaded, "semodule -i ")) {
+			FAIL("a post-install hook leaves the old module loaded");
+			return;
+		}
+	}
+	PASS();
+}
+
+/*
  * Ports are labelled by st_selinux_apply(), which a host that passed the stage
  * once never reaches unless the probe asks about the ports of this run.
  */
@@ -1081,6 +1111,7 @@ int main(void)
 	test_selinux_agent_reaches_user_namespaces();
 	test_selinux_agent_reads_filesystem_types();
 	test_installer_labels_the_config_directory();
+	test_upgrade_reloads_the_selinux_module();
 	test_installer_probe_asks_about_ports();
 	test_installer_relabel_reapplies_the_device_labels();
 	test_static_cli_is_built_without_cgo();

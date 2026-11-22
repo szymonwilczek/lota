@@ -166,6 +166,14 @@ fi
 systemd-sysusers %{_sysusersdir}/lota-agent.conf >/dev/null 2>&1 || :
 systemctl daemon-reload >/dev/null 2>&1 || :
 
+# A loaded module is the store's copy: replacing the file does not touch it,
+# and the new agent would run under the old policy.
+if command -v semodule >/dev/null 2>&1 &&
+	semodule -l 2>/dev/null | grep -qx lota; then
+	semodule -i %{_datadir}/lota/selinux/lota.pp ||
+		echo "lota-agent: could not reload the SELinux module; run: semodule -i %{_datadir}/lota/selinux/lota.pp"
+fi
+
 # Relabel on every transaction, not only the first: restorecon is a no-op
 # until lota-install loads the module, and new files inherit the directory's
 # type.
