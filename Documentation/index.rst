@@ -34,6 +34,8 @@ Development happens on ``lota-next``. Open pull requests there, not against
 * :doc:`Development and testing policy <contributor/development/index>`
 * :doc:`Branch and release flow <contributor/branching>`
 * :doc:`Code of Conduct <contributor/code-of-conduct>`
+* Local patch checks: :ghsrc:`scripts/check-patch`
+* Commit message rewrapper: :ghsrc:`scripts/format-patch`
 
 Operator
 --------
@@ -47,6 +49,8 @@ intentionally fails closed when required gates are missing.
 * PCR policy templates: :ghsrc:`policies/README.rst`
 * SELinux policy: :ghsrc:`selinux/README.rst`
 * EK root bundles: :ghsrc:`configs/ek-roots/README.rst`
+* Example configuration: :ghsrc:`configs/lota.conf.example`
+* Re-enrollment flow: :ghsrc:`examples/enrollment/README.rst`
 
 Security reviewer or academic reviewer
 --------------------------------------
@@ -115,6 +119,9 @@ reproducible and verified against signed manifests.
 * :doc:`Release and branch flow <contributor/branching>`
 * :doc:`Production install gates <operator/production-bringup/index>`
 * SELinux policy: :ghsrc:`selinux/README.rst`
+* systemd units: :ghsrc:`systemd/`
+* udev rules: :ghsrc:`configs/udev/99-lota-tpm.rules`
+* IMA policy: :ghsrc:`configs/ima/lota-ima-policy`
 
 .. toctree::
    :hidden:
