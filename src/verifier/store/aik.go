@@ -24,7 +24,6 @@ import (
 	"crypto/x509"
 	"encoding/asn1"
 	"encoding/hex"
-	"encoding/json"
 	"encoding/pem"
 	"errors"
 	"fmt"
@@ -65,11 +64,8 @@ type AIKStore interface {
 	// returns all registered client IDs
 	ListClients() []string
 
-	// returns when the AIK was first registered for the client
-	GetRegisteredAt(clientID string) (time.Time, error)
-
 	// replaces the AIK for an existing client (key rotation)
-	// preserves hardware ID binding. updates registration timestamp
+	// preserves hardware ID binding
 	RotateAIK(clientID string, newKey *rsa.PublicKey) error
 }
 
@@ -141,22 +137,14 @@ type ClientExistenceBatchChecker interface {
 	ExistingClients(clientIDs []string) (map[string]struct{}, error)
 }
 
-// metadata persisted alongside AIK public keys for lifecycle management
-// used by FileStore to track registration time in a sidecar JSON file
-type aikMeta struct {
-	RegisteredAt time.Time `json:"registered_at"`
-}
-
 // keys are stored as PEM files: {storePath}/{clientID}.pem
-// registration metadata: {storePath}/{clientID}.meta (JSON)
 // hardware IDs are stored as: {storePath}/{clientID}.hwid
 type FileStore struct {
-	mu           sync.RWMutex
-	storePath    string
-	cache        map[string]*rsa.PublicKey
-	fpIndex      map[string]string // Fingerprint(pubKey) -> clientID
-	hardwareIDs  map[string][32]byte
-	registeredAt map[string]time.Time
+	mu          sync.RWMutex
+	storePath   string
+	cache       map[string]*rsa.PublicKey
+	fpIndex     map[string]string // Fingerprint(pubKey) -> clientID
+	hardwareIDs map[string][32]byte
 }
 
 // creates a new file-based AIK store
@@ -166,11 +154,10 @@ func NewFileStore(storePath string) (*FileStore, error) {
 	}
 
 	fs := &FileStore{
-		storePath:    storePath,
-		cache:        make(map[string]*rsa.PublicKey),
-		fpIndex:      make(map[string]string),
-		hardwareIDs:  make(map[string][32]byte),
-		registeredAt: make(map[string]time.Time),
+		storePath:   storePath,
+		cache:       make(map[string]*rsa.PublicKey),
+		fpIndex:     make(map[string]string),
+		hardwareIDs: make(map[string][32]byte),
 	}
 
 	// load existing keys into cache
@@ -213,13 +200,6 @@ func (fs *FileStore) loadAll() error {
 			}
 			fs.hardwareIDs[clientID] = hwid
 
-		case ".meta":
-			meta, err := fs.loadMeta(clientID)
-			if err != nil {
-				slog.Warn("failed to load metadata", "client", clientID, "error", err)
-				continue
-			}
-			fs.registeredAt[clientID] = meta.RegisteredAt
 		}
 	}
 
@@ -278,32 +258,6 @@ func (fs *FileStore) loadHardwareID(clientID string) ([32]byte, error) {
 
 	copy(hwid[:], data)
 	return hwid, nil
-}
-
-func (fs *FileStore) loadMeta(clientID string) (*aikMeta, error) {
-	path := filepath.Join(fs.storePath, clientID+".meta")
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return nil, err
-	}
-
-	var meta aikMeta
-	if err := json.Unmarshal(data, &meta); err != nil {
-		return nil, fmt.Errorf("failed to parse metadata: %w", err)
-	}
-
-	return &meta, nil
-}
-
-func (fs *FileStore) saveMeta(clientID string, regTime time.Time) error {
-	meta := aikMeta{RegisteredAt: regTime}
-	data, err := json.Marshal(meta)
-	if err != nil {
-		return fmt.Errorf("failed to marshal metadata: %w", err)
-	}
-
-	path := filepath.Join(fs.storePath, clientID+".meta")
-	return os.WriteFile(path, data, 0o600)
 }
 
 func (fs *FileStore) GetAIK(clientID string) (*rsa.PublicKey, error) {
@@ -365,13 +319,6 @@ func (fs *FileStore) RegisterAIK(clientID string, pubKey *rsa.PublicKey) error {
 	fs.cache[clientID] = pubKey
 	fs.fpIndex[fp] = clientID
 
-	// persist registration timestamp
-	now := time.Now()
-	if err := fs.saveMeta(clientID, now); err != nil {
-		slog.Warn("failed to save metadata", "client", clientID, "error", err)
-	}
-	fs.registeredAt[clientID] = now
-
 	return nil
 }
 
@@ -408,20 +355,6 @@ func (fs *FileStore) CountClients() int {
 	fs.mu.RLock()
 	defer fs.mu.RUnlock()
 	return len(fs.cache)
-}
-
-func (fs *FileStore) GetRegisteredAt(clientID string) (time.Time, error) {
-	if err := validateClientID(clientID); err != nil {
-		return time.Time{}, err
-	}
-
-	fs.mu.RLock()
-	defer fs.mu.RUnlock()
-
-	if t, ok := fs.registeredAt[clientID]; ok {
-		return t, nil
-	}
-	return time.Time{}, errors.New("registration time not found")
 }
 
 // replaces expired AIK with a new key, preserving hardware ID binding
@@ -468,14 +401,7 @@ func (fs *FileStore) RotateAIK(clientID string, newKey *rsa.PublicKey) error {
 		return fmt.Errorf("failed to write key file: %w", err)
 	}
 
-	// update metadata with new registration time
-	now := time.Now()
-	if err := fs.saveMeta(clientID, now); err != nil {
-		slog.Warn("failed to save metadata", "client", clientID, "error", err)
-	}
-
 	fs.cache[clientID] = newKey
-	fs.registeredAt[clientID] = now
 	if owner, ok := fs.fpIndex[oldFP]; ok && owner == clientID {
 		delete(fs.fpIndex, oldFP)
 	}
@@ -505,14 +431,12 @@ func (fs *FileStore) DeleteClient(clientID string) error {
 	}
 
 	// key file first: it is the record of existence
-	// .meta/.hwid are sidecars and may legitimately be absent
+	// .hwid is a sidecar and may legitimately be absent
 	if err := os.Remove(filepath.Join(fs.storePath, clientID+".pem")); err != nil && !os.IsNotExist(err) {
 		return fmt.Errorf("failed to remove key file: %w", err)
 	}
-	for _, ext := range []string{".meta", ".hwid"} {
-		if err := os.Remove(filepath.Join(fs.storePath, clientID+ext)); err != nil && !os.IsNotExist(err) {
-			return fmt.Errorf("failed to remove %s file: %w", ext, err)
-		}
+	if err := os.Remove(filepath.Join(fs.storePath, clientID+".hwid")); err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("failed to remove .hwid file: %w", err)
 	}
 
 	if fp := Fingerprint(pubKey); fp != "" {
@@ -522,7 +446,6 @@ func (fs *FileStore) DeleteClient(clientID string) error {
 	}
 	delete(fs.cache, clientID)
 	delete(fs.hardwareIDs, clientID)
-	delete(fs.registeredAt, clientID)
 
 	return nil
 }
@@ -633,17 +556,15 @@ func Fingerprint(pubKey *rsa.PublicKey) string {
 
 // implements AIKStore in-memory (for testing only right now).
 type MemoryStore struct {
-	mu           sync.RWMutex
-	keys         map[string]*rsa.PublicKey
-	hardwareIDs  map[string][32]byte
-	registeredAt map[string]time.Time
+	mu          sync.RWMutex
+	keys        map[string]*rsa.PublicKey
+	hardwareIDs map[string][32]byte
 }
 
 func NewMemoryStore() *MemoryStore {
 	return &MemoryStore{
-		keys:         make(map[string]*rsa.PublicKey),
-		hardwareIDs:  make(map[string][32]byte),
-		registeredAt: make(map[string]time.Time),
+		keys:        make(map[string]*rsa.PublicKey),
+		hardwareIDs: make(map[string][32]byte),
 	}
 }
 
@@ -679,7 +600,6 @@ func (ms *MemoryStore) RegisterAIK(clientID string, pubKey *rsa.PublicKey) error
 	}
 
 	ms.keys[clientID] = pubKey
-	ms.registeredAt[clientID] = time.Now()
 	return nil
 }
 
@@ -727,16 +647,6 @@ func (ms *MemoryStore) RegisterAIKWithCert(clientID string, pubKey *rsa.PublicKe
 	return ms.RegisterAIK(clientID, pubKey)
 }
 
-func (ms *MemoryStore) GetRegisteredAt(clientID string) (time.Time, error) {
-	ms.mu.RLock()
-	defer ms.mu.RUnlock()
-
-	if t, ok := ms.registeredAt[clientID]; ok {
-		return t, nil
-	}
-	return time.Time{}, errors.New("registration time not found")
-}
-
 // replaces expired AIK with a new key, preserving hardware ID binding
 func (ms *MemoryStore) RotateAIK(clientID string, newKey *rsa.PublicKey) error {
 	ms.mu.Lock()
@@ -756,7 +666,6 @@ func (ms *MemoryStore) RotateAIK(clientID string, newKey *rsa.PublicKey) error {
 	}
 
 	ms.keys[clientID] = newKey
-	ms.registeredAt[clientID] = time.Now()
 	return nil
 }
 
@@ -772,7 +681,6 @@ func (ms *MemoryStore) DeleteClient(clientID string) error {
 
 	delete(ms.keys, clientID)
 	delete(ms.hardwareIDs, clientID)
-	delete(ms.registeredAt, clientID)
 	return nil
 }
 
@@ -1285,10 +1193,6 @@ func (cs *CertificateStore) RegisterHardwareID(clientID string, hardwareID [32]b
 
 func (cs *CertificateStore) GetHardwareID(clientID string) ([32]byte, error) {
 	return cs.backend.GetHardwareID(clientID)
-}
-
-func (cs *CertificateStore) GetRegisteredAt(clientID string) (time.Time, error) {
-	return cs.backend.GetRegisteredAt(clientID)
 }
 
 // DeleteClient removes the client from the registry,

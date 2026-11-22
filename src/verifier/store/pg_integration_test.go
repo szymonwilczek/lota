@@ -230,12 +230,6 @@ func TestPostgresAIKStore(t *testing.T) {
 	if ok, err := s.HasClient("cX"); err != nil || ok {
 		t.Fatalf("HasClient cX: %v %v", ok, err)
 	}
-	if at, err := s.GetRegisteredAt("c1"); err != nil || at.IsZero() {
-		t.Fatalf("GetRegisteredAt: %v %v", at, err)
-	}
-	if _, err := s.GetRegisteredAt("cX"); err == nil {
-		t.Fatal("GetRegisteredAt on unknown client should fail")
-	}
 
 	// operator-forced re-enrollment:
 	// delete frees the row and the AIK-uniqueness slot,
