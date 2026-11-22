@@ -1470,6 +1470,69 @@ enum stage_state probe_pcr14_barrier_stage(int pcr_state, int lock_ran,
 	}
 }
 
+/* one "type proto a, b-c" row; 1 port listed, 2 listed as a single entry */
+static int port_row_lists(const char *row, unsigned long want, char *type,
+			  size_t type_cap)
+{
+	char fmt[32];
+	char proto[8];
+	const char *p;
+	int off = 0;
+	int found = 0;
+
+	snprintf(fmt, sizeof(fmt), "%%%zus %%7s %%n", type_cap - 1);
+	if (sscanf(row, fmt, type, proto, &off) != 2 || off == 0 ||
+	    strcmp(proto, "tcp") != 0)
+		return 0;
+
+	for (p = row + off; *p;) {
+		char *end;
+		unsigned long lo = strtoul(p, &end, 10);
+		unsigned long hi = lo;
+
+		if (end == p)
+			break;
+		if (*end == '-')
+			hi = strtoul(end + 1, &end, 10);
+		if (want >= lo && want <= hi)
+			found = lo == hi ? 2 : (found ? found : 1);
+		for (p = end; *p == ',' || *p == ' ';)
+			p++;
+	}
+	return found;
+}
+
+int probe_port_needs_label(const char *listing, const char *port)
+{
+	unsigned long want;
+	const char *line = listing;
+	char *end;
+	int taken = 0;
+
+	want = strtoul(port, &end, 10);
+	if (!isdigit((unsigned char)port[0]) || *end || want == 0 ||
+	    want > 65535)
+		return -EINVAL;
+
+	while (line && *line) {
+		const char *next = strchr(line, '\n');
+		size_t len = next ? (size_t)(next - line) : strlen(line);
+		char row[1024];
+		char type[64];
+		int listed;
+
+		snprintf(row, sizeof(row), "%.*s", (int)len, line);
+		listed = port_row_lists(row, want, type, sizeof(type));
+		if (listed && (strcmp(type, "lota_port_t") == 0 ||
+			       strcmp(type, "http_port_t") == 0))
+			return 0;
+		if (listed == 2)
+			taken = 1;
+		line = next ? next + 1 : NULL;
+	}
+	return !taken;
+}
+
 int probe_named_files(const struct probe_named_file *files, size_t count,
 		      char *note, size_t cap)
 {

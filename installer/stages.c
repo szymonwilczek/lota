@@ -874,6 +874,26 @@ static int selinux_module_loaded(void)
 	return 0;
 }
 
+/* A port named on this run that the agent would be refused at */
+static int selinux_port_pending(const struct install_ctx *ctx)
+{
+	static char out[65536];
+	const char *const argv[] = { "semanage", "port", "-l", NULL };
+	const char *const ports[] = { ctx->opts.ca_port,
+				      ctx->opts.verifier_port };
+
+	if ((!ctx->opts.ca_port && !ctx->opts.verifier_port) ||
+	    !tool_exists("semanage") ||
+	    run_capture(argv, out, sizeof(out)) != 0)
+		return 0;
+
+	for (size_t i = 0; i < sizeof(ports) / sizeof(ports[0]); i++) {
+		if (ports[i] && probe_port_needs_label(out, ports[i]) > 0)
+			return 1;
+	}
+	return 0;
+}
+
 static enum stage_state st_selinux_probe(struct install_ctx *ctx, char *note,
 					 size_t cap)
 {
@@ -881,7 +901,8 @@ static enum stage_state st_selinux_probe(struct install_ctx *ctx, char *note,
 
 	if (dev == 0 && label_ok(PATH_AGENT_BIN, "lota_agent_exec_t") &&
 	    label_ok_if_present(PATH_LOTA_STATE_DIR, "lota_var_t") &&
-	    label_ok_if_present(PATH_LOTA_CONF_DIR, "lota_etc_t")) {
+	    label_ok_if_present(PATH_LOTA_CONF_DIR, "lota_etc_t") &&
+	    !selinux_port_pending(ctx)) {
 		snprintf(note, cap,
 			 "TPM device, agent binary, state directory and config "
 			 "directory carry the LOTA SELinux labels.%s",
