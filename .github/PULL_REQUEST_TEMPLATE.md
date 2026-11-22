@@ -4,6 +4,7 @@ Title: bare-prefix subject, no Conventional-Commit parentheses.
 Use module prefix (agent:, verifier:, attestca:, fleetctl:, bpf:)
 or type prefix (feat:, fix:, docs:, ci:, build:).
 Never fix(agent:) or feat(ca):.
+Submodule: docs: operator:. Two surfaces changed together: sdk/server:.
 
 Open against lota-next, not main.
 Delete any section below that genuinely does not apply; do not leave it blank.

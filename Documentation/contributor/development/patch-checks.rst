@@ -93,9 +93,21 @@ Commit body headings must use standalone ``Problem:`` and ``Solution:`` lines,
 with the explanatory text starting on the next line. **The version bump is the
 one exception**: the release tag sits on it, and ``release.yml`` publishes its
 description as the release notes, so its body is addressed to whoever reads the
-release page. Body text is wrapped to 75 columns, with a two-column tolerance
-when the final word reaches column 76 or 77. The DCO ``Signed-off-by`` trailer
-must be separated from the description by one blank line.
+release page. The DCO ``Signed-off-by`` trailer must be separated from the
+description by one blank line.
+
+Subjects, pull request titles, branch names, and body lines are limited to 75
+columns. A body line over the limit
+fails ``check-pr-quality.sh``, locally and in CI, and
+``scripts/format-patch`` rewraps it; a subject, title, or branch name has to
+be shortened by hand. A body line keeps its length when it is a single word, a trailer (``*-by:``,
+``Fixes:``, ``Link:``, ``Closes:``, ``Docs-Not-Needed:``), a line with a URL, a
+``Merge branch`` line, a diffstat line, or a line led by a file path. Merge
+commits and subjects starting with ``Merge`` are exempt, and so is a pull
+request from ``lota-next``, whose commits were checked when they landed there.
+
+A body that is short for the size of the change is reported as ``INFO``. It
+recommends more detail and does not fail the check.
 
 The local hotpath check delegates to ``scripts/check-pr-quality.sh``, using the
 same ``.github/pr-quality-hotpaths.txt`` manifest as the ``PR quality``
@@ -179,8 +191,9 @@ messages before pushing. It rewrites commits in ``base..head`` to remove
 trailing spaces, trailing tabs, and blank lines after the final content line.
 It does not change file trees. It also fixes simple inline ``Problem:`` and
 ``Solution:`` headings, inserts the required blank line before
-``Signed-off-by``, wraps body paragraphs, and tells the developer to review the
-rewritten descriptions. The script requires a clean index and working tree,
+``Signed-off-by``, wraps body paragraphs to 75 columns, and tells the developer
+to review the rewritten descriptions. A trailer, a URL, a merge line, a
+diffstat line, and a line led by a file path are left as written. The script requires a clean index and working tree,
 refuses merge commits, and creates a backup branch before updating the current
 branch.
 
@@ -206,9 +219,9 @@ the companion docs that describe them and carries a tier:
   These cover the documented contracts: TPM enrollment, verifier policy, BPF
   LSM enforcement, SDK token formats, deployment policy, and operator
   provisioning.
-* ``recommended`` -- a missing companion doc only warns, never fails. These
-  cover process surfaces that seldom change a contract: CI, build, the gate
-  scripts, and dependency manifests.
+* ``recommended`` -- a missing companion doc prints a note naming the docs,
+  never fails. These cover process surfaces that seldom change a contract: CI,
+  build, the gate scripts, and dependency manifests.
 
 The commit type (the ``type:`` subject prefix) caps the tier. An
 infrastructure type -- ``ci``, ``build``, ``test``, ``tests``, ``chore``,
@@ -216,8 +229,8 @@ infrastructure type -- ``ci``, ``build``, ``test``, ``tests``, ``chore``,
 even against a required rule; ``docs``, ``license``, and ``gitignore`` are
 exempt; module-scoped commits (``agent:``, ``bpf:``, ``verifier:``, ...) and
 ``treewide:`` take the tier of the rule. A ``Docs-Not-Needed: <reason>``
-trailer with a non-empty reason waives the requirement for the commit it sits
-on and is recorded in history.
+trailer with a non-empty reason settles the commit it sits on for both tiers:
+nothing is printed, and the reason stays in history.
 
 In ``--pr-diff`` mode a companion doc anywhere in the pull-request diff
 satisfies a required rule, so a documentation commit can accompany a code
