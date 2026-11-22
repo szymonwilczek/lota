@@ -16,9 +16,10 @@ Changes must preserve the production security contract. Do not add
 development shortcuts that weaken TPM enrollment, verifier policy, BPF LSM
 enforcement, SELinux confinement, release signing, or reproducible builds.
 
-If a change affects an external contract, update the matching documentation in
-the same commit. Examples include CLI flags, policy syntax, IPC wire formats,
-systemd units, SELinux labels, SDK APIs, and verifier configuration.
+A change to an external contract should update the matching documentation in
+the same commit. ``check-patch`` recommends pages to look at and enforces
+nothing. Examples of such contracts include CLI flags, policy syntax, IPC wire
+formats, systemd units, SELinux labels, SDK APIs, and verifier configuration.
 
 Developer Certificate of Origin
 ===============================
