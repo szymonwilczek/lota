@@ -28,7 +28,7 @@ if [ ! -f ca.key ]; then
     openssl req -x509 -new -key ca.key -days 1825 -out ca.crt \
 	    -subj "/CN=lota-attest-ca" \
 	    -addext "basicConstraints=critical,CA:TRUE" \
-	    -addext "keyUsage=critical,keyCertSign"
+	    -addext "keyUsage=critical,keyCertSign,cRLSign"
     echo "generated CA key + cert"
 fi
 

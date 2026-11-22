@@ -71,6 +71,32 @@ check "the example generates a listener certificate" test -s "$CA_DIR/tls.crt"
 check "the listener certificate is issued by the CA anchor" \
       openssl verify -CAfile "$CA_DIR/ca.crt" "$CA_DIR/tls.crt"
 
+# The verifier revokes AIK certificates through a CRL from this anchor and
+# refuses one from an issuer without cRLSign. openssl verify applies the same
+# rule; the listener certificate stands in for an AIK certificate.
+crl_from_anchor_verifies() {
+    local dir="$WORK_DIR/crl"
+
+    mkdir -p "$dir"
+    : >"$dir/index"
+    echo 1000 >"$dir/number"
+    cat >"$dir/ca.cnf" <<EOF_CNF
+[ca]
+default_ca = lota
+[lota]
+database = $dir/index
+crlnumber = $dir/number
+default_md = sha256
+default_crl_days = 1
+certificate = $CA_DIR/ca.crt
+private_key = $CA_DIR/ca.key
+EOF_CNF
+    openssl ca -config "$dir/ca.cnf" -gencrl -out "$dir/ca.crl" 2>/dev/null &&
+	openssl verify -crl_check -CAfile "$CA_DIR/ca.crt" \
+		-CRLfile "$dir/ca.crl" "$CA_DIR/tls.crt" >/dev/null 2>&1
+}
+check "a CRL from the anchor verifies" crl_from_anchor_verifies
+
 # A listener certificate is the one certificate in the deployment that is
 # rotated on a schedule.
 # Rotating it -- with a new key, which is the point of rotating -- must not

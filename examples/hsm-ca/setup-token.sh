@@ -85,7 +85,7 @@ openssl req -new -x509 -days 365 "${PROVIDERS[@]}" \
     -key "$KEY_URI" \
     -subj "/CN=lota-attest-ca" \
     -addext "basicConstraints=critical,CA:TRUE" \
-    -addext "keyUsage=critical,keyCertSign" \
+    -addext "keyUsage=critical,keyCertSign,cRLSign" \
     -out "$OUT_DIR/ca.crt" </dev/null >/dev/null 2>&1 ||
     die "could not issue ca.crt from the token key (is the pkcs11 provider installed?)"
 
