@@ -19,7 +19,6 @@ import (
 
 	"github.com/szymonwilczek/lota/verifier/logging"
 	"github.com/szymonwilczek/lota/verifier/metrics"
-	"github.com/szymonwilczek/lota/verifier/store"
 	"github.com/szymonwilczek/lota/verifier/verify"
 )
 
@@ -80,7 +79,7 @@ func startCapTestServer(t *testing.T, cfg ServerConfig) string {
 	vcfg := verify.DefaultConfig()
 	vcfg.RequireBootEnrollment = false
 	vcfg.Metrics = metrics.New()
-	v := verify.NewVerifier(vcfg, store.NewMemoryStore())
+	v := verify.NewVerifier(vcfg, nil)
 
 	srv, err := NewServer(cfg, v)
 	if err != nil {

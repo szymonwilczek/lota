@@ -26,10 +26,10 @@ import (
 //   - acceptance yields a validity deadline in the future,
 //   - accept/reject decision is deterministic for a fixed spec
 func FuzzVerifyReport(f *testing.F) {
-	aikStore := newFuzzCertStore(f)
+	aikVerifier := newFuzzCertVerifier(f)
 	cfg := DefaultConfig()
 	cfg.NonceLifetime = time.Hour
-	v := NewVerifier(cfg, aikStore)
+	v := NewVerifier(cfg, aikVerifier)
 	if err := v.AddPolicy(DefaultPolicy()); err != nil {
 		f.Fatalf("AddPolicy: %v", err)
 	}

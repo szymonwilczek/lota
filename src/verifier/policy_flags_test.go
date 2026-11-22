@@ -10,7 +10,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/szymonwilczek/lota/verifier/store"
 	"github.com/szymonwilczek/lota/verifier/verify"
 )
 
@@ -36,7 +35,7 @@ func policyTestVerifier(t *testing.T) (*verify.Verifier, *bytes.Buffer, *slog.Lo
 
 	var logs bytes.Buffer
 	logger := slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug}))
-	return verify.NewVerifier(verify.DefaultConfig(), store.NewMemoryStore()), &logs, logger
+	return verify.NewVerifier(verify.DefaultConfig(), nil), &logs, logger
 }
 
 // Per-tenant policy needs a second policy to bind against: a single --policy

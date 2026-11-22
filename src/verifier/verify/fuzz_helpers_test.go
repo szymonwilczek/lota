@@ -318,12 +318,12 @@ func buildSignedReport(s *fuzzReportSpec, clientID string, challengeNonce [types
 	return buf
 }
 
-// newFuzzCertStore returns a certificate-verifying AIK store that trusts the
+// newFuzzCertVerifier returns a certificate verifier that trusts the
 // shared test CA.
-// VerifyReport refuses any store that is not an AIKCertVerifier (verify.go),
-// so a fuzz target MUST use this and not MemoryStore, or every input is rejected
+// VerifyReport refuses a verifier with no AIKCertVerifier (verify.go),
+// so a fuzz target MUST use this, or every input is rejected
 // before reaching trust logic
-func newFuzzCertStore(tb testing.TB) store.AIKStore {
+func newFuzzCertVerifier(tb testing.TB) store.AIKCertVerifier {
 	tb.Helper()
 	dir := tb.TempDir()
 	caPath := filepath.Join(dir, "ca.pem")
@@ -331,9 +331,9 @@ func newFuzzCertStore(tb testing.TB) store.AIKStore {
 	if err := os.WriteFile(caPath, pemBytes, 0o600); err != nil {
 		tb.Fatalf("write test CA: %v", err)
 	}
-	cs, err := store.NewCertificateStore(filepath.Join(dir, "store"), []string{caPath}, true)
+	cs, err := store.NewCertificateVerifier([]string{caPath}, nil)
 	if err != nil {
-		tb.Fatalf("NewCertificateStore: %v", err)
+		tb.Fatalf("NewCertificateVerifier: %v", err)
 	}
 	return cs
 }

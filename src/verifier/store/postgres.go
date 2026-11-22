@@ -33,17 +33,8 @@ import (
 var pgMigrations = []migration{
 	{
 		version:     1,
-		description: "consolidated schema: clients, baselines, nonces, revocations, bans, audit, attestation log, sharding",
+		description: "consolidated schema: baselines, nonces, revocations, bans, audit, attestation log, sharding",
 		sql: `
-			CREATE TABLE clients (
-				id          TEXT PRIMARY KEY,
-				aik_der     BYTEA NOT NULL,
-				hardware_id BYTEA,
-				created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
-			);
-
-			CREATE UNIQUE INDEX idx_clients_aik_der_unique ON clients(aik_der);
-
 			CREATE TABLE baselines (
 				client_id                TEXT PRIMARY KEY,
 				pcr14                    BYTEA NOT NULL CHECK(octet_length(pcr14) = 32),

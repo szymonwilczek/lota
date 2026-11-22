@@ -16,8 +16,7 @@ import (
 )
 
 // inventoryFixture builds an API handler whose only per-client record is
-// the baseline store, as in a Privacy CA deployment: the AIK store stays
-// empty and challenge history is per-process.
+// the baseline store: challenge history is per-process.
 func inventoryFixture(t *testing.T, clients ...string) *http.ServeMux {
 	t.Helper()
 
@@ -30,7 +29,7 @@ func inventoryFixture(t *testing.T, clients ...string) *http.ServeMux {
 	cfg.RevocationStore = store.NewMemoryRevocationStore(auditLog)
 	cfg.BanStore = store.NewMemoryBanStore(auditLog)
 
-	v := verify.NewVerifier(cfg, store.NewMemoryStore())
+	v := verify.NewVerifier(cfg, nil)
 	if err := v.AddPolicy(verify.DefaultPolicy()); err != nil {
 		t.Fatalf("AddPolicy(DefaultPolicy): %v", err)
 	}
@@ -112,7 +111,7 @@ func TestClientInfoReportsTheFleetsLastAttestation(t *testing.T) {
 	cfg.RevocationStore = store.NewMemoryRevocationStore(auditLog)
 	cfg.BanStore = store.NewMemoryBanStore(auditLog)
 
-	v := verify.NewVerifier(cfg, store.NewMemoryStore())
+	v := verify.NewVerifier(cfg, nil)
 	if err := v.AddPolicy(verify.DefaultPolicy()); err != nil {
 		t.Fatalf("AddPolicy(DefaultPolicy): %v", err)
 	}

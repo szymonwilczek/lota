@@ -18,7 +18,7 @@ func profileVerifier(t *testing.T, profile string, override *bool) *Verifier {
 	cfg := DefaultConfig()
 	cfg.EnableSelfServiceReanchor = override
 
-	v := NewVerifier(cfg, newCertStore(t))
+	v := NewVerifier(cfg, newCertVerifier(t))
 	policy := DefaultPolicy()
 	policy.Profile = profile
 	if err := v.AddPolicy(policy); err != nil {
@@ -80,7 +80,7 @@ func TestSelfServiceReanchor_TenantWithoutPolicyFollowsTheActiveOne(t *testing.T
 
 // With no policy at all there is nothing to consent on the fleet's behalf.
 func TestSelfServiceReanchor_NoPolicyMeansOff(t *testing.T) {
-	v := NewVerifier(DefaultConfig(), newCertStore(t))
+	v := NewVerifier(DefaultConfig(), newCertVerifier(t))
 	if v.selfServiceReanchorForTenant("") {
 		t.Fatal("a verifier with no policy must not re-anchor")
 	}
@@ -90,7 +90,7 @@ func TestSelfServiceReanchor_NoPolicyMeansOff(t *testing.T) {
 // the enterprise handling: the operator would find out from players whose games
 // stopped after a BIOS update.
 func TestAddPolicy_RejectsUnknownProfile(t *testing.T) {
-	v := NewVerifier(DefaultConfig(), newCertStore(t))
+	v := NewVerifier(DefaultConfig(), newCertVerifier(t))
 	policy := DefaultPolicy()
 	policy.Profile = "consumr"
 
@@ -101,7 +101,7 @@ func TestAddPolicy_RejectsUnknownProfile(t *testing.T) {
 
 func TestAddPolicy_AcceptsKnownProfiles(t *testing.T) {
 	for _, profile := range []string{"", ProfileEnterprise, ProfileConsumer} {
-		v := NewVerifier(DefaultConfig(), newCertStore(t))
+		v := NewVerifier(DefaultConfig(), newCertVerifier(t))
 		policy := DefaultPolicy()
 		policy.Profile = profile
 		if err := v.AddPolicy(policy); err != nil {

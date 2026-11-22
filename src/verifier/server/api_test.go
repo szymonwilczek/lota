@@ -51,7 +51,7 @@ func init() {
  * the route is gone.
  */
 func TestAttestationLogEndpoint_SanitizesDetails(t *testing.T) {
-	aikStore := newCertStore(t)
+	aikVerifier := newCertVerifier(t)
 	m := metrics.New()
 	cfg := verify.DefaultConfig()
 	cfg.RequireBootEnrollment = false
@@ -60,7 +60,7 @@ func TestAttestationLogEndpoint_SanitizesDetails(t *testing.T) {
 	cfg.RevocationStore = store.NewMemoryRevocationStore(auditLog)
 	cfg.BanStore = store.NewMemoryBanStore(auditLog)
 	cfg.Metrics = m
-	v := verify.NewVerifier(cfg, aikStore)
+	v := verify.NewVerifier(cfg, aikVerifier)
 	if err := v.AddPolicy(verify.DefaultPolicy()); err != nil {
 		t.Fatalf("AddPolicy(DefaultPolicy) failed: %v", err)
 	}
@@ -187,7 +187,7 @@ func setupTestAPIWithKey(t *testing.T, adminKey string) (*http.ServeMux, *verify
 func setupTestAPIWithKeys(t *testing.T, adminKey, readerKey string) (*http.ServeMux, *verify.Verifier) {
 	t.Helper()
 
-	aikStore := newCertStore(t)
+	aikVerifier := newCertVerifier(t)
 	m := metrics.New()
 	cfg := verify.DefaultConfig()
 	cfg.RequireBootEnrollment = false
@@ -195,7 +195,7 @@ func setupTestAPIWithKeys(t *testing.T, adminKey, readerKey string) (*http.Serve
 	cfg.RevocationStore = store.NewMemoryRevocationStore(auditLog)
 	cfg.BanStore = store.NewMemoryBanStore(auditLog)
 	cfg.Metrics = m
-	v := verify.NewVerifier(cfg, aikStore)
+	v := verify.NewVerifier(cfg, aikVerifier)
 	if err := v.AddPolicy(verify.DefaultPolicy()); err != nil {
 		t.Fatalf("AddPolicy(DefaultPolicy) failed: %v", err)
 	}
@@ -228,7 +228,7 @@ func setupTestAPIListeningWithKey(t *testing.T, adminKey string) (*http.ServeMux
 func setupTestAPIListeningWithKeys(t *testing.T, adminKey, readerKey string) (*http.ServeMux, *verify.Verifier) {
 	t.Helper()
 
-	aikStore := newCertStore(t)
+	aikVerifier := newCertVerifier(t)
 	m := metrics.New()
 	cfg := verify.DefaultConfig()
 	cfg.RequireBootEnrollment = false
@@ -236,7 +236,7 @@ func setupTestAPIListeningWithKeys(t *testing.T, adminKey, readerKey string) (*h
 	cfg.RevocationStore = store.NewMemoryRevocationStore(auditLog)
 	cfg.BanStore = store.NewMemoryBanStore(auditLog)
 	cfg.Metrics = m
-	v := verify.NewVerifier(cfg, aikStore)
+	v := verify.NewVerifier(cfg, aikVerifier)
 	if err := v.AddPolicy(verify.DefaultPolicy()); err != nil {
 		t.Fatalf("AddPolicy(DefaultPolicy) failed: %v", err)
 	}
@@ -1521,7 +1521,7 @@ func assertMetric(t *testing.T, body, metric, expectedValue string) {
 }
 
 func TestReanchorReviewEndpoints(t *testing.T) {
-	aikStore := newCertStore(t)
+	aikVerifier := newCertVerifier(t)
 
 	bs := verify.NewBaselineStore()
 	var pcr14 [32]byte
@@ -1540,7 +1540,7 @@ func TestReanchorReviewEndpoints(t *testing.T) {
 	cfg.RequireBootEnrollment = false
 	cfg.BaselineStore = bs
 	cfg.Metrics = m
-	v := verify.NewVerifier(cfg, aikStore)
+	v := verify.NewVerifier(cfg, aikVerifier)
 	srv := &Server{verifier: v, addr: ":8443"}
 	mux := http.NewServeMux()
 	NewAPIHandler(mux, v, srv, store.NewMemoryAuditLog(), nil, m,
@@ -1584,7 +1584,7 @@ func TestReanchorReviewEndpoints(t *testing.T) {
 	}
 }
 
-// drives full challenge/attest round so the client exists in the AIK store,
+// drives full challenge/attest round so the client has a baseline,
 // the baseline store and the nonce store
 func attestTestClient(t *testing.T, v *verify.Verifier, challengeID string) string {
 	t.Helper()

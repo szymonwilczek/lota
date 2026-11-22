@@ -30,7 +30,7 @@ type ackFixture struct {
 func newAckFixture(t *testing.T) *ackFixture {
 	t.Helper()
 
-	aikStore := newCertStore(t)
+	aikVerifier := newCertVerifier(t)
 
 	bs := verify.NewBaselineStore()
 	var b verify.BootBaseline
@@ -51,7 +51,7 @@ func newAckFixture(t *testing.T) *ackFixture {
 	cfg.RequireBootEnrollment = false
 	cfg.BaselineStore = bs
 	cfg.Metrics = m
-	v := verify.NewVerifier(cfg, aikStore)
+	v := verify.NewVerifier(cfg, aikVerifier)
 	srv := &Server{verifier: v, addr: ":8443"}
 
 	auditLog := store.NewMemoryAuditLog()

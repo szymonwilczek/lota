@@ -39,7 +39,7 @@ func repinVerifier(t *testing.T, allowedSeeds ...byte) *Verifier {
 	cfg.NonceLifetime = 1 * time.Second
 	cfg.RequireBootEnrollment = false
 
-	verifier := NewVerifier(cfg, newCertStore(t))
+	verifier := NewVerifier(cfg, newCertVerifier(t))
 	policy := DefaultPolicy()
 	for _, seed := range allowedSeeds {
 		h := fixtureAgentHashSeed(seed)

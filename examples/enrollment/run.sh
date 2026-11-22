@@ -31,8 +31,7 @@ BIN="${BIN:-$BUILD_DIR}"
 CA_DIR="${CA_DIR:-$HERE/ca}"
 EK_ROOT="${EK_ROOT:?set it to a manufacturer root, or a pinned bundle dir}"
 RUN_DIR="${RUN_DIR:-$(mktemp -d "${TMPDIR:-/tmp}/lota-enrollment.XXXXXX")}"
-AIK_STORE="${AIK_STORE:-$RUN_DIR/aiks}"
-STATE_DB="${STATE_DB:-$AIK_STORE/verifier-state.sqlite}"
+STATE_DB="${STATE_DB:-$RUN_DIR/verifier-state.sqlite}"
 POLICY="${POLICY:-$HERE/../../policies/testing.yaml}"
 
 CA_ADDR="${CA_ADDR:-127.0.0.1:8444}"
@@ -82,7 +81,7 @@ done
     echo "missing verifier policy: $POLICY" >&2
     exit 1
 }
-mkdir -p "$RUN_DIR" "$AIK_STORE"
+mkdir -p "$RUN_DIR"
 
 # SHA-256 of the anchor's SPKI: known before enrollment,
 # as the slot is claimed at consent
@@ -160,7 +159,6 @@ echo "== 3/4 start the verifier (trusts only the CA root) =="
     "$verifier" -addr "$VERIFIER_ADDR" \
                 -aik-ca-cert "$CA_DIR/ca.crt" \
                 -cert "$CA_DIR/tls.crt" -key "$CA_DIR/tls.key" \
-                -aik-store "$AIK_STORE" \
                 -state-db "$STATE_DB" \
                 -policy "$POLICY" \
                 -allow-permissive-policy \

@@ -30,8 +30,6 @@ package store
 
 import (
 	"context"
-	"crypto/rand"
-	"crypto/rsa"
 	"database/sql"
 	"errors"
 	"fmt"
@@ -54,7 +52,7 @@ func pgTestDB(t *testing.T) *sql.DB {
 	}
 	t.Cleanup(func() { db.Close() })
 	if _, err := db.Exec(
-		"TRUNCATE clients, baselines, used_nonces, revocations, hardware_bans, audit_log, attestation_log"); err != nil {
+		"TRUNCATE baselines, used_nonces, revocations, hardware_bans, audit_log, attestation_log"); err != nil {
 		t.Fatalf("truncate: %v", err)
 	}
 	return db
@@ -159,92 +157,6 @@ func TestPostgresMigrationsIdempotent(t *testing.T) {
 	}
 	if v != len(pgMigrations) {
 		t.Fatalf("schema version = %d, want %d", v, len(pgMigrations))
-	}
-}
-
-func TestPostgresAIKStore(t *testing.T) {
-	db := pgTestDB(t)
-	s := NewPostgresAIKStore(db)
-
-	k1, _ := rsa.GenerateKey(rand.Reader, 2048)
-	if err := s.RegisterAIK("c1", &k1.PublicKey); err != nil {
-		t.Fatalf("RegisterAIK: %v", err)
-	}
-	if err := s.RegisterAIK("c1", &k1.PublicKey); err != nil {
-		t.Fatalf("RegisterAIK idempotent: %v", err)
-	}
-	// same key, different client -> global uniqueness rejection
-	if err := s.RegisterAIK("c2", &k1.PublicKey); err == nil {
-		t.Fatal("expected ErrAIKAlreadyRegistered for duplicate key")
-	}
-
-	got, err := s.GetAIK("c1")
-	if err != nil || got.N.Cmp(k1.PublicKey.N) != 0 {
-		t.Fatalf("GetAIK: %v", err)
-	}
-
-	var hw [32]byte
-	hw[0] = 0xAB
-	if err := s.RegisterHardwareID("c1", hw); err != nil {
-		t.Fatalf("RegisterHardwareID: %v", err)
-	}
-	var hw2 [32]byte
-	hw2[0] = 0xCD
-	if err := s.RegisterHardwareID("c1", hw2); err != ErrHardwareIDMismatch {
-		t.Fatalf("hardware mismatch: got %v want ErrHardwareIDMismatch", err)
-	}
-
-	k2, _ := rsa.GenerateKey(rand.Reader, 2048)
-	if err := s.RotateAIK("c1", &k2.PublicKey); err != nil {
-		t.Fatalf("RotateAIK: %v", err)
-	}
-	got2, _ := s.GetAIK("c1")
-	if got2.N.Cmp(k2.PublicKey.N) != 0 {
-		t.Fatal("RotateAIK did not replace the key")
-	}
-	if gh, _ := s.GetHardwareID("c1"); gh != hw {
-		t.Fatal("RotateAIK lost the hardware-ID binding")
-	}
-	if n := s.CountClients(); n != 1 {
-		t.Fatalf("CountClients = %d, want 1", n)
-	}
-	if ex, _ := s.ExistingClients([]string{"c1", "cX"}); len(ex) != 1 {
-		t.Fatalf("ExistingClients = %v", ex)
-	}
-
-	// cert-carrying registration delegates to the same uniqueness contract
-	k3, _ := rsa.GenerateKey(rand.Reader, 2048)
-	if err := s.RegisterAIKWithCert("c3", &k3.PublicKey, []byte{0x30}, []byte{0x30}); err != nil {
-		t.Fatalf("RegisterAIKWithCert: %v", err)
-	}
-
-	if cl := s.ListClients(); len(cl) != 2 || cl[0] != "c1" || cl[1] != "c3" {
-		t.Fatalf("ListClients = %v", cl)
-	}
-	if cl := s.ListClientsPage(1, 1); len(cl) != 1 || cl[0] != "c3" {
-		t.Fatalf("ListClientsPage = %v", cl)
-	}
-	if ok, err := s.HasClient("c1"); err != nil || !ok {
-		t.Fatalf("HasClient c1: %v %v", ok, err)
-	}
-	if ok, err := s.HasClient("cX"); err != nil || ok {
-		t.Fatalf("HasClient cX: %v %v", ok, err)
-	}
-
-	// operator-forced re-enrollment:
-	// delete frees the row and the AIK-uniqueness slot,
-	// unknown client maps to ErrAIKNotFound
-	if err := s.DeleteClient("c3"); err != nil {
-		t.Fatalf("DeleteClient: %v", err)
-	}
-	if _, err := s.GetAIK("c3"); !errors.Is(err, ErrAIKNotFound) {
-		t.Fatalf("GetAIK after delete: %v, want ErrAIKNotFound", err)
-	}
-	if err := s.DeleteClient("c3"); !errors.Is(err, ErrAIKNotFound) {
-		t.Fatalf("DeleteClient on unknown client: %v, want ErrAIKNotFound", err)
-	}
-	if err := s.RegisterAIK("c4", &k3.PublicKey); err != nil {
-		t.Fatalf("re-registering the freed AIK failed: %v", err)
 	}
 }
 
@@ -709,7 +621,7 @@ func TestPostgresReadOnlyOpenVerifiesAndWritesNothing(t *testing.T) {
 		defer db.Close()
 
 		var n int
-		if err := db.QueryRow("SELECT count(*) FROM clients").Scan(&n); err != nil {
+		if err := db.QueryRow("SELECT count(*) FROM baselines").Scan(&n); err != nil {
 			t.Fatalf("a read-only open must still be able to read: %v", err)
 		}
 	})

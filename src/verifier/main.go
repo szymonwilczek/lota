@@ -10,8 +10,9 @@
 //   --http-addr ADDR   Listen address for HTTP monitoring API (default: disabled)
 //   --cert FILE        TLS certificate file
 //   --key FILE         TLS private key file
-//   --aik-store PATH   AIK key store directory (default: /var/lib/lota/aiks)
 //   --db PATH          SQLite database for persistent storage (default: disabled)
+//   --state-db PATH    SQLite state without --db or --pg-dsn
+//                      (default: /var/lib/lota/verifier-state.sqlite)
 //   --pg-dsn DSN       PostgreSQL DSN for shared multi-instance storage
 //                      (or LOTA_PG_DSN); mutually exclusive with --db
 //   --policy FILE      PCR policy file (YAML); may be repeated, first is active
@@ -49,7 +50,6 @@ import (
 	"net"
 	"os"
 	"os/signal"
-	"path/filepath"
 	"strings"
 	"syscall"
 	"time"
@@ -87,9 +87,7 @@ var (
 		"How long the monitoring API keeps answering after the attestation listener has closed on shutdown. /health answers 503 degraded for that window, which is what a load balancer reads to stop routing here before the process goes; set it to at least one health-check interval behind one. Zero shuts the API down as soon as it is idle.")
 	certFile     = flag.String("cert", "", "TLS certificate file")
 	keyFile      = flag.String("key", "", "TLS private key file")
-	aikStorePath = flag.String("aik-store", "/var/lib/lota/aiks",
-		"AIK key store directory; the client registry only when no database is configured")
-	dbPath       = flag.String("db", "", "SQLite database path for persistent storage (empty = file/memory stores)")
+	dbPath       = flag.String("db", "", "SQLite database path for all verifier state (empty = --state-db, which keeps no boot baselines)")
 	policyFiles  stringSliceFlag
 	policyPubKey = flag.String("policy-pubkey", "", "Ed25519 public key for policy signature verification (PEM)")
 
@@ -97,7 +95,7 @@ var (
 	logFormat           = flag.String("log-format", "text", "Log output format: text or json")
 	logLevel            = flag.String("log-level", "info", "Minimum log level: debug, info, warn, error, security")
 	requireEventLog     = flag.Bool("require-event-log", true, "Require attestation reports to include a TPM event log (mandatory)")
-	requireCert         = flag.Bool("require-cert", true, "Require Privacy CA trust anchors at startup: refuses to start without --aik-ca-cert and selects the certificate-verifying AIK store. Reports without a CA-issued AIK certificate are always rejected at verification; disabling this only skips the startup validation (INSECURE: a deployment without a certificate-verifying AIK store cannot attest any client)")
+	requireCert         = flag.Bool("require-cert", true, "Require Privacy CA trust anchors at startup: refuses to start without --aik-ca-cert. Reports without a CA-issued AIK certificate are always rejected at verification; disabling this only skips the startup validation (INSECURE: a deployment without a CA root cannot attest any client)")
 	allowTOFUBoot       = flag.Bool("allow-tofu-boot-baseline", false, "INSECURE: allow TOFU first-use of the per-client PCR0/PCR1/PCR7 boot baseline regardless of policy or event-log state. With the default (false), a first-attestation client must be covered by a signed policy that pins PCR0/PCR1/PCR7, be pre-enrolled in the baseline store, or pass the event-log Secure Boot gate of a policy with require_secureboot (the diverse-fleet path); otherwise the report is refused so a host that boots on already-compromised firmware cannot self-pin its tampered baseline.")
 	selfServiceReanchor = flag.Bool("enable-self-service-reanchor", false, "Override every policy's `profile` and force self-service re-anchor on or off. Left unset, each policy decides: profile: consumer enables it, enterprise (and unset) leaves it off. When on, a firmware/Secure Boot PCR drift re-pins the per-device boot baseline automatically if it preserves the Secure Boot root of trust (PK/KEK/db unchanged, dbx append-only, Secure Boot on, firmware version not rolled back), instead of rejecting until an operator clears the row. Only ever takes effect under a policy with require_secureboot.")
 	allowPermissive     = flag.Bool("allow-permissive-policy", false, "INSECURE: allow starting with a permissive PCR policy (no PCR values and no kernel/agent hash allowlists)")
@@ -108,7 +106,7 @@ var (
 	pgDSN               = flag.String("pg-dsn", "", "PostgreSQL DSN for shared multi-instance storage (or LOTA_PG_DSN env); selects the Postgres backend for baseline, nonce, revocation, ban, audit and attestation state. The database must be writable: the verifier applies its schema at startup, so a hot standby is refused. Mutually exclusive with --db.")
 	attestLogWindow     = flag.Duration("attestation-log-window", store.DefaultCollapseWindow, "How long one decision-log row may stand for. A trusted round that repeats what the row standing for that host already says advances it -- last seen, rounds -- instead of writing another row, so the log grows with what happened rather than with how long the fleet stayed up. Refusals, verdict changes and first sightings always get their own row whatever this is set to. Zero writes every round as its own row, which is what a deployment whose retention rule counts rows asks for.")
 	pgMaxOpenConns      = flag.Int("pg-max-open-conns", store.DefaultPGMaxOpenConns, "Maximum open Postgres connections per instance (per shard when sharded). Postgres group-commits concurrent transactions, so a wider pool raises enrollment/attestation burst throughput; keep the value times the instance count under the database's max_connections.")
-	stateDBPath         = flag.String("state-db", "", "SQLite database an instance without --db or --pg-dsn keeps its durable state in: used nonce history, revocations, hardware bans, the audit log and the attestation decision log (defaults to <aik-store>/verifier-state.sqlite); set --allow-insecure-memory-state to keep none of it")
+	stateDBPath         = flag.String("state-db", "/var/lib/lota/verifier-state.sqlite", "SQLite database an instance without --db or --pg-dsn keeps its durable state in: used nonce history, revocations, hardware bans, the audit log and the attestation decision log; set --allow-insecure-memory-state to keep none of it")
 	scopedKeysFile      = flag.String("api-keys-file", "", "YAML file of scoped monitoring-API keys (entries of key_sha256, role: reader|admin, tenants list or * for all); reloaded on SIGHUP. Environment keys keep working with global scope.")
 	allowMemState       = flag.Bool("allow-insecure-memory-state", false, "INSECURE: keep no durable state without a database. The used nonce history lives in memory, so a restart re-opens a replay window, and this instance holds no revocations, bans, audit log or decision log at all -- those endpoints answer 503.")
 	reportOnly          = flag.Bool("report-only", false, "Serve the monitoring API from a database this instance never writes -- a Postgres hot standby or the primary -- with no attestation listener bound and every state-changing endpoint refused. Requires --http-addr and a Postgres DSN; the schema is verified but never applied, so the reporting load that is not the verifier's can be taken off the primary.")
@@ -120,60 +118,28 @@ var (
 // root would be parsed, ignored, and leave the operator believing revocation is live.
 var errCRLWithoutCARoot = errors.New("--aik-crl requires at least one --aik-ca-cert to verify CRL signatures")
 
-// aikStoreParams is everything the AIK-store choice depends on.
-// StorePath is the registry only when no database is configured.
-type aikStoreParams struct {
-	StorePath   string
+// aikVerifierParams is everything the choice of AIK verifier depends on.
+type aikVerifierParams struct {
 	CACerts     []string
 	CRLs        []string
 	RequireCert bool
 }
 
-// selectAIKStore picks the AIK store.
-//
-// registry returns the backend's client store: the database when one is
-// configured, --aik-store otherwise. Without certificate verification it is
-// returned as is (TOFU); with it, the certificate store persists into it.
-//
-// Returned *store.CertificateStore is non-nil exactly when the certificate path
-// was taken; it is the same object on every backend, which is why the caller
-// logs it through one helper.
-func selectAIKStore(p aikStoreParams, registry func() (store.AIKStore, error)) (store.AIKStore, *store.CertificateStore, error) {
-	if len(p.CRLs) > 0 && len(p.CACerts) == 0 {
-		return nil, nil, errCRLWithoutCARoot
+// selectAIKVerifier builds the certificate verifier from the configured roots.
+// Without a root there is nothing to chain to: nil, unless --require-cert
+// refuses that outright.
+func selectAIKVerifier(p aikVerifierParams) (*store.CertificateVerifier, error) {
+	if len(p.CACerts) == 0 {
+		if len(p.CRLs) > 0 {
+			return nil, errCRLWithoutCARoot
+		}
+		if p.RequireCert {
+			return nil, fmt.Errorf("%w: provide one or more --aik-ca-cert PEM paths (the Privacy CA root), or disable --require-cert (INSECURE)",
+				store.ErrNoTrustedCAs)
+		}
+		return nil, nil
 	}
-
-	if p.RequireCert && len(p.CACerts) == 0 {
-		return nil, nil, fmt.Errorf("%w: provide one or more --aik-ca-cert PEM paths (the Privacy CA root), or disable --require-cert (INSECURE)",
-			store.ErrNoTrustedCAs)
-	}
-
-	backend, err := registry()
-	if err != nil {
-		return nil, nil, err
-	}
-
-	if !p.RequireCert && len(p.CACerts) == 0 {
-		return backend, nil, nil
-	}
-
-	cs, err := store.NewCertificateStoreWithBackend(backend, p.CACerts, p.CRLs, p.RequireCert)
-	if err != nil {
-		return nil, nil, err
-	}
-	return cs, cs, nil
-}
-
-// logAIKStore logs the certificate-backed selection and its registry,
-// so "registered_clients" reads as per-instance or fleet-wide.
-// The TOFU fallback is logged by the caller.
-func logAIKStore(logger *slog.Logger, cs *store.CertificateStore, p aikStoreParams, registry string) {
-	logger.Info("certificate-backed AIK store initialized",
-		"registry", registry,
-		"trusted_cas", len(p.CACerts),
-		"loaded_crls", cs.CRLCount(),
-		"require_cert", p.RequireCert,
-		"registered_clients", cs.CountClients())
+	return store.NewCertificateVerifier(p.CACerts, p.CRLs)
 }
 
 // enforcementStores holds operator decisions: revocations, bans, the audit
@@ -312,16 +278,8 @@ func main() {
 	}
 
 	// initialize stores
-	var aikStore store.AIKStore
 	var auditLog store.AuditLog
 	var attestLog store.AttestationLog
-	aikParams := aikStoreParams{
-		StorePath: *aikStorePath,
-		CACerts:   []string(aikCACerts),
-		CRLs:      []string(aikCRLs),
-		// report-only verifies no AIK chain; the store is only read
-		RequireCert: *requireCert && !*reportOnly,
-	}
 	verifierCfg := verify.DefaultConfig()
 	verifierCfg.Logger = logger
 	verifierCfg.Metrics = m
@@ -409,15 +367,32 @@ func main() {
 		os.Exit(1)
 	}
 
+	// report-only verifies no AIK chain
+	certs, err := selectAIKVerifier(aikVerifierParams{
+		CACerts:     []string(aikCACerts),
+		CRLs:        []string(aikCRLs),
+		RequireCert: *requireCert && !*reportOnly,
+	})
+	if err != nil {
+		logger.Error("failed to initialize AIK certificate verification", "error", err)
+		os.Exit(1)
+	}
+	var aikVerifier store.AIKCertVerifier
+	if certs != nil {
+		aikVerifier = certs
+		logger.Info("AIK certificate verification initialized",
+			"trusted_cas", len(aikCACerts),
+			"loaded_crls", certs.CRLCount())
+	} else if !*reportOnly {
+		logger.Warn("INSECURE: no attestation-CA root configured; every report will be refused",
+			"hint", "set --aik-ca-cert to verify AIK certificate chains")
+	}
+
 	if usePostgres {
 		// Postgres backend: shared, multi-instance state for deployments
 		// behind a load balancer.
 		// Mutable enforcement, baseline and nonce state lives in Postgres
 		// so any instance sees writes made by any peer.
-		//
-		// Unlike the SQLite --db block, this path supports the
-		// certificate-backed AIK store, so a production --require-cert fleet
-		// can run several verifier instances against one database
 		//
 		// With --pg-shard-dsn the per-client baseline, nonce and session state
 		// is partitioned across the given databases;
@@ -492,7 +467,6 @@ func main() {
 		}
 
 		defer closeShards()
-		// control database also anchors the AIK/certificate flow below
 		db := dbs[0]
 
 		if len(dbs) == 1 {
@@ -517,24 +491,6 @@ func main() {
 		auditLog = enforcement.audit
 		attestLog = enforcement.attestations
 
-		// AIK store: certificate-backed when the deployment verifies chains
-		// (the production default), otherwise a shared TOFU store in Postgres
-		selected, aikCertStore, aikErr := selectAIKStore(aikParams, func() (store.AIKStore, error) {
-			return store.NewPostgresAIKStore(db), nil
-		})
-		if aikErr != nil {
-			logger.Error("failed to initialize the AIK store", "error", aikErr)
-			//nolint:gocritic // startup abort before any DB write; the OS reclaims the handle
-			os.Exit(1)
-		}
-		aikStore = selected
-		if aikCertStore != nil {
-			logAIKStore(logger, aikCertStore, aikParams, "postgres")
-		} else {
-			logger.Warn("INSECURE: Postgres TOFU AIK store initialized without certificate verification",
-				"hint", "set --require-cert and --aik-ca-cert to verify AIK certificate chains")
-		}
-
 		ver, err := store.SchemaVersion(db)
 		if err != nil {
 			logger.Warn("failed to read Postgres schema version", "error", err)
@@ -548,24 +504,6 @@ func main() {
 			os.Exit(1)
 		}
 		defer db.Close()
-
-		// AIK store: certificate-backed when the deployment verifies chains,
-		// otherwise TOFU; the registry is in SQLite either way
-		selected, aikCertStore, aikErr := selectAIKStore(aikParams, func() (store.AIKStore, error) {
-			return store.NewSQLiteAIKStore(db), nil
-		})
-		if aikErr != nil {
-			logger.Error("failed to initialize the AIK store", "error", aikErr)
-			//nolint:gocritic // startup abort before any attestation is served; the OS reclaims the handle
-			os.Exit(1)
-		}
-		aikStore = selected
-		if aikCertStore != nil {
-			logAIKStore(logger, aikCertStore, aikParams, *dbPath)
-		} else {
-			logger.Warn("INSECURE: SQLite TOFU AIK store initialized without certificate verification",
-				"hint", "set --require-cert and --aik-ca-cert to verify AIK certificate chains")
-		}
 
 		verifierCfg.BaselineStore = verify.NewSQLiteBaselineStore(db)
 		verifierCfg.UsedNonceBackend = verify.NewSQLiteUsedNonceBackend(db)
@@ -587,9 +525,6 @@ func main() {
 		// forgets a ban
 		if !*allowMemState {
 			path := *stateDBPath
-			if path == "" {
-				path = filepath.Join(*aikStorePath, "verifier-state.sqlite")
-			}
 			db, err := store.OpenDB(path)
 			if err != nil {
 				logger.Error("failed to open the state database (required for anti-replay and enforcement persistence)",
@@ -614,33 +549,16 @@ func main() {
 				"nonce_lifetime", verifierCfg.NonceLifetime,
 				"api", "revocation, ban, audit and attestation endpoints answer 503")
 		}
-
-		// file-based AIK store (optionally certificate-backed)
-		selected, aikCertStore, aikErr := selectAIKStore(aikParams, func() (store.AIKStore, error) {
-			return store.NewFileStore(*aikStorePath)
-		})
-		if aikErr != nil {
-			logger.Error("failed to initialize the AIK store", "path", *aikStorePath, "error", aikErr)
-			//nolint:gocritic // startup abort before any attestation is served; the OS reclaims the handle
-			os.Exit(1)
-		}
-		aikStore = selected
-		if aikCertStore != nil {
-			logAIKStore(logger, aikCertStore, aikParams, *aikStorePath)
-		} else {
-			logger.Info("file-based AIK store initialized",
-				"path", *aikStorePath, "registered_clients", len(selected.ListClients()))
-		}
-
 	}
 
-	verifier := verify.NewVerifier(verifierCfg, aikStore)
+	verifier := verify.NewVerifier(verifierCfg, aikVerifier)
 
 	// policy signature verification key
 	if *policyPubKey != "" {
 		pubKey, err := verify.LoadPolicyPublicKey(*policyPubKey)
 		if err != nil {
 			logger.Error("failed to load policy public key", "path", *policyPubKey, "error", err)
+			//nolint:gocritic // startup abort before any attestation is served; the OS reclaims the handle
 			os.Exit(1)
 		}
 		verifier.SetPolicyPublicKey(pubKey)
@@ -735,17 +653,9 @@ func main() {
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP)
 
-	// crlReloader is non-nil only when the operator booted with a
-	// certificate-backed AIK store; that is also the only path that
-	// loaded any CRLs. SIGHUP re-runs the same load+verify gates as
-	// startup and atomically swaps the active set on success, leaving
-	// the existing set in place when the refresh fails.
-	type crlReloader interface{ ReloadCRLs() error }
-	var reloader crlReloader
-	if r, ok := aikStore.(crlReloader); ok {
-		reloader = r
-	}
-
+	// Only a verifier with a root loaded any CRLs. SIGHUP re-runs the same
+	// load+verify gates as startup and atomically swaps the active set on
+	// success, leaving the existing set in place when the refresh fails.
 	for sig := range sigCh {
 		switch sig {
 		case syscall.SIGHUP:
@@ -754,21 +664,17 @@ func main() {
 					logger.Error("SIGHUP: API key reload failed; keeping previous set", "error", err)
 				}
 			}
-			if reloader == nil {
+			if certs == nil {
 				if *scopedKeysFile == "" {
-					logger.Warn("SIGHUP: no certificate-backed CRL store configured; nothing to reload")
+					logger.Warn("SIGHUP: no CRL feed configured; nothing to reload")
 				}
 				continue
 			}
-			if err := reloader.ReloadCRLs(); err != nil {
+			if err := certs.ReloadCRLs(); err != nil {
 				logger.Error("SIGHUP: CRL reload failed; keeping previous set", "error", err)
 				continue
 			}
-			if cs, ok := aikStore.(interface{ CRLCount() int }); ok {
-				logger.Info("SIGHUP: CRL feed reloaded", "loaded_crls", cs.CRLCount())
-			} else {
-				logger.Info("SIGHUP: CRL feed reloaded")
-			}
+			logger.Info("SIGHUP: CRL feed reloaded", "loaded_crls", certs.CRLCount())
 		default:
 			logger.Info("shutting down", "signal", sig.String())
 			srv.Stop()

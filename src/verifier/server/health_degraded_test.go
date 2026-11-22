@@ -14,7 +14,6 @@ import (
 
 	"github.com/szymonwilczek/lota/verifier/logging"
 	"github.com/szymonwilczek/lota/verifier/metrics"
-	"github.com/szymonwilczek/lota/verifier/store"
 	"github.com/szymonwilczek/lota/verifier/verify"
 )
 
@@ -50,7 +49,7 @@ func startHealthServer(t *testing.T, drain time.Duration) (*Server, string) {
 	vcfg := verify.DefaultConfig()
 	vcfg.RequireBootEnrollment = false
 	vcfg.Metrics = cfg.Metrics
-	v := verify.NewVerifier(vcfg, store.NewMemoryStore())
+	v := verify.NewVerifier(vcfg, nil)
 
 	srv, err := NewServer(cfg, v)
 	if err != nil {

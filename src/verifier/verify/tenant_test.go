@@ -82,8 +82,8 @@ func TestValidTenantName(t *testing.T) {
 func attestWithCertOUs(t *testing.T, clientID string, ous []string) (*types.VerifyResult, error) {
 	t.Helper()
 
-	aikStore := newCertStore(t)
-	verifier := createTestVerifier(t, aikStore)
+	aikVerifier := newCertVerifier(t)
+	verifier := createTestVerifier(t, aikVerifier)
 
 	challenge, err := verifier.GenerateChallenge(clientID)
 	if err != nil {
@@ -104,8 +104,8 @@ func attestWithCertOUs(t *testing.T, clientID string, ous []string) (*types.Veri
 func attestVerifierWithCertOUs(t *testing.T, clientID string, ous []string) (*Verifier, *types.VerifyResult, error) {
 	t.Helper()
 
-	aikStore := newCertStore(t)
-	verifier := createTestVerifier(t, aikStore)
+	aikVerifier := newCertVerifier(t)
+	verifier := createTestVerifier(t, aikVerifier)
 
 	challenge, err := verifier.GenerateChallenge(clientID)
 	if err != nil {
@@ -259,7 +259,7 @@ func attestWithBanStore(t *testing.T, clientID string, ous []string, bans store.
 	cfg.RequireBootEnrollment = false
 	cfg.NonceLifetime = 1 * time.Second
 	cfg.BanStore = bans
-	verifier := NewVerifier(cfg, newCertStore(t))
+	verifier := NewVerifier(cfg, newCertVerifier(t))
 	if err := verifier.AddPolicy(DefaultPolicy()); err != nil {
 		t.Fatalf("AddPolicy(DefaultPolicy) failed: %v", err)
 	}
@@ -351,7 +351,7 @@ func TestIntegration_TenantOnAttestationLog(t *testing.T) {
 	cfg.RequireBootEnrollment = false
 	cfg.NonceLifetime = 1 * time.Second
 	cfg.AttestationLog = attestLog
-	verifier := NewVerifier(cfg, newCertStore(t))
+	verifier := NewVerifier(cfg, newCertVerifier(t))
 	if err := verifier.AddPolicy(DefaultPolicy()); err != nil {
 		t.Fatalf("AddPolicy(DefaultPolicy) failed: %v", err)
 	}
@@ -452,7 +452,7 @@ func attestWithTenantPolicy(t *testing.T, clientID string, ous []string) (*types
 	cfg := DefaultConfig()
 	cfg.RequireBootEnrollment = false
 	cfg.NonceLifetime = 1 * time.Second
-	verifier := NewVerifier(cfg, newCertStore(t))
+	verifier := NewVerifier(cfg, newCertVerifier(t))
 
 	if err := verifier.AddPolicy(DefaultPolicy()); err != nil {
 		t.Fatalf("AddPolicy(DefaultPolicy) failed: %v", err)

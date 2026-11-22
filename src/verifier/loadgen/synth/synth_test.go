@@ -4,7 +4,7 @@
 //
 // Load numbers are only meaningful if the synthetic reports walk the same
 // verification path a real agent does, so the core test drives production-configured
-// Verifier (certificate-verifying AIK store, default strict config, the generated rig
+// Verifier (certificate verifier, default strict config, the generated rig
 // policy loaded from YAML) and requires VERIFY_OK end to end
 
 package synth
@@ -23,7 +23,7 @@ import (
 )
 
 // newRigVerifier builds a Verifier exactly the way src/verifier/main.go does for production:
-// certificate-verifying AIK store trusting the rig CA,
+// certificate verifier trusting the rig CA,
 // strict DefaultConfig,
 // rig policy loaded from generated YAML
 func newRigVerifier(t *testing.T, fleet *Fleet) *verify.Verifier {
@@ -34,12 +34,12 @@ func newRigVerifier(t *testing.T, fleet *Fleet) *verify.Verifier {
 	if err := os.WriteFile(caPath, fleet.CA.CertPEM(), 0o600); err != nil {
 		t.Fatalf("write CA cert: %v", err)
 	}
-	aikStore, err := store.NewCertificateStore(filepath.Join(dir, "aiks"), []string{caPath}, true)
+	aikVerifier, err := store.NewCertificateVerifier([]string{caPath}, nil)
 	if err != nil {
-		t.Fatalf("NewCertificateStore: %v", err)
+		t.Fatalf("NewCertificateVerifier: %v", err)
 	}
 
-	v := verify.NewVerifier(verify.DefaultConfig(), aikStore)
+	v := verify.NewVerifier(verify.DefaultConfig(), aikVerifier)
 	t.Cleanup(v.Close)
 
 	policyYAML, err := fleet.PolicyYAML()

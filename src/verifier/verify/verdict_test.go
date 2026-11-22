@@ -28,7 +28,7 @@ func TestBaselineStoreFailureIsNotAnIntegrityVerdict(t *testing.T) {
 	cfg.RequireBootEnrollment = false
 	cfg.BaselineStore = baseOnlyStore{NewBaselineStore()}
 
-	v := NewVerifier(cfg, newCertStore(t))
+	v := NewVerifier(cfg, newCertVerifier(t))
 	if err := v.AddPolicy(DefaultPolicy()); err != nil {
 		t.Fatalf("AddPolicy: %v", err)
 	}
@@ -210,7 +210,7 @@ func TestTruncatedReportIsNotAnOldAgent(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			verifier := createTestVerifier(t, newCertStore(t))
+			verifier := createTestVerifier(t, newCertVerifier(t))
 
 			clientID := "malformed-report-client"
 			challenge, err := verifier.GenerateChallenge(clientID)
@@ -449,10 +449,31 @@ func TestRequirementRefusalNamesTheRequirement(t *testing.T) {
 	}
 }
 
+// With no attestation-CA root nothing can vouch for an AIK, and the fault is
+// the verifier's: the host must not be told its evidence was bad.
+func TestVerifierWithoutCARootRefusesAsItsOwnFault(t *testing.T) {
+	verifier := createTestVerifier(t, nil)
+
+	clientID := "no-ca-root-client"
+	challenge, err := verifier.GenerateChallenge(clientID)
+	if err != nil {
+		t.Fatalf("GenerateChallenge: %v", err)
+	}
+
+	result, verr := verifier.VerifyReport(clientID,
+		createValidReport(t, clientID, challenge.Nonce, [32]byte{}))
+	if verr == nil {
+		t.Fatal("a verifier with no CA root attested a report")
+	}
+	if result == nil || result.Result != types.VerifyInternalError {
+		t.Fatalf("result %+v, want the internal-error verdict", result)
+	}
+}
+
 // A profile with no certificate on disk reports without one.
 func TestReportWithoutAIKCertificateNamesTheAbsentCertificate(t *testing.T) {
-	aikStore := newCertStore(t)
-	verifier := createTestVerifier(t, aikStore)
+	aikVerifier := newCertVerifier(t)
+	verifier := createTestVerifier(t, aikVerifier)
 
 	clientID := "cert-absent-client"
 	challenge, err := verifier.GenerateChallenge(clientID)

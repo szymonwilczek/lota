@@ -89,8 +89,8 @@ one is made against it.
 A verifier holds them whenever it has somewhere durable to keep them, which
 is every ordinary deployment: ``--pg-dsn`` puts them in the shared database
 the fleet serves from, ``--db`` in that SQLite file, and an instance given
-neither keeps them beside its AIK store in ``--state-db`` (default
-``<aik-store>/verifier-state.sqlite``), which is the same file its used-nonce
+neither keeps them in ``--state-db`` (default
+``/var/lib/lota/verifier-state.sqlite``), which is the same file its used-nonce
 history lives in. Only ``--allow-insecure-memory-state`` leaves the group
 absent, and that flag says what it does: the instance keeps nothing across a
 restart, so it refuses to take a decision it would forget.
@@ -426,8 +426,7 @@ Revocations and hardware bans survive the delete. Body: ``reason`` and
 
    {"status": "deleted", "client_id": "host-0001"}
 
-**400** invalid client ID or missing actor or reason, **404** unknown
-client. Writes an audit entry with action ``delete_client``.
+**400** missing actor or reason, **404** unknown client. Writes an audit entry with action ``delete_client``.
 
 GET /api/v1/reanchor/review
 ---------------------------

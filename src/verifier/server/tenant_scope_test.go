@@ -5,8 +5,6 @@
 package server
 
 import (
-	"crypto/rand"
-	"crypto/rsa"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -36,29 +34,18 @@ func newScopedAPIFixture(t *testing.T, scopedKeyHash string) *scopedAPIFixture {
 	revStore := store.NewMemoryRevocationStore(auditLog)
 	banStore := store.NewMemoryBanStore(auditLog)
 
-	// memory AIK store so ListClients surfaces the seeded clients
-	// the same way an attested fleet would
-	aikStore := store.NewMemoryStore()
-
 	cfg := verify.DefaultConfig()
 	cfg.RequireBootEnrollment = false
 	cfg.BaselineStore = baseline
 	cfg.RevocationStore = revStore
 	cfg.BanStore = banStore
-	v := verify.NewVerifier(cfg, aikStore)
+	v := verify.NewVerifier(cfg, nil)
 	if err := v.AddPolicy(verify.DefaultPolicy()); err != nil {
 		t.Fatalf("AddPolicy(DefaultPolicy): %v", err)
 	}
 
 	// two clients, one per tenant
 	seed := func(clientID, tenant string) {
-		key, err := rsa.GenerateKey(rand.Reader, 2048)
-		if err != nil {
-			t.Fatalf("seed key: %v", err)
-		}
-		if err := aikStore.RegisterAIK(clientID, &key.PublicKey); err != nil {
-			t.Fatalf("RegisterAIK(%s): %v", clientID, err)
-		}
 		var pcr14 [32]byte
 		pcr14[0] = byte(len(clientID))
 		if res, _ := baseline.CheckAndUpdate(clientID, pcr14); res != verify.TOFUFirstUse {

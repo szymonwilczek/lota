@@ -69,7 +69,7 @@ without any TOFU opt-out::
 
    lota-verifier -addr :8443 -generate-cert \
      -aik-ca-cert rig/ca.crt -policy rig/policy.yaml \
-     -aik-store /var/tmp/loadtest-aiks
+     -state-db /var/tmp/loadtest-state.sqlite
 
 .. warning::
 
@@ -84,12 +84,12 @@ without any TOFU opt-out::
 
    ``--db`` (single-file SQLite backend) runs the rig, but one process
    serializing writes to one file is not the write tier the numbers
-   describe. Use the default file-backed stores as above, or
+   describe. Use ``-state-db`` as above, or
    ``--pg-dsn`` for the shared Postgres backend -- the Postgres rig is
    the configuration the scale and failover numbers are recorded
-   against. With a database configured the client registry lives there
+   against. With a database configured the client inventory lives there
    too, so a multi-instance rig reports one fleet through whichever
-   instance is asked, and ``--aik-store`` is not needed at all.
+   instance is asked.
 
 Run modes
 =========

@@ -368,7 +368,7 @@ func marshalRSAPublicKey(pub *rsa.PublicKey) []byte {
 }
 
 // creates a Verifier with default policy for testing
-func createTestVerifier(t *testing.T, aikStore store.AIKStore) *Verifier {
+func createTestVerifier(t *testing.T, aikVerifier store.AIKCertVerifier) *Verifier {
 	t.Helper()
 	cfg := DefaultConfig()
 	// Fixtures carry no signed policy pinning PCR0/1/7 and
@@ -376,7 +376,7 @@ func createTestVerifier(t *testing.T, aikStore store.AIKStore) *Verifier {
 	// as operator running with --allow-tofu-boot-baseline
 	cfg.RequireBootEnrollment = false
 	cfg.NonceLifetime = 1 * time.Second
-	verifier := NewVerifier(cfg, aikStore)
+	verifier := NewVerifier(cfg, aikVerifier)
 
 	// default policy that allows any values
 	if err := verifier.AddPolicy(DefaultPolicy()); err != nil {
@@ -393,8 +393,8 @@ func TestIntegration_FullAttestationFlow_TOFU(t *testing.T) {
 	t.Log("INTEGRATION TEST: Full attestation flow with TOFU")
 	t.Log("Simulates first-time client attestation")
 
-	aikStore := newCertStore(t)
-	verifier := createTestVerifier(t, aikStore)
+	aikVerifier := newCertVerifier(t)
+	verifier := createTestVerifier(t, aikVerifier)
 
 	clientID := "test-client-001"
 
@@ -424,9 +424,9 @@ func TestIntegration_FullAttestationFlow_TOFU(t *testing.T) {
 func TestIntegration_SubsequentAttestation(t *testing.T) {
 	t.Log("INTEGRATION TEST: Subsequent attestation with registered AIK")
 
-	aikStore := newCertStore(t)
+	aikVerifier := newCertVerifier(t)
 
-	verifier := createTestVerifier(t, aikStore)
+	verifier := createTestVerifier(t, aikVerifier)
 
 	clientID := "test-client"
 
@@ -454,9 +454,9 @@ func TestIntegration_PCR14BaselineViolation(t *testing.T) {
 	t.Log("INTEGRATION TEST: PCR14 baseline violation detection")
 	t.Log("CRITICAL SECURITY TEST: Detects agent tampering")
 
-	aikStore := newCertStore(t)
+	aikVerifier := newCertVerifier(t)
 
-	verifier := createTestVerifier(t, aikStore)
+	verifier := createTestVerifier(t, aikVerifier)
 
 	clientID := "compromised-client"
 
@@ -501,9 +501,9 @@ func TestIntegration_NonceReplayAttack(t *testing.T) {
 	t.Log("INTEGRATION TEST: Nonce replay attack detection")
 	t.Log("CRITICAL SECURITY TEST: Prevents attestation replay")
 
-	aikStore := newCertStore(t)
+	aikVerifier := newCertVerifier(t)
 
-	verifier := createTestVerifier(t, aikStore)
+	verifier := createTestVerifier(t, aikVerifier)
 	clientID := "replay-victim"
 	challenge, _ := verifier.GenerateChallenge(clientID)
 	pcr14 := fixturePCR14()
@@ -532,8 +532,8 @@ func TestIntegration_NonceReplayAttack(t *testing.T) {
 func TestIntegration_InvalidSignature(t *testing.T) {
 	t.Log("INTEGRATION TEST: Invalid signature rejection")
 
-	aikStore := newCertStore(t)
-	verifier := createTestVerifier(t, aikStore)
+	aikVerifier := newCertVerifier(t)
+	verifier := createTestVerifier(t, aikVerifier)
 
 	clientID := "wrong-key-client"
 
@@ -561,8 +561,8 @@ func TestIntegration_InvalidSignature(t *testing.T) {
 func TestIntegration_ConcurrentClients(t *testing.T) {
 	t.Log("INTEGRATION TEST: Concurrent client attestations")
 
-	aikStore := newCertStore(t)
-	verifier := createTestVerifier(t, aikStore)
+	aikVerifier := newCertVerifier(t)
+	verifier := createTestVerifier(t, aikVerifier)
 
 	// generate keys for multiple clients
 	numClients := 10
@@ -626,8 +626,8 @@ func TestIntegration_ConcurrentClients(t *testing.T) {
 func TestIntegration_ConcurrentFirstAttestationSameClient(t *testing.T) {
 	t.Log("INTEGRATION TEST: Concurrent first attestation (same hardware)")
 
-	aikStore := newCertStore(t)
-	verifier := createTestVerifier(t, aikStore)
+	aikVerifier := newCertVerifier(t)
+	verifier := createTestVerifier(t, aikVerifier)
 
 	// both goroutines represent the same hardware identity
 	hardwareLabel := "same-hardware-client"
@@ -826,8 +826,8 @@ func createValidReportWithKey(clientID string, nonce [32]byte, pcr14 [32]byte, k
 func TestIntegration_ChallengePCRMask(t *testing.T) {
 	t.Log("TEST: Challenge contains correct PCR mask")
 
-	aikStore := newCertStore(t)
-	verifier := createTestVerifier(t, aikStore)
+	aikVerifier := newCertVerifier(t)
+	verifier := createTestVerifier(t, aikVerifier)
 
 	challenge, err := verifier.GenerateChallenge("pcr-test-client")
 	if err != nil {
@@ -850,12 +850,12 @@ func TestIntegration_ChallengePCRMask(t *testing.T) {
 // is rejected with VerifyPCRFail before the BootBaselineStorer pin is consulted.
 // There is no configuration that accepts such report.
 func TestVerify_RejectsMissingBootPCRs(t *testing.T) {
-	aikStore := newCertStore(t)
+	aikVerifier := newCertVerifier(t)
 
 	cfg := DefaultConfig()
 	cfg.NonceLifetime = 1 * time.Second
 
-	verifier := NewVerifier(cfg, aikStore)
+	verifier := NewVerifier(cfg, aikVerifier)
 	if err := verifier.AddPolicy(DefaultPolicy()); err != nil {
 		t.Fatalf("AddPolicy(DefaultPolicy): %v", err)
 	}
@@ -901,7 +901,7 @@ func TestVerify_RejectsMissingBootCommitment(t *testing.T) {
 func assertFlagRejected(t *testing.T, clientID string, flags uint32, wantMsg string) {
 	t.Helper()
 
-	verifier := createTestVerifier(t, newCertStore(t))
+	verifier := createTestVerifier(t, newCertVerifier(t))
 
 	challenge, err := verifier.GenerateChallenge(clientID)
 	if err != nil {
@@ -929,7 +929,7 @@ func assertFlagRejected(t *testing.T, clientID string, flags uint32, wantMsg str
 // measurement below it -- the PCR 0/1/7 pin, the Secure Boot state, PCR 14
 // baseline -- would be unauthenticated
 func TestVerify_RejectsNonUEFIBoot(t *testing.T) {
-	verifier := createTestVerifier(t, newCertStore(t))
+	verifier := createTestVerifier(t, newCertVerifier(t))
 
 	clientID := "bios-host"
 	challenge, err := verifier.GenerateChallenge(clientID)
@@ -1031,7 +1031,7 @@ func TestVerify_BootEnrollmentGateOptOutAllowsTOFU(t *testing.T) {
 func attestUnderConfig(t *testing.T, cfg VerifierConfig, clientID string) (*types.VerifyResult, error) {
 	t.Helper()
 
-	verifier := NewVerifier(cfg, newCertStore(t))
+	verifier := NewVerifier(cfg, newCertVerifier(t))
 	if err := verifier.AddPolicy(DefaultPolicy()); err != nil {
 		t.Fatalf("AddPolicy(DefaultPolicy): %v", err)
 	}
@@ -1051,14 +1051,13 @@ func attestUnderConfig(t *testing.T, cfg VerifierConfig, clientID string) (*type
 // Client whose PCR14 baseline is on record must be visible through ClientInfo
 // even when the nonce store holds no history for it:
 // the monotonic counter starts at zero after a verifier restart with the
-// in-memory nonce backend, and the Privacy CA flow records nothing in the AIK store
-// (the certificate presented per attestation is the trust anchor).
+// in-memory nonce backend.
 // Such client is listed by ListClients but the per-client lookup reported it as not found.
 func TestClientInfo_BaselineOnlyClientIsFound(t *testing.T) {
 	baselines := NewBaselineStore()
 	cfg := DefaultConfig()
 	cfg.BaselineStore = baselines
-	verifier := NewVerifier(cfg, store.NewMemoryStore())
+	verifier := NewVerifier(cfg, nil)
 
 	var pcr14 [types.HashSize]byte
 	pcr14[0] = 0x42
@@ -1120,8 +1119,8 @@ func mokPCR14Baseline(mok []byte) [types.HashSize]byte {
 // agrees with itself -- the only thing that can catch the change is the register
 // the client pinned on the round before.
 func TestVerify_MOKChangeIsRefusedAgainstThePinnedRegister(t *testing.T) {
-	aikStore := newCertStore(t)
-	verifier := createTestVerifier(t, aikStore)
+	aikVerifier := newCertVerifier(t)
+	verifier := createTestVerifier(t, aikVerifier)
 
 	clientID := "mok-client"
 

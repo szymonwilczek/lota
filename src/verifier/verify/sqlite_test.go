@@ -584,13 +584,13 @@ func TestSQLiteIntegration_FullFlow(t *testing.T) {
 	}
 	defer db.Close()
 
-	aikStore := newCertStore(t)
+	aikVerifier := newCertVerifier(t)
 	cfg := DefaultConfig()
 	cfg.RequireBootEnrollment = false
 	cfg.BaselineStore = NewSQLiteBaselineStore(db)
 	cfg.UsedNonceBackend = NewSQLiteUsedNonceBackend(db)
 
-	verifier := NewVerifier(cfg, aikStore)
+	verifier := NewVerifier(cfg, aikVerifier)
 	if err := verifier.AddPolicy(DefaultPolicy()); err != nil {
 		t.Fatalf("AddPolicy(DefaultPolicy): %v", err)
 	}
@@ -646,7 +646,7 @@ func TestSQLiteIntegration_ReplayAfterRestart(t *testing.T) {
 	pcr14 := sqliteFixturePCR14()
 
 	// first verifier instance
-	aikStore1 := newCertStore(t)
+	aikStore1 := newCertVerifier(t)
 	cfg1 := DefaultConfig()
 	cfg1.RequireBootEnrollment = false
 	cfg1.BaselineStore = NewSQLiteBaselineStore(db)
@@ -670,7 +670,7 @@ func TestSQLiteIntegration_ReplayAfterRestart(t *testing.T) {
 	t.Log("✓ First attestation succeeded")
 
 	// new verifier with same DB
-	aikStore2 := newCertStore(t)
+	aikStore2 := newCertVerifier(t)
 	cfg2 := DefaultConfig()
 
 	cfg2.RequireBootEnrollment = false
@@ -710,7 +710,7 @@ func TestSQLiteIntegration_BaselineSurvivesRestart(t *testing.T) {
 	tamperedPCR14 := [32]byte{0xFF, 0xFF}
 
 	// establish baseline
-	aikStore1 := newCertStore(t)
+	aikStore1 := newCertVerifier(t)
 	cfg1 := DefaultConfig()
 	cfg1.RequireBootEnrollment = false
 	cfg1.BaselineStore = NewSQLiteBaselineStore(db)
@@ -733,7 +733,7 @@ func TestSQLiteIntegration_BaselineSurvivesRestart(t *testing.T) {
 	t.Log("✓ Baseline established")
 
 	// new verifier with same DB
-	aikStore2 := newCertStore(t)
+	aikStore2 := newCertVerifier(t)
 	cfg2 := DefaultConfig()
 
 	cfg2.RequireBootEnrollment = false
@@ -778,13 +778,13 @@ func TestSQLiteIntegration_ConcurrentAttestations(t *testing.T) {
 	db.SetMaxOpenConns(1)
 	db.SetMaxIdleConns(1)
 
-	aikStore := newCertStore(t)
+	aikVerifier := newCertVerifier(t)
 	cfg := DefaultConfig()
 	cfg.RequireBootEnrollment = false
 	cfg.BaselineStore = NewSQLiteBaselineStore(db)
 	cfg.UsedNonceBackend = NewSQLiteUsedNonceBackend(db)
 
-	verifier := NewVerifier(cfg, aikStore)
+	verifier := NewVerifier(cfg, aikVerifier)
 	if err := verifier.AddPolicy(DefaultPolicy()); err != nil {
 		t.Fatalf("AddPolicy(DefaultPolicy): %v", err)
 	}

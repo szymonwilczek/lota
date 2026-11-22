@@ -221,7 +221,6 @@ EOF
 %license LICENSE
 %{_bindir}/lota-verifier
 %dir %attr(0700,root,root) %{_sharedstatedir}/lota
-%dir %attr(0700,root,root) %{_sharedstatedir}/lota/aiks
 
 %files attest-ca
 %license LICENSE

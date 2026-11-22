@@ -22,7 +22,7 @@ func attestWithLog(t *testing.T, clientID string, bans store.BanStore,
 	cfg.NonceLifetime = 1 * time.Second
 	cfg.BanStore = bans
 	cfg.AttestationLog = attestLog
-	verifier := NewVerifier(cfg, newCertStore(t))
+	verifier := NewVerifier(cfg, newCertVerifier(t))
 	if err := verifier.AddPolicy(DefaultPolicy()); err != nil {
 		t.Fatalf("AddPolicy(DefaultPolicy) failed: %v", err)
 	}

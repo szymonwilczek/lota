@@ -25,12 +25,8 @@ contents:
     dst: /usr/bin/lota-verifier
     file_info:
       mode: 0755
-  # default --aik-store and its parent
+  # parent of the default --state-db
   - dst: /var/lib/lota
-    type: dir
-    file_info:
-      mode: 0700
-  - dst: /var/lib/lota/aiks
     type: dir
     file_info:
       mode: 0700

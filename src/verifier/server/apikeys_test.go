@@ -98,13 +98,13 @@ func TestLoadAPIKeysFileRejectsInvalid(t *testing.T) {
 func newScopedKeyAPI(t *testing.T, set *APIKeySet) *http.ServeMux {
 	t.Helper()
 
-	aikStore := newCertStore(t)
+	aikVerifier := newCertVerifier(t)
 	cfg := verify.DefaultConfig()
 	cfg.RequireBootEnrollment = false
 	auditLog := store.NewMemoryAuditLog()
 	cfg.RevocationStore = store.NewMemoryRevocationStore(auditLog)
 	cfg.BanStore = store.NewMemoryBanStore(auditLog)
-	v := verify.NewVerifier(cfg, aikStore)
+	v := verify.NewVerifier(cfg, aikVerifier)
 	if err := v.AddPolicy(verify.DefaultPolicy()); err != nil {
 		t.Fatalf("AddPolicy(DefaultPolicy) failed: %v", err)
 	}

@@ -61,7 +61,7 @@ spec:
             - --require-cert={{ .Values.requireCert }}
             - --cert={{ .Values.tls.mountPath }}/tls.crt
             - --key={{ .Values.tls.mountPath }}/tls.key
-            - --aik-store={{ .Values.dataDir }}/aiks
+            - --state-db={{ .Values.dataDir }}/verifier-state.sqlite
             {{- if .Values.aikCA.existingSecret }}
             {{- range .Values.aikCA.files }}
             - --aik-ca-cert={{ $.Values.aikCA.mountPath }}/{{ . }}

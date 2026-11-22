@@ -2,7 +2,7 @@
 // Copyright (C) 2026 Szymon Wilczek
 // Shared test fixtures for the Privacy CA attestation model: a test
 // attestation CA that issues AIK certificates whose subject carries the
-// device pseudonym, and a certificate-verifying AIK store that trusts it.
+// device pseudonym, and a certificate verifier that trusts it.
 
 package verify
 
@@ -83,9 +83,9 @@ func issueAIKCertOrPanic(pseudonym string, aikPub *rsa.PublicKey) []byte {
 	return der
 }
 
-// newCertStore returns a certificate-verifying AIK store that trusts the
+// newCertVerifier returns a certificate verifier that trusts the
 // test attestation CA, the production-shaped trust anchor.
-func newCertStore(t *testing.T) store.AIKStore {
+func newCertVerifier(t *testing.T) store.AIKCertVerifier {
 	t.Helper()
 	dir := t.TempDir()
 	caPath := filepath.Join(dir, "ca.pem")
@@ -93,9 +93,9 @@ func newCertStore(t *testing.T) store.AIKStore {
 	if err := os.WriteFile(caPath, pemBytes, 0o600); err != nil {
 		t.Fatalf("write test CA: %v", err)
 	}
-	cs, err := store.NewCertificateStore(filepath.Join(dir, "store"), []string{caPath}, true)
+	cs, err := store.NewCertificateVerifier([]string{caPath}, nil)
 	if err != nil {
-		t.Fatalf("NewCertificateStore: %v", err)
+		t.Fatalf("NewCertificateVerifier: %v", err)
 	}
 	return cs
 }

@@ -14,8 +14,8 @@ import (
 // certificate chain is the verifier's sole AIK trust anchor, so an agent
 // that has not enrolled with the attestation CA cannot attest.
 func TestRequireCert_RejectsReportWithoutAIKCertificate(t *testing.T) {
-	aikStore := newCertStore(t)
-	verifier := createTestVerifier(t, aikStore)
+	aikVerifier := newCertVerifier(t)
+	verifier := createTestVerifier(t, aikVerifier)
 
 	clientID := "no-cert-client"
 	challenge, err := verifier.GenerateChallenge(clientID)

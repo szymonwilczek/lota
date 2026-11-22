@@ -37,7 +37,7 @@ import (
 )
 
 // newRigVerifier mirrors the production wiring in src/verifier/main.go:
-// certificate-verifying AIK store over the rig CA,
+// certificate verifier over the rig CA,
 // strict default config,
 // generated policy loaded from YAML
 func newRigVerifier(t *testing.T, fleet *synth.Fleet) *verify.Verifier {
@@ -48,14 +48,14 @@ func newRigVerifier(t *testing.T, fleet *synth.Fleet) *verify.Verifier {
 	if err := os.WriteFile(caPath, fleet.CA.CertPEM(), 0o600); err != nil {
 		t.Fatalf("write CA cert: %v", err)
 	}
-	aikStore, err := store.NewCertificateStore(filepath.Join(dir, "aiks"), []string{caPath}, true)
+	aikVerifier, err := store.NewCertificateVerifier([]string{caPath}, nil)
 	if err != nil {
-		t.Fatalf("NewCertificateStore: %v", err)
+		t.Fatalf("NewCertificateVerifier: %v", err)
 	}
 
 	// no Close cleanup here:
 	// server.Stop closes the verifier it wraps
-	v := verify.NewVerifier(verify.DefaultConfig(), aikStore)
+	v := verify.NewVerifier(verify.DefaultConfig(), aikVerifier)
 
 	policyYAML, err := fleet.PolicyYAML()
 	if err != nil {

@@ -103,7 +103,7 @@ func TestLifecycle_BootBaselineOnlyClient(t *testing.T) {
 	bs := NewBaselineStore()
 	cfg := DefaultConfig()
 	cfg.BaselineStore = bs
-	v := NewVerifier(cfg, store.NewMemoryStore())
+	v := NewVerifier(cfg, nil)
 
 	bs.CheckAndUpdateBootPCRs("c9", boot(0x50, 0x51, 0x57))
 	if err := v.ForceReanchor("c9"); err != nil {
@@ -756,7 +756,7 @@ func acceptLogVerifier(t *testing.T, buf *bytes.Buffer, policy *PCRPolicy,
 		Output: buf,
 	})
 
-	v := NewVerifier(cfg, newCertStore(t))
+	v := NewVerifier(cfg, newCertVerifier(t))
 	if err := v.AddPolicy(policy); err != nil {
 		t.Fatalf("AddPolicy: %v", err)
 	}
