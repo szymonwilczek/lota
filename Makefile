@@ -176,22 +176,6 @@ BPF_CFLAGS += -D__BPF_PROGRAM__
 BPF_CFLAGS += -I$(INC_DIR)
 BPF_CFLAGS += $(REPRO_CFLAGS)
 
-# Agent test source files
-AGTEST_SRCS = tests/test_main.c \
-            tests/test_config.c \
-            tests/test_policy.c \
-            tests/test_tpm_aik.c \
-            tests/test_server_sdk.c \
-            tests/test_anticheat_compat.c \
-            tests/test_loader_attach.c \
-            tests/test_integrity_baseline.c \
-              $(AGENT_DIR)/report.c \
-              $(AGENT_DIR)/hash_verify.c \
-              $(AGENT_DIR)/daemon.c \
-              $(AGENT_DIR)/shutdown.c \
-              $(AGENT_DIR)/policy.c \
-              $(AGENT_DIR)/policy_sign.c \
-
 # Agent main source files
 AGENT_SRCS := $(AGENT_DIR)/main.c \
 			  $(AGENT_DIR)/cli.c \
@@ -417,6 +401,7 @@ $(SDK_LIB): $(SDK_OBJS) $(call SDK_VERSION_SCRIPT,$(SDK_LIB)) Makefile | $(BUILD
 $(PKGCONFIG_DIR):
 	$(Q)mkdir -p $@
 
+.PHONY: pkgconfig
 pkgconfig: $(PKGCONFIG_FILES)
 
 # Staged SDK prefix:
@@ -430,6 +415,7 @@ pkgconfig: $(PKGCONFIG_FILES)
 STAGE_DIR := $(BUILD_DIR)/stage
 STAGE_HEADERS := $(shell grep -v '^[[:space:]]*\#' packaging/abi/public-headers.list 2>/dev/null | grep -v '^[[:space:]]*$$')
 
+.PHONY: sdk-stage
 sdk-stage: $(SDK_LIB) $(SERVER_SDK_LIB) $(WINE_HOOK_LIB) $(ANTICHEAT_LIB) \
 		$(PKGCONFIG_FILES)
 	$(Q)rm -rf $(STAGE_DIR)
@@ -522,32 +508,41 @@ $(INC_DIR)/vmlinux.h:
 	$(QUIET_GEN)
 	$(Q)bpftool btf dump file /sys/kernel/btf/vmlinux format c > $@
 
-# Phony targets
-.PHONY: check-docs-strict
-.PHONY: help all bpf agent initramfs-lock installer verifier attest-ca fleet-cli loadgen packages container-images container-image-verifier container-image-attest-ca container-image-attest-ca-hsm helm-package helm-lint helm-template observability-lint srpm rpm-sign dnf-repo sdk server-sdk wine-hook anticheat pkgconfig sdk-stage clean htmldocs docs-lint docs-linkcheck docs-serve cleandocs install check-version-tag check-includes check-el9-decls check-player-build check-license-boundary check-test-build-dir check-doc-diagnostics check-config-commands check-stack-frames check-private-errno check-package-manifests check-helm-chart check-container-images lint lint-c lint-go print-lint-go-modules sparse smatch coccicheck reproducible-build test test-unit test-bins test-hardware test-sdk sanitizer-build valgrind-unit valgrind-smoke fuzz-agent fuzz-config fuzz-enroll fuzz-seal-envelope fuzz-tpm-attest fuzz-policy-sign fuzz-server-sdk fuzz-tpm-resp fuzz-bpf-devt fuzz-bpf-open-flags fuzz-bpf-kmem-device fuzz-bpf-event-budget fuzz-bpf-inaccessible-exec fuzz-bpf-shebang fuzz-bpf-all fuzz-all fuzz-regress syzkaller-fuzz-loader examples examples-clean sign-bpf check-abi abi-baseline
 
+.PHONY: bpf
 bpf: $(BPF_OBJ)
 
+.PHONY: agent
 agent: $(AGENT_BIN)
 
+.PHONY: initramfs-lock
 initramfs-lock: $(INITRAMFS_LOCK_BIN)
 
+.PHONY: installer
 installer: $(INSTALLER_BIN)
 
+.PHONY: verifier
 verifier: $(VERIFIER_BIN)
 
+.PHONY: attest-ca
 attest-ca: $(ATTESTCA_BIN)
 
+.PHONY: fleet-cli
 fleet-cli: $(FLEETCTL_BIN)
 
+.PHONY: loadgen
 loadgen: $(LOADGEN_BIN)
 
+.PHONY: sdk
 sdk: $(SDK_LIB) $(SDK_STATIC)
 
+.PHONY: server-sdk
 server-sdk: $(SERVER_SDK_LIB) $(SERVER_SDK_STATIC)
 
+.PHONY: wine-hook
 wine-hook: $(WINE_HOOK_LIB) $(WINE_HOOK_LIB32)
 
+.PHONY: anticheat
 anticheat: $(ANTICHEAT_LIB)
 
 # Examples (opt-in: end-to-end demo material under examples/).
@@ -563,6 +558,7 @@ EXAMPLES_FRAGMENTS := $(wildcard $(EXAMPLES_DIR)/*/Makefile.fragment)
 $(EXAMPLES_BUILD_DIR): | $(BUILD_DIR)
 	$(Q)mkdir -p $@
 
+.PHONY: examples
 examples: $(EXAMPLES_BUILD_DIR) sdk-stage
 	@for frag in $(EXAMPLES_FRAGMENTS); do \
 		dir=$$(dirname $$frag); \
@@ -582,6 +578,7 @@ examples: $(EXAMPLES_BUILD_DIR) sdk-stage
 		echo "SKIP: demo_server (go not installed or stub absent)"; \
 	fi
 
+.PHONY: examples-clean
 examples-clean:
 	rm -rf $(EXAMPLES_BUILD_DIR)
 	@for frag in $(EXAMPLES_FRAGMENTS); do \
@@ -613,6 +610,7 @@ SIGNING_KEY ?= /etc/lota/policy.key
 SIGNING_PUBKEY ?= $(SIGNING_KEY:.key=.pub)
 PKG_ENFORCEMENT_PUB := $(BUILD_DIR)/lota-enforcement.pub
 
+.PHONY: sign-bpf
 sign-bpf: $(BPF_OBJ) $(AGENT_BIN)
 	@test -r $(SIGNING_KEY) || { \
 		echo "sign-bpf: signing key not readable: $(SIGNING_KEY)" >&2; \
@@ -690,6 +688,7 @@ define require_source_date_epoch
 	}
 endef
 
+.PHONY: reproducible-build
 reproducible-build: export SOURCE_DATE_EPOCH = $(REPRO_SOURCE_DATE_EPOCH)
 reproducible-build: export TZ = UTC
 reproducible-build: export LC_ALL = C
@@ -743,6 +742,7 @@ selinux-pp: $(SELINUX_PP)
 # the distribution, or this project for its own releases.
 # Package built without that step installs an object the agent refuses to load,
 # so the machine stops enforcing for reason nobody chose; refuse to build it instead.
+.PHONY: packages
 packages: all selinux-pp
 	$(Q)test -r $(BPF_OBJ).sig || { \
 		echo "packages: $(BPF_OBJ).sig is missing." >&2; \
@@ -823,16 +823,20 @@ KO_BUILD_HSM = env KO_CONFIG_PATH=$(KO_HSM_CONFIG) KO_DOCKER_REPO=$(KO_DOCKER_RE
 	SOURCE_DATE_EPOCH=$(REPRO_SOURCE_DATE_EPOCH) \
 	$(KO) build -B --sbom=spdx --platform=$(KO_HSM_PLATFORMS) --tags=$(KO_HSM_IMAGE_TAGS) $(KO_LABELS)
 
+.PHONY: container-images
 container-images: container-image-verifier container-image-attest-ca container-image-attest-ca-hsm
 
+.PHONY: container-image-verifier
 container-image-verifier:
 	$(require_source_date_epoch)
 	$(Q)cd $(SRC_DIR)/verifier && $(KO_BUILD) .
 
+.PHONY: container-image-attest-ca
 container-image-attest-ca:
 	$(require_source_date_epoch)
 	$(Q)cd $(SRC_DIR)/attestca && $(KO_BUILD) .
 
+.PHONY: container-image-attest-ca-hsm
 container-image-attest-ca-hsm:
 	$(require_source_date_epoch)
 	$(Q)cd $(SRC_DIR)/attestca && $(KO_BUILD_HSM) .
@@ -852,11 +856,13 @@ HELM_CHECK_VALUES := \
 
 # Chart-behaviour gate: Chart.yaml carries @VERSION@ and rendered pods can
 # start; neither is caught by helm-lint or kubeconform
+.PHONY: check-helm-chart
 check-helm-chart:
 	@scripts/check-helm-chart.sh
 
 # Image-behaviour gate: pure-Go images hold the CA key on disk;
 # the HSM image (tag, cgo, loader) is the production key road
+.PHONY: check-container-images
 check-container-images:
 	@scripts/check-container-images.sh
 
@@ -864,13 +870,16 @@ check-container-images:
 HELM_PACKAGE_DIR ?= $(BUILD_DIR)/helm
 HELM_PACKAGE := $(HELM_PACKAGE_DIR)/lota-verifier-$(PROJECT_VERSION).tgz
 
+.PHONY: helm-package
 helm-package: check-helm-chart
 	$(HELM) package $(HELM_CHART_DIR) --version $(PROJECT_VERSION) \
 		--app-version $(PROJECT_VERSION) -d $(HELM_PACKAGE_DIR)
 
+.PHONY: helm-lint
 helm-lint:
 	$(HELM) lint $(HELM_CHART_DIR) $(HELM_CHECK_VALUES)
 
+.PHONY: helm-template
 helm-template: helm-package
 	$(HELM) template lota-verifier $(HELM_PACKAGE) $(HELM_CHECK_VALUES) | $(KUBECONFORM) -strict -summary -
 
@@ -882,6 +891,7 @@ PROMTOOL ?= promtool
 JQ ?= jq
 OBSERVABILITY_DIR := deploy/observability
 
+.PHONY: observability-lint
 observability-lint:
 	$(PROMTOOL) check config --syntax-only $(OBSERVABILITY_DIR)/prometheus.yml
 	$(PROMTOOL) check rules $(OBSERVABILITY_DIR)/alerts/lota-verifier-alerts.yaml
@@ -897,6 +907,7 @@ SRPM_TREE := $(BUILD_DIR)/srpmtree
 SRPM_SPEC := $(SRPM_TREE)/SPECS/lota.spec
 OUTDIR ?= $(BUILD_DIR)/srpm
 
+.PHONY: srpm
 srpm: check-package-manifests
 	$(Q)rm -rf $(SRPM_TREE)
 	$(Q)mkdir -p $(SRPM_TREE)/SOURCES $(SRPM_TREE)/SPECS $(OUTDIR)
@@ -945,12 +956,14 @@ REPO_DIR ?= $(BUILD_DIR)/dnf-repo
 LOTA_RPM_GPG_NAME ?=
 LOTA_REPO_BASEURL ?= https://lota.szymon-wilczek.me/rpm
 
+.PHONY: rpm-sign
 rpm-sign:
 	@test -n "$(LOTA_RPM_GPG_NAME)" || { \
 		echo "rpm-sign: set LOTA_RPM_GPG_NAME to the signing key uid/id" >&2; exit 1; }
 	$(Q)rpmsign --define "_gpg_name $(LOTA_RPM_GPG_NAME)" --addsign $(PKG_DIR)/*.rpm
 	@echo "Signed RPMs in $(PKG_DIR)"
 
+.PHONY: dnf-repo
 dnf-repo: rpm-sign
 	$(Q)rm -rf $(REPO_DIR)
 	$(Q)mkdir -p $(REPO_DIR)
@@ -963,6 +976,7 @@ dnf-repo: rpm-sign
 		packaging/repo/lota.repo.in >$(REPO_DIR)/lota.repo
 	@echo "Signed dnf repo in $(REPO_DIR) (baseurl $(LOTA_REPO_BASEURL))"
 
+.PHONY: clean
 clean:
 	rm -rf $(BUILD_DIR)
 	@echo "Cleaned build artifacts"
@@ -971,20 +985,26 @@ clean:
 # Config and sources live under Documentation/
 # htmldocs builds strictly (-W)
 # docs-lint runs the reStructuredText linter
+.PHONY: htmldocs
 htmldocs:
 	$(MAKE) -C Documentation html
+.PHONY: docs-lint
 docs-lint:
 	$(MAKE) -C Documentation lint
+.PHONY: docs-linkcheck
 docs-linkcheck:
 	$(MAKE) -C Documentation linkcheck
+.PHONY: docs-serve
 docs-serve:
 	$(MAKE) -C Documentation serve
+.PHONY: cleandocs
 cleandocs:
 	$(MAKE) -C Documentation clean
 
 # Strict docs gate:
 # full build into a scratch tree; an incremental one skips unchanged
 # sources and hides their problems, and _build/ stays untouched
+.PHONY: check-docs-strict
 check-docs-strict:
 	$(Q)command -v sphinx-build >/dev/null 2>&1 || { \
 		echo "check-docs-strict: sphinx-build not found; install sphinx to build the documentation" >&2; \
@@ -995,6 +1015,7 @@ check-docs-strict:
 	$(MAKE) -C Documentation html BUILDDIR="$$tmp" \
 		&& echo "check-docs-strict: clean"
 
+.PHONY: check-version-tag
 check-version-tag:
 	@if git rev-parse --is-inside-work-tree >/dev/null 2>&1; then \
 		tag="$$(git describe --tags --exact-match 2>/dev/null || true)"; \
@@ -1012,6 +1033,7 @@ check-version-tag:
 # host gets whichever one built the package it installed,
 # so they must ship the same files; the spec takes its version from VERSION.
 # See scripts/check-package-manifests.sh
+.PHONY: check-package-manifests
 check-package-manifests:
 	@scripts/check-package-manifests.sh
 
@@ -1019,6 +1041,7 @@ check-package-manifests:
 # Fails on any header pulled in but not used directly (transitive dependency).
 # Drives clang-include-cleaner over a bear-built compile database.
 # See scripts/check-includes.sh; auto-fix with scripts/fix-includes.sh
+.PHONY: check-includes
 check-includes:
 	@scripts/check-includes.sh
 
@@ -1027,12 +1050,14 @@ check-includes:
 # where a header Fedora pulls in for free is absent.
 # Spawns the container itself.
 # See scripts/check-el9-decls.sh
+.PHONY: check-el9-decls
 check-el9-decls:
 	@scripts/check-el9-decls.sh
 
 # Player build gate
 # Runs the player page's build commands, read from the page, in a clean Fedora.
 # Spawns the container itself. See scripts/check-player-build.sh
+.PHONY: check-player-build
 check-player-build:
 	@scripts/check-player-build.sh
 
@@ -1040,6 +1065,7 @@ check-player-build:
 # Fails when MIT file depends on GPL-2.0-only one,
 # or when source file declares no license at all.
 # See Documentation/contributor/development/license-boundary.rst
+.PHONY: check-license-boundary
 check-license-boundary:
 	@scripts/check-license-boundary.sh
 
@@ -1047,6 +1073,7 @@ check-license-boundary:
 # Fails when a test or example script names the default build directory
 # instead of $(BUILD_DIR).
 # See scripts/check-test-build-dir.sh
+.PHONY: check-test-build-dir
 check-test-build-dir:
 	@scripts/check-test-build-dir.sh
 
@@ -1054,21 +1081,25 @@ check-test-build-dir:
 # Fails when documentation quotes a message no source string can print,
 # which is what an operator searching for the text on their screen hits.
 # See scripts/check-doc-diagnostics.sh
+.PHONY: check-doc-diagnostics
 check-doc-diagnostics:
 	@scripts/check-doc-diagnostics.sh
 
 # Shipped-configuration command gate
 # Fails when policies/ or configs/ names an option the command does not have.
 # See scripts/check-config-commands.sh
+.PHONY: check-config-commands
 check-config-commands:
 	@scripts/check-config-commands.sh
 
+.PHONY: check-stack-frames
 check-stack-frames:
 	@scripts/check-stack-frames.sh
 
 # TPM and network codes must reach an operator through tpm_strerror()
 # and net_strerror(), which know the private ranges above POSIX.
 # strerror() renders those as "Unknown error 4098".
+.PHONY: check-private-errno
 check-private-errno:
 	@scripts/check-private-errno.sh
 
@@ -1078,9 +1109,11 @@ check-private-errno:
 # header against the installed set alone.
 # abi-baseline rewrites the baseline after deliberate surface change;
 # see Documentation/contributor/development/api-stability.rst
+.PHONY: check-abi
 check-abi:
 	@scripts/check-abi.sh
 
+.PHONY: abi-baseline
 abi-baseline:
 	@scripts/check-abi.sh --update
 
@@ -1101,8 +1134,10 @@ SERVER_SDK_MODULE := $(if $(wildcard sdk/server/go.mod),sdk/server,src/sdk/serve
 LINT_GO_MODULES := src/verifier src/attestca src/crl src/fleetctl \
 	$(SERVER_SDK_MODULE) examples/demo_server examples/ci-gate/gate
 
+.PHONY: lint
 lint: lint-c lint-go
 
+.PHONY: lint-c
 lint-c:
 	@test -n "$(CLANG_FORMAT)" || { \
 		echo "lint-c: clang-format not found (install clang-tools / clang-format-22)" >&2; \
@@ -1112,9 +1147,11 @@ lint-c:
 	@echo "lint-c: clean"
 
 # Modules lint-go covers, one per line; check-patch reads this list.
+.PHONY: print-lint-go-modules
 print-lint-go-modules:
 	@printf '%s\n' $(LINT_GO_MODULES)
 
+.PHONY: lint-go
 lint-go:
 	@command -v $(GOLANGCI_LINT) >/dev/null 2>&1 || { \
 		echo "lint-go: golangci-lint not found" >&2; exit 1; }
@@ -1181,6 +1218,7 @@ CHECKER_CPPFLAGS := $(CHECK_CPPFLAGS) -I$(CHECKER_INC_DIR) -Ibenchmarks/include 
 SPARSE_FLAGS := -D__CHECKER__ -Wsparse-all -Wno-declaration-after-statement
 SPARSE_EXEMPTIONS := scripts/sparse-exemptions.txt
 
+.PHONY: sparse
 sparse:
 	@command -v $(SPARSE) >/dev/null 2>&1 || { \
 		echo "sparse: $(SPARSE) not found (install 'sparse'); skipping" >&2; \
@@ -1240,6 +1278,7 @@ sparse:
 SMATCH_FINDING_RE := ^[^ ]+:[0-9]+ .*\(\) (warn|error|info|warning):
 SMATCH_PARSE_RE := :[0-9]+:[0-9]+: (error|warning):
 
+.PHONY: smatch
 smatch:
 	@command -v $(SMATCH) >/dev/null 2>&1 || { \
 		echo "smatch: $(SMATCH) not found; build it from https://repo.or.cz/smatch.git and pass SMATCH=/path/to/smatch; skipping" >&2; \
@@ -1279,6 +1318,7 @@ smatch:
 # Coccinelle semantic-patch rules in scripts/coccinelle/ over the C sources.
 # Blocking: rules are curated to be clean on a healthy tree, so any match is
 # real finding and fails the target.
+.PHONY: coccicheck
 coccicheck:
 	@command -v $(SPATCH) >/dev/null 2>&1 || { \
 		echo "coccicheck: $(SPATCH) not found (install 'coccinelle'); skipping" >&2; \
@@ -1313,6 +1353,7 @@ endif
 # Install to system (requires root)
 # selinux-pp is required, not guarded: without the module lota-install's
 # SELinux stage has nothing to load.
+.PHONY: install
 install: check-version-tag check-hook32 all selinux-pp
 	install -d $(DESTDIR)/usr/bin
 	install -d $(DESTDIR)/usr/lib/lota
@@ -1398,881 +1439,383 @@ endif
 	@echo "Installed to $(DESTDIR)/usr"
 
 # Build test binaries
+#
+# tests/test_*.c is picked up automatically. A test that links more than its
+# own source declares the extra prerequisites and flags below.
 TEST_SDK_BIN := $(BUILD_DIR)/test_sdk_ipc
-TEST_BIN_DIR := $(BUILD_DIR)
 
-TEST_BINS := \
-	$(TEST_BIN_DIR)/test_hash_verify \
-	$(TEST_BIN_DIR)/test_dbus \
-	$(TEST_BIN_DIR)/test_systemd \
-	$(TEST_BIN_DIR)/test_packaging \
-	$(TEST_BIN_DIR)/test_steam_runtime \
-	$(TEST_BIN_DIR)/test_container_watch \
-	$(TEST_BIN_DIR)/test_token_gate \
-	$(TEST_BIN_DIR)/test_wine_hook \
-	$(TEST_BIN_DIR)/test_wine_hook_events \
-	$(TEST_BIN_DIR)/test_wine_hook_slow_agent \
-	$(TEST_BIN_DIR)/test_wine_hook_publisher \
-	$(TEST_BIN_DIR)/hook_preload_target \
-	$(TEST_BIN_DIR)/test_daemon \
-	$(TEST_BIN_DIR)/test_daemon_start_status \
-	$(TEST_BIN_DIR)/test_signal_shutdown \
-	$(TEST_BIN_DIR)/test_daemon_loop \
-	$(TEST_BIN_DIR)/test_tls_verify \
-	$(TEST_BIN_DIR)/test_verify_result_str \
-	$(TEST_BIN_DIR)/test_connect_hint \
-	$(TEST_BIN_DIR)/test_net_errors \
-	$(TEST_BIN_DIR)/test_tls_anchor \
-	$(TEST_BIN_DIR)/test_xattr_carry \
-	$(TEST_BIN_DIR)/test_config \
-	$(TEST_BIN_DIR)/test_config_alloc \
-	$(TEST_BIN_DIR)/test_config_add_profile \
-	$(TEST_BIN_DIR)/test_subscribe \
-	$(TEST_BIN_DIR)/test_policy_sign \
-	$(TEST_BIN_DIR)/test_policy_export \
-	$(TEST_BIN_DIR)/test_aik_rotation \
-	$(TEST_BIN_DIR)/test_pcr14_verdict \
-	$(TEST_BIN_DIR)/test_ipc_privilege \
-	$(TEST_BIN_DIR)/test_startup_hint \
-	$(TEST_BIN_DIR)/test_terminate_report \
-	$(TEST_BIN_DIR)/test_kill_report \
-	$(TEST_BIN_DIR)/test_measure_report \
-	$(TEST_BIN_DIR)/test_standing_answer \
-	$(TEST_BIN_DIR)/test_ipc_notify \
-	$(TEST_BIN_DIR)/test_ipc_attest_time \
-	$(TEST_BIN_DIR)/test_ipc_coverage_cost \
-	$(TEST_BIN_DIR)/test_ipc_token_refusal \
-	$(TEST_BIN_DIR)/test_ipc_lockout_sync \
-	$(TEST_BIN_DIR)/test_ipc_reload_binding \
-	$(TEST_BIN_DIR)/test_ipc_token_no_tpm \
-	$(TEST_BIN_DIR)/test_ipc_extra_listener \
-	$(TEST_BIN_DIR)/test_test_servers_order \
-	$(TEST_BIN_DIR)/test_reload_enforcement_state \
-	$(TEST_BIN_DIR)/test_credential_activation \
-	$(TEST_BIN_DIR)/test_enroll_wire \
-	$(TEST_BIN_DIR)/test_enroll_status \
-	$(TEST_BIN_DIR)/test_enroll_state \
-	$(TEST_BIN_DIR)/test_profile_id \
-	$(TEST_BIN_DIR)/test_attest_targets \
-	$(TEST_BIN_DIR)/test_attest_reload \
-	$(TEST_BIN_DIR)/test_attest_stage \
-	$(TEST_BIN_DIR)/test_attest_aggregate \
-	$(TEST_BIN_DIR)/test_status_flags \
-	$(TEST_BIN_DIR)/test_iommu_evidence \
-	$(TEST_BIN_DIR)/test_publisher_profile \
-	$(TEST_BIN_DIR)/test_esrt \
-	$(TEST_BIN_DIR)/test_aik_cert_renew \
-	$(TEST_BIN_DIR)/test_io_read_file \
-	$(TEST_BIN_DIR)/test_devt \
-	$(TEST_BIN_DIR)/test_live_fixtures \
-	$(TEST_BIN_DIR)/test_sb_dev \
-	$(TEST_BIN_DIR)/test_cgroup_guard \
-	$(TEST_BIN_DIR)/test_kernel_measure \
-	$(TEST_BIN_DIR)/test_kernel_image \
-	$(TEST_BIN_DIR)/test_bpf_mount_hooks \
-	$(TEST_BIN_DIR)/test_bpf_kill_guard \
-	$(TEST_BIN_DIR)/test_path_sanitize \
-	$(TEST_BIN_DIR)/test_event_budget \
-	$(TEST_BIN_DIR)/test_tpm_nv_chunk \
-	$(TEST_BIN_DIR)/test_ipc_token_cap \
-	$(TEST_BIN_DIR)/test_initramfs_lock \
-	$(TEST_BIN_DIR)/test_hardening \
-	$(TEST_BIN_DIR)/test_server_sdk \
-	$(TEST_BIN_DIR)/demo_sdk \
-	$(TEST_BIN_DIR)/test_ipc_client \
-	$(TEST_BIN_DIR)/test_ipc_payload_len \
-	$(TEST_BIN_DIR)/test_cross_lang_verify \
-	$(TEST_BIN_DIR)/test_cross_lang_report_gen \
-	$(TEST_BIN_DIR)/test_anticheat \
-	$(TEST_BIN_DIR)/test_flag_names \
-	$(TEST_BIN_DIR)/test_runtime_measure \
-	$(TEST_BIN_DIR)/test_runtime_image_measure \
-	$(TEST_BIN_DIR)/test_runtime_measure_failure \
-	$(TEST_BIN_DIR)/test_rt_verity_cache \
-	$(TEST_BIN_DIR)/test_verity_digest_key \
-	$(TEST_BIN_DIR)/test_ptrace_policy \
-	$(TEST_BIN_DIR)/test_signal_policy \
-	$(TEST_BIN_DIR)/test_module_purpose \
-	$(TEST_BIN_DIR)/test_runtime_protect_digest \
-	$(TEST_BIN_DIR)/test_protect_pids \
-	$(TEST_BIN_DIR)/test_terminate_policy \
-	$(TEST_BIN_DIR)/test_runtime_image_collect \
-	$(TEST_BIN_DIR)/test_runtime_mapping_identity \
-	$(TEST_BIN_DIR)/test_runtime_measure_pid \
-	$(TEST_BIN_DIR)/test_runtime_identity_road \
-	$(TEST_BIN_DIR)/test_mapped_pins \
-	$(TEST_BIN_DIR)/test_watchdog_pace \
-	$(TEST_BIN_DIR)/test_seal_blob \
-	$(TEST_BIN_DIR)/test_seal_envelope \
-	$(TEST_BIN_DIR)/test_seal_tpm \
-	$(TEST_BIN_DIR)/test_seal_aik \
-	$(TEST_BIN_DIR)/test_ipc_dos \
-	$(TEST_BIN_DIR)/test_loader_attach \
-	$(TEST_BIN_DIR)/test_bpf_loader_load_source \
-	$(TEST_BIN_DIR)/test_bpf_loader_open_fails_closed \
-	$(TEST_BIN_DIR)/test_watchdog_supervisor \
-	$(TEST_BIN_DIR)/test_bpf_object_preflight \
-	$(TEST_BIN_DIR)/test_ima_policy_scope \
-	$(TEST_BIN_DIR)/test_kernel_floor_hint \
-	$(TEST_BIN_DIR)/test_integrity_baseline \
-	$(TEST_BIN_DIR)/test_daemon_exit_status \
-	$(TEST_BIN_DIR)/test_integrity_map_layout \
-	$(TEST_BIN_DIR)/test_protect_pid_validation \
-	$(TEST_BIN_DIR)/test_startup_refusal_status \
-	$(TEST_BIN_DIR)/test_installer_probe \
-	$(TEST_BIN_DIR)/test_installer_named_paths \
-	$(TEST_BIN_DIR)/test_installer_trust_key \
-	$(TEST_BIN_DIR)/test_installer_checkpoint \
-	$(TEST_BIN_DIR)/test_installer_stage_text \
-	$(TEST_BIN_DIR)/test_installer_service \
-	$(TEST_BIN_DIR)/test_installer_confirm \
-	$(TEST_BIN_DIR)/test_selftest_plan \
-	$(TEST_BIN_DIR)/test_ima_xattr \
-	$(TEST_BIN_DIR)/test_constant_time \
-	$(TEST_SDK_BIN)
+TEST_BINS := $(patsubst tests/%.c,$(BUILD_DIR)/%,$(wildcard tests/test_*.c))
+TEST_BINS += $(BUILD_DIR)/hook_preload_target
+TEST_BINS += $(BUILD_DIR)/demo_sdk
+TEST_BINS += $(BUILD_DIR)/test_cross_lang_report_gen
+TEST_BINS += $(BUILD_DIR)/test_cross_lang_verify
 
-$(TEST_SDK_BIN): tests/test_sdk_ipc.c $(SDK_LIB) | $(BUILD_DIR)
+# Need a live agent, a server or generated input
+TEST_MANUAL := \
+	$(BUILD_DIR)/demo_sdk \
+	$(BUILD_DIR)/hook_preload_target \
+	$(BUILD_DIR)/test_cross_lang_report_gen \
+	$(BUILD_DIR)/test_cross_lang_verify \
+	$(BUILD_DIR)/test_ipc_client \
+	$(BUILD_DIR)/test_ipc_dos \
+	$(BUILD_DIR)/test_sdk_ipc \
+	$(BUILD_DIR)/test_tls_verify
+
+TEST_RUN := $(filter-out $(TEST_MANUAL),$(TEST_BINS))
+
+$(BUILD_DIR)/%: tests/%.c | $(BUILD_DIR)
 	$(QUIET_CC)
-	$(Q)$(CC) $(CFLAGS) -DAGENT_BIN_PATH='"$(AGENT_BIN)"' -o $@ $< \
-		-L$(BUILD_DIR) -llotagaming -Wl,-rpath,$(abspath $(BUILD_DIR))
+	$(Q)$(CC) $(CFLAGS) $(TEST_CFLAGS) -o $@ $(filter %.c,$^) $(TEST_LDLIBS)
 
-$(TEST_BIN_DIR)/test_hash_verify: tests/test_hash_verify.c $(AGENT_DIR)/hash_verify.c | $(BUILD_DIR)
-	$(QUIET_CC)
-	$(Q)$(CC) $(CFLAGS) -o $@ $^ -lcrypto
+TEST_LIBBPF := -lbpf -lsystemd -lcrypto
+TEST_LIBNET := -lssl -lcrypto -lsystemd
+TEST_LIBSSL := -lcrypto -lsystemd
+TEST_LIBTSS := -ltss2-esys -ltss2-mu -ltss2-tcti-device -ltss2-tctildr -lcrypto -lssl
+TEST_LIBSDK := -L$(BUILD_DIR) -llotagaming -Wl,-rpath,$(abspath $(BUILD_DIR))
 
-$(TEST_BIN_DIR)/test_installer_trust_key: tests/test_installer_trust_key.c \
-		installer/stages.c installer/probe.c installer/run.c \
-		installer/ui.c $(AGENT_DIR)/policy_pubkey.c \
-		$(AGENT_DIR)/profile.c | $(BUILD_DIR)
-	$(QUIET_CC)
-	$(Q)$(CC) $(CFLAGS) -o $@ $(filter %.c,$^) -lcrypto
+TEST_ATTEST_SRCS := $(addprefix $(AGENT_DIR)/,attest_targets.c profile.c config.c io_utils.c pin.c)
+TEST_CONFIG_SRCS := $(addprefix $(AGENT_DIR)/,config.c io_utils.c pin.c)
+TEST_IPC_SRCS := $(addprefix $(AGENT_DIR)/,ipc.c journal.c profile.c token_gate.c)
+TEST_LOADER_SRCS := $(addprefix $(AGENT_DIR)/,bpf_loader.c journal.c policy_sign.c \
+	sb_dev.c cgroup_guard.c)
+TEST_NET_SRCS := $(addprefix $(AGENT_DIR)/,net.c journal.c pin.c)
+TEST_SDK_SRCS := $(addprefix $(SDK_DIR)/,lota_anticheat.c lota_gaming.c lota_server.c)
+TEST_STARTUP_SRCS := $(AGENT_DIR)/startup_policy.c $(TEST_LOADER_SRCS) $(TEST_CONFIG_SRCS) \
+	$(AGENT_DIR)/policy_pubkey.c
+TEST_TPM_SRCS := $(addprefix $(AGENT_DIR)/,tpm.c tpm_errno.c seal_envelope.c profile.c)
+TEST_INSTALLER_SRCS := installer/stages.c installer/probe.c installer/run.c installer/ui.c \
+	$(AGENT_DIR)/policy_pubkey.c $(AGENT_DIR)/profile.c
 
-$(TEST_BIN_DIR)/test_installer_checkpoint: tests/test_installer_checkpoint.c \
-		installer/stages.c installer/probe.c installer/run.c \
-		installer/ui.c $(AGENT_DIR)/policy_pubkey.c \
-		$(AGENT_DIR)/profile.c | $(BUILD_DIR)
-	$(QUIET_CC)
-	$(Q)$(CC) $(CFLAGS) -o $@ $(filter %.c,$^) -lcrypto
+TEST_ATTEST := $(addprefix $(BUILD_DIR)/test_, \
+	attest_aggregate \
+	attest_reload \
+	attest_targets \
+)
+$(TEST_ATTEST): $(TEST_ATTEST_SRCS)
+$(TEST_ATTEST): TEST_LDLIBS := -lcrypto
 
-$(TEST_BIN_DIR)/test_installer_stage_text: tests/test_installer_stage_text.c \
-		installer/stages.c installer/probe.c installer/run.c \
-		installer/ui.c $(AGENT_DIR)/policy_pubkey.c \
-		$(AGENT_DIR)/profile.c | $(BUILD_DIR)
-	$(QUIET_CC)
-	$(Q)$(CC) $(CFLAGS) -o $@ $(filter %.c,$^) -lcrypto
+TEST_HOOK := $(addprefix $(BUILD_DIR)/test_, \
+	wine_hook_events \
+	wine_hook_publisher \
+	wine_hook_slow_agent \
+)
+$(TEST_HOOK): $(WINE_HOOK_LIB)
+$(TEST_HOOK): TEST_CFLAGS := -DLOTA_HOOK_LIB_PATH='"$(WINE_HOOK_LIB)"'
+$(TEST_HOOK): TEST_LDLIBS := -ldl
 
-$(TEST_BIN_DIR)/test_installer_probe: tests/test_installer_probe.c installer/probe.c | $(BUILD_DIR)
-	$(QUIET_CC)
-	$(Q)$(CC) $(CFLAGS) -o $@ $^ -lcrypto
+TEST_INSTALLER := $(addprefix $(BUILD_DIR)/test_, \
+	installer_checkpoint \
+	installer_stage_text \
+	installer_trust_key \
+)
+$(TEST_INSTALLER): $(TEST_INSTALLER_SRCS)
+$(TEST_INSTALLER): TEST_LDLIBS := -lcrypto
 
-$(TEST_BIN_DIR)/test_installer_named_paths: tests/test_installer_named_paths.c \
-		$(INSTALLER_BIN) | $(BUILD_DIR)
-	$(QUIET_CC)
-	$(Q)$(CC) $(CFLAGS) -DLOTA_INSTALL_BIN='"$(INSTALLER_BIN)"' -o $@ $<
+TEST_IPC := $(addprefix $(BUILD_DIR)/test_, \
+	ipc_attest_time \
+	ipc_coverage_cost \
+	ipc_extra_listener \
+	ipc_lockout_sync \
+	ipc_notify \
+	ipc_reload_binding \
+	ipc_token_no_tpm \
+)
+$(TEST_IPC): $(TEST_IPC_SRCS)
+$(TEST_IPC): TEST_LDLIBS := $(TEST_LIBSSL)
 
-$(TEST_BIN_DIR)/test_installer_service: tests/test_installer_service.c installer/probe.c | $(BUILD_DIR)
-	$(QUIET_CC)
-	$(Q)$(CC) $(CFLAGS) -o $@ $^ -lcrypto
+TEST_LOADER := $(addprefix $(BUILD_DIR)/test_, \
+	bpf_loader_load_source \
+	bpf_loader_open_fails_closed \
+	bpf_object_preflight \
+	ima_policy_scope \
+	integrity_baseline \
+	loader_attach \
+)
+$(TEST_LOADER): $(TEST_LOADER_SRCS)
+$(TEST_LOADER): TEST_LDLIBS := $(TEST_LIBBPF)
 
-$(TEST_BIN_DIR)/test_installer_confirm: tests/test_installer_confirm.c \
-		installer/ui.c | $(BUILD_DIR)
-	$(QUIET_CC)
-	$(Q)$(CC) $(CFLAGS) -o $@ $^
+TEST_NET := $(addprefix $(BUILD_DIR)/test_, \
+	connect_hint \
+	tls_verify \
+	verify_result_str \
+)
+$(TEST_NET): $(TEST_NET_SRCS)
+$(TEST_NET): TEST_LDLIBS := $(TEST_LIBNET)
 
-$(TEST_BIN_DIR)/test_selftest_plan: tests/test_selftest_plan.c | $(BUILD_DIR)
-	$(QUIET_CC)
-	$(Q)$(CC) $(CFLAGS) -o $@ $^
+TEST_RUNTIME_IMAGE := $(addprefix $(BUILD_DIR)/test_, \
+	runtime_identity_road \
+	runtime_image_collect \
+	runtime_mapping_identity \
+	runtime_measure_failure \
+	runtime_measure_pid \
+)
+$(TEST_RUNTIME_IMAGE): $(AGENT_DIR)/runtime_image_measure.c
+$(TEST_RUNTIME_IMAGE): TEST_LDLIBS := -lcrypto
 
-$(TEST_BIN_DIR)/test_ima_xattr: tests/test_ima_xattr.c include/lota_ima_xattr.h | $(BUILD_DIR)
-	$(QUIET_CC)
-	$(Q)$(CC) $(CFLAGS) -o $@ $<
+TEST_STARTUP := $(addprefix $(BUILD_DIR)/test_, \
+	protect_pid_validation \
+	startup_refusal_status \
+)
+$(TEST_STARTUP): $(TEST_STARTUP_SRCS)
+$(TEST_STARTUP): TEST_LDLIBS := $(TEST_LIBBPF) \
+	-Wl,--wrap=bpf_loader_verify_kernel_runtime_hardening
 
-$(TEST_BIN_DIR)/test_constant_time: tests/test_constant_time.c | $(BUILD_DIR)
-	$(QUIET_CC)
-	$(Q)$(CC) $(CFLAGS) -o $@ $^ -lcrypto
+TEST_TPM := $(addprefix $(BUILD_DIR)/test_, \
+	aik_rotation \
+	credential_activation \
+	pcr14_verdict \
+	seal_aik \
+	seal_tpm \
+)
+$(TEST_TPM): $(TEST_TPM_SRCS)
+$(TEST_TPM): TEST_CFLAGS := -DLOTA_INTERNAL_TESTS
+$(TEST_TPM): TEST_LDLIBS := $(TEST_LIBTSS)
 
-$(TEST_BIN_DIR)/test_dbus: tests/test_dbus.c $(AGENT_DIR)/dbus.c $(AGENT_DIR)/journal.c VERSION | $(BUILD_DIR)
-	$(QUIET_CC)
-	$(Q)$(CC) $(CFLAGS) $(SDK_VERSION_CFLAGS) -o $@ $(filter %.c,$^) -lsystemd
+# Interpose libbpf's open calls and the signature verify so the loader's
+# verify-then-load path is testable without a key or a live kernel
+$(BUILD_DIR)/test_bpf_loader_load_source: TEST_LDLIBS += \
+	-Wl,--wrap=policy_verify_buffer \
+	-Wl,--wrap=bpf_object__open_file \
+	-Wl,--wrap=bpf_object__open_mem
 
-$(TEST_BIN_DIR)/test_systemd: tests/test_systemd.c $(AGENT_DIR)/sdnotify.c $(AGENT_DIR)/journal.c | $(BUILD_DIR)
-	$(QUIET_CC)
-	$(Q)$(CC) $(CFLAGS) -o $@ $^ -lsystemd
+# wraps return NULL with errno clear: refusal path without a kernel
+$(BUILD_DIR)/test_bpf_loader_open_fails_closed: TEST_LDLIBS += \
+	-Wl,--wrap=policy_verify_buffer \
+	-Wl,--wrap=bpf_object__open_mem \
+	-Wl,--wrap=bpf_object__next_program \
+	-Wl,--wrap=bpf_program__type \
+	-Wl,--wrap=bpf_program__name \
+	-Wl,--wrap=bpf_program__attach \
+	-Wl,--wrap=ring_buffer__new
 
-$(TEST_BIN_DIR)/test_packaging: tests/test_packaging.c | $(BUILD_DIR)
-	$(QUIET_CC)
-	$(Q)$(CC) $(CFLAGS) -o $@ $^
+$(BUILD_DIR)/test_bpf_object_preflight: TEST_LDLIBS += -Wl,--wrap=policy_verify_buffer
 
-$(TEST_BIN_DIR)/test_steam_runtime: tests/test_steam_runtime.c $(AGENT_DIR)/steam_runtime.c $(AGENT_DIR)/journal.c | $(BUILD_DIR)
-	$(QUIET_CC)
-	$(Q)$(CC) $(CFLAGS) -DLOTA_GROUP_NAME='"root"' -o $@ $^ -lsystemd
+$(BUILD_DIR)/test_aik_cert_renew: $(AGENT_DIR)/aik_cert.c $(AGENT_DIR)/io_utils.c
+$(BUILD_DIR)/test_aik_cert_renew: TEST_LDLIBS := -lcrypto
 
-$(TEST_BIN_DIR)/test_container_watch: tests/test_container_watch.c $(AGENT_DIR)/container_watch.c | $(BUILD_DIR)
-	$(QUIET_CC)
-	$(Q)$(CC) $(CFLAGS) -o $@ $^
+$(BUILD_DIR)/test_anticheat: tests/token_forge.c $(TEST_SDK_SRCS) $(VERSION_FILE)
+$(BUILD_DIR)/test_anticheat: TEST_CFLAGS := $(SDK_VERSION_CFLAGS)
+$(BUILD_DIR)/test_anticheat: TEST_LDLIBS := -lcrypto
 
-$(TEST_BIN_DIR)/test_token_gate: tests/test_token_gate.c $(AGENT_DIR)/token_gate.c | $(BUILD_DIR)
-	$(QUIET_CC)
-	$(Q)$(CC) $(CFLAGS) -o $@ $^
+$(BUILD_DIR)/test_attest_stage: $(addprefix $(AGENT_DIR)/,attest_stage.c net_errno.c tpm_errno.c)
+
+$(BUILD_DIR)/test_bpf_kill_guard: $(BPF_OBJ)
+$(BUILD_DIR)/test_bpf_kill_guard: TEST_CFLAGS := -DBPF_OBJ_PATH='"$(BPF_OBJ)"'
+$(BUILD_DIR)/test_bpf_kill_guard: TEST_LDLIBS := -lbpf
+
+$(BUILD_DIR)/test_bpf_mount_hooks: $(BPF_OBJ)
+$(BUILD_DIR)/test_bpf_mount_hooks: TEST_CFLAGS := -DBPF_OBJ_PATH='"$(BPF_OBJ)"'
+$(BUILD_DIR)/test_bpf_mount_hooks: TEST_LDLIBS := -lelf
+
+$(BUILD_DIR)/test_cgroup_guard: $(AGENT_DIR)/cgroup_guard.c $(AGENT_DIR)/sb_dev.c
+
+$(BUILD_DIR)/test_config: $(TEST_CONFIG_SRCS) $(AGENT_DIR)/policy_pubkey.c
+$(BUILD_DIR)/test_config_add_profile: $(TEST_CONFIG_SRCS)
+$(BUILD_DIR)/test_config_alloc: $(TEST_CONFIG_SRCS)
+$(BUILD_DIR)/test_config_alloc: TEST_CFLAGS := -pthread
+
+$(BUILD_DIR)/test_constant_time: TEST_LDLIBS := -lcrypto
+
+$(BUILD_DIR)/test_container_watch: $(AGENT_DIR)/container_watch.c
+
+$(BUILD_DIR)/test_daemon: $(AGENT_DIR)/daemon.c
+$(BUILD_DIR)/test_daemon_exit_status: $(AGENT_DIR)/exit_status.c
+$(BUILD_DIR)/test_daemon_loop: $(AGENT_DIR)/daemon_loop_telemetry.c
+
+$(BUILD_DIR)/test_daemon_start_status: $(AGENT_BIN)
+$(BUILD_DIR)/test_daemon_start_status: TEST_CFLAGS := -DAGENT_BIN_PATH='"$(AGENT_BIN)"'
+
+$(BUILD_DIR)/test_dbus: $(AGENT_DIR)/dbus.c $(AGENT_DIR)/journal.c $(VERSION_FILE)
+$(BUILD_DIR)/test_dbus: TEST_CFLAGS := $(SDK_VERSION_CFLAGS)
+$(BUILD_DIR)/test_dbus: TEST_LDLIBS := -lsystemd
+
+$(BUILD_DIR)/test_devt: $(INC_DIR)/lota_devt.h
+$(BUILD_DIR)/test_enroll_state: $(AGENT_DIR)/enroll_state.c
+$(BUILD_DIR)/test_enroll_status: $(AGENT_DIR)/enroll.c
+$(BUILD_DIR)/test_enroll_wire: $(AGENT_DIR)/enroll.c
+$(BUILD_DIR)/test_esrt: $(AGENT_DIR)/esrt.c
+$(BUILD_DIR)/test_event_budget: $(INC_DIR)/lota_event_budget.h
+
+$(BUILD_DIR)/test_flag_names: $(SDK_LIB)
+$(BUILD_DIR)/test_flag_names: TEST_LDLIBS := $(TEST_LIBSDK)
+
+$(BUILD_DIR)/test_hardening: $(AGENT_DIR)/hardening.c $(AGENT_DIR)/journal.c
+$(BUILD_DIR)/test_hardening: TEST_LDLIBS := -lseccomp -lsystemd -pthread
+
+$(BUILD_DIR)/test_hash_verify: $(AGENT_DIR)/hash_verify.c
+$(BUILD_DIR)/test_hash_verify: TEST_LDLIBS := -lcrypto
+
+$(BUILD_DIR)/test_ima_xattr: $(INC_DIR)/lota_ima_xattr.h
+
+$(BUILD_DIR)/test_initramfs_lock: src/initramfs/lota-pcr14-lock.c
+$(BUILD_DIR)/test_initramfs_lock: TEST_CFLAGS := -DLOTA_INITRAMFS_LOCK_NO_MAIN
+$(BUILD_DIR)/test_initramfs_lock: TEST_LDLIBS := -ltss2-esys -ltss2-mu -ltss2-tcti-device -lcrypto
+
+$(BUILD_DIR)/test_installer_confirm: installer/ui.c
+
+$(BUILD_DIR)/test_installer_named_paths: $(INSTALLER_BIN)
+$(BUILD_DIR)/test_installer_named_paths: TEST_CFLAGS := -DLOTA_INSTALL_BIN='"$(INSTALLER_BIN)"'
+
+$(BUILD_DIR)/test_installer_probe: installer/probe.c
+$(BUILD_DIR)/test_installer_probe: TEST_LDLIBS := -lcrypto
+
+$(BUILD_DIR)/test_installer_service: installer/probe.c
+$(BUILD_DIR)/test_installer_service: TEST_LDLIBS := -lcrypto
+
+$(BUILD_DIR)/test_integrity_map_layout: $(TEST_LOADER_SRCS) $(BPF_OBJ) $(LEGACY_BPF_OBJ)
+$(BUILD_DIR)/test_integrity_map_layout: TEST_CFLAGS := -DTREE_BPF_OBJ='"$(BPF_OBJ)"' \
+	-DLEGACY_BPF_OBJ='"$(LEGACY_BPF_OBJ)"'
+$(BUILD_DIR)/test_integrity_map_layout: TEST_LDLIBS := $(TEST_LIBBPF)
+
+$(BUILD_DIR)/test_io_read_file: $(AGENT_DIR)/io_utils.c
+$(BUILD_DIR)/test_iommu_evidence: $(AGENT_DIR)/iommu.c
+
+$(BUILD_DIR)/test_ipc_client: TEST_LDLIBS := -lcrypto
+
+$(BUILD_DIR)/test_ipc_dos: $(SDK_LIB)
+$(BUILD_DIR)/test_ipc_dos: TEST_LDLIBS := $(TEST_LIBSDK)
+
+$(BUILD_DIR)/test_ipc_payload_len: $(AGENT_DIR)/ipc_payload.h $(INC_DIR)/lota_ipc.h
+$(BUILD_DIR)/test_ipc_privilege: $(AGENT_DIR)/ipc_privilege.h
+$(BUILD_DIR)/test_ipc_token_cap: $(INC_DIR)/lota_ipc.h $(INC_DIR)/lota_token.h
+
+$(BUILD_DIR)/test_ipc_token_refusal: $(addprefix $(AGENT_DIR)/,ipc.c profile.c token_gate.c)
+$(BUILD_DIR)/test_ipc_token_refusal: TEST_LDLIBS := $(TEST_LIBSSL)
+
+$(BUILD_DIR)/test_kernel_floor_hint: $(AGENT_DIR)/kernel_floor_hint.h
+$(BUILD_DIR)/test_kernel_image: $(AGENT_DIR)/kernel_image.c
+$(BUILD_DIR)/test_kernel_measure: $(AGENT_DIR)/kernel_measure.c
+$(BUILD_DIR)/test_kill_report: $(AGENT_DIR)/kill_report.h
+$(BUILD_DIR)/test_mapped_pins: $(AGENT_DIR)/mapped_pins.h
+$(BUILD_DIR)/test_measure_report: $(AGENT_DIR)/measure_report.h
+$(BUILD_DIR)/test_module_purpose: $(INC_DIR)/lota.h
+
+$(BUILD_DIR)/test_net_errors: $(addprefix $(AGENT_DIR)/,net.c net_errno.c journal.c pin.c \
+	attest_stage.c tpm_errno.c)
+$(BUILD_DIR)/test_net_errors: TEST_LDLIBS := $(TEST_LIBNET)
+
+$(BUILD_DIR)/test_path_sanitize: $(AGENT_DIR)/path_validate.h
+$(BUILD_DIR)/test_policy_export: $(AGENT_DIR)/policy.c
+
+$(BUILD_DIR)/test_policy_sign: $(AGENT_DIR)/policy_sign.c
+$(BUILD_DIR)/test_policy_sign: TEST_LDLIBS := -lcrypto
+
+$(BUILD_DIR)/test_profile_id: $(addprefix $(AGENT_DIR)/,profile.c publishers.c enroll_state.c \
+	aik_cert.c io_utils.c)
+$(BUILD_DIR)/test_profile_id: TEST_LDLIBS := -lcrypto
+
+$(BUILD_DIR)/test_protect_pids: $(AGENT_DIR)/protect_pids.h
+$(BUILD_DIR)/test_ptrace_policy: $(INC_DIR)/lota.h
+
+$(BUILD_DIR)/test_publisher_profile: $(SDK_DIR)/lota_gaming.c $(VERSION_FILE)
+$(BUILD_DIR)/test_publisher_profile: TEST_CFLAGS := $(SDK_VERSION_CFLAGS)
+
+$(BUILD_DIR)/test_reload_enforcement_state: $(addprefix $(AGENT_DIR)/,reload.c config.c journal.c \
+	policy_sign.c io_utils.c pin.c)
+$(BUILD_DIR)/test_reload_enforcement_state: TEST_LDLIBS := $(TEST_LIBSSL)
+
+$(BUILD_DIR)/test_rt_verity_cache: $(AGENT_DIR)/rt_verity_cache.h
+
+$(BUILD_DIR)/test_runtime_image_measure: TEST_LDLIBS := -lcrypto
+
+$(BUILD_DIR)/test_runtime_measure: $(TEST_SDK_SRCS) $(VERSION_FILE)
+$(BUILD_DIR)/test_runtime_measure: TEST_CFLAGS := $(SDK_VERSION_CFLAGS)
+$(BUILD_DIR)/test_runtime_measure: TEST_LDLIBS := -lcrypto
+
+$(BUILD_DIR)/test_runtime_protect_digest: TEST_LDLIBS := -lcrypto
+
+$(BUILD_DIR)/test_sb_dev: $(AGENT_DIR)/sb_dev.c $(INC_DIR)/lota_devt.h
+$(BUILD_DIR)/test_seal_blob: $(INC_DIR)/lota_seal.h
+
+$(BUILD_DIR)/test_seal_envelope: $(AGENT_DIR)/seal_envelope.c
+$(BUILD_DIR)/test_seal_envelope: TEST_LDLIBS := -lcrypto
+
+$(BUILD_DIR)/test_sdk_ipc: $(SDK_LIB)
+$(BUILD_DIR)/test_sdk_ipc: TEST_CFLAGS := -DAGENT_BIN_PATH='"$(AGENT_BIN)"'
+$(BUILD_DIR)/test_sdk_ipc: TEST_LDLIBS := $(TEST_LIBSDK)
+
+$(BUILD_DIR)/test_server_sdk: tests/token_forge.c $(SDK_DIR)/lota_server.c \
+	$(SDK_DIR)/lota_gaming.c $(VERSION_FILE)
+$(BUILD_DIR)/test_server_sdk: TEST_CFLAGS := $(SDK_VERSION_CFLAGS)
+$(BUILD_DIR)/test_server_sdk: TEST_LDLIBS := -lcrypto
+
+$(BUILD_DIR)/test_signal_policy: $(INC_DIR)/lota.h
+
+$(BUILD_DIR)/test_signal_shutdown: $(AGENT_DIR)/daemon.c $(AGENT_DIR)/shutdown.c
+$(BUILD_DIR)/test_signal_shutdown: TEST_LDLIBS := -pthread
+
+$(BUILD_DIR)/test_standing_answer: $(AGENT_DIR)/standing_answer.h
+$(BUILD_DIR)/test_startup_hint: $(AGENT_DIR)/startup_hint.h
+$(BUILD_DIR)/test_status_flags: $(AGENT_DIR)/status_flags.h $(INC_DIR)/lota_ipc.h
+
+$(BUILD_DIR)/test_steam_runtime: $(AGENT_DIR)/steam_runtime.c $(AGENT_DIR)/journal.c
+$(BUILD_DIR)/test_steam_runtime: TEST_CFLAGS := -DLOTA_GROUP_NAME='"root"'
+$(BUILD_DIR)/test_steam_runtime: TEST_LDLIBS := -lsystemd
+
+$(BUILD_DIR)/test_subscribe: $(SDK_DIR)/lota_gaming.c $(VERSION_FILE)
+$(BUILD_DIR)/test_subscribe: TEST_CFLAGS := $(SDK_VERSION_CFLAGS)
+
+$(BUILD_DIR)/test_systemd: $(AGENT_DIR)/sdnotify.c $(AGENT_DIR)/journal.c
+$(BUILD_DIR)/test_systemd: TEST_LDLIBS := -lsystemd
+
+$(BUILD_DIR)/test_terminate_policy: $(AGENT_DIR)/terminate_policy.h
+$(BUILD_DIR)/test_terminate_report: $(AGENT_DIR)/terminate_report.h
+
+$(BUILD_DIR)/test_test_servers_order: $(AGENT_DIR)/test_servers.c $(AGENT_DIR)/journal.c
+$(BUILD_DIR)/test_test_servers_order: TEST_LDLIBS := -lsystemd
+
+$(BUILD_DIR)/test_tls_anchor: $(addprefix $(AGENT_DIR)/,net.c net_errno.c journal.c pin.c)
+$(BUILD_DIR)/test_tls_anchor: TEST_LDLIBS := $(TEST_LIBNET)
+
+$(BUILD_DIR)/test_token_gate: $(AGENT_DIR)/token_gate.c
+$(BUILD_DIR)/test_tpm_nv_chunk: $(INC_DIR)/lota_tpm_nv.h
+$(BUILD_DIR)/test_verity_digest_key: $(INC_DIR)/lota.h
+
+# forks a child that the supervisor really kills: thread and signal under test
+$(BUILD_DIR)/test_watchdog_supervisor: $(addprefix $(AGENT_DIR)/,watchdog.c sdnotify.c journal.c)
+$(BUILD_DIR)/test_watchdog_supervisor: TEST_CFLAGS := -pthread
+$(BUILD_DIR)/test_watchdog_supervisor: TEST_LDLIBS := -lsystemd
+
+$(BUILD_DIR)/test_watchdog_pace: $(AGENT_DIR)/watchdog_pace.h
+$(BUILD_DIR)/test_xattr_carry: $(AGENT_DIR)/io_utils.c
+
+$(BUILD_DIR)/demo_sdk: $(SDK_DIR)/lota_gaming.c $(VERSION_FILE)
+$(BUILD_DIR)/demo_sdk: TEST_CFLAGS := $(SDK_VERSION_CFLAGS)
 
 # the test #includes lota_wine_hook.c; list it so a hook edit rebuilds
-$(TEST_BIN_DIR)/test_wine_hook: tests/test_wine_hook.c $(SDK_DIR)/lota_gaming.c \
+$(BUILD_DIR)/test_wine_hook: tests/test_wine_hook.c $(SDK_DIR)/lota_gaming.c \
 		$(SDK_DIR)/lota_wine_hook.c $(VERSION_FILE) | $(BUILD_DIR)
 	$(QUIET_CC)
 	$(Q)$(CC) $(CFLAGS) $(SDK_VERSION_CFLAGS) -DLOTA_HOOK_TESTING \
 		-o $@ $(filter-out $(VERSION_FILE) $(SDK_DIR)/lota_wine_hook.c,$^) \
 		-lpthread
 
-# dlopen()ed, not linked: the subscription is in the hook's load-time half
-$(TEST_BIN_DIR)/test_wine_hook_events: tests/test_wine_hook_events.c \
-		$(WINE_HOOK_LIB) | $(BUILD_DIR)
-	$(QUIET_CC)
-	$(Q)$(CC) $(CFLAGS) -DLOTA_HOOK_LIB_PATH='"$(WINE_HOOK_LIB)"' \
-		-o $@ $< -ldl
-
-$(TEST_BIN_DIR)/test_wine_hook_slow_agent: tests/test_wine_hook_slow_agent.c \
-		$(WINE_HOOK_LIB) | $(BUILD_DIR)
-	$(QUIET_CC)
-	$(Q)$(CC) $(CFLAGS) -DLOTA_HOOK_LIB_PATH='"$(WINE_HOOK_LIB)"' \
-		-o $@ $< -ldl
-
-$(TEST_BIN_DIR)/test_wine_hook_publisher: tests/test_wine_hook_publisher.c \
-		$(WINE_HOOK_LIB) | $(BUILD_DIR)
-	$(QUIET_CC)
-	$(Q)$(CC) $(CFLAGS) -DLOTA_HOOK_LIB_PATH='"$(WINE_HOOK_LIB)"' \
-		-o $@ $< -ldl
-
-$(TEST_BIN_DIR)/hook_preload_target: tests/hook_preload_target.c | $(BUILD_DIR)
-	$(QUIET_CC)
-	$(Q)$(CC) $(CFLAGS) -o $@ $<
-
-$(TEST_BIN_DIR)/test_daemon: tests/test_daemon.c $(AGENT_DIR)/daemon.c | $(BUILD_DIR)
-	$(QUIET_CC)
-	$(Q)$(CC) $(CFLAGS) -o $@ $^
-
-$(TEST_BIN_DIR)/test_daemon_start_status: tests/test_daemon_start_status.c \
-		$(AGENT_BIN) | $(BUILD_DIR)
-	$(QUIET_CC)
-	$(Q)$(CC) $(CFLAGS) -DAGENT_BIN_PATH='"$(AGENT_BIN)"' -o $@ $<
-
-$(TEST_BIN_DIR)/test_signal_shutdown: tests/test_signal_shutdown.c $(AGENT_DIR)/daemon.c $(AGENT_DIR)/shutdown.c | $(BUILD_DIR)
-	$(QUIET_CC)
-	$(Q)$(CC) $(CFLAGS) -o $@ $^ -pthread
-
-$(TEST_BIN_DIR)/test_daemon_loop: tests/test_daemon_loop.c $(AGENT_DIR)/daemon_loop_telemetry.c | $(BUILD_DIR)
-	$(QUIET_CC)
-	$(Q)$(CC) $(CFLAGS) -o $@ $^
-
-$(TEST_BIN_DIR)/test_tls_verify: tests/test_tls_verify.c $(AGENT_DIR)/net.c $(AGENT_DIR)/journal.c $(AGENT_DIR)/pin.c | $(BUILD_DIR)
-	$(QUIET_CC)
-	$(Q)$(CC) $(CFLAGS) -o $@ $^ -lssl -lcrypto -lsystemd
-
-$(TEST_BIN_DIR)/test_verify_result_str: tests/test_verify_result_str.c $(AGENT_DIR)/net.c $(AGENT_DIR)/journal.c $(AGENT_DIR)/pin.c | $(BUILD_DIR)
-	$(QUIET_CC)
-	$(Q)$(CC) $(CFLAGS) -o $@ $^ -lssl -lcrypto -lsystemd
-
-$(TEST_BIN_DIR)/test_connect_hint: tests/test_connect_hint.c $(AGENT_DIR)/net.c $(AGENT_DIR)/journal.c $(AGENT_DIR)/pin.c | $(BUILD_DIR)
-	$(QUIET_CC)
-	$(Q)$(CC) $(CFLAGS) -o $@ $^ -lssl -lcrypto -lsystemd
-
-$(TEST_BIN_DIR)/test_net_errors: tests/test_net_errors.c $(AGENT_DIR)/net.c $(AGENT_DIR)/net_errno.c $(AGENT_DIR)/journal.c $(AGENT_DIR)/pin.c $(AGENT_DIR)/attest_stage.c $(AGENT_DIR)/tpm_errno.c | $(BUILD_DIR)
-	$(QUIET_CC)
-	$(Q)$(CC) $(CFLAGS) -o $@ $^ -lssl -lcrypto -lsystemd
-
-$(TEST_BIN_DIR)/test_tls_anchor: tests/test_tls_anchor.c $(AGENT_DIR)/net.c $(AGENT_DIR)/net_errno.c $(AGENT_DIR)/journal.c $(AGENT_DIR)/pin.c | $(BUILD_DIR)
-	$(QUIET_CC)
-	$(Q)$(CC) $(CFLAGS) -o $@ $^ -lssl -lcrypto -lsystemd
-
-$(TEST_BIN_DIR)/test_config: tests/test_config.c $(AGENT_DIR)/config.c $(AGENT_DIR)/io_utils.c $(AGENT_DIR)/pin.c $(AGENT_DIR)/policy_pubkey.c | $(BUILD_DIR)
-	$(QUIET_CC)
-	$(Q)$(CC) $(CFLAGS) -o $@ $^
-
-$(TEST_BIN_DIR)/test_config_alloc: tests/test_config_alloc.c $(AGENT_DIR)/config.c $(AGENT_DIR)/io_utils.c $(AGENT_DIR)/pin.c | $(BUILD_DIR)
-	$(QUIET_CC)
-	$(Q)$(CC) $(CFLAGS) -pthread -o $@ $^
-
-$(TEST_BIN_DIR)/test_config_add_profile: tests/test_config_add_profile.c $(AGENT_DIR)/config.c $(AGENT_DIR)/io_utils.c $(AGENT_DIR)/pin.c | $(BUILD_DIR)
-	$(QUIET_CC)
-	$(Q)$(CC) $(CFLAGS) -o $@ $^
-
-$(TEST_BIN_DIR)/test_subscribe: tests/test_subscribe.c $(SDK_DIR)/lota_gaming.c $(VERSION_FILE) | $(BUILD_DIR)
-	$(QUIET_CC)
-	$(Q)$(CC) $(CFLAGS) $(SDK_VERSION_CFLAGS) -o $@ \
-		$(filter-out $(VERSION_FILE),$^)
-
-$(TEST_BIN_DIR)/test_publisher_profile: tests/test_publisher_profile.c $(SDK_DIR)/lota_gaming.c $(VERSION_FILE) | $(BUILD_DIR)
-	$(QUIET_CC)
-	$(Q)$(CC) $(CFLAGS) $(SDK_VERSION_CFLAGS) -o $@ \
-		$(filter-out $(VERSION_FILE),$^)
-
-$(TEST_BIN_DIR)/test_policy_sign: tests/test_policy_sign.c $(AGENT_DIR)/policy_sign.c | $(BUILD_DIR)
-	$(QUIET_CC)
-	$(Q)$(CC) $(CFLAGS) -o $@ $^ -lcrypto
-
-$(TEST_BIN_DIR)/test_policy_export: tests/test_policy_export.c $(AGENT_DIR)/policy.c | $(BUILD_DIR)
-	$(QUIET_CC)
-	$(Q)$(CC) $(CFLAGS) -o $@ $^
-
-$(TEST_BIN_DIR)/test_aik_rotation: tests/test_aik_rotation.c $(AGENT_DIR)/tpm.c $(AGENT_DIR)/tpm_errno.c $(AGENT_DIR)/seal_envelope.c $(AGENT_DIR)/profile.c | $(BUILD_DIR)
-	$(QUIET_CC)
-	$(Q)$(CC) $(CFLAGS) -DLOTA_INTERNAL_TESTS -o $@ $^ -ltss2-esys -ltss2-mu -ltss2-tcti-device -ltss2-tctildr -lcrypto -lssl
-
-$(TEST_BIN_DIR)/test_credential_activation: tests/test_credential_activation.c $(AGENT_DIR)/tpm.c $(AGENT_DIR)/tpm_errno.c $(AGENT_DIR)/seal_envelope.c $(AGENT_DIR)/profile.c | $(BUILD_DIR)
-	$(QUIET_CC)
-	$(Q)$(CC) $(CFLAGS) -DLOTA_INTERNAL_TESTS -o $@ $^ -ltss2-esys -ltss2-mu -ltss2-tcti-device -ltss2-tctildr -lcrypto -lssl
-
-$(TEST_BIN_DIR)/test_pcr14_verdict: tests/test_pcr14_verdict.c $(AGENT_DIR)/tpm.c $(AGENT_DIR)/tpm_errno.c $(AGENT_DIR)/seal_envelope.c $(AGENT_DIR)/profile.c | $(BUILD_DIR)
-	$(QUIET_CC)
-	$(Q)$(CC) $(CFLAGS) -DLOTA_INTERNAL_TESTS -o $@ $^ -ltss2-esys -ltss2-mu -ltss2-tcti-device -ltss2-tctildr -lcrypto -lssl
-
-$(TEST_BIN_DIR)/test_enroll_status: tests/test_enroll_status.c $(AGENT_DIR)/enroll.c | $(BUILD_DIR)
-	$(QUIET_CC)
-	$(Q)$(CC) $(CFLAGS) -o $@ $^
-
-$(TEST_BIN_DIR)/test_enroll_wire: tests/test_enroll_wire.c $(AGENT_DIR)/enroll.c | $(BUILD_DIR)
-	$(QUIET_CC)
-	$(Q)$(CC) $(CFLAGS) -o $@ $^
-
-$(TEST_BIN_DIR)/test_enroll_state: tests/test_enroll_state.c $(AGENT_DIR)/enroll_state.c | $(BUILD_DIR)
-	$(QUIET_CC)
-	$(Q)$(CC) $(CFLAGS) -o $@ $^
-
-$(TEST_BIN_DIR)/test_profile_id: tests/test_profile_id.c $(AGENT_DIR)/profile.c \
-		$(AGENT_DIR)/publishers.c $(AGENT_DIR)/enroll_state.c \
-		$(AGENT_DIR)/aik_cert.c $(AGENT_DIR)/io_utils.c | $(BUILD_DIR)
-	$(QUIET_CC)
-	$(Q)$(CC) $(CFLAGS) -o $@ $^ -lcrypto
-
-$(TEST_BIN_DIR)/test_attest_targets: tests/test_attest_targets.c $(AGENT_DIR)/attest_targets.c $(AGENT_DIR)/profile.c $(AGENT_DIR)/config.c $(AGENT_DIR)/io_utils.c $(AGENT_DIR)/pin.c | $(BUILD_DIR)
-	$(QUIET_CC)
-	$(Q)$(CC) $(CFLAGS) -o $@ $^ -lcrypto
-
-$(TEST_BIN_DIR)/test_attest_reload: tests/test_attest_reload.c $(AGENT_DIR)/attest_targets.c $(AGENT_DIR)/profile.c $(AGENT_DIR)/config.c $(AGENT_DIR)/io_utils.c $(AGENT_DIR)/pin.c | $(BUILD_DIR)
-	$(QUIET_CC)
-	$(Q)$(CC) $(CFLAGS) -o $@ $^ -lcrypto
-
-$(TEST_BIN_DIR)/test_attest_stage: tests/test_attest_stage.c $(AGENT_DIR)/attest_stage.c $(AGENT_DIR)/net_errno.c $(AGENT_DIR)/tpm_errno.c | $(BUILD_DIR)
-	$(QUIET_CC)
-	$(Q)$(CC) $(CFLAGS) -o $@ $^
-
-$(TEST_BIN_DIR)/test_attest_aggregate: tests/test_attest_aggregate.c $(AGENT_DIR)/attest_targets.c $(AGENT_DIR)/profile.c $(AGENT_DIR)/config.c $(AGENT_DIR)/io_utils.c $(AGENT_DIR)/pin.c | $(BUILD_DIR)
-	$(QUIET_CC)
-	$(Q)$(CC) $(CFLAGS) -o $@ $^ -lcrypto
-
-$(TEST_BIN_DIR)/test_status_flags: tests/test_status_flags.c \
-		$(AGENT_DIR)/status_flags.h $(INC_DIR)/lota_ipc.h | $(BUILD_DIR)
-	$(QUIET_CC)
-	$(Q)$(CC) $(CFLAGS) -o $@ $<
-
-$(TEST_BIN_DIR)/test_iommu_evidence: tests/test_iommu_evidence.c \
-		$(AGENT_DIR)/iommu.c | $(BUILD_DIR)
-	$(QUIET_CC)
-	$(Q)$(CC) $(CFLAGS) -o $@ $^
-
-$(TEST_BIN_DIR)/test_esrt: tests/test_esrt.c $(AGENT_DIR)/esrt.c | $(BUILD_DIR)
-	$(QUIET_CC)
-	$(Q)$(CC) $(CFLAGS) -o $@ $^
-
-$(TEST_BIN_DIR)/test_aik_cert_renew: tests/test_aik_cert_renew.c $(AGENT_DIR)/aik_cert.c $(AGENT_DIR)/io_utils.c | $(BUILD_DIR)
-	$(QUIET_CC)
-	$(Q)$(CC) $(CFLAGS) -o $@ $^ -lcrypto
-
-$(TEST_BIN_DIR)/test_xattr_carry: tests/test_xattr_carry.c $(AGENT_DIR)/io_utils.c | $(BUILD_DIR)
-	$(QUIET_CC)
-	$(Q)$(CC) $(CFLAGS) -o $@ $^
-
-$(TEST_BIN_DIR)/test_io_read_file: tests/test_io_read_file.c $(AGENT_DIR)/io_utils.c | $(BUILD_DIR)
-	$(QUIET_CC)
-	$(Q)$(CC) $(CFLAGS) -o $@ $^
-
-$(TEST_BIN_DIR)/test_devt: tests/test_devt.c $(INC_DIR)/lota_devt.h | $(BUILD_DIR)
-	$(QUIET_CC)
-	$(Q)$(CC) $(CFLAGS) -o $@ $<
-
-$(TEST_BIN_DIR)/test_live_fixtures: tests/test_live_fixtures.c | $(BUILD_DIR)
-	$(QUIET_CC)
-	$(Q)$(CC) $(CFLAGS) -o $@ $<
-
-$(TEST_BIN_DIR)/test_sb_dev: tests/test_sb_dev.c $(AGENT_DIR)/sb_dev.c $(INC_DIR)/lota_devt.h | $(BUILD_DIR)
-	$(QUIET_CC)
-	$(Q)$(CC) $(CFLAGS) -o $@ tests/test_sb_dev.c $(AGENT_DIR)/sb_dev.c
-
-$(TEST_BIN_DIR)/test_cgroup_guard: tests/test_cgroup_guard.c $(AGENT_DIR)/cgroup_guard.c $(AGENT_DIR)/sb_dev.c | $(BUILD_DIR)
-	$(QUIET_CC)
-	$(Q)$(CC) $(CFLAGS) -o $@ tests/test_cgroup_guard.c $(AGENT_DIR)/cgroup_guard.c $(AGENT_DIR)/sb_dev.c
-
-$(TEST_BIN_DIR)/test_bpf_mount_hooks: tests/test_bpf_mount_hooks.c $(BPF_OBJ) | $(BUILD_DIR)
-	$(QUIET_CC)
-	$(Q)$(CC) $(CFLAGS) -DBPF_OBJ_PATH='"$(BPF_OBJ)"' -o $@ $< -lelf
-
-$(TEST_BIN_DIR)/test_bpf_kill_guard: tests/test_bpf_kill_guard.c $(BPF_OBJ) | $(BUILD_DIR)
-	$(QUIET_CC)
-	$(Q)$(CC) $(CFLAGS) -DBPF_OBJ_PATH='"$(BPF_OBJ)"' -o $@ $< -lbpf
-
-$(TEST_BIN_DIR)/test_kernel_measure: tests/test_kernel_measure.c $(AGENT_DIR)/kernel_measure.c | $(BUILD_DIR)
-	$(QUIET_CC)
-	$(Q)$(CC) $(CFLAGS) -o $@ $^
-
-$(TEST_BIN_DIR)/test_kernel_image: tests/test_kernel_image.c $(AGENT_DIR)/kernel_image.c | $(BUILD_DIR)
-	$(QUIET_CC)
-	$(Q)$(CC) $(CFLAGS) -o $@ $^
-
-$(TEST_BIN_DIR)/test_path_sanitize: tests/test_path_sanitize.c $(AGENT_DIR)/path_validate.h | $(BUILD_DIR)
-	$(QUIET_CC)
-	$(Q)$(CC) $(CFLAGS) -o $@ $<
-
-$(TEST_BIN_DIR)/test_event_budget: tests/test_event_budget.c $(INC_DIR)/lota_event_budget.h | $(BUILD_DIR)
-	$(QUIET_CC)
-	$(Q)$(CC) $(CFLAGS) -o $@ $<
-
-$(TEST_BIN_DIR)/test_tpm_nv_chunk: tests/test_tpm_nv_chunk.c $(INC_DIR)/lota_tpm_nv.h | $(BUILD_DIR)
-	$(QUIET_CC)
-	$(Q)$(CC) $(CFLAGS) -o $@ $<
-
-$(TEST_BIN_DIR)/test_ipc_token_cap: tests/test_ipc_token_cap.c $(INC_DIR)/lota_ipc.h $(INC_DIR)/lota_token.h | $(BUILD_DIR)
-	$(QUIET_CC)
-	$(Q)$(CC) $(CFLAGS) -o $@ $<
-
-$(TEST_BIN_DIR)/test_initramfs_lock: tests/test_initramfs_lock.c src/initramfs/lota-pcr14-lock.c | $(BUILD_DIR)
-	$(QUIET_CC)
-	$(Q)$(CC) $(CFLAGS) -DLOTA_INITRAMFS_LOCK_NO_MAIN -o $@ $^ -ltss2-esys -ltss2-mu -ltss2-tcti-device -lcrypto
-
-$(TEST_BIN_DIR)/test_hardening: tests/test_hardening.c $(AGENT_DIR)/hardening.c $(AGENT_DIR)/journal.c | $(BUILD_DIR)
-	$(QUIET_CC)
-	$(Q)$(CC) $(CFLAGS) -o $@ $^ -lseccomp -lsystemd -pthread
-
-$(TEST_BIN_DIR)/test_server_sdk: tests/test_server_sdk.c tests/token_forge.c $(SDK_DIR)/lota_server.c $(SDK_DIR)/lota_gaming.c $(VERSION_FILE) | $(BUILD_DIR)
-	$(QUIET_CC)
-	$(Q)$(CC) $(CFLAGS) $(SDK_VERSION_CFLAGS) -o $@ $(filter-out $(VERSION_FILE),$^) -lcrypto
-
-$(TEST_BIN_DIR)/demo_sdk: tests/demo_sdk.c $(SDK_DIR)/lota_gaming.c $(VERSION_FILE) | $(BUILD_DIR)
-	$(QUIET_CC)
-	$(Q)$(CC) $(CFLAGS) $(SDK_VERSION_CFLAGS) -o $@ \
-		$(filter-out $(VERSION_FILE),$^)
-
-$(TEST_BIN_DIR)/test_anticheat: tests/test_anticheat.c tests/token_forge.c $(SDK_DIR)/lota_anticheat.c $(SDK_DIR)/lota_gaming.c $(SDK_DIR)/lota_server.c $(VERSION_FILE) | $(BUILD_DIR)
-	$(QUIET_CC)
-	$(Q)$(CC) $(CFLAGS) $(SDK_VERSION_CFLAGS) -o $@ $(filter-out $(VERSION_FILE),$^) -lcrypto
-
-$(TEST_BIN_DIR)/test_runtime_measure: tests/test_runtime_measure.c $(SDK_DIR)/lota_anticheat.c $(SDK_DIR)/lota_gaming.c $(SDK_DIR)/lota_server.c $(VERSION_FILE) | $(BUILD_DIR)
-	$(QUIET_CC)
-	$(Q)$(CC) $(CFLAGS) $(SDK_VERSION_CFLAGS) -o $@ $(filter-out $(VERSION_FILE),$^) -lcrypto
-
-$(TEST_BIN_DIR)/test_runtime_image_measure: tests/test_runtime_image_measure.c | $(BUILD_DIR)
-	$(QUIET_CC)
-	$(Q)$(CC) $(CFLAGS) -o $@ $^ -lcrypto
-
-$(TEST_BIN_DIR)/test_rt_verity_cache: tests/test_rt_verity_cache.c \
-		$(AGENT_DIR)/rt_verity_cache.h | $(BUILD_DIR)
-	$(QUIET_CC)
-	$(Q)$(CC) $(CFLAGS) -o $@ $<
-
-$(TEST_BIN_DIR)/test_verity_digest_key: tests/test_verity_digest_key.c \
-		$(INC_DIR)/lota.h | $(BUILD_DIR)
-	$(QUIET_CC)
-	$(Q)$(CC) $(CFLAGS) -o $@ $<
-
-$(TEST_BIN_DIR)/test_ptrace_policy: tests/test_ptrace_policy.c \
-		$(INC_DIR)/lota.h | $(BUILD_DIR)
-	$(QUIET_CC)
-	$(Q)$(CC) $(CFLAGS) -o $@ $<
-
-$(TEST_BIN_DIR)/test_signal_policy: tests/test_signal_policy.c \
-		$(INC_DIR)/lota.h | $(BUILD_DIR)
-	$(QUIET_CC)
-	$(Q)$(CC) $(CFLAGS) -o $@ $<
-
-$(TEST_BIN_DIR)/test_module_purpose: tests/test_module_purpose.c \
-		$(INC_DIR)/lota.h | $(BUILD_DIR)
-	$(QUIET_CC)
-	$(Q)$(CC) $(CFLAGS) -o $@ $<
-
-$(TEST_BIN_DIR)/test_runtime_measure_failure: tests/test_runtime_measure_failure.c \
-		$(AGENT_DIR)/runtime_image_measure.c | $(BUILD_DIR)
-	$(QUIET_CC)
-	$(Q)$(CC) $(CFLAGS) -o $@ $^ -lcrypto
-
-$(TEST_BIN_DIR)/test_protect_pids: tests/test_protect_pids.c \
-		$(AGENT_DIR)/protect_pids.h | $(BUILD_DIR)
-	$(QUIET_CC)
-	$(Q)$(CC) $(CFLAGS) -o $@ $<
-
-$(TEST_BIN_DIR)/test_terminate_policy: tests/test_terminate_policy.c \
-		$(AGENT_DIR)/terminate_policy.h | $(BUILD_DIR)
-	$(QUIET_CC)
-	$(Q)$(CC) $(CFLAGS) -o $@ $<
-
-$(TEST_BIN_DIR)/test_runtime_protect_digest: tests/test_runtime_protect_digest.c | $(BUILD_DIR)
-	$(QUIET_CC)
-	$(Q)$(CC) $(CFLAGS) -o $@ $^ -lcrypto
-
-$(TEST_BIN_DIR)/test_runtime_image_collect: tests/test_runtime_image_collect.c $(AGENT_DIR)/runtime_image_measure.c | $(BUILD_DIR)
-	$(QUIET_CC)
-	$(Q)$(CC) $(CFLAGS) -o $@ $^ -lcrypto
-
-$(TEST_BIN_DIR)/test_runtime_mapping_identity: tests/test_runtime_mapping_identity.c $(AGENT_DIR)/runtime_image_measure.c | $(BUILD_DIR)
-	$(QUIET_CC)
-	$(Q)$(CC) $(CFLAGS) -o $@ $^ -lcrypto
-
-$(TEST_BIN_DIR)/test_runtime_measure_pid: tests/test_runtime_measure_pid.c $(AGENT_DIR)/runtime_image_measure.c | $(BUILD_DIR)
-	$(QUIET_CC)
-	$(Q)$(CC) $(CFLAGS) -o $@ $^ -lcrypto
-
-$(TEST_BIN_DIR)/test_mapped_pins: tests/test_mapped_pins.c \
-		$(AGENT_DIR)/mapped_pins.h | $(BUILD_DIR)
-	$(QUIET_CC)
-	$(Q)$(CC) $(CFLAGS) -o $@ tests/test_mapped_pins.c
-
-$(TEST_BIN_DIR)/test_watchdog_pace: tests/test_watchdog_pace.c \
-		$(AGENT_DIR)/watchdog_pace.h | $(BUILD_DIR)
-	$(QUIET_CC)
-	$(Q)$(CC) $(CFLAGS) -o $@ tests/test_watchdog_pace.c
-
-$(TEST_BIN_DIR)/test_runtime_identity_road: tests/test_runtime_identity_road.c $(AGENT_DIR)/runtime_image_measure.c | $(BUILD_DIR)
-	$(QUIET_CC)
-	$(Q)$(CC) $(CFLAGS) -o $@ $^ -lcrypto
-
-$(TEST_BIN_DIR)/test_seal_blob: tests/test_seal_blob.c $(INC_DIR)/lota_seal.h | $(BUILD_DIR)
-	$(QUIET_CC)
-	$(Q)$(CC) $(CFLAGS) -o $@ $<
-
-$(TEST_BIN_DIR)/test_seal_envelope: tests/test_seal_envelope.c $(AGENT_DIR)/seal_envelope.c | $(BUILD_DIR)
-	$(QUIET_CC)
-	$(Q)$(CC) $(CFLAGS) -o $@ $^ -lcrypto
-
-$(TEST_BIN_DIR)/test_seal_tpm: tests/test_seal_tpm.c $(AGENT_DIR)/tpm.c $(AGENT_DIR)/tpm_errno.c $(AGENT_DIR)/seal_envelope.c $(AGENT_DIR)/profile.c | $(BUILD_DIR)
-	$(QUIET_CC)
-	$(Q)$(CC) $(CFLAGS) -DLOTA_INTERNAL_TESTS -o $@ $^ -ltss2-esys -ltss2-mu -ltss2-tcti-device -ltss2-tctildr -lcrypto -lssl
-
-$(TEST_BIN_DIR)/test_seal_aik: tests/test_seal_aik.c $(AGENT_DIR)/tpm.c $(AGENT_DIR)/tpm_errno.c $(AGENT_DIR)/seal_envelope.c $(AGENT_DIR)/profile.c | $(BUILD_DIR)
-	$(QUIET_CC)
-	$(Q)$(CC) $(CFLAGS) -DLOTA_INTERNAL_TESTS -o $@ $^ -ltss2-esys -ltss2-mu -ltss2-tcti-device -ltss2-tctildr -lcrypto -lssl
-
-$(TEST_BIN_DIR)/test_ipc_payload_len: tests/test_ipc_payload_len.c \
-		$(AGENT_DIR)/ipc_payload.h $(INC_DIR)/lota_ipc.h | $(BUILD_DIR)
-	$(QUIET_CC)
-	$(Q)$(CC) $(CFLAGS) -o $@ $<
-
-$(TEST_BIN_DIR)/test_flag_names: tests/test_flag_names.c $(SDK_LIB) | $(BUILD_DIR)
-	$(QUIET_CC)
-	$(Q)$(CC) $(CFLAGS) -o $@ $< -L$(BUILD_DIR) -llotagaming -Wl,-rpath,$(abspath $(BUILD_DIR))
-
-$(TEST_BIN_DIR)/test_ipc_privilege: tests/test_ipc_privilege.c \
-		$(AGENT_DIR)/ipc_privilege.h | $(BUILD_DIR)
-	$(QUIET_CC)
-	$(Q)$(CC) $(CFLAGS) -o $@ $<
-
-$(TEST_BIN_DIR)/test_startup_hint: tests/test_startup_hint.c \
-		$(AGENT_DIR)/startup_hint.h | $(BUILD_DIR)
-	$(QUIET_CC)
-	$(Q)$(CC) $(CFLAGS) -o $@ $<
-
-$(TEST_BIN_DIR)/test_terminate_report: tests/test_terminate_report.c \
-		$(AGENT_DIR)/terminate_report.h | $(BUILD_DIR)
-	$(QUIET_CC)
-	$(Q)$(CC) $(CFLAGS) -o $@ $<
-
-$(TEST_BIN_DIR)/test_kill_report: tests/test_kill_report.c \
-		$(AGENT_DIR)/kill_report.h | $(BUILD_DIR)
-	$(QUIET_CC)
-	$(Q)$(CC) $(CFLAGS) -o $@ $<
-
-$(TEST_BIN_DIR)/test_measure_report: tests/test_measure_report.c \
-		$(AGENT_DIR)/measure_report.h | $(BUILD_DIR)
-	$(QUIET_CC)
-	$(Q)$(CC) $(CFLAGS) -o $@ $<
-
-$(TEST_BIN_DIR)/test_standing_answer: tests/test_standing_answer.c \
-		$(AGENT_DIR)/standing_answer.h | $(BUILD_DIR)
-	$(QUIET_CC)
-	$(Q)$(CC) $(CFLAGS) -o $@ $<
-
-$(TEST_BIN_DIR)/test_ipc_notify: tests/test_ipc_notify.c $(AGENT_DIR)/ipc.c \
-		$(AGENT_DIR)/journal.c $(AGENT_DIR)/profile.c \
-		$(AGENT_DIR)/token_gate.c | $(BUILD_DIR)
-	$(QUIET_CC)
-	$(Q)$(CC) $(CFLAGS) -o $@ $^ -lcrypto -lsystemd
-
-$(TEST_BIN_DIR)/test_ipc_attest_time: tests/test_ipc_attest_time.c \
-		$(AGENT_DIR)/ipc.c $(AGENT_DIR)/journal.c \
-		$(AGENT_DIR)/profile.c $(AGENT_DIR)/token_gate.c | $(BUILD_DIR)
-	$(QUIET_CC)
-	$(Q)$(CC) $(CFLAGS) -o $@ $^ -lcrypto -lsystemd
-
-$(TEST_BIN_DIR)/test_ipc_coverage_cost: tests/test_ipc_coverage_cost.c \
-		$(AGENT_DIR)/ipc.c $(AGENT_DIR)/journal.c \
-		$(AGENT_DIR)/profile.c $(AGENT_DIR)/token_gate.c | $(BUILD_DIR)
-	$(QUIET_CC)
-	$(Q)$(CC) $(CFLAGS) -o $@ $^ -lcrypto -lsystemd
-
-$(TEST_BIN_DIR)/test_ipc_token_refusal: tests/test_ipc_token_refusal.c \
-		$(AGENT_DIR)/ipc.c $(AGENT_DIR)/profile.c \
-		$(AGENT_DIR)/token_gate.c | $(BUILD_DIR)
-	$(QUIET_CC)
-	$(Q)$(CC) $(CFLAGS) -o $@ $^ -lcrypto -lsystemd
-
-$(TEST_BIN_DIR)/test_ipc_lockout_sync: tests/test_ipc_lockout_sync.c \
-		$(AGENT_DIR)/ipc.c $(AGENT_DIR)/journal.c \
-		$(AGENT_DIR)/profile.c $(AGENT_DIR)/token_gate.c | $(BUILD_DIR)
-	$(QUIET_CC)
-	$(Q)$(CC) $(CFLAGS) -o $@ $^ -lcrypto -lsystemd
-
-$(TEST_BIN_DIR)/test_ipc_reload_binding: tests/test_ipc_reload_binding.c \
-		$(AGENT_DIR)/ipc.c $(AGENT_DIR)/journal.c \
-		$(AGENT_DIR)/profile.c $(AGENT_DIR)/token_gate.c | $(BUILD_DIR)
-	$(QUIET_CC)
-	$(Q)$(CC) $(CFLAGS) -o $@ $^ -lcrypto -lsystemd
-
-$(TEST_BIN_DIR)/test_ipc_token_no_tpm: tests/test_ipc_token_no_tpm.c \
-		$(AGENT_DIR)/ipc.c $(AGENT_DIR)/journal.c \
-		$(AGENT_DIR)/profile.c $(AGENT_DIR)/token_gate.c | $(BUILD_DIR)
-	$(QUIET_CC)
-	$(Q)$(CC) $(CFLAGS) -o $@ $^ -lcrypto -lsystemd
-
-$(TEST_BIN_DIR)/test_ipc_extra_listener: tests/test_ipc_extra_listener.c \
-		$(AGENT_DIR)/ipc.c $(AGENT_DIR)/journal.c \
-		$(AGENT_DIR)/profile.c $(AGENT_DIR)/token_gate.c | $(BUILD_DIR)
-	$(QUIET_CC)
-	$(Q)$(CC) $(CFLAGS) -o $@ $^ -lcrypto -lsystemd
-
-$(TEST_BIN_DIR)/test_test_servers_order: tests/test_test_servers_order.c \
-		$(AGENT_DIR)/test_servers.c $(AGENT_DIR)/journal.c | $(BUILD_DIR)
-	$(QUIET_CC)
-	$(Q)$(CC) $(CFLAGS) -o $@ $^ -lsystemd
-
-$(TEST_BIN_DIR)/test_reload_enforcement_state: \
-		tests/test_reload_enforcement_state.c $(AGENT_DIR)/reload.c \
-		$(AGENT_DIR)/config.c $(AGENT_DIR)/journal.c \
-		$(AGENT_DIR)/policy_sign.c $(AGENT_DIR)/io_utils.c \
-		$(AGENT_DIR)/pin.c | $(BUILD_DIR)
-	$(QUIET_CC)
-	$(Q)$(CC) $(CFLAGS) -o $@ $^ -lcrypto -lsystemd
-
-$(TEST_BIN_DIR)/test_ipc_client: tests/test_ipc_client.c | $(BUILD_DIR)
-	$(QUIET_CC)
-	$(Q)$(CC) $(CFLAGS) -o $@ $^ -lcrypto
-
 # C half of the report layout cross-check:
 # serializes fully patterned report with the production serializer
 # for report_verify.go to parse
-$(TEST_BIN_DIR)/test_cross_lang_report_gen: tests/cross_lang/report_gen.c src/agent/report.c \
+$(BUILD_DIR)/test_cross_lang_report_gen: tests/cross_lang/report_gen.c src/agent/report.c \
 		$(INC_DIR)/lota.h $(INC_DIR)/attestation.h | $(BUILD_DIR)
 	$(QUIET_CC)
 	$(Q)$(CC) $(CFLAGS) -o $@ $(filter %.c,$^)
 
-$(TEST_BIN_DIR)/test_cross_lang_verify: tests/cross_lang/test_verify.c $(SERVER_SDK_LIB) | $(BUILD_DIR)
+$(BUILD_DIR)/test_cross_lang_verify: tests/cross_lang/test_verify.c $(SERVER_SDK_LIB) | $(BUILD_DIR)
 	$(QUIET_CC)
 	$(Q)$(CC) $(CFLAGS) -o $@ $< -L$(BUILD_DIR) -llotaserver -Wl,-rpath,$(abspath $(BUILD_DIR)) -lcrypto
 
-$(TEST_BIN_DIR)/test_ipc_dos: tests/test_ipc_dos.c $(SDK_LIB) | $(BUILD_DIR)
-	$(QUIET_CC)
-	$(Q)$(CC) $(CFLAGS) -o $@ $< -L$(BUILD_DIR) -llotagaming -Wl,-rpath,$(abspath $(BUILD_DIR))
-
-$(TEST_BIN_DIR)/test_loader_attach: tests/test_loader_attach.c $(AGENT_DIR)/bpf_loader.c $(AGENT_DIR)/journal.c $(AGENT_DIR)/policy_sign.c $(AGENT_DIR)/sb_dev.c $(AGENT_DIR)/cgroup_guard.c | $(BUILD_DIR)
-	$(QUIET_CC)
-	$(Q)$(CC) $(CFLAGS) -o $@ $^ -lbpf -lsystemd -lcrypto
-
-# Interpose libbpf's open calls and the signature verify so the loader's
-# verify-then-load path is testable without a key or a live kernel
-$(TEST_BIN_DIR)/test_bpf_loader_load_source: tests/test_bpf_loader_load_source.c $(AGENT_DIR)/bpf_loader.c $(AGENT_DIR)/journal.c $(AGENT_DIR)/policy_sign.c $(AGENT_DIR)/sb_dev.c $(AGENT_DIR)/cgroup_guard.c | $(BUILD_DIR)
-	$(QUIET_CC)
-	$(Q)$(CC) $(CFLAGS) -o $@ $^ -lbpf -lsystemd -lcrypto \
-		-Wl,--wrap=policy_verify_buffer \
-		-Wl,--wrap=bpf_object__open_file \
-		-Wl,--wrap=bpf_object__open_mem
-
-# wraps return NULL with errno clear: refusal path without a kernel
-$(TEST_BIN_DIR)/test_bpf_loader_open_fails_closed: tests/test_bpf_loader_open_fails_closed.c $(AGENT_DIR)/bpf_loader.c $(AGENT_DIR)/journal.c $(AGENT_DIR)/policy_sign.c $(AGENT_DIR)/sb_dev.c $(AGENT_DIR)/cgroup_guard.c | $(BUILD_DIR)
-	$(QUIET_CC)
-	$(Q)$(CC) $(CFLAGS) -o $@ $^ -lbpf -lsystemd -lcrypto \
-		-Wl,--wrap=policy_verify_buffer \
-		-Wl,--wrap=bpf_object__open_mem \
-		-Wl,--wrap=bpf_object__next_program \
-		-Wl,--wrap=bpf_program__type \
-		-Wl,--wrap=bpf_program__name \
-		-Wl,--wrap=bpf_program__attach \
-		-Wl,--wrap=ring_buffer__new
-
-# forks a child that the supervisor really kills: thread and signal under test
-$(TEST_BIN_DIR)/test_watchdog_supervisor: tests/test_watchdog_supervisor.c $(AGENT_DIR)/watchdog.c $(AGENT_DIR)/sdnotify.c $(AGENT_DIR)/journal.c | $(BUILD_DIR)
-	$(QUIET_CC)
-	$(Q)$(CC) $(CFLAGS) -pthread -o $@ $^ -lsystemd
-
-$(TEST_BIN_DIR)/test_protect_pid_validation: tests/test_protect_pid_validation.c \
-		$(AGENT_DIR)/startup_policy.c $(AGENT_DIR)/bpf_loader.c \
-		$(AGENT_DIR)/journal.c $(AGENT_DIR)/policy_sign.c \
-		$(AGENT_DIR)/sb_dev.c $(AGENT_DIR)/cgroup_guard.c \
-		$(AGENT_DIR)/config.c $(AGENT_DIR)/io_utils.c \
-		$(AGENT_DIR)/pin.c $(AGENT_DIR)/policy_pubkey.c \
-		| $(BUILD_DIR)
-	$(QUIET_CC)
-	$(Q)$(CC) $(CFLAGS) -o $@ $^ -lbpf -lsystemd -lcrypto \
-		-Wl,--wrap=bpf_loader_verify_kernel_runtime_hardening
-
-$(TEST_BIN_DIR)/test_startup_refusal_status: tests/test_startup_refusal_status.c \
-		$(AGENT_DIR)/startup_policy.c $(AGENT_DIR)/bpf_loader.c \
-		$(AGENT_DIR)/journal.c $(AGENT_DIR)/policy_sign.c \
-		$(AGENT_DIR)/sb_dev.c $(AGENT_DIR)/cgroup_guard.c \
-		$(AGENT_DIR)/config.c $(AGENT_DIR)/io_utils.c \
-		$(AGENT_DIR)/pin.c $(AGENT_DIR)/policy_pubkey.c \
-		| $(BUILD_DIR)
-	$(QUIET_CC)
-	$(Q)$(CC) $(CFLAGS) -o $@ $^ -lbpf -lsystemd -lcrypto \
-		-Wl,--wrap=bpf_loader_verify_kernel_runtime_hardening
-
-$(TEST_BIN_DIR)/test_bpf_object_preflight: tests/test_bpf_object_preflight.c $(AGENT_DIR)/bpf_loader.c $(AGENT_DIR)/journal.c $(AGENT_DIR)/policy_sign.c $(AGENT_DIR)/sb_dev.c $(AGENT_DIR)/cgroup_guard.c | $(BUILD_DIR)
-	$(QUIET_CC)
-	$(Q)$(CC) $(CFLAGS) -o $@ $^ -lbpf -lsystemd -lcrypto \
-		-Wl,--wrap=policy_verify_buffer
-
-$(TEST_BIN_DIR)/test_kernel_floor_hint: tests/test_kernel_floor_hint.c $(AGENT_DIR)/kernel_floor_hint.h | $(BUILD_DIR)
-	$(QUIET_CC)
-	$(Q)$(CC) $(CFLAGS) -o $@ $<
-
-$(TEST_BIN_DIR)/test_ima_policy_scope: tests/test_ima_policy_scope.c $(AGENT_DIR)/bpf_loader.c $(AGENT_DIR)/journal.c $(AGENT_DIR)/policy_sign.c $(AGENT_DIR)/sb_dev.c $(AGENT_DIR)/cgroup_guard.c | $(BUILD_DIR)
-	$(QUIET_CC)
-	$(Q)$(CC) $(CFLAGS) -o $@ $^ -lbpf -lsystemd -lcrypto
-
-$(TEST_BIN_DIR)/test_integrity_baseline: tests/test_integrity_baseline.c $(AGENT_DIR)/bpf_loader.c $(AGENT_DIR)/journal.c $(AGENT_DIR)/policy_sign.c $(AGENT_DIR)/sb_dev.c $(AGENT_DIR)/cgroup_guard.c | $(BUILD_DIR)
-	$(QUIET_CC)
-	$(Q)$(CC) $(CFLAGS) -o $@ $^ -lbpf -lsystemd -lcrypto
-
-$(TEST_BIN_DIR)/test_daemon_exit_status: tests/test_daemon_exit_status.c $(AGENT_DIR)/exit_status.c | $(BUILD_DIR)
-	$(QUIET_CC)
-	$(Q)$(CC) $(CFLAGS) -o $@ $^
-
-$(TEST_BIN_DIR)/test_integrity_map_layout: tests/test_integrity_map_layout.c $(AGENT_DIR)/bpf_loader.c $(AGENT_DIR)/journal.c $(AGENT_DIR)/policy_sign.c $(AGENT_DIR)/sb_dev.c $(AGENT_DIR)/cgroup_guard.c $(BPF_OBJ) $(LEGACY_BPF_OBJ) | $(BUILD_DIR)
-	$(QUIET_CC)
-	$(Q)$(CC) $(CFLAGS) -DTREE_BPF_OBJ='"$(BPF_OBJ)"' \
-		-DLEGACY_BPF_OBJ='"$(LEGACY_BPF_OBJ)"' \
-		-o $@ $(filter %.c,$^) -lbpf -lsystemd -lcrypto
-
 # Build the unit/integration test binaries without running them. Used by
 # the include-hygiene gate so test sources are analyzed too.
+.PHONY: test-bins
 test-bins: $(TEST_BINS)
 
 # Full test suite (unit + integration + hardware)
 # Note: hardware tests require root. Run 'sudo make test-hardware' for them.
+.PHONY: test
 test: test-unit
 
+.PHONY: test-unit
 test-unit: all $(TEST_BINS)
 	@echo "=== Running unit tests ==="
-	@$(BUILD_DIR)/test_hash_verify
-	@$(BUILD_DIR)/test_dbus
-	@$(BUILD_DIR)/test_systemd
-	@$(BUILD_DIR)/test_packaging
-	@$(BUILD_DIR)/test_steam_runtime
-	@$(BUILD_DIR)/test_container_watch
-	@$(BUILD_DIR)/test_token_gate
-	@$(BUILD_DIR)/test_wine_hook
-	@$(BUILD_DIR)/test_wine_hook_events
-	@$(BUILD_DIR)/test_wine_hook_slow_agent
-	@$(BUILD_DIR)/test_wine_hook_publisher
-	@$(BUILD_DIR)/test_daemon
-	@$(BUILD_DIR)/test_daemon_start_status
-	@$(BUILD_DIR)/test_signal_shutdown
-	@$(BUILD_DIR)/test_daemon_loop
-	@$(BUILD_DIR)/test_config
-	@$(BUILD_DIR)/test_config_alloc
-	@$(BUILD_DIR)/test_config_add_profile
-	@$(BUILD_DIR)/test_subscribe
-	@$(BUILD_DIR)/test_policy_sign
-	@$(BUILD_DIR)/test_policy_export
-	@$(BUILD_DIR)/test_aik_rotation
-	@$(BUILD_DIR)/test_pcr14_verdict
-	@$(BUILD_DIR)/test_ipc_privilege
-	@$(BUILD_DIR)/test_startup_hint
-	@$(BUILD_DIR)/test_terminate_report
-	@$(BUILD_DIR)/test_kill_report
-	@$(BUILD_DIR)/test_measure_report
-	@$(BUILD_DIR)/test_standing_answer
-	@$(BUILD_DIR)/test_ipc_notify
-	@$(BUILD_DIR)/test_ipc_attest_time
-	@$(BUILD_DIR)/test_ipc_coverage_cost
-	@$(BUILD_DIR)/test_ipc_token_refusal
-	@$(BUILD_DIR)/test_ipc_lockout_sync
-	@$(BUILD_DIR)/test_ipc_reload_binding
-	@$(BUILD_DIR)/test_ipc_token_no_tpm
-	@$(BUILD_DIR)/test_ipc_extra_listener
-	@$(BUILD_DIR)/test_test_servers_order
-	@$(BUILD_DIR)/test_reload_enforcement_state
-	@$(BUILD_DIR)/test_credential_activation
-	@$(BUILD_DIR)/test_enroll_wire
-	@$(BUILD_DIR)/test_enroll_status
-	@$(BUILD_DIR)/test_enroll_state
-	@$(BUILD_DIR)/test_profile_id
-	@$(BUILD_DIR)/test_attest_targets
-	@$(BUILD_DIR)/test_attest_reload
-	@$(BUILD_DIR)/test_attest_stage
-	@$(BUILD_DIR)/test_attest_aggregate
-	@$(BUILD_DIR)/test_status_flags
-	@$(BUILD_DIR)/test_iommu_evidence
-	@$(BUILD_DIR)/test_publisher_profile
-	@$(BUILD_DIR)/test_io_read_file
-	@$(BUILD_DIR)/test_devt
-	@$(BUILD_DIR)/test_live_fixtures
-	@$(BUILD_DIR)/test_sb_dev
-	@$(BUILD_DIR)/test_cgroup_guard
-	@$(BUILD_DIR)/test_kernel_measure
-	@$(BUILD_DIR)/test_kernel_image
-	@$(BUILD_DIR)/test_bpf_mount_hooks
-	@$(BUILD_DIR)/test_bpf_kill_guard
-	@$(BUILD_DIR)/test_path_sanitize
-	@$(BUILD_DIR)/test_event_budget
-	@$(BUILD_DIR)/test_tpm_nv_chunk
-	@$(BUILD_DIR)/test_ipc_token_cap
-	@$(BUILD_DIR)/test_initramfs_lock
-	@$(BUILD_DIR)/test_installer_probe
-	@$(BUILD_DIR)/test_installer_named_paths
-	@$(BUILD_DIR)/test_installer_trust_key
-	@$(BUILD_DIR)/test_installer_checkpoint
-	@$(BUILD_DIR)/test_installer_stage_text
-	@$(BUILD_DIR)/test_installer_service
-	@$(BUILD_DIR)/test_installer_confirm
-	@$(BUILD_DIR)/test_selftest_plan
-	@$(BUILD_DIR)/test_ima_xattr
-	@$(BUILD_DIR)/test_constant_time
-	@$(BUILD_DIR)/test_hardening
-	@$(BUILD_DIR)/test_server_sdk
-	@$(BUILD_DIR)/test_anticheat
-	@$(BUILD_DIR)/test_flag_names
-	@$(BUILD_DIR)/test_verify_result_str
-	@$(BUILD_DIR)/test_connect_hint
-	@$(BUILD_DIR)/test_net_errors
-	@$(BUILD_DIR)/test_tls_anchor
-	@$(BUILD_DIR)/test_xattr_carry
-	@$(BUILD_DIR)/test_runtime_measure
-	@$(BUILD_DIR)/test_runtime_image_measure
-	@$(BUILD_DIR)/test_runtime_measure_failure
-	@$(BUILD_DIR)/test_rt_verity_cache
-	@$(BUILD_DIR)/test_verity_digest_key
-	@$(BUILD_DIR)/test_ptrace_policy
-	@$(BUILD_DIR)/test_signal_policy
-	@$(BUILD_DIR)/test_module_purpose
-	@$(BUILD_DIR)/test_runtime_protect_digest
-	@$(BUILD_DIR)/test_protect_pids
-	@$(BUILD_DIR)/test_terminate_policy
-	@$(BUILD_DIR)/test_runtime_image_collect
-	@$(BUILD_DIR)/test_runtime_mapping_identity
-	@$(BUILD_DIR)/test_runtime_measure_pid
-	@$(BUILD_DIR)/test_mapped_pins
-	@$(BUILD_DIR)/test_watchdog_pace
-	@$(BUILD_DIR)/test_runtime_identity_road
-	@$(BUILD_DIR)/test_seal_blob
-	@$(BUILD_DIR)/test_seal_envelope
-	@$(BUILD_DIR)/test_seal_tpm
-	@$(BUILD_DIR)/test_seal_aik
-	@$(BUILD_DIR)/test_loader_attach
-	@$(BUILD_DIR)/test_bpf_loader_load_source
-	@$(BUILD_DIR)/test_bpf_loader_open_fails_closed
-	@$(BUILD_DIR)/test_watchdog_supervisor
-	@$(BUILD_DIR)/test_bpf_object_preflight
-	@$(BUILD_DIR)/test_ima_policy_scope
-	@$(BUILD_DIR)/test_kernel_floor_hint
-	@$(BUILD_DIR)/test_integrity_baseline
-	@$(BUILD_DIR)/test_daemon_exit_status
-	@$(BUILD_DIR)/test_startup_refusal_status
-	@$(BUILD_DIR)/test_integrity_map_layout
+	@set -e; for t in $(TEST_RUN); do $$t; done
 	@echo ""
 	@echo "=== Running integration tests (best effort) ==="
 	@if [ -x $(AGENT_BIN) ] && command -v openssl >/dev/null 2>&1; then \
@@ -2388,6 +1931,7 @@ test-unit: all $(TEST_BINS)
 	@echo ""
 	@echo "Tests complete. Run 'make test-hardware' (as root) for hardware tests."
 
+.PHONY: test-hardware
 test-hardware: $(AGENT_BIN)
 	@echo "=== Agent hardware tests (require root) ==="
 	$(AGENT_BIN) --test-iommu
@@ -2395,6 +1939,7 @@ test-hardware: $(AGENT_BIN)
 	$(AGENT_BIN) --test-tpm
 	@echo ""
 
+.PHONY: test-sdk
 test-sdk: $(TEST_SDK_BIN) $(SDK_LIB) $(AGENT_BIN)
 	@echo "=== SDK Integration Test ==="
 	@echo "Start agent in another terminal: sudo $(BUILD_DIR)/lota-agent --test-ipc"
@@ -2404,6 +1949,7 @@ test-sdk: $(TEST_SDK_BIN) $(SDK_LIB) $(AGENT_BIN)
 # compilation/smoke gate for broad coverage; make test-unit remains the
 # runtime sanitizer gate for the standalone unit tests.
 SANITIZER_BUILD_TARGETS = all examples $(BENCH_C_BIN) syzkaller-fuzz-loader
+.PHONY: sanitizer-build
 sanitizer-build:
 	$(MAKE) SANITIZE=address,undefined $(SANITIZER_BUILD_TARGETS)
 
@@ -2437,6 +1983,7 @@ VALGRIND_UNIT_BINS := \
 	test_daemon_exit_status test_integrity_map_layout \
 	test_installer_confirm
 
+.PHONY: valgrind-unit
 valgrind-unit: $(TEST_BINS)
 	@echo "=== Running unit tests under valgrind memcheck ==="
 	@for b in $(VALGRIND_UNIT_BINS); do \
@@ -2449,6 +1996,7 @@ valgrind-unit: $(TEST_BINS)
 # a separate smoke pass for operator-facing binaries that are safe to
 # execute without TPM/BPF/root.
 VALGRIND_SMOKE_CONFIG := $(BUILD_DIR)/valgrind-smoke.conf
+.PHONY: valgrind-smoke
 valgrind-smoke: all examples
 	@echo "=== Running CLI smoke paths under valgrind memcheck ==="
 	@: > $(VALGRIND_SMOKE_CONFIG)
@@ -2495,6 +2043,7 @@ $(BUILD_DIR)/fuzz/fuzz_ipc.o: fuzz/fuzz_ipc.c src/agent/ipc.c src/agent/ipc.h | 
 $(BUILD_DIR)/fuzz:
 	$(Q)mkdir -p $@
 
+.PHONY: fuzz-agent
 fuzz-agent: $(FUZZ_AGENT_OBJS)
 	$(QUIET_CLANG)
 	$(Q)clang $(FUZZ_CFLAGS) -o $(BUILD_DIR)/fuzz-agent $(FUZZ_AGENT_OBJS) $(LDFLAGS)
@@ -2511,6 +2060,7 @@ $(BUILD_DIR)/fuzz/config_%.o: src/agent/%.c | $(BUILD_DIR)/fuzz
 	$(QUIET_CLANG)
 	$(Q)clang $(FUZZ_CFLAGS) -I$(INC_DIR) -MMD -MP -c $< -o $@
 
+.PHONY: fuzz-config
 fuzz-config: $(BUILD_DIR)/fuzz/fuzz_config.o $(FUZZ_CONFIG_OBJS) $(FUZZ_LSAN_OBJ)
 	$(QUIET_CLANG)
 	$(Q)clang $(FUZZ_CFLAGS) -o $(BUILD_DIR)/fuzz-config $^
@@ -2520,6 +2070,7 @@ $(BUILD_DIR)/fuzz/fuzz_enroll.o: fuzz/fuzz_enroll.c src/agent/enroll.c src/agent
 	$(QUIET_CLANG)
 	$(Q)clang $(FUZZ_CFLAGS) -c $< -o $@
 
+.PHONY: fuzz-enroll
 fuzz-enroll: $(BUILD_DIR)/fuzz/fuzz_enroll.o $(FUZZ_LSAN_OBJ)
 	$(QUIET_CLANG)
 	$(Q)clang $(FUZZ_CFLAGS) -o $(BUILD_DIR)/fuzz-enroll $^
@@ -2533,6 +2084,7 @@ $(BUILD_DIR)/fuzz/seal_envelope_obj.o: src/agent/seal_envelope.c | $(BUILD_DIR)/
 	$(QUIET_CLANG)
 	$(Q)clang $(FUZZ_CFLAGS) -I$(INC_DIR) -c $< -o $@
 
+.PHONY: fuzz-seal-envelope
 fuzz-seal-envelope: $(BUILD_DIR)/fuzz/fuzz_seal_envelope.o $(BUILD_DIR)/fuzz/seal_envelope_obj.o $(FUZZ_LSAN_OBJ)
 	$(QUIET_CLANG)
 	$(Q)clang $(FUZZ_CFLAGS) -o $(BUILD_DIR)/fuzz-seal-envelope $^ -lcrypto
@@ -2542,6 +2094,7 @@ $(BUILD_DIR)/fuzz/fuzz_tpm_attest.o: fuzz/fuzz_tpm_attest.c | $(BUILD_DIR)/fuzz
 	$(QUIET_CLANG)
 	$(Q)clang $(FUZZ_CFLAGS) -c $< -o $@
 
+.PHONY: fuzz-tpm-attest
 fuzz-tpm-attest: $(BUILD_DIR)/fuzz/fuzz_tpm_attest.o $(FUZZ_LSAN_OBJ)
 	$(QUIET_CLANG)
 	$(Q)clang $(FUZZ_CFLAGS) -o $(BUILD_DIR)/fuzz-tpm-attest $^ -ltss2-mu
@@ -2555,6 +2108,7 @@ $(BUILD_DIR)/fuzz/policy_sign_obj.o: src/agent/policy_sign.c src/agent/policy_si
 	$(QUIET_CLANG)
 	$(Q)clang $(FUZZ_CFLAGS) -I$(INC_DIR) -c $< -o $@
 
+.PHONY: fuzz-policy-sign
 fuzz-policy-sign: $(BUILD_DIR)/fuzz/fuzz_policy_sign.o $(BUILD_DIR)/fuzz/policy_sign_obj.o $(FUZZ_LSAN_OBJ)
 	$(QUIET_CLANG)
 	$(Q)clang $(FUZZ_CFLAGS) -o $(BUILD_DIR)/fuzz-policy-sign $^ -lcrypto
@@ -2568,6 +2122,7 @@ $(BUILD_DIR)/fuzz/server_sdk_obj.o: src/sdk/lota_server.c $(VERSION_FILE) | $(BU
 	$(QUIET_CLANG)
 	$(Q)clang $(FUZZ_CFLAGS) $(SDK_VERSION_CFLAGS) -I$(INC_DIR) -c $< -o $@
 
+.PHONY: fuzz-server-sdk
 fuzz-server-sdk: $(BUILD_DIR)/fuzz/fuzz_server_sdk.o $(BUILD_DIR)/fuzz/server_sdk_obj.o $(FUZZ_LSAN_OBJ)
 	$(QUIET_CLANG)
 	$(Q)clang $(FUZZ_CFLAGS) -o $(BUILD_DIR)/fuzz-server-sdk $^ -lcrypto
@@ -2577,6 +2132,7 @@ $(BUILD_DIR)/fuzz/fuzz_tpm_resp.o: fuzz/fuzz_tpm_resp.c | $(BUILD_DIR)/fuzz
 	$(QUIET_CLANG)
 	$(Q)clang $(FUZZ_CFLAGS) -c $< -o $@
 
+.PHONY: fuzz-tpm-resp
 fuzz-tpm-resp: $(BUILD_DIR)/fuzz/fuzz_tpm_resp.o $(FUZZ_LSAN_OBJ)
 	$(QUIET_CLANG)
 	$(Q)clang $(FUZZ_CFLAGS) -o $(BUILD_DIR)/fuzz-tpm-resp $^ -ltss2-mu
@@ -2594,6 +2150,7 @@ $(BUILD_DIR)/fuzz/fuzz_devt.o: fuzz/bpf_oracle/fuzz_devt.c include/lota_devt.h |
 	$(QUIET_CLANG)
 	$(Q)clang $(BPF_ORACLE_CFLAGS) -c $< -o $@
 
+.PHONY: fuzz-bpf-devt
 fuzz-bpf-devt: $(BUILD_DIR)/fuzz/fuzz_devt.o $(FUZZ_LSAN_OBJ)
 	$(QUIET_CLANG)
 	$(Q)clang $(FUZZ_CFLAGS) -o $(BUILD_DIR)/fuzz-bpf-devt $^
@@ -2602,6 +2159,7 @@ $(BUILD_DIR)/fuzz/fuzz_open_flags.o: fuzz/bpf_oracle/fuzz_open_flags.c fuzz/bpf_
 	$(QUIET_CLANG)
 	$(Q)clang $(BPF_ORACLE_CFLAGS) -c $< -o $@
 
+.PHONY: fuzz-bpf-open-flags
 fuzz-bpf-open-flags: $(BUILD_DIR)/fuzz/fuzz_open_flags.o $(FUZZ_LSAN_OBJ)
 	$(QUIET_CLANG)
 	$(Q)clang $(FUZZ_CFLAGS) -o $(BUILD_DIR)/fuzz-bpf-open-flags $^
@@ -2610,6 +2168,7 @@ $(BUILD_DIR)/fuzz/fuzz_kmem_device.o: fuzz/bpf_oracle/fuzz_kmem_device.c fuzz/bp
 	$(QUIET_CLANG)
 	$(Q)clang $(BPF_ORACLE_CFLAGS) -c $< -o $@
 
+.PHONY: fuzz-bpf-kmem-device
 fuzz-bpf-kmem-device: $(BUILD_DIR)/fuzz/fuzz_kmem_device.o $(FUZZ_LSAN_OBJ)
 	$(QUIET_CLANG)
 	$(Q)clang $(FUZZ_CFLAGS) -o $(BUILD_DIR)/fuzz-bpf-kmem-device $^
@@ -2618,6 +2177,7 @@ $(BUILD_DIR)/fuzz/fuzz_event_budget.o: fuzz/bpf_oracle/fuzz_event_budget.c inclu
 	$(QUIET_CLANG)
 	$(Q)clang $(BPF_ORACLE_CFLAGS) -c $< -o $@
 
+.PHONY: fuzz-bpf-event-budget
 fuzz-bpf-event-budget: $(BUILD_DIR)/fuzz/fuzz_event_budget.o $(FUZZ_LSAN_OBJ)
 	$(QUIET_CLANG)
 	$(Q)clang $(FUZZ_CFLAGS) -o $(BUILD_DIR)/fuzz-bpf-event-budget $^
@@ -2626,6 +2186,7 @@ $(BUILD_DIR)/fuzz/fuzz_inaccessible_exec.o: fuzz/bpf_oracle/fuzz_inaccessible_ex
 	$(QUIET_CLANG)
 	$(Q)clang $(BPF_ORACLE_CFLAGS) -c $< -o $@
 
+.PHONY: fuzz-bpf-inaccessible-exec
 fuzz-bpf-inaccessible-exec: $(BUILD_DIR)/fuzz/fuzz_inaccessible_exec.o $(FUZZ_LSAN_OBJ)
 	$(QUIET_CLANG)
 	$(Q)clang $(FUZZ_CFLAGS) -o $(BUILD_DIR)/fuzz-bpf-inaccessible-exec $^
@@ -2634,10 +2195,12 @@ $(BUILD_DIR)/fuzz/fuzz_shebang.o: fuzz/bpf_oracle/fuzz_shebang.c fuzz/bpf_oracle
 	$(QUIET_CLANG)
 	$(Q)clang $(BPF_ORACLE_CFLAGS) -c $< -o $@
 
+.PHONY: fuzz-bpf-shebang
 fuzz-bpf-shebang: $(BUILD_DIR)/fuzz/fuzz_shebang.o $(FUZZ_LSAN_OBJ)
 	$(QUIET_CLANG)
 	$(Q)clang $(FUZZ_CFLAGS) -o $(BUILD_DIR)/fuzz-bpf-shebang $^
 
+.PHONY: fuzz-bpf-all
 fuzz-bpf-all: fuzz-bpf-devt fuzz-bpf-open-flags fuzz-bpf-kmem-device \
 	fuzz-bpf-event-budget fuzz-bpf-inaccessible-exec fuzz-bpf-shebang
 
@@ -2698,12 +2261,14 @@ FUZZ_TARGETS := fuzz-agent fuzz-config fuzz-enroll \
 	fuzz-tpm-resp fuzz-bpf-devt fuzz-bpf-open-flags fuzz-bpf-kmem-device \
 	fuzz-bpf-event-budget fuzz-bpf-inaccessible-exec fuzz-bpf-shebang
 
+.PHONY: fuzz-all
 fuzz-all: $(FUZZ_TARGETS)
 
 # Replay fuzz/regressions/<target>/ against each target; any target that
 # still fails fails the run. New artifacts go to the build dir, not the tree.
 FUZZ_REGRESS_DIR := fuzz/regressions
 
+.PHONY: fuzz-regress
 fuzz-regress: fuzz-all
 	@rc=0; \
 	for t in $(FUZZ_TARGETS); do \
@@ -2729,6 +2294,7 @@ fuzz-regress: fuzz-all
 # syscalls run through the LOTA kernel surface. See syzkaller/README.rst.
 SYZ_FUZZ_LOADER := $(BUILD_DIR)/lota_bpf_fuzz
 
+.PHONY: syzkaller-fuzz-loader
 syzkaller-fuzz-loader: $(SYZ_FUZZ_LOADER)
 
 $(SYZ_FUZZ_LOADER): syzkaller/lota_bpf_fuzz.c | $(BUILD_DIR)
@@ -2846,6 +2412,7 @@ check-header-paths:
 	fi; \
 	exit $$rc
 
+.PHONY: help
 help:
 	@echo "LOTA $(PROJECT_VERSION)"
 	@echo ""
