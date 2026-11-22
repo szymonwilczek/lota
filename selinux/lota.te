@@ -98,7 +98,7 @@ dev_node(lota_tpm_device_t)
 # the code of title that asked to be protected.
 # It grants no debugger: attaching is refused separately by the agent's own
 # LSM hook, which exempts the agent for read access only.
-allow lota_agent_t self:capability { dac_override dac_read_search sys_admin sys_ptrace };
+allow lota_agent_t self:capability { dac_override dac_read_search sys_admin sys_ptrace chown };
 allow lota_agent_t self:capability2 { bpf perfmon };
 allow lota_agent_t self:process { signal signull };
 allow lota_agent_t self:fifo_file rw_fifo_file_perms;
@@ -124,6 +124,11 @@ allow lota_agent_t self:unix_stream_socket connectto;
 # /usr/lib/lota/*.bpf.o
 allow lota_agent_t lota_bpf_t:dir list_dir_perms;
 allow lota_agent_t lota_bpf_t:file { read_file_perms execute map };
+
+# Per-user container socket, /run/user/<uid>/lota/lota.sock
+userdom_manage_tmp_dirs(lota_agent_t)
+userdom_manage_tmp_sockets(lota_agent_t)
+userdom_watch_tmp_dirs(lota_agent_t)
 
 #
 # Hardware access

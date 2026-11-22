@@ -326,8 +326,7 @@ static void test_selinux_reports_every_tunable(void)
 	char line[1024];
 	bool derived = false;
 	int iterating_targets = 0;
-	static const char *const sources[] = { "selinux/lota.te",
-					       "selinux/lota_gaming.te" };
+	static const char *const sources[] = { "selinux/lota.te" };
 	FILE *fp;
 
 	TEST("selinux: the reported tunables are read from the policy");
@@ -419,9 +418,7 @@ static void test_selinux_reports_every_tunable(void)
 static void test_selinux_policy_carries_no_portcon(void)
 {
 	static const char *const sources[] = { "selinux/lota.te",
-					       "selinux/lota.fc",
-					       "selinux/lota_gaming.te",
-					       "selinux/lota_gaming.fc" };
+					       "selinux/lota.fc" };
 	char line[1024];
 
 	TEST("selinux: no source declares a port context");
@@ -511,6 +508,37 @@ static size_t iface_calls(const char *body, size_t len, char out[][64],
 	return count;
 }
 
+static void test_selinux_container_listener_is_shipped(void)
+{
+	static const char *const rules[] = {
+		"userdom_manage_tmp_dirs(lota_agent_t)",
+		"userdom_manage_tmp_sockets(lota_agent_t)",
+		"userdom_watch_tmp_dirs(lota_agent_t)", " chown "
+	};
+	static char policy[65536];
+	FILE *fp;
+	size_t got;
+
+	TEST("selinux: the shipped module carries the container listener");
+
+	fp = open_shipped("selinux/lota.te");
+	if (!fp) {
+		FAIL("could not open selinux/lota.te");
+		return;
+	}
+	got = fread(policy, 1, sizeof(policy) - 1, fp);
+	fclose(fp);
+	policy[got] = '\0';
+
+	for (size_t i = 0; i < sizeof(rules) / sizeof(rules[0]); i++) {
+		if (!strstr(policy, rules[i])) {
+			FAIL("the packages ship lota.pp alone: the rule belongs there");
+			return;
+		}
+	}
+	PASS();
+}
+
 static void test_selinux_gaming_client_reaches_container_socket(void)
 {
 	static const char *const road[] = { "lota_gaming_client",
@@ -580,6 +608,36 @@ static size_t slurp_shipped(const char *rel, char *buf, size_t cap)
 	fclose(fp);
 	buf[got] = '\0';
 	return got;
+}
+
+/*
+ * A client stats the socket before it connects, so write alone leaves it with
+ * EACCES on the system socket.
+ */
+static void test_selinux_status_client_stats_socket(void)
+{
+	static char policy[65536];
+	const char *want = "lota_var_t:sock_file write_sock_file_perms;";
+	const char *body;
+	size_t len;
+
+	TEST("selinux: a status client may stat the agent socket");
+
+	if (!slurp_shipped("selinux/lota.if", policy, sizeof(policy))) {
+		FAIL("could not read selinux/lota.if");
+		return;
+	}
+	if (!iface_body(policy, "lota_query_status", &body, &len)) {
+		FAIL("lota_query_status is not defined");
+		return;
+	}
+	for (size_t i = 0; i + strlen(want) <= len; i++) {
+		if (strncmp(body + i, want, strlen(want)) == 0) {
+			PASS();
+			return;
+		}
+	}
+	FAIL("lota_query_status does not grant getattr on the socket");
 }
 
 /*
@@ -950,7 +1008,9 @@ int main(void)
 	test_selinux_interfaces_are_installed();
 	test_selinux_reports_every_tunable();
 	test_selinux_policy_carries_no_portcon();
+	test_selinux_container_listener_is_shipped();
 	test_selinux_gaming_client_reaches_container_socket();
+	test_selinux_status_client_stats_socket();
 	test_installer_labels_the_config_directory();
 	test_installer_relabel_reapplies_the_device_labels();
 	test_static_cli_is_built_without_cgo();

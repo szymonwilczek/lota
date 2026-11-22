@@ -59,7 +59,7 @@ interface(`lota_query_status',`
         ')
 
         allow $1 lota_var_t:dir search_dir_perms;
-        allow $1 lota_var_t:sock_file write;
+        allow $1 lota_var_t:sock_file write_sock_file_perms;
         allow $1 lota_agent_t:unix_stream_socket connectto;
         allow $1 lota_var_t:file read_file_perms;
 ')

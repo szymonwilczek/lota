@@ -7,7 +7,7 @@
 SHELL := /bin/bash
 
 # Policy modules
-MODULES := lota lota_gaming
+MODULES := lota
 
 # Derived file lists
 TE_FILES := $(addsuffix .te,$(MODULES))
@@ -92,11 +92,6 @@ check-deps:
 	$(MAKE) -f $(SELINUX_MAKEFILE) $@
 
 #
-# lota_gaming depends on lota
-#
-lota_gaming.pp: lota.pp
-
-#
 # Install policy modules
 #
 .PHONY: install
@@ -107,7 +102,6 @@ install: all
 
 	@echo "Installing policy modules..."
 	semodule -i lota.pp
-	semodule -i lota_gaming.pp
 
 	@echo "Installing policy packages and interfaces..."
 	install -d $(SELINUX_MODULE_DIR)
@@ -206,7 +200,6 @@ uninstall:
 	fi
 
 	@# modules
-	-semodule -r lota_gaming 2>/dev/null || true
 	-semodule -r lota 2>/dev/null || true
 
 	@# the copies install put on the filesystem
@@ -252,9 +245,6 @@ verify:
 	@semodule -l | grep -q "^lota" && \
 		echo -e "$(GREEN)lota module: installed$(NC)" || \
 		echo -e "$(RED)lota module: NOT installed$(NC)"
-	@semodule -l | grep -q "^lota_gaming" && \
-		echo -e "$(GREEN)lota_gaming module: installed$(NC)" || \
-		echo -e "$(RED)lota_gaming module: NOT installed$(NC)"
 	@semanage port -l | grep -q "lota_port_t" && \
 		echo -e "$(GREEN)lota_port_t: configured$(NC)" || \
 		echo -e "$(YELLOW)lota_port_t: not configured$(NC)"
