@@ -328,11 +328,3 @@ int hardening_apply_daemon(void)
 	lota_info("hardening: applied tracer refusal and seccomp blocklist");
 	return 0;
 }
-
-int hardening_apply_all(void)
-{
-	int ret = hardening_apply_basics();
-	if (ret < 0)
-		return ret;
-	return hardening_apply_daemon();
-}

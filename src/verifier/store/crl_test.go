@@ -23,6 +23,8 @@ import (
 	"path/filepath"
 	"testing"
 	"time"
+
+	"github.com/szymonwilczek/lota/crl"
 )
 
 // buildCA returns a self-signed CA cert + key suitable for issuing AIK
@@ -141,7 +143,7 @@ func TestCRL_LoadRejectsUnknownIssuer(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected CRL load to fail: signed by untrusted CA")
 	}
-	if !errors.Is(err, ErrCRLNoIssuer) && !errors.Is(err, ErrCRLSignature) {
+	if !errors.Is(err, crl.ErrCRLNoIssuer) && !errors.Is(err, crl.ErrCRLSignature) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	_ = goodKey
@@ -168,7 +170,7 @@ func TestCRL_RevokesAIKCertificate(t *testing.T) {
 	}
 
 	_, err = cv.VerifyAIKCertificate(leafKey, leafDER)
-	if !errors.Is(err, ErrCertificateRevoked) {
+	if !errors.Is(err, crl.ErrCertificateRevoked) {
 		t.Fatalf("expected ErrCertificateRevoked, got %v", err)
 	}
 
@@ -210,7 +212,7 @@ func TestCRL_FailsClosedWhenStale(t *testing.T) {
 	}
 
 	_, err = cv.VerifyAIKCertificate(leafKey, leafDER)
-	if !errors.Is(err, ErrCRLStale) {
+	if !errors.Is(err, crl.ErrCRLStale) {
 		t.Fatalf("expected ErrCRLStale, got %v", err)
 	}
 }
@@ -238,7 +240,7 @@ func TestCRL_ReloadHotSwapsRevocations(t *testing.T) {
 
 	// initial state: initialSerial revoked, refreshedSerial accepted.
 	initialLeafKey, initialLeafDER := buildAIKLeaf(t, ca, caKey, initialSerial)
-	if _, err := cv.VerifyAIKCertificate(initialLeafKey, initialLeafDER); !errors.Is(err, ErrCertificateRevoked) {
+	if _, err := cv.VerifyAIKCertificate(initialLeafKey, initialLeafDER); !errors.Is(err, crl.ErrCertificateRevoked) {
 		t.Fatalf("pre-reload: expected ErrCertificateRevoked for serial %x, got %v",
 			initialSerial, err)
 	}
@@ -264,7 +266,7 @@ func TestCRL_ReloadHotSwapsRevocations(t *testing.T) {
 	}
 
 	// post-reload: refreshedSerial rejects, initialSerial accepted.
-	if _, err := cv.VerifyAIKCertificate(refreshedLeafKey, refreshedLeafDER); !errors.Is(err, ErrCertificateRevoked) {
+	if _, err := cv.VerifyAIKCertificate(refreshedLeafKey, refreshedLeafDER); !errors.Is(err, crl.ErrCertificateRevoked) {
 		t.Fatalf("post-reload: expected ErrCertificateRevoked for serial %x, got %v",
 			refreshedSerial, err)
 	}
@@ -304,7 +306,7 @@ func TestCRL_ReloadRejectsBadFeedKeepsPreviousSet(t *testing.T) {
 
 	// previous set must still flag the originally revoked serial.
 	leafKey, leafDER := buildAIKLeaf(t, ca, caKey, revoked)
-	if _, err := cv.VerifyAIKCertificate(leafKey, leafDER); !errors.Is(err, ErrCertificateRevoked) {
+	if _, err := cv.VerifyAIKCertificate(leafKey, leafDER); !errors.Is(err, crl.ErrCertificateRevoked) {
 		t.Fatalf("expected ErrCertificateRevoked from preserved set, got %v", err)
 	}
 }

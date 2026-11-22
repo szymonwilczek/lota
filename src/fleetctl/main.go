@@ -370,7 +370,7 @@ func cmdDevices(ctx *cmdContext, stderr io.Writer, args []string) error {
 
 // parseActionArgs handles the shared "<id> -actor A [-note S] [-reason R]"
 // argument shape of the mutating commands.
-func parseActionArgs(name string, stderr io.Writer, args []string, needReason, needActor bool) (id, reason, actor, note string, err error) {
+func parseActionArgs(name string, stderr io.Writer, args []string) (id, reason, actor, note string, err error) {
 	fs := flag.NewFlagSet(name, flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	reasonF := fs.String("reason", "", "revocation reason")
@@ -386,17 +386,17 @@ func parseActionArgs(name string, stderr io.Writer, args []string, needReason, n
 	if fs.NArg() != 0 {
 		return "", "", "", "", fmt.Errorf("%w: %s takes one target argument", errUsage, name)
 	}
-	if needReason && *reasonF == "" {
+	if *reasonF == "" {
 		return "", "", "", "", fmt.Errorf("%w: %s requires -reason", errUsage, name)
 	}
-	if needActor && *actorF == "" {
+	if *actorF == "" {
 		return "", "", "", "", fmt.Errorf("%w: %s requires -actor", errUsage, name)
 	}
 	return args[0], *reasonF, *actorF, *noteF, nil
 }
 
 func cmdRevoke(ctx *cmdContext, stderr io.Writer, args []string) error {
-	id, reason, actor, note, err := parseActionArgs("revoke", stderr, args, true, true)
+	id, reason, actor, note, err := parseActionArgs("revoke", stderr, args)
 	if err != nil {
 		return err
 	}
@@ -408,7 +408,7 @@ func cmdRevoke(ctx *cmdContext, stderr io.Writer, args []string) error {
 }
 
 func cmdUnrevoke(ctx *cmdContext, stderr io.Writer, args []string) error {
-	id, reason, actor, note, err := parseActionArgs("unrevoke", stderr, args, true, true)
+	id, reason, actor, note, err := parseActionArgs("unrevoke", stderr, args)
 	if err != nil {
 		return err
 	}
@@ -573,7 +573,7 @@ func cmdBans(ctx *cmdContext, stderr io.Writer, args []string) error {
 }
 
 func cmdReanchor(ctx *cmdContext, stderr io.Writer, args []string) error {
-	id, reason, actor, note, err := parseActionArgs("reanchor", stderr, args, true, true)
+	id, reason, actor, note, err := parseActionArgs("reanchor", stderr, args)
 	if err != nil {
 		return err
 	}
@@ -585,7 +585,7 @@ func cmdReanchor(ctx *cmdContext, stderr io.Writer, args []string) error {
 }
 
 func cmdDelete(ctx *cmdContext, stderr io.Writer, args []string) error {
-	id, reason, actor, note, err := parseActionArgs("delete", stderr, args, true, true)
+	id, reason, actor, note, err := parseActionArgs("delete", stderr, args)
 	if err != nil {
 		return err
 	}
@@ -624,7 +624,7 @@ func cmdReanchorReview(ctx *cmdContext, stderr io.Writer, args []string) error {
 	case "ack":
 		// attributed like every other trust change
 		id, reason, actor, note, err := parseActionArgs("reanchor-review ack",
-			stderr, args[1:], true, true)
+			stderr, args[1:])
 		if err != nil {
 			return err
 		}

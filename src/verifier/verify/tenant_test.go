@@ -96,7 +96,7 @@ func attestWithCertOUs(t *testing.T, clientID string, ous []string) (*types.Veri
 	defer func() { testAIKCertOUs = nil }()
 	reportData := createValidReport(t, clientID, challenge.Nonce, pcr14)
 
-	return verifier.VerifyReport(clientID, reportData)
+	return verifier.VerifyReportFrom(clientID, "", reportData)
 }
 
 // attestVerifierWithCertOUs is attestWithCertOUs but returns
@@ -118,7 +118,7 @@ func attestVerifierWithCertOUs(t *testing.T, clientID string, ous []string) (*Ve
 	defer func() { testAIKCertOUs = nil }()
 	reportData := createValidReport(t, clientID, challenge.Nonce, pcr14)
 
-	result, err := verifier.VerifyReport(clientID, reportData)
+	result, err := verifier.VerifyReportFrom(clientID, "", reportData)
 	return verifier, result, err
 }
 
@@ -263,9 +263,6 @@ func attestWithBanStore(t *testing.T, clientID string, ous []string, bans store.
 	if err := verifier.AddPolicy(DefaultPolicy()); err != nil {
 		t.Fatalf("AddPolicy(DefaultPolicy) failed: %v", err)
 	}
-	if err := verifier.SetActivePolicy("default"); err != nil {
-		t.Fatalf("SetActivePolicy(default) failed: %v", err)
-	}
 
 	challenge, err := verifier.GenerateChallenge(clientID)
 	if err != nil {
@@ -278,7 +275,7 @@ func attestWithBanStore(t *testing.T, clientID string, ous []string, bans store.
 	defer func() { testAIKCertOUs = nil }()
 	reportData := createValidReport(t, clientID, challenge.Nonce, pcr14)
 
-	return verifier.VerifyReport(clientID, reportData)
+	return verifier.VerifyReportFrom(clientID, "", reportData)
 }
 
 // devicePseudonymHWID returns the hardware identity the verifier derives
@@ -299,7 +296,7 @@ func TestIntegration_HardwareBanIsPerTenant(t *testing.T) {
 	hwid := devicePseudonymHWID(t, clientID)
 
 	// banned in a DIFFERENT tenant: the client must attest cleanly
-	bans := store.NewMemoryBanStore()
+	bans := store.NewSQLiteBanStore(testDB(t), nil)
 	if err := bans.BanHardware("other-game", hwid, store.RevocationCheating, "op", ""); err != nil {
 		t.Fatalf("BanHardware(other-game): %v", err)
 	}
@@ -330,7 +327,7 @@ func TestIntegration_DefaultTenantClientHitsDefaultBans(t *testing.T) {
 
 	// certificate without an OU lands in the default tenant,
 	// so a default-tenant ban still rejects it
-	bans := store.NewMemoryBanStore()
+	bans := store.NewSQLiteBanStore(testDB(t), nil)
 	if err := bans.BanHardware(DefaultTenant, hwid, store.RevocationCheating, "op", ""); err != nil {
 		t.Fatalf("BanHardware(default): %v", err)
 	}
@@ -346,7 +343,7 @@ func TestIntegration_DefaultTenantClientHitsDefaultBans(t *testing.T) {
 func TestIntegration_TenantOnAttestationLog(t *testing.T) {
 	const clientID = "tenant-log-client"
 
-	attestLog := store.NewMemoryAttestationLog()
+	attestLog := store.NewSQLiteAttestationLog(testDB(t), store.DefaultCollapseWindow)
 	cfg := DefaultConfig()
 	cfg.RequireBootEnrollment = false
 	cfg.NonceLifetime = 1 * time.Second
@@ -354,9 +351,6 @@ func TestIntegration_TenantOnAttestationLog(t *testing.T) {
 	verifier := NewVerifier(cfg, newCertVerifier(t))
 	if err := verifier.AddPolicy(DefaultPolicy()); err != nil {
 		t.Fatalf("AddPolicy(DefaultPolicy) failed: %v", err)
-	}
-	if err := verifier.SetActivePolicy("default"); err != nil {
-		t.Fatalf("SetActivePolicy(default) failed: %v", err)
 	}
 
 	challenge, err := verifier.GenerateChallenge(clientID)
@@ -370,7 +364,7 @@ func TestIntegration_TenantOnAttestationLog(t *testing.T) {
 	defer func() { testAIKCertOUs = nil }()
 	reportData := createValidReport(t, clientID, challenge.Nonce, pcr14)
 
-	result, err := verifier.VerifyReport(clientID, reportData)
+	result, err := verifier.VerifyReportFrom(clientID, "", reportData)
 	if err != nil {
 		t.Fatalf("VerifyReport: %v", err)
 	}
@@ -378,7 +372,7 @@ func TestIntegration_TenantOnAttestationLog(t *testing.T) {
 		t.Fatalf("result = %d, want VerifyOK", result.Result)
 	}
 
-	records := attestLog.QueryAttestations(1)
+	records := attestLog.QueryAttestations(store.AttestationQuery{Limit: 1})
 	if len(records) != 1 || records[0].Tenant != "acme-corp" {
 		t.Fatalf("attestation record = %+v, want tenant acme-corp", records)
 	}
@@ -438,8 +432,12 @@ func TestChallengePolicyMaskIsUnion(t *testing.T) {
 	if mask&(1<<4) == 0 || mask&(1<<5) == 0 {
 		t.Fatalf("challenge mask %#x must cover the active AND the tenant-bound policy PCRs", mask)
 	}
-	if active := pv.GetActivePolicyMask(); active&(1<<5) != 0 {
-		t.Fatalf("active mask %#x should not include the bound policy's PCR", active)
+	active, ok := pv.GetActivePolicyConfig()
+	if !ok {
+		t.Fatal("no active policy")
+	}
+	if m := active.GetRequiredMask(); m&(1<<5) != 0 {
+		t.Fatalf("active mask %#x should not include the bound policy's PCR", m)
 	}
 }
 
@@ -466,9 +464,6 @@ func attestWithTenantPolicy(t *testing.T, clientID string, ous []string) (*types
 	}); err != nil {
 		t.Fatalf("AddPolicy(acme-strict) failed: %v", err)
 	}
-	if err := verifier.SetActivePolicy("default"); err != nil {
-		t.Fatalf("SetActivePolicy(default) failed: %v", err)
-	}
 
 	challenge, err := verifier.GenerateChallenge(clientID)
 	if err != nil {
@@ -481,7 +476,7 @@ func attestWithTenantPolicy(t *testing.T, clientID string, ous []string) (*types
 	defer func() { testAIKCertOUs = nil }()
 	reportData := createValidReport(t, clientID, challenge.Nonce, pcr14)
 
-	return verifier.VerifyReport(clientID, reportData)
+	return verifier.VerifyReportFrom(clientID, "", reportData)
 }
 
 func TestIntegration_TenantBoundPolicySelected(t *testing.T) {

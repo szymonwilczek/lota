@@ -181,7 +181,6 @@ type nonceEntry struct {
 	nonce     [types.NonceSize]byte
 	createdAt time.Time
 	bindingID string // optional: bind nonce to specific bindingID (challengeID)
-	counter   uint64 // monotonic counter for ordering
 }
 
 // tracks per-client challenge state for rate limiting
@@ -266,13 +265,6 @@ func NewNonceStoreFromConfig(cfg NonceStoreConfig) *NonceStore {
 	return ns
 }
 
-// creates a new nonce store with specified lifetime
-func NewNonceStore(lifetime time.Duration) *NonceStore {
-	cfg := DefaultNonceStoreConfig()
-	cfg.Lifetime = lifetime
-	return NewNonceStoreFromConfig(cfg)
-}
-
 // creates a new challenge with random nonce
 //
 // bindingID is a transport-level identifier used to bind the issued nonce
@@ -316,9 +308,7 @@ func (ns *NonceStore) GenerateChallenge(bindingID string, pcrMask uint32) (*type
 			return nil, err
 		}
 
-		// get and increment binding counters
 		cs := ns.bindingChallenges[bindingID]
-		cs.attestCounter++
 		cs.pendingCount++
 		ns.bindingChallenges[bindingID] = cs
 
@@ -326,7 +316,6 @@ func (ns *NonceStore) GenerateChallenge(bindingID string, pcrMask uint32) (*type
 			nonce:     nonce,
 			createdAt: time.Now(),
 			bindingID: bindingID,
-			counter:   cs.attestCounter,
 		}
 		ns.mu.Unlock()
 

@@ -194,9 +194,9 @@ func encodeFuzzReportSpec(s *fuzzReportSpec) []byte {
 // driven by its trust logic rather than by malformed-input rejection
 func buildSignedReport(s *fuzzReportSpec, clientID string, challengeNonce [types.NonceSize]byte, key *rsa.PrivateKey) []byte {
 	hwID := sha256.Sum256([]byte(clientID))
-	// fixed struct plus the two variable-section length prefixes;
+	// fixed struct plus the event log length prefix;
 	// mandatory ESRT section is appended at the end
-	buf := make([]byte, types.FixedReportSize+8)
+	buf := make([]byte, types.FixedReportSize+4)
 	offset := 0
 
 	binary.LittleEndian.PutUint32(buf[offset:], types.ReportMagic)
@@ -294,16 +294,6 @@ func buildSignedReport(s *fuzzReportSpec, clientID string, challengeNonce [types
 	offset += 4
 	copy(buf[offset:offset+types.CmdlineParamMax], s.iommu.cmdline)
 	offset += types.CmdlineParamMax
-
-	// BPF summary (advisory; fixed)
-	binary.LittleEndian.PutUint32(buf[offset:], 1)
-	offset += 4
-	binary.LittleEndian.PutUint32(buf[offset:], 1)
-	offset += 4
-	offset += 16 // first_seen + last_seen timestamps left zero
-	// bpf event_count = 0
-	binary.LittleEndian.PutUint32(buf[offset:], 0)
-	offset += 4
 
 	eventLog := buildTestEventLog(nil)
 	binary.LittleEndian.PutUint32(buf[offset:], uint32(len(eventLog)))

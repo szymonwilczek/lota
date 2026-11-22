@@ -23,10 +23,11 @@ func TestAttestationLogEndpoint_ReportsKernelHash(t *testing.T) {
 	m := metrics.New()
 	cfg := verify.DefaultConfig()
 	cfg.RequireBootEnrollment = false
-	auditLog := store.NewMemoryAuditLog()
-	attLog := store.NewMemoryAttestationLog()
-	cfg.RevocationStore = store.NewMemoryRevocationStore(auditLog)
-	cfg.BanStore = store.NewMemoryBanStore(auditLog)
+	db := testDB(t)
+	auditLog := store.NewSQLiteAuditLog(db)
+	attLog := store.NewSQLiteAttestationLog(db, store.DefaultCollapseWindow)
+	cfg.RevocationStore = store.NewSQLiteRevocationStore(db, auditLog)
+	cfg.BanStore = store.NewSQLiteBanStore(db, auditLog)
 	cfg.Metrics = m
 	v := verify.NewVerifier(cfg, aikVerifier)
 	if err := v.AddPolicy(verify.DefaultPolicy()); err != nil {

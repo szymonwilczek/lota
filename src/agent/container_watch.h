@@ -45,7 +45,6 @@ struct container_watch {
 	bool bound[LOTA_CONFIG_MAX_CONTAINER_LISTENERS];
 	int uid_count;
 	int fd; /* inotify on the root, -1 when unavailable */
-	int wd;
 	int mnt_fd; /* /proc/self/mountinfo, -1 when unavailable */
 	struct container_watch_ops ops;
 };

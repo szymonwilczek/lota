@@ -13,8 +13,6 @@
  * they asked for, on top of the uid check rather than instead of it.
  */
 
-#define LOTA_INTERNAL_TESTS 1
-
 #include <stdio.h>
 
 #include "../src/agent/ipc_privilege.h"

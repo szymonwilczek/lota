@@ -404,12 +404,7 @@ type SQLiteAttestationLog struct {
 }
 
 // creates an attestation log backed by the given database
-func NewSQLiteAttestationLog(db *sql.DB) *SQLiteAttestationLog {
-	return NewSQLiteAttestationLogWindow(db, DefaultCollapseWindow)
-}
-
-// the same, with a deployment's own collapse window
-func NewSQLiteAttestationLogWindow(db *sql.DB, window time.Duration) *SQLiteAttestationLog {
+func NewSQLiteAttestationLog(db *sql.DB, window time.Duration) *SQLiteAttestationLog {
 	return &SQLiteAttestationLog{db: db, window: window}
 }
 
@@ -524,12 +519,8 @@ const sqliteAttestationSelect = `SELECT id, timestamp, tenant, client_id, hardwa
 	 result, duration_ms, pcr14, details, remote_addr, kernel_hash, last_seen, rounds
 	 FROM attestation_log`
 
-func (l *SQLiteAttestationLog) QueryAttestations(limit int) []AttestationRecord {
-	return l.QueryAttestationsFiltered(AttestationQuery{Limit: limit})
-}
-
 // zero query: the whole log, newest first
-func (l *SQLiteAttestationLog) QueryAttestationsFiltered(q AttestationQuery) []AttestationRecord {
+func (l *SQLiteAttestationLog) QueryAttestations(q AttestationQuery) []AttestationRecord {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 

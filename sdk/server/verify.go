@@ -103,19 +103,14 @@ const (
 
 // Errors returned by verification functions
 var (
-	ErrInvalidArg = errors.New("lota: invalid argument")
-	ErrBadToken   = errors.New("lota: malformed token")
-	ErrBadVersion = errors.New("lota: unsupported token version")
-	ErrSigFail    = errors.New("lota: signature verification failed")
-	ErrNonceFail  = errors.New("lota: nonce mismatch")
-	ErrExpired    = errors.New("lota: token expired")
-	// ErrTooOld is reserved:
-	// token carries no issued-at field, so its absolute age cannot
-	// be measured and VerifyToken does not return this
-	ErrTooOld       = errors.New("lota: token too old")
+	ErrInvalidArg   = errors.New("lota: invalid argument")
+	ErrBadToken     = errors.New("lota: malformed token")
+	ErrBadVersion   = errors.New("lota: unsupported token version")
+	ErrSigFail      = errors.New("lota: signature verification failed")
+	ErrNonceFail    = errors.New("lota: nonce mismatch")
+	ErrExpired      = errors.New("lota: token expired")
 	ErrFutureToken  = errors.New("lota: token validity exceeds the freshness window")
 	ErrAttestParse  = errors.New("lota: failed to parse TPMS_ATTEST")
-	ErrNotQuote     = errors.New("lota: TPMS_ATTEST is not a quote")
 	ErrBadMagic     = errors.New("lota: invalid TPM magic in TPMS_ATTEST")
 	ErrNoSignature  = errors.New("lota: token contains no signature")
 	ErrNoAttestData = errors.New("lota: token contains no attestation data")

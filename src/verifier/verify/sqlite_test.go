@@ -594,9 +594,6 @@ func TestSQLiteIntegration_FullFlow(t *testing.T) {
 	if err := verifier.AddPolicy(DefaultPolicy()); err != nil {
 		t.Fatalf("AddPolicy(DefaultPolicy): %v", err)
 	}
-	if err := verifier.SetActivePolicy("default"); err != nil {
-		t.Fatalf("SetActivePolicy(default): %v", err)
-	}
 
 	clientID := "sqlite-client"
 	pcr14 := sqliteFixturePCR14()
@@ -608,7 +605,7 @@ func TestSQLiteIntegration_FullFlow(t *testing.T) {
 	}
 
 	reportData := createSQLiteTestReport(t, clientID, challenge.Nonce, pcr14)
-	result, err := verifier.VerifyReport(clientID, reportData)
+	result, err := verifier.VerifyReportFrom(clientID, "", reportData)
 	if err != nil {
 		t.Fatalf("VerifyReport failed: %v", err)
 	}
@@ -619,7 +616,7 @@ func TestSQLiteIntegration_FullFlow(t *testing.T) {
 	// second attestation (should match baseline)
 	challenge2, _ := verifier.GenerateChallenge(clientID)
 	report2 := createSQLiteTestReport(t, clientID, challenge2.Nonce, pcr14)
-	result2, err := verifier.VerifyReport(clientID, report2)
+	result2, err := verifier.VerifyReportFrom(clientID, "", report2)
 	if err != nil || result2.Result != types.VerifyOK {
 		t.Fatalf("Second attestation failed: %v (result=%d)", err, result2.Result)
 	}
@@ -656,14 +653,11 @@ func TestSQLiteIntegration_ReplayAfterRestart(t *testing.T) {
 	if err := v1.AddPolicy(DefaultPolicy()); err != nil {
 		t.Fatalf("AddPolicy(DefaultPolicy): %v", err)
 	}
-	if err := v1.SetActivePolicy("default"); err != nil {
-		t.Fatalf("SetActivePolicy(default): %v", err)
-	}
 
 	// successful attestation
 	challenge, _ := v1.GenerateChallenge("restart-client")
 	report := createSQLiteTestReport(t, "restart-client", challenge.Nonce, pcr14)
-	result1, err := v1.VerifyReport("restart-client", report)
+	result1, err := v1.VerifyReportFrom("restart-client", "", report)
 	if err != nil || result1.Result != types.VerifyOK {
 		t.Fatalf("First attestation failed: %v", err)
 	}
@@ -681,12 +675,9 @@ func TestSQLiteIntegration_ReplayAfterRestart(t *testing.T) {
 	if err := v2.AddPolicy(DefaultPolicy()); err != nil {
 		t.Fatalf("AddPolicy(DefaultPolicy): %v", err)
 	}
-	if err := v2.SetActivePolicy("default"); err != nil {
-		t.Fatalf("SetActivePolicy(default): %v", err)
-	}
 
 	// same report - MUST fail
-	result2, err := v2.VerifyReport("restart-client", report)
+	result2, err := v2.VerifyReportFrom("restart-client", "", report)
 	if result2.Result != types.VerifyNonceFail {
 		t.Fatalf("SECURITY FAILURE: Replay attack succeeded after restart!\n"+
 			"  Expected: FAIL_NONCE (%d)\n"+
@@ -720,13 +711,10 @@ func TestSQLiteIntegration_BaselineSurvivesRestart(t *testing.T) {
 	if err := v1.AddPolicy(DefaultPolicy()); err != nil {
 		t.Fatalf("AddPolicy(DefaultPolicy): %v", err)
 	}
-	if err := v1.SetActivePolicy("default"); err != nil {
-		t.Fatalf("SetActivePolicy(default): %v", err)
-	}
 
 	ch1, _ := v1.GenerateChallenge("baseline-client")
 	rep1 := createSQLiteTestReport(t, "baseline-client", ch1.Nonce, originalPCR14)
-	r1, err := v1.VerifyReport("baseline-client", rep1)
+	r1, err := v1.VerifyReportFrom("baseline-client", "", rep1)
 	if err != nil || r1.Result != types.VerifyOK {
 		t.Fatalf("Baseline attestation failed: %v", err)
 	}
@@ -744,14 +732,11 @@ func TestSQLiteIntegration_BaselineSurvivesRestart(t *testing.T) {
 	if err := v2.AddPolicy(DefaultPolicy()); err != nil {
 		t.Fatalf("AddPolicy(DefaultPolicy): %v", err)
 	}
-	if err := v2.SetActivePolicy("default"); err != nil {
-		t.Fatalf("SetActivePolicy(default): %v", err)
-	}
 
 	// tampered PCR14 should be detected even after restart
 	ch2, _ := v2.GenerateChallenge("baseline-client")
 	rep2 := createSQLiteTestReport(t, "baseline-client", ch2.Nonce, tamperedPCR14)
-	r2, err := v2.VerifyReport("baseline-client", rep2)
+	r2, err := v2.VerifyReportFrom("baseline-client", "", rep2)
 
 	if r2.Result != types.VerifyIntegrityMismatch {
 		t.Fatalf("SECURITY FAILURE: PCR14 tampering not detected after restart!\n"+
@@ -788,9 +773,6 @@ func TestSQLiteIntegration_ConcurrentAttestations(t *testing.T) {
 	if err := verifier.AddPolicy(DefaultPolicy()); err != nil {
 		t.Fatalf("AddPolicy(DefaultPolicy): %v", err)
 	}
-	if err := verifier.SetActivePolicy("default"); err != nil {
-		t.Fatalf("SetActivePolicy(default): %v", err)
-	}
 
 	numClients := 10
 	var wg sync.WaitGroup
@@ -817,7 +799,7 @@ func TestSQLiteIntegration_ConcurrentAttestations(t *testing.T) {
 				}
 
 				rep := createSQLiteTestReportWithKey(nil, clientID, ch.Nonce, pcr14, clientKey)
-				result, err := verifier.VerifyReport(clientID, rep)
+				result, err := verifier.VerifyReportFrom(clientID, "", rep)
 				if err != nil || result.Result != types.VerifyOK {
 					errCh <- fmt.Errorf("client %d iter %d: verify: %v (result=%d)", n, j, err, result.Result)
 					return
@@ -871,9 +853,9 @@ func createSQLiteTestReportWithKey(t testing.TB, clientID string, nonce [32]byte
 	}
 	hwID := sha256.Sum256([]byte(clientID))
 
-	// fixed struct plus the two variable-section length prefixes;
+	// fixed struct plus the event log length prefix;
 	// mandatory ESRT section is appended at the end
-	buf := make([]byte, types.FixedReportSize+8)
+	buf := make([]byte, types.FixedReportSize+4)
 	offset := 0
 
 	// Header
@@ -987,20 +969,6 @@ func createSQLiteTestReportWithKey(t testing.TB, clientID string, nonce [32]byte
 	offset += 4
 	copy(buf[offset:], "intel_iommu=on")
 	offset += types.CmdlineParamMax
-
-	// BPF summary
-	binary.LittleEndian.PutUint32(buf[offset:], 1)
-	offset += 4
-	binary.LittleEndian.PutUint32(buf[offset:], 1)
-	offset += 4
-	binary.LittleEndian.PutUint64(buf[offset:], uint64(time.Now().Unix()))
-	offset += 8
-	binary.LittleEndian.PutUint64(buf[offset:], uint64(time.Now().Unix()))
-	offset += 8
-
-	// bpf event_count = 0
-	binary.LittleEndian.PutUint32(buf[offset:], 0)
-	offset += 4
 
 	eventLog := uefiEventLog()
 	binary.LittleEndian.PutUint32(buf[offset:], uint32(len(eventLog)))

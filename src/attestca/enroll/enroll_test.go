@@ -13,6 +13,12 @@ import (
 	"github.com/szymonwilczek/lota/attestca/internal/tpmtest"
 )
 
+func pendingCount(s *Service) int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return len(s.pending)
+}
+
 func newTestService(tb testing.TB, opts ...Option) (*Service, tpmtest.Root) {
 	tb.Helper()
 	root := tpmtest.NewVendorRoot(tb, "tpm-vendor-root")
@@ -41,8 +47,8 @@ func TestEnrollFullCeremony(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Begin: %v", err)
 	}
-	if svc.PendingCount() != 1 {
-		t.Fatalf("pending=%d, want 1", svc.PendingCount())
+	if pendingCount(svc) != 1 {
+		t.Fatalf("pending=%d, want 1", pendingCount(svc))
 	}
 
 	recovered := tpmtest.SoftwareActivate(t, ek.Priv, aikName, ch.CredentialBlob, ch.EncryptedSecret)
@@ -54,8 +60,8 @@ func TestEnrollFullCeremony(t *testing.T) {
 	if len(certDER) == 0 || deviceID == "" {
 		t.Fatal("empty certificate or device id")
 	}
-	if svc.PendingCount() != 0 {
-		t.Fatalf("session not consumed: pending=%d", svc.PendingCount())
+	if pendingCount(svc) != 0 {
+		t.Fatalf("session not consumed: pending=%d", pendingCount(svc))
 	}
 }
 
@@ -99,8 +105,8 @@ func TestEnrollWrongSecretRejected(t *testing.T) {
 	}
 
 	// session must be burned even on failure
-	if svc.PendingCount() != 0 {
-		t.Fatalf("failed session not consumed: pending=%d", svc.PendingCount())
+	if pendingCount(svc) != 0 {
+		t.Fatalf("failed session not consumed: pending=%d", pendingCount(svc))
 	}
 }
 
@@ -136,7 +142,7 @@ func TestEnrollSessionExpiry(t *testing.T) {
 	now := time.Now()
 	clock := &now
 	svc, root := newTestService(t, WithSessionTTL(time.Minute),
-		WithClock(func() time.Time { return *clock }))
+		func(s *Service) { s.now = func() time.Time { return *clock } })
 	ek := tpmtest.NewEKCert(t, root)
 	aikTPMT, aikName := tpmtest.AIKTemplate(t)
 

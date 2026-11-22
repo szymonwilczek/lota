@@ -94,7 +94,6 @@ var (
 	generateCert        = flag.Bool("generate-cert", false, "Generate self-signed certificate")
 	logFormat           = flag.String("log-format", "text", "Log output format: text or json")
 	logLevel            = flag.String("log-level", "info", "Minimum log level: debug, info, warn, error, security")
-	requireEventLog     = flag.Bool("require-event-log", true, "Require attestation reports to include a TPM event log (mandatory)")
 	requireCert         = flag.Bool("require-cert", true, "Require Privacy CA trust anchors at startup: refuses to start without --aik-ca-cert. Reports without a CA-issued AIK certificate are always rejected at verification; disabling this only skips the startup validation (INSECURE: a deployment without a CA root cannot attest any client)")
 	allowTOFUBoot       = flag.Bool("allow-tofu-boot-baseline", false, "INSECURE: allow TOFU first-use of the per-client PCR0/PCR1/PCR7 boot baseline regardless of policy or event-log state. With the default (false), a first-attestation client must be covered by a signed policy that pins PCR0/PCR1/PCR7, be pre-enrolled in the baseline store, or pass the event-log Secure Boot gate of a policy with require_secureboot (the diverse-fleet path); otherwise the report is refused so a host that boots on already-compromised firmware cannot self-pin its tampered baseline.")
 	selfServiceReanchor = flag.Bool("enable-self-service-reanchor", false, "Override every policy's `profile` and force self-service re-anchor on or off. Left unset, each policy decides: profile: consumer enables it, enterprise (and unset) leaves it off. When on, a firmware/Secure Boot PCR drift re-pins the per-device boot baseline automatically if it preserves the Secure Boot root of trust (PK/KEK/db unchanged, dbx append-only, Secure Boot on, firmware version not rolled back), instead of rejecting until an operator clears the row. Only ever takes effect under a policy with require_secureboot.")
@@ -160,7 +159,7 @@ func sqliteEnforcementStores(db *sql.DB, logger *slog.Logger, m *metrics.Metrics
 		revocations: store.NewSQLiteRevocationStore(db, audit),
 		bans:        store.NewSQLiteBanStore(db, audit),
 		attestations: store.NewBatchedAttestationLog(
-			store.NewSQLiteAttestationLogWindow(db, *attestLogWindow),
+			store.NewSQLiteAttestationLog(db, *attestLogWindow),
 			store.BatchedAttestationLogConfig{Logger: logger, Loss: m}),
 	}
 }
@@ -174,7 +173,7 @@ func postgresEnforcementStores(db *sql.DB, logger *slog.Logger, m *metrics.Metri
 		revocations: store.NewPostgresRevocationStore(db, audit),
 		bans:        store.NewPostgresBanStore(db, audit),
 		attestations: store.NewBatchedAttestationLog(
-			store.NewPostgresAttestationLogWindow(db, *attestLogWindow),
+			store.NewPostgresAttestationLog(db, *attestLogWindow),
 			store.BatchedAttestationLogConfig{Logger: logger, Loss: m}),
 	}
 }
@@ -283,12 +282,6 @@ func main() {
 	verifierCfg := verify.DefaultConfig()
 	verifierCfg.Logger = logger
 	verifierCfg.Metrics = m
-	if !*requireEventLog {
-		logger.Error("event log verification is mandatory and cannot be disabled",
-			"hint", "remove --require-event-log=false and provide event logs from agents")
-		os.Exit(1)
-	}
-	verifierCfg.RequireEventLog = *requireEventLog
 	verifierCfg.RequireBootEnrollment = !*allowTOFUBoot
 	if *allowTOFUBoot {
 		logger.Warn("INSECURE: --allow-tofu-boot-baseline is set; a first-attestation client will TOFU-pin whatever PCR0/PCR1/PCR7 values it reports, including firmware/Secure Boot state that may already be compromised")
@@ -403,7 +396,7 @@ func main() {
 		}
 		dbs := make([]*sql.DB, 0, len(shardDSNs))
 		for i, d := range shardDSNs {
-			open := store.OpenPostgresDBPool
+			open := store.OpenPostgresDB
 			if *reportOnly {
 				open = store.OpenPostgresDBReadOnly
 			}

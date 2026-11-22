@@ -20,9 +20,10 @@ import (
 func FuzzAPIRequestBody(f *testing.F) {
 	cfg := verify.DefaultConfig()
 	cfg.RequireBootEnrollment = false
-	auditLog := store.NewMemoryAuditLog()
-	cfg.RevocationStore = store.NewMemoryRevocationStore(auditLog)
-	cfg.BanStore = store.NewMemoryBanStore(auditLog)
+	db := testDB(f)
+	auditLog := store.NewSQLiteAuditLog(db)
+	cfg.RevocationStore = store.NewSQLiteRevocationStore(db, auditLog)
+	cfg.BanStore = store.NewSQLiteBanStore(db, auditLog)
 	cfg.Metrics = metrics.New()
 	v := verify.NewVerifier(cfg, nil)
 	if err := v.AddPolicy(verify.DefaultPolicy()); err != nil {

@@ -336,7 +336,9 @@ static int child_seccomp_allows_benign_syscalls(void)
 
 static int child_apply_all_succeeds(void)
 {
-	return hardening_apply_all() == 0 ? 0 : 1;
+	if (hardening_apply_basics() < 0)
+		return 1;
+	return hardening_apply_daemon() == 0 ? 0 : 1;
 }
 
 /*

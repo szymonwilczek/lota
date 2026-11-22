@@ -75,16 +75,19 @@ static void build_full_snapshot(struct policy_snapshot *snap)
 static char *emit_to_string(const struct policy_snapshot *snap, size_t *out_len)
 {
 	static char buf[8192];
-	size_t written = 0;
+	FILE *mem;
 	int ret;
 
 	memset(buf, 0, sizeof(buf));
-	ret = policy_emit_to_buf(snap, buf, sizeof(buf), &written);
-	if (ret != 0)
+	mem = fmemopen(buf, sizeof(buf), "w");
+	if (!mem)
+		return NULL;
+	ret = policy_emit(snap, mem);
+	if (fclose(mem) != 0 || ret != 0)
 		return NULL;
 
 	if (out_len)
-		*out_len = written;
+		*out_len = strlen(buf);
 	return buf;
 }
 
@@ -583,36 +586,6 @@ static void test_emit_null_args(void)
 	PASS();
 }
 
-static void test_emit_to_buf_null_args(void)
-{
-	TEST("policy_emit_to_buf - NULL arguments return EINVAL");
-
-	struct policy_snapshot snap;
-	memset(&snap, 0, sizeof(snap));
-	char buf[128];
-	size_t written;
-
-	int ret = policy_emit_to_buf(NULL, buf, sizeof(buf), &written);
-	if (ret != -EINVAL) {
-		FAIL("expected -EINVAL for NULL snap");
-		return;
-	}
-
-	ret = policy_emit_to_buf(&snap, NULL, sizeof(buf), &written);
-	if (ret != -EINVAL) {
-		FAIL("expected -EINVAL for NULL buf");
-		return;
-	}
-
-	ret = policy_emit_to_buf(&snap, buf, 0, &written);
-	if (ret != -EINVAL) {
-		FAIL("expected -EINVAL for zero buf_size");
-		return;
-	}
-
-	PASS();
-}
-
 static void test_emit_verifier_fields(void)
 {
 	TEST("policy_emit - all verifier-required fields present");
@@ -725,37 +698,6 @@ static void test_emit_partial_pcrs(void)
 	PASS();
 }
 
-static void test_emit_written_count(void)
-{
-	TEST("policy_emit_to_buf - written count matches strlen");
-
-	struct policy_snapshot snap;
-	build_full_snapshot(&snap);
-
-	char buf[8192];
-	size_t written = 0;
-	int ret = policy_emit_to_buf(&snap, buf, sizeof(buf), &written);
-	if (ret != 0) {
-		FAIL("emit_to_buf returned error");
-		return;
-	}
-
-	if (written != strlen(buf)) {
-		char msg[128];
-		snprintf(msg, sizeof(msg), "written=%zu, strlen=%zu", written,
-			 strlen(buf));
-		FAIL(msg);
-		return;
-	}
-
-	if (written == 0) {
-		FAIL("written should be > 0");
-		return;
-	}
-
-	PASS();
-}
-
 static void test_export_pcrs_omit_grub_registers(void)
 {
 	TEST("policy_export_pcrs - omits grubenv-driven PCR 8/9");
@@ -775,11 +717,11 @@ static void test_export_pcrs_omit_grub_registers(void)
 	 * static pin then fails healthy host, so they must not be in the export set
 	 */
 	for (size_t i = 0; i < count; i++) {
-		if (pcrs[i] == POLICY_PCR_8) {
+		if (pcrs[i] == 8) {
 			FAIL("PCR 8 must not be exported (grubenv drift)");
 			return;
 		}
-		if (pcrs[i] == POLICY_PCR_9) {
+		if (pcrs[i] == 9) {
 			FAIL("PCR 9 must not be exported (grubenv drift)");
 			return;
 		}
@@ -820,12 +762,10 @@ int main(void)
 
 	printf("\nError Handling:\n");
 	test_emit_null_args();
-	test_emit_to_buf_null_args();
 
 	printf("\nVerifier Compatibility:\n");
 	test_emit_verifier_fields();
 	test_emit_spdx_header();
-	test_emit_written_count();
 
 	printf("\nExport PCR selection:\n");
 	test_export_pcrs_omit_grub_registers();

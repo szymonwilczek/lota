@@ -37,8 +37,6 @@
 /* consecutive UNTRUSTED heartbeats that end the session */
 #define UNTRUSTED_FREEZE_STREAK 2
 #define POLL_TIMEOUT_MS 600
-#define DEFAULT_NONCE_URL "http://127.0.0.1:7443/nonce"
-#define DEFAULT_STATE_URL "http://127.0.0.1:7443/state"
 #define DEFAULT_GAME_ID "trust-pong"
 #define DEFAULT_AGENT_SOCKET NULL
 

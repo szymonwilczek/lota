@@ -1880,7 +1880,6 @@ static int tpm_aik_save_auth_rotation_metadata(struct tpm_context *ctx)
 	    ctx->aik_meta.version != TPM_AIK_META_VERSION)
 		return -EINVAL;
 
-	ctx->aik_meta.auth_rotated_at = (int64_t)time(NULL);
 	return tpm_aik_save_metadata(ctx);
 }
 
@@ -1988,7 +1987,6 @@ int tpm_quote(struct tpm_context *ctx, const uint8_t *nonce, uint32_t pcr_mask,
 		}
 	}
 
-	memcpy(response->nonce, nonce, LOTA_NONCE_SIZE);
 	response->pcr_mask = pcr_mask;
 	response->hash_alg = TPM2_ALG_NULL;
 
@@ -2680,13 +2678,6 @@ int tpm_derive_locked_pcr14(const uint8_t self_hash[],
 		return ret;
 	return sha256_two_block(lock_value, boot_commit, out);
 }
-
-/*
- * Domain-separation marker used as qualifyingData for the empty-PCR
- * probe quote that captures TPM-signed clockInfo. The value is never
- * shipped to a verifier, so a constant string is sufficient.
- */
-#define TPM_CLOCK_PROBE_TAG "LOTA-PCR14-CLOCK-PROBE-v1"
 
 /*
  * Print the platform's own reset/restart counters, the pair an operator

@@ -25,6 +25,12 @@ type fixedChunkReader struct {
 	idx    int
 }
 
+func newTestNonceStore(lifetime time.Duration) *NonceStore {
+	cfg := DefaultNonceStoreConfig()
+	cfg.Lifetime = lifetime
+	return NewNonceStoreFromConfig(cfg)
+}
+
 func (r *fixedChunkReader) Read(p []byte) (int, error) {
 	if r.idx >= len(r.chunks) {
 		return 0, io.EOF
@@ -59,7 +65,7 @@ func TestNonceStore_GenerateAndVerify(t *testing.T) {
 	t.Log("SECURITY TEST: Nonce generation and verification")
 	t.Log("Verifies challenge-response protocol correctness")
 
-	store := NewNonceStore(5 * time.Minute)
+	store := newTestNonceStore(5 * time.Minute)
 
 	challenge, err := store.GenerateChallenge("binding-1", 0x00004003)
 	if err != nil {
@@ -102,7 +108,7 @@ func TestNonceStore_OneTimeUse(t *testing.T) {
 	t.Log("SECURITY TEST: Nonce one-time use (anti-replay)")
 	t.Log("CRITICAL: Ensures nonces cannot be reused to replay old attestations")
 
-	store := NewNonceStore(5 * time.Minute)
+	store := newTestNonceStore(5 * time.Minute)
 
 	challenge, _ := store.GenerateChallenge("binding-1", 0x00004003)
 
@@ -131,7 +137,7 @@ func TestNonceStore_Expiration(t *testing.T) {
 	t.Log("SECURITY TEST: Nonce expiration (TTL)")
 	t.Log("Prevents use of stale challenges")
 
-	store := NewNonceStore(100 * time.Millisecond)
+	store := newTestNonceStore(100 * time.Millisecond)
 	challenge, _ := store.GenerateChallenge("binding-1", 0x00004003)
 
 	report := &types.AttestationReport{}
@@ -154,7 +160,7 @@ func TestNonceStore_UnknownNonce(t *testing.T) {
 	t.Log("SECURITY TEST: Unknown nonce rejection")
 	t.Log("Prevents forged challenges")
 
-	store := NewNonceStore(5 * time.Minute)
+	store := newTestNonceStore(5 * time.Minute)
 
 	report := &types.AttestationReport{}
 	for i := range report.TPM.Nonce {
@@ -175,7 +181,7 @@ func TestNonceStore_ClientBinding(t *testing.T) {
 	t.Log("SECURITY TEST: Nonce binding ID enforcement")
 	t.Log("Prevents using challenge from one transport binding for another")
 
-	store := NewNonceStore(5 * time.Minute)
+	store := newTestNonceStore(5 * time.Minute)
 
 	challenge, _ := store.GenerateChallenge("binding-1", 0x00004003)
 	report := &types.AttestationReport{}
@@ -245,7 +251,6 @@ func TestNonceStore_GenerateChallenge_RetriesOnPendingCollision(t *testing.T) {
 		nonce:     colliding,
 		createdAt: time.Now(),
 		bindingID: "existing-binding",
-		counter:   1,
 	}
 	store.mu.Unlock()
 
@@ -313,7 +318,7 @@ func TestNonceStore_GenerateChallenge_EntropySourceFailure(t *testing.T) {
 func TestNonceStore_PendingCount(t *testing.T) {
 	t.Log("TEST: Pending challenge count tracking")
 
-	store := NewNonceStore(5 * time.Minute)
+	store := newTestNonceStore(5 * time.Minute)
 
 	if store.PendingCount() != 0 {
 		t.Errorf("Initial pending count: got %d, want 0", store.PendingCount())
@@ -334,7 +339,7 @@ func TestNonceStore_NonceMismatchInAttest(t *testing.T) {
 	t.Log("SECURITY TEST: Nonce mismatch between header and TPMS_ATTEST")
 	t.Log("CRITICAL: Detects tampering where header nonce is modified")
 
-	store := NewNonceStore(5 * time.Minute)
+	store := newTestNonceStore(5 * time.Minute)
 
 	challenge, _ := store.GenerateChallenge("binding-1", 0x00004003)
 	report := &types.AttestationReport{}
@@ -359,7 +364,7 @@ func TestNonceStore_UsedNonceHistory(t *testing.T) {
 	t.Log("SECURITY TEST: Used nonce history prevents reuse")
 	t.Log("CRITICAL: Even after nonce deletion, used nonce must be rejected")
 
-	store := NewNonceStore(5 * time.Minute)
+	store := newTestNonceStore(5 * time.Minute)
 
 	challenge, _ := store.GenerateChallenge("client1", 0x00004003)
 	report := &types.AttestationReport{}
@@ -530,7 +535,7 @@ func TestNonceStore_MonotonicCounter(t *testing.T) {
 	t.Log("TEST: Per-hardware monotonic attestation counter")
 	t.Log("Tracks successful attestations for durable client identity")
 
-	store := NewNonceStore(5 * time.Minute)
+	store := newTestNonceStore(5 * time.Minute)
 	var hwID [types.HardwareIDSize]byte
 	copy(hwID[:], []byte("hw-counter-identity"))
 	clientID := hex.EncodeToString(hwID[:])
@@ -613,7 +618,7 @@ func TestNonceStore_RateLimitNotConsumedOnFailedIssue(t *testing.T) {
 func TestNonceStore_ClientPendingTracking(t *testing.T) {
 	t.Log("TEST: Per-client pending count tracking")
 
-	store := NewNonceStore(5 * time.Minute)
+	store := newTestNonceStore(5 * time.Minute)
 	clientID := "binding-pending"
 
 	if store.ClientPendingCount(clientID) != 0 {
@@ -753,7 +758,7 @@ func TestNonceStore_TableDriven(t *testing.T) {
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
-			store := NewNonceStore(tc.ttl)
+			store := newTestNonceStore(tc.ttl)
 			challenge, _ := store.GenerateChallenge(tc.clientGen, 0x00004003)
 
 			if tc.sleep > 0 {

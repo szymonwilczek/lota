@@ -57,16 +57,6 @@ void journal_set_level(int priority)
 		g_min_priority = priority;
 }
 
-int journal_get_level(void)
-{
-	return g_min_priority;
-}
-
-_Bool journal_use_journal(void)
-{
-	return g_use_journal;
-}
-
 void journal_detached_from_terminal(void)
 {
 	g_use_journal = true;

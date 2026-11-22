@@ -668,16 +668,6 @@ int probe_cmdline_has_token(const char *cmdline, const char *token)
 	return 0;
 }
 
-int probe_booted_ima_ok(void)
-{
-	char buf[4096];
-	int ret = probe_read_text("/proc/cmdline", buf, sizeof(buf));
-
-	if (ret < 0)
-		return ret;
-	return probe_cmdline_ima_ok(buf);
-}
-
 int probe_ima_mode_blocking(int secureboot, const char *cmdline)
 {
 	if (secureboot)

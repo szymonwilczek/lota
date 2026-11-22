@@ -874,7 +874,6 @@ int lota_runtime_measure_pid(pid_t pid,
 					 "%s", entries[i].soname);
 				snprintf(fail->path, sizeof(fail->path), "%s",
 					 entries[i].path);
-				fail->ino = entries[i].ino;
 				fail->reported_len = m.reported_len;
 				fail->role = m.role;
 				fail->err = ret;

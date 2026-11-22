@@ -210,7 +210,7 @@ wait "$live_pid" 2>/dev/null || true
 
 # a stale pid file does not block --reset
 printf '%s\n' "$live_pid" >"$ROOT/run/lota/lota-agent.pid"
-stale=$(run_bringup --reset 2>&1) || {
+run_bringup --reset >/dev/null 2>&1 || {
     echo "FAIL: --reset refused on a stale pid file"
     failures=$((failures + 1))
 }

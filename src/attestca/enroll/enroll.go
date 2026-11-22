@@ -101,15 +101,6 @@ func WithMaxPending(n int) Option {
 	}
 }
 
-// WithClock overrides the time source (tests)
-func WithClock(now func() time.Time) Option {
-	return func(s *Service) {
-		if now != nil {
-			s.now = now
-		}
-	}
-}
-
 // WithTenantManifest binds an EK-to-tenant manifest so each enrollment is
 // assigned a tenant.
 // Without it every device enrolls into the default tenant,
@@ -274,13 +265,6 @@ func (s *Service) Complete(sessionID string, recoveredSecret []byte) (aikCertDER
 		return nil, "", fmt.Errorf("issuing AIK certificate: %w", err)
 	}
 	return der, sess.deviceID, nil
-}
-
-// PendingCount reports outstanding sessions (monitoring)
-func (s *Service) PendingCount() int {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return len(s.pending)
 }
 
 func (s *Service) sweepLocked(now time.Time) {

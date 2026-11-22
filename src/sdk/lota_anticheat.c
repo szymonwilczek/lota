@@ -120,7 +120,6 @@ struct lota_ac_session {
 	uint64_t session_start;
 	uint64_t last_heartbeat;
 	uint32_t heartbeat_seq;
-	uint32_t heartbeat_interval;
 	uint32_t required_flags;
 	uint32_t lota_flags;
 
@@ -1156,9 +1155,6 @@ struct lota_ac_session *lota_ac_init(const struct lota_ac_config *cfg)
 	s->provider = cfg->provider;
 	s->state = LOTA_AC_STATE_IDLE;
 	strncpy(s->game_id, cfg->game_id, LOTA_AC_MAX_GAME_ID - 1);
-	s->heartbeat_interval = cfg->heartbeat_interval_sec ?
-					cfg->heartbeat_interval_sec :
-					LOTA_AC_DEFAULT_HEARTBEAT_SEC;
 	s->required_flags = cfg->required_flags;
 	s->direct = cfg->direct;
 

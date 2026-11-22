@@ -54,7 +54,6 @@ struct terminate_request {
 	uint32_t target_pid;
 	uint32_t target_uid; /* real uid of the target, read from /proc */
 	uint32_t caller_uid; /* SO_PEERCRED of the connection */
-	uint32_t caller_pid;
 	uint32_t agent_pid; /* the daemon serving this request */
 	int signal;
 	bool target_is_protected;

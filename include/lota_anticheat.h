@@ -50,9 +50,6 @@ extern "C" {
 #define LOTA_AC_DOMAIN_VERSION_V1 1u
 #define LOTA_AC_DOMAIN_VERSION_CURRENT LOTA_AC_DOMAIN_VERSION_V1
 
-/* default heartbeat interval in seconds */
-#define LOTA_AC_DEFAULT_HEARTBEAT_SEC 30
-
 /* heartbeat output filenames */
 #define LOTA_AC_FILE_EAC "lota-ac-eac.bin"
 #define LOTA_AC_FILE_BATTLEYE "lota-ac-battleye.bin"
@@ -159,7 +156,6 @@ struct lota_ac_config {
 
 	enum lota_ac_provider provider;
 	const char *game_id; /* NUL-terminated, max LOTA_AC_MAX_GAME_ID */
-	uint32_t heartbeat_interval_sec; /* 0 -> default (30 s) */
 
 	/*
 	 * Extra attestation flags this title insists on.

@@ -150,20 +150,6 @@ func main() {
 		fail("iommu cmdline = %q, want %q", got, "intel_iommu=on")
 	}
 
-	// BPF summary
-	if report.BPF.TotalExecEvents != 0x11223344 {
-		fail("bpf.total_exec_events = %#08x, want 0x11223344", report.BPF.TotalExecEvents)
-	}
-	if report.BPF.UniqueBinaries != 0x55667788 {
-		fail("bpf.unique_binaries = %#08x, want 0x55667788", report.BPF.UniqueBinaries)
-	}
-	if report.BPF.FirstEventTS != 0x0011223344556677 {
-		fail("bpf.first_event_ts = %#016x, want 0x0011223344556677", report.BPF.FirstEventTS)
-	}
-	if report.BPF.LastEventTS != 0x7766554433221100 {
-		fail("bpf.last_event_ts = %#016x, want 0x7766554433221100", report.BPF.LastEventTS)
-	}
-
 	// variable sections
 	if got := string(report.EventLog); got != eventLog {
 		fail("event log = %q, want %q", got, eventLog)
@@ -188,7 +174,7 @@ func main() {
 	}
 
 	// file's length must be exactly what the Go constants predict
-	wantLen := types.FixedReportSize + 4 + 4 + len(eventLog) + types.ESRTWireSize
+	wantLen := types.FixedReportSize + 4 + len(eventLog) + types.ESRTWireSize
 	if len(data) != wantLen {
 		fail("report is %d bytes, Go constants predict %d (FixedReportSize=%d)",
 			len(data), wantLen, types.FixedReportSize)

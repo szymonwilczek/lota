@@ -320,7 +320,7 @@ func verifyWithPolicy(t *testing.T, policy *PCRPolicy, report *types.Attestation
 	if err := v.AddPolicy(policy); err != nil {
 		t.Fatalf("AddPolicy failed: %v", err)
 	}
-	return v.VerifyReportWithFacts(report, facts)
+	return v.VerifyReportForTenant(report, "", facts)
 }
 
 func TestSecureBootGate_EnabledPasses(t *testing.T) {

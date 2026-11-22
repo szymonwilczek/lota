@@ -268,8 +268,8 @@ func TestRelease_NonceIsSingleUse(t *testing.T) {
 	if !strings.Contains(resp.Reason, "not issued") {
 		t.Fatalf("reason %q", resp.Reason)
 	}
-	if g.nonces.outstanding() != 0 {
-		t.Fatalf("%d nonces outstanding", g.nonces.outstanding())
+	if n := len(g.nonces.issued); n != 0 {
+		t.Fatalf("%d nonces outstanding", n)
 	}
 }
 

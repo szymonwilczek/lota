@@ -33,9 +33,6 @@ func FuzzVerifyReport(f *testing.F) {
 	if err := v.AddPolicy(DefaultPolicy()); err != nil {
 		f.Fatalf("AddPolicy: %v", err)
 	}
-	if err := v.SetActivePolicy("default"); err != nil {
-		f.Fatalf("SetActivePolicy: %v", err)
-	}
 
 	key, err := rsa.GenerateKey(rand.Reader, 2048)
 	if err != nil {
@@ -58,7 +55,7 @@ func FuzzVerifyReport(f *testing.F) {
 			t.Fatalf("GenerateChallenge: %v", err)
 		}
 		report := buildSignedReport(spec, clientID, ch.Nonce, key)
-		result, err := v.VerifyReport(clientID, report)
+		result, err := v.VerifyReportFrom(clientID, "", report)
 
 		if result == nil {
 			t.Fatalf("VerifyReport returned nil result (err=%v)", err)

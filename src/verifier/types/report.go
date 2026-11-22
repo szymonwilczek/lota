@@ -31,7 +31,6 @@ const (
 	PCRCount        = 24   // TPM PCR bank size
 	MaxKernelPath   = 256
 	CmdlineParamMax = 64
-	ExecEventSize   = 344 // sizeof(lota_exec_event)
 )
 
 // report flags (see: include/attestation.h)
@@ -278,20 +277,11 @@ type SystemMeasurement struct {
 	IOMMU      IOMMUStatus         // 76 bytes
 }
 
-// struct lota_bpf_summary (see: include/attestation.h)
-type BPFSummary struct {
-	TotalExecEvents uint32 // 4 bytes
-	UniqueBinaries  uint32 // 4 bytes
-	FirstEventTS    uint64 // 8 bytes
-	LastEventTS     uint64 // 8 bytes
-}
-
 // struct lota_attestation_report (see: include/attestation.h)
 type AttestationReport struct {
 	Header ReportHeader      // 32 bytes
 	TPM    TPMEvidence       // 5466 bytes
 	System SystemMeasurement // 396 bytes (364 + 32 for agent_hash)
-	BPF    BPFSummary        // 24 bytes
 
 	// variable-length sections (not part of fixed wire format)
 	EventLog []byte // raw TCG binary event log from agent
@@ -342,16 +332,16 @@ var (
 )
 
 // minimum binary size of a serialized report on the wire.
-// Header(16) + TPM(5466) + System(396) + BPF(24) + event_count(4) + event_log_size(4) + ESRT(28) = 5938.
+// Header(16) + TPM(5466) + System(396) + event_log_size(4) + ESRT(28) = 5910.
 //
 // ESRT section is mandatory, so it counts toward the minimum:
 // report that stops before it is truncated.
 // src/agent/report.c pins the C-side sizes with static asserts
-const MinReportSize = 5938
+const MinReportSize = 5910
 
 // fixed struct portion (without variable-length sections)
-// Header(16) + TPM(5466) + System(396) + BPF(24) = 5902
-const FixedReportSize = 5902
+// Header(16) + TPM(5466) + System(396) = 5878
+const FixedReportSize = 5878
 
 // deserializes a binary attestation report
 func ParseReport(data []byte) (*AttestationReport, error) {
@@ -453,29 +443,6 @@ func ParseReport(data []byte) (*AttestationReport, error) {
 	copy(report.System.IOMMU.CmdlineParam[:], data[offset:offset+CmdlineParamMax])
 	offset += CmdlineParamMax
 
-	// bpf summary (24 bytes)
-	report.BPF.TotalExecEvents = binary.LittleEndian.Uint32(data[offset:])
-	offset += 4
-	report.BPF.UniqueBinaries = binary.LittleEndian.Uint32(data[offset:])
-	offset += 4
-	report.BPF.FirstEventTS = binary.LittleEndian.Uint64(data[offset:])
-	offset += 8
-	report.BPF.LastEventTS = binary.LittleEndian.Uint64(data[offset:])
-	offset += 8
-
-	// BPF events section: event_count + events
-	if len(data) < offset+4 {
-		return nil, fmt.Errorf("%w: truncated at event_count", ErrInvalidSize)
-	}
-	eventCount := binary.LittleEndian.Uint32(data[offset:])
-	offset += 4
-	remaining := len(data) - offset
-	if remaining < 0 || uint64(eventCount)*ExecEventSize > uint64(remaining) {
-		return nil, fmt.Errorf("%w: truncated at BPF events (event_count %d)", ErrInvalidSize, eventCount)
-	}
-	eventBytes := int(eventCount) * ExecEventSize
-	offset += eventBytes // skip BPF events (not parsed yet)
-
 	// TPM event log section
 	if len(data) < offset+4 {
 		return nil, fmt.Errorf("%w: truncated at event_log_size", ErrInvalidSize)
@@ -533,14 +500,4 @@ func (r *VerifyResult) Serialize() []byte {
 	binary.LittleEndian.PutUint32(data[12:16], r.Flags)
 	binary.LittleEndian.PutUint64(data[16:24], r.ValidUntil)
 	return data
-}
-
-// returns null-terminated kernel path as string
-func (s *SystemMeasurement) GetKernelPath() string {
-	for i, b := range s.KernelPath {
-		if b == 0 {
-			return string(s.KernelPath[:i])
-		}
-	}
-	return string(s.KernelPath[:])
 }

@@ -91,9 +91,6 @@ func TestAgentHashDecision_ZeroVerdictIsEscalate(t *testing.T) {
 	if v != AgentHashEscalate {
 		t.Fatalf("zero value must be escalate, got %v", v)
 	}
-	if v.String() != "escalate" {
-		t.Fatalf("zero value String(): got %q", v.String())
-	}
 }
 
 // Policy gate and the re-pin discriminator must read the allow-list the same way.
@@ -141,9 +138,6 @@ func repinVerifierWithLog(t *testing.T, buf *bytes.Buffer,
 	}
 	if err := verifier.AddPolicy(policy); err != nil {
 		t.Fatalf("AddPolicy: %v", err)
-	}
-	if err := verifier.SetActivePolicy("default"); err != nil {
-		t.Fatalf("SetActivePolicy: %v", err)
 	}
 	return verifier
 }

@@ -33,8 +33,8 @@ func haRound(clientID string, at time.Time) AttestationRecord {
 // a second instance waits while the first decides about the same host
 func TestPostgresAttestationLogOneInstanceDecidesPerSubject(t *testing.T) {
 	db := pgTestDB(t)
-	first := NewPostgresAttestationLog(db)
-	second := NewPostgresAttestationLog(db)
+	first := NewPostgresAttestationLog(db, DefaultCollapseWindow)
+	second := NewPostgresAttestationLog(db, DefaultCollapseWindow)
 
 	at := time.Now().UTC().Truncate(time.Millisecond)
 	round := haRound("ha-subject", at)
@@ -66,7 +66,7 @@ func TestPostgresAttestationLogOneInstanceDecidesPerSubject(t *testing.T) {
 		t.Fatalf("Record: %v", err)
 	}
 
-	rows := first.QueryAttestationsFiltered(AttestationQuery{ClientID: "ha-subject"})
+	rows := first.QueryAttestations(AttestationQuery{ClientID: "ha-subject"})
 	if len(rows) != 1 {
 		t.Fatalf("two instances recorded one host's arrival and left %d rows, want 1", len(rows))
 	}
@@ -78,8 +78,8 @@ func TestPostgresAttestationLogOneInstanceDecidesPerSubject(t *testing.T) {
 // different hosts do not wait on each other
 func TestPostgresAttestationLogSubjectsDoNotBlockEachOther(t *testing.T) {
 	db := pgTestDB(t)
-	first := NewPostgresAttestationLog(db)
-	second := NewPostgresAttestationLog(db)
+	first := NewPostgresAttestationLog(db, DefaultCollapseWindow)
+	second := NewPostgresAttestationLog(db, DefaultCollapseWindow)
 
 	at := time.Now().UTC().Truncate(time.Millisecond)
 
@@ -109,7 +109,7 @@ func TestPostgresAttestationLogSubjectsDoNotBlockEachOther(t *testing.T) {
 		t.Fatalf("Commit: %v", err)
 	}
 
-	rows := first.QueryAttestationsFiltered(AttestationQuery{})
+	rows := first.QueryAttestations(AttestationQuery{})
 	if len(rows) != 2 {
 		t.Fatalf("two hosts arrived and left %d rows, want one each", len(rows))
 	}
@@ -125,7 +125,7 @@ func TestPostgresAttestationLogConcurrentRoundsAreAllCounted(t *testing.T) {
 	)
 	logs := make([]*PostgresAttestationLog, instances)
 	for i := range logs {
-		logs[i] = NewPostgresAttestationLog(db)
+		logs[i] = NewPostgresAttestationLog(db, DefaultCollapseWindow)
 	}
 
 	at := time.Now().UTC().Truncate(time.Millisecond)
@@ -154,7 +154,7 @@ func TestPostgresAttestationLogConcurrentRoundsAreAllCounted(t *testing.T) {
 		t.Fatalf("Record: %v", err)
 	}
 
-	got := logs[0].QueryAttestationsFiltered(AttestationQuery{ClientID: "ha-steady"})
+	got := logs[0].QueryAttestations(AttestationQuery{ClientID: "ha-steady"})
 	if len(got) != 1 {
 		t.Fatalf("%d instances served %d rounds each and left %d rows, want 1",
 			instances, rounds, len(got))

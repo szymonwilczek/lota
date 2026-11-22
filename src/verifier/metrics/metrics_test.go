@@ -41,9 +41,6 @@ func TestLabeledCounter(t *testing.T) {
 	if vals["sig_fail"] != 1 {
 		t.Errorf("expected sig_fail=1, got %d", vals["sig_fail"])
 	}
-	if lc.Total() != 3 {
-		t.Errorf("expected total=3, got %d", lc.Total())
-	}
 }
 
 func TestLabeledCounter_Concurrent(t *testing.T) {
@@ -59,8 +56,8 @@ func TestLabeledCounter_Concurrent(t *testing.T) {
 	}
 	wg.Wait()
 
-	if lc.Total() != 100 {
-		t.Errorf("expected 100, got %d", lc.Total())
+	if got := lc.Values()["concurrent"]; got != 100 {
+		t.Errorf("expected 100, got %d", got)
 	}
 }
 

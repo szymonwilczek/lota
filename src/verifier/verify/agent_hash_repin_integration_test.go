@@ -48,9 +48,6 @@ func repinVerifier(t *testing.T, allowedSeeds ...byte) *Verifier {
 	if err := verifier.AddPolicy(policy); err != nil {
 		t.Fatalf("AddPolicy: %v", err)
 	}
-	if err := verifier.SetActivePolicy("default"); err != nil {
-		t.Fatalf("SetActivePolicy: %v", err)
-	}
 	return verifier
 }
 
@@ -67,7 +64,7 @@ func attestAsBuild(t *testing.T, v *Verifier, clientID string, seed byte) (*type
 	report := createValidReportWithAgentHash(t, clientID, challenge.Nonce,
 		fixturePCR14Seed(seed), productionPCRMask, productionFlags,
 		fixtureAgentHashSeed(seed))
-	return v.VerifyReport(clientID, report)
+	return v.VerifyReportFrom(clientID, "", report)
 }
 
 // The path this whole feature exists for:

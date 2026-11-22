@@ -22,7 +22,7 @@ import (
 type ackFixture struct {
 	mux   *http.ServeMux
 	store *verify.BaselineStore
-	audit *store.MemoryAuditLog
+	audit *store.SQLiteAuditLog
 }
 
 // newAckFixture seeds "queued" (LFA re-anchored, pending review) and "quiet"
@@ -54,10 +54,12 @@ func newAckFixture(t *testing.T) *ackFixture {
 	v := verify.NewVerifier(cfg, aikVerifier)
 	srv := &Server{verifier: v, addr: ":8443"}
 
-	auditLog := store.NewMemoryAuditLog()
+	db := testDB(t)
+
+	auditLog := store.NewSQLiteAuditLog(db)
 	mux := http.NewServeMux()
 	NewAPIHandler(mux, v, srv, auditLog, nil, m,
-		store.NewMemoryAttestationLog(), "admin-key", "reader-key")
+		store.NewSQLiteAttestationLog(db, store.DefaultCollapseWindow), "admin-key", "reader-key")
 
 	return &ackFixture{mux: mux, store: bs, audit: auditLog}
 }

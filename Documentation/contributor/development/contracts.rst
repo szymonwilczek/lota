@@ -14,8 +14,7 @@ Attestation report wire format
 
 The attestation report (``include/attestation.h``, serialized by
 ``src/agent/report.c``, parsed by ``src/verifier/types/report.go``) has a fixed
-struct followed by variable-length sections: the BPF event array, the TPM event
-log, and the ESRT firmware-version descriptor.
+struct followed by the TPM event log and the ESRT firmware-version descriptor.
 
 **Every section is mandatory.** The verifier accepts exactly one report wire
 version and rejects any other, so there is no mixed-version fleet to parse
@@ -224,7 +223,7 @@ extended.
 Both of a row's times are written in UTC and compared as instants, so
 verifiers in different zones agree.
 
-``AttestationQuerier`` narrows a read by window, verdict, events-only and
+``QueryAttestations`` narrows a read by window, verdict, events-only and
 client. A window returns the rows that overlap it, not only those opened
 inside it. Both SQL stores build the clauses with one function.
 

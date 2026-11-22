@@ -185,7 +185,6 @@ const char *tpm_strerror(int err);
 
 /* Default metadata path (install target creates /var/lib/lota/) */
 #define TPM_AIK_META_PATH "/var/lib/lota/aik_meta.dat"
-#define TPM_AIK_AUTH_PATH "/var/lib/lota/aik_auth.dat"
 
 /*
  * Persistent PCR14 clock-state path.
@@ -284,8 +283,7 @@ struct aik_metadata {
 	int64_t provisioned_at; /* time_t: current AIK creation */
 	int64_t last_rotated_at; /* time_t: last key rotation (0 if never) */
 	uint8_t key_derivation; /* TPM_AIK_KEY_DERIVATION_* */
-	int64_t auth_rotated_at; /* time_t: last auth rotation (0 if never) */
-	uint8_t _reserved[55];
+	uint8_t _reserved[63];
 } __attribute__((packed));
 
 /*
@@ -1059,7 +1057,7 @@ int tpm_activate_credential(struct tpm_context *ctx, const uint8_t *cred_blob,
  * tpm_get_ek_cert - Read Endorsement Key certificate from NVRAM
  * @ctx: Initialized TPM context
  * @buf: Output buffer for DER-encoded certificate
- * @buf_size: Size of output buffer (recommend LOTA_MAX_EK_CERT_SIZE)
+ * @buf_size: Size of output buffer
  * @out_size: Actual size of read certificate
  *
  * Reads the EK certificate from the standard NV index 0x01c00002.
@@ -1189,12 +1187,10 @@ int tpm_aik_get_prev_public(struct tpm_context *ctx, uint8_t *buf,
 			    size_t buf_size, size_t *out_size);
 
 /*
- * TPM Event Log paths (tried in order)
+ * TPM Event Log path
  */
 #define TPM_EVENTLOG_PATH_BIOS \
 	"/sys/kernel/security/tpm0/binary_bios_measurements"
-#define TPM_EVENTLOG_PATH_IMA \
-	"/sys/kernel/security/ima/binary_runtime_measurements"
 
 /* Maximum event log size (512 KB) */
 #define TPM_MAX_EVENT_LOG_SIZE (512 * 1024)

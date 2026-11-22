@@ -604,12 +604,7 @@ static void test_consent_record(void)
 		      "a file that is not a consent record is refused");
 	}
 
-	CHECK(profile_consent_forget(&paths) == 0 &&
-		      profile_consent_time(&paths, &agreed) == -ENOENT,
-	      "consent can be withdrawn");
-	CHECK(profile_consent_forget(&paths) == 0,
-	      "withdrawing consent twice is not an error");
-
+	unlink(paths.consent);
 	unlink(paths.aik_handle);
 	rmdir(paths.dir);
 	rmdir(base);

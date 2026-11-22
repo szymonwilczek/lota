@@ -24,9 +24,6 @@ func profileVerifier(t *testing.T, profile string, override *bool) *Verifier {
 	if err := v.AddPolicy(policy); err != nil {
 		t.Fatalf("AddPolicy(profile=%q): %v", profile, err)
 	}
-	if err := v.SetActivePolicy("default"); err != nil {
-		t.Fatalf("SetActivePolicy: %v", err)
-	}
 	return v
 }
 

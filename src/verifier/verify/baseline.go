@@ -146,10 +146,6 @@ func MatchLockedBootCommitmentPCR14(baseline, agentHash [types.HashSize]byte,
 	return expected, expected == target
 }
 
-// ErrBaselineNotFound is returned by baseline-mutating helpers when the
-// target client has no PCR14 baseline row yet.
-var ErrBaselineNotFound = errors.New("baseline not found for client")
-
 // defines the interface for PCR baseline stores
 type BaselineStorer interface {
 	// performs TOFU validation for PCR 14

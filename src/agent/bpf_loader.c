@@ -51,7 +51,6 @@
 /* Stats map indices - must match BPF program */
 #define STAT_TOTAL_EXECS 0
 #define STAT_EVENTS_SENT 1
-#define STAT_ERRORS 2
 #define STAT_RINGBUF_DROPS 3
 #define STAT_MODULES_BLOCKED 4
 #define STAT_MMAP_EXECS 5
@@ -1591,14 +1590,6 @@ int bpf_loader_setup_ringbuf(struct bpf_loader_ctx *ctx,
 	return 0;
 }
 
-int bpf_loader_poll(struct bpf_loader_ctx *ctx, int timeout_ms)
-{
-	if (!ctx || !ctx->ringbuf)
-		return -EINVAL;
-
-	return ring_buffer__poll(ctx->ringbuf, timeout_ms);
-}
-
 int bpf_loader_get_event_fd(struct bpf_loader_ctx *ctx)
 {
 	if (!ctx || !ctx->ringbuf)
@@ -1611,44 +1602,6 @@ int bpf_loader_consume(struct bpf_loader_ctx *ctx)
 	if (!ctx || !ctx->ringbuf)
 		return -EINVAL;
 	return ring_buffer__consume(ctx->ringbuf);
-}
-
-int bpf_loader_get_stats(struct bpf_loader_ctx *ctx, uint64_t *total_execs,
-			 uint64_t *events_sent, uint64_t *errors,
-			 uint64_t *drops)
-{
-	uint64_t value;
-	uint32_t key;
-	int err;
-
-	if (!ctx || !ctx->loaded || ctx->stats_fd < 0)
-		return -EINVAL;
-
-	if (total_execs) {
-		key = STAT_TOTAL_EXECS;
-		err = bpf_map_lookup_elem(ctx->stats_fd, &key, &value);
-		*total_execs = (err == 0) ? value : 0;
-	}
-
-	if (events_sent) {
-		key = STAT_EVENTS_SENT;
-		err = bpf_map_lookup_elem(ctx->stats_fd, &key, &value);
-		*events_sent = (err == 0) ? value : 0;
-	}
-
-	if (errors) {
-		key = STAT_ERRORS;
-		err = bpf_map_lookup_elem(ctx->stats_fd, &key, &value);
-		*errors = (err == 0) ? value : 0;
-	}
-
-	if (drops) {
-		key = STAT_RINGBUF_DROPS;
-		err = bpf_map_lookup_elem(ctx->stats_fd, &key, &value);
-		*drops = (err == 0) ? value : 0;
-	}
-
-	return 0;
 }
 
 void bpf_loader_cleanup(struct bpf_loader_ctx *ctx)
@@ -1862,24 +1815,6 @@ int bpf_loader_measure_verity_digest(const char *path,
 				     struct lota_verity_digest_key *out)
 {
 	return measure_fsverity_digest(path, out);
-}
-
-int bpf_loader_allow_verity_path(struct bpf_loader_ctx *ctx, const char *path)
-{
-	struct lota_verity_digest_key key = { 0 };
-	int ret;
-
-	if (!ctx || !ctx->loaded || !path)
-		return -EINVAL;
-
-	if (ctx->allow_verity_digest_fd < 0)
-		return -ENOTSUP;
-
-	ret = measure_fsverity_digest(path, &key);
-	if (ret < 0)
-		return ret;
-
-	return bpf_loader_allow_verity_digest(ctx, &key);
 }
 
 int bpf_loader_disallow_verity_digest(struct bpf_loader_ctx *ctx,
@@ -2219,11 +2154,6 @@ int bpf_loader_pin_sweep(struct bpf_loader_ctx *ctx, size_t *released)
 	return ret;
 }
 
-size_t bpf_loader_pin_count(const struct bpf_loader_ctx *ctx)
-{
-	return ctx ? ctx->pin_count : 0;
-}
-
 int bpf_loader_protect_pid(struct bpf_loader_ctx *ctx, uint32_t pid)
 {
 	struct protected_pid_entry value = { 0 };
@@ -2420,7 +2350,6 @@ int bpf_loader_get_extended_stats(struct bpf_loader_ctx *ctx,
 
 	read_stat(ctx->stats_fd, STAT_TOTAL_EXECS, &stats->total_execs);
 	read_stat(ctx->stats_fd, STAT_EVENTS_SENT, &stats->events_sent);
-	read_stat(ctx->stats_fd, STAT_ERRORS, &stats->errors);
 	read_stat(ctx->stats_fd, STAT_RINGBUF_DROPS, &stats->drops);
 	read_stat(ctx->stats_fd, STAT_MODULES_BLOCKED, &stats->modules_blocked);
 	read_stat(ctx->stats_fd, STAT_MMAP_EXECS, &stats->mmap_execs);

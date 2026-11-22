@@ -83,36 +83,6 @@ static int hash_fd(int fd, uint8_t sha256_out[LOTA_HASH_SIZE])
 	return 0;
 }
 
-int hash_verify_file(const char *path, uint8_t sha256_out[LOTA_HASH_SIZE])
-{
-	int fd;
-	int ret;
-
-	if (!path || !sha256_out)
-		return -EINVAL;
-
-	/* reject relative paths and empty strings */
-	if (path[0] != '/')
-		return -ENOENT;
-
-	fd = open(path, O_RDONLY | O_NOFOLLOW | O_NOCTTY);
-	if (fd < 0)
-		return -errno;
-
-	/* reject non-regular files */
-	{
-		struct stat st;
-		if (fstat(fd, &st) < 0 || !S_ISREG(st.st_mode)) {
-			close(fd);
-			return -EINVAL;
-		}
-	}
-
-	ret = hash_fd(fd, sha256_out);
-	close(fd);
-	return ret;
-}
-
 int hash_verify_event(struct hash_verify_ctx *ctx,
 		      const struct lota_exec_event *event,
 		      uint8_t sha256_out[LOTA_HASH_SIZE])

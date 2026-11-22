@@ -38,8 +38,8 @@ func TestPostgresAndSQLiteAnswerTheSameQuestionTheSameWay(t *testing.T) {
 	// sub-microsecond on purpose
 	at := time.Date(2026, 9, 19, 9, 0, 0, 123456789, time.UTC)
 
-	pg := NewPostgresAttestationLogWindow(db, time.Hour)
-	lite := NewSQLiteAttestationLogWindow(eventsTestDB(t), time.Hour)
+	pg := NewPostgresAttestationLog(db, time.Hour)
+	lite := NewSQLiteAttestationLog(eventsTestDB(t), time.Hour)
 	for i, r := range parityRounds(at) {
 		if err := pg.Record(r); err != nil {
 			t.Fatalf("postgres: record %d: %v", i, err)
@@ -66,7 +66,7 @@ func TestPostgresAndSQLiteAnswerTheSameQuestionTheSameWay(t *testing.T) {
 	}
 
 	// Postgres keeps the input truncated to the microsecond
-	whole := pg.QueryAttestations(0)
+	whole := pg.QueryAttestations(AttestationQuery{})
 	if len(whole) == 0 {
 		t.Fatal("postgres recorded nothing")
 	}
@@ -80,8 +80,8 @@ func TestPostgresAndSQLiteAnswerTheSameQuestionTheSameWay(t *testing.T) {
 	}
 
 	for _, q := range queries {
-		want := lite.QueryAttestationsFiltered(q)
-		got := pg.QueryAttestationsFiltered(q)
+		want := lite.QueryAttestations(q)
+		got := pg.QueryAttestations(q)
 		if len(got) != len(want) {
 			t.Errorf("%+v: postgres returned %d rows, sqlite returned %d", q, len(got), len(want))
 			continue
@@ -105,7 +105,7 @@ func truncateAttestationTimes(r AttestationRecord) AttestationRecord {
 // covered by a window named in another zone
 func TestPostgresHoldsTheInstantNotTheClockReading(t *testing.T) {
 	db := pgTestDB(t)
-	log := NewPostgresAttestationLogWindow(db, time.Hour)
+	log := NewPostgresAttestationLog(db, time.Hour)
 
 	east := time.FixedZone("UTC+9", 9*60*60)
 	at := time.Date(2026, 9, 19, 12, 0, 0, 0, time.UTC)
@@ -114,7 +114,7 @@ func TestPostgresHoldsTheInstantNotTheClockReading(t *testing.T) {
 	}
 
 	west := time.FixedZone("UTC-6", -6*60*60)
-	got := log.QueryAttestationsFiltered(AttestationQuery{
+	got := log.QueryAttestations(AttestationQuery{
 		Since: at.Add(-time.Minute).In(west),
 		Until: at.Add(time.Minute).In(west),
 	})
@@ -125,7 +125,7 @@ func TestPostgresHoldsTheInstantNotTheClockReading(t *testing.T) {
 		t.Errorf("the row reads %v, and the round was served at %v", got[0].Timestamp, at)
 	}
 
-	before := log.QueryAttestationsFiltered(AttestationQuery{
+	before := log.QueryAttestations(AttestationQuery{
 		Since: at.Add(-2 * time.Hour),
 		Until: at.Add(-time.Hour),
 	})
@@ -154,7 +154,7 @@ func TestPostgresWritesWhatItMayNotFold(t *testing.T) {
 	for _, c := range cases {
 		t.Run(c.what, func(t *testing.T) {
 			db := pgTestDB(t)
-			log := NewPostgresAttestationLogWindow(db, time.Hour)
+			log := NewPostgresAttestationLog(db, time.Hour)
 
 			for i := range 3 {
 				if err := log.Record(trustedRound(at.Add(time.Duration(i) * time.Minute))); err != nil {
@@ -168,7 +168,7 @@ func TestPostgresWritesWhatItMayNotFold(t *testing.T) {
 				t.Fatalf("record the changed round: %v", err)
 			}
 
-			got := log.QueryAttestations(0)
+			got := log.QueryAttestations(AttestationQuery{})
 			if len(got) != 2 {
 				t.Fatalf("%s left %d rows, want 2", c.what, len(got))
 			}
@@ -177,5 +177,24 @@ func TestPostgresWritesWhatItMayNotFold(t *testing.T) {
 				t.Errorf("the row that stood before it counts %d rounds, want 3", standing.Rounds)
 			}
 		})
+	}
+}
+
+// reader-visible fields; the row id is the backend's own
+func assertSameAttestation(t *testing.T, wantName string, want AttestationRecord, gotName string, got AttestationRecord) {
+	t.Helper()
+
+	if !want.Timestamp.Equal(got.Timestamp) || !want.LastSeen.Equal(got.LastSeen) {
+		t.Errorf("%s says %v..%v, %s says %v..%v",
+			wantName, want.Timestamp, want.LastSeen, gotName, got.Timestamp, got.LastSeen)
+	}
+	if want.Rounds != got.Rounds {
+		t.Errorf("%s counts %d rounds, %s counts %d", wantName, want.Rounds, gotName, got.Rounds)
+	}
+	if want.Result != got.Result || want.ClientID != got.ClientID ||
+		want.Tenant != got.Tenant || want.HardwareID != got.HardwareID ||
+		want.PCR14 != got.PCR14 || want.KernelHash != got.KernelHash ||
+		want.Details != got.Details {
+		t.Errorf("%s says %+v, %s says %+v", wantName, want, gotName, got)
 	}
 }

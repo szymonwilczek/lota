@@ -18,9 +18,9 @@ import (
 // Test report matching C struct layout
 // IMPORTANT: Any misalignment causes verification failures
 func createTestReportBytes() []byte {
-	// fixed struct plus the two variable-section length prefixes;
+	// fixed struct plus the event log length prefix;
 	// mandatory ESRT section is appended at the end
-	buf := make([]byte, FixedReportSize+8)
+	buf := make([]byte, FixedReportSize+4)
 	offset := 0
 
 	// Header (32 bytes)
@@ -115,16 +115,6 @@ func createTestReportBytes() []byte {
 	binary.LittleEndian.PutUint32(buf[offset:], 2) // unit_count
 	offset += 4
 	copy(buf[offset:], "intel_iommu=on") // cmdline
-	offset += CmdlineParamMax
-
-	// BPF Summary (24 bytes)
-	binary.LittleEndian.PutUint32(buf[offset:], 100) // total_exec_events
-	offset += 4
-	binary.LittleEndian.PutUint32(buf[offset:], 50) // unique_binaries
-	offset += 4
-	binary.LittleEndian.PutUint64(buf[offset:], 1699999000) // first_event_ts
-	offset += 8
-	binary.LittleEndian.PutUint64(buf[offset:], 1700000000) // last_event_ts
 
 	// mandatory trailing ESRT section
 	// all-zero means present == false
@@ -132,28 +122,6 @@ func createTestReportBytes() []byte {
 	binary.LittleEndian.PutUint32(buf[8:12], uint32(len(buf))) // report_size
 
 	return buf
-}
-
-// TestParseReport_OversizedEventCountRejected pins the BPF event_count bound.
-// event_count is attacker-controlled u32; parser must reject count whose byte
-// span cannot fit the buffer without overflowing the size computation.
-//
-// createTestReportBytes() lays event_count as the u32 right after the fixed struct,
-// followed by event_log_size and the mandatory ESRT section, all zero in the valid baseline.
-func TestParseReport_OversizedEventCountRejected(t *testing.T) {
-	data := createTestReportBytes()
-	binary.LittleEndian.PutUint32(data[FixedReportSize:], 0xFFFFFFFF)
-
-	report, err := ParseReport(data)
-	if err == nil {
-		t.Fatalf("oversized event_count accepted: report=%+v", report)
-	}
-	if !errors.Is(err, ErrInvalidSize) {
-		t.Fatalf("oversized event_count: got %v, want ErrInvalidSize", err)
-	}
-	if report != nil {
-		t.Fatal("ParseReport returned non-nil report with error")
-	}
 }
 
 func TestParseReport_ValidReport(t *testing.T) {
@@ -238,16 +206,6 @@ func TestParseReport_ValidReport(t *testing.T) {
 			t.Errorf("IOMMU.Flags: got 0x%02X, want 0x07", report.System.IOMMU.Flags)
 		}
 		t.Log("✓ System measurement parsed correctly")
-	})
-
-	t.Run("BPFSummary", func(t *testing.T) {
-		if report.BPF.TotalExecEvents != 100 {
-			t.Errorf("TotalExecEvents: got %d, want 100", report.BPF.TotalExecEvents)
-		}
-		if report.BPF.UniqueBinaries != 50 {
-			t.Errorf("UniqueBinaries: got %d, want 50", report.BPF.UniqueBinaries)
-		}
-		t.Log("✓ BPF summary parsed correctly")
 	})
 }
 
@@ -348,7 +306,7 @@ func TestParseReport_FieldOffsetsMatchCLayout(t *testing.T) {
 		offAgentHash  = offKernelHash + HashSize
 		offKernelPath = offAgentHash + HashSize
 		offIOMMU      = offKernelPath + MaxKernelPath
-		offBPFTotal   = offIOMMU + 4 + 4 + 4 + CmdlineParamMax
+		offFixedEnd   = offIOMMU + 4 + 4 + 4 + CmdlineParamMax
 	)
 
 	// layout must close exactly on the published constants
@@ -359,7 +317,7 @@ func TestParseReport_FieldOffsetsMatchCLayout(t *testing.T) {
 		}
 	}
 	assertEqual(tpmEnd-tpmBase, 5466, "TPM evidence section")
-	assertEqual(offBPFTotal+24, FixedReportSize, "fixed section")
+	assertEqual(offFixedEnd, FixedReportSize, "fixed section")
 
 	// byte-slice fields: write a marker, parse, require it in the field
 	sliceCases := []struct {
@@ -415,7 +373,6 @@ func TestParseReport_FieldOffsetsMatchCLayout(t *testing.T) {
 		binary.LittleEndian.PutUint16(data[offPrevAIKSize:], 0x0006)
 		binary.LittleEndian.PutUint16(data[offQuoteSigAlg:], TPMAlgRSASSA)
 		binary.LittleEndian.PutUint16(data[offQuoteHashAlg:], TPMAlgSHA256)
-		binary.LittleEndian.PutUint32(data[offBPFTotal:], 0x07070707)
 
 		report, err := ParseReport(data)
 		if err != nil {
@@ -435,7 +392,6 @@ func TestParseReport_FieldOffsetsMatchCLayout(t *testing.T) {
 			{"TPM.PrevAIKSize", uint64(report.TPM.PrevAIKSize), 0x0006},
 			{"TPM.QuoteSigAlg", uint64(report.TPM.QuoteSigAlg), uint64(TPMAlgRSASSA)},
 			{"TPM.QuoteSigHashAlg", uint64(report.TPM.QuoteSigHashAlg), uint64(TPMAlgSHA256)},
-			{"BPF.TotalExecEvents", uint64(report.BPF.TotalExecEvents), 0x07070707},
 		}
 		for _, c := range checks {
 			if c.got != c.want {
@@ -675,57 +631,5 @@ func TestParseReport_ESRT_NotPresent(t *testing.T) {
 	}
 	if report.ESRT.Present {
 		t.Error("expected ESRT.Present false")
-	}
-}
-
-// TestParseReport_EventSectionMatchesCLayout checks ExecEventSize against
-// struct lota_exec_event (include/lota.h). A short size lands the parser inside
-// the event array, missing the event log and ESRT.
-func TestParseReport_EventSectionMatchesCLayout(t *testing.T) {
-	// timestamp_ns, event_type, pid, tgid, uid, gid, target union,
-	// flags, signal, hash, comm, filename
-	const cEventSize = 8 + 4 + 4 + 4 + 4 + 4 + 4 + 4 + 4 +
-		HashSize + 16 + MaxKernelPath
-
-	if ExecEventSize != cEventSize {
-		t.Fatalf("ExecEventSize: got %d, want %d (sizeof lota_exec_event)",
-			ExecEventSize, cEventSize)
-	}
-
-	// One event; the ESRT marker proves the walk stepped over it exactly
-	base := createTestReportBytes()
-	tail := len(base) - ESRTWireSize - 4 // event_log_size sits before ESRT
-	if tail < FixedReportSize+4 {
-		t.Fatalf("baseline report of %d bytes is too short", len(base))
-	}
-
-	data := append([]byte{}, base[:FixedReportSize]...)
-	data = binary.LittleEndian.AppendUint32(data, 1) // event_count
-
-	event := make([]byte, cEventSize)
-	for i := range event {
-		event[i] = 0xAB // anything a misread length would pick up
-	}
-	data = append(data, event...)
-
-	data = binary.LittleEndian.AppendUint32(data, 0) // event_log_size
-
-	esrt := make([]byte, ESRTWireSize)
-	binary.LittleEndian.PutUint32(esrt[0:], 1)   // present
-	binary.LittleEndian.PutUint32(esrt[4:], 785) // fw_version
-	data = append(data, esrt...)
-
-	binary.LittleEndian.PutUint32(data[8:12], uint32(len(data)))
-
-	report, err := ParseReport(data)
-	if err != nil {
-		t.Fatalf("report carrying one event rejected: %v", err)
-	}
-	if report.ESRT == nil || !report.ESRT.Present {
-		t.Fatal("the ESRT past the event section did not survive the walk")
-	}
-	if report.ESRT.FWVersion != 785 {
-		t.Errorf("ESRT past the event section: FWVersion %d, want 785",
-			report.ESRT.FWVersion)
 	}
 }

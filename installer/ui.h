@@ -109,10 +109,8 @@ const char *ui_result_word(enum ui_result r);
 /* explanation block: dim vertical bar, word-wrapped body */
 void ui_explain(struct ui *ui, const char *body);
 
-/* word-wrapped paragraph / warning / error */
+/* word-wrapped paragraph / error */
 void ui_text(struct ui *ui, const char *fmt, ...)
-	__attribute__((format(printf, 2, 3)));
-void ui_warn(struct ui *ui, const char *fmt, ...)
 	__attribute__((format(printf, 2, 3)));
 void ui_error(struct ui *ui, const char *fmt, ...)
 	__attribute__((format(printf, 2, 3)));

@@ -55,17 +55,6 @@ const (
 	ReanchorLFA
 )
 
-func (v ReanchorVerdict) String() string {
-	switch v {
-	case ReanchorAllow:
-		return "allow"
-	case ReanchorLFA:
-		return "lfa"
-	default:
-		return "escalate"
-	}
-}
-
 // pcr7Variables extracts the Secure Boot variables measured into PCR 7
 // (EV_EFI_VARIABLE_DRIVER_CONFIG: PK, KEK, db, dbx, SecureBoot) as a map of
 // UnicodeName -> VariableData.
@@ -129,7 +118,6 @@ func reanchorDecision(in ReanchorInputs) (verdict ReanchorVerdict, reason string
 	// assurance tier and the anti-rollback / disappeared-ESRT escalations
 	// are decided from the ESRT alone, then the rate limit short-circuits
 	// before any parsing.
-	verdict = ReanchorAllow
 	if in.CurrentESRT != nil && in.CurrentESRT.Present {
 		// Firmware reporting that it runs below its own declared
 		// anti-rollback floor (ESRT LowestSupported above FWVersion) is

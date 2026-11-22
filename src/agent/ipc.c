@@ -208,7 +208,6 @@ static int check_protect_pid_rate_limit(uid_t uid)
 struct ipc_client {
 	int fd;
 	uid_t peer_uid; /* authenticated peer UID via SO_PEERCRED */
-	gid_t peer_gid; /* authenticated peer GID */
 	pid_t peer_pid; /* authenticated peer PID */
 	uint64_t peer_start_time_ticks; /* /proc/<pid>/stat field 22 */
 	uint8_t recv_buf[LOTA_IPC_REQUEST_SIZE + LOTA_IPC_MAX_PAYLOAD];
@@ -715,7 +714,7 @@ static int ensure_socket_dir(void)
 }
 
 static struct ipc_client *client_create(struct ipc_context *ctx, int fd,
-					uid_t uid, gid_t gid, pid_t pid)
+					uid_t uid, pid_t pid)
 {
 	struct ipc_client *client;
 
@@ -731,7 +730,6 @@ static struct ipc_client *client_create(struct ipc_context *ctx, int fd,
 
 	client->fd = fd;
 	client->peer_uid = uid;
-	client->peer_gid = gid;
 	client->peer_pid = pid;
 
 	if (client_map_insert(ctx, fd, client) < 0) {
@@ -2838,7 +2836,6 @@ static void handle_terminate_protected(struct ipc_context *ctx,
 	decision_input.target_pid = req.pid;
 	decision_input.target_uid = target_uid;
 	decision_input.caller_uid = (uint32_t)client->peer_uid;
-	decision_input.caller_pid = (uint32_t)client->peer_pid;
 	decision_input.agent_pid = (uint32_t)getpid();
 	decision_input.signal = (int)req.signal;
 
@@ -3213,7 +3210,7 @@ static int accept_client(struct ipc_context *ctx, int listen_fd)
 		return ret;
 	}
 
-	client = client_create(ctx, fd, cred.uid, cred.gid, cred.pid);
+	client = client_create(ctx, fd, cred.uid, cred.pid);
 	if (!client) {
 		close(fd);
 		return -ENOMEM;

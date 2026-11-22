@@ -55,7 +55,7 @@ func writeRig(dir string, agents, keyPool int, tenant string) error {
 	}
 	// fleet only validates the profile and renders the policy here;
 	// certificates are re-issued from the pool on every load
-	fleet, err := synth.NewFleetWithKeys(ca, agents, keys, tenant)
+	fleet, err := synth.NewFleet(ca, agents, keys, tenant)
 	if err != nil {
 		return err
 	}
@@ -132,7 +132,7 @@ func loadRig(dir string, agents int) (*synth.Fleet, *rigMeta, error) {
 		return nil, nil, err
 	}
 
-	fleet, err := synth.NewFleetWithKeys(ca, agents, keys, meta.Tenant)
+	fleet, err := synth.NewFleet(ca, agents, keys, meta.Tenant)
 	if err != nil {
 		return nil, nil, err
 	}

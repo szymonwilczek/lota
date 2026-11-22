@@ -26,6 +26,14 @@ import (
 // certificate verifier trusting the rig CA,
 // strict DefaultConfig,
 // rig policy loaded from generated YAML
+func testFleet(ca *CA, n, keyPool int, tenant string) (*Fleet, error) {
+	keys, err := GenerateKeyPool(keyPool)
+	if err != nil {
+		return nil, err
+	}
+	return NewFleet(ca, n, keys, tenant)
+}
+
 func newRigVerifier(t *testing.T, fleet *Fleet) *verify.Verifier {
 	t.Helper()
 	dir := t.TempDir()
@@ -53,9 +61,6 @@ func newRigVerifier(t *testing.T, fleet *Fleet) *verify.Verifier {
 	if err := v.LoadPolicy(policyPath); err != nil {
 		t.Fatalf("LoadPolicy: %v", err)
 	}
-	if err := v.SetActivePolicy(PolicyName); err != nil {
-		t.Fatalf("SetActivePolicy: %v", err)
-	}
 	return v
 }
 
@@ -65,9 +70,9 @@ func newTestFleet(t *testing.T, n, keyPool int) *Fleet {
 	if err != nil {
 		t.Fatalf("NewCA: %v", err)
 	}
-	fleet, err := NewFleet(ca, n, keyPool, "")
+	fleet, err := testFleet(ca, n, keyPool, "")
 	if err != nil {
-		t.Fatalf("NewFleet: %v", err)
+		t.Fatalf("testFleet: %v", err)
 	}
 	return fleet
 }
@@ -82,9 +87,9 @@ func attestOnce(t *testing.T, v *verify.Verifier, fleet *Fleet, a *Agent, challe
 	if err != nil {
 		t.Fatalf("BuildReport(%s): %v", a.Name, err)
 	}
-	result, err := v.VerifyReport(challengeID, report)
+	result, err := v.VerifyReportFrom(challengeID, "", report)
 	if err != nil {
-		t.Logf("VerifyReport(%s): %v", a.Name, err)
+		t.Logf("VerifyReportFrom(%s): %v", a.Name, err)
 	}
 	return result
 }
@@ -129,7 +134,7 @@ func TestTamperedReportRejected(t *testing.T) {
 	// flip one byte of PCR0 (offset 16 = first PCR value)
 	report[16] ^= 0xFF
 
-	result, _ := v.VerifyReport("tamper", report)
+	result, _ := v.VerifyReportFrom("tamper", "", report)
 	if result.Result == types.VerifyOK {
 		t.Fatal("tampered report accepted")
 	}
@@ -185,9 +190,9 @@ func TestFleetProfileSharedIdentitiesRigScoped(t *testing.T) {
 	for _, a := range f1.Agents {
 		keys = append(keys, a.Key)
 	}
-	f3, err := NewFleetWithKeys(f1.CA, len(f1.Agents), keys, "")
+	f3, err := NewFleet(f1.CA, len(f1.Agents), keys, "")
 	if err != nil {
-		t.Fatalf("NewFleetWithKeys: %v", err)
+		t.Fatalf("NewFleet: %v", err)
 	}
 	for i := range f1.Agents {
 		if f1.Agents[i].HardwareID != f3.Agents[i].HardwareID {
@@ -268,9 +273,9 @@ func TestTenantedFleetCarriesTheTenantInEveryCertificate(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewCA: %v", err)
 	}
-	fleet, err := NewFleet(ca, 3, 2, "acme")
+	fleet, err := testFleet(ca, 3, 2, "acme")
 	if err != nil {
-		t.Fatalf("NewFleet(tenant=acme): %v", err)
+		t.Fatalf("testFleet(tenant=acme): %v", err)
 	}
 
 	for _, a := range fleet.Agents {
@@ -299,9 +304,9 @@ func TestUntenantedFleetIssuesCertificatesWithNoOU(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewCA: %v", err)
 	}
-	fleet, err := NewFleet(ca, 2, 1, "")
+	fleet, err := testFleet(ca, 2, 1, "")
 	if err != nil {
-		t.Fatalf("NewFleet: %v", err)
+		t.Fatalf("testFleet: %v", err)
 	}
 
 	cert, err := x509.ParseCertificate(fleet.Agents[0].CertDER)
@@ -323,7 +328,7 @@ func TestFleetRefusesAnInvalidTenant(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewCA: %v", err)
 	}
-	if _, err := NewFleet(ca, 1, 1, "Not A Tenant!"); err == nil {
+	if _, err := testFleet(ca, 1, 1, "Not A Tenant!"); err == nil {
 		t.Fatal("expected an invalid tenant name to be refused")
 	}
 }

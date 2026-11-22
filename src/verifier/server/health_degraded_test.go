@@ -38,7 +38,7 @@ func startHealthServer(t *testing.T, drain time.Duration) (*Server, string) {
 	t.Helper()
 
 	httpAddr := freeLoopbackAddr(t)
-	cfg := DefaultServerConfig()
+	cfg := ServerConfig{ReadTimeout: 30 * time.Second, WriteTimeout: 10 * time.Second}
 	cfg.Address = "127.0.0.1:0"
 	cfg.HTTPAddress = httpAddr
 	cfg.Logger = logging.Nop()

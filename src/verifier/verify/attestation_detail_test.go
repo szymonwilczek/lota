@@ -18,7 +18,7 @@ import (
 func recordOneRound(t *testing.T, clientID string, report func(nonce [types.NonceSize]byte) []byte) store.AttestationRecord {
 	t.Helper()
 
-	attestLog := store.NewMemoryAttestationLog()
+	attestLog := store.NewSQLiteAttestationLog(testDB(t), store.DefaultCollapseWindow)
 	cfg := DefaultConfig()
 	cfg.RequireBootEnrollment = false
 	cfg.NonceLifetime = 1 * time.Second
@@ -27,19 +27,16 @@ func recordOneRound(t *testing.T, clientID string, report func(nonce [types.Nonc
 	if err := verifier.AddPolicy(DefaultPolicy()); err != nil {
 		t.Fatalf("AddPolicy(DefaultPolicy) failed: %v", err)
 	}
-	if err := verifier.SetActivePolicy("default"); err != nil {
-		t.Fatalf("SetActivePolicy(default) failed: %v", err)
-	}
 
 	challenge, err := verifier.GenerateChallenge(clientID)
 	if err != nil {
 		t.Fatalf("GenerateChallenge: %v", err)
 	}
-	if _, err := verifier.VerifyReport(clientID, report(challenge.Nonce)); err != nil {
+	if _, err := verifier.VerifyReportFrom(clientID, "", report(challenge.Nonce)); err != nil {
 		t.Logf("round refused: %v", err)
 	}
 
-	records := attestLog.QueryAttestations(1)
+	records := attestLog.QueryAttestations(store.AttestationQuery{Limit: 1})
 	if len(records) != 1 {
 		t.Fatalf("attestation records = %d, want 1", len(records))
 	}
@@ -114,7 +111,7 @@ func TestRecordCarriesTheAddressTheReportCameFrom(t *testing.T) {
 	const clientID = "detail-addr-client"
 	const peer = "192.0.2.10:39412"
 
-	attestLog := store.NewMemoryAttestationLog()
+	attestLog := store.NewSQLiteAttestationLog(testDB(t), store.DefaultCollapseWindow)
 	cfg := DefaultConfig()
 	cfg.RequireBootEnrollment = false
 	cfg.NonceLifetime = 1 * time.Second
@@ -122,9 +119,6 @@ func TestRecordCarriesTheAddressTheReportCameFrom(t *testing.T) {
 	verifier := NewVerifier(cfg, newCertVerifier(t))
 	if err := verifier.AddPolicy(DefaultPolicy()); err != nil {
 		t.Fatalf("AddPolicy(DefaultPolicy) failed: %v", err)
-	}
-	if err := verifier.SetActivePolicy("default"); err != nil {
-		t.Fatalf("SetActivePolicy(default) failed: %v", err)
 	}
 
 	challenge, err := verifier.GenerateChallenge(clientID)
@@ -136,7 +130,7 @@ func TestRecordCarriesTheAddressTheReportCameFrom(t *testing.T) {
 		t.Fatalf("VerifyReportFrom: %v", err)
 	}
 
-	records := attestLog.QueryAttestations(1)
+	records := attestLog.QueryAttestations(store.AttestationQuery{Limit: 1})
 	if len(records) != 1 {
 		t.Fatalf("attestation records = %d, want 1", len(records))
 	}

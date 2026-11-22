@@ -101,14 +101,6 @@ char LICENSE[] SEC("license") = "GPL";
 #define VM_MAYWRITE 0x00000020
 #endif
 
-#ifdef LOTA_BPF_DEBUG_PRINTK
-#define lota_bpf_debug(fmt, ...) bpf_printk(fmt, ##__VA_ARGS__)
-#else
-#define lota_bpf_debug(fmt, ...) \
-	do {                     \
-	} while (0)
-#endif
-
 /*
  * Executable page protection bit.
  */
@@ -154,7 +146,6 @@ struct {
 
 #define STAT_TOTAL_EXECS 0
 #define STAT_EVENTS_SENT 1
-#define STAT_ERRORS 2
 #define STAT_RINGBUF_DROPS 3
 #define STAT_MODULES_BLOCKED 4
 #define STAT_MMAP_EXECS 5
@@ -380,17 +371,11 @@ static __always_inline int integrity_baseline_ok(struct integrity_data *cfg)
 	if (!cfg)
 		return 0;
 
-	if (!cfg->sig_enforce) {
-		lota_bpf_debug("LOTA: BLOCKING module load: sig_enforce=%d",
-			       cfg->sig_enforce);
+	if (!cfg->sig_enforce)
 		return 0;
-	}
 
-	if (!cfg->lockdown) {
-		lota_bpf_debug("LOTA: BLOCKING module load: lockdown=%d",
-			       cfg->lockdown);
+	if (!cfg->lockdown)
 		return 0;
-	}
 
 	return 1;
 }
@@ -1040,7 +1025,6 @@ static __always_inline void report_blocked_mount(const char *what, u32 len)
 	event->tgid = bpf_get_current_pid_tgid() >> 32;
 	event->pid = bpf_get_current_pid_tgid() & 0xFFFFFFFF;
 	event->uid = (u32)(bpf_get_current_uid_gid() & 0xFFFFFFFF);
-	event->gid = (u32)(bpf_get_current_uid_gid() >> 32);
 	bpf_get_current_comm(event->comm, sizeof(event->comm));
 	if (len > 0 && len < sizeof(event->filename))
 		bpf_probe_read_kernel(event->filename, len, what);
@@ -1185,7 +1169,6 @@ static __always_inline void report_blocked_kill_guard(const char *what, u32 len)
 	event->tgid = bpf_get_current_pid_tgid() >> 32;
 	event->pid = bpf_get_current_pid_tgid() & 0xFFFFFFFF;
 	event->uid = (u32)(bpf_get_current_uid_gid() & 0xFFFFFFFF);
-	event->gid = (u32)(bpf_get_current_uid_gid() >> 32);
 	bpf_get_current_comm(event->comm, sizeof(event->comm));
 	if (len > 0 && len < sizeof(event->filename))
 		bpf_probe_read_kernel(event->filename, len, what);
@@ -1219,7 +1202,6 @@ static __always_inline void report_blocked_mapped_write(struct file *file)
 	event->tgid = bpf_get_current_pid_tgid() >> 32;
 	event->pid = bpf_get_current_pid_tgid() & 0xFFFFFFFF;
 	event->uid = (u32)(bpf_get_current_uid_gid() & 0xFFFFFFFF);
-	event->gid = (u32)(bpf_get_current_uid_gid() >> 32);
 	bpf_get_current_comm(event->comm, sizeof(event->comm));
 
 	dentry = BPF_CORE_READ(file, f_path.dentry);
@@ -1464,7 +1446,6 @@ int BPF_PROG(lota_bprm_check_security, struct linux_binprm *bprm)
 			event->pid = bpf_get_current_pid_tgid() & 0xFFFFFFFF;
 			event->uid =
 				(u32)(bpf_get_current_uid_gid() & 0xFFFFFFFF);
-			event->gid = (u32)(bpf_get_current_uid_gid() >> 32);
 
 			bpf_get_current_comm(event->comm, sizeof(event->comm));
 
@@ -1535,8 +1516,6 @@ int BPF_PROG(lota_kernel_read_file, struct file *file,
 	uint32_t key = 0;
 	uint32_t mode = get_mode();
 
-	lota_bpf_debug("LOTA: kernel_read_file id=%d mode=%d", id, mode);
-
 	/*
 	 * A purpose this object has no rule for is refused while strict module
 	 * loading is armed, and ignored otherwise.
@@ -1553,11 +1532,8 @@ int BPF_PROG(lota_kernel_read_file, struct file *file,
 	}
 
 	if (mode == LOTA_MODE_ENFORCE) {
-		if (strict_unknown) {
-			lota_bpf_debug("LOTA: BLOCKING kernel file read: "
-				       "unrecognised purpose");
+		if (strict_unknown)
 			blocked = 1;
-		}
 
 		if (id == LOTA_KREAD_KEXEC_IMAGE ||
 		    id == LOTA_KREAD_KEXEC_INITRAMFS)
@@ -1582,20 +1558,14 @@ int BPF_PROG(lota_kernel_read_file, struct file *file,
 		/* firmware is always strict in ENFORCE: require fs-verity
 		 * allowlist */
 		if (id == LOTA_KREAD_FIRMWARE) {
-			if (!is_verity_allowed(file)) {
-				lota_bpf_debug("LOTA: BLOCKING firmware load: "
-					       "no allowed fs-verity digest");
+			if (!is_verity_allowed(file))
 				blocked = 1;
-			}
 		}
 
 		if (lota_kread_is_module(id) &&
 		    get_config(LOTA_CFG_STRICT_MODULES)) {
-			if (!is_verity_allowed(file)) {
-				lota_bpf_debug("LOTA: BLOCKING module load: no "
-					       "allowed fs-verity digest");
+			if (!is_verity_allowed(file))
 				blocked = 1;
-			}
 		}
 	}
 
@@ -1679,8 +1649,6 @@ int BPF_PROG(lota_kernel_load_data, enum kernel_load_data_id id)
 	int emit_event = 0;
 	int strict_unknown;
 
-	lota_bpf_debug("LOTA: kernel_load_data id=%d", id);
-
 	mode = get_mode();
 
 	/* the same rule as kernel_read_file: an unrecognised purpose is refused
@@ -1696,11 +1664,8 @@ int BPF_PROG(lota_kernel_load_data, enum kernel_load_data_id id)
 		return 0;
 
 	if (mode == LOTA_MODE_ENFORCE) {
-		if (strict_unknown) {
-			lota_bpf_debug("LOTA: BLOCKING kernel data load: "
-				       "unrecognised purpose");
+		if (strict_unknown)
 			blocked = 1;
-		}
 
 		if (id == LOTA_KREAD_KEXEC_IMAGE ||
 		    id == LOTA_KREAD_KEXEC_INITRAMFS)

@@ -55,10 +55,11 @@ func TestAttestationLogEndpoint_SanitizesDetails(t *testing.T) {
 	m := metrics.New()
 	cfg := verify.DefaultConfig()
 	cfg.RequireBootEnrollment = false
-	auditLog := store.NewMemoryAuditLog()
-	attLog := store.NewMemoryAttestationLog()
-	cfg.RevocationStore = store.NewMemoryRevocationStore(auditLog)
-	cfg.BanStore = store.NewMemoryBanStore(auditLog)
+	db := testDB(t)
+	auditLog := store.NewSQLiteAuditLog(db)
+	attLog := store.NewSQLiteAttestationLog(db, store.DefaultCollapseWindow)
+	cfg.RevocationStore = store.NewSQLiteRevocationStore(db, auditLog)
+	cfg.BanStore = store.NewSQLiteBanStore(db, auditLog)
 	cfg.Metrics = m
 	v := verify.NewVerifier(cfg, aikVerifier)
 	if err := v.AddPolicy(verify.DefaultPolicy()); err != nil {
@@ -191,9 +192,10 @@ func setupTestAPIWithKeys(t *testing.T, adminKey, readerKey string) (*http.Serve
 	m := metrics.New()
 	cfg := verify.DefaultConfig()
 	cfg.RequireBootEnrollment = false
-	auditLog := store.NewMemoryAuditLog()
-	cfg.RevocationStore = store.NewMemoryRevocationStore(auditLog)
-	cfg.BanStore = store.NewMemoryBanStore(auditLog)
+	db := testDB(t)
+	auditLog := store.NewSQLiteAuditLog(db)
+	cfg.RevocationStore = store.NewSQLiteRevocationStore(db, auditLog)
+	cfg.BanStore = store.NewSQLiteBanStore(db, auditLog)
 	cfg.Metrics = m
 	v := verify.NewVerifier(cfg, aikVerifier)
 	if err := v.AddPolicy(verify.DefaultPolicy()); err != nil {
@@ -232,9 +234,10 @@ func setupTestAPIListeningWithKeys(t *testing.T, adminKey, readerKey string) (*h
 	m := metrics.New()
 	cfg := verify.DefaultConfig()
 	cfg.RequireBootEnrollment = false
-	auditLog := store.NewMemoryAuditLog()
-	cfg.RevocationStore = store.NewMemoryRevocationStore(auditLog)
-	cfg.BanStore = store.NewMemoryBanStore(auditLog)
+	db := testDB(t)
+	auditLog := store.NewSQLiteAuditLog(db)
+	cfg.RevocationStore = store.NewSQLiteRevocationStore(db, auditLog)
+	cfg.BanStore = store.NewSQLiteBanStore(db, auditLog)
 	cfg.Metrics = m
 	v := verify.NewVerifier(cfg, aikVerifier)
 	if err := v.AddPolicy(verify.DefaultPolicy()); err != nil {
@@ -310,9 +313,9 @@ func buildSignedReport(t *testing.T, clientID string, nonce [32]byte, pcr14 [32]
 	t.Helper()
 	hwID := sha256.Sum256([]byte(clientID))
 
-	// fixed struct plus the two variable-section length prefixes;
+	// fixed struct plus the event log length prefix;
 	// mandatory ESRT section is appended at the end
-	buf := make([]byte, types.FixedReportSize+8)
+	buf := make([]byte, types.FixedReportSize+4)
 	offset := 0
 
 	// Header (32 bytes)
@@ -438,20 +441,6 @@ func buildSignedReport(t *testing.T, clientID string, nonce [32]byte, pcr14 [32]
 	offset += 4
 	copy(buf[offset:], "intel_iommu=on")
 	offset += types.CmdlineParamMax
-
-	// BPF Summary (24 bytes)
-	binary.LittleEndian.PutUint32(buf[offset:], 42)
-	offset += 4
-	binary.LittleEndian.PutUint32(buf[offset:], 10)
-	offset += 4
-	binary.LittleEndian.PutUint64(buf[offset:], uint64(time.Now().Add(-time.Hour).Unix()))
-	offset += 8
-	binary.LittleEndian.PutUint64(buf[offset:], uint64(time.Now().Unix()))
-	offset += 8
-
-	// no serialized BPF exec events in API fixtures
-	binary.LittleEndian.PutUint32(buf[offset:], 0)
-	offset += 4
 
 	eventLog := buildUEFIEventLog()
 	binary.LittleEndian.PutUint32(buf[offset:], uint32(len(eventLog)))
@@ -607,7 +596,7 @@ func attestClient(t *testing.T, v *verify.Verifier, clientID string, key *rsa.Pr
 	}
 
 	report := buildSignedReport(t, clientID, challenge.Nonce, pcr14, key)
-	result, _ := v.VerifyReport(clientID, report)
+	result, _ := v.VerifyReportFrom(clientID, "", report)
 	return result.Result
 }
 
@@ -673,8 +662,8 @@ func TestHealthDegraded(t *testing.T) {
 
 func TestStatsEndpoint(t *testing.T) {
 	mux, v := setupTestAPIListeningWithKeys(t, "", "")
-	if err := v.AddPolicy(verify.StrictPolicy()); err != nil {
-		t.Fatalf("AddPolicy(StrictPolicy) failed: %v", err)
+	if err := v.AddPolicy(&verify.PCRPolicy{Name: "strict"}); err != nil {
+		t.Fatalf("AddPolicy failed: %v", err)
 	}
 
 	req := httptest.NewRequest("GET", "/api/v1/stats", nil)
@@ -975,7 +964,7 @@ func TestIntegrationAPI_FailedAttestationCounter(t *testing.T) {
 	}
 
 	garbage := make([]byte, 100)
-	v.VerifyReport(clientID, garbage) // will fail
+	v.VerifyReportFrom(clientID, "", garbage) // will fail
 
 	req := httptest.NewRequest("GET", "/api/v1/stats", nil)
 	rec := httptest.NewRecorder()
@@ -1025,7 +1014,7 @@ func TestIntegrationAPI_NonceConsumedVisibleInStats(t *testing.T) {
 
 	// complete attestation: pending -1, used +1
 	report := buildSignedReport(t, clientID, challenge.Nonce, pcr14, testAIK)
-	result, err := v.VerifyReport(clientID, report)
+	result, err := v.VerifyReportFrom(clientID, "", report)
 	if err != nil || result.Result != types.VerifyOK {
 		t.Fatalf("Attestation failed: %v (code=%d)", err, result.Result)
 	}
@@ -1054,13 +1043,13 @@ func TestIntegrationAPI_ReplayAttackVisibleInStats(t *testing.T) {
 	report := buildSignedReport(t, clientID, challenge.Nonce, pcr14, testAIK)
 
 	// first submission: success
-	result1, _ := v.VerifyReport(clientID, report)
+	result1, _ := v.VerifyReportFrom(clientID, "", report)
 	if result1.Result != types.VerifyOK {
 		t.Fatalf("First attestation should succeed, got %d", result1.Result)
 	}
 
 	// replay attempt: must fail
-	result2, _ := v.VerifyReport(clientID, report)
+	result2, _ := v.VerifyReportFrom(clientID, "", report)
 	if result2.Result != types.VerifyNonceFail {
 		t.Fatalf("SECURITY: Replay not detected! Got result %d, want %d",
 			result2.Result, types.VerifyNonceFail)
@@ -1245,7 +1234,7 @@ func TestIntegrationAPI_InvalidSignatureVisibleInStats(t *testing.T) {
 	sigOffset := 16 + types.PCRCount*types.HashSize + 4
 	badReport[sigOffset] ^= 0xFF
 	badReport[sigOffset+1] ^= 0xFF
-	result, _ := v.VerifyReport(clientID, badReport)
+	result, _ := v.VerifyReportFrom(clientID, "", badReport)
 
 	if result.Result != types.VerifySigFail {
 		t.Fatalf("SECURITY: Wrong signature not detected! Got %d, want %d",
@@ -1285,7 +1274,7 @@ func TestIntegrationAPI_PCR14TamperingVisibleInStats(t *testing.T) {
 	tamperedPCR14 := [32]byte{0xFF, 0xBB, 0xCC}
 	challenge, _ := v.GenerateChallenge(clientID)
 	report := buildSignedReport(t, clientID, challenge.Nonce, tamperedPCR14, getClientTestAIK(clientID))
-	result, _ := v.VerifyReport(clientID, report)
+	result, _ := v.VerifyReportFrom(clientID, "", report)
 
 	if result.Result != types.VerifyIntegrityMismatch {
 		t.Fatalf("SECURITY: PCR14 tampering not detected! Got %d, want %d",
@@ -1315,7 +1304,7 @@ func TestIntegrationAPI_PrometheusAfterAttestations(t *testing.T) {
 
 	// 1 failed attestation (garbage)
 	v.GenerateChallenge("prom-fail")
-	v.VerifyReport("prom-fail", []byte("garbage"))
+	v.VerifyReportFrom("prom-fail", "", []byte("garbage"))
 
 	req := httptest.NewRequest("GET", "/metrics", nil)
 	rec := httptest.NewRecorder()
@@ -1354,7 +1343,7 @@ func TestIntegrationAPI_PendingChallengesNotLeak(t *testing.T) {
 
 	// consume first challenge only
 	report := buildSignedReport(t, clientID, challenges[0], pcr14, testAIK)
-	v.VerifyReport(clientID, report)
+	v.VerifyReportFrom(clientID, "", report)
 
 	assertStats(t, mux, func(s statsResponse) {
 		if deref(s.PendingChallenges) != 2 {
@@ -1364,7 +1353,7 @@ func TestIntegrationAPI_PendingChallengesNotLeak(t *testing.T) {
 
 	// consume second
 	report2 := buildSignedReport(t, clientID, challenges[1], pcr14, testAIK)
-	v.VerifyReport(clientID, report2)
+	v.VerifyReportFrom(clientID, "", report2)
 
 	assertStats(t, mux, func(s statsResponse) {
 		if deref(s.PendingChallenges) != 1 {
@@ -1450,7 +1439,7 @@ func TestIntegrationAPI_MixedSuccessFailureRatio(t *testing.T) {
 	// 2 failed (garbage reports)
 	for i := 0; i < 2; i++ {
 		v.GenerateChallenge(fmt.Sprintf("fail-%d", i))
-		v.VerifyReport(fmt.Sprintf("fail-%d", i), []byte{0x00})
+		v.VerifyReportFrom(fmt.Sprintf("fail-%d", i), "", []byte{0x00})
 	}
 
 	// check /api/v1/stats
@@ -1543,8 +1532,9 @@ func TestReanchorReviewEndpoints(t *testing.T) {
 	v := verify.NewVerifier(cfg, aikVerifier)
 	srv := &Server{verifier: v, addr: ":8443"}
 	mux := http.NewServeMux()
-	NewAPIHandler(mux, v, srv, store.NewMemoryAuditLog(), nil, m,
-		store.NewMemoryAttestationLog(), "admin-key", "reader-key")
+	db := testDB(t)
+	NewAPIHandler(mux, v, srv, store.NewSQLiteAuditLog(db), nil, m,
+		store.NewSQLiteAttestationLog(db, store.DefaultCollapseWindow), "admin-key", "reader-key")
 
 	// review list (reader) lists dev1
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/reanchor/review", nil)
@@ -1599,7 +1589,7 @@ func attestTestClient(t *testing.T, v *verify.Verifier, challengeID string) stri
 	clientID := persistentClientID(challengeID)
 	key := getClientTestAIK(clientID)
 	report := buildSignedReport(t, challengeID, challenge.Nonce, pcr14, key)
-	if _, err := v.VerifyReport(challengeID, report); err != nil {
+	if _, err := v.VerifyReportFrom(challengeID, "", report); err != nil {
 		t.Fatalf("VerifyReport failed: %v", err)
 	}
 	return clientID
@@ -1842,7 +1832,7 @@ func TestEveryServedRouteIsAdvertised(t *testing.T) {
 		covered[matchedPattern(t, mux, endpoint)] = true
 	}
 
-	for _, pattern := range h.RegisteredRoutes() {
+	for _, pattern := range h.routes {
 		if !covered[pattern] {
 			t.Errorf("route %q is served and advertised by no endpoint",
 				pattern)

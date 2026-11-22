@@ -187,7 +187,7 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size)
 	 * agent-self authorization run their real checks instead of failing on
 	 * a synthetic credential.
 	 */
-	client = client_create(&ctx, 50, geteuid(), getegid(), getpid());
+	client = client_create(&ctx, 50, geteuid(), getpid());
 	if (!client)
 		return 0;
 	read_pid_start_time_ticks(getpid(), &client->peer_start_time_ticks);

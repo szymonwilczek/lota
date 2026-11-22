@@ -74,7 +74,6 @@ type Counter struct {
 func (c *Counter) Inc()         { c.val.Add(1) }
 func (c *Counter) Add(n int64)  { c.val.Add(n) }
 func (c *Counter) Value() int64 { return c.val.Load() }
-func (c *Counter) Reset()       { c.val.Store(0) }
 
 // tracks counts per label value
 type LabeledCounter struct {
@@ -122,18 +121,6 @@ func (lc *LabeledCounter) Values() map[string]int64 {
 		result[k] = v.Load()
 	}
 	return result
-}
-
-// returns the sum across all labels
-func (lc *LabeledCounter) Total() int64 {
-	lc.mu.RLock()
-	defer lc.mu.RUnlock()
-
-	var total int64
-	for _, v := range lc.counts {
-		total += v.Load()
-	}
-	return total
 }
 
 // tracks the distribution of observed values

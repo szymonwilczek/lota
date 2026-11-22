@@ -123,18 +123,4 @@ bool daemon_reload_pending(void);
 int daemon_install_signals(volatile sig_atomic_t *running,
 			   volatile sig_atomic_t *reload);
 
-/*
- * Redirect stdout and stderr to a log file.
- *
- * When running as a daemon, output needs to go somewhere persistent.
- * In systemd mode (Type=simple, no --daemon), stdout/stderr go to
- * the journal automatically.  This function is for standalone daemon
- * mode only.
- *
- * @log_path: Path to log file (NULL to redirect to /dev/null)
- *
- * Returns: 0 on success, negative errno on failure
- */
-int daemon_redirect_output(const char *log_path);
-
 #endif /* LOTA_DAEMON_H */

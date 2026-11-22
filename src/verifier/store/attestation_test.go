@@ -6,7 +6,6 @@ package store
 import (
 	"bytes"
 	"database/sql"
-	"fmt"
 	"io"
 	"log/slog"
 	"path/filepath"
@@ -173,7 +172,7 @@ func TestCollapseRefusesEitherHalfOfAVerdictChange(t *testing.T) {
 // a round behind the last sighting (reordered, or clock stepped back) gets
 // its own row, so the anomaly shows instead of hiding in a count
 func TestARoundOlderThanTheRowIsWrittenNotFolded(t *testing.T) {
-	log := NewSQLiteAttestationLog(eventsTestDB(t))
+	log := NewSQLiteAttestationLog(eventsTestDB(t), DefaultCollapseWindow)
 	at := time.Date(2026, 9, 19, 13, 0, 0, 0, time.UTC)
 
 	for i := 0; i < 4; i++ {
@@ -188,7 +187,7 @@ func TestARoundOlderThanTheRowIsWrittenNotFolded(t *testing.T) {
 	}
 
 	// newest first: the stepped round
-	got := log.QueryAttestations(0)
+	got := log.QueryAttestations(AttestationQuery{})
 	if len(got) != 2 {
 		t.Fatalf("a round behind the row's last sighting is its own row, got %d rows", len(got))
 	}
@@ -262,7 +261,7 @@ func trustedRound(at time.Time) AttestationRecord {
 
 // the row counts its rounds and keeps the last one's time
 func TestSteadyAttestationHoldsOneRow(t *testing.T) {
-	log := NewSQLiteAttestationLog(eventsTestDB(t))
+	log := NewSQLiteAttestationLog(eventsTestDB(t), DefaultCollapseWindow)
 	at := time.Date(2026, 9, 19, 10, 0, 0, 0, time.UTC)
 
 	for i := 0; i < 12; i++ {
@@ -271,7 +270,7 @@ func TestSteadyAttestationHoldsOneRow(t *testing.T) {
 		}
 	}
 
-	got := log.QueryAttestations(0)
+	got := log.QueryAttestations(AttestationQuery{})
 	if len(got) != 1 {
 		t.Fatalf("an hour of steady attestation is one row, got %d", len(got))
 	}
@@ -288,7 +287,7 @@ func TestSteadyAttestationHoldsOneRow(t *testing.T) {
 
 // the trusted rounds before a refusal survive it
 func TestARefusalIsWrittenImmediately(t *testing.T) {
-	log := NewSQLiteAttestationLog(eventsTestDB(t))
+	log := NewSQLiteAttestationLog(eventsTestDB(t), DefaultCollapseWindow)
 	at := time.Date(2026, 9, 19, 10, 0, 0, 0, time.UTC)
 
 	for i := 0; i < 3; i++ {
@@ -304,7 +303,7 @@ func TestARefusalIsWrittenImmediately(t *testing.T) {
 		t.Fatalf("record refusal: %v", err)
 	}
 
-	got := log.QueryAttestations(0)
+	got := log.QueryAttestations(AttestationQuery{})
 	if len(got) != 2 {
 		t.Fatalf("three trusted rounds and a refusal are two rows, got %d", len(got))
 	}
@@ -320,7 +319,7 @@ func TestARefusalIsWrittenImmediately(t *testing.T) {
 }
 
 func TestRecoveryOpensItsOwnRow(t *testing.T) {
-	log := NewSQLiteAttestationLog(eventsTestDB(t))
+	log := NewSQLiteAttestationLog(eventsTestDB(t), DefaultCollapseWindow)
 	at := time.Date(2026, 9, 19, 10, 0, 0, 0, time.UTC)
 
 	first := trustedRound(at)
@@ -334,7 +333,7 @@ func TestRecoveryOpensItsOwnRow(t *testing.T) {
 		}
 	}
 
-	got := log.QueryAttestations(0)
+	got := log.QueryAttestations(AttestationQuery{})
 	if len(got) != 3 {
 		t.Fatalf("trusted, refused and trusted again are three rows, got %d", len(got))
 	}
@@ -344,7 +343,7 @@ func TestRecoveryOpensItsOwnRow(t *testing.T) {
 }
 
 func TestSubjectsDoNotShareARow(t *testing.T) {
-	log := NewSQLiteAttestationLog(eventsTestDB(t))
+	log := NewSQLiteAttestationLog(eventsTestDB(t), DefaultCollapseWindow)
 	at := time.Date(2026, 9, 19, 10, 0, 0, 0, time.UTC)
 
 	for i := 0; i < 4; i++ {
@@ -359,14 +358,14 @@ func TestSubjectsDoNotShareARow(t *testing.T) {
 		}
 	}
 
-	got := log.QueryAttestations(0)
+	got := log.QueryAttestations(AttestationQuery{})
 	if len(got) != 2 {
 		t.Fatalf("two hosts attesting are two rows, got %d", len(got))
 	}
 }
 
 func TestABatchCollapsesLikeSingleRecords(t *testing.T) {
-	log := NewSQLiteAttestationLog(eventsTestDB(t))
+	log := NewSQLiteAttestationLog(eventsTestDB(t), DefaultCollapseWindow)
 	at := time.Date(2026, 9, 19, 10, 0, 0, 0, time.UTC)
 
 	batch := make([]AttestationRecord, 0, 7)
@@ -381,7 +380,7 @@ func TestABatchCollapsesLikeSingleRecords(t *testing.T) {
 		t.Fatalf("batch: %v", err)
 	}
 
-	got := log.QueryAttestations(0)
+	got := log.QueryAttestations(AttestationQuery{})
 	if len(got) != 2 {
 		t.Fatalf("six trusted rounds and a revocation are two rows, got %d", len(got))
 	}
@@ -395,7 +394,7 @@ func TestABatchCollapsesLikeSingleRecords(t *testing.T) {
 
 // 0, 30 and 60 min share the first row; 90 opens a second, 120 joins it
 func TestTheWindowClosesTheRowInTheStore(t *testing.T) {
-	log := NewSQLiteAttestationLog(eventsTestDB(t))
+	log := NewSQLiteAttestationLog(eventsTestDB(t), DefaultCollapseWindow)
 	at := time.Date(2026, 9, 19, 10, 0, 0, 0, time.UTC)
 
 	for i := 0; i < 5; i++ {
@@ -404,7 +403,7 @@ func TestTheWindowClosesTheRowInTheStore(t *testing.T) {
 		}
 	}
 
-	got := log.QueryAttestations(0)
+	got := log.QueryAttestations(AttestationQuery{})
 	if len(got) != 2 {
 		t.Fatalf("two hours of half-hourly rounds under an hour-long window are two rows, got %d", len(got))
 	}
@@ -417,7 +416,7 @@ func TestTheWindowClosesTheRowInTheStore(t *testing.T) {
 }
 
 func TestAZeroWindowRecordsEveryRound(t *testing.T) {
-	log := NewSQLiteAttestationLogWindow(eventsTestDB(t), 0)
+	log := NewSQLiteAttestationLog(eventsTestDB(t), 0)
 	at := time.Date(2026, 9, 19, 10, 0, 0, 0, time.UTC)
 
 	for i := 0; i < 5; i++ {
@@ -426,7 +425,7 @@ func TestAZeroWindowRecordsEveryRound(t *testing.T) {
 		}
 	}
 
-	got := log.QueryAttestations(0)
+	got := log.QueryAttestations(AttestationQuery{})
 	if len(got) != 5 {
 		t.Fatalf("a zero window writes every round, got %d rows", len(got))
 	}
@@ -437,17 +436,8 @@ func TestAZeroWindowRecordsEveryRound(t *testing.T) {
 	}
 }
 
-// one backend holding the fixture rounds
-type windowBackend struct {
-	name string
-	log  interface {
-		AttestationLog
-		AttestationQuerier
-	}
-}
-
-// standing row, one refusal, recovery; recorded into every backend
-func windowFixture(t *testing.T, at time.Time) []windowBackend {
+// standing row, one refusal, recovery
+func windowFixture(t *testing.T, at time.Time) *SQLiteAttestationLog {
 	t.Helper()
 
 	rounds := make([]AttestationRecord, 0, 8)
@@ -462,18 +452,13 @@ func windowFixture(t *testing.T, at time.Time) []windowBackend {
 		rounds = append(rounds, trustedRound(at.Add(time.Duration(20+i)*time.Minute)))
 	}
 
-	backends := []windowBackend{
-		{"memory", NewMemoryAttestationLogWindow(time.Hour)},
-		{"sqlite", NewSQLiteAttestationLogWindow(eventsTestDB(t), time.Hour)},
-	}
-	for _, b := range backends {
-		for i, r := range rounds {
-			if err := b.log.Record(r); err != nil {
-				t.Fatalf("%s: record %d: %v", b.name, i, err)
-			}
+	log := NewSQLiteAttestationLog(eventsTestDB(t), time.Hour)
+	for i, r := range rounds {
+		if err := log.Record(r); err != nil {
+			t.Fatalf("record %d: %v", i, err)
 		}
 	}
-	return backends
+	return log
 }
 
 // a row's edges are inside the window; a nanosecond past either is not
@@ -545,19 +530,18 @@ func TestWindowEdgesAreInclusive(t *testing.T) {
 		},
 	}
 
-	for _, b := range windowFixture(t, at) {
-		for _, c := range cases {
-			t.Run(fmt.Sprintf("%s/%s", b.name, c.what), func(t *testing.T) {
-				got := b.log.QueryAttestationsFiltered(c.q)
-				if len(got) != c.count {
-					t.Errorf("%d rows, want %d", len(got), c.count)
-					for i := range got {
-						t.Logf("  %v..%v %s rounds=%d",
-							got[i].Timestamp, got[i].LastSeen, got[i].Result, got[i].Rounds)
-					}
+	log := windowFixture(t, at)
+	for _, c := range cases {
+		t.Run(c.what, func(t *testing.T) {
+			got := log.QueryAttestations(c.q)
+			if len(got) != c.count {
+				t.Errorf("%d rows, want %d", len(got), c.count)
+				for i := range got {
+					t.Logf("  %v..%v %s rounds=%d",
+						got[i].Timestamp, got[i].LastSeen, got[i].Result, got[i].Rounds)
 				}
-			})
-		}
+			}
+		})
 	}
 }
 
@@ -587,71 +571,20 @@ func TestNarrowedReadsAnswerWhatWasAsked(t *testing.T) {
 		}, 0},
 	}
 
-	for _, b := range windowFixture(t, at) {
-		for _, c := range cases {
-			t.Run(fmt.Sprintf("%s/%s", b.name, c.what), func(t *testing.T) {
-				got := b.log.QueryAttestationsFiltered(c.q)
-				if len(got) != c.count {
-					t.Errorf("%d rows, want %d", len(got), c.count)
-				}
-			})
-		}
-	}
-}
-
-// same rounds, same query: rows match field for field across backends
-func TestBackendsAnswerTheSameQuestionTheSameWay(t *testing.T) {
-	at := time.Date(2026, 9, 19, 9, 0, 0, 0, time.UTC)
-	backends := windowFixture(t, at)
-
-	queries := []AttestationQuery{
-		{},
-		{Since: at.Add(time.Minute), Until: at.Add(2 * time.Minute)},
-		{Since: at.Add(9 * time.Minute), Until: at.Add(21 * time.Minute)},
-		{EventsOnly: true},
-		{Result: "ok"},
-		{ClientID: "c1", Limit: 2},
-		{Tenant: "alpha", Since: at.Add(-time.Hour)},
-	}
-
-	for _, q := range queries {
-		want := backends[0].log.QueryAttestationsFiltered(q)
-		for _, b := range backends[1:] {
-			got := b.log.QueryAttestationsFiltered(q)
-			if len(got) != len(want) {
-				t.Errorf("%+v: %s returned %d rows, %s returned %d",
-					q, b.name, len(got), backends[0].name, len(want))
-				continue
+	log := windowFixture(t, at)
+	for _, c := range cases {
+		t.Run(c.what, func(t *testing.T) {
+			got := log.QueryAttestations(c.q)
+			if len(got) != c.count {
+				t.Errorf("%d rows, want %d", len(got), c.count)
 			}
-			for i := range got {
-				assertSameAttestation(t, backends[0].name, want[i], b.name, got[i])
-			}
-		}
-	}
-}
-
-// reader-visible fields; the row id is the backend's own
-func assertSameAttestation(t *testing.T, wantName string, want AttestationRecord, gotName string, got AttestationRecord) {
-	t.Helper()
-
-	if !want.Timestamp.Equal(got.Timestamp) || !want.LastSeen.Equal(got.LastSeen) {
-		t.Errorf("%s says %v..%v, %s says %v..%v",
-			wantName, want.Timestamp, want.LastSeen, gotName, got.Timestamp, got.LastSeen)
-	}
-	if want.Rounds != got.Rounds {
-		t.Errorf("%s counts %d rounds, %s counts %d", wantName, want.Rounds, gotName, got.Rounds)
-	}
-	if want.Result != got.Result || want.ClientID != got.ClientID ||
-		want.Tenant != got.Tenant || want.HardwareID != got.HardwareID ||
-		want.PCR14 != got.PCR14 || want.KernelHash != got.KernelHash ||
-		want.Details != got.Details {
-		t.Errorf("%s says %+v, %s says %+v", wantName, want, gotName, got)
+		})
 	}
 }
 
 // a window matches instants, whatever zone wrote the row or asks
 func TestAttestationWindowIsAnInstantNotAClockReading(t *testing.T) {
-	log := NewSQLiteAttestationLog(eventsTestDB(t))
+	log := NewSQLiteAttestationLog(eventsTestDB(t), DefaultCollapseWindow)
 
 	// one instant, stamped in UTC+5, asked in UTC
 	east := time.FixedZone("UTC+5", 5*60*60)
@@ -661,7 +594,7 @@ func TestAttestationWindowIsAnInstantNotAClockReading(t *testing.T) {
 		t.Fatalf("record: %v", err)
 	}
 
-	got := log.QueryAttestationsFiltered(AttestationQuery{
+	got := log.QueryAttestations(AttestationQuery{
 		Since: at.Add(-time.Minute),
 		Until: at.Add(time.Minute),
 	})
@@ -672,7 +605,7 @@ func TestAttestationWindowIsAnInstantNotAClockReading(t *testing.T) {
 		t.Errorf("the row reads %v, and the round was served at %v", got[0].Timestamp, at)
 	}
 
-	before := log.QueryAttestationsFiltered(AttestationQuery{
+	before := log.QueryAttestations(AttestationQuery{
 		Since: at.Add(-2 * time.Hour),
 		Until: at.Add(-time.Hour),
 	})
@@ -683,7 +616,7 @@ func TestAttestationWindowIsAnInstantNotAClockReading(t *testing.T) {
 
 // a window inside a row's span returns it
 func TestAttestationWindowInsideAStandingRowReturnsIt(t *testing.T) {
-	log := NewSQLiteAttestationLog(eventsTestDB(t))
+	log := NewSQLiteAttestationLog(eventsTestDB(t), DefaultCollapseWindow)
 
 	west := time.FixedZone("UTC-7", -7*60*60)
 	at := time.Date(2026, 9, 19, 8, 0, 0, 0, time.UTC)
@@ -695,7 +628,7 @@ func TestAttestationWindowInsideAStandingRowReturnsIt(t *testing.T) {
 		}
 	}
 
-	got := log.QueryAttestationsFiltered(AttestationQuery{
+	got := log.QueryAttestations(AttestationQuery{
 		Since: at.Add(10 * time.Minute),
 		Until: at.Add(15 * time.Minute),
 	})
@@ -709,7 +642,7 @@ func TestAttestationWindowInsideAStandingRowReturnsIt(t *testing.T) {
 
 // a round stamped east of UTC reads back as the same instant and still folds
 func TestAttestationRowReadsBackAsTheInstantItHappened(t *testing.T) {
-	log := NewSQLiteAttestationLog(eventsTestDB(t))
+	log := NewSQLiteAttestationLog(eventsTestDB(t), DefaultCollapseWindow)
 
 	east := time.FixedZone("UTC+2", 2*60*60)
 	at := time.Date(2026, 9, 19, 6, 0, 0, 0, time.UTC)
@@ -721,7 +654,7 @@ func TestAttestationRowReadsBackAsTheInstantItHappened(t *testing.T) {
 		}
 	}
 
-	got := log.QueryAttestations(0)
+	got := log.QueryAttestations(AttestationQuery{})
 	if len(got) != 1 {
 		t.Fatalf("three identical rounds are one row, got %d", len(got))
 	}
@@ -744,7 +677,7 @@ func TestTheHourAClockRepeatsIsStillAnHour(t *testing.T) {
 
 	// 01:00 UTC: Warsaw falls back from 03:00 CEST to 02:00 CET
 	change := time.Date(2026, 10, 25, 0, 30, 0, 0, time.UTC)
-	log := NewSQLiteAttestationLogWindow(eventsTestDB(t), 2*time.Hour)
+	log := NewSQLiteAttestationLog(eventsTestDB(t), 2*time.Hour)
 
 	const rounds = 5
 	for i := range rounds {
@@ -759,7 +692,7 @@ func TestTheHourAClockRepeatsIsStillAnHour(t *testing.T) {
 	last := change.Add((rounds - 1) * 15 * time.Minute).In(warsaw).Format("15:04 MST")
 	t.Logf("the verifier's clock read %s for the first round and %s for the last", first, last)
 
-	got := log.QueryAttestations(0)
+	got := log.QueryAttestations(AttestationQuery{})
 	if len(got) != 1 {
 		t.Fatalf("a host attesting across the change left %d rows, want 1", len(got))
 	}
@@ -771,7 +704,7 @@ func TestTheHourAClockRepeatsIsStillAnHour(t *testing.T) {
 	}
 
 	// the repeated hour still reads as an hour
-	window := log.QueryAttestationsFiltered(AttestationQuery{
+	window := log.QueryAttestations(AttestationQuery{
 		Since: change.Add(30 * time.Minute),
 		Until: change.Add(45 * time.Minute),
 	})

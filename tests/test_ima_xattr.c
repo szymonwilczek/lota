@@ -43,8 +43,8 @@ static void test_signature_types_accepted(void)
 
 static void test_bare_digest_rejected(void)
 {
-	const uint8_t digest[] = { LOTA_IMA_XATTR_DIGEST, 0xde, 0xad };
-	const uint8_t digest_ng[] = { LOTA_IMA_XATTR_DIGEST_NG, 0x04, 0xbe };
+	const uint8_t digest[] = { 0x01, 0xde, 0xad };
+	const uint8_t digest_ng[] = { 0x04, 0x04, 0xbe };
 
 	TEST("bare digest (0x01/0x04) is not a signature");
 	if (lota_ima_xattr_is_signature(digest, sizeof(digest))) {

@@ -103,7 +103,6 @@ type Verifier struct {
 	attestationLog store.AttestationLog
 
 	// configuration
-	nonceLifetime  time.Duration
 	resultValidity time.Duration
 
 	// monitoring
@@ -115,7 +114,6 @@ type Verifier struct {
 	bannedAttests  atomic.Int64
 
 	// policy enforcement
-	requireEventLog       bool
 	requireBootEnrollment bool
 	selfServiceReanchor   *bool
 }
@@ -169,9 +167,6 @@ type VerifierConfig struct {
 	// optional: attestation decision log (nil = no attestation audit)
 	AttestationLog store.AttestationLog
 
-	// if true, reject attestation reports that do not include an event log
-	RequireEventLog bool
-
 	// if true, refuse to TOFU-establish a per-client boot baseline
 	// (PCR0/PCR1/PCR7) the first time a client reports. The baseline
 	// must be authenticated through one of two enrollment paths:
@@ -221,7 +216,6 @@ func DefaultConfig() VerifierConfig {
 	return VerifierConfig{
 		NonceLifetime:         5 * time.Minute,
 		ResultValidity:        1 * time.Hour,
-		RequireEventLog:       true,
 		RequireBootEnrollment: true,
 		AllowPermissivePolicy: false,
 	}
@@ -262,9 +256,7 @@ func NewVerifier(cfg VerifierConfig, aikVerifier store.AIKCertVerifier) *Verifie
 		log:                   logger,
 		metrics:               m,
 		attestationLog:        cfg.AttestationLog,
-		nonceLifetime:         cfg.NonceLifetime,
 		resultValidity:        cfg.ResultValidity,
-		requireEventLog:       cfg.RequireEventLog,
 		requireBootEnrollment: cfg.RequireBootEnrollment,
 		selfServiceReanchor:   cfg.EnableSelfServiceReanchor,
 		startTime:             time.Now(),
@@ -345,11 +337,6 @@ func (v *Verifier) bootBaselineRoad(tenant string, bootFacts *BootFacts) bootBas
 		}
 	}
 	return bootBaselineRoad{}
-}
-
-// VerifyReport verifies a report that arrived over an unnamed transport.
-func (v *Verifier) VerifyReport(challengeID string, reportData []byte) (*types.VerifyResult, error) {
-	return v.VerifyReportFrom(challengeID, "", reportData)
 }
 
 // VerifyReportFrom verifies a report and records the address it came from.
@@ -1047,11 +1034,6 @@ func (v *Verifier) SetPolicyPublicKey(pubKey ed25519.PublicKey) {
 	v.pcrVerifier.SetPolicyPublicKey(pubKey)
 }
 
-// sets which policy to use
-func (v *Verifier) SetActivePolicy(name string) error {
-	return v.pcrVerifier.SetActivePolicy(name)
-}
-
 // returns the currently active PCR policy
 // returned pointer must be treated as read-only by callers
 func (v *Verifier) ActivePolicyConfig() (*PCRPolicy, bool) {
@@ -1249,11 +1231,6 @@ func (v *Verifier) RevocationStore() store.RevocationStore {
 // returns the configured hardware ban store
 func (v *Verifier) BanStore() store.BanStore {
 	return v.banStore
-}
-
-// returns client IDs currently present in the nonce store
-func (v *Verifier) ListActiveClients() []string {
-	return v.nonceStore.ListActiveClients()
 }
 
 // tryReanchor attempts self-service re-anchor on a firmware/Secure Boot PCR drift.

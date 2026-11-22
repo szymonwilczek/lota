@@ -168,16 +168,6 @@ func connectionCap(configured int) int {
 	}
 }
 
-func DefaultServerConfig() ServerConfig {
-	return ServerConfig{
-		Address:        ":8443",
-		HTTPAddress:    "",
-		ReadTimeout:    30 * time.Second,
-		WriteTimeout:   10 * time.Second,
-		MaxConnections: DefaultMaxConnections,
-	}
-}
-
 func NewServer(cfg ServerConfig, verifier *verify.Verifier) (*Server, error) {
 	// load tls certificate; optional when report-only,
 	// but a non-loopback monitoring API still needs it
@@ -597,17 +587,14 @@ func (s *Server) sendErrorResult(conn net.Conn, resultCode uint32) {
 }
 
 type HealthStatus struct {
-	Listening         bool
-	Address           string
-	ActiveConnections int
-	Stats             verify.Stats
+	Listening bool
+	Address   string
 }
 
 func (s *Server) HealthCheck() HealthStatus {
 	return HealthStatus{
 		Listening: s.serving.Load(),
 		Address:   s.addr,
-		Stats:     s.verifier.Stats(),
 	}
 }
 

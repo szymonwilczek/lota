@@ -47,7 +47,6 @@ LOTA_PATHS := \
 	/usr/lib64/lota \
 	/etc/lota \
 	/var/lib/lota \
-	/var/log/lota \
 	/run/lota
 
 # Colors for output
@@ -156,7 +155,6 @@ install: all
 	mkdir -p /etc/lota/ca
 	mkdir -p /var/lib/lota/aik
 	mkdir -p /var/lib/lota/baseline
-	mkdir -p /var/log/lota
 	mkdir -p /run/lota
 	mkdir -p /usr/lib/lota
 

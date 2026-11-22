@@ -38,12 +38,12 @@ func (s *spyLog) RecordBatch(entries []AttestationRecord) error {
 	return nil
 }
 
-func (s *spyLog) QueryAttestations(limit int) []AttestationRecord {
+func (s *spyLog) QueryAttestations(q AttestationQuery) []AttestationRecord {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	n := len(s.records)
-	if limit > 0 && limit < n {
-		n = limit
+	if q.Limit > 0 && q.Limit < n {
+		n = q.Limit
 	}
 	out := make([]AttestationRecord, n)
 	copy(out, s.records[len(s.records)-n:])
@@ -106,7 +106,7 @@ func TestBatchedAttestationLogReadYourWrites(t *testing.T) {
 	}
 	// nothing flushed yet on its own
 	// query must force it
-	if got := bl.QueryAttestations(10); len(got) != 1 || got[0].ClientID != "c1" {
+	if got := bl.QueryAttestations(AttestationQuery{Limit: 10}); len(got) != 1 || got[0].ClientID != "c1" {
 		t.Fatalf("QueryAttestations = %+v, want the buffered record", got)
 	}
 }
@@ -137,7 +137,7 @@ func (b *blockingLog) RecordBatch(e []AttestationRecord) error {
 	return nil
 }
 
-func (b *blockingLog) QueryAttestations(int) []AttestationRecord { return nil }
+func (b *blockingLog) QueryAttestations(AttestationQuery) []AttestationRecord { return nil }
 
 // every record handed to the backend
 func (b *blockingLog) all() []AttestationRecord {
@@ -222,7 +222,7 @@ func (p *partialFailLog) Record(AttestationRecord) error {
 	return nil
 }
 
-func (p *partialFailLog) QueryAttestations(int) []AttestationRecord { return nil }
+func (p *partialFailLog) QueryAttestations(AttestationQuery) []AttestationRecord { return nil }
 
 func (p *partialFailLog) count() int {
 	p.mu.Lock()
@@ -272,17 +272,17 @@ func TestBatchedAttestationLogCloseIdempotent(t *testing.T) {
 }
 
 // Backend that cannot batch still works through the per-record fallback.
-// It wraps MemoryAttestationLog as named field so RecordBatch is not promoted
+// It wraps SQLiteAttestationLog as named field so RecordBatch is not promoted
 // and the type is deliberately not a BatchRecorder.
-type recordOnlyLog struct{ inner *MemoryAttestationLog }
+type recordOnlyLog struct{ inner *SQLiteAttestationLog }
 
 func (r *recordOnlyLog) Record(e AttestationRecord) error { return r.inner.Record(e) }
-func (r *recordOnlyLog) QueryAttestations(limit int) []AttestationRecord {
-	return r.inner.QueryAttestations(limit)
+func (r *recordOnlyLog) QueryAttestations(q AttestationQuery) []AttestationRecord {
+	return r.inner.QueryAttestations(q)
 }
 
 func TestBatchedAttestationLogFallbackWithoutBatcher(t *testing.T) {
-	backend := &recordOnlyLog{inner: NewMemoryAttestationLog()}
+	backend := &recordOnlyLog{inner: NewSQLiteAttestationLog(eventsTestDB(t), DefaultCollapseWindow)}
 	if _, isBatcher := any(backend).(BatchRecorder); isBatcher {
 		t.Fatal("test backend must not satisfy BatchRecorder")
 	}
@@ -296,7 +296,7 @@ func TestBatchedAttestationLogFallbackWithoutBatcher(t *testing.T) {
 	if err := bl.Close(); err != nil {
 		t.Fatalf("Close: %v", err)
 	}
-	if got := backend.QueryAttestations(0); len(got) != 5 {
+	if got := backend.QueryAttestations(AttestationQuery{}); len(got) != 5 {
 		t.Fatalf("fallback persisted %d records, want 5", len(got))
 	}
 }

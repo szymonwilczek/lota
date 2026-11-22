@@ -52,34 +52,3 @@ func FuzzVerifyNonceInAttest(f *testing.F) {
 		}
 	})
 }
-
-// fuzzes GetNonceFromAttest with arbitrary blobs
-func FuzzGetNonceFromAttest(f *testing.F) {
-	f.Add(realTPMSAttestBlob)
-	f.Add(realTPMSAttestBlob[:20])
-	f.Add([]byte{})
-
-	f.Fuzz(func(t *testing.T, data []byte) {
-		nonce, err := GetNonceFromAttest(data)
-
-		attest, parseErr := ParseTPMSAttest(data)
-		if parseErr != nil {
-			if err == nil {
-				t.Error("GetNonceFromAttest succeeded but ParseTPMSAttest failed")
-			}
-			if nonce != nil {
-				t.Error("GetNonceFromAttest returned non-nil nonce with error")
-			}
-			return
-		}
-
-		if err != nil {
-			t.Errorf("GetNonceFromAttest failed but ParseTPMSAttest succeeded: %v", err)
-			return
-		}
-
-		if len(nonce) != len(attest.ExtraData) {
-			t.Errorf("nonce length %d != extraData length %d", len(nonce), len(attest.ExtraData))
-		}
-	})
-}

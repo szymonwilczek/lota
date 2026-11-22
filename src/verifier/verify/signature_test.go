@@ -45,7 +45,7 @@ func TestRSASSAVerifier_ValidSignature(t *testing.T) {
 		t.Fatalf("Failed to create test signature: %v", err)
 	}
 
-	err = verifier.VerifyQuoteSignature(attestData, signature, &testKeyPair.PublicKey)
+	err = verifier.VerifyQuoteSignature(attestData, signature, &testKeyPair.PublicKey, crypto.SHA256)
 	if err != nil {
 		t.Fatalf("Signature verification failed: %v", err)
 	}
@@ -68,7 +68,7 @@ func TestRSASSAVerifier_InvalidSignature(t *testing.T) {
 	// corrupt signature
 	signature[0] ^= 0xFF
 
-	err := verifier.VerifyQuoteSignature(attestData, signature, &testKeyPair.PublicKey)
+	err := verifier.VerifyQuoteSignature(attestData, signature, &testKeyPair.PublicKey, crypto.SHA256)
 	if err == nil {
 		t.Fatal("SECURITY VIOLATION: Invalid signature was accepted!")
 	}
@@ -92,7 +92,7 @@ func TestRSASSAVerifier_WrongKey(t *testing.T) {
 	signature, _ := rsa.SignPKCS1v15(rand.Reader, testKeyPair, crypto.SHA256, hash[:])
 
 	// verify with wrong key
-	err := verifier.VerifyQuoteSignature(attestData, signature, &wrongKey.PublicKey)
+	err := verifier.VerifyQuoteSignature(attestData, signature, &wrongKey.PublicKey, crypto.SHA256)
 	if err == nil {
 		t.Fatal("SECURITY VIOLATION: Signature verified with wrong key!")
 	}
@@ -115,7 +115,7 @@ func TestRSASSAVerifier_ModifiedAttestData(t *testing.T) {
 	// modify the attestation data
 	modifiedData := []byte("MODIFIED attestation data")
 
-	err := verifier.VerifyQuoteSignature(modifiedData, signature, &testKeyPair.PublicKey)
+	err := verifier.VerifyQuoteSignature(modifiedData, signature, &testKeyPair.PublicKey, crypto.SHA256)
 	if err == nil {
 		t.Fatal("SECURITY VIOLATION: Modified data accepted with original signature!")
 	}
@@ -128,7 +128,7 @@ func TestRSASSAVerifier_NilKey(t *testing.T) {
 
 	verifier := NewRSASSAVerifier()
 
-	err := verifier.VerifyQuoteSignature([]byte("data"), []byte("sig"), nil)
+	err := verifier.VerifyQuoteSignature([]byte("data"), []byte("sig"), nil, crypto.SHA256)
 	if err == nil {
 		t.Error("Expected error for nil key")
 	}
@@ -156,7 +156,7 @@ func TestRSAPSSVerifier_ValidSignature(t *testing.T) {
 	}
 
 	// verify
-	err = verifier.VerifyQuoteSignature(attestData, signature, &testKeyPair.PublicKey)
+	err = verifier.VerifyQuoteSignature(attestData, signature, &testKeyPair.PublicKey, crypto.SHA256)
 	if err != nil {
 		t.Fatalf("PSS signature verification failed: %v", err)
 	}
@@ -177,7 +177,7 @@ func TestRSAPSSVerifier_InvalidSignature(t *testing.T) {
 	// corrupt signature
 	signature[len(signature)-1] ^= 0xFF
 
-	err := verifier.VerifyQuoteSignature(attestData, signature, &testKeyPair.PublicKey)
+	err := verifier.VerifyQuoteSignature(attestData, signature, &testKeyPair.PublicKey, crypto.SHA256)
 	if err == nil {
 		t.Fatal("SECURITY: Invalid PSS signature was accepted!")
 	}
@@ -414,32 +414,6 @@ func TestParseRSAPublicKey_RejectsSmallKey(t *testing.T) {
 	t.Logf("✓ Correctly rejected small key: %v", err)
 }
 
-func TestAIKFingerprint(t *testing.T) {
-	t.Log("TEST: AIK fingerprint generation")
-
-	fp := AIKFingerprint(&testKeyPair.PublicKey)
-
-	// fingerprint should be 64 hex chars (256 bits = 32 bytes)
-	if len(fp) != 64 {
-		t.Errorf("Fingerprint length: got %d, want 64", len(fp))
-	}
-
-	// same key should produce same fingerprint
-	fp2 := AIKFingerprint(&testKeyPair.PublicKey)
-	if fp != fp2 {
-		t.Error("Same key produced different fingerprints!")
-	}
-
-	// different key should produce different fingerprint
-	otherKey, _ := rsa.GenerateKey(rand.Reader, 2048)
-	fp3 := AIKFingerprint(&otherKey.PublicKey)
-	if fp == fp3 {
-		t.Error("Different keys produced same fingerprint!")
-	}
-
-	t.Logf("✓ AIK fingerprint: %s", fp)
-}
-
 func BenchmarkRSASSAVerify(b *testing.B) {
 	verifier := NewRSASSAVerifier()
 	attestData := make([]byte, 145) // typical TPMS_ATTEST size
@@ -450,7 +424,7 @@ func BenchmarkRSASSAVerify(b *testing.B) {
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		verifier.VerifyQuoteSignature(attestData, signature, &testKeyPair.PublicKey)
+		verifier.VerifyQuoteSignature(attestData, signature, &testKeyPair.PublicKey, crypto.SHA256)
 	}
 }
 
@@ -467,7 +441,7 @@ func BenchmarkRSASSAVerifyParallel(b *testing.B) {
 	b.ResetTimer()
 	b.RunParallel(func(pb *testing.PB) {
 		for pb.Next() {
-			verifier.VerifyQuoteSignature(attestData, signature, &testKeyPair.PublicKey)
+			verifier.VerifyQuoteSignature(attestData, signature, &testKeyPair.PublicKey, crypto.SHA256)
 		}
 	})
 }
@@ -483,6 +457,6 @@ func BenchmarkRSAPSSVerify(b *testing.B) {
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		verifier.VerifyQuoteSignature(attestData, signature, &testKeyPair.PublicKey)
+		verifier.VerifyQuoteSignature(attestData, signature, &testKeyPair.PublicKey, crypto.SHA256)
 	}
 }

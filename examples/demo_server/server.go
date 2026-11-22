@@ -52,7 +52,6 @@ type sessionState struct {
 	lastVerdict   string
 	lastLicense   string
 	lastReason    string // repeated by /state, empty when trusted
-	gameIDHex     string
 	updatedAt     time.Time
 }
 

@@ -253,102 +253,45 @@ func TestBootBaseline_SQLiteGetBootBaselineNilWhenUnpinned(t *testing.T) {
 	}
 }
 
-func TestPCRVerifier_ActivePolicyDeclaresBootPCRs(t *testing.T) {
-	v := NewPCRVerifier()
-
-	// no active policy
-	if v.ActivePolicyDeclaresBootPCRs() {
+func TestPCRVerifier_PolicyDeclaresBootPCRsForTenant(t *testing.T) {
+	if NewPCRVerifier().PolicyDeclaresBootPCRsForTenant("") {
 		t.Fatal("expected false with no active policy")
 	}
 
-	pinAll := &PCRPolicy{
-		Name: "pin-all",
-		PCRs: map[int]string{
-			0: "aa",
-			1: "bb",
-			7: "cc",
-		},
-		AgentHashes: []string{"de"},
-	}
-	if err := v.AddPolicy(pinAll); err != nil {
-		t.Fatalf("AddPolicy: %v", err)
-	}
-	if err := v.SetActivePolicy("pin-all"); err != nil {
-		t.Fatalf("SetActivePolicy: %v", err)
-	}
-	if !v.ActivePolicyDeclaresBootPCRs() {
-		t.Fatal("expected true when PCR0/1/7 all pinned")
-	}
-
-	pinPartial := &PCRPolicy{
-		Name: "pin-partial",
-		PCRs: map[int]string{
-			0: "aa",
-			7: "cc",
-		},
-		AgentHashes: []string{"de"},
-	}
-	if err := v.AddPolicy(pinPartial); err != nil {
-		t.Fatalf("AddPolicy: %v", err)
-	}
-	if err := v.SetActivePolicy("pin-partial"); err != nil {
-		t.Fatalf("SetActivePolicy: %v", err)
-	}
-	if v.ActivePolicyDeclaresBootPCRs() {
-		t.Fatal("expected false when PCR1 missing")
-	}
-
-	pinNone := &PCRPolicy{
-		Name:        "pin-none",
-		PCRs:        map[int]string{14: "dd"},
-		AgentHashes: []string{"de"},
-	}
-	if err := v.AddPolicy(pinNone); err != nil {
-		t.Fatalf("AddPolicy: %v", err)
-	}
-	if err := v.SetActivePolicy("pin-none"); err != nil {
-		t.Fatalf("SetActivePolicy: %v", err)
-	}
-	if v.ActivePolicyDeclaresBootPCRs() {
-		t.Fatal("expected false when no boot PCR is pinned")
+	for _, tc := range []struct {
+		name string
+		pcrs map[int]string
+		want bool
+	}{
+		{"pin-all", map[int]string{0: "aa", 1: "bb", 7: "cc"}, true},
+		{"pin-partial", map[int]string{0: "aa", 7: "cc"}, false},
+		{"pin-none", map[int]string{14: "dd"}, false},
+	} {
+		v := NewPCRVerifier()
+		policy := &PCRPolicy{Name: tc.name, PCRs: tc.pcrs, AgentHashes: []string{"de"}}
+		if err := v.AddPolicy(policy); err != nil {
+			t.Fatalf("AddPolicy: %v", err)
+		}
+		if got := v.PolicyDeclaresBootPCRsForTenant(""); got != tc.want {
+			t.Fatalf("%s: got %v, want %v", tc.name, got, tc.want)
+		}
 	}
 }
 
-func TestPCRVerifier_ActivePolicyRequiresSecureBoot(t *testing.T) {
-	v := NewPCRVerifier()
-
-	// no active policy
-	if v.ActivePolicyRequiresSecureBoot() {
+func TestPCRVerifier_PolicyRequiresSecureBootForTenant(t *testing.T) {
+	if NewPCRVerifier().PolicyRequiresSecureBootForTenant("") {
 		t.Fatal("expected false with no active policy")
 	}
 
-	sbOn := &PCRPolicy{
-		Name:              "sb-on",
-		RequireSecureBoot: true,
-		AgentHashes:       []string{"de"},
-	}
-	if err := v.AddPolicy(sbOn); err != nil {
-		t.Fatalf("AddPolicy: %v", err)
-	}
-	if err := v.SetActivePolicy("sb-on"); err != nil {
-		t.Fatalf("SetActivePolicy: %v", err)
-	}
-	if !v.ActivePolicyRequiresSecureBoot() {
-		t.Fatal("expected true when require_secureboot is set")
-	}
-
-	sbOff := &PCRPolicy{
-		Name:        "sb-off",
-		AgentHashes: []string{"de"},
-	}
-	if err := v.AddPolicy(sbOff); err != nil {
-		t.Fatalf("AddPolicy: %v", err)
-	}
-	if err := v.SetActivePolicy("sb-off"); err != nil {
-		t.Fatalf("SetActivePolicy: %v", err)
-	}
-	if v.ActivePolicyRequiresSecureBoot() {
-		t.Fatal("expected false when require_secureboot is unset")
+	for _, want := range []bool{true, false} {
+		v := NewPCRVerifier()
+		policy := &PCRPolicy{Name: "sb", RequireSecureBoot: want, AgentHashes: []string{"de"}}
+		if err := v.AddPolicy(policy); err != nil {
+			t.Fatalf("AddPolicy: %v", err)
+		}
+		if got := v.PolicyRequiresSecureBootForTenant(""); got != want {
+			t.Fatalf("got %v, want %v", got, want)
+		}
 	}
 }
 
@@ -760,9 +703,6 @@ func acceptLogVerifier(t *testing.T, buf *bytes.Buffer, policy *PCRPolicy,
 	if err := v.AddPolicy(policy); err != nil {
 		t.Fatalf("AddPolicy: %v", err)
 	}
-	if err := v.SetActivePolicy(policy.Name); err != nil {
-		t.Fatalf("SetActivePolicy: %v", err)
-	}
 	return v
 }
 
@@ -777,7 +717,7 @@ func firstUseBootAcceptLine(t *testing.T, v *Verifier, logs *bytes.Buffer,
 		t.Fatalf("GenerateChallenge: %v", err)
 	}
 	report := createValidReport(t, clientID, challenge.Nonce, fixturePCR14())
-	result, err := v.VerifyReport(clientID, report)
+	result, err := v.VerifyReportFrom(clientID, "", report)
 	if err != nil {
 		t.Fatalf("VerifyReport: %v", err)
 	}

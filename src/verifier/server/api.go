@@ -204,12 +204,6 @@ func (h *APIHandler) handle(mux *http.ServeMux, pattern string,
 	mux.HandleFunc(pattern, handler)
 }
 
-// RegisteredRoutes is every pattern handed to the mux, in registration order.
-// Its counterpart is AdvertisedRoutes(), which is what an operator is told.
-func (h *APIHandler) RegisteredRoutes() []string {
-	return h.routes
-}
-
 // AdvertisedRoutes is what the instance tells an operator it exposes.
 // It is what the routes above registered, so the banner cannot name an endpoint
 // nothing serves or omit one that is served.
@@ -1415,12 +1409,7 @@ func (h *APIHandler) handleAttestationLog(w http.ResponseWriter, r *http.Request
 	}
 
 	p := requestPrincipal(r)
-	var entries []store.AttestationRecord
-	if narrower, ok := h.attestationLog.(store.AttestationQuerier); ok {
-		entries = narrower.QueryAttestationsFiltered(q)
-	} else {
-		entries = h.attestationLog.QueryAttestations(limit)
-	}
+	entries := h.attestationLog.QueryAttestations(q)
 	resp := make([]attestationResponse, 0, len(entries))
 	for i := range entries {
 		e := &entries[i]

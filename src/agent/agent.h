@@ -79,15 +79,8 @@ struct agent_globals {
 	uint8_t policy_digest[32];
 	int policy_digest_set;
 
-	/* Canonical snapshot of the current enforcement policy used for digest
-	 * recompute */
+	/* Canonical snapshot of the current enforcement policy */
 	int policy_snapshot_set;
-	int policy_mode;
-	bool policy_strict_mmap;
-	bool policy_strict_exec;
-	bool policy_block_ptrace;
-	bool policy_strict_modules;
-	bool policy_block_anon_exec;
 
 	struct lota_verity_digest_key *policy_verity_digests;
 	int policy_verity_digest_count;
@@ -95,9 +88,6 @@ struct agent_globals {
 	uint32_t *policy_protect_pids; /* sorted unique */
 	int policy_protect_pid_count;
 	uint64_t policy_protect_epoch; /* monotonic runtime PID set mutation id */
-
-	char (*policy_trust_libs)[PATH_MAX]; /* sorted unique */
-	int policy_trust_lib_count;
 
 	/*
 	 * Edge-trigger cache for the TPM DA-lockout transition logger.

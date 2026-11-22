@@ -146,9 +146,9 @@ func createValidReportWithEventLog(t *testing.T, clientID string, nonce [32]byte
 	t.Helper()
 	hwID := sha256.Sum256([]byte(clientID))
 
-	// fixed struct plus the two variable-section length prefixes;
+	// fixed struct plus the event log length prefix;
 	// mandatory ESRT section is appended at the end
-	buf := make([]byte, types.FixedReportSize+8)
+	buf := make([]byte, types.FixedReportSize+4)
 	offset := 0
 
 	// Header (32 bytes)
@@ -278,20 +278,6 @@ func createValidReportWithEventLog(t *testing.T, clientID string, nonce [32]byte
 	copy(buf[offset:], "intel_iommu=on")
 	offset += types.CmdlineParamMax
 
-	// BPF Summary
-	binary.LittleEndian.PutUint32(buf[offset:], 42)
-	offset += 4
-	binary.LittleEndian.PutUint32(buf[offset:], 10)
-	offset += 4
-	binary.LittleEndian.PutUint64(buf[offset:], uint64(time.Now().Add(-time.Hour).Unix()))
-	offset += 8
-	binary.LittleEndian.PutUint64(buf[offset:], uint64(time.Now().Unix()))
-	offset += 8
-
-	// bpf event_count = 0 (no serialized exec events in integration fixtures)
-	binary.LittleEndian.PutUint32(buf[offset:], 0)
-	offset += 4
-
 	// append the caller's firmware log
 	// (Spec ID header + the PCR 7 SecureBoot variable measurement
 	// the UEFI gate requires)
@@ -382,9 +368,6 @@ func createTestVerifier(t *testing.T, aikVerifier store.AIKCertVerifier) *Verifi
 	if err := verifier.AddPolicy(DefaultPolicy()); err != nil {
 		t.Fatalf("AddPolicy(DefaultPolicy) failed: %v", err)
 	}
-	if err := verifier.SetActivePolicy("default"); err != nil {
-		t.Fatalf("SetActivePolicy(default) failed: %v", err)
-	}
 
 	return verifier
 }
@@ -409,7 +392,7 @@ func TestIntegration_FullAttestationFlow_TOFU(t *testing.T) {
 	reportData := createValidReport(t, clientID, challenge.Nonce, pcr14)
 	t.Logf("✓ Report created (%d bytes)", len(reportData))
 
-	result, err := verifier.VerifyReport(clientID, reportData)
+	result, err := verifier.VerifyReportFrom(clientID, "", reportData)
 	if err != nil {
 		t.Fatalf("Verification failed: %v", err)
 	}
@@ -434,7 +417,7 @@ func TestIntegration_SubsequentAttestation(t *testing.T) {
 	challenge1, _ := verifier.GenerateChallenge(clientID)
 	pcr14 := fixturePCR14()
 	report1 := createValidReport(t, clientID, challenge1.Nonce, pcr14)
-	result1, err := verifier.VerifyReport(clientID, report1)
+	result1, err := verifier.VerifyReportFrom(clientID, "", report1)
 	if err != nil || result1.Result != types.VerifyOK {
 		t.Fatalf("First attestation failed: %v (result=%d)", err, result1.Result)
 	}
@@ -443,7 +426,7 @@ func TestIntegration_SubsequentAttestation(t *testing.T) {
 	// should match baseline
 	challenge2, _ := verifier.GenerateChallenge(clientID)
 	report2 := createValidReport(t, clientID, challenge2.Nonce, pcr14)
-	result2, err := verifier.VerifyReport(clientID, report2)
+	result2, err := verifier.VerifyReportFrom(clientID, "", report2)
 	if err != nil || result2.Result != types.VerifyOK {
 		t.Fatalf("Second attestation failed: %v (result=%d)", err, result2.Result)
 	}
@@ -464,7 +447,7 @@ func TestIntegration_PCR14BaselineViolation(t *testing.T) {
 	challenge1, _ := verifier.GenerateChallenge(clientID)
 	originalPCR14 := fixturePCR14()
 	report1 := createValidReport(t, clientID, challenge1.Nonce, originalPCR14)
-	result1, _ := verifier.VerifyReport(clientID, report1)
+	result1, _ := verifier.VerifyReportFrom(clientID, "", report1)
 	if result1.Result != types.VerifyOK {
 		t.Fatalf("Baseline establishment failed")
 	}
@@ -477,7 +460,7 @@ func TestIntegration_PCR14BaselineViolation(t *testing.T) {
 	tamperedPCR14[0] ^= 0xFF // flip first byte - TAMPERING!
 
 	report2 := createValidReport(t, clientID, challenge2.Nonce, tamperedPCR14)
-	result2, err := verifier.VerifyReport(clientID, report2)
+	result2, err := verifier.VerifyReportFrom(clientID, "", report2)
 
 	// MUST detect the tampering
 	if result2.Result != types.VerifyIntegrityMismatch {
@@ -510,14 +493,14 @@ func TestIntegration_NonceReplayAttack(t *testing.T) {
 	reportData := createValidReport(t, clientID, challenge.Nonce, pcr14)
 
 	// should succeed
-	result1, err := verifier.VerifyReport(clientID, reportData)
+	result1, err := verifier.VerifyReportFrom(clientID, "", reportData)
 	if err != nil || result1.Result != types.VerifyOK {
 		t.Fatalf("First submission failed: %v", err)
 	}
 	t.Log("✓ First submission accepted")
 
 	// REPLAY ATTEMPT - same report again
-	result2, err := verifier.VerifyReport(clientID, reportData)
+	result2, err := verifier.VerifyReportFrom(clientID, "", reportData)
 
 	if result2.Result != types.VerifyNonceFail {
 		t.Fatalf("SECURITY FAILURE: Replay attack NOT detected!\n"+
@@ -546,7 +529,7 @@ func TestIntegration_InvalidSignature(t *testing.T) {
 	reportData[sigOffset] ^= 0xFF
 	reportData[sigOffset+1] ^= 0xFF
 
-	result, err := verifier.VerifyReport(clientID, reportData)
+	result, err := verifier.VerifyReportFrom(clientID, "", reportData)
 
 	if result.Result != types.VerifySigFail {
 		t.Fatalf("SECURITY FAILURE: Invalid signature NOT detected!\n"+
@@ -591,7 +574,7 @@ func TestIntegration_ConcurrentClients(t *testing.T) {
 
 			reportData := createValidReportWithKey(clientID, challenge.Nonce, pcr14, clientKeys[clientNum])
 
-			result, err := verifier.VerifyReport(clientID, reportData)
+			result, err := verifier.VerifyReportFrom(clientID, "", reportData)
 			if err != nil || result.Result != types.VerifyOK {
 				errors <- fmt.Errorf("client %d: verification failed: %v (result=%d)",
 					clientNum, err, result.Result)
@@ -650,7 +633,7 @@ func TestIntegration_ConcurrentFirstAttestationSameClient(t *testing.T) {
 			pcr14 := fixturePCR14()
 
 			reportData := createValidReportWithKey(hardwareLabel, challenge.Nonce, pcr14, key)
-			result, err := verifier.VerifyReport(challengeID, reportData)
+			result, err := verifier.VerifyReportFrom(challengeID, "", reportData)
 			if err != nil || result.Result != types.VerifyOK {
 				errs <- fmt.Errorf("verify failed: %v (result=%d)", err, result.Result)
 				done <- false
@@ -680,9 +663,9 @@ func TestIntegration_ConcurrentFirstAttestationSameClient(t *testing.T) {
 // helper for concurrent test
 func createValidReportWithKey(clientID string, nonce [32]byte, pcr14 [32]byte, key *rsa.PrivateKey) []byte {
 	hwID := sha256.Sum256([]byte(clientID))
-	// fixed struct plus the two variable-section length prefixes;
+	// fixed struct plus the event log length prefix;
 	// mandatory ESRT section is appended at the end
-	buf := make([]byte, types.FixedReportSize+8)
+	buf := make([]byte, types.FixedReportSize+4)
 	offset := 0
 
 	// Header
@@ -796,20 +779,6 @@ func createValidReportWithKey(clientID string, nonce [32]byte, pcr14 [32]byte, k
 	copy(buf[offset:offset+types.CmdlineParamMax], []byte("intel_iommu=on"))
 	offset += types.CmdlineParamMax
 
-	// BPF
-	binary.LittleEndian.PutUint32(buf[offset:], 1)
-	offset += 4
-	binary.LittleEndian.PutUint32(buf[offset:], 1)
-	offset += 4
-	binary.LittleEndian.PutUint64(buf[offset:], uint64(time.Now().Unix()))
-	offset += 8
-	binary.LittleEndian.PutUint64(buf[offset:], uint64(time.Now().Unix()))
-	offset += 8
-
-	// bpf event_count = 0
-	binary.LittleEndian.PutUint32(buf[offset:], 0)
-	offset += 4
-
 	eventLog := uefiEventLog()
 	binary.LittleEndian.PutUint32(buf[offset:], uint32(len(eventLog)))
 	buf = append(buf, eventLog...)
@@ -859,9 +828,6 @@ func TestVerify_RejectsMissingBootPCRs(t *testing.T) {
 	if err := verifier.AddPolicy(DefaultPolicy()); err != nil {
 		t.Fatalf("AddPolicy(DefaultPolicy): %v", err)
 	}
-	if err := verifier.SetActivePolicy("default"); err != nil {
-		t.Fatalf("SetActivePolicy(default): %v", err)
-	}
 
 	clientID := "boot-pcr-reject"
 	challenge, err := verifier.GenerateChallenge(clientID)
@@ -872,7 +838,7 @@ func TestVerify_RejectsMissingBootPCRs(t *testing.T) {
 	pcr14 := fixturePCR14()
 	reportData := createValidReportWithMask(t, clientID, challenge.Nonce, pcr14, legacyPCRMask)
 
-	result, err := verifier.VerifyReport(clientID, reportData)
+	result, err := verifier.VerifyReportFrom(clientID, "", reportData)
 	if err == nil {
 		t.Fatal("expected rejection: pcr_mask 0x4003 omits PCR 0/1/7")
 	}
@@ -911,7 +877,7 @@ func assertFlagRejected(t *testing.T, clientID string, flags uint32, wantMsg str
 	reportData := createValidReportWithFlags(t, clientID, challenge.Nonce,
 		fixturePCR14(), productionPCRMask, flags)
 
-	result, err := verifier.VerifyReport(clientID, reportData)
+	result, err := verifier.VerifyReportFrom(clientID, "", reportData)
 	if err == nil {
 		t.Fatalf("expected rejection: report flags 0x%08x omit %s", flags, wantMsg)
 	}
@@ -940,7 +906,7 @@ func TestVerify_RejectsNonUEFIBoot(t *testing.T) {
 	reportData := createValidReport(t, clientID, challenge.Nonce, fixturePCR14())
 	reportData = stripEventLogEntries(t, reportData)
 
-	result, err := verifier.VerifyReport(clientID, reportData)
+	result, err := verifier.VerifyReportFrom(clientID, "", reportData)
 	if err == nil {
 		t.Fatal("expected rejection: event log carries no UEFI evidence")
 	}
@@ -960,16 +926,7 @@ func stripEventLogEntries(t *testing.T, reportData []byte) []byte {
 
 	bare := buildTestEventLog(nil)
 
-	// Walk to the length field:
-	// the BPF event array before it is variable, and the wire may carry
-	// mandatory section after the log, so neither end is fixed distance
-	// from it
 	off := types.FixedReportSize
-	if len(reportData) < off+4 {
-		t.Fatalf("report of %d bytes stops before event_count", len(reportData))
-	}
-	eventCount := binary.LittleEndian.Uint32(reportData[off : off+4])
-	off += 4 + int(eventCount)*types.ExecEventSize
 	if len(reportData) < off+4 {
 		t.Fatalf("report of %d bytes stops before event_log_size", len(reportData))
 	}
@@ -1035,9 +992,6 @@ func attestUnderConfig(t *testing.T, cfg VerifierConfig, clientID string) (*type
 	if err := verifier.AddPolicy(DefaultPolicy()); err != nil {
 		t.Fatalf("AddPolicy(DefaultPolicy): %v", err)
 	}
-	if err := verifier.SetActivePolicy("default"); err != nil {
-		t.Fatalf("SetActivePolicy(default): %v", err)
-	}
 
 	challenge, err := verifier.GenerateChallenge(clientID)
 	if err != nil {
@@ -1045,7 +999,7 @@ func attestUnderConfig(t *testing.T, cfg VerifierConfig, clientID string) (*type
 	}
 
 	reportData := createValidReport(t, clientID, challenge.Nonce, fixturePCR14())
-	return verifier.VerifyReport(clientID, reportData)
+	return verifier.VerifyReportFrom(clientID, "", reportData)
 }
 
 // Client whose PCR14 baseline is on record must be visible through ClientInfo
@@ -1129,7 +1083,7 @@ func TestVerify_MOKChangeIsRefusedAgainstThePinnedRegister(t *testing.T) {
 		t.Fatalf("GenerateChallenge failed: %v", err)
 	}
 	report1 := createValidReport(t, clientID, challenge1.Nonce, fixturePCR14())
-	result1, err := verifier.VerifyReport(clientID, report1)
+	result1, err := verifier.VerifyReportFrom(clientID, "", report1)
 	if err != nil || result1.Result != types.VerifyOK {
 		t.Fatalf("first attestation failed: %v (result=%d)", err, result1.Result)
 	}
@@ -1148,7 +1102,7 @@ func TestVerify_MOKChangeIsRefusedAgainstThePinnedRegister(t *testing.T) {
 	report2 := createValidReportWithEventLog(t, clientID, challenge2.Nonce, moved,
 		productionPCRMask, productionFlags, fixtureAgentHash(), mokEventLog(mok))
 
-	result2, err := verifier.VerifyReport(clientID, report2)
+	result2, err := verifier.VerifyReportFrom(clientID, "", report2)
 	if result2.Result != types.VerifyIntegrityMismatch {
 		t.Fatalf("SECURITY: a MOK change was accepted\n"+
 			"  expected: FAIL_INTEGRITY_MISMATCH (%d)\n"+

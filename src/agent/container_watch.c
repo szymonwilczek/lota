@@ -140,7 +140,6 @@ static int watch_start(struct container_watch *w)
 	}
 
 	w->fd = fd;
-	w->wd = wd;
 	return 0;
 }
 
@@ -229,7 +228,6 @@ int container_watch_init(struct container_watch *w, const char *root,
 
 	memset(w, 0, sizeof(*w));
 	w->fd = -1;
-	w->wd = -1;
 	w->mnt_fd = -1;
 
 	n = snprintf(w->root, sizeof(w->root), "%s",
@@ -306,6 +304,5 @@ void container_watch_cleanup(struct container_watch *w)
 
 	memset(w, 0, sizeof(*w));
 	w->fd = -1;
-	w->wd = -1;
 	w->mnt_fd = -1;
 }

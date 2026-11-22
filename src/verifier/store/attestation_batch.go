@@ -260,21 +260,10 @@ func (l *BatchedAttestationLog) reportDrop() {
 		"hint", hint)
 }
 
-// QueryAttestations flushes any buffered records first so the monitoring surface
-// reads its own recent writes, then delegates to the backend
-func (l *BatchedAttestationLog) QueryAttestations(limit int) []AttestationRecord {
+// flushes so the read sees every accepted record
+func (l *BatchedAttestationLog) QueryAttestations(q AttestationQuery) []AttestationRecord {
 	l.flush()
-	return l.backend.QueryAttestations(limit)
-}
-
-// flushes, then narrows in the backend or, if it cannot, here
-func (l *BatchedAttestationLog) QueryAttestationsFiltered(q AttestationQuery) []AttestationRecord {
-	l.flush()
-
-	if narrower, ok := l.backend.(AttestationQuerier); ok {
-		return narrower.QueryAttestationsFiltered(q)
-	}
-	return filterAttestations(l.backend.QueryAttestations(0), q)
+	return l.backend.QueryAttestations(q)
 }
 
 // Flush drains the buffer synchronously.

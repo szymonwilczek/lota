@@ -120,7 +120,7 @@ func TestPKCS11SignerIssuesAIK(t *testing.T) {
 	if err != nil {
 		t.Fatalf("parse issued AIK cert: %v", err)
 	}
-	caCert, _ := x509.ParseCertificate(issuer.CACertDER())
+	caCert, _ := x509.ParseCertificate(caDER)
 	pool := x509.NewCertPool()
 	pool.AddCert(caCert)
 	if _, err := aikCert.Verify(x509.VerifyOptions{

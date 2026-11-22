@@ -18,7 +18,7 @@ func TestAttestationLog_RecordsKernelHash(t *testing.T) {
 	}
 	defer db.Close()
 
-	log := NewSQLiteAttestationLog(db)
+	log := NewSQLiteAttestationLog(db, DefaultCollapseWindow)
 	if err := log.Record(AttestationRecord{
 		ClientID:   "c1",
 		Tenant:     "alpha",
@@ -29,7 +29,7 @@ func TestAttestationLog_RecordsKernelHash(t *testing.T) {
 		t.Fatalf("record: %v", err)
 	}
 
-	got := log.QueryAttestations(1)
+	got := log.QueryAttestations(AttestationQuery{Limit: 1})
 	if len(got) != 1 {
 		t.Fatalf("want 1 record, got %d", len(got))
 	}
@@ -48,7 +48,7 @@ func TestAttestationLog_RecordsKernelHashInBatch(t *testing.T) {
 	}
 	defer db.Close()
 
-	log := NewSQLiteAttestationLog(db)
+	log := NewSQLiteAttestationLog(db, DefaultCollapseWindow)
 	if err := log.RecordBatch([]AttestationRecord{
 		{ClientID: "c1", Result: "ok", KernelHash: "aaaa"},
 		{ClientID: "c1", Result: "ok", KernelHash: "bbbb"},
@@ -56,7 +56,7 @@ func TestAttestationLog_RecordsKernelHashInBatch(t *testing.T) {
 		t.Fatalf("batch: %v", err)
 	}
 
-	got := log.QueryAttestations(2)
+	got := log.QueryAttestations(AttestationQuery{Limit: 2})
 	if len(got) != 2 {
 		t.Fatalf("want 2 records, got %d", len(got))
 	}

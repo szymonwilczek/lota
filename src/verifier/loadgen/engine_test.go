@@ -68,9 +68,6 @@ func newRigVerifier(t *testing.T, fleet *synth.Fleet) *verify.Verifier {
 	if err := v.LoadPolicy(policyPath); err != nil {
 		t.Fatalf("LoadPolicy: %v", err)
 	}
-	if err := v.SetActivePolicy(synth.PolicyName); err != nil {
-		t.Fatalf("SetActivePolicy: %v", err)
-	}
 	return v
 }
 
@@ -129,10 +126,13 @@ func startTestServer(t *testing.T, fleet *synth.Fleet) (addr string, clientTLSCf
 	certPath, keyPath := writeServerTLS(t, dir)
 	addr = freePort(t)
 
-	cfg := server.DefaultServerConfig()
-	cfg.Address = addr
-	cfg.CertFile = certPath
-	cfg.KeyFile = keyPath
+	cfg := server.ServerConfig{
+		Address:      addr,
+		CertFile:     certPath,
+		KeyFile:      keyPath,
+		ReadTimeout:  30 * time.Second,
+		WriteTimeout: 10 * time.Second,
+	}
 
 	srv, err := server.NewServer(cfg, newRigVerifier(t, fleet))
 	if err != nil {
@@ -156,7 +156,11 @@ func testFleet(t *testing.T, n int) *synth.Fleet {
 	if err != nil {
 		t.Fatalf("NewCA: %v", err)
 	}
-	fleet, err := synth.NewFleet(ca, n, 2, "")
+	keys, err := synth.GenerateKeyPool(2)
+	if err != nil {
+		t.Fatalf("GenerateKeyPool: %v", err)
+	}
+	fleet, err := synth.NewFleet(ca, n, keys, "")
 	if err != nil {
 		t.Fatalf("NewFleet: %v", err)
 	}

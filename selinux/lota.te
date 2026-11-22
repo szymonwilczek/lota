@@ -20,11 +20,6 @@ gen_tunable(lota_network_attest, true)
 ## </desc>
 gen_tunable(lota_bpf_load, true)
 
-## <desc>
-## <p>Allow interaction with module loading subsystem.</p>
-## </desc>
-gen_tunable(lota_module_enforce, false)
-
 #
 # Type declarations
 #
@@ -60,12 +55,6 @@ files_config_file(lota_etc_t)
 
 type lota_bpf_t;
 files_type(lota_bpf_t)
-
-type lota_log_t;
-logging_log_file(lota_log_t)
-
-type lota_tmp_t;
-files_tmp_file(lota_tmp_t)
 
 #
 # Port type for the attestation endpoints the agent connects out to.
@@ -109,9 +98,9 @@ dev_node(lota_tpm_device_t)
 # the code of title that asked to be protected.
 # It grants no debugger: attaching is refused separately by the agent's own
 # LSM hook, which exempts the agent for read access only.
-allow lota_agent_t self:capability { dac_override dac_read_search sys_admin sys_rawio ipc_lock sys_ptrace };
+allow lota_agent_t self:capability { dac_override dac_read_search sys_admin sys_ptrace };
 allow lota_agent_t self:capability2 { bpf perfmon };
-allow lota_agent_t self:process { signal signull setcap setrlimit };
+allow lota_agent_t self:process { signal signull };
 allow lota_agent_t self:fifo_file rw_fifo_file_perms;
 allow lota_agent_t self:unix_stream_socket create_stream_socket_perms;
 allow lota_agent_t self:unix_dgram_socket create_socket_perms;
@@ -136,16 +125,6 @@ allow lota_agent_t self:unix_stream_socket connectto;
 allow lota_agent_t lota_bpf_t:dir list_dir_perms;
 allow lota_agent_t lota_bpf_t:file { read_file_perms execute map };
 
-# /var/log/lota
-allow lota_agent_t lota_log_t:dir { create_dir_perms add_entry_dir_perms };
-allow lota_agent_t lota_log_t:file { create_file_perms append_file_perms };
-logging_log_filetrans(lota_agent_t, lota_log_t, file)
-
-# /tmp/lota
-allow lota_agent_t lota_tmp_t:dir manage_dir_perms;
-allow lota_agent_t lota_tmp_t:file manage_file_perms;
-files_tmp_filetrans(lota_agent_t, lota_tmp_t, { file dir })
-
 #
 # Hardware access
 #
@@ -163,8 +142,6 @@ allow lota_agent_t lota_tpm_device_t:chr_file rw_chr_file_perms;
 # attest until the udev relabel has run.
 dev_rw_tpm(lota_agent_t)
 
-dev_read_raw_memory(lota_agent_t)
-
 # /dev/urandom
 dev_read_urand(lota_agent_t)
 dev_read_rand(lota_agent_t)
@@ -173,13 +150,10 @@ dev_read_rand(lota_agent_t)
 # BPF subsystem
 #
 
-fs_manage_bpf_files(lota_agent_t)
-fs_manage_bpf_dirs(lota_agent_t)
 kernel_read_system_state(lota_agent_t)
 
 tunable_policy(`lota_bpf_load',`
         allow lota_agent_t self:bpf { map_create map_read map_write prog_load prog_run };
-        allow lota_agent_t self:perf_event { open read write };
 ')
 
 #
@@ -226,9 +200,6 @@ allow lota_agent_t system_map_t:file read_file_perms;
 files_read_all_files(lota_agent_t)
 allow lota_agent_t file_type:file { getattr open read ioctl };
 
-# /proc/<pid>/map_files of a process the agent did not spawn
-domain_read_all_domains_state(lota_agent_t)
-
 # Ending a protected process on its owner's behalf
 #
 # Protected task takes no signal from anything but itself, the agent
@@ -260,10 +231,6 @@ fs_read_efivarfs_files(lota_agent_t)
 
 # /sys/fs/selinux
 selinux_get_fs_mount(lota_agent_t)
-selinux_compute_access_vector(lota_agent_t)
-
-# dmesg
-kernel_read_ring_buffer(lota_agent_t)
 
 # /proc/cmdline
 kernel_read_kernel_sysctls(lota_agent_t)
@@ -344,7 +311,6 @@ init_read_pid_files(lota_agent_t)
 #
 
 corenet_tcp_connect_http_port(lota_agent_t)
-corenet_tcp_connect_http_cache_port(lota_agent_t)
 sysnet_dns_name_resolve(lota_agent_t)
 
 tunable_policy(`lota_network_attest',`
@@ -352,14 +318,6 @@ tunable_policy(`lota_network_attest',`
         allow lota_agent_t self:tcp_socket create_stream_socket_perms;
         allow lota_agent_t self:udp_socket create_socket_perms;
         allow lota_agent_t self:netlink_route_socket { create bind getattr nlmsg_read };
-')
-
-#
-# Module subsystem
-#
-
-tunable_policy(`lota_module_enforce',`
-        modutils_read_module_deps(lota_agent_t)
 ')
 
 #

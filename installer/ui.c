@@ -401,15 +401,6 @@ void ui_text(struct ui *ui, const char *fmt, ...)
 	va_end(ap);
 }
 
-void ui_warn(struct ui *ui, const char *fmt, ...)
-{
-	va_list ap;
-
-	va_start(ap, fmt);
-	vtext(ui, col(ui, SGR_YELLOW), "WARN: ", fmt, ap);
-	va_end(ap);
-}
-
 void ui_error(struct ui *ui, const char *fmt, ...)
 {
 	va_list ap;

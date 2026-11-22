@@ -185,6 +185,14 @@ func TestParseTPMSAttest_TruncatedData(t *testing.T) {
 	}
 }
 
+func verifyPCRDigestBlob(blob []byte, pcrValues *[types.PCRCount][types.HashSize]byte, pcrMask uint32) error {
+	attest, err := ParseTPMSAttest(blob)
+	if err != nil {
+		return err
+	}
+	return VerifyPCRDigestParsed(attest, pcrValues, pcrMask)
+}
+
 func TestVerifyNonceInAttest_Match(t *testing.T) {
 	t.Log("SECURITY TEST: Nonce verification in TPMS_ATTEST")
 	t.Log("CRITICAL: This prevents replay attacks")
@@ -211,22 +219,6 @@ func TestVerifyNonceInAttest_Mismatch(t *testing.T) {
 	}
 
 	t.Logf("✓ Correctly rejected mismatched nonce: %v", err)
-}
-
-func TestGetNonceFromAttest(t *testing.T) {
-	t.Log("SECURITY TEST: Nonce extraction from TPMS_ATTEST")
-
-	nonce, err := GetNonceFromAttest(realTPMSAttestBlob)
-	if err != nil {
-		t.Fatalf("Failed to extract nonce: %v", err)
-	}
-
-	if !bytes.Equal(nonce, expectedNonce) {
-		t.Errorf("Extracted nonce mismatch:\n  got:  %x\n  want: %x",
-			nonce, expectedNonce)
-	}
-
-	t.Logf("✓ Nonce correctly extracted: %x", nonce)
 }
 
 // Table-driven test for various TPMS_ATTEST edge cases
@@ -393,7 +385,7 @@ func TestVerifyPCRDigest_Match(t *testing.T) {
 
 	blob := buildTestAttestBlob(expectedDigest)
 
-	err := VerifyPCRDigest(blob, &pcrValues, pcrMask)
+	err := verifyPCRDigestBlob(blob, &pcrValues, pcrMask)
 	if err != nil {
 		t.Fatalf("PCR digest should match: %v", err)
 	}
@@ -426,7 +418,7 @@ func TestVerifyPCRDigest_Mismatch(t *testing.T) {
 	// tamper with PCR values (simulate malicious agent)
 	pcrValues[14][0] ^= 0xFF
 
-	err := VerifyPCRDigest(blob, &pcrValues, pcrMask)
+	err := verifyPCRDigestBlob(blob, &pcrValues, pcrMask)
 	if err == nil {
 		t.Fatal("Expected error for tampered PCR values, got nil")
 	}
@@ -475,7 +467,7 @@ func TestVerifyPCRDigestParsed_MatchesByteForm(t *testing.T) {
 	if err := VerifyPCRDigestParsed(parsed, &pcrValues, pcrMask); err != nil {
 		t.Fatalf("parsed-form unexpected mismatch: %v", err)
 	}
-	if err := VerifyPCRDigest(blob, &pcrValues, pcrMask); err != nil {
+	if err := verifyPCRDigestBlob(blob, &pcrValues, pcrMask); err != nil {
 		t.Fatalf("byte-form unexpected mismatch: %v", err)
 	}
 
@@ -484,7 +476,7 @@ func TestVerifyPCRDigestParsed_MatchesByteForm(t *testing.T) {
 	if err := VerifyPCRDigestParsed(parsed, &pcrValues, pcrMask); err == nil {
 		t.Fatal("parsed-form: tampered PCR must reject")
 	}
-	if err := VerifyPCRDigest(blob, &pcrValues, pcrMask); err == nil {
+	if err := verifyPCRDigestBlob(blob, &pcrValues, pcrMask); err == nil {
 		t.Fatal("byte-form: tampered PCR must reject")
 	}
 }
@@ -538,7 +530,7 @@ func TestVerifyPCRDigestParsed_RejectsSHA384PCRBank(t *testing.T) {
 	digest := make([]byte, 48)
 	blob := buildAttestBlobWithHashAlg(t, types.TPMAlgSHA384, digest)
 
-	err := VerifyPCRDigest(blob, &pcrValues, pcrMask)
+	err := verifyPCRDigestBlob(blob, &pcrValues, pcrMask)
 	if err == nil {
 		t.Fatal("SHA-384 PCR bank must be rejected by VerifyPCRDigestParsed")
 	}
@@ -559,7 +551,7 @@ func TestVerifyPCRDigestParsed_RejectsSHA512PCRBank(t *testing.T) {
 	digest := make([]byte, 64)
 	blob := buildAttestBlobWithHashAlg(t, types.TPMAlgSHA512, digest)
 
-	err := VerifyPCRDigest(blob, &pcrValues, pcrMask)
+	err := verifyPCRDigestBlob(blob, &pcrValues, pcrMask)
 	if err == nil {
 		t.Fatal("SHA-512 PCR bank must be rejected by VerifyPCRDigestParsed")
 	}
@@ -576,7 +568,7 @@ func TestVerifyPCRDigestParsed_RejectsSHA1PCRBank(t *testing.T) {
 	digest := make([]byte, 20)
 	blob := buildAttestBlobWithHashAlg(t, types.TPMAlgSHA1, digest)
 
-	err := VerifyPCRDigest(blob, &pcrValues, pcrMask)
+	err := verifyPCRDigestBlob(blob, &pcrValues, pcrMask)
 	if err == nil {
 		t.Fatal("SHA-1 PCR bank must be rejected by VerifyPCRDigestParsed")
 	}
@@ -597,7 +589,7 @@ func TestVerifyPCRDigestParsed_RejectsUnknownPCRBank(t *testing.T) {
 	digest := make([]byte, 32)
 	blob := buildAttestBlobWithHashAlg(t, 0x0042, digest)
 
-	err := VerifyPCRDigest(blob, &pcrValues, pcrMask)
+	err := verifyPCRDigestBlob(blob, &pcrValues, pcrMask)
 	if err == nil {
 		t.Fatal("unknown PCR bank hash must be rejected")
 	}
@@ -613,7 +605,7 @@ func TestVerifyPCRDigest_InvalidAttest(t *testing.T) {
 	pcrMask := uint32((1 << 0) | (1 << 1) | (1 << 14))
 	var pcrValues [types.PCRCount][types.HashSize]byte
 
-	err := VerifyPCRDigest([]byte{0x00, 0x01, 0x02}, &pcrValues, pcrMask)
+	err := verifyPCRDigestBlob([]byte{0x00, 0x01, 0x02}, &pcrValues, pcrMask)
 	if err == nil {
 		t.Fatal("Expected error for invalid attestation data, got nil")
 	}

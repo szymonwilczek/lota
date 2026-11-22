@@ -118,11 +118,6 @@ static void test_event_constants(void)
 		return;
 	}
 
-	if (LOTA_IPC_EVENT_ALL != LOTA_EVENT_ALL) {
-		FAIL("EVENT_ALL mismatch");
-		return;
-	}
-
 	PASS();
 }
 
@@ -138,7 +133,7 @@ static void test_subscribe_unsubscribe_mask(void)
 		return;
 	}
 
-	sub.event_mask = LOTA_IPC_EVENT_ALL;
+	sub.event_mask = LOTA_EVENT_ALL;
 	if (sub.event_mask != 0xFFFFFFFF) {
 		FAIL("EVENT_ALL should be 0xFFFFFFFF");
 		return;

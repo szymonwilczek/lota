@@ -26,16 +26,13 @@ func attestWithLog(t *testing.T, clientID string, bans store.BanStore,
 	if err := verifier.AddPolicy(DefaultPolicy()); err != nil {
 		t.Fatalf("AddPolicy(DefaultPolicy) failed: %v", err)
 	}
-	if err := verifier.SetActivePolicy("default"); err != nil {
-		t.Fatalf("SetActivePolicy(default) failed: %v", err)
-	}
 
 	challenge, err := verifier.GenerateChallenge(clientID)
 	if err != nil {
 		t.Fatalf("GenerateChallenge: %v", err)
 	}
 	reportData := createValidReport(t, clientID, challenge.Nonce, fixturePCR14())
-	result, _ := verifier.VerifyReport(clientID, reportData)
+	result, _ := verifier.VerifyReportFrom(clientID, "", reportData)
 	return verifier, result
 }
 
@@ -44,13 +41,13 @@ func attestWithLog(t *testing.T, clientID string, bans store.BanStore,
 func TestIntegration_AttestationRecordCarriesBannableHardwareID(t *testing.T) {
 	const clientID = "hwid-log-client"
 
-	attestLog := store.NewMemoryAttestationLog()
+	attestLog := store.NewSQLiteAttestationLog(testDB(t), store.DefaultCollapseWindow)
 	_, result := attestWithLog(t, clientID, nil, attestLog)
 	if result.Result != types.VerifyOK {
 		t.Fatalf("result = %d, want VerifyOK", result.Result)
 	}
 
-	records := attestLog.QueryAttestations(1)
+	records := attestLog.QueryAttestations(store.AttestationQuery{Limit: 1})
 	if len(records) != 1 {
 		t.Fatalf("attestation records = %d, want 1", len(records))
 	}
@@ -69,18 +66,18 @@ func TestIntegration_RejectedRoundNamesTheHardwareToBan(t *testing.T) {
 	const clientID = "hwid-banned-client"
 	hwid := devicePseudonymHWID(t, clientID)
 
-	bans := store.NewMemoryBanStore()
+	bans := store.NewSQLiteBanStore(testDB(t), nil)
 	if err := bans.BanHardware(DefaultTenant, hwid, store.RevocationCheating, "op", ""); err != nil {
 		t.Fatalf("BanHardware: %v", err)
 	}
 
-	attestLog := store.NewMemoryAttestationLog()
+	attestLog := store.NewSQLiteAttestationLog(testDB(t), store.DefaultCollapseWindow)
 	_, result := attestWithLog(t, clientID, bans, attestLog)
 	if result.Result != types.VerifyBanned {
 		t.Fatalf("result = %d, want VerifyBanned", result.Result)
 	}
 
-	records := attestLog.QueryAttestations(1)
+	records := attestLog.QueryAttestations(store.AttestationQuery{Limit: 1})
 	if len(records) != 1 {
 		t.Fatalf("attestation records = %d, want 1", len(records))
 	}

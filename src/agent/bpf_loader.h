@@ -77,15 +77,6 @@ int bpf_loader_measure_verity_digest(const char *path,
 				     struct lota_verity_digest_key *out);
 
 /*
- * bpf_loader_allow_verity_path - Measure a path's fs-verity digest and allow it
- * @ctx: Loaded context
- * @path: Absolute path to a fs-verity-enabled regular file
- *
- * Returns: 0 on success, negative errno on failure
- */
-int bpf_loader_allow_verity_path(struct bpf_loader_ctx *ctx, const char *path);
-
-/*
  * bpf_loader_hash_file - Kernel content hash of a file, taken during its open
  * @ctx: Loaded context
  * @path: /proc magic link to open, so no attacker path is walked
@@ -134,12 +125,6 @@ void bpf_loader_pin_round_begin(struct bpf_loader_ctx *ctx);
  * Returns: 0 on success, negative errno on failure.
  */
 int bpf_loader_pin_sweep(struct bpf_loader_ctx *ctx, size_t *released);
-
-/*
- * bpf_loader_pin_count - How many inodes this agent is holding pinned
- * @ctx: Loaded context
- */
-size_t bpf_loader_pin_count(const struct bpf_loader_ctx *ctx);
 
 /*
  * Callback for ring buffer events
@@ -232,17 +217,6 @@ int bpf_loader_setup_ringbuf(struct bpf_loader_ctx *ctx,
 			     bpf_event_handler_t handler, void *handler_ctx);
 
 /*
- * bpf_loader_poll - Poll ring buffer for events
- * @ctx: Context with set up ring buffer
- * @timeout_ms: Timeout in milliseconds (-1 for infinite)
- *
- * Calls the handler for each event received.
- *
- * Returns: Number of events processed, or negative errno
- */
-int bpf_loader_poll(struct bpf_loader_ctx *ctx, int timeout_ms);
-
-/*
  * bpf_loader_get_event_fd - Get the epoll fd for the ring buffer
  * @ctx: Context
  *
@@ -257,20 +231,6 @@ int bpf_loader_get_event_fd(struct bpf_loader_ctx *ctx);
  * Returns: Number of events processed, or negative errno
  */
 int bpf_loader_consume(struct bpf_loader_ctx *ctx);
-
-/*
- * bpf_loader_get_stats - Get BPF statistics
- * @ctx: Loaded context
- * @total_execs: Output - total exec events seen
- * @events_sent: Output - events sent to ring buffer
- * @errors: Output - error count
- * @drops: Output - ring buffer drops
- *
- * Returns: 0 on success, negative errno on failure
- */
-int bpf_loader_get_stats(struct bpf_loader_ctx *ctx, uint64_t *total_execs,
-			 uint64_t *events_sent, uint64_t *errors,
-			 uint64_t *drops);
 
 /*
  * bpf_loader_set_mode - Set enforcement mode
@@ -531,7 +491,6 @@ int bpf_loader_untrust_lib(struct bpf_loader_ctx *ctx, const char *path);
 struct bpf_extended_stats {
 	uint64_t total_execs;
 	uint64_t events_sent;
-	uint64_t errors;
 	uint64_t drops;
 	uint64_t modules_blocked;
 	uint64_t mmap_execs;

@@ -23,8 +23,8 @@
  * tracer indicates an attached ptracer (gdb, strace, frida-server, ...).
  *
  * Ordering note: hardening_apply_basics() drops PR_SET_DUMPABLE to 0
- * before this function runs (see hardening_apply_all() and
- * hardening_apply_daemon()). PR_SET_DUMPABLE=0 makes the process
+ * before this function runs (see hardening_apply_daemon()).
+ * PR_SET_DUMPABLE=0 makes the process
  * non-attachable via PTRACE_ATTACH for any process without
  * CAP_SYS_PTRACE, which closes the TOCTOU window between reading
  * TracerPid and finishing startup: an unprivileged attacker cannot
@@ -127,17 +127,6 @@ int hardening_apply_basics(void);
  * Returns: 0 on success, negative errno on the first failing step.
  */
 int hardening_apply_daemon(void);
-
-/*
- * hardening_apply_all - Convenience wrapper invoking the helpers above
- *
- * Equivalent to hardening_apply_basics() followed by
- * hardening_apply_daemon(). Retained for test harnesses that exercise
- * the full sequence in a single forked child.
- *
- * Returns: 0 on success, negative errno on the first failing step.
- */
-int hardening_apply_all(void);
 
 /*
  * hardening_parse_tracer_pid_buf - Parse /proc/self/status TracerPid line

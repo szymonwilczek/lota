@@ -2,11 +2,6 @@
 /*
  * LOTA Agent - systemd Integration
  *
- * Detection:
- *   sdnotify_under_systemd() checks for NOTIFY_SOCKET or
- *   INVOCATION_ID in the environment. When neither is present,
- *   all sd_notify calls are silently skipped.
- *
  * Lifecycle:
  *   sdnotify_ready()     ->  READY=1
  *   sdnotify_reloading() ->  RELOADING=1
@@ -29,15 +24,6 @@
 
 #include <stdbool.h>
 #include <stdint.h>
-
-/*
- * sdnotify_under_systemd - Detect if running under systemd.
- *
- * Checks NOTIFY_SOCKET and INVOCATION_ID environment variables.
- *
- * Returns: true if systemd-managed, false otherwise.
- */
-bool sdnotify_under_systemd(void);
 
 /*
  * sdnotify_ready - Signal readiness to systemd.

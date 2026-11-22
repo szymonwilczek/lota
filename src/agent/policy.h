@@ -37,13 +37,10 @@
 #define POLICY_PCR_1 1
 #define POLICY_PCR_4 4
 #define POLICY_PCR_7 7
-#define POLICY_PCR_8 8
-#define POLICY_PCR_9 9
 #define POLICY_PCR_11 11
 #define POLICY_PCR_14 14
 
 #define POLICY_MAX_PCRS 24
-#define POLICY_MAX_HASHES 8
 
 /*
  * Collected system snapshot for policy generation.
@@ -96,21 +93,6 @@ struct policy_snapshot {
  * Returns: 0 on success, negative errno on write failure
  */
 int policy_emit(const struct policy_snapshot *snap, FILE *out);
-
-/*
- * policy_emit_to_buf - Serialize a policy snapshot to a memory buffer
- *
- * @snap:     System snapshot
- * @buf:      Output buffer
- * @buf_size: Buffer capacity
- * @written:  Bytes written (excluding NUL terminator)
- *
- * Convenience wrapper around policy_emit() using fmemopen.
- *
- * Returns: 0 on success, -ENOSPC if buffer too small, negative errno otherwise
- */
-int policy_emit_to_buf(const struct policy_snapshot *snap, char *buf,
-		       size_t buf_size, size_t *written);
 
 /*
  * policy_kernel_hash_reason - why an exported policy carries no kernel digest

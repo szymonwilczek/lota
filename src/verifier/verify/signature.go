@@ -3,46 +3,22 @@
 // LOTA Verifier - Signature verification module
 //
 // The signature verifier validates the TPM quote (TPMS_ATTEST +
-// signature) against an AIK public key. It is intentionally
-// decoupled from the AIK trust model so the same verifier handles
-// every supported source for the public key:
-//   - Certificate-backed AIK chain via CertificateVerifier.
-//     VerifyReport requires the AIK certificate in every report and has
-//     chain-verified it against the configured trust roots before the
-//     signature is checked.
-//   - Optional future Privacy CA / DAA flow. The interface stays
-//     intentionally minimal so a new strategy can be plugged in
-//     without touching the quote-verification fast path.
+// signature) against an AIK public key. The caller resolves that key
+// through CertificateVerifier, which requires the AIK certificate in
+// every report and chain-verifies it against the configured trust
+// roots before the signature is checked.
 
 package verify
 
 import (
 	"crypto"
 	"crypto/rsa"
-	"crypto/sha256"
 	"crypto/x509"
-	"encoding/hex"
 	"errors"
 	"fmt"
 
 	"github.com/szymonwilczek/lota/verifier/types"
 )
-
-// handles TPM quote signature verification
-// interface allows swapping verification strategies
-type SignatureVerifier interface {
-	// verifies the TPM quote signature
-	// attestData: raw TPMS_ATTEST from TPM
-	// signature: signature over attestData
-	// aikPubKey: AIK public key; provided by the caller after it
-	//   has been resolved through the active trust model:
-	//   the AIK certificate chain, or key pinned in one of
-	//   the anchorless stores used by tests and provisioning.
-	VerifyQuoteSignature(attestData, signature []byte, aikPubKey *rsa.PublicKey) error
-
-	// returns verifier name for logging
-	Name() string
-}
 
 // implements RSASSA-PKCS1-v1_5 verification
 type RSASSAVerifier struct{}
@@ -51,15 +27,7 @@ func NewRSASSAVerifier() *RSASSAVerifier {
 	return &RSASSAVerifier{}
 }
 
-func (v *RSASSAVerifier) Name() string {
-	return "RSASSA-PKCS1-v1_5"
-}
-
-func (v *RSASSAVerifier) VerifyQuoteSignature(attestData, signature []byte, aikPubKey *rsa.PublicKey) error {
-	return v.VerifyQuoteSignatureWithHash(attestData, signature, aikPubKey, crypto.SHA256)
-}
-
-func (v *RSASSAVerifier) VerifyQuoteSignatureWithHash(attestData, signature []byte, aikPubKey *rsa.PublicKey, hashAlg crypto.Hash) error {
+func (v *RSASSAVerifier) VerifyQuoteSignature(attestData, signature []byte, aikPubKey *rsa.PublicKey, hashAlg crypto.Hash) error {
 	if aikPubKey == nil {
 		return errors.New("AIK public key is nil")
 	}
@@ -88,15 +56,7 @@ func NewRSAPSSVerifier() *RSAPSSVerifier {
 	return &RSAPSSVerifier{}
 }
 
-func (v *RSAPSSVerifier) Name() string {
-	return "RSASSA-PSS"
-}
-
-func (v *RSAPSSVerifier) VerifyQuoteSignature(attestData, signature []byte, aikPubKey *rsa.PublicKey) error {
-	return v.VerifyQuoteSignatureWithHash(attestData, signature, aikPubKey, crypto.SHA256)
-}
-
-func (v *RSAPSSVerifier) VerifyQuoteSignatureWithHash(attestData, signature []byte, aikPubKey *rsa.PublicKey, hashAlg crypto.Hash) error {
+func (v *RSAPSSVerifier) VerifyQuoteSignature(attestData, signature []byte, aikPubKey *rsa.PublicKey, hashAlg crypto.Hash) error {
 	if aikPubKey == nil {
 		return errors.New("AIK public key is nil")
 	}
@@ -157,7 +117,7 @@ func VerifyReportSignature(report *types.AttestationReport, aikPubKey *rsa.Publi
 	// extract actual data
 	attestData := report.TPM.AttestData[:report.TPM.AttestSize]
 	signature := report.TPM.QuoteSignature[:report.TPM.QuoteSigSize]
-	hashAlg, hashSource, err := selectQuoteHashAlgorithm(report)
+	hashAlg, err := selectQuoteHashAlgorithm(report)
 	if err != nil {
 		return err
 	}
@@ -167,14 +127,14 @@ func VerifyReportSignature(report *types.AttestationReport, aikPubKey *rsa.Publi
 		return errors.New("TPM quote signature scheme missing (quote_sig_alg=0)")
 
 	case types.TPMAlgRSASSA:
-		if verr := NewRSASSAVerifier().VerifyQuoteSignatureWithHash(attestData, signature, aikPubKey, hashAlg); verr != nil {
-			return fmt.Errorf("TPM quote signature invalid (sig_alg=RSASSA hash=%s source=%s): %v", hashName(hashAlg), hashSource, verr)
+		if verr := NewRSASSAVerifier().VerifyQuoteSignature(attestData, signature, aikPubKey, hashAlg); verr != nil {
+			return fmt.Errorf("TPM quote signature invalid (sig_alg=RSASSA hash=%s): %v", hashName(hashAlg), verr)
 		}
 		return nil
 
 	case types.TPMAlgRSAPSS:
-		if verr := NewRSAPSSVerifier().VerifyQuoteSignatureWithHash(attestData, signature, aikPubKey, hashAlg); verr != nil {
-			return fmt.Errorf("TPM quote signature invalid (sig_alg=RSAPSS hash=%s source=%s): %v", hashName(hashAlg), hashSource, verr)
+		if verr := NewRSAPSSVerifier().VerifyQuoteSignature(attestData, signature, aikPubKey, hashAlg); verr != nil {
+			return fmt.Errorf("TPM quote signature invalid (sig_alg=RSAPSS hash=%s): %v", hashName(hashAlg), verr)
 		}
 		return nil
 	}
@@ -196,22 +156,22 @@ func tpmAlgToCryptoHash(tpmAlg uint16) (crypto.Hash, error) {
 	}
 }
 
-func selectQuoteHashAlgorithm(report *types.AttestationReport) (crypto.Hash, string, error) {
+func selectQuoteHashAlgorithm(report *types.AttestationReport) (crypto.Hash, error) {
 	if report == nil {
-		return 0, "report.tpm.quote_sig_hash_alg", errors.New("report is nil")
+		return 0, errors.New("report is nil")
 	}
 	if report.TPM.QuoteSigHashAlg == 0 {
-		return 0, "report.tpm.quote_sig_hash_alg", errors.New("TPM quote signature hash algorithm missing")
+		return 0, errors.New("TPM quote signature hash algorithm missing")
 	}
 
 	h, mapErr := tpmAlgToCryptoHash(report.TPM.QuoteSigHashAlg)
 	if mapErr != nil {
-		return 0, "report.tpm.quote_sig_hash_alg", mapErr
+		return 0, mapErr
 	}
 	if !h.Available() {
-		return 0, "report.tpm.quote_sig_hash_alg", fmt.Errorf("hash algorithm unavailable: %s", hashName(h))
+		return 0, fmt.Errorf("hash algorithm unavailable: %s", hashName(h))
 	}
-	return h, "report.tpm.quote_sig_hash_alg", nil
+	return h, nil
 }
 
 func hashName(h crypto.Hash) string {
@@ -244,15 +204,4 @@ func ParseRSAPublicKey(keyData []byte) (*rsa.PublicKey, error) {
 	}
 
 	return rsaPub, nil
-}
-
-// returns SHA-256 fingerprint of AIK public key (PKIX/SPKI encoding)
-// used for tofu identification
-func AIKFingerprint(aikPubKey *rsa.PublicKey) string {
-	keyBytes, err := x509.MarshalPKIXPublicKey(aikPubKey)
-	if err != nil {
-		return ""
-	}
-	h := sha256.Sum256(keyBytes)
-	return hex.EncodeToString(h[:])
 }

@@ -260,27 +260,6 @@ func VerifyPCRDigestParsed(attest *TPMSAttest, pcrValues *[types.PCRCount][types
 	return nil
 }
 
-// VerifyPCRDigest is the byte-slice entry point used by callers that do
-// not consume the parsed TPMS_ATTEST themselves. Internally it parses
-// and delegates to VerifyPCRDigestParsed; new code should prefer the
-// parsed form to avoid re-parsing.
-func VerifyPCRDigest(attestData []byte, pcrValues *[types.PCRCount][types.HashSize]byte, pcrMask uint32) error {
-	attest, err := ParseTPMSAttest(attestData)
-	if err != nil {
-		return fmt.Errorf("failed to parse TPMS_ATTEST: %w", err)
-	}
-	return VerifyPCRDigestParsed(attest, pcrValues, pcrMask)
-}
-
-// extracts nonce (extraData) from TPMS_ATTEST
-func GetNonceFromAttest(attestData []byte) ([]byte, error) {
-	attest, err := ParseTPMSAttest(attestData)
-	if err != nil {
-		return nil, err
-	}
-	return attest.ExtraData, nil
-}
-
 // computes SHA-256(
 //
 //	challengeNonce || hardwareID || signedFlags ||

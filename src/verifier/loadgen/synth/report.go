@@ -242,25 +242,11 @@ func (f *Fleet) BuildReport(a *Agent, challengeNonce [types.NonceSize]byte) ([]b
 	copy(buf[off:], iommuCmdline)
 	off += types.CmdlineParamMax
 
-	// BPF summary
-	binary.LittleEndian.PutUint32(buf[off:], 0)
-	off += 4
-	binary.LittleEndian.PutUint32(buf[off:], 0)
-	off += 4
-	binary.LittleEndian.PutUint64(buf[off:], 0)
-	off += 8
-	binary.LittleEndian.PutUint64(buf[off:], 0)
-	off += 8
-
 	if off != types.FixedReportSize {
 		return nil, fmt.Errorf("fixed section is %d bytes, want %d", off, types.FixedReportSize)
 	}
 
-	// variable sections: BPF event count, then the TCG event log
-	var tail [8]byte
-	binary.LittleEndian.PutUint32(tail[0:4], 0) // bpf event_count
-	binary.LittleEndian.PutUint32(tail[4:8], narrow32(len(eventLog)))
-	buf = append(buf, tail[:]...)
+	buf = binary.LittleEndian.AppendUint32(buf, narrow32(len(eventLog)))
 	buf = append(buf, eventLog...)
 
 	// mandatory trailing ESRT section

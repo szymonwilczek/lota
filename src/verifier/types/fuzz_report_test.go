@@ -17,8 +17,6 @@ func FuzzParseReport(f *testing.F) {
 	// seed: minimal report with event log appended
 	withLog := make([]byte, len(seed))
 	copy(withLog, seed)
-	eventCountBuf := make([]byte, 4)
-	withLog = append(withLog, eventCountBuf...) // event_count=0 already in seed
 	eventLogSize := make([]byte, 4)
 	binary.LittleEndian.PutUint32(eventLogSize, 5)
 	withLog = append(withLog, eventLogSize...)

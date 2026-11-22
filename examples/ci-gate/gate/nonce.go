@@ -85,15 +85,6 @@ func (s *nonceStore) evictExpiredLocked() {
 	}
 }
 
-// outstanding returns the number of issued nonces not yet spent or swept.
-//
-//nolint:unused // called from gate_test.go, which run.tests: false hides
-func (s *nonceStore) outstanding() int {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return len(s.issued)
-}
-
 // constantTimeEqual keeps a caller from learning how much of a nonce it guessed
 // correctly by timing the comparison.
 func constantTimeEqual(a, b []byte) bool {

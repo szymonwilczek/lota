@@ -51,15 +51,6 @@ journal_print(const char *file, int line, const char *func, int priority,
  */
 void journal_set_level(int priority);
 
-int journal_get_level(void);
-
-/*
- * journal_use_journal - Check if journal backend is active.
- *
- * Returns: true if sd_journal_print is being used, false for stderr.
- */
-_Bool journal_use_journal(void);
-
 /*
  * journal_detached_from_terminal - Send to the journal from here on.
  *

@@ -101,10 +101,6 @@ var pgMigrations = []migration{
 				tenant    TEXT NOT NULL DEFAULT 'default'
 			);
 
-			CREATE INDEX idx_audit_log_timestamp ON audit_log(timestamp);
-			CREATE INDEX idx_audit_log_target ON audit_log(target_id);
-			CREATE INDEX idx_audit_log_tenant ON audit_log(tenant);
-
 			CREATE TABLE attestation_log (
 				id          BIGSERIAL PRIMARY KEY,
 				timestamp   TIMESTAMPTZ NOT NULL,
@@ -172,15 +168,6 @@ var pgMigrations = []migration{
 // Keep it well under max_connections / instances.
 const DefaultPGMaxOpenConns = 20
 
-// OpenPostgresDB opens a Postgres-backed store at the given DSN with the
-// default connection pool and applies pending schema migrations.
-//
-// DSN is a libpq/pgx connection string, e.g:
-// "postgres://user:pass@host:5432/lota?sslmode=verify-full"
-func OpenPostgresDB(dsn string) (*sql.DB, error) {
-	return OpenPostgresDBPool(dsn, DefaultPGMaxOpenConns)
-}
-
 // ServerMaxConnections reports the database server's max_connections,
 // the budget every instance's pool is drawn from.
 //
@@ -195,14 +182,17 @@ func ServerMaxConnections(db *sql.DB) (int, error) {
 	return n, nil
 }
 
-// OpenPostgresDBPool opens the backend with an explicit max-open-connections pool ceiling
+// OpenPostgresDB opens the backend with an explicit max-open-connections pool ceiling
 // and applies pending schema migrations.
 // Non-positive value falls back to DefaultPGMaxOpenConns.
+//
+// DSN is a libpq/pgx connection string, e.g:
+// "postgres://user:pass@host:5432/lota?sslmode=verify-full"
 //
 // Pooling is left to database/sql; the pool is sized for the per-instance
 // attestation concurrency, not the whole fleet, because every verifier
 // instance opens its own pool against the shared server.
-func OpenPostgresDBPool(dsn string, maxOpenConns int) (*sql.DB, error) {
+func OpenPostgresDB(dsn string, maxOpenConns int) (*sql.DB, error) {
 	db, err := openPostgresPool(dsn, maxOpenConns)
 	if err != nil {
 		return nil, err
