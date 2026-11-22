@@ -611,6 +611,27 @@ static size_t slurp_shipped(const char *rel, char *buf, size_t cap)
 }
 
 /*
+ * A title in a user namespace is checked against that namespace, which is the
+ * cap_userns class. The capability class does not cover it.
+ */
+static void test_selinux_agent_reaches_user_namespaces(void)
+{
+	static char policy[65536];
+
+	TEST("selinux: the agent reaches titles in user namespaces");
+
+	if (!slurp_shipped("selinux/lota.te", policy, sizeof(policy))) {
+		FAIL("could not read selinux/lota.te");
+		return;
+	}
+	if (!strstr(policy, "self:cap_userns { kill sys_ptrace };")) {
+		FAIL("no cap_userns rule: Proton titles stay out of reach");
+		return;
+	}
+	PASS();
+}
+
+/*
  * A client stats the socket before it connects, so write alone leaves it with
  * EACCES on the system socket.
  */
@@ -1011,6 +1032,7 @@ int main(void)
 	test_selinux_container_listener_is_shipped();
 	test_selinux_gaming_client_reaches_container_socket();
 	test_selinux_status_client_stats_socket();
+	test_selinux_agent_reaches_user_namespaces();
 	test_installer_labels_the_config_directory();
 	test_installer_relabel_reapplies_the_device_labels();
 	test_static_cli_is_built_without_cgo();
