@@ -8,39 +8,6 @@ import (
 	"testing"
 )
 
-// Every persistent AIK registry implements ClientDeleter;
-// otherwise CertificateStore reports ErrDeleteUnsupported and the API
-// delete answers 500.
-func TestEveryPersistentAIKRegistryCanRemoveAClient(t *testing.T) {
-	dir := t.TempDir()
-
-	db, err := OpenDB(dir + "/aik.sqlite")
-	if err != nil {
-		t.Fatalf("OpenDB: %v", err)
-	}
-	defer db.Close()
-
-	fileStore, err := NewFileStore(dir + "/file")
-	if err != nil {
-		t.Fatalf("NewFileStore: %v", err)
-	}
-
-	registries := map[string]any{
-		"sqlite":   NewSQLiteAIKStore(db),
-		"file":     fileStore,
-		"memory":   NewMemoryStore(),
-		"postgres": (*PostgresAIKStore)(nil),
-	}
-
-	for name, reg := range registries {
-		t.Run(name, func(t *testing.T) {
-			if _, ok := reg.(ClientDeleter); !ok {
-				t.Fatalf("the %s registry cannot remove a client, so the operator's delete answers 500 on it", name)
-			}
-		})
-	}
-}
-
 // SQLite delete removes AIK, hardware ID and client row;
 // a repeat delete reports ErrAIKNotFound.
 func TestSQLiteAIKDeleteRemovesTheClient(t *testing.T) {

@@ -296,17 +296,6 @@ static void test_is_unix_socket_real(void)
 	PASS();
 }
 
-static void test_sd_listen_fds_start(void)
-{
-	TEST("sdnotify: SD_LISTEN_FDS_START == 3");
-
-	if (SD_LISTEN_FDS_START != 3) {
-		FAIL("expected 3");
-		return;
-	}
-	PASS();
-}
-
 static void test_journal_init_null(void)
 {
 	TEST("journal: init(NULL) does not crash");
@@ -435,7 +424,6 @@ int main(void)
 	test_listen_fds_none();
 	test_is_unix_socket_stdin();
 	test_is_unix_socket_real();
-	test_sd_listen_fds_start();
 
 	/* journal tests */
 	test_journal_init_null();

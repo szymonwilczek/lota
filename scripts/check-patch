@@ -1252,6 +1252,18 @@ check_package_manifests() {
     fi
 }
 
+check_doc_references() {
+    local out
+
+    if out=$(make check-doc-references 2>&1); then
+        pass "doc-references"
+    else
+        printf '%s\n' "$out" | grep -v '^make'
+        fail "doc-references" \
+             "a comment or page names a symbol or command the tree does not have."
+    fi
+}
+
 main() {
     local base=""
     local head="HEAD"
@@ -1327,6 +1339,7 @@ main() {
     check_syzkaller_matrix "${changed_files[@]}"
     check_header_paths "${changed_files[@]}"
     check_package_manifests "${changed_files[@]}"
+    check_doc_references
     check_helm_chart "${changed_files[@]}"
     check_container_images "${changed_files[@]}"
 

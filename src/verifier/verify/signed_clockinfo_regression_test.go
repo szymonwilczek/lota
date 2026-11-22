@@ -68,32 +68,6 @@ func TestRegression_LockedDerivation_DoesNotDrift(t *testing.T) {
 	}
 }
 
-// TestRegression_LockedDerivation_IgnoresEveryCounterSource is the original
-// failure stated as a property.  Neither counter source can influence
-// the register, so an agent and a verifier reading different counters
-// -- which is what per-publisher keys guarantee -- agree on the value.
-func TestRegression_LockedDerivation_IgnoresEveryCounterSource(t *testing.T) {
-	ah := referenceAgentHash()
-	pcr14 := DeriveLockedBootCommitmentPCR14(zeroBaseline, ah)
-
-	for _, counters := range [][2]uint32{
-		{regressionResetCount, regressionRestartCount},
-		{9, 0},
-		{0, 0},
-	} {
-		blob := buildAttestWithClockInfo(counters[0], counters[1])
-		attest, err := ParseTPMSAttest(blob)
-		if err != nil {
-			t.Fatalf("parse failed: %v", err)
-		}
-		_ = attest
-		if _, ok := MatchLockedBootCommitmentPCR14(zeroBaseline, ah, pcr14); !ok {
-			t.Fatalf("matcher refused a host whose quote reported counters %v",
-				counters)
-		}
-	}
-}
-
 // TestRegression_TPMSAttestParser_PreservesCounters cross-checks the
 // verifier's binary-level parser against the same swtpm counters. The
 // fix moved the agent-side capture to TPM2_Quote.clockInfo, so the

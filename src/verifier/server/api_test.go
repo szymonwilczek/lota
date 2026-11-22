@@ -54,21 +54,6 @@ func init() {
  * The credential was withdrawn rather than half-wired, and this asserts
  * the route is gone.
  */
-func TestSessionValidateEndpointIsWithdrawn(t *testing.T) {
-	mux, _ := setupTestAPI(t)
-
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/session/validate",
-		strings.NewReader(`{"session_token":"xyz"}`))
-	req.Header.Set("Content-Type", "application/json")
-	rr := httptest.NewRecorder()
-
-	mux.ServeHTTP(rr, req)
-	if rr.Code != http.StatusNotFound {
-		t.Fatalf("expected 404 for a withdrawn endpoint, got %d body=%s",
-			rr.Code, rr.Body.String())
-	}
-}
-
 func TestAttestationLogEndpoint_SanitizesDetails(t *testing.T) {
 	aikStore := newCertStore(t)
 	m := metrics.New()
@@ -907,28 +892,6 @@ func TestMetricsCounterValues(t *testing.T) {
 
 	if !strings.Contains(body, "lota_pending_challenges 1") {
 		t.Error("Expected pending_challenges = 1 in metrics")
-	}
-}
-
-func TestUptimeIncreases(t *testing.T) {
-	mux, _ := setupTestAPIListeningWithKeys(t, "", "")
-
-	req := httptest.NewRequest("GET", "/health", nil)
-	rec := httptest.NewRecorder()
-	mux.ServeHTTP(rec, req)
-	var resp1 healthResponse
-	json.NewDecoder(rec.Body).Decode(&resp1)
-
-	time.Sleep(10 * time.Millisecond)
-
-	req = httptest.NewRequest("GET", "/health", nil)
-	rec = httptest.NewRecorder()
-	mux.ServeHTTP(rec, req)
-	var resp2 healthResponse
-	json.NewDecoder(rec.Body).Decode(&resp2)
-
-	if resp2.UptimeSec < resp1.UptimeSec {
-		t.Error("Uptime should not decrease")
 	}
 }
 

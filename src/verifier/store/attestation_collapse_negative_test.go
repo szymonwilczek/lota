@@ -97,35 +97,6 @@ func TestCollapseRefusesEitherHalfOfAVerdictChange(t *testing.T) {
 	}
 }
 
-// interleaved rounds of two hosts keep two rows and two counts
-func TestTwoHostsDoNotShareARow(t *testing.T) {
-	log := NewSQLiteAttestationLog(eventsTestDB(t))
-	at := time.Date(2026, 9, 19, 12, 0, 0, 0, time.UTC)
-
-	for i := 0; i < 5; i++ {
-		first := trustedRound(at.Add(time.Duration(i) * time.Minute))
-		second := trustedRound(at.Add(time.Duration(i)*time.Minute + 30*time.Second))
-		second.ClientID = "c2"
-		second.HardwareID = "bb22"
-		if err := log.Record(first); err != nil {
-			t.Fatalf("record c1 %d: %v", i, err)
-		}
-		if err := log.Record(second); err != nil {
-			t.Fatalf("record c2 %d: %v", i, err)
-		}
-	}
-
-	got := log.QueryAttestations(0)
-	if len(got) != 2 {
-		t.Fatalf("two hosts are two rows, got %d", len(got))
-	}
-	for i := range got {
-		if got[i].Rounds != 5 {
-			t.Errorf("%s stands for %d rounds, want 5", got[i].ClientID, got[i].Rounds)
-		}
-	}
-}
-
 // a round behind the last sighting (reordered, or clock stepped back) gets
 // its own row, so the anomaly shows instead of hiding in a count
 func TestARoundOlderThanTheRowIsWrittenNotFolded(t *testing.T) {

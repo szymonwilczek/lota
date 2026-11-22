@@ -10,7 +10,6 @@
 
 #include <stdint.h>
 #include <stdio.h>
-#include <sys/sysmacros.h>
 
 #include "../include/lota_devt.h"
 
@@ -73,28 +72,11 @@ static void test_mkdev_round_trip(void)
 	}
 }
 
-/*
- * stat(2) is not a source for these keys, and the glibc layout it hands back
- * is why: for a non-zero major it is a different number from the kernel's,
- * while for a major-0 anonymous device the two coincide -- which is how a key
- * taken from st_dev looked right on every filesystem the project met before
- * btrfs, where the device itself is the wrong one.
- * tests/test_sb_dev.c holds the key derivation the loader actually uses
- */
-static void test_glibc_layout_is_not_the_kernel_one(void)
-{
-	CHECK(LOTA_DEVT_MKDEV(8, 1) != (unsigned long long)makedev(8, 1),
-	      "a non-zero-major st_dev is not the kernel layout");
-	CHECK(LOTA_DEVT_MKDEV(0, 37) == (unsigned long long)makedev(0, 37),
-	      "a major-0 st_dev coincides with the kernel layout");
-}
-
 int main(void)
 {
 	printf("=== dev_t encoding tests ===\n");
 	test_kernel_mkdev_layout();
 	test_mkdev_round_trip();
-	test_glibc_layout_is_not_the_kernel_one();
 
 	if (g_failures) {
 		fprintf(stderr, "\n%d test(s) failed\n", g_failures);

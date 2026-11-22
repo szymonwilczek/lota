@@ -14,7 +14,6 @@ import (
 	"crypto/sha256"
 	"crypto/x509"
 	"encoding/binary"
-	"encoding/hex"
 	"fmt"
 	"strings"
 	"testing"
@@ -366,11 +365,6 @@ func marshalRSAPublicKey(pub *rsa.PublicKey) []byte {
 		panic("failed to marshal public key: " + err.Error())
 	}
 	return der
-}
-
-func persistentClientID(challengeID string) string {
-	hwID := sha256.Sum256([]byte(challengeID))
-	return hex.EncodeToString(hwID[:])
 }
 
 // creates a Verifier with default policy for testing

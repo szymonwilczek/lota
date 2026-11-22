@@ -476,6 +476,18 @@ jobs:
       - name: Compare the two package manifests
         run: make check-package-manifests
 
+  doc-references:
+    name: documentation references
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Check names in comments and pages
+        run: make check-doc-references
+
   syzkaller-matrix:
     name: syzkaller hook matrix
     runs-on: ubuntu-24.04

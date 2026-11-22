@@ -102,6 +102,13 @@ type ClientDeleter interface {
 	DeleteClient(clientID string) error
 }
 
+var (
+	_ ClientDeleter = (*FileStore)(nil)
+	_ ClientDeleter = (*MemoryStore)(nil)
+	_ ClientDeleter = (*SQLiteAIKStore)(nil)
+	_ ClientDeleter = (*PostgresAIKStore)(nil)
+)
+
 // optional interface for database-backed stores to avoid loading all clients
 // into memory for API list endpoints.
 type PaginatedClientLister interface {

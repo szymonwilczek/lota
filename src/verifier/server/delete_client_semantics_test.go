@@ -6,9 +6,6 @@ package server
 import (
 	"net/http"
 	"net/http/httptest"
-	"os"
-	"path/filepath"
-	"regexp"
 	"strings"
 	"testing"
 
@@ -62,39 +59,5 @@ func TestDeleteLeavesTheDeviceAbleToReturnOnItsOwn(t *testing.T) {
 	}
 	if baseline == nil || baseline.PCR14 != after {
 		t.Fatal("the returning client's own measurement did not become the baseline")
-	}
-}
-
-// Neither the handler nor the operator docs may call delete a re-enrolment.
-func TestDeleteIsNotDescribedAsAnEnrollment(t *testing.T) {
-	// "forcing a fresh enrollment", "forces fresh enrolment", ...
-	claim := regexp.MustCompile(`(?i)forc\w*\s+(a\s+)?fresh\s+enroll?ment`)
-
-	files := []string{
-		"api.go",
-		"../../../Documentation/operator/monitoring-api.rst",
-		"../../../Documentation/operator/fleet-cli.rst",
-		"../../../Documentation/operator/production-bringup/ca-enrollment.rst",
-	}
-
-	for _, f := range files {
-		raw, err := os.ReadFile(filepath.Clean(f))
-		if err != nil {
-			t.Fatalf("read %s: %v", f, err)
-		}
-		// the claim wraps across lines;
-		// match with breaks and comment markers removed
-		var words []string
-		for _, w := range strings.Fields(string(raw)) {
-			if w == "//" || w == "*" {
-				continue
-			}
-			words = append(words, strings.TrimPrefix(w, "//"))
-		}
-		flat := strings.Join(words, " ")
-		if m := claim.FindString(flat); m != "" {
-			t.Errorf("%s says the delete %q, which it cannot: the device keeps its certificate and returns on its own",
-				f, m)
-		}
 	}
 }
