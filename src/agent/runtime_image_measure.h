@@ -73,6 +73,7 @@ struct lota_rt_open_identity {
 	dev_t dev;
 	ino_t ino;
 	unsigned long fs_magic; /* fstatfs() f_type of the fd, 0 if unread */
+	int fs_magic_err; /* fstatfs() errno, 0 if fs_magic was read */
 	uint64_t size; /* with mtime, tells a replaced file from a cached one */
 	int64_t mtime_sec;
 	int64_t mtime_nsec;

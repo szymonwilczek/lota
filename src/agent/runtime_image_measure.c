@@ -394,6 +394,8 @@ int lota_rt_measure_entry_verity(pid_t pid,
 			/* off the fd: the path may have moved since open */
 			if (fstatfs(fd, &sfs) == 0)
 				opened->fs_magic = (unsigned long)sfs.f_type;
+			else
+				opened->fs_magic_err = errno;
 		}
 	}
 
@@ -749,6 +751,12 @@ static int rt_measure_object(pid_t pid, const struct lota_rt_map_entry *entry,
 	}
 	if (!rt_err_is_unmeasurable(ret))
 		return ret;
+
+	/* no filesystem type, no road: say why, the verity refusal hides it */
+	if (m->opened.fs_magic_err != 0) {
+		m->road_err = -m->opened.fs_magic_err;
+		return ret;
+	}
 
 	/* a running executable is unwritable already */
 	road = lota_rt_identity_road(m->role, 0, m->opened.fs_magic,
