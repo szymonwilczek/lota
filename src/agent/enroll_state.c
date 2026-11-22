@@ -103,7 +103,7 @@ int enroll_state_load_path(const char *path, struct enroll_state *out)
 		return -EIO; /* too short to carry even a magic and a version */
 	if (st.magic != LOTA_ENROLL_STATE_MAGIC)
 		return -EINVAL; /* not an enrollment record at all */
-	/* version before length: an older record is short because it is old */
+	/* version before length: another version has its own length */
 	if (st.version != LOTA_ENROLL_STATE_VERSION)
 		return -ENOTSUP; /* a version this build does not read */
 	if ((size_t)n != sizeof(st))

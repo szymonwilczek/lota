@@ -55,9 +55,9 @@ func TestTruncatedReportIsNotAnOldAgent(t *testing.T) {
 			reason:  "report_malformed",
 		},
 		{
-			name: "an agent on wire 1.0.0",
+			name: "an agent on another wire",
 			cut: func(report []byte) []byte {
-				binary.LittleEndian.PutUint32(report[4:8], 0x00010000)
+				binary.LittleEndian.PutUint32(report[4:8], types.ReportVersion+0x00010000)
 				return report
 			},
 			verdict: codeOldVersion,

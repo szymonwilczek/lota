@@ -21,7 +21,7 @@
  */
 struct lota_report_header {
 	uint32_t magic; /* LOTA_MAGIC */
-	uint32_t version; /* LOTA_VERSION */
+	uint32_t version; /* LOTA_REPORT_VERSION */
 
 	uint32_t report_size; /* Total size including variable data */
 	uint32_t flags; /* Report flags */

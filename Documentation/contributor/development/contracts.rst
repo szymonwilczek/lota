@@ -28,11 +28,7 @@ A breaking layout change -- adding, removing or reordering a field, or adding a
 section -- bumps the version in ``include/lota.h`` and ``ReportVersion`` in
 ``types/report.go`` together, the major for the report and the minor for the
 verifier's result. That is a flag-day either way: roll the verifier tier first,
-then the agents. Version 2 dropped the always-empty ``ek_certificate`` field
-(the Privacy CA model means the verifier never sees an EK) and made the ESRT
-section mandatory; 2.1 shortened the result from 56 bytes to 24 by removing the
-session token, which was issued to every attested host and could be presented
-by none.
+then the agents.
 
 The result travels the same way as the report and under the same version. It is
 ``struct verifier_result`` in ``src/agent/net.h``, serialized by
@@ -510,10 +506,10 @@ IPC token payload budget
 Signed token returned over the local socket (``struct lota_ipc_token`` in
 ``include/lota_ipc.h``, built by ``src/agent/ipc.c``, parsed by the SDK in
 ``src/sdk/lota_gaming.c``) must fit ``LOTA_IPC_MAX_PAYLOAD``. Every protected
-PID costs four bytes in the PID list plus a 32-byte kernel image digest in a
-v2 token, so ``LOTA_IPC_TOKEN_MAX_PROTECT_PIDS`` is derived from the payload
-budget left after the header, a maximum quote and a maximum signature -- it is
-the real per-token limit, not a round number.
+PID costs four bytes in the PID list plus a 32-byte kernel image digest, so
+``LOTA_IPC_TOKEN_MAX_PROTECT_PIDS`` is derived from the payload budget left
+after the header, a maximum quote and a maximum signature -- it is the real
+per-token limit, not a round number.
 
 Both sides of the socket take the cap from that header, so the agent and the
 SDK parser stay in lockstep; changing the payload size or the per-PID cost
@@ -533,7 +529,7 @@ follow.
 
 The maximum a relying party sizes a receive buffer from --
 ``LOTA_TOKEN_MAX_SIZE``, ``TokenMaxSize`` in Go -- covers a full token at that
-cap *including* the per-PID image digests a v2 token carries. A maximum that
+cap *including* the per-PID image digests. A maximum that
 counts only the PID list describes a token nobody sends.
 
 Installer probes and agent gates

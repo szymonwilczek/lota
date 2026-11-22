@@ -96,10 +96,8 @@ A relying party's test suite has to build tokens the way an agent would, and
 the fields a token binds under its quote are computed, not guessed. The server
 SDK exports each of those folds, so nothing downstream re-derives one by hand:
 
-* ``server.ComputeRuntimeProtectDigest(pids)`` for a v1 token built with
-  ``SerializeToken``,
-* ``server.ComputeRuntimeProtectDigestV2(pids, imageDigests)`` for a v2 token
-  built with ``SerializeTokenV2``,
+* ``server.ComputeRuntimeProtectDigest(pids, imageDigests)`` for a token built
+  with ``SerializeToken``,
 * ``server.ComputeTokenQuoteNonce(...)`` for the value the quote's extra data
   has to carry.
 

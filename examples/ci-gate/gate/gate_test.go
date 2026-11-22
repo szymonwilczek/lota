@@ -57,7 +57,7 @@ func mintToken(t *testing.T, opts tokenOpts) []byte {
 	validUntil := uint64(time.Now().Add(opts.validFor).Unix())
 	pcrMask := uint32(0x4083)
 	policyDigest := [32]byte{0xA1, 0xB2, 0xC3}
-	runtimeDigest := emptyRuntimeProtectDigest()
+	runtimeDigest := verifysdk.ComputeRuntimeProtectDigest(nil, nil)
 
 	pcrDigest := make([]byte, 32)
 	for i := range pcrDigest {
@@ -79,28 +79,11 @@ func mintToken(t *testing.T, opts tokenOpts) []byte {
 	}
 
 	token, err := verifysdk.SerializeToken(validUntil, opts.flags, opts.nonce,
-		0x0014, 0x000B, pcrMask, policyDigest, runtimeDigest, nil, attest, sig)
+		0x0014, 0x000B, pcrMask, policyDigest, runtimeDigest, 0, nil, nil, attest, sig)
 	if err != nil {
 		t.Fatalf("serialize: %v", err)
 	}
 	return token
-}
-
-// emptyRuntimeProtectDigest is the canonical digest of an empty protected PID set,
-// which is what an agent with nothing under runtime protection puts in the token.
-// The v1 form of this helper is internal to the SDK,
-// so a caller minting synthetic tokens reproduces it;
-// caller verifying them never needs to.
-func emptyRuntimeProtectDigest() [32]byte {
-	h := sha256.New()
-	_, _ = h.Write([]byte("lota-runtime-protect-pids:v1\x00"))
-	var le [4]byte
-	binary.LittleEndian.PutUint32(le[:], 0)
-	_, _ = h.Write(le[:])
-
-	var out [32]byte
-	copy(out[:], h.Sum(nil))
-	return out
 }
 
 // fakeTPMSAttest builds the TPMS_ATTEST layout the verifier parses,

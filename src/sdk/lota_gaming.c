@@ -882,7 +882,7 @@ int lota_get_token(struct lota_client *client, const uint8_t *nonce,
 		return LOTA_ERR_PROTOCOL;
 	if (token->protect_pid_count > LOTA_IPC_TOKEN_MAX_PROTECT_PIDS)
 		return LOTA_ERR_PROTOCOL;
-	if (token->runtime_protect_version > LOTA_IPC_RUNTIME_PROTECT_V2)
+	if (token->runtime_protect_version != LOTA_IPC_RUNTIME_PROTECT_V1)
 		return LOTA_ERR_PROTOCOL;
 
 	/* validate sizes */
@@ -890,10 +890,8 @@ int lota_get_token(struct lota_client *client, const uint8_t *nonce,
 	    ipc_token_hdr.sig_size > LOTA_IPC_TOKEN_MAX_SIG)
 		return LOTA_ERR_PROTOCOL;
 
-	size_t image_list_size = 0;
-	if (token->runtime_protect_version == LOTA_IPC_RUNTIME_PROTECT_V2)
-		image_list_size = (size_t)token->protect_pid_count *
-				  LOTA_IPC_TOKEN_IMAGE_DIGEST_SIZE;
+	size_t image_list_size = (size_t)token->protect_pid_count *
+				 LOTA_IPC_TOKEN_IMAGE_DIGEST_SIZE;
 
 	size_t expected_len = LOTA_IPC_TOKEN_HEADER_SIZE +
 			      ipc_token_hdr.pid_list_size + image_list_size +
@@ -920,7 +918,7 @@ int lota_get_token(struct lota_client *client, const uint8_t *nonce,
 		}
 	}
 
-	/* copy the v2 per-PID kernel image digests if present */
+	/* copy the per-PID kernel image digests */
 	if (image_list_size > 0) {
 		token->protected_image_digests =
 			calloc(token->protect_pid_count,
@@ -998,17 +996,14 @@ size_t lota_token_serialized_size(const struct lota_token *token)
 	if (token->protect_pid_count > LOTA_TOKEN_MAX_PROTECT_PIDS)
 		return 0;
 
-	if (token->runtime_protect_version == LOTA_RUNTIME_PROTECT_V2 &&
-	    token->protect_pid_count > 0 && !token->protected_image_digests)
+	if (token->protect_pid_count > 0 && !token->protected_image_digests)
 		return 0;
 
 	total = LOTA_TOKEN_HEADER_SIZE +
 		(size_t)token->protect_pid_count * sizeof(uint32_t) +
+		(size_t)token->protect_pid_count *
+			LOTA_TOKEN_IMAGE_DIGEST_SIZE +
 		token->attest_size + token->signature_len;
-
-	if (token->runtime_protect_version == LOTA_RUNTIME_PROTECT_V2)
-		total += (size_t)token->protect_pid_count *
-			 LOTA_TOKEN_IMAGE_DIGEST_SIZE;
 
 	/* wire.total_size is uint16_t on wire; reject impossible encodings */
 	if (total > 0xFFFFu)
@@ -1027,8 +1022,7 @@ int lota_token_serialize(const struct lota_token *token, uint8_t *buf,
 	 * Caller that zeroes its struct and forgets the field would otherwise
 	 * get token every parser refuses, and would only find out at the far end
 	 */
-	if (token->runtime_protect_version < LOTA_RUNTIME_PROTECT_V1 ||
-	    token->runtime_protect_version > LOTA_RUNTIME_PROTECT_V2)
+	if (token->runtime_protect_version != LOTA_RUNTIME_PROTECT_V1)
 		return LOTA_ERR_INVALID_ARG;
 
 	size_t total = lota_token_serialized_size(token);
@@ -1078,9 +1072,8 @@ int lota_token_serialize(const struct lota_token *token, uint8_t *buf,
 		}
 	}
 
-	/* write the v2 per-PID kernel image digests */
-	if (token->runtime_protect_version == LOTA_RUNTIME_PROTECT_V2 &&
-	    token->protect_pid_count > 0 && token->protected_image_digests) {
+	/* write the per-PID kernel image digests */
+	if (token->protect_pid_count > 0 && token->protected_image_digests) {
 		size_t image_bytes = (size_t)token->protect_pid_count *
 				     LOTA_TOKEN_IMAGE_DIGEST_SIZE;
 		memcpy(buf + off, token->protected_image_digests, image_bytes);

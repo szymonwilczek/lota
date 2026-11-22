@@ -371,7 +371,7 @@ static int build_attestation_report(const struct verifier_challenge *challenge,
 	memset(report, 0, sizeof(*report));
 
 	report->header.magic = LOTA_MAGIC;
-	report->header.version = LOTA_VERSION;
+	report->header.version = LOTA_REPORT_VERSION;
 	report->header.report_size = sizeof(*report);
 
 	/* nonce from challenge */

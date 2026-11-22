@@ -40,16 +40,14 @@ extern "C" {
  *   136     2     pid_list_size  (bytes, must be protect_pid_count * 4)
  *   138     2     attest_size    (TPMS_ATTEST blob size)
  *   140     2     sig_size       (TPM signature size)
- *   142     2     runtime_protect_version (1 = PID-set only,
- *                                          2 = PID-set + kernel image digests)
+ *   142     2     runtime_protect_version (1 = PID-set + kernel image digests)
  *   ---     ---   --------------------------------
  *   144     var   protected_pids[protect_pid_count] (little-endian uint32)
  *   144+P   var   protected_image_digests[protect_pid_count][32]
- *                         (present only when runtime_protect_version == 2)
  *   144+P+I var   attest_data[attest_size]
  *   ...     var   signature[sig_size]
  *
- * In v2 the runtime_protect_digest binds, per PID, the kernel-anchored
+ * The runtime_protect_digest binds, per PID, the kernel-anchored
  * runtime image digest carried in protected_image_digests, so the quote
  * attests what code each protected process is running, not just its
  * identity. The image digests are authenticated transitively: a verifier
@@ -59,7 +57,7 @@ extern "C" {
  * Maximum token size: LOTA_TOKEN_MAX_SIZE below.
  */
 #define LOTA_TOKEN_MAGIC 0x4B544F4C /* "LOTK" in memory (little-endian) */
-#define LOTA_TOKEN_VERSION 0x0003
+#define LOTA_TOKEN_VERSION 0x0001
 #define LOTA_TOKEN_HEADER_SIZE 144
 /*
  * Protected-PID cap: LOTA_IPC_TOKEN_MAX_PROTECT_PIDS from the uninstalled
@@ -70,15 +68,14 @@ extern "C" {
 #define LOTA_TOKEN_IMAGE_DIGEST_SIZE 32
 
 /* runtime_protect_version values */
-#define LOTA_RUNTIME_PROTECT_V1 1 /* PID set identity only */
-#define LOTA_RUNTIME_PROTECT_V2 2 /* PID set + per-PID kernel image digest */
+#define LOTA_RUNTIME_PROTECT_V1 1 /* PID set + per-PID kernel image digest */
 
 #define LOTA_TOKEN_MAX_IMAGE_LIST_SIZE \
 	(LOTA_TOKEN_MAX_PROTECT_PIDS * LOTA_TOKEN_IMAGE_DIGEST_SIZE)
 
 /*
  * Largest token that can reach a relying party: the header, a full protected
- * PID list, the per-PID image digests a v2 token carries for that same list,
+ * PID list, the per-PID image digests for that same list,
  * and a maximum quote plus signature. A receive buffer sized from this holds
  * any token an agent can produce.
  */
@@ -105,10 +102,10 @@ struct lota_token_wire {
 	/* 136   2   pid_list_size (protect_pid_count * sizeof(uint32_t)) */
 	/* 138   2   attest_size  (TPMS_ATTEST blob size) */
 	/* 140   2   sig_size     (TPM signature size) */
-	/* 142   2   runtime_protect_version (1 = PID set, 2 = + image) */
+	/* 142   2   runtime_protect_version (1 = PID set + image) */
 	/* ---   --- ----------------------------------- */
 	/* 144   var protected_pids[protect_pid_count] */
-	/* 144+P var protected_image_digests[protect_pid_count][32] (v2 only) */
+	/* 144+P var protected_image_digests[protect_pid_count][32] */
 	/* ...   var attest_data[attest_size] */
 	/* ...   var signature[sig_size] */
 
@@ -130,8 +127,8 @@ struct lota_token_wire {
 	uint16_t sig_size;
 	uint16_t runtime_protect_version;
 	/*
-	 * followed by protected_pids[], then (v2 only)
-	 * protected_image_digests[], then attest_data[] and signature[]
+	 * followed by protected_pids[], protected_image_digests[],
+	 * attest_data[] and signature[]
 	 */
 } __attribute__((packed));
 

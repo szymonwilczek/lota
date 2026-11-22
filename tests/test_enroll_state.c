@@ -83,26 +83,25 @@ static void test_missing_is_enoent(void)
 	CHECK(ret == -ENOENT, "absent state load returns -ENOENT");
 }
 
-static void test_rejects_v1_record(void)
+static void test_rejects_other_version_record(void)
 {
-	/* record written before the token field existed:
-	 * version 1, ending where enroll_token begins */
-	const size_t v1_size = offsetof(struct enroll_state, enroll_token);
+	/* a record at another version need not match this layout */
+	const size_t short_size = offsetof(struct enroll_state, enroll_token);
 	const char *path = tmp_path();
 	struct enroll_state in, out;
 	int fd;
 
 	memset(&in, 0, sizeof(in));
 	in.magic = LOTA_ENROLL_STATE_MAGIC;
-	in.version = 1;
+	in.version = LOTA_ENROLL_STATE_VERSION + 1;
 	in.ca_port = 8444;
 	snprintf(in.ca_server, sizeof(in.ca_server), "ca.example");
 
 	fd = open(path, O_WRONLY | O_CREAT | O_TRUNC, 0600);
-	CHECK(fd >= 0, "open v1 record");
+	CHECK(fd >= 0, "open other-version record");
 	if (fd >= 0) {
-		CHECK(write(fd, &in, v1_size) == (ssize_t)v1_size,
-		      "write v1 record");
+		CHECK(write(fd, &in, short_size) == (ssize_t)short_size,
+		      "write other-version record");
 		close(fd);
 	}
 
@@ -116,7 +115,7 @@ static void test_rejects_v1_record(void)
 	CHECK(fd >= 0, "reopen for short current-version record");
 	if (fd >= 0) {
 		in.version = LOTA_ENROLL_STATE_VERSION;
-		CHECK(write(fd, &in, v1_size) == (ssize_t)v1_size,
+		CHECK(write(fd, &in, short_size) == (ssize_t)short_size,
 		      "write truncated current record");
 		close(fd);
 	}
@@ -285,7 +284,7 @@ int main(void)
 	test_either_field_alone_is_an_endpoint();
 	test_renew_anchor_prefers_the_configured_one();
 	test_roundtrip();
-	test_rejects_v1_record();
+	test_rejects_other_version_record();
 	test_missing_is_enoent();
 	test_record_presence();
 	test_rejects_bad_magic();

@@ -4,7 +4,7 @@
 //
 // Per-token protected-PID cap must reflect what actually fits the IPC payload:
 // every protected PID costs its 4-byte value plus a 32-byte kernel image digest
-// in a v2 token, on top of the header, a maximum quote and a maximum signature.
+// in a token, on top of the header, a maximum quote and a maximum signature.
 //
 // If the advertised cap is larger than what fits, the runtime count guard can
 // never fire before the payload overflows, so token issuance fails opaquely
@@ -24,12 +24,12 @@
 	(LOTA_IPC_TOKEN_HEADER_SIZE + LOTA_IPC_TOKEN_MAX_ATTEST + \
 	 LOTA_IPC_TOKEN_MAX_SIG)
 
-/* full protected set in the worst-case (v2) token must fit the payload */
+/* full protected set in the worst-case token must fit the payload */
 _Static_assert(LOTA_IPC_TOKEN_FIXED_SIZE +
 			       (size_t)LOTA_IPC_TOKEN_MAX_PROTECT_PIDS *
 				       LOTA_IPC_TOKEN_PROTECT_ENTRY_SIZE <=
 		       LOTA_IPC_MAX_PAYLOAD,
-	       "worst-case v2 token must fit the IPC payload");
+	       "worst-case token must fit the IPC payload");
 
 /* cap must be the binding limit: one more PID must overflow the payload */
 _Static_assert(LOTA_IPC_TOKEN_FIXED_SIZE +
@@ -78,10 +78,10 @@ int main(void)
 		fail = 1;
 	}
 
-	/* LOTA_TOKEN_MAX_SIZE must fit a full v2 token */
+	/* LOTA_TOKEN_MAX_SIZE must fit a full token */
 	if ((size_t)LOTA_TOKEN_MAX_SIZE < LOTA_TOKEN_WORST_CASE_SIZE) {
 		printf("FAIL: advertised max %u bytes is below the %zu-byte "
-		       "worst-case v2 token\n",
+		       "worst-case token\n",
 		       (unsigned)LOTA_TOKEN_MAX_SIZE,
 		       (size_t)LOTA_TOKEN_WORST_CASE_SIZE);
 		fail = 1;

@@ -2,7 +2,7 @@
 # Regenerate with `make abi-baseline`; the diff is the review signal.
 # See Documentation/contributor/development/api-stability.rst
 macro LOTA_AC_MAGIC                            = 1279345480
-macro LOTA_AC_VERSION                          = 3
+macro LOTA_AC_VERSION                          = 1
 macro LOTA_AC_HEADER_SIZE                      = 110
 macro LOTA_AC_MAX_TOKEN                        = 1608
 macro LOTA_AC_MAX_HEARTBEAT                    = 1718
@@ -11,8 +11,7 @@ macro LOTA_AC_SESSION_ID_SIZE                  = 16
 macro LOTA_AC_GAME_HASH_SIZE                   = 32
 macro LOTA_AC_RUNTIME_MEASURE_SIZE             = 32
 macro LOTA_AC_DOMAIN_VERSION_V1                = 1
-macro LOTA_AC_DOMAIN_VERSION_V2                = 2
-macro LOTA_AC_DOMAIN_VERSION_CURRENT           = 2
+macro LOTA_AC_DOMAIN_VERSION_CURRENT           = 1
 macro LOTA_AC_DEFAULT_HEARTBEAT_SEC            = 30
 macro LOTA_AC_FILE_EAC                         = "lota-ac-eac.bin"
 macro LOTA_AC_FILE_BATTLEYE                    = "lota-ac-battleye.bin"
@@ -166,13 +165,12 @@ struct lota_snapshot_wire_hdr size=16 align=1
 	flags                            off=8 size=4
 	token_size                       off=12 size=4
 macro LOTA_TOKEN_MAGIC                         = 1263816524
-macro LOTA_TOKEN_VERSION                       = 3
+macro LOTA_TOKEN_VERSION                       = 1
 macro LOTA_TOKEN_HEADER_SIZE                   = 144
 macro LOTA_TOKEN_MAX_PROTECT_PIDS              = 181
 macro LOTA_TOKEN_MAX_PID_LIST_SIZE             = 724
 macro LOTA_TOKEN_IMAGE_DIGEST_SIZE             = 32
 macro LOTA_RUNTIME_PROTECT_V1                  = 1
-macro LOTA_RUNTIME_PROTECT_V2                  = 2
 macro LOTA_TOKEN_MAX_IMAGE_LIST_SIZE           = 5792
 macro LOTA_TOKEN_MAX_SIZE                      = 8196
 struct lota_token_wire size=144 align=1

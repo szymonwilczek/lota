@@ -23,12 +23,11 @@
 /* Protocol constants */
 #define LOTA_IPC_MAGIC 0x4C4F5441 /* "LOTA" */
 /*
- * Version 2 adds SET_PROFILE.
  * Agent refuses any other version outright:
  * this header is internal and the agent and the SDK that speaks to it ship
  * together, so there is nothing to negotiate with.
  */
-#define LOTA_IPC_VERSION 2
+#define LOTA_IPC_VERSION 1
 /*
  * Practical per-frame payload cap enforced by the agent socket parser.
  * The largest production payload is GET_TOKEN: token header, protected PID
@@ -271,14 +270,13 @@ struct lota_ipc_token {
 	uint64_t runtime_protect_epoch; /* Monotonic runtime protection mutation
 					   id */
 	uint16_t pid_list_size; /* Bytes for protected_pids[] */
-	uint16_t runtime_protect_version; /* 1 = PID set, 2 = + image digests */
+	uint16_t runtime_protect_version; /* 1 = PID set + image digests */
 
 	/*
 	 * Variable-length data follows:
 	 *   - protected_pids[protect_pid_count] (little-endian uint32)
 	 *   - protected_image_digests[protect_pid_count][32]
-	 *         (present only when runtime_protect_version == 2)
-	 *   - attest_data[attest_size]  (TPMS_ATTEST)
+		 *   - attest_data[attest_size]  (TPMS_ATTEST)
 	 *   - signature[sig_size]       (RSA signature)
 	 */
 } __attribute__((packed));
@@ -288,7 +286,7 @@ struct lota_ipc_token {
 #define LOTA_IPC_TOKEN_MAX_SIG 512
 #define LOTA_IPC_TOKEN_IMAGE_DIGEST_SIZE 32
 /*
- * Worst-case bytes one protected PID contributes to a v2 token:
+ * Worst-case bytes one protected PID contributes to a token:
  * its 4-byte value plus its 32-byte kernel image digest
  */
 #define LOTA_IPC_TOKEN_PROTECT_ENTRY_SIZE (4 + LOTA_IPC_TOKEN_IMAGE_DIGEST_SIZE)
@@ -307,12 +305,11 @@ struct lota_ipc_token {
 	(LOTA_IPC_TOKEN_MAX_PROTECT_PIDS * LOTA_IPC_TOKEN_IMAGE_DIGEST_SIZE)
 
 /* runtime_protect_version values (mirror of lota_token.h) */
-#define LOTA_IPC_RUNTIME_PROTECT_V1 1 /* PID set identity only */
-#define LOTA_IPC_RUNTIME_PROTECT_V2 \
-	2 /* PID set + per-PID kernel image digest */
+#define LOTA_IPC_RUNTIME_PROTECT_V1 \
+	1 /* PID set + per-PID kernel image digest */
 
 /*
- * Worst-case v2 token:
+ * Worst-case token:
  * the header, the full protected-PID list, the per-PID image-digest list,
  * and a maximum quote plus signature.
  * Protected-PID cap above is derived so this stays within LOTA_IPC_MAX_PAYLOAD

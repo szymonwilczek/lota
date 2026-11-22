@@ -154,9 +154,8 @@ to a new version node below the current one, for example ``LOTAGAMING_1.1
 { global: lota_new_call; } LOTAGAMING_1.0;``. A program built against the
 older node keeps running against the newer library.
 
-``lota_set_request_timeout()`` was added this way. Growing ``struct
-lota_connect_opts`` instead is an ABI break: an installed function takes it,
-so its layout is frozen.
+Growing ``struct lota_connect_opts`` instead is an ABI break: an installed
+function takes it, so its layout is frozen.
 
 Removing a function, renaming it, or changing its signature or the layout of a
 struct it takes is an ABI break. It bumps ``LOTA_ABI_MAJOR``, which changes
@@ -307,7 +306,7 @@ carries its version in the message:
      - Version constant
      - Rule
    * - Attestation report
-     - ``LOTA_VERSION_MAJOR`` / ``types.ReportVersion``
+     - ``LOTA_REPORT_VERSION_MAJOR`` / ``types.ReportVersion``
      - Exact match. The verifier refuses a report from a wire it was not
        built to parse rather than guessing at the layout of the message
        every trust decision rests on, so a layout change is a flag day for

@@ -1568,10 +1568,9 @@ static void handle_get_token(struct ipc_context *ctx, struct ipc_client *client,
 				 released == 1 ? "" : "s");
 	}
 
-	ret = lota_compute_runtime_protect_digest_v2(runtime_pids,
-						     image_digests,
-						     runtime_pid_count,
-						     runtime_protect_digest);
+	ret = lota_compute_runtime_protect_digest(runtime_pids, image_digests,
+						  runtime_pid_count,
+						  runtime_protect_digest);
 	if (ret < 0) {
 		lota_err("runtime protected PID digest computation failed: %s",
 			 strerror(-ret));
@@ -1596,7 +1595,7 @@ static void handle_get_token(struct ipc_context *ctx, struct ipc_client *client,
 	token->runtime_protect_epoch = g_agent.policy_protect_epoch;
 	token->protect_pid_count = runtime_pid_count;
 	token->pid_list_size = pid_list_size;
-	token->runtime_protect_version = LOTA_IPC_RUNTIME_PROTECT_V2;
+	token->runtime_protect_version = LOTA_IPC_RUNTIME_PROTECT_V1;
 
 	if (has_req)
 		memcpy(token->client_nonce, req_local.nonce, 32);
