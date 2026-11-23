@@ -18,6 +18,8 @@
 #include <stdio.h>
 #include <string.h>
 
+#include "../include/attestation.h"
+#include "../src/agent/config.h"
 #include "../src/agent/net.h"
 
 static int g_failures;
@@ -121,6 +123,50 @@ int main(void)
 	CHECK(strstr(net_result_str(21), "read") != NULL &&
 		      strstr(net_result_str(21), "version") == NULL,
 	      "verdict 21 says the report could not be read and does not advise an upgrade");
+
+	/*
+	 * an enforce refusal tells the host what to write and where: the line
+	 * the config parser takes, in the file the agent reads, and a reboot,
+	 * since a restart spends the boot's attestation
+	 */
+	{
+		static const uint32_t states[] = {
+			0, LOTA_REPORT_FLAG_BPF_ACTIVE
+		};
+		size_t i;
+
+		for (i = 0; i < sizeof(states) / sizeof(states[0]); i++) {
+			const char *t = net_verdict_str(17, states[i]);
+			char msg[128];
+
+			snprintf(msg, sizeof(msg),
+				 "verdict 17 (flags 0x%x) names mode = enforce "
+				 "in " LOTA_CONFIG_DEFAULT_PATH " and a reboot",
+				 states[i]);
+			CHECK(strstr(t, "mode = enforce") != NULL &&
+				      strstr(t, LOTA_CONFIG_DEFAULT_PATH) !=
+					      NULL &&
+				      strstr(t, "reboot") != NULL,
+			      msg);
+
+			snprintf(msg, sizeof(msg),
+				 "verdict 17 (flags 0x%x) names no other file, "
+				 "key or restart",
+				 states[i]);
+			CHECK(strstr(t, "agent.conf") == NULL &&
+				      strstr(t, "enforce = true") == NULL &&
+				      strstr(t, "restart lota-agent") == NULL,
+			      msg);
+		}
+	}
+
+	/* the report says whether the LSM was loaded; the sentence follows */
+	CHECK(strstr(net_verdict_str(17, LOTA_REPORT_FLAG_BPF_ACTIVE),
+		     "not enforcing") != NULL,
+	      "verdict 17 on a report with the LSM loaded says it is not enforcing");
+	CHECK(strstr(net_verdict_str(17, 0), "is loaded") == NULL &&
+		      strstr(net_verdict_str(17, 0), "not running") != NULL,
+	      "verdict 17 on a report without the LSM says the daemon is not running");
 
 	/* the default still exists for a code from a newer verifier */
 	CHECK(!is_named(FIRST_UNKNOWN_CODE),

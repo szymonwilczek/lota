@@ -31,6 +31,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 
+#include "attestation.h"
+#include "config.h"
 #include "journal.h"
 #include "lota.h"
 
@@ -896,10 +898,11 @@ const char *net_result_str(uint32_t result)
 		       "enforcement. Boot with module.sig_enforce=1, or a "
 		       "kernel built with CONFIG_MODULE_SIG_FORCE";
 	case VERIFY_ENFORCE_REQUIRED:
-		return "FAIL - The LOTA LSM is loaded on this host but is not "
-		       "enforcing, and the publisher's policy requires it to "
-		       "be. Set enforce = true in /etc/lota/agent.conf and "
-		       "restart lota-agent";
+		return "FAIL - The LOTA enforcement daemon is not enforcing "
+		       "on this host, and the publisher's policy requires it "
+		       "to. Set mode = enforce in " LOTA_CONFIG_DEFAULT_PATH
+		       ", keep lota-agent.service enabled, and reboot: "
+		       "stopping the agent spends this boot's attestation";
 	case VERIFY_IMA_APPRAISAL_REQUIRED:
 		return "FAIL - This host's kernel appraises no executable and "
 		       "the publisher's policy requires IMA appraisal. It is "
@@ -942,4 +945,24 @@ const char *net_result_str(uint32_t result)
 	default:
 		return "FAIL - Unknown error";
 	}
+}
+
+const char *net_verdict_str(uint32_t result, uint32_t report_flags)
+{
+	if (result != VERIFY_ENFORCE_REQUIRED)
+		return net_result_str(result);
+
+	/* BPF_ACTIVE is the daemon's answer that its LSM is loaded */
+	if (report_flags & LOTA_REPORT_FLAG_BPF_ACTIVE)
+		return "FAIL - The LOTA LSM is loaded on this host but is not "
+		       "enforcing, and the publisher's policy requires it to "
+		       "be. Set mode = enforce in " LOTA_CONFIG_DEFAULT_PATH
+		       " and reboot: stopping the agent spends this boot's "
+		       "attestation, so a restart does not bring it back";
+
+	return "FAIL - The LOTA enforcement daemon is not running on this "
+	       "host, or runs without its LSM, and the publisher's policy "
+	       "requires enforcement. Its journal (journalctl -u "
+	       "lota-agent) says why. Keep lota-agent.service enabled, set "
+	       "mode = enforce in " LOTA_CONFIG_DEFAULT_PATH ", and reboot";
 }
