@@ -8,7 +8,8 @@ Measuring a game with ``lota-bench``
 ``lota-bench`` (:ghsrc:`tools/lota-bench`) measures what LOTA costs a
 player: it samples the cost of a running game and of the LOTA services
 next to it, and writes the samples to a result file that can be shared
-and compared. It is a contributor tool, built from the tree and not
+and compared, and it summarises the frame times MangoHud logged for the
+same run. It is a contributor tool, built from the tree and not
 shipped in the packages.
 
 Building
@@ -121,6 +122,63 @@ The output file is created exclusively and is never overwritten. A run
 that fails before the result is complete removes the file, so a result
 file on disk is always a finished run.
 
+Frame times
+===========
+
+The cgroup files say what the game cost the machine; how smooth it ran
+comes from MangoHud, which runs inside the game and logs one row per
+frame. Because the log is written from inside, it reads the same whether
+the game is protected or not. Turn logging on in the MangoHud
+configuration or through ``MANGOHUD_CONFIG``:
+
+.. code-block:: console
+
+   $ MANGOHUD_CONFIG=output_folder=$HOME/mangologs,autostart_log=5,log_duration=600 \
+         mangohud ./game
+
+For a Steam title, put ``MANGOHUD_CONFIG=... mangohud %command%`` in the
+launch options. ``log_interval`` must stay at its default of ``0``: with
+an interval the log holds one row per interval, frame times between rows
+are lost, and ``lota-bench`` refuses the log. The log is summarised with:
+
+.. code-block:: console
+
+   $ lota-bench frames ~/mangologs/game_<date>.csv
+   .../game_<date>.csv: 107912 frames in 600.004 s
+     mean             5.560 ms    179.9 fps
+     median           5.561 ms    179.8 fps
+     p99              5.663 ms    176.6 fps
+     p99.9            5.811 ms    172.1 fps
+     1% low           5.743 ms    174.1 fps
+     0.1% low         5.811 ms    172.1 fps
+     max              9.904 ms    101.0 fps
+     stutters  0 frames over twice the median
+
+Only the ``frametime`` and ``elapsed`` columns are read, found by name
+in the column row; the description of the machine MangoHud writes above
+that row is skipped and never copied. Frame times are kept in
+microseconds, truncating the rest.
+
+``p99`` and ``p99.9``
+   The nearest-rank percentiles: the frame time that 99% (99.9%) of
+   frames are at or under. These are what MangoHud's own summary calls
+   the 1% and 0.1% minimum fps.
+
+``1% low`` and ``0.1% low``
+   The mean of the slowest 1% (0.1%) of frames, at least one frame. A
+   handful of long frames moves these where it barely moves a
+   percentile.
+
+``stutters``
+   Frames longer than twice the median.
+
+A log is refused when no row among its first 16 names the
+``frametime`` and ``elapsed`` columns, when a row has a different number
+of columns than that row, when a frame time is not a plain decimal
+number of milliseconds or ``elapsed`` goes back, or when the frames
+cover less than half of the time the log spans, which is what a log
+with an interval looks like. A refusal names the line.
+
 The result file
 ===============
 
@@ -184,4 +242,5 @@ problem:
 
 Because the validator is what stands between a contributed file and the
 tree, it is fuzzed: ``make fuzz-bench-result`` builds the harness, which
-also checks that no accepted input carries a ``/`` or a ``\``.
+also checks that no accepted input carries a ``/`` or a ``\``. The
+MangoHud log reader has its own harness, ``make fuzz-bench-frames``.

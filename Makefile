@@ -345,7 +345,7 @@ $(INSTALLER_BIN): $(INSTALLER_SRCS) installer/install.h installer/probe.h \
 # Contributors build it from the tree; no package ships it.
 LOTA_BENCH_BIN := $(BUILD_DIR)/lota-bench
 LOTA_BENCH_SRCS := $(addprefix $(LOTA_BENCH_DIR)/,main.c cgroup.c result.c json.c \
-	validate.c)
+	validate.c frames.c)
 LOTA_BENCH_PREFIX ?= /usr/local
 $(LOTA_BENCH_BIN): $(LOTA_BENCH_SRCS) $(wildcard $(LOTA_BENCH_DIR)/*.h) | $(BUILD_DIR)
 	$(QUIET_CC)
@@ -1629,6 +1629,7 @@ $(BUILD_DIR)/test_bench_cgroup: $(LOTA_BENCH_DIR)/cgroup.c $(LOTA_BENCH_DIR)/cgr
 $(BUILD_DIR)/test_bench_result: $(addprefix $(LOTA_BENCH_DIR)/,result.c result.h cgroup.c cgroup.h)
 $(BUILD_DIR)/test_bench_validate: $(addprefix $(LOTA_BENCH_DIR)/,validate.c validate.h \
 	json.c json.h result.c result.h cgroup.c cgroup.h)
+$(BUILD_DIR)/test_bench_frames: $(addprefix $(LOTA_BENCH_DIR)/,frames.c frames.h)
 
 $(BUILD_DIR)/test_bpf_kill_guard: $(BPF_OBJ)
 $(BUILD_DIR)/test_bpf_kill_guard: TEST_CFLAGS := -DBPF_OBJ_PATH='"$(BPF_OBJ)"'
@@ -2016,7 +2017,7 @@ VALGRIND_UNIT_BINS := \
 	test_integrity_baseline \
 	test_daemon_exit_status test_integrity_map_layout \
 	test_installer_confirm test_bench_cgroup test_bench_result \
-	test_bench_validate
+	test_bench_validate test_bench_frames
 
 .PHONY: valgrind-unit
 valgrind-unit: $(TEST_BINS)
@@ -2108,6 +2109,15 @@ fuzz-bench-result: $(FUZZ_BENCH_SRCS) $(wildcard $(LOTA_BENCH_DIR)/*.h) $(FUZZ_L
 	$(QUIET_CLANG)
 	$(Q)clang $(FUZZ_CFLAGS) -o $(BUILD_DIR)/fuzz-bench-result \
 		$(FUZZ_BENCH_SRCS) $(FUZZ_LSAN_OBJ)
+
+# lota-bench MangoHud log reader fuzz (standalone, libc only)
+FUZZ_BENCH_FRAMES_SRCS := fuzz/fuzz_bench_frames.c $(LOTA_BENCH_DIR)/frames.c
+
+.PHONY: fuzz-bench-frames
+fuzz-bench-frames: $(FUZZ_BENCH_FRAMES_SRCS) $(LOTA_BENCH_DIR)/frames.h $(FUZZ_LSAN_OBJ)
+	$(QUIET_CLANG)
+	$(Q)clang $(FUZZ_CFLAGS) -o $(BUILD_DIR)/fuzz-bench-frames \
+		$(FUZZ_BENCH_FRAMES_SRCS) $(FUZZ_LSAN_OBJ)
 
 # Enrollment reply decoders fuzz (standalone, includes enroll.c, libc only)
 $(BUILD_DIR)/fuzz/fuzz_enroll.o: fuzz/fuzz_enroll.c src/agent/enroll.c src/agent/enroll.h | $(BUILD_DIR)/fuzz
@@ -2304,7 +2314,7 @@ FUZZ_TARGETS := fuzz-agent fuzz-config fuzz-enroll \
 	fuzz-seal-envelope fuzz-tpm-attest fuzz-policy-sign fuzz-server-sdk \
 	fuzz-tpm-resp fuzz-bpf-devt fuzz-bpf-open-flags fuzz-bpf-kmem-device \
 	fuzz-bpf-event-budget fuzz-bpf-inaccessible-exec fuzz-bpf-shebang \
-	fuzz-bench-result
+	fuzz-bench-result fuzz-bench-frames
 
 .PHONY: fuzz-all
 fuzz-all: $(FUZZ_TARGETS)

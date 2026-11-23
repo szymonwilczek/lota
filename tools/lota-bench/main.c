@@ -25,6 +25,7 @@
 #include <unistd.h>
 
 #include "cgroup.h"
+#include "frames.h"
 #include "result.h"
 #include "validate.h"
 
@@ -61,12 +62,14 @@ static void usage(FILE *f)
 		"Usage: lota-bench sample --cgroup PATH --output FILE "
 		"[--interval-ms N] [--duration-s N]\n"
 		"       lota-bench validate FILE\n"
+		"       lota-bench frames LOG\n"
 		"       lota-bench --version\n"
 		"\n"
 		"sample  Sample the game's cgroup and the LOTA units' cgroups\n"
 		"        until the duration runs out, the game's cgroup goes\n"
 		"        away, or Ctrl+C.\n"
 		"validate  Check FILE against the result schema.\n"
+		"frames  Summarise the frame times of a MangoHud log.\n"
 		"\n"
 		"  --cgroup PATH     the game's cgroup: a path under " CGROUP_ROOT
 		",\n"
@@ -390,9 +393,9 @@ static int main_sample(int argc, char **argv)
 
 /*
  * NULL with errno set: EINVAL for anything but a regular file, EFBIG for
- * one over the limit
+ * one over @max bytes
  */
-static char *read_result(const char *path, size_t *len)
+static char *read_file(const char *path, uint64_t max, size_t *len)
 {
 	struct stat st;
 	size_t got = 0;
@@ -408,7 +411,7 @@ static char *read_result(const char *path, size_t *len)
 		errno = EINVAL;
 		goto fail;
 	}
-	if ((uint64_t)st.st_size > BENCH_RESULT_MAX_BYTES) {
+	if ((uint64_t)st.st_size > max) {
 		errno = EFBIG;
 		goto fail;
 	}
@@ -448,7 +451,7 @@ static int main_validate(int argc, char **argv)
 		usage(stderr);
 		return EXIT_BENCH_USAGE;
 	}
-	buf = read_result(argv[1], &len);
+	buf = read_file(argv[1], BENCH_RESULT_MAX_BYTES, &len);
 	if (!buf) {
 		fprintf(stderr, "lota-bench: %s: %s\n", argv[1],
 			errno == EINVAL ? "not a regular file" :
@@ -463,6 +466,61 @@ static int main_validate(int argc, char **argv)
 	}
 	printf("%s: valid, %u samples every %u ms (%s)\n", argv[1],
 	       info.samples, info.interval_ms, bench_end_names[info.end]);
+	return 0;
+}
+
+static void print_frame_time(const char *label, uint64_t us)
+{
+	printf("  %-9s %8llu.%03llu ms", label, (unsigned long long)(us / 1000),
+	       (unsigned long long)(us % 1000));
+	if (us)
+		printf("  %7.1f fps", 1e6 / (double)us);
+	putchar('\n');
+}
+
+static int main_frames(int argc, char **argv)
+{
+	struct bench_frame_stats s;
+	struct bench_frames f;
+	char err[256];
+	size_t len;
+	char *buf;
+	int ret;
+
+	if (argc != 2) {
+		usage(stderr);
+		return EXIT_BENCH_USAGE;
+	}
+	buf = read_file(argv[1], BENCH_FRAMES_LOG_MAX_BYTES, &len);
+	if (!buf) {
+		fprintf(stderr, "lota-bench: %s: %s\n", argv[1],
+			errno == EINVAL ? "not a regular file" :
+					  strerror(errno));
+		return 1;
+	}
+	ret = bench_frames_parse(buf, len, &f, err, sizeof(err));
+	free(buf);
+	if (ret) {
+		bench_frames_free(&f);
+		fprintf(stderr, "%s: %s\n", argv[1], err);
+		return 1;
+	}
+	bench_frame_stats(&f, &s);
+	bench_frames_free(&f);
+
+	printf("%s: %llu frames in %llu.%03llu s\n", argv[1],
+	       (unsigned long long)s.frames,
+	       (unsigned long long)(s.total_us / 1000000),
+	       (unsigned long long)(s.total_us / 1000 % 1000));
+	print_frame_time("mean", s.mean_us);
+	print_frame_time("median", s.median_us);
+	print_frame_time("p99", s.p99_us);
+	print_frame_time("p99.9", s.p999_us);
+	print_frame_time("1% low", s.low_1pct_us);
+	print_frame_time("0.1% low", s.low_01pct_us);
+	print_frame_time("max", s.max_us);
+	printf("  stutters  %llu frames over twice the median\n",
+	       (unsigned long long)s.stutters);
 	return 0;
 }
 
@@ -484,6 +542,8 @@ int main(int argc, char **argv)
 		return main_sample(argc - 1, argv + 1);
 	if (strcmp(argv[1], "validate") == 0)
 		return main_validate(argc - 1, argv + 1);
+	if (strcmp(argv[1], "frames") == 0)
+		return main_frames(argc - 1, argv + 1);
 
 	fprintf(stderr, "lota-bench: unknown command '%s'\n", argv[1]);
 	usage(stderr);
