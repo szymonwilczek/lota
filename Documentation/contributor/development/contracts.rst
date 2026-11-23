@@ -486,7 +486,7 @@ An object mapped once with a writer carries
 at the round says what the pages held then, not what they held between two
 rounds. Nothing is refused on either flag.
 
-After the objects come the peers: every process that reached a process of
+After the objects come the actors: every process that reached a process of
 the instance on a road the kernel lets through. An instance is the protected
 process and everything it started. From outside, the road is a unix socket:
 a process connected to a unix stream socket, or sent a datagram to one, owned
@@ -495,14 +495,18 @@ process of the instance creates, binds or listens on it. From inside, the
 road is one process of the instance reading another (``ptrace`` in read mode),
 attaching to it or writing into it (``ptrace`` attach, ``process_vm_writev``,
 ``/proc/<pid>/mem``), or signalling it, as ``wineserver`` does to the title.
-The kernel records each contact as it is made (``instance_peers`` in
-``src/bpf/lota_lsm.bpf.c``). A peer carries its
+A process of the instance is also listed for itself when it maps anonymous
+memory executable or mprotects it to executable, a refused attempt included:
+such code leaves no object to list, so the entry (``ANON_EXEC``, with
+``owner_tgid`` equal to ``tgid``) says who did it and how many times.
+The kernel records each contact as it is made (``instance_actors`` in
+``src/bpf/lota_lsm.bpf.c``). An actor carries its
 PID, start time, uid, the device and inode of its executable, its command
 name, the owning process and its name, how it reached in and how many times.
 Nothing is refused: the list says who reached in, the relying party decides
 what that means. A record the kernel could not keep, or a list longer than
-``LOTA_IPC_REGISTRY_MAX_PEERS``, sets ``LOTA_IPC_REGISTRY_PEERS_LOST``. Indices
-below ``total`` are objects, the next ``peer_total`` are peers, and the pages
+``LOTA_IPC_REGISTRY_MAX_ACTORS``, sets ``LOTA_IPC_REGISTRY_ACTORS_LOST``. Indices
+below ``total`` are objects, the next ``actor_total`` are actors, and the pages
 hand them out in that order.
 
 A token also says how long the caller's instance stood stopped, in
@@ -517,11 +521,11 @@ unprotected process leaves its stop unseen. The value never falls while the root
 lives.
 
 The token binds the list. Hashing the page's ``flags``, ``total`` and
-``peer_total`` and every entry in order as ``lota_registry_digest.h`` does
+``actor_total`` and every entry in order as ``lota_registry_digest.h`` does
 yields the page's
 ``image_digest``, which is the token's entry for that process while
 ``LOTA_IPC_REGISTRY_MEASURED`` is set. Every field of every entry is in the
-hash, the entries without a digest and the peers included, so a list with an entry dropped,
+hash, the entries without a digest and the actors included, so a list with an entry dropped,
 reordered or rewritten does not hash to the token's value. A list from another
 round does not either, so a relying party that checks the hash needs no further
 pairing; the ``round`` field only keeps the pages of one listing together.

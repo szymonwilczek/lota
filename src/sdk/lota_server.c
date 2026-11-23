@@ -696,18 +696,19 @@ const char *lota_server_sdk_version(void)
 #define REGISTRY_PATH_MAX (LOTA_RUNTIME_IMAGE_SONAME_MAX + 64)
 #define REGISTRY_FLAGS                                                 \
 	(LOTA_IPC_REGISTRY_MEASURED | LOTA_IPC_REGISTRY_HISTORY_LOST | \
-	 LOTA_IPC_REGISTRY_PEERS_LOST | LOTA_IPC_REGISTRY_FROM_EXEC)
+	 LOTA_IPC_REGISTRY_ACTORS_LOST | LOTA_IPC_REGISTRY_FROM_EXEC)
 
 _Static_assert(LOTA_SERVER_REGISTRY_MAX_OBJECTS ==
 		       LOTA_IPC_REGISTRY_MAX_OBJECTS,
 	       "lota_server.h copies the agent's registry bound");
-_Static_assert(LOTA_SERVER_REGISTRY_MAX_PEERS == LOTA_IPC_REGISTRY_MAX_PEERS,
-	       "lota_server.h copies the agent's peer bound");
+_Static_assert(LOTA_SERVER_REGISTRY_MAX_ACTORS == LOTA_IPC_REGISTRY_MAX_ACTORS,
+	       "lota_server.h copies the agent's actor bound");
 _Static_assert(
-	sizeof(((struct lota_server_registry_peer *)0)->comm) ==
-			sizeof(((struct lota_ipc_registry_peer *)0)->comm) &&
-		sizeof(((struct lota_server_registry_peer *)0)->owner_comm) ==
-			sizeof(((struct lota_ipc_registry_peer *)0)->owner_comm),
+	sizeof(((struct lota_server_registry_actor *)0)->comm) ==
+			sizeof(((struct lota_ipc_registry_actor *)0)->comm) &&
+		sizeof(((struct lota_server_registry_actor *)0)->owner_comm) ==
+			sizeof(((struct lota_ipc_registry_actor *)0)
+				       ->owner_comm),
 	"lota_server.h copies the agent's name width");
 
 /* @m as the agent put it on the wire; 0 or LOTA_SERVER_ERR_INVALID_ARG */
@@ -758,11 +759,11 @@ static int registry_wire_entry(const struct lota_server_registry_module *m,
 }
 
 /* @p as the agent put it on the wire; 0 or LOTA_SERVER_ERR_INVALID_ARG */
-static int registry_wire_peer(const struct lota_server_registry_peer *p,
-			      struct lota_ipc_registry_peer *w)
+static int registry_wire_actor(const struct lota_server_registry_actor *p,
+			       struct lota_ipc_registry_actor *w)
 {
-	if (p->kind < LOTA_IPC_REGISTRY_PEER_CONNECT ||
-	    p->kind > LOTA_IPC_REGISTRY_PEER_KIND_MAX)
+	if (p->kind < LOTA_IPC_REGISTRY_ACTOR_CONNECT ||
+	    p->kind > LOTA_IPC_REGISTRY_ACTOR_KIND_MAX)
 		return LOTA_SERVER_ERR_INVALID_ARG;
 	if (memchr(p->comm, '\0', sizeof(p->comm)) == NULL ||
 	    memchr(p->owner_comm, '\0', sizeof(p->owner_comm)) == NULL)
@@ -785,16 +786,16 @@ static int registry_wire_peer(const struct lota_server_registry_peer *p,
 int lota_server_registry_digest(uint32_t flags,
 				const struct lota_server_registry_module *mods,
 				size_t count,
-				const struct lota_server_registry_peer *peers,
-				size_t peer_count, uint8_t out[32])
+				const struct lota_server_registry_actor *actors,
+				size_t actor_count, uint8_t out[32])
 {
 	EVP_MD_CTX *md;
 	int ret = LOTA_SERVER_OK;
 
-	if (!out || (count > 0 && !mods) || (peer_count > 0 && !peers))
+	if (!out || (count > 0 && !mods) || (actor_count > 0 && !actors))
 		return LOTA_SERVER_ERR_INVALID_ARG;
 	if (count > LOTA_SERVER_REGISTRY_MAX_OBJECTS ||
-	    peer_count > LOTA_SERVER_REGISTRY_MAX_PEERS ||
+	    actor_count > LOTA_SERVER_REGISTRY_MAX_ACTORS ||
 	    (flags & ~REGISTRY_FLAGS))
 		return LOTA_SERVER_ERR_INVALID_ARG;
 
@@ -802,7 +803,7 @@ int lota_server_registry_digest(uint32_t flags,
 	if (!md)
 		return LOTA_SERVER_ERR_CRYPTO;
 	if (lota_registry_digest_begin(md, (uint16_t)flags, (uint32_t)count,
-				       (uint32_t)peer_count))
+				       (uint32_t)actor_count))
 		ret = LOTA_SERVER_ERR_CRYPTO;
 
 	for (size_t i = 0; ret == LOTA_SERVER_OK && i < count; i++) {
@@ -817,13 +818,13 @@ int lota_server_registry_digest(uint32_t flags,
 			ret = LOTA_SERVER_ERR_CRYPTO;
 	}
 
-	for (size_t i = 0; ret == LOTA_SERVER_OK && i < peer_count; i++) {
-		struct lota_ipc_registry_peer w;
+	for (size_t i = 0; ret == LOTA_SERVER_OK && i < actor_count; i++) {
+		struct lota_ipc_registry_actor w;
 
-		ret = registry_wire_peer(&peers[i], &w);
+		ret = registry_wire_actor(&actors[i], &w);
 		if (ret != LOTA_SERVER_OK)
 			break;
-		if (lota_registry_digest_peer(md, &w))
+		if (lota_registry_digest_actor(md, &w))
 			ret = LOTA_SERVER_ERR_CRYPTO;
 	}
 

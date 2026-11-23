@@ -130,21 +130,21 @@ int main(void)
 	TEST("registry pages every object and binds the round");
 	{
 		static struct lota_rt_object_record objs[40];
-		struct lota_ipc_registry_peer peers[30];
+		struct lota_ipc_registry_actor actors[30];
 		struct registry cur = { 0 };
 		struct registry next = { 0 };
 		const struct registry_process *p;
 		uint8_t folded[32];
 		uint8_t buf[2048];
-		uint32_t start = 0, pages = 0, seen = 0, seen_peers = 0;
+		uint32_t start = 0, pages = 0, seen = 0, seen_actors = 0;
 		int ok = 1;
 
-		memset(peers, 0, sizeof(peers));
+		memset(actors, 0, sizeof(actors));
 		for (int i = 0; i < 30; i++) {
-			peers[i].tgid = 5000u + (uint32_t)i;
-			peers[i].kind = LOTA_IPC_REGISTRY_PEER_CONNECT;
-			snprintf(peers[i].comm, sizeof(peers[i].comm),
-				 "peer%02d", i);
+			actors[i].tgid = 5000u + (uint32_t)i;
+			actors[i].kind = LOTA_IPC_REGISTRY_ACTOR_CONNECT;
+			snprintf(actors[i].comm, sizeof(actors[i].comm),
+				 "actor%02d", i);
 		}
 
 		memset(folded, 0xab, sizeof(folded));
@@ -162,7 +162,7 @@ int main(void)
 			}
 		}
 		ok &= registry_add(&next, 1234, 1000, 0, folded, objs, 40,
-				   peers, 30) == 0;
+				   actors, 30) == 0;
 		ok &= registry_add(&next, 1235, 1000,
 				   LOTA_IPC_REGISTRY_HISTORY_LOST |
 					   LOTA_IPC_REGISTRY_FROM_EXEC |
@@ -173,7 +173,7 @@ int main(void)
 
 		p = registry_find(&cur, 1234);
 		ok &= p != NULL && registry_find(&cur, 99) == NULL;
-		while (ok && p && start < p->count + p->peer_count) {
+		while (ok && p && start < p->count + p->actor_count) {
 			struct lota_ipc_registry_page hdr;
 			size_t len = 0, off = sizeof(hdr);
 			int c = registry_encode_page(p, cur.round, start, buf,
@@ -185,24 +185,25 @@ int main(void)
 			}
 			memcpy(&hdr, buf, sizeof(hdr));
 			ok &= hdr.round == 1 && hdr.pid == 1234 &&
-			      hdr.total == 40 && hdr.peer_total == 30 &&
+			      hdr.total == 40 && hdr.actor_total == 30 &&
 			      hdr.start == start && hdr.count == (uint16_t)c &&
 			      (hdr.flags & LOTA_IPC_REGISTRY_MEASURED) &&
 			      memcmp(hdr.image_digest, folded, 32) == 0;
 			for (int k = 0; k < c; k++) {
 				struct lota_ipc_registry_entry e;
-				struct lota_ipc_registry_peer q;
+				struct lota_ipc_registry_actor q;
 				uint32_t idx = start + (uint32_t)k;
 				uint8_t want;
 
-				/* the peers follow the last object */
+				/* the actors follow the last object */
 				if (idx >= 40) {
 					memcpy(&q, buf + off, sizeof(q));
 					off += sizeof(q);
 					ok &= q.tgid == 5000u + (idx - 40) &&
 					      strcmp(q.comm,
-						     peers[idx - 40].comm) == 0;
-					seen_peers++;
+						     actors[idx - 40].comm) ==
+						      0;
+					seen_actors++;
 					continue;
 				}
 				want = idx % 3 == 0 ?
@@ -225,7 +226,7 @@ int main(void)
 			start += (uint32_t)c;
 			pages++;
 		}
-		ok &= seen == 40 && seen_peers == 30 && pages > 1;
+		ok &= seen == 40 && seen_actors == 30 && pages > 1;
 		{
 			size_t len = 0;
 
@@ -310,9 +311,9 @@ int main(void)
 
 	TEST("registry lists who reached the instance from outside");
 	{
-		struct lota_instance_peer_key keys[4];
-		struct lota_instance_peer_val vals[4];
-		struct lota_ipc_registry_peer out[2];
+		struct lota_instance_actor_key keys[4];
+		struct lota_instance_actor_val vals[4];
+		struct lota_ipc_registry_actor out[2];
 		size_t n;
 		int overflow = 0;
 		int ok = 1;
@@ -320,8 +321,8 @@ int main(void)
 		memset(keys, 0, sizeof(keys));
 		memset(vals, 0, sizeof(vals));
 		/* root 7 started at 99 */
-		keys[0] = (struct lota_instance_peer_key){
-			99, 300, 7, 40, 8, LOTA_IPC_REGISTRY_PEER_CONNECT
+		keys[0] = (struct lota_instance_actor_key){
+			99, 300, 7, 40, 8, LOTA_IPC_REGISTRY_ACTOR_CONNECT
 		};
 		vals[0].count = 3;
 		vals[0].exe_dev = LOTA_DEVT_MKDEV(8, 3);
@@ -330,45 +331,45 @@ int main(void)
 		memcpy(vals[0].comm, "injector", 8);
 		memcpy(vals[0].owner_comm, "wineserver", 10);
 		/* an earlier root under the same PID */
-		keys[1] = (struct lota_instance_peer_key){
-			98, 301, 7, 41, 7, LOTA_IPC_REGISTRY_PEER_SEND
+		keys[1] = (struct lota_instance_actor_key){
+			98, 301, 7, 41, 7, LOTA_IPC_REGISTRY_ACTOR_SEND
 		};
 		/* another instance */
-		keys[2] = (struct lota_instance_peer_key){
-			99, 302, 9, 42, 9, LOTA_IPC_REGISTRY_PEER_SEND
+		keys[2] = (struct lota_instance_actor_key){
+			99, 302, 9, 42, 9, LOTA_IPC_REGISTRY_ACTOR_SEND
 		};
 		/* a name that fills the kernel's buffer */
-		keys[3] = (struct lota_instance_peer_key){
-			99, 303, 7, 43, 7, LOTA_IPC_REGISTRY_PEER_SIGNAL
+		keys[3] = (struct lota_instance_actor_key){
+			99, 303, 7, 43, 7, LOTA_IPC_REGISTRY_ACTOR_SIGNAL
 		};
 		memset(vals[3].comm, 'a', sizeof(vals[3].comm));
 
-		n = registry_collect_peers(out, 2, keys, vals, 4, 7, 99,
-					   &overflow);
+		n = registry_collect_actors(out, 2, keys, vals, 4, 7, 99,
+					    &overflow);
 		ok &= n == 2 && !overflow;
 		ok &= out[0].tgid == 40 && out[0].start_ticks == 300 &&
 		      out[0].owner_tgid == 8 && out[0].count == 3 &&
 		      out[0].exe_dev == makedev(8, 3) && out[0].exe_ino == 55 &&
 		      out[0].uid == 1000 &&
-		      out[0].kind == LOTA_IPC_REGISTRY_PEER_CONNECT &&
+		      out[0].kind == LOTA_IPC_REGISTRY_ACTOR_CONNECT &&
 		      strcmp(out[0].comm, "injector") == 0 &&
 		      strcmp(out[0].owner_comm, "wineserver") == 0;
 		ok &= out[1].tgid == 43 && strlen(out[1].comm) == 15 &&
-		      out[1].kind == LOTA_IPC_REGISTRY_PEER_SIGNAL;
+		      out[1].kind == LOTA_IPC_REGISTRY_ACTOR_SIGNAL;
 
-		n = registry_collect_peers(out, 1, keys, vals, 4, 7, 99,
-					   &overflow);
+		n = registry_collect_actors(out, 1, keys, vals, 4, 7, 99,
+					    &overflow);
 		ok &= n == 1 && overflow;
 		if (ok)
 			PASS();
 		else
-			FAIL("peer collection kept, lost or misnamed a peer");
+			FAIL("actor collection kept, lost or misnamed an actor");
 	}
 
 	TEST("registry digest is the hash of the listed pages");
 	{
 		static struct lota_rt_object_record objs[3];
-		struct lota_ipc_registry_peer peers[2];
+		struct lota_ipc_registry_actor actors[2];
 		struct registry cur = { 0 };
 		struct registry next = { 0 };
 		const struct registry_process *p;
@@ -393,21 +394,21 @@ int main(void)
 		objs[1].history_flags = LOTA_EXEC_HISTORY_WRITABLE |
 					LOTA_EXEC_HISTORY_MEMORY;
 
-		memset(peers, 0, sizeof(peers));
-		peers[0] = (struct lota_ipc_registry_peer){
+		memset(actors, 0, sizeof(actors));
+		actors[0] = (struct lota_ipc_registry_actor){
 			.count = 2,
 			.tgid = 600,
-			.kind = LOTA_IPC_REGISTRY_PEER_SEND
+			.kind = LOTA_IPC_REGISTRY_ACTOR_SEND
 		};
-		strcpy(peers[0].comm, "probe");
-		strcpy(peers[0].owner_comm, "title");
-		peers[1] = peers[0];
-		peers[1].tgid = 601;
+		strcpy(actors[0].comm, "probe");
+		strcpy(actors[0].owner_comm, "title");
+		actors[1] = actors[0];
+		actors[1].tgid = 601;
 
 		ok &= registry_digest(flags | LOTA_IPC_REGISTRY_MEASURED, objs,
-				      3, peers, 2, want) == 0;
-		ok &= registry_add(&next, 77, 1000, flags, want, objs, 3, peers,
-				   2) == 0;
+				      3, actors, 2, want) == 0;
+		ok &= registry_add(&next, 77, 1000, flags, want, objs, 3,
+				   actors, 2) == 0;
 		registry_replace(&cur, &next);
 		p = registry_find(&cur, 77);
 		if (!p)
@@ -425,7 +426,7 @@ int main(void)
 			memcpy(&hdr, buf, sizeof(hdr));
 			ok &= lota_registry_digest_begin(md, hdr.flags,
 							 hdr.total,
-							 hdr.peer_total) == 0;
+							 hdr.actor_total) == 0;
 			for (int i = 0; ok && i < (int)hdr.total; i++) {
 				struct lota_ipc_registry_entry e;
 				const char *s;
@@ -444,12 +445,12 @@ int main(void)
 				ok &= lota_registry_digest_entry(
 					      md, &e, s, s + e.soname_len) == 0;
 			}
-			for (int i = 0; ok && i < (int)hdr.peer_total; i++) {
-				struct lota_ipc_registry_peer q;
+			for (int i = 0; ok && i < (int)hdr.actor_total; i++) {
+				struct lota_ipc_registry_actor q;
 
 				memcpy(&q, buf + off, sizeof(q));
 				off += sizeof(q);
-				ok &= lota_registry_digest_peer(md, &q) == 0;
+				ok &= lota_registry_digest_actor(md, &q) == 0;
 			}
 			ok &= off == len;
 			ok &= lota_registry_digest_final(md, got) == 0 &&
@@ -459,11 +460,11 @@ int main(void)
 
 		/* an object without a digest is bound all the same */
 		ok &= registry_digest(flags | LOTA_IPC_REGISTRY_MEASURED, objs,
-				      2, peers, 2, other) == 0 &&
+				      2, actors, 2, other) == 0 &&
 		      memcmp(other, want, 32) != 0;
-		/* and so is every peer */
+		/* and so is every actor */
 		ok &= registry_digest(flags | LOTA_IPC_REGISTRY_MEASURED, objs,
-				      3, peers, 1, other) == 0 &&
+				      3, actors, 1, other) == 0 &&
 		      memcmp(other, want, 32) != 0;
 		EVP_MD_CTX_free(md);
 		registry_clear(&cur);

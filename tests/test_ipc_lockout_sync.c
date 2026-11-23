@@ -137,10 +137,11 @@ int bpf_loader_exec_history(struct bpf_loader_ctx *ctx,
 	return -ENOENT;
 }
 
-int bpf_loader_instance_peers(struct bpf_loader_ctx *ctx,
-			      int (*alive)(uint32_t tgid, uint64_t start_ticks),
-			      struct lota_instance_peer_key **keys,
-			      struct lota_instance_peer_val **vals, size_t *n)
+int bpf_loader_instance_actors(struct bpf_loader_ctx *ctx,
+			       int (*alive)(uint32_t tgid,
+					    uint64_t start_ticks),
+			       struct lota_instance_actor_key **keys,
+			       struct lota_instance_actor_val **vals, size_t *n)
 {
 	(void)ctx;
 	(void)alive;

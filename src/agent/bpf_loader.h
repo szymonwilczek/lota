@@ -46,7 +46,7 @@ struct bpf_loader_ctx {
 	int exe_hash_slots_fd; /* 'exe_hash_slots' map fd */
 	int mapped_exec_fd; /* 'mapped_exec' pin map fd */
 	int exec_history_fd; /* 'exec_history' map fd */
-	int instance_peers_fd; /* 'instance_peers' map fd */
+	int instance_actors_fd; /* 'instance_actors' map fd */
 	struct mapped_exec_pin *pins; /* what this agent has pinned */
 	size_t pin_count;
 	size_t pin_cap;
@@ -148,7 +148,7 @@ int bpf_loader_exec_history(struct bpf_loader_ctx *ctx,
 			    struct lota_exec_history_val **vals, size_t *n);
 
 /*
- * bpf_loader_instance_peers - Read who reached an instance, dropping the dead
+ * bpf_loader_instance_actors - Read who reached an instance, dropping the dead
  * @ctx:   Loaded context
  * @alive: Says whether the instance root @tgid started at @start_ticks runs
  * @keys:  Receives the live entries' keys, to free()
@@ -158,10 +158,12 @@ int bpf_loader_exec_history(struct bpf_loader_ctx *ctx,
  * Entries of an instance whose root @alive denies are deleted from the map.
  * Returns: 0 on success, -ENOENT without the map, negative errno on failure.
  */
-int bpf_loader_instance_peers(struct bpf_loader_ctx *ctx,
-			      int (*alive)(uint32_t tgid, uint64_t start_ticks),
-			      struct lota_instance_peer_key **keys,
-			      struct lota_instance_peer_val **vals, size_t *n);
+int bpf_loader_instance_actors(struct bpf_loader_ctx *ctx,
+			       int (*alive)(uint32_t tgid,
+					    uint64_t start_ticks),
+			       struct lota_instance_actor_key **keys,
+			       struct lota_instance_actor_val **vals,
+			       size_t *n);
 
 /*
  * Callback for ring buffer events
@@ -599,7 +601,7 @@ struct bpf_extended_stats {
 	uint64_t mapped_write_blocked; /* writes refused to a pinned library */
 	uint64_t mapped_pin_refused; /* mapped objects left unpinned */
 	uint64_t exec_history_lost; /* exec mappings left unrecorded */
-	uint64_t instance_peers_lost; /* instance socket reaches unrecorded */
+	uint64_t instance_actors_lost; /* instance socket reaches unrecorded */
 	uint64_t instance_stops_lost; /* instance thread stops unrecorded */
 };
 

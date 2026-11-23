@@ -1065,17 +1065,17 @@ enum registry_fault {
 	REGISTRY_BAD_ROAD, /* a digest on the unmeasured object */
 	REGISTRY_BAD_ENTRY_FLAG, /* an entry flag the SDK does not know */
 	REGISTRY_BAD_FLAG, /* a page flag the SDK does not know */
-	REGISTRY_BAD_PEER_KIND, /* a peer kind the SDK does not know */
-	REGISTRY_BAD_PEER_COMM, /* a peer name without its NUL */
+	REGISTRY_BAD_ACTOR_KIND, /* an actor kind the SDK does not know */
+	REGISTRY_BAD_ACTOR_COMM, /* an actor name without its NUL */
 };
 
-/* 5 objects, then 2 peers */
+/* 5 objects, then 2 actors */
 #define REGISTRY_MOCK_OBJECTS 5
-#define REGISTRY_MOCK_PEERS 2
+#define REGISTRY_MOCK_ACTORS 2
 
 /*
  * Registry page of entries [start, start + count) of a listing of
- * REGISTRY_MOCK_OBJECTS objects followed by REGISTRY_MOCK_PEERS peers.
+ * REGISTRY_MOCK_OBJECTS objects followed by REGISTRY_MOCK_ACTORS actors.
  */
 static size_t build_registry_page(uint8_t *buf, uint64_t round, uint32_t start,
 				  uint16_t count, enum registry_fault fault)
@@ -1087,7 +1087,7 @@ static size_t build_registry_page(uint8_t *buf, uint64_t round, uint32_t start,
 	hdr.round = round;
 	hdr.pid = 4242;
 	hdr.total = REGISTRY_MOCK_OBJECTS;
-	hdr.peer_total = REGISTRY_MOCK_PEERS;
+	hdr.actor_total = REGISTRY_MOCK_ACTORS;
 	hdr.start = start;
 	hdr.count = count;
 	hdr.flags = LOTA_IPC_REGISTRY_MEASURED |
@@ -1100,7 +1100,7 @@ static size_t build_registry_page(uint8_t *buf, uint64_t round, uint32_t start,
 
 	for (uint32_t i = start; i < start + count; i++) {
 		struct lota_ipc_registry_entry e;
-		struct lota_ipc_registry_peer q;
+		struct lota_ipc_registry_actor q;
 		char soname[24];
 		char path[48];
 
@@ -1114,12 +1114,12 @@ static size_t build_registry_page(uint8_t *buf, uint64_t round, uint32_t start,
 			q.tgid = 6000 + k;
 			q.uid = 1000;
 			q.owner_tgid = 4243;
-			q.kind = k == 0 ? LOTA_IPC_REGISTRY_PEER_CONNECT :
-					  LOTA_IPC_REGISTRY_PEER_PTRACE_ATTACH;
-			if (k == 1 && fault == REGISTRY_BAD_PEER_KIND)
-				q.kind = 6;
-			snprintf(q.comm, sizeof(q.comm), "peer%u", k);
-			if (k == 1 && fault == REGISTRY_BAD_PEER_COMM)
+			q.kind = k == 0 ? LOTA_IPC_REGISTRY_ACTOR_ANON_EXEC :
+					  LOTA_IPC_REGISTRY_ACTOR_PTRACE_ATTACH;
+			if (k == 1 && fault == REGISTRY_BAD_ACTOR_KIND)
+				q.kind = LOTA_IPC_REGISTRY_ACTOR_KIND_MAX + 1;
+			snprintf(q.comm, sizeof(q.comm), "actor%u", k);
+			if (k == 1 && fault == REGISTRY_BAD_ACTOR_COMM)
 				memset(q.comm, 'a', sizeof(q.comm));
 			strcpy(q.owner_comm, "wineserver");
 			memcpy(buf + off, &q, sizeof(q));
@@ -1163,7 +1163,7 @@ static size_t build_registry_page(uint8_t *buf, uint64_t round, uint32_t start,
 
 /*
  * Answer GET_REGISTRY in pages of three, one of them both objects and
- * peers; round @torn_round from the 2nd on.
+ * actors; round @torn_round from the 2nd on.
  */
 static void serve_registry(int client_fd, uint64_t torn_round,
 			   enum registry_fault fault)
@@ -1175,7 +1175,7 @@ static void serve_registry(int client_fd, uint64_t torn_round,
 
 	while (recv_request(client_fd, &req, &body, sizeof(body)) == 0) {
 		uint64_t round = served > 0 && torn_round ? torn_round : 1;
-		uint32_t left = REGISTRY_MOCK_OBJECTS + REGISTRY_MOCK_PEERS -
+		uint32_t left = REGISTRY_MOCK_OBJECTS + REGISTRY_MOCK_ACTORS -
 				body.start;
 		uint16_t count = (uint16_t)(left < 3 ? left : 3);
 		size_t len;
@@ -1215,14 +1215,14 @@ static void server_registry_bad_flag(int client_fd)
 	serve_registry(client_fd, 0, REGISTRY_BAD_FLAG);
 }
 
-static void server_registry_bad_peer_kind(int client_fd)
+static void server_registry_bad_actor_kind(int client_fd)
 {
-	serve_registry(client_fd, 0, REGISTRY_BAD_PEER_KIND);
+	serve_registry(client_fd, 0, REGISTRY_BAD_ACTOR_KIND);
 }
 
-static void server_registry_bad_peer_comm(int client_fd)
+static void server_registry_bad_actor_comm(int client_fd)
 {
-	serve_registry(client_fd, 0, REGISTRY_BAD_PEER_COMM);
+	serve_registry(client_fd, 0, REGISTRY_BAD_ACTOR_COMM);
 }
 
 static void server_registry_not_protected(int client_fd)
@@ -1291,13 +1291,15 @@ static void test_registry_pages(void)
 				      LOTA_REGISTRY_OBJECT_MEMORY) ||
 	    reg->objects[2].flags != LOTA_REGISTRY_OBJECT_WRITABLE ||
 	    reg->objects[4].path[0] != '\0' || reg->objects[3].flags != 0 ||
-	    reg->peer_count != 2 || !reg->peers || reg->peers[0].tgid != 6000 ||
-	    reg->peers[0].count != 2 || reg->peers[0].start_ticks != 9000 ||
-	    reg->peers[0].kind != LOTA_REGISTRY_PEER_CONNECT ||
-	    reg->peers[1].kind != LOTA_REGISTRY_PEER_PTRACE_ATTACH ||
-	    reg->peers[1].exe_ino != 301 || reg->peers[1].owner_tgid != 4243 ||
-	    strcmp(reg->peers[1].comm, "peer1") != 0 ||
-	    strcmp(reg->peers[1].owner_comm, "wineserver") != 0) {
+	    reg->actor_count != 2 || !reg->actors ||
+	    reg->actors[0].tgid != 6000 || reg->actors[0].count != 2 ||
+	    reg->actors[0].start_ticks != 9000 ||
+	    reg->actors[0].kind != LOTA_REGISTRY_ACTOR_ANON_EXEC ||
+	    reg->actors[1].kind != LOTA_REGISTRY_ACTOR_PTRACE_ATTACH ||
+	    reg->actors[1].exe_ino != 301 ||
+	    reg->actors[1].owner_tgid != 4243 ||
+	    strcmp(reg->actors[1].comm, "actor1") != 0 ||
+	    strcmp(reg->actors[1].owner_comm, "wineserver") != 0) {
 		FAIL(lota_strerror(ret));
 		lota_registry_free(reg);
 		return;
@@ -1360,8 +1362,8 @@ static void test_registry_refusals(void)
 	else
 		PASS();
 
-	TEST("get_registry refuses a peer kind it does not know");
-	ret = fetch_registry(server_registry_bad_peer_kind, &reg, &skipped);
+	TEST("get_registry refuses an actor kind it does not know");
+	ret = fetch_registry(server_registry_bad_actor_kind, &reg, &skipped);
 	if (skipped)
 		SKIP("AF_UNIX mock server not permitted");
 	else if (ret != LOTA_ERR_PROTOCOL || reg)
@@ -1369,8 +1371,8 @@ static void test_registry_refusals(void)
 	else
 		PASS();
 
-	TEST("get_registry refuses a peer name without its end");
-	ret = fetch_registry(server_registry_bad_peer_comm, &reg, &skipped);
+	TEST("get_registry refuses an actor name without its end");
+	ret = fetch_registry(server_registry_bad_actor_comm, &reg, &skipped);
 	if (skipped)
 		SKIP("AF_UNIX mock server not permitted");
 	else if (ret != LOTA_ERR_PROTOCOL || reg)
