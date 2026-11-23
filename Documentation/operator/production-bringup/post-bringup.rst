@@ -405,7 +405,9 @@ The verifier, port, CA certificate and cadence come from
 no attestation flags are hardcoded in the unit. A zero ``attest_interval``
 means this host never chose a cadence: with a ``[profile]`` list it attests to
 every configured publisher at the default 300 s, and only a host with no
-profile at all falls back to attesting once to ``server`` and exiting. A
+profile at all falls back to attesting once to ``server`` and exiting. A host
+that names neither runs the loop with no target: it reports nothing and waits
+for the reload that names its first publisher. A
 non-zero value has to fall between the floor and the ceiling the agent prints
 in ``--help``; the agent refuses to start on anything else, since an interval
 past the ceiling mints tokens that sit outside every relying party's freshness
@@ -531,8 +533,9 @@ new publisher immediately in case a title of theirs is already running. Neither
 touches enforcement, PCR 14 or any existing enrollment, and a publisher that
 was already there keeps its cadence, its session state and its failure backoff.
 ``try-`` is what makes it one command on every host: a unit that is not running
--- the loop stays inactive until the first enrollment -- is skipped. It is the
-command ``--add-publisher`` prints alongside the consent line. A rebuild that
+is skipped. A host past ``lota-install`` runs both, the loop with no target
+until its first publisher. It is the command ``--add-publisher`` prints
+alongside the consent line. A rebuild that
 fails leaves the previous list in place.
 
 Every key below a section header belongs to that section, so the top-level keys
@@ -770,12 +773,12 @@ a profile whose keys have since been pointed somewhere else is reported once::
 override it for a moved CA, and the new endpoint is recorded once the CA
 certifies the key. An unreachable CA changes nothing on the host.
 
-First enrollment stays operator-driven. ``lota-attest.service`` carries
-``ConditionDirectoryNotEmpty=/var/lib/lota/profiles`` and stays inactive until
-the operator's first ``lota-agent --enroll`` creates a profile there (the
-directory itself ships with the package, so only its contents say anything);
-afterwards the loop renews the certificate automatically. Start it after the first enrollment
-(or it activates on the next boot):
+``lota-attest.service`` has no start condition. On a host that names no
+publisher yet the loop runs with no target and reports nothing; the reload that
+names the first one starts reporting, and the loop enrolls with a publisher the
+first time a title of theirs asks. After enrollment it renews the certificate
+automatically. ``lota-install`` enables and starts it; on a host brought up by
+hand:
 
 .. code-block:: sh
 

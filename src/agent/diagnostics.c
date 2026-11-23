@@ -184,6 +184,12 @@ static int diagnostic_exit_code(int ret)
 	return ret;
 }
 
+/* --server, or the file's server key: the CLI copies the latter into opts */
+static bool opts_name_a_server(const struct cli_options *opts)
+{
+	return opts->server_addr && opts->server_addr[0] != '\0';
+}
+
 int diagnostics_dispatch(struct cli_options *opts, struct lota_config *cfg)
 {
 	/*
@@ -195,7 +201,7 @@ int diagnostics_dispatch(struct cli_options *opts, struct lota_config *cfg)
 	 */
 	g_agent.tpm_ctx.allow_env_tpm_overrides = attest_env_overrides_allowed(
 		opts->attest_flag, opts->attest_interval,
-		cfg ? cfg->profile_count : 0);
+		cfg ? cfg->profile_count : 0, opts_name_a_server(opts));
 
 	if (opts->shutdown_flag) {
 		int sret = ipc_request_shutdown();
@@ -437,9 +443,12 @@ int diagnostics_dispatch(struct cli_options *opts, struct lota_config *cfg)
 		 * that path has no target list and would attest to the top-level
 		 * verifier -- unset on consumer install -- while every configured
 		 * publisher waited.
+		 * Host that names nothing gets the loop too, waiting for the
+		 * reload that names its first publisher.
 		 */
 		interval = attest_effective_interval(
-			opts->attest_interval, cfg ? cfg->profile_count : 0);
+			opts->attest_interval, cfg ? cfg->profile_count : 0,
+			opts_name_a_server(opts));
 
 		if (interval > 0)
 			return diagnostic_exit_code(do_continuous_attest(

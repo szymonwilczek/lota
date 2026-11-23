@@ -16,8 +16,9 @@
 
 # ---- Verifier connection ------------------------------------------------
 
-# Verifier server address
-server = localhost
+# Verifier server address (default: none, so --attest has no single verifier
+# to report to; a [profile] below names each publisher's own)
+# server = verifier.example.com
 
 # Verifier server port
 port = 8443
@@ -89,11 +90,10 @@ bpf_path = /usr/lib/lota/lota_lsm.bpf.o
 # 0 means this host never chose a cadence, not that it wants a single round.
 # With a [profile] list below it attests to every configured publisher at
 # the default 300 s; with no profile at all it falls back to attesting once
-# to the single verifier named by `server` and exiting.
+# to the single verifier named by `server` and exiting. With neither, the
+# loop runs with no target and waits for a reload that names a publisher.
 #
 # Set `server`, `port` and `ca_cert` above to the verifier the loop should reach.
-# Service stays inactive until the first `lota-agent --enroll` creates publisher
-# profile under /var/lib/lota/profiles/
 attest_interval = 300
 
 # AIK key lifetime in seconds before rotation (0 = default 30 days).

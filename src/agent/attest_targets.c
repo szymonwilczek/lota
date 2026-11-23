@@ -245,7 +245,7 @@ int attest_targets_build(const struct lota_config *cfg, const char *server,
 			n++;
 		}
 	} else {
-		if (!server)
+		if (!server || !server[0])
 			return -EINVAL;
 
 		snprintf(out[n].server, sizeof(out[n].server), "%s", server);

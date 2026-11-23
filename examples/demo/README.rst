@@ -137,7 +137,8 @@ reads ``LOTA_TCTI``. AIK metadata and AIK auth are redirected with
 are honored on the agent's interactive one-shot commands (the demo drives
 ``--test-signed``), and **every deployed process ignores them**: the enforcing
 daemon, and the continuous attestation loop that ``lota-attest.service`` runs.
-``--attest`` counts as the loop once the host names publishers or an interval.
+``--attest`` counts as the loop once the host names publishers or an interval,
+or names no verifier at all.
 Production selects the TPM through ``/dev/tpmrm0`` and the compiled-in AIK
 paths.
 

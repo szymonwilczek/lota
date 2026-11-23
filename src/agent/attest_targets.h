@@ -248,8 +248,8 @@ bool attest_target_should_announce_wait(struct attest_target *t);
  * With no profiles configured the single @server / @port / @ca_cert is the only
  * target, as on an enterprise fleet host.
  *
- * Returns 0, -EINVAL on a missing single-target server or bad argument,
- * or E2BIG when @max cannot hold every configured profile.
+ * Returns 0, -EINVAL on a missing or empty single-target server or bad
+ * argument, or E2BIG when @max cannot hold every configured profile.
  */
 int attest_targets_build(const struct lota_config *cfg, const char *server,
 			 int port, const char *ca_cert, int interval_sec,

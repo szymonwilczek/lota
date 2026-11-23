@@ -194,7 +194,7 @@ void config_init(struct lota_config *cfg)
 
 	memset(cfg, 0, sizeof(*cfg));
 
-	set_str(cfg->server, sizeof(cfg->server), "localhost");
+	/* server stays unset: a default would be a verifier nobody named */
 	cfg->port = LOTA_DEFAULT_VERIFIER_PORT;
 
 	cfg->allow_verity_count = 0;
@@ -1309,7 +1309,8 @@ void config_dump(const struct lota_config *cfg, FILE *fp)
 	fprintf(fp, "# LOTA Agent effective configuration\n\n");
 
 	fprintf(fp, "# Verifier connection\n");
-	fprintf(fp, "server = %s\n", cfg->server);
+	if (cfg->server[0])
+		fprintf(fp, "server = %s\n", cfg->server);
 	fprintf(fp, "port = %d\n", cfg->port);
 	if (cfg->ca_cert[0])
 		fprintf(fp, "ca_cert = %s\n", cfg->ca_cert);
