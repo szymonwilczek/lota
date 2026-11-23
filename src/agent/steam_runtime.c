@@ -19,7 +19,6 @@
 
 #include <errno.h>
 #include <fcntl.h>
-#include <grp.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -28,10 +27,6 @@
 #include <sys/types.h>
 
 #include "journal.h"
-
-#ifndef LOTA_GROUP_NAME
-#define LOTA_GROUP_NAME "lota"
-#endif
 
 /*
  * Classify the runtime version from PRESSURE_VESSEL_RUNTIME or
@@ -317,7 +312,7 @@ int steam_runtime_container_socket_path(char *buf, size_t bufsz)
 	return 0;
 }
 
-int steam_runtime_ensure_socket_dir(const char *dir)
+int steam_runtime_ensure_socket_dir(const char *dir, gid_t gid)
 {
 	struct stat st;
 
@@ -359,21 +354,8 @@ int steam_runtime_ensure_socket_dir(const char *dir)
 	if (!S_ISDIR(st.st_mode))
 		return -ENOTDIR;
 
-	/*
-	 * Only the daemon owns this directory, and only it can hand the group
-	 * away. An unprivileged caller -- the tooling, the tests -- has nothing
-	 * to give and must not fail for that.
-	 */
-	if (geteuid() != 0)
+	if (gid == (gid_t)-1)
 		return 0;
-
-	struct group *grp = getgrnam(LOTA_GROUP_NAME);
-	if (!grp) {
-		lota_err("steam_runtime: no '%s' group, so %s stays root-only "
-			 "and no title can reach the socket in it",
-			 LOTA_GROUP_NAME, dir);
-		return -ENOENT;
-	}
 
 	/*
 	 * Group ownership: lota so members of the group can connect to the
@@ -382,16 +364,8 @@ int steam_runtime_ensure_socket_dir(const char *dir)
 	 * syscalls, but the symlink check pins the inode the chown lands
 	 * on to the one lstat saw).
 	 */
-	if (fchownat(AT_FDCWD, dir, (uid_t)-1, grp->gr_gid,
-		     AT_SYMLINK_NOFOLLOW) < 0) {
-		int ret = -errno;
-
-		lota_err("steam_runtime: chown(%s, -1, %d): %s -- the "
-			 "directory stays root-only, so no title can reach "
-			 "the socket in it",
-			 dir, grp->gr_gid, strerror(-ret));
-		return ret;
-	}
+	if (fchownat(AT_FDCWD, dir, (uid_t)-1, gid, AT_SYMLINK_NOFOLLOW) < 0)
+		return -errno;
 
 	return 0;
 }

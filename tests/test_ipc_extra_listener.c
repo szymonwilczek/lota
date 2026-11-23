@@ -469,6 +469,62 @@ static void test_unrecorded_identity_is_not_a_replacement(void)
 		PASS();
 }
 
+/*
+ * A login's runtime directory can be replaced by logind's tmpfs between
+ * the directory being made and the socket being bound in it. The caller
+ * knows that is a login still mounting and retries, so a failed bind is
+ * returned, not logged.
+ */
+static void test_bind_failure_is_left_to_the_caller(struct ipc_context *ctx)
+{
+	char path[108];
+	FILE *cap;
+	long said;
+	int saved_fd, ret;
+
+	TEST("a socket with no directory -> -ENOENT, nothing said");
+
+	snprintf(path, sizeof(path), "/tmp/lota-extra-nodir-%d/lota.sock",
+		 (int)getpid());
+
+	cap = tmpfile();
+	if (!cap) {
+		FAIL("cannot capture stderr");
+		return;
+	}
+	fflush(stderr);
+	saved_fd = dup(STDERR_FILENO);
+	if (saved_fd < 0) {
+		FAIL("cannot capture stderr");
+		fclose(cap);
+		return;
+	}
+	dup2(fileno(cap), STDERR_FILENO);
+
+	ret = ipc_add_listener(ctx, path);
+
+	fflush(stderr);
+	dup2(saved_fd, STDERR_FILENO);
+	close(saved_fd);
+	said = lseek(fileno(cap), 0, SEEK_END);
+	fclose(cap);
+
+	if (ret == 0) {
+		FAIL("bound a socket in a directory that does not exist");
+		ipc_remove_listener(ctx, path);
+		return;
+	}
+	if (ret != -ENOENT) {
+		FAIL("expected -ENOENT");
+		return;
+	}
+	if (said != 0) {
+		FAIL("wrote to stderr, so the caller cannot keep a pending login quiet");
+		return;
+	}
+	PASS();
+}
+
 int main(void)
 {
 	struct ipc_context ctx;
@@ -503,6 +559,7 @@ int main(void)
 	test_live_listener_is_not_taken(&ctx);
 	test_refusal_leaves_the_socket_connectable(&ctx);
 	test_stale_socket_file_is_not_mistaken_for_a_listener(&ctx);
+	test_bind_failure_is_left_to_the_caller(&ctx);
 	test_untouched_socket_is_not_replaced();
 	test_unlinked_socket_is_replaced();
 	test_rebound_socket_is_replaced();
