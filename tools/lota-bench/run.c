@@ -733,8 +733,7 @@ static bool ends_with(const char *s, const char *tail)
 	return n >= m && strcmp(s + n - m, tail) == 0;
 }
 
-/* the newest MangoHud log written since @since; 0, or -1 for none */
-static int find_log(int dir, time_t since, char *name, size_t cap)
+int bench_run_find_log(int dir, time_t since, char *name, size_t cap)
 {
 	struct dirent *e;
 	time_t best = 0;
@@ -742,7 +741,7 @@ static int find_log(int dir, time_t since, char *name, size_t cap)
 	DIR *d;
 	int fd;
 
-	fd = dup(dir);
+	fd = openat(dir, ".", O_RDONLY | O_DIRECTORY | O_CLOEXEC);
 	if (fd < 0)
 		return -1;
 	d = fdopendir(fd);
@@ -777,7 +776,7 @@ static void take_frames(int dir, time_t since, unsigned int index,
 	char *buf;
 	int ret;
 
-	if (find_log(dir, since, name, sizeof(name))) {
+	if (bench_run_find_log(dir, since, name, sizeof(name))) {
 		fprintf(stderr,
 			"lota-bench: no MangoHud log in the session; this run "
 			"has no frame times\n");
