@@ -85,6 +85,11 @@ The agent requires elevated privileges for hardware attestation:
   ``CAP_CHOWN`` in the unit's bounding set but without the rule still
   fails the change with ``EPERM``
 
+The domain has no access to ``/run/systemd/userdb``. ``lota-agent.service`` sets
+``SYSTEMD_BYPASS_USERDB=1`` so that a group lookup stops at ``/etc/group``, which
+is where the packages create ``lota``. A group defined only in userdb does not
+resolve in the service.
+
 Installation
 ------------
 

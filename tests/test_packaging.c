@@ -751,6 +751,27 @@ static void test_installer_labels_the_config_directory(void)
 }
 
 /*
+ * Fedora resolves groups with "files [SUCCESS=merge] systemd", so a lota group
+ * found in /etc/group still walks the userdb sockets the policy keeps shut.
+ */
+static void test_agent_unit_skips_userdb(void)
+{
+	static char src[65536];
+
+	TEST("packaging: the agent unit skips the userdb lookup");
+
+	if (!slurp_shipped("systemd/lota-agent.service", src, sizeof(src))) {
+		FAIL("could not read lota-agent.service");
+		return;
+	}
+	if (!strstr(src, "\nEnvironment=SYSTEMD_BYPASS_USERDB=1\n")) {
+		FAIL("a group lookup logs an AVC per userdb socket");
+		return;
+	}
+	PASS();
+}
+
+/*
  * An upgrade replaces lota.pp under a module the policy store keeps its own copy
  * of, so a rule the new agent depends on stays out until something reloads it.
  */
@@ -1112,6 +1133,7 @@ int main(void)
 	test_selinux_agent_reads_filesystem_types();
 	test_installer_labels_the_config_directory();
 	test_upgrade_reloads_the_selinux_module();
+	test_agent_unit_skips_userdb();
 	test_installer_probe_asks_about_ports();
 	test_installer_relabel_reapplies_the_device_labels();
 	test_static_cli_is_built_without_cgo();

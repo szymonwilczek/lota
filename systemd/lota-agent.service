@@ -62,6 +62,9 @@ NotifyAccess=main
 ExecStart=/usr/bin/lota-agent
 ExecStop=/usr/bin/lota-agent --shutdown
 ExecReload=/bin/kill -HUP $MAINPID
+# The lota group comes from sysusers, so /etc/group answers. nss-systemd would
+# still walk /run/systemd/userdb, which the policy refuses with one AVC a socket.
+Environment=SYSTEMD_BYPASS_USERDB=1
 WatchdogSec=60s
 Restart=on-failure
 RestartSec=5s
