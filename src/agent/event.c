@@ -229,7 +229,10 @@ int handle_exec_event(void *ctx, void *data, size_t len)
 		}
 		break;
 	case LOTA_EVENT_PTRACE:
-		event_type_str = "PTRACE";
+		event_type_str =
+			(event->flags & LOTA_EVENT_FLAG_INSIDE_INSTANCE) ?
+				"PTRACE_INSIDE_INSTANCE" :
+				"PTRACE";
 		lota_info("[%llu] %s %s -> pid=%u: %s (pid=%u, uid=%u)",
 			  (unsigned long long)event->timestamp_ns,
 			  event_type_str, comm_safe, event->target_pid,
@@ -260,6 +263,14 @@ int handle_exec_event(void *ctx, void *data, size_t len)
 			"[%llu] MAPPED_WRITE_BLOCKED %s -> %s (pid=%u, uid=%u)",
 			(unsigned long long)event->timestamp_ns, comm_safe,
 			filename_safe, event->pid, event->uid);
+		return 0;
+	/* the move also ended the agent; this is the record */
+	case LOTA_EVENT_AGENT_MOVED:
+		lota_warn("[%llu] AGENT_MOVED %s moved the agent pid=%u to %s "
+			  "(pid=%u, uid=%u)",
+			  (unsigned long long)event->timestamp_ns, comm_safe,
+			  event->target_pid, filename_safe, event->pid,
+			  event->uid);
 		return 0;
 	/* no signal, so no target pid: name the file instead */
 	case LOTA_EVENT_KILL_GUARD_BLOCKED:

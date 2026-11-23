@@ -78,6 +78,7 @@ enum lota_error size=4
 	LOTA_ERR_NO_ENFORCEMENT                  = -16
 	LOTA_ERR_NO_KEY_SLOT                     = -17
 	LOTA_ERR_TPM_LOCKED                      = -18
+	LOTA_ERR_NOT_PROTECTED                   = -19
 macro LOTA_FLAG_ATTESTED                       = 1
 macro LOTA_FLAG_TPM_OK                         = 2
 macro LOTA_FLAG_IOMMU_OK                       = 4
@@ -96,6 +97,8 @@ macro LOTA_FLAG_STRICT_EXEC                    = 65536
 macro LOTA_FLAG_STRICT_MODULES                 = 131072
 macro LOTA_FLAG_BLOCK_ANON_EXEC                = 262144
 macro LOTA_FLAG_BLOCK_PTRACE                   = 524288
+macro LOTA_FLAG_AGENT_RESTARTED                = 1048576
+macro LOTA_FLAG_EVENTS_LOST                    = 64
 macro LOTA_EVENT_STATUS                        = 1
 macro LOTA_EVENT_ATTEST                        = 2
 macro LOTA_EVENT_MODE                          = 4
@@ -106,7 +109,7 @@ struct lota_status size=32 align=8
 	valid_until                      off=16 size=8
 	attest_count                     off=24 size=4
 	fail_count                       off=28 size=4
-struct lota_token size=184 align=8
+struct lota_token size=192 align=8
 	valid_until                      off=0 size=8
 	flags                            off=8 size=4
 	nonce                            off=12 size=32
@@ -124,6 +127,7 @@ struct lota_token size=184 align=8
 	attest_size                      off=160 size=8
 	signature                        off=168 size=8
 	signature_len                    off=176 size=8
+	stopped_ms                       off=184 size=8
 struct lota_connect_opts size=32 align=8
 	struct_size                      off=0 size=8
 	socket_path                      off=8 size=8
@@ -131,6 +135,52 @@ struct lota_connect_opts size=32 align=8
 	publisher_profile                off=24 size=8
 macro LOTA_PUBLISHER_PROFILE_LEN               = 64
 macro LOTA_CONNECT_OPTS_SIZE_MIN               = 32
+macro LOTA_REGISTRY_SONAME_MAX                 = 256
+macro LOTA_REGISTRY_PATH_MAX                   = 320
+macro LOTA_REGISTRY_ROAD_NONE                  = 0
+macro LOTA_REGISTRY_ROAD_VERITY                = 1
+macro LOTA_REGISTRY_ROAD_CONTENT               = 2
+macro LOTA_REGISTRY_MEASURED                   = 1
+macro LOTA_REGISTRY_HISTORY_LOST               = 2
+macro LOTA_REGISTRY_PEERS_LOST                 = 4
+macro LOTA_REGISTRY_OBJECT_UNMAPPED            = 1
+macro LOTA_REGISTRY_OBJECT_WRITABLE            = 2
+macro LOTA_REGISTRY_OBJECT_MEMORY              = 4
+struct lota_registry_object size=680 align=8
+	size                             off=0 size=8
+	dev                              off=8 size=8
+	ino                              off=16 size=8
+	road                             off=24 size=4
+	flags                            off=28 size=4
+	digest_len                       off=32 size=4
+	digest                           off=36 size=64
+	soname                           off=100 size=256
+	path                             off=356 size=320
+macro LOTA_REGISTRY_PEER_CONNECT               = 1
+macro LOTA_REGISTRY_PEER_SEND                  = 2
+macro LOTA_REGISTRY_PEER_PTRACE_READ           = 3
+macro LOTA_REGISTRY_PEER_PTRACE_ATTACH         = 4
+macro LOTA_REGISTRY_PEER_SIGNAL                = 5
+struct lota_registry_peer size=80 align=8
+	count                            off=0 size=8
+	start_ticks                      off=8 size=8
+	exe_dev                          off=16 size=8
+	exe_ino                          off=24 size=8
+	tgid                             off=32 size=4
+	uid                              off=36 size=4
+	owner_tgid                       off=40 size=4
+	kind                             off=44 size=4
+	comm                             off=48 size=16
+	owner_comm                       off=64 size=16
+struct lota_registry size=80 align=8
+	round                            off=0 size=8
+	pid                              off=8 size=4
+	flags                            off=12 size=4
+	image_digest                     off=16 size=32
+	count                            off=48 size=4
+	objects                          off=56 size=8
+	peer_count                       off=64 size=4
+	peers                            off=72 size=8
 macro LOTA_SERVER_MAX_PCR_DIGEST_SIZE          = 64
 macro LOTA_SERVER_MAX_TOKEN_AGE_SEC            = 300
 macro LOTA_SERVER_MAX_CLOCK_SKEW_SEC           = 60
@@ -147,7 +197,7 @@ enum lota_server_error size=4
 	LOTA_SERVER_ERR_BUFFER                   = -9
 	LOTA_SERVER_ERR_FUTURE                   = -10
 	LOTA_SERVER_ERR_RUNTIME_IMAGE            = -11
-struct lota_server_claims size=208 align=8
+struct lota_server_claims size=216 align=8
 	valid_until                      off=0 size=8
 	flags                            off=8 size=4
 	nonce                            off=12 size=32
@@ -159,6 +209,30 @@ struct lota_server_claims size=208 align=8
 	pcr_digest                       off=124 size=64
 	pcr_digest_len                   off=192 size=8
 	expired                          off=200 size=4
+	stopped_ms                       off=208 size=8
+struct lota_server_registry_module size=64 align=8
+	soname                           off=0 size=8
+	path                             off=8 size=8
+	size                             off=16 size=8
+	dev                              off=24 size=8
+	ino                              off=32 size=8
+	road                             off=40 size=4
+	flags                            off=44 size=4
+	digest_len                       off=48 size=4
+	digest                           off=56 size=8
+macro LOTA_SERVER_REGISTRY_MAX_OBJECTS         = 512
+struct lota_server_registry_peer size=80 align=8
+	count                            off=0 size=8
+	start_ticks                      off=8 size=8
+	exe_dev                          off=16 size=8
+	exe_ino                          off=24 size=8
+	tgid                             off=32 size=4
+	uid                              off=36 size=4
+	owner_tgid                       off=40 size=4
+	kind                             off=44 size=4
+	comm                             off=48 size=16
+	owner_comm                       off=64 size=16
+macro LOTA_SERVER_REGISTRY_MAX_PEERS           = 256
 macro LOTA_SNAPSHOT_FILE_NAME                  = "lota-attestation.bin"
 macro LOTA_SNAPSHOT_MAGIC                      = 1096044364
 macro LOTA_SNAPSHOT_VERSION                    = 1
@@ -171,14 +245,14 @@ struct lota_snapshot_wire_hdr size=16 align=1
 	token_size                       off=12 size=4
 macro LOTA_TOKEN_MAGIC                         = 1263816524
 macro LOTA_TOKEN_VERSION                       = 1
-macro LOTA_TOKEN_HEADER_SIZE                   = 144
-macro LOTA_TOKEN_MAX_PROTECT_PIDS              = 181
-macro LOTA_TOKEN_MAX_PID_LIST_SIZE             = 724
+macro LOTA_TOKEN_HEADER_SIZE                   = 152
+macro LOTA_TOKEN_MAX_PROTECT_PIDS              = 180
+macro LOTA_TOKEN_MAX_PID_LIST_SIZE             = 720
 macro LOTA_TOKEN_IMAGE_DIGEST_SIZE             = 32
 macro LOTA_RUNTIME_PROTECT_V1                  = 1
-macro LOTA_TOKEN_MAX_IMAGE_LIST_SIZE           = 5792
-macro LOTA_TOKEN_MAX_SIZE                      = 8196
-struct lota_token_wire size=144 align=1
+macro LOTA_TOKEN_MAX_IMAGE_LIST_SIZE           = 5760
+macro LOTA_TOKEN_MAX_SIZE                      = 8168
+struct lota_token_wire size=152 align=1
 	magic                            off=0 size=4
 	version                          off=4 size=2
 	total_size                       off=6 size=2
@@ -196,6 +270,7 @@ struct lota_token_wire size=144 align=1
 	attest_size                      off=138 size=2
 	sig_size                         off=140 size=2
 	runtime_protect_version          off=142 size=2
+	stopped_ms                       off=144 size=8
 macro LOTA_HOOK_ENV_DISABLE                    = "LOTA_HOOK_DISABLE"
 macro LOTA_HOOK_ENV_ACTIVATE_PATH              = "LOTA_HOOK_ACTIVATE_PATH"
 macro LOTA_HOOK_ENV_ACTIVATE_PROGRAM           = "LOTA_HOOK_ACTIVATE_PROGRAM"
@@ -209,8 +284,6 @@ macro LOTA_HOOK_ENV_REFRESH_SEC                = "LOTA_HOOK_REFRESH_SEC"
 macro LOTA_HOOK_STATUS_FILE                    = "lota-status"
 macro LOTA_HOOK_TOKEN_FILE                     = "lota-token.bin"
 macro LOTA_HOOK_SNAPSHOT_FILE                  = "lota-attestation.bin"
-macro LOTA_HOOK_ENV_PROTECT_DELAY              = "LOTA_HOOK_PROTECT_DELAY"
 macro LOTA_HOOK_DEFAULT_REFRESH_SEC            = 60
-macro LOTA_HOOK_DEFAULT_PROTECT_DELAY_SEC      = 20
 macro LOTA_HOOK_CONNECT_TIMEOUT_MS             = 2000
 macro LOTA_HOOK_REQUEST_TIMEOUT_MS             = 20000

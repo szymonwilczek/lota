@@ -272,15 +272,11 @@ A token says the producer was in the protected set only if the producer put
 itself there: ``lota_ac_init()`` does not register the process; the reference
 calls ``lota_protect_self()`` behind ``--protect-self``.
 
-Once registered, the process may map an executable file only if its fs-verity
-digest is allowed or its inode is in ``trusted_libs``; anything else is
-``-EPERM``, its own libraries included. Registering before the loader is done
-kills the title. Two points are safe:
-
-* **After startup**, as the Wine hook does (``LOTA_HOOK_PROTECT_DELAY``, 20
-  seconds by default). A library loaded later meets the same rule.
-* **Any time**, once the game's libraries carry allowed fs-verity digests
-  (``LOTA_FLAG_IMAGE_FULLY_MEASURED`` on the far side).
+Under ``strict_mmap`` a registered process may map an executable file only if
+its fs-verity digest is allowed or its inode is in ``trusted_libs``; anything
+else is ``-EPERM``, its own libraries included. ``lota-protect`` registers a
+program before it runs, so on such a host every object the title loads needs
+an allowed digest (``LOTA_FLAG_IMAGE_FULLY_MEASURED`` on the far side).
 
 A refusal surfaces as ``dlopen()`` failing with "failed to map segment from
 shared object"; the agent journal has the matching ``MMAP_BLOCKED`` line. The
@@ -315,14 +311,68 @@ Worth being precise about, because it decides what you can build on it:
   written, and the token carries ``LOTA_FLAG_IMAGE_CONTENT_HASHED``.
   Refusing that flag demands fs-verity, at the cost of every such install.
 
-* Whether a protected process was ended on that host since it booted. A
-  protected process takes no signal except through the agent, and the agent
-  relays a termination only for the process's owner or root -- so a player can
-  close a hung title, and ``LOTA_FLAG_PROTECTED_TERMINATED`` says on every
-  later token that it happened. Ordinarily it means exactly that. Read
+* Which code objects the process mapped executable since it was protected,
+  the unmeasured ones and those it already dropped included.
+  ``lota_get_registry()`` lists them for a protected PID as the last token
+  round found them: size, inode and, where one was taken, the digest; the
+  path for an object still mapped, ``LOTA_REGISTRY_OBJECT_UNMAPPED`` and the
+  file's name for one that is gone. A refused mapping is listed too.
+  ``LOTA_REGISTRY_OBJECT_WRITABLE`` says another process could write the
+  object's pages while the title ran them, such as a helper holding a
+  memfd that no seal keeps from writes, or a file open for write or mapped
+  shared and writable; ``LOTA_REGISTRY_OBJECT_MEMORY``
+  says the code has no file on disk. A digest of such an object shows the
+  pages at the round only.
+  ``LOTA_REGISTRY_HISTORY_LOST`` says the kernel lost a record and the list
+  may miss an object. The token does not carry the list, it binds it:
+  ``lota_server_registry_digest()`` hashes the flags, every object and every
+  peer in the order listed, and the result equals the image digest the token holds for
+  that process. A list that does not hash to it, short of an object or with
+  one rewritten, is not the one the token describes.
+
+* Which processes reached the title: from outside through a unix socket,
+  such as one asking the title's ``wineserver`` to write into its memory, and
+  from inside by reading, writing or signalling another of its processes,
+  such as ``wineserver`` writing into the game. The registry lists each one
+  after the objects: its PID, uid, executable, command name, the title
+  process it reached, how (``LOTA_REGISTRY_PEER_*``) and how many times.
+  ``LOTA_REGISTRY_PEERS_LOST`` says the list may miss one. The agent refuses
+  nothing; whether a peer is expected, say the launcher, is your policy. The
+  peers are in the same hash, so a list with one dropped does not match.
+
+* Whether a protected process was ended through the agent on that host since
+  it booted. The agent relays a termination only for the process's owner or
+  root, and ``LOTA_FLAG_PROTECTED_TERMINATED`` says on every later token that
+  it happened; an ordinary signal ends the process too, without the flag. Ordinarily it means exactly that. Read
   together with the protected set the token carries, it is also how a session
   that ended locally is told apart from a process that vanished, which is the
   case worth a second look if the process that left was yours.
+
+* Whether the agent answering is the first of that boot.
+  ``LOTA_FLAG_AGENT_RESTARTED`` says an earlier agent ended without a shutdown
+  and was started again; whatever it recorded, ``PROTECTED_TERMINATED``
+  included, ended with it, so a token with this bit vouches for nothing before
+  the restart.
+
+* Whether anything outlived the agent. A protected process ends with the agent,
+  however the agent ended, and moving the agent to another cgroup ends both, so
+  a session that goes quiet together with its agent is the design at work rather
+  than evidence of anything. A session that goes quiet alone may be a stalled
+  title, which the next item can tell you once it answers again.
+
+* How long the title stood. ``stopped_ms`` is the time any thread of its
+  instance stood stopped: a frozen cgroup, job control, a tracer inside the
+  instance. It only grows while the process at the root of the instance lives,
+  so compare two tokens. A suspend leaves its own freeze in it, not the sleep.
+  LOTA holds no threshold: what gap is too long is your policy. A process in no
+  instance reads 0, and so does one whose root has ended. A title slowed down
+  rather than stopped does not show here.
+
+* Whether the agent's log is whole. ``LOTA_FLAG_EVENTS_LOST`` says the kernel
+  left an event out of it: the agent did not keep up, or something produced more
+  events than the log takes. Refusals still happened and the lists in the token
+  are kept apart from that log. The bit can arrive a second or more after the
+  loss, and what it is worth is your policy.
 
 It does **not** prove the player is not cheating. It proves the platform
 underneath is what it claims to be, which removes the layer where a cheat

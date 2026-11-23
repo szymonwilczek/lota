@@ -8,6 +8,9 @@
 # the Windows game, and shares the agent's socket directory and the hook's
 # token directory through PRESSURE_VESSEL_FILESYSTEMS_RW.
 #
+# The command runs through lota-protect, so the whole launch is protected
+# before its first instruction.
+#
 # Usage:
 #   As Steam launch option:
 #     lota-proton-hook %command%
@@ -18,6 +21,7 @@
 #
 # Environment:
 #   LOTA_HOOK_LIB_PATH   Override path to liblota_wine_hook.so
+#   LOTA_PROTECT_PATH    Override path to lota-protect (default: from PATH)
 #   LOTA_HOOK_LIB_ROOTS  Colon-separated prefixes holding lib64/ and lib/
 #                        (default /usr:/usr/local)
 #   LOTA_HOOK_DISABLE    Set to 1 (or true) to disable: the wrapper warns
@@ -42,6 +46,18 @@ case "${LOTA_HOOK_DISABLE:-}" in
 	exec "$@"
 	;;
 esac
+
+# Protected from the first instruction; the library only reports.
+# Without lota-protect the launch goes on and the agent reports it unprotected.
+launch() {
+    local protect="${LOTA_PROTECT_PATH:-$(command -v lota-protect || true)}"
+
+    if [[ -n "$protect" && -x "$protect" ]]; then
+        exec "$protect" -- "$@"
+    fi
+    echo "lota-proton-hook: lota-protect not found, starting unprotected" >&2
+    exec "$@"
+}
 
 LOTA_HOOK_LIB="${LOTA_HOOK_LIB_PATH:-}"
 
@@ -99,8 +115,8 @@ fi
 if [[ -z "$LOTA_HOOK_LIB" ||
 	  ( "$LOTA_HOOK_LIB" != *'$LIB'* && ! -f "$LOTA_HOOK_LIB" ) ]]; then
     echo "lota-proton-hook: hook library not found" >&2
-    echo "lota-proton-hook: continuing without LOTA integration" >&2
-    exec "$@"
+    echo "lota-proton-hook: continuing without the hook" >&2
+    launch "$@"
 fi
 
 if [[ -n "${LD_PRELOAD:-}" ]]; then
@@ -185,4 +201,4 @@ fi
 
 export PRESSURE_VESSEL_FILESYSTEMS_RW
 
-exec "$@"
+launch "$@"

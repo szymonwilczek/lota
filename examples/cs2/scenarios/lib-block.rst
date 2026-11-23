@@ -74,18 +74,17 @@ object, and attaches the LSM programs:
 The gate is armed but has nothing to guard until at least one process opts in.
 Two paths feed the protected_pids map:
 
-- **Game-side auto-register.** ``liblota_wine_hook.so`` calls
-  ``lota_protect_self()`` ``LOTA_HOOK_PROTECT_DELAY`` seconds (default 20)
-  after it loads, so any CS2 / Proton launch wired through
-  ``lota-proton-hook`` registers itself without operator
-  intervention. This is the production path; nothing else needs to happen on
-  the agent CLI. Confirm with the ``info`` line ``registered pid=<pid> for
-  runtime enforcement`` or ``bpftool map dump name protected_pids``.
+- **Game-side auto-register.** ``lota-proton-hook`` starts the launch through
+  ``lota-protect``, so any CS2 / Proton launch wired through it is protected
+  before its first instruction, together with every process it creates. This
+  is the production path; nothing else needs to happen on the agent CLI.
+  ``liblota_wine_hook.so`` also calls ``lota_protect_self()`` on its first
+  connect. Confirm with the ``info`` line ``registered pid=<pid> for runtime
+  enforcement`` or ``journalctl -u lota-agent``.
 
-  The wait is required: once registered, a title maps only files with an
-  allowed fs-verity digest or a ``trusted_libs`` inode, so registering
-  mid-load refuses Proton its own ``ntdll.so``. Verity-covered titles can set
-  ``LOTA_HOOK_PROTECT_DELAY=0``; a codec dlopened later needs covering too.
+  A protected title maps only files with an allowed fs-verity digest or a
+  ``trusted_libs`` inode, so every Proton object it loads, ``ntdll.so`` first,
+  needs covering.
 - **Manual register.** For out-of-game reproductions, or for a binary that does
   not link the hook, pass ``--protect-pid <pid>`` to the agent at startup. The
   PID must already be running when the agent starts: the agent reads it before
@@ -174,10 +173,9 @@ in the journal. A second shell that never registered its PID can run
 ``LD_PRELOAD=/tmp/evil.so cat`` unaffected -- the gate is scoped to the
 opted-in set on purpose, so a single agent can guard the game without breaking
 the rest of the host. The cross-process threat surface (an external aimbot
-reading ``/proc/<game>/mem``) is covered by the ptrace and task_kill hooks in
-the same BPF object, both of which already scope by ``is_protected_task()`` and
-reject untrusted readers regardless of whether the attacker is themselves
-registered.
+reading ``/proc/<game>/mem``) is covered by the ptrace hook in the same BPF
+object, which scopes by ``is_protected_task()`` and rejects every reader outside
+the game's own instance, registered or not.
 
 What this proves
 ----------------

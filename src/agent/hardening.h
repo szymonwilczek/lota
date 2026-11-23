@@ -15,6 +15,17 @@
 #define LOTA_AGENT_HARDENING_H
 
 #include <stdbool.h>
+#include <sys/types.h>
+
+/*
+ * hardening_read_tracer_pid - Read the TracerPid of a process
+ * @pid: the process, or 0 for the caller
+ * @out_tracer: the tracer's pid on -EPERM, otherwise zero
+ *
+ * Returns hardening_parse_tracer_pid_buf()'s verdict on /proc/<pid>/status,
+ * or a negative errno when the file cannot be read (-ENOENT: gone).
+ */
+int hardening_read_tracer_pid(pid_t pid, long *out_tracer);
 
 /*
  * hardening_refuse_if_traced - Refuse to start under a debugger

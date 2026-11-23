@@ -83,6 +83,13 @@ RestartPreventExitStatus=78 3
 User=root
 Group=root
 
+#
+# Whatever the agent protects dies with it, so the OOM killer should look
+# elsewhere first. Not -1000: a memory limit on this unit with nothing left to
+# kill in it loops in the kernel instead of ending the agent.
+#
+OOMScoreAdjust=-900
+
 ProtectSystem=strict
 ReadWritePaths=/var/lib/lota /run/lota
 ReadOnlyPaths=/etc/lota /usr/lib/lota
@@ -120,9 +127,7 @@ DeviceAllow=/dev/tpm0 rw
 # own LSM hook, which exempts it for read access only.
 #
 # CAP_KILL is what lets the agent end a protected process for its owner.
-# Such a process takes no signal from anything but itself, the agent
-# or the kernel, so a hung title would otherwise cost the player a reboot;
-# the agent relays SIGTERM or SIGKILL for a caller kill(2) would have allowed,
+# The agent relays SIGTERM or SIGKILL for a caller kill(2) would have allowed,
 # and a title runs as the player rather than as root, so signalling it crosses
 # a uid boundary and needs the capability.
 #

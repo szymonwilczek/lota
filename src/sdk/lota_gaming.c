@@ -69,6 +69,10 @@ _Static_assert(LOTA_FLAG_BLOCK_ANON_EXEC == LOTA_STATUS_BLOCK_ANON_EXEC,
 	       "BLOCK_ANON_EXEC differs");
 _Static_assert(LOTA_FLAG_BLOCK_PTRACE == LOTA_STATUS_BLOCK_PTRACE,
 	       "BLOCK_PTRACE differs");
+_Static_assert(LOTA_FLAG_AGENT_RESTARTED == LOTA_STATUS_AGENT_RESTARTED,
+	       "AGENT_RESTARTED differs");
+_Static_assert(LOTA_FLAG_EVENTS_LOST == LOTA_STATUS_EVENTS_LOST,
+	       "EVENTS_LOST differs");
 
 #define DEFAULT_TIMEOUT_MS 5000
 
@@ -149,6 +153,9 @@ static int wait_for_socket(int fd, int events, int timeout_ms)
 		return -errno;
 	if (ret == 0)
 		return -ETIMEDOUT;
+	/* a reply queued before the hangup is still read */
+	if (pfd.revents & POLLIN)
+		return 0;
 	if (pfd.revents & (POLLERR | POLLHUP | POLLNVAL))
 		return -ECONNRESET;
 
@@ -338,6 +345,8 @@ static int ipc_result_to_error(uint32_t result)
 		return LOTA_ERR_NO_KEY_SLOT;
 	case LOTA_IPC_ERR_TPM_LOCKOUT:
 		return LOTA_ERR_TPM_LOCKED;
+	case LOTA_IPC_ERR_NOT_PROTECTED:
+		return LOTA_ERR_NOT_PROTECTED;
 	case LOTA_IPC_ERR_TPM_FAILURE:
 	case LOTA_IPC_ERR_INTERNAL:
 	default:
@@ -910,6 +919,7 @@ int lota_get_token(struct lota_client *client, const uint8_t *nonce,
 	       sizeof(token->runtime_protect_digest));
 	token->runtime_protect_epoch = ipc_token_hdr.runtime_protect_epoch;
 	token->runtime_protect_version = ipc_token_hdr.runtime_protect_version;
+	token->stopped_ms = ipc_token_hdr.stopped_ms;
 	token->protect_pid_count = ipc_token_hdr.protect_pid_count;
 
 	if (ipc_token_hdr.pid_list_size !=
@@ -1095,6 +1105,7 @@ int lota_token_serialize(const struct lota_token *token, uint8_t *buf,
 	wire.attest_size = htole16((uint16_t)token->attest_size);
 	wire.sig_size = htole16((uint16_t)token->signature_len);
 	wire.runtime_protect_version = htole16(token->runtime_protect_version);
+	wire.stopped_ms = htole64(token->stopped_ms);
 
 	/* write header */
 	memcpy(buf, &wire, sizeof(wire));
@@ -1311,6 +1322,272 @@ int lota_poll_events(struct lota_client *client, int timeout_ms)
 	return dispatched;
 }
 
+/* bounds the allocation a reply asks for */
+#define REGISTRY_MAX_OBJECTS LOTA_IPC_REGISTRY_MAX_OBJECTS
+#define REGISTRY_MAX_PEERS LOTA_IPC_REGISTRY_MAX_PEERS
+#define REGISTRY_FLAGS                                                 \
+	(LOTA_IPC_REGISTRY_MEASURED | LOTA_IPC_REGISTRY_HISTORY_LOST | \
+	 LOTA_IPC_REGISTRY_PEERS_LOST)
+_Static_assert(
+	LOTA_REGISTRY_MEASURED == LOTA_IPC_REGISTRY_MEASURED &&
+		LOTA_REGISTRY_HISTORY_LOST == LOTA_IPC_REGISTRY_HISTORY_LOST &&
+		LOTA_REGISTRY_PEERS_LOST == LOTA_IPC_REGISTRY_PEERS_LOST &&
+		LOTA_REGISTRY_OBJECT_UNMAPPED ==
+			LOTA_IPC_REGISTRY_ENTRY_UNMAPPED &&
+		LOTA_REGISTRY_OBJECT_WRITABLE ==
+			LOTA_IPC_REGISTRY_ENTRY_WRITABLE &&
+		LOTA_REGISTRY_OBJECT_MEMORY == LOTA_IPC_REGISTRY_ENTRY_MEMORY,
+	"lota_gaming.h registry flags copy lota_ipc.h");
+_Static_assert(LOTA_REGISTRY_PEER_CONNECT == LOTA_IPC_REGISTRY_PEER_CONNECT &&
+		       LOTA_REGISTRY_PEER_SEND == LOTA_IPC_REGISTRY_PEER_SEND &&
+		       LOTA_REGISTRY_PEER_PTRACE_READ ==
+			       LOTA_IPC_REGISTRY_PEER_PTRACE_READ &&
+		       LOTA_REGISTRY_PEER_PTRACE_ATTACH ==
+			       LOTA_IPC_REGISTRY_PEER_PTRACE_ATTACH &&
+		       LOTA_REGISTRY_PEER_SIGNAL ==
+			       LOTA_IPC_REGISTRY_PEER_SIGNAL &&
+		       LOTA_IPC_REGISTRY_PEER_KIND_MAX ==
+			       LOTA_IPC_REGISTRY_PEER_SIGNAL,
+	       "lota_gaming.h peer kinds copy lota_ipc.h");
+_Static_assert(
+	sizeof(((struct lota_registry_peer *)0)->comm) ==
+			sizeof(((struct lota_ipc_registry_peer *)0)->comm) &&
+		sizeof(((struct lota_registry_peer *)0)->owner_comm) ==
+			sizeof(((struct lota_ipc_registry_peer *)0)->owner_comm),
+	"lota_gaming.h copies the agent's name width");
+/* a token round between two pages restarts the listing */
+#define REGISTRY_FETCH_TRIES 4
+
+void lota_registry_free(struct lota_registry *reg)
+{
+	if (!reg)
+		return;
+	free(reg->objects);
+	free(reg->peers);
+	free(reg);
+}
+
+static int registry_request_page(struct lota_client *client, uint32_t pid,
+				 uint32_t start, uint8_t *buf, size_t cap,
+				 size_t *len)
+{
+	struct lota_ipc_request req;
+	struct lota_ipc_response resp;
+	struct lota_ipc_registry_request body;
+	int ret;
+
+	memset(&body, 0, sizeof(body));
+	body.pid = pid;
+	body.start = start;
+
+	memset(&req, 0, sizeof(req));
+	req.magic = LOTA_IPC_MAGIC;
+	req.version = LOTA_IPC_VERSION;
+	req.cmd = LOTA_IPC_CMD_GET_REGISTRY;
+	req.payload_len = sizeof(body);
+
+	ret = send_request(client, &req, &body, sizeof(body));
+	if (ret < 0)
+		return (ret == -ETIMEDOUT) ? LOTA_ERR_TIMEOUT :
+					     LOTA_ERR_PROTOCOL;
+
+	ret = recv_response(client, &resp, buf, cap, len);
+	if (ret < 0)
+		return (ret == -ETIMEDOUT) ? LOTA_ERR_TIMEOUT :
+					     LOTA_ERR_PROTOCOL;
+	if (resp.result != LOTA_IPC_OK)
+		return ipc_result_to_error(resp.result);
+	return LOTA_OK;
+}
+
+/* Decode the peer at @off into @p; 0 or LOTA_ERR_PROTOCOL */
+static int registry_decode_peer(const uint8_t *buf, size_t len, size_t *off,
+				struct lota_registry_peer *p)
+{
+	struct lota_ipc_registry_peer w;
+
+	if (len - *off < sizeof(w))
+		return LOTA_ERR_PROTOCOL;
+	memcpy(&w, buf + *off, sizeof(w));
+	*off += sizeof(w);
+
+	if (w.kind < LOTA_IPC_REGISTRY_PEER_CONNECT ||
+	    w.kind > LOTA_IPC_REGISTRY_PEER_KIND_MAX)
+		return LOTA_ERR_PROTOCOL;
+	if (!memchr(w.comm, '\0', sizeof(w.comm)) ||
+	    !memchr(w.owner_comm, '\0', sizeof(w.owner_comm)))
+		return LOTA_ERR_PROTOCOL;
+
+	memset(p, 0, sizeof(*p));
+	p->count = w.count;
+	p->start_ticks = w.start_ticks;
+	p->exe_dev = w.exe_dev;
+	p->exe_ino = w.exe_ino;
+	p->tgid = w.tgid;
+	p->uid = w.uid;
+	p->owner_tgid = w.owner_tgid;
+	p->kind = w.kind;
+	memcpy(p->comm, w.comm, sizeof(p->comm));
+	memcpy(p->owner_comm, w.owner_comm, sizeof(p->owner_comm));
+	return LOTA_OK;
+}
+
+/* Decode @count entries after the page header, the first at @start. */
+static int registry_decode_entries(const uint8_t *buf, size_t len,
+				   uint32_t start, uint16_t count,
+				   struct lota_registry *reg)
+{
+	size_t off = sizeof(struct lota_ipc_registry_page);
+
+	for (uint32_t i = start; i < start + count; i++) {
+		struct lota_ipc_registry_entry e;
+		struct lota_registry_object *o;
+
+		if (i >= reg->count) {
+			if (registry_decode_peer(buf, len, &off,
+						 &reg->peers[i - reg->count]))
+				return LOTA_ERR_PROTOCOL;
+			continue;
+		}
+
+		o = &reg->objects[i];
+		if (len - off < sizeof(e))
+			return LOTA_ERR_PROTOCOL;
+		memcpy(&e, buf + off, sizeof(e));
+		off += sizeof(e);
+
+		if (e.soname_len == 0 ||
+		    e.soname_len >= LOTA_REGISTRY_SONAME_MAX ||
+		    e.path_len >= LOTA_REGISTRY_PATH_MAX ||
+		    len - off < (size_t)e.soname_len + e.path_len)
+			return LOTA_ERR_PROTOCOL;
+		if (e.road > LOTA_IPC_REGISTRY_ROAD_CONTENT)
+			return LOTA_ERR_PROTOCOL;
+		if (e.road == LOTA_IPC_REGISTRY_ROAD_NONE ?
+			    e.digest_len != 0 :
+			    (e.digest_len != 32 && e.digest_len != 64))
+			return LOTA_ERR_PROTOCOL;
+		if (e.flags & ~LOTA_IPC_REGISTRY_ENTRY_KNOWN)
+			return LOTA_ERR_PROTOCOL;
+
+		memset(o, 0, sizeof(*o));
+		o->size = e.size;
+		o->dev = e.dev;
+		o->ino = e.ino;
+		o->road = e.road;
+		o->flags = e.flags;
+		o->digest_len = e.digest_len;
+		memcpy(o->digest, e.digest, e.digest_len);
+		memcpy(o->soname, buf + off, e.soname_len);
+		off += e.soname_len;
+		memcpy(o->path, buf + off, e.path_len);
+		off += e.path_len;
+	}
+	return off == len ? LOTA_OK : LOTA_ERR_PROTOCOL;
+}
+
+/* One listing; 1 asks for a restart because a token round intervened. */
+static int registry_fetch(struct lota_client *client, uint32_t pid,
+			  uint8_t *buf, struct lota_registry **out)
+{
+	struct lota_registry *reg = NULL;
+	uint32_t start = 0;
+	uint32_t all = 0;
+	int ret;
+
+	do {
+		struct lota_ipc_registry_page hdr;
+		size_t len = 0;
+
+		ret = registry_request_page(client, pid, start, buf,
+					    LOTA_IPC_MAX_PAYLOAD, &len);
+		if (ret != LOTA_OK)
+			goto fail;
+		ret = LOTA_ERR_PROTOCOL;
+		if (len < sizeof(hdr))
+			goto fail;
+		memcpy(&hdr, buf, sizeof(hdr));
+		if (hdr.pid != pid || hdr.start != start)
+			goto fail;
+
+		if (!reg) {
+			if (hdr.total > REGISTRY_MAX_OBJECTS ||
+			    hdr.peer_total > REGISTRY_MAX_PEERS ||
+			    (hdr.flags & ~REGISTRY_FLAGS))
+				goto fail;
+			ret = LOTA_ERR_NO_MEMORY;
+			reg = calloc(1, sizeof(*reg));
+			if (!reg)
+				goto fail;
+			if (hdr.total > 0) {
+				reg->objects = calloc(hdr.total,
+						      sizeof(*reg->objects));
+				if (!reg->objects)
+					goto fail;
+			}
+			if (hdr.peer_total > 0) {
+				reg->peers = calloc(hdr.peer_total,
+						    sizeof(*reg->peers));
+				if (!reg->peers)
+					goto fail;
+			}
+			reg->round = hdr.round;
+			reg->pid = pid;
+			reg->flags = hdr.flags;
+			reg->count = hdr.total;
+			reg->peer_count = hdr.peer_total;
+			memcpy(reg->image_digest, hdr.image_digest,
+			       sizeof(reg->image_digest));
+		} else if (hdr.round != reg->round || hdr.total != reg->count ||
+			   hdr.peer_total != reg->peer_count) {
+			lota_registry_free(reg);
+			return 1;
+		}
+
+		ret = LOTA_ERR_PROTOCOL;
+		all = reg->count + reg->peer_count;
+		if ((hdr.count == 0 && start < all) || hdr.count > all - start)
+			goto fail;
+		ret = registry_decode_entries(buf, len, start, hdr.count, reg);
+		if (ret != LOTA_OK)
+			goto fail;
+		start += hdr.count;
+	} while (start < all);
+
+	*out = reg;
+	return LOTA_OK;
+fail:
+	lota_registry_free(reg);
+	return ret;
+}
+
+int lota_get_registry(struct lota_client *client, uint32_t pid,
+		      struct lota_registry **out)
+{
+	uint8_t *buf;
+	int ret = LOTA_ERR_AGENT_ERROR;
+
+	if (!client)
+		return LOTA_ERR_NOT_CONNECTED;
+	if (!out || pid == 0)
+		return LOTA_ERR_INVALID_ARG;
+	*out = NULL;
+
+	buf = malloc(LOTA_IPC_MAX_PAYLOAD);
+	if (!buf)
+		return LOTA_ERR_NO_MEMORY;
+
+	/* torn by a token round on every try: reported as an agent error */
+	for (int i = 0; i < REGISTRY_FETCH_TRIES; i++) {
+		ret = registry_fetch(client, pid, buf, out);
+		if (ret != 1)
+			break;
+		ret = LOTA_ERR_AGENT_ERROR;
+	}
+	free(buf);
+	return ret;
+}
+
 const char *lota_strerror(int error)
 {
 	switch (error) {
@@ -1352,6 +1629,8 @@ const char *lota_strerror(int error)
 		return "This machine has no attestation-key slot left for that publisher";
 	case LOTA_ERR_TPM_LOCKED:
 		return "The TPM on this machine is locked out after too many failed authorizations and signs nothing until it is cleared";
+	case LOTA_ERR_NOT_PROTECTED:
+		return "The last token round did not measure that process";
 	default:
 		return "Unknown error";
 	}

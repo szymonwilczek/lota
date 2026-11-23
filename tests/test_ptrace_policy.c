@@ -6,7 +6,7 @@
  * what the key's help text and the documentation promise, and not a read of
  * another process's /proc, which the kernel's own permission model already
  * answers. A process that asked for protection is the separate case, and it
- * refuses both.
+ * refuses both, as does every process it starts.
  *
  * Copyright (C) 2026 Szymon Wilczek
  */
@@ -140,9 +140,108 @@ static void test_attach_is_recognised_by_its_flag(void)
 	      "an access carrying both flags is an attach");
 }
 
+/* CLONE_VM | CLONE_VFORK, what posix_spawn() passes */
+#define SPAWN_FLAGS 0x00004100UL
+/* CLONE_VM | CLONE_FS | CLONE_FILES | CLONE_SIGHAND, what a thread adds to */
+#define THREAD_SHARE_FLAGS 0x00000f00UL
+
+/*
+ * A protected process passes its protection to the processes it creates,
+ * however it creates them, and to nothing a process nobody protects creates.
+ */
+static void test_a_child_inherits_protection(void)
+{
+	CHECK(lota_clone_inherits_protection(0, 1),
+	      "a fork of a protected process is protected");
+	CHECK(lota_clone_inherits_protection(SPAWN_FLAGS, 1),
+	      "a posix_spawn() child of a protected process is protected");
+	CHECK(!lota_clone_inherits_protection(0, 0),
+	      "a fork of an unprotected process is not protected");
+	CHECK(!lota_clone_inherits_protection(SPAWN_FLAGS, 0),
+	      "a spawn of an unprotected process is not protected");
+}
+
+/* A thread is covered through its leader and takes no mark of its own */
+static void test_a_thread_takes_no_mark(void)
+{
+	CHECK(!lota_clone_inherits_protection(
+		      THREAD_SHARE_FLAGS | LOTA_CLONE_THREAD, 1),
+	      "a thread of a protected process takes no mark");
+}
+
+/*
+ * A tracer attached before the protection would follow a protected process
+ * into its children, so a process held from outside the set creates nothing
+ */
+static void test_a_tracer_from_outside_stops_creation(void)
+{
+	CHECK(lota_clone_refused(1, 1, 0),
+	      "a protected process traced from outside creates nothing");
+	CHECK(!lota_clone_refused(1, 1, 1),
+	      "a protected process traced from inside its instance creates");
+	CHECK(!lota_clone_refused(1, 0, 0),
+	      "an untraced protected process creates");
+	CHECK(!lota_clone_refused(0, 1, 0),
+	      "a traced unprotected process is not this rule's business");
+}
+
+static void test_access_inside_an_instance(void)
+{
+	CHECK(lota_inside_instance(1, 100, 5000, 1, 100, 5000),
+	      "two processes of one instance are inside it");
+	CHECK(!lota_inside_instance(1, 100, 5000, 1, 200, 5000),
+	      "another instance's process is outside");
+	CHECK(!lota_inside_instance(1, 100, 5000, 1, 100, 6000),
+	      "a recycled root tgid names another instance");
+	CHECK(!lota_inside_instance(0, 100, 5000, 1, 100, 5000),
+	      "an unprotected actor is outside every instance");
+	CHECK(!lota_inside_instance(1, 100, 5000, 0, 100, 5000),
+	      "an unprotected target is in no instance");
+}
+
+/* the hook passes a target inside the actor's instance as unprotected */
+static void test_an_attach_inside_the_instance_is_allowed(void)
+{
+	int inside = lota_inside_instance(1, 100, 5000, 1, 100, 5000);
+
+	CHECK(!lota_ptrace_denied(LOTA_PTRACE_MODE_ATTACH, LOTA_MODE_MONITOR, 0,
+				  0, !inside),
+	      "an attach inside the instance is not refused");
+	CHECK(lota_ptrace_denied(LOTA_PTRACE_MODE_ATTACH, LOTA_MODE_MONITOR, 0,
+				 1, !inside),
+	      "the agent stays refused to every instance");
+}
+
+#define PROC_NAME(s) (s), (unsigned int)(sizeof(s) - 1)
+
+/* /proc entries a CAP_PERFMON reader would get past the ptrace verdict */
+static void test_proc_entries_that_read_memory(void)
+{
+	CHECK(lota_proc_entry_reads_mm(PROC_NAME("maps")), "maps reads memory");
+	CHECK(lota_proc_entry_reads_mm(PROC_NAME("smaps_rollup")),
+	      "smaps_rollup reads memory");
+	CHECK(lota_proc_entry_reads_mm(PROC_NAME("pagemap")),
+	      "pagemap reads memory");
+	CHECK(lota_proc_entry_reads_mm(PROC_NAME("environ")),
+	      "environ reads memory");
+	CHECK(lota_proc_entry_reads_mm(PROC_NAME("auxv")), "auxv reads memory");
+	CHECK(lota_proc_entry_reads_mm(PROC_NAME("map_files")),
+	      "map_files lists the mappings");
+	CHECK(!lota_proc_entry_reads_mm(PROC_NAME("status")),
+	      "status only names the process");
+	CHECK(!lota_proc_entry_reads_mm(PROC_NAME("cmdline")),
+	      "cmdline stays readable for ps");
+	CHECK(!lota_proc_entry_reads_mm(PROC_NAME("cgroup")),
+	      "cgroup stays readable for systemd");
+	CHECK(!lota_proc_entry_reads_mm("mapsx", 4 + 1),
+	      "a longer name is another entry");
+	CHECK(!lota_proc_entry_reads_mm("map", 3), "a prefix is another entry");
+}
+
 int main(void)
 {
 	printf("=== ptrace policy tests ===\n");
+	test_proc_entries_that_read_memory();
 	test_read_is_allowed_with_the_key_on();
 	test_attach_is_refused_with_the_key_on();
 	test_the_key_off_refuses_nothing();
@@ -152,6 +251,11 @@ int main(void)
 	test_the_agent_is_never_a_target();
 	test_the_agent_read_exemption();
 	test_attach_is_recognised_by_its_flag();
+	test_a_child_inherits_protection();
+	test_a_thread_takes_no_mark();
+	test_a_tracer_from_outside_stops_creation();
+	test_access_inside_an_instance();
+	test_an_attach_inside_the_instance_is_allowed();
 
 	if (g_failures) {
 		fprintf(stderr, "\n%d test(s) failed\n", g_failures);

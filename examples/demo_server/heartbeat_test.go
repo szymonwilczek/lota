@@ -113,7 +113,7 @@ func newSignedHeartbeat(t *testing.T, key *rsa.PrivateKey,
 	}
 
 	expectedTPMNonce := verifysdk.ComputeTokenQuoteNonce(validUntil,
-		hdr.lotaFlags, pcrMask, heartbeatNonce, policyDigest, runtimeDigest, 0)
+		hdr.lotaFlags, pcrMask, heartbeatNonce, policyDigest, runtimeDigest, 0, 0)
 
 	attest := buildFakeTPMSAttest(expectedTPMNonce[:], pcrMask, pcrDigest)
 	hash := sha256.Sum256(attest)
@@ -124,7 +124,7 @@ func newSignedHeartbeat(t *testing.T, key *rsa.PrivateKey,
 
 	token, err := verifysdk.SerializeToken(validUntil, hdr.lotaFlags,
 		heartbeatNonce, 0x0014, 0x000B, pcrMask, policyDigest, runtimeDigest,
-		0, nil, nil, attest, sig)
+		0, 0, nil, nil, attest, sig)
 	if err != nil {
 		t.Fatalf("serialize: %v", err)
 	}

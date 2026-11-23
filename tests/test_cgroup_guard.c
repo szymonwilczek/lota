@@ -1,7 +1,7 @@
 /* SPDX-License-Identifier: MIT */
 /*
- * Unit tests for the cgroup.kill walk, against a built directory tree:
- * no cgroups, no root, no agent.
+ * Unit tests for the cgroup.kill and cgroup.freeze walk, against a built
+ * directory tree: no cgroups, no root, no agent.
  *
  * Copyright (C) 2026 Szymon Wilczek
  */
@@ -15,6 +15,7 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
+#include "../include/lota.h"
 #include "../src/agent/cgroup_guard.h"
 #include "../src/agent/sb_dev.h"
 
@@ -48,6 +49,14 @@ static void write_file(const char *path, const char *content)
 	fclose(f);
 }
 
+static void make_cgroup_file(const char *rel, const char *name)
+{
+	char path[PATH_MAX];
+
+	snprintf(path, sizeof(path), "%s%s/%s", g_tmpdir, rel, name);
+	write_file(path, "0\n");
+}
+
 static void make_cgroup_dir(const char *rel, int with_kill_file)
 {
 	char path[PATH_MAX];
@@ -60,19 +69,23 @@ static void make_cgroup_dir(const char *rel, int with_kill_file)
 	if (!with_kill_file)
 		return;
 
-	snprintf(path, sizeof(path), "%s%s/cgroup.kill", g_tmpdir, rel);
-	write_file(path, "0\n");
+	make_cgroup_file(rel, "cgroup.kill");
 }
 
-static unsigned long long ino_of(const char *rel)
+static unsigned long long ino_of_file(const char *rel, const char *name)
 {
 	char path[PATH_MAX];
 	struct stat st = { 0 };
 
-	snprintf(path, sizeof(path), "%s%s/cgroup.kill", g_tmpdir, rel);
+	snprintf(path, sizeof(path), "%s%s/%s", g_tmpdir, rel, name);
 	if (stat(path, &st) != 0)
 		return 0;
 	return (unsigned long long)st.st_ino;
+}
+
+static unsigned long long ino_of(const char *rel)
+{
+	return ino_of_file(rel, "cgroup.kill");
 }
 
 static void test_self_path(void)
@@ -159,6 +172,44 @@ static void test_collect(void)
 	CHECK(ret == 1, "the root of the hierarchy is one level, not two");
 }
 
+/* cgroup.freeze stops the agent past every signal hook as cgroup.kill ends it */
+static void test_collect_freeze(void)
+{
+	struct cgroup_guard_file files[LOTA_CGROUP_GUARD_MAX];
+	char root[PATH_MAX];
+	int ret;
+
+	make_cgroup_dir("/froot", 0);
+	make_cgroup_dir("/froot/system.slice", 1);
+	make_cgroup_file("/froot/system.slice", "cgroup.freeze");
+	make_cgroup_dir("/froot/system.slice/lota-agent.service", 1);
+	make_cgroup_file("/froot/system.slice/lota-agent.service",
+			 "cgroup.freeze");
+
+	snprintf(root, sizeof(root), "%s/froot", g_tmpdir);
+	ret = cgroup_guard_collect(root, "/system.slice/lota-agent.service",
+				   files, LOTA_CGROUP_GUARD_MAX);
+	CHECK(ret == 4, "both files of both levels are collected");
+	if (ret == 4) {
+		CHECK(files[0].kind == LOTA_GUARD_CGROUP_KILL &&
+			      files[1].kind == LOTA_GUARD_CGROUP_FREEZE,
+		      "each level gives its kill file, then its freeze file");
+		CHECK(files[1].ino ==
+			      ino_of_file(
+				      "/froot/system.slice/lota-agent.service",
+				      "cgroup.freeze"),
+		      "the agent's own cgroup.freeze is guarded");
+		CHECK(files[3].ino == ino_of_file("/froot/system.slice",
+						  "cgroup.freeze"),
+		      "an ancestor's cgroup.freeze is guarded");
+	}
+
+	ret = cgroup_guard_collect(root, "/system.slice/lota-agent.service",
+				   files, 3);
+	CHECK(ret == -ENOSPC,
+	      "a freeze file past the caller's room is refused");
+}
+
 int main(void)
 {
 	char tmpl[] = "/tmp/lota-cgroup-guard-XXXXXX";
@@ -181,6 +232,7 @@ int main(void)
 	if (fd >= 0 && sb_dev_from_fd(fd, &dev) == 0 && dev != 0) {
 		close(fd);
 		test_collect();
+		test_collect_freeze();
 	} else {
 		if (fd >= 0)
 			close(fd);

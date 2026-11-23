@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: MIT */
 /*
- * LOTA - the cgroup files that end the agent without a signal
+ * LOTA - the cgroup files that end or stop the agent without a signal
  *
  * Copyright (C) 2026 Szymon Wilczek
  */
@@ -12,6 +12,7 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
+#include "../../include/lota.h"
 #include "cgroup_guard.h"
 #include "sb_dev.h"
 
@@ -98,7 +99,8 @@ int cgroup_guard_self_path(const char *proc_cgroup_path, char *out,
 }
 
 /* superblock dev, not st_dev: the BPF hook compares the former */
-static int guard_file_ids(const char *dir, struct cgroup_guard_file *out)
+static int guard_file_ids(const char *dir, const char *name,
+			  struct cgroup_guard_file *out)
 {
 	char path[PATH_MAX];
 	struct stat st = { 0 };
@@ -106,7 +108,7 @@ static int guard_file_ids(const char *dir, struct cgroup_guard_file *out)
 	int fd;
 	int ret;
 
-	if (snprintf(path, sizeof(path), "%s/cgroup.kill", dir) >=
+	if (snprintf(path, sizeof(path), "%s/%s", dir, name) >=
 	    (int)sizeof(path))
 		return -ENAMETOOLONG;
 
@@ -132,6 +134,14 @@ static int guard_file_ids(const char *dir, struct cgroup_guard_file *out)
 	out->ino = (unsigned long long)st.st_ino;
 	return 0;
 }
+
+static const struct {
+	const char *name;
+	unsigned int kind;
+} guard_names[] = {
+	{ "cgroup.kill", LOTA_GUARD_CGROUP_KILL },
+	{ "cgroup.freeze", LOTA_GUARD_CGROUP_FREEZE },
+};
 
 int cgroup_guard_collect(const char *mount_root, const char *cgroup_path,
 			 struct cgroup_guard_file *out, size_t max)
@@ -164,11 +174,16 @@ int cgroup_guard_collect(const char *mount_root, const char *cgroup_path,
 	for (;;) {
 		char *slash;
 
-		if (count == max)
-			return -ENOSPC;
-
-		if (guard_file_ids(dir, &out[count]) == 0)
+		for (size_t i = 0;
+		     i < sizeof(guard_names) / sizeof(guard_names[0]); i++) {
+			if (count == max)
+				return -ENOSPC;
+			if (guard_file_ids(dir, guard_names[i].name,
+					   &out[count]) != 0)
+				continue;
+			out[count].kind = guard_names[i].kind;
 			count++;
+		}
 
 		if (strlen(dir) <= root_len)
 			break;

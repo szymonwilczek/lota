@@ -361,8 +361,9 @@ Active threats
          ``LOTA_FLAG_IMAGE_CONTENT_HASHED``. Only on a kernel-served
          filesystem, and only for a file no writer may replace: the running
          executable, or a library the agent has pinned, in every mode. A
-         refused write to a pinned library is counted and sent on the event
-         stream, not left a bare ``EPERM``.
+         pinned library refuses a write open and a ``truncate(2)`` by path.
+         A refused write is counted and sent on the event stream, not left
+         a bare ``EPERM``.
      - | Anonymous executable memory and JIT code are not measured as modules.
        | Intended bound is W^X plus policy enforcement: ``block_anon_exec``
          refuses it in a protected process, off by default and carried as
@@ -394,8 +395,31 @@ Active threats
    * - ptrace or process mutation
      - | BPF LSM hooks protect the agent and protected PIDs, including
          ``__ptrace_may_access`` where available. Both refuse a read and an
-         attach alike, so nothing reads a protected process's ``/proc`` or
-         attaches a debugger to it.
+         attach alike, so nothing attaches a debugger to a protected process
+         or reads its memory.
+       | The ``/proc`` entries that read an address space (``maps``,
+         ``smaps``, ``pagemap``, ``environ``, ``auxv``, ``map_files``) are
+         refused at the open, by the same rules: the kernel lets a holder of
+         ``CAP_PERFMON`` past a refused read there, root included. Entries
+         that only name the process (``stat``, ``status``, ``cmdline``) stay
+         readable, as for any process.
+       | A process a protected one creates is protected before it first runs,
+         and stays protected across ``execve``. When the kernel cannot record
+         that, the creation fails, so no child runs unprotected. A protected
+         process held by a tracer outside its instance creates nothing, since
+         the kernel would hand the tracer the child as well.
+       | An instance is the tree one protected process started. Inside it the
+         refusal does not apply and every access is recorded: the wineserver
+         reads and writes the memory of each process it hosts. Nothing outside
+         an instance reaches into it, another instance included. The agent
+         adds every process of an instance to the protected set, so the
+         token names it and the measurement covers it; it reads the
+         membership through a pidfd before and after the start time, so a
+         reused PID is never added.
+       | The agent refuses to protect a process a tracer already holds: the
+         LSM refuses new attaches, and one made before the protection would
+         stay. It reads the tracer after the process is in the map, so no
+         attach lands between the check and the protection.
        | ``block_ptrace``, off by default, extends the refusal to an attach on
          any other task.
      - | Reading another process's ``/proc`` is left to the kernel outside the
@@ -406,18 +430,43 @@ Active threats
        | Hook availability and verifier behavior must be validated on the
          target kernel.
    * - Ending a protected process
-     - | ``lota-agent --terminate-protected`` is the only route: the LSM passes
-         no signal to a protected task from anything but itself, the agent or
-         the kernel, and the agent relays only ``SIGTERM`` and ``SIGKILL``, only
-         for a caller ``kill(2)`` would have allowed.
-       | Except a signal the task handles itself: it ends nothing, and the
-         wineserver drives every process it hosts with ``SIGUSR1`` and
-         ``SIGQUIT``. ``SIGTERM``, ``SIGINT`` and ``SIGHUP`` stay refused even
-         when handled, since a title handles them to exit, as does every
-         signal to the agent, whose handlers are how it shuts down.
-       | Every relayed termination is journalled, and the host reports
+     - | A protected task can be ended: a title that is killed is not cheated
+         in, its session ends and the publisher sees that.
+       | From outside its instance the LSM refuses a signal that would stop it
+         or write its memory to a core file, sent directly or aimed through
+         ``F_SETOWN``, and refuses a change to its resource limits. A dump
+         signal with no handler, from a crash or a terminal's quit key, ends
+         the group before the kernel writes anything.
+       | A title whose own cgroup is frozen stands, as does one stopped from
+         inside its instance. Nothing refuses that; the token's ``stopped_ms``
+         says for how long any of its threads stood, and the publisher decides
+         what that means. The freeze a suspend applies counts, the sleep itself
+         does not. A title slowed rather than stopped (``cpu.max``,
+         ``SCHED_IDLE``) or frozen through the cgroup v1 freezer adds nothing
+         to it, and the value ends with the process at the root of the
+         instance.
+       | The agent is guarded: the LSM refuses every signal to it but
+         ``SIGHUP`` and signal 0 from anything but itself, a holder of
+         ``LOTA_TASK_AUTH_ADMIN`` or the kernel, since its handlers are how it
+         shuts down.
+       | Every report rests on the agent, so what it protects ends with it,
+         whatever ended it. Moving the agent to another cgroup ends both before
+         the move takes effect, since a cgroup frozen beforehand would freeze
+         it on arrival.
+       | An agent kept short of CPU enforces all the same, as the hooks run in
+         the kernel. Its log falls behind, and the status word, the token and
+         the report carry ``EVENTS_LOST`` until it ends. The verifier logs the
+         bit and decides nothing on it. The slowdown itself is not reported, and
+         its rounds still pass.
+       | ``lota-agent --terminate-protected`` relays ``SIGTERM`` or
+         ``SIGKILL`` for a caller ``kill(2)`` would have allowed and leaves a
+         record. Every relayed termination is journalled, and the host reports
          ``PROTECTED_TERMINATED`` in its status word and in every token it
          issues until it reboots.
+       | That record ends with the agent. An agent restarted within the boot
+         finds PCR 14 already committed, which only a shutdown would have
+         spent, and reports ``AGENT_RESTARTED`` until the reboot: a restart
+         that drops the record cannot also hide that it happened.
        | The protected set the token carries names who is left, so a publisher
          that knows which of its processes belongs there sees which one went.
        | The verb's answer counts that set without the signalled process,

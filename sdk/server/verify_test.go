@@ -77,7 +77,7 @@ func buildTestToken(t testing.TB, priv *rsa.PrivateKey, validUntil uint64,
 	runtimeDigest := computeRuntimeProtectDigest(nil, nil)
 
 	// compute expected nonce = SHA256(valid_until||flags||pcr_mask||nonce||policy_digest)
-	expectedNonce := ComputeTokenQuoteNonce(validUntil, flags, pcrMask, nonce, policyDigest, runtimeDigest, 0)
+	expectedNonce := ComputeTokenQuoteNonce(validUntil, flags, pcrMask, nonce, policyDigest, runtimeDigest, 0, 0)
 
 	// build TPMS_ATTEST with the expected nonce as extraData
 	attestData := buildFakeTPMSAttest(expectedNonce[:], pcrMask, pcrDigest)
@@ -87,7 +87,7 @@ func buildTestToken(t testing.TB, priv *rsa.PrivateKey, validUntil uint64,
 
 	// serialize
 	tok, err := SerializeToken(validUntil, flags, nonce,
-		TPMAlgRSASSA, 0x000B, pcrMask, policyDigest, runtimeDigest, 0, nil, nil, attestData, signature)
+		TPMAlgRSASSA, 0x000B, pcrMask, policyDigest, runtimeDigest, 0, 0, nil, nil, attestData, signature)
 	if err != nil {
 		t.Fatalf("SerializeToken: %v", err)
 	}
@@ -115,7 +115,7 @@ func TestSerializeParseRoundtrip(t *testing.T) {
 	signature := []byte("fake-signature-for-testing")
 
 	tok, err := SerializeToken(validUntil, flags, nonce,
-		TPMAlgRSASSA, 0x000B, 0x4001, policyDigest, runtimeDigest, 0, nil, nil, attestData, signature)
+		TPMAlgRSASSA, 0x000B, 0x4001, policyDigest, runtimeDigest, 0, 0, nil, nil, attestData, signature)
 	if err != nil {
 		t.Fatalf("SerializeToken: %v", err)
 	}
@@ -255,7 +255,7 @@ func TestVerifyToken_TruncatedAttestRejected(t *testing.T) {
 	policyDigest := [32]byte{0x11, 0x22, 0x33}
 	runtimeDigest := computeRuntimeProtectDigest(nil, nil)
 
-	expectedNonce := ComputeTokenQuoteNonce(validUntil, flags, pcrMask, nonce, policyDigest, runtimeDigest, 0)
+	expectedNonce := ComputeTokenQuoteNonce(validUntil, flags, pcrMask, nonce, policyDigest, runtimeDigest, 0, 0)
 
 	fullAttest := buildFakeTPMSAttest(expectedNonce[:], pcrMask, bytes.Repeat([]byte{0x42}, 32))
 	if len(fullAttest) < 2 {
@@ -267,7 +267,7 @@ func TestVerifyToken_TruncatedAttestRejected(t *testing.T) {
 
 	signature := signAttest(t, key, truncatedAttest)
 	tok, err := SerializeToken(validUntil, flags, nonce,
-		TPMAlgRSASSA, TPMAlgSHA256, pcrMask, policyDigest, runtimeDigest, 0, nil, nil, truncatedAttest, signature)
+		TPMAlgRSASSA, TPMAlgSHA256, pcrMask, policyDigest, runtimeDigest, 0, 0, nil, nil, truncatedAttest, signature)
 	if err != nil {
 		t.Fatalf("SerializeToken: %v", err)
 	}
@@ -395,7 +395,7 @@ func TestVerifyToken_RSAPSS(t *testing.T) {
 	pcrDigest := make([]byte, 32)
 	rand.Read(pcrDigest)
 
-	expectedNonce := computeExpectedNonce(validUntil, flags, 0x4001, nonce, policyDigest, runtimeDigest, 0)
+	expectedNonce := computeExpectedNonce(validUntil, flags, 0x4001, nonce, policyDigest, runtimeDigest, 0, 0)
 	attestData := buildFakeTPMSAttest(expectedNonce[:], 0x4001, pcrDigest)
 
 	// sign with PSS
@@ -410,7 +410,7 @@ func TestVerifyToken_RSAPSS(t *testing.T) {
 	}
 
 	tok, err := SerializeToken(validUntil, flags, nonce,
-		TPMAlgRSAPSS, 0x000B, 0x4001, policyDigest, runtimeDigest, 0, nil, nil, attestData, signature)
+		TPMAlgRSAPSS, 0x000B, 0x4001, policyDigest, runtimeDigest, 0, 0, nil, nil, attestData, signature)
 	if err != nil {
 		t.Fatalf("SerializeToken: %v", err)
 	}
@@ -437,7 +437,7 @@ func TestVerifyToken_RSASSA_SHA384(t *testing.T) {
 	pcrDigest := make([]byte, 32)
 	rand.Read(pcrDigest)
 
-	expectedNonce := computeExpectedNonce(validUntil, flags, pcrMask, nonce, policyDigest, runtimeDigest, 0)
+	expectedNonce := computeExpectedNonce(validUntil, flags, pcrMask, nonce, policyDigest, runtimeDigest, 0, 0)
 	attestData := buildFakeTPMSAttest(expectedNonce[:], pcrMask, pcrDigest)
 
 	digest := sha512.Sum384(attestData)
@@ -447,7 +447,7 @@ func TestVerifyToken_RSASSA_SHA384(t *testing.T) {
 	}
 
 	tok, err := SerializeToken(validUntil, flags, nonce,
-		TPMAlgRSASSA, TPMAlgSHA384, pcrMask, policyDigest, runtimeDigest, 0, nil, nil, attestData, signature)
+		TPMAlgRSASSA, TPMAlgSHA384, pcrMask, policyDigest, runtimeDigest, 0, 0, nil, nil, attestData, signature)
 	if err != nil {
 		t.Fatalf("SerializeToken: %v", err)
 	}
@@ -474,7 +474,7 @@ func TestVerifyToken_UnsupportedHashAlgRejected(t *testing.T) {
 	pcrDigest := make([]byte, 32)
 	rand.Read(pcrDigest)
 
-	expectedNonce := computeExpectedNonce(validUntil, flags, pcrMask, nonce, policyDigest, runtimeDigest, 0)
+	expectedNonce := computeExpectedNonce(validUntil, flags, pcrMask, nonce, policyDigest, runtimeDigest, 0, 0)
 	attestData := buildFakeTPMSAttest(expectedNonce[:], pcrMask, pcrDigest)
 
 	hash := sha256.Sum256(attestData)
@@ -484,7 +484,7 @@ func TestVerifyToken_UnsupportedHashAlgRejected(t *testing.T) {
 	}
 
 	tok, err := SerializeToken(validUntil, flags, nonce,
-		TPMAlgRSASSA, 0x1234, pcrMask, policyDigest, runtimeDigest, 0, nil, nil, attestData, signature)
+		TPMAlgRSASSA, 0x1234, pcrMask, policyDigest, runtimeDigest, 0, 0, nil, nil, attestData, signature)
 	if err != nil {
 		t.Fatalf("SerializeToken: %v", err)
 	}
@@ -502,14 +502,14 @@ func TestSerializeToken_Limits(t *testing.T) {
 
 	// attest_data too large
 	bigAttest := make([]byte, MaxAttestSize+1)
-	_, err := SerializeToken(0, 0, nonce, 0, 0, 0, policyDigest, runtimeDigest, 0, nil, nil, bigAttest, nil)
+	_, err := SerializeToken(0, 0, nonce, 0, 0, 0, policyDigest, runtimeDigest, 0, 0, nil, nil, bigAttest, nil)
 	if err == nil {
 		t.Fatal("expected error for too-large attest_data")
 	}
 
 	// signature too large
 	bigSig := make([]byte, MaxSigSize+1)
-	_, err = SerializeToken(0, 0, nonce, 0, 0, 0, policyDigest, runtimeDigest, 0, nil, nil, nil, bigSig)
+	_, err = SerializeToken(0, 0, nonce, 0, 0, 0, policyDigest, runtimeDigest, 0, 0, nil, nil, nil, bigSig)
 	if err == nil {
 		t.Fatal("expected error for too-large signature")
 	}
@@ -519,7 +519,7 @@ func TestParseToken_NoAttest(t *testing.T) {
 	nonce := [32]byte{}
 	policyDigest := [32]byte{}
 	runtimeDigest := computeRuntimeProtectDigest(nil, nil)
-	tok, err := SerializeToken(200, 0x03, nonce, TPMAlgRSASSA, 0x000B, 0x4001, policyDigest, runtimeDigest, 0, nil, nil, nil, nil)
+	tok, err := SerializeToken(200, 0x03, nonce, TPMAlgRSASSA, 0x000B, 0x4001, policyDigest, runtimeDigest, 0, 0, nil, nil, nil, nil)
 	if err != nil {
 		t.Fatalf("SerializeToken: %v", err)
 	}
@@ -537,14 +537,14 @@ func TestComputeExpectedNonce_Deterministic(t *testing.T) {
 	nonce := [32]byte{1, 2, 3}
 	policyDigest := [32]byte{0x01}
 	runtimeDigest := computeRuntimeProtectDigest(nil, nil)
-	n1 := computeExpectedNonce(200, 7, 0x4001, nonce, policyDigest, runtimeDigest, 0)
-	n2 := computeExpectedNonce(200, 7, 0x4001, nonce, policyDigest, runtimeDigest, 0)
+	n1 := computeExpectedNonce(200, 7, 0x4001, nonce, policyDigest, runtimeDigest, 0, 0)
+	n2 := computeExpectedNonce(200, 7, 0x4001, nonce, policyDigest, runtimeDigest, 0, 0)
 	if n1 != n2 {
 		t.Error("computeExpectedNonce should be deterministic")
 	}
 
 	// different flags -> different result
-	n3 := computeExpectedNonce(200, 8, 0x4001, nonce, policyDigest, runtimeDigest, 0)
+	n3 := computeExpectedNonce(200, 8, 0x4001, nonce, policyDigest, runtimeDigest, 0, 0)
 	if n1 == n3 {
 		t.Error("different flags should produce different nonce")
 	}
@@ -646,12 +646,12 @@ func TestVerifyToken_V2_Success(t *testing.T) {
 	images := [][32]byte{{0xAB, 0xCD, 0xEF}}
 	runtimeDigest := ComputeRuntimeProtectDigest(pids, images)
 
-	expectedNonce := ComputeTokenQuoteNonce(validUntil, flags, pcrMask, nonce, policyDigest, runtimeDigest, 0)
+	expectedNonce := ComputeTokenQuoteNonce(validUntil, flags, pcrMask, nonce, policyDigest, runtimeDigest, 0, 0)
 	attestData := buildFakeTPMSAttest(expectedNonce[:], pcrMask, pcrDigest)
 	signature := signAttest(t, key, attestData)
 
 	tok, err := SerializeToken(validUntil, flags, nonce, TPMAlgRSASSA, 0x000B,
-		pcrMask, policyDigest, runtimeDigest, 0, pids, images, attestData, signature)
+		pcrMask, policyDigest, runtimeDigest, 0, 0, pids, images, attestData, signature)
 	if err != nil {
 		t.Fatalf("SerializeToken: %v", err)
 	}
@@ -681,17 +681,17 @@ func TestVerifyToken_V2_TamperedImageDigest(t *testing.T) {
 	images := [][32]byte{{0xAB, 0xCD, 0xEF}}
 	runtimeDigest := ComputeRuntimeProtectDigest(pids, images)
 
-	expectedNonce := ComputeTokenQuoteNonce(validUntil, flags, pcrMask, nonce, policyDigest, runtimeDigest, 0)
+	expectedNonce := ComputeTokenQuoteNonce(validUntil, flags, pcrMask, nonce, policyDigest, runtimeDigest, 0, 0)
 	attestData := buildFakeTPMSAttest(expectedNonce[:], pcrMask, pcrDigest)
 	signature := signAttest(t, key, attestData)
 
 	tok, err := SerializeToken(validUntil, flags, nonce, TPMAlgRSASSA, 0x000B,
-		pcrMask, policyDigest, runtimeDigest, 0, pids, images, attestData, signature)
+		pcrMask, policyDigest, runtimeDigest, 0, 0, pids, images, attestData, signature)
 	if err != nil {
 		t.Fatalf("SerializeToken: %v", err)
 	}
 
-	// flip a byte inside the carried image digest (after the 144-byte header
+	// flip a byte inside the carried image digest (after the 152-byte header
 	// and the 4-byte PID list); the recomputed digest must then diverge
 	// from the quote-bound value
 	tok[TokenHeaderSize+4] ^= 0xFF
@@ -784,5 +784,40 @@ func TestVerifyToken_ZeroRuntimeProtectVersionRejected(t *testing.T) {
 
 	if _, err := ParseToken(tok); err == nil {
 		t.Fatal("ParseToken accepted a zero runtime_protect_version")
+	}
+}
+
+// stopped time reaches the claims, and only under the quote
+func TestStoppedMSBoundToQuote(t *testing.T) {
+	key := generateTestKey(t)
+	nonce := [32]byte{0x42}
+	validUntil := uint64(time.Now().Add(2 * time.Minute).Unix())
+	flags := uint32(0x07)
+	pcrMask := uint32(0x4001)
+	policyDigest := [32]byte{0xAA}
+	runtimeDigest := computeRuntimeProtectDigest(nil, nil)
+	pcrDigest := make([]byte, 32)
+	const stopped = uint64(4242)
+
+	expected := ComputeTokenQuoteNonce(validUntil, flags, pcrMask, nonce, policyDigest, runtimeDigest, 0, stopped)
+	attestData := buildFakeTPMSAttest(expected[:], pcrMask, pcrDigest)
+	signature := signAttest(t, key, attestData)
+	tok, err := SerializeToken(validUntil, flags, nonce, TPMAlgRSASSA, 0x000B,
+		pcrMask, policyDigest, runtimeDigest, 0, stopped, nil, nil, attestData, signature)
+	if err != nil {
+		t.Fatalf("SerializeToken: %v", err)
+	}
+
+	claims, err := VerifyToken(tok, &key.PublicKey, nonce[:])
+	if err != nil {
+		t.Fatalf("VerifyToken: %v", err)
+	}
+	if claims.StoppedMS != stopped {
+		t.Fatalf("StoppedMS = %d, want %d", claims.StoppedMS, stopped)
+	}
+
+	binary.LittleEndian.PutUint64(tok[144:152], 0)
+	if _, err := VerifyToken(tok, &key.PublicKey, nonce[:]); !errors.Is(err, ErrNonceFail) {
+		t.Fatalf("zeroed stopped_ms: got %v, want ErrNonceFail", err)
 	}
 }

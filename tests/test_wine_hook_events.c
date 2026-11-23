@@ -317,7 +317,6 @@ static int load_hook(void)
 	setenv(LOTA_HOOK_ENV_TOKEN_DIR, tmpdir, 1);
 	setenv(LOTA_HOOK_ENV_LOG_LEVEL, "silent", 1);
 	setenv(LOTA_HOOK_ENV_REFRESH_SEC, "1", 1);
-	setenv(LOTA_HOOK_ENV_PROTECT_DELAY, "0", 1);
 
 	hook_lib = dlopen(LOTA_HOOK_LIB_PATH, RTLD_NOW);
 	if (!hook_lib) {

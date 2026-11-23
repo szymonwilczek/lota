@@ -74,12 +74,9 @@ int main(int argc, char *argv[])
 	/*
 	 * --sleep keeps the protected task alive for the
 	 * ptrace_access_check and task_kill integration stages.
-	 * Block on stdin, not a signal: the task_kill gate rejects
-	 * every foreign-task signal to a protected PID (that is the
-	 * property the task_kill stage asserts), so a kill -TERM from
-	 * the harness can never reach this process. The harness closes
-	 * our stdin to request teardown; read() then returns EOF and we
-	 * exit, letting lota_task_free reap the protected-PID entry.
+	 * Block on stdin: the harness either signals this process or
+	 * closes our stdin to request teardown; read() then returns EOF
+	 * and we exit, letting lota_task_free reap the protected-PID entry.
 	 */
 	if (sleep_mode) {
 		char c;

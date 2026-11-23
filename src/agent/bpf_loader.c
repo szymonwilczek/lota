@@ -15,6 +15,7 @@
 #include <sys/stat.h>
 #include <sys/syscall.h>
 #include <sys/xattr.h>
+#include <time.h>
 #include <unistd.h>
 #include <sys/ioctl.h>
 #include <bpf/bpf.h>
@@ -59,12 +60,16 @@
 #define STAT_PTRACE_BLOCKED 8
 #define STAT_SETUID_EVENTS 9
 #define STAT_BPF_SYSCALL_BLOCKED 13
+#define STAT_BLOCKED_EVENTS_SUPPRESSED 15
 #define STAT_MOUNTS_BLOCKED 16
 #define STAT_KILL_GUARD_BLOCKED 17
 #define STAT_EVENTS_YIELDED 18
 #define STAT_KILL_PROBES 19
 #define STAT_MAPPED_WRITE_BLOCKED 20
 #define STAT_MAPPED_PIN_REFUSED 21
+#define STAT_EXEC_HISTORY_LOST 22
+#define STAT_INSTANCE_PEERS_LOST 23
+#define STAT_INSTANCE_STOPS_LOST 24
 
 struct protected_pid_entry {
 	uint64_t start_time_ticks;
@@ -73,6 +78,21 @@ struct protected_pid_entry {
 struct lota_task_auth_entry {
 	uint32_t flags;
 	uint32_t pad;
+};
+
+/* mirrors struct lota_instance_entry in lota_lsm.bpf.c */
+struct lota_instance_entry {
+	uint64_t root_start_ticks;
+	uint32_t root_tgid;
+	uint32_t pad;
+};
+
+/* mirrors struct lota_instance_stops in lota_lsm.bpf.c */
+struct lota_instance_stops {
+	uint32_t lock;
+	uint32_t stopped_threads;
+	uint64_t since_ns;
+	uint64_t total_ns;
 };
 
 #define LOTA_TASK_AUTH_ADMIN (1U << 0)
@@ -895,15 +915,14 @@ int bpf_loader_verify_kernel_runtime_hardening(bool allow_mutable_rootfs)
 }
 
 /*
- * Arm guarded_files with the agent's cgroup.kill and each ancestor's:
- * a write there SIGKILLs the agent past lota_task_kill.
+ * Arm guarded_files with the agent's cgroup.kill and cgroup.freeze and each
+ * ancestor's: a write there SIGKILLs or stops the agent past lota_task_kill.
  * No unified hierarchy is not a failure; any other error is.
  */
 static int arm_kill_guard(struct bpf_loader_ctx *ctx)
 {
 	struct cgroup_guard_file files[LOTA_CGROUP_GUARD_MAX];
 	char cgroup_path[PATH_MAX];
-	uint32_t kind = LOTA_GUARD_CGROUP_KILL;
 	int count;
 	int ret;
 
@@ -911,7 +930,7 @@ static int arm_kill_guard(struct bpf_loader_ctx *ctx)
 				     sizeof(cgroup_path));
 	if (ret == -ENOENT) {
 		lota_info(
-			"No unified cgroup hierarchy: no cgroup.kill road to guard");
+			"No unified cgroup hierarchy: no cgroup road to guard");
 		return 0;
 	}
 	if (ret < 0) {
@@ -923,23 +942,25 @@ static int arm_kill_guard(struct bpf_loader_ctx *ctx)
 	count = cgroup_guard_collect(LOTA_CGROUP_MOUNT_ROOT, cgroup_path, files,
 				     LOTA_CGROUP_GUARD_MAX);
 	if (count < 0) {
-		lota_err("Failed to resolve the cgroup.kill files of %s: %s",
+		lota_err("Failed to resolve the guarded cgroup files of %s: %s",
 			 cgroup_path, strerror(-count));
 		return count;
 	}
 	if (count == 0) {
-		lota_info("cgroup %s carries no cgroup.kill file", cgroup_path);
+		lota_info("cgroup %s carries no cgroup.kill or cgroup.freeze",
+			  cgroup_path);
 		return 0;
 	}
 
 	for (int i = 0; i < count; i++) {
 		struct trusted_lib_key key = { .dev = files[i].dev,
 					       .ino = files[i].ino };
+		uint32_t kind = files[i].kind;
 
 		if (bpf_map_update_elem(ctx->guarded_files_fd, &key, &kind,
 					BPF_ANY) < 0) {
 			ret = -errno;
-			lota_err("Failed to guard a cgroup.kill file: %s",
+			lota_err("Failed to guard a cgroup file: %s",
 				 strerror(-ret));
 			return ret;
 		}
@@ -953,7 +974,7 @@ static int arm_kill_guard(struct bpf_loader_ctx *ctx)
 		return ret;
 	}
 
-	lota_info("Kill guard armed on %d cgroup.kill file(s) above %s", count,
+	lota_info("Kill guard armed on %d cgroup file(s) above %s", count,
 		  cgroup_path);
 	return 0;
 }
@@ -971,9 +992,13 @@ int bpf_loader_init(struct bpf_loader_ctx *ctx)
 	ctx->trusted_libs_fd = -1;
 	ctx->guarded_files_fd = -1;
 	ctx->protected_pids_fd = -1;
+	ctx->instance_fd = -1;
+	ctx->instance_stops_fd = -1;
 	ctx->allow_verity_digest_fd = -1;
 	ctx->exe_hash_slots_fd = -1;
 	ctx->mapped_exec_fd = -1;
+	ctx->exec_history_fd = -1;
+	ctx->instance_peers_fd = -1;
 
 	libbpf_set_print(libbpf_print_fn);
 	libbpf_set_strict_mode(LIBBPF_STRICT_ALL);
@@ -1388,6 +1413,35 @@ int bpf_loader_load(struct bpf_loader_ctx *ctx, const char *bpf_obj_path,
 		}
 	}
 
+	/* optional: without it no process joins the set through its creator */
+	ctx->instance_fd =
+		bpf_object__find_map_fd_by_name(ctx->obj, "lota_instance");
+	if (ctx->instance_fd < 0) {
+		ctx->instance_fd = -1;
+	} else {
+		err = harden_fd_cloexec(ctx->instance_fd, "lota_instance map");
+		if (err < 0) {
+			lota_err("Failed to harden lota_instance map fd: %s",
+				 strerror(-err));
+			goto err_close;
+		}
+	}
+
+	/* optional: without it every instance reports no stopped time */
+	ctx->instance_stops_fd =
+		bpf_object__find_map_fd_by_name(ctx->obj, "instance_stops");
+	if (ctx->instance_stops_fd < 0) {
+		ctx->instance_stops_fd = -1;
+	} else {
+		err = harden_fd_cloexec(ctx->instance_stops_fd,
+					"instance_stops map");
+		if (err < 0) {
+			lota_err("Failed to harden instance_stops map fd: %s",
+				 strerror(-err));
+			goto err_close;
+		}
+	}
+
 	/* required: without it cgroup.kill ends the agent past the signal gate */
 	ctx->guarded_files_fd =
 		bpf_object__find_map_fd_by_name(ctx->obj, "guarded_files");
@@ -1430,6 +1484,36 @@ int bpf_loader_load(struct bpf_loader_ctx *ctx, const char *bpf_obj_path,
 		err = harden_fd_cloexec(ctx->mapped_exec_fd, "mapped_exec map");
 		if (err < 0) {
 			lota_err("Failed to harden mapped_exec map fd: %s",
+				 strerror(-err));
+			goto err_close;
+		}
+	}
+
+	/* optional: without it no unmapped object is listed */
+	ctx->exec_history_fd =
+		bpf_object__find_map_fd_by_name(ctx->obj, "exec_history");
+	if (ctx->exec_history_fd < 0) {
+		ctx->exec_history_fd = -1;
+	} else {
+		err = harden_fd_cloexec(ctx->exec_history_fd,
+					"exec_history map");
+		if (err < 0) {
+			lota_err("Failed to harden exec_history map fd: %s",
+				 strerror(-err));
+			goto err_close;
+		}
+	}
+
+	/* optional: without it no peer of an instance is listed */
+	ctx->instance_peers_fd =
+		bpf_object__find_map_fd_by_name(ctx->obj, "instance_peers");
+	if (ctx->instance_peers_fd < 0) {
+		ctx->instance_peers_fd = -1;
+	} else {
+		err = harden_fd_cloexec(ctx->instance_peers_fd,
+					"instance_peers map");
+		if (err < 0) {
+			lota_err("Failed to harden instance_peers map fd: %s",
 				 strerror(-err));
 			goto err_close;
 		}
@@ -1497,6 +1581,11 @@ int bpf_loader_attach(struct bpf_loader_ctx *ctx)
 	 */
 	static const char *const required_programs[] = {
 		"lota_ptrace_access_check",
+		"lota_agent_exit",
+		"lota_no_core",
+		"lota_agent_moved",
+		"lota_stop_enter",
+		"lota_stop_leave",
 	};
 	const size_t required_count =
 		sizeof(required_programs) / sizeof(required_programs[0]);
@@ -1614,10 +1703,10 @@ void bpf_loader_cleanup(struct bpf_loader_ctx *ctx)
 		ctx->ringbuf = NULL;
 	}
 
-	for (int i = 0; i < ctx->link_count; i++) {
-		bpf_link__destroy(ctx->links[i]);
-		ctx->links[i] = NULL;
-	}
+	/*
+	 * The links stay open: the kernel closes them when this process exits,
+	 * after lota_agent_exit has ended what the agent protected.
+	 */
 	ctx->link_count = 0;
 
 	if (ctx->obj) {
@@ -1635,9 +1724,13 @@ void bpf_loader_cleanup(struct bpf_loader_ctx *ctx)
 	ctx->trusted_libs_fd = -1;
 	ctx->guarded_files_fd = -1;
 	ctx->protected_pids_fd = -1;
+	ctx->instance_fd = -1;
+	ctx->instance_stops_fd = -1;
 	ctx->allow_verity_digest_fd = -1;
 	ctx->exe_hash_slots_fd = -1;
 	ctx->mapped_exec_fd = -1;
+	ctx->exec_history_fd = -1;
+	ctx->instance_peers_fd = -1;
 
 	/* the map took the pins with it */
 	free(ctx->pins);
@@ -2117,6 +2210,153 @@ void bpf_loader_pin_round_begin(struct bpf_loader_ctx *ctx)
 		ctx->pin_round++;
 }
 
+#define OWNED_MAP_KEY_MAX 64
+
+/*
+ * Read up to @max entries of the map @fd into @k and @v, then delete those
+ * of a process @alive denies; @owner names the process of a key.
+ * Returns the number of live entries, packed at the front.
+ */
+static size_t read_owned_map(int fd, size_t max, size_t ksz, size_t vsz,
+			     uint8_t *k, uint8_t *v,
+			     void (*owner)(const void *key, uint32_t *tgid,
+					   uint64_t *start_ticks),
+			     int (*alive)(uint32_t tgid, uint64_t start_ticks))
+{
+	uint8_t cur[OWNED_MAP_KEY_MAX];
+	uint8_t next[OWNED_MAP_KEY_MAX];
+	size_t count = 0;
+	size_t kept = 0;
+	void *prev = NULL;
+
+	while (count < max && bpf_map_get_next_key(fd, prev, next) == 0) {
+		memcpy(cur, next, ksz);
+		prev = cur;
+		if (bpf_map_lookup_elem(fd, cur, v + count * vsz) < 0)
+			continue;
+		memcpy(k + count * ksz, cur, ksz);
+		count++;
+	}
+
+	/* deleted after the walk: a delete during it restarts the walk */
+	for (size_t i = 0; i < count; i++) {
+		uint32_t tgid = 0;
+		uint64_t ticks = 0;
+
+		owner(k + i * ksz, &tgid, &ticks);
+		if (!alive(tgid, ticks)) {
+			(void)bpf_map_delete_elem(fd, k + i * ksz);
+			continue;
+		}
+		if (kept != i) {
+			memcpy(k + kept * ksz, k + i * ksz, ksz);
+			memcpy(v + kept * vsz, v + i * vsz, vsz);
+		}
+		kept++;
+	}
+	return kept;
+}
+
+static void exec_history_owner(const void *key, uint32_t *tgid,
+			       uint64_t *start_ticks)
+{
+	const struct lota_exec_history_key *h = key;
+
+	*tgid = h->tgid;
+	*start_ticks = h->start_ticks;
+}
+
+_Static_assert(sizeof(struct lota_exec_history_key) <= OWNED_MAP_KEY_MAX,
+	       "exec history key fits the walk buffer");
+
+int bpf_loader_exec_history(struct bpf_loader_ctx *ctx,
+			    int (*alive)(uint32_t tgid, uint64_t start_ticks),
+			    struct lota_exec_history_key **keys,
+			    struct lota_exec_history_val **vals, size_t *n)
+{
+	struct lota_exec_history_key *k;
+	struct lota_exec_history_val *v;
+	size_t count;
+
+	if (!ctx || !alive || !keys || !vals || !n)
+		return -EINVAL;
+	*keys = NULL;
+	*vals = NULL;
+	*n = 0;
+	if (ctx->exec_history_fd < 0)
+		return -ENOENT;
+
+	k = calloc(LOTA_MAX_EXEC_HISTORY, sizeof(*k));
+	v = calloc(LOTA_MAX_EXEC_HISTORY, sizeof(*v));
+	if (!k || !v) {
+		free(k);
+		free(v);
+		return -ENOMEM;
+	}
+
+	count = read_owned_map(ctx->exec_history_fd, LOTA_MAX_EXEC_HISTORY,
+			       sizeof(*k), sizeof(*v), (uint8_t *)k,
+			       (uint8_t *)v, exec_history_owner, alive);
+	for (size_t i = 0; i < count; i++)
+		v[i].name[sizeof(v[i].name) - 1] = '\0';
+
+	*keys = k;
+	*vals = v;
+	*n = count;
+	return 0;
+}
+
+static void instance_peer_owner(const void *key, uint32_t *tgid,
+				uint64_t *start_ticks)
+{
+	const struct lota_instance_peer_key *p = key;
+
+	*tgid = p->root_tgid;
+	*start_ticks = p->root_start_ticks;
+}
+
+_Static_assert(sizeof(struct lota_instance_peer_key) <= OWNED_MAP_KEY_MAX,
+	       "instance peer key fits the walk buffer");
+
+int bpf_loader_instance_peers(struct bpf_loader_ctx *ctx,
+			      int (*alive)(uint32_t tgid, uint64_t start_ticks),
+			      struct lota_instance_peer_key **keys,
+			      struct lota_instance_peer_val **vals, size_t *n)
+{
+	struct lota_instance_peer_key *k;
+	struct lota_instance_peer_val *v;
+	size_t count;
+
+	if (!ctx || !alive || !keys || !vals || !n)
+		return -EINVAL;
+	*keys = NULL;
+	*vals = NULL;
+	*n = 0;
+	if (ctx->instance_peers_fd < 0)
+		return -ENOENT;
+
+	k = calloc(LOTA_MAX_INSTANCE_PEERS, sizeof(*k));
+	v = calloc(LOTA_MAX_INSTANCE_PEERS, sizeof(*v));
+	if (!k || !v) {
+		free(k);
+		free(v);
+		return -ENOMEM;
+	}
+
+	count = read_owned_map(ctx->instance_peers_fd, LOTA_MAX_INSTANCE_PEERS,
+			       sizeof(*k), sizeof(*v), (uint8_t *)k,
+			       (uint8_t *)v, instance_peer_owner, alive);
+	for (size_t i = 0; i < count; i++) {
+		v[i].comm[sizeof(v[i].comm) - 1] = '\0';
+		v[i].owner_comm[sizeof(v[i].owner_comm) - 1] = '\0';
+	}
+
+	*keys = k;
+	*vals = v;
+	*n = count;
+	return 0;
+}
+
 int bpf_loader_pin_sweep(struct bpf_loader_ctx *ctx, size_t *released)
 {
 	struct trusted_lib_key key = { 0 };
@@ -2206,6 +2446,57 @@ int bpf_loader_protect_pid(struct bpf_loader_ctx *ctx, uint32_t pid)
 	return 0;
 }
 
+int bpf_loader_adopt_instance_member(struct bpf_loader_ctx *ctx, uint32_t pid)
+{
+	struct protected_pid_entry value = { 0 };
+	struct lota_instance_entry entry;
+	int pidfd;
+	int ret;
+
+	if (!ctx || !ctx->loaded || pid == 0)
+		return -EINVAL;
+
+	if (ctx->protected_pids_fd < 0 || ctx->instance_fd < 0)
+		return -ENOTSUP;
+
+#ifndef SYS_pidfd_open
+	return -ENOTSUP;
+#else
+	pidfd = (int)syscall(SYS_pidfd_open, (pid_t)pid, 0);
+	if (pidfd < 0)
+		return -errno;
+
+	if (bpf_map_lookup_elem(ctx->instance_fd, &pidfd, &entry) < 0) {
+		ret = errno == ENOENT ? 0 : -errno;
+		goto out;
+	}
+
+	ret = read_pid_start_time_ticks(pid, &value.start_time_ticks);
+	if (ret < 0)
+		goto out;
+	if (value.start_time_ticks == 0) {
+		ret = -EINVAL;
+		goto out;
+	}
+
+	/* still alive: the start time read was its own, not a successor's */
+	if (bpf_map_lookup_elem(ctx->instance_fd, &pidfd, &entry) < 0) {
+		ret = errno == ENOENT ? 0 : -errno;
+		goto out;
+	}
+
+	if (bpf_map_update_elem(ctx->protected_pids_fd, &pid, &value, BPF_ANY) <
+	    0) {
+		ret = -errno;
+		goto out;
+	}
+	ret = 1;
+out:
+	close(pidfd);
+	return ret;
+#endif
+}
+
 int bpf_loader_probe_protect_pid(uint32_t pid)
 {
 	uint64_t start_time_ticks = 0;
@@ -2221,6 +2512,116 @@ int bpf_loader_probe_protect_pid(uint32_t pid)
 	return 0;
 }
 
+/* the clock bpf_ktime_get_ns() reads */
+static uint64_t monotonic_ns(void)
+{
+	struct timespec now;
+
+	if (clock_gettime(CLOCK_MONOTONIC, &now) < 0)
+		return 0;
+	return (uint64_t)now.tv_sec * 1000000000ULL + (uint64_t)now.tv_nsec;
+}
+
+int bpf_loader_instance_stopped_ms(struct bpf_loader_ctx *ctx, uint32_t pid,
+				   uint64_t *ms)
+{
+	struct lota_instance_stops stops;
+	struct lota_instance_entry entry;
+	uint64_t root_ticks = 0;
+	uint64_t ticks = 0;
+	uint32_t root = pid;
+	int pidfd;
+	int ret;
+
+	if (!ctx || !ms || pid == 0)
+		return -EINVAL;
+
+	*ms = 0;
+	if (!ctx->loaded || ctx->instance_fd < 0 || ctx->instance_stops_fd < 0)
+		return 0;
+
+#ifndef SYS_pidfd_open
+	return 0;
+#else
+	pidfd = (int)syscall(SYS_pidfd_open, (pid_t)pid, 0);
+	if (pidfd < 0)
+		return errno == ESRCH ? 0 : -errno;
+
+	if (bpf_map_lookup_elem(ctx->instance_fd, &pidfd, &entry) == 0) {
+		root = entry.root_tgid;
+		root_ticks = entry.root_start_ticks;
+	} else if (errno != ENOENT) {
+		ret = errno == ESRCH ? 0 : -errno;
+		close(pidfd);
+		return ret;
+	}
+
+	if (root != pid) {
+		close(pidfd);
+		pidfd = (int)syscall(SYS_pidfd_open, (pid_t)root, 0);
+		if (pidfd < 0)
+			return errno == ESRCH ? 0 : -errno;
+
+		/* pidfd first: a PID reused after this read fails the lookup */
+		ret = read_pid_start_time_ticks(root, &ticks);
+		if (ret < 0) {
+			ret = ret == -ENOENT ? 0 : ret;
+			goto out;
+		}
+		if (ticks != root_ticks) {
+			ret = 0;
+			goto out;
+		}
+	}
+
+	if (bpf_map_lookup_elem_flags(ctx->instance_stops_fd, &pidfd, &stops,
+				      BPF_F_LOCK) < 0) {
+		ret = (errno == ENOENT || errno == ESRCH) ? 0 : -errno;
+		goto out;
+	}
+
+	*ms = lota_stopped_ns(stops.total_ns, stops.stopped_threads,
+			      stops.since_ns, monotonic_ns()) /
+	      1000000ULL;
+	ret = 0;
+out:
+	close(pidfd);
+	return ret;
+#endif
+}
+
+/*
+ * A thread of an unprotected process leaves its stop unseen, and the count it
+ * holds would run on through a later protection. Keep the total, close the
+ * period.
+ */
+static void close_instance_stops(struct bpf_loader_ctx *ctx, uint32_t pid)
+{
+	struct lota_instance_stops stops;
+	int pidfd;
+
+	if (ctx->instance_stops_fd < 0)
+		return;
+
+#ifdef SYS_pidfd_open
+	pidfd = (int)syscall(SYS_pidfd_open, (pid_t)pid, 0);
+	if (pidfd < 0)
+		return;
+
+	if (bpf_map_lookup_elem_flags(ctx->instance_stops_fd, &pidfd, &stops,
+				      BPF_F_LOCK) == 0 &&
+	    stops.stopped_threads) {
+		stops.total_ns =
+			lota_stopped_ns(stops.total_ns, stops.stopped_threads,
+					stops.since_ns, monotonic_ns());
+		stops.stopped_threads = 0;
+		(void)bpf_map_update_elem(ctx->instance_stops_fd, &pidfd,
+					  &stops, BPF_EXIST | BPF_F_LOCK);
+	}
+	close(pidfd);
+#endif
+}
+
 int bpf_loader_unprotect_pid(struct bpf_loader_ctx *ctx, uint32_t pid)
 {
 	if (!ctx || !ctx->loaded)
@@ -2232,6 +2633,7 @@ int bpf_loader_unprotect_pid(struct bpf_loader_ctx *ctx, uint32_t pid)
 	if (bpf_map_delete_elem(ctx->protected_pids_fd, &pid) < 0)
 		return -errno;
 
+	close_instance_stops(ctx, pid);
 	return 0;
 }
 
@@ -2393,7 +2795,15 @@ int bpf_loader_get_extended_stats(struct bpf_loader_ctx *ctx,
 		  &stats->mapped_write_blocked);
 	read_stat(ctx->stats_fd, STAT_MAPPED_PIN_REFUSED,
 		  &stats->mapped_pin_refused);
+	read_stat(ctx->stats_fd, STAT_EXEC_HISTORY_LOST,
+		  &stats->exec_history_lost);
+	read_stat(ctx->stats_fd, STAT_INSTANCE_PEERS_LOST,
+		  &stats->instance_peers_lost);
+	read_stat(ctx->stats_fd, STAT_INSTANCE_STOPS_LOST,
+		  &stats->instance_stops_lost);
 	read_stat(ctx->stats_fd, STAT_EVENTS_YIELDED, &stats->events_yielded);
+	read_stat(ctx->stats_fd, STAT_BLOCKED_EVENTS_SUPPRESSED,
+		  &stats->blocked_suppressed);
 	read_stat(ctx->stats_fd, STAT_KILL_PROBES, &stats->kill_probes);
 
 	return 0;

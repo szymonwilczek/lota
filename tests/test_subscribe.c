@@ -1013,6 +1013,387 @@ out:
 	close(sv[1]);
 }
 
+/* Answer one PING and hang up at once, as an agent shutting down does. */
+static void server_ping_then_hangup(int client_fd)
+{
+	struct lota_ipc_request req;
+	struct lota_ipc_ping_response ping = { .uptime_sec = 7, .pid = 1 };
+
+	if (recv_request(client_fd, &req, NULL, 0) < 0)
+		_exit(1);
+	if (send_response(client_fd, LOTA_IPC_OK, &ping, sizeof(ping)) < 0)
+		_exit(2);
+}
+
+static void test_reply_before_hangup(void)
+{
+	struct lota_connect_opts opts = { .struct_size = sizeof(opts) };
+	struct lota_client *client;
+	uint64_t uptime = 0;
+	pid_t server;
+	int ret;
+
+	TEST("a reply sent just before the agent hangs up is read");
+	server = start_mock_server(server_ping_then_hangup);
+	if (server < 0) {
+		if (socket_errno_is_sandbox(mock_server_errno))
+			SKIP("AF_UNIX mock server not permitted");
+		else
+			FAIL("failed to start mock server");
+		return;
+	}
+	opts.socket_path = test_socket;
+	opts.timeout_ms = 5000;
+	client = lota_connect_opts(&opts);
+	if (!client) {
+		FAIL("connect failed");
+		wait_server(server);
+		return;
+	}
+	ret = lota_ping(client, &uptime);
+	lota_disconnect(client);
+	wait_server(server);
+	if (ret != LOTA_OK || uptime != 7)
+		FAIL(lota_strerror(ret));
+	else
+		PASS();
+}
+
+/* How a mock registry listing breaks the wire contract */
+enum registry_fault {
+	REGISTRY_SOUND,
+	REGISTRY_BAD_ROAD, /* a digest on the unmeasured object */
+	REGISTRY_BAD_ENTRY_FLAG, /* an entry flag the SDK does not know */
+	REGISTRY_BAD_FLAG, /* a page flag the SDK does not know */
+	REGISTRY_BAD_PEER_KIND, /* a peer kind the SDK does not know */
+	REGISTRY_BAD_PEER_COMM, /* a peer name without its NUL */
+};
+
+/* 5 objects, then 2 peers */
+#define REGISTRY_MOCK_OBJECTS 5
+#define REGISTRY_MOCK_PEERS 2
+
+/*
+ * Registry page of entries [start, start + count) of a listing of
+ * REGISTRY_MOCK_OBJECTS objects followed by REGISTRY_MOCK_PEERS peers.
+ */
+static size_t build_registry_page(uint8_t *buf, uint64_t round, uint32_t start,
+				  uint16_t count, enum registry_fault fault)
+{
+	struct lota_ipc_registry_page hdr;
+	size_t off = sizeof(hdr);
+
+	memset(&hdr, 0, sizeof(hdr));
+	hdr.round = round;
+	hdr.pid = 4242;
+	hdr.total = REGISTRY_MOCK_OBJECTS;
+	hdr.peer_total = REGISTRY_MOCK_PEERS;
+	hdr.start = start;
+	hdr.count = count;
+	hdr.flags = LOTA_IPC_REGISTRY_MEASURED | LOTA_IPC_REGISTRY_HISTORY_LOST;
+	if (fault == REGISTRY_BAD_FLAG)
+		hdr.flags |= 1U << 9;
+	memset(hdr.image_digest, 0x5a, sizeof(hdr.image_digest));
+	memcpy(buf, &hdr, sizeof(hdr));
+
+	for (uint32_t i = start; i < start + count; i++) {
+		struct lota_ipc_registry_entry e;
+		struct lota_ipc_registry_peer q;
+		char soname[24];
+		char path[48];
+
+		if (i >= REGISTRY_MOCK_OBJECTS) {
+			uint32_t k = i - REGISTRY_MOCK_OBJECTS;
+
+			memset(&q, 0, sizeof(q));
+			q.count = 2 + k;
+			q.start_ticks = 9000 + k;
+			q.exe_ino = 300 + k;
+			q.tgid = 6000 + k;
+			q.uid = 1000;
+			q.owner_tgid = 4243;
+			q.kind = k == 0 ? LOTA_IPC_REGISTRY_PEER_CONNECT :
+					  LOTA_IPC_REGISTRY_PEER_PTRACE_ATTACH;
+			if (k == 1 && fault == REGISTRY_BAD_PEER_KIND)
+				q.kind = 6;
+			snprintf(q.comm, sizeof(q.comm), "peer%u", k);
+			if (k == 1 && fault == REGISTRY_BAD_PEER_COMM)
+				memset(q.comm, 'a', sizeof(q.comm));
+			strcpy(q.owner_comm, "wineserver");
+			memcpy(buf + off, &q, sizeof(q));
+			off += sizeof(q);
+			continue;
+		}
+
+		snprintf(soname, sizeof(soname), "lib%u.so", i);
+		/* object 4 was unmapped before the round: no path */
+		if (i == 4)
+			path[0] = '\0';
+		else
+			snprintf(path, sizeof(path), "/opt/title/lib%u.so", i);
+		memset(&e, 0, sizeof(e));
+		e.size = 1000 + i;
+		e.ino = 77 + i;
+		e.road = i == 4 ? LOTA_IPC_REGISTRY_ROAD_NONE :
+				  LOTA_IPC_REGISTRY_ROAD_VERITY;
+		if (i != 4 || fault == REGISTRY_BAD_ROAD) {
+			e.digest_len = 32;
+			memset(e.digest, (int)i + 1, 32);
+		}
+		if (i == 4)
+			e.flags = LOTA_IPC_REGISTRY_ENTRY_UNMAPPED |
+				  LOTA_IPC_REGISTRY_ENTRY_MEMORY;
+		if (i == 2)
+			e.flags = LOTA_IPC_REGISTRY_ENTRY_WRITABLE;
+		if (i == 1 && fault == REGISTRY_BAD_ENTRY_FLAG)
+			e.flags = 1U << 3;
+		e.soname_len = (uint16_t)strlen(soname);
+		e.path_len = (uint16_t)strlen(path);
+		memcpy(buf + off, &e, sizeof(e));
+		off += sizeof(e);
+		memcpy(buf + off, soname, e.soname_len);
+		off += e.soname_len;
+		memcpy(buf + off, path, e.path_len);
+		off += e.path_len;
+	}
+	return off;
+}
+
+/*
+ * Answer GET_REGISTRY in pages of three, one of them both objects and
+ * peers; round @torn_round from the 2nd on.
+ */
+static void serve_registry(int client_fd, uint64_t torn_round,
+			   enum registry_fault fault)
+{
+	struct lota_ipc_request req;
+	struct lota_ipc_registry_request body;
+	uint8_t buf[LOTA_IPC_MAX_PAYLOAD];
+	int served = 0;
+
+	while (recv_request(client_fd, &req, &body, sizeof(body)) == 0) {
+		uint64_t round = served > 0 && torn_round ? torn_round : 1;
+		uint32_t left = REGISTRY_MOCK_OBJECTS + REGISTRY_MOCK_PEERS -
+				body.start;
+		uint16_t count = (uint16_t)(left < 3 ? left : 3);
+		size_t len;
+
+		if (req.cmd != LOTA_IPC_CMD_GET_REGISTRY || body.pid != 4242)
+			_exit(2);
+		len = build_registry_page(buf, round, body.start, count, fault);
+		if (send_response(client_fd, LOTA_IPC_OK, buf, (uint32_t)len) <
+		    0)
+			_exit(3);
+		served++;
+	}
+}
+
+static void server_registry(int client_fd)
+{
+	serve_registry(client_fd, 0, REGISTRY_SOUND);
+}
+
+static void server_registry_torn(int client_fd)
+{
+	serve_registry(client_fd, 2, REGISTRY_SOUND);
+}
+
+static void server_registry_bad_road(int client_fd)
+{
+	serve_registry(client_fd, 0, REGISTRY_BAD_ROAD);
+}
+
+static void server_registry_bad_entry_flag(int client_fd)
+{
+	serve_registry(client_fd, 0, REGISTRY_BAD_ENTRY_FLAG);
+}
+
+static void server_registry_bad_flag(int client_fd)
+{
+	serve_registry(client_fd, 0, REGISTRY_BAD_FLAG);
+}
+
+static void server_registry_bad_peer_kind(int client_fd)
+{
+	serve_registry(client_fd, 0, REGISTRY_BAD_PEER_KIND);
+}
+
+static void server_registry_bad_peer_comm(int client_fd)
+{
+	serve_registry(client_fd, 0, REGISTRY_BAD_PEER_COMM);
+}
+
+static void server_registry_not_protected(int client_fd)
+{
+	struct lota_ipc_request req;
+	struct lota_ipc_registry_request body;
+
+	if (recv_request(client_fd, &req, &body, sizeof(body)) < 0)
+		_exit(1);
+	if (send_response(client_fd, LOTA_IPC_ERR_NOT_PROTECTED, NULL, 0) < 0)
+		_exit(3);
+}
+
+/* Fetch pid 4242 from a mock agent running @scenario. */
+static int fetch_registry(server_scenario_fn scenario,
+			  struct lota_registry **reg, int *skipped)
+{
+	struct lota_connect_opts opts = { .struct_size = sizeof(opts) };
+	struct lota_client *client;
+	pid_t server;
+	int ret;
+
+	*skipped = 0;
+	server = start_mock_server(scenario);
+	if (server < 0) {
+		*skipped = socket_errno_is_sandbox(mock_server_errno);
+		return LOTA_ERR_CONNECTION_FAILED;
+	}
+	opts.socket_path = test_socket;
+	opts.timeout_ms = 5000;
+	client = lota_connect_opts(&opts);
+	if (!client) {
+		wait_server(server);
+		return LOTA_ERR_CONNECTION_FAILED;
+	}
+	ret = lota_get_registry(client, 4242, reg);
+	lota_disconnect(client);
+	wait_server(server);
+	return ret;
+}
+
+static void test_registry_pages(void)
+{
+	struct lota_registry *reg = NULL;
+	int skipped;
+	int ret;
+
+	TEST("get_registry joins the pages of one listing");
+	ret = fetch_registry(server_registry, &reg, &skipped);
+	if (skipped) {
+		SKIP("AF_UNIX mock server not permitted");
+		return;
+	}
+	if (ret != LOTA_OK || !reg || reg->count != 5 || reg->round != 1 ||
+	    reg->pid != 4242 ||
+	    reg->flags !=
+		    (LOTA_REGISTRY_MEASURED | LOTA_REGISTRY_HISTORY_LOST) ||
+	    reg->image_digest[0] != 0x5a ||
+	    strcmp(reg->objects[3].soname, "lib3.so") != 0 ||
+	    strcmp(reg->objects[3].path, "/opt/title/lib3.so") != 0 ||
+	    reg->objects[3].size != 1003 || reg->objects[3].digest_len != 32 ||
+	    reg->objects[3].digest[0] != 4 ||
+	    reg->objects[4].road != LOTA_REGISTRY_ROAD_NONE ||
+	    reg->objects[4].digest_len != 0 ||
+	    reg->objects[4].flags != (LOTA_REGISTRY_OBJECT_UNMAPPED |
+				      LOTA_REGISTRY_OBJECT_MEMORY) ||
+	    reg->objects[2].flags != LOTA_REGISTRY_OBJECT_WRITABLE ||
+	    reg->objects[4].path[0] != '\0' || reg->objects[3].flags != 0 ||
+	    reg->peer_count != 2 || !reg->peers || reg->peers[0].tgid != 6000 ||
+	    reg->peers[0].count != 2 || reg->peers[0].start_ticks != 9000 ||
+	    reg->peers[0].kind != LOTA_REGISTRY_PEER_CONNECT ||
+	    reg->peers[1].kind != LOTA_REGISTRY_PEER_PTRACE_ATTACH ||
+	    reg->peers[1].exe_ino != 301 || reg->peers[1].owner_tgid != 4243 ||
+	    strcmp(reg->peers[1].comm, "peer1") != 0 ||
+	    strcmp(reg->peers[1].owner_comm, "wineserver") != 0) {
+		FAIL(lota_strerror(ret));
+		lota_registry_free(reg);
+		return;
+	}
+	lota_registry_free(reg);
+	PASS();
+}
+
+static void test_registry_torn(void)
+{
+	struct lota_registry *reg = NULL;
+	int skipped;
+	int ret;
+
+	TEST("get_registry restarts a listing a token round tore");
+	ret = fetch_registry(server_registry_torn, &reg, &skipped);
+	if (skipped) {
+		SKIP("AF_UNIX mock server not permitted");
+		return;
+	}
+	if (ret != LOTA_OK || !reg || reg->round != 2 || reg->count != 5) {
+		FAIL(lota_strerror(ret));
+		lota_registry_free(reg);
+		return;
+	}
+	lota_registry_free(reg);
+	PASS();
+}
+
+static void test_registry_refusals(void)
+{
+	struct lota_registry *reg = NULL;
+	int skipped;
+	int ret;
+
+	TEST("get_registry refuses a digest on an unmeasured object");
+	ret = fetch_registry(server_registry_bad_road, &reg, &skipped);
+	if (skipped)
+		SKIP("AF_UNIX mock server not permitted");
+	else if (ret != LOTA_ERR_PROTOCOL || reg)
+		FAIL(lota_strerror(ret));
+	else
+		PASS();
+
+	TEST("get_registry refuses an entry flag it does not know");
+	ret = fetch_registry(server_registry_bad_entry_flag, &reg, &skipped);
+	if (skipped)
+		SKIP("AF_UNIX mock server not permitted");
+	else if (ret != LOTA_ERR_PROTOCOL || reg)
+		FAIL(lota_strerror(ret));
+	else
+		PASS();
+
+	TEST("get_registry refuses a listing flag it does not know");
+	ret = fetch_registry(server_registry_bad_flag, &reg, &skipped);
+	if (skipped)
+		SKIP("AF_UNIX mock server not permitted");
+	else if (ret != LOTA_ERR_PROTOCOL || reg)
+		FAIL(lota_strerror(ret));
+	else
+		PASS();
+
+	TEST("get_registry refuses a peer kind it does not know");
+	ret = fetch_registry(server_registry_bad_peer_kind, &reg, &skipped);
+	if (skipped)
+		SKIP("AF_UNIX mock server not permitted");
+	else if (ret != LOTA_ERR_PROTOCOL || reg)
+		FAIL(lota_strerror(ret));
+	else
+		PASS();
+
+	TEST("get_registry refuses a peer name without its end");
+	ret = fetch_registry(server_registry_bad_peer_comm, &reg, &skipped);
+	if (skipped)
+		SKIP("AF_UNIX mock server not permitted");
+	else if (ret != LOTA_ERR_PROTOCOL || reg)
+		FAIL(lota_strerror(ret));
+	else
+		PASS();
+
+	TEST("get_registry names a process the round did not measure");
+	ret = fetch_registry(server_registry_not_protected, &reg, &skipped);
+	if (skipped)
+		SKIP("AF_UNIX mock server not permitted");
+	else if (ret != LOTA_ERR_NOT_PROTECTED || reg)
+		FAIL(lota_strerror(ret));
+	else
+		PASS();
+
+	TEST("get_registry refuses a missing client or output");
+	if (lota_get_registry(NULL, 1, &reg) == LOTA_ERR_NOT_CONNECTED &&
+	    lota_get_registry((struct lota_client *)&reg, 1, NULL) ==
+		    LOTA_ERR_INVALID_ARG)
+		PASS();
+	else
+		FAIL("accepted a missing argument");
+}
+
 int main(void)
 {
 	printf("=== SUBSCRIBE / Push Notification Tests ===\n\n");
@@ -1044,6 +1425,10 @@ int main(void)
 	test_unsubscribe();
 	test_poll_no_data();
 	test_poll_infinite_wait();
+	test_reply_before_hangup();
+	test_registry_pages();
+	test_registry_torn();
+	test_registry_refusals();
 
 	printf("\n=== Results: %d/%d passed ===\n", tests_passed, tests_run);
 	return (tests_passed == tests_run) ? 0 : 1;

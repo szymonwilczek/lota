@@ -147,33 +147,25 @@ static void carry_live_state(struct attest_target *to,
 	to->next_enroll_ms = from->next_enroll_ms;
 }
 
-int attest_targets_reload(const char *config_path, const char *server, int port,
-			  const char *ca_cert, int interval_sec,
-			  struct attest_target *targets, size_t max,
-			  size_t *count)
+int attest_targets_rebuild(const struct lota_config *cfg, const char *server,
+			   int port, const char *ca_cert, int interval_sec,
+			   struct attest_target *targets, size_t max,
+			   size_t *count)
 {
-	struct lota_config *fresh;
 	struct attest_target *rebuilt;
 	size_t n = 0;
 	int ret;
 
-	if (!config_path || !targets || !count || max == 0)
+	if (!targets || !count || max == 0)
 		return -EINVAL;
 
-	/* Both are far too large for this frame, and neither may touch what
-	 * the loop is using until the whole rebuild has succeeded */
-	fresh = config_new();
+	/* far too large for this frame, and the live list stays as it is
+	 * until the whole rebuild has succeeded */
 	rebuilt = calloc(max, sizeof(*rebuilt));
-	if (!fresh || !rebuilt) {
-		ret = -ENOMEM;
-		goto out;
-	}
+	if (!rebuilt)
+		return -ENOMEM;
 
-	ret = config_load(fresh, config_path);
-	if (ret < 0)
-		goto out;
-
-	ret = attest_targets_build(fresh, server, port, ca_cert, interval_sec,
+	ret = attest_targets_build(cfg, server, port, ca_cert, interval_sec,
 				   rebuilt, max, &n);
 	if (ret < 0) {
 		/*
@@ -201,8 +193,31 @@ int attest_targets_reload(const char *config_path, const char *server, int port,
 	ret = 0;
 
 out:
-	config_free(fresh);
 	free(rebuilt);
+	return ret;
+}
+
+int attest_targets_reload(const char *config_path, const char *server, int port,
+			  const char *ca_cert, int interval_sec,
+			  struct attest_target *targets, size_t max,
+			  size_t *count)
+{
+	struct lota_config *fresh;
+	int ret;
+
+	if (!config_path || !targets || !count || max == 0)
+		return -EINVAL;
+
+	fresh = config_new();
+	if (!fresh)
+		return -ENOMEM;
+
+	ret = config_load(fresh, config_path);
+	if (ret == 0)
+		ret = attest_targets_rebuild(fresh, server, port, ca_cert,
+					     interval_sec, targets, max, count);
+
+	config_free(fresh);
 	return ret;
 }
 

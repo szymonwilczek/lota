@@ -123,6 +123,56 @@ int bpf_loader_unprotect_pid(struct bpf_loader_ctx *ctx, uint32_t pid)
 	return -ENOTSUP;
 }
 
+int bpf_loader_instance_stopped_ms(struct bpf_loader_ctx *ctx, uint32_t pid,
+				   uint64_t *ms)
+{
+	(void)ctx;
+	(void)pid;
+	*ms = 0;
+	return 0;
+}
+
+int bpf_loader_adopt_instance_member(struct bpf_loader_ctx *ctx, uint32_t pid)
+{
+	(void)ctx;
+	(void)pid;
+	return 0;
+}
+
+int bpf_loader_exec_history(struct bpf_loader_ctx *ctx,
+			    int (*alive)(uint32_t tgid, uint64_t start_ticks),
+			    struct lota_exec_history_key **keys,
+			    struct lota_exec_history_val **vals, size_t *n)
+{
+	(void)ctx;
+	(void)alive;
+	*keys = NULL;
+	*vals = NULL;
+	*n = 0;
+	return -ENOENT;
+}
+
+int bpf_loader_instance_peers(struct bpf_loader_ctx *ctx,
+			      int (*alive)(uint32_t tgid, uint64_t start_ticks),
+			      struct lota_instance_peer_key **keys,
+			      struct lota_instance_peer_val **vals, size_t *n)
+{
+	(void)ctx;
+	(void)alive;
+	*keys = NULL;
+	*vals = NULL;
+	*n = 0;
+	return -ENOENT;
+}
+
+int bpf_loader_get_extended_stats(struct bpf_loader_ctx *ctx,
+				  struct bpf_extended_stats *stats)
+{
+	(void)ctx;
+	memset(stats, 0, sizeof(*stats));
+	return 0;
+}
+
 int dbus_get_fd(struct dbus_context *ctx)
 {
 	(void)ctx;
@@ -166,15 +216,19 @@ int enroll_state_load_path(const char *path, struct enroll_state *out)
 	return -ENOENT;
 }
 
-int lota_runtime_measure_pid(pid_t pid,
-			     uint8_t out_digest[LOTA_RUNTIME_IMAGE_DIGEST_SIZE],
-			     struct lota_runtime_measure_coverage *cov,
-			     struct lota_runtime_measure_failure *fail)
+int lota_runtime_measure_pid_objects(
+	pid_t pid, uint8_t out_digest[LOTA_RUNTIME_IMAGE_DIGEST_SIZE],
+	struct lota_runtime_measure_coverage *cov,
+	struct lota_runtime_measure_failure *fail,
+	struct lota_rt_object_record *objs, size_t *n_objs)
 {
 	(void)pid;
 	(void)out_digest;
 	(void)cov;
 	(void)fail;
+	(void)objs;
+	if (n_objs)
+		*n_objs = 0;
 	return -ENOTSUP;
 }
 

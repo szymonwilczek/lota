@@ -73,10 +73,11 @@ enum lota_event_type {
 	LOTA_EVENT_MOUNT_BLOCKED, /* mount that would shadow a trusted file */
 	LOTA_EVENT_KILL_GUARD_BLOCKED, /* write that would kill a guarded task */
 	LOTA_EVENT_MAPPED_WRITE_BLOCKED, /* write to a pinned mapped library */
+	LOTA_EVENT_AGENT_MOVED, /* the agent was moved to another cgroup */
 };
 
 /* One past the last event type, so a per-type array covers every one */
-#define LOTA_EVENT_TYPE_COUNT (LOTA_EVENT_MAPPED_WRITE_BLOCKED + 1)
+#define LOTA_EVENT_TYPE_COUNT (LOTA_EVENT_AGENT_MOVED + 1)
 
 /*
  * Event flags (struct lota_exec_event.flags).
@@ -84,9 +85,13 @@ enum lota_event_type {
  * PROTECTED marks an executable-mapping event whose task is in the
  * protected set, so the agent can trigger an event-driven re-measurement
  * of that process instead of waiting for the next periodic heartbeat.
+ *
+ * INSIDE_INSTANCE marks a ptrace access one process of an instance made
+ * to another of the same instance: allowed, and recorded.
  */
 enum lota_event_flag {
 	LOTA_EVENT_FLAG_PROTECTED = (1U << 0),
+	LOTA_EVENT_FLAG_INSIDE_INSTANCE = (1U << 1),
 };
 
 /*
@@ -234,11 +239,12 @@ static inline int lota_kread_denied(unsigned int id, int from_file,
 }
 
 /*
- * PTRACE_MODE_ATTACH from include/linux/ptrace.h.
+ * PTRACE_MODE_READ and PTRACE_MODE_ATTACH from include/linux/ptrace.h.
  *
  * Mirrored: the enforcement object builds against vmlinux.h, which carries types
  * and not the uapi-adjacent flag definitions.
  */
+#define LOTA_PTRACE_MODE_READ 0x01
 #define LOTA_PTRACE_MODE_ATTACH 0x02
 
 /* Whether an access asks to trace the target rather than only to read it */
@@ -276,7 +282,8 @@ static inline int lota_ptrace_agent_read_exempt(unsigned int ptrace_mode,
  * Three rules, in the order they are asked:
  *
  *   - the agent itself is never a ptrace target;
- *   - a process that asked for protection refuses both modes;
+ *   - a protected process refuses both modes to anything outside its
+ *     instance (lota_inside_instance());
  *   - block_ptrace covers every other task, in enforce, and for an attach
  *     only.
  *
@@ -309,18 +316,114 @@ static inline int lota_ptrace_denied(unsigned int ptrace_mode,
 	return 0;
 }
 
+/* longest /proc entry name lota_proc_entry_reads_mm() names, plus one */
+#define LOTA_PROC_NAME_MAX 16
+
+static inline int lota_name_is(const char *name, unsigned int len,
+			       const char *want)
+{
+	unsigned int i;
+
+	for (i = 0; i < LOTA_PROC_NAME_MAX; i++) {
+		if (want[i] == '\0')
+			return i == len;
+		if (i >= len || name[i] != want[i])
+			return 0;
+	}
+	return 0;
+}
+
 /*
- * Signal numbers shared by every Linux architecture LOTA builds for.
+ * Whether opening the /proc/<pid> entry @name reads that process's address
+ * space or the memory behind it.
+ *
+ * The kernel answers these opens with a READ ptrace check, and when it fails
+ * still admits a caller with CAP_PERFMON, past ptrace_access_check. The
+ * ptrace verdict above then never sees them, so the open is refused on its
+ * own, by the same rules. Entries that only name the process (stat, status,
+ * cmdline, cgroup) stay open to ps, systemd and journald.
+ */
+static inline int lota_proc_entry_reads_mm(const char *name, unsigned int len)
+{
+	return lota_name_is(name, len, "maps") ||
+	       lota_name_is(name, len, "smaps") ||
+	       lota_name_is(name, len, "smaps_rollup") ||
+	       lota_name_is(name, len, "numa_maps") ||
+	       lota_name_is(name, len, "pagemap") ||
+	       lota_name_is(name, len, "environ") ||
+	       lota_name_is(name, len, "auxv") ||
+	       lota_name_is(name, len, "map_files");
+}
+
+/* CLONE_THREAD from <linux/sched.h>, mirrored like the above */
+#define LOTA_CLONE_THREAD 0x00010000
+
+/*
+ * Whether a task made by clone(2) joins its creator's protected set.
+ *
+ * A protected process is protected with everything it starts. The child is
+ * marked before it first runs, so nothing reaches it unprotected, and the
+ * mark stays across execve as the process does. A thread belongs to its
+ * leader and takes no mark of its own.
+ */
+static inline int lota_clone_inherits_protection(unsigned long clone_flags,
+						 int creator_protected)
+{
+	return creator_protected && !(clone_flags & LOTA_CLONE_THREAD);
+}
+
+/*
+ * Whether a protected process may not create anything because a tracer
+ * outside its instance holds it. A tracer attached before the process
+ * was protected stays attached, and the kernel hands it every child a
+ * PTRACE_O_TRACEFORK tracer asks for without asking the LSM.
+ */
+static inline int lota_clone_refused(int creator_protected, int creator_traced,
+				     int tracer_protected)
+{
+	return creator_protected && creator_traced && !tracer_protected;
+}
+
+/*
+ * Whether an access stays inside one instance: the tree one protected process
+ * started, named by that root's tgid and start time, so a recycled tgid names
+ * another instance. Wine's server reads and writes the memory of every process
+ * it hosts, so inside an instance ptrace is recorded, not refused; nothing
+ * outside it reaches in.
+ */
+static inline int
+lota_inside_instance(int actor_protected, unsigned int actor_root,
+		     unsigned long long actor_ticks, int target_protected,
+		     unsigned int target_root, unsigned long long target_ticks)
+{
+	return actor_protected && target_protected &&
+	       actor_root == target_root && actor_ticks == target_ticks;
+}
+
+/*
+ * SIGHUP, shared by every Linux architecture LOTA builds for.
  *
  * Mirrored for the same reason as the ptrace flag above:
  * the enforcement object builds against vmlinux.h, which carries types
  * and not the uapi signal numbers.
  */
 #define LOTA_SIG_HUP 1
-#define LOTA_SIG_INT 2
 #define LOTA_SIG_KILL 9
-#define LOTA_SIG_TERM 15
-#define LOTA_SIG_STOP 19
+#define LOTA_SIG_IO 29
+
+/* what stops a task, and what makes the kernel write its memory to a core */
+#define LOTA_SIG_FREEZES \
+	((1ULL << 19) | (1ULL << 20) | (1ULL << 21) | (1ULL << 22))
+#define LOTA_SIG_DUMPS                                                         \
+	((1ULL << 3) | (1ULL << 4) | (1ULL << 5) | (1ULL << 6) | (1ULL << 7) | \
+	 (1ULL << 8) | (1ULL << 11) | (1ULL << 24) | (1ULL << 25) |            \
+	 (1ULL << 31))
+
+/* a signal whose default action writes a core file */
+static inline int lota_signal_dumps(int sig)
+{
+	return sig > 0 && sig <= 31 && !!(LOTA_SIG_DUMPS & (1ULL << sig));
+}
 
 /*
  * The signal-delivery verdict, stated here so the enforcement object
@@ -331,46 +434,40 @@ static inline int lota_ptrace_denied(unsigned int ptrace_mode,
  * the agent, a task holding CAP_SYS_ADMIN over BPF, and a kernel-generated
  * signal all reach delivery without asking this.
  *
- * @target_handles: the target has its own handler for @sig, neither
- * SIG_DFL nor SIG_IGN.
+ * Only the agent is guarded, so a local root cannot kill it and swap a
+ * tampered binary in before the next attestation. A probe (sig 0) and SIGHUP,
+ * its reload, are delivered, since neither ends it. It stops with
+ * lota-agent --shutdown.
+ *
+ * A protected process can be ended: a title that hung has to die from the
+ * terminal, and its session ends with it. From outside its instance it cannot
+ * be stopped, nor sent a signal whose default writes its memory to a core
+ * file. Inside the instance everything goes through, since the wineserver
+ * drives the processes it hosts with signals. Every signal at it is recorded.
  *
  * The verdict does not depend on the enforcement mode: an agent that can be
  * killed in monitor is an agent whose measurements stop without a trace,
  * and the mode switches policy, not the integrity of the measurement.
- * The agent stops with lota-agent --shutdown in every mode.
- *
- * Three rules, in order:
- *
- *   - a target nobody protects is nobody's business here;
- *   - a probe (sig 0) and the agent's own reload signal are delivered,
- *     since neither can end the target;
- *   - a signal a protected title handles itself is delivered: it runs the
- *     title's own code, and Wine drives its processes this way. Not SIGTERM,
- *     SIGINT or SIGHUP, which a title handles to end, and never to the agent.
- *
- * Everything else reaching a protected target or the agent itself is refused,
- * so a local root cannot kill the agent and swap a tampered binary in before
- * the next attestation.
  */
 static inline int lota_signal_denied(int sig, int target_is_agent,
-				     int target_is_protected,
-				     int target_handles)
+				     int sender_inside)
 {
-	if (!target_is_agent && !target_is_protected)
+	if (target_is_agent)
+		return sig != 0 && sig != LOTA_SIG_HUP;
+
+	if (sender_inside || sig <= 0 || sig > 31)
 		return 0;
 
-	if (sig == 0)
-		return 0;
+	return lota_signal_dumps(sig) || !!(LOTA_SIG_FREEZES & (1ULL << sig));
+}
 
-	if (target_is_agent && sig == LOTA_SIG_HUP)
-		return 0;
-
-	if (!target_is_agent && target_handles && sig != LOTA_SIG_KILL &&
-	    sig != LOTA_SIG_STOP && sig != LOTA_SIG_TERM &&
-	    sig != LOTA_SIG_INT && sig != LOTA_SIG_HUP)
-		return 0;
-
-	return 1;
+/*
+ * The same verdict for a signal aimed through F_SETOWN. The sender is unknown,
+ * so it counts as outside, and sig 0 means the default SIGIO.
+ */
+static inline int lota_sigio_denied(int sig, int target_is_agent)
+{
+	return lota_signal_denied(sig ? sig : LOTA_SIG_IO, target_is_agent, 0);
 }
 
 /*
@@ -552,8 +649,9 @@ struct lota_exec_event {
 #define LOTA_MAX_TRUSTED_LIBS 512
 
 /*
- * Files whose write kills a protected task past every signal hook:
- * cgroup.kill of the agent's cgroup and its ancestors, so a cgroup depth.
+ * Files whose write kills or stops a protected task past every signal hook:
+ * cgroup.kill and cgroup.freeze of the agent's cgroup and its ancestors,
+ * two per level of a cgroup depth.
  */
 #define LOTA_MAX_GUARDED_FILES 64
 
@@ -592,6 +690,7 @@ struct lota_exe_hash_slot {
 
 /* guarded_files value: why the file is guarded */
 #define LOTA_GUARD_CGROUP_KILL 1
+#define LOTA_GUARD_CGROUP_FREEZE 2
 
 /*
  * Libraries the agent pins against writes while measuring a process.
@@ -613,6 +712,76 @@ struct lota_mapped_seen {
 #define LOTA_MAX_MAPPED_SEEN 65536
 
 /*
+ * Every file a protected process mapped or mprotected executable, refused
+ * attempts included: an unmapped object leaves no trace in /proc.
+ * Keyed by the process and its start time, so a reused PID starts empty.
+ * Only the agent deletes, and only entries of a process that is gone.
+ */
+#define LOTA_EXEC_HISTORY_NAME_MAX 128
+#define LOTA_MAX_EXEC_HISTORY 65536
+
+struct lota_exec_history_key {
+	__u32 tgid;
+	__u32 pad;
+	__u64 start_ticks;
+	__u64 dev; /* s_dev, kernel encoding */
+	__u64 ino;
+};
+
+/*
+ * another file could write the code: open for write, mapped shared writable,
+ * or memory with no name and no write seal, which any fd holder can write
+ */
+#define LOTA_EXEC_HISTORY_WRITABLE (1U << 0)
+/* the code lives in memory only: memfd, shm, tmpfs or hugetlbfs */
+#define LOTA_EXEC_HISTORY_MEMORY (1U << 1)
+
+struct lota_exec_history_val {
+	__u64 size;
+	__u32 flags; /* LOTA_EXEC_HISTORY_*, of every attempt */
+	__u32 pad;
+	char name[LOTA_EXEC_HISTORY_NAME_MAX];
+};
+
+/*
+ * Every process that reached a process of an instance on a road the gate
+ * lets through: from outside, through a unix socket of the instance, by
+ * connecting to it or sending to it; from inside, by a ptrace access or a
+ * signal to another process of the instance.
+ * Keyed by the instance root and its start time, the peer and its start
+ * time, the process of the instance it reached and how.
+ * Only the agent deletes, and only entries of a root that is gone.
+ */
+#define LOTA_MAX_INSTANCE_PEERS 4096
+
+enum lota_instance_peer_kind {
+	LOTA_INSTANCE_PEER_CONNECT = 1, /* stream or seqpacket connect */
+	LOTA_INSTANCE_PEER_SEND = 2, /* datagram sent */
+	LOTA_INSTANCE_PEER_PTRACE_READ = 3, /* read-mode access, inside */
+	LOTA_INSTANCE_PEER_PTRACE_ATTACH = 4, /* attach-mode access, inside */
+	LOTA_INSTANCE_PEER_SIGNAL = 5, /* signal sent, inside */
+};
+
+struct lota_instance_peer_key {
+	__u64 root_start_ticks;
+	__u64 peer_start_ticks;
+	__u32 root_tgid;
+	__u32 peer_tgid;
+	__u32 owner_tgid; /* process of the instance it reached */
+	__u32 kind; /* enum lota_instance_peer_kind */
+};
+
+struct lota_instance_peer_val {
+	__u64 count; /* times it did so */
+	__u64 exe_dev; /* s_dev of the peer's executable, kernel encoding */
+	__u64 exe_ino;
+	__u32 uid; /* peer's real uid at its first reach */
+	__u32 pad;
+	char comm[LOTA_MAX_COMM_LEN];
+	char owner_comm[LOTA_MAX_COMM_LEN];
+};
+
+/*
  * Kernel integrity baseline, as the agent's startup hardening gate read it.
  *
  * The gate refuses to start the agent unless the kernel enforces module
@@ -625,5 +794,17 @@ struct integrity_data {
 	__u32 sig_enforce; /* 1 when module signatures are enforced */
 	__u32 lockdown; /* 1 when lockdown is integrity or above */
 };
+
+/*
+ * Stopped time of an instance at @now: what ended periods add up to, plus the
+ * open one while a thread still stands.
+ */
+static inline __u64 lota_stopped_ns(__u64 total_ns, __u32 stopped_threads,
+				    __u64 since_ns, __u64 now)
+{
+	if (stopped_threads && now > since_ns)
+		return total_ns + (now - since_ns);
+	return total_ns;
+}
 
 #endif /* LOTA_H */

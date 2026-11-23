@@ -280,6 +280,10 @@ WINE_HOOK_OBJS32 := $(patsubst $(SDK_DIR)/%.c,$(BUILD_DIR)/hook32/%.o,\
 	$(WINE_HOOK_SRCS) $(SDK_SRCS))
 endif
 
+# Starts a program already protected; links the gaming SDK statically
+PROTECT_BIN := $(BUILD_DIR)/lota-protect
+PROTECT_SRCS := $(SDK_DIR)/lota_protect.c
+
 # Anti-cheat compatibility layer
 ANTICHEAT_LIB := $(BUILD_DIR)/liblota_anticheat.so
 ANTICHEAT_SRCS := $(SDK_DIR)/lota_anticheat.c
@@ -301,7 +305,7 @@ PKGCONFIG_FILES := $(patsubst packaging/pkgconfig/%.pc.in,$(PKGCONFIG_DIR)/%.pc,
 
 # Default target
 .PHONY: all
-all: $(AGENT_BIN) $(INITRAMFS_LOCK_BIN) $(INSTALLER_BIN) $(BPF_OBJ) $(VERIFIER_BIN) $(ATTESTCA_BIN) $(SDK_LIB) $(SERVER_SDK_LIB) $(WINE_HOOK_LIB) $(WINE_HOOK_LIB32) $(ANTICHEAT_LIB) $(PKGCONFIG_FILES)
+all: $(AGENT_BIN) $(INITRAMFS_LOCK_BIN) $(INSTALLER_BIN) $(BPF_OBJ) $(VERIFIER_BIN) $(ATTESTCA_BIN) $(SDK_LIB) $(SERVER_SDK_LIB) $(WINE_HOOK_LIB) $(WINE_HOOK_LIB32) $(PROTECT_BIN) $(ANTICHEAT_LIB) $(PKGCONFIG_FILES)
 ifeq ($(ARCH),x86_64)
 ifneq ($(LOTA_HOOK32),1)
 	@echo "note: $(HOOK32_MISSING); this tree cannot be installed as it is"
@@ -496,6 +500,12 @@ $(WINE_HOOK_LIB32): $(WINE_HOOK_OBJS32) Makefile | $(BUILD_DIR)
 		$(WINE_HOOK_OBJS32) -lpthread
 	$(Q)ln -sf $(notdir $@).$(LOTA_ABI_VERSION) $@.$(LOTA_ABI_MAJOR)
 	$(Q)ln -sf $(notdir $@).$(LOTA_ABI_VERSION) $@
+
+$(PROTECT_BIN): $(PROTECT_SRCS) $(SDK_OBJS) include/lota_gaming.h \
+		include/lota_wine_hook.h | $(BUILD_DIR)
+	$(QUIET_CC)
+	$(Q)$(CC) $(CFLAGS) -o $@ $(PROTECT_SRCS) $(SDK_OBJS) \
+		-pie -Wl,-z,relro,-z,now
 
 # build anti-cheat compatibility layer (includes gaming + server SDK; versioned)
 $(ANTICHEAT_LIB): $(ANTICHEAT_OBJS) $(SDK_OBJS) $(SERVER_SDK_OBJS) \
@@ -755,7 +765,7 @@ SELINUX_PP := selinux/lota.pp
 SELINUX_IF := selinux/lota.if
 # Must match both package manifests and lota-install's SELinux stage default.
 SELINUX_DATA_DIR := /usr/share/lota/selinux
-$(SELINUX_PP):
+$(SELINUX_PP): selinux/lota.te selinux/lota.if selinux/lota.fc
 	$(Q)$(MAKE) -C selinux lota.pp
 
 .PHONY: selinux-pp
@@ -1435,6 +1445,7 @@ ifeq ($(LOTA_HOOK32),1)
 	ln -sf liblota_wine_hook.so.$(LOTA_ABI_VERSION) \
 		$(DESTDIR)/usr/lib/liblota_wine_hook.so.$(LOTA_ABI_MAJOR)
 endif
+	install -m 755 $(PROTECT_BIN) $(DESTDIR)/usr/bin/
 	install -m 755 scripts/lota-proton-hook $(DESTDIR)/usr/bin/
 	install -m 755 scripts/lota-steam-setup $(DESTDIR)/usr/bin/
 	install -d $(DESTDIR)/usr/share/lota/ima
@@ -1509,7 +1520,8 @@ TEST_LIBSDK := -L$(BUILD_DIR) -llotagaming -Wl,-rpath,$(abspath $(BUILD_DIR))
 
 TEST_ATTEST_SRCS := $(addprefix $(AGENT_DIR)/,attest_targets.c profile.c config.c io_utils.c pin.c)
 TEST_CONFIG_SRCS := $(addprefix $(AGENT_DIR)/,config.c io_utils.c pin.c)
-TEST_IPC_SRCS := $(addprefix $(AGENT_DIR)/,ipc.c journal.c profile.c token_gate.c)
+TEST_IPC_SRCS := $(addprefix $(AGENT_DIR)/,ipc.c journal.c profile.c token_gate.c \
+	hardening.c)
 TEST_LOADER_SRCS := $(addprefix $(AGENT_DIR)/,bpf_loader.c journal.c policy_sign.c \
 	sb_dev.c cgroup_guard.c)
 TEST_NET_SRCS := $(addprefix $(AGENT_DIR)/,net.c journal.c pin.c)
@@ -1563,7 +1575,7 @@ TEST_IPC := $(addprefix $(BUILD_DIR)/test_, \
 	ipc_token_no_tpm \
 )
 $(TEST_IPC): $(TEST_IPC_SRCS)
-$(TEST_IPC): TEST_LDLIBS := $(TEST_LIBSSL)
+$(TEST_IPC): TEST_LDLIBS := $(TEST_LIBSSL) -lseccomp
 
 TEST_LOADER := $(addprefix $(BUILD_DIR)/test_, \
 	bpf_loader_load_source \
@@ -1619,7 +1631,8 @@ $(BUILD_DIR)/test_bpf_loader_load_source: TEST_LDLIBS += \
 	-Wl,--wrap=bpf_object__open_file \
 	-Wl,--wrap=bpf_object__open_mem
 
-# wraps return NULL with errno clear: refusal path without a kernel
+# wraps return NULL with errno clear: refusal path without a kernel;
+# the map calls run over a table in memory
 $(BUILD_DIR)/test_bpf_loader_open_fails_closed: TEST_LDLIBS += \
 	-Wl,--wrap=policy_verify_buffer \
 	-Wl,--wrap=bpf_object__open_mem \
@@ -1627,7 +1640,10 @@ $(BUILD_DIR)/test_bpf_loader_open_fails_closed: TEST_LDLIBS += \
 	-Wl,--wrap=bpf_program__type \
 	-Wl,--wrap=bpf_program__name \
 	-Wl,--wrap=bpf_program__attach \
-	-Wl,--wrap=ring_buffer__new
+	-Wl,--wrap=ring_buffer__new \
+	-Wl,--wrap=bpf_map_get_next_key \
+	-Wl,--wrap=bpf_map_lookup_elem \
+	-Wl,--wrap=bpf_map_delete_elem
 
 $(BUILD_DIR)/test_bpf_object_preflight: TEST_LDLIBS += -Wl,--wrap=policy_verify_buffer
 
@@ -1667,7 +1683,8 @@ $(BUILD_DIR)/test_bpf_mount_hooks: $(BPF_OBJ)
 $(BUILD_DIR)/test_bpf_mount_hooks: TEST_CFLAGS := -DBPF_OBJ_PATH='"$(BPF_OBJ)"'
 $(BUILD_DIR)/test_bpf_mount_hooks: TEST_LDLIBS := -lelf
 
-$(BUILD_DIR)/test_cgroup_guard: $(AGENT_DIR)/cgroup_guard.c $(AGENT_DIR)/sb_dev.c
+$(BUILD_DIR)/test_cgroup_guard: $(AGENT_DIR)/cgroup_guard.c $(AGENT_DIR)/sb_dev.c \
+	$(INC_DIR)/lota.h
 
 $(BUILD_DIR)/test_config: $(TEST_CONFIG_SRCS) $(AGENT_DIR)/policy_pubkey.c
 $(BUILD_DIR)/test_config_add_profile: $(TEST_CONFIG_SRCS)
@@ -1739,8 +1756,9 @@ $(BUILD_DIR)/test_ipc_payload_len: $(AGENT_DIR)/ipc_payload.h $(INC_DIR)/lota_ip
 $(BUILD_DIR)/test_ipc_privilege: $(AGENT_DIR)/ipc_privilege.h
 $(BUILD_DIR)/test_ipc_token_cap: $(INC_DIR)/lota_ipc.h $(INC_DIR)/lota_token.h
 
-$(BUILD_DIR)/test_ipc_token_refusal: $(addprefix $(AGENT_DIR)/,ipc.c profile.c token_gate.c)
-$(BUILD_DIR)/test_ipc_token_refusal: TEST_LDLIBS := $(TEST_LIBSSL)
+$(BUILD_DIR)/test_ipc_token_refusal: $(addprefix $(AGENT_DIR)/,ipc.c profile.c token_gate.c \
+	hardening.c)
+$(BUILD_DIR)/test_ipc_token_refusal: TEST_LDLIBS := $(TEST_LIBSSL) -lseccomp
 
 $(BUILD_DIR)/test_kernel_floor_hint: $(AGENT_DIR)/kernel_floor_hint.h
 $(BUILD_DIR)/test_kernel_image: $(AGENT_DIR)/kernel_image.c
@@ -1844,10 +1862,12 @@ $(BUILD_DIR)/demo_sdk: TEST_CFLAGS := $(SDK_VERSION_CFLAGS)
 
 # the test #includes lota_wine_hook.c; list it so a hook edit rebuilds
 $(BUILD_DIR)/test_wine_hook: tests/test_wine_hook.c $(SDK_DIR)/lota_gaming.c \
-		$(SDK_DIR)/lota_wine_hook.c $(VERSION_FILE) | $(BUILD_DIR)
+		$(SDK_DIR)/lota_wine_hook.c $(PROTECT_SRCS) $(VERSION_FILE) \
+		| $(BUILD_DIR)
 	$(QUIET_CC)
 	$(Q)$(CC) $(CFLAGS) $(SDK_VERSION_CFLAGS) -DLOTA_HOOK_TESTING \
-		-o $@ $(filter-out $(VERSION_FILE) $(SDK_DIR)/lota_wine_hook.c,$^) \
+		-o $@ $(filter-out $(VERSION_FILE) $(SDK_DIR)/lota_wine_hook.c \
+		$(PROTECT_SRCS),$^) \
 		-lpthread
 
 # C half of the report layout cross-check:

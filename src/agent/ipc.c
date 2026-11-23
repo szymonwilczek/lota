@@ -7,16 +7,19 @@
 
 #include "attest_aggregate.h"
 #include "enroll.h"
+#include "hardening.h"
 #include "ipc.h"
 #include "ipc_privilege.h"
 #include "ipc_payload.h"
 #include "measure_report.h"
 #include "standing_answer.h"
 #include "protect_pids.h"
+#include "registry.h"
 #include "status_flags.h"
 #include "terminate_policy.h"
 #include "terminate_report.h"
 
+#include <dirent.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <grp.h>
@@ -92,7 +95,7 @@ static int protect_pid_rate_count = 0;
 static uint64_t protect_pid_last_table_full_warn_sec = 0;
 
 static int u32_cmp(const void *a, const void *b);
-static void runtime_protect_reap_exited(void);
+static void runtime_protect_catch_up(void);
 static int build_canonical_runtime_pid_list(uint32_t **out_pids,
 					    uint32_t *out_count);
 
@@ -1045,6 +1048,66 @@ void ipc_runtime_coverage_forget(void)
 /* Last answer reported per protected PID; an unchanged round stays quiet */
 static struct measure_report_table g_measure_reports;
 
+/* what the last token round found mapped; IPC thread only */
+static struct registry g_registry;
+
+#define REGISTRY_OBJECTS_MAX LOTA_IPC_REGISTRY_MAX_OBJECTS
+_Static_assert(REGISTRY_OBJECTS_MAX >= LOTA_RUNTIME_IMAGE_MAX_MODULES,
+	       "the registry must hold every object a process is measured with");
+
+static int exec_history_alive(uint32_t tgid, uint64_t start_ticks)
+{
+	uint64_t ticks = 0;
+
+	return read_pid_start_time_ticks((pid_t)tgid, &ticks) == 0 &&
+	       ticks == start_ticks;
+}
+
+/*
+ * The exec history of every live process.
+ * False when it is missing or a kernel record was lost: every list of the
+ * round may then lack an object.
+ */
+static bool exec_history_read(struct lota_exec_history_key **keys,
+			      struct lota_exec_history_val **vals, size_t *n)
+{
+	struct bpf_extended_stats stats;
+	int ret;
+
+	ret = bpf_loader_exec_history(&g_agent.bpf_ctx, exec_history_alive,
+				      keys, vals, n);
+	if (ret < 0) {
+		lota_warn("exec history unavailable: %s", strerror(-ret));
+		return false;
+	}
+	if (bpf_loader_get_extended_stats(&g_agent.bpf_ctx, &stats) < 0)
+		return false;
+	return stats.exec_history_lost == 0;
+}
+
+/*
+ * Every process outside an instance that reached one of its unix sockets.
+ * False when the record is missing or one was lost.
+ */
+static bool instance_peers_read(struct lota_instance_peer_key **keys,
+				struct lota_instance_peer_val **vals, size_t *n)
+{
+	struct bpf_extended_stats stats;
+	int ret;
+
+	ret = bpf_loader_instance_peers(&g_agent.bpf_ctx, exec_history_alive,
+					keys, vals, n);
+	if (ret < 0) {
+		lota_warn("instance peers unavailable: %s", strerror(-ret));
+		return false;
+	}
+	if (bpf_loader_get_extended_stats(&g_agent.bpf_ctx, &stats) < 0)
+		return false;
+	return stats.instance_peers_lost == 0;
+}
+
+static int read_pid_real_uid(pid_t pid, uint32_t *out_uid);
+
 /* Token rounds that repeated a journalled answer; reported at shutdown */
 static uint64_t g_token_answer_repeats;
 
@@ -1079,7 +1142,7 @@ static void runtime_coverage_take(bool *full_out, bool *content_hashed_out)
 	 * Reaping in one place keeps the status word and the token in agreement.
 	 * Before the cache check: a dropped PID bumps the epoch.
 	 */
-	runtime_protect_reap_exited();
+	runtime_protect_catch_up();
 
 	agent_globals_lock(&g_agent);
 	count = g_agent.policy_protect_pid_count;
@@ -1182,7 +1245,7 @@ static void handle_get_status(struct ipc_context *ctx,
  * The TPM signs over the token quote nonce:
  *   SHA256(valid_until_LE || flags_LE || pcr_mask_LE || client_nonce ||
  *          policy_digest || runtime_protect_digest ||
- *          runtime_protect_epoch_LE)
+ *          runtime_protect_epoch_LE || stopped_ms_LE)
  * binding the signature to both the token metadata and the client's challenge.
  */
 static void handle_get_token(struct ipc_context *ctx, struct ipc_client *client,
@@ -1198,9 +1261,21 @@ static void handle_get_token(struct ipc_context *ctx, struct ipc_client *client,
 	uint8_t *data_ptr;
 	uint32_t *runtime_pids = NULL;
 	uint32_t runtime_pid_count = 0;
+	uint64_t stopped_ms = 0;
 	uint16_t pid_list_size = 0;
 	uint8_t (*image_digests)[32] = NULL;
 	size_t image_list_size = 0;
+	struct lota_rt_object_record *objs = NULL;
+	struct registry next_registry = { 0 };
+	struct lota_exec_history_key *hist_keys = NULL;
+	struct lota_exec_history_val *hist_vals = NULL;
+	size_t n_hist = 0;
+	bool hist_lost = false;
+	struct lota_instance_peer_key *peer_keys = NULL;
+	struct lota_instance_peer_val *peer_vals = NULL;
+	struct lota_ipc_registry_peer *peers = NULL;
+	size_t n_peer_hist = 0;
+	bool peers_lost = false;
 	size_t total_size;
 	uint64_t view_valid_until;
 	uint32_t view_flags;
@@ -1378,7 +1453,7 @@ static void handle_get_token(struct ipc_context *ctx, struct ipc_client *client,
 	 * the one that protected itself.
 	 * Catch the set up with the kernel's before reading it
 	 */
-	runtime_protect_reap_exited();
+	runtime_protect_catch_up();
 
 	ret = build_canonical_runtime_pid_list(&runtime_pids,
 					       &runtime_pid_count);
@@ -1428,11 +1503,16 @@ static void handle_get_token(struct ipc_context *ctx, struct ipc_client *client,
 				  LOTA_IPC_TOKEN_IMAGE_DIGEST_SIZE;
 		image_digests =
 			calloc(runtime_pid_count, sizeof(*image_digests));
-		if (!image_digests) {
+		objs = calloc(REGISTRY_OBJECTS_MAX, sizeof(*objs));
+		peers = calloc(LOTA_IPC_REGISTRY_MAX_PEERS, sizeof(*peers));
+		if (!image_digests || !objs || !peers) {
 			fail = true;
 			fail_code = LOTA_IPC_ERR_INTERNAL;
 			goto out;
 		}
+		hist_lost = !exec_history_read(&hist_keys, &hist_vals, &n_hist);
+		peers_lost = !instance_peers_read(&peer_keys, &peer_vals,
+						  &n_peer_hist);
 		for (uint32_t i = 0; i < runtime_pid_count; i++) {
 			struct lota_runtime_measure_failure mfail;
 			struct lota_runtime_measure_coverage cov;
@@ -1440,10 +1520,66 @@ static void handle_get_token(struct ipc_context *ctx, struct ipc_client *client,
 			char held_clause[80];
 			uint64_t held = 0;
 			char reason[LOTA_RT_REASON_MAX];
+			uint32_t owner = UINT32_MAX;
+			uint64_t start_ticks = 0;
+			uint16_t rflags = 0;
+			int lost = 0;
+			int peer_overflow = 0;
+			size_t n_objs = 0;
+			size_t n_peers;
+			int rec;
 
-			ret = lota_runtime_measure_pid((pid_t)runtime_pids[i],
-						       image_digests[i], &cov,
-						       &mfail);
+			/* unreadable owner: only root reads the entry */
+			(void)read_pid_real_uid((pid_t)runtime_pids[i], &owner);
+			ret = lota_runtime_measure_pid_objects(
+				(pid_t)runtime_pids[i], image_digests[i], &cov,
+				&mfail, objs, &n_objs);
+
+			/* what the maps no longer show, from the history */
+			if (read_pid_start_time_ticks((pid_t)runtime_pids[i],
+						      &start_ticks) < 0)
+				lost = 1;
+			n_objs = registry_merge_history(objs, n_objs,
+							REGISTRY_OBJECTS_MAX,
+							hist_keys, hist_vals,
+							n_hist, runtime_pids[i],
+							start_ticks, &lost);
+			if (hist_lost || lost)
+				rflags |= LOTA_IPC_REGISTRY_HISTORY_LOST;
+
+			n_peers = registry_collect_peers(
+				peers, LOTA_IPC_REGISTRY_MAX_PEERS, peer_keys,
+				peer_vals, n_peer_hist, runtime_pids[i],
+				start_ticks, &peer_overflow);
+			if (peers_lost || lost || peer_overflow)
+				rflags |= LOTA_IPC_REGISTRY_PEERS_LOST;
+
+			/* the token's entry binds the whole list */
+			if (ret >= 0) {
+				rec = registry_digest(
+					rflags | LOTA_IPC_REGISTRY_MEASURED,
+					objs, n_objs, peers, n_peers,
+					image_digests[i]);
+				if (rec == 0)
+					rec = registry_add(
+						&next_registry, runtime_pids[i],
+						owner, rflags, image_digests[i],
+						objs, n_objs, peers, n_peers);
+			} else {
+				rec = registry_add(&next_registry,
+						   runtime_pids[i], owner,
+						   rflags, NULL, objs, n_objs,
+						   peers, n_peers);
+			}
+
+			/* a digest the registry cannot back is not sent */
+			if (rec < 0) {
+				lota_err("registry of pid=%u not kept: %s",
+					 runtime_pids[i], strerror(-rec));
+				fail = true;
+				fail_code = LOTA_IPC_ERR_INTERNAL;
+				goto out;
+			}
 			if (ret < 0) {
 				lota_rt_failure_reason(&mfail, ret, reason,
 						       sizeof(reason));
@@ -1567,6 +1703,8 @@ static void handle_get_token(struct ipc_context *ctx, struct ipc_client *client,
 				 released == 1 ? "" : "s");
 	}
 
+	registry_replace(&g_registry, &next_registry);
+
 	ret = lota_compute_runtime_protect_digest(runtime_pids, image_digests,
 						  runtime_pid_count,
 						  runtime_protect_digest);
@@ -1601,11 +1739,22 @@ static void handle_get_token(struct ipc_context *ctx, struct ipc_client *client,
 	else
 		memset(token->client_nonce, 0, 32);
 
+	ret = bpf_loader_instance_stopped_ms(
+		&g_agent.bpf_ctx, (uint32_t)client->peer_pid, &stopped_ms);
+	if (ret < 0) {
+		lota_err("stopped time of PID %d unreadable: %s",
+			 client->peer_pid, strerror(-ret));
+		fail = true;
+		fail_code = LOTA_IPC_ERR_INTERNAL;
+		goto out;
+	}
+	token->stopped_ms = stopped_ms;
+
 	ret = lota_compute_token_quote_nonce(
 		token->valid_until, token->flags, token->pcr_mask,
 		token->client_nonce, token->policy_digest,
 		token->runtime_protect_digest, token->runtime_protect_epoch,
-		binding_nonce);
+		token->stopped_ms, binding_nonce);
 	if (ret < 0) {
 		lota_err("token quote nonce computation failed: %s",
 			 strerror(-ret));
@@ -1710,6 +1859,13 @@ out:
 		OPENSSL_cleanse(image_digests, image_list_size);
 		free(image_digests);
 	}
+	free(objs);
+	free(hist_keys);
+	free(hist_vals);
+	free(peer_keys);
+	free(peer_vals);
+	free(peers);
+	registry_clear(&next_registry);
 	ipc_secure_bzero(&quote, sizeof(quote));
 
 	/* journal only news; the client is answered every round */
@@ -2356,6 +2512,132 @@ static void runtime_protect_reap_exited(void)
 	agent_globals_unlock(&g_agent);
 }
 
+static int protect_pid_adopt(uint32_t pid, void *ctx)
+{
+	(void)ctx;
+	return bpf_loader_adopt_instance_member(&g_agent.bpf_ctx, pid);
+}
+
+/* Every running process but the agent, from /proc */
+static int list_running_pids(uint32_t **out, int *out_count)
+{
+	uint32_t self = (uint32_t)getpid();
+	uint32_t *pids = NULL;
+	struct dirent *de;
+	int count = 0;
+	int cap = 0;
+	DIR *dir;
+
+	*out = NULL;
+	*out_count = 0;
+
+	dir = opendir("/proc");
+	if (!dir)
+		return -errno;
+
+	while ((de = readdir(dir)) != NULL) {
+		unsigned long val;
+		char *end;
+
+		if (de->d_name[0] < '1' || de->d_name[0] > '9')
+			continue;
+		errno = 0;
+		val = strtoul(de->d_name, &end, 10);
+		if (errno || *end || val > UINT32_MAX || val == self)
+			continue;
+
+		if (count == cap) {
+			int next_cap = cap ? cap * 2 : 256;
+			uint32_t *next;
+
+			next = realloc(pids, (size_t)next_cap * sizeof(*pids));
+			if (!next) {
+				free(pids);
+				closedir(dir);
+				return -ENOMEM;
+			}
+			pids = next;
+			cap = next_cap;
+		}
+		pids[count++] = (uint32_t)val;
+	}
+	closedir(dir);
+
+	*out = pids;
+	*out_count = count;
+	return 0;
+}
+
+/*
+ * Add every process a protected one created to the set.
+ *
+ * The kernel protects such a process from its first instruction, but only
+ * the root of the tree was ever named here, so the token and the runtime
+ * measurement saw the launcher and not the title it started. Run after
+ * every reap, for the same reason: the read is where a missing member
+ * would be left out.
+ */
+static void runtime_protect_adopt_members(void)
+{
+	uint32_t *cands = NULL;
+	uint32_t *next = NULL;
+	int cand_count = 0;
+	int next_count = 0;
+	int count;
+	int ret;
+
+	if (g_agent.bpf_ctx.instance_fd < 0)
+		return;
+
+	count = g_agent.policy_protect_pid_count;
+	if (count < 0 || (count > 0 && !g_agent.policy_protect_pids))
+		return;
+
+	if (g_agent.policy_protect_epoch == UINT64_MAX)
+		return;
+
+	if (list_running_pids(&cands, &cand_count) < 0)
+		return;
+
+	next = calloc(LOTA_MAX_PROTECTED_PIDS, sizeof(*next));
+	if (!next)
+		goto out;
+
+	ret = protect_pids_adopt(g_agent.policy_protect_pids, count, cands,
+				 cand_count, protect_pid_adopt, NULL,
+				 LOTA_MAX_PROTECTED_PIDS, next, &next_count);
+	if (ret <= 0)
+		goto out;
+
+	for (int i = count; i < next_count; i++)
+		lota_info("PID %u runs in a protected instance; adding it to "
+			  "the runtime set",
+			  next[i]);
+
+	agent_globals_lock(&g_agent);
+	if (g_agent.policy_protect_pids) {
+		OPENSSL_cleanse(g_agent.policy_protect_pids,
+				(size_t)count * sizeof(uint32_t));
+		free(g_agent.policy_protect_pids);
+	}
+	g_agent.policy_protect_pids = next;
+	g_agent.policy_protect_pid_count = next_count;
+	g_agent.policy_protect_epoch += 1;
+	agent_globals_unlock(&g_agent);
+	next = NULL;
+
+out:
+	free(next);
+	free(cands);
+}
+
+/* Bring the set in step with the kernel: exited processes out, members in */
+static void runtime_protect_catch_up(void)
+{
+	runtime_protect_reap_exited();
+	runtime_protect_adopt_members();
+}
+
 static int build_canonical_runtime_pid_list(uint32_t **out_pids,
 					    uint32_t *out_count)
 {
@@ -2488,6 +2770,27 @@ static int pid_set_remove(const uint32_t *pids, int count, uint32_t pid,
 	return 0;
 }
 
+/*
+ * 0 when @pid has no tracer. A process under one is refused protection:
+ * the LSM stops new attaches, not the one already there, and that tracer
+ * would read and write the process as if it were unprotected.
+ */
+static int protect_target_untraced(uint32_t pid)
+{
+	long tracer = 0;
+	int ret;
+
+	ret = hardening_read_tracer_pid((pid_t)pid, &tracer);
+	if (ret == -EPERM)
+		lota_warn("Refusing PROTECT_PID %u: traced by pid %ld, "
+			  "which protection does not detach",
+			  pid, tracer);
+	else if (ret < 0)
+		lota_warn("Refusing PROTECT_PID %u: cannot read its tracer: %s",
+			  pid, strerror(-ret));
+	return ret;
+}
+
 static void handle_protect_pid_update(struct ipc_context *ctx,
 				      struct ipc_client *client,
 				      const uint8_t *payload,
@@ -2587,7 +2890,7 @@ static void handle_protect_pid_update(struct ipc_context *ctx,
 
 	/* same catch-up, so idempotent no-op is judged against the processes
 	 * that are actually running */
-	runtime_protect_reap_exited();
+	runtime_protect_catch_up();
 
 	had = pid_set_contains(g_agent.policy_protect_pids,
 			       g_agent.policy_protect_pid_count, pid);
@@ -2638,6 +2941,22 @@ static void handle_protect_pid_update(struct ipc_context *ctx,
 			lota_err("Failed to protect PID %u (IPC): %s", pid,
 				 strerror(-ret));
 			build_error_response(client, LOTA_IPC_ERR_INTERNAL);
+			return;
+		}
+
+		/*
+		 * Read after the map holds the process, so no attach lands
+		 * between the check and the protection: a tracer seen now
+		 * was attached before it, and stays.
+		 */
+		ret = protect_target_untraced(pid);
+		if (ret < 0) {
+			if (bpf_loader_unprotect_pid(&g_agent.bpf_ctx, pid) < 0)
+				lota_err("Failed to withdraw protection from "
+					 "PID %u",
+					 pid);
+			build_error_response(client,
+					     LOTA_IPC_ERR_ACCESS_DENIED);
 			return;
 		}
 		mutated = true;
@@ -2754,23 +3073,64 @@ static int read_pid_real_uid(pid_t pid, uint32_t *out_uid)
 }
 
 /*
+ * One page of the objects the last token round found mapped in a process.
+ *
+ * The owner of the process or root may read it, the same callers that
+ * could read its maps themselves.
+ * A process the round did not measure is answered NOT_PROTECTED.
+ */
+static void handle_get_registry(struct ipc_client *client,
+				const uint8_t *payload, uint32_t payload_len)
+{
+	struct lota_ipc_response *resp = (void *)client->send_buf;
+	struct lota_ipc_registry_request req;
+	const struct registry_process *p;
+	size_t len = 0;
+	int ret;
+
+	if (payload_len < sizeof(req)) {
+		build_error_response(client, LOTA_IPC_ERR_BAD_REQUEST);
+		return;
+	}
+	memcpy(&req, payload, sizeof(req));
+
+	p = registry_find(&g_registry, req.pid);
+	if (!p) {
+		build_error_response(client, LOTA_IPC_ERR_NOT_PROTECTED);
+		return;
+	}
+	if (client->peer_uid != 0 && (uint32_t)client->peer_uid != p->uid) {
+		build_error_response(client, LOTA_IPC_ERR_ACCESS_DENIED);
+		return;
+	}
+
+	ret = registry_encode_page(p, g_registry.round, req.start,
+				   client->send_buf + LOTA_IPC_RESPONSE_SIZE,
+				   LOTA_IPC_MAX_PAYLOAD, &len);
+	if (ret < 0) {
+		build_error_response(client, ret == -ERANGE ?
+						     LOTA_IPC_ERR_BAD_REQUEST :
+						     LOTA_IPC_ERR_INTERNAL);
+		return;
+	}
+
+	resp->magic = LOTA_IPC_MAGIC;
+	resp->version = LOTA_IPC_VERSION;
+	resp->result = LOTA_IPC_OK;
+	resp->payload_len = (uint32_t)len;
+	client->send_len = LOTA_IPC_RESPONSE_SIZE + len;
+	client->send_offset = 0;
+}
+
+/*
  * End a protected process on behalf of its owner.
  *
- * Protected task takes no signal from anything but itself, the agent
- * or the kernel, which is what stops a cheat from killing the process being
- * measured and also what leaves a player with a hung title and no way out but
- * a reboot.
- *
- * The agent holds the identity the LSM accepts, so it delivers the signal for
- * caller kill(2) would already have allowed -- the owner of the process,
+ * The agent delivers the signal and journals it, for a caller kill(2)
+ * would already have allowed -- the owner of the process,
  * or root -- and refuses everything past that.
  *
- * There is no operator privilege gate here on purpose.
- * Requiring a verity-allowlisted caller, as UNPROTECT_PID does, would reproduce
- * the dead end on the machines this exists for: that list is empty on a default
- * install.
- * What keeps the widening honest is that the request cannot be made anywhere but
- * here, so nothing ends a protected process without the agent recording it.
+ * There is no operator privilege gate here on purpose: the caller could send
+ * the same signal itself, and the verb adds only the record.
  */
 static void handle_terminate_protected(struct ipc_context *ctx,
 				       struct ipc_client *client,
@@ -2825,7 +3185,7 @@ static void handle_terminate_protected(struct ipc_context *ctx,
 	}
 
 	/* judge membership against the processes that are actually running */
-	runtime_protect_reap_exited();
+	runtime_protect_catch_up();
 
 	agent_globals_lock(&g_agent);
 	decision_input.target_is_protected =
@@ -3005,6 +3365,10 @@ static void process_request(struct ipc_context *ctx, struct ipc_client *client)
 
 	case LOTA_IPC_CMD_TERMINATE_PROTECTED:
 		handle_terminate_protected(ctx, client, payload, payload_len);
+		break;
+
+	case LOTA_IPC_CMD_GET_REGISTRY:
+		handle_get_registry(client, payload, payload_len);
 		break;
 
 	case LOTA_IPC_CMD_SHUTDOWN:
@@ -3646,6 +4010,10 @@ void ipc_update_status(struct ipc_context *ctx, uint32_t flags,
 	 */
 	if (ctx->protected_terminated)
 		flags |= LOTA_STATUS_PROTECTED_TERMINATED;
+	if (ctx->agent_restarted)
+		flags |= LOTA_STATUS_AGENT_RESTARTED;
+	if (ctx->events_lost)
+		flags |= LOTA_STATUS_EVENTS_LOST;
 
 	/* a round knows nothing of the policy, the daemon does */
 	flags = lota_status_fold_policy(flags, ctx->mode, ctx->policy_keys);
@@ -3717,6 +4085,28 @@ void ipc_update_rotation(struct ipc_context *ctx, uint64_t generation,
 
 	if (changed)
 		dbus_emit_rotation_changed(ctx->dbus);
+}
+
+void ipc_set_agent_restarted(struct ipc_context *ctx)
+{
+	ctx->agent_restarted = true;
+	if (ctx->status_flags & LOTA_STATUS_AGENT_RESTARTED)
+		return;
+
+	ctx->status_flags |= LOTA_STATUS_AGENT_RESTARTED;
+	notify_subscribers(ctx, LOTA_IPC_EVENT_STATUS);
+	dbus_emit_status_changed(ctx->dbus, ctx->status_flags);
+}
+
+void ipc_set_events_lost(struct ipc_context *ctx)
+{
+	ctx->events_lost = true;
+	if (ctx->status_flags & LOTA_STATUS_EVENTS_LOST)
+		return;
+
+	ctx->status_flags |= LOTA_STATUS_EVENTS_LOST;
+	notify_subscribers(ctx, LOTA_IPC_EVENT_STATUS);
+	dbus_emit_status_changed(ctx->dbus, ctx->status_flags);
 }
 
 void ipc_set_mode(struct ipc_context *ctx, uint8_t mode)

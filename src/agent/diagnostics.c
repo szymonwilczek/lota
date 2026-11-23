@@ -89,9 +89,8 @@ static int ipc_request_shutdown(void)
 /*
  * Ask the agent to end a protected process.
  *
- * Socket owner is the only thing on the machine that can:
- * protected task takes no signal from a terminal, task manager or a root shell.
- * The agent answers for a caller kill(2) would already have allowed,
+ * The agent journals the termination.
+ * It answers for a caller kill(2) would already have allowed,
  * so this runs as the player who owns the title, without sudo.
  *
  * @out_others receives the protected set size, not counting @pid.

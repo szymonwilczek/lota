@@ -218,9 +218,6 @@ fs_getattr_all_fs(lota_agent_t)
 
 # Ending a protected process on its owner's behalf
 #
-# Protected task takes no signal from anything but itself, the agent
-# or the kernel, so a hung title can be closed only by asking the agent
-# to deliver one.
 # The agent answers for a caller kill(2) would already have allowed, which means
 # it signals processes of another uid and needs the kill capability for it.
 #

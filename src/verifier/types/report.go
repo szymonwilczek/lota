@@ -92,6 +92,10 @@ const (
 	FlagStrictModules uint32 = 1 << 14
 	FlagBlockAnonExec uint32 = 1 << 15
 	FlagBlockPtrace   uint32 = 1 << 16
+
+	// FlagEventsLost is set when the kernel left events out of the daemon's
+	// log. Enforcement is unaffected. Logged, not a verdict.
+	FlagEventsLost uint32 = 1 << 17
 )
 
 // challenge capability flags (see: include/attestation.h)

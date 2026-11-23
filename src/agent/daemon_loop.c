@@ -12,7 +12,6 @@
 #include <sys/types.h>
 
 #include "../../include/lota.h"
-#include "../../include/lota_ipc.h"
 #include "journal.h"
 #include "reload.h"
 #include "sdnotify.h"
@@ -26,25 +25,19 @@
 #include "watchdog.h"
 
 /*
- * Ringbuf drop telemetry.
+ * Event loss telemetry.
  *
- * The BPF programs increment STAT_RINGBUF_DROPS whenever
- * bpf_ringbuf_reserve() returns NULL while a hook is about to emit
- * an event. Enforcement is unaffected (a blocked event still
- * returns -EPERM at the LSM hook), but the forensic audit stream
- * for that specific allow/deny is lost. The loop polls the counter
- * at most every RINGBUF_DROP_POLL_INTERVAL_NS to bound the
- * overhead and, on any positive delta, logs a security event and
- * raises LOTA_STATUS_RINGBUF_DROPS so monitoring (D-Bus / IPC /
- * Prometheus scrape) sees the gap.
+ * A hook that refuses or allows still does so when its event is left out, but
+ * the log loses that line. The kernel counts each case: the ring was full, the
+ * type yielded under pressure, or a refusal spent its budget. The loop reads
+ * the counters at most once per EVENT_LOSS_POLL_INTERVAL_NS and, on any
+ * increase, logs them and raises LOTA_STATUS_EVENTS_LOST for the rest of this
+ * agent.
  *
- * The bit is sticky: once set, it stays raised until the daemon
- * exits and a fresh attestation re-publishes the status. Operators
- * are expected to treat any raised bit as "investigate the
- * forensic gap for the time window between the last clean reading
- * and now".
+ * Permitted events past their budget stay out: an ordinary boot spends it.
+ * A loaded agent reads the counters late; they wait for it.
  */
-#define RINGBUF_DROP_POLL_INTERVAL_NS (1000ULL * 1000ULL * 1000ULL)
+#define EVENT_LOSS_POLL_INTERVAL_NS (1000ULL * 1000ULL * 1000ULL)
 
 static uint64_t monotonic_ns(void)
 {
@@ -59,8 +52,8 @@ static uint64_t monotonic_ns(void)
  * pure delta logic can be unit-tested without dragging the global
  * agent context and libbpf/libtss2/libsystemd into the test target.
  */
-static void poll_ringbuf_drops(struct agent_loop_ctx *ctx, uint64_t *last_drops,
-			       uint64_t *last_poll_ns)
+static void poll_event_loss(struct agent_loop_ctx *ctx, uint64_t *last_lost,
+			    uint64_t *last_poll_ns)
 {
 	uint64_t now_ns;
 
@@ -71,7 +64,7 @@ static void poll_ringbuf_drops(struct agent_loop_ctx *ctx, uint64_t *last_drops,
 	if (now_ns == 0)
 		return;
 	if (*last_poll_ns != 0 &&
-	    now_ns - *last_poll_ns < RINGBUF_DROP_POLL_INTERVAL_NS)
+	    now_ns - *last_poll_ns < EVENT_LOSS_POLL_INTERVAL_NS)
 		return;
 	*last_poll_ns = now_ns;
 
@@ -79,17 +72,19 @@ static void poll_ringbuf_drops(struct agent_loop_ctx *ctx, uint64_t *last_drops,
 	if (bpf_loader_get_extended_stats(ctx->bpf_ctx, &stats) < 0)
 		return;
 
-	uint64_t delta = agent_ringbuf_drop_delta(stats.drops, last_drops);
+	uint64_t delta = agent_ringbuf_drop_delta(
+		stats.drops + stats.events_yielded + stats.blocked_suppressed,
+		last_lost);
 	if (delta == 0)
 		return;
 
-	lota_err("SECURITY: BPF events ringbuf dropped %lu events (total=%lu); "
-		 "forensic stream incomplete - enforcement unaffected",
-		 (unsigned long)delta, (unsigned long)stats.drops);
+	lota_err("SECURITY: kernel left out %lu events (full=%lu yielded=%lu "
+		 "blocked_budget=%lu); log incomplete - enforcement unaffected",
+		 (unsigned long)delta, (unsigned long)stats.drops,
+		 (unsigned long)stats.events_yielded,
+		 (unsigned long)stats.blocked_suppressed);
 
-	ipc_update_status(
-		ctx->ipc_ctx,
-		ctx->ipc_ctx->status_flags | LOTA_STATUS_RINGBUF_DROPS, 0);
+	ipc_set_events_lost(ctx->ipc_ctx);
 }
 
 /*
@@ -112,21 +107,16 @@ static void agent_reload_publishers(struct agent_loop_ctx *ctx)
 	if (!ctx->targets || !ctx->target_count || ctx->target_max == 0)
 		return;
 
-	ret = attest_targets_build(
+	count = *ctx->target_count;
+	ret = attest_targets_rebuild(
 		ctx->cfg,
 		(ctx->cfg && ctx->cfg->server[0]) ? ctx->cfg->server : NULL,
 		ctx->cfg ? ctx->cfg->port : 0,
 		ctx->cfg ? ctx->cfg->ca_cert : NULL,
 		ctx->cfg ? ctx->cfg->attest_interval : 0, ctx->targets,
 		ctx->target_max, &count);
-	if (ret < 0) {
-		/* no publisher configured at all is valid state,
-		 * and the only one that legitimately empties the list */
-		if (ret == -EINVAL)
-			count = 0;
-		else
-			return;
-	}
+	if (ret < 0)
+		return;
 
 	*ctx->target_count = count;
 	ipc_set_profiles(ctx->ipc_ctx, ctx->targets, count);
@@ -181,8 +171,8 @@ static void bench_poll(struct agent_loop_ctx *ctx, int *last_err)
 int agent_run_event_loop(struct agent_loop_ctx *ctx)
 {
 	struct epoll_event events[16];
-	uint64_t last_drops = 0;
-	uint64_t last_drop_poll_ns = 0;
+	uint64_t last_lost = 0;
+	uint64_t last_loss_poll_ns = 0;
 	int bench_err = 0;
 
 	while (*ctx->running) {
@@ -205,7 +195,7 @@ int agent_run_event_loop(struct agent_loop_ctx *ctx)
 			break;
 		}
 
-		poll_ringbuf_drops(ctx, &last_drops, &last_drop_poll_ns);
+		poll_event_loss(ctx, &last_lost, &last_loss_poll_ns);
 		if (ctx->bench)
 			bench_poll(ctx, &bench_err);
 

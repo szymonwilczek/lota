@@ -40,9 +40,9 @@ static void test_flags(void)
 	      "flags print by the names a title sees");
 
 	status_flags_string(LOTA_STATUS_ATTESTED | LOTA_STATUS_TPM_LOCKOUT |
-				    LOTA_STATUS_RINGBUF_DROPS,
+				    LOTA_STATUS_EVENTS_LOST,
 			    buf, sizeof(buf));
-	CHECK(strcmp(buf, "ATTESTED,TPM_LOCKOUT,RINGBUF_DROPS") == 0,
+	CHECK(strcmp(buf, "ATTESTED,EVENTS_LOST,TPM_LOCKOUT") == 0,
 	      "host-only bits are named too");
 
 	status_flags_string(LOTA_STATUS_TPM_OK | (1U << 30), buf, sizeof(buf));

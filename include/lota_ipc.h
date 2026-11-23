@@ -58,6 +58,8 @@ enum lota_ipc_cmd {
 		0x09, /* Exchange state with the attestation loop (agent peer only) */
 	LOTA_IPC_CMD_TERMINATE_PROTECTED =
 		0x0A, /* End a protected process on behalf of its owner */
+	LOTA_IPC_CMD_GET_REGISTRY =
+		0x0B, /* Code objects the last measurement found in a process */
 };
 
 /*
@@ -121,10 +123,12 @@ enum lota_ipc_result {
 #define LOTA_STATUS_BPF_LOADED (1 << 3) /* BPF LSM active */
 #define LOTA_STATUS_SECURE_BOOT (1 << 4) /* Secure Boot enabled */
 #define LOTA_STATUS_TPM_LOCKOUT (1 << 5) /* TPM signaled DA lockout */
-#define LOTA_STATUS_RINGBUF_DROPS \
-	(1                        \
-	 << 6) /* BPF events ringbuf dropped at least one event since last     \
-		  poll; forensic stream incomplete, enforcement unaffected */
+/*
+ * the kernel left out an event: ring full, yielded under pressure or a refusal
+ * past its budget. The event log is incomplete, enforcement is not affected.
+ * Stays set until the agent ends.
+ */
+#define LOTA_STATUS_EVENTS_LOST (1 << 6)
 #define LOTA_STATUS_UPDATE_PENDING \
 	(1                         \
 	 << 7) /* Agent binary on disk differs from the running one: package \
@@ -170,6 +174,13 @@ enum lota_ipc_result {
 #define LOTA_STATUS_STRICT_MODULES (1 << 17) /* strict_modules applies */
 #define LOTA_STATUS_BLOCK_ANON_EXEC (1 << 18) /* block_anon_exec applies */
 #define LOTA_STATUS_BLOCK_PTRACE (1 << 19) /* block_ptrace applies */
+
+/*
+ * This agent found PCR 14 already holding the boot's commitment: an earlier
+ * one ended in this boot without a shutdown, and what it recorded,
+ * PROTECTED_TERMINATED included, ended with it. Sticky until the next boot.
+ */
+#define LOTA_STATUS_AGENT_RESTARTED (1 << 20)
 
 #define LOTA_STATUS_PROTECTED_TERMINATED \
 	(1                               \
@@ -264,7 +275,7 @@ struct lota_ipc_token_request {
  * - Recompute runtime_protect_digest from protected_pids[]
  * - Compute expected_nonce = SHA256(valid_until_LE || flags_LE || pcr_mask_LE
  * || client_nonce || policy_digest || runtime_protect_digest ||
- * runtime_protect_epoch_LE)
+ * runtime_protect_epoch_LE || stopped_ms_LE)
  * - Verify TPM signature over attest_data using AIK public key
  * - Parse attest_data, check extraData == expected_nonce
  * - Check PCR digest in attest_data matches expected policy
@@ -287,6 +298,7 @@ struct lota_ipc_token {
 					   id */
 	uint16_t pid_list_size; /* Bytes for protected_pids[] */
 	uint16_t runtime_protect_version; /* 1 = PID set + image digests */
+	uint64_t stopped_ms; /* Time the caller's instance stood stopped */
 
 	/*
 	 * Variable-length data follows:
@@ -471,8 +483,7 @@ struct lota_ipc_policy_update {
 /*
  * TERMINATE_PROTECTED request payload
  *
- * Protected process takes no signal from anything but itself, the agent
- * or the kernel, so its owner asks the agent to deliver one.
+ * Its owner asks the agent to end a protected process, which journals it.
  * Only SIGTERM and SIGKILL are relayed: the verb ends a process,
  * it does not drive one.
  */
@@ -489,6 +500,122 @@ struct lota_ipc_terminate_response {
 	uint32_t signal;
 	uint32_t other_protect_pid_count; /* protected set minus @pid */
 	uint32_t _reserved1;
+} __attribute__((packed));
+
+/*
+ * GET_REGISTRY request payload
+ *
+ * Asks for what the last token round found in @pid, from entry @start on:
+ * the code objects, then the peers.
+ * Answered for the owner of the process or root.
+ */
+struct lota_ipc_registry_request {
+	uint32_t pid;
+	uint32_t start;
+} __attribute__((packed));
+
+/* image_digest is the token's entry for @pid */
+#define LOTA_IPC_REGISTRY_MEASURED (1U << 0)
+/* an executable mapping of @pid went unrecorded; the list may miss one */
+#define LOTA_IPC_REGISTRY_HISTORY_LOST (1U << 1)
+/* a reach into a socket of @pid's instance went unrecorded */
+#define LOTA_IPC_REGISTRY_PEERS_LOST (1U << 2)
+
+/* mapped since protection began, gone from the address space when measured */
+#define LOTA_IPC_REGISTRY_ENTRY_UNMAPPED (1U << 0)
+/*
+ * when mapped executable, open for write or mapped shared writable
+ * elsewhere, or a memfd or shm segment no seal kept from writes
+ */
+#define LOTA_IPC_REGISTRY_ENTRY_WRITABLE (1U << 1)
+/* backed by memory only: memfd, shm, tmpfs or hugetlbfs */
+#define LOTA_IPC_REGISTRY_ENTRY_MEMORY (1U << 2)
+#define LOTA_IPC_REGISTRY_ENTRY_KNOWN                                          \
+	(LOTA_IPC_REGISTRY_ENTRY_UNMAPPED | LOTA_IPC_REGISTRY_ENTRY_WRITABLE | \
+	 LOTA_IPC_REGISTRY_ENTRY_MEMORY)
+
+/* objects listed for one process: those mapped, then those unmapped */
+#define LOTA_IPC_REGISTRY_MAX_OBJECTS 512
+/* peers listed for one process; more set LOTA_IPC_REGISTRY_PEERS_LOST */
+#define LOTA_IPC_REGISTRY_MAX_PEERS 256
+
+/*
+ * GET_REGISTRY response payload
+ *
+ * A page header followed by @count entries. Entry i of the listing is
+ * object i while i < @total and peer i - @total after it.
+ * @round names the measurement round the list comes from:
+ * pages of one listing that carry different rounds do not belong together.
+ *
+ * The token binds the list. With LOTA_IPC_REGISTRY_MEASURED set,
+ * hashing @flags, @total, @peer_total, every object and every peer in
+ * order as lota_registry_digest.h does yields @image_digest, the token's
+ * entry for @pid.
+ */
+struct lota_ipc_registry_page {
+	uint64_t round;
+	uint32_t pid;
+	uint32_t total; /* objects the round found in @pid */
+	uint32_t peer_total; /* peers of @pid's instance */
+	uint32_t start;
+	uint16_t count; /* entries in this page */
+	uint16_t flags; /* LOTA_IPC_REGISTRY_* */
+	uint8_t image_digest[32];
+} __attribute__((packed));
+
+/* How an entry's digest was taken */
+enum lota_ipc_registry_road {
+	LOTA_IPC_REGISTRY_ROAD_NONE = 0, /* no digest */
+	LOTA_IPC_REGISTRY_ROAD_VERITY = 1, /* fs-verity measurement */
+	LOTA_IPC_REGISTRY_ROAD_CONTENT = 2, /* kernel hash of the contents */
+};
+
+/*
+ * One registry entry, followed by @soname_len bytes of soname and
+ * @path_len bytes of path, neither NUL-terminated.
+ */
+struct lota_ipc_registry_entry {
+	uint64_t size;
+	uint64_t dev; /* makedev() of the backing device */
+	uint64_t ino;
+	uint8_t road; /* enum lota_ipc_registry_road */
+	uint8_t digest_len; /* 0, 32 or 64 */
+	uint16_t soname_len;
+	uint16_t path_len;
+	uint16_t flags; /* LOTA_IPC_REGISTRY_ENTRY_* */
+	uint8_t digest[64];
+} __attribute__((packed));
+
+/* How a peer reached the instance */
+enum lota_ipc_registry_peer_kind {
+	/* from outside, through a unix socket of the instance */
+	LOTA_IPC_REGISTRY_PEER_CONNECT = 1, /* stream or seqpacket connect */
+	LOTA_IPC_REGISTRY_PEER_SEND = 2, /* datagram sent */
+	/* from inside, one process of the instance to another */
+	LOTA_IPC_REGISTRY_PEER_PTRACE_READ = 3, /* read-mode ptrace access */
+	LOTA_IPC_REGISTRY_PEER_PTRACE_ATTACH =
+		4, /* attach-mode ptrace access */
+	LOTA_IPC_REGISTRY_PEER_SIGNAL = 5, /* signal sent */
+	LOTA_IPC_REGISTRY_PEER_KIND_MAX = LOTA_IPC_REGISTRY_PEER_SIGNAL,
+};
+
+/*
+ * A process that reached a process of the instance of @pid: from outside,
+ * through a unix socket a process of the instance made, bound or listened
+ * on; or from inside, by a ptrace access or a signal.
+ * The command names are NUL-terminated and zero-padded.
+ */
+struct lota_ipc_registry_peer {
+	uint64_t count; /* times it did so */
+	uint64_t start_ticks; /* the peer's, /proc/<tgid>/stat field 22 */
+	uint64_t exe_dev; /* makedev() of the peer executable's device */
+	uint64_t exe_ino; /* 0 when the peer had no executable */
+	uint32_t tgid; /* the peer */
+	uint32_t uid; /* the peer's real uid at its first reach */
+	uint32_t owner_tgid; /* the process of the instance it reached */
+	uint32_t kind; /* enum lota_ipc_registry_peer_kind */
+	char comm[16];
+	char owner_comm[16];
 } __attribute__((packed));
 
 #endif /* LOTA_IPC_H */

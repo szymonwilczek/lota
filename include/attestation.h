@@ -88,6 +88,9 @@ struct lota_report_header {
 #define LOTA_REPORT_FLAG_BLOCK_ANON_EXEC (1U << 15)
 #define LOTA_REPORT_FLAG_BLOCK_PTRACE (1U << 16)
 
+/* The kernel left events out of the daemon's log. Enforcement is unaffected. */
+#define LOTA_REPORT_FLAG_EVENTS_LOST (1U << 17)
+
 /*
  * Maximum size of TPMS_ATTEST structure returned by TPM2_Quote.
  * Contains: magic, type, qualifiedSigner, extraData (nonce),

@@ -101,6 +101,56 @@ int bpf_loader_unprotect_pid(struct bpf_loader_ctx *ctx, uint32_t pid)
 	return -ENOTSUP;
 }
 
+int bpf_loader_instance_stopped_ms(struct bpf_loader_ctx *ctx, uint32_t pid,
+				   uint64_t *ms)
+{
+	(void)ctx;
+	(void)pid;
+	*ms = 0;
+	return 0;
+}
+
+int bpf_loader_adopt_instance_member(struct bpf_loader_ctx *ctx, uint32_t pid)
+{
+	(void)ctx;
+	(void)pid;
+	return 0;
+}
+
+int bpf_loader_exec_history(struct bpf_loader_ctx *ctx,
+			    int (*alive)(uint32_t tgid, uint64_t start_ticks),
+			    struct lota_exec_history_key **keys,
+			    struct lota_exec_history_val **vals, size_t *n)
+{
+	(void)ctx;
+	(void)alive;
+	*keys = NULL;
+	*vals = NULL;
+	*n = 0;
+	return -ENOENT;
+}
+
+int bpf_loader_instance_peers(struct bpf_loader_ctx *ctx,
+			      int (*alive)(uint32_t tgid, uint64_t start_ticks),
+			      struct lota_instance_peer_key **keys,
+			      struct lota_instance_peer_val **vals, size_t *n)
+{
+	(void)ctx;
+	(void)alive;
+	*keys = NULL;
+	*vals = NULL;
+	*n = 0;
+	return -ENOENT;
+}
+
+int bpf_loader_get_extended_stats(struct bpf_loader_ctx *ctx,
+				  struct bpf_extended_stats *stats)
+{
+	(void)ctx;
+	memset(stats, 0, sizeof(*stats));
+	return 0;
+}
+
 int dbus_get_fd(struct dbus_context *ctx)
 {
 	(void)ctx;
@@ -145,15 +195,19 @@ int enroll_state_load_path(const char *path, struct enroll_state *out)
 	return -ENOENT;
 }
 
-int lota_runtime_measure_pid(pid_t pid,
-			     uint8_t out_digest[LOTA_RUNTIME_IMAGE_DIGEST_SIZE],
-			     struct lota_runtime_measure_coverage *cov,
-			     struct lota_runtime_measure_failure *fail)
+int lota_runtime_measure_pid_objects(
+	pid_t pid, uint8_t out_digest[LOTA_RUNTIME_IMAGE_DIGEST_SIZE],
+	struct lota_runtime_measure_coverage *cov,
+	struct lota_runtime_measure_failure *fail,
+	struct lota_rt_object_record *objs, size_t *n_objs)
 {
 	(void)pid;
 	(void)out_digest;
 	(void)cov;
 	(void)fail;
+	(void)objs;
+	if (n_objs)
+		*n_objs = 0;
 	return -ENOTSUP;
 }
 
@@ -452,6 +506,44 @@ static void test_idle_round_keeps_the_time(struct ipc_context *ctx)
 	PASS();
 }
 
+/* the round publishes the word from scratch; the loss outlives it */
+static void test_events_lost_outlives_a_round(struct ipc_context *ctx)
+{
+	struct lota_ipc_status st;
+	uint64_t until = (uint64_t)time(NULL) + 600;
+
+	TEST("a lost event stays in the status and leaves the window alone");
+
+	ipc_update_status(ctx, LOTA_STATUS_TPM_OK, until);
+	ipc_set_events_lost(ctx);
+
+	if (read_status(ctx, &st) < 0) {
+		FAIL("status");
+		return;
+	}
+	if (!(st.flags & LOTA_STATUS_EVENTS_LOST)) {
+		FAIL("the loss did not reach the status");
+		return;
+	}
+	if (st.valid_until != until) {
+		FAIL("the loss moved the validity window");
+		return;
+	}
+
+	ipc_update_status(ctx, LOTA_STATUS_TPM_OK, until);
+
+	if (read_status(ctx, &st) < 0) {
+		FAIL("status");
+		return;
+	}
+	if (!(st.flags & LOTA_STATUS_EVENTS_LOST)) {
+		FAIL("a round erased the loss");
+		return;
+	}
+
+	PASS();
+}
+
 int main(void)
 {
 	struct ipc_context ctx;
@@ -477,6 +569,7 @@ int main(void)
 	test_completed_round_sets_the_time(&ctx);
 	test_recompute_keeps_the_time(&ctx);
 	test_idle_round_keeps_the_time(&ctx);
+	test_events_lost_outlives_a_round(&ctx);
 
 	ipc_cleanup(&ctx);
 	unlink(test_socket);

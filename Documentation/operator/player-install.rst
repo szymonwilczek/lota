@@ -326,6 +326,12 @@ that title's launch options -- ``lota-steam-setup`` prints the exact string.
 Container mounts are not pasted: ``lota-proton-hook`` adds the socket and
 token directories to ``PRESSURE_VESSEL_FILESYSTEMS_RW`` itself.
 
+``lota-proton-hook`` starts the launch through ``lota-protect``, which has the
+agent protect it before anything of the title runs; every process the launch
+creates is protected with it. A launch a debugger already holds is refused
+and does not start. With no agent answering, the title starts unprotected,
+and no token lists it among the protected processes.
+
 The bridge is installed once per word size on x86_64: Steam's launch chain
 mixes 64- and 32-bit processes that all inherit ``LD_PRELOAD``, so
 ``lota-proton-hook`` names it through ld.so's ``$LIB`` token. With only one
@@ -361,17 +367,11 @@ examined and rejected, are in :ghsrc:`examples/cs2/README.rst`.
 When a title will not close
 ===========================
 
-A game that asks to be protected (``lota_protect_self()``) gets a signal that
-could end or stop it only from itself, the agent or the kernel. That stops a
-cheat from killing the measured process, and also means a hung title survives
-a terminal, a task manager and a root shell alike.
+A protected game takes signals like any other process: a terminal, a task
+manager or Steam's own *Stop* ends it. Killing a game does not cheat in it;
+the session simply ends. Only the agent refuses signals.
 
-A signal the game handles itself runs the game's own code and is delivered;
-Wine drives the program it hosts that way. ``SIGTERM``, ``SIGINT`` and
-``SIGHUP`` stay refused even when handled: a game handles them to exit.
-
-The agent holds the identity the kernel accepts, so it delivers the signal on
-request::
+The agent can also deliver the signal on request, and record that it did::
 
     lota-agent --terminate-protected <pid>
     lota-agent --terminate-protected <pid> --force   # SIGKILL
@@ -386,10 +386,17 @@ ordinary ``kill`` reaches it, and the agent will not end itself this way.
 The exchange is that the host says so. Every relayed termination is journalled
 with the target, its owner and the caller, and the host reports
 ``PROTECTED_TERMINATED`` in its status and in every token until it reboots.
+An agent that ends some other way and is started again in the same boot has
+lost that record, and reports ``AGENT_RESTARTED`` until the reboot instead.
 A publisher then sees a session that was ended on the machine rather than a
 process that silently disappeared -- closing a hung game is the ordinary reason
 for it, and what says *which* process left is the protected set the token
 already carries.
+
+A protected game ends with the agent, however the agent ended, since nothing
+vouches for the game afterwards. It cannot be suspended from outside (``^Z``
+from its terminal, ``kill -STOP``), and it leaves no core file: a crash with no
+handler of its own ends it instead.
 
 Pausing and removing
 ====================
@@ -399,7 +406,8 @@ Pausing and removing
   kill-block is the anti-tamper surface), and the graceful shutdown poisons PCR
   14 before unloading -- so **resume requires a reboot**. That is the security
   contract, not a bug: same-boot re-attestation after a shutdown would let a
-  tampered session pose as the original one.
+  tampered session pose as the original one. A protected game still running
+  ends with the agent.
 * **Resume:** ``sudo lota-install --resume`` explains that resuming is a reboot
   and offers to reboot now (default no); the socket-activated agent then
   starts on its own and re-measures into a fresh PCR 14.

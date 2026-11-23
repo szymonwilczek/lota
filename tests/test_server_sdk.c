@@ -589,6 +589,40 @@ static void test_verify_tampered_flags(EVP_PKEY *key, const uint8_t *aik_der,
 	}
 }
 
+static void test_verify_tampered_stopped_ms(EVP_PKEY *key,
+					    const uint8_t *aik_der,
+					    size_t aik_len)
+{
+	TEST("lota_server_verify_token - tampered stopped_ms → NONCE_FAIL");
+
+	uint64_t now = (uint64_t)time(NULL);
+	uint8_t nonce[32] = { 0 };
+
+	uint8_t tokbuf[2048];
+	size_t tok_written = 0;
+	int ret = forge_token_sha256(key, now + LOTA_SERVER_MAX_TOKEN_AGE_SEC,
+				     0x07, nonce, tokbuf, sizeof(tokbuf),
+				     &tok_written);
+	if (ret != LOTA_OK) {
+		FAIL("build_full_token failed");
+		return;
+	}
+
+	/* a client hiding a stall would clear this field (offset 144) */
+	tokbuf[144] = 0xFF;
+
+	struct lota_server_claims claims;
+	ret = lota_server_verify_token(tokbuf, tok_written, aik_der, aik_len,
+				       nonce, &claims);
+	if (ret == LOTA_SERVER_ERR_NONCE_FAIL) {
+		PASS();
+	} else {
+		char msg[64];
+		snprintf(msg, sizeof(msg), "expected NONCE_FAIL, got %d", ret);
+		FAIL(msg);
+	}
+}
+
 static void test_verify_tampered_pcr_mask(EVP_PKEY *key, const uint8_t *aik_der,
 					  size_t aik_len)
 {
@@ -658,7 +692,7 @@ static void test_verify_mixed_pcr_banks_rejected(EVP_PKEY *key,
 	}
 
 	if (forge_quote_nonce(valid_until, flags, pcr_mask_union, nonce,
-			      policy_digest, runtime_digest, 0,
+			      policy_digest, runtime_digest, 0, 0,
 			      expected_nonce) != 0) {
 		FAIL("expected nonce compute failed");
 		return;
@@ -1064,6 +1098,286 @@ static void test_sdk_version_is_a_real_build(void)
 	PASS();
 }
 
+/* Append @n bytes of @v little-endian to @b at *@off. */
+static void put_le(uint8_t *b, size_t *off, uint64_t v, int n)
+{
+	for (int i = 0; i < n; i++)
+		b[(*off)++] = (uint8_t)(v >> (8 * i));
+}
+
+/*
+ * A relying party hashes a fetched registry and compares the result with
+ * the image digest the token carries, so the hash must be the documented
+ * one: every object in list order, those without a digest included.
+ */
+static void test_registry_digest(void)
+{
+	uint8_t d1[32], d2[64];
+	struct lota_server_registry_module mods[] = {
+		{ "libc.so.6", "/usr/lib64/libc.so.6", 2048, 0x803, 17,
+		  LOTA_REGISTRY_ROAD_VERITY, 0, sizeof(d2), d2 },
+		{ "title.exe", "/opt/title/title.exe", 4096, 0x803, 42,
+		  LOTA_REGISTRY_ROAD_NONE, 0, 0, NULL },
+		{ "inject.so", NULL, 512, 0x2a, 7, LOTA_REGISTRY_ROAD_NONE,
+		  LOTA_REGISTRY_OBJECT_UNMAPPED |
+			  LOTA_REGISTRY_OBJECT_WRITABLE |
+			  LOTA_REGISTRY_OBJECT_MEMORY,
+		  0, NULL },
+		{ "libz.so.1", "/usr/lib64/libz.so.1", 1024, 0x803, 18,
+		  LOTA_REGISTRY_ROAD_CONTENT, 0, sizeof(d1), d1 },
+	};
+	struct lota_server_registry_peer peers[] = {
+		{ 3, 912345, 0x803, 99, 4242, 1000, 4100,
+		  LOTA_REGISTRY_PEER_CONNECT, "injector", "wineserver" },
+		{ 1, 912400, 0x803, 100, 4250, 1000, 4100,
+		  LOTA_REGISTRY_PEER_SEND, "probe", "wineserver" },
+	};
+	const uint32_t flags = LOTA_REGISTRY_MEASURED;
+	uint8_t buf[1024];
+	uint8_t want[32], got[32], other[32];
+	unsigned int wlen = 0;
+	size_t off = 0;
+
+	memset(d1, 0x11, sizeof(d1));
+	memset(d2, 0x22, sizeof(d2));
+
+	/* the layout of lota_registry_digest.h, spelled out */
+	memcpy(buf, "lota-runtime-registry:v1", 25);
+	off = 25;
+	put_le(buf, &off, flags, 2);
+	put_le(buf, &off, 4, 4);
+	put_le(buf, &off, 2, 4);
+	for (size_t i = 0; i < 4; i++) {
+		const struct lota_server_registry_module *m = &mods[i];
+		size_t slen = strlen(m->soname);
+		size_t plen = m->path ? strlen(m->path) : 0;
+
+		put_le(buf, &off, m->size, 8);
+		put_le(buf, &off, m->dev, 8);
+		put_le(buf, &off, m->ino, 8);
+		buf[off++] = (uint8_t)m->road;
+		buf[off++] = (uint8_t)m->digest_len;
+		put_le(buf, &off, slen, 2);
+		put_le(buf, &off, plen, 2);
+		put_le(buf, &off, m->flags, 2);
+		if (m->digest_len)
+			memcpy(buf + off, m->digest, m->digest_len);
+		off += m->digest_len;
+		memcpy(buf + off, m->soname, slen);
+		off += slen;
+		if (plen)
+			memcpy(buf + off, m->path, plen);
+		off += plen;
+	}
+	for (size_t i = 0; i < 2; i++) {
+		const struct lota_server_registry_peer *q = &peers[i];
+
+		put_le(buf, &off, q->count, 8);
+		put_le(buf, &off, q->start_ticks, 8);
+		put_le(buf, &off, q->exe_dev, 8);
+		put_le(buf, &off, q->exe_ino, 8);
+		put_le(buf, &off, q->tgid, 4);
+		put_le(buf, &off, q->uid, 4);
+		put_le(buf, &off, q->owner_tgid, 4);
+		put_le(buf, &off, q->kind, 4);
+		memset(buf + off, 0, 32);
+		memcpy(buf + off, q->comm, strlen(q->comm));
+		memcpy(buf + off + 16, q->owner_comm, strlen(q->owner_comm));
+		off += 32;
+	}
+
+	TEST("registry_digest hashes the documented layout");
+	if (EVP_Digest(buf, off, want, &wlen, EVP_sha256(), NULL) != 1 ||
+	    lota_server_registry_digest(flags, mods, 4, peers, 2, got) !=
+		    LOTA_SERVER_OK ||
+	    memcmp(want, got, sizeof(got)) != 0)
+		FAIL("digest differs from the documented layout");
+	else
+		PASS();
+
+	TEST("registry_digest binds what the list leaves out");
+	{
+		struct lota_server_registry_module swapped[4];
+		struct lota_server_registry_module cut[3] = { mods[0], mods[1],
+							      mods[3] };
+		struct lota_server_registry_module edit[4];
+		int ok = 1;
+
+		/* an object without a digest dropped */
+		ok &= lota_server_registry_digest(flags, cut, 3, peers, 2,
+						  other) == LOTA_SERVER_OK &&
+		      memcmp(other, got, sizeof(got)) != 0;
+		/* reordered */
+		memcpy(swapped, mods, sizeof(mods));
+		swapped[0] = mods[3];
+		swapped[3] = mods[0];
+		ok &= lota_server_registry_digest(flags, swapped, 4, peers, 2,
+						  other) == LOTA_SERVER_OK &&
+		      memcmp(other, got, sizeof(got)) != 0;
+		/* an unmapped object passed off as mapped */
+		memcpy(edit, mods, sizeof(mods));
+		edit[2].flags = 0;
+		ok &= lota_server_registry_digest(flags, edit, 4, peers, 2,
+						  other) == LOTA_SERVER_OK &&
+		      memcmp(other, got, sizeof(got)) != 0;
+		/* code another process could write passed off as fixed */
+		edit[2].flags = LOTA_REGISTRY_OBJECT_UNMAPPED;
+		ok &= lota_server_registry_digest(flags, edit, 4, peers, 2,
+						  other) == LOTA_SERVER_OK &&
+		      memcmp(other, got, sizeof(got)) != 0;
+		/* a path rewritten */
+		memcpy(edit, mods, sizeof(mods));
+		edit[1].path = "/opt/title/other.exe";
+		ok &= lota_server_registry_digest(flags, edit, 4, peers, 2,
+						  other) == LOTA_SERVER_OK &&
+		      memcmp(other, got, sizeof(got)) != 0;
+		/* a lost history hidden */
+		ok &= lota_server_registry_digest(
+			      flags | LOTA_REGISTRY_HISTORY_LOST, mods, 4,
+			      peers, 2, other) == LOTA_SERVER_OK &&
+		      memcmp(other, got, sizeof(got)) != 0;
+		/* a peer dropped */
+		ok &= lota_server_registry_digest(flags, mods, 4, peers, 1,
+						  other) == LOTA_SERVER_OK &&
+		      memcmp(other, got, sizeof(got)) != 0;
+		/* a lost peer hidden */
+		ok &= lota_server_registry_digest(
+			      flags | LOTA_REGISTRY_PEERS_LOST, mods, 4, peers,
+			      2, other) == LOTA_SERVER_OK &&
+		      memcmp(other, got, sizeof(got)) != 0;
+		{
+			struct lota_server_registry_peer pe[2] = { peers[0],
+								   peers[1] };
+
+			/* a peer passed off as another executable */
+			pe[0].exe_ino = 1;
+			ok &= lota_server_registry_digest(flags, mods, 4, pe, 2,
+							  other) ==
+				      LOTA_SERVER_OK &&
+			      memcmp(other, got, sizeof(got)) != 0;
+			/* fewer contacts claimed */
+			pe[0] = peers[0];
+			pe[0].count = 1;
+			ok &= lota_server_registry_digest(flags, mods, 4, pe, 2,
+							  other) ==
+				      LOTA_SERVER_OK &&
+			      memcmp(other, got, sizeof(got)) != 0;
+			/* bytes behind a name's NUL do not count */
+			pe[0] = peers[0];
+			pe[0].comm[14] = 'x';
+			ok &= lota_server_registry_digest(flags, mods, 4, pe, 2,
+							  other) ==
+				      LOTA_SERVER_OK &&
+			      memcmp(other, got, sizeof(got)) == 0;
+		}
+		/* NULL and empty path are one and the same */
+		memcpy(edit, mods, sizeof(mods));
+		edit[2].path = "";
+		ok &= lota_server_registry_digest(flags, edit, 4, peers, 2,
+						  other) == LOTA_SERVER_OK &&
+		      memcmp(other, got, sizeof(got)) == 0;
+		if (ok)
+			PASS();
+		else
+			FAIL("an edit to the list kept the digest");
+	}
+
+	TEST("registry_digest refuses malformed modules");
+	{
+		struct lota_server_registry_module bad = mods[0];
+		int ok = lota_server_registry_digest(flags, mods, 1, NULL, 0,
+						     NULL) ==
+				 LOTA_SERVER_ERR_INVALID_ARG &&
+			 lota_server_registry_digest(flags, NULL, 1, NULL, 0,
+						     got) ==
+				 LOTA_SERVER_ERR_INVALID_ARG &&
+			 lota_server_registry_digest(1U << 7, mods, 1, NULL, 0,
+						     got) ==
+				 LOTA_SERVER_ERR_INVALID_ARG;
+
+		bad.digest_len = 20;
+		ok = ok && lota_server_registry_digest(flags, &bad, 1, NULL, 0,
+						       got) ==
+				   LOTA_SERVER_ERR_INVALID_ARG;
+		bad = mods[0];
+		bad.soname = "";
+		ok = ok && lota_server_registry_digest(flags, &bad, 1, NULL, 0,
+						       got) ==
+				   LOTA_SERVER_ERR_INVALID_ARG;
+		bad = mods[0];
+		bad.digest = NULL;
+		ok = ok && lota_server_registry_digest(flags, &bad, 1, NULL, 0,
+						       got) ==
+				   LOTA_SERVER_ERR_INVALID_ARG;
+		bad = mods[0];
+		bad.road = 3;
+		ok = ok && lota_server_registry_digest(flags, &bad, 1, NULL, 0,
+						       got) ==
+				   LOTA_SERVER_ERR_INVALID_ARG;
+		bad = mods[1];
+		bad.digest_len = 32;
+		bad.digest = d1;
+		ok = ok && lota_server_registry_digest(flags, &bad, 1, NULL, 0,
+						       got) ==
+				   LOTA_SERVER_ERR_INVALID_ARG;
+		bad = mods[0];
+		bad.flags = 1U << 3;
+		ok = ok && lota_server_registry_digest(flags, &bad, 1, NULL, 0,
+						       got) ==
+				   LOTA_SERVER_ERR_INVALID_ARG;
+		ok = ok &&
+		     lota_server_registry_digest(
+			     flags, mods, LOTA_SERVER_REGISTRY_MAX_OBJECTS + 1,
+			     NULL, 0, got) == LOTA_SERVER_ERR_INVALID_ARG;
+		if (ok)
+			PASS();
+		else
+			FAIL("accepted a malformed module");
+	}
+
+	TEST("registry_digest refuses malformed peers");
+	{
+		struct lota_server_registry_peer bad = peers[0];
+		int ok = lota_server_registry_digest(flags, mods, 4, NULL, 1,
+						     got) ==
+			 LOTA_SERVER_ERR_INVALID_ARG;
+
+		bad.kind = 0;
+		ok = ok && lota_server_registry_digest(flags, mods, 4, &bad, 1,
+						       got) ==
+				   LOTA_SERVER_ERR_INVALID_ARG;
+		for (uint32_t kind = LOTA_REGISTRY_PEER_CONNECT;
+		     kind <= LOTA_REGISTRY_PEER_SIGNAL; kind++) {
+			bad.kind = kind;
+			ok = ok && lota_server_registry_digest(flags, mods, 4,
+							       &bad, 1, got) ==
+					   LOTA_SERVER_OK;
+		}
+		bad.kind = 6;
+		ok = ok && lota_server_registry_digest(flags, mods, 4, &bad, 1,
+						       got) ==
+				   LOTA_SERVER_ERR_INVALID_ARG;
+		bad = peers[0];
+		memset(bad.comm, 'a', sizeof(bad.comm));
+		ok = ok && lota_server_registry_digest(flags, mods, 4, &bad, 1,
+						       got) ==
+				   LOTA_SERVER_ERR_INVALID_ARG;
+		bad = peers[0];
+		memset(bad.owner_comm, 'a', sizeof(bad.owner_comm));
+		ok = ok && lota_server_registry_digest(flags, mods, 4, &bad, 1,
+						       got) ==
+				   LOTA_SERVER_ERR_INVALID_ARG;
+		ok = ok && lota_server_registry_digest(
+				   flags, mods, 4, peers,
+				   LOTA_SERVER_REGISTRY_MAX_PEERS + 1,
+				   got) == LOTA_SERVER_ERR_INVALID_ARG;
+		if (ok)
+			PASS();
+		else
+			FAIL("accepted a malformed peer");
+	}
+}
+
 int main(void)
 {
 	printf(BOLD "\n=== LOTA Server SDK - Test Suite ===\n\n" RESET);
@@ -1105,6 +1419,7 @@ int main(void)
 	test_verify_wrong_nonce(key, aik_der, aik_len);
 	test_verify_bad_signature(key, aik_der, aik_len);
 	test_verify_tampered_flags(key, aik_der, aik_len);
+	test_verify_tampered_stopped_ms(key, aik_der, aik_len);
 	test_verify_tampered_pcr_mask(key, aik_der, aik_len);
 	test_verify_tampered_image_digest_is_named(key, aik_der, aik_len);
 	test_verify_mixed_pcr_banks_rejected(key, aik_der, aik_len);
@@ -1122,6 +1437,7 @@ int main(void)
 	test_update_pending_flag_is_distinct_and_named();
 	test_sdk_version_agrees_across_libraries();
 	test_sdk_version_is_a_real_build();
+	test_registry_digest();
 
 	printf(BOLD "\n=== Results: %d/%d passed" RESET, tests_pass, tests_run);
 	if (tests_fail > 0) {

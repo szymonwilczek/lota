@@ -10,14 +10,22 @@
  * Copyright (C) 2026 Szymon Wilczek
  */
 
+#include <errno.h>
 #include <stdio.h>
 #include <string.h>
 #include <unistd.h>
 #include <stdint.h>
+#include <sys/sysmacros.h>
 
 #include "test.h"
 #include "../src/agent/runtime_image_measure.h"
+#include "../src/agent/registry.h"
 #include "lota.h"
+#include "lota_devt.h"
+#include "lota_ipc.h"
+#include "lota_registry_digest.h"
+
+#include <openssl/evp.h>
 
 static int digest_is_zero(const uint8_t d[32])
 {
@@ -83,6 +91,383 @@ int main(void)
 			PASS();
 		else
 			FAIL("accepted unbacked range");
+	}
+
+	TEST("measure_pid_objects lists the mappings of a failed measurement");
+	{
+		static struct lota_rt_object_record
+			objs[LOTA_RUNTIME_IMAGE_MAX_MODULES];
+		char exe[LOTA_RT_MAP_PATH_MAX] = "";
+		size_t n = 0;
+		int found = 0;
+		ssize_t elen = readlink("/proc/self/exe", exe, sizeof(exe) - 1);
+
+		if (elen > 0)
+			exe[elen] = '\0';
+		(void)lota_runtime_measure_pid_objects(getpid(), digest, NULL,
+						       NULL, objs, &n);
+		for (size_t i = 0; i < n; i++)
+			if (strcmp(objs[i].entry.path, exe) == 0)
+				found = 1;
+		if (n > 0 && found)
+			PASS();
+		else
+			FAIL("own executable missing from the objects");
+	}
+
+	TEST("measure_pid_objects refuses objects with nowhere to count them");
+	{
+		static struct lota_rt_object_record objs[1];
+
+		if (lota_runtime_measure_pid_objects(getpid(), digest, NULL,
+						     NULL, objs,
+						     NULL) == -EINVAL)
+			PASS();
+		else
+			FAIL("accepted objects without a count");
+	}
+
+	TEST("registry pages every object and binds the round");
+	{
+		static struct lota_rt_object_record objs[40];
+		struct lota_ipc_registry_peer peers[30];
+		struct registry cur = { 0 };
+		struct registry next = { 0 };
+		const struct registry_process *p;
+		uint8_t folded[32];
+		uint8_t buf[2048];
+		uint32_t start = 0, pages = 0, seen = 0, seen_peers = 0;
+		int ok = 1;
+
+		memset(peers, 0, sizeof(peers));
+		for (int i = 0; i < 30; i++) {
+			peers[i].tgid = 5000u + (uint32_t)i;
+			peers[i].kind = LOTA_IPC_REGISTRY_PEER_CONNECT;
+			snprintf(peers[i].comm, sizeof(peers[i].comm),
+				 "peer%02d", i);
+		}
+
+		memset(folded, 0xab, sizeof(folded));
+		for (int i = 0; i < 40; i++) {
+			memset(&objs[i], 0, sizeof(objs[i]));
+			snprintf(objs[i].entry.soname,
+				 sizeof(objs[i].entry.soname), "lib%02d.so", i);
+			snprintf(objs[i].entry.path, sizeof(objs[i].entry.path),
+				 "/opt/title/lib%02d.so", i);
+			objs[i].size = 4096u * (uint64_t)i;
+			if (i % 3 != 0) {
+				objs[i].digest.len = 32;
+				objs[i].digest.digest[0] = (uint8_t)i;
+				objs[i].content_hashed = (i % 3 == 2);
+			}
+		}
+		ok &= registry_add(&next, 1234, 1000, 0, folded, objs, 40,
+				   peers, 30) == 0;
+		ok &= registry_add(&next, 1235, 1000,
+				   LOTA_IPC_REGISTRY_HISTORY_LOST |
+					   LOTA_IPC_REGISTRY_MEASURED,
+				   NULL, NULL, 0, NULL, 0) == 0;
+		registry_replace(&cur, &next);
+		ok &= cur.round == 1 && next.count == 0;
+
+		p = registry_find(&cur, 1234);
+		ok &= p != NULL && registry_find(&cur, 99) == NULL;
+		while (ok && p && start < p->count + p->peer_count) {
+			struct lota_ipc_registry_page hdr;
+			size_t len = 0, off = sizeof(hdr);
+			int c = registry_encode_page(p, cur.round, start, buf,
+						     sizeof(buf), &len);
+
+			if (c <= 0) {
+				ok = 0;
+				break;
+			}
+			memcpy(&hdr, buf, sizeof(hdr));
+			ok &= hdr.round == 1 && hdr.pid == 1234 &&
+			      hdr.total == 40 && hdr.peer_total == 30 &&
+			      hdr.start == start && hdr.count == (uint16_t)c &&
+			      (hdr.flags & LOTA_IPC_REGISTRY_MEASURED) &&
+			      memcmp(hdr.image_digest, folded, 32) == 0;
+			for (int k = 0; k < c; k++) {
+				struct lota_ipc_registry_entry e;
+				struct lota_ipc_registry_peer q;
+				uint32_t idx = start + (uint32_t)k;
+				uint8_t want;
+
+				/* the peers follow the last object */
+				if (idx >= 40) {
+					memcpy(&q, buf + off, sizeof(q));
+					off += sizeof(q);
+					ok &= q.tgid == 5000u + (idx - 40) &&
+					      strcmp(q.comm,
+						     peers[idx - 40].comm) == 0;
+					seen_peers++;
+					continue;
+				}
+				want = idx % 3 == 0 ?
+					       LOTA_IPC_REGISTRY_ROAD_NONE :
+				       idx % 3 == 2 ?
+					       LOTA_IPC_REGISTRY_ROAD_CONTENT :
+					       LOTA_IPC_REGISTRY_ROAD_VERITY;
+
+				memcpy(&e, buf + off, sizeof(e));
+				off += sizeof(e);
+				ok &= e.road == want &&
+				      e.size == 4096u * (uint64_t)idx &&
+				      e.soname_len == 8 &&
+				      memcmp(buf + off, objs[idx].entry.soname,
+					     8) == 0;
+				off += e.soname_len + e.path_len;
+				seen++;
+			}
+			ok &= off == len;
+			start += (uint32_t)c;
+			pages++;
+		}
+		ok &= seen == 40 && seen_peers == 30 && pages > 1;
+		{
+			size_t len = 0;
+
+			ok &= registry_encode_page(p, cur.round, 71, buf,
+						   sizeof(buf),
+						   &len) == -ERANGE;
+			ok &= registry_encode_page(p, cur.round, 0, buf, 100,
+						   &len) == -ENOSPC;
+			p = registry_find(&cur, 1235);
+			ok &= p && p->flags == LOTA_IPC_REGISTRY_HISTORY_LOST &&
+			      registry_encode_page(p, cur.round, 0, buf,
+						   sizeof(buf), &len) == 0 &&
+			      len == sizeof(struct lota_ipc_registry_page);
+		}
+		registry_clear(&cur);
+		if (ok)
+			PASS();
+		else
+			FAIL("registry paging lost or misdescribed an object");
+	}
+
+	TEST("registry lists what the maps no longer show");
+	{
+		static struct lota_rt_object_record objs[4];
+		struct lota_exec_history_key keys[5];
+		struct lota_exec_history_val vals[5];
+		const uint64_t dev = LOTA_DEVT_MKDEV(8, 3);
+		size_t n;
+		int overflow = 0;
+		int ok = 1;
+
+		memset(objs, 0, sizeof(objs));
+		memset(keys, 0, sizeof(keys));
+		memset(vals, 0, sizeof(vals));
+		for (int i = 0; i < 2; i++) {
+			objs[i].entry.dev_major = 8;
+			objs[i].entry.dev_minor = 3;
+			objs[i].entry.ino = 10u + (uint64_t)i;
+			snprintf(objs[i].entry.soname,
+				 sizeof(objs[i].entry.soname), "lib%d.so", i);
+		}
+		/* still mapped, so already listed */
+		keys[0] = (struct lota_exec_history_key){ 7, 0, 99, dev, 10 };
+		vals[0].flags = LOTA_EXEC_HISTORY_WRITABLE;
+		keys[1] = (struct lota_exec_history_key){ 7, 0, 99, dev, 12 };
+		vals[1].size = 512;
+		vals[1].flags = LOTA_EXEC_HISTORY_MEMORY;
+		strcpy(vals[1].name, "inject.so");
+		/* an earlier process under the same PID */
+		keys[2] = (struct lota_exec_history_key){ 7, 0, 98, dev, 13 };
+		/* another process */
+		keys[3] = (struct lota_exec_history_key){ 8, 0, 99, dev, 14 };
+		/* the kernel found no name */
+		keys[4] = (struct lota_exec_history_key){ 7, 0, 99, dev, 15 };
+
+		n = registry_merge_history(objs, 2, 4, keys, vals, 5, 7, 99,
+					   &overflow);
+		ok &= n == 4 && !overflow && !objs[0].unmapped &&
+		      !objs[1].unmapped;
+		ok &= objs[0].history_flags == LOTA_EXEC_HISTORY_WRITABLE &&
+		      objs[1].history_flags == 0 &&
+		      objs[2].history_flags == LOTA_EXEC_HISTORY_MEMORY &&
+		      objs[3].history_flags == 0;
+		ok &= objs[2].unmapped && objs[2].entry.ino == 12 &&
+		      objs[2].entry.dev_major == 8 &&
+		      objs[2].entry.dev_minor == 3 && objs[2].size == 512 &&
+		      strcmp(objs[2].entry.soname, "inject.so") == 0 &&
+		      objs[2].entry.path[0] == '\0' && objs[2].digest.len == 0;
+		ok &= objs[3].unmapped && objs[3].entry.ino == 15 &&
+		      strcmp(objs[3].entry.soname, "?") == 0;
+
+		n = registry_merge_history(objs, 2, 3, keys, vals, 5, 7, 99,
+					   &overflow);
+		ok &= n == 3 && overflow;
+		if (ok)
+			PASS();
+		else
+			FAIL("history merge kept, lost or misnamed an object");
+	}
+
+	TEST("registry lists who reached the instance from outside");
+	{
+		struct lota_instance_peer_key keys[4];
+		struct lota_instance_peer_val vals[4];
+		struct lota_ipc_registry_peer out[2];
+		size_t n;
+		int overflow = 0;
+		int ok = 1;
+
+		memset(keys, 0, sizeof(keys));
+		memset(vals, 0, sizeof(vals));
+		/* root 7 started at 99 */
+		keys[0] = (struct lota_instance_peer_key){
+			99, 300, 7, 40, 8, LOTA_IPC_REGISTRY_PEER_CONNECT
+		};
+		vals[0].count = 3;
+		vals[0].exe_dev = LOTA_DEVT_MKDEV(8, 3);
+		vals[0].exe_ino = 55;
+		vals[0].uid = 1000;
+		memcpy(vals[0].comm, "injector", 8);
+		memcpy(vals[0].owner_comm, "wineserver", 10);
+		/* an earlier root under the same PID */
+		keys[1] = (struct lota_instance_peer_key){
+			98, 301, 7, 41, 7, LOTA_IPC_REGISTRY_PEER_SEND
+		};
+		/* another instance */
+		keys[2] = (struct lota_instance_peer_key){
+			99, 302, 9, 42, 9, LOTA_IPC_REGISTRY_PEER_SEND
+		};
+		/* a name that fills the kernel's buffer */
+		keys[3] = (struct lota_instance_peer_key){
+			99, 303, 7, 43, 7, LOTA_IPC_REGISTRY_PEER_SIGNAL
+		};
+		memset(vals[3].comm, 'a', sizeof(vals[3].comm));
+
+		n = registry_collect_peers(out, 2, keys, vals, 4, 7, 99,
+					   &overflow);
+		ok &= n == 2 && !overflow;
+		ok &= out[0].tgid == 40 && out[0].start_ticks == 300 &&
+		      out[0].owner_tgid == 8 && out[0].count == 3 &&
+		      out[0].exe_dev == makedev(8, 3) && out[0].exe_ino == 55 &&
+		      out[0].uid == 1000 &&
+		      out[0].kind == LOTA_IPC_REGISTRY_PEER_CONNECT &&
+		      strcmp(out[0].comm, "injector") == 0 &&
+		      strcmp(out[0].owner_comm, "wineserver") == 0;
+		ok &= out[1].tgid == 43 && strlen(out[1].comm) == 15 &&
+		      out[1].kind == LOTA_IPC_REGISTRY_PEER_SIGNAL;
+
+		n = registry_collect_peers(out, 1, keys, vals, 4, 7, 99,
+					   &overflow);
+		ok &= n == 1 && overflow;
+		if (ok)
+			PASS();
+		else
+			FAIL("peer collection kept, lost or misnamed a peer");
+	}
+
+	TEST("registry digest is the hash of the listed pages");
+	{
+		static struct lota_rt_object_record objs[3];
+		struct lota_ipc_registry_peer peers[2];
+		struct registry cur = { 0 };
+		struct registry next = { 0 };
+		const struct registry_process *p;
+		const uint16_t flags = LOTA_IPC_REGISTRY_HISTORY_LOST;
+		uint8_t want[32], got[32], other[32];
+		uint8_t buf[2048];
+		size_t len = 0, off = sizeof(struct lota_ipc_registry_page);
+		EVP_MD_CTX *md = EVP_MD_CTX_new();
+		int ok = md != NULL;
+
+		memset(objs, 0, sizeof(objs));
+		for (int i = 0; i < 3; i++) {
+			snprintf(objs[i].entry.soname,
+				 sizeof(objs[i].entry.soname), "lib%d.so", i);
+			objs[i].entry.ino = 20u + (uint64_t)i;
+			objs[i].size = 100u * (uint64_t)i;
+		}
+		strcpy(objs[0].entry.path, "/opt/title/lib0.so");
+		objs[0].digest.len = 32;
+		memset(objs[0].digest.digest, 0x5a, 32);
+		objs[2].unmapped = 1;
+		objs[1].history_flags = LOTA_EXEC_HISTORY_WRITABLE |
+					LOTA_EXEC_HISTORY_MEMORY;
+
+		memset(peers, 0, sizeof(peers));
+		peers[0] = (struct lota_ipc_registry_peer){
+			.count = 2,
+			.tgid = 600,
+			.kind = LOTA_IPC_REGISTRY_PEER_SEND
+		};
+		strcpy(peers[0].comm, "probe");
+		strcpy(peers[0].owner_comm, "title");
+		peers[1] = peers[0];
+		peers[1].tgid = 601;
+
+		ok &= registry_digest(flags | LOTA_IPC_REGISTRY_MEASURED, objs,
+				      3, peers, 2, want) == 0;
+		ok &= registry_add(&next, 77, 1000, flags, want, objs, 3, peers,
+				   2) == 0;
+		registry_replace(&cur, &next);
+		p = registry_find(&cur, 77);
+		if (!p)
+			ok = 0;
+		else
+			ok &= p->flags ==
+				      (flags | LOTA_IPC_REGISTRY_MEASURED) &&
+			      registry_encode_page(p, cur.round, 0, buf,
+						   sizeof(buf), &len) == 5;
+
+		/* what a relying party does with the page it received */
+		if (ok) {
+			struct lota_ipc_registry_page hdr;
+
+			memcpy(&hdr, buf, sizeof(hdr));
+			ok &= lota_registry_digest_begin(md, hdr.flags,
+							 hdr.total,
+							 hdr.peer_total) == 0;
+			for (int i = 0; ok && i < (int)hdr.total; i++) {
+				struct lota_ipc_registry_entry e;
+				const char *s;
+
+				memcpy(&e, buf + off, sizeof(e));
+				off += sizeof(e);
+				s = (const char *)buf + off;
+				off += e.soname_len + e.path_len;
+				ok &= (i == 2) ==
+				      !!(e.flags &
+					 LOTA_IPC_REGISTRY_ENTRY_UNMAPPED);
+				ok &= (i == 1) ==
+				      (e.flags ==
+				       (LOTA_IPC_REGISTRY_ENTRY_WRITABLE |
+					LOTA_IPC_REGISTRY_ENTRY_MEMORY));
+				ok &= lota_registry_digest_entry(
+					      md, &e, s, s + e.soname_len) == 0;
+			}
+			for (int i = 0; ok && i < (int)hdr.peer_total; i++) {
+				struct lota_ipc_registry_peer q;
+
+				memcpy(&q, buf + off, sizeof(q));
+				off += sizeof(q);
+				ok &= lota_registry_digest_peer(md, &q) == 0;
+			}
+			ok &= off == len;
+			ok &= lota_registry_digest_final(md, got) == 0 &&
+			      memcmp(got, want, 32) == 0 &&
+			      memcmp(hdr.image_digest, want, 32) == 0;
+		}
+
+		/* an object without a digest is bound all the same */
+		ok &= registry_digest(flags | LOTA_IPC_REGISTRY_MEASURED, objs,
+				      2, peers, 2, other) == 0 &&
+		      memcmp(other, want, 32) != 0;
+		/* and so is every peer */
+		ok &= registry_digest(flags | LOTA_IPC_REGISTRY_MEASURED, objs,
+				      3, peers, 1, other) == 0 &&
+		      memcmp(other, want, 32) != 0;
+		EVP_MD_CTX_free(md);
+		registry_clear(&cur);
+		if (ok)
+			PASS();
+		else
+			FAIL("the pages do not hash to the token's entry");
 	}
 
 	printf("\n%d/%d kernel-anchored measurement tests passed\n",

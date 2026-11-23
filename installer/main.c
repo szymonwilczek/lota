@@ -323,6 +323,9 @@ static int do_pause(struct install_ctx *ctx)
 		"(PCR 14) on purpose, so this boot can no longer attest. That "
 		"is the security contract, not a fault: resuming therefore "
 		"needs a reboot (see --resume).");
+	ui_text(&ctx->ui,
+		"A game the agent protects ends with it, so save and close "
+		"any that is running first.");
 	if (!ui_confirm(&ctx->ui, "Pause the agent now?", ctx->opts.yes,
 			UI_DEFAULT_NO)) {
 		ui_text(&ctx->ui, "Left running. Nothing changed.");

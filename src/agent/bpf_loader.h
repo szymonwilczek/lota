@@ -20,7 +20,7 @@ struct bpf_object;
 struct ring_buffer;
 struct bpf_link;
 
-#define BPF_MAX_LSM_LINKS 24
+#define BPF_MAX_LSM_LINKS 32
 
 /*
  * BPF loader context
@@ -39,9 +39,13 @@ struct bpf_loader_ctx {
 	int trusted_libs_fd; /* 'trusted_libs' map fd */
 	int guarded_files_fd; /* 'guarded_files' map fd */
 	int protected_pids_fd; /* Protected PIDs map fd */
+	int instance_fd; /* 'lota_instance' task storage fd */
+	int instance_stops_fd; /* 'instance_stops' task storage fd */
 	int allow_verity_digest_fd; /* 'allow_verity_digest' map fd */
 	int exe_hash_slots_fd; /* 'exe_hash_slots' map fd */
 	int mapped_exec_fd; /* 'mapped_exec' pin map fd */
+	int exec_history_fd; /* 'exec_history' map fd */
+	int instance_peers_fd; /* 'instance_peers' map fd */
 	struct mapped_exec_pin *pins; /* what this agent has pinned */
 	size_t pin_count;
 	size_t pin_cap;
@@ -125,6 +129,38 @@ void bpf_loader_pin_round_begin(struct bpf_loader_ctx *ctx);
  * Returns: 0 on success, negative errno on failure.
  */
 int bpf_loader_pin_sweep(struct bpf_loader_ctx *ctx, size_t *released);
+
+/*
+ * bpf_loader_exec_history - Read the exec history, dropping the dead
+ * @ctx:   Loaded context
+ * @alive: Says whether process @tgid started at @start_ticks still runs
+ * @keys:  Receives the live entries' keys, to free()
+ * @vals:  Receives their values, parallel to @keys, to free()
+ * @n:     Receives the number of entries
+ *
+ * Entries of a process @alive denies are deleted from the map.
+ * Returns: 0 on success, -ENOENT without the map, negative errno on failure.
+ */
+int bpf_loader_exec_history(struct bpf_loader_ctx *ctx,
+			    int (*alive)(uint32_t tgid, uint64_t start_ticks),
+			    struct lota_exec_history_key **keys,
+			    struct lota_exec_history_val **vals, size_t *n);
+
+/*
+ * bpf_loader_instance_peers - Read who reached an instance, dropping the dead
+ * @ctx:   Loaded context
+ * @alive: Says whether the instance root @tgid started at @start_ticks runs
+ * @keys:  Receives the live entries' keys, to free()
+ * @vals:  Receives their values, parallel to @keys, to free()
+ * @n:     Receives the number of entries
+ *
+ * Entries of an instance whose root @alive denies are deleted from the map.
+ * Returns: 0 on success, -ENOENT without the map, negative errno on failure.
+ */
+int bpf_loader_instance_peers(struct bpf_loader_ctx *ctx,
+			      int (*alive)(uint32_t tgid, uint64_t start_ticks),
+			      struct lota_instance_peer_key **keys,
+			      struct lota_instance_peer_val **vals, size_t *n);
 
 /*
  * Callback for ring buffer events
@@ -427,6 +463,36 @@ int bpf_loader_verify_kernel_runtime_hardening(bool allow_mutable_rootfs);
 int bpf_loader_protect_pid(struct bpf_loader_ctx *ctx, uint32_t pid);
 
 /*
+ * bpf_loader_adopt_instance_member - Name an instance member in the set
+ * @ctx: Loaded context
+ * @pid: Process ID to ask about
+ *
+ * A process created by a protected one carries its creator's instance in
+ * lota_instance from its first instruction. When @pid does, it is added
+ * to protected_pids under its start time, so the token and the runtime
+ * measurement see it. The membership is read through a pidfd before and
+ * after the start time, so a PID reused in between is not taken.
+ *
+ * Returns: 1 when added, 0 when @pid is not a member, negative errno
+ */
+int bpf_loader_adopt_instance_member(struct bpf_loader_ctx *ctx, uint32_t pid);
+
+/*
+ * bpf_loader_instance_stopped_ms - How long @pid's instance stood stopped
+ * @ctx: Loaded context
+ * @pid: Process ID to ask about
+ * @ms: Output, milliseconds any thread of the instance stood stopped
+ *
+ * Read from the root of the instance, so the value covers every member and
+ * ends with the root. A process in no instance, or one whose root has gone,
+ * has none: @ms is 0.
+ *
+ * Returns: 0 on success, negative errno
+ */
+int bpf_loader_instance_stopped_ms(struct bpf_loader_ctx *ctx, uint32_t pid,
+				   uint64_t *ms);
+
+/*
  * bpf_loader_probe_protect_pid - Ask whether a PID could be protected
  * @pid: Process ID a startup policy names
  *
@@ -514,9 +580,13 @@ struct bpf_extended_stats {
 	uint64_t mounts_blocked;
 	uint64_t kill_guard_blocked;
 	uint64_t events_yielded; /* dropped to leave ring room */
+	uint64_t blocked_suppressed; /* refused events past their budget */
 	uint64_t kill_probes; /* signal-0 probes at a protected task */
 	uint64_t mapped_write_blocked; /* writes refused to a pinned library */
 	uint64_t mapped_pin_refused; /* mapped objects left unpinned */
+	uint64_t exec_history_lost; /* exec mappings left unrecorded */
+	uint64_t instance_peers_lost; /* instance socket reaches unrecorded */
+	uint64_t instance_stops_lost; /* instance thread stops unrecorded */
 };
 
 /*

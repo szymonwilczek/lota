@@ -22,12 +22,14 @@ LOTAGAMING_1.0 {
 		lota_disconnect;
 		lota_flags_to_string;
 		lota_get_fd;
+		lota_get_registry;
 		lota_get_status;
 		lota_get_token;
 		lota_is_attested;
 		lota_ping;
 		lota_poll_events;
 		lota_protect_self;
+		lota_registry_free;
 		lota_sdk_version;
 		lota_set_request_timeout;
 		lota_strerror;

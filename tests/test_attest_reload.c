@@ -186,6 +186,27 @@ int main(void)
 	CHECK(targets[1].next_due_ms == 0,
 	      "the new publisher is due now rather than one interval from now");
 
+	/* the daemon rebuilds from the config its SIGHUP already loaded */
+	{
+		struct lota_config *cfg = config_new();
+
+		targets[0].valid_until = 987654;
+		targets[0].sessions = 1;
+		rc = cfg ? config_load(cfg, conf) : -ENOMEM;
+		if (rc == 0)
+			rc = attest_targets_rebuild(cfg, NULL, 0, NULL, 300,
+						    targets,
+						    LOTA_CONFIG_MAX_PROFILES,
+						    &count);
+		CHECK(rc == 0 && count == 2,
+		      "a rebuild from a loaded config keeps both publishers");
+		CHECK(targets[0].attested && targets[0].valid_until == 987654 &&
+			      targets[0].sessions == 1,
+		      "and keeps the verdict and sessions, so a SIGHUP does not "
+		      "read as a host that stopped being attested");
+		config_free(cfg);
+	}
+
 	/* A file that does not parse is the installer's half-written config
 	 * or a hand edit; answering titles and reporting from the previous
 	 * list beats reporting to nobody */

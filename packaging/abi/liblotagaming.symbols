@@ -4,12 +4,14 @@ lota_connect_opts@@LOTAGAMING_1.0
 lota_disconnect@@LOTAGAMING_1.0
 lota_flags_to_string@@LOTAGAMING_1.0
 lota_get_fd@@LOTAGAMING_1.0
+lota_get_registry@@LOTAGAMING_1.0
 lota_get_status@@LOTAGAMING_1.0
 lota_get_token@@LOTAGAMING_1.0
 lota_is_attested@@LOTAGAMING_1.0
 lota_ping@@LOTAGAMING_1.0
 lota_poll_events@@LOTAGAMING_1.0
 lota_protect_self@@LOTAGAMING_1.0
+lota_registry_free@@LOTAGAMING_1.0
 lota_sdk_version@@LOTAGAMING_1.0
 lota_set_request_timeout@@LOTAGAMING_1.0
 lota_strerror@@LOTAGAMING_1.0

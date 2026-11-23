@@ -50,8 +50,20 @@ char LICENSE[] SEC("license") = "GPL";
 #define EPERM 1
 #endif
 
+#ifndef ENOMEM
+#define ENOMEM 12
+#endif
+
+#ifndef EEXIST
+#define EEXIST 17
+#endif
+
 #ifndef EINVAL
 #define EINVAL 22
+#endif
+
+#ifndef AF_UNIX
+#define AF_UNIX 1
 #endif
 
 #ifndef FMODE_WRITE
@@ -117,7 +129,7 @@ struct {
  */
 struct {
 	__uint(type, BPF_MAP_TYPE_ARRAY);
-	__uint(max_entries, 22);
+	__uint(max_entries, 25);
 	__type(key, u32);
 	__type(value, u64);
 } stats SEC(".maps");
@@ -161,6 +173,11 @@ struct {
 #define STAT_KILL_PROBES 19 /* permitted sig 0, counted, not journalled */
 #define STAT_MAPPED_WRITE_BLOCKED 20 /* write refused to a pinned library */
 #define STAT_MAPPED_PIN_REFUSED 21 /* mapping not pinned, so not measured */
+#define STAT_EXEC_HISTORY_LOST \
+	22 /* exec mapping of a protected task unrecorded */
+#define STAT_INSTANCE_PEERS_LOST \
+	23 /* reach into an instance socket unrecorded */
+#define STAT_INSTANCE_STOPS_LOST 24 /* stop of an instance thread unrecorded */
 
 /*
  * Rate-limit window per enum lota_event_type (see lota_event_budget.h):
@@ -193,6 +210,44 @@ struct {
 	__type(key, int);
 	__type(value, struct lota_task_auth_entry);
 } lota_task_auth SEC(".maps");
+
+/*
+ * Protection a task took from the protected process that created it, named
+ * by the process registered through protected_pids at the root of the tree.
+ * The entry lives and dies with the task, so it needs no start-time binding
+ * against TGID reuse and has no capacity for a fork to run out of.
+ */
+struct lota_instance_entry {
+	u64 root_start_ticks;
+	u32 root_tgid;
+	u32 pad;
+};
+
+struct {
+	__uint(type, BPF_MAP_TYPE_TASK_STORAGE);
+	__uint(map_flags, BPF_F_NO_PREALLOC);
+	__type(key, int);
+	__type(value, struct lota_instance_entry);
+} lota_instance SEC(".maps");
+
+/*
+ * How long instance threads stood stopped, held on the root task. The clock
+ * runs while at least one thread stands: since_ns is when the first stopped,
+ * total_ns what ended periods add up to. bpf_ktime_get_ns() skips a suspend.
+ */
+struct lota_instance_stops {
+	struct bpf_spin_lock lock;
+	u32 stopped_threads;
+	u64 since_ns;
+	u64 total_ns;
+};
+
+struct {
+	__uint(type, BPF_MAP_TYPE_TASK_STORAGE);
+	__uint(map_flags, BPF_F_NO_PREALLOC);
+	__type(key, int);
+	__type(value, struct lota_instance_stops);
+} instance_stops SEC(".maps");
 
 /*
  * Scratch holds what the kernel writes and the key built from it.
@@ -294,6 +349,40 @@ struct {
 	__type(value, struct lota_mapped_seen);
 } mapped_seen SEC(".maps");
 
+/* see struct lota_exec_history_key; not LRU, a loss is counted instead */
+struct {
+	__uint(type, BPF_MAP_TYPE_HASH);
+	__uint(max_entries, LOTA_MAX_EXEC_HISTORY);
+	__type(key, struct lota_exec_history_key);
+	__type(value, struct lota_exec_history_val);
+} exec_history SEC(".maps");
+
+/*
+ * The instance a unix socket belongs to: set when a process of the
+ * instance creates, binds or listens on it, never cleared.
+ */
+struct lota_sock_owner {
+	struct lota_instance_entry id;
+	u32 tgid;
+	u32 pad;
+	char comm[LOTA_MAX_COMM_LEN];
+};
+
+struct {
+	__uint(type, BPF_MAP_TYPE_SK_STORAGE);
+	__uint(map_flags, BPF_F_NO_PREALLOC);
+	__type(key, int);
+	__type(value, struct lota_sock_owner);
+} lota_sock_owner SEC(".maps");
+
+/* see struct lota_instance_peer_key; not LRU, a loss is counted instead */
+struct {
+	__uint(type, BPF_MAP_TYPE_HASH);
+	__uint(max_entries, LOTA_MAX_INSTANCE_PEERS);
+	__type(key, struct lota_instance_peer_key);
+	__type(value, struct lota_instance_peer_val);
+} instance_peers SEC(".maps");
+
 /*
  * fs-verity digest allowlist.
  * Key: digest length + digest bytes (SHA-512 only)
@@ -326,6 +415,17 @@ struct {
 /* RCU read section for task walks in sleepable hooks */
 extern void bpf_rcu_read_lock(void) __ksym;
 extern void bpf_rcu_read_unlock(void) __ksym;
+
+/* a referenced task by global pid, for a hook that only has a struct pid */
+extern struct task_struct *bpf_task_from_pid(s32 pid) __ksym;
+extern struct task_struct *bpf_task_acquire(struct task_struct *p) __ksym;
+extern void bpf_task_release(struct task_struct *p) __ksym;
+extern int bpf_send_signal_task(struct task_struct *task, int sig,
+				enum pid_type type, u64 value) __ksym;
+extern int bpf_iter_task_new(struct bpf_iter_task *it, struct task_struct *task,
+			     unsigned int flags) __ksym;
+extern struct task_struct *bpf_iter_task_next(struct bpf_iter_task *it) __ksym;
+extern void bpf_iter_task_destroy(struct bpf_iter_task *it) __ksym;
 
 /* kfunc definition for bpf_get_fsverity_digest */
 extern int bpf_get_fsverity_digest(struct file *file,
@@ -468,7 +568,9 @@ static __always_inline u64 get_task_start_ticks(struct task_struct *task)
 	return start_ns / (LOTA_NSEC_PER_SEC / LOTA_USER_HZ);
 }
 
-static __always_inline int is_protected_task(struct task_struct *task)
+/* Is @task the process protected_pids names? Its start time in @start_ticks. */
+static __always_inline int is_registered_task(struct task_struct *task,
+					      u64 *start_ticks)
 {
 	u32 tgid;
 	u64 task_start_ticks;
@@ -487,6 +589,7 @@ static __always_inline int is_protected_task(struct task_struct *task)
 		task_start_ticks = get_task_start_ticks(leader);
 	else
 		task_start_ticks = get_task_start_ticks(task);
+	*start_ticks = task_start_ticks;
 	return task_start_ticks && entry->start_time_ticks == task_start_ticks;
 }
 
@@ -512,6 +615,81 @@ auth_subject_task(struct task_struct *task)
 	 */
 	leader = task->group_leader;
 	return leader ? leader : task;
+}
+
+/*
+ * The instance @task belongs to, in @id: the one it inherited, or its own
+ * when protected_pids names it. Returns 1 when @task is protected.
+ * The caller holds the RCU read lock, which a sleepable hook needs for task
+ * storage; task_instance() takes it.
+ */
+static __always_inline int task_instance_rcu(struct task_struct *task,
+					     struct lota_instance_entry *id)
+{
+	struct lota_instance_entry *entry;
+	struct task_struct *subject;
+	u64 start_ticks = 0;
+
+	if (!task)
+		return 0;
+
+	subject = auth_subject_task(task);
+	entry = bpf_task_storage_get(&lota_instance, subject, 0, 0);
+	if (entry) {
+		*id = *entry;
+		return 1;
+	}
+
+	if (!is_registered_task(task, &start_ticks))
+		return 0;
+
+	id->root_start_ticks = start_ticks;
+	id->root_tgid = BPF_CORE_READ(task, tgid);
+	id->pad = 0;
+	return 1;
+}
+
+static __always_inline int task_instance(struct task_struct *task,
+					 struct lota_instance_entry *id)
+{
+	int ret;
+
+	bpf_rcu_read_lock();
+	ret = task_instance_rcu(task, id);
+	bpf_rcu_read_unlock();
+
+	return ret;
+}
+
+/* Is @task held by a tracer, and is that tracer inside instance @id? */
+static __always_inline int
+task_tracer_inside(struct task_struct *task,
+		   const struct lota_instance_entry *id, int *traced)
+{
+	struct lota_instance_entry tracer_id = {};
+	struct task_struct *tracer;
+	int tracer_protected = 0;
+
+	*traced = BPF_CORE_READ(task, ptrace) != 0;
+	if (!*traced)
+		return 0;
+
+	bpf_rcu_read_lock();
+	tracer = task->parent;
+	if (tracer)
+		tracer_protected = task_instance_rcu(tracer, &tracer_id);
+	bpf_rcu_read_unlock();
+
+	return lota_inside_instance(tracer_protected, tracer_id.root_tgid,
+				    tracer_id.root_start_ticks, 1,
+				    id->root_tgid, id->root_start_ticks);
+}
+
+static __always_inline int is_protected_task(struct task_struct *task)
+{
+	struct lota_instance_entry id;
+
+	return task_instance(task, &id);
 }
 
 static __always_inline int has_task_auth_flag(struct task_struct *task,
@@ -612,6 +790,14 @@ static __always_inline int is_lota_managed_map(struct bpf_map *map)
 		return 1;
 	if (__builtin_memcmp(name, "mapped_seen", sizeof("mapped_seen")) == 0)
 		return 1;
+	if (__builtin_memcmp(name, "exec_history", sizeof("exec_history")) == 0)
+		return 1;
+	if (__builtin_memcmp(name, "lota_sock_owner",
+			     sizeof("lota_sock_owner")) == 0)
+		return 1;
+	if (__builtin_memcmp(name, "instance_peers",
+			     sizeof("instance_peers")) == 0)
+		return 1;
 	if (__builtin_memcmp(name, "events", sizeof("events")) == 0)
 		return 1;
 	if (__builtin_memcmp(name, "stats", sizeof("stats")) == 0)
@@ -623,8 +809,17 @@ static __always_inline int is_lota_managed_map(struct bpf_map *map)
 		return 1;
 	if (__builtin_memcmp(name, "allow_verity", sizeof("allow_verity")) == 0)
 		return 1;
+	if (__builtin_memcmp(name, "verity_scratch",
+			     sizeof("verity_scratch")) == 0)
+		return 1;
 	if (__builtin_memcmp(name, "lota_task_auth",
 			     sizeof("lota_task_auth")) == 0)
+		return 1;
+	if (__builtin_memcmp(name, "lota_instance", sizeof("lota_instance")) ==
+	    0)
+		return 1;
+	if (__builtin_memcmp(name, "instance_stops",
+			     sizeof("instance_stops")) == 0)
 		return 1;
 	if (__builtin_memcmp(name, "exe_hash_slots",
 			     sizeof("exe_hash_slots")) == 0)
@@ -783,16 +978,11 @@ static __always_inline u32 guarded_file_kind(struct file *file)
  * Enforcement map key of a file. s_dev, not stat(2)'s st_dev:
  * they differ on a filesystem with a device per subvolume.
  */
-static __always_inline int file_inode_key(struct file *file,
-					  struct trusted_lib_key *key)
+static __always_inline int inode_key(struct inode *inode,
+				     struct trusted_lib_key *key)
 {
 	struct super_block *sb;
-	struct inode *inode;
 
-	if (!file)
-		return 0;
-
-	inode = BPF_CORE_READ(file, f_inode);
 	if (!inode)
 		return 0;
 
@@ -808,16 +998,33 @@ static __always_inline int file_inode_key(struct file *file,
 	return 1;
 }
 
-static __always_inline int is_mapped_exec_guarded(struct file *file)
+static __always_inline int file_inode_key(struct file *file,
+					  struct trusted_lib_key *key)
+{
+	if (!file)
+		return 0;
+
+	return inode_key(BPF_CORE_READ(file, f_inode), key);
+}
+
+static __always_inline int is_inode_mapped_exec_guarded(struct inode *inode)
 {
 	struct trusted_lib_key key = {};
 	u32 *guarded;
 
-	if (!file_inode_key(file, &key))
+	if (!inode_key(inode, &key))
 		return 0;
 
 	guarded = bpf_map_lookup_elem(&mapped_exec, &key);
 	return (guarded && *guarded) ? 1 : 0;
+}
+
+static __always_inline int is_mapped_exec_guarded(struct file *file)
+{
+	if (!file)
+		return 0;
+
+	return is_inode_mapped_exec_guarded(BPF_CORE_READ(file, f_inode));
 }
 
 /* enough to tell a file from one swapped in */
@@ -846,6 +1053,114 @@ static __always_inline void remember_mapped_exec(struct file *file)
 
 	inode_seen(inode, &seen);
 	bpf_map_update_elem(&mapped_seen, &key, &seen, BPF_ANY);
+}
+
+#define LOTA_TMPFS_MAGIC 0x01021994
+#define LOTA_HUGETLBFS_MAGIC 0x958458f6
+#define LOTA_F_SEAL_WRITE 0x0008
+#define LOTA_F_SEAL_FUTURE_WRITE 0x0010
+
+/* seals of a tmpfs or hugetlbfs inode */
+static __always_inline u32 memory_inode_seals(struct inode *inode,
+					      unsigned long magic)
+{
+	struct hugetlbfs_inode_info *h;
+	struct shmem_inode_info *s;
+
+	if (magic == LOTA_HUGETLBFS_MAGIC) {
+		h = (void *)((char *)inode -
+			     bpf_core_field_offset(struct hugetlbfs_inode_info,
+						   vfs_inode));
+		return BPF_CORE_READ(h, seals);
+	}
+	s = (void *)((char *)inode -
+		     bpf_core_field_offset(struct shmem_inode_info, vfs_inode));
+	return BPF_CORE_READ(s, seals);
+}
+
+/* who else could change the code of @inode right now */
+static __always_inline u32 exec_history_flags(struct inode *inode)
+{
+	unsigned long magic;
+	u32 flags = 0;
+
+	if (!inode)
+		return 0;
+
+	/* negative i_writecount: writes denied, e.g. a running exe */
+	if (BPF_CORE_READ(inode, i_writecount.counter) > 0 ||
+	    BPF_CORE_READ(inode, i_mapping, i_mmap_writable.counter) > 0)
+		flags |= LOTA_EXEC_HISTORY_WRITABLE;
+
+	magic = BPF_CORE_READ(inode, i_sb, s_magic);
+	if (magic != LOTA_TMPFS_MAGIC && magic != LOTA_HUGETLBFS_MAGIC)
+		return flags;
+
+	flags |= LOTA_EXEC_HISTORY_MEMORY;
+
+	/*
+	 * A memfd or shm segment has no name to open: its fds never count
+	 * in i_writecount, and any holder can write until a seal forbids it.
+	 */
+	if (BPF_CORE_READ(inode, __i_nlink) == 0 &&
+	    !(memory_inode_seals(inode, magic) &
+	      (LOTA_F_SEAL_WRITE | LOTA_F_SEAL_FUTURE_WRITE)))
+		flags |= LOTA_EXEC_HISTORY_WRITABLE;
+
+	return flags;
+}
+
+/* first attempt per file names it; the flags gather every attempt's */
+static __always_inline void remember_protected_exec(struct file *file)
+{
+	struct lota_exec_history_key key = {};
+	struct lota_exec_history_val val = {};
+	struct lota_exec_history_val *seen;
+	struct trusted_lib_key ik = {};
+	struct task_struct *task;
+	struct task_struct *leader;
+	const unsigned char *name;
+	struct inode *inode;
+	long err;
+
+	task = (struct task_struct *)bpf_get_current_task_btf();
+	if (!task || !is_protected_task(task))
+		return;
+
+	if (!file_inode_key(file, &ik)) {
+		inc_stat(STAT_EXEC_HISTORY_LOST);
+		return;
+	}
+
+	leader = BPF_CORE_READ(task, group_leader);
+	key.tgid = BPF_CORE_READ(task, tgid);
+	key.start_ticks = get_task_start_ticks(leader ? leader : task);
+	key.dev = ik.dev;
+	key.ino = ik.ino;
+
+	inode = BPF_CORE_READ(file, f_inode);
+	val.flags = exec_history_flags(inode);
+
+	seen = bpf_map_lookup_elem(&exec_history, &key);
+	if (seen) {
+		if (val.flags & ~seen->flags)
+			__sync_fetch_and_or(&seen->flags, val.flags);
+		return;
+	}
+
+	val.size = inode ? (u64)BPF_CORE_READ(inode, i_size) : 0;
+	name = BPF_CORE_READ(file, f_path.dentry, d_name.name);
+	if (name)
+		bpf_probe_read_kernel_str(val.name, sizeof(val.name), name);
+
+	err = bpf_map_update_elem(&exec_history, &key, &val, BPF_NOEXIST);
+	if (err == -EEXIST) {
+		seen = bpf_map_lookup_elem(&exec_history, &key);
+		if (seen)
+			__sync_fetch_and_or(&seen->flags, val.flags);
+	} else if (err) {
+		inc_stat(STAT_EXEC_HISTORY_LOST);
+	}
 }
 
 /*
@@ -1136,6 +1451,118 @@ static __always_inline int sleepable_task_is_agent_or_admin(void)
 	return ret;
 }
 
+#define LOTA_PROC_SUPER_MAGIC 0x9fa0
+
+/*
+ * An open of a /proc memory entry of the agent or of a protected process,
+ * from outside it; see lota_proc_entry_reads_mm(). The ptrace verdict,
+ * asked of the open itself because CAP_PERFMON passes the kernel's check
+ * without it. Returns 1 to deny; @target_pid is the process refused.
+ */
+static __always_inline int denies_proc_mm_open(struct file *file,
+					       u32 *target_pid)
+{
+	struct lota_instance_entry target_id = {};
+	struct lota_instance_entry actor_id = {};
+	char name[LOTA_PROC_NAME_MAX] = {};
+	struct task_struct *current;
+	struct task_struct *target;
+	int target_protected;
+	struct dentry *dentry;
+	struct proc_inode *pi;
+	struct inode *inode;
+	int target_agent;
+	int actor_agent;
+	int inside = 0;
+	u32 len;
+	s32 nr;
+
+	inode = BPF_CORE_READ(file, f_inode);
+	if (!inode ||
+	    BPF_CORE_READ(inode, i_sb, s_magic) != LOTA_PROC_SUPER_MAGIC)
+		return 0;
+
+	dentry = BPF_CORE_READ(file, f_path.dentry);
+	len = BPF_CORE_READ(dentry, d_name.len);
+	if (len == 0 || len >= LOTA_PROC_NAME_MAX)
+		return 0;
+	if (bpf_probe_read_kernel(name, len & (LOTA_PROC_NAME_MAX - 1),
+				  BPF_CORE_READ(dentry, d_name.name)))
+		return 0;
+	if (!lota_proc_entry_reads_mm(name, len))
+		return 0;
+
+	pi = (void *)((char *)inode -
+		      bpf_core_field_offset(struct proc_inode, vfs_inode));
+	nr = BPF_CORE_READ(pi, pid, numbers[0].nr);
+	if (nr <= 0)
+		return 0;
+
+	target = bpf_task_from_pid(nr);
+	if (!target)
+		return 0;
+
+	*target_pid = target->tgid;
+	if (target->tgid == bpf_get_current_pid_tgid() >> 32) {
+		bpf_task_release(target);
+		return 0;
+	}
+
+	current = (struct task_struct *)bpf_get_current_task_btf();
+	bpf_rcu_read_lock();
+	actor_agent = has_task_auth_flag(current, LOTA_TASK_AUTH_AGENT);
+	target_agent = has_task_auth_flag(target, LOTA_TASK_AUTH_AGENT);
+	bpf_rcu_read_unlock();
+
+	target_protected = task_instance(target, &target_id);
+	bpf_task_release(target);
+
+	if (lota_ptrace_agent_read_exempt(LOTA_PTRACE_MODE_READ, actor_agent))
+		return 0;
+
+	if (target_protected)
+		inside = lota_inside_instance(
+			task_instance(current, &actor_id), actor_id.root_tgid,
+			actor_id.root_start_ticks, target_protected,
+			target_id.root_tgid, target_id.root_start_ticks);
+
+	return lota_ptrace_denied(LOTA_PTRACE_MODE_READ, LOTA_MODE_MONITOR, 0,
+				  target_agent, target_protected && !inside);
+}
+
+/* the reader sees only EPERM; logged as PTRACE_BLOCKED, naming the entry */
+static __always_inline void report_blocked_proc_mm(struct file *file,
+						   u32 target_pid)
+{
+	struct lota_exec_event *event;
+
+	inc_stat(STAT_PTRACE_BLOCKED);
+
+	if (!should_emit_event(LOTA_MODE_ENFORCE, 1, LOTA_EVENT_PTRACE_BLOCKED))
+		return;
+
+	event = bpf_ringbuf_reserve(&events, sizeof(*event), 0);
+	if (!event) {
+		inc_stat(STAT_RINGBUF_DROPS);
+		return;
+	}
+
+	__builtin_memset(event, 0, sizeof(*event));
+	event->timestamp_ns = bpf_ktime_get_ns();
+	event->event_type = LOTA_EVENT_PTRACE_BLOCKED;
+	event->tgid = bpf_get_current_pid_tgid() >> 32;
+	event->pid = bpf_get_current_pid_tgid() & 0xFFFFFFFF;
+	event->uid = (u32)(bpf_get_current_uid_gid() & 0xFFFFFFFF);
+	event->target_pid = target_pid;
+	bpf_get_current_comm(event->comm, sizeof(event->comm));
+	bpf_probe_read_kernel_str(event->filename, LOTA_PROC_NAME_MAX,
+				  BPF_CORE_READ(file, f_path.dentry,
+						d_name.name));
+
+	bpf_ringbuf_submit(event, 0);
+	inc_stat(STAT_EVENTS_SENT);
+}
+
 /* report a refused guarded-file open; logged as KILL_BLOCKED */
 static __always_inline void report_blocked_kill_guard(const char *what, u32 len)
 {
@@ -1168,10 +1595,9 @@ static __always_inline void report_blocked_kill_guard(const char *what, u32 len)
 }
 
 /* the writer sees only EPERM; tell the event stream */
-static __always_inline void report_blocked_mapped_write(struct file *file)
+static __always_inline void report_blocked_mapped_write(struct dentry *dentry)
 {
 	struct lota_exec_event *event;
-	struct dentry *dentry;
 	const unsigned char *name = NULL;
 
 	inc_stat(STAT_MAPPED_WRITE_BLOCKED);
@@ -1194,7 +1620,6 @@ static __always_inline void report_blocked_mapped_write(struct file *file)
 	event->uid = (u32)(bpf_get_current_uid_gid() & 0xFFFFFFFF);
 	bpf_get_current_comm(event->comm, sizeof(event->comm));
 
-	dentry = BPF_CORE_READ(file, f_path.dentry);
 	if (dentry)
 		name = BPF_CORE_READ(dentry, d_name.name);
 	if (!name ||
@@ -1207,15 +1632,22 @@ static __always_inline void report_blocked_mapped_write(struct file *file)
 }
 
 /* the verdict lives in include/lota.h, shared with the tests */
-static __always_inline int denies_kill_guard_open(struct file *file)
+/* LOTA_GUARD_* of a refused write open of a guarded file, or 0 */
+static __always_inline u32 denies_kill_guard_open(struct file *file)
 {
+	u32 kind;
+
 	if (!is_write_open_flags(BPF_CORE_READ(file, f_flags)))
 		return 0;
 
-	if (!guarded_file_kind(file))
+	kind = guarded_file_kind(file);
+	if (!kind)
 		return 0;
 
-	return lota_kill_guard_denied(1, 1, sleepable_task_is_agent_or_admin());
+	if (!lota_kill_guard_denied(1, 1, sleepable_task_is_agent_or_admin()))
+		return 0;
+
+	return kind;
 }
 
 /*
@@ -1225,6 +1657,8 @@ static __always_inline int denies_kill_guard_open(struct file *file)
 SEC("lsm.s/file_open")
 int BPF_PROG(lota_file_open, struct file *file, int ret)
 {
+	u32 target_pid = 0;
+	u32 guard;
 	u32 mode;
 	int flags;
 
@@ -1238,7 +1672,17 @@ int BPF_PROG(lota_file_open, struct file *file, int ret)
 	if (is_kernel_mem_device(file))
 		return -EPERM;
 
-	if (denies_kill_guard_open(file)) {
+	if (denies_proc_mm_open(file, &target_pid)) {
+		report_blocked_proc_mm(file, target_pid);
+		return -EPERM;
+	}
+
+	guard = denies_kill_guard_open(file);
+	if (guard == LOTA_GUARD_CGROUP_FREEZE) {
+		report_blocked_kill_guard("(cgroup.freeze)", 16);
+		return -EPERM;
+	}
+	if (guard) {
 		report_blocked_kill_guard("(cgroup.kill)", 14);
 		return -EPERM;
 	}
@@ -1246,7 +1690,7 @@ int BPF_PROG(lota_file_open, struct file *file, int ret)
 	/* pinned library: unwritable like a running executable */
 	if (is_write_open_flags(BPF_CORE_READ(file, f_flags)) &&
 	    is_mapped_exec_guarded(file)) {
-		report_blocked_mapped_write(file);
+		report_blocked_mapped_write(BPF_CORE_READ(file, f_path.dentry));
 		return -EPERM;
 	}
 
@@ -1264,6 +1708,35 @@ int BPF_PROG(lota_file_open, struct file *file, int ret)
 	if (!is_write_open_flags(flags))
 		return 0;
 
+	return -EPERM;
+}
+
+/* =====================================================================
+ * LSM hook: path_truncate
+ *
+ * truncate(2) shortens a file by path, with no open for lota_file_open
+ * to refuse. A pinned library stays as unwritable as a running
+ * executable, which the kernel will not truncate either.
+ * ===================================================================== */
+SEC("lsm/path_truncate")
+int BPF_PROG(lota_path_truncate, const struct path *path, int ret)
+{
+	struct dentry *dentry;
+
+	if (ret != 0)
+		return ret;
+
+	if (!path)
+		return 0;
+
+	dentry = BPF_CORE_READ(path, dentry);
+	if (!dentry)
+		return 0;
+
+	if (!is_inode_mapped_exec_guarded(BPF_CORE_READ(dentry, d_inode)))
+		return 0;
+
+	report_blocked_mapped_write(dentry);
 	return -EPERM;
 }
 
@@ -1762,6 +2235,7 @@ int BPF_PROG(lota_mmap_file, struct file *file, unsigned long reqprot,
 	 * before the process asks to be protected.
 	 */
 	remember_mapped_exec(file);
+	remember_protected_exec(file);
 
 	mode = get_mode();
 
@@ -1930,6 +2404,7 @@ int BPF_PROG(lota_file_mprotect, struct vm_area_struct *vma,
 
 	/* mprotect(PROT_EXEC) maps code too */
 	remember_mapped_exec(file);
+	remember_protected_exec(file);
 
 	/*
 	 * mprotect(PROT_EXEC) on a file-backed VMA closes the W^X bypass
@@ -2005,12 +2480,145 @@ int BPF_PROG(lota_file_mprotect, struct vm_area_struct *vma,
 }
 
 /* ======================================================================
+ * Who reached a process of an instance
+ *
+ * instance_peers records, per instance, every process that reached one of
+ * its processes on a road the gate lets through:
+ *
+ *   - a process outside the instance that connects to, or sends to, a unix
+ *     socket a process of the instance created, bound or listens on: a
+ *     process of the instance can act on a request that came that way;
+ *   - a process of the instance that ptrace-accesses another one, or
+ *     signals it: what the wineserver does to the processes it hosts, and
+ *     what the gate allows inside an instance and refuses from outside.
+ *
+ * Nothing is refused here.
+ * ====================================================================== */
+static __always_inline void mark_instance_socket(struct sock *sk)
+{
+	struct lota_instance_entry id = {};
+	struct lota_sock_owner *owner;
+	struct task_struct *task;
+
+	if (!sk || BPF_CORE_READ(sk, __sk_common.skc_family) != AF_UNIX)
+		return;
+
+	task = (struct task_struct *)bpf_get_current_task_btf();
+	if (!task || !task_instance(task, &id))
+		return;
+
+	owner = bpf_sk_storage_get(&lota_sock_owner, sk, 0,
+				   BPF_LOCAL_STORAGE_GET_F_CREATE);
+	if (!owner) {
+		inc_stat(STAT_INSTANCE_PEERS_LOST);
+		return;
+	}
+	if (owner->tgid)
+		return;
+
+	owner->id = id;
+	bpf_get_current_comm(owner->comm, sizeof(owner->comm));
+	owner->tgid = BPF_CORE_READ(task, tgid);
+}
+
+/*
+ * Count one reach of @task into process @owner_tgid, named @owner_comm,
+ * of the instance @root.
+ */
+static __always_inline void
+note_instance_peer(struct task_struct *task,
+		   const struct lota_instance_entry *root, u32 owner_tgid,
+		   const char *owner_comm, u32 kind)
+{
+	struct lota_instance_peer_key key = {};
+	struct lota_instance_peer_val val = {};
+	struct trusted_lib_key ik = {};
+	struct lota_instance_peer_val *seen;
+	struct task_struct *leader;
+	long err;
+
+	leader = BPF_CORE_READ(task, group_leader);
+	key.root_start_ticks = root->root_start_ticks;
+	key.root_tgid = root->root_tgid;
+	key.peer_tgid = BPF_CORE_READ(task, tgid);
+	key.peer_start_ticks = get_task_start_ticks(leader ? leader : task);
+	key.owner_tgid = owner_tgid;
+	key.kind = kind;
+
+	seen = bpf_map_lookup_elem(&instance_peers, &key);
+	if (seen) {
+		__sync_fetch_and_add(&seen->count, 1);
+		return;
+	}
+
+	val.count = 1;
+	if (file_inode_key(BPF_CORE_READ(task, mm, exe_file), &ik)) {
+		val.exe_dev = ik.dev;
+		val.exe_ino = ik.ino;
+	}
+	val.uid = (u32)(bpf_get_current_uid_gid() & 0xFFFFFFFF);
+	bpf_get_current_comm(val.comm, sizeof(val.comm));
+	__builtin_memcpy(val.owner_comm, owner_comm, sizeof(val.owner_comm));
+
+	err = bpf_map_update_elem(&instance_peers, &key, &val, BPF_NOEXIST);
+	if (err == -EEXIST) {
+		seen = bpf_map_lookup_elem(&instance_peers, &key);
+		if (seen)
+			__sync_fetch_and_add(&seen->count, 1);
+	} else if (err) {
+		inc_stat(STAT_INSTANCE_PEERS_LOST);
+	}
+}
+
+/* @other was reached from the current task; counted when from outside */
+static __always_inline void record_instance_peer(struct sock *other, u32 kind)
+{
+	struct lota_instance_entry id = {};
+	struct lota_sock_owner *owner;
+	struct task_struct *task;
+
+	if (!other)
+		return;
+	owner = bpf_sk_storage_get(&lota_sock_owner, other, 0, 0);
+	if (!owner || !owner->tgid)
+		return;
+
+	task = (struct task_struct *)bpf_get_current_task_btf();
+	if (!task)
+		return;
+	if (lota_inside_instance(task_instance(task, &id), id.root_tgid,
+				 id.root_start_ticks, 1, owner->id.root_tgid,
+				 owner->id.root_start_ticks))
+		return;
+
+	note_instance_peer(task, &owner->id, owner->tgid, owner->comm, kind);
+}
+
+/* @target of instance @root was reached from the current task, inside it */
+static __always_inline void
+record_instance_access(struct task_struct *target,
+		       const struct lota_instance_entry *root, u32 kind)
+{
+	char target_comm[LOTA_MAX_COMM_LEN] = {};
+	struct task_struct *task;
+
+	task = (struct task_struct *)bpf_get_current_task_btf();
+	if (!task)
+		return;
+	bpf_probe_read_kernel_str(target_comm, sizeof(target_comm),
+				  &target->comm);
+	note_instance_peer(task, root, BPF_CORE_READ(target, tgid), target_comm,
+			   kind);
+}
+
+/* ======================================================================
  * LSM hook: security_ptrace_access_check
  *
  * Called when one process attempts to trace/debug another via ptrace,
  * and by procfs for a read of another process's /proc.
  *
- * Ptrace on the agent and on protected PIDs is blocked in every mode.
+ * Ptrace on the agent and on protected PIDs is blocked in every mode,
+ * except between two processes of one instance, which is logged.
  * In ENFORCE mode an attach on any other task is blocked while
  * block_ptrace is set; otherwise it is logged.
  *
@@ -2023,7 +2631,12 @@ SEC("lsm/ptrace_access_check")
 int BPF_PROG(lota_ptrace_access_check, struct task_struct *child,
 	     unsigned int mode, int ret)
 {
+	struct lota_instance_entry target_id = {};
+	struct lota_instance_entry actor_id = {};
 	struct lota_exec_event *event = NULL;
+	struct task_struct *current;
+	int target_protected;
+	int inside = 0;
 	u32 lota_mode;
 	u32 child_pid;
 	int blocked = 0;
@@ -2043,10 +2656,19 @@ int BPF_PROG(lota_ptrace_access_check, struct task_struct *child,
 		return 0;
 	}
 
+	target_protected = task_instance(child, &target_id);
+	if (target_protected) {
+		current = (struct task_struct *)bpf_get_current_task_btf();
+		inside = lota_inside_instance(
+			task_instance(current, &actor_id), actor_id.root_tgid,
+			actor_id.root_start_ticks, target_protected,
+			target_id.root_tgid, target_id.root_start_ticks);
+	}
+
 	blocked = lota_ptrace_denied(mode, lota_mode,
 				     get_config(LOTA_CFG_BLOCK_PTRACE),
 				     is_lota_agent_task(child),
-				     is_protected_task(child));
+				     target_protected && !inside);
 
 	/* for logging */
 	emit_event = should_emit_event(lota_mode, blocked,
@@ -2060,6 +2682,8 @@ int BPF_PROG(lota_ptrace_access_check, struct task_struct *child,
 		event->timestamp_ns = bpf_ktime_get_ns();
 		event->event_type = blocked ? LOTA_EVENT_PTRACE_BLOCKED :
 					      LOTA_EVENT_PTRACE;
+		if (inside)
+			event->flags |= LOTA_EVENT_FLAG_INSIDE_INSTANCE;
 		event->tgid = bpf_get_current_pid_tgid() >> 32;
 		event->pid = bpf_get_current_pid_tgid() & 0xFFFFFFFF;
 		event->uid = (u32)(bpf_get_current_uid_gid() & 0xFFFFFFFF);
@@ -2085,39 +2709,53 @@ int BPF_PROG(lota_ptrace_access_check, struct task_struct *child,
 		return -EPERM;
 	}
 
+	/* the ring buffer drops; the instance's record does not */
+	if (inside)
+		record_instance_access(
+			child, &target_id,
+			lota_ptrace_is_attach(mode) ?
+				LOTA_INSTANCE_PEER_PTRACE_ATTACH :
+				LOTA_INSTANCE_PEER_PTRACE_READ);
+
 	return 0;
 }
 
-/*
- * Whether @p has its own handler for @sig, neither SIG_DFL nor SIG_IGN.
- * The thread group shares the table, so any thread answers. An unreadable
- * table or an out-of-range @sig answers no, keeping the signal refused.
- */
-static __always_inline int lota_task_handles_signal(struct task_struct *p,
-						    int sig)
+/* records a signal at the agent or a protected task; label is 8 bytes */
+static __always_inline void report_signal(int event_type, int blocked, int sig,
+					  u32 target_tgid, const char *label)
 {
-	struct sighand_struct *sighand;
-	unsigned long handler = 0;
+	struct lota_exec_event *event = NULL;
+	u64 pid_tgid = bpf_get_current_pid_tgid();
+	int emit_event;
 
-	if (sig < 1 ||
-	    sig > (int)(sizeof(sighand->action) / sizeof(sighand->action[0])))
-		return 0;
+	emit_event = should_emit_event(get_mode(), blocked, event_type);
+	if (emit_event)
+		event = bpf_ringbuf_reserve(&events, sizeof(*event), 0);
+	if (event) {
+		__builtin_memset(event, 0, sizeof(*event));
+		event->timestamp_ns = bpf_ktime_get_ns();
+		event->event_type = (u32)event_type;
+		event->tgid = (u32)(pid_tgid >> 32);
+		event->pid = (u32)pid_tgid;
+		event->uid = (u32)(bpf_get_current_uid_gid() & 0xFFFFFFFF);
+		event->target_pid = target_tgid;
+		event->signal = (u32)sig;
 
-	sighand = BPF_CORE_READ(p, sighand);
-	if (!sighand)
-		return 0;
+		bpf_get_current_comm(event->comm, sizeof(event->comm));
+		__builtin_memcpy(event->filename, label, 8);
 
-	if (bpf_core_read(&handler, sizeof(handler),
-			  &sighand->action[sig - 1].sa.sa_handler))
-		return 0;
-
-	return handler > 1;
+		bpf_ringbuf_submit(event, 0);
+		inc_stat(STAT_EVENTS_SENT);
+	} else if (emit_event) {
+		inc_stat(STAT_RINGBUF_DROPS);
+	}
 }
 
 /* ======================================================================
  * LSM hook: task_kill
  *
- * Blocks selected signal delivery to protected tasks from foreign tasks.
+ * Blocks signal delivery to the agent from foreign tasks, and records every
+ * signal at the agent or a protected task.
  *
  * SECURITY: Never trust sender PID/namespace for privileged signal paths.
  * Only authenticated LOTA task identities and kernel-generated signals can
@@ -2127,26 +2765,25 @@ SEC("lsm/task_kill")
 int BPF_PROG(lota_task_kill, struct task_struct *p, struct kernel_siginfo *info,
 	     int sig, const struct cred *cred)
 {
+	struct lota_instance_entry target_id = {};
+	struct lota_instance_entry sender_id = {};
 	struct task_struct *current;
 	u32 sender_tgid;
 	u32 target_tgid;
-	u32 lota_mode;
 	int target_is_agent;
 	int target_is_protected = 0;
+	int sender_inside = 0;
 	int blocked;
 	int event_type;
-	int emit_event;
-	struct lota_exec_event *event = NULL;
 
 	(void)cred;
 
 	if (!p)
 		return 0;
 
-	lota_mode = get_mode();
 	target_is_agent = is_lota_agent_task(p);
 	if (!target_is_agent)
-		target_is_protected = is_protected_task(p);
+		target_is_protected = task_instance(p, &target_id);
 
 	if (!target_is_agent && !target_is_protected)
 		return 0;
@@ -2174,9 +2811,19 @@ int BPF_PROG(lota_task_kill, struct task_struct *p, struct kernel_siginfo *info,
 			return 0;
 	}
 
+	if (target_is_protected)
+		sender_inside = lota_inside_instance(
+			task_instance(current, &sender_id), sender_id.root_tgid,
+			sender_id.root_start_ticks, 1, target_id.root_tgid,
+			target_id.root_start_ticks);
+
+	/* a signal between two processes of one instance is in its record */
+	if (sig && sender_inside)
+		record_instance_access(p, &target_id,
+				       LOTA_INSTANCE_PEER_SIGNAL);
+
 	/* the verdict lives in include/lota.h, shared with the tests */
-	blocked = lota_signal_denied(sig, target_is_agent, target_is_protected,
-				     lota_task_handles_signal(p, sig));
+	blocked = lota_signal_denied(sig, target_is_agent, sender_inside);
 
 	/* report every signal but a permitted probe, which is only counted */
 	event_type = lota_signal_event(sig, blocked);
@@ -2185,31 +2832,269 @@ int BPF_PROG(lota_task_kill, struct task_struct *p, struct kernel_siginfo *info,
 		return 0;
 	}
 
-	emit_event = should_emit_event(lota_mode, blocked, event_type);
-	if (emit_event)
-		event = bpf_ringbuf_reserve(&events, sizeof(*event), 0);
-	if (event) {
-		__builtin_memset(event, 0, sizeof(*event));
-		event->timestamp_ns = bpf_ktime_get_ns();
-		event->event_type = (u32)event_type;
-		event->tgid = sender_tgid;
-		event->pid = (u32)(bpf_get_current_pid_tgid() & 0xFFFFFFFF);
-		event->uid = (u32)(bpf_get_current_uid_gid() & 0xFFFFFFFF);
-		event->target_pid = target_tgid;
-		event->signal = (u32)sig;
-
-		bpf_get_current_comm(event->comm, sizeof(event->comm));
-		__builtin_memcpy(event->filename, "(kill)", 6);
-
-		bpf_ringbuf_submit(event, 0);
-		inc_stat(STAT_EVENTS_SENT);
-	} else if (emit_event) {
-		inc_stat(STAT_RINGBUF_DROPS);
-	}
+	report_signal(event_type, blocked, sig, target_tgid, "(kill)\0");
 
 	if (blocked)
 		return -EPERM;
 
+	return 0;
+}
+
+/* ======================================================================
+ * LSM hook: file_send_sigiotask
+ *
+ * F_SETOWN and F_SETSIG aim any signal at a task past lota_task_kill. The write
+ * raising it can run in softirq, where current says nothing about who aimed it,
+ * so the sender counts as outside the instance.
+ * ====================================================================== */
+SEC("lsm/file_send_sigiotask")
+int BPF_PROG(lota_file_send_sigiotask, struct task_struct *tsk,
+	     struct fown_struct *fown, int sig)
+{
+	struct lota_instance_entry id = {};
+	int target_is_agent;
+
+	(void)fown;
+
+	target_is_agent = is_lota_agent_task(tsk);
+	if (!target_is_agent && !task_instance(tsk, &id))
+		return 0;
+
+	if (!lota_sigio_denied(sig, target_is_agent))
+		return 0;
+
+	report_signal(LOTA_EVENT_KILL_BLOCKED, 1, sig, BPF_CORE_READ(tsk, tgid),
+		      "(sigio)");
+	return -EPERM;
+}
+
+/* ======================================================================
+ * LSM hook: task_setrlimit
+ *
+ * RLIMIT_CPU has the kernel itself raise SIGXCPU and SIGKILL at the task, which
+ * no signal verdict sees, and RLIMIT_CORE widens what a dump writes. Another
+ * process's limits are refused from outside its instance.
+ * ====================================================================== */
+SEC("lsm/task_setrlimit")
+int BPF_PROG(lota_task_setrlimit, struct task_struct *p, unsigned int resource,
+	     struct rlimit *new_rlim)
+{
+	struct lota_instance_entry target_id = {};
+	struct lota_instance_entry sender_id = {};
+	struct task_struct *current;
+	u32 target_tgid;
+	int target_is_agent;
+
+	(void)new_rlim;
+	(void)resource;
+
+	target_is_agent = is_lota_agent_task(p);
+	if (!target_is_agent && !task_instance(p, &target_id))
+		return 0;
+
+	target_tgid = BPF_CORE_READ(p, tgid);
+	if ((u32)(bpf_get_current_pid_tgid() >> 32) == target_tgid)
+		return 0;
+
+	current = (struct task_struct *)bpf_get_current_task_btf();
+	if (is_lota_agent_task(current) || is_bpf_admin_task())
+		return 0;
+
+	if (!target_is_agent &&
+	    lota_inside_instance(
+		    task_instance(current, &sender_id), sender_id.root_tgid,
+		    sender_id.root_start_ticks, 1, target_id.root_tgid,
+		    target_id.root_start_ticks))
+		return 0;
+
+	report_signal(LOTA_EVENT_KILL_BLOCKED, 1, 0, target_tgid, "(rlimit)");
+	return -EPERM;
+}
+
+/* ======================================================================
+ * Unix sockets of an instance: the sockets carry it, a reach from outside
+ * is counted (record_instance_peer())
+ * ====================================================================== */
+SEC("lsm/socket_post_create")
+int BPF_PROG(lota_socket_post_create, struct socket *sock, int family, int type,
+	     int protocol, int kern, int ret)
+{
+	if (ret || kern || family != AF_UNIX || !sock)
+		return ret;
+	mark_instance_socket(sock->sk);
+	return 0;
+}
+
+SEC("lsm/socket_bind")
+int BPF_PROG(lota_socket_bind, struct socket *sock, struct sockaddr *address,
+	     int addrlen, int ret)
+{
+	if (ret || !sock)
+		return ret;
+	mark_instance_socket(sock->sk);
+	return 0;
+}
+
+SEC("lsm/socket_listen")
+int BPF_PROG(lota_socket_listen, struct socket *sock, int backlog, int ret)
+{
+	if (ret || !sock)
+		return ret;
+	mark_instance_socket(sock->sk);
+	return 0;
+}
+
+SEC("lsm/unix_stream_connect")
+int BPF_PROG(lota_unix_stream_connect, struct sock *sock, struct sock *other,
+	     struct sock *newsk, int ret)
+{
+	if (ret)
+		return ret;
+	record_instance_peer(other, LOTA_INSTANCE_PEER_CONNECT);
+	return 0;
+}
+
+SEC("lsm/unix_may_send")
+int BPF_PROG(lota_unix_may_send, struct socket *sock, struct socket *other,
+	     int ret)
+{
+	if (ret || !other)
+		return ret;
+	record_instance_peer(other->sk, LOTA_INSTANCE_PEER_SEND);
+	return 0;
+}
+
+/* ======================================================================
+ * LSM hook: task_alloc
+ *
+ * A process created by a protected one is marked here, before it first
+ * runs. If the mark cannot be stored the clone fails: a child that runs
+ * unprotected is the window this closes. A protected process held by a
+ * tracer outside its instance creates nothing, threads included, since
+ * the tracer would follow it into the child.
+ * ====================================================================== */
+SEC("lsm/task_alloc")
+int BPF_PROG(lota_task_alloc, struct task_struct *task,
+	     unsigned long clone_flags, int ret)
+{
+	struct lota_instance_entry id = {};
+	struct lota_instance_entry *entry;
+	struct task_struct *current;
+	int creator_protected;
+	int tracer_inside;
+	int traced;
+
+	if (ret != 0)
+		return ret;
+
+	current = (struct task_struct *)bpf_get_current_task_btf();
+	creator_protected = task_instance(current, &id);
+	if (!creator_protected)
+		return 0;
+
+	tracer_inside = task_tracer_inside(current, &id, &traced);
+	if (lota_clone_refused(creator_protected, traced, tracer_inside))
+		return -EPERM;
+
+	if (!lota_clone_inherits_protection(clone_flags, creator_protected))
+		return 0;
+
+	entry = bpf_task_storage_get(&lota_instance, task, 0,
+				     BPF_LOCAL_STORAGE_GET_F_CREATE);
+	if (!entry)
+		return -ENOMEM;
+
+	entry->root_start_ticks = id.root_start_ticks;
+	entry->root_tgid = id.root_tgid;
+	return 0;
+}
+
+/* ======================================================================
+ * The agent's exit: nothing it protects outlives it
+ *
+ * The agent is what a report rests on, and the programs end with it. Its links
+ * close in exit_files(), after this tracepoint, so the signal goes out with
+ * every hook still on, whatever ended the agent. A process forking meanwhile
+ * adds its child behind the walk, or is refused the fork once signalled.
+ * Threads are walked, not leaders: a leader that exited takes no signal, and
+ * its group can be running.
+ * ====================================================================== */
+#define LOTA_TASK_ITER_ALL_THREADS 1
+
+/* where preemption is off the kill goes through a per-CPU slot: -EBUSY, once */
+#define LOTA_KILL_TRIES 64
+#define LOTA_EBUSY 16
+
+static __always_inline void kill_group(struct task_struct *t)
+{
+	int i;
+
+	for (i = 0; i < LOTA_KILL_TRIES; i++) {
+		if (bpf_send_signal_task(t, LOTA_SIG_KILL, PIDTYPE_TGID, 0) !=
+		    -LOTA_EBUSY)
+			break;
+	}
+}
+
+/* end every protected group, and the agent with @with_agent */
+static __always_inline void kill_instances(int with_agent)
+{
+	struct lota_instance_entry id = {};
+	struct task_struct *held;
+	struct task_struct *t;
+
+	bpf_rcu_read_lock();
+	bpf_for_each(task, t, NULL, LOTA_TASK_ITER_ALL_THREADS)
+	{
+		if (!task_instance_rcu(t, &id) &&
+		    !(with_agent && is_lota_agent_task(t)))
+			continue;
+		held = bpf_task_acquire(t);
+		if (!held)
+			continue;
+		kill_group(held);
+		bpf_task_release(held);
+	}
+	bpf_rcu_read_unlock();
+}
+
+SEC("tp_btf/sched_process_exit")
+int BPF_PROG(lota_agent_exit, struct task_struct *task, bool group_dead)
+{
+	if (!group_dead || !is_lota_agent_task(task))
+		return 0;
+
+	kill_instances(0);
+	return 0;
+}
+
+/* ======================================================================
+ * Tracepoint: signal_deliver
+ *
+ * A core file is a read of the memory the hooks guard, and a terminal's ^\ or
+ * a process's own crash raises the signal with no hook asked. The group's
+ * SIGKILL goes out here, before the kernel acts on the default: a group already
+ * exiting takes no dump. A signal with a handler is the process's own business.
+ * ====================================================================== */
+SEC("tp_btf/signal_deliver")
+int BPF_PROG(lota_no_core, int sig, struct kernel_siginfo *info,
+	     struct k_sigaction *ka)
+{
+	struct lota_instance_entry id = {};
+	struct task_struct *current;
+
+	(void)info;
+
+	if (!lota_signal_dumps(sig) || BPF_CORE_READ(ka, sa.sa_handler))
+		return 0;
+
+	current = bpf_get_current_task_btf();
+	if (!task_instance(current, &id))
+		return 0;
+
+	report_signal(LOTA_EVENT_KILL_BLOCKED, 1, sig,
+		      BPF_CORE_READ(current, tgid), "(dump)\0");
+	kill_group(current);
 	return 0;
 }
 
@@ -2309,6 +3194,8 @@ int BPF_PROG(lota_task_fix_setuid, struct cred *new, const struct cred *old,
 SEC("lsm/bpf_map")
 int BPF_PROG(lota_bpf_map, struct bpf_map *map, fmode_t fmode, int ret)
 {
+	(void)fmode;
+
 	if (ret != 0)
 		return -EPERM;
 
@@ -2319,9 +3206,6 @@ int BPF_PROG(lota_bpf_map, struct bpf_map *map, fmode_t fmode, int ret)
 		return 0;
 
 	if (is_bpf_admin_task())
-		return 0;
-
-	if (!(fmode & FMODE_WRITE))
 		return 0;
 
 	if (!is_lota_managed_map(map))
@@ -2335,14 +3219,15 @@ int BPF_PROG(lota_bpf_map, struct bpf_map *map, fmode_t fmode, int ret)
  * LSM hook: bpf
  *
  * Keep global bpf() hook non-invasive. Object-specific access control is
- * enforced in lota_bpf_map where map identity is available.
+ * enforced in lota_bpf_map where map identity is available. The exception is
+ * BPF_LINK_DETACH, which takes a program off its hook and names its link by a
+ * descriptor the caller can swap after this hook read it, so one link cannot
+ * be told from another here.
  * ====================================================================== */
 SEC("lsm/bpf")
 int BPF_PROG(lota_bpf, int cmd, union bpf_attr *attr, unsigned int size,
 	     int ret)
 {
-	(void)cmd;
-
 	(void)size;
 	(void)attr;
 
@@ -2372,5 +3257,147 @@ int BPF_PROG(lota_bpf, int cmd, union bpf_attr *attr, unsigned int size,
 	 */
 	if (ret != 0)
 		return -EPERM;
+
+	if (cmd == BPF_LINK_DETACH && get_config(LOTA_CFG_LOCK_BPF) &&
+	    !is_bpf_admin_task()) {
+		inc_stat(STAT_BPF_SYSCALL_BLOCKED);
+		return -EPERM;
+	}
+	return 0;
+}
+
+/* =====================================================================
+ * fentry: cgroup_attach_task
+ *
+ * Moving a task between cgroups has no security hook, and a cgroup frozen
+ * before the move freezes what enters it, in either hierarchy: no file guard
+ * can stop that. The agent has no reason to move, so a move ends it the way
+ * its death does, before the move takes effect. Not the cgroup_attach_task
+ * tracepoint: it fires under a spinlock, where one kill per CPU gets out.
+ * ===================================================================== */
+SEC("fentry/cgroup_attach_task")
+int BPF_PROG(lota_agent_moved, struct cgroup *dst_cgrp,
+	     struct task_struct *leader, bool threadgroup)
+{
+	struct lota_exec_event *event;
+	const char *name;
+
+	(void)threadgroup;
+
+	if (!is_lota_agent_task(leader))
+		return 0;
+
+	event = bpf_ringbuf_reserve(&events, sizeof(*event), 0);
+	if (event) {
+		__builtin_memset(event, 0, sizeof(*event));
+		event->timestamp_ns = bpf_ktime_get_ns();
+		event->event_type = LOTA_EVENT_AGENT_MOVED;
+		event->tgid = bpf_get_current_pid_tgid() >> 32;
+		event->pid = bpf_get_current_pid_tgid() & 0xFFFFFFFF;
+		event->uid = (u32)(bpf_get_current_uid_gid() & 0xFFFFFFFF);
+		event->target_pid = BPF_CORE_READ(leader, tgid);
+		bpf_get_current_comm(event->comm, sizeof(event->comm));
+		name = BPF_CORE_READ(dst_cgrp, kn, name);
+		if (name)
+			bpf_probe_read_kernel_str(
+				event->filename, sizeof(event->filename), name);
+		bpf_ringbuf_submit(event, 0);
+		inc_stat(STAT_EVENTS_SENT);
+	} else {
+		inc_stat(STAT_RINGBUF_DROPS);
+	}
+
+	kill_instances(1);
+	return 0;
+}
+
+/* =====================================================================
+ * STOPPED TIME
+ *
+ * A frozen cgroup, a job-control stop and a ptrace stop all pass through
+ * these two, in the thread that stands. An unfrozen thread passing through
+ * cgroup_leave_frozen() is what ends a stop: leaving with the freeze still on
+ * re-arms the trap and the thread stays frozen.
+ * ===================================================================== */
+static __always_inline struct task_struct *
+instance_root_acquire(struct task_struct *task)
+{
+	struct lota_instance_entry id = {};
+	struct task_struct *root;
+
+	if (!task_instance(task, &id))
+		return NULL;
+
+	root = bpf_task_from_pid(id.root_tgid);
+	if (!root)
+		return NULL;
+	if (get_task_start_ticks(root) != id.root_start_ticks) {
+		bpf_task_release(root);
+		return NULL;
+	}
+	return root;
+}
+
+SEC("fentry/cgroup_enter_frozen")
+int BPF_PROG(lota_stop_enter)
+{
+	struct task_struct *task = bpf_get_current_task_btf();
+	struct lota_instance_stops *stops;
+	struct task_struct *root;
+	u64 now;
+
+	if (BPF_CORE_READ_BITFIELD_PROBED(task, frozen))
+		return 0;
+
+	root = instance_root_acquire(task);
+	if (!root)
+		return 0;
+
+	stops = bpf_task_storage_get(&instance_stops, root, 0,
+				     BPF_LOCAL_STORAGE_GET_F_CREATE);
+	if (!stops) {
+		inc_stat(STAT_INSTANCE_STOPS_LOST);
+		goto out;
+	}
+
+	now = bpf_ktime_get_ns();
+	bpf_spin_lock(&stops->lock);
+	if (stops->stopped_threads++ == 0)
+		stops->since_ns = now;
+	bpf_spin_unlock(&stops->lock);
+out:
+	bpf_task_release(root);
+	return 0;
+}
+
+SEC("fexit/cgroup_leave_frozen")
+int BPF_PROG(lota_stop_leave, bool always_leave)
+{
+	struct task_struct *task = bpf_get_current_task_btf();
+	struct lota_instance_stops *stops;
+	struct task_struct *root;
+	u64 now;
+
+	(void)always_leave;
+
+	if (BPF_CORE_READ_BITFIELD_PROBED(task, frozen))
+		return 0;
+
+	root = instance_root_acquire(task);
+	if (!root)
+		return 0;
+
+	stops = bpf_task_storage_get(&instance_stops, root, 0, 0);
+	if (!stops)
+		goto out;
+
+	now = bpf_ktime_get_ns();
+	bpf_spin_lock(&stops->lock);
+	if (stops->stopped_threads > 0 && --stops->stopped_threads == 0)
+		stops->total_ns = lota_stopped_ns(stops->total_ns, 1,
+						  stops->since_ns, now);
+	bpf_spin_unlock(&stops->lock);
+out:
+	bpf_task_release(root);
 	return 0;
 }

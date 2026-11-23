@@ -114,6 +114,12 @@ enum lota_error {
 	 * Unlike LOTA_ERR_NOT_ATTESTED, retrying next round does not help.
 	 */
 	LOTA_ERR_TPM_LOCKED = -18,
+
+	/*
+	 * The process asked about was not measured by the last token round:
+	 * nobody protected it, or it exited before the round reached it.
+	 */
+	LOTA_ERR_NOT_PROTECTED = -19,
 };
 
 /*
@@ -176,14 +182,13 @@ enum lota_error {
 #define LOTA_FLAG_IMAGE_FULLY_MEASURED (1 << 9)
 
 /*
- * Protected process was ended locally on this host since it booted.
+ * Protected process was ended through the agent on this host since it booted.
  *
- * Process that asked to be protected takes no signal from anything but itself,
- * the agent or the kernel, so a title that hangs can only be closed by asking
- * the agent to end it -- and the agent does that for whoever kill(2) would have
- * allowed, the owner of the process or root.
- * The player gets their machine back; this bit is what the publisher gets,
- * and it stays set until the host reboots.
+ * The agent ends a protected process on request, for whoever kill(2) would
+ * have allowed, the owner of the process or root. An ordinary signal reaches
+ * it as well; this route is the one that leaves a record.
+ * This bit is what the publisher gets, and it stays set until the host
+ * reboots.
  *
  * It says a session was ended on the machine rather than a process quietly
  * disappearing.
@@ -240,6 +245,27 @@ enum lota_error {
 #define LOTA_FLAG_BLOCK_PTRACE (1 << 19)
 
 /*
+ * The agent answering was not the first of this boot: an earlier one ended
+ * without a shutdown, and was started again. PCR 14 still held the boot's
+ * commitment, which the agent cannot forge or reset, so the restart is
+ * certain while what led to it is not.
+ *
+ * Every record the earlier agent kept ended with it. A token that carries
+ * this bit says nothing of what happened on the host before the restart,
+ * PROTECTED_TERMINATED included. It stays set until the host reboots.
+ */
+#define LOTA_FLAG_AGENT_RESTARTED (1 << 20)
+
+/*
+ * The kernel left an event out of the agent's log: the agent did not keep up,
+ * or something produced more events than the log takes. What the agent refuses
+ * is still refused and the token's lists are kept apart from that log, so only
+ * the lines are gone. It stays set until the agent ends, and it can arrive up
+ * to a second after the loss, later on an agent short of CPU.
+ */
+#define LOTA_FLAG_EVENTS_LOST (1 << 6)
+
+/*
  * Subscription event types
  *
  * Bitmask selecting which status changes trigger push notifications.
@@ -274,7 +300,7 @@ struct lota_status {
  * - Verifying the TPM signature over attest_data with the AIK public key
  * - Checking extraData in TPMS_ATTEST equals
  *   SHA256(valid_until || flags || pcr_mask || nonce || policy_digest ||
- *   runtime_protect_digest || runtime_protect_epoch),
+ *   runtime_protect_digest || runtime_protect_epoch || stopped_ms),
  *   which is what puts every field above inside the signature
  * - Checking the nonce is the one it issued
  * - Verifying PCR digest matches expected policy
@@ -313,6 +339,9 @@ struct lota_token {
 	size_t attest_size; /* Size of attest_data */
 	uint8_t *signature; /* TPM signature (heap allocated) */
 	size_t signature_len; /* Signature length in bytes */
+
+	/* milliseconds any thread of the instance stood stopped, suspend aside */
+	uint64_t stopped_ms;
 };
 
 /*
@@ -455,17 +484,19 @@ int lota_ping(struct lota_client *client, uint64_t *uptime_sec);
  * Idempotent: a second call from the same task returns LOTA_OK
  * without mutating the runtime PID set.
  *
- * Once registered, the agent's BPF strict_mmap, block_anon_exec,
- * ptrace_access_check, and task_kill hooks gate every access into
- * or out of this process against the trust set.
+ * Once registered, the agent's BPF strict_mmap, block_anon_exec and
+ * ptrace_access_check hooks gate every access into or out of this
+ * process against the trust set, and task_kill records every signal
+ * at it. Every process it
+ * creates from then on is protected with it, from its first instruction.
  *
- * Call it once the loader is done: a protected task maps only files with
- * an allowed fs-verity digest or a trusted_libs inode, so registering
- * earlier refuses the process its own libraries. Libraries loaded later
- * need covering (see LOTA_HOOK_ENV_PROTECT_DELAY).
+ * Under strict_mmap a protected task maps only files with an allowed
+ * fs-verity digest or a trusted_libs inode; lota-protect protects a
+ * program from its first instruction.
  *
  * Returns LOTA_OK on success.
- *         LOTA_ERR_ACCESS_DENIED if the PID identity check fails.
+ *         LOTA_ERR_ACCESS_DENIED if the PID identity check fails, or a
+ *                                tracer already holds the process.
  *         LOTA_ERR_RATE_LIMITED  if the caller's UID exceeded the
  *                                privileged-PID rate window.
  *         LOTA_ERR_PROTOCOL      on IPC framing errors.
@@ -598,6 +629,117 @@ int lota_unsubscribe(struct lota_client *client);
  *          or negative LOTA_ERR_* on error.
  */
 int lota_poll_events(struct lota_client *client, int timeout_ms);
+
+/* Upper bounds of the strings in a registry object, terminator included */
+#define LOTA_REGISTRY_SONAME_MAX 256
+#define LOTA_REGISTRY_PATH_MAX 320
+
+/* How a registry object's digest was taken */
+#define LOTA_REGISTRY_ROAD_NONE 0 /* no digest */
+#define LOTA_REGISTRY_ROAD_VERITY 1 /* fs-verity measurement */
+#define LOTA_REGISTRY_ROAD_CONTENT 2 /* contents hashed while running */
+
+/* image_digest is the token's entry for the process */
+#define LOTA_REGISTRY_MEASURED (1U << 0)
+/* an executable mapping went unrecorded; the list may miss an object */
+#define LOTA_REGISTRY_HISTORY_LOST (1U << 1)
+/* a peer went unrecorded; the list may miss a process that reached in */
+#define LOTA_REGISTRY_PEERS_LOST (1U << 2)
+
+/*
+ * Mapped since protection began, gone from the address space when
+ * measured: no path and no digest, the soname is the file's name.
+ */
+#define LOTA_REGISTRY_OBJECT_UNMAPPED (1U << 0)
+/*
+ * When a protected process mapped it executable, something else held it
+ * open for write or mapped it shared writable, or it was a memfd or shm
+ * segment with no write seal, which anyone holding an fd can write: the
+ * code could change without the file being written again.
+ */
+#define LOTA_REGISTRY_OBJECT_WRITABLE (1U << 1)
+/* backed by memory only (memfd, shm, tmpfs, hugetlbfs), no file on disk */
+#define LOTA_REGISTRY_OBJECT_MEMORY (1U << 2)
+
+/*
+ * One code object a protected process mapped executable.
+ * The token's image digest binds every field.
+ */
+struct lota_registry_object {
+	uint64_t size;
+	uint64_t dev;
+	uint64_t ino;
+	uint32_t road; /* LOTA_REGISTRY_ROAD_* */
+	uint32_t flags; /* LOTA_REGISTRY_OBJECT_* */
+	uint32_t digest_len; /* 0, 32 or 64 */
+	uint8_t digest[64];
+	char soname[LOTA_REGISTRY_SONAME_MAX];
+	char path[LOTA_REGISTRY_PATH_MAX];
+};
+
+/* How a peer reached the instance: from outside, through a unix socket */
+#define LOTA_REGISTRY_PEER_CONNECT 1 /* connected to a stream socket */
+#define LOTA_REGISTRY_PEER_SEND 2 /* sent a datagram */
+/* from inside, one process of the instance to another */
+#define LOTA_REGISTRY_PEER_PTRACE_READ 3 /* read-mode ptrace access */
+#define LOTA_REGISTRY_PEER_PTRACE_ATTACH 4 /* ptrace, process_vm_*, mem */
+#define LOTA_REGISTRY_PEER_SIGNAL 5 /* sent a signal */
+
+/*
+ * One process that reached a process of the instance of a protected
+ * process: from outside, through a unix socket a process of the instance
+ * owns, or from inside, by a ptrace access or a signal.
+ * The token's image digest binds every field.
+ */
+struct lota_registry_peer {
+	uint64_t count; /* times it did so */
+	uint64_t start_ticks; /* the peer's start time, in clock ticks */
+	uint64_t exe_dev; /* device of the peer's executable */
+	uint64_t exe_ino; /* inode of the peer's executable */
+	uint32_t tgid;
+	uint32_t uid;
+	uint32_t owner_tgid; /* the instance process it reached */
+	uint32_t kind; /* LOTA_REGISTRY_PEER_* */
+	char comm[16];
+	char owner_comm[16];
+};
+
+/*
+ * The code objects the last token round found mapped in one process and
+ * the processes outside its instance that reached it.
+ */
+struct lota_registry {
+	uint64_t round; /* measurement round the list comes from */
+	uint32_t pid;
+	uint32_t flags; /* LOTA_REGISTRY_* */
+	uint8_t image_digest[32];
+	uint32_t count;
+	struct lota_registry_object *objects;
+	uint32_t peer_count;
+	struct lota_registry_peer *peers;
+};
+
+/*
+ * lota_get_registry - Fetch what the last token round found mapped in @pid
+ * @client: Connected client
+ * @pid:    A protected process the caller owns, or any one for root
+ * @out:    Receives a registry to release with lota_registry_free()
+ *
+ * Every object is listed, those the agent could not measure included.
+ * The token binds the list: with LOTA_REGISTRY_MEASURED set, image_digest
+ * is the token's protected_image_digests entry for @pid, and
+ * lota_server_registry_digest() over the objects and peers reproduces it.
+ * A relying party checks both before trusting the list.
+ *
+ * Returns: LOTA_OK, LOTA_ERR_NOT_PROTECTED for a process the last round
+ *          did not measure, LOTA_ERR_ACCESS_DENIED for somebody else's,
+ *          or another negative LOTA_ERR_*.
+ */
+int lota_get_registry(struct lota_client *client, uint32_t pid,
+		      struct lota_registry **out);
+
+/* Release a registry from lota_get_registry(); NULL is a no-op. */
+void lota_registry_free(struct lota_registry *reg);
 
 const char *lota_strerror(int error);
 

@@ -37,6 +37,10 @@
 
 #include "test.h"
 #include "../src/sdk/lota_wine_hook.c"
+int lota_protect_main(int argc, char **argv);
+#define main lota_protect_main
+#include "../src/sdk/lota_protect.c"
+#undef main
 #include "lota_gaming.h"
 #include "lota_ipc.h"
 
@@ -1434,6 +1438,7 @@ static void test_hook_token_path_when_empty(void)
 static char mock_socket[104];
 static char mock_cmdlog[PATH_MAX];
 static int mock_agent_errno;
+static uint32_t mock_protect_result = LOTA_IPC_OK;
 
 static int mock_errno_is_sandbox(int err)
 {
@@ -1510,6 +1515,13 @@ static void mock_agent_serve(int client_fd)
 			memset(&status, 0, sizeof(status));
 			if (mock_send_response(client_fd, LOTA_IPC_OK, &status,
 					       sizeof(status)) < 0)
+				break;
+			continue;
+		}
+
+		if (req.cmd == LOTA_IPC_CMD_PROTECT_PID) {
+			if (mock_send_response(client_fd, mock_protect_result,
+					       NULL, 0) < 0)
 				break;
 			continue;
 		}
@@ -1733,71 +1745,13 @@ static void test_the_registration_is_not_repeated(void)
 	PASS();
 }
 
-/*
- * A protected task maps only allowlisted or trusted libraries, so a title
- * registered mid-load is refused its own. Registration waits a grace period.
- */
-static void test_the_loader_grace_period_holds_the_registration(void)
-{
-	TEST("the grace period holds the registration until the loader is done");
-
-	if (hook_protect_due(1000, 20, 1000)) {
-		FAIL("registered at init, before the loader has mapped a thing");
-		return;
-	}
-	if (hook_protect_due(1000, 20, 1019)) {
-		FAIL("registered one second before the grace period ends");
-		return;
-	}
-	if (!hook_protect_due(1000, 20, 1020)) {
-		FAIL("the grace period elapsed and the title is still not registered");
-		return;
-	}
-	if (!hook_protect_due(1000, 0, 1000)) {
-		FAIL("a zero delay must register on the first connect");
-		return;
-	}
-
-	PASS();
-}
-
-/* A host whose objects carry verity digests can ask for no wait at all. */
-static void test_the_grace_period_is_configurable(void)
-{
-	TEST("the grace period reads its length from the environment");
-
-	if (hook_protect_delay(NULL) != LOTA_HOOK_DEFAULT_PROTECT_DELAY_SEC) {
-		FAIL("unset must fall back to the default grace period");
-		return;
-	}
-	if (hook_protect_delay("0") != 0) {
-		FAIL("0 must disable the wait");
-		return;
-	}
-	if (hook_protect_delay("45") != 45) {
-		FAIL("an explicit length must be honoured");
-		return;
-	}
-	if (hook_protect_delay("-5") != LOTA_HOOK_DEFAULT_PROTECT_DELAY_SEC) {
-		FAIL("a negative length must fall back to the default");
-		return;
-	}
-	if (hook_protect_delay("later") !=
-	    LOTA_HOOK_DEFAULT_PROTECT_DELAY_SEC) {
-		FAIL("a value that is not a number must fall back");
-		return;
-	}
-
-	PASS();
-}
-
-/* The same rule on the wire: nothing is sent until the grace period ends. */
-static void test_a_refresh_inside_the_grace_period_does_not_register(void)
+/* lota-protect protects from exec, so nothing is left to wait for. */
+static void test_the_first_refresh_registers(void)
 {
 	pid_t agent;
 	int count;
 
-	TEST("a refresh inside the grace period does not register");
+	TEST("the first refresh registers the title");
 
 	agent = start_mock_agent();
 	if (agent < 0) {
@@ -1809,9 +1763,7 @@ static void test_a_refresh_inside_the_grace_period_does_not_register(void)
 		return;
 	}
 
-	hook_state_for_mock_agent("grace");
-	g_hook.init_time = time(NULL);
-	g_hook.protect_delay_sec = 30;
+	hook_state_for_mock_agent("first_refresh");
 
 	g_hook.client = hook_connect();
 	if (!g_hook.client) {
@@ -1820,18 +1772,6 @@ static void test_a_refresh_inside_the_grace_period_does_not_register(void)
 		return;
 	}
 	refresh_once();
-
-	count = mock_cmd_count(LOTA_IPC_CMD_PROTECT_PID);
-	if (count != 0) {
-		lota_disconnect(g_hook.client);
-		g_hook.client = NULL;
-		stop_mock_agent(agent);
-		FAIL("registered while the loader is still mapping libraries");
-		return;
-	}
-
-	/* the title is up: the grace period has passed */
-	g_hook.init_time -= 31;
 	refresh_once();
 
 	lota_disconnect(g_hook.client);
@@ -1840,7 +1780,7 @@ static void test_a_refresh_inside_the_grace_period_does_not_register(void)
 
 	count = mock_cmd_count(LOTA_IPC_CMD_PROTECT_PID);
 	if (count != 1) {
-		FAIL("the title is never registered once its loader is done");
+		FAIL("the title is not registered exactly once");
 		return;
 	}
 
@@ -2018,8 +1958,6 @@ static void test_a_registration_publishes_itself(void)
 
 	hook_state_for_mock_agent("publish");
 	snprintf(path, sizeof(path), "%s/publish.status", tmpdir);
-	g_hook.init_time = time(NULL);
-	g_hook.protect_delay_sec = 3600; /* the loader is still running */
 
 	g_hook.client = hook_connect();
 	if (!g_hook.client) {
@@ -2027,10 +1965,6 @@ static void test_a_registration_publishes_itself(void)
 		FAIL("hook did not connect to the mock agent");
 		return;
 	}
-	refresh_once();
-
-	/* the loader is done: what every cycle of the thread loop does */
-	g_hook.protect_delay_sec = 0;
 	hook_register_self();
 
 	lota_disconnect(g_hook.client);
@@ -2075,8 +2009,6 @@ static void test_a_refusal_publishes_itself(void)
 
 	hook_state_for_mock_agent("refused_publish");
 	snprintf(path, sizeof(path), "%s/refused_publish.status", tmpdir);
-	g_hook.init_time = time(NULL);
-	g_hook.protect_delay_sec = 0;
 
 	g_hook.client = hook_connect();
 	if (!g_hook.client) {
@@ -2118,6 +2050,131 @@ static void test_a_refusal_publishes_itself(void)
 		return;
 	}
 
+	PASS();
+}
+
+/*
+ * Run lota-protect against @socket on a program that leaves a marker
+ * and exits 7. Returns its exit status, or -1; *@ran says if it ran.
+ */
+static int run_lota_protect(const char *socket, int *ran)
+{
+	char marker[PATH_MAX];
+	char script[PATH_MAX + 32];
+	char *argv[] = { "lota-protect", "--", "/bin/sh", "-c", script, NULL };
+	int status;
+	pid_t pid;
+
+	snprintf(marker, sizeof(marker), "%s/protect.ran", tmpdir);
+	snprintf(script, sizeof(script), "touch '%s'; exit 7", marker);
+	unlink(marker);
+
+	pid = fork();
+	if (pid < 0)
+		return -1;
+	if (pid == 0) {
+		int null_fd = open("/dev/null", O_WRONLY | O_CLOEXEC);
+
+		if (null_fd >= 0)
+			dup2(null_fd, STDERR_FILENO);
+		setenv(LOTA_HOOK_ENV_SOCKET, socket, 1);
+		unsetenv(LOTA_HOOK_ENV_PUBLISHER);
+		_exit(lota_protect_main(5, argv));
+	}
+
+	if (waitpid(pid, &status, 0) != pid || !WIFEXITED(status))
+		return -1;
+
+	*ran = access(marker, F_OK) == 0;
+	unlink(marker);
+	return WEXITSTATUS(status);
+}
+
+static void test_lota_protect_protects_then_starts(void)
+{
+	pid_t agent;
+	int ran = 0;
+	int rc;
+
+	TEST("lota-protect asks for protection, then becomes the program");
+
+	mock_protect_result = LOTA_IPC_OK;
+	agent = start_mock_agent();
+	if (agent < 0) {
+		if (mock_errno_is_sandbox(mock_agent_errno)) {
+			SKIP("no unix socket in this sandbox");
+			return;
+		}
+		FAIL("mock agent did not start");
+		return;
+	}
+
+	rc = run_lota_protect(mock_socket, &ran);
+	stop_mock_agent(agent);
+
+	if (rc != 7 || !ran) {
+		FAIL("the program did not run with its own exit status");
+		return;
+	}
+	if (mock_cmd_count(LOTA_IPC_CMD_PROTECT_PID) != 1) {
+		FAIL("the agent was not asked exactly once");
+		return;
+	}
+	PASS();
+}
+
+/* a tracer holding the process: the game must not start unprotected */
+static void test_lota_protect_refused_does_not_start(void)
+{
+	pid_t agent;
+	int ran = 0;
+	int rc;
+
+	TEST("lota-protect does not start a program the agent refused");
+
+	mock_protect_result = LOTA_IPC_ERR_ACCESS_DENIED;
+	agent = start_mock_agent();
+	mock_protect_result = LOTA_IPC_OK;
+	if (agent < 0) {
+		if (mock_errno_is_sandbox(mock_agent_errno)) {
+			SKIP("no unix socket in this sandbox");
+			return;
+		}
+		FAIL("mock agent did not start");
+		return;
+	}
+
+	rc = run_lota_protect(mock_socket, &ran);
+	stop_mock_agent(agent);
+
+	if (ran) {
+		FAIL("the program ran after the agent refused it");
+		return;
+	}
+	if (rc != PROTECT_EXIT_REFUSED) {
+		FAIL("the refusal did not exit with 125");
+		return;
+	}
+	PASS();
+}
+
+/* no agent: the game starts, and the agent's absence is what reports it */
+static void test_lota_protect_without_agent_starts(void)
+{
+	char socket[PATH_MAX];
+	int ran = 0;
+	int rc;
+
+	TEST("lota-protect starts the program when no agent answers");
+
+	snprintf(socket, sizeof(socket), "%s/no-agent.sock", tmpdir);
+	unlink(socket);
+
+	rc = run_lota_protect(socket, &ran);
+	if (rc != 7 || !ran) {
+		FAIL("the program did not run without an agent");
+		return;
+	}
 	PASS();
 }
 
@@ -2351,14 +2408,17 @@ int main(void)
 	/* connect-then-register sequence */
 	test_the_launch_path_registers_the_title();
 	test_the_registration_is_not_repeated();
-	test_the_loader_grace_period_holds_the_registration();
-	test_the_grace_period_is_configurable();
-	test_a_refresh_inside_the_grace_period_does_not_register();
+	test_the_first_refresh_registers();
 	test_a_gate_refusal_is_told_apart_from_a_missing_file();
 	test_the_status_file_names_the_refused_object();
 	test_the_loader_wrapper_hands_back_what_it_got();
 	test_a_registration_publishes_itself();
 	test_a_refusal_publishes_itself();
+
+	/* lota-protect: protected before the program's first instruction */
+	test_lota_protect_protects_then_starts();
+	test_lota_protect_refused_does_not_start();
+	test_lota_protect_without_agent_starts();
 
 	/* how the refresh thread reads a poll */
 	test_a_quiet_wait_is_not_a_failure();
