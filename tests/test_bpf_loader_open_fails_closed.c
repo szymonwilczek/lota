@@ -123,7 +123,7 @@ struct ring_buffer *__wrap_ring_buffer__new(int map_fd,
 
 /* one hash map in memory, under whichever fd the context names */
 #define FAKE_MAP_FD 7
-#define FAKE_MAP_SLOTS 8
+#define FAKE_MAP_SLOTS 300
 
 static struct {
 	size_t ksz;
@@ -251,6 +251,40 @@ static void test_exec_history_walk(void)
 	free(vals);
 }
 
+static void test_exec_history_past_first_buffer(void)
+{
+	struct lota_exec_history_key key;
+	struct lota_exec_history_val val;
+	struct lota_exec_history_key *keys = NULL;
+	struct lota_exec_history_val *vals = NULL;
+	struct bpf_loader_ctx ctx;
+	bool together = true;
+	size_t n = 0;
+	int ret;
+
+	fake_map_reset(sizeof(key), sizeof(val));
+	for (uint32_t i = 0; i < FAKE_MAP_SLOTS; i++) {
+		memset(&key, 0, sizeof(key));
+		memset(&val, 0, sizeof(val));
+		key.tgid = 1;
+		key.start_ticks = 100;
+		key.ino = i;
+		val.size = i;
+		fake_map_put(&key, &val);
+	}
+
+	memset(&ctx, 0, sizeof(ctx));
+	ctx.exec_history_fd = FAKE_MAP_FD;
+	ret = bpf_loader_exec_history(&ctx, fake_alive, &keys, &vals, &n);
+	CHECK(ret == 0 && n == FAKE_MAP_SLOTS,
+	      "a history longer than the first buffer is read whole");
+	for (size_t i = 0; i < n; i++)
+		together = together && keys[i].ino == i && vals[i].size == i;
+	CHECK(together, "growing keeps keys and values together");
+	free(keys);
+	free(vals);
+}
+
 static void test_instance_peers_walk(void)
 {
 	struct lota_instance_peer_key key;
@@ -373,6 +407,7 @@ int main(void)
 	unlink(sig_path);
 
 	test_exec_history_walk();
+	test_exec_history_past_first_buffer();
 	test_instance_peers_walk();
 
 	if (g_failures) {
