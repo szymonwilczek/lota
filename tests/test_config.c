@@ -91,24 +91,24 @@ static void test_config_init_defaults(void)
 		FAIL("mode != enforce");
 		return;
 	}
-	if (cfg.strict_mmap != true) {
-		FAIL("strict_mmap != true");
+	if (cfg.strict_mmap != false) {
+		FAIL("strict_mmap != false");
 		return;
 	}
 	if (cfg.strict_exec != false) {
 		FAIL("strict_exec != false");
 		return;
 	}
-	if (cfg.block_ptrace != true) {
-		FAIL("block_ptrace != true");
+	if (cfg.block_ptrace != false) {
+		FAIL("block_ptrace != false");
 		return;
 	}
 	if (cfg.strict_modules != false) {
 		FAIL("strict_modules != false");
 		return;
 	}
-	if (cfg.block_anon_exec != true) {
-		FAIL("block_anon_exec != true");
+	if (cfg.block_anon_exec != false) {
+		FAIL("block_anon_exec != false");
 		return;
 	}
 	if (cfg.seal_aik_auth != false) {
@@ -768,6 +768,15 @@ static void test_config_load_invalid_mode(void)
 	/* should remain default on parse failure */
 	if (strcmp(cfg.mode, "enforce") != 0) {
 		FAIL("mode changed on invalid input");
+		return;
+	}
+
+	/* the mode switches policy, and monitor already lifts all of it */
+	write_config("mode_maintenance.conf", "mode = maintenance\n");
+	config_path("mode_maintenance.conf", path, sizeof(path));
+	config_init(&cfg);
+	if (config_load(&cfg, path) != -EINVAL) {
+		FAIL("mode = maintenance is not a mode");
 		return;
 	}
 
@@ -2089,13 +2098,6 @@ static void test_a_weaker_mode_names_the_flags_it_ignores(void)
 		return;
 	}
 
-	snprintf(cfg.mode, sizeof(cfg.mode), "maintenance");
-	if (config_inert_strict_flags(&cfg, inert, LOTA_STRICT_FLAG_COUNT) !=
-	    LOTA_STRICT_FLAG_COUNT) {
-		FAIL("maintenance mode runs no gate either");
-		return;
-	}
-
 	snprintf(cfg.mode, sizeof(cfg.mode), "enforce");
 	if (config_inert_strict_flags(&cfg, inert, LOTA_STRICT_FLAG_COUNT) !=
 	    0) {
@@ -2238,7 +2240,7 @@ static void test_config_load_all_known_keys(void)
 		"ca_cert = /all/ca.pem\n"
 		"pin_sha256 = abcdef0123456789222222222222222222222222222222222222222222222222\n"
 		"bpf_path = /all/lota.bpf.o\n"
-		"mode = maintenance\n"
+		"mode = monitor\n"
 		"strict_mmap = true\n"
 		"block_ptrace = true\n"
 		"bench = true\n"
@@ -2287,7 +2289,7 @@ static void test_config_load_all_known_keys(void)
 		FAIL("bpf_path");
 		return;
 	}
-	if (strcmp(cfg.mode, "maintenance") != 0) {
+	if (strcmp(cfg.mode, "monitor") != 0) {
 		FAIL("mode");
 		return;
 	}

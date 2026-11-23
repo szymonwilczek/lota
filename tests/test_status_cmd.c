@@ -70,6 +70,7 @@ static void test_format(void)
 	status_format(&s, buf, sizeof(buf));
 	CHECK(strcmp(buf, "Mode:         enforce\n"
 			  "Flags:        TPM_OK,BENCH\n"
+			  "Policy:       none (LSM not loaded)\n"
 			  "Attested:     2023-11-14 22:13:20 UTC\n"
 			  "Token until:  none\n"
 			  "Attestations: 5 succeeded, 1 failed\n") == 0,
@@ -84,6 +85,37 @@ static void test_format(void)
 	status_format(&s, buf, sizeof(buf));
 	CHECK(strstr(buf, "Attested:     never\n") != NULL,
 	      "a host never attested says so");
+}
+
+static void test_policy(void)
+{
+	struct lota_ipc_status s;
+	char buf[256];
+
+	memset(&s, 0, sizeof(s));
+	s.mode = LOTA_MODE_ENFORCE;
+	s.flags = LOTA_STATUS_BPF_LOADED | LOTA_STATUS_ENFORCE |
+		  LOTA_STATUS_STRICT_MMAP | LOTA_STATUS_BLOCK_PTRACE;
+	status_policy_string(&s, buf, sizeof(buf));
+	CHECK(strcmp(buf, "strict_mmap,block_ptrace; each refusal is logged "
+			  "as *_BLOCKED with its file") == 0,
+	      "the keys print as lota.conf names them, with where refusals go");
+
+	s.flags = LOTA_STATUS_BPF_LOADED | LOTA_STATUS_ENFORCE;
+	status_policy_string(&s, buf, sizeof(buf));
+	CHECK(strcmp(buf, "none") == 0, "enforce with no key reads as none");
+
+	s.mode = LOTA_MODE_MONITOR;
+	s.flags = LOTA_STATUS_BPF_LOADED;
+	status_policy_string(&s, buf, sizeof(buf));
+	CHECK(strcmp(buf, "none (monitor mode)") == 0,
+	      "monitor says why no key applies");
+
+	s.mode = LOTA_MODE_ENFORCE;
+	s.flags = 0;
+	status_policy_string(&s, buf, sizeof(buf));
+	CHECK(strcmp(buf, "none (LSM not loaded)") == 0,
+	      "enforce without the LSM says so, not none");
 }
 
 /* One connection answered with @resp and @body, then the child exits */
@@ -195,6 +227,7 @@ int main(void)
 
 	test_flags();
 	test_format();
+	test_policy();
 	test_request();
 
 	printf("\n%s: %d failure(s)\n", g_failures ? "FAILED" : "OK",

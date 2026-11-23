@@ -19,6 +19,10 @@ int status_request(const char *socket_path, struct lota_ipc_status *out);
 /* Comma-separated names of @flags; a bit without a name prints as hex */
 void status_flags_string(uint32_t flags, char *buf, size_t len);
 
+/* The policy keys the host applies, or why none does */
+void status_policy_string(const struct lota_ipc_status *s, char *buf,
+			  size_t len);
+
 /* The whole report, one "Key: value" line each */
 void status_format(const struct lota_ipc_status *s, char *buf, size_t len);
 

@@ -435,7 +435,7 @@ static enum bench_mode mode_of(uint8_t mode)
 	case LOTA_MODE_ENFORCE:
 		return BMO_ENFORCE;
 	default:
-		return BMO_MAINTENANCE;
+		return BMO_UNKNOWN;
 	}
 }
 

@@ -54,10 +54,6 @@ char LICENSE[] SEC("license") = "GPL";
 #define EINVAL 22
 #endif
 
-#ifndef EOPNOTSUPP
-#define EOPNOTSUPP 95
-#endif
-
 #ifndef FMODE_WRITE
 #define FMODE_WRITE ((fmode_t)(1U << 1))
 #endif
@@ -873,12 +869,6 @@ static __always_inline void answer_pin_question(struct file *file,
 	slot->seen = LOTA_EXE_MAP_SEEN_MISSING;
 	slot->state = LOTA_EXE_HASH_ANSWERED;
 
-	/* a pin refuses nothing outside enforce */
-	if (get_mode() != LOTA_MODE_ENFORCE) {
-		slot->err = EOPNOTSUPP;
-		return;
-	}
-
 	inode = BPF_CORE_READ(file, f_inode);
 	if (!inode || !file_inode_key(file, &key)) {
 		slot->err = EINVAL;
@@ -1216,22 +1206,16 @@ static __always_inline void report_blocked_mapped_write(struct file *file)
 	inc_stat(STAT_EVENTS_SENT);
 }
 
-/*
- * Refuse write opens of a guarded file; reads kill nobody.
- * The agent and admin are exempt, as from the signal gate.
- */
-static __always_inline int denies_kill_guard_open(struct file *file, u32 mode)
+/* the verdict lives in include/lota.h, shared with the tests */
+static __always_inline int denies_kill_guard_open(struct file *file)
 {
-	if (mode != LOTA_MODE_ENFORCE)
-		return 0;
-
 	if (!is_write_open_flags(BPF_CORE_READ(file, f_flags)))
 		return 0;
 
 	if (!guarded_file_kind(file))
 		return 0;
 
-	return !sleepable_task_is_agent_or_admin();
+	return lota_kill_guard_denied(1, 1, sleepable_task_is_agent_or_admin());
 }
 
 /*
@@ -1247,31 +1231,28 @@ int BPF_PROG(lota_file_open, struct file *file, int ret)
 	if (ret != 0)
 		return -EPERM;
 
-	mode = get_mode();
-	if (mode != LOTA_MODE_ENFORCE)
-		return 0;
-
-	if (is_kernel_mem_device(file))
-		return -EPERM;
-
 	if (!file)
 		return 0;
 
-	/* ahead of strict_mmap: kill protection is not opt-in */
-	if (denies_kill_guard_open(file, mode)) {
+	/* kernel memory, kill protection and pins are not policy */
+	if (is_kernel_mem_device(file))
+		return -EPERM;
+
+	if (denies_kill_guard_open(file)) {
 		report_blocked_kill_guard("(cgroup.kill)", 14);
 		return -EPERM;
 	}
 
-	/*
-	 * Pinned library: unwritable like a running executable.
-	 * Ahead of strict_mmap, since its content hash depends on it.
-	 */
+	/* pinned library: unwritable like a running executable */
 	if (is_write_open_flags(BPF_CORE_READ(file, f_flags)) &&
 	    is_mapped_exec_guarded(file)) {
 		report_blocked_mapped_write(file);
 		return -EPERM;
 	}
+
+	mode = get_mode();
+	if (mode != LOTA_MODE_ENFORCE)
+		return 0;
 
 	if (!get_config(LOTA_CFG_STRICT_MMAP))
 		return 0;
@@ -1321,11 +1302,7 @@ int BPF_PROG(lota_file_post_open_measure, struct file *file, int mask)
 		return 0;
 	}
 
-	/* lota_file_open refuses writes in enforce mode only */
-	slot->guard = (get_mode() == LOTA_MODE_ENFORCE &&
-		       is_mapped_exec_guarded(file)) ?
-			      1 :
-			      0;
+	slot->guard = is_mapped_exec_guarded(file) ? 1 : 0;
 
 	if (want == LOTA_EXE_HASH_ASKED_PIN) {
 		answer_pin_question(file, slot);
@@ -1510,64 +1487,33 @@ int BPF_PROG(lota_kernel_read_file, struct file *file,
 	     enum kernel_read_file_id id)
 {
 	struct lota_exec_event *event = NULL;
-	int blocked = 0;
+	struct integrity_data *integrity;
+	int blocked;
 	int emit_event = 0;
-	int strict_unknown;
+	int verity = 0;
+	int strict;
 	uint32_t key = 0;
 	uint32_t mode = get_mode();
 
-	/*
-	 * A purpose this object has no rule for is refused while strict module
-	 * loading is armed, and ignored otherwise.
-	 * Everything else is filtered out here.
-	 */
-	strict_unknown = mode == LOTA_MODE_ENFORCE &&
-			 !lota_kread_is_known(id) &&
-			 get_config(LOTA_CFG_STRICT_MODULES);
+	strict = mode == LOTA_MODE_ENFORCE &&
+		 get_config(LOTA_CFG_STRICT_MODULES);
 
-	if (!strict_unknown && !lota_kread_is_module(id) &&
-	    id != LOTA_KREAD_FIRMWARE && id != LOTA_KREAD_KEXEC_IMAGE &&
-	    id != LOTA_KREAD_KEXEC_INITRAMFS && id != LOTA_KREAD_POLICY) {
+	/* an unknown purpose counts only while strict */
+	if (!(strict && !lota_kread_is_known(id)) &&
+	    !lota_kread_is_watched(id, 1))
 		return 0;
-	}
 
-	if (mode == LOTA_MODE_ENFORCE) {
-		if (strict_unknown)
-			blocked = 1;
+	integrity = bpf_map_lookup_elem(&integrity_cfg, &key);
 
-		if (id == LOTA_KREAD_KEXEC_IMAGE ||
-		    id == LOTA_KREAD_KEXEC_INITRAMFS)
-			blocked = 1;
+	/* the digest is read only where the verdict asks for it */
+	if (strict && (lota_kread_is_module(id) || id == LOTA_KREAD_FIRMWARE))
+		verity = is_verity_allowed(file);
 
-		if (in_non_init_userns())
-			blocked = 1;
-
-		/* always allow policy files */
-		if (id == LOTA_KREAD_POLICY)
-			return 0;
-
-		/* kernel integrity config */
-		struct integrity_data *integrity;
-		integrity = bpf_map_lookup_elem(&integrity_cfg, &key);
-
-		if (lota_kread_is_module(id) || id == LOTA_KREAD_FIRMWARE) {
-			if (!integrity_baseline_ok(integrity))
-				blocked = 1;
-		}
-
-		/* firmware is always strict in ENFORCE: require fs-verity
-		 * allowlist */
-		if (id == LOTA_KREAD_FIRMWARE) {
-			if (!is_verity_allowed(file))
-				blocked = 1;
-		}
-
-		if (lota_kread_is_module(id) &&
-		    get_config(LOTA_CFG_STRICT_MODULES)) {
-			if (!is_verity_allowed(file))
-				blocked = 1;
-		}
-	}
+	/* the verdict lives in include/lota.h, shared with the tests */
+	blocked = lota_kread_denied(id, 1, mode == LOTA_MODE_ENFORCE,
+				    get_config(LOTA_CFG_STRICT_MODULES),
+				    integrity_baseline_ok(integrity), verity,
+				    in_non_init_userns());
 
 	emit_event = should_emit_event(mode, blocked,
 				       blocked ? LOTA_EVENT_MODULE_BLOCKED :
@@ -1644,65 +1590,29 @@ SEC("lsm/kernel_load_data")
 int BPF_PROG(lota_kernel_load_data, enum kernel_load_data_id id)
 {
 	struct lota_exec_event *event = NULL;
+	struct integrity_data *integrity;
+	u32 key = 0;
 	u32 mode;
-	int blocked = 0;
+	int blocked;
 	int emit_event = 0;
-	int strict_unknown;
+	int strict;
 
 	mode = get_mode();
+	strict = mode == LOTA_MODE_ENFORCE &&
+		 get_config(LOTA_CFG_STRICT_MODULES);
 
-	/* the same rule as kernel_read_file: an unrecognised purpose is refused
-	 * while strict module loading is armed */
-	strict_unknown = mode == LOTA_MODE_ENFORCE &&
-			 !lota_kread_is_known(id) &&
-			 get_config(LOTA_CFG_STRICT_MODULES);
-
-	if (!strict_unknown && id != LOTA_KREAD_FIRMWARE &&
-	    !lota_kread_is_module(id) && id != LOTA_KREAD_KEXEC_IMAGE &&
-	    id != LOTA_KREAD_KEXEC_INITRAMFS && id != LOTA_KREAD_POLICY &&
-	    id != LOTA_KREAD_X509_CERTIFICATE)
+	/* the same filter as kernel_read_file */
+	if (!(strict && !lota_kread_is_known(id)) &&
+	    !lota_kread_is_watched(id, 0))
 		return 0;
 
-	if (mode == LOTA_MODE_ENFORCE) {
-		if (strict_unknown)
-			blocked = 1;
+	integrity = bpf_map_lookup_elem(&integrity_cfg, &key);
 
-		if (id == LOTA_KREAD_KEXEC_IMAGE ||
-		    id == LOTA_KREAD_KEXEC_INITRAMFS)
-			blocked = 1;
-
-		if (in_non_init_userns())
-			blocked = 1;
-
-		u32 key = 0;
-		struct integrity_data *integrity;
-
-		integrity = bpf_map_lookup_elem(&integrity_cfg, &key);
-		if (lota_kread_is_module(id) || id == LOTA_KREAD_FIRMWARE) {
-			if (!integrity_baseline_ok(integrity))
-				blocked = 1;
-		}
-
-		/* memory-only firmware loads cannot be fs-verity validated ->
-		 * deny */
-		if (id == LOTA_KREAD_FIRMWARE)
-			blocked = 1;
-
-		/* memory-only module loads bypass file fs-verity checks -> deny
-		 * in strict
-		 */
-		if (lota_kread_is_module(id) &&
-		    get_config(LOTA_CFG_STRICT_MODULES))
-			blocked = 1;
-
-		/* align with kernel_read_file: strict-modules must not block
-		 * policy load */
-		if (id == LOTA_KREAD_KEXEC_IMAGE ||
-		    id == LOTA_KREAD_KEXEC_INITRAMFS) {
-			if (get_config(LOTA_CFG_STRICT_MODULES))
-				blocked = 1;
-		}
-	}
+	/* nothing handed over from memory has a file to check */
+	blocked = lota_kread_denied(id, 0, mode == LOTA_MODE_ENFORCE,
+				    get_config(LOTA_CFG_STRICT_MODULES),
+				    integrity_baseline_ok(integrity), 0,
+				    in_non_init_userns());
 
 	emit_event = should_emit_event(mode, blocked,
 				       blocked ? LOTA_EVENT_MODULE_BLOCKED :
@@ -2100,9 +2010,9 @@ int BPF_PROG(lota_file_mprotect, struct vm_area_struct *vma,
  * Called when one process attempts to trace/debug another via ptrace,
  * and by procfs for a read of another process's /proc.
  *
- * In ENFORCE mode, ptrace on protected PIDs is blocked entirely,
- * and an attach on any other task is blocked while block_ptrace is set.
- * In MONITOR mode, all ptrace attempts are logged for forensic review.
+ * Ptrace on the agent and on protected PIDs is blocked in every mode.
+ * In ENFORCE mode an attach on any other task is blocked while
+ * block_ptrace is set; otherwise it is logged.
  *
  * @child: The process being traced (target)
  * @mode: PTRACE_MODE_* flags (read, attach, etc)
@@ -2265,14 +2175,10 @@ int BPF_PROG(lota_task_kill, struct task_struct *p, struct kernel_siginfo *info,
 	}
 
 	/* the verdict lives in include/lota.h, shared with the tests */
-	blocked = lota_signal_denied(sig, lota_mode, target_is_agent,
-				     target_is_protected,
+	blocked = lota_signal_denied(sig, target_is_agent, target_is_protected,
 				     lota_task_handles_signal(p, sig));
 
-	/*
-	 * Report every signal but a permitted probe, which is only counted.
-	 * Outside enforce the report is the hook's whole job.
-	 */
+	/* report every signal but a permitted probe, which is only counted */
 	event_type = lota_signal_event(sig, blocked);
 	if (!event_type) {
 		inc_stat(STAT_KILL_PROBES);

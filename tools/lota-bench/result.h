@@ -106,7 +106,7 @@ enum bench_mode {
 	BMO_NONE = 0,
 	BMO_MONITOR,
 	BMO_ENFORCE,
-	BMO_MAINTENANCE,
+	BMO_UNKNOWN, /* a mode this tool has no name for */
 	BMO_COUNT,
 };
 

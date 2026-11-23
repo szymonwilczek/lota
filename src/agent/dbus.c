@@ -38,8 +38,6 @@ static const char *mode_string(uint8_t mode)
 		return "monitor";
 	case LOTA_MODE_ENFORCE:
 		return "enforce";
-	case LOTA_MODE_MAINTENANCE:
-		return "maintenance";
 	default:
 		return "unknown";
 	}

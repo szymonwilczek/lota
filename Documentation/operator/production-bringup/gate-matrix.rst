@@ -95,8 +95,10 @@ What the mode decides
 
 The strict flags (``strict_mmap``, ``strict_exec``, ``block_ptrace``,
 ``strict_modules``, ``block_anon_exec`` and their command-line forms) apply in
-``mode = enforce`` only. In ``monitor`` and ``maintenance`` each gate returns
-early: the agent starts, reports the flag as on and blocks nothing.
+``mode = enforce`` only. In ``monitor`` each gate returns early: the agent
+starts, names the flag as inert and blocks nothing the flag covers. The mode
+switches these flags and nothing else; the agent, protected processes,
+pinned libraries and the running kernel are guarded in both modes.
 
 ``lota-agent --dump-config`` lists the keys the mode leaves inert::
 
@@ -107,6 +109,13 @@ early: the agent starts, reports the flag as on and blocks nothing.
 
 and the agent logs the same list at startup, beside its ``Mode:`` line. A host
 meant to enforce that shows either is in the wrong mode.
+
+The token and the attestation report carry the policy the host applies:
+``LOTA_FLAG_ENFORCE`` for the mode and one bit per key (``LOTA_FLAG_STRICT_MMAP``
+and the rest), each set only in enforce mode with the LSM loaded. A key the mode
+leaves inert reads as off, and a reload that changes the mode or a key changes
+the bits with it. Whether a title needs a key is its publisher's call; the
+agent reports the policy and decides nothing on it.
 
 Automated developer bring-up
 ============================

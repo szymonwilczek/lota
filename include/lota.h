@@ -94,9 +94,8 @@ enum lota_event_flag {
  * Controls whether LSM hooks block or just monitor
  */
 enum lota_mode {
-	LOTA_MODE_MONITOR = 0, /* Log only, allow everything */
-	LOTA_MODE_ENFORCE = 1, /* Block unauthorized operations */
-	LOTA_MODE_MAINTENANCE = 2, /* Temporarily allow all (for updates) */
+	LOTA_MODE_MONITOR = 0, /* Log what policy would refuse */
+	LOTA_MODE_ENFORCE = 1, /* Refuse what policy refuses */
 };
 
 /* Config map keys */
@@ -161,6 +160,80 @@ static inline int lota_kread_is_known(unsigned int id)
 }
 
 /*
+ * Whether the gate rules on a purpose at all.
+ * @from_file: kernel_read_file rather than kernel_load_data, which also sees
+ * certificates handed to the keyring from memory.
+ */
+static inline int lota_kread_is_watched(unsigned int id, int from_file)
+{
+	if (lota_kread_is_module(id))
+		return 1;
+
+	switch (id) {
+	case LOTA_KREAD_FIRMWARE:
+	case LOTA_KREAD_KEXEC_IMAGE:
+	case LOTA_KREAD_KEXEC_INITRAMFS:
+	case LOTA_KREAD_POLICY:
+		return 1;
+	case LOTA_KREAD_X509_CERTIFICATE:
+		return !from_file;
+	}
+	return 0;
+}
+
+/*
+ * The verdict on code or data the kernel takes in on its own behalf, shared
+ * by kernel_read_file and kernel_load_data and stated here for the tests.
+ * Returns 1 to deny, 0 to allow.
+ *
+ * Integrity of the running kernel is not policy and holds in every mode:
+ *
+ *   - kexec replaces the measured kernel, and is refused;
+ *   - a user namespace other than the initial one takes nothing in;
+ *   - a module or firmware load needs module signature enforcement and
+ *     lockdown, the baseline the token reports.
+ *
+ * strict_modules is policy and applies in enforce only (@policy_on):
+ *
+ *   - a module or firmware read from a file needs an allow_verity digest;
+ *   - one handed over from memory has no file to check, and is refused;
+ *   - a purpose this object has no rule for is refused.
+ *
+ * An IMA policy read from a file is always allowed.
+ */
+static inline int lota_kread_denied(unsigned int id, int from_file,
+				    int policy_on, int strict_modules,
+				    int baseline_ok, int verity_allowed,
+				    int foreign_userns)
+{
+	int strict = policy_on && strict_modules;
+	int payload = lota_kread_is_module(id) || id == LOTA_KREAD_FIRMWARE;
+
+	if (!lota_kread_is_known(id))
+		return strict;
+
+	if (!lota_kread_is_watched(id, from_file))
+		return 0;
+
+	if (from_file && id == LOTA_KREAD_POLICY)
+		return 0;
+
+	if (id == LOTA_KREAD_KEXEC_IMAGE || id == LOTA_KREAD_KEXEC_INITRAMFS)
+		return 1;
+
+	if (foreign_userns)
+		return 1;
+
+	if (payload && !baseline_ok)
+		return 1;
+
+	if (payload && strict)
+		return from_file ? !verity_allowed : 1;
+
+	return 0;
+}
+
+/*
  * PTRACE_MODE_ATTACH from include/linux/ptrace.h.
  *
  * Mirrored: the enforcement object builds against vmlinux.h, which carries types
@@ -202,11 +275,14 @@ static inline int lota_ptrace_agent_read_exempt(unsigned int ptrace_mode,
  *
  * Three rules, in the order they are asked:
  *
- *   - the agent itself is never a ptrace target, in any mode;
- *   - a process that asked for protection refuses both modes, except in
- *     maintenance, which is the mode that exists to lift the gates;
+ *   - the agent itself is never a ptrace target;
+ *   - a process that asked for protection refuses both modes;
  *   - block_ptrace covers every other task, in enforce, and for an attach
  *     only.
+ *
+ * The first two hold in every enforcement mode: a token speaks for an isolated
+ * process measured by an intact agent, and no mode makes that true without
+ * the gate. The mode switches policy, and block_ptrace is policy.
  *
  * The third rule is a global over every task on the machine, so the access modes
  * part company there. An attach is what the key is named for and what it refuses.
@@ -223,10 +299,7 @@ static inline int lota_ptrace_denied(unsigned int ptrace_mode,
 				     int target_is_agent,
 				     int target_is_protected)
 {
-	if (target_is_agent)
-		return 1;
-
-	if (lota_mode != LOTA_MODE_MAINTENANCE && target_is_protected)
+	if (target_is_agent || target_is_protected)
 		return 1;
 
 	if (lota_mode == LOTA_MODE_ENFORCE && block_ptrace &&
@@ -261,11 +334,13 @@ static inline int lota_ptrace_denied(unsigned int ptrace_mode,
  * @target_handles: the target has its own handler for @sig, neither
  * SIG_DFL nor SIG_IGN.
  *
- * Four rules, in order:
+ * The verdict does not depend on the enforcement mode: an agent that can be
+ * killed in monitor is an agent whose measurements stop without a trace,
+ * and the mode switches policy, not the integrity of the measurement.
+ * The agent stops with lota-agent --shutdown in every mode.
  *
- *   - only enforce refuses anything; monitor and maintenance deliver every
- *     signal, so an operator evaluating LOTA can stop the agent without
- *     spending the boot commitment;
+ * Three rules, in order:
+ *
  *   - a target nobody protects is nobody's business here;
  *   - a probe (sig 0) and the agent's own reload signal are delivered,
  *     since neither can end the target;
@@ -274,17 +349,13 @@ static inline int lota_ptrace_denied(unsigned int ptrace_mode,
  *     SIGINT or SIGHUP, which a title handles to end, and never to the agent.
  *
  * Everything else reaching a protected target or the agent itself is refused,
- * so in enforce a local root cannot kill the agent and swap a tampered binary
- * in before the next attestation.
+ * so a local root cannot kill the agent and swap a tampered binary in before
+ * the next attestation.
  */
-static inline int lota_signal_denied(int sig, unsigned int lota_mode,
-				     int target_is_agent,
+static inline int lota_signal_denied(int sig, int target_is_agent,
 				     int target_is_protected,
 				     int target_handles)
 {
-	if (lota_mode != LOTA_MODE_ENFORCE)
-		return 0;
-
 	if (!target_is_agent && !target_is_protected)
 		return 0;
 
@@ -318,6 +389,19 @@ static inline int lota_signal_event(int sig, int denied)
 		return 0;
 
 	return LOTA_EVENT_KILL;
+}
+
+/*
+ * The cgroup.kill verdict, shared with the tests like the signal verdict.
+ * A write to a guarded cgroup.kill ends every task in the cgroup without
+ * passing the signal hook, so it is refused on the same terms as SIGKILL:
+ * in every mode, to everyone but the agent and the admin identity.
+ * A read ends nobody.
+ */
+static inline int lota_kill_guard_denied(int write_open, int guarded,
+					 int opener_exempt)
+{
+	return write_open && guarded && !opener_exempt;
 }
 
 /*

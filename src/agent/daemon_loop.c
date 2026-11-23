@@ -22,6 +22,7 @@
 #include "bpf_loader.h"
 #include "dbus.h"
 #include "ipc.h"
+#include "status_flags.h"
 #include "watchdog.h"
 
 /*
@@ -244,6 +245,16 @@ int agent_run_event_loop(struct agent_loop_ctx *ctx)
 						ctx->protect_pid_count,
 						ctx->trust_libs,
 						ctx->trust_lib_count);
+					ipc_set_mode(ctx->ipc_ctx,
+						     (uint8_t)*ctx->mode);
+					ipc_set_policy(
+						ctx->ipc_ctx,
+						lota_status_policy_keys(
+							*ctx->strict_mmap,
+							*ctx->strict_exec,
+							*ctx->strict_modules,
+							*ctx->block_anon_exec,
+							*ctx->block_ptrace));
 					agent_reload_publishers(ctx);
 				}
 			} else if (events[i].data.fd ==

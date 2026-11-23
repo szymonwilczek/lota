@@ -125,8 +125,6 @@ static const char *mode_name(uint8_t mode)
 		return "monitor";
 	case LOTA_MODE_ENFORCE:
 		return "enforce";
-	case LOTA_MODE_MAINTENANCE:
-		return "maintenance";
 	}
 	return NULL;
 }
@@ -141,9 +139,47 @@ static void time_string(uint64_t t, const char *none, char *buf, size_t len)
 		snprintf(buf, len, "%s", none);
 }
 
+/* The keys the host applies, as lota.conf names them */
+static const struct lota_flag_name policy_keys[] = {
+	{ LOTA_STATUS_STRICT_MMAP, "strict_mmap" },
+	{ LOTA_STATUS_STRICT_EXEC, "strict_exec" },
+	{ LOTA_STATUS_STRICT_MODULES, "strict_modules" },
+	{ LOTA_STATUS_BLOCK_ANON_EXEC, "block_anon_exec" },
+	{ LOTA_STATUS_BLOCK_PTRACE, "block_ptrace" },
+};
+
+/*
+ * A key that refuses a title's library leaves the title failing to start,
+ * so the line names the keys and where each refusal is written.
+ */
+void status_policy_string(const struct lota_ipc_status *s, char *buf,
+			  size_t len)
+{
+	size_t pos = 0;
+
+	if (len == 0)
+		return;
+	buf[0] = '\0';
+
+	if (!(s->flags & LOTA_STATUS_ENFORCE)) {
+		append(buf, len, &pos, "none (%s)",
+		       s->mode == LOTA_MODE_ENFORCE ? "LSM not loaded" :
+						      "monitor mode");
+		return;
+	}
+
+	names_of(policy_keys, sizeof(policy_keys) / sizeof(policy_keys[0]),
+		 s->flags, buf, len, &pos);
+	if (pos == 0)
+		append(buf, len, &pos, "none");
+	else
+		append(buf, len, &pos,
+		       "; each refusal is logged as *_BLOCKED with its file");
+}
+
 void status_format(const struct lota_ipc_status *s, char *buf, size_t len)
 {
-	char flags[512], last[32], until[32];
+	char flags[512], policy[256], last[32], until[32];
 	const char *mode = mode_name(s->mode);
 	size_t pos = 0;
 
@@ -151,6 +187,7 @@ void status_format(const struct lota_ipc_status *s, char *buf, size_t len)
 		return;
 	buf[0] = '\0';
 	status_flags_string(s->flags, flags, sizeof(flags));
+	status_policy_string(s, policy, sizeof(policy));
 	time_string(s->last_attest_time, "never", last, sizeof(last));
 	time_string(s->valid_until, "none", until, sizeof(until));
 
@@ -159,6 +196,7 @@ void status_format(const struct lota_ipc_status *s, char *buf, size_t len)
 	else
 		append(buf, len, &pos, "Mode:         unknown (%u)\n", s->mode);
 	append(buf, len, &pos, "Flags:        %s\n", flags);
+	append(buf, len, &pos, "Policy:       %s\n", policy);
 	append(buf, len, &pos, "Attested:     %s\n", last);
 	append(buf, len, &pos, "Token until:  %s\n", until);
 	append(buf, len, &pos,

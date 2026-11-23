@@ -106,8 +106,6 @@ const char *mode_to_string(int mode)
 {
 	if (mode == LOTA_MODE_ENFORCE)
 		return "enforce";
-	if (mode == LOTA_MODE_MAINTENANCE)
-		return "maintenance";
 	return "monitor";
 }
 
@@ -117,8 +115,6 @@ int parse_mode(const char *mode_str)
 		return -1;
 	if (strcmp(mode_str, "enforce") == 0)
 		return LOTA_MODE_ENFORCE;
-	if (strcmp(mode_str, "maintenance") == 0)
-		return LOTA_MODE_MAINTENANCE;
 	if (strcmp(mode_str, "monitor") == 0)
 		return LOTA_MODE_MONITOR;
 	return -1;

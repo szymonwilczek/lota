@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: MIT */
 /*
- * Unit tests for what the module gate counts as a module load (include/lota.h).
+ * Unit tests for what the module gate counts as a module load, and for its
+ * verdict (include/lota.h).
  *
  * A module reaches the kernel in one of two forms, and the kernel says which:
  * the image itself, or the compressed file handed to
@@ -122,6 +123,72 @@ static void test_a_later_purpose_is_not_known(void)
 	      "an unrecognised purpose is not claimed as a module load");
 }
 
+/* (purpose, enforce, strict_modules, baseline, verity) */
+#define FROM_FILE(id, on, strict, base, verity) \
+	lota_kread_denied((id), 1, (on), (strict), (base), (verity), 0)
+#define FROM_MEMORY(id, on, strict, base) \
+	lota_kread_denied((id), 0, (on), (strict), (base), 0, 0)
+
+/* Kernel integrity is not policy: it holds in monitor too */
+static void test_kernel_integrity_holds_in_every_mode(void)
+{
+	CHECK(FROM_FILE(KERNEL_PURPOSE_KEXEC_IMAGE, 0, 0, 1, 1),
+	      "kexec of a file is refused in monitor");
+	CHECK(FROM_MEMORY(KERNEL_PURPOSE_KEXEC_INITRAMFS, 0, 0, 1),
+	      "kexec from memory is refused in monitor");
+	CHECK(FROM_FILE(KERNEL_PURPOSE_MODULE_COMPRESSED, 0, 0, 0, 1),
+	      "a module without the integrity baseline is refused in monitor");
+	CHECK(FROM_FILE(KERNEL_PURPOSE_FIRMWARE, 0, 0, 0, 1),
+	      "firmware without the integrity baseline is refused in monitor");
+	CHECK(lota_kread_denied(KERNEL_PURPOSE_MODULE, 1, 0, 0, 1, 1, 1),
+	      "a module from a foreign user namespace is refused in monitor");
+	CHECK(lota_kread_denied(KERNEL_PURPOSE_X509_CERTIFICATE, 0, 0, 0, 1, 0,
+				1),
+	      "a certificate from a foreign user namespace is refused");
+}
+
+/* With the baseline met and strict_modules off, firmware is the kernel's */
+static void test_firmware_is_policy(void)
+{
+	CHECK(!FROM_FILE(KERNEL_PURPOSE_FIRMWARE, 1, 0, 1, 0),
+	      "enforce takes firmware outside the allowlist without strict_modules");
+	CHECK(!FROM_MEMORY(KERNEL_PURPOSE_FIRMWARE, 1, 0, 1),
+	      "enforce takes firmware from memory without strict_modules");
+	CHECK(FROM_FILE(KERNEL_PURPOSE_FIRMWARE, 1, 1, 1, 0),
+	      "strict_modules refuses firmware outside the allowlist");
+	CHECK(!FROM_FILE(KERNEL_PURPOSE_FIRMWARE, 1, 1, 1, 1),
+	      "strict_modules takes allowlisted firmware");
+	CHECK(FROM_MEMORY(KERNEL_PURPOSE_FIRMWARE, 1, 1, 1),
+	      "strict_modules refuses firmware from memory");
+}
+
+static void test_strict_modules_is_policy(void)
+{
+	CHECK(FROM_FILE(KERNEL_PURPOSE_MODULE_COMPRESSED, 1, 1, 1, 0),
+	      "strict_modules refuses a module outside the allowlist");
+	CHECK(!FROM_FILE(KERNEL_PURPOSE_MODULE_COMPRESSED, 1, 1, 1, 1),
+	      "strict_modules takes an allowlisted module");
+	CHECK(FROM_MEMORY(KERNEL_PURPOSE_MODULE, 1, 1, 1),
+	      "strict_modules refuses a module from memory");
+	CHECK(!FROM_FILE(KERNEL_PURPOSE_MODULE_COMPRESSED, 0, 1, 1, 0),
+	      "monitor lifts strict_modules");
+	CHECK(FROM_FILE(KERNEL_PURPOSE_MODULE_COMPRESSED + 1, 1, 1, 1, 1),
+	      "strict_modules refuses a purpose it does not know");
+	CHECK(!FROM_FILE(KERNEL_PURPOSE_MODULE_COMPRESSED + 1, 0, 1, 1, 1),
+	      "monitor takes a purpose it does not know");
+}
+
+/* What the gate does not rule on */
+static void test_purposes_outside_the_gate(void)
+{
+	CHECK(!FROM_FILE(KERNEL_PURPOSE_POLICY, 1, 1, 0, 0),
+	      "an IMA policy read from a file is always taken");
+	CHECK(!FROM_FILE(KERNEL_PURPOSE_X509_CERTIFICATE, 1, 1, 0, 0),
+	      "a certificate read from a file is not ruled on");
+	CHECK(!FROM_FILE(KERNEL_PURPOSE_UNKNOWN, 1, 1, 0, 0),
+	      "the unknown purpose the kernel names is not ruled on");
+}
+
 int main(void)
 {
 	printf("=== module purpose coverage ===\n");
@@ -131,6 +198,10 @@ int main(void)
 	test_other_purposes_are_not_modules();
 	test_every_purpose_this_kernel_sends_is_known();
 	test_a_later_purpose_is_not_known();
+	test_kernel_integrity_holds_in_every_mode();
+	test_firmware_is_policy();
+	test_strict_modules_is_policy();
+	test_purposes_outside_the_gate();
 
 	if (g_failures) {
 		fprintf(stderr, "\n%d check(s) failed\n", g_failures);

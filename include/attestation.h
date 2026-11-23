@@ -79,6 +79,16 @@ struct lota_report_header {
 #define LOTA_REPORT_FLAG_BENCH (1U << 11)
 
 /*
+ * The policy keys the daemon applies. Set with LOTA_REPORT_FLAG_ENFORCE only:
+ * a key the mode leaves inert is reported off.
+ */
+#define LOTA_REPORT_FLAG_STRICT_MMAP (1U << 12)
+#define LOTA_REPORT_FLAG_STRICT_EXEC (1U << 13)
+#define LOTA_REPORT_FLAG_STRICT_MODULES (1U << 14)
+#define LOTA_REPORT_FLAG_BLOCK_ANON_EXEC (1U << 15)
+#define LOTA_REPORT_FLAG_BLOCK_PTRACE (1U << 16)
+
+/*
  * Maximum size of TPMS_ATTEST structure returned by TPM2_Quote.
  * Contains: magic, type, qualifiedSigner, extraData (nonce),
  * clockInfo, firmwareVersion, and quote info (PCR selection + digest).

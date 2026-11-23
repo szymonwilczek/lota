@@ -72,8 +72,7 @@ static int parse_mode_strict(const char *value)
 	if (!value)
 		return -1;
 
-	if (strcmp(value, "monitor") == 0 || strcmp(value, "enforce") == 0 ||
-	    strcmp(value, "maintenance") == 0)
+	if (strcmp(value, "monitor") == 0 || strcmp(value, "enforce") == 0)
 		return 0;
 
 	return -1;
@@ -201,22 +200,20 @@ void config_init(struct lota_config *cfg)
 	set_str(cfg->bpf_path, sizeof(cfg->bpf_path),
 		"/usr/lib/lota/lota_lsm.bpf.o");
 	set_str(cfg->mode, sizeof(cfg->mode), "enforce");
-	cfg->strict_mmap = true;
 	/*
-	 * strict_exec and strict_modules require at least one
-	 * allow_verity entry (startup_policy.c::apply_startup_policy)
-	 * because both gates check the BPF allowlist before honouring
-	 * an exec / kernel_read_file. A fresh install has no
-	 * allow_verity entries until the operator runs the fs-verity
-	 * provisioning step, so defaulting either flag to true bricks
-	 * the agent on first start. Operators opt into strict mode by
-	 * setting strict_exec / strict_modules = true in
-	 * /etc/lota/lota.conf alongside the allow_verity list.
+	 * Policy is off until the operator sets it. A host that names no
+	 * key runs every title from execve, and the report says which
+	 * policy is on so an anti-cheat can require one.
+	 *
+	 * strict_exec and strict_modules also need an allow_verity entry
+	 * (startup_policy.c::apply_startup_policy): both gates check the
+	 * BPF allowlist, and a fresh install has none.
 	 */
+	cfg->strict_mmap = false;
 	cfg->strict_exec = false;
-	cfg->block_ptrace = true;
+	cfg->block_ptrace = false;
 	cfg->strict_modules = false;
-	cfg->block_anon_exec = true;
+	cfg->block_anon_exec = false;
 	cfg->seal_aik_auth = false;
 	cfg->seal_aik_auth_strict = false;
 	cfg->seal_persistent_primary = false;
@@ -802,7 +799,7 @@ static int apply_key(struct lota_config *cfg, const char *key,
 		if (parse_mode_strict(value) != 0) {
 			fprintf(stderr,
 				"%s:%d: invalid mode '%s' (valid: "
-				"monitor/enforce/maintenance)\n",
+				"monitor/enforce)\n",
 				filepath, lineno, value);
 			return -1;
 		}

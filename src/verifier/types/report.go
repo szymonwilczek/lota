@@ -83,6 +83,15 @@ const (
 	// FlagBench is set when the daemon runs with --bench and writes what it
 	// costs. Its policy is the same as without it. Logged, not a verdict.
 	FlagBench uint32 = 1 << 11
+
+	// The policy keys the daemon applies, set with FlagEnforce only.
+	// Logged, not a verdict: whether a host needs one is the relying
+	// party's call.
+	FlagStrictMmap    uint32 = 1 << 12
+	FlagStrictExec    uint32 = 1 << 13
+	FlagStrictModules uint32 = 1 << 14
+	FlagBlockAnonExec uint32 = 1 << 15
+	FlagBlockPtrace   uint32 = 1 << 16
 )
 
 // challenge capability flags (see: include/attestation.h)
@@ -138,6 +147,32 @@ const (
 )
 
 // returns a deterministic string for a result code
+// PolicyKeys names the policy keys a report header says the daemon applies,
+// in the order of their bits. A key outside enforce mode is not reported.
+func PolicyKeys(flags uint32) []string {
+	if flags&FlagEnforce == 0 {
+		return nil
+	}
+
+	keys := []struct {
+		flag uint32
+		name string
+	}{
+		{FlagStrictMmap, "strict_mmap"},
+		{FlagStrictExec, "strict_exec"},
+		{FlagStrictModules, "strict_modules"},
+		{FlagBlockAnonExec, "block_anon_exec"},
+		{FlagBlockPtrace, "block_ptrace"},
+	}
+	var names []string
+	for _, k := range keys {
+		if flags&k.flag != 0 {
+			names = append(names, k.name)
+		}
+	}
+	return names
+}
+
 func VerifyResultString(code uint32) string {
 	switch code {
 	case VerifyOK:

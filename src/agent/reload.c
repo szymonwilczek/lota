@@ -616,8 +616,6 @@ static void sync_config_snapshot(
 	memcpy(cfg->bpf_path, new_cfg->bpf_path, sizeof(cfg->bpf_path));
 	if (mode == LOTA_MODE_ENFORCE)
 		snprintf(cfg->mode, sizeof(cfg->mode), "enforce");
-	else if (mode == LOTA_MODE_MAINTENANCE)
-		snprintf(cfg->mode, sizeof(cfg->mode), "maintenance");
 	else
 		snprintf(cfg->mode, sizeof(cfg->mode), "monitor");
 
@@ -726,8 +724,7 @@ int agent_reload_config(const char *config_path, struct lota_config *cfg,
 	}
 
 	int new_mode = parse_mode(new_cfg->mode);
-	if (*mode == LOTA_MODE_ENFORCE && (new_mode == LOTA_MODE_MONITOR ||
-					   new_mode == LOTA_MODE_MAINTENANCE)) {
+	if (*mode == LOTA_MODE_ENFORCE && new_mode == LOTA_MODE_MONITOR) {
 		int auth_ret = verify_reload_downgrade_authorization_fd(
 			cfg_fd, cfg_path, cfg);
 		if (auth_ret < 0) {

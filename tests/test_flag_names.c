@@ -80,6 +80,19 @@ int main(void)
 
 	CHECK(names(LOTA_FLAG_BENCH, "BENCH"), "BENCH is named");
 
+	/* the policy a title reads off a token has to print as it reads */
+	CHECK(names(LOTA_FLAG_ENFORCE, "ENFORCE"), "ENFORCE is named");
+	CHECK(names(LOTA_FLAG_STRICT_MMAP, "STRICT_MMAP"),
+	      "STRICT_MMAP is named");
+	CHECK(names(LOTA_FLAG_STRICT_EXEC, "STRICT_EXEC"),
+	      "STRICT_EXEC is named");
+	CHECK(names(LOTA_FLAG_STRICT_MODULES, "STRICT_MODULES"),
+	      "STRICT_MODULES is named");
+	CHECK(names(LOTA_FLAG_BLOCK_ANON_EXEC, "BLOCK_ANON_EXEC"),
+	      "BLOCK_ANON_EXEC is named");
+	CHECK(names(LOTA_FLAG_BLOCK_PTRACE, "BLOCK_PTRACE"),
+	      "BLOCK_PTRACE is named");
+
 	CHECK(lota_flags_to_string(LOTA_FLAG_ATTESTED, buf, 2) ==
 		      LOTA_ERR_BUFFER_TOO_SMALL,
 	      "a buffer too small is refused rather than truncated silently");

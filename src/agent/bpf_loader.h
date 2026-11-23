@@ -235,7 +235,7 @@ int bpf_loader_consume(struct bpf_loader_ctx *ctx);
 /*
  * bpf_loader_set_mode - Set enforcement mode
  * @ctx: Loaded context
- * @mode: enum lota_mode value (MONITOR, ENFORCE, MAINTENANCE)
+ * @mode: enum lota_mode value (MONITOR, ENFORCE)
  *
  * Controls whether LSM hooks block or just monitor.
  *

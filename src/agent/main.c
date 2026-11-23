@@ -367,6 +367,10 @@ static int run_daemon(const struct run_daemon_params *params)
 	}
 
 	ipc_set_mode(&g_agent.ipc_ctx, (uint8_t)g_agent.mode);
+	ipc_set_policy(&g_agent.ipc_ctx,
+		       lota_status_policy_keys(strict_mmap, strict_exec,
+					       strict_modules, block_anon_exec,
+					       block_ptrace));
 	ipc_set_profiles(&g_agent.ipc_ctx, targets, target_count);
 	setup_container_listener(&g_agent.ipc_ctx, cfg);
 	setup_dbus(&g_agent.ipc_ctx);
@@ -884,8 +888,7 @@ int main(int argc, char *argv[])
 	 * unit to add --mode monitor, or who packages their own unit with a
 	 * weakened mode, would otherwise silently override the configured
 	 * enforce policy. Refuse to start in that case and require the
-	 * caller to acknowledge the downgrade explicitly. Maintenance and
-	 * monitor are both treated as weakenings of enforce.
+	 * caller to acknowledge the downgrade explicitly.
 	 */
 	if (opts.cli_mode_set && opts.config_file_mode == LOTA_MODE_ENFORCE &&
 	    g_agent.mode != LOTA_MODE_ENFORCE &&

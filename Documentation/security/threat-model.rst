@@ -344,8 +344,10 @@ Active threats
      - | PCR14 is OS-writable by the PC Client Profile.
        | Userspace cannot make that race impossible on every platform.
    * - Runtime image substitution
-     - | BPF LSM gates executable mmap and mprotect for protected processes
-         against the fs-verity allow-list.
+     - | With ``strict_mmap`` in enforce mode, BPF LSM gates executable mmap
+         and mprotect for protected processes against the fs-verity
+         allow-list. The key is off by default, and the token carries
+         ``LOTA_FLAG_STRICT_MMAP`` while it applies.
        | A bind or move mount that would shadow a trusted file is refused
          through both mount APIs, and the refusal is emitted on the event
          stream and counted like every other blocked hook.
@@ -358,11 +360,16 @@ Active threats
          the agent's own open of it, flagged by
          ``LOTA_FLAG_IMAGE_CONTENT_HASHED``. Only on a kernel-served
          filesystem, and only for a file no writer may replace: the running
-         executable, or, in enforce mode, a library the agent has pinned. A
+         executable, or a library the agent has pinned, in every mode. A
          refused write to a pinned library is counted and sent on the event
          stream, not left a bare ``EPERM``.
      - | Anonymous executable memory and JIT code are not measured as modules.
-       | Intended bound is W^X plus policy enforcement.
+       | Intended bound is W^X plus policy enforcement: ``block_anon_exec``
+         refuses it in a protected process, off by default and carried as
+         ``LOTA_FLAG_BLOCK_ANON_EXEC``.
+       | Without ``strict_mmap`` a protected process maps any library; the
+         re-measurement still folds what it maps, so an unlisted library is
+         in the measurement rather than refused.
        | Memory with no file behind it, such as the memfd Wine maps Windows
          images out of, takes neither road: no digest can exist for it and no
          guard refuses a write through an earlier mapping. It is reported as
@@ -389,7 +396,7 @@ Active threats
          ``__ptrace_may_access`` where available. Both refuse a read and an
          attach alike, so nothing reads a protected process's ``/proc`` or
          attaches a debugger to it.
-       | ``block_ptrace``, on by default, extends the refusal to an attach on
+       | ``block_ptrace``, off by default, extends the refusal to an attach on
          any other task.
      - | Reading another process's ``/proc`` is left to the kernel outside the
          protected set. Same-uid access to it is ordinary, ``yama``'s
@@ -430,16 +437,18 @@ Active threats
    * - Kernel module or memory-only load
      - | Kernel lockdown, module signature enforcement, and BPF LSM gates reject
          unsafe load paths.
-       | In enforce mode a module or firmware load also stands on the kernel
-         integrity baseline: module signatures enforced and lockdown at
+       | In every mode a module or firmware load also stands on the kernel
+         integrity baseline, and kexec is refused: module signatures enforced and lockdown at
          integrity or above. The startup hardening gate reads both out of
          sysfs and refuses to start the agent without them, and neither can
          fall while the kernel runs, so a running agent has already
          established the baseline and the hook reads its verdict.
-       | With ``strict_modules``, a module load has to name a file in the
-         fs-verity allowlist, in either form the kernel accepts: the image
-         itself, and the compressed file ``modprobe`` hands the kernel on a
-         distribution that ships ``.ko.xz`` or ``.ko.zst``. The allowlist
+       | With ``strict_modules`` in enforce mode, a module or firmware load
+         has to name a file in the fs-verity allowlist, and one handed over
+         from memory is refused. A module counts in either form the kernel
+         accepts: the image itself, and the compressed file ``modprobe``
+         hands the kernel on a distribution that ships ``.ko.xz`` or
+         ``.ko.zst``. The allowlist
          therefore has to name the compressed files, since that is what such a
          host presents. A purpose the object does not recognise -- what a later
          kernel adds -- is refused.
