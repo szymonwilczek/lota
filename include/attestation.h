@@ -75,6 +75,9 @@ struct lota_report_header {
  */
 #define LOTA_REPORT_FLAG_IMA_APPRAISAL (1U << 10)
 
+/* The daemon runs with --bench. Its policy is the same as without it. */
+#define LOTA_REPORT_FLAG_BENCH (1U << 11)
+
 /*
  * Maximum size of TPMS_ATTEST structure returned by TPM2_Quote.
  * Contains: magic, type, qualifiedSigner, extraData (nonce),

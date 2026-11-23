@@ -175,6 +175,9 @@ struct lota_config {
 	bool strict_modules;
 	bool block_anon_exec;
 
+	/* the agent writes what it costs; read at startup only */
+	bool bench;
+
 	/* Attestation */
 	int attest_interval; /* 0 = one-shot */
 	uint32_t aik_ttl; /* seconds, 0 = default */

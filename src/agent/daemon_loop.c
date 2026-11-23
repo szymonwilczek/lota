@@ -11,10 +11,14 @@
 #include <unistd.h>
 #include <sys/types.h>
 
+#include "../../include/lota.h"
 #include "../../include/lota_ipc.h"
 #include "journal.h"
 #include "reload.h"
 #include "sdnotify.h"
+#include "bench_bpf.h"
+#include "bench_protected.h"
+#include "bench_snapshot.h"
 #include "bpf_loader.h"
 #include "dbus.h"
 #include "ipc.h"
@@ -140,16 +144,56 @@ static void agent_reload_publishers(struct agent_loop_ctx *ctx)
 	}
 }
 
+/* logged when it changes, not every second */
+static void bench_poll(struct agent_loop_ctx *ctx, int *last_err)
+{
+	static struct bench_bpf bpf;
+	static struct bench_pid pids[LOTA_MAX_PROTECTED_PIDS];
+	static struct bench_protected prot;
+	struct bench_protected_sum sum;
+	uint64_t now = monotonic_ns();
+	bool have_bpf;
+	int ret, n;
+
+	if (!bench_due(ctx->bench, now))
+		return;
+
+	have_bpf =
+		bench_bpf_sample(ctx->bpf_ctx, ctx->bench->stats_fd >= 0, &bpf);
+	n = bench_bpf_protected(ctx->bpf_ctx, pids, LOTA_MAX_PROTECTED_PIDS);
+	if (n >= 0)
+		bench_protected_sample(
+			&prot, pids, (size_t)n,
+			ctx->bench->seq % LOTA_BENCH_PSS_EVERY == 0, &sum);
+	ret = bench_write(ctx->bench, now, have_bpf ? &bpf : NULL,
+			  n >= 0 ? &sum : NULL);
+	if (ret == -EMSGSIZE || ret == *last_err)
+		return;
+	if (ret < 0)
+		lota_warn("Bench: cannot write %s: %s", LOTA_BENCH_PATH,
+			  strerror(-ret));
+	else
+		lota_info("Bench: writing %s again", LOTA_BENCH_PATH);
+	*last_err = ret;
+}
+
 int agent_run_event_loop(struct agent_loop_ctx *ctx)
 {
 	struct epoll_event events[16];
 	uint64_t last_drops = 0;
 	uint64_t last_drop_poll_ns = 0;
+	int bench_err = 0;
 
 	while (*ctx->running) {
 		int timeout = -1;
 		if (ctx->wd_enabled && ctx->wd_usec > 0)
 			timeout = (int)(ctx->wd_usec / 2000);
+		if (ctx->bench) {
+			int due = bench_timeout_ms(ctx->bench, monotonic_ns());
+
+			if (timeout < 0 || due < timeout)
+				timeout = due;
+		}
 
 		int nfds = epoll_wait(ctx->epoll_fd, events, 16, timeout);
 
@@ -161,9 +205,12 @@ int agent_run_event_loop(struct agent_loop_ctx *ctx)
 		}
 
 		poll_ringbuf_drops(ctx, &last_drops, &last_drop_poll_ns);
+		if (ctx->bench)
+			bench_poll(ctx, &bench_err);
 
-		if (nfds == 0 && ctx->wd_enabled) {
-			watchdog_beat();
+		if (nfds == 0) {
+			if (ctx->wd_enabled)
+				watchdog_beat();
 			continue;
 		}
 

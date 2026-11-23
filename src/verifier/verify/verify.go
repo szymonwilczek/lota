@@ -980,6 +980,10 @@ func (v *Verifier) VerifyReportFrom(challengeID, remoteAddr string, reportData [
 		clog.Warn("no module security features detected")
 	}
 
+	if report.Header.Flags&types.FlagBench != 0 {
+		clog.Info("agent runs with --bench")
+	}
+
 	clog.Info("verification successful")
 
 	// Record which kernel image this device reported, and log once when it

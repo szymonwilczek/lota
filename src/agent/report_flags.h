@@ -7,6 +7,7 @@
  * ENFORCE alone. Both bits describe the enforcement daemon, which holds the
  * LSM, not the process building the report: a daemon that does not answer
  * enforces nothing, and enforce mode with nothing loaded blocks nothing.
+ * LOTA_REPORT_FLAG_BENCH rides along, as it too is the daemon's.
  *
  * Copyright (C) 2026 Szymon Wilczek
  */
@@ -32,8 +33,12 @@ report_enforcement_flags(const struct enforcement_view *v)
 {
 	uint32_t flags = 0;
 
-	if (!v || !v->answered || !(v->status_flags & LOTA_STATUS_BPF_LOADED))
+	if (!v || !v->answered)
 		return 0;
+	if (v->status_flags & LOTA_STATUS_BENCH)
+		flags |= LOTA_REPORT_FLAG_BENCH;
+	if (!(v->status_flags & LOTA_STATUS_BPF_LOADED))
+		return flags;
 
 	flags |= LOTA_REPORT_FLAG_BPF_ACTIVE;
 	if (v->mode == LOTA_MODE_ENFORCE)

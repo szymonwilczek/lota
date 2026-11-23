@@ -179,6 +179,7 @@ static int load_config_into_options(struct cli_options *opts,
 	opts->block_ptrace = cfg->block_ptrace;
 	opts->strict_modules = cfg->strict_modules;
 	opts->block_anon_exec = cfg->block_anon_exec;
+	opts->bench = cfg->bench;
 	opts->attest_interval = cfg->attest_interval;
 	opts->aik_ttl = cfg->aik_ttl;
 
@@ -291,6 +292,7 @@ int cli_parse(int argc, char **argv, struct cli_options *opts,
 		{ "test-ipc", no_argument, NULL, 'c' },
 		{ "test-signed", no_argument, NULL, 'S' },
 		{ "shutdown", no_argument, NULL, 1001 },
+		{ "status", no_argument, NULL, 1046 },
 		{ "terminate-protected", required_argument, NULL, 1042 },
 		{ "force", no_argument, NULL, 1043 },
 		{ "export-policy", no_argument, NULL, 'E' },
@@ -329,6 +331,7 @@ int cli_parse(int argc, char **argv, struct cli_options *opts,
 		{ "block-ptrace", no_argument, NULL, 'P' },
 		{ "strict-modules", no_argument, NULL, 'J' },
 		{ "block-anon-exec", no_argument, NULL, 'X' },
+		{ "bench", no_argument, NULL, 1045 },
 		{ "protect-pid", required_argument, NULL, 'R' },
 		{ "trust-lib", required_argument, NULL, 'L' },
 		{ "allow-verity", required_argument, NULL, 'A' },
@@ -385,6 +388,9 @@ int cli_parse(int argc, char **argv, struct cli_options *opts,
 			break;
 		case 1001:
 			opts->shutdown_flag = 1;
+			break;
+		case 1046:
+			opts->status_flag = 1;
 			break;
 		case 'E':
 			opts->export_policy_flag = 1;
@@ -444,6 +450,9 @@ int cli_parse(int argc, char **argv, struct cli_options *opts,
 			break;
 		case 1041:
 			opts->publisher_name = optarg;
+			break;
+		case 1045:
+			opts->bench = true;
 			break;
 		case 1044:
 			if (strcmp(optarg, "session") == 0) {
@@ -774,6 +783,7 @@ int cli_dump_config(struct cli_options *opts, struct lota_config *cfg)
 	cfg->block_ptrace = opts->block_ptrace;
 	cfg->strict_modules = opts->strict_modules;
 	cfg->block_anon_exec = opts->block_anon_exec;
+	cfg->bench = opts->bench;
 	cfg->attest_interval = opts->attest_interval;
 	cfg->aik_ttl = opts->aik_ttl;
 	cfg->aik_handle = g_agent.tpm_ctx.aik_handle;

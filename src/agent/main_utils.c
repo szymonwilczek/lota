@@ -17,6 +17,7 @@
 #include "../../include/lota_ipc.h"
 #include "agent.h"
 #include "attest.h"
+#include "bench.h"
 #include "config.h"
 #include "container_watch.h"
 #include "daemon.h"
@@ -122,6 +123,11 @@ void print_usage(const char *prog, const char *default_bpf_path,
 	       "testing)\n");
 	printf("  --shutdown        Request graceful shutdown via "
 	       "authenticated IPC\n");
+	printf("  --status          Print the running agent's mode, flags "
+	       "and\n"
+	       "                    attestation counts, as any caller of "
+	       "the\n"
+	       "                    socket sees them, and exit\n");
 	printf("  --terminate-protected PID\n");
 	printf("                    End a process that asked to be protected, "
 	       "which\n");
@@ -283,6 +289,11 @@ void print_usage(const char *prog, const char *default_bpf_path,
 	       "--allow-verity)\n");
 	printf("  --block-anon-exec Block anonymous executable mappings\n");
 	printf("                    (no effect unless --mode enforce)\n");
+	printf("  --bench           Write the agent's cost to " LOTA_BENCH_PATH
+	       "\n");
+	printf("                    each second. Changes no policy; the status "
+	       "word\n");
+	printf("                    and the attestation report carry it\n");
 	printf("  --protect-pid PID Seed this daemon's protected set with PID "
 	       "(ptrace\n");
 	printf("                    blocked). A startup option, not a request "

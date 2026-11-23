@@ -2,7 +2,7 @@
 /*
  * LOTA Agent - Diagnostic and admin one-shot dispatch
  *
- * Collects every short-lived CLI mode (--shutdown, --dump-config,
+ * Collects every short-lived CLI mode (--shutdown, --status, --dump-config,
  * --gen-signing-key, --sign-policy, --verify-policy, --test-tpm,
  * --test-iommu, --test-ipc, --test-signed, --export-policy, --attest)
  * behind one entry point so main() never sees the per-flag branching.

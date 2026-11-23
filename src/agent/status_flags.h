@@ -32,6 +32,7 @@ struct agent_boot_state {
 	bool tpm_lockout; /* the TPM is in dictionary-attack lockout */
 	bool ringbuf_drops; /* the event stream lost records */
 	bool kernel_appraisal; /* IMA appraises every exec */
+	bool bench; /* started with --bench */
 };
 
 static inline uint32_t agent_status_flags(const struct agent_boot_state *st)
@@ -55,6 +56,8 @@ static inline uint32_t agent_status_flags(const struct agent_boot_state *st)
 		flags |= LOTA_STATUS_RINGBUF_DROPS;
 	if (st->kernel_appraisal)
 		flags |= LOTA_STATUS_KERNEL_APPRAISAL;
+	if (st->bench)
+		flags |= LOTA_STATUS_BENCH;
 
 	return flags;
 }

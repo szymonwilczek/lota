@@ -51,6 +51,7 @@
 #include "../../include/lota_token_quote_nonce.h"
 #include "bpf_loader.h"
 #include "lota_endian.h"
+#include "socket_watch.h"
 
 #define MAX_EVENTS 64
 #define MAX_CONNECTED_CLIENTS 2048
@@ -3425,11 +3426,19 @@ int ipc_recheck_socket(struct ipc_context *ctx)
 		return -EINVAL;
 
 	if (ctx->sock_watch_fd >= 0) {
+		bool named = false;
+
 		while ((len = read(ctx->sock_watch_fd, buf, sizeof(buf))) > 0)
-			;
-		if (len < 0 && errno != EAGAIN && errno != EWOULDBLOCK)
+			named |= socket_events_name(buf, (size_t)len,
+						    LOTA_IPC_SOCKET_NAME);
+		if (len < 0 && errno != EAGAIN && errno != EWOULDBLOCK) {
 			lota_warn("socket watch read failed: %s",
 				  strerror(errno));
+			named = true;
+		}
+		/* the directory also holds --bench's file, rewritten each second */
+		if (!named)
+			return 0;
 	}
 
 	if (!ipc_socket_was_replaced(LOTA_IPC_SOCKET_PATH, ctx->listen_dev,

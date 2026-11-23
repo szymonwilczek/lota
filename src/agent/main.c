@@ -16,6 +16,7 @@
  *   --daemon        Run as daemon
  */
 #include <errno.h>
+#include <grp.h>
 #include <signal.h>
 #include <stdbool.h>
 #include <stdio.h>
@@ -28,6 +29,7 @@
 #include "../../include/lota.h"
 #include "agent.h"
 #include "attest.h"
+#include "bench_bpf.h"
 #include "bpf_loader.h"
 #include "cli.h"
 #include "config.h"
@@ -73,6 +75,7 @@ struct run_daemon_params {
 	bool strict_modules;
 	bool block_anon_exec;
 	bool allow_mutable_rootfs;
+	bool bench;
 	const char *config_path;
 	struct lota_config *cfg;
 };
@@ -174,6 +177,7 @@ static int run_daemon(const struct run_daemon_params *params)
 	block_ptrace = params->block_ptrace;
 	strict_modules = params->strict_modules;
 	block_anon_exec = params->block_anon_exec;
+	boot_state.bench = params->bench;
 	config_path = params->config_path;
 	cfg = params->cfg;
 
@@ -655,6 +659,29 @@ static int run_daemon(const struct run_daemon_params *params)
 	sdnotify_status("Monitoring, mode=%s", mode_to_string(g_agent.mode));
 	lota_info("Monitoring binary executions (event-driven)");
 
+	/* the agent's counters go to a fixed file a lota member reads */
+	static struct bench_state bench;
+	struct bench_state *bench_ctx = NULL;
+
+	if (boot_state.bench) {
+		struct group *grp = getgrnam("lota");
+
+		if (!grp)
+			lota_warn("Bench: group 'lota' not found, %s is "
+				  "readable by root only",
+				  LOTA_BENCH_PATH);
+		bench_state_init(&bench, grp ? grp->gr_gid : 0, bench_now_ns());
+		bench.stats_fd = bench_bpf_enable_stats();
+		if (bench.stats_fd < 0)
+			lota_warn("Bench: BPF run time is not counted: %s",
+				  strerror(-bench.stats_fd));
+		bench_ctx = &bench;
+		lota_info("Bench: writing %s every %d ms", LOTA_BENCH_PATH,
+			  LOTA_BENCH_INTERVAL_MS);
+	} else {
+		bench_remove();
+	}
+
 	struct agent_loop_ctx loop_ctx = {
 		.epoll_fd = epoll_fd,
 		.sfd = sfd,
@@ -679,6 +706,7 @@ static int run_daemon(const struct run_daemon_params *params)
 		.dbus_ctx = g_agent.dbus_ctx,
 		.bpf_ctx = &g_agent.bpf_ctx,
 		.container_watch = &g_agent.container_watch,
+		.bench = bench_ctx,
 		.running = &g_agent.running,
 	};
 	/* task_kill refuses systemd's watchdog kill; supervise from inside */
@@ -695,6 +723,11 @@ static int run_daemon(const struct run_daemon_params *params)
 	}
 
 	ret = agent_run_event_loop(&loop_ctx);
+	if (bench_ctx) {
+		bench_remove();
+		if (bench.stats_fd >= 0)
+			close(bench.stats_fd);
+	}
 
 	watchdog_stop();
 
@@ -928,6 +961,7 @@ int main(int argc, char *argv[])
 		.strict_modules = opts.strict_modules,
 		.block_anon_exec = opts.block_anon_exec,
 		.allow_mutable_rootfs = opts.insecure_allow_mutable_rootfs != 0,
+		.bench = opts.bench,
 		.config_path = opts.config_path,
 		.cfg = cfg,
 	};
