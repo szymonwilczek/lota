@@ -91,6 +91,21 @@ int pidfile_create(const char *path);
 void pidfile_remove(const char *path, int fd);
 
 /*
+ * Wait until no process holds the PID file's lock.
+ *
+ * The daemon keeps its lock until it has finished shutting down, so a
+ * caller that asked it to stop learns here when it is gone.
+ *
+ * @path:       PID file path (NULL for the shipped default)
+ * @timeout_ms: how long to wait for the holder
+ *
+ * Returns: 0 when nothing holds the lock or the file does not exist,
+ *          -ETIMEDOUT if it is still held after @timeout_ms,
+ *          negative errno on other failures.
+ */
+int pidfile_wait_released(const char *path, unsigned int timeout_ms);
+
+/*
  * Whether a SIGHUP has been taken since the last time this was asked,
  * and clearing it in the same call.
  *

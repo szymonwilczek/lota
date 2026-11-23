@@ -197,7 +197,10 @@ The trade-off is that ``systemctl restart lota-agent`` does **not** bring the
 host back the way it does for other units. Stopping works: ``ExecStop`` is
 ``/usr/bin/lota-agent --shutdown``, which sends a privileged IPC command that
 exits the daemon loop cleanly, and a caller running as the agent's own uid is
-authorised on a default install. What does not work is the *start* half.
+authorised on a default install. ``--shutdown`` returns only once the daemon
+has exited, so the unit is stopped when ``systemctl`` says it is. What does not
+work is the *start* half: it is refused with exit 78, and the unit stays
+failed until the reboot.
 
 Stopping the agent poisons PCR 14, deliberately. The boot commitment cannot be
 re-extended once spent, so an agent started again in the same boot refuses at

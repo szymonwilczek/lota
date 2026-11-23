@@ -20,6 +20,7 @@
 #include "../../include/lota_ipc.h"
 #include "agent.h"
 #include "attest.h"
+#include "daemon.h"
 #include "enroll.h"
 #include "io_utils.h"
 #include "main_utils.h"
@@ -27,6 +28,12 @@
 #include "terminate_report.h"
 #include "test_servers.h"
 #include "tpm.h"
+
+/*
+ * Below the unit's stop timeout, so systemd sees the daemon gone before it
+ * gives up on the stop.
+ */
+#define SHUTDOWN_WAIT_MS 60000
 
 static int ipc_request_shutdown(void)
 {
@@ -210,6 +217,26 @@ int diagnostics_dispatch(struct cli_options *opts, struct lota_config *cfg)
 				strerror(-sret));
 			return 1;
 		}
+
+		/*
+		 * the daemon answers before it has poisoned PCR14 and unloaded
+		 * its LSM; a supervisor that starts it again before then starts
+		 * a second instance beside the first
+		 */
+		sret = pidfile_wait_released(opts->pid_file_path,
+					     SHUTDOWN_WAIT_MS);
+		if (sret < 0) {
+			fprintf(stderr,
+				"The agent accepted the shutdown but is still "
+				"running after %d s (%s); its journal says "
+				"where it stopped\n",
+				SHUTDOWN_WAIT_MS / 1000, strerror(-sret));
+			return 1;
+		}
+		fprintf(stderr,
+			"Agent stopped. PCR14 is spent, so this host attests "
+			"again only after a reboot; starting the agent before "
+			"then is refused\n");
 		return 0;
 	}
 

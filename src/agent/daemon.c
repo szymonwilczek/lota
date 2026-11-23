@@ -23,6 +23,7 @@
 #include <sys/file.h>
 #include <sys/stat.h>
 #include <sys/types.h>
+#include <time.h>
 #include <unistd.h>
 
 /*
@@ -328,6 +329,48 @@ void pidfile_remove(const char *path, int fd)
 
 	if (fd >= 0)
 		close(fd);
+}
+
+#define PIDFILE_WAIT_STEP_MS 50
+
+int pidfile_wait_released(const char *path, unsigned int timeout_ms)
+{
+	const struct timespec step = {
+		.tv_nsec = PIDFILE_WAIT_STEP_MS * 1000000L,
+	};
+	int flags = O_RDONLY | O_CLOEXEC;
+	unsigned int waited = 0;
+	int fd;
+	int ret;
+
+#ifdef O_NOFOLLOW
+	flags |= O_NOFOLLOW;
+#endif
+	fd = open(daemon_pidfile_path(path), flags);
+	if (fd < 0)
+		return errno == ENOENT ? 0 : -errno;
+
+	for (;;) {
+		if (flock(fd, LOCK_SH | LOCK_NB) == 0) {
+			ret = 0;
+			break;
+		}
+		if (errno == EINTR)
+			continue;
+		if (errno != EWOULDBLOCK) {
+			ret = -errno;
+			break;
+		}
+		if (waited >= timeout_ms) {
+			ret = -ETIMEDOUT;
+			break;
+		}
+		nanosleep(&step, NULL);
+		waited += PIDFILE_WAIT_STEP_MS;
+	}
+
+	close(fd);
+	return ret;
 }
 
 bool daemon_reload_pending(void)
