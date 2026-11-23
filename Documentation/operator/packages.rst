@@ -117,10 +117,13 @@ State the packages own, and state they leave alone
 ``0700``; ``lota-verifier`` owns ``/var/lib/lota``, also ``0700``, so
 ``rpm -V`` reports a changed mode.
 
+``lota-agent`` also owns ``/etc/lota``, ``0755``, so ``lota.conf`` can be
+written on a fresh host; no package owns ``lota.conf`` itself.
+
 The files inside are **not** owned: the AIK authorisation value and its
 sealed form, the AIK metadata, the monotonic clock state and the publisher
 profiles. They are the machine's identity and survive removal and reinstall,
-as do ``/etc/lota`` and the TPM's persistent objects. To hand the machine
+as do the files in ``/etc/lota`` and the TPM's persistent objects. To hand the machine
 on or re-enrol from scratch, remove them by hand.
 
 Removing ``lota-agent`` first stops the daemon, its socket and the
