@@ -412,9 +412,9 @@ Active threats
          the kernel would hand the tracer the child as well.
        | An instance is the tree one protected process started. Inside it the
          refusal does not apply and every access is recorded: the wineserver
-         reads and writes the memory of each process it hosts. Nothing outside
-         an instance reaches into it, another instance included. The agent
-         adds every process of an instance to the protected set, so the
+         reads and writes the memory of each process it hosts. No ptrace or
+         ``/proc`` access from outside reaches into an instance, another
+         instance included. The agent adds every process of an instance to the protected set, so the
          token names it and the measurement covers it; it reads the
          membership through a pidfd before and after the start time, so a
          reused PID is never added.
@@ -598,8 +598,16 @@ Explicit non-goals
   layer N.
 * Measuring anonymous executable memory as a trusted module set.
 * Guarding data a protected process shares with an unprotected one. Memory it
-  maps executable is recorded with who could write it; plain data in a shared
-  segment is neither guarded nor recorded.
+  maps executable from such a segment is flagged writable, without naming who
+  holds it or recording a store into it; plain data in a shared segment is
+  neither guarded nor recorded.
+* Guarding a title from a wineserver started outside its instance. The server
+  holds the sections it hands out, so whatever reaches the server can write code
+  the title maps from them. The server is absent from the token's protected
+  PIDs and those sections are flagged writable; the relying party judges that.
+* Recording how a title was started. Arguments, the working directory, inherited
+  descriptors and environment that loads no code stay out of the token, which
+  names what runs and not what it was told to do.
 * Making PCR14 immutable from userspace on platforms where the TPM profile
   leaves it OS-writable.
 * Replacing operator key management, CA key ceremony, or release governance.
