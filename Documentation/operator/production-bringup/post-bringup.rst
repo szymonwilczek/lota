@@ -476,6 +476,11 @@ host::
     sudo lota-agent --add-publisher ca.studio.example --ca-port 8444 \
         --ca-cert /etc/lota/studio.pem --publisher-name studio
 
+The section is written with ``reporting = session``: reports leave only while a
+title of that publisher's runs. An operator-owned host that should report
+whether or not anything is running passes ``--reporting continuous``, which is
+what ``lota-install --ca-server`` writes for the fleet it enrols into.
+
 **The anchor has to live where the units can read it.** ``--add-publisher``
 reads the file to derive the publisher's identity, but the two units are what
 read it from then on, and both run with ``PrivateTmp=yes`` -- so an anchor

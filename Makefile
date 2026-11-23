@@ -1512,6 +1512,7 @@ $(TEST_HOOK): TEST_LDLIBS := -ldl
 
 TEST_INSTALLER := $(addprefix $(BUILD_DIR)/test_, \
 	installer_checkpoint \
+	installer_fleet_profile \
 	installer_trust_key \
 )
 $(TEST_INSTALLER): $(TEST_INSTALLER_SRCS)

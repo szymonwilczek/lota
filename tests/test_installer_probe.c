@@ -1211,7 +1211,7 @@ static void test_conf_profile_count(void)
 static void test_selfcheck_plan(void)
 {
 	TEST("a verifier and no publishers is one round against it");
-	if (probe_selfcheck_plan("verifier.example", 0) !=
+	if (probe_selfcheck_plan("verifier.example", 0, false) !=
 	    SELFCHECK_ONE_ROUND) {
 		FAIL("named verifier did not produce a round");
 		return;
@@ -1219,15 +1219,16 @@ static void test_selfcheck_plan(void)
 	PASS();
 
 	TEST("no verifier named leaves the round to the first title");
-	if (probe_selfcheck_plan(NULL, 0) != SELFCHECK_SKIP_NO_VERIFIER ||
-	    probe_selfcheck_plan("", 0) != SELFCHECK_SKIP_NO_VERIFIER) {
+	if (probe_selfcheck_plan(NULL, 0, false) !=
+		    SELFCHECK_SKIP_NO_VERIFIER ||
+	    probe_selfcheck_plan("", 0, false) != SELFCHECK_SKIP_NO_VERIFIER) {
 		FAIL("an unnamed verifier was treated as named");
 		return;
 	}
 	PASS();
 
 	TEST("configured publishers are the target list, so no verifier is named");
-	if (probe_selfcheck_plan("verifier.example", 5) !=
+	if (probe_selfcheck_plan("verifier.example", 5, false) !=
 	    SELFCHECK_PUBLISHERS_REPORT) {
 		FAIL("the self-check still names one verifier");
 		return;
@@ -1235,8 +1236,169 @@ static void test_selfcheck_plan(void)
 	PASS();
 
 	TEST("publishers decide even when no verifier was given");
-	if (probe_selfcheck_plan(NULL, 5) != SELFCHECK_PUBLISHERS_REPORT) {
+	if (probe_selfcheck_plan(NULL, 5, false) !=
+	    SELFCHECK_PUBLISHERS_REPORT) {
 		FAIL("a host with publishers was told a title would do it");
+		return;
+	}
+	PASS();
+
+	/*
+	 * A fleet install records its verifier as a profile, and the loop is
+	 * what reports to it from then on: a one-shot round proves a process
+	 * that does not run after the installer exits.
+	 */
+	TEST("the fleet profile is proven by the loop that reports to it");
+	if (probe_selfcheck_plan("verifier.example", 1, true) !=
+	    SELFCHECK_LOOP_REPORTS) {
+		FAIL("the fleet verifier was not waited on through the loop");
+		return;
+	}
+	PASS();
+
+	TEST("a fleet profile without a verifier has nobody to report to");
+	if (probe_selfcheck_plan(NULL, 1, true) !=
+	    SELFCHECK_PUBLISHERS_REPORT) {
+		FAIL("a token-only fleet was waited on");
+		return;
+	}
+	PASS();
+}
+
+/*
+ * A fleet install enrolled with the operator's CA and wrote nothing into
+ * lota.conf, so after the reboot the loop had no target and the publisher
+ * it had enrolled with was invisible to the daemon.
+ * Whether the anchor is recorded is read from each profile's ca_cert.
+ */
+static void test_conf_profile_anchor(void)
+{
+	static const char conf[] = "log_level = debug\n"
+				   "ca_cert = /etc/lota/top.pem\n"
+				   "[profile \"pubA\"]\n"
+				   "ca = ca.a.example\n"
+				   "ca_cert = /etc/lota/a.pem\n"
+				   "[profile \"pubB\"]\n"
+				   "# ca_cert = /etc/lota/commented.pem\n"
+				   "ca-cert = /etc/lota/b.pem  \n"
+				   "[profile \"pubC\"]\n"
+				   "ca = ca.c.example\n";
+	char out[256];
+
+	TEST("each profile's anchor is read from its own section");
+	if (probe_conf_buf_profile_anchor(conf, 0, out, sizeof(out)) != 1 ||
+	    strcmp(out, "/etc/lota/a.pem") != 0) {
+		FAIL("first profile's anchor");
+		return;
+	}
+	if (probe_conf_buf_profile_anchor(conf, 1, out, sizeof(out)) != 1 ||
+	    strcmp(out, "/etc/lota/b.pem") != 0) {
+		FAIL("hyphenated key, comment or trailing blank");
+		return;
+	}
+	PASS();
+
+	TEST("a profile without an anchor, or past the last, has none");
+	if (probe_conf_buf_profile_anchor(conf, 2, out, sizeof(out)) != 0 ||
+	    probe_conf_buf_profile_anchor(conf, 3, out, sizeof(out)) != 0 ||
+	    probe_conf_buf_profile_anchor(NULL, 0, out, sizeof(out)) != 0) {
+		FAIL("an anchor was invented");
+		return;
+	}
+	PASS();
+
+	TEST("the top-level anchor is not a profile's");
+	if (probe_conf_buf_profile_anchor("ca_cert = /etc/lota/top.pem\n", 0,
+					  out, sizeof(out)) != 0) {
+		FAIL("top-level key read as a profile");
+		return;
+	}
+	PASS();
+}
+
+/*
+ * The loop's status names how many publishers it attested to.
+ * Until it has picked up the profile the installer wrote, that count is
+ * short of the profiles that report continuously, so a status left over
+ * from before the reload is not taken for the fleet's.
+ */
+static void test_conf_continuous_count(void)
+{
+	TEST("only continuous profiles with a verifier are counted");
+	if (probe_conf_buf_continuous_count("[profile \"session\"]\n"
+					    "verifier = v.session.example\n"
+					    "[profile \"fleet\"]\n"
+					    "reporting = continuous\n"
+					    "verifier = v.fleet.example\n"
+					    "[profile \"tokens\"]\n"
+					    "reporting = continuous\n"
+					    "verifier = none\n"
+					    "[profile \"fleet2\"]\n"
+					    "verifier = v.fleet2.example\n"
+					    "reporting = continuous\n") != 2) {
+		FAIL("wrong count");
+		return;
+	}
+	PASS();
+
+	TEST("top-level keys are not a profile");
+	if (probe_conf_buf_continuous_count("reporting = continuous\n"
+					    "verifier = v.example\n") != 0 ||
+	    probe_conf_buf_continuous_count(NULL) != 0) {
+		FAIL("false positive");
+		return;
+	}
+	PASS();
+}
+
+static void test_attest_status_covers(void)
+{
+	TEST("an attested status covering every publisher is accepted");
+	if (!probe_attest_status_covers(
+		    "Attested (1 publisher), valid until 1700000000", NULL,
+		    1) ||
+	    !probe_attest_status_covers(
+		    "Attested (3 publishers), valid until 1700000000", NULL,
+		    2)) {
+		FAIL("attested status refused");
+		return;
+	}
+	PASS();
+
+	TEST("a status short of the expected count is not the fleet's");
+	if (probe_attest_status_covers(
+		    "Attested (1 publisher), valid until 1700000000", NULL,
+		    2) ||
+	    probe_attest_status_covers("Idle: no publisher configured", NULL,
+				       1) ||
+	    probe_attest_status_covers("Attestation incomplete", NULL, 1) ||
+	    probe_attest_status_covers("Attested (x publishers)", NULL, 1) ||
+	    probe_attest_status_covers("", NULL, 1) ||
+	    probe_attest_status_covers(NULL, NULL, 1)) {
+		FAIL("unattested status accepted");
+		return;
+	}
+	PASS();
+
+	/*
+	 * A host that already attested to one publisher reads the same count
+	 * after the reload that swaps it for the fleet's, until the loop has
+	 * taken the reload: only a status other than the one read before it
+	 * is the fleet's round.
+	 */
+	TEST("the status from before the reload is not taken for a new round");
+	if (probe_attest_status_covers(
+		    "Attested (1 publisher), valid until 1700000000",
+		    "Attested (1 publisher), valid until 1700000000", 1)) {
+		FAIL("stale status accepted");
+		return;
+	}
+	if (!probe_attest_status_covers(
+		    "Attested (1 publisher), valid until 1700000300",
+		    "Attested (1 publisher), valid until 1700000000", 1) ||
+	    !probe_attest_status_covers(
+		    "Attested (1 publisher), valid until 1700000300", "", 1)) {
+		FAIL("new round refused");
 		return;
 	}
 	PASS();
@@ -1528,6 +1690,9 @@ int main(void)
 	test_conf_key();
 	test_conf_profile_count();
 	test_selfcheck_plan();
+	test_conf_profile_anchor();
+	test_conf_continuous_count();
+	test_attest_status_covers();
 	test_esrt_present();
 	test_fstype_magic_mapping();
 	test_fs_verity_capability();

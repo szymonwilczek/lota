@@ -121,6 +121,37 @@ check "the section is written into the empty file" \
 check "the config the command wrote loads" loads "$conf"
 [[ $rc -eq 0 ]] || echo "  reported: $out"
 
+# An operator-owned host reports whether or not a title runs:
+# a fleet verifier that hears only during a session hears nothing.
+fleet_pem=$(anchor fleet)
+conf="$WORK_DIR/fleet.conf"
+: >"$conf"
+
+rc=0
+out=$("$AGENT_BIN" --add-publisher ca.fleet.example \
+	           --ca-cert "$fleet_pem" --publisher-name fleet \
+	           --server verifier.fleet.example --reporting continuous \
+	           --config "$conf" 2>&1) || rc=$?
+check "a continuous publisher is added" test "$rc" -eq 0
+check "the section reports continuously" \
+      has_line "$conf" 'reporting = continuous'
+check "the config the command wrote loads" loads "$conf"
+[[ $rc -eq 0 ]] || echo "  reported: $out"
+
+# A typo must not quietly fall back to session reporting.
+typo_pem=$(anchor typo)
+conf="$WORK_DIR/typo.conf"
+: >"$conf"
+
+rc=0
+out=$("$AGENT_BIN" --add-publisher ca.typo.example \
+	           --ca-cert "$typo_pem" --publisher-name typo \
+	           --server verifier.typo.example --reporting continous \
+	           --config "$conf" 2>&1) || rc=$?
+check "an unknown reporting mode is refused" test "$rc" -ne 0
+check "nothing is written for an unknown reporting mode" \
+      lacks "$conf" 'typo'
+
 if [[ $failures -ne 0 ]]; then
     echo "FAILURES: $failures"
     exit 1

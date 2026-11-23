@@ -226,7 +226,13 @@ What the stages do
    (credential activation) and receives a short-lived AIK certificate, one per
    publisher. Naming a CA here (``--ca-server`` with ``--ca-cert``) enrolls
    with it during the install, which is what an operator provisioning a fleet
-   wants. Naming none is the normal single-machine case and is not a blocked
+   wants, and records that CA in ``/etc/lota/lota.conf`` as a publisher
+   profile with ``reporting = continuous``, reporting to the ``--verifier``
+   given, or to nobody without one. That profile is what the attestation loop
+   reports to after the install and what a title names to reach the fleet's
+   CA; a host that enrolled without it is enrolled with a publisher nothing
+   reports to, and running the installer again with the same flags records
+   it. Naming none is the normal single-machine case and is not a blocked
    stage: the publisher is whoever they buy a title from, so the agent enrolls
    with each publisher the first time a title asks for one. Either way the
    running agent renews the certificate on its own against the endpoint
@@ -251,9 +257,13 @@ and an attestation round-trip) and a plain-language summary of exactly what
 telemetry leaves the machine.
 
 Who performs that round-trip depends on whether the host answers to
-publishers. On a machine with no publisher profiles, ``--verifier`` names the
-one verifier and the self-check runs a round against it; with no
-``--verifier``, the first title launch performs it. **On a machine that has
+publishers. A fleet install that recorded its CA with a ``--verifier`` is
+proven by the attestation loop, since the loop is what reports to that
+verifier from then on: the self-check waits up to 90 seconds for the loop's
+status to name every continuously reporting publisher as attested, and fails
+with the last status it read otherwise. On a machine with no publisher
+profiles, ``--verifier`` names the one verifier and the self-check runs a
+round against it; with no ``--verifier``, the first title launch performs it. **On a machine that has
 publisher profiles, the publishers are the agent's target list** -- each with
 its own trust anchor, verifier and cadence -- so no single verifier stands for
 them and the self-check says so instead of naming one. That is not a host
@@ -277,8 +287,9 @@ A guided install needs these inputs, all fail-closed:
   or neither: an anchor without an endpoint has nothing to enroll against. A
   guided install normally passes neither and lets the agent enroll with each
   publisher when a title first asks;
-* optionally the **verifier endpoint** (``--verifier``) for the final
-  round-trip check;
+* optionally the **verifier endpoint** (``--verifier``, ``--verifier-port``): the
+  verifier the recorded profile reports to, or with no CA named, the one the
+  final round-trip runs against;
 * compiled **SELinux module** (``lota.pp``, default
   ``/usr/share/lota/selinux/lota.pp``, override with ``--selinux-module``) on
   SELinux-enforcing distributions.

@@ -1076,14 +1076,185 @@ int probe_conf_profile_count(const char *conf_path)
 	return probe_conf_buf_profile_count(buf);
 }
 
+/*
+ * Key of one config line, hyphens read as underscores like the agent's parser.
+ * 1 and the value in out when line holds key, else 0.
+ */
+static int conf_line_value(const char *line, const char *eol, const char *key,
+			   char *out, size_t cap)
+{
+	const char *p = line;
+	const char *end;
+	size_t len;
+
+	while (*p == ' ' || *p == '\t')
+		p++;
+	for (; *key; key++, p++) {
+		char c = *p == '-' ? '_' : *p;
+
+		if (p >= eol || c != *key)
+			return 0;
+	}
+	while (*p == ' ' || *p == '\t')
+		p++;
+	if (*p != '=')
+		return 0;
+	p++;
+	while (*p == ' ' || *p == '\t')
+		p++;
+	end = eol;
+	while (end > p &&
+	       (end[-1] == ' ' || end[-1] == '\t' || end[-1] == '\r'))
+		end--;
+	len = (size_t)(end - p);
+	if (len == 0 || len >= cap)
+		return 0;
+	memcpy(out, p, len);
+	out[len] = '\0';
+	return 1;
+}
+
+static bool conf_line_opens_profile(const char *line)
+{
+	const char *p = line;
+
+	while (*p == ' ' || *p == '\t')
+		p++;
+	if (strncmp(p, "[profile", 8) != 0)
+		return false;
+	p += 8;
+	while (*p == ' ' || *p == '\t')
+		p++;
+	return *p == '"';
+}
+
+/*
+ * Walk the [profile] sections, calling fn on each key line of each.
+ * Section index is -1 above the first one.
+ */
+typedef void (*conf_profile_line_fn)(int section, const char *line,
+				     const char *eol, void *arg);
+
+static int conf_walk_profiles(const char *buf, conf_profile_line_fn fn,
+			      void *arg)
+{
+	const char *line;
+	int section = -1;
+
+	for (line = buf; line && *line;) {
+		const char *nl = strchr(line, '\n');
+		const char *eol = nl ? nl : line + strlen(line);
+
+		if (conf_line_opens_profile(line))
+			section++;
+		else if (section >= 0)
+			fn(section, line, eol, arg);
+		line = nl ? nl + 1 : NULL;
+	}
+	return section + 1;
+}
+
+struct anchor_lookup {
+	int index;
+	char *out;
+	size_t cap;
+	int found;
+};
+
+static void anchor_line(int section, const char *line, const char *eol,
+			void *arg)
+{
+	struct anchor_lookup *l = arg;
+
+	if (section == l->index && !l->found)
+		l->found =
+			conf_line_value(line, eol, "ca_cert", l->out, l->cap);
+}
+
+int probe_conf_buf_profile_anchor(const char *buf, int index, char *out,
+				  size_t cap)
+{
+	struct anchor_lookup l = { index, out, cap, 0 };
+
+	if (!out || cap == 0)
+		return 0;
+	out[0] = '\0';
+	if (!buf || index < 0)
+		return 0;
+	conf_walk_profiles(buf, anchor_line, &l);
+	return l.found;
+}
+
+#define CONF_MAX_PROFILES 64
+
+struct continuous_scan {
+	bool continuous[CONF_MAX_PROFILES];
+	bool reports[CONF_MAX_PROFILES];
+};
+
+static void continuous_line(int section, const char *line, const char *eol,
+			    void *arg)
+{
+	struct continuous_scan *c = arg;
+	char v[256];
+
+	if (section >= CONF_MAX_PROFILES)
+		return;
+	if (conf_line_value(line, eol, "reporting", v, sizeof(v)))
+		c->continuous[section] = strcmp(v, "continuous") == 0;
+	else if (conf_line_value(line, eol, "verifier", v, sizeof(v)))
+		c->reports[section] = strcmp(v, "none") != 0;
+}
+
+int probe_conf_buf_continuous_count(const char *buf)
+{
+	struct continuous_scan c;
+	int sections;
+	int count = 0;
+
+	if (!buf)
+		return 0;
+	memset(&c, 0, sizeof(c));
+	sections = conf_walk_profiles(buf, continuous_line, &c);
+	if (sections > CONF_MAX_PROFILES)
+		sections = CONF_MAX_PROFILES;
+	for (int i = 0; i < sections; i++)
+		count += c.continuous[i] && c.reports[i];
+	return count;
+}
+
+int probe_attest_status_covers(const char *status, const char *before,
+			       int expected)
+{
+	static const char prefix[] = "Attested (";
+	char *end;
+	long n;
+
+	if (!status || strncmp(status, prefix, sizeof(prefix) - 1) != 0)
+		return 0;
+	/* valid-until moves with every round, so a new round reads differently */
+	if (before && before[0] && strcmp(status, before) == 0)
+		return 0;
+	status += sizeof(prefix) - 1;
+	if (*status < '0' || *status > '9')
+		return 0;
+	n = strtol(status, &end, 10);
+	if (strncmp(end, " publisher", 10) != 0)
+		return 0;
+	return n >= expected;
+}
+
 enum probe_selfcheck_plan probe_selfcheck_plan(const char *verifier,
-					       int profile_count)
+					       int profile_count,
+					       bool fleet_profile)
 {
 	/*
 	 * Publishers first: they are the agent's target list, so they decide
 	 * where this host reports whether or not a verifier was named.
 	 * A round that named one as well is the combination the agent refuses.
 	 */
+	if (fleet_profile && verifier && verifier[0])
+		return SELFCHECK_LOOP_REPORTS;
 	if (profile_count > 0)
 		return SELFCHECK_PUBLISHERS_REPORT;
 	if (!verifier || !verifier[0])

@@ -95,6 +95,8 @@ struct install_ctx {
 	/* a stage changed this host during this run, so state read from before it
 	 * no longer describes what the host would do now */
 	int applied;
+	/* the loop's status just before this run reloaded it, if it did */
+	char loop_status_before[256];
 };
 
 /* Probe verdict for one stage */
@@ -142,6 +144,29 @@ enum trust_key_source {
 	TRUST_KEY_OVERRIDE, /* the operator's own key on disk */
 	TRUST_KEY_PACKAGED, /* the key the agent package shipped */
 };
+
+/*
+ * installer_profile_recorded - whether lota.conf names the publisher @anchor is
+ *
+ * A publisher is its anchor's key, so a profile whose ca_cert is a copy of
+ * @anchor under another path counts.
+ * Returns 1 when one does, 0 when none does or @conf_path cannot be read,
+ * -ENOMEM when the scratch space cannot be allocated.
+ */
+int installer_profile_recorded(const char *conf_path, const char *anchor);
+
+/* argv slots installer_add_publisher_argv() fills, terminator included */
+#define INSTALLER_ADD_PUBLISHER_ARGC 14
+
+/*
+ * installer_add_publisher_argv - the --add-publisher run that records the
+ * fleet's CA as a continuously reporting publisher
+ *
+ * No verifier named writes a publisher that runs none.
+ */
+void installer_add_publisher_argv(
+	const struct install_opts *o,
+	const char *argv[INSTALLER_ADD_PUBLISHER_ARGC]);
 
 /*
  * installer_trust_key - which key the enforcement check will name
