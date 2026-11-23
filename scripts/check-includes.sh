@@ -48,7 +48,7 @@ mkdir -p "$DB_DIR"
 # -B recompiles every TU so bear captures it; -o keeps the generated,
 # committed vmlinux.h from being rebuilt from the live kernel BTF.
 bear --output "$DB" -- "${MAKE:-make}" -B -k -o include/vmlinux.h \
-	all examples test-bins fuzz-all bench-c syzkaller-fuzz-loader \
+	all examples test-bins fuzz-all bench-c lota-bench syzkaller-fuzz-loader \
 	>/dev/null 2>&1 || true
 
 test -s "$DB" || {

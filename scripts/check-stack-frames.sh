@@ -4,16 +4,16 @@
 #
 # Refuse a function in a shipped binary whose stack frame exceeds the limit below.
 #
-# The agent is a long-running daemon and the installer runs on whatever stack
-# the caller has.
-# Neither has any business holding a quarter of a megabyte in an automatic:
+# The agent is a long-running daemon; the installer and lota-bench run on
+# whatever stack the caller has.
+# None has any business holding a quarter of a megabyte in an automatic:
 # the objects that get that large -- configuration, allow-lists, rollback snapshots
 # -- have a lifetime the compiler cannot see and belong on the heap, where a failed
 # allocation is a value the caller can act on.
 #
-# Only the shipped sources are checked. Tests are short-lived processes on the main
-# thread's full stack, and holding them to a daemon's budget would say nothing
-# about what runs on a user's machine.
+# Only the sources of installed binaries are checked. Tests are short-lived
+# processes on the main thread's full stack, and holding them to a daemon's
+# budget would say nothing about what runs on a user's machine.
 #
 # The flags are pinned here rather than taken from CFLAGS so the number a frame
 # is measured at does not move with the build mode.
@@ -31,7 +31,7 @@ set -euo pipefail
 LIMIT=${STACK_FRAME_LIMIT:-32768}
 
 CC=${CC:-gcc}
-SRC_GLOBS=('src/*.c' 'src/**/*.c' 'installer/*.c')
+SRC_GLOBS=('src/*.c' 'src/**/*.c' 'installer/*.c' 'tools/**/*.c')
 
 if ! command -v "$CC" >/dev/null 2>&1; then
 	echo "check-stack-frames: $CC not found; skipping" >&2
