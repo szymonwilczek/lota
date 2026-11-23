@@ -48,6 +48,7 @@
 #include "net.h"
 #include "policy.h"
 #include "quote.h"
+#include "report_flags.h"
 #include "sdnotify.h"
 #include "selftest.h"
 #include "tpm.h"
@@ -357,6 +358,22 @@ int export_policy(int mode)
  *                 trust anchor is configured and the host therefore has no
  *                 profile to read one from.
  */
+/* Say when the daemon stops or starts answering, not at every report */
+static void note_daemon_view(int ret)
+{
+	static int last = 1;
+
+	if (ret < 0 && last >= 0)
+		lota_warn(
+			"The enforcement daemon on %s does not answer (%s): "
+			"reports carry no ENFORCE or BPF_ACTIVE until it does",
+			LOTA_IPC_SOCKET_PATH, strerror(-ret));
+	else if (ret == 0 && last < 0)
+		lota_info("The enforcement daemon answers again; reports "
+			  "carry its mode");
+	last = ret < 0 ? ret : 0;
+}
+
 static int build_attestation_report(const struct verifier_challenge *challenge,
 				    struct lota_attestation_report *report,
 				    const char *aik_cert_path)
@@ -379,18 +396,15 @@ static int build_attestation_report(const struct verifier_challenge *challenge,
 	report->tpm.pcr_mask = challenge->pcr_mask;
 
 	/*
-	 * report LSM enforcement mode
-	 * this flag is part of nonce binding (signed by TPM quote extraData)
+	 * Enforcement is the daemon's, asked fresh for every report.
+	 * Part of the nonce binding, so signed by the quote's extraData.
 	 */
-	if (g_agent.mode == LOTA_MODE_ENFORCE)
-		report->header.flags |= LOTA_REPORT_FLAG_ENFORCE;
+	{
+		struct enforcement_view view;
 
-	/*
-	 * report BPF LSM status
-	 * this flag is part of nonce binding (signed by TPM quote extraData)
-	 */
-	if (g_agent.bpf_ctx.loaded)
-		report->header.flags |= LOTA_REPORT_FLAG_BPF_ACTIVE;
+		note_daemon_view(attest_daemon_view(&view));
+		report->header.flags |= report_enforcement_flags(&view);
+	}
 
 	/*
 	 * Report kernel security features before nonce binding so the TPM quote

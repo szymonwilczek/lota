@@ -184,8 +184,9 @@ Security Requirements
 | ``require_iommu``          | DMA protection via       | ``true``             |
 |                            | VT-d/AMD-Vi              |                      |
 +----------------------------+--------------------------+----------------------+
-| ``require_enforce``        | SELinux/AppArmor in      | ``true``             |
-|                            | enforce mode             |                      |
+| ``require_enforce``        | LOTA enforcement daemon  | ``true``             |
+|                            | running in enforce mode  |                      |
+|                            | with its LSM loaded      |                      |
 +----------------------------+--------------------------+----------------------+
 | ``require_module_sig``     | Kernel module signature  | Distro-dependent     |
 |                            | enforcement              |                      |
@@ -227,9 +228,11 @@ it::
    sudo lota-agent --export-policy | grep '^require_'
 
 ``require_iommu``, ``require_module_sig``, ``require_secureboot`` and
-``require_lockdown`` must read ``true``. ``require_enforce`` is the agent's
-mode, not the MAC's; check the MAC with ``getenforce`` (SELinux) or
-``aa-status`` (AppArmor).
+``require_lockdown`` must read ``true``. ``require_enforce`` is the
+enforcement daemon's mode, not the MAC's. The report carries it only while
+``lota-agent.service`` answers on its socket with the LSM loaded, so a host
+whose daemon is stopped fails it. Check the MAC with ``getenforce``
+(SELinux) or ``aa-status`` (AppArmor).
 
 .. _kernel-trust-event-log-secure-boot--cmdline-policy:
 
