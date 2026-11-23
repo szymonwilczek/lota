@@ -1236,6 +1236,11 @@ static void test_registry_digest(void)
 			      flags | LOTA_REGISTRY_HISTORY_LOST, mods, 4,
 			      peers, 2, other) == LOTA_SERVER_OK &&
 		      memcmp(other, got, sizeof(got)) != 0;
+		/* a late start dressed as a whole life */
+		ok &= lota_server_registry_digest(
+			      flags | LOTA_REGISTRY_FROM_EXEC, mods, 4, peers,
+			      2, other) == LOTA_SERVER_OK &&
+		      memcmp(other, got, sizeof(got)) != 0;
 		/* a peer dropped */
 		ok &= lota_server_registry_digest(flags, mods, 4, peers, 1,
 						  other) == LOTA_SERVER_OK &&

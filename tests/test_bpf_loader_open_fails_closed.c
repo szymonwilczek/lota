@@ -125,6 +125,10 @@ struct ring_buffer *__wrap_ring_buffer__new(int map_fd,
 #define FAKE_MAP_FD 7
 #define FAKE_MAP_SLOTS 300
 
+/* a task storage map: the key is a pidfd the loader opens for itself */
+#define FAKE_TASK_FD 8
+static int g_task_marked;
+
 static struct {
 	size_t ksz;
 	size_t vsz;
@@ -171,6 +175,12 @@ int __wrap_bpf_map_lookup_elem(int fd, const void *key, void *value)
 {
 	int at = fd == FAKE_MAP_FD ? fake_map_find(key) : -1;
 
+	if (fd == FAKE_TASK_FD) {
+		if (g_task_marked)
+			return 0;
+		errno = ENOENT;
+		return -ENOENT;
+	}
 	if (at < 0)
 		return -ENOENT;
 	memcpy(value, g_map.vals[at], g_map.vsz);
@@ -181,6 +191,10 @@ int __wrap_bpf_map_delete_elem(int fd, const void *key)
 {
 	int at = fd == FAKE_MAP_FD ? fake_map_find(key) : -1;
 
+	if (fd == FAKE_TASK_FD) {
+		g_task_marked = 0;
+		return 0;
+	}
 	if (at < 0)
 		return -ENOENT;
 	g_map.gone[at] = 1;
@@ -283,6 +297,64 @@ static void test_exec_history_past_first_buffer(void)
 	CHECK(together, "growing keeps keys and values together");
 	free(keys);
 	free(vals);
+}
+
+static uint64_t own_start_ticks(void)
+{
+	unsigned long long ticks = 0;
+	char buf[1024];
+	char *p;
+	FILE *f;
+
+	f = fopen("/proc/self/stat", "r");
+	if (!f)
+		return 0;
+	p = fgets(buf, sizeof(buf), f);
+	fclose(f);
+	p = p ? strrchr(buf, ')') : NULL;
+	if (!p || sscanf(p + 1,
+			 " %*c %*d %*d %*d %*d %*d %*u %*u %*u %*u %*u "
+			 "%*u %*u %*d %*d %*d %*d %*d %*d %llu",
+			 &ticks) != 1)
+		return 0;
+	return ticks;
+}
+
+static void test_born_protected(void)
+{
+	struct bpf_loader_ctx ctx;
+	uint32_t pid = (uint32_t)getpid();
+	uint64_t ticks = own_start_ticks();
+	uint64_t val = 0;
+
+	memset(&ctx, 0, sizeof(ctx));
+	ctx.loaded = true;
+	ctx.born_protected_fd = FAKE_TASK_FD;
+	ctx.instance_stops_fd = -1;
+	ctx.protected_pids_fd = FAKE_MAP_FD;
+
+	g_task_marked = 0;
+	CHECK(bpf_loader_born_protected(&ctx, pid, ticks) == 0,
+	      "a process without the mark did not start under protection");
+
+	g_task_marked = 1;
+	CHECK(bpf_loader_born_protected(&ctx, pid, ticks) == 1,
+	      "the mark is read for the process it was asked about");
+	CHECK(bpf_loader_born_protected(&ctx, pid, ticks + 1) == 0,
+	      "a successor on the same PID does not lend its mark");
+	CHECK(bpf_loader_born_protected(&ctx, pid, 0) == 0,
+	      "an unread start time claims nothing");
+
+	ctx.born_protected_fd = -1;
+	CHECK(bpf_loader_born_protected(&ctx, pid, ticks) == 0,
+	      "without the map nothing is claimed");
+	ctx.born_protected_fd = FAKE_TASK_FD;
+
+	fake_map_reset(sizeof(pid), sizeof(val));
+	fake_map_put(&pid, &val);
+	CHECK(bpf_loader_unprotect_pid(&ctx, pid) == 0 && g_task_marked == 0 &&
+		      bpf_loader_born_protected(&ctx, pid, ticks) == 0,
+	      "withdrawing protection takes the mark with it");
 }
 
 static void test_instance_peers_walk(void)
@@ -409,6 +481,7 @@ int main(void)
 	test_exec_history_walk();
 	test_exec_history_past_first_buffer();
 	test_instance_peers_walk();
+	test_born_protected();
 
 	if (g_failures) {
 		printf("Failed: %d\n", g_failures);

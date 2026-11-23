@@ -520,6 +520,8 @@ struct lota_ipc_registry_request {
 #define LOTA_IPC_REGISTRY_HISTORY_LOST (1U << 1)
 /* a reach into a socket of @pid's instance went unrecorded */
 #define LOTA_IPC_REGISTRY_PEERS_LOST (1U << 2)
+/* @pid's image was executed under protection: the list starts at its exec */
+#define LOTA_IPC_REGISTRY_FROM_EXEC (1U << 3)
 
 /* mapped since protection began, gone from the address space when measured */
 #define LOTA_IPC_REGISTRY_ENTRY_UNMAPPED (1U << 0)

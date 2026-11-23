@@ -1553,6 +1553,10 @@ static void handle_get_token(struct ipc_context *ctx, struct ipc_client *client,
 				start_ticks, &peer_overflow);
 			if (peers_lost || lost || peer_overflow)
 				rflags |= LOTA_IPC_REGISTRY_PEERS_LOST;
+			if (bpf_loader_born_protected(&g_agent.bpf_ctx,
+						      runtime_pids[i],
+						      start_ticks) > 0)
+				rflags |= LOTA_IPC_REGISTRY_FROM_EXEC;
 
 			/* the token's entry binds the whole list */
 			if (ret >= 0) {

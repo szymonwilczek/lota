@@ -645,6 +645,12 @@ int lota_poll_events(struct lota_client *client, int timeout_ms);
 #define LOTA_REGISTRY_HISTORY_LOST (1U << 1)
 /* a peer went unrecorded; the list may miss a process that reached in */
 #define LOTA_REGISTRY_PEERS_LOST (1U << 2)
+/*
+ * The image was executed under protection, so the list starts at its exec.
+ * Without it the list starts when protection did: an object loaded and dropped
+ * earlier is not there, and a late start looks otherwise the same.
+ */
+#define LOTA_REGISTRY_FROM_EXEC (1U << 3)
 
 /*
  * Mapped since protection began, gone from the address space when
