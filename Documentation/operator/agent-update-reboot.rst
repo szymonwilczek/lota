@@ -16,9 +16,9 @@ Two more properties make the update a deliberate procedure rather than a package
 swap:
 
 * **The enforcing daemon is unkillable by design.** LOTA LSM hook refuses
-  ``kill`` against the agent, so ``systemctl stop`` cannot bring it down. Use
-  ``lota-agent --shutdown``, the in-band graceful-shutdown request, to stop it
-  for replacement.
+  ``kill`` against the agent, systemd's included. Stop it for replacement with
+  ``lota-agent --shutdown``, the in-band graceful-shutdown request, or with
+  ``systemctl stop lota-agent``, whose ``ExecStop`` sends the same request.
 * **The binary carries an immutability proof** -- fs-verity on ext4/btrfs, or a
   signed ``security.ima`` xattr on XFS. Replacing the file drops that proof (a
   ``dnf upgrade`` in particular strips ``security.ima``), so it must be
@@ -106,8 +106,9 @@ On each host, once the new hash is pinned in the verifier tier:
    the old one, and it is refused for the rest of the boot.
    Both units then stay ``failed`` with the reason in the journal until the
    reboot.
-#. **Stop the running daemon.** ``lota-agent --shutdown`` -- ``systemctl stop``
-   cannot, because the LSM hook blocks the kill.
+#. **Stop the running daemon.** ``systemctl stop lota-agent`` or
+   ``lota-agent --shutdown``; both send the in-band request, since the LSM
+   hook blocks the kill.
 #. **Cold-reboot the host.** A full power cycle, not a warm reboot: PCR 14 only
    resets on a hardware reset on most platforms, so a warm reboot may leave the
    stale commitment in place. On boot the new binary measures itself into a fresh

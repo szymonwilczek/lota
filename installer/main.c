@@ -315,9 +315,9 @@ static int do_pause(struct install_ctx *ctx)
 
 	ui_text(&ctx->ui,
 		"Pausing stops the agent through its own graceful path "
-		"('lota-agent --shutdown'). systemd cannot stop the agent - "
-		"the anti-tamper hook blocks that - so this dedicated path is "
-		"the only clean way down.");
+		"('lota-agent --shutdown', which 'systemctl stop lota-agent' "
+		"runs too). No signal can stop the agent - the anti-tamper "
+		"hook blocks them - so this path is the only way down.");
 	ui_text(&ctx->ui,
 		"On the way down the agent poisons its TPM measurement slot "
 		"(PCR 14) on purpose, so this boot can no longer attest. That "
