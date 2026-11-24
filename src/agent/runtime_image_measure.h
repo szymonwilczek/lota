@@ -80,6 +80,7 @@ struct lota_rt_open_identity {
 	int64_t mtime_nsec;
 	/* 0 once nothing links it anywhere */
 	unsigned long nlink;
+	int seals; /* F_GET_SEALS of the fd, negative where it has none */
 };
 
 /*
@@ -99,6 +100,15 @@ enum lota_rt_identity_road {
  * it is a coverage gap. An unlinked file on disk is still a file.
  */
 int lota_rt_object_has_no_file(unsigned long fs_magic, unsigned long nlink);
+
+/*
+ * The LOTA_EXEC_HISTORY_* an open object carries by what it is, for a mapping
+ * older than protection, which the kernel never saw. With no name and no seal
+ * against writes, any holder of an fd can write it. A writer of anything else
+ * shows only at the mapping itself.
+ */
+uint32_t lota_rt_object_memory_flags(unsigned long fs_magic,
+				     unsigned long nlink, int seals);
 
 /*
  * Which road may measure one object of a live process. role is an enum
@@ -309,7 +319,7 @@ struct lota_rt_object_record {
 	uint64_t size;
 	int content_hashed;
 	int unmapped; /* only in the exec history, no longer in the maps */
-	uint32_t history_flags; /* LOTA_EXEC_HISTORY_* the kernel recorded */
+	uint32_t history_flags; /* LOTA_EXEC_HISTORY_*, by the walk and the kernel */
 };
 
 /*

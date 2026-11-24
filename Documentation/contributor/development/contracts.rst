@@ -494,6 +494,10 @@ An object mapped once with a writer carries
 at the round says what the pages held then, not what they held between two
 rounds. Nothing is refused on either flag.
 
+The kernel sees only mappings made under protection. For an older one the
+agent's walk reads the same memory and seal facts off the open file, as they
+stand at the round. A writer of a named file shows only at the mapping itself.
+
 After the objects come the actors: every process that reached a process of
 the instance on a road the kernel lets through. An instance is the protected
 process and everything it started. From outside, the road is a unix socket:
