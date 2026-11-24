@@ -1,26 +1,11 @@
 /* SPDX-License-Identifier: MIT */
 /* Copyright (C) 2026 Szymon Wilczek */
 /*
- * LOTA block-demo: victim process that opts itself into the
- * runtime enforcement layer and then asks the dynamic loader to
- * map an unauthorised .so.
+ * LOTA block-demo: a protected process that dlopen()s an object
+ * outside the trust set.
  *
- * Exit codes:
- *    0  evil.so was blocked (dlopen returned NULL with EPERM/EACCES)
- *    1  evil.so loaded successfully (block did NOT fire -- failure)
- *    2  invocation / IPC / runtime error (test inconclusive)
- *
- * Stage timeline:
- *    1. Connect to the agent.
- *    2. Call lota_protect_self() so this PID enters protected_pids.
- *    3. Verify the registration with lota_get_status().
- *    4. dlopen() the evil .so; expect failure when the agent is
- *       in enforce + strict_mmap and the operator built the trust
- *       set such that evil.so is not allowed.
- *
- * The expected-failure dlopen path is the demonstrable contract:
- * the runtime gate must reject the load before the .so's
- * constructor runs.
+ * Exit status: 0 the load failed, 1 it succeeded, 2 the demo could
+ * not run.
  */
 
 #include <dlfcn.h>
@@ -72,11 +57,8 @@ int main(int argc, char *argv[])
 	fflush(stdout);
 
 	/*
-	 * --sleep keeps the protected task alive for the
-	 * ptrace_access_check and task_kill integration stages.
-	 * Block on stdin: the harness either signals this process or
-	 * closes our stdin to request teardown; read() then returns EOF
-	 * and we exit, letting lota_task_free reap the protected-PID entry.
+	 * --sleep holds a protected process for the ptrace and signal stages
+	 * of tests/integration/test_bpf_gates.sh until stdin closes.
 	 */
 	if (sleep_mode) {
 		char c;
@@ -89,14 +71,7 @@ int main(int argc, char *argv[])
 		return 0;
 	}
 
-	/*
-	 * dlopen runs through ld.so which calls mmap(PROT_EXEC) on
-	 * each segment of evil.so. In ENFORCE + strict_mmap the BPF
-	 * mmap_file hook returns -EPERM, dlopen() sees the loader's
-	 * propagated failure, and dlerror() reports
-	 * "Operation not permitted" or similar. The constructor
-	 * never runs, so evil_init() never writes to stderr.
-	 */
+	/* enforce, strict_mmap: exec segment refused, no constructor runs */
 	handle = dlopen(evil_path, RTLD_NOW);
 	if (!handle) {
 		err = dlerror();

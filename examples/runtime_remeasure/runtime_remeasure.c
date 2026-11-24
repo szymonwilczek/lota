@@ -2,25 +2,14 @@
 /*
  * LOTA runtime re-measurement demonstrator.
  *
- * A standalone, TPM-free reference for the runtime measurement that the
- * anti-cheat heartbeat binds into every beat. It needs no agent, no
- * verifier and no TPM, so it runs unmodified inside a plain VM.
+ * Computes the runtime measurement the anti-cheat heartbeat carries,
+ * with no agent, verifier or TPM:
  *
- * It shows three things:
- *
- *   1. The live measurement of the running image (the bytes mapped into
- *      this process) equals the measurement derived from the on-disk ELF.
- *      This is the invariant a verifier relies on: it can precompute the
- *      expected value from the binary and still recognise an honest
- *      producer's live measurement.
- *
- *   2. A one-byte change inside an executable segment flips the digest
- *      (--patch-demo). That is exactly the on-disk-vs-live drift runtime
- *      re-measurements closes: a runtime patch the session-start file
- *      hash never saw.
- *
- *   3. Re-measuring a steady process repeatedly yields a stable digest
- *      (--watch), which is what the heartbeat does on every interval.
+ *   - the live measurement of the mapped image equals the one computed
+ *     from the on-disk objects, so a verifier can precompute it;
+ *   - a one-byte change in an executable segment of a copy changes its
+ *     digest (--patch-demo);
+ *   - re-measuring an unchanged process gives the same digest (--watch).
  *
  * Copyright (C) 2026 Szymon Wilczek
  */
@@ -47,7 +36,7 @@ static void print_digest(const char *label,
 	printf("\n");
 }
 
-/* Sleep helper that tolerates signal interruption. */
+/* resumes after EINTR */
 static void sleep_seconds(unsigned seconds)
 {
 	struct timespec ts = { .tv_sec = (time_t)seconds, .tv_nsec = 0 };
@@ -56,10 +45,8 @@ static void sleep_seconds(unsigned seconds)
 }
 
 /*
- * File offset of the last byte of the first executable (PF_X) PT_LOAD
- * segment, or (off_t)-1 on failure. The last byte is always code and
- * never overlaps the ELF header, so patching it exercises detection
- * instead of corrupting the parse.
+ * File offset of the last byte of the first PF_X PT_LOAD segment, or -1.
+ * The end of the segment stays clear of the headers the measurement parses.
  */
 static off_t first_exec_seg_last_byte(const char *path)
 {
@@ -126,7 +113,6 @@ done:
 	return ret;
 }
 
-/* Collect the enumerated runtime object paths into a fixed table. */
 #define RM_MAX_OBJS 512
 struct obj_table {
 	char (*paths)[LOTA_AC_RUNTIME_PATH_MAX];
@@ -147,11 +133,7 @@ static int obj_collect_cb(const char *path, void *user)
 	return 0;
 }
 
-/*
- * Default mode: prove the live mapped image (all loaded objects) equals
- * the set measure reproduced from the same objects' on-disk files.
- * This is the producer/verifier invariant runtime re-measurements relies on.
- */
+/* Compares the live measurement with the one over the loaded objects' files. */
 static int run_default(void)
 {
 	uint8_t live[LOTA_AC_RUNTIME_MEASURE_SIZE];
@@ -218,7 +200,7 @@ static int print_path_cb(const char *path, void *user)
 	return 0;
 }
 
-/* --list-objects: print the trusted runtime manifest, one path per line. */
+/* --list-objects: the loaded runtime objects, one path per line */
 static int run_list_objects(void)
 {
 	int rc = lota_ac_list_runtime_objects(print_path_cb, NULL);
@@ -231,9 +213,8 @@ static int run_list_objects(void)
 }
 
 /*
- * --manifest FILE: read a manifest (one ELF path per line, '#' comments
- * and blank lines ignored), compute the set measure, and compare it to
- * the live image. This is the verifier-side reproduction path.
+ * --manifest FILE: one ELF path per line, blank lines and '#' comments
+ * skipped. Compares the measurement over these files with the live one.
  */
 static int run_manifest(const char *manifest)
 {
@@ -264,13 +245,7 @@ static int run_manifest(const char *manifest)
 		char *s = line;
 		size_t n;
 
-		/*
-		 * A line longer than the buffer comes back in pieces,
-		 * and each piece would be taken for a path of its own
-		 * -- so one unreadable entry would silently become two
-		 * measured objects that were never in the manifest.
-		 * Refuse the file instead.
-		 */
+		/* an overlong line would read back as several paths */
 		n = strlen(line);
 		if (n > 0 && line[n - 1] != '\n' && !feof(f)) {
 			fprintf(stderr,
@@ -339,7 +314,7 @@ out:
 	return ret;
 }
 
-/* --patch-demo: a one-byte code patch must flip the digest. */
+/* --patch-demo: flip one code byte of a copy and compare the digests */
 static int run_patch_demo(const char *exe_path)
 {
 	char tmp[] = "/tmp/lota_remeasure_XXXXXX";
@@ -407,7 +382,7 @@ done:
 	return ret;
 }
 
-/* --watch: re-measure repeatedly; a steady process stays stable. */
+/* --watch: re-measure and compare against the first measurement */
 static int run_watch(unsigned interval, unsigned count)
 {
 	uint8_t baseline[LOTA_AC_RUNTIME_MEASURE_SIZE];

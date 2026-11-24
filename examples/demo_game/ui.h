@@ -1,11 +1,7 @@
 /* SPDX-License-Identifier: MIT */
 /* Copyright (C) 2026 Szymon Wilczek */
 /*
- * trust_pong UI helpers.
- *
- * Thin wrapper over SDL2 so trust_pong.c reads as a game loop with
- * declarative draw calls instead of raw SDL setup. Owns the bitmap
- * text renderer, banner, score, and primitive game shapes.
+ * trust_pong UI: the SDL2 window, bitmap text, banner, score and game shapes.
  */
 
 #ifndef LOTA_EXAMPLES_DEMO_GAME_UI_H
@@ -33,31 +29,19 @@ struct ui_context {
 	SDL_Renderer *renderer;
 };
 
-/*
- * Initialise SDL2 and open the window.
- * Returns 0 on success and a negative errno-style code on failure.
- * On failure no resources are leaked and the context is zeroed.
- */
+/* Returns 0, or -1 with @ui zeroed. */
 int ui_init(struct ui_context *ui);
 
 void ui_shutdown(struct ui_context *ui);
 
-/*
- * Clear the framebuffer to the background colour for the current
- * verdict. Called once per frame before draw calls.
- */
+/* Clears the frame; @verdict is ignored. */
 void ui_begin_frame(struct ui_context *ui, enum ui_verdict verdict);
 
-/*
- * Present the back buffer.
- */
 void ui_end_frame(struct ui_context *ui);
 
 /*
- * Banner along the top of the window. Colour and text track the
- * verdict; reason (when non-NULL) is shown on a dedicated second row
- * so the operator sees why the verdict flipped without leaving the
- * game window.
+ * Colour and title follow @verdict; a non-NULL @reason fills up to two rows
+ * under the title.
  */
 void ui_draw_banner(struct ui_context *ui, enum ui_verdict verdict,
 		    const char *reason);
@@ -70,11 +54,7 @@ void ui_draw_ball(struct ui_context *ui, int x, int y);
 
 void ui_draw_back_wall(struct ui_context *ui);
 
-/*
- * Centre-screen overlay for the terminal "integrity loss" message.
- * The caller is responsible for deciding when to call it (after two
- * consecutive UNTRUSTED verdicts in the demo flow).
- */
+/* Centre overlay for a frozen game. */
 void ui_draw_frozen_overlay(struct ui_context *ui);
 
 #endif /* LOTA_EXAMPLES_DEMO_GAME_UI_H */

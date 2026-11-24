@@ -20,9 +20,8 @@ import (
 	verifysdk "github.com/szymonwilczek/lota/sdk/server"
 )
 
-// LACH wire constants. Mirror include/lota_anticheat.h. Any drift is
-// caught by the test suite which fabricates packets with these exact
-// offsets.
+// LACH wire constants from include/lota_anticheat.h and
+// src/sdk/lota_anticheat.c.
 const (
 	lachMagic           uint32 = 0x4C414348 // 'LACH'
 	lachVersion         uint8  = 1
@@ -33,21 +32,16 @@ const (
 	lachMaxToken               = 1608
 	lachMaxPacket              = lachHeaderSize + lachMaxToken
 
-	// The heartbeat nonce binds the runtime measurement
 	heartbeatNonceDomain = "lota-ac-heartbeat:v1\x00"
 	domainVersion        = 1
 
-	// Runtime measures every file-backed loaded object.
-	// Each object yields a content digest under runtimeObjectDomain.
-	// Combined image digest folds them, keyed by soname, under runtimeMeasureDomain.
+	// Each executable object hashes under runtimeObjectDomain; the image
+	// digest folds them by soname under runtimeMeasureDomain.
 	runtimeObjectDomain  = "lota-ac-runtime-object:v1\x00"
 	runtimeMeasureDomain = "lota-ac-runtime-measure:v1\x00"
 )
 
-// rejectErr signals that a packet failed at the wire-format layer and
-// must be answered with the REJECT verdict. Anything else is treated
-// as UNTRUSTED so the operator can distinguish "client sent garbage"
-// from "client sent a structurally valid packet that did not verify".
+// rejectErr marks a packet the wire format refuses; it is answered REJECT.
 type rejectErr struct{ msg string }
 
 func (e *rejectErr) Error() string { return "reject: " + e.msg }
@@ -104,12 +98,8 @@ func (s *demoServer) handleHeartbeat(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Producer-reported runtime measurement (hdr.runtimeMeas) is
-	// advisory only: it is computed inside the game process, which an
-	// attacker with code in that process can forge, so it is logged on
-	// mismatch but never gates trust.
-	// Authoritative runtime measurement is taken by the agent from the
-	// kernel side and bound into the TPM-signed token verified below.
+	// The producer computes hdr.runtimeMeas in its own process,
+	// so a mismatch is only logged.
 	if hdr.runtimeMeas != game.runtimeMeasure {
 		logf("session=%s seq=%d advisory=%q",
 			sessionHex, hdr.sequence,
@@ -184,9 +174,7 @@ func (s *demoServer) handleHeartbeat(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// parseHeartbeat decodes a LACH-framed packet. Returns a rejectErr for
-// anything the wire format itself disallows; callers translate that
-// into the REJECT verdict.
+// parseHeartbeat decodes a LACH packet, or returns a rejectErr.
 func parseHeartbeat(buf []byte) (*lachHeader, []byte, error) {
 	if len(buf) < lachHeaderSize {
 		return nil, nil, &rejectErr{msg: fmt.Sprintf("packet too short (%d bytes)", len(buf))}
@@ -231,9 +219,8 @@ func parseHeartbeat(buf []byte) (*lachHeader, []byte, error) {
 }
 
 // computeHeartbeatNonce mirrors compute_heartbeat_nonce() in
-// src/sdk/lota_anticheat.c. Drift here would make every TRUSTED path
-// fall back to UNTRUSTED because the embedded TPMS_ATTEST.extraData
-// would no longer match the nonce the server expects.
+// src/sdk/lota_anticheat.c; a token minted for another value fails
+// verification.
 func computeHeartbeatNonce(hdr *lachHeader) [32]byte {
 	h := sha256.New()
 	_, _ = h.Write([]byte(heartbeatNonceDomain))
@@ -250,7 +237,6 @@ func computeHeartbeatNonce(hdr *lachHeader) [32]byte {
 	_, _ = h.Write(hdr.gameIDHash[:])
 	binary.LittleEndian.PutUint32(u32[:], hdr.domainVersion)
 	_, _ = h.Write(u32[:])
-	// the nonce binds the runtime measurement
 	_, _ = h.Write(hdr.runtimeMeas[:])
 	var out [32]byte
 	copy(out[:], h.Sum(nil))
@@ -319,12 +305,9 @@ func runtimeObjectDigest(path string) (digest [32]byte, hasExec bool, err error)
 }
 
 // computeExpectedRuntimeMeasureSet mirrors
-// lota_ac_compute_expected_runtime_measure_set(). It folds the per-object
-// digests of the given ELF files (the trusted runtime manifest) into the
-// combined image digest, keyed by soname (file basename) and sorted, so
-// the order of paths does not matter. Files with no executable segment
-// are skipped. The server reproduces this to reject heartbeats whose live
-// code pages no longer match the registered binaries.
+// lota_ac_compute_expected_runtime_measure_set(): the per-object digests,
+// sorted by soname (file basename), fold into one image digest, so the order
+// of paths does not matter. Files with no executable segment are skipped.
 func computeExpectedRuntimeMeasureSet(paths []string) ([32]byte, error) {
 	var out [32]byte
 	objs := make([]runtimeObject, 0, len(paths))
@@ -368,18 +351,15 @@ func computeExpectedRuntimeMeasureSet(paths []string) ([32]byte, error) {
 	return out, nil
 }
 
-// checkFreshness enforces the demo's monotonic-sequence and bounded-
-// age contract. The wire-format checks are best-effort: a real anti-
-// cheat would also need replay protection across server restarts,
-// which is out of scope here.
+// checkFreshness refuses a timestamp from the future or past the age window
+// and, within a session, a sequence that does not grow or a timestamp that
+// goes back. Session state is held in memory only.
 func (s *demoServer) checkFreshness(hdr *lachHeader) (string, bool) {
 	// #nosec G115 -- a clock before 1970 is not a case this demo serves
 	now := uint64(time.Now().Unix())
 	if hdr.timestamp > now+60 {
 		return "timestamp in the future", false
 	}
-	// negative window would wrap into enormous one and accept every heartbeat
-	// ever minted, so it reads as "no age limit" instead
 	maxAge := uint64(0)
 	if s.maxHeartbeatAge > 0 {
 		// #nosec G115 -- positive, and capped where the flag is parsed
@@ -409,10 +389,9 @@ func (s *demoServer) recordVerdictWithLicense(sessionHex, gameHashHex, verdict,
 	s.recordVerdict(sessionHex, gameHashHex, verdict, license, reason, nil)
 }
 
-// recordVerdict updates per-session and per-game state. When hdr is
-// non-nil the per-session row also advances lastSeq + lastTimestamp
-// so a subsequent replay of the same packet trips the freshness gate.
-// reason is what the producer was answered with, empty when trusted.
+// recordVerdict updates per-session and per-game state. A non-nil hdr also
+// advances lastSeq and lastTimestamp, so a replay fails checkFreshness.
+// reason is what the producer was answered, empty when trusted.
 func (s *demoServer) recordVerdict(sessionHex, gameHashHex, verdict, license,
 	reason string, hdr *lachHeader,
 ) {

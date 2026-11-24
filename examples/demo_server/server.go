@@ -30,10 +30,9 @@ const (
 	verdictReject  = "REJECT"
 )
 
-// gameBinding is the demo's representation of an accepted game: the
-// SHA-256 over the game-binding domain string and the game_id (the
-// same hash trust_pong's heartbeat producer stamps into LACH headers)
-// plus the license string the server returns on the TRUSTED path.
+// gameBinding is an accepted game: the binding hash its producer stamps into
+// the LACH header, the runtime measurement a matching producer reports and
+// the license returned on TRUSTED.
 type gameBinding struct {
 	gameID         string
 	gameIDHash     [32]byte
@@ -41,11 +40,8 @@ type gameBinding struct {
 	licenseID      string
 }
 
-// sessionState tracks the most recent verdict the server saw for a
-// single anti-cheat session id (16 bytes from the LACH header). The
-// store is intentionally a flat in-memory map: the demo never has to
-// survive a restart and the operator can clear state by restarting
-// the binary.
+// sessionState is the latest verdict for one session or one game,
+// held in memory only.
 type sessionState struct {
 	lastSeq       uint32
 	lastTimestamp uint64
@@ -61,12 +57,7 @@ type demoServer struct {
 	gamesByHash     map[[32]byte]gameBinding
 	maxHeartbeatAge time.Duration
 
-	/*
-	 * Flags this publisher demands of the token.
-	 * Heartbeat missing one is UNTRUSTED, which is where a coverage policy lives:
-	 * the machine reports what its runtime measurement covered,
-	 * and the party relying on it decides whether that is enough.
-	 */
+	// token flags the publisher demands; missing one makes UNTRUSTED
 	requiredFlags uint32
 
 	mu       sync.Mutex
@@ -202,8 +193,7 @@ func writeJSON(w http.ResponseWriter, status int, body any) {
 	enc := json.NewEncoder(w)
 	enc.SetEscapeHTML(false)
 	if err := enc.Encode(body); err != nil {
-		// status line is already written, so there is nothing left
-		// to tell the client; say it where the operator can see it.
+		// the status line is out; only the log can carry the error
 		logf("write response: %v", err)
 	}
 }
@@ -213,13 +203,8 @@ func logf(format string, args ...any) {
 	fmt.Printf("[%s] %s\n", stamp, fmt.Sprintf(format, args...))
 }
 
-// parseExpectedGames accepts a comma-separated list of game_id=license
-// entries. Returns an error if the list is empty or any entry is
-// missing a license string. The game-binding hash is derived from the
-// game_id with the same SDK domain string the C heartbeat producer
-// stamps into the LACH header, mixed with the producer binary's
-// SHA-256 (passed as anticheatExeDigest) so the verdict map keys
-// reproduce lota_ac_compute_game_binding_hash() byte for byte.
+// parseExpectedGames parses comma-separated game_id=license entries and
+// binds each game_id to anticheatExeDigest as the producer does.
 func parseExpectedGames(spec string, anticheatExeDigest [32]byte,
 	runtimeMeasure [32]byte,
 ) (map[string]gameBinding, error) {
@@ -247,16 +232,11 @@ func parseExpectedGames(spec string, anticheatExeDigest [32]byte,
 	return out, nil
 }
 
-// computeGameBindingHash reproduces the SDK-side game-binding domain
-// hash that lota_ac_compute_game_binding_hash() (src/sdk/lota_anticheat.c)
-// stamps into the LACH header. The C helper hashes
+// computeGameBindingHash mirrors lota_ac_compute_game_binding_hash():
 //
 //	SHA-256("lota-ac-game-binding:v1" || 0x00 || game_id || sha256(exe))
 //
-// using the LOTA_AC_DOMAIN_VERSION_V1 entry of lota_ac_domain_table.
-// The Go derivation must mirror it byte for byte or the server keys
-// its verdict map by a hash the producer never sends, which surfaces
-// as state=UNTRUSTED reason="unknown game_id_hash" on a clean run.
+// A mismatch is answered "unknown game_id_hash".
 func computeGameBindingHash(gameID string, exeDigest [32]byte) [32]byte {
 	h := sha256.New()
 	_, _ = h.Write([]byte("lota-ac-game-binding:v1"))
@@ -268,10 +248,8 @@ func computeGameBindingHash(gameID string, exeDigest [32]byte) [32]byte {
 	return out
 }
 
-// parseAIKBytes accepts either a raw DER PKIX/SPKI blob or the PEM
-// wrapper produced by `openssl rsa -pubout`. The function rejects any
-// key smaller than RSA-2048 so a demo operator cannot accidentally
-// bring up a server that accepts weak keys.
+// parseAIKBytes reads a PKIX RSA key in DER or PEM and refuses one under
+// 2048 bits.
 func parseAIKBytes(blob []byte) (*rsa.PublicKey, error) {
 	der := blob
 	if block, _ := pem.Decode(blob); block != nil {
