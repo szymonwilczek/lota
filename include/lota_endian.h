@@ -10,10 +10,9 @@
 #include <stdint.h>
 
 /*
- * Each byte is masked before the cast.
- * The cast alone truncates, which is what these want, but it leaves a checker
- * unable to tell a deliberate narrowing from an accidental one -- and callers
- * pass magic constants, so the truncation is visible after constant folding.
+ * Each byte is masked before the cast: a cast alone also truncates, but a
+ * checker cannot tell it from an accidental narrowing once a constant argument
+ * is folded in.
  */
 static inline void lota__write_le16(uint8_t *p, uint16_t v)
 {

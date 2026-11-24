@@ -1,15 +1,11 @@
 /* SPDX-License-Identifier: MIT */
 /* Copyright (C) 2026 Szymon Wilczek */
 /*
- * Runtime protected PID digest helper.
+ * Digest over the protected PIDs and each one's registry digest (see
+ * lota_registry_digest.h), so the quote attests what each process runs:
  *
- * Binds, per protected PID, the kernel-anchored runtime image digest of that
- * process (see lota_runtime_image_measure.h), so the quote attests not just
- * which processes are protected but what code each of them is actually running:
  *   SHA256("lota-runtime-protect-pids:v1\0" || count_LE ||
  *          pid0_LE || image0[32] || pid1_LE || image1[32] || ...)
- *
- * The PID list must be sorted in strictly increasing order.
  */
 
 #ifndef LOTA_RUNTIME_PROTECT_DIGEST_H
@@ -31,6 +27,12 @@ static inline void lota__runtime_digest_bzero(void *ptr, size_t len)
 	OPENSSL_cleanse(ptr, len);
 }
 
+/**
+ * lota_validate_canonical_protect_pid_list() - Check the order of a PID list.
+ * @pids: the list, may be NULL if @pid_count is 0.
+ *
+ * Return: 0 if strictly increasing, -EINVAL otherwise.
+ */
 static inline int lota_validate_canonical_protect_pid_list(const uint32_t *pids,
 							   uint32_t pid_count)
 {
@@ -46,13 +48,15 @@ static inline int lota_validate_canonical_protect_pid_list(const uint32_t *pids,
 	return 0;
 }
 
-/*
- * Bind the protected PID set together with each process's kernel-anchored
- * runtime image digest. image_digests is a parallel array of pid_count 32-byte
- * digests, one per entry of the (sorted) pids array. Computing the image digest
- * is the caller's responsibility (lota_runtime_image_measure.h); a caller that
- * cannot measure a protected PID must fail closed, since the digest is what the
- * quote attests.
+/**
+ * lota_compute_runtime_protect_digest() - Compute the digest of the PID set.
+ * @pids: sorted PIDs.
+ * @image_digests: one digest per entry of @pids; the agent passes zeroes for a
+ *                 process it could not measure and a coverage flag says so.
+ * @out_digest: receives the digest; zeroed on -EIO.
+ *
+ * Return: 0 on success, -EINVAL on a bad argument or an unsorted list, -ENOMEM
+ * or -EIO from the hash.
  */
 static inline int
 lota_compute_runtime_protect_digest(const uint32_t *pids,

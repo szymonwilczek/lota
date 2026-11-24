@@ -1,18 +1,9 @@
 /* SPDX-License-Identifier: MIT */
 /*
- * LOTA Wine/Proton Hook - Public API and Constants
+ * LOTA Wine/Proton hook.
  *
- * LD_PRELOAD shared library that transparently bridges LOTA
- * attestation into Wine/Proton processes. Connects to the local
- * LOTA agent via the Gaming SDK, then maintains a pair of well-known
- * files (text status + binary token) that Wine-side code can read
- * through the Z: drive mapping.
- *
- * Usage:
- *   LD_PRELOAD=liblota_wine_hook.so wine game.exe
- *
- *   # Steam launch options:
- *   lota-proton-hook %command%
+ * LD_PRELOAD library that connects to the agent through the gaming SDK and
+ * keeps a set of files Wine-side code can read through the Z: drive mapping.
  *
  * Copyright (C) 2026 Szymon Wilczek
  */
@@ -26,49 +17,43 @@
 extern "C" {
 #endif
 
-/* set to "1" or "true" to disable the hook entirely. */
+/* "1" or "true" disables the hook. */
 #define LOTA_HOOK_ENV_DISABLE "LOTA_HOOK_DISABLE"
 
 /*
- * comma-separated exe prefixes to hook instead of the skip lists;
- * lota-proton-hook sets it from the Steam launch unless already set
+ * Comma-separated exe prefixes to hook, replacing the skip lists.
+ * lota-proton-hook sets it from the Steam launch unless already set.
  */
 #define LOTA_HOOK_ENV_ACTIVATE_PATH "LOTA_HOOK_ACTIVATE_PATH"
 
 /*
- * title dir relative to a Wine drive ("steamapps/common/Title/");
- * Wine's loader hooks only when its argv[1] lies inside, whatever
- * the pin says; lota-proton-hook sets it from the Steam launch unless
- * already set
+ * Title dir relative to a Wine drive; Wine's loader hooks only when its argv[1]
+ * lies inside, whatever the pin says.
+ * lota-proton-hook sets it from the Steam launch unless already set.
  */
 #define LOTA_HOOK_ENV_ACTIVATE_PROGRAM "LOTA_HOOK_ACTIVATE_PROGRAM"
 
-/* comma-separated exe prefixes to skip, on top of the system paths */
+/* Comma-separated exe prefixes to skip, on top of the system paths. */
 #define LOTA_HOOK_ENV_SKIP_PATH "LOTA_HOOK_SKIP_PATH"
 
-/*
- * Log level: debug | info | warn | error | silent
- * Default: warn
- */
+/* debug | info | warn | error | silent, default warn */
 #define LOTA_HOOK_ENV_LOG_LEVEL "LOTA_HOOK_LOG_LEVEL"
 
-/* custom LOTA agent Unix socket path (default: /run/lota/lota.sock). */
+/* Agent socket path, default LOTA_IPC_SOCKET_PATH. */
 #define LOTA_HOOK_ENV_SOCKET "LOTA_HOOK_SOCKET"
 
 /*
- * Directory where the hook writes status / token files.
- * Default resolution order:
- *   1. $LOTA_HOOK_TOKEN_DIR       (explicit)
- *   2. $XDG_RUNTIME_DIR/lota-hook (standard)
- *   3. /tmp/lota-<uid>            (no runtime directory)
+ * Directory of the status and token files, first of:
+ *   1. $LOTA_HOOK_TOKEN_DIR
+ *   2. $XDG_RUNTIME_DIR/lota-hook
+ *   3. /tmp/lota-<uid>
  *
- * A candidate the caller does not own is reported and skipped;
- * one at a mode other than 0700 is tightened and its old mode reported.
- * Never $XDG_RUNTIME_DIR/lota: the daemon owns it (root:lota 0750).
+ * A candidate the caller does not own is reported and skipped; one at a mode
+ * other than 0700 is tightened and its old mode reported.
+ * Never $XDG_RUNTIME_DIR/lota: the daemon owns it.
  */
 #define LOTA_HOOK_ENV_TOKEN_DIR "LOTA_HOOK_TOKEN_DIR"
 
-/* Directory name appended to $XDG_RUNTIME_DIR for the default above */
 #define LOTA_HOOK_TOKEN_DIR_NAME "lota-hook"
 
 /*
@@ -78,13 +63,14 @@ extern "C" {
  */
 #define LOTA_HOOK_ENV_PUBLISHER "LOTA_HOOK_PUBLISHER"
 
-/* token refresh interval in seconds (default: 60). */
+/* Token refresh interval in seconds. */
 #define LOTA_HOOK_ENV_REFRESH_SEC "LOTA_HOOK_REFRESH_SEC"
 
 /*
  * Text status file (key=value, one per line).
  * Fields:
  *   LOTA_ATTESTED      1 | 0
+ *   LOTA_OFFLINE       1 | 0
  *   LOTA_FLAGS         0xHEX  (LOTA_FLAG_* bitmask)
  *   LOTA_VALID_UNTIL   UNIX_TIMESTAMP
  *   LOTA_ATTEST_COUNT  unsigned
@@ -99,16 +85,11 @@ extern "C" {
  */
 #define LOTA_HOOK_STATUS_FILE "lota-status"
 
-/*
- * Binary token file.
- * Can be sent directly to a game server for verification.
- */
 #define LOTA_HOOK_TOKEN_FILE "lota-token.bin"
 
 /*
- * Atomic combined snapshot file (header + token wire bytes).
- * Readers should prefer this file in order to avoid TOCTOU races between
- * reading status and token separately.
+ * Status flags and token in one atomic file, so a reader avoids the race
+ * between reading the two files above.
  */
 #define LOTA_HOOK_SNAPSHOT_FILE LOTA_SNAPSHOT_FILE_NAME
 
@@ -118,38 +99,34 @@ extern "C" {
  */
 #define LOTA_HOOK_BOOT_EVIDENCE_FILE "lota-boot-evidence.bin"
 
-/* defaults */
 #define LOTA_HOOK_DEFAULT_REFRESH_SEC 60
 
-#define LOTA_HOOK_CONNECT_TIMEOUT_MS 2000 /* local socket */
+#define LOTA_HOOK_CONNECT_TIMEOUT_MS 2000
 
-/* a status answer may wait on a measurement; on timeout, ask again */
+/* A status answer may wait on a measurement; on timeout, ask again. */
 #define LOTA_HOOK_REQUEST_TIMEOUT_MS (10 * LOTA_HOOK_CONNECT_TIMEOUT_MS)
 
-/* the hook is built hidden so its SDK copy cannot shadow the game's */
+/* The hook is built hidden so its SDK copy cannot shadow the game's. */
 #define LOTA_HOOK_EXPORT __attribute__((visibility("default")))
 
-/*
- * lota_hook_active - Check whether the hook is running.
+/**
+ * lota_hook_active() - Check whether the hook is running.
  *
- * Returns 1 if the background refresh thread is alive,
- * 0 otherwise (disabled, init failed, or not loaded).
+ * Return: 1 if the refresh thread is alive, 0 if disabled or init failed.
  */
 LOTA_HOOK_EXPORT int lota_hook_active(void);
 
-/*
- * lota_hook_status_path - Return absolute path to the status file.
+/**
+ * lota_hook_status_path() - Return the absolute path of the status file.
  *
- * Returns pointer to internal static buffer, or NULL if the hook
- * has not been initialised.
+ * Return: a static buffer, or NULL before the hook has initialised.
  */
 LOTA_HOOK_EXPORT const char *lota_hook_status_path(void);
 
-/*
- * lota_hook_token_path - Return absolute path to the token file.
+/**
+ * lota_hook_token_path() - Return the absolute path of the token file.
  *
- * Returns pointer to internal static buffer, or NULL if the hook
- * has not been initialised.
+ * Return: a static buffer, or NULL before the hook has initialised.
  */
 LOTA_HOOK_EXPORT const char *lota_hook_token_path(void);
 

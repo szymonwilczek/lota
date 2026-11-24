@@ -2,17 +2,23 @@
 /*
  * LOTA sealed-blob wire format.
  *
- * A sealed blob binds a small secret to a TPM and to a chosen PCR state:
- * the TPM only releases the secret (via TPM2_Unseal) when the current PCR
- * values reproduce the PolicyPCR digest the blob was sealed against. The
- * blob is therefore inert at rest -- useless on a different machine, or on
- * the same machine booted into a different (tampered) state.
+ * A sealed blob binds a small secret to a TPM and a PCR state: TPM2_Unseal
+ * releases it only when the current PCR values reproduce the PolicyPCR digest
+ * it was sealed against.
  *
- * This header carries only the portable, TPM-independent framing: the
- * magic/version, the PCR selection the blob is bound to, a diagnostic copy
- * of the seal-time PCR digest, and the lengths of the marshalled
- * TPM2B_PUBLIC / TPM2B_PRIVATE that follow. The marshalled bodies are
- * opaque here; tpm.c produces and consumes them.
+ * Layout (little-endian):
+ *
+ *   offset size field
+ *   0      4    magic        LOTA_SEAL_MAGIC
+ *   4      2    version      LOTA_SEAL_VERSION
+ *   6      2    reserved     must be 0
+ *   8      4    pcr_mask     PCR selection the blob is sealed against
+ *   12     1    pcr_alg      LOTA_SEAL_PCR_ALG_SHA256
+ *   13     3    reserved     must be 0
+ *   16     32   pcr_digest   seal-time PCR digest, unused on unseal
+ *   48     2    pub_len      marshalled TPM2B_PUBLIC length
+ *   50     2    priv_len     marshalled TPM2B_PRIVATE length
+ *   52     var  pub[pub_len] || priv[priv_len]
  *
  * Copyright (C) 2026 Szymon Wilczek
  */
@@ -32,81 +38,49 @@ extern "C" {
 #define LOTA_SEAL_VERSION 1u
 
 /*
- * Largest plaintext secret that may be sealed. TPM2_Seal bounds the
- * sensitive data; 128 bytes comfortably covers symmetric keys, AIK auth
- * values, and per-title key material while staying within every TPM's
- * sealed-data limit.
+ * Largest plaintext secret that may be sealed: MAX_SYM_DATA of the TPM 2.0
+ * reference implementation bounds the sensitive data of TPM2_Create.
  */
 #define LOTA_SEAL_MAX_SECRET 128u
 
-/* PolicyPCR digest is a single SHA-256. */
 #define LOTA_SEAL_PCR_DIGEST_SIZE 32u
 
-/* pcr_alg field values. */
 #define LOTA_SEAL_PCR_ALG_SHA256 0u
 
 /* Valid PCR indices are 0..23; the mask is one bit per PCR. */
 #define LOTA_SEAL_PCR_MASK_ALL 0x00FFFFFFu
 
-/*
- * LOTA's boot-commitment register, which agent.h names LOTA_PCR_SELF.
- * It is repeated here because the masks below are the reason a caller cares
- * about it, and this header may not depend on the agent's.
- */
+/* Copy of LOTA_PCR_SELF from agent.h, which this header may not depend on. */
 #define LOTA_SEAL_BOOT_COMMITMENT_PCR 14u
 
 /*
- * Default PCR set: the firmware and Secure Boot PCRs 0-7, and nothing else.
+ * Default PCR set: PCRs 0-7, the firmware and boot-path measurements, Secure
+ * Boot included. A change in any of them invalidates the seal, and on a shim
+ * and GRUB host PCR 4 holds the kernel image, so a kernel upgrade does. A
+ * powered-off disk in someone else's hands unseals nothing: the blob loads only
+ * under this TPM's primary key.
  *
- * These describe the machine. They hold their values across a reboot and across
- * an agent upgrade, and they cannot be reproduced on other hardware or under
- * other firmware -- which is exactly the binding at-rest sealing wants,
- * since the threat it answers is a powered-off disk in someone else's hands.
- * A firmware or Secure Boot change still invalidates the seal.
- *
- * PCR 14 is deliberately absent. It is LOTA's boot commitment, and its value
- * is a function of the agent binary: it is stable from boot to boot and it moves
- * when the agent is updated. Binding it would make every agent upgrade destroy
- * every sealed secret on the host -- and where the plaintext has been dropped,
- * that means re-enrolling with every publisher after a routine update.
- * It also buys nothing against the stolen-disk threat, which PCRs 0-7 already
- * answer.
+ * PCR 14 is left out: it moves when the agent is updated, so binding it would
+ * cost every sealed secret on the host at every upgrade.
  */
 #define LOTA_SEAL_DEFAULT_PCR_MASK 0xFFu
 
 /*
- * The platform set plus the boot commitment, which additionally binds the
- * secret to the agent binary that sealed it.
- * Named, because it is a deliberate trade: it defends against an agent swapped
- * on this machine, and it costs the secret at every legitimate agent upgrade.
+ * The default set plus PCR 14, the agent's boot commitment. This binds a boot
+ * state, not a process: any process with TPM access unseals while the registers
+ * match. An agent upgrade costs the secret.
  */
 #define LOTA_SEAL_AGENT_BOUND_PCR_MASK \
 	(LOTA_SEAL_DEFAULT_PCR_MASK | (1u << LOTA_SEAL_BOOT_COMMITMENT_PCR))
 
-/* Fixed header size on disk (little-endian, packed). */
 #define LOTA_SEAL_HEADER_SIZE 52u
 
-/* Upper bounds on the marshalled TPM2B bodies and the whole blob. */
 #define LOTA_SEAL_MAX_PUB 1024u
 #define LOTA_SEAL_MAX_PRIV 1024u
 #define LOTA_SEAL_MAX_BLOB \
 	(LOTA_SEAL_HEADER_SIZE + LOTA_SEAL_MAX_PUB + LOTA_SEAL_MAX_PRIV)
 
-/*
- * Parsed/buildable header fields.
- *
- *   offset size field
- *   0      4    magic        LOTA_SEAL_MAGIC
- *   4      2    version      LOTA_SEAL_VERSION
- *   6      2    reserved     must be 0
- *   8      4    pcr_mask     PCR selection the blob is sealed against
- *   12     1    pcr_alg      LOTA_SEAL_PCR_ALG_SHA256
- *   13     3    reserved     must be 0
- *   16     32   pcr_digest   seal-time PolicyPCR pcr digest (diagnostic)
- *   48     2    pub_len      marshalled TPM2B_PUBLIC length
- *   50     2    priv_len     marshalled TPM2B_PRIVATE length
- *   52     var  pub[pub_len] || priv[priv_len]
- */
+/* Header fields that vary between blobs. */
 struct lota_seal_meta {
 	uint32_t pcr_mask;
 	uint8_t pcr_alg;
@@ -134,11 +108,11 @@ enum lota_blob_reason {
 	LOTA_BLOB_BODY_LENGTH,
 };
 
-/*
+/**
+ * struct lota_blob_refusal - Why a blob or envelope parse refused.
  * @reason: which field was refused.
- * @value: that field as it was read, where it is a number worth printing.
- * @expected: what the format requires of it, 0 where the reason has no
- *            single number to compare against.
+ * @value: that field as read, where it is a number worth printing.
+ * @expected: what the format requires, 0 where no single number applies.
  */
 struct lota_blob_refusal {
 	enum lota_blob_reason reason;
@@ -146,7 +120,12 @@ struct lota_blob_refusal {
 	uint32_t expected;
 };
 
-/* @reason as a phrase about the file; the blob never reached a TPM */
+/**
+ * lota_blob_reason_str() - Word a refusal.
+ * @reason: the refused field.
+ *
+ * Return: a phrase about the file, as the blob never reached a TPM.
+ */
 static inline const char *lota_blob_reason_str(enum lota_blob_reason reason)
 {
 	switch (reason) {
@@ -200,12 +179,7 @@ static inline uint32_t lota__seal_read_le32(const uint8_t *p)
 	       ((uint32_t)p[3] << 24);
 }
 
-/*
- * Each byte is masked before the cast.
- * The cast alone truncates, which is what these want, but it leaves a checker
- * unable to tell a deliberate narrowing from an accidental one -- and callers
- * pass magic constants, so the truncation is visible after constant folding.
- */
+/* Each byte is masked before the cast, for the reason in lota_endian.h. */
 static inline void lota__seal_write_le16(uint8_t *p, uint16_t v)
 {
 	p[0] = (uint8_t)(v & 0xffu);
@@ -220,10 +194,13 @@ static inline void lota__seal_write_le32(uint8_t *p, uint32_t v)
 	p[3] = (uint8_t)((v >> 24) & 0xffu);
 }
 
-/*
- * Reject a PCR mask that selects no PCR or any index above 23. Sealing to
- * an empty selection would bind the secret to nothing (it would unseal in
- * any state), so it is refused.
+/**
+ * lota_seal_validate_pcr_mask() - Check a PCR selection.
+ * @pcr_mask: bit n selects PCR n.
+ *
+ * An empty selection would bind the secret to nothing, so it is refused.
+ *
+ * Return: 0 if valid, -EINVAL if empty or naming a PCR above 23.
  */
 static inline int lota_seal_validate_pcr_mask(uint32_t pcr_mask)
 {
@@ -234,10 +211,14 @@ static inline int lota_seal_validate_pcr_mask(uint32_t pcr_mask)
 	return 0;
 }
 
-/*
- * Serialize the fixed header into out[0..LOTA_SEAL_HEADER_SIZE). The
- * caller appends pub[pub_len] then priv[priv_len].
- * Returns 0 on success, EINVAL on a NULL argument or an invalid mask/alg.
+/**
+ * lota_seal_serialize_header() - Write the fixed header.
+ * @out: LOTA_SEAL_HEADER_SIZE bytes.
+ * @m:   PCR binding and body lengths to write.
+ *
+ * The caller appends pub[pub_len], then priv[priv_len].
+ *
+ * Return: 0 on success, -EINVAL on a NULL argument or an invalid field.
  */
 static inline int lota_seal_serialize_header(uint8_t *out,
 					     const struct lota_seal_meta *m)
@@ -256,26 +237,24 @@ static inline int lota_seal_serialize_header(uint8_t *out,
 	memset(out, 0, LOTA_SEAL_HEADER_SIZE);
 	lota__seal_write_le32(out + 0, LOTA_SEAL_MAGIC);
 	lota__seal_write_le16(out + 4, (uint16_t)LOTA_SEAL_VERSION);
-	/* out+6..7 reserved = 0 */
 	lota__seal_write_le32(out + 8, m->pcr_mask);
 	out[12] = m->pcr_alg;
-	/* out+13..15 reserved = 0 */
 	memcpy(out + 16, m->pcr_digest, LOTA_SEAL_PCR_DIGEST_SIZE);
 	lota__seal_write_le16(out + 48, m->pub_len);
 	lota__seal_write_le16(out + 50, m->priv_len);
 	return 0;
 }
 
-/*
- * Parse and validate the fixed header from a blob of total length len.
- * Fills *m and, if body_off is non-NULL, the offset where pub[] begins.
- * Verifies magic, version, reserved bytes, mask, alg, the length fields,
- * and that the declared bodies fit exactly within len.
+/**
+ * lota_seal_parse_header_why() - Parse and validate the fixed header.
+ * @buf: the whole blob.
+ * @len: length of @buf; the declared bodies must fill it exactly.
+ * @m: receives the header fields on success.
+ * @body_off: if non-NULL, receives the offset of pub[].
+ * @why: if non-NULL, receives the refused field.
  *
- * Fills *why, if non-NULL, with the refused field.
- *
- * Returns 0 on success, -EINVAL on a malformed header,
- * -EMSGSIZE on a length mismatch.
+ * Return: 0 on success, -EINVAL on a malformed header, -EMSGSIZE on a length
+ * mismatch.
  */
 static inline int lota_seal_parse_header_why(const uint8_t *buf, size_t len,
 					     struct lota_seal_meta *m,
@@ -336,7 +315,6 @@ static inline int lota_seal_parse_header_why(const uint8_t *buf, size_t len,
 		return -EINVAL;
 	}
 
-	/* bodies must fit exactly: no trailing slack, no overflow */
 	size_t need = (size_t)LOTA_SEAL_HEADER_SIZE + (size_t)pub_len +
 		      (size_t)priv_len;
 	if (need != len) {
@@ -355,7 +333,15 @@ static inline int lota_seal_parse_header_why(const uint8_t *buf, size_t len,
 	return 0;
 }
 
-/* The same parse for a caller that has nobody to explain the refusal to. */
+/**
+ * lota_seal_parse_header() - lota_seal_parse_header_why() without @why.
+ * @buf:      as for lota_seal_parse_header_why().
+ * @len:      as for lota_seal_parse_header_why().
+ * @m:        as for lota_seal_parse_header_why().
+ * @body_off: as for lota_seal_parse_header_why().
+ *
+ * Return: as lota_seal_parse_header_why().
+ */
 static inline int lota_seal_parse_header(const uint8_t *buf, size_t len,
 					 struct lota_seal_meta *m,
 					 size_t *body_off)

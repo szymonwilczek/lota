@@ -16,15 +16,13 @@
 #define LOTA_ENROLL_MAGIC 0x4C434145u
 
 /*
- * Protocol version, carried by every frame. One layout per message: the
- * token and the intermediates are a length and a count that may be zero.
- * A layout change takes the next number; the agent sends its newest,
- * the CA answers in the request's, an unknown number is refused.
+ * Protocol version, carried by every frame. A layout change takes the next
+ * number; the agent sends its newest, the CA answers in the request's, an
+ * unknown number is refused.
  */
 #define LOTA_ENROLL_VERSION 1u
 
-/* Field bounds, identical to the Go wire caps. */
-/* see (src/attestca/wire/wire.go) */
+/* Field bounds, identical to src/attestca/wire/wire.go. */
 #define LOTA_ENROLL_MAX_EK_CERT 2048u
 #define LOTA_ENROLL_MAX_AIK_PUBLIC 1024u
 #define LOTA_ENROLL_MAX_CRED_BLOB 1024u
@@ -36,13 +34,9 @@
 #define LOTA_ENROLL_MAX_TOKEN 128u
 
 /*
- * Manufacturer intermediates a device presents with its EK leaf.
- *
- * TPM whose EK certificate sits several levels below its manufacturer root
- * stores the intermediates the CA cannot obtain anywhere else in its own NV,
- * so the device is the only party that can supply them.
- * Both caps are frame budget: eight certificates and 8 KB of them still leave
- * the leaf, the AIK template and the token inside LOTA_ENROLL_MAX_FRAME.
+ * Manufacturer intermediates a device presents with its EK leaf. Both caps are
+ * frame budget: they leave the leaf, the AIK template and the token inside
+ * LOTA_ENROLL_MAX_FRAME.
  */
 #define LOTA_ENROLL_MAX_EK_CHAIN_CERTS 8u
 #define LOTA_ENROLL_MAX_EK_CHAIN_BYTES 8192u
@@ -50,7 +44,6 @@
 /* Bound on a single decoded frame body. */
 #define LOTA_ENROLL_MAX_FRAME (16u * 1024u)
 
-/* Reply status codes. */
 enum lota_enroll_status {
 	LOTA_ENROLL_STATUS_OK = 0,
 	LOTA_ENROLL_STATUS_BAD_REQUEST = 1,

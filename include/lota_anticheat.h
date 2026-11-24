@@ -1,14 +1,7 @@
 /* SPDX-License-Identifier: MIT */
 /*
- * LOTA Anti-Cheat Compatibility Layer
- *
- * Adapter that emulates the session interface expected by anti-cheat
- * systems (EAC, BattlEye) for games that require one.
- *
- * Produces heartbeat packets that wrap LOTA attestation tokens with
- * per-session context. Game servers verify heartbeats using
- * lota_ac_verify_heartbeat(), which internally delegates to
- * lota_server_verify_token() for TPM signature validation.
+ * LOTA anti-cheat layer: heartbeat packets wrap LOTA tokens with per-session
+ * context, and a game server verifies them with lota_ac_verify_heartbeat().
  *
  * Two client modes:
  *   Direct - calls lota_gaming SDK over Unix socket (native games)
@@ -27,7 +20,7 @@
 extern "C" {
 #endif
 
-#define LOTA_AC_MAGIC 0x4C414348 /* "LACH" little-endian */
+#define LOTA_AC_MAGIC 0x4C414348 /* "HCAL" on the wire, little-endian */
 #define LOTA_AC_VERSION 1
 #define LOTA_AC_HEADER_SIZE 110
 #define LOTA_AC_MAX_TOKEN 1608
@@ -38,12 +31,9 @@ extern "C" {
 #define LOTA_AC_RUNTIME_MEASURE_SIZE 32
 
 /*
- * Domain-version negotiation.
- *
- * Each value names a frozen pair of hash domain strings used to derive the
- * game-binding hash and the heartbeat nonce. Producer stamps the value into the
- * wire; verifier rejects anything outside its accepted set. New string variants
- * must allocate the next integer instead of silently replacing an existing one.
+ * Each value names a frozen pair of hash domain strings, for the game-binding
+ * hash and the heartbeat nonce. The verifier rejects any other value. New
+ * strings take the next integer.
  *
  * V1: "lota-ac-game-binding:v1\\0" + "lota-ac-heartbeat:v1\\0"
  */
@@ -61,23 +51,18 @@ enum lota_ac_provider {
 
 enum lota_ac_state {
 	LOTA_AC_STATE_IDLE = 0, /* not initialised */
-	LOTA_AC_STATE_RUNNING = 1, /* active, agent reachable */
+	LOTA_AC_STATE_RUNNING = 1, /* internal, replaced before init returns */
 	LOTA_AC_STATE_TRUSTED = 2, /* attested, and every required flag set */
-	LOTA_AC_STATE_UNTRUSTED = 3, /* agent reachable but not attested */
-	LOTA_AC_STATE_ERROR = 4, /* cannot reach agent / internal fault */
+	LOTA_AC_STATE_UNTRUSTED = 3, /* not trusted */
+	LOTA_AC_STATE_ERROR = 4, /* no verdict to report */
 };
 
 /*
- * Error codes.
+ * Error codes, below LOTA_AC_ERR_BASE so none collides with the negative errno
+ * the measure helpers return.
  *
- * Every code sits below LOTA_AC_ERR_BASE, so none collides with the negative
- * errno the measure helpers return; lota_ac_strerror() renders both.
- *
- * The verification group says why a server refused a heartbeat.
- * The rest say why a producer-side call failed and are read with
- * lota_ac_last_error(): a refused configuration is the integrator's bug,
- * while a missing agent, a publisher nobody agreed to or an unattested host
- * is a state the player acts on.
+ * The verification group says why a server refused a heartbeat. The rest say
+ * why a producer-side call failed, and are read with lota_ac_last_error().
  */
 #define LOTA_AC_ERR_BASE (-1000)
 
@@ -92,130 +77,98 @@ enum {
 	LOTA_AC_ERR_NONCE_FAIL = LOTA_AC_ERR_BASE - 5,
 	LOTA_AC_ERR_EXPIRED = LOTA_AC_ERR_BASE - 6,
 	LOTA_AC_ERR_CRYPTO = LOTA_AC_ERR_BASE - 7,
-	/* agent answered: no attestation-key slot left for this publisher;
-	   no retry helps, show it to the player */
+	/* agent answered: no attestation-key slot left; no retry helps */
 	LOTA_AC_ERR_NO_KEY_SLOT = LOTA_AC_ERR_BASE - 25,
-	/* TPM in dictionary-attack lockout: signs nothing until cleared;
-	   no retry helps, unlike NOT_ATTESTED */
+	/* TPM in dictionary-attack lockout until it lapses or is cleared */
 	LOTA_AC_ERR_TPM_LOCKOUT = LOTA_AC_ERR_BASE - 26,
-	LOTA_AC_ERR_RUNTIME_IMAGE = LOTA_AC_ERR_BASE - 24, /* the runtime
-							    * measurement is
-							    * not the one
-							    * expected */
+	/* not the runtime measurement expected */
+	LOTA_AC_ERR_RUNTIME_IMAGE = LOTA_AC_ERR_BASE - 24,
 
 	/* the caller's own configuration */
-	LOTA_AC_ERR_CONFIG_SIZE = LOTA_AC_ERR_BASE - 8, /* struct_size unset
-							 * or too small */
-	LOTA_AC_ERR_GAME_ID = LOTA_AC_ERR_BASE - 9, /* game_id missing, empty
-						     * or too long */
-	LOTA_AC_ERR_PROVIDER = LOTA_AC_ERR_BASE - 10, /* provider is neither
-						       * EAC nor BattlEye */
+
+	/* struct_size unset or too small */
+	LOTA_AC_ERR_CONFIG_SIZE = LOTA_AC_ERR_BASE - 8,
+	/* game_id missing, empty or too long */
+	LOTA_AC_ERR_GAME_ID = LOTA_AC_ERR_BASE - 9,
+	/* provider is neither EAC nor BattlEye */
+	LOTA_AC_ERR_PROVIDER = LOTA_AC_ERR_BASE - 10,
 
 	/* this library */
 	LOTA_AC_ERR_NO_MEMORY = LOTA_AC_ERR_BASE - 11,
-	LOTA_AC_ERR_INTERNAL = LOTA_AC_ERR_BASE - 12, /* session id or game-id
-						       * hash failed */
+	/* session id or game-id hash failed */
+	LOTA_AC_ERR_INTERNAL = LOTA_AC_ERR_BASE - 12,
 
-	/* the host, which is what a player acts on */
-	LOTA_AC_ERR_NO_AGENT = LOTA_AC_ERR_BASE - 13, /* no agent answering the
-						       * socket */
-	LOTA_AC_ERR_CONSENT_REQUIRED = LOTA_AC_ERR_BASE - 14, /* nobody has
-							       * agreed to this
-							       * publisher */
-	LOTA_AC_ERR_UNKNOWN_PROFILE = LOTA_AC_ERR_BASE - 15, /* not enrolled
-							      * with that
-							      * publisher */
+	/* the host: a player acts on these */
+
+	/* no agent answering the socket */
+	LOTA_AC_ERR_NO_AGENT = LOTA_AC_ERR_BASE - 13,
+	/* nobody has agreed to this publisher */
+	LOTA_AC_ERR_CONSENT_REQUIRED = LOTA_AC_ERR_BASE - 14,
+	/* not enrolled with that publisher */
+	LOTA_AC_ERR_UNKNOWN_PROFILE = LOTA_AC_ERR_BASE - 15,
 	LOTA_AC_ERR_ACCESS_DENIED = LOTA_AC_ERR_BASE - 16,
-	LOTA_AC_ERR_TOKEN_DIR = LOTA_AC_ERR_BASE - 17, /* file mode: no hook
-							* output directory */
+	/* file mode: no hook output directory */
+	LOTA_AC_ERR_TOKEN_DIR = LOTA_AC_ERR_BASE - 17,
 	LOTA_AC_ERR_NOT_ATTESTED = LOTA_AC_ERR_BASE - 18, /* no verdict yet */
-	LOTA_AC_ERR_RATE_LIMITED = LOTA_AC_ERR_BASE - 19, /* beating faster
-							   * than the agent
-							   * issues tokens */
+	/* beating faster than the agent issues tokens */
+	LOTA_AC_ERR_RATE_LIMITED = LOTA_AC_ERR_BASE - 19,
 
 	/* the beat itself */
-	LOTA_AC_ERR_STATUS = LOTA_AC_ERR_BASE - 20, /* the agent would not
-						     * report its state */
-	LOTA_AC_ERR_TOKEN = LOTA_AC_ERR_BASE - 21, /* the agent would not issue
-						    * a token */
-	LOTA_AC_ERR_MEASURE = LOTA_AC_ERR_BASE - 22, /* this process could not
-						      * be measured */
-	LOTA_AC_ERR_SERIALIZE = LOTA_AC_ERR_BASE - 23, /* the token would not
-							* serialise */
+
+	/* the agent would not report its state */
+	LOTA_AC_ERR_STATUS = LOTA_AC_ERR_BASE - 20,
+	/* the agent would not issue a token */
+	LOTA_AC_ERR_TOKEN = LOTA_AC_ERR_BASE - 21,
+	/* this process could not be measured */
+	LOTA_AC_ERR_MEASURE = LOTA_AC_ERR_BASE - 22,
+	/* the token would not serialise */
+	LOTA_AC_ERR_SERIALIZE = LOTA_AC_ERR_BASE - 23,
 
 	/* boot evidence */
-	LOTA_AC_ERR_NO_EVIDENCE = LOTA_AC_ERR_BASE - 27, /* the agent would
-							  * not hand it over */
-	LOTA_AC_ERR_BAD_EVIDENCE = LOTA_AC_ERR_BASE - 28, /* not the boot the
-							   * heartbeat quotes */
+
+	/* the agent would not hand it over */
+	LOTA_AC_ERR_NO_EVIDENCE = LOTA_AC_ERR_BASE - 27,
+	/* not the boot the heartbeat quotes */
+	LOTA_AC_ERR_BAD_EVIDENCE = LOTA_AC_ERR_BASE - 28,
 };
 
 struct lota_ac_config {
-	/*
-	 * sizeof(struct lota_ac_config), set by the caller.
-	 * See the same member on struct lota_connect_opts for what it buys.
-	 * Zero is refused rather than guessed at.
-	 *
-	 *     struct lota_ac_config cfg = { .struct_size = sizeof(cfg) };
-	 */
+	/* sizeof(struct lota_ac_config), 0 is refused; see lota_connect_opts */
 	size_t struct_size;
 
 	enum lota_ac_provider provider;
 	const char *game_id; /* NUL-terminated, max LOTA_AC_MAX_GAME_ID */
 
 	/*
-	 * Extra attestation flags this title insists on.
-	 *
-	 * Heartbeat state is TRUSTED only if every one of them is set,
-	 * and only if LOTA_FLAG_ATTESTED is set: this field raises the bar
-	 * and cannot lower it.
-	 * Leaving it 0 asks for attestation alone, which is what TRUSTED means
-	 * -- it does not accept any status word that happens to be non-zero,
-	 * because a word is non-zero as soon as the agent holds a TPM handle
-	 * and nobody has attested anything.
+	 * Flags a title requires beside LOTA_FLAG_ATTESTED, which TRUSTED
+	 * always requires. A status word is non-zero as soon as the agent holds
+	 * a TPM.
 	 */
 	uint32_t required_flags;
 
-	/*
-	 * Client mode:
-	 *   direct = 1 -> use lota_gaming SDK (native games)
-	 *   direct = 0 -> read Wine hook files
-	 */
+	/* 1: lota_gaming SDK (native games), 0: Wine hook files */
 	int direct;
 
 	/*
-	 * For file mode: directory containing lota-status and lota-token.bin.
-	 * NULL -> auto-detect, in the order the hook resolves:
-	 * $LOTA_HOOK_TOKEN_DIR, then $XDG_RUNTIME_DIR/lota-hook, then
-	 * /tmp/lota-<uid>. Never $XDG_RUNTIME_DIR/lota, which belongs to
-	 * the agent.
+	 * File mode: directory with lota-status and lota-token.bin.
+	 * NULL: $LOTA_HOOK_TOKEN_DIR, $XDG_RUNTIME_DIR/lota-hook,
+	 * /tmp/lota-<uid>.
 	 */
 	const char *token_dir;
 
-	/*
-	 * For direct mode: custom socket path.
-	 * NULL -> default (/run/lota/lota.sock).
-	 */
+	/* Direct mode: NULL for /run/lota/lota.sock */
 	const char *socket_path;
 
 	/*
-	 * For direct mode:
-	 * which publisher this session attests for, as the lowercase hex SHA-256
-	 * of that publisher's attestation-CA trust anchor SubjectPublicKeyInfo.
-	 * See struct lota_connect_opts, which this is passed through to.
-	 *
-	 * NULL on a single-publisher host; one that answers for several
-	 * refuses a session that names none.
-	 * Ignored in file mode, where the Wine hook owns the agent connection.
+	 * Direct mode: the publisher this session attests for, hex
+	 * SHA-256 of its attestation-CA SubjectPublicKeyInfo. See struct
+	 * lota_connect_opts. NULL on a single-publisher host; one that answers
+	 * for several refuses a session that names none.
 	 */
 	const char *publisher_profile;
 };
 
-/*
- * Size of the structure as of the 1.0 surface.
- * Caller passing less than this is refused;
- * Caller passing more has members this library does not read.
- */
+/* Smallest struct_size accepted. */
 #define LOTA_AC_CONFIG_SIZE_MIN                               \
 	(offsetof(struct lota_ac_config, publisher_profile) + \
 	 sizeof(const char *))
@@ -224,8 +177,8 @@ struct lota_ac_config {
  * heartbeat wire format (little-endian, packed):
  *
  *   offset  size   field
- *   0       4      magic           0x4C414348
- *   4       1      version         0x03
+ *   0       4      magic           LOTA_AC_MAGIC
+ *   4       1      version         LOTA_AC_VERSION
  *   5       1      provider        EAC=1, BE=2
  *   6       2      total_size      full packet size
  *   8       16     session_id      random per-session
@@ -239,14 +192,12 @@ struct lota_ac_config {
  *   74      4      domain_version  LOTA_AC_DOMAIN_VERSION_*; selects the
  *                                  game-binding/heartbeat domain pair and
  *                                  is itself bound into the heartbeat nonce
- *   78      32     runtime_measure advisory producer-side re-measurement of
- *                                  the executable image. Computed inside the
- *                                  game process and therefore forgeable, so
- *                                  it is nonce-bound for tamper-evidence but
- *                                  is NOT a trust signal. The authoritative
- *                                  runtime measurement is taken by the agent
- *                                  from the kernel side and bound into the
- *                                  embedded token's runtime_protect_digest.
+ *   78      32     runtime_measure producer-side re-measurement of the
+ *                                  executable image. Computed inside the game
+ *                                  process, so forgeable and not a trust
+ *                                  signal; nonce-bound for tamper-evidence. The
+ *                                  agent's own is in the token's
+ *                                  runtime_protect_digest.
  *   110     var    lota_token[]    full LOTA token (wire format)
  */
 struct lota_ac_heartbeat_wire {
@@ -272,20 +223,13 @@ struct lota_ac_info {
 	uint64_t last_heartbeat; /* epoch */
 	uint32_t heartbeat_seq; /* current counter */
 	/*
-	 * Last known attestation flags (LOTA_FLAG_* from lota_gaming.h)
-	 *
-	 * LOTA_FLAG_UPDATE_PENDING may be set on perfectly healthy session:
-	 * it says a package update replaced the agent binary and takes effect
-	 * on the next cold boot, not that anything is wrong now.
-	 * Surface it to the player if you like, but do not fold it into trust
-	 * decision -- the state field and the heartbeat verification remain
-	 * the only answers to whether this session is trustworthy.
+	 * Last known LOTA_FLAG_*. LOTA_FLAG_UPDATE_PENDING says a package
+	 * update replaced the agent binary, effective on the next boot; it
+	 * is not a trust signal.
 	 */
 	uint32_t lota_flags;
-	uint8_t game_id_hash[LOTA_AC_GAME_HASH_SIZE]; /* verified game identity
-							 binding */
-	int trusted; /* state == LOTA_AC_STATE_TRUSTED, in the same terms the
-		      * state field is in: attested, whatever else was asked for */
+	uint8_t game_id_hash[LOTA_AC_GAME_HASH_SIZE];
+	int trusted; /* state == LOTA_AC_STATE_TRUSTED */
 	/* the boot PCRs the quote signed, for lota_ac_verify_boot_evidence() */
 	uint32_t pcr_mask;
 	uint8_t pcr_digest[32];
@@ -293,131 +237,102 @@ struct lota_ac_info {
 
 struct lota_ac_session;
 
-/*
- * Create and initialise an anti-cheat session.
+/**
+ * lota_ac_init() - Create an anti-cheat session.
  *
- * In direct mode, opens a connection to the LOTA agent.
- * In file mode, locates the Wine hook output directory.
+ * Direct mode connects to the agent, file mode locates the Wine hook directory.
  *
- * Returns NULL on error; lota_ac_last_error() says which one.
- * A session whose agent could not be reached is returned, in LOTA_AC_STATE_ERROR,
- * so a title can show the player something and try again -- the accessor names
- * that case too.
+ * Return: The session, in LOTA_AC_STATE_ERROR if it got no verdict. NULL on
+ * error. lota_ac_last_error() holds the reason, LOTA_AC_ERR_OK if the verdict
+ * is missing because a snapshot could not be read.
  */
 struct lota_ac_session *lota_ac_init(const struct lota_ac_config *cfg);
 
-/*
- * lota_ac_last_error - Why the last call on this thread failed
+/**
+ * lota_ac_last_error() - Why the last call on this thread failed.
  *
  * Set by every call that returns a value to check, LOTA_AC_ERR_OK on success:
  * errno for the measure helpers, LOTA_AC_ERR_* otherwise. The renderers,
- * lota_ac_get_state() and lota_ac_shutdown() leave it alone.
- * Thread-local, because a title and its launcher in one process must
- * not read each other's answer.
- *
- * It exists because the alternative is what this SDK used to do:
- * return NULL or -EIO for a dozen unrelated causes and leave an integrator
- * to guess. The one distinction to build on is whether the code names
- * the caller's own configuration or the state of the host.
+ * lota_ac_get_state() and lota_ac_shutdown() leave it alone. Thread-local, as a
+ * title and its launcher can share a process.
  */
 int lota_ac_last_error(void);
 
-/*
- * lota_ac_strerror - The error code as a sentence
+/**
+ * lota_ac_strerror() - The error code as a sentence.
+ * @err: A LOTA_AC_ERR_* code or a negative errno.
  *
- * Accepts any value a call returned: a LOTA_AC_ERR_* code or a negative
- * errno from the measure helpers, which gets the system's description.
- * Stable English, no trailing punctuation, never NULL, even for a code
- * from a newer library.
+ * Return: Stable English with no trailing punctuation, never NULL.
  */
 const char *lota_ac_strerror(int err);
 
-/*
- * Destroy session and release resources.
- * Disconnects from agent if in direct mode. Safe to call with NULL.
+/**
+ * lota_ac_shutdown() - Destroy a session; NULL is accepted.
  */
 void lota_ac_shutdown(struct lota_ac_session *session);
 
-/*
- * Get current session state.
+/**
+ * lota_ac_get_state() - Current session state.
  *
- * Local telemetry, not an authority: client-side memory can be hooked,
- * and a server's trust must come from lota_ac_verify_heartbeat() over the packets
- * it received. Useful for what a launcher shows a player before a round starts.
+ * Local telemetry: client memory can be hooked, so a server trusts only
+ * lota_ac_verify_heartbeat().
  *
- * Returns LOTA_AC_STATE_IDLE if session is NULL.
+ * Return: The state, LOTA_AC_STATE_IDLE if @session is NULL.
  */
 enum lota_ac_state lota_ac_get_state(const struct lota_ac_session *session);
 
-/*
- * Get local session telemetry for heartbeat production.
+/**
+ * lota_ac_get_info() - Local session telemetry.
  *
- * Output from this function is NOT authoritative for anti-cheat decisions.
- * Treat it as local diagnostics only. Client-side memory can be hooked; server
- * trust must come from lota_ac_verify_heartbeat() over received heartbeat
- * packets.
+ * Not authoritative, as with lota_ac_get_state().
  *
- * The state and trusted fields carry what lota_ac_get_state() carries.
- * Both roads out of a session are local telemetry, so they answer the same thing;
- * neither becomes an authority by agreeing with the other.
- *
- * Returns 0 on success, -EINVAL if session or info is NULL.
+ * Return: 0 on success, -EINVAL if an argument is NULL.
  */
 int lota_ac_get_info(const struct lota_ac_session *session,
 		     struct lota_ac_info *info);
 
-/*
- * Refresh session state from agent (direct) or hook files (file mode).
- * Call periodically or before generating a heartbeat.
+/**
+ * lota_ac_tick() - Refresh session state from the agent or the hook files.
  *
- * Returns 0 on success, negative errno on failure.
+ * Return: 0 on success, negative errno on failure.
  */
 int lota_ac_tick(struct lota_ac_session *session);
 
-/*
- * Generate a heartbeat packet.
+/**
+ * lota_ac_heartbeat() - Generate a heartbeat packet.
+ * @written: The packet size, on success.
  *
- * Calls lota_ac_tick() internally for a fresh state, then serialises
- * the heartbeat into buf[0..buflen). On success, *written is set to
- * the actual packet size.
+ * Refreshes the state first. The token nonce binds sequence, timestamp, session
+ * and game, which takes a live token, so file mode has no heartbeat.
  *
- * Security model:
- * - The heartbeat binds sequence/timestamp/session/game context into
- *   token nonce, which is TPM-signature-authenticated by the inner token.
- * - This requires live token issuance with caller-supplied nonce.
- * - Therefore heartbeat generation is supported only in direct mode.
- *
- * Returns 0 on success, -EINVAL for bad arguments, -ENODATA if no
- * token is available, -ENOSPC if buf is too small, -EOPNOTSUPP if
- * replay-safe nonce binding is unavailable (file mode).
+ * Return: 0 on success, -EINVAL for bad arguments, -ENOTCONN without an agent,
+ * -ENODATA if no token is available, -ENOSPC if @buf is too small, -EOPNOTSUPP
+ * in file mode, another negative errno on failure.
  */
 int lota_ac_heartbeat(struct lota_ac_session *session, uint8_t *buf,
 		      size_t buflen, size_t *written);
 
-/*
- * Fetch the boot evidence for this session's tokens.
+/**
+ * lota_ac_boot_evidence() - Fetch the boot evidence for this session's tokens.
  *
- * The values of the PCRs a token quotes and the PCR 7 events behind them
- * (lota_token.h), from the agent in direct mode or from the hook's
- * lota-boot-evidence.bin in file mode. Send it with a heartbeat; the
- * server reads Secure Boot from it with lota_ac_verify_boot_evidence().
+ * Layout in lota_token.h, from the agent in direct mode or the hook's
+ * lota-boot-evidence.bin in file mode. Send it with a heartbeat. A buffer of
  * LOTA_BOOT_EVIDENCE_MAX_SIZE holds any.
  *
- * Returns 0 on success, -EINVAL for bad arguments, -ENOTCONN without an
- * agent, -ENODATA if there is none to give, -ENOSPC if buf is too small,
- * -EIO when the agent refused.
+ * Return: 0 on success, -EINVAL for bad arguments, -ENOTCONN without an agent,
+ * -ENODATA if there is none to give, -ENOSPC if @buf is too small, -EIO when
+ * the agent refused.
  */
 int lota_ac_boot_evidence(struct lota_ac_session *session, uint8_t *buf,
 			  size_t buflen, size_t *written);
 
-/*
- * Compute canonical game-binding hash for a game ID and executable image.
+/**
+ * lota_ac_compute_game_binding_hash() - Expected game hash for a server.
  *
- * Hash format:
  *   SHA-256("lota-ac-game-binding:v1\\0" || game_id ||
- * SHA-256(executable-bytes))
+ *           SHA-256(executable-bytes))
  *
- * Use this to precompute expected_game_id_hash for server-side checks.
+ * Return: 0 on success, negative errno on failure.
  */
 int lota_ac_compute_game_binding_hash(const char *game_id, const char *exe_path,
 				      uint8_t out[LOTA_AC_GAME_HASH_SIZE]);
@@ -425,20 +340,11 @@ int lota_ac_compute_game_binding_hash(const char *game_id, const char *exe_path,
 /*
  * Runtime re-measurement of the live loaded image.
  *
- * Game-binding hash above pins SHA-256 of the on-disk main executable
- * at session start. It cannot detect an attacker who patches code pages
- * in memory without touching the file, and it says nothing about the
- * shared libraries the process maps. Game logic frequently lives in a
- * shared object, so a complete runtime measurement must cover every
- * loaded module, not just the main program.
- *
- * Runtime measurement closes that TOCTOU window by hashing the
- * executable PT_LOAD segments of every file-backed loaded object (the
- * main executable + each shared library) as they are mapped in the
- * live address space.
- *
- * Kernel-provided vDSO (linux-vdso / linux-gate) is excluded:
- * it has no backing file, so a verifier cannot reproduce it.
+ * The game-binding hash pins the on-disk main executable at session start, so
+ * it sees neither code patched in memory nor shared libraries. This hashes the
+ * executable PT_LOAD segments of every file-backed loaded object as mapped.
+ * The vDSO has no backing file, so a verifier could not reproduce it, and is
+ * excluded.
  *
  * Per-object digest (content only, position-independent):
  *   SHA-256("lota-ac-runtime-object:v1\\0" || seg_count_LE32 ||
@@ -454,107 +360,76 @@ int lota_ac_compute_game_binding_hash(const char *game_id, const char *exe_path,
  *           for each object:
  *               soname_len_LE32 || soname_bytes || object_digest[32])
  *
- * For position-independent x86-64 code the executable segments carry no
- * load-time relocations (and full RELRO keeps the GOT/PLT data, not code,
- * mutable), so each live object mapping is byte-identical to its on-disk
+ * An x86-64 object without DT_TEXTREL takes no load-time relocations in its
+ * executable segments, so each live mapping is byte-identical to its on-disk
  * segment content.
  *
- * Producer measures its own running image.
- * Verifier reproduces the expected digest from the same set of ELF files
- * (the trusted runtime manifest).
- * Divergence means the live code pages of some module no longer match the
- * registered binaries.
+ * The producer measures its own image; the verifier reproduces the digest from
+ * the same ELF files, the trusted runtime manifest.
  */
 
-/* Upper bound on the path length reported by the object enumerator. */
 #define LOTA_AC_RUNTIME_PATH_MAX 4096
 
-/*
- * Measure the live, mapped image of the calling process: the main
- * executable plus every file-backed shared object, excluding the vDSO.
+/**
+ * lota_ac_compute_runtime_measure() - Measure the calling process's live image.
  *
- * Returns 0 on success, -EINVAL on a NULL argument, -ENOMEM on allocation
- * failure, -E2BIG if a single object has more executable segments than
- * the implementation supports or the process maps more objects than the
- * implementation supports, -EIO on a digest failure, -ENOENT if no
- * file-backed executable object is found.
+ * Return: 0 on success, -EINVAL on a NULL argument, -ENOMEM on allocation
+ * failure, -E2BIG with too many objects or segments in one, -EIO on a digest
+ * failure, -ENOENT if no file-backed executable object is found.
  */
 int lota_ac_compute_runtime_measure(uint8_t out[LOTA_AC_RUNTIME_MEASURE_SIZE]);
 
 /*
- * Callback invoked once per file-backed loaded object. path is the
- * object's on-disk path (the resolved main-executable path, or a shared
- * library path). Return 0 to continue enumeration, non-zero to stop.
+ * Called once per file-backed loaded object with its on-disk path. Return 0 to
+ * continue, non-zero to stop.
  */
 typedef int (*lota_ac_runtime_object_fn)(const char *path, void *user);
 
-/*
- * Enumerate the on-disk paths of the file-backed objects that
- * lota_ac_compute_runtime_measure() measures, applying the identical
- * filtering (vDSO excluded). Use this to capture the trusted runtime
- * manifest a verifier needs to reproduce the expected measurement.
+/**
+ * lota_ac_list_runtime_objects() - Enumerate what the runtime measure covers.
  *
- * Returns 0 on success (including when the callback stops early),
- * -EINVAL on a NULL callback, negative errno if the main executable
- * path cannot be resolved.
+ * Use it to capture the trusted runtime manifest.
+ *
+ * Return: 0 on success or when @fn stops early, -EINVAL on a NULL @fn, negative
+ * errno if the main executable path cannot be resolved.
  */
 int lota_ac_list_runtime_objects(lota_ac_runtime_object_fn fn, void *user);
 
-/*
- * Precompute the expected runtime measurement from a set of ELF files
- * (the trusted runtime manifest): the producer's main executable and the
- * shared libraries it loads. Objects are keyed by file basename and
- * combined in canonical sorted order, so the order of `paths` does not
- * matter. Files with no executable PT_LOAD segment contribute nothing.
+/**
+ * lota_ac_compute_expected_runtime_measure_set() - Measure of ELF files.
  *
- * Returns 0 on success, -EINVAL on a NULL argument, -ENOENT if the set
- * yields no executable object, -E2BIG if too many objects/segments,
- * negative errno on an I/O or parse failure of any file.
+ * Objects are keyed by file basename and sorted, so the order of @paths does
+ * not matter. A file with no executable PT_LOAD segment contributes nothing.
+ *
+ * Return: 0 on success, -EINVAL on a NULL argument, -ENOENT if the set yields
+ * no executable object, -E2BIG if too many objects or segments, negative errno
+ * on an I/O or parse failure.
  */
 int lota_ac_compute_expected_runtime_measure_set(
 	const char *const *paths, size_t count,
 	uint8_t out[LOTA_AC_RUNTIME_MEASURE_SIZE]);
 
-/*
- * Convenience wrapper: the expected runtime measurement for an image made
- * of a single object (a statically linked executable, or when verifying
- * the main executable alone). Equivalent to
- * lota_ac_compute_expected_runtime_measure_set(&exe_path, 1, out).
+/**
+ * lota_ac_compute_expected_runtime_measure() - Runtime measure of a single ELF.
+ *
+ * Same as lota_ac_compute_expected_runtime_measure_set(&exe_path, 1, out).
  */
 int lota_ac_compute_expected_runtime_measure(
 	const char *exe_path, uint8_t out[LOTA_AC_RUNTIME_MEASURE_SIZE]);
 
-/*
- * Verify a heartbeat packet.
+/**
+ * lota_ac_verify_heartbeat() - Verify a heartbeat packet.
+ * @aik_pub_der: Mandatory; unverified claims are attacker-controlled.
+ * @expected_game_id_hash: See lota_ac_compute_game_binding_hash().
+ * @expected_runtime_measure: See lota_ac_compute_expected_runtime_measure().
+ *                            Also bound into the nonce.
+ * @info: Session and attestation details.
  *
- * Parses the heartbeat header, extracts the embedded LOTA token,
- * and performs full TPM signature verification using aik_pub_der.
- * Also requires expected_game_id_hash and rejects heartbeats that do not match
- * the expected game identity binding.
- * Fills info with session/attestation details.
+ * @info is LOTA_AC_STATE_TRUSTED only if the signed status word carries
+ * LOTA_FLAG_ATTESTED. A server wanting more reads info->lota_flags, the same
+ * word.
  *
- * expected_runtime_measure is the runtime measurement a trustworthy
- * producer must report for this image.
- * See lota_ac_compute_expected_runtime_measure()
- *
- * It is mandatory: the heartbeat is rejected unless its runtime_measure
- * field matches, and the value is also bound into the nonce so a fully
- * signed token cannot carry a stale or substituted measurement.
- *
- * SECURITY: aik_pub_der is mandatory. Parse-only operation is rejected
- * because unverified claims are attacker-controlled and must not drive
- * trust decisions.
- *
- * max_age_sec: maximum acceptable token age (0 -> 300 s default).
- *
- * A packet that verifies is reported LOTA_AC_STATE_TRUSTED only if the status
- * word the signature covers carries LOTA_FLAG_ATTESTED. Everything else about
- * the packet can be perfect on a host no verifier has ever answered,
- * and this is the verdict a backend acts on.
- * A server wanting more than attestation reads info->lota_flags, which carries
- * that same signed word.
- *
- * Returns 0 on success, a LOTA_AC_ERR_* code on failure.
+ * Return: 0 on success, a LOTA_AC_ERR_* code on failure.
  */
 int lota_ac_verify_heartbeat(
 	const uint8_t *data, size_t len, const uint8_t *aik_pub_der,
@@ -563,16 +438,16 @@ int lota_ac_verify_heartbeat(
 	const uint8_t expected_runtime_measure[LOTA_AC_RUNTIME_MEASURE_SIZE],
 	struct lota_ac_info *info);
 
-/*
- * Read Secure Boot from boot evidence.
+/**
+ * lota_ac_verify_boot_evidence() - Read Secure Boot from boot evidence.
+ * @info: From lota_ac_verify_heartbeat() on the heartbeat the evidence came
+ *        with;
+ *        the evidence counts only for the boot that quote signed.
+ * @secure_boot: 1 if the firmware measured Secure Boot on before the boot
+ *               loader, else 0.
  *
- * info must come from lota_ac_verify_heartbeat() on the heartbeat the
- * evidence was sent with: the evidence counts only when it is the boot that
- * heartbeat's quote signed. *secure_boot is 1 when the firmware measured
- * Secure Boot on before it handed over to the boot loader, 0 otherwise.
- *
- * Returns 0 on success, LOTA_AC_ERR_BAD_EVIDENCE for evidence that is
- * malformed or of another boot, another LOTA_AC_ERR_* code on failure.
+ * Return: 0 on success, LOTA_AC_ERR_BAD_EVIDENCE for evidence malformed or of
+ * another boot, another LOTA_AC_ERR_* code on failure.
  */
 int lota_ac_verify_boot_evidence(const struct lota_ac_info *info,
 				 const uint8_t *evidence, size_t len,

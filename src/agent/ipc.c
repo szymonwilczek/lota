@@ -2303,8 +2303,8 @@ static void handle_sync_attest(struct ipc_context *ctx,
 	uint32_t emitted = 0;
 
 	if (!ipc_client_is_agent_peer(client)) {
-		lota_warn("SYNC_ATTEST denied for uid=%d pid=%d: not this "
-			  "agent binary",
+		lota_warn("SYNC_ATTEST denied for uid=%d pid=%d: other uid or "
+			  "stale pid",
 			  client->peer_uid, client->peer_pid);
 		build_error_response(client, LOTA_IPC_ERR_ACCESS_DENIED);
 		return;

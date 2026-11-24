@@ -18,7 +18,7 @@ struct lota_flag_name {
 	const char *name;
 };
 
-/* The bits a title sees through the SDK, in the order it prints them */
+/* The bits lota_flags_to_string() names, in the order it prints them */
 static const struct lota_flag_name lota_flag_names[] = {
 	{ LOTA_STATUS_ATTESTED, "ATTESTED" },
 	{ LOTA_STATUS_TPM_OK, "TPM_OK" },
@@ -26,7 +26,7 @@ static const struct lota_flag_name lota_flag_names[] = {
 	{ LOTA_STATUS_BPF_LOADED, "BPF_LOADED" },
 	{ LOTA_STATUS_SECURE_BOOT, "SECURE_BOOT" },
 	{ LOTA_STATUS_UPDATE_PENDING, "UPDATE_PENDING" },
-	/* "nobody verifies here" is not a failure; without it this reads NOT ATTESTED */
+	/* No publisher reports here: no failure, unlike a bare NOT ATTESTED */
 	{ LOTA_STATUS_TOKEN_ONLY, "TOKEN_ONLY" },
 	{ LOTA_STATUS_IMAGE_FULLY_MEASURED, "IMAGE_FULLY_MEASURED" },
 	{ LOTA_STATUS_IMAGE_CONTENT_HASHED, "IMAGE_CONTENT_HASHED" },
@@ -43,7 +43,7 @@ static const struct lota_flag_name lota_flag_names[] = {
 	{ LOTA_STATUS_EVENTS_LOST, "EVENTS_LOST" },
 };
 
-/* The bits only the host's operator is shown */
+/* The bits lota-agent --status names and the SDK does not */
 static const struct lota_flag_name lota_host_flag_names[] = {
 	{ LOTA_STATUS_TPM_LOCKOUT, "TPM_LOCKOUT" },
 };

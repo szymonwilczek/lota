@@ -2,28 +2,27 @@
 /*
  * LOTA sealed-envelope wire format.
  *
- * TPM2_Seal bounds the sensitive data it can wrap (LOTA caps a direct seal
- * at LOTA_SEAL_MAX_SECRET bytes). To seal a larger payload -- an asset
- * blob, a save file, a bundle of per-title keys -- LOTA uses an envelope:
- * a fresh random key-encryption key (KEK) is sealed to the PCR state with
- * the ordinary sealed-blob path, and the payload is encrypted under that
- * KEK with AES-256-GCM. The TPM still enforces the boot/PCR binding (it
- * gates release of the KEK); the bulk payload rides outside the TPM under
- * authenticated encryption.
+ * A direct seal holds LOTA_SEAL_MAX_SECRET bytes. A larger payload is encrypted
+ * with AES-256-GCM under a random KEK and the KEK is sealed to the PCR state,
+ * so the TPM gates the KEK and the payload stays outside it.
  *
- * This header carries only the portable, TPM- and crypto-independent
- * framing: the magic/version, the lengths of the embedded sealed-KEK blob
- * and ciphertext, and the GCM nonce and tag. The KEK blob body is an
- * opaque LOTA_SEAL_MAGIC blob (see lota_seal.h); the ciphertext body is
- * opaque AES-256-GCM output. tpm.c produces and consumes both.
+ * Layout (little-endian):
  *
- * On-disk layout:
+ *   offset size field
+ *   0      4    magic        LOTA_ENVELOPE_MAGIC
+ *   4      2    version      LOTA_ENVELOPE_VERSION
+ *   6      2    reserved     must be 0
+ *   8      2    kek_blob_len embedded sealed-KEK blob length
+ *   10     2    reserved     must be 0
+ *   12     4    payload_len  plaintext length, equal to the ciphertext's
+ *   16     12   nonce        AES-256-GCM nonce
+ *   28     16   tag          AES-256-GCM tag
+ *   44     4    reserved     must be 0
+ *   48     var  kek_blob[kek_blob_len] || ct[payload_len]
  *
- *   [ envelope header (48 B) ][ sealed-KEK blob ][ AES-256-GCM ciphertext ]
- *
- * The header (with its tag field zeroed) followed by the sealed-KEK blob is
- * fed to GCM as additional authenticated data, so neither the framing nor
- * the bound KEK can be swapped without failing the tag check.
+ * The header with its tag zeroed, followed by the sealed-KEK blob, is the GCM
+ * additional authenticated data, so neither the framing nor the KEK can be
+ * swapped without failing the tag check.
  *
  * Copyright (C) 2026 Szymon Wilczek
  */
@@ -44,42 +43,20 @@ extern "C" {
 #define LOTA_ENVELOPE_MAGIC 0x564E454Cu /* "LENV" on disk, little-endian */
 #define LOTA_ENVELOPE_VERSION 1u
 
-/* AES-256-GCM parameters. */
-#define LOTA_ENVELOPE_KEK_SIZE 32u /* AES-256 key sealed to the PCR state */
-#define LOTA_ENVELOPE_NONCE_SIZE 12u /* 96-bit GCM nonce */
-#define LOTA_ENVELOPE_TAG_SIZE 16u /* 128-bit GCM tag */
+#define LOTA_ENVELOPE_KEK_SIZE 32u
+#define LOTA_ENVELOPE_NONCE_SIZE 12u
+#define LOTA_ENVELOPE_TAG_SIZE 16u
 
-/* Fixed header size on disk (little-endian, packed). */
 #define LOTA_ENVELOPE_HEADER_SIZE 48u
 
-/*
- * Largest payload an envelope may carry. 64 KiB comfortably covers the
- * intended at-rest use cases (asset/key bundles, small save files) while
- * bounding the memory a single seal/unseal touches. Larger objects belong
- * in a streaming format, which this primitive deliberately is not.
- */
+/* Bounds the memory a single seal or unseal touches. */
 #define LOTA_ENVELOPE_MAX_PAYLOAD 65536u
 
-/* Upper bound on a whole envelope blob: header + sealed KEK + ciphertext. */
 #define LOTA_ENVELOPE_MAX_BLOB                                            \
 	((size_t)LOTA_ENVELOPE_HEADER_SIZE + (size_t)LOTA_SEAL_MAX_BLOB + \
 	 (size_t)LOTA_ENVELOPE_MAX_PAYLOAD)
 
-/*
- * Parsed/buildable header fields.
- *
- *   offset size field
- *   0      4    magic        LOTA_ENVELOPE_MAGIC
- *   4      2    version      LOTA_ENVELOPE_VERSION
- *   6      2    reserved     must be 0
- *   8      2    kek_blob_len embedded sealed-KEK blob length
- *   10     2    reserved     must be 0
- *   12     4    payload_len  plaintext length (== ciphertext length for GCM)
- *   16     12   nonce        AES-256-GCM nonce
- *   28     16   tag          AES-256-GCM tag
- *   44     4    reserved     must be 0
- *   48     var  kek_blob[kek_blob_len] || ct[payload_len]
- */
+/* Header fields that vary between envelopes. */
 struct lota_envelope_meta {
 	uint16_t kek_blob_len;
 	uint32_t payload_len;
@@ -87,10 +64,14 @@ struct lota_envelope_meta {
 	uint8_t tag[LOTA_ENVELOPE_TAG_SIZE];
 };
 
-/*
- * Serialize the fixed header into out[0..LOTA_ENVELOPE_HEADER_SIZE).
- * The caller appends the sealed-KEK blob then the ciphertext.
- * Returns 0 on success, -EINVAL on a NULL argument or an out-of-range length.
+/**
+ * lota_envelope_serialize_header() - Write the fixed header.
+ * @out: LOTA_ENVELOPE_HEADER_SIZE bytes.
+ * @m:   lengths, nonce and tag to write.
+ *
+ * The caller appends the sealed-KEK blob, then the ciphertext.
+ *
+ * Return: 0 on success, -EINVAL on a NULL argument or an out-of-range length.
  */
 static inline int
 lota_envelope_serialize_header(uint8_t *out, const struct lota_envelope_meta *m)
@@ -105,27 +86,23 @@ lota_envelope_serialize_header(uint8_t *out, const struct lota_envelope_meta *m)
 	memset(out, 0, LOTA_ENVELOPE_HEADER_SIZE);
 	lota__seal_write_le32(out + 0, LOTA_ENVELOPE_MAGIC);
 	lota__seal_write_le16(out + 4, (uint16_t)LOTA_ENVELOPE_VERSION);
-	/* out+6..7 reserved = 0 */
 	lota__seal_write_le16(out + 8, m->kek_blob_len);
-	/* out+10..11 reserved = 0 */
 	lota__seal_write_le32(out + 12, m->payload_len);
 	memcpy(out + 16, m->nonce, LOTA_ENVELOPE_NONCE_SIZE);
 	memcpy(out + 28, m->tag, LOTA_ENVELOPE_TAG_SIZE);
-	/* out+44..47 reserved = 0 */
 	return 0;
 }
 
-/*
- * Parse and validate the fixed header from a blob of total length len.
- * Fills *m and, if body_off is non-NULL, the offset where the sealed-KEK
- * blob begins.
- * Verifies magic, version, reserved bytes, the length fields, and that
- * the declared bodies fit exactly within len.
+/**
+ * lota_envelope_parse_header_why() - Parse and validate the fixed header.
+ * @buf: the whole envelope.
+ * @len: length of @buf; the declared bodies must fill it exactly.
+ * @m: receives the header fields on success.
+ * @body_off: if non-NULL, receives the offset of the sealed-KEK blob.
+ * @why: if non-NULL, receives the refused field.
  *
- * Fills *why, if non-NULL, with the refused field (enum lota_blob_reason).
- *
- * Returns 0 on success, -EINVAL on a malformed header, -EMSGSIZE on
- * a length mismatch.
+ * Return: 0 on success, -EINVAL on a malformed header, -EMSGSIZE on a length
+ * mismatch.
  */
 static inline int lota_envelope_parse_header_why(const uint8_t *buf, size_t len,
 						 struct lota_envelope_meta *m,
@@ -172,7 +149,6 @@ static inline int lota_envelope_parse_header_why(const uint8_t *buf, size_t len,
 		return -EINVAL;
 	}
 
-	/* bodies must fit exactly: no trailing slack, no overflow */
 	size_t need = (size_t)LOTA_ENVELOPE_HEADER_SIZE + (size_t)kek_blob_len +
 		      (size_t)payload_len;
 	if (need != len) {
@@ -190,7 +166,15 @@ static inline int lota_envelope_parse_header_why(const uint8_t *buf, size_t len,
 	return 0;
 }
 
-/* The same parse for a caller that has nobody to explain the refusal to. */
+/**
+ * lota_envelope_parse_header() - lota_envelope_parse_header_why() without @why.
+ * @buf:      as for lota_envelope_parse_header_why().
+ * @len:      as for lota_envelope_parse_header_why().
+ * @m:        as for lota_envelope_parse_header_why().
+ * @body_off: as for lota_envelope_parse_header_why().
+ *
+ * Return: as lota_envelope_parse_header_why().
+ */
 static inline int lota_envelope_parse_header(const uint8_t *buf, size_t len,
 					     struct lota_envelope_meta *m,
 					     size_t *body_off)
@@ -198,10 +182,12 @@ static inline int lota_envelope_parse_header(const uint8_t *buf, size_t len,
 	return lota_envelope_parse_header_why(buf, len, m, body_off, NULL);
 }
 
-/*
- * Return non-zero if a blob's leading magic identifies it as a sealed
- * envelope (LOTA_ENVELOPE_MAGIC) instead of direct sealed blob.
- * Lets the unseal path pick the right decoder without a mode flag.
+/**
+ * lota_envelope_is_envelope() - Tell an envelope from a direct sealed blob.
+ * @buf: the blob.
+ * @len: bytes in @buf; under four is not an envelope.
+ *
+ * Return: non-zero if the leading magic is LOTA_ENVELOPE_MAGIC.
  */
 static inline int lota_envelope_is_envelope(const uint8_t *buf, size_t len)
 {
@@ -210,12 +196,19 @@ static inline int lota_envelope_is_envelope(const uint8_t *buf, size_t len)
 	return lota__seal_read_le32(buf + 0) == LOTA_ENVELOPE_MAGIC;
 }
 
-/*
- * AES-256-GCM seal: encrypt pt[0..pt_len) under kek with nonce, binding
- * aad[0..aad_len) as additional authenticated data. Writes pt_len bytes of
- * ciphertext to ct_out and the LOTA_ENVELOPE_TAG_SIZE tag to tag_out.
- * Returns 0 on success, -EINVAL on a bad argument, -EIO on a crypto error.
- * Implemented in seal_envelope.c (OpenSSL).
+/**
+ * lota_envelope_aead_seal() - Encrypt a payload under the KEK.
+ * @kek:     AES-256-GCM key.
+ * @nonce:   GCM nonce.
+ * @aad:     additional data the tag covers; may be NULL when @aad_len is 0.
+ * @aad_len: bytes in @aad, at most INT_MAX.
+ * @pt:      plaintext.
+ * @pt_len:  bytes in @pt, 1 to LOTA_ENVELOPE_MAX_PAYLOAD.
+ * @ct_out: receives @pt_len bytes of ciphertext.
+ * @tag_out: receives the GCM tag.
+ *
+ * Return: 0 on success, -EINVAL on a bad argument, -ENOMEM, -EIO on a crypto
+ * error.
  */
 int lota_envelope_aead_seal(const uint8_t kek[LOTA_ENVELOPE_KEK_SIZE],
 			    const uint8_t nonce[LOTA_ENVELOPE_NONCE_SIZE],
@@ -223,13 +216,13 @@ int lota_envelope_aead_seal(const uint8_t kek[LOTA_ENVELOPE_KEK_SIZE],
 			    const uint8_t *pt, size_t pt_len, uint8_t *ct_out,
 			    uint8_t tag_out[LOTA_ENVELOPE_TAG_SIZE]);
 
-/*
- * AES-256-GCM open: verify tag over aad + ct and decrypt ct[0..ct_len) under
- * kek with nonce. Writes ct_len bytes of plaintext to pt_out only if the tag
- * verifies.
- * Returns 0 on success, -EINVAL on a bad argument, -EBADMSG on a tag mismatch
- * (tampered/wrong KEK), -EIO on a crypto error.
- * Implemented in seal_envelope.c (OpenSSL).
+/**
+ * lota_envelope_aead_open() - Verify and decrypt a payload under the KEK.
+ * @pt_out: receives @ct_len bytes of plaintext, written before the tag is
+ *          checked; valid only on success.
+ *
+ * Return: 0 on success, -EINVAL on a bad argument, -ENOMEM, -EBADMSG on a tag
+ * mismatch, -EIO on a crypto error.
  */
 int lota_envelope_aead_open(const uint8_t kek[LOTA_ENVELOPE_KEK_SIZE],
 			    const uint8_t nonce[LOTA_ENVELOPE_NONCE_SIZE],

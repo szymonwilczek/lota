@@ -56,7 +56,16 @@ static inline int lota_registry_digest_begin(EVP_MD_CTX *md, uint16_t flags,
 	return 0;
 }
 
-/* @soname and @path hold e->soname_len and e->path_len bytes */
+/**
+ * lota_registry_digest_entry() - Hash one object of the list.
+ * @md: context from lota_registry_digest_begin().
+ * @e: the entry as it goes on the wire.
+ * @soname: e->soname_len bytes.
+ * @path: e->path_len bytes.
+ *
+ * Return: 0 on success, -EINVAL on an oversized digest_len, -EIO on a hash
+ * failure.
+ */
 static inline int
 lota_registry_digest_entry(EVP_MD_CTX *md,
 			   const struct lota_ipc_registry_entry *e,

@@ -1,25 +1,12 @@
 /* SPDX-License-Identifier: MIT */
 /* Copyright (C) 2026 Szymon Wilczek */
 /*
- * Canonical device-number (dev_t) encoding shared by the BPF programs
- * and the user-space loader.
+ * Device numbers in the kernel's MKDEV layout, as BPF programs read them from
+ * inode->i_rdev and super_block->s_dev: 20-bit minor with the major above it.
  *
- * Kernel stores inode->i_rdev and super_block->s_dev in its internal
- * MKDEV layout:
- *
- * 	20-bit minor with the major above it
- * 	(major = dev >> 20, minor = dev & 0xFFFFF)
- *
- * BPF programs read those fields verbatim, so any device identity that has to
- * compare against a BPF-side value
- * 	-- a /dev node major/minor or a trusted-library map key --
- * must be expressed in this same layout.
- *
- * stat(2) is not a source for it. Its layout differs (the glibc gnu_dev encoding
- * that mirrors the kernel's new_encode_dev()), and on btrfs it reports
- * a per-subvolume anonymous device the superblock never had, so a key built from
- * st_dev is one the kernel cannot look up.
- * src/agent/sb_dev.h resolves the superblock device instead, already in this layout.
+ * stat(2) is no source for a key compared against them. Its st_dev has the
+ * new_encode_dev() layout and, on btrfs, names a per-subvolume anonymous device
+ * (see src/agent/sb_dev.h).
  */
 
 #ifndef LOTA_DEVT_H

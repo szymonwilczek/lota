@@ -1,7 +1,8 @@
 /* SPDX-License-Identifier: MIT */
 /* Copyright (C) 2026 Szymon Wilczek */
 /*
- * LOTA atomic attestation snapshot (writer/reader shared constants)
+ * Attestation snapshot file: a header, then the token. Shared by its writer,
+ * the Wine hook, and its reader, the anti-cheat SDK.
  */
 
 #ifndef LOTA_SNAPSHOT_H
@@ -15,18 +16,16 @@
 /* "LOTA" little-endian */
 #define LOTA_SNAPSHOT_MAGIC 0x41544F4CUL
 
-/* Bump when wire header semantics change */
 #define LOTA_SNAPSHOT_VERSION 1
 
-/* Fixed header size on disk */
 #define LOTA_SNAPSHOT_HEADER_SIZE 16
 
 struct lota_snapshot_wire_hdr {
-	uint32_t magic; /* offset 0 */
-	uint16_t version; /* offset 4 */
-	uint16_t reserved; /* offset 6 (must be 0 for v1) */
-	uint32_t flags; /* offset 8 */
-	uint32_t token_size; /* offset 12 */
+	uint32_t magic;
+	uint16_t version;
+	uint16_t reserved; /* must be 0 */
+	uint32_t flags;
+	uint32_t token_size;
 } __attribute__((packed));
 
 #if defined(__STDC_VERSION__) && (__STDC_VERSION__ >= 201112L)
