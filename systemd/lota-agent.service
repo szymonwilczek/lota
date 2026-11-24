@@ -213,7 +213,7 @@ SupplementaryGroups=
 SecureBits=noroot-locked
 
 LimitMEMLOCK=64M
-LimitNOFILE=1024
+LimitNOFILE=4096
 
 StandardOutput=journal
 StandardError=journal
