@@ -11,10 +11,14 @@
  */
 
 #include <errno.h>
+#include <fcntl.h>
+#include <limits.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
 #include <stdint.h>
+#include <sys/mman.h>
 #include <sys/sysmacros.h>
 
 #include "test.h"
@@ -26,6 +30,96 @@
 #include "lota_registry_digest.h"
 
 #include <openssl/evp.h>
+
+static int maps_reads;
+static void (*before_second_maps_read)(void);
+
+FILE *__real_fopen(const char *path, const char *mode);
+FILE *__wrap_fopen(const char *path, const char *mode);
+int __real_openat(int dirfd, const char *path, int flags, ...);
+int __wrap_openat(int dirfd, const char *path, int flags, ...);
+
+FILE *__wrap_fopen(const char *path, const char *mode)
+{
+	size_t len = strlen(path);
+
+	if (len >= 5 && strcmp(path + len - 5, "/maps") == 0)
+		maps_reads++;
+	if (maps_reads == 2 && before_second_maps_read)
+		before_second_maps_read();
+	return __real_fopen(path, mode);
+}
+
+/* opening a map_files link takes CAP_CHECKPOINT_RESTORE, reading it does not */
+int __wrap_openat(int dirfd, const char *path, int flags, ...)
+{
+	char target[PATH_MAX];
+	ssize_t len = readlinkat(dirfd, path, target, sizeof(target) - 1);
+
+	if (len <= 0)
+		return __real_openat(dirfd, path, flags);
+	target[len] = '\0';
+	return __real_openat(AT_FDCWD, target, flags);
+}
+
+static int fake_content_hash(const char *path, uint64_t dev, uint64_t ino,
+			     struct lota_verity_digest_key *out)
+{
+	(void)path;
+	(void)dev;
+	(void)ino;
+	memset(out, 0, sizeof(*out));
+	out->len = LOTA_VERITY_DIGEST_SHA256_SIZE;
+	out->digest[0] = 1;
+	return 0;
+}
+
+#define MAPPING_SIZE 4096
+
+static void *mapping;
+static int other_file = -1;
+
+static void unmap_mapping(void)
+{
+	munmap(mapping, MAPPING_SIZE);
+}
+
+static void replace_mapping(void)
+{
+	mmap(mapping, MAPPING_SIZE, PROT_READ | PROT_EXEC,
+	     MAP_PRIVATE | MAP_FIXED, other_file, 0);
+}
+
+/* a file of its own next to the test binary, whose filesystem may execute */
+static int open_scratch_file(char *path, size_t size, const char *suffix)
+{
+	char exe[PATH_MAX];
+	ssize_t len = readlink("/proc/self/exe", exe, sizeof(exe) - 1);
+	int fd;
+
+	if (len <= 0)
+		return -1;
+	exe[len] = '\0';
+	if ((size_t)snprintf(path, size, "%s%s", exe, suffix) >= size)
+		return -1;
+	fd = __real_openat(AT_FDCWD, path,
+			   O_RDWR | O_CREAT | O_TRUNC | O_CLOEXEC, 0600);
+	if (fd >= 0 && ftruncate(fd, MAPPING_SIZE) != 0) {
+		close(fd);
+		return -1;
+	}
+	return fd;
+}
+
+/* lowest free descriptor, so a leak moves it */
+static int next_fd(void)
+{
+	int fd = __real_openat(AT_FDCWD, "/dev/null", O_RDONLY | O_CLOEXEC);
+
+	if (fd >= 0)
+		close(fd);
+	return fd;
+}
 
 static int digest_is_zero(const uint8_t d[32])
 {
@@ -80,14 +174,14 @@ int main(void)
 	else
 		FAIL("accepted NULL output");
 
-	TEST("measure_entry_verity rejects an unbacked range");
+	TEST("open_mapping rejects an unbacked range");
 	{
 		struct lota_rt_map_entry e;
-		struct lota_verity_digest_key v;
+		struct stat st;
+
 		memset(&e, 0, sizeof(e));
 		strcpy(e.soname, "none");
-		if (lota_rt_measure_entry_verity(getpid(), &e, &v, NULL, NULL) <
-		    0)
+		if (lota_rt_open_mapping(AT_FDCWD, &e, &st) == -EINVAL)
 			PASS();
 		else
 			FAIL("accepted unbacked range");
@@ -472,6 +566,121 @@ int main(void)
 			PASS();
 		else
 			FAIL("the pages do not hash to the token's entry");
+	}
+
+	TEST("coverage reads the maps twice however many objects there are");
+	{
+		struct lota_rt_map_entry *e =
+			calloc(LOTA_RUNTIME_IMAGE_MAX_MODULES, sizeof(*e));
+		size_t n = 0;
+
+		ret = e ? lota_rt_collect_exec_maps(
+				  getpid(), e, LOTA_RUNTIME_IMAGE_MAX_MODULES,
+				  &n) :
+			  -ENOMEM;
+		free(e);
+		maps_reads = 0;
+		if (ret == 0 && n > 2 &&
+		    lota_runtime_coverage_pid(getpid(), &cov) == 0 &&
+		    cov.measured + cov.unmeasurable == n && maps_reads == 2)
+			PASS();
+		else
+			FAIL("maps read once per object");
+	}
+
+	TEST("measurement reads the maps twice however many objects there are");
+	{
+		lota_rt_set_content_hasher(fake_content_hash);
+		maps_reads = 0;
+		ret = lota_runtime_measure_pid(getpid(), digest, &cov, NULL);
+		lota_rt_set_content_hasher(NULL);
+		if (ret == 0 && cov.unmeasurable > 1 && maps_reads == 2)
+			PASS();
+		else
+			FAIL("maps read once per object");
+	}
+
+	TEST("a mapped file on tmpfs is a gap in coverage");
+	{
+		char path[] = "/dev/shm/lota-test-XXXXXX";
+		int fd = mkstemp(path);
+		void *m = MAP_FAILED;
+
+		if (fd >= 0 && ftruncate(fd, MAPPING_SIZE) == 0)
+			m = mmap(NULL, MAPPING_SIZE, PROT_READ | PROT_EXEC,
+				 MAP_PRIVATE, fd, 0);
+		if (m == MAP_FAILED) {
+			PASS();
+		} else if (lota_runtime_coverage_pid(getpid(), &cov) == 0 &&
+			   cov.unmeasurable > 0) {
+			PASS();
+		} else {
+			FAIL("a file on tmpfs stopped the walk");
+		}
+		if (m != MAP_FAILED)
+			munmap(m, MAPPING_SIZE);
+		if (fd >= 0) {
+			close(fd);
+			unlink(path);
+		}
+	}
+
+	TEST("a walk leaves no mapping open");
+	{
+		int before = next_fd();
+
+		(void)lota_runtime_coverage_pid(getpid(), &cov);
+		(void)lota_runtime_measure_pid(getpid(), digest, NULL, NULL);
+		(void)lota_runtime_coverage_pid(-1, &cov);
+		if (before >= 0 && next_fd() == before)
+			PASS();
+		else
+			FAIL("descriptor left open");
+	}
+
+	{
+		char path[PATH_MAX + 16], other[PATH_MAX + 16];
+		int fd = open_scratch_file(path, sizeof(path), ".map0");
+		int before;
+
+		other_file = open_scratch_file(other, sizeof(other), ".map1");
+		mapping = fd < 0 || other_file < 0 ? MAP_FAILED :
+						     mmap(NULL, MAPPING_SIZE,
+							  PROT_READ | PROT_EXEC,
+							  MAP_PRIVATE, fd, 0);
+		before = next_fd();
+
+		TEST("a mapping replaced by the check is stale");
+		before_second_maps_read = replace_mapping;
+		maps_reads = 0;
+		if (mapping != MAP_FAILED &&
+		    lota_runtime_coverage_pid(getpid(), &cov) == -ESTALE)
+			PASS();
+		else
+			FAIL("measured a file the range no longer maps");
+
+		TEST("a mapping gone by the check is stale");
+		before_second_maps_read = unmap_mapping;
+		maps_reads = 0;
+		if (mapping != MAP_FAILED &&
+		    lota_runtime_coverage_pid(getpid(), &cov) == -ESTALE)
+			PASS();
+		else
+			FAIL("measured a range no longer mapped");
+		before_second_maps_read = NULL;
+
+		TEST("a stale walk leaves no mapping open");
+		if (next_fd() == before)
+			PASS();
+		else
+			FAIL("descriptor left open");
+
+		if (fd >= 0)
+			close(fd);
+		if (other_file >= 0)
+			close(other_file);
+		unlink(path);
+		unlink(other);
 	}
 
 	printf("\n%d/%d kernel-anchored measurement tests passed\n",

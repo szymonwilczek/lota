@@ -254,8 +254,54 @@ int lota_rt_mapping_identity_ok(const struct lota_rt_map_entry *enumerated,
 	return 1;
 }
 
-int lota_rt_lookup_map_entry(pid_t pid, unsigned long start, unsigned long end,
-			     struct lota_rt_map_entry *out)
+int lota_rt_open_mapping(int dirfd, const struct lota_rt_map_entry *entry,
+			 struct stat *st)
+{
+	char leaf[40];
+	int fd;
+	int n;
+
+	if (!entry || !st || entry->start >= entry->end)
+		return -EINVAL;
+
+	/*
+	 * Keep the untrusted maps pathname out of the file access: map_files
+	 * is keyed only by the numeric range, which holds no path separator.
+	 */
+	n = snprintf(leaf, sizeof(leaf), "%lx-%lx", entry->start, entry->end);
+	if (n < 0 || (size_t)n >= sizeof(leaf) ||
+	    !rt_map_files_leaf_is_safe(leaf))
+		return -EINVAL;
+
+	fd = openat(dirfd, leaf, O_RDONLY | O_CLOEXEC);
+	if (fd < 0)
+		return -errno;
+
+	if (fstat(fd, st) != 0) {
+		int err = -errno;
+
+		close(fd);
+		return err;
+	}
+	if (!S_ISREG(st->st_mode)) {
+		close(fd);
+		return -ESTALE;
+	}
+	return fd;
+}
+
+/* One enumerated mapping, held open from before its check until measured */
+struct rt_mapping {
+	int fd;
+	int err; /* why fd cannot be measured, 0 if it can */
+	int checked;
+	struct stat st;
+};
+
+/* Tie every open handle to its enumerated range, from a single maps read */
+static void rt_check_mappings(pid_t pid,
+			      const struct lota_rt_map_entry *entries,
+			      struct rt_mapping *maps, size_t n)
 {
 	char maps_path[64];
 	char *line = NULL;
@@ -263,15 +309,12 @@ int lota_rt_lookup_map_entry(pid_t pid, unsigned long start, unsigned long end,
 	FILE *f;
 	int ret = 0;
 
-	if (!out)
-		return -EINVAL;
-
-	memset(out, 0, sizeof(*out));
-
 	snprintf(maps_path, sizeof(maps_path), "/proc/%d/maps", (int)pid);
 	f = fopen(maps_path, "re");
-	if (!f)
-		return -errno;
+	if (!f) {
+		ret = -errno;
+		goto out;
+	}
 
 	while (getline(&line, &line_cap, f) != -1) {
 		struct lota_rt_map_entry e;
@@ -279,172 +322,132 @@ int lota_rt_lookup_map_entry(pid_t pid, unsigned long start, unsigned long end,
 
 		if (rc < 0) {
 			ret = rc;
-			goto out;
+			break;
 		}
 		if (rc == 0)
 			continue;
-		if (e.start == start && e.end == end) {
-			*out = e;
-			ret = 1;
-			goto out;
+		for (size_t i = 0; i < n; i++) {
+			if (entries[i].start != e.start ||
+			    entries[i].end != e.end)
+				continue;
+			maps[i].checked = lota_rt_mapping_identity_ok(
+				&entries[i], &e,
+				(unsigned long long)maps[i].st.st_ino);
+			break;
 		}
 	}
-
-out:
 	free(line);
 	fclose(f);
-	return ret;
+out:
+	for (size_t i = 0; i < n; i++) {
+		if (maps[i].err != 0)
+			continue;
+		if (ret != 0)
+			maps[i].err = ret;
+		else if (!maps[i].checked)
+			maps[i].err = -ESTALE;
+	}
 }
 
-int lota_rt_measure_entry_verity(pid_t pid,
-				 const struct lota_rt_map_entry *entry,
-				 struct lota_verity_digest_key *out,
-				 uint32_t *reported_len,
-				 struct lota_rt_open_identity *opened)
+static void rt_close_mappings(struct rt_mapping *maps, size_t n)
 {
-	char map_files_dir[64];
-	char map_files_leaf[40];
-	struct stat st = { 0 };
-	int dirfd = -1;
-	int fd = -1;
-	int ret = 0;
-	int n;
+	for (size_t i = 0; i < n; i++) {
+		if (maps[i].fd >= 0)
+			close(maps[i].fd);
+	}
+	free(maps);
+}
 
-	if (reported_len)
-		*reported_len = 0;
-	if (opened)
-		memset(opened, 0, sizeof(*opened));
+/*
+ * Open everything before the one maps read that checks it, so the read costs
+ * the same however many objects the process maps. A mapping that fails keeps
+ * its errno for the walk to reach in order. NULL when out of memory.
+ */
+static struct rt_mapping *
+rt_open_mappings(pid_t pid, const struct lota_rt_map_entry *entries, size_t n)
+{
+	char dir[64];
+	struct rt_mapping *maps;
+	int dirfd;
+	int dir_err;
 
-	if (!entry || !out)
-		return -EINVAL;
-	if (entry->start >= entry->end)
-		return -EINVAL;
+	maps = calloc(n, sizeof(*maps));
+	if (!maps)
+		return NULL;
+
+	snprintf(dir, sizeof(dir), "/proc/%d/map_files", (int)pid);
+	dirfd = open(dir, O_RDONLY | O_DIRECTORY | O_CLOEXEC);
+	dir_err = dirfd < 0 ? -errno : 0;
+
+	for (size_t i = 0; i < n; i++) {
+		int fd = dir_err ? dir_err :
+				   lota_rt_open_mapping(dirfd, &entries[i],
+							&maps[i].st);
+
+		maps[i].fd = fd < 0 ? -1 : fd;
+		maps[i].err = fd < 0 ? fd : 0;
+	}
+	if (dirfd >= 0)
+		close(dirfd);
+
+	rt_check_mappings(pid, entries, maps, n);
+	return maps;
+}
+
+static void rt_fill_open_identity(const struct rt_mapping *map,
+				  struct lota_rt_open_identity *opened)
+{
+	struct statfs sfs;
+
+	opened->dev = map->st.st_dev;
+	opened->ino = map->st.st_ino;
+	opened->size = (uint64_t)map->st.st_size;
+	opened->mtime_sec = (int64_t)map->st.st_mtim.tv_sec;
+	opened->mtime_nsec = (int64_t)map->st.st_mtim.tv_nsec;
+	opened->nlink = (unsigned long)map->st.st_nlink;
+	/* off the fd: the path may have moved since open */
+	if (fstatfs(map->fd, &sfs) == 0)
+		opened->fs_magic = (unsigned long)sfs.f_type;
+	else
+		opened->fs_magic_err = errno;
+}
+
+static int rt_read_verity(const struct rt_mapping *map,
+			  struct lota_verity_digest_key *out,
+			  uint32_t *reported_len)
+{
+	union {
+		uint8_t buf[sizeof(struct fsverity_digest) +
+			    LOTA_VERITY_DIGEST_MAX_SIZE];
+		struct fsverity_digest hdr;
+	} d;
+	struct lota_rt_verity_key ckey;
 
 	/*
-	 * keep the untrusted /proc/<pid>/maps pathname out of the file access:
-	 * map_files is keyed only by the numeric range, under a trusted procfs
-	 * directory, and the range leaf cannot contain path separators
+	 * fs-verity fixes the contents of an inode, so a digest read from this
+	 * device, inode, size and mtime has not changed.
 	 */
-	n = snprintf(map_files_dir, sizeof(map_files_dir), "/proc/%d/map_files",
-		     (int)pid);
-	if (n < 0 || (size_t)n >= sizeof(map_files_dir))
-		return -ENAMETOOLONG;
-	n = snprintf(map_files_leaf, sizeof(map_files_leaf), "%lx-%lx",
-		     entry->start, entry->end);
-	if (n < 0 || (size_t)n >= sizeof(map_files_leaf) ||
-	    !rt_map_files_leaf_is_safe(map_files_leaf))
-		return -EINVAL;
+	lota_rt_verity_key_from_stat(&map->st, &ckey);
+	if (lota_rt_verity_cache_get(&rt_digest_cache, &ckey, out)) {
+		*reported_len = out->len;
+		return 0;
+	}
 
-	dirfd = open(map_files_dir, O_RDONLY | O_DIRECTORY | O_CLOEXEC);
-	if (dirfd < 0)
+	memset(&d, 0, sizeof(d));
+	d.hdr.digest_size = (uint16_t)LOTA_VERITY_DIGEST_MAX_SIZE;
+
+	if (ioctl(map->fd, FS_IOC_MEASURE_VERITY, &d) != 0)
 		return -errno;
 
-	fd = openat(dirfd, map_files_leaf, O_RDONLY | O_CLOEXEC);
-	if (fd < 0) {
-		ret = -errno;
-		goto out;
-	}
+	*reported_len = d.hdr.digest_size;
+	if (!LOTA_VERITY_DIGEST_LEN_SUPPORTED(d.hdr.digest_size))
+		return -EINVAL;
 
-	if (fstat(fd, &st) != 0) {
-		ret = -errno;
-		goto out;
-	}
-
-	/*
-	 * The mapping must still resolve to what was enumerated.
-	 * The range is re-read from the same /proc/<pid>/maps the enumeration
-	 * used, so the two device numbers are comparable; the opened handle's
-	 * inode is what ties the file about to be measured to that range.
-	 */
-	if (!S_ISREG(st.st_mode)) {
-		ret = -ESTALE;
-		goto out;
-	}
-	{
-		struct lota_rt_map_entry observed;
-		int found = lota_rt_lookup_map_entry(pid, entry->start,
-						     entry->end, &observed);
-
-		if (found < 0) {
-			ret = found;
-			goto out;
-		}
-		if (found == 0 ||
-		    !lota_rt_mapping_identity_ok(
-			    entry, &observed, (unsigned long long)st.st_ino)) {
-			ret = -ESTALE;
-			goto out;
-		}
-
-		/*
-		 * Report the handle's own identity so the caller can tell
-		 * which mapping is the executable without comparing a stat()
-		 * device against a maps one -- the comparison this block
-		 * exists to avoid.
-		 */
-		if (opened) {
-			struct statfs sfs;
-
-			opened->dev = st.st_dev;
-			opened->ino = st.st_ino;
-			opened->size = (uint64_t)st.st_size;
-			opened->mtime_sec = (int64_t)st.st_mtim.tv_sec;
-			opened->mtime_nsec = (int64_t)st.st_mtim.tv_nsec;
-			opened->nlink = (unsigned long)st.st_nlink;
-			/* off the fd: the path may have moved since open */
-			if (fstatfs(fd, &sfs) == 0)
-				opened->fs_magic = (unsigned long)sfs.f_type;
-			else
-				opened->fs_magic_err = errno;
-		}
-	}
-
-	{
-		union {
-			uint8_t buf[sizeof(struct fsverity_digest) +
-				    LOTA_VERITY_DIGEST_MAX_SIZE];
-			struct fsverity_digest hdr;
-		} d;
-		struct lota_rt_verity_key ckey;
-
-		/*
-		 * fs-verity fixes inode's contents, so digest already read from
-		 * this exact inode -- same device, size and mtime -- cannot have
-		 * changed.
-		 * Anything else is a miss and re-reads.
-		 */
-		lota_rt_verity_key_from_stat(&st, &ckey);
-		if (lota_rt_verity_cache_get(&rt_digest_cache, &ckey, out)) {
-			if (reported_len)
-				*reported_len = out->len;
-			goto out;
-		}
-
-		memset(&d, 0, sizeof(d));
-		d.hdr.digest_size = (uint16_t)LOTA_VERITY_DIGEST_MAX_SIZE;
-
-		if (ioctl(fd, FS_IOC_MEASURE_VERITY, &d) != 0) {
-			ret = -errno;
-			goto out;
-		}
-		if (reported_len)
-			*reported_len = d.hdr.digest_size;
-		if (!LOTA_VERITY_DIGEST_LEN_SUPPORTED(d.hdr.digest_size)) {
-			ret = -EINVAL;
-			goto out;
-		}
-
-		memset(out, 0, sizeof(*out));
-		out->len = d.hdr.digest_size;
-		memcpy(out->digest, d.hdr.digest, (size_t)out->len);
-		lota_rt_verity_cache_put(&rt_digest_cache, &ckey, out);
-	}
-
-out:
-	if (fd >= 0)
-		close(fd);
-	close(dirfd);
-	return ret;
+	memset(out, 0, sizeof(*out));
+	out->len = d.hdr.digest_size;
+	memcpy(out->digest, d.hdr.digest, (size_t)out->len);
+	lota_rt_verity_cache_put(&rt_digest_cache, &ckey, out);
+	return 0;
 }
 
 void lota_rt_failure_reason(const struct lota_runtime_measure_failure *fail,
@@ -716,16 +719,18 @@ static int rt_entry_pinned(pid_t pid, const struct lota_rt_map_entry *entry,
  * errno, so the caller still tells a coverage gap from a failure.
  */
 static int rt_measure_object(pid_t pid, const struct lota_rt_map_entry *entry,
-			     dev_t exe_dev, ino_t exe_ino,
-			     struct rt_object_measure *m)
+			     const struct rt_mapping *map, dev_t exe_dev,
+			     ino_t exe_ino, struct rt_object_measure *m)
 {
 	enum lota_rt_identity_road road;
-	int ret;
+	int ret = map->err;
 
 	memset(m, 0, sizeof(*m));
 
-	ret = lota_rt_measure_entry_verity(pid, entry, &m->digest,
-					   &m->reported_len, &m->opened);
+	if (ret == 0) {
+		rt_fill_open_identity(map, &m->opened);
+		ret = rt_read_verity(map, &m->digest, &m->reported_len);
+	}
 
 	/*
 	 * Both from stat(): a maps device never matches one on a filesystem
@@ -780,6 +785,7 @@ int lota_runtime_coverage_pid(pid_t pid,
 			      struct lota_runtime_measure_coverage *cov)
 {
 	struct lota_rt_map_entry *entries = NULL;
+	struct rt_mapping *maps = NULL;
 	dev_t exe_dev = 0;
 	ino_t exe_ino = 0;
 	size_t n = 0;
@@ -795,7 +801,7 @@ int lota_runtime_coverage_pid(pid_t pid,
 
 	ret = lota_rt_collect_exec_maps(pid, entries,
 					LOTA_RUNTIME_IMAGE_MAX_MODULES, &n);
-	if (ret != 0)
+	if (ret != 0 || n == 0)
 		goto out;
 
 	/* same roads as the token; unknown executable: fs-verity only */
@@ -804,10 +810,17 @@ int lota_runtime_coverage_pid(pid_t pid,
 		exe_ino = 0;
 	}
 
+	maps = rt_open_mappings(pid, entries, n);
+	if (!maps) {
+		ret = -ENOMEM;
+		goto out;
+	}
+
 	for (size_t i = 0; i < n; i++) {
 		struct rt_object_measure m;
 
-		ret = rt_measure_object(pid, &entries[i], exe_dev, exe_ino, &m);
+		ret = rt_measure_object(pid, &entries[i], &maps[i], exe_dev,
+					exe_ino, &m);
 		if (ret == 0) {
 			cov->measured++;
 			if (m.content_hashed)
@@ -820,6 +833,8 @@ int lota_runtime_coverage_pid(pid_t pid,
 	}
 	ret = 0;
 out:
+	if (maps)
+		rt_close_mappings(maps, n);
 	free(entries);
 	return ret;
 }
@@ -831,6 +846,7 @@ int lota_runtime_measure_pid_objects(
 	struct lota_rt_object_record *objs, size_t *n_objs)
 {
 	struct lota_rt_map_entry *entries = NULL;
+	struct rt_mapping *maps = NULL;
 	struct lota_runtime_image_module *mods = NULL;
 	struct lota_runtime_measure_coverage local_cov = { 0 };
 	int exe_measured = 0;
@@ -880,6 +896,12 @@ int lota_runtime_measure_pid_objects(
 	if (ret != 0)
 		goto out;
 
+	maps = rt_open_mappings(pid, entries, n);
+	if (!maps) {
+		ret = -ENOMEM;
+		goto out;
+	}
+
 	for (i = 0; i < n; i++) {
 		struct lota_runtime_image_module *slot =
 			&mods[local_cov.measured];
@@ -888,7 +910,8 @@ int lota_runtime_measure_pid_objects(
 		snprintf(slot->soname, sizeof(slot->soname), "%s",
 			 entries[i].soname);
 
-		ret = rt_measure_object(pid, &entries[i], exe_dev, exe_ino, &m);
+		ret = rt_measure_object(pid, &entries[i], &maps[i], exe_dev,
+					exe_ino, &m);
 		if (objs) {
 			objs[i].size = m.opened.size;
 			if (ret == 0) {
@@ -937,8 +960,7 @@ int lota_runtime_measure_pid_objects(
 	if (ret != 0)
 		goto out;
 
-	n = local_cov.measured;
-	qsort(mods, n, sizeof(*mods), rt_module_qsort_cmp);
+	qsort(mods, local_cov.measured, sizeof(*mods), rt_module_qsort_cmp);
 
 	/*
 	 * Two distinct inodes can share an soname and content digest (the same
@@ -946,7 +968,7 @@ int lota_runtime_measure_pid_objects(
 	 * strictly increasing canonical-order contract still holds
 	 */
 	unique = 1;
-	for (i = 1; i < n; i++) {
+	for (i = 1; i < local_cov.measured; i++) {
 		if (lota__runtime_image_module_cmp(&mods[unique - 1],
 						   &mods[i]) != 0)
 			mods[unique++] = mods[i];
@@ -957,6 +979,8 @@ int lota_runtime_measure_pid_objects(
 	if (ret == 0 && cov)
 		*cov = local_cov;
 out:
+	if (maps)
+		rt_close_mappings(maps, n);
 	free(entries);
 	if (mods)
 		OPENSSL_cleanse(mods,
