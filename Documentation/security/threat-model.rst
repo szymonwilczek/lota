@@ -40,6 +40,14 @@ An integrator can build game-specific or fleet-specific policy on top of these
 properties. LOTA does not inspect gameplay behavior, memory signatures, network
 patterns, or user input.
 
+LOTA raises the cost of a cheat; it does not make one impossible. A cheat that
+runs on a host LOTA attests is not by itself a failure of the system. What
+counts is what the cheat had to cost: one below the game process needs the
+machine's owner to give up the measured state the token reports, and a device
+caught cheating keeps its ban, because the ban holds on the identity the CA
+derives from the TPM and re-enrolling keeps that identity. Cheats that live
+entirely in the game process stay with the anti-cheat on top.
+
 Trust boundaries
 ================
 

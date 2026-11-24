@@ -401,9 +401,9 @@ Pausing and removing it
 =======================
 
 **Pausing** is deliberately awkward, and the reason is worth a sentence.
-LOTA's job is to be impossible for a cheat to switch off mid-game, so it
-cannot be killed like an ordinary program, and starting it again takes a
-restart::
+LOTA's job is that a cheat cannot switch it off mid-game without the game
+seeing it, so it cannot be killed like an ordinary program, and starting it
+again takes a restart::
 
     sudo lota-install --pause
 
