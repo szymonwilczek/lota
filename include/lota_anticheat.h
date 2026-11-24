@@ -142,6 +142,12 @@ enum {
 						      * be measured */
 	LOTA_AC_ERR_SERIALIZE = LOTA_AC_ERR_BASE - 23, /* the token would not
 							* serialise */
+
+	/* boot evidence */
+	LOTA_AC_ERR_NO_EVIDENCE = LOTA_AC_ERR_BASE - 27, /* the agent would
+							  * not hand it over */
+	LOTA_AC_ERR_BAD_EVIDENCE = LOTA_AC_ERR_BASE - 28, /* not the boot the
+							   * heartbeat quotes */
 };
 
 struct lota_ac_config {
@@ -280,6 +286,9 @@ struct lota_ac_info {
 							 binding */
 	int trusted; /* state == LOTA_AC_STATE_TRUSTED, in the same terms the
 		      * state field is in: attested, whatever else was asked for */
+	/* the boot PCRs the quote signed, for lota_ac_verify_boot_evidence() */
+	uint32_t pcr_mask;
+	uint8_t pcr_digest[32];
 };
 
 struct lota_ac_session;
@@ -384,6 +393,22 @@ int lota_ac_tick(struct lota_ac_session *session);
  */
 int lota_ac_heartbeat(struct lota_ac_session *session, uint8_t *buf,
 		      size_t buflen, size_t *written);
+
+/*
+ * Fetch the boot evidence for this session's tokens.
+ *
+ * The values of the PCRs a token quotes and the PCR 7 events behind them
+ * (lota_token.h), from the agent in direct mode or from the hook's
+ * lota-boot-evidence.bin in file mode. Send it with a heartbeat; the
+ * server reads Secure Boot from it with lota_ac_verify_boot_evidence().
+ * LOTA_BOOT_EVIDENCE_MAX_SIZE holds any.
+ *
+ * Returns 0 on success, -EINVAL for bad arguments, -ENOTCONN without an
+ * agent, -ENODATA if there is none to give, -ENOSPC if buf is too small,
+ * -EIO when the agent refused.
+ */
+int lota_ac_boot_evidence(struct lota_ac_session *session, uint8_t *buf,
+			  size_t buflen, size_t *written);
 
 /*
  * Compute canonical game-binding hash for a game ID and executable image.
@@ -537,6 +562,21 @@ int lota_ac_verify_heartbeat(
 	const uint8_t expected_game_id_hash[LOTA_AC_GAME_HASH_SIZE],
 	const uint8_t expected_runtime_measure[LOTA_AC_RUNTIME_MEASURE_SIZE],
 	struct lota_ac_info *info);
+
+/*
+ * Read Secure Boot from boot evidence.
+ *
+ * info must come from lota_ac_verify_heartbeat() on the heartbeat the
+ * evidence was sent with: the evidence counts only when it is the boot that
+ * heartbeat's quote signed. *secure_boot is 1 when the firmware measured
+ * Secure Boot on before it handed over to the boot loader, 0 otherwise.
+ *
+ * Returns 0 on success, LOTA_AC_ERR_BAD_EVIDENCE for evidence that is
+ * malformed or of another boot, another LOTA_AC_ERR_* code on failure.
+ */
+int lota_ac_verify_boot_evidence(const struct lota_ac_info *info,
+				 const uint8_t *evidence, size_t len,
+				 int *secure_boot);
 
 const char *lota_ac_state_str(enum lota_ac_state state);
 const char *lota_ac_provider_str(enum lota_ac_provider provider);

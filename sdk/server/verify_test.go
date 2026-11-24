@@ -821,3 +821,182 @@ func TestStoppedMSBoundToQuote(t *testing.T) {
 		t.Fatalf("zeroed stopped_ms: got %v, want ErrNonceFail", err)
 	}
 }
+
+// one PCR 7 event: what the firmware measured and what the evidence sends
+type testEvent struct {
+	measured []byte
+	sent     []byte
+}
+
+const testEvidenceMask = 1<<0 | 1<<1 | 1<<7 | 1<<14
+
+// UEFI_VARIABLE_DATA for the EFI global SecureBoot variable
+func secureBootVar(value []byte) []byte {
+	out := append([]byte{}, efiGlobalGUID...)
+	out = binary.LittleEndian.AppendUint64(out, uint64(len(secureBootName)/2))
+	out = binary.LittleEndian.AppendUint64(out, uint64(len(value)))
+	out = append(out, secureBootName...)
+	return append(out, value...)
+}
+
+// evidence for evs and the claims a token quoting the PCR 7 they replay to
+// would carry
+func buildEvidence(evs []testEvent) ([]byte, *Claims) {
+	var pcrs [24][32]byte
+	var chain [64]byte
+	for _, ev := range evs {
+		d := sha256.Sum256(ev.measured)
+		copy(chain[32:], d[:])
+		next := sha256.Sum256(chain[:])
+		copy(chain[:32], next[:])
+	}
+	copy(pcrs[0][:], bytes.Repeat([]byte{0x10}, 32))
+	copy(pcrs[1][:], bytes.Repeat([]byte{0x11}, 32))
+	copy(pcrs[7][:], chain[:32])
+	copy(pcrs[14][:], bytes.Repeat([]byte{0x14}, 32))
+
+	out := binary.LittleEndian.AppendUint16(nil, BootEvidenceVersion)
+	out = binary.LittleEndian.AppendUint16(out, uint16(len(evs)))
+	out = binary.LittleEndian.AppendUint32(out, testEvidenceMask)
+	h := sha256.New()
+	for i := range pcrs {
+		if testEvidenceMask&(1<<i) == 0 {
+			continue
+		}
+		out = append(out, pcrs[i][:]...)
+		h.Write(pcrs[i][:])
+	}
+	for _, ev := range evs {
+		d := sha256.Sum256(ev.measured)
+		out = append(out, d[:]...)
+		out = binary.LittleEndian.AppendUint16(out, uint16(len(ev.sent)))
+		out = append(out, ev.sent...)
+	}
+	return out, &Claims{PCRMask: testEvidenceMask, PCRDigest: h.Sum(nil)}
+}
+
+func evidenceSays(evs []testEvent) (bool, error) {
+	evidence, claims := buildEvidence(evs)
+	return VerifyBootEvidence(claims, evidence)
+}
+
+var (
+	evOn        = secureBootVar([]byte{1})
+	evOff       = secureBootVar([]byte{0})
+	evSeparator = make([]byte, 4)
+	evPK        = []byte("synthetic platform key")
+	evAuthority = []byte("synthetic boot authority")
+)
+
+func TestVerifyBootEvidence_Honest(t *testing.T) {
+	sb, err := evidenceSays([]testEvent{
+		{evOn, evOn}, {evPK, nil}, {evSeparator, nil}, {evAuthority, nil},
+	})
+	if err != nil || !sb {
+		t.Fatalf("a Secure Boot boot read sb=%v err=%v", sb, err)
+	}
+
+	sb, err = evidenceSays([]testEvent{
+		{evOff, evOff}, {evPK, nil}, {evSeparator, nil},
+	})
+	if err != nil || sb {
+		t.Fatalf("a boot without Secure Boot read sb=%v err=%v", sb, err)
+	}
+}
+
+// what root can extend into PCR 7 after boot, and what it can leave out
+func TestVerifyBootEvidence_RootExtends(t *testing.T) {
+	wide := secureBootVar([]byte{1, 1})
+	cases := []struct {
+		name string
+		evs  []testEvent
+		err  error
+	}{
+		{"SecureBoot=1 extended after the separator", []testEvent{
+			{evOff, nil}, {evPK, nil}, {evSeparator, nil}, {evOn, evOn},
+		}, nil},
+		{"a later separator does not reopen the window", []testEvent{
+			{evOff, nil}, {evSeparator, nil}, {evSeparator, nil}, {evOn, evOn},
+		}, nil},
+		{"no separator", []testEvent{
+			{evOff, nil}, {evPK, nil}, {evOn, evOn},
+		}, nil},
+		{"a SecureBoot measurement sent hidden", []testEvent{
+			{evOn, nil}, {evSeparator, nil},
+		}, nil},
+		{"conflicting SecureBoot measurements", []testEvent{
+			{evOn, evOn}, {evOff, evOff}, {evSeparator, nil},
+		}, nil},
+		{"a SecureBoot value wider than a byte", []testEvent{
+			{wide, wide}, {evSeparator, nil},
+		}, nil},
+		{"data that is not what was measured", []testEvent{
+			{evOff, evOn}, {evSeparator, nil},
+		}, ErrBadEvidence},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			sb, err := evidenceSays(tc.evs)
+			if !errors.Is(err, tc.err) || sb {
+				t.Fatalf("sb=%v err=%v, want off with %v", sb, err, tc.err)
+			}
+		})
+	}
+}
+
+// evidence edited after the fact no longer matches its token
+func TestVerifyBootEvidence_Edits(t *testing.T) {
+	evidence, claims := buildEvidence([]testEvent{
+		{evOn, evOn}, {evPK, nil}, {evSeparator, nil},
+	})
+	if sb, err := VerifyBootEvidence(claims, evidence); err != nil || !sb {
+		t.Fatalf("baseline sb=%v err=%v", sb, err)
+	}
+	edit := func(f func(b []byte) []byte) []byte {
+		return f(append([]byte{}, evidence...))
+	}
+	cases := []struct {
+		name     string
+		evidence []byte
+		claims   *Claims
+	}{
+		{"an edited PCR value", edit(func(b []byte) []byte {
+			b[BootEvidenceHeaderSize] ^= 1
+			return b
+		}), claims},
+		{"an event left out", edit(func(b []byte) []byte {
+			binary.LittleEndian.PutUint16(b[2:], 2)
+			return b[:len(b)-BootEvidenceEventSize]
+		}), claims},
+		{"an event count past the data", edit(func(b []byte) []byte {
+			binary.LittleEndian.PutUint16(b[2:], 4)
+			return b
+		}), claims},
+		{"a trailing byte", edit(func(b []byte) []byte {
+			return append(b, 0)
+		}), claims},
+		{"a truncated buffer", evidence[:len(evidence)-1], claims},
+		{"another version", edit(func(b []byte) []byte {
+			b[0] = 2
+			return b
+		}), claims},
+		{"another token's PCR mask", evidence,
+			&Claims{PCRMask: claims.PCRMask &^ (1 << 14), PCRDigest: claims.PCRDigest}},
+		{"another token's PCR digest", evidence,
+			&Claims{PCRMask: claims.PCRMask, PCRDigest: append([]byte{^claims.PCRDigest[0]}, claims.PCRDigest[1:]...)}},
+		{"a SHA-384 PCR digest", evidence,
+			&Claims{PCRMask: claims.PCRMask, PCRDigest: make([]byte, 48)}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			sb, err := VerifyBootEvidence(tc.claims, tc.evidence)
+			if !errors.Is(err, ErrBadEvidence) || sb {
+				t.Fatalf("sb=%v err=%v, want ErrBadEvidence", sb, err)
+			}
+		})
+	}
+
+	if sb, err := VerifyBootEvidence(nil, evidence); !errors.Is(err, ErrInvalidArg) || sb {
+		t.Fatalf("nil claims: sb=%v err=%v", sb, err)
+	}
+}

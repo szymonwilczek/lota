@@ -24,6 +24,7 @@ static inline bool ipc_payload_len_valid(uint32_t cmd, uint32_t payload_len)
 	switch (cmd) {
 	case LOTA_IPC_CMD_PING:
 	case LOTA_IPC_CMD_GET_STATUS:
+	case LOTA_IPC_CMD_GET_BOOT_EVIDENCE:
 	case LOTA_IPC_CMD_SHUTDOWN:
 		return payload_len == 0;
 

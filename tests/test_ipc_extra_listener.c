@@ -41,6 +41,7 @@
 #include "../src/agent/profile.h"
 #include "../src/agent/runtime_image_measure.h"
 #include "../src/agent/tpm.h"
+#include "../src/agent/boot_evidence.h"
 
 /*
  * The daemon's state and the layers below the socket.
@@ -82,6 +83,17 @@ int tpm_bind_profile(struct tpm_context *ctx, const struct profile_paths *paths)
 {
 	(void)ctx;
 	(void)paths;
+	return -ENOTSUP;
+}
+
+int boot_evidence_collect(struct tpm_context *tpm, uint32_t pcr_mask,
+			  uint8_t *out, size_t out_size, size_t *out_len)
+{
+	(void)tpm;
+	(void)pcr_mask;
+	(void)out;
+	(void)out_size;
+	(void)out_len;
 	return -ENOTSUP;
 }
 

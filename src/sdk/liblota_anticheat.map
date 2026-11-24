@@ -19,6 +19,7 @@
 
 LOTA_ANTICHEAT_1.0 {
 	global:
+		lota_ac_boot_evidence;
 		lota_ac_compute_expected_runtime_measure;
 		lota_ac_compute_expected_runtime_measure_set;
 		lota_ac_compute_game_binding_hash;
@@ -34,6 +35,7 @@ LOTA_ANTICHEAT_1.0 {
 		lota_ac_state_str;
 		lota_ac_strerror;
 		lota_ac_tick;
+		lota_ac_verify_boot_evidence;
 		lota_ac_verify_heartbeat;
 
 	local:

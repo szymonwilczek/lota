@@ -12,6 +12,7 @@
  *  - Expired token detection
  *  - Nonce mismatch rejection
  *  - Malformed input handling
+ *  - Boot evidence a root host shaped, held to its token
  */
 
 #include <openssl/evp.h>
@@ -1383,6 +1384,342 @@ static void test_registry_digest(void)
 	}
 }
 
+/*
+ * Boot evidence. The host is root, so every byte it sends is chosen, and only
+ * the PCR digest the TPM signed and the PCR 7 value it fixes are not.
+ */
+
+#define EV_MASK ((1u << 0) | (1u << 1) | (1u << 7) | (1u << 14))
+#define EV_MAX 8192
+
+struct test_event {
+	const uint8_t *measured; /* what the firmware extended */
+	size_t measured_len;
+	const uint8_t *sent; /* what the host ships, NULL for digest only */
+	size_t sent_len;
+};
+
+static void ev_le16(uint8_t *p, uint16_t v)
+{
+	p[0] = (uint8_t)v;
+	p[1] = (uint8_t)(v >> 8);
+}
+
+static void ev_le32(uint8_t *p, uint32_t v)
+{
+	for (int i = 0; i < 4; i++)
+		p[i] = (uint8_t)(v >> (8 * i));
+}
+
+static void ev_sha256(const void *data, size_t len, uint8_t out[32])
+{
+	EVP_Digest(data, len, out, NULL, EVP_sha256(), NULL);
+}
+
+/* UEFI_VARIABLE_DATA for the EFI global SecureBoot variable */
+static size_t secure_boot_var(const uint8_t *value, size_t value_len,
+			      uint8_t *out)
+{
+	static const uint8_t guid[16] = {
+		0x61, 0xdf, 0xe4, 0x8b, 0xca, 0x93, 0xd2, 0x11,
+		0xaa, 0x0d, 0x00, 0xe0, 0x98, 0x03, 0x2b, 0x8c,
+	};
+	static const char name[] = "SecureBoot";
+	size_t off = 0;
+
+	memcpy(out, guid, sizeof(guid));
+	off += sizeof(guid);
+	memset(out + off, 0, 16);
+	out[off] = (uint8_t)(sizeof(name) - 1);
+	out[off + 8] = (uint8_t)value_len;
+	off += 16;
+	for (size_t i = 0; i < sizeof(name) - 1; i++) {
+		out[off++] = (uint8_t)name[i];
+		out[off++] = 0;
+	}
+	memcpy(out + off, value, value_len);
+	return off + value_len;
+}
+
+/*
+ * Evidence for @evs and the claims a token quoting the PCR 7 they replay
+ * to would carry.
+ */
+static size_t build_evidence(const struct test_event *evs, size_t n,
+			     uint8_t *out, struct lota_server_claims *claims)
+{
+	uint8_t pcrs[24][32];
+	uint8_t chain[64] = { 0 };
+	size_t off = LOTA_BOOT_EVIDENCE_HEADER_SIZE, npcr = 0;
+	uint8_t values[4 * 32];
+
+	memset(pcrs, 0, sizeof(pcrs));
+	for (size_t i = 0; i < n; i++) {
+		ev_sha256(evs[i].measured, evs[i].measured_len, chain + 32);
+		ev_sha256(chain, sizeof(chain), chain);
+	}
+	memset(pcrs[0], 0x10, 32);
+	memset(pcrs[1], 0x11, 32);
+	memcpy(pcrs[7], chain, 32);
+	memset(pcrs[14], 0x14, 32);
+
+	ev_le16(out, LOTA_BOOT_EVIDENCE_VERSION);
+	ev_le16(out + 2, (uint16_t)n);
+	ev_le32(out + 4, EV_MASK);
+	for (int i = 0; i < 24; i++) {
+		if (!(EV_MASK & (1u << i)))
+			continue;
+		memcpy(out + off, pcrs[i], 32);
+		memcpy(values + 32 * npcr++, pcrs[i], 32);
+		off += 32;
+	}
+	for (size_t i = 0; i < n; i++) {
+		ev_sha256(evs[i].measured, evs[i].measured_len, out + off);
+		ev_le16(out + off + 32, (uint16_t)evs[i].sent_len);
+		off += LOTA_BOOT_EVIDENCE_EVENT_SIZE;
+		if (evs[i].sent) {
+			memcpy(out + off, evs[i].sent, evs[i].sent_len);
+			off += evs[i].sent_len;
+		}
+	}
+
+	memset(claims, 0, sizeof(*claims));
+	claims->pcr_mask = EV_MASK;
+	ev_sha256(values, 32 * npcr, claims->pcr_digest);
+	claims->pcr_digest_len = 32;
+	return off;
+}
+
+static const uint8_t ev_on[1] = { 1 };
+static const uint8_t ev_off[1] = { 0 };
+static const uint8_t ev_separator[4];
+static const uint8_t ev_pk[] = "synthetic platform key";
+static const uint8_t ev_authority[] = "synthetic boot authority";
+
+static int evidence_says(const struct test_event *evs, size_t n, int *sb)
+{
+	struct lota_server_claims claims;
+	uint8_t buf[EV_MAX];
+	size_t len = build_evidence(evs, n, buf, &claims);
+
+	return lota_server_verify_boot_evidence(&claims, buf, len, sb);
+}
+
+static void test_boot_evidence_honest(void)
+{
+	uint8_t on[64], off[64];
+	size_t on_len = secure_boot_var(ev_on, 1, on);
+	size_t off_len = secure_boot_var(ev_off, 1, off);
+	int sb = -1, ret;
+
+	TEST("boot evidence - a Secure Boot boot reads on");
+	struct test_event boot_on[] = {
+		{ on, on_len, on, on_len },
+		{ ev_pk, sizeof(ev_pk), NULL, 0 },
+		{ ev_separator, 4, NULL, 0 },
+		{ ev_authority, sizeof(ev_authority), NULL, 0 },
+	};
+	ret = evidence_says(boot_on, 4, &sb);
+	if (ret == LOTA_SERVER_OK && sb == 1)
+		PASS();
+	else
+		FAIL(lota_server_strerror(ret));
+
+	TEST("boot evidence - a boot without Secure Boot reads off");
+	struct test_event boot_off[] = {
+		{ off, off_len, off, off_len },
+		{ ev_pk, sizeof(ev_pk), NULL, 0 },
+		{ ev_separator, 4, NULL, 0 },
+	};
+	sb = -1;
+	ret = evidence_says(boot_off, 3, &sb);
+	if (ret == LOTA_SERVER_OK && sb == 0)
+		PASS();
+	else
+		FAIL("an off boot did not read off");
+}
+
+/* What root can extend into PCR 7 after boot, and what it can leave out */
+static void test_boot_evidence_root_extends(void)
+{
+	uint8_t on[64], off[64], wide[64];
+	uint8_t two[2] = { 1, 1 };
+	size_t on_len = secure_boot_var(ev_on, 1, on);
+	size_t off_len = secure_boot_var(ev_off, 1, off);
+	size_t wide_len = secure_boot_var(two, sizeof(two), wide);
+	int sb = -1, ret;
+
+	TEST("boot evidence - SecureBoot=1 extended after the separator");
+	struct test_event appended[] = {
+		{ off, off_len, NULL, 0 },
+		{ ev_pk, sizeof(ev_pk), NULL, 0 },
+		{ ev_separator, 4, NULL, 0 },
+		{ on, on_len, on, on_len },
+	};
+	ret = evidence_says(appended, 4, &sb);
+	if (ret == LOTA_SERVER_OK && sb == 0)
+		PASS();
+	else
+		FAIL("a measurement root added reads on");
+
+	TEST("boot evidence - a later separator does not reopen the window");
+	struct test_event early_separator[] = {
+		{ off, off_len, NULL, 0 },
+		{ ev_separator, 4, NULL, 0 },
+		{ ev_separator, 4, NULL, 0 },
+		{ on, on_len, on, on_len },
+	};
+	sb = -1;
+	ret = evidence_says(early_separator, 4, &sb);
+	if (ret == LOTA_SERVER_OK && sb == 0)
+		PASS();
+	else
+		FAIL("a measurement after a second separator reads on");
+
+	TEST("boot evidence - no separator reads off");
+	struct test_event no_separator[] = {
+		{ off, off_len, NULL, 0 },
+		{ ev_pk, sizeof(ev_pk), NULL, 0 },
+		{ on, on_len, on, on_len },
+	};
+	sb = -1;
+	ret = evidence_says(no_separator, 3, &sb);
+	if (ret == LOTA_SERVER_OK && sb == 0)
+		PASS();
+	else
+		FAIL("a measurement with no separator before it reads on");
+
+	TEST("boot evidence - a SecureBoot measurement sent hidden reads off");
+	struct test_event hidden[] = {
+		{ on, on_len, NULL, 0 },
+		{ ev_separator, 4, NULL, 0 },
+	};
+	sb = -1;
+	ret = evidence_says(hidden, 2, &sb);
+	if (ret == LOTA_SERVER_OK && sb == 0)
+		PASS();
+	else
+		FAIL("an unread measurement reads on");
+
+	TEST("boot evidence - conflicting SecureBoot measurements read off");
+	struct test_event conflict[] = {
+		{ on, on_len, on, on_len },
+		{ off, off_len, off, off_len },
+		{ ev_separator, 4, NULL, 0 },
+	};
+	sb = -1;
+	ret = evidence_says(conflict, 3, &sb);
+	if (ret == LOTA_SERVER_OK && sb == 0)
+		PASS();
+	else
+		FAIL("a 1 next to a 0 reads on");
+
+	TEST("boot evidence - a SecureBoot value wider than a byte reads off");
+	struct test_event wide_value[] = {
+		{ wide, wide_len, wide, wide_len },
+		{ ev_separator, 4, NULL, 0 },
+	};
+	sb = -1;
+	ret = evidence_says(wide_value, 2, &sb);
+	if (ret == LOTA_SERVER_OK && sb == 0)
+		PASS();
+	else
+		FAIL("a two-byte value reads on");
+
+	TEST("boot evidence - data that is not what was measured is refused");
+	struct test_event swapped[] = {
+		{ off, off_len, on, on_len },
+		{ ev_separator, 4, NULL, 0 },
+	};
+	sb = -1;
+	ret = evidence_says(swapped, 2, &sb);
+	if (ret == LOTA_SERVER_ERR_BAD_EVIDENCE && sb == 0)
+		PASS();
+	else
+		FAIL("SecureBoot=1 data over a SecureBoot=0 digest passed");
+}
+
+/* Evidence edited after the fact no longer matches its token */
+static void test_boot_evidence_edits(void)
+{
+	uint8_t on[64], buf[EV_MAX];
+	size_t on_len = secure_boot_var(ev_on, 1, on);
+	struct lota_server_claims claims, other;
+	struct test_event boot[] = {
+		{ on, on_len, on, on_len },
+		{ ev_pk, sizeof(ev_pk), NULL, 0 },
+		{ ev_separator, 4, NULL, 0 },
+	};
+	size_t len = build_evidence(boot, 3, buf, &claims);
+	int sb, ret;
+
+	TEST("boot evidence - an edited PCR value is refused");
+	buf[LOTA_BOOT_EVIDENCE_HEADER_SIZE] ^= 1;
+	ret = lota_server_verify_boot_evidence(&claims, buf, len, &sb);
+	buf[LOTA_BOOT_EVIDENCE_HEADER_SIZE] ^= 1;
+	if (ret == LOTA_SERVER_ERR_BAD_EVIDENCE)
+		PASS();
+	else
+		FAIL("PCR 0 changed and the evidence passed");
+
+	TEST("boot evidence - an event left out is refused");
+	ev_le16(buf + 2, 2);
+	ret = lota_server_verify_boot_evidence(&claims, buf, len, &sb);
+	if (ret == LOTA_SERVER_ERR_BAD_EVIDENCE) {
+		ret = lota_server_verify_boot_evidence(
+			&claims, buf, len - LOTA_BOOT_EVIDENCE_EVENT_SIZE, &sb);
+	}
+	ev_le16(buf + 2, 3);
+	if (ret == LOTA_SERVER_ERR_BAD_EVIDENCE)
+		PASS();
+	else
+		FAIL("evidence short of the separator passed");
+
+	TEST("boot evidence - trailing bytes are refused");
+	buf[len] = 0;
+	ret = lota_server_verify_boot_evidence(&claims, buf, len + 1, &sb);
+	if (ret == LOTA_SERVER_ERR_BAD_EVIDENCE)
+		PASS();
+	else
+		FAIL("a trailing byte passed");
+
+	TEST("boot evidence - another token's PCR mask is refused");
+	other = claims;
+	other.pcr_mask &= ~(1u << 14);
+	ret = lota_server_verify_boot_evidence(&other, buf, len, &sb);
+	if (ret == LOTA_SERVER_ERR_BAD_EVIDENCE)
+		PASS();
+	else
+		FAIL("the mask was not held to the token's");
+
+	TEST("boot evidence - another token's PCR digest is refused");
+	other = claims;
+	other.pcr_digest[0] ^= 1;
+	ret = lota_server_verify_boot_evidence(&other, buf, len, &sb);
+	if (ret == LOTA_SERVER_ERR_BAD_EVIDENCE)
+		PASS();
+	else
+		FAIL("the digest was not held to the token's");
+
+	TEST("boot evidence - a truncated buffer is refused");
+	ret = lota_server_verify_boot_evidence(&claims, buf, len - 1, &sb);
+	if (ret == LOTA_SERVER_ERR_BAD_EVIDENCE)
+		PASS();
+	else
+		FAIL("a short buffer passed");
+
+	TEST("boot evidence - NULL arguments are refused");
+	if (lota_server_verify_boot_evidence(NULL, buf, len, &sb) ==
+		    LOTA_SERVER_ERR_INVALID_ARG &&
+	    lota_server_verify_boot_evidence(&claims, NULL, len, &sb) ==
+		    LOTA_SERVER_ERR_INVALID_ARG &&
+	    lota_server_verify_boot_evidence(&claims, buf, len, NULL) ==
+		    LOTA_SERVER_ERR_INVALID_ARG)
+		PASS();
+	else
+		FAIL("a NULL argument was accepted");
+}
+
 int main(void)
 {
 	printf(BOLD "\n=== LOTA Server SDK - Test Suite ===\n\n" RESET);
@@ -1443,6 +1780,9 @@ int main(void)
 	test_sdk_version_agrees_across_libraries();
 	test_sdk_version_is_a_real_build();
 	test_registry_digest();
+	test_boot_evidence_honest();
+	test_boot_evidence_root_extends();
+	test_boot_evidence_edits();
 
 	printf(BOLD "\n=== Results: %d/%d passed" RESET, tests_pass, tests_run);
 	if (tests_fail > 0) {

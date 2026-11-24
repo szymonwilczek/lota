@@ -270,13 +270,14 @@ token into a directory somebody else owns.
 
 The files are:
 
-===================== ====== ================================
-File                  Format Owner
-===================== ====== ================================
-``lota-status``       text   hook state, last refresh, errors
-``lota-token.bin``    binary raw gaming SDK attestation token
-``lota-snapshot.bin`` binary combined flags + token blob
-===================== ====== ================================
+========================== ====== ================================
+File                       Format Owner
+========================== ====== ================================
+``lota-status``            text   hook state, last refresh, errors
+``lota-token.bin``         binary raw gaming SDK attestation token
+``lota-snapshot.bin``      binary combined flags + token blob
+``lota-boot-evidence.bin`` binary boot PCRs + PCR 7 events
+========================== ====== ================================
 
 A background refresh thread re-queries the agent every
 ``LOTA_HOOK_REFRESH_SEC`` seconds (default 60) and rewrites the files
@@ -287,10 +288,10 @@ exiting first would take the artefacts the running title had just written. A
 clean exit and a crash therefore both leave the files behind, and the next
 launch overwrites them on its first refresh.
 
-What removes the token and the snapshot is losing the agent:
-``publish_offline_status()`` rewrites ``lota-status`` with ``LOTA_ATTESTED=0``
-and unlinks the other two, because neither can be trusted past the
-disconnect.
+What removes the token, the snapshot and the boot evidence is losing the
+agent: ``publish_offline_status()`` rewrites ``lota-status`` with
+``LOTA_ATTESTED=0`` and unlinks the other three, because none can be trusted
+past the disconnect.
 
 Verify after launching CS2 (run from the operator account, not root, so
 ``$XDG_RUNTIME_DIR`` resolves to the user's runtime dir):

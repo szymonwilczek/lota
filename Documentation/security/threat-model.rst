@@ -137,10 +137,12 @@ unlinkable; evidence is not, and the product says so where a player can act on
 it -- at the consent prompt, in ``--list-publishers`` and in the player
 documentation.
 
-The fork the design already had is the answer to it. A publisher whose titles
-only check tokens receives no report, no PCR values and no event log, so for
-them the separation is complete; a publisher who runs a verifier trades that
-away for a verifier's judgement. Nothing in the protocol can give two verifiers
+The fork the design already had narrows it. A publisher whose titles only
+check tokens receives no report and no event log: the quoted PCR digest, and
+with the boot evidence the values behind it and the PCR 7 event digests. Those
+are the same for every publisher on one boot, so they link a machine too, but
+they do not name its disk; a publisher who runs a verifier trades that away for
+a verifier's judgement. Nothing in the protocol can give two verifiers
 a per-publisher view of PCR 14 while both still verify it, so this is a
 disclosure to state plainly.
 
@@ -615,8 +617,9 @@ Explicit non-goals
   keeps the device identity the CA derives from the EK. A relying party watches
   the PCR digest for a change on each device, keeps a ban on that identity and
   judges play on its server; it does not treat the flags as proof against the
-  machine's owner. The digest differs between machines, so without the event log
-  it does not show that Secure Boot was on when the device was first seen.
+  machine's owner. The digest differs between machines, so on its own it does
+  not show that Secure Boot was on when the device was first seen; the boot
+  evidence that comes with the token does.
 * Supporting hosts that intentionally disable lockdown, module signature
   enforcement, SELinux enforcing mode, fs-verity, IMA appraisal, or TPM access
   control required by production policy.

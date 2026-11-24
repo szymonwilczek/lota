@@ -112,6 +112,11 @@ int main(void)
 				     sizeof(struct lota_ipc_pid_request)),
 	      "GET_REGISTRY without a start is refused");
 
+	CHECK(ipc_payload_len_valid(LOTA_IPC_CMD_GET_BOOT_EVIDENCE, 0),
+	      "GET_BOOT_EVIDENCE carries nothing");
+	CHECK(!ipc_payload_len_valid(LOTA_IPC_CMD_GET_BOOT_EVIDENCE, 4),
+	      "GET_BOOT_EVIDENCE with a payload is refused");
+
 	CHECK(!ipc_payload_len_valid(0xdead, 4),
 	      "an unknown command may not carry a payload");
 	CHECK(ipc_payload_len_valid(0xdead, 0),

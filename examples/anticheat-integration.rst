@@ -245,8 +245,9 @@ An agent that goes away mid-session
 An integrator reading the hook's file sink sees the same event through
 ``lota-status``, and the field that carries it is ``LOTA_OFFLINE``, not
 ``LOTA_ATTESTED``. When the hook loses the agent it rewrites the file with
-``LOTA_OFFLINE=1`` and a zeroed payload, and unlinks ``lota-token.bin`` and
-``lota-attestation.bin``, which cannot be trusted past the disconnect.
+``LOTA_OFFLINE=1`` and a zeroed payload, and unlinks ``lota-token.bin``,
+``lota-attestation.bin`` and ``lota-boot-evidence.bin``, which cannot be
+trusted past the disconnect.
 The write happens once per disconnect: the hook retries the connection for
 as long as the process lives, and a reconnect that succeeds publishes live
 state again, so a file that stops changing is not a signal.
@@ -383,6 +384,17 @@ Worth being precise about, because it decides what you can build on it:
   events than the log takes. Refusals still happened and the lists in the token
   are kept apart from that log. The bit can arrive a second or more after the
   loss, and what it is worth is your policy.
+
+* Whether Secure Boot was on, without a verifier of your own. The token
+  quotes the boot PCRs by their digest alone. ``lota_ac_boot_evidence()``
+  fetches their values and the PCR 7 events behind them, from the agent or
+  from the hook's ``lota-boot-evidence.bin``; send it with a heartbeat, and
+  ``lota_ac_verify_boot_evidence()`` reads Secure Boot from it with the info
+  ``lota_ac_verify_heartbeat()`` filled, or ``VerifyBootEvidence`` (Go) with
+  the claims ``VerifyToken`` returned. Evidence that is not the boot the
+  quote signed is refused, so a host cannot edit it. The quoted PCRs hold
+  still for a boot, so one copy serves every heartbeat until the player
+  reboots.
 
 It does **not** prove the player is not cheating. It proves the platform
 underneath is what it claims to be, which removes the layer where a cheat

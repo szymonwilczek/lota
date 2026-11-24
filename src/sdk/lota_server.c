@@ -19,6 +19,7 @@
 #include <time.h>
 #include <stdint.h>
 
+#include "../../include/lota.h"
 #include "../../include/lota_runtime_image_measure.h"
 #include "../../include/lota_ipc.h"
 #include "../../include/lota_registry_digest.h"
@@ -680,6 +681,8 @@ const char *lota_server_strerror(int error)
 		return "Token valid_until too far in the future";
 	case LOTA_SERVER_ERR_RUNTIME_IMAGE:
 		return "Runtime image measurement does not match the quote";
+	case LOTA_SERVER_ERR_BAD_EVIDENCE:
+		return "Boot evidence does not match the token";
 
 	default:
 		return "Unknown error";
@@ -832,4 +835,160 @@ int lota_server_registry_digest(uint32_t flags,
 		ret = LOTA_SERVER_ERR_CRYPTO;
 	EVP_MD_CTX_free(md);
 	return ret;
+}
+
+/* EFI global variable namespace 8be4df61-93ca-11d2-aa0d-00e098032b8c */
+static const uint8_t efi_global_guid[16] = {
+	0x61, 0xdf, 0xe4, 0x8b, 0xca, 0x93, 0xd2, 0x11,
+	0xaa, 0x0d, 0x00, 0xe0, 0x98, 0x03, 0x2b, 0x8c,
+};
+
+/* "SecureBoot" in UTF-16LE */
+static const uint8_t secure_boot_name[20] = {
+	'S', 0, 'e', 0, 'c', 0, 'u', 0, 'r', 0,
+	'e', 0, 'B', 0, 'o', 0, 'o', 0, 't', 0,
+};
+
+#define EVIDENCE_PCR_SECURE_BOOT 7u
+#define EFI_VARIABLE_DATA_HEADER (16 + 8 + 8)
+
+static int sha256_once(const void *data, size_t len, uint8_t out[32])
+{
+	return EVP_Digest(data, len, out, NULL, EVP_sha256(), NULL) == 1 ? 0 :
+									   -1;
+}
+
+/*
+ * The SecureBoot value an event measures: 1 for on, 0 for any other value,
+ * -1 when the event measures some other variable.
+ */
+static int secure_boot_vote(const uint8_t *data, size_t size)
+{
+	uint64_t name_len, value_len;
+	const uint8_t *value;
+
+	if (size < EFI_VARIABLE_DATA_HEADER + sizeof(secure_boot_name))
+		return -1;
+	if (memcmp(data, efi_global_guid, sizeof(efi_global_guid)) != 0)
+		return -1;
+	name_len = read_le64(data + 16);
+	value_len = read_le64(data + 24);
+	if (name_len != sizeof(secure_boot_name) / 2 ||
+	    memcmp(data + EFI_VARIABLE_DATA_HEADER, secure_boot_name,
+		   sizeof(secure_boot_name)) != 0)
+		return -1;
+
+	value = data + EFI_VARIABLE_DATA_HEADER + sizeof(secure_boot_name);
+	if (value_len != size - (size_t)(value - data))
+		return 0;
+	return value_len == 1 && value[0] == 1;
+}
+
+int lota_server_verify_boot_evidence(const struct lota_server_claims *claims,
+				     const uint8_t *evidence, size_t len,
+				     int *secure_boot)
+{
+	static const uint8_t zero4[4];
+	uint8_t separator[32], digest[32], pcr7[32] = { 0 };
+	uint8_t chain[64];
+	const uint8_t *p, *end;
+	uint32_t mask;
+	uint16_t count;
+	size_t npcr = 0;
+	int votes_on = 0, votes_off = 0, before_separator = 1;
+	EVP_MD_CTX *md;
+
+	if (!claims || !evidence || !secure_boot)
+		return LOTA_SERVER_ERR_INVALID_ARG;
+	*secure_boot = 0;
+
+	if (len < LOTA_BOOT_EVIDENCE_HEADER_SIZE ||
+	    read_le16(evidence) != LOTA_BOOT_EVIDENCE_VERSION)
+		return LOTA_SERVER_ERR_BAD_EVIDENCE;
+	count = read_le16(evidence + 2);
+	mask = read_le32(evidence + 4);
+	if (mask != claims->pcr_mask || claims->pcr_digest_len != 32 ||
+	    !(mask & (1u << EVIDENCE_PCR_SECURE_BOOT)) ||
+	    mask >> LOTA_PCR_COUNT)
+		return LOTA_SERVER_ERR_BAD_EVIDENCE;
+
+	p = evidence + LOTA_BOOT_EVIDENCE_HEADER_SIZE;
+	end = evidence + len;
+
+	/* the PCR values, checked against the digest the TPM signed */
+	md = EVP_MD_CTX_new();
+	if (!md || EVP_DigestInit_ex(md, EVP_sha256(), NULL) != 1) {
+		EVP_MD_CTX_free(md);
+		return LOTA_SERVER_ERR_CRYPTO;
+	}
+	for (uint32_t i = 0; i < LOTA_PCR_COUNT; i++) {
+		if (!(mask & (1u << i)))
+			continue;
+		if ((size_t)(end - p) < 32) {
+			EVP_MD_CTX_free(md);
+			return LOTA_SERVER_ERR_BAD_EVIDENCE;
+		}
+		if (EVP_DigestUpdate(md, p, 32) != 1) {
+			EVP_MD_CTX_free(md);
+			return LOTA_SERVER_ERR_CRYPTO;
+		}
+		if (i == EVIDENCE_PCR_SECURE_BOOT)
+			memcpy(pcr7, p, 32);
+		p += 32;
+		npcr++;
+	}
+	if (EVP_DigestFinal_ex(md, digest, NULL) != 1) {
+		EVP_MD_CTX_free(md);
+		return LOTA_SERVER_ERR_CRYPTO;
+	}
+	EVP_MD_CTX_free(md);
+	if (npcr == 0 || CRYPTO_memcmp(digest, claims->pcr_digest, 32) != 0)
+		return LOTA_SERVER_ERR_BAD_EVIDENCE;
+
+	/*
+	 * The events, replayed to the PCR 7 value. Event types are labels
+	 * the log carries outside the digest, so only digests and data count:
+	 * the separator is the first event that extends SHA-256 of four zero
+	 * bytes, and only a SecureBoot measurement before it is the firmware's.
+	 */
+	if (sha256_once(zero4, sizeof(zero4), separator))
+		return LOTA_SERVER_ERR_CRYPTO;
+	memset(chain, 0, 32);
+	for (uint32_t i = 0; i < count; i++) {
+		uint16_t data_size;
+		const uint8_t *ev = p;
+
+		if ((size_t)(end - p) < LOTA_BOOT_EVIDENCE_EVENT_SIZE)
+			return LOTA_SERVER_ERR_BAD_EVIDENCE;
+		data_size = read_le16(p + 32);
+		p += LOTA_BOOT_EVIDENCE_EVENT_SIZE;
+		if ((size_t)(end - p) < data_size)
+			return LOTA_SERVER_ERR_BAD_EVIDENCE;
+
+		if (data_size > 0) {
+			int vote;
+
+			if (sha256_once(p, data_size, digest))
+				return LOTA_SERVER_ERR_CRYPTO;
+			if (CRYPTO_memcmp(digest, ev, 32) != 0)
+				return LOTA_SERVER_ERR_BAD_EVIDENCE;
+			vote = secure_boot_vote(p, data_size);
+			if (before_separator && vote == 1)
+				votes_on++;
+			else if (before_separator && vote == 0)
+				votes_off++;
+		}
+		if (memcmp(ev, separator, 32) == 0)
+			before_separator = 0;
+
+		memcpy(chain + 32, ev, 32);
+		if (sha256_once(chain, sizeof(chain), chain))
+			return LOTA_SERVER_ERR_CRYPTO;
+		p += data_size;
+	}
+	if (p != end || CRYPTO_memcmp(chain, pcr7, 32) != 0)
+		return LOTA_SERVER_ERR_BAD_EVIDENCE;
+
+	*secure_boot = !before_separator && votes_on > 0 && votes_off == 0;
+	return LOTA_SERVER_OK;
 }

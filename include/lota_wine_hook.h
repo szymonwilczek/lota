@@ -112,6 +112,12 @@ extern "C" {
  */
 #define LOTA_HOOK_SNAPSHOT_FILE LOTA_SNAPSHOT_FILE_NAME
 
+/*
+ * Boot evidence for the token file, in the format lota_token.h describes.
+ * Absent when the agent could not produce it.
+ */
+#define LOTA_HOOK_BOOT_EVIDENCE_FILE "lota-boot-evidence.bin"
+
 /* defaults */
 #define LOTA_HOOK_DEFAULT_REFRESH_SEC 60
 
