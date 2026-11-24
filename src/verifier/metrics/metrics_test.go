@@ -212,7 +212,7 @@ func TestExport_ReanchorOutcomes(t *testing.T) {
 	m := New()
 
 	output := m.Export()
-	for _, outcome := range []string{"strong", "lfa", "forced", "escalate"} {
+	for _, outcome := range []string{"strong", "lfa", "mok", "forced", "escalate"} {
 		want := `lota_reanchors_total{outcome="` + outcome + `"} 0`
 		if !strings.Contains(output, want) {
 			t.Errorf("expected zero-value %q in output", want)

@@ -36,6 +36,7 @@ type baselineShard interface {
 	TenantStorer
 	ReanchorStorer
 	AgentHashRepinStorer
+	PCR14RepinStorer
 	KernelHashRecorder
 	MachineKeysRecorder
 }
@@ -153,6 +154,12 @@ func (s *ShardedBaselineStore) ArchiveAndReanchor(clientID string, boot BootBase
 
 func (s *ShardedBaselineStore) GetAgentHashRepinState(clientID string) AgentHashRepinState {
 	return s.shardFor(clientID).GetAgentHashRepinState(clientID)
+}
+
+func (s *ShardedBaselineStore) RepinPCR14(clientID string,
+	from, to [types.HashSize]byte, eventLog []byte, now time.Time,
+) error {
+	return s.shardFor(clientID).RepinPCR14(clientID, from, to, eventLog, now)
 }
 
 func (s *ShardedBaselineStore) ArchiveAndRepinAgentHash(clientID string,

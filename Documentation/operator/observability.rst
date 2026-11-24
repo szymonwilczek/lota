@@ -91,7 +91,9 @@ Metric                                          Type      Meaning
 ``lota_reanchors_total{outcome}``               counter   Boot-baseline re-anchors by outcome:
                                                           ``strong`` and ``lfa`` (self-service,
                                                           auto-applied; ``lfa`` also lands in the
-                                                          operator review queue), ``escalate``
+                                                          operator review queue), ``mok``
+                                                          (PCR 14 re-pinned after a MOK-only
+                                                          change), ``escalate``
                                                           (refused, device blocked until an operator
                                                           acts), ``forced`` (operator-forced via the
                                                           monitoring API).

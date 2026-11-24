@@ -35,7 +35,7 @@ type Metrics struct {
 	// rejection reason
 	Rejections *LabeledCounter
 
-	// self-service re-anchor outcomes (strong / lfa / pending / escalate)
+	// re-anchor outcomes (strong / lfa / mok / forced / escalate)
 	Reanchors *LabeledCounter
 
 	// verification duration in seconds
@@ -197,7 +197,7 @@ func (m *Metrics) Export() string {
 	writeLabeledCounter(&b, "lota_reanchors_total",
 		"Total baseline re-anchors by outcome", "outcome",
 		m.Reanchors.Values(),
-		[]string{"strong", "lfa", "forced", "escalate"})
+		[]string{"strong", "lfa", "mok", "forced", "escalate"})
 
 	writeCounter(&b, "lota_connection_errors_total",
 		"Total protocol-level connection errors",

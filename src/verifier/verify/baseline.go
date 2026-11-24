@@ -653,6 +653,32 @@ func (s *BaselineStore) ArchiveAndRepinAgentHash(clientID string,
 	return nil
 }
 
+// RepinPCR14 moves the pinned PCR 14 and the boot evidence (in-memory).
+func (s *BaselineStore) RepinPCR14(clientID string,
+	from, to [types.HashSize]byte, eventLog []byte, now time.Time,
+) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	b, ok := s.baselines[clientID]
+	if !ok {
+		return errors.New("PCR 14 re-pin: no baseline row for client")
+	}
+	if b.PCR14 != from {
+		return ErrPCR14RepinRaced
+	}
+	st := s.reanchor[clientID]
+	if st == nil {
+		st = &ReanchorState{}
+		s.reanchor[clientID] = st
+	}
+	b.PCR14 = to
+	b.LastSeen = now
+	st.Present = true
+	st.EventLogBaseline = append([]byte(nil), eventLog...)
+	return nil
+}
+
 // RecordBootEvidence stores the event log + ESRT version that accompanied a
 // first-use boot baseline (in-memory).
 // esrt_capable is sticky.

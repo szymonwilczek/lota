@@ -777,3 +777,53 @@ func TestVerify_AnchoredBootPinNamesItsAnchor(t *testing.T) {
 		t.Fatalf("an anchored accept is blamed on the flag:\n%s", line)
 	}
 }
+
+type pcr14RepinStore interface {
+	BaselineStorer
+	BootBaselineStorer
+	ReanchorStorer
+	PCR14RepinStorer
+}
+
+func checkRepinPCR14(t *testing.T, bs pcr14RepinStore) {
+	t.Helper()
+	var from, to, other [types.HashSize]byte
+	from[0], to[0], other[0] = 0xA1, 0xA2, 0xA3
+	log := []byte("evlog-next")
+
+	if bs.RepinPCR14("c", from, to, log, time.Now()) == nil {
+		t.Fatal("re-pinned a client with no row")
+	}
+	bs.CheckAndUpdate("c", from)
+	bs.CheckAndUpdateBootPCRs("c", boot(0xB0, 0xB1, 0xB7))
+
+	if err := bs.RepinPCR14("c", other, to, log, time.Now()); !errors.Is(err, ErrPCR14RepinRaced) {
+		t.Fatalf("stale register: got %v, want ErrPCR14RepinRaced", err)
+	}
+	if err := bs.RepinPCR14("c", from, to, log, time.Now()); err != nil {
+		t.Fatalf("RepinPCR14: %v", err)
+	}
+	if got := bs.GetBaseline("c").PCR14; got != to {
+		t.Fatalf("pin not moved: %x", got)
+	}
+	if st := bs.GetReanchorState("c"); !bytes.Equal(st.EventLogBaseline, log) {
+		t.Fatal("boot evidence not moved")
+	}
+}
+
+func TestRepinPCR14_Stores(t *testing.T) {
+	db, err := store.OpenDB(t.TempDir() + "/b.sqlite")
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer db.Close()
+
+	sharded, _ := newShardedMemoryBaselines(2)
+	for name, bs := range map[string]pcr14RepinStore{
+		"memory":  NewBaselineStore(),
+		"sqlite":  NewSQLiteBaselineStore(db),
+		"sharded": sharded,
+	} {
+		t.Run(name, func(t *testing.T) { checkRepinPCR14(t, bs) })
+	}
+}

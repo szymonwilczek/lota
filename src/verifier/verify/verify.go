@@ -865,7 +865,8 @@ func (v *Verifier) VerifyReportFrom(challengeID, remoteAddr string, reportData [
 	// -- presents a log and a register that agree with each other and derives
 	// clean. Comparing the register the client pinned is what makes that change
 	// visible; it is a boot-chain change, so it takes the same operator re-anchor
-	// a firmware change does.
+	// a firmware change does, except a change confined to the MOK state, which
+	// tryMOKRepin follows where self-service re-anchor is on.
 	// An agent update moves the register legitimately, and the agent_hash re-pin
 	// above moves the pin with it in one statement.
 	switch outcome.PCR14Result {
@@ -877,6 +878,19 @@ func (v *Verifier) VerifyReportFrom(challengeID, remoteAddr string, reportData [
 		pinned := pcr14
 		if outcome.AgentHashBaseline != nil {
 			pinned = outcome.AgentHashBaseline.PCR14
+		}
+		if v.tryMOKRepin(clog, clientID, tenant, pinned, pcr14, report, bootFacts) {
+			// the mismatch aborted the transaction; re-run it on the moved pin
+			outcome = atomicStore.CheckAndUpdateAttestation(
+				clientID, pcr14, report.System.AgentHash, bootPtr)
+			if outcome.PCR14Result == TOFUMatch {
+				break
+			}
+			logging.Security(clog, "PCR14 re-pin did not settle; refusing",
+				"pcr14", pcr14Hex)
+			v.metrics.Rejections.Inc("integrity_mismatch")
+			result.Result = types.VerifyIntegrityMismatch
+			return result, errors.New("FAIL_INTEGRITY_MISMATCH: PCR14 re-pin did not settle")
 		}
 		logging.Security(clog, "PCR14 moved from the pinned register",
 			"actual_pcr14", pcr14Hex,
