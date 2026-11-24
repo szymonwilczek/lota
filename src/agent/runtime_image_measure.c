@@ -453,12 +453,37 @@ static int rt_read_verity(const struct rt_mapping *map,
 	return 0;
 }
 
+/* the link reads where the file behind it may not be reached */
+static void rt_name_exe_failure(pid_t pid, int err,
+				struct lota_runtime_measure_failure *fail)
+{
+	char exe_path[64];
+	ssize_t len;
+
+	snprintf(exe_path, sizeof(exe_path), "/proc/%d/exe", (int)pid);
+	len = readlink(exe_path, fail->path, sizeof(fail->path) - 1);
+	if (len <= 0)
+		return;
+
+	fail->path[len] = '\0';
+	fail->role = LOTA_RT_ROLE_EXECUTABLE;
+	fail->err = err;
+}
+
+/* object the kernel holds no usable fs-verity digest for */
+static int rt_err_is_unmeasurable(int err)
+{
+	return err == -ENODATA || err == -EOPNOTSUPP || err == -EINVAL ||
+	       err == -ENOTTY;
+}
+
 void lota_rt_failure_reason(const struct lota_runtime_measure_failure *fail,
 			    int err, char *buf, size_t buflen)
 {
 	char subject[LOTA_RT_REASON_MAX];
 	const char *object;
 	const char *tail;
+	int no_digest;
 
 	if (!buf || buflen == 0)
 		return;
@@ -473,6 +498,10 @@ void lota_rt_failure_reason(const struct lota_runtime_measure_failure *fail,
 
 	if (err < 0)
 		err = -err;
+
+	/* the walk answers ENODATA for an executable and keeps the cause here */
+	if (err == ENODATA && fail && fail->err != 0)
+		err = fail->err < 0 ? -fail->err : fail->err;
 
 	if (!fail || (fail->soname[0] == '\0' && fail->path[0] == '\0')) {
 		snprintf(buf, buflen, "%s", strerror(err));
@@ -513,7 +542,10 @@ void lota_rt_failure_reason(const struct lota_runtime_measure_failure *fail,
 		return;
 	}
 
-	if (err == ENODATA && fail->road_err != 0) {
+	no_digest = rt_err_is_unmeasurable(-err) &&
+		    !(err == EINVAL && fail->reported_len != 0);
+
+	if (no_digest && fail->road_err != 0) {
 		/* content road refused too: name its error, not fs-verity */
 		snprintf(buf, buflen,
 			 "%s%s carries no fs-verity digest and the kernel "
@@ -524,7 +556,14 @@ void lota_rt_failure_reason(const struct lota_runtime_measure_failure *fail,
 		return;
 	}
 
-	if (err == ENODATA) {
+	if (no_digest && err != ENODATA) {
+		snprintf(buf, buflen,
+			 "%s%s is on a filesystem without fs-verity", subject,
+			 tail);
+		return;
+	}
+
+	if (no_digest) {
 		snprintf(buf, buflen,
 			 "%s%s carries no fs-verity digest (enable fs-verity "
 			 "on it, or drop the process from the protected set)",
@@ -589,13 +628,6 @@ static int rt_exe_identity(pid_t pid, dev_t *dev, ino_t *ino)
 	*dev = st.st_dev;
 	*ino = st.st_ino;
 	return 0;
-}
-
-/* object the kernel holds no usable fs-verity digest for */
-static int rt_err_is_unmeasurable(int err)
-{
-	return err == -ENODATA || err == -EOPNOTSUPP || err == -EINVAL ||
-	       err == -ENOTTY;
 }
 
 /*
@@ -926,8 +958,11 @@ int lota_runtime_measure_pid_objects(
 	}
 
 	ret = rt_exe_identity(pid, &exe_dev, &exe_ino);
-	if (ret != 0)
+	if (ret != 0) {
+		if (fail)
+			rt_name_exe_failure(pid, ret, fail);
 		goto out;
+	}
 
 	maps = rt_open_mappings(pid, entries, n);
 	if (!maps) {
