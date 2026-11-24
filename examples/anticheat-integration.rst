@@ -325,7 +325,9 @@ Worth being precise about, because it decides what you can build on it:
   says the code has no file on disk. A digest of such an object shows the
   pages at the round only.
   ``LOTA_REGISTRY_HISTORY_LOST`` says the kernel lost a record and the list
-  may miss an object. The token does not carry the list, it binds it:
+  may miss an object. ``LOTA_REGISTRY_TRUNCATED`` says the process maps more
+  objects than one measurement holds: the excess is unmeasured, and an object
+  listed as unmapped may be part of it. The token does not carry the list, it binds it:
   ``lota_server_registry_digest()`` hashes the flags, every object and every
   actor in the order listed, and the result equals the image digest the token holds for
   that process. A list that does not hash to it, short of an object or with

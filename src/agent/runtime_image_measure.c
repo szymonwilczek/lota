@@ -185,16 +185,17 @@ static int rt_entry_seen(const struct lota_rt_map_entry *entries, size_t n,
 }
 
 int lota_rt_collect_exec_maps(pid_t pid, struct lota_rt_map_entry *entries,
-			      size_t max, size_t *n_out)
+			      size_t max, size_t *n_out, uint32_t *past_limit)
 {
 	char maps_path[64];
 	char *line = NULL;
 	size_t line_cap = 0;
 	size_t count = 0;
+	uint32_t past = 0;
 	FILE *f;
 	int ret = 0;
 
-	if (!entries || !n_out || max == 0)
+	if (!entries || !n_out || !past_limit || max == 0)
 		return -EINVAL;
 
 	snprintf(maps_path, sizeof(maps_path), "/proc/%d/maps", (int)pid);
@@ -215,13 +216,14 @@ int lota_rt_collect_exec_maps(pid_t pid, struct lota_rt_map_entry *entries,
 		if (rt_entry_seen(entries, count, &e))
 			continue;
 		if (count >= max) {
-			ret = -E2BIG;
-			goto out;
+			past++;
+			continue;
 		}
 		entries[count++] = e;
 	}
 
 	*n_out = count;
+	*past_limit = past;
 out:
 	free(line);
 	fclose(f);
@@ -459,6 +461,14 @@ void lota_rt_failure_reason(const struct lota_runtime_measure_failure *fail,
 
 	if (!buf || buflen == 0)
 		return;
+
+	if (fail && fail->past_limit > 0) {
+		snprintf(buf, buflen,
+			 "the process has %u executable mappings past the %d "
+			 "objects LOTA measures",
+			 fail->past_limit, LOTA_RUNTIME_IMAGE_MAX_MODULES);
+		return;
+	}
 
 	if (err < 0)
 		err = -err;
@@ -800,7 +810,8 @@ int lota_runtime_coverage_pid(pid_t pid,
 		return -ENOMEM;
 
 	ret = lota_rt_collect_exec_maps(pid, entries,
-					LOTA_RUNTIME_IMAGE_MAX_MODULES, &n);
+					LOTA_RUNTIME_IMAGE_MAX_MODULES, &n,
+					&cov->past_limit);
 	if (ret != 0 || n == 0)
 		goto out;
 
@@ -831,6 +842,7 @@ int lota_runtime_coverage_pid(pid_t pid,
 			goto out;
 		cov->unmeasurable++;
 	}
+	cov->unmeasurable += cov->past_limit;
 	ret = 0;
 out:
 	if (maps)
@@ -874,9 +886,12 @@ int lota_runtime_measure_pid_objects(
 	}
 
 	ret = lota_rt_collect_exec_maps(pid, entries,
-					LOTA_RUNTIME_IMAGE_MAX_MODULES, &n);
+					LOTA_RUNTIME_IMAGE_MAX_MODULES, &n,
+					&local_cov.past_limit);
 	if (ret != 0)
 		goto out;
+	if (cov)
+		cov->past_limit = local_cov.past_limit;
 	if (n == 0) {
 		/* live process always maps at least its own executable */
 		ret = -ENOENT;
@@ -955,6 +970,10 @@ int lota_runtime_measure_pid_objects(
 			local_cov.content_hashed++;
 		local_cov.measured++;
 	}
+
+	local_cov.unmeasurable += local_cov.past_limit;
+	if (fail)
+		fail->past_limit = local_cov.past_limit;
 
 	ret = lota_rt_coverage_verdict(&local_cov, exe_measured);
 	if (ret != 0)

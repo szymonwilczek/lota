@@ -1554,7 +1554,7 @@ static void handle_get_token(struct ipc_context *ctx, struct ipc_client *client,
 						    &n_actor_hist);
 		for (uint32_t i = 0; i < runtime_pid_count; i++) {
 			struct lota_runtime_measure_failure mfail;
-			struct lota_runtime_measure_coverage cov;
+			struct lota_runtime_measure_coverage cov = { 0 };
 			char statement[MEASURE_REPORT_STATEMENT_MAX];
 			char held_clause[80];
 			uint64_t held = 0;
@@ -1585,6 +1585,8 @@ static void handle_get_token(struct ipc_context *ctx, struct ipc_client *client,
 							start_ticks, &lost);
 			if (hist_lost || lost)
 				rflags |= LOTA_IPC_REGISTRY_HISTORY_LOST;
+			if (cov.past_limit > 0)
+				rflags |= LOTA_IPC_REGISTRY_TRUNCATED;
 
 			n_actors = registry_collect_actors(
 				actors, LOTA_IPC_REGISTRY_MAX_ACTORS,
