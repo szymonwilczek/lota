@@ -6,6 +6,7 @@ package verify
 
 import (
 	"crypto/sha256"
+	"strings"
 	"testing"
 
 	"github.com/szymonwilczek/lota/verifier/types"
@@ -107,16 +108,10 @@ func TestExtractKernelCmdlines_KernelCmdlineEvent(t *testing.T) {
 	t.Log("TEST: kernel_cmdline EV_IPL event yields the parameter string")
 
 	parsed := &ParsedEventLog{Entries: []EventLogEntry{
-		{
-			PCRIndex: 8, EventType: EvIPL,
-			EventData: []byte("grub_cmd: linux (hd1,gpt2)/vmlinuz root=UUID=abc ro quiet\x00"),
-		},
-		{
-			PCRIndex: 8, EventType: EvIPL,
-			EventData: []byte("kernel_cmdline: (hd1,gpt2)/vmlinuz root=UUID=abc ro quiet\x00"),
-		},
+		grubEntry(8, "grub_cmd: linux (hd1,gpt2)/vmlinuz root=UUID=abc ro quiet"),
+		grubEntry(8, "kernel_cmdline: (hd1,gpt2)/vmlinuz root=UUID=abc ro quiet"),
 	}}
-	got := ExtractKernelCmdlines(parsed)
+	got, _ := ExtractKernelCmdlines(parsed)
 	if len(got) != 1 || got[0] != "root=UUID=abc ro quiet" {
 		t.Errorf("unexpected cmdlines: %q", got)
 	}
@@ -126,16 +121,10 @@ func TestExtractKernelCmdlines_GrubCmdFallback(t *testing.T) {
 	t.Log("TEST: grub_cmd linux event is the fallback source")
 
 	parsed := &ParsedEventLog{Entries: []EventLogEntry{
-		{
-			PCRIndex: 8, EventType: EvIPL,
-			EventData: []byte("grub_cmd: set root=hd1\x00"),
-		},
-		{
-			PCRIndex: 8, EventType: EvIPL,
-			EventData: []byte("grub_cmd: linuxefi /vmlinuz root=UUID=abc ro\x00"),
-		},
+		grubEntry(8, "grub_cmd: set root=hd1"),
+		grubEntry(8, "grub_cmd: linuxefi /vmlinuz root=UUID=abc ro"),
 	}}
-	got := ExtractKernelCmdlines(parsed)
+	got, _ := ExtractKernelCmdlines(parsed)
 	if len(got) != 1 || got[0] != "root=UUID=abc ro" {
 		t.Errorf("unexpected cmdlines: %q", got)
 	}
@@ -145,12 +134,9 @@ func TestExtractKernelCmdlines_IgnoresOtherPCRs(t *testing.T) {
 	t.Log("TEST: EV_IPL events outside PCR 8 are ignored")
 
 	parsed := &ParsedEventLog{Entries: []EventLogEntry{
-		{
-			PCRIndex: 9, EventType: EvIPL,
-			EventData: []byte("kernel_cmdline: /vmlinuz init=/bin/sh\x00"),
-		},
+		grubEntry(9, "kernel_cmdline: /vmlinuz init=/bin/sh"),
 	}}
-	if got := ExtractKernelCmdlines(parsed); len(got) != 0 {
+	if got, _ := ExtractKernelCmdlines(parsed); len(got) != 0 {
 		t.Errorf("unexpected cmdlines: %q", got)
 	}
 }
@@ -159,9 +145,9 @@ func TestExtractKernelCmdlines_EmptyParams(t *testing.T) {
 	t.Log("TEST: cmdline with only the image path yields an empty string")
 
 	parsed := &ParsedEventLog{Entries: []EventLogEntry{
-		{PCRIndex: 8, EventType: EvIPL, EventData: []byte("kernel_cmdline: /vmlinuz\x00")},
+		grubEntry(8, "kernel_cmdline: /vmlinuz"),
 	}}
-	got := ExtractKernelCmdlines(parsed)
+	got, _ := ExtractKernelCmdlines(parsed)
 	if len(got) != 1 || got[0] != "" {
 		t.Errorf("unexpected cmdlines: %q", got)
 	}
@@ -171,10 +157,10 @@ func TestExtractKernelCmdlines_MultipleKernelCmdlines(t *testing.T) {
 	t.Log("TEST: every measured kernel_cmdline event is returned")
 
 	parsed := &ParsedEventLog{Entries: []EventLogEntry{
-		{PCRIndex: 8, EventType: EvIPL, EventData: []byte("kernel_cmdline: /vmlinuz ro quiet\x00")},
-		{PCRIndex: 8, EventType: EvIPL, EventData: []byte("kernel_cmdline: /vmlinuz ro init=/bin/sh\x00")},
+		grubEntry(8, "kernel_cmdline: /vmlinuz ro quiet"),
+		grubEntry(8, "kernel_cmdline: /vmlinuz ro init=/bin/sh"),
 	}}
-	got := ExtractKernelCmdlines(parsed)
+	got, _ := ExtractKernelCmdlines(parsed)
 	if len(got) != 2 {
 		t.Fatalf("want 2 cmdlines, got %q", got)
 	}
@@ -294,6 +280,18 @@ func reportForEntries(t *testing.T, entries []EventLogEntry, mask uint32) *types
 func measuredSecureBootEntry(value byte) EventLogEntry {
 	return measuredEntry(7, EvEFIVariableDriverConfig,
 		encodeUEFIVariableData(efiGlobalVariableGUID, "SecureBoot", []byte{value}))
+}
+
+// GRUB form: digest over the text after "label: ", without the NUL
+func grubEntry(pcr uint32, text string) EventLogEntry {
+	_, rest, _ := strings.Cut(text, ": ")
+	d := sha256.Sum256([]byte(rest))
+	return EventLogEntry{
+		PCRIndex:  pcr,
+		EventType: EvIPL,
+		Digests:   map[uint16][]byte{AlgSHA256: d[:]},
+		EventData: []byte(text + "\x00"),
+	}
 }
 
 func measuredCmdlineEntry(cmdline string) EventLogEntry {
@@ -489,5 +487,49 @@ func TestVerifyEventLog_RejectsVariableDataOffDigest(t *testing.T) {
 	report := reportForEntries(t, []EventLogEntry{entry}, 1<<7)
 	if facts, err := VerifyEventLogWithPolicy(report, false); err == nil {
 		t.Fatalf("log with SecureBoot data off its digest accepted: %+v", facts)
+	}
+}
+
+func TestExtractKernelCmdlines_TextOffDigest(t *testing.T) {
+	forged := grubEntry(8, "kernel_cmdline: /vmlinuz ro init=/bin/sh")
+	forged.EventData = []byte("kernel_cmdline: /vmlinuz ro quiet\x00")
+	parsed := &ParsedEventLog{Entries: []EventLogEntry{forged}}
+
+	got, unbound := ExtractKernelCmdlines(parsed)
+	if len(got) != 0 || unbound != 1 {
+		t.Errorf("forged text read: lines %q, unbound %d", got, unbound)
+	}
+
+	facts := &BootFacts{PCR8Quoted: true, PCR8EventsSeen: true, CmdlineTrusted: true,
+		CmdlineUnbound: unbound}
+	if err := verifyCmdlinePolicy(&PCRPolicy{}, facts); err == nil {
+		t.Error("cmdline policy passed a forged PCR 8 event")
+	}
+}
+
+func TestExtractKernelCmdlines_LabelCannotHide(t *testing.T) {
+	parsed := &ParsedEventLog{Entries: []EventLogEntry{
+		grubEntry(8, "grub_cmd: linux /vmlinuz ro init=/bin/sh"),
+		grubEntry(8, "kernel_cmdline: /vmlinuz ro init=/bin/sh"),
+	}}
+	for i := range parsed.Entries {
+		e := &parsed.Entries[i]
+		_, rest, _ := strings.Cut(string(e.EventData), ": ")
+		e.EventData = []byte("grub_note: " + rest)
+	}
+
+	got, unbound := ExtractKernelCmdlines(parsed)
+	if unbound != 0 || len(got) != 1 || got[0] != "ro init=/bin/sh" {
+		t.Errorf("relabelled lines: %q, unbound %d", got, unbound)
+	}
+}
+
+func TestExtractKernelCmdlines_WholeEventDigest(t *testing.T) {
+	parsed := &ParsedEventLog{Entries: []EventLogEntry{
+		measuredEntry(8, EvIPL, []byte("kernel_cmdline: /vmlinuz ro quiet\x00")),
+	}}
+	got, unbound := ExtractKernelCmdlines(parsed)
+	if unbound != 0 || len(got) != 1 || got[0] != "ro quiet" {
+		t.Errorf("whole-event digest: %q, unbound %d", got, unbound)
 	}
 }

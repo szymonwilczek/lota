@@ -444,8 +444,8 @@ func VerifyEventLogConsistency(report *types.AttestationReport, replay *ReplayRe
 //
 // enforcePCR8 removes PCR 8 from the consistency skip set.
 // It must be set whenever the active policy gates on the measured kernel cmdline:
-// forged kernel_cmdline event breaks the PCR 8 replay and is only caught when the
-// PCR is consistency-checked.
+// a forged digest breaks the PCR 8 replay and is only caught when the PCR is
+// consistency-checked. Forged text under a real digest is caught by the policy.
 func VerifyEventLogWithPolicy(report *types.AttestationReport, enforcePCR8 bool) (*BootFacts, error) {
 	if len(report.EventLog) == 0 {
 		return nil, errors.New("TPM event log missing from report")
