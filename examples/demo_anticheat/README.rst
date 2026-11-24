@@ -59,6 +59,16 @@ from "this machine failed verification", which look identical in the attested
 bit alone. The host is configured for you with ``verifier = none`` in that
 publisher's profile.
 
+The TPM vouches for the PCR digest, the nonce and the machine behind that
+certificate. The flags are the agent's statement, and a local root can sign its
+own (see ``Documentation/security/threat-model.rst``). So watch ``pcr_digest``
+from the claims for a change on each device, keep a ban on the device identity
+your CA derives from the EK, and judge play on your server.
+
+That digest differs between machines, and a firmware or agent update moves it.
+It shows that a device changed, not that Secure Boot was on when you first saw
+it: that takes the event log, which only the deep half reports.
+
 **Deep -- a verifier and a policy.** The agent sends full attestation reports
 to a verifier you run, on your own cadence, and that verifier judges them
 against a policy: boot PCR pins, the agent-hash allow-list, the firmware

@@ -31,6 +31,11 @@ The protected properties are:
   loading, and protected process mutation through BPF LSM programs,
 * release artifacts can be rebuilt and checked against signed hashes.
 
+A local root does not remove what the TPM vouches for: the PCR values a quote
+covers, its freshness and the certified TPM holding the key. What the agent
+states, such as flags and runtime digests, holds only while root leaves the
+agent alone (see "Explicit non-goals").
+
 An integrator can build game-specific or fleet-specific policy on top of these
 properties. LOTA does not inspect gameplay behavior, memory signatures, network
 patterns, or user input.
@@ -586,6 +591,17 @@ Explicit non-goals
 
 * Detecting cheat behavior by scanning memory, input, game state, or network
   patterns.
+* Keeping a local root from the TPM. Root reaches ``/dev/tpmrm0``, and the CA
+  certifies any restricted key on a certified TPM, so root can sign a token or
+  report carrying any flags, policy digest, runtime digest, protected PIDs or
+  stopped time. Binding a key to the agent would not hold: one boot without
+  the agent reaches the same PCR state the agent starts from. The signature
+  still proves the quoted PCR digest, the nonce and the TPM, and re-enrolling
+  keeps the device identity the CA derives from the EK. A relying party watches
+  the PCR digest for a change on each device, keeps a ban on that identity and
+  judges play on its server; it does not treat the flags as proof against the
+  machine's owner. The digest differs between machines, so without the event log
+  it does not show that Secure Boot was on when the device was first seen.
 * Supporting hosts that intentionally disable lockdown, module signature
   enforcement, SELinux enforcing mode, fs-verity, IMA appraisal, or TPM access
   control required by production policy.
@@ -695,11 +711,10 @@ baseline that binary chained onto, and nothing else.
   it, and the value is expected to repeat: the same host running the same
   agent build has the same commitment every boot, which is what makes a
   per-client baseline comparable at all.
-* **What is out of scope** is a local root that runs *before* the agent in the
-  same boot. Such an attacker can extend the commitment themselves and, having
-  reached the boot state the AIK auth is sealed to, quote it -- and that was
-  equally true when the counters were in the digest, since they could be
-  predicted. The layers that address that attacker are Secure Boot, the IMA
+* **What is out of scope** is a local root, before the agent or after it.
+  Before it, such an attacker can extend the commitment themselves. After it,
+  they can use the TPM directly and sign with a key the CA certifies. The
+  layers that narrow what runs ahead of the agent are Secure Boot, the IMA
   appraisal floor, fs-verity on the agent binary and the ordering that puts
   the agent ahead of every login-capable target; PCR 14 records which binary
   committed, it does not prove that a process is still alive.
