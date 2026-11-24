@@ -96,6 +96,11 @@ either against a number parsed out of ``maps`` recognises no executable at all
 on a per-subvolume-device filesystem, which downgrades the fatal case to a
 coverage note and makes the refusal name whichever object was recorded last.
 
+A mapping the agent cannot open, or one that no longer resolves to the inode
+enumerated, is a gap of the same kind and never contributes a digest. Its
+handle gives no identity, so it stops the measurement only when no mapping
+measured as the executable; the refusal then carries the errno of the open.
+
 Baseline store migrations
 =========================
 

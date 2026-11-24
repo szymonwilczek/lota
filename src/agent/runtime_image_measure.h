@@ -17,6 +17,7 @@
 #ifndef LOTA_AGENT_RUNTIME_IMAGE_MEASURE_H
 #define LOTA_AGENT_RUNTIME_IMAGE_MEASURE_H
 
+#include <errno.h>
 #include <stddef.h>
 #include <stdint.h>
 #include <sys/stat.h>
@@ -212,6 +213,15 @@ struct lota_runtime_measure_failure {
 	uint32_t past_limit; /* mappings past the limit, once all were walked */
 };
 
+/*
+ * Whether err says the agent ran out of something, and nothing about the
+ * process it walked.
+ */
+static inline int lota_rt_err_is_agent_failure(int err)
+{
+	return err == -ENOMEM || err == -EMFILE || err == -ENFILE;
+}
+
 #define LOTA_RT_REASON_MAX 512 /* longest lota_rt_failure_reason() sentence */
 
 /*
@@ -284,16 +294,16 @@ int lota_rt_open_mapping(int dirfd, const struct lota_rt_map_entry *entry,
  * fs-verity digest of every object that carries one into the canonical image
  * digest, and writes the 32-byte result.
  *
- * Objects the kernel holds no digest for, and mappings past
- * LOTA_RUNTIME_IMAGE_MAX_MODULES, are counted, not guessed at:
+ * Objects with no digest, mappings that will not open or no longer resolve to
+ * the inode enumerated, and mappings past LOTA_RUNTIME_IMAGE_MAX_MODULES, are
+ * counted, not guessed at:
  * they are absent from the fold and reported through cov, so partial measurement
  * can never be read as a complete one.
  * cov->past_limit is set also when the measurement fails after the enumeration.
  *
  * Fails closed (negative errno) when lota_rt_coverage_verdict() refuses the round,
- * and on any error that is not an unmeasurable object -- mapping that cannot
- * be opened or no longer resolves to the inode enumerated is a failure,
- * not a coverage gap.
+ * when the own executable fails, with the errno of a read that failed, and
+ * when the agent runs out of memory or descriptors.
  *
  * cov and fail may be NULL.
  * When fail is non-NULL it receives the object that stopped the measurement,
