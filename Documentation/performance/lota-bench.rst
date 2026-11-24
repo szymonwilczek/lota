@@ -187,16 +187,21 @@ title and starts it:
 
    $ lota-bench run ~/bench/example --game "Example Title" --proton 9.0 \
          --settings "high, 1440p"
-   The session begins in /home/user/bench/example: 7 runs of 300 s.
+   The session begins in /home/user/bench/example: 7 runs of 60 s.
    Run 0 of 6, configuration A (warm-up). Set the game's launch options to:
 
-     MANGOHUD_CONFIG=output_folder=/home/user/bench/example,autostart_log=5,log_duration=300 systemd-run --user --scope --unit=lota-bench-game mangohud %command%
+     MANGOHUD_CONFIG=output_folder=/home/user/bench/example,autostart_log=30,log_duration=60 systemd-run --user --scope --unit=lota-bench-game mangohud %command%
 
-   start it, and play as you would for 300 s once it is in the game.
+   start it, and be in the game within 30 s, when the frame log starts;
+   play as you would for 60 s from there.
    Waiting for the game; Ctrl+C gives up.
 
-``--rounds`` (default 3), ``--duration-s`` (default 300) and
-``--interval-ms`` (default 1000) set the rest of the plan; ``--proton``,
+``--rounds`` (default 3), ``--duration-s`` (default 60),
+``--settle-s`` (default 30) and ``--interval-ms`` (default 1000) set the
+rest of the plan. A loading screen makes the tail of the frame times
+noise, so the frame log starts ``--settle-s`` after the game; the
+cgroups measure the whole run, so what starting the game costs still
+counts. ``--proton``,
 ``--game-version`` and ``--settings`` only describe the run. Every later
 call is ``lota-bench run DIR`` alone and takes the next run the plan
 calls for; options given to a session that has begun are refused. The
@@ -232,13 +237,14 @@ figures need it to run with ``--bench`` (``BENCH`` among the flags
 ``mangohud``; without ``--bench`` nothing tells whether the title was
 in fact protected.
 
-Once the scope appears the run is sampled for ``duration_s`` seconds,
+Once the scope appears the run is sampled for ``settle_s`` and
+``duration_s`` seconds together,
 then ``lota-bench`` asks to quit the game and waits for the scope to go.
 ``lota-bench`` runs as the user, at nice 10 and idle I/O priority, and
 reads nothing but cgroup files, the agent's snapshot and its own
 directory. A run is not kept, and the next call takes it again, when:
 
-- the game quits before ``duration_s`` is up, or Ctrl+C stops the run;
+- the game quits before they are up, or Ctrl+C stops the run;
 - LOTA left the state of the configuration during the run: the agent
   or attestation ran in ``A``, or the agent went away in ``B`` or
   ``C``;
@@ -268,7 +274,7 @@ configurations side by side:
 .. code-block:: console
 
    $ lota-bench report ~/bench/example/result.json
-   Example Title: 3 rounds of A B C, 300 s a run
+   Example Title: 3 rounds of A B C, 60 s a run after 30 s to settle
    ...
                                         A               B               C         B-A         C-A
    frame time median ms          6.94 ±0.02      6.95 ±0.01      6.97 ±0.03     +0.01 ~     +0.03 ~
@@ -288,6 +294,10 @@ themselves, and more rounds are what would.
 ``frame time median``, ``p99``, ``1% low``, in ms
    From the run's MangoHud log, as ``lota-bench frames`` defines them.
    Lower is better.
+   A game held to the display's refresh by vsync hides what it spends:
+   the frame time stays on the refresh interval while the CPU has room.
+   For such a game the CPU rows give the cost, and the frame times only
+   show that nothing got worse.
 
 ``game CPU``, ``lota-agent CPU``, ``lota-attest CPU``, in %
    The CPU time the cgroup accrued over the run, as a share of one CPU:
@@ -297,6 +307,10 @@ themselves, and more rounds are what would.
 
 ``game memory``, ``lota-agent memory``, in MiB
    The highest ``memory.current`` of the run.
+   The agent's figure in ``C`` counts the page cache of the game's files
+   it reads to hash them, which the kernel takes back under pressure.
+   ``file`` in the unit's ``memory.stat`` tells it from ``anon``, the
+   memory the agent holds.
 
 ``BPF programs``, in µs/s
    The time the agent's BPF programs ran during the run, for every
@@ -366,7 +380,8 @@ The plan
    "game": {"title": "Example Title", "proton": "9.0",
             "version": null, "settings": "high, 1440p"},
    "rounds": 3,
-   "duration_s": 300,
+   "settle_s": 30,
+   "duration_s": 60,
    "interval_ms": 1000
 
 ``version``
@@ -383,10 +398,11 @@ The plan
    The title, and the Proton, game version and settings it ran with.
    Only the title is required.
 
-``rounds``, ``duration_s``, ``interval_ms``
+``rounds``, ``settle_s``, ``duration_s``, ``interval_ms``
    A session is a warm-up run followed by ``rounds`` rounds of one run
    in each configuration (``A``, ``B``, ``C``), 2 to 10 rounds. Each run
-   samples for ``duration_s`` seconds, 10 to 3600, every
+   samples for ``settle_s`` seconds, 1 to 600, in which the frame log
+   does not run, and then ``duration_s`` seconds, 10 to 3600, every
    ``interval_ms`` milliseconds, 100 to 60000. A run holds at most 14400
    samples and a session at most 43200, so a plan that would plan more
    is refused.
@@ -405,7 +421,7 @@ A run
       "lota-agent": {...}, "lota-attest": null},
      {"t_ms": 1000, ...}
     ],
-    "sample_count": 300, "wall_ms": 300004, "end": "duration",
+    "sample_count": 90, "wall_ms": 90004, "end": "duration",
     "totals": {"game": {"cpu_usec": ..., "memory_max_bytes": ...,
                         "pgfault": ..., "pgmajfault": ...,
                         "io_read_bytes": ..., "io_write_bytes": ...},

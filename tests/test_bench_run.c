@@ -45,6 +45,7 @@ static void fill_plan(struct bench_plan *p)
 	set(&p->machine.tpm, "none");
 	set(&p->game.title, "Example Title");
 	p->rounds = ROUNDS;
+	p->settle_s = 30;
 	p->duration_s = 600;
 	p->interval_ms = 1000;
 }

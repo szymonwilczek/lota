@@ -766,6 +766,7 @@ enum top_key {
 	TK_MACHINE,
 	TK_GAME,
 	TK_ROUNDS,
+	TK_SETTLE_S,
 	TK_DURATION_S,
 	TK_INTERVAL_MS,
 	TK_RUN,
@@ -781,6 +782,7 @@ static const char *const top_keys[TK_COUNT] = {
 	[TK_MACHINE] = "machine",
 	[TK_GAME] = "game",
 	[TK_ROUNDS] = "rounds",
+	[TK_SETTLE_S] = "settle_s",
 	[TK_DURATION_S] = "duration_s",
 	[TK_INTERVAL_MS] = "interval_ms",
 	[TK_RUN] = "run",
@@ -791,7 +793,7 @@ static const char *const top_keys[TK_COUNT] = {
 #define HEAD_KEYS (B(TK_SCHEMA_VERSION) | B(TK_TOOL) | B(TK_KIND))
 #define PLAN_KEYS                                                 \
 	(HEAD_KEYS | B(TK_VERSION) | B(TK_MACHINE) | B(TK_GAME) | \
-	 B(TK_ROUNDS) | B(TK_DURATION_S) | B(TK_INTERVAL_MS))
+	 B(TK_ROUNDS) | B(TK_SETTLE_S) | B(TK_DURATION_S) | B(TK_INTERVAL_MS))
 
 static const uint32_t kind_keys[BK_COUNT] = {
 	[BK_PLAN] = PLAN_KEYS,
@@ -841,6 +843,9 @@ static int top_value(struct vctx *v, int key, struct bench_doc *d,
 	case TK_ROUNDS:
 		return uint_range(v, "rounds", BENCH_ROUNDS_MIN,
 				  BENCH_ROUNDS_MAX, &p->rounds);
+	case TK_SETTLE_S:
+		return uint_range(v, "settle_s", BENCH_SETTLE_MIN_S,
+				  BENCH_SETTLE_MAX_S, &p->settle_s);
 	case TK_DURATION_S:
 		return uint_range(v, "duration_s", BENCH_DURATION_MIN_S,
 				  BENCH_DURATION_MAX_S, &p->duration_s);
@@ -859,7 +864,7 @@ static int top_value(struct vctx *v, int key, struct bench_doc *d,
 static int plan_consistent(struct vctx *v, const struct bench_doc *d)
 {
 	const struct bench_plan *p = &d->plan;
-	uint64_t per_run = (uint64_t)p->duration_s * 1000 / p->interval_ms + 1;
+	uint64_t per_run = bench_run_samples(p);
 
 	if (per_run > BENCH_MAX_SAMPLES)
 		return bad(v, here(v),

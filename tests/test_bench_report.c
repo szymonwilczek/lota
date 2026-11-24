@@ -37,6 +37,7 @@ static void fill(void)
 	set(&p->machine.cpu_model, "Test CPU 8-Core");
 	set(&p->game.title, "Example Title");
 	p->rounds = ROUNDS;
+	p->settle_s = 30;
 	p->duration_s = 600;
 	p->interval_ms = 1000;
 	doc->nruns = NRUNS;

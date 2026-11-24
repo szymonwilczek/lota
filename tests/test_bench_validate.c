@@ -55,6 +55,7 @@ static void fill_plan(struct bench_plan *p)
 	set(&p->game.title, "Example Title");
 	set(&p->game.settings, "high");
 	p->rounds = ROUNDS;
+	p->settle_s = 30;
 	p->duration_s = 600;
 	p->interval_ms = 1000;
 }
@@ -327,6 +328,11 @@ static const struct rejection rejections[] = {
 	  "rounds 1 is not 2..10"),
 	R("a run too short to measure", T_PLAN, "\"duration_s\": 600",
 	  "\"duration_s\": 9", "duration_s 9 is not 10..3600"),
+	R("a settle the frame log cannot start after", T_PLAN,
+	  "\"settle_s\": 30", "\"settle_s\": 0", "settle_s 0 is not 1..600"),
+	R2("the settle counted in the samples", T_PLAN, "\"settle_s\": 30",
+	   "\"settle_s\": 600", "samples a session", "\"interval_ms\": 1000",
+	   "\"interval_ms\": 100"),
 	R("an interval out of range", T_PLAN, "\"interval_ms\": 1000",
 	  "\"interval_ms\": 5", "interval_ms 5 is not"),
 	R2("a run over the sample cap", T_PLAN, "\"duration_s\": 600",
