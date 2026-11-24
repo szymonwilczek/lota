@@ -19,9 +19,9 @@ parsing, and the PCR14 boot-commitment derivation (initramfs lock +
 boot commitment, over the fleet's agent hash -- the derivation takes no
 clock counters, so the synthetic quote's ClockInfo is free to be a
 constant). The synthetic event log carries the firmware's
-``SecureBoot`` variable measurement on PCR 7, which is what proves a
-UEFI boot, the bootloader's ``EV_IPL`` measurement of the kernel image
-on PCR 9, which is what makes the fleet's kernel pin evaluable the way
+``SecureBoot`` variable measurement on PCR 7 and the separator after
+it, which is what proves a UEFI boot, the bootloader's ``EV_IPL``
+measurement of the kernel image on PCR 9, which is what makes the fleet's kernel pin evaluable the way
 a booted host's is, and no PCR 14 event, so the chain anchors on a zero
 baseline -- the shape of a UEFI host that boots without shim. The
 verifier under test runs its strict production configuration; no TOFU

@@ -170,6 +170,7 @@ func TestExtractMachineKeys_DB(t *testing.T) {
 	log := &ParsedEventLog{Entries: []EventLogEntry{
 		measuredEntry(7, EvEFIVariableDriverConfig,
 			encodeUEFIVariableData(efiGlobalVariableGUID, "db", db)),
+		separatorEntry(),
 	}}
 
 	got := ExtractMachineKeys(log, nil)
@@ -230,6 +231,7 @@ func mokEvent(digest [32]byte, name string) EventLogEntry {
 func mokBootEntries(list []byte, trusted byte) []EventLogEntry {
 	return []EventLogEntry{
 		measuredSecureBootEntry(1),
+		separatorEntry(),
 		mokEvent(sha256.Sum256(list), "MokList"),
 		mokEvent(sha256.Sum256([]byte("denylist")), "MokListX"),
 		mokEvent(sha256.Sum256([]byte{trusted}), "MokListTrusted"),
@@ -240,7 +242,7 @@ func TestMOKPCR14Change(t *testing.T) {
 	other := mokEvent(sha256.Sum256([]byte("other")), "Other")
 	moved := mokEvent(sha256.Sum256([]byte("moved")), "Other")
 	renamed := mokBootEntries([]byte("list-a"), 0)
-	renamed[1].EventData = []byte("MokListX\x00")
+	renamed[2].EventData = []byte("MokListX\x00")
 
 	tests := []struct {
 		name    string

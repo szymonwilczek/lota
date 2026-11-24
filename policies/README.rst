@@ -251,7 +251,7 @@ the diverse-fleet enrollment path: see "Boot enrollment ceremony" below for how
 it lifts the per-machine PCR 0/1/7 pinning requirement.
 
 ``require_secureboot`` requires the firmware-measured ``SecureBoot`` EFI
-variable (PCR 7, ``EV_EFI_VARIABLE_DRIVER_CONFIG``) to be present and enabled.
+variable (PCR 7, before the firmware's separator) to be present and enabled.
 The agent-reported Secure Boot header flag is telemetry only; a compromised
 kernel sets it freely. This check is bootloader-independent. Players must have
 Secure Boot enabled in firmware setup; any kernel signed for Secure Boot

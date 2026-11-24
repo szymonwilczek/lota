@@ -6,6 +6,7 @@ package verify
 
 import (
 	"bytes"
+	"crypto/sha256"
 	"errors"
 	"time"
 
@@ -55,9 +56,10 @@ const (
 	ReanchorLFA
 )
 
-// pcr7Variables extracts the Secure Boot variables measured into PCR 7
-// (EV_EFI_VARIABLE_DRIVER_CONFIG: PK, KEK, db, dbx, SecureBoot) as a map of
-// UnicodeName -> VariableData.
+// pcr7Variables extracts the Secure Boot variables the firmware measured into
+// PCR 7 before its separator (EV_EFI_VARIABLE_DRIVER_CONFIG: PK, KEK, db, dbx,
+// SecureBoot) as a map of UnicodeName -> VariableData. An event off its
+// digest names nothing.
 // EV_EFI_VARIABLE_AUTHORITY is intentionally skipped:
 // it records which db entry authorized the bootloader and changes on a legitimate
 // bootloader update, so it is not part of the root of trust the re-anchor must hold constant.
@@ -66,9 +68,13 @@ func pcr7Variables(parsed *ParsedEventLog) map[string][]byte {
 	if parsed == nil {
 		return out
 	}
-	for i := range parsed.Entries {
-		e := &parsed.Entries[i]
-		if e.PCRIndex != 7 || e.EventType != EvEFIVariableDriverConfig {
+	events, _ := firmwarePCR7(parsed)
+	for _, e := range events {
+		if e.EventType != EvEFIVariableDriverConfig {
+			continue
+		}
+		sum := sha256.Sum256(e.EventData)
+		if !bytes.Equal(e.Digests[AlgSHA256], sum[:]) {
 			continue
 		}
 		uv, err := parseUEFIVariableData(e.EventData)

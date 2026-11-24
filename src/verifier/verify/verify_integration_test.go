@@ -51,31 +51,25 @@ const productionFlags = types.FlagTPMQuoteOK | types.FlagModuleSig | types.FlagE
 
 // uefiEventLog is the firmware log every fixture report carries:
 // one EV_EFI_VARIABLE_DRIVER_CONFIG measurement of the EFI global SecureBoot
-// variable on PCR 7.
+// variable on PCR 7, then the firmware's separator.
 // That event is the verifier's proof of UEFI boot -- legacy BIOS log has no EFI
 // variable to measure.
 func uefiEventLog() []byte {
-	payload := encodeUEFIVariableData(efiGlobalVariableGUID, "SecureBoot", []byte{0x01})
-	digest := sha256.Sum256(payload)
-	return buildTestEventLog([]EventLogEntry{{
-		PCRIndex:  7,
-		EventType: EvEFIVariableDriverConfig,
-		Digests:   map[uint16][]byte{AlgSHA256: digest[:]},
-		EventData: payload,
-	}})
+	return buildTestEventLog([]EventLogEntry{
+		secureBootEntry([]byte{0x01}), separatorEntry(),
+	})
 }
 
 // uefiPCR7 is the PCR 7 value uefiEventLog replays to.
 // Fixture report must carry it so the SecureBoot measurement is quote-authenticated
 func uefiPCR7() [types.HashSize]byte {
-	payload := encodeUEFIVariableData(efiGlobalVariableGUID, "SecureBoot", []byte{0x01})
-	digest := sha256.Sum256(payload)
-
 	var pcr7 [types.HashSize]byte
-	h := sha256.New()
-	h.Write(pcr7[:])
-	h.Write(digest[:])
-	copy(pcr7[:], h.Sum(nil))
+	for _, e := range []EventLogEntry{secureBootEntry([]byte{0x01}), separatorEntry()} {
+		h := sha256.New()
+		h.Write(pcr7[:])
+		h.Write(e.Digests[AlgSHA256])
+		copy(pcr7[:], h.Sum(nil))
+	}
 	return pcr7
 }
 
@@ -1032,17 +1026,11 @@ func TestClientInfo_BaselineOnlyClientIsFound(t *testing.T) {
 // Enrolling or deleting a key with mokutil changes the measured variable,
 // which is what moves the register.
 func mokEventLog(mok []byte) []byte {
-	sbPayload := encodeUEFIVariableData(efiGlobalVariableGUID, "SecureBoot", []byte{0x01})
-	sbDigest := sha256.Sum256(sbPayload)
 	mokDigest := sha256.Sum256(mok)
 
 	return buildTestEventLog([]EventLogEntry{
-		{
-			PCRIndex:  7,
-			EventType: EvEFIVariableDriverConfig,
-			Digests:   map[uint16][]byte{AlgSHA256: sbDigest[:]},
-			EventData: sbPayload,
-		},
+		secureBootEntry([]byte{0x01}),
+		separatorEntry(),
 		{
 			PCRIndex:  14,
 			EventType: EvIPL,

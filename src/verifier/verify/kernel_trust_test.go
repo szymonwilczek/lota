@@ -13,22 +13,22 @@ import (
 )
 
 func secureBootEntry(value []byte) EventLogEntry {
-	return EventLogEntry{
-		PCRIndex:  7,
-		EventType: EvEFIVariableDriverConfig,
-		EventData: encodeUEFIVariableData(efiGlobalVariableGUID, "SecureBoot", value),
-	}
+	return measuredEntry(7, EvEFIVariableDriverConfig,
+		encodeUEFIVariableData(efiGlobalVariableGUID, "SecureBoot", value))
+}
+
+func separatorEntry() EventLogEntry {
+	return measuredEntry(7, EvSeparator, []byte{0, 0, 0, 0})
 }
 
 func TestExtractSecureBootState_Enabled(t *testing.T) {
 	t.Log("TEST: SecureBoot variable 0x01 reports enabled")
 
 	parsed := &ParsedEventLog{Entries: []EventLogEntry{
-		{
-			PCRIndex: 7, EventType: EvEFIVariableDriverConfig,
-			EventData: encodeUEFIVariableData(efiGlobalVariableGUID, "PK", []byte{0xaa}),
-		},
+		measuredEntry(7, EvEFIVariableDriverConfig,
+			encodeUEFIVariableData(efiGlobalVariableGUID, "PK", []byte{0xaa})),
 		secureBootEntry([]byte{0x01}),
+		separatorEntry(),
 	}}
 	st, err := ExtractSecureBootState(parsed)
 	if err != nil {
@@ -42,7 +42,9 @@ func TestExtractSecureBootState_Enabled(t *testing.T) {
 func TestExtractSecureBootState_Disabled(t *testing.T) {
 	t.Log("TEST: SecureBoot variable 0x00 reports disabled")
 
-	parsed := &ParsedEventLog{Entries: []EventLogEntry{secureBootEntry([]byte{0x00})}}
+	parsed := &ParsedEventLog{Entries: []EventLogEntry{
+		secureBootEntry([]byte{0x00}), separatorEntry(),
+	}}
 	st, err := ExtractSecureBootState(parsed)
 	if err != nil {
 		t.Fatalf("extract failed: %v", err)
@@ -61,7 +63,7 @@ func TestExtractSecureBootState_Missing(t *testing.T) {
 			PCRIndex: 7, EventType: EvEFIVariableDriverConfig,
 			EventData: encodeUEFIVariableData(otherGUID, "SecureBoot", []byte{0x01}),
 		},
-		{PCRIndex: 7, EventType: EvSeparator, EventData: []byte{0, 0, 0, 0}},
+		separatorEntry(),
 	}}
 	st, err := ExtractSecureBootState(parsed)
 	if err != nil {
@@ -78,6 +80,7 @@ func TestExtractSecureBootState_Conflicting(t *testing.T) {
 	parsed := &ParsedEventLog{Entries: []EventLogEntry{
 		secureBootEntry([]byte{0x01}),
 		secureBootEntry([]byte{0x00}),
+		separatorEntry(),
 	}}
 	if _, err := ExtractSecureBootState(parsed); err == nil {
 		t.Error("conflicting measurements not rejected")
@@ -88,7 +91,8 @@ func TestExtractSecureBootState_MalformedVariable(t *testing.T) {
 	t.Log("TEST: Malformed PCR 7 variable event fails closed")
 
 	parsed := &ParsedEventLog{Entries: []EventLogEntry{
-		{PCRIndex: 7, EventType: EvEFIVariableDriverConfig, EventData: []byte{0x01, 0x02}},
+		measuredEntry(7, EvEFIVariableDriverConfig, []byte{0x01, 0x02}),
+		separatorEntry(),
 	}}
 	if _, err := ExtractSecureBootState(parsed); err == nil {
 		t.Error("malformed variable event not rejected")
@@ -98,7 +102,9 @@ func TestExtractSecureBootState_MalformedVariable(t *testing.T) {
 func TestExtractSecureBootState_OversizeValue(t *testing.T) {
 	t.Log("TEST: SecureBoot variable with unexpected size fails closed")
 
-	parsed := &ParsedEventLog{Entries: []EventLogEntry{secureBootEntry([]byte{0x01, 0x00})}}
+	parsed := &ParsedEventLog{Entries: []EventLogEntry{
+		secureBootEntry([]byte{0x01, 0x00}), separatorEntry(),
+	}}
 	if _, err := ExtractSecureBootState(parsed); err == nil {
 		t.Error("oversize SecureBoot value not rejected")
 	}
@@ -324,7 +330,7 @@ func verifyWithPolicy(t *testing.T, policy *PCRPolicy, report *types.Attestation
 func TestSecureBootGate_EnabledPasses(t *testing.T) {
 	t.Log("SECURITY TEST: event-log Secure Boot enabled passes the gate")
 
-	report := reportForEntries(t, []EventLogEntry{measuredSecureBootEntry(0x01)}, 1<<7)
+	report := reportForEntries(t, []EventLogEntry{measuredSecureBootEntry(0x01), separatorEntry()}, 1<<7)
 	if err := verifyWithPolicy(t, secureBootPolicy(), report, false); err != nil {
 		t.Errorf("enabled Secure Boot rejected: %v", err)
 	}
@@ -333,7 +339,7 @@ func TestSecureBootGate_EnabledPasses(t *testing.T) {
 func TestSecureBootGate_DisabledRejected(t *testing.T) {
 	t.Log("SECURITY TEST: event-log Secure Boot disabled is rejected")
 
-	report := reportForEntries(t, []EventLogEntry{measuredSecureBootEntry(0x00)}, 1<<7)
+	report := reportForEntries(t, []EventLogEntry{measuredSecureBootEntry(0x00), separatorEntry()}, 1<<7)
 	if err := verifyWithPolicy(t, secureBootPolicy(), report, false); err == nil {
 		t.Error("disabled Secure Boot not rejected")
 	}
@@ -343,7 +349,7 @@ func TestSecureBootGate_MissingMeasurementRejected(t *testing.T) {
 	t.Log("SECURITY TEST: log without a SecureBoot measurement is rejected")
 
 	report := reportForEntries(t, []EventLogEntry{
-		measuredEntry(7, EvSeparator, []byte{0, 0, 0, 0}),
+		separatorEntry(),
 	}, 1<<7)
 	if err := verifyWithPolicy(t, secureBootPolicy(), report, false); err == nil {
 		t.Error("missing SecureBoot measurement not rejected")
@@ -353,7 +359,7 @@ func TestSecureBootGate_MissingMeasurementRejected(t *testing.T) {
 func TestSecureBootGate_UnquotedPCR7Rejected(t *testing.T) {
 	t.Log("SECURITY TEST: SecureBoot fact without PCR 7 in the quote is untrusted")
 
-	report := reportForEntries(t, []EventLogEntry{measuredSecureBootEntry(0x01)}, 1<<0)
+	report := reportForEntries(t, []EventLogEntry{measuredSecureBootEntry(0x01), separatorEntry()}, 1<<0)
 	if err := verifyWithPolicy(t, secureBootPolicy(), report, false); err == nil {
 		t.Error("unquoted PCR 7 not rejected")
 	}
@@ -363,9 +369,9 @@ func TestSecureBootGate_ForgedEventRejected(t *testing.T) {
 	t.Log("SECURITY TEST: forged SecureBoot event breaks PCR 7 replay")
 
 	// quoted PCRs derived from the honest log (Secure Boot disabled)
-	report := reportForEntries(t, []EventLogEntry{measuredSecureBootEntry(0x00)}, 1<<7)
+	report := reportForEntries(t, []EventLogEntry{measuredSecureBootEntry(0x00), separatorEntry()}, 1<<7)
 	// attacker swaps in a log claiming Secure Boot is enabled
-	report.EventLog = buildTestEventLog([]EventLogEntry{measuredSecureBootEntry(0x01)})
+	report.EventLog = buildTestEventLog([]EventLogEntry{measuredSecureBootEntry(0x01), separatorEntry()})
 
 	if err := verifyWithPolicy(t, secureBootPolicy(), report, false); err == nil {
 		t.Error("forged SecureBoot event not rejected")
@@ -375,7 +381,7 @@ func TestSecureBootGate_ForgedEventRejected(t *testing.T) {
 func TestSecureBootGate_SelfReportedFlagIgnored(t *testing.T) {
 	t.Log("SECURITY TEST: agent-reported FlagSecureBoot cannot satisfy the gate")
 
-	report := reportForEntries(t, []EventLogEntry{measuredSecureBootEntry(0x00)}, 1<<7)
+	report := reportForEntries(t, []EventLogEntry{measuredSecureBootEntry(0x00), separatorEntry()}, 1<<7)
 	report.Header.Flags |= types.FlagSecureBoot
 
 	if err := verifyWithPolicy(t, secureBootPolicy(), report, false); err == nil {
@@ -436,7 +442,7 @@ func TestCmdlineGate_StrippedLogRejected(t *testing.T) {
 	}, 1<<8)
 	// attacker removes every PCR 8 event from the log
 	report.EventLog = buildTestEventLog([]EventLogEntry{
-		measuredEntry(7, EvSeparator, []byte{0, 0, 0, 0}),
+		separatorEntry(),
 	})
 
 	if err := verifyWithPolicy(t, cmdlinePolicy(), report, true); err == nil {
@@ -448,7 +454,7 @@ func TestCmdlineGate_NonGRUBHostSkipped(t *testing.T) {
 	t.Log("TEST: zero quoted PCR 8 with no PCR 8 events skips the cmdline check")
 
 	report := reportForEntries(t, []EventLogEntry{
-		measuredEntry(7, EvSeparator, []byte{0, 0, 0, 0}),
+		separatorEntry(),
 	}, (1<<7)|(1<<8))
 	if err := verifyWithPolicy(t, cmdlinePolicy(), report, true); err != nil {
 		t.Errorf("non-GRUB host rejected: %v", err)
@@ -459,7 +465,7 @@ func TestCmdlineGate_UnquotedPCR8Rejected(t *testing.T) {
 	t.Log("SECURITY TEST: cmdline gate requires PCR 8 in the quote mask")
 
 	report := reportForEntries(t, []EventLogEntry{
-		measuredEntry(7, EvSeparator, []byte{0, 0, 0, 0}),
+		separatorEntry(),
 	}, 1<<7)
 	if err := verifyWithPolicy(t, cmdlinePolicy(), report, true); err == nil {
 		t.Error("missing PCR 8 quote coverage not rejected")
@@ -484,9 +490,56 @@ func TestVerifyEventLog_RejectsVariableDataOffDigest(t *testing.T) {
 	entry := measuredSecureBootEntry(0x00)
 	entry.EventData = encodeUEFIVariableData(efiGlobalVariableGUID, "SecureBoot", []byte{0x01})
 
-	report := reportForEntries(t, []EventLogEntry{entry}, 1<<7)
+	report := reportForEntries(t, []EventLogEntry{entry, separatorEntry()}, 1<<7)
 	if facts, err := VerifyEventLogWithPolicy(report, false); err == nil {
 		t.Fatalf("log with SecureBoot data off its digest accepted: %+v", facts)
+	}
+}
+
+// root can extend PCR 7 after boot and hand over any log that replays to
+// it; the separator closes the firmware's part, whatever the types say
+func TestSecureBootGate_RootExtendsPCR7(t *testing.T) {
+	sbOff := measuredSecureBootEntry(0x00)
+	sbOn := measuredSecureBootEntry(0x01)
+	relabel := func(e EventLogEntry, typ uint32) EventLogEntry {
+		e.EventType = typ
+		return e
+	}
+	hidden := relabel(sbOff, EvEFIAction)
+	hidden.EventData = encodeUEFIVariableData(efiGlobalVariableGUID, "SecureBooX", []byte{0x00})
+	forged := relabel(sbOff, EvEFIAction)
+	forged.EventData = encodeUEFIVariableData(efiGlobalVariableGUID, "SecureBoot", []byte{0x01})
+	fakeOn := relabel(sbOn, EvNoAction)
+
+	tests := []struct {
+		name string
+		log  []EventLogEntry
+	}{
+		{"appended", []EventLogEntry{sbOff, separatorEntry(), sbOn}},
+		{"relabelled and appended",
+			[]EventLogEntry{relabel(sbOff, EvEFIAction), separatorEntry(), sbOn}},
+		{"hidden and appended", []EventLogEntry{hidden, separatorEntry(), sbOn}},
+		{"data off a relabelled digest", []EventLogEntry{forged, separatorEntry(), sbOn}},
+		{"never extended", []EventLogEntry{fakeOn, sbOff, separatorEntry(), sbOn}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			report := reportForEntries(t, tt.log, 1<<7)
+			if err := verifyWithPolicy(t, secureBootPolicy(), report, false); err == nil {
+				t.Error("Secure Boot read on from a host that booted with it off")
+			}
+		})
+	}
+}
+
+func TestExtractSecureBootState_NoSeparator(t *testing.T) {
+	parsed := &ParsedEventLog{Entries: []EventLogEntry{
+		secureBootEntry([]byte{0x01}),
+		measuredEntry(7, EvSeparator, []byte{0xff, 0xff, 0xff, 0xff}),
+	}}
+	st, err := ExtractSecureBootState(parsed)
+	if err != nil || st.Found {
+		t.Errorf("log with no separator: %+v, %v", st, err)
 	}
 }
 

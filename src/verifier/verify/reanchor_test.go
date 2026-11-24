@@ -39,14 +39,10 @@ type pcrVar struct {
 func pcr7Log(vars []pcrVar) []byte {
 	entries := make([]EventLogEntry, 0, len(vars))
 	for _, v := range vars {
-		entries = append(entries, EventLogEntry{
-			PCRIndex:  7,
-			EventType: EvEFIVariableDriverConfig,
-			Digests:   map[uint16][]byte{AlgSHA256: make([]byte, 32)},
-			EventData: encodeUEFIVar(v.name, v.data),
-		})
+		entries = append(entries, measuredEntry(7, EvEFIVariableDriverConfig,
+			encodeUEFIVar(v.name, v.data)))
 	}
-	return buildTestEventLog(entries)
+	return buildTestEventLog(append(entries, separatorEntry()))
 }
 
 func baseVars() []pcrVar {
@@ -80,6 +76,25 @@ func mustParse(b []byte) *ParsedEventLog {
 		panic(err)
 	}
 	return p
+}
+
+func TestPCR7Variables_AfterSeparator(t *testing.T) {
+	entries := []EventLogEntry{
+		measuredEntry(7, EvEFIVariableDriverConfig, encodeUEFIVar("db", []byte("db"))),
+		separatorEntry(),
+		measuredEntry(7, EvEFIVariableDriverConfig, encodeUEFIVar("db", []byte("root"))),
+	}
+	got := pcr7Variables(&ParsedEventLog{Entries: entries})
+	if string(got["db"]) != "db" {
+		t.Errorf("db read from after the separator: %q", got["db"])
+	}
+
+	offDigest := entries[0]
+	offDigest.EventData = encodeUEFIVar("db", []byte("root"))
+	got = pcr7Variables(&ParsedEventLog{Entries: []EventLogEntry{offDigest, separatorEntry()}})
+	if _, ok := got["db"]; ok {
+		t.Errorf("db read off its digest: %q", got["db"])
+	}
 }
 
 func TestReanchorDecision(t *testing.T) {

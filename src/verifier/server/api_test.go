@@ -485,30 +485,32 @@ func secureBootVariableEvent() []byte {
 	return append(buf, 0x01)
 }
 
+// separatorEvent is the EV_SEPARATOR data that ends the firmware's PCR 7
+// measurements.
+var separatorEvent = []byte{0, 0, 0, 0}
+
 // uefiPCR7 is the PCR 7 value buildUEFIEventLog replays to;
 // fixture report must carry it so the measurement is quote-authenticated
 func uefiPCR7() [32]byte {
-	digest := sha256.Sum256(secureBootVariableEvent())
-
 	var pcr7 [32]byte
-	h := sha256.New()
-	h.Write(pcr7[:])
-	h.Write(digest[:])
-	copy(pcr7[:], h.Sum(nil))
+	for _, data := range [][]byte{secureBootVariableEvent(), separatorEvent} {
+		digest := sha256.Sum256(data)
+		h := sha256.New()
+		h.Write(pcr7[:])
+		h.Write(digest[:])
+		copy(pcr7[:], h.Sum(nil))
+	}
 	return pcr7
 }
 
-// buildUEFIEventLog appends the PCR 7 SecureBoot variable measurement
-// to the minimal log.
-// That event is the verifier's proof of a UEFI boot.
-func buildUEFIEventLog() []byte {
-	payload := secureBootVariableEvent()
+// pcr7Event is one PCR_EVENT2 on PCR 7 with the SHA-256 digest of its data
+func pcr7Event(eventType uint32, payload []byte) []byte {
 	digest := sha256.Sum256(payload)
 
 	entry := make([]byte, 0, 64+len(payload))
 	hdr := make([]byte, 8)
-	binary.LittleEndian.PutUint32(hdr[0:4], 7)          // pcr_index
-	binary.LittleEndian.PutUint32(hdr[4:8], 0x80000001) // EV_EFI_VARIABLE_DRIVER_CONFIG
+	binary.LittleEndian.PutUint32(hdr[0:4], 7) // pcr_index
+	binary.LittleEndian.PutUint32(hdr[4:8], eventType)
 	entry = append(entry, hdr...)
 
 	count := make([]byte, 4)
@@ -523,9 +525,16 @@ func buildUEFIEventLog() []byte {
 	size := make([]byte, 4)
 	binary.LittleEndian.PutUint32(size, uint32(len(payload)))
 	entry = append(entry, size...)
-	entry = append(entry, payload...)
+	return append(entry, payload...)
+}
 
-	return append(buildMinimalEventLog(), entry...)
+// buildUEFIEventLog appends the PCR 7 SecureBoot variable measurement and
+// the separator to the minimal log.
+// That event is the verifier's proof of a UEFI boot.
+func buildUEFIEventLog() []byte {
+	log := buildMinimalEventLog()
+	log = append(log, pcr7Event(0x80000001, secureBootVariableEvent())...) // EV_EFI_VARIABLE_DRIVER_CONFIG
+	return append(log, pcr7Event(0x00000004, separatorEvent)...)           // EV_SEPARATOR
 }
 
 func buildMinimalEventLog() []byte {
