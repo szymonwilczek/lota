@@ -35,10 +35,8 @@ _Static_assert(sizeof(struct lota_ac_heartbeat_wire) == LOTA_AC_HEADER_SIZE,
 	       "heartbeat wire header size must match LOTA_AC_HEADER_SIZE");
 
 /*
- * The two error spaces this library hands out must not overlap:
- * a caller reads a number and has to know which of them it came from.
- * Linux errno values stay well inside a few hundred; the guard is here
- * so a base moved closer fails to build.
+ * The library hands out LOTA_AC_ERR_* and negative errno: a caller reads a
+ * number and has to know which of them it is.
  */
 _Static_assert(LOTA_AC_ERR_BASE < -255,
 	       "LOTA_AC_ERR_BASE must sit past any errno value");
@@ -48,10 +46,7 @@ _Static_assert(LOTA_AC_ERR_BASE < -255,
 _Static_assert(sizeof(struct lota_ac_heartbeat_wire) == 110,
 	       "heartbeat wire header is frozen");
 
-/*
- * Frozen string pairs selected by LOTA_AC_DOMAIN_VERSION_*. Adding a new
- * version means appending a new row, never editing an existing one.
- */
+/* String pairs selected by LOTA_AC_DOMAIN_VERSION_*. */
 struct lota_ac_domain_strings {
 	uint32_t version;
 	const char *game_binding;
@@ -76,7 +71,7 @@ lota_ac_domain_lookup(uint32_t version)
 	return NULL;
 }
 
-/* last call's answer on this thread; every entry point writes it */
+/* per thread, as lota_ac_last_error() reads it */
 static _Thread_local int g_ac_error = LOTA_AC_ERR_OK;
 
 int lota_ac_last_error(void)
@@ -84,14 +79,14 @@ int lota_ac_last_error(void)
 	return g_ac_error;
 }
 
-/* record @err for lota_ac_last_error() and return it */
+/* record @ret for lota_ac_last_error() and return it */
 static int ac_ret(int ret)
 {
 	g_ac_error = ret;
 	return ret;
 }
 
-/* The refusal half of ac_ret(), for call sites that return their own value */
+/* ac_ret() for call sites that return their own value */
 static int ac_fail(int err)
 {
 	return ac_ret(err);
@@ -127,7 +122,7 @@ struct lota_ac_session {
 	/* direct SDK mode */
 	int direct;
 	struct lota_client *client;
-	int connect_error; /* why client is NULL, reported on every call */
+	int connect_error; /* why client is NULL */
 
 	/* file mode */
 	char token_dir[256];
@@ -231,14 +226,14 @@ static int compute_game_id_hash(const char *game_id,
 }
 
 /*
- * Runtime re-measurement.
+ * Runtime measurement.
  *
- * Measures every file-backed loaded object (main executable + shared
- * libraries, excluding the vDSO). Each object yields a content-only
- * digest over its executable PT_LOAD segments; the combined image digest
- * folds those, keyed by soname (file basename) and sorted, so neither
- * load order nor search path matters. Computed either from the live
- * mapping (producer) or from a set of ELF files (verifier).
+ * Covers each object dl_iterate_phdr() lists, less the vDSO, matched by name.
+ * Each object yields a digest over its executable PT_LOAD segments; the
+ * combined digest folds those, keyed by file basename and sorted, so neither
+ * load order nor directory matters. Computed from the live mapping (producer)
+ * or from a set of ELF files (verifier). The two differ on an object with
+ * DT_TEXTREL and on a program run through ld.so explicitly.
  *
  * See lota_anticheat.h for the canonical layout.
  */
@@ -248,7 +243,7 @@ static int compute_game_id_hash(const char *game_id,
 #define LOTA_AC_RUNTIME_MAX_OBJS 256
 #define LOTA_AC_SONAME_MAX 256
 
-/* One measured object: its soname (file basename) and content digest. */
+/* @soname is the file's basename, not DT_SONAME. */
 struct rt_object {
 	char soname[LOTA_AC_SONAME_MAX];
 	uint8_t digest[LOTA_AC_RUNTIME_MEASURE_SIZE];
@@ -282,7 +277,6 @@ static int runtime_measure_update_seg_hdr(EVP_MD_CTX *md, uint64_t vaddr,
 	return 0;
 }
 
-/* Begin a per-object digest with its domain and executable segment count. */
 static int rt_object_digest_begin(EVP_MD_CTX *md, uint32_t seg_count)
 {
 	static const char domain[] = LOTA_AC_RUNTIME_OBJECT_DOMAIN;
@@ -298,9 +292,8 @@ static int rt_object_digest_begin(EVP_MD_CTX *md, uint32_t seg_count)
 }
 
 /*
- * Per-object digest of the live mapping. Fills out on success and sets
- * *has_exec. An object with no executable PT_LOAD segment is valid and
- * simply contributes nothing (*has_exec = 0).
+ * An object with no executable PT_LOAD segment is valid and contributes
+ * nothing (*has_exec = 0).
  */
 static int rt_live_object_digest(struct dl_phdr_info *info, uint8_t out[32],
 				 int *has_exec)
@@ -323,7 +316,7 @@ static int rt_live_object_digest(struct dl_phdr_info *info, uint8_t out[32],
 		segs[n++] = ph;
 	}
 	if (n == 0)
-		return 0; /* no executable code: skip this object */
+		return 0;
 
 	for (uint32_t k = 1; k < n; k++) {
 		const ElfW(Phdr) *key = segs[k];
@@ -362,7 +355,7 @@ out:
 	return ret;
 }
 
-/* qsort comparator: order objects by soname, then digest as a tiebreak. */
+/* the digest breaks a tie between objects of one name */
 static int rt_object_cmp(const void *a, const void *b)
 {
 	const struct rt_object *oa = a;
@@ -373,7 +366,6 @@ static int rt_object_cmp(const void *a, const void *b)
 	return memcmp(oa->digest, ob->digest, LOTA_AC_RUNTIME_MEASURE_SIZE);
 }
 
-/* Fold the sorted object set into the combined image digest. */
 static int rt_finalize_combined(struct rt_object *objs, size_t count,
 				uint8_t out[LOTA_AC_RUNTIME_MEASURE_SIZE])
 {
@@ -442,9 +434,8 @@ static int rt_resolve_self_exe(char *buf, size_t len)
 }
 
 /*
- * Decide whether a dl_iterate_phdr object is measured, and resolve its
- * on-disk path and soname. index 0 is always the main executable.
- * Returns 1 to include, 0 to skip (vDSO / unnamed auxiliary objects).
+ * Index 0 is the main executable, which glibc lists unnamed.
+ * Return: 1 to measure, 0 to skip.
  */
 static int rt_object_identity(struct dl_phdr_info *info, unsigned index,
 			      const char *self_exe, const char **path_out,
@@ -456,7 +447,7 @@ static int rt_object_identity(struct dl_phdr_info *info, unsigned index,
 		return 1;
 	}
 	if (!info->dlpi_name || info->dlpi_name[0] == '\0')
-		return 0; /* anonymous auxiliary object (e.g. vDSO) */
+		return 0;
 
 	const char *base = rt_basename(info->dlpi_name);
 	if (rt_starts_with(base, "linux-vdso") ||
@@ -631,10 +622,8 @@ static int runtime_measure_update_file_seg(EVP_MD_CTX *md, int fd,
 }
 
 /*
- * Per-object digest from an ELF file on disk. Mirrors
- * rt_live_object_digest(). Fills out and sets *has_exec on success; a
- * file with no executable PT_LOAD segment is valid (*has_exec = 0).
- * Returns a negative error for a malformed or unreadable file.
+ * rt_live_object_digest() from an ELF file on disk.
+ * Return: 0 on success, negative errno for a malformed or unreadable file.
  */
 static int rt_file_object_digest(const char *path, uint8_t out[32],
 				 int *has_exec)
@@ -701,7 +690,7 @@ static int rt_file_object_digest(const char *path, uint8_t out[32],
 	}
 
 	if (n == 0) {
-		ret = 0; /* no executable code: caller skips this object */
+		ret = 0;
 		goto out;
 	}
 
@@ -944,21 +933,14 @@ out:
 }
 
 /*
- * Resolve token directory for file mode.
- *
  * Priority: cfg->token_dir > $LOTA_HOOK_TOKEN_DIR >
  *           $XDG_RUNTIME_DIR/lota-hook > /tmp/lota-<uid>
  *
- * This mirrors the producer (src/sdk/lota_wine_hook.c), and has to:
- * a consumer that looks anywhere else reads a directory the hook never
- * writes.
- * $XDG_RUNTIME_DIR/lota is the agent's -- it holds the container socket
- * at root:lota 0750 -- so neither side may resolve it.
- *
- * The hook exports LOTA_HOOK_TOKEN_DIR for whatever it settled on,
- * so an in-process consumer follows a fallback automatically; a consumer in
- * a separate process walks the same list and takes the first directory that
- * exists.
+ * The producer's order (src/sdk/lota_wine_hook.c) below cfg->token_dir.
+ * The producer skips an empty or unusable $LOTA_HOOK_TOKEN_DIR; here any set
+ * value wins. The last two count only if the directory exists.
+ * $XDG_RUNTIME_DIR/lota is the agent's: it holds the container socket at
+ * root:lota 0750.
  */
 static int resolve_token_dir(const struct lota_ac_config *cfg, char *out,
 			     size_t outlen)
@@ -995,11 +977,7 @@ static int resolve_token_dir(const struct lota_ac_config *cfg, char *out,
 	if (stat(out, &st) == 0 && S_ISDIR(st.st_mode))
 		return 0;
 
-	/*
-	 * Neither exists.
-	 * Report the documented default, so the error names the directory
-	 * an integrator is expecting the hook to have made.
-	 */
+	/* neither exists: the snapshot error names the default */
 	if (!xdg || !xdg[0])
 		return -ENOENT;
 	ret = snprintf(out, outlen, "%s/%s", xdg, LOTA_HOOK_TOKEN_DIR_NAME);
@@ -1009,12 +987,8 @@ static int resolve_token_dir(const struct lota_ac_config *cfg, char *out,
 }
 
 /*
- * TRUSTED means attested, whatever else the caller asked for.
- *
- * required_flags is added to LOTA_FLAG_ATTESTED, never used in its place.
- * A non-zero word proves nothing: TPM_OK is set as soon as the agent holds
- * a TPM, so a host that has completed no round with any verifier still
- * reports a non-zero word, with ATTESTED clear.
+ * @required adds to LOTA_FLAG_ATTESTED. A non-zero word proves nothing:
+ * the agent sets TPM_OK on opening the TPM.
  */
 static int is_trusted(uint32_t flags, uint32_t required)
 {
@@ -1086,13 +1060,7 @@ const char *lota_ac_strerror(int err)
 		return "the boot evidence is not the boot the heartbeat quotes";
 	}
 
-	/*
-	 * Not one of ours, so it is the other space: the measure helpers return
-	 * negative errno, and an integrator printing this function's output for
-	 * whatever a call returned is entitled to the right sentence.
-	 * The two spaces cannot collide -- LOTA_AC_ERR_BASE sits past any errno
-	 * -- so the test below is the whole of the disambiguation.
-	 */
+	/* not one of ours: the measure helpers return negative errno */
 	if (err < 0 && err > LOTA_AC_ERR_BASE) {
 		const char *desc = strerrordesc_np(-err);
 
@@ -1103,13 +1071,7 @@ const char *lota_ac_strerror(int err)
 	return "unknown error";
 }
 
-/*
- * The connect refusal in this SDK's vocabulary.
- *
- * The gaming SDK already tells "no agent" from "nobody has consented" from
- * "this host is not enrolled with them", and those are exactly the 3 an integrator
- * has to act on differently, so they are carried across.
- */
+/* A refusal without a code of its own here reads as no agent. */
 static int ac_error_from_connect(int connect_err)
 {
 	switch (connect_err) {
@@ -1136,7 +1098,7 @@ struct lota_ac_session *lota_ac_init(const struct lota_ac_config *cfg)
 		ac_fail(LOTA_AC_ERR_INVALID_ARG);
 		return NULL;
 	}
-	/* caller has to say how big its configuration is; see the header */
+	/* the caller says how big its configuration is; see the header */
 	if (cfg->struct_size < LOTA_AC_CONFIG_SIZE_MIN) {
 		ac_fail(LOTA_AC_ERR_CONFIG_SIZE);
 		return NULL;
@@ -1191,11 +1153,9 @@ struct lota_ac_session *lota_ac_init(const struct lota_ac_config *cfg)
 		}
 
 		/*
-		 * A session whose agent is not there is handed back:
-		 * the title has something to show the player and can beat again
-		 * once the host is ready. The reason is reported either way,
-		 * so "not ready yet" is never mistaken for a configuration
-		 * this library rejected.
+		 * A session whose agent is not there is handed back, so the
+		 * title has something to show the player. It never connects
+		 * later: a host that gets ready takes a new session.
 		 */
 		if (!s->client) {
 			s->state = LOTA_AC_STATE_ERROR;
@@ -1225,7 +1185,6 @@ struct lota_ac_session *lota_ac_init(const struct lota_ac_config *cfg)
 		}
 	}
 
-	/* initial tick to populate state */
 	if (s->state == LOTA_AC_STATE_RUNNING)
 		lota_ac_tick(s);
 
@@ -1282,7 +1241,6 @@ int lota_ac_tick(struct lota_ac_session *session)
 		return ac_ret(-EINVAL);
 
 	if (session->direct) {
-		/* direct SDK mode */
 		if (!session->client) {
 			session->state = LOTA_AC_STATE_ERROR;
 			ac_fail(session->connect_error ?
@@ -1329,7 +1287,6 @@ int lota_ac_tick(struct lota_ac_session *session)
 		}
 	}
 
-	/* update state machine */
 	if (session->token_len > 0 || session->lota_flags != 0)
 		session->state = is_trusted(session->lota_flags,
 					    session->required_flags) ?
@@ -1357,9 +1314,8 @@ int lota_ac_heartbeat(struct lota_ac_session *session, uint8_t *buf,
 	}
 
 	/*
-	 * Replay-safe heartbeat requires nonce-bound token acquisition.
-	 * File mode uses pre-generated snapshot tokens and cannot safely bind
-	 * current sequence/timestamp challenge into TPM-signed nonce.
+	 * A heartbeat binds its sequence and timestamp into the token's nonce.
+	 * File mode holds the hook's token, requested with no nonce.
 	 */
 	if (!session->direct) {
 		ac_fail(LOTA_AC_ERR_INVALID_ARG);
@@ -1367,12 +1323,8 @@ int lota_ac_heartbeat(struct lota_ac_session *session, uint8_t *buf,
 	}
 
 	/*
-	 * Refresh integrity flags for the nonce binding with GET_STATUS only. A
-	 * heartbeat needs exactly one TPM quote (the nonce-bound GET_TOKEN
-	 * below); routing through lota_ac_tick() would issue a second,
-	 * immediately overwritten GET_TOKEN and burn an extra slot of the
-	 * agent's per-UID GET_TOKEN rate limit (ipc.c), halving the sustainable
-	 * heartbeat rate.
+	 * GET_STATUS only: lota_ac_tick() also fetches a token, which takes a
+	 * second slot of the agent's GET_TOKEN rate limit (ipc.c) on every beat.
 	 */
 	if (!session->client) {
 		ac_fail(session->connect_error ? session->connect_error :
@@ -1395,10 +1347,8 @@ int lota_ac_heartbeat(struct lota_ac_session *session, uint8_t *buf,
 	sequence = session->heartbeat_seq;
 
 	/*
-	 * Re-measure the live executable image for this beat.
-	 * Binding the fresh measurement into the nonce ties it to the
-	 * TPM-signed token and closes the TOCTOU window left by the
-	 * session-start on-disk hash
+	 * Measured at each beat. The nonce binds the value into the signed
+	 * token, so it cannot change on the way to a server.
 	 */
 	ret = lota_ac_compute_runtime_measure(runtime_measure);
 	if (ret < 0) {
@@ -1433,10 +1383,7 @@ int lota_ac_heartbeat(struct lota_ac_session *session, uint8_t *buf,
 				return -EIO;
 			}
 
-			/*
-			 * The rate limit is the one an integrator can fix
-			 * by beating slower, so it must not read as a broken agent.
-			 */
+			/* an integrator fixes this one by beating slower */
 			ac_fail(ret == LOTA_ERR_RATE_LIMITED ?
 					LOTA_AC_ERR_RATE_LIMITED :
 				ret == LOTA_ERR_CONNECTION_FAILED ?
@@ -1578,11 +1525,7 @@ int lota_ac_boot_evidence(struct lota_ac_session *session, uint8_t *buf,
 }
 
 /*
- * The server SDK's verdict in this library's terms.
- *
- * lota_ac_verify_heartbeat() returns only LOTA_AC_ERR_*, so every
- * LOTA_SERVER_ERR_* from lota_server_verify_token() is mapped here
- * and never passed through.
+ * The verifiers here return only LOTA_AC_ERR_*.
  * Anything without its own code is MALFORMED.
  */
 static int ac_error_from_server(int server_err)
@@ -1664,11 +1607,8 @@ int lota_ac_verify_heartbeat(
 		return ac_ret(LOTA_AC_ERR_MALFORMED);
 
 	/*
-	 * Runtime measurement must match the value an honest producer of this
-	 * image reports.
-	 * Reject before signature work, then bind the same bytes into the
-	 * expected nonce so a TPM-signed token cannot smuggle a different
-	 * measurement past this check
+	 * Rejected before signature work. The expected nonce binds the same
+	 * bytes, so a signed token cannot carry a different measurement.
 	 */
 	if (CRYPTO_memcmp(data + 78, expected_runtime_measure,
 			  LOTA_AC_RUNTIME_MEASURE_SIZE) != 0)
@@ -1701,11 +1641,7 @@ int lota_ac_verify_heartbeat(
 	if (CRYPTO_memcmp(claims.nonce, expected_nonce, LOTA_NONCE_SIZE) != 0)
 		return ac_ret(LOTA_AC_ERR_NONCE_FAIL);
 
-	/*
-	 * lota_flags in heartbeat header are plaintext transport metadata only.
-	 * Trust token claims (nonce-bound and signature-verified when AIK is
-	 * set) and fail closed if header/token disagree
-	 */
+	/* the nonce covers the header's flags: they must equal the token's */
 	if (heartbeat_lota_flags != claims.flags)
 		return ac_ret(LOTA_AC_ERR_MALFORMED);
 

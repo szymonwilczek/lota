@@ -28,7 +28,6 @@
 #include "../../include/lota_ipc.h"
 #include "../../include/lota_token.h"
 
-/* the only unit that sees both headers */
 _Static_assert(LOTA_TOKEN_MAX_PROTECT_PIDS == LOTA_IPC_TOKEN_MAX_PROTECT_PIDS,
 	       "wire protected-PID cap must be the IPC-derived cap");
 _Static_assert(LOTA_TOKEN_MAX_PID_LIST_SIZE == LOTA_IPC_TOKEN_MAX_PID_LIST_SIZE,
@@ -76,24 +75,17 @@ _Static_assert(LOTA_FLAG_EVENTS_LOST == LOTA_STATUS_EVENTS_LOST,
 
 #define DEFAULT_TIMEOUT_MS 5000
 
-/*
- * Maximum number of candidate socket paths to try during autodiscovery.
- */
 #define MAX_DISCOVERY_PATHS 4
 #define DRAIN_READ_TIMEOUT_MS 50
 
 /*
- * Build identity, injected from the VERSION file by the Makefile.
- * Library that cannot name the build it came from is useless to advisory
- * or a support ticket, so refuse to compile instead of reporting a placeholder.
+ * Injected from the VERSION file by the Makefile. A library that cannot name
+ * its build is useless to an advisory or a support ticket.
  */
 #ifndef LOTA_BUILD_VERSION_STRING
 #error "LOTA_BUILD_VERSION_STRING must be defined at build time"
 #endif
 
-/*
- * Client context
- */
 struct lota_client {
 	int fd;
 	int timeout_ms;
@@ -172,12 +164,10 @@ static int send_request(struct lota_client *client,
 	if (ret < 0)
 		return ret;
 
-	/* send header */
 	ret = send_all(client->fd, req, sizeof(*req));
 	if (ret < 0)
 		return ret;
 
-	/* send payload if present */
 	if (payload && payload_len > 0) {
 		ret = send_all(client->fd, payload, payload_len);
 		if (ret < 0)
@@ -187,7 +177,6 @@ static int send_request(struct lota_client *client,
 	return 0;
 }
 
-/* for helpers used by recv_response */
 static int dispatch_notification(struct lota_client *client,
 				 const void *payload, size_t payload_len);
 static int drain_payload(int fd, size_t remaining, int timeout_ms);
@@ -255,11 +244,7 @@ static int recv_response(struct lota_client *client,
 {
 	int ret;
 
-	/*
-	 * Loop until LOTA receive a command response (not a notification!).
-	 * Server-push notifications that arrive while waiting for a
-	 * response are dispatched via the callback and skipped.
-	 */
+	/* a notification before the response goes to any set callback */
 	for (;;) {
 		ret = recv_exact_timeout(client->fd, resp, sizeof(*resp),
 					 client->timeout_ms);
@@ -291,10 +276,9 @@ static int recv_response(struct lota_client *client,
 			continue;
 		}
 
-		break; /* got a real response */
+		break;
 	}
 
-	/* receive payload if present */
 	if (resp->payload_len > 0) {
 		if (resp->payload_len > payload_size) {
 			drain_payload(client->fd, resp->payload_len,
@@ -354,10 +338,7 @@ static int ipc_result_to_error(uint32_t result)
 	}
 }
 
-/*
- * Dispatch a server-push notification via the client's callback.
- * Returns 1 if dispatched, 0 if no callback registered.
- */
+/* Return: 1 if the callback ran, else 0. */
 static int dispatch_notification(struct lota_client *client,
 				 const void *payload, size_t payload_len)
 {
@@ -433,11 +414,7 @@ struct lota_client *lota_connect(void)
 	return lota_connect_opts(NULL);
 }
 
-/*
- * Try to connect to a specific socket path.
- *
- * Returns a connected fd on success, -1 on failure.
- */
+/* Return: a connected fd, or -1. */
 static int try_connect_path(const char *path, int timeout_ms)
 {
 	struct sockaddr_un addr;
@@ -478,7 +455,7 @@ static int try_connect_path(const char *path, int timeout_ms)
 		}
 	}
 
-	/* restore blocking mode so recv(MSG_WAITALL) works correctly */
+	/* send_all() does not retry EAGAIN */
 	if (clear_nonblock(fd) < 0) {
 		close(fd);
 		return -1;
@@ -488,24 +465,20 @@ static int try_connect_path(const char *path, int timeout_ms)
 }
 
 /*
- * Build the list of candidate socket paths for autodiscovery.
- *
  * Discovery order:
- *   1. /run/lota/lota.sock (primary agent socket)
- *   2. $XDG_RUNTIME_DIR/lota/lota.sock (container-accessible)
+ *   1. /run/lota/lota.sock
+ *   2. $XDG_RUNTIME_DIR/lota/lota.sock (reachable from a container)
  */
 static int build_discovery_paths(char paths[][PATH_MAX], int max)
 {
 	const char *env;
 	int n = 0;
 
-	/* primary path */
 	if (n < max) {
 		snprintf(paths[n], PATH_MAX, "%s", LOTA_IPC_SOCKET_PATH);
 		n++;
 	}
 
-	/* container-accessible path via XDG_RUNTIME_DIR */
 	env = getenv("XDG_RUNTIME_DIR");
 	if (env && env[0] && n < max) {
 		snprintf(paths[n], PATH_MAX, "%s/lota/lota.sock", env);
@@ -515,10 +488,7 @@ static int build_discovery_paths(char paths[][PATH_MAX], int max)
 	return n;
 }
 
-/*
- * The transport's failure in one errno space. recv_response() mixes negative
- * errnos with LOTA_ERR_* codes, and the two overlap numerically.
- */
+/* recv_response() mixes negative errnos with LOTA_ERR_* codes, which overlap. */
 static int select_transport_error(int ret)
 {
 	if (ret == -ETIMEDOUT)
@@ -529,10 +499,9 @@ static int select_transport_error(int ret)
 }
 
 /*
- * Bind the connection to one publisher, named by the hex SHA-256 of its CA trust
- * anchor's SubjectPublicKeyInfo.
- * Returns 0, or negative errno when the name is malformed, the agent has no
- * profile for it, or the transport failed.
+ * @hex names a publisher: the hex SHA-256 of its CA trust anchor's
+ * SubjectPublicKeyInfo.
+ * Return: 0 or negative errno.
  */
 static int select_publisher(struct lota_client *client, const char *hex)
 {
@@ -570,16 +539,9 @@ static int select_publisher(struct lota_client *client, const char *hex)
 		return select_transport_error(ret);
 	if (resp.result == LOTA_IPC_ERR_CONSENT_REQUIRED)
 		return -EACCES;
-	/*
-	 * Only the agent's "no such publisher" reads as one.
-	 * Anything else -- malformed request, agent that refused the command
-	 * outright -- is fault on this side of the socket, and reporting it as
-	 * unknown publisher sends integrator to check the identity they sent,
-	 * which is not where the problem is.
-	 */
+	/* only the agent's "no such publisher" reads as one */
 	if (resp.result == LOTA_IPC_ERR_UNKNOWN_PROFILE)
 		return -ENOENT;
-	/* known publisher, no key slot left on this machine */
 	if (resp.result == LOTA_IPC_ERR_NO_KEY_SLOT)
 		return -ENOSPC;
 	if (resp.result != LOTA_IPC_OK)
@@ -588,11 +550,7 @@ static int select_publisher(struct lota_client *client, const char *hex)
 	return 0;
 }
 
-/*
- * Why the last connect on this thread failed.
- * Thread-local so two titles in one process (or title and its launcher) cannot
- * read each other's answer.
- */
+/* Why the last connect on this thread failed. */
 static _Thread_local int g_connect_error = LOTA_OK;
 
 int lota_connect_last_error(void)
@@ -608,10 +566,8 @@ struct lota_client *lota_connect_opts(const struct lota_connect_opts *opts)
 	int fd = -1;
 
 	/*
-	 * Caller that passes options has to say how big they are.
-	 * Refusing zero here costs integrator one assignment and buys every
-	 * later member of this structure way in;
-	 * guessing would read memory the caller never wrote
+	 * A caller passing options says how big they are: guessing would read
+	 * memory it never wrote.
 	 */
 	g_connect_error = LOTA_OK;
 
@@ -623,10 +579,6 @@ struct lota_client *lota_connect_opts(const struct lota_connect_opts *opts)
 	timeout_ms = (opts && opts->timeout_ms > 0) ? opts->timeout_ms :
 						      DEFAULT_TIMEOUT_MS;
 
-	/*
-	 * if the caller provided an explicit socket path, use only that
-	 * otherwise, try autodiscovery across known paths
-	 */
 	if (opts && opts->socket_path) {
 		fd = try_connect_path(opts->socket_path, timeout_ms);
 	} else {
@@ -634,8 +586,6 @@ struct lota_client *lota_connect_opts(const struct lota_connect_opts *opts)
 			build_discovery_paths(discovery, MAX_DISCOVERY_PATHS);
 
 		for (int i = 0; i < count; i++) {
-			/* quick existence check to avoid blocking connect on
-			 * missing sockets */
 			struct stat st;
 			if (stat(discovery[i], &st) != 0)
 				continue;
@@ -664,11 +614,9 @@ struct lota_client *lota_connect_opts(const struct lota_connect_opts *opts)
 	if (opts && opts->publisher_profile) {
 		int sel = select_publisher(client, opts->publisher_profile);
 
-		/* Caller asked to attest for a specific publisher and the agent
-		 * cannot answer for that one.
-		 * Failing the connection is the point:
-		 * falling back would hand the title another publisher's evidence
-		 * under its own name
+		/*
+		 * Falling back would hand the title another publisher's
+		 * evidence under its own name.
 		 */
 		if (sel < 0) {
 			g_connect_error =
@@ -725,7 +673,6 @@ int lota_ping(struct lota_client *client, uint64_t *uptime_sec)
 	if (!client)
 		return LOTA_ERR_NOT_CONNECTED;
 
-	/* build request */
 	memset(&req, 0, sizeof(req));
 	req.magic = LOTA_IPC_MAGIC;
 	req.version = LOTA_IPC_VERSION;
@@ -804,7 +751,6 @@ int lota_get_status(struct lota_client *client, struct lota_status *status)
 
 	memset(status, 0, sizeof(*status));
 
-	/* build request */
 	memset(&req, 0, sizeof(req));
 	memset(&ipc_status, 0, sizeof(ipc_status));
 	req.magic = LOTA_IPC_MAGIC;
@@ -826,7 +772,6 @@ int lota_get_status(struct lota_client *client, struct lota_status *status)
 	if (resp.result != LOTA_IPC_OK)
 		return ipc_result_to_error(resp.result);
 
-	/* copy to output */
 	if (payload_len >= sizeof(ipc_status)) {
 		status->flags = ipc_status.flags;
 		status->last_attest_time = ipc_status.last_attest_time;
@@ -869,10 +814,8 @@ int lota_get_token(struct lota_client *client, const uint8_t *nonce,
 	if (!token)
 		return LOTA_ERR_INVALID_ARG;
 
-	/* initialize token */
 	memset(token, 0, sizeof(*token));
 
-	/* build request */
 	memset(&req, 0, sizeof(req));
 	req.magic = LOTA_IPC_MAGIC;
 	req.version = LOTA_IPC_VERSION;
@@ -903,7 +846,6 @@ int lota_get_token(struct lota_client *client, const uint8_t *nonce,
 	if (payload_len < LOTA_IPC_TOKEN_HEADER_SIZE)
 		return LOTA_ERR_PROTOCOL;
 
-	/* parse token header */
 	memcpy(&ipc_token_hdr, buf, sizeof(ipc_token_hdr));
 
 	token->valid_until = ipc_token_hdr.valid_until;
@@ -932,7 +874,6 @@ int lota_get_token(struct lota_client *client, const uint8_t *nonce,
 	if (token->runtime_protect_version != LOTA_IPC_RUNTIME_PROTECT_V1)
 		return LOTA_ERR_PROTOCOL;
 
-	/* validate sizes */
 	if (ipc_token_hdr.attest_size > LOTA_IPC_TOKEN_MAX_ATTEST ||
 	    ipc_token_hdr.sig_size > LOTA_IPC_TOKEN_MAX_SIG)
 		return LOTA_ERR_PROTOCOL;
@@ -965,7 +906,6 @@ int lota_get_token(struct lota_client *client, const uint8_t *nonce,
 		}
 	}
 
-	/* copy the per-PID kernel image digests */
 	if (image_list_size > 0) {
 		token->protected_image_digests =
 			calloc(token->protect_pid_count,
@@ -978,7 +918,6 @@ int lota_get_token(struct lota_client *client, const uint8_t *nonce,
 		data_ptr += image_list_size;
 	}
 
-	/* copy attest_data if present */
 	if (ipc_token_hdr.attest_size > 0) {
 		token->attest_data = malloc(ipc_token_hdr.attest_size);
 		if (!token->attest_data)
@@ -989,7 +928,6 @@ int lota_get_token(struct lota_client *client, const uint8_t *nonce,
 		data_ptr += ipc_token_hdr.attest_size;
 	}
 
-	/* copy signature if present */
 	if (ipc_token_hdr.sig_size > 0) {
 		token->signature = malloc(ipc_token_hdr.sig_size);
 		if (!token->signature) {
@@ -1089,7 +1027,7 @@ size_t lota_token_serialized_size(const struct lota_token *token)
 			LOTA_TOKEN_IMAGE_DIGEST_SIZE +
 		token->attest_size + token->signature_len;
 
-	/* wire.total_size is uint16_t on wire; reject impossible encodings */
+	/* wire.total_size is a uint16_t */
 	if (total > 0xFFFFu)
 		return 0;
 
@@ -1102,9 +1040,9 @@ int lota_token_serialize(const struct lota_token *token, uint8_t *buf,
 	if (!token || !buf)
 		return LOTA_ERR_INVALID_ARG;
 
-	/* runtime_protect_version has to name version.
-	 * Caller that zeroes its struct and forgets the field would otherwise
-	 * get token every parser refuses, and would only find out at the far end
+	/*
+	 * A caller that zeroes its struct and forgets the field would get a
+	 * token lota_server_parse_token() refuses, at the far end.
 	 */
 	if (token->runtime_protect_version != LOTA_RUNTIME_PROTECT_V1)
 		return LOTA_ERR_INVALID_ARG;
@@ -1117,7 +1055,6 @@ int lota_token_serialize(const struct lota_token *token, uint8_t *buf,
 	if (buflen < total)
 		return LOTA_ERR_BUFFER_TOO_SMALL;
 
-	/* populate header struct */
 	struct lota_token_wire wire;
 	memset(&wire, 0, sizeof(wire));
 
@@ -1144,7 +1081,6 @@ int lota_token_serialize(const struct lota_token *token, uint8_t *buf,
 	wire.runtime_protect_version = htole16(token->runtime_protect_version);
 	wire.stopped_ms = htole64(token->stopped_ms);
 
-	/* write header */
 	memcpy(buf, &wire, sizeof(wire));
 	size_t off = sizeof(wire);
 
@@ -1157,7 +1093,6 @@ int lota_token_serialize(const struct lota_token *token, uint8_t *buf,
 		}
 	}
 
-	/* write the per-PID kernel image digests */
 	if (token->protect_pid_count > 0 && token->protected_image_digests) {
 		size_t image_bytes = (size_t)token->protect_pid_count *
 				     LOTA_TOKEN_IMAGE_DIGEST_SIZE;
@@ -1165,13 +1100,11 @@ int lota_token_serialize(const struct lota_token *token, uint8_t *buf,
 		off += image_bytes;
 	}
 
-	/* write attest_data */
 	if (token->attest_size > 0 && token->attest_data) {
 		memcpy(buf + off, token->attest_data, token->attest_size);
 		off += token->attest_size;
 	}
 
-	/* write signature */
 	if (token->signature_len > 0 && token->signature) {
 		memcpy(buf + off, token->signature, token->signature_len);
 		off += token->signature_len;
@@ -1255,8 +1188,6 @@ int lota_poll_events(struct lota_client *client, int timeout_ms)
 	if (!infinite_wait && !nonblocking)
 		deadline_ms = monotonic_ms() + timeout_ms;
 
-	/* timeout_ms == 0: non-blocking one-shot drain of queued events */
-
 	for (;;) {
 		int wait_ms;
 
@@ -1280,7 +1211,6 @@ int lota_poll_events(struct lota_client *client, int timeout_ms)
 		if (ret < 0)
 			return LOTA_ERR_PROTOCOL;
 
-		/* drain all currently queued frames without blocking */
 		for (;;) {
 			ret = recv_exact_timeout(client->fd, &resp,
 						 sizeof(resp),
@@ -1297,8 +1227,6 @@ int lota_poll_events(struct lota_client *client, int timeout_ms)
 				return LOTA_ERR_PROTOCOL;
 
 			if (resp.result != LOTA_IPC_NOTIFY) {
-				/* unexpected non-notification -> drain and skip
-				 */
 				if (resp.payload_len > 0)
 					drain_payload(client->fd,
 						      resp.payload_len,
@@ -1332,7 +1260,6 @@ int lota_poll_events(struct lota_client *client, int timeout_ms)
 								    nlen);
 			}
 
-			/* see if more data is queued right now */
 			{
 				int more =
 					wait_for_socket(client->fd, POLLIN, 0);
@@ -1345,10 +1272,7 @@ int lota_poll_events(struct lota_client *client, int timeout_ms)
 			}
 		}
 
-		/*
-		 * For infinite wait, return once at least one notification has
-		 * been delivered and the currently queued frames were drained.
-		 */
+		/* an infinite wait ends once something was delivered */
 		if (infinite_wait && dispatched > 0)
 			break;
 

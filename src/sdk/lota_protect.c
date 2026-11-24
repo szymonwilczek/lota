@@ -8,9 +8,9 @@
  * Protection survives the exec and passes to every process PROGRAM
  * creates, so nothing runs in the tree before it is protected.
  *
- * The agent refuses a process a tracer already holds: PROGRAM does
- * not start. Any other failure starts PROGRAM unprotected: no token
- * lists it among the protected processes.
+ * LOTA_ERR_ACCESS_DENIED, as for a process a tracer already holds,
+ * does not start PROGRAM. Any other failure starts PROGRAM unprotected:
+ * no token lists it among the protected processes.
  *
  * Reads LOTA_HOOK_SOCKET and LOTA_HOOK_PUBLISHER, as the Wine hook does.
  *
@@ -73,7 +73,6 @@ static int protect_self(void)
 	if (env && *env)
 		opts.socket_path = env;
 
-	/* unnamed: refused on a multi-enrollment host, reported below */
 	opts.publisher_profile =
 		publisher_or_null(getenv(LOTA_HOOK_ENV_PUBLISHER));
 

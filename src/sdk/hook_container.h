@@ -1,9 +1,8 @@
 /* SPDX-License-Identifier: MIT */
 /* Copyright (C) 2026 Szymon Wilczek */
 /*
- * Whether the hook's token directory is readable from outside its container.
- * Header-only and pure: the caller reads /proc/self/mountinfo and the
- * environment, so a test needs no container.
+ * The checks behind the hook's warning that its token directory is private to
+ * its container. The caller reads /proc/self/mountinfo and the environment.
  */
 
 #ifndef LOTA_SDK_HOOK_CONTAINER_H
@@ -16,8 +15,9 @@
 
 /*
  * Is @dir a mount point (field 5) in /proc/self/mountinfo @mountinfo?
- * A bind from the host is one; a container-private directory is not.
- * \040-escaped whitespace is not unescaped, so such a path reads as unshared.
+ * A directory bound in from the host is one, as is a tmpfs private to the
+ * container; a subdirectory of a bind is not.
+ * \040-escaped whitespace is not unescaped, so such a path reads as no mount.
  */
 static inline bool hook_dir_is_mount(const char *mountinfo, const char *dir)
 {
@@ -34,7 +34,6 @@ static inline bool hook_dir_is_mount(const char *mountinfo, const char *dir)
 		const char *end = strchr(line, '\n');
 		int field;
 
-		/* skip to the fifth field: the mount point */
 		for (field = 1; field < 5 && p; field++) {
 			p = strchr(p, ' ');
 			if (p)
@@ -53,18 +52,15 @@ static inline bool hook_dir_is_mount(const char *mountinfo, const char *dir)
 }
 
 /*
- * @container_env is $container, set by any container manager for what runs
- * inside it. PRESSURE_VESSEL_* does not count: it is set on the host too.
+ * @container_env is $container.
+ * PRESSURE_VESSEL_* does not count: it is set on the host too.
  */
 static inline bool hook_in_container(const char *container_env)
 {
 	return container_env && container_env[0];
 }
 
-/*
- * Names the directory to share and the wrapper that shares it.
- * Writes a NUL-terminated sentence without a trailing newline.
- */
+/* Names the directory to share and the wrapper. No trailing newline. */
 static inline void hook_container_private_message(const char *dir, char *out,
 						  size_t cap)
 {
