@@ -261,10 +261,29 @@ register anything with the verifier. ::
      "pending_challenges": 0,
      "pcr14_baseline": "cafe...",
      "first_seen": "2026-06-30T08:00:00Z",
-     "first_seen_unix": 1782806400
+     "first_seen_unix": 1782806400,
+     "machine_keys": {
+       "db": [{"type": "x509", "sha256": "ab12...", "subject": "CN=..."}],
+       "mok": [{"type": "x509", "sha256": "cd34...", "subject": "CN=..."}],
+       "mok_state": "listed"
+     }
    }
 
 String fields are omitted when empty.
+
+``machine_keys`` lists the keys the machine trusts at boot and for its modules,
+from its last passed attestation, and appears once one has recorded them. LOTA
+shows them and gates nothing on them: which keys a deployment accepts is its own
+call. ``db`` comes from the PCR 7 log. ``mok`` is the list shim holds, which
+includes shim's built-in keys, and ``mok_state`` says what backs it:
+
+``listed``
+   the list the agent sent matches the MokList measurement in the log
+``not_measured``
+   no shim ran, so no MOK applies
+``unproven``
+   shim measured a list and the agent's copy is missing or differs, so ``mok``
+   is empty. It says nothing about the keys themselves
 
 ``hardware_id`` is the 32-byte hardware identity as 64 hex characters -- the
 value ``POST /api/v1/bans`` takes, unedited. Under the Privacy CA flow it is
@@ -289,7 +308,7 @@ per-client record -- except two fields, which are this instance's own:
 
 Behind a load balancer, read either of those from one pinned instance or not
 at all. ``last_attestation``, ``attestation_count``, ``first_seen``,
-``tenant``, ``revoked`` and ``pcr14_baseline`` are the fleet's answer and are
+``tenant``, ``revoked``, ``pcr14_baseline`` and ``machine_keys`` are the fleet's answer and are
 the same on every instance.
 
 Revocations

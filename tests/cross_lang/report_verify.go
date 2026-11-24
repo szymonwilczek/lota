@@ -24,6 +24,7 @@ import (
 const reportPath = "/tmp/lota_cross_report.bin"
 
 const eventLog = "LOTA-CROSS-LANG-EVENT-LOG"
+const mokList = "LOTA-CROSS-LANG-MOK-LIST"
 
 // pattern rebuilds the C side's (base ^ index) fill for field of size n
 func pattern(base byte, n int) []byte {
@@ -174,16 +175,27 @@ func main() {
 	}
 
 	// file's length must be exactly what the Go constants predict
-	wantLen := types.FixedReportSize + 4 + len(eventLog) + types.ESRTWireSize
+	wantLen := types.FixedReportSize + 4 + len(eventLog) + types.ESRTWireSize +
+		types.MokListSizeLen + len(mokList)
 	if len(data) != wantLen {
 		fail("report is %d bytes, Go constants predict %d (FixedReportSize=%d)",
 			len(data), wantLen, types.FixedReportSize)
 	}
 
+	if got := string(report.MokList); got != mokList {
+		fail("MOK list = %q, want %q", got, mokList)
+	}
+
 	// report truncated before the ESRT section must be refused
-	truncated := data[:len(data)-types.ESRTWireSize]
+	truncated := data[:len(data)-types.MokListSizeLen-len(mokList)-types.ESRTWireSize]
 	if _, err := types.ParseReport(truncated); err == nil {
 		fail("parser accepted a report with no ESRT section")
+	}
+
+	// report truncated before the MOK list section must be refused
+	truncated = data[:len(data)-types.MokListSizeLen-len(mokList)]
+	if _, err := types.ParseReport(truncated); err == nil {
+		fail("parser accepted a report with no MOK list section")
 	}
 
 	if failures > 0 {

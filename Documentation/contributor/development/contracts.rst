@@ -14,14 +14,15 @@ Attestation report wire format
 
 The attestation report (``include/attestation.h``, serialized by
 ``src/agent/report.c``, parsed by ``src/verifier/types/report.go``) has a fixed
-struct followed by the TPM event log and the ESRT firmware-version descriptor.
+struct followed by the TPM event log, the ESRT firmware-version descriptor and
+the MOK list.
 
 **Every section is mandatory.** The verifier accepts exactly one report wire
 version and rejects any other, so there is no mixed-version fleet to parse
 defensively for: a report that stops before a section is truncated, not old. A
 platform with nothing to report says so in the section's own fields -- the ESRT
 descriptor carries ``present = 0`` where the firmware exposes no System
-Firmware entry.
+Firmware entry, and the MOK list is size 0 where there is none to send.
 
 A breaking layout change -- adding, removing or reordering a field, or adding a
 section -- bumps the version in ``include/lota.h`` and ``ReportVersion`` in

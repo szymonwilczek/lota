@@ -276,6 +276,23 @@ type ClientInfo struct {
 	PCR14Baseline     string `json:"pcr14_baseline,omitempty"`
 	FirstSeen         string `json:"first_seen,omitempty"`
 	FirstSeenUnix     int64  `json:"first_seen_unix,omitempty"`
+
+	MachineKeys *MachineKeys `json:"machine_keys,omitempty"`
+}
+
+// MachineKeys lists the keys a machine trusts at boot and for its modules.
+// Advisory: the verifier gates nothing on them.
+type MachineKeys struct {
+	DB       []MachineKey `json:"db"`
+	MOK      []MachineKey `json:"mok"`
+	MOKState string       `json:"mok_state"`
+}
+
+// MachineKey is one signature database entry.
+type MachineKey struct {
+	Type    string `json:"type"`
+	SHA256  string `json:"sha256"`
+	Subject string `json:"subject,omitempty"`
 }
 
 // ClientInfo fetches the per-client attestation details.

@@ -287,7 +287,7 @@ func createValidReportWithEventLog(t *testing.T, clientID string, nonce [32]byte
 	// mandatory trailing ESRT section
 	// all-zero means present == false,
 	// which is what a platform with no ESRT System Firmware entry reports
-	buf = append(buf, make([]byte, types.ESRTWireSize)...)
+	buf = append(buf, make([]byte, types.ESRTWireSize+types.MokListSizeLen)...)
 
 	// keep report_size consistent with wire payload
 	binary.LittleEndian.PutUint32(buf[8:12], uint32(len(buf)))
@@ -786,7 +786,7 @@ func createValidReportWithKey(clientID string, nonce [32]byte, pcr14 [32]byte, k
 	// mandatory trailing ESRT section
 	// all-zero means present == false,
 	// which is what a platform with no ESRT System Firmware entry reports
-	buf = append(buf, make([]byte, types.ESRTWireSize)...)
+	buf = append(buf, make([]byte, types.ESRTWireSize+types.MokListSizeLen)...)
 	binary.LittleEndian.PutUint32(buf[8:12], uint32(len(buf)))
 
 	return buf

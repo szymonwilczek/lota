@@ -479,3 +479,15 @@ func TestGetRequiredMask_CmdlinePolicyForcesPCR8(t *testing.T) {
 		t.Errorf("PCR 8 unexpectedly in required mask 0x%08x", mask)
 	}
 }
+
+// replay extends the digest alone, so a log naming SecureBoot=1 over the digest
+// of SecureBoot=0 replays clean and has to be refused on its data
+func TestVerifyEventLog_RejectsVariableDataOffDigest(t *testing.T) {
+	entry := measuredSecureBootEntry(0x00)
+	entry.EventData = encodeUEFIVariableData(efiGlobalVariableGUID, "SecureBoot", []byte{0x01})
+
+	report := reportForEntries(t, []EventLogEntry{entry}, 1<<7)
+	if facts, err := VerifyEventLogWithPolicy(report, false); err == nil {
+		t.Fatalf("log with SecureBoot data off its digest accepted: %+v", facts)
+	}
+}

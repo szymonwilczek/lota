@@ -540,7 +540,7 @@ func TestParseReport_WithEventLog(t *testing.T) {
 	buf = append(buf, []byte("hello")...)
 
 	// mandatory trailing ESRT section (all-zero: present == false)
-	buf = append(buf, make([]byte, types.ESRTWireSize)...)
+	buf = append(buf, make([]byte, types.ESRTWireSize+types.MokListSizeLen)...)
 
 	// update report_size header (offset 8)
 	binary.LittleEndian.PutUint32(buf[8:12], uint32(len(buf)))

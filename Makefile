@@ -211,6 +211,7 @@ AGENT_SRCS := $(AGENT_DIR)/main.c \
               $(AGENT_DIR)/runtime_image_measure.c \
               $(AGENT_DIR)/report.c \
               $(AGENT_DIR)/esrt.c \
+              $(AGENT_DIR)/moklist.c \
               $(AGENT_DIR)/hash_verify.c \
               $(AGENT_DIR)/daemon.c \
               $(AGENT_DIR)/shutdown.c \
@@ -1710,7 +1711,7 @@ $(BUILD_DIR)/test_devt: $(INC_DIR)/lota_devt.h
 $(BUILD_DIR)/test_enroll_state: $(AGENT_DIR)/enroll_state.c
 $(BUILD_DIR)/test_enroll_status: $(AGENT_DIR)/enroll.c
 $(BUILD_DIR)/test_enroll_wire: $(AGENT_DIR)/enroll.c
-$(BUILD_DIR)/test_esrt: $(AGENT_DIR)/esrt.c
+$(BUILD_DIR)/test_esrt: $(AGENT_DIR)/esrt.c $(AGENT_DIR)/moklist.c
 $(BUILD_DIR)/test_event_budget: $(INC_DIR)/lota_event_budget.h
 
 $(BUILD_DIR)/test_flag_names: $(SDK_LIB)

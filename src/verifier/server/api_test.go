@@ -449,7 +449,7 @@ func buildSignedReport(t *testing.T, clientID string, nonce [32]byte, pcr14 [32]
 	// mandatory trailing ESRT section
 	// all-zero means present == false,
 	// which is what a platform with no ESRT System Firmware entry reports
-	buf = append(buf, make([]byte, types.ESRTWireSize)...)
+	buf = append(buf, make([]byte, types.ESRTWireSize+types.MokListSizeLen)...)
 	binary.LittleEndian.PutUint32(buf[8:12], uint32(len(buf)))
 
 	return buf
@@ -1113,6 +1113,9 @@ func TestIntegrationAPI_ClientInfoAfterAttestation(t *testing.T) {
 	}
 	if resp.FirstSeen == "" {
 		t.Error("Expected non-empty first_seen after attestation")
+	}
+	if resp.MachineKeys == nil || resp.MachineKeys.MOKState == "" {
+		t.Errorf("Expected machine_keys after attestation, got %+v", resp.MachineKeys)
 	}
 
 	prefix := resp.PCR14Baseline

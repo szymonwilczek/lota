@@ -302,7 +302,7 @@ func buildSignedReport(s *fuzzReportSpec, clientID string, challengeNonce [types
 	// mandatory trailing ESRT section
 	// all-zero means present == false,
 	// which is what a platform with no ESRT System Firmware entry reports
-	buf = append(buf, make([]byte, types.ESRTWireSize)...)
+	buf = append(buf, make([]byte, types.ESRTWireSize+types.MokListSizeLen)...)
 	binary.LittleEndian.PutUint32(buf[8:12], uint32(len(buf)))
 
 	return buf

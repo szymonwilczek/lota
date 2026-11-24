@@ -87,7 +87,8 @@ var migrations = []migration{
 				tenant                   TEXT NOT NULL DEFAULT 'default',
 				agent_hash_repin_count   INTEGER DEFAULT 0,
 				last_agent_hash_repin_at TIMESTAMP,
-				kernel_hash              BLOB
+				kernel_hash              BLOB,
+				machine_keys             TEXT
 			);
 
 			CREATE INDEX idx_baselines_tenant ON baselines(tenant);

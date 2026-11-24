@@ -333,6 +333,10 @@ type AttestationReport struct {
 	// Present == false means the platform exposed no ESRT System Firmware entry
 	// (the Low-Firmware-Assurance path), not that the agent omitted the section.
 	ESRT *ESRTInfo
+
+	// MokList is the agent's copy of MokListRT, unverified until compared with
+	// the MokList event of the quote-authenticated log. Empty when not sent.
+	MokList []byte
 }
 
 // ESRTInfo mirrors struct lota_esrt (include/attestation.h):
@@ -346,8 +350,11 @@ type ESRTInfo struct {
 	FWClass         [16]byte
 }
 
-// ESRTWireSize is the fixed serialized length of the trailing ESRT section.
+// ESRTWireSize is the fixed serialized length of the ESRT section.
 const ESRTWireSize = 28
+
+// MokListSizeLen is the length prefix of the MOK list section.
+const MokListSizeLen = 4
 
 // Challenge for attestation protocol (48 bytes)
 type Challenge struct {
@@ -375,12 +382,17 @@ var (
 )
 
 // minimum binary size of a serialized report on the wire.
-// Header(16) + TPM(5466) + System(396) + event_log_size(4) + ESRT(28) = 5910.
+// Header(16) + TPM(5466) + System(396) + event_log_size(4) + ESRT(28) +
+// mok_list_size(4) = 5914.
 //
-// ESRT section is mandatory, so it counts toward the minimum:
-// report that stops before it is truncated.
+// ESRT and MOK list sections are mandatory, so they count toward the minimum:
+// report that stops before one is truncated.
 // src/agent/report.c pins the C-side sizes with static asserts
-const MinReportSize = 5910
+const MinReportSize = 5914
+
+// MaxReportWireSize caps a report before the verifier allocates for it.
+// A firmware event log takes most of it, and dbx grows over a machine's life.
+const MaxReportWireSize = 256 * 1024
 
 // fixed struct portion (without variable-length sections)
 // Header(16) + TPM(5466) + System(396) = 5878
@@ -502,7 +514,7 @@ func ParseReport(data []byte) (*AttestationReport, error) {
 	}
 	offset += int(eventLogSize)
 
-	// Mandatory trailing ESRT section (28 bytes)
+	// Mandatory ESRT section (28 bytes)
 	// Agent always emits it and reports Present == false where the platform
 	// exposes no ESRT System Firmware entry, so report that stops short
 	// is truncated
@@ -518,7 +530,23 @@ func ParseReport(data []byte) (*AttestationReport, error) {
 	esrt.LowestSupported = binary.LittleEndian.Uint32(data[offset:])
 	offset += 4
 	copy(esrt.FWClass[:], data[offset:offset+16])
+	offset += 16
 	report.ESRT = esrt
+
+	// Mandatory MOK list section: length prefix, then the variable's data
+	if len(data) < offset+MokListSizeLen {
+		return nil, fmt.Errorf("%w: report ends before the MOK list section", ErrInvalidSize)
+	}
+	mokListSize := binary.LittleEndian.Uint32(data[offset:])
+	offset += MokListSizeLen
+	if len(data) < offset+int(mokListSize) {
+		return nil, fmt.Errorf("%w: truncated at MOK list (need %d, have %d)",
+			ErrInvalidSize, mokListSize, len(data)-offset)
+	}
+	if mokListSize > 0 {
+		report.MokList = make([]byte, mokListSize)
+		copy(report.MokList, data[offset:offset+int(mokListSize)])
+	}
 
 	return report, nil
 }

@@ -249,10 +249,11 @@ func (f *Fleet) BuildReport(a *Agent, challengeNonce [types.NonceSize]byte) ([]b
 	buf = binary.LittleEndian.AppendUint32(buf, narrow32(len(eventLog)))
 	buf = append(buf, eventLog...)
 
-	// mandatory trailing ESRT section
-	// synthetic platform exposes no ESRT System Firmware entry,
-	// which is present == 0 -- the same thing real host without one reports
-	buf = append(buf, make([]byte, types.ESRTWireSize)...)
+	// mandatory ESRT and MOK list sections
+	// synthetic platform exposes no ESRT System Firmware entry, which is
+	// present == 0 -- the same thing real host without one reports -- and
+	// boots no shim, so it has no MOK list to send
+	buf = append(buf, make([]byte, types.ESRTWireSize+types.MokListSizeLen)...)
 
 	binary.LittleEndian.PutUint32(buf[8:12], narrow32(len(buf)))
 	return buf, nil

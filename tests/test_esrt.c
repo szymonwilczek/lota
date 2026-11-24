@@ -7,6 +7,10 @@
  * skipped, and a missing table is reported as not-present (not an error) so
  * the verifier can route the host onto the Low-Firmware-Assurance path.
  *
+ * Also covers the MOK list reader (moklist.c), which reads the sibling
+ * firmware fact: attributes dropped, a missing variable is not an error, and a
+ * list over the buffer goes unsent.
+ *
  * Copyright (C) 2026 Szymon Wilczek
  */
 
@@ -14,10 +18,12 @@
 #include <fcntl.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 #include <sys/stat.h>
 #include <unistd.h>
 
 #include "../src/agent/esrt.h"
+#include "../src/agent/moklist.h"
 #include "attestation.h"
 
 static int g_failures;
@@ -199,8 +205,75 @@ static void test_malformed_guid_graceful(void)
 	rm_rf(base);
 }
 
+/* writes attrs + data the way efivarfs presents a variable */
+static void write_var(const char *path, size_t attrs, const char *data,
+		      size_t size)
+{
+	static const char prefix[4] = { 7, 0, 0, 0 };
+	int fd = open(path, O_WRONLY | O_CREAT | O_TRUNC, 0600);
+
+	if (fd < 0)
+		return;
+	if (write(fd, prefix, attrs) != (ssize_t)attrs ||
+	    write(fd, data, size) != (ssize_t)size)
+		g_failures++;
+	close(fd);
+}
+
+static void test_mok_list_read(void)
+{
+	char path[] = "/tmp/lota-mok-XXXXXX";
+	uint8_t buf[8];
+	uint32_t size = 99;
+	int fd = mkstemp(path);
+
+	if (fd < 0) {
+		CHECK(0, "fixture file");
+		return;
+	}
+	close(fd);
+
+	write_var(path, 4, "abcd", 4);
+	CHECK(mok_list_read_path(path, buf, sizeof(buf), &size) == 0,
+	      "list read returns 0");
+	CHECK(size == 4 && memcmp(buf, "abcd", 4) == 0,
+	      "attributes dropped, data intact");
+
+	write_var(path, 4, "abcdefgh", 8);
+	CHECK(mok_list_read_path(path, buf, sizeof(buf), &size) == 0 &&
+		      size == 8,
+	      "list filling the buffer exactly is read");
+
+	write_var(path, 4, "abcdefghi", 9);
+	CHECK(mok_list_read_path(path, buf, sizeof(buf), &size) == -E2BIG &&
+		      size == 0,
+	      "list over the buffer goes unsent");
+
+	write_var(path, 2, "", 0);
+	CHECK(mok_list_read_path(path, buf, sizeof(buf), &size) == -ENODATA &&
+		      size == 0,
+	      "variable shorter than its attributes refused");
+
+	unlink(path);
+	size = 99;
+	CHECK(mok_list_read_path(path, buf, sizeof(buf), &size) == 0 &&
+		      size == 0,
+	      "missing variable is an empty list");
+
+	CHECK(mok_list_read_path(NULL, buf, sizeof(buf), &size) == -EINVAL &&
+		      mok_list_read_path(path, NULL, 0, &size) == -EINVAL &&
+		      mok_list_read_path(path, buf, sizeof(buf), NULL) ==
+			      -EINVAL,
+	      "NULL arguments refused");
+
+	/* live variable or none: either way the wrapper must not fail on size */
+	CHECK(mok_list_read(buf, 0, &size) == 0 || size == 0,
+	      "default path keeps out_size consistent");
+}
+
 int main(void)
 {
+	test_mok_list_read();
 	test_picks_system_firmware();
 	test_missing_is_not_present();
 	test_only_device_entries();

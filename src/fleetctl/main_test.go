@@ -222,6 +222,27 @@ func TestDevicesShow(t *testing.T) {
 	}
 }
 
+func TestDevicesShowMachineKeys(t *testing.T) {
+	f := newFakeAPI(t, map[string]string{
+		"GET /api/v1/clients/host1": `{"client_id":"host1","machine_keys":{
+			"db":[{"type":"sha256","sha256":"aa"}],
+			"mok":[{"type":"x509","sha256":"bb","subject":"CN=Test Owner"}],
+			"mok_state":"listed"}}`,
+	})
+
+	code, out, _ := runCLI(t, noEnv, "-server", f.srv.URL, "devices", "show", "host1")
+	if code != exitOK {
+		t.Fatalf("exit = %d", code)
+	}
+	for _, want := range []string{
+		"mok state: listed", "mok key: x509 bb CN=Test Owner", "db key: sha256 aa",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("output lacks %q: %q", want, out)
+		}
+	}
+}
+
 func TestRevokeHappyPath(t *testing.T) {
 	f := newFakeAPI(t, map[string]string{
 		"POST /api/v1/clients/host1/revoke": `{"status":"revoked",

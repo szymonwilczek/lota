@@ -26,6 +26,7 @@
 package verify
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"errors"
@@ -1166,4 +1167,47 @@ func (s *PostgresBaselineStore) RecordKernelHash(clientID string,
 	}
 
 	return prev, had, nil
+}
+
+// RecordMachineKeys implements MachineKeysRecorder. An unchanged list writes
+// nothing, so a round costs a read.
+func (s *PostgresBaselineStore) RecordMachineKeys(clientID string, keys []byte) ([]byte, error) {
+	var stored sql.NullString
+	if err := s.db.QueryRow(
+		`SELECT machine_keys FROM baselines WHERE client_id = $1`,
+		clientID,
+	).Scan(&stored); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, nil
+		}
+		return nil, err
+	}
+
+	var prev []byte
+	if stored.Valid {
+		prev = []byte(stored.String)
+	}
+	if bytes.Equal(prev, keys) {
+		return prev, nil
+	}
+
+	if _, err := s.db.Exec(
+		`UPDATE baselines SET machine_keys = $1 WHERE client_id = $2`,
+		string(keys), clientID,
+	); err != nil {
+		return prev, err
+	}
+	return prev, nil
+}
+
+// GetMachineKeys implements MachineKeysRecorder.
+func (s *PostgresBaselineStore) GetMachineKeys(clientID string) []byte {
+	var stored sql.NullString
+	if err := s.db.QueryRow(
+		`SELECT machine_keys FROM baselines WHERE client_id = $1`,
+		clientID,
+	).Scan(&stored); err != nil || !stored.Valid {
+		return nil
+	}
+	return []byte(stored.String)
 }

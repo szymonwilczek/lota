@@ -9,6 +9,7 @@
 package verify
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"errors"
@@ -1129,4 +1130,53 @@ func (s *SQLiteBaselineStore) RecordKernelHash(clientID string,
 	}
 
 	return prev, had, nil
+}
+
+// RecordMachineKeys implements MachineKeysRecorder. An unchanged list writes
+// nothing, so a round costs a read.
+func (s *SQLiteBaselineStore) RecordMachineKeys(clientID string, keys []byte) ([]byte, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	var stored sql.NullString
+	if err := s.db.QueryRow(
+		`SELECT machine_keys FROM baselines WHERE client_id = ?`,
+		clientID,
+	).Scan(&stored); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, nil
+		}
+		return nil, err
+	}
+
+	var prev []byte
+	if stored.Valid {
+		prev = []byte(stored.String)
+	}
+	if bytes.Equal(prev, keys) {
+		return prev, nil
+	}
+
+	if _, err := s.db.Exec(
+		`UPDATE baselines SET machine_keys = ? WHERE client_id = ?`,
+		string(keys), clientID,
+	); err != nil {
+		return prev, err
+	}
+	return prev, nil
+}
+
+// GetMachineKeys implements MachineKeysRecorder.
+func (s *SQLiteBaselineStore) GetMachineKeys(clientID string) []byte {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	var stored sql.NullString
+	if err := s.db.QueryRow(
+		`SELECT machine_keys FROM baselines WHERE client_id = ?`,
+		clientID,
+	).Scan(&stored); err != nil || !stored.Valid {
+		return nil
+	}
+	return []byte(stored.String)
 }

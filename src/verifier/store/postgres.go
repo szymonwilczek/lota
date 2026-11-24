@@ -57,7 +57,8 @@ var pgMigrations = []migration{
 				tenant                   TEXT NOT NULL DEFAULT 'default',
 				agent_hash_repin_count   BIGINT NOT NULL DEFAULT 0,
 				last_agent_hash_repin_at TIMESTAMPTZ,
-				kernel_hash              BYTEA
+				kernel_hash              BYTEA,
+				machine_keys             TEXT
 			);
 
 			CREATE INDEX idx_baselines_tenant ON baselines(tenant);
