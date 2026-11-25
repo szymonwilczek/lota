@@ -1,10 +1,5 @@
 /* SPDX-License-Identifier: MIT */
 /* Copyright (C) 2026 Szymon Wilczek */
-/*
- * Reading and destroying what this host stores per publisher.
- * See publishers.h for why the inventory avoids the TPM.
- */
-
 #include <dirent.h>
 #include <errno.h>
 #include <stdbool.h>
@@ -22,7 +17,6 @@
 #include "profile.h"
 #include "publishers.h"
 
-/* Fill one entry from a profile directory whose name is the identity */
 static void read_entry(const char *base_dir, const char *id,
 		       struct publisher_entry *e)
 {
@@ -35,11 +29,7 @@ static void read_entry(const char *base_dir, const char *id,
 	memset(e, 0, sizeof(*e));
 	snprintf(e->id, sizeof(e->id), "%s", id);
 
-	/*
-	 * Here the directory is all there is, so the layout comes from the name
-	 * it carries.
-	 * Caller has already checked that name is identity.
-	 */
+	/* the caller checked that the name is an identity */
 	if (profile_paths_from_id(base_dir, id, &paths) < 0)
 		return;
 
@@ -96,17 +86,11 @@ int publishers_list(const char *base_dir, struct publisher_entry *out,
 
 	dir = opendir(base_dir);
 	if (!dir) {
-		/* nothing has ever been stored, which is an answer */
 		if (errno == ENOENT)
 			return 0;
 		return -errno;
 	}
 
-	/*
-	 * Count every profile, store at most @max.
-	 * *count is the total either way, so a truncated walk is -ENOBUFS,
-	 * never a silent prefix.
-	 */
 	while ((ent = readdir(dir)) != NULL) {
 		if (!name_is_identity(ent->d_name))
 			continue;
@@ -136,10 +120,7 @@ int publishers_list_alloc(const char *base_dir, struct publisher_entry **out,
 	*out = NULL;
 	*count = 0;
 
-	/*
-	 * One entry is enough to learn how many there are:
-	 * a bounded listing reports the total whether or not it fitted.
-	 */
+	/* a bounded listing still counts them all */
 	ret = publishers_list(base_dir, &probe, 1, &total);
 	if (ret < 0 && ret != -ENOBUFS)
 		return ret;
@@ -150,10 +131,7 @@ int publishers_list_alloc(const char *base_dir, struct publisher_entry **out,
 	if (!list)
 		return -ENOMEM;
 
-	/*
-	 * A profile created since the count makes this -ENOBUFS;
-	 * fail rather than return a short list.
-	 */
+	/* -ENOBUFS here: a profile was created since the count */
 	ret = publishers_list(base_dir, list, total, count);
 	if (ret < 0) {
 		free(list);
@@ -196,7 +174,6 @@ int publisher_anchor_names_another(const char *base_dir, const char *id,
 	if (rc < 0)
 		return rc;
 	if (st.ca_cert[0] == '\0') {
-		/* no anchor recorded: nothing to compare */
 		OPENSSL_cleanse(&st, sizeof(st));
 		return -ENOENT;
 	}
@@ -274,11 +251,7 @@ int publishers_forget(const struct profile_paths *paths)
 			first_error = -errno;
 	}
 
-	/*
-	 * Remove the directory last and only when it is empty:
-	 * something left behind means this host still stores part of that
-	 * publisher's identity, and silent success would say otherwise.
-	 */
+	/* a file left behind is still part of that publisher's identity */
 	if (rmdir(paths->dir) != 0 && errno != ENOENT && !first_error)
 		first_error = -errno;
 

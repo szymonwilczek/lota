@@ -1,11 +1,5 @@
 /* SPDX-License-Identifier: MIT */
 /* Copyright (C) 2026 Szymon Wilczek */
-/*
- * LOTA Agent - Network/TLS client interface
- *
- * Handles communication with remote verifier over TLS.
- */
-
 #ifndef LOTA_NET_H
 #define LOTA_NET_H
 
@@ -17,8 +11,17 @@
 typedef struct ssl_st SSL;
 typedef struct ssl_ctx_st SSL_CTX;
 
-/*
- * Network context - holds TLS connection state
+/**
+ * struct net_context - One TLS client connection.
+ * @ssl_ctx: Context net_context_init() configured.
+ * @ssl: The connection; NULL until net_connect().
+ * @socket_fd: Its socket, or -1.
+ * @connected: Nonzero after net_connect() succeeded.
+ * @server_addr: Host to resolve, also the name checked on the certificate.
+ * @server_port: Port.
+ * @skip_verify: Certificate and hostname checks are off.
+ * @pin_sha256: SHA-256 of the DER certificate the peer must present.
+ * @has_pin: Nonzero when @pin_sha256 is set.
  */
 struct net_context {
 	SSL_CTX *ssl_ctx;
@@ -29,22 +32,32 @@ struct net_context {
 	int server_port;
 	int skip_verify;
 	uint8_t pin_sha256[LOTA_PIN_SHA256_LEN];
-	int has_pin; /* nonzero if pin_sha256 is set */
+	int has_pin;
 };
 
-/*
- * Challenge received from verifier
+/**
+ * struct verifier_challenge - The verifier's challenge, 48 bytes on the wire.
+ * @magic: LOTA_MAGIC.
+ * @version: Protocol version.
+ * @nonce: Nonce to quote over.
+ * @pcr_mask: PCRs to quote.
+ * @flags: LOTA_CHALLENGE_FLAG_* bits.
  */
 struct verifier_challenge {
 	uint32_t magic;
 	uint32_t version;
 	uint8_t nonce[32];
 	uint32_t pcr_mask;
-	uint32_t flags; /* LOTA_CHALLENGE_FLAG_* capability bitmask */
+	uint32_t flags;
 };
 
-/*
- * Result from verifier
+/**
+ * struct verifier_result - The verifier's verdict, 24 bytes on the wire.
+ * @magic: LOTA_MAGIC.
+ * @version: Protocol version.
+ * @result: VERIFY_* code.
+ * @flags: Result flags.
+ * @valid_until: When the verdict expires.
  */
 struct verifier_result {
 	uint32_t magic;
@@ -54,11 +67,11 @@ struct verifier_result {
 	uint64_t valid_until;
 };
 
-/* Result codes.
- * One enumeration with the verifier's (src/verifier/types/report.go):
- * a code this list is missing reaches the host as an unknown error,
- * which is the only account it has of why it stopped attesting.
- * The pair is compared in the build -- see verify_codes_test.go */
+/*
+ * Verdict codes, the same list as src/verifier/types/report.go;
+ * verify_codes_test.go compares the two.
+ * A code missing here reaches the host as "Unknown error".
+ */
 #define VERIFY_OK 0
 #define VERIFY_NONCE_FAIL 1
 #define VERIFY_SIG_FAIL 2
@@ -83,9 +96,9 @@ struct verifier_result {
 #define VERIFY_REPORT_MALFORMED 21
 
 /*
- * LOTA-private transport error codes: POSIX has none for a peer going away.
- * Above glibc's 1..133 and disjoint from the TPM block at 4097; render with
- * net_strerror(). A socket errno, when there is one, is returned instead.
+ * Transport errors no errno names, above the errno range and apart from the
+ * TPM codes at 4097; net_strerror() renders them. A socket errno, when there
+ * is one, is returned instead.
  */
 #define LOTA_ERR_NET_PEER_CLOSED 4353 /* TLS shutdown mid-exchange */
 #define LOTA_ERR_NET_PEER_GONE 4354 /* EOF with no shutdown and no errno */
@@ -94,143 +107,183 @@ struct verifier_result {
 #define LOTA_ERR_NET_TLS_CERT 4357 /* peer certificate failed verification */
 #define LOTA_ERR_NET_TLS_PIN 4358 /* peer certificate is not the pinned one */
 
-/* name of a LOTA-private transport code, NULL for anything else */
+/**
+ * net_err_name() - Describe a LOTA_ERR_NET_* code.
+ * @err: The code, of either sign.
+ *
+ * Return: the sentence, or NULL for any other code.
+ */
 const char *net_err_name(int err);
 
-/* TLS refused (certificates) rather than peer unreachable (address/port) */
+/**
+ * net_err_is_tls() - Whether TLS refused, rather than the peer being
+ * unreachable.
+ * @err: The code, of either sign.
+ *
+ * Return: nonzero for the LOTA_ERR_NET_TLS* codes.
+ */
 int net_err_is_tls(int err);
 
-/* net_err_name(), falling back to strerror() */
+/**
+ * net_strerror() - net_err_name(), falling back to strerror().
+ * @err: The code, of either sign.
+ *
+ * Return: the sentence.
+ */
 const char *net_strerror(int err);
 
-/*
- * net_transport_error - negative errno for a TLS read or write that moved no
- * bytes, from SSL_get_error() @ssl_err and the socket's @sock_errno. Pure.
+/**
+ * net_transport_error() - Map a TLS read or write that moved no bytes.
+ * @ssl_err: SSL_get_error().
+ * @sock_errno: errno after the call.
+ *
+ * Return: -ETIMEDOUT for a socket timeout, the negative @sock_errno,
+ * a negative LOTA_ERR_NET_* code, or -EIO.
  */
 int net_transport_error(int ssl_err, int sock_errno);
 
-/*
- * The likely cause of a connect(2) that was refused, as a sentence the operator
- * can act on, or NULL when there is nothing better to say than the errno.
+/**
+ * net_connect_refusal_hint() - Name the SELinux rule that refused a connect.
+ * @err: connect(2) errno.
+ * @port: Port connected to.
+ * @selinux_root: selinuxfs mount, or NULL for the system one.
+ * @buf: Receives the sentence.
+ * @cap: Size of @buf.
  *
- * Both causes answer EACCES: a port without lota_port_t, or lota_network_attest
- * off. The hint names the one it reads, or both when it
- * reads neither, and is given only while SELinux enforces.
+ * Only EACCES while SELinux enforces. Two rules answer it: a port without
+ * lota_port_t, and lota_network_attest off. The sentence names the one the
+ * boolean points at, or both when the boolean cannot be read.
  *
- * @selinux_root: selinuxfs mount holding enforce and booleans/; NULL for the
- * system one.
- * @buf holds the sentence; the returned pointer is @buf or NULL.
+ * Return: @buf, or NULL when there is no hint or it did not fit.
  */
 const char *net_connect_refusal_hint(int err, int port,
 				     const char *selinux_root, char *buf,
 				     size_t cap);
 
-/*
- * Initialize network subsystem.
- * Must be called once at startup.
+/**
+ * net_init() - Ignore SIGPIPE, so a write to a closed peer fails with EPIPE.
  *
- * Returns: 0 on success, negative errno on failure
+ * A second call does nothing.
+ *
+ * Return: 0, or a negative errno.
  */
 int net_init(void);
 
+/**
+ * net_cleanup() - Let net_init() run again.
+ */
 void net_cleanup(void);
 
-/*
- * Initialize network context for connection.
+/**
+ * net_context_init() - Configure a TLS 1.3 client.
+ * @ctx: Context to fill.
+ * @server: Host name or address.
+ * @port: Port.
+ * @ca_cert_path: Anchor, a CA or the listener's own certificate; NULL for
+ *                the system store.
+ * @skip_verify: Nonzero turns off certificate and hostname checks.
+ * @pin_sha256: SHA-256 of the DER certificate the peer must present, or
+ *              NULL; checked also with @skip_verify.
  *
- * @ctx: Context to initialize
- * @server: Server hostname or IP
- * @port: Server port
- * @ca_cert_path: Path to CA certificate for verification (NULL for system CAs)
- * @skip_verify: If nonzero, disable TLS certificate verification (INSECURE)
- * @pin_sha256: SHA-256 fingerprint of expected server certificate (NULL to
- * skip)
- *
- * By default (ca_cert_path=NULL, skip_verify=0), the system CA certificate
- * store is used to verify the verifier's certificate. Provide ca_cert_path
- * to use a custom CA (for example: self-signed verifier cert).
- * Set skip_verify=1 only for development/testing - this disables all TLS
- * security.
- *
- * If pin_sha256 is non-NULL, the 32-byte SHA-256 fingerprint of the server's
- * DER-encoded certificate is compared after the TLS handshake. The connection
- * is aborted on mismatch. Pinning is enforced regardless of skip_verify to
- * catch MITM even in insecure test setups.
- *
- * Returns: 0 on success, negative errno on failure
+ * Return: 0, -EINVAL when @ca_cert_path does not load, -ENOENT when the
+ * system store does not, or another negative errno.
  */
 int net_context_init(struct net_context *ctx, const char *server, int port,
 		     const char *ca_cert_path, int skip_verify,
 		     const uint8_t *pin_sha256);
 
+/**
+ * net_context_cleanup() - Disconnect and free the TLS context.
+ * @ctx: Context, or NULL.
+ */
 void net_context_cleanup(struct net_context *ctx);
 
-/*
- * Connect to verifier server over TLS.
+/**
+ * net_connect() - Connect, complete the handshake and check the peer.
+ * @ctx: Context from net_context_init().
  *
- * @ctx: Initialized context
- *
- * Returns: 0 on success, negative errno on failure
+ * Return: 0, also when already connected; -EHOSTUNREACH when the name does
+ * not resolve; the connect(2) errno; -LOTA_ERR_NET_TLS_HANDSHAKE,
+ * -LOTA_ERR_NET_TLS_CERT or -LOTA_ERR_NET_TLS_PIN; or another negative
+ * errno.
  */
 int net_connect(struct net_context *ctx);
 
+/**
+ * net_disconnect() - Shut down the TLS session and close the socket.
+ * @ctx: Context, or NULL.
+ */
 void net_disconnect(struct net_context *ctx);
 
-/*
- * Write exactly len bytes over the TLS connection.
+/**
+ * net_write_all() - Write exactly @len bytes.
+ * @ctx: Connected context.
+ * @buf: Bytes.
+ * @len: Length of @buf.
  *
- * Returns: 0 on success, negative errno on failure
+ * Return: 0, or a negative errno or LOTA_ERR_NET_* code.
  */
 int net_write_all(struct net_context *ctx, const void *buf, size_t len);
 
-/*
- * Read exactly len bytes from the TLS connection.
+/**
+ * net_read_full() - Read exactly @len bytes.
+ * @ctx: Connected context.
+ * @buf: Receives the bytes.
+ * @len: Length of @buf.
  *
- * Returns: 0 on success, negative errno on failure (-EIO on short read)
+ * Return: 0, or a negative errno or LOTA_ERR_NET_* code.
  */
 int net_read_full(struct net_context *ctx, void *buf, size_t len);
 
-/*
- * Receive challenge from verifier.
- * Call after connect, before sending report.
+/**
+ * net_recv_challenge() - Read the verifier's challenge.
+ * @ctx: Connected context.
+ * @challenge: Receives it in host byte order.
  *
- * @ctx: Connected context
- * @challenge: Output challenge structure
- *
- * Returns: 0 on success, negative errno on failure
+ * Return: 0, -EPROTO when the magic is wrong, or a negative errno or
+ * LOTA_ERR_NET_* code.
  */
 int net_recv_challenge(struct net_context *ctx,
 		       struct verifier_challenge *challenge);
 
-/*
- * Send attestation report to verifier.
+/**
+ * net_send_report() - Send an attestation report.
+ * @ctx: Connected context.
+ * @report: Packed struct lota_attestation_report.
+ * @report_size: Size of @report.
  *
- * @ctx: Connected context
- * @report: Packed attestation report (lota_attestation_report)
- * @report_size: Size of report in bytes
- *
- * Returns: 0 on success, negative errno on failure
+ * Return: 0, or a negative errno or LOTA_ERR_NET_* code.
  */
 int net_send_report(struct net_context *ctx, const void *report,
 		    size_t report_size);
 
-/*
- * Receive verification result.
+/**
+ * net_recv_result() - Read the verifier's verdict.
+ * @ctx: Connected context.
+ * @result: Receives it in host byte order.
  *
- * @ctx: Connected context
- * @result: Output result structure
- *
- * Returns: 0 on success, negative errno on failure
+ * Return: 0, -EPROTO when the magic is wrong, or a negative errno or
+ * LOTA_ERR_NET_* code.
  */
 int net_recv_result(struct net_context *ctx, struct verifier_result *result);
 
+/**
+ * net_result_str() - The sentence for a verdict code.
+ * @result: VERIFY_* code.
+ *
+ * Return: the sentence; "FAIL - Unknown error" for a code not listed.
+ */
 const char *net_result_str(uint32_t result);
 
-/*
- * The sentence for a verdict on a report that carried @report_flags.
+/**
+ * net_verdict_str() - The sentence for a verdict on a report.
+ * @result: VERIFY_* code.
+ * @report_flags: Flags of the report the verdict answers.
  *
- * Some refusals have more than one cause on the host, and the report the
- * verdict answers says which one this host has.
+ * VERIFY_ENFORCE_REQUIRED has two causes on the host; the
+ * LOTA_REPORT_FLAG_BPF_ACTIVE bit tells them apart.
+ *
+ * Return: the sentence.
  */
 const char *net_verdict_str(uint32_t result, uint32_t report_flags);
 

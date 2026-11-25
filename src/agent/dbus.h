@@ -2,13 +2,8 @@
 /*
  * LOTA Agent - D-Bus Interface
  *
- * Exposes org.lota.Agent1 on the system bus as an alternative
- * to the Unix socket IPC protocol. Desktop environments and
- * non-game tooling can use D-Bus instead of the binary socket protocol.
- *
- * Bus name:   org.lota.Agent1
- * Object:     /org/lota/Agent1
- * Interface:  org.lota.Agent1
+ * org.lota.Agent1 on the system bus: the daemon's state read-only, beside
+ * the Unix socket.
  *
  * Copyright (C) 2026 Szymon Wilczek
  */
@@ -27,78 +22,78 @@ struct ipc_context;
 
 struct dbus_context;
 
-/*
- * dbus_init - Claim bus name and register object on system bus.
- * @ipc: IPC context whose state is exposed read-only via D-Bus.
+/**
+ * dbus_init() - Register the object and claim the bus name.
+ * @ipc: Context whose state the bus exposes.
  *
- * Returns: Allocated context on success, NULL on failure.
- *          Error details are printed to stderr.
+ * Return: the context, or NULL; a bus failure is also logged.
  */
 struct dbus_context *dbus_init(struct ipc_context *ipc);
 
-/*
- * dbus_get_fd - Return the bus connection fd for external poll.
+/**
+ * dbus_get_fd() - The bus connection fd, for epoll.
+ * @ctx: Context, or NULL.
  *
- * Returns: fd >= 0, or -1 if context is NULL / not connected.
+ * Return: the fd, -1 for a NULL @ctx, or a negative errno.
  */
 int dbus_get_fd(struct dbus_context *ctx);
 
-/*
- * dbus_process - Drive the sd-bus event loop.
- * @ctx: D-Bus context.
- * @timeout_us: Max time to wait in microseconds (0 = non-blocking).
+/**
+ * dbus_process() - Handle every pending bus message.
+ * @ctx: Context.
+ * @timeout_us: Then wait up to this long for more; 0 does not wait.
  *
- * Returns: 0 on success, negative errno on fatal error.
+ * Return: 0, or a negative errno; an interrupted wait is 0.
  */
 int dbus_process(struct dbus_context *ctx, uint64_t timeout_us);
 
-/*
- * dbus_emit_status_changed - Emit StatusChanged signal.
- * @ctx:   D-Bus context.
- * @flags: New LOTA_STATUS_* bitmask.
+/**
+ * dbus_emit_status_changed() - Emit StatusChanged and the status properties.
+ * @ctx: Context, or NULL.
+ * @flags: The signal's argument.
  */
 void dbus_emit_status_changed(struct dbus_context *ctx, uint32_t flags);
 
-/*
- * dbus_emit_attestation_result - Emit AttestationResult signal.
- * @ctx:     D-Bus context.
- * @success: true if attestation passed.
+/**
+ * dbus_emit_attestation_result() - Emit AttestationResult and the round's
+ * properties.
+ * @ctx: Context, or NULL.
+ * @success: The round passed.
  */
 void dbus_emit_attestation_result(struct dbus_context *ctx, bool success);
 
-/*
- * dbus_emit_mode_changed - Emit ModeChanged signal.
- * @ctx:  D-Bus context.
- * @mode: New lota_mode value.
+/**
+ * dbus_emit_mode_changed() - Emit ModeChanged and the Mode property.
+ * @ctx: Context, or NULL.
+ * @mode: lota_mode value.
  */
 void dbus_emit_mode_changed(struct dbus_context *ctx, uint8_t mode);
 
-/*
- * dbus_emit_rotation_changed - Emit PropertiesChanged for the AIK rotation
- * properties so subscribers refresh rotation state without polling.
- * @ctx: D-Bus context.
+/**
+ * dbus_emit_rotation_changed() - Emit PropertiesChanged for the AIK rotation
+ * properties.
+ * @ctx: Context, or NULL.
  */
 void dbus_emit_rotation_changed(struct dbus_context *ctx);
 
-/*
- * dbus_status_word - the status word this interface answers with
+/**
+ * dbus_status_word() - The status word GetStatus() and StatusFlags answer.
+ * @ipc: Context, or NULL for 0.
  *
- * Both GetStatus() and the StatusFlags property answer it,
- * so the bus has one word.
+ * Return: ipc_host_status_flags().
  */
 uint32_t dbus_status_word(const struct ipc_context *ipc);
 
-/*
- * dbus_version_string - what org.lota.Agent1.Version answers
+/**
+ * dbus_version_string() - What the Version property answers.
  *
- * A client that version-gates on the bus reads this and nothing else,
- * so it has to name a build a host can check against what it has installed.
+ * Return: LOTA_BUILD_VERSION_STRING.
  */
 const char *dbus_version_string(void);
 
-/*
- * dbus_cleanup - Release bus name and free context.
- * @ctx: Context from dbus_init (NULL-safe).
+/**
+ * dbus_cleanup() - Release the bus name and free the context.
+ * @ctx: Context, or NULL.
  */
 void dbus_cleanup(struct dbus_context *ctx);
 

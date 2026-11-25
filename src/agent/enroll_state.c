@@ -1,12 +1,9 @@
 /* SPDX-License-Identifier: MIT */
 /* Copyright (C) 2026 Szymon Wilczek */
 /*
- * LOTA enrollment state - persist the CA endpoint a host last enrolled
- * against and the AIK generation the issued certificate is bound to.
+ * LOTA enrollment state - struct enroll_state on disk.
  *
- * Self-contained file I/O so it stays unit-testable apart from the TPM and
- * network stack the enrollment ceremony pulls in. The record is same-host
- * state written behind a magic/version guard; see struct enroll_state.
+ * No TPM or network code, so test_enroll_state links this file alone.
  */
 
 #include <errno.h>
@@ -21,7 +18,6 @@
 
 #include "enroll.h"
 
-/* Write a file atomically: write a temp file, fsync, then rename. */
 static int state_write_atomic(const char *path, const void *data, size_t len,
 			      mode_t mode)
 {
@@ -76,8 +72,6 @@ int enroll_state_save_path(const char *path, const struct enroll_state *st)
 	on_disk = *st;
 	on_disk.magic = LOTA_ENROLL_STATE_MAGIC;
 	on_disk.version = LOTA_ENROLL_STATE_VERSION;
-	/* endpoint, not a secret, but it pins the CA the host re-enrolls to;
-	 * keep it root-only */
 	return state_write_atomic(path, &on_disk, sizeof(on_disk), 0600);
 }
 
@@ -92,7 +86,7 @@ int enroll_state_load_path(const char *path, struct enroll_state *out)
 
 	fd = open(path, O_RDONLY | O_CLOEXEC);
 	if (fd < 0)
-		return -errno; /* -ENOENT when the host has never enrolled */
+		return -errno;
 
 	memset(&st, 0, sizeof(st));
 	n = read(fd, &st, sizeof(st));
@@ -100,16 +94,15 @@ int enroll_state_load_path(const char *path, struct enroll_state *out)
 	if (n < 0)
 		return -errno;
 	if ((size_t)n < offsetof(struct enroll_state, aik_generation))
-		return -EIO; /* too short to carry even a magic and a version */
+		return -EIO;
 	if (st.magic != LOTA_ENROLL_STATE_MAGIC)
-		return -EINVAL; /* not an enrollment record at all */
+		return -EINVAL;
 	/* version before length: another version has its own length */
 	if (st.version != LOTA_ENROLL_STATE_VERSION)
-		return -ENOTSUP; /* a version this build does not read */
+		return -ENOTSUP;
 	if ((size_t)n != sizeof(st))
-		return -EIO; /* shorter than the record it claims to be */
+		return -EIO;
 
-	/* NUL-terminate the string fields defensively before use */
 	st.ca_server[sizeof(st.ca_server) - 1] = '\0';
 	st.ca_cert[sizeof(st.ca_cert) - 1] = '\0';
 	st.enroll_token[sizeof(st.enroll_token) - 1] = '\0';
@@ -117,10 +110,7 @@ int enroll_state_load_path(const char *path, struct enroll_state *out)
 	return 0;
 }
 
-/*
- * Read the two fields every record version starts with, for a diagnostic.
- * Kept out of the loader so a refused record can never be acted on.
- */
+/* apart from the loader, so a refused record is never acted on */
 int enroll_state_peek(const char *path, uint32_t *out_magic,
 		      uint32_t *out_version)
 {
@@ -158,13 +148,6 @@ int enroll_renew_anchor(const char *configured, const char *recorded,
 
 	*out = NULL;
 
-	/*
-	 * Configured anchor is the one the profile was derived from,
-	 * so it names the same publisher as the recorded path and is
-	 * the one the daemon is guaranteed to be able to open:
-	 * the recorded path may be a staging directory an installer used,
-	 * or anything under a /tmp the unit's sandbox replaces
-	 */
 	if (configured && configured[0]) {
 		*out = configured;
 		return 0;

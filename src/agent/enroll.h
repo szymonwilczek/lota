@@ -3,9 +3,8 @@
 /*
  * LOTA attestation-CA enrollment client.
  *
- * Drives the agent side of the credential-activation ceremony: send the
- * EK certificate and AIK template, activate the returned credential in
- * the TPM, and persist the issued AIK certificate.
+ * Sends the EK certificate and the AIK public area, activates the credential
+ * the CA returns, and stores the issued AIK certificate.
  */
 
 #ifndef LOTA_AGENT_ENROLL_H
@@ -24,32 +23,30 @@
 
 struct tpm_context;
 
-/*
- * AIK certificate and the enrollment record live inside the publisher profile
- * the CA trust anchor names -- see profile.h
- * Host that enrolls with two publishers keeps two of each and one AIK per
- * publisher, so the two cannot correlate the machine between them.
- */
 #define LOTA_ENROLL_STATE_MAGIC 0x4C455354 /* "LEST" */
 #define LOTA_ENROLL_STATE_VERSION 1
 
-/*
- * Enrollment state: the CA endpoint a successful enrollment used plus the
- * AIK generation the issued certificate is bound to. Same-host state, so it
- * is stored in native byte order behind a magic/version guard. It lets
- * --reenroll reuse the endpoint with no re-typed CA arguments, and lets the
- * daemon tell when a local AIK rotation has outdated the stored certificate.
+/**
+ * struct enroll_state - What the last successful enrollment of a profile used.
+ * @magic: LOTA_ENROLL_STATE_MAGIC.
+ * @version: LOTA_ENROLL_STATE_VERSION.
+ * @aik_generation: AIK generation the certificate was issued for; the daemon
+ *	reports re-enrollment required when the AIK's differs.
+ * @ca_port: CA port.
+ * @no_verify_tls: TLS verification was skipped.
+ * @has_pin: @pin_sha256 is set.
+ * @pin_sha256: The pin net_context_init() takes.
+ * @ca_server: CA host.
+ * @ca_cert: CA trust anchor path.
+ * @_reserved: Zero.
+ * @enroll_token: Enrollment token, presented again by --reenroll and renewal.
  *
- * The enrollment token lets --reenroll and automatic certificate renewal keep
- * presenting it.
- * Loader requires the current record: a short or foreign one is refused, never
- * re-enrolled over.
- * Record is root-only 0600: the token is tenant-admission secret.
+ * Written in native byte order, mode 0600: the token is a secret.
  */
 struct enroll_state {
 	uint32_t magic;
 	uint32_t version;
-	uint64_t aik_generation; /* AIK generation the stored cert was issued for */
+	uint64_t aik_generation;
 	int32_t ca_port;
 	int32_t no_verify_tls;
 	int32_t has_pin;
@@ -60,24 +57,45 @@ struct enroll_state {
 	char enroll_token[LOTA_ENROLL_MAX_TOKEN + 1];
 } __attribute__((packed));
 
+/**
+ * enroll_state_save_path() - Write @st to @path through a fsynced temp file.
+ * @path: Record path.
+ * @st: Record; magic and version are set on the copy written.
+ *
+ * Return: 0 or a negative errno.
+ */
 int enroll_state_save_path(const char *path, const struct enroll_state *st);
 
-/*
- * Returns 0 or:
- *   -ENOENT   no file: never enrolled
- *   -ENOTSUP  unknown version
- *   -EIO      short record
- *   -EINVAL   not an enrollment record, or a bad argument
+/**
+ * enroll_state_load_path() - Read the record at @path.
+ * @path: Record path.
+ * @out: Record, with its strings NUL-terminated.
  *
- * Only -ENOENT means no record; check enroll_state_record_present() before
- * enrolling, or a live certificate is overwritten.
+ * Return: 0, -ENOENT when there is no file, -EINVAL for a foreign magic
+ * or a NULL argument, -ENOTSUP for another version, -EIO for a short record,
+ * or the open() or read() errno.
  */
 int enroll_state_load_path(const char *path, struct enroll_state *out);
 
-/* 1 if a record is on disk (readable or not) for this load result, else 0 */
+/**
+ * enroll_state_record_present() - Whether a record is on disk.
+ * @load_rc: enroll_state_load_path() result.
+ *
+ * A record that does not load still holds an endpoint; enrolling over it
+ * loses that.
+ *
+ * Return: 0 for -ENOENT, 1 otherwise.
+ */
 int enroll_state_record_present(int load_rc);
 
-/* magic + version of a refused record, for the refusal; 0 or -errno */
+/**
+ * enroll_state_peek() - Read the magic and version of a refused record.
+ * @path: Record path.
+ * @out_magic: First word.
+ * @out_version: Second word.
+ *
+ * Return: 0, -EIO when both cannot be read, -EINVAL, or the open() errno.
+ */
 int enroll_state_peek(const char *path, uint32_t *out_magic,
 		      uint32_t *out_version);
 
@@ -97,46 +115,50 @@ struct enroll_result {
 	char device_id[LOTA_ENROLL_MAX_DEVICE_ID + 1];
 };
 
-/*
- * One certificate inside a chain the platform hands over:
- * a view into the caller's buffer, so a chain costs no second allocation
+/**
+ * struct enroll_cert_ref - One DER certificate inside a caller's buffer.
+ * @der: First byte.
+ * @len: Length.
  */
 struct enroll_cert_ref {
 	const uint8_t *der;
 	size_t len;
 };
 
-/*
- * Split a concatenated DER certificate blob into its elements.
+/**
+ * enroll_split_cert_chain() - Split certificates laid end to end.
+ * @blob: The certificates, as tpm_get_ek_cert_chain() reads them.
+ * @len: Length of @blob.
+ * @out: One entry per certificate, pointing into @blob.
+ * @out_max: Entries in @out.
+ * @out_count: Entries filled.
  *
- * TPM stores its manufacturer intermediates as one NV blob with the certificates
- * laid end to end and no framing of its own, so the elements are found by walking
- * the ASN.1 SEQUENCE headers.
+ * The walk stops without error at the first bytes that are not a
+ * definite-length SEQUENCE within LOTA_ENROLL_MAX_EK_CERT, or past
+ * LOTA_ENROLL_MAX_EK_CHAIN_BYTES, so padding after the last one ends the list;
+ * it also stops when @out is full.
  *
- * The blob is vendor data the host does not control, so the walk is lenient:
- * it ends at the first bytes that do not begin a certificate this wire can carry,
- * which is what turns trailing NV padding into the end of the list instead of
- * a failed read. A blob that yields nothing is not an error -- the enrollment
- * proceeds on the leaf alone.
- *
- * Returns 0 and the element count, or -EINVAL on a NULL argument.
+ * Return: 0, or -EINVAL for a NULL argument.
  */
 int enroll_split_cert_chain(const uint8_t *blob, size_t len,
 			    struct enroll_cert_ref *out, size_t out_max,
 			    size_t *out_count);
 
-/*
- * Wire codec. Encoders return the body length written or negative errno;
- * decoders return 0 or negative errno. The encoded body excludes the
- * outer u32 frame length, which the transport adds.
+/**
+ * enroll_encode_begin() - Encode the begin request.
+ * @out: Body buffer; the frame length is added by the sender.
+ * @out_max: Size of @out.
+ * @ek_cert: EK certificate.
+ * @ek_cert_len: Length of @ek_cert.
+ * @aik_public: AIK TPMT_PUBLIC.
+ * @aik_public_len: Length of @aik_public.
+ * @token: Enrollment token, or NULL.
+ * @token_len: Length of @token; 0 writes an empty field.
+ * @ek_chain: Manufacturer intermediates, or NULL.
+ * @ek_chain_len: Entries in @ek_chain; 0 writes a count of zero.
  *
- * Begin writes every field; token and ek_chain change only lengths.
- *
- * Token names the device's tenant at the CA (the gaming path);
- * NULL or empty writes length zero.
- *
- * ek_chain: manufacturer intermediates between the leaf and a root the CA
- * pins, as stored on the chip; NULL or empty writes count zero.
+ * Return: Body length, -EINVAL, -EMSGSIZE for a field over its limit,
+ * or -ENOSPC when @out is too small.
  */
 ssize_t enroll_encode_begin(uint8_t *out, size_t out_max,
 			    const uint8_t *ek_cert, size_t ek_cert_len,
@@ -145,64 +167,118 @@ ssize_t enroll_encode_begin(uint8_t *out, size_t out_max,
 			    const struct enroll_cert_ref *ek_chain,
 			    size_t ek_chain_len);
 
-/*
- * Read an enrollment token from a file into out (NUL-terminated).
- * out_size must be at least LOTA_ENROLL_MAX_TOKEN + 1.
- * Trailing whitespace is trimmed; the rest must be 1..LOTA_ENROLL_MAX_TOKEN
- * printable, non-whitespace ASCII characters so the secret survives
- * trailing-newline write and a shell round-trip unchanged.
- * Returns 0 or negative errno (-EMSGSIZE oversized, -EINVAL empty or malformed).
+/**
+ * enroll_token_from_file() - Read an enrollment token.
+ * @path: Token file.
+ * @out: The token, NUL-terminated.
+ * @out_size: At least LOTA_ENROLL_MAX_TOKEN + 1.
+ *
+ * Trailing spaces, tabs, CR and LF are trimmed; what remains must be 1 to
+ * LOTA_ENROLL_MAX_TOKEN printable ASCII characters other than space.
+ *
+ * Return: 0, -EMSGSIZE when longer, -EINVAL when empty, malformed or for a bad
+ * argument, or the open() or read() errno.
  */
 int enroll_token_from_file(const char *path, char *out, size_t out_size);
+
+/**
+ * enroll_encode_complete() - Encode the complete request.
+ * @out: Body buffer.
+ * @out_max: Size of @out.
+ * @session_id: Session from the challenge.
+ * @secret: Activated credential secret.
+ * @secret_len: Length of @secret.
+ *
+ * Return: Body length, -EINVAL, -EMSGSIZE or -ENOSPC.
+ */
 ssize_t enroll_encode_complete(uint8_t *out, size_t out_max,
 			       const char *session_id, const uint8_t *secret,
 			       size_t secret_len);
+
+/**
+ * enroll_decode_challenge() - Decode the challenge reply.
+ * @body: Frame body.
+ * @len: Length of @body.
+ * @out: Reply; zeroed first.
+ *
+ * Return: 0, -EPROTO for a foreign magic, -EPROTONOSUPPORT for another
+ * version, -EMSGSIZE for a field over its limit, -EBADMSG for a short body
+ * or trailing bytes, or -EINVAL.
+ */
 int enroll_decode_challenge(const uint8_t *body, size_t len,
 			    struct enroll_challenge *out);
+
+/**
+ * enroll_decode_result() - Decode the result reply.
+ * @body: Frame body.
+ * @len: Length of @body.
+ * @out: Reply; zeroed first.
+ *
+ * Return: As enroll_decode_challenge().
+ */
 int enroll_decode_result(const uint8_t *body, size_t len,
 			 struct enroll_result *out);
 
-/*
- * lota_enroll_status_text - the operator-facing sentence for a reply status
- * @status: the status a CA sent on the challenge or the completion reply
+/**
+ * lota_enroll_status_text() - Explain a refusal the CA sent.
+ * @status: Status of the challenge or the result reply.
  *
- * Returns a sentence naming what was refused and what to do,
- * or NULL for a status this build does not know -- a CA newer than this agent.
- * The caller prints the number in that case, and says that is what it is.
+ * Return: What was refused and what to do, or NULL for
+ * LOTA_ENROLL_STATUS_OK and for a status this build does not know.
  */
 const char *lota_enroll_status_text(unsigned int status);
 
-/*
- * Run one enrollment against the CA at server:port and write the issued
- * AIK certificate to out_cert_path.
- * token is the optional per-tenant enrollment token presented with the begin
- * request (NULL = none).
- * TPM context must already have a provisioned AIK.
- * Returns 0 on success, negative errno on failure.
+/**
+ * enroll_to_ca() - Run one enrollment and store the issued AIK certificate.
+ * @tpm: TPM holding the AIK to certify.
+ * @server: CA host.
+ * @port: CA port.
+ * @ca_cert: CA trust anchor.
+ * @skip_verify: Skip TLS verification.
+ * @pin: Pin for net_context_init(), or NULL.
+ * @token: Enrollment token, or NULL.
+ * @out_cert_path: Where the certificate is written.
+ *
+ * Return: 0, -EACCES when the CA refuses, or another negative errno.
  */
 int enroll_to_ca(struct tpm_context *tpm, const char *server, int port,
 		 const char *ca_cert, int skip_verify, const uint8_t *pin,
 		 const char *token, const char *out_cert_path);
 
-/*
- * Top-level --enroll handler: bring up the TPM, provision the AIK, run
- * one enrollment against the CA, and store the issued certificate in the profile
- * ca_cert names.
- * ca_cert is required -- it is the profile's identity, not only verification input.
- * token_file optionally names file holding the enrollment token to present
- * (--enroll-token-file).
- * Returns 0 on success, negative errno on failure.
+/**
+ * do_enroll() - Enroll: --enroll.
+ * @server: CA host.
+ * @port: CA port.
+ * @ca_cert: CA trust anchor; required, it names the profile.
+ * @skip_verify: Skip TLS verification.
+ * @pin: Pin for net_context_init(), or NULL.
+ * @token_file: --enroll-token-file, or NULL.
+ *
+ * Records consent, provisions the profile's AIK, enrolls, and records the
+ * endpoint for --reenroll and renewal.
+ *
+ * Return: exit code 0 or 1.
  */
 int do_enroll(const char *server, int port, const char *ca_cert,
 	      int skip_verify, const uint8_t *pin, const char *token_file);
 
-/* Endpoint a re-enrollment dials */
+/**
+ * enum enroll_endpoint_source - Where the endpoint --reenroll dials comes from.
+ * @ENROLL_ENDPOINT_FROM_RECORD: nothing named on the command line.
+ * @ENROLL_ENDPOINT_FROM_COMMAND_LINE: a host, a port or both named.
+ */
 enum enroll_endpoint_source {
-	ENROLL_ENDPOINT_FROM_RECORD, /* nothing named on the command line */
-	ENROLL_ENDPOINT_FROM_COMMAND_LINE, /* a host, a port or both named */
+	ENROLL_ENDPOINT_FROM_RECORD,
+	ENROLL_ENDPOINT_FROM_COMMAND_LINE,
 };
 
-/* @given_server: --ca-server or NULL; @given_port: --ca-port or 0 */
+/**
+ * enroll_endpoint_source() - Where the endpoint comes from.
+ * @given_server: --ca-server, or NULL.
+ * @given_port: --ca-port, or 0.
+ *
+ * Return: ENROLL_ENDPOINT_FROM_COMMAND_LINE when either is given.
+ */
 static inline enum enroll_endpoint_source
 enroll_endpoint_source(const char *given_server, int given_port)
 {
@@ -211,120 +287,138 @@ enroll_endpoint_source(const char *given_server, int given_port)
 		       ENROLL_ENDPOINT_FROM_RECORD;
 }
 
-/* Per field: one not given keeps the record's */
+/**
+ * enroll_endpoint_server() - CA host to dial.
+ * @recorded_server: Host in the record.
+ * @given_server: --ca-server, or NULL.
+ *
+ * Return: @given_server when set, else @recorded_server.
+ */
 static inline const char *enroll_endpoint_server(const char *recorded_server,
 						 const char *given_server)
 {
 	return given_server && given_server[0] ? given_server : recorded_server;
 }
 
+/**
+ * enroll_endpoint_port() - CA port to dial.
+ * @recorded_port: Port in the record.
+ * @given_port: --ca-port, or 0.
+ *
+ * Return: @given_port when positive, else @recorded_port.
+ */
 static inline int enroll_endpoint_port(int recorded_port, int given_port)
 {
 	return given_port > 0 ? given_port : recorded_port;
 }
 
-/*
- * Guided re-enrollment:
- * Reuse the endpoint recorded by the last successful --enroll against the same
- * CA trust anchor, run fresh credential activation, and refresh the certificate
- * and recorded state.
+/**
+ * do_reenroll() - Enroll again with the recorded endpoint: --reenroll.
+ * @ca_cert: CA trust anchor; it selects the record.
+ * @ca_server: Host overriding the record, or NULL.
+ * @ca_port: Port overriding the record, or 0.
  *
- * ca_server and ca_port override the recorded endpoint unless NULL / 0.
- * Returns 0 on success, 1 on failure.
+ * TLS, pin and token come from the record. A record that does not load is
+ * refused, not enrolled over.
+ *
+ * Return: exit code 0 or 1.
  */
 int do_reenroll(const char *ca_cert, const char *ca_server, int ca_port);
 
-/*
- * Daemon-side certificate renewal:
- * Reuse the endpoint recorded in the given profile and run fresh credential
- * activation against the CA using the already-provisioned AIK in tpm,
- * refreshing the profile's certificate and recorded generation.
+/**
+ * enroll_renew_cert() - Renew a profile's certificate from inside the daemon.
+ * @tpm: Initialised TPM holding the profile's AIK.
+ * @paths: Profile.
+ * @configured_ca_cert: Anchor the configuration names, or NULL.
  *
- * Caller owns TPM and network initialization (unlike do_reenroll, this does not
- * bring up the TPM or the global net layer).
- * Returns 0 on success, or negative errno on failure:
- * -ENOENT when the profile has no recorded endpoint, so the caller can disable
- * auto-renewal.
+ * Enrolls with the recorded endpoint and the anchor enroll_renew_anchor()
+ * picks. The caller has initialised the net layer.
+ *
+ * Return: 0, -EINVAL for a NULL argument, an enroll_state_load_path() error
+ * (-ENOENT: never enrolled), -ENOENT when no anchor is configured or
+ * recorded, or an enroll_to_ca() error.
  */
 int enroll_renew_cert(struct tpm_context *tpm,
 		      const struct profile_paths *paths,
 		      const char *configured_ca_cert);
 
-/*
- * Which CA trust anchor a renewal presents.
+/**
+ * enroll_renew_anchor() - Pick the anchor a renewal presents.
+ * @configured: Anchor the configuration names, or NULL.
+ * @recorded: Anchor in the record, or NULL.
+ * @out: One of the two.
  *
- * configured is the anchor this profile is configured with and recorded is
- * the one stored when it enrolled.  Both name the same publisher, since the
- * profile is derived from the anchor, so the choice is about which path is
- * still openable: the daemon's sandbox gives it its own /tmp and /var/tmp,
- * and an enrollment driven from a staging directory records a path that is
- * not there for it.
+ * Both name the profile's publisher; @recorded may be a path the daemon's
+ * private /tmp hides, so @configured wins.
  *
- * Returns 0 and points *out at the anchor to use, or -ENOENT when neither is
- * set, or -EINVAL for a NULL out.
- *
- * *out points into one of the arguments and lives as long as it does.
+ * Return: 0, -ENOENT when both are empty, or -EINVAL for a NULL @out.
  */
 int enroll_renew_anchor(const char *configured, const char *recorded,
 			const char **out);
 
-/*
- * Record that somebody on this machine agreed to answer to a publisher,
- * named by the hex SHA-256 of its CA trust anchor's SubjectPublicKeyInfo.
+/**
+ * do_allow_publisher() - Record consent to a publisher: --allow-publisher.
+ * @profile_id: Hex SHA-256 of the publisher's anchor SubjectPublicKeyInfo.
  *
- * Nothing enrolls without this: AIK is stable handle a publisher can recognise
- * the machine by, so the decision to hand one out is the player's (or the operator's)
- * and is recorded before the key exists.
- * Whatever shows the player what publisher would learn calls this when they accept.
+ * The daemon does not enroll a profile without it.
  *
- * Returns 0 on success, 1 on failure (one-shot CLI mode).
+ * Return: exit code 0, also when already recorded, or 1.
  */
 int do_allow_publisher(const char *profile_id);
 
-/*
- * Write a publisher's [profile] section into lota.conf.
- * Records no consent -- that stays a separate act by the person at the machine.
+/**
+ * do_add_publisher() - Append a [profile] section: --add-publisher.
+ * @config_path: Configuration file, or NULL for LOTA_CONFIG_DEFAULT_PATH.
+ * @name: Label, or NULL for one from the identity.
+ * @ca_server: CA host.
+ * @ca_port: CA port, or 0 for LOTA_DEFAULT_CA_PORT.
+ * @ca_cert: CA trust anchor.
+ * @verifier: Verifier host; NULL or empty writes a token-only publisher.
+ * @verifier_port: Verifier port, or 0 for LOTA_DEFAULT_VERIFIER_PORT.
+ * @interval: Attestation interval.
+ * @session_gated: Attest only while a title holds a session.
  *
- * @verifier NULL or empty writes the publisher who runs none, so the caller
- * has to pass what was named.
+ * Records no consent.
+ *
+ * Return: exit code 0, also when the publisher is already configured, or 1.
  */
 int do_add_publisher(const char *config_path, const char *name,
 		     const char *ca_server, int ca_port, const char *ca_cert,
 		     const char *verifier, int verifier_port, int interval,
 		     bool session_gated);
 
-/*
- * Show every publisher this host stores anything for, and what it stores.
- * Returns 0 on success, 1 on failure (one-shot CLI mode).
+/**
+ * do_list_publishers() - List every profile on disk: --list-publishers.
+ *
+ * Return: exit code 0 or 1.
  */
 int do_list_publishers(void);
 
-/*
- * Take publisher back: destroy the AIK they can recognise this machine by,
- * delete their enrollment, certificate and consent, and leave nothing that
- * could hand them the same identity again.
+/**
+ * do_forget_publisher() - Remove a profile: --forget-publisher.
+ * @profile_id: Hex identity, as do_allow_publisher() takes.
  *
- * A profile still configured in lota.conf will enroll again
- * -- with a *new* key -- the next time a title of theirs runs and somebody
- * agrees to it, which is the point: forgetting is about the identity,
- * not about refusing the publisher forever.
+ * Evicts the profile's AIK unless another object holds its handle, then
+ * removes the profile directory. A configured profile enrolls again only with
+ * new consent and a new key.
  *
- * Returns 0 on success, 1 on failure (one-shot CLI mode).
+ * Return: exit code 0 or 1; nothing is removed when the key cannot be checked
+ * or evicted.
  */
 int do_forget_publisher(const char *profile_id);
 
-/*
- * First enrollment for a publisher, from inside a running agent.
+/**
+ * enroll_profile_now() - First enrollment from inside the daemon.
+ * @tpm: Initialised TPM with the profile bound.
+ * @paths: Profile; its directory is created.
+ * @ca_server: CA host.
+ * @ca_port: CA port.
+ * @ca_cert: CA trust anchor.
  *
- * Same ceremony as --enroll, minus the process-level bring-up:
- * the caller already holds an initialised TPM with the profile bound
- * and initialised net layer, which is what makes this callable from attestation
- * loop when a title asks for a publisher this host has never enrolled with.
+ * Enrolls with TLS verified, no pin and no token, and records the endpoint.
+ * The caller has initialised the net layer.
  *
- * Creates the profile directory, stores the issued certificate in it
- * and records the endpoint, so later renewal needs no arguments.
- *
- * Returns 0 on success, or a negative errno.
+ * Return: 0 or a negative errno.
  */
 int enroll_profile_now(struct tpm_context *tpm,
 		       const struct profile_paths *paths, const char *ca_server,

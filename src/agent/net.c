@@ -2,8 +2,6 @@
 /*
  * LOTA Agent - Network/TLS client implementation
  *
- * Uses OpenSSL for TLS 1.3 communication with verifier.
- *
  * Copyright (C) 2026 Szymon Wilczek
  */
 
@@ -36,21 +34,12 @@
 #include "journal.h"
 #include "lota.h"
 
-/* TLS socket I/O timeout */
 #define NET_IO_TIMEOUT_SEC 30
 
-/* Where the kernel publishes SELinux state.
- * Read directly, so the agent needs no libselinux at link time */
+/* read directly: the agent does not link libselinux */
 #define NET_SELINUX_ROOT "/sys/fs/selinux"
-/* The tunable that decides whether the agent's domain may reach the network
- * at all; selinux/README.rst documents it as an operator's switch */
 #define NET_ATTEST_BOOLEAN "lota_network_attest"
 
-/*
- * Wire-format size assertions.
- * Protocol sends these structures as flat byte arrays; any compiler
- * padding would silently break the protocol
- */
 _Static_assert(sizeof(struct verifier_challenge) == 48,
 	       "verifier_challenge must be 48 bytes on wire");
 _Static_assert(sizeof(struct verifier_result) == 24,
@@ -58,11 +47,7 @@ _Static_assert(sizeof(struct verifier_result) == 24,
 
 static int ssl_initialized = 0;
 
-/*
- * Ensure runtime sockets do not alias standard descriptors (0/1/2).
- * Avoids fd confusion if stdio was closed earlier and socket()
- * reused one of those descriptor numbers.
- */
+/* with stdio closed, socket() can hand out 0, 1 or 2 */
 static int normalize_socket_fd(int fd)
 {
 	if (fd < 0)
@@ -107,10 +92,6 @@ int net_transport_error(int ssl_err, int sock_errno)
 	}
 }
 
-/*
- * Wait for SSL socket to become ready using poll().
- * Prevents busy-waiting on SSL_ERROR_WANT_READ/WRITE.
- */
 static int ssl_wait(SSL *ssl, int event)
 {
 	int fd = SSL_get_fd(ssl);
@@ -131,7 +112,6 @@ static int ssl_wait(SSL *ssl, int event)
 	else
 		return -EINVAL;
 
-	/* wait with timeout */
 	ret = poll(&pfd, 1, NET_IO_TIMEOUT_SEC * 1000);
 	if (ret == 0)
 		return -ETIMEDOUT;
@@ -201,12 +181,6 @@ int net_context_init(struct net_context *ctx, const char *server, int port,
 	SSL_CTX_set_min_proto_version(ssl_ctx, TLS1_3_VERSION);
 
 	if (skip_verify) {
-		/*
-		 * INSECURE: Skip all certificate verification.
-		 * This makes the connection vulnerable to MITM attacks.
-		 * Intended only for development/testing with self-signed certs
-		 * when the CA certificate is not available.
-		 */
 		lota_warn(
 			"TLS certificate verification DISABLED (--no-verify-tls)");
 		lota_warn("Connection is vulnerable to MITM attacks!");
@@ -229,11 +203,6 @@ int net_context_init(struct net_context *ctx, const char *server, int port,
 					    X509_V_FLAG_PARTIAL_CHAIN);
 		SSL_CTX_set_verify(ssl_ctx, SSL_VERIFY_PEER, NULL);
 	} else {
-		/*
-		 * No custom CA - use system default certificate store.
-		 * This verifies the verifier's certificate against trusted
-		 * system CAs.
-		 */
 		if (SSL_CTX_set_default_verify_paths(ssl_ctx) != 1) {
 			lota_err("Failed to load system CA certificates. "
 				 "Use --ca-cert to specify verifier's CA "
@@ -277,7 +246,6 @@ int net_connect(struct net_context *ctx)
 	if (ctx->connected)
 		return 0;
 
-	/* resolve server address */
 	memset(&hints, 0, sizeof(hints));
 	hints.ai_family = AF_UNSPEC;
 	hints.ai_socktype = SOCK_STREAM;
@@ -317,8 +285,7 @@ int net_connect(struct net_context *ctx)
 		ret = connect(sock, rp->ai_addr, rp->ai_addrlen);
 		last_errno = errno;
 		if (ret == 0) {
-			/* immediate success */
-			fcntl(sock, F_SETFL, flags); /* restore blocking */
+			fcntl(sock, F_SETFL, flags);
 			break;
 		}
 
@@ -341,7 +308,6 @@ int net_connect(struct net_context *ctx)
 					    err != 0)
 						last_errno = err;
 					if (err == 0) {
-						/* connected successfully */
 						close(epfd);
 						fcntl(sock, F_SETFL,
 						      flags); /* restore
@@ -365,11 +331,7 @@ int net_connect(struct net_context *ctx)
 		const char *cause = net_connect_refusal_hint(
 			last_errno, ctx->server_port, NULL, hint, sizeof(hint));
 
-		/*
-		 * Caller renders the errno, which for a refusal by the policy
-		 * is "Permission denied" against a server that is running.
-		 * Say the rest here, where the port is known.
-		 */
+		/* the caller prints only the errno; the port is known here */
 		if (cause)
 			lota_err("Cannot reach %s:%d. %s", ctx->server_addr,
 				 ctx->server_port, cause);
@@ -395,10 +357,6 @@ int net_connect(struct net_context *ctx)
 	SSL_set_fd(ssl, sock);
 	SSL_set_tlsext_host_name(ssl, ctx->server_addr);
 
-	/*
-	 * Hostname verification: ensure the certificate CN or SAN matches
-	 * the server that is intended to connect to.
-	 */
 	if (!ctx->skip_verify) {
 		if (SSL_set1_host(ssl, ctx->server_addr) != 1) {
 			lota_err("Failed to set hostname verification for: %s",
@@ -410,7 +368,6 @@ int net_connect(struct net_context *ctx)
 		}
 	}
 
-	/* TLS handshake */
 	ret = SSL_connect(ssl);
 	if (ret != 1) {
 		int ssl_err = SSL_get_error(ssl, ret);
@@ -448,9 +405,6 @@ int net_connect(struct net_context *ctx)
 		}
 	}
 
-	/*
-	 * Post-handshake certificate verification.
-	 */
 	if (!ctx->skip_verify) {
 		long verify_result = SSL_get_verify_result(ssl);
 		if (verify_result != X509_V_OK) {
@@ -466,7 +420,6 @@ int net_connect(struct net_context *ctx)
 			return -LOTA_ERR_NET_TLS_CERT;
 		}
 
-		/* verify server presented a certificate */
 		X509 *peer_cert = SSL_get1_peer_certificate(ssl);
 		if (!peer_cert) {
 			lota_err("Verifier did not present a TLS certificate");
@@ -479,10 +432,6 @@ int net_connect(struct net_context *ctx)
 		X509_free(peer_cert);
 	}
 
-	/*
-	 * Certificate pinning: compute SHA-256 fingerprint of the server's
-	 * DER-encoded certificate and compare against the expected pin.
-	 */
 	if (ctx->has_pin) {
 		X509 *peer_cert = SSL_get1_peer_certificate(ssl);
 		if (!peer_cert) {
@@ -512,10 +461,6 @@ int net_connect(struct net_context *ctx)
 		}
 		X509_free(peer_cert);
 
-		/*
-		 * Constant-time comparison to prevent timing side-channels.
-		 * CRYPTO_memcmp returns 0 on match.
-		 */
 		if (CRYPTO_memcmp(digest, ctx->pin_sha256,
 				  LOTA_PIN_SHA256_LEN) != 0) {
 			{
@@ -593,7 +538,6 @@ int net_recv_challenge(struct net_context *ctx,
 		total += ret;
 	}
 
-	/* challenge parsing (little-endian wire format) */
 	memcpy(&challenge->magic, buf + 0, 4);
 	memcpy(&challenge->version, buf + 4, 4);
 	memcpy(challenge->nonce, buf + 8, 32);
@@ -666,7 +610,6 @@ int net_recv_result(struct net_context *ctx, struct verifier_result *result)
 		total += ret;
 	}
 
-	/* result parsing (little-endian wire format) */
 	memcpy(&result->magic, buf + 0, 4);
 	memcpy(&result->version, buf + 4, 4);
 	memcpy(&result->result, buf + 8, 4);
@@ -744,7 +687,7 @@ int net_read_full(struct net_context *ctx, void *buf, size_t len)
 	return 0;
 }
 
-/* First byte of a selinuxfs node under @root, or -1 when it cannot be read */
+/* 0 or 1 from the first byte of a selinuxfs node, or -1 */
 static int selinux_node_state(const char *root, const char *rel)
 {
 	char path[256], state[8];
@@ -779,19 +722,11 @@ const char *net_connect_refusal_hint(int err, int port,
 	if (port <= 0 || port > 65535)
 		return NULL;
 
-	/*
-	 * Read the state.
-	 * Where SELinux is absent or permissive the denial did not happen,
-	 * so this EACCES came from somewhere else and the port label is
-	 * the wrong thing to name.
-	 */
+	/* absent or permissive: this EACCES came from somewhere else */
 	if (selinux_node_state(root, "enforce") != 1)
 		return NULL;
 
-	/*
-	 * Name only the cause that was read. The node holds "<active> <pending>";
-	 * without the module there is no node and either applies.
-	 */
+	/* "<active> <pending>"; no node without the module, so either rule */
 	tunable = selinux_node_state(root, "booleans/" NET_ATTEST_BOOLEAN);
 
 	if (tunable == 0)
@@ -873,7 +808,6 @@ const char *net_result_str(uint32_t result)
 	case VERIFY_INTERNAL_ERROR:
 		return "FAIL - Verifier internal error";
 	case VERIFY_POLICY_REQUIREMENT:
-		/* unclassified requirement, e.g. an unenrolled firmware baseline */
 		return "FAIL - This host does not meet a requirement the "
 		       "publisher's policy states about it, and the verdict "
 		       "does not say which. The requirements this agent knows "
