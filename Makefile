@@ -1,31 +1,11 @@
 # SPDX-License-Identifier: MIT
-#
-# LOTA - Linux Open Trusted Attestation
-# Master Makefile
-#
-# Targets:
-#   help      - Show operator-facing target list
-#   all       - Build agent, verifier, SDKs, initramfs helper and BPF program
-#   test-unit - Build and run local unit tests
-#   install   - Install to system
-#
-# Requirements:
-#   - clang, llvm (for BPF compilation)
-#   - gcc (for user-space)
-#   - libbpf-devel
-#   - tpm2-tss-devel
-#   - openssl-devel (for SHA-256)
-#
 
 .DEFAULT_GOAL := help
 
-# Compiler settings
 CC ?= gcc
 CLANG ?= clang
 
-# Build verbosity:
-# `make V=1` prints full commands
-# default prints a terse one-line summary per artifact
+# V=1 prints every command in full.
 ifeq ($(V),1)
   Q =
   QUIET_CC =
@@ -36,8 +16,6 @@ ifeq ($(V),1)
   QUIET_GEN =
 else
   Q = @
-  # strip the build-directory prefix so the summary stays readable
-  # and independent of overridden BUILD_DIR
   quiet_name = $(patsubst $(BUILD_DIR)/%,%,$@)
   QUIET_CC      = @echo "  CC      $(quiet_name)"
   QUIET_CLANG   = @echo "  CLANG   $(quiet_name)"
@@ -47,7 +25,6 @@ else
   QUIET_GEN     = @echo "  GEN     $(quiet_name)"
 endif
 
-# Directories
 SRC_DIR := src
 BPF_DIR := $(SRC_DIR)/bpf
 AGENT_DIR := $(SRC_DIR)/agent
@@ -63,7 +40,6 @@ ifeq ($(PROJECT_VERSION),)
 $(error VERSION file is missing or empty)
 endif
 
-# Output files
 AGENT_BIN := $(BUILD_DIR)/lota-agent
 INITRAMFS_LOCK_BIN := $(BUILD_DIR)/lota-pcr14-lock
 INSTALLER_BIN := $(BUILD_DIR)/lota-install
@@ -78,33 +54,22 @@ SDK_STATIC := $(BUILD_DIR)/liblotagaming.a
 SERVER_SDK_LIB := $(BUILD_DIR)/liblotaserver.so
 SERVER_SDK_STATIC := $(BUILD_DIR)/liblotaserver.a
 
-# Shared-library ABI version. The soname carries the major only (bumped on an
-# incompatible ABI change); the on-disk file carries the full version and the
-# soname/linker symlinks point at it, the usual libX.so.MAJOR.MINOR.PATCH
-# layout.
-#
-# Independent of the release VERSION: it moves when the ABI moves, not when the product does.
-#
-# Major 1 is the frozen surface
-# -- see Documentation/contributor/development/api-stability.rst.
+# Shared-library ABI version, independent of VERSION.
+# The soname carries the major only; the file carries the full version.
 LOTA_ABI_MAJOR := 1
 LOTA_ABI_VERSION := $(LOTA_ABI_MAJOR).0.0
 
-# Detect target architecture (overridable)
 ifndef ARCH
 	HOST_ARCH := $(shell $(CC) -dumpmachine | cut -d- -f1)
 	ARCH := $(HOST_ARCH)
 endif
 
-# Compiler flags
 CFLAGS := -Wall -Wextra -Werror -O2 -g
 CFLAGS += -I$(INC_DIR)
 CFLAGS += -D_GNU_SOURCE
 CFLAGS += -fstack-protector-strong
 CFLAGS += -fstack-clash-protection
-# Control-flow integrity is architecture-specific: Intel CET
-# (-fcf-protection) on x86_64, branch protection (BTI/PAC) on aarch64.
-# -fcf-protection is an x86-only option and errors out on other targets.
+# -fcf-protection is x86-only.
 ifeq ($(ARCH),x86_64)
 CFLAGS += -fcf-protection=full
 else ifeq ($(ARCH),aarch64)
@@ -117,37 +82,22 @@ CFLAGS += -Wshadow -Wpointer-arith -Wcast-align
 CFLAGS += -Wstrict-prototypes -Wmissing-prototypes
 CFLAGS += -Wundef -Wvla
 
-# Reproducible builds
-# Map the build root to a constant so the output depends only on the
-# source.
-# SOURCE_DATE_EPOCH (honored by the compiler for __DATE__/__TIME__)
-# is pinned by `make reproducible-build` and the CI audit.
-# Applied to the BPF object too.
 REPRO_CFLAGS := -ffile-prefix-map=$(CURDIR)=.
 CFLAGS += $(REPRO_CFLAGS)
 
-# Optional sanitizer build for the host C side (agent, SDK, tests).
-# Set SANITIZE=address,undefined to rebuild every host object under
-# ASan/UBSan; CI uses this to surface memory and UB defects the normal
-# hardened build cannot see. BPF objects use BPF_CFLAGS and stay
-# untouched. -fno-sanitize-recover makes a finding abort the process so
-# a CI run fails loudly instead of logging and continuing.
+# SANITIZE=address,undefined builds the host C objects, not the BPF object,
+# under the sanitizers; a finding aborts the process.
 ifdef SANITIZE
 CFLAGS += -fsanitize=$(SANITIZE) -fno-omit-frame-pointer
 CFLAGS += -fno-sanitize-recover=all
 endif
 
-# Build identity injected into both SDKs.
-# One source, so the two libraries cannot report different builds;
-# objects that carry it take VERSION as a prerequisite so a version bump rebuilds them.
 LOTA_VERSION_STRING ?= $(PROJECT_VERSION)
 SDK_VERSION_CFLAGS := -DLOTA_BUILD_VERSION_STRING=\"$(LOTA_VERSION_STRING)\"
 
-# Linker hardening
 HARDENING_LDFLAGS := -Wl,-z,relro,-z,now -Wl,-z,noexecstack -Wl,-z,separate-code
 
-# Agent link flags
-# -pthread: the watchdog supervisor runs on a thread of its own
+# -pthread: the watchdog runs on a thread of its own.
 LDFLAGS := -pie -pthread $(HARDENING_LDFLAGS)
 LDFLAGS += -lbpf -ltss2-esys -ltss2-mu -ltss2-tcti-device -ltss2-tctildr -lcrypto -lssl -lsystemd -lseccomp
 
@@ -155,7 +105,6 @@ ifdef SANITIZE
 LDFLAGS += -fsanitize=$(SANITIZE)
 endif
 
-# BPF target architecture mapping
 BPF_ARCH := $(ARCH)
 ifeq ($(ARCH),x86_64)
 	BPF_ARCH := x86
@@ -164,19 +113,13 @@ ifeq ($(ARCH),aarch64)
 	BPF_ARCH := arm64
 endif
 
-# BPF compilation flags
-# -target bpf: Generate BPF bytecode
-# -g: Include debug info
-# -O2: Optimization level (for BPF verifier)
-# -mcpu=v3: Enable the atomic xchg/cmpxchg instructions used by the
-# allow-event budget counter.
+# -mcpu=v3 for the atomic exchange and compare-and-swap of the event budget.
 BPF_CFLAGS := -target bpf -g -O2 -mcpu=v3
 BPF_CFLAGS += -D__TARGET_ARCH_$(BPF_ARCH)
 BPF_CFLAGS += -D__BPF_PROGRAM__
 BPF_CFLAGS += -I$(INC_DIR)
 BPF_CFLAGS += $(REPRO_CFLAGS)
 
-# Agent main source files
 AGENT_SRCS := $(AGENT_DIR)/main.c \
 			  $(AGENT_DIR)/cli.c \
 			  $(AGENT_DIR)/diagnostics.c \
@@ -243,25 +186,22 @@ AGENT_SRCS := $(AGENT_DIR)/main.c \
 
 AGENT_OBJS := $(patsubst $(SRC_DIR)/%.c,$(BUILD_DIR)/%.o,$(AGENT_SRCS))
 
-# SDK source files
 SDK_DIR := $(SRC_DIR)/sdk
 SDK_SRCS := $(SDK_DIR)/lota_gaming.c
 SDK_OBJS := $(patsubst $(SRC_DIR)/%.c,$(BUILD_DIR)/%.o,$(SDK_SRCS))
 
-# Server SDK source files
 SERVER_SDK_SRCS := $(SDK_DIR)/lota_server.c
 SERVER_SDK_OBJS := $(patsubst $(SRC_DIR)/%.c,$(BUILD_DIR)/%.o,$(SERVER_SDK_SRCS))
 
-# Wine/Proton hook
 WINE_HOOK_LIB := $(BUILD_DIR)/liblota_wine_hook.so
 WINE_HOOK_SRCS := $(SDK_DIR)/lota_wine_hook.c
-# own SDK objects: the hook is built with hidden visibility
+# the hook links its own SDK objects, built hidden
 WINE_HOOK_OBJS := $(patsubst $(SDK_DIR)/%.c,$(BUILD_DIR)/hook/%.o,\
 	$(WINE_HOOK_SRCS) $(SDK_SRCS))
 
-# The hook's 32-bit half, x86_64 only: Steam's launch chain mixes word sizes
-# and lota-proton-hook names the hook through ld.so's $$LIB token.
-# auto builds it when -m32 links, libatomic included; install requires it.
+# The hook's 32-bit half, x86_64 only: lota-proton-hook names the hook through
+# ld.so's $$LIB token. auto builds it when a -m32 program links; install
+# requires it.
 LOTA_HOOK32 ?= auto
 ifeq ($(ARCH),x86_64)
 ifeq ($(LOTA_HOOK32),auto)
@@ -272,7 +212,6 @@ else
 LOTA_HOOK32 := 0
 endif
 
-# names the packages, rather than a crt1.o or libatomic link error
 HOOK32_MISSING := the 32-bit half of the Wine hook needs a multilib toolchain \
 (glibc-devel.i686 and libatomic.i686 on Fedora/RHEL, gcc-multilib on \
 Debian/Ubuntu)
@@ -283,30 +222,22 @@ WINE_HOOK_OBJS32 := $(patsubst $(SDK_DIR)/%.c,$(BUILD_DIR)/hook32/%.o,\
 	$(WINE_HOOK_SRCS) $(SDK_SRCS))
 endif
 
-# Starts a program already protected; links the gaming SDK statically
 PROTECT_BIN := $(BUILD_DIR)/lota-protect
 PROTECT_SRCS := $(SDK_DIR)/lota_protect.c
 
-# Anti-cheat compatibility layer
 ANTICHEAT_LIB := $(BUILD_DIR)/liblota_anticheat.so
 ANTICHEAT_SRCS := $(SDK_DIR)/lota_anticheat.c
 ANTICHEAT_OBJS := $(patsubst $(SRC_DIR)/%.c,$(BUILD_DIR)/%.o,$(ANTICHEAT_SRCS))
 
-# Linker version script per shared library:
-# exports the functions the installed header declares and makes every other symbol local.
-# Named $(notdir $(lib)).map next to the sources it filters.
 SDK_VERSION_SCRIPT = $(SDK_DIR)/$(basename $(notdir $(1))).map
 VERSION_SCRIPT_LDFLAGS = -Wl,--version-script=$(call SDK_VERSION_SCRIPT,$(1))
 
-# pkg-config files for the installed SDK.
-# Generated from the templates so the version an integrator queries is the ABI version
-# -- the .pc describes the linkable contract, and that is what governs it.
+# The .pc files carry the ABI version, not VERSION.
 PKGCONFIG_DIR := $(BUILD_DIR)/pkgconfig
 PKGCONFIG_TEMPLATES := $(wildcard packaging/pkgconfig/*.pc.in)
 PKGCONFIG_FILES := $(patsubst packaging/pkgconfig/%.pc.in,$(PKGCONFIG_DIR)/%.pc,\
 	$(PKGCONFIG_TEMPLATES))
 
-# Default target
 .PHONY: all
 all: $(AGENT_BIN) $(INITRAMFS_LOCK_BIN) $(INSTALLER_BIN) $(BPF_OBJ) $(VERIFIER_BIN) $(ATTESTCA_BIN) $(SDK_LIB) $(SERVER_SDK_LIB) $(WINE_HOOK_LIB) $(WINE_HOOK_LIB32) $(PROTECT_BIN) $(ANTICHEAT_LIB) $(PKGCONFIG_FILES)
 ifeq ($(ARCH),x86_64)
@@ -315,35 +246,20 @@ ifneq ($(LOTA_HOOK32),1)
 endif
 endif
 
-# build directories
 $(BUILD_DIR):
 	$(Q)mkdir -p $(BUILD_DIR)/agent
 
-# build agent binary
 $(AGENT_BIN): $(AGENT_OBJS) | $(BUILD_DIR)
 	$(QUIET_LD)
 	$(Q)$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
 
-# build the initramfs PCR14 lock helper. The binary stays small and
-# self-contained: it links only against TSS2-ESYS and OpenSSL so the
-# 90lota dracut module can copy a minimal closure of shared objects
-# into the initramfs image. PIE + the rest of the agent's hardening
-# flags are inherited from CFLAGS so the helper is built with the
-# same protections as the daemon.
 $(INITRAMFS_LOCK_BIN): src/initramfs/lota-pcr14-lock.c | $(BUILD_DIR)
 	$(QUIET_CC)
 	$(Q)$(CC) $(CFLAGS) -o $@ $^ -pie -Wl,-z,relro,-z,now \
 		-ltss2-esys -ltss2-mu -ltss2-tcti-device -lcrypto
 
-# build the guided player installer.
-# Self-contained TUI binary that links only libcrypto
-# (PCR14 lock-constant derivation + AIK certificate expiry)
-# Every privileged action shells out to the same tooling the documentation names
-# (dracut, grubby, systemctl, ...)
-#
-# profile.c comes from the agent on purpose:
-# the installer has to name the same publisher profile directory the agent enrolls
-# into, and second copy of that rule would be second answer to it.
+# profile.c comes from the agent, so the installer names the same publisher
+# profile directory the agent enrolls into.
 INSTALLER_SRCS := installer/main.c installer/stages.c installer/tui.c \
 	installer/ui.c installer/run.c installer/probe.c \
 	$(AGENT_DIR)/policy_pubkey.c $(AGENT_DIR)/profile.c
@@ -354,8 +270,7 @@ $(INSTALLER_BIN): $(INSTALLER_SRCS) installer/install.h installer/probe.h \
 	$(Q)$(CC) $(CFLAGS) -DLOTA_INSTALL_VERSION=\"$(LOTA_VERSION_STRING)\" \
 		-o $@ $(INSTALLER_SRCS) -pie -Wl,-z,relro,-z,now -lcrypto
 
-# lota-bench measures what LOTA costs a game.
-# Contributors build it from the tree; no package ships it.
+# No package ships lota-bench.
 LOTA_BENCH_BIN := $(BUILD_DIR)/lota-bench
 LOTA_BENCH_SRCS := $(addprefix $(LOTA_BENCH_DIR)/,main.c cgroup.c result.c json.c \
 	validate.c frames.c field.c machine.c agentsnap.c run.c report.c) \
@@ -366,21 +281,13 @@ $(LOTA_BENCH_BIN): $(LOTA_BENCH_SRCS) $(wildcard $(LOTA_BENCH_DIR)/*.h) | $(BUIL
 	$(Q)$(CC) $(CFLAGS) -DLOTA_BENCH_VERSION=\"$(LOTA_VERSION_STRING)\" \
 		-o $@ $(LOTA_BENCH_SRCS) -pie -Wl,-z,relro,-z,now
 
-# auto-generated header dependencies. -MMD writes a sibling
-# <object>.d listing every header the .c file pulled in;
-# -MP adds phony targets for those headers so a deleted header
-# does not break the next build. The .d files are included at the
-# bottom of this Makefile so make rebuilds any .o whose headers
-# changed.
 DEPFLAGS = -MMD -MP -MF $(@:.o=.d)
 
-# compile agent
 $(BUILD_DIR)/agent/%.o: $(AGENT_DIR)/%.c | $(BUILD_DIR)
 	$(QUIET_CC)
 	$(Q)mkdir -p $(dir $@)
 	$(Q)$(CC) $(CFLAGS) $(DEPFLAGS) -c -o $@ $<
 
-# compile SDK
 $(BUILD_DIR)/sdk/%.o: $(SDK_DIR)/%.c | $(BUILD_DIR)
 	$(QUIET_CC)
 	$(Q)mkdir -p $(dir $@)
@@ -400,7 +307,6 @@ $(BUILD_DIR)/hook32/%.o: $(SDK_DIR)/%.c | $(BUILD_DIR)
 	$(Q)$(CC) -m32 $(CFLAGS) $(DEPFLAGS) -fPIC -fvisibility=hidden \
 		-c -o $@ $<
 
-# build identity (both SDKs report it; see lota_sdk_version)
 $(BUILD_DIR)/agent/dbus.o: CFLAGS += $(SDK_VERSION_CFLAGS)
 $(BUILD_DIR)/agent/dbus.o: $(VERSION_FILE)
 $(BUILD_DIR)/sdk/lota_server.o: CFLAGS += $(SDK_VERSION_CFLAGS)
@@ -412,7 +318,6 @@ $(BUILD_DIR)/hook/lota_gaming.o: $(VERSION_FILE)
 $(BUILD_DIR)/hook32/lota_gaming.o: CFLAGS += $(SDK_VERSION_CFLAGS)
 $(BUILD_DIR)/hook32/lota_gaming.o: $(VERSION_FILE)
 
-# build SDK shared library (versioned: real file + soname/linker symlinks)
 $(SDK_LIB): $(SDK_OBJS) $(call SDK_VERSION_SCRIPT,$(SDK_LIB)) Makefile | $(BUILD_DIR)
 	$(QUIET_LD)
 	$(Q)rm -f $@ $@.*
@@ -422,21 +327,14 @@ $(SDK_LIB): $(SDK_OBJS) $(call SDK_VERSION_SCRIPT,$(SDK_LIB)) Makefile | $(BUILD
 	$(Q)ln -sf $(notdir $@).$(LOTA_ABI_VERSION) $@.$(LOTA_ABI_MAJOR)
 	$(Q)ln -sf $(notdir $@).$(LOTA_ABI_VERSION) $@
 
-# generate the pkg-config files
 $(PKGCONFIG_DIR):
 	$(Q)mkdir -p $@
 
 .PHONY: pkgconfig
 pkgconfig: $(PKGCONFIG_FILES)
 
-# Staged SDK prefix:
-# what lota-sdk and lota-sdk-devel install, laid out as a prefix, without needing
-# root or a package manager.
-# It is how anything in tree builds "against the published packages"
-# -- the reference integrations point PKG_CONFIG_PATH here, so they resolve headers
-# and libraries the way an integrator's build does instead of reaching into build/
-# or, worse, finding a stale copy under /usr.
-# The header set is read from the ABI baseline rather than restated.
+# An SDK prefix built without root: the headers listed in the ABI baseline,
+# the four shared libraries and the .pc files. The examples build against it.
 STAGE_DIR := $(BUILD_DIR)/stage
 STAGE_HEADERS := $(shell grep -v '^[[:space:]]*\#' packaging/abi/public-headers.list 2>/dev/null | grep -v '^[[:space:]]*$$')
 
@@ -462,12 +360,10 @@ $(PKGCONFIG_DIR)/%.pc: packaging/pkgconfig/%.pc.in Makefile | $(PKGCONFIG_DIR)
 	$(QUIET_GEN)
 	$(Q)sed 's|@LOTA_ABI_VERSION@|$(LOTA_ABI_VERSION)|g' $< > $@
 
-# build SDK static library
 $(SDK_STATIC): $(SDK_OBJS) | $(BUILD_DIR)
 	$(QUIET_AR)
 	$(Q)$(AR) rcs $@ $^
 
-# build server SDK shared library (versioned)
 $(SERVER_SDK_LIB): $(SERVER_SDK_OBJS) $(call SDK_VERSION_SCRIPT,$(SERVER_SDK_LIB)) \
 		Makefile | $(BUILD_DIR)
 	$(QUIET_LD)
@@ -478,12 +374,10 @@ $(SERVER_SDK_LIB): $(SERVER_SDK_OBJS) $(call SDK_VERSION_SCRIPT,$(SERVER_SDK_LIB
 	$(Q)ln -sf $(notdir $@).$(LOTA_ABI_VERSION) $@.$(LOTA_ABI_MAJOR)
 	$(Q)ln -sf $(notdir $@).$(LOTA_ABI_VERSION) $@
 
-# build server SDK static library
 $(SERVER_SDK_STATIC): $(SERVER_SDK_OBJS) | $(BUILD_DIR)
 	$(QUIET_AR)
 	$(Q)$(AR) rcs $@ $^
 
-# build Wine/Proton hook (self-contained: includes gaming SDK; versioned)
 $(WINE_HOOK_LIB): $(WINE_HOOK_OBJS) Makefile | $(BUILD_DIR)
 	$(QUIET_LD)
 	$(Q)rm -f $@ $@.*
@@ -510,7 +404,6 @@ $(PROTECT_BIN): $(PROTECT_SRCS) $(SDK_OBJS) include/lota_gaming.h \
 	$(Q)$(CC) $(CFLAGS) -o $@ $(PROTECT_SRCS) $(SDK_OBJS) \
 		-pie -Wl,-z,relro,-z,now
 
-# build anti-cheat compatibility layer (includes gaming + server SDK; versioned)
 $(ANTICHEAT_LIB): $(ANTICHEAT_OBJS) $(SDK_OBJS) $(SERVER_SDK_OBJS) \
 		$(call SDK_VERSION_SCRIPT,$(ANTICHEAT_LIB)) Makefile | $(BUILD_DIR)
 	$(QUIET_LD)
@@ -522,19 +415,15 @@ $(ANTICHEAT_LIB): $(ANTICHEAT_OBJS) $(SDK_OBJS) $(SERVER_SDK_OBJS) \
 	$(Q)ln -sf $(notdir $@).$(LOTA_ABI_VERSION) $@.$(LOTA_ABI_MAJOR)
 	$(Q)ln -sf $(notdir $@).$(LOTA_ABI_VERSION) $@
 
-# build bpf program
 $(BPF_OBJ): $(BPF_DIR)/lota_lsm.bpf.c $(INC_DIR)/vmlinux.h $(INC_DIR)/lota.h $(INC_DIR)/lota_devt.h | $(BUILD_DIR)
 	$(QUIET_CLANG)
 	$(Q)$(CLANG) $(BPF_CFLAGS) -c -o $@ $<
 
-# Fixture object for the integrity map layout test: the wider map value
-# an enforcement object built before the agent read verdicts still carries.
-# Nothing loads it, so it needs no programs and no license section.
+# Fixture for the integrity map layout test; nothing loads it.
 $(LEGACY_BPF_OBJ): tests/fixtures/legacy_integrity_map.bpf.c $(INC_DIR)/vmlinux.h | $(BUILD_DIR)
 	$(QUIET_CLANG)
 	$(Q)$(CLANG) $(BPF_CFLAGS) -c -o $@ $<
 
-# generate vmlinux.h from running kernel btf
 $(INC_DIR)/vmlinux.h:
 	$(QUIET_GEN)
 	$(Q)bpftool btf dump file /sys/kernel/btf/vmlinux format c > $@
@@ -583,12 +472,8 @@ wine-hook: $(WINE_HOOK_LIB) $(WINE_HOOK_LIB32)
 .PHONY: anticheat
 anticheat: $(ANTICHEAT_LIB)
 
-# Examples (opt-in: end-to-end demo material under examples/).
-#
-# `make all` deliberately does NOT depend on this target so the agent
-# build stays fast and the demo SDL2/libcurl/Go toolchains stay
-# optional. Recurse into every per-component fragment that is in tree;
-# each fragment writes its artifacts under build/examples/.
+# Not part of all. Each examples/*/Makefile.fragment builds into
+# $(BUILD_DIR)/examples.
 EXAMPLES_DIR := examples
 EXAMPLES_BUILD_DIR := $(BUILD_DIR)/examples
 EXAMPLES_FRAGMENTS := $(wildcard $(EXAMPLES_DIR)/*/Makefile.fragment)
@@ -625,25 +510,8 @@ examples-clean:
 			BUILD_DIR=$(abspath $(EXAMPLES_BUILD_DIR)) 2>/dev/null || true; \
 	done
 
-#
-# Sign the in-tree BPF object with the deployed agent's signing key.
-# Produces $(BPF_OBJ).sig next to the .o so bpf_loader's signature
-# check accepts the load. SIGNING_KEY defaults to the operator key
-# laid down by lota-dev-bringup.sh; override on the command line for
-# CI / packaging.
-#
-# Prerequisites:
-#   - $(BPF_OBJ) built (`make bpf` or `make all`).
-#   - $(AGENT_BIN) built so `--sign-policy` is available.
-#   - SIGNING_KEY points at a readable Ed25519 PEM private key, e.g.
-#     the one generated by `lota-agent --gen-signing-key
-#     /etc/lota/policy`.
-#
-# Usage:
-#   sudo make sign-bpf SIGNING_KEY=/etc/lota/policy.key
-#
-# Public half defaults to where --gen-signing-key writes it. It is copied into
-# the build directory for both packaging roads; no pubkey, no signature.
+# sign-bpf writes $(BPF_OBJ).sig with SIGNING_KEY and copies SIGNING_PUBKEY
+# into the build directory for packaging.
 SIGNING_KEY ?= /etc/lota/policy.key
 SIGNING_PUBKEY ?= $(SIGNING_KEY:.key=.pub)
 PKG_ENFORCEMENT_PUB := $(BUILD_DIR)/lota-enforcement.pub
@@ -666,23 +534,17 @@ sign-bpf: $(BPF_OBJ) $(AGENT_BIN)
 	$(Q)cp $(SIGNING_PUBKEY) $(PKG_ENFORCEMENT_PUB)
 	@echo "Signed: $(BPF_OBJ).sig"
 
-# Go verifier
 $(VERIFIER_BIN): $(wildcard $(SRC_DIR)/verifier/*.go $(SRC_DIR)/verifier/**/*.go $(SRC_DIR)/crl/*.go) | $(BUILD_DIR)
 	$(QUIET_GO)
 	$(Q)cd $(SRC_DIR)/verifier && env GOCACHE=$(GOCACHE) go build -trimpath -o $(abspath $@) .
 
-# Go attestation CA
-# GO_TAGS optionally selects build tags, e.g. GO_TAGS=pkcs11 to compile the
-# HSM-backed signing-key support (needs cgo and a PKCS#11 module at runtime).
-#
-# The stamp holds GO_TAGS and is rewritten only when it changes, so a new tag
-# set rebuilds the CA.
+# GO_TAGS=pkcs11 builds the CA's HSM signing-key support (needs cgo).
+# The stamp is rewritten only when GO_TAGS changes, so a new tag set rebuilds it.
 GO_TAGS ?=
 ATTESTCA_TAGS_STAMP := $(BUILD_DIR)/.attestca-tags
 $(ATTESTCA_TAGS_STAMP): FORCE | $(BUILD_DIR)
 	$(Q)printf '%s\n' '$(GO_TAGS)' | cmp -s - $@ 2>/dev/null || printf '%s\n' '$(GO_TAGS)' >$@
 
-# Always out of date: the stamp recipe runs every time and compares itself
 .PHONY: FORCE
 FORCE:
 
@@ -690,32 +552,19 @@ $(ATTESTCA_BIN): $(wildcard $(SRC_DIR)/attestca/*.go $(SRC_DIR)/attestca/**/*.go
 	$(QUIET_GO)
 	$(Q)cd $(SRC_DIR)/attestca && env GOCACHE=$(GOCACHE) go build -trimpath $(if $(GO_TAGS),-tags $(GO_TAGS),) -o $(abspath $@) .
 
-# Go fleet CLI
-# CGO_ENABLED=0: the operator reference calls this binary static, and that is
-# what lets it run from a workstation with nothing on it but network access.
-# A plain go build takes the cgo net and os/user resolvers wherever a C
-# toolchain exists, and the result needs the build host's glibc.
+# CGO_ENABLED=0 keeps the binary static, free of the build host's glibc.
 $(FLEETCTL_BIN): $(wildcard $(SRC_DIR)/fleetctl/*.go $(SRC_DIR)/fleetctl/**/*.go) | $(BUILD_DIR)
 	$(QUIET_GO)
 	$(Q)cd $(SRC_DIR)/fleetctl && env GOCACHE=$(GOCACHE) CGO_ENABLED=0 go build -trimpath -o $(abspath $@) .
 
-# Go synthetic-fleet load generator (lives in the verifier module)
 $(LOADGEN_BIN): $(wildcard $(SRC_DIR)/verifier/loadgen/*.go $(SRC_DIR)/verifier/loadgen/**/*.go $(SRC_DIR)/verifier/*.go $(SRC_DIR)/verifier/**/*.go) | $(BUILD_DIR)
 	$(QUIET_GO)
 	$(Q)cd $(SRC_DIR)/verifier && env GOCACHE=$(GOCACHE) go build -trimpath -o $(abspath $@) ./loadgen
 
-# Canonical reproducible build
-# This target pins the remaining environmental inputs the toolchain reads
-# -- the build timestamp (SOURCE_DATE_EPOCH), the time zone and the locale
-# -- so the artifacts depend only on the source tree.
-# SOURCE_DATE_EPOCH defaults to the HEAD commit time, so a build from a
-# given commit (or tag) is deterministic.
-# Outside a git checkout there is none; stamping targets refuse.
-# Set REPRO_SOURCE_DATE_EPOCH to the release date instead.
-# See Documentation/security/reproducible-builds.rst for how to verify shipped == tag.
+# SOURCE_DATE_EPOCH for reproducible-build and the images:
+# the HEAD commit time. Without a git checkout, set REPRO_SOURCE_DATE_EPOCH.
 REPRO_SOURCE_DATE_EPOCH ?= $(shell git -C $(CURDIR) log -1 --pretty=%ct 2>/dev/null)
 
-# First step of every target that stamps the build timestamp.
 define require_source_date_epoch
 	@test -n "$(REPRO_SOURCE_DATE_EPOCH)" || { \
 		echo "$@: no commit time to read and REPRO_SOURCE_DATE_EPOCH is unset." >&2; \
@@ -730,26 +579,11 @@ endef
 reproducible-build: export SOURCE_DATE_EPOCH = $(REPRO_SOURCE_DATE_EPOCH)
 reproducible-build: export TZ = UTC
 reproducible-build: export LC_ALL = C
-# Refuse before building; the sub-make inherits the pinned environment.
 reproducible-build:
 	$(require_source_date_epoch)
 	$(Q)$(MAKE) all
 	@echo "Reproducible build complete (SOURCE_DATE_EPOCH=$(REPRO_SOURCE_DATE_EPOCH), TZ=UTC, LC_ALL=C)"
 
-# Native packages (RPM via nfpm)
-# Builds one .rpm per config under packaging/nfpm/ into $(PKG_DIR).
-# Depends on the build artifacts (all), so the configs find the binaries and
-# libraries they reference.
-# Agent package ships the BPF object signed, with its .sig and public key;
-# a build missing either is refused.
-#
-# Changelog version tracks VERSION:
-# Template placeholder is substituted from PROJECT_VERSION into a generated file
-# the configs point at, so it never has to be bumped alongside VERSION.
-#
-# Ends in package-lint; an rpmlint error fails the build.
-#
-# .spec / COPR path layers on top for the Fedora build service.
 NFPM ?= nfpm
 RPMLINT ?= rpmlint
 # rpm spelling of the version (- as ~); exact sibling depends need it
@@ -759,11 +593,6 @@ NFPM_CONFIGS := lota-agent lota-verifier lota-attest-ca lota-sdk lota-sdk-devel
 CHANGELOG_TMPL := packaging/nfpm/changelog.yaml
 CHANGELOG_GEN := $(BUILD_DIR)/changelog.gen.yaml
 
-# Compiled SELinux policy module.
-# Built via the policy devel Makefile under selinux/ (needs selinux-policy-devel)
-# and shipped in the agent RPM at /usr/share/lota/selinux/lota.pp so
-# lota-install's SELinux stage can load it without the operator
-# hand-compiling the module out of band.
 SELINUX_PP := selinux/lota.pp
 SELINUX_IF := selinux/lota.if
 # Must match both package manifests and lota-install's SELinux stage default.
@@ -774,12 +603,8 @@ $(SELINUX_PP): selinux/lota.te selinux/lota.if selinux/lota.fc
 .PHONY: selinux-pp
 selinux-pp: $(SELINUX_PP)
 
-# Enforcement object ships signed, and the key it is verified against ships with it.
-# Enforcement is host-owned singleton -- one kernel, one LSM, so no publisher pushes
-# kernel policy -- which makes signing it the job of whoever builds the package:
-# the distribution, or this project for its own releases.
-# Package built without that step installs an object the agent refuses to load,
-# so the machine stops enforcing for reason nobody chose; refuse to build it instead.
+# An unsigned enforcement object is one the agent refuses to load, so packages
+# refuses to build without $(BPF_OBJ).sig and SIGNING_PUBKEY.
 .PHONY: packages
 packages: all selinux-pp
 	$(Q)test -r $(BPF_OBJ).sig || { \
@@ -806,8 +631,7 @@ packages: all selinux-pp
 	@echo "RPMs written to $(PKG_DIR)"
 	$(Q)$(MAKE) package-lint
 
-# rpmlint over the built RPMs, local and CI alike. Without lota.rpmlintrc
-# the deliberate findings bury new ones; skipped when rpmlint is missing.
+# Skipped when rpmlint is missing.
 .PHONY: package-lint
 package-lint:
 	$(Q)ls $(PKG_DIR)/*.rpm >/dev/null 2>&1 || { \
@@ -822,23 +646,10 @@ package-lint:
 		echo "  RPMLINT skipped ($(RPMLINT) not installed)"; \
 	fi
 
-# RHEL-family (Rocky 9 / el9) package build + install smoke.
-# Spawns rockylinux:9 podman container, builds RPMs off clean archive of HEAD,
-# installs agent+verifier+attest-ca and checks the binaries run and the units ship.
-# No attestation: container has no boot-measured trust chain.
 .PHONY: rhel-package-smoke
 rhel-package-smoke:
 	$(Q)scripts/rhel-package-smoke.sh
 
-# Container images (OCI, built with ko -> distroless static, no Docker daemon)
-# KO_DOCKER_REPO is the destination registry prefix
-# -B names the images <repo>/verifier and <repo>/attestca after the base of each import path.
-# Build is reproducible (SOURCE_DATE_EPOCH from the HEAD commit), carries an SPDX SBOM
-# and OCI source/licence/version labels, and is multi-arch.
-# Release flow cosign-signs the pushed digests.
-# For a local Podman inspection, point ko at an OCI layout instead of a registry:
-#   cd src/verifier && ko build --oci-layout-path=/tmp/v .
-#   skopeo copy oci:/tmp/v containers-storage:localhost/lota-verifier
 KO ?= ko
 KO_DOCKER_REPO ?= ghcr.io/szymonwilczek/lota
 KO_IMAGE_TAGS ?= $(PROJECT_VERSION),latest
@@ -850,8 +661,7 @@ KO_LABELS := \
 KO_BUILD = env KO_DOCKER_REPO=$(KO_DOCKER_REPO) SOURCE_DATE_EPOCH=$(REPRO_SOURCE_DATE_EPOCH) \
 	$(KO) build -B --sbom=spdx --platform=$(KO_PLATFORMS) --tags=$(KO_IMAGE_TAGS) $(KO_LABELS)
 
-# HSM-capable CA image: a variant tag of the attestca repository, built from
-# packaging/ko/attestca-hsm; amd64 only, as cgo does not cross-compile here
+# amd64 only: cgo does not cross-compile here
 KO_HSM_CONFIG := $(CURDIR)/packaging/ko/attestca-hsm
 KO_HSM_PLATFORMS ?= linux/amd64
 KO_HSM_TAG_SUFFIX ?= -hsm
@@ -879,10 +689,6 @@ container-image-attest-ca-hsm:
 	$(require_source_date_epoch)
 	$(Q)cd $(SRC_DIR)/attestca && $(KO_BUILD_HSM) .
 
-# Helm chart validation (no Kubernetes cluster required)
-# helm-lint checks chart structure; helm-template renders the manifests
-# and pipes them through kubeconform for Kubernetes API schema validation.
-# Both run offline against the local chart, so they fit CI without cluster.
 HELM ?= helm
 KUBECONFORM ?= kubeconform
 HELM_CHART_DIR := deploy/helm/lota-verifier
@@ -892,19 +698,14 @@ HELM_CHECK_VALUES := \
 	--set policy.enabled=true \
 	--set policy.existingSecret=example-policy
 
-# Chart-behaviour gate: Chart.yaml carries @VERSION@ and rendered pods can
-# start; neither is caught by helm-lint or kubeconform
 .PHONY: check-helm-chart
 check-helm-chart:
 	@scripts/check-helm-chart.sh
 
-# Image-behaviour gate: pure-Go images hold the CA key on disk;
-# the HSM image (tag, cgo, loader) is the production key road
 .PHONY: check-container-images
 check-container-images:
 	@scripts/check-container-images.sh
 
-# Chart version and appVersion come from VERSION
 HELM_PACKAGE_DIR ?= $(BUILD_DIR)/helm
 HELM_PACKAGE := $(HELM_PACKAGE_DIR)/lota-verifier-$(PROJECT_VERSION).tgz
 
@@ -921,10 +722,8 @@ helm-lint:
 helm-template: helm-package
 	$(HELM) template lota-verifier $(HELM_PACKAGE) $(HELM_CHECK_VALUES) | $(KUBECONFORM) -strict -summary -
 
-# Observability reference-config validation
-# check config runs --syntax-only because the scrape config names credentials
-# file that only exists on deployed host;
-# rules file is checked explicitly since --syntax-only skips rule_files
+# --syntax-only: the scrape config names a credentials file only a deployed
+# host has. It skips rule_files, so the rules are checked on their own.
 PROMTOOL ?= promtool
 JQ ?= jq
 OBSERVABILITY_DIR := deploy/observability
@@ -935,12 +734,8 @@ observability-lint:
 	$(PROMTOOL) check rules $(OBSERVABILITY_DIR)/alerts/lota-verifier-alerts.yaml
 	$(JQ) empty $(OBSERVABILITY_DIR)/grafana/lota-verifier-dashboard.json
 
-# Source RPM (COPR / rpmbuild from source)
-# Archives HEAD into a tarball and builds an SRPM into OUTDIR.
-# COPR drives this through .copr/Makefile; locally run `make srpm`.
-# The spec carries @VERSION@ and @CHANGELOG@: both are filled from VERSION here
-# (as RPM_VERSION), so a version bump touches VERSION alone.
-# An entry is added unless the spec already holds one for this version.
+# @VERSION@ and @CHANGELOG@ in the spec are filled from VERSION; a changelog
+# entry is added unless the spec holds one for this version and release.
 SRPM_TREE := $(BUILD_DIR)/srpmtree
 SRPM_SPEC := $(SRPM_TREE)/SPECS/lota.spec
 OUTDIR ?= $(BUILD_DIR)/srpm
@@ -980,16 +775,6 @@ srpm: check-package-manifests
 		--define "_sourcedir $(abspath $(SRPM_TREE)/SOURCES)"
 	@echo "SRPM written to $(OUTDIR)"
 
-# Signed dnf repository (self-hosted, for the nfpm binary packages) rpm-sign
-# signs every RPM in PKG_DIR with the project signing key.
-# dnf-repo assembles createrepo_c repository under REPO_DIR with signed metadata,
-# the exported public key and a generated .repo file.
-# Signing key is a release secret held outside the tree:
-# set LOTA_RPM_GPG_NAME to its uid or key id and have its passphrase available
-# through gpg-agent
-# LOTA_REPO_BASEURL is the project site's /rpm, where the docs deploy serves
-# the latest release.
-# PKG_DIR is defined with the native-packages target above.
 REPO_DIR ?= $(BUILD_DIR)/dnf-repo
 LOTA_RPM_GPG_NAME ?=
 LOTA_REPO_BASEURL ?= https://lota.szymon-wilczek.me/rpm
@@ -1019,10 +804,6 @@ clean:
 	rm -rf $(BUILD_DIR)
 	@echo "Cleaned build artifacts"
 
-# Documentation (Sphinx
-# Config and sources live under Documentation/
-# htmldocs builds strictly (-W)
-# docs-lint runs the reStructuredText linter
 .PHONY: htmldocs
 htmldocs:
 	$(MAKE) -C Documentation html
@@ -1039,9 +820,7 @@ docs-serve:
 cleandocs:
 	$(MAKE) -C Documentation clean
 
-# Strict docs gate:
-# full build into a scratch tree; an incremental one skips unchanged
-# sources and hides their problems, and _build/ stays untouched
+# A full build into a scratch tree: an incremental one skips unchanged sources.
 .PHONY: check-docs-strict
 check-docs-strict:
 	$(Q)command -v sphinx-build >/dev/null 2>&1 || { \
@@ -1066,11 +845,6 @@ check-version-tag:
 		fi; \
 	fi
 
-# Package-manifest parity gate
-# nfpm configs and the RPM spec describe the same packages;
-# host gets whichever one built the package it installed,
-# so they must ship the same files; the spec takes its version from VERSION.
-# Comments and pages must name symbols and commands that exist.
 $(BUILD_DIR)/check-doc-references: scripts/check-doc-references.c | $(BUILD_DIR)
 	$(QUIET_CC)
 	$(Q)$(CC) $(CFLAGS) -o $@ $<
@@ -1079,62 +853,34 @@ $(BUILD_DIR)/check-doc-references: scripts/check-doc-references.c | $(BUILD_DIR)
 check-doc-references: $(BUILD_DIR)/check-doc-references
 	@$<
 
-# See scripts/check-package-manifests.sh
 .PHONY: check-package-manifests
 check-package-manifests:
 	@scripts/check-package-manifests.sh
 
-# Include-hygiene gate
-# Fails on any header pulled in but not used directly (transitive dependency).
-# Drives clang-include-cleaner over a bear-built compile database.
-# See scripts/check-includes.sh; auto-fix with scripts/fix-includes.sh
 .PHONY: check-includes
 check-includes:
 	@scripts/check-includes.sh
 
-# Second-toolchain declaration gate
-# Compiles every C translation unit -fsyntax-only against el9 headers,
-# where a header Fedora pulls in for free is absent.
-# Spawns the container itself.
-# See scripts/check-el9-decls.sh
 .PHONY: check-el9-decls
 check-el9-decls:
 	@scripts/check-el9-decls.sh
 
-# Player build gate
-# Runs the player page's build commands, read from the page, in a clean Fedora.
-# Spawns the container itself. See scripts/check-player-build.sh
 .PHONY: check-player-build
 check-player-build:
 	@scripts/check-player-build.sh
 
-# License-boundary gate
-# Fails when MIT file depends on GPL-2.0-only one,
-# or when source file declares no license at all.
-# See Documentation/contributor/development/license-boundary.rst
 .PHONY: check-license-boundary
 check-license-boundary:
 	@scripts/check-license-boundary.sh
 
-# Test build-directory gate
-# Fails when a test or example script names the default build directory
-# instead of $(BUILD_DIR).
-# See scripts/check-test-build-dir.sh
 .PHONY: check-test-build-dir
 check-test-build-dir:
 	@scripts/check-test-build-dir.sh
 
-# Doc-quoted diagnostic gate
-# Fails when documentation quotes a message no source string can print,
-# which is what an operator searching for the text on their screen hits.
-# See scripts/check-doc-diagnostics.sh
 .PHONY: check-doc-diagnostics
 check-doc-diagnostics:
 	@scripts/check-doc-diagnostics.sh
 
-# Shipped-configuration command gate
-# Fails when policies/ or configs/ names an option the command does not have.
-# See scripts/check-config-commands.sh
 .PHONY: check-config-commands
 check-config-commands:
 	@scripts/check-config-commands.sh
@@ -1143,19 +889,10 @@ check-config-commands:
 check-stack-frames:
 	@scripts/check-stack-frames.sh
 
-# TPM and network codes must reach an operator through tpm_strerror()
-# and net_strerror(), which know the private ranges above POSIX.
-# strerror() renders those as "Unknown error 4098".
 .PHONY: check-private-errno
 check-private-errno:
 	@scripts/check-private-errno.sh
 
-# Public API/ABI gate
-# Compares the SDK's exported symbols, sonames, installed header set and type
-# layout against the baseline in packaging/abi/, and compiles every public
-# header against the installed set alone.
-# abi-baseline rewrites the baseline after deliberate surface change;
-# see Documentation/contributor/development/api-stability.rst
 .PHONY: check-abi
 check-abi:
 	@scripts/check-abi.sh
@@ -1164,20 +901,11 @@ check-abi:
 abi-baseline:
 	@scripts/check-abi.sh --update
 
-# Combined lint:
-# clang-format style check on the C sources and headers plus golangci-lint
-# on every Go module.
-# Read-only -- it reports, it never rewrites.
-# Use `clang-format -i` / `golangci-lint fmt` to apply fixes.
 CLANG_FORMAT ?= $(shell command -v clang-format-22 2>/dev/null || \
 	command -v clang-format 2>/dev/null)
 GOLANGCI_LINT ?= golangci-lint
-# Server SDK module: sdk/server once the public module moves there, else
-# src/sdk/server. Must precede LINT_GO_MODULES, which := expands in place.
+# Must precede LINT_GO_MODULES, which := expands in place.
 SERVER_SDK_MODULE := $(if $(wildcard sdk/server/go.mod),sdk/server,src/sdk/server)
-# Every Go module in the tree.
-# SDK and the examples are the code an integrator copies,
-# so they are linted at least as strictly as the rest.
 LINT_GO_MODULES := src/verifier src/attestca src/crl src/fleetctl \
 	$(SERVER_SDK_MODULE) examples/demo_server examples/ci-gate/gate
 
@@ -1193,7 +921,7 @@ lint-c:
 		$(CLANG_FORMAT) --dry-run --Werror $$files
 	@echo "lint-c: clean"
 
-# Modules lint-go covers, one per line; check-patch reads this list.
+# check-patch reads this list.
 .PHONY: print-lint-go-modules
 print-lint-go-modules:
 	@printf '%s\n' $(LINT_GO_MODULES)
@@ -1209,55 +937,23 @@ lint-go:
 	done
 	@echo "lint-go: clean"
 
-# Semantic C analysis: sparse, smatch, Coccinelle.
-# These pass a reduced flag set: hardening, machine and sanitizer flags in CFLAGS
-# confuse the checkers, so only includes and the feature macro are given.
-# Dependency include paths come from pkg-config so system headers resolve.
-# src/bpf is excluded (x86 BPF target), same as clang-analyzer and lint-c
+# sparse, smatch and Coccinelle get the include paths and the feature macro
+# only, not CFLAGS, and skip src/bpf.
 SPARSE ?= sparse
 SMATCH ?= smatch
 SPATCH ?= spatch
 CHECK_PKG_CFLAGS := $(foreach p,libsystemd libseccomp dbus-1 sdl2 libcurl libbpf openssl tss2-esys tss2-mu tss2-tctildr,$(shell pkg-config --cflags $(p) 2>/dev/null))
 CHECK_CPPFLAGS := -I$(INC_DIR) -I$(SRC_DIR) -D_GNU_SOURCE $(CHECK_PKG_CFLAGS)
 
-# sparse over every project C source.
-# Blocking: Any finding fails.
+# sparse and smatch: a finding outside /usr headers, or a non-zero exit, fails
+# the file. sparse exemptions are per file, in scripts/sparse-exemptions.txt.
+# The lota/ symlink gives <lota/...> includes the installed layout.
 #
-# Only findings in tracked files count. sparse 0.6.x does not know several
-# glibc and gcc attributes (__access__, __transparent_union__), so a run
-# reports the C library by the hundred; those lines say nothing about this
-# tree and differ per distribution, which would make the gate unportable.
-#
-# The flag set mirrors what each group is really compiled with.
-# Tests link the agent's own objects behind LOTA_INTERNAL_TESTS, the SDK
-# carries the build-identity define, and the benchmarks have their own
-# include root;
-# without them sparse walks a translation unit no build ever produces and
-# reports undefined identifiers that do not exist.
-# The reference integrations include <lota/...> the way an integrator does,
-# so a symlink gives them the installed layout without staging the SDK first.
-#
-# One warning -Wsparse-all turns on is switched off tree-wide.
-# declaration-after-statement is a style rule, not a defect class.
-# Nothing else is switched off. Where sparse is wrong it is exempted by file,
-# not by class, so a real finding elsewhere in the tree still fails.
-#
-# The corrected flag set is shared by sparse and smatch: smatch is built from
-# sparse and parses with the same front end, so a translation unit either
-# checker cannot assemble is one neither can analyse.
-#
-# Two defines stand in for things the checkers' front end cannot do,
-# and without them a source is not analysed at all:
-#
-#   CURL_DISABLE_TYPECHECK -- curl_easy_setopt is a macro from
-#     <curl/typecheck-gcc.h> that expands into a deeply nested expression.
-#     smatch segfaults walking it, taking every file that calls the macro
-#     with it. Only the checkers lose it.
-#   __glibc_has_open_how -- glibc's <fcntl.h> decides whether to define
-#     struct open_how by asking __has_include("linux/openat2.h"). Neither
-#     sparse nor smatch resolves that quoted form, so glibc defines its own
-#     copy and the kernel header a source includes for openat2(2) then
-#     collides with it.
+#   CURL_DISABLE_TYPECHECK -- smatch segfaults walking the curl_easy_setopt
+#     type-check macro.
+#   __glibc_has_open_how -- the checkers do not resolve glibc's
+#     __has_include("linux/openat2.h"), so <fcntl.h> defines its own struct
+#     open_how and <linux/openat2.h> then redefines it.
 CHECKER_INC_DIR := $(BUILD_DIR)/checker-include
 CHECKER_CPPFLAGS := $(CHECK_CPPFLAGS) -I$(CHECKER_INC_DIR) -Ibenchmarks/include \
 	-DLOTA_INTERNAL_TESTS $(SDK_VERSION_CFLAGS) \
@@ -1303,25 +999,9 @@ sparse:
 		echo "sparse: findings above must be fixed" >&2; exit 1; \
 	fi
 
-# smatch over every project C source.
-# Blocking: Any finding fails.
-#
-# smatch has no distribution package, so the target skips when the binary is
-# absent -- but when it runs, it decides.
-# CI always runs it: the smatch job in c-static-analysis.yml builds SMATCH_REV
-# from source and caches it. Build the same revision locally to match:
-#
-#     git clone https://repo.or.cz/smatch.git && make -C smatch
-#     make smatch SMATCH=$PWD/smatch/smatch
-#
-# Two shapes of output count, and they are not the same thing.
-# smatch's own findings are "file.c:LINE func() warn:" -- no column,
-# and "warn" rather than "warning", which is why the sparse filter does not
-# match them. Front-end errors are "file.c:LINE:COL: error:" and mean smatch
-# failed to assemble the translation unit, so the file was never analysed.
-#
-# Findings inside system headers are dropped for the same reason as sparse:
-# they describe the C library and vary per distribution.
+# Skipped when smatch is missing; CI builds SMATCH_REV from
+# c-static-analysis.yml. smatch's own findings carry no column
+# ("file.c:LINE func() warn:"); its front-end errors do.
 SMATCH_FINDING_RE := ^[^ ]+:[0-9]+ .*\(\) (warn|error|info|warning):
 SMATCH_PARSE_RE := :[0-9]+:[0-9]+: (error|warning):
 
@@ -1362,9 +1042,7 @@ smatch:
 		echo "smatch: findings above must be fixed" >&2; exit 1; \
 	fi
 
-# Coccinelle semantic-patch rules in scripts/coccinelle/ over the C sources.
-# Blocking: rules are curated to be clean on a healthy tree, so any match is
-# real finding and fails the target.
+# Any match of a scripts/coccinelle/ rule fails.
 .PHONY: coccicheck
 coccicheck:
 	@command -v $(SPATCH) >/dev/null 2>&1 || { \
@@ -1387,7 +1065,7 @@ coccicheck:
 	fi; \
 	echo "coccicheck: clean"
 
-# x86_64 installs need the 32-bit Wine hook, or Steam logs a loader error
+# x86_64 installs need the 32-bit Wine hook
 .PHONY: check-hook32
 check-hook32:
 ifeq ($(ARCH),x86_64)
@@ -1397,9 +1075,7 @@ ifneq ($(LOTA_HOOK32),1)
 endif
 endif
 
-# Install to system (requires root)
-# selinux-pp is required, not guarded: without the module lota-install's
-# SELinux stage has nothing to load.
+# selinux-pp is required: lota-install's SELinux stage loads the module.
 .PHONY: install
 install: check-version-tag check-hook32 all selinux-pp
 	install -d $(DESTDIR)/usr/bin
@@ -1417,17 +1093,11 @@ install: check-version-tag check-hook32 all selinux-pp
 	install -m 755 $(VERIFIER_BIN) $(DESTDIR)/usr/bin/
 	install -m 755 $(ATTESTCA_BIN) $(DESTDIR)/usr/bin/
 	install -m 644 $(BPF_OBJ) $(DESTDIR)/usr/lib/lota/
-	@# Install the detached BPF signature too when sign-bpf produced
-	@# one. Agent's bpf_loader_load() reads <obj>.sig next to the .o,
-	@# so the two files must land in the same directory. Production
-	@# installs the .sig generated against the operator key; CI
-	@# packaging that has not signed yet leaves the file absent so
-	@# the agent will refuse to load until sign-bpf runs.
+	@# The agent reads <obj>.sig beside the object; without one it
+	@# refuses the object.
 	@if [ -f $(BPF_OBJ).sig ]; then \
 		install -m 644 $(BPF_OBJ).sig $(DESTDIR)/usr/lib/lota/; \
 	fi
-	@# Same for the public half of the key it was signed with:
-	@# it is the other end of that signature, so it ships beside it or not at all
 	@if [ -f $(PKG_ENFORCEMENT_PUB) ]; then \
 		install -m 644 $(PKG_ENFORCEMENT_PUB) \
 			$(DESTDIR)/usr/lib/lota/enforcement.pub; \
@@ -1456,9 +1126,7 @@ endif
 		$(DESTDIR)/usr/share/lota/ima/lota-ima-policy
 	install -d $(DESTDIR)$(SELINUX_DATA_DIR)
 	install -m 644 $(SELINUX_PP) $(DESTDIR)$(SELINUX_DATA_DIR)/lota.pp
-	@# The interfaces are callable only from a file the policy devel
-	@# Makefile can see, so the source ships beside the module for a
-	@# caller to copy.
+	@# lota.if ships for policies that call its interfaces.
 	install -m 644 $(SELINUX_IF) $(DESTDIR)$(SELINUX_DATA_DIR)/lota.if
 	install -d $(DESTDIR)/etc/dbus-1/system.d
 	install -m 644 dbus/org.lota.Agent1.conf $(DESTDIR)/etc/dbus-1/system.d/
@@ -1486,8 +1154,6 @@ endif
 	install -m 644 $(PKGCONFIG_FILES) $(DESTDIR)/usr/lib64/pkgconfig/
 	@echo "Installed to $(DESTDIR)/usr"
 
-# Build test binaries
-#
 # tests/test_*.c is picked up automatically. A test that links more than its
 # own source declares the extra prerequisites and flags below.
 TEST_SDK_BIN := $(BUILD_DIR)/test_sdk_ipc
@@ -1498,7 +1164,7 @@ TEST_BINS += $(BUILD_DIR)/demo_sdk
 TEST_BINS += $(BUILD_DIR)/test_cross_lang_report_gen
 TEST_BINS += $(BUILD_DIR)/test_cross_lang_verify
 
-# Need a live agent, a server or generated input
+# Left out of the test loop.
 TEST_MANUAL := \
 	$(BUILD_DIR)/demo_sdk \
 	$(BUILD_DIR)/hook_preload_target \
@@ -1636,8 +1302,8 @@ $(BUILD_DIR)/test_bpf_loader_load_source: TEST_LDLIBS += \
 	-Wl,--wrap=bpf_object__open_file \
 	-Wl,--wrap=bpf_object__open_mem
 
-# wraps return NULL with errno clear: refusal path without a kernel;
-# the map calls run over a table in memory
+# The open and attach wraps return NULL with errno clear; the map calls run
+# over a table in memory.
 $(BUILD_DIR)/test_bpf_loader_open_fails_closed: TEST_LDLIBS += \
 	-Wl,--wrap=policy_verify_buffer \
 	-Wl,--wrap=bpf_object__open_mem \
@@ -1888,13 +1554,10 @@ $(BUILD_DIR)/test_cross_lang_verify: tests/cross_lang/test_verify.c $(SERVER_SDK
 	$(QUIET_CC)
 	$(Q)$(CC) $(CFLAGS) -o $@ $< -L$(BUILD_DIR) -llotaserver -Wl,-rpath,$(abspath $(BUILD_DIR)) -lcrypto
 
-# Build the unit/integration test binaries without running them. Used by
-# the include-hygiene gate so test sources are analyzed too.
+# Used by the include-hygiene gate.
 .PHONY: test-bins
 test-bins: $(TEST_BINS)
 
-# Full test suite (unit + integration + hardware)
-# Note: hardware tests require root. Run 'sudo make test-hardware' for them.
 .PHONY: test
 test: test-unit
 
@@ -2032,21 +1695,15 @@ test-sdk: $(TEST_SDK_BIN) $(SDK_LIB) $(AGENT_BIN)
 	@echo "Start agent in another terminal: sudo $(BUILD_DIR)/lota-agent --test-ipc"
 	@echo "Then run: $(BUILD_DIR)/test_sdk_ipc"
 
-# Build every CI-safe userspace artifact under ASan/UBSan. This is a
-# compilation/smoke gate for broad coverage; make test-unit remains the
-# runtime sanitizer gate for the standalone unit tests.
+# Builds under ASan/UBSan without running anything; SANITIZE=address,undefined
+# test-unit runs the unit tests under them.
 SANITIZER_BUILD_TARGETS = all examples $(BENCH_C_BIN) $(LOTA_BENCH_BIN) \
 	syzkaller-fuzz-loader
 .PHONY: sanitizer-build
 sanitizer-build:
 	$(MAKE) SANITIZE=address,undefined $(SANITIZER_BUILD_TARGETS)
 
-# Memcheck the standalone unit tests. test_hardening is excluded on
-# purpose: it probes seccomp (syscall 317, which valgrind cannot model)
-# and issues a mount(2) with a deliberately invalid source pointer to
-# prove the call reached the kernel rather than being filtered. Both
-# are reported as errors by valgrind by design, so AddressSanitizer
-# (make SANITIZE=address,undefined test-unit) covers that test instead.
+# test_hardening is left out: valgrind cannot run its seccomp filters.
 VALGRIND ?= valgrind
 VALGRIND_FLAGS := --error-exitcode=1 --leak-check=full \
 	--errors-for-leak-kinds=definite,indirect --track-origins=yes -q
@@ -2085,9 +1742,7 @@ valgrind-unit: $(TEST_BINS)
 	done
 	@echo "valgrind-unit: clean"
 
-# Keep valgrind-unit for exhaustive standalone unit binaries, and add
-# a separate smoke pass for operator-facing binaries that are safe to
-# execute without TPM/BPF/root.
+# CLI paths that run without a TPM, BPF or root.
 VALGRIND_SMOKE_CONFIG := $(BUILD_DIR)/valgrind-smoke.conf
 .PHONY: valgrind-smoke
 valgrind-smoke: all examples
@@ -2113,14 +1768,11 @@ valgrind-smoke: all examples
 	fi
 	@echo "valgrind-smoke: clean"
 
-# Fuzzing
 FUZZ_CFLAGS := $(CFLAGS) -fsanitize=fuzzer,address -g -O1
 
 # Linked into every fuzz target: disables LSan where ptrace attach is refused
 FUZZ_LSAN_OBJ := $(BUILD_DIR)/fuzz/lsan_options.o
 
-# Every C libFuzzer harness lives under fuzz/ as fuzz_<name>.c;
-# the agent sources they exercise stay under src/agent/
 FUZZ_AGENT_OBJS := $(filter-out $(BUILD_DIR)/agent/main.o $(BUILD_DIR)/agent/ipc.o $(BUILD_DIR)/agent/reload.o $(BUILD_DIR)/agent/test_servers.o $(BUILD_DIR)/agent/startup_policy.o $(BUILD_DIR)/agent/daemon_loop.o, $(AGENT_OBJS))
 FUZZ_AGENT_OBJS += $(BUILD_DIR)/fuzz/fuzz_ipc.o $(FUZZ_LSAN_OBJ)
 
@@ -2140,7 +1792,6 @@ fuzz-agent: $(FUZZ_AGENT_OBJS)
 	$(QUIET_CLANG)
 	$(Q)clang $(FUZZ_CFLAGS) -o $(BUILD_DIR)/fuzz-agent $(FUZZ_AGENT_OBJS) $(LDFLAGS)
 
-# Config parser fuzz (links config.c, pin.c, io_utils.c; tpm.h headers only)
 FUZZ_CONFIG_SRCS := src/agent/config.c src/agent/pin.c src/agent/io_utils.c
 FUZZ_CONFIG_OBJS := $(patsubst src/agent/%.c,$(BUILD_DIR)/fuzz/config_%.o,$(FUZZ_CONFIG_SRCS))
 
@@ -2157,7 +1808,6 @@ fuzz-config: $(BUILD_DIR)/fuzz/fuzz_config.o $(FUZZ_CONFIG_OBJS) $(FUZZ_LSAN_OBJ
 	$(QUIET_CLANG)
 	$(Q)clang $(FUZZ_CFLAGS) -o $(BUILD_DIR)/fuzz-config $^
 
-# lota-bench result validator fuzz (standalone, libc only)
 FUZZ_BENCH_SRCS := fuzz/fuzz_bench_result.c \
 	$(addprefix $(LOTA_BENCH_DIR)/,validate.c json.c result.c cgroup.c machine.c field.c)
 
@@ -2167,7 +1817,6 @@ fuzz-bench-result: $(FUZZ_BENCH_SRCS) $(wildcard $(LOTA_BENCH_DIR)/*.h) $(FUZZ_L
 	$(Q)clang $(FUZZ_CFLAGS) -o $(BUILD_DIR)/fuzz-bench-result \
 		$(FUZZ_BENCH_SRCS) $(FUZZ_LSAN_OBJ)
 
-# lota-bench MangoHud log reader fuzz (standalone, libc only)
 FUZZ_BENCH_FRAMES_SRCS := fuzz/fuzz_bench_frames.c $(LOTA_BENCH_DIR)/frames.c
 
 .PHONY: fuzz-bench-frames
@@ -2176,7 +1825,6 @@ fuzz-bench-frames: $(FUZZ_BENCH_FRAMES_SRCS) $(LOTA_BENCH_DIR)/frames.h $(FUZZ_L
 	$(Q)clang $(FUZZ_CFLAGS) -o $(BUILD_DIR)/fuzz-bench-frames \
 		$(FUZZ_BENCH_FRAMES_SRCS) $(FUZZ_LSAN_OBJ)
 
-# Enrollment reply decoders fuzz (standalone, includes enroll.c, libc only)
 $(BUILD_DIR)/fuzz/fuzz_enroll.o: fuzz/fuzz_enroll.c src/agent/enroll.c src/agent/enroll.h | $(BUILD_DIR)/fuzz
 	$(QUIET_CLANG)
 	$(Q)clang $(FUZZ_CFLAGS) -c $< -o $@
@@ -2186,7 +1834,6 @@ fuzz-enroll: $(BUILD_DIR)/fuzz/fuzz_enroll.o $(FUZZ_LSAN_OBJ)
 	$(QUIET_CLANG)
 	$(Q)clang $(FUZZ_CFLAGS) -o $(BUILD_DIR)/fuzz-enroll $^
 
-# Sealed-envelope parser + AES-256-GCM core fuzz (links seal_envelope.c)
 $(BUILD_DIR)/fuzz/fuzz_seal_envelope.o: fuzz/fuzz_seal_envelope.c include/lota_envelope.h | $(BUILD_DIR)/fuzz
 	$(QUIET_CLANG)
 	$(Q)clang $(FUZZ_CFLAGS) -I$(INC_DIR) -c $< -o $@
@@ -2200,7 +1847,6 @@ fuzz-seal-envelope: $(BUILD_DIR)/fuzz/fuzz_seal_envelope.o $(BUILD_DIR)/fuzz/sea
 	$(QUIET_CLANG)
 	$(Q)clang $(FUZZ_CFLAGS) -o $(BUILD_DIR)/fuzz-seal-envelope $^ -lcrypto
 
-# TPM attestation-structure unmarshal fuzz (standalone, tss2-mu only)
 $(BUILD_DIR)/fuzz/fuzz_tpm_attest.o: fuzz/fuzz_tpm_attest.c | $(BUILD_DIR)/fuzz
 	$(QUIET_CLANG)
 	$(Q)clang $(FUZZ_CFLAGS) -c $< -o $@
@@ -2210,7 +1856,6 @@ fuzz-tpm-attest: $(BUILD_DIR)/fuzz/fuzz_tpm_attest.o $(FUZZ_LSAN_OBJ)
 	$(QUIET_CLANG)
 	$(Q)clang $(FUZZ_CFLAGS) -o $(BUILD_DIR)/fuzz-tpm-attest $^ -ltss2-mu
 
-# Policy Ed25519 signature-verify fuzz (links policy_sign.c)
 $(BUILD_DIR)/fuzz/fuzz_policy_sign.o: fuzz/fuzz_policy_sign.c src/agent/policy_sign.h | $(BUILD_DIR)/fuzz
 	$(QUIET_CLANG)
 	$(Q)clang $(FUZZ_CFLAGS) -I$(INC_DIR) -c $< -o $@
@@ -2224,7 +1869,6 @@ fuzz-policy-sign: $(BUILD_DIR)/fuzz/fuzz_policy_sign.o $(BUILD_DIR)/fuzz/policy_
 	$(QUIET_CLANG)
 	$(Q)clang $(FUZZ_CFLAGS) -o $(BUILD_DIR)/fuzz-policy-sign $^ -lcrypto
 
-# Server SDK attestation-token verify fuzz (links lota_server.c)
 $(BUILD_DIR)/fuzz/fuzz_server_sdk.o: fuzz/fuzz_server_sdk.c include/lota_server.h | $(BUILD_DIR)/fuzz
 	$(QUIET_CLANG)
 	$(Q)clang $(FUZZ_CFLAGS) -I$(INC_DIR) -c $< -o $@
@@ -2238,7 +1882,6 @@ fuzz-server-sdk: $(BUILD_DIR)/fuzz/fuzz_server_sdk.o $(BUILD_DIR)/fuzz/server_sd
 	$(QUIET_CLANG)
 	$(Q)clang $(FUZZ_CFLAGS) -o $(BUILD_DIR)/fuzz-server-sdk $^ -lcrypto
 
-# TPM2B response/credential unmarshal fuzz (standalone, tss2-mu only)
 $(BUILD_DIR)/fuzz/fuzz_tpm_resp.o: fuzz/fuzz_tpm_resp.c | $(BUILD_DIR)/fuzz
 	$(QUIET_CLANG)
 	$(Q)clang $(FUZZ_CFLAGS) -c $< -o $@
@@ -2248,13 +1891,9 @@ fuzz-tpm-resp: $(BUILD_DIR)/fuzz/fuzz_tpm_resp.o $(FUZZ_LSAN_OBJ)
 	$(QUIET_CLANG)
 	$(Q)clang $(FUZZ_CFLAGS) -o $(BUILD_DIR)/fuzz-tpm-resp $^ -ltss2-mu
 
-# BPF LSM decision-logic oracle fuzzers (standalone, libc only).
-#
-# Differential harnesses under fuzz/bpf_oracle/:
-# mirror of the BPF helper logic checked against an independent reference.
-# fuzz-bpf-devt is zero-copy over the real include/lota_devt.h.
-# others mirror helpers embedded in src/bpf/lota_lsm.bpf.c
-# (see fuzz/bpf_oracle/MIRROR.md)
+# fuzz-bpf-devt and fuzz-bpf-event-budget run the headers the BPF LSM
+# includes; the other oracles run mirrors of helpers in
+# src/bpf/lota_lsm.bpf.c.
 BPF_ORACLE_CFLAGS := $(FUZZ_CFLAGS) -I$(INC_DIR) -Ifuzz/bpf_oracle
 
 $(BUILD_DIR)/fuzz/fuzz_devt.o: fuzz/bpf_oracle/fuzz_devt.c include/lota_devt.h | $(BUILD_DIR)/fuzz
@@ -2315,19 +1954,15 @@ fuzz-bpf-shebang: $(BUILD_DIR)/fuzz/fuzz_shebang.o $(FUZZ_LSAN_OBJ)
 fuzz-bpf-all: fuzz-bpf-devt fuzz-bpf-open-flags fuzz-bpf-kmem-device \
 	fuzz-bpf-event-budget fuzz-bpf-inaccessible-exec fuzz-bpf-shebang
 
-# Mirror drift guard.
-# Mirrors harnesses copy decision logic out of src/bpf/lota_lsm.bpf.c;
-# fuzz/bpf_oracle/mirror.lock pins that source by content hash.
-# check-bpf-mirror fails when production drifts from the lock,
-# so a change to a mirrored helper forces a re-verify of the copy.
-# Line references to the source also fail: the lock misses a moved helper.
+# mirror.lock pins the mirrored helpers by hash and the macros by definition.
+# check-bpf-mirror fails when they change, or when fuzz/bpf_oracle cites the
+# source by line.
 BPF_MIRROR_SRC := src/bpf/lota_lsm.bpf.c
 BPF_MIRROR_DIR := fuzz/bpf_oracle
 BPF_MIRROR_LOCK := $(BPF_MIRROR_DIR)/mirror.lock
 BPF_MIRROR_FUNCS := is_write_open_flags is_kernel_mem_device is_shebang_binprm is_inaccessible_exec_path
 BPF_MIRROR_MACROS := LOTA_O_ACCMODE LOTA_O_WRONLY LOTA_O_RDWR LOTA_O_TRUNC S_IFMT S_IFCHR BINPRM_FLAGS_PATH_INACCESSIBLE
 
-# emit the canonical "func"/"macro" lines for the current production source
 define BPF_MIRROR_GEN
 	for fn in $(BPF_MIRROR_FUNCS); do \
 		h=$$(awk -v fn="$$fn" '$$0 ~ ("(^|[^A-Za-z_])" fn "\\(") && /^static/ {inf=1} inf{print} inf && /^}/{exit}' $(BPF_MIRROR_SRC) | sha256sum | cut -d" " -f1); \
@@ -2401,9 +2036,6 @@ fuzz-regress: fuzz-all
 	done; \
 	exit $$rc
 
-# syzkaller bring-up harness: loads the production BPF LSM object,
-# attaches every hook in enforce mode, and idles so syz-executor's
-# syscalls run through the LOTA kernel surface. See syzkaller/README.rst.
 SYZ_FUZZ_LOADER := $(BUILD_DIR)/lota_bpf_fuzz
 
 .PHONY: syzkaller-fuzz-loader
@@ -2596,11 +2228,6 @@ help:
 	@$(HELP_EXAMPLE) "SANITIZE=address,undefined make test-unit" "Build and run under ASan/UBSan"
 	@$(HELP_EXAMPLE) "BENCH_COUNT=10 make bench-go" "More samples for benchstat"
 
-# Benchmarks (see benchmarks/README.rst).
-# L1 micro-benchmarks only
-# L2 macro suite (hyperfine over swtpm)
-# L3 kernel suite (perf over the BPF LSM)
-# are operator runbooks documented in benchmarks/README.rst.
 .PHONY: bench bench-go bench-c bench-clean
 
 BENCH_DIR := benchmarks
@@ -2657,7 +2284,6 @@ $(BENCH_C_BIN): $(BENCH_DIR)/c/bench_sdk.c $(ANTICHEAT_SRCS) \
 bench-clean:
 	rm -rf $(BENCH_RESULTS)/*.txt $(BENCH_RESULTS)/*.json $(BENCH_C_BIN)
 
-# pull in auto-generated header dependencies
 -include $(AGENT_OBJS:.o=.d)
 -include $(SDK_OBJS:.o=.d)
 -include $(SERVER_SDK_OBJS:.o=.d)
