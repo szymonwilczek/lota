@@ -1,13 +1,6 @@
 // SPDX-License-Identifier: MIT
 // Copyright (C) 2026 Szymon Wilczek
 // LOTA Verifier - REST Monitoring API
-//
-// HTTP endpoints for monitoring and health checking:
-//   GET /health              - Load balancer health check
-//   GET /api/v1/stats        - Verification statistics
-//   GET /api/v1/clients      - List registered clients
-//   GET /api/v1/clients/{id} - Per-client details
-//   GET /metrics             - Prometheus-compatible metrics
 
 package server
 
@@ -43,7 +36,7 @@ const (
 	maxDetailChars   = 2048
 )
 
-// serves the monitoring REST API
+// APIHandler serves the monitoring REST API.
 type APIHandler struct {
 	verifier       *verify.Verifier
 	server         *Server
@@ -52,25 +45,18 @@ type APIHandler struct {
 	log            *slog.Logger
 	metrics        *metrics.Metrics
 	startTime      time.Time
-	adminAPIKey    string // if non-empty, required for mutating endpoints
-	reportOnly     bool   // instance reads a database it cannot write
-	readerAPIKey   string // if non-empty, required for sensitive read-only endpoints
+	adminAPIKey    string
+	reportOnly     bool // instance reads a database it cannot write
+	readerAPIKey   string
 	adminKeyHash   [32]byte
 	readerKeyHash  [32]byte
 	routes         []string // patterns handed to the mux, in order
 	endpoints      []string // what those patterns serve, as an operator calls it
 }
 
-// creates a new API handler and registers routes on the given mux
-// adminAPIKey controls access to mutating endpoints (revoke, ban):
-//   - non-empty: requires Authorization: Bearer <key> header
-//   - empty: all mutating endpoints return 403
-//
-// readerAPIKey controls access to sensitive read-only endpoints:
-//   - non-empty: requires Authorization: Bearer <reader-key|admin-key>
-//   - empty but admin key set: still requires Authorization: Bearer <admin-key>
-//   - both empty: sensitive read-only endpoints are public (loopback dev only;
-//     the server refuses a non-loopback bind in this state)
+// NewAPIHandler registers the monitoring routes on mux. The reader endpoints
+// are open while no key of any kind is configured; the admin endpoints answer
+// 403 while neither an admin key nor a key file is.
 func NewAPIHandler(mux *http.ServeMux, verifier *verify.Verifier, srv *Server, auditLog store.AuditLog, logger *slog.Logger, m *metrics.Metrics, attestLog store.AttestationLog, adminAPIKey, readerAPIKey string) *APIHandler {
 	if logger == nil {
 		logger = logging.Nop()
@@ -99,14 +85,11 @@ func NewAPIHandler(mux *http.ServeMux, verifier *verify.Verifier, srv *Server, a
 		h.readerKeyHash = sha256.Sum256([]byte(readerAPIKey))
 	}
 
-	// public monitoring endpoints (no auth required)
 	h.handle(mux, "GET /health", h.handleHealth)
 
-	// operational intelligence endpoints (reader or admin auth required)
 	h.handle(mux, "GET /api/v1/stats", h.requireReader(h.handleStats))
 	h.handle(mux, "GET /metrics", h.requireReader(h.handleMetrics))
 
-	// sensitive read-only endpoints (reader or admin auth required)
 	h.handle(mux, "GET /api/v1/clients", h.requireReader(h.handleListClients))
 	h.handle(mux, "GET /api/v1/clients/", h.requireReader(h.handleClientInfo),
 		"GET /api/v1/clients/{id}")
@@ -115,30 +98,23 @@ func NewAPIHandler(mux *http.ServeMux, verifier *verify.Verifier, srv *Server, a
 	h.handle(mux, "GET /api/v1/audit", h.requireReader(h.handleAuditLog))
 	h.handle(mux, "GET /api/v1/attestations", h.requireReader(h.handleAttestationLog))
 
-	// revocation management (admin auth required)
 	h.handle(mux, "POST /api/v1/clients/", h.requireAdmin(h.handleClientAction),
 		"POST /api/v1/clients/{id}/revoke")
 	h.handle(mux, "DELETE /api/v1/clients/", h.requireAdmin(h.handleClientAction),
 		"DELETE /api/v1/clients/{id}/revoke", "DELETE /api/v1/clients/{id}")
 
-	// post-fact review of Low-Firmware-Assurance re-anchors.
-	// LFA re-anchors apply automatically; these endpoints let an operator see
-	// which clients took that path and acknowledge having reviewed them.
-	// Acknowledge route is more specific than the POST /clients/ pattern
-	// above, so Go's mux routes it here.
 	h.handle(mux, "GET /api/v1/reanchor/review",
 		h.requireReader(h.handleReanchorReviewList))
+	// more specific than POST /api/v1/clients/, so the mux routes the
+	// acknowledgement here
 	h.handle(mux, "POST /api/v1/clients/{clientID}/reanchor-review-ack",
 		h.requireAdmin(h.handleReanchorReviewAck),
 		"POST /api/v1/clients/{id}/reanchor-review-ack")
 
-	// operator-forced re-baseline;
-	// deliberate counterpart of the self-service re-anchor above (admin auth required)
 	h.handle(mux, "POST /api/v1/clients/{clientID}/reanchor",
 		h.requireAdmin(h.handleForceReanchor),
 		"POST /api/v1/clients/{id}/reanchor")
 
-	// hardware ban management (admin auth required)
 	h.handle(mux, "POST /api/v1/bans", h.requireAdmin(h.handleBanHardware))
 	h.handle(mux, "DELETE /api/v1/bans/", h.requireAdmin(h.handleUnbanHardware),
 		"DELETE /api/v1/bans/{id}")
@@ -188,11 +164,9 @@ func (h *APIHandler) handleUnmatched(mux *http.ServeMux) http.HandlerFunc {
 	}
 }
 
-// handle registers a route and records both the pattern the mux matches on
-// and the endpoints an operator can call. They differ where one pattern
-// dispatches several actions by path: the pattern is what routing needs,
-// the endpoints are what an inventory has to name.
-// Given no endpoints, a route advertises itself.
+// handle registers pattern and records the endpoints it serves, which differ
+// where one pattern dispatches several actions by path; given none, the pattern
+// is its own endpoint.
 func (h *APIHandler) handle(mux *http.ServeMux, pattern string,
 	handler http.HandlerFunc, endpoints ...string,
 ) {
@@ -204,20 +178,16 @@ func (h *APIHandler) handle(mux *http.ServeMux, pattern string,
 	mux.HandleFunc(pattern, handler)
 }
 
-// AdvertisedRoutes is what the instance tells an operator it exposes.
-// It is what the routes above registered, so the banner cannot name an endpoint
-// nothing serves or omit one that is served.
+// AdvertisedRoutes returns the endpoints handle registered,
+// so the banner names exactly what is served.
 func (h *APIHandler) AdvertisedRoutes() []string {
 	return h.endpoints
 }
 
-// principalCtxKey carries the authenticated Principal through the
-// request context so handlers can scope responses to its tenant set.
 type principalCtxKey struct{}
 
-// requestPrincipal returns the authenticated principal of a request.
-// nil means the endpoint was served without authentication
-// -- the loopback development default -- and scopes as every-tenant
+// requestPrincipal returns the authenticated principal of a request,
+// nil when the endpoint was served without authentication.
 func requestPrincipal(r *http.Request) *Principal {
 	if p, ok := r.Context().Value(principalCtxKey{}).(*Principal); ok {
 		return p
@@ -225,10 +195,8 @@ func requestPrincipal(r *http.Request) *Principal {
 	return nil
 }
 
-// principalAllowsTenant reports whether the request principal may see
-// or act within a tenant.
-// Unauthenticated (nil) principal scopes as every tenant,
-// matching the loopback dev default.
+// principalAllowsTenant reports whether p may see or act within tenant;
+// a nil p may act in every tenant.
 func principalAllowsTenant(p *Principal, tenant string) bool {
 	if p == nil {
 		return true
@@ -236,14 +204,13 @@ func principalAllowsTenant(p *Principal, tenant string) bool {
 	return p.AllowsTenant(tenant)
 }
 
-// scopedToTenants reports whether the principal carries restricted tenant set
-// (i.e. listings must be filtered).
+// scopedToTenants reports whether p is limited to a tenant set.
 func scopedToTenants(p *Principal) bool {
 	return p != nil && !p.AllTenants
 }
 
-// clientTenant resolves the CA-assigned tenant of a client,
-// falling back to the default tenant for clients without baseline row.
+// clientTenant returns the tenant of a client, the default tenant when
+// ClientInfo finds none.
 func (h *APIHandler) clientTenant(clientID string) string {
 	if info, found := h.verifier.ClientInfo(clientID); found {
 		return info.Tenant
@@ -251,12 +218,10 @@ func (h *APIHandler) clientTenant(clientID string) string {
 	return verify.DefaultTenant
 }
 
-// withPrincipal stashes the principal on the request context.
 func withPrincipal(r *http.Request, p *Principal) *http.Request {
 	return r.WithContext(context.WithValue(r.Context(), principalCtxKey{}, p))
 }
 
-// scopedKeySet returns the scoped key set when the server carries one.
 func (h *APIHandler) scopedKeySet() *APIKeySet {
 	if h.server == nil {
 		return nil
@@ -264,8 +229,8 @@ func (h *APIHandler) scopedKeySet() *APIKeySet {
 	return h.server.apiKeySet()
 }
 
-// resolvePrincipal authenticates bearer token against the env keys
-// (global scope by design, the dev default) and the scoped key file.
+// resolvePrincipal matches token against the environment keys,
+// which cover every tenant, and then the scoped key file.
 func (h *APIHandler) resolvePrincipal(token string) *Principal {
 	if h.adminAPIKey != "" && tokenMatchesHash(token, h.adminKeyHash) {
 		return &Principal{Role: RoleAdmin, AllTenants: true}
@@ -279,21 +244,20 @@ func (h *APIHandler) resolvePrincipal(token string) *Principal {
 	return nil
 }
 
-// authConfigured reports whether any auth tier exists at all.
 func (h *APIHandler) authConfigured() bool {
 	return h.adminAPIKey != "" || h.readerAPIKey != "" || h.scopedKeySet().Len() > 0
 }
 
-// adminConfigured reports whether any key can reach the admin tier.
 func (h *APIHandler) adminConfigured() bool {
 	return h.adminAPIKey != "" || h.scopedKeySet().Len() > 0
 }
 
-// wraps a handler with Bearer token authentication
-// if no admin-capable key is configured, all mutating requests are rejected
+// requireAdmin admits a principal with the admin role. A report-only
+// instance answers 503 first. With neither an admin key nor a key file every
+// call gets 403; otherwise a missing token gets 401 and a key without the
+// admin role 403.
 func (h *APIHandler) requireAdmin(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		// read-only database: refuse before the key check and the write
 		if h.reportOnly {
 			h.log.Warn("state-changing endpoint called on a reporting instance",
 				"method", logging.SanitizeField(r.Method),
@@ -336,16 +300,11 @@ func (h *APIHandler) requireAdmin(next http.HandlerFunc) http.HandlerFunc {
 	}
 }
 
-// wraps a handler with reader-level authentication
-// accepts the reader env key, the admin env key, or any scoped key
-// (admin implies reader).
-// Endpoint is public only when no auth tier is configured at all;
-// configured admin key alone is sufficient to gate reader endpoints,
-// so an operator who sets only an admin key does not silently expose the sensitive read tier
+// requireReader admits any principal.
+// With no key of any kind configured it admits every request.
 func (h *APIHandler) requireReader(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if !h.authConfigured() {
-			// no auth configured: endpoint is public (loopback dev default)
 			next(w, r)
 			return
 		}
@@ -371,7 +330,6 @@ func (h *APIHandler) requireReader(next http.HandlerFunc) http.HandlerFunc {
 	}
 }
 
-// extracts the Bearer token from the Authorization header
 func extractBearerToken(r *http.Request) string {
 	auth := r.Header.Get("Authorization")
 	const prefix = "Bearer "
@@ -381,14 +339,13 @@ func extractBearerToken(r *http.Request) string {
 	return strings.TrimSpace(auth[len(prefix):])
 }
 
-// compares provided token against expected key hash using fixed-size
-// constant-time comparison to avoid key-length timing side channels
+// tokenMatchesHash compares hashes, so the time does not depend on the key
+// length.
 func tokenMatchesHash(token string, expectedHash [32]byte) bool {
 	tokenHash := sha256.Sum256([]byte(token))
 	return subtle.ConstantTimeCompare(tokenHash[:], expectedHash[:]) == 1
 }
 
-// response structs (JSON serialization)
 type healthResponse struct {
 	Status    string `json:"status"`
 	Mode      string `json:"mode,omitempty"` // "reporting" when report-only
@@ -400,10 +357,8 @@ type healthResponse struct {
 	} `json:"tls"`
 }
 
-// statsResponse is the /api/v1/stats body.
-//
-// Fleet-wide counters are pointers so a tenant-scoped response omits them
-// instead of reporting zero.
+// statsResponse keeps fleet-wide counters as pointers, so a tenant-scoped
+// response omits them instead of reporting zero.
 type statsResponse struct {
 	PendingChallenges *int     `json:"pending_challenges,omitempty"`
 	UsedNonces        *int     `json:"used_nonces,omitempty"`
@@ -419,12 +374,8 @@ type statsResponse struct {
 	ActiveBans        int      `json:"active_bans"`
 	Uptime            string   `json:"uptime"`
 	UptimeSec         int64    `json:"uptime_sec"`
-	// TenantScoped is set when the response counts were narrowed to
-	// the caller's tenant set.
-	// Fleet-wide attestation counters are then omitted because they
-	// are not attributable per tenant.
-	TenantScoped bool     `json:"tenant_scoped,omitempty"`
-	Tenants      []string `json:"tenants,omitempty"`
+	TenantScoped      bool     `json:"tenant_scoped,omitempty"`
+	Tenants           []string `json:"tenants,omitempty"`
 }
 
 type clientListResponse struct {
@@ -457,8 +408,8 @@ type errorResponse struct {
 	Error string `json:"error"`
 }
 
-// health check for load balancers
-// returns 200 if the verifier is healthy and accepting connections
+// handleHealth answers 503 "degraded" while the attestation listener is not
+// accepting; a report-only instance, which has none, answers 200.
 func (h *APIHandler) handleHealth(w http.ResponseWriter, r *http.Request) {
 	health := h.server.HealthCheck()
 
@@ -470,7 +421,6 @@ func (h *APIHandler) handleHealth(w http.ResponseWriter, r *http.Request) {
 	resp.TLS.Listening = health.Listening
 	resp.TLS.Address = health.Address
 
-	// no attestation listener by design: report the mode, not a fault
 	if h.reportOnly {
 		resp.Mode = "reporting"
 		resp.TLS.Address = ""
@@ -487,7 +437,6 @@ func (h *APIHandler) handleHealth(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, resp)
 }
 
-// GET /api/v1/stats - verification engine statistics
 func (h *APIHandler) handleStats(w http.ResponseWriter, r *http.Request) {
 	stats := h.verifier.Stats()
 
@@ -512,9 +461,7 @@ func (h *APIHandler) handleStats(w http.ResponseWriter, r *http.Request) {
 		resp.LoadedPolicies = []string{}
 	}
 
-	// tenant-scoped key gets tenant-narrowed counts;
-	// fleet-wide attestation/nonce counters are not attributable per tenant,
-	// so they are zeroed and the response flags itself as scoped
+	// fleet-wide counters cannot be split per tenant, so they are omitted
 	if p := requestPrincipal(r); scopedToTenants(p) {
 		resp.TenantScoped = true
 		resp.Tenants = sortedTenantSet(p)
@@ -557,8 +504,6 @@ func (h *APIHandler) handleStats(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, resp)
 }
 
-// sortedTenantSet returns the principal's explicit tenants in sorted
-// order for a stable stats response.
 func sortedTenantSet(p *Principal) []string {
 	tenants := make([]string, 0, len(p.Tenants))
 	for t := range p.Tenants {
@@ -568,7 +513,6 @@ func sortedTenantSet(p *Principal) []string {
 	return tenants
 }
 
-// GET /api/v1/clients - list all registered clients
 func (h *APIHandler) handleListClients(w http.ResponseWriter, r *http.Request) {
 	const (
 		defaultLimit = 100
@@ -581,9 +525,8 @@ func (h *APIHandler) handleListClients(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// tenant-scoped key sees only its tenants' clients;
-	// SQL-paged fast path below serves the global view, so scoped keys walk
-	// the full list and paginate the filtered result
+	// the store pages the global view only,
+	// so a scoped key pages the filtered list here
 	if p := requestPrincipal(r); scopedToTenants(p) {
 		all := h.verifier.ListClients()
 		visible := make([]string, 0, len(all))
@@ -612,8 +555,7 @@ func (h *APIHandler) handleListClients(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// durable baseline record first, then clients only this instance knows
-	// (out-of-band AIK registrations, sessions with no baseline yet)
+	// clients with a baseline first, then those only this instance knows
 	total := h.verifier.CountDurableClients()
 
 	clients, err := h.verifier.DurableClientsPage(limit, offset)
@@ -663,7 +605,6 @@ func (h *APIHandler) handleListClients(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, resp)
 }
 
-// GET /api/v1/clients/{id} - per-client attestation details
 func (h *APIHandler) handleClientInfo(w http.ResponseWriter, r *http.Request) {
 	path := strings.TrimPrefix(r.URL.Path, "/api/v1/clients/")
 	clientID := strings.TrimRight(path, "/")
@@ -678,7 +619,7 @@ func (h *APIHandler) handleClientInfo(w http.ResponseWriter, r *http.Request) {
 		writeJSONStatus(w, http.StatusNotFound, errorResponse{Error: "client not found"})
 		return
 	}
-	// client outside the key's tenant set does not exist for it
+	// outside the key's tenants a client reads as absent
 	if !principalAllowsTenant(requestPrincipal(r), info.Tenant) {
 		writeJSONStatus(w, http.StatusNotFound, errorResponse{Error: "client not found"})
 		return
@@ -709,18 +650,14 @@ func (h *APIHandler) handleClientInfo(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, resp)
 }
 
-// GET /metrics - Prometheus text exposition format
 func (h *APIHandler) handleMetrics(w http.ResponseWriter, r *http.Request) {
-	// exposition is fleet-wide and carries no tenant dimension,
-	// so tenant-scoped key must not read it:
-	// /api/v1/stats already withholds the same counters from scoped callers
+	// the exposition has no tenant dimension
 	if scopedToTenants(requestPrincipal(r)) {
 		writeJSONStatus(w, http.StatusForbidden,
 			errorResponse{Error: "metrics are global-scope; use a key with tenants [\"*\"]"})
 		return
 	}
 
-	// sync gauges from verifier stats before export
 	stats := h.verifier.Stats()
 	h.metrics.PendingChallenges.Store(int64(stats.PendingChallenges))
 	h.metrics.RegisteredClients.Store(int64(stats.RegisteredClients))
@@ -733,14 +670,12 @@ func (h *APIHandler) handleMetrics(w http.ResponseWriter, r *http.Request) {
 	fmt.Fprint(w, h.metrics.Export())
 }
 
-// JSON request for revoke/unrevoke actions
 type revokeRequest struct {
-	Reason string `json:"reason"` // cheating|compromised|hardware_change|admin
-	Actor  string `json:"actor"`  // administrator identifier
-	Note   string `json:"note"`   // free-form justification
+	Reason string `json:"reason"`
+	Actor  string `json:"actor"`
+	Note   string `json:"note"`
 }
 
-// JSON response for revocation entries
 type revocationResponse struct {
 	ClientID  string `json:"client_id"`
 	Tenant    string `json:"tenant"`
@@ -750,7 +685,6 @@ type revocationResponse struct {
 	Note      string `json:"note"`
 }
 
-// handles POST/DELETE on /api/v1/clients/{id}[/revoke]
 func (h *APIHandler) handleClientAction(w http.ResponseWriter, r *http.Request) {
 	path := strings.TrimPrefix(r.URL.Path, "/api/v1/clients/")
 	parts := strings.SplitN(path, "/", 2)
@@ -761,7 +695,6 @@ func (h *APIHandler) handleClientAction(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	// determine sub-action
 	action := ""
 	if len(parts) > 1 {
 		action = strings.TrimRight(parts[1], "/")
@@ -783,7 +716,6 @@ func (h *APIHandler) handleClientAction(w http.ResponseWriter, r *http.Request) 
 	}
 }
 
-// POST /api/v1/clients/{id}/revoke - revoke a client's AIK
 func (h *APIHandler) handleRevokeClient(w http.ResponseWriter, r *http.Request, clientID string) {
 	revStore := h.verifier.RevocationStore()
 	if revStore == nil {
@@ -807,10 +739,7 @@ func (h *APIHandler) handleRevokeClient(w http.ResponseWriter, r *http.Request, 
 		return
 	}
 
-	// Record the tenant the CA assigned to this client so listings can be scoped
-	// Client with no baseline row falls into the default tenant
 	tenant := h.clientTenant(clientID)
-	// foreign-tenant client does not exist for this key
 	if !principalAllowsTenant(requestPrincipal(r), tenant) {
 		writeJSONStatus(w, http.StatusNotFound, errorResponse{Error: "client not found"})
 		return
@@ -841,7 +770,6 @@ func (h *APIHandler) handleRevokeClient(w http.ResponseWriter, r *http.Request, 
 	})
 }
 
-// DELETE /api/v1/clients/{id}/revoke - unrevoke a client
 func (h *APIHandler) handleUnrevokeClient(w http.ResponseWriter, r *http.Request, clientID string) {
 	revStore := h.verifier.RevocationStore()
 	if revStore == nil {
@@ -849,8 +777,6 @@ func (h *APIHandler) handleUnrevokeClient(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	// Restoring access is the act a fleet most wants signed, so the lift carries
-	// the same attribution its inverse does.
 	var req lifecycleRequest
 	if r.ContentLength != 0 {
 		if err := decodeJSONRequest(w, r, &req); err != nil {
@@ -867,9 +793,7 @@ func (h *APIHandler) handleUnrevokeClient(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	// scope on the revocation's recorded tenant;
-	// foreign-tenant revocation is reported as "not revoked"
-	// so a key cannot probe another tenant's revocation state
+	// a revocation in another tenant reads as absent
 	if scopedToTenants(requestPrincipal(r)) {
 		entry, revoked := revStore.IsRevoked(clientID)
 		if !revoked || !principalAllowsTenant(requestPrincipal(r), entry.Tenant) {
@@ -901,7 +825,6 @@ func (h *APIHandler) handleUnrevokeClient(w http.ResponseWriter, r *http.Request
 	})
 }
 
-// GET /api/v1/revocations - list all active revocations
 func (h *APIHandler) handleListRevocations(w http.ResponseWriter, r *http.Request) {
 	revStore := h.verifier.RevocationStore()
 	if revStore == nil {
@@ -933,16 +856,14 @@ func (h *APIHandler) handleListRevocations(w http.ResponseWriter, r *http.Reques
 	})
 }
 
-// JSON request for ban actions
 type banRequest struct {
-	HardwareID string `json:"hardware_id"`      // hex-encoded 32 bytes
-	Tenant     string `json:"tenant,omitempty"` // ban scope; default tenant when empty
-	Reason     string `json:"reason"`           // cheating|compromised|hardware_change|admin
-	Actor      string `json:"actor"`            // administrator identifier
-	Note       string `json:"note"`             // free-form justification
+	HardwareID string `json:"hardware_id"`
+	Tenant     string `json:"tenant,omitempty"` // empty = default tenant
+	Reason     string `json:"reason"`
+	Actor      string `json:"actor"`
+	Note       string `json:"note"`
 }
 
-// JSON response for ban entries
 type banResponse struct {
 	HardwareID string `json:"hardware_id"`
 	Tenant     string `json:"tenant"`
@@ -987,7 +908,6 @@ func parsePagination(r *http.Request, defaultLimit, maxLimit int) (limit, offset
 	return limit, offset, nil
 }
 
-// POST /api/v1/bans - ban a hardware identity
 func (h *APIHandler) handleBanHardware(w http.ResponseWriter, r *http.Request) {
 	banStr := h.verifier.BanStore()
 	if banStr == nil {
@@ -1018,9 +938,6 @@ func (h *APIHandler) handleBanHardware(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// ban scope is explicit:
-	// default tenant when omitted, validated otherwise,
-	// and always within the key's tenant set
 	tenant := req.Tenant
 	if tenant == "" {
 		tenant = verify.DefaultTenant
@@ -1058,7 +975,6 @@ func (h *APIHandler) handleBanHardware(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// DELETE /api/v1/bans/{hwid} - unban a hardware identity
 func (h *APIHandler) handleUnbanHardware(w http.ResponseWriter, r *http.Request) {
 	banStr := h.verifier.BanStore()
 	if banStr == nil {
@@ -1066,8 +982,6 @@ func (h *APIHandler) handleUnbanHardware(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	// Letting a banned machine back in is the act a fleet most wants signed;
-	// the lift carries the same attribution the ban does.
 	var req unbanRequest
 	if r.ContentLength != 0 {
 		if err := decodeJSONRequest(w, r, &req); err != nil {
@@ -1099,9 +1013,7 @@ func (h *APIHandler) handleUnbanHardware(w http.ResponseWriter, r *http.Request)
 	}
 	canonicalHWID := store.FormatHardwareID(hwid)
 
-	// The tenant used to be read off the URL while the ban read it from the body,
-	// so a request naming it there would otherwise go on lifting in the default
-	// tenant without saying so.
+	// a tenant in the query would otherwise be ignored without a word
 	if r.URL.Query().Has("tenant") {
 		writeJSONStatus(w, http.StatusBadRequest, errorResponse{
 			Error: "tenant is a body field on this endpoint, not a query parameter",
@@ -1109,9 +1021,6 @@ func (h *APIHandler) handleUnbanHardware(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	// ban to lift is identified by (tenant, hardware_id);
-	// tenant comes from the body field the ban was imposed through,
-	// default when omitted, and must be within the key's tenant set
 	tenant := req.Tenant
 	if tenant == "" {
 		tenant = verify.DefaultTenant
@@ -1146,7 +1055,6 @@ func (h *APIHandler) handleUnbanHardware(w http.ResponseWriter, r *http.Request)
 	})
 }
 
-// GET /api/v1/bans?limit=N&next_id=<cursor> - list active hardware bans (keyset-paged)
 func (h *APIHandler) handleListBans(w http.ResponseWriter, r *http.Request) {
 	banStr := h.verifier.BanStore()
 	if banStr == nil {
@@ -1258,9 +1166,7 @@ func (h *APIHandler) handleListBans(w http.ResponseWriter, r *http.Request) {
 		entries = entries[:limit]
 	}
 
-	// tenant-scoped key sees only its tenants' bans;
-	// cursor still advances over every entry (respNextID above),
-	// so filtered page may come back short but pagination stays consistent
+	// the cursor covers every entry, so a scoped page may come back short
 	p := requestPrincipal(r)
 	resp := make([]banResponse, 0, len(entries))
 	for i := range entries {
@@ -1278,8 +1184,7 @@ func (h *APIHandler) handleListBans(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 
-	// when scoped, the store-wide total would leak other tenants' counts;
-	// recompute the visible total from the filtered full list
+	// the store-wide total would count other tenants' bans
 	if scopedToTenants(p) {
 		total = 0
 		for _, e := range banStr.ListBans() {
@@ -1298,7 +1203,6 @@ func (h *APIHandler) handleListBans(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// JSON response for audit entries
 type auditResponse struct {
 	ID        int64  `json:"id"`
 	Timestamp string `json:"timestamp"`
@@ -1310,14 +1214,13 @@ type auditResponse struct {
 	Note      string `json:"note,omitempty"`
 }
 
-// GET /api/v1/audit?limit=N - query audit log
 func (h *APIHandler) handleAuditLog(w http.ResponseWriter, r *http.Request) {
 	if h.auditLog == nil {
 		writeJSONStatus(w, http.StatusServiceUnavailable, errorResponse{Error: "audit log not configured"})
 		return
 	}
 
-	limit := 100 // default
+	limit := 100
 	if l := r.URL.Query().Get("limit"); l != "" {
 		if parsed, err := strconv.Atoi(l); err == nil && parsed > 0 {
 			limit = parsed
@@ -1353,7 +1256,6 @@ func (h *APIHandler) handleAuditLog(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// JSON response for attestation decision entries
 type attestationResponse struct {
 	ID         int64   `json:"id"`
 	Timestamp  string  `json:"timestamp"`
@@ -1371,7 +1273,8 @@ type attestationResponse struct {
 	Rounds   int64  `json:"rounds,omitempty"`    // identical rounds it covers
 }
 
-// RFC 3339 ?since / ?until; unparsable is unset: a wider window beats none
+// attestationTimeParam parses an RFC 3339 query value; an unparsable one is
+// ignored, widening the window.
 func attestationTimeParam(r *http.Request, key string) time.Time {
 	v := r.URL.Query().Get(key)
 	if v == "" {
@@ -1384,8 +1287,6 @@ func attestationTimeParam(r *http.Request, key string) time.Time {
 	return t
 }
 
-// GET /api/v1/attestations?limit=N&since=&until=&result=&events=&client_id=
-// - query attestation decision log
 func (h *APIHandler) handleAttestationLog(w http.ResponseWriter, r *http.Request) {
 	if h.attestationLog == nil {
 		writeJSONStatus(w, http.StatusServiceUnavailable, errorResponse{Error: "attestation log not configured"})
@@ -1442,7 +1343,6 @@ func (h *APIHandler) handleAttestationLog(w http.ResponseWriter, r *http.Request
 	})
 }
 
-// writes JSON response with proper headers and explicit status code
 func writeJSONStatus(w http.ResponseWriter, code int, v any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(code)
@@ -1453,7 +1353,6 @@ func writeJSONStatus(w http.ResponseWriter, code int, v any) {
 	}
 }
 
-// writes JSON response with implicit 200 status
 func writeJSON(w http.ResponseWriter, v any) {
 	w.Header().Set("Content-Type", "application/json")
 	enc := json.NewEncoder(w)
@@ -1488,7 +1387,6 @@ func decodeJSONRequest(w http.ResponseWriter, r *http.Request, dst any) error {
 		return err
 	}
 
-	// refuse unknown fields
 	dec := json.NewDecoder(bytes.NewReader(body))
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(dst); err != nil {
@@ -1533,8 +1431,8 @@ func sanitizeAttestationDetail(s string) string {
 	return out
 }
 
-// strips CR and LF from a request-supplied value
-// so it cannot forge additional log records
+// sanitizeLogField replaces CR and LF in a request-supplied value, so it
+// cannot forge log records.
 func sanitizeLogField(s string) string {
 	s = strings.ReplaceAll(s, "\r", " ")
 	return strings.ReplaceAll(s, "\n", " ")
@@ -1585,8 +1483,8 @@ func validateJSONComplexity(body []byte) error {
 	return nil
 }
 
-// handleReanchorReviewList returns the clients that re-anchored on the
-// Low-Firmware-Assurance path and have not yet been reviewed (reader).
+// handleReanchorReviewList returns the clients whose Low-Firmware-Assurance
+// re-anchor awaits review.
 func (h *APIHandler) handleReanchorReviewList(w http.ResponseWriter, r *http.Request) {
 	clients, err := h.verifier.ListReanchorReview()
 	if err != nil {
@@ -1608,10 +1506,9 @@ func (h *APIHandler) handleReanchorReviewList(w http.ResponseWriter, r *http.Req
 	writeJSON(w, map[string]any{"pending_review": clients, "count": len(clients)})
 }
 
-// handleReanchorReviewAck clears a client's pending-review flag once an
-// operator has inspected its LFA re-anchor (admin only).
-// Requires actor and reason and writes an audit row; unknown clients and
-// clients with nothing queued are refused.
+// handleReanchorReviewAck clears a client's pending LFA review. Actor and
+// reason are required; a client without a baseline or a pending review is
+// refused.
 func (h *APIHandler) handleReanchorReviewAck(w http.ResponseWriter, r *http.Request) {
 	clientID := r.PathValue("clientID")
 	if clientID == "" {
@@ -1671,33 +1568,23 @@ func (h *APIHandler) handleReanchorReviewAck(w http.ResponseWriter, r *http.Requ
 	writeJSON(w, map[string]string{"status": "reviewed", "client_id": clientID})
 }
 
-// JSON request for operator lifecycle actions
-// (forced re-anchor, delete)
 type lifecycleRequest struct {
-	Actor  string `json:"actor"`  // administrator identifier
-	Reason string `json:"reason"` // why this was done
-	Note   string `json:"note"`   // free-form justification
+	Actor  string `json:"actor"`
+	Reason string `json:"reason"`
+	Note   string `json:"note"`
 }
 
-// JSON request for lifting a ban.
-//
-// It carries the tenant the ban lives in, in the field the ban was imposed
-// through: a ban is identified by (tenant, hardware_id), so the two verbs have
-// to name the tenant the same way or an administrator can impose one it cannot
-// lift.
+// unbanRequest names the tenant in the body, as banRequest does:
+// a ban is keyed by tenant and hardware ID.
 type unbanRequest struct {
-	Tenant string `json:"tenant,omitempty"` // ban scope; default tenant when empty
-	Actor  string `json:"actor"`            // administrator identifier
-	Reason string `json:"reason"`           // why this was done
-	Note   string `json:"note"`             // free-form justification
+	Tenant string `json:"tenant,omitempty"` // empty = default tenant
+	Actor  string `json:"actor"`
+	Reason string `json:"reason"`
+	Note   string `json:"note"`
 }
 
-// POST /api/v1/clients/{clientID}/reanchor
-// Drop the client's stored baselines so the next attestation re-establishes
-// trust (admin only).
-// This is the deliberate operator re-baseline for platform changes
-// the self-service re-anchor refuses or is not enabled for.
-// AIK registration is untouched.
+// handleForceReanchor clears a client's baseline, boot baseline included,
+// so its next attestation is a first use again.
 func (h *APIHandler) handleForceReanchor(w http.ResponseWriter, r *http.Request) {
 	clientID := r.PathValue("clientID")
 	if clientID == "" {
@@ -1721,7 +1608,6 @@ func (h *APIHandler) handleForceReanchor(w http.ResponseWriter, r *http.Request)
 
 	logID := sanitizeLogField(clientID)
 
-	// resolve the tenant for scoping and the audit entry
 	tenant := h.clientTenant(clientID)
 	if !principalAllowsTenant(requestPrincipal(r), tenant) {
 		writeJSONStatus(w, http.StatusNotFound, errorResponse{Error: "client not found"})
@@ -1755,13 +1641,9 @@ func (h *APIHandler) handleForceReanchor(w http.ResponseWriter, r *http.Request)
 	})
 }
 
-// DELETE /api/v1/clients/{id}
-// Remove the client's baselines (admin only).
-// The device keeps its certificate; its next attestation becomes the new
-// baseline. Revoke or ban first to keep it out.
-// Revocations and hardware bans survive the delete.
-// Body names who removed the client and why ({"actor", "reason"}),
-// both required.
+// handleDeleteClient clears a client's baseline, boot baseline included,
+// and its nonce store state; its next attestation is a first use again.
+// Revocations and bans stay.
 func (h *APIHandler) handleDeleteClient(w http.ResponseWriter, r *http.Request, clientID string) {
 	var req lifecycleRequest
 	if r.ContentLength != 0 {

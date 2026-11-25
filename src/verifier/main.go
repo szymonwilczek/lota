@@ -1,35 +1,6 @@
 // SPDX-License-Identifier: MIT
 // Copyright (C) 2026 Szymon Wilczek
 // LOTA Verifier - Remote attestation verification service
-//
-// Usage:
-//   lota-verifier [options]
-//
-// Options:
-//   --addr ADDR        Listen address for TLS attestation protocol (default: :8443)
-//   --http-addr ADDR   Listen address for HTTP monitoring API (default: disabled)
-//   --cert FILE        TLS certificate file
-//   --key FILE         TLS private key file
-//   --db PATH          SQLite database for persistent storage (default: disabled)
-//   --state-db PATH    SQLite state without --db or --pg-dsn
-//                      (default: /var/lib/lota/verifier-state.sqlite)
-//   --pg-dsn DSN       PostgreSQL DSN for shared multi-instance storage
-//                      (or LOTA_PG_DSN); mutually exclusive with --db
-//   --policy FILE      PCR policy file (YAML); may be repeated, first is active
-//   --policy-pubkey FILE Ed25519 public key for policy signature verification
-//   --max-connections N Max concurrent attestation connections (default: 256;
-//                      -1 disables the cap)
-
-// Environment variables:
-//   LOTA_ADMIN_API_KEY  API key for admin endpoints (revoke, ban); required for mutation
-//   LOTA_READER_API_KEY API key for sensitive read-only endpoints; if empty, the
-//                       read tier is public on a loopback bind and the server
-//                       refuses a non-loopback bind unless LOTA_ADMIN_API_KEY is set
-//   LOTA_PG_DSN         PostgreSQL DSN for the shared storage backend; keeps
-//                       connection credentials out of the process argument list
-//   --generate-cert    Generate self-signed certificate for testing
-//   --log-format FMT   Log output format: text or json (default: text)
-//   --log-level LVL    Minimum log level: debug, info, warn, error, security (default: info)
 
 package main
 
@@ -112,21 +83,16 @@ var (
 	printVersions       = flag.Bool("print-versions", false, "Print the attestation report wire version this binary implements, the schema version it builds each backend up to, and its TLS floor, then exit. The report wire must match the agent fleet's exactly.")
 )
 
-// errCRLWithoutCARoot is configuration that revokes nothing:
-// CRL is only trusted through the root that signed it, so one given without
-// root would be parsed, ignored, and leave the operator believing revocation is live.
 var errCRLWithoutCARoot = errors.New("--aik-crl requires at least one --aik-ca-cert to verify CRL signatures")
 
-// aikVerifierParams is everything the choice of AIK verifier depends on.
 type aikVerifierParams struct {
 	CACerts     []string
 	CRLs        []string
 	RequireCert bool
 }
 
-// selectAIKVerifier builds the certificate verifier from the configured roots.
-// Without a root there is nothing to chain to: nil, unless --require-cert
-// refuses that outright.
+// selectAIKVerifier returns nil when no CA root is given, unless CRLs are
+// given or RequireCert is set, which is an error.
 func selectAIKVerifier(p aikVerifierParams) (*store.CertificateVerifier, error) {
 	if len(p.CACerts) == 0 {
 		if len(p.CRLs) > 0 {
@@ -141,9 +107,6 @@ func selectAIKVerifier(p aikVerifierParams) (*store.CertificateVerifier, error) 
 	return store.NewCertificateVerifier(p.CACerts, p.CRLs)
 }
 
-// enforcementStores holds operator decisions: revocations, bans, the audit
-// log they write, and the attestation decision log.
-// The API answers 503 for each one that is absent.
 type enforcementStores struct {
 	audit        store.AuditLog
 	revocations  store.RevocationStore
@@ -164,8 +127,7 @@ func sqliteEnforcementStores(db *sql.DB, logger *slog.Logger, m *metrics.Metrics
 	}
 }
 
-// postgresEnforcementStores keeps the group in Postgres, shared by every
-// instance; sharded deployments keep it on the control shard.
+// postgresEnforcementStores keeps the group in Postgres.
 func postgresEnforcementStores(db *sql.DB, logger *slog.Logger, m *metrics.Metrics) enforcementStores {
 	audit := store.NewPostgresAuditLog(db)
 	return enforcementStores{
@@ -178,19 +140,15 @@ func postgresEnforcementStores(db *sql.DB, logger *slog.Logger, m *metrics.Metri
 	}
 }
 
-// install sets the revocation, ban and attestation stores on cfg.
-// A nil store stays nil, which the API reports as absent.
 func (e enforcementStores) install(cfg *verify.VerifierConfig) {
 	cfg.RevocationStore = e.revocations
 	cfg.BanStore = e.bans
 	cfg.AttestationLog = e.attestations
 }
 
-// loadPolicies registers every --policy document in the order it was given.
-//
-// The first one becomes the active policy, used for clients whose tenant binds
-// none. A reused `name:` would silently replace a loaded document and is refused;
-// a further document that binds no tenant is unreachable and is reported.
+// loadPolicies loads paths in order; the first becomes the active policy.
+// A reused name is refused, and a policy neither active nor bound to a tenant
+// is logged.
 func loadPolicies(logger *slog.Logger, verifier *verify.Verifier, paths []string) error {
 	for i, path := range paths {
 		if err := verifier.LoadPolicy(path); err != nil {
@@ -238,9 +196,6 @@ func main() {
 	flag.Var(&aikCRLs, "aik-crl", "CRL file (PEM or DER) used to revoke compromised AIK certificates; may be repeated. Each CRL must be signed by one of the --aik-ca-cert roots.")
 	flag.Parse()
 
-	// --print-versions is query, not server run:
-	// emit the version report and exit before any store,
-	// TLS or listener setup
 	if *printVersions {
 		writeVersions(os.Stdout)
 		return
@@ -270,13 +225,11 @@ func main() {
 		}
 	}
 
-	// validate tls config; report-only binds no attestation listener
 	if (*certFile == "" || *keyFile == "") && !*reportOnly {
 		logger.Error("TLS certificate and key required (use --generate-cert for testing)")
 		os.Exit(1)
 	}
 
-	// initialize stores
 	var auditLog store.AuditLog
 	var attestLog store.AttestationLog
 	verifierCfg := verify.DefaultConfig()
@@ -287,9 +240,7 @@ func main() {
 		logger.Warn("INSECURE: --allow-tofu-boot-baseline is set; a first-attestation client will TOFU-pin whatever PCR0/PCR1/PCR7 values it reports, including firmware/Secure Boot state that may already be compromised")
 	}
 
-	// the policy's `profile` decides
-	// flag overrides it in either direction, so it is only read when
-	// the operator actually passed it
+	// only a flag given on the command line overrides the policy profile
 	flag.Visit(func(f *flag.Flag) {
 		if f.Name != "enable-self-service-reanchor" {
 			return
@@ -308,8 +259,7 @@ func main() {
 		logger.Warn("INSECURE: --allow-unpinned-agent is set; a diverse-fleet policy may run with the agent self-hash on TOFU, so a modified non-enforcing agent could pin its own hash and attest without enforcing")
 	}
 
-	// resolve the Postgres DSN(s) from flag or environment
-	// the env form keeps connection credentials out of the process argument list
+	// the environment keeps credentials out of the argument list
 	dsn := *pgDSN
 	if dsn == "" {
 		dsn = os.Getenv("LOTA_PG_DSN")
@@ -334,7 +284,6 @@ func main() {
 		os.Exit(1)
 	}
 
-	// report-only: monitoring API off Postgres it never writes; needs both
 	if *reportOnly {
 		if !usePostgres {
 			logger.Error("--report-only reads a Postgres database",
@@ -350,9 +299,7 @@ func main() {
 			"note", "the schema is verified but never applied, and every state-changing endpoint answers 503")
 	}
 
-	// mistyped pool is a silent misconfiguration otherwise:
-	// database/sql reads 0 as "unlimited" and the store's own fallback would
-	// quietly hand back the default, so neither reaches the operator
+	// OpenPostgresDB would replace a value below 1 with the default
 	if usePostgres && *pgMaxOpenConns < 1 {
 		logger.Error("--pg-max-open-conns must be at least 1",
 			"value", *pgMaxOpenConns,
@@ -360,7 +307,6 @@ func main() {
 		os.Exit(1)
 	}
 
-	// report-only verifies no AIK chain
 	certs, err := selectAIKVerifier(aikVerifierParams{
 		CACerts:     []string(aikCACerts),
 		CRLs:        []string(aikCRLs),
@@ -382,15 +328,6 @@ func main() {
 	}
 
 	if usePostgres {
-		// Postgres backend: shared, multi-instance state for deployments
-		// behind a load balancer.
-		// Mutable enforcement, baseline and nonce state lives in Postgres
-		// so any instance sees writes made by any peer.
-		//
-		// With --pg-shard-dsn the per-client baseline, nonce and session state
-		// is partitioned across the given databases;
-		// first shard is the control database for enforcement, audit and attestation state
-		/// (fleet-global, read-mostly, not on the per-report path)
 		if len(shardDSNs) == 0 {
 			shardDSNs = []string{dsn}
 		}
@@ -406,11 +343,6 @@ func main() {
 				os.Exit(1)
 			}
 
-			// max_connections is the budget every instance's pool draws from,
-			// so pool sized against it alone is already over budget for the second
-			// instance.
-			// Advisory, not fatal: behind connection pooler the backend limit is not
-			// the one that applies
 			if serverMax, err := store.ServerMaxConnections(sdb); err != nil {
 				logger.Debug("could not read the database's max_connections",
 					"shard", i, "error", err)
@@ -431,13 +363,11 @@ func main() {
 			}
 		}
 
-		// pin the shard set against the control database before anything
-		// takes dependency on the pools
 		shardIDs := make([]string, len(dbs))
 		identity := store.ShardIdentity
 		assertShards := store.AssertShardSet
 		if *reportOnly {
-			// pinning writes on first use; leave it to the attesting side
+			// ShardIdentity writes the identity on first use
 			identity = store.ReadShardIdentity
 			assertShards = store.CheckShardSet
 		}
@@ -513,9 +443,6 @@ func main() {
 			logger.Info("SQLite store initialized", "path", *dbPath, "schema_version", ver)
 		}
 	} else {
-		// no database: used nonces and enforcement state still go to one
-		// SQLite file, so a restart neither re-opens a replay window nor
-		// forgets a ban
 		if !*allowMemState {
 			path := *stateDBPath
 			db, err := store.OpenDB(path)
@@ -537,7 +464,6 @@ func main() {
 			logger.Info("state database opened", "path", path,
 				"holds", "used nonces, revocations, hardware bans, audit log, attestation log")
 		} else {
-			// enforcement stores stay nil, so their endpoints answer 503
 			logger.Warn("INSECURE: no durable state; verifier restart re-opens a replay window and this instance holds no revocations, bans, audit log or decision log",
 				"nonce_lifetime", verifierCfg.NonceLifetime,
 				"api", "revocation, ban, audit and attestation endpoints answer 503")
@@ -546,7 +472,6 @@ func main() {
 
 	verifier := verify.NewVerifier(verifierCfg, aikVerifier)
 
-	// policy signature verification key
 	if *policyPubKey != "" {
 		pubKey, err := verify.LoadPolicyPublicKey(*policyPubKey)
 		if err != nil {
@@ -558,8 +483,6 @@ func main() {
 		logger.Info("policy signature verification enabled", "pubkey", *policyPubKey)
 	}
 
-	// custom policies if specified; report-only verifies nothing
-	// and ignores them
 	switch {
 	case *reportOnly:
 		if len(policyFiles) > 0 {
@@ -584,7 +507,6 @@ func main() {
 		os.Exit(1)
 	}
 
-	// fail closed on a policy with no measurement allowlists unless explicitly allowed
 	if policy, ok := verifier.ActivePolicyConfig(); ok {
 		if verify.IsMeasurementEmptyPolicy(policy) && !*allowPermissive {
 			logger.Error("refusing to start with measurement-empty PCR policy",
@@ -594,7 +516,6 @@ func main() {
 		}
 	}
 
-	// resolve API keys (environment variable only for security)
 	adminKey := os.Getenv("LOTA_ADMIN_API_KEY")
 	readerKey := os.Getenv("LOTA_READER_API_KEY")
 
@@ -605,7 +526,6 @@ func main() {
 		logger.Info("reader API key loaded from LOTA_READER_API_KEY")
 	}
 
-	// initialize tls server
 	serverCfg := server.ServerConfig{
 		Address:        *addr,
 		HTTPAddress:    *httpAddr,
@@ -646,9 +566,6 @@ func main() {
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP)
 
-	// Only a verifier with a root loaded any CRLs. SIGHUP re-runs the same
-	// load+verify gates as startup and atomically swaps the active set on
-	// success, leaving the existing set in place when the refresh fails.
 	for sig := range sigCh {
 		switch sig {
 		case syscall.SIGHUP:
@@ -671,17 +588,12 @@ func main() {
 		default:
 			logger.Info("shutting down", "signal", sig.String())
 			srv.Stop()
-			// flush any attestation records still buffered by the batched
-			// writer before the process exits
 			if c, ok := attestLog.(interface{ Close() error }); ok {
 				if err := c.Close(); err != nil {
 					logger.Warn("attestation-log flush on shutdown failed", "error", err)
 				}
 			}
 
-			// what this run lost from the decision log, said once where an
-			// operator closing an incident will look: the counters are also
-			// on /metrics, which is gone with the process
 			if l, ok := attestLog.(interface {
 				DroppedCount() int64
 				FailedCount() int64
@@ -697,14 +609,14 @@ func main() {
 	}
 }
 
-// creates a self-signed certificate for testing
+// generateTestCert writes a self-signed certificate and key to the working
+// directory.
 func generateTestCert() error {
 	priv, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
 		return fmt.Errorf("failed to generate key: %w", err)
 	}
 
-	// certificate template
 	serialNumber, err := rand.Int(rand.Reader, new(big.Int).Lsh(big.NewInt(1), 128))
 	if err != nil {
 		return err
@@ -717,7 +629,7 @@ func generateTestCert() error {
 			CommonName:   "lota-verifier",
 		},
 		NotBefore:             time.Now(),
-		NotAfter:              time.Now().Add(365 * 24 * time.Hour), // 1 year
+		NotAfter:              time.Now().Add(365 * 24 * time.Hour),
 		KeyUsage:              x509.KeyUsageDigitalSignature | x509.KeyUsageKeyEncipherment | x509.KeyUsageCertSign,
 		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
 		BasicConstraintsValid: true,
@@ -726,7 +638,6 @@ func generateTestCert() error {
 		IPAddresses:           []net.IP{net.ParseIP("127.0.0.1"), net.ParseIP("::1")},
 	}
 
-	// self-sign
 	certDER, err := x509.CreateCertificate(rand.Reader, &template, &template, &priv.PublicKey, priv)
 	if err != nil {
 		return fmt.Errorf("failed to create certificate: %w", err)
@@ -737,7 +648,6 @@ func generateTestCert() error {
 		return fmt.Errorf("failed to marshal private key: %w", err)
 	}
 
-	// write certificate (world-readable) and private key (owner-only)
 	if err := writePEMFile("lota-verifier.crt", 0o644,
 		&pem.Block{Type: "CERTIFICATE", Bytes: certDER}); err != nil {
 		return fmt.Errorf("failed to write certificate: %w", err)
@@ -750,9 +660,7 @@ func generateTestCert() error {
 	return nil
 }
 
-// writePEMFile writes block to path with perm. The file's Close error is
-// reported even when the PEM encoding itself succeeds, so a flush failure
-// is not lost.
+// writePEMFile writes block to path, creating it with perm.
 func writePEMFile(path string, perm os.FileMode, block *pem.Block) (err error) {
 	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, perm)
 	if err != nil {

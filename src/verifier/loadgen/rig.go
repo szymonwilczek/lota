@@ -1,11 +1,6 @@
 // SPDX-License-Identifier: MIT
 // Copyright (C) 2026 Szymon Wilczek
 // LOTA Load Generator - Rig directory
-//
-// Rig directory is the persisted identity of a synthetic fleet:
-// throwaway attestation CA, AIK key pool and generated verifier policy.
-// Setup writes it once; every run reloads it, so the verifier under test keeps
-// trusting the same CA and re-attesting clients keep their baselines across runs
 
 package main
 
@@ -26,7 +21,6 @@ const (
 	rigMetaFile   = "rig.json"
 )
 
-// rigMeta records the setup-time shape so run can default to it
 type rigMeta struct {
 	Version int    `json:"version"`
 	Agents  int    `json:"agents"`
@@ -34,7 +28,6 @@ type rigMeta struct {
 	Tenant  string `json:"tenant,omitempty"`
 }
 
-// writeRig materializes new rig directory
 func writeRig(dir string, agents, keyPool int, tenant string) error {
 	if keyPool <= 0 {
 		keyPool = synth.DefaultKeyPool
@@ -53,8 +46,7 @@ func writeRig(dir string, agents, keyPool int, tenant string) error {
 	if err != nil {
 		return err
 	}
-	// fleet only validates the profile and renders the policy here;
-	// certificates are re-issued from the pool on every load
+	// built for the policy only; loadRig issues the certificates again
 	fleet, err := synth.NewFleet(ca, agents, keys, tenant)
 	if err != nil {
 		return err
@@ -91,8 +83,8 @@ func writeRig(dir string, agents, keyPool int, tenant string) error {
 	return nil
 }
 
-// loadRig rebuilds the fleet from rig directory
-// agents <= 0 uses the setup-time fleet size
+// loadRig rebuilds the fleet from dir. agents <= 0 means the setup size,
+// and more than the setup size is an error.
 func loadRig(dir string, agents int) (*synth.Fleet, *rigMeta, error) {
 	metaRaw, err := os.ReadFile(filepath.Join(dir, rigMetaFile))
 	if err != nil {

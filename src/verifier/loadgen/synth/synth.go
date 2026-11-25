@@ -1,21 +1,6 @@
 // SPDX-License-Identifier: MIT
 // Copyright (C) 2026 Szymon Wilczek
 // LOTA Load Generator - Synthetic fleet identities
-//
-// Builds fleet of software-only agent identities whose attestation reports pass
-// the verifier's full production verification path:
-// AIK certificate chain, quote signature, binding nonce, PCR digest, event log,
-// and the PCR14 boot-commitment derivation.
-//
-// Fleet shares one deterministic PCR bank and one agent/kernel hash,
-// so a single generated policy (PolicyYAML) covers every agent.
-// Identities differ per agent AND per rig:
-// hardware_id and pseudonym are salted with the rig's CA certificate,
-// so independent rigs driven against one shared verifier backend never collide
-// on client IDs, while a rig directory reloaded between runs reproduces its identities.
-// RSA keys come from a shared pool because key generation, not signing,
-// dominates setup time; the verifier binds trust to the certificate subject,
-// not key uniqueness.
 
 package synth
 
@@ -37,17 +22,16 @@ import (
 	"github.com/szymonwilczek/lota/verifier/verify"
 )
 
-// aikKeyBits matches the RSA-2048 AIK the real agent certifies
+// aikKeyBits matches the agent's RSA-2048 AIK.
 const aikKeyBits = 2048
 
-// CA is throwaway attestation CA for load-test rig
-// Its certificate is handed to the verifier as --aik-ca-cert;
-// every agent certificate chains to it
+// CA is the rig's attestation CA, which issues every agent certificate.
 type CA struct {
 	Key  *rsa.PrivateKey
 	Cert *x509.Certificate
 }
 
+// NewCA generates a self-signed CA with an RSA-2048 key, valid for 30 days.
 func NewCA() (*CA, error) {
 	key, err := rsa.GenerateKey(rand.Reader, aikKeyBits)
 	if err != nil {
@@ -73,13 +57,13 @@ func NewCA() (*CA, error) {
 	return &CA{Key: key, Cert: cert}, nil
 }
 
-// CertPEM returns the CA certificate for the verifier's --aik-ca-cert
+// CertPEM returns the CA certificate for the verifier's --aik-ca-cert.
 func (ca *CA) CertPEM() []byte {
 	return pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: ca.Cert.Raw})
 }
 
-// KeyPEM returns the CA private key so rig directory can be reused across runs
-// without re-issuing agent certificates
+// KeyPEM returns the CA private key as PKCS#8 PEM, so a reloaded rig can
+// issue certificates under the same CA.
 func (ca *CA) KeyPEM() []byte {
 	return pem.EncodeToMemory(&pem.Block{
 		Type:  "PRIVATE KEY",
@@ -95,7 +79,7 @@ func mustMarshalPKCS8(key *rsa.PrivateKey) []byte {
 	return der
 }
 
-// LoadCA rebuilds CA from the PEM pair CertPEM/KeyPEM produced
+// LoadCA rebuilds a CA from the output of CertPEM and KeyPEM.
 func LoadCA(certPEM, keyPEM []byte) (*CA, error) {
 	certBlock, _ := pem.Decode(certPEM)
 	if certBlock == nil {
@@ -120,12 +104,9 @@ func LoadCA(certPEM, keyPEM []byte) (*CA, error) {
 	return &CA{Key: key, Cert: cert}, nil
 }
 
-// IssueAIKCert mints DER AIK certificate whose subject carries the device
-// pseudonym, mirroring what the attestation CA issues.
-//
-// A non-empty tenant goes into the subject's OrganizationalUnit, which is where
-// the verifier reads a device's tenant from; empty leaves the certificate in
-// the default tenant, the shape a deployment that assigns none produces.
+// IssueAIKCert returns a DER AIK certificate with the pseudonym as subject CN,
+// valid for 30 days. A non-empty tenant goes into the one OU the verifier reads
+// the tenant from; with no OU the device is in the default tenant.
 func (ca *CA) IssueAIKCert(pseudonym, tenant string, pub *rsa.PublicKey) ([]byte, error) {
 	serial, err := rand.Int(rand.Reader, new(big.Int).Lsh(big.NewInt(1), 128))
 	if err != nil {
@@ -154,62 +135,57 @@ func (ca *CA) IssueAIKCert(pseudonym, tenant string, pub *rsa.PublicKey) ([]byte
 	return der, nil
 }
 
-// Agent is one synthetic fleet member
+// Agent is one synthetic fleet member.
 type Agent struct {
 	Name       string
 	HardwareID [types.HashSize]byte
-	Pseudonym  string // hex, AIK certificate subject CN = verifier client ID
+	Pseudonym  string // AIK certificate CN, the verifier's client ID
 	Key        *rsa.PrivateKey
 	CertDER    []byte
 }
 
-// Fleet is set of agents sharing one measurement profile,
-// plus the CA that vouches for them
+// Fleet is a set of agents with one shared measurement profile.
 type Fleet struct {
 	Tenant string
 	CA     *CA
 	Agents []*Agent
 
-	// shared measurement profile; PolicyYAML pins these
+	// Policy pins both hashes and PCR 0 and 1
 	AgentHash  [types.HashSize]byte
 	KernelHash [types.HashSize]byte
 	PCRs       [types.PCRCount][types.HashSize]byte
 }
 
-// deterministic measurement profile:
-// any two rigs built from the same version agree,
-// so results are comparable across runs and hosts
+// profileDigest gives every rig the same profile, so runs compare.
 func profileDigest(label string) [types.HashSize]byte {
 	return sha256.Sum256([]byte("lota-loadgen-profile-v1:" + label))
 }
 
-// AgentName returns the canonical name of fleet member i
+// AgentName returns the name of fleet member i.
 func AgentName(i int) string {
 	return fmt.Sprintf("loadgen-%06d", i)
 }
 
-// RigID is the per-rig identity salt:
-// Digest of the rig's throwaway CA certificate.
-// Every rig generates fresh random CA, so the salt is unique per rig,
-// and the certificate persists in the rig directory, so the salt
-// - and with it every agent identity - is stable across reloads of the same rig
+// RigID returns the first 8 bytes of the CA certificate's SHA-256 as hex.
+// It salts the agent identities, so they differ between rigs and repeat when
+// a rig is reloaded.
 func (ca *CA) RigID() string {
 	h := sha256.Sum256(ca.Cert.Raw)
 	return hex.EncodeToString(h[:8])
 }
 
-// Pseudonym maps rig and agent name to the agent's 64-hex device pseudonym,
-// the same shape the attestation CA derives for real devices
+// Pseudonym derives the 64 hex character CN the verifier decodes as the
+// device identity.
 func Pseudonym(rigID, name string) string {
 	h := sha256.Sum256([]byte("lota-loadgen-pseudonym:" + rigID + ":" + name))
 	return hex.EncodeToString(h[:])
 }
 
-// DefaultKeyPool is the AIK key pool size when the caller does not choose one
+// DefaultKeyPool is the AIK key pool size when the caller does not choose one.
 const DefaultKeyPool = 256
 
-// NewFleet builds n agents over an existing key pool,
-// e.g. one reloaded from rig directory
+// NewFleet builds n agents that take the keys round-robin and issues
+// each a fresh certificate.
 func NewFleet(ca *CA, n int, keys []*rsa.PrivateKey, tenant string) (*Fleet, error) {
 	if n <= 0 {
 		return nil, fmt.Errorf("fleet size must be positive, got %d", n)
@@ -254,7 +230,8 @@ func NewFleet(ca *CA, n int, keys []*rsa.PrivateKey, tenant string) (*Fleet, err
 	return f, nil
 }
 
-// parallelFor runs fn(0..n-1) across GOMAXPROCS workers, returning the first error
+// parallelFor runs fn(0..n-1) on GOMAXPROCS workers. A worker stops
+// at its first error, and the first error recorded is returned.
 func parallelFor(n int, fn func(i int) error) error {
 	workers := min(runtime.GOMAXPROCS(0), n)
 	var (

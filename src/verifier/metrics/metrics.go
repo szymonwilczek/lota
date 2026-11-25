@@ -1,10 +1,6 @@
 // SPDX-License-Identifier: MIT
 // Copyright (C) 2026 Szymon Wilczek
 // LOTA Verifier - Prometheus Metrics
-//
-// Metrics registry with Prometheus text exposition output.
-// Tracks attestation counters, rejection reasons (label-based),
-// and verification latency histogram.
 
 package metrics
 
@@ -20,28 +16,24 @@ import (
 	"github.com/szymonwilczek/lota/verifier/types"
 )
 
-// holds all verifier metrics
+// Metrics holds the verifier counters, gauges and latency histogram.
+// The gauges are not updated here; the caller stores them before Export.
 type Metrics struct {
-	// Counters
-	AttestationTotal Counter // total attestation attempts
-	AttestationOK    Counter // successful attestations
-	AttestationFail  Counter // all failed attestations (parse errors + rejections)
-	ConnectionErrors Counter // protocol-level errors
+	AttestationTotal Counter
+	AttestationOK    Counter
+	AttestationFail  Counter
+	ConnectionErrors Counter
 
-	AttestationLogDropped    Counter // decision records dropped on a full writer buffer
-	AttestationLogFailed     Counter // decision records whose write failed
-	AttestationLogEventsLost Counter // events among those two; alert on this one
+	AttestationLogDropped    Counter
+	AttestationLogFailed     Counter
+	AttestationLogEventsLost Counter
 
-	// rejection reason
 	Rejections *LabeledCounter
 
-	// re-anchor outcomes (strong / lfa / mok / forced / escalate)
 	Reanchors *LabeledCounter
 
-	// verification duration in seconds
-	VerifyDuration *Histogram
+	VerifyDuration *Histogram // seconds
 
-	// Gauges
 	PendingChallenges atomic.Int64
 	RegisteredClients atomic.Int64
 	ActiveRevocations atomic.Int64
@@ -49,11 +41,10 @@ type Metrics struct {
 	UsedNonces        atomic.Int64
 	LoadedPolicies    atomic.Int64
 
-	// server start time for uptime calculation
 	StartTime time.Time
 }
 
-// creates a zeroed metrics registry
+// New returns a zeroed registry with latency buckets from 1 ms to 10 s.
 func New() *Metrics {
 	return &Metrics{
 		Rejections: NewLabeledCounter(),
@@ -66,7 +57,7 @@ func New() *Metrics {
 	}
 }
 
-// monotonically increasing 64-bit integer
+// Counter is an atomic int64 count.
 type Counter struct {
 	val atomic.Int64
 }
@@ -75,19 +66,20 @@ func (c *Counter) Inc()         { c.val.Add(1) }
 func (c *Counter) Add(n int64)  { c.val.Add(n) }
 func (c *Counter) Value() int64 { return c.val.Load() }
 
-// tracks counts per label value
+// LabeledCounter keeps a count per label value.
 type LabeledCounter struct {
 	mu     sync.RWMutex
 	counts map[string]*atomic.Int64
 }
 
+// NewLabeledCounter returns an empty LabeledCounter.
 func NewLabeledCounter() *LabeledCounter {
 	return &LabeledCounter{
 		counts: make(map[string]*atomic.Int64),
 	}
 }
 
-// increments the counter for the given label value
+// Inc adds one to the count for label.
 func (lc *LabeledCounter) Inc(label string) {
 	lc.mu.RLock()
 	counter, ok := lc.counts[label]
@@ -99,7 +91,6 @@ func (lc *LabeledCounter) Inc(label string) {
 	}
 
 	lc.mu.Lock()
-	// double-check after acquiring write lock
 	if counter, ok = lc.counts[label]; ok {
 		lc.mu.Unlock()
 		counter.Add(1)
@@ -111,7 +102,7 @@ func (lc *LabeledCounter) Inc(label string) {
 	lc.mu.Unlock()
 }
 
-// returns a snapshot of all label->count pairs
+// Values returns a copy of the counts.
 func (lc *LabeledCounter) Values() map[string]int64 {
 	lc.mu.RLock()
 	defer lc.mu.RUnlock()
@@ -123,17 +114,16 @@ func (lc *LabeledCounter) Values() map[string]int64 {
 	return result
 }
 
-// tracks the distribution of observed values
-// implements cumulative bucket counting compatible with Prometheus
+// Histogram counts observations into cumulative buckets.
 type Histogram struct {
-	bounds  []float64      // upper bounds (sorted), not including +Inf
-	buckets []atomic.Int64 // cumulative counts: buckets[i] = count <= bounds[i]
-	inf     atomic.Int64   // count of ALL observations (the +Inf bucket)
-	sum     atomic.Int64   // sum * 1e9 stored as int64 for atomicity
+	bounds  []float64      // sorted, +Inf implied
+	buckets []atomic.Int64 // buckets[i] counts values <= bounds[i]
+	inf     atomic.Int64
+	sum     atomic.Int64 // sum of values * 1e9, an integer to stay atomic
 	count   atomic.Int64
 }
 
-// creates a histogram with the given bucket upper bounds
+// NewHistogram returns a histogram over the given bucket upper bounds.
 func NewHistogram(bounds ...float64) *Histogram {
 	sorted := make([]float64, len(bounds))
 	copy(sorted, bounds)
@@ -145,14 +135,12 @@ func NewHistogram(bounds ...float64) *Histogram {
 	}
 }
 
-// records a single value into the histogram
+// Observe records value.
 func (h *Histogram) Observe(value float64) {
 	h.count.Add(1)
 
-	// as fixed-point nanoseconds to avoid float atomics
 	h.sum.Add(int64(value * 1e9))
 
-	// increment all buckets where value <= bound
 	for i, bound := range h.bounds {
 		if value <= bound {
 			h.buckets[i].Add(1)
@@ -161,19 +149,18 @@ func (h *Histogram) Observe(value float64) {
 	h.inf.Add(1)
 }
 
-// returns the total number of observations
+// Count returns the number of observations.
 func (h *Histogram) Count() int64 { return h.count.Load() }
 
-// returns the sum of all observed values
+// Sum returns the sum of observed values, each truncated to 1e-9.
 func (h *Histogram) Sum() float64 {
 	return float64(h.sum.Load()) / 1e9
 }
 
-// rejection reasons that are not wire verdicts: an unreadable or unpinnable
-// baseline is a verifier fault, the host only sees an internal error
+// rejection labels that name no verdict
 var internalRejectionReasons = []string{"baseline_error"}
 
-// writes all metrics in Prometheus text exposition format
+// Export renders the metrics in the Prometheus text exposition format.
 func (m *Metrics) Export() string {
 	var b strings.Builder
 
@@ -187,13 +174,11 @@ func (m *Metrics) Export() string {
 		"Total successful attestations",
 		m.AttestationOK.Value())
 
-	// labeled rejections: wire verdicts plus internal reasons
 	writeLabeledCounter(&b, "lota_rejections_total",
 		"Total rejected attestations by reason", "reason",
 		m.Rejections.Values(),
 		append(types.RejectionReasons(), internalRejectionReasons...))
 
-	// labeled re-anchor outcomes
 	writeLabeledCounter(&b, "lota_reanchors_total",
 		"Total baseline re-anchors by outcome", "outcome",
 		m.Reanchors.Values(),
@@ -215,12 +200,10 @@ func (m *Metrics) Export() string {
 		"Lost decision records that were events rather than trusted rounds",
 		m.AttestationLogEventsLost.Value())
 
-	// derived counter: total failed attestations across all reasons
 	writeCounter(&b, "lota_attestations_failed_total",
 		"Total failed attestations (parse errors + rejections)",
 		m.AttestationFail.Value())
 
-	// histogram
 	b.WriteString("# HELP lota_verification_duration_seconds Attestation verification latency\n")
 	b.WriteString("# TYPE lota_verification_duration_seconds histogram\n")
 	for i, bound := range m.VerifyDuration.bounds {
@@ -235,7 +218,6 @@ func (m *Metrics) Export() string {
 	fmt.Fprintf(&b, "lota_verification_duration_seconds_count %d\n\n",
 		m.VerifyDuration.Count())
 
-	// gauges
 	writeGauge(&b, "lota_pending_challenges",
 		"Number of outstanding attestation challenges",
 		m.PendingChallenges.Load())
@@ -267,9 +249,8 @@ func (m *Metrics) Export() string {
 	return b.String()
 }
 
-// writeLabeledCounter emits one series per recorded label,
-// merged with zero-valued series for every known label, so alert expressions
-// that cannot see absent series always have something to match.
+// writeLabeledCounter emits a series per recorded label and a zero series
+// for each known label not yet recorded, so an alert finds a series to match.
 func writeLabeledCounter(b *strings.Builder, name, help, label string,
 	values map[string]int64, known []string,
 ) {
@@ -282,7 +263,6 @@ func writeLabeledCounter(b *strings.Builder, name, help, label string,
 	for k, v := range values {
 		merged[k] = v
 	}
-	// sort for stable output
 	keys := make([]string, 0, len(merged))
 	for k := range merged {
 		keys = append(keys, k)
@@ -306,7 +286,6 @@ func writeGauge(b *strings.Builder, name, help string, value int64) {
 	fmt.Fprintf(b, "%s %d\n\n", name, value)
 }
 
-// formats a float for Prometheus exposition
 func formatFloat(f float64) string {
 	if math.IsInf(f, 1) {
 		return "+Inf"
@@ -314,7 +293,7 @@ func formatFloat(f float64) string {
 	return fmt.Sprintf("%g", f)
 }
 
-// implement store.AttestationLogLoss
+// Metrics implements store.AttestationLogLoss.
 func (m *Metrics) AttestationRecordsDropped(n int64) { m.AttestationLogDropped.Add(n) }
 func (m *Metrics) AttestationRecordsFailed(n int64)  { m.AttestationLogFailed.Add(n) }
 func (m *Metrics) AttestationEventsLost(n int64)     { m.AttestationLogEventsLost.Add(n) }

@@ -11,103 +11,65 @@ import (
 	"fmt"
 )
 
-// protocol constants
 const (
 	ReportMagic uint32 = 0x41544F4C // "LOTA" little-endian
-	// ReportVersion is the attestation report wire version,
-	// matching LOTA_REPORT_VERSION in include/lota.h
-	//
-	// Verifier accepts exactly this one:
-	// breaking layout change bumps the major and is a flag-day.
+	// ReportVersion is LOTA_REPORT_VERSION of include/lota.h; ParseReport
+	// accepts no other.
 	ReportVersion uint32 = 0x00010000 // 1.0.0
 
-	HashSize        = 32   // SHA-256
-	NonceSize       = 32   // Challenge nonce
-	HardwareIDSize  = 32   // SHA-256 of EK public key
-	MaxSigSize      = 512  // RSA-4096 signature
-	MaxAttestSize   = 1024 // TPMS_ATTEST blob
-	MaxAIKPubSize   = 512  // AIK public key (DER SPKI)
-	MaxAIKCertSize  = 2048 // AIK certificate (DER X.509)
-	PCRCount        = 24   // TPM PCR bank size
+	HashSize        = 32 // SHA-256
+	NonceSize       = 32
+	HardwareIDSize  = 32
+	MaxSigSize      = 512
+	MaxAttestSize   = 1024
+	MaxAIKPubSize   = 512
+	MaxAIKCertSize  = 2048
+	PCRCount        = 24
 	MaxKernelPath   = 256
 	CmdlineParamMax = 64
 )
 
 // report flags (see: include/attestation.h)
 const (
-	FlagIOMMUOK      uint32 = 1 << 0 // IOMMU verification passed
-	FlagTPMQuoteOK   uint32 = 1 << 1 // TPM quote succeeded
-	FlagKernelHashOK uint32 = 1 << 2 // Kernel hash computed
-	FlagBPFActive    uint32 = 1 << 3 // eBPF LSM is loaded
-	FlagModuleSig    uint32 = 1 << 4 // Kernel enforces module sigs
-	FlagLockdown     uint32 = 1 << 5 // Kernel lockdown active
-	FlagSecureBoot   uint32 = 1 << 6 // Secure Boot enabled
-	FlagEnforce      uint32 = 1 << 7 // LSM enforce mode active
+	FlagIOMMUOK      uint32 = 1 << 0
+	FlagTPMQuoteOK   uint32 = 1 << 1
+	FlagKernelHashOK uint32 = 1 << 2
+	FlagBPFActive    uint32 = 1 << 3
+	FlagModuleSig    uint32 = 1 << 4
+	FlagLockdown     uint32 = 1 << 5
+	FlagSecureBoot   uint32 = 1 << 6
+	FlagEnforce      uint32 = 1 << 7
 
-	// FlagBootCommitmentV1 indicates the agent extended PCR14 with
-	// SHA256(tag || agent_hash), chained onto the value the initramfs lock
-	// helper left. The verifier rederives that chain from the reported agent
-	// hash and the pre-lock baseline the report's event log replays to,
-	// and compares the result against the register the quote signed and against
-	// the one the client pinned.
-	// The register is per-binary, not per-boot.
-	// Every agent sets it and the verifier requires it:
-	// the bit names the v1 wire contract specifically, so a future
-	// derivation gets its own flag rather than reusing this one.
+	// FlagBootCommitmentV1 and FlagInitramfsLockV1 name the one PCR 14
+	// derivation the verifier rederives; a report without both is refused.
 	FlagBootCommitmentV1 uint32 = 1 << 8
+	FlagInitramfsLockV1  uint32 = 1 << 9
 
-	// FlagInitramfsLockV1 is set when the agent observed that an
-	// initramfs-time helper (lota-pcr14-lock, shipped under the
-	// 90lota dracut module) extended PCR14 with the domain-separated
-	// digest
-	//     SHA256("LOTA-PCR14-INITRAMFS-LOCK-v1")
-	// before the agent ran. The agent then extends with the
-	// boot-commitment value on top, so the final PCR14 reflects a
-	// two-hop chain:
-	//     pcr14_lock  = SHA256(0^32 || initramfs_lock_commit)
-	//     pcr14_final = SHA256(pcr14_lock || boot_commitment)
-	// Verifier mirrors that two-hop derivation and has no other one:
-	// report without this bit alongside FlagBootCommitmentV1 carries
-	// a PCR14 the verifier cannot interpret and is rejected.
-	FlagInitramfsLockV1 uint32 = 1 << 9
-
-	// FlagIMAAppraisal is set when the kernel appraises the executables
-	// on the host: IMA in a blocking mode over a loaded policy carrying
-	// an appraise rule that reaches an exec. Clear is the ordinary state
-	// of a stock distribution host, whose packages carry no IMA signatures,
-	// and it says nothing about the agent's own binding -- fs-verity and the
-	// PCR 14 commitment in this report cover that.
-	// Telemetry with a policy knob (RequireIMAAppraisal), not a verdict.
+	// FlagIMAAppraisal is clear on a stock host; a policy may require it.
 	FlagIMAAppraisal uint32 = 1 << 10
 
-	// FlagBench is set when the daemon runs with --bench and writes what it
-	// costs. Its policy is the same as without it. Logged, not a verdict.
 	FlagBench uint32 = 1 << 11
 
 	// The policy keys the daemon applies, set with FlagEnforce only.
-	// Logged, not a verdict: whether a host needs one is the relying
-	// party's call.
+	// Logged, not a verdict.
 	FlagStrictMmap    uint32 = 1 << 12
 	FlagStrictExec    uint32 = 1 << 13
 	FlagStrictModules uint32 = 1 << 14
 	FlagBlockAnonExec uint32 = 1 << 15
 	FlagBlockPtrace   uint32 = 1 << 16
 
-	// FlagEventsLost is set when the kernel left events out of the daemon's
-	// log. Enforcement is unaffected. Logged, not a verdict.
+	// FlagEventsLost: the kernel left events out of the daemon's log.
+	// Logged, not a verdict.
 	FlagEventsLost uint32 = 1 << 17
 )
 
 // challenge capability flags (see: include/attestation.h)
 const (
-	// ChallengeFlagBootCommitmentV1 names the PCR14 derivation the verifier
-	// validates. Every challenge carries it, because v1 is the only construction
-	// the verifier accepts.
-	// It stays on the wire so future v2 derivation has capability bit to differ from.
+	// ChallengeFlagBootCommitmentV1 names the PCR 14 derivation the
+	// verifier validates; every challenge carries it.
 	ChallengeFlagBootCommitmentV1 uint32 = 1 << 0
 )
 
-// verification result codes
 const (
 	VerifyOK                uint32 = 0
 	VerifyNonceFail         uint32 = 1
@@ -116,27 +78,24 @@ const (
 	VerifyIOMMUFail         uint32 = 4
 	VerifyOldVersion        uint32 = 5
 	VerifyIntegrityMismatch uint32 = 6
-	VerifyRevoked           uint32 = 7 // AIK revoked by administrator
-	VerifyBanned            uint32 = 8 // hardware ID banned
-	VerifyInternalError     uint32 = 9 // verifier internal error / unset failure path
+	VerifyRevoked           uint32 = 7
+	VerifyBanned            uint32 = 8
+	VerifyInternalError     uint32 = 9 // also VerifyReportFrom's default
 
-	// VerifyIdentityFail: the quote's signature verified, but the AIK
-	// certificate names another key. Kept apart from VerifySigFail
-	// because only this one is fixed by re-enrolling.
+	// VerifyIdentityFail: the AIK certificate names another key, or its
+	// pseudonym or tenant is invalid; checked before the quote signature.
+	// Re-enrolling fixes it, unlike VerifySigFail.
 	VerifyIdentityFail uint32 = 10
 
-	// policy requirement with no code below; not VerifyPCRFail,
-	// the fix is not in the boot chain
+	// a policy requirement with no code below; the fix is not in the boot
+	// chain, unlike VerifyPCRFail
 	VerifyPolicyRequirement uint32 = 11
 
-	// the AIK certificate has expired or is not yet valid (host clock behind).
-	// Kept apart from VerifySigFail: the fix is re-enrolment, not distrust.
+	// the AIK certificate has expired or is not yet valid
 	VerifyCertificateValidity uint32 = 12
 
-	// no AIK certificate in the report: unfinished enrolment
 	VerifyCertificateMissing uint32 = 13
 
-	// one per policy requirement, each with its own remedy
 	VerifySecureBootRequired   uint32 = 14
 	VerifyLockdownRequired     uint32 = 15
 	VerifyModuleSigRequired    uint32 = 16
@@ -145,12 +104,11 @@ const (
 	VerifyKernelImageRequired  uint32 = 19
 	VerifyCmdlineRequired      uint32 = 20
 
-	// unparsable for a reason other than the version field (truncated,
-	// foreign magic). Not VerifyOldVersion: an upgrade does not fix it
+	// unparsable for a reason other than the version field; an upgrade does
+	// not fix it, unlike VerifyOldVersion
 	VerifyReportMalformed uint32 = 21
 )
 
-// returns a deterministic string for a result code
 // PolicyKeys names the policy keys a report header says the daemon applies,
 // in the order of their bits. A key outside enforce mode is not reported.
 func PolicyKeys(flags uint32) []string {
@@ -177,6 +135,7 @@ func PolicyKeys(flags uint32) []string {
 	return names
 }
 
+// VerifyResultString returns the exported name of a result code.
 func VerifyResultString(code uint32) string {
 	switch code {
 	case VerifyOK:
@@ -228,8 +187,7 @@ func VerifyResultString(code uint32) string {
 	}
 }
 
-// RejectionReasons returns every refusing verdict by its exported name.
-// The exporter seeds a zero series for each, so alerts read 0.
+// RejectionReasons returns the exported name of every refusing verdict.
 func RejectionReasons() []string {
 	return []string{
 		VerifyResultString(VerifyNonceFail),
@@ -256,7 +214,7 @@ func RejectionReasons() []string {
 	}
 }
 
-// struct lota_report_header (see: include/attestation.h)
+// ReportHeader is struct lota_report_header (include/attestation.h).
 type ReportHeader struct {
 	Magic      uint32 // offset 0
 	Version    uint32 // offset 4
@@ -264,74 +222,57 @@ type ReportHeader struct {
 	Flags      uint32 // offset 12
 }
 
-// struct lota_tpm_evidence (see: include/attestation.h)
-//
-//	pcr_values[24][32]     768 bytes
-//	pcr_mask                 4 bytes
-//	quote_signature[512]   512 bytes
-//	quote_sig_size           2 bytes
-//	attest_data[1024]     1024 bytes
-//	attest_size              2 bytes
-//	aik_public[512]        512 bytes
-//	aik_public_size          2 bytes
-//	aik_certificate[2048] 2048 bytes
-//	aik_cert_size            2 bytes
-//	nonce[32]               32 bytes
-//	hardware_id[32]         32 bytes
-//	aik_generation           8 bytes
-//	prev_aik_public[512]   512 bytes
-//	prev_aik_public_size     2 bytes
-//	quote_sig_alg            2 bytes
-//	quote_sig_hash_alg       2 bytes
-//	TOTAL:                5466 bytes
+// TPMEvidence is struct lota_tpm_evidence (include/attestation.h),
+// 5466 bytes on the wire.
 type TPMEvidence struct {
-	PCRValues       [PCRCount][HashSize]byte // 768 bytes
-	PCRMask         uint32                   // 4 bytes
-	QuoteSignature  [MaxSigSize]byte         // 512 bytes
-	QuoteSigSize    uint16                   // 2 bytes
-	AttestData      [MaxAttestSize]byte      // 1024 bytes
-	AttestSize      uint16                   // 2 bytes
-	AIKPublic       [MaxAIKPubSize]byte      // 512 bytes
-	AIKPublicSize   uint16                   // 2 bytes
-	AIKCertificate  [MaxAIKCertSize]byte     // 2048 bytes
-	AIKCertSize     uint16                   // 2 bytes
-	Nonce           [NonceSize]byte          // 32 bytes
-	HardwareID      [HardwareIDSize]byte     // 32 bytes
-	AIKGeneration   uint64                   // 8 bytes
-	PrevAIKPublic   [MaxAIKPubSize]byte      // 512 bytes
-	PrevAIKSize     uint16                   // 2 bytes
-	QuoteSigAlg     uint16                   // 2 bytes (TPM2_ALG_RSASSA or TPM2_ALG_RSAPSS)
-	QuoteSigHashAlg uint16                   // 2 bytes (TPM2_ALG_SHA256/SHA384/SHA512)
+	PCRValues       [PCRCount][HashSize]byte
+	PCRMask         uint32
+	QuoteSignature  [MaxSigSize]byte
+	QuoteSigSize    uint16
+	AttestData      [MaxAttestSize]byte
+	AttestSize      uint16
+	AIKPublic       [MaxAIKPubSize]byte
+	AIKPublicSize   uint16
+	AIKCertificate  [MaxAIKCertSize]byte
+	AIKCertSize     uint16
+	Nonce           [NonceSize]byte
+	HardwareID      [HardwareIDSize]byte
+	AIKGeneration   uint64
+	PrevAIKPublic   [MaxAIKPubSize]byte
+	PrevAIKSize     uint16
+	QuoteSigAlg     uint16
+	QuoteSigHashAlg uint16
 }
 
-// struct iommu_status (see: include/iommu_types.h)
+// IOMMUStatus is struct iommu_status (include/iommu_types.h).
 type IOMMUStatus struct {
 	Vendor       uint32
 	Flags        uint32
 	UnitCount    uint32
-	CmdlineParam [CmdlineParamMax]byte // 64 bytes
+	CmdlineParam [CmdlineParamMax]byte
 }
 
-// struct lota_system_measurement (see: include/attestation.h)
+// SystemMeasurement is struct lota_system_measurement (include/attestation.h),
+// 396 bytes on the wire.
 type SystemMeasurement struct {
-	KernelHash [HashSize]byte      // 32 bytes
-	AgentHash  [HashSize]byte      // 32 bytes
-	KernelPath [MaxKernelPath]byte // 256 bytes
-	IOMMU      IOMMUStatus         // 76 bytes
+	KernelHash [HashSize]byte
+	AgentHash  [HashSize]byte
+	KernelPath [MaxKernelPath]byte
+	IOMMU      IOMMUStatus
 }
 
-// struct lota_attestation_report (see: include/attestation.h)
+// AttestationReport is struct lota_attestation_report (include/attestation.h)
+// followed by the variable-length sections.
 type AttestationReport struct {
-	Header ReportHeader      // 32 bytes
-	TPM    TPMEvidence       // 5466 bytes
-	System SystemMeasurement // 396 bytes (364 + 32 for agent_hash)
+	Header ReportHeader
+	TPM    TPMEvidence
+	System SystemMeasurement
 
-	// variable-length sections (not part of fixed wire format)
-	EventLog []byte // raw TCG binary event log from agent
+	EventLog []byte // TCG binary event log
 
-	// ESRT is always set by ParseReport: the section is mandatory.
-	// Present == false means the platform exposed no ESRT System Firmware entry
-	// (the Low-Firmware-Assurance path), not that the agent omitted the section.
+	// ESRT is always set by ParseReport. Present == false means the
+	// platform exposed no ESRT System Firmware entry, not that the section
+	// was missing.
 	ESRT *ESRTInfo
 
 	// MokList is the agent's copy of MokListRT, unverified until compared with
@@ -339,10 +280,9 @@ type AttestationReport struct {
 	MokList []byte
 }
 
-// ESRTInfo mirrors struct lota_esrt (include/attestation.h):
-// platform's ESRT System Firmware version, used by the verifier as a firmware
-// anti-rollback signal for self-service re-anchor.
-// Wire size of 28 bytes.
+// ESRTInfo is struct lota_esrt (include/attestation.h): the platform's ESRT
+// System Firmware version, the firmware rollback signal of self-service
+// re-anchor.
 type ESRTInfo struct {
 	Present         bool
 	FWVersion       uint32
@@ -356,7 +296,7 @@ const ESRTWireSize = 28
 // MokListSizeLen is the length prefix of the MOK list section.
 const MokListSizeLen = 4
 
-// Challenge for attestation protocol (48 bytes)
+// Challenge is the 48-byte challenge the verifier sends.
 type Challenge struct {
 	Magic   uint32
 	Version uint32
@@ -365,7 +305,7 @@ type Challenge struct {
 	Flags   uint32
 }
 
-// VerifyResult returned to agent (24 bytes)
+// VerifyResult is the 24-byte result the verifier sends.
 type VerifyResult struct {
 	Magic      uint32
 	Version    uint32
@@ -374,31 +314,24 @@ type VerifyResult struct {
 	ValidUntil uint64
 }
 
-// errors
 var (
 	ErrInvalidMagic   = errors.New("invalid report magic")
 	ErrInvalidVersion = errors.New("unsupported protocol version")
 	ErrInvalidSize    = errors.New("invalid report size")
 )
 
-// minimum binary size of a serialized report on the wire.
-// Header(16) + TPM(5466) + System(396) + event_log_size(4) + ESRT(28) +
-// mok_list_size(4) = 5914.
-//
-// ESRT and MOK list sections are mandatory, so they count toward the minimum:
-// report that stops before one is truncated.
-// src/agent/report.c pins the C-side sizes with static asserts
+// MinReportSize is a report with empty variable sections: Header(16) +
+// TPM(5466) + System(396) + event_log_size(4) + ESRT(28) + mok_list_size(4).
 const MinReportSize = 5914
 
-// MaxReportWireSize caps a report before the verifier allocates for it.
-// A firmware event log takes most of it, and dbx grows over a machine's life.
+// MaxReportWireSize caps a report before the verifier allocates for it. A
+// firmware event log takes most of it, and dbx grows over a machine's life.
 const MaxReportWireSize = 256 * 1024
 
-// fixed struct portion (without variable-length sections)
-// Header(16) + TPM(5466) + System(396) = 5878
+// FixedReportSize is Header(16) + TPM(5466) + System(396).
 const FixedReportSize = 5878
 
-// deserializes a binary attestation report
+// ParseReport parses a wire report, refusing any version but ReportVersion.
 func ParseReport(data []byte) (*AttestationReport, error) {
 	if len(data) < MinReportSize {
 		return nil, fmt.Errorf("%w: got %d, minimum %d", ErrInvalidSize, len(data), MinReportSize)
@@ -407,7 +340,6 @@ func ParseReport(data []byte) (*AttestationReport, error) {
 	report := &AttestationReport{}
 	offset := 0
 
-	// header (32 bytes)
 	report.Header.Magic = binary.LittleEndian.Uint32(data[offset:])
 	offset += 4
 	if report.Header.Magic != ReportMagic {
@@ -426,8 +358,6 @@ func ParseReport(data []byte) (*AttestationReport, error) {
 	report.Header.Flags = binary.LittleEndian.Uint32(data[offset:])
 	offset += 4
 
-	// tpm evidence (6992 bytes)
-	// pcr values: 24 * 32 = 768 bytes
 	for i := 0; i < PCRCount; i++ {
 		copy(report.TPM.PCRValues[i][:], data[offset:offset+HashSize])
 		offset += HashSize
@@ -480,7 +410,6 @@ func ParseReport(data []byte) (*AttestationReport, error) {
 	report.TPM.QuoteSigHashAlg = binary.LittleEndian.Uint16(data[offset:])
 	offset += 2
 
-	// system measurement (396 bytes)
 	copy(report.System.KernelHash[:], data[offset:offset+HashSize])
 	offset += HashSize
 	copy(report.System.AgentHash[:], data[offset:offset+HashSize])
@@ -488,7 +417,6 @@ func ParseReport(data []byte) (*AttestationReport, error) {
 	copy(report.System.KernelPath[:], data[offset:offset+MaxKernelPath])
 	offset += MaxKernelPath
 
-	// iommu status (76 bytes)
 	report.System.IOMMU.Vendor = binary.LittleEndian.Uint32(data[offset:])
 	offset += 4
 	report.System.IOMMU.Flags = binary.LittleEndian.Uint32(data[offset:])
@@ -498,7 +426,6 @@ func ParseReport(data []byte) (*AttestationReport, error) {
 	copy(report.System.IOMMU.CmdlineParam[:], data[offset:offset+CmdlineParamMax])
 	offset += CmdlineParamMax
 
-	// TPM event log section
 	if len(data) < offset+4 {
 		return nil, fmt.Errorf("%w: truncated at event_log_size", ErrInvalidSize)
 	}
@@ -514,10 +441,6 @@ func ParseReport(data []byte) (*AttestationReport, error) {
 	}
 	offset += int(eventLogSize)
 
-	// Mandatory ESRT section (28 bytes)
-	// Agent always emits it and reports Present == false where the platform
-	// exposes no ESRT System Firmware entry, so report that stops short
-	// is truncated
 	if len(data) < offset+ESRTWireSize {
 		return nil, fmt.Errorf("%w: report ends before the ESRT section (need %d more bytes)",
 			ErrInvalidSize, offset+ESRTWireSize-len(data))
@@ -533,7 +456,6 @@ func ParseReport(data []byte) (*AttestationReport, error) {
 	offset += 16
 	report.ESRT = esrt
 
-	// Mandatory MOK list section: length prefix, then the variable's data
 	if len(data) < offset+MokListSizeLen {
 		return nil, fmt.Errorf("%w: report ends before the MOK list section", ErrInvalidSize)
 	}
@@ -551,9 +473,9 @@ func ParseReport(data []byte) (*AttestationReport, error) {
 	return report, nil
 }
 
-// creates binary challenge for agent
+// Serialize encodes c for the wire.
 func (c *Challenge) Serialize() []byte {
-	data := make([]byte, 48) // 4+4+32+4+4
+	data := make([]byte, 48)
 	binary.LittleEndian.PutUint32(data[0:4], c.Magic)
 	binary.LittleEndian.PutUint32(data[4:8], c.Version)
 	copy(data[8:40], c.Nonce[:])
@@ -562,9 +484,9 @@ func (c *Challenge) Serialize() []byte {
 	return data
 }
 
-// creates binary result for agent
+// Serialize encodes r for the wire.
 func (r *VerifyResult) Serialize() []byte {
-	data := make([]byte, 24) // 4+4+4+4+8
+	data := make([]byte, 24)
 	binary.LittleEndian.PutUint32(data[0:4], r.Magic)
 	binary.LittleEndian.PutUint32(data[4:8], r.Version)
 	binary.LittleEndian.PutUint32(data[8:12], r.Result)

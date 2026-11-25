@@ -1,14 +1,6 @@
 // SPDX-License-Identifier: MIT
 // Copyright (C) 2026 Szymon Wilczek
 // LOTA Verifier - Structured Logging
-//
-// Provides structured logging for the verifier based on log/slog.
-// Supports JSON and text output formats with configurable log levels.
-//
-// Custom log level SECURITY (12) is above ERROR (8) and is used for
-// security-relevant events: attestation failures, revocations, bans,
-// integrity mismatches, and other events that may indicate cheating
-// or system compromise.
 
 package logging
 
@@ -20,28 +12,22 @@ import (
 	"strings"
 )
 
-// custom slog level for security-critical events
+// LevelSecurity sits above slog.LevelError, so every level ParseLevel returns
+// lets it through.
 const LevelSecurity = slog.Level(12)
 
-// maps custom levels to their display strings
 var levelNames = map[slog.Level]string{
 	LevelSecurity: "SECURITY",
 }
 
-// configures a new logger instance
+// Options configures New.
 type Options struct {
-	// minimum log level: debug, info, warn, error
-	// security events are always emitted regardless of this setting
-	Level string
-
-	// selects output encoding: 'json' or 'text' (default)
-	Format string
-
-	// output destination. defaults to os.Stderr if nil
-	Output io.Writer
+	Level  string    // see ParseLevel
+	Format string    // "json" in any case; anything else is text
+	Output io.Writer // nil = os.Stderr
 }
 
-// creates a configured *slog.Logger
+// New returns a logger for opts.
 func New(opts Options) *slog.Logger {
 	level := ParseLevel(opts.Level)
 
@@ -78,14 +64,13 @@ func New(opts Options) *slog.Logger {
 	return slog.New(handler)
 }
 
-// returns a logger that discards all output
+// Nop returns a logger that discards its output.
 func Nop() *slog.Logger {
 	return slog.New(slog.NewTextHandler(io.Discard, nil))
 }
 
-// converts a level name string to slog.Level
-// accepted values: debug, info, warn, error, security
-// defaults to INFO for unknown values
+// ParseLevel maps debug, info, warn or warning, error and security to a level,
+// ignoring case; anything else is info.
 func ParseLevel(s string) slog.Level {
 	switch strings.ToLower(s) {
 	case "debug":
@@ -103,10 +88,8 @@ func ParseLevel(s string) slog.Level {
 	}
 }
 
-// emits a SECURITY-level log entry.
-// Security lines routinely carry request-supplied values
-// (client IDs, URL paths, actor fields, certificate subjects),
-// so every string argument is sanitized here, at the sink.
+// Security logs msg at LevelSecurity, passing each string argument through
+// SanitizeField.
 func Security(logger *slog.Logger, msg string, args ...any) {
 	for i, a := range args {
 		if s, ok := a.(string); ok {
@@ -116,15 +99,13 @@ func Security(logger *slog.Logger, msg string, args ...any) {
 	logger.Log(context.Background(), LevelSecurity, msg, args...)
 }
 
-// SanitizeField strips CR and LF from a request-supplied value
-// so it cannot forge additional log records.
+// SanitizeField replaces CR and LF in s with spaces.
 func SanitizeField(s string) string {
 	s = strings.ReplaceAll(s, "\r", " ")
 	return strings.ReplaceAll(s, "\n", " ")
 }
 
-// returns a child logger with the client_id field pre-set;
-// ID is client-supplied, so it is sanitized before it reaches a record
+// WithClient returns logger with a sanitized client_id field.
 func WithClient(logger *slog.Logger, clientID string) *slog.Logger {
 	return logger.With("client_id", SanitizeField(clientID))
 }

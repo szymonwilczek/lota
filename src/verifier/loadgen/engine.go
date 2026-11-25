@@ -1,19 +1,6 @@
 // SPDX-License-Identifier: MIT
 // Copyright (C) 2026 Szymon Wilczek
 // LOTA Load Generator - Load engine
-//
-// Drives synthetic fleet against a live verifier over the real TLS attestation
-// protocol:
-// challenge -> report -> result, one connection per attestation, exactly like lota-agent
-//
-// Two modes:
-//   - steady: every agent attests on the fleet interval, with start
-//     offsets spread across one interval so the verifier sees a flat
-//     arrival rate. This is the production traffic shape.
-//   - storm: every agent attests once as fast as the in-flight cap
-//     allows. Against a fresh verifier store this is the registration
-//     (first-attestation commit) burst; it bounds enrollment-wave and
-//     disaster-recovery behaviour.
 
 package main
 
@@ -35,24 +22,21 @@ import (
 	"github.com/szymonwilczek/lota/verifier/types"
 )
 
-// runConfig is everything one load run needs
 type runConfig struct {
-	Server   string // host:port of the verifier attestation listener
+	Server   string // attestation listener, host:port
 	TLS      *tls.Config
 	Fleet    *synth.Fleet
 	Agents   int
 	Mode     string // "steady" or "storm"
 	Interval time.Duration
 	Duration time.Duration
-	InFlight int           // storm concurrency cap
-	Timeout  time.Duration // per-attestation deadline (dial to result)
-	Progress time.Duration // progress line period, 0 = quiet
-	AttestW  io.Writer     // optional JSONL accepted-attestation log
+	InFlight int           // storm concurrency cap, <= 0 = 128
+	Timeout  time.Duration // dial timeout, then again for the exchange
+	Progress time.Duration // 0 = quiet
+	AttestW  io.Writer     // JSONL log of accepted attestations, may be nil
 	Logf     func(format string, args ...any)
 }
 
-// secondBucket is one second of run timeline;
-// failover analysis reads the dip and recovery straight off this series
 type secondBucket struct {
 	Unix     int64  `json:"unix"`
 	OK       uint64 `json:"ok"`
@@ -60,7 +44,7 @@ type secondBucket struct {
 	Errors   uint64 `json:"errors"`
 }
 
-// latencyStats summarizes round-trip latency in milliseconds
+// latencyStats covers verified and refused attestations, in milliseconds.
 type latencyStats struct {
 	P50  float64 `json:"p50_ms"`
 	P90  float64 `json:"p90_ms"`
@@ -69,7 +53,6 @@ type latencyStats struct {
 	Mean float64 `json:"mean_ms"`
 }
 
-// summary is the machine-readable result of run
 type summary struct {
 	Mode              string            `json:"mode"`
 	Server            string            `json:"server"`
@@ -82,13 +65,12 @@ type summary struct {
 	Rejected          map[string]uint64 `json:"rejected,omitempty"`
 	TransportError    map[string]uint64 `json:"transport_errors,omitempty"`
 	Latency           latencyStats      `json:"latency"`
-	RatePerSec        float64           `json:"achieved_rate_per_sec"`  // verified only
-	AttemptRatePerSec float64           `json:"attempted_rate_per_sec"` // refusals included
+	RatePerSec        float64           `json:"achieved_rate_per_sec"`
+	AttemptRatePerSec float64           `json:"attempted_rate_per_sec"`
 	AgentsNeverOK     int               `json:"agents_never_ok"`
 	Timeline          []secondBucket    `json:"timeline,omitempty"`
 }
 
-// collector aggregates results from all agent workers
 type collector struct {
 	mu        sync.Mutex
 	attempts  uint64
@@ -221,14 +203,12 @@ const (
 	modeStorm  = "storm"
 )
 
-// attestRecord is one JSONL line of the accepted-attestation log
 type attestRecord struct {
 	Agent      string `json:"agent"`
 	Unix       int64  `json:"unix"`
 	ValidUntil uint64 `json:"valid_until"`
 }
 
-// run executes one load run and returns its summary
 func run(ctx context.Context, cfg *runConfig) (*summary, error) {
 	if cfg.Agents <= 0 || cfg.Agents > len(cfg.Fleet.Agents) {
 		return nil, fmt.Errorf("agent count %d outside fleet size %d", cfg.Agents, len(cfg.Fleet.Agents))
@@ -282,8 +262,8 @@ func run(ctx context.Context, cfg *runConfig) (*summary, error) {
 	return col.summarize(cfg, started, time.Now()), nil
 }
 
-// runSteady spreads agents across one interval and loops each on the interval
-// until the run duration elapses
+// runSteady spreads the agents' first attestation across one interval,
+// then repeats each on the interval until the duration elapses.
 func runSteady(ctx context.Context, cfg *runConfig, attest func(agent int)) error {
 	if cfg.Interval <= 0 {
 		return fmt.Errorf("steady mode needs a positive interval")
@@ -321,11 +301,9 @@ func runSteady(ctx context.Context, cfg *runConfig, attest func(agent int)) erro
 	return nil
 }
 
-// runStorm pushes every agent through one attestation, bounded by the in-flight cap
-//
-// Cancellation stops launching but is not run failure:
-// Operator interrupting a long storm still gets the summary and the -out file
-// for the agents that did attest, the same way steady mode ends on its duration
+// runStorm attests every agent once, at most InFlight at a time.
+// Cancellation stops launching but is no failure, so the agents that did
+// attest are still summarized.
 func runStorm(ctx context.Context, cfg *runConfig, attest func(agent int)) {
 	inFlight := cfg.InFlight
 	if inFlight <= 0 {
@@ -348,7 +326,6 @@ func runStorm(ctx context.Context, cfg *runConfig, attest func(agent int)) {
 	wg.Wait()
 }
 
-// attestOnce performs one full attestation exchange for agent a
 func attestOnce(cfg *runConfig, a *synth.Agent) (*types.VerifyResult, error) {
 	dialer := &net.Dialer{Timeout: cfg.Timeout}
 	conn, err := tls.DialWithDialer(dialer, "tcp", cfg.Server, cfg.TLS)
@@ -360,7 +337,6 @@ func attestOnce(cfg *runConfig, a *synth.Agent) (*types.VerifyResult, error) {
 		return nil, fmt.Errorf("deadline: %w", err)
 	}
 
-	// challenge (48 bytes)
 	chBuf := make([]byte, 48)
 	if _, err := io.ReadFull(conn, chBuf); err != nil {
 		return nil, fmt.Errorf("read challenge: %w", err)
@@ -379,7 +355,6 @@ func attestOnce(cfg *runConfig, a *synth.Agent) (*types.VerifyResult, error) {
 		return nil, fmt.Errorf("write report: %w", err)
 	}
 
-	// result (56 bytes)
 	resBuf := make([]byte, 24)
 	if _, err := io.ReadFull(conn, resBuf); err != nil {
 		return nil, fmt.Errorf("read result: %w", err)
@@ -394,15 +369,14 @@ func attestOnce(cfg *runConfig, a *synth.Agent) (*types.VerifyResult, error) {
 	return result, nil
 }
 
-// errorKind buckets transport error for the summary
+// errorKind names a transport error by its timeout or by the text before
+// its first colon.
 func errorKind(err error) string {
 	var netErr net.Error
 	switch {
 	case errors.As(err, &netErr) && netErr.Timeout():
 		return "timeout"
 	default:
-		// first path segment of the wrapped error
-		// ("dial", "read challenge", ...)
 		msg := err.Error()
 		for i, r := range msg {
 			if r == ':' {
@@ -413,7 +387,6 @@ func errorKind(err error) string {
 	}
 }
 
-// startProgress emits periodic one-line progress while run is live
 func startProgress(cfg *runConfig, col *collector) (stop func()) {
 	if cfg.Progress <= 0 || cfg.Logf == nil {
 		return func() {}
