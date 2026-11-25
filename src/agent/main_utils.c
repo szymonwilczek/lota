@@ -427,12 +427,7 @@ void setup_dbus(struct ipc_context *ctx)
 		lota_warn("D-Bus unavailable, using socket IPC only");
 }
 
-/*
- * IPC_MAX_EXTRA_LISTENERS is the only hard cap on per-UID listener
- * slots; LOTA_CONFIG_MAX_CONTAINER_LISTENERS mirrors that constant so
- * config_load() can reject overflow before ever reach this code path.
- * Asserted to keep the two definitions wired together.
- */
+/* config_load() refuses more UIDs than the IPC layer has slots for. */
 _Static_assert(LOTA_CONFIG_MAX_CONTAINER_LISTENERS <= IPC_MAX_EXTRA_LISTENERS,
 	       "container listener cap exceeds ipc extra-listener slots");
 
@@ -506,10 +501,6 @@ static int add_listener_for_uid(uint32_t uid, void *user)
 
 	ret = ipc_add_listener(ctx, path);
 	if (ret == -EADDRINUSE) {
-		/*
-		 * Another agent is serving uid's titles there.
-		 * Say which process kept the socket.
-		 */
 		fprintf(stderr,
 			"Warning: %s is already served by another agent, so uid %u keeps that listener and this server has none\n",
 			path, uid);
@@ -605,14 +596,12 @@ void setup_container_listener(struct ipc_context *ctx,
 	}
 
 	/*
-	 * Reached only for a runtime directory that names no login:
-	 * a container's own, or a path an operator chose.
-	 * There is nothing to watch for, so this binds once
-	 * and says so if it cannot.
+	 * A runtime directory outside /run/user/<uid> names no login to watch
+	 * for, so this binds once.
 	 */
 	ret = steam_runtime_container_socket_dir(dir, sizeof(dir));
 	if (ret < 0)
-		return; /* XDG_RUNTIME_DIR not set, nothing to do */
+		return;
 
 	ret = steam_runtime_container_socket_path(path, sizeof(path));
 	if (ret < 0)
@@ -640,7 +629,6 @@ void setup_container_listener(struct ipc_context *ctx,
 		return;
 	}
 
-	/* log detected Steam Runtime environment */
 	ret = steam_runtime_detect(&rt_info);
 	if (ret == 0 && (rt_info.env_flags & STEAM_ENV_STEAM_ACTIVE))
 		steam_runtime_log_info(&rt_info);
@@ -688,21 +676,13 @@ int self_measure(struct tpm_context *ctx)
 		return ret;
 
 	/*
-	 * Bind PCR14 to self_hash, chained onto the value the initramfs lock
-	 * helper left. The digest folds in no clock counter: a TPM obfuscates
-	 * resetCount and restartCount per signing key.
-	 * The verifier rederives the chain from the pinned agent hash and the
-	 * baseline the signed event log replays to, and compares the register
-	 * against the one the client pinned.
+	 * Chained onto the value the initramfs lock helper left.
+	 * No clock counter goes in: a TPM obfuscates resetCount and
+	 * restartCount per signing key.
 	 */
 	ret = tpm_extend_boot_commitment(ctx, self_hash);
 	if (ret < 0) {
-		/*
-		 * -EBADMSG covers every refusal the commitment can produce,
-		 * so name which one it was.
-		 * A refusal an operator caused by running a build the register
-		 * does not commit to reads identically to a TPM fault otherwise.
-		 */
+		/* every refusal is -EBADMSG; the state names it */
 		if (ret == -EBADMSG) {
 			switch (ctx->boot_commitment_state) {
 			case TPM_PCR14_BINARY_CHANGED:
@@ -749,19 +729,9 @@ int self_measure(struct tpm_context *ctx)
 		return ret;
 	}
 
-	/*
-	 * Cache the hash so build_attestation_report() can pull the exact
-	 * bytes folded into PCR14 instead of re-reading /proc/self/exe and
-	 * risking a drift if the on-disk binary inode was replaced between
-	 * the boot-time hash and the next attestation round.
-	 */
+	/* reports carry the committed hash even after the file is replaced */
 	memcpy(ctx->self_hash, self_hash, LOTA_HASH_SIZE);
 	ctx->self_hash_ready = true;
 
-	/*
-	 * Extend succeeded either way; say which way, because a warm restart
-	 * that found the commitment already in the register has spent no boot
-	 * and the caller's log line is the only place that shows.
-	 */
 	return (int)tpm_boot_commitment_outcome(ctx->boot_commitment_state);
 }

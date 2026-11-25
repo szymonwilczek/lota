@@ -2,9 +2,6 @@
 /*
  * LOTA Agent - Policy Auto-Generation
  *
- * Generates a complete YAML policy file from the current system state.
- * The output is directly consumable by lota-verifier --policy.
- *
  * Copyright (C) 2026 Szymon Wilczek
  */
 
@@ -19,20 +16,6 @@
 #include "../../include/lota.h"
 #include "kernel_image.h"
 
-/*
- * PCR index definitions.
- * Set actually exported by --export-policy is policy_export_pcrs()
- * See policy.c for why PCR 8/9/14 are excluded.
- *
- *   PCR 0:  SRTM / firmware measurement
- *   PCR 1:  BIOS / UEFI configuration
- *   PCR 4:  Boot manager / loader stage
- *   PCR 7:  Secure Boot state
- *   PCR 8:  Boot config / command line (grubenv-driven, drifts; not exported)
- *   PCR 9:  Kernel/initrd measurements (grubenv-driven, drifts; not exported)
- *   PCR 11: Unified Kernel Image (UKI) measurements
- *   PCR 14: LOTA boot-commitment (per-boot, derivation-validated; not exported)
- */
 #define POLICY_PCR_0 0
 #define POLICY_PCR_1 1
 #define POLICY_PCR_4 4
@@ -42,17 +25,12 @@
 
 #define POLICY_MAX_PCRS 24
 
-/*
- * Collected system snapshot for policy generation.
- */
 struct policy_snapshot {
-	/* Policy metadata */
 	char name[64];
 	char description[256];
 	char hostname[64];
 	char timestamp[32]; /* ISO-8601 */
 
-	/* PCR values (SHA-256, LOTA_HASH_SIZE bytes each) */
 	struct {
 		int index;
 		uint8_t value[LOTA_HASH_SIZE];
@@ -60,57 +38,55 @@ struct policy_snapshot {
 	} pcrs[POLICY_MAX_PCRS];
 	int pcr_count;
 
-	/* Kernel image the bootloader measured (event log, not PCR 9) */
+	/* Kernel image the bootloader measured, from the event log */
 	char kernel_release[65]; /* sizeof(struct utsname.release) */
 	char kernel_image_path[KERNEL_IMAGE_PATH_MAX]; /* as logged */
 	uint8_t kernel_hash[LOTA_HASH_SIZE];
 	bool kernel_hash_valid;
 	int kernel_hash_error; /* reader's -errno when there is no digest */
 
-	/* Agent binary hash */
 	char agent_path[LOTA_MAX_PATH_LEN];
 	uint8_t agent_hash[LOTA_HASH_SIZE];
 	bool agent_hash_valid;
 
-	/* Security feature detection */
 	bool iommu_enabled;
 	bool enforce_mode;
 	bool module_sig;
 	bool secureboot;
 	bool lockdown;
-	bool ima_appraisal; /* IMA appraises every exec */
+	/*
+	 * IMA appraisal blocks, and the agent reads a rule appraising exec from
+	 * the IMA policy.
+	 */
+	bool ima_appraisal;
 };
 
-/*
- * policy_emit - Serialize a policy snapshot to YAML
+/**
+ * policy_emit() - Write a snapshot as a lota-verifier --policy file.
+ * @snap: The snapshot.
+ * @out: Stream to write to.
  *
- * @snap: System snapshot (from policy_collect or test fixture)
- * @out:  Output stream (stdout, file, or fmemopen buffer)
+ * PCR 14 is left out even when @snap holds it.
  *
- * Writes a complete, verifier-ready YAML policy document to @out.
- * The output can be used directly with lota-verifier --policy.
- *
- * Returns: 0 on success, negative errno on write failure
+ * Return: 0, -EINVAL for a NULL argument, or -EIO when @out reports an error.
  */
 int policy_emit(const struct policy_snapshot *snap, FILE *out);
 
-/*
- * policy_kernel_hash_reason - why an exported policy carries no kernel digest
+/**
+ * policy_kernel_hash_reason() - Why a policy carries no kernel digest.
+ * @err: The reader's negative errno, as in kernel_hash_error.
  *
- * Renders the reader's errno as the sentence the document and the terminal
- * both say, so the two cannot drift apart.
+ * The policy file and the terminal print the same sentence.
+ *
+ * Return: a static string.
  */
 const char *policy_kernel_hash_reason(int err);
 
-/*
- * policy_export_pcrs - Canonical PCR indices read for --export-policy
+/**
+ * policy_export_pcrs() - The PCRs --export-policy reads from the TPM.
+ * @count: Receives the number of entries, or NULL.
  *
- * @count: out, number of entries in the returned array (may be NULL)
- *
- * Returns pointer to static array of PCR indices the agent reads from the
- * live TPM when generating a policy.
- * Centralized here so the set has a single source of truth and can be unit-tested
- * without a TPM.
+ * Return: a static array.
  */
 const int *policy_export_pcrs(size_t *count);
 

@@ -6,34 +6,24 @@
 #include "tpm.h"
 
 /*
- * Exit status for a state only an operator can clear: the host is configured
- * in a way the agent refuses, and starting it again changes nothing.
- * The packaged unit lists it in RestartPreventExitStatus, so systemd leaves
- * the unit failed with the reason in the journal.
- *
- * 78 is sysexits.h EX_CONFIG, which is what this is.
+ * A state only an operator can clear. Both packaged units list it in
+ * RestartPreventExitStatus. 78 is EX_CONFIG of sysexits.h.
  */
 #define LOTA_EXIT_OPERATOR_ACTION 78
 
 /*
- * Another instance already holds the PID file.
- *
- * systemd hits this when it starts the unit under a running agent it cannot
- * kill, e.g. after a socket-unit restart. Retrying changes nothing while that
- * instance lives, so the packaged unit lists it in RestartPreventExitStatus.
+ * Another instance holds the PID file. lota-agent.service lists it in
+ * RestartPreventExitStatus.
  */
 #define LOTA_EXIT_ALREADY_RUNNING 3
 
-/*
- * What the daemon's return value becomes as a process exit status.
+/**
+ * lota_daemon_exit_status() - Map the daemon's result to its exit status.
+ * @rc: What run_daemon() returned: 0 or a negative errno.
+ * @commitment: The PCR 14 verdict of the same run.
  *
- * @rc:         what run_daemon() returned: 0 or a negative errno.
- * @commitment: the PCR 14 verdict the same run reached, read from
- *              the TPM context this process used.
- *
- * The unit file's behaviour stands on this answer, so it has one producer:
- * a refusal routed anywhere but LOTA_EXIT_OPERATOR_ACTION is one systemd
- * restarts into for the rest of the boot.
+ * Return: LOTA_EXIT_OPERATOR_ACTION for -ENOTSUP or a refused boot commitment,
+ * else @rc.
  */
 int lota_daemon_exit_status(int rc, enum tpm_pcr14_state commitment);
 

@@ -17,18 +17,11 @@
 #include <unistd.h>
 #include <openssl/types.h>
 
-/*
- * EAUTH is not defined on all platforms ->
- * 80 is a value that does not collide with standard errnos.
- */
+/* Linux has no EAUTH, and 80 is ELIBBAD there. */
 #ifndef EAUTH
 #define EAUTH 80
 #endif
 
-/*
- * Read entire file into malloc'd buffer.
- * Returns buffer (caller frees) or NULL on error.
- */
 static uint8_t *read_file_contents(const char *path, size_t *out_len,
 				   int *err_out)
 {
@@ -97,7 +90,7 @@ static uint8_t *read_file_contents(const char *path, size_t *out_len,
 		return NULL;
 	}
 
-	/* detect concurrent file growth after initial size snapshot */
+	/* the file grew after fstat() */
 	extra = fgetc(f);
 	if (extra != EOF) {
 		*err_out = -EAGAIN;
@@ -120,10 +113,6 @@ static uint8_t *read_file_contents(const char *path, size_t *out_len,
 	return buf;
 }
 
-/*
- * Load Ed25519 private key from PEM file.
- * Returns EVP_PKEY (caller frees) or NULL on error.
- */
 static EVP_PKEY *load_privkey(const char *path)
 {
 	FILE *f;
@@ -147,10 +136,6 @@ static EVP_PKEY *load_privkey(const char *path)
 	return pkey;
 }
 
-/*
- * Load Ed25519 public key from PEM file.
- * Returns EVP_PKEY (caller frees) or NULL on error.
- */
 static EVP_PKEY *load_pubkey(const char *path)
 {
 	FILE *f;
@@ -195,7 +180,6 @@ int policy_sign_generate_keypair(const char *privkey_pem_path,
 	if (EVP_PKEY_keygen(ctx, &pkey) <= 0)
 		goto out;
 
-	/* write private key (PKCS#8 PEM, no encryption) */
 	{
 		int pk_fd = open(privkey_pem_path, O_WRONLY | O_CREAT | O_TRUNC,
 				 0600);
@@ -218,8 +202,6 @@ int policy_sign_generate_keypair(const char *privkey_pem_path,
 	fclose(f);
 	f = NULL;
 
-	/* write public key (SPKI PEM); public artifact, not group/other
-	 * writable */
 	{
 		int pub_fd = open(pubkey_pem_path, O_WRONLY | O_CREAT | O_TRUNC,
 				  0644);
@@ -271,10 +253,7 @@ int policy_sign_buffer(const uint8_t *data, size_t data_len,
 		goto out;
 	}
 
-	/*
-	 * Ed25519 uses a one-shot DigestSign (md=NULL).
-	 * Message is passed entirely to DigestSign, not via Update.
-	 */
+	/* Ed25519 takes no digest and signs in one call, without Update. */
 	if (EVP_DigestSignInit(md_ctx, NULL, NULL, NULL, pkey) <= 0)
 		goto out;
 
@@ -353,8 +332,6 @@ int policy_sign_file(const char *file_path, const char *privkey_pem_path,
 	if (ret != 0)
 		return ret;
 
-	/* write raw signature to .sig file; public artifact, not group/other
-	 * writable */
 	{
 		int sig_fd = open(sig_path, O_WRONLY | O_CREAT | O_TRUNC, 0644);
 		if (sig_fd < 0)
@@ -389,7 +366,6 @@ int policy_verify_file(const char *file_path, const char *pubkey_pem_path,
 	if (!file_path || !pubkey_pem_path || !sig_path)
 		return -EINVAL;
 
-	/* read signature file */
 	f = fopen(sig_path, "rb");
 	if (!f)
 		return -errno ? -errno : -ENOENT;
@@ -400,7 +376,6 @@ int policy_verify_file(const char *file_path, const char *pubkey_pem_path,
 	if (nread != POLICY_SIG_SIZE)
 		return -EAUTH;
 
-	/* read policy file */
 	int read_err = 0;
 	data = read_file_contents(file_path, &data_len, &read_err);
 	if (!data)

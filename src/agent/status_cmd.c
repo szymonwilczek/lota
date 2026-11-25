@@ -148,10 +148,6 @@ static const struct lota_flag_name policy_keys[] = {
 	{ LOTA_STATUS_BLOCK_PTRACE, "block_ptrace" },
 };
 
-/*
- * A key that refuses a title's library leaves the title failing to start,
- * so the line names the keys and where each refusal is written.
- */
 void status_policy_string(const struct lota_ipc_status *s, char *buf,
 			  size_t len)
 {

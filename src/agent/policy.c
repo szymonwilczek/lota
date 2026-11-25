@@ -2,26 +2,6 @@
 /*
  * LOTA Agent - Policy Auto-Generation
  *
- * Generates a complete YAML policy file from the current system state.
- * The output is directly consumable by lota-verifier --policy.
- *
- * YAML structure matches PCRPolicy in src/verifier/verify/pcr.go:
- *
- *   name: <string>
- *   description: <string>
- *   pcrs:
- *     <index>: "<hex>"
- *   kernel_hashes:
- *     - "<hex>"
- *   agent_hashes:
- *     - "<hex>"
- *   require_iommu: <bool>
- *   require_enforce: <bool>
- *   require_module_sig: <bool>
- *   require_secureboot: <bool>
- *   require_lockdown: <bool>
- *   require_ima_appraisal: <bool>
- *
  * Copyright (C) 2026 Szymon Wilczek
  */
 
@@ -34,28 +14,10 @@
 #include "lota.h"
 
 /*
- * Canonical set of PCR indices the agent reads from the live TPM when generating
- * policy (--export-policy).
- * Single source of truth so the set is testable without TPM and regression
- * (re-pinning a drift-prone PCR) is caught by tests/test_policy_export.c
- *
- * PCR 8 (GRUB command/cmdline) and PCR 9 (GRUB-loaded files) are deliberately
- * excluded:
- * on GRUB + grubenv distributions
- * (greenboot toggles boot_success / boot_indeterminate / saved_entry, all measured)
- * these registers drift across benign reboots, so static pin fails healthy host.
- * Their security-relevant content is covered elsewhere -- the kernel command line
- * by the verifier's quote-bound PCR 8 event-log denylist (not the aggregate pin),
- * the kernel image by PCR 4 and kernel_hash, and the initramfs by the PCR 14
- * boot-commitment chain.
- *
- * PCR 14 (LOTA boot-commitment) is excluded: an exported policy is fleet-wide
- * and the register is per-host -- it chains onto whatever the platform measured
- * into PCR 14 before the initramfs lock -- and the verifier validates it per
- * client, through the boot-commitment derivation and the pinned baseline,
- * not a static policy pin.
- * policy_emit() also drops it defensively at the emit stage so no snapshot can freeze
- * one boot's value into the policy.
+ * PCR 8 and PCR 9 change across healthy reboots where GRUB measures grubenv,
+ * so a pin on them refuses a good host. The verifier checks the command line
+ * with its PCR 8 event-log denylist and the kernel image with kernel_hashes.
+ * The verifier checks PCR 14 per client, against its baseline.
  */
 static const int policy_export_pcr_list[] = {
 	POLICY_PCR_0, POLICY_PCR_1, POLICY_PCR_4, POLICY_PCR_7, POLICY_PCR_11,
@@ -75,13 +37,6 @@ static void emit_hash_hex(FILE *out, const uint8_t hash[LOTA_HASH_SIZE])
 		fprintf(out, "%02x", hash[i]);
 }
 
-/*
- * Write a YAML double-quoted scalar with proper escaping.
- *
- * Escapes backslashes, double quotes and control characters so that
- * the output is a valid YAML double-quoted string regardless of
- * input content.
- */
 static void emit_yaml_string(FILE *out, const char *s)
 {
 	fputc('"', out);
@@ -126,12 +81,6 @@ static void emit_yaml_string(FILE *out, const char *s)
 	fputc('"', out);
 }
 
-/*
- * Why the exported document carries no kernel digest.
- *
- * Each of these leaves the operator a different next step, so the reason
- * travels into the file rather than collapsing into "not available".
- */
 const char *policy_kernel_hash_reason(int err)
 {
 	switch (err) {
@@ -172,11 +121,6 @@ int policy_emit(const struct policy_snapshot *snap, FILE *out)
 	if (!snap || !out)
 		return -EINVAL;
 
-	/*
-	 * YAML header comment block.
-	 * Includes provenance metadata so operators know when and where
-	 * this policy was generated.
-	 */
 	fprintf(out, "# SPDX-License-Identifier: MIT\n");
 	fprintf(out, "# LOTA Policy - Auto-generated from live system\n");
 	fprintf(out, "#\n");
@@ -198,24 +142,9 @@ int policy_emit(const struct policy_snapshot *snap, FILE *out)
 	fprintf(out, "\n");
 	fprintf(out, "\n");
 
-	/*
-	 * PCR values section.
-	 *
-	 * Only PCRs that were successfully read are emitted.
-	 * The verifier only checks PCRs present in this map; omitted
-	 * PCRs will be accepted unconditionally (by design).
-	 */
 	fprintf(out, "# PCR values (SHA-256, hex-encoded)\n");
 	fprintf(out, "# Only listed PCRs are verified; others are ignored.\n");
 
-	/*
-	 * PCR14 is the LOTA boot-commitment register.
-	 * It is per-host, and the verifier validates it per client through
-	 * the boot-commitment derivation and the pinned baseline,
-	 * not a static policy pin
-	 * Skip it defensively here so even snapshot that carries it cannot freeze
-	 * one boot's value into the policy and reject the host on its next reboot
-	 */
 	int valid_pcrs = 0;
 	for (i = 0; i < snap->pcr_count; i++) {
 		if (snap->pcrs[i].valid && snap->pcrs[i].index != POLICY_PCR_14)
@@ -242,10 +171,6 @@ int policy_emit(const struct policy_snapshot *snap, FILE *out)
 		"# static pin, and changes on every boot.\n");
 	fprintf(out, "\n");
 
-	/*
-	 * Kernel image digest and path from the bootloader's EV_IPL record,
-	 * the value the verifier's kernel_hashes gate compares.
-	 */
 	fprintf(out, "# Allowed kernel images (SHA-256)\n");
 	if (snap->kernel_hash_valid) {
 		emit_yaml_comment(
@@ -256,11 +181,6 @@ int policy_emit(const struct policy_snapshot *snap, FILE *out)
 			emit_yaml_comment(out, "Booted kernel",
 					  snap->kernel_release);
 	} else {
-		/*
-		 * Leave the list empty, never fall back to a PCR: it changes
-		 * with the whole boot, so the pin would refuse this host on
-		 * its next boot and read as kernel drift.
-		 */
 		emit_yaml_comment(
 			out, "Empty",
 			policy_kernel_hash_reason(snap->kernel_hash_error));
@@ -279,9 +199,6 @@ int policy_emit(const struct policy_snapshot *snap, FILE *out)
 	}
 	fprintf(out, "\n");
 
-	/*
-	 * Agent binary hash.
-	 */
 	fprintf(out, "# Allowed LOTA agent hashes (SHA-256)\n");
 	if (snap->agent_path[0])
 		emit_yaml_comment(out, "Source", snap->agent_path);
@@ -296,12 +213,6 @@ int policy_emit(const struct policy_snapshot *snap, FILE *out)
 	}
 	fprintf(out, "\n");
 
-	/*
-	 * Security requirements.
-	 *
-	 * Each boolean reflects the current system state: if the feature
-	 * is detected as active, the requirement is set to true.
-	 */
 	fprintf(out,
 		"# Security requirements (auto-detected from live system)\n");
 	fprintf(out, "require_iommu: %s\n",

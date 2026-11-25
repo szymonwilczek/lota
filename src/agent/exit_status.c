@@ -12,12 +12,9 @@
 #include "tpm.h"
 
 /*
- * Did the PCR 14 verdict refuse the boot commitment?
- *
- * PCR 14 cannot be reset from userspace, so a refused extend stays refused
- * until reboot and restarting the daemon cannot change it.
- * Only AWAITING_EXTEND and ALREADY_COMMITTED let the extend proceed.
- * A run that never reached the register leaves AWAITING_EXTEND, the zero value.
+ * PCR 14 cannot be reset from userspace, so a restart of the same binary meets
+ * the same refusal until reboot. A run that never reached the register leaves
+ * AWAITING_EXTEND, the zero value.
  */
 static bool commitment_refused(enum tpm_pcr14_state state)
 {
@@ -36,11 +33,7 @@ static bool commitment_refused(enum tpm_pcr14_state state)
 		return true;
 	}
 
-	/*
-	 * A verdict this file has no case for is the one that must not be
-	 * restarted into: an unrecognised state is not evidence that trying
-	 * again is free.
-	 */
+	/* an unknown state is no evidence that a restart is free */
 	return true;
 }
 
@@ -49,21 +42,11 @@ int lota_daemon_exit_status(int rc, enum tpm_pcr14_state commitment)
 	if (rc >= 0)
 		return rc;
 
-	/*
-	 * -ENOTSUP is the daemon's "this host is configured in a way I refuse":
-	 * a legacy firmware interface, or a publisher key that predates
-	 * per-publisher derivation.
-	 * Both need someone to act; neither is fixed by trying again.
-	 */
+	/* a host configuration the daemon refuses, such as the kernel floor */
 	if (rc == -ENOTSUP)
 		return LOTA_EXIT_OPERATOR_ACTION;
 
-	/*
-	 * The refusal every restart pays for: a spent, mis-chained or mutated
-	 * PCR 14 stands until the host reboots, and each attempt still opens
-	 * the TPM, provisions the AIK and lays the container socket down before
-	 * finding that out.
-	 */
+	/* each restart would set up IPC, the TPM and the AIK again first */
 	if (commitment_refused(commitment))
 		return LOTA_EXIT_OPERATOR_ACTION;
 
