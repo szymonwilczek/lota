@@ -1,15 +1,8 @@
 /* SPDX-License-Identifier: MIT */
 /*
- * Kernel-anchored runtime image measurement of a live process.
- *
- * Enumerates the file-backed executable mappings of a target PID from
- * /proc/<pid>/maps (kernel-maintained, so the target cannot forge it) and,
- * for each backing object, folds the kernel-computed fs-verity digest into
- * the canonical per-process image digest defined in
+ * Kernel-anchored runtime image measurement of a live process: the
+ * file-backed executable mappings folded into the image digest of
  * include/lota_runtime_image_measure.h.
- *
- * Measurement is performed by the privileged agent, never by the measured
- * process.
  *
  * Copyright (C) 2026 Szymon Wilczek
  */
@@ -26,23 +19,32 @@
 #include "lota_runtime_image_measure.h"
 #include "lota.h"
 
-/* longest mapping path kept; the parser refuses a longer one */
+/* the parser refuses a longer mapping path */
 #define LOTA_RT_MAP_PATH_MAX (LOTA_RUNTIME_IMAGE_SONAME_MAX + 64)
 
-/* What a failing object is to the process that mapped it */
+/**
+ * enum lota_rt_object_role - What an object is to the process that mapped it.
+ * @LOTA_RT_ROLE_UNKNOWN: not opened, or no longer the mapping enumerated.
+ * @LOTA_RT_ROLE_EXECUTABLE: the process's own executable; a failure fails
+ *	the measurement.
+ * @LOTA_RT_ROLE_MAPPED_OBJECT: anything else; a failure is counted as
+ *	unmeasurable.
+ */
 enum lota_rt_object_role {
-	LOTA_RT_ROLE_UNKNOWN = 0, /* mapping would not open */
-	LOTA_RT_ROLE_EXECUTABLE, /* no digest refuses the token */
-	LOTA_RT_ROLE_MAPPED_OBJECT, /* no digest marks coverage partial */
+	LOTA_RT_ROLE_UNKNOWN = 0,
+	LOTA_RT_ROLE_EXECUTABLE,
+	LOTA_RT_ROLE_MAPPED_OBJECT,
 };
 
-/*
- * One file-backed executable mapping selected for measurement.
- * - start/end are the mapping's virtual address range (used to build the
- * authoritative /proc/<pid>/map_files key)
- * - dev/ino identify the backing inode
- * - soname is the basename the image digest folds
- * - path is the mapped file, for the operator
+/**
+ * struct lota_rt_map_entry - One file-backed executable mapping.
+ * @start: start of the address range, which names it in map_files.
+ * @end: end of the address range.
+ * @dev_major: device major, as maps reports it.
+ * @dev_minor: device minor, as maps reports it.
+ * @ino: inode of the backing file.
+ * @soname: basename the image digest folds.
+ * @path: mapped path, " (deleted)" stripped.
  */
 struct lota_rt_map_entry {
 	unsigned long start;
@@ -54,76 +56,103 @@ struct lota_rt_map_entry {
 	char path[LOTA_RT_MAP_PATH_MAX];
 };
 
-/*
- * Parse one /proc/<pid>/maps line.
+/**
+ * lota_rt_parse_maps_line() - Parse one /proc/<pid>/maps line.
+ * @line: the line.
+ * @out: the mapping.
  *
- * Returns 1 and fills *out when the line is a file-backed executable
- * mapping worth measuring, 0 when the line should be skipped (non-executable,
- * anonymous, or a special region such as [vdso] / [stack]), or a negative
- * errno when the line is malformed.
+ * Return: 1 and @out filled for a file-backed executable mapping, 0 for a
+ * line to skip (not executable, anonymous, or a region such as [vdso]),
+ * -ENAMETOOLONG for a path that does not fit, -EINVAL otherwise.
  */
 int lota_rt_parse_maps_line(const char *line, struct lota_rt_map_entry *out);
 
-/*
- * Identity of an opened mapping, as stat() reports it.
- *
- * Kept apart from the numbers in /proc/<pid>/maps:
- * this one is comparable with a stat() of /proc/<pid>/exe,
- * and that one is not.
+/**
+ * struct lota_rt_open_identity - An opened mapping, as fstat() reports it.
+ * @dev: device; comparable with a stat() of /proc/<pid>/exe, unlike the
+ *	maps device.
+ * @ino: inode.
+ * @fs_magic: fstatfs() f_type of the fd, 0 if unread.
+ * @fs_magic_err: fstatfs() errno, 0 if @fs_magic was read.
+ * @size: size; with dev, ino and mtime, the digest cache key.
+ * @mtime_sec: mtime seconds.
+ * @mtime_nsec: mtime nanoseconds.
+ * @nlink: link count; 0 once nothing links it.
+ * @seals: F_GET_SEALS of the fd, negative where it has none.
  */
 struct lota_rt_open_identity {
 	dev_t dev;
 	ino_t ino;
-	unsigned long fs_magic; /* fstatfs() f_type of the fd, 0 if unread */
-	int fs_magic_err; /* fstatfs() errno, 0 if fs_magic was read */
-	uint64_t size; /* with mtime, tells a replaced file from a cached one */
+	unsigned long fs_magic;
+	int fs_magic_err;
+	uint64_t size;
 	int64_t mtime_sec;
 	int64_t mtime_nsec;
-	/* 0 once nothing links it anywhere */
 	unsigned long nlink;
-	int seals; /* F_GET_SEALS of the fd, negative where it has none */
+	int seals;
 };
 
-/*
- * How an object's digest may be produced. fs-verity wins wherever present;
- * a content hash is sound only for what cannot be written: the running
- * executable or a write-guarded library.
+/**
+ * enum lota_rt_identity_road - How an object's digest may be produced.
+ * @LOTA_RT_ROAD_NONE: no digest may be produced.
+ * @LOTA_RT_ROAD_VERITY: the kernel holds an fs-verity digest.
+ * @LOTA_RT_ROAD_CONTENT_HASH: the kernel hashes the content on demand.
  */
 enum lota_rt_identity_road {
-	LOTA_RT_ROAD_NONE = 0, /* no digest may be produced for this object */
-	LOTA_RT_ROAD_VERITY, /* the kernel holds an fs-verity digest */
-	LOTA_RT_ROAD_CONTENT_HASH, /* the kernel hashes the content on demand */
+	LOTA_RT_ROAD_NONE = 0,
+	LOTA_RT_ROAD_VERITY,
+	LOTA_RT_ROAD_CONTENT_HASH,
 };
 
-/*
- * Whether an object is memory with no file behind it: an unlinked tmpfs or
- * hugetlbfs object, such as a memfd. No road may answer for it;
- * it is a coverage gap. An unlinked file on disk is still a file.
+/**
+ * lota_rt_object_has_no_file() - Whether an object is memory with no file.
+ * @fs_magic: f_type of its filesystem.
+ * @nlink: its link count.
+ *
+ * Return: 1 for an unlinked tmpfs or hugetlbfs object, such as a memfd,
+ * 0 otherwise; an unlinked file on disk is still a file.
  */
 int lota_rt_object_has_no_file(unsigned long fs_magic, unsigned long nlink);
 
-/*
- * The LOTA_EXEC_HISTORY_* an open object carries by what it is, for a mapping
- * older than protection, which the kernel never saw. With no name and no seal
- * against writes, any holder of an fd can write it. A writer of anything else
- * shows only at the mapping itself.
+/**
+ * lota_rt_object_memory_flags() - LOTA_EXEC_HISTORY_* of an open object.
+ * @fs_magic: f_type of its filesystem.
+ * @nlink: its link count.
+ * @seals: its F_GET_SEALS, negative where it has none.
+ *
+ * Return: 0 off tmpfs and hugetlbfs, else LOTA_EXEC_HISTORY_MEMORY, plus
+ * LOTA_EXEC_HISTORY_WRITABLE when unlinked and not sealed against writes.
  */
 uint32_t lota_rt_object_memory_flags(unsigned long fs_magic,
 				     unsigned long nlink, int seals);
 
-/*
- * Which road may measure one object of a live process. role is an enum
- * lota_rt_object_role; a filesystem off the fs_magic allowlist gets no
- * content hash; write_guarded: the agent pinned it against writes.
+/**
+ * lota_rt_identity_road() - Which road may measure one object.
+ * @role: enum lota_rt_object_role.
+ * @verity_present: the kernel holds an fs-verity digest for it.
+ * @fs_magic: f_type of its filesystem.
+ * @write_guarded: the agent pinned it against writes.
+ *
+ * fs-verity wins whatever the role. A content hash is taken only for the
+ * executable or a write-guarded mapped object, on a filesystem in the
+ * allowlist.
+ *
+ * Return: the road, LOTA_RT_ROAD_NONE when none may.
  */
 enum lota_rt_identity_road lota_rt_identity_road(int role, int verity_present,
 						 unsigned long fs_magic,
 						 int write_guarded);
 
-/*
- * Kernel hash of the content behind one mapping: path is its /proc magic
- * link, dev/ino the identity the open must resolve to.
- * Returns 0 or a negative errno. With none installed, only fs-verity measures.
+/**
+ * typedef lota_rt_content_hasher_fn - Kernel hash of the content of a mapping.
+ * @path: its map_files link.
+ * @dev: device the open must resolve to.
+ * @ino: inode the open must resolve to.
+ * @out: the digest.
+ *
+ * With none installed, only fs-verity measures.
+ *
+ * Return: 0 or a negative errno.
  */
 typedef int (*lota_rt_content_hasher_fn)(const char *path, uint64_t dev,
 					 uint64_t ino,
@@ -131,14 +160,21 @@ typedef int (*lota_rt_content_hasher_fn)(const char *path, uint64_t dev,
 
 void lota_rt_set_content_hasher(lota_rt_content_hasher_fn fn);
 
-/*
- * Pin the file behind one mapping against writes; arguments as for the
- * hasher. 0 and pinned set, or a negative errno. Unset: no library hashed.
+/**
+ * typedef lota_rt_pin_object_fn - Pin the file of a mapping against writes.
+ * @path: its map_files link.
+ * @dev: device the open must resolve to.
+ * @ino: inode the open must resolve to.
+ * @pinned: set when the file is pinned.
+ *
+ * With none installed, no mapped object is content hashed.
+ *
+ * Return: 0 or a negative errno.
  */
 typedef int (*lota_rt_pin_object_fn)(const char *path, uint64_t dev,
 				     uint64_t ino, int *pinned);
 
-/* Pin rounds: the sweep unpins what its round did not reach */
+/* a round's sweep unpins what the round did not reach */
 typedef void (*lota_rt_pin_round_fn)(void);
 typedef int (*lota_rt_pin_sweep_fn)(size_t *released);
 
@@ -147,60 +183,55 @@ void lota_rt_set_pin_object(lota_rt_pin_object_fn pin,
 			    lota_rt_pin_sweep_fn sweep);
 
 /*
- * Bracket one measurement of the whole protected set,
- * so a library two processes map stays pinned for both.
+ * Bracket one measurement of the whole protected set. round_end() returns
+ * the sweep's result, 0 with *released 0 when no sweep is installed.
  */
 void lota_rt_measure_round_begin(void);
 int lota_rt_measure_round_end(size_t *released);
 
-/*
- * Does the opened mapping still describe the one that was enumerated?
+/**
+ * lota_rt_mapping_identity_ok() - Whether an opened mapping is the one
+ * enumerated.
+ * @enumerated: the mapping from the first maps read.
+ * @observed: the same range from the maps read after the open.
+ * @opened_ino: inode of the opened handle.
  *
- * enumerated and observed are both read from /proc/<pid>/maps -- the second
- * after the handle was opened -- so their device numbers are the same quantity
- * and can be compared.
+ * Both devices come from maps: a filesystem with a device per subvolume,
+ * such as btrfs, reports another one to stat().
  *
- * opened_ino is the inode of the handle itself, which is what ties the file
- * that will be measured to the range that was enumerated.
- *
- * A device from stat() is deliberately not one of the inputs: a filesystem
- * that reports one device per subvolume, as btrfs does, answers stat()
- * and maps differently for the same live mapping, and comparing the two refuses
- * every mapping on such a host.
- *
- * Returns 1 when the mapping is unchanged, 0 otherwise -- including for a NULL
- * argument, so the caller fails closed.
+ * Return: 1 when device and inode match, 0 otherwise or for a NULL argument.
  */
 int lota_rt_mapping_identity_ok(const struct lota_rt_map_entry *enumerated,
 				const struct lota_rt_map_entry *observed,
 				unsigned long long opened_ino);
 
-/*
- * Collect the deduplicated set of file-backed executable mappings of a live
- * process (one entry per backing inode) into entries[].
+/**
+ * lota_rt_collect_exec_maps() - File-backed executable mappings of a process.
+ * @pid: the process.
+ * @entries: one entry per backing inode.
+ * @max: capacity of @entries.
+ * @n_out: entries filled.
+ * @past_limit: mappings that did not fit.
  *
- * Returns 0, the entry count via *n_out and the number of mappings that did
- * not fit via *past_limit, or a negative errno. Mappings past max are counted
- * and not deduplicated: telling their inodes apart would take the list the
- * limit bounds.
+ * A mapping past @max whose inode is in @entries is skipped; the others are
+ * counted, each mapping of one inode again.
+ *
+ * Return: 0, or a negative errno with @n_out and @past_limit untouched.
  */
 int lota_rt_collect_exec_maps(pid_t pid, struct lota_rt_map_entry *entries,
 			      size_t max, size_t *n_out, uint32_t *past_limit);
 
-/*
- * Why a runtime image measurement failed, so the caller can name the object
- * instead of printing a bare errno.
- *
- * soname is the basename of the object that stopped the measurement
- * and is empty when the measurement failed before any object was reached.
- *
- * path is where that object was mapped from; a basename is ambiguous.
- *
- * role is enum lota_rt_object_role.
- *
- * reported_len is the digest length the kernel returned for that object:
- * zero when it carries no fs-verity digest at all, otherwise a length LOTA
- * does not take.
+/**
+ * struct lota_runtime_measure_failure - The object a measurement failed on.
+ * @soname: its basename; empty when no mapping was reached.
+ * @path: where it was mapped from.
+ * @reported_len: fs-verity digest length the kernel returned; nonzero only
+ *	for a length LOTA does not take.
+ * @role: enum lota_rt_object_role.
+ * @err: negative errno of its measurement.
+ * @road_err: why the content road refused, 0 if it was not tried.
+ * @no_file: memory with no file behind it.
+ * @past_limit: mappings past the limit, set once all were walked.
  */
 struct lota_runtime_measure_failure {
 	char soname[LOTA_RUNTIME_IMAGE_SONAME_MAX];
@@ -208,136 +239,136 @@ struct lota_runtime_measure_failure {
 	uint32_t reported_len;
 	int role;
 	int err;
-	int road_err; /* content road's refusal, 0 if that road was closed */
-	int no_file; /* memory with no file behind it */
-	uint32_t past_limit; /* mappings past the limit, once all were walked */
+	int road_err;
+	int no_file;
+	uint32_t past_limit;
 };
 
-/*
- * Whether err says the agent ran out of something, and nothing about the
- * process it walked.
- */
+/* the agent ran out of something; nothing about the process walked */
 static inline int lota_rt_err_is_agent_failure(int err)
 {
 	return err == -ENOMEM || err == -EMFILE || err == -ENFILE;
 }
 
-#define LOTA_RT_REASON_MAX 512 /* longest lota_rt_failure_reason() sentence */
+#define LOTA_RT_REASON_MAX 512
 
-/*
- * Render a failure into buf as one sentence: object path, its role in the
- * process, and the reason. Always NUL-terminates.
- * Safe with a NULL failure, which renders the errno alone.
+/**
+ * lota_rt_failure_reason() - Render a failure as one sentence.
+ * @fail: the failure, or NULL for @err alone.
+ * @err: errno of the measurement, either sign.
+ * @buf: the sentence, NUL-terminated and truncated to @buflen.
+ * @buflen: size of @buf.
+ *
+ * Mappings past the limit win over the object; -ENODATA names the cause
+ * kept in @fail.
  */
 void lota_rt_failure_reason(const struct lota_runtime_measure_failure *fail,
 			    int err, char *buf, size_t buflen);
 
-/*
- * How much of a process's mapped code the measurement could account for.
- *
- * measured counts the objects folded into the image digest;
- * unmeasurable counts those the kernel holds no fs-verity digest for.
- *
- * Distinction is the relying party's to act on: machine that cannot measure
- * distribution's libc is not a machine that hid something, and a publisher who
- * wants full coverage asks for the flag that says so.
+/**
+ * struct lota_runtime_measure_coverage - How much mapped code was measured.
+ * @measured: objects folded into the image digest.
+ * @unmeasurable: objects left out of it.
+ * @content_hashed: of @measured, those content hashed, not fs-verity.
+ * @past_limit: of @unmeasurable, those past the object limit.
  */
 struct lota_runtime_measure_coverage {
 	uint32_t measured;
 	uint32_t unmeasurable;
-	uint32_t content_hashed; /* of measured: content hash, not fs-verity */
-	uint32_t past_limit; /* of unmeasurable: past the object limit */
+	uint32_t content_hashed;
+	uint32_t past_limit;
 };
 
-/*
- * Coverage of a process's mapped code, without folding a digest.
+/**
+ * lota_runtime_coverage_pid() - Coverage of a process, without the digest.
+ * @pid: the process.
+ * @cov: the coverage.
  *
- * Same enumeration and the same per-object read as the measurement,
- * minus the hash: it answers "how much of this process could be measured"
- * for a caller that needs the answer rather than the value
- * -- the status word, which has to agree with the token the same connection
- * later fetches.
- * Returns 0 and fills cov, or a negative errno.
+ * Same roads as lota_runtime_measure_pid(), but a failing executable is only
+ * counted; when /proc/<pid>/exe does not stat, every object is a mapped one.
+ *
+ * Return: 0 and @cov filled, or a negative errno from the enumeration or an
+ * agent failure.
  */
 int lota_runtime_coverage_pid(pid_t pid,
 			      struct lota_runtime_measure_coverage *cov);
 
-/*
- * Whether a measurement round may be issued at all.
+/**
+ * lota_rt_coverage_verdict() - Whether a measurement may be issued.
+ * @cov: the coverage.
+ * @exe_measured: the process's own executable was measured.
  *
- * Full coverage is a publisher's policy question, but two properties are the host's
- * and are not negotiable: something has to have been measured, and the process's
- * own executable -- the code the title itself ships, which whoever ships it can
- * make measurable -- has to be one of the objects measured.
- *
- * Returns 0 when the digest may be issued, -ENODATA otherwise.
+ * Return: 0 when something and the executable were measured, -ENODATA
+ * otherwise, -EINVAL for a NULL @cov.
  */
 int lota_rt_coverage_verdict(const struct lota_runtime_measure_coverage *cov,
 			     int exe_measured);
 
-/*
- * Open the file behind one enumerated mapping through <dirfd>/<range>, dirfd
- * being /proc/<pid>/map_files: a kernel magic symlink, so no path the process
- * controls is followed.
+/**
+ * lota_rt_open_mapping() - Open the file behind one enumerated mapping.
+ * @dirfd: /proc/<pid>/map_files.
+ * @entry: the mapping, opened by its range, never by its maps path.
+ * @st: fstat() of the fd.
  *
- * Returns the fd and fills st, or a negative errno; -ESTALE when the range no
- * longer holds a regular file.
+ * Return: the fd, -EINVAL for a bad range, -ESTALE when the range no longer
+ * holds a regular file, or another negative errno.
  */
 int lota_rt_open_mapping(int dirfd, const struct lota_rt_map_entry *entry,
 			 struct stat *st);
 
-/*
- * Compute the kernel-anchored runtime image digest of a live process.
+/**
+ * lota_runtime_measure_pid() - Runtime image digest of a live process.
+ * @pid: the process.
+ * @out_digest: the digest.
+ * @cov: the coverage, or NULL; on failure only @cov->past_limit, once the
+ *	enumeration ran.
+ * @fail: the object that stopped the measurement, or NULL.
  *
- * Enumerates the process's file-backed executable mappings, opens them all,
- * reads the maps once more to tie every handle to its range, folds the kernel
- * fs-verity digest of every object that carries one into the canonical image
- * digest, and writes the 32-byte result.
+ * Opens every mapping, ties each handle to its range with a second maps read,
+ * and folds the digest of every object measured. A mapped object that fails,
+ * and a mapping past LOTA_RUNTIME_IMAGE_MAX_MODULES, is left out and counted
+ * in @cov.
  *
- * Objects with no digest, mappings that will not open or no longer resolve to
- * the inode enumerated, and mappings past LOTA_RUNTIME_IMAGE_MAX_MODULES, are
- * counted, not guessed at:
- * they are absent from the fold and reported through cov, so partial measurement
- * can never be read as a complete one.
- * cov->past_limit is set also when the measurement fails after the enumeration.
- *
- * Fails closed (negative errno) when lota_rt_coverage_verdict() refuses the round,
- * when the own executable fails, with the errno of a read that failed, and
- * when the agent runs out of memory or descriptors.
- *
- * cov and fail may be NULL.
- * When fail is non-NULL it receives the object that stopped the measurement,
- * for lota_rt_failure_reason().
- *
- * Returns 0 on success.
+ * Return: 0, -ENOENT with no mapping, -ENODATA when the executable carries no
+ * digest or lota_rt_coverage_verdict() refuses, or another negative errno:
+ * the executable's, an unopened mapping's on a refused verdict, or an agent
+ * failure.
  */
 int lota_runtime_measure_pid(pid_t pid,
 			     uint8_t out_digest[LOTA_RUNTIME_IMAGE_DIGEST_SIZE],
 			     struct lota_runtime_measure_coverage *cov,
 			     struct lota_runtime_measure_failure *fail);
 
-/*
- * One mapping a measurement found, for the registry.
- *
- * digest.len is 0 for an object absent from the fold; content_hashed says
- * the digest is a kernel content hash rather than an fs-verity one.
- * size is 0 when the object would not open.
+/**
+ * struct lota_rt_object_record - One mapping a measurement found.
+ * @entry: the mapping.
+ * @digest: its digest; len 0 when left out of the fold.
+ * @size: its size; 0 when not opened.
+ * @content_hashed: @digest is a content hash, not fs-verity.
+ * @unmapped: only in the exec history, no longer in the maps.
+ * @history_flags: LOTA_EXEC_HISTORY_*, from the walk and the exec history.
  */
 struct lota_rt_object_record {
 	struct lota_rt_map_entry entry;
 	struct lota_verity_digest_key digest;
 	uint64_t size;
 	int content_hashed;
-	int unmapped; /* only in the exec history, no longer in the maps */
-	uint32_t history_flags; /* LOTA_EXEC_HISTORY_*, by the walk and the kernel */
+	int unmapped;
+	uint32_t history_flags;
 };
 
-/*
- * lota_runtime_measure_pid(), plus every enumerated mapping in objs.
+/**
+ * lota_runtime_measure_pid_objects() - lota_runtime_measure_pid(), plus
+ * every enumerated mapping.
+ * @pid: the process.
+ * @out_digest: the digest.
+ * @cov: the coverage, or NULL.
+ * @fail: the object that stopped the measurement, or NULL.
+ * @objs: LOTA_RUNTIME_IMAGE_MAX_MODULES records, or NULL.
+ * @n_objs: records filled, also when the measurement fails after the
+ *	enumeration; required with @objs.
  *
- * objs holds LOTA_RUNTIME_IMAGE_MAX_MODULES records, or is NULL.
- * *n_objs receives how many were filled, also when the measurement fails
- * after the enumeration, so a failed process still names what it mapped.
+ * Return: as lota_runtime_measure_pid(); -EINVAL for a NULL @out_digest.
  */
 int lota_runtime_measure_pid_objects(
 	pid_t pid, uint8_t out_digest[LOTA_RUNTIME_IMAGE_DIGEST_SIZE],

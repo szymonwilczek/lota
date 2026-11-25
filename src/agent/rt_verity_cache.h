@@ -1,24 +1,7 @@
 /* SPDX-License-Identifier: MIT */
 /*
- * Cache of kernel fs-verity digests, keyed by the inode they were read from.
- *
- * Token folds a measurement of every file-backed executable mapping of every
- * protected process, and heartbeating title asks for one every few seconds.
- *
- * Each object costs an open() and an FS_IOC_MEASURE_VERITY, and process maps
- * its own binary plus every library it loads.
- *
- * Caching is sound because fs-verity is immutable:
- * once enabled on an inode, neither the file's contents nor its digest can change,
- * and the kernel refuses writes to it.
- * What can change underneath is the identity of the inode -- file replaced by
- * package update is a new inode, and an inode number can be reused after deletion
- * -- so the key carries the device, inode number, size and modification time,
- * all read from the same fstat() the measurement already performs on open
- * descriptor.
- * Miss on any of them re-reads from the kernel, so a stale entry is never served.
- *
- * Cache holds no secret: fs-verity digest is public property of a file anyone may read.
+ * Cache of kernel digests of mapped objects, keyed by the device, inode,
+ * size and mtime they were read under.
  *
  * Copyright (C) 2026 Szymon Wilczek
  */
@@ -32,15 +15,16 @@
 
 #include "lota.h"
 
-/*
- * Entries.
- * Process maps at most LOTA_RUNTIME_IMAGE_MAX_MODULES objects and several
- * protected processes share their libraries, so this holds a typical protected
- * set whole.
- */
 #define LOTA_RT_VERITY_CACHE_ENTRIES 1024
 
-/* Identity of the inode a digest was read from */
+/**
+ * struct lota_rt_verity_key - Identity of the inode a digest was read from.
+ * @dev: device.
+ * @ino: inode.
+ * @size: size.
+ * @mtime_sec: mtime seconds.
+ * @mtime_nsec: mtime nanoseconds.
+ */
 struct lota_rt_verity_key {
 	uint64_t dev;
 	uint64_t ino;
@@ -52,7 +36,7 @@ struct lota_rt_verity_key {
 struct lota_rt_verity_entry {
 	struct lota_rt_verity_key key;
 	struct lota_verity_digest_key digest;
-	uint64_t used_at; /* cache clock at the last hit, 0 = free */
+	uint64_t used_at; /* cache clock at the last put or hit, 0 = free */
 };
 
 struct lota_rt_verity_cache {
@@ -62,7 +46,7 @@ struct lota_rt_verity_cache {
 	uint64_t misses;
 };
 
-/* Build a key from a stat of the open descriptor the digest is read from */
+/* key from an fstat() of the descriptor the digest is read from */
 static inline void lota_rt_verity_key_from_stat(const struct stat *st,
 						struct lota_rt_verity_key *out)
 {
@@ -94,12 +78,15 @@ static inline size_t lota_rt_verity_slot(const struct lota_rt_verity_key *key)
 	return (size_t)(h % LOTA_RT_VERITY_CACHE_ENTRIES);
 }
 
-/*
- * Look up a digest.
- * Returns 1 and fills out on a hit, 0 on a miss.
+/**
+ * lota_rt_verity_cache_get() - Look up a digest.
+ * @cache: the cache.
+ * @key: the inode.
+ * @out: the digest.
  *
- * Probing is linear from the hashed slot over a short window,
- * which keeps a lookup bounded no matter how the key set collides.
+ * Probes eight slots from the hashed one.
+ *
+ * Return: 1 and @out filled on a hit, 0 on a miss or a NULL argument.
  */
 static inline int lota_rt_verity_cache_get(struct lota_rt_verity_cache *cache,
 					   const struct lota_rt_verity_key *key,
@@ -131,9 +118,14 @@ static inline int lota_rt_verity_cache_get(struct lota_rt_verity_cache *cache,
 	return 0;
 }
 
-/*
- * Record a digest, replacing the least recently used entry in the probe window
- * when every slot in it is taken.
+/**
+ * lota_rt_verity_cache_put() - Record a digest.
+ * @cache: the cache.
+ * @key: the inode.
+ * @digest: the digest; one of an unsupported length is not kept.
+ *
+ * Takes a free slot or the one of @key in the probe window, else the least
+ * recently used one.
  */
 static inline void
 lota_rt_verity_cache_put(struct lota_rt_verity_cache *cache,

@@ -1,14 +1,9 @@
 /* SPDX-License-Identifier: MIT */
 /*
- * The enforcement bits of an attestation report, and what they are taken from.
- *
- * LOTA_REPORT_FLAG_ENFORCE and LOTA_REPORT_FLAG_BPF_ACTIVE are bound into the
- * quote's nonce, and a verifier that requires enforcement accepts a host on
- * ENFORCE alone. Both bits describe the enforcement daemon, which holds the
- * LSM, not the process building the report: a daemon that does not answer
- * enforces nothing, and enforce mode with nothing loaded blocks nothing.
- * LOTA_REPORT_FLAG_BENCH, LOTA_REPORT_FLAG_EVENTS_LOST and the policy keys ride
- * along, as they too are the daemon's.
+ * The enforcement bits of an attestation report, taken from the daemon that
+ * holds the LSM, not from the process building the report: a daemon that
+ * does not answer gives none, BPF_ACTIVE needs the LSM loaded, and ENFORCE
+ * and the policy keys need enforce mode too.
  *
  * Copyright (C) 2026 Szymon Wilczek
  */
@@ -22,11 +17,16 @@
 #include "../../include/lota.h"
 #include "../../include/lota_ipc.h"
 
-/* The enforcing process as the reporter last saw it */
+/**
+ * struct enforcement_view - The enforcing daemon as the reporter last saw it.
+ * @answered: the daemon was reached.
+ * @mode: its enum lota_mode.
+ * @status_flags: its LOTA_STATUS_* word.
+ */
 struct enforcement_view {
-	bool answered; /* the process holding the LSM was reached */
-	uint8_t mode; /* its enum lota_mode */
-	uint32_t status_flags; /* its LOTA_STATUS_* word */
+	bool answered;
+	uint8_t mode;
+	uint32_t status_flags;
 };
 
 static inline uint32_t

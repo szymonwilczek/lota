@@ -2,9 +2,8 @@
 /* Copyright (C) 2026 Szymon Wilczek */
 /*
  * Log line for measuring a protected process's live code, and whether it is
- * news. A digest does not change while mapped, so rounds on a timer repeat
- * the same answer; only a changed statement is written.
- * Pure, so tests can pin both.
+ * news: rounds on a timer repeat the same answer, so only a changed
+ * statement is written.
  */
 
 #ifndef LOTA_AGENT_MEASURE_REPORT_H
@@ -25,25 +24,42 @@
 
 #define MEASURE_REPORT_STATEMENT_MAX STANDING_ANSWER_STATEMENT_MAX
 
-/* A round's verdict on one protected process; sets the log level */
+/**
+ * enum measure_answer - A round's verdict on one protected process.
+ * @MEASURE_ANSWER_MEASURED: every mapped object measured.
+ * @MEASURE_ANSWER_PARTIAL: some mapped objects unmeasurable.
+ * @MEASURE_ANSWER_ABSENT: the measurement failed, not fatally: left out.
+ * @MEASURE_ANSWER_REFUSED: the measurement failed fatally: round refused.
+ */
 enum measure_answer {
-	MEASURE_ANSWER_MEASURED = 0, /* every mapped object measured */
-	MEASURE_ANSWER_PARTIAL, /* some mapped objects unmeasurable */
-	MEASURE_ANSWER_ABSENT, /* unmeasurable, not the caller: left out */
-	MEASURE_ANSWER_REFUSED, /* unmeasurable caller: round refused */
+	MEASURE_ANSWER_MEASURED = 0,
+	MEASURE_ANSWER_PARTIAL,
+	MEASURE_ANSWER_ABSENT,
+	MEASURE_ANSWER_REFUSED,
 };
 
-/* Standing answer for one protected PID */
+/**
+ * struct measure_report_entry - Standing answer for one protected PID.
+ * @used: the slot holds a PID.
+ * @pid: the PID.
+ * @answer: its standing answer.
+ */
 struct measure_report_entry {
 	bool used;
 	uint32_t pid;
 	struct standing_answer answer;
 };
 
+/**
+ * struct measure_report_table - Answers already in the log.
+ * @entries: one per protected PID.
+ * @suppressed: repeats of a written answer not written again.
+ * @unremembered: answers written with no slot to remember them.
+ */
 struct measure_report_table {
 	struct measure_report_entry entries[MEASURE_REPORT_MAX_PIDS];
-	uint64_t suppressed; /* repeated rounds not written */
-	uint64_t unremembered; /* written, no room to remember */
+	uint64_t suppressed;
+	uint64_t unremembered;
 };
 
 /*
@@ -54,7 +70,8 @@ struct measure_report_table {
  * @statement: rendered line; any change to it is news
  * @held: rounds the replaced answer had held
  *
- * Return: true to write @statement.
+ * Return: true to write @statement; always for a NULL @table or @statement,
+ * or a PID not in a full table.
  */
 static inline bool measure_report_note(struct measure_report_table *table,
 				       uint32_t pid, int answer,
@@ -87,7 +104,6 @@ static inline bool measure_report_note(struct measure_report_table *table,
 	if (!entry)
 		entry = free_slot;
 
-	/* table full: an unremembered answer cannot be a known repeat */
 	if (!entry) {
 		table->unremembered++;
 		return true;
@@ -99,7 +115,7 @@ static inline bool measure_report_note(struct measure_report_table *table,
 	stated_before = entry->answer.stated;
 	news = standing_answer_note(&entry->answer, answer, statement, held);
 
-	/* clean answers never written are not counted as withheld */
+	/* a clean first answer, never written, is not counted as withheld */
 	if (!news && stated_before)
 		table->suppressed++;
 

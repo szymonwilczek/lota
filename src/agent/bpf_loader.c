@@ -596,7 +596,7 @@ static int agent_self_fsverity_enabled(void)
 	if (fd < 0)
 		return -errno;
 
-	/* room for the largest digest; the struct last, for clang -Werror */
+	/* room for the largest digest */
 	union {
 		uint8_t buf[sizeof(struct fsverity_digest) +
 			    LOTA_VERITY_DIGEST_MAX_SIZE];

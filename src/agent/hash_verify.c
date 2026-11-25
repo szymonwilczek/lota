@@ -1,14 +1,6 @@
 /* SPDX-License-Identifier: MIT */
 /*
- * LOTA Agent - File integrity fingerprint helper
- *
- * IMPORTANT SECURITY NOTE:
- * This module intentionally does NOT compute userspace content hashes for
- * security decisions. Userspace read-and-hash is vulnerable to TOCTOU races.
- *
- * Instead, it derives a stable 32-byte fingerprint from kernel-measured
- * fs-verity digest for already-open file descriptors. If fs-verity is not
- * enabled/available for the file, verification fails closed.
+ * LOTA Agent - fs-verity fingerprint of the file behind an event.
  *
  * Copyright (C) 2026 Szymon Wilczek
  */
@@ -42,19 +34,9 @@ void hash_verify_cleanup(struct hash_verify_ctx *ctx)
 	memset(ctx, 0, sizeof(*ctx));
 }
 
-/*
- * Compute SHA-256 from an already-open file descriptor.
- * The caller is responsible for opening and closing the fd.
- */
+/* first LOTA_HASH_SIZE bytes of the fs-verity digest; the caller owns fd */
 static int hash_fd(int fd, uint8_t sha256_out[LOTA_HASH_SIZE])
 {
-	/*
-	 * fsverity_digest ends in a flexible array; back it with a buffer
-	 * sized for the largest digest. The struct is the last union member
-	 * so the flexible array sits at the end, which clang requires (gcc
-	 * accepts the field-not-at-end GNU extension, clang -Werror rejects
-	 * it).
-	 */
 	union {
 		uint8_t buf[sizeof(struct fsverity_digest) +
 			    LOTA_VERITY_DIGEST_MAX_SIZE];
@@ -98,13 +80,6 @@ int hash_verify_event(struct hash_verify_ctx *ctx,
 	is_exec = (event->event_type == LOTA_EVENT_EXEC ||
 		   event->event_type == LOTA_EVENT_EXEC_BLOCKED);
 
-	/*
-	 * For EXEC events, prefer /proc/PID/exe. It references the already-open
-	 * executable inode that the kernel used for this process image.
-	 *
-	 * For non-EXEC file events, use event filename directly (absolute paths
-	 * only), but still require fs-verity for a stable fingerprint.
-	 */
 	if (is_exec) {
 		char proc_path[32];
 
