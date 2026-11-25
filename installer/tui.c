@@ -2,22 +2,6 @@
  * Copyright (C) 2026 Szymon Wilczek
  *
  * lota-install - Full-screen Interactive Frontend
- *
- * Takes over the terminal like most of the TUIs:
- * Alternate screen, raw keys, stage list pane, details pane and an output pane,
- * all re-laid-out on every resize.
- *
- * This frontend probes, confirms and applies the same stage table, and the ui
- * sink (ui.h) feeds child output and self-check lines into the output pane
- * instead of stdout.
- *
- * Keys:
- *    - arrows/jk ->	select
- *   - Enter ->		runs the selected stage
- *   - a -> 		runs every pending stage in order
- *   - r ->		re-probes
- *   - PgUp/PgDn, Ctrl-U/Ctrl-D ->	scroll the output
- *   - q -> 		quit
  */
 
 #include "tui.h"
@@ -38,9 +22,7 @@
 
 #include "ui.h"
 
-/* cell grid */
-
-/* attr byte: low 3 bits color index, high bits styles */
+/* attr: low 3 bits colour index, higher bits styles */
 #define C_DEF 0
 #define C_RED 1
 #define C_GREEN 2
@@ -69,43 +51,35 @@ enum tui_mode {
 struct tui {
 	struct install_ctx *ctx;
 
-	/* terminal */
 	int cols, rows;
 	struct cell *grid;
-	int gcap; /* cells allocated */
-	char *fb; /* compose buffer for one flush */
-	size_t fbcap; /* bytes allocated */
+	int gcap;
+	char *fb;
+	size_t fbcap;
 	size_t fblen;
 
-	/* Probed stage states;
-	 * index install_stage_count = self-check */
 	int n;
 	enum stage_state st[INSTALL_MAX_TUI_STAGES];
 	char note[INSTALL_MAX_TUI_STAGES][STAGE_NOTE_CAP];
 	int selfcheck_done;
 	int selfcheck_ok;
 
-	/* interaction */
 	enum tui_mode mode;
 	int sel;
 	int auto_run;
 	int quit;
 	char flash[OUT_CAP];
 
-	/* Output pane ring buffer;
-	 * scroll 0 follows the tail */
+	/* scroll 0 follows the tail */
 	char out[OUT_LINES][OUT_CAP];
 	int out_head, out_n;
 	int scroll;
 
-	/* Running action */
 	unsigned spin;
 	char run_label[OUT_CAP];
 	struct timespec run_start;
 	int abort_req;
 };
-
-/* terminal mode */
 
 static volatile sig_atomic_t t_winch;
 static struct termios t_saved;
@@ -122,7 +96,6 @@ static void term_restore(void)
 	if (!t_active)
 		return;
 	t_active = 0;
-	/* leave the alternate screen, show the cursor, reset attrs */
 	(void)!write(STDOUT_FILENO, "\033[0m\033[?25h\033[?1049l", 19);
 	tcsetattr(STDIN_FILENO, TCSAFLUSH, &t_saved);
 }
@@ -141,8 +114,7 @@ static int term_enter(void)
 	if (tcgetattr(STDIN_FILENO, &t_saved) != 0)
 		return -errno;
 	raw = t_saved;
-	/* raw keys, no echo, no signal generation
-	 * (Ctrl-C is a key here: it aborts running command before quitting) */
+	/* no ISIG: Ctrl-C arrives as a key */
 	raw.c_lflag &= ~(tcflag_t)(ICANON | ECHO | ISIG);
 	raw.c_iflag &= ~(tcflag_t)(IXON | ICRNL);
 	raw.c_cc[VMIN] = 0;
@@ -164,8 +136,6 @@ static int term_enter(void)
 	(void)!write(STDOUT_FILENO, "\033[?1049h\033[?25l", 14);
 	return 0;
 }
-
-/* grid primitives */
 
 static void grid_resize(struct tui *t)
 {
@@ -209,7 +179,6 @@ static struct cell *cell_at(struct tui *t, int x, int y)
 	return &t->grid[y * t->cols + x];
 }
 
-/* writes a UTF-8 string starting at (x,y), clipped to the row */
 static void put_text(struct tui *t, int x, int y, uint8_t attr, const char *s)
 {
 	while (*s) {
@@ -231,8 +200,6 @@ static void put_text(struct tui *t, int x, int y, uint8_t attr, const char *s)
 	}
 }
 
-/* like put_text but never paints past maxw display columns, so pane
- * content cannot bleed across a pane border */
 static void put_clip(struct tui *t, int x, int y, int maxw, uint8_t attr,
 		     const char *s)
 {
@@ -274,7 +241,6 @@ static void put_textf(struct tui *t, int x, int y, uint8_t attr,
 	put_text(t, x, y, attr, buf);
 }
 
-/* fills a horizontal run with one glyph */
 static void put_run(struct tui *t, int x, int y, int w, uint8_t attr,
 		    const char *glyph)
 {
@@ -290,7 +256,6 @@ static void put_run(struct tui *t, int x, int y, int w, uint8_t attr,
 	}
 }
 
-/* rounded box with an embedded title */
 static void put_box(struct tui *t, int x, int y, int w, int h, uint8_t attr,
 		    const char *title)
 {
@@ -312,8 +277,7 @@ static void put_box(struct tui *t, int x, int y, int w, int h, uint8_t attr,
 		put_textf(t, x + 2, y, attr | A_BOLD, " %s ", title);
 }
 
-/* Word-wraps text into a rectangle.
- * Returns rows consumed. */
+/* returns rows consumed */
 static int draw_wrapped(struct tui *t, int x, int y, int w, int maxl,
 			uint8_t attr, const char *text)
 {
@@ -363,8 +327,6 @@ static int draw_wrapped(struct tui *t, int x, int y, int w, int maxl,
 	}
 	return line;
 }
-
-/* frame flush */
 
 static void fb_put(struct tui *t, const char *s, size_t len)
 {
@@ -436,8 +398,6 @@ static void flush_grid(struct tui *t)
 	(void)!write(STDOUT_FILENO, t->fb, t->fblen);
 }
 
-/* output ring */
-
 static void out_push(struct tui *t, const char *line)
 {
 	int idx = (t->out_head + t->out_n) % OUT_LINES;
@@ -449,11 +409,8 @@ static void out_push(struct tui *t, const char *line)
 	}
 	snprintf(t->out[idx], OUT_CAP, "%s", line);
 	t->out_n++;
-	/* new output snaps the view back to the tail */
 	t->scroll = 0;
 }
-
-/* stage state */
 
 static void probe_stage(struct tui *t, int i)
 {
@@ -479,7 +436,6 @@ static int barrier_index(void)
 	return -1;
 }
 
-/* first stage that still needs something (skips DONE/SKIP) */
 static int first_unmet(struct tui *t)
 {
 	int i;
@@ -497,9 +453,7 @@ static int reboot_pending(struct tui *t)
 	return t->ctx->reboot_needed || (b >= 0 && t->st[b] == STAGE_REBOOT);
 }
 
-/* Everything before the barrier is satisfied
- * (REBOOT counts: it is applied and only waits for the boot),
- * and the reboot is due */
+/* REBOOT before the barrier counts as satisfied */
 static int ready_for_reboot(struct tui *t)
 {
 	int b = barrier_index();
@@ -513,8 +467,6 @@ static int ready_for_reboot(struct tui *t)
 			return 0;
 	return reboot_pending(t);
 }
-
-/* rendering */
 
 static const char *const spin_frames[] = { "⠋", "⠙", "⠹", "⠸", "⠼",
 					   "⠴", "⠦", "⠧", "⠇", "⠏" };
@@ -607,7 +559,6 @@ static void render_stage_list(struct tui *t, int x, int y, int w, int h)
 		char label[128];
 
 		if (i == t->n) {
-			/* virtual self-check row */
 			glyph = t->selfcheck_done ? "✔" : "▸";
 			gattr = t->selfcheck_done ?
 					C_GREEN :
@@ -632,8 +583,6 @@ static void render_stage_list(struct tui *t, int x, int y, int w, int h)
 	}
 }
 
-/* columns the stage list needs so no title ever wraps or clips:
- * border+pad (4) + glyph cell (2) + "NN " (3) + longest title + pad */
 static int stage_list_width(struct tui *t)
 {
 	int max = ui_disp_len(install_selfcheck_title);
@@ -726,15 +675,12 @@ static void render_details(struct tui *t, int x, int y, int w, int h)
 	}
 }
 
-/* lines `text` needs when wrapped to `w` columns;
- * draws off-grid so the counting loop stays the one draw_wrapped uses */
+/* draw_wrapped() off-grid, so both count lines the same way */
 static int wrap_count(struct tui *t, int w, const char *text)
 {
 	return draw_wrapped(t, 0, t->rows, w, 9999, 0, text);
 }
 
-/* centered confirmation dialog: nothing is applied without an explicit yes,
- * and the consent step cannot be missed in a side pane */
 static void render_confirm_modal(struct tui *t)
 {
 	const struct stage *s = &install_stages[t->sel];
@@ -756,7 +702,6 @@ static void render_confirm_modal(struct tui *t)
 	x = (t->cols - w) / 2;
 	y = (t->rows - mh) / 2;
 
-	/* blank the area so panes underneath do not show through */
 	for (i = 0; i < mh; i++)
 		put_run(t, x, y + i, w, 0, " ");
 	put_box(t, x, y, w, mh, C_YELLOW, "Confirm");
@@ -831,13 +776,10 @@ static void render(struct tui *t)
 		return;
 	}
 
-	/* title bar */
 	put_run(t, 0, 0, t->cols, A_INV, " ");
 	put_text(t, 1, 0, A_INV | A_BOLD, "LOTA Guided Install");
 	put_text(t, t->cols - 16, 0, A_INV, "Ctrl-C to quit");
 
-	/* panes: the stage list gets whatever its longest title needs
-	 * (clipped to half the screen as the floor for the right column) */
 	lw = stage_list_width(t);
 	if (lw > t->cols / 2 + 8)
 		lw = t->cols / 2 + 8;
@@ -856,7 +798,6 @@ static void render(struct tui *t)
 	put_box(t, rx, 1 + dh, rw, t->rows - 2 - dh, A_DIM, "Output");
 	render_output(t, rx + 2, 2 + dh, rw - 4, t->rows - 4 - dh);
 
-	/* key bar + flash */
 	put_run(t, 0, t->rows - 1, t->cols, A_INV, " ");
 	put_clip(t, 0, t->rows - 1, t->cols, A_INV, keybar_text(t));
 	if (t->flash[0]) {
@@ -874,8 +815,6 @@ static void render(struct tui *t)
 	flush_grid(t);
 }
 
-/* keys */
-
 enum tui_key {
 	K_NONE = 0,
 	K_UP,
@@ -885,7 +824,7 @@ enum tui_key {
 	K_ENTER,
 	K_ESC,
 	K_CTRL_C,
-	K_CHAR, /* in *ch */
+	K_CHAR,
 };
 
 static enum tui_key read_key(int timeout_ms, char *ch)
@@ -903,16 +842,15 @@ static enum tui_key read_key(int timeout_ms, char *ch)
 	switch (b) {
 	case 0x03:
 		return K_CTRL_C;
-	case 0x04: /* Ctrl-D scrolls the output down, like PgDn */
+	case 0x04:
 		return K_PGDN;
-	case 0x15: /* Ctrl-U scrolls the output up, like PgUp */
+	case 0x15:
 		return K_PGUP;
 	case '\r':
 	case '\n':
 		return K_ENTER;
 	case 0x1b:
-		/* possible escape sequence:
-		 * lone ESC has no follow-up byte within the grace window */
+		/* a lone ESC has no follow-up byte within the grace window */
 		if (poll(&pfd, 1, 25) <= 0)
 			return K_ESC;
 		if (read(STDIN_FILENO, &b, 1) <= 0 || b != '[')
@@ -942,8 +880,6 @@ static enum tui_key read_key(int timeout_ms, char *ch)
 	}
 }
 
-/* drains pending keys while a command runs:
- * Ctrl-C arms the abort, everything else is dropped */
 static void poll_keys_running(struct tui *t)
 {
 	char ch;
@@ -956,8 +892,6 @@ static void poll_keys_running(struct tui *t)
 		}
 	}
 }
-
-/* ui sink */
 
 static void snk_line(void *ud, const char *line)
 {
@@ -1002,8 +936,6 @@ static int snk_abort(void *ud)
 	return t->abort_req;
 }
 
-/* actions */
-
 static void flashf(struct tui *t, const char *fmt, ...)
 	__attribute__((format(printf, 2, 3)));
 
@@ -1034,8 +966,7 @@ static void run_self_check(struct tui *t)
 	}
 }
 
-/* Applies stage `i`.
- * Returns 1 when the auto chain may continue. */
+/* returns 1 when the auto chain may continue */
 static int do_apply(struct tui *t, int i)
 {
 	int rc;
@@ -1059,7 +990,6 @@ static int do_apply(struct tui *t, int i)
 	}
 	if (rc != 0 || t->st[i] == STAGE_PENDING || t->st[i] == STAGE_BLOCKED ||
 	    t->st[i] == STAGE_ERROR) {
-		/* boot-chain stages stay un-probeable until the reboot */
 		if (rc == 0 && t->ctx->reboot_needed &&
 		    t->st[i] == STAGE_PENDING) {
 			t->st[i] = STAGE_REBOOT;
@@ -1072,7 +1002,6 @@ static int do_apply(struct tui *t, int i)
 		return 0;
 	}
 
-	/* the probe says what holds now; the run did the work */
 	if (t->st[i] == STAGE_DONE) {
 		static const char applied[] = "Applied. ";
 		size_t pre = sizeof(applied) - 1;
@@ -1085,8 +1014,6 @@ static int do_apply(struct tui *t, int i)
 	return 1;
 }
 
-/* Advances selection (and the auto chain) to the next actionable stage.
- * Enters CONFIRM / BARRIER / self-check as appropriate. */
 static void advance(struct tui *t)
 {
 	int b = barrier_index();
@@ -1103,8 +1030,6 @@ static void advance(struct tui *t)
 
 	t->sel = next;
 	if (b >= 0 && next >= b && reboot_pending(t)) {
-		/* Everything up to the barrier is done;
-		 * Reboot time! */
 		probe_stage(t, b);
 		t->sel = b;
 		t->auto_run = 0;
@@ -1134,7 +1059,6 @@ static void advance(struct tui *t)
 		t->mode = M_BARRIER;
 		return;
 	default:
-		/* BLOCKED / ERROR stops the chain on the offender */
 		t->auto_run = 0;
 		return;
 	}
@@ -1184,8 +1108,6 @@ static void activate_selected(struct tui *t)
 	}
 }
 
-/* main loop */
-
 static int quit_code(struct tui *t)
 {
 	if (t->selfcheck_done && t->selfcheck_ok)
@@ -1195,7 +1117,6 @@ static int quit_code(struct tui *t)
 	return EXIT_INSTALL_FAIL;
 }
 
-/* navigation/apply bound to a printable key in M_NAV / M_CONFIRM */
 static void handle_char(struct tui *t, char ch)
 {
 	switch (ch) {
@@ -1262,16 +1183,11 @@ int tui_run(struct install_ctx *ctx)
 	}
 
 	t->ctx = ctx;
-	/* fits: stages.c asserts it at build time */
 	t->n = install_stage_count;
 
 	bound.ud = t;
 
-	/* initial probe runs before the screen takeover and logs to
-	 * the normal terminal:
-	 * the slower probes (lsinitrd, grubby) would otherwise look like
-	 * a frozen TUI, and the result stays in the scrollback after exit.
-	 * In-TUI re-probes ('r') are user-driven and render live instead. */
+	/* probe before the takeover: slow probes would look like a hang */
 	printf("lota-install: probing system state\n");
 	fflush(stdout);
 	{
@@ -1291,11 +1207,10 @@ int tui_run(struct install_ctx *ctx)
 		fprintf(stderr, "lota-install: Cannot switch the terminal "
 				"to raw mode. Falling back to --plain\n");
 		free(t);
-		return -1; /* caller falls back to the plain flow */
+		return -1;
 	}
 	grid_resize(t);
 
-	/* mirror the probe results into the Output pane for reference */
 	{
 		char buf[OUT_CAP];
 		int i;
@@ -1369,7 +1284,6 @@ int tui_run(struct install_ctx *ctx)
 	free(t->fb);
 	free(t);
 
-	/* persist the outcome on the normal screen */
 	if (code == EXIT_INSTALL_REBOOT) {
 		printf("lota-install: Reboot required. Reboot, then run the "
 		       "same lota-install command again - it resumes at the "

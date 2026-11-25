@@ -2,13 +2,6 @@
  * Copyright (C) 2026 Szymon Wilczek
  *
  * lota-install - Child Process Runner
- *
- * Stages that change system state shell out to the same tools the
- * documentation names (dracut, grubby, systemctl, lota-agent, ...).
- *
- * Commands are argv arrays passed straight to execvp - no shell, no
- * word splitting - with stdout+stderr merged into the UI's live
- * region so whoever is running the install sees exactly what ran.
  */
 
 #ifndef LOTA_INSTALL_RUN_H
@@ -18,16 +11,28 @@
 
 #include "ui.h"
 
-/* Runs argv (NULL-terminated) with output streamed to the live
- * region under `label`.
- * Returns the child's exit code (0..255), 128+signal when signalled,
- * or -errno on spawn failure.
- * Live region is opened and closed by this call. */
+/**
+ * run_cmd() - Run a command with its output in the live region.
+ * @ui:    UI the live region belongs to.
+ * @label: live region label.
+ * @argv:  NULL-terminated argv for execvp; no shell.
+ *
+ * stdout and stderr are merged; stdin is /dev/null.
+ *
+ * Return: the child's exit code (127 when exec fails), 128 + signal when
+ * signalled, or -errno when the child cannot be started or waited for.
+ */
 int run_cmd(struct ui *ui, const char *label, const char *const argv[]);
 
-/* Runs argv silently, capturing combined output into out (NUL
- * terminated, truncated to cap).
- * Same return contract as run_cmd. */
+/**
+ * run_capture() - Run a command and capture its output.
+ * @argv: NULL-terminated argv for execvp; no shell.
+ * @out:  merged stdout and stderr, truncated to @cap - 1 bytes and
+ *        NUL-terminated.
+ * @cap:  size of @out.
+ *
+ * Return: as run_cmd(); -EINVAL for a NULL @out or zero @cap.
+ */
 int run_capture(const char *const argv[], char *out, size_t cap);
 
 #endif /* LOTA_INSTALL_RUN_H */

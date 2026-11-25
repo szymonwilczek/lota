@@ -9,11 +9,15 @@
 
 #include "install.h"
 
-/* Takes over the whole terminal (alternate screen, raw keys) and drives
- * the stage engine interactively.
- * Returns the process exit code (EXIT_INSTALL_*).
- * Terminal is restored and a short result summary is printed to the normal
- * screen before returning. */
+/**
+ * tui_run() - Drive the stage table in a full-screen view.
+ * @ctx: install context.
+ *
+ * The terminal is restored before returning.
+ *
+ * Return: an EXIT_INSTALL_* code, or -1 when the view cannot start
+ * and the caller should run the plain flow.
+ */
 int tui_run(struct install_ctx *ctx);
 
 #endif /* LOTA_INSTALL_TUI_H */

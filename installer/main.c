@@ -156,7 +156,6 @@ static int parse_args(int argc, char **argv, struct install_opts *opts)
 			break;
 		case 13:
 			opts->unattended = 1;
-			/* nobody is watching: never prompt, never redraw */
 			opts->yes = 1;
 			opts->plain = 1;
 			break;
@@ -197,15 +196,6 @@ static int parse_args(int argc, char **argv, struct install_opts *opts)
 		exit(EXIT_INSTALL_USAGE);
 	}
 
-	/*
-	 * Every file the operator named, before any stage runs.
-	 *
-	 * A path arrives here only by being typed, so one that does not resolve
-	 * is a mistake in the command line and belongs beside the other
-	 * command-line refusals.
-	 * Reported the same way for all four.
-	 * The SELinux module is passed only when it was named.
-	 */
 	{
 		const struct probe_named_file named[] = {
 			{ "--ca-cert", opts->ca_cert },
@@ -227,7 +217,6 @@ static int parse_args(int argc, char **argv, struct install_opts *opts)
 	return 0;
 }
 
-/* Does a stage note punctuate itself? */
 static int ends_in_stop(const char *note)
 {
 	size_t len = note ? strlen(note) : 0;
@@ -236,8 +225,6 @@ static int ends_in_stop(const char *note)
 		       note[len - 1] == '?');
 }
 
-/* Probe-only report.
- * Never mutates, usable before deciding to run */
 static int run_status(struct install_ctx *ctx)
 {
 	char note[STAGE_NOTE_CAP];
@@ -262,12 +249,11 @@ static int run_status(struct install_ctx *ctx)
 			pending++;
 		if (st == STAGE_BLOCKED)
 			blocked++;
-		/* let later probes account for boot-chain stages */
+		/* st_barrier_probe() reads reboot_needed */
 		if (st == STAGE_REBOOT)
 			ctx->reboot_needed = 1;
 	}
 
-	/* self-check, probed only */
 	{
 		enum stage_state st =
 			install_selfcheck_probe(ctx, note, sizeof(note));
@@ -301,7 +287,6 @@ static void print_reboot_box(struct install_ctx *ctx, const char *note)
 			  "and it resumes exactly where it left off.");
 }
 
-/* Lifecycle veneer: stop the agent through its graceful path. */
 static int do_pause(struct install_ctx *ctx)
 {
 	const char *const argv[] = { PATH_AGENT_BIN, "--shutdown", NULL };
@@ -344,20 +329,6 @@ static int do_pause(struct install_ctx *ctx)
 	return EXIT_INSTALL_OK;
 }
 
-/*
- * Make a title's own objects measurable.
- *
- * Runtime measurement folded into every token covers a mapped object only when
- * the kernel holds an fs-verity digest for it.
- * Title's binaries belong to whoever ships the title, so this walks the object
- * list they capture and enables verity on each.
- * Objects belonging to the distribution are deliberately not this tool's business:
- * enabling verity on packaged file lasts until the next update of that package.
- *
- * List is the title's, the privilege is root's and a digest is permanent,
- * so a line only names an object when probe_manifest_line() takes it:
- * absolute, no '..' walking it somewhere else.
- */
 static int do_verity_manifest(struct install_ctx *ctx)
 {
 	unsigned enabled = 0, already = 0, failed = 0;
@@ -419,12 +390,6 @@ static int do_verity_manifest(struct install_ctx *ctx)
 			continue;
 		}
 
-		/*
-		 * digest already set under another hash algorithm cannot be changed
-		 * in place -- it is property of the inode -- so the route is fresh
-		 * copy of the file, which is the operator's call and not something
-		 * to do behind their back.
-		 */
 		snprintf(note, sizeof(note), "%.512s: %s%s", path,
 			 strerror(-rc),
 			 rc == -EEXIST ? " (fs-verity is already enabled under "
@@ -448,7 +413,6 @@ static int do_verity_manifest(struct install_ctx *ctx)
 	return failed == 0 ? EXIT_INSTALL_OK : EXIT_INSTALL_FAIL;
 }
 
-/* Lifecycle veneer: resuming after a pause is a reboot, by design. */
 static int do_resume(struct install_ctx *ctx)
 {
 	const char *const argv[] = { "systemctl", "reboot", NULL };
@@ -488,13 +452,6 @@ int install_auto_bringup_opted_in(void)
 	return probe_auto_bringup_at(PATH_AUTO_BRINGUP);
 }
 
-/*
- * Image being built in a chroot or a container has no firmware, no TPM and no
- * boot entries of its own, and the package hook runs there exactly as it does
- * on a machine.
- * Bring-up belongs to the host that eventually boots the image, so a run there
- * is a no-op rather than a wall of blocked stages.
- */
 static int not_a_running_host(void)
 {
 	const char *const argv[] = { "systemd-detect-virt", "--container", "-q",
@@ -553,16 +510,11 @@ int main(int argc, char **argv)
 		return EXIT_INSTALL_USAGE;
 	}
 
-	/* interactive terminal:
-	 * full-screen frontend drives the same stage table
-	 * sequential flow below stays for --plain and non-TTY runs */
 	if (ctx.ui.tty && isatty(STDIN_FILENO)) {
 		int rc = tui_run(&ctx);
 
 		if (rc >= 0)
 			return rc;
-		/* raw mode unavailable
-		 * degrade to the plain flow */
 		ctx.ui.tty = 0;
 		ctx.ui.color = 0;
 	}
@@ -574,12 +526,6 @@ int main(int argc, char **argv)
 
 		ui_stage_begin(&ctx.ui, i + 1, install_step_count, s->title);
 
-		/*
-		 * Everything a package may do on its own is behind us;
-		 * the checkpoint exists to be crossed by whoever chose
-		 * the boot-path change, so unattended run stops here rather than
-		 * reporting reboot nobody asked for.
-		 */
 		if (ctx.opts.unattended && n_deferred && s->barrier) {
 			int rc = install_unattended_checkpoint(
 				note, sizeof(note), deferred, n_deferred);
@@ -620,8 +566,6 @@ int main(int argc, char **argv)
 			ctx.applied = 1;
 			applied = 1;
 			st = s->probe(&ctx, note, sizeof(note));
-			/* boot-chain stages stay un-probeable until the reboot
-			 * reboot_needed records their success */
 			if (st == STAGE_PENDING && ctx.reboot_needed)
 				st = STAGE_REBOOT;
 		}
