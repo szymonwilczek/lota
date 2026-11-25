@@ -1,17 +1,6 @@
 // SPDX-License-Identifier: MIT
 // Copyright (C) 2026 Szymon Wilczek
 // LOTA Verifier - PostgreSQL database management
-//
-// Postgres backend for multi-instance / high-availability deployments.
-// The SQLite backend (db.go) stays the single-node default; this layer
-// gives the same store interfaces a shared backend that several verifier
-// instances behind a load balancer can point at.
-//
-// The driver is pgx in its database/sql-compatible mode, so the store
-// implementations stay on *sql.DB like the SQLite ones.
-//
-// Placeholders are $N (Postgres) rather than ? (SQLite), so the Postgres
-// store code lives in its own pg_*.go files instead of being shared.
 
 package store
 
@@ -27,9 +16,8 @@ import (
 	_ "github.com/jackc/pgx/v5/stdlib" // database/sql driver "pgx"
 )
 
-// Holds the Postgres schema history.
-// One consolidated schema: verifier creates the database at its final shape.
-// runPgMigrations stays so post-1.0 change can append entry.
+// pgMigrations lists the Postgres schema versions in order. A schema change
+// appends one.
 var pgMigrations = []migration{
 	{
 		version:     1,
@@ -160,21 +148,11 @@ var pgMigrations = []migration{
 	},
 }
 
-// DefaultPGMaxOpenConns is the per-instance connection pool ceiling used when
-// the operator does not tune it.
-// Database commits concurrent transactions in one WAL fsync (group commit),
-// so the pool size caps how many enrollment/attestation writes coalesce per fsync:
-// wider pool lifts burst throughput until it hits the database's max_connections
-// (shared by every instance's pool).
-// Keep it well under max_connections / instances.
+// DefaultPGMaxOpenConns is the per-instance pool ceiling when none is given.
+// The pools of all instances draw from the server's max_connections.
 const DefaultPGMaxOpenConns = 20
 
-// ServerMaxConnections reports the database server's max_connections,
-// the budget every instance's pool is drawn from.
-//
-// Connection pooler in front of the database may report its own backend limit
-// or refuse the query outright, so callers treat an error as "unknown" and carry
-// on rather than failing deployment that is fronted by one.
+// ServerMaxConnections reports the server's max_connections.
 func ServerMaxConnections(db *sql.DB) (int, error) {
 	var n int
 	if err := db.QueryRow("SELECT current_setting('max_connections')::int").Scan(&n); err != nil {
@@ -183,16 +161,12 @@ func ServerMaxConnections(db *sql.DB) (int, error) {
 	return n, nil
 }
 
-// OpenPostgresDB opens the backend with an explicit max-open-connections pool ceiling
-// and applies pending schema migrations.
-// Non-positive value falls back to DefaultPGMaxOpenConns.
+// OpenPostgresDB opens the database with a pool of maxOpenConns,
+// or DefaultPGMaxOpenConns when it is not positive, refuses a standby
+// and applies the pending migrations.
 //
-// DSN is a libpq/pgx connection string, e.g:
+// dsn is a libpq/pgx connection string, e.g:
 // "postgres://user:pass@host:5432/lota?sslmode=verify-full"
-//
-// Pooling is left to database/sql; the pool is sized for the per-instance
-// attestation concurrency, not the whole fleet, because every verifier
-// instance opens its own pool against the shared server.
 func OpenPostgresDB(dsn string, maxOpenConns int) (*sql.DB, error) {
 	db, err := openPostgresPool(dsn, maxOpenConns)
 	if err != nil {
@@ -263,11 +237,10 @@ func openPostgresPool(dsn string, maxOpenConns int) (*sql.DB, error) {
 	return db, nil
 }
 
-// ErrSchemaAbsent: a read-only open found no LOTA schema and creates none.
+// ErrSchemaAbsent is returned when a read-only open finds no LOTA schema.
 var ErrSchemaAbsent = errors.New("database carries no LOTA schema")
 
 // verifyPgSchemaReadOnly checks the schema against this build without writing.
-// No advisory lock: it changes nothing, so nothing races with it.
 func verifyPgSchemaReadOnly(ctx context.Context, db *sql.DB) error {
 	conn, err := db.Conn(ctx)
 	if err != nil {
@@ -344,12 +317,11 @@ func refuseStandby(db *sql.DB) error {
 		ErrDatabaseInRecovery)
 }
 
-// runPgMigrations applies pending Postgres schema migrations, each inside its
-// own transaction with rollback on failure.
-// Session-level advisory lock serializes concurrent verifier instances racing
-// the first migration so the consolidated schema is created exactly once.
+// runPgMigrations applies the pending migrations, each in its own
+// transaction, then checks the schema identity. A session advisory lock
+// serializes concurrent instances.
 func runPgMigrations(db *sql.DB) error {
-	// 0x6C6F7461 = "lota"; arbitrary stable key for the migration advisory lock.
+	// 0x6C6F7461 is "lota" in ASCII
 	const migrationLockKey = 0x6C6F7461
 
 	ctx := context.Background()

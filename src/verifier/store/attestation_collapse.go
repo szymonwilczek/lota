@@ -3,15 +3,13 @@
 // LOTA Verifier - What the decision log records
 //
 // A row records a change; a round identical to the standing row folds into it.
-// Backend-free, so both SQL stores agree.
+// Both SQL stores decide it here.
 
 package store
 
 import "time"
 
-// DefaultCollapseWindow applies when a deployment sets none.
-// An hour keeps per-day evidence and folds twelve five-minute rounds into one
-// row.
+// DefaultCollapseWindow is the default of --attestation-log-window.
 const DefaultCollapseWindow = time.Hour
 
 // verdict of a trusted round; every other verdict is an event
@@ -21,8 +19,8 @@ func attestationIsEvent(r AttestationRecord) bool {
 	return r.Result != attestationResultOK
 }
 
-// whether @next folds into @standing (zero when no row is open).
-// A zero @window records every round.
+// attestationCollapses reports whether next folds into standing,
+// which is zero when no row is open. A zero window records every round.
 func attestationCollapses(standing, next AttestationRecord, window time.Duration) bool {
 	if window <= 0 {
 		return false

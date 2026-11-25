@@ -11,12 +11,9 @@ import (
 	"time"
 )
 
-// identifies a deterministic position in the bans stream
-// serialized as "<unix_nano>:<hardware_id_hex>:<tenant>"
-//
-// Tenant tie-breaks entries that share timestamp and hardware ID:
-// with per-tenant bans the same hardware identity may carry one ban
-// row per tenant.
+// BanCursor is a position in the bans stream, serialized as
+// "<unix_nano>:<hardware_id_hex>:<tenant>". The tenant breaks ties between
+// bans of one hardware ID at one time, since each tenant bans on its own.
 type BanCursor struct {
 	BannedAt   time.Time
 	HardwareID [32]byte

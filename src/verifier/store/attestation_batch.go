@@ -2,12 +2,10 @@
 // Copyright (C) 2026 Szymon Wilczek
 // LOTA Verifier - Batched attestation log writer
 //
-// BatchedAttestationLog moves the attestation audit write off the verification hot path.
-// Record only buffers; background worker flushes the buffer as single batch on timer
-// or once it fills, so the N per-report audit writes that would each cost WAL commit
-// fsync collapse into one commit per flush.
-// Audit log is append-only and never gates attestation, so crash may lose at most
-// the records buffered since the last flush - bounded by the flush interval.
+// Record only buffers. The worker writes the buffer as one batch on a timer
+// or once it fills; Flush and QueryAttestations write it on the caller's
+// goroutine. A failed write never changes a verdict, and a crash loses
+// what is still buffered.
 
 package store
 
@@ -24,18 +22,15 @@ import (
 type BatchedAttestationLogConfig struct {
 	// MaxBatch flushes the buffer once this many records accumulate.
 	MaxBatch int
-	// FlushInterval bounds how long a record waits before it is durable
-	// (and thus the worst-case audit loss on a crash).
+	// FlushInterval is the period of the timed flush.
 	FlushInterval time.Duration
-	// MaxBuffer caps buffered records;
-	// Past it the oldest records drop so stalled database cannot grow
-	// the buffer without bound.
+	// MaxBuffer caps buffered records; past it Record sheds a batch,
+	// see shedOldest.
 	MaxBuffer int
 	// Logger receives flush-failure and drop warnings.
-	// Defaults to the slog default logger.
 	Logger *slog.Logger
 
-	// Loss receives dropped and failed record counts. Optional.
+	// Loss receives dropped and failed record counts.
 	Loss AttestationLogLoss
 
 	// CloseTimeout bounds the final flush in Close;
@@ -43,8 +38,8 @@ type BatchedAttestationLogConfig struct {
 	CloseTimeout time.Duration
 }
 
-// AttestationLogLoss counts decision records dropped on a full buffer
-// or lost to a failed write.
+// AttestationLogLoss counts records dropped on a full buffer or lost to a
+// failed write, and the events among them.
 type AttestationLogLoss interface {
 	AttestationRecordsDropped(n int64)
 	AttestationRecordsFailed(n int64)
@@ -54,20 +49,17 @@ type AttestationLogLoss interface {
 const (
 	defaultBatchMaxBatch      = 256
 	defaultBatchFlushInterval = time.Second
-	// hard cap defaults to a multiple of the batch size:
-	// enough slack to ride out brief database stall,
-	// bounded enough to protect memory
+	// MaxBuffer defaults to this many batches
 	defaultBatchMaxBufferMul = 16
 
-	// waiting longer only loses the tail to the supervisor's kill, unreported
 	defaultCloseTimeout = 5 * time.Second
 
 	// a stalled backend drops on nearly every record; warn at most this often
 	dropReportInterval = 30 * time.Second
 )
 
-// BatchedAttestationLog wraps an AttestationLog with an asynchronous, batching writer.
-// It satisfies AttestationLog and is safe for concurrent Record callers.
+// BatchedAttestationLog is an AttestationLog that batches writes to its
+// backend. Record is safe for concurrent use.
 type BatchedAttestationLog struct {
 	backend AttestationLog
 	batcher BatchRecorder // non-nil when backend can batch; else Record loop
@@ -94,9 +86,8 @@ type BatchedAttestationLog struct {
 	log            *slog.Logger
 }
 
-// NewBatchedAttestationLog wraps backend with an asynchronous batching writer
-// and starts its background flush worker.
-// Close stops the worker and flushes what remains.
+// NewBatchedAttestationLog wraps backend and starts the flush worker.
+// Zero config fields take their defaults.
 func NewBatchedAttestationLog(backend AttestationLog, cfg BatchedAttestationLogConfig) *BatchedAttestationLog {
 	if cfg.CloseTimeout <= 0 {
 		cfg.CloseTimeout = defaultCloseTimeout
@@ -138,9 +129,9 @@ func NewBatchedAttestationLog(backend AttestationLog, cfg BatchedAttestationLogC
 	return l
 }
 
-// drop @n records from a full buffer: heartbeats, then events, oldest first.
-// Reuses @buf's storage; the caller keeps only the result.
-// Returns the kept records and how many of the dropped were events.
+// shedOldest drops n records from buf, the oldest heartbeats first and then
+// the oldest events. It reuses buf's storage and returns the kept records and
+// the number of events dropped.
 func shedOldest(buf []AttestationRecord, n int) (kept []AttestationRecord, events int) {
 	if n <= 0 {
 		return buf, 0
@@ -176,7 +167,7 @@ func shedOldest(buf []AttestationRecord, n int) (kept []AttestationRecord, event
 	return kept, events
 }
 
-// how many of @buf are records somebody reads this log for
+// countAttestationEvents counts the records in buf that are events.
 func countAttestationEvents(buf []AttestationRecord) int {
 	n := 0
 	for i := range buf {
@@ -187,11 +178,10 @@ func countAttestationEvents(buf []AttestationRecord) int {
 	return n
 }
 
-// Record buffers entry and returns immediately;
-// it never performs database write on the caller's goroutine.
+// Record buffers entry and returns nil; it never writes to the backend on the
+// caller's goroutine.
 func (l *BatchedAttestationLog) Record(entry AttestationRecord) error {
-	// stamp the enqueue time so the audit record reflects when
-	// the attestation happened, not when the batch was flushed
+	// the attestation time, not the flush time
 	if entry.Timestamp.IsZero() {
 		entry.Timestamp = time.Now().UTC()
 	}
@@ -201,13 +191,8 @@ func (l *BatchedAttestationLog) Record(entry AttestationRecord) error {
 	l.mu.Lock()
 	overflow := len(l.buf) >= l.maxBuffer
 	if overflow {
-		// bound memory by shedding records, heartbeats first;
-		// liveness of the verify path beats completeness
-		// of best-effort audit trail.
-		// Whole batch goes at once so the shift costs O(maxBuffer) every
-		// maxBatch records rather than on every Record -- a per-record
-		// shift makes this path O(maxBuffer) under the mutex, which
-		// re-serializes the hot path exactly when the backend is stalled
+		// a whole batch at once, so the O(maxBuffer) shift under the
+		// mutex runs once per maxBatch records
 		drop = min(l.maxBatch, len(l.buf))
 		l.buf, shedEvents = shedOldest(l.buf, drop)
 		l.dropped.Add(int64(drop))
@@ -220,8 +205,6 @@ func (l *BatchedAttestationLog) Record(entry AttestationRecord) error {
 	l.mu.Unlock()
 
 	if drop > 0 {
-		// off the mutex: the hot path pays two atomics for the common case
-		// and the report itself only when the rate limit lets it through
 		if l.loss != nil {
 			l.loss.AttestationRecordsDropped(int64(drop))
 			if shedEvents > 0 {
@@ -260,7 +243,7 @@ func (l *BatchedAttestationLog) reportDrop() {
 		"hint", hint)
 }
 
-// flushes so the read sees every accepted record
+// QueryAttestations flushes the buffer and queries the backend.
 func (l *BatchedAttestationLog) QueryAttestations(q AttestationQuery) []AttestationRecord {
 	l.flush()
 	return l.backend.QueryAttestations(q)
@@ -272,11 +255,9 @@ func (l *BatchedAttestationLog) Flush() {
 	l.flush()
 }
 
-// Close stops the background worker and flushes remaining records.
-// It is idempotent; after Close the worker no longer drains,
-// so callers must stop issuing Record first.
-// Past closeTimeout it counts the unwritten records as failed,
-// logs them and returns ErrCloseTimedOut.
+// Close stops the worker after a final flush. Records after Close stay in the
+// buffer. Past closeTimeout it counts the buffer plus MaxBatch records as
+// failed and returns ErrCloseTimedOut. Later calls return nil.
 func (l *BatchedAttestationLog) Close() error {
 	if l.closed.Swap(true) {
 		return nil
@@ -294,11 +275,9 @@ func (l *BatchedAttestationLog) Close() error {
 
 	l.mu.Lock()
 	pending := len(l.buf)
-	// the worker's batch is out of reach: counts only the buffer's events
 	pendingEvents := countAttestationEvents(l.buf)
 	l.mu.Unlock()
 
-	// plus the batch stuck in the worker, at most maxBatch
 	lost := int64(pending + l.maxBatch)
 	l.failed.Add(lost)
 	l.eventsLost.Add(int64(pendingEvents))
@@ -314,7 +293,8 @@ func (l *BatchedAttestationLog) Close() error {
 	return ErrCloseTimedOut
 }
 
-// ErrCloseTimedOut: Close gave up on the final flush; buffered records are lost.
+// ErrCloseTimedOut is returned by Close when the final flush missed the
+// deadline.
 var ErrCloseTimedOut = errors.New("attestation log did not flush before the shutdown deadline")
 
 // DroppedCount returns the number of records dropped under buffer pressure.
@@ -361,9 +341,7 @@ func (l *BatchedAttestationLog) flush() {
 	l.buf = make([]AttestationRecord, 0, l.maxBatch)
 	l.mu.Unlock()
 
-	// count what was actually lost, not the batch it happened in:
-	// RecordBatch is all-or-nothing, but the per-record fallback can lose
-	// one entry and persist the rest
+	// the per-record fallback can lose some records and write the rest
 	var (
 		err        error
 		lost       int
@@ -386,7 +364,6 @@ func (l *BatchedAttestationLog) flush() {
 		}
 	}
 	if lost > 0 {
-		// never landed counts as lost, same as shed
 		l.failed.Add(int64(lost))
 		l.eventsLost.Add(int64(lostEvents))
 		if l.loss != nil {
