@@ -2,19 +2,9 @@
 // Copyright (C) 2026 Szymon Wilczek
 // LOTA Verifier - Store sharding
 //
-// Postgres backend is bounded by per-database WAL fsync throughput, shared by every
-// verifier instance on that database. To scale the database tier past one host the fleet
-// is partitioned across N independent databases: each store operation is routed to shard
-// by stable hash of the client it belongs to, so a given client's baseline and its used
-// nonces land on the same shard on every instance.
-// Independent databases commit in parallel, so aggregate durable write throughput scales
-// with the number of shards (on independent storage).
-//
-// Hash is FNV-1a, which is deterministic and process-independent:
-// two verifier instances pointed at the same shard set route identically,
-// so a nonce one instance recorded is found by the other.
-// Routing adds only a hash to each call - it introduces no cross-shard transaction
-// and no new failure mode beyond single backend's.
+// A client-scoped call goes to the shard FNV-1a of its client picks,
+// so a client's baseline and used nonces share a shard, and instances
+// given the same shard set route alike. No transaction spans shards.
 
 package verify
 
@@ -28,15 +18,13 @@ import (
 // negative wherever int is 32 bits, and the router would index a slice with it.
 const maxPositiveInt32 = 0x7fffffff
 
-// shardIndex maps key to one of n shards with FNV-1a.
-// It is stable across processes and architectures, which is what lets separate
-// verifier instances agree on key's shard.
+// shardIndex maps key to one of n shards with FNV-1a, alike in every process
+// and on every architecture.
 func shardIndex(key string, n int) int {
 	if n <= 1 {
 		return 0
 	}
 	h := fnv.New32a()
-	// write on hash.Hash never returns error
 	_, _ = h.Write([]byte(key))
 	return int(h.Sum32()&maxPositiveInt32) % n
 }
@@ -53,8 +41,7 @@ type ShardedUsedNonceBackend struct {
 var _ RoutedUsedNonceBackend = (*ShardedUsedNonceBackend)(nil)
 
 // NewShardedUsedNonceBackend partitions used-nonce state across shards.
-// It panics on empty shard set: verifier with no nonce backend cannot enforce
-// replay protection and must fail at construction, not silently.
+// It panics on an empty shard set.
 func NewShardedUsedNonceBackend(shards []UsedNonceBackend) *ShardedUsedNonceBackend {
 	if len(shards) == 0 {
 		panic("verify: ShardedUsedNonceBackend requires at least one shard")
@@ -70,12 +57,12 @@ func (s *ShardedUsedNonceBackend) Contains(nonceKey string) (bool, error) {
 	return s.shards[shardIndex(nonceKey, len(s.shards))].Contains(nonceKey)
 }
 
-// RecordFor stores the nonce in the shard the client belongs to
+// RecordFor stores the nonce in the client's shard.
 func (s *ShardedUsedNonceBackend) RecordFor(routeKey, nonceKey string, usedAt time.Time) error {
 	return s.shards[shardIndex(routeKey, len(s.shards))].Record(nonceKey, usedAt)
 }
 
-// ContainsFor looks the nonce up in the shard the client belongs to
+// ContainsFor looks the nonce up in the client's shard.
 func (s *ShardedUsedNonceBackend) ContainsFor(routeKey, nonceKey string) (bool, error) {
 	return s.shards[shardIndex(routeKey, len(s.shards))].Contains(nonceKey)
 }

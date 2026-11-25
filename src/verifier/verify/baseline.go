@@ -1,10 +1,6 @@
 // SPDX-License-Identifier: MIT
 // Copyright (C) 2026 Szymon Wilczek
-// LOTA Verifier - PCR Baseline Store (TOFU)
-//
-// Implements Trust On First Use (TOFU) for PCR values.
-// On first attestation, PCR 14 (agent self-measurement) is stored as "Known Good".
-// Subsequent attestations must match this baseline or fail with INTEGRITY_MISMATCH.
+// LOTA Verifier - per-client baselines pinned on first use
 
 package verify
 
@@ -19,18 +15,12 @@ import (
 	"github.com/szymonwilczek/lota/verifier/types"
 )
 
-// bootCommitmentTag is the domain-separation prefix used by the agent
-// when extending PCR14 with the boot commitment. It MUST match the
-// LOTA-PCR14-BOOT-COMMITMENT-v1 string in src/agent/tpm.c.
-//
-// The commitment covers the agent hash alone.
+// bootCommitmentTag is the domain-separation prefix of the agent's PCR 14
+// boot commitment. It must match TPM_BOOT_COMMITMENT_TAG in src/agent/tpm.c.
 const bootCommitmentTag = "LOTA-PCR14-BOOT-COMMITMENT-v1"
 
-// initramfsLockTag is the domain-separation prefix used by the
-// initramfs lock helper (src/initramfs/lota-pcr14-lock.c) when it
-// extends PCR14 before any userspace daemon runs. The verifier
-// rederives the same digest whenever FlagInitramfsLockV1 is set on a
-// report.
+// initramfsLockTag is the domain-separation prefix of the PCR 14 extend by
+// the initramfs lock helper (src/initramfs/lota-pcr14-lock.c).
 const initramfsLockTag = "LOTA-PCR14-INITRAMFS-LOCK-v1"
 
 // DeriveInitramfsLockPCR14 reproduces the post-extend PCR14 value the
@@ -39,12 +29,9 @@ const initramfsLockTag = "LOTA-PCR14-INITRAMFS-LOCK-v1"
 //	commit = SHA256(initramfsLockTag)
 //	pcr14  = SHA256(baseline || commit)
 //
-// baseline is the PCR14 content present when the lock helper runs:
-// shim MOK measurement (MokList, SbatLevel, MokListRT) on a shim-booted host,
-// or 0^32 on a UEFI host that boots without shim, since nothing else measures
-// PCR14 before userspace.
-//
-// Verifier reconstructs baseline from the TPM event log.
+// baseline is PCR14 when the lock helper runs, as the event log replays it:
+// the shim MOK events on a shim-booted host, 0^32 where nothing measured
+// PCR14.
 func DeriveInitramfsLockPCR14(baseline [types.HashSize]byte) [types.HashSize]byte {
 	commit := sha256.New()
 	commit.Write([]byte(initramfsLockTag))
@@ -66,16 +53,6 @@ func DeriveInitramfsLockPCR14(baseline [types.HashSize]byte) [types.HashSize]byt
 //	lock_value  = DeriveInitramfsLockPCR14()
 //	boot_commit = SHA256(bootCommitmentTag || agentHash)
 //	pcr14_final = SHA256(lock_value || boot_commit)
-//
-// The value depends on the platform baseline and the agent binary,
-// and on nothing the signing key can change, so every publisher's verifier
-// derives the same register for the same host.  It is also stable across
-// a suspend and across reboots of the same build, which is why neither
-// side scans candidates.
-//
-// This is the only PCR14 derivation the verifier validates;
-// report that does not carry both FlagInitramfsLockV1 and FlagBootCommitment
-// is rejected before the chain is rederived.
 func DeriveLockedBootCommitmentPCR14(baseline, agentHash [types.HashSize]byte) [types.HashSize]byte {
 	lockValue := DeriveInitramfsLockPCR14(baseline)
 
@@ -97,21 +74,12 @@ func DeriveLockedBootCommitmentPCR14(baseline, agentHash [types.HashSize]byte) [
 // It is also the PCR shim measures the MOK state into on UEFI Secure Boot.
 const pcr14Index = 14
 
-// PCR14BaselineFromEventLog reconstructs the PCR14 content present before
-// any LOTA extend by replaying the firmware TCG event log.
-// On UEFI Secure Boot shim measures the MOK state (MokList, SbatLevel, MokListRT)
-// into PCR14 before ExitBootServices;
-// LOTA's initramfs-lock and agent extends run afterwards and never enter the
-// firmware log, so the replayed PCR14 is exactly the baseline the lock chain
-// anchors on.
+// PCR14BaselineFromEventLog replays the firmware event log and returns PCR14
+// as it stood before any LOTA extend: LOTA's extends never enter that log.
+// A nil log, a replay error or a log with no PCR14 events yields 0^32.
 //
-// nil log, replay error, or no PCR14 events yields 0^32 - UEFI host whose boot
-// chain never measured PCR14 (no shim).
-// The log is proven to be a UEFI one before this runs, see UEFIAnchored.
-//
-// baseline needs no separate trust:
-// it is authenticated by the quote, since forged event log makes Derive*(baseline, ...)
-// diverge from the signed PCR14 and the match fails closed
+// The quote authenticates the result: a forged log makes the derived PCR14
+// diverge from the signed one.
 func PCR14BaselineFromEventLog(parsed *ParsedEventLog) [types.HashSize]byte {
 	var zero [types.HashSize]byte
 	if parsed == nil || pcr14Index >= types.PCRCount {
@@ -124,21 +92,8 @@ func PCR14BaselineFromEventLog(parsed *ParsedEventLog) [types.HashSize]byte {
 	return replay.PCRValues[pcr14Index]
 }
 
-// MatchLockedBootCommitmentPCR14 rederives PCR14 for the agent_hash the report
-// carries and compares it against the register the quote signed.
-//
-// There is nothing to scan and nothing to tolerate. The derivation binds the
-// platform baseline and the agent binary, so the value a host presents is the
-// same before and after a suspend, and the same for every publisher that
-// verifies it.
-//
-// The signature parameters are kept as named returns so callers keep reading
-// one shape: restartDrift is always zero and exists so a caller that logs it
-// does not have to special-case this derivation.
-//
-// The integrity binding is the agent hash: a party who does not know the hash
-// the register commits to cannot produce a matching PCR 14, and the register
-// cannot be reset from userspace within a boot.
+// MatchLockedBootCommitmentPCR14 derives PCR14 for baseline and agentHash
+// and compares it with target, the register the quote signed.
 func MatchLockedBootCommitmentPCR14(baseline, agentHash [types.HashSize]byte,
 	target [types.HashSize]byte,
 ) (expected [types.HashSize]byte, matched bool) {
@@ -146,23 +101,20 @@ func MatchLockedBootCommitmentPCR14(baseline, agentHash [types.HashSize]byte,
 	return expected, expected == target
 }
 
-// defines the interface for PCR baseline stores
+// BaselineStorer is a store of per-client baselines.
 type BaselineStorer interface {
-	// performs TOFU validation for PCR 14
+	// CheckAndUpdate pins pcr14 for a client with no baseline,
+	// else compares it with the pinned PCR14 and counts a match.
 	CheckAndUpdate(clientID string, pcr14 [types.HashSize]byte) (TOFUResult, *ClientBaseline)
 
-	// returns the stored baseline for a client (nil if not found)
+	// GetBaseline returns the client's baseline, nil when it has none.
 	GetBaseline(clientID string) *ClientBaseline
 
-	// removes all stored baseline state for client:
-	// the PCR14 baseline, the PCR0/1/7 boot baseline and the re-anchor bookkeeping.
-	// Next attestation re-establishes trust per the active TOFU/policy configuration.
+	// ClearBaseline removes the client's baseline. Archived baselines stay.
 	ClearBaseline(clientID string) error
 
-	// returns all known client IDs
 	ListClients() []string
 
-	// returns baseline store statistics
 	Stats() BaselineStats
 }
 
@@ -172,117 +124,79 @@ type PagedClientLister interface {
 	ListClientsPage(limit, offset int) ([]string, error)
 }
 
-// stores known-good measurements for a client
+// ClientBaseline is the pinned PCR14 and agent hash of a client.
 type ClientBaseline struct {
-	// agent self-measurement hash
 	PCR14 [types.HashSize]byte
 
-	// SHA-256 of the agent binary; pinned independently of PCR14
-	// so a report that carries a register the pinned hash cannot produce is
-	// rejected, and so an allow-listed agent update can move both pins in
-	// one statement.
-	// Zero means out-of-band PCR 14 pin; refused, never filled from a report.
+	// SHA-256 of the agent binary. Zero is a row from an out-of-band
+	// PCR14 pin: the verifier refuses it and never fills it from a report.
 	AgentHash [types.HashSize]byte
 
-	// when baseline was established
 	FirstSeen time.Time
 
-	// last successful attestation
 	LastSeen time.Time
 
-	// number of successful attestations
 	AttestCount uint64
 
-	// how many times the pinned agent hash has moved to a build the policy
-	// allow-list names, and when it last moved.
-	// Together they are the rate limit on ArchiveAndRepinAgentHash;
-	// Zero LastAgentHashRepinAt means the client has never re-pinned,
-	// so its first update is never rate limited.
+	// Moves of the pinned agent hash and the time of the last one, the rate
+	// limit of ArchiveAndRepinAgentHash. A zero LastAgentHashRepinAt leaves
+	// the first move unlimited.
 	AgentHashRepinCount  int
 	LastAgentHashRepinAt time.Time
 }
 
-// boot-chain PCR values that must remain stable across reboots.
-//
-// PCR0  - SRTM, CRTM, BIOS / UEFI firmware code
-// PCR1  - host platform configuration: SMBIOS, BIOS settings, boot order
-// PCR7  - Secure Boot policy and authority chain
-//
-// Pinned via TOFU on first attestation; any deviation surfaces a
-// firmware / SecureBoot / cmdline change to the operator instead of
-// silently accepting the new measurements as if they were genuine.
+// BootBaseline is the pinned PCR0 (firmware code), PCR1 (platform
+// configuration) and PCR7 (Secure Boot policy) of a client.
 type BootBaseline struct {
 	PCR0 [types.HashSize]byte
 	PCR1 [types.HashSize]byte
 	PCR7 [types.HashSize]byte
 
-	// timestamps mirror ClientBaseline semantics
 	FirstSeen time.Time
 	LastSeen  time.Time
 }
 
-// BootBaselineStorer is optionally implemented by baseline stores that
-// pin firmware / SecureBoot PCRs in addition to PCR14. Callers should
-// type-assert and degrade to PCR14-only validation if not satisfied.
+// BootBaselineStorer is implemented by baseline stores that pin PCR0, PCR1
+// and PCR7. The verifier refuses to attest against a store without it.
 type BootBaselineStorer interface {
-	// CheckAndUpdateBootPCRs validates PCR0/PCR1/PCR7 against the stored
-	// baseline. Semantics mirror BaselineStorer.CheckAndUpdate.
+	// CheckAndUpdateBootPCRs is CheckAndUpdate for PCR0, PCR1 and PCR7.
 	CheckAndUpdateBootPCRs(clientID string, boot BootBaseline) (TOFUResult, *BootBaseline)
 }
 
-// BootBaselineReader is implemented by baseline stores that can return
-// the persisted PCR0/PCR1/PCR7 baseline for a client without performing
-// a TOFU write. The verifier uses it to gate first-use boot baselines
-// behind an enrollment ceremony: if no baseline row exists and the
-// active policy does not pin PCR0/PCR1/PCR7 explicitly, the production
-// configuration refuses the attestation instead of TOFU-establishing
-// whatever firmware/Secure Boot values the agent ships up. A nil
-// return is the canonical "not enrolled" signal.
+// BootBaselineReader is implemented by baseline stores that read a client's
+// boot baseline without writing it. GetBootBaseline returns nil for a client
+// with none. Under RequireBootEnrollment a stored boot baseline enrolls the
+// client.
 type BootBaselineReader interface {
 	GetBootBaseline(clientID string) *BootBaseline
 }
 
-// TenantStorer is optionally implemented by baseline stores that persist
-// the CA-assigned device tenant next to the baseline row.
-// Tenant is stamped from the verified AIK certificate after every successful
-// attestation and partitions the operator-facing surface:
-// listings, mutations and logs are scoped to it.
-// Row that predates tenancy (or store without the capability) reads as DefaultTenant.
+// TenantStorer is implemented by baseline stores that keep the CA-assigned
+// tenant on the baseline row. Listings, mutations and logs are scoped to it.
 type TenantStorer interface {
 	// SetClientTenant records the client's tenant on its baseline row.
 	// Fails when the client has no baseline row to stamp.
 	SetClientTenant(clientID, tenant string) error
 
-	// ClientTenant returns the recorded tenant.
-	// Client without baseline row or with pre-tenancy row is in DefaultTenant.
+	// ClientTenant returns the recorded tenant, DefaultTenant for a client
+	// with none.
 	ClientTenant(clientID string) (string, error)
 }
 
-// AgentHashStorer is optionally implemented by baseline stores that can pin
-// the agent self-hash alongside PCR14. The hash is the SHA-256 of the agent
-// binary as captured by the agent at startup; the verifier rederives the
-// expected PCR14 from it and the event log's pre-lock baseline,
-// so a register that matches no build the client is pinned to is refused.
+// AgentHashStorer is implemented by baseline stores that pin the agent hash
+// next to PCR14.
 type AgentHashStorer interface {
-	// CheckAndUpdateAgentHash pins the agent self-hash with TOFU
-	// semantics that mirror CheckAndUpdate(). currentPCR14 is recorded
-	// alongside the hash so the baselines table satisfies its NOT NULL
-	// constraint on first use.
+	// CheckAndUpdateAgentHash is CheckAndUpdate for the agent hash.
+	// currentPCR14 fills the row's PCR14 on first use, which the schema
+	// requires.
 	CheckAndUpdateAgentHash(clientID string,
 		currentPCR14, agentHash [types.HashSize]byte) (TOFUResult, *ClientBaseline)
 }
 
-// AttestationOutcome is the result of a single AtomicBaselineStorer
-// transaction. The three TOFU results report the per-component decision;
-// the snapshots carry whichever baseline values the caller needs to
-// surface in security logs or pass back to the agent. BootProvided
-// mirrors the caller's intent so consumers can distinguish "boot
-// pin not supplied this round" from "boot pin succeeded silently".
-//
-// PCR14Result is the decision for the register itself. A component that
-// carries no decision because the transaction ended before it
-// -- an agent_hash mismatch writes nothing -- reads TOFUError,
-// so a caller that forgets a branch fails closed.
+// AttestationOutcome is the result of CheckAndUpdateAttestation: a TOFU
+// result per component and copies of the baselines. BootProvided is whether
+// the caller passed a boot baseline. PCR14Result and BootResult read
+// TOFUError when the transaction ended before them.
 type AttestationOutcome struct {
 	AgentHashResult   TOFUResult
 	AgentHashBaseline *ClientBaseline
@@ -292,36 +206,20 @@ type AttestationOutcome struct {
 	BootBaseline      *BootBaseline
 }
 
-// AtomicBaselineStorer is implemented by baseline stores that can
-// commit both the agent_hash pin and the firmware/SecureBoot PCR pin
-// in a single read-modify-write transaction. Splitting the two writes
-// into successive AgentHashStorer + BootBaselineStorer calls opens a
-// race in multi-process verifier deployments: one process can finish
-// the PCR14/agent_hash insert and a second process can sneak in
-// between with a CheckAndUpdateBootPCRs that sees the row without the
-// boot columns yet and TOFU-establishes attacker-controlled
-// PCR0/PCR1/PCR7. The combined transaction closes the window by
-// taking an exclusive write lock for the entire decision.
-//
-// The contract is the same as the split methods:
-//   - agentHash is always evaluated;
-//   - boot, when non-nil, is evaluated in the same critical section;
-//     when nil, the boot columns are left untouched and
-//     AttestationOutcome.BootProvided is false on return;
-//   - any mismatch leaves persistent state unchanged so the caller's
-//     reject path matches the pre-transaction view.
+// AtomicBaselineStorer is implemented by baseline stores that decide the
+// agent hash, PCR14 and boot pins of one attestation under one write lock,
+// so a concurrent attestation cannot pin PCR0, PCR1 and PCR7 between them.
+// A nil boot leaves the boot baseline untouched. Any mismatch writes nothing.
 type AtomicBaselineStorer interface {
 	CheckAndUpdateAttestation(clientID string,
 		pcr14, agentHash [types.HashSize]byte,
 		boot *BootBaseline) AttestationOutcome
 }
 
-// ReanchorState is the persisted re-anchor bookkeeping for a client:
-// event log captured when the boot baseline was pinned (for PCR 7 replay-diff),
-// the firmware version at that time (ESRT anti-rollback), the sticky ESRT-capability
-// bit (device that ever reported an ESRT and later stops is suspicious), the last
-// assurance tier, and the rate-limit counter.
-// Present is false when no baseline row exists for the client.
+// ReanchorState is a client's re-anchor bookkeeping: the event log captured
+// with the boot baseline, the ESRT firmware version then, whether an ESRT was
+// ever reported, the last assurance tier, the review flag and the rate-limit
+// counter. Present is false when the client has no boot baseline.
 type ReanchorState struct {
 	Present          bool
 	EventLogBaseline []byte
@@ -333,21 +231,19 @@ type ReanchorState struct {
 	LastReanchorAt   time.Time
 }
 
-// ReanchorStorer is optionally implemented by baseline stores that support
-// self-service re-anchor after a legitimate firmware drift.
+// ReanchorStorer is implemented by baseline stores that re-anchor a client's
+// boot baseline after a firmware drift.
 //
-//   - GetReanchorState returns the bookkeeping for a client (Present == false
-//     when the client has no baseline row, which the verifier treats as
-//     fail-closed: no event-log baseline means no replay-diff is possible).
+//   - GetReanchorState returns the bookkeeping for a client.
 //   - ArchiveAndReanchor atomically copies the current PCR0/1/7 row into the
 //     archive table and replaces it with boot, recording the new event-log
 //     baseline, ESRT version and assurance tier, setting esrt_capable sticky,
 //     and bumping reanchor_count / last_reanchor_at. reason labels the archive
 //     row ("strong" or "lfa").
-//     now is the re-anchor clock: the implementation re-reads last_reanchor_at
-//     under the same lock/transaction as the write and returns ErrReanchorRateLimited
-//     when now is still within the assurance-tier interval, so concurrent attestations
-//     for one client cannot race the cheap-path gate in reanchorDecision.
+//     It re-reads last_reanchor_at under the lock of the write and returns
+//     ErrReanchorRateLimited when now is inside the assurance-tier interval,
+//     so concurrent attestations of one client cannot race the gate in
+//     reanchorDecision.
 type ReanchorStorer interface {
 	GetReanchorState(clientID string) ReanchorState
 	ArchiveAndReanchor(clientID string, boot BootBaseline, eventLog []byte,
@@ -357,29 +253,23 @@ type ReanchorStorer interface {
 	// RecordBootEvidence captures the event log and firmware version that
 	// accompanied a first-use boot baseline, so a later re-anchor has a
 	// reference to replay-diff PCR 7 against.
-	// It is an idempotent update on the existing baseline row (no archive,
-	// no counter bump) and sets esrt_capable sticky when esrtPresent.
-	// Missing call simply leaves the event-log baseline empty, which the
-	// verifier treats as fail-closed (operator re-baseline) at re-anchor time.
+	// It updates the existing baseline row in place and sets esrt_capable
+	// sticky when esrtPresent. Without it a re-anchor escalates to the
+	// operator.
 	RecordBootEvidence(clientID string, eventLog []byte, esrtVersion uint32,
 		esrtPresent bool) error
 
-	// ListLFAReviewPending returns the clients that have re-anchored on the
-	// Low-Firmware-Assurance path and have not yet been reviewed by an
-	// operator.
-	// LFA re-anchors apply automatically (no approval gate);
-	// this is a post-fact review queue, not a blocking one.
+	// ListLFAReviewPending returns the clients with an applied LFA
+	// re-anchor no operator has reviewed.
 	ListLFAReviewPending() []string
 
-	// AcknowledgeLFAReview clears a client's pending-review flag once an
-	// operator has looked at its LFA re-anchor.
-	// It does not touch the baseline;
-	// it only takes the client off the review list.
-	// Returns ErrNoReviewPending when nothing is queued.
+	// AcknowledgeLFAReview takes the client off the review list, leaving
+	// the baseline alone. It returns ErrNoReviewPending when nothing is
+	// queued.
 	AcknowledgeLFAReview(clientID string) error
 }
 
-// ErrNoReviewPending: the client has no LFA re-anchor awaiting review.
+// ErrNoReviewPending reports a client with no LFA re-anchor awaiting review.
 var ErrNoReviewPending = errors.New("no re-anchor review pending")
 
 // AgentHashRepinState is the per-client bookkeeping behind the agent-hash
@@ -394,26 +284,6 @@ type AgentHashRepinState struct {
 	LastRepinAt time.Time
 }
 
-// AgentHashRepinStorer is optionally implemented by baseline stores that support
-// moving client's pinned agent hash after a package update.
-//
-// Boot re-anchor above answers "the firmware moved".
-// This answers "the agent binary moved".
-// They are separate because their authorities are separate:
-// boot re-anchor is judged from the event log and the Secure Boot root of trust,
-// while a re-pin is judged from the policy's agent_hashes allow-list,
-// which names the builds the relying party already trusts.
-//
-//   - GetAgentHashRepinState returns the bookkeeping for a client.
-//   - ArchiveAndRepinAgentHash atomically copies the outgoing hash into
-//     the archive table and replaces the pinned agent_hash and PCR14 with
-//     the reported pair, bumping agent_hash_repin_count / last_agent_hash_repin_at.
-//     now is the re-pin clock: the implementation re-reads last_agent_hash_repin_at
-//     under the same lock or transaction as the write and returns
-//     ErrAgentHashRepinRateLimited when now is still inside AgentHashRepinMinInterval,
-//     so concurrent attestations for one client cannot race the cheap-path gate
-//     in agentHashDecision.
-//
 // KernelHashRecorder is optionally implemented by baseline stores that keep
 // the kernel hash a client last reported.
 //
@@ -440,13 +310,24 @@ type MachineKeysRecorder interface {
 	GetMachineKeys(clientID string) []byte
 }
 
+// AgentHashRepinStorer is implemented by baseline stores that move a client's
+// pinned agent hash to a build the policy's agent_hashes allow-list names.
+//
+//   - GetAgentHashRepinState returns the bookkeeping for a client.
+//   - ArchiveAndRepinAgentHash atomically copies the outgoing hash into
+//     the archive table, replaces the pinned agent_hash and PCR14 with the
+//     reported pair and bumps the repin count and time. It re-reads the
+//     repin time under the lock of the write and returns
+//     ErrAgentHashRepinRateLimited when now is inside
+//     AgentHashRepinMinInterval, so concurrent attestations of one client
+//     cannot race the gate in agentHashDecision.
 type AgentHashRepinStorer interface {
 	GetAgentHashRepinState(clientID string) AgentHashRepinState
 	ArchiveAndRepinAgentHash(clientID string,
 		agentHash, pcr14 [types.HashSize]byte, now time.Time) error
 }
 
-// manages per-client PCR baselines (TOFU)
+// BaselineStore is the in-memory baseline store.
 type BaselineStore struct {
 	mu            sync.RWMutex
 	baselines     map[string]*ClientBaseline // clientID -> PCR14 baseline
@@ -457,7 +338,7 @@ type BaselineStore struct {
 	machineKeys   map[string][]byte
 }
 
-// creates a new baseline store
+// NewBaselineStore returns an empty in-memory baseline store.
 func NewBaselineStore() *BaselineStore {
 	return &BaselineStore{
 		baselines:     make(map[string]*ClientBaseline),
@@ -469,27 +350,24 @@ func NewBaselineStore() *BaselineStore {
 	}
 }
 
-// describes the outcome of TOFU check
+// TOFUResult is the outcome of a check against a pinned value.
 type TOFUResult int
 
 const (
-	// First time seeing this client - baseline established
+	// TOFUFirstUse means nothing was pinned and the reported value now is.
 	TOFUFirstUse TOFUResult = iota
 
-	// PCR matches stored baseline
+	// TOFUMatch means the reported value equals the pinned one.
 	TOFUMatch
 
-	// PCR does NOT match stored baseline - possible tampering
+	// TOFUMismatch means the reported value differs from the pinned one.
 	TOFUMismatch
 
-	// Database or store error - must not be treated as first use
+	// TOFUError means the store failed; it is never a first use.
 	TOFUError
 )
 
-// performs TOFU validation for PCR 14
-// returns TOFUFirstUse on first attestation (baseline stored)
-// returns TOFUMatch if PCR matches baseline
-// returns TOFUMismatch if PCR differs from baseline (CRITICAL!)
+// CheckAndUpdate implements BaselineStorer.
 func (s *BaselineStore) CheckAndUpdate(clientID string, pcr14 [types.HashSize]byte) (TOFUResult, *ClientBaseline) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -498,7 +376,6 @@ func (s *BaselineStore) CheckAndUpdate(clientID string, pcr14 [types.HashSize]by
 
 	existing, exists := s.baselines[clientID]
 	if !exists {
-		// first use - establish baseline
 		baseline := &ClientBaseline{
 			PCR14:       pcr14,
 			FirstSeen:   now,
@@ -510,26 +387,22 @@ func (s *BaselineStore) CheckAndUpdate(clientID string, pcr14 [types.HashSize]by
 	}
 
 	if existing.PCR14 != pcr14 {
-		// possible tampering
 		return TOFUMismatch, existing
 	}
 
-	// update last seen
 	existing.LastSeen = now
 	existing.AttestCount++
 	return TOFUMatch, existing
 }
 
-// returns the stored baseline for a client (nil if not found)
+// GetBaseline implements BaselineStorer.
 func (s *BaselineStore) GetBaseline(clientID string) *ClientBaseline {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return s.baselines[clientID]
 }
 
-// GetBootBaseline returns the persisted PCR0/PCR1/PCR7 row for a
-// client or nil when the boot baseline has never been pinned. It is
-// the read-only side of BootBaselineStorer and never writes.
+// GetBootBaseline implements BootBaselineReader with a copy.
 func (s *BaselineStore) GetBootBaseline(clientID string) *BootBaseline {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -541,8 +414,8 @@ func (s *BaselineStore) GetBootBaseline(clientID string) *BootBaseline {
 	return &out
 }
 
-// GetReanchorState returns the in-memory re-anchor bookkeeping for a
-// client. Present is false when the client has no boot baseline yet.
+// GetReanchorState implements ReanchorStorer. Present is false when the
+// client has no boot baseline.
 func (s *BaselineStore) GetReanchorState(clientID string) ReanchorState {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -560,11 +433,7 @@ func (s *BaselineStore) GetReanchorState(clientID string) ReanchorState {
 	return st
 }
 
-// ArchiveAndReanchor replaces the stored boot baseline with boot and records
-// the new re-anchor state.
-// In-memory store keeps no archive table; the previous values are simply overwritten
-// (durable backends persist the archive).
-// esrtCapable is sticky: once true it stays true.
+// ArchiveAndReanchor implements ReanchorStorer with no archive.
 func (s *BaselineStore) ArchiveAndReanchor(clientID string, boot BootBaseline,
 	eventLog []byte, esrtVersion uint32, esrtCapable, lfa bool,
 	reason string, now time.Time,
@@ -593,7 +462,6 @@ func (s *BaselineStore) ArchiveAndReanchor(clientID string, boot BootBaseline,
 	st.ESRTCapable = st.ESRTCapable || esrtCapable
 	st.LFA = lfa
 	if lfa {
-		// auto re-anchor; flag for post-fact operator review
 		st.LFAReviewPending = true
 	}
 	st.ReanchorCount++
@@ -602,7 +470,7 @@ func (s *BaselineStore) ArchiveAndReanchor(clientID string, boot BootBaseline,
 	return nil
 }
 
-// GetAgentHashRepinState returns the in-memory re-pin bookkeeping
+// GetAgentHashRepinState implements AgentHashRepinStorer.
 func (s *BaselineStore) GetAgentHashRepinState(clientID string) AgentHashRepinState {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -619,14 +487,8 @@ func (s *BaselineStore) GetAgentHashRepinState(clientID string) AgentHashRepinSt
 	}
 }
 
-// ArchiveAndRepinAgentHash moves the pinned agent hash
-// and PCR14 to the reported pair.
-// In-memory store keeps no archive table;
-// the outgoing hash is simply overwritten (durable backends persist it).
-// Refuses when the client has no baseline row:
-// re-pin replaces a pin, and establishing one is TOFU's job, not this path's.
-// Refuses a row with no agent_hash for the same reason;
-// moving it would also replace the out-of-band PCR 14 pin.
+// ArchiveAndRepinAgentHash implements AgentHashRepinStorer with no archive.
+// Refuses a client with no baseline row and a row with no agent hash.
 func (s *BaselineStore) ArchiveAndRepinAgentHash(clientID string,
 	agentHash, pcr14 [types.HashSize]byte, now time.Time,
 ) error {
@@ -679,9 +541,7 @@ func (s *BaselineStore) RepinPCR14(clientID string,
 	return nil
 }
 
-// RecordBootEvidence stores the event log + ESRT version that accompanied a
-// first-use boot baseline (in-memory).
-// esrt_capable is sticky.
+// RecordBootEvidence implements ReanchorStorer.
 func (s *BaselineStore) RecordBootEvidence(clientID string, eventLog []byte,
 	esrtVersion uint32, esrtPresent bool,
 ) error {
@@ -700,8 +560,7 @@ func (s *BaselineStore) RecordBootEvidence(clientID string, eventLog []byte,
 	return nil
 }
 
-// ListLFAReviewPending returns clients with an unreviewed LFA re-anchor
-// (in-memory).
+// ListLFAReviewPending implements ReanchorStorer.
 func (s *BaselineStore) ListLFAReviewPending() []string {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -714,7 +573,7 @@ func (s *BaselineStore) ListLFAReviewPending() []string {
 	return out
 }
 
-// AcknowledgeLFAReview clears a client's pending-review flag (in-memory).
+// AcknowledgeLFAReview implements ReanchorStorer.
 func (s *BaselineStore) AcknowledgeLFAReview(clientID string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -726,10 +585,7 @@ func (s *BaselineStore) AcknowledgeLFAReview(clientID string) error {
 	return nil
 }
 
-// Removes all stored baseline state for a client.
-// SQL-backed stores keep the PCR14, boot-PCR and re-anchor columns in one row,
-// so their DELETE drops everything at once.
-// Mirror that here across the three maps.
+// ClearBaseline implements BaselineStorer.
 func (s *BaselineStore) ClearBaseline(clientID string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -741,8 +597,7 @@ func (s *BaselineStore) ClearBaseline(clientID string) error {
 	return nil
 }
 
-// SetClientTenant records the CA-assigned tenant for client that already
-// holds baseline row.
+// SetClientTenant implements TenantStorer.
 func (s *BaselineStore) SetClientTenant(clientID, tenant string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -753,8 +608,7 @@ func (s *BaselineStore) SetClientTenant(clientID, tenant string) error {
 	return nil
 }
 
-// ClientTenant returns the recorded tenant.
-// Client never stamped is in the default tenant.
+// ClientTenant implements TenantStorer.
 func (s *BaselineStore) ClientTenant(clientID string) (string, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -764,7 +618,7 @@ func (s *BaselineStore) ClientTenant(clientID string) (string, error) {
 	return DefaultTenant, nil
 }
 
-// returns all known client IDs
+// ListClients returns the clients with a PCR14 baseline.
 func (s *BaselineStore) ListClients() []string {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -776,7 +630,7 @@ func (s *BaselineStore) ListClients() []string {
 	return clients
 }
 
-// returns baseline store statistics
+// BaselineStats counts the clients and dates their first baselines.
 type BaselineStats struct {
 	TotalClients   int
 	OldestBaseline time.Time
@@ -803,14 +657,12 @@ func (s *BaselineStore) Stats() BaselineStats {
 	return stats
 }
 
-// returns hex-encoded PCR 14 value
+// FormatPCR14 returns pcr14 in hex.
 func FormatPCR14(pcr14 [types.HashSize]byte) string {
 	return hex.EncodeToString(pcr14[:])
 }
 
-// CheckAndUpdateAgentHash pins agent_hash with TOFU semantics in the
-// in-memory baseline store; currentPCR14 is captured on first use so
-// operators retain a forensic snapshot of the runtime PCR value.
+// CheckAndUpdateAgentHash implements AgentHashStorer.
 func (s *BaselineStore) CheckAndUpdateAgentHash(clientID string,
 	currentPCR14, agentHash [types.HashSize]byte,
 ) (TOFUResult, *ClientBaseline) {
@@ -833,10 +685,7 @@ func (s *BaselineStore) CheckAndUpdateAgentHash(clientID string,
 		return TOFUFirstUse, &out
 	}
 
-	// row without a pinned agent_hash can only come from out-of-band PCR14 pin:
-	// every attestation writes the hash.
-	// Mismatch branch below therefore also covers it -- the verifier does not
-	// adopt whichever hash happens to arrive first.
+	// a row with no agent hash is an out-of-band PCR14 pin and mismatches
 	if existing.AgentHash != agentHash {
 		out := *existing
 		return TOFUMismatch, &out
@@ -848,9 +697,7 @@ func (s *BaselineStore) CheckAndUpdateAgentHash(clientID string,
 	return TOFUMatch, &out
 }
 
-// CheckAndUpdateBootPCRs pins PCR0/PCR1/PCR7 with TOFU semantics that
-// mirror CheckAndUpdate(). Any deviation from the stored boot baseline
-// surfaces a firmware / SecureBoot / boot-order change.
+// CheckAndUpdateBootPCRs implements BootBaselineStorer.
 func (s *BaselineStore) CheckAndUpdateBootPCRs(clientID string, boot BootBaseline) (TOFUResult, *BootBaseline) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -876,16 +723,8 @@ func (s *BaselineStore) CheckAndUpdateBootPCRs(clientID string, boot BootBaselin
 	return TOFUMatch, &out
 }
 
-// CheckAndUpdateAttestation commits the agent_hash pin and (when boot
-// is non-nil) the firmware/SecureBoot pin in a single critical
-// section, matching the SQLite store's BEGIN IMMEDIATE contract on a
-// process-local map. The in-memory store does not face the
-// multi-process race that motivated the interface, but exposing the
-// combined call keeps the verifier wiring uniform across stores so
-// tests and production share one decision path.
-//
-// Mismatch in either component leaves the existing baseline
-// untouched, mirroring the SQLite implementation.
+// CheckAndUpdateAttestation implements AtomicBaselineStorer under the store
+// mutex.
 func (s *BaselineStore) CheckAndUpdateAttestation(clientID string,
 	pcr14, agentHash [types.HashSize]byte,
 	boot *BootBaseline,
@@ -896,7 +735,6 @@ func (s *BaselineStore) CheckAndUpdateAttestation(clientID string,
 	now := time.Now()
 	outcome := AttestationOutcome{BootProvided: boot != nil, PCR14Result: TOFUError}
 
-	// --- agent_hash branch ---
 	existing, exists := s.baselines[clientID]
 	if !exists {
 		b := &ClientBaseline{
@@ -906,14 +744,11 @@ func (s *BaselineStore) CheckAndUpdateAttestation(clientID string,
 			LastSeen:    now,
 			AttestCount: 1,
 		}
-		// snapshot first; row not committed yet in case boot mismatches.
 		snap := *b
 		outcome.AgentHashResult = TOFUFirstUse
 		outcome.AgentHashBaseline = &snap
 		outcome.PCR14Result = TOFUFirstUse
 
-		// boot branch on a fresh row mirrors the agent_hash decision:
-		// any incoming boot baseline becomes the canonical pin.
 		if boot != nil {
 			stored := *boot
 			stored.FirstSeen = now
@@ -929,13 +764,10 @@ func (s *BaselineStore) CheckAndUpdateAttestation(clientID string,
 
 	switch {
 	case existing.AgentHash != agentHash:
-		// agent_hash mismatch terminates the transaction: leave the row
-		// untouched and return the stored snapshot for security logging.
 		snap := *existing
 		outcome.AgentHashResult = TOFUMismatch
 		outcome.AgentHashBaseline = &snap
 		if boot != nil {
-			// boot side carries no decision because no write happens.
 			outcome.BootResult = TOFUError
 		}
 		return outcome
@@ -943,11 +775,7 @@ func (s *BaselineStore) CheckAndUpdateAttestation(clientID string,
 		outcome.AgentHashResult = TOFUMatch
 	}
 
-	// --- PCR14 branch ---
-	//
-	// Every road that creates a row writes the register with it,
-	// so an existing row always has one to compare against.
-	// A mismatch terminates the transaction without writes.
+	// every road that creates a row writes PCR14 with it
 	if existing.PCR14 != pcr14 {
 		snap := *existing
 		outcome.PCR14Result = TOFUMismatch
@@ -959,7 +787,6 @@ func (s *BaselineStore) CheckAndUpdateAttestation(clientID string,
 	}
 	outcome.PCR14Result = TOFUMatch
 
-	// --- boot branch ---
 	if boot != nil {
 		existingBoot, hasBoot := s.bootBaselines[clientID]
 		if !hasBoot {
@@ -967,7 +794,6 @@ func (s *BaselineStore) CheckAndUpdateAttestation(clientID string,
 		} else if existingBoot.PCR0 != boot.PCR0 ||
 			existingBoot.PCR1 != boot.PCR1 ||
 			existingBoot.PCR7 != boot.PCR7 {
-			// boot mismatch: undo any tentative state and return.
 			snap := *existing
 			outcome.AgentHashBaseline = &snap
 			snapBoot := *existingBoot
@@ -979,7 +805,6 @@ func (s *BaselineStore) CheckAndUpdateAttestation(clientID string,
 		}
 	}
 
-	// --- commit phase: every component passed ---
 	existing.LastSeen = now
 	existing.AttestCount++
 	snap := *existing
@@ -1005,9 +830,7 @@ func (s *BaselineStore) CheckAndUpdateAttestation(clientID string,
 	return outcome
 }
 
-// RecordKernelHash implements KernelHashRecorder for the in-memory store.
-// A client with no PCR14 baseline is not tracked: there is nothing this
-// process has agreed to remember about it yet.
+// RecordKernelHash implements KernelHashRecorder.
 func (s *BaselineStore) RecordKernelHash(clientID string,
 	kernelHash [types.HashSize]byte,
 ) (prev [types.HashSize]byte, had bool, err error) {
@@ -1023,7 +846,7 @@ func (s *BaselineStore) RecordKernelHash(clientID string,
 	return prev, had, nil
 }
 
-// RecordMachineKeys implements MachineKeysRecorder for the in-memory store.
+// RecordMachineKeys implements MachineKeysRecorder.
 func (s *BaselineStore) RecordMachineKeys(clientID string, keys []byte) ([]byte, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -1037,7 +860,7 @@ func (s *BaselineStore) RecordMachineKeys(clientID string, keys []byte) ([]byte,
 	return prev, nil
 }
 
-// GetMachineKeys implements MachineKeysRecorder for the in-memory store.
+// GetMachineKeys implements MachineKeysRecorder.
 func (s *BaselineStore) GetMachineKeys(clientID string) []byte {
 	s.mu.RLock()
 	defer s.mu.RUnlock()

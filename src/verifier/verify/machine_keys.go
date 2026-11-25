@@ -12,13 +12,15 @@ import (
 	"encoding/hex"
 )
 
-// MOK list states. None of them is a verdict, publisher judges the keys.
+// MOK list states.
 const (
-	// MOKListed: list hashes to the MokList measurement in the log.
+	// MOKListed means the list hashes to the first PCR 14 event,
+	// named MokList.
 	MOKListed = "listed"
-	// MOKNotMeasured: log has no PCR 14 event, so no shim ran and no MOK applies.
+	// MOKNotMeasured means the log has no PCR 14 event.
 	MOKNotMeasured = "not_measured"
-	// MOKUnproven: shim measured a list, and what the agent sent is not it.
+	// MOKUnproven means there is no log, or its first PCR 14 event is not
+	// a MokList the list hashes to.
 	MOKUnproven = "unproven"
 )
 
@@ -42,11 +44,8 @@ type MachineKey struct {
 }
 
 // MachineKeys lists the keys a machine trusts at boot and for its modules.
-//
-// Recorded, not gated: LOTA shows the keys and the publisher judges them.
-// db comes from a PCR 7 event bound to its digest. MOK comes from the agent and
-// counts only as MOKListed: the digest it matches sits in the log that replays
-// to the quoted PCR 14.
+// DB is read from a PCR 7 event whose digest is the hash of its data;
+// MOK holds the agent's list only when it is MOKListed.
 type MachineKeys struct {
 	DB       []MachineKey `json:"db"`
 	MOK      []MachineKey `json:"mok"`
@@ -67,8 +66,8 @@ func ExtractMachineKeys(parsed *ParsedEventLog, mokList []byte) *MachineKeys {
 	return keys
 }
 
-// Only the first PCR 14 event counts. Event data is outside the digest, so
-// a forged log could name the MokListX event MokList; order is what replay fixes.
+// mokListState checks mokList against the first PCR 14 event alone: event
+// data is outside the digest, so only the event's position binds its name.
 func mokListState(parsed *ParsedEventLog, mokList []byte) string {
 	if parsed == nil {
 		return MOKUnproven
@@ -88,8 +87,8 @@ func mokListState(parsed *ParsedEventLog, mokList []byte) string {
 	return MOKNotMeasured
 }
 
-// parseSignatureLists walks EFI_SIGNATURE_LIST records. Malformed tail ends the
-// walk: what parsed before it is still what the firmware measured.
+// parseSignatureLists walks EFI_SIGNATURE_LIST records.
+// A malformed record ends the walk, and the keys before it are returned.
 func parseSignatureLists(data []byte) []MachineKey {
 	const (
 		listHeaderSize = 28 // SignatureType, ListSize, HeaderSize, SignatureSize
@@ -131,8 +130,8 @@ func machineKey(sigType [16]byte, sig []byte) MachineKey {
 	return key
 }
 
-// x509.ParseCertificate refuses firmware certificates with a negative serial,
-// so read the subject alone. Later TBS fields are ignored by asn1.
+// certSubject reads the subject alone, since x509.ParseCertificate refuses
+// firmware certificates with a negative serial. asn1 ignores the later fields.
 func certSubject(der []byte) string {
 	var cert struct {
 		TBS struct {

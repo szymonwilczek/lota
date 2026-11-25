@@ -2,17 +2,9 @@
 // Copyright (C) 2026 Szymon Wilczek
 // LOTA Verifier - Sharded baseline store
 //
-// ShardedBaselineStore partitions per-client baseline state across N independent
-// baseline stores, routing every single-client operation to the shard that owns
-// the client (by a stable hash of the client ID) and fanning out the fleet-wide
-// reads (client listing, statistics, the LFA review queue).
-// It reproduces the full BaselineStorer capability set -- including the atomic
-// attestation transaction, boot-PCR pinning, tenant stamping and self-service re-anchor
-// -- so sharded deployment loses no verifier feature.
-//
-// Client's baseline always lives on exactly one shard, so the atomic read-modify-write
-// guarantees of the underlying store are preserved unchanged:
-// sharding never splits one client's decision across databases.
+// A client-scoped call goes to the one shard that owns the client, so its
+// transaction stays inside one database. Client listing, statistics and the
+// LFA review queue fan out to every shard.
 
 package verify
 
@@ -22,11 +14,7 @@ import (
 	"github.com/szymonwilczek/lota/verifier/types"
 )
 
-// baselineShard is the full capability set shardable baseline store must provide.
-// Production Postgres baseline store satisfies it; requiring it at construction
-// means every optional interface the verifier probes
-// (atomic attestation, boot PCRs, tenant, re-anchor)
-// can be routed to the owning shard, so no feature silently degrades under sharding.
+// baselineShard is every capability a baseline shard must have.
 type baselineShard interface {
 	BaselineStorer
 	BootBaselineStorer
@@ -41,22 +29,18 @@ type baselineShard interface {
 	MachineKeysRecorder
 }
 
-// ShardedBaselineStore routes per-client baseline operations across set of baseline shards.
+// ShardedBaselineStore partitions baseline state across shards.
 type ShardedBaselineStore struct {
 	shards []baselineShard
 }
 
-// compile-time proof both stores keep the whole capability set,
-// so verifier's interface probes succeed on either.
 var (
 	_ baselineShard = (*BaselineStore)(nil)
 	_ baselineShard = (*ShardedBaselineStore)(nil)
 )
 
-// NewShardedBaselineStore partitions baseline state across shards.
-// Every shard must provide the full baseline capability set;
-// it panics otherwise, because shard missing capability would silently disable
-// that feature for the clients it owns.
+// NewShardedBaselineStore returns a store over shards.
+// It panics on an empty set or a shard that is not a baselineShard.
 func NewShardedBaselineStore(shards []BaselineStorer) *ShardedBaselineStore {
 	if len(shards) == 0 {
 		panic("verify: ShardedBaselineStore requires at least one shard")
