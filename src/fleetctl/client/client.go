@@ -1,12 +1,8 @@
 // SPDX-License-Identifier: MIT
 // Copyright (C) 2026 Szymon Wilczek
-// LOTA Fleet CLI - verifier monitoring API client
-//
-// Typed HTTP client for the verifier's REST monitoring API.
-// CLI is pure API consumer:
-// it shares no code with the verifier, so it builds and runs against any verifier
-// version that speaks the documented endpoint contract.
 
+// Package client is a client of the verifier's monitoring API that imports
+// no verifier code.
 package client
 
 import (
@@ -24,24 +20,17 @@ import (
 	"time"
 )
 
-// keep the error body bounded
-// API never sends large error payloads
 const maxErrorBodyBytes = 64 * 1024
 
 // Config carries the connection parameters for verifier monitoring API.
 type Config struct {
-	// ServerURL is the API base URL,
-	// e.g. http://127.0.0.1:8080 or an https:// URL
-	// when the API sits behind TLS-terminating proxy.
-	ServerURL string
-	// APIKey is the Bearer token (reader or admin tier);
-	// empty sends no Authorization header (loopback dev setups only).
-	APIKey string
-	// CACertPEM optionally pins the TLS roots for an https ServerURL.
+	ServerURL string // http or https, with a host
+	APIKey    string // Bearer token; empty sends no Authorization header
+
+	// CACertPEM, if set, replaces the system roots for an https ServerURL.
 	CACertPEM []byte
-	// Timeout bounds each request;
-	// zero means 30 seconds.
-	Timeout time.Duration
+
+	Timeout time.Duration // per request; zero means 30 seconds
 }
 
 // Client talks to one verifier monitoring API endpoint.
@@ -103,11 +92,8 @@ func New(cfg Config) (*Client, error) {
 	}, nil
 }
 
-// do runs one API request.
-// JSON body is sent when in is non-nil and the response is decoded into out
-// when out is non-nil.
-// Any status other than the listed ones surfaces as *APIError carrying the
-// server's error field.
+// do sends in as JSON when non-nil and decodes into out when non-nil;
+// a status not in okStatus is an *APIError.
 func (c *Client) do(method, path string, query url.Values, in, out any, okStatus ...int) error {
 	reqURL := c.baseURL + path
 	if len(query) > 0 {
@@ -159,8 +145,6 @@ func (c *Client) do(method, path string, query url.Values, in, out any, okStatus
 	return nil
 }
 
-// decodeAPIError maps a non-OK response onto *APIError,
-// preserving the server's {"error": ...} message when one is present.
 func decodeAPIError(resp *http.Response) error {
 	apiErr := &APIError{StatusCode: resp.StatusCode}
 
@@ -176,9 +160,9 @@ func decodeAPIError(resp *http.Response) error {
 	return apiErr
 }
 
-// Health is the GET /health response;
-// Status is "degraded" when the attestation TLS listener is down
-// (the API then answers 503).
+// Health is the GET /health response. Status is "degraded", with HTTP 503,
+// while the attestation listener is not accepting; a report-only verifier
+// has none and answers "ok".
 type Health struct {
 	Status    string `json:"status"`
 	Uptime    string `json:"uptime"`
@@ -189,9 +173,8 @@ type Health struct {
 	} `json:"tls"`
 }
 
-// Health fetches the health check.
-// Degraded verifier is data, not an error:
-// the 503 body is returned like the 200 one.
+// Health fetches the health check; a 503 is returned as Health,
+// not as an error.
 func (c *Client) Health() (*Health, error) {
 	var h Health
 	err := c.do(http.MethodGet, "/health", nil, nil, &h,
@@ -202,10 +185,8 @@ func (c *Client) Health() (*Health, error) {
 	return &h, nil
 }
 
-// Stats is the GET /api/v1/stats response.
-//
-// Fleet-wide counters are pointers: a tenant-scoped response omits them,
-// and nil keeps "withheld" from decoding as zero.
+// Stats is the GET /api/v1/stats response. The pointer counters are nil
+// when the key is tenant-scoped.
 type Stats struct {
 	PendingChallenges *int     `json:"pending_challenges,omitempty"`
 	UsedNonces        *int     `json:"used_nonces,omitempty"`
@@ -280,8 +261,8 @@ type ClientInfo struct {
 	MachineKeys *MachineKeys `json:"machine_keys,omitempty"`
 }
 
-// MachineKeys lists the keys a machine trusts at boot and for its modules.
-// Advisory: the verifier gates nothing on them.
+// MachineKeys lists the db and MOK keys a client last reported;
+// the verifier records them but no verdict depends on them.
 type MachineKeys struct {
 	DB       []MachineKey `json:"db"`
 	MOK      []MachineKey `json:"mok"`
@@ -306,15 +287,12 @@ func (c *Client) ClientInfo(clientID string) (*ClientInfo, error) {
 	return &info, nil
 }
 
-// actionRequest is the shared {reason, actor, note} mutation payload.
 type actionRequest struct {
 	Reason string `json:"reason,omitempty"`
 	Actor  string `json:"actor,omitempty"`
 	Note   string `json:"note,omitempty"`
 }
 
-// unbanRequest adds the ban's tenant to the mutation payload;
-// a ban is identified by (tenant, hardware_id) on both verbs.
 type unbanRequest struct {
 	Tenant string `json:"tenant,omitempty"`
 	Reason string `json:"reason,omitempty"`
@@ -322,7 +300,6 @@ type unbanRequest struct {
 	Note   string `json:"note,omitempty"`
 }
 
-// banRequest adds the hardware identity to the mutation payload.
 type banRequest struct {
 	HardwareID string `json:"hardware_id"`
 	Tenant     string `json:"tenant,omitempty"`
@@ -331,9 +308,8 @@ type banRequest struct {
 	Note       string `json:"note,omitempty"`
 }
 
-// Revoke revokes a client's AIK.
-// Reason must be one of the server's revocation reasons
-// (cheating, compromised, hardware_change, admin).
+// Revoke revokes a client's AIK. The verifier accepts the reasons
+// cheating, compromised, hardware_change and admin.
 func (c *Client) Revoke(clientID, reason, actor, note string) error {
 	return c.do(http.MethodPost, "/api/v1/clients/"+url.PathEscape(clientID)+"/revoke",
 		nil, actionRequest{Reason: reason, Actor: actor, Note: note}, nil,
@@ -369,18 +345,16 @@ func (c *Client) ListRevocations() ([]Revocation, error) {
 	return resp.Revocations, nil
 }
 
-// Ban bans a hardware identity (hex-encoded 32 bytes) within a tenant.
-// Empty tenant defaults to the server's default tenant.
+// Ban bans a hardware ID of 64 hex digits in tenant, the default tenant
+// when empty.
 func (c *Client) Ban(hardwareID, tenant, reason, actor, note string) error {
 	return c.do(http.MethodPost, "/api/v1/bans", nil,
 		banRequest{HardwareID: hardwareID, Tenant: tenant, Reason: reason, Actor: actor, Note: note},
 		nil, http.StatusCreated)
 }
 
-// Unban lifts a hardware ban within a tenant.
-// Empty tenant defaults to the server's default tenant;
-// Tenant selects which (tenant, hardware) ban row is lifted, and travels in
-// the body, where the ban put it.
+// Unban lifts the ban of a hardware ID in tenant, the default tenant when
+// empty.
 func (c *Client) Unban(hardwareID, tenant, reason, actor, note string) error {
 	return c.do(http.MethodDelete, "/api/v1/bans/"+url.PathEscape(hardwareID),
 		nil, unbanRequest{Tenant: tenant, Reason: reason, Actor: actor, Note: note}, nil,
@@ -397,8 +371,7 @@ type Ban struct {
 	Note       string `json:"note"`
 }
 
-// BanPage is one keyset-paged GET /api/v1/bans response;
-// non-empty NextID is the cursor for the following page.
+// BanPage is one page of GET /api/v1/bans; a non-empty NextID continues it.
 type BanPage struct {
 	Bans   []Ban  `json:"bans"`
 	Count  int    `json:"count"`
@@ -407,9 +380,8 @@ type BanPage struct {
 	NextID string `json:"next_id,omitempty"`
 }
 
-// ListBans fetches one page of active hardware bans.
-// Zero limit defers to the server default;
-// nextID continues from a previous page's cursor.
+// ListBans fetches one page of active hardware bans; zero limit and empty
+// nextID are left to the server.
 func (c *Client) ListBans(limit int, nextID string) (*BanPage, error) {
 	q := url.Values{}
 	if limit > 0 {
@@ -426,25 +398,24 @@ func (c *Client) ListBans(limit int, nextID string) (*BanPage, error) {
 	return &page, nil
 }
 
-// Reanchor drops a client's stored baselines so its next attestation
-// re-establishes trust (the operator-forced re-baseline).
+// Reanchor clears a client's baseline, boot baseline included,
+// so its next attestation is a first use again.
 func (c *Client) Reanchor(clientID, reason, actor, note string) error {
 	return c.do(http.MethodPost, "/api/v1/clients/"+url.PathEscape(clientID)+"/reanchor",
 		nil, actionRequest{Reason: reason, Actor: actor, Note: note}, nil,
 		http.StatusOK)
 }
 
-// DeleteClient removes a client's registration and baselines, forcing fresh enrollment.
-// Revocations and hardware bans survive.
-// Actor and note are optional audit metadata.
+// DeleteClient removes a client's baselines and nonce store state; its
+// revocations and hardware bans stay. The verifier requires reason and actor.
 func (c *Client) DeleteClient(clientID, reason, actor, note string) error {
 	return c.do(http.MethodDelete, "/api/v1/clients/"+url.PathEscape(clientID),
 		nil, actionRequest{Reason: reason, Actor: actor, Note: note}, nil,
 		http.StatusOK)
 }
 
-// ReanchorReviewList fetches the clients that re-anchored on the
-// Low-Firmware-Assurance path and still await operator review.
+// ReanchorReviewList fetches the clients whose Low-Firmware-Assurance
+// re-anchor awaits review.
 func (c *Client) ReanchorReviewList() ([]string, error) {
 	var resp struct {
 		PendingReview []string `json:"pending_review"`
@@ -456,7 +427,7 @@ func (c *Client) ReanchorReviewList() ([]string, error) {
 	return resp.PendingReview, nil
 }
 
-// ReanchorReviewAck clears a client's pending-review flag with attribution.
+// ReanchorReviewAck clears a client's pending review.
 func (c *Client) ReanchorReviewAck(clientID, reason, actor, note string) error {
 	return c.do(http.MethodPost,
 		"/api/v1/clients/"+url.PathEscape(clientID)+"/reanchor-review-ack",

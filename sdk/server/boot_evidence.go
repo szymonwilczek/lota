@@ -10,9 +10,12 @@ import (
 	"encoding/binary"
 )
 
-// Boot evidence wire format constants (see: include/lota_token.h)
+// BootEvidenceVersion is the only boot evidence version VerifyBootEvidence
+// accepts; the layout is in include/lota_token.h.
 const BootEvidenceVersion uint16 = 0x0001
 
+// Boot evidence sizes. VerifyBootEvidence does not enforce
+// BootEvidenceMaxSize.
 const (
 	BootEvidenceHeaderSize = 8
 	BootEvidenceEventSize  = 34 // digest + data_size
@@ -26,7 +29,7 @@ const (
 	secureBootNameSz = 20
 )
 
-// EFI global variable namespace 8be4df61-93ca-11d2-aa0d-00e098032b8c
+// EFI_GLOBAL_VARIABLE, 8be4df61-93ca-11d2-aa0d-00e098032b8c
 var efiGlobalGUID = []byte{
 	0x61, 0xdf, 0xe4, 0x8b, 0xca, 0x93, 0xd2, 0x11,
 	0xaa, 0x0d, 0x00, 0xe0, 0x98, 0x03, 0x2b, 0x8c,
@@ -64,21 +67,19 @@ func secureBootVote(data []byte) int {
 	return 0
 }
 
-// VerifyBootEvidence reads Secure Boot from the PCRs a verified token quotes.
+// VerifyBootEvidence reads Secure Boot from the boot evidence the agent
+// returned next to a token. claims must come from VerifyToken: ParseToken
+// claims prove nothing.
 //
-// Parameters:
-//   - claims: Claims VerifyToken returned for the token; ParseToken claims
-//     prove nothing
-//   - evidence: bytes the agent returned next to the token
-//
-// Accepts the evidence only when its PCR values hash to the signed PCR
-// digest and its PCR 7 events replay to the PCR 7 value, so a host cannot
-// rewrite it. A SecureBoot measurement that is absent, carries any value but
-// 1 or comes after the firmware's separator reads as off, as does evidence
-// with no separator.
+// The evidence is accepted only when its PCR mask equals the token's and
+// covers PCR 7, its PCR values hash to the token's PCR digest and its events
+// replay to the PCR 7 value. Secure Boot is on only when a separator is
+// present and every SecureBoot event before it that carries data carries the
+// value 1; with none such, Secure Boot is off. An event sent without data is
+// not checked.
 //
 // Returns ErrInvalidArg for nil claims and ErrBadEvidence for evidence that
-// is malformed or describes another boot; secureBoot is false on any error.
+// is malformed or does not match the token; secureBoot is false on any error.
 func VerifyBootEvidence(claims *Claims, evidence []byte) (secureBoot bool, err error) {
 	if claims == nil {
 		return false, ErrInvalidArg
@@ -115,10 +116,9 @@ func VerifyBootEvidence(claims *Claims, evidence []byte) (secureBoot bool, err e
 		return false, ErrBadEvidence
 	}
 
-	// The events, replayed to the PCR 7 value. Event types are labels
-	// the log carries outside the digest, so only digests and data count:
-	// the separator is the first event that extends SHA-256 of four zero
-	// bytes, and only a SecureBoot measurement before it is the firmware's.
+	// Event types are not in the evidence; the separator is the first
+	// event whose digest is SHA-256 of four zero bytes.
+	// An event with no data is replayed but not checked.
 	separator := sha256.Sum256(make([]byte, 4))
 	var chain [2 * sha256.Size]byte
 	votesOn, votesOff, beforeSeparator := 0, 0, true

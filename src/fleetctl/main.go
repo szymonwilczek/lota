@@ -1,22 +1,9 @@
 // SPDX-License-Identifier: MIT
 // Copyright (C) 2026 Szymon Wilczek
-// LOTA Fleet CLI - lota-fleet
-//
-// Command-line front end for the verifier's REST monitoring API.
-//
-// One binary covers the fleet lifecycle operator otherwise drives with
-// curl: device inventory, revocations, hardware bans, forced re-anchor,
-// client removal, LFA re-anchor review, and the audit and attestation logs.
-//
-// Connection:
-//
-//	--server URL            or LOTA_FLEET_SERVER (default http://127.0.0.1:8080)
-//	--key-file PATH         or LOTA_FLEET_API_KEY (reader or admin Bearer key)
-//	--tls-ca PATH           extra TLS root for an https --server
-//
-// The API key is never taken from argv, so it cannot leak through the
-// process list; pass a file or the environment variable.
 
+// Command lota-fleet drives the verifier's monitoring API; usageText lists
+// its commands. The API key is read from -key-file, else from
+// LOTA_FLEET_API_KEY, never from argv.
 package main
 
 import (
@@ -85,10 +72,7 @@ client-side; the verifier already scopes every response to the API key's
 tenant set.
 `
 
-// exit codes:
-// 0 success,
-// 1 operation failed or reported a negative result (degraded health, invalid token),
-// 2 usage error
+// Exit codes. exitError also covers a health status other than "ok".
 const (
 	exitOK    = 0
 	exitError = 1
@@ -99,7 +83,6 @@ func main() {
 	os.Exit(run(os.Args[1:], os.Stdout, os.Stderr, os.Getenv))
 }
 
-// cmdContext carries everything one command handler needs.
 type cmdContext struct {
 	api    *client.Client
 	stdout io.Writer
@@ -175,8 +158,7 @@ func run(argv []string, stdout, stderr io.Writer, getenv func(string) string) in
 	return code
 }
 
-// errUsage marks command-level argument mistakes
-// so dispatch can map them onto the usage exit code.
+// errUsage makes dispatch exit with exitUsage.
 var errUsage = errors.New("usage error")
 
 func dispatch(ctx *cmdContext, stderr io.Writer, cmd string, args []string) (int, error) {
@@ -224,14 +206,13 @@ func dispatch(ctx *cmdContext, stderr io.Writer, cmd string, args []string) (int
 	}
 }
 
-// printJSON renders any API response struct as indented JSON.
 func printJSON(w io.Writer, v any) error {
 	enc := json.NewEncoder(w)
 	enc.SetIndent("", "  ")
 	return enc.Encode(v)
 }
 
-// kv prints one "key: value" detail line, skipping empty values.
+// kv prints "key: value", nothing for an empty string.
 func kv(w io.Writer, key string, value any) {
 	if s, ok := value.(string); ok && s == "" {
 		return
@@ -239,9 +220,8 @@ func kv(w io.Writer, key string, value any) {
 	fmt.Fprintf(w, "%s: %v\n", key, value)
 }
 
-// kvCounter prints a counter the verifier may decline to report.
-// A tenant-scoped stats response omits the fleet-wide counters instead of
-// zeroing them, and the table says nothing.
+// kvCounter prints nothing for a counter the verifier left out, as it does
+// with the fleet-wide counters for a tenant-scoped key.
 func kvCounter[T int | int64](w io.Writer, key string, value *T) {
 	if value == nil {
 		return
@@ -269,7 +249,6 @@ func cmdHealth(ctx *cmdContext, args []string) (int, error) {
 		fmt.Fprintf(ctx.stdout, "tls listening: %v (%s)\n", h.TLS.Listening, h.TLS.Address)
 	}
 
-	// degraded verifier is failed check for scripts
 	if h.Status != "ok" {
 		return exitError, nil
 	}
@@ -379,8 +358,7 @@ func printMachineKeys(ctx *cmdContext, label string, keys []client.MachineKey) {
 	}
 }
 
-// parseActionArgs handles the shared "<id> -actor A [-note S] [-reason R]"
-// argument shape of the mutating commands.
+// parseActionArgs parses "<id> -reason R -actor A [-note S]".
 func parseActionArgs(name string, stderr io.Writer, args []string) (id, reason, actor, note string, err error) {
 	fs := flag.NewFlagSet(name, flag.ContinueOnError)
 	fs.SetOutput(stderr)
@@ -459,9 +437,8 @@ func cmdRevocations(ctx *cmdContext, stderr io.Writer, args []string) error {
 	return tw.Flush()
 }
 
-// filterTenant narrows listing rows to the CLI's -tenant filter,
-// in the table and the JSON rendering alike;
-// Empty filter keeps everything.
+// filterTenant keeps the rows of tenant filter, all of them when it is
+// empty; it reuses the backing array of rows.
 func filterTenant[T any](rows []T, filter string, tenantOf func(*T) string) []T {
 	if filter == "" {
 		return rows
@@ -537,7 +514,6 @@ func cmdUnban(ctx *cmdContext, stderr io.Writer, args []string) error {
 	return nil
 }
 
-// tenantLabel renders a possibly-empty tenant for human output.
 func tenantLabel(tenant string) string {
 	if tenant == "" {
 		return "the default tenant"
@@ -628,12 +604,10 @@ func cmdReanchorReview(ctx *cmdContext, stderr io.Writer, args []string) error {
 			fmt.Fprintln(ctx.stdout, id)
 		}
 
-		// count on stderr keeps stdout pipeable and an empty queue visible
 		fmt.Fprintf(stderr, "%d client(s) awaiting re-anchor review\n", len(clients))
 		return nil
 
 	case "ack":
-		// attributed like every other trust change
 		id, reason, actor, note, err := parseActionArgs("reanchor-review ack",
 			stderr, args[1:])
 		if err != nil {
@@ -650,9 +624,8 @@ func cmdReanchorReview(ctx *cmdContext, stderr io.Writer, args []string) error {
 	}
 }
 
-// parseLimit handles the shared "[-limit N] [-tenant T]" shape of the log commands.
-// Tenant is client-side display filter (the server already scopes to the key's tenants);
-// Empty tenant shows every visible row.
+// parseLimit parses "[-limit N] [-tenant T]"; the tenant filter is applied
+// client-side.
 func parseLimit(name string, stderr io.Writer, args []string) (limit int, tenant string, err error) {
 	fs := flag.NewFlagSet(name, flag.ContinueOnError)
 	fs.SetOutput(stderr)

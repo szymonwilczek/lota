@@ -1,26 +1,7 @@
 // SPDX-License-Identifier: MIT
 // Copyright (C) 2026 Szymon Wilczek
-//
-// LOTA Server-Side Token Verification SDK (Go)
-//
-// Provides game servers with the ability to verify attestation tokens
-// received from game clients running the LOTA Gaming SDK.
-//
-// Usage:
-//
-//	claims, err := server.VerifyToken(tokenBytes, aikPub, expectedNonce)
-//	if err != nil {
-//	    log.Printf("attestation failed: %v", err)
-//	    rejectClient()
-//	    return
-//	}
-//	if claims.Expired {
-//	    log.Printf("token expired, requesting re-attestation")
-//	    requestNewToken()
-//	    return
-//	}
-//	allowClient()
 
+// Package server verifies LOTA attestation tokens on a relying party.
 package server
 
 import (
@@ -38,7 +19,7 @@ import (
 	"time"
 )
 
-// Token wire format constants
+// Token wire format; the layout is in include/lota_token.h.
 const (
 	TokenMagic      uint32 = 0x4B544F4C // "LOTK" in memory (little-endian)
 	TokenVersion    uint16 = 0x0001
@@ -49,29 +30,21 @@ const (
 
 	ImageDigestSize = 32 // per protected PID
 
-	// LOTA_TOKEN_MAX_PROTECT_PIDS in include/lota_token.h
-	MaxProtectPIDs = 180
+	MaxProtectPIDs = 180 // LOTA_TOKEN_MAX_PROTECT_PIDS
 
-	// largest token an agent can produce: header, full PID list with image
-	// digests, maximum quote and signature
+	// TokenMaxSize is the size of a token with every list and buffer full.
 	TokenMaxSize = TokenHeaderSize + (MaxProtectPIDs * 4) +
 		(MaxProtectPIDs * ImageDigestSize) + MaxAttestSize + MaxSigSize
 )
 
-// Token freshness policy defaults (see: include/lota_server.h)
+// VerifyToken refuses a token whose expiry lies more than DefaultMaxTokenAge
+// plus MaxClockSkew seconds ahead. Neither is configurable.
 const (
-	// Maximum lifetime (in seconds) VerifyToken accepts for a token:
-	// its validUntil must be no further than this in the future, plus
-	// MaxClockSkew.
-	// Issuers must size validUntil within this window.
-	DefaultMaxTokenAge = 300 // 5 minutes
-
-	// Allowance (in seconds) added to the freshness window for clock
-	// skew between the issuing agent and the verifying server.
-	MaxClockSkew = 60 // 1 minute
+	DefaultMaxTokenAge = 300
+	MaxClockSkew       = 60
 )
 
-// TPM algorithm identifiers
+// TPM_ALG_* identifiers of the token's signature scheme and hash.
 const (
 	TPMAlgRSASSA uint16 = 0x0014
 	TPMAlgRSAPSS uint16 = 0x0016
@@ -81,27 +54,21 @@ const (
 	TPMAlgSHA512 uint16 = 0x000D
 )
 
-// TPM constants for TPMS_ATTEST parsing
 const (
 	tpmGeneratedValue uint32 = 0xff544347
 	tpmSTAttestQuote  uint16 = 0x8018
 
-	// MaxPCRSelectSize caps a TPMS_PCR_SELECTION sizeofSelect.
-	// PC Client TPM has 24 PCRs, so the bitmap is 3 bytes;
-	// 8 leaves slack for larger banks while keeping the allocation
-	// bounded by a constant.
+	// MaxPCRSelectSize caps a quote's sizeofSelect; a set bit past PCR 23
+	// is refused.
 	MaxPCRSelectSize = 8
-	// MaxPCRDigestSize caps a TPM2B_DIGEST length.
-	// Widest TPM hash (SHA-512) is 64 bytes.
+	// MaxPCRDigestSize caps a quote's PCR digest, SHA-512 wide.
 	MaxPCRDigestSize = 64
 
-	// maxTPMHASize is sizeof(TPMT_HA): hash algorithm (2) + SHA-512 digest (64).
-	// It bounds both TPM2B_NAME (a TPMU_NAME is at most a TPMT_HA) and TPM2B_DATA,
-	// whose buffer is sized to a TPMT_HA.
+	// sizeof(TPMT_HA), the cap on qualifiedSigner and extraData
 	maxTPMHASize = 2 + 64
 )
 
-// Errors returned by verification functions
+// Errors returned by the functions of this package.
 var (
 	ErrInvalidArg   = errors.New("lota: invalid argument")
 	ErrBadToken     = errors.New("lota: malformed token")
@@ -118,51 +85,29 @@ var (
 	ErrBadEvidence  = errors.New("lota: boot evidence does not match the token")
 )
 
-// represents the verified claims extracted from a LOTA attestation token
-// after successful VerifyToken(), all fields are cryptographically validated
+// Claims are the fields of a token. From VerifyToken every field but Expired
+// is covered by the AIK signature; from ParseToken nothing is.
 type Claims struct {
-	// when the token expires
-	ExpiresAt time.Time
-
-	// contains the LOTA_FLAG_* bitmask at issue time
-	Flags uint32
-
-	// 32-byte client nonce included in the token
-	Nonce [32]byte
-
-	// indicates which TPM PCRs were included in the quote
-	PCRMask uint32
-
-	// SHA-256 over startup enforcement policy state (includes allowlist)
-	PolicyDigest [32]byte
-
-	// SHA-256 over canonical runtime protected PID set
+	ExpiresAt            time.Time // Unix 0 when the token never expires
+	Flags                uint32    // LOTA_FLAG_*
+	Nonce                [32]byte
+	PCRMask              uint32
+	PolicyDigest         [32]byte
 	RuntimeProtectDigest [32]byte
+	ProtectPIDCount      uint32
+	RuntimeProtectEpoch  uint64
+	StoppedMS            uint64
 
-	// number of protected runtime PIDs covered by RuntimeProtectDigest
-	ProtectPIDCount uint32
-
-	// monotonic runtime protected PID-set mutation identifier
-	RuntimeProtectEpoch uint64
-
-	// milliseconds any thread of the instance stood stopped, suspend aside
-	StoppedMS uint64
-
-	// composite hash of the selected PCR values
-	// from the TPMS_ATTEST QuoteInfo (empty if not a Quote)
+	// PCR digest of the quote; empty when the attestation is no quote
 	PCRDigest []byte
 
-	// TPM signature algorithm used (0x0014=RSASSA, 0x0016=PSS)
-	SigAlg uint16
-
-	// TPM hash algorithm used (0x000B=SHA-256)
+	// VerifyToken accepts RSASSA or RSAPSS with SHA-256, SHA-384 or SHA-512
+	SigAlg  uint16
 	HashAlg uint16
 
-	// true if the token has passed its ExpiresAt time
-	Expired bool
+	Expired bool // a nonzero expiry has passed
 }
 
-// represents the parsed wire-format header
 type tokenWire struct {
 	magic                 uint32
 	version               uint16
@@ -184,27 +129,28 @@ type tokenWire struct {
 	stoppedMS             uint64
 }
 
-// runtime_protect_version wire values.
 const (
 	runtimeProtectV1 = 1 // PID set + per-PID kernel image digest
 	imageDigestSize  = 32
 )
 
-// Verifies a serialized LOTA token against an AIK public key
+// VerifyToken verifies a serialized token against aikPub, which must come
+// from a trusted source and not from the client, and the 32-byte nonce the
+// caller issued.
 //
-// Parameters:
-//   - tokenData: serialized token bytes (from lota_token_serialize on client)
-//   - aikPub: AIK RSA public key (from trusted source, NOT from client)
-//   - expectedNonce: required 32-byte nonce to verify challenge freshness
+// It recomputes the runtime digest from the token's PID list and image
+// digests, checks the signature over the quote, the quoted PCR mask against
+// the header, extraData against ComputeTokenQuoteNonce over the header,
+// and the nonce. A token with expiry 0 never expires.
 //
-// Returns verified Claims on success. Returns error if cryptographic
-// verification fails or the token is expired/too old/issued in future.
+// On ErrExpired and ErrFutureToken the verified claims are returned with the
+// error; on any other error the claims are nil. A PCR mask that differs from
+// the quote's is reported as ErrNonceFail.
 func VerifyToken(tokenData []byte, aikPub *rsa.PublicKey, expectedNonce []byte) (*Claims, error) {
 	if aikPub == nil || len(expectedNonce) != 32 {
 		return nil, ErrInvalidArg
 	}
 
-	// parse wire format
 	hdr, err := parseWireHeader(tokenData)
 	if err != nil {
 		return nil, err
@@ -236,12 +182,10 @@ func VerifyToken(tokenData []byte, aikPub *rsa.PublicKey, expectedNonce []byte) 
 		return nil, fmt.Errorf("%w: recomputed from the token's own pid list and image digests", ErrRuntimeImage)
 	}
 
-	// verify RSA signature over attest_data
 	if err := verifyRSASignature(attestData, signature, hdr.sigAlg, hdr.hashAlg, aikPub); err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrSigFail, err)
 	}
 
-	// parse TPMS_ATTEST - extract extraData, signed PCR selection and PCR digest
 	extraData, quotedPCRMask, pcrDigest, err := parseTPMSAttest(attestData)
 	if err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrAttestParse, err)
@@ -250,21 +194,16 @@ func VerifyToken(tokenData []byte, aikPub *rsa.PublicKey, expectedNonce []byte) 
 		return nil, fmt.Errorf("%w: pcr_mask header does not match signed quote", ErrNonceFail)
 	}
 
-	// verify nonce binding: extraData == SHA256(valid_until||flags||pcr_mask||nonce||policy_digest||runtime_protect_digest||runtime_protect_epoch)
 	computedNonce := computeExpectedNonce(hdr.validUntil, hdr.flags, hdr.pcrMask, hdr.nonce, hdr.policy, hdr.runtimeProtectDigest, hdr.runtimeProtectEpoch, hdr.stoppedMS)
 	if subtle.ConstantTimeCompare(extraData, computedNonce[:]) != 1 {
 		return nil, fmt.Errorf("%w: extraData does not match SHA256(metadata||nonce)", ErrNonceFail)
 	}
 
-	// verify caller-provided challenge nonce
 	if subtle.ConstantTimeCompare(hdr.nonce[:], expectedNonce) != 1 {
 		return nil, fmt.Errorf("%w: client nonce does not match expected", ErrNonceFail)
 	}
 
-	// token whose expiry does not fit signed 64-bit Unix time is malformed:
-	// time.Unix cannot represent it, and every comparison below would flip
-	// sign on the way in.
-	// Bound it once, here, rather than at each use.
+	// time.Unix and the comparisons below need an int64
 	if hdr.validUntil > math.MaxInt64 {
 		return nil, fmt.Errorf("%w: valid_until out of range", ErrBadToken)
 	}
@@ -285,25 +224,16 @@ func VerifyToken(tokenData []byte, aikPub *rsa.PublicKey, expectedNonce []byte) 
 		HashAlg:              hdr.hashAlg,
 	}
 
-	// check expiry
 	now := time.Now()
 	if hdr.validUntil > 0 && now.Unix() > validUntil {
 		claims.Expired = true
 	}
 
-	// return claims with error for temporal violations
 	if claims.Expired {
 		return claims, ErrExpired
 	}
 
-	// Bound the remaining lifetime:
-	// The token carries no issued-at field, so validUntil is the only
-	// temporal anchor:
-	// legitimately issued token expires at most DefaultMaxTokenAge in the
-	// future, + allowance for issuer/verifier clock skew.
-	// Reject one whose expiry is implausibly far out.
-	// Callers must size validUntil accordingly:
-	// keep the agent attest_interval at or below DefaultMaxTokenAge
+	// the token has no issue time, so its expiry bounds its age
 	if hdr.validUntil > 0 &&
 		validUntil > now.Unix()+DefaultMaxTokenAge+MaxClockSkew {
 		return claims, ErrFutureToken
@@ -325,8 +255,9 @@ func tpmHashAlgToCryptoHash(hashAlg uint16) (crypto.Hash, error) {
 	}
 }
 
-// parses a serialized LOTA token WITHOUT cryptographic verification
-// Claims are UNTRUSTED.
+// ParseToken decodes a token without verifying it, so its claims prove
+// nothing. PCRDigest is filled when the quote parses; RuntimeProtectEpoch is
+// left zero.
 func ParseToken(tokenData []byte) (*Claims, error) {
 	hdr, err := parseWireHeader(tokenData)
 	if err != nil {
@@ -351,7 +282,6 @@ func ParseToken(tokenData []byte) (*Claims, error) {
 		HashAlg:              hdr.hashAlg,
 	}
 
-	// try to extract PCR digest from TPMS_ATTEST (best-effort)
 	if hdr.attestSize > 0 {
 		imageListSize := int(hdr.protectPIDCount) * imageDigestSize
 		attestStart := TokenHeaderSize + int(hdr.pidListSize) + imageListSize
@@ -369,12 +299,10 @@ func ParseToken(tokenData []byte) (*Claims, error) {
 	return claims, nil
 }
 
-// creates the wire-format representation of a token
-// This is the Go equivalent of lota_token_serialize() from the C gaming SDK.
-// For more information see: include/lota_gaming.h
-// The token carries, after the PID list, one 32-byte kernel-anchored image
-// digest per protected PID. runtimeProtectDigest must already fold the PID set
-// and image digests (see ComputeRuntimeProtectDigest).
+// SerializeToken encodes a token, as lota_token_serialize() does in C.
+// protectedPIDs must be strictly increasing with one image digest each,
+// and runtimeProtectDigest must be ComputeRuntimeProtectDigest over them;
+// the digest is not checked here.
 func SerializeToken(validUntil uint64, flags uint32, nonce [32]byte,
 	sigAlg, hashAlg uint16, pcrMask uint32, policyDigest [32]byte,
 	runtimeProtectDigest [32]byte, runtimeProtectEpoch, stoppedMS uint64,
@@ -404,8 +332,6 @@ func SerializeToken(validUntil uint64, flags uint32, nonce [32]byte,
 
 	binary.LittleEndian.PutUint32(buf[0:4], TokenMagic)
 	binary.LittleEndian.PutUint16(buf[4:6], TokenVersion)
-	// every length below is bounded by the Max* checks at the top of this
-	// function, which together keep totalSize under 40 KiB
 	binary.LittleEndian.PutUint16(buf[6:8], uint16(totalSize)) // #nosec G115 -- bounded by the size checks above
 	binary.LittleEndian.PutUint64(buf[8:16], validUntil)
 	binary.LittleEndian.PutUint32(buf[16:20], flags)
@@ -439,11 +365,8 @@ func SerializeToken(validUntil uint64, flags uint32, nonce [32]byte,
 	return buf, nil
 }
 
-// ComputeRuntimeProtectDigest exposes the protect-digest fold.
-// A token built with SerializeToken has to bind this value under the quote,
-// so every relying party's own test suite needs it -- and without it exported,
-// each one re-derives a domain-separated hash by hand, which is exactly the drift
-// the domain string exists to prevent.
+// ComputeRuntimeProtectDigest returns the runtime protect digest of the PID
+// set and its image digests, the value a token's header carries.
 func ComputeRuntimeProtectDigest(pids []uint32, imageDigests [][32]byte) [32]byte {
 	imageList := make([]byte, len(imageDigests)*imageDigestSize)
 	for i, d := range imageDigests {
@@ -452,7 +375,6 @@ func ComputeRuntimeProtectDigest(pids []uint32, imageDigests [][32]byte) [32]byt
 	return computeRuntimeProtectDigest(pids, imageList)
 }
 
-// parses the wire-format token header
 func parseWireHeader(data []byte) (*tokenWire, error) {
 	if len(data) < TokenHeaderSize {
 		return nil, fmt.Errorf("%w: too short (%d bytes, need %d)", ErrBadToken, len(data), TokenHeaderSize)
@@ -499,7 +421,6 @@ func parseWireHeader(data []byte) (*tokenWire, error) {
 		return nil, fmt.Errorf("%w: pid list size mismatch", ErrBadToken)
 	}
 
-	// validate sizes (the image-digest block sits after the PID list)
 	imageListSize := int(hdr.protectPIDCount) * imageDigestSize
 	expected := int(TokenHeaderSize) + int(hdr.pidListSize) + imageListSize + int(hdr.attestSize) + int(hdr.sigSize)
 	if expected > int(hdr.totalSize) {
@@ -512,7 +433,6 @@ func parseWireHeader(data []byte) (*tokenWire, error) {
 	return hdr, nil
 }
 
-// verifies the TPM RSA signature over attest_data
 func verifyRSASignature(attestData, signature []byte, sigAlg, hashAlg uint16, aikPub *rsa.PublicKey) error {
 	h, err := tpmHashAlgToCryptoHash(hashAlg)
 	if err != nil {
@@ -555,14 +475,13 @@ func computeExpectedNonce(validUntil uint64, flags, pcrMask uint32, nonce, polic
 	return sha256.Sum256(buf[:])
 }
 
-// computes the token quote nonce used in the token verification domain:
+// ComputeTokenQuoteNonce returns the extraData a token's quote must carry:
 //
-//	SHA256(valid_until_LE || flags_LE || pcr_mask_LE || client_nonce || policy_digest || runtime_protect_digest || runtime_protect_epoch_LE || stopped_ms_LE)
+//	SHA256(valid_until || flags || pcr_mask || nonce || policy_digest ||
+//	       runtime_protect_digest || runtime_protect_epoch || stopped_ms)
 //
-// This value is expected to match TPMS_ATTEST.extraData in the token format.
-//
-// NOTE: This is intentionally different from the attestation report binding
-// nonce used by the remote attestation verifier/agent report path.
+// with the integers little-endian. It differs from the binding nonce of an
+// attestation report.
 func ComputeTokenQuoteNonce(validUntil uint64, flags, pcrMask uint32, nonce, policyDigest, runtimeProtectDigest [32]byte, runtimeProtectEpoch, stoppedMS uint64) [32]byte {
 	return computeExpectedNonce(validUntil, flags, pcrMask, nonce, policyDigest, runtimeProtectDigest, runtimeProtectEpoch, stoppedMS)
 }
@@ -591,10 +510,8 @@ func parseProtectedPIDs(data []byte, count uint32) ([]uint32, error) {
 	return pids, nil
 }
 
-// computeRuntimeProtectDigest mirrors lota_compute_runtime_protect_digest:
-// it folds the protected PID set together with each PID's kernel-anchored
-// runtime image digest. imageList is the concatenation of len(pids) 32-byte
-// digests, one per PID, in the same order.
+// computeRuntimeProtectDigest mirrors lota_compute_runtime_protect_digest().
+// imageList holds one 32-byte digest per PID, in PID order.
 func computeRuntimeProtectDigest(pids []uint32, imageList []byte) [32]byte {
 	var le [4]byte
 	h := sha256.New()
@@ -612,10 +529,8 @@ func computeRuntimeProtectDigest(pids []uint32, imageList []byte) [32]byte {
 	return out
 }
 
-// parses a raw TPMS_ATTEST blob and extracts:
-//   - extraData (the nonce embedded by the TPM)
-//   - pcrMask from signed TPML_PCR_SELECTION (only lower 24 PCR bits supported)
-//   - pcrDigest (the PCR composite hash, only for Quote type)
+// parseTPMSAttest returns extraData and, for a quote, its PCR mask and PCR
+// digest. A selection of a bank other than SHA-256 is refused.
 func parseTPMSAttest(data []byte) (extraData []byte, pcrMask uint32, pcrDigest []byte, err error) {
 	if len(data) < 10 {
 		return nil, 0, nil, fmt.Errorf("attest data too short: %d bytes", len(data))
@@ -623,7 +538,6 @@ func parseTPMSAttest(data []byte) (extraData []byte, pcrMask uint32, pcrDigest [
 
 	r := bytes.NewReader(data)
 
-	// magic (4 bytes, big-endian)
 	var magic uint32
 	if err := binary.Read(r, binary.BigEndian, &magic); err != nil {
 		return nil, 0, nil, fmt.Errorf("read magic: %w", err)
@@ -632,13 +546,11 @@ func parseTPMSAttest(data []byte) (extraData []byte, pcrMask uint32, pcrDigest [
 		return nil, 0, nil, fmt.Errorf("%w: got 0x%08X", ErrBadMagic, magic)
 	}
 
-	// type (2 bytes, big-endian)
 	var attestType uint16
 	if err := binary.Read(r, binary.BigEndian, &attestType); err != nil {
 		return nil, 0, nil, fmt.Errorf("read type: %w", err)
 	}
 
-	// qualifiedSigner (TPM2B_NAME: 2-byte size + data)
 	var signerSize uint16
 	if err := binary.Read(r, binary.BigEndian, &signerSize); err != nil {
 		return nil, 0, nil, fmt.Errorf("read signer size: %w", err)
@@ -654,7 +566,6 @@ func parseTPMSAttest(data []byte) (extraData []byte, pcrMask uint32, pcrDigest [
 		return nil, 0, nil, fmt.Errorf("read signer: %w", err)
 	}
 
-	// extraData (TPM2B_DATA: 2-byte size + data)
 	var extraSize uint16
 	if err := binary.Read(r, binary.BigEndian, &extraSize); err != nil {
 		return nil, 0, nil, fmt.Errorf("read extraData size: %w", err)
@@ -670,20 +581,18 @@ func parseTPMSAttest(data []byte) (extraData []byte, pcrMask uint32, pcrDigest [
 		return nil, 0, nil, fmt.Errorf("read extraData: %w", err)
 	}
 
-	// clockInfo: clock(8) + resetCount(4) + restartCount(4) + safe(1) = 17 bytes
+	// clockInfo
 	clockBuf := make([]byte, 17)
 	if _, err := io.ReadFull(r, clockBuf); err != nil {
 		return nil, 0, nil, fmt.Errorf("read clockInfo: %w", err)
 	}
 
-	// firmwareVersion (8 bytes)
 	fwBuf := make([]byte, 8)
 	if _, err := io.ReadFull(r, fwBuf); err != nil {
 		return nil, 0, nil, fmt.Errorf("read firmwareVersion: %w", err)
 	}
 
 	if attestType == tpmSTAttestQuote {
-		// TPML_PCR_SELECTION: count(4) + array
 		var pcrSelCount uint32
 		if err := binary.Read(r, binary.BigEndian, &pcrSelCount); err != nil {
 			return nil, 0, nil, fmt.Errorf("read pcr selection count: %w", err)
@@ -725,7 +634,6 @@ func parseTPMSAttest(data []byte) (extraData []byte, pcrMask uint32, pcrDigest [
 			}
 		}
 
-		// pcrDigest (TPM2B_DIGEST: 2-byte size + data)
 		var digestSize uint16
 		if err := binary.Read(r, binary.BigEndian, &digestSize); err != nil {
 			return nil, 0, nil, fmt.Errorf("read pcrDigest size: %w", err)
@@ -745,7 +653,8 @@ func parseTPMSAttest(data []byte) (extraData []byte, pcrMask uint32, pcrDigest [
 	return extraData, pcrMask, pcrDigest, nil
 }
 
-// parses a DER-encoded RSA public key in PKIX/SPKI format (SubjectPublicKeyInfo)
+// ParseRSAPublicKey parses a DER SubjectPublicKeyInfo RSA key of at least
+// 2048 bits.
 func ParseRSAPublicKey(der []byte) (*rsa.PublicKey, error) {
 	pub, err := x509.ParsePKIXPublicKey(der)
 	if err != nil {
