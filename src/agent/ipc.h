@@ -1,17 +1,11 @@
 /* SPDX-License-Identifier: MIT */
 /* Copyright (C) 2026 Szymon Wilczek */
 /*
- * LOTA Agent - IPC Server Module
+ * LOTA Agent - IPC server.
  *
- * One process serves LOTA_IPC_SOCKET_PATH: the enforcement daemon.
- * It is the unit systemd's socket activation starts, the one that stays up whether
- * or not a publisher is configured, and the one holding the BPF context,
- * the enforcement policy digest and the boot state a title asks about.
- *
- * The attestation loop is a client of this server, not a second one.
- * It sends SYNC_ATTEST with the verdict it holds for each publisher and reads
- * back the sessions and enrollment requests only the socket owner can see.
- * Two servers on one path meant whichever bound last answered, with half the state.
+ * The enforcement daemon serves LOTA_IPC_SOCKET_PATH. The attestation loop is
+ * its client: SYNC_ATTEST carries the verdict held for each publisher and reads
+ * back the sessions and enrollment requests the socket owner sees.
  */
 
 #ifndef LOTA_AGENT_IPC_H
@@ -31,57 +25,28 @@ struct dbus_context;
 struct ipc_client;
 
 /*
- * Rate limiting for GET_TOKEN, in two layers that measure different things.
+ * GET_TOKEN limits per TOKEN_RATE_WINDOW_SEC. A token costs a TPM quote.
  *
- * Every GET_TOKEN costs fresh TPM quote, so the limiter exists to stop one
- * caller monopolising the TPM.
- *
- * Connection is the session: title holds one, and the agent already authenticates
- * its peer.
- * So the per-session budget is what title spends, sized so no realistic heartbeat
- * reaches it, and the per-UID ceiling stays as the bound on total TPM cost,
- * sized for several titles at once.
- *
- * Neither alone is enough: without the session budget one title can spend the whole
- * uid allowance, and without the uid ceiling a caller opens connections until
- * the TPM is saturated.
+ * The session budget keeps one title from spending its uid's allowance;
+ * the uid ceiling bounds the quotes of a caller that opens more connections.
  */
 #define TOKEN_RATE_LIMIT_PER_SESSION 20 /* requests, ~3 s heartbeat */
 #define TOKEN_RATE_LIMIT 60 /* requests per uid, several titles */
 #define TOKEN_RATE_WINDOW_SEC 60 /* per minute */
 
-/*
- * The fastest heartbeat any reference integration uses, in seconds.
- * Per-session budget is checked against it below so change to either one
- * cannot quietly starve a title.
- */
+/* demo_anticheat's default heartbeat, in seconds */
 #define LOTA_REFERENCE_HEARTBEAT_SEC 5
 
-/*
- * Title on the reference cadence must fit inside its session budget with room
- * to spare, or the limiter is throttling correct behaviour.
- */
 _Static_assert(TOKEN_RATE_LIMIT_PER_SESSION >
 		       TOKEN_RATE_WINDOW_SEC / LOTA_REFERENCE_HEARTBEAT_SEC,
 	       "session token budget must exceed the reference heartbeat rate");
 
-/*
- * The uid ceiling has to hold several sessions at once, or the second title
- * player launches is refused for what the first one spent.
- */
 _Static_assert(TOKEN_RATE_LIMIT >= 2 * TOKEN_RATE_LIMIT_PER_SESSION,
 	       "uid token ceiling must cover at least two concurrent sessions");
 
-/*
- * The session budget is the inner bound; session may never outspend the uid
- * it belongs to.
- */
 _Static_assert(TOKEN_RATE_LIMIT_PER_SESSION < TOKEN_RATE_LIMIT,
 	       "session budget must be tighter than the uid ceiling");
 
-/*
- * fd -> client lookup table.
- */
 #define IPC_CLIENT_MAP_SIZE 4096 /* must be a power of two */
 
 struct ipc_client_map_entry {
@@ -89,30 +54,20 @@ struct ipc_client_map_entry {
 	struct ipc_client *client;
 };
 
-/*
- * Maximum number of extra listener sockets.
- */
 #define IPC_MAX_EXTRA_LISTENERS 4
 
-/*
- * Extra listener socket.
- */
 struct ipc_listener {
 	int fd; /* Listening fd (-1 if unused) */
-	char path[PATH_MAX]; /* Socket path for cleanup */
+	char path[PATH_MAX];
 };
 
-/*
- * IPC server context
- */
 struct ipc_context {
 	int listen_fd; /* Primary listening socket */
-	int epoll_fd; /* epoll instance */
+	int epoll_fd;
 
 	/*
-	 * (device, inode) the primary listener is bound to, and an inotify
-	 * watch on its directory; sock_watch_fd -1 means not watching,
-	 * so a replaced socket stays replaced.
+	 * (device, inode) at the primary socket path when it was bound,
+	 * and the inotify watch on its directory (-1: not watching).
 	 */
 	dev_t listen_dev;
 	ino_t listen_ino;
@@ -120,55 +75,42 @@ struct ipc_context {
 	bool running;
 	uint64_t start_time_sec; /* CLOCK_MONOTONIC seconds for uptime */
 
-	/* Connected clients (lifetime bound) */
 	struct ipc_client *client_list;
 	int client_count;
 
-	/* O(1) lookup of client by fd (in addition to the linked list). */
 	struct ipc_client_map_entry client_map[IPC_CLIENT_MAP_SIZE];
 
-	/* Extra listener sockets */
 	struct ipc_listener extra[IPC_MAX_EXTRA_LISTENERS];
 	int extra_count;
 
 	/*
-	 * TPM context for token signing.
-	 *
-	 * Borrowed, not owned. In the production daemon this points at
-	 * g_agent.tpm_ctx and is used only from the same single-threaded
-	 * epoll loop that owns all TPM mutations. ipc_context provides no
-	 * locking around the pointer or the pointed-to tpm_context; a future
-	 * threaded IPC implementation must serialize GET_TOKEN against the
-	 * attestation loop, AIK rotation, lockout reconciliation, and cleanup.
+	 * TPM context for token signing. Borrowed; ipc_context does no locking:
+	 * used from the epoll loop's thread.
 	 */
 	struct tpm_context *tpm;
 	uint32_t quote_pcr_mask;
 
-	/* D-Bus context (optional, NULL if D-Bus unavailable) */
+	/* NULL if D-Bus is unavailable */
 	struct dbus_context *dbus;
 	int dbus_fd;
 
 	/*
-	 * Protected process was ended here for its owner.
+	 * A protected process was ended for its owner. Set until the agent
+	 * ends.
 	 *
-	 * Sticky for the boot and kept beside status_flags rather than in it,
-	 * because that word is republished wholesale on every attestation round
-	 * and would drop the bit.
-	 *
-	 * ipc_update_status folds it back in, so the status answer, the token
-	 * and the D-Bus property carry it from one source.
+	 * Kept apart from status_flags with the two below: each round replaces
+	 * that word and ipc_update_status() folds them back in.
 	 */
 	bool protected_terminated;
 
-	/* this agent is not the first of the boot; sticky like the above */
+	/* an earlier agent of this boot ended without a shutdown */
 	bool agent_restarted;
 
-	/* the kernel left out an event; sticky like the above */
+	/* the kernel left out an event; set until the agent ends */
 	bool events_lost;
 
-	/* Attestation state */
 	uint32_t status_flags;
-	uint64_t last_attest_time; /* set by a round, never by a recompute */
+	uint64_t last_attest_time;
 	uint64_t valid_until;
 	uint32_t attest_count;
 	uint32_t fail_count;
@@ -184,341 +126,301 @@ struct ipc_context {
 	bool aik_reenroll_required; /* stored cert outdated by a rotation */
 
 	/*
-	 * Publisher profiles this host attests for, borrowed from the attestation
-	 * loop that owns them.
+	 * Publisher profiles, borrowed from the caller of ipc_set_profiles().
+	 * Read from the epoll loop's thread, as tpm is.
 	 *
-	 * Connection may bind itself to one of these with SET_PROFILE,
-	 * and every later answer is then that publisher's: its AIK signs the token,
-	 * and its verifier's verdict is the status.
-	 * Without the list the agent has nothing to bind to,
-	 * so SET_PROFILE is refused; that is the case for the diagnostic
-	 * IPC servers, which attest to nobody.
-	 *
-	 * Same borrowing rule as tpm above:
-	 * read from the single-threaded epoll loop that also owns the writes.
+	 * A connection binds to one with SET_PROFILE: its AIK then signs that
+	 * connection's tokens and its verifier's verdict is its status.
+	 * With an empty list SET_PROFILE is refused.
 	 */
 	struct attest_target *profiles;
 	size_t profile_count;
 
 	/*
-	 * Session opened or closed, or title asked for a publisher this host
-	 * has not enrolled with.
-	 * Raised where it happens and acted on once the epoll pass is over,
-	 * because both places run with a client being created or destroyed
-	 * underneath them.
+	 * A session opened or closed, a title named a publisher not enrolled
+	 * here, or the list was replaced. Acted on after the epoll pass:
+	 * notifying walks the client list, which client_destroy() is changing
+	 * where this is raised.
 	 */
 	bool profiles_changed;
 
 	/*
-	 * Called once the attestation loop has synced.
-	 *
-	 * Loop is the process that rotates the AIK and it writes the rotation
-	 * record to disk, so the socket owner republishes that state by
-	 * re-reading the file rather than carrying it on the wire:
-	 * the file is the source both processes already share,
-	 * and a wire field would be a second copy to keep true.
+	 * Called after each accepted sync. The attestation loop rotates the AIK
+	 * and writes the rotation record; the socket owner re-reads that file.
 	 */
 	void (*on_attest_sync)(void *user);
 	void *on_attest_sync_user;
 
-	/* true when using socket activation (do not unlink socket) */
+	/* socket-activated: ipc_cleanup() leaves the primary path in place */
 	bool activated;
 };
 
-/*
- * ipc_init - Initialize IPC server
- * @ctx: Context to initialize
+/**
+ * ipc_init() - Serve LOTA_IPC_SOCKET_PATH.
+ * @ctx: Context to initialize.
  *
- * Creates Unix socket at /run/lota/lota.sock and
- * sets up epoll for non-blocking operation.
- *
- * Returns: 0 on success, negative errno on failure
+ * Return: 0 on success, -EADDRINUSE when a process still answers on the path,
+ * other negative errno on failure.
  */
 int ipc_init(struct ipc_context *ctx);
 
-/*
- * ipc_cleanup - Shutdown IPC server
- * @ctx: Context to clean up
+/**
+ * ipc_cleanup() - Shut the IPC server down.
+ * @ctx: Context to clean up.
  *
- * Closes all connections and removes socket file.
+ * Closes every connection and listener. Unlinks the extra listeners' paths,
+ * and the primary path unless it was socket-activated.
  */
 void ipc_cleanup(struct ipc_context *ctx);
 
-/*
- * ipc_process - Process pending IPC events
- * @ctx: Server context
- * @timeout_ms: Max time to wait (-1 = block, 0 = poll)
+/**
+ * ipc_process() - Process pending IPC events.
+ * @ctx: Server context.
+ * @timeout_ms: Max time to wait (-1 = block, 0 = poll).
  *
- * Non-blocking if timeout_ms is 0.
- *
- * Returns: Number of events processed, negative errno on error
+ * Return: Number of events processed, negative errno on error.
  */
 int ipc_process(struct ipc_context *ctx, int timeout_ms);
 
-/*
- * ipc_get_fd - Get epoll fd for external select/poll
- * @ctx: Server context
+/**
+ * ipc_get_fd() - Get the epoll fd for external select/poll.
+ * @ctx: Server context.
  *
- * Returns: epoll file descriptor, or -1 if not initialized
+ * Return: The epoll fd.
  */
 int ipc_get_fd(struct ipc_context *ctx);
 
-/*
- * ipc_update_status - Update attestation status
- * @ctx: Server context
- * @flags: New LOTA_STATUS_* flags
- * @valid_until: Token validity timestamp
+/**
+ * ipc_update_status() - Publish the attestation status.
+ * @ctx: Server context.
+ * @flags: New LOTA_STATUS_* flags; the bits this context holds are folded in.
+ * @valid_until: Token validity timestamp.
  */
 void ipc_update_status(struct ipc_context *ctx, uint32_t flags,
 		       uint64_t valid_until);
 
-/*
- * ipc_record_attestation - Record attestation attempt
- * @ctx: Server context
- * @success: Whether attestation succeeded
+/**
+ * ipc_record_attestation() - Record an attestation attempt.
+ * @ctx: Server context.
+ * @success: Whether attestation succeeded.
  */
 void ipc_record_attestation(struct ipc_context *ctx, bool success);
 
-/*
- * ipc_update_rotation - Publish AIK rotation state.
- * @ctx: Server context
- * @generation: Current AIK generation counter
- * @provisioned_at: Current AIK creation time (Unix seconds)
- * @last_rotated_at: Last rotation time (Unix seconds, 0 if never)
- * @rotation_deadline: provisioned_at + TTL (0 if unknown)
- * @grace_deadline: End of post-rotation grace window (0 if none)
- * @reenroll_required: True when a rotation has outdated the stored cert
+/**
+ * ipc_update_rotation() - Publish AIK rotation state.
+ * @ctx: Server context.
+ * @generation: Current AIK generation counter.
+ * @provisioned_at: Current AIK creation time (Unix seconds).
+ * @last_rotated_at: Last rotation time (Unix seconds, 0 if never).
+ * @rotation_deadline: provisioned_at + TTL (0 if unknown).
+ * @grace_deadline: End of post-rotation grace window (0 if none).
+ * @reenroll_required: True when a rotation has outdated the stored cert.
  *
- * Updates the rotation fields and, when D-Bus is attached and a field
- * changed, emits a PropertiesChanged for the rotation properties.
+ * Emits PropertiesChanged for the rotation properties when a field changed.
  */
 void ipc_update_rotation(struct ipc_context *ctx, uint64_t generation,
 			 uint64_t provisioned_at, uint64_t last_rotated_at,
 			 uint64_t rotation_deadline, uint64_t grace_deadline,
 			 bool reenroll_required);
 
-/*
- * ipc_set_agent_restarted - Say for the rest of the boot that an earlier
- * agent of this boot ended without a shutdown
- * @ctx: Server context
+/**
+ * ipc_set_agent_restarted() - Raise LOTA_STATUS_AGENT_RESTARTED.
+ * @ctx: Server context.
+ *
+ * An earlier agent of this boot ended without a shutdown.
  */
 void ipc_set_agent_restarted(struct ipc_context *ctx);
 
-/*
- * ipc_set_events_lost - Say until the agent ends that the kernel left out
- * an event of the log
- * @ctx: Server context
+/**
+ * ipc_set_events_lost() - Raise LOTA_STATUS_EVENTS_LOST until the agent ends.
+ * @ctx: Server context.
+ *
+ * The kernel left out an event of the log.
  */
 void ipc_set_events_lost(struct ipc_context *ctx);
 
-/*
- * ipc_set_mode - Update current mode
- * @ctx: Server context
- * @mode: New mode (enum lota_mode)
+/**
+ * ipc_set_mode() - Update the current mode.
+ * @ctx: Server context.
+ * @mode: New mode (enum lota_mode).
  */
 void ipc_set_mode(struct ipc_context *ctx, uint8_t mode);
 
-/*
- * Set the policy keys the daemon applies, as LOTA_STATUS_POLICY_KEYS bits.
- * The status word and the token carry them while the mode is enforce.
+/**
+ * ipc_set_policy() - Set the policy keys the daemon applies.
+ * @ctx: Server context.
+ * @keys: LOTA_STATUS_POLICY_KEYS bits; lota_status_fold_policy() decides when
+ *        the status word carries them.
  */
 void ipc_set_policy(struct ipc_context *ctx, uint32_t keys);
 
-/*
- * ipc_host_status_flags - the status word a caller that names no publisher sees
+/**
+ * ipc_host_status_flags() - Get the word of a caller naming no publisher.
+ * @ctx: Server context, or NULL.
  *
- * The stored word plus the facts that are answered at the moment of the answer.
- * A bus connection names no publisher, so the host-wide view is the only one
- * there is -- but runtime-measurement coverage is a fact about the host,
- * and every road out has to carry it.
+ * Return: The stored word with the runtime coverage and content-hash bits
+ * folded in at the call, 0 when @ctx is NULL.
  */
 uint32_t ipc_host_status_flags(const struct ipc_context *ctx);
 
-/*
- * ipc_runtime_coverage_forget - drop the cached coverage verdict
+/**
+ * ipc_runtime_coverage_forget() - Drop the cached coverage verdict.
  *
- * Call on every executable mapping of a protected process,
- * including those inside the re-measure cooldown.
+ * The next read walks the protected set again.
  */
 void ipc_runtime_coverage_forget(void);
 
-/*
- * ipc_runtime_measure_stats - Count what the measurement reports left out
- * @repeated: rounds that repeated a written answer
- * @unremembered: answers written without room to compare
+/**
+ * ipc_runtime_measure_stats() - Count what the measurement reports left out.
+ * @repeated: Out: rounds that repeated a written answer.
+ * @unremembered: Out: answers written without room to compare.
  */
 void ipc_runtime_measure_stats(uint64_t *repeated, uint64_t *unremembered);
 
-/*
- * ipc_token_answer_stats - Count token rounds left out of the journal
- * @repeated: rounds that repeated a journalled answer
+/**
+ * ipc_token_answer_stats() - Count token rounds left out of the journal.
+ * @repeated: Out: rounds that repeated a journalled answer.
  */
 void ipc_token_answer_stats(uint64_t *repeated);
 
-/*
- * ipc_set_profiles - Hand the IPC layer the publisher profiles
- * @ctx: Server context
- * @profiles: Targets owned by the attestation loop, borrowed for the run
- * @count: How many
+/**
+ * ipc_set_profiles() - Hand the IPC layer the publisher profiles.
+ * @ctx: Server context.
+ * @profiles: Targets, borrowed for the run.
+ * @count: How many; NULL/0 clears the list.
  *
- * Until this is called a connection has no publisher to bind to
- * and SET_PROFILE is refused.
- * Passing NULL/0 clears the list.
+ * A live connection is bound again to the publisher it named, or left unbound
+ * when that publisher is gone.
  */
 void ipc_set_profiles(struct ipc_context *ctx, struct attest_target *profiles,
 		      size_t count);
 
-/*
- * ipc_set_attest_sync_hook - Run @fn after the attestation loop syncs
- * @ctx: Server context
- * @fn: Callback, or NULL to clear
- * @user: Opaque argument handed back to @fn
- *
- * The socket owner learns from a sync that the loop has been round the course,
- * which is the moment any state the loop keeps on disk -- the AIK rotation
- * record -- is worth re-reading.
+/**
+ * ipc_set_attest_sync_hook() - Run @fn after the attestation loop syncs.
+ * @ctx: Server context.
+ * @fn: Callback, or NULL to clear.
+ * @user: Opaque argument handed back to @fn.
  */
 void ipc_set_attest_sync_hook(struct ipc_context *ctx, void (*fn)(void *),
 			      void *user);
 
-/*
- * ipc_set_tpm - Set TPM context for token signing
- * @ctx: Server context
- * @tpm: Initialized TPM context (or NULL to disable signing)
- * @pcr_mask: PCRs to include in token quotes
- *
- * When TPM context is set, GET_TOKEN will generate fresh
- * TPM quotes signed by the AIK. Without TPM context, GET_TOKEN is refused:
- * a token nobody signed is not evidence, so it is never issued.
+/**
+ * ipc_set_tpm() - Set the TPM context for token signing.
+ * @ctx: Server context.
+ * @tpm: Initialized TPM context; NULL makes GET_TOKEN answer
+ *       LOTA_IPC_ERR_NO_TPM.
+ * @pcr_mask: PCRs to include in token quotes.
  */
 void ipc_set_tpm(struct ipc_context *ctx, struct tpm_context *tpm,
 		 uint32_t pcr_mask);
 
-/*
- * ipc_can_issue_tokens - whether this server can answer GET_TOKEN at all
- * @ctx: Server context, or NULL
+/**
+ * ipc_can_issue_tokens() - Tell whether a TPM is bound to sign tokens.
+ * @ctx: Server context, or NULL.
  *
- * Signing is the whole of a token, so a server with no TPM bound has no
- * token to give and refuses every request. Callers that announce what
- * a server does ask here, so a banner cannot promise what GET_TOKEN goes
- * on to refuse.
+ * Return: true when @ctx has a TPM context.
  */
 bool ipc_can_issue_tokens(const struct ipc_context *ctx);
 
-/*
- * ipc_token_capability_str - one line saying what GET_TOKEN will answer
- * @ctx: Server context, or NULL
+/**
+ * ipc_token_capability_str() - Say in one line what GET_TOKEN will answer.
+ * @ctx: Server context, or NULL.
  *
- * Derived from ipc_can_issue_tokens(), for the diagnostic servers to print.
- * Never NULL.
+ * Return: A static string for the diagnostic servers to print, never NULL.
  */
 const char *ipc_token_capability_str(const struct ipc_context *ctx);
 
-/*
- * ipc_add_listener - Add an extra listener socket.
+/**
+ * ipc_add_listener() - Add an extra listener socket.
  * @ctx: Initialized IPC context.
- * @socket_path: Absolute path for the new Unix socket.
+ * @socket_path: Absolute path of the new Unix socket; its directory must exist.
  *
- * Creates an additional listening socket and registers it with
- * the epoll set. The socket directory must already exist.
- * Connections accepted on extra listeners are handled identically
- * to the primary socket.
- *
- * Returns: 0 on success, negative errno on failure.
+ * Return: 0 on success, -EADDRINUSE when a process still answers on the path,
+ * other negative errno on failure.
  */
 int ipc_add_listener(struct ipc_context *ctx, const char *socket_path);
 
-/*
- * ipc_remove_listener - Drop an extra listener socket.
+/**
+ * ipc_remove_listener() - Drop an extra listener socket.
  * @ctx: Initialized IPC context.
  * @socket_path: Path the listener was added under.
  *
- * Unregisters the socket from the epoll set, closes it and unlinks the path,
- * freeing the slot for another listener. A per-user socket outlives the login
- * it was created for -- the runtime directory goes with the session
- * and the socket file with it, leaving a listener nothing can connect to
- * and a slot that cannot be reused.
+ * Unregisters and closes the socket, unlinks the path and frees the slot.
  *
- * Returns: 0 on success, -ENOENT when no listener holds that path.
+ * Return: 0 on success, -ENOENT when no listener holds that path.
  */
 int ipc_remove_listener(struct ipc_context *ctx, const char *socket_path);
 
-/*
- * ipc_is_listener - Check if an fd is any listener socket.
+/**
+ * ipc_is_listener() - Check if an fd is any listener socket.
  * @ctx: Server context.
- * @fd:  File descriptor to check.
+ * @fd: File descriptor to check.
  *
- * Returns: 1 if fd is the primary or any extra listener, 0 otherwise.
+ * Return: 1 if @fd is the primary or any extra listener, 0 otherwise.
  */
 int ipc_is_listener(struct ipc_context *ctx, int fd);
 
-/*
- * ipc_init_activated - Initialize IPC from a systemd socket-activated fd.
+/**
+ * ipc_init_activated() - Initialize IPC from a systemd socket-activated fd.
  * @ctx: Context to initialize.
- * @fd:  Pre-created listening socket fd (from sd_listen_fds).
+ * @fd: AF_UNIX SOCK_STREAM socket already listening (from sd_listen_fds).
  *
- * Uses the passed fd as the primary listener instead of creating
- * a new socket. The fd must be an AF_UNIX SOCK_STREAM socket
- * already in listening state. Ownership transfers to the IPC
- * context; the fd will be closed by ipc_cleanup().
+ * On success @ctx owns @fd and ipc_cleanup() closes it.
  *
- * Returns: 0 on success, negative errno on failure.
+ * Return: 0 on success, negative errno on failure.
  */
 int ipc_init_activated(struct ipc_context *ctx, int fd);
 
-/*
- * ipc_watch_socket_path - Watch the directory holding the primary socket
- * @ctx: Server context
+/**
+ * ipc_watch_socket_path() - Watch the directory holding the primary socket.
+ * @ctx: Server context.
  *
- * A socket unit restart unlinks the path this daemon is bound to and binds
- * a new inode at the same name, which severs every title's IPC while nothing
- * reports a failure. The watch is what lets ipc_recheck_socket() notice.
+ * Restarting a socket unit with RemoveOnStop=yes binds a new inode at the path:
+ * titles connect to it while this daemon accepts on the old one. Without the
+ * watch the daemon cannot rebind on its own.
  *
- * Returns: the inotify fd to add to the caller's poll set, negative errno on
- * failure. A failure is not fatal -- the daemon runs unchanged, it just cannot
- * recover its socket on its own.
+ * Return: The inotify fd to add to the caller's poll set, negative errno on
+ * failure.
  */
 int ipc_watch_socket_path(struct ipc_context *ctx);
 
-/*
- * ipc_socket_watch_fd - The watch descriptor, or -1 when not watching
- * @ctx: Server context
+/**
+ * ipc_socket_watch_fd() - Get the watch descriptor.
+ * @ctx: Server context, or NULL.
+ *
+ * Return: The inotify fd, or -1 when not watching.
  */
 int ipc_socket_watch_fd(const struct ipc_context *ctx);
 
-/*
- * ipc_socket_was_replaced - Does @path still name the socket we bound?
- * @path: socket path the listener was bound at
- * @dev:  device of the inode it was bound to
- * @ino:  inode it was bound to
+/**
+ * ipc_socket_was_replaced() - Tell whether @path stopped naming our socket.
+ * @path: Socket path the listener was bound at.
+ * @dev: Device of the inode it was bound to.
+ * @ino: Inode it was bound to; 0 means none was recorded.
  *
- * A listening fd outlives its path, so the file descriptor cannot answer this;
- * only the identity of the file at the name can.
- * An @ino of 0 means no identity was ever recorded, which is not a replacement.
+ * A listening fd outlives its path, so only the file at the name can answer.
  *
- * Returns: 1 when the path is gone or names another inode, 0 otherwise.
+ * Return: 1 when the path is gone or names another inode, 0 otherwise.
  */
 int ipc_socket_was_replaced(const char *path, dev_t dev, ino_t ino);
 
-/*
- * ipc_recheck_socket - Rebind if the socket path no longer names our socket
- * @ctx: Server context
+/**
+ * ipc_recheck_socket() - Rebind if the path no longer names our socket.
+ * @ctx: Server context.
  *
- * Drains the watch and compares the path against the listener's recorded
- * identity. Call it whenever the watch fd reports readable.
+ * Call whenever the watch fd reports readable.
  *
- * Returns: 1 when the listener was rebound, 0 when nothing changed,
- * negative errno on failure.
+ * Return: 1 when the listener was rebound, 0 when nothing changed, negative
+ * errno on failure.
  */
 int ipc_recheck_socket(struct ipc_context *ctx);
 
-/*
- * ipc_set_dbus - Attach D-Bus context for signal emission.
+/**
+ * ipc_set_dbus() - Attach a D-Bus context for signal emission.
  * @ctx: Server context.
- * @dbus: D-Bus context (or NULL to detach).
+ * @dbus: D-Bus context, or NULL to detach.
  *
- * When set, ipc_update_status/ipc_record_attestation/ipc_set_mode
- * will automatically emit corresponding D-Bus signals.
+ * Its fd joins the epoll set and state changes emit D-Bus signals on it.
  */
 void ipc_set_dbus(struct ipc_context *ctx, struct dbus_context *dbus);
 

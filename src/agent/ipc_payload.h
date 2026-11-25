@@ -2,13 +2,6 @@
 /*
  * How long a request payload may be, per IPC command.
  *
- * Split out of ipc.c so it can be exercised without linking the TPM and BPF halves
- * of the agent: the check runs before any handler, so command missing from it
- * is refused with LOTA_IPC_ERR_BAD_REQUEST and its handler never runs at all.
- *
- * That failure looks like working agent answering "no", which is why it needs
- * a test of its own.
- *
  * Copyright (C) 2026 Szymon Wilczek
  */
 #ifndef LOTA_IPC_PAYLOAD_H
@@ -19,6 +12,17 @@
 
 #include "../../include/lota_ipc.h"
 
+/**
+ * ipc_payload_len_valid() - Whether a payload length fits its command.
+ * @cmd: LOTA_IPC_CMD_* from the request header.
+ * @payload_len: Payload length from the request header.
+ *
+ * A refused length is answered LOTA_IPC_ERR_BAD_REQUEST before any handler
+ * runs, so a command missing from this switch reaches its handler only with an
+ * empty payload.
+ *
+ * Return: true when @payload_len fits @cmd.
+ */
 static inline bool ipc_payload_len_valid(uint32_t cmd, uint32_t payload_len)
 {
 	switch (cmd) {
@@ -50,11 +54,9 @@ static inline bool ipc_payload_len_valid(uint32_t cmd, uint32_t payload_len)
 
 	case LOTA_IPC_CMD_SYNC_ATTEST:
 		/*
-		 * One verdict per publisher, and a host that answers to nobody
-		 * still syncs so the socket owner learns the list is empty.
-		 * The cap is the configurable publisher count,
-		 * NOT LOTA_IPC_MAX_PAYLOAD,
-		 * so peer cannot claim a longer list than a host can hold.
+		 * One verdict per publisher; a host that answers to nobody
+		 * still syncs, with none. The cap is the publisher count a host
+		 * can hold, not LOTA_IPC_MAX_PAYLOAD.
 		 */
 		if (payload_len < sizeof(struct lota_ipc_attest_sync))
 			return false;
@@ -65,17 +67,6 @@ static inline bool ipc_payload_len_valid(uint32_t cmd, uint32_t payload_len)
 		       0;
 
 	default:
-		/*
-		 * Unknown command.
-		 * Dispatcher returns LOTA_IPC_ERR_UNKNOWN_CMD regardless of
-		 * payload contents, but non-zero payload still consumed up to
-		 * LOTA_IPC_MAX_PAYLOAD bytes of recv_buf on the way in.
-		 * Require zero payload here so the bad request is rejected
-		 * as soon as the IPC header is parsed;
-		 * the client gets the same LOTA_IPC_ERR_BAD_REQUEST it would
-		 * get for any other malformed length, and the agent never reads
-		 * the body off the socket.
-		 */
 		return payload_len == 0;
 	}
 }

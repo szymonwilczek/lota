@@ -6,21 +6,16 @@
 
 #include <stdbool.h>
 
-/*
- * Who may issue a privileged IPC command.
+/**
+ * ipc_privilege_granted() - Whether a peer may issue a privileged IPC command.
+ * @uid_is_agent: Peer uid equals the agent's own, from SO_PEERCRED.
+ * @pid_identity_ok: The peer's pid still has the start time it had at accept,
+ *                   so a recycled pid does not inherit the connection's
+ *                   authority.
+ * @verity_allowlist_count: Executables on the operator's fs-verity allowlist.
+ * @exe_on_allowlist: The peer's executable is one of them.
  *
- * The rule is kept apart from the code that gathers its inputs so it can
- * be read and tested on its own: everything here is a decision, nothing
- * here reads /proc, a map or a socket.
- *
- * @uid_is_agent:     peer uid equals the agent's own, authenticated by
- *                    the kernel through SO_PEERCRED
- * @pid_identity_ok:  the peer's pid still carries the start time it had
- *                    when the connection was accepted, so a recycled pid
- *                    cannot inherit the connection's authority
- * @verity_allowlist_count: how many executables the operator put on the
- *                    fs-verity allowlist
- * @exe_on_allowlist: whether the peer's executable is one of them
+ * Return: true when granted.
  */
 static inline bool ipc_privilege_granted(bool uid_is_agent,
 					 bool pid_identity_ok,
@@ -31,14 +26,11 @@ static inline bool ipc_privilege_granted(bool uid_is_agent,
 		return false;
 
 	/*
-	 * An allowlist narrows this rule where an operator has configured one
-	 * and is silent where they have not. Requiring membership of an empty
-	 * list would deny the unit's own ExecStop, and with SIGKILL refused by
-	 * the LSM hook nothing could stop the agent.
+	 * An empty allowlist does not narrow the rule: requiring membership
+	 * would deny the unit's ExecStop, and the LSM refuses SIGKILL to the
+	 * agent.
 	 *
-	 * The uid check alone admits only root, which this rule never kept
-	 * from stopping the agent; what it keeps out is the lota group,
-	 * which can reach the socket but may not drive a privileged command.
+	 * The uid check keeps out the lota group, which reaches the socket.
 	 */
 	if (verity_allowlist_count > 0)
 		return exe_on_allowlist;
