@@ -1,14 +1,6 @@
 /* SPDX-License-Identifier: MIT */
 /* Copyright (C) 2026 Szymon Wilczek */
-/*
- * AIK certificate lifetime inspection.
- *
- * CA issues short-lived AIK certificates (24h by default), so the daemon must
- * renew before notAfter.
- *
- * These helpers read the stored DER certificate and report its remaining and
- * total validity so the attestation loop can decide when to re-enroll.
- */
+/* AIK certificate lifetime and key checks; see aik_cert.h */
 
 #include <errno.h>
 #include <stdint.h>
@@ -30,14 +22,12 @@ bool aik_cert_renew_due(int64_t remaining_sec, int64_t total_sec)
 	return remaining_sec < total_sec / 3;
 }
 
-/* Seconds spanned by an ASN1_TIME interval, or a negative errno on failure. */
 static int asn1_interval_seconds(const ASN1_TIME *from, const ASN1_TIME *to,
 				 int64_t *out)
 {
 	int days = 0, secs = 0;
 
-	/* from == NULL means "now"
-	 * (ASN1_TIME_diff convention) */
+	/* ASN1_TIME_diff() reads a NULL from as now */
 	if (!to)
 		return -EINVAL;
 	if (ASN1_TIME_diff(&days, &secs, from, to) != 1)
@@ -121,11 +111,8 @@ int aik_cert_matches_key(const char *path, const uint8_t *spki_der,
 	}
 
 	/*
-	 * i2d_PUBKEY is what produced the caller's bytes too, so both sides
-	 * are the same DER encoding of the same question and a plain memcmp
-	 * is the comparison.
-	 * Re-encoding the certificate's stored bytes keeps it independent of
-	 * how the CA chose to serialise them.
+	 * Encoded as tpm_get_aik_public() encodes its key, so the comparison
+	 * does not depend on how the CA serialised this one.
 	 */
 	cert_spki_len = i2d_PUBKEY(pkey, NULL);
 	if (cert_spki_len <= 0 || (size_t)cert_spki_len > sizeof(cert_spki)) {

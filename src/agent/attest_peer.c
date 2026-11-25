@@ -1,15 +1,6 @@
 /* SPDX-License-Identifier: MIT */
 /* Copyright (C) 2026 Szymon Wilczek */
-/*
- * The attestation loop's client of the enforcement daemon's IPC socket.
- * See attest_peer.h for why the loop is a client and not a server.
- *
- * Blocking I/O with a short timeout rather than an epoll state machine:
- * the peer is a local socket on the same machine, the frames are a few hundred
- * bytes, and the loop has nothing else to do while the exchange is in flight.
- * The timeout is what keeps a wedged peer from holding the loop, and the
- * systemd watchdog is what catches it if one ever does.
- */
+/* The attestation loop's client of the enforcement daemon's IPC socket */
 
 #include <errno.h>
 #include <poll.h>
@@ -25,14 +16,9 @@
 #include "journal.h"
 #include "profile.h"
 
-/* Long enough for a local round trip under load,
- * short enough that a wedged peer costs one attestation round
- * rather than the watchdog deadline */
+/* Bounds each socket read and write against a wedged peer */
 #define ATTEST_PEER_IO_TIMEOUT_SEC 5
 
-/* Daemon that is down stays down for a while;
- * retrying every round would fill the journal for a host that is deliberately
- * running enforcement-less */
 #define ATTEST_PEER_RETRY_MS 30000
 
 static uint64_t peer_monotonic_ms(void)
@@ -88,7 +74,6 @@ void attest_peer_close(struct attest_peer *peer)
 	peer->fd = -1;
 }
 
-/* Drop the connection and hold off before the next attempt */
 static void peer_drop(struct attest_peer *peer)
 {
 	attest_peer_close(peer);
@@ -172,12 +157,8 @@ static int peer_read_all(int fd, uint8_t *buf, size_t len)
 }
 
 /*
- * Read one frame, skipping pushed notifications.
- *
- * Notification can arrive between the request and its answer
- * -- a title may open a session at any moment -- so a reply is whatever is not
- * a notify. The event itself needs no handling here: the sync in flight is already
- * carrying the state it announces.
+ * Read one frame, skipping pushed notifications: a title may open a session
+ * between a request and its answer.
  */
 static int peer_read_reply(int fd, struct lota_ipc_response *resp,
 			   uint8_t *payload, size_t payload_max)
@@ -204,7 +185,6 @@ static int peer_read_reply(int fd, struct lota_ipc_response *resp,
 			return 0;
 	}
 
-	/* peer pushing notifications without ever answering is broken */
 	return -EPROTO;
 }
 
@@ -403,12 +383,7 @@ int attest_peer_sync(struct attest_peer *peer, struct attest_target *targets,
 	}
 
 	if (resp.result != LOTA_IPC_OK) {
-		/*
-		 * Refusal is not transport failure, so the connection stays:
-		 * the daemon answered, it just would not accept this peer.
-		 * Dropping and retrying would turn one refusal into reconnect
-		 * loop.
-		 */
+		/* A refusal is no transport failure: the connection stays */
 		lota_warn("The enforcement daemon refused the attestation "
 			  "sync (result %u): session gating and runtime "
 			  "enrollment are off",

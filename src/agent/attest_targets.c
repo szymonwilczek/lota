@@ -1,12 +1,6 @@
 /* SPDX-License-Identifier: MIT */
 /* Copyright (C) 2026 Szymon Wilczek */
-/*
- * Attestation target list.
- * See attest_targets.h for what a target is.
- *
- * No logging and no TPM here: the loop reports what this produced, including
- * the reason anchor yielded no profile, so the list itself stays testable.
- */
+/* Attestation target list; see attest_targets.h */
 
 #include <errno.h>
 #include <stddef.h>
@@ -39,10 +33,7 @@ enum attest_renew_say attest_target_resolve_renew(struct attest_target *t,
 	was = t->auto_renew;
 	t->auto_renew = t->has_profile && rec_server && rec_server[0];
 
-	/*
-	 * No stale endpoint on a target that cannot renew;
-	 * a changed endpoint is logged again.
-	 */
+	/* one that cannot renew keeps no endpoint; a changed one logs again */
 	if (t->auto_renew) {
 		if (strcmp(t->renew_ca, rec_server) != 0 ||
 		    t->renew_ca_port != rec_port)
@@ -104,11 +95,7 @@ bool attest_target_should_announce_renew_move(struct attest_target *t)
 }
 
 /*
- * Same publisher as before the reload.
- *
- * The identity is the trust anchor's key, so a publisher that moved its CA
- * or its verifier is still the one this list was holding state for.
- * A target without a profile has no identity to compare and falls back to
+ * The identity is the trust anchor's key; a target without a profile compares
  * where it reports.
  */
 static bool same_target(const struct attest_target *a,
@@ -121,8 +108,7 @@ static bool same_target(const struct attest_target *a,
 	return strcmp(a->server, b->server) == 0 && a->port == b->port;
 }
 
-/* What the loop knows and the file does not: the schedule,
- * the failure state and the session count the IPC layer maintains here */
+/* What the loop holds and the file does not */
 static void carry_live_state(struct attest_target *to,
 			     const struct attest_target *from)
 {
@@ -159,8 +145,7 @@ int attest_targets_rebuild(const struct lota_config *cfg, const char *server,
 	if (!targets || !count || max == 0)
 		return -EINVAL;
 
-	/* far too large for this frame, and the live list stays as it is
-	 * until the whole rebuild has succeeded */
+	/* the live list stays as it is until the whole rebuild has succeeded */
 	rebuilt = calloc(max, sizeof(*rebuilt));
 	if (!rebuilt)
 		return -ENOMEM;
@@ -169,10 +154,8 @@ int attest_targets_rebuild(const struct lota_config *cfg, const char *server,
 				   rebuilt, max, &n);
 	if (ret < 0) {
 		/*
-		 * A file that names no publisher and no single verifier is
-		 * an operator with nothing configured, which is a state
-		 * and not a failure.
-		 * Every other error leaves the list alone.
+		 * Nothing configured is a state: it empties the list. Every
+		 * other error leaves the list alone.
 		 */
 		if (ret != -EINVAL)
 			goto out;
@@ -253,7 +236,6 @@ int attest_targets_build(const struct lota_config *cfg, const char *server,
 				p->pin_sha256[0] &&
 				lota_pin_sha256_parse(p->pin_sha256,
 						      out[n].pin_sha256) == 0;
-			/* profile without its own cadence keeps the host's */
 			out[n].interval = p->attest_interval ?
 						  p->attest_interval :
 						  interval_sec;
@@ -277,8 +259,8 @@ int attest_targets_build(const struct lota_config *cfg, const char *server,
 		int ret;
 
 		/*
-		 * Label from the configuration only; the enrolled endpoint
-		 * lives in the --enroll record, which this list never reads.
+		 * From the configuration only: the enrolled endpoint lives in
+		 * the --enroll record, which this list never reads.
 		 */
 		if (out[i].token_only)
 			snprintf(out[i].label, sizeof(out[i].label),

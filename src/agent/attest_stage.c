@@ -1,14 +1,6 @@
 /* SPDX-License-Identifier: MIT */
 /* Copyright (C) 2026 Szymon Wilczek */
-/*
- * Names for the stages an attestation round can fail at.
- *
- * The continuous loop has no operator watching its stdout, so the stage name
- * is what a failure is reported as.
- *
- * Kept apart from attest.c so it links into a test without a TPM or a network
- * stack behind it.
- */
+/* Names for the stages an attestation round can fail at */
 
 #include "attest.h"
 #include "net.h"

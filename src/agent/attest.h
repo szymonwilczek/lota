@@ -9,102 +9,72 @@
 #include "config.h"
 #include "profile.h"
 
-/*
- * Operator-facing floor on the continuous-attestation interval,
- * enforced where the interval is read and reported by --help
- *
- * Retry backoff below is separate quantity:
- * it is the first delay after failed attestation,
- * doubled per consecutive failure.
- */
+/* Floor on the continuous-attestation interval */
 #define MIN_ATTEST_INTERVAL 30 /* seconds */
-#define ATTEST_BACKOFF_BASE_SEC 10 /* first retry delay */
+#define ATTEST_BACKOFF_BASE_SEC 10 /* first retry delay, doubled per failure */
 #define MAX_BACKOFF_SECONDS 300 /* Max retry delay */
 
 /*
- * Operator-facing floor on the AIK rotation TTL.
- *
- * Below it a host rotates its attestation key faster than an enrolment completes:
- * every rotation invalidates the certificate that names the old key, so the host
- * churns TPM key creation and CA round trips.
- * Shared so the command line and the configuration file enforce the same floor.
+ * Floor on the AIK rotation TTL, for the command line and the configuration
+ * file.
  */
 #define MIN_AIK_TTL 3600 /* seconds */
 
 /*
- * Slack added to the interval when the attestation loop sets token's valid_until,
- * so token outlives the round that minted it.
+ * Added to the interval in a publisher's valid_until: the window outlasts the
+ * wait for the next round.
  */
 #define ATTEST_TOKEN_VALIDITY_SLACK_SEC 60
 
 /*
- * How far into the future a relying party will accept a valid_until:
- * DefaultMaxTokenAge plus MaxClockSkew in src/sdk/server/verify.go, which is
- * the tighter of the two verifier implementations and therefore the bound
- * the agent has to mint within.
- * Token past it is refused by every relying party, not merely by strict one.
+ * How far ahead the SDK verifiers accept a valid_until: DefaultMaxTokenAge plus
+ * MaxClockSkew in sdk/server/verify.go, LOTA_SERVER_MAX_TOKEN_AGE_SEC plus
+ * LOTA_SERVER_MAX_CLOCK_SKEW_SEC in include/lota_server.h.
  */
 #define RELYING_PARTY_TOKEN_WINDOW_SEC (300 + 60)
 
 /*
- * Cadence a host attests at when it names publishers but not an interval.
- * It matches the value configs/lota.conf.example ships, so host that took
- * the default and a host that copied the example behave the same, and it sits
- * at the ceiling below -- the widest spacing whose tokens every relying party
- * still accepts.
+ * Cadence of a host that names publishers or nothing, but no interval.
+ * It matches configs/lota.conf.example and sits at the ceiling below.
  */
 #define DEFAULT_ATTEST_INTERVAL 300
 
 /*
  * How long a token issued to a publisher who runs no verifier is good for.
- *
- * There is no round to take the window from: nothing is reported to that
- * publisher, so the agent mints the bound itself.  It matches the default
- * cadence, which keeps a token-only publisher's freshness the same as
- * everybody else's and leaves the slack below the window every relying
- * party accepts.
+ * Nothing is reported to that publisher, so the agent sets the bound itself.
  */
 #define TOKEN_ONLY_VALIDITY_SEC DEFAULT_ATTEST_INTERVAL
 
-/*
- * Ceiling on the continuous-attestation interval.
- * Above it the loop mints tokens no relying party accepts, which is running agent
- * whose every token is refused.
- */
+/* Ceiling on the interval: past it a token lands outside the window above */
 #define MAX_ATTEST_INTERVAL \
 	(RELYING_PARTY_TOKEN_WINDOW_SEC - ATTEST_TOKEN_VALIDITY_SLACK_SEC)
 
-/* A token nobody reports on still has to land inside that window */
 _Static_assert(TOKEN_ONLY_VALIDITY_SEC + ATTEST_TOKEN_VALIDITY_SLACK_SEC <=
 		       RELYING_PARTY_TOKEN_WINDOW_SEC,
 	       "a token-only token must stay verifiable by every relying party");
 
-/* Interval the operator can set has to exist between the two bounds */
 _Static_assert(MIN_ATTEST_INTERVAL < MAX_ATTEST_INTERVAL,
 	       "attestation interval floor must stay below the ceiling");
 
-/* The default a host falls back to has to be one an operator could have set */
 _Static_assert(DEFAULT_ATTEST_INTERVAL >= MIN_ATTEST_INTERVAL &&
 		       DEFAULT_ATTEST_INTERVAL <= MAX_ATTEST_INTERVAL,
 	       "the default attestation interval must lie between the bounds");
 
-/*
- * Slack is charged against the same window the ceiling is derived from,
- * so token minted at the ceiling still lands inside it.
- */
 _Static_assert(MAX_ATTEST_INTERVAL + ATTEST_TOKEN_VALIDITY_SLACK_SEC <=
 		       RELYING_PARTY_TOKEN_WINDOW_SEC,
 	       "a token minted at the interval ceiling must stay verifiable");
 
-/*
- * The cadence --attest runs at:
- * what the host configured, the default when it named publishers but no
- * interval, the default again when it named nothing at all -- the loop then
- * waits for a reload to name a target -- and 0 when it named only a single
- * verifier, the one case that still belongs to the single-verifier one-shot.
+/**
+ * attest_effective_interval() - The cadence --attest runs at.
+ * @configured: Configured interval, 0 when none.
+ * @profile_count: How many publishers the host names.
+ * @has_server: The options name a single verifier.
  *
- * Pure function so the choice is testable without a TPM or a verifier:
- * it decides whether a configured publisher list is attested to at all.
+ * A host that names nothing still gets the loop, which waits for a reload to
+ * name a target.
+ *
+ * Return: @configured when set, DEFAULT_ATTEST_INTERVAL for publishers or for
+ * nothing named, 0 for a single verifier alone: the one-shot.
  */
 static inline int attest_effective_interval(int configured, int profile_count,
 					    bool has_server)
@@ -116,11 +86,17 @@ static inline int attest_effective_interval(int configured, int profile_count,
 	return 0;
 }
 
-/*
- * LOTA_TCTI / LOTA_AIK_META_PATH may redirect the TPM and the AIK store only
- * in an interactive one-shot (swtpm demo, tests), never in continuous
- * attestation: lota-attest.service would quote the host against another TPM.
- * Same inputs as the cadence, so the two cannot disagree.
+/**
+ * attest_env_overrides_allowed() - May the environment redirect the TPM?
+ * @attest_flag: --attest was given.
+ * @configured: As for attest_effective_interval().
+ * @profile_count: As for attest_effective_interval().
+ * @has_server: As for attest_effective_interval().
+ *
+ * LOTA_TCTI and LOTA_AIK_META_PATH serve one-shots, the swtpm demo and tests:
+ * a continuous round would quote the host against another TPM.
+ *
+ * Return: false for --attest at a cadence, true otherwise.
  */
 static inline bool attest_env_overrides_allowed(int attest_flag, int configured,
 						int profile_count,
@@ -132,13 +108,7 @@ static inline bool attest_env_overrides_allowed(int attest_flag, int configured,
 					 has_server) <= 0;
 }
 
-/*
- * Stages an attestation round can fail at.
- *
- * The round reports its failure by stage, because the continuous loop runs
- * with nobody reading its progress output: the stage name plus an errno is
- * the whole of what an operator gets.
- */
+/* Stages an attestation round can fail at; the loop logs the failing one */
 enum attest_stage {
 	ATTEST_STAGE_TLS_SETUP,
 	ATTEST_STAGE_CONNECT,
@@ -151,71 +121,72 @@ enum attest_stage {
 	ATTEST_STAGE_COUNT,
 };
 
-/*
- * Name of a stage, for a log line.
- * Never NULL, including for a value the table does not cover.
+/**
+ * attest_stage_str() - Name of a stage, for a log line.
+ * @stage: The stage.
+ *
+ * Return: the name, never NULL, also for a value the table does not cover.
  */
 const char *attest_stage_str(enum attest_stage stage);
 
-/*
- * Why a round failed, for the line the loop logs.
+/**
+ * attest_failure_reason() - Why a round failed, for the line the loop logs.
+ * @ret: The round's return value: a negative errno or LOTA-private TPM code.
  *
- * Takes a return value from the round, negative errno or LOTA-private
- * TPM code, and yields a printable reason. Never NULL.
+ * Return: a printable reason.
  */
 const char *attest_failure_reason(int ret);
 
-/*
- * attest_warn_cert_orphaned - say it when this publisher's stored certificate
- * names a key the TPM does not hold
- *
- * @paths: the profile just bound, or NULL when the caller has none
- * @label: how this publisher is named in log lines
- * @key_present: what tpm_aik_key_present() answered before provisioning
+/**
+ * attest_warn_cert_orphaned() - Log a stored certificate naming a lost key.
+ * @paths: The profile just bound, or NULL when the caller has none.
+ * @label: How this publisher is named in log lines.
+ * @key_present: What tpm_aik_key_present() answered before provisioning.
  *
  * Call right after provisioning: an absent key may come back derived to the
- * value the certificate still names. Every path that binds a profile and
- * provisions calls this, since a TPM clear strands all of them at once.
- *
- * Only logs. The round refuses the mismatched key itself, and one
- * publisher's enrollment never takes the host's enforcement down.
+ * value the certificate still names. Only logs.
  */
 void attest_warn_cert_orphaned(const struct profile_paths *paths,
 			       const char *label, int key_present);
 
+/**
+ * export_policy() - Write a verifier-ready YAML policy of this host to stdout.
+ * @mode: The agent's LOTA_MODE_*, recorded as the policy's enforce mode.
+ *
+ * Return: 0 on success, negative on a TPM or write failure.
+ */
 int export_policy(int mode);
 int do_attest(const char *server, int port, const char *ca_cert,
 	      int skip_verify, const uint8_t *pin_sha256);
-/*
- * Continuous attestation.
+/**
+ * do_continuous_attest() - Run the continuous attestation loop.
+ * @cfg: Publisher profiles to report to, each to its own verifier on its own
+ *       cadence with its own AIK.
+ * @config_path: The file a SIGHUP re-reads that list from; NULL is the default.
+ * @server: With no profiles, the only target.
+ * @port: Its port.
+ * @ca_cert: Its CA certificate.
+ * @skip_verify: Nonzero disables TLS certificate verification.
+ * @pin_sha256: The pin of a target that states none; NULL for none.
+ * @interval_sec: The cadence a profile that states none inherits.
+ * @aik_ttl: The -aik-ttl or configured value, 0 for the default.
  *
- * @cfg names the publisher profiles to report to; with profile list configured
- * it is the target list, each profile reporting to its own verifier on its own
- * cadence and signing with its own AIK.
- * With no profiles (or no config) the single server/port/ca_cert the caller
- * resolved is the only target.
- * @interval_sec is the cadence a profile that states none inherits.
- *
- * @config_path is where that list is re-read from on SIGHUP, so a publisher
- * a game's installer registers while the host runs is reported to without
- * a restart. NULL means the default file, which is what the packaged unit
- * leaves it as.
+ * Return: 0 after a shutdown, 1 when the loop cannot start,
+ * LOTA_EXIT_OPERATOR_ACTION when a restart cannot clear a refused
+ * self-measurement.
  */
 int do_continuous_attest(const struct lota_config *cfg, const char *config_path,
 			 const char *server, int port, const char *ca_cert,
 			 int skip_verify, const uint8_t *pin_sha256,
 			 int interval_sec, uint32_t aik_ttl);
 
-/*
- * Publish the current AIK rotation state (generation, provisioned time,
- * next-rotation deadline, grace window, reenroll-required) over IPC / D-Bus
- * from the loaded AIK metadata. Safe to call once the IPC context exists and
- * the AIK metadata is loaded; a no-op until then.
- * aik_ttl mirrors the -aik-ttl / config value (0 selects the default).
- * paths names the publisher profile whose enrollment is compared against the
- * live AIK;
- * NULL when no CA trust anchor is configured and there is therefore no enrollment
- * to compare.
+/**
+ * publish_rotation_state() - Publish the AIK rotation state over IPC and D-Bus.
+ * @aik_ttl: The -aik-ttl or configured value, 0 for the default.
+ * @paths: The profile whose enrollment is compared against the live AIK; NULL
+ *         compares nothing and leaves the reenroll flag clear.
+ *
+ * A no-op until the AIK metadata is loaded.
  */
 void publish_rotation_state(uint32_t aik_ttl,
 			    const struct profile_paths *paths);
