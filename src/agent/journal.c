@@ -13,9 +13,8 @@
 #include <stdlib.h>
 #include <systemd/sd-journal.h>
 
-/* module state */
 static bool g_use_journal;
-static int g_min_priority = LOG_DEBUG; /* emit everything by default */
+static int g_min_priority = LOG_DEBUG;
 static const char *g_ident = "lota";
 
 static const char *priority_prefix(int priority)
@@ -68,7 +67,6 @@ void journal_print(const char *file, int line, const char *func, int priority,
 	va_list ap;
 	char buf[1024];
 
-	/* priority filter: lower number = higher severity */
 	if (priority > g_min_priority)
 		return;
 
@@ -82,13 +80,6 @@ void journal_print(const char *file, int line, const char *func, int priority,
 				file, "CODE_LINE=%d", line, "CODE_FUNC=%s",
 				func, NULL);
 	} else {
-		/*
-		 * Fallback: human-readable format on stderr.
-		 *
-		 * Format: "lota-agent[PID] ERR: message\n"
-		 * Timestamps are omitted because the terminal or
-		 * syslog-ng/rsyslog will add them if needed.
-		 */
 		fprintf(stderr, "%s: %s: %s\n", g_ident,
 			priority_prefix(priority), buf);
 	}

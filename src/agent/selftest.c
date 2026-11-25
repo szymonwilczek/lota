@@ -2,7 +2,6 @@
 /* Copyright (C) 2026 Szymon Wilczek */
 /*
  * LOTA Agent - Self-test commands
- * TPM and IOMMU diagnostic test subcommands
  */
 
 #include <errno.h>
@@ -38,11 +37,7 @@ void print_hex(const char *label, const uint8_t *data, size_t len)
 	printf("\n");
 }
 
-/*
- * Quote with the AIK the context is bound to. @whose names its publisher,
- * or is NULL for the pre-profile records. Never provisions: a key would
- * outlive the probe and hold a persistent-object slot.
- */
+/* @whose: the publisher, or NULL for the TPM_AIK_META_PATH key */
 static void selftest_quote_one_key(struct selftest_tally *tally,
 				   const char *whose)
 {
@@ -51,7 +46,7 @@ static void selftest_quote_one_key(struct selftest_tally *tally,
 
 	if (selftest_aik_plan(tpm_handle_holds_object(
 		    &g_agent.tpm_ctx, handle)) == SELFTEST_AIK_SKIP) {
-		/* skip both the key and the quote */
+		/* the key and the quote */
 		selftest_skip(tally);
 		if (whose)
 			printf("%s: no key at handle 0x%08X, and this command "
@@ -104,7 +99,6 @@ static void selftest_quote_one_key(struct selftest_tally *tally,
 		}
 		print_hex("Nonce", test_nonce, LOTA_NONCE_SIZE);
 
-		/* quote pcrs: 0,1,14 */
 		quote_pcr_mask = (1U << 0) | (1U << 1) | (1U << LOTA_PCR_SELF);
 		printf("\nRequesting quote for PCRs 0, 1, %d...\n",
 		       LOTA_PCR_SELF);
@@ -136,7 +130,6 @@ static void selftest_quote_one_key(struct selftest_tally *tally,
 	}
 }
 
-/* Quote with each publisher's key, bound through its profile. */
 static void selftest_quote_publisher_keys(struct selftest_tally *tally,
 					  const struct publisher_entry *entries,
 					  size_t count)
@@ -223,7 +216,6 @@ int test_tpm(void)
 		print_hex("PCR 10", pcr_value, LOTA_HASH_SIZE);
 	}
 
-	/* hash kernel image */
 	printf("\nFinding current kernel...\n");
 	{
 		int k_err = tpm_get_current_kernel_path(
@@ -247,7 +239,6 @@ int test_tpm(void)
 		}
 	}
 
-	/* self-measurement test */
 	printf("\n=== Self-Measurement Test ===\n\n");
 
 	len = readlink("/proc/self/exe", exe_path, sizeof(exe_path) - 1);
@@ -300,7 +291,6 @@ int test_tpm(void)
 		print_hex("PCR 14 (after)", pcr_value, LOTA_HASH_SIZE);
 	}
 
-	/* AIK and quote tests */
 	printf("\n=== AIK and Quote Test ===\n\n");
 
 	{
@@ -378,18 +368,13 @@ int test_iommu(void)
 	}
 }
 
-/*
- * Read all of stdin into buf (capacity cap). Returns the byte count via
- * *out_len, -E2BIG if the input exceeds cap, or a negative errno. Reading
- * the secret / blob from stdin keeps it out of argv and the environment.
- */
+/* stdin keeps the secret out of argv and the environment; -E2BIG past @cap */
 static int read_all_stdin(uint8_t *buf, size_t cap, size_t *out_len)
 {
 	size_t total = 0;
 
 	for (;;) {
 		if (total == cap) {
-			/* probe for a trailing byte to detect overflow */
 			uint8_t extra;
 			ssize_t n = read(STDIN_FILENO, &extra, 1);
 			if (n > 0)
@@ -436,7 +421,7 @@ static int parse_seal_mask(const char *str, uint32_t *out_mask)
 	unsigned long v;
 
 	if (!str) {
-		*out_mask = 0; /* 0 -> tpm_seal_secret picks the default */
+		*out_mask = 0;
 		return 0;
 	}
 	errno = 0;
@@ -449,10 +434,6 @@ static int parse_seal_mask(const char *str, uint32_t *out_mask)
 	return 0;
 }
 
-/*
- * do_seal - read a secret from stdin, seal it to the PCR state, write the
- * sealed blob to stdout. Operator/root tool; never exposed over IPC.
- */
 int do_seal(const char *pcr_str)
 {
 	uint8_t *secret = NULL;
@@ -467,10 +448,7 @@ int do_seal(const char *pcr_str)
 		return 1;
 	}
 
-	/*
-	 * Heap buffers: an envelope payload reaches LOTA_ENVELOPE_MAX_PAYLOAD
-	 * (64 KiB), too large for the stack.
-	 */
+	/* 64 KiB: too large for the stack */
 	secret = malloc(LOTA_ENVELOPE_MAX_PAYLOAD);
 	blob = malloc(LOTA_ENVELOPE_MAX_BLOB);
 	if (!secret || !blob) {
@@ -490,11 +468,7 @@ int do_seal(const char *pcr_str)
 		goto out;
 	}
 
-	/*
-	 * Silence the TSS library's own WARNING/ERROR spam: seal/unseal print
-	 * their own clear diagnostics via tpm_strerror().
-	 * overwrite=0 leaves an operator-set TSS2_LOG untouched for debugging.
-	 */
+	/* the failure is worded through tpm_strerror() */
 	setenv("TSS2_LOG", "all+none", 0);
 
 	ret = tpm_init(&g_agent.tpm_ctx);
@@ -504,10 +478,6 @@ int do_seal(const char *pcr_str)
 		goto out;
 	}
 
-	/*
-	 * Direct TPM2_Seal up to its sensitive-data cap; beyond that an
-	 * envelope (TPM-sealed KEK + AES-256-GCM payload) carries the bulk.
-	 */
 	if (secret_len <= LOTA_SEAL_MAX_SECRET)
 		ret = tpm_seal_secret(&g_agent.tpm_ctx, secret, secret_len,
 				      pcr_mask, blob, LOTA_ENVELOPE_MAX_BLOB,
@@ -555,10 +525,6 @@ static void report_framing_refusal(const struct lota_blob_refusal *why)
 			lota_blob_reason_str(why->reason));
 }
 
-/*
- * do_unseal - read a sealed blob from stdin, unseal it, write the secret
- * to stdout. Fails closed when the host is not in the sealed PCR state.
- */
 int do_unseal(void)
 {
 	uint8_t *blob = NULL;
@@ -587,7 +553,6 @@ int do_unseal(void)
 		goto out;
 	}
 
-	/* leading magic selects the decoder: envelope vs direct seal */
 	envelope = lota_envelope_is_envelope(blob, blob_len) != 0;
 
 	/* framing is checked before the TPM opens: a refusal is the file's */
@@ -616,9 +581,7 @@ int do_unseal(void)
 		goto out;
 	}
 
-	/* PCR-policy mismatch is the expected unseal failure.
-	 * Keep its report clean by silencing the TSS library's own error
-	 * logging (overwrite=0 respects an operator-set TSS2_LOG). */
+	/* a PCR mismatch is the expected failure; tpm_strerror() names it */
 	setenv("TSS2_LOG", "all+none", 0);
 
 	ret = tpm_init(&g_agent.tpm_ctx);
@@ -664,10 +627,7 @@ out:
 	return rc;
 }
 
-/*
- * How many of these publishers still keep the authorization in the clear.
- * Read from disk after the verb has run, so the report shows what is stored.
- */
+/* read back after the verb, so the count is what is stored */
 static unsigned aik_auth_exposed_count(const struct publisher_entry *entries,
 				       size_t count)
 {
@@ -685,12 +645,6 @@ static unsigned aik_auth_exposed_count(const struct publisher_entry *entries,
 	return exposed;
 }
 
-/*
- * do_seal_aik_auth - adopt at-rest sealing of the AIK userAuth on an
- * already-enrolled host, without re-enrolling. Seals the current auth to
- * the current PCR state (and, with seal_aik_auth_strict in lota.conf, drops
- * the plaintext sidecar).
- */
 int do_seal_aik_auth(void)
 {
 	struct publisher_entry *entries = NULL;
@@ -703,7 +657,6 @@ int do_seal_aik_auth(void)
 
 	setenv("TSS2_LOG", "all+none", 0);
 
-	/* Every profile: a key left out is neither sealed nor reported */
 	ret = publishers_list_alloc(LOTA_PROFILE_BASE_DIR, &entries, &count);
 	if (ret < 0) {
 		fprintf(stderr, "Failed to read %s: %s\n",
@@ -718,13 +671,7 @@ int do_seal_aik_auth(void)
 		goto out;
 	}
 
-	/*
-	 * Every key this host attests with, not the one the context happens to
-	 * start on.
-	 * Each publisher holds its own AIK with its own auth, and sealing only
-	 * the pre-profile default left every key in use with its authorization
-	 * in plaintext while reporting success.
-	 */
+	/* each publisher holds its own AIK with its own auth */
 	for (size_t i = 0; i < count; i++) {
 		enum profile_aik_auth_state before;
 		struct profile_paths paths;
@@ -766,11 +713,6 @@ int do_seal_aik_auth(void)
 		sealed++;
 	}
 
-	/*
-	 * Only a host with no publishers attests with the default key.
-	 * With publishers present, sealing it would protect an unused key
-	 * and add it to the sealed count.
-	 */
 	if (publishers_default_key_in_use(count)) {
 		ret = tpm_aik_reseal_auth(&g_agent.tpm_ctx);
 		if (ret < 0) {
@@ -839,11 +781,6 @@ out:
 	return rc;
 }
 
-/*
- * do_reprovision_aik - explicit recovery for strict at-rest sealing. When a
- * firmware/kernel/agent change made the sealed AIK auth unrecoverable,
- * rotate the AIK + auth and re-seal to the current state.
- */
 int do_reprovision_aik(void)
 {
 	struct publisher_entry *entries = NULL;
@@ -857,7 +794,6 @@ int do_reprovision_aik(void)
 
 	setenv("TSS2_LOG", "all+none", 0);
 
-	/* every profile: a key this walk never saw is a key that is not rotated */
 	ret = publishers_list_alloc(LOTA_PROFILE_BASE_DIR, &entries, &count);
 	if (ret < 0) {
 		fprintf(stderr, "Failed to read %s: %s\n",
@@ -872,12 +808,6 @@ int do_reprovision_aik(void)
 		goto out;
 	}
 
-	/*
-	 * Every key this host attests with, for the same reason the adopt verb
-	 * walks them: an operator rotating "the machine's attestation identity"
-	 * on a host with publishers means theirs, and rotating the pre-profile
-	 * default rotates the one key no publisher uses.
-	 */
 	for (size_t i = 0; i < count; i++) {
 		struct profile_paths paths;
 
@@ -949,10 +879,7 @@ int do_reprovision_aik(void)
 			keys_moved, keys_moved == 1 ? "" : "s",
 			rotated - keys_moved);
 
-	/*
-	 * Say how the new authorizations are kept:
-	 * tpm_aik_save_auth() seals only when seal_aik_auth is set
-	 */
+	/* tpm_aik_save_auth() seals only with seal_aik_auth or _strict */
 	{
 		unsigned exposed = aik_auth_exposed_count(entries, count);
 
@@ -1005,12 +932,6 @@ out:
 	return rc;
 }
 
-/*
- * do_seal_persist_primary - persist the seal storage primary at its
- * persistent handle so subsequent seal/unseal skip the per-op CreatePrimary.
- * Idempotent. Requires seal_persistent_primary=true in lota.conf for the
- * seal/unseal path to actually reuse it.
- */
 int do_seal_persist_primary(void)
 {
 	bool already = false;
@@ -1044,10 +965,6 @@ int do_seal_persist_primary(void)
 	return 0;
 }
 
-/*
- * do_seal_evict_primary - remove the persistent seal storage primary. Sealed
- * blobs remain valid: the per-op derived primary is byte-identical.
- */
 int do_seal_evict_primary(void)
 {
 	int ret;

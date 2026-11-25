@@ -21,10 +21,7 @@
 #include "runtime_image_measure.h"
 #include "lota_runtime_image_measure.h"
 
-/*
- * Format SHA-256 hex string into buffer.
- * buf must be at least 65 bytes (64 hex + NUL).
- */
+/* @buf holds LOTA_HASH_SIZE * 2 + 1 bytes */
 static void format_sha256(const uint8_t hash[LOTA_HASH_SIZE], char *buf)
 {
 	for (int i = 0; i < LOTA_HASH_SIZE; i++)
@@ -41,15 +38,8 @@ static bool hash_is_nonzero(const uint8_t hash[LOTA_HASH_SIZE])
 }
 
 /*
- * Per-PID debounce for event-driven re-measurement.
- *
- * A protected process loading code (lazy dlopen at startup) emits one
- * executable-mapping event per object, and re-measuring the full image on
- * each one is O(objects^2) and floods the log. The re-measure is a
- * monitor/forensic complement to in-kernel enforcement, so coalescing a
- * burst behind a short cooldown loses no enforcement and still reports
- * drift promptly. The event timestamp is the kernel's CLOCK_MONOTONIC
- * reading, so it is the time source and no extra clock read is needed.
+ * A process loading code emits one event per object, and each re-measure walks
+ * the whole image. timestamp_ns is bpf_ktime_get_ns(), CLOCK_MONOTONIC.
  */
 #define LOTA_RT_REMEASURE_COOLDOWN_NS (1000ULL * 1000 * 1000)
 
@@ -59,12 +49,7 @@ static struct rt_remeasure_slot {
 	bool used;
 } rt_remeasure_seen[LOTA_MAX_PROTECTED_PIDS];
 
-/*
- * Record that pid is about to be re-measured at now_ns and report whether
- * the cooldown has elapsed since its last re-measure. An untracked pid
- * claims a free slot, or evicts the least-recently-measured one when the
- * table is full (which also reclaims slots left by exited PIDs).
- */
+/* a full table gives the slot of the oldest re-measure to a new pid */
 static bool rt_remeasure_due(uint32_t pid, uint64_t now_ns)
 {
 	struct rt_remeasure_slot *victim = &rt_remeasure_seen[0];
@@ -79,7 +64,7 @@ static bool rt_remeasure_due(uint32_t pid, uint64_t now_ns)
 			return true;
 		}
 		if (!victim->used)
-			continue; /* already holding a free slot */
+			continue;
 		if (!s->used || s->last_ns < victim->last_ns)
 			victim = s;
 	}
@@ -90,18 +75,7 @@ static bool rt_remeasure_due(uint32_t pid, uint64_t now_ns)
 	return true;
 }
 
-/*
- * Event-driven re-measurement.
- *
- * When a protected process changes its executable mappings (mmap or
- * mprotect of code pages), re-measure its image from the kernel side
- * immediately instead of waiting for the next periodic heartbeat. The
- * fresh, kernel-anchored digest is recorded in the audit stream so image
- * drift between heartbeats is observable as it happens; the value bound
- * under the quote is still produced on the next token request. In enforce
- * mode an untrusted mapping is already blocked at the source, so this is
- * the monitor-mode and forensic complement to that enforcement.
- */
+/* the journal only: a token measures the image again for its quote */
 static void remeasure_protected_image(const struct lota_exec_event *event)
 {
 	uint8_t digest[LOTA_RUNTIME_IMAGE_DIGEST_SIZE];
@@ -134,13 +108,6 @@ static void remeasure_protected_image(const struct lota_exec_event *event)
 		  cov.unmeasurable);
 }
 
-/*
- * Ring buffer event handler.
- *
- * For file-bearing events (EXEC, MODULE, MMAP), computes the SHA-256
- * content hash via the hash verification cache and logs it alongside
- * the event metadata.
- */
 int handle_exec_event(void *ctx, void *data, size_t len)
 {
 	struct lota_exec_event event_copy;
@@ -159,27 +126,14 @@ int handle_exec_event(void *ctx, void *data, size_t len)
 	if (len < sizeof(event_copy))
 		return 0;
 
-	/*
-	 * libbpf maps the ring buffer records read-only into the
-	 * consumer's address space, so any write to the record
-	 * delivered by ring_buffer__poll() raises SIGSEGV. Take a
-	 * private copy before NUL-terminating the variable-length
-	 * string fields; hash_verify_event() calls open(event->filename,
-	 * ...) downstream and therefore needs the path NUL-terminated.
-	 * BPF synthesises some filename values via __builtin_memcpy()
-	 * without a trailing NUL, which is why the termination cannot
-	 * be skipped entirely.
-	 */
+	/* libbpf maps the record read-only */
 	memcpy(&event_copy, data, sizeof(event_copy));
 	event->comm[LOTA_MAX_COMM_LEN - 1] = '\0';
 	event->filename[LOTA_MAX_PATH_LEN - 1] = '\0';
 
 	/*
-	 * comm and filename are attacker-controlled (PR_SET_NAME / path an attacker can name).
-	 * Log through control-folded copies so embedded newline or ANSI escape cannot forge
-	 * log line or rewrite the operator's terminal.
-	 * raw event->filename is kept for the open() in the hash path,
-	 * which must see the true path.
+	 * Any process names its comm and its paths. The hash path opens the raw
+	 * filename.
 	 */
 	lota_str_sanitize(event->comm, comm_safe, sizeof(comm_safe));
 	lota_str_sanitize(event->filename, filename_safe,
@@ -294,11 +248,6 @@ int handle_exec_event(void *ctx, void *data, size_t len)
 		break;
 	}
 
-	/*
-	 * For events with a file path, attempt to resolve the content
-	 * SHA-256 hash. This uses the LRU cache so unchanged files
-	 * are not re-hashed on every event.
-	 */
 	if (has_file && event->filename[0] == '/') {
 		if (is_exec && hash_is_nonzero(event->hash)) {
 			format_sha256(event->hash, hash_hex);
@@ -310,8 +259,7 @@ int handle_exec_event(void *ctx, void *data, size_t len)
 			return 0;
 		}
 
-		/* never hash blocked exec events: /proc/<pid>/exe is not the
-		 * new image */
+		/* /proc/<pid>/exe is still the old image */
 		if (is_exec && is_blocked)
 			goto log_no_hash;
 
@@ -326,7 +274,6 @@ int handle_exec_event(void *ctx, void *data, size_t len)
 				hash_hex, event->pid, event->uid);
 			return 0;
 		}
-		/* hash failed -> fall through to log without hash */
 	}
 
 log_no_hash:

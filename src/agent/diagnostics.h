@@ -2,11 +2,6 @@
 /*
  * LOTA Agent - Diagnostic and admin one-shot dispatch
  *
- * Collects every short-lived CLI mode (--shutdown, --status, --dump-config,
- * --gen-signing-key, --sign-policy, --verify-policy, --test-tpm,
- * --test-iommu, --test-ipc, --test-signed, --export-policy, --attest)
- * behind one entry point so main() never sees the per-flag branching.
- *
  * Copyright (C) 2026 Szymon Wilczek
  */
 
@@ -16,12 +11,17 @@
 #include "cli.h"
 #include "config.h"
 
-/*
- * Run any diagnostic / admin mode requested by the CLI. Returns:
- *   - a non-negative program exit code when a diagnostic mode handled
- *     the invocation and main() should exit with that value;
- *   - -1 when no diagnostic flag fired, meaning main() must continue
- *     down the daemon path.
+/**
+ * diagnostics_dispatch() - Run the one-shot the options name.
+ * @opts: Parsed and finalized options.
+ * @cfg: Loaded configuration, or NULL.
+ *
+ * Sets g_agent.tpm_ctx.allow_env_tpm_overrides as
+ * attest_env_overrides_allowed() decides, and clears it when the daemon
+ * follows.
+ *
+ * Return: the exit code of the one-shot, 1 where it failed with a negative
+ * errno, or -1 when the options name none and the daemon follows.
  */
 int diagnostics_dispatch(struct cli_options *opts, struct lota_config *cfg);
 

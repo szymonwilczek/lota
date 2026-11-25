@@ -7,27 +7,49 @@
 #include <stddef.h>
 #include <stdint.h>
 
+/**
+ * test_tpm() - Probe the TPM: --test-tpm.
+ *
+ * Reads PCRs 0, 1, 10 and 14, hashes the kernel and the agent, runs
+ * self_measure(), which extends PCR 14 when it holds this boot's initramfs
+ * lock value, and quotes with each key the host attests with.
+ *
+ * Return: 0, -EIO when a step failed, or the tpm_init() error.
+ */
 int test_tpm(void);
+
+/**
+ * test_iommu() - Probe the IOMMU: --test-iommu.
+ *
+ * Return: 0 when iommu_verify_full() passes, 1 otherwise.
+ */
 int test_iommu(void);
+
+/**
+ * print_hex() - Print @label and up to 32 bytes of @data in hex.
+ * @label: Prefix.
+ * @data: Bytes.
+ * @len: Length of @data; past 32 the line ends in "...".
+ */
 void print_hex(const char *label, const uint8_t *data, size_t len);
 
-/* What --test-tpm does about the attestation key it needs to quote with */
+/**
+ * enum selftest_aik_plan - What a probe does about the key at the AIK handle.
+ * @SELFTEST_AIK_USE_EXISTING: a key is there; use it.
+ * @SELFTEST_AIK_SKIP: the handle is free or the TPM could not be asked.
+ *
+ * A key created by a probe would outlive it and hold a persistent handle.
+ */
 enum selftest_aik_plan {
-	/* A key is already at the handle: quote with it and leave it there */
 	SELFTEST_AIK_USE_EXISTING,
-	/* The handle is free, or the TPM could not be asked.
-	 * Creating a key here would outlive the probe and take a persistent
-	 * object with it, so the quote test is skipped instead */
 	SELFTEST_AIK_SKIP,
 };
 
-/*
- * @holds_object: tpm_handle_holds_object() for the AIK handle -- 1 when
- * the handle holds one, 0 when free, negative errno when the TPM could not be
- * asked.
+/**
+ * selftest_aik_plan() - Plan for the key at the AIK handle.
+ * @holds_object: tpm_handle_holds_object() for the handle.
  *
- * A diagnostic reports state; it does not create it. Anything but a key that
- * is already there means the probe quotes with nothing.
+ * Return: SELFTEST_AIK_USE_EXISTING for 1, SELFTEST_AIK_SKIP otherwise.
  */
 static inline enum selftest_aik_plan selftest_aik_plan(int holds_object)
 {
@@ -35,31 +57,33 @@ static inline enum selftest_aik_plan selftest_aik_plan(int holds_object)
 				   SELFTEST_AIK_SKIP;
 }
 
-/* Whose attestation key --test-tpm quotes with */
+/**
+ * enum selftest_quote_key - Whose key --test-tpm quotes with.
+ * @SELFTEST_QUOTE_PRE_PROFILE: the key TPM_AIK_META_PATH names.
+ * @SELFTEST_QUOTE_PER_PUBLISHER: each publisher's own key.
+ */
 enum selftest_quote_key {
-	/* No publisher key: the /var/lib/lota records name the host's key */
 	SELFTEST_QUOTE_PRE_PROFILE,
-	/* Each publisher's own key; the pre-profile records are stale */
 	SELFTEST_QUOTE_PER_PUBLISHER,
 };
 
-/* @keys_held: publishers_keys_held() over this host's profiles */
+/**
+ * selftest_quote_key() - Whose key to quote with.
+ * @keys_held: publishers_keys_held() over this host's profiles.
+ *
+ * Return: SELFTEST_QUOTE_PER_PUBLISHER when a publisher holds a key.
+ */
 static inline enum selftest_quote_key selftest_quote_key(size_t keys_held)
 {
 	return keys_held > 0 ? SELFTEST_QUOTE_PER_PUBLISHER :
 			       SELFTEST_QUOTE_PRE_PROFILE;
 }
 
-/*
- * What a probe learned about the things it tried.
- *
- * A probe runs several operations and reports each.
- * Whether the command as a whole succeeded is a question about all of them,
- * and a caller that gates on the exit status is asking exactly that
- * -- so the answer is kept.
- *
- * A section that could not be reached is not a failure: nothing about it was
- * learned, which is a different thing from learning that it does not work.
+/**
+ * struct selftest_tally - Outcome of each step of a probe.
+ * @passed: Steps that succeeded.
+ * @failed: Steps that failed.
+ * @skipped: Steps with nothing to run on; not failures.
  */
 struct selftest_tally {
 	int passed;
@@ -67,6 +91,11 @@ struct selftest_tally {
 	int skipped;
 };
 
+/**
+ * selftest_record() - Count one step.
+ * @t: Tally.
+ * @ret: The step's result; negative is a failure.
+ */
 static inline void selftest_record(struct selftest_tally *t, int ret)
 {
 	if (ret < 0)
@@ -75,44 +104,82 @@ static inline void selftest_record(struct selftest_tally *t, int ret)
 		t->passed++;
 }
 
+/**
+ * selftest_skip() - Count one skipped step.
+ * @t: Tally.
+ */
 static inline void selftest_skip(struct selftest_tally *t)
 {
 	t->skipped++;
 }
 
-/*
- * The exit status a probe leaves behind.
+/**
+ * selftest_verdict() - Result of a whole probe.
+ * @t: Tally.
  *
- * A script gating on the command is asking whether this host can do what
- * the probe exercised, so the answer is built from the tally.
+ * Return: -EIO when a step failed, else 0.
  */
 static inline int selftest_verdict(const struct selftest_tally *t)
 {
 	return t->failed > 0 ? -EIO : 0;
 }
 
-/*
- * Operator/root one-shots: seal a secret read from stdin to the current
- * PCR state and write the blob to stdout, or unseal a blob from stdin and
- * write the secret to stdout. Never exposed over the agent IPC socket.
+/**
+ * do_seal() - Seal stdin to the PCR state and write the blob to stdout.
+ * @pcr_str: --seal-pcrs mask, or NULL for the tpm_seal_secret() default.
+ *
+ * Up to LOTA_SEAL_MAX_SECRET bytes go in one sealed object; up to
+ * LOTA_ENVELOPE_MAX_PAYLOAD in an envelope.
+ *
+ * Return: exit code 0 or 1.
  */
 int do_seal(const char *pcr_str);
+
+/**
+ * do_unseal() - Unseal a blob from stdin and write the secret to stdout.
+ *
+ * The framing is checked before the TPM is opened.
+ *
+ * Return: exit code 0 or 1; 1 when the PCR state differs from the sealed one.
+ */
 int do_unseal(void);
 
-/*
- * AIK-auth at-rest lifecycle one-shots (root): adopt sealing on an
- * already-enrolled host, or recover after a boot-state change rotated the
- * sealed auth out of reach.
+/**
+ * do_seal_aik_auth() - Seal the userAuth of every attestation key.
+ *
+ * Walks each publisher holding a key, and the TPM_AIK_META_PATH key when no
+ * publisher is listed. tpm_aik_reseal_auth() does each.
+ *
+ * Return: exit code 0 or 1.
  */
 int do_seal_aik_auth(void);
+
+/**
+ * do_reprovision_aik() - Replace the userAuth of every attestation key.
+ *
+ * Walks the keys as do_seal_aik_auth() does; tpm_reprovision_aik() does each,
+ * and the output names the certificates a moved key made stale.
+ *
+ * Return: exit code 0 or 1.
+ */
 int do_reprovision_aik(void);
 
-/*
- * Seal storage-primary persistence one-shots (root): persist the
- * deterministic seal primary at its handle to skip per-op CreatePrimary, or
- * evict it. Sealed blobs stay valid across both.
+/**
+ * do_seal_persist_primary() - Persist the seal storage primary.
+ *
+ * Seal and unseal use it only with seal_persistent_primary set.
+ *
+ * Return: exit code 0, also when it was already persisted, or 1.
  */
 int do_seal_persist_primary(void);
+
+/**
+ * do_seal_evict_primary() - Evict the persistent seal storage primary.
+ *
+ * Sealed blobs still unseal.
+ *
+ * Return: exit code 0, or 1, also when none was persisted.
+ */
 int do_seal_evict_primary(void);
 
 #endif /* LOTA_SELFTEST_H */

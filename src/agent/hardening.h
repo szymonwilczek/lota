@@ -1,12 +1,8 @@
 /* SPDX-License-Identifier: MIT */
 /*
- * LOTA Agent - Process self-hardening helpers
+ * LOTA Agent - process self-hardening
  *
- * Apply prctl / seccomp / tracer-detection guards from inside the agent binary.
- * Required because the agent may be launched outside systemd (recovery shells,
- * sysadmin dry-runs, integration tests) and must still refuse to expose secrets
- * to root-attached debuggers or to issue privileged syscalls it never
- * legitimately needs.
+ * The agent applies these itself, so they hold outside systemd too.
  *
  * Copyright (C) 2026 Szymon Wilczek
  */
@@ -17,134 +13,77 @@
 #include <stdbool.h>
 #include <sys/types.h>
 
-/*
- * hardening_read_tracer_pid - Read the TracerPid of a process
- * @pid: the process, or 0 for the caller
- * @out_tracer: the tracer's pid on -EPERM, otherwise zero
+/**
+ * hardening_read_tracer_pid() - Read the TracerPid of a process.
+ * @pid: The process; 0 or below for the caller.
+ * @out_tracer: The tracer's pid on -EPERM, else 0.
  *
- * Returns hardening_parse_tracer_pid_buf()'s verdict on /proc/<pid>/status,
- * or a negative errno when the file cannot be read (-ENOENT: gone).
+ * Return: as hardening_parse_tracer_pid_buf() on /proc/<pid>/status,
+ * -EIO for an empty file, or a negative errno from reading it: -ENOENT when
+ * the process is gone before the open, -ESRCH when it goes before the read.
  */
 int hardening_read_tracer_pid(pid_t pid, long *out_tracer);
 
-/*
- * hardening_refuse_if_traced - Refuse to start under a debugger
+/**
+ * hardening_refuse_if_traced() - Refuse to start under a tracer.
  *
- * Reads /proc/self/status and inspects the TracerPid field. Any non-zero
- * tracer indicates an attached ptracer (gdb, strace, frida-server, ...).
+ * Logs the tracer it finds. After hardening_apply_basics() the process is not
+ * dumpable, so a tracer without CAP_SYS_PTRACE cannot attach after the check.
  *
- * Ordering note: hardening_apply_basics() drops PR_SET_DUMPABLE to 0
- * before this function runs (see hardening_apply_daemon()).
- * PR_SET_DUMPABLE=0 makes the process
- * non-attachable via PTRACE_ATTACH for any process without
- * CAP_SYS_PTRACE, which closes the TOCTOU window between reading
- * TracerPid and finishing startup: an unprivileged attacker cannot
- * attach in that interval because the kernel-side dumpable check
- * fires first.
- *
- * Returns: 0 if not traced, -EPERM if traced, -EINVAL on a malformed
- * TracerPid line, -ENOTSUP on a kernel that omits the field, -ERANGE
- * on a tracer pid that overflows int32, negative errno on I/O error.
+ * Return: as hardening_read_tracer_pid() for the caller.
  */
 int hardening_refuse_if_traced(void);
 
-/*
- * hardening_apply_no_new_privs - prctl(PR_SET_NO_NEW_PRIVS, 1)
+/**
+ * hardening_apply_no_new_privs() - Set PR_SET_NO_NEW_PRIVS.
  *
- * Once set, execve() cannot grant additional privileges (no setuid/sgid,
- * no file capabilities, no LSM transitions that elevate). Required before
- * installing a seccomp BPF filter that uses SECCOMP_RET_ERRNO.
- *
- * Returns: 0 on success, negative errno on failure.
+ * Return: 0 or a negative errno.
  */
 int hardening_apply_no_new_privs(void);
 
-/*
- * hardening_apply_no_dumpable - prctl(PR_SET_DUMPABLE, 0)
+/**
+ * hardening_apply_no_dumpable() - Set PR_SET_DUMPABLE to 0.
  *
- * Disables core dumps and forces /proc/self/{mem,maps,environ} to root
- * ownership while preventing read access by other users. Defeats memory
- * harvesting via /proc when the agent crashes or when an unprivileged
- * subshell inherits the same UID.
- *
- * Returns: 0 on success, negative errno on failure.
+ * Return: 0 or a negative errno.
  */
 int hardening_apply_no_dumpable(void);
 
-/*
- * hardening_apply_seccomp - Install in-process seccomp BPF blocklist
+/**
+ * hardening_apply_seccomp() - Load the syscall blocklist.
  *
- * Default policy: SCMP_ACT_ALLOW. Every denied syscall fires
- * SCMP_ACT_KILL_PROCESS: the kernel terminates the agent with
- * SIGSYS (si_code=SYS_SECCOMP) and no handler runs. The filter is
- * the fail-deep layer for the daemon - a hit means the process is
- * already in an unsafe state and EPERM-and-continue would mask the
- * regression or compromise. systemd then restarts the agent and
- * the journal carries the audit line.
+ * A syscall in hardening_denied_syscalls kills the process with SIGSYS; every
+ * other one passes. SCMP_FLTATR_CTL_TSYNC binds the filter to the threads
+ * already running; a build of libseccomp without it fails the call.
  *
- * Blocklisted:
- *
- *   ptrace, process_vm_readv, process_vm_writev, kexec_load,
- *   kexec_file_load, init_module, finit_module, delete_module,
- *   create_module, query_module, get_kernel_syms, pivot_root,
- *   swapon, swapoff, reboot, mount, umount2, name_to_handle_at,
- *   open_by_handle_at, setns, unshare, io_uring_setup,
- *   io_uring_enter, io_uring_register, userfaultfd,
- *   pidfd_send_signal, modify_ldt, personality.
- *
- * Requires PR_SET_NO_NEW_PRIVS to be set beforehand.
- *
- * SCMP_FLTATR_CTL_TSYNC is enabled before load so the filter binds
- * to every thread of the agent's thread group. The agent is
- * single-threaded today but libtss2, libbpf, and any future epoll
- * worker pool may legitimately spawn threads after this point;
- * without TSYNC such threads would start unfiltered and silently
- * reopen the deny-list. A libseccomp build that cannot satisfy the
- * attribute fails the call.
- *
- * Returns: 0 on success, negative errno on filter build/load failure.
+ * Return: 0, or a negative errno when the filter cannot be built or loaded.
  */
 int hardening_apply_seccomp(void);
 
-/*
- * hardening_apply_basics - Pre-CLI defenses safe under any launch path
+/**
+ * hardening_apply_basics() - Set PR_SET_NO_NEW_PRIVS and PR_SET_DUMPABLE=0.
  *
- * Applies PR_SET_NO_NEW_PRIVS and PR_SET_DUMPABLE=0. Neither call blocks
- * a sysadmin running ./lota-agent --shutdown or --test-tpm under strace,
- * so the binary remains diagnosable in recovery shells while still
- * refusing to expose secrets via /proc/<pid>/{mem,maps,environ} or to
- * gain privileges through an unexpected execve.
- *
- * Must be invoked unconditionally at process start (before getopt and
- * before any TPM/IPC/BPF interaction).
- *
- * Returns: 0 on success, negative errno on the first failing step.
+ * Return: 0, or the negative errno of the first step that fails.
  */
 int hardening_apply_basics(void);
 
-/*
- * hardening_apply_daemon - Daemon-mode defenses (tracer refusal + seccomp)
+/**
+ * hardening_apply_daemon() - Refuse a tracer, then load the blocklist.
  *
- * Refuses startup under a ptracer and installs the seccomp blocklist
- * documented on hardening_apply_seccomp(). Invoked only by long-running
- * entry points (run_daemon, do_continuous_attest, do_attest); diagnostic
- * one-shots (--shutdown, --test-tpm, --export-policy, --gen-signing-key,
- * --sign-policy, --verify-policy) skip this step so an admin debugging a
- * misconfiguration with strace/gdb is not blocked by -EPERM.
+ * Called by run_daemon(), do_attest() and continuous_attest_run();
+ * other commands start under a tracer.
  *
- * Requires hardening_apply_basics() to have completed first (seccomp
- * needs PR_SET_NO_NEW_PRIVS).
- *
- * Returns: 0 on success, negative errno on the first failing step.
+ * Return: 0, or the negative errno of the first step that fails.
  */
 int hardening_apply_daemon(void);
 
-/*
- * hardening_parse_tracer_pid_buf - Parse /proc/self/status TracerPid line
+/**
+ * hardening_parse_tracer_pid_buf() - Parse the TracerPid line of a status text.
+ * @buf: NUL-terminated /proc/<pid>/status text.
+ * @out_tracer: The tracer's pid on -EPERM, else 0.
  *
- * Internal helper exported only so the unit test in tests/test_hardening.c
- * can drive it with synthetic /proc buffers. Production callers go
- * through hardening_refuse_if_traced().
+ * Return: 0 for TracerPid 0, -EPERM for another pid, -ENOTSUP without the
+ * field at the start of a line, -EINVAL for a NULL argument or a value other
+ * than digits up to a newline or the end, -ERANGE above INT32_MAX.
  */
 int hardening_parse_tracer_pid_buf(const char *buf, long *out_tracer);
 

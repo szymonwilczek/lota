@@ -19,40 +19,13 @@
 
 #include "journal.h"
 
-/*
- * hardening_parse_tracer_pid - inspect a /proc/<pid>/status payload
- *                              for the TracerPid: field
- * @buf: NUL-terminated copy of the /proc payload (the function does
- *       not read past the first NUL; truncation past the TracerPid
- *       line is therefore safe).
- * @out_tracer: caller-owned output; on -EPERM holds the offending
- *              pid, otherwise zero.
- *
- * Returns:
- *    0       - field present, tracer is pid 0 (not traced);
- *   -EPERM   - field present, tracer is a non-zero pid;
- *   -ENOTSUP - field absent (procfs without TracerPid);
- *   -EINVAL  - field present but malformed (no digits, trailing
- *              garbage such as "0XYZ", ...);
- *   -ERANGE  - tracer pid exceeds INT32_MAX.
- *
- * Exposed via hardening.c rather than hardening.h so the surface
- * stays internal; the test declares the prototype itself and links
- * against this object.
- */
 int hardening_parse_tracer_pid_buf(const char *buf, long *out_tracer)
 {
 	if (!buf || !out_tracer)
 		return -EINVAL;
 	*out_tracer = 0;
 
-	/*
-	 * Match "TracerPid:" at the start of a line. /proc emits the field
-	 * once with a leading newline (or as the first line in pathological
-	 * cases); searching for the "\n" prefix prevents a future field
-	 * whose value happens to contain "TracerPid:" from being mistaken
-	 * for the real one.
-	 */
+	/* only at a line start */
 	const char *p = (buf[0] == 'T' && strncmp(buf, "TracerPid:", 10) == 0) ?
 				buf :
 				strstr(buf, "\nTracerPid:");
@@ -64,15 +37,6 @@ int hardening_parse_tracer_pid_buf(const char *buf, long *out_tracer)
 	while (*p == ' ' || *p == '\t')
 		p++;
 
-	/*
-	 * Parse a non-negative decimal up to the newline. Two contracts:
-	 *   - at least one digit must be present;
-	 *   - the digit run must be terminated by '\n' (or by the end of
-	 *     the buffer when /proc truncated the trailing newline). Any
-	 *     other trailing character means the value is malformed -
-	 *     e.g. "0XYZ" - and must NOT be silently coerced to
-	 *     tracer == 0 the way the original parser did.
-	 */
 	long tracer = 0;
 	const char *digit_start = p;
 	while (*p >= '0' && *p <= '9') {
@@ -108,17 +72,7 @@ int hardening_read_tracer_pid(pid_t pid, long *out_tracer)
 	if (fd < 0)
 		return -errno;
 
-	/*
-	 * /proc/<pid>/status can exceed 4 KiB on hosts with dense cgroup
-	 * namespaces, many supplementary groups, or large Cpus_allowed_list
-	 * / Mems_allowed_list bitmaps. TracerPid: lands in the first ~200
-	 * bytes in practice but the parser must not rely on that, so the
-	 * read is done in a loop that drains the file up to a generous
-	 * 32 KiB cap. The cap exists only to bound resident memory; a
-	 * status file larger than that on a non-malicious kernel is
-	 * unheard of, and partial truncation past the TracerPid: line
-	 * cannot hide a tracer because that field appears near the top.
-	 */
+	/* the file can pass 4 KiB; TracerPid comes before the cap */
 	const size_t cap = 32 * 1024;
 	char *buf = malloc(cap);
 	size_t off = 0;
@@ -181,50 +135,10 @@ int hardening_apply_no_dumpable(void)
 }
 
 /*
- * Syscalls the agent must never invoke. The filter answers any hit
- * with SECCOMP_RET_KILL_PROCESS (SIGSYS, no handler runs, no rollback):
- * a denied syscall reaching this point means either (a) an agent
- * regression that started calling something it has no business in,
- * (b) attacker-induced state mid-process, or (c) a dependency
- * stepping outside its documented surface. In none of those cases is
- * "return EPERM and keep going" a safe outcome - the in-process
- * filter is the fail-deep layer, distinct from the systemd unit's
- * SystemCallErrorNumber=EPERM which exists only to catch
- * non-daemon paths. systemd restarts the agent and the journal
- * carries the SIGSYS+si_code=SYS_SECCOMP audit line so the
- * responder can attribute the kill to the responsible syscall.
- *
- * Coverage rationale:
- *   - ptrace, process_vm_readv/writev: cross-process memory inspection.
- *   - kexec_load/file_load, init_module/finit/delete/create_module,
- *     query_module, get_kernel_syms: kernel-image and module surface.
- *   - pivot_root, mount, umount2, setns, unshare: namespace and
- *     mount-table manipulation.
- *
- * Deliberately NOT in the blocklist:
- *   - name_to_handle_at / open_by_handle_at: libsystemd 257+ calls
- *     name_to_handle_at internally on its socket-activation path
- *     (sd_listen_fds() chain), so a blanket KILL_PROCESS rule kills
- *     the agent the moment it accepts the activated fd from systemd.
- *     The threat model already pins file access at the SELinux layer
- *     (lota_agent_t only reads lota_etc_t / lota_var_t / lota_bpf_t,
- *     plus the udev-relabelled TPM device), so a file_handle the
- *     agent can construct does not widen the access surface beyond
- *     what the MAC layer already grants.
- *   - swapon/swapoff, reboot: system-wide state changes.
- *   - io_uring_setup, io_uring_enter, io_uring_register: ring-based
- *     async I/O is unused by the agent and is the entry point for
- *     several historical sandbox escapes (CVE-2022-2602 and follow-ons).
- *   - userfaultfd: classic UAF / heap-spray primitive (CVE-2016-3070
- *     class). The agent does not register a userfault region.
- *   - pidfd_send_signal: delivers signals without kill()/permission
- *     checks via process file descriptors.
- *     The one path where the agent signals another process, ending protected
- *     one for its owner, goes through kill() with a pidfd held open only to pin
- *     the PID number, so the permission checks stay in play.
- *   - modify_ldt: x86 LDT manipulation, recurring local-priv vector.
- *   - personality: ABI-switching primitive abused to weaken ASLR
- *     (READ_IMPLIES_EXEC) on x86.
+ * A hit kills the process: a listed syscall from the agent is a fault or a
+ * compromise, and an EPERM it carries on past would hide it.
+ * name_to_handle_at and open_by_handle_at stay off: under socket activation
+ * libsystemd calls the first inside sd_listen_fds().
  */
 static const int hardening_denied_syscalls[] = {
 	SCMP_SYS(ptrace),
@@ -266,17 +180,10 @@ int hardening_apply_seccomp(void)
 	     i++) {
 		int sc = hardening_denied_syscalls[i];
 		if (sc < 0)
-			continue; /* libseccomp returns __NR_SCMP_ERROR
-				     (negative) on unknown */
+			continue; /* SCMP_SYS() of a syscall this arch lacks */
 
 		rc = seccomp_rule_add(ctx, SCMP_ACT_KILL_PROCESS, sc, 0);
 		if (rc < 0) {
-			/*
-			 * EOPNOTSUPP/EDOM may indicate a syscall absent on this
-			 * arch (e.g. create_module on aarch64). Tolerate that
-			 * to keep the filter loadable; the underlying syscall
-			 * is unreachable anyway.
-			 */
 			if (rc == -EOPNOTSUPP || rc == -EDOM || rc == -EINVAL)
 				continue;
 			seccomp_release(ctx);
@@ -284,16 +191,6 @@ int hardening_apply_seccomp(void)
 		}
 	}
 
-	/*
-	 * SCMP_FLTATR_CTL_TSYNC installs the filter on every thread of the
-	 * caller's thread group (SECCOMP_FILTER_FLAG_TSYNC at the syscall
-	 * level): the watchdog supervisor, libtss2 and libbpf workers may
-	 * spawn threads, and without TSYNC they start unfiltered,
-	 * silently reopening the deny-list. Failing the load when TSYNC
-	 * cannot be enforced is the correct production behaviour: a
-	 * libseccomp build that lacks TSYNC support is not a configuration
-	 * the agent should run in.
-	 */
 	rc = seccomp_attr_set(ctx, SCMP_FLTATR_CTL_TSYNC, 1);
 	if (rc < 0) {
 		seccomp_release(ctx);
