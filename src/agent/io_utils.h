@@ -5,30 +5,33 @@
 
 #include <stddef.h>
 
+/* Return: 0, -EIO when write() takes no bytes, or an errno */
 int lota_write_full(int fd, const void *buf, size_t len);
+/* Return: 0, -ECONNRESET at end of file before @len bytes, or an errno */
 int lota_read_full(int fd, void *buf, size_t len);
 
-/*
- * Carry one extended attribute from @from to @to, if @from has it.
+/**
+ * lota_copy_xattr() - Carry one extended attribute from @from to @to.
+ * @from: the file replaced by rename.
+ * @to: its replacement, which takes the attributes its directory implies.
+ * @name: the attribute.
  *
- * A writer that replaces a file by rename gives the replacement whatever
- * the parent directory implies, not what the file it replaced carried,
- * so a rewritten configuration can come back with another SELinux type.
- * @name is the attribute to carry: production passes "security.selinux",
- * a test passes one it is allowed to set.
- *
- * Returns 0 when the attribute was carried or @from had none, and a negative
- * errno otherwise. A destination that refuses the attribute reports its own
- * errno; the data written is unaffected, so the caller decides what that is
- * worth.
+ * Return: 0 when the attribute was carried or @from has none, -EINVAL for
+ * a NULL argument, -ERANGE for a value over 512 bytes, or the errno of
+ * getxattr() or setxattr().
  */
 int lota_copy_xattr(const char *from, const char *to, const char *name);
 
-/*
- * Read an entire file into buf, bounded by max.
- * A missing or empty file returns 0 with *out_len == 0 (absent, not an error).
- * A file larger than max returns -EMSGSIZE without reading.
- * Returns negative errno on failure.
+/**
+ * lota_read_file_bounded() - Read a whole file of at most @max bytes.
+ * @path: the file.
+ * @buf: receives the contents.
+ * @max: size of @buf.
+ * @out_len: bytes read; 0 for a missing or empty file.
+ *
+ * Return: 0 (also for a missing or empty file), -EINVAL for a NULL
+ * argument, -EMSGSIZE before any read for a file larger than @max,
+ * or another negative errno.
  */
 int lota_read_file_bounded(const char *path, void *buf, size_t max,
 			   size_t *out_len);

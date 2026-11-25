@@ -7,35 +7,29 @@
 
 #include "../../include/lota.h"
 
-/*
- * Which register carries the booted kernel depends on how the host boots,
- * so the agent tries several.
- * A register that exists is not a register that was extended: every TPM 2.0
- * answers for PCR 11 whether or not anything measured a unified kernel image
- * into it, and on a GRUB host it answers with zeros.
+/**
+ * typedef kernel_pcr_reader - Read one SHA-256 PCR.
+ * @ctx: the caller's context.
+ * @pcr: the register.
+ * @out: its value.
  *
- * Reading is a callback so the selection can be driven without a TPM.
- * Returns 0 and fills @out on success, negative on failure.
+ * Return: 0 with @out filled; any other value skips the register.
  */
 typedef int (*kernel_pcr_reader)(void *ctx, int pcr,
 				 uint8_t out[LOTA_HASH_SIZE]);
 
-/*
- * kernel_measurement_select - take the kernel measurement from a PCR that has one
+/**
+ * kernel_measurement_select() - Take the kernel measurement from a PCR.
+ * @read: reads one register.
+ * @ctx: passed to @read.
+ * @out_hash: the value of the first usable register.
+ * @selected_pcr: the register taken, -1 when none; may be NULL.
  *
- * Tries, in order: PCR 11 (UKI / systemd-stub), 9 (GRUB's kernel and initrd
- * measurements), 8 (GRUB command line), 4 (boot manager).
- * A register that cannot be read, or that reads as all zeros because nothing
- * extended it, is not a source.
+ * Tries PCR 11, 9, 8 and 4 in that order and skips a register that
+ * cannot be read or reads as all zeros.
  *
- * What the value covers depends on the boot path, and it is wider than
- * the kernel image on every path but the first: on a GRUB host PCR 9 carries
- * the initramfs too, so rebuilding that moves the measurement without
- * the kernel changing.
- *
- * Returns 0 with @out_hash filled and @selected_pcr naming the register,
- * or -ENOENT when no candidate carries a measurement -- which is the answer
- * a caller must not report as a kernel hash of zeros.
+ * Return: 0, -EINVAL for a NULL @read or @out_hash, or -ENOENT when no
+ * register is usable.
  */
 int kernel_measurement_select(kernel_pcr_reader read, void *ctx,
 			      uint8_t out_hash[LOTA_HASH_SIZE],

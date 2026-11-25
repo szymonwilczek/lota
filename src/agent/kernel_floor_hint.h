@@ -1,9 +1,8 @@
 /* SPDX-License-Identifier: MIT */
-/* Copyright (C) 2026 Szymon Wilczek */
 /*
- * Advice for a host below the kernel floor: restrictive lockdown and enforced
- * module signatures. Pure, so a test pins the sentence and both daemon
- * refusals share it.
+ * LOTA Agent - advice for a host below the kernel floor.
+ *
+ * Copyright (C) 2026 Szymon Wilczek
  */
 
 #ifndef LOTA_AGENT_KERNEL_FLOOR_HINT_H
@@ -14,20 +13,29 @@
 #include <stddef.h>
 #include <stdio.h>
 
-/* Which half of the floor is missing */
+/**
+ * enum lota_kernel_floor - The part of the kernel floor that is missing.
+ * @LOTA_KERNEL_FLOOR_LOCKDOWN: restrictive lockdown.
+ * @LOTA_KERNEL_FLOOR_MODULE_SIG: enforced module signatures.
+ */
 enum lota_kernel_floor {
 	LOTA_KERNEL_FLOOR_LOCKDOWN,
 	LOTA_KERNEL_FLOOR_MODULE_SIG,
 };
 
-/* Name the missing state and the lever that raises it; always NUL-terminated */
+/**
+ * kernel_floor_message() - Name the missing state and how to raise it.
+ * @which: the missing part.
+ * @secureboot: Secure Boot is on.
+ * @out: the message; NUL-terminated when @cap is not 0.
+ * @cap: size of @out.
+ */
 static inline void kernel_floor_message(enum lota_kernel_floor which,
 					bool secureboot, char *out, size_t cap)
 {
 	if (!out || cap == 0)
 		return;
 
-	/* Secure Boot off: enable it. On: the cmdline parameter is missing. */
 	if (which == LOTA_KERNEL_FLOOR_LOCKDOWN) {
 		if (secureboot)
 			snprintf(
@@ -66,13 +74,14 @@ static inline void kernel_floor_message(enum lota_kernel_floor which,
 			 "this machine and the way into its setup screen.");
 }
 
-/* Advice under a startup refusal @err: fix the policy, or the host */
+/**
+ * startup_refusal_advice() - Advice under a startup policy refusal.
+ * @err: the refusal.
+ *
+ * Return: for -ENOTSUP, a sentence naming the host; otherwise the policy.
+ */
 static inline const char *startup_refusal_advice(int err)
 {
-	/*
-	 * -ENOTSUP is the floor, a state of the host: the only policy edit
-	 * that passes it drops the requirement. An edit repairs the rest.
-	 */
 	if (err == -ENOTSUP)
 		return "The line above is a state of this host, not of this "
 		       "configuration: raise it and start again.";

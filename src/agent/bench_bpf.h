@@ -11,10 +11,11 @@
 #include "bench_snapshot.h"
 #include "bpf_loader.h"
 
-/*
- * Ask the kernel to count BPF run time. The returned descriptor is the
- * switch: counting stops when it is closed, or when the daemon dies.
- * Returns the descriptor or a negative errno.
+/**
+ * bench_bpf_enable_stats() - Ask the kernel to count BPF run time.
+ *
+ * Return: a descriptor that holds the count on while it is open,
+ * or a negative errno.
  */
 int bench_bpf_enable_stats(void);
 

@@ -1,8 +1,8 @@
 /* SPDX-License-Identifier: MIT */
-/* Copyright (C) 2026 Szymon Wilczek */
 /*
- * LOTA - IOMMU Verification Module
- * Verifies VT-d (Intel) or AMD-Vi status for DMA attack protection
+ * LOTA Agent - IOMMU state of the host.
+ *
+ * Copyright (C) 2026 Szymon Wilczek
  */
 
 #ifndef LOTA_IOMMU_H
@@ -14,78 +14,73 @@
 
 #include "../../include/iommu_types.h"
 
-/*
- * iommu_check_sysfs - Check /sys/class/iommu/ for active IOMMU units
- * @status: Output structure to populate
- * @root: Prefix the sysfs path is read under, NULL for the live machine
+/**
+ * iommu_check_sysfs() - Count the IOMMU units in /sys/class/iommu.
+ * @status: the state to fill.
+ * @root: prefix of the path read, NULL for the live machine.
  *
- * Scans /sys/class/iommu/ for dmar* (Intel) or ivhd* (AMD) entries.
- * Sets IOMMU_FLAG_SYSFS_PRESENT and vendor type.
+ * Counts dmar* and ivhd* entries and sets the unit count, the vendor and,
+ * for one or more, IOMMU_FLAG_SYSFS_PRESENT.
  *
- * Returns: Number of IOMMU units found, 0 if none
+ * Return: the count, 0 without the directory, or -1 for a bad argument.
  */
 int iommu_check_sysfs(struct iommu_status *status, const char *root);
 
-/*
- * iommu_check_cmdline - Validate /proc/cmdline for IOMMU boot parameters
- * @status: Output structure to populate
- * @root: Prefix /proc/cmdline is read under, NULL for the live machine
+/**
+ * iommu_check_cmdline() - Read the IOMMU parameters of /proc/cmdline.
+ * @status: the state to fill.
+ * @root: prefix of the path read, NULL for the live machine.
  *
- * Looks for: intel_iommu=on, amd_iommu=on/force, iommu.strict=1
- * Sets IOMMU_FLAG_CMDLINE_SET if found.
+ * Checks intel_iommu=on, amd_iommu=force and amd_iommu=on in that order,
+ * records the first present with IOMMU_FLAG_CMDLINE_SET, and sets
+ * IOMMU_FLAG_STRICT for iommu.strict=1 or iommu=strict.
  *
- * Returns: 0 if IOMMU param found, -1 if missing
+ * Return: 0 when one of the three is present, -1 otherwise.
  */
 int iommu_check_cmdline(struct iommu_status *status, const char *root);
 
-/*
- * iommu_check_domains - Read the domain each IOMMU group is in
- * @status: Output structure to populate
- * @root: Prefix the sysfs path is read under, NULL for the live machine
+/**
+ * iommu_check_domains() - Count the IOMMU groups in a translating domain.
+ * @status: the state to fill.
+ * @root: prefix of the path read, NULL for the live machine.
  *
- * Sets IOMMU_FLAG_DMA_REMAP when at least one group is in a translating
- * (DMA or DMA-FQ) domain; identity (passthrough) does not count.
+ * Counts groups whose domain type is DMA or DMA-FQ and sets
+ * IOMMU_FLAG_DMA_REMAP for one or more.
  *
- * Returns: Number of translating groups, negative on error
+ * Return: the count, 0 without /sys/kernel/iommu_groups, or -1 for a bad
+ * argument.
  */
 int iommu_check_domains(struct iommu_status *status, const char *root);
 
-/*
- * iommu_check_irq_remap - Look for a remapped interrupt chip
- * @status: Output structure to populate
- * @root: Prefix /proc/interrupts is read under, NULL for the live machine
+/**
+ * iommu_check_irq_remap() - Look for a remapped interrupt chip.
+ * @status: the state to fill.
+ * @root: prefix of the path read, NULL for the live machine.
  *
- * Sets IOMMU_FLAG_IRQ_REMAP when an interrupt chip is named IR-*.
+ * Sets IOMMU_FLAG_IRQ_REMAP when /proc/interrupts names an IR- chip.
  *
- * Returns: 0 on success, -1 if the table could not be read
+ * Return: 0, or -1 when the table is not read.
  */
 int iommu_check_irq_remap(struct iommu_status *status, const char *root);
 
-/*
- * iommu_verify_full - Complete IOMMU verification
- * @status: Output structure to populate
+/**
+ * iommu_verify_full() - Run every IOMMU check.
+ * @status: the state, cleared first.
  *
- * Runs every check and aggregates results.
- * For attestation to pass, IOMMU_FLAG_SYSFS_PRESENT and
- * IOMMU_FLAG_DMA_REMAP must be set.
- *
- * Returns: true if IOMMU is properly enabled, false otherwise
+ * Return: true when IOMMU_FLAG_SYSFS_PRESENT and IOMMU_FLAG_DMA_REMAP are set.
  */
 bool iommu_verify_full(struct iommu_status *status);
 
-/*
- * iommu_verify_full_at - iommu_verify_full() with every path read under @root
- * (NULL for the live machine)
- */
+/* iommu_verify_full() with every path read under @root, NULL for the host */
 bool iommu_verify_full_at(struct iommu_status *status, const char *root);
 
-/*
- * iommu_status_to_string - Convert status flags to human-readable string
- * @status: IOMMU status structure
- * @buf: Output buffer
- * @buf_len: Buffer size
+/**
+ * iommu_status_to_string() - Describe the IOMMU state.
+ * @status: the state.
+ * @buf: the text.
+ * @buf_len: size of @buf.
  *
- * Returns: Number of bytes written (excluding null terminator)
+ * Return: the length snprintf() reports, or -1 for a bad argument.
  */
 int iommu_status_to_string(const struct iommu_status *status, char *buf,
 			   size_t buf_len);

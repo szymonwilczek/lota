@@ -1,7 +1,6 @@
 /* SPDX-License-Identifier: MIT */
 /*
- * LOTA - IOMMU Verification Module
- * Verifies VT-d (Intel) or AMD-Vi status for DMA attack protection
+ * LOTA Agent - IOMMU state of the host.
  *
  * Copyright (C) 2026 Szymon Wilczek
  */
@@ -18,19 +17,14 @@
 #include "iommu.h"
 #include "iommu_types.h"
 
-/* Sysfs path for IOMMU class */
 #define IOMMU_SYSFS_PATH "/sys/class/iommu"
 
-/* Where the kernel command line is read from */
 #define IOMMU_CMDLINE_PATH "/proc/cmdline"
 
-/* One directory per IOMMU group, with its domain type */
 #define IOMMU_GROUPS_PATH "/sys/kernel/iommu_groups"
 
-/* The kernel's interrupt table, where a remapped chip names itself */
 #define IOMMU_INTERRUPTS_PATH "/proc/interrupts"
 
-/* prefix @path with @root (NULL: live machine); -1 if truncated */
 static int iommu_path(char *buf, size_t len, const char *root, const char *path)
 {
 	int n = snprintf(buf, len, "%s%s", root ? root : "", path);
@@ -95,7 +89,6 @@ int iommu_check_sysfs(struct iommu_status *status, const char *root)
 
 	dir = opendir(path);
 	if (!dir) {
-		/* kernel might not support it */
 		return 0;
 	}
 
@@ -103,10 +96,6 @@ int iommu_check_sysfs(struct iommu_status *status, const char *root)
 		if (entry->d_name[0] == '.')
 			continue;
 
-		/*
-		 * Intel VT-d: dmar0, dmar1, ...
-		 * AMD-Vi: ivhd0, ivhd1, ...
-		 */
 		if (strncmp(entry->d_name, "dmar", 4) == 0) {
 			status->vendor = IOMMU_VENDOR_INTEL_VTD;
 			count++;
@@ -155,10 +144,6 @@ int iommu_check_cmdline(struct iommu_status *status, const char *root)
 	if (buf[n - 1] == '\n')
 		buf[n - 1] = '\0';
 
-	/*
-	 * first match wins so Intel host with both arch families pinned on the
-	 * command line never sees AMD overwrite the recorded value
-	 */
 	if (cmdline_has_param(buf, "intel_iommu=on")) {
 		set_iommu_cmdline(status, "intel_iommu=on");
 		ret = 0;
@@ -170,10 +155,6 @@ int iommu_check_cmdline(struct iommu_status *status, const char *root)
 		ret = 0;
 	}
 
-	/*
-	 * Check for strict mode - disables lazy IOMMU TLB flush
-	 * More secure but slightly lower performance
-	 */
 	if (cmdline_has_param(buf, "iommu.strict=1") ||
 	    cmdline_has_param(buf, "iommu=strict")) {
 		status->flags |= IOMMU_FLAG_STRICT;
@@ -182,11 +163,6 @@ int iommu_check_cmdline(struct iommu_status *status, const char *root)
 	return ret;
 }
 
-/*
- * DMA and DMA-FQ translate (they differ only in flush timing); identity is
- * passthrough and blocked reaches nothing.
- * Unit presence alone would call an iommu=pt host protected.
- */
 int iommu_check_domains(struct iommu_status *status, const char *root)
 {
 	char path[PATH_MAX];
@@ -202,7 +178,6 @@ int iommu_check_domains(struct iommu_status *status, const char *root)
 
 	dir = opendir(path);
 	if (!dir) {
-		/* no groups directory is a kernel with no IOMMU driver */
 		return 0;
 	}
 
@@ -240,7 +215,6 @@ int iommu_check_domains(struct iommu_status *status, const char *root)
 	return translating;
 }
 
-/* remapped chips are named IR-IO-APIC, IR-PCI-MSI, ... on both vendors */
 int iommu_check_irq_remap(struct iommu_status *status, const char *root)
 {
 	char path[PATH_MAX];
@@ -285,13 +259,6 @@ bool iommu_verify_full_at(struct iommu_status *status, const char *root)
 	iommu_check_domains(status, root);
 	iommu_check_irq_remap(status, root);
 
-	/*
-	 * Minimum requirement: IOMMU must be present in sysfs and have
-	 * confirmed DMA remapping active.
-	 *
-	 * IOMMU_FLAG_CMDLINE_SET is not strictly required
-	 * on modern systems where UEFI enables IOMMU by default.
-	 */
 	return (status->flags & IOMMU_FLAG_SYSFS_PRESENT) &&
 	       (status->flags & IOMMU_FLAG_DMA_REMAP);
 }

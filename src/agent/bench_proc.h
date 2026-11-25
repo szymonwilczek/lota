@@ -29,13 +29,18 @@ int bench_parse_stat(const char *buf, struct bench_proc *p);
 int bench_parse_status(const char *buf, struct bench_proc *p);
 int bench_parse_rollup(const char *buf, struct bench_proc *p);
 
-/* "memlock:" of a BPF map's fdinfo, in bytes, under /proc/self/fdinfo */
+/* "memlock:" of a BPF map's fdinfo, in bytes */
 int bench_parse_memlock(const char *buf, uint64_t *out);
 int bench_read_memlock(int fdinfo_dirfd, int fd, uint64_t *out);
 
-/*
- * Fill @p from stat, status and, with @rollup, smaps_rollup under the
- * /proc/<pid> directory @dirfd. No descriptor outlives the call.
+/**
+ * bench_read_proc() - Read the counters of one process.
+ * @dirfd: its /proc/<pid> directory.
+ * @p: the counters.
+ * @rollup: also read smaps_rollup.
+ *
+ * Return: 0, -EINVAL for a file that does not parse, -EMSGSIZE for one that
+ * does not fit the buffer, or the errno of the read.
  */
 int bench_read_proc(int dirfd, struct bench_proc *p, bool rollup);
 
