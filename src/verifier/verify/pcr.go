@@ -1,9 +1,6 @@
 // SPDX-License-Identifier: MIT
 // Copyright (C) 2026 Szymon Wilczek
 // LOTA Verifier - PCR baseline verification module
-//
-// Verifies that PCR values match expected "golden" measurements.
-// This is the core of attestation - proving system is in known-good state.
 
 package verify
 
@@ -25,84 +22,38 @@ import (
 	"github.com/szymonwilczek/lota/verifier/types"
 )
 
-// defines expected PCR values for verification
+// PCRPolicy is a verification policy, read from YAML.
 type PCRPolicy struct {
-	// human-readable policy name
-	Name string `yaml:"name"`
-
-	// explains what this policy represents
+	Name        string `yaml:"name"`
 	Description string `yaml:"description"`
 
-	// binds this policy to one tenant:
-	// clients whose AIK certificate carries this tenant verify against it
-	// instead of the active policy.
-	// Empty means no binding.
-	// Binding travels inside the policy file, so signed policy authenticates its own scope.
+	// Tenant binds the policy to clients whose AIK certificate carries
+	// this tenant; empty binds none.
 	Tenant string `yaml:"tenant"`
 
-	// names the kind of fleet this policy governs, which is what decides how
-	// firmware drift is handled.
-	//
-	// Drift means different things to the two markets.
-	// On a fleet the relying party owns, an unexplained PCR 0/1/7 change is
-	// finding and stopping is the correct answer.
-	// On a fleet of machines the relying party does not own, the same change
-	// is player installing BIOS update, and stopping means a game that refuses
-	// to start for a reason nobody on either side chose.
-	//
-	// ProfileEnterprise (the default, including when unset) leaves self-service
-	// re-anchor off.
-	// ProfileConsumer turns it on, and the re-anchor discriminator still has
-	// to find the Secure Boot root of trust intact before anything moves.
+	// Profile is ProfileEnterprise or ProfileConsumer; empty reads as
+	// ProfileEnterprise.
 	Profile string `yaml:"profile"`
 
-	// maps PCR index to expected hash value (hex-encoded)
-	// IMPORTANT: only PCRs listed here are checked; others are ignored
+	// PCRs maps a PCR index to its expected hex digest.
 	PCRs map[int]string `yaml:"pcrs"`
 
-	// lists allowed kernel image hashes
 	KernelHashes []string `yaml:"kernel_hashes"`
+	AgentHashes  []string `yaml:"agent_hashes"`
 
-	// lists allowed LOTA agent hashes
-	AgentHashes []string `yaml:"agent_hashes"`
-
-	// if true, fails verification if IOMMU not enabled
-	RequireIOMMU bool `yaml:"require_iommu"`
-
-	// if true, fails if LSM not in enforce mode
-	RequireEnforce bool `yaml:"require_enforce"`
-
-	// if true, fails if kernel module signature enforcement disabled
-	RequireModuleSig bool `yaml:"require_module_sig"`
-
-	// if true, fails if Secure Boot not enabled
-	RequireSecureBoot bool `yaml:"require_secureboot"`
-
-	// if true, fails if kernel lockdown not enabled
-	RequireLockdown bool `yaml:"require_lockdown"`
-
-	// if true, fails when the host's kernel appraises no executable.
-	// Off by default: appraisal content is distribution or operator supplied,
-	// so a stock host cannot have it, and the agent reports the state.
-	// A fleet whose image pipeline signs its executables turns this on
-	// and the flag becomes a gate.
-	RequireIMAAppraisal bool `yaml:"require_ima_appraisal"`
-
-	// if true, fails when the event-log-measured kernel command line
-	// carries a denylisted parameter (builtin denylist + cmdline_deny).
-	// GRUB-only in v1: hosts with no PCR 8 cmdline measurement and a
-	// zero quoted PCR 8 skip the check (systemd-boot/UKI measure the
-	// cmdline into PCR 12 instead)
+	RequireIOMMU         bool `yaml:"require_iommu"`
+	RequireEnforce       bool `yaml:"require_enforce"`
+	RequireModuleSig     bool `yaml:"require_module_sig"`
+	RequireSecureBoot    bool `yaml:"require_secureboot"`
+	RequireLockdown      bool `yaml:"require_lockdown"`
+	RequireIMAAppraisal  bool `yaml:"require_ima_appraisal"`
 	RequireCmdlinePolicy bool `yaml:"require_cmdline_policy"`
 
-	// operator extensions to the builtin cmdline parameter denylist;
-	// entry forms: "param" (bare or any value), "param=" (any value),
-	// "param=value" (exact pair)
+	// CmdlineDeny extends builtinCmdlineDeny, in its rule forms.
 	CmdlineDeny []string `yaml:"cmdline_deny"`
 }
 
-// returns the effective cmdline denylist: builtin rules plus operator
-// extensions from the policy file
+// EffectiveCmdlineDeny returns builtinCmdlineDeny followed by CmdlineDeny.
 func (p *PCRPolicy) EffectiveCmdlineDeny() []string {
 	out := make([]string, 0, len(builtinCmdlineDeny)+len(p.CmdlineDeny))
 	out = append(out, builtinCmdlineDeny...)
@@ -110,25 +61,19 @@ func (p *PCRPolicy) EffectiveCmdlineDeny() []string {
 	return out
 }
 
-// manages PCR policies and verification
+// PCRVerifier holds the loaded policies and their tenant bindings.
 type PCRVerifier struct {
 	mu           sync.RWMutex
 	policies     map[string]*PCRPolicy
-	active       string            // name of active policy
-	tenantPolicy map[string]string // tenant -> bound policy name
-	policyPubKey ed25519.PublicKey // if set, policy files require valid Ed25519 signature
+	active       string
+	tenantPolicy map[string]string // tenant -> policy name
+	policyPubKey ed25519.PublicKey
 
-	// if false, LoadPolicy rejects policies that define no measurement allowlists
-	// (no PCR values and no kernel/agent hash allowlists)
 	allowPermissivePolicy bool
-
-	// if false, LoadPolicy rejects a diverse-fleet policy (require_secureboot
-	// with no raw PCR pins) that does not pin agent_hashes.
-	// See RequiresAgentHashPin.
-	allowUnpinnedAgent bool
+	allowUnpinnedAgent    bool
 }
 
-// creates a new PCR verifier
+// NewPCRVerifier returns a verifier with no policy.
 func NewPCRVerifier() *PCRVerifier {
 	return &PCRVerifier{
 		policies:              make(map[string]*PCRPolicy),
@@ -138,34 +83,26 @@ func NewPCRVerifier() *PCRVerifier {
 	}
 }
 
-// controls whether LoadPolicy accepts measurement-empty policies
-// This is intentionally false by default to avoid silent misconfiguration.
+// SetAllowPermissivePolicy makes LoadPolicy accept a policy for which
+// IsMeasurementEmptyPolicy holds.
 func (v *PCRVerifier) SetAllowPermissivePolicy(allow bool) {
 	v.mu.Lock()
 	defer v.mu.Unlock()
 	v.allowPermissivePolicy = allow
 }
 
-// controls whether LoadPolicy accepts a diverse-fleet policy with no pinned
-// agent_hashes.
-// Intentionally false by default:
-// on the diverse-fleet path (require_secureboot, no raw PCR pins) the per-device
-// PCR 0/1/7 and the agent self-hash both go through TOFU, so without a pinned
-// agent_hash a modified, non-enforcing agent would pin its own hash on first use
-// and then attest "OK" while doing no enforcement.
-//
-// kernel_hashes do not count -- they are advisory and self-reported.
-// agent_hash allowlist is the only cryptographic gate on which agent binary ran.
+// SetAllowUnpinnedAgent makes LoadPolicy accept a policy for which
+// RequiresAgentHashPin holds.
 func (v *PCRVerifier) SetAllowUnpinnedAgent(allow bool) {
 	v.mu.Lock()
 	defer v.mu.Unlock()
 	v.allowUnpinnedAgent = allow
 }
 
-// RequiresAgentHashPin reports whether a policy is a diverse-fleet policy
-// (require_secureboot with no raw PCR pins) that fails to pin agent_hashes.
-// Such a policy leaves the agent self-hash on TOFU, which a modified agent
-// can exploit, so LoadPolicy refuses it unless the operator opts out.
+// RequiresAgentHashPin reports whether a policy requires Secure Boot and
+// pins neither a PCR nor an agent hash. The first agent hash a client
+// reports is then pinned unchecked, so LoadPolicy refuses such a policy
+// unless SetAllowUnpinnedAgent allows it.
 func RequiresAgentHashPin(policy *PCRPolicy) bool {
 	if policy == nil {
 		return false
@@ -175,17 +112,15 @@ func RequiresAgentHashPin(policy *PCRPolicy) bool {
 		len(policy.AgentHashes) == 0
 }
 
-// sets the Ed25519 public key used to verify policy file signatures
-// when set, LoadPolicy rejects any policy without a valid detached .sig file
-// pass nil to disable signature verification
+// SetPolicyPublicKey makes LoadPolicy require a valid signature at
+// path + ".sig"; nil drops the requirement.
 func (v *PCRVerifier) SetPolicyPublicKey(pubKey ed25519.PublicKey) {
 	v.mu.Lock()
 	defer v.mu.Unlock()
 	v.policyPubKey = pubKey
 }
 
-// checks policy for common misconfigurations and logs warnings
-// returns list of warnings found (empty if policy is well-configured)
+// ValidatePolicy returns a warning for each check the policy leaves open.
 func ValidatePolicy(policy *PCRPolicy) []string {
 	var warnings []string
 
@@ -214,11 +149,8 @@ func ValidatePolicy(policy *PCRPolicy) []string {
 	return warnings
 }
 
-// returns true if the policy does not define any measurement allowlists:
-// neither explicit PCR values nor kernel/agent hash allowlists.
-//
-// NOTE: This is intentionally different from ValidatePolicy() definition of
-// "effectively permissive".
+// IsMeasurementEmptyPolicy reports whether a policy pins no PCR, kernel hash
+// or agent hash. A nil policy is empty.
 func IsMeasurementEmptyPolicy(policy *PCRPolicy) bool {
 	if policy == nil {
 		return true
@@ -226,8 +158,6 @@ func IsMeasurementEmptyPolicy(policy *PCRPolicy) bool {
 	return len(policy.PCRs) == 0 && len(policy.KernelHashes) == 0 && len(policy.AgentHashes) == 0
 }
 
-// isAllZeroHex reports whether a hex digest is nothing but zeros, which is what
-// a host sends when the register the agent read carries no measurement.
 func isAllZeroHex(hexDigest string) bool {
 	if hexDigest == "" {
 		return false
@@ -240,10 +170,6 @@ func isAllZeroHex(hexDigest string) bool {
 	return true
 }
 
-// validateKernelPins refuses a kernel allow-list entry that pins nothing.
-//
-// A host whose boot path measures no kernel into the register the agent reads
-// reports an all-zero digest, and every such host reports the same one.
 func validateKernelPins(policy *PCRPolicy) error {
 	if policy == nil {
 		return nil
@@ -269,9 +195,7 @@ func validatePolicyPCRIndices(policy *PCRPolicy) error {
 	return nil
 }
 
-// loads a policy from YAML file
-// if a policy public key has been set via SetPolicyPublicKey,
-// the file must have a valid detached Ed25519 signature at path+".sig"!
+// LoadPolicy reads a YAML policy file and registers it.
 func (v *PCRVerifier) LoadPolicy(path string) error {
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -310,14 +234,12 @@ func (v *PCRVerifier) LoadPolicy(path string) error {
 	return v.registerPolicy(&policy)
 }
 
-// adds a policy programmatically, through the same validation the file road runs
+// AddPolicy registers a policy without the signature, IsMeasurementEmptyPolicy
+// and RequiresAgentHashPin checks of LoadPolicy.
 func (v *PCRVerifier) AddPolicy(policy *PCRPolicy) error {
 	return v.registerPolicy(policy)
 }
 
-// validatePolicyDocument runs every check that judges the document itself.
-// registerPolicy, the only way into the policy map, calls it, so a check
-// added here covers both the file and the programmatic road.
 func validatePolicyDocument(policy *PCRPolicy) error {
 	if err := validatePolicyPCRIndices(policy); err != nil {
 		return err
@@ -328,12 +250,8 @@ func validatePolicyDocument(policy *PCRPolicy) error {
 	return validateKernelPins(policy)
 }
 
-// registerPolicy validates a policy document and stores it, maintaining the
-// tenant binding index.
-// Tenant binds to at most one policy.
-// Re-registering the same policy name refreshes its binding.
-// It is the only way into the policy map, so no road can register a document
-// that has not been through validatePolicyDocument.
+// registerPolicy stores a policy under its name; the first one stored becomes
+// active. A tenant binds to at most one policy.
 func (v *PCRVerifier) registerPolicy(policy *PCRPolicy) error {
 	if err := validatePolicyDocument(policy); err != nil {
 		return err
@@ -355,8 +273,6 @@ func (v *PCRVerifier) registerPolicy(policy *PCRPolicy) error {
 		}
 	}
 
-	// drop stale binding when policy is re-registered under
-	// new or removed tenant
 	if old, ok := v.policies[policy.Name]; ok && old.Tenant != "" && old.Tenant != policy.Tenant {
 		delete(v.tenantPolicy, old.Tenant)
 	}
@@ -366,7 +282,6 @@ func (v *PCRVerifier) registerPolicy(policy *PCRPolicy) error {
 		v.tenantPolicy[policy.Tenant] = policy.Name
 	}
 
-	// set as active if first policy
 	if v.active == "" {
 		v.active = policy.Name
 	}
@@ -374,8 +289,8 @@ func (v *PCRVerifier) registerPolicy(policy *PCRPolicy) error {
 	return nil
 }
 
-// checks report against the policy bound to the client's tenant,
-// falling back to the active policy when the tenant has no binding
+// VerifyReportForTenant checks a report against the policy bound to the
+// tenant, or the active policy when the tenant has none.
 func (v *PCRVerifier) VerifyReportForTenant(report *types.AttestationReport, tenant string, facts *BootFacts) error {
 	policy, exists := v.policyForTenant(tenant)
 	if !exists {
@@ -385,8 +300,6 @@ func (v *PCRVerifier) VerifyReportForTenant(report *types.AttestationReport, ten
 	return v.verifyAgainstPolicy(report, policy, facts)
 }
 
-// policyForTenant resolves the policy a tenant verifies against:
-// its bound policy when one is registered, the active policy otherwise
 func (v *PCRVerifier) policyForTenant(tenant string) (*PCRPolicy, bool) {
 	v.mu.RLock()
 	defer v.mu.RUnlock()
@@ -402,8 +315,8 @@ func (v *PCRVerifier) policyForTenant(tenant string) (*PCRPolicy, bool) {
 	return policy, ok
 }
 
-// PolicyNameForTenant reports which policy tenant verifies against (for logging).
-// Falls back to the active policy name
+// PolicyNameForTenant returns the name of the policy the tenant verifies
+// against.
 func (v *PCRVerifier) PolicyNameForTenant(tenant string) string {
 	v.mu.RLock()
 	defer v.mu.RUnlock()
@@ -416,9 +329,8 @@ func (v *PCRVerifier) PolicyNameForTenant(tenant string) string {
 	return v.active
 }
 
-// reports whether tenant's policy pins expected hex values for PCR0, PCR1
-// and PCR7, which authenticates the firmware/Secure Boot baseline through
-// the signed-policy channel; used by the enrollment gate in Verify()
+// PolicyDeclaresBootPCRsForTenant reports whether the tenant's policy pins
+// PCR 0, 1 and 7.
 func (v *PCRVerifier) PolicyDeclaresBootPCRsForTenant(tenant string) bool {
 	policy, ok := v.policyForTenant(tenant)
 	if !ok || policy == nil {
@@ -436,33 +348,26 @@ func (v *PCRVerifier) PolicyDeclaresBootPCRsForTenant(tenant string) bool {
 	return true
 }
 
-// reports whether tenant's policy enforces event-log Secure Boot;
-// drives the event-log-anchored TOFU branch of the boot enrollment
-// gate in Verify()
+// PolicyRequiresSecureBootForTenant reports whether the tenant's policy sets
+// RequireSecureBoot.
 func (v *PCRVerifier) PolicyRequiresSecureBootForTenant(tenant string) bool {
 	policy, ok := v.policyForTenant(tenant)
 	return ok && policy != nil && policy.RequireSecureBoot
 }
 
-// reports whether tenant's policy gates on the kernel command line
+// PolicyRequiresCmdlineForTenant reports whether the tenant's policy sets
+// RequireCmdlinePolicy.
 func (v *PCRVerifier) PolicyRequiresCmdlineForTenant(tenant string) bool {
 	policy, ok := v.policyForTenant(tenant)
 	return ok && policy != nil && policy.RequireCmdlinePolicy
 }
 
-// Fleet profiles a policy may declare.
-// Unset profile reads as ProfileEnterprise.
+// Fleet profiles; ProfileConsumer enables self-service re-anchor.
 const (
 	ProfileEnterprise = "enterprise"
 	ProfileConsumer   = "consumer"
 )
 
-// validateProfile refuses a profile the verifier does not know.
-//
-// Typo must not be read as "not consumer" and quietly leave a diverse fleet
-// on the enterprise handling:
-// the operator would have written down intention the verifier never carried out,
-// and would find out from players whose games stopped after a BIOS update.
 func validateProfile(policy *PCRPolicy) error {
 	switch policy.Profile {
 	case "", ProfileEnterprise, ProfileConsumer:
@@ -473,33 +378,22 @@ func validateProfile(policy *PCRPolicy) error {
 	}
 }
 
-// PolicyEnablesSelfServiceReanchorForTenant reports whether the tenant's policy
-// asks the verifier to re-anchor a drifted boot baseline itself.
-//
-// Tenant with no policy gets false: no policy is not consent.
+// PolicyEnablesSelfServiceReanchorForTenant reports whether the tenant's
+// policy has ProfileConsumer.
 func (v *PCRVerifier) PolicyEnablesSelfServiceReanchorForTenant(tenant string) bool {
 	policy, ok := v.policyForTenant(tenant)
 	return ok && policy != nil && policy.Profile == ProfileConsumer
 }
 
-// agentHashAllowed reports whether the reported agent hash is one the active
-// policy lists, ie build the publisher has blessed.
-// It is named predicate rather than inline loop because more than one gate has
-// to ask the same question, and two independent comparisons of one list are two
-// places for it to be read differently.
-//
-// The comparison is over lower-case hex, which is what the agent reports
-// and what a policy file carries; upper-case entry does not match and is policy
-// authoring error rather than hash to accept leniently.
+// agentHashAllowed reports whether allowedHashes lists the reported hash in
+// lower-case hex.
 func agentHashAllowed(reported [types.HashSize]byte, allowedHashes []string) bool {
 	return slices.Contains(allowedHashes, hex.EncodeToString(reported[:]))
 }
 
-// kernelPinValue returns the quote-bound kernel image digest the
-// kernel_hashes gate compares, or why there is none.
-// Unlike RecordedKernelHash it never falls back to the reported register:
-// a whole-boot aggregate never matches an image-digest pin, and the refusal
-// would blame the kernel instead of the missing PCR 9 coverage.
+// kernelPinValue returns the quote-bound kernel image digest kernel_hashes is
+// compared with, or why there is none. The reported register is a whole-boot
+// aggregate, which no image digest pin matches.
 func kernelPinValue(facts *BootFacts) ([types.HashSize]byte, error) {
 	var out [types.HashSize]byte
 
@@ -531,13 +425,11 @@ func (e *policyError) Error() string { return e.err.Error() }
 
 func (e *policyError) Unwrap() error { return e.err }
 
-// refuse marks an error with the verdict class it belongs to
 func refuse(verdict uint32, err error) error {
 	return &policyError{verdict: verdict, err: err}
 }
 
-// policyVerdict is the class a verifyAgainstPolicy error belongs to;
-// an unmarked error stays VerifyPCRFail, the class that claims least.
+// policyVerdict returns the verdict refuse attached to err, or VerifyPCRFail.
 func policyVerdict(err error) uint32 {
 	var pe *policyError
 
@@ -548,22 +440,15 @@ func policyVerdict(err error) uint32 {
 }
 
 func (v *PCRVerifier) verifyAgainstPolicy(report *types.AttestationReport, policy *PCRPolicy, facts *BootFacts) error {
-	// check pcr values
-	//
-	// collect every mismatch in index order: a boot chain moves several
-	// registers at once, and map iteration is random, so the failure must name
-	// all of them and read the same on every round
+	// name every mismatch, in the same order on every round
 	var stale []string
 	for _, pcrIdx := range slices.Sorted(maps.Keys(policy.PCRs)) {
 		expectedHex := policy.PCRs[pcrIdx]
 
-		// policy faults, not host state: stop here, since nothing
-		// the reports can answer them
 		if pcrIdx < 0 || pcrIdx >= types.PCRCount {
 			return fmt.Errorf("invalid PCR index in policy '%s': %d", policy.Name, pcrIdx)
 		}
 
-		// check if this pcr was included in quote
 		if report.TPM.PCRMask&(1<<uint(pcrIdx)) == 0 {
 			return fmt.Errorf("PCR %d not included in quote", pcrIdx)
 		}
@@ -583,7 +468,6 @@ func (v *PCRVerifier) verifyAgainstPolicy(report *types.AttestationReport, polic
 		return errors.New(strings.Join(stale, "; "))
 	}
 
-	// check kernel hash
 	if len(policy.KernelHashes) > 0 {
 		pinned, err := kernelPinValue(facts)
 		if err != nil {
@@ -603,7 +487,6 @@ func (v *PCRVerifier) verifyAgainstPolicy(report *types.AttestationReport, polic
 		}
 	}
 
-	// verify agent binary hash if policy specifies allowed hashes
 	if len(policy.AgentHashes) > 0 {
 		if !agentHashAllowed(report.System.AgentHash, policy.AgentHashes) {
 			return refuse(types.VerifyIntegrityMismatch,
@@ -612,7 +495,6 @@ func (v *PCRVerifier) verifyAgainstPolicy(report *types.AttestationReport, polic
 		}
 	}
 
-	// check iommu requirement
 	if policy.RequireIOMMU {
 		if report.System.IOMMU.Flags&0x04 == 0 {
 			return refuse(types.VerifyIOMMUFail,
@@ -620,7 +502,6 @@ func (v *PCRVerifier) verifyAgainstPolicy(report *types.AttestationReport, polic
 		}
 	}
 
-	// check LSM enforce mode
 	if policy.RequireEnforce {
 		if report.Header.Flags&types.FlagEnforce == 0 {
 			return refuse(types.VerifyEnforceRequired,
@@ -628,7 +509,6 @@ func (v *PCRVerifier) verifyAgainstPolicy(report *types.AttestationReport, polic
 		}
 	}
 
-	// check module signing enforcement
 	if policy.RequireModuleSig {
 		if report.Header.Flags&types.FlagModuleSig == 0 {
 			return refuse(types.VerifyModuleSigRequired,
@@ -636,9 +516,7 @@ func (v *PCRVerifier) verifyAgainstPolicy(report *types.AttestationReport, polic
 		}
 	}
 
-	// check secure boot from the firmware-measured event log value;
-	// the agent-reported FlagSecureBoot is telemetry only (a
-	// compromised kernel sets it freely)
+	// FlagSecureBoot is agent-reported; the event log is quote-bound
 	if policy.RequireSecureBoot {
 		if facts == nil || !facts.SecureBootTrusted {
 			return refuse(types.VerifySecureBootRequired,
@@ -654,14 +532,12 @@ func (v *PCRVerifier) verifyAgainstPolicy(report *types.AttestationReport, polic
 		}
 	}
 
-	// check the measured kernel cmdline against the parameter denylist
 	if policy.RequireCmdlinePolicy {
 		if err := verifyCmdlinePolicy(policy, facts); err != nil {
 			return refuse(types.VerifyCmdlineRequired, err)
 		}
 	}
 
-	// check kernel lockdown
 	if policy.RequireLockdown {
 		if report.Header.Flags&types.FlagLockdown == 0 {
 			return refuse(types.VerifyLockdownRequired,
@@ -669,7 +545,6 @@ func (v *PCRVerifier) verifyAgainstPolicy(report *types.AttestationReport, polic
 		}
 	}
 
-	// check that the kernel appraises the host's executables
 	if policy.RequireIMAAppraisal {
 		if report.Header.Flags&types.FlagIMAAppraisal == 0 {
 			return refuse(types.VerifyIMAAppraisalRequired,
@@ -680,15 +555,15 @@ func (v *PCRVerifier) verifyAgainstPolicy(report *types.AttestationReport, polic
 	return nil
 }
 
-// returns the current active policy name
+// GetActivePolicy returns the name of the active policy.
 func (v *PCRVerifier) GetActivePolicy() string {
 	v.mu.RLock()
 	defer v.mu.RUnlock()
 	return v.active
 }
 
-// returns the currently active policy configuration
-// returned pointer must be treated as read-only by callers
+// GetActivePolicyConfig returns the active policy, which the caller must not
+// modify.
 func (v *PCRVerifier) GetActivePolicyConfig() (*PCRPolicy, bool) {
 	v.mu.RLock()
 	defer v.mu.RUnlock()
@@ -696,7 +571,7 @@ func (v *PCRVerifier) GetActivePolicyConfig() (*PCRPolicy, bool) {
 	return policy, ok
 }
 
-// returns names of all loaded policies
+// ListPolicies returns the names of the loaded policies.
 func (v *PCRVerifier) ListPolicies() []string {
 	v.mu.RLock()
 	defer v.mu.RUnlock()
@@ -721,67 +596,50 @@ func (v *PCRVerifier) TenantBindings() map[string]string {
 	return bindings
 }
 
-// creates the built-in permissive policy used only for explicit insecure fallback.
-// IMPORTANT: this policy has no measurement allowlists and MUST NOT be used by default
-// in production deployments. Provide a custom YAML policy with explicit PCR values
-// and/or kernel/agent hash allowlists.
+// DefaultPolicy returns a built-in policy that pins no measurement.
 func DefaultPolicy() *PCRPolicy {
 	return &PCRPolicy{
 		Name:        "default",
 		Description: "Built-in baseline policy - enforces security requirements without specific PCR values",
-		// PCR values intentionally empty - use TOFU for PCR14!
-		// Site-specific PCR0/PCR7 values should be defined in custom YAML policies
+
 		PCRs:                map[int]string{},
-		KernelHashes:        []string{}, // defined in site-specific policy
-		AgentHashes:         []string{}, // defined in site-specific policy
-		RequireIOMMU:        true,       // baseline: DMA remapping should be enabled
-		RequireEnforce:      true,       // LSM must be in enforce mode
-		RequireModuleSig:    true,       // baseline: module signature enforcement should be enabled
-		RequireSecureBoot:   false,      // optional hardware feature
-		RequireLockdown:     false,      // optional kernel feature
-		RequireIMAAppraisal: false,      // stock hosts carry no IMA signatures
+		KernelHashes:        []string{},
+		AgentHashes:         []string{},
+		RequireIOMMU:        true,
+		RequireEnforce:      true,
+		RequireModuleSig:    true,
+		RequireSecureBoot:   false,
+		RequireLockdown:     false,
+		RequireIMAAppraisal: false,
 	}
 }
 
-// calculates the PCR mask required by this policy
-// always includes PCR 14 (LOTA self-measurement) as it is required for baseline verification
-// and the firmware / SecureBoot PCRs (0, 1, 7) so the verifier can TOFU-pin them
+// GetRequiredMask returns the mask of the PCRs the policy pins, PCR 0, 1, 7
+// and 14 for the baselines, PCR 9 for the kernel image digest, and PCR 8
+// when RequireCmdlinePolicy is set.
 func (p *PCRPolicy) GetRequiredMask() uint32 {
 	mask := uint32(0)
 
-	// PCRs defined in the policy
 	for pcrIdx := range p.PCRs {
 		if pcrIdx >= 0 && pcrIdx < types.PCRCount {
 			mask |= (1 << uint(pcrIdx))
 		}
 	}
 
-	// PCR 14: LOTA self-measurement; required for runtime baseline.
-	// PCR 0:  SRTM / firmware code.
-	// PCR 1:  host platform configuration (BIOS settings, boot order).
-	// PCR 7:  Secure Boot policy + authority chain.
 	mask |= (1 << 14) | (1 << 0) | (1 << 1) | (1 << 7)
 
-	// PCR 8: GRUB kernel cmdline; the cmdline gate can only trust the
-	// measured command line when the quote covers the PCR it extends
 	if p.RequireCmdlinePolicy {
 		mask |= 1 << 8
 	}
 
-	// PCR 9: bootloader per-file measurements, source of the recorded kernel
-	// image digest.
-	// Unconditional -- the digest is recorded whether or not a policy pins
-	// a kernel, and is trusted only when the quote covers PCR
 	mask |= 1 << 9
 
 	return mask
 }
 
-// GetChallengePolicyMask returns the union of the PCR masks of the active policy
-// and every tenant-bound policy.
-// Challenge is issued before the client authenticates its tenant, so it must
-// request every PCR any selectable policy may check.
-// Quoting a superset is harmless.
+// GetChallengePolicyMask returns the union of the required masks of the
+// active policy, or DefaultPolicy without one, and every tenant-bound policy.
+// The challenge is issued before the client's tenant is known.
 func (v *PCRVerifier) GetChallengePolicyMask() uint32 {
 	v.mu.RLock()
 	defer v.mu.RUnlock()

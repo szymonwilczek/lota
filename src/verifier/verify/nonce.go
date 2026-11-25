@@ -1,18 +1,6 @@
 // SPDX-License-Identifier: MIT
 // Copyright (C) 2026 Szymon Wilczek
 // LOTA Verifier - Nonce/freshness verification module
-//
-// Ensures attestation reports are fresh and not replays.
-// The nonce is included in TPM quote's extraData field.
-//
-// Anti-replay protections (for now, i keep track of them here):
-//   - One-time nonce consumption (generate -> verify -> delete)
-//   - Nonce TTL expiration (configurable lifetime)
-//   - Client binding (nonce tied to specific client ID)
-//   - Per-client rate limiting (prevents challenge flooding)
-//   - Monotonic counter per client (detects reordering)
-//   - Used nonce history (prevents reuse after restart)
-//   - TPMS_ATTEST nonce binding (cryptographic proof from TPM)
 
 package verify
 
@@ -32,46 +20,28 @@ import (
 
 const maxNonceGenerationAttempts = 8
 
-// abstracts used nonce storage for anti-replay protection
-// memory backend is used by default; SQLite backend provides persistence
-// across verifier restarts for production deployments
-//
-// implementations must be safe for concurrent use:
-// nonce store calls the backend outside its own mutex so database round
-// trips do not serialize independent clients
+// UsedNonceBackend holds the used-nonce history. Implementations must be safe
+// for concurrent use: NonceStore calls them without its mutex.
 type UsedNonceBackend interface {
-	// stores a nonce key as used at the given time
 	Record(nonceKey string, usedAt time.Time) error
-
-	// reports whether the nonce key has been recorded as used.
 	Contains(nonceKey string) (bool, error)
-
-	// returns the number of stored used nonces
 	Count() int
 
-	// removes entries with usedAt older than the given cutoff
+	// Cleanup drops the entries used before olderThan.
 	Cleanup(olderThan time.Time)
 }
 
-// RoutedUsedNonceBackend partitions used nonces by client identity, the key
-// the baseline store partitions on, so a shard holds only its own clients'
-// state and losing one costs only those clients.
-//
-// A replay is the same client presenting the same nonce, so the record
-// and the lookup land on the same shard.
+// RoutedUsedNonceBackend keeps used nonces in the partition a route key picks.
+// NonceStore routes by the client identity, so a replay's record and lookup
+// land in the same partition.
 type RoutedUsedNonceBackend interface {
 	UsedNonceBackend
-
-	// stores a nonce key as used, in the partition the route key names
 	RecordFor(routeKey, nonceKey string, usedAt time.Time) error
-
-	// reports whether the route key's partition holds the nonce key
 	ContainsFor(routeKey, nonceKey string) (bool, error)
 }
 
-// implements UsedNonceBackend using an in-memory map
-// bounded by maxSize - evicts oldest entries when capacity is reached
-// carries its own mutex: the nonce store calls backends unlocked
+// memoryUsedNonceBackend keeps up to maxSize used nonces and evicts the oldest
+// to make room; maxSize <= 0 keeps none.
 type memoryUsedNonceBackend struct {
 	mu      sync.Mutex
 	index   map[string]*list.Element
@@ -147,77 +117,61 @@ func (m *memoryUsedNonceBackend) Cleanup(olderThan time.Time) {
 	}
 }
 
-// manages outstanding challenges and prevents replay attacks
+// NonceStore issues challenges and consumes each nonce once.
 type NonceStore struct {
 	mu         sync.RWMutex
 	pending    map[string]nonceEntry
 	lifetime   time.Duration
 	randReader io.Reader
 
-	// anti-replay: pluggable backend for used nonce history
-	usedBackend UsedNonceBackend
+	usedBackend   UsedNonceBackend
+	routedBackend RoutedUsedNonceBackend // usedBackend when it is routed
 
-	// non-nil when the backend partitions its state and the client identity
-	// decides the partition
-	routedBackend RoutedUsedNonceBackend
+	bindingChallenges  map[string]clientState // keyed by bindingID
+	identityChallenges map[string]clientState // keyed by identityID
 
-	// per-binding state for pending challenge tracking and binding checks.
-	// bindingID is transport-level (challengeID in TLS server).
-	bindingChallenges map[string]clientState
+	maxPending      int // per bindingID
+	rateLimitWindow time.Duration
+	rateLimitMax    int // rounds per identityID per window
 
-	// per-hardware identity state used for durable rate limiting and counters.
-	// key: hex(HardwareID).
-	identityChallenges map[string]clientState
-
-	maxPending      int           // max outstanding challenges per bindingID
-	rateLimitWindow time.Duration // rate limit window duration
-	rateLimitMax    int           // max attestations per identity per window
-
-	// stop channel for cleanupLoop goroutine
 	stopCh chan struct{}
 }
 
 type nonceEntry struct {
 	nonce     [types.NonceSize]byte
 	createdAt time.Time
-	bindingID string // optional: bind nonce to specific bindingID (challengeID)
+	bindingID string
 }
 
-// tracks per-client challenge state for rate limiting
 type clientState struct {
-	pendingCount    int       // outstanding challenges
-	windowStart     time.Time // current rate limit window start
-	windowCount     int       // challenges issued in current window
-	attestCounter   uint64    // monotonic attestation counter
-	lastAttestation time.Time // time of last successful attestation
+	pendingCount    int
+	windowStart     time.Time
+	windowCount     int
+	attestCounter   uint64
+	lastAttestation time.Time
 }
 
-// configuration for nonce store
+// NonceStoreConfig configures NewNonceStoreFromConfig.
 type NonceStoreConfig struct {
-	// how long a nonce remains valid
 	Lifetime time.Duration
 
-	// max outstanding challenges per client
+	// MaxPendingPerClient bounds the outstanding challenges per binding.
 	MaxPendingPerClient int
 
-	// rate limit: max challenges per window
-	RateLimitMax int
-
-	// rate limit window duration
+	// RateLimitMax bounds the rounds per identity in RateLimitWindow.
+	RateLimitMax    int
 	RateLimitWindow time.Duration
 
-	// max used nonces to remember (memory backend only)
+	// UsedNonceHistory caps the in-memory history used when UsedBackend is
+	// nil; zero or less keeps none.
 	UsedNonceHistory int
+	UsedBackend      UsedNonceBackend
 
-	// pluggable used nonce backend (nil = in-memory with UsedNonceHistory cap)
-	UsedBackend UsedNonceBackend
-
-	// cryptographically secure randomness source for nonce generation
-	// nil defaults to crypto/rand.Reader
+	// RandReader defaults to crypto/rand.Reader.
 	RandReader io.Reader
 }
 
-// returns sensible defaults
+// DefaultNonceStoreConfig returns the default nonce store configuration.
 func DefaultNonceStoreConfig() NonceStoreConfig {
 	return NonceStoreConfig{
 		Lifetime:            5 * time.Minute,
@@ -228,15 +182,13 @@ func DefaultNonceStoreConfig() NonceStoreConfig {
 	}
 }
 
-// creates a new nonce store from config
-// IMPORTANT: Nonces older than lifetime are automatically rejected
+// NewNonceStoreFromConfig starts the store's expiry sweep; Close stops it.
 func NewNonceStoreFromConfig(cfg NonceStoreConfig) *NonceStore {
 	backend := cfg.UsedBackend
 	if backend == nil {
 		backend = newMemoryUsedNonceBackend(cfg.UsedNonceHistory)
 	}
 
-	// nil unless the backend partitions its state; routed calls check it
 	var routed RoutedUsedNonceBackend
 	if r, ok := backend.(RoutedUsedNonceBackend); ok {
 		routed = r
@@ -265,16 +217,7 @@ func NewNonceStoreFromConfig(cfg NonceStoreConfig) *NonceStore {
 	return ns
 }
 
-// creates a new challenge with random nonce
-//
-// bindingID is a transport-level identifier used to bind the issued nonce
-// to the request context. In the verifier TLS server this is a per-connection
-// random challengeID (not an IP and not a durable hardware identity)
-//
-// Used-nonce history probe (database round trip on the Postgres backend)
-// runs before the store mutex is taken so challenge issuance for independent
-// clients does not serialize on the backend;
-// pending-collision re-check, per-binding limit and the insert stay atomic under the mutex
+// GenerateChallenge issues a challenge whose nonce is bound to bindingID.
 func (ns *NonceStore) GenerateChallenge(bindingID string, pcrMask uint32) (*types.Challenge, error) {
 	for range maxNonceGenerationAttempts {
 		var nonce [types.NonceSize]byte
@@ -283,9 +226,7 @@ func (ns *NonceStore) GenerateChallenge(bindingID string, pcrMask uint32) (*type
 		}
 
 		key := hex.EncodeToString(nonce[:])
-		// Partitioned backend is not probed: its partition is the client,
-		// which has not named itself yet.
-		// VerifyNonce still rejects a spent nonce.
+		// a routed backend is not probed: no client is named yet
 		if ns.routedBackend == nil {
 			used, err := ns.usedBackend.Contains(key)
 			if err != nil {
@@ -302,7 +243,6 @@ func (ns *NonceStore) GenerateChallenge(bindingID string, pcrMask uint32) (*type
 			continue
 		}
 
-		// enforce per-binding pending bound (bindingID is challenge-scoped)
 		if err := ns.checkPendingLimit(bindingID); err != nil {
 			ns.mu.Unlock()
 			return nil, err
@@ -331,21 +271,8 @@ func (ns *NonceStore) GenerateChallenge(bindingID string, pcrMask uint32) (*type
 	return nil, errors.New("nonce generation failed: repeated collisions")
 }
 
-// checks if the nonce in report matches an outstanding challenge
-// nonce is consumed (one-time use) to prevent replay
-//
-// SECURITY: This verifies TWO things:
-// - report.TPM.Nonce matches stored challenge
-// - Nonce inside TPMS_ATTEST (signed by TPM) matches stored challenge
-// identityID is the durable, authenticated client identity (the
-// CA-issued device pseudonym) used for per-identity rate limiting and
-// monotonic counters. It is supplied by the caller after the AIK
-// certificate has been verified, so the limit cannot be evaded by
-// rotating an agent-asserted hardware_id.
-//
-// usedContains and usedRecord reach the used-nonce history through the client's
-// partition where the backend has one. Both roads see the same nonce for the
-// same client, which is all replay protection needs.
+// usedContains and usedRecord reach the history through the identity's
+// partition when the backend is routed.
 func (ns *NonceStore) usedContains(identityID, key string) (bool, error) {
 	if ns.routedBackend != nil {
 		return ns.routedBackend.ContainsFor(identityID, key)
@@ -360,17 +287,14 @@ func (ns *NonceStore) usedRecord(identityID, key string, usedAt time.Time) error
 	return ns.usedBackend.Record(key, usedAt)
 }
 
-// VerifyNonce holds the store mutex only around the in-memory maps.
-// Used-nonce backend calls (database round trip each on the Postgres backend)
-// and the binding-nonce cryptography run unlocked so independent clients verify concurrently;
-// consumption stays atomic because the pending-map delete under the mutex has exactly
-// one winner, and only that winner reaches Record
+// VerifyNonce consumes the report's nonce. It refuses a nonce already used,
+// unknown, expired, issued to another binding, over the identity's rate limit,
+// or absent from the quote's extraData as the binding nonce. A rate-limit
+// refusal consumes the nonce; an extraData refusal leaves it pending.
+// identityID is the client identity from the verified AIK certificate.
 func (ns *NonceStore) VerifyNonce(report *types.AttestationReport, bindingID, identityID string) error {
 	key := hex.EncodeToString(report.TPM.Nonce[:])
 
-	// check used nonce history first (detects replays after restart)
-	// unlocked: history only grows, and nonce enters it solely through
-	// the single consumer that won the pending-map delete
 	used, err := ns.usedContains(identityID, key)
 	if err != nil {
 		return fmt.Errorf("used-nonce history unavailable, refusing the round: %w", err)
@@ -386,20 +310,17 @@ func (ns *NonceStore) VerifyNonce(report *types.AttestationReport, bindingID, id
 		return errors.New("unknown nonce - possible replay attack")
 	}
 
-	// check lifetime
 	if time.Since(entry.createdAt) > ns.lifetime {
 		delete(ns.pending, key)
 		ns.mu.Unlock()
 		return errors.New("nonce expired")
 	}
 
-	// verify transport binding
 	if entry.bindingID != "" && entry.bindingID != bindingID {
 		ns.mu.Unlock()
 		return errors.New("nonce bound to different challenge")
 	}
 
-	// verify nonce matches whats in report header
 	if subtle.ConstantTimeCompare(entry.nonce[:], report.TPM.Nonce[:]) != 1 {
 		ns.mu.Unlock()
 		return errors.New("nonce mismatch in report header")
@@ -415,14 +336,6 @@ func (ns *NonceStore) VerifyNonce(report *types.AttestationReport, bindingID, id
 	}
 	ns.mu.Unlock()
 
-	// verify nonce inside tpms_attest (signed by tpm)
-	// compute binding nonce =
-	// SHA-256(challenge_nonce || hardware_id || signed_flags ||
-	// kernel_hash || agent_hash || iommu_status)
-	// to verify that the TPM quote is bound to the reported hardware identity
-	//
-	// Pure computation on the copied entry
-	// Failure leaves the nonce pending
 	if report.TPM.AttestSize == 0 {
 		return errors.New("no attestation data - cannot verify nonce binding")
 	}
@@ -437,9 +350,7 @@ func (ns *NonceStore) VerifyNonce(report *types.AttestationReport, bindingID, id
 		return fmt.Errorf("TPMS_ATTEST nonce verification failed: %w", err)
 	}
 
-	// all checks passed: consume the nonce
-	// re-check pending under the mutex -- concurrent presentation
-	// of the same nonce may have won the delete while the unlocked crypto ran
+	// a concurrent round may have consumed it during the unlocked check
 	ns.mu.Lock()
 	if _, still := ns.pending[key]; !still {
 		ns.mu.Unlock()
@@ -453,8 +364,6 @@ func (ns *NonceStore) VerifyNonce(report *types.AttestationReport, bindingID, id
 	ns.identityChallenges[identityID] = ics
 	ns.mu.Unlock()
 
-	// record as used
-	// only the delete winner gets here for a given key
 	if err := ns.usedRecord(identityID, key, time.Now()); err != nil {
 		return fmt.Errorf("failed to record used nonce: %w", err)
 	}
@@ -462,9 +371,7 @@ func (ns *NonceStore) VerifyNonce(report *types.AttestationReport, bindingID, id
 	return nil
 }
 
-// consumeLocked removes pending nonce and releases its slot in
-// the per-binding pending budget.
-// Caller holds ns.mu
+// consumeLocked drops a pending nonce and its binding's slot; ns.mu is held.
 func (ns *NonceStore) consumeLocked(key, bindingID string) {
 	delete(ns.pending, key)
 	if cs, ok := ns.bindingChallenges[bindingID]; ok {
@@ -491,19 +398,16 @@ func (ns *NonceStore) DiscardChallenge(nonce [types.NonceSize]byte, bindingID st
 	ns.consumeLocked(key, bindingID)
 }
 
-// enforces per-binding pending challenge bound.
 func (ns *NonceStore) checkPendingLimit(bindingID string) error {
 	cs, exists := ns.bindingChallenges[bindingID]
 
 	if exists {
-		// check outstanding challenge limit
 		if cs.pendingCount >= ns.maxPending {
 			return fmt.Errorf("too many outstanding challenges for client %s (%d/%d)",
 				bindingID, cs.pendingCount, ns.maxPending)
 		}
 		ns.bindingChallenges[bindingID] = cs
 	} else {
-		// new bindingID - initialize state
 		ns.bindingChallenges[bindingID] = clientState{
 			windowStart: time.Now(),
 			windowCount: 0,
@@ -513,7 +417,6 @@ func (ns *NonceStore) checkPendingLimit(bindingID string) error {
 	return nil
 }
 
-// enforces durable per-hardware challenge/attest rate limiting.
 func (ns *NonceStore) checkIdentityRateLimit(identityID string) error {
 	cs := ns.identityChallenges[identityID]
 	now := time.Now()
@@ -531,12 +434,11 @@ func (ns *NonceStore) checkIdentityRateLimit(identityID string) error {
 	return nil
 }
 
-// stops the background cleanup goroutine
+// Close stops the expiry sweep.
 func (ns *NonceStore) Close() {
 	close(ns.stopCh)
 }
 
-// periodically removes expired nonces
 func (ns *NonceStore) cleanupLoop() {
 	ticker := time.NewTicker(ns.lifetime / 2)
 	defer ticker.Stop()
@@ -556,10 +458,8 @@ func (ns *NonceStore) cleanup() {
 
 	ns.mu.Lock()
 
-	// clean expired pending nonces
 	for key, entry := range ns.pending {
 		if now.Sub(entry.createdAt) > ns.lifetime {
-			// decrement binding pending count
 			if cs, ok := ns.bindingChallenges[entry.bindingID]; ok {
 				cs.pendingCount--
 				if cs.pendingCount < 0 {
@@ -571,7 +471,6 @@ func (ns *NonceStore) cleanup() {
 		}
 	}
 
-	// evict stale client entries to bound map growth
 	clientCutoff := now.Add(-ns.lifetime * 3)
 	for id, cs := range ns.bindingChallenges {
 		if cs.pendingCount <= 0 && cs.lastAttestation.Before(clientCutoff) {
@@ -587,26 +486,22 @@ func (ns *NonceStore) cleanup() {
 
 	ns.mu.Unlock()
 
-	// clean old used nonce entries via backend
-	// unlocked so Postgres DELETE round trip does not stall challenge
-	// and verify traffic
-	// keep used 3x longer than lifetime
+	// a used nonce outlives its pending entry
 	ns.usedBackend.Cleanup(now.Add(-ns.lifetime * 3))
 }
 
-// returns number of outstanding challenges (for monitoring)
+// PendingCount returns the number of outstanding challenges.
 func (ns *NonceStore) PendingCount() int {
 	ns.mu.RLock()
 	defer ns.mu.RUnlock()
 	return len(ns.pending)
 }
 
-// returns number of used nonces in history (for monitoring)
+// UsedCount returns the size of the used-nonce history.
 func (ns *NonceStore) UsedCount() int {
 	return ns.usedBackend.Count()
 }
 
-// returns per-hardware-identity attestation counter (for monitoring).
 func (ns *NonceStore) ClientCounter(clientID string) uint64 {
 	ns.mu.RLock()
 	defer ns.mu.RUnlock()
@@ -617,7 +512,7 @@ func (ns *NonceStore) ClientCounter(clientID string) uint64 {
 	return 0
 }
 
-// returns per-binding pending challenge count
+// ClientPendingCount returns the binding's outstanding challenges.
 func (ns *NonceStore) ClientPendingCount(clientID string) int {
 	ns.mu.RLock()
 	defer ns.mu.RUnlock()
@@ -628,7 +523,6 @@ func (ns *NonceStore) ClientPendingCount(clientID string) int {
 	return 0
 }
 
-// returns time of bindingID's last successful attestation
 func (ns *NonceStore) ClientLastAttestation(clientID string) time.Time {
 	ns.mu.RLock()
 	defer ns.mu.RUnlock()
@@ -639,9 +533,7 @@ func (ns *NonceStore) ClientLastAttestation(clientID string) time.Time {
 	return time.Time{}
 }
 
-// ForgetClient drops a deleted client's identity and binding state
-// (counter, last attestation, rate-limit window).
-// The used-nonce history (replay defence) is keyed separately and stays.
+// ForgetClient drops the identity's state; the used-nonce history stays.
 func (ns *NonceStore) ForgetClient(clientID string) {
 	ns.mu.Lock()
 	defer ns.mu.Unlock()
@@ -650,7 +542,7 @@ func (ns *NonceStore) ForgetClient(clientID string) {
 	delete(ns.bindingChallenges, clientID)
 }
 
-// returns all hardware identities with active attestation state
+// ListActiveClients returns the identities the store holds state for.
 func (ns *NonceStore) ListActiveClients() []string {
 	ns.mu.RLock()
 	defer ns.mu.RUnlock()

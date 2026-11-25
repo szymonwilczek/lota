@@ -1,13 +1,6 @@
 // SPDX-License-Identifier: MIT
 // Copyright (C) 2026 Szymon Wilczek
 // LOTA Verifier - PostgreSQL Used Nonce Backend
-//
-// Postgres counterpart of SQLiteUsedNonceBackend.
-// Same anti-replay semantics over a shared backend, so a nonce consumed on
-// one verifier instance is rejected as replayed on every other instance.
-//
-// Only the SQL dialect differs:
-// numbered $N placeholders and ON CONFLICT DO NOTHING in place of INSERT OR IGNORE
 
 package verify
 
@@ -17,14 +10,13 @@ import (
 	"time"
 )
 
-// PostgresUsedNonceBackend implements UsedNonceBackend using a shared
-// Postgres database
+// PostgresUsedNonceBackend keeps the used-nonce history in Postgres,
+// so instances sharing the database refuse each other's used nonces.
 type PostgresUsedNonceBackend struct {
 	db *sql.DB
 }
 
-// NewPostgresUsedNonceBackend creates a used nonce backend backed by
-// the given Postgres database
+// NewPostgresUsedNonceBackend returns a backend over db.
 func NewPostgresUsedNonceBackend(db *sql.DB) *PostgresUsedNonceBackend {
 	return &PostgresUsedNonceBackend{db: db}
 }
@@ -38,9 +30,7 @@ func (s *PostgresUsedNonceBackend) Record(nonceKey string, usedAt time.Time) err
 	return err
 }
 
-// Contains tells a nonce that was never used from one the database could not
-// be asked about. Folding both into false answered "fresh" during an outage,
-// which silently suspends the cross-instance replay guarantee.
+// Contains returns an error, not false, when the database cannot answer.
 func (s *PostgresUsedNonceBackend) Contains(nonceKey string) (bool, error) {
 	hash := hexEncode(nonceKey)
 	var exists int

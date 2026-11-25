@@ -1,15 +1,6 @@
 // SPDX-License-Identifier: MIT
 // Copyright (C) 2026 Szymon Wilczek
 // LOTA Verifier - TPM Event Log Parser and PCR Replay
-//
-// Parses the TCG binary event log (binary_bios_measurements) and replays
-// PCR extend operations to independently verify that reported PCR values
-// are consistent with the firmware/bootloader measurement chain.
-//
-// Event log format:
-//	- Legacy header event (TCG_PCR_EVENT format, pcr_index=0, event_type=EV_NO_ACTION)
-// 		Contains Spec ID Event with digest algorithm info
-//  - TCG_PCR_EVENT2 entries (crypto-agile format with per-algorithm digests)
 
 package verify
 
@@ -49,13 +40,13 @@ const (
 
 // untrusted size caps
 const (
-	maxTCGHeaderDataSize uint32 = 1 << 20 // 1MB
-	maxTCGEventDataSize  uint32 = 1 << 20 // 1MB
-	maxTCGDigestCount    uint32 = 16      // sane upper bound for digest algorithms
-	maxUEFIVarNameUnits  uint64 = 1 << 10 // UTF-16 code units; EFI variable names are short
+	maxTCGHeaderDataSize uint32 = 1 << 20
+	maxTCGEventDataSize  uint32 = 1 << 20
+	maxTCGDigestCount    uint32 = 16
+	maxUEFIVarNameUnits  uint64 = 1 << 10 // UTF-16 code units
 )
 
-// single measurement entry from the event log
+// EventLogEntry is one TCG_PCR_EVENT2 entry of the event log.
 type EventLogEntry struct {
 	PCRIndex  uint32
 	EventType uint32
@@ -63,25 +54,21 @@ type EventLogEntry struct {
 	EventData []byte
 }
 
-// result of event log parsing
+// ParsedEventLog is a parsed event log.
 type ParsedEventLog struct {
 	Entries       []EventLogEntry
-	AlgorithmList []uint16 // algorithms present in log
+	AlgorithmList []uint16 // from the Spec ID Event
 }
 
-// result of PCR replay
+// ReplayResult holds the SHA-256 bank a replay reconstructs.
 type ReplayResult struct {
-	// reconstructed PCR values per algorithm (IMPORTANT NOTE: currently SHA-256 only)
-	PCRValues [types.PCRCount][types.HashSize]byte
-
-	// number of extend operations per PCR
+	PCRValues    [types.PCRCount][types.HashSize]byte
 	ExtendCounts [types.PCRCount]int
-
-	// total entries processed
 	TotalEntries int
 }
 
-// parses a TCG binary event log (binary_bios_measurements format)
+// ParseEventLog parses a TCG crypto-agile binary event log: a TCG_PCR_EVENT
+// header carrying the Spec ID Event, then TCG_PCR_EVENT2 entries.
 func ParseEventLog(data []byte) (*ParsedEventLog, error) {
 	if len(data) < 32 {
 		return nil, errors.New("event log too short")
@@ -90,7 +77,6 @@ func ParseEventLog(data []byte) (*ParsedEventLog, error) {
 	result := &ParsedEventLog{}
 	offset := 0
 
-	// first entry is the legacy header (TCG_PCR_EVENT format)
 	// pcr_index (4) + event_type (4) + sha1_digest (20) + event_data_size (4) + event_data
 	if len(data) < offset+32 {
 		return nil, errors.New("event log truncated at header")
@@ -100,7 +86,7 @@ func ParseEventLog(data []byte) (*ParsedEventLog, error) {
 	offset += 4
 	headerType := binary.LittleEndian.Uint32(data[offset:])
 	offset += 4
-	offset += 20 // skip SHA-1 digest
+	offset += 20
 	headerDataSize := binary.LittleEndian.Uint32(data[offset:])
 	offset += 4
 
@@ -115,9 +101,8 @@ func ParseEventLog(data []byte) (*ParsedEventLog, error) {
 	if remaining < 0 || uint64(headerDataSize) > uint64(remaining) {
 		return nil, errors.New("event log truncated at header data")
 	}
-	headerSize := int(headerDataSize) // safe after cap
+	headerSize := int(headerDataSize)
 
-	// parse Spec ID Event to get algorithm list
 	specData := data[offset : offset+headerSize]
 	algList, err := parseSpecIDEvent(specData)
 	if err != nil {
@@ -126,7 +111,6 @@ func ParseEventLog(data []byte) (*ParsedEventLog, error) {
 	result.AlgorithmList = algList
 	offset += headerSize
 
-	// parse remaining entries as TCG_PCR_EVENT2
 	for offset < len(data) {
 		entry, consumed, err := parsePCREvent2(data[offset:])
 		if err != nil {
@@ -142,9 +126,7 @@ func ParseEventLog(data []byte) (*ParsedEventLog, error) {
 	return result, nil
 }
 
-// extracts algorithm list from Spec ID Event header
 func parseSpecIDEvent(data []byte) ([]uint16, error) {
-	// spec ID Event structure:
 	// signature (16 bytes): "Spec ID Event03\0"
 	// platformClass (4)
 	// specVersionMinor (1)
@@ -158,8 +140,7 @@ func parseSpecIDEvent(data []byte) ([]uint16, error) {
 		return nil, errors.New("spec ID event too short")
 	}
 
-	// skip to numberOfAlgorithms at offset 24
-	offset := 16 + 4 + 1 + 1 + 1 + 1 // = 24
+	offset := 16 + 4 + 1 + 1 + 1 + 1
 	numAlgs := binary.LittleEndian.Uint32(data[offset:])
 	offset += 4
 
@@ -180,7 +161,6 @@ func parseSpecIDEvent(data []byte) ([]uint16, error) {
 	return algs, nil
 }
 
-// parses a single TCG_PCR_EVENT2 entry
 func parsePCREvent2(data []byte) (*EventLogEntry, int, error) {
 	if len(data) < 8 {
 		return nil, 0, io.ErrUnexpectedEOF
@@ -216,7 +196,6 @@ func parsePCREvent2(data []byte) (*EventLogEntry, int, error) {
 
 		digestSize := algDigestSize(algID)
 		if digestSize == 0 {
-			// unknown algorithm, try to find size from algList
 			return nil, 0, fmt.Errorf("unknown digest algorithm: 0x%04x", algID)
 		}
 
@@ -229,7 +208,6 @@ func parsePCREvent2(data []byte) (*EventLogEntry, int, error) {
 		offset += digestSize
 	}
 
-	// event data
 	if len(data) < offset+4 {
 		return nil, 0, io.ErrUnexpectedEOF
 	}
@@ -242,7 +220,7 @@ func parsePCREvent2(data []byte) (*EventLogEntry, int, error) {
 	if remaining < 0 || uint64(eventDataSize) > uint64(remaining) {
 		return nil, 0, io.ErrUnexpectedEOF
 	}
-	eventSize := int(eventDataSize) // safe after cap
+	eventSize := int(eventDataSize)
 	entry.EventData = make([]byte, eventSize)
 	copy(entry.EventData, data[offset:offset+eventSize])
 	offset += eventSize
@@ -257,15 +235,15 @@ var efiGlobalVariableGUID = [16]byte{
 	0xaa, 0x0d, 0x00, 0xe0, 0x98, 0x03, 0x2b, 0x8c,
 }
 
-// decoded UEFI_VARIABLE_DATA payload of an EV_EFI_VARIABLE_* event
+// UEFIVariableData is the decoded UEFI_VARIABLE_DATA of an EV_EFI_VARIABLE_*
+// event.
 type UEFIVariableData struct {
 	VariableName [16]byte // EFI_GUID, on-disk mixed-endian layout
 	UnicodeName  string
 	VariableData []byte
 }
 
-// parses the UEFI_VARIABLE_DATA structure (TCG PC Client Platform
-// Firmware Profile):
+// UEFI_VARIABLE_DATA layout:
 //
 //	VariableName       EFI_GUID (16)
 //	UnicodeNameLength  u64 (UTF-16 code units)
@@ -304,7 +282,6 @@ func parseUEFIVariableData(data []byte) (*UEFIVariableData, error) {
 	return out, nil
 }
 
-// extracts the NUL-terminated string an EV_IPL event carries
 func parseIPLEventString(data []byte) string {
 	if i := bytes.IndexByte(data, 0); i >= 0 {
 		data = data[:i]
@@ -312,7 +289,6 @@ func parseIPLEventString(data []byte) string {
 	return string(data)
 }
 
-// returns digest size in bytes for a given TCG algorithm ID
 func algDigestSize(algID uint16) int {
 	switch algID {
 	case AlgSHA1:
@@ -328,15 +304,10 @@ func algDigestSize(algID uint16) int {
 	}
 }
 
-// startupLocalitySignature marks the EV_NO_ACTION record firmware writes to
-// state the locality it started the TPM at.
-// The record is the signature, its NUL terminator, then one byte of locality.
+// startupLocalitySignature starts the EV_NO_ACTION record of the locality the
+// firmware started the TPM at; one byte of locality follows it.
 var startupLocalitySignature = []byte("StartupLocality\x00")
 
-// startupLocality returns the locality an EV_NO_ACTION entry declares.
-//
-// Firmware data the verifier does not control, so a record that is not this
-// one, or is too short to hold the byte, reports nothing.
 func startupLocality(entry *EventLogEntry) (byte, bool) {
 	if entry.EventType != EvNoAction {
 		return 0, false
@@ -350,17 +321,10 @@ func startupLocality(entry *EventLogEntry) (byte, bool) {
 	return entry.EventData[len(startupLocalitySignature)], true
 }
 
-// replays the event log to reconstruct PCR values
-//
-// PCRs start at zero, except where the log records that firmware started the TPM
-// above locality 0: a measured static root of trust (Intel Boot Guard
-// and equivalents) starts it at locality 3, and PCR 0 then begins at 31 zero bytes
-// followed by the locality.
-// The locality comes from the unsigned log, so a forged one cannot pass: the replay
-// must still reproduce the quote-signed PCR values.
-//
-// EV_NO_ACTION entries are informational: the spec-ID header, the locality
-// record, vendor notes. The TPM never extended them, so neither does this.
+// ReplayEventLog extends the SHA-256 digests of the log into zeroed PCRs.
+// A StartupLocality record ahead of the first PCR 0 extend starts PCR 0 at
+// 31 zero bytes and the locality. EV_NO_ACTION entries, entries without a
+// SHA-256 digest and entries past the last PCR are not extended.
 func ReplayEventLog(parsed *ParsedEventLog) (*ReplayResult, error) {
 	if parsed == nil {
 		return nil, errors.New("nil event log")
@@ -383,10 +347,9 @@ func ReplayEventLog(parsed *ParsedEventLog) (*ReplayResult, error) {
 
 		sha256Digest, ok := entry.Digests[AlgSHA256]
 		if !ok {
-			continue // skip entries without SHA-256 digest
+			continue
 		}
 
-		// PCR extend: new_value = SHA256(old_value || digest)
 		h := sha256.New()
 		h.Write(result.PCRValues[entry.PCRIndex][:])
 		h.Write(sha256Digest)
@@ -399,21 +362,17 @@ func ReplayEventLog(parsed *ParsedEventLog) (*ReplayResult, error) {
 	return result, nil
 }
 
-// verifies that reported PCR values match the event log replay
-// only checks PCRs that have entries in the event log (extend count > 0)
-// PCRs with OS-level extensions (PCR 14 from LOTA self-measurement)
-// are expected to differ since those extensions happen after boot
-//
-// skipPCRs allows excluding specific PCR indices from the check
+// VerifyEventLogConsistency returns a mismatch for each PCR outside skipPCRs
+// that the replay extended and the report quoted with another value.
 func VerifyEventLogConsistency(report *types.AttestationReport, replay *ReplayResult, skipPCRs map[int]bool) []string {
 	var mismatches []string
 
 	for i := 0; i < types.PCRCount; i++ {
 		if replay.ExtendCounts[i] == 0 {
-			continue // no events for this PCR
+			continue
 		}
 		if report.TPM.PCRMask&(1<<uint(i)) == 0 {
-			continue // not TPM-quoted by this challenge/report
+			continue
 		}
 		if skipPCRs != nil && skipPCRs[i] {
 			continue
@@ -435,17 +394,9 @@ func VerifyEventLogConsistency(report *types.AttestationReport, replay *ReplayRe
 	return mismatches
 }
 
-// performs full event log verification and derives the boot facts the
-// policy gates consume:
-// - parse the binary event log
-// - replay PCR extend operations
-// - compare replayed PCRs against reported values
-// - extract Secure Boot state and kernel cmdline (see BootFacts)
-//
-// enforcePCR8 removes PCR 8 from the consistency skip set.
-// It must be set whenever the active policy gates on the measured kernel cmdline:
-// a forged digest breaks the PCR 8 replay and is only caught when the PCR is
-// consistency-checked. Forged text under a real digest is caught by the policy.
+// VerifyEventLogWithPolicy parses and replays the report's event log, fails
+// on a mismatch with a quoted PCR the log extends, other than 8, 9 and 14, and
+// returns the boot facts. enforcePCR8 adds PCR 8 to the check.
 func VerifyEventLogWithPolicy(report *types.AttestationReport, enforcePCR8 bool) (*BootFacts, error) {
 	if len(report.EventLog) == 0 {
 		return nil, errors.New("TPM event log missing from report")
@@ -465,9 +416,6 @@ func VerifyEventLogWithPolicy(report *types.AttestationReport, enforcePCR8 bool)
 		return nil, fmt.Errorf("event log verification: %w", err)
 	}
 
-	// skip PCR 14 (LOTA self-measurement, extended at runtime)
-	// skip PCR 9 (bootloader-loaded files, not modeled by any policy)
-	// skip PCR 8 (GRUB cmdline) only while no policy consumes it
 	skipPCRs := map[int]bool{
 		9: true, 14: true,
 	}
@@ -487,8 +435,6 @@ func VerifyEventLogWithPolicy(report *types.AttestationReport, enforcePCR8 bool)
 	if err != nil {
 		return nil, fmt.Errorf("event log semantic extraction failed: %w", err)
 	}
-	// hand the already-parsed log to downstream consumers (re-anchor) so
-	// they do not parse the same bytes a second time
 	facts.Parsed = parsed
 
 	slog.Info("event log verified",
@@ -498,10 +444,9 @@ func VerifyEventLogWithPolicy(report *types.AttestationReport, enforcePCR8 bool)
 	return facts, nil
 }
 
-// verifyVariableEventDigests binds the Secure Boot variables to the replay.
-// Replay extends the digest alone, so event data it does not cover could name
-// any value while PCR 7 still matches. Firmware measures the whole
-// UEFI_VARIABLE_DATA, and these values are what verifier reads out of the log.
+// verifyVariableEventDigests refuses a PCR 7 EV_EFI_VARIABLE_DRIVER_CONFIG
+// event whose data does not hash to its SHA-256 digest. The replay extends the
+// digest alone, so uncovered data could name any value while PCR 7 matches.
 func verifyVariableEventDigests(parsed *ParsedEventLog) error {
 	for i := range parsed.Entries {
 		e := &parsed.Entries[i]

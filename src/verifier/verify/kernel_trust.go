@@ -1,17 +1,6 @@
 // SPDX-License-Identifier: MIT
 // Copyright (C) 2026 Szymon Wilczek
 // LOTA Verifier - Kernel trust from event-log semantics
-//
-// Machine-independent kernel trust controls derived from the TPM event
-// log instead of raw PCR pins or agent-reported flags:
-//   - Secure Boot state from the firmware-measured SecureBoot variable
-//     (PCR 7, before the separator)
-//   - kernel command line from the GRUB measurement (PCR 8, EV_IPL)
-//
-// Extracted values are trustworthy only when the corresponding PCR
-// is covered by the TPM quote and the event-log replay matches the
-// quoted value.
-// Callers must gate on those conditions (see BootFacts).
 
 package verify
 
@@ -26,7 +15,7 @@ import (
 	"github.com/szymonwilczek/lota/verifier/types"
 )
 
-// firmware-measured Secure Boot configuration recovered from the log
+// SecureBootState is the SecureBoot variable the firmware measured into PCR 7.
 type SecureBootState struct {
 	Found   bool
 	Enabled bool
@@ -38,8 +27,7 @@ var separatorDigest = sha256.Sum256([]byte{0, 0, 0, 0})
 
 // firmwarePCR7 returns the PCR 7 events the replay extended before the
 // firmware's separator, and false when no separator was extended.
-// Event types sit outside the digest, so the separator is found by its
-// digest, and everything root extends after boot lands past it.
+// The separator is found by its digest, which does not cover the event type.
 func firmwarePCR7(parsed *ParsedEventLog) ([]*EventLogEntry, bool) {
 	var out []*EventLogEntry
 	for i := range parsed.Entries {
@@ -110,16 +98,10 @@ const (
 	grubCmdPrefix       = "grub_cmd: "
 )
 
-// Returns the kernel command lines GRUB measured into PCR 8, and how many
-// PCR 8 EV_IPL events carry text their digest does not cover.
-// Only covered text is read. GRUB leaves its "label: " prefix out of the
-// digest, so lines are found by what the text says: a linux command, or a
-// kernel image path followed by parameters. The label adds lines, never
-// hides one.
-// Leading kernel image path token is stripped: it duplicates the per-machine
-// boot device/path and carries no parameters.
-// All returned command lines must satisfy the policy; only one of them
-// booted, but the log does not say which.
+// ExtractKernelCmdlines returns the kernel command lines, image path dropped,
+// in the PCR 8 EV_IPL events whose digest covers their text, and the number
+// of PCR 8 EV_IPL events whose digest does not. The log does not say which
+// of the lines booted.
 func ExtractKernelCmdlines(parsed *ParsedEventLog) (lines []string, unbound int) {
 	if parsed == nil {
 		return nil, 0
@@ -194,7 +176,6 @@ func linuxCommandArgs(cmd string) (string, bool) {
 	return "", false
 }
 
-// drops the first whitespace-separated token (the kernel image path)
 func stripImagePathToken(s string) string {
 	s = strings.TrimSpace(s)
 	if i := strings.IndexAny(s, " \t"); i >= 0 {
@@ -203,33 +184,30 @@ func stripImagePathToken(s string) string {
 	return ""
 }
 
-// builtinCmdlineDeny rejects parameters that defeat the signed kernel's
-// integrity guarantees while staying machine-independent: none of them
-// appear on a stock distribution command line. Rule forms:
+// builtinCmdlineDeny is the kernel parameter denylist. Rule forms:
 //
 //	"param"   bare flag or any valued form
 //	"param="  any value
 //	"param=v" exact key=value pair
 var builtinCmdlineDeny = []string{
-	"init=",         // arbitrary userspace entry point
-	"rdinit=",       // arbitrary entry point via initramfs
-	"rd.break",      // dracut pre-pivot root shell
-	"lockdown=none", // disables kernel lockdown
+	"init=",
+	"rdinit=",
+	"rd.break",
+	"lockdown=none",
 	"module.sig_enforce=0",
 	"selinux=0",
 	"enforcing=0",
 	"apparmor=0",
 	"security=none",
-	"systemd.debug_shell", // root shell on tty9
-	"kgdboc=",             // kernel debugger console: live memory patching
+	"systemd.debug_shell",
+	"kgdboc=",
 }
 
-// kernel parameter names treat '-' and '_' as equivalent
+// the kernel reads '-' and '_' in parameter names as one
 func normalizeParamKey(k string) string {
 	return strings.ReplaceAll(k, "-", "_")
 }
 
-// reports whether a single cmdline token matches a deny rule
 func cmdlineTokenMatches(token, rule string) bool {
 	tKey, tVal, tHasVal := strings.Cut(token, "=")
 	rKey, rVal, rHasVal := strings.Cut(rule, "=")
@@ -242,9 +220,9 @@ func cmdlineTokenMatches(token, rule string) bool {
 	return tHasVal && tVal == rVal
 }
 
-// returns the deny rules matched by any parameter on cmdline.
-// Tokenization is whitespace-based and does not honor kernel quoting,
-// so a denied key inside a quoted value still matches (fail closed).
+// MatchCmdlineDeny returns the deny rules matched by a parameter on cmdline.
+// Tokens split on whitespace alone, so a denied key inside a quoted value
+// matches too.
 func MatchCmdlineDeny(cmdline string, deny []string) []string {
 	var hits []string
 	seen := make(map[string]bool)
@@ -261,7 +239,6 @@ func MatchCmdlineDeny(cmdline string, deny []string) []string {
 
 // KernelImage is the bootloader's measurement of the kernel it loaded,
 // taken from the event log.
-// PCR 9 also covers grubenv, which changes every boot; the image digest does not.
 type KernelImage struct {
 	Found  bool
 	Path   string // as the bootloader named it, ie (hd0,gpt4)/vmlinuz-...
@@ -326,10 +303,8 @@ func ExtractKernelImageDigest(parsed *ParsedEventLog) (KernelImage, error) {
 	return out, nil
 }
 
-// RecordedKernelHash returns the kernel digest the verifier records
-// and kernel_hashes pins, so a pinned value matches its source.
-// The image digest is used when PCR 9 is quoted and replays; otherwise
-// the reported register, which names a boot rather than a kernel.
+// RecordedKernelHash returns the kernel digest the verifier records: the image
+// digest when PCR 9 is quoted and replays, the reported register otherwise.
 func RecordedKernelHash(report *types.AttestationReport, facts *BootFacts) [types.HashSize]byte {
 	var out [types.HashSize]byte
 	if facts != nil && facts.KernelImageTrusted && facts.KernelImage.Found {
@@ -342,11 +317,9 @@ func RecordedKernelHash(report *types.AttestationReport, facts *BootFacts) [type
 	return report.System.KernelHash
 }
 
-// BootFacts carries the event-log-derived boot state the policy gates
-// consume.
-// *Trusted field is set only when the source PCR is covered by the quote
-// mask and the event-log replay reproduces the quoted value,
-// i.e. the TPM vouches for the log entries the fact came from
+// BootFacts carries the boot state the policy gates read from the event log.
+// A *Trusted field is set when the quote covers its PCR and the replay
+// extended it to the quoted value.
 type BootFacts struct {
 	SecureBoot        SecureBootState
 	SecureBootTrusted bool // PCR 7 quoted + replay-consistent
@@ -358,49 +331,27 @@ type BootFacts struct {
 	PCR8Reported   [types.HashSize]byte
 	PCR8EventsSeen bool
 
-	// recorded, not gated: a log naming two kernels leaves it unset
+	// a log naming two kernels leaves it unset
 	KernelImage        KernelImage
 	KernelImageTrusted bool // PCR 9 quoted + replay-consistent
 
-	// Parsed is the event log already parsed for this verification, so
-	// downstream consumers (re-anchor) reuse it instead of parsing the
-	// same bytes again.
-	// Set only after quote-consistency passed.
+	// Parsed is the log the facts came from, set by VerifyEventLogWithPolicy.
 	Parsed *ParsedEventLog
 }
 
-// SecureBootAnchored reports whether the event-log facts prove Secure
-// Boot enabled through a quote-authenticated PCR 7 replay.
-// Boot enrollment gate uses this as the machine-independent anchor
-// that permits per-device TOFU of the PCR 0/1/7 baseline:
-// the boot-with-Secure-Boot-off cheat path is already rejected here,
-// so the TOFU row degrades to a per-device rollback/consistency anchor
-// rather than the sole firmware trust control.
+// SecureBootAnchored reports whether a trusted PCR 7 replay carries the
+// SecureBoot variable enabled.
 func SecureBootAnchored(facts *BootFacts) bool {
 	return facts != nil && facts.SecureBootTrusted &&
 		facts.SecureBoot.Found && facts.SecureBoot.Enabled
 }
 
-// UEFIAnchored reports whether the event log proves the host booted via UEFI:
-// the firmware measured the EFI global SecureBoot variable into PCR 7 before
-// its separator and that PCR 7 is quote-authenticated by the replay.
-//
-// The variable's value is irrelevant here -- host with Secure Boot off still
-// measures it, and whether Secure Boot must be on is a policy question
-// (RequireSecureBoot).
-// What the event proves is that UEFI firmware ran: legacy BIOS/CSM has no EFI
-// variables to measure, so its log can never carry one.
-//
-// PCR 14 is not usable for this:
-// it holds the shim MOK state, so it is zero on UEFI host that boots without
-// shim (own PK/KEK/db, directly signed systemd-boot or UKI) exactly as it
-// is on BIOS.
+// UEFIAnchored reports whether a trusted PCR 7 replay carries the SecureBoot
+// variable, whatever its value.
 func UEFIAnchored(facts *BootFacts) bool {
 	return facts != nil && facts.SecureBootTrusted && facts.SecureBoot.Found
 }
 
-// reports whether the PCR's quoted value is independently authenticated
-// by the event log: the quote covers it and the replay reproduces it
 func pcrReplayAuthenticated(report *types.AttestationReport, replay *ReplayResult, pcr int) bool {
 	if pcr < 0 || pcr >= types.PCRCount {
 		return false
@@ -414,8 +365,8 @@ func pcrReplayAuthenticated(report *types.AttestationReport, replay *ReplayResul
 	return report.TPM.PCRValues[pcr] == replay.PCRValues[pcr]
 }
 
-// derives the policy-facing boot facts from a parsed and replayed
-// event log. Fails on malformed or conflicting SecureBoot measurements.
+// ExtractBootFacts derives BootFacts from a parsed and replayed event log.
+// It fails on a SecureBoot measurement ExtractSecureBootState refuses.
 func ExtractBootFacts(report *types.AttestationReport, parsed *ParsedEventLog, replay *ReplayResult) (*BootFacts, error) {
 	if report == nil || parsed == nil || replay == nil {
 		return nil, errors.New("nil report/event log/replay")
@@ -426,7 +377,6 @@ func ExtractBootFacts(report *types.AttestationReport, parsed *ParsedEventLog, r
 		return nil, err
 	}
 
-	// two kernel images: unknown, not fatal -- nothing gates on it
 	img, err := ExtractKernelImageDigest(parsed)
 	if err != nil {
 		slog.Warn("kernel image measurement unusable", "error", err)
@@ -449,20 +399,14 @@ func ExtractBootFacts(report *types.AttestationReport, parsed *ParsedEventLog, r
 	}, nil
 }
 
-// enforces the cmdline parameter policy against the measured kernel
-// command line. GRUB-only in v1: a host whose TPM-quoted PCR 8 is zero
-// and whose log carries no PCR 8 measurement never ran a PCR 8-measuring
-// bootloader (systemd-boot/UKI measure the cmdline into PCR 12), so the
-// check is skipped there. A non-zero quoted PCR 8 without a measured
-// cmdline means the log was truncated: the TPM proves something was
-// measured, so reject.
+// verifyCmdlinePolicy refuses a measured command line that carries a denied
+// parameter. A quoted zero PCR 8 the log never extends skips the check;
+// any other host needs a trusted PCR 8, covered events and a command line.
 func verifyCmdlinePolicy(policy *PCRPolicy, facts *BootFacts) error {
 	if facts == nil {
 		return errors.New("cmdline policy requires event-log boot facts")
 	}
 
-	// the zero-PCR8 skip below is only sound when the zero value is
-	// TPM-attested, not agent-asserted
 	if !facts.PCR8Quoted {
 		return errors.New("cmdline policy: PCR 8 not covered by quote")
 	}

@@ -1,12 +1,6 @@
 // SPDX-License-Identifier: MIT
 // Copyright (C) 2026 Szymon Wilczek
 // LOTA Verifier - Signature verification module
-//
-// The signature verifier validates the TPM quote (TPMS_ATTEST +
-// signature) against an AIK public key. The caller resolves that key
-// through CertificateVerifier, which requires the AIK certificate in
-// every report and chain-verifies it against the configured trust
-// roots before the signature is checked.
 
 package verify
 
@@ -20,7 +14,7 @@ import (
 	"github.com/szymonwilczek/lota/verifier/types"
 )
 
-// implements RSASSA-PKCS1-v1_5 verification
+// RSASSAVerifier verifies RSASSA-PKCS1-v1_5 quote signatures.
 type RSASSAVerifier struct{}
 
 func NewRSASSAVerifier() *RSASSAVerifier {
@@ -49,7 +43,8 @@ func (v *RSASSAVerifier) VerifyQuoteSignature(attestData, signature []byte, aikP
 	return nil
 }
 
-// implements RSASSA-PSS verification
+// RSAPSSVerifier verifies RSASSA-PSS quote signatures whose salt is as long
+// as the hash.
 type RSAPSSVerifier struct{}
 
 func NewRSAPSSVerifier() *RSAPSSVerifier {
@@ -83,12 +78,9 @@ func (v *RSAPSSVerifier) VerifyQuoteSignature(attestData, signature []byte, aikP
 	return nil
 }
 
-// verifies the TPM quote signature in the report
-//
-// Verification flow:
-// - Extract signature and attest_data from report
-// - Hash attest_data with SHA-256
-// - Verify signature over hash using AIK public key
+// VerifyReportSignature verifies the quote signature over the report's
+// TPMS_ATTEST with aikPubKey, an RSA key of at least 2048 bits, by the
+// report's scheme (RSASSA or RSA-PSS) and hash (SHA-256, SHA-384 or SHA-512).
 func VerifyReportSignature(report *types.AttestationReport, aikPubKey *rsa.PublicKey) error {
 	if report.TPM.QuoteSigSize == 0 {
 		return errors.New("no signature in report")
@@ -114,7 +106,6 @@ func VerifyReportSignature(report *types.AttestationReport, aikPubKey *rsa.Publi
 		return fmt.Errorf("RSA key too small: %d bits, minimum 2048", aikPubKey.N.BitLen())
 	}
 
-	// extract actual data
 	attestData := report.TPM.AttestData[:report.TPM.AttestSize]
 	signature := report.TPM.QuoteSignature[:report.TPM.QuoteSigSize]
 	hashAlg, err := selectQuoteHashAlgorithm(report)
@@ -187,7 +178,7 @@ func hashName(h crypto.Hash) string {
 	}
 }
 
-// parses RSA public key from DER-encoded PKIX/SPKI format
+// ParseRSAPublicKey parses a DER PKIX RSA key of at least 2048 bits.
 func ParseRSAPublicKey(keyData []byte) (*rsa.PublicKey, error) {
 	pub, err := x509.ParsePKIXPublicKey(keyData)
 	if err != nil {
