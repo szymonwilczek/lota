@@ -71,19 +71,14 @@ exist there either. A player cannot sign a root filesystem, and a requirement
 nobody on the consumer road can satisfy is a requirement that only stops
 installs.
 
-What binds the agent itself does not depend on IMA: fs-verity makes the kernel
-refuse a modified read of the agent binary, and the PCR 14 boot commitment ties
-the running build to the boot the verifier sees. So where the agent binary
-carries fs-verity, a kernel appraising nothing is an **advisory** state -- the
-agent starts, and ``LOTA_FLAG_KERNEL_APPRAISAL`` is clear in the status word,
-in the TPM-signed token and in the attestation report, where a publisher or an
-operator policy (``require_ima_appraisal``) refuses it if they want it.
-
-Where the agent binary carries **no** fs-verity -- a filesystem without it,
-where the binary's only claim is a signed ``security.ima`` xattr -- appraisal is
-the thing that makes that xattr mean anything, and the agent refuses to start
-without it. That is the one host on which the requirement is load-bearing, and
-there it is kept.
+Nothing binds the agent binary on disk. The PCR 14 boot commitment carries
+the hash the running agent computes of its own binary, so it tells the
+verifier which build an unmodified agent is; a modified binary can extend the
+pinned hash. A kernel appraising nothing is therefore an **advisory** state on
+every host -- the agent starts, and ``LOTA_FLAG_KERNEL_APPRAISAL`` is clear in
+the status word, in the TPM-signed token and in the attestation report, where
+a publisher or an operator policy (``require_ima_appraisal``) refuses it if
+they want it.
 
 The agent is privileged. It owns TPM interaction, BPF LSM loading, runtime
 measurement, local IPC, D-Bus status, and attestation report construction.
@@ -322,26 +317,27 @@ Active threats
          12 and skip this check (Secure Boot enforcement still applies).
        | Denylist coverage is enumerative, not semantic.
    * - Agent binary drift
-     - | PCR14 boot commitment and agent hash policy bind the agent image.
-       | fs-verity protects the installed binary.
+     - | PCR14 boot commitment and agent hash policy name the agent build the
+         boot ran, so another version fails the match. Nothing binds the
+         installed binary: a modified one can extend the pinned hash.
        | Between a package update and the next cold boot the file on disk and
          the running image differ by construction, and the agent reports that
          as ``LOTA_FLAG_UPDATE_PENDING``. It is **not** a tamper signal and
          carries no verdict: PCR 14 still commits to the running build, the
          report still names it, and the divergence resolves at the reboot the
          flag exists to announce. An offline swap of the on-disk file is a
-         different question and is answered by fs-verity plus the boot
-         commitment, not by this flag.
+         different question, and nothing in this row detects it.
        | Restarting a unit in that window runs the new binary against a PCR 14
          committing to the old one; it is refused until reboot, and both units
          stay failed rather than looping.
-     - Replacing the agent binary requires cold reboot, fs-verity re-enable,
-       policy update, and re-attestation.
+     - Replacing the agent binary requires cold reboot, policy update, and
+       re-attestation.
    * - Modified, non-enforcing agent (self-compiled client)
      - | Agent self-hash is bound into PCR 14, and ``agent_hashes`` in the policy
          pins the official hash so a verifier rederives PCR 14 only for that
          binary.
-       | Different hash fails the match.
+       | Different hash fails the match. A client that extends the official
+         hash instead of its own passes: that is a local root, out of scope.
        | On the diverse-fleet path PCR 14 is dynamic and TOFU'd, so the verifier
          refuses a ``require_secureboot`` policy with empty ``agent_hashes``
          (advisory ``kernel_hashes`` do not substitute) unless ``--allow-unpinned-agent``
@@ -742,9 +738,9 @@ baseline that binary chained onto, and nothing else.
 * **What is out of scope** is a local root, before the agent or after it.
   Before it, such an attacker can extend the commitment themselves. After it,
   they can use the TPM directly and sign with a key the CA certifies. The
-  layers that narrow what runs ahead of the agent are Secure Boot, the IMA
-  appraisal floor, fs-verity on the agent binary and the ordering that puts
-  the agent ahead of every login-capable target; PCR 14 records which binary
+  layers that narrow what runs ahead of the agent are Secure Boot, IMA
+  appraisal where the host has it, and the ordering that puts the agent ahead
+  of every login-capable target; PCR 14 records which binary
   committed, it does not prove that a process is still alive.
 
 A TPM that restarts across S3 restores every PCR unchanged, and the derivation

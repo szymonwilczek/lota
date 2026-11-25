@@ -12,17 +12,13 @@ running host therefore does **not** change the committed measurement: the new
 binary sits on disk, but the value the verifier checks against still reflects the
 old one until the host cold-reboots and the new binary measures itself in.
 
-Two more properties make the update a deliberate procedure rather than a package
-swap:
+One more property makes the update a deliberate procedure rather than a
+package swap:
 
 * **The enforcing daemon is unkillable by design.** LOTA LSM hook refuses
   ``kill`` against the agent, systemd's included. Stop it for replacement with
   ``lota-agent --shutdown``, the in-band graceful-shutdown request, or with
   ``systemctl stop lota-agent``, whose ``ExecStop`` sends the same request.
-* **The binary carries an immutability proof** -- fs-verity on ext4/btrfs, or a
-  signed ``security.ima`` xattr on XFS. Replacing the file drops that proof (a
-  ``dnf upgrade`` in particular strips ``security.ima``), so it must be
-  re-established before the agent will run under enforcement.
 
 This document is the operator runbook for rolling a new agent build across a
 fleet. It pairs with the binary-replacement note in
@@ -86,14 +82,6 @@ On each host, once the new hash is pinned in the verifier tier:
 
 #. **Update the package.** Install the new agent build (for example
    ``dnf upgrade lota-agent``).
-#. **Check the immutability proof.** fs-verity is a property of the inode and
-   the upgrade writes a new file, so the proof the old binary carried does not
-   survive it. The package's post-install re-enables fs-verity on the new
-   binary and says so; where the filesystem cannot carry it (XFS below 6.13,
-   for instance) it says that instead, and the ``security.ima`` xattr has to be
-   re-signed with the operator IMA key. One of the two is mandatory: without
-   either, the agent refuses to start under enforcement, so a host that skips
-   this comes back from its reboot with no agent at all.
 
    While the host waits for that reboot the agent reports
    ``LOTA_FLAG_UPDATE_PENDING`` alongside its normal flags, so a title can tell

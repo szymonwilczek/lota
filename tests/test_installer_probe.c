@@ -159,32 +159,34 @@ static void test_cmdline_ima(void)
 	}
 	PASS();
 
-	TEST("ima_appraise=fix satisfies the floor");
-	if (probe_cmdline_ima_ok("ima_appraise=fix") != 0) {
-		FAIL("fix rejected");
+	TEST("absent ima_appraise leaves the kernel default, enforce");
+	if (probe_cmdline_ima_ok("ro root=UUID=x rhgb quiet") != 0) {
+		FAIL("the default mode rejected");
 		return;
 	}
 	PASS();
 
-	TEST("log, off and absent ima_appraise fail the floor");
-	if (probe_cmdline_ima_ok("ima_appraise=log") != -EPERM ||
-	    probe_cmdline_ima_ok("ima_appraise=off") != -EPERM ||
-	    probe_cmdline_ima_ok("ro root=UUID=x rhgb quiet") != -EPERM) {
+	TEST("fix, log and off fail the floor");
+	if (probe_cmdline_ima_ok("ima_appraise=fix") != -EPERM ||
+	    probe_cmdline_ima_ok("ima_appraise=log") != -EPERM ||
+	    probe_cmdline_ima_ok("ima_appraise=off") != -EPERM) {
 		FAIL("non-enforcing mode accepted");
 		return;
 	}
 	PASS();
 
-	TEST("first ima_appraise token wins, mirroring the agent gate");
+	TEST("last ima_appraise token wins, as in the kernel");
 	if (probe_cmdline_ima_ok("ima_appraise=log ima_appraise=enforce") !=
-	    -EPERM) {
-		FAIL("second token consulted");
+		    0 ||
+	    probe_cmdline_ima_ok("ima_appraise=enforce ima_appraise=fix") !=
+		    -EPERM) {
+		FAIL("an earlier token decided");
 		return;
 	}
 	PASS();
 
-	TEST("prefix tokens do not match (ima_appraise_x=enforce)");
-	if (probe_cmdline_ima_ok("ima_appraise_x=enforce") != -EPERM) {
+	TEST("prefix tokens do not match (ima_appraise_x=off)");
+	if (probe_cmdline_ima_ok("ima_appraise_x=off") != 0) {
 		FAIL("prefix matched");
 		return;
 	}
@@ -288,77 +290,6 @@ cleanup:
 	snprintf(cmd, sizeof(cmd), "rm -rf '%s'", base);
 	if (system(cmd) != 0)
 		fprintf(stderr, "warning: cleanup failed\n");
-}
-
-/* statfs f_type magics, mirroring <linux/magic.h> */
-#define KAT_EXT_MAGIC 0xEF53
-#define KAT_XFS_MAGIC 0x58465342
-#define KAT_BTRFS_MAGIC 0x9123683E
-#define KAT_F2FS_MAGIC 0xF2F52010
-#define KAT_ZFS_MAGIC 0x2FC12FC1
-
-static void test_fstype_magic_mapping(void)
-{
-	TEST("statfs magic maps to the right filesystem class");
-	if (probe_fstype_from_magic(KAT_EXT_MAGIC) != PROBE_FS_EXT4 ||
-	    probe_fstype_from_magic(KAT_XFS_MAGIC) != PROBE_FS_XFS ||
-	    probe_fstype_from_magic(KAT_BTRFS_MAGIC) != PROBE_FS_BTRFS ||
-	    probe_fstype_from_magic(KAT_F2FS_MAGIC) != PROBE_FS_F2FS ||
-	    probe_fstype_from_magic(KAT_ZFS_MAGIC) != PROBE_FS_ZFS) {
-		FAIL("known magic misclassified");
-		return;
-	}
-	if (probe_fstype_from_magic(0x12345) != PROBE_FS_UNKNOWN) {
-		FAIL("unknown magic not reported as UNKNOWN");
-		return;
-	}
-	PASS();
-}
-
-static void test_fs_verity_capability(void)
-{
-	TEST("verity-capable filesystems are ext4/btrfs/f2fs only");
-	if (!probe_fs_supports_fsverity(PROBE_FS_EXT4) ||
-	    !probe_fs_supports_fsverity(PROBE_FS_BTRFS) ||
-	    !probe_fs_supports_fsverity(PROBE_FS_F2FS)) {
-		FAIL("a verity-capable filesystem reported as incapable");
-		return;
-	}
-	if (probe_fs_supports_fsverity(PROBE_FS_XFS) ||
-	    probe_fs_supports_fsverity(PROBE_FS_ZFS) ||
-	    probe_fs_supports_fsverity(PROBE_FS_UNKNOWN)) {
-		FAIL("a non-verity filesystem reported as capable");
-		return;
-	}
-	PASS();
-}
-
-static void test_verity_remediation_per_fs(void)
-{
-	char ext[512];
-	char xfs[512];
-	char zfs[512];
-
-	TEST("remediation steers ext4 to verity and XFS/ZFS to IMA");
-	probe_verity_remediation(PROBE_FS_EXT4, "/usr/bin/lota-agent", ext,
-				 sizeof(ext));
-	probe_verity_remediation(PROBE_FS_XFS, "/usr/bin/lota-agent", xfs,
-				 sizeof(xfs));
-	probe_verity_remediation(PROBE_FS_ZFS, "/usr/bin/lota-agent", zfs,
-				 sizeof(zfs));
-	if (!strstr(ext, "tune2fs")) {
-		FAIL("ext4 hint omits the tune2fs verity path");
-		return;
-	}
-	if (strstr(xfs, "tune2fs") || !strstr(xfs, "security.ima")) {
-		FAIL("XFS hint must drop tune2fs and name the IMA route");
-		return;
-	}
-	if (strstr(zfs, "tune2fs") || !strstr(zfs, "security.ima")) {
-		FAIL("ZFS hint must drop tune2fs and name the IMA route");
-		return;
-	}
-	PASS();
 }
 
 static void test_machine_description(void)
@@ -1497,19 +1428,18 @@ static void test_ima_mode_blocking(void)
 		PASS();
 
 	TEST("without Secure Boot the parameter is the answer");
-	if (!probe_ima_mode_blocking(0, "ro quiet ima_appraise=fix"))
-		FAIL("a honoured fix mode was refused");
-	else if (probe_ima_mode_blocking(0, "ro quiet ima_appraise=log"))
+	if (!probe_ima_mode_blocking(0, "ro quiet ima_appraise=enforce"))
+		FAIL("a honoured enforce mode was refused");
+	else if (probe_ima_mode_blocking(0, "ro quiet ima_appraise=fix"))
 		FAIL("a non-blocking mode passed");
 	else
 		PASS();
 }
 
 /*
- * The scope stage, which exists because the agent's startup gate reads the loaded
- * policy and the installer used to read only the cmdline. The unknown case
- * matters as much as the missing one: a kernel that publishes no policy is a host
- * the agent starts on, so the stage must not stop the install there.
+ * The scope stage reports what tokens will say about exec appraisal.
+ * The agent starts on any scope, so only a probe that could not look
+ * is an error.
  */
 static void test_ima_scope_stage_verdicts(void)
 {
@@ -1520,13 +1450,12 @@ static void test_ima_scope_stage_verdicts(void)
 	scope = (struct probe_ima_scope){ .scope = PROBE_IMA_SCOPE_EXEC,
 					  .is_root = 1 };
 	if (probe_ima_scope_stage(&scope, note, sizeof(note)) != STAGE_DONE)
-		FAIL("the scope the gate asks for was reported as work");
+		FAIL("an appraised scope was reported as work");
 	else
 		PASS();
 
-	TEST("an unappraised host whose agent verity holds is reported, not stopped");
+	TEST("an unappraised host is reported, not stopped");
 	scope = (struct probe_ima_scope){ .scope = PROBE_IMA_SCOPE_NONE,
-					  .agent_verity = 1,
 					  .is_root = 1 };
 	if (probe_ima_scope_stage(&scope, note, sizeof(note)) != STAGE_DONE)
 		FAIL("an install the agent would complete was stopped");
@@ -1537,21 +1466,11 @@ static void test_ima_scope_stage_verdicts(void)
 	else
 		PASS();
 
-	TEST("without verity an unappraised host stops the install");
-	scope = (struct probe_ima_scope){ .scope = PROBE_IMA_SCOPE_NONE,
-					  .is_root = 1 };
-	if (probe_ima_scope_stage(&scope, note, sizeof(note)) != STAGE_BLOCKED)
-		FAIL("the host the agent refuses was walked past");
-	else if (!strstr(note, "refuses to start"))
-		FAIL("the note does not say what the host cannot do");
-	else
-		PASS();
-
 	TEST("an unsigned host is told a rule set would refuse everything");
 	scope = (struct probe_ima_scope){ .scope = PROBE_IMA_SCOPE_NONE,
 					  .secureboot = 1,
 					  .is_root = 1 };
-	if (probe_ima_scope_stage(&scope, note, sizeof(note)) != STAGE_BLOCKED)
+	if (probe_ima_scope_stage(&scope, note, sizeof(note)) != STAGE_DONE)
 		FAIL("the verdict changed with the reason");
 	else if (!strstr(note, "enforce"))
 		FAIL("the note does not say which mode a Secure Boot host "
@@ -1565,8 +1484,8 @@ static void test_ima_scope_stage_verdicts(void)
 	scope = (struct probe_ima_scope){ .scope = PROBE_IMA_SCOPE_NONE,
 					  .agent_signed = 1,
 					  .is_root = 1 };
-	if (probe_ima_scope_stage(&scope, note, sizeof(note)) != STAGE_BLOCKED)
-		FAIL("a signed host still needs the rules");
+	if (probe_ima_scope_stage(&scope, note, sizeof(note)) != STAGE_DONE)
+		FAIL("the verdict changed with the reason");
 	else if (strstr(note, "carry no signature"))
 		FAIL("a signing host was told it signs nothing");
 	else
@@ -1577,7 +1496,6 @@ static void test_ima_scope_stage_verdicts(void)
 					  .policy_signed = 1,
 					  .secureboot = 1,
 					  .agent_signed = 1,
-					  .agent_verity = 1,
 					  .is_root = 1 };
 	probe_ima_scope_stage(&scope, note, sizeof(note));
 	if (strlen(note) >= sizeof(note) - 1)
@@ -1591,18 +1509,18 @@ static void test_ima_scope_stage_verdicts(void)
 	scope = (struct probe_ima_scope){ .scope = PROBE_IMA_SCOPE_NONE,
 					  .policy_signed = 1,
 					  .is_root = 1 };
-	if (probe_ima_scope_stage(&scope, note, sizeof(note)) != STAGE_BLOCKED)
+	if (probe_ima_scope_stage(&scope, note, sizeof(note)) != STAGE_DONE)
 		FAIL("the verdict changed with the reason");
 	else if (!strstr(note, "POLICY_CHECK"))
 		FAIL("the note does not name the rule that refuses the write");
 	else
 		PASS();
 
-	TEST("a kernel publishing no policy leaves the mode deciding");
+	TEST("a kernel publishing no policy is reported, not stopped");
 	scope = (struct probe_ima_scope){ .scope = -ENOTSUP, .is_root = 1 };
 	if (probe_ima_scope_stage(&scope, note, sizeof(note)) != STAGE_DONE)
 		FAIL("a host the agent starts on was blocked by the installer");
-	else if (!strstr(note, "unverified"))
+	else if (!strstr(note, "cannot be checked"))
 		FAIL("the note does not say the scope went unchecked");
 	else
 		PASS();
@@ -1694,9 +1612,6 @@ int main(void)
 	test_conf_continuous_count();
 	test_attest_status_covers();
 	test_esrt_present();
-	test_fstype_magic_mapping();
-	test_fs_verity_capability();
-	test_verity_remediation_per_fs();
 	test_machine_description();
 	test_efivar_payload();
 	test_secureboot_remediation();

@@ -12,6 +12,7 @@
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
+#include <sys/types.h>
 
 #include "../../include/lota.h"
 #include "mapped_pins.h"
@@ -106,9 +107,9 @@ int bpf_loader_hash_file(struct bpf_loader_ctx *ctx, const char *path,
  * @expect_ino: st_ino the open must resolve to.
  * @guarded: Set to 1 when the file is pinned and may be measured, 0 otherwise.
  *
- * Pins the inode of this open. @guarded stays 0 when the file has no mapping
- * record, changed since it was mapped, or is open for writing. Held until a
- * bpf_loader_pin_sweep() misses it.
+ * Pins the inode of this open. A file with no mapping record, changed since it
+ * was mapped, or open for writing leaves @guarded 0: no pin is set, and one an
+ * earlier round set stays. Held until a bpf_loader_pin_sweep() misses it.
  *
  * Return: 0 or a negative errno.
  */
@@ -360,12 +361,13 @@ bool bpf_loader_integrity_config_satisfied(const struct integrity_data *cfg);
 
 /**
  * bpf_loader_ima_appraisal_active() - Do mode and policy appraise exec?
- * @cmdline_path: Kernel cmdline carrying ima_appraise=, the mode.
+ * @cmdline_path: Kernel cmdline carrying ima_appraise=, the mode. With none
+ *	the kernel keeps its default, enforce.
  * @policy_path: Loaded IMA policy carrying the func= rules, the scope.
  * @secureboot: Non-zero when this host booted with Secure Boot on. The kernel
  *	then keeps its built-in mode, enforce, and @cmdline_path is not read.
  *
- * Return: 0 when the mode is enforce or fix and a rule reaches an executable,
+ * Return: 0 when the mode is enforce and a rule reaches an executable,
  * -ENOENT when no rule does, -EACCES when the policy could not be read, or
  * another negative errno. Callers report anything but 0 as not appraised.
  */
@@ -373,9 +375,23 @@ int bpf_loader_ima_appraisal_active(const char *cmdline_path,
 				    const char *policy_path, int secureboot);
 
 /**
+ * bpf_loader_secure_boot_judge() - Secure Boot state from two efivarfs reads.
+ * @sb: SecureBoot variable, 4 bytes of attributes then the value.
+ * @sb_len: Bytes read into @sb, or a negative errno.
+ * @mok: shim's MokSBStateRT variable, same layout.
+ * @mok_len: Bytes read into @mok, or a negative errno.
+ *
+ * Return: 0 when SecureBoot is 1 and MokSBStateRT does not put shim in
+ * insecure mode, -EPERM when either says off, -EIO for a short @sb,
+ * or @sb_len.
+ */
+int bpf_loader_secure_boot_judge(const uint8_t *sb, ssize_t sb_len,
+				 const uint8_t *mok, ssize_t mok_len);
+
+/**
  * bpf_loader_secure_boot_enabled() - Check the UEFI Secure Boot state.
  *
- * Return: 0 when efivarfs shows SecureBoot=1, a negative errno otherwise.
+ * Return: bpf_loader_secure_boot_judge() over the efivarfs variables.
  */
 int bpf_loader_secure_boot_enabled(void);
 
@@ -391,17 +407,13 @@ int bpf_loader_kernel_appraises_exec(void);
 
 /**
  * bpf_loader_verify_kernel_runtime_hardening() - Check the kernel floor.
- * @allow_mutable_rootfs: Let the checks named below pass with a warning.
+ * @allow_mutable_rootfs: Let a TPM device without its label pass with a
+ *	warning.
  *
  * Refuses unless lockdown is restrictive and module signatures are enforced.
- *
- * Refuses when no executable is appraised, unless the agent binary has
- * fs-verity or @allow_mutable_rootfs is set; an IMA policy that could not be
- * read passes either way, with a warning.
- *
- * Unless @allow_mutable_rootfs is set, refuses a TPM device without the
- * lota_tpm_device_t label and an agent binary with neither fs-verity nor a
- * signature-type security.ima.
+ * Warns when bpf_loader_kernel_appraises_exec() fails. Unless
+ * @allow_mutable_rootfs is set, refuses a TPM device without the
+ * lota_tpm_device_t label.
  *
  * Return: 0 or a negative errno.
  */

@@ -51,19 +51,4 @@ static inline int lota_ima_policy_rule_appraises_exec(const char *rule)
 	return 1;
 }
 
-/**
- * lota_ima_scope_is_advisory() - Test whether exec appraisal may be missing.
- * @agent_verity_bound: the agent binary has fs-verity enabled.
- *
- * fs-verity on the binary passes the immutability gate alone. Without it, the
- * gate rests on a signed security.ima xattr, which means nothing unless
- * appraised.
- *
- * Return: 1 if a kernel that appraises no executable is advisory, 0 otherwise.
- */
-static inline int lota_ima_scope_is_advisory(int agent_verity_bound)
-{
-	return agent_verity_bound ? 1 : 0;
-}
-
 #endif /* LOTA_IMA_POLICY_SCOPE_H */

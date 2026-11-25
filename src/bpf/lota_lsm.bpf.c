@@ -43,8 +43,8 @@ char LICENSE[] SEC("license") = "GPL";
 #ifndef BINPRM_FLAGS_PATH_INACCESSIBLE
 #define BINPRM_FLAGS_PATH_INACCESSIBLE (1U << 2)
 #endif
-#ifndef SI_KERNEL
-#define SI_KERNEL 0x80
+#ifndef PF_EXITING
+#define PF_EXITING 0x00000004
 #endif
 
 #ifndef MS_BIND
@@ -69,6 +69,10 @@ char LICENSE[] SEC("license") = "GPL";
 #endif
 #ifndef S_IFCHR
 #define S_IFCHR 0020000
+#endif
+
+#ifndef S_PRIVATE
+#define S_PRIVATE (1 << 9)
 #endif
 
 #ifndef VM_WRITE
@@ -1375,7 +1379,7 @@ static __always_inline int denies_proc_mm_open(struct file *file,
 				  target_agent, target_protected && !inside);
 }
 
-/* logged as PTRACE_BLOCKED with the name of the entry */
+/* logged as PTRACE_BLOCKED with the name of the entry or device */
 static __always_inline void report_blocked_proc_mm(struct file *file,
 						   u32 target_pid)
 {
@@ -1514,8 +1518,10 @@ int BPF_PROG(lota_file_open, struct file *file, int ret)
 		return 0;
 
 	/* refused in every mode */
-	if (is_kernel_mem_device(file))
+	if (is_kernel_mem_device(file)) {
+		report_blocked_proc_mm(file, 0);
 		return -EPERM;
+	}
 
 	if (denies_proc_mm_open(file, &target_pid)) {
 		report_blocked_proc_mm(file, target_pid);
@@ -1560,12 +1566,14 @@ int BPF_PROG(lota_file_open, struct file *file, int ret)
  * LSM hook: path_truncate
  *
  * truncate(2) shortens a file by path, with no open for lota_file_open
- * to refuse.
+ * to refuse. Refuses a pinned file, and in enforce mode with strict_mmap a
+ * trusted library.
  * ===================================================================== */
 SEC("lsm/path_truncate")
 int BPF_PROG(lota_path_truncate, const struct path *path, int ret)
 {
 	struct dentry *dentry;
+	struct inode *inode;
 
 	if (ret != 0)
 		return ret;
@@ -1577,11 +1585,17 @@ int BPF_PROG(lota_path_truncate, const struct path *path, int ret)
 	if (!dentry)
 		return 0;
 
-	if (!is_inode_mapped_exec_guarded(BPF_CORE_READ(dentry, d_inode)))
-		return 0;
+	inode = BPF_CORE_READ(dentry, d_inode);
+	if (is_inode_mapped_exec_guarded(inode)) {
+		report_blocked_mapped_write(dentry);
+		return -EPERM;
+	}
 
-	report_blocked_mapped_write(dentry);
-	return -EPERM;
+	if (get_mode() == LOTA_MODE_ENFORCE &&
+	    get_config(LOTA_CFG_STRICT_MMAP) && is_trusted_inode(inode))
+		return -EPERM;
+
+	return 0;
 }
 
 /* =====================================================================
@@ -1644,8 +1658,9 @@ int BPF_PROG(lota_file_post_open_measure, struct file *file, int mask)
  * LSM hook: bprm_check_security
  *
  * In enforce mode with strict_exec, refuses an exec of a file starting with
- * "#!", through a descriptor (fdpath set), and of a file without an fs-verity
- * digest in allow_verity.
+ * "#!", of an interpreter a binfmt handler hands the exec to, through a
+ * descriptor (fdpath set), and of a file without an fs-verity digest in
+ * allow_verity.
  * ====================================================================== */
 SEC("lsm/bprm_check_security")
 int BPF_PROG(lota_bprm_check_security, struct linux_binprm *bprm)
@@ -1685,8 +1700,10 @@ int BPF_PROG(lota_bprm_check_security, struct linux_binprm *bprm)
 	}
 
 	if (mode == LOTA_MODE_ENFORCE && get_config(LOTA_CFG_STRICT_EXEC)) {
+		/* a binfmt handing off renames interp before the next pass */
 		if (is_shebang_binprm(bprm) ||
-		    BPF_CORE_READ(bprm, interpreter) ||
+		    BPF_CORE_READ(bprm, interp) !=
+			    BPF_CORE_READ(bprm, filename) ||
 		    is_inaccessible_exec_path(bprm)) {
 			blocked = 1;
 		} else if (!have_digest) {
@@ -2126,12 +2143,33 @@ int BPF_PROG(lota_mmap_file, struct file *file, unsigned long reqprot,
 	return 0;
 }
 
+/* the file shmem_zero_setup() gives a shared anonymous mapping */
+static __always_inline int is_shared_anon_file(struct file *file)
+{
+	union {
+		char str[9];
+		u64 word;
+	} name = {};
+	const unsigned char *dname;
+
+	if (!(BPF_CORE_READ(file, f_inode, i_flags) & S_PRIVATE))
+		return 0;
+
+	dname = BPF_CORE_READ(file, f_path.dentry, d_name.name);
+	if (bpf_probe_read_kernel_str(name.str, sizeof(name.str), dname) !=
+	    sizeof(name.str))
+		return 0;
+
+	return name.word == *(const u64 *)"dev/zero";
+}
+
 /* ======================================================================
  * LSM hook: file_mprotect
  *
  * The refusals of mmap_file for a protection change to executable; a VMA
  * with VM_WRITE or VM_MAYWRITE counts as writable. A shared anonymous mapping
- * carries a shmem file here and takes the file refusals.
+ * carries a shmem file here, a private /dev/zero mapping its file without
+ * vm_ops; both take the anonymous refusals.
  * ====================================================================== */
 SEC("lsm/file_mprotect")
 int BPF_PROG(lota_file_mprotect, struct vm_area_struct *vma,
@@ -2153,7 +2191,7 @@ int BPF_PROG(lota_file_mprotect, struct vm_area_struct *vma,
 	/* a direct read keeps vm_file trusted for the fs-verity kfunc */
 	file = vma->vm_file;
 
-	if (!file) {
+	if (!file || !BPF_CORE_READ(vma, vm_ops) || is_shared_anon_file(file)) {
 		int anon_blocked = 0;
 		int emit_event = 0;
 
@@ -2493,7 +2531,8 @@ static __always_inline void report_signal(int event_type, int blocked, int sig,
  *
  * The verdict of lota_signal_denied() for a signal at the agent or a
  * protected process. A signal within one thread group, from the agent or
- * the admin identity, with no siginfo or with SI_KERNEL passes unrecorded.
+ * the admin identity, or the parent-death signal of an exiting parent
+ * passes unrecorded.
  * ====================================================================== */
 SEC("lsm/task_kill")
 int BPF_PROG(lota_task_kill, struct task_struct *p, struct kernel_siginfo *info,
@@ -2535,13 +2574,14 @@ int BPF_PROG(lota_task_kill, struct task_struct *p, struct kernel_siginfo *info,
 	if (is_lota_agent_task(current) || is_bpf_admin_task())
 		return 0;
 
-	if (!info)
+	/*
+	 * The signal the target asked for when its parent exits. The verifier
+	 * holds info non-NULL, and an exiting task sends no other signal that
+	 * reaches this hook.
+	 */
+	if ((BPF_CORE_READ(current, flags) & PF_EXITING) &&
+	    sig == BPF_CORE_READ(p, pdeath_signal))
 		return 0;
-	{
-		int si_code = BPF_CORE_READ(info, si_code);
-		if (si_code == SI_KERNEL)
-			return 0;
-	}
 
 	if (target_is_protected)
 		sender_inside = lota_inside_instance(
@@ -2958,18 +2998,17 @@ int BPF_PROG(lota_bpf_map, struct bpf_map *map, fmode_t fmode, int ret)
 /* ======================================================================
  * LSM hook: bpf
  *
- * Refuses every bpf() the kernel issues: the hook's last argument is
- * bool kernel, which @ret receives. With lock_bpf, refuses BPF_LINK_DETACH to
- * all but the admin identity. It names its link by a descriptor the caller
- * can swap after this hook read it, so one link cannot be told from another
- * here.
+ * With lock_bpf, refuses BPF_LINK_DETACH to all but the admin identity.
+ * It names its link by a descriptor the caller can swap after this hook
+ * read it, so one link cannot be told from another here.
  * ====================================================================== */
 SEC("lsm/bpf")
 int BPF_PROG(lota_bpf, int cmd, union bpf_attr *attr, unsigned int size,
-	     int ret)
+	     bool kernel, int ret)
 {
 	(void)size;
 	(void)attr;
+	(void)kernel;
 
 	if (ret != 0)
 		return -EPERM;

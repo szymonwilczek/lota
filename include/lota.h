@@ -411,10 +411,12 @@ static inline int lota_signal_dumps(int sig)
 
 /**
  * lota_signal_denied() - Verdict on a signal.
- * @sender_inside: The sender is in the target's instance.
+ * @sig:             signal number, 0 for a probe.
+ * @target_is_agent: The target is the agent.
+ * @sender_inside:   The sender is in the target's instance.
  *
- * Self-signals, the agent, the admin identity and kernel-generated signals
- * never reach this.
+ * Self-signals, the agent, the admin identity, a parent-death signal and a
+ * signal the kernel does not count as sent from user space never reach this.
  *
  * Only a probe (sig 0) and SIGHUP, its reload, reach the agent. It stops with
  * lota-agent --shutdown.

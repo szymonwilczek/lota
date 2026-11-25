@@ -255,12 +255,10 @@ void print_usage(const char *prog, const char *default_bpf_path,
 	printf("                    Acknowledge that --mode weakens cfg.mode\n"
 	       "                    'enforce' to monitor.\n");
 	printf("  --insecure-allow-mutable-rootfs\n");
-	printf("                    Skip the agent-binary immutability check\n"
-	       "                    at startup. Use only where the rootfs can\n"
-	       "                    offer neither fs-verity nor a signed\n"
-	       "                    security.ima xattr; the\n"
-	       "                    dirty-shutdown (panic/power-loss/SIGKILL)\n"
-	       "                    coverage gap stays open on that host.\n");
+	printf("                    Start with a warning when /dev/tpm[rm]0\n"
+	       "                    lacks the lota_tpm_device_t SELinux\n"
+	       "                    label; another root domain can then\n"
+	       "                    hold the TPM resource manager.\n");
 	/* accepted in any mode, applied in enforce only */
 	printf("  --strict-mmap     Block mmap(PROT_EXEC) of untrusted "
 	       "libraries\n");

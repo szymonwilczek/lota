@@ -16,6 +16,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include <sys/stat.h>
 
 #include <bpf/bpf.h>
 #include <bpf/libbpf.h>
@@ -54,6 +55,8 @@ __wrap_ring_buffer__new(int map_fd, ring_buffer_sample_fn sample_cb, void *ctx,
 int __wrap_bpf_map_get_next_key(int fd, const void *key, void *next_key);
 int __wrap_bpf_map_lookup_elem(int fd, const void *key, void *value);
 int __wrap_bpf_map_delete_elem(int fd, const void *key);
+int __wrap_bpf_map_update_elem(int fd, const void *key, const void *value,
+			       __u64 flags);
 
 int __wrap_policy_verify_buffer(const uint8_t *data, size_t data_len,
 				const char *pubkey_pem_path, const uint8_t *sig)
@@ -129,6 +132,12 @@ struct ring_buffer *__wrap_ring_buffer__new(int map_fd,
 #define FAKE_TASK_FD 8
 static int g_task_marked;
 
+/* exe_hash_slots answers with g_pin_answer; mapped_exec counts */
+#define FAKE_SLOT_FD 9
+#define FAKE_PIN_FD 10
+static struct lota_exe_hash_slot g_pin_answer;
+static int g_pin_updates;
+
 static struct {
 	size_t ksz;
 	size_t vsz;
@@ -175,6 +184,10 @@ int __wrap_bpf_map_lookup_elem(int fd, const void *key, void *value)
 {
 	int at = fd == FAKE_MAP_FD ? fake_map_find(key) : -1;
 
+	if (fd == FAKE_SLOT_FD) {
+		memcpy(value, &g_pin_answer, sizeof(g_pin_answer));
+		return 0;
+	}
 	if (fd == FAKE_TASK_FD) {
 		if (g_task_marked)
 			return 0;
@@ -200,6 +213,23 @@ int __wrap_bpf_map_delete_elem(int fd, const void *key)
 	g_map.gone[at] = 1;
 	g_map.deletes++;
 	return 0;
+}
+
+int __wrap_bpf_map_update_elem(int fd, const void *key, const void *value,
+			       __u64 flags)
+{
+	(void)key;
+	(void)value;
+	(void)flags;
+
+	if (fd == FAKE_SLOT_FD)
+		return 0;
+	if (fd == FAKE_PIN_FD) {
+		g_pin_updates++;
+		return 0;
+	}
+	errno = EBADF;
+	return -EBADF;
 }
 
 static void fake_map_reset(size_t ksz, size_t vsz)
@@ -357,6 +387,68 @@ static void test_born_protected(void)
 	      "withdrawing protection takes the mark with it");
 }
 
+static int pin_once(struct bpf_loader_ctx *ctx, const char *path,
+		    const struct stat *st, uint32_t guard, uint32_t seen,
+		    uint32_t writers)
+{
+	int guarded = -1;
+
+	memset(&g_pin_answer, 0, sizeof(g_pin_answer));
+	g_pin_answer.state = LOTA_EXE_HASH_ANSWERED;
+	g_pin_answer.guard = guard;
+	g_pin_answer.dev = 64;
+	g_pin_answer.ino = 1000;
+	g_pin_answer.seen = seen;
+	g_pin_answer.writers = writers;
+
+	if (bpf_loader_pin_mapped_object(ctx, path, (uint64_t)st->st_dev,
+					 (uint64_t)st->st_ino, &guarded) != 0)
+		return -1;
+	return guarded;
+}
+
+static void test_pin_answer(void)
+{
+	char path[] = "/tmp/lota_test_pin_XXXXXX";
+	struct bpf_loader_ctx ctx;
+	struct stat st;
+	int fd;
+
+	fd = mkstemp(path);
+	if (fd < 0 || fstat(fd, &st) < 0) {
+		CHECK(0, "a file to pin exists");
+		return;
+	}
+	close(fd);
+
+	memset(&ctx, 0, sizeof(ctx));
+	ctx.loaded = true;
+	ctx.exe_hash_slots_fd = FAKE_SLOT_FD;
+	ctx.mapped_exec_fd = FAKE_PIN_FD;
+	g_pin_updates = 0;
+
+	CHECK(pin_once(&ctx, path, &st, 0, LOTA_EXE_MAP_SEEN_OK, 0) == 1 &&
+		      g_pin_updates == 1 && ctx.pin_count == 1,
+	      "an unwritten mapped file is pinned and guarded");
+	CHECK(pin_once(&ctx, path, &st, 0, LOTA_EXE_MAP_SEEN_OK, 1) == 0 &&
+		      g_pin_updates == 1,
+	      "a file open for write is not pinned");
+
+	CHECK(pin_once(&ctx, path, &st, 1, LOTA_EXE_MAP_SEEN_OK, 0) == 1,
+	      "a pin an earlier round set guards an unwritten file");
+	CHECK(pin_once(&ctx, path, &st, 1, LOTA_EXE_MAP_SEEN_OK, 1) == 0,
+	      "a pin does not guard a file a descriptor opened before it "
+	      "writes");
+	CHECK(pin_once(&ctx, path, &st, 1, LOTA_EXE_MAP_SEEN_CHANGED, 0) == 0,
+	      "a pin does not guard a file written since it was mapped");
+	CHECK(g_pin_updates == 1 && ctx.pin_count == 1 &&
+		      ctx.pins[0].round == ctx.pin_round,
+	      "an unguarded earlier pin stays recorded for this round");
+
+	free(ctx.pins);
+	unlink(path);
+}
+
 static void test_instance_actors_walk(void)
 {
 	struct lota_instance_actor_key key;
@@ -482,6 +574,7 @@ int main(void)
 	test_exec_history_past_first_buffer();
 	test_instance_actors_walk();
 	test_born_protected();
+	test_pin_answer();
 
 	if (g_failures) {
 		printf("Failed: %d\n", g_failures);

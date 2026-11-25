@@ -838,7 +838,9 @@ const char *net_result_str(uint32_t result)
 		       ", keep lota-agent.service enabled, and reboot: "
 		       "stopping the agent spends this boot's attestation";
 	case VERIFY_IMA_APPRAISAL_REQUIRED:
-		return "FAIL - This host's kernel appraises no executable and "
+		return "FAIL - This host could not show that its kernel "
+		       "appraises executables (appraisal in enforce mode and "
+		       "an appraise rule on BPRM_CHECK or without func=), and "
 		       "the publisher's policy requires IMA appraisal. It is "
 		       "a boot-time policy and a signed filesystem: see the "
 		       "publisher's bring-up instructions before turning it "

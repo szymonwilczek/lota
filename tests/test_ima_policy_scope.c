@@ -7,8 +7,8 @@
  * and that takes both files: ima_appraise= on the cmdline carries the mode,
  * and the loaded policy carries the scope. A mode with an empty scope appraises
  * nothing -- appraisal applies only to the func= rules the policy contains
- * -- so a host booted ima_appraise=fix with no BPRM_CHECK rule blocks on nothing
- * while looking, from the cmdline alone, like the floor is in place.
+ * -- so a host booted ima_appraise=enforce with no BPRM_CHECK rule blocks on
+ * nothing while looking, from the cmdline alone, like the floor is in place.
  *
  * Both files are written by the test, because the point is the combinations
  * a single machine cannot present.
@@ -67,28 +67,70 @@ static void test_mode_off_is_refused(void)
 		PASS();
 }
 
-static void test_mode_absent_is_refused(void)
+/* fix repairs a failing xattr and passes the access */
+static void test_mode_fix_is_refused(void)
 {
-	TEST("no ima_appraise= at all is refused");
+	TEST("ima_appraise=fix is refused whatever the policy says");
 
-	write_file(cmdline_path, "ro quiet\n");
+	write_file(cmdline_path, "ro quiet ima=on ima_appraise=fix\n");
 	write_file(policy_path, policy_appraises_exec);
 
 	if (bpf_loader_ima_appraisal_active(cmdline_path, policy_path, 0) == 0)
-		FAIL("a kernel booted without the parameter passed");
+		FAIL("ima_appraise=fix passed the gate");
+	else
+		PASS();
+}
+
+static void test_last_mode_decides(void)
+{
+	TEST("the last ima_appraise= decides the mode");
+
+	write_file(policy_path, policy_appraises_exec);
+
+	write_file(cmdline_path, "ro ima_appraise=enforce ima_appraise=off\n");
+	if (bpf_loader_ima_appraisal_active(cmdline_path, policy_path, 0) ==
+	    0) {
+		FAIL("enforce then off passed the gate");
+		return;
+	}
+
+	write_file(cmdline_path, "ro ima_appraise=off ima_appraise=enforce\n");
+	if (bpf_loader_ima_appraisal_active(cmdline_path, policy_path, 0) != 0)
+		FAIL("off then enforce was refused");
+	else
+		PASS();
+}
+
+/* without the parameter the kernel stays in its default, enforce */
+static void test_mode_absent_reads_the_scope(void)
+{
+	TEST("no ima_appraise= at all leaves the policy to decide");
+
+	write_file(cmdline_path, "ro quiet\n");
+	write_file(policy_path, policy_appraises_exec);
+	if (bpf_loader_ima_appraisal_active(cmdline_path, policy_path, 0) !=
+	    0) {
+		FAIL("the default mode over an exec rule was refused");
+		return;
+	}
+
+	write_file(policy_path, policy_measure_only);
+	if (bpf_loader_ima_appraisal_active(cmdline_path, policy_path, 0) !=
+	    -ENOENT)
+		FAIL("the default mode over no exec rule was not -ENOENT");
 	else
 		PASS();
 }
 
 /*
- * ima_appraise=fix with a policy that has no BPRM_CHECK rule appraises
+ * ima_appraise=enforce with a policy that has no BPRM_CHECK rule appraises
  * no executable, so the gate must refuse it despite the blocking mode.
  */
 static void test_blocking_mode_with_empty_scope_is_refused(void)
 {
 	TEST("a blocking mode over a policy that appraises no exec is refused");
 
-	write_file(cmdline_path, "ro quiet ima=on ima_appraise=fix\n");
+	write_file(cmdline_path, "ro quiet ima=on ima_appraise=enforce\n");
 	write_file(policy_path, policy_measure_only);
 
 	if (bpf_loader_ima_appraisal_active(cmdline_path, policy_path, 0) == 0)
@@ -253,19 +295,42 @@ static void test_secureboot_ignores_the_cmdline_mode(void)
  * the token; on a host where the binary's only claim is a signature nobody
  * appraises, the same policy is fatal.
  */
-static void test_scope_advisory_rule(void)
+static void test_secure_boot_judge(void)
 {
-	TEST("an unappraised kernel is advisory where verity binds the agent");
-	if (!lota_ima_scope_is_advisory(1))
-		FAIL("a host bound by the kernel was refused for coverage it "
-		     "cannot have");
+	static const uint8_t sb_on[5] = { 0x06, 0, 0, 0, 1 };
+	static const uint8_t sb_off[5] = { 0x06, 0, 0, 0, 0 };
+	static const uint8_t mok_nv[5] = { 0x07, 0, 0, 0, 1 };
+	static const uint8_t mok_rt[5] = { 0x06, 0, 0, 0, 1 };
+	static const uint8_t mok_rt_zero[5] = { 0x06, 0, 0, 0, 0 };
+
+	TEST("SecureBoot=1 without MokSBStateRT is on");
+	if (bpf_loader_secure_boot_judge(sb_on, 5, NULL, -ENOENT) != 0)
+		FAIL("a missing shim variable turned it off");
 	else
 		PASS();
 
-	TEST("without verity an unappraised kernel is fatal");
-	if (lota_ima_scope_is_advisory(0))
-		FAIL("a signed xattr nobody appraises was accepted as a "
-		     "binding");
+	TEST("a NON_VOLATILE MokSBStateRT=1 is ignored, as by the kernel");
+	if (bpf_loader_secure_boot_judge(sb_on, 5, mok_nv, 5) != 0)
+		FAIL("a non-volatile variable turned it off");
+	else
+		PASS();
+
+	TEST("a volatile MokSBStateRT=1 is shim's insecure mode");
+	if (bpf_loader_secure_boot_judge(sb_on, 5, mok_rt, 5) != -EPERM)
+		FAIL("insecure mode read as on");
+	else if (bpf_loader_secure_boot_judge(sb_on, 5, mok_rt_zero, 5) != 0)
+		FAIL("MokSBStateRT=0 turned it off");
+	else if (bpf_loader_secure_boot_judge(sb_on, 5, mok_rt, 4) != 0)
+		FAIL("a short shim variable turned it off");
+	else
+		PASS();
+
+	TEST("SecureBoot=0, short or unread is not on");
+	if (bpf_loader_secure_boot_judge(sb_off, 5, NULL, -ENOENT) != -EPERM ||
+	    bpf_loader_secure_boot_judge(sb_on, 4, NULL, -ENOENT) != -EIO ||
+	    bpf_loader_secure_boot_judge(sb_on, -ENOENT, NULL, -ENOENT) !=
+		    -ENOENT)
+		FAIL("the SecureBoot variable was misread");
 	else
 		PASS();
 }
@@ -280,7 +345,9 @@ int main(void)
 		 (int)getpid());
 
 	test_mode_off_is_refused();
-	test_mode_absent_is_refused();
+	test_mode_fix_is_refused();
+	test_last_mode_decides();
+	test_mode_absent_reads_the_scope();
 	test_blocking_mode_with_empty_scope_is_refused();
 	test_blocking_mode_with_exec_scope_passes();
 	test_appraise_without_func_covers_exec();
@@ -288,7 +355,7 @@ int main(void)
 	test_unreadable_scope_is_not_appraised();
 	test_secureboot_ignores_the_cmdline_mode();
 	test_rule_shapes();
-	test_scope_advisory_rule();
+	test_secure_boot_judge();
 
 	unlink(cmdline_path);
 	unlink(policy_path);

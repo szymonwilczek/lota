@@ -30,7 +30,6 @@
 
 #include "../../include/lota.h"
 #include "../../include/lota_ima_policy_scope.h"
-#include "../../include/lota_ima_xattr.h"
 #include "bpf_loader.h"
 #include "cgroup_guard.h"
 #include "journal.h"
@@ -45,9 +44,6 @@
 /* Where the kernel publishes the boot parameters and the loaded IMA policy */
 #define IMA_CMDLINE_PATH "/proc/cmdline"
 #define IMA_POLICY_PATH "/sys/kernel/security/ima/policy"
-
-/* The rule set this package ships, named in the refusal that needs it */
-#define LOTA_IMA_POLICY_ASSET "/usr/share/lota/ima/lota-ima-policy"
 
 /* Stats map indices - must match BPF program */
 #define STAT_TOTAL_EXECS 0
@@ -448,6 +444,7 @@ int bpf_loader_ima_appraisal_active(const char *cmdline_path,
 {
 	char buf[4096];
 	size_t len = 0;
+	const char *val = NULL;
 	char *tok;
 	char *save = NULL;
 	int read_err = 0;
@@ -472,25 +469,24 @@ int bpf_loader_ima_appraisal_active(const char *cmdline_path,
 	if (buf[len - 1] == '\n')
 		buf[len - 1] = '\0';
 
+	/* the kernel keeps the last one; with none, its default enforce */
 	for (tok = strtok_r(buf, " \t", &save); tok;
 	     tok = strtok_r(NULL, " \t", &save)) {
-		const char *val;
-
-		if (strncmp(tok, "ima_appraise=", 13) != 0)
-			continue;
-		val = tok + 13;
-		if (strcmp(val, "enforce") != 0 && strcmp(val, "fix") != 0)
-			return -EPERM;
-
-		ret = ima_policy_appraises_exec(policy_path, &read_err);
-		if (ret == -EACCES)
-			/* debug, not warn: asked every round */
-			lota_dbg("IMA appraisal mode is %s but %s could not "
-				 "be read (%s), so the scope is unknown",
-				 val, policy_path, strerror(-read_err));
-		return ret;
+		if (strncmp(tok, "ima_appraise=", 13) == 0)
+			val = tok + 13;
 	}
-	return -EPERM;
+	if (!val)
+		val = "enforce";
+	if (strcmp(val, "enforce") != 0)
+		return -EPERM;
+
+	ret = ima_policy_appraises_exec(policy_path, &read_err);
+	if (ret == -EACCES)
+		/* debug, not warn: asked every round */
+		lota_dbg("IMA appraisal mode is %s but %s could not "
+			 "be read (%s), so the scope is unknown",
+			 val, policy_path, strerror(-read_err));
+	return ret;
 }
 
 int bpf_loader_kernel_module_sig_enforced(const char *sig_enforce_path)
@@ -507,33 +503,51 @@ int bpf_loader_kernel_module_sig_enforced(const char *sig_enforce_path)
 	return -EPERM;
 }
 
-/* efivarfs: 4 bytes of attributes, then SecureBoot's byte, 1 when enabled */
-int bpf_loader_secure_boot_enabled(void)
+int bpf_loader_secure_boot_judge(const uint8_t *sb, ssize_t sb_len,
+				 const uint8_t *mok, ssize_t mok_len)
 {
-	static const char path[] =
-		"/sys/firmware/efi/efivars/"
-		"SecureBoot-8be4df61-93ca-11d2-aa0d-00e098032b8c";
-	uint8_t buf[5];
-	int fd;
+	if (sb_len < 0)
+		return (int)sb_len;
+	if (sb_len < 5)
+		return -EIO;
+	if (sb[4] != 1)
+		return -EPERM;
+	/* shim's insecure mode, honoured by the kernel when not NON_VOLATILE */
+	if (mok_len >= 5 && !(mok[0] & 0x1) && mok[4] == 1)
+		return -EPERM;
+	return 0;
+}
+
+static ssize_t read_efivar(const char *path, uint8_t *buf, size_t cap)
+{
 	ssize_t n;
+	int fd;
 
 	fd = open(path, O_RDONLY | O_CLOEXEC);
 	if (fd < 0)
 		return -errno;
 
-	n = read(fd, buf, sizeof(buf));
-	if (n < 0) {
-		int err = -errno;
-		close(fd);
-		return err;
-	}
+	n = read(fd, buf, cap);
+	if (n < 0)
+		n = -errno;
 	close(fd);
+	return n;
+}
 
-	if (n < (ssize_t)sizeof(buf))
-		return -EIO;
-	if (buf[4] == 1)
-		return 0;
-	return -EPERM;
+int bpf_loader_secure_boot_enabled(void)
+{
+	static const char sb_path[] =
+		"/sys/firmware/efi/efivars/"
+		"SecureBoot-8be4df61-93ca-11d2-aa0d-00e098032b8c";
+	static const char mok_path[] =
+		"/sys/firmware/efi/efivars/"
+		"MokSBStateRT-605dab50-e046-4300-abb6-3dd810dd8b23";
+	uint8_t sb[5] = { 0 };
+	uint8_t mok[5] = { 0 };
+	ssize_t sb_len = read_efivar(sb_path, sb, sizeof(sb));
+	ssize_t mok_len = read_efivar(mok_path, mok, sizeof(mok));
+
+	return bpf_loader_secure_boot_judge(sb, sb_len, mok, mok_len);
 }
 
 /*
@@ -585,72 +599,6 @@ static int tpm_device_selinux_label_ok(void)
 	return 0;
 }
 
-/*
- * Returns 0 when /proc/self/exe has fs-verity enabled, -ENODATA when it does
- * not or the filesystem has none, another negative errno otherwise.
- * The digest is not compared with anything.
- */
-static int agent_self_fsverity_enabled(void)
-{
-	int fd = open("/proc/self/exe", O_RDONLY | O_CLOEXEC);
-	if (fd < 0)
-		return -errno;
-
-	/* room for the largest digest */
-	union {
-		uint8_t buf[sizeof(struct fsverity_digest) +
-			    LOTA_VERITY_DIGEST_MAX_SIZE];
-		struct fsverity_digest hdr;
-	} d;
-	memset(&d, 0, sizeof(d));
-	d.hdr.digest_size = (uint16_t)LOTA_VERITY_DIGEST_MAX_SIZE;
-
-	int ret = 0;
-	if (ioctl(fd, FS_IOC_MEASURE_VERITY, &d) != 0) {
-		int err = errno;
-		if (err == ENODATA || err == ENOTTY || err == EOPNOTSUPP)
-			ret = -ENODATA;
-		else
-			ret = -err;
-	}
-	close(fd);
-	return ret;
-}
-
-/* RSA-8192 + IMA v2 header ~1 KiB; ERANGE past this counts as unsigned */
-#define LOTA_IMA_XATTR_READ_MAX 4096
-
-/*
- * Returns 0 when the security.ima of /proc/self/exe is of a signature type,
- * negative errno otherwise. Reads the type alone: whether the kernel appraised
- * the file is bpf_loader_kernel_appraises_exec()'s question.
- *
- * A digest does not count: whoever swaps the file offline can recompute it.
- */
-static int agent_self_ima_signed(void)
-{
-	uint8_t xattr[LOTA_IMA_XATTR_READ_MAX];
-	ssize_t n = getxattr("/proc/self/exe", "security.ima", xattr,
-			     sizeof(xattr));
-
-	if (n < 0)
-		return -errno;
-	if (!lota_ima_xattr_is_signature(xattr, (size_t)n))
-		return -ENODATA;
-	return 0;
-}
-
-static int agent_self_immutability_enforced(void)
-{
-	int ret = agent_self_fsverity_enabled();
-
-	if (ret == 0)
-		return 0;
-	if (agent_self_ima_signed() == 0)
-		return 0;
-	return ret;
-}
-
 int bpf_loader_kernel_appraises_exec(void)
 {
 	return bpf_loader_ima_appraisal_active(
@@ -660,7 +608,6 @@ int bpf_loader_kernel_appraises_exec(void)
 
 int bpf_loader_verify_kernel_runtime_hardening(bool allow_mutable_rootfs)
 {
-	int verity = agent_self_fsverity_enabled();
 	bool secureboot = bpf_loader_secure_boot_enabled() == 0;
 	char floor_msg[512];
 	int ret;
@@ -683,67 +630,21 @@ int bpf_loader_verify_kernel_runtime_hardening(bool allow_mutable_rootfs)
 	}
 
 	ret = bpf_loader_kernel_appraises_exec();
-	if (ret < 0 &&
-	    (lota_ima_scope_is_advisory(verity == 0) || allow_mutable_rootfs)) {
-		lota_warn(
-			"The kernel appraises no executable on this host "
-			"(%s), so nothing but LOTA's own bindings covers what "
-			"this machine runs: the agent binary is held by "
-			"fs-verity and the PCR 14 boot commitment, and every "
-			"token says KERNEL_APPRAISAL is clear. IMA-signed "
-			"distribution packages, or an image pipeline that "
-			"signs the executables and enrols its certificate, "
-			"are what set it",
-			ret == -ENOENT ? "the loaded policy carries no "
-					 "appraise rule that reaches an exec" :
-			ret == -EACCES ? "the loaded policy could not be read, "
-					 "so no rule of it is known" :
-					 "IMA appraisal is not in a blocking "
-					 "mode");
-		ret = 0;
-	} else if (ret == -EACCES) {
-		/* unread is not empty: pass, with the token's bit clear */
-		lota_warn("Whether the kernel appraises any executable on "
-			  "this host could not be determined: %s could not be "
-			  "read, so no rule of the loaded policy is known. A "
-			  "kernel built without CONFIG_IMA_READ_POLICY never "
-			  "publishes it. The agent starts, and every token "
-			  "says KERNEL_APPRAISAL is clear, because the scope "
-			  "was unverified rather than verified empty",
-			  IMA_POLICY_PATH);
-		ret = 0;
-	} else if (ret == -ENOENT) {
-		lota_err("IMA appraisal is in a blocking mode but %s carries "
-			 "no appraise rule that reaches an executable, so no "
-			 "executable on this host is appraised -- and this "
-			 "agent has no fs-verity of its own, so a signed "
-			 "security.ima xattr nothing appraises is all that "
-			 "stands between its binary and an offline swap. The "
-			 "scope "
-			 "comes with the signatures the rules verify: "
-			 "IMA-signed distribution packages with the "
-			 "distribution's certificate on the .ima keyring, or "
-			 "an image pipeline that signs the executables and "
-			 "enrols its certificate -- both are in the production "
-			 "bringup guide. Loading rules over unsigned "
-			 "executables refuses them instead, and the developer "
-			 "baseline at %s is not exempt from that; a host whose "
-			 "policy carries 'appraise func=POLICY_CHECK "
-			 "appraise_type=imasig' refuses to load it unsigned in "
-			 "the first place",
-			 IMA_POLICY_PATH, LOTA_IMA_POLICY_ASSET);
-		return ret;
-	}
-	if (ret < 0) {
-		lota_err("IMA appraisal is not in an enforcing mode "
-			 "(ima_appraise=enforce or fix required on the kernel "
-			 "cmdline; log and the default off do not block on "
-			 "integrity failures). This host booted without Secure "
-			 "Boot, where the parameter is the whole answer, and "
-			 "its agent binary carries no fs-verity, so appraisal "
-			 "is the only thing that could bind it");
-		return ret;
-	}
+	if (ret < 0)
+		lota_warn("Exec appraisal is not established on this host "
+			  "(%s), so every token says KERNEL_APPRAISAL is "
+			  "clear. IMA-signed distribution packages, or an "
+			  "image pipeline that signs the executables and "
+			  "enrols its certificate, are what set it",
+			  ret == -ENOENT ?
+				  "the loaded policy has no appraise rule on "
+				  "BPRM_CHECK or without func=" :
+			  ret == -EACCES ?
+				  "the loaded policy could not be read" :
+			  ret == -EPERM ?
+				  "ima_appraise= on the kernel cmdline is not "
+				  "enforce" :
+				  "the kernel cmdline could not be read");
 
 	ret = tpm_device_selinux_label_ok();
 	if (ret == -ENOENT) {
@@ -759,42 +660,6 @@ int bpf_loader_verify_kernel_runtime_hardening(bool allow_mutable_rootfs)
 				  "reduce "
 				  "attestation availability");
 		} else {
-			return ret;
-		}
-	}
-
-	ret = agent_self_immutability_enforced();
-	if (ret < 0) {
-		if (allow_mutable_rootfs) {
-			lota_warn(
-				"INSECURE: agent binary (/proc/self/exe) is "
-				"neither fs-verity protected nor covered by a "
-				"signed security.ima xattr, and "
-				"--insecure-allow-mutable-rootfs "
-				"was set. Dirty shutdown "
-				"(panic/power-loss/SIGKILL) on "
-				"this host cannot detect a swapped agent binary, "
-				"library "
-				"closure, or policy file across a hard reset; the "
-				"verifier "
-				"will accept the same PCR14 boot commitment after "
-				"the "
-				"next boot even if those inputs were tampered "
-				"while the "
-				"host was offline.");
-		} else {
-			lota_err(
-				"Agent binary (/proc/self/exe) is not "
-				"protected against offline tampering "
-				"(needs fs-verity, or a signed security.ima "
-				"xattr appraised under ima_appraise=enforce on "
-				"filesystems without verity such as XFS or ZFS; "
-				"required to detect tampering across "
-				"panic/power-loss/SIGKILL, where "
-				"dirty shutdown cannot run "
-				"poison_runtime_pcr() and the verifier "
-				"has no other way to notice a swapped binary "
-				"on a measured rootfs)");
 			return ret;
 		}
 	}
@@ -1208,10 +1073,12 @@ int bpf_loader_load(struct bpf_loader_ctx *ctx, const char *bpf_obj_path,
 			lota_info(
 				"Kernel integrity baseline: module signatures enforced, lockdown at integrity or above");
 		} else {
-			lota_err(
-				"Kernel integrity baseline not met (module signatures enforced: %s, lockdown at integrity or above: %s); module and firmware loads are refused in enforce mode",
-				cfg.sig_enforce ? "yes" : "no",
-				cfg.lockdown ? "yes" : "no");
+			lota_err("Kernel integrity baseline not met (module "
+				 "signatures enforced: %s, lockdown at "
+				 "integrity or above: %s); module and firmware "
+				 "loads are refused in every mode",
+				 cfg.sig_enforce ? "yes" : "no",
+				 cfg.lockdown ? "yes" : "no");
 		}
 
 		uint32_t key = 0;
@@ -1479,8 +1346,7 @@ int bpf_loader_attach(struct bpf_loader_ctx *ctx)
 	for (size_t i = 0; i < required_count; i++) {
 		if (!required_attached[i]) {
 			lota_err("Required BPF program %s not attached; "
-				 "refusing to run with "
-				 "ptrace policy gap",
+				 "refusing to run without it",
 				 required_programs[i]);
 			err = -ENOENT;
 			goto err_detach;
@@ -2008,21 +1874,24 @@ int bpf_loader_pin_mapped_object(struct bpf_loader_ctx *ctx, const char *path,
 		ret = pin_record(ctx, slot.dev, slot.ino);
 		if (ret < 0)
 			return ret;
-		*guarded = 1;
-		return 0;
 	}
 
 	/* not provably the mapped bytes: leave unmeasured */
 	if (slot.seen != LOTA_EXE_MAP_SEEN_OK) {
-		lota_dbg("mapped object not pinned: %s (%s)", path,
+		lota_dbg("mapped object not guarded: %s (%s)", path,
 			 slot.seen == LOTA_EXE_MAP_SEEN_CHANGED ?
 				 "written since it was mapped" :
 				 "no record of it being mapped");
 		return 0;
 	}
 	if (slot.writers > 0) {
-		lota_dbg("mapped object not pinned: %s (%u writer%s)", path,
+		lota_dbg("mapped object not guarded: %s (%u writer%s)", path,
 			 slot.writers, slot.writers == 1 ? "" : "s");
+		return 0;
+	}
+
+	if (slot.guard) {
+		*guarded = 1;
 		return 0;
 	}
 

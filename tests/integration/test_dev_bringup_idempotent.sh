@@ -12,8 +12,8 @@
 # Requires:
 #   - bash, and a writable temp directory
 #
-# Runs unprivileged under LOTA_BRINGUP_ROOT, with TPM, fs-verity
-# and systemd tools stubbed on PATH; the host is not touched.
+# Runs unprivileged under LOTA_BRINGUP_ROOT, with TPM and systemd tools
+# stubbed on PATH; the host is not touched.
 
 set -euo pipefail
 
@@ -89,15 +89,6 @@ AGENT
 chmod 0755 "$ROOT/usr/bin/lota-agent"
 printf 'bpf object\n' >"$ROOT/usr/lib/lota/lota_lsm.bpf.o"
 
-# fsverity measure fails until enable has run once
-cat >"$STUB_BIN/fsverity" <<'FSVERITY'
-#!/bin/bash
-case "${1:-}" in
-measure) [[ -e "$LOTA_TEST_VERITY_MARK" ]] || exit 1 ;;
-enable) : >"$LOTA_TEST_VERITY_MARK" ;;
-esac
-exit 0
-FSVERITY
 cat >"$STUB_BIN/tpm2_evictcontrol" <<'TPM2'
 #!/bin/bash
 for arg in "$@"; do
@@ -119,7 +110,6 @@ chmod 0755 "$STUB_BIN"/*
 
 export LOTA_TEST_AGENT_LOG="$AGENT_LOG"
 export LOTA_TEST_TPM_LOG="$TPM_LOG"
-export LOTA_TEST_VERITY_MARK="$WORK_DIR/verity.mark"
 export LOTA_BRINGUP_ROOT="$ROOT"
 export PATH="$STUB_BIN:$PATH"
 
@@ -159,6 +149,27 @@ check "a re-run keeps the agent's state files" \
 check "a re-run evicts nothing from the TPM" test -z "$tpm_calls"
 check "a re-run names the flag that would reset the state" \
     says "$second" "--reset"
+
+# the IMA policy step reads the loaded rules the way the agent does
+IMA_RUNTIME="$ROOT/sys/kernel/security/ima/policy"
+mkdir -p "$(dirname "$IMA_RUNTIME")"
+printf '%s\n' 'dont_appraise fsmagic=0x9fa0' \
+    'appraise func=POLICY_CHECK appraise_type=imasig' >"$IMA_RUNTIME"
+ima_out=$(run_bringup) || true
+check "dont_appraise and POLICY_CHECK alone get the shipped rules" \
+    says "$ima_out" "loading IMA appraisal policy"
+check "the shipped rules reach the policy file" \
+    grep -q "^appraise func=BPRM_CHECK" "$IMA_RUNTIME"
+ima_out=$(run_bringup) || true
+check "an exec appraise rule is left alone" \
+    says "$ima_out" "already appraises exec"
+rm -f "$IMA_RUNTIME"
+mkdir "$IMA_RUNTIME"
+ima_out=$(run_bringup) || true
+check "an unreadable policy is not written blind" \
+    says "$ima_out" "cannot be read"
+check "an unreadable policy is left as it was" test -d "$IMA_RUNTIME"
+rmdir "$IMA_RUNTIME"
 
 # --reset is the only destructive path
 reset=$(run_bringup --reset) || {

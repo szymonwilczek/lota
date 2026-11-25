@@ -42,7 +42,6 @@ struct probe_ima_scope {
 	int policy_signed; /* policy writes are appraised against a signature */
 	int secureboot;
 	int agent_signed; /* agent binary carries a signed security.ima */
-	int agent_verity; /* agent binary is under fs-verity */
 	int is_root;
 };
 
@@ -52,11 +51,8 @@ struct probe_ima_scope {
  * @note: filled with the reason for the verdict.
  * @cap:  size of @note.
  *
- * Return: STAGE_DONE when a rule reaches an executable, or when the policy
- * cannot be read for a reason other than -EACCES without root. With no such
- * rule, STAGE_DONE when lota_ima_scope_is_advisory() holds for
- * @s->agent_verity, otherwise STAGE_BLOCKED. STAGE_ERROR when @s is NULL or
- * the read failed with -EACCES without root.
+ * Return: STAGE_ERROR when @s is NULL or the read failed with -EACCES
+ * without root, otherwise STAGE_DONE.
  */
 enum stage_state probe_ima_scope_stage(const struct probe_ima_scope *s,
 				       char *note, size_t cap);
@@ -80,15 +76,6 @@ enum probe_verity {
 	PROBE_VERITY_ENABLED = 0,
 	PROBE_VERITY_DISABLED,
 	PROBE_VERITY_UNSUPPORTED,
-};
-
-enum probe_fstype {
-	PROBE_FS_UNKNOWN = 0,
-	PROBE_FS_EXT4, /* ext2/ext3/ext4 */
-	PROBE_FS_XFS,
-	PROBE_FS_BTRFS,
-	PROBE_FS_F2FS,
-	PROBE_FS_ZFS,
 };
 
 enum probe_pcr14 {
@@ -146,40 +133,6 @@ int probe_manifest_line(const char *line, char *out, size_t cap);
  * -EINVAL when @port is not a port number.
  */
 int probe_port_needs_label(const char *listing, const char *port);
-
-/**
- * probe_fstype_from_magic() - Classify a statfs f_type.
- * @magic: f_type value.
- *
- * Return: enum probe_fstype.
- */
-enum probe_fstype probe_fstype_from_magic(long magic);
-
-/**
- * probe_fs_supports_fsverity() - Whether a filesystem class has fs-verity.
- * @fs: filesystem class.
- *
- * Return: 1 for ext4, btrfs and f2fs, otherwise 0.
- */
-int probe_fs_supports_fsverity(enum probe_fstype fs);
-
-/**
- * probe_verity_remediation() - Guidance for making a binary immutable.
- * @fs:   filesystem class of @path.
- * @path: the binary.
- * @out:  output buffer.
- * @cap:  size of @out.
- */
-void probe_verity_remediation(enum probe_fstype fs, const char *path, char *out,
-			      size_t cap);
-
-/**
- * probe_path_fstype() - Filesystem class of the volume holding a path.
- * @path: path to statfs.
- *
- * Return: enum probe_fstype; PROBE_FS_UNKNOWN when statfs fails.
- */
-enum probe_fstype probe_path_fstype(const char *path);
 
 /**
  * probe_file_ima_signed() - Whether a file carries a signed security.ima.
@@ -272,12 +225,13 @@ int probe_esrt_system_firmware_present(void);
 int probe_esrt_system_firmware_present_at(const char *base);
 
 /**
- * probe_cmdline_ima_ok() - Whether a cmdline sets ima_appraise=enforce or fix.
+ * probe_cmdline_ima_ok() - Whether a cmdline leaves ima_appraise=enforce.
  * @cmdline: kernel command line.
  *
- * The first ima_appraise= token decides.
+ * The last ima_appraise= token decides; with none the kernel keeps its
+ * default, enforce.
  *
- * Return: 0 for enforce or fix, -EPERM otherwise, -EINVAL for NULL,
+ * Return: 0 for enforce, -EPERM otherwise, -EINVAL for NULL,
  * -E2BIG for a cmdline of 4096 bytes or more.
  */
 int probe_cmdline_ima_ok(const char *cmdline);

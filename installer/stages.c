@@ -16,7 +16,6 @@
 #include <sys/types.h>
 
 #include "install.h"
-#include "../include/lota_ima_policy_scope.h"
 #include "probe.h"
 #include "run.h"
 #include "ui.h"
@@ -411,50 +410,6 @@ static int st_trust_apply(struct install_ctx *ctx)
 	return 0;
 }
 
-static enum stage_state st_verity_probe(struct install_ctx *ctx, char *note,
-					size_t cap)
-{
-	int st = probe_fsverity_state(PATH_AGENT_BIN);
-
-	(void)ctx;
-
-	switch (st) {
-	case PROBE_VERITY_ENABLED:
-		snprintf(note, cap,
-			 "Kernel-enforced read-only hash is "
-			 "active on %s",
-			 PATH_AGENT_BIN);
-		return STAGE_DONE;
-	case PROBE_VERITY_DISABLED:
-		snprintf(note, cap, "fs-verity not yet enabled on %s",
-			 PATH_AGENT_BIN);
-		return STAGE_PENDING;
-	case PROBE_VERITY_UNSUPPORTED:
-		if (probe_file_ima_signed(PATH_AGENT_BIN) == 1) {
-			snprintf(
-				note, cap,
-				"No fs-verity on this filesystem; %s carries a "
-				"signed security.ima xattr enforced by IMA "
-				"appraisal instead",
-				PATH_AGENT_BIN);
-			return STAGE_DONE;
-		}
-		probe_verity_remediation(probe_path_fstype(PATH_AGENT_BIN),
-					 PATH_AGENT_BIN, note, cap);
-		return STAGE_BLOCKED;
-	default:
-		snprintf(note, cap, "fs-verity probe failed: %s",
-			 strerror(-st));
-		return STAGE_ERROR;
-	}
-}
-
-static int st_verity_apply(struct install_ctx *ctx)
-{
-	(void)ctx;
-	return probe_fsverity_enable(PATH_AGENT_BIN);
-}
-
 #define INITRD_LIST_CAP 65536
 
 /* NULL @image: the running kernel's image */
@@ -591,7 +546,6 @@ struct floor_state {
 	int ima_ok;
 	int sig_ok;
 	int lockdown_ok;
-	int scope_ok;
 	int appraised; /* scope not PROBE_IMA_SCOPE_NONE, unreadable too */
 	int secureboot;
 };
@@ -600,14 +554,6 @@ static int booted_ima_appraised(void)
 {
 	return probe_ima_policy_scope(PROBE_IMA_POLICY_PATH, NULL) !=
 	       PROBE_IMA_SCOPE_NONE;
-}
-
-static int booted_ima_scope_ok(int appraised)
-{
-	if (appraised)
-		return 1;
-	return lota_ima_scope_is_advisory(
-		probe_fsverity_state(PATH_AGENT_BIN) == PROBE_VERITY_ENABLED);
 }
 
 static void booted_floor(struct floor_state *st)
@@ -621,7 +567,6 @@ static void booted_floor(struct floor_state *st)
 	st->sig_ok = probe_module_sig_enforced() == 0;
 	st->lockdown_ok = probe_lockdown_restrictive() == 0;
 	st->appraised = booted_ima_appraised();
-	st->scope_ok = booted_ima_scope_ok(st->appraised);
 }
 
 static enum stage_state st_cmdline_probe(struct install_ctx *ctx, char *note,
@@ -680,7 +625,7 @@ static int st_cmdline_apply(struct install_ctx *ctx)
 	booted_floor(&st);
 
 	if (!st.ima_ok)
-		strcat(args, "ima_appraise=fix ");
+		strcat(args, "ima_appraise=enforce ");
 	if (!st.sig_ok)
 		strcat(args, "module.sig_enforce=1 ");
 	if (!st.lockdown_ok)
@@ -716,8 +661,6 @@ static enum stage_state st_ima_scope_probe(struct install_ctx *ctx, char *note,
 					     &scope.policy_signed);
 	scope.secureboot = probe_secureboot() == 1;
 	scope.agent_signed = probe_file_ima_signed(PATH_AGENT_BIN) == 1;
-	scope.agent_verity = probe_fsverity_state(PATH_AGENT_BIN) ==
-			     PROBE_VERITY_ENABLED;
 
 	return probe_ima_scope_stage(&scope, note, cap);
 }
@@ -1376,20 +1319,11 @@ enum stage_state install_selfcheck_probe(struct install_ctx *ctx, char *note,
 	int rc;
 
 	booted_floor(&st);
-	if (!(st.ima_ok && st.sig_ok && st.lockdown_ok && st.scope_ok)) {
+	if (!(st.ima_ok && st.sig_ok && st.lockdown_ok)) {
 		snprintf(note, cap,
 			 "Not ready: the kernel integrity floor is not "
 			 "satisfied, so the self-check would fail. The floor "
 			 "stages above say which part of it.");
-		return STAGE_PENDING;
-	}
-	if (probe_fsverity_state(PATH_AGENT_BIN) != PROBE_VERITY_ENABLED &&
-	    probe_file_ima_signed(PATH_AGENT_BIN) != 1) {
-		snprintf(note, cap,
-			 "Not ready: %s is neither under fs-verity nor "
-			 "carrying a signed IMA xattr, so a modified read of "
-			 "it would go unnoticed.",
-			 PATH_AGENT_BIN);
 		return STAGE_PENDING;
 	}
 	if (!agent_service_active()) {
@@ -1402,8 +1336,8 @@ enum stage_state install_selfcheck_probe(struct install_ctx *ctx, char *note,
 	rc = enroll_profile(ctx, &paths);
 	if (rc == -EINVAL) {
 		snprintf(note, cap,
-			 "Ready: floor satisfied, agent binary immutable, "
-			 "service running, and no publisher named yet - the "
+			 "Ready: floor satisfied, service running, and no "
+			 "publisher named yet - the "
 			 "certificate arrives when a title first asks. The "
 			 "attestation round-trip runs during an install; this "
 			 "report performs nothing.");
@@ -1420,8 +1354,8 @@ enum stage_state install_selfcheck_probe(struct install_ctx *ctx, char *note,
 	}
 
 	snprintf(note, cap,
-		 "Ready: floor satisfied, agent binary immutable, service "
-		 "running, AIK certificate valid (%s). The attestation "
+		 "Ready: floor satisfied, service running, AIK "
+		 "certificate valid (%s). The attestation "
 		 "round-trip runs during an install; this report performs "
 		 "nothing.",
 		 days > 0 ? "a day or more left" : "less than a day left");
@@ -1443,27 +1377,17 @@ int install_self_check(struct install_ctx *ctx)
 
 	booted_floor(&st);
 	{
-		int floor_ok = st.ima_ok && st.sig_ok && st.lockdown_ok &&
-			       st.scope_ok;
+		int floor_ok = st.ima_ok && st.sig_ok && st.lockdown_ok;
 
 		ui_kv(&ctx->ui, "Kernel integrity floor",
 		      floor_ok && !st.appraised ?
 			      "Satisfied (the kernel appraises nothing; every "
 			      "token says so)" :
-		      floor_ok	   ? "Satisfied" :
-		      !st.scope_ok ? "NOT satisfied (nothing appraised, and no "
-				     "fs-verity on the agent binary)" :
-				     "NOT satisfied");
+		      floor_ok ? "Satisfied" :
+				 "NOT satisfied");
 		if (!floor_ok)
 			ok = 0;
 	}
-
-	ui_kv(&ctx->ui, "agent binary immutability",
-	      probe_fsverity_state(PATH_AGENT_BIN) == PROBE_VERITY_ENABLED ?
-		      "Enforced (fs-verity)" :
-	      probe_file_ima_signed(PATH_AGENT_BIN) == 1 ?
-		      "Enforced (signed IMA xattr)" :
-		      "NOT enforced");
 
 	ui_kv(&ctx->ui, "agent service",
 	      agent_service_active() ? "Active" : "NOT active");
@@ -1676,20 +1600,6 @@ const struct stage install_stages[] = {
 		.apply = st_trust_apply,
 	},
 	{
-		.title = "Tamper-proofing the agent binary",
-		.explain =
-			"Kernel must refuse any modified read of /usr/bin/lota-agent "
-			"so replacing or patching it breaks attestation visibly. "
-			"On ext4/btrfs/f2fs this stage enables fs-verity. "
-			"On XFS, ZFS and other filesystems without verity, signed "
-			"security.ima xattr appraised under ima_appraise=enforce "
-			"gives the same guarantee; the agent accepts either. "
-			"fs-verity changes only that one file's state on disk and "
-			"is undone by reinstalling the package.",
-		.probe = st_verity_probe,
-		.apply = st_verity_apply,
-	},
-	{
 		.title = "Boot-time PCR14 lock in the initramfs",
 		.explain =
 			"LOTA pins TPM PCR 14 very early in boot (inside the "
@@ -1710,11 +1620,10 @@ const struct stage install_stages[] = {
 	{
 		.title = "Kernel integrity floor on the cmdline",
 		.explain =
-			"The agent refuses to start unless the kernel enforces an "
-			"integrity floor: IMA appraisal in an enforcing mode "
-			"(ima_appraise=fix - it satisfies the floor without "
-			"blocking unsigned files), signed kernel modules, and "
-			"kernel lockdown. "
+			"The agent refuses to start unless the kernel enforces "
+			"signed kernel modules and lockdown. IMA appraisal in "
+			"enforce mode lets a token say KERNEL_APPRAISAL; "
+			"without it the agent starts with a warning. "
 			"This step appends the missing parameters to the boot "
 			"entries via grubby. They appear in /etc/default/grub and "
 			"take effect on the next boot. "
@@ -1728,19 +1637,12 @@ const struct stage install_stages[] = {
 		.explain =
 			"The previous step set the appraisal *mode*; the "
 			"kernel applies that mode only to the rules its "
-			"loaded IMA policy carries. A policy with no appraise "
-			"rule reaching an executable appraises nothing, and "
-			"the agent refuses to start on such a host.\n"
+			"loaded IMA policy carries. Tokens say "
+			"KERNEL_APPRAISAL only for an appraise rule on "
+			"BPRM_CHECK or one without func=; other rules, such "
+			"as MMAP_CHECK, are not counted.\n"
 			"This step reads the loaded policy and reports "
-			"whether the kernel appraises anything. A host whose "
-			"agent binary carries fs-verity runs without it -- the "
-			"kernel refuses a modified read of the agent and "
-			"PCR 14 commits the running build -- and every token "
-			"it hands out says so, which is what a publisher "
-			"reads. On a filesystem without verity, where the "
-			"agent's only claim is a signed security.ima xattr, "
-			"appraisal is what makes that claim real and the "
-			"agent will not start without it.\n"
+			"whether such a rule is there.\n"
 			"It loads no rules: an IMA rule cannot name a "
 			"path, so the rule that appraises the agent appraises "
 			"every executable it matches, and on a Secure Boot "

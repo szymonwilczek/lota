@@ -131,7 +131,7 @@ uint32_t lota_rt_object_memory_flags(unsigned long fs_magic,
  * @role: enum lota_rt_object_role.
  * @verity_present: the kernel holds an fs-verity digest for it.
  * @fs_magic: f_type of its filesystem.
- * @write_guarded: the agent pinned it against writes.
+ * @write_guarded: bpf_loader_pin_mapped_object() set its @guarded.
  *
  * fs-verity wins whatever the role. A content hash is taken only for the
  * executable or a write-guarded mapped object, on a filesystem in the

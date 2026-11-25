@@ -415,7 +415,7 @@ func TestRequirementRefusalNamesTheRequirement(t *testing.T) {
 				return &types.AttestationReport{}
 			},
 			verdict: codeIMAAppraisalRequired,
-			names:   "appraises no executable",
+			names:   "exec appraisal not established",
 		},
 		{
 			name: "a kernel command line carrying a denied parameter",

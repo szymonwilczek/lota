@@ -5,7 +5,7 @@
 #
 # The engine decides what a package may do:
 # everything host-local and reversible (BPF signature check, policy_pubkey
-# in lota.conf, fs-verity on the binary, the SELinux fence) runs here,
+# in lota.conf, the SELinux fence) runs here,
 # and the two stages that rewrite how the machine boots -- the 90lota initramfs
 # and the kernel integrity floor -- wait for a person unless this host asked for
 # them (/etc/lota/auto-bringup or LOTA_AUTO_BRINGUP=1).
