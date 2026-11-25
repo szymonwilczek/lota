@@ -2,13 +2,9 @@
 # SPDX-License-Identifier: MIT
 # Copyright (C) 2026 Szymon Wilczek
 #
-# Operator-facing tamper trigger for the live demo.
-#
-# Discovers the running demo's sandbox under /tmp/lota-demo.*, arms the
-# tamper marker that the demo_anticheat producer polls before each
-# heartbeat, holds the marker until interrupted, and unlinks it on exit
-# so the verdict stream returns to TRUSTED. The producer itself does the
-# actual byte flip on the signed token.
+# Creates the tamper marker demo_anticheat checks on every heartbeat, which
+# then flips the last signature byte. On exit the marker is removed, even
+# one that existed before the run.
 
 set -euo pipefail
 
@@ -87,9 +83,6 @@ fi
 
 if [ -z "$MARKER" ]; then
 	if [ -z "$DEMO_DIR" ]; then
-		# pick the newest demo sandbox; ls -td sorts by mtime desc
-		# and stops at the first hit so multiple parallel runs do
-		# not silently target the wrong one
 		DEMO_DIR="$(ls -1dt /tmp/lota-demo.* 2>/dev/null | head -n1 || true)"
 		if [ -z "$DEMO_DIR" ]; then
 			die "no /tmp/lota-demo.* sandbox found; start the demo via examples/demo/setup.sh first"
@@ -99,9 +92,7 @@ if [ -z "$MARKER" ]; then
 	MARKER="$DEMO_DIR/tamper.marker"
 fi
 
-# Refuse to operate outside the documented sandbox path so a stray
-# --marker value cannot scribble an arbitrary file under operator
-# privileges.
+# Only the text is matched, so a path with .. in it can land elsewhere.
 case "$MARKER" in
 /tmp/lota-demo.*) ;;
 *)
@@ -132,8 +123,7 @@ if [ -n "$HOLD_SEC" ]; then
 	sleep "$HOLD_SEC"
 else
 	log "press Ctrl-C to disarm"
-	# tail -f /dev/null is portable on bash and survives SIGINT
-	# cleanly through the trap above
+	# wait returns on a trapped signal; a foreground sleep would not
 	tail -f /dev/null &
 	wait "$!" 2>/dev/null || true
 fi

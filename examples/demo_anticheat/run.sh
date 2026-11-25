@@ -2,25 +2,13 @@
 # SPDX-License-Identifier: MIT
 # Copyright (C) 2026 Szymon Wilczek
 #
-# End-to-end proof of the anti-cheat reference, on one host, with no root.
+# Runs the anti-cheat reference end to end without root, on a throwaway
+# swTPM: a heartbeat must come back TRUSTED, and one with its last signature
+# byte flipped UNTRUSTED, with the server log naming the signature.
 #
-# It stands up a throwaway swTPM, runs lota-agent against it under socket
-# activation so the agent listens on a path in /tmp rather than /run/lota,
-# starts the reference game server on the AIK that TPM provisioned,
-# and runs the heartbeat producer against it twice.
-#
-# The assertions are the two a studio cares about:
-#
-#   1. heartbeat from an attested host verifies (TRUSTED), and
-#   2. heartbeat whose token was altered in flight does not (UNTRUSTED),
-#      with the server naming the signature as the reason.
-#
-# The second case flips one byte inside the signed token and leaves the wire
-# well-formed, so what it exercises is the integrity path rather than the parser.
-#
-# Requires: swtpm, swtpm_setup, tpm2_readpublic, systemd-socket-activate,
-# and `make all examples` already run.
-# Override the binaries with BIN and the examples with EXAMPLES_BIN.
+# Needs swtpm, swtpm_setup, tpm2_readpublic, systemd-socket-activate and
+# `make all examples`. LOTA_BUILD_DIR, BIN, EXAMPLES_BIN, TPM_PORT and
+# SERVER_ADDR override the defaults below; KEEP_LOGS keeps the run directory.
 
 set -euo pipefail
 
@@ -48,8 +36,7 @@ for c in swtpm swtpm_setup tpm2_readpublic systemd-socket-activate; do
 	}
 done
 
-# agent socket lives here,
-# so the directory has to stay well inside the 108-byte sockaddr_un limit.
+# /tmp, not $TMPDIR: the agent socket path has to fit in sockaddr_un.
 RUN_DIR="$(mktemp -d /tmp/lota-anticheat.XXXXXX)"
 TPM_PORT="${TPM_PORT:-42531}"
 SERVER_ADDR="${SERVER_ADDR:-127.0.0.1:7543}"
@@ -84,9 +71,7 @@ SWTPM_PID=$!
 sleep 1
 
 echo "== 2/5 start lota-agent on a socket-activated path =="
-# Socket activation is what keeps this rootless:
-# systemd-socket-activate binds the listener,
-# so the agent never has to create /run/lota.
+# The activated listener keeps the agent off /run/lota.
 systemd-socket-activate -l "$RUN_DIR/lota.sock" \
 	-E LOTA_TCTI="$TCTI" \
 	-E LOTA_AIK_META_PATH="$RUN_DIR/aik_meta.dat" \
@@ -100,9 +85,9 @@ done
 [ -S "$RUN_DIR/lota.sock" ] || fail "agent socket never appeared"
 
 echo "== 3/5 export the AIK the server will trust =="
-# producer connects to the agent before it reaches the server,
-# so running it against a server that is not up yet is what brings
-# the socket-activated agent to life and makes it provision its AIK.
+# The agent starts on the first connection and provisions its AIK; the
+# producer connects before it reaches the server, so a server that is not
+# up yet is enough.
 "$producer" --server "http://$SERVER_ADDR/heartbeat" \
 	--socket "$RUN_DIR/lota.sock" --once >/dev/null 2>&1 || true
 
@@ -132,7 +117,7 @@ set +e
 rc=$?
 set -e
 
-# --once exits with the server's verdict: 0 TRUSTED, 1 UNTRUSTED, 2 REJECT
+# --once exits 0 on TRUSTED and 1 on UNTRUSTED
 if [ "$rc" -ne 0 ]; then
 	cat "$RUN_DIR/trusted.log" "$RUN_DIR/server.log" >&2
 	fail "an attested host was not TRUSTED (exit $rc)"
@@ -140,8 +125,6 @@ fi
 echo "   heartbeat verified against a real TPM quote"
 
 echo "== 5/5 an altered token is UNTRUSTED =="
-# one byte flipped inside the signed token, wire format left intact,
-# so the server's signature check is what has to catch it.
 touch "$RUN_DIR/tamper"
 set +e
 "$producer" --server "http://$SERVER_ADDR/heartbeat" \

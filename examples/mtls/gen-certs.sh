@@ -6,19 +6,16 @@
 # heartbeat producer to the game server and the game server back to the
 # producer.
 #
-# This is a DEDICATED provisioning CA, separate from the attestation CA.
-# The attestation CA certifies a device's AIK (hardware identity); this CA
-# certifies the two services (producer and game server) so each end of the
-# heartbeat channel can prove who it is. Keeping the two PKIs apart means a
-# service-identity key never doubles as a device-attestation anchor.
+# The CA here is not the attestation CA: it certifies the two services, not
+# a device's AIK.
 #
 # Output (in OUT_DIR, default ./mtls):
 #   ca.crt / ca.key            provisioning CA (trust root for both ends)
 #   server.crt / server.key    game server identity (serverAuth, SAN-bound)
 #   producer.crt / producer.key  anti-cheat producer identity (clientAuth)
 #
-# Rotation: re-run with -server or -producer to reissue just that leaf
-# against the existing CA, then restart the reissued side. See README.rst.
+# -server or -producer issues only that leaf. Without ca.key a new CA is
+# made first, which the other leaf does not chain to.
 
 set -euo pipefail
 
@@ -46,8 +43,6 @@ mkdir -p "$OUT_DIR"
 cd "$OUT_DIR"
 umask 077
 
-# Provisioning CA
-# self-signed, trust root both ends pin
 if [ ! -f ca.key ]; then
 	openssl genpkey -algorithm EC -pkeyopt ec_paramgen_curve:P-256 -out ca.key
 	openssl req -x509 -new -key ca.key -days "$CA_DAYS" -out ca.crt \
@@ -60,8 +55,6 @@ elif [ "$what" = "all" ]; then
 fi
 
 # issue_leaf <name> <subject-CN> <ext-block>
-# Signs a leaf CSR against the provisioning CA with the given X.509v3
-# extensions, so server and producer certs carry the right EKU and SAN
 issue_leaf() {
 	local name="$1" cn="$2" ext="$3"
 	openssl genpkey -algorithm EC -pkeyopt ec_paramgen_curve:P-256 \

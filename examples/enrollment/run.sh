@@ -2,26 +2,15 @@
 # SPDX-License-Identifier: MIT
 # Copyright (C) 2026 Szymon Wilczek
 #
-# End-to-end Privacy CA enrollment demo on one host with a TPM (real or
-# swTPM). It stands up the attestation CA, enrolls the agent's AIK
-# through credential activation, then attests to a verifier that trusts
-# only the CA. A software-only client cannot complete this: the CA issues
-# the AIK certificate only after the TPM proves, via TPM2_ActivateCredential,
-# that the AIK and the certified EK share one chip.
-#
-# Requires a provisioned TPM with a readable EK certificate. Override the
-# binary directory and the EK manufacturer roots via the environment:
+# Starts the attestation CA, enrolls this host's AIK with it through
+# credential activation, then attests once to a verifier that trusts only
+# the CA certificate. Needs a TPM with a readable EK certificate, and sudo.
 #
 #   BIN=/usr/bin EK_ROOT=/var/lib/swtpm-localca/issuercert.pem ./run.sh
 #
-# CA_ADDR and VERIFIER_ADDR default to the CA's and verifier's own ports;
-# move them on a host that already attests.
-#
-# EK_ROOT is a file or a directory. A file is one self-signed root, as the
-# swtpm local CA issues, and goes to -ek-root. A directory is a pinned bundle
-# for a vendor EK chain with intermediates, and goes to -ek-root-bundle.
-# Build it with scripts/lota-ek-root-pin.sh and scripts/lota-ek-roots-update.sh
-# (see README.rst).
+# EK_ROOT, required, is a PEM file of roots for -ek-root, or a pinned bundle
+# directory for -ek-root-bundle. CA_ADDR defaults to 127.0.0.1:8444 and
+# VERIFIER_ADDR to 127.0.0.1:9443; a taken address is refused.
 
 set -euo pipefail
 
@@ -37,7 +26,6 @@ POLICY="${POLICY:-$HERE/../../policies/testing.yaml}"
 CA_ADDR="${CA_ADDR:-127.0.0.1:8444}"
 VERIFIER_ADDR="${VERIFIER_ADDR:-127.0.0.1:9443}"
 
-# refuse a taken port before starting anything
 addr_in_use() {
     local host=${1%%:*} port=${1##*:}
 
@@ -45,7 +33,6 @@ addr_in_use() {
         ss -ltnH "sport = :$port" 2>/dev/null | grep -q .
         return
     fi
-    # no ss: a successful connect means somebody is listening
     (exec 3<>"/dev/tcp/$host/$port") 2>/dev/null
 }
 
@@ -83,8 +70,7 @@ done
 }
 mkdir -p "$RUN_DIR"
 
-# SHA-256 of the anchor's SPKI: known before enrollment,
-# as the slot is claimed at consent
+# the publisher id: SHA-256 of ca.crt's SPKI
 publisher_id() {
     command -v openssl >/dev/null 2>&1 || return 1
     openssl x509 -in "$CA_DIR/ca.crt" -noout -pubkey |
@@ -94,7 +80,7 @@ publisher_id() {
 
 CONSENT_ATTEMPTED=0
 
-# on every exit past consent: a failed run keeps the slot too
+# --enroll records consent before it enrolls, so a failed run keeps the slot
 say_what_was_left() {
     local id
 
@@ -125,8 +111,6 @@ cleanup() {
 }
 trap cleanup EXIT
 
-# A bundle carries the intermediates a vendor chain needs;
-# a lone file is the self-signed anchor swTPM issues directly from.
 if [ -d "$EK_ROOT" ]; then
     ek_material=(-ek-root-bundle "$EK_ROOT")
 else
@@ -150,9 +134,8 @@ sudo "$agent" --enroll \
 echo "AIK certificate stored in the publisher profile the CA anchor names," \
      "under /var/lib/lota/profiles/"
 
-# The listener certificate gen-ca.sh issued serves this verifier too:
-# it chains to ca.crt and carries 127.0.0.1, so the agent verifies the handshake
-# against the same file that names the publisher it enrolled with.
+# tls.crt chains to ca.crt and names only 127.0.0.1 and localhost, so at
+# the default VERIFIER_ADDR the agent's --ca-cert also verifies this verifier.
 echo "== 3/4 start the verifier (trusts only the CA root) =="
 (
     cd "$RUN_DIR"
@@ -167,9 +150,9 @@ echo "== 3/4 start the verifier (trusts only the CA root) =="
 VERIFIER_PID=$!
 sleep 1
 
-# The agent refuses --server while /etc/lota/lota.conf names publishers,
-# so the demo uses a config with none and leaves the host's publishers alone.
-# The agent requires a root-owned config.
+# --attest refuses --server when the config has profiles, so this config
+# has none; it is written as root because the agent refuses one it does not
+# own.
 DEMO_CONF="$RUN_DIR/demo.conf"
 printf '%s\n' \
        "# Enrollment demo: no profiles; attests once to the named verifier." |
