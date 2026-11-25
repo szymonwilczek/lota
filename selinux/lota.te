@@ -1,14 +1,7 @@
 # SPDX-License-Identifier: GPL-2.0-only
 # Copyright (C) 2026 Szymon Wilczek
-#
-# LOTA SELinux policy - type enforcement
-#
 
 policy_module(lota, 1.0.0)
-
-#
-# Tunables
-#
 
 ## <desc>
 ## <p>Allow network access for remote attestation.</p>
@@ -20,33 +13,17 @@ gen_tunable(lota_network_attest, true)
 ## </desc>
 gen_tunable(lota_bpf_load, true)
 
-#
-# Type declarations
-#
-
 type lota_agent_t;
 type lota_agent_exec_t;
 init_daemon_domain(lota_agent_t, lota_agent_exec_t)
 
-#
-# Packaged lota-agent.service sets enough hardening directives
-# that systemd implicitly applies NoNewPrivileges=yes before exec.
-# Under NNP a SELinux domain transition is refused unless the source
-# domain holds process2:{ nnp_transition nosuid_transition } against
-# the target -- without this, init_t cannot enter lota_agent_t and
-# the daemon runs (and is denied lota_var_t / lota_tpm_device_t access)
-# under init_t's context.
-#
+# lota-agent.service sets NoNewPrivileges=yes, under which entering
+# lota_agent_t from init_t needs nnp_transition; nosuid_transition is
+# needed when the binary is on a nosuid mount.
 allow init_t lota_agent_t:process2 { nnp_transition nosuid_transition };
 
-#
-# /run/lota -- socket-activation runtime dir owned by systemd
-# (init_t) on RuntimeDirectory=lota creation, and managed by
-# lota_agent_t for the agent's witness files under /var/lib/lota.
-# files_pid_file() assigns the pid_file attribute that systemd
-# already has cascading manage rights on for socket activation
-# (dir create, sock_file bind, rmdir on unit stop)
-#
+# Labels /var/lib/lota and /run/lota; as a pid_file type it lets systemd
+# manage /run/lota, the RuntimeDirectory of lota-agent.socket.
 type lota_var_t;
 files_pid_file(lota_var_t)
 
@@ -56,48 +33,23 @@ files_config_file(lota_etc_t)
 type lota_bpf_t;
 files_type(lota_bpf_t)
 
-#
-# Port type for the attestation endpoints the agent connects out to.
-#
-# Policy below allows lota_agent_t to reach this type, so a port that nothing
-# labels is a port the agent cannot use:
-# the connect fails with EACCES and the operator sees a connection error against
-# server that is running.
-# The type is declared here and nothing is labelled with it here: a loadable
-# module cannot carry port contexts, because portcon is base policy. Every
-# assignment happens at bring-up instead -- lota-install labels the endpoints it
-# was given, and any other endpoint is the operator's:
+# A loadable module cannot carry portcon, so no port is labelled here:
+# lota-install labels the endpoints it was given, any other is the
+# operator's:
 #
 #   semanage port -a -t lota_port_t -p tcp <port>
 type lota_port_t;
 corenet_port(lota_port_t)
 
-#
-# Dedicated TPM character-device type.
-#
-# PCR 8-15, PCR 14 included, are auth-free and Locality-0 writable (TPM 2.0
-# PC Client Platform TPM Profile p3.3), so the TPM itself gates no extend.
-#
 # configs/udev/99-lota-tpm.rules relabels /dev/tpm[0-9]* and
-# /dev/tpmrm[0-9]* at device-add time. Interfaces such as dev_rw_tpm()
-# grant tpm_device_t, so the label cuts the rw holders from fifteen to eight.
-#
-# It does not fence root: devices_unconfined_type is one of the eight,
-# unconfined_t is a member, and it may relabel the node back. A module cannot
-# revoke base-policy grants; against root, src/agent/tpm.c attributes the extend.
-#
+# /dev/tpmrm[0-9]* from tpm_device_t at device-add time. The label does
+# not fence root, and a module cannot revoke base-policy grants.
 type lota_tpm_device_t;
 dev_node(lota_tpm_device_t)
 
-#
-# lota_agent_t policy
-#
-
-# sys_ptrace is what authorises reading another process's /proc entries
-# -- maps, map_files -- which is how the runtime image measurement reaches
-# the code of title that asked to be protected.
-# It grants no debugger: attaching is refused separately by the agent's own
-# LSM hook, which exempts the agent for read access only.
+# sys_ptrace reads another process's /proc maps and map_files for the
+# runtime image measurement; the agent's LSM hook exempts it for read
+# access only.
 allow lota_agent_t self:capability { dac_override dac_read_search sys_admin sys_ptrace chown };
 
 # A title in a user namespace (Proton) is checked in that namespace,
@@ -110,19 +62,15 @@ allow lota_agent_t self:fifo_file rw_fifo_file_perms;
 allow lota_agent_t self:unix_stream_socket create_stream_socket_perms;
 allow lota_agent_t self:unix_dgram_socket create_socket_perms;
 
-# /etc/lota - read only
 allow lota_agent_t lota_etc_t:dir list_dir_perms;
 allow lota_agent_t lota_etc_t:file read_file_perms;
 
-# /var/lib/lota - read/write
 allow lota_agent_t lota_var_t:dir manage_dir_perms;
 allow lota_agent_t lota_var_t:file manage_file_perms;
 
-# The IPC listening socket (/run/lota/lota.sock, lota_var_t) is a sock_file,
-# a class manage_file_perms does not cover. The daemon binds it on the
-# non-socket-activated path, and lota_agent_t one-shots (e.g. --shutdown)
-# connect to it as clients. Without these the client write/connect is
-# denied and a graceful shutdown fails under enforcing.
+# /run/lota/lota.sock: the daemon binds it when not socket-activated and
+# again once the file is replaced; one-shots such as --shutdown connect
+# to it.
 allow lota_agent_t lota_var_t:sock_file manage_sock_file_perms;
 allow lota_agent_t self:unix_stream_socket connectto;
 
@@ -130,7 +78,6 @@ allow lota_agent_t self:unix_stream_socket connectto;
 # renamed over, never followed; that is all the daemon may do to one.
 allow lota_agent_t lota_var_t:lnk_file unlink;
 
-# /usr/lib/lota/*.bpf.o
 allow lota_agent_t lota_bpf_t:dir list_dir_perms;
 allow lota_agent_t lota_bpf_t:file { read_file_perms execute map };
 
@@ -139,30 +86,13 @@ userdom_manage_tmp_dirs(lota_agent_t)
 userdom_manage_tmp_sockets(lota_agent_t)
 userdom_watch_tmp_dirs(lota_agent_t)
 
-#
-# Hardware access
-#
-
-# /dev/tpm[0-9]*, /dev/tpmrm[0-9]* (relabelled by udev to
-# lota_tpm_device_t at device-add time)
 allow lota_agent_t lota_tpm_device_t:chr_file rw_chr_file_perms;
 
-# Bootstrap fallback: on systems where the udev rule has not yet
-# loaded (early initramfs hand-off, hostile relabel, ...) lota-agent
-# still needs read+open on the stock tpm_device_t label so the
-# operator can recover. The verifier path detects the missing label
-# at attestation time via the agent's clock-state attribution
-# (src/agent/tpm.c::tpm_extend_boot_commitment) and refuses to
-# attest until the udev relabel has run.
+# the node keeps the stock tpm_device_t until udev relabels it
 dev_rw_tpm(lota_agent_t)
 
-# /dev/urandom
 dev_read_urand(lota_agent_t)
 dev_read_rand(lota_agent_t)
-
-#
-# BPF subsystem
-#
 
 kernel_read_system_state(lota_agent_t)
 
@@ -170,121 +100,56 @@ tunable_policy(`lota_bpf_load',`
         allow lota_agent_t self:bpf { map_create map_read map_write prog_load prog_run };
 ')
 
-#
-# System state reads
-#
-
-# /proc
 domain_read_all_domains_state(lota_agent_t)
 kernel_read_proc_symlinks(lota_agent_t)
 
-# /proc/kallsyms. bpf_loader::resolve_kernel_symbol() reads it to pin
-# sig_enforce and lockdown addresses into the integrity_cfg map so the
-# LSM programs can verify at runtime that module.sig_enforce has not
-# been flipped. selinux-policy 44.x labels /proc/kallsyms as
-# system_map_t (the same type as /boot/System.map; the kallsyms node
-# is exposed under that label via genfscon), so neither
-# kernel_read_system_state() nor kernel_read_proc_files() (both
-# proc_t-scoped) cover the read. Grant the file class directly; the
-# /proc dir traversal is already granted via kernel_read_system_state.
 gen_require(`
 	type system_map_t;
 ')
 allow lota_agent_t system_map_t:file read_file_perms;
 
-# Runtime image measurement of protected process
-#
-# lota_protect_self() puts title in the protected set, and every token the agent
-# then issues folds in kernel-anchored measurement of that process's live code:
-# /proc/<pid>/maps is walked and each file-backed executable mapping is opened
-# through /proc/<pid>/map_files and measured with FS_IOC_MEASURE_VERITY (ioctlcmd 0x6686).
-#
-# What gets opened is whatever the title has mapped -- its own binary,
-# the SDK, libc, and anything else it loads -- so the type is not knowable from
-# this policy.
-# Without these rules the open is denied, the measurement cannot be taken,
-# and measurement that is missing must never be issued as trusted one,
-# so every GET_TOKEN on the host fails closed.
-#
-# Read and measure only, on files already mapped by process the agent was asked
-# to protect.
+# Runtime image measurement opens each executable mapping of a protected
+# process through /proc/<pid>/map_files and measures it with
+# FS_IOC_MEASURE_VERITY; what the title maps decides the type.
 files_read_all_files(lota_agent_t)
 allow lota_agent_t file_type:file { getattr open read ioctl };
 
-# The road for a title without fs-verity turns on the filesystem it lives on,
-# which fstatfs() reports. Refused, the road stays shut and the title loses
-# its token.
+# fstatfs() of each mapping feeds the road for a title without fs-verity
 fs_getattr_all_fs(lota_agent_t)
 
-# Ending a protected process on its owner's behalf
-#
-# The agent answers for a caller kill(2) would already have allowed, which means
-# it signals processes of another uid and needs the kill capability for it.
-#
-# The target's domain is not knowable here for the same reason the measurement
-# rules above are open: title runs as whatever the distribution confines it to.
-# Only signal and sigkill are granted, which is what SIGTERM and SIGKILL need;
-# the agent relays nothing else.
+# The agent relays SIGTERM or SIGKILL to a protected process for its
+# owner or root (terminate_policy.h), across uids and whatever its domain.
 allow lota_agent_t self:capability kill;
 allow lota_agent_t domain:process { signal sigkill };
 
-# /boot/vmlinuz-*
 files_read_boot_files(lota_agent_t)
 files_read_boot_symlinks(lota_agent_t)
 
-# /sys
 dev_read_sysfs(lota_agent_t)
-# /sys/kernel/btf/vmlinux -- libbpf mmaps it during bpf_object__load to
-# resolve CO-RE relocations against the running kernel; without the
-# mmap class allow the load fails with -EINVAL at bpf_create_map_xattr.
+# libbpf maps /sys/kernel/btf/vmlinux for CO-RE relocations
 dev_map_sysfs(lota_agent_t)
 
-# /sys/firmware/efi/efivars
 fs_read_efivarfs_files(lota_agent_t)
 
-# /sys/fs/selinux
 selinux_get_fs_mount(lota_agent_t)
 
-# /proc/cmdline
 kernel_read_kernel_sysctls(lota_agent_t)
 
-#
-# Logging + IPC under systemd
-#
-# journal_init() in src/agent/journal.c routes lota_info/lota_warn/
-# lota_err through sd_journal_send() whenever INVOCATION_ID is set
-# (i.e. when systemd execs the agent). sd_journal_send() opens
-# /run/systemd/journal/socket (syslogd_var_run_t). Without the
-# logging_send_syslog_msg() rule below every diagnostic line the
-# agent emits is silently dropped, so a startup that fails any
-# downstream gate shows up in journalctl as exactly two stdout
-# lines from test_iommu() with no context, and the operator has
-# no way to attribute the failure.
-#
-# dbus_system_bus_client() grants the agent send_msg on the system bus,
-# but on this refpolicy it does NOT grant acquire_svc -- owning the
-# well-known name org.lota.Agent1 needs an explicit rule. Without it
-# dbus-broker denies RequestName (USER_AVC acquire_svc, not a kernel AVC),
-# dbus_init() logs "failed to claim org.lota.Agent1: Permission denied",
-# and the agent falls back to socket IPC only with no D-Bus surface.
-#
-# pidfs_t arrived with kernel 6.9+ (Fedora 44 ships 6.19+). libsystemd
-# 259 calls fstatfs() on the pidfd dirfd it opens internally during
-# sd_listen_fds / sd_notify, so the agent must be able to getattr
-# the pidfs root. No refpolicy interface exists yet, allow rule
-# is explicit.
-#
+# Under systemd, or once detached from a terminal, the agent logs via
+# sd_journal_send().
 logging_send_syslog_msg(lota_agent_t)
 logging_send_audit_msgs(lota_agent_t)
 
 dbus_system_bus_client(lota_agent_t)
+
+# owning org.lota.Agent1 needs acquire_svc, which
+# dbus_system_bus_client() does not grant
 gen_require(`
 	class dbus acquire_svc;
 ')
 allow lota_agent_t system_dbusd_t:dbus acquire_svc;
 
-# optional_policy() drops the block when the type is absent and keeps it
-# on a policy new enough to define pidfs_t
+# pidfs_t is defined only by newer policies
 optional_policy(`
 	gen_require(`
 		type pidfs_t;
@@ -292,36 +157,10 @@ optional_policy(`
 	allow lota_agent_t pidfs_t:filesystem getattr;
 ')
 
-#
-# Type=notify in systemd/lota-agent.service requires the agent to
-# call sd_notify(READY=1) before TimeoutStartSec elapses, otherwise
-# systemd kills the unit and the daemon enters a restart loop even
-# though the agent reaches steady state (BPF attached, ring buffer
-# consuming). libsystemd 259 reaches the notify path via:
-#   - sendto(2) over AF_UNIX SOCK_DGRAM to /run/systemd/notify
-#     (init_t:unix_dgram_socket sendto + init_var_run_t:sock_file
-#     write). Confirmed dgram (not stream) by socat probe:
-#     "connect(...) /run/systemd/notify: Protocol wrong type for
-#     socket" with UNIX-CONNECT (SOCK_STREAM default).
-#   - read(2) on auxiliary regular files in /run/systemd/
-#     (init_var_run_t, file class) -- e.g.
-#     /run/systemd/userdb/io.systemd.NamespaceResource that
-#     sd_notify resolves while building the pidfd payload.
-# init_dgram_send() grants the sendto on the dgram socket;
-# init_use_notify() covers the sock_file open/read and an
-# unrelated stream connect (kept for sd_listen_fds and any future
-# stream notify path); init_read_pid_files() covers the regular
-# file reads. Without the dgram_send grant, sd_notify silently
-# returns -EACCES and the unit shows "Failed to start ... timeout
-# was exceeded" even though the journal proves the daemon is live.
-#
+# Type=notify: sd_notify(READY=1) sends a datagram to init
 init_dgram_send(lota_agent_t)
 init_use_notify(lota_agent_t)
 init_read_pid_files(lota_agent_t)
-
-#
-# Network
-#
 
 corenet_tcp_connect_http_port(lota_agent_t)
 sysnet_dns_name_resolve(lota_agent_t)
@@ -332,10 +171,6 @@ tunable_policy(`lota_network_attest',`
         allow lota_agent_t self:udp_socket create_socket_perms;
         allow lota_agent_t self:netlink_route_socket { create bind getattr nlmsg_read };
 ')
-
-#
-# Misc
-#
 
 files_read_etc_files(lota_agent_t)
 miscfiles_read_localization(lota_agent_t)

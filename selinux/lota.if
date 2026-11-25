@@ -1,8 +1,5 @@
 ## SPDX-License-Identifier: GPL-2.0-only
 # Copyright (C) 2026 Szymon Wilczek
-##
-## LOTA SELinux interfaces
-##
 
 ########################################
 ## <summary>
@@ -44,7 +41,8 @@ interface(`lota_exec',`
 
 ########################################
 ## <summary>
-##      Query LOTA attestation status via socket.
+##      Connect to the agent socket in /run/lota and read
+##      lota_var_t files.
 ## </summary>
 ## <param name="domain">
 ##      <summary>
@@ -66,7 +64,8 @@ interface(`lota_query_status',`
 
 ########################################
 ## <summary>
-##      Request attestation from LOTA.
+##      lota_query_status, plus the signal permission on
+##      lota_agent_t; no signal makes the agent attest.
 ## </summary>
 ## <param name="domain">
 ##      <summary>
@@ -147,7 +146,7 @@ interface(`lota_admin',`
 
 ########################################
 ## <summary>
-##      Read LOTA attestation state.
+##      Read lota_var_t files.
 ## </summary>
 ## <param name="domain">
 ##      <summary>
@@ -181,9 +180,7 @@ interface(`lota_query_status_container',`
                 type lota_agent_t;
         ')
 
-        #
-        # /run/user/<uid>/lota/lota.sock is user_tmp_t all the way down
-        #
+        # /run/user/<uid>/lota/lota.sock is user_tmp_t
         files_search_pids($1)
         userdom_search_user_tmp_dirs($1)
         userdom_write_user_tmp_sockets($1)
