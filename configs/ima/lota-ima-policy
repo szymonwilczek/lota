@@ -1,44 +1,23 @@
 # SPDX-License-Identifier: MIT
 #
-# LOTA IMA appraisal policy.
+# LOTA IMA developer baseline, not a production appraisal policy.
+# scripts/lota-dev-bringup.sh tries to load it unless the loaded policy is
+# readable and has a line containing "appraise", dont_appraise included;
+# a failed write only warns. Production signatures and rules come from the
+# distribution or the operator; LOTA signs no executable.
 #
-# The agent's startup check reads both halves of the question:
-# the ima_appraise= kernel boot parameter for the mode,
-# and /sys/kernel/security/ima/policy for the scope, because a blocking
-# mode over a policy with no appraise rule for func=BPRM_CHECK
-# appraises no executable at all. Where the kernel was built without
-# CONFIG_IMA_READ_POLICY the policy cannot be read, and the agent
-# says so.
+# The appraise rules reach every exec and every PROT_EXEC mmap outside the
+# filesystems listed in dont_appraise (pseudo filesystems and tmpfs),
+# and accept only a valid security.ima signature. A kernel built with
+# CONFIG_IMA_APPRAISE enforces appraisal by default, and under Secure Boot
+# whatever ima_appraise= says; without Secure Boot only ima_appraise=fix,
+# log or off lowers it. Loading this file on a host without IMA signatures
+# refuses every such exec unless the kernel takes one of those.
 #
-# This file is the developer-host baseline written by
-# scripts/lota-dev-bringup.sh and supplies the rules the kernel
-# evaluates once ima_appraise=enforce|fix is on the cmdline.
-#
-# Rule semantics:
-#   - dont_appraise covers ephemeral / non-security-relevant paths
-#     so the runtime IMA cost stays bounded.
-#   - measure rules emit IMA log entries for every exec / mmap
-#     PROT_EXEC the LSM stack sees; the LOTA verifier consumes the
-#     IMA log for kernel-side audit.
-#   - appraise rules instruct the kernel to verify a stored hash
-#     before allowing the exec / mmap. The "appraise_type=imasig"
-#     selector verifies signatures that already exist as
-#     security.ima xattrs; on a dev host without signatures the
-#     appraise call records the absent signature and the kernel
-#     follows whichever ima_appraise= mode was set on the cmdline
-#     (log on a dev host).
-#
-# This file is a DEVELOPER baseline, not a production appraisal
-# policy. The appraise rules match every exec/mmap (IMA rules
-# cannot match by path), so loading it under ima_appraise=enforce
-# on a rootfs without IMA signatures blocks every execution on
-# the host. LOTA ships no xattr-signing pipeline: production
-# appraisal content - the signatures and the rule set - is
-# distribution- or operator-supplied. See "IMA appraisal policy"
-# in Documentation/operator/production-bringup/index.rst for the
-# supported routes;
-# LOTA's own binaries are integrity-bound through fs-verity and
-# the PCR14 boot commitment independent of IMA.
+# The agent's kernel appraisal check passes only when the loaded policy has
+# an appraise rule on BPRM_CHECK or with no func=; a kernel built without
+# CONFIG_IMA_READ_POLICY does not publish the policy, and the agent then
+# reports the scope as unknown.
 
 dont_appraise fsmagic=0x9fa0
 dont_appraise fsmagic=0x62656572
