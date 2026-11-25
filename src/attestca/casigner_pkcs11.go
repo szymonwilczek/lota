@@ -2,12 +2,6 @@
 // Copyright (C) 2026 Szymon Wilczek
 //go:build pkcs11
 
-// PKCS#11-backed CA signing key.
-//
-// Built only with -tags pkcs11 (needs cgo and a PKCS#11 module at runtime).
-// crypto11 returns a crypto.Signer whose private key never leaves the token;
-// the issuance path is unchanged.
-
 package main
 
 import (
@@ -19,12 +13,9 @@ import (
 	"github.com/ThalesGroup/crypto11"
 )
 
-// newPKCS11Signer opens the configured token and returns a signer for the
-// CA key plus a close function for the token session.
-//
-// It fails closed: the module, token and a key selector (label or id) are required,
-// the PIN must be present, and a key that cannot be found is an error rather than
-// a silent fallback.
+// newPKCS11Signer opens the token and returns the CA key's signer and the
+// function that closes the token. The module, the token, a label or an id,
+// and the PIN are required; a key that is not found is an error.
 func newPKCS11Signer(c pkcs11KeyConfig) (crypto.Signer, func() error, error) {
 	if c.module == "" || c.token == "" {
 		return nil, nil, fmt.Errorf("pkcs11: -ca-key-pkcs11-module and -ca-key-pkcs11-token are required")

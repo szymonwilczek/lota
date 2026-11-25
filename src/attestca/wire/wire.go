@@ -1,19 +1,16 @@
 // SPDX-License-Identifier: MIT
 // Copyright (C) 2026 Szymon Wilczek
-// LOTA Attestation CA - enrollment wire protocol
-//
-// Four length-prefixed, big-endian messages carry one enrollment over a
-// TLS connection:
-//
-//	agent -> CA : BeginRequest    (EK cert + AIK TPMT_PUBLIC + token + EK chain)
-//	CA -> agent : ChallengeReply  (session id + credential blob + secret)
-//	agent -> CA : CompleteRequest (session id + activated secret)
-//	CA -> agent : ResultReply     (AIK certificate + device id)
-//
-// One layout per message: an optional field is a zero length or count,
-// never a version. Every variable field is bounded.
-// C agent mirrors this layout in include/lota_enroll.h
 
+// Package wire encodes the enrollment messages, each a length-prefixed
+// big-endian frame:
+//
+//	agent -> CA: BeginRequest    (EK cert, AIK TPMT_PUBLIC, token, EK chain)
+//	CA -> agent: ChallengeReply  (session id, credential blob, enc. secret)
+//	agent -> CA: CompleteRequest (session id, activated secret)
+//	CA -> agent: ResultReply     (AIK certificate, device id)
+//
+// An absent field is a zero length or count, and every variable field is
+// bounded. include/lota_enroll.h holds the same constants for the agent.
 package wire
 
 import (
@@ -25,16 +22,13 @@ import (
 )
 
 const (
-	// Magic identifies an enrollment frame
-	// ("LCAE", little-endian read in C, encoded
-	// big-endian here for a stable on-wire byte order)
+	// Magic, "LCAE", opens every message body
 	Magic uint32 = 0x4C434145
 
-	// Version1 is the one protocol version in service; it dates the peer,
-	// not the frame. A layout change takes the next number (see frameVersion).
+	// Version1 is the only version frameVersion accepts.
 	Version1 uint16 = 1
 
-	// Version is the newest protocol version this package speaks.
+	// Version is the version EncodeBegin writes.
 	Version = Version1
 
 	MaxEKCertSize      = 2048
@@ -47,14 +41,11 @@ const (
 	MaxDeviceIDSize    = 128
 	MaxEnrollTokenSize = 128
 
-	// MaxEKChainCerts and MaxEKChainBytes bound the manufacturer
-	// intermediates a device presents with its EK leaf.
-	// Both are frame budget: eight certificates and 8 KB of them still leave
-	// the leaf, the AIK template and the token inside MaxFrameSize.
+	// count and total bytes of BeginRequest.EKChainDER
 	MaxEKChainCerts = 8
 	MaxEKChainBytes = 8192
 
-	// MaxFrameSize bounds a single decoded message body.
+	// MaxFrameSize bounds a frame body.
 	MaxFrameSize = 16 * 1024
 )
 
@@ -72,6 +63,7 @@ const (
 	StatusCRLStale       uint16 = 9 // EK issuer's CRLs all past NextUpdate
 )
 
+// Errors returned by the encoders, the decoders and ReadFrame/WriteFrame.
 var (
 	ErrBadMagic   = errors.New("enroll: bad frame magic")
 	ErrBadVersion = errors.New("enroll: unsupported protocol version")
@@ -85,17 +77,10 @@ type BeginRequest struct {
 	EKCertDER []byte
 	AIKPublic []byte // marshaled TPMT_PUBLIC
 
-	// Token is the optional enrollment token; length zero when absent.
-	Token []byte
+	Token      []byte   // empty when absent
+	EKChainDER [][]byte // EK intermediates, empty when absent
 
-	// EKChainDER holds the manufacturer intermediates read from the TPM,
-	// leaf-ward first; count zero when absent.
-	// They are untrusted path material: they may complete a route to a
-	// pinned root, never widen the set of roots.
-	EKChainDER [][]byte
-
-	// Version is set by DecodeBegin to the version of the received frame
-	// so the server can mirror it in the replies.
+	// set by DecodeBegin; EncodeBegin writes the constant Version instead
 	Version uint16
 }
 
@@ -106,10 +91,8 @@ type ChallengeReply struct {
 	CredentialBlob  []byte
 	EncryptedSecret []byte
 
-	// Version selects the version of the encoded frame and must be set:
-	// encoder refuses an unset field rather than guessing version.
-	// Server sets it to the version of the request it answers,
-	// so reply never carries a version the requesting agent did not use.
+	// the frame version; the encoder refuses one frameVersion does not
+	// accept, zero included
 	Version uint16
 }
 
@@ -118,9 +101,7 @@ type CompleteRequest struct {
 	SessionID string
 	Secret    []byte
 
-	// Version selects the version of the encoded frame and must be set
-	// (see ChallengeReply.Version)
-	// Agent keeps one version for whole exchange.
+	// as ChallengeReply.Version
 	Version uint16
 }
 
@@ -130,8 +111,7 @@ type ResultReply struct {
 	AIKCertDER []byte
 	DeviceID   string
 
-	// Version selects the version of the encoded frame and must be set
-	// (see ChallengeReply.Version)
+	// as ChallengeReply.Version
 	Version uint16
 }
 
@@ -140,8 +120,7 @@ type encoder struct {
 	err error
 }
 
-// frameVersion is the only version check; a revision adds its case here.
-// Unset is refused: a reply must mirror its request, never guess.
+// frameVersion is the only version check; zero is refused.
 func frameVersion(v uint16) (uint16, error) {
 	switch v {
 	case Version1:
@@ -171,8 +150,7 @@ func (e *encoder) bytes16(b []byte) {
 		return
 	}
 	n := len(b)
-	// every caller validates its fields against the Max* limits above, all far below 65535
-	// guard the length prefix so the conversion cannot overflow
+	// callers bound n far lower; this guards the uint16 conversion
 	if n < 0 || n > math.MaxUint16 {
 		e.err = ErrTooLarge
 		return
@@ -189,8 +167,7 @@ func (e *encoder) result() ([]byte, error) {
 	return e.buf, nil
 }
 
-// EncodeBegin serializes a BeginRequest in the newest version,
-// every field written; absent ones as zero length or count.
+// EncodeBegin serializes a BeginRequest as Version.
 func EncodeBegin(r *BeginRequest) ([]byte, error) {
 	if len(r.EKCertDER) > MaxEKCertSize || len(r.AIKPublic) > MaxAIKPublicSize ||
 		len(r.Token) > MaxEnrollTokenSize || len(r.EKChainDER) > MaxEKChainCerts {
@@ -213,7 +190,7 @@ func EncodeBegin(r *BeginRequest) ([]byte, error) {
 	e.bytes16(r.Token)
 	n := len(r.EKChainDER)
 
-	// already bounded above; kept for the uint16 conversion, as in bytes16
+	// bounded above; this guards the uint16 conversion
 	if n < 0 || n > math.MaxUint16 {
 		return nil, ErrTooLarge
 	}
@@ -349,10 +326,8 @@ func DecodeBegin(b []byte) (*BeginRequest, error) {
 	return req, nil
 }
 
-// chain reads the count-prefixed list of manufacturer intermediates.
-// The peer is unauthenticated at this point and stays so: the count is
-// checked before a single element is allocated, and the elements are bounded
-// individually and in total.
+// chain reads the count-prefixed EK chain; the count is checked before
+// anything is allocated, the elements singly and in total.
 func (d *decoder) chain() ([][]byte, error) {
 	n, err := d.u16()
 	if err != nil {
@@ -377,8 +352,7 @@ func (d *decoder) chain() ([][]byte, error) {
 	return out, nil
 }
 
-// end refuses trailing bytes: a newer frame, whose extra fields must not be
-// silently dropped.
+// end refuses trailing bytes.
 func (d *decoder) end() error {
 	if d.off != len(d.buf) {
 		return ErrTrailing
@@ -470,8 +444,7 @@ func WriteFrame(w io.Writer, body []byte) error {
 		return ErrTooLarge
 	}
 	n := len(body)
-	// MaxFrameSize already bounds body well within uint32
-	// keep the explicit guard so the length-prefix conversion is provably safe
+	// bounded by MaxFrameSize; this guards the uint32 conversion
 	if n < 0 || n > math.MaxUint32 {
 		return ErrTooLarge
 	}

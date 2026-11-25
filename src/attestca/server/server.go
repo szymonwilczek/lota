@@ -1,12 +1,11 @@
 // SPDX-License-Identifier: MIT
 // Copyright (C) 2026 Szymon Wilczek
-// LOTA Attestation CA - TLS enrollment server
-//
-// One TLS connection carries one enrollment: the server reads a
-// BeginRequest, runs the credential-activation challenge, reads the
-// CompleteRequest with the activated secret, and replies with the issued
-// AIK certificate. Enrollment errors are mapped to wire status codes.
 
+// Package server serves enrollment over TLS, one enrollment per connection:
+// a BeginRequest answered by a ChallengeReply, then a CompleteRequest
+// answered by a ResultReply. A refused Begin or Complete is answered with
+// its wire status; a frame that does not decode, and a connection beyond
+// MaxConns, are closed without a reply.
 package server
 
 import (
@@ -30,39 +29,29 @@ const (
 	defaultWriteTimeout = 15 * time.Second
 	defaultMaxConns     = 256
 
-	// defaultBeginRateLimit/Window bound how many enrollment Begin attempts
-	// one source IP may make per window. Begin runs EK chain verification
-	// plus an RSA MakeCredential; EK certificates are public, so without
-	// this an unauthenticated client can force unbounded crypto work and
-	// exhaust the pending-session cap for legitimate hosts.
 	defaultBeginRateLimit  = 10
 	defaultBeginRateWindow = time.Minute
 
-	// maxRateEntries caps the number of distinct source IPs tracked so the
-	// limiter table itself cannot grow without bound.
+	// source IPs with a live window; a new one beyond it is refused
 	maxRateEntries = 4096
 )
 
-// Config configures the enrollment server.
+// Config configures a Server. Service and TLSConfig are required;
+// a non-positive number or duration selects its default,
+// a nil Logger discards.
 type Config struct {
-	// Service performs the actual enrollment.
-	Service *enroll.Service
-
-	// TLSConfig is the server TLS configuration (certificate required).
+	Service   *enroll.Service
 	TLSConfig *tls.Config
+	Logger    *slog.Logger
 
-	// Logger receives structured events; nil discards.
-	Logger *slog.Logger
-
-	// ReadTimeout/WriteTimeout bound a single connection's I/O.
+	// deadline of each frame read and each frame write
 	ReadTimeout  time.Duration
 	WriteTimeout time.Duration
 
-	// MaxConns caps concurrent connections.
+	// a connection beyond MaxConns is closed at once
 	MaxConns int
 
-	// BeginRateLimit/BeginRateWindow bound enrollment Begin attempts per
-	// source IP. Zero selects the defaults.
+	// Begin attempts allowed per source IP per window
 	BeginRateLimit  int
 	BeginRateWindow time.Duration
 }
@@ -90,7 +79,7 @@ type rateWindow struct {
 	windowStart time.Time
 }
 
-// New builds a Server from Config.
+// New returns a Server for cfg.
 func New(cfg Config) (*Server, error) {
 	if cfg.Service == nil {
 		return nil, errors.New("nil enrollment service")
@@ -135,8 +124,8 @@ func New(cfg Config) (*Server, error) {
 	}, nil
 }
 
-// Serve accepts connections until the listener is closed.
-// Listener is wrapped in TLS using the configured certificate.
+// Serve accepts TLS connections on ln until ctx is done, then waits for the
+// open ones and returns nil. Any other Accept error is returned at once.
 func (s *Server) Serve(ctx context.Context, ln net.Listener) error {
 	tlsLn := tls.NewListener(ln, s.tlsConfig)
 
@@ -158,7 +147,6 @@ func (s *Server) Serve(ctx context.Context, ln net.Listener) error {
 		select {
 		case s.connSem <- struct{}{}:
 		default:
-			// at capacity: shed load rather than queue unboundedly
 			_ = conn.Close()
 			continue
 		}
@@ -182,7 +170,6 @@ func (s *Server) handle(conn net.Conn) {
 		return
 	}
 
-	// Rate-limit before the expensive Begin (EK verify + MakeCredential).
 	if !s.allowBegin(remote) {
 		s.log.Warn("enroll begin rate-limited", "remote", remote)
 		if werr := s.writeChallenge(conn, &wire.ChallengeReply{Status: wire.StatusRateLimited, Version: begin.Version}); werr != nil {
@@ -239,10 +226,9 @@ func (s *Server) handle(conn net.Conn) {
 	}
 }
 
-// allowBegin applies a per-source-IP fixed-window rate limit to the
-// enrollment Begin path. Connections from one IP share a counter keyed on
-// the host portion (ephemeral ports collapse together). Returns false when
-// the source has spent its window budget or the tracking table is full.
+// allowBegin counts a Begin against the fixed window of remote's host and
+// reports false once the window is spent or a new host finds the table
+// full.
 func (s *Server) allowBegin(remote string) bool {
 	host, _, err := net.SplitHostPort(remote)
 	if err != nil {
@@ -257,8 +243,7 @@ func (s *Server) allowBegin(remote string) bool {
 	w, ok := s.rateTable[host]
 	if !ok {
 		if len(s.rateTable) >= maxRateEntries {
-			// Table full of live windows: refuse new sources rather than
-			// evict an active one, so IP churn cannot reset limits.
+			// evicting a live window would let IP churn reset it
 			return false
 		}
 		s.rateTable[host] = &rateWindow{count: 1, windowStart: now}
@@ -329,16 +314,8 @@ func (s *Server) writeFrame(conn net.Conn, body []byte) error {
 	return wire.WriteFrame(conn, body)
 }
 
-// beginStatus maps an enrollment refusal to the status the device sees,
-// which decides whether it retries. Every deliberate refusal has a case;
-// the default arm is left to CA faults, which a retry may clear.
-//
-// Besides the chain checks, the EK arm holds verdicts on the key itself:
-// not listed by a strict tenant manifest, revoked by its manufacturer's CRL,
-// or carrying the ROCA fingerprint.
-//
-// A stale CRL has its own status; a CRL that does not verify stops the CA at
-// startup and never gets here.
+// beginStatus maps a Begin error to its wire status; an error with no case
+// is StatusInternalError.
 func beginStatus(err error) uint16 {
 	switch {
 	case errors.Is(err, ca.ErrEKChain), errors.Is(err, ca.ErrEKExpired),
