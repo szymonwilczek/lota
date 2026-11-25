@@ -1529,6 +1529,35 @@ static void test_config_load_rejects_symlink(void)
 	PASS();
 }
 
+static void test_config_load_rejects_fifo(void)
+{
+	struct lota_config cfg;
+	char path[PATH_MAX];
+	int ret;
+
+	TEST("config_load rejects a FIFO with no writer");
+	config_path("fifo.conf", path, sizeof(path));
+
+	unlink(path);
+	if (mkfifo(path, 0600) != 0) {
+		FAIL("mkfifo failed");
+		return;
+	}
+
+	config_init(&cfg);
+	alarm(10);
+	ret = config_load(&cfg, path);
+	alarm(0);
+	if (ret != -EINVAL) {
+		char msg[64];
+		snprintf(msg, sizeof(msg), "expected -EINVAL, got %d", ret);
+		FAIL(msg);
+		return;
+	}
+
+	PASS();
+}
+
 /*
  * Certificate pinning belongs to the publisher, not to the host: each publisher
  * runs its own verifier with its own certificate, so one fingerprint can match
@@ -2561,6 +2590,7 @@ int main(void)
 		test_config_host_pin_beside_profiles,
 		test_config_load_rejects_group_writable,
 		test_config_load_rejects_symlink,
+		test_config_load_rejects_fifo,
 		test_config_dump_keeps_server_unset,
 		test_config_dump_roundtrip,
 		test_config_dump_keeps_the_sealing_keys,

@@ -1242,7 +1242,8 @@ int config_load(struct lota_config *cfg, const char *path)
 	open_flags |= O_NOFOLLOW;
 #endif
 
-	fd = open(filepath, open_flags);
+	/* a FIFO with no writer reaches the regular-file check, not a wait */
+	fd = open(filepath, open_flags | O_NONBLOCK);
 	if (fd < 0)
 		return -errno;
 

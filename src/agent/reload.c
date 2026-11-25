@@ -682,7 +682,8 @@ int agent_reload_config(const char *config_path, struct lota_config *cfg,
 #ifdef O_NOFOLLOW
 		open_flags |= O_NOFOLLOW;
 #endif
-		cfg_fd = open(cfg_path, open_flags);
+		/* a FIFO reaches the regular-file check, not a wait */
+		cfg_fd = open(cfg_path, open_flags | O_NONBLOCK);
 	}
 	if (cfg_fd < 0) {
 		int open_err = -errno;

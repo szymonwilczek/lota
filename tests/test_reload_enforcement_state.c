@@ -22,6 +22,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
 #include <unistd.h>
 
 #include "test.h"
@@ -497,6 +498,52 @@ static void test_switch_not_asked_for_follows_the_file(void)
 	unlink(path);
 }
 
+static void test_fifo_is_refused_without_waiting(void)
+{
+	char trust_libs[LOTA_CONFIG_MAX_LIBS][PATH_MAX] = { { 0 } };
+	uint32_t *protect_pids = NULL;
+	int trust_lib_count = 0, protect_pid_count = 0;
+	struct lota_config *cfg;
+	char path[PATH_MAX];
+	int mode = LOTA_MODE_ENFORCE;
+	bool t = true, f = false;
+	int ret;
+
+	TEST("a FIFO at the config path is refused without waiting");
+
+	if (write_config(path, sizeof(path), NULL) < 0) {
+		FAIL("cannot write a config under /tmp");
+		return;
+	}
+	unlink(path);
+	if (mkfifo(path, 0600) != 0) {
+		FAIL("mkfifo failed");
+		return;
+	}
+
+	cfg = config_new();
+	if (!cfg) {
+		FAIL("out of memory");
+		unlink(path);
+		return;
+	}
+
+	alarm(10);
+	ret = agent_reload_config(path, cfg, &mode, &t, &f, &t, &t, &f,
+				  &protect_pids, &protect_pid_count, trust_libs,
+				  &trust_lib_count);
+	alarm(0);
+
+	if (ret != -EINVAL)
+		FAIL("expected -EINVAL");
+	else
+		PASS();
+
+	config_free(cfg);
+	free(protect_pids);
+	unlink(path);
+}
+
 int main(void)
 {
 	printf("=== reload keeps command-line enforcement state ===\n\n");
@@ -506,6 +553,7 @@ int main(void)
 	test_config_removal_still_takes_effect();
 	test_command_line_switch_survives_reload();
 	test_switch_not_asked_for_follows_the_file();
+	test_fifo_is_refused_without_waiting();
 
 	printf("\n=== %d/%d passed ===\n", tests_passed, tests_run);
 	return tests_passed == tests_run ? 0 : 1;
