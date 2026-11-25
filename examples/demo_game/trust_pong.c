@@ -25,7 +25,7 @@
 #include "ui.h"
 
 #define POLL_INTERVAL_MS 750
-/* UNTRUSTED poll results, with no TRUSTED between them, that freeze the game */
+/* UNTRUSTED heartbeats, with no TRUSTED between them, that freeze the game */
 #define UNTRUSTED_FREEZE_STREAK 2
 #define POLL_TIMEOUT_MS 600
 #define DEFAULT_GAME_ID "trust-pong"
@@ -45,7 +45,8 @@ struct game_state {
 
 struct verdict_snapshot {
 	enum ui_verdict verdict;
-	unsigned int seq; /* bumped by each publish_verdict() */
+	/* updated_at_unix of the verdict, 0 without one */
+	long long updated_at;
 	char reason[160];
 };
 
@@ -63,7 +64,7 @@ struct response_buf {
 
 /* published together under g_poll_lock: a snapshot is one verdict */
 static enum ui_verdict g_poll_verdict = UI_VERDICT_CHECKING;
-static unsigned int g_poll_seq;
+static long long g_poll_updated_at;
 static char g_poll_reason[160];
 static pthread_mutex_t g_poll_lock;
 static atomic_bool g_poll_stop = false;
@@ -122,6 +123,24 @@ static char *extract_string(const char *body, const char *key)
 	memcpy(out, p, len);
 	out[len] = '\0';
 	return out;
+}
+
+/* 0 when the key is missing or not a number */
+static long long extract_int(const char *body, const char *key)
+{
+	if (!body || !key)
+		return 0;
+	char needle[64];
+	int n = snprintf(needle, sizeof(needle), "\"%s\"", key);
+	if (n <= 0 || (size_t)n >= sizeof(needle))
+		return 0;
+	const char *p = strstr(body, needle);
+	if (!p)
+		return 0;
+	p += n;
+	while (*p && (isspace((unsigned char)*p) || *p == ':'))
+		p++;
+	return strtoll(p, NULL, 10);
 }
 
 /*
@@ -215,11 +234,12 @@ static enum ui_verdict verdict_from_label(const char *state)
 	return UI_VERDICT_OFFLINE;
 }
 
-static void publish_verdict(enum ui_verdict v, const char *reason)
+static void publish_verdict(enum ui_verdict v, const char *reason,
+			    long long updated_at)
 {
 	pthread_mutex_lock(&g_poll_lock);
 	g_poll_verdict = v;
-	g_poll_seq++;
+	g_poll_updated_at = updated_at;
 	if (reason) {
 		strncpy(g_poll_reason, reason, sizeof(g_poll_reason) - 1);
 		g_poll_reason[sizeof(g_poll_reason) - 1] = '\0';
@@ -233,7 +253,7 @@ static void snapshot_verdict(struct verdict_snapshot *out)
 {
 	pthread_mutex_lock(&g_poll_lock);
 	out->verdict = g_poll_verdict;
-	out->seq = g_poll_seq;
+	out->updated_at = g_poll_updated_at;
 	memcpy(out->reason, g_poll_reason, sizeof(out->reason));
 	pthread_mutex_unlock(&g_poll_lock);
 }
@@ -247,7 +267,7 @@ static void *poll_thread(void *arg)
 	struct poll_args *args = arg;
 	CURL *curl = curl_easy_init();
 	if (!curl) {
-		publish_verdict(UI_VERDICT_OFFLINE, "curl_easy_init failed");
+		publish_verdict(UI_VERDICT_OFFLINE, "curl_easy_init failed", 0);
 		return NULL;
 	}
 	curl_easy_setopt(curl, CURLOPT_URL, args->url);
@@ -261,11 +281,13 @@ static void *poll_thread(void *arg)
 		CURLcode rc = curl_easy_perform(curl);
 		if (rc != CURLE_OK) {
 			publish_verdict(UI_VERDICT_OFFLINE,
-					curl_easy_strerror(rc));
+					curl_easy_strerror(rc), 0);
 		} else {
 			char *state = extract_string(body.data, "state");
 			char *license = extract_string(body.data, "license");
 			char *why = extract_string(body.data, "reason");
+			long long at =
+				extract_int(body.data, "updated_at_unix");
 			char detail[160];
 
 			/* the reason, when present, replaces the license */
@@ -277,7 +299,7 @@ static void *poll_thread(void *arg)
 					 state ? state : "?",
 					 license ? " license=" : "",
 					 license ? license : "");
-			publish_verdict(verdict_from_label(state), detail);
+			publish_verdict(verdict_from_label(state), detail, at);
 			free(state);
 			free(license);
 			free(why);
@@ -421,10 +443,10 @@ int main(int argc, char **argv)
 		if (initial_handshake(&opts, handshake) != 0) {
 			publish_verdict(
 				UI_VERDICT_OFFLINE,
-				"handshake failed - check agent + server");
+				"handshake failed - check agent + server", 0);
 		} else {
 			publish_verdict(UI_VERDICT_CHECKING,
-					"awaiting first heartbeat verdict");
+					"awaiting first heartbeat verdict", 0);
 		}
 		curl_easy_cleanup(handshake);
 	}
@@ -458,7 +480,7 @@ int main(int argc, char **argv)
 	};
 
 	bool quit = false;
-	unsigned int counted_seq = 0;
+	long long counted_at = 0;
 	while (!quit) {
 		SDL_Event ev;
 		while (SDL_PollEvent(&ev)) {
@@ -471,9 +493,9 @@ int main(int argc, char **argv)
 		struct verdict_snapshot snap;
 		snapshot_verdict(&snap);
 
-		/* count each poll result once */
-		if (snap.seq != counted_seq) {
-			counted_seq = snap.seq;
+		/* count each heartbeat once */
+		if (snap.updated_at && snap.updated_at != counted_at) {
+			counted_at = snap.updated_at;
 			if (snap.verdict == UI_VERDICT_UNTRUSTED) {
 				g.untrusted_streak++;
 				if (!g.frozen &&

@@ -68,6 +68,8 @@ der_sha256() {
 		sha256sum | cut -d' ' -f1
 }
 
+mkdir "$WORK/certs"
+written=()
 count=0
 roots=0
 while IFS= read -r line || [ -n "$line" ]; do
@@ -97,7 +99,7 @@ while IFS= read -r line || [ -n "$line" ]; do
 	curl -fsSL --proto '=https' --tlsv1.2 -o "$raw" "$url" ||
 		die "failed to fetch $label from $url"
 
-	pem="$WORK/$filename"
+	pem="$WORK/certs/$filename"
 	to_pem "$raw" "$pem" || die "downloaded $label is not a certificate"
 
 	got="$(der_sha256 "$pem")"
@@ -105,6 +107,7 @@ while IFS= read -r line || [ -n "$line" ]; do
 		die "fingerprint mismatch for $label: pinned $pin, fetched $got"
 
 	echo "$pin  $filename  $class  $label" >>"$MANIFEST"
+	written+=("$filename")
 	echo "verified $class $label ($pin)"
 	count=$((count + 1))
 done <"$SOURCES"
@@ -116,9 +119,8 @@ done <"$SOURCES"
 
 # a refused line has already exited: it leaves the files in $OUTDIR alone
 install -m 0644 "$MANIFEST" "$OUTDIR/$MANIFEST_NAME"
-for pem in "$WORK"/*.pem; do
-	[ -e "$pem" ] || continue
-	install -m 0644 "$pem" "$OUTDIR/$(basename -- "$pem")"
+for filename in "${written[@]}"; do
+	install -m 0644 "$WORK/certs/$filename" "$OUTDIR/$filename"
 done
 
 echo "wrote $count pinned certificate(s), $roots of them anchors, to $OUTDIR"

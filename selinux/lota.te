@@ -103,16 +103,15 @@ tunable_policy(`lota_bpf_load',`
 domain_read_all_domains_state(lota_agent_t)
 kernel_read_proc_symlinks(lota_agent_t)
 
-gen_require(`
-	type system_map_t;
-')
-allow lota_agent_t system_map_t:file read_file_perms;
-
 # Runtime image measurement opens each executable mapping of a protected
 # process through /proc/<pid>/map_files and measures it with
 # FS_IOC_MEASURE_VERITY; what the title maps decides the type.
-files_read_all_files(lota_agent_t)
-allow lota_agent_t file_type:file { getattr open read ioctl };
+gen_require(`
+	attribute file_type;
+	type shadow_t, system_map_t;
+')
+allow lota_agent_t file_type:dir list_dir_perms;
+allow lota_agent_t { file_type -shadow_t -system_map_t }:file read_file_perms;
 
 # fstatfs() of each mapping feeds the road for a title without fs-verity
 fs_getattr_all_fs(lota_agent_t)

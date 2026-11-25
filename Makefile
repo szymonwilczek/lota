@@ -255,7 +255,7 @@ $(AGENT_BIN): $(AGENT_OBJS) | $(BUILD_DIR)
 
 $(INITRAMFS_LOCK_BIN): src/initramfs/lota-pcr14-lock.c | $(BUILD_DIR)
 	$(QUIET_CC)
-	$(Q)$(CC) $(CFLAGS) -o $@ $^ -pie -Wl,-z,relro,-z,now \
+	$(Q)$(CC) $(CFLAGS) -o $@ $^ -pie $(HARDENING_LDFLAGS) \
 		-ltss2-esys -ltss2-mu -ltss2-tcti-device -lcrypto
 
 # profile.c comes from the agent, so the installer names the same publisher
@@ -268,7 +268,7 @@ $(INSTALLER_BIN): $(INSTALLER_SRCS) installer/install.h installer/probe.h \
 		$(AGENT_DIR)/profile.h | $(BUILD_DIR)
 	$(QUIET_CC)
 	$(Q)$(CC) $(CFLAGS) -DLOTA_INSTALL_VERSION=\"$(LOTA_VERSION_STRING)\" \
-		-o $@ $(INSTALLER_SRCS) -pie -Wl,-z,relro,-z,now -lcrypto
+		-o $@ $(INSTALLER_SRCS) -pie $(HARDENING_LDFLAGS) -lcrypto
 
 # No package ships lota-bench.
 LOTA_BENCH_BIN := $(BUILD_DIR)/lota-bench
@@ -279,7 +279,7 @@ LOTA_BENCH_PREFIX ?= /usr/local
 $(LOTA_BENCH_BIN): $(LOTA_BENCH_SRCS) $(wildcard $(LOTA_BENCH_DIR)/*.h) | $(BUILD_DIR)
 	$(QUIET_CC)
 	$(Q)$(CC) $(CFLAGS) -DLOTA_BENCH_VERSION=\"$(LOTA_VERSION_STRING)\" \
-		-o $@ $(LOTA_BENCH_SRCS) -pie -Wl,-z,relro,-z,now
+		-o $@ $(LOTA_BENCH_SRCS) -pie $(HARDENING_LDFLAGS)
 
 DEPFLAGS = -MMD -MP -MF $(@:.o=.d)
 
@@ -402,7 +402,7 @@ $(PROTECT_BIN): $(PROTECT_SRCS) $(SDK_OBJS) include/lota_gaming.h \
 		include/lota_wine_hook.h | $(BUILD_DIR)
 	$(QUIET_CC)
 	$(Q)$(CC) $(CFLAGS) -o $@ $(PROTECT_SRCS) $(SDK_OBJS) \
-		-pie -Wl,-z,relro,-z,now
+		-pie $(HARDENING_LDFLAGS)
 
 $(ANTICHEAT_LIB): $(ANTICHEAT_OBJS) $(SDK_OBJS) $(SERVER_SDK_OBJS) \
 		$(call SDK_VERSION_SCRIPT,$(ANTICHEAT_LIB)) Makefile | $(BUILD_DIR)

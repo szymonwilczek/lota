@@ -4,7 +4,8 @@
 #
 # Runs block_victim on evil.so against a lota-agent already running in
 # enforce mode with strict_mmap; the --test-* modes attach no BPF.
-# Exits 0 when dlopen of evil.so fails, 1 when it loads, 2 otherwise.
+# Exits 0 when the mapping of evil.so is refused only once the victim
+# is protected, 1 when it loads, 2 otherwise.
 # The build root is $BUILD_DIR, else $LOTA_BUILD_DIR, else build/ in the tree.
 
 set -euo pipefail
@@ -35,15 +36,18 @@ since_ts=$(date +%s)
 
 echo "[block-demo] launching victim against $SOCKET"
 set +e
-"$VICTIM_BIN" "$EVIL_SO"
+"$VICTIM_BIN" &
+victim_pid=$!
+wait "$victim_pid"
 victim_rc=$?
 set -e
 
 echo ""
-echo "[block-demo] kernel-side journal since the demo started:"
-journalctl -u lota-agent --since "@$since_ts" --no-pager 2>/dev/null \
-    | grep -E "MMAP_BLOCKED|ANON_EXEC_BLOCKED|BLOCK|EPERM" \
-    || echo "  (no block events captured -- did the agent attach BPF?)"
+echo "[block-demo] agent journal for pid $victim_pid:"
+journalctl -t lota-agent --since "@$since_ts" --no-pager 2>/dev/null \
+    | grep -E "(MMAP|ANON_EXEC)_BLOCKED .*\(pid=$victim_pid, " \
+    || echo "  (no block event for pid $victim_pid in the journal;" \
+            "an agent in the foreground logs to its own terminal)"
 
 case "$victim_rc" in
     0)

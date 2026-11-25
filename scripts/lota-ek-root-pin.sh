@@ -232,6 +232,11 @@ emit_line() {
 
     pin="$(der_sha256 "$cert")"
     [ -n "$pin" ] || die "failed to fingerprint a certificate on the path"
+    # lota-ek-roots-update.sh fetches over https only
+    case "$url" in
+	https://*) ;;
+	*) url="" ;;
+    esac
 
     label="$(openssl x509 -in "$cert" -noout -subject -nameopt sep_comma_plus,utf8 2>/dev/null | sed 's/^subject=//')"
     slug="$(printf '%s' "$label" | tr '[:upper:]' '[:lower:]' | tr -c 'a-z0-9' '-' | sed 's/--*/-/g; s/^-//; s/-$//')"

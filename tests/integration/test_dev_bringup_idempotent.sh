@@ -22,11 +22,15 @@ export LC_ALL=C
 REPO_DIR=$(cd "$(dirname "$0")/../.." && pwd)
 BRINGUP="$REPO_DIR/scripts/lota-dev-bringup.sh"
 TPM_HEADER="$REPO_DIR/src/agent/tpm.h"
+BUILD_DIR="${BUILD_DIR:-${LOTA_BUILD_DIR:-$REPO_DIR/build}}"
+REAL_AGENT="$BUILD_DIR/lota-agent"
 
-if [[ ! -x "$BRINGUP" ]]; then
-    echo "[dev-bringup] missing artifact: $BRINGUP" >&2
-    exit 2
-fi
+for f in "$BRINGUP" "$REAL_AGENT"; do
+    if [[ ! -x "$f" ]]; then
+        echo "[dev-bringup] missing artifact: $f" >&2
+        exit 2
+    fi
+done
 
 WORK_DIR=$(mktemp -d)
 trap 'rm -rf "$WORK_DIR"' EXIT
@@ -66,12 +70,16 @@ if [[ -z "$AIK_HANDLE" || -z "$SEAL_HANDLE" ]]; then
     exit 2
 fi
 
-# stub agent: logs its verbs; --verify-policy passes once a .sig exists
+# stub agent: logs its verbs; --verify-policy passes once a .sig exists;
+# --dump-config goes to the real parser
 mkdir -p "$STUB_BIN" "$ROOT/usr/bin" "$ROOT/usr/lib/lota" "$STATE_DIR"
 cat >"$ROOT/usr/bin/lota-agent" <<'AGENT'
 #!/bin/bash
 set -euo pipefail
 printf '%s\n' "$*" >>"$LOTA_TEST_AGENT_LOG"
+for arg in "$@"; do
+	[[ "$arg" == --dump-config ]] && exec "$LOTA_TEST_REAL_AGENT" "$@"
+done
 case "${1:-}" in
 --gen-signing-key)
 	: >"$2.key"
@@ -108,6 +116,7 @@ exit 0
 SYSTEMCTL
 chmod 0755 "$STUB_BIN"/*
 
+export LOTA_TEST_REAL_AGENT="$REAL_AGENT"
 export LOTA_TEST_AGENT_LOG="$AGENT_LOG"
 export LOTA_TEST_TPM_LOG="$TPM_LOG"
 export LOTA_BRINGUP_ROOT="$ROOT"
@@ -231,6 +240,36 @@ check "a stale pid file does not block a reset" \
 check "the reset behind a stale pid file evicts the AIK" \
     says "$tpm_calls" "$AIK_HANDLE"
 rm -f "$ROOT/run/lota/lota-agent.pid"
+
+# a config with a profile keeps policy_pubkey at top level
+CONF="$ROOT/etc/lota/lota.conf"
+printf '%s\n' '[profile "demo"]' 'ca = ca.example.invalid' \
+    'ca_cert = /etc/lota/demo.pem' 'verifier = none' >"$CONF"
+prof_out=$(run_bringup) || true
+check "policy_pubkey is wired into a config with a profile" \
+    grep -q '^policy_pubkey' "$CONF"
+loads() { "$REAL_AGENT" --config "$1" --dump-config >/dev/null 2>&1; }
+check "the agent loads the config the script wrote" loads "$CONF"
+check "the profile survives the edit" grep -q '^\[profile "demo"\]' "$CONF"
+
+# a umask that lets the group write does not reach the config
+printf '%s\n' '# local settings' >"$CONF"
+chmod 0644 "$CONF"
+(umask 002 && run_bringup >/dev/null) || true
+check "policy_pubkey is wired in under umask 002" \
+    grep -q '^policy_pubkey' "$CONF"
+check "the config keeps mode 0644 under umask 002" \
+    test "$(stat -c %a "$CONF")" = 644
+check "no edited copy is left beside the config" test ! -e "$CONF.new"
+
+# an edited copy left group-writable by an earlier run is written anew
+printf '%s\n' '# local settings' >"$CONF"
+printf 'stale\n' >"$CONF.new"
+chmod 0664 "$CONF.new"
+stale_out=$(run_bringup) || true
+check "a stale group-writable copy does not stop the edit" \
+    grep -q '^policy_pubkey' "$CONF"
+check "the stale copy is gone after the edit" test ! -e "$CONF.new"
 
 header_drops_the_rollback_claim() { ! grep -q "rolls back" "$BRINGUP"; }
 check "the header does not promise a rollback the script does not do" \

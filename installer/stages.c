@@ -815,8 +815,11 @@ static int st_selinux_apply(struct install_ctx *ctx)
 			return rc > 0 ? -EIO : rc;
 	}
 	{
+		static char out[65536];
+		const char *const list[] = { "semanage", "port", "-l", NULL };
 		const char *const ports[] = { ctx->opts.ca_port,
 					      ctx->opts.verifier_port };
+		int listed = run_capture(list, out, sizeof(out)) == 0;
 
 		for (size_t i = 0; i < sizeof(ports) / sizeof(ports[0]); i++) {
 			const char *const argv[] = { "semanage",    "port",
@@ -825,7 +828,8 @@ static int st_selinux_apply(struct install_ctx *ctx)
 						     "tcp",	    ports[i],
 						     NULL };
 
-			if (!ports[i] || !ports[i][0])
+			if (!listed || !ports[i] || !ports[i][0] ||
+			    probe_port_needs_label(out, ports[i]) <= 0)
 				continue;
 			(void)run_cmd(&ctx->ui,
 				      "Labelling the attestation port", argv);
@@ -1573,6 +1577,15 @@ enum ui_result install_stage_result(enum stage_state st, int applied)
 	default:
 		return UI_FAIL;
 	}
+}
+
+enum stage_state install_stage_after_apply(const struct stage *s,
+					   const struct install_ctx *ctx,
+					   enum stage_state st)
+{
+	if (st == STAGE_PENDING && s->boot_path && ctx->reboot_needed)
+		return STAGE_REBOOT;
+	return st;
 }
 
 const struct stage install_stages[] = {

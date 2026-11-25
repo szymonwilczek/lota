@@ -20,7 +20,8 @@
  * stdout and stderr are merged; stdin is /dev/null.
  *
  * Return: the child's exit code (127 when exec fails), 128 + signal when
- * signalled, or -errno when the child cannot be started or waited for.
+ * signalled, 128 + SIGTERM for a child the sink aborted that exited 0, or
+ * -errno when the child cannot be started or waited for.
  */
 int run_cmd(struct ui *ui, const char *label, const char *const argv[]);
 

@@ -27,9 +27,9 @@ gaming SDK)
    Connects to the local agent, gets the challenge from the gate, asks the
    agent for a token answering it, presents the token, and writes the
    released secret. Every failure is fail-closed: the output file is
-   created only after a release, so a step that fails for any reason
-   leaves the job without the secret rather than proceeding with a stale
-   one.
+   removed first and written only after a release, so a step that fails
+   for any reason leaves the job without the secret rather than
+   proceeding with a stale one.
 
 ``lota-release-gate`` -- the relying party (``gate/``, Go, imports
 ``sdk/server``)
@@ -116,7 +116,8 @@ retry.
    * - ``6``
      - The gate refused. Its reason is on stderr.
    * - ``7``
-     - Released, but the secret could not be written.
+     - ``--out`` could not be removed, or the released secret could not
+       be written.
 
 Gate flags
 ==========

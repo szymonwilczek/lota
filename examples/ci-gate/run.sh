@@ -135,7 +135,7 @@ openssl rsa -in "$RUN_DIR/other.key" -pubout -out "$RUN_DIR/other.pem" \
 GATE_PID=$!
 sleep 1
 
-rm -f "$RUN_DIR/refused"
+cp "$RUN_DIR/released" "$RUN_DIR/refused"
 set +e
 "$step" --gate "http://$GATE_ADDR" --socket "$RUN_DIR/lota.sock" \
 	--out "$RUN_DIR/refused" >"$RUN_DIR/step-negative.log" 2>&1
@@ -144,10 +144,19 @@ set -e
 
 [ "$rc" -ne 0 ] || fail "an untrusted host was released the secret"
 [ "$rc" -eq 6 ] || fail "expected exit 6 (refused), got $rc"
-[ ! -e "$RUN_DIR/refused" ] || fail "a refused step still wrote a file"
+[ ! -e "$RUN_DIR/refused" ] || fail "a refused step left a file"
 grep -q "release refused" "$RUN_DIR/gate-negative.log" ||
 	fail "the gate did not audit the refusal"
 echo "   refused, nothing written, refusal audited"
+
+cp "$RUN_DIR/released" "$RUN_DIR/misused"
+set +e
+"$step" --out "$RUN_DIR/misused" --no-such-flag >/dev/null 2>&1
+rc=$?
+set -e
+[ "$rc" -eq 2 ] || fail "expected exit 2 (usage), got $rc"
+[ ! -e "$RUN_DIR/misused" ] || fail "a misused step left a file"
+echo "   misused, nothing written"
 
 echo
 echo "PASS: the gate releases to an attested host and refuses everything else"

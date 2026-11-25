@@ -56,7 +56,7 @@ Five-step operator path
 
    The script discovers the active sandbox, arms the tamper marker, and holds
    it until Ctrl-C. The next producer tick flips the banner to red
-   ``INTEGRITY LOSS`` and (after two consecutive UNTRUSTED ticks, matching
+   ``INTEGRITY LOSS`` and (after two consecutive UNTRUSTED heartbeats, matching
    ``trust_pong``'s ``untrusted_streak >= 2``) the play field freezes under an
    overlay reading ``INTEGRITY LOSS`` over
    ``session terminated after two UNTRUSTED heartbeats``. Ctrl-C on

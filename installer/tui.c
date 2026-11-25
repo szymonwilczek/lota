@@ -990,8 +990,9 @@ static int do_apply(struct tui *t, int i)
 	}
 	if (rc != 0 || t->st[i] == STAGE_PENDING || t->st[i] == STAGE_BLOCKED ||
 	    t->st[i] == STAGE_ERROR) {
-		if (rc == 0 && t->ctx->reboot_needed &&
-		    t->st[i] == STAGE_PENDING) {
+		if (rc == 0 &&
+		    install_stage_after_apply(&install_stages[i], t->ctx,
+					      t->st[i]) == STAGE_REBOOT) {
 			t->st[i] = STAGE_REBOOT;
 			snprintf(t->note[i], sizeof(t->note[i]),
 				 "Applied. Takes effect on the next boot.");

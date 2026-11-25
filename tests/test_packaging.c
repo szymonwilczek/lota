@@ -656,6 +656,73 @@ static void test_selinux_agent_reads_filesystem_types(void)
 }
 
 /*
+ * A binary linked with its own relro flags misses the noexecstack and
+ * separate-code the shared set carries.
+ */
+static void test_every_binary_links_hardened(void)
+{
+	static char mk[262144];
+	const char *first;
+
+	TEST("make: every binary links with the shared hardening flags");
+
+	if (!slurp_shipped("Makefile", mk, sizeof(mk))) {
+		FAIL("could not read the Makefile");
+		return;
+	}
+	first = strstr(mk, "-z,relro");
+	if (!first || strstr(first + 1, "-z,relro")) {
+		FAIL("a binary links outside HARDENING_LDFLAGS");
+		return;
+	}
+	PASS();
+}
+
+/*
+ * The agent reads no kernel symbol table: every ksym of the BPF object
+ * resolves through BTF.
+ */
+static void test_selinux_agent_skips_the_symbol_table(void)
+{
+	static char policy[65536];
+
+	TEST("selinux: the agent gets no read on the kernel symbol table");
+
+	if (!slurp_shipped("selinux/lota.te", policy, sizeof(policy))) {
+		FAIL("could not read selinux/lota.te");
+		return;
+	}
+	if (strstr(policy, "files_read_all_files(lota_agent_t)") ||
+	    strstr(policy, "file_type:file") ||
+	    strstr(policy, "system_map_t:file") ||
+	    !strstr(policy, "{ file_type -shadow_t -system_map_t }:file")) {
+		FAIL("lota_agent_t may read /proc/kallsyms and System.map");
+		return;
+	}
+	PASS();
+}
+
+/* no title maps /etc/shadow, and the agent reads it nowhere else */
+static void test_selinux_agent_skips_shadow(void)
+{
+	static char policy[65536];
+
+	TEST("selinux: the agent gets no read on the shadow file");
+
+	if (!slurp_shipped("selinux/lota.te", policy, sizeof(policy))) {
+		FAIL("could not read selinux/lota.te");
+		return;
+	}
+	if (strstr(policy, "auth_read_shadow") ||
+	    strstr(policy, "shadow_t:file") ||
+	    !strstr(policy, "{ file_type -shadow_t -system_map_t }:file")) {
+		FAIL("lota_agent_t may read /etc/shadow");
+		return;
+	}
+	PASS();
+}
+
+/*
  * A client stats the socket before it connects, so write alone leaves it with
  * EACCES on the system socket.
  */
@@ -914,6 +981,33 @@ static void test_installer_probe_asks_about_ports(void)
 	call = start ? strstr(start, "selinux_port_pending(") : NULL;
 	if (!end || !call || call > end) {
 		FAIL("a later run with a new port skips the labelling");
+		return;
+	}
+	PASS();
+}
+
+/*
+ * semanage port -a on a port another type names writes a local record that
+ * shadows that type for every domain, so apply labels only what the probe
+ * reports as unnamed.
+ */
+static void test_installer_leaves_a_named_port_alone(void)
+{
+	static char src[262144];
+	const char *start, *end, *call, *add;
+
+	TEST("installer: the SELinux stage leaves a port a type names alone");
+
+	if (!slurp_shipped("installer/stages.c", src, sizeof(src))) {
+		FAIL("could not open installer/stages.c");
+		return;
+	}
+	start = strstr(src, "static int st_selinux_apply(");
+	end = start ? strstr(start, "\n}\n") : NULL;
+	call = start ? strstr(start, "probe_port_needs_label(") : NULL;
+	add = start ? strstr(start, "\"lota_port_t\"") : NULL;
+	if (!end || !add || add > end || !call || call > end) {
+		FAIL("apply relabels a port another type already names");
 		return;
 	}
 	PASS();
@@ -1222,8 +1316,11 @@ int main(void)
 	test_selinux_container_listener_is_shipped();
 	test_selinux_gaming_client_reaches_container_socket();
 	test_selinux_status_client_stats_socket();
+	test_selinux_agent_skips_shadow();
 	test_selinux_agent_reaches_user_namespaces();
 	test_selinux_agent_reads_filesystem_types();
+	test_selinux_agent_skips_the_symbol_table();
+	test_every_binary_links_hardened();
 	test_installer_labels_the_config_directory();
 	test_upgrade_reloads_the_selinux_module();
 	test_both_hooks_drive_bringup();
@@ -1231,6 +1328,7 @@ int main(void)
 	test_agent_unit_skips_userdb();
 	test_agent_unit_outwaits_the_shutdown();
 	test_installer_probe_asks_about_ports();
+	test_installer_leaves_a_named_port_alone();
 	test_installer_relabel_reapplies_the_device_labels();
 	test_static_cli_is_built_without_cgo();
 	test_shared_key_refusal_survives_several_publishers();

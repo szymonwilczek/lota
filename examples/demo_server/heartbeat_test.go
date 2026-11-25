@@ -350,6 +350,35 @@ func TestHeartbeat_UntrustedOnReplay(t *testing.T) {
 	}
 }
 
+func TestCheckFreshness_ClockSkew(t *testing.T) {
+	cases := []struct {
+		name   string
+		offset int64
+		reason string
+	}{
+		{"ahead within skew", 30, ""},
+		{"ahead past skew", 61, "timestamp in the future"},
+		{"past the age window", -(5*60 + 1), "heartbeat too old"},
+		{"within the age window", -(5*60 - 5), ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			s := newTestServer(t, nil)
+			at := time.Now().Unix() + tc.offset
+			hdr := &lachHeader{
+				sequence: 1,
+				// #nosec G115 -- the test clock is after 1970
+				timestamp: uint64(at),
+			}
+			reason, ok := s.checkFreshness(hdr)
+			if ok != (tc.reason == "") || reason != tc.reason {
+				t.Fatalf("got (%q, %v), want reason %q",
+					reason, ok, tc.reason)
+			}
+		})
+	}
+}
+
 func TestNonce_IssuesUniqueSessionAndNonce(t *testing.T) {
 	s := newTestServer(t, nil)
 

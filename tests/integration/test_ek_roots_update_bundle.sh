@@ -147,6 +147,15 @@ rc=0
 run_update sources.mismatch bundle-mismatch >mismatch.txt 2>&1 || rc=$?
 check "a fingerprint mismatch is still refused" test "$rc" -ne 0
 
+# the CA reads whatever file the manifest names, .pem or not
+printf '%s  vendor-root.crt  root  %s  Example TPM Root CA\n' \
+	"$root_pin" https://example.invalid/root.der >sources.crt
+rc=0
+run_update sources.crt bundle-crt >crt.txt 2>&1 || rc=$?
+check "a sources line naming a .crt file materializes" test "$rc" -eq 0
+check "the .crt file the manifest names is written" \
+	test -f bundle-crt/vendor-root.crt
+
 if [[ $failures -ne 0 ]]; then
     echo "FAILURES: $failures"
     sed -n '1,10p' out.txt 2>/dev/null

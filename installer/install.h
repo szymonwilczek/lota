@@ -216,6 +216,19 @@ void install_reboot_required(char *buf, size_t cap, const char *note);
  */
 enum ui_result install_stage_result(enum stage_state st, int applied);
 
+/**
+ * install_stage_after_apply() - Verdict of a stage probed after its apply.
+ * @s:   the stage.
+ * @ctx: the run; reboot_needed says the boot chain changed.
+ * @st:  the probe verdict.
+ *
+ * Return: STAGE_REBOOT for a boot-path stage still pending once the boot
+ * chain changed, otherwise @st.
+ */
+enum stage_state install_stage_after_apply(const struct stage *s,
+					   const struct install_ctx *ctx,
+					   enum stage_state st);
+
 extern const struct stage install_stages[];
 extern const int install_stage_count;
 

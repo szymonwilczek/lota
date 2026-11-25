@@ -13,6 +13,7 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <getopt.h>
+#include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -371,6 +372,7 @@ int main(int argc, char **argv)
 		{ NULL, 0, NULL, 0 },
 	};
 
+	bool bad_usage = false;
 	int opt;
 	while ((opt = getopt_long(argc, argv, "g:o:s:c:t:h", longopts, NULL)) !=
 	       -1) {
@@ -394,12 +396,18 @@ int main(int argc, char **argv)
 			usage(argv[0]);
 			return 0;
 		default:
-			usage(argv[0]);
-			return EXIT_USAGE;
+			bad_usage = true;
+			break;
 		}
 	}
 
-	if (!opts.gate || !opts.out_path) {
+	if (opts.out_path && unlink(opts.out_path) != 0 && errno != ENOENT) {
+		fprintf(stderr, "ci-attest: cannot remove %s: %s\n",
+			opts.out_path, strerror(errno));
+		return EXIT_OUTPUT;
+	}
+
+	if (bad_usage || !opts.gate || !opts.out_path) {
 		usage(argv[0]);
 		return EXIT_USAGE;
 	}
@@ -472,10 +480,15 @@ int main(int argc, char **argv)
 	if (rc != 0)
 		return rc;
 
-	uint8_t *secret = malloc(strlen(secret_b64));
+	uint8_t *secret = malloc(strlen(secret_b64) + 1);
 	size_t secret_len = 0;
-	if (!secret || base64_decode(secret_b64, secret, strlen(secret_b64),
-				     &secret_len) != 0) {
+	if (!secret) {
+		fprintf(stderr, "ci-attest: out of memory\n");
+		free(secret_b64);
+		return EXIT_OUTPUT;
+	}
+	if (base64_decode(secret_b64, secret, strlen(secret_b64),
+			  &secret_len) != 0) {
 		fprintf(stderr, "ci-attest: released secret is not base64\n");
 		free(secret);
 		free(secret_b64);
