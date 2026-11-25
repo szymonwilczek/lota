@@ -4,45 +4,19 @@
 #
 # lota-dev-bringup.sh
 #
-# Walk an operator's host through the full production bring-up
-# contract LOTA's agent expects at startup:
+# Prepare a developer host for the agent: an Ed25519 key at
+# /etc/lota/policy.key, a signature on the BPF object, policy_pubkey in
+# /etc/lota/lota.conf and fs-verity on /usr/bin/lota-agent. Not meant for
+# hardened production hosts.
 #
-#   1. Operator Ed25519 signing key at /etc/lota/policy.key + .pub.
-#   2. Signed BPF object at /usr/lib/lota/lota_lsm.bpf.o.sig.
-#   3. policy_pubkey reference in /etc/lota/lota.conf so the agent
-#      consults the right public key when verifying the .sig.
-#   4. fs-verity enabled on /usr/bin/lota-agent so the agent's
-#      anti-tamper self-check passes.
-#   5. IMA appraisal in an enforcing mode (ima_appraise=enforce|fix
-#      on the kernel cmdline) so the kernel-floor gate passes.
-#   6. With --reset only: persistent state under /var/lib/lota wiped
-#      and the persistent AIK handle evicted from the TPM, so PCR14
-#      starts from a known baseline after the next cold reboot.
-#   7. Final instruction to cold-reboot before starting the daemon
-#      via systemd, because PCR14 (and the TPM clock resetCount /
-#      restartCount the agent binds against) can only advance on
-#      hardware reset.
-#
-# Each step skips an artefact that already exists, so a re-run is a no-op
-# on a gated host. There is no rollback: a failed run keeps its partial
-# work and the next run continues from it.
-#
-# --reset destroys the host's attestation identity (the agent provisions
-# a new AIK on next start), so it is opt-in and refused while the agent
-# runs.
-#
-# Production deployments run the same chain with operator policy
-# tooling (cosign-signed RPM / signed BPF object shipped by
-# packaging, IMA policy provisioned at boot via the distro's
-# integrity profile, /etc/lota/lota.conf managed by Ansible or
-# similar). This script is the developer-host equivalent and is
-# explicitly NOT meant for hardened production hosts.
+# Each step skips what is already in place. There is no rollback: a failed run
+# keeps its partial work.
 #
 # Environment:
 #   LOTA_BRINGUP_ROOT
-#     Prefix every path with this directory instead of /, for tests;
-#     root is then not required. TPM access is not redirected:
-#     tpm2_evictcontrol from PATH still runs.
+#     Prefix the /etc, /usr, /var, /run and /sys paths with this directory, for
+#     tests; root is then not required. /proc/cmdline, systemd and the TPM are
+#     not redirected.
 
 set -euo pipefail
 
@@ -108,7 +82,6 @@ ensure_artifact() {
     [[ -e "$1" ]] || fail "missing artifact: $1 (run 'sudo make install' first)"
 }
 
-# LOTA's persistent handles, from the agent's headers
 TPM_HEADER="$(dirname "$0")/../src/agent/tpm.h"
 PROFILE_HEADER="$(dirname "$0")/../src/agent/profile.h"
 
@@ -127,11 +100,9 @@ if [[ -n "$PROFILE_BASE" && -n "$PROFILE_COUNT" ]]; then
         $((PROFILE_BASE + PROFILE_COUNT - 1)))
 fi
 
-# 1. Verify the agent + BPF object are installed before doing anything else.
 ensure_artifact "$AGENT_BIN"
 ensure_artifact "$BPF_OBJ"
 
-# 2. Sign-key + pubkey
 if [[ ! -f "$POLICY_KEY" || ! -f "$POLICY_PUB" ]]; then
     info "generating Ed25519 keypair at $POLICY_DIR/policy.{key,pub}"
     install -d -m 0700 "$POLICY_DIR"
@@ -142,8 +113,6 @@ else
     info "operator keypair already present, skipping --gen-signing-key"
 fi
 
-# 3. Sign the in-tree BPF object so bpf_loader_verify_bpf_object_signature passes.
-#    Skip when the signature on disk already verifies against the pubkey.
 if [[ -f "$BPF_SIG" ]] && [[ -f "$POLICY_PUB" ]] &&
     "$AGENT_BIN" --verify-policy "$BPF_OBJ" \
         --policy-pubkey "$POLICY_PUB" >/dev/null 2>&1; then
@@ -154,13 +123,11 @@ else
     ensure_artifact "$BPF_SIG"
 fi
 
-# 4. /etc/lota/lota.conf must reference the pubkey so the daemon path knows
-#    where to read it. Append once; do not duplicate the line on re-run.
 if [[ ! -f "$LOTA_CONF" ]]; then
     info "seeding $LOTA_CONF from configs/lota.conf.example"
     src="$(dirname "$0")/../configs/lota.conf.example"
     [[ -f "$src" ]] || fail "configs/lota.conf.example not found relative to $0"
-    # the agent refuses a config not owned by root; redirected runs are not root
+    # a root agent refuses a config not owned by root
     if $redirected; then
         install -m 0644 "$src" "$LOTA_CONF"
     else
@@ -175,9 +142,6 @@ else
     info "policy_pubkey already configured, leaving $LOTA_CONF alone"
 fi
 
-# 5. fs-verity on the agent binary. Filesystem must already have the verity
-#    feature enabled (`tune2fs -O verity /dev/sdX` on ext4, mkfs-time for
-#    btrfs/f2fs). The fsverity tool reports a friendly error if not.
 if command -v fsverity >/dev/null 2>&1; then
     if fsverity measure "$AGENT_BIN" >/dev/null 2>&1; then
         info "fs-verity already enabled on $AGENT_BIN"
@@ -192,17 +156,6 @@ else
     warn "fsverity utility not installed; install fsverity-utils and re-run"
 fi
 
-# 6. IMA appraisal mode. The kernel-floor check inside the agent parses
-#    /proc/cmdline and requires ima_appraise=enforce|fix; log and the
-#    default off do not block on integrity failures. The cmdline only
-#    sets the appraisal mode -- a loaded policy with appraise rules is
-#    still required for anything to actually be checked.
-#    Suggest fix, not enforce, on a dev host:
-#    developer baseline policy loaded below appraises every exec, and
-#    under enforce a rootfs without IMA signatures blocks every execution.
-#    fix satisfies the agent's kernel floor and writes the missing xattrs
-#    as files are matched; production routes to enforce are the operator's
-#    call (see Documentation/operator/production-bringup/index.rst, "IMA appraisal policy")
 if grep -qE 'ima_appraise=(enforce|fix)' /proc/cmdline 2>/dev/null; then
     info "IMA appraisal already in an enforcing mode"
 else
@@ -223,12 +176,6 @@ if [[ -f "$IMA_POLICY_SRC" ]] &&
     fi
 fi
 
-# 7. Wipe stale agent state, on request. The clock-state snapshot under
-#    $STATE_DIR is the agent's witness for PCR14 history; mismatched
-#    snapshots after a partial install force tpm_extend_boot_commitment
-#    to refuse with EBADMSG, and clearing them plus the persistent AIK
-#    is how a host gets back to a known baseline. It is also how a host
-#    loses the identity it attests with, so the caller asks for it.
 state_files() {
     [[ -d "$STATE_DIR" ]] || return 0
     find "$STATE_DIR" -mindepth 1 -maxdepth 1 \
@@ -236,8 +183,8 @@ state_files() {
         -o -name 'snapshot*' \) 2>/dev/null || true
 }
 
-# Active unit, or a live pid in the daemon's pid file:
-# a refused stop leaves the unit inactive with the daemon still running.
+# Active unit, or a live pid in the daemon's pid file: after a refused
+# stop the unit is not active and the daemon still runs.
 agent_is_running() {
     local pid=""
 
@@ -298,9 +245,6 @@ else
     fi
 fi
 
-# 8. Cold reboot. PCR14 resetCount only advances on hardware reset, so the
-#    agent's first run after this script must follow a reboot for the
-#    boot-commitment baseline to bind to the freshly-signed binary.
 info ""
 info "Bring-up complete. Next steps:"
 info "  1. Reboot the host (cold boot if possible) so PCR14 resetCount"

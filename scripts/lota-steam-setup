@@ -3,14 +3,9 @@
 #
 # lota-steam-setup -- Configure Steam for LOTA integration
 #
-# Sets up the LOTA agent socket to be accessible from inside
-# Steam Runtime pressure-vessel containers (soldier, sniper, etc.)
-# and configures the LD_PRELOAD hook for automatic loading.
-#
-# What this script does:
-#   1. Creates $XDG_RUNTIME_DIR/lota/ with correct permissions
-#   2. Verifies the LOTA agent is reachable from the container path
-#   3. Prints Steam launch option instructions
+# Checks that the LOTA agent and the hook library are in place for
+# Steam Runtime pressure-vessel containers (soldier, sniper, etc.),
+# creates $XDG_RUNTIME_DIR/lota/ and prints the Steam launch options.
 #
 # Usage:
 #   lota-steam-setup             Run setup checks
@@ -23,12 +18,10 @@ set -euo pipefail
 
 LOTA_GROUP="lota"
 SOCKET_NAME="lota.sock"
-# LOTA_AGENT_SOCKET: for a host that keeps the socket elsewhere, and tests
 PRIMARY_SOCKET="${LOTA_AGENT_SOCKET:-/run/lota/${SOCKET_NAME}}"
 HOOK_LIB="liblota_wine_hook.so"
 # Mirrors LOTA_HOOK_TOKEN_DIR_NAME in include/lota_wine_hook.h
 HOOK_TOKEN_DIR_NAME="lota-hook"
-# LOTA_CONF: tests
 LOTA_CONF="${LOTA_CONF:-/etc/lota/lota.conf}"
 
 if [[ -t 1 ]]; then
@@ -112,8 +105,6 @@ check_xdg_runtime_dir() {
 
 check_agent_running() {
     if [[ -S "$PRIMARY_SOCKET" ]]; then
-        # a socket this user cannot open is not a working one,
-        # and it looks identical to a working one from the outside
         if [[ -r "$PRIMARY_SOCKET" && -w "$PRIMARY_SOCKET" ]]; then
             ok "LOTA agent socket: $PRIMARY_SOCKET"
             return 0
@@ -159,7 +150,6 @@ check_lota_group() {
 check_hook_library() {
     local found="" found32=""
 
-    # also the soname, as the wrapper does
     for dir in /usr/lib64 /usr/local/lib64; do
         for candidate in "$dir/${HOOK_LIB}" "$dir"/${HOOK_LIB}.[0-9]*; do
             if [[ -f "$candidate" ]]; then
@@ -169,7 +159,6 @@ check_hook_library() {
         done
     done
 
-    # 32-bit half: without it Steam logs a loader error, the game still runs
     for dir in /usr/lib /usr/local/lib; do
         for candidate in "$dir/${HOOK_LIB}" "$dir"/${HOOK_LIB}.[0-9]*; do
             if [[ -f "$candidate" ]]; then
@@ -203,7 +192,6 @@ check_hook_library() {
     echo "  libatomic.i686."
 }
 
-# no login session, no XDG_RUNTIME_DIR: report it, never expand it bare (set -u)
 no_session_runtime_dir() {
     warn "$1: this account has no session runtime directory"
     echo "  XDG_RUNTIME_DIR is unset, so there is no /run/user/<uid> to use."
@@ -231,7 +219,6 @@ setup_container_socket_dir() {
     mkdir -p "$dir"
     chmod 0750 "$dir"
 
-    # set group if possible
     if getent group "$LOTA_GROUP" >/dev/null 2>&1; then
         chgrp "$LOTA_GROUP" "$dir" 2>/dev/null || true
     fi
@@ -249,8 +236,7 @@ check_container_socket() {
 
     container_socket="${XDG_RUNTIME_DIR}/lota/${SOCKET_NAME}"
 
-    # the directory is the group's too: an outsider cannot see the socket,
-    # which is not it missing, and no register + reboot changes that
+    # a directory this user cannot enter hides the socket: it may not be missing
     if [[ -d "${container_socket%/*}" && ! -x "${container_socket%/*}" ]]; then
         warn "Cannot look inside ${container_socket%/*}, so the container socket cannot be checked"
         echo "  It is handed to the '$LOTA_GROUP' group:"
@@ -261,8 +247,6 @@ check_container_socket() {
     fi
 
     if [[ -S "$container_socket" ]]; then
-        # a socket this user cannot open is not a working one,
-        # and it looks identical to a working one from the outside
         if [[ -r "$container_socket" && -w "$container_socket" ]]; then
             ok "Container socket: $container_socket"
             return 0
@@ -287,12 +271,6 @@ check_container_socket() {
     return 1
 }
 
-# check_hook_token_dir: the hook writes its status and token into a directory
-# of the player's own -- $XDG_RUNTIME_DIR/lota-hook -- and refuses one owned by
-# anybody else, because those files carry a signed token.
-# It creates the directory itself at first launch; what this check catches is
-# a leftover the player cannot use, which is the case that reads as
-# "the hook does nothing".
 check_hook_token_dir() {
     local dir
 
@@ -359,32 +337,20 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-# install_systemd_dropin: lays down the XDG_RUNTIME_DIR override for
-# lota-agent.service so the agent's container-aware secondary
-# listener is created on boot under the operator's /run/user/<uid>.
-# Single-valued by design; multi-user hosts have to pick the user
-# that drives Steam.
 install_systemd_dropin() {
     local uid dropin_dir dropin redirected=false
 
-    # LOTA_SETUP_DROPIN_DIR moves the drop-in somewhere the caller already
-    # owns: a package staging root, or a test.
-    # Nothing on this host's systemd is being configured then, so the verb
-    # neither asks for root nor reloads anything.
     dropin_dir="/etc/systemd/system/lota-agent.service.d"
     if [[ -n "${LOTA_SETUP_DROPIN_DIR:-}" ]]; then
         dropin_dir="$LOTA_SETUP_DROPIN_DIR"
         redirected=true
     fi
 
-    # Need root to write under /etc/systemd/system. The operator UID
-    # is recovered from $SUDO_UID (sudo sets it) so the drop-in
-    # cannot accidentally pin XDG_RUNTIME_DIR to /run/user/0 when
-    # the caller forgot to wrap with sudo from their own session.
     if ! $redirected && [[ $EUID -ne 0 ]]; then
         fail "--install-systemd-dropin must run as root (try: sudo $(basename "$0") --install-systemd-dropin)"
         return 1
     fi
+    # $SUDO_UID, so the drop-in does not pin XDG_RUNTIME_DIR to /run/user/0
     if [[ -z "${SUDO_UID:-}" ]]; then
         fail "could not determine the operator UID"
         fail "invoke as: sudo $(basename "$0") --install-systemd-dropin"
@@ -406,14 +372,6 @@ install_systemd_dropin() {
 
     dropin="${dropin_dir}/10-xdg-runtime.conf"
 
-    # The listener is built once, when the agent starts, so this drop-in
-    # reaches a running host at its next boot. Say so before writing it:
-    # the alternative is restarting the agent, and lota-agent.socket
-    # Triggers= the service while the service Requires= the socket,
-    # so a socket restart runs ExecStop=lota-agent --shutdown and spends
-    # the boot's PCR 14 commitment -- which stops the host attesting until
-    # it reboots anyway.
-    # --verify tells operators not to do it; this verb is not the exception.
     info "This takes effect at the next boot. The running agent keeps"
     info "serving titles unchanged until then, and nothing here stops it."
 
@@ -430,8 +388,6 @@ Environment=XDG_RUNTIME_DIR=/run/user/${uid}
 EOF
     chmod 0644 "$dropin"
 
-    # Keeps systemd's view of the unit current for its next start.
-    # It does not touch the running service, which is the point.
     $redirected || systemctl daemon-reload
     ok "drop-in installed for uid=${uid}; reboot to create the listener"
 }
@@ -447,12 +403,6 @@ if $install_dropin; then
     exit 0
 fi
 
-# register_container_listener_uid: appends container_listener_uid =
-# $SUDO_UID to /etc/lota/lota.conf so the agent creates an extra
-# /run/user/<uid>/lota/lota.sock listener for every configured
-# operator. Multi-user superset of --install-systemd-dropin: the
-# config knob accepts up to LOTA_CONFIG_MAX_CONTAINER_LISTENERS
-# entries, while the drop-in can only pin one XDG_RUNTIME_DIR.
 register_container_listener_uid() {
     local uid line backup created=false
 
@@ -479,8 +429,7 @@ register_container_listener_uid() {
         return 1
     fi
 
-    # The package ships the directory, not the file:
-    # an absent lota.conf is an empty one, as it is to --add-publisher.
+    # The package ships the directory, not the file.
     if [[ ! -d "$(dirname -- "$LOTA_CONF")" ]]; then
         fail "$(dirname -- "$LOTA_CONF") does not exist; install LOTA before --register-uid"
         return 1
@@ -496,21 +445,15 @@ register_container_listener_uid() {
         return 0
     fi
 
-    # The listener is built once, when the agent starts, so this change
-    # reaches a running host at its next boot.
-    # Say so before touching the file: the alternative is stopping the agent,
-    # and that spends the boot's PCR 14 commitment, which stops the host
-    # attesting until it reboots anyway.
     info "This takes effect at the next boot. The running agent keeps"
     info "serving titles unchanged until then, and nothing here stops it."
 
     backup="${LOTA_CONF}.lota-steam-setup.bak"
     cp -p -- "$LOTA_CONF" "$backup"
 
-    # container_listener_uid is a global key, and the grammar is sectioned:
-    # everything after the first [profile "..."] header belongs to that profile.
-    # Appending would land it inside the last profile and the whole file would
-    # stop parsing at the next boot, on a host that looks healthy until then.
+    # container_listener_uid is a top-level key: a key after a [profile "..."]
+    # header belongs to that profile, and a top-level key there stops the file
+    # parsing.
     info "Writing '${line}' to ${LOTA_CONF}"
     if grep -Eq '^[[:space:]]*\[profile' "$LOTA_CONF"; then
         awk -v line="$line" '
@@ -527,10 +470,6 @@ register_container_listener_uid() {
                "$line" >>"$LOTA_CONF"
     fi
 
-    # Read back what was written.
-    # A writer that leaves an unloadable config must not report success:
-    # the running agent has already read its copy, so the damage would stay
-    # invisible until the host failed to bring the agent up at the next boot.
     if ! lota-agent --dump-config --config "$LOTA_CONF" >/dev/null 2>&1; then
         if $created; then
             rm -f -- "$LOTA_CONF" "$backup"
@@ -594,7 +533,6 @@ echo "  both itself, so the line to paste into the game's Properties"
 echo "  -> General -> Launch options is this one:"
 echo ""
 runtime_dir="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
-# no session: the path below is a guess for this account, not Steam's
 if [[ -z "${XDG_RUNTIME_DIR:-}" ]]; then
     warn "No session here, so the paths below are this account's own."
     echo "  Run this from the account that starts Steam for the string"

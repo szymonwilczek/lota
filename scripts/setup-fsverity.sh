@@ -5,7 +5,7 @@
 # Helper script for setting up fs-verity for LOTA testing.
 #
 # Usage:
-#   ./setup-fsverity.sh check - Check kernel support
+#   ./setup-fsverity.sh check - Check the tool and the current directory's fs
 #   ./setup-fsverity.sh enable <file> - Enable fs-verity on a file
 #   ./setup-fsverity.sh digest <file> - Get digest of a file
 
@@ -28,8 +28,6 @@ check_support() {
         return 1
     fi
 
-    # check filesystem support (requires a file on the fs)
-    # assume current dir is on a supporting fs
     touch .fsverity_check
     if ! fsverity enable .fsverity_check 2>/dev/null; then
          echo -e "${RED}Error: Filesystem does not support fs-verity or it is disabled.${NC}"

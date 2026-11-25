@@ -3,13 +3,10 @@
 #
 # lota-proton-hook -- Launch wrapper for Steam/Proton with LOTA integration
 #
-# Sets LD_PRELOAD so that the LOTA Wine hook library is loaded into
-# the Wine/Proton process, transparently bridging attestation into
-# the Windows game, and shares the agent's socket directory and the hook's
-# token directory through PRESSURE_VESSEL_FILESYSTEMS_RW.
-#
-# The command runs through lota-protect, so the whole launch is protected
-# before its first instruction.
+# Sets LD_PRELOAD to load the LOTA Wine hook into the Wine/Proton process,
+# shares the agent's socket directory and the hook's token directory through
+# PRESSURE_VESSEL_FILESYSTEMS_RW, and runs the command through lota-protect.
+# A missing library or lota-protect does not stop the launch.
 #
 # Usage:
 #   As Steam launch option:
@@ -38,8 +35,7 @@
 
 set -euo pipefail
 
-# Escape hatch when the preload itself breaks the launch. Checked here,
-# not only in the library: by then it is already mapped into the game.
+# Checked here too: when the library checks, it is already mapped into the game.
 case "${LOTA_HOOK_DISABLE:-}" in
     1 | true)
 	echo "lota-proton-hook: LOTA_HOOK_DISABLE set, skipping LOTA integration" >&2
@@ -47,8 +43,6 @@ case "${LOTA_HOOK_DISABLE:-}" in
 	;;
 esac
 
-# Protected from the first instruction; the library only reports.
-# Without lota-protect the launch goes on and the agent reports it unprotected.
 launch() {
     local protect="${LOTA_PROTECT_PATH:-$(command -v lota-protect || true)}"
 
@@ -61,11 +55,9 @@ launch() {
 
 LOTA_HOOK_LIB="${LOTA_HOOK_LIB_PATH:-}"
 
-# packaged and source-install prefixes; tests override them
 IFS=: read -r -a lota_hook_roots <<<"${LOTA_HOOK_LIB_ROOTS:-/usr:/usr/local}"
 
-# the soname too: the bare .so is a -devel symlink;
-# an unmatched glob fails the caller's -f
+# the soname too: the bare .so ships in -devel
 hook_candidates() {
     lota_hook_cands=(
         "$1/liblota_wine_hook.so"
@@ -111,7 +103,7 @@ if [[ -z "$LOTA_HOOK_LIB" ]]; then
     LOTA_HOOK_LIB=$(hook_pair || hook_single || true)
 fi
 
-# a $LIB path cannot be stat'ed; hook_pair() checked both halves
+# a $LIB path cannot be stat'ed
 if [[ -z "$LOTA_HOOK_LIB" ||
 	  ( "$LOTA_HOOK_LIB" != *'$LIB'* && ! -f "$LOTA_HOOK_LIB" ) ]]; then
     echo "lota-proton-hook: hook library not found" >&2
@@ -125,16 +117,14 @@ else
     export LD_PRELOAD="${LOTA_HOOK_LIB}"
 fi
 
-# LD_PRELOAD also reaches Steam's helpers, outside the FHS skip list;
-# the reaper outlives the title and would keep the 32-bit libc write-pinned.
-# Pin the hook to the title and its compatibility tools, as Steam names them.
-# A preset pin wins; no install path, no pin.
+# LD_PRELOAD also reaches Steam's helpers, outside the FHS skip list: pin the
+# hook to the title and its compatibility tools, as Steam names them.
 if [[ -z "${LOTA_HOOK_ACTIVATE_PATH:-}" &&
 	  -n "${STEAM_COMPAT_INSTALL_PATH:-}" ]]; then
     # trailing slash: a prefix must not match a sibling directory
     lota_hook_pin="${STEAM_COMPAT_INSTALL_PATH%/}/"
 
-    # colon list in, comma list out; an empty element matches everything
+    # colon list in, comma list out
     IFS=: read -r -a lota_hook_tools <<<"${STEAM_COMPAT_TOOL_PATHS:-}"
     for lota_hook_tool in "${lota_hook_tools[@]}"; do
         [[ -n "$lota_hook_tool" ]] || continue
@@ -144,10 +134,9 @@ if [[ -z "${LOTA_HOOK_ACTIVATE_PATH:-}" &&
     export LOTA_HOOK_ACTIVATE_PATH="$lota_hook_pin"
 fi
 
-# Every process of a Proton prefix is the pinned Wine loader; the title is
-# told apart by its Windows program. A Steam library is a drive of its own,
-# so the path starts at the library root; outside one it is the host path.
-# A set value wins.
+# The hook decides Wine's loader by the Windows program it hosts, so
+# this is the title's directory as Wine sees it: from the library root
+# inside a Steam library, the host path outside one.
 if [[ -z "${LOTA_HOOK_ACTIVATE_PROGRAM:-}" &&
 	  -n "${STEAM_COMPAT_INSTALL_PATH:-}" ]]; then
     lota_hook_title="${STEAM_COMPAT_INSTALL_PATH%/}/"
@@ -157,10 +146,6 @@ if [[ -z "${LOTA_HOOK_ACTIVATE_PROGRAM:-}" &&
     export LOTA_HOOK_ACTIVATE_PROGRAM="$lota_hook_title"
 fi
 
-# pressure-vessel binds only paths in PRESSURE_VESSEL_FILESYSTEMS_RW.
-# Outside a container the variable is ignored.
-
-# share_dir: append $1 unless it is already a whole element
 share_dir() {
     local want="$1" entry
 
@@ -186,11 +171,10 @@ else
     lota_token_dir="/tmp/lota-$(id -u)"
 fi
 
-# must exist on the host to be bound; on failure the library reports it
+# must exist on the host to be bound
 (umask 0077 && mkdir -p "$lota_token_dir") 2>/dev/null || true
 share_dir "$lota_token_dir"
 
-# agent-owned; share only if present, a missing path fails the container
 lota_socket="${LOTA_HOOK_SOCKET:-${XDG_RUNTIME_DIR:+${XDG_RUNTIME_DIR}/lota/lota.sock}}"
 if [[ -n "$lota_socket" ]]; then
     lota_socket_dir=$(dirname -- "$lota_socket")

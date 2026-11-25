@@ -21,8 +21,7 @@ set -euo pipefail
 MANIFEST_NAME="ek-roots.manifest"
 PLACEHOLDER="REPLACE_ME"
 
-# A manufacturer root anchors a chain; an intermediate only completes a path
-# to one. The CA enforces the difference, so the sources file has to state it.
+# The CA enforces the class, so the sources file has to state it.
 CLASS_ROOT="root"
 CLASS_INTERMEDIATE="intermediate"
 
@@ -56,7 +55,6 @@ MANIFEST="$WORK/$MANIFEST_NAME"
 	echo "# (path material the CA builds through but never anchors at)."
 } >"$MANIFEST"
 
-# to_pem reads a certificate in DER or PEM and writes it back as PEM.
 to_pem() {
 	local in="$1" out="$2"
 	if openssl x509 -inform DER -in "$in" -outform PEM -out "$out" 2>/dev/null; then
@@ -65,7 +63,6 @@ to_pem() {
 	openssl x509 -inform PEM -in "$in" -outform PEM -out "$out" 2>/dev/null
 }
 
-# der_sha256 prints the lowercase hex SHA-256 over a PEM certificate's DER.
 der_sha256() {
 	openssl x509 -inform PEM -in "$1" -outform DER 2>/dev/null |
 		sha256sum | cut -d' ' -f1
@@ -113,12 +110,11 @@ while IFS= read -r line || [ -n "$line" ]; do
 done <"$SOURCES"
 
 [ "$count" -gt 0 ] || die "no certificates in $SOURCES"
-# path material alone anchors nothing, and the CA refuses to start on it
+# the CA refuses to start on a bundle that pins no root
 [ "$roots" -gt 0 ] ||
 	die "no $CLASS_ROOT line in $SOURCES: a bundle of intermediates anchors no chain"
 
-# stage the whole bundle, then move every file into
-# place so a half-written bundle never reaches the CA
+# a refused line has already exited: it leaves the files in $OUTDIR alone
 install -m 0644 "$MANIFEST" "$OUTDIR/$MANIFEST_NAME"
 for pem in "$WORK"/*.pem; do
 	[ -e "$pem" ] || continue
