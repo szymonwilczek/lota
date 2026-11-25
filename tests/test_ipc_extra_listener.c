@@ -26,6 +26,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/resource.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
 #include <sys/un.h>
@@ -202,10 +203,9 @@ int dbus_process(struct dbus_context *ctx, uint64_t timeout_us)
 	return 0;
 }
 
-void dbus_emit_status_changed(struct dbus_context *ctx, uint32_t flags)
+void dbus_emit_status_changed(struct dbus_context *ctx)
 {
 	(void)ctx;
-	(void)flags;
 }
 
 void dbus_emit_attestation_result(struct dbus_context *ctx, bool success)
@@ -386,6 +386,61 @@ static void test_refusal_leaves_the_socket_connectable(struct ipc_context *ctx)
 		PASS();
 
 	ipc_remove_listener(ctx, victim_socket);
+	close(victim_fd);
+	unlink(victim_socket);
+}
+
+/* with no descriptor left, the probe cannot tell, and the path stays */
+static void
+test_probe_without_a_descriptor_keeps_the_path(struct ipc_context *ctx)
+{
+	struct rlimit old, low;
+	int held[64];
+	int n = 0, victim_fd, ret;
+
+	TEST("a probe with no descriptor left does not unlink the path");
+
+	victim_fd = listener_at(victim_socket);
+	if (victim_fd < 0 || getrlimit(RLIMIT_NOFILE, &old) < 0) {
+		FAIL("cannot lay down the socket to protect");
+		if (victim_fd >= 0)
+			close(victim_fd);
+		return;
+	}
+
+	low = old;
+	low.rlim_cur = 64;
+	if (setrlimit(RLIMIT_NOFILE, &low) < 0) {
+		FAIL("cannot lower the descriptor limit");
+		close(victim_fd);
+		unlink(victim_socket);
+		return;
+	}
+	while (n < 64) {
+		int fd = dup(victim_fd);
+
+		if (fd < 0)
+			break;
+		held[n++] = fd;
+	}
+
+	ret = ipc_add_listener(ctx, victim_socket);
+
+	while (n > 0)
+		close(held[--n]);
+	setrlimit(RLIMIT_NOFILE, &old);
+
+	if (ret == 0)
+		FAIL("took a socket another process is answering on");
+	else if (ret != -EMFILE)
+		FAIL("the refusal does not name the descriptor limit");
+	else if (!connectable(victim_socket))
+		FAIL("the socket is gone or no longer answers");
+	else
+		PASS();
+
+	if (ret == 0)
+		ipc_remove_listener(ctx, victim_socket);
 	close(victim_fd);
 	unlink(victim_socket);
 }
@@ -629,6 +684,7 @@ int main(void)
 
 	test_live_listener_is_not_taken(&ctx);
 	test_refusal_leaves_the_socket_connectable(&ctx);
+	test_probe_without_a_descriptor_keeps_the_path(&ctx);
 	test_stale_socket_file_is_not_mistaken_for_a_listener(&ctx);
 	test_bind_failure_is_left_to_the_caller(&ctx);
 	test_untouched_socket_is_not_replaced();

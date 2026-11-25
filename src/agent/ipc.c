@@ -25,7 +25,7 @@
 #include <fcntl.h>
 #include <grp.h>
 #include <limits.h>
-#include <signal.h>
+#include <poll.h>
 #include <sys/syscall.h>
 #include <openssl/crypto.h>
 #include <stdint.h>
@@ -91,6 +91,10 @@ static int protect_pid_rate_count = 0;
 static uint64_t protect_pid_last_table_full_warn_sec = 0;
 
 static int u32_cmp(const void *a, const void *b);
+static void client_attestation_view(const struct ipc_context *ctx,
+				    const struct ipc_client *client,
+				    uint32_t *flags, uint64_t *valid_until);
+static uint32_t runtime_coverage_fold(uint32_t flags);
 static void runtime_protect_catch_up(void);
 static int build_canonical_runtime_pid_list(uint32_t **out_pids,
 					    uint32_t *out_count);
@@ -494,17 +498,17 @@ _Static_assert(LOTA_IPC_ATTEST_SYNC_RESPONSE_MAX_SIZE <= LOTA_IPC_MAX_PAYLOAD,
  * Whether a process still answers on @path. A socket file survives an unclean
  * stop, so only connect() can tell.
  *
- * ECONNREFUSED is the leftover, ENOENT a clean slate, and any other connect()
- * error counts as occupied.
+ * Returns 1 when something answers, 0 for a leftover (ECONNREFUSED) or a clean
+ * slate (ENOENT), and -errno when socket() or connect() fails otherwise.
  */
-static bool socket_has_live_listener(const char *path)
+static int socket_has_live_listener(const char *path)
 {
 	struct sockaddr_un addr;
 	int fd, ret;
 
 	fd = socket(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0);
 	if (fd < 0)
-		return false;
+		return -errno;
 
 	memset(&addr, 0, sizeof(addr));
 	addr.sun_family = AF_UNIX;
@@ -513,13 +517,33 @@ static bool socket_has_live_listener(const char *path)
 	ret = connect(fd, (struct sockaddr *)&addr, sizeof(addr));
 	if (ret == 0) {
 		close(fd);
-		return true;
+		return 1;
 	}
 
 	ret = errno;
 	close(fd);
 
-	return ret != ECONNREFUSED && ret != ENOENT;
+	if (ret == ECONNREFUSED || ret == ENOENT)
+		return 0;
+	return -ret;
+}
+
+/*
+ * 0 when @path may be taken; otherwise the reason it is refused.
+ */
+static int socket_path_free(const char *path)
+{
+	int ret = socket_has_live_listener(path);
+
+	if (ret > 0) {
+		lota_err("%s already has a listener; refusing to take it over",
+			 path);
+		return -EADDRINUSE;
+	}
+	if (ret < 0)
+		lota_err("cannot probe %s (%s); refusing to take it over", path,
+			 strerror(-ret));
+	return ret;
 }
 
 static int set_nonblocking(int fd)
@@ -839,6 +863,11 @@ static void build_notification(struct ipc_context *ctx,
 {
 	struct lota_ipc_response *resp = (void *)client->send_buf;
 	struct lota_ipc_notify *notify;
+	uint64_t valid_until;
+	uint32_t flags;
+
+	client_attestation_view(ctx, client, &flags, &valid_until);
+	flags = runtime_coverage_fold(flags);
 
 	resp->magic = LOTA_IPC_MAGIC;
 	resp->version = LOTA_IPC_VERSION;
@@ -847,9 +876,9 @@ static void build_notification(struct ipc_context *ctx,
 
 	notify = (void *)(client->send_buf + LOTA_IPC_RESPONSE_SIZE);
 	notify->events = events;
-	notify->flags = ctx->status_flags;
+	notify->flags = flags;
 	notify->last_attest_time = ctx->last_attest_time;
-	notify->valid_until = ctx->valid_until;
+	notify->valid_until = valid_until;
 	notify->attest_count = ctx->attest_count;
 	notify->fail_count = ctx->fail_count;
 	notify->mode = ctx->mode;
@@ -1201,8 +1230,8 @@ static void handle_get_token(struct ipc_context *ctx, struct ipc_client *client,
 	uint32_t runtime_pid_count = 0;
 	uint64_t stopped_ms = 0;
 	uint16_t pid_list_size = 0;
-	uint8_t (*image_digests)[32] = NULL;
-	size_t image_list_size = 0;
+	uint8_t (*registry_digests)[32] = NULL;
+	size_t registry_list_size = 0;
 	struct lota_rt_object_record *objs = NULL;
 	struct registry next_registry = { 0 };
 	struct lota_exec_history_key *hist_keys = NULL;
@@ -1399,18 +1428,18 @@ static void handle_get_token(struct ipc_context *ctx, struct ipc_client *client,
 	lota_rt_measure_round_begin();
 
 	/*
-	 * Each protected process's image digest joins the protect digest.
+	 * Each protected process's registry digest joins the protect digest.
 	 * One that cannot be measured stays a zero digest and clears
 	 * LOTA_STATUS_IMAGE_FULLY_MEASURED; only the caller's own refuses.
 	 */
 	if (runtime_pid_count > 0) {
-		image_list_size = (size_t)runtime_pid_count *
-				  LOTA_IPC_TOKEN_IMAGE_DIGEST_SIZE;
-		image_digests =
-			calloc(runtime_pid_count, sizeof(*image_digests));
+		registry_list_size = (size_t)runtime_pid_count *
+				     LOTA_IPC_TOKEN_REGISTRY_DIGEST_SIZE;
+		registry_digests =
+			calloc(runtime_pid_count, sizeof(*registry_digests));
 		objs = calloc(REGISTRY_OBJECTS_MAX, sizeof(*objs));
 		actors = calloc(LOTA_IPC_REGISTRY_MAX_ACTORS, sizeof(*actors));
-		if (!image_digests || !objs || !actors) {
+		if (!registry_digests || !objs || !actors) {
 			fail = true;
 			fail_code = LOTA_IPC_ERR_INTERNAL;
 			goto out;
@@ -1421,6 +1450,7 @@ static void handle_get_token(struct ipc_context *ctx, struct ipc_client *client,
 		for (uint32_t i = 0; i < runtime_pid_count; i++) {
 			struct lota_runtime_measure_failure mfail;
 			struct lota_runtime_measure_coverage cov = { 0 };
+			uint8_t image_digest[LOTA_RUNTIME_IMAGE_DIGEST_SIZE];
 			char statement[MEASURE_REPORT_STATEMENT_MAX];
 			char held_clause[80];
 			uint64_t held = 0;
@@ -1437,7 +1467,7 @@ static void handle_get_token(struct ipc_context *ctx, struct ipc_client *client,
 			/* unreadable owner: only root reads the entry */
 			(void)read_pid_real_uid((pid_t)runtime_pids[i], &owner);
 			ret = lota_runtime_measure_pid_objects(
-				(pid_t)runtime_pids[i], image_digests[i], &cov,
+				(pid_t)runtime_pids[i], image_digest, &cov,
 				&mfail, objs, &n_objs);
 
 			/* what the maps no longer show, from the history */
@@ -1470,12 +1500,14 @@ static void handle_get_token(struct ipc_context *ctx, struct ipc_client *client,
 				rec = registry_digest(
 					rflags | LOTA_IPC_REGISTRY_MEASURED,
 					objs, n_objs, actors, n_actors,
-					image_digests[i]);
+					registry_digests[i]);
 				if (rec == 0)
-					rec = registry_add(
-						&next_registry, runtime_pids[i],
-						owner, rflags, image_digests[i],
-						objs, n_objs, actors, n_actors);
+					rec = registry_add(&next_registry,
+							   runtime_pids[i],
+							   owner, rflags,
+							   registry_digests[i],
+							   objs, n_objs, actors,
+							   n_actors);
 			} else {
 				rec = registry_add(&next_registry,
 						   runtime_pids[i], owner,
@@ -1525,8 +1557,6 @@ static void handle_get_token(struct ipc_context *ctx, struct ipc_client *client,
 					goto out;
 				}
 
-				memset(image_digests[i], 0,
-				       sizeof(image_digests[i]));
 				measure_report_line(statement,
 						    sizeof(statement),
 						    MEASURE_ANSWER_ABSENT,
@@ -1604,7 +1634,8 @@ static void handle_get_token(struct ipc_context *ctx, struct ipc_client *client,
 
 	registry_replace(&g_registry, &next_registry);
 
-	ret = lota_compute_runtime_protect_digest(runtime_pids, image_digests,
+	ret = lota_compute_runtime_protect_digest(runtime_pids,
+						  registry_digests,
 						  runtime_pid_count,
 						  runtime_protect_digest);
 	if (ret < 0) {
@@ -1679,7 +1710,8 @@ static void handle_get_token(struct ipc_context *ctx, struct ipc_client *client,
 	}
 
 	total_size = LOTA_IPC_TOKEN_HEADER_SIZE + pid_list_size +
-		     image_list_size + quote.attest_size + quote.signature_size;
+		     registry_list_size + quote.attest_size +
+		     quote.signature_size;
 	if (total_size > LOTA_IPC_MAX_PAYLOAD) {
 		lota_err("token too large (%zu bytes): too many protected PIDs",
 			 total_size);
@@ -1709,9 +1741,9 @@ static void handle_get_token(struct ipc_context *ctx, struct ipc_client *client,
 		memcpy(data_ptr, pid_le, sizeof(pid_le));
 		data_ptr += sizeof(pid_le);
 	}
-	if (image_list_size > 0 && image_digests) {
-		memcpy(data_ptr, image_digests, image_list_size);
-		data_ptr += image_list_size;
+	if (registry_list_size > 0 && registry_digests) {
+		memcpy(data_ptr, registry_digests, registry_list_size);
+		data_ptr += registry_list_size;
 	}
 	memcpy(data_ptr, quote.attest_data, quote.attest_size);
 	data_ptr += quote.attest_size;
@@ -1743,9 +1775,9 @@ out:
 				(size_t)runtime_pid_count * sizeof(uint32_t));
 		free(runtime_pids);
 	}
-	if (image_digests) {
-		OPENSSL_cleanse(image_digests, image_list_size);
-		free(image_digests);
+	if (registry_digests) {
+		OPENSSL_cleanse(registry_digests, registry_list_size);
+		free(registry_digests);
 	}
 	free(objs);
 	free(hist_keys);
@@ -2521,15 +2553,6 @@ static int pid_set_add(const uint32_t *pids, int count, uint32_t pid,
 		memcpy(new_pids, pids, (size_t)count * sizeof(uint32_t));
 	new_pids[count] = pid;
 
-	/* keep sorted invariant */
-	for (int i = count; i > 0; i--) {
-		if (new_pids[i - 1] <= new_pids[i])
-			break;
-		uint32_t tmp = new_pids[i - 1];
-		new_pids[i - 1] = new_pids[i];
-		new_pids[i] = tmp;
-	}
-
 	*out = new_pids;
 	*out_count = count + 1;
 	return 0;
@@ -2625,7 +2648,7 @@ static void handle_protect_pid_update(struct ipc_context *ctx,
 	}
 	memcpy(&req, payload, sizeof(req));
 	pid = req.pid;
-	if (pid == 0) {
+	if (pid == 0 || pid > INT_MAX) {
 		build_error_response(client, LOTA_IPC_ERR_BAD_REQUEST);
 		return;
 	}
@@ -2907,6 +2930,13 @@ static void handle_get_registry(struct ipc_client *client,
 	client->send_offset = 0;
 }
 
+static bool pidfd_exited(int pidfd)
+{
+	struct pollfd pfd = { .fd = pidfd, .events = POLLIN };
+
+	return poll(&pfd, 1, 0) > 0;
+}
+
 /*
  * End a protected process for its owner or root; terminate_policy_decide()
  * holds the rule.
@@ -2951,6 +2981,8 @@ static void handle_terminate_protected(struct ipc_context *ctx,
 	}
 
 	uid_ret = read_pid_real_uid((pid_t)req.pid, &target_uid);
+	if (uid_ret == 0 && pidfd_exited(pidfd))
+		uid_ret = -ESRCH;
 	if (uid_ret < 0) {
 		close(pidfd);
 		lota_warn("TERMINATE_PROTECTED for pid=%u from uid=%d: cannot "
@@ -2987,13 +3019,16 @@ static void handle_terminate_protected(struct ipc_context *ctx,
 		return;
 	}
 
-	if (kill((pid_t)req.pid, (int)req.signal) < 0) {
+	if (syscall(SYS_pidfd_send_signal, pidfd, (int)req.signal, NULL, 0) <
+	    0) {
 		int err = errno;
 
 		close(pidfd);
 		lota_err("TERMINATE_PROTECTED failed for pid=%u sig=%u: %s",
 			 req.pid, req.signal, strerror(err));
-		build_error_response(client, LOTA_IPC_ERR_INTERNAL);
+		build_error_response(client, err == ESRCH ?
+						     LOTA_IPC_ERR_BAD_REQUEST :
+						     LOTA_IPC_ERR_INTERNAL);
 		return;
 	}
 	close(pidfd);
@@ -3012,7 +3047,7 @@ static void handle_terminate_protected(struct ipc_context *ctx,
 	if (!(ctx->status_flags & LOTA_STATUS_PROTECTED_TERMINATED)) {
 		ctx->status_flags |= LOTA_STATUS_PROTECTED_TERMINATED;
 		notify_subscribers(ctx, LOTA_IPC_EVENT_STATUS);
-		dbus_emit_status_changed(ctx->dbus, ctx->status_flags);
+		dbus_emit_status_changed(ctx->dbus);
 	}
 
 	resp->magic = LOTA_IPC_MAGIC;
@@ -3374,11 +3409,9 @@ int ipc_init(struct ipc_context *ctx)
 	 * A socket somebody still answers on is not ours to take. One that
 	 * refuses the connection is a leftover of an unclean stop.
 	 */
-	if (socket_has_live_listener(LOTA_IPC_SOCKET_PATH)) {
-		lota_err("%s already has a listener; refusing to take it over",
-			 LOTA_IPC_SOCKET_PATH);
-		return -EADDRINUSE;
-	}
+	ret = socket_path_free(LOTA_IPC_SOCKET_PATH);
+	if (ret < 0)
+		return ret;
 
 	ret = open_primary_listener(&ctx->listen_fd);
 	if (ret < 0)
@@ -3738,7 +3771,7 @@ void ipc_update_status(struct ipc_context *ctx, uint32_t flags,
 
 	if (old_flags != flags) {
 		notify_subscribers(ctx, LOTA_IPC_EVENT_STATUS);
-		dbus_emit_status_changed(ctx->dbus, flags);
+		dbus_emit_status_changed(ctx->dbus);
 	}
 }
 
@@ -3757,7 +3790,7 @@ static void refold_policy(struct ipc_context *ctx)
 
 	ctx->status_flags = flags;
 	notify_subscribers(ctx, LOTA_IPC_EVENT_STATUS);
-	dbus_emit_status_changed(ctx->dbus, flags);
+	dbus_emit_status_changed(ctx->dbus);
 }
 
 void ipc_set_policy(struct ipc_context *ctx, uint32_t keys)
@@ -3787,7 +3820,7 @@ void ipc_set_agent_restarted(struct ipc_context *ctx)
 
 	ctx->status_flags |= LOTA_STATUS_AGENT_RESTARTED;
 	notify_subscribers(ctx, LOTA_IPC_EVENT_STATUS);
-	dbus_emit_status_changed(ctx->dbus, ctx->status_flags);
+	dbus_emit_status_changed(ctx->dbus);
 }
 
 void ipc_set_events_lost(struct ipc_context *ctx)
@@ -3798,7 +3831,7 @@ void ipc_set_events_lost(struct ipc_context *ctx)
 
 	ctx->status_flags |= LOTA_STATUS_EVENTS_LOST;
 	notify_subscribers(ctx, LOTA_IPC_EVENT_STATUS);
-	dbus_emit_status_changed(ctx->dbus, ctx->status_flags);
+	dbus_emit_status_changed(ctx->dbus);
 }
 
 void ipc_set_mode(struct ipc_context *ctx, uint8_t mode)
@@ -3917,11 +3950,9 @@ int ipc_add_listener(struct ipc_context *ctx, const char *socket_path)
 	 * As for the primary socket: a path somebody still answers on is
 	 * refused, and a leftover of an unclean stop is unlinked.
 	 */
-	if (socket_has_live_listener(socket_path)) {
-		lota_err("%s already has a listener; refusing to take it over",
-			 socket_path);
-		return -EADDRINUSE;
-	}
+	ret = socket_path_free(socket_path);
+	if (ret < 0)
+		return ret;
 
 	unlink(socket_path);
 

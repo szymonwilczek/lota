@@ -223,7 +223,7 @@ struct lota_ipc_token_request {
  *
  * Verification:
  * - Recompute runtime_protect_digest from protected_pids[] and
- *   protected_image_digests[] (lota_runtime_protect_digest.h)
+ *   protected_registry_digests[] (lota_runtime_protect_digest.h)
  * - Compute the expected nonce with lota_compute_token_quote_nonce()
  * - Verify the TPM signature over attest_data with the AIK public key
  * - Parse attest_data and check that extraData is the expected nonce
@@ -245,13 +245,13 @@ struct lota_ipc_token {
 	uint32_t protect_pid_count; /* Number of protected PIDs in payload */
 	uint64_t runtime_protect_epoch; /* Monotonic PID-set mutation id */
 	uint16_t pid_list_size; /* Bytes for protected_pids[] */
-	uint16_t runtime_protect_version; /* 1 = PID set + image digests */
+	uint16_t runtime_protect_version; /* 1 = PID set + registry digests */
 	uint64_t stopped_ms; /* Time the caller's instance stood stopped */
 
 	/*
 	 * Variable-length data follows:
 	 *   - protected_pids[protect_pid_count] (little-endian uint32)
-	 *   - protected_image_digests[protect_pid_count][32]
+	 *   - protected_registry_digests[protect_pid_count][32]
 	 *   - attest_data[attest_size]  (TPMS_ATTEST)
 	 *   - signature[sig_size]       (RSA signature)
 	 */
@@ -260,9 +260,10 @@ struct lota_ipc_token {
 #define LOTA_IPC_TOKEN_HEADER_SIZE sizeof(struct lota_ipc_token)
 #define LOTA_IPC_TOKEN_MAX_ATTEST 1024
 #define LOTA_IPC_TOKEN_MAX_SIG 512
-#define LOTA_IPC_TOKEN_IMAGE_DIGEST_SIZE 32
-/* Bytes one protected PID adds to a token: its value and its image digest */
-#define LOTA_IPC_TOKEN_PROTECT_ENTRY_SIZE (4 + LOTA_IPC_TOKEN_IMAGE_DIGEST_SIZE)
+#define LOTA_IPC_TOKEN_REGISTRY_DIGEST_SIZE 32
+/* Bytes one protected PID adds to a token: its value and its registry digest */
+#define LOTA_IPC_TOKEN_PROTECT_ENTRY_SIZE \
+	(4 + LOTA_IPC_TOKEN_REGISTRY_DIGEST_SIZE)
 /*
  * Protected PIDs that fit the payload beside the header, a maximum quote and a
  * maximum signature. handle_get_token() enforces it.
@@ -272,20 +273,20 @@ struct lota_ipc_token {
 	  LOTA_IPC_TOKEN_MAX_ATTEST - LOTA_IPC_TOKEN_MAX_SIG) / \
 	 LOTA_IPC_TOKEN_PROTECT_ENTRY_SIZE)
 #define LOTA_IPC_TOKEN_MAX_PID_LIST_SIZE (LOTA_IPC_TOKEN_MAX_PROTECT_PIDS * 4)
-#define LOTA_IPC_TOKEN_MAX_IMAGE_LIST_SIZE \
-	(LOTA_IPC_TOKEN_MAX_PROTECT_PIDS * LOTA_IPC_TOKEN_IMAGE_DIGEST_SIZE)
+#define LOTA_IPC_TOKEN_MAX_REGISTRY_LIST_SIZE \
+	(LOTA_IPC_TOKEN_MAX_PROTECT_PIDS * LOTA_IPC_TOKEN_REGISTRY_DIGEST_SIZE)
 
 /* runtime_protect_version values (mirror of lota_token.h) */
-#define LOTA_IPC_RUNTIME_PROTECT_V1 1 /* PID set + per-PID image digest */
+#define LOTA_IPC_RUNTIME_PROTECT_V1 1 /* PID set + per-PID registry digest */
 
 /*
- * Header, full PID and image digest lists, largest quote and signature.
+ * Header, full PID and registry digest lists, largest quote and signature.
  * ipc.c asserts it fits LOTA_IPC_MAX_PAYLOAD; the SDK sizes its receive buffer
  * from it.
  */
-#define LOTA_IPC_TOKEN_MAX_SIZE                                           \
-	(LOTA_IPC_TOKEN_HEADER_SIZE + LOTA_IPC_TOKEN_MAX_PID_LIST_SIZE +  \
-	 LOTA_IPC_TOKEN_MAX_IMAGE_LIST_SIZE + LOTA_IPC_TOKEN_MAX_ATTEST + \
+#define LOTA_IPC_TOKEN_MAX_SIZE                                              \
+	(LOTA_IPC_TOKEN_HEADER_SIZE + LOTA_IPC_TOKEN_MAX_PID_LIST_SIZE +     \
+	 LOTA_IPC_TOKEN_MAX_REGISTRY_LIST_SIZE + LOTA_IPC_TOKEN_MAX_ATTEST + \
 	 LOTA_IPC_TOKEN_MAX_SIG)
 
 /* Event bits of a SUBSCRIBE mask and a push notification */
@@ -428,7 +429,7 @@ struct lota_ipc_registry_request {
 	uint32_t start;
 } __attribute__((packed));
 
-/* image_digest is the token's entry for @pid */
+/* registry_digest is the token's entry for @pid */
 #define LOTA_IPC_REGISTRY_MEASURED (1U << 0)
 /* an executable mapping of @pid went unrecorded; the list may miss one */
 #define LOTA_IPC_REGISTRY_HISTORY_LOST (1U << 1)
@@ -471,7 +472,7 @@ struct lota_ipc_registry_request {
  *
  * The token binds the list. With LOTA_IPC_REGISTRY_MEASURED set,
  * hashing @flags, @total, @actor_total, every object and every actor in
- * order as lota_registry_digest.h does yields @image_digest, the token's
+ * order as lota_registry_digest.h does yields @registry_digest, the token's
  * entry for @pid.
  */
 struct lota_ipc_registry_page {
@@ -482,7 +483,7 @@ struct lota_ipc_registry_page {
 	uint32_t start;
 	uint16_t count; /* entries in this page */
 	uint16_t flags; /* LOTA_IPC_REGISTRY_* */
-	uint8_t image_digest[32];
+	uint8_t registry_digest[32];
 } __attribute__((packed));
 
 /* How an entry's digest was taken */

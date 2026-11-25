@@ -371,8 +371,8 @@ It answers for whoever ``kill(2)`` would already have allowed -- the owner of
 the process, or root -- so a player ends their own game as themselves, with no
 ``sudo``. It reports how many other processes are still protected, not
 counting the one it signalled. Nothing else widens: only ``SIGTERM`` and
-``SIGKILL`` are relayed, a process nobody protected is refused because an
-ordinary ``kill`` reaches it, and the agent will not end itself this way.
+``SIGKILL`` are relayed, a process nobody protected is refused, and the agent
+will not end itself this way.
 
 The exchange is that the host says so. Every relayed termination is journalled
 with the target, its owner and the caller, and the host reports

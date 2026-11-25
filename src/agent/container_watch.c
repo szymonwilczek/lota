@@ -24,20 +24,20 @@ static int watch_slot_of_uid(const struct container_watch *w, uint32_t uid)
 	return -1;
 }
 
-static bool runtime_dir_present(const struct container_watch *w, uint32_t uid)
+static bool runtime_dir_present(const struct container_watch *w, uint32_t uid,
+				struct stat *st)
 {
 	char path[PATH_MAX];
-	struct stat st;
 	int n;
 
 	n = snprintf(path, sizeof(path), "%s/%u", w->root, uid);
 	if (n < 0 || (size_t)n >= sizeof(path))
 		return false;
 
-	if (stat(path, &st) < 0)
+	if (stat(path, st) < 0)
 		return false;
 
-	return S_ISDIR(st.st_mode);
+	return S_ISDIR(st->st_mode);
 }
 
 /*
@@ -48,7 +48,16 @@ static bool runtime_dir_present(const struct container_watch *w, uint32_t uid)
  */
 static int watch_sync_uid(struct container_watch *w, int slot)
 {
-	bool present = runtime_dir_present(w, w->uids[slot]);
+	struct stat st;
+	bool present = runtime_dir_present(w, w->uids[slot], &st);
+
+	/* a mount over the directory hides the socket bound in it */
+	if (w->bound[slot] && (!present || st.st_dev != w->dir_dev[slot] ||
+			       st.st_ino != w->dir_ino[slot])) {
+		w->bound[slot] = false;
+		if (w->ops.unbind)
+			w->ops.unbind(w->uids[slot], w->ops.user);
+	}
 
 	if (present && !w->bound[slot]) {
 		if (!w->ops.bind)
@@ -56,13 +65,9 @@ static int watch_sync_uid(struct container_watch *w, int slot)
 		if (w->ops.bind(w->uids[slot], w->ops.user) < 0)
 			return 0;
 		w->bound[slot] = true;
+		w->dir_dev[slot] = st.st_dev;
+		w->dir_ino[slot] = st.st_ino;
 		return 1;
-	}
-
-	if (!present && w->bound[slot]) {
-		w->bound[slot] = false;
-		if (w->ops.unbind)
-			w->ops.unbind(w->uids[slot], w->ops.user);
 	}
 
 	return 0;

@@ -14,6 +14,7 @@
 #include <limits.h>
 #include <stdbool.h>
 #include <stdint.h>
+#include <sys/types.h>
 
 #include "config.h"
 
@@ -24,7 +25,7 @@
  * struct container_watch_ops - What the tracking asks of its caller.
  * @bind: Lay down the listener for the UID. Returns 0 or a negative errno; a
  *        failure leaves the UID unbound, so the next observation retries it.
- * @unbind: The runtime directory went away, drop the listener.
+ * @unbind: The runtime directory went away or was replaced, drop the listener.
  * @user: Passed to both.
  */
 struct container_watch_ops {
@@ -37,6 +38,9 @@ struct container_watch {
 	char root[PATH_MAX];
 	uint32_t uids[LOTA_CONFIG_MAX_CONTAINER_LISTENERS];
 	bool bound[LOTA_CONFIG_MAX_CONTAINER_LISTENERS];
+	/* the runtime directory each listener was bound in */
+	dev_t dir_dev[LOTA_CONFIG_MAX_CONTAINER_LISTENERS];
+	ino_t dir_ino[LOTA_CONFIG_MAX_CONTAINER_LISTENERS];
 	int uid_count;
 	int fd; /* inotify on the root, -1 when unavailable */
 	int mnt_fd; /* /proc/self/mountinfo, -1 when unavailable */
@@ -118,8 +122,9 @@ int container_watch_mount_fd(const struct container_watch *w);
  * container_watch_process() - Act on what happened under the root.
  * @w: The tracking state.
  *
- * Binds each tracked UID that has a runtime directory and no listener,
- * and unbinds each one that has lost the directory.
+ * Binds each tracked UID that has a runtime directory and no listener, and
+ * unbinds each one that has lost the directory. One whose directory was
+ * replaced, by a mount over it among others, is unbound and bound again.
  * Call it when either descriptor above reports.
  *
  * Return: the number of UIDs bound by this call, or -EINVAL.

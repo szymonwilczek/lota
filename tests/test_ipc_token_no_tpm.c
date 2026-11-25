@@ -28,6 +28,7 @@
  */
 #include <errno.h>
 #include <fcntl.h>
+#include <limits.h>
 #include <poll.h>
 #include <stdbool.h>
 #include <stdio.h>
@@ -212,10 +213,9 @@ int dbus_process(struct dbus_context *ctx, uint64_t timeout_us)
 	return 0;
 }
 
-void dbus_emit_status_changed(struct dbus_context *ctx, uint32_t flags)
+void dbus_emit_status_changed(struct dbus_context *ctx)
 {
 	(void)ctx;
-	(void)flags;
 }
 
 void dbus_emit_attestation_result(struct dbus_context *ctx, bool success)
@@ -553,6 +553,34 @@ static void test_protect_pid_refusal_is_logged(void)
 	PASS();
 }
 
+/* no process has a pid above INT_MAX; a pid_t cast of one is not positive */
+static void test_protect_pid_past_int_max_is_refused(struct ipc_context *ctx)
+{
+	struct lota_ipc_pid_request req = { .pid = (uint32_t)INT_MAX + 1 };
+	struct lota_ipc_response resp;
+	uint8_t payload[LOTA_IPC_MAX_PAYLOAD];
+	int fd, ret;
+
+	TEST("PROTECT_PID of a pid past INT_MAX is a bad request");
+
+	fd = client_open();
+	if (fd < 0) {
+		FAIL("cannot connect");
+		return;
+	}
+	ret = send_request(fd, LOTA_IPC_CMD_PROTECT_PID, &req, sizeof(req));
+	if (ret >= 0)
+		ret = read_frame(ctx, fd, &resp, payload, sizeof(payload), 64);
+	close(fd);
+
+	if (ret < 0)
+		FAIL("no answer");
+	else if (resp.result != LOTA_IPC_ERR_BAD_REQUEST)
+		FAIL("the pid reached the policy checks");
+	else
+		PASS();
+}
+
 /* The refusal itself: a host with no TPM must never hand out a token */
 static void test_no_tpm_is_refused(void)
 {
@@ -840,6 +868,7 @@ int main(void)
 		test_protect_pid_refusal_names_itself();
 		test_protect_pid_refusal_is_logged();
 	}
+	test_protect_pid_past_int_max_is_refused(&ctx);
 
 	test_boot_evidence_without_tpm(&ctx);
 

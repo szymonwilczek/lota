@@ -3,8 +3,8 @@
  * LOTA runtime protected-PID digest - Unit Tests
  *
  * Covers the fold, which binds each protected PID together with its
- * kernel-anchored runtime image digest. Pins determinism, the documented
- * byte layout, sensitivity to PID set and per-PID image digest, and the
+ * registry digest. Pins determinism, the documented byte layout,
+ * sensitivity to PID set and per-PID registry digest, and the
  * canonical-order contract.
  *
  * Copyright (C) 2026 Szymon Wilczek
@@ -22,7 +22,7 @@
 #include "lota_runtime_protect_digest.h"
 
 /* independent reference fold mirroring the documented byte layout */
-static int reference(const uint32_t *pids, const uint8_t (*images)[32],
+static int reference(const uint32_t *pids, const uint8_t (*registry)[32],
 		     uint32_t count, uint8_t out[32])
 {
 	static const char domain[] = "lota-runtime-protect-pids:v1\0";
@@ -41,7 +41,7 @@ static int reference(const uint32_t *pids, const uint8_t (*images)[32],
 	for (uint32_t i = 0; i < count; i++) {
 		lota__write_le32(le, pids[i]);
 		if (EVP_DigestUpdate(ctx, le, 4) != 1 ||
-		    EVP_DigestUpdate(ctx, images[i], 32) != 1)
+		    EVP_DigestUpdate(ctx, registry[i], 32) != 1)
 			goto fail;
 	}
 	if (EVP_DigestFinal_ex(ctx, out, &len) != 1 || len != 32)
@@ -56,23 +56,23 @@ fail:
 int main(void)
 {
 	uint32_t pids[2] = { 1234, 5678 };
-	uint8_t images[2][32];
+	uint8_t registry[2][32];
 	uint8_t a[32], b[32], ref[32];
 
 	printf("Runtime protect digest tests:\n");
 
-	memset(images[0], 0xa1, 32);
-	memset(images[1], 0xb2, 32);
+	memset(registry[0], 0xa1, 32);
+	memset(registry[1], 0xb2, 32);
 
 	TEST("matches independent reference layout");
-	if (lota_compute_runtime_protect_digest(pids, images, 2, a) == 0 &&
-	    reference(pids, images, 2, ref) == 0 && memcmp(a, ref, 32) == 0)
+	if (lota_compute_runtime_protect_digest(pids, registry, 2, a) == 0 &&
+	    reference(pids, registry, 2, ref) == 0 && memcmp(a, ref, 32) == 0)
 		PASS();
 	else
 		FAIL("layout drift");
 
 	TEST("is deterministic");
-	if (lota_compute_runtime_protect_digest(pids, images, 2, b) == 0 &&
+	if (lota_compute_runtime_protect_digest(pids, registry, 2, b) == 0 &&
 	    memcmp(a, b, 32) == 0)
 		PASS();
 	else
@@ -80,24 +80,24 @@ int main(void)
 
 	TEST("PID change alters digest");
 	pids[1] = 5679;
-	if (lota_compute_runtime_protect_digest(pids, images, 2, b) == 0 &&
+	if (lota_compute_runtime_protect_digest(pids, registry, 2, b) == 0 &&
 	    memcmp(a, b, 32) != 0)
 		PASS();
 	else
 		FAIL("pid not bound");
 	pids[1] = 5678;
 
-	TEST("image digest change alters digest");
-	images[1][0] ^= 0xff;
-	if (lota_compute_runtime_protect_digest(pids, images, 2, b) == 0 &&
+	TEST("registry digest change alters digest");
+	registry[1][0] ^= 0xff;
+	if (lota_compute_runtime_protect_digest(pids, registry, 2, b) == 0 &&
 	    memcmp(a, b, 32) != 0)
 		PASS();
 	else
-		FAIL("image digest not bound");
-	images[1][0] ^= 0xff;
+		FAIL("registry digest not bound");
+	registry[1][0] ^= 0xff;
 
 	TEST("PID count change alters digest");
-	if (lota_compute_runtime_protect_digest(pids, images, 1, b) == 0 &&
+	if (lota_compute_runtime_protect_digest(pids, registry, 1, b) == 0 &&
 	    memcmp(a, b, 32) != 0)
 		PASS();
 	else
@@ -106,18 +106,18 @@ int main(void)
 	TEST("rejects unsorted PID list");
 	{
 		uint32_t bad[2] = { 5678, 1234 };
-		if (lota_compute_runtime_protect_digest(bad, images, 2, b) ==
+		if (lota_compute_runtime_protect_digest(bad, registry, 2, b) ==
 		    -EINVAL)
 			PASS();
 		else
 			FAIL("accepted unsorted");
 	}
 
-	TEST("rejects NULL image array with non-zero count");
+	TEST("rejects NULL registry array with non-zero count");
 	if (lota_compute_runtime_protect_digest(pids, NULL, 2, b) == -EINVAL)
 		PASS();
 	else
-		FAIL("accepted NULL images");
+		FAIL("accepted NULL registry digests");
 
 	TEST("empty set yields a defined digest");
 	if (lota_compute_runtime_protect_digest(NULL, NULL, 0, b) == 0 &&
@@ -130,7 +130,7 @@ int main(void)
 	{
 		/*
 		 * Locks the C and Go folds to the same bytes.
-		 * pids {1,2}, image digests of 0xAA*32 and 0xBB*32
+		 * pids {1,2}, registry digests of 0xAA*32 and 0xBB*32
 		 * Every token binds this value under its quote, and the Go
 		 * side exports the fold (server.ComputeRuntimeProtectDigest),
 		 * so relying party's test suite consumes it instead of re-deriving it.

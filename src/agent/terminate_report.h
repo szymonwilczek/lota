@@ -5,10 +5,41 @@
 #ifndef LOTA_AGENT_TERMINATE_REPORT_H
 #define LOTA_AGENT_TERMINATE_REPORT_H
 
+#include <errno.h>
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
 #include <stdio.h>
+
+#include "../../include/lota_ipc.h"
+
+/**
+ * terminate_result_errno() - The errno a TERMINATE_PROTECTED refusal maps to.
+ * @result: The result code of the response, not LOTA_IPC_OK.
+ *
+ * diagnostics.c words its message from the errno.
+ *
+ * Return: -EINVAL not protected, -EPERM a target the verb does not end,
+ * -ESRCH no such process, -EACCES not the caller's to end, -EIO the signal
+ * failed in the agent, -EPROTO any other code.
+ */
+static inline int terminate_result_errno(uint32_t result)
+{
+	switch (result) {
+	case LOTA_IPC_ERR_NOT_PROTECTED:
+		return -EINVAL;
+	case LOTA_IPC_ERR_TARGET_REFUSED:
+		return -EPERM;
+	case LOTA_IPC_ERR_BAD_REQUEST:
+		return -ESRCH;
+	case LOTA_IPC_ERR_ACCESS_DENIED:
+		return -EACCES;
+	case LOTA_IPC_ERR_INTERNAL:
+		return -EIO;
+	default:
+		return -EPROTO;
+	}
+}
 
 /**
  * terminate_others_protected() - Count the protected PIDs other than @target.

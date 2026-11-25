@@ -140,10 +140,21 @@ int bpf_loader_instance_stopped_ms(struct bpf_loader_ctx *ctx, uint32_t pid,
 	return 0;
 }
 
+/*
+ * The adoption pass runs between the owner read and the signal of
+ * TERMINATE_PROTECTED; a victim set here dies and is reaped in that window.
+ */
+static pid_t terminate_victim;
+
 int bpf_loader_adopt_instance_member(struct bpf_loader_ctx *ctx, uint32_t pid)
 {
 	(void)ctx;
 	(void)pid;
+	if (terminate_victim > 0) {
+		kill(terminate_victim, SIGKILL);
+		waitpid(terminate_victim, NULL, 0);
+		terminate_victim = 0;
+	}
 	return 0;
 }
 
@@ -195,10 +206,9 @@ int dbus_process(struct dbus_context *ctx, uint64_t timeout_us)
 	return 0;
 }
 
-void dbus_emit_status_changed(struct dbus_context *ctx, uint32_t flags)
+void dbus_emit_status_changed(struct dbus_context *ctx)
 {
 	(void)ctx;
-	(void)flags;
 }
 
 /*
@@ -725,6 +735,66 @@ static void subscriber_child(uint32_t mask, int ready_fd, uint32_t await_event)
 	_exit((notify.events & await_event) ? 0 : CHILD_ERR_NOT_NOTIFY);
 }
 
+#define CHILD_ERR_VIEW_DIFFERS 0x46
+
+/*
+ * A title bound to the test publisher: subscribe, wait for one push, then ask
+ * GET_STATUS on the same connection; both answers must carry the same word.
+ */
+static void title_view_child(int ready_fd)
+{
+	struct lota_ipc_subscribe_request sub = {
+		.event_mask = LOTA_IPC_EVENT_STATUS,
+	};
+	struct lota_ipc_set_profile set;
+	struct lota_ipc_response resp;
+	uint8_t payload[LOTA_IPC_MAX_PAYLOAD];
+	struct lota_ipc_notify notify;
+	struct lota_ipc_status st;
+	int fd;
+
+	fd = client_open();
+	if (fd < 0)
+		_exit(CHILD_ERR_CONNECT);
+
+	memset(&set, 0, sizeof(set));
+	memcpy(set.profile_id, test_profile_id, sizeof(set.profile_id));
+	if (send_request(fd, LOTA_IPC_CMD_SET_PROFILE, &set, sizeof(set)) < 0)
+		_exit(CHILD_ERR_SEND);
+	if (client_read_frame(fd, &resp, payload, sizeof(payload), 2000) < 0)
+		_exit(CHILD_ERR_NO_ANSWER);
+	if (resp.result != LOTA_IPC_OK)
+		_exit((int)resp.result);
+
+	if (send_request(fd, LOTA_IPC_CMD_SUBSCRIBE, &sub, sizeof(sub)) < 0)
+		_exit(CHILD_ERR_SEND);
+	if (client_read_frame(fd, &resp, payload, sizeof(payload), 2000) < 0)
+		_exit(CHILD_ERR_NO_ANSWER);
+	if (resp.result != LOTA_IPC_OK)
+		_exit((int)resp.result);
+
+	if (write(ready_fd, "s", 1) != 1)
+		_exit(CHILD_ERR_SEND);
+
+	if (client_read_frame(fd, &resp, payload, sizeof(payload), 2000) < 0)
+		_exit(CHILD_ERR_NO_NOTIFY);
+	if (resp.result != LOTA_IPC_NOTIFY || resp.payload_len < sizeof(notify))
+		_exit(CHILD_ERR_NOT_NOTIFY);
+	memcpy(&notify, payload, sizeof(notify));
+
+	if (send_request(fd, LOTA_IPC_CMD_GET_STATUS, NULL, 0) < 0)
+		_exit(CHILD_ERR_SEND);
+	if (client_read_frame(fd, &resp, payload, sizeof(payload), 2000) < 0)
+		_exit(CHILD_ERR_NO_ANSWER);
+	if (resp.result != LOTA_IPC_OK || resp.payload_len < sizeof(st))
+		_exit(CHILD_ERR_NO_ANSWER);
+	memcpy(&st, payload, sizeof(st));
+
+	if (notify.flags != st.flags || notify.valid_until != st.valid_until)
+		_exit(CHILD_ERR_VIEW_DIFFERS);
+	_exit(0);
+}
+
 /* Drive the daemon until the forked client is done, and report what it said */
 static int pump_until_exit(struct ipc_context *ctx, pid_t pid, int passes)
 {
@@ -824,6 +894,64 @@ static void test_outside_client_is_notified(struct ipc_context *ctx)
 	}
 	if (rc != 0) {
 		FAIL("the pushed frame is not the status event");
+		return;
+	}
+
+	PASS();
+}
+
+/*
+ * The host attests for another publisher; the title's publisher holds no
+ * verdict, so the push must not tell the title otherwise.
+ */
+static void test_title_push_carries_its_publisher_view(struct ipc_context *ctx)
+{
+	uint32_t saved_flags = ctx->status_flags;
+	uint64_t saved_valid = ctx->valid_until;
+	int ready[2];
+	pid_t pid;
+	int rc;
+
+	TEST("a title's push carries the word GET_STATUS gives it");
+
+	if (pipe(ready) < 0) {
+		FAIL("pipe");
+		return;
+	}
+
+	pid = fork();
+	if (pid < 0) {
+		FAIL("fork");
+		close(ready[0]);
+		close(ready[1]);
+		return;
+	}
+	if (pid == 0) {
+		close(ready[0]);
+		title_view_child(ready[1]);
+	}
+	close(ready[1]);
+
+	for (int i = 0; i < 256; i++) {
+		struct pollfd pfd = { .fd = ready[0], .events = POLLIN };
+
+		if (poll(&pfd, 1, 0) > 0)
+			break;
+		ipc_process(ctx, 10);
+	}
+	close(ready[0]);
+
+	ipc_update_status(ctx, ctx->status_flags | LOTA_STATUS_ATTESTED,
+			  (uint64_t)time(NULL) + 300);
+
+	rc = pump_until_exit(ctx, pid, 256);
+	ipc_update_status(ctx, saved_flags, saved_valid);
+	if (rc == CHILD_ERR_VIEW_DIFFERS) {
+		FAIL("the push carries the host verdict, not the publisher's");
+		return;
+	}
+	if (rc != 0) {
+		FAIL("the title did not get its push and its status");
 		return;
 	}
 
@@ -1026,6 +1154,138 @@ static void test_repeated_sync_announces_nothing(struct ipc_context *ctx)
 	PASS();
 }
 
+static pid_t protected_child(void)
+{
+	pid_t pid = fork();
+
+	if (pid == 0) {
+		for (;;)
+			pause();
+	}
+	if (pid < 0)
+		return -1;
+
+	g_agent.policy_protect_pids = calloc(1, sizeof(uint32_t));
+	if (!g_agent.policy_protect_pids) {
+		kill(pid, SIGKILL);
+		waitpid(pid, NULL, 0);
+		return -1;
+	}
+	g_agent.policy_protect_pids[0] = (uint32_t)pid;
+	g_agent.policy_protect_pid_count = 1;
+	return pid;
+}
+
+static void protected_forget(void)
+{
+	free(g_agent.policy_protect_pids);
+	g_agent.policy_protect_pids = NULL;
+	g_agent.policy_protect_pid_count = 0;
+}
+
+static int terminate_request(struct ipc_context *ctx, pid_t pid,
+			     uint32_t *result)
+{
+	struct lota_ipc_terminate_request req = {
+		.pid = (uint32_t)pid,
+		.signal = SIGTERM,
+	};
+	struct lota_ipc_response resp;
+	uint8_t payload[LOTA_IPC_MAX_PAYLOAD];
+	int fd, ret;
+
+	fd = client_open();
+	if (fd < 0)
+		return fd;
+
+	ret = send_request(fd, LOTA_IPC_CMD_TERMINATE_PROTECTED, &req,
+			   sizeof(req));
+	if (ret == 0)
+		ret = read_frame(ctx, fd, &resp, payload, sizeof(payload), 64);
+	close(fd);
+	if (ret == 0)
+		*result = resp.result;
+	return ret;
+}
+
+static void test_terminate_reaches_the_target(struct ipc_context *ctx)
+{
+	uint32_t result = 0;
+	int status = 0;
+	pid_t pid;
+
+	TEST("TERMINATE_PROTECTED ends a live protected process");
+
+	pid = protected_child();
+	if (pid < 0) {
+		FAIL("cannot fork a protected process");
+		return;
+	}
+
+	if (terminate_request(ctx, pid, &result) < 0) {
+		FAIL("terminate request");
+		kill(pid, SIGKILL);
+		waitpid(pid, NULL, 0);
+		goto out;
+	}
+	if (result != LOTA_IPC_OK) {
+		FAIL("a live protected process is refused");
+		kill(pid, SIGKILL);
+		waitpid(pid, NULL, 0);
+		goto out;
+	}
+	if (waitpid(pid, &status, 0) != pid || !WIFSIGNALED(status) ||
+	    WTERMSIG(status) != SIGTERM) {
+		FAIL("the process did not die of SIGTERM");
+		goto out;
+	}
+
+	PASS();
+out:
+	protected_forget();
+}
+
+/*
+ * A target reaped after the owner read leaves its number free for another
+ * process; the request must not reach anything by that number.
+ */
+static void test_terminate_target_reaped_mid_request(struct ipc_context *ctx)
+{
+	uint32_t result = 0;
+	pid_t pid;
+
+	TEST("a target reaped before the signal is answered as gone");
+
+	pid = protected_child();
+	if (pid < 0) {
+		FAIL("cannot fork a protected process");
+		return;
+	}
+	terminate_victim = pid;
+
+	if (terminate_request(ctx, pid, &result) < 0) {
+		FAIL("terminate request");
+		goto out;
+	}
+	if (terminate_victim != 0) {
+		FAIL("the target was not reaped inside the request");
+		goto out;
+	}
+	if (result != LOTA_IPC_ERR_BAD_REQUEST) {
+		FAIL("a reaped target is not answered as a missing process");
+		goto out;
+	}
+
+	PASS();
+out:
+	if (terminate_victim > 0) {
+		kill(terminate_victim, SIGKILL);
+		waitpid(terminate_victim, NULL, 0);
+		terminate_victim = 0;
+	}
+	protected_forget();
+}
+
 int main(void)
 {
 	struct ipc_context ctx;
@@ -1072,6 +1332,9 @@ int main(void)
 	test_repeated_sync_announces_nothing(&ctx);
 	test_session_notification_is_delivered(&ctx);
 	test_sync_after_notification_is_answered(&ctx);
+	test_title_push_carries_its_publisher_view(&ctx);
+	test_terminate_reaches_the_target(&ctx);
+	test_terminate_target_reaped_mid_request(&ctx);
 
 	ipc_cleanup(&ctx);
 	profile_forget(profiles);

@@ -103,7 +103,7 @@ static inline const char *terminate_decision_reason(enum terminate_decision d)
 	case TERMINATE_DENY_TARGET:
 		return "not a process this verb can end";
 	case TERMINATE_DENY_NOT_PROTECTED:
-		return "not a protected process (ordinary kill reaches it)";
+		return "not a protected process";
 	case TERMINATE_DENY_SIGNAL:
 		return "only SIGTERM and SIGKILL are relayed";
 	case TERMINATE_DENY_OWNER:

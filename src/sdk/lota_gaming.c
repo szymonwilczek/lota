@@ -878,11 +878,11 @@ int lota_get_token(struct lota_client *client, const uint8_t *nonce,
 	    ipc_token_hdr.sig_size > LOTA_IPC_TOKEN_MAX_SIG)
 		return LOTA_ERR_PROTOCOL;
 
-	size_t image_list_size = (size_t)token->protect_pid_count *
-				 LOTA_IPC_TOKEN_IMAGE_DIGEST_SIZE;
+	size_t registry_list_size = (size_t)token->protect_pid_count *
+				    LOTA_IPC_TOKEN_REGISTRY_DIGEST_SIZE;
 
 	size_t expected_len = LOTA_IPC_TOKEN_HEADER_SIZE +
-			      ipc_token_hdr.pid_list_size + image_list_size +
+			      ipc_token_hdr.pid_list_size + registry_list_size +
 			      ipc_token_hdr.attest_size +
 			      ipc_token_hdr.sig_size;
 	if (payload_len < expected_len)
@@ -906,16 +906,16 @@ int lota_get_token(struct lota_client *client, const uint8_t *nonce,
 		}
 	}
 
-	if (image_list_size > 0) {
-		token->protected_image_digests =
+	if (registry_list_size > 0) {
+		token->protected_registry_digests =
 			calloc(token->protect_pid_count,
-			       sizeof(*token->protected_image_digests));
-		if (!token->protected_image_digests)
+			       sizeof(*token->protected_registry_digests));
+		if (!token->protected_registry_digests)
 			goto oom;
 
-		memcpy(token->protected_image_digests, data_ptr,
-		       image_list_size);
-		data_ptr += image_list_size;
+		memcpy(token->protected_registry_digests, data_ptr,
+		       registry_list_size);
+		data_ptr += registry_list_size;
 	}
 
 	if (ipc_token_hdr.attest_size > 0) {
@@ -999,8 +999,8 @@ void lota_token_free(struct lota_token *token)
 	token->protected_pids = NULL;
 	token->protect_pid_count = 0;
 
-	free(token->protected_image_digests);
-	token->protected_image_digests = NULL;
+	free(token->protected_registry_digests);
+	token->protected_registry_digests = NULL;
 	token->runtime_protect_version = 0;
 }
 
@@ -1018,13 +1018,13 @@ size_t lota_token_serialized_size(const struct lota_token *token)
 	if (token->protect_pid_count > LOTA_TOKEN_MAX_PROTECT_PIDS)
 		return 0;
 
-	if (token->protect_pid_count > 0 && !token->protected_image_digests)
+	if (token->protect_pid_count > 0 && !token->protected_registry_digests)
 		return 0;
 
 	total = LOTA_TOKEN_HEADER_SIZE +
 		(size_t)token->protect_pid_count * sizeof(uint32_t) +
 		(size_t)token->protect_pid_count *
-			LOTA_TOKEN_IMAGE_DIGEST_SIZE +
+			LOTA_TOKEN_REGISTRY_DIGEST_SIZE +
 		token->attest_size + token->signature_len;
 
 	/* wire.total_size is a uint16_t */
@@ -1093,11 +1093,12 @@ int lota_token_serialize(const struct lota_token *token, uint8_t *buf,
 		}
 	}
 
-	if (token->protect_pid_count > 0 && token->protected_image_digests) {
-		size_t image_bytes = (size_t)token->protect_pid_count *
-				     LOTA_TOKEN_IMAGE_DIGEST_SIZE;
-		memcpy(buf + off, token->protected_image_digests, image_bytes);
-		off += image_bytes;
+	if (token->protect_pid_count > 0 && token->protected_registry_digests) {
+		size_t registry_bytes = (size_t)token->protect_pid_count *
+					LOTA_TOKEN_REGISTRY_DIGEST_SIZE;
+		memcpy(buf + off, token->protected_registry_digests,
+		       registry_bytes);
+		off += registry_bytes;
 	}
 
 	if (token->attest_size > 0 && token->attest_data) {
@@ -1504,8 +1505,8 @@ static int registry_fetch(struct lota_client *client, uint32_t pid,
 			reg->flags = hdr.flags;
 			reg->count = hdr.total;
 			reg->actor_count = hdr.actor_total;
-			memcpy(reg->image_digest, hdr.image_digest,
-			       sizeof(reg->image_digest));
+			memcpy(reg->registry_digest, hdr.registry_digest,
+			       sizeof(reg->registry_digest));
 		} else if (hdr.round != reg->round || hdr.total != reg->count ||
 			   hdr.actor_total != reg->actor_count) {
 			lota_registry_free(reg);

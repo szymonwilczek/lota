@@ -312,7 +312,7 @@ int forge_token_sha256(EVP_PKEY *key, uint64_t valid_until, uint32_t flags,
 }
 
 /*
- * Same, but with one protected process and its image digest,
+ * Same, but with one protected process and its registry digest,
  * so the relying-party side has a v2 runtime measurement to recompute.
  */
 int forge_token_protected(EVP_PKEY *key, uint64_t valid_until, uint32_t flags,
@@ -325,7 +325,7 @@ int forge_token_protected(EVP_PKEY *key, uint64_t valid_until, uint32_t flags,
 	uint8_t pcr_digest[32];
 	uint32_t pcr_mask = 0x4001;
 	uint32_t pids[1] = { 4242 };
-	uint8_t image_digests[1][32];
+	uint8_t registry_digests[1][32];
 	struct lota_token token;
 	size_t attest_len = 0;
 	size_t sig_len = 0;
@@ -333,11 +333,11 @@ int forge_token_protected(EVP_PKEY *key, uint64_t valid_until, uint32_t flags,
 	uint8_t *sig;
 	int ret;
 
-	memset(image_digests[0], 0x5A, sizeof(image_digests[0]));
+	memset(registry_digests[0], 0x5A, sizeof(registry_digests[0]));
 	memset(pcr_digest, 0xDD, sizeof(pcr_digest));
 
 	if (lota_compute_runtime_protect_digest(
-		    pids, (const uint8_t (*)[32])image_digests, 1,
+		    pids, (const uint8_t (*)[32])registry_digests, 1,
 		    runtime_digest) != 0)
 		return LOTA_ERR_INVALID_ARG;
 	if (forge_quote_nonce(valid_until, flags, pcr_mask, nonce,
@@ -369,7 +369,7 @@ int forge_token_protected(EVP_PKEY *key, uint64_t valid_until, uint32_t flags,
 	token.runtime_protect_epoch = 0;
 	token.protect_pid_count = 1;
 	token.protected_pids = pids;
-	token.protected_image_digests = image_digests;
+	token.protected_registry_digests = registry_digests;
 	token.attest_data = attest;
 	token.attest_size = attest_len;
 	token.signature = sig;

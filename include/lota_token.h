@@ -35,16 +35,16 @@ extern "C" {
  *   136     2     pid_list_size  (bytes, must be protect_pid_count * 4)
  *   138     2     attest_size    (TPMS_ATTEST blob size)
  *   140     2     sig_size       (TPM signature size)
- *   142     2     runtime_protect_version (1 = PID set + image digests)
+ *   142     2     runtime_protect_version (1 = PID set + registry digests)
  *   144     8     stopped_ms     (time the caller's instance stood stopped)
  *   ---     ---   --------------------------------
  *   152     var   protected_pids[protect_pid_count] (little-endian uint32)
- *   152+P   var   protected_image_digests[protect_pid_count][32]
+ *   152+P   var   protected_registry_digests[protect_pid_count][32]
  *   152+P+I var   attest_data[attest_size]
  *   ...     var   signature[sig_size]
  *
- * runtime_protect_digest covers each PID and its image digest, so the quote
- * attests what each protected process runs. The carried image digests are
+ * runtime_protect_digest covers each PID and its registry digest, so the quote
+ * attests what each protected process runs. The carried registry digests are
  * authenticated only by recomputing it and comparing with the quoted value.
  */
 #define LOTA_TOKEN_MAGIC 0x4B544F4C /* "LOTK" in memory (little-endian) */
@@ -56,18 +56,18 @@ extern "C" {
  */
 #define LOTA_TOKEN_MAX_PROTECT_PIDS 180
 #define LOTA_TOKEN_MAX_PID_LIST_SIZE (LOTA_TOKEN_MAX_PROTECT_PIDS * 4)
-#define LOTA_TOKEN_IMAGE_DIGEST_SIZE 32
+#define LOTA_TOKEN_REGISTRY_DIGEST_SIZE 32
 
 /* runtime_protect_version values */
-#define LOTA_RUNTIME_PROTECT_V1 1 /* PID set + per-PID image digest */
+#define LOTA_RUNTIME_PROTECT_V1 1 /* PID set + per-PID registry digest */
 
-#define LOTA_TOKEN_MAX_IMAGE_LIST_SIZE \
-	(LOTA_TOKEN_MAX_PROTECT_PIDS * LOTA_TOKEN_IMAGE_DIGEST_SIZE)
+#define LOTA_TOKEN_MAX_REGISTRY_LIST_SIZE \
+	(LOTA_TOKEN_MAX_PROTECT_PIDS * LOTA_TOKEN_REGISTRY_DIGEST_SIZE)
 
-/* Full PID and image digest lists, largest quote and signature. */
+/* Full PID and registry digest lists, largest quote and signature. */
 #define LOTA_TOKEN_MAX_SIZE                                      \
 	(LOTA_TOKEN_HEADER_SIZE + LOTA_TOKEN_MAX_PID_LIST_SIZE + \
-	 LOTA_TOKEN_MAX_IMAGE_LIST_SIZE + 1024 + 512)
+	 LOTA_TOKEN_MAX_REGISTRY_LIST_SIZE + 1024 + 512)
 
 /* Fixed part of the layout above. */
 struct lota_token_wire {
@@ -90,7 +90,7 @@ struct lota_token_wire {
 	uint16_t runtime_protect_version;
 	uint64_t stopped_ms;
 	/*
-	 * followed by protected_pids[], protected_image_digests[],
+	 * followed by protected_pids[], protected_registry_digests[],
 	 * attest_data[] and signature[]
 	 */
 } __attribute__((packed));

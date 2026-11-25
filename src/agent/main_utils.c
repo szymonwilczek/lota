@@ -513,8 +513,8 @@ static int add_listener_for_uid(uint32_t uid, void *user)
 }
 
 /*
- * The socket file goes with the runtime directory logind removed,
- * so this releases the slot rather than the file.
+ * The socket file goes with the runtime directory logind removed, or under
+ * a mount over it, so this releases the slot rather than the file.
  */
 static void drop_listener_for_uid(uint32_t uid, void *user)
 {
@@ -527,9 +527,7 @@ static void drop_listener_for_uid(uint32_t uid, void *user)
 		return;
 
 	if (ipc_remove_listener(ctx, path) == 0)
-		lota_info(
-			"Container listener for uid %u released, session over",
-			uid);
+		lota_info("Container listener for uid %u released", uid);
 }
 
 void setup_container_listener(struct ipc_context *ctx,

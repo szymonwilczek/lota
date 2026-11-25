@@ -75,13 +75,16 @@ struct lota_server_claims {
 
 /**
  * lota_server_verify_token() - Verify a serialized attestation token.
+ * @token_data: token from lota_token_serialize().
+ * @token_len: size of @token_data.
  * @aik_pub_der: AIK public key in DER (PKIX/SPKI) format.
+ * @aik_pub_len: size of @aik_pub_der.
  * @expected_nonce: 32-byte nonce the server issued for this attempt.
  * @claims: zeroed unless an argument is invalid, filled once the signature,
  *          extraData and nonce check out, so LOTA_SERVER_ERR_FUTURE and
  *          LOTA_SERVER_ERR_EXPIRED still report valid_until.
  *
- * Recomputes the runtime digest from the PID list and image digests, then
+ * Recomputes the runtime digest from the PID list and registry digests, then
  * checks the TPM signature over attest_data, the quoted PCR mask against the
  * header, and extraData against lota_compute_token_quote_nonce() over the
  * header, so every field the caller acts on is inside the signature. Then the
@@ -95,7 +98,7 @@ struct lota_server_claims {
  * LOTA_SERVER_ERR_FUTURE if valid_until is too far ahead,
  * LOTA_SERVER_ERR_NONCE_FAIL if the mask, extraData or nonce differ,
  * LOTA_SERVER_ERR_RUNTIME_IMAGE if the digest recomputed from the PID list and
- * image digests differs from the signed one,
+ * registry digests differs from the signed one,
  * another negative code otherwise.
  */
 int lota_server_verify_token(const uint8_t *token_data, size_t token_len,
@@ -105,6 +108,9 @@ int lota_server_verify_token(const uint8_t *token_data, size_t token_len,
 
 /**
  * lota_server_parse_token() - Extract claims without verifying the signature.
+ * @token_data: token from lota_token_serialize().
+ * @token_len: size of @token_data.
+ * @claims: receives the claims.
  *
  * Claims from this function are untrusted.
  *
@@ -115,6 +121,7 @@ int lota_server_parse_token(const uint8_t *token_data, size_t token_len,
 
 /**
  * lota_server_strerror() - Word an error code.
+ * @error: LOTA_SERVER_* code.
  *
  * Return: a static string.
  */
@@ -174,10 +181,12 @@ struct lota_server_registry_actor {
  * lota_server_registry_digest() - Hash a registry the way the agent does.
  * @flags: the registry's LOTA_REGISTRY_* flags.
  * @mods: objects of one process, in the order listed.
+ * @count: entries in @mods.
  * @actors: actors of the process, in the order listed.
+ * @actor_count: entries in @actors.
  * @out: receives the digest.
  *
- * @out equals the token's protected_image_digests entry for the process when
+ * @out equals the token's protected_registry_digests entry for the process when
  * the registry is the one that round measured. Anything else, reordered, short
  * of an entry or with one rewritten, is not the list behind the token.
  *
@@ -195,6 +204,7 @@ int lota_server_registry_digest(uint32_t flags,
  * @claims: from lota_server_verify_token(); lota_server_parse_token() claims
  *          prove nothing.
  * @evidence: bytes lota_get_boot_evidence() returned with the token.
+ * @len: size of @evidence.
  * @secure_boot: 1 when the firmware measured Secure Boot on before it handed
  *               over to the boot loader, 0 otherwise.
  *

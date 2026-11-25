@@ -66,12 +66,13 @@ func TestConstantsMatchTokenHeader(t *testing.T) {
 	}
 }
 
-// TokenMaxSize must fit a full token, 32-byte image digest per protected PID
+// TokenMaxSize must fit a full token, 32-byte registry digest per protected PID
 func TestTokenMaxSizeCoversAFullV2Token(t *testing.T) {
 	hdr := headerConstants(t)
-	digest, ok := hdr["LOTA_TOKEN_IMAGE_DIGEST_SIZE"]
+	digest, ok := hdr["LOTA_TOKEN_REGISTRY_DIGEST_SIZE"]
 	if !ok {
-		t.Fatal("LOTA_TOKEN_IMAGE_DIGEST_SIZE not found in include/lota_token.h")
+		t.Fatal("LOTA_TOKEN_REGISTRY_DIGEST_SIZE not found in " +
+			"include/lota_token.h")
 	}
 	worst := uint64(TokenHeaderSize) +
 		uint64(MaxProtectPIDs)*(4+digest) +

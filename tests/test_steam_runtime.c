@@ -638,6 +638,35 @@ static void test_ensure_dir_not_a_dir(void)
 	PASS();
 }
 
+static void test_ensure_dir_symlink_leaves_target(void)
+{
+	char target[PATH_MAX];
+	char link[PATH_MAX];
+	struct stat st;
+	int ret;
+
+	TEST("ensure_socket_dir: symlink -> -ENOTDIR, target mode kept");
+
+	snprintf(target, sizeof(target), "%s/symlink_target", tmpdir);
+	snprintf(link, sizeof(link), "%s/symlink_dir", tmpdir);
+	if (mkdir(target, 0700) < 0 || chmod(target, 0700) < 0 ||
+	    symlink(target, link) < 0) {
+		FAIL("cannot set up the symlink");
+		return;
+	}
+
+	ret = steam_runtime_ensure_socket_dir(link, (gid_t)-1);
+	if (ret != -ENOTDIR) {
+		FAIL("expected -ENOTDIR");
+		return;
+	}
+	if (stat(target, &st) != 0 || (st.st_mode & 0777) != 0700) {
+		FAIL("the symlink target changed mode");
+		return;
+	}
+	PASS();
+}
+
 static void test_ensure_dir_null(void)
 {
 	TEST("ensure_socket_dir: NULL -> -EINVAL");
@@ -870,6 +899,7 @@ int main(void)
 	test_ensure_dir_mode_under_restrictive_umask();
 	test_ensure_dir_exists();
 	test_ensure_dir_not_a_dir();
+	test_ensure_dir_symlink_leaves_target();
 	test_ensure_dir_null();
 	test_ensure_dir_empty();
 	test_ensure_dir_own_gid();

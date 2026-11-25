@@ -196,15 +196,15 @@ struct lota_token {
 	/* SHA-256 over startup enforcement policy, allowlist included */
 	uint8_t policy_digest[32];
 
-	/* SHA-256 over the protected PIDs and their image digests */
+	/* SHA-256 over the protected PIDs and their registry digests */
 	uint8_t runtime_protect_digest[32];
 	uint64_t runtime_protect_epoch; /* Monotonic PID-set mutation id */
-	uint16_t runtime_protect_version; /* 1 = PID set + image digests */
+	uint16_t runtime_protect_version; /* 1 = PID set + registry digests */
 	uint32_t protect_pid_count;
 	uint32_t *protected_pids; /* heap-allocated canonical list */
 
-	/* per-PID runtime image digest, parallel to protected_pids */
-	uint8_t (*protected_image_digests)[32];
+	/* per-PID registry digest, parallel to protected_pids */
+	uint8_t (*protected_registry_digests)[32];
 
 	uint8_t *attest_data; /* TPMS_ATTEST blob (heap allocated) */
 	size_t attest_size; /* Size of attest_data */
@@ -260,6 +260,8 @@ struct lota_client *lota_connect(void);
 /**
  * lota_connect_opts() - lota_connect() with custom options.
  * @opts: socket path, timeout and publisher; NULL for the defaults.
+ *
+ * Return: as for lota_connect().
  */
 struct lota_client *lota_connect_opts(const struct lota_connect_opts *opts);
 
@@ -287,6 +289,7 @@ void lota_disconnect(struct lota_client *client);
 
 /**
  * lota_get_fd() - Get the underlying socket file descriptor.
+ * @client: connection from lota_connect().
  *
  * Return: the descriptor, -1 without a client.
  */
@@ -294,6 +297,7 @@ int lota_get_fd(struct lota_client *client);
 
 /**
  * lota_set_request_timeout() - Set the deadline for a request's answer.
+ * @client: connection from lota_connect().
  * @timeout_ms: milliseconds a request may wait for its answer, above 0.
  *
  * The connect timeout bounds reaching the local socket. An answer can take
@@ -307,6 +311,7 @@ int lota_set_request_timeout(struct lota_client *client, int timeout_ms);
 
 /**
  * lota_ping() - Check that the agent is responsive.
+ * @client: connection from lota_connect().
  * @uptime_sec: receives the agent's uptime; may be NULL.
  *
  * Return: LOTA_OK, or a negative LOTA_ERR_*.
@@ -315,6 +320,7 @@ int lota_ping(struct lota_client *client, uint64_t *uptime_sec);
 
 /**
  * lota_protect_self() - Register the calling process as protected.
+ * @client: connection from lota_connect().
  *
  * The agent checks that the connection's SO_PEERCRED PID is the target and that
  * its start time still matches, so a recycled PID cannot use a prior
@@ -337,6 +343,8 @@ int lota_protect_self(struct lota_client *client);
 
 /**
  * lota_get_status() - Get the current attestation status.
+ * @client: connection from lota_connect().
+ * @status: receives the status.
  *
  * Return: LOTA_OK, or a negative LOTA_ERR_*.
  */
@@ -344,6 +352,7 @@ int lota_get_status(struct lota_client *client, struct lota_status *status);
 
 /**
  * lota_is_attested() - Check LOTA_FLAG_ATTESTED through lota_get_status().
+ * @client: connection from lota_connect().
  *
  * Return: 1 if attested, 0 otherwise or on error.
  */
@@ -351,6 +360,7 @@ int lota_is_attested(struct lota_client *client);
 
 /**
  * lota_get_token() - Get an attestation token for server verification.
+ * @client: connection from lota_connect().
  * @nonce: 32-byte challenge from the server; what stops the server accepting a
  *         replayed token. NULL for none.
  * @token: receives the token; release it with lota_token_free().
@@ -370,6 +380,7 @@ void lota_token_free(struct lota_token *token);
 
 /**
  * lota_token_serialized_size() - Calculate the serialized size of a token.
+ * @token: token from lota_get_token().
  *
  * Return: bytes needed, 0 if the token is invalid.
  */
@@ -377,6 +388,9 @@ size_t lota_token_serialized_size(const struct lota_token *token);
 
 /**
  * lota_token_serialize() - Serialize a token to its wire format.
+ * @token: token from lota_get_token().
+ * @buf: receives the wire bytes.
+ * @buflen: size of @buf.
  * @written: receives the bytes written; may be NULL.
  *
  * The server verifies the result with lota_server_verify_token().
@@ -389,7 +403,9 @@ int lota_token_serialize(const struct lota_token *token, uint8_t *buf,
 
 /**
  * lota_get_boot_evidence() - Fetch the evidence behind a token's boot PCRs.
+ * @client: connection from lota_connect().
  * @buf: LOTA_BOOT_EVIDENCE_MAX_SIZE (lota_token.h) holds any.
+ * @buflen: size of @buf.
  * @written: receives the bytes written; may be NULL.
  *
  * The values of the PCRs a token quotes and the PCR 7 events behind them, in
@@ -416,7 +432,10 @@ typedef void (*lota_status_callback_fn)(const struct lota_status *status,
 
 /**
  * lota_subscribe() - Subscribe to status change notifications.
+ * @client: connection from lota_connect().
  * @event_mask: LOTA_EVENT_* bitmask.
+ * @callback: receives each notification.
+ * @user_data: passed to @callback.
  *
  * @callback runs from lota_poll_events() and from other SDK calls that read a
  * notification. @event_mask is narrowed to the events the agent publishes to
@@ -432,6 +451,7 @@ int lota_subscribe(struct lota_client *client, uint32_t event_mask,
 
 /**
  * lota_unsubscribe() - Stop notifications on this connection.
+ * @client: connection from lota_connect().
  *
  * Return: LOTA_OK, or a negative LOTA_ERR_*.
  */
@@ -439,6 +459,7 @@ int lota_unsubscribe(struct lota_client *client);
 
 /**
  * lota_poll_events() - Dispatch pending notifications to the callback.
+ * @client: connection from lota_connect().
  * @timeout_ms: maximum wait; 0 does not block, -1 blocks indefinitely.
  *
  * Return: notifications dispatched, or a negative LOTA_ERR_*.
@@ -454,7 +475,7 @@ int lota_poll_events(struct lota_client *client, int timeout_ms);
 #define LOTA_REGISTRY_ROAD_VERITY 1 /* fs-verity measurement */
 #define LOTA_REGISTRY_ROAD_CONTENT 2 /* contents hashed while running */
 
-/* image_digest is the token's entry for the process */
+/* registry_digest is the token's entry for the process */
 #define LOTA_REGISTRY_MEASURED (1U << 0)
 /* an executable mapping went unrecorded; the list may miss an object */
 #define LOTA_REGISTRY_HISTORY_LOST (1U << 1)
@@ -489,7 +510,7 @@ int lota_poll_events(struct lota_client *client, int timeout_ms);
 
 /*
  * One code object a protected process mapped executable.
- * The token's image digest binds every field.
+ * The token's registry digest binds every field.
  */
 struct lota_registry_object {
 	uint64_t size;
@@ -518,7 +539,7 @@ struct lota_registry_object {
  * process: from outside, through a unix socket a process of the instance
  * owns, or from inside, by a ptrace access or a signal. Or one process of
  * the instance that made its own anonymous memory executable.
- * The token's image digest binds every field.
+ * The token's registry digest binds every field.
  */
 struct lota_registry_actor {
 	uint64_t count; /* times it did so */
@@ -541,7 +562,7 @@ struct lota_registry {
 	uint64_t round; /* measurement round the list comes from */
 	uint32_t pid;
 	uint32_t flags; /* LOTA_REGISTRY_* */
-	uint8_t image_digest[32];
+	uint8_t registry_digest[32];
 	uint32_t count;
 	struct lota_registry_object *objects;
 	uint32_t actor_count;
@@ -550,13 +571,14 @@ struct lota_registry {
 
 /**
  * lota_get_registry() - Fetch what the last token round found in a process.
+ * @client: connection from lota_connect().
  * @pid: a protected process the caller owns, any one for root.
  * @out: receives a registry to release with lota_registry_free().
  *
  * Objects the agent could not measure are listed too. The LOTA_REGISTRY_* flags
  * say what the list may miss.
- * The token binds the list: with LOTA_REGISTRY_MEASURED set, image_digest is
- * the token's protected_image_digests entry for @pid, and
+ * The token binds the list: with LOTA_REGISTRY_MEASURED set, registry_digest is
+ * the token's protected_registry_digests entry for @pid, and
  * lota_server_registry_digest() over the objects and actors reproduces it.
  * A relying party checks both before trusting the list.
  *
@@ -575,6 +597,7 @@ void lota_registry_free(struct lota_registry *reg);
 
 /**
  * lota_strerror() - Describe a LOTA_ERR_* code.
+ * @error: LOTA_ERR_* code.
  *
  * Return: a static string.
  */
@@ -597,6 +620,8 @@ const char *lota_sdk_version(void);
 /**
  * lota_flags_to_string() - Write flags as "ATTESTED,TPM_OK,BPF_LOADED".
  * @flags: LOTA_FLAG_* bitmask.
+ * @buf: receives the string.
+ * @buflen: size of @buf.
  *
  * Return: bytes written without the terminator, or a negative LOTA_ERR_*.
  */

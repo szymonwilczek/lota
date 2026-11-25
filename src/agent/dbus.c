@@ -200,7 +200,7 @@ static int method_get_token(sd_bus_message *msg, void *userdata,
 	}
 
 	(void)error;
-	return sd_bus_reply_method_return(msg, "u", ctx->ipc->status_flags);
+	return sd_bus_reply_method_return(msg, "u", dbus_status_word(ctx->ipc));
 }
 
 static const sd_bus_vtable agent_vtable[] = {
@@ -225,7 +225,8 @@ static const sd_bus_vtable agent_vtable[] = {
 		      SD_BUS_VTABLE_UNPRIVILEGED),
 	SD_BUS_METHOD("GetStatus", "", "usttuu", method_get_status,
 		      SD_BUS_VTABLE_UNPRIVILEGED),
-	SD_BUS_METHOD("GetToken", "", "u", method_get_token, 0),
+	SD_BUS_METHOD("GetToken", "", "u", method_get_token,
+		      SD_BUS_VTABLE_UNPRIVILEGED),
 
 	SD_BUS_SIGNAL("StatusChanged", "u", 0),
 	SD_BUS_SIGNAL("AttestationResult", "b", 0),
@@ -332,7 +333,7 @@ static void emit_flush(struct dbus_context *ctx, const char *what, int ret)
 			  strerror(-ret));
 }
 
-void dbus_emit_status_changed(struct dbus_context *ctx, uint32_t flags)
+void dbus_emit_status_changed(struct dbus_context *ctx)
 {
 	if (!ctx || !ctx->bus)
 		return;
@@ -340,7 +341,7 @@ void dbus_emit_status_changed(struct dbus_context *ctx, uint32_t flags)
 	emit_flush(ctx, "StatusChanged",
 		   sd_bus_emit_signal(ctx->bus, LOTA_DBUS_OBJECT_PATH,
 				      LOTA_DBUS_INTERFACE, "StatusChanged", "u",
-				      flags));
+				      dbus_status_word(ctx->ipc)));
 
 	emit_flush(ctx, "StatusFlags properties",
 		   sd_bus_emit_properties_changed(

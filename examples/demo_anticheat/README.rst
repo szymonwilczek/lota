@@ -337,7 +337,7 @@ carries ``LOTA_FLAG_IMAGE_FULLY_MEASURED`` clear -- which leaves the decision
 with the publisher who has to make it.
 
 On the backend side, ``lota_server_verify_token()`` recomputes the runtime
-measurement from the token's own protected-PID list and image digests and
+measurement from the token's own protected-PID list and registry digests and
 compares it against the value inside the TPM signature. A mismatch is
 ``LOTA_SERVER_ERR_RUNTIME_IMAGE`` -- its own code, distinct from the two nonce
 checks, because it is the signal that a protected process's code did not

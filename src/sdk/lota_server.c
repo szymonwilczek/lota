@@ -368,12 +368,12 @@ static int parse_wire_header(const uint8_t *data, size_t len,
 	    (uint16_t)(hdr->protect_pid_count * sizeof(uint32_t)))
 		return LOTA_SERVER_ERR_BAD_TOKEN;
 
-	/* the image-digest block follows the PID list */
-	size_t image_list_size =
-		(size_t)hdr->protect_pid_count * LOTA_TOKEN_IMAGE_DIGEST_SIZE;
+	/* the registry-digest block follows the PID list */
+	size_t registry_list_size = (size_t)hdr->protect_pid_count *
+				    LOTA_TOKEN_REGISTRY_DIGEST_SIZE;
 
 	size_t expected = (size_t)LOTA_TOKEN_HEADER_SIZE + hdr->pid_list_size +
-			  image_list_size + hdr->attest_size + hdr->sig_size;
+			  registry_list_size + hdr->attest_size + hdr->sig_size;
 	if (expected > (size_t)hdr->total_size)
 		return LOTA_SERVER_ERR_BAD_TOKEN;
 	if (hdr->attest_size > 1024 || hdr->sig_size > 512)
@@ -402,12 +402,12 @@ int lota_server_verify_token(const uint8_t *token_data, size_t token_len,
 		return ret;
 
 	const uint8_t *pid_list_bytes = token_data + LOTA_TOKEN_HEADER_SIZE;
-	size_t image_list_size =
-		(size_t)hdr.protect_pid_count * LOTA_TOKEN_IMAGE_DIGEST_SIZE;
-	const uint8_t (*image_digests)[32] =
+	size_t registry_list_size =
+		(size_t)hdr.protect_pid_count * LOTA_TOKEN_REGISTRY_DIGEST_SIZE;
+	const uint8_t (*registry_digests)[32] =
 		(const uint8_t (*)[32])(pid_list_bytes + hdr.pid_list_size);
 	const uint8_t *attest_data =
-		pid_list_bytes + hdr.pid_list_size + image_list_size;
+		pid_list_bytes + hdr.pid_list_size + registry_list_size;
 	const uint8_t *signature = attest_data + hdr.attest_size;
 	uint8_t runtime_protect_digest[32];
 	uint32_t *pid_list = NULL;
@@ -438,7 +438,7 @@ int lota_server_verify_token(const uint8_t *token_data, size_t token_len,
 	}
 
 	ret = lota_compute_runtime_protect_digest(
-		pid_list, pid_count ? image_digests : NULL, pid_count,
+		pid_list, pid_count ? registry_digests : NULL, pid_count,
 		runtime_protect_digest);
 	if (ret != 0) {
 		if (pid_list) {
@@ -580,11 +580,11 @@ int lota_server_parse_token(const uint8_t *token_data, size_t token_len,
 	claims->stopped_ms = hdr.stopped_ms;
 
 	if (hdr.attest_size > 0) {
-		size_t image_list_size = (size_t)hdr.protect_pid_count *
-					 LOTA_TOKEN_IMAGE_DIGEST_SIZE;
+		size_t registry_list_size = (size_t)hdr.protect_pid_count *
+					    LOTA_TOKEN_REGISTRY_DIGEST_SIZE;
 		const uint8_t *attest_data =
 			token_data + LOTA_TOKEN_HEADER_SIZE +
-			hdr.pid_list_size + image_list_size;
+			hdr.pid_list_size + registry_list_size;
 		const uint8_t *pcr_digest = NULL;
 		size_t pcr_digest_len = 0;
 		size_t expected_pcr_digest_len =

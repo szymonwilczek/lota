@@ -5,7 +5,7 @@
  * lota_registry_digest.h), so the quote attests what each process runs:
  *
  *   SHA256("lota-runtime-protect-pids:v1\0" || count_LE ||
- *          pid0_LE || image0[32] || pid1_LE || image1[32] || ...)
+ *          pid0_LE || reg0[32] || pid1_LE || reg1[32] || ...)
  */
 
 #ifndef LOTA_RUNTIME_PROTECT_DIGEST_H
@@ -30,6 +30,7 @@ static inline void lota__runtime_digest_bzero(void *ptr, size_t len)
 /**
  * lota_validate_canonical_protect_pid_list() - Check the order of a PID list.
  * @pids: the list, may be NULL if @pid_count is 0.
+ * @pid_count: entries in @pids.
  *
  * Return: 0 if strictly increasing, -EINVAL otherwise.
  */
@@ -51,8 +52,10 @@ static inline int lota_validate_canonical_protect_pid_list(const uint32_t *pids,
 /**
  * lota_compute_runtime_protect_digest() - Compute the digest of the PID set.
  * @pids: sorted PIDs.
- * @image_digests: one digest per entry of @pids; the agent passes zeroes for a
- *                 process it could not measure and a coverage flag says so.
+ * @pid_count: entries in @pids and @registry_digests.
+ * @registry_digests: one digest per entry of @pids; the agent passes zeroes
+ *                    for a process it could not measure and a coverage flag
+ *                    says so.
  * @out_digest: receives the digest; zeroed on -EIO.
  *
  * Return: 0 on success, -EINVAL on a bad argument or an unsorted list, -ENOMEM
@@ -60,7 +63,7 @@ static inline int lota_validate_canonical_protect_pid_list(const uint32_t *pids,
  */
 static inline int
 lota_compute_runtime_protect_digest(const uint32_t *pids,
-				    const uint8_t (*image_digests)[32],
+				    const uint8_t (*registry_digests)[32],
 				    uint32_t pid_count, uint8_t out_digest[32])
 {
 	static const uint8_t domain[] = "lota-runtime-protect-pids:v1\0";
@@ -71,7 +74,7 @@ lota_compute_runtime_protect_digest(const uint32_t *pids,
 
 	if (!out_digest)
 		return -EINVAL;
-	if (pid_count > 0 && (!pids || !image_digests))
+	if (pid_count > 0 && (!pids || !registry_digests))
 		return -EINVAL;
 	if (lota_validate_canonical_protect_pid_list(pids, pid_count) != 0)
 		return -EINVAL;
@@ -95,7 +98,7 @@ lota_compute_runtime_protect_digest(const uint32_t *pids,
 	for (uint32_t i = 0; i < pid_count; i++) {
 		lota__write_le32(le_u32, pids[i]);
 		if (EVP_DigestUpdate(mdctx, le_u32, sizeof(le_u32)) != 1 ||
-		    EVP_DigestUpdate(mdctx, image_digests[i], 32) != 1) {
+		    EVP_DigestUpdate(mdctx, registry_digests[i], 32) != 1) {
 			ret = -EIO;
 			goto out;
 		}

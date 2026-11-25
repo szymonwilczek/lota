@@ -253,37 +253,29 @@ int steam_runtime_container_socket_path(char *buf, size_t bufsz)
 
 int steam_runtime_ensure_socket_dir(const char *dir, gid_t gid)
 {
-	struct stat st;
+	int ret = 0;
+	int fd;
 
 	if (!dir || !dir[0])
 		return -EINVAL;
 
-	if (stat(dir, &st) == 0) {
-		if (!S_ISDIR(st.st_mode))
-			return -ENOTDIR;
-	} else if (mkdir(dir, 0750) < 0 && errno != EEXIST) {
+	if (mkdir(dir, 0750) < 0 && errno != EEXIST)
 		return -errno;
-	}
+
+	fd = open(dir, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
+	if (fd < 0)
+		return -errno;
 
 	/*
 	 * An existing directory may carry another mode, and mkdir masks this
 	 * one: the unit sets UMask=0077.
 	 */
-	if (chmod(dir, 0750) < 0)
-		return -errno;
+	if (fchmod(fd, 0750) < 0 ||
+	    (gid != (gid_t)-1 && fchown(fd, (uid_t)-1, gid) < 0))
+		ret = -errno;
 
-	if (lstat(dir, &st) < 0)
-		return -errno;
-	if (!S_ISDIR(st.st_mode))
-		return -ENOTDIR;
-
-	if (gid == (gid_t)-1)
-		return 0;
-
-	if (fchownat(AT_FDCWD, dir, (uid_t)-1, gid, AT_SYMLINK_NOFOLLOW) < 0)
-		return -errno;
-
-	return 0;
+	close(fd);
+	return ret;
 }
 
 void steam_runtime_log_info(const struct steam_runtime_info *info)

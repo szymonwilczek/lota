@@ -775,6 +775,34 @@ static void test_agent_unit_skips_userdb(void)
 }
 
 /*
+ * ExecStop waits up to 60 s for the daemon to exit; Fedora's default stop
+ * timeout is 45 s and aborts the unit when it runs out.
+ */
+static void test_agent_unit_outwaits_the_shutdown(void)
+{
+	static char src[65536];
+	const char *p;
+	unsigned int secs = 0;
+
+	TEST("packaging: the agent unit's stop timeout outlasts --shutdown");
+
+	if (!slurp_shipped("systemd/lota-agent.service", src, sizeof(src))) {
+		FAIL("could not read lota-agent.service");
+		return;
+	}
+	p = strstr(src, "\nTimeoutStopSec=");
+	if (!p || sscanf(p, "\nTimeoutStopSec=%us\n", &secs) != 1) {
+		FAIL("no TimeoutStopSec= in seconds");
+		return;
+	}
+	if (secs <= 60) {
+		FAIL("systemd stops waiting before --shutdown does");
+		return;
+	}
+	PASS();
+}
+
+/*
  * An upgrade replaces lota.pp under a module the policy store keeps its own copy
  * of, so a rule the new agent depends on stays out until something reloads it.
  */
@@ -1201,6 +1229,7 @@ int main(void)
 	test_both_hooks_drive_bringup();
 	test_both_manifests_own_the_config_directory();
 	test_agent_unit_skips_userdb();
+	test_agent_unit_outwaits_the_shutdown();
 	test_installer_probe_asks_about_ports();
 	test_installer_relabel_reapplies_the_device_labels();
 	test_static_cli_is_built_without_cgo();

@@ -329,7 +329,7 @@ Worth being precise about, because it decides what you can build on it:
   objects than one measurement holds: the excess is unmeasured, and an object
   listed as unmapped may be part of it. The token does not carry the list, it binds it:
   ``lota_server_registry_digest()`` hashes the flags, every object and every
-  actor in the order listed, and the result equals the image digest the token holds for
+  actor in the order listed, and the result equals the registry digest the token holds for
   that process. A list that does not hash to it, short of an object or with
   one rewritten, is not the one the token describes.
 

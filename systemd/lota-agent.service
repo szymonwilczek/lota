@@ -20,6 +20,8 @@ NotifyAccess=main
 # its enforce is refused without --insecure-allow-mode-downgrade
 ExecStart=/usr/bin/lota-agent
 ExecStop=/usr/bin/lota-agent --shutdown
+# above the 60 s --shutdown waits for the daemon to exit (SHUTDOWN_WAIT_MS)
+TimeoutStopSec=90s
 ExecReload=/bin/kill -HUP $MAINPID
 # The lota group comes from sysusers, so /etc/group answers. nss-systemd would
 # still walk /run/systemd/userdb, which the policy refuses with one AVC a socket.
