@@ -26,10 +26,6 @@
 #include "pin.h"
 #include "tpm.h"
 
-/*
- * Trims leading and trailing whitespace in-place.
- * Returns pointer into the same buffer (no allocation).
- */
 static char *trim(char *s)
 {
 	char *end;
@@ -78,10 +74,7 @@ static int parse_mode_strict(const char *value)
 	return -1;
 }
 
-/*
- * Safe string copy into fixed-size buffer.
- * Always NUL-terminates.
- */
+/* Truncates what does not fit. */
 static void set_str(char *dst, size_t dst_size, const char *src)
 {
 	size_t len = strlen(src);
@@ -99,7 +92,7 @@ static int validate_path_value(const char *key, const char *value,
 	if (!key || !value)
 		return -1;
 
-	/* allow clearing optional fields by setting empty value */
+	/* passes: clears a single-value key, adds an empty list entry */
 	if (value[0] == '\0')
 		return 0;
 
@@ -123,14 +116,7 @@ static int validate_path_value(const char *key, const char *value,
 		return -1;
 	}
 
-	/*
-	 * Note: this validates only the path string shape.
-	 * It intentionally does not canonicalize (realpath) or resolve
-	 * symlinks. Callers that treat these files as security boundaries
-	 * should open them safely (e.g. O_NOFOLLOW + fstat) and/or rely on
-	 * higher-level trust models (fs-verity / measured boot / remote
-	 * attestation).
-	 */
+	/* the string's shape only: no symlink is resolved */
 
 	return 0;
 }
@@ -161,11 +147,6 @@ static int config_validate_file_security(int fd, const char *filepath)
 		return -EPERM;
 	}
 
-	/*
-	 * Ownership policy:
-	 * - root agent: config must be root-owned
-	 * - non-root agent: config must be owned by current euid or by root
-	 */
 	if (euid == 0) {
 		if (st.st_uid != 0) {
 			fprintf(stderr,
@@ -193,7 +174,7 @@ void config_init(struct lota_config *cfg)
 
 	memset(cfg, 0, sizeof(*cfg));
 
-	/* server stays unset: a default would be a verifier nobody named */
+	/* server stays empty: there is no default verifier */
 	cfg->port = LOTA_DEFAULT_VERIFIER_PORT;
 
 	cfg->allow_verity_count = 0;
@@ -201,13 +182,8 @@ void config_init(struct lota_config *cfg)
 		"/usr/lib/lota/lota_lsm.bpf.o");
 	set_str(cfg->mode, sizeof(cfg->mode), "enforce");
 	/*
-	 * Policy is off until the operator sets it. A host that names no
-	 * key runs every title from execve, and the report says which
-	 * policy is on so an anti-cheat can require one.
-	 *
-	 * strict_exec and strict_modules also need an allow_verity entry
-	 * (startup_policy.c::apply_startup_policy): both gates check the
-	 * BPF allowlist, and a fresh install has none.
+	 * strict_exec and strict_modules also need an allow_verity entry:
+	 * startup_policy.c refuses them without one.
 	 */
 	cfg->strict_mmap = false;
 	cfg->strict_exec = false;
@@ -232,12 +208,6 @@ void config_init(struct lota_config *cfg)
 	set_str(cfg->log_level, sizeof(cfg->log_level), "info");
 }
 
-/*
- * calloc not malloc: config_init zeroes the struct anyway, but the allocation
- * is over a megabyte and the kernel hands back zeroed pages for one that size,
- * so the memset walks pages that are already clean instead of pages full of
- * whatever the allocator last held.
- */
 struct lota_config *config_new(void)
 {
 	struct lota_config *cfg = calloc(1, sizeof(*cfg));
@@ -254,11 +224,6 @@ void config_free(struct lota_config *cfg)
 	free(cfg);
 }
 
-/*
- * Shared by the top-level attest_interval and the per-profile interval:
- * 0 has a meaning at each level, anything else has to sit between the bounds
- * the attestation loop can actually mint verifiable tokens within.
- */
 static int check_attest_interval(long v, const char *key, const char *filepath,
 				 int lineno)
 {
@@ -273,11 +238,9 @@ static int check_attest_interval(long v, const char *key, const char *filepath,
 	return -1;
 }
 
-/* The default a host falls back to has to be one an operator could have set. */
 _Static_assert(TPM_AIK_DEFAULT_TTL_SEC >= MIN_AIK_TTL,
 	       "the default AIK TTL must not sit below the floor");
 
-/* One sentence, so the two roads cannot drift into two answers. */
 #define AIK_TTL_LIFTED_MSG "Warning: AIK TTL %u too low, using %ds (1 hour)\n"
 
 uint32_t config_clamp_aik_ttl(uint32_t ttl, const char *filepath, int lineno)
@@ -294,15 +257,7 @@ uint32_t config_clamp_aik_ttl(uint32_t ttl, const char *filepath, int lineno)
 	return MIN_AIK_TTL;
 }
 
-/*
- * Apply a single key = value pair to the profile a [profile "name"] header
- * opened.
- *
- * Returns 0 applied, 1 unknown key, -1 invalid value.
- * Top-level key used inside profile section lands here as unknown, which is
- * the fail-closed answer: the operator meant one of the two and the file
- * cannot say which.
- */
+/* Returns 0 applied, 1 unknown key, -1 invalid value. */
 static int apply_profile_key(struct lota_profile *p, const char *key,
 			     const char *value, const char *filepath,
 			     int lineno)
@@ -330,12 +285,6 @@ static int apply_profile_key(struct lota_profile *p, const char *key,
 		return 0;
 	}
 	if (strcmp(key, "verifier") == 0) {
-		/*
-		 * Publisher verifies tokens in their own backend
-		 * and runs no verifier here.
-		 * Spelled out rather than inferred from absent key,
-		 * so a typo stays a refused config.
-		 */
 		if (strcmp(value, "none") == 0) {
 			p->token_only = true;
 			p->verifier[0] = '\0';
@@ -361,10 +310,6 @@ static int apply_profile_key(struct lota_profile *p, const char *key,
 	if (strcmp(key, "pin_sha256") == 0 || strcmp(key, "pin-sha256") == 0) {
 		uint8_t bin[LOTA_PIN_SHA256_LEN];
 
-		/*
-		 * Parsed here only to reject it: a pin the connection cannot
-		 * read would start the profile unpinned
-		 */
 		if (lota_pin_sha256_parse(value, bin) != 0) {
 			fprintf(stderr,
 				"%s:%d: invalid pin_sha256 '%s' (expected 64 "
@@ -426,9 +371,6 @@ int config_profile_name_defect(const char *name, char *why, size_t why_cap)
 	}
 
 	for (p = (const unsigned char *)name; *p; p++) {
-		/* the quote is not a control character, but it is what closes
-		 * the header, so a label carrying one names a section that
-		 * ends where the label does */
 		if (*p == '"') {
 			snprintf(why, why_cap,
 				 "contains a quote (0x22), which is what ends "
@@ -446,10 +388,8 @@ int config_profile_name_defect(const char *name, char *why, size_t why_cap)
 }
 
 /*
- * Why the parser would read @value back as something other than what
- * the writer put on a key's line, or 0 for one it reads back as written.
- *
- * @key is named only to size the line the value has to fit on.
+ * Why the parser would not read non-empty @value back as written on a line of
+ * @key, or 0 when it would.
  */
 static int value_defect(const char *key, const char *value, char *why,
 			size_t why_cap)
@@ -467,8 +407,6 @@ static int value_defect(const char *key, const char *value, char *why,
 		}
 	}
 
-	/* the parser trims a value, so a value with an edge of whitespace
-	 * is not the value the host would read */
 	if (isspace((unsigned char)value[0]) ||
 	    isspace((unsigned char)value[strlen(value) - 1])) {
 		snprintf(why, why_cap,
@@ -477,8 +415,6 @@ static int value_defect(const char *key, const char *value, char *why,
 		return -EILSEQ;
 	}
 
-	/* an over-long line is skipped with an error,
-	 * so the key never reaches the profile at all */
 	line = strlen(key) + strlen(" = ") + strlen(value) + 1;
 	if (line >= LOTA_CONFIG_MAX_LINE) {
 		snprintf(why, why_cap,
@@ -563,8 +499,6 @@ int config_profile_defect(const struct lota_profile *p, char *why,
 }
 
 /*
- * Parse a [profile "name"] header and open the profile it names.
- *
  * @line is the trimmed line, known to start with '['.
  * Returns 0 with *out set, or -1 with a reason on stderr.
  */
@@ -652,21 +586,12 @@ static int open_profile_section(struct lota_config *cfg, char *line,
 	return 0;
 }
 
-/*
- * Profile that names no CA, no anchor or no verifier cannot enroll or report,
- * and the identity everything else will be keyed by is derived from the anchor.
- * Incomplete is refused rather than half-configured.
- */
+/* Returns the number of problems it reported on stderr. */
 static int validate_profiles(const struct lota_config *cfg,
 			     const char *filepath)
 {
 	int errors = 0;
 
-	/*
-	 * A pin matches one certificate and each publisher runs its own verifier:
-	 * a host-level pin would fail every other profile at TLS time, where
-	 * it looks like a network fault. Refuse it here.
-	 */
 	if (cfg->profile_count > 0 && cfg->pin_sha256[0]) {
 		fprintf(stderr,
 			"%s: pin_sha256 outside a profile pins one verifier's "
@@ -694,11 +619,6 @@ static int validate_profiles(const struct lota_config *cfg,
 			errors++;
 		}
 
-		/*
-		 * Port for a verifier that was declared absent is a contradiction,
-		 * and ignoring the key an operator deliberately wrote is worse
-		 * than refusing it.
-		 */
 		if (p->token_only &&
 		    p->verifier_port != LOTA_DEFAULT_VERIFIER_PORT) {
 			fprintf(stderr,
@@ -712,17 +632,10 @@ static int validate_profiles(const struct lota_config *cfg,
 	return errors;
 }
 
-/*
- * Apply a single key = value pair to the config struct.
- *
- * Returns:
- *   0  if the key was recognised and applied
- *   1  if the key was unknown (caller should warn)
- */
+/* Returns 0 applied, 1 unknown key, -1 invalid value. */
 static int apply_key(struct lota_config *cfg, const char *key,
 		     const char *value, const char *filepath, int lineno)
 {
-	/* verifier connection */
 	if (strcmp(key, "server") == 0) {
 		set_str(cfg->server, sizeof(cfg->server), value);
 		return 0;
@@ -786,7 +699,6 @@ static int apply_key(struct lota_config *cfg, const char *key,
 		cfg->allow_verity_count++;
 		return 0;
 	}
-	/* bpf / enforcement */
 	if (strcmp(key, "bpf_path") == 0 || strcmp(key, "bpf-path") == 0 ||
 	    strcmp(key, "bpf") == 0) {
 		if (validate_path_value("bpf_path", value, filepath, lineno) !=
@@ -922,7 +834,6 @@ static int apply_key(struct lota_config *cfg, const char *key,
 		return 0;
 	}
 
-	/* attestation */
 	if (strcmp(key, "attest_interval") == 0 ||
 	    strcmp(key, "attest-interval") == 0) {
 		long v;
@@ -969,7 +880,6 @@ static int apply_key(struct lota_config *cfg, const char *key,
 		return 0;
 	}
 
-	/* daemon */
 	if (strcmp(key, "daemon") == 0) {
 		bool parsed;
 		if (parse_bool_strict(value, &parsed) != 0) {
@@ -989,7 +899,6 @@ static int apply_key(struct lota_config *cfg, const char *key,
 		return 0;
 	}
 
-	/* policy signing */
 	if (strcmp(key, "signing_key") == 0 ||
 	    strcmp(key, "signing-key") == 0) {
 		if (validate_path_value("signing_key", value, filepath,
@@ -1007,7 +916,6 @@ static int apply_key(struct lota_config *cfg, const char *key,
 		return 0;
 	}
 
-	/* lists */
 	if (strcmp(key, "trust_lib") == 0 || strcmp(key, "trust-lib") == 0) {
 		if (cfg->trust_lib_count >= LOTA_CONFIG_MAX_LIBS) {
 			fprintf(stderr,
@@ -1078,13 +986,12 @@ static int apply_key(struct lota_config *cfg, const char *key,
 		return 0;
 	}
 
-	/* logging */
 	if (strcmp(key, "log_level") == 0 || strcmp(key, "log-level") == 0) {
 		set_str(cfg->log_level, sizeof(cfg->log_level), value);
 		return 0;
 	}
 
-	return 1; /* unknown key */
+	return 1;
 }
 
 static int config_load_stream(struct lota_config *cfg, FILE *f,
@@ -1127,9 +1034,8 @@ static int config_load_stream(struct lota_config *cfg, FILE *f,
 
 		if (*trimmed == '[') {
 			/*
-			 * rejected header leaves the section open with no profile
-			 * behind it, so the keys that follow are skipped rather
-			 * than landing in the previous profile or at the top level
+			 * a rejected header leaves the section open with no
+			 * profile, so the keys that follow are skipped
 			 */
 			in_section = true;
 			if (open_profile_section(cfg, trimmed, filepath, lineno,
@@ -1238,7 +1144,6 @@ int config_load(struct lota_config *cfg, const char *path)
 
 	int open_flags = O_RDONLY | O_CLOEXEC;
 #ifdef O_NOFOLLOW
-	/* avoid reading config through symlink indirection */
 	open_flags |= O_NOFOLLOW;
 #endif
 
@@ -1330,7 +1235,6 @@ void config_dump(const struct lota_config *cfg, FILE *fp)
 	fprintf(fp, "bpf_path = %s\n", cfg->bpf_path);
 	fprintf(fp, "mode = %s\n", cfg->mode);
 
-	/* name the strict keys this mode ignores */
 	inert_count =
 		config_inert_strict_flags(cfg, inert, LOTA_STRICT_FLAG_COUNT);
 	if (inert_count > 0) {
@@ -1409,9 +1313,8 @@ void config_dump(const struct lota_config *cfg, FILE *fp)
 	}
 
 	/*
-	 * profiles come last, and nothing top-level may follow them:
-	 * every key after section header belongs to that section, so dump that
-	 * emitted them earlier would not parse back as what it printed
+	 * profiles come last: every key after a section header belongs to
+	 * that section
 	 */
 	for (int i = 0; i < cfg->profile_count; i++) {
 		const struct lota_profile *p = &cfg->profiles[i];
@@ -1437,11 +1340,8 @@ void config_dump(const struct lota_config *cfg, FILE *fp)
 }
 
 /*
- * Whether @text already carries a `[profile "name"]` header, and how many profile
- * sections it holds.
- * Deliberately text scan rather than a parse:
- * the file may hold keys this build does not know, and refusing to add publisher
- * because of one would be the wrong answer.
+ * Counts every `[profile` in @text into *out_count, comments included.
+ * Returns 1 when one is labelled @name, else 0.
  */
 static int profile_section_scan(const char *text, const char *name,
 				int *out_count)
@@ -1470,15 +1370,13 @@ static int profile_section_scan(const char *text, const char *name,
 	return found;
 }
 
-/* The profile as the parser reads it back.
- * Keys are written in the order the documentation lists them so a file
- * an installer touched still reads like one a person wrote. */
 static int profile_section_render(const struct lota_profile *p, char *buf,
 				  size_t cap)
 {
-	/* Publisher who runs none, said the way validate_profiles() requires:
-	 * the key is present and the port is absent, because the parser refuses
-	 * a port for a verifier declared absent */
+	/*
+	 * validate_profiles() refuses an absent verifier key, so a profile with
+	 * none says verifier = none
+	 */
 	bool no_verifier = p->token_only || p->verifier[0] == '\0';
 	int n;
 
@@ -1540,14 +1438,6 @@ int config_profile_append_text(const char *existing,
 	if (!existing || !p || !out || out_cap == 0)
 		return -EINVAL;
 
-	/*
-	 * Every field below is interpolated into text the parser reads back at
-	 * the next start, and the values arrive from a command line:
-	 * a label carrying a quote closes the header being built, a host carrying
-	 * a newline forges a key.
-	 * So the writer applies the parser's own rules first and refuses
-	 * -- or a file that does not load at all.
-	 */
 	{
 		char why[192];
 		int defect = config_profile_defect(p, why, sizeof(why));
@@ -1560,11 +1450,9 @@ int config_profile_append_text(const char *existing,
 	}
 
 	/*
-	 * A publisher is its trust anchor, not its label.
-	 * The same anchor already in the file is the installer running twice
-	 * -- or the same publisher configured under another name -- and either
-	 * way a second section would resolve to one profile directory and one
-	 * AIK, burning a slot and attesting twice to the same place.
+	 * "ca_cert = <path>" as a substring of the text counts as the publisher
+	 * being present, under any label: a second section with the anchor
+	 * would resolve to the same profile directory.
 	 */
 	{
 		char probe[PATH_MAX + 64];
@@ -1580,8 +1468,6 @@ int config_profile_append_text(const char *existing,
 		}
 	}
 
-	/* label already spoken for by a different anchor is two publishers claiming
-	 * one name, which only the operator can resolve */
 	if (profile_section_scan(existing, p->name, &count))
 		return -EEXIST;
 
@@ -1614,10 +1500,7 @@ int config_profile_append(const char *path, const struct lota_profile *p)
 	if (!path || !p)
 		return -EINVAL;
 
-	/* A file that is not there yet is an empty one:
-	 * the package ships /etc/lota but no lota.conf, and the verb has to work
-	 * rather than telling the player to create one.
-	 * The reader reports a missing file as zero bytes, which is the same thing. */
+	/* the reader reports a missing file as zero bytes */
 	existing = calloc(1, LOTA_CONFIG_MAX_FILE + 1);
 	if (!existing)
 		return -ENOMEM;
@@ -1644,12 +1527,6 @@ int config_profile_append(const char *path, const struct lota_profile *p)
 		return ret;
 	}
 
-	/*
-	 * Rename into place so crash mid-write leaves the old config rather than
-	 * half of one:
-	 * the agent reads this file on every start, and a truncated one is host
-	 * that will not come back.
-	 */
 	if (snprintf(tmp_path, sizeof(tmp_path), "%s.new", path) >=
 	    (int)sizeof(tmp_path)) {
 		free(updated);
@@ -1691,14 +1568,6 @@ int config_profile_append(const char *path, const struct lota_profile *p)
 	close(fd);
 	free(updated);
 
-	/*
-	 * Parse the replacement before renaming it into place.
-	 * The field rules cover only what this writer added; the rest of
-	 * the file is copied through as is, and if that no longer parses
-	 * -- a hand edit, a package that half-replaced it -- the host would
-	 * start with no configuration.
-	 * On refusal the live file stays untouched.
-	 */
 	{
 		struct lota_config *readback = config_new();
 		int lret;
@@ -1724,14 +1593,8 @@ int config_profile_append(const char *path, const struct lota_profile *p)
 	}
 
 	/*
-	 * Temporary file took its SELinux type from this directory,
-	 * not from the file it is about to replace.
-	 * Where the two differ -- a packaged lota.conf under an unlabelled
-	 * /etc/lota -- the rename would silently change the config's type.
-	 *
-	 * A destination that refuses the attribute is not a reason to throw
-	 * away a correct config: the writer says so and the operator can
-	 * restorecon.
+	 * The replacement takes the live file's SELinux label; a failure to
+	 * carry it only warns.
 	 */
 	{
 		int lret = lota_copy_xattr(path, tmp_path, "security.selinux");

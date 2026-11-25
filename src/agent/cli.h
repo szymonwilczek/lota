@@ -2,12 +2,6 @@
 /*
  * LOTA Agent - CLI argument parsing
  *
- * Encapsulates getopt_long, defaults sourced from the on-disk config,
- * and the per-flag validation.
- * main() consumes the resulting struct cli_options and dispatches into
- * the diagnostic or daemon path; it never touches the option table or
- * the per-option case bodies directly.
- *
  * Copyright (C) 2026 Szymon Wilczek
  */
 
@@ -33,13 +27,8 @@ struct cli_options {
 	int test_ipc_flag;
 	int test_signed_flag;
 	int shutdown_flag;
-	int status_flag; /* --status */
-	/*
-	 * --terminate-protected PID:
-	 * end a process that asked to be protected, and journal that it was ended.
-	 * SIGTERM unless --force, which sends SIGKILL to a title that is too far
-	 * gone to handle anything.
-	 */
+	int status_flag;
+	/* --terminate-protected PID: SIGTERM, or SIGKILL with --force */
 	uint32_t terminate_protected_pid;
 	int terminate_protected_flag;
 	int force_flag;
@@ -47,13 +36,13 @@ struct cli_options {
 	int export_policy_flag;
 	int attest_flag;
 	int enroll_flag;
-	int reenroll_flag; /* --reenroll: guided re-enroll, reuse saved endpoint */
+	int reenroll_flag; /* --reenroll: reuse the saved endpoint */
 	int seal_flag;
 	int unseal_flag;
 	int seal_aik_auth_migrate_flag; /* --seal-aik-auth: adopt sealing */
 	int reprovision_aik_flag; /* --reprovision-aik: strict recovery */
-	int seal_persist_primary_flag; /* --seal-persist-primary */
-	int seal_evict_primary_flag; /* --seal-evict-primary */
+	int seal_persist_primary_flag;
+	int seal_evict_primary_flag;
 	const char *seal_pcrs; /* PCR mask string for --seal; NULL = default */
 	const char *gen_signing_key_prefix;
 	const char *sign_policy_file;
@@ -79,7 +68,6 @@ struct cli_options {
 	int daemon_flag;
 	const char *pid_file_path;
 
-	/* networking */
 	const char *bpf_path;
 	const char *server_addr;
 	bool server_overridden;
@@ -89,26 +77,20 @@ struct cli_options {
 	/* attestation-CA enrollment endpoint (--enroll) */
 	const char *ca_server;
 	int ca_port;
-	bool ca_port_given; /* --ca-port named; ca_port holds a default */
+	bool ca_port_given; /* --ca-port given, not the default */
 	const char *enroll_token_file; /* --enroll-token-file: tenant token */
 	/* --allow-publisher: record consent to answer to one publisher,
 	 * named by the hex SHA-256 of its CA anchor's SPKI */
 	const char *allow_publisher;
 
 	/*
-	 * --add-publisher writes a [profile] section into lota.conf
-	 * so game's installer can register its publisher without asking
-	 * the player to edit a file.
-	 *
-	 * It records no consent:
-	 * that stays separate, deliberate act, because installer must not be
-	 * able to agree on the player's behalf to publisher holding a key
-	 * on their machine.
+	 * --add-publisher writes a [profile] section into lota.conf.
+	 * It records no consent: --allow-publisher does.
 	 */
-	const char *add_publisher; /* CA host, or host:port */
+	const char *add_publisher;
 	const char *publisher_name; /* --publisher-name, the section label */
 	bool reporting_continuous; /* --reporting continuous */
-	int list_publishers_flag; /* --list-publishers */
+	int list_publishers_flag;
 	/* --forget-publisher: destroy one publisher's key and stored state */
 	const char *forget_publisher;
 	int no_verify_tls;
@@ -124,35 +106,43 @@ struct cli_options {
 	int config_file_mode;
 };
 
-/*
- * Parse argv into a fully-resolved cli_options. The function loads the
- * on-disk config (via --config or the default path), seeds defaults from
- * it, then layers the CLI overrides on top. Side effects:
+/**
+ * cli_parse() - Parse argv over the config file's values.
+ * @argc: Argument count.
+ * @argv: The arguments.
+ * @out: Receives the options.
+ * @cfg: Receives the config file; @out points into it.
  *
- *   - mutates g_agent.mode and g_agent.tpm_ctx.aik_handle while parsing
- *     the config, mirroring the behavior of the previous inline parser;
- *   - populates the module-local runtime lists exposed via the
- *     cli_runtime_* accessors below.
+ * Loads --config or the default path, then layers the flags on top. Also sets
+ * g_agent.mode and the AIK handle, sealing flags and kernel path in
+ * g_agent.tpm_ctx, and fills the lists behind the accessors below.
  *
- * Returns 0 on success, a positive program exit code on a parse error
- * that the binary should report and exit with.
+ * Return: 0 on success, -1 after printing help for --help, or a positive
+ * program exit code on a parse error.
  */
 int cli_parse(int argc, char **argv, struct cli_options *out,
 	      struct lota_config *cfg);
 
-/*
- * Emit the merged CLI+config view of struct lota_config on stdout, as
- * driven by --dump-config. Returns the program exit code.
+/**
+ * cli_dump_config() - Print the merged config for --dump-config.
+ * @opts: The parsed options.
+ * @cfg: The config; the merge overwrites it.
+ *
+ * Return: the program exit code.
  */
 int cli_dump_config(struct cli_options *opts, struct lota_config *cfg);
 
-/*
- * Validate parsed pin/no-verify-tls combinations once parsing is done.
- * Returns 0 on success, a non-zero program exit code on error.
+/**
+ * cli_finalize_pin() - Parse the pin from the flag or the file into @opts.
+ * @opts: The options; receives pin_sha256_bin and has_pin.
+ *
+ * Warns when the pin is combined with --no-verify-tls.
+ *
+ * Return: 0, or 1 for a malformed pin.
  */
 int cli_finalize_pin(struct cli_options *opts);
 
-/* Runtime lists populated by cli_parse(), shared with run_daemon(). */
+/* The lists cli_parse() builds from the file and the flags. */
 uint32_t **cli_runtime_protect_pids(void);
 int *cli_runtime_protect_pid_count(void);
 char (*cli_runtime_trust_libs(void))[PATH_MAX];
@@ -161,13 +151,8 @@ char (*cli_runtime_allow_verity(void))[PATH_MAX];
 int *cli_runtime_allow_verity_count(void);
 
 /*
- * Which enforcement switches the command line turned on.
- *
- * All five are enabling flags, and a reload re-applies the switches from
- * the configuration file -- whose defaults leave strict_exec and strict_modules off.
- * Without a record of what was asked for, a reload withdraws an enforcement
- * setting the operator passed to this daemon, and the agent cannot be restarted
- * to re-read its own command line.
+ * Which enforcement switches the command line turned on, so that a reload keeps
+ * them.
  */
 #define LOTA_CLI_SWITCH_STRICT_MMAP (1U << 0)
 #define LOTA_CLI_SWITCH_STRICT_EXEC (1U << 1)
@@ -178,17 +163,8 @@ int *cli_runtime_allow_verity_count(void);
 uint32_t cli_startup_switch_mask(void);
 
 /*
- * What the command line itself asked for, kept apart from the runtime lists
- * above.
- *
- * Those lists start as the config file's contents plus the flags
- * and are rewritten in place on every reload, so after the first one there is
- * nothing left to say which entries the operator passed as arguments.
- * A reload re-reads the file, which need never mention them: without this
- * record it would revoke them, and --protect-pid has no runtime verb to put
- * them back with.
- *
- * Empty on a daemon started without the flags.
+ * The --trust-lib and --protect-pid entries alone, so that a reload keeps them;
+ * the lists above also hold the file's. Empty without those flags.
  */
 const char (*cli_startup_trust_libs(void))[PATH_MAX];
 int cli_startup_trust_lib_count(void);
