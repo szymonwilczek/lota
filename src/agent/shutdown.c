@@ -47,19 +47,10 @@ int poison_runtime_pcr(struct tpm_context *ctx)
 	if (ret < 0)
 		return ret;
 
-	/*
-	 * Record that this host spent its own commitment, so the next start
-	 * reports a paused agent.
-	 * Best effort: losing the note costs the wording of a refusal that
-	 * happens either way.
-	 */
+	/* best effort: without the note the next start refuses all the same */
 	{
 		struct lota_clock_state snap = { 0 };
 
-		/*
-		 * Keep the counters the successful extend recorded;
-		 * only the register value and the reason change
-		 */
 		if (tpm_clock_state_load(ctx, &snap) < 0)
 			memset(&snap, 0, sizeof(snap));
 

@@ -19,37 +19,54 @@
 
 #include <stdint.h>
 
+/**
+ * enum watchdog_verdict - what the supervisor does on one wake-up
+ * @WATCHDOG_PING: the loop beat within half the deadline; ping systemd.
+ * @WATCHDOG_HOLD: it did not; withhold the ping.
+ * @WATCHDOG_TERMINATE: no beat for the whole deadline; end the process.
+ */
 enum watchdog_verdict {
-	/* the loop advanced inside its ping contract */
 	WATCHDOG_PING,
-	/* it did not: withhold the ping so systemd sees the same stall */
 	WATCHDOG_HOLD,
-	/* a whole interval with no progress: end the process */
 	WATCHDOG_TERMINATE,
 };
 
-/*
- * watchdog_verdict_for - verdict for one wake-up (CLOCK_MONOTONIC, ns)
+/**
+ * watchdog_verdict_for() - Verdict for one wake-up.
+ * @now_ns: CLOCK_MONOTONIC now, in ns.
+ * @last_beat_ns: CLOCK_MONOTONIC time of the last beat, in ns.
+ * @deadline_ns: the watchdog interval, in ns; 0 means no watchdog.
  *
- * HOLD past half @deadline_ns (the loop's epoll timeout), TERMINATE past
- * all of it. A beat after @now_ns (torn read) or a zero @deadline_ns (no
- * watchdog) is PING.
+ * Return: WATCHDOG_HOLD from half @deadline_ns since the beat,
+ * WATCHDOG_TERMINATE from all of it, else WATCHDOG_PING.
+ * A beat at or after @now_ns and a zero @deadline_ns give WATCHDOG_PING.
  */
 enum watchdog_verdict watchdog_verdict_for(uint64_t now_ns,
 					   uint64_t last_beat_ns,
 					   uint64_t deadline_ns);
 
-/*
- * watchdog_start - spawn the supervisor for WATCHDOG_USEC @wd_usec (0: no-op)
+/**
+ * watchdog_start() - Spawn the supervisor thread.
+ * @wd_usec: WATCHDOG_USEC from systemd; 0 does nothing.
  *
- * Beats once first, so a slow startup is not a wedge. Returns 0 or -errno.
+ * Beats once first, so the deadline counts from the start.
+ *
+ * Return: 0, -EALREADY when a supervisor runs, or a negative errno.
  */
 int watchdog_start(uint64_t wd_usec);
 
-/* record that the main loop advanced; safe with no supervisor */
+/**
+ * watchdog_beat() - Record that the main loop advanced.
+ *
+ * Safe without a supervisor.
+ */
 void watchdog_beat(void);
 
-/* stop and join the supervisor; safe with none running */
+/**
+ * watchdog_stop() - Stop and join the supervisor.
+ *
+ * Safe with none running.
+ */
 void watchdog_stop(void);
 
 #endif /* LOTA_AGENT_WATCHDOG_H */

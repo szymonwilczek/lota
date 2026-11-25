@@ -14,12 +14,16 @@
 
 #define LOTA_IPC_SOCKET_NAME "lota.sock"
 
-/* Fixed part of an event; the name follows it */
 #define LOTA_INOTIFY_HDR offsetof(struct inotify_event, name)
 
-/*
- * True when a batch of events names @name, touches the directory itself,
- * or lost events to an overflow. A truncated tail counts as named.
+/**
+ * socket_events_name() - Whether a batch of inotify events concerns @name.
+ * @buf: events as read() returned them.
+ * @len: bytes in @buf.
+ * @name: file name in the watched directory.
+ *
+ * Return: true when an event names @name, concerns the directory itself
+ * or reports an overflow, and when the batch ends in a cut event.
  */
 static inline bool socket_events_name(const char *buf, size_t len,
 				      const char *name)

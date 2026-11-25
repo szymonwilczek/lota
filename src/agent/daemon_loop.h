@@ -35,13 +35,7 @@ struct agent_loop_ctx {
 	char (*trust_libs)[PATH_MAX];
 	int *trust_lib_count;
 
-	/*
-	 * Publisher target list the IPC layer answers titles from,
-	 * owned by the caller.
-	 * Reload rebuilds it in place: lota.conf gains publishers while the daemon
-	 * runs (game's installer writes one), and title cannot name publisher
-	 * the daemon has not read.
-	 */
+	/* the IPC layer answers from it; SIGHUP rebuilds it in place */
 	struct attest_target *targets;
 	size_t *target_count;
 	size_t target_max;
@@ -49,30 +43,29 @@ struct agent_loop_ctx {
 	struct ipc_context *ipc_ctx;
 	struct dbus_context *dbus_ctx;
 	struct bpf_loader_ctx *bpf_ctx;
-	/*
-	 * Logins arrive while the daemon runs, and each one can carry
-	 * a container listener the configuration already asked for.
-	 */
 	struct container_watch *container_watch;
 	struct bench_state *bench; /* NULL without --bench */
 	volatile sig_atomic_t *running;
 };
 
+/**
+ * agent_run_event_loop() - Serve until asked to stop.
+ * @ctx: The loop's state.
+ *
+ * SIGTERM, SIGINT and the IPC shutdown request end the loop, and so does
+ * a failing epoll_wait(), with an error logged.
+ *
+ * Return: 0.
+ */
 int agent_run_event_loop(struct agent_loop_ctx *ctx);
 
-/*
- * agent_ringbuf_drop_delta - compute alertable BPF event loss delta
- * @current: sum of the loss counters returned by
- *           bpf_loader_get_extended_stats()
- * @last:    in/out pointer to the last observed counter; updated to
- *           @current on return so successive calls report monotonic
- *           increments
+/**
+ * agent_ringbuf_drop_delta() - Increase of the event loss counters.
+ * @current: Sum of the counters from bpf_loader_get_extended_stats().
+ * @last: Previous sum; set to @current.
  *
- * Returns the increase since the last call. A non-zero return is the
- * forensic signal: every event the kernel left out of the log.
- * A counter rollback
- * (BPF stats reset across map reload) is treated as zero delta and
- * just resets the baseline so the next monotonic delta reads cleanly.
+ * Return: @current minus @last, or 0 when @current is not above @last or @last
+ * is NULL.
  */
 uint64_t agent_ringbuf_drop_delta(uint64_t current, uint64_t *last);
 

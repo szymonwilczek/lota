@@ -2,12 +2,6 @@
 /*
  * LOTA Agent - Daemon utilities
  *
- * Unix daemonization, PID file management, and signal handling.
- *
- * When running under systemd (Type=simple), daemonization is NOT needed
- * because systemd manages the process lifecycle.  In that case, only
- * the PID file and signal handlers are relevant.
- *
  * Copyright (C) 2026 Szymon Wilczek
  */
 
@@ -26,18 +20,10 @@
 #include <time.h>
 #include <unistd.h>
 
-/*
- * Pointers to the caller's flags, set by daemon_install_signals().
- * These are module-level so that the async-signal-safe handlers
- * (which cannot take arguments) can reach them.
- */
+/* the handlers take no context */
 static volatile sig_atomic_t *g_daemon_running;
 static volatile sig_atomic_t *g_daemon_reload;
 
-/*
- * Signal handler: graceful shutdown (SIGTERM, SIGINT).
- * Async-signal-safe: only writes to a volatile sig_atomic_t.
- */
 static void sigterm_handler(int sig)
 {
 	(void)sig;
@@ -45,10 +31,6 @@ static void sigterm_handler(int sig)
 		*g_daemon_running = 0;
 }
 
-/*
- * Signal handler: configuration reload (SIGHUP).
- * Async-signal-safe: only writes to a volatile sig_atomic_t.
- */
 static void sighup_handler(int sig)
 {
 	(void)sig;
@@ -56,12 +38,7 @@ static void sighup_handler(int sig)
 		*g_daemon_reload = 1;
 }
 
-/*
- * Write end of the pipe the daemon reports its startup verdict on,
- * held by the daemon process for as long as it has not reported.
- * -1 when the process was not daemonised, which is what makes
- * daemon_notify_started() a no-op in the foreground.
- */
+/* write end of the startup pipe until the verdict; -1 without daemonize() */
 static int g_startup_pipe = -1;
 
 void daemon_notify_started(int status)
@@ -79,16 +56,6 @@ void daemon_notify_started(int status)
 	g_startup_pipe = -1;
 }
 
-/*
- * The launching process, once it has forked: wait for the daemon to say how
- * its startup ended and exit with that.
- *
- * This is the half of daemonising that has to stay: a caller that gets its
- * shell back has been told the agent is up, and only the daemon knows whether
- * it is.
- * Reading blocks for as long as startup takes, which is the same wait
- * a foreground start asks for.
- */
 static void daemon_await_child(int read_fd) __attribute__((noreturn));
 
 static void daemon_await_child(int read_fd)
@@ -102,11 +69,7 @@ static void daemon_await_child(int read_fd)
 
 	if (got == (ssize_t)sizeof(status)) {
 		if (status != 0)
-			/*
-			 * Reported as the caller will see it:
-			 * an exit status is the low byte, and the daemon reports
-			 * negative errnos among its own.
-			 */
+			/* the low byte, as the shell sees it */
 			fprintf(stderr,
 				"lota-agent: startup refused (exit %d). "
 				"The reason is in the journal: "
@@ -115,11 +78,7 @@ static void daemon_await_child(int read_fd)
 		_exit(status);
 	}
 
-	/*
-	 * The pipe closed with nothing on it, so the daemon died before it
-	 * reached either verdict.
-	 * This is a failed start too, and the caller is told so.
-	 */
+	/* every write end closed without a verdict */
 	fprintf(stderr,
 		"lota-agent: the agent exited before startup completed. "
 		"The reason is in the journal: journalctl -t lota-agent\n");
@@ -135,9 +94,6 @@ int daemonize(void)
 	if (pipe(startup_pipe) < 0)
 		return -errno;
 
-	/*
-	 * first fork: detach from parent process
-	 */
 	pid = fork();
 	if (pid < 0) {
 		int err = errno;
@@ -152,28 +108,17 @@ int daemonize(void)
 
 	close(startup_pipe[0]);
 
-	/*
-	 * create new session and process group
-	 */
 	if (setsid() < 0)
 		return -errno;
 
-	/*
-	 * second fork: ensure the daemon can never accidentally
-	 * re-acquire a controlling terminal
-	 * Grandchild is NOT a session leader
-	 */
+	/* not a session leader, so no controlling terminal can be acquired */
 	pid = fork();
 	if (pid < 0)
 		return -errno;
 	if (pid > 0)
 		_exit(0); /* session leader exits */
 
-	/*
-	 * The daemon proper.
-	 * It owns the verdict from here, and holding the write end is what
-	 * makes the launching process wait.
-	 */
+	/* the launcher reads until this end is written or closed */
 	g_startup_pipe = startup_pipe[1];
 	(void)fcntl(g_startup_pipe, F_SETFD, FD_CLOEXEC);
 
@@ -182,10 +127,6 @@ int daemonize(void)
 
 	umask(0077);
 
-	/*
-	 * close inherited file descriptors and redirect standard
-	 * streams to /dev/null
-	 */
 	fd = open("/dev/null", O_RDWR);
 	if (fd < 0)
 		return -errno;
@@ -203,10 +144,7 @@ int daemonize(void)
 	return 0;
 }
 
-/*
- * Create parent directories for a path.
- * Only creates the final directory component's parent.
- */
+/* One level only. An existing parent must not let others replace the file. */
 static int ensure_parent_dir(const char *path)
 {
 	char *pathcopy;
@@ -317,7 +255,6 @@ int pidfile_create(const char *path)
 
 	fsync(fd);
 
-	/* fd stays open -> lock persists until process exit */
 	return fd;
 }
 
@@ -398,10 +335,6 @@ int daemon_install_signals(volatile sig_atomic_t *running,
 	g_daemon_running = running;
 	g_daemon_reload = reload;
 
-	/*
-	 * SIGTERM / SIGINT -> graceful shutdown.
-	 * SA_RESTART: restart interrupted syscalls
-	 */
 	memset(&sa, 0, sizeof(sa));
 	sa.sa_handler = sigterm_handler;
 	sa.sa_flags = SA_RESTART;
@@ -412,9 +345,6 @@ int daemon_install_signals(volatile sig_atomic_t *running,
 	if (sigaction(SIGINT, &sa, NULL) < 0)
 		return -errno;
 
-	/*
-	 * SIGHUP -> reload configuration
-	 */
 	memset(&sa, 0, sizeof(sa));
 	sa.sa_handler = sighup_handler;
 	sa.sa_flags = SA_RESTART;
@@ -423,9 +353,6 @@ int daemon_install_signals(volatile sig_atomic_t *running,
 	if (sigaction(SIGHUP, &sa, NULL) < 0)
 		return -errno;
 
-	/*
-	 * SIGPIPE -> ignore
-	 */
 	memset(&sa, 0, sizeof(sa));
 	sa.sa_handler = SIG_IGN;
 	sa.sa_flags = 0;
