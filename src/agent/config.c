@@ -195,7 +195,6 @@ void config_init(struct lota_config *cfg)
 	cfg->seal_persistent_primary = false;
 
 	cfg->attest_interval = 0;
-	cfg->aik_ttl = 0;
 	cfg->aik_handle = TPM_AIK_HANDLE;
 
 	cfg->daemon = false;
@@ -236,25 +235,6 @@ static int check_attest_interval(long v, const char *key, const char *filepath,
 		filepath, lineno, key, v, MIN_ATTEST_INTERVAL,
 		MAX_ATTEST_INTERVAL, MAX_ATTEST_INTERVAL);
 	return -1;
-}
-
-_Static_assert(TPM_AIK_DEFAULT_TTL_SEC >= MIN_AIK_TTL,
-	       "the default AIK TTL must not sit below the floor");
-
-#define AIK_TTL_LIFTED_MSG "Warning: AIK TTL %u too low, using %ds (1 hour)\n"
-
-uint32_t config_clamp_aik_ttl(uint32_t ttl, const char *filepath, int lineno)
-{
-	if (ttl == 0 || ttl >= MIN_AIK_TTL)
-		return ttl;
-
-	if (filepath)
-		fprintf(stderr, "%s:%d: " AIK_TTL_LIFTED_MSG, filepath, lineno,
-			ttl, MIN_AIK_TTL);
-	else
-		fprintf(stderr, AIK_TTL_LIFTED_MSG, ttl, MIN_AIK_TTL);
-
-	return MIN_AIK_TTL;
 }
 
 /* Returns 0 applied, 1 unknown key, -1 invalid value. */
@@ -848,18 +828,6 @@ static int apply_key(struct lota_config *cfg, const char *key,
 		cfg->attest_interval = (int)v;
 		return 0;
 	}
-	if (strcmp(key, "aik_ttl") == 0 || strcmp(key, "aik-ttl") == 0) {
-		long v;
-		if (safe_parse_long(value, &v) != 0 || v < 0 ||
-		    v > (long)UINT32_MAX) {
-			fprintf(stderr, "%s:%d: invalid aik_ttl '%s'\n",
-				filepath, lineno, value);
-			return -1;
-		}
-		cfg->aik_ttl =
-			config_clamp_aik_ttl((uint32_t)v, filepath, lineno);
-		return 0;
-	}
 	if (strcmp(key, "aik_handle") == 0 || strcmp(key, "aik-handle") == 0) {
 		unsigned long v;
 		if (safe_parse_ulong_base(value, 0, &v) != 0 || v == 0 ||
@@ -1259,7 +1227,6 @@ void config_dump(const struct lota_config *cfg, FILE *fp)
 
 	fprintf(fp, "\n# Attestation\n");
 	fprintf(fp, "attest_interval = %d\n", cfg->attest_interval);
-	fprintf(fp, "aik_ttl = %u\n", cfg->aik_ttl);
 	fprintf(fp, "aik_handle = 0x%08X\n", cfg->aik_handle);
 	if (cfg->kernel_path[0])
 		fprintf(fp, "kernel_path = %s\n", cfg->kernel_path);

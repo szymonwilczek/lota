@@ -236,8 +236,8 @@ expiry (it re-enrolls once the cert enters its final third of validity, backing
 off when the CA is unreachable). The renewal is automatic whenever an endpoint
 is on disk, so an enrolled host needs no scheduled ``--reenroll``. The same
 guided command stays available as a manual override -- before the certificate
-TTL expires, or after the agent rotates the AIK -- naming only the anchor that
-selects the profile:
+TTL expires, or after ``--reprovision-aik`` replaces the AIK -- naming only the
+anchor that selects the profile:
 
 .. code-block:: sh
 
@@ -460,41 +460,8 @@ file is not what changed.
 
 Other publishers are unaffected. Each has its own key, schedule and failure
 state, so one publisher standing still does not slow, stop or silence the
-rest -- which the log shows by continuing to report their enrollment, rotation
-and renewal work as usual.
-
-AIK rotation status over D-Bus
-==============================
-
-The agent rotates the AIK on its own schedule (``--aik-ttl``, default 30d). It
-surfaces the rotation state over D-Bus so an operator -- or a fleet monitor --
-can see when a rotation is due and when a re-enrollment is needed.
-``GetRotationStatus`` returns the generation, the AIK creation time, the
-next-rotation deadline, any open grace window, and whether the stored
-certificate has been outdated by a rotation:
-
-.. code-block:: sh
-
-    busctl call org.lota.Agent1 /org/lota/Agent1 org.lota.Agent1 \
-        GetRotationStatus
-    # (tttttb) generation provisioned_at rotation_deadline ... reenroll_required
-
-    busctl get-property org.lota.Agent1 /org/lota/Agent1 org.lota.Agent1 \
-        ReenrollRequired
-
-When ``ReenrollRequired`` is true, the host rotated its AIK and the issued
-certificate is stale; clear it with the guided ``sudo lota-agent --reenroll``
-above. The same properties emit ``PropertiesChanged``, so a subscriber is
-notified the moment a rotation happens rather than having to poll.
-
-The schedule has a floor of 3600 seconds, and it applies wherever the value is
-set: ``--aik-ttl`` and the ``aik_ttl`` key in ``lota.conf`` both meet it. Below
-an hour a host rotates its attestation key faster than an enrolment completes,
-so every rotation invalidates the certificate that names the old key and the
-host spends its time on TPM key creation and CA round trips -- on a firmware
-TPM, the slow operations. A smaller value is lifted to the floor, and the agent
-says so on stderr; when it came from the file, the warning names the file and
-the line. ``aik_ttl = 0`` is not a cadence -- it selects the built-in default.
+rest -- which the log shows by continuing to report their enrollment and
+renewal work as usual.
 
 Assigning tenants at enrollment
 ===============================

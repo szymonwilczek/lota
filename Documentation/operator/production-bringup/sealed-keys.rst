@@ -22,12 +22,12 @@ Seal a secret to the current boot state and recover it later:
     # Unseal: only succeeds when the host is in the sealed PCR state.
     sudo lota-agent --unseal < title.sealed
 
-The default PCR set is the platform: firmware and Secure Boot PCRs 0-7. Those
-describe the machine rather than the software on it, so they cannot be
-reproduced on other hardware or under other firmware -- which is the binding
-at-rest sealing wants, since the threat it answers is a powered-off disk in
-someone else's hands. A firmware or Secure Boot change still makes the unseal
-fail closed.
+The default PCR set is the platform: the firmware code, its configuration and
+the Secure Boot state, PCRs 0, 1 and 7. The threat at-rest sealing answers is a
+powered-off disk in someone else's hands, and the blob loads only under this
+TPM's primary key. A firmware or Secure Boot change makes the unseal fail
+closed. A kernel upgrade does not: PCR 4, which holds the kernel image on a shim
+and GRUB host, is not in the set.
 
 **PCR 14 is deliberately not in the default set.** It is LOTA's boot
 commitment, and its value is a function of the agent binary: it is stable from
@@ -35,7 +35,7 @@ boot to boot, and it moves when the agent is updated. Binding it would make
 every agent upgrade destroy every sealed secret on the host, while adding
 nothing against a stolen disk.
 
-Ask for it explicitly with ``--seal-pcrs 0x40FF`` when you want a secret a
+Ask for it explicitly with ``--seal-pcrs 0x4083`` when you want a secret a
 swapped agent cannot read and you accept losing it at each upgrade; pick any
 other set the same way (for example ``--seal-pcrs 0xC1`` for PCRs 0, 6 and 7).
 

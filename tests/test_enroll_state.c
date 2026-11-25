@@ -2,9 +2,8 @@
 /*
  * Unit tests for the enrollment state record (enroll_state.c).
  *
- * The record lets --reenroll reuse a saved CA endpoint and lets the daemon
- * tell when a local AIK rotation has outdated the issued certificate, so
- * the round-trip and the fail-closed guards are pinned here.
+ * The record lets --reenroll reuse a saved CA endpoint, so the round-trip
+ * and the fail-closed guards are pinned here.
  *
  * Copyright (C) 2026 Szymon Wilczek
  */
@@ -46,7 +45,6 @@ static void test_roundtrip(void)
 	struct enroll_state in, out;
 
 	memset(&in, 0, sizeof(in));
-	in.aik_generation = 7;
 	in.ca_port = 8444;
 	in.no_verify_tls = 0;
 	in.has_pin = 1;
@@ -61,7 +59,6 @@ static void test_roundtrip(void)
 	memset(&out, 0, sizeof(out));
 	CHECK(enroll_state_load_path(path, &out) == 0, "load state");
 
-	CHECK(out.aik_generation == 7, "generation round-trips");
 	CHECK(out.ca_port == 8444, "port round-trips");
 	CHECK(out.has_pin == 1, "has_pin round-trips");
 	CHECK(memcmp(out.pin_sha256, in.pin_sha256, sizeof(in.pin_sha256)) == 0,

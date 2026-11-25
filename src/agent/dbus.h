@@ -70,13 +70,6 @@ void dbus_emit_attestation_result(struct dbus_context *ctx, bool success);
 void dbus_emit_mode_changed(struct dbus_context *ctx, uint8_t mode);
 
 /**
- * dbus_emit_rotation_changed() - Emit PropertiesChanged for the AIK rotation
- * properties.
- * @ctx: Context, or NULL.
- */
-void dbus_emit_rotation_changed(struct dbus_context *ctx);
-
-/**
  * dbus_status_word() - The status word GetStatus() and StatusFlags answer.
  * @ipc: Context, or NULL for 0.
  *

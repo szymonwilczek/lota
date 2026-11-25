@@ -123,10 +123,6 @@ static void test_config_init_defaults(void)
 		FAIL("attest_interval != 0");
 		return;
 	}
-	if (cfg.aik_ttl != 0) {
-		FAIL("aik_ttl != 0");
-		return;
-	}
 	if (cfg.aik_handle != 0x81010002) {
 		FAIL("aik_handle != 0x81010002");
 		return;
@@ -264,7 +260,6 @@ static void test_config_load_basic_values(void)
 				   "strict_mmap = true\n"
 				   "block_ptrace = yes\n"
 				   "attest_interval = 300\n"
-				   "aik_ttl = 7200\n"
 				   "aik_handle = 0x81010003\n"
 				   "seal_aik_auth = true\n"
 				   "seal_aik_auth_strict = true\n"
@@ -301,10 +296,6 @@ static void test_config_load_basic_values(void)
 	}
 	if (cfg.attest_interval != 300) {
 		FAIL("attest_interval != 300");
-		return;
-	}
-	if (cfg.aik_ttl != 7200) {
-		FAIL("aik_ttl != 7200");
 		return;
 	}
 	if (cfg.aik_handle != 0x81010003) {
@@ -396,7 +387,6 @@ static void test_config_load_hyphen_keys(void)
 		"strict-mmap = true\n"
 		"block-ptrace = true\n"
 		"attest-interval = 120\n"
-		"aik-ttl = 3600\n"
 		"aik-handle = 0x81020001\n"
 		"pid-file = /tmp/test.pid\n"
 		"signing-key = /tmp/sign.key\n"
@@ -435,10 +425,6 @@ static void test_config_load_hyphen_keys(void)
 	}
 	if (cfg.attest_interval != 120) {
 		FAIL("attest-interval");
-		return;
-	}
-	if (cfg.aik_ttl != 3600) {
-		FAIL("aik-ttl");
 		return;
 	}
 	if (cfg.aik_handle != 0x81020001) {
@@ -1042,100 +1028,18 @@ static void test_config_load_attest_interval_bounds(void)
 	PASS();
 }
 
-static void test_config_load_aik_ttl_floor(void)
+static void test_config_load_refuses_aik_ttl(void)
 {
 	struct lota_config cfg;
 	char path[PATH_MAX];
-	char content[64];
-	int ret;
 
-	TEST("config_load lifts aik_ttl below the floor");
-	snprintf(content, sizeof(content), "aik_ttl = %d\n", MIN_AIK_TTL - 1);
-	write_config("ttl_low.conf", content);
-	config_path("ttl_low.conf", path, sizeof(path));
+	TEST("config_load refuses aik_ttl");
+	write_config("aik_ttl.conf", "aik_ttl = 7200\n");
+	config_path("aik_ttl.conf", path, sizeof(path));
 	config_init(&cfg);
-	ret = config_load(&cfg, path);
-	if (ret != 0) {
-		char msg[64];
-		snprintf(msg, sizeof(msg), "expected 0, got %d", ret);
-		FAIL(msg);
+	if (config_load(&cfg, path) != -EINVAL) {
+		FAIL("aik_ttl was accepted");
 		return;
-	}
-	if (cfg.aik_ttl != MIN_AIK_TTL) {
-		char msg[64];
-		snprintf(msg, sizeof(msg), "expected %d, got %u", MIN_AIK_TTL,
-			 cfg.aik_ttl);
-		FAIL(msg);
-		return;
-	}
-	PASS();
-
-	TEST("config_load keeps aik_ttl at the floor");
-	snprintf(content, sizeof(content), "aik_ttl = %d\n", MIN_AIK_TTL);
-	write_config("ttl_floor.conf", content);
-	config_path("ttl_floor.conf", path, sizeof(path));
-	config_init(&cfg);
-	ret = config_load(&cfg, path);
-	if (ret != 0 || cfg.aik_ttl != MIN_AIK_TTL) {
-		FAIL("floor value not applied");
-		return;
-	}
-	PASS();
-
-	/* 0 selects the built-in default and is not a rotation cadence,
-	 * so the floor must leave it alone */
-	TEST("config_load keeps aik_ttl = 0 (the default)");
-	write_config("ttl_zero.conf", "aik_ttl = 0\n");
-	config_path("ttl_zero.conf", path, sizeof(path));
-	config_init(&cfg);
-	ret = config_load(&cfg, path);
-	if (ret != 0 || cfg.aik_ttl != 0) {
-		FAIL("zero was clamped");
-		return;
-	}
-	PASS();
-
-	/* The dump is what --add-publisher rewrites lota.conf from,
-	 * so a clamped value has to survive the round trip as the clamped one */
-	TEST("config_dump writes the lifted aik_ttl back");
-	{
-		struct lota_config reloaded;
-		char dump_path[PATH_MAX];
-		FILE *f;
-		int fd;
-
-		snprintf(content, sizeof(content), "aik_ttl = %d\n",
-			 MIN_AIK_TTL - 1);
-		write_config("ttl_dump_src.conf", content);
-		config_path("ttl_dump_src.conf", path, sizeof(path));
-		config_init(&cfg);
-		if (config_load(&cfg, path) != 0) {
-			FAIL("load source");
-			return;
-		}
-
-		snprintf(dump_path, sizeof(dump_path), "%s/ttl_dumped.conf",
-			 tmpdir);
-		fd = open(dump_path, O_WRONLY | O_CREAT | O_TRUNC, 0600);
-		f = fd >= 0 ? fdopen(fd, "w") : NULL;
-		if (fd >= 0 && !f)
-			close(fd);
-		if (!f) {
-			FAIL("fopen dump");
-			return;
-		}
-		config_dump(&cfg, f);
-		fclose(f);
-
-		config_init(&reloaded);
-		if (config_load(&reloaded, dump_path) != 0) {
-			FAIL("reload dump");
-			return;
-		}
-		if (reloaded.aik_ttl != MIN_AIK_TTL) {
-			FAIL("dump did not carry the lifted value");
-			return;
-		}
 	}
 	PASS();
 }
@@ -2274,7 +2178,6 @@ static void test_config_load_all_known_keys(void)
 		"block_ptrace = true\n"
 		"bench = true\n"
 		"attest_interval = 240\n"
-		"aik_ttl = 86400\n"
 		"aik_handle = 0x81010005\n"
 		"daemon = true\n"
 		"pid_file = /all/pid\n"
@@ -2332,10 +2235,6 @@ static void test_config_load_all_known_keys(void)
 	}
 	if (cfg.attest_interval != 240) {
 		FAIL("attest_interval");
-		return;
-	}
-	if (cfg.aik_ttl != 86400) {
-		FAIL("aik_ttl");
 		return;
 	}
 	if (cfg.aik_handle != 0x81010005) {
@@ -2580,7 +2479,7 @@ int main(void)
 		test_config_load_empty_value,
 		test_config_load_port_bounds,
 		test_config_load_attest_interval_bounds,
-		test_config_load_aik_ttl_floor,
+		test_config_load_refuses_aik_ttl,
 		test_config_load_profiles,
 		test_config_profile_reporting,
 		test_config_load_profile_incomplete,

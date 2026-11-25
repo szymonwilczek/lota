@@ -137,11 +137,10 @@ func (ca *CA) IssueAIKCert(pseudonym, tenant string, pub *rsa.PublicKey) ([]byte
 
 // Agent is one synthetic fleet member.
 type Agent struct {
-	Name       string
-	HardwareID [types.HashSize]byte
-	Pseudonym  string // AIK certificate CN, the verifier's client ID
-	Key        *rsa.PrivateKey
-	CertDER    []byte
+	Name      string
+	Pseudonym string // AIK certificate CN, the verifier's client ID
+	Key       *rsa.PrivateKey
+	CertDER   []byte
 }
 
 // Fleet is a set of agents with one shared measurement profile.
@@ -212,10 +211,9 @@ func NewFleet(ca *CA, n int, keys []*rsa.PrivateKey, tenant string) (*Fleet, err
 	if err := parallelFor(n, func(i int) error {
 		name := AgentName(i)
 		a := &Agent{
-			Name:       name,
-			HardwareID: sha256.Sum256([]byte("lota-loadgen-hwid:" + rigID + ":" + name)),
-			Pseudonym:  Pseudonym(rigID, name),
-			Key:        keys[i%len(keys)],
+			Name:      name,
+			Pseudonym: Pseudonym(rigID, name),
+			Key:       keys[i%len(keys)],
 		}
 		der, err := ca.IssueAIKCert(a.Pseudonym, tenant, &a.Key.PublicKey)
 		if err != nil {

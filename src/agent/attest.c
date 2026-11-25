@@ -368,19 +368,6 @@ static int build_attestation_report(const struct verifier_challenge *challenge,
 			report->header.flags |= LOTA_REPORT_FLAG_IMA_APPRAISAL;
 	}
 
-	ret = tpm_get_hardware_id(&g_agent.tpm_ctx, report->tpm.hardware_id);
-	if (ret < 0) {
-		fprintf(stderr, "Warning: Failed to get hardware ID: %s\n",
-			tpm_strerror(ret));
-		memset(report->tpm.hardware_id, 0,
-		       sizeof(report->tpm.hardware_id));
-	} else if (ret == 1) {
-		lota_notice(
-			"Hardware ID derived from the AIK: this TPM yielded no endorsement key");
-	} else {
-		lota_dbg("Hardware ID derived from the EK");
-	}
-
 	ret = tpm_get_current_kernel_path(&g_agent.tpm_ctx, kernel_path,
 					  sizeof(kernel_path));
 	if (ret == 0) {
@@ -477,8 +464,6 @@ static int build_attestation_report(const struct verifier_challenge *challenge,
 		if (EVP_DigestInit_ex(md, EVP_sha256(), NULL) != 1 ||
 		    EVP_DigestUpdate(md, challenge->nonce, LOTA_NONCE_SIZE) !=
 			    1 ||
-		    EVP_DigestUpdate(md, report->tpm.hardware_id,
-				     LOTA_HARDWARE_ID_SIZE) != 1 ||
 		    EVP_DigestUpdate(md, flags_le, sizeof(flags_le)) != 1 ||
 		    EVP_DigestUpdate(md, report->system.kernel_hash,
 				     sizeof(report->system.kernel_hash)) != 1 ||
@@ -571,25 +556,6 @@ static int build_attestation_report(const struct verifier_challenge *challenge,
 			report->tpm.aik_cert_size = 0;
 			lota_dbg("No AIK certificate on disk; run --enroll for "
 				 "cert-backed attestation");
-		}
-	}
-
-	if (g_agent.tpm_ctx.aik_meta_loaded) {
-		report->tpm.aik_generation =
-			g_agent.tpm_ctx.aik_meta.generation;
-
-		if (tpm_aik_in_grace_period(&g_agent.tpm_ctx)) {
-			size_t prev_size = 0;
-			ret = tpm_aik_get_prev_public(
-				&g_agent.tpm_ctx, report->tpm.prev_aik_public,
-				LOTA_MAX_AIK_PUB_SIZE, &prev_size);
-			if (ret == 0) {
-				report->tpm.prev_aik_public_size =
-					(uint16_t)prev_size;
-				lota_dbg("Previous AIK included (grace period, "
-					 "%zu bytes)",
-					 prev_size);
-			}
 		}
 	}
 
@@ -956,32 +922,6 @@ static uint32_t reconcile_tpm_lockout(uint32_t flags)
 	return flags & ~LOTA_STATUS_TPM_LOCKOUT;
 }
 
-void publish_rotation_state(uint32_t aik_ttl, const struct profile_paths *paths)
-{
-	struct tpm_context *tpm = &g_agent.tpm_ctx;
-	struct enroll_state st;
-	uint64_t deadline = 0;
-	bool reenroll_required = false;
-	uint32_t ttl;
-
-	if (!tpm->aik_meta_loaded)
-		return;
-
-	ttl = aik_ttl ? aik_ttl : TPM_AIK_DEFAULT_TTL_SEC;
-	if (tpm->aik_meta.provisioned_at > 0)
-		deadline = (uint64_t)tpm->aik_meta.provisioned_at + ttl;
-
-	/* With no record there is nothing to compare: the flag stays clear */
-	if (paths && enroll_state_load_path(paths->enroll_state, &st) == 0)
-		reenroll_required = st.aik_generation !=
-				    tpm->aik_meta.generation;
-
-	ipc_update_rotation(&g_agent.ipc_ctx, tpm->aik_meta.generation,
-			    (uint64_t)tpm->aik_meta.provisioned_at,
-			    (uint64_t)tpm->aik_meta.last_rotated_at, deadline,
-			    (uint64_t)tpm->grace_deadline, reenroll_required);
-}
-
 /* The loop's attestation tallies, sent to the socket owner with each sync */
 static struct attest_peer_counters g_attest_counters;
 
@@ -1210,27 +1150,6 @@ static bool enroll_target_if_needed(struct attest_target *t)
 	return false;
 }
 
-static void rotate_bound_aik_if_due(uint32_t aik_ttl)
-{
-	int ret;
-
-	if (!g_agent.tpm_ctx.aik_meta_loaded)
-		return;
-	if (tpm_aik_needs_rotation(&g_agent.tpm_ctx, aik_ttl) != 1)
-		return;
-
-	lota_info("AIK rotation due (gen %lu, age %ld s)",
-		  (unsigned long)g_agent.tpm_ctx.aik_meta.generation,
-		  (long)tpm_aik_age(&g_agent.tpm_ctx));
-
-	ret = tpm_rotate_aik(&g_agent.tpm_ctx);
-	if (ret < 0)
-		lota_err("AIK rotation failed: %s", tpm_strerror(ret));
-	else
-		lota_info("AIK rotated -> generation %lu",
-			  (unsigned long)g_agent.tpm_ctx.aik_meta.generation);
-}
-
 /*
  * Enable unattended AIK certificate renewal for @t when its enrollment record
  * holds a CA endpoint. Re-reads the record on every call.
@@ -1351,8 +1270,8 @@ static bool target_reporting_now(struct attest_target *t)
 
 	if (attest_target_should_announce_wait(t))
 		lota_info("Nothing is reported to %s until a title of theirs "
-			  "runs; enrollment, key rotation and certificate "
-			  "renewal continue meanwhile",
+			  "runs; enrollment and certificate renewal "
+			  "continue meanwhile",
 			  t->label);
 
 	if (t->attested) {
@@ -1367,7 +1286,7 @@ static bool target_reporting_now(struct attest_target *t)
 
 /* One round against one target: seconds to wait before its next one */
 static int attest_target_round(struct attest_target *t, int skip_verify,
-			       const uint8_t *pin_sha256, uint32_t aik_ttl)
+			       const uint8_t *pin_sha256)
 {
 	time_t now = time(NULL);
 	int ret;
@@ -1384,10 +1303,8 @@ static int attest_target_round(struct attest_target *t, int skip_verify,
 	}
 
 	ret = bind_target(t);
-	if (ret == 0) {
-		rotate_bound_aik_if_due(aik_ttl);
+	if (ret == 0)
 		renew_target_cert_if_due(t);
-	}
 
 	/*
 	 * A key the certificate does not name stays wrong on retry: no backoff,
@@ -1439,9 +1356,8 @@ static int attest_target_round(struct attest_target *t, int skip_verify,
 			lota_err("The TPM refused to authorize a quote for "
 				 "%s. The attestation key or its stored "
 				 "authorization is not the one this publisher "
-				 "enrolled, and every retry spends a "
-				 "dictionary-attack attempt, so no round is "
-				 "attempted until this publisher is "
+				 "enrolled, so no round is attempted until "
+				 "this publisher is "
 				 "re-enrolled: lota-agent --reenroll "
 				 "--ca-cert <their anchor>.",
 				 t->label);
@@ -1545,8 +1461,7 @@ static void announce_targets(const struct attest_target *targets, size_t count)
 			lota_info("Target %zu: %s -- nothing is reported to "
 				  "them; their backend verifies the tokens "
 				  "titles fetch. Checked every %d seconds for "
-				  "enrollment, AIK rotation and certificate "
-				  "renewal",
+				  "enrollment and certificate renewal",
 				  i + 1, targets[i].label, targets[i].interval);
 		else
 			lota_info("Target %zu: %s every %d seconds%s", i + 1,
@@ -1615,9 +1530,6 @@ static int aik_ready_for(const struct attest_target *first)
 		lota_err("Failed to load AIK metadata: %s", tpm_strerror(ret));
 		return ret;
 	}
-	lota_info("AIK generation: %lu, age: %ld seconds",
-		  (unsigned long)g_agent.tpm_ctx.aik_meta.generation,
-		  (long)tpm_aik_age(&g_agent.tpm_ctx));
 	return 0;
 }
 
@@ -1626,7 +1538,6 @@ static int continuous_attest_run(const struct lota_config *cfg,
 				 const char *config_path, const char *server,
 				 int port, const char *ca_cert, int skip_verify,
 				 const uint8_t *pin_sha256, int interval_sec,
-				 uint32_t aik_ttl,
 				 struct attest_target *targets)
 {
 	struct attest_peer peer;
@@ -1768,7 +1679,7 @@ static int continuous_attest_run(const struct lota_config *cfg,
 				continue;
 
 			wait_sec = attest_target_round(&targets[i], skip_verify,
-						       pin_sha256, aik_ttl);
+						       pin_sha256);
 			targets[i].next_due_ms =
 				monotonic_ms() + (uint64_t)wait_sec * 1000;
 		}
@@ -1871,7 +1782,7 @@ static int continuous_attest_run(const struct lota_config *cfg,
 int do_continuous_attest(const struct lota_config *cfg, const char *config_path,
 			 const char *server, int port, const char *ca_cert,
 			 int skip_verify, const uint8_t *pin_sha256,
-			 int interval_sec, uint32_t aik_ttl)
+			 int interval_sec)
 {
 	struct attest_target *targets;
 	int ret;
@@ -1886,7 +1797,7 @@ int do_continuous_attest(const struct lota_config *cfg, const char *config_path,
 	ret = continuous_attest_run(
 		cfg, config_path ? config_path : LOTA_CONFIG_DEFAULT_PATH,
 		server, port, ca_cert, skip_verify, pin_sha256, interval_sec,
-		aik_ttl, targets);
+		targets);
 	free(targets);
 	return ret;
 }

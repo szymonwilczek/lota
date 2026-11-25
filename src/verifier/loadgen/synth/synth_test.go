@@ -176,9 +176,6 @@ func TestFleetProfileSharedIdentitiesRigScoped(t *testing.T) {
 		t.Error("PCR14 derivation differs between fleets")
 	}
 	for i := range f1.Agents {
-		if f1.Agents[i].HardwareID == f2.Agents[i].HardwareID {
-			t.Errorf("agent %d hardware ID collides across rigs", i)
-		}
 		if f1.Agents[i].Pseudonym == f2.Agents[i].Pseudonym {
 			t.Errorf("agent %d pseudonym collides across rigs", i)
 		}
@@ -195,9 +192,6 @@ func TestFleetProfileSharedIdentitiesRigScoped(t *testing.T) {
 		t.Fatalf("NewFleet: %v", err)
 	}
 	for i := range f1.Agents {
-		if f1.Agents[i].HardwareID != f3.Agents[i].HardwareID {
-			t.Errorf("agent %d hardware ID unstable across rig reload", i)
-		}
 		if f1.Agents[i].Pseudonym != f3.Agents[i].Pseudonym {
 			t.Errorf("agent %d pseudonym unstable across rig reload", i)
 		}

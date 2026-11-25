@@ -176,7 +176,6 @@ static int load_config_into_options(struct cli_options *opts,
 	opts->block_anon_exec = cfg->block_anon_exec;
 	opts->bench = cfg->bench;
 	opts->attest_interval = cfg->attest_interval;
-	opts->aik_ttl = cfg->aik_ttl;
 
 	agent_globals_lock(&g_agent);
 	g_agent.tpm_ctx.aik_handle = cfg->aik_handle;
@@ -327,7 +326,6 @@ int cli_parse(int argc, char **argv, struct cli_options *opts,
 		{ "allow-verity", required_argument, NULL, 'A' },
 		{ "daemon", no_argument, NULL, 'd' },
 		{ "pid-file", required_argument, NULL, 'D' },
-		{ "aik-ttl", required_argument, NULL, 'T' },
 		{ "gen-signing-key", required_argument, NULL, 'G' },
 		{ "sign-policy", required_argument, NULL, 'g' },
 		{ "verify-policy", required_argument, NULL, 'V' },
@@ -341,7 +339,6 @@ int cli_parse(int argc, char **argv, struct cli_options *opts,
 	opts->bpf_path = LOTA_CLI_DEFAULT_BPF_PATH;
 	opts->server_addr = "";
 	opts->server_port = LOTA_DEFAULT_VERIFIER_PORT;
-	opts->aik_ttl = LOTA_CLI_DEFAULT_AIK_TTL;
 	opts->ca_port = LOTA_DEFAULT_CA_PORT;
 	opts->config_file_mode = -1;
 
@@ -363,7 +360,7 @@ int cli_parse(int argc, char **argv, struct cli_options *opts,
 
 	while ((opt = getopt_long(
 			argc, argv,
-			"f:ZticSEaI:s:p:C:KF:b:m:MPJYXR:L:A:dD:T:G:g:V:k:Q:h",
+			"f:ZticSEaI:s:p:C:KF:b:m:MPJYXR:L:A:dD:G:g:V:k:Q:h",
 			long_options, NULL)) != -1) {
 		switch (opt) {
 		case 't':
@@ -649,15 +646,6 @@ int cli_parse(int argc, char **argv, struct cli_options *opts,
 		case 'D':
 			opts->pid_file_path = optarg;
 			break;
-		case 'T': {
-			uint32_t v;
-			if (safe_parse_u32_dec(optarg, &v) < 0) {
-				fprintf(stderr, "Invalid AIK TTL: %s\n",
-					optarg);
-				return 1;
-			}
-			opts->aik_ttl = v;
-		} break;
 		case 'G':
 			opts->gen_signing_key_prefix = optarg;
 			break;
@@ -686,12 +674,6 @@ int cli_parse(int argc, char **argv, struct cli_options *opts,
 			return (opt == 'h') ? -1 : 1;
 		}
 	}
-
-	/*
-	 * --aik-ttl reaches here unclamped; a value from the file has already
-	 * been lifted by the parser and passes through.
-	 */
-	opts->aik_ttl = config_clamp_aik_ttl(opts->aik_ttl, NULL, 0);
 
 	return 0;
 }
@@ -773,7 +755,6 @@ int cli_dump_config(struct cli_options *opts, struct lota_config *cfg)
 	cfg->block_anon_exec = opts->block_anon_exec;
 	cfg->bench = opts->bench;
 	cfg->attest_interval = opts->attest_interval;
-	cfg->aik_ttl = opts->aik_ttl;
 	cfg->aik_handle = g_agent.tpm_ctx.aik_handle;
 	cfg->daemon = opts->daemon_flag ? true : false;
 	if (opts->pid_file_path != cfg->pid_file) {

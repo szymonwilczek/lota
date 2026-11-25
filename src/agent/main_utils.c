@@ -80,12 +80,12 @@ void print_usage(const char *prog, const char *default_bpf_path,
 	printf("                    to stdout and exit (fails closed if the "
 	       "boot\n");
 	printf("                    state differs from seal time)\n");
-	printf("  --seal-pcrs MASK  PCR bitmask for --seal; default is 0xFF, "
+	printf("  --seal-pcrs MASK  PCR bitmask for --seal; default is 0x83, "
 	       "the\n");
-	printf("                    platform set, PCRs 0-7. PCR 14 is not in "
-	       "it:\n");
-	printf("                    it is the agent's own boot commitment, so "
-	       "0x40FF\n");
+	printf("                    platform set, PCRs 0, 1 and 7. PCR 14 is "
+	       "not in\n");
+	printf("                    it: it is the agent's own boot commitment, "
+	       "so 0x4083\n");
 	printf("                    additionally binds the secret to this "
 	       "agent\n");
 	printf("                    binary and every upgrade then destroys "
@@ -306,10 +306,6 @@ void print_usage(const char *prog, const char *default_bpf_path,
 	       "systemd)\n");
 	printf("  --pid-file PATH   PID file location\n");
 	printf("                    (default: %s)\n", DAEMON_DEFAULT_PID_FILE);
-	printf("  --aik-ttl SECS    AIK key lifetime in seconds before "
-	       "rotation\n");
-	printf("                    (default: 30 days, min: %d)\n",
-	       MIN_AIK_TTL);
 	printf("\nPolicy signing:\n");
 	printf("  --gen-signing-key PREFIX\n");
 	printf("                    Generate Ed25519 keypair: PREFIX.key + "

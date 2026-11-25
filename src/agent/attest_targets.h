@@ -36,7 +36,7 @@ struct attest_target {
 
 	/*
 	 * This publisher runs no verifier: nothing is reported here. The target
-	 * still enrolls, holds an AIK, rotates it and renews its certificate.
+	 * still enrolls, holds an AIK and renews its certificate.
 	 */
 	bool token_only;
 
@@ -154,8 +154,8 @@ bool attest_target_should_announce_renew_move(struct attest_target *t);
  * @t: The target.
  *
  * A token-only publisher holds no verdict here, and a session-gated one is
- * reported to only with a title of theirs running. Enrollment, AIK rotation
- * and certificate renewal do not depend on this answer.
+ * reported to only with a title of theirs running. Enrollment and
+ * certificate renewal do not depend on this answer.
  *
  * Return: true when a report goes out.
  */

@@ -60,16 +60,13 @@ static void test_mask_validation(void)
 
 /*
  * The default mask describes the machine, not the software running on it.
- * PCRs 0-7 are the firmware and Secure Boot set: they cannot be reproduced on
- * other hardware, which is the binding at-rest sealing wants, and they survive
- * both a reboot and an agent upgrade.
+ * PCRs 0, 1 and 7 are the firmware and Secure Boot set: they survive a reboot,
+ * a kernel upgrade and an agent upgrade.
  */
 static void test_default_mask_contents(void)
 {
-	TEST("default mask is the platform set, PCR 0-7");
-	uint32_t want = 0;
-	for (int i = 0; i <= 7; i++)
-		want |= (1u << i);
+	TEST("default mask is the platform set, PCR 0, 1 and 7");
+	uint32_t want = (1u << 0) | (1u << 1) | (1u << 7);
 	if (LOTA_SEAL_DEFAULT_PCR_MASK != want) {
 		FAIL("mask mismatch");
 		return;

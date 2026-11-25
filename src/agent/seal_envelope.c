@@ -9,6 +9,7 @@
 #include <limits.h>
 #include <stdint.h>
 #include <string.h>
+#include <openssl/crypto.h>
 #include <openssl/evp.h>
 #include <openssl/types.h>
 
@@ -109,6 +110,8 @@ int lota_envelope_aead_open(const uint8_t kek[LOTA_ENVELOPE_KEK_SIZE],
 	}
 	ret = 0;
 out:
+	if (ret < 0)
+		OPENSSL_cleanse(pt_out, ct_len);
 	EVP_CIPHER_CTX_free(ctx);
 	return ret;
 }

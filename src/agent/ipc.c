@@ -2180,9 +2180,6 @@ static void handle_sync_attest(struct ipc_context *ctx,
 	adopt_loop_observations(ctx, &hdr);
 	recompute_host_attestation(ctx);
 	adopt_attest_counters(ctx, &hdr);
-
-	if (ctx->on_attest_sync)
-		ctx->on_attest_sync(ctx->on_attest_sync_user);
 }
 
 /*
@@ -3782,29 +3779,6 @@ void ipc_record_attestation(struct ipc_context *ctx, bool success)
 	dbus_emit_attestation_result(ctx->dbus, success);
 }
 
-void ipc_update_rotation(struct ipc_context *ctx, uint64_t generation,
-			 uint64_t provisioned_at, uint64_t last_rotated_at,
-			 uint64_t rotation_deadline, uint64_t grace_deadline,
-			 bool reenroll_required)
-{
-	bool changed = ctx->aik_generation != generation ||
-		       ctx->aik_provisioned_at != provisioned_at ||
-		       ctx->aik_last_rotated_at != last_rotated_at ||
-		       ctx->aik_rotation_deadline != rotation_deadline ||
-		       ctx->aik_grace_deadline != grace_deadline ||
-		       ctx->aik_reenroll_required != reenroll_required;
-
-	ctx->aik_generation = generation;
-	ctx->aik_provisioned_at = provisioned_at;
-	ctx->aik_last_rotated_at = last_rotated_at;
-	ctx->aik_rotation_deadline = rotation_deadline;
-	ctx->aik_grace_deadline = grace_deadline;
-	ctx->aik_reenroll_required = reenroll_required;
-
-	if (changed)
-		dbus_emit_rotation_changed(ctx->dbus);
-}
-
 void ipc_set_agent_restarted(struct ipc_context *ctx)
 {
 	ctx->agent_restarted = true;
@@ -3858,16 +3832,6 @@ const char *ipc_token_capability_str(const struct ipc_context *ctx)
 		return "Tokens are signed by the TPM AIK.";
 
 	return "GET_TOKEN is refused: signing needs a TPM, and an unsigned token is never issued. Use --test-signed for tokens.";
-}
-
-void ipc_set_attest_sync_hook(struct ipc_context *ctx, void (*fn)(void *),
-			      void *user)
-{
-	if (!ctx)
-		return;
-
-	ctx->on_attest_sync = fn;
-	ctx->on_attest_sync_user = user;
 }
 
 void ipc_set_profiles(struct ipc_context *ctx, struct attest_target *profiles,

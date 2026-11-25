@@ -21,10 +21,15 @@
 #define LOTA_INTERNAL_TESTS 1
 
 #include <errno.h>
+#include <fcntl.h>
 #include <stdint.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
 
+/* defines LOTA_TPM_TESTING */
+#include "../src/agent/agent_internal.h" // IWYU pragma: keep
 #include "../src/agent/tpm.h"
 
 static int g_failures;
@@ -431,6 +436,57 @@ static void test_the_two_accepting_verdicts_are_told_apart(void)
 	PASS();
 }
 
+static int write_handoff(const char *path, size_t len)
+{
+	uint8_t buf[LOTA_HASH_SIZE + 1];
+	int fd = open(path, O_WRONLY | O_CREAT | O_TRUNC, 0600);
+	ssize_t n;
+
+	if (fd < 0)
+		return -1;
+	memcpy(buf, k_baseline, LOTA_HASH_SIZE);
+	buf[LOTA_HASH_SIZE] = 0x5a;
+	n = write(fd, buf, len);
+	if (close(fd) != 0 || n != (ssize_t)len)
+		return -1;
+	return 0;
+}
+
+static void test_handoff_of_another_length_is_absent(void)
+{
+	char dir[] = "/tmp/lota-pcr14-XXXXXX";
+	char path[sizeof(dir) + 16];
+	uint8_t out[LOTA_HASH_SIZE];
+	int present;
+	int ret;
+
+	TEST("a handoff longer than one digest counts as absent");
+
+	if (!mkdtemp(dir))
+		FAIL("mkdtemp");
+	snprintf(path, sizeof(path), "%s/baseline", dir);
+
+	ret = write_handoff(path, LOTA_HASH_SIZE);
+	if (ret == 0)
+		ret = tpm_test_read_pcr14_baseline(path, out, &present);
+	if (ret != 0 || present != 1 ||
+	    memcmp(out, k_baseline, LOTA_HASH_SIZE) != 0) {
+		unlink(path);
+		rmdir(dir);
+		FAIL("a digest-sized handoff is not read back");
+	}
+
+	ret = write_handoff(path, LOTA_HASH_SIZE + 1);
+	if (ret == 0)
+		ret = tpm_test_read_pcr14_baseline(path, out, &present);
+	unlink(path);
+	rmdir(dir);
+	if (ret != 0 || present != 0 ||
+	    memcmp(out, k_zero_baseline, LOTA_HASH_SIZE) != 0)
+		FAIL("a longer handoff is taken as the baseline");
+	PASS();
+}
+
 int main(void)
 {
 	test_lock_missing_on_a_shim_host();
@@ -443,6 +499,7 @@ int main(void)
 	test_a_replaced_handoff_is_not_a_foreign_extend();
 	test_reset_count_advance_is_not_a_resume();
 	test_the_two_accepting_verdicts_are_told_apart();
+	test_handoff_of_another_length_is_absent();
 
 	if (g_failures == 0) {
 		printf("\nAll tests passed.\n");

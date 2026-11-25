@@ -65,7 +65,6 @@ func (c *fuzzConsumer) fill(dst []byte) {
 }
 
 func (c *fuzzConsumer) u32() uint32 { return binary.LittleEndian.Uint32(c.take(4)) }
-func (c *fuzzConsumer) u64() uint64 { return binary.LittleEndian.Uint64(c.take(8)) }
 func (c *fuzzConsumer) flag() bool  { return c.byteAt()&1 == 1 }
 
 // fuzzReportSpec is the policy-relevant slice of an attestation report that
@@ -88,7 +87,6 @@ type fuzzReportSpec struct {
 		units   uint32
 		cmdline []byte
 	}
-	aikGen uint64
 
 	// bindNonce controls whether the quote binds the real challenge nonce.
 	// false exercises the nonce-fail gate with an otherwise valid envelope.
@@ -113,7 +111,6 @@ func decodeFuzzReportSpec(data []byte) *fuzzReportSpec {
 	s.iommu.flags = c.u32()
 	s.iommu.units = c.u32()
 	s.iommu.cmdline = trimToMax(c.take(int(c.byteAt())), types.CmdlineParamMax)
-	s.aikGen = c.u64()
 	s.bindNonce = c.flag()
 	return s
 }
@@ -132,7 +129,6 @@ func nominalSpec() *fuzzReportSpec {
 	s := &fuzzReportSpec{
 		flags:     productionFlags,
 		pcrMask:   0x00004083,
-		aikGen:    1,
 		bindNonce: true,
 	}
 	for i := range types.PCRCount {
@@ -159,9 +155,7 @@ func nominalSpec() *fuzzReportSpec {
 func encodeFuzzReportSpec(s *fuzzReportSpec) []byte {
 	buf := make([]byte, 0, 512)
 	var u4 [4]byte
-	var u8 [8]byte
 	putu32 := func(v uint32) { binary.LittleEndian.PutUint32(u4[:], v); buf = append(buf, u4[:]...) }
-	putu64 := func(v uint64) { binary.LittleEndian.PutUint64(u8[:], v); buf = append(buf, u8[:]...) }
 
 	putu32(s.flags)
 	putu32(s.pcrMask)
@@ -177,7 +171,6 @@ func encodeFuzzReportSpec(s *fuzzReportSpec) []byte {
 	putu32(s.iommu.units)
 	buf = append(buf, byte(len(s.iommu.cmdline)))
 	buf = append(buf, s.iommu.cmdline...)
-	putu64(s.aikGen)
 	if s.bindNonce {
 		buf = append(buf, 1)
 	} else {
@@ -193,7 +186,6 @@ func encodeFuzzReportSpec(s *fuzzReportSpec) []byte {
 // only the policy-relevant contents vary, so VerifyReport's decision is
 // driven by its trust logic rather than by malformed-input rejection
 func buildSignedReport(s *fuzzReportSpec, clientID string, challengeNonce [types.NonceSize]byte, key *rsa.PrivateKey) []byte {
-	hwID := sha256.Sum256([]byte(clientID))
 	// fixed struct plus the event log length prefix;
 	// mandatory ESRT section is appended at the end
 	buf := make([]byte, types.FixedReportSize+4)
@@ -223,7 +215,6 @@ func buildSignedReport(s *fuzzReportSpec, clientID string, challengeNonce [types
 	// report (see ComputeAttestationBindingNonce)
 	bindingReport := &types.AttestationReport{}
 	bindingReport.Header.Flags = s.flags
-	copy(bindingReport.TPM.HardwareID[:], hwID[:])
 	copy(bindingReport.System.KernelHash[:], s.kernelHash[:])
 	copy(bindingReport.System.AgentHash[:], s.agentHash[:])
 	bindingReport.System.IOMMU.Vendor = s.iommu.vendor
@@ -265,15 +256,6 @@ func buildSignedReport(s *fuzzReportSpec, clientID string, challengeNonce [types
 
 	copy(buf[offset:], challengeNonce[:])
 	offset += types.NonceSize
-	copy(buf[offset:offset+types.HardwareIDSize], hwID[:])
-	offset += types.HardwareIDSize
-	binary.LittleEndian.PutUint64(buf[offset:], s.aikGen)
-	offset += 8
-
-	// prev_aik_public empty
-	offset += types.MaxAIKPubSize
-	binary.LittleEndian.PutUint16(buf[offset:], 0)
-	offset += 2
 	binary.LittleEndian.PutUint16(buf[offset:], types.TPMAlgRSASSA)
 	offset += 2
 	binary.LittleEndian.PutUint16(buf[offset:], types.TPMAlgSHA256)

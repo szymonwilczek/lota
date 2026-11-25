@@ -385,8 +385,6 @@ static void persist_enroll_state(const struct profile_paths *paths,
 		memcpy(st.pin_sha256, pin, sizeof(st.pin_sha256));
 		st.has_pin = 1;
 	}
-	if (tpm_aik_load_metadata(&g_agent.tpm_ctx) == 0)
-		st.aik_generation = g_agent.tpm_ctx.aik_meta.generation;
 
 	if (enroll_state_save_path(paths->enroll_state, &st) < 0)
 		fprintf(stderr,

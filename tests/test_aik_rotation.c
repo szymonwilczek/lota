@@ -1,9 +1,8 @@
 /* SPDX-License-Identifier: MIT */
 /*
- * Unit tests for AIK rotation (tpm.h / tpm.c metadata and lifecycle).
+ * Unit tests for the AIK record and lifecycle (tpm.h / tpm.c).
  *
- * These tests exercise the metadata persistence, age calculation,
- * rotation-needed checks, and grace period logic WITHOUT requiring
+ * These tests exercise the metadata persistence WITHOUT requiring
  * a real TPM. The heavy TPM call paths (EvictControl, CreatePrimary)
  * are not invoked here! -- those are integration-tested via
  * --test-tpm on a real machine.
@@ -11,6 +10,7 @@
  * Copyright (C) 2026 Szymon Wilczek
  */
 
+#include <endian.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <openssl/evp.h>
@@ -25,6 +25,7 @@
 #include <stdint.h>
 #include <sys/types.h>
 #include <tss2/tss2_common.h>
+#include <tss2/tss2_esys.h>
 #include <tss2/tss2_tpm2_types.h>
 
 #include "test.h"
@@ -116,7 +117,6 @@ static void test_metadata_key_derivation_round_trip(void)
 
 	ctx.aik_meta.magic = TPM_AIK_META_MAGIC;
 	ctx.aik_meta.version = TPM_AIK_META_VERSION;
-	ctx.aik_meta.generation = 7;
 	ctx.aik_meta.key_derivation = TPM_AIK_KEY_DERIVATION_PER_PUBLISHER;
 	ctx.aik_meta_loaded = true;
 
@@ -198,7 +198,6 @@ static void test_recorded_shared_key_still_reads_shared(void)
 
 	ctx.aik_meta.magic = TPM_AIK_META_MAGIC;
 	ctx.aik_meta.version = TPM_AIK_META_VERSION;
-	ctx.aik_meta.generation = 1;
 	ctx.aik_meta.key_derivation = TPM_AIK_KEY_DERIVATION_SHARED;
 	ctx.aik_meta_loaded = true;
 
@@ -311,46 +310,67 @@ static void test_shared_replacement_needs_a_key(void)
 	PASS();
 }
 
-static void test_metadata_save_load(void)
+/* Bytes 8-31 are written zero and read past: key_derivation sits at 32 */
+static void test_metadata_unused_bytes_are_ignored(void)
 {
 	struct tpm_context ctx;
-	struct tpm_context ctx2;
-	int ret;
+	uint8_t raw[sizeof(struct aik_metadata)];
+	uint32_t word;
+	int fd, ret;
 
-	TEST("metadata save -> load round-trip");
+	TEST("load reads key_derivation past the unused bytes");
 	make_ctx(&ctx);
-	make_ctx(&ctx2);
 
-	ctx.aik_meta.magic = TPM_AIK_META_MAGIC;
-	ctx.aik_meta.version = TPM_AIK_META_VERSION;
-	ctx.aik_meta.generation = 42;
-	ctx.aik_meta.provisioned_at = 1700000000;
-	ctx.aik_meta.last_rotated_at = 1700000100;
-	ctx.aik_meta_loaded = true;
+	memset(raw, 0, sizeof(raw));
+	word = htole32(TPM_AIK_META_MAGIC);
+	memcpy(raw, &word, sizeof(word));
+	word = htole32(TPM_AIK_META_VERSION);
+	memcpy(raw + 4, &word, sizeof(word));
+	memset(raw + 8, 0x5A, 24);
+	raw[32] = TPM_AIK_KEY_DERIVATION_SHARED;
 
-	ret = tpm_aik_save_metadata(&ctx);
-	if (ret != 0) {
-		FAIL("save returned error");
+	fd = open(ctx.aik_meta_path, O_WRONLY | O_CREAT | O_TRUNC, 0600);
+	if (fd < 0) {
+		FAIL("cannot create test file");
 		return;
 	}
+	{
+		ssize_t wr_ = write(fd, raw, sizeof(raw));
+		(void)wr_;
+	}
+	close(fd);
 
-	ret = tpm_aik_load_metadata(&ctx2);
+	ret = tpm_aik_load_metadata(&ctx);
 	if (ret != 0) {
 		FAIL("load returned error");
 		return;
 	}
-
-	if (ctx2.aik_meta.magic != TPM_AIK_META_MAGIC ||
-	    ctx2.aik_meta.version != TPM_AIK_META_VERSION ||
-	    ctx2.aik_meta.generation != 42 ||
-	    ctx2.aik_meta.provisioned_at != 1700000000 ||
-	    ctx2.aik_meta.last_rotated_at != 1700000100) {
-		FAIL("metadata values mismatch after round-trip");
+	if (ctx.aik_meta.key_derivation != TPM_AIK_KEY_DERIVATION_SHARED) {
+		FAIL("key_derivation read from the wrong offset");
 		return;
 	}
 
-	if (!ctx2.aik_meta_loaded) {
-		FAIL("aik_meta_loaded not set");
+	ctx.aik_meta.key_derivation = TPM_AIK_KEY_DERIVATION_PER_PUBLISHER;
+	if (tpm_aik_save_metadata(&ctx) != 0) {
+		FAIL("save returned error");
+		return;
+	}
+	fd = open(ctx.aik_meta_path, O_RDONLY);
+	if (fd < 0 || read(fd, raw, sizeof(raw)) != (ssize_t)sizeof(raw)) {
+		if (fd >= 0)
+			close(fd);
+		FAIL("cannot read the record back");
+		return;
+	}
+	close(fd);
+	for (size_t i = 8; i < 32; i++) {
+		if (raw[i] != 0) {
+			FAIL("save wrote a nonzero unused byte");
+			return;
+		}
+	}
+	if (raw[32] != TPM_AIK_KEY_DERIVATION_PER_PUBLISHER) {
+		FAIL("save moved key_derivation");
 		return;
 	}
 
@@ -361,16 +381,13 @@ static void test_metadata_default_creation(void)
 {
 	struct tpm_context ctx;
 	int ret;
-	time_t before, after;
 
 	TEST("load fills defaults without writing a record");
 	make_ctx(&ctx);
 	/* make sure file does not exist */
 	unlink(ctx.aik_meta_path);
 
-	before = time(NULL);
 	ret = tpm_aik_load_metadata(&ctx);
-	after = time(NULL);
 
 	if (ret != 0) {
 		FAIL("load returned error");
@@ -381,17 +398,9 @@ static void test_metadata_default_creation(void)
 		FAIL("wrong magic");
 		return;
 	}
-	if (ctx.aik_meta.generation != 1) {
-		FAIL("default generation should be 1");
-		return;
-	}
-	if (ctx.aik_meta.provisioned_at < (int64_t)before ||
-	    ctx.aik_meta.provisioned_at > (int64_t)after) {
-		FAIL("provisioned_at out of range");
-		return;
-	}
-	if (ctx.aik_meta.last_rotated_at != 0) {
-		FAIL("last_rotated_at should be 0 on first create");
+	if (ctx.aik_meta.key_derivation !=
+	    TPM_AIK_KEY_DERIVATION_PER_PUBLISHER) {
+		FAIL("default key_derivation should be per publisher");
 		return;
 	}
 
@@ -413,16 +422,13 @@ static void test_new_key_metadata_persisted(void)
 	struct tpm_context ctx;
 	struct tpm_context ctx2;
 	int ret;
-	time_t before, after;
 
 	TEST("new AIK metadata is persisted");
 	make_ctx(&ctx);
 	make_ctx(&ctx2);
 	unlink(ctx.aik_meta_path);
 
-	before = time(NULL);
 	ret = tpm_test_save_new_key_metadata(&ctx);
-	after = time(NULL);
 
 	if (ret != 0) {
 		FAIL("save new-key metadata returned error");
@@ -442,15 +448,8 @@ static void test_new_key_metadata_persisted(void)
 
 	if (ctx2.aik_meta.magic != TPM_AIK_META_MAGIC ||
 	    ctx2.aik_meta.version != TPM_AIK_META_VERSION ||
-	    ctx2.aik_meta.generation != 1 ||
-	    ctx2.aik_meta.last_rotated_at != 0) {
+	    ctx2.aik_meta.key_derivation != TPM_AIK_KEY_DERIVATION_SHARED) {
 		FAIL("metadata defaults mismatch");
-		return;
-	}
-
-	if (ctx2.aik_meta.provisioned_at < (int64_t)before ||
-	    ctx2.aik_meta.provisioned_at > (int64_t)after) {
-		FAIL("provisioned_at out of range");
 		return;
 	}
 
@@ -531,238 +530,6 @@ static void test_metadata_bad_version(void)
 	PASS();
 }
 
-static void test_aik_age(void)
-{
-	struct tpm_context ctx;
-	int64_t age;
-	time_t now;
-
-	TEST("tpm_aik_age returns correct age");
-	make_ctx(&ctx);
-
-	now = time(NULL);
-	ctx.aik_meta.magic = TPM_AIK_META_MAGIC;
-	ctx.aik_meta.version = TPM_AIK_META_VERSION;
-	ctx.aik_meta.provisioned_at = (int64_t)(now - 7200); /* 2 hours ago */
-	ctx.aik_meta_loaded = true;
-
-	age = tpm_aik_age(&ctx);
-	if (age < 7199 || age > 7201) {
-		char buf[64];
-		snprintf(buf, sizeof(buf), "expected ~7200, got %ld",
-			 (long)age);
-		FAIL(buf);
-		return;
-	}
-
-	PASS();
-}
-
-static void test_aik_age_no_metadata(void)
-{
-	struct tpm_context ctx;
-	int64_t age;
-
-	TEST("tpm_aik_age fails if metadata not loaded");
-	make_ctx(&ctx);
-	ctx.aik_meta_loaded = false;
-
-	age = tpm_aik_age(&ctx);
-	if (age >= 0) {
-		FAIL("should return negative error");
-		return;
-	}
-
-	PASS();
-}
-
-static void test_needs_rotation_fresh(void)
-{
-	struct tpm_context ctx;
-	int ret;
-
-	TEST("needs_rotation -> 0 for fresh key");
-	make_ctx(&ctx);
-
-	ctx.aik_meta.magic = TPM_AIK_META_MAGIC;
-	ctx.aik_meta.version = TPM_AIK_META_VERSION;
-	ctx.aik_meta.provisioned_at = (int64_t)time(NULL);
-	ctx.aik_meta_loaded = true;
-
-	ret = tpm_aik_needs_rotation(&ctx, 3600);
-	if (ret != 0) {
-		FAIL("should be 0 for just-provisioned key");
-		return;
-	}
-
-	PASS();
-}
-
-static void test_needs_rotation_expired(void)
-{
-	struct tpm_context ctx;
-	int ret;
-
-	TEST("needs_rotation -> 1 for expired key");
-	make_ctx(&ctx);
-
-	ctx.aik_meta.magic = TPM_AIK_META_MAGIC;
-	ctx.aik_meta.version = TPM_AIK_META_VERSION;
-	ctx.aik_meta.provisioned_at = (int64_t)(time(NULL) - 7200);
-	ctx.aik_meta_loaded = true;
-
-	ret = tpm_aik_needs_rotation(&ctx, 3600);
-	if (ret != 1) {
-		FAIL("should be 1 for 2h-old key with 1h TTL");
-		return;
-	}
-
-	PASS();
-}
-
-static void test_needs_rotation_default_ttl(void)
-{
-	struct tpm_context ctx;
-	int ret;
-
-	TEST("needs_rotation uses default 30d TTL");
-	make_ctx(&ctx);
-
-	ctx.aik_meta.magic = TPM_AIK_META_MAGIC;
-	ctx.aik_meta.version = TPM_AIK_META_VERSION;
-	ctx.aik_meta.provisioned_at = (int64_t)time(NULL);
-	ctx.aik_meta_loaded = true;
-
-	/* 0 -> use TPM_AIK_DEFAULT_TTL_SEC (30 days) */
-	ret = tpm_aik_needs_rotation(&ctx, 0);
-	if (ret != 0) {
-		FAIL("fresh key should not need rotation with 30d default");
-		return;
-	}
-
-	/* simulate 31-day old key */
-	ctx.aik_meta.provisioned_at = (int64_t)(time(NULL) - 31 * 24 * 3600);
-	ret = tpm_aik_needs_rotation(&ctx, 0);
-	if (ret != 1) {
-		FAIL("31-day old key should need rotation with 30d default");
-		return;
-	}
-
-	PASS();
-}
-
-static void test_grace_period_inactive(void)
-{
-	struct tpm_context ctx;
-
-	TEST("grace period inactive by default");
-	make_ctx(&ctx);
-
-	if (tpm_aik_in_grace_period(&ctx) != 0) {
-		FAIL("should be 0 with no rotation");
-		return;
-	}
-
-	PASS();
-}
-
-static void test_grace_period_active(void)
-{
-	struct tpm_context ctx;
-
-	TEST("grace period active within deadline");
-	make_ctx(&ctx);
-
-	ctx.grace_deadline = time(NULL) + 600; /* 10 minutes from now */
-	ctx.prev_aik_public_size = 128;
-	memset(ctx.prev_aik_public, 0xAA, 128);
-
-	if (tpm_aik_in_grace_period(&ctx) != 1) {
-		FAIL("should be 1 during grace window");
-		return;
-	}
-
-	PASS();
-}
-
-static void test_grace_period_expired(void)
-{
-	struct tpm_context ctx;
-
-	TEST("grace period expires -> clears state");
-	make_ctx(&ctx);
-
-	ctx.grace_deadline = time(NULL) - 10; /* 10 seconds in the past */
-	ctx.prev_aik_public_size = 128;
-
-	if (tpm_aik_in_grace_period(&ctx) != 0) {
-		FAIL("should be 0 after deadline");
-		return;
-	}
-
-	if (ctx.prev_aik_public_size != 0) {
-		FAIL("prev_aik_public_size not cleared");
-		return;
-	}
-
-	if (ctx.grace_deadline != 0) {
-		FAIL("grace_deadline not cleared");
-		return;
-	}
-
-	PASS();
-}
-
-static void test_get_prev_public_grace(void)
-{
-	struct tpm_context ctx;
-	uint8_t buf[LOTA_MAX_AIK_PUB_SIZE];
-	size_t out_size = 0;
-	int ret;
-
-	TEST("get_prev_public returns key in grace period");
-	make_ctx(&ctx);
-
-	ctx.grace_deadline = time(NULL) + 600;
-	ctx.prev_aik_public_size = 64;
-	memset(ctx.prev_aik_public, 0xBB, 64);
-
-	ret = tpm_aik_get_prev_public(&ctx, buf, sizeof(buf), &out_size);
-	if (ret != 0) {
-		FAIL("should succeed during grace period");
-		return;
-	}
-	if (out_size != 64) {
-		FAIL("wrong output size");
-		return;
-	}
-	if (buf[0] != 0xBB || buf[63] != 0xBB) {
-		FAIL("data mismatch");
-		return;
-	}
-
-	PASS();
-}
-
-static void test_get_prev_public_no_grace(void)
-{
-	struct tpm_context ctx;
-	uint8_t buf[LOTA_MAX_AIK_PUB_SIZE];
-	size_t out_size = 0;
-	int ret;
-
-	TEST("get_prev_public -> -ENOENT without grace period");
-	make_ctx(&ctx);
-
-	ret = tpm_aik_get_prev_public(&ctx, buf, sizeof(buf), &out_size);
-	if (ret != -ENOENT) {
-		FAIL("expected -ENOENT");
-		return;
-	}
-
-	PASS();
-}
-
 static void test_save_creates_dirs(void)
 {
 	struct tpm_context ctx;
@@ -778,8 +545,6 @@ static void test_save_creates_dirs(void)
 
 	ctx.aik_meta.magic = TPM_AIK_META_MAGIC;
 	ctx.aik_meta.version = TPM_AIK_META_VERSION;
-	ctx.aik_meta.generation = 7;
-	ctx.aik_meta.provisioned_at = 1234567890;
 	ctx.aik_meta_loaded = true;
 
 	ret = tpm_aik_save_metadata(&ctx);
@@ -824,76 +589,6 @@ static void test_metadata_truncated(void)
 	if (ret != -EIO) {
 		char ebuf[32];
 		snprintf(ebuf, sizeof(ebuf), "expected -EIO, got %d", ret);
-		FAIL(ebuf);
-		return;
-	}
-
-	PASS();
-}
-
-static void test_needs_rotation_boundary(void)
-{
-	struct tpm_context ctx;
-	int ret;
-
-	TEST("needs_rotation boundary: age == TTL -> 1");
-	make_ctx(&ctx);
-
-	ctx.aik_meta.magic = TPM_AIK_META_MAGIC;
-	ctx.aik_meta.version = TPM_AIK_META_VERSION;
-	ctx.aik_meta.provisioned_at = (int64_t)(time(NULL) - 3600);
-	ctx.aik_meta_loaded = true;
-
-	/* exactly at boundary */
-	ret = tpm_aik_needs_rotation(&ctx, 3600);
-	if (ret != 1) {
-		FAIL("age == TTL should trigger rotation");
-		return;
-	}
-
-	PASS();
-}
-
-static void test_get_prev_public_small_buf(void)
-{
-	struct tpm_context ctx;
-	uint8_t buf[8];
-	size_t out_size = 0;
-	int ret;
-
-	TEST("get_prev_public -> -ENOSPC if buffer too small");
-	make_ctx(&ctx);
-
-	ctx.grace_deadline = time(NULL) + 600;
-	ctx.prev_aik_public_size = 64;
-	memset(ctx.prev_aik_public, 0xCC, 64);
-
-	ret = tpm_aik_get_prev_public(&ctx, buf, sizeof(buf), &out_size);
-	if (ret != -ENOSPC) {
-		char ebuf[32];
-		snprintf(ebuf, sizeof(ebuf), "expected -ENOSPC, got %d", ret);
-		FAIL(ebuf);
-		return;
-	}
-
-	PASS();
-}
-
-static void test_provision_rejects_swtpm_vendor(void)
-{
-	struct tpm_context ctx;
-	int ret;
-
-	TEST("provision rejects software TPM vendor strings");
-	make_ctx(&ctx);
-
-	tpm_test_set_prop_reader(mock_prop_reader_swtpm);
-	ret = tpm_provision_aik(&ctx);
-	tpm_test_reset_prop_reader();
-
-	if (ret != -EACCES) {
-		char ebuf[64];
-		snprintf(ebuf, sizeof(ebuf), "expected -EACCES, got %d", ret);
 		FAIL(ebuf);
 		return;
 	}
@@ -1107,6 +802,58 @@ static void test_lockout_flag_lifecycle(void)
 	PASS();
 }
 
+static uint32_t g_mock_permanent;
+
+static int mock_prop_reader_permanent(struct tpm_context *ctx, TPM2_PT prop,
+				      uint32_t *out_val)
+{
+	(void)ctx;
+	if (prop != TPM2_PT_PERMANENT || !out_val)
+		return -EINVAL;
+	*out_val = g_mock_permanent;
+	return 0;
+}
+
+static TSS2_RC success_thunk(void *u)
+{
+	(void)u;
+	return TSS2_RC_SUCCESS;
+}
+
+static void test_lockout_survives_auth_free_success(void)
+{
+	struct tpm_context ctx;
+	int ret;
+
+	TEST("success keeps the lockout flag while inLockout is set");
+	make_ctx(&ctx);
+	ctx.lockout_active = true;
+	ctx.lockout_first_seen = 1000;
+
+	tpm_test_set_prop_reader(mock_prop_reader_permanent);
+	g_mock_permanent = TPMA_PERMANENT_INLOCKOUT;
+	ret = tpm_test_call_with_backoff_array(&ctx, success_thunk, NULL, NULL,
+					       NULL, 0);
+	if (ret != 0 || !tpm_is_locked_out(&ctx) ||
+	    ctx.lockout_first_seen != 1000) {
+		tpm_test_reset_prop_reader();
+		FAIL("flag cleared while the TPM reports inLockout");
+		return;
+	}
+
+	g_mock_permanent = 0;
+	ret = tpm_test_call_with_backoff_array(&ctx, success_thunk, NULL, NULL,
+					       NULL, 0);
+	tpm_test_reset_prop_reader();
+	if (ret != 0 || tpm_is_locked_out(&ctx) ||
+	    ctx.lockout_first_seen != 0) {
+		FAIL("flag kept after the TPM left lockout");
+		return;
+	}
+
+	PASS();
+}
+
 /*
  * Boot-time self_hash buffer round-trip.
  *
@@ -1139,21 +886,17 @@ static void test_tpm_strerror_maps_lota_private(void)
 	}
 
 	const char *auth = tpm_strerror(-LOTA_ERR_TPM_AUTH_FAIL);
-	if (!auth || strstr(auth, "DA") == NULL) {
-		FAIL("AUTH_FAIL description must call out the DA-counter "
-		     "implication");
+	if (!auth || strstr(auth, "authorization") == NULL ||
+	    strstr(auth, "DA") != NULL) {
+		FAIL("AUTH_FAIL covers codes the DA counter ignores");
 		return;
 	}
 
-	/*
-	 * The code an operator meets when a sealed secret will not open:
-	 * the host is not in the state the blob was sealed against.
-	 * It says which state, because "policy not satisfied" alone sends
-	 * a reader to the TPM specification.
-	 */
+	/* an EK policy session fails with the same code as a PCR unseal */
 	const char *policy = tpm_strerror(-LOTA_ERR_TPM_POLICY_FAIL);
-	if (!policy || strstr(policy, "PCR") == NULL) {
-		FAIL("POLICY_FAIL description must name the boot/PCR state");
+	if (!policy || strstr(policy, "policy") == NULL ||
+	    strstr(policy, "boot") != NULL) {
+		FAIL("POLICY_FAIL description names a boot state");
 		return;
 	}
 	if (strcmp(policy, strerror(LOTA_ERR_TPM_POLICY_FAIL)) == 0) {
@@ -1668,6 +1411,18 @@ static void test_aik_unique_separates_publishers(void)
 		FAIL("a host with no publisher must contribute nothing");
 		return;
 	}
+
+	static const char *const bad[] = { "1g", " 1", "+1", "-1" };
+	for (size_t i = 0; i < sizeof(bad) / sizeof(bad[0]); i++) {
+		char id[LOTA_PROFILE_ID_LEN];
+
+		snprintf(id, sizeof(id), "%s", id_a);
+		memcpy(id + 6, bad[i], 2);
+		if (tpm_aik_profile_unique(id, again, &len_again) != -EINVAL) {
+			FAIL("a profile id with a non-hex byte was read");
+			return;
+		}
+	}
 	PASS();
 }
 
@@ -1773,13 +1528,437 @@ static void test_object_change_is_read_from_the_name(void)
 	PASS();
 }
 
+/* A 24-PCR SHA-256 bank: PCR n reads n + 1 in every byte. */
+static int g_pcr_read_calls;
+
+TSS2_RC __wrap_Esys_PCR_Read(ESYS_CONTEXT *esys_ctx, ESYS_TR shandle1,
+			     ESYS_TR shandle2, ESYS_TR shandle3,
+			     const TPML_PCR_SELECTION *in, UINT32 *counter,
+			     TPML_PCR_SELECTION **sel_out,
+			     TPML_DIGEST **values_out);
+
+TSS2_RC __wrap_Esys_PCR_Read(ESYS_CONTEXT *esys_ctx, ESYS_TR shandle1,
+			     ESYS_TR shandle2, ESYS_TR shandle3,
+			     const TPML_PCR_SELECTION *in, UINT32 *counter,
+			     TPML_PCR_SELECTION **sel_out,
+			     TPML_DIGEST **values_out)
+{
+	TPML_PCR_SELECTION *sel = calloc(1, sizeof(*sel));
+	TPML_DIGEST *values = calloc(1, sizeof(*values));
+
+	(void)esys_ctx;
+	(void)shandle1;
+	(void)shandle2;
+	(void)shandle3;
+	g_pcr_read_calls++;
+	if (!sel || !values) {
+		free(sel);
+		free(values);
+		return TSS2_ESYS_RC_MEMORY;
+	}
+	*counter = 1;
+	sel->count = 1;
+	sel->pcrSelections[0].hash = TPM2_ALG_SHA256;
+	sel->pcrSelections[0].sizeofSelect = 3;
+	for (uint32_t i = 0; i < 24 && values->count < 8; i++) {
+		if (!(in->pcrSelections[0].pcrSelect[i / 8] & (1U << (i % 8))))
+			continue;
+		sel->pcrSelections[0].pcrSelect[i / 8] |= 1U << (i % 8);
+		values->digests[values->count].size = LOTA_HASH_SIZE;
+		memset(values->digests[values->count].buffer, (int)(i + 1),
+		       LOTA_HASH_SIZE);
+		values->count++;
+	}
+	*sel_out = sel;
+	*values_out = values;
+	return TSS2_RC_SUCCESS;
+}
+
+static void test_pcr_batch_reads_past_eight(void)
+{
+	static uint8_t values[LOTA_PCR_COUNT][LOTA_HASH_SIZE];
+	struct tpm_context ctx;
+	int ret;
+
+	TEST("tpm_read_pcrs_batch reads every PCR of a 24-bit mask");
+	make_ctx(&ctx);
+	g_pcr_read_calls = 0;
+
+	ret = tpm_read_pcrs_batch(&ctx, 0xFFFFFF, values);
+	if (ret != 0) {
+		FAIL("batch read failed");
+		return;
+	}
+	for (uint32_t i = 0; i < LOTA_PCR_COUNT; i++) {
+		if (values[i][0] != i + 1 ||
+		    values[i][LOTA_HASH_SIZE - 1] != i + 1) {
+			FAIL("a PCR past the first eight read zero");
+			return;
+		}
+	}
+	if (g_pcr_read_calls != 3) {
+		FAIL("expected three TPM2_PCR_Read calls");
+		return;
+	}
+
+	PASS();
+}
+
+static void test_refused_unseal_with_unmoved_pcrs_is_the_blob(void)
+{
+	uint8_t same[LOTA_HASH_SIZE];
+	uint8_t moved[LOTA_HASH_SIZE];
+	uint8_t value[LOTA_HASH_SIZE];
+	struct tpm_context ctx;
+	unsigned int len = 0;
+	EVP_MD_CTX *md;
+	int ok;
+
+	TEST("a refused unseal with the seal-time PCRs is a rejected blob");
+	make_ctx(&ctx);
+
+	/* PCRs 0, 1 and 7 of the mocked bank */
+	md = EVP_MD_CTX_new();
+	ok = md && EVP_DigestInit_ex(md, EVP_sha256(), NULL) == 1;
+	for (int i = 0; ok && i < 3; i++) {
+		memset(value, i == 2 ? 8 : i + 1, sizeof(value));
+		ok = EVP_DigestUpdate(md, value, sizeof(value)) == 1;
+	}
+	ok = ok && EVP_DigestFinal_ex(md, same, &len) == 1;
+	EVP_MD_CTX_free(md);
+	if (!ok || len != sizeof(same)) {
+		FAIL("digest");
+		return;
+	}
+	memcpy(moved, same, sizeof(moved));
+	moved[0] ^= 1;
+
+	if (tpm_test_seal_refusal_errno(&ctx, 0x83, same, TPM2_RC_INTEGRITY,
+					-EIO) != -EBADMSG) {
+		FAIL("an integrity refusal with unmoved PCRs");
+		return;
+	}
+	if (tpm_test_seal_refusal_errno(&ctx, 0x83, same, TPM2_RC_POLICY_FAIL,
+					-LOTA_ERR_TPM_POLICY_FAIL) !=
+	    -EBADMSG) {
+		FAIL("a policy refusal with unmoved PCRs");
+		return;
+	}
+	if (tpm_test_seal_refusal_errno(&ctx, 0x83, moved, TPM2_RC_POLICY_FAIL,
+					-LOTA_ERR_TPM_POLICY_FAIL) !=
+	    -LOTA_ERR_TPM_POLICY_FAIL) {
+		FAIL("moved PCRs read as a rejected blob");
+		return;
+	}
+	if (tpm_test_seal_refusal_errno(&ctx, 0x83, same,
+					TSS2_ESYS_RC_GENERAL_FAILURE,
+					-EIO) != -EIO) {
+		FAIL("a stack error read as a TPM refusal");
+		return;
+	}
+	if (tpm_test_seal_refusal_errno(&ctx, 0x83, same, TPM2_RC_LOCKOUT,
+					-LOTA_ERR_TPM_LOCKED) !=
+	    -LOTA_ERR_TPM_LOCKED) {
+		FAIL("a lockout read as a rejected blob");
+		return;
+	}
+	PASS();
+}
+
+static void test_failed_bind_keeps_the_bound_publisher(void)
+{
+	static const char bound[] = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+				    "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+	static struct profile_paths paths;
+	struct tpm_context ctx;
+	int ret;
+
+	TEST("a failed bind leaves the bound publisher's id in place");
+	make_ctx(&ctx);
+	snprintf(ctx.aik_profile_id, sizeof(ctx.aik_profile_id), "%s", bound);
+	ctx.aik_handle = 0x81010016;
+
+	memset(&paths, 0, sizeof(paths));
+	memset(paths.id, 'b', LOTA_PROFILE_ID_LEN - 1);
+	memset(paths.aik_meta, 'm', sizeof(ctx.aik_meta_path));
+
+	ret = tpm_bind_profile(&ctx, &paths);
+	if (ret != -ENAMETOOLONG) {
+		FAIL("expected -ENAMETOOLONG");
+		return;
+	}
+	if (strcmp(ctx.aik_profile_id, bound) != 0) {
+		FAIL("the refused publisher's id stayed bound");
+		return;
+	}
+	if (ctx.aik_handle != 0x81010016) {
+		FAIL("the handle moved");
+		return;
+	}
+	PASS();
+}
+
+static void test_reprovision_reads_the_record_first(void)
+{
+	struct tpm_context ctx;
+	int ret;
+
+	TEST("reprovision loads the record and refuses a shared key");
+	make_ctx(&ctx);
+	ctx.aik_meta.magic = TPM_AIK_META_MAGIC;
+	ctx.aik_meta.version = TPM_AIK_META_VERSION;
+	ctx.aik_meta.key_derivation = TPM_AIK_KEY_DERIVATION_SHARED;
+	ctx.aik_meta_loaded = true;
+	if (tpm_aik_save_metadata(&ctx) != 0) {
+		FAIL("save returned error");
+		return;
+	}
+
+	/* a bind leaves the record unloaded */
+	memset(&ctx.aik_meta, 0, sizeof(ctx.aik_meta));
+	ctx.aik_meta_loaded = false;
+	memset(ctx.aik_profile_id, 'c', LOTA_PROFILE_ID_LEN - 1);
+
+	ret = tpm_test_aik_check_shared_replace(&ctx);
+	if (ret != -ENOTSUP) {
+		FAIL("a shared key was let through");
+		return;
+	}
+	if (!ctx.aik_meta_loaded ||
+	    ctx.aik_meta.key_derivation != TPM_AIK_KEY_DERIVATION_SHARED) {
+		FAIL("the record was not loaded");
+		return;
+	}
+
+	tpm_aik_allow_shared_key_replace(&ctx, true);
+	ret = tpm_test_aik_check_shared_replace(&ctx);
+	tpm_aik_allow_shared_key_replace(&ctx, false);
+	if (ret != 0) {
+		FAIL("enrollment could not replace a shared key");
+		return;
+	}
+
+	ctx.aik_meta.key_derivation = TPM_AIK_KEY_DERIVATION_PER_PUBLISHER;
+	if (tpm_test_aik_check_shared_replace(&ctx) != 0) {
+		FAIL("the publisher's own key was refused");
+		return;
+	}
+	PASS();
+}
+
+/* The TPM lists the bound handle; opening the key is never expected. */
+static uint32_t g_listed_handle;
+static int g_key_opens;
+
+TSS2_RC __wrap_Esys_GetCapability(ESYS_CONTEXT *esys_ctx, ESYS_TR shandle1,
+				  ESYS_TR shandle2, ESYS_TR shandle3,
+				  TPM2_CAP capability, UINT32 property,
+				  UINT32 property_count, TPMI_YES_NO *more_data,
+				  TPMS_CAPABILITY_DATA **capability_data);
+TSS2_RC __wrap_Esys_TR_FromTPMPublic(ESYS_CONTEXT *esys_ctx, TPM2_HANDLE handle,
+				     ESYS_TR shandle1, ESYS_TR shandle2,
+				     ESYS_TR shandle3, ESYS_TR *object);
+
+TSS2_RC __wrap_Esys_GetCapability(ESYS_CONTEXT *esys_ctx, ESYS_TR shandle1,
+				  ESYS_TR shandle2, ESYS_TR shandle3,
+				  TPM2_CAP capability, UINT32 property,
+				  UINT32 property_count, TPMI_YES_NO *more_data,
+				  TPMS_CAPABILITY_DATA **capability_data)
+{
+	TPMS_CAPABILITY_DATA *data = calloc(1, sizeof(*data));
+
+	(void)esys_ctx;
+	(void)shandle1;
+	(void)shandle2;
+	(void)shandle3;
+	(void)property;
+	(void)property_count;
+	if (!data)
+		return TSS2_ESYS_RC_MEMORY;
+	data->capability = capability;
+	data->data.handles.count = 1;
+	data->data.handles.handle[0] = g_listed_handle;
+	if (more_data)
+		*more_data = TPM2_NO;
+	*capability_data = data;
+	return TSS2_RC_SUCCESS;
+}
+
+TSS2_RC __wrap_Esys_TR_FromTPMPublic(ESYS_CONTEXT *esys_ctx, TPM2_HANDLE handle,
+				     ESYS_TR shandle1, ESYS_TR shandle2,
+				     ESYS_TR shandle3, ESYS_TR *object)
+{
+	(void)esys_ctx;
+	(void)handle;
+	(void)shandle1;
+	(void)shandle2;
+	(void)shandle3;
+	(void)object;
+	g_key_opens++;
+	return TSS2_ESYS_RC_GENERAL_FAILURE;
+}
+
+static void test_lost_auth_keeps_a_shared_key(void)
+{
+	static int session;
+	char dir[192];
+	struct tpm_context ctx;
+	int ret;
+
+	TEST("a lost auth record does not replace a shared key");
+	snprintf(dir, sizeof(dir), "%s/lost_auth", tmp_dir);
+	mkdir(dir, 0700);
+	make_ctx(&ctx);
+	snprintf(ctx.aik_meta_path, sizeof(ctx.aik_meta_path),
+		 "%s/aik_meta.dat", dir);
+	ctx.esys_ctx = (ESYS_CONTEXT *)&session;
+	ctx.aik_handle = 0x81010016;
+	g_listed_handle = ctx.aik_handle;
+	g_key_opens = 0;
+	memset(ctx.aik_profile_id, 'd', LOTA_PROFILE_ID_LEN - 1);
+	ctx.aik_meta.magic = TPM_AIK_META_MAGIC;
+	ctx.aik_meta.version = TPM_AIK_META_VERSION;
+	ctx.aik_meta.key_derivation = TPM_AIK_KEY_DERIVATION_SHARED;
+	ctx.aik_meta_loaded = true;
+
+	ret = tpm_provision_aik(&ctx);
+
+	if (ret != -ENOTSUP) {
+		FAIL("expected -ENOTSUP");
+		return;
+	}
+	if (g_key_opens != 0) {
+		FAIL("provisioning went on to replace the key");
+		return;
+	}
+	PASS();
+}
+
+static void test_reprovision_rewrites_a_missing_record(void)
+{
+	static int session;
+	char dir[192];
+	struct tpm_context ctx;
+	int ret;
+
+	TEST("a missing record does not block reprovision");
+	snprintf(dir, sizeof(dir), "%s/missing_meta", tmp_dir);
+	mkdir(dir, 0700);
+	make_ctx(&ctx);
+	snprintf(ctx.aik_meta_path, sizeof(ctx.aik_meta_path),
+		 "%s/aik_meta.dat", dir);
+	ctx.esys_ctx = (ESYS_CONTEXT *)&session;
+	ctx.aik_handle = 0x81010016;
+	g_listed_handle = ctx.aik_handle;
+	g_key_opens = 0;
+	memset(ctx.aik_profile_id, 'e', LOTA_PROFILE_ID_LEN - 1);
+
+	ret = tpm_test_aik_check_shared_replace(&ctx);
+	if (ret != 0) {
+		char ebuf[64];
+		snprintf(ebuf, sizeof(ebuf), "expected 0, got %d", ret);
+		FAIL(ebuf);
+		return;
+	}
+	if (ctx.aik_meta_loaded) {
+		FAIL("a record was assumed");
+		return;
+	}
+	PASS();
+}
+
+static void test_provision_ignores_the_vendor_string(void)
+{
+	static int session;
+	struct tpm_context ctx;
+	int ret;
+
+	TEST("provisioning does not judge the vendor string");
+	make_ctx(&ctx);
+	ctx.esys_ctx = (ESYS_CONTEXT *)&session;
+	ctx.aik_handle = 0x81010016;
+	g_listed_handle = ctx.aik_handle;
+	g_key_opens = 0;
+	memset(ctx.aik_profile_id, 'd', LOTA_PROFILE_ID_LEN - 1);
+	ctx.aik_meta.magic = TPM_AIK_META_MAGIC;
+	ctx.aik_meta.version = TPM_AIK_META_VERSION;
+	ctx.aik_meta.key_derivation = TPM_AIK_KEY_DERIVATION_SHARED;
+	ctx.aik_meta_loaded = true;
+
+	tpm_test_set_prop_reader(mock_prop_reader_swtpm);
+	ret = tpm_provision_aik(&ctx);
+	tpm_test_reset_prop_reader();
+
+	if (ret != -ENOTSUP) {
+		char ebuf[64];
+		snprintf(ebuf, sizeof(ebuf), "expected -ENOTSUP, got %d", ret);
+		FAIL(ebuf);
+		return;
+	}
+	PASS();
+}
+
+static int g_esys_session;
+
+void __wrap_Esys_Finalize(ESYS_CONTEXT **esys_ctx);
+TSS2_RC __wrap_Esys_Initialize(ESYS_CONTEXT **esys_ctx, TSS2_TCTI_CONTEXT *tcti,
+			       TSS2_ABI_VERSION *abi);
+
+void __wrap_Esys_Finalize(ESYS_CONTEXT **esys_ctx)
+{
+	*esys_ctx = NULL;
+}
+
+TSS2_RC __wrap_Esys_Initialize(ESYS_CONTEXT **esys_ctx, TSS2_TCTI_CONTEXT *tcti,
+			       TSS2_ABI_VERSION *abi)
+{
+	(void)tcti;
+	(void)abi;
+	*esys_ctx = (ESYS_CONTEXT *)&g_esys_session;
+	return TSS2_RC_SUCCESS;
+}
+
+static void test_reconnect_keeps_the_aik_name(void)
+{
+	static int tcti;
+	struct tpm_context ctx;
+
+	TEST("a session reconnect keeps the AIK's Name");
+	make_ctx(&ctx);
+	ctx.esys_ctx = (ESYS_CONTEXT *)&tcti;
+	ctx.tcti_ctx = (TSS2_TCTI_CONTEXT *)&tcti;
+	memset(ctx.aik_object_name, 0x5a, 34);
+	ctx.aik_object_name_size = 34;
+	ctx.aik_auth_loaded = true;
+	ctx.aik_meta_loaded = true;
+
+	if (tpm_test_esys_reconnect(&ctx) != 0) {
+		FAIL("reconnect failed");
+		return;
+	}
+	if (ctx.esys_ctx != (ESYS_CONTEXT *)&g_esys_session) {
+		FAIL("the session was not replaced");
+		return;
+	}
+	if (ctx.aik_object_name_size != 34 || ctx.aik_object_name[0] != 0x5a ||
+	    ctx.aik_object_name[33] != 0x5a) {
+		FAIL("the AIK's Name was forgotten");
+		return;
+	}
+	if (ctx.aik_auth_loaded || ctx.aik_meta_loaded) {
+		FAIL("the cached auth or record survived");
+		return;
+	}
+	PASS();
+}
+
 int main(void)
 {
-	printf("\n=== AIK Rotation Tests ===\n\n");
+	printf("\n=== AIK Tests ===\n\n");
 
 	setup_tmp_dir();
 
-	test_metadata_save_load();
+	test_metadata_unused_bytes_are_ignored();
 	test_metadata_key_derivation_round_trip();
 	test_absent_metadata_claims_nothing();
 	test_recorded_shared_key_still_reads_shared();
@@ -1789,21 +1968,8 @@ int main(void)
 	test_new_key_metadata_persisted();
 	test_metadata_bad_magic();
 	test_metadata_bad_version();
-	test_aik_age();
-	test_aik_age_no_metadata();
-	test_needs_rotation_fresh();
-	test_needs_rotation_expired();
-	test_needs_rotation_default_ttl();
-	test_grace_period_inactive();
-	test_grace_period_active();
-	test_grace_period_expired();
-	test_get_prev_public_grace();
-	test_get_prev_public_no_grace();
 	test_save_creates_dirs();
 	test_metadata_truncated();
-	test_needs_rotation_boundary();
-	test_get_prev_public_small_buf();
-	test_provision_rejects_swtpm_vendor();
 	test_rc_success_is_zero();
 	test_rc_lockout_raw();
 	test_rc_lockout_resmgr_layer();
@@ -1813,6 +1979,15 @@ int main(void)
 	test_rc_nv_space();
 	test_rc_tcti_layer();
 	test_lockout_flag_lifecycle();
+	test_lockout_survives_auth_free_success();
+	test_pcr_batch_reads_past_eight();
+	test_refused_unseal_with_unmoved_pcrs_is_the_blob();
+	test_failed_bind_keeps_the_bound_publisher();
+	test_reconnect_keeps_the_aik_name();
+	test_reprovision_reads_the_record_first();
+	test_lost_auth_keeps_a_shared_key();
+	test_reprovision_rewrites_a_missing_record();
+	test_provision_ignores_the_vendor_string();
 	test_self_hash_pin_round_trip();
 	test_tpm_strerror_maps_lota_private();
 	test_clock_state_save_load_round_trip();

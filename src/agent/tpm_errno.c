@@ -21,11 +21,9 @@ const char *tpm_strerror(int err)
 	case LOTA_ERR_TPM_LOCKED:
 		return "TPM dictionary-attack lockout engaged";
 	case LOTA_ERR_TPM_AUTH_FAIL:
-		return "TPM authorization failed (increments DA lockout "
-		       "counter)";
+		return "TPM authorization failed";
 	case LOTA_ERR_TPM_POLICY_FAIL:
-		return "TPM policy not satisfied (host not in the sealed "
-		       "boot/PCR state)";
+		return "TPM policy not satisfied";
 	default:
 		return strerror(code);
 	}

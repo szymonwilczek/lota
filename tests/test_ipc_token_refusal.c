@@ -204,11 +204,6 @@ void dbus_emit_mode_changed(struct dbus_context *ctx, uint8_t mode)
 	(void)mode;
 }
 
-void dbus_emit_rotation_changed(struct dbus_context *ctx)
-{
-	(void)ctx;
-}
-
 /* No enrollment on disk, which is the state a first session finds */
 int enroll_state_load_path(const char *path, struct enroll_state *out)
 {

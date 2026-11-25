@@ -68,31 +68,6 @@ struct run_daemon_params {
 	struct lota_config *cfg;
 };
 
-/* static: the global IPC context keeps the pointer after run_daemon() */
-struct rotation_hook_ctx {
-	uint32_t aik_ttl;
-	const struct profile_paths *profile;
-};
-
-static struct rotation_hook_ctx g_rotation_hook;
-
-/*
- * The attestation loop runs in its own process, rotates the AIK and writes the
- * record; its sync says a round has finished.
- */
-static void republish_rotation_state(void *user)
-{
-	const struct rotation_hook_ctx *hook = user;
-
-	if (!hook)
-		return;
-
-	if (tpm_aik_load_metadata(&g_agent.tpm_ctx) < 0)
-		return;
-
-	publish_rotation_state(hook->aik_ttl, hook->profile);
-}
-
 /* The hooks take no context, so these use the daemon's BPF loader */
 static int agent_kernel_hash_file(const char *path, uint64_t dev, uint64_t ino,
 				  struct lota_verity_digest_key *out)
@@ -451,23 +426,6 @@ static int run_daemon(const struct run_daemon_params *params)
 			ipc_set_tpm(&g_agent.ipc_ctx, &g_agent.tpm_ctx,
 				    LOTA_TOKEN_QUOTE_PCR_MASK);
 			lota_info("AIK ready, signed tokens enabled");
-
-			int64_t age = tpm_aik_age(&g_agent.tpm_ctx);
-			lota_info("AIK generation: %lu, age: %ld seconds",
-				  (unsigned long)
-					  g_agent.tpm_ctx.aik_meta.generation,
-				  (long)age);
-
-			publish_rotation_state(
-				params->cfg ? params->cfg->aik_ttl : 0,
-				profile);
-
-			g_rotation_hook.aik_ttl =
-				params->cfg ? params->cfg->aik_ttl : 0;
-			g_rotation_hook.profile = profile;
-			ipc_set_attest_sync_hook(&g_agent.ipc_ctx,
-						 republish_rotation_state,
-						 &g_rotation_hook);
 		}
 
 		lota_info("Performing self-measurement");

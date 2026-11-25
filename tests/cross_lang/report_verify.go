@@ -112,18 +112,6 @@ func main() {
 		fail("nonce = %x, want %x (a stale ek_certificate field would shift this)",
 			report.TPM.Nonce[:8], pattern(0x55, 8))
 	}
-	if !bytes.Equal(report.TPM.HardwareID[:], pattern(0x66, types.HardwareIDSize)) {
-		fail("hardware_id = %x, want %x", report.TPM.HardwareID[:8], pattern(0x66, 8))
-	}
-	if report.TPM.AIKGeneration != 0x0102030405060708 {
-		fail("aik_generation = %#016x, want 0x0102030405060708", report.TPM.AIKGeneration)
-	}
-	if !bytes.Equal(report.TPM.PrevAIKPublic[:], pattern(0x77, types.MaxAIKPubSize)) {
-		fail("prev_aik_public mismatch (first bytes %x)", report.TPM.PrevAIKPublic[:8])
-	}
-	if report.TPM.PrevAIKSize != 300 {
-		fail("prev_aik_public_size = %d, want 300", report.TPM.PrevAIKSize)
-	}
 	if report.TPM.QuoteSigAlg != types.TPMAlgRSASSA {
 		fail("quote_sig_alg = %#04x, want %#04x", report.TPM.QuoteSigAlg, types.TPMAlgRSASSA)
 	}

@@ -18,7 +18,6 @@
 #include "pin.h"
 
 #define LOTA_CLI_DEFAULT_BPF_PATH "/usr/lib/lota/lota_lsm.bpf.o"
-#define LOTA_CLI_DEFAULT_AIK_TTL 0 /* 0 -> use TPM_AIK_DEFAULT_TTL_SEC */
 
 struct cli_options {
 	/* diagnostic / admin one-shots */
@@ -53,7 +52,6 @@ struct cli_options {
 	const char *policy_pubkey_path;
 	const char *config_path;
 	int attest_interval;
-	uint32_t aik_ttl;
 
 	/* enforcement toggles */
 	bool strict_mmap;

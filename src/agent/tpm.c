@@ -255,12 +255,24 @@ static void tpm_record_lockout(struct tpm_context *ctx)
 	}
 }
 
+/*
+ * A call that needs no DA-protected authorization succeeds in lockout, so ask
+ * the TPM before clearing. The flag is down during the read, which goes
+ * through tpm_call_with_backoff() and so back here.
+ */
 static void tpm_clear_lockout(struct tpm_context *ctx)
 {
+	uint32_t perm = 0;
+
 	if (!ctx || !ctx->lockout_active)
 		return;
 
 	ctx->lockout_active = false;
+	if (tpm_read_prop(ctx, TPM2_PT_PERMANENT, &perm) != 0 ||
+	    (perm & TPMA_PERMANENT_INLOCKOUT)) {
+		ctx->lockout_active = true;
+		return;
+	}
 	ctx->lockout_first_seen = 0;
 }
 
@@ -594,9 +606,6 @@ int tpm_init(struct tpm_context *ctx)
 	memset(ctx->aik_object_name, 0, sizeof(ctx->aik_object_name));
 	ctx->aik_object_name_size = 0;
 	ctx->aik_object_replaced = false;
-	memset(ctx->prev_aik_public, 0, sizeof(ctx->prev_aik_public));
-	ctx->prev_aik_public_size = 0;
-	ctx->grace_deadline = 0;
 	ctx->lockout_active = false;
 	ctx->lockout_first_seen = 0;
 	ctx->lockout_event_count = 0;
@@ -802,77 +811,89 @@ int tpm_read_pcrs_batch(struct tpm_context *ctx, uint32_t pcr_mask,
 	TPML_DIGEST *pcr_values = NULL;
 	uint32_t pcr_update_counter;
 	TPML_PCR_SELECTION *pcr_selection_out = NULL;
-	uint32_t digest_idx = 0;
+	uint32_t want = pcr_mask & ((1U << LOTA_PCR_COUNT) - 1U);
 	uint32_t i;
+	int ret = 0;
 
 	if (!ctx || !values)
 		return -EINVAL;
 
 	memset(values, 0, LOTA_PCR_COUNT * LOTA_HASH_SIZE);
 
-	if (pcr_mask == 0)
-		return 0;
+	/* TPM2_PCR_Read returns at most eight digests per call. */
+	while (want) {
+		uint32_t digest_idx = 0;
+		uint32_t got = 0;
 
-	memset(&pcr_selection, 0, sizeof(pcr_selection));
-	pcr_selection.count = 1;
-	pcr_selection.pcrSelections[0].hash = TPM_HASH_ALG;
-	pcr_selection.pcrSelections[0].sizeofSelect = 3; /* 24 PCRs = 3 bytes */
+		memset(&pcr_selection, 0, sizeof(pcr_selection));
+		pcr_selection.count = 1;
+		pcr_selection.pcrSelections[0].hash = TPM_HASH_ALG;
+		pcr_selection.pcrSelections[0].sizeofSelect = 3;
+		pcr_selection.pcrSelections[0].pcrSelect[0] =
+			(uint8_t)(want & 0xFF);
+		pcr_selection.pcrSelections[0].pcrSelect[1] =
+			(uint8_t)((want >> 8) & 0xFF);
+		pcr_selection.pcrSelections[0].pcrSelect[2] =
+			(uint8_t)((want >> 16) & 0xFF);
 
-	pcr_selection.pcrSelections[0].pcrSelect[0] =
-		(uint8_t)(pcr_mask & 0xFF);
-	pcr_selection.pcrSelections[0].pcrSelect[1] =
-		(uint8_t)((pcr_mask >> 8) & 0xFF);
-	pcr_selection.pcrSelections[0].pcrSelect[2] =
-		(uint8_t)((pcr_mask >> 16) & 0xFF);
+		{
+			struct esys_pcr_read_args args = {
+				.esys_ctx = ctx->esys_ctx,
+				.pcr_selection_in = &pcr_selection,
+				.pcr_update_counter_out = &pcr_update_counter,
+				.pcr_selection_out = &pcr_selection_out,
+				.pcr_values_out = &pcr_values,
+			};
+			int call_ret = tpm_call_with_backoff(
+				ctx, esys_pcr_read_thunk, &args, &rc, 2,
+				(void **)&pcr_selection_out,
+				(void **)&pcr_values);
+			if (call_ret < 0)
+				return call_ret;
+		}
 
-	{
-		struct esys_pcr_read_args args = {
-			.esys_ctx = ctx->esys_ctx,
-			.pcr_selection_in = &pcr_selection,
-			.pcr_update_counter_out = &pcr_update_counter,
-			.pcr_selection_out = &pcr_selection_out,
-			.pcr_values_out = &pcr_values,
-		};
-		int call_ret = tpm_call_with_backoff(
-			ctx, esys_pcr_read_thunk, &args, &rc, 2,
-			(void **)&pcr_selection_out, (void **)&pcr_values);
-		if (call_ret < 0)
-			return call_ret;
-	}
+		if (!pcr_values || !pcr_selection_out ||
+		    pcr_selection_out->count == 0) {
+			ret = -ENODATA;
+			goto out;
+		}
 
-	if (!pcr_values || !pcr_selection_out ||
-	    pcr_selection_out->count == 0) {
+		for (i = 0; i < LOTA_PCR_COUNT; i++) {
+			uint8_t sel = pcr_selection_out->pcrSelections[0]
+					      .pcrSelect[i / 8];
+			if (!(sel & (1U << (i % 8))))
+				continue;
+
+			if (!(want & (1U << i)) ||
+			    digest_idx >= pcr_values->count ||
+			    pcr_values->digests[digest_idx].size !=
+				    LOTA_HASH_SIZE) {
+				ret = -EIO;
+				goto out;
+			}
+			memcpy(values[i],
+			       pcr_values->digests[digest_idx].buffer,
+			       LOTA_HASH_SIZE);
+			digest_idx++;
+			got |= 1U << i;
+		}
+
 		Esys_Free(pcr_values);
 		Esys_Free(pcr_selection_out);
-		return -ENODATA;
+		pcr_values = NULL;
+		pcr_selection_out = NULL;
+
+		if (!got)
+			return -ENODATA;
+		want &= ~got;
 	}
-
-	for (i = 0; i < LOTA_PCR_COUNT; i++) {
-		uint8_t sel =
-			pcr_selection_out->pcrSelections[0].pcrSelect[i / 8];
-		if (!(sel & (1U << (i % 8))))
-			continue;
-
-		if (digest_idx >= pcr_values->count) {
-			Esys_Free(pcr_values);
-			Esys_Free(pcr_selection_out);
-			return -EIO;
-		}
-
-		if (pcr_values->digests[digest_idx].size != LOTA_HASH_SIZE) {
-			Esys_Free(pcr_values);
-			Esys_Free(pcr_selection_out);
-			return -EIO;
-		}
-		memcpy(values[i], pcr_values->digests[digest_idx].buffer,
-		       LOTA_HASH_SIZE);
-		digest_idx++;
-	}
-
-	Esys_Free(pcr_values);
-	Esys_Free(pcr_selection_out);
 
 	return 0;
+
+out:
+	Esys_Free(pcr_values);
+	Esys_Free(pcr_selection_out);
+	return ret;
 }
 
 /*
@@ -1032,7 +1053,7 @@ static bool aik_binding_survives(const char *bound_id, uint32_t bound_handle,
 
 /*
  * Drop everything cached for the key when the object at the AIK handle differs
- * from the Name recorded here. The rotation record and the userAuth belong to
+ * from the Name recorded here. The AIK record and the userAuth belong to
  * one key; a replaced object leaves them describing a key the TPM no longer
  * holds.
  */
@@ -1062,11 +1083,13 @@ static void aik_note_object(struct tpm_context *ctx, ESYS_TR object)
 
 /*
  * Only the ESYS object cache goes stale: keep the TCTI and replace the session.
- * The rest of the context (self-measurement, PCR 14 verdict, profile binding)
- * survives.
+ * The rest of the context (self-measurement, PCR 14 verdict, profile binding,
+ * the AIK's Name) survives.
  */
 static int tpm_esys_reconnect(struct tpm_context *ctx)
 {
+	uint8_t name[sizeof(ctx->aik_object_name)];
+	uint16_t name_size;
 	TSS2_RC rc;
 
 	if (!ctx || !ctx->initialized || !ctx->esys_ctx || !ctx->tcti_ctx)
@@ -1080,7 +1103,11 @@ static int tpm_esys_reconnect(struct tpm_context *ctx)
 		return tss2_rc_to_errno(rc);
 	}
 
+	memcpy(name, ctx->aik_object_name, sizeof(name));
+	name_size = ctx->aik_object_name_size;
 	tpm_forget_bound_aik(ctx);
+	memcpy(ctx->aik_object_name, name, sizeof(name));
+	ctx->aik_object_name_size = name_size;
 	return 0;
 }
 
@@ -1152,6 +1179,17 @@ void tpm_aik_allow_shared_key_replace(struct tpm_context *ctx, bool allow)
 		ctx->aik_allow_shared_key_replace = allow;
 }
 
+static int hex_nibble(char c)
+{
+	if (c >= '0' && c <= '9')
+		return c - '0';
+	if (c >= 'a' && c <= 'f')
+		return c - 'a' + 10;
+	if (c >= 'A' && c <= 'F')
+		return c - 'A' + 10;
+	return -1;
+}
+
 int tpm_aik_profile_unique(const char *profile_id, uint8_t out[LOTA_HASH_SIZE],
 			   uint16_t *out_len)
 {
@@ -1168,13 +1206,14 @@ int tpm_aik_profile_unique(const char *profile_id, uint8_t out[LOTA_HASH_SIZE],
 		return -EINVAL;
 
 	for (size_t i = 0; i < LOTA_HASH_SIZE; i++) {
-		unsigned int byte;
+		int hi = hex_nibble(profile_id[i * 2]);
+		int lo = hex_nibble(profile_id[i * 2 + 1]);
 
-		if (sscanf(profile_id + i * 2, "%2x", &byte) != 1) {
+		if (hi < 0 || lo < 0) {
 			memset(out, 0, LOTA_HASH_SIZE);
 			return -EINVAL;
 		}
-		out[i] = (uint8_t)byte;
+		out[i] = (uint8_t)(hi << 4 | lo);
 	}
 
 	*out_len = LOTA_HASH_SIZE;
@@ -1260,6 +1299,8 @@ restore:
 	 * A caller that survives a failed bind must not write this publisher's
 	 * metadata under the previous publisher's handle.
 	 */
+	snprintf(ctx->aik_profile_id, sizeof(ctx->aik_profile_id), "%s",
+		 previous_profile_id);
 	snprintf(ctx->aik_meta_path, sizeof(ctx->aik_meta_path), "%s",
 		 previous_meta_path);
 	ctx->aik_handle = previous_handle;
@@ -1455,70 +1496,6 @@ static int create_aik_primary(struct tpm_context *ctx, ESYS_TR *out_handle,
 	return 0;
 }
 
-static void tpm_prop_u32_to_ascii(uint32_t prop, char out[4])
-{
-	out[0] = (char)((prop >> 24) & 0xFF);
-	out[1] = (char)((prop >> 16) & 0xFF);
-	out[2] = (char)((prop >> 8) & 0xFF);
-	out[3] = (char)(prop & 0xFF);
-}
-
-static int tpm_verify_device_identity(struct tpm_context *ctx)
-{
-	uint32_t manufacturer = 0;
-	uint32_t fw1 = 0;
-	uint32_t fw2 = 0;
-	uint32_t vendor_parts[4] = { 0 };
-	char vendor[17] = { 0 };
-	char vendor_upper[17] = { 0 };
-	int ret;
-
-	ret = tpm_read_prop(ctx, TPM2_PT_MANUFACTURER, &manufacturer);
-	if (ret < 0)
-		return ret;
-
-	ret = tpm_read_prop(ctx, TPM2_PT_FIRMWARE_VERSION_1, &fw1);
-	if (ret < 0)
-		return ret;
-
-	ret = tpm_read_prop(ctx, TPM2_PT_FIRMWARE_VERSION_2, &fw2);
-	if (ret < 0)
-		return ret;
-
-	if (manufacturer == 0 || (fw1 == 0 && fw2 == 0))
-		return -EACCES;
-
-	ret = tpm_read_prop(ctx, TPM2_PT_VENDOR_STRING_1, &vendor_parts[0]);
-	if (ret < 0)
-		return ret;
-	ret = tpm_read_prop(ctx, TPM2_PT_VENDOR_STRING_2, &vendor_parts[1]);
-	if (ret < 0)
-		return ret;
-	ret = tpm_read_prop(ctx, TPM2_PT_VENDOR_STRING_3, &vendor_parts[2]);
-	if (ret < 0)
-		return ret;
-	ret = tpm_read_prop(ctx, TPM2_PT_VENDOR_STRING_4, &vendor_parts[3]);
-	if (ret < 0)
-		return ret;
-
-	for (int i = 0; i < 4; i++)
-		tpm_prop_u32_to_ascii(vendor_parts[i], vendor + (i * 4));
-
-	for (int i = 0; i < 16; i++) {
-		char c = vendor[i];
-		if (c >= 'a' && c <= 'z')
-			c = (char)(c - ('a' - 'A'));
-		vendor_upper[i] = c;
-	}
-
-	if (strstr(vendor_upper, "SWTPM") || strstr(vendor_upper, "SW TPM") ||
-	    strstr(vendor_upper, "SIMULATOR") || strstr(vendor_upper, "QEMU")) {
-		return -EACCES;
-	}
-
-	return 0;
-}
-
 #ifdef LOTA_TPM_TESTING
 void tpm_test_set_prop_reader(tpm_test_prop_reader_fn reader)
 {
@@ -1533,27 +1510,18 @@ void tpm_test_reset_prop_reader(void)
 
 static int tpm_aik_save_new_key_metadata(struct tpm_context *ctx)
 {
-	time_t now;
-
 	if (!ctx || !ctx->initialized)
 		return -EINVAL;
-
-	now = time(NULL);
 
 	if (!ctx->aik_meta_loaded) {
 		memset(&ctx->aik_meta, 0, sizeof(ctx->aik_meta));
 		ctx->aik_meta.magic = TPM_AIK_META_MAGIC;
 		ctx->aik_meta.version = TPM_AIK_META_VERSION;
-		ctx->aik_meta.generation = 1;
-		ctx->aik_meta.last_rotated_at = 0;
 	} else if (ctx->aik_meta.magic != TPM_AIK_META_MAGIC ||
 		   ctx->aik_meta.version != TPM_AIK_META_VERSION) {
 		return -EINVAL;
-	} else if (ctx->aik_meta.generation == 0) {
-		ctx->aik_meta.generation = 1;
 	}
 
-	ctx->aik_meta.provisioned_at = (int64_t)now;
 	ctx->aik_meta.key_derivation =
 		ctx->aik_profile_id[0] ? TPM_AIK_KEY_DERIVATION_PER_PUBLISHER :
 					 TPM_AIK_KEY_DERIVATION_SHARED;
@@ -1569,16 +1537,32 @@ int tpm_test_save_new_key_metadata(struct tpm_context *ctx)
 }
 #endif
 
+/* Replacing a shared key invalidates the certificate that names it. */
+static int aik_check_shared_replace(struct tpm_context *ctx)
+{
+	int ret;
+
+	if (!ctx->aik_meta_loaded) {
+		ret = tpm_aik_load_metadata(ctx);
+		/* no record: nothing says the key is shared */
+		if (ret == -EKEYREVOKED)
+			return 0;
+		if (ret < 0)
+			return ret;
+	}
+
+	if (tpm_aik_key_is_shared(ctx) && !ctx->aik_allow_shared_key_replace)
+		return -ENOTSUP;
+
+	return 0;
+}
+
 int tpm_provision_aik(struct tpm_context *ctx)
 {
 	int ret;
 
 	if (!ctx || !ctx->initialized)
 		return -EINVAL;
-
-	ret = tpm_verify_device_identity(ctx);
-	if (ret < 0)
-		return ret;
 
 	ret = aik_exists(ctx, NULL);
 	if (ret < 0)
@@ -1614,6 +1598,10 @@ int tpm_provision_aik(struct tpm_context *ctx)
 			return load_rc;
 		}
 
+		ret = aik_check_shared_replace(ctx);
+		if (ret < 0)
+			return ret;
+
 		ret = tpm_aik_reprovision_with_auth(ctx, 1);
 		if (ret < 0)
 			return ret;
@@ -1628,10 +1616,7 @@ int tpm_provision_aik(struct tpm_context *ctx)
 	return tpm_aik_save_new_key_metadata(ctx);
 }
 
-/*
- * A loaded record keeps its generation: a bump marks the certificate
- * over the key stale.
- */
+/* The key did not change: a loaded record is written back as it is. */
 static int tpm_aik_save_auth_rotation_metadata(struct tpm_context *ctx)
 {
 	if (!ctx || !ctx->initialized)
@@ -1674,6 +1659,10 @@ int tpm_reprovision_aik(struct tpm_context *ctx, bool *out_key_changed)
 		if (ret < 0)
 			return ret;
 		had_name = true;
+
+		ret = aik_check_shared_replace(ctx);
+		if (ret < 0)
+			return ret;
 	}
 
 	ret = tpm_aik_reprovision_with_auth(ctx, had == 1 ? 1 : 0);
@@ -2278,22 +2267,22 @@ int tpm_firmware_refuses_attestation(const struct tpm_context *ctx)
  * and the agent anchors its derivations on it.
  *
  * @present, when given, receives whether a usable handoff was there: the
- * agent's evidence that the lock helper ran this boot. A short handoff counts
- * as absent.
+ * agent's evidence that the lock helper ran this boot. A handoff of any other
+ * length counts as absent.
  *
  * The baseline is not trust input: a tampered file makes the agent's own
  * derivations miss the real PCR14.
  *
  * Returns: 0 or negative errno; @out is zeroed when no usable handoff exists.
  */
-static int read_pcr14_baseline(uint8_t out[LOTA_HASH_SIZE], int *present)
+static int read_pcr14_baseline(const char *path, uint8_t out[LOTA_HASH_SIZE],
+			       int *present)
 {
 	memset(out, 0, LOTA_HASH_SIZE);
 	if (present)
 		*present = 0;
 
-	int fd = open(LOTA_PCR14_BASELINE_PATH,
-		      O_RDONLY | O_CLOEXEC | O_NOFOLLOW);
+	int fd = open(path, O_RDONLY | O_CLOEXEC | O_NOFOLLOW);
 	if (fd < 0) {
 		if (errno == ENOENT)
 			return 0;
@@ -2306,7 +2295,7 @@ static int read_pcr14_baseline(uint8_t out[LOTA_HASH_SIZE], int *present)
 		return err;
 	}
 
-	uint8_t buf[LOTA_HASH_SIZE];
+	uint8_t buf[LOTA_HASH_SIZE + 1];
 	size_t n = fread(buf, 1, sizeof(buf), f);
 	int read_err = ferror(f);
 	fclose(f);
@@ -2317,7 +2306,7 @@ static int read_pcr14_baseline(uint8_t out[LOTA_HASH_SIZE], int *present)
 		fprintf(stderr,
 			"PCR14 boot-commitment: ignoring malformed baseline handoff "
 			"(%zu bytes at %s)\n",
-			n, LOTA_PCR14_BASELINE_PATH);
+			n, path);
 		memset(out, 0, LOTA_HASH_SIZE);
 		return 0;
 	}
@@ -2532,7 +2521,8 @@ int tpm_extend_boot_commitment(struct tpm_context *ctx,
 	uint8_t baseline[LOTA_HASH_SIZE];
 	int lock_ran = 0;
 
-	ret = read_pcr14_baseline(baseline, &lock_ran);
+	ret = read_pcr14_baseline(LOTA_PCR14_BASELINE_PATH, baseline,
+				  &lock_ran);
 	if (ret < 0)
 		return ret;
 
@@ -2859,127 +2849,6 @@ cleanup:
 }
 
 #define TPM_EK_RSA_HANDLE 0x81010001
-
-static int tpm_load_ek(struct tpm_context *ctx, ESYS_TR *out_handle,
-		       bool *out_transient);
-
-int tpm_get_hardware_id(struct tpm_context *ctx, uint8_t *hardware_id)
-{
-	TSS2_RC rc;
-	ESYS_TR ek_handle = ESYS_TR_NONE;
-	bool ek_transient = false;
-	TPM2B_PUBLIC *ek_public = NULL;
-	TPM2B_NAME *ek_name = NULL;
-	TPM2B_NAME *ek_qualified_name = NULL;
-	EVP_MD_CTX *md_ctx = NULL;
-	unsigned int hash_len;
-	int ret = 0;
-
-	if (!ctx || !ctx->initialized || !hardware_id)
-		return -EINVAL;
-
-	memset(hardware_id, 0, LOTA_HARDWARE_ID_SIZE);
-
-	/*
-	 * TPM2_Clear evicts the persistent handle and keeps the endorsement
-	 * seed, so tpm_load_ek() recreates the same key.
-	 */
-	if (tpm_load_ek(ctx, &ek_handle, &ek_transient) < 0) {
-		uint8_t aik_buf[LOTA_MAX_AIK_PUB_SIZE];
-		size_t aik_size;
-
-		ret = tpm_get_aik_public(ctx, aik_buf, sizeof(aik_buf),
-					 &aik_size);
-		if (ret < 0)
-			return ret;
-
-		md_ctx = EVP_MD_CTX_new();
-		if (!md_ctx)
-			return -ENOMEM;
-
-		if (EVP_DigestInit_ex(md_ctx, EVP_sha256(), NULL) != 1 ||
-		    EVP_DigestUpdate(md_ctx, aik_buf, aik_size) != 1 ||
-		    EVP_DigestFinal_ex(md_ctx, hardware_id, &hash_len) != 1) {
-			EVP_MD_CTX_free(md_ctx);
-			return -EIO;
-		}
-
-		EVP_MD_CTX_free(md_ctx);
-		return 1; /* AIK fallback */
-	}
-
-	{
-		struct esys_read_public_args args = {
-			.esys_ctx = ctx->esys_ctx,
-			.object_handle = ek_handle,
-			.out_public_out = &ek_public,
-			.name_out = &ek_name,
-			.qualified_name_out = &ek_qualified_name,
-		};
-		ret = tpm_call_with_backoff(ctx, esys_read_public_thunk, &args,
-					    &rc, 3, (void **)&ek_public,
-					    (void **)&ek_name,
-					    (void **)&ek_qualified_name);
-		if (ret < 0)
-			goto cleanup;
-	}
-
-	md_ctx = EVP_MD_CTX_new();
-	if (!md_ctx) {
-		ret = -ENOMEM;
-		goto cleanup;
-	}
-
-	if (EVP_DigestInit_ex(md_ctx, EVP_sha256(), NULL) != 1) {
-		ret = -EIO;
-		goto cleanup;
-	}
-
-	if (ek_public->publicArea.type == TPM2_ALG_RSA) {
-		if (EVP_DigestUpdate(
-			    md_ctx, ek_public->publicArea.unique.rsa.buffer,
-			    ek_public->publicArea.unique.rsa.size) != 1) {
-			ret = -EIO;
-			goto cleanup;
-		}
-	} else if (ek_public->publicArea.type == TPM2_ALG_ECC) {
-		if (EVP_DigestUpdate(
-			    md_ctx, ek_public->publicArea.unique.ecc.x.buffer,
-			    ek_public->publicArea.unique.ecc.x.size) != 1 ||
-		    EVP_DigestUpdate(
-			    md_ctx, ek_public->publicArea.unique.ecc.y.buffer,
-			    ek_public->publicArea.unique.ecc.y.size) != 1) {
-			ret = -EIO;
-			goto cleanup;
-		}
-	} else {
-		ret = -ENOTSUP;
-		goto cleanup;
-	}
-
-	if (EVP_DigestFinal_ex(md_ctx, hardware_id, &hash_len) != 1) {
-		ret = -EIO;
-		goto cleanup;
-	}
-
-	ret = 0;
-
-cleanup:
-	if (md_ctx)
-		EVP_MD_CTX_free(md_ctx);
-	if (ek_public)
-		Esys_Free(ek_public);
-	if (ek_name)
-		Esys_Free(ek_name);
-	if (ek_qualified_name)
-		Esys_Free(ek_qualified_name);
-	if (ek_transient && ek_handle != ESYS_TR_NONE)
-		Esys_FlushContext(ctx->esys_ctx, ek_handle);
-	else if (!ek_transient)
-		tpm_tr_close(ctx, &ek_handle);
-
-	return ret;
-}
 
 /*
  * The attestation CA recomputes the AIK name from these exact bytes when
@@ -4107,9 +3976,6 @@ int tpm_aik_load_metadata(struct tpm_context *ctx)
 		memset(&ctx->aik_meta, 0, sizeof(ctx->aik_meta));
 		ctx->aik_meta.magic = TPM_AIK_META_MAGIC;
 		ctx->aik_meta.version = TPM_AIK_META_VERSION;
-		ctx->aik_meta.generation = 1;
-		ctx->aik_meta.provisioned_at = (int64_t)time(NULL);
-		ctx->aik_meta.last_rotated_at = 0;
 		ctx->aik_meta.key_derivation =
 			TPM_AIK_KEY_DERIVATION_PER_PUBLISHER;
 		ctx->aik_meta_loaded = true;
@@ -4125,9 +3991,6 @@ int tpm_aik_load_metadata(struct tpm_context *ctx)
 
 	meta.magic = le32toh(meta.magic);
 	meta.version = le32toh(meta.version);
-	meta.generation = le64toh(meta.generation);
-	meta.provisioned_at = (int64_t)le64toh((uint64_t)meta.provisioned_at);
-	meta.last_rotated_at = (int64_t)le64toh((uint64_t)meta.last_rotated_at);
 
 	if (meta.magic != TPM_AIK_META_MAGIC)
 		return -EINVAL;
@@ -4174,11 +4037,6 @@ int tpm_aik_save_metadata(struct tpm_context *ctx)
 	memset(&wire, 0, sizeof(wire));
 	wire.magic = htole32(ctx->aik_meta.magic);
 	wire.version = htole32(TPM_AIK_META_VERSION);
-	wire.generation = htole64(ctx->aik_meta.generation);
-	wire.provisioned_at =
-		(int64_t)htole64((uint64_t)ctx->aik_meta.provisioned_at);
-	wire.last_rotated_at =
-		(int64_t)htole64((uint64_t)ctx->aik_meta.last_rotated_at);
 	wire.key_derivation = ctx->aik_meta.key_derivation;
 
 	n = write(fd, &wire, sizeof(wire));
@@ -4206,122 +4064,6 @@ int tpm_aik_save_metadata(struct tpm_context *ctx)
 	if (ret < 0)
 		return ret;
 
-	return 0;
-}
-
-int64_t tpm_aik_age(struct tpm_context *ctx)
-{
-	time_t now;
-
-	if (!ctx || !ctx->aik_meta_loaded)
-		return -EINVAL;
-
-	now = time(NULL);
-	return (int64_t)(now - (time_t)ctx->aik_meta.provisioned_at);
-}
-
-int tpm_aik_needs_rotation(struct tpm_context *ctx, uint32_t max_age_sec)
-{
-	int64_t age;
-
-	if (!ctx || !ctx->aik_meta_loaded)
-		return -EINVAL;
-
-	if (max_age_sec == 0)
-		max_age_sec = TPM_AIK_DEFAULT_TTL_SEC;
-
-	age = tpm_aik_age(ctx);
-	if (age < 0)
-		return (int)age;
-
-	return (age >= (int64_t)max_age_sec) ? 1 : 0;
-}
-
-int tpm_rotate_aik(struct tpm_context *ctx)
-{
-	int ret;
-	size_t prev_size = 0;
-
-	if (!ctx || !ctx->initialized || !ctx->aik_meta_loaded)
-		return -EINVAL;
-
-	ret = aik_exists(ctx, NULL);
-	if (ret < 0)
-		return ret;
-
-	if (ret == 1) {
-		ret = tpm_get_aik_public(ctx, ctx->prev_aik_public,
-					 sizeof(ctx->prev_aik_public),
-					 &prev_size);
-		if (ret < 0) {
-			prev_size = 0;
-		}
-		ctx->prev_aik_public_size = prev_size;
-
-		ret = tpm_aik_reprovision_with_auth(ctx, 1);
-		if (ret < 0)
-			return ret;
-	} else {
-		ctx->prev_aik_public_size = 0;
-
-		ret = tpm_provision_aik(ctx);
-		if (ret < 0)
-			return ret;
-	}
-
-	ctx->aik_meta.generation++;
-	ctx->aik_meta.last_rotated_at = (int64_t)time(NULL);
-	ctx->aik_meta.provisioned_at = ctx->aik_meta.last_rotated_at;
-
-	ret = tpm_aik_save_metadata(ctx);
-	if (ret < 0)
-		return ret;
-
-	if (ctx->prev_aik_public_size > 0) {
-		ctx->grace_deadline = time(NULL) + TPM_AIK_GRACE_PERIOD_SEC;
-	} else {
-		ctx->grace_deadline = 0;
-	}
-
-	return 0;
-}
-
-int tpm_aik_in_grace_period(struct tpm_context *ctx)
-{
-	if (!ctx)
-		return 0;
-
-	if (ctx->grace_deadline == 0)
-		return 0;
-
-	if (time(NULL) >= ctx->grace_deadline) {
-		ctx->grace_deadline = 0;
-		ctx->prev_aik_public_size = 0;
-		return 0;
-	}
-
-	return 1;
-}
-
-int tpm_aik_get_prev_public(struct tpm_context *ctx, uint8_t *buf,
-			    size_t buf_size, size_t *out_size)
-{
-	if (!ctx || !buf || !out_size)
-		return -EINVAL;
-
-	*out_size = 0;
-
-	if (!tpm_aik_in_grace_period(ctx))
-		return -ENOENT;
-
-	if (ctx->prev_aik_public_size == 0)
-		return -ENOENT;
-
-	if (buf_size < ctx->prev_aik_public_size)
-		return -ENOSPC;
-
-	memcpy(buf, ctx->prev_aik_public, ctx->prev_aik_public_size);
-	*out_size = ctx->prev_aik_public_size;
 	return 0;
 }
 
@@ -4809,8 +4551,8 @@ out:
 
 /*
  * Diagnostic composite: SHA-256 over the selected PCR values in ascending
- * index order. Recorded in the blob so an operator can see which PCR state
- * a secret was sealed against. Not security-critical; the authPolicy is
+ * index order. Recorded in the blob, and compared on a refused unseal to tell
+ * a rejected blob from moved PCRs. Not security-critical; the authPolicy is
  * the binding.
  */
 static int seal_compute_pcr_digest(struct tpm_context *ctx, uint32_t pcr_mask,
@@ -4846,6 +4588,24 @@ static int seal_compute_pcr_digest(struct tpm_context *ctx, uint32_t pcr_mask,
 out:
 	EVP_MD_CTX_free(md);
 	return ret;
+}
+
+/* PCRs that still match the seal-time digest put a TPM refusal on the blob */
+static int seal_refusal_errno(struct tpm_context *ctx,
+			      const struct lota_seal_meta *meta, TSS2_RC rc,
+			      int err)
+{
+	uint8_t now[LOTA_SEAL_PCR_DIGEST_SIZE];
+
+	if (err != -EIO && err != -LOTA_ERR_TPM_POLICY_FAIL)
+		return err;
+	if (!tpm_rc_layer_is_tpm(rc))
+		return err;
+	if (seal_compute_pcr_digest(ctx, meta->pcr_mask, now) < 0)
+		return err;
+	if (memcmp(now, meta->pcr_digest, sizeof(now)) != 0)
+		return err;
+	return -EBADMSG;
 }
 
 int tpm_seal_secret(struct tpm_context *ctx, const uint8_t *secret,
@@ -5105,7 +4865,7 @@ out:
 	if (sealed != ESYS_TR_NONE)
 		Esys_FlushContext(ctx->esys_ctx, sealed);
 	seal_release_primary(ctx, primary, primary_persistent);
-	return ret;
+	return seal_refusal_errno(ctx, &meta, rc, ret);
 }
 
 int tpm_seal_secret_envelope(struct tpm_context *ctx, const uint8_t *payload,
@@ -5346,6 +5106,31 @@ int tpm_seal_evict_primary(struct tpm_context *ctx)
 }
 
 #ifdef LOTA_TPM_TESTING
+int tpm_test_read_pcr14_baseline(const char *path, uint8_t out[LOTA_HASH_SIZE],
+				 int *present)
+{
+	return read_pcr14_baseline(path, out, present);
+}
+
+int tpm_test_seal_refusal_errno(struct tpm_context *ctx, uint32_t pcr_mask,
+				const uint8_t *pcr_digest, uint32_t rc, int err)
+{
+	struct lota_seal_meta meta = { .pcr_mask = pcr_mask };
+
+	memcpy(meta.pcr_digest, pcr_digest, sizeof(meta.pcr_digest));
+	return seal_refusal_errno(ctx, &meta, (TSS2_RC)rc, err);
+}
+
+int tpm_test_aik_check_shared_replace(struct tpm_context *ctx)
+{
+	return aik_check_shared_replace(ctx);
+}
+
+int tpm_test_esys_reconnect(struct tpm_context *ctx)
+{
+	return tpm_esys_reconnect(ctx);
+}
+
 int tpm_test_rc_is_stale_object_record(uint32_t rc)
 {
 	return tss2_rc_is_stale_object_record((TSS2_RC)rc) ? 1 : 0;

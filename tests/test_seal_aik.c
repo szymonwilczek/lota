@@ -531,14 +531,14 @@ static void test_mask_selection_default(void)
 	uint8_t sel[3];
 	uint32_t count = 0;
 
-	TEST("mask->selection: default mask sets PCR 0-7 and not PCR14");
+	TEST("mask->selection: default mask sets PCR 0, 1, 7 and not PCR14");
 	if (tpm_test_pcr_mask_to_selection(LOTA_SEAL_DEFAULT_PCR_MASK, sel,
 					   &count) != 0) {
 		FAIL("call");
 		return;
 	}
-	/* PCR 0-7 -> byte0 = 0xFF; nothing above, so byte1 and byte2 stay 0 */
-	if (count != 1 || sel[0] != 0xFF || sel[1] != 0x00 || sel[2] != 0x00) {
+	/* PCR 0, 1, 7 -> byte0 = 0x83; byte1 and byte2 stay 0 */
+	if (count != 1 || sel[0] != 0x83 || sel[1] != 0x00 || sel[2] != 0x00) {
 		FAIL("bitmap mismatch");
 		return;
 	}
@@ -555,14 +555,14 @@ static void test_mask_selection_agent_bound(void)
 	uint8_t sel[3];
 	uint32_t count = 0;
 
-	TEST("mask->selection: agent-bound mask adds PCR14 to PCR 0-7");
+	TEST("mask->selection: agent-bound mask adds PCR14 to PCR 0, 1, 7");
 	if (tpm_test_pcr_mask_to_selection(LOTA_SEAL_AGENT_BOUND_PCR_MASK, sel,
 					   &count) != 0) {
 		FAIL("call");
 		return;
 	}
-	/* PCR 0-7 -> byte0 = 0xFF; PCR14 -> byte1 bit6 = 0x40; byte2 = 0 */
-	if (count != 1 || sel[0] != 0xFF || sel[1] != 0x40 || sel[2] != 0x00) {
+	/* PCR 0, 1, 7 -> byte0 = 0x83; PCR14 -> byte1 bit6 = 0x40; byte2 = 0 */
+	if (count != 1 || sel[0] != 0x83 || sel[1] != 0x40 || sel[2] != 0x00) {
 		FAIL("bitmap mismatch");
 		return;
 	}
@@ -714,13 +714,13 @@ static void test_policy_fail_maps_clean(void)
 	PASS();
 }
 
-/* the boot-state hint must not follow a framing or PolicyPCR refusal */
+/* the boot-state hint must not follow a framing refusal */
 static void test_boot_state_hint_is_for_a_tpm_that_did_not_say(void)
 {
-	TEST("the boot-state hint is only for an unexplained TPM refusal");
+	TEST("the boot-state hint is only for a TPM refusal");
 
-	if (tpm_unseal_boot_state_unknown(-LOTA_ERR_TPM_POLICY_FAIL)) {
-		FAIL("a policy failure already names the state");
+	if (!tpm_unseal_boot_state_unknown(-LOTA_ERR_TPM_POLICY_FAIL)) {
+		FAIL("a policy failure does not say which policy");
 		return;
 	}
 	if (tpm_unseal_boot_state_unknown(-EBADMSG)) {

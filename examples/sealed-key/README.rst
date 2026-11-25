@@ -40,8 +40,8 @@ in as additional authenticated data, so a tampered envelope fails the GCM tag
 instead of returning corrupt data. ``--unseal`` detects the envelope from its
 magic; no extra flag is needed.
 
-The default PCR set is the firmware/kernel boot PCRs 0–7 plus LOTA's PCR14
-boot-commitment, so a firmware, kernel, or agent change invalidates the seal.
+The default PCR set is the platform PCRs 0, 1 and 7, so a firmware or Secure
+Boot change invalidates the seal and a kernel or agent upgrade does not.
 Override it with ``--seal-pcrs MASK``.
 
 .. code:: sh

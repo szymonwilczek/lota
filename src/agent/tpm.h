@@ -56,7 +56,6 @@ struct tpm_quote_response;
  * tpm_unseal_boot_state_unknown() - Print the boot-state hint after an unseal?
  * @err: Return value of the failed unseal.
  *
- * tpm_strerror() names the boot state for -LOTA_ERR_TPM_POLICY_FAIL.
  * -EBADMSG is a bad blob.
  *
  * Return: true for any other negative @err.
@@ -65,7 +64,7 @@ static inline bool tpm_unseal_boot_state_unknown(int err)
 {
 	if (err >= 0)
 		return false;
-	return err != -LOTA_ERR_TPM_POLICY_FAIL && err != -EBADMSG;
+	return err != -EBADMSG;
 }
 
 /**
@@ -124,14 +123,6 @@ const char *tpm_strerror(int err);
 
 /* Hash algorithm for PCR bank */
 #define TPM_HASH_ALG TPM2_ALG_SHA256
-
-/*
- * AIK rotation defaults.
- * tpm_aik_get_prev_public() answers for the grace period after a rotation by
- * the same context; nothing persists it.
- */
-#define TPM_AIK_DEFAULT_TTL_SEC (30 * 24 * 3600) /* 30 days */
-#define TPM_AIK_GRACE_PERIOD_SEC 3600 /* 1 hour */
 
 /* AIK metadata file magic and version */
 #define TPM_AIK_META_MAGIC 0x4D4B4941 /* "AIKM" */
@@ -200,20 +191,11 @@ struct aik_auth_record {
 	uint8_t _reserved[22];
 } __attribute__((packed));
 
-/*
- * AIK metadata on disk, at TPM_AIK_META_PATH or in the publisher profile.
- *
- * generation is 1 on a fresh record, tpm_rotate_aik() increments it and
- * creating a key over a loaded record keeps it, raising 0 to 1.
- * provisioned_at drives tpm_aik_age(), is wall-clock time and moves on a key
- * creation, a rotation and a fresh record.
- */
+/* AIK metadata on disk, at TPM_AIK_META_PATH or in the publisher profile. */
 struct aik_metadata {
 	uint32_t magic;
 	uint32_t version;
-	uint64_t generation;
-	int64_t provisioned_at; /* time_t */
-	int64_t last_rotated_at; /* time_t: last rotation (0 if none) */
+	uint8_t _unused[24]; /* zero, ignored on read */
 	uint8_t key_derivation; /* TPM_AIK_KEY_DERIVATION_* */
 	uint8_t _reserved[63];
 } __attribute__((packed));
@@ -270,13 +252,13 @@ struct tpm_context {
 	/* AIK persistent handle (configurable, default TPM_AIK_HANDLE) */
 	uint32_t aik_handle;
 
-	/* AIK rotation state */
+	/* AIK record */
 	struct aik_metadata aik_meta;
 	bool aik_meta_loaded;
 
 	/*
-	 * Publisher named by the last tpm_bind_profile() past its argument
-	 * checks, also a failed one; empty on a host with no publisher.
+	 * Publisher named by the last successful tpm_bind_profile();
+	 * empty on a host with no publisher.
 	 * Creation input, so publishers hold different keys.
 	 */
 	char aik_profile_id[LOTA_PROFILE_ID_LEN];
@@ -306,11 +288,6 @@ struct tpm_context {
 	uint8_t aik_auth[TPM_AIK_AUTH_SIZE];
 	bool aik_auth_loaded;
 
-	/* Previous AIK public key, exported by tpm_rotate_aik() */
-	uint8_t prev_aik_public[LOTA_MAX_AIK_PUB_SIZE];
-	size_t prev_aik_public_size;
-	time_t grace_deadline; /* 0 if no grace period active */
-
 	/*
 	 * Dictionary-attack lockout state.
 	 *
@@ -318,8 +295,8 @@ struct tpm_context {
 	 * that was clear, lockout_first_seen, and counts in
 	 * lockout_event_count.
 	 * A successful tpm_call_with_backoff() or TPM_CALL_RETRY clears the
-	 * first two, an auth-free call on a TPM still locked out among them;
-	 * so does tpm_reset_lockout_state().
+	 * first two when TPM_PT_PERMANENT then reads without inLockout;
+	 * tpm_reset_lockout_state() clears them without asking the TPM.
 	 * Neither touches the count. tpm_init() zeroes all three.
 	 */
 	bool lockout_active;
@@ -406,10 +383,10 @@ int tpm_read_pcr(struct tpm_context *ctx, uint32_t pcr_index,
  * tpm_read_pcrs_batch() - Read several PCRs from the SHA-256 bank.
  * @ctx: Initialized TPM context.
  * @pcr_mask: PCRs to read; bit 0 is PCR 0.
- * @values: Receives the values; PCRs outside @pcr_mask read zero, as do those
- *          past the eight one TPM2_PCR_Read returns.
+ * @values: Receives the values; PCRs outside @pcr_mask read zero.
  *
- * Return: 0 or a negative errno.
+ * Return: 0, -ENODATA when the TPM returns none of the PCRs still to read, or
+ * a negative errno.
  */
 int tpm_read_pcrs_batch(struct tpm_context *ctx, uint32_t pcr_mask,
 			uint8_t values[LOTA_PCR_COUNT][LOTA_HASH_SIZE]);
@@ -440,10 +417,9 @@ int tpm_quote(struct tpm_context *ctx, const uint8_t *nonce, uint32_t pcr_mask,
  * - auth readable, record says shared: -ENOTSUP unless
  *   tpm_aik_allow_shared_key_replace() was set, then the profile's own key;
  * - auth record present but unreadable: the load error, key left alone;
- * - no auth record: fresh auth.
+ * - no auth record: fresh auth, refused as above for a shared key.
  *
- * Return: 0, -EACCES when tpm_verify_device_identity() refuses the device,
- * or a negative errno.
+ * Return: 0 or a negative errno.
  */
 int tpm_provision_aik(struct tpm_context *ctx);
 
@@ -460,8 +436,8 @@ int tpm_provision_aik(struct tpm_context *ctx);
  * Call after tpm_init() and before tpm_provision_aik().
  * A LOTA_AIK_META_PATH override wins over the profile's metadata path.
  *
- * A failure past the argument checks restores the handle and the metadata path
- * and drops the cached key; aik_profile_id keeps the new publisher.
+ * A failure past the argument checks restores the publisher,
+ * the handle and the metadata path and drops the cached key.
  *
  * Return: 0, -ENOSPC when the range is exhausted, or a negative errno.
  */
@@ -473,9 +449,9 @@ int tpm_bind_profile(struct tpm_context *ctx,
  * @ctx: TPM context.
  *
  * Set when an open of the handle finds an object other than the Name recorded
- * by the last open. A reconnect, a failed bind or a bind to another publisher,
- * handle or metadata path forgets that Name, so a change across one goes
- * unseen. The cached auth is already dropped by then, so this is diagnostic.
+ * by the last open. A failed bind or a bind to another publisher, handle or
+ * metadata path forgets that Name, so a change across one goes unseen.
+ * The cached auth is already dropped by then, so this is diagnostic.
  * Reading clears it.
  *
  * Return: true when set since the last read.
@@ -492,8 +468,8 @@ bool tpm_aik_object_replaced(struct tpm_context *ctx);
  * A primary key is derived from the hierarchy seed and the creation template:
  * the same template gives the same key at any handle.
  *
- * Return: 0, or -EINVAL on a wrong length or a byte %2x cannot read; "1g" reads
- * as 0x01.
+ * Return: 0, or -EINVAL on a wrong length or a character that is not a hex
+ * digit.
  */
 int tpm_aik_profile_unique(const char *profile_id, uint8_t out[LOTA_HASH_SIZE],
 			   uint16_t *out_len);
@@ -891,26 +867,11 @@ int tpm_get_ek_cert_chain(struct tpm_context *ctx, uint8_t *buf,
 			  size_t buf_size, size_t *out_size);
 
 /**
- * tpm_get_hardware_id() - Compute the hardware identifier.
- * @ctx: Initialized TPM context.
- * @hardware_id: LOTA_HARDWARE_ID_SIZE bytes.
- *
- * SHA-256 of the EK's public unique field: the RSA modulus, or ECC X and Y.
- * With no EK at the persistent handle the key is recreated from its template,
- * giving the same value. When the TPM yields no EK, SHA-256 of the AIK's DER
- * SubjectPublicKeyInfo.
- *
- * Return: 0 from the EK, 1 from the AIK, -ENOKEY with neither, or a negative
- * errno.
- */
-int tpm_get_hardware_id(struct tpm_context *ctx, uint8_t *hardware_id);
-
-/**
- * tpm_aik_load_metadata() - Load the AIK rotation metadata.
+ * tpm_aik_load_metadata() - Load the AIK metadata.
  * @ctx: Initialized TPM context; @ctx->aik_meta_path, or TPM_AIK_META_PATH.
  *
  * A missing file with no key at the handle yields defaults in memory
- * (generation 1, provisioned_at now), with nothing written.
+ * (a per-publisher key), with nothing written.
  *
  * Return: 0, -EKEYREVOKED on a missing file with a key at the handle, -EIO on
  * a short file, -EINVAL on wrong magic, -ENOTSUP on another version, or
@@ -925,65 +886,6 @@ int tpm_aik_load_metadata(struct tpm_context *ctx);
  * Return: 0 or a negative errno.
  */
 int tpm_aik_save_metadata(struct tpm_context *ctx);
-
-/**
- * tpm_aik_age() - Seconds since provisioned_at.
- * @ctx: TPM context with loaded metadata.
- *
- * Return: the age, negative when provisioned_at is ahead of the clock, or
- * -EINVAL with no metadata loaded.
- */
-int64_t tpm_aik_age(struct tpm_context *ctx);
-
-/**
- * tpm_aik_needs_rotation() - Is the AIK at or past its maximum age?
- * @ctx: TPM context with loaded metadata.
- * @max_age_sec: Maximum age; 0 selects TPM_AIK_DEFAULT_TTL_SEC.
- *
- * Return: 1 when due, 0 when not, -EINVAL with no metadata loaded, or the
- * negative age truncated to int when provisioned_at is ahead of the clock.
- */
-int tpm_aik_needs_rotation(struct tpm_context *ctx, uint32_t max_age_sec);
-
-/**
- * tpm_rotate_aik() - Run one AIK rotation.
- * @ctx: Initialized TPM context with loaded metadata.
- *
- * Exports the current public key for the grace period, evicts the handle,
- * provisions it again with fresh userAuth, increments generation, updates
- * provisioned_at and saves the metadata.
- *
- * The same seed and template derive the same key, so the key material and
- * the public key from tpm_aik_get_prev_public() equal the current ones.
- *
- * Return: 0 or a negative errno.
- */
-int tpm_rotate_aik(struct tpm_context *ctx);
-
-/**
- * tpm_aik_in_grace_period() - Is the rotation grace period active?
- * @ctx: TPM context.
- *
- * For TPM_AIK_GRACE_PERIOD_SEC after a rotation by this context the report
- * carries the previous public key, also after binding another publisher.
- * Expiry clears the state.
- *
- * Return: 1 when active, 0 otherwise.
- */
-int tpm_aik_in_grace_period(struct tpm_context *ctx);
-
-/**
- * tpm_aik_get_prev_public() - Get the previous AIK public key.
- * @ctx: TPM context.
- * @buf: Receives the DER-encoded key.
- * @buf_size: Size of @buf.
- * @out_size: Receives the key's size.
- *
- * Return: 0, -ENOENT outside the grace period, -ENOSPC on a small @buf,
- * or a negative errno.
- */
-int tpm_aik_get_prev_public(struct tpm_context *ctx, uint8_t *buf,
-			    size_t buf_size, size_t *out_size);
 
 /*
  * TPM Event Log path
@@ -1019,8 +921,9 @@ int tpm_read_event_log(uint8_t *buf, size_t buf_size, size_t *out_size);
  * @ctx: TPM context.
  *
  * Return: true after TPM2_RC_LOCKOUT until a successful
- * tpm_call_with_backoff() or TPM_CALL_RETRY, or tpm_reset_lockout_state();
- * the TPM can still be locked out when it reads false.
+ * tpm_call_with_backoff() or TPM_CALL_RETRY finds inLockout clear,
+ * or tpm_reset_lockout_state(); the TPM can still be locked out when
+ * it reads false.
  */
 bool tpm_is_locked_out(const struct tpm_context *ctx);
 
@@ -1067,10 +970,10 @@ int tpm_seal_secret(struct tpm_context *ctx, const uint8_t *secret,
  * Runs over an encrypted PolicyPCR session.
  *
  * Return: 0, -EINVAL/-EMSGSIZE on a header lota_seal_parse_header() refuses,
- * -EBADMSG on a body that does not unmarshal, -ENOSPC on a small @out_secret,
- * -LOTA_ERR_TPM_POLICY_FAIL when the policy fails, as after a PCR move, -EIO
- * when the TPM refuses the tampered or foreign object, or a negative errno /
- * LOTA_ERR_TPM_*.
+ * -EBADMSG on a body that does not unmarshal or that the TPM refuses while the
+ * PCRs still hash to the header's pcr_digest, -ENOSPC on a small @out_secret,
+ * -LOTA_ERR_TPM_POLICY_FAIL or -EIO on any other refusal of the policy or the
+ * object, or a negative errno / LOTA_ERR_TPM_*.
  */
 int tpm_unseal_secret(struct tpm_context *ctx, const uint8_t *blob,
 		      size_t blob_len, uint8_t *out_secret, size_t out_cap,
@@ -1108,9 +1011,9 @@ int tpm_seal_secret_envelope(struct tpm_context *ctx, const uint8_t *payload,
  *
  * Return: 0, -EINVAL/-EMSGSIZE on a malformed blob or bad arguments, -ENOSPC on
  * a small @out, -EBADMSG when the tag fails over the header, the sealed KEK or
- * the payload, or the KEK does not unmarshal, -LOTA_ERR_TPM_POLICY_FAIL when
- * the policy fails, as after a PCR move, -EIO when the TPM refuses the sealed
- * KEK, or a negative errno / LOTA_ERR_TPM_*.
+ * the payload, or tpm_unseal_secret() gives it for the KEK,
+ * -LOTA_ERR_TPM_POLICY_FAIL or -EIO when it gives those, or a negative errno /
+ * LOTA_ERR_TPM_*.
  */
 int tpm_unseal_secret_envelope(struct tpm_context *ctx, const uint8_t *blob,
 			       size_t blob_len, uint8_t *out, size_t out_cap,
@@ -1193,8 +1096,11 @@ int tpm_aik_reseal_auth(struct tpm_context *ctx);
  * Recovery for strict at-rest sealing after a boot-state change made the sealed
  * auth unrecoverable. The key is a primary: same template, same key.
  * seal_aik_auth and seal_aik_auth_strict select how the new auth is stored.
+ * With a key at the handle, the record is loaded first if it is not already;
+ * a missing record is written afresh.
  *
- * Return: 0 or a negative errno.
+ * Return: 0, -ENOTSUP when the record says shared and
+ * tpm_aik_allow_shared_key_replace() was not set, or a negative errno.
  */
 int tpm_reprovision_aik(struct tpm_context *ctx, bool *out_key_changed);
 
@@ -1238,6 +1144,14 @@ int tpm_aik_handle_holds_profile_key(struct tpm_context *ctx);
 #ifdef LOTA_TPM_TESTING
 typedef int (*tpm_test_prop_reader_fn)(struct tpm_context *ctx, TPM2_PT prop,
 				       uint32_t *out_val);
+
+int tpm_test_read_pcr14_baseline(const char *path, uint8_t out[LOTA_HASH_SIZE],
+				 int *present);
+int tpm_test_aik_check_shared_replace(struct tpm_context *ctx);
+int tpm_test_esys_reconnect(struct tpm_context *ctx);
+int tpm_test_seal_refusal_errno(struct tpm_context *ctx, uint32_t pcr_mask,
+				const uint8_t *pcr_digest, uint32_t rc,
+				int err);
 
 /*
  * Pure helpers: the Name comparison behind tpm_aik_object_replaced(), and

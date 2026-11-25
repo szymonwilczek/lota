@@ -218,8 +218,14 @@ int lota_envelope_aead_seal(const uint8_t kek[LOTA_ENVELOPE_KEK_SIZE],
 
 /**
  * lota_envelope_aead_open() - Verify and decrypt a payload under the KEK.
- * @pt_out: receives @ct_len bytes of plaintext, written before the tag is
- *          checked; valid only on success.
+ * @kek:     as for lota_envelope_aead_seal().
+ * @nonce:   the nonce the payload was sealed with.
+ * @aad:     the additional data it was sealed with.
+ * @aad_len: as for lota_envelope_aead_seal().
+ * @ct:      ciphertext.
+ * @ct_len:  bytes in @ct, 1 to LOTA_ENVELOPE_MAX_PAYLOAD.
+ * @tag:     GCM tag to verify.
+ * @pt_out: receives @ct_len bytes of plaintext; zeroed on -EBADMSG and -EIO.
  *
  * Return: 0 on success, -EINVAL on a bad argument, -ENOMEM, -EBADMSG on a tag
  * mismatch, -EIO on a crypto error.

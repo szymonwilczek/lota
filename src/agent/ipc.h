@@ -117,14 +117,6 @@ struct ipc_context {
 	uint8_t mode;
 	uint32_t policy_keys; /* LOTA_STATUS_POLICY_KEYS the daemon holds */
 
-	/* AIK rotation state, surfaced read-only over D-Bus */
-	uint64_t aik_generation; /* monotonic rotation counter */
-	uint64_t aik_provisioned_at; /* current AIK creation (Unix time) */
-	uint64_t aik_last_rotated_at; /* last rotation (Unix time, 0 if never) */
-	uint64_t aik_rotation_deadline; /* provisioned_at + TTL (0 if unknown) */
-	uint64_t aik_grace_deadline; /* end of post-rotation grace (0 if none) */
-	bool aik_reenroll_required; /* stored cert outdated by a rotation */
-
 	/*
 	 * Publisher profiles, borrowed from the caller of ipc_set_profiles().
 	 * Read from the epoll loop's thread, as tpm is.
@@ -143,13 +135,6 @@ struct ipc_context {
 	 * where this is raised.
 	 */
 	bool profiles_changed;
-
-	/*
-	 * Called after each accepted sync. The attestation loop rotates the AIK
-	 * and writes the rotation record; the socket owner re-reads that file.
-	 */
-	void (*on_attest_sync)(void *user);
-	void *on_attest_sync_user;
 
 	/* socket-activated: ipc_cleanup() leaves the primary path in place */
 	bool activated;
@@ -205,23 +190,6 @@ void ipc_update_status(struct ipc_context *ctx, uint32_t flags,
  * @success: Whether attestation succeeded.
  */
 void ipc_record_attestation(struct ipc_context *ctx, bool success);
-
-/**
- * ipc_update_rotation() - Publish AIK rotation state.
- * @ctx: Server context.
- * @generation: Current AIK generation counter.
- * @provisioned_at: Current AIK creation time (Unix seconds).
- * @last_rotated_at: Last rotation time (Unix seconds, 0 if never).
- * @rotation_deadline: provisioned_at + TTL (0 if unknown).
- * @grace_deadline: End of post-rotation grace window (0 if none).
- * @reenroll_required: True when a rotation has outdated the stored cert.
- *
- * Emits PropertiesChanged for the rotation properties when a field changed.
- */
-void ipc_update_rotation(struct ipc_context *ctx, uint64_t generation,
-			 uint64_t provisioned_at, uint64_t last_rotated_at,
-			 uint64_t rotation_deadline, uint64_t grace_deadline,
-			 bool reenroll_required);
 
 /**
  * ipc_set_agent_restarted() - Raise LOTA_STATUS_AGENT_RESTARTED.
@@ -294,15 +262,6 @@ void ipc_token_answer_stats(uint64_t *repeated);
  */
 void ipc_set_profiles(struct ipc_context *ctx, struct attest_target *profiles,
 		      size_t count);
-
-/**
- * ipc_set_attest_sync_hook() - Run @fn after the attestation loop syncs.
- * @ctx: Server context.
- * @fn: Callback, or NULL to clear.
- * @user: Opaque argument handed back to @fn.
- */
-void ipc_set_attest_sync_hook(struct ipc_context *ctx, void (*fn)(void *),
-			      void *user);
 
 /**
  * ipc_set_tpm() - Set the TPM context for token signing.
