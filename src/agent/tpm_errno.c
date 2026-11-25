@@ -5,7 +5,6 @@
  *
  * Kept apart from tpm.c, which links the TSS2 stack, so the code that has to
  * print a TPM failure can be built into a test with no TPM behind it.
- * The codes themselves and the reason they exist are documented in tpm.h.
  */
 
 #include <errno.h>

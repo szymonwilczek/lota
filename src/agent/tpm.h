@@ -440,7 +440,7 @@ int tpm_quote(struct tpm_context *ctx, const uint8_t *nonce, uint32_t pcr_mask,
  * - auth readable, record says shared: -ENOTSUP unless
  *   tpm_aik_allow_shared_key_replace() was set, then the profile's own key;
  * - auth record present but unreadable: the load error, key left alone;
- * - no auth record: fresh auth, and the same key for the same template.
+ * - no auth record: fresh auth.
  *
  * Return: 0, -EACCES when tpm_verify_device_identity() refuses the device,
  * or a negative errno.
@@ -566,7 +566,7 @@ bool tpm_aik_provisioning_orphans_cert(int key_present, bool cert_stored,
  * @allow: True on the enrollment path, false everywhere else.
  *
  * The replacement changes the key the CA certificate names; the enrollment
- * path fetches a certificate for it. Other callers get -ENOTSUP.
+ * path fetches a certificate for it.
  */
 void tpm_aik_allow_shared_key_replace(struct tpm_context *ctx, bool allow);
 
