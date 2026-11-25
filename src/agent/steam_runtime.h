@@ -1,10 +1,6 @@
 /* SPDX-License-Identifier: MIT */
 /*
- * LOTA Agent - Steam Runtime Detection and Container-Aware IPC
- *
- * Detects Steam Runtime pressure-vessel containers (soldier, sniper,
- * medic, heavy) and resolves socket paths that are accessible from
- * inside the container sandbox.
+ * LOTA Agent - Steam Runtime detection and container socket paths
  *
  * Copyright (C) 2026 Szymon Wilczek
  */
@@ -17,150 +13,112 @@
 #include <stdint.h>
 #include <sys/types.h>
 
-/*
- * Steam Runtime container types.
- *
- * pressure-vessel ships multiple runtime versions selected by
- * the STEAM_COMPAT_TOOL_PATHS and per-game configuration:
- *
- *   STEAM_RT_NONE    - no container (native or Steam Runtime 1.0)
- *   STEAM_RT_SOLDIER - Steam Linux Runtime 2.0 (Ubuntu 18.04 base)
- *   STEAM_RT_SNIPER  - Steam Linux Runtime 3.0 (Ubuntu 20.04 base)
- *   STEAM_RT_MEDIC   - Steam Linux Runtime 1.0 (legacy, rare)
- *   STEAM_RT_HEAVY   - Steam Linux Runtime (Proton experimental)
- *   STEAM_RT_UNKNOWN - inside a container but type unrecognised
- */
 enum steam_runtime_type {
-	STEAM_RT_NONE = 0,
+	STEAM_RT_NONE = 0, /* neither PRESSURE_VESSEL_RUNTIME nor _BASE set */
 	STEAM_RT_SOLDIER,
 	STEAM_RT_SNIPER,
 	STEAM_RT_MEDIC,
 	STEAM_RT_HEAVY,
-	STEAM_RT_UNKNOWN,
+	STEAM_RT_UNKNOWN, /* a value classify_runtime() did not recognise */
 };
 
 /*
- * Container environment detection flags.
+ * env_flags, where "set" means not empty and not rejected as malformed:
+ * PRESSURE_VESSEL: PRESSURE_VESSEL_RUNTIME or PRESSURE_VESSEL_RUNTIME_BASE set
+ * FLATPAK: /.flatpak-info is a regular file
+ * STEAM_ACTIVE: SteamAppId or STEAM_COMPAT_DATA_PATH set
+ * XDG_AVAILABLE: XDG_RUNTIME_DIR set, and a directory itself, not a symlink
+ * PROTON: PROTON_VERSION or STEAM_COMPAT_TOOL_PATHS set
  */
-#define STEAM_ENV_PRESSURE_VESSEL (1U << 0) /* inside pressure-vessel */
-#define STEAM_ENV_FLATPAK (1U << 1) /* inside Flatpak sandbox */
-#define STEAM_ENV_STEAM_ACTIVE (1U << 2) /* Steam client is running */
-#define STEAM_ENV_XDG_AVAILABLE (1U << 3) /* XDG_RUNTIME_DIR exists */
-#define STEAM_ENV_PROTON (1U << 4) /* Proton/Wine detected */
+#define STEAM_ENV_PRESSURE_VESSEL (1U << 0)
+#define STEAM_ENV_FLATPAK (1U << 1)
+#define STEAM_ENV_STEAM_ACTIVE (1U << 2)
+#define STEAM_ENV_XDG_AVAILABLE (1U << 3)
+#define STEAM_ENV_PROTON (1U << 4)
 
-/*
- * Container-accessible socket directory suffix.
- * Appended to $XDG_RUNTIME_DIR.
- */
+/* appended to $XDG_RUNTIME_DIR */
 #define STEAM_RT_SOCKET_DIR_SUFFIX "lota"
 
-/*
- * Group the socket directory is handed to, so titles in it can connect.
- */
+/* the socket directory's group, so titles in it can connect */
 #define STEAM_RT_SOCKET_GROUP "lota"
 
-/*
- * Container-accessible socket filename.
- */
 #define STEAM_RT_SOCKET_NAME "lota.sock"
 
-/*
- * Steam Runtime environment information.
- */
 struct steam_runtime_info {
 	enum steam_runtime_type type;
 	uint32_t env_flags;
 
-	/* Detected paths */
 	char xdg_runtime_dir[PATH_MAX];
 	char container_socket_path[PATH_MAX];
 	char steam_compat_path[PATH_MAX]; /* STEAM_COMPAT_DATA_PATH */
 
 	char container_id[64];
 
-	/* Steam app ID (if available) */
+	/* SteamAppId; 0 when unset or not a uint32_t */
 	uint32_t app_id;
 };
 
-/*
- * steam_runtime_detect - Detect Steam Runtime container environment.
- * @info: Output structure filled with detected information.
+/**
+ * steam_runtime_detect() - Read this process's environment and /.flatpak-info.
+ * @info: Receives the result.
  *
- * Probes environment variables and filesystem markers to determine
- * whether LOTA is running on a host with Steam, inside a
- * pressure-vessel container, or inside a Flatpak sandbox.
- *
- * Returns: 0 on success (info is filled), negative errno on failure.
+ * Return: 0, or -EINVAL when @info is NULL.
  */
 int steam_runtime_detect(struct steam_runtime_info *info);
 
-/*
- * steam_runtime_type_str - Human-readable runtime type string.
- * @type: Runtime type enum value.
+/**
+ * steam_runtime_type_str() - Name a runtime type.
+ * @type: The type.
  *
- * Returns: Static string, never NULL.
+ * Return: a static string, never NULL.
  */
 const char *steam_runtime_type_str(enum steam_runtime_type type);
 
-/*
- * steam_runtime_runtime_dir - The agent's own runtime directory.
- * @buf: Destination buffer (important: should be PATH_MAX).
- * @bufsz: Size of buf.
+/**
+ * steam_runtime_runtime_dir() - Copy XDG_RUNTIME_DIR out.
+ * @buf: Destination.
+ * @bufsz: Its size.
  *
- * Writes the value of XDG_RUNTIME_DIR, checked the same way every other
- * environment input here is. The single-operator drop-in is what puts it in
- * the daemon's environment, and it is the only thing in that environment that
- * names the login the container listener belongs to.
- *
- * Returns: 0 on success, -ENOENT if XDG_RUNTIME_DIR is unset or rejected,
- *          -ENAMETOOLONG if it does not fit.
+ * Return: 0, -EINVAL, -ENOENT when the variable is unset or rejected,
+ * or -ENAMETOOLONG.
  */
 int steam_runtime_runtime_dir(char *buf, size_t bufsz);
 
-/*
- * steam_runtime_container_socket_dir - Build the container-accessible
- *   socket directory path.
- * @buf: Destination buffer (important: should be PATH_MAX).
- * @bufsz: Size of buf.
+/**
+ * steam_runtime_container_socket_dir() - Build the socket directory.
+ * @buf: Destination.
+ * @bufsz: Its size.
  *
- * Writes "$XDG_RUNTIME_DIR/lota" into buf.
+ * Writes "$XDG_RUNTIME_DIR/lota".
  *
- * Returns: 0 on success, -ENOENT if XDG_RUNTIME_DIR is unset,
- *          -ENAMETOOLONG if path overflows.
+ * Return: as for steam_runtime_runtime_dir().
  */
 int steam_runtime_container_socket_dir(char *buf, size_t bufsz);
 
-/*
- * steam_runtime_container_socket_path - Build the container-accessible
- *   socket path.
- * @buf: Destination buffer (should be PATH_MAX).
- * @bufsz: Size of buf.
+/**
+ * steam_runtime_container_socket_path() - Build the socket path.
+ * @buf: Destination.
+ * @bufsz: Its size.
  *
- * Writes "$XDG_RUNTIME_DIR/lota/lota.sock" into buf.
+ * Writes "$XDG_RUNTIME_DIR/lota/lota.sock".
  *
- * Returns: 0 on success, negative errno on failure.
+ * Return: as for steam_runtime_runtime_dir().
  */
 int steam_runtime_container_socket_path(char *buf, size_t bufsz);
 
-/*
- * steam_runtime_ensure_socket_dir - Create the container-accessible
- *   socket directory with correct permissions.
- * @dir: Path to create (e.g: from steam_runtime_container_socket_dir).
- * @gid: Group to hand the directory to, or (gid_t)-1 to leave it.
+/**
+ * steam_runtime_ensure_socket_dir() - Make the socket directory, mode 0750.
+ * @dir: Path to create or repair.
+ * @gid: Group to hand it to, or (gid_t)-1 to leave it.
  *
- * Creates the directory with mode 0750 and hands it to @gid,
- * matching the primary socket directory setup.
- *
- * Returns: 0 on success, negative errno on failure.
+ * Return: 0, -ENOTDIR when @dir is not a directory, or another negative
+ * errno.
  */
 int steam_runtime_ensure_socket_dir(const char *dir, gid_t gid);
 
-/*
- * steam_runtime_log_info - Log detected runtime information.
- * @info: Filled info structure from steam_runtime_detect().
- *
- * Prints a summary of the detected environment to stderr at
- * info level.
+/**
+ * steam_runtime_log_info() - Log what steam_runtime_detect() found.
+ * @info: Its result.
  */
 void steam_runtime_log_info(const struct steam_runtime_info *info);
 

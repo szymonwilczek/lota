@@ -1,17 +1,8 @@
 /* SPDX-License-Identifier: MIT */
 /*
- * Keeping the agent's protected-PID set in step with the processes in it:
- * the ones that exited leave, the ones a protected process created join.
- *
- * BPF map is maintained by the kernel: lota_task_free drops protected task
- * the moment it exits. Agent keeps its own copy of that set, because token
- * carries it and the runtime image measurement walks it, and nothing dropped
- * anything from that copy -- so title that protected itself and exited left
- * behind PID that resolves to nothing, and every later token failed closed
- * on measurement that could not be taken.
- *
- * Split out of ipc.c so the filter can be tested against stand-in for /proc
- * rather than against processes a test would have to spawn and kill.
+ * Keeps the agent's protected-PID set in step with the processes in it:
+ * the ones gone from /proc leave, the ones that run in a protected instance
+ * join. The token carries this set and the runtime image measurement walks it.
  *
  * Copyright (C) 2026 Szymon Wilczek
  */
@@ -22,26 +13,20 @@
 #include <stdbool.h>
 #include <stdint.h>
 
-/*
- * Whether @pid is still a running process.
- * @ctx is the caller's, untouched here; production predicate reads /proc
- * and the tests answer from a list.
- */
+/* Whether @pid stays in the set; @ctx is the caller's */
 typedef bool (*protect_pid_alive_fn)(uint32_t pid, void *ctx);
 
-/*
- * Copy @pids into @out, dropping every entry @alive says has gone.
+/**
+ * protect_pids_reap() - Copy the set without the PIDs @alive drops.
+ * @pids: The set.
+ * @count: Its size.
+ * @alive: Says whether a PID stays.
+ * @ctx: Passed to @alive.
+ * @out: Holds @count entries, in the order of @pids.
+ * @out_count: Receives the number kept.
  *
- * @out must hold @count entries.
- * Order is preserved, so the canonical form the token is built from
- * is unaffected beyond the removals.
- *
- * Returns 1 when something was dropped, 0 when nothing was, or a negative
- * errno.
- *
- * Distinction between 1 and 0 is what tells the caller to bump the mutation
- * epoch: relying party comparing epochs must never see the same epoch with
- * different protected set.
+ * Return: 1 when something was dropped, and the caller then bumps the
+ * mutation epoch; 0 when nothing was; or -EINVAL.
  */
 static inline int protect_pids_reap(const uint32_t *pids, int count,
 				    protect_pid_alive_fn alive, void *ctx,
@@ -70,23 +55,28 @@ static inline int protect_pids_reap(const uint32_t *pids, int count,
 }
 
 /*
- * Whether @pid runs in a protected instance, and if so put it in the
- * kernel's map. Returns 1 when it was added, 0 when it is not a member,
- * or a negative errno. The production predicate asks lota_instance.
+ * 1 when @pid runs in a protected instance and went into the kernel's map,
+ * 0 when it is not a member, or a negative errno.
  */
 typedef int (*protect_pid_adopt_fn)(uint32_t pid, void *ctx);
 
-/*
- * Copy @pids into @out, then append every candidate @adopt takes.
+/**
+ * protect_pids_adopt() - Copy the set and add what runs in its instances.
+ * @pids: The set.
+ * @count: Its size.
+ * @cands: Candidate PIDs.
+ * @cand_count: How many.
+ * @adopt: Takes a candidate, or refuses it.
+ * @ctx: Passed to @adopt.
+ * @cap: Capacity of @out; adoption stops there.
+ * @out: Receives the result.
+ * @out_count: Receives its size.
  *
- * A process created by a protected one is protected in the kernel from
- * its first instruction, but only the root of its tree is named in the
- * set. This brings the rest in, so the token and the measurement cover
- * every process of the instance.
+ * A candidate already in @pids is skipped, and so is one @adopt does not
+ * take.
  *
- * @out must hold @cap entries; a candidate already in @pids is skipped,
- * and adoption stops at @cap. Returns the number adopted, or a negative
- * errno. Above zero, the caller bumps the mutation epoch.
+ * Return: the number adopted, or -EINVAL. Above zero, the caller bumps the
+ * mutation epoch.
  */
 static inline int protect_pids_adopt(const uint32_t *pids, int count,
 				     const uint32_t *cands, int cand_count,

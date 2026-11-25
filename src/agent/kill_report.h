@@ -1,10 +1,6 @@
 /* SPDX-License-Identifier: MIT */
 /* Copyright (C) 2026 Szymon Wilczek */
-/*
- * Log line for a signal aimed at a protected process.
- * Pure, so tests can pin the line; it names the signal,
- * as a SIGKILL and a probe must differ.
- */
+/* Log line for a KILL or KILL_BLOCKED event. */
 
 #ifndef LOTA_AGENT_KILL_REPORT_H
 #define LOTA_AGENT_KILL_REPORT_H
@@ -13,16 +9,19 @@
 #include <stdint.h>
 #include <stdio.h>
 
-/*
- * kill_report_line - Format the log line for one kill event
- * @out: caller's buffer
- * @cap: its size
- * @blocked: signal was refused
- * @comm: sender's name, already folded for the log
- * @target_pid: protected target
- * @sig: signal number
- * @pid: sending thread
- * @uid: sender's uid
+/**
+ * kill_report_line() - Format the log line for one event.
+ * @out: Caller's buffer.
+ * @cap: Its size.
+ * @blocked: The event is KILL_BLOCKED.
+ * @comm: Name of the task the hook ran in, already sanitized.
+ * @target_pid: Target's tgid.
+ * @sig: Signal number; 0 for a refused rlimit change or a default SIGIO.
+ * @pid: That task's thread id.
+ * @uid: That task's uid.
+ *
+ * That task is not always the sender: at the delivery of a dump signal it is
+ * the receiver.
  */
 static inline void kill_report_line(char *out, size_t cap, int blocked,
 				    const char *comm, uint32_t target_pid,

@@ -1,9 +1,5 @@
 /* SPDX-License-Identifier: MIT */
 /* Copyright (C) 2026 Szymon Wilczek */
-/*
- * Certificate pin parsing.
- * See pin.h for why it does not live beside the TLS code that enforces the pin.
- */
 
 #include "pin.h"
 
@@ -22,13 +18,11 @@ int lota_pin_sha256_parse(const char *hex, uint8_t *out)
 		return -EINVAL;
 
 	while (hex[i] != '\0' && out_idx < LOTA_PIN_SHA256_LEN) {
-		/* skip colons and spaces */
 		if (hex[i] == ':' || hex[i] == ' ') {
 			i++;
 			continue;
 		}
 
-		/* need two hex nibbles */
 		if (hex[i + 1] == '\0')
 			return -EINVAL;
 

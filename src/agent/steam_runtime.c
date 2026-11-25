@@ -1,16 +1,6 @@
 /* SPDX-License-Identifier: MIT */
 /*
- * LOTA Agent - Steam Runtime Detection and Container-Aware IPC
- *
- * Detects Steam Runtime pressure-vessel containers and resolves
- * IPC socket paths accessible from inside the sandbox.
- *
- * Detection strategy:
- *  - Check PRESSURE_VESSEL_* env vars (definitive container signal)
- *  - Check /.flatpak-info (Flatpak sandbox)
- *  - Check STEAM_COMPAT_*, SteamAppId (Steam active)
- *  - Probe $XDG_RUNTIME_DIR availability and writability
- *  - Check PROTON_* / WINEPREFIX (Proton/Wine)
+ * LOTA Agent - Steam Runtime detection and container socket paths
  *
  * Copyright (C) 2026 Szymon Wilczek
  */
@@ -28,16 +18,6 @@
 
 #include "journal.h"
 
-/*
- * Classify the runtime version from PRESSURE_VESSEL_RUNTIME or
- * the /usr manifest inside the container.
- *
- * Known bases:
- *   soldier -> SteamLinuxRuntime_soldier (Ubuntu 18.04)
- *   sniper  -> SteamLinuxRuntime_sniper  (Ubuntu 20.04)
- *   medic   -> SteamLinuxRuntime (legacy 1.0 scout derivative)
- *   heavy   -> SteamLinuxRuntime_heavy   (experimental)
- */
 static enum steam_runtime_type classify_runtime(const char *runtime_str)
 {
 	if (!runtime_str || !runtime_str[0])
@@ -89,10 +69,7 @@ static int is_regular_file(const char *path)
 	return S_ISREG(st.st_mode);
 }
 
-/*
- * Safely get an environment variable with validation.
- * Returns pointer to value if valid, NULL otherwise.
- */
+/* NULL when unset, empty, longer than @max_len or holding a control char */
 static const char *get_env_safe(const char *name, size_t max_len)
 {
 	const char *val = getenv(name);
@@ -133,17 +110,6 @@ int steam_runtime_detect(struct steam_runtime_info *info)
 	memset(info, 0, sizeof(*info));
 	info->type = STEAM_RT_NONE;
 
-	/*
-	 * Detect pressure-vessel container.
-	 *
-	 * Inside a pressure-vessel container the following env vars
-	 * are set by the runtime's entry point:
-	 *   PRESSURE_VESSEL_RUNTIME       path to runtime sysroot
-	 *   PRESSURE_VESSEL_RUNTIME_BASE  base name of the runtime
-	 *   PRESSURE_VESSEL_LOCALE_I18N   locale mode
-	 *
-	 * Any of these is a definitive signal.
-	 */
 	env = get_env_safe("PRESSURE_VESSEL_RUNTIME", PATH_MAX);
 	if (env) {
 		info->env_flags |= STEAM_ENV_PRESSURE_VESSEL;
@@ -158,21 +124,9 @@ int steam_runtime_detect(struct steam_runtime_info *info)
 		}
 	}
 
-	/*
-	 * Detect Flatpak sandbox.
-	 *
-	 * Steam installs from Flathub run inside a Flatpak sandbox.
-	 * /.flatpak-info exists only inside the sandbox.
-	 */
 	if (is_regular_file("/.flatpak-info"))
 		info->env_flags |= STEAM_ENV_FLATPAK;
 
-	/*
-	 * Detect Steam client activity.
-	 *
-	 * SteamAppId is set for every game launched through Steam.
-	 * STEAM_COMPAT_DATA_PATH is set when using Proton.
-	 */
 	env = get_env_safe("SteamAppId", 32);
 	if (env) {
 		info->env_flags |= STEAM_ENV_STEAM_ACTIVE;
@@ -187,18 +141,12 @@ int steam_runtime_detect(struct steam_runtime_info *info)
 			 sizeof(info->steam_compat_path), "%s", env);
 	}
 
-	/*
-	 * Detect Proton/Wine.
-	 */
 	env = get_env_safe("PROTON_VERSION", 64);
 	if (!env)
 		env = get_env_safe("STEAM_COMPAT_TOOL_PATHS", PATH_MAX);
 	if (env)
 		info->env_flags |= STEAM_ENV_PROTON;
 
-	/*
-	 * Probe XDG_RUNTIME_DIR.
-	 */
 	env = get_env_safe("XDG_RUNTIME_DIR",
 			   sizeof(info->xdg_runtime_dir) - 1);
 	if (env && is_directory(env)) {
@@ -207,21 +155,12 @@ int steam_runtime_detect(struct steam_runtime_info *info)
 			 "%s", env);
 	}
 
-	/*
-	 * Build container-accessible socket path.
-	 *
-	 * If XDG_RUNTIME_DIR is set, this will always succeed
-	 * because PATH_MAX is large enough for any sane path.
-	 */
 	if (info->env_flags & STEAM_ENV_XDG_AVAILABLE) {
 		(void)steam_runtime_container_socket_path(
 			info->container_socket_path,
 			sizeof(info->container_socket_path));
 	}
 
-	/*
-	 * Container ID
-	 */
 	env = get_env_safe("PRESSURE_VESSEL_INSTANCE_ID",
 			   sizeof(info->container_id) - 1);
 	if (env) {
@@ -327,28 +266,12 @@ int steam_runtime_ensure_socket_dir(const char *dir, gid_t gid)
 	}
 
 	/*
-	 * A directory that is already there is repaired:
-	 * one left by an older agent carries that agent's mode and group,
-	 * and a title cannot reach a socket inside it.
-	 *
-	 * mkdir(2) masks the mode, and the daemon's unit sets UMask=0077,
-	 * which leaves 0700: a directory the lota group cannot enter,
-	 * so the socket inside it is one no title can reach.
-	 * Say the mode outright rather than let the caller's umask decide it.
+	 * An existing directory may carry another mode, and mkdir masks this
+	 * one: the unit sets UMask=0077.
 	 */
 	if (chmod(dir, 0750) < 0)
 		return -errno;
 
-	/*
-	 * re-stat to verify mkdir resolved to a directory rather than an
-	 * attacker-planted symlink that appeared between the initial
-	 * stat() and the mkdir(). O_NOFOLLOW on the chown path also
-	 * guards the same race; the explicit S_ISDIR check is the cheap
-	 * version of the open(O_DIRECTORY|O_NOFOLLOW) gate previously
-	 * used. Cannot keep that gate because fchown(2) refuses an O_PATH
-	 * fd with EBADF, and a plain open() on the runtime dir would inherit
-	 * O_RDONLY semantics this code does not need
-	 */
 	if (lstat(dir, &st) < 0)
 		return -errno;
 	if (!S_ISDIR(st.st_mode))
@@ -357,13 +280,6 @@ int steam_runtime_ensure_socket_dir(const char *dir, gid_t gid)
 	if (gid == (gid_t)-1)
 		return 0;
 
-	/*
-	 * Group ownership: lota so members of the group can connect to the
-	 * socket once the agent binds it. AT_SYMLINK_NOFOLLOW keeps the
-	 * race-window guard (mkdir + lstat + fchownat are still distinct
-	 * syscalls, but the symlink check pins the inode the chown lands
-	 * on to the one lstat saw).
-	 */
 	if (fchownat(AT_FDCWD, dir, (uid_t)-1, gid, AT_SYMLINK_NOFOLLOW) < 0)
 		return -errno;
 

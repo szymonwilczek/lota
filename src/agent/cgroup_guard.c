@@ -16,10 +16,8 @@
 #include "cgroup_guard.h"
 #include "sb_dev.h"
 
-/* a /proc/<pid>/cgroup record is one cgroup path plus a short prefix */
 #define CGROUP_LINE_MAX 4096
 
-/* reject "." and "..": such a path names a cgroup the agent is not in */
 static int path_is_descending(const char *path)
 {
 	const char *p = path;
@@ -166,7 +164,6 @@ int cgroup_guard_collect(const char *mount_root, const char *cgroup_path,
 		     cgroup_path) >= (int)sizeof(dir))
 		return -ENAMETOOLONG;
 
-	/* the root cgroup is "/": drop the trailing separator before walking */
 	for (size_t len = strlen(dir); len > root_len && dir[len - 1] == '/';
 	     len--)
 		dir[len - 1] = '\0';
