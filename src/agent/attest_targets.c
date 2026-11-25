@@ -119,6 +119,7 @@ static void carry_live_state(struct attest_target *to,
 	to->backoff_sec = from->backoff_sec;
 	to->last_success = from->last_success;
 	to->key_mismatch_announced = from->key_mismatch_announced;
+	to->cert_unreadable_announced = from->cert_unreadable_announced;
 	to->auth_fail_announced = from->auth_fail_announced;
 	to->shared_key_announced = from->shared_key_announced;
 	to->attested = from->attested;
@@ -131,6 +132,47 @@ static void carry_live_state(struct attest_target *to,
 	to->enroll_pending = from->enroll_pending;
 	to->enroll_backoff = from->enroll_backoff;
 	to->next_enroll_ms = from->next_enroll_ms;
+}
+
+enum attest_cert_say attest_target_note_cert_match(struct attest_target *t,
+						   int match_rc)
+{
+	if (match_rc == -EKEYREJECTED) {
+		t->cert_unreadable_announced = false;
+		if (t->key_mismatch_announced)
+			return ATTEST_CERT_SILENT;
+		t->key_mismatch_announced = true;
+		return ATTEST_CERT_MISMATCH;
+	}
+
+	if (match_rc < 0) {
+		if (t->cert_unreadable_announced)
+			return ATTEST_CERT_SILENT;
+		t->cert_unreadable_announced = true;
+		return ATTEST_CERT_UNREADABLE;
+	}
+
+	t->cert_unreadable_announced = false;
+	if (!t->key_mismatch_announced)
+		return ATTEST_CERT_SILENT;
+	t->key_mismatch_announced = false;
+	return ATTEST_CERT_MATCHES_AGAIN;
+}
+
+bool attest_targets_take_wakeups(struct attest_target *targets, size_t count,
+				 uint64_t now_ms)
+{
+	bool asked = false;
+
+	for (size_t i = 0; i < count; i++) {
+		if (!targets[i].enroll_pending && !targets[i].session_changed)
+			continue;
+		targets[i].enroll_pending = false;
+		targets[i].session_changed = false;
+		targets[i].next_due_ms = now_ms;
+		asked = true;
+	}
+	return asked;
 }
 
 int attest_targets_rebuild(const struct lota_config *cfg, const char *server,
@@ -181,7 +223,7 @@ out:
 }
 
 int attest_targets_reload(const char *config_path, const char *server, int port,
-			  const char *ca_cert, int interval_sec,
+			  const char *ca_cert, int interval_sec, bool pinned,
 			  struct attest_target *targets, size_t max,
 			  size_t *count)
 {
@@ -196,6 +238,8 @@ int attest_targets_reload(const char *config_path, const char *server, int port,
 		return -ENOMEM;
 
 	ret = config_load(fresh, config_path);
+	if (ret == 0 && pinned && fresh->profile_count > 0)
+		ret = -ENOTUNIQ;
 	if (ret == 0)
 		ret = attest_targets_rebuild(fresh, server, port, ca_cert,
 					     interval_sec, targets, max, count);

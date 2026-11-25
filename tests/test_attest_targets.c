@@ -24,6 +24,7 @@
 #include <openssl/types.h>
 #include <openssl/x509.h>
 
+#include "../include/lota_server.h"
 #include "../src/agent/attest.h"
 #include "../src/agent/attest_targets.h"
 
@@ -291,6 +292,17 @@ static void test_effective_interval(void)
 	      "a configured cadence wins over the default");
 	CHECK(attest_effective_interval(45, 0, true) == 45,
 	      "a configured cadence runs the loop without profiles too");
+}
+
+/* A verifier whose clock runs behind still accepts the latest token. */
+static void test_ceiling_leaves_the_clock_skew(void)
+{
+	long valid_in = MAX_ATTEST_INTERVAL + ATTEST_TOKEN_VALIDITY_SLACK_SEC;
+	long behind = LOTA_SERVER_MAX_CLOCK_SKEW_SEC;
+
+	CHECK(valid_in + behind <= LOTA_SERVER_MAX_TOKEN_AGE_SEC +
+					   LOTA_SERVER_MAX_CLOCK_SKEW_SEC,
+	      "a token at the ceiling passes a verifier a full skew behind");
 }
 
 /*
@@ -614,6 +626,61 @@ static void test_each_profile_pins_its_own_verifier(void)
 	unlink(anchor);
 }
 
+/* A certificate that cannot be read confirms nothing about the key. */
+static void test_an_unreadable_cert_confirms_nothing(void)
+{
+	struct attest_target t;
+
+	memset(&t, 0, sizeof(t));
+	CHECK(attest_target_note_cert_match(&t, -EKEYREJECTED) ==
+		      ATTEST_CERT_MISMATCH,
+	      "a foreign key is reported");
+	CHECK(attest_target_note_cert_match(&t, -EINVAL) ==
+			      ATTEST_CERT_UNREADABLE &&
+		      t.key_mismatch_announced,
+	      "an unreadable certificate keeps the mismatch");
+	CHECK(attest_target_note_cert_match(&t, -EINVAL) == ATTEST_CERT_SILENT,
+	      "an unreadable certificate is reported once");
+	CHECK(attest_target_note_cert_match(&t, 0) ==
+			      ATTEST_CERT_MATCHES_AGAIN &&
+		      !t.key_mismatch_announced,
+	      "only a certificate naming the key clears the mismatch");
+	CHECK(attest_target_note_cert_match(&t, -EINVAL) ==
+		      ATTEST_CERT_UNREADABLE,
+	      "a certificate that broke again is reported again");
+	attest_target_note_cert_match(&t, -EKEYREJECTED);
+	CHECK(attest_target_note_cert_match(&t, -EINVAL) ==
+		      ATTEST_CERT_UNREADABLE,
+	      "a certificate read as a foreign key's counts as read");
+}
+
+/* A title asking for an enrolled publisher wakes the loop once, not forever. */
+static void test_a_request_wakes_the_loop_once(void)
+{
+	struct attest_target t[2];
+
+	memset(t, 0, sizeof(t));
+	t[0].next_due_ms = 9000;
+	t[1].next_due_ms = 9000;
+	t[1].enroll_pending = true;
+
+	CHECK(attest_targets_take_wakeups(t, 2, 100) && t[1].next_due_ms == 100,
+	      "a pending enrollment makes its target due now");
+	CHECK(t[0].next_due_ms == 9000,
+	      "a target nobody asked for keeps its slot");
+
+	t[1].next_due_ms = 5000;
+	CHECK(!attest_targets_take_wakeups(t, 2, 200) &&
+		      t[1].next_due_ms == 5000,
+	      "the request is spent once served");
+
+	t[0].session_changed = true;
+	CHECK(attest_targets_take_wakeups(t, 2, 300) &&
+		      !attest_targets_take_wakeups(t, 2, 400) &&
+		      t[0].next_due_ms == 300,
+	      "a session change wakes the loop once too");
+}
+
 int main(void)
 {
 	printf("=== Attestation target list tests ===\n\n");
@@ -623,6 +690,7 @@ int main(void)
 	test_token_only_publisher();
 	test_more_profiles_than_room();
 	test_effective_interval();
+	test_ceiling_leaves_the_clock_skew();
 	test_env_overrides_stop_at_the_deployment();
 	test_target_reports();
 	test_wait_for_a_first_session_is_announced();
@@ -630,6 +698,8 @@ int main(void)
 	test_a_moved_ca_is_reported();
 	test_the_renewal_endpoint_is_said_once();
 	test_each_profile_pins_its_own_verifier();
+	test_a_request_wakes_the_loop_once();
+	test_an_unreadable_cert_confirms_nothing();
 
 	printf("\n%s\n", g_failures ? "FAILURES" : "All tests passed");
 	return g_failures ? 1 : 0;

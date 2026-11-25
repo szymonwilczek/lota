@@ -358,8 +358,8 @@ int test_iommu(void)
 			printf("  - Enable VT-d/AMD-Vi in BIOS\n");
 		}
 		if (!(status.flags & IOMMU_FLAG_CMDLINE_SET)) {
-			printf("  - Add 'intel_iommu=on' or 'amd_iommu=force' "
-			       "to kernel cmdline\n");
+			printf("  - Add 'intel_iommu=on' or "
+			       "'amd_iommu=force_enable' to kernel cmdline\n");
 		}
 		if (!(status.flags & IOMMU_FLAG_DMA_REMAP)) {
 			printf("  - Check dmesg for IOMMU initialization "

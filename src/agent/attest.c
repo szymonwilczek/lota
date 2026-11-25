@@ -954,32 +954,34 @@ static int target_key_matches_cert(struct attest_target *t)
 	}
 
 	ret = aik_cert_matches_key(t->paths.aik_cert, spki, spki_len);
-	if (ret == -EKEYREJECTED) {
-		if (!t->key_mismatch_announced) {
-			lota_err("The attestation key at this publisher's "
-				 "handle is not the key their certificate was "
-				 "issued over, so every quote would be refused "
-				 "by the TPM and each refusal spends a "
-				 "dictionary-attack attempt. No round is "
-				 "attempted until they issue a certificate for "
-				 "the key that is here now: lota-agent "
-				 "--reenroll --ca-cert <their anchor>. "
-				 "Publisher: %s",
-				 t->label);
-			t->key_mismatch_announced = true;
-		}
-		return ret;
-	}
-
-	if (t->key_mismatch_announced) {
+	switch (attest_target_note_cert_match(t, ret)) {
+	case ATTEST_CERT_MISMATCH:
+		lota_err("The attestation key at this publisher's handle is "
+			 "not the key their certificate was issued over, so "
+			 "their verifier would not accept its quotes. No round "
+			 "is attempted until they issue a certificate for the "
+			 "key that is here now: lota-agent --reenroll "
+			 "--ca-cert <their anchor>. Publisher: %s",
+			 t->label);
+		break;
+	case ATTEST_CERT_MATCHES_AGAIN:
 		lota_info("The attestation key at this publisher's handle "
 			  "matches their certificate again; rounds resume. "
 			  "Publisher: %s",
 			  t->label);
-		t->key_mismatch_announced = false;
+		break;
+	case ATTEST_CERT_UNREADABLE:
+		lota_warn("The AIK certificate stored for %s cannot be read "
+			  "(%s): the key at its handle is not checked against "
+			  "it and it is not renewed. Re-enroll to replace it: "
+			  "lota-agent --reenroll --ca-cert <their anchor>",
+			  t->label, strerror(-ret));
+		break;
+	case ATTEST_CERT_SILENT:
+		break;
 	}
 
-	return 0;
+	return ret == -EKEYREJECTED ? ret : 0;
 }
 
 static int bind_target(struct attest_target *t)
@@ -1088,8 +1090,6 @@ static bool enroll_target_if_needed(struct attest_target *t)
 			  t->paths.enroll_state);
 		return false;
 	}
-
-	t->enroll_pending = false;
 
 	{
 		time_t agreed = 0;
@@ -1354,12 +1354,12 @@ static int attest_target_round(struct attest_target *t, int skip_verify,
 	if (ret == -LOTA_ERR_TPM_AUTH_FAIL) {
 		if (!t->auth_fail_announced) {
 			lota_err("The TPM refused to authorize a quote for "
-				 "%s. The attestation key or its stored "
-				 "authorization is not the one this publisher "
-				 "enrolled, so no round is attempted until "
-				 "this publisher is "
-				 "re-enrolled: lota-agent --reenroll "
-				 "--ca-cert <their anchor>.",
+				 "%s: the stored authorization is not the "
+				 "attestation key's. Until the agent restarts, "
+				 "the TPM is not asked again with it, so "
+				 "rounds fail until it changes: lota-agent "
+				 "--reprovision-aik, then lota-agent "
+				 "--reenroll --ca-cert <their anchor>.",
 				 t->label);
 			t->auth_fail_announced = true;
 		}
@@ -1643,10 +1643,19 @@ static int continuous_attest_run(const struct lota_config *cfg,
 			size_t before = target_count;
 			int rret = attest_targets_reload(
 				config_path, server, port, ca_cert,
-				interval_sec, targets, LOTA_CONFIG_MAX_PROFILES,
-				&target_count);
+				interval_sec, pin_sha256 != NULL, targets,
+				LOTA_CONFIG_MAX_PROFILES, &target_count);
 
-			if (rret < 0) {
+			if (rret == -ENOTUNIQ) {
+				lota_warn("Reload refused: the certificate pin "
+					  "this loop started with is for %s, "
+					  "but the file now configures "
+					  "publisher profiles; still reporting "
+					  "to the %zu target(s) it started "
+					  "with. Restart without the pin to "
+					  "report to the profiles",
+					  server ? server : "(none)", before);
+			} else if (rret < 0) {
 				lota_warn("Reload failed (%s); still reporting "
 					  "to the %zu publisher(s) this loop "
 					  "started with",
@@ -1657,16 +1666,10 @@ static int continuous_attest_run(const struct lota_config *cfg,
 					  target_count);
 				announce_targets(targets, target_count);
 				resolve_auto_renew(targets, target_count);
-				if (before == 0 && target_count > 0) {
-					if (aik_ready_for(&targets[0]) < 0)
-						lota_warn("The first round "
-							  "retries the AIK");
-				} else if (target_count > 0 &&
-					   targets[0].has_profile &&
-					   bind_target(&targets[0]) < 0)
-					lota_warn("Tokens will keep the "
-						  "previous publisher's AIK "
-						  "until the next round");
+				if (before == 0 && target_count > 0 &&
+				    aik_ready_for(&targets[0]) < 0)
+					lota_warn("The first round retries "
+						  "the AIK");
 			}
 			now_ms = monotonic_ms();
 		}
@@ -1690,14 +1693,6 @@ static int continuous_attest_run(const struct lota_config *cfg,
 		attest_peer_sync(&peer, targets, target_count,
 				 &g_attest_counters);
 
-		if (target_count > 1 && targets[0].has_profile) {
-			ret = bind_target(&targets[0]);
-			if (ret < 0)
-				lota_warn("Tokens will keep the previous "
-					  "publisher's AIK until the next "
-					  "round");
-		}
-
 		for (size_t i = 0; i < target_count; i++) {
 			if (wake_ms == 0 || targets[i].next_due_ms < wake_ms)
 				wake_ms = targets[i].next_due_ms;
@@ -1713,7 +1708,6 @@ static int continuous_attest_run(const struct lota_config *cfg,
 
 		while (g_agent.running) {
 			uint64_t current_ms;
-			bool asked = false;
 			int timeout_ms;
 
 			watchdog_keepalive(&pace);
@@ -1726,15 +1720,8 @@ static int continuous_attest_run(const struct lota_config *cfg,
 				break;
 
 			/* a launched title wants its first report now */
-			for (size_t i = 0; i < target_count; i++) {
-				if (targets[i].enroll_pending ||
-				    targets[i].session_changed) {
-					targets[i].session_changed = false;
-					targets[i].next_due_ms = current_ms;
-					asked = true;
-				}
-			}
-			if (asked)
+			if (attest_targets_take_wakeups(targets, target_count,
+							current_ms))
 				break;
 
 			timeout_ms = (int)watchdog_pace_sleep_ms(

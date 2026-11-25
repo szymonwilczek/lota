@@ -83,12 +83,12 @@ bpf_path = /usr/lib/lota/lota_lsm.bpf.o
 # ---- Attestation ---------------------------------------------------------
 
 # Seconds between attestation rounds of `lota-agent --attest`, which the
-# packaged lota-attest.service runs: 0, or 30 to 300.
+# packaged lota-attest.service runs: 0, or 30 to 240.
 #
 # 0 is no cadence chosen. With [profile] entries the loop then attests every
-# 300 s; with no profile but a `server`, --attest attests once and exits; with
+# 240 s; with no profile but a `server`, --attest attests once and exits; with
 # neither, the loop runs with no target until a reload names a publisher.
-attest_interval = 300
+attest_interval = 240
 
 # ---- Sealed AIK auth ------------------------------------------------------
 # Keep the AIK userAuth sealed to PCRs 0-7, so it unseals only while the
@@ -177,7 +177,7 @@ log_level = info
 # readable by lota-attest.service, as the top-level ca_cert is.
 #
 # ca_port defaults to 8444 and verifier_port to 8443. interval defaults to
-# attest_interval above (300 when that is 0) and takes the same range.
+# attest_interval above (240 when that is 0) and takes the same range.
 #
 # reporting = session (the default) sends that publisher reports only while
 # one of their titles runs. reporting = continuous reports on every round,

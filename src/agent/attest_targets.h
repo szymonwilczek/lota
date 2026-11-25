@@ -57,6 +57,9 @@ struct attest_target {
 	 */
 	bool key_mismatch_announced;
 
+	/* Said its stored certificate cannot be read; reading it clears it */
+	bool cert_unreadable_announced;
+
 	/* Said the TPM refused its quote's auth; a good round clears it */
 	bool auth_fail_announced;
 
@@ -149,6 +152,39 @@ const char *attest_target_renew_at(const struct attest_target *t, char *buf,
  */
 bool attest_target_should_announce_renew_move(struct attest_target *t);
 
+/* what to log about the key at a target's handle against its certificate */
+enum attest_cert_say {
+	ATTEST_CERT_SILENT = 0, /* nothing new to log */
+	ATTEST_CERT_MISMATCH,
+	ATTEST_CERT_MATCHES_AGAIN,
+	ATTEST_CERT_UNREADABLE,
+};
+
+/**
+ * attest_target_note_cert_match() - Record what the certificate check said.
+ * @t: The target; records the answer.
+ * @match_rc: aik_cert_matches_key() for the key at @t's handle.
+ *
+ * A certificate that cannot be read confirms nothing and clears no mismatch.
+ *
+ * Return: what to log.
+ */
+enum attest_cert_say attest_target_note_cert_match(struct attest_target *t,
+						   int match_rc);
+
+/**
+ * attest_targets_take_wakeups() - Make due now every target a title asked for.
+ * @targets: The targets.
+ * @count: Number of @targets.
+ * @now_ms: Now, on the monotonic clock.
+ *
+ * Clears each request it serves, so a request wakes the loop once.
+ *
+ * Return: true when a target was made due.
+ */
+bool attest_targets_take_wakeups(struct attest_target *targets, size_t count,
+				 uint64_t now_ms);
+
 /**
  * attest_target_reports() - Whether this round sends a report for @t.
  * @t: The target.
@@ -194,15 +230,17 @@ int attest_targets_rebuild(const struct lota_config *cfg, const char *server,
  * @port: As attest_targets_build().
  * @ca_cert: As attest_targets_build().
  * @interval_sec: As attest_targets_build().
+ * @pinned: The loop pins @server's certificate.
  * @targets: As attest_targets_rebuild().
  * @max: Capacity of @targets.
  * @count: Length of @targets.
  *
- * Return: as attest_targets_rebuild(), or a negative errno with @targets
- * untouched when the file does not load.
+ * Return: as attest_targets_rebuild(), -ENOTUNIQ when @pinned and the file
+ * configures profiles, or a negative errno with @targets untouched when the
+ * file does not load.
  */
 int attest_targets_reload(const char *config_path, const char *server, int port,
-			  const char *ca_cert, int interval_sec,
+			  const char *ca_cert, int interval_sec, bool pinned,
 			  struct attest_target *targets, size_t max,
 			  size_t *count);
 

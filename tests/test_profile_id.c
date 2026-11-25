@@ -287,6 +287,16 @@ static void test_unusable_anchor_is_refused(void)
 				     sizeof(id)) == -ENOENT,
 	      "missing anchor reports ENOENT");
 
+	/* root reads a 0000 file; the refusal is only there for a user */
+	if (geteuid() != 0 &&
+	    write_all(garbage_path, garbage, sizeof(garbage)) == 0 &&
+	    chmod(garbage_path, 0) == 0) {
+		CHECK(profile_id_from_anchor(garbage_path, id, sizeof(id)) ==
+			      -EACCES,
+		      "an anchor that cannot be read is not reported missing");
+		unlink(garbage_path);
+	}
+
 	CHECK(write_all(garbage_path, garbage, sizeof(garbage)) == 0,
 	      "write a non-certificate anchor");
 	CHECK(profile_id_from_anchor(garbage_path, id, sizeof(id)) == -EINVAL,

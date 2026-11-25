@@ -21,17 +21,18 @@
 #define ATTEST_TOKEN_VALIDITY_SLACK_SEC 60
 
 /*
- * How far ahead the SDK verifiers accept a valid_until: DefaultMaxTokenAge plus
- * MaxClockSkew in sdk/server/verify.go, LOTA_SERVER_MAX_TOKEN_AGE_SEC plus
- * LOTA_SERVER_MAX_CLOCK_SKEW_SEC in include/lota_server.h.
+ * How far ahead the SDK verifiers accept a valid_until is DefaultMaxTokenAge
+ * plus MaxClockSkew in sdk/server/verify.go, LOTA_SERVER_MAX_TOKEN_AGE_SEC plus
+ * LOTA_SERVER_MAX_CLOCK_SKEW_SEC in include/lota_server.h. The agent stays
+ * within the age and leaves the skew to a verifier's clock.
  */
-#define RELYING_PARTY_TOKEN_WINDOW_SEC (300 + 60)
+#define RELYING_PARTY_MAX_TOKEN_AGE_SEC 300
 
 /*
  * Cadence of a host that names publishers or nothing, but no interval.
  * It matches configs/lota.conf.example and sits at the ceiling below.
  */
-#define DEFAULT_ATTEST_INTERVAL 300
+#define DEFAULT_ATTEST_INTERVAL 240
 
 /*
  * How long a token issued to a publisher who runs no verifier is good for.
@@ -39,12 +40,12 @@
  */
 #define TOKEN_ONLY_VALIDITY_SEC DEFAULT_ATTEST_INTERVAL
 
-/* Ceiling on the interval: past it a token lands outside the window above */
+/* Ceiling on the interval: past it a token outlives the age above */
 #define MAX_ATTEST_INTERVAL \
-	(RELYING_PARTY_TOKEN_WINDOW_SEC - ATTEST_TOKEN_VALIDITY_SLACK_SEC)
+	(RELYING_PARTY_MAX_TOKEN_AGE_SEC - ATTEST_TOKEN_VALIDITY_SLACK_SEC)
 
 _Static_assert(TOKEN_ONLY_VALIDITY_SEC + ATTEST_TOKEN_VALIDITY_SLACK_SEC <=
-		       RELYING_PARTY_TOKEN_WINDOW_SEC,
+		       RELYING_PARTY_MAX_TOKEN_AGE_SEC,
 	       "a token-only token must stay verifiable by every relying party");
 
 _Static_assert(MIN_ATTEST_INTERVAL < MAX_ATTEST_INTERVAL,
@@ -55,7 +56,7 @@ _Static_assert(DEFAULT_ATTEST_INTERVAL >= MIN_ATTEST_INTERVAL &&
 	       "the default attestation interval must lie between the bounds");
 
 _Static_assert(MAX_ATTEST_INTERVAL + ATTEST_TOKEN_VALIDITY_SLACK_SEC <=
-		       RELYING_PARTY_TOKEN_WINDOW_SEC,
+		       RELYING_PARTY_MAX_TOKEN_AGE_SEC,
 	       "a token minted at the interval ceiling must stay verifiable");
 
 /**

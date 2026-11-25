@@ -16,40 +16,29 @@
 
 #define PCR_BOOT_FILES 9u
 
-bool kernel_image_path_names_kernel(const char *path)
+static bool names_kernel(const char *path, size_t len)
 {
 	static const char *const prefixes[] = { "vmlinuz", "kernel",
 						"bzImage" };
-	const char *base = path;
+	size_t base = 0;
 
-	if (!path)
-		return false;
-
-	for (const char *p = path; *p; p++) {
-		if (*p == '/' || *p == '\\')
-			base = p + 1;
+	for (size_t i = 0; i < len; i++) {
+		if (path[i] == '/' || path[i] == '\\')
+			base = i + 1;
 	}
 
 	for (size_t i = 0; i < sizeof(prefixes) / sizeof(prefixes[0]); i++) {
-		if (strncmp(base, prefixes[i], strlen(prefixes[i])) == 0)
+		size_t n = strlen(prefixes[i]);
+
+		if (len - base >= n && memcmp(path + base, prefixes[i], n) == 0)
 			return true;
 	}
 	return false;
 }
 
-static bool ipl_path(const uint8_t *data, size_t size, char *out,
-		     size_t out_size)
+bool kernel_image_path_names_kernel(const char *path)
 {
-	size_t len = 0;
-
-	while (len < size && data[len] != '\0')
-		len++;
-	if (len >= out_size)
-		return false;
-
-	memcpy(out, data, len);
-	out[len] = '\0';
-	return true;
+	return path && names_kernel(path, strlen(path));
 }
 
 int kernel_image_from_event_log(const uint8_t *log, size_t log_size,
@@ -59,7 +48,6 @@ int kernel_image_from_event_log(const uint8_t *log, size_t log_size,
 	struct tcg_event ev;
 	struct kernel_image found = { .digest = { 0 }, .path = { 0 } };
 	bool have_one = false;
-	bool missing_sha256 = false;
 	int ret;
 
 	if (!log || !out)
@@ -71,18 +59,20 @@ int kernel_image_from_event_log(const uint8_t *log, size_t log_size,
 	while ((ret = tcg_log_next(&c, &ev)) > 0) {
 		const uint8_t *sha256 = ev.sha256;
 		char path[KERNEL_IMAGE_PATH_MAX];
+		size_t len = 0;
 
 		if (ev.pcr != PCR_BOOT_FILES || ev.type != TCG_EV_IPL)
 			continue;
-		if (!ipl_path(ev.data, ev.data_size, path, sizeof(path)))
+		while (len < ev.data_size && ev.data[len] != '\0')
+			len++;
+		if (!names_kernel((const char *)ev.data, len))
 			continue;
-		if (!kernel_image_path_names_kernel(path))
-			continue;
-
-		if (!sha256) {
-			missing_sha256 = true;
-			continue;
-		}
+		if (len >= sizeof(path))
+			return -ENAMETOOLONG;
+		if (!sha256)
+			return -ENOMSG;
+		memcpy(path, ev.data, len);
+		path[len] = '\0';
 
 		if (have_one) {
 			if (strcmp(found.path, path) == 0 &&
@@ -102,5 +92,5 @@ int kernel_image_from_event_log(const uint8_t *log, size_t log_size,
 		*out = found;
 		return 0;
 	}
-	return missing_sha256 ? -ENOMSG : -ENOENT;
+	return -ENOENT;
 }

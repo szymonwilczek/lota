@@ -6,10 +6,15 @@
  * X509_V_FLAG_PARTIAL_CHAIN, or OpenSSL looks for its unreachable issuer.
  */
 
+#include <errno.h>
 #include <fcntl.h>
+#include <netinet/in.h>
+#include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/socket.h>
+#include <sys/wait.h>
 #include <unistd.h>
 
 #include <openssl/evp.h>
@@ -126,6 +131,78 @@ static int anchor_accepts(const char *anchor_path, X509 *leaf, int *err_out)
 	return rc == 1;
 }
 
+/* A loopback port served by a child that offers @cert in one handshake */
+static int serve_once(X509 *cert, EVP_PKEY *key, pid_t *pid)
+{
+	struct sockaddr_in addr;
+	socklen_t len = sizeof(addr);
+	int fd = socket(AF_INET, SOCK_STREAM, 0);
+
+	*pid = -1;
+	if (fd < 0)
+		return -1;
+
+	memset(&addr, 0, sizeof(addr));
+	addr.sin_family = AF_INET;
+	addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+	if (bind(fd, (struct sockaddr *)&addr, sizeof(addr)) < 0 ||
+	    listen(fd, 1) < 0 ||
+	    getsockname(fd, (struct sockaddr *)&addr, &len) < 0) {
+		close(fd);
+		return -1;
+	}
+
+	*pid = fork();
+	if (*pid < 0) {
+		close(fd);
+		return -1;
+	}
+	if (*pid == 0) {
+		SSL_CTX *sctx = SSL_CTX_new(TLS_server_method());
+		int c = accept(fd, NULL, NULL);
+
+		if (sctx && c >= 0 &&
+		    SSL_CTX_use_certificate(sctx, cert) == 1 &&
+		    SSL_CTX_use_PrivateKey(sctx, key) == 1) {
+			SSL *ssl = SSL_new(sctx);
+
+			if (ssl) {
+				SSL_set_fd(ssl, c);
+				SSL_accept(ssl);
+				SSL_free(ssl);
+			}
+		}
+		if (c >= 0)
+			close(c);
+		SSL_CTX_free(sctx);
+		close(fd);
+		_exit(0);
+	}
+	close(fd);
+	return ntohs(addr.sin_port);
+}
+
+/* net_connect() to a listener offering @cert, verified against @anchor_path */
+static int connect_verified(const char *anchor_path, X509 *cert, EVP_PKEY *key)
+{
+	struct net_context ctx;
+	pid_t child;
+	int port = serve_once(cert, key, &child);
+	int ret = -EINVAL;
+
+	if (port < 0)
+		return -EIO;
+
+	memset(&ctx, 0, sizeof(ctx));
+	if (net_context_init(&ctx, "127.0.0.1", port, anchor_path, 0, NULL) ==
+	    0) {
+		ret = net_connect(&ctx);
+		net_context_cleanup(&ctx);
+	}
+	waitpid(child, NULL, 0);
+	return ret;
+}
+
 int main(void)
 {
 	EVP_PKEY *ca_key = EVP_EC_gen("P-256");
@@ -172,6 +249,16 @@ int main(void)
 
 	CHECK(anchor_accepts(self_pem, leaf, &err) == 0,
 	      "a pinned certificate does not vouch for a different one");
+
+	signal(SIGPIPE, SIG_IGN);
+	CHECK(connect_verified(self_pem, leaf, leaf_key) ==
+		      -LOTA_ERR_NET_TLS_CERT,
+	      "a listener certificate another CA issued is a certificate "
+	      "failure, not a failed handshake");
+	CHECK(connect_verified(ca_pem, leaf, leaf_key) ==
+		      -LOTA_ERR_NET_TLS_CERT,
+	      "a listener certificate for another name is a certificate "
+	      "failure, not a failed handshake");
 
 	X509_free(ca);
 	X509_free(leaf);

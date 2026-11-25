@@ -403,7 +403,7 @@ The verifier, port, CA certificate and cadence come from
 ``/etc/lota/lota.conf`` (``server``, ``port``, ``ca_cert``, ``attest_interval``);
 no attestation flags are hardcoded in the unit. A zero ``attest_interval``
 means this host never chose a cadence: with a ``[profile]`` list it attests to
-every configured publisher at the default 300 s, and only a host with no
+every configured publisher at the default 240 s, and only a host with no
 profile at all falls back to attesting once to ``server`` and exiting. A host
 that names neither runs the loop with no target: it reports nothing and waits
 for the reload that names its first publisher. A

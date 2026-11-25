@@ -90,6 +90,9 @@ const char *policy_kernel_hash_reason(int err)
 		return "the event log measures two different kernel images and does not say which one booted";
 	case -ENOMSG:
 		return "the kernel image is measured without a SHA-256 digest, which is the only one the verifier compares";
+	case -ENAMETOOLONG:
+		return "the kernel image path is longer than the verifier "
+		       "accepts";
 	case -EINVAL:
 		return "the event log could not be parsed";
 	case -ENOMEM:

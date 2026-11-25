@@ -54,24 +54,52 @@ static void set_iommu_cmdline(struct iommu_status *status, const char *param)
 	snprintf(status->cmdline_param, IOMMU_CMDLINE_PARAM_MAX, "%s", param);
 }
 
-static bool cmdline_has_param(const char *cmdline, const char *param)
+static int cmdline_bool(const char *s)
 {
-	size_t plen = strlen(param);
-	const char *p = cmdline;
-
-	while ((p = strstr(p, param)) != NULL) {
-		if (p != cmdline && p[-1] != ' ') {
-			p += plen;
-			continue;
-		}
-
-		if (p[plen] != '\0' && p[plen] != ' ' && p[plen] != '\n') {
-			p += plen;
-			continue;
-		}
-		return true;
+	switch (s[0]) {
+	case 'e':
+	case 'E':
+	case 'y':
+	case 'Y':
+	case 't':
+	case 'T':
+	case '1':
+		return 1;
+	case 'd':
+	case 'D':
+	case 'n':
+	case 'N':
+	case 'f':
+	case 'F':
+	case '0':
+		return 0;
+	case 'o':
+	case 'O':
+		if (s[1] == 'n' || s[1] == 'N')
+			return 1;
+		if (s[1] == 'f' || s[1] == 'F')
+			return 0;
+		return -1;
+	default:
+		return -1;
 	}
-	return false;
+}
+
+static bool cmdline_option(const char *list, const char *opt)
+{
+	return strncmp(list, opt, strlen(opt)) == 0;
+}
+
+/* a dash in a parameter name reads as an underscore */
+static bool cmdline_param(const char *word, const char *name)
+{
+	for (; *name; word++, name++) {
+		char c = *word == '-' ? '_' : *word;
+
+		if (c != *name)
+			return false;
+	}
+	return true;
 }
 
 int iommu_check_sysfs(struct iommu_status *status, const char *root)
@@ -122,6 +150,11 @@ int iommu_check_cmdline(struct iommu_status *status, const char *root)
 	char path[PATH_MAX];
 	ssize_t n;
 	int ret = -1;
+	const char *intel = NULL;
+	const char *amd = NULL;
+	bool amd_off = false;
+	bool setup_strict = false;
+	int strict = 0;
 
 	if (!status)
 		return -1;
@@ -144,21 +177,51 @@ int iommu_check_cmdline(struct iommu_status *status, const char *root)
 	if (buf[n - 1] == '\n')
 		buf[n - 1] = '\0';
 
-	if (cmdline_has_param(buf, "intel_iommu=on")) {
-		set_iommu_cmdline(status, "intel_iommu=on");
+	for (char *save, *word = strtok_r(buf, " \t\n", &save); word;
+	     word = strtok_r(NULL, " \t\n", &save)) {
+		const char *v;
+
+		if (strcmp(word, "--") == 0)
+			break;
+
+		if (cmdline_param(word, "intel_iommu=")) {
+			for (v = word + 12; *v; v += strspn(v, ",")) {
+				if (cmdline_option(v, "on"))
+					intel = word;
+				else if (cmdline_option(v, "off"))
+					intel = NULL;
+				else if (cmdline_option(v, "strict"))
+					setup_strict = true;
+				v += strcspn(v, ",");
+			}
+		} else if (cmdline_param(word, "amd_iommu=")) {
+			for (v = word + 10; *v; v += strspn(v, ",")) {
+				if (cmdline_option(v, "fullflush"))
+					setup_strict = true;
+				else if (cmdline_option(v, "force_enable"))
+					amd = word;
+				else if (cmdline_option(v, "off"))
+					amd_off = true;
+				v += strcspn(v, ",");
+			}
+		} else if (strncmp(word, "iommu.strict=", 13) == 0) {
+			int on = cmdline_bool(word + 13);
+
+			if (on >= 0)
+				strict = on;
+		}
+	}
+
+	if (intel) {
+		set_iommu_cmdline(status, intel);
 		ret = 0;
-	} else if (cmdline_has_param(buf, "amd_iommu=force")) {
-		set_iommu_cmdline(status, "amd_iommu=force");
-		ret = 0;
-	} else if (cmdline_has_param(buf, "amd_iommu=on")) {
-		set_iommu_cmdline(status, "amd_iommu=on");
+	} else if (amd && !amd_off) {
+		set_iommu_cmdline(status, amd);
 		ret = 0;
 	}
 
-	if (cmdline_has_param(buf, "iommu.strict=1") ||
-	    cmdline_has_param(buf, "iommu=strict")) {
+	if (strict == 1 || setup_strict)
 		status->flags |= IOMMU_FLAG_STRICT;
-	}
 
 	return ret;
 }

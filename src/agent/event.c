@@ -119,8 +119,6 @@ int handle_exec_event(void *ctx, void *data, size_t len)
 	char filename_safe[LOTA_MAX_PATH_LEN];
 	int has_file = 0;
 	bool is_exec = false;
-	bool is_blocked = false;
-	int hash_ret;
 	(void)ctx;
 
 	if (len < sizeof(event_copy))
@@ -149,7 +147,6 @@ int handle_exec_event(void *ctx, void *data, size_t len)
 		event_type_str = "EXEC_BLOCKED";
 		has_file = 1;
 		is_exec = true;
-		is_blocked = true;
 		break;
 	case LOTA_EVENT_MODULE_LOAD:
 		event_type_str = "MODULE";
@@ -158,12 +155,10 @@ int handle_exec_event(void *ctx, void *data, size_t len)
 	case LOTA_EVENT_MODULE_BLOCKED:
 		event_type_str = "BLOCKED";
 		has_file = 1;
-		is_blocked = true;
 		break;
 	case LOTA_EVENT_MOUNT_BLOCKED:
 		event_type_str = "MOUNT_BLOCKED";
 		has_file = 1;
-		is_blocked = true;
 		break;
 	case LOTA_EVENT_MMAP_EXEC:
 		event_type_str = "MMAP_EXEC";
@@ -176,7 +171,6 @@ int handle_exec_event(void *ctx, void *data, size_t len)
 	case LOTA_EVENT_MMAP_BLOCKED:
 		event_type_str = "MMAP_BLOCKED";
 		has_file = 1;
-		is_blocked = true;
 		if (event->flags & LOTA_EVENT_FLAG_PROTECTED) {
 			ipc_runtime_coverage_forget();
 			remeasure_protected_image(event);
@@ -249,24 +243,18 @@ int handle_exec_event(void *ctx, void *data, size_t len)
 	}
 
 	if (has_file && event->filename[0] == '/') {
-		if (is_exec && hash_is_nonzero(event->hash)) {
-			format_sha256(event->hash, hash_hex);
-			lota_info(
-				"[%llu] %s %s: %s verity32=%s (pid=%u, uid=%u)",
-				(unsigned long long)event->timestamp_ns,
-				event_type_str, comm_safe, filename_safe,
-				hash_hex, event->pid, event->uid);
-			return 0;
+		const uint8_t *digest = NULL;
+
+		if (is_exec) {
+			if (hash_is_nonzero(event->hash))
+				digest = event->hash;
+		} else if (hash_verify_event(&g_agent.hash_ctx, event,
+					     content_hash) == 0) {
+			digest = content_hash;
 		}
 
-		/* /proc/<pid>/exe is still the old image */
-		if (is_exec && is_blocked)
-			goto log_no_hash;
-
-		hash_ret = hash_verify_event(&g_agent.hash_ctx, event,
-					     content_hash);
-		if (hash_ret == 0) {
-			format_sha256(content_hash, hash_hex);
+		if (digest) {
+			format_sha256(digest, hash_hex);
 			lota_info(
 				"[%llu] %s %s: %s verity32=%s (pid=%u, uid=%u)",
 				(unsigned long long)event->timestamp_ns,
@@ -275,8 +263,6 @@ int handle_exec_event(void *ctx, void *data, size_t len)
 			return 0;
 		}
 	}
-
-log_no_hash:
 
 	lota_info("[%llu] %s %s: %s (pid=%u, uid=%u)",
 		  (unsigned long long)event->timestamp_ns, event_type_str,

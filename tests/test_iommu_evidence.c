@@ -230,6 +230,58 @@ static void test_unremapped_interrupts_say_so(void)
 	PASS();
 }
 
+/* the options the booted kernel itself acts on, and only those */
+static void test_cmdline_is_read_as_the_kernel_reads_it(void)
+{
+	static const struct {
+		const char *cmdline;
+		bool set;
+		bool strict;
+	} cases[] = {
+		{ "ro intel_iommu=on,sm_on quiet\n", true, false },
+		{ "intel_iommu=sm_on,on\n", true, false },
+		{ "intel_iommu=on,off\n", false, false },
+		{ "intel_iommu=on intel_iommu=off\n", false, false },
+		{ "intel_iommu=off,on\n", true, false },
+		{ "amd_iommu=force_enable\n", true, false },
+		{ "amd_iommu=force\n", false, false },
+		{ "amd_iommu=on\n", false, false },
+		{ "amd_iommu=force_enable,off\n", false, false },
+		{ "iommu.strict=y\n", false, true },
+		{ "iommu.strict=on\n", false, true },
+		{ "iommu.strict=1 iommu.strict=0\n", false, false },
+		{ "iommu.strict=x\n", false, false },
+		{ "iommu=strict\n", false, false },
+		{ "intel_iommu=on,strict\n", true, true },
+		{ "intel_iommu=strict iommu.strict=0\n", false, true },
+		{ "amd_iommu=fullflush iommu.strict=0\n", false, true },
+		{ "intel-iommu=on\n", true, false },
+		{ "amd-iommu=force_enable\n", true, false },
+		{ "ro -- intel_iommu=on iommu.strict=1\n", false, false },
+	};
+
+	TEST("the cmdline is read as the kernel reads it");
+
+	for (size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); i++) {
+		struct iommu_status status;
+		bool set, strict;
+
+		tree_reset();
+		mkfile("proc/cmdline", cases[i].cmdline);
+		memset(&status, 0, sizeof(status));
+		iommu_check_cmdline(&status, g_root);
+
+		set = status.flags & IOMMU_FLAG_CMDLINE_SET;
+		strict = status.flags & IOMMU_FLAG_STRICT;
+		if (set != cases[i].set || strict != cases[i].strict) {
+			printf("    %s", cases[i].cmdline);
+			FAIL("enabled or strict differs from the kernel");
+			return;
+		}
+	}
+	PASS();
+}
+
 int main(void)
 {
 	printf("=== IOMMU evidence tests ===\n\n");
@@ -241,6 +293,7 @@ int main(void)
 	test_a_host_without_an_iommu_verifies_nothing();
 	test_irq_remapping_comes_from_the_interrupt_table();
 	test_unremapped_interrupts_say_so();
+	test_cmdline_is_read_as_the_kernel_reads_it();
 
 	rmtree(g_root);
 
