@@ -305,11 +305,6 @@ int bpf_loader_object_integrity_layout(const char *bpf_obj_path,
 	if (!bpf_obj_path || !key_size || !value_size)
 		return -EINVAL;
 
-	/*
-	 * Opening parses the ELF and its BTF without asking the kernel for
-	 * anything, so this costs no privilege and can be answered before
-	 * the agent has committed to anything.
-	 */
 	obj = bpf_object__open_file(bpf_obj_path, NULL);
 	if (!obj)
 		return -EIO;
@@ -419,17 +414,9 @@ int bpf_loader_kernel_lockdown_restrictive(const char *lockdown_path)
 }
 
 /*
- * Does the loaded IMA policy appraise an executable?
- *
- * Which rule counts is lota_ima_policy_rule_appraises_exec(),
- * shared with the installer stage whose job is to satisfy this gate.
- *
- * Returns 0 when an executable is appraised, -ENOENT when the policy is readable
- * and appraises none, and -EACCES when it could not be read at all,
- * with @read_err carrying why: a kernel built without CONFIG_IMA_READ_POLICY
- * and a caller without the privilege to read the file are both scopes nobody
- * can see rather than scopes that are empty, and the two are told apart by
- * errno rather than guessed at.
+ * Returns 0 when a rule of the loaded policy appraises an executable, -ENOENT
+ * when none does, -EACCES when the file could not be read, with the errno in
+ * @read_err.
  */
 static int ima_policy_appraises_exec(const char *policy_path, int *read_err)
 {
@@ -456,19 +443,6 @@ static int ima_policy_appraises_exec(const char *policy_path, int *read_err)
 	return found ? 0 : -ENOENT;
 }
 
-/*
- * The appraisal mode the kernel was booted in, read from ima_appraise=
- * on the cmdline: only "enforce" (block on integrity failure) and "fix"
- * (write missing xattrs, still blocks on signature failure) constitute
- * the kernel-floor the agent demands. "log" and the default "off" measure
- * or do nothing and therefore leave the integrity gate unenforced.
- *
- * Both files the question has behind it are parameters, so the answer can be
- * checked against something other than the machine the check runs on: the mode
- * lives on the kernel cmdline, and the scope -- which func= rules the loaded
- * policy actually appraises -- lives in the policy file.
- * Neither half is the answer on its own.
- */
 int bpf_loader_ima_appraisal_active(const char *cmdline_path,
 				    const char *policy_path, int secureboot)
 {
@@ -510,11 +484,7 @@ int bpf_loader_ima_appraisal_active(const char *cmdline_path,
 
 		ret = ima_policy_appraises_exec(policy_path, &read_err);
 		if (ret == -EACCES)
-			/*
-			 * Mode known, scope unread: -EACCES tells it apart
-			 * from an empty scope.
-			 * Debug, not warn: asked every round.
-			 */
+			/* debug, not warn: asked every round */
 			lota_dbg("IMA appraisal mode is %s but %s could not "
 				 "be read (%s), so the scope is unknown",
 				 val, policy_path, strerror(-read_err));
@@ -523,16 +493,6 @@ int bpf_loader_ima_appraisal_active(const char *cmdline_path,
 	return -EPERM;
 }
 
-/*
- * Returns 0 when the running kernel enforces module signatures, a
- * negative errno otherwise. /sys/module/module/parameters/sig_enforce
- * reflects CONFIG_MODULE_SIG_FORCE plus any boot-time
- * module.sig_enforce=1 override. Without it, root (or an unsigned
- * automated kmod load triggered before lota-agent attaches its
- * kernel_read_file LSM hook) can insert an unsigned kernel module
- * during the boot -> agent window and survive every later
- * enforcement gate the agent installs.
- */
 int bpf_loader_kernel_module_sig_enforced(const char *sig_enforce_path)
 {
 	char buf[16];
@@ -547,11 +507,7 @@ int bpf_loader_kernel_module_sig_enforced(const char *sig_enforce_path)
 	return -EPERM;
 }
 
-/*
- * UEFI variables exposed through efivarfs start with a 4-byte attributes
- * field followed by the variable payload. SecureBoot is a one-byte payload:
- * 1 means enabled, 0 means disabled.
- */
+/* efivarfs: 4 bytes of attributes, then SecureBoot's byte, 1 when enabled */
 int bpf_loader_secure_boot_enabled(void)
 {
 	static const char path[] =
@@ -581,25 +537,12 @@ int bpf_loader_secure_boot_enabled(void)
 }
 
 /*
- * Returns 0 when /dev/tpmrm0 carries the SELinux label
- * "lota_tpm_device_t", a negative errno otherwise.
+ * Returns 0 when each TPM device present carries lota_tpm_device_t, the type
+ * configs/udev/99-lota-tpm.rules sets at device add, -ENOENT when none is
+ * present, another negative errno otherwise.
  *
- * Rationale (TPM DoS / lockout). LOTA fences /dev/tpm[0-9]* and
- * /dev/tpmrm[0-9]* behind the dedicated SELinux type
- * lota_tpm_device_t via configs/udev/99-lota-tpm.rules so only the
- * lota_agent_t domain can open them. Without the fence, any other
- * root domain can flood the resource manager and exhaust TPM
- * sessions, the NV rate budget, or the DA counter. The agent stays
- * fail-closed (LOTA_ERR_TPM_LOCKED -> LOTA_STATUS_TPM_LOCKOUT), but
- * availability of attestation tokens collapses. The udev rule
- * fires at device-add time and is not retroactive: on a host whose
- * /etc/udev/rules.d link was broken, the kernel labels the device
- * with the generic tpm_device_t and every other root domain
- * (e.g. tpm2-abrmd_t) still has rw access to it. Read the label
- * directly via getxattr(2) so the daemon does not need libselinux
- * at link time and the check works even when SELinux is in
- * permissive mode (the label still tells us whether the relabel
- * happened).
+ * Reads the xattr: no libselinux at link time, and the label reads the same in
+ * permissive mode.
  */
 static int tpm_device_selinux_label_ok(void)
 {
@@ -615,11 +558,7 @@ static int tpm_device_selinux_label_ok(void)
 			if (errno == ENOENT)
 				continue;
 			if (errno == ENOTSUP) {
-				/* Filesystem has no SELinux xattr support (no
-				 * SELinux on host). Report success on the
-				 * assumption the operator runs a non-SELinux
-				 * deployment; the udev fence is then not the
-				 * active defence anyway. */
+				/* no SELinux xattrs here, no label to check */
 				return 0;
 			}
 			lota_err("getxattr(security.selinux) failed on %s: %s",
@@ -647,24 +586,9 @@ static int tpm_device_selinux_label_ok(void)
 }
 
 /*
- * Returns 0 when /proc/self/exe carries an fs-verity digest, a
- * negative errno otherwise.
- *
- * Rationale (dirty-shutdown coverage). poison_runtime_pcr() only runs
- * on clean shutdown paths. A panic, power loss, SIGKILL, or hard reset
- * leaves PCR14 carrying the last live boot commitment, and a verifier
- * that re-attests the same host after such a stop sees that value as
- * authentic if the on-disk agent binary, library closure, or policy
- * file was swapped while the host was offline. The TPM itself cannot
- * detect that mutation: PCR0/PCR1/PCR7 cover firmware / SecureBoot /
- * cmdline, and PCR14 only binds the running agent self-hash, not
- * inode contents that were touched after the agent stopped reading
- * them. Closing the dirty-shutdown gap therefore requires
- * tamper-evident rootfs storage: fs-verity on the agent binary +
- * dm-verity / IMA appraisal on the rootfs that hosts the policy file
- * and shared libraries. The agent binary self-check below is the
- * minimum the agent can verify before it starts; the surrounding
- * rootfs guarantees are the operator's deployment contract.
+ * Returns 0 when /proc/self/exe has fs-verity enabled, -ENODATA when it does
+ * not or the filesystem has none, another negative errno otherwise.
+ * The digest is not compared with anything.
  */
 static int agent_self_fsverity_enabled(void)
 {
@@ -672,12 +596,7 @@ static int agent_self_fsverity_enabled(void)
 	if (fd < 0)
 		return -errno;
 
-	/*
-	 * fsverity_digest ends in a flexible array; back it with a buffer
-	 * sized for the largest digest. The struct is the last union member
-	 * so the flexible array sits at the end, which clang -Werror
-	 * requires (gcc tolerates the field-not-at-end GNU extension).
-	 */
+	/* room for the largest digest; the struct last, for clang -Werror */
 	union {
 		uint8_t buf[sizeof(struct fsverity_digest) +
 			    LOTA_VERITY_DIGEST_MAX_SIZE];
@@ -698,22 +617,15 @@ static int agent_self_fsverity_enabled(void)
 	return ret;
 }
 
-/* Signed security.ima xattr fits comfortably below this;
- * RSA-8192 signature plus the IMA v2 header is ~1 KiB.
- * Oversized values return ERANGE and are treated as not-determinable */
+/* RSA-8192 + IMA v2 header ~1 KiB; ERANGE past this counts as unsigned */
 #define LOTA_IMA_XATTR_READ_MAX 4096
 
 /*
- * Returns 0 when /proc/self/exe carries a kernel-enforced IMA signature
- * in its security.ima xattr, negative errno otherwise.
+ * Returns 0 when the security.ima of /proc/self/exe is of a signature type,
+ * negative errno otherwise. Reads the type alone: whether the kernel appraised
+ * the file is bpf_loader_kernel_appraises_exec()'s question.
  *
- * Under ima_appraise=enforce the kernel refuses to exec or read a file whose
- * content does not match the hash signed in security.ima by a key in the .ima keyring.
- * Signature-type xattr on the running binary is therefore live evidence that the kernel
- * appraised it: unsigned or tampered binary would not have reached this code.
- * This is the same offline-swap coverage fs-verity gives, on any filesystem with security
- * xattr namespace (XFS, ZFS, ...) where fs-verity is unavailable.
- * Bare digest does not count -- attacker who swaps the binary offline can recompute it.
+ * A digest does not count: whoever swaps the file offline can recompute it.
  */
 static int agent_self_ima_signed(void)
 {
@@ -728,15 +640,6 @@ static int agent_self_ima_signed(void)
 	return 0;
 }
 
-/*
- * Returns 0 when the agent binary is protected by at least one kernel-enforced
- * immutability mechanism, negative errno otherwise.
- * fs-verity (ext4, btrfs, f2fs, recent XFS) and appraised signed security.ima
- * xattr (any filesystem with a security xattr namespace) are equivalent for the
- * offline-swap threat this gate closes, so either one satisfies it.
- * fs-verity errno is preserved when neither holds, since it is the more specific
- * failure on verity-capable rootfs.
- */
 static int agent_self_immutability_enforced(void)
 {
 	int ret = agent_self_fsverity_enabled();
@@ -757,7 +660,6 @@ int bpf_loader_kernel_appraises_exec(void)
 
 int bpf_loader_verify_kernel_runtime_hardening(bool allow_mutable_rootfs)
 {
-	/* read first: verity decides whether the appraisal gate is advisory */
 	int verity = agent_self_fsverity_enabled();
 	bool secureboot = bpf_loader_secure_boot_enabled() == 0;
 	char floor_msg[512];
@@ -800,11 +702,7 @@ int bpf_loader_verify_kernel_runtime_hardening(bool allow_mutable_rootfs)
 					 "mode");
 		ret = 0;
 	} else if (ret == -EACCES) {
-		/*
-		 * Unread is not empty (no CONFIG_IMA_READ_POLICY): pass like
-		 * an unappraised host, bit clear.
-		 * A publisher wanting the certainty refuses on the token.
-		 */
+		/* unread is not empty: pass, with the token's bit clear */
 		lota_warn("Whether the kernel appraises any executable on "
 			  "this host could not be determined: %s could not be "
 			  "read, so no rule of the loaded policy is known. A "
@@ -852,16 +750,6 @@ int bpf_loader_verify_kernel_runtime_hardening(bool allow_mutable_rootfs)
 		lota_warn("No /dev/tpm[rm]0 devices present at hardening gate; "
 			  "skipping SELinux confinement check");
 	} else if (ret < 0) {
-		/*
-		 * The label mismatch already logged a SECURITY-tagged error
-		 * inside tpm_device_selinux_label_ok(). Treat it the same as
-		 * the other hardening prerequisites: hard-fail by default so
-		 * the operator notices the broken udev relabel at startup;
-		 * the existing --insecure-allow-mutable-rootfs escape hatch
-		 * also tolerates the deviation: a host that already cannot
-		 * prove its own binary is not running a tight SELinux
-		 * deployment either.
-		 */
 		if (allow_mutable_rootfs) {
 			lota_warn("INSECURE: TPM device SELinux label check "
 				  "failed and "
@@ -966,7 +854,6 @@ static int arm_kill_guard(struct bpf_loader_ctx *ctx)
 		}
 	}
 
-	/* the set is complete; left writable, a reload could drop it */
 	if (bpf_map_freeze(ctx->guarded_files_fd) < 0) {
 		ret = -errno;
 		lota_err("Failed to freeze guarded_files map: %s",
@@ -1008,11 +895,8 @@ int bpf_loader_init(struct bpf_loader_ctx *ctx)
 }
 
 /*
- * Verify the detached signature over the BPF object at bpf_obj_path and,
- * on success, hand the verified bytes back through out_obj_data / out_obj_len
- * (ownership transfers to the caller, which frees them).
- * Returning the exact buffer that was signature-checked lets the loader hand
- * those bytes to libbpf directly.
+ * Verify the detached signature at <bpf_obj_path>.sig. On success the verified
+ * bytes go to the caller, to free, so the load uses what was checked.
  */
 static int verify_bpf_object_signature(const char *bpf_obj_path,
 				       const char *bpf_pubkey_pem_path,
@@ -1100,8 +984,6 @@ static int verify_bpf_object_signature(const char *bpf_obj_path,
 
 	ret = policy_verify_buffer(obj_data, obj_len, bpf_pubkey_pem_path, sig);
 	if (ret == 0) {
-		/* transfer the verified buffer to the caller so the load uses
-		 * exactly these bytes */
 		*out_obj_data = obj_data;
 		*out_obj_len = obj_len;
 		obj_data = NULL;
@@ -1131,20 +1013,14 @@ int bpf_loader_verify_object(const char *bpf_obj_path,
 	ret = verify_bpf_object_signature(bpf_obj_path, bpf_pubkey_pem_path,
 					  &obj_data, &obj_len);
 
-	/*
-	 * The bytes are of no use here: the load reads and verifies them again
-	 * against the kernel it hands them to, so holding this copy across
-	 * everything between here and there would buy nothing.
-	 */
 	free(obj_data);
 	return ret;
 }
 
 /*
- * The kernel copies the map's own value_size into the caller's buffer,
- * so a map wider than the struct it is read into writes past that struct.
- * The object is checked before it is loaded; this is the same question asked
- * of the map the kernel actually holds, because the buffer is on this stack.
+ * The kernel copies the map's own value_size to and from the caller's buffer,
+ * so a map wider than the struct overruns it.
+ * The pre-flight read the object on disk; this reads the map the kernel holds.
  */
 static int integrity_map_fits(int map_fd)
 {
@@ -1202,11 +1078,8 @@ int bpf_loader_load(struct bpf_loader_ctx *ctx, const char *bpf_obj_path,
 	};
 
 	/*
-	 * Load from the verified buffer, not the path.
-	 * bpf_object__open_mem() copies the bytes, so the loaded object is
-	 * exactly what passed the signature check and the file cannot be
-	 * swapped between verify and load.
-	 * libbpf duplicates obj_data, so it is freed right after
+	 * The verified bytes: the file can change after the check.
+	 * libbpf is done with the buffer when open returns.
 	 */
 	errno = 0;
 	ctx->obj = bpf_object__open_mem(obj_data, obj_len, &opts);
@@ -1230,17 +1103,6 @@ int bpf_loader_load(struct bpf_loader_ctx *ctx, const char *bpf_obj_path,
 		goto err_close;
 	}
 
-	/*
-	 * Program attach is intentionally deferred until bpf_loader_attach().
-	 * Resolving map fds, hardening them, writing task_auth /
-	 * integrity_config / early LOCK_BPF, and then letting the caller
-	 * populate the full enforcement policy (mode + strict_* + block_*)
-	 * BEFORE programs go live closes the attach -> startup-policy
-	 * window: every hook observes the operator policy from its very
-	 * first invocation, not post-load default zeros.
-	 */
-
-	/* Get ring buffer map fd */
 	ctx->ringbuf_fd = bpf_object__find_map_fd_by_name(ctx->obj, "events");
 	if (ctx->ringbuf_fd < 0) {
 		err = ctx->ringbuf_fd;
@@ -1253,10 +1115,9 @@ int bpf_loader_load(struct bpf_loader_ctx *ctx, const char *bpf_obj_path,
 		goto err_close;
 	}
 
-	/* Get stats map fd */
 	ctx->stats_fd = bpf_object__find_map_fd_by_name(ctx->obj, "stats");
 	if (ctx->stats_fd < 0) {
-		ctx->stats_fd = -1; /* stats map is optional */
+		ctx->stats_fd = -1;
 	} else {
 		err = harden_fd_cloexec(ctx->stats_fd, "stats map");
 		if (err < 0) {
@@ -1326,7 +1187,6 @@ int bpf_loader_load(struct bpf_loader_ctx *ctx, const char *bpf_obj_path,
 			"lota_config map unavailable, early LOCK_BPF not applied");
 	}
 
-	/* Integrity config map */
 	ctx->integrity_fd =
 		bpf_object__find_map_fd_by_name(ctx->obj, "integrity_cfg");
 	if (ctx->integrity_fd >= 0) {
@@ -1348,11 +1208,6 @@ int bpf_loader_load(struct bpf_loader_ctx *ctx, const char *bpf_obj_path,
 			lota_info(
 				"Kernel integrity baseline: module signatures enforced, lockdown at integrity or above");
 		} else {
-			/*
-			 * hardening gate refuses to start on this a moment later,
-			 * but it is this value the module and firmware branches
-			 * read, so what it costs is said here
-			 */
 			lota_err(
 				"Kernel integrity baseline not met (module signatures enforced: %s, lockdown at integrity or above: %s); module and firmware loads are refused in enforce mode",
 				cfg.sig_enforce ? "yes" : "no",
@@ -1361,13 +1216,6 @@ int bpf_loader_load(struct bpf_loader_ctx *ctx, const char *bpf_obj_path,
 
 		uint32_t key = 0;
 
-		/*
-		 * The kernel reads the map's own value_size out of the buffer
-		 * handed to it, so a wider map reads past cfg.
-		 * The pre-flight refuses such an object before the daemon gets
-		 * here; the map the kernel holds is asked again because the buffer
-		 * is on this stack.
-		 */
 		err = integrity_map_fits(ctx->integrity_fd);
 		if (err < 0) {
 			lota_err("Refusing to write the integrity map of %s",
@@ -1384,11 +1232,10 @@ int bpf_loader_load(struct bpf_loader_ctx *ctx, const char *bpf_obj_path,
 		lota_err("integrity_config map not found in BPF object");
 	}
 
-	/* Get trusted libraries map fd */
 	ctx->trusted_libs_fd =
 		bpf_object__find_map_fd_by_name(ctx->obj, "trusted_libs");
 	if (ctx->trusted_libs_fd < 0) {
-		ctx->trusted_libs_fd = -1; /* optional map */
+		ctx->trusted_libs_fd = -1;
 	} else {
 		err = harden_fd_cloexec(ctx->trusted_libs_fd,
 					"trusted_libs map");
@@ -1399,11 +1246,10 @@ int bpf_loader_load(struct bpf_loader_ctx *ctx, const char *bpf_obj_path,
 		}
 	}
 
-	/* Get protected PIDs map fd */
 	ctx->protected_pids_fd =
 		bpf_object__find_map_fd_by_name(ctx->obj, "protected_pids");
 	if (ctx->protected_pids_fd < 0) {
-		ctx->protected_pids_fd = -1; /* optional map */
+		ctx->protected_pids_fd = -1;
 	} else {
 		err = harden_fd_cloexec(ctx->protected_pids_fd,
 					"protected_pids map");
@@ -1536,11 +1382,10 @@ int bpf_loader_load(struct bpf_loader_ctx *ctx, const char *bpf_obj_path,
 		}
 	}
 
-	/* Get fs-verity allowlist map fd */
 	ctx->allow_verity_digest_fd =
 		bpf_object__find_map_fd_by_name(ctx->obj, "allow_verity");
 	if (ctx->allow_verity_digest_fd < 0) {
-		ctx->allow_verity_digest_fd = -1; /* optional map */
+		ctx->allow_verity_digest_fd = -1;
 	} else {
 		err = harden_fd_cloexec(ctx->allow_verity_digest_fd,
 					"allow_verity_digest map");
@@ -1581,21 +1426,6 @@ int bpf_loader_attach(struct bpf_loader_ctx *ctx)
 	if (ctx->attached)
 		return -EALREADY;
 
-	/*
-	 * Attach all supported runtime enforcement programs.
-	 *
-	 * BPF_PROG_TYPE_LSM hooks carry the primary policy gates
-	 * (bprm_check_security, kernel_read_file, kernel_load_data,
-	 * mmap_file, file_mprotect, ptrace_access_check, task_kill,
-	 * task_free, task_fix_setuid, bpf_map, bpf, ...). These are the
-	 * authoritative deny points for execve / module load / mprotect /
-	 * ptrace_attach / signal delivery / BPF map writes.
-	 *
-	 * The required-programs table catches a partial BPF object that
-	 * silently dropped a critical LSM hook during compilation; a
-	 * missing required program surfaces as -ENOENT here so the daemon
-	 * exits before sd_notify(READY=1).
-	 */
 	static const char *const required_programs[] = {
 		"lota_ptrace_access_check",
 		"lota_agent_exit",
@@ -1678,10 +1508,6 @@ int bpf_loader_setup_ringbuf(struct bpf_loader_ctx *ctx,
 	if (ctx->ringbuf)
 		return -EALREADY;
 
-	/*
-	 * Create ring buffer manager.
-	 * The handler will be called for each event.
-	 */
 	errno = 0;
 	ctx->ringbuf = ring_buffer__new(ctx->ringbuf_fd,
 					(ring_buffer_sample_fn)handler,
@@ -1749,7 +1575,6 @@ void bpf_loader_cleanup(struct bpf_loader_ctx *ctx)
 	ctx->exec_history_fd = -1;
 	ctx->instance_actors_fd = -1;
 
-	/* the map took the pins with it */
 	free(ctx->pins);
 	ctx->pins = NULL;
 	ctx->pin_count = 0;
@@ -2178,7 +2003,7 @@ int bpf_loader_pin_mapped_object(struct bpf_loader_ctx *ctx, const char *path,
 	if (slot.dev == 0 || slot.ino == 0)
 		return -ENODATA;
 
-	/* still pinned from an earlier round: not written since */
+	/* still pinned from an earlier round: opens for write refused since */
 	if (slot.guard) {
 		ret = pin_record(ctx, slot.dev, slot.ino);
 		if (ret < 0)
@@ -2417,7 +2242,6 @@ int bpf_loader_pin_sweep(struct bpf_loader_ctx *ctx, size_t *released)
 		key.ino = ctx->pins[i].ino;
 		if (bpf_map_delete_elem(ctx->mapped_exec_fd, &key) < 0 &&
 		    errno != ENOENT) {
-			/* Kept, so the next sweep tries again */
 			ret = -errno;
 			ctx->pins[write_at++] = ctx->pins[i];
 			continue;
@@ -2773,11 +2597,9 @@ static int stat_regular_file_nofollow(const char *path, struct stat *st,
 }
 
 /*
- * BPF side looks these keys up with inode->i_sb->s_dev, so the loader has to
- * write that device and not the one stat(2) reports: on btrfs a subvolume has
- * its own anonymous device, and a key built from stat(2) is a key no hook can
- * find. A path whose superblock device cannot be resolved is refused -- arming
- * a lookup that can never hit is what left the hooks inert.
+ * The hooks look these keys up with inode->i_sb->s_dev, which on btrfs differs
+ * from stat(2)'s st_dev: a subvolume has its own anonymous device.
+ * A path whose superblock device cannot be read is refused.
  */
 static int trusted_lib_key_for_file(const char *path,
 				    struct trusted_lib_key *key)

@@ -22,141 +22,144 @@ struct bpf_link;
 
 #define BPF_MAX_LSM_LINKS 32
 
-/*
- * BPF loader context
- */
 struct bpf_loader_ctx {
-	struct bpf_object *obj; /* libbpf object */
-	struct ring_buffer *ringbuf; /* Ring buffer for events */
+	struct bpf_object *obj;
+	struct ring_buffer *ringbuf;
 	struct bpf_link
 		*links[BPF_MAX_LSM_LINKS]; /* attached BPF program links */
-	int link_count; /* number of attached links */
-	int ringbuf_fd; /* Ring buffer map fd */
-	int stats_fd; /* Stats map fd */
-	int config_fd; /* 'lota_config' map fd */
-	int integrity_fd; /* 'integrity_config' map fd */
-	int task_auth_fd; /* 'lota_task_auth' map fd */
-	int trusted_libs_fd; /* 'trusted_libs' map fd */
-	int guarded_files_fd; /* 'guarded_files' map fd */
-	int protected_pids_fd; /* Protected PIDs map fd */
-	int instance_fd; /* 'lota_instance' task storage fd */
-	int instance_stops_fd; /* 'instance_stops' task storage fd */
-	int born_protected_fd; /* 'born_protected' task storage fd */
-	int allow_verity_digest_fd; /* 'allow_verity_digest' map fd */
-	int exe_hash_slots_fd; /* 'exe_hash_slots' map fd */
-	int mapped_exec_fd; /* 'mapped_exec' pin map fd */
-	int exec_history_fd; /* 'exec_history' map fd */
-	int instance_actors_fd; /* 'instance_actors' map fd */
+	int link_count;
+	int ringbuf_fd;
+	int stats_fd;
+	int config_fd;
+	int integrity_fd;
+	int task_auth_fd;
+	int trusted_libs_fd;
+	int guarded_files_fd;
+	int protected_pids_fd;
+	int instance_fd;
+	int instance_stops_fd;
+	int born_protected_fd;
+	int allow_verity_digest_fd;
+	int exe_hash_slots_fd;
+	int mapped_exec_fd;
+	int exec_history_fd;
+	int instance_actors_fd;
 	struct mapped_exec_pin *pins; /* what this agent has pinned */
 	size_t pin_count;
 	size_t pin_cap;
-	uint64_t pin_round; /* measurement round the pins were last seen in */
-	bool loaded; /* BPF object loaded into the kernel and maps resolved */
-	bool attached; /* LSM / fmod_ret programs attached to kernel hooks */
+	uint64_t pin_round; /* the round bpf_loader_pin_round_begin() opened */
+	bool loaded; /* object in the kernel, maps resolved */
+	bool attached; /* programs attached to their hooks */
 };
 
-/*
- * bpf_loader_allow_verity_digest - Add an allowed fs-verity digest to the map
- * @ctx: Loaded context
- * @key: Digest length + bytes key
+/**
+ * bpf_loader_allow_verity_digest() - Add a digest to the fs-verity allowlist.
+ * @ctx: Loaded context.
+ * @key: Digest length and bytes.
  *
- * Returns: 0 on success, negative errno on failure
+ * Return: 0, -ENOTSUP without the map, or another negative errno.
  */
 int bpf_loader_allow_verity_digest(struct bpf_loader_ctx *ctx,
 				   const struct lota_verity_digest_key *key);
 
-/*
- * bpf_loader_disallow_verity_digest - Remove an allowed fs-verity digest
- * @ctx: Loaded context
- * @key: Digest length + bytes key
+/**
+ * bpf_loader_disallow_verity_digest() - Remove a digest from the allowlist.
+ * @ctx: Loaded context.
+ * @key: Digest length and bytes.
+ *
+ * Return: 0, -ENOTSUP without the map, or another negative errno.
  */
 int bpf_loader_disallow_verity_digest(struct bpf_loader_ctx *ctx,
 				      const struct lota_verity_digest_key *key);
 
-/*
- * bpf_loader_measure_verity_digest - Measure fs-verity digest for a path
- * @path: Absolute path to a fs-verity-enabled regular file
- * @out: Digest length + bytes key
+/**
+ * bpf_loader_measure_verity_digest() - Read the fs-verity digest of a file.
+ * @path: Absolute path to a regular file, with no symlink along it.
+ * @out: Digest length and bytes.
+ *
+ * Return: 0 or a negative errno.
  */
 int bpf_loader_measure_verity_digest(const char *path,
 				     struct lota_verity_digest_key *out);
 
-/*
- * bpf_loader_hash_file - Kernel content hash of a file, taken during its open
- * @ctx: Loaded context
- * @path: /proc magic link to open, so no attacker path is walked
- * @expect_dev: st_dev the open must resolve to
- * @expect_ino: st_ino the open must resolve to
- * @out: Digest length + bytes
+/**
+ * bpf_loader_hash_file() - Kernel hash of a file, taken during its open.
+ * @ctx: Loaded context.
+ * @path: /proc magic link to open.
+ * @expect_dev: st_dev the open must resolve to.
+ * @expect_ino: st_ino the open must resolve to.
+ * @out: Digest length and bytes.
  *
- * Returns: 0 on success, negative errno on failure: -ENOSYS without the
- * exe_hash_slots map, -ESTALE when the open resolved to another object,
- * -ENXIO when no program answered, -EPROTO for an unknown algorithm,
- * else the kernel's own error.
+ * Return: 0, -ENOSYS without the exe_hash_slots map, -ESTALE when the open
+ * resolved to another object, -ENXIO when no program answered, -EPROTO for an
+ * unknown algorithm, or another negative errno.
  */
 int bpf_loader_hash_file(struct bpf_loader_ctx *ctx, const char *path,
 			 uint64_t expect_dev, uint64_t expect_ino,
 			 struct lota_verity_digest_key *out);
 
-/*
- * bpf_loader_pin_mapped_object - Pin a mapped library against writes
- * @ctx: Loaded context
- * @path: Path to open, as for bpf_loader_hash_file
- * @expect_dev: st_dev the open must still resolve to
- * @expect_ino: st_ino the open must still resolve to
- * @guarded: Set to 1 when the file is pinned and may be measured, 0 otherwise
+/**
+ * bpf_loader_pin_mapped_object() - Pin a mapped library against writes.
+ * @ctx: Loaded context.
+ * @path: Path to open, as for bpf_loader_hash_file().
+ * @expect_dev: st_dev the open must resolve to.
+ * @expect_ino: st_ino the open must resolve to.
+ * @guarded: Set to 1 when the file is pinned and may be measured, 0 otherwise.
  *
- * Pins the kernel's inode for this open. @guarded stays 0 when the file has
- * no mapping record, changed since it was mapped, or is open for writing.
- * Held until a bpf_loader_pin_sweep() misses it.
+ * Pins the inode of this open. @guarded stays 0 when the file has no mapping
+ * record, changed since it was mapped, or is open for writing. Held until a
+ * bpf_loader_pin_sweep() misses it.
  *
- * Returns: 0 on success, negative errno on failure.
+ * Return: 0 or a negative errno.
  */
 int bpf_loader_pin_mapped_object(struct bpf_loader_ctx *ctx, const char *path,
 				 uint64_t expect_dev, uint64_t expect_ino,
 				 int *guarded);
 
-/*
- * bpf_loader_pin_round_begin - Start a round of pinning
- * @ctx: Loaded context
+/**
+ * bpf_loader_pin_round_begin() - Start a round of pinning.
+ * @ctx: Loaded context.
  */
 void bpf_loader_pin_round_begin(struct bpf_loader_ctx *ctx);
 
-/*
- * bpf_loader_pin_sweep - Release the pins this round did not reach
- * @ctx: Loaded context
- * @released: Optional, set to the number of inodes unpinned
+/**
+ * bpf_loader_pin_sweep() - Release the pins this round did not reach.
+ * @ctx: Loaded context.
+ * @released: Optional, set to the number of inodes unpinned.
  *
- * Returns: 0 on success, negative errno on failure.
+ * Return: 0 or a negative errno. A pin that could not be released is tried
+ * again by the next sweep.
  */
 int bpf_loader_pin_sweep(struct bpf_loader_ctx *ctx, size_t *released);
 
-/*
- * bpf_loader_exec_history - Read the exec history, dropping the dead
- * @ctx:   Loaded context
- * @alive: Says whether process @tgid started at @start_ticks still runs
- * @keys:  Receives the live entries' keys, to free()
- * @vals:  Receives their values, parallel to @keys, to free()
- * @n:     Receives the number of entries
+/**
+ * bpf_loader_exec_history() - Read the exec history, dropping the dead.
+ * @ctx: Loaded context.
+ * @alive: Says whether process @tgid started at @start_ticks still runs.
+ * @keys: Receives the live entries' keys, to free().
+ * @vals: Receives their values, parallel to @keys, to free().
+ * @n: Receives the number of entries.
  *
  * Entries of a process @alive denies are deleted from the map.
- * Returns: 0 on success, -ENOENT without the map, negative errno on failure.
+ *
+ * Return: 0, -ENOENT without the map, or another negative errno.
  */
 int bpf_loader_exec_history(struct bpf_loader_ctx *ctx,
 			    int (*alive)(uint32_t tgid, uint64_t start_ticks),
 			    struct lota_exec_history_key **keys,
 			    struct lota_exec_history_val **vals, size_t *n);
 
-/*
- * bpf_loader_instance_actors - Read who reached an instance, dropping the dead
- * @ctx:   Loaded context
- * @alive: Says whether the instance root @tgid started at @start_ticks runs
- * @keys:  Receives the live entries' keys, to free()
- * @vals:  Receives their values, parallel to @keys, to free()
- * @n:     Receives the number of entries
+/**
+ * bpf_loader_instance_actors() - Read an instance's actors, dropping the dead.
+ * @ctx: Loaded context.
+ * @alive: Says whether the instance root @tgid started at @start_ticks runs.
+ * @keys: Receives the live entries' keys, to free().
+ * @vals: Receives their values, parallel to @keys, to free().
+ * @n: Receives the number of entries.
  *
  * Entries of an instance whose root @alive denies are deleted from the map.
- * Returns: 0 on success, -ENOENT without the map, negative errno on failure.
+ *
+ * Return: 0, -ENOENT without the map, or another negative errno.
  */
 int bpf_loader_instance_actors(struct bpf_loader_ctx *ctx,
 			       int (*alive)(uint32_t tgid,
@@ -165,151 +168,122 @@ int bpf_loader_instance_actors(struct bpf_loader_ctx *ctx,
 			       struct lota_instance_actor_val **vals,
 			       size_t *n);
 
-/*
- * Callback for ring buffer events
- */
 typedef int (*bpf_event_handler_t)(void *ctx, void *data, size_t len);
 
-/*
- * bpf_loader_init - Initialize BPF loader context
- * @ctx: Context to initialize
+/**
+ * bpf_loader_init() - Initialize a loader context.
+ * @ctx: Context to initialize.
  *
- * Returns: 0 on success, negative errno on failure
+ * Return: 0, or -EINVAL when @ctx is NULL.
  */
 int bpf_loader_init(struct bpf_loader_ctx *ctx);
 
-/*
- * bpf_loader_verify_object - Answer whether the object would be refused
- * @bpf_obj_path: Path to compiled BPF object file (.bpf.o)
- * @bpf_pubkey_pem_path: Path to PEM-encoded Ed25519 public key used to verify
- *      the detached signature at <bpf_obj_path>.sig.
+/**
+ * bpf_loader_verify_object() - Would bpf_loader_load() refuse this object?
+ * @bpf_obj_path: Compiled BPF object file.
+ * @bpf_pubkey_pem_path: PEM Ed25519 public key for the detached signature at
+ *	<bpf_obj_path>.sig.
  *
- * The same check bpf_loader_load() makes, asked early and without the kernel:
- * it reads the object, the signature beside it and the public key, and reports
- * whether the three agree. Nothing is loaded and no context is needed.
+ * Reads the three files and loads nothing, so main refuses a mis-signed object
+ * before the boot commitment is spent. bpf_loader_load() verifies again.
  *
- * Exists so a refusal decided entirely by files on disk is discovered before
- * the boot commitment is spent. A caller that reaches bpf_loader_load() is
- * still authoritative -- this does not stand in for it, and the load verifies
- * the bytes it hands the kernel.
- *
- * Returns: 0 when the object would be accepted, negative errno otherwise;
- * -EINVAL when no object path or public key is configured.
+ * Return: 0 when the signature verifies, -EINVAL when no object path or public
+ * key is configured, or another negative errno.
  */
 int bpf_loader_verify_object(const char *bpf_obj_path,
 			     const char *bpf_pubkey_pem_path);
 
-/*
- * bpf_loader_load - Load BPF object into the kernel and resolve maps
- * @ctx: Initialized context
- * @bpf_obj_path: Path to compiled BPF object file (.bpf.o)
- * @bpf_pubkey_pem_path: Path to PEM-encoded Ed25519 public key used to
- *   verify detached signature at <bpf_obj_path>.sig.
+/**
+ * bpf_loader_load() - Load the BPF object into the kernel, unattached.
+ * @ctx: Initialized context.
+ * @bpf_obj_path: Compiled BPF object file.
+ * @bpf_pubkey_pem_path: PEM Ed25519 public key for the detached signature at
+ *	<bpf_obj_path>.sig.
  *
- * NOTE: Current agent wiring intentionally reuses the same
- * --policy-pubkey / policy_pubkey for both policy YAML signature
- * verification and BPF object signature verification. This is intended for now
- * and will be changed!
+ * Verifies the signature, loads the verified bytes, resolves the map fds with
+ * FD_CLOEXEC set, and writes lota_task_auth, the early LOCK_BPF, integrity_cfg
+ * and guarded_files. bpf_loader_attach() attaches the programs.
  *
- * Verifies the detached signature, loads the BPF object into the
- * kernel, resolves all map fds, hardens fd cloexec, sets task_auth +
- * integrity_config + early LOCK_BPF, and leaves the loader in the
- * loaded-but-not-attached state. The caller must invoke
- * bpf_loader_attach() to commit programs to LSM / fmod_ret hooks;
- * doing so only after the full startup policy is written to
- * lota_config closes the small attach -> startup-policy window in
- * which an attached hook would observe a partially configured map.
- *
- * Returns: 0 on success, negative errno on failure
+ * Return: 0, -EALREADY when already loaded, or another negative errno.
  */
 int bpf_loader_load(struct bpf_loader_ctx *ctx, const char *bpf_obj_path,
 		    const char *bpf_pubkey_pem_path);
 
-/*
- * bpf_loader_attach - Attach loaded BPF programs to their hooks
- * @ctx: Context after a successful bpf_loader_load()
+/**
+ * bpf_loader_attach() - Attach the loaded LSM and tracing programs.
+ * @ctx: Context after a successful bpf_loader_load().
  *
- * Attaches every BPF_PROG_TYPE_LSM and BPF_PROG_TYPE_TRACING program
- * to its kernel hook and verifies that the security-critical
- * required-programs set (lota_ptrace_access_check and
- * lota_ptrace_may_access_fallback) is fully attached. Refusing to
- * proceed with a partial attach keeps the fail-deep contract: the
- * daemon never reaches sd_notify(READY=1) with a known ptrace
- * coverage gap. Call only after the full enforcement policy has been
- * written to lota_config so the very first invocation of every
- * attached hook sees the operator-configured strict_* / block_* /
- * mode bits, not the post-load default zeros.
+ * Call once the enforcement policy is in lota_config: a hook attached earlier
+ * reads a policy not yet written. Detaches them all on failure.
  *
- * Returns: 0 on success, negative errno on failure
+ * Return: 0, -ENOENT when a program the agent requires did not attach, -E2BIG
+ * past BPF_MAX_LSM_LINKS, -EALREADY when already attached, or another negative
+ * errno.
  */
 int bpf_loader_attach(struct bpf_loader_ctx *ctx);
 
-/*
- * bpf_loader_setup_ringbuf - Set up ring buffer for events
- * @ctx: Loaded context
- * @handler: Callback for processing events
- * @handler_ctx: User context passed to handler
+/**
+ * bpf_loader_setup_ringbuf() - Set up the ring buffer for events.
+ * @ctx: Loaded context.
+ * @handler: Callback for processing events.
+ * @handler_ctx: User context passed to @handler.
  *
- * Returns: 0 on success, negative errno on failure
+ * Return: 0, -EALREADY when already set up, or another negative errno.
  */
 int bpf_loader_setup_ringbuf(struct bpf_loader_ctx *ctx,
 			     bpf_event_handler_t handler, void *handler_ctx);
 
-/*
- * bpf_loader_get_event_fd - Get the epoll fd for the ring buffer
- * @ctx: Context
+/**
+ * bpf_loader_get_event_fd() - Get the epoll fd of the ring buffer.
+ * @ctx: Context.
  *
- * Returns: file descriptor (>= 0) or negative errno
+ * Return: file descriptor or a negative errno.
  */
 int bpf_loader_get_event_fd(struct bpf_loader_ctx *ctx);
 
-/*
- * bpf_loader_consume - Consume available events without blocking
- * @ctx: Context
+/**
+ * bpf_loader_consume() - Consume available events without blocking.
+ * @ctx: Context.
  *
- * Returns: Number of events processed, or negative errno
+ * Return: number of events processed or a negative errno.
  */
 int bpf_loader_consume(struct bpf_loader_ctx *ctx);
 
-/*
- * bpf_loader_set_mode - Set enforcement mode
- * @ctx: Loaded context
- * @mode: enum lota_mode value (MONITOR, ENFORCE)
+/**
+ * bpf_loader_set_mode() - Set the enforcement mode.
+ * @ctx: Loaded context.
+ * @mode: enum lota_mode value.
  *
- * Controls whether LSM hooks block or just monitor.
- *
- * Returns: 0 on success, negative errno on failure
+ * Return: 0 or a negative errno.
  */
 int bpf_loader_set_mode(struct bpf_loader_ctx *ctx, uint32_t mode);
 
-/*
- * bpf_loader_get_mode - Get current enforcement mode
- * @ctx: Loaded context
- * @mode: Output - current mode
+/**
+ * bpf_loader_get_mode() - Get the enforcement mode.
+ * @ctx: Loaded context.
+ * @mode: Set to the current mode.
  *
- * Returns: 0 on success, negative errno on failure
+ * Return: 0 or a negative errno.
  */
 int bpf_loader_get_mode(struct bpf_loader_ctx *ctx, uint32_t *mode);
 
-/*
- * bpf_loader_set_config - Set a runtime configuration value
- * @ctx: Loaded context
- * @key: Config key (LOTA_CFG_*)
- * @value: Config value
+/**
+ * bpf_loader_set_config() - Set a runtime configuration value.
+ * @ctx: Loaded context.
+ * @key: LOTA_CFG_* key.
+ * @value: Value for @key.
  *
- * Returns: 0 on success, negative errno on failure
+ * Return: 0 or a negative errno.
  */
 int bpf_loader_set_config(struct bpf_loader_ctx *ctx, uint32_t key,
 			  uint32_t value);
 
-/*
- * bpf_loader_verify_integrity_config - Verify integrity_config map contents
- * @ctx: Loaded context
+/**
+ * bpf_loader_verify_integrity_config() - Compare integrity_cfg with the kernel.
+ * @ctx: Loaded context.
  *
- * Re-reads the kernel integrity baseline and checks it matches the current
- * integrity_config map value.
- *
- * Returns: 0 on success, negative errno on mismatch/failure
+ * Return: 0 when the map holds what the kernel publishes now, -ENOTSUP without
+ * the map, -EPERM on a mismatch, or another negative errno.
  */
 int bpf_loader_verify_integrity_config(struct bpf_loader_ctx *ctx);
 
@@ -317,268 +291,239 @@ int bpf_loader_verify_integrity_config(struct bpf_loader_ctx *ctx);
 #define LOTA_MODULE_SIG_ENFORCE_PATH "/sys/module/module/parameters/sig_enforce"
 #define LOTA_KERNEL_LOCKDOWN_PATH "/sys/kernel/security/lockdown"
 
-/*
- * bpf_loader_kernel_module_sig_enforced - Check module signature enforcement
- * @sig_enforce_path: sysfs file carrying the module.sig_enforce parameter
+/**
+ * bpf_loader_kernel_module_sig_enforced() - Are module signatures enforced?
+ * @sig_enforce_path: sysfs file carrying the module.sig_enforce parameter.
  *
- * Returns: 0 when the running kernel enforces module signatures, negative
- * errno otherwise.
+ * Return: 0 when enforced, a negative errno otherwise.
  */
 int bpf_loader_kernel_module_sig_enforced(const char *sig_enforce_path);
 
-/*
- * bpf_loader_kernel_lockdown_restrictive - Check Linux lockdown state
- * @lockdown_path: securityfs file carrying the lockdown state
+/**
+ * bpf_loader_kernel_lockdown_restrictive() - Is lockdown on?
+ * @lockdown_path: securityfs file carrying the lockdown state.
  *
- * Returns: 0 when lockdown is in integrity/confidentiality mode, negative
- * errno otherwise.
+ * Return: 0 in integrity or confidentiality mode, a negative errno otherwise.
  */
 int bpf_loader_kernel_lockdown_restrictive(const char *lockdown_path);
 
-/*
- * bpf_loader_build_integrity_config - Fill the value the module gate reads
- * @cfg: value written into the integrity_cfg map
- * @sig_enforce_path: sysfs file carrying the module.sig_enforce parameter
- * @lockdown_path: securityfs file carrying the lockdown state
+/**
+ * bpf_loader_build_integrity_config() - Fill the value the module gate reads.
+ * @cfg: Value written into the integrity_cfg map.
+ * @sig_enforce_path: sysfs file carrying the module.sig_enforce parameter.
+ * @lockdown_path: securityfs file carrying the lockdown state.
  *
- * The same two readers the hardening gate runs, so the gate and the module
- * branch of the BPF program cannot answer the question differently.
+ * Runs the two readers the hardening gate runs. A reader that fails leaves its
+ * field 0.
  *
- * Returns: 0 on success, negative errno when @cfg is missing.
+ * Return: 0, or -EINVAL when @cfg is NULL.
  */
 int bpf_loader_build_integrity_config(struct integrity_data *cfg,
 				      const char *sig_enforce_path,
 				      const char *lockdown_path);
 
-/*
- * bpf_loader_object_integrity_layout - The integrity map an object carries
- * @bpf_obj_path: enforcement object on disk
- * @key_size: filled with the map's key size
- * @value_size: filled with the map's value size
+/**
+ * bpf_loader_object_integrity_layout() - The integrity map an object carries.
+ * @bpf_obj_path: Enforcement object on disk.
+ * @key_size: Set to the map's key size.
+ * @value_size: Set to the map's value size.
  *
- * The map's layout belongs to the object the kernel loads, and the struct
- * the agent reads it into belongs to the build. The kernel copies the map's
- * value_size on every lookup, so the two have to be compared before either
- * direction touches the map, and this is the half that can be read from disk
- * -- before the boot commitment is spent.
- *
- * Returns: 0 with both sizes filled, or a negative errno when the object
- * cannot be opened or carries no integrity map.
+ * Return: 0, -EIO when the object cannot be opened, -ENOENT when it carries no
+ * integrity map, or -EINVAL on a NULL argument.
  */
 int bpf_loader_object_integrity_layout(const char *bpf_obj_path,
 				       uint32_t *key_size,
 				       uint32_t *value_size);
 
-/*
- * bpf_loader_check_object_integrity_layout - Can this agent read that map?
- * @bpf_obj_path: enforcement object on disk
+/**
+ * bpf_loader_check_object_integrity_layout() - Can this agent read that map?
+ * @bpf_obj_path: Enforcement object on disk.
  *
- * Asked before the object is loaded, and before the boot commitment is spent:
- * what the object carries is a property of the file, and a file this build
- * cannot read is an operator's mistake rather than a boot to spend.
+ * The kernel copies the map's own value_size to and from the caller's buffer,
+ * so its layout has to match struct integrity_data. Reads the file alone, so
+ * main refuses a mismatch before the boot commitment is spent.
  *
- * Returns: 0 when the object can be read, a negative errno otherwise.
+ * Return: 0 when the sizes match, -ENOTSUP when they do not, or another
+ * negative errno.
  */
 int bpf_loader_check_object_integrity_layout(const char *bpf_obj_path);
 
-/*
- * bpf_loader_integrity_config_satisfied - Would this value let a module load?
- * @cfg: value written into the integrity_cfg map
+/**
+ * bpf_loader_integrity_config_satisfied() - Does @cfg meet the module baseline?
+ * @cfg: Value written into the integrity_cfg map.
  *
  * The userspace mirror of integrity_baseline_ok() in the BPF program.
  *
- * Returns: true when the module and firmware branches of
- * lota_kernel_read_file() accept @cfg.
+ * Return: true when both module signatures and lockdown are set in @cfg.
  */
 bool bpf_loader_integrity_config_satisfied(const struct integrity_data *cfg);
 
-/*
- * bpf_loader_ima_appraisal_active - Is IMA appraising an executable here?
- * @cmdline_path: kernel cmdline carrying ima_appraise= (the mode)
- * @policy_path: loaded IMA policy carrying the func= rules (the scope)
+/**
+ * bpf_loader_ima_appraisal_active() - Do mode and policy appraise exec?
+ * @cmdline_path: Kernel cmdline carrying ima_appraise=, the mode.
+ * @policy_path: Loaded IMA policy carrying the func= rules, the scope.
+ * @secureboot: Non-zero when this host booted with Secure Boot on. The kernel
+ *	then keeps its built-in mode, enforce, and @cmdline_path is not read.
  *
- * @secureboot: non-zero when this host booted with Secure Boot on, in which
- * case the kernel discarded ima_appraise= and the mode is its built-in
- * default, which blocks.
- *
- * Returns: 0 when appraisal blocks on an integrity failure, negative errno
- * otherwise: -ENOENT when the scope reaches no exec, -EACCES when it could not
- * be read. Report anything but 0 as not appraised.
+ * Return: 0 when the mode is enforce or fix and a rule reaches an executable,
+ * -ENOENT when no rule does, -EACCES when the policy could not be read, or
+ * another negative errno. Callers report anything but 0 as not appraised.
  */
 int bpf_loader_ima_appraisal_active(const char *cmdline_path,
 				    const char *policy_path, int secureboot);
 
-/*
- * bpf_loader_secure_boot_enabled - Check UEFI Secure Boot state
+/**
+ * bpf_loader_secure_boot_enabled() - Check the UEFI Secure Boot state.
  *
- * Returns: 0 when the kernel exposes SecureBoot=1 through efivarfs, negative
- * errno otherwise.
+ * Return: 0 when efivarfs shows SecureBoot=1, a negative errno otherwise.
  */
 int bpf_loader_secure_boot_enabled(void);
 
-/*
- * bpf_loader_kernel_appraises_exec - Does the kernel appraise executables here?
+/**
+ * bpf_loader_kernel_appraises_exec() - Does this host appraise executables?
  *
- * The live-path form of bpf_loader_ima_appraisal_active(): the booted mode,
- * the loaded policy and this host's Secure Boot state.
+ * bpf_loader_ima_appraisal_active() on the booted cmdline, the loaded policy
+ * and this host's Secure Boot state.
  *
- * Returns: 0 when an executable on this host is appraised, negative errno
- * otherwise (-ENOENT when the policy reaches no exec, -EACCES when it could
- * not be read, as in the attest loop without CAP_SYS_ADMIN).
+ * Return: as for bpf_loader_ima_appraisal_active().
  */
 int bpf_loader_kernel_appraises_exec(void);
 
-/*
- * bpf_loader_verify_kernel_runtime_hardening - Verify kernel anti-tamper base
+/**
+ * bpf_loader_verify_kernel_runtime_hardening() - Check the kernel floor.
+ * @allow_mutable_rootfs: Let the checks named below pass with a warning.
  *
- * Ensures runtime prerequisites expected by LOTA self-protection are active:
- *   - Linux lockdown mode is restrictive (integrity or confidentiality)
- *   - kernel module signatures are enforced
- *   - IMA appraisal blocks on failure and its policy reaches executables
+ * Refuses unless lockdown is restrictive and module signatures are enforced.
  *
- * Returns: 0 on success, negative errno on failure
- */
-/*
- * @allow_mutable_rootfs: when true, the agent-binary immutability self
- *   check is skipped (the function still requires lockdown, module
- *   signature enforcement, and IMA appraisal).
- *   It is for host whose rootfs offers neither proof:
- *   no fs-verity, which XFS and ZFS do not have, and no signed security.ima
- *   xattr either.
- *   Call site logs the deviation so the dirty-shutdown coverage gap stays visible.
+ * Refuses when no executable is appraised, unless the agent binary has
+ * fs-verity or @allow_mutable_rootfs is set; an IMA policy that could not be
+ * read passes either way, with a warning.
+ *
+ * Unless @allow_mutable_rootfs is set, refuses a TPM device without the
+ * lota_tpm_device_t label and an agent binary with neither fs-verity nor a
+ * signature-type security.ima.
+ *
+ * Return: 0 or a negative errno.
  */
 int bpf_loader_verify_kernel_runtime_hardening(bool allow_mutable_rootfs);
 
-/*
- * bpf_loader_protect_pid - Add a PID to the protected set
- * @ctx: Loaded context
- * @pid: Process ID to protect
+/**
+ * bpf_loader_protect_pid() - Add a PID to the protected set.
+ * @ctx: Loaded context.
+ * @pid: Process ID to protect.
  *
- * Protected PIDs get extra security in ENFORCE mode:
- *   - ptrace on these PIDs is blocked
+ * The entry carries the start time from /proc/<pid>/stat, which a process that
+ * reuses @pid does not match.
  *
- * Identity is bound to PID start time from /proc/<pid>/stat
- * to prevent trust leakage on PID reuse. This path is accepted only
- * in initial PID namespace.
- *
- * Returns: 0 on success, negative errno on failure
+ * Return: 0, -ENOTSUP without the map or outside the initial PID namespace,
+ * or another negative errno.
  */
 int bpf_loader_protect_pid(struct bpf_loader_ctx *ctx, uint32_t pid);
 
-/*
- * bpf_loader_adopt_instance_member - Name an instance member in the set
- * @ctx: Loaded context
- * @pid: Process ID to ask about
+/**
+ * bpf_loader_adopt_instance_member() - Name an instance member in the set.
+ * @ctx: Loaded context.
+ * @pid: Process ID to ask about.
  *
  * A process created by a protected one carries its creator's instance in
- * lota_instance from its first instruction. When @pid does, it is added
- * to protected_pids under its start time, so the token and the runtime
- * measurement see it. The membership is read through a pidfd before and
- * after the start time, so a PID reused in between is not taken.
+ * lota_instance. When @pid does, it is added to protected_pids under its start
+ * time. The membership is read through a pidfd before and after the start time,
+ * so a PID reused in between is not taken.
  *
- * Returns: 1 when added, 0 when @pid is not a member, negative errno
+ * Return: 1 when added, 0 when @pid is not a member, or a negative errno.
  */
 int bpf_loader_adopt_instance_member(struct bpf_loader_ctx *ctx, uint32_t pid);
 
-/*
- * bpf_loader_instance_stopped_ms - How long @pid's instance stood stopped
- * @ctx: Loaded context
- * @pid: Process ID to ask about
- * @ms: Output, milliseconds any thread of the instance stood stopped
+/**
+ * bpf_loader_instance_stopped_ms() - How long @pid's instance stood stopped.
+ * @ctx: Loaded context.
+ * @pid: Process ID to ask about.
+ * @ms: Set to the milliseconds any thread of the instance stood stopped.
  *
- * Read from the root of the instance, so the value covers every member and
- * ends with the root. A process in no instance, or one whose root has gone,
- * has none: @ms is 0.
+ * Read from the root of the instance, so the value covers every member.
+ * @ms is 0 when the root has gone or no stop was recorded.
  *
- * Returns: 0 on success, negative errno
+ * Return: 0 or a negative errno.
  */
 int bpf_loader_instance_stopped_ms(struct bpf_loader_ctx *ctx, uint32_t pid,
 				   uint64_t *ms);
 
-/*
- * bpf_loader_born_protected - Was @pid's image executed under protection?
- * @ctx: Loaded context
- * @pid: Process ID to ask about
- * @start_ticks: Start time the answer has to belong to
+/**
+ * bpf_loader_born_protected() - Was @pid's image executed under protection?
+ * @ctx: Loaded context.
+ * @pid: Process ID to ask about.
+ * @start_ticks: Start time the answer has to belong to.
  *
- * A process that forked from a protected one and never executed is not.
+ * A process that forked from a protected one and never executed was not.
  *
- * Returns: 1 when it was, 0 when not or unknown, negative errno
+ * Return: 1 when it was, 0 when not or unknown, or a negative errno.
  */
 int bpf_loader_born_protected(struct bpf_loader_ctx *ctx, uint32_t pid,
 			      uint64_t start_ticks);
 
-/*
- * bpf_loader_probe_protect_pid - Ask whether a PID could be protected
- * @pid: Process ID a startup policy names
+/**
+ * bpf_loader_probe_protect_pid() - Could this PID be protected?
+ * @pid: Process ID a startup policy names.
  *
- * Makes exactly the read bpf_loader_protect_pid() makes -- the same
- * /proc/<pid>/stat, the same start time, the same PID-namespace
- * requirement -- and stops before touching a map, so it needs no loaded
- * context. A caller that must know whether a startup policy will be
- * accepted asks here first; anything this refuses, protect_pid refuses
- * for the same reason.
+ * Makes the read bpf_loader_protect_pid() makes and needs no loaded context,
+ * so main refuses a startup policy before the boot commitment is spent.
  *
- * -ENOENT means no process is running under that pid.
- *
- * Returns: 0 if the PID can be protected, negative errno otherwise
+ * Return: 0 when the PID can be protected, -ENOENT when no process runs under
+ * it, or another negative errno.
  */
 int bpf_loader_probe_protect_pid(uint32_t pid);
 
-/*
- * bpf_loader_protected_pids - Read the protected set
- * @ctx: Loaded context
- * @pid: Out, up to @max PIDs
- * @start: Out, each PID's start time in clock ticks, as protected
- * @max: Capacity of both arrays
+/**
+ * bpf_loader_protected_pids() - Read the protected set.
+ * @ctx: Loaded context.
+ * @pid: Receives up to @max PIDs.
+ * @start: Receives each PID's start time in clock ticks.
+ * @max: Capacity of both arrays.
  *
- * Returns: the number of entries read, or negative errno
+ * Return: the number of entries read or a negative errno.
  */
 int bpf_loader_protected_pids(const struct bpf_loader_ctx *ctx, uint32_t *pid,
 			      uint64_t *start, size_t max);
 
-/*
- * bpf_loader_unprotect_pid - Remove a PID from the protected set
- * @ctx: Loaded context
- * @pid: Process ID to unprotect
+/**
+ * bpf_loader_unprotect_pid() - Remove a PID from the protected set.
+ * @ctx: Loaded context.
+ * @pid: Process ID to unprotect.
  *
- * Returns: 0 on success, negative errno on failure
+ * Return: 0 or a negative errno.
  */
 int bpf_loader_unprotect_pid(struct bpf_loader_ctx *ctx, uint32_t pid);
 
-/*
- * bpf_loader_trust_lib - Add a library path to the trusted whitelist
- * @ctx: Loaded context
- * @path: Full path to the shared library
+/**
+ * bpf_loader_trust_lib() - Add a library to the trusted set.
+ * @ctx: Loaded context.
+ * @path: Absolute path to a regular file, with no symlink along it.
  *
- * Trusted libraries are allowed to be loaded via mmap(PROT_EXEC)
- * even when strict mmap enforcement is enabled.
+ * Keyed by superblock device and inode. A trusted library passes the strict
+ * mmap check on executable mappings.
  *
- * Returns: 0 on success, negative errno on failure
+ * Return: 0, -ENOTSUP without the map, or another negative errno.
  */
 int bpf_loader_trust_lib(struct bpf_loader_ctx *ctx, const char *path);
 
-/*
- * bpf_loader_probe_trusted_lib - Ask whether a path could be trusted
- * @path: Full path to the shared library
+/**
+ * bpf_loader_probe_trusted_lib() - Could this path be trusted?
+ * @path: As for bpf_loader_trust_lib().
  *
- * Applies exactly the resolution bpf_loader_trust_lib() applies
- * -- same open, same regular-file requirement, same device/inode rejection --
- * and stops before touching a map, so it needs no loaded context.
- * A caller that must know whether a startup policy will be accepted asks
- * here first; anything this refuses, trust_lib refuses for the same
- * reason.
+ * Resolves @path as bpf_loader_trust_lib() does and needs no loaded context,
+ * so main refuses a startup policy before the boot commitment is spent.
  *
- * Returns: 0 if the path resolves, negative errno otherwise
+ * Return: 0 when the path resolves or a negative errno.
  */
 int bpf_loader_probe_trusted_lib(const char *path);
 
-/*
- * bpf_loader_untrust_lib - Remove a library path from the trusted whitelist
- * @ctx: Loaded context
- * @path: Full path to the shared library
+/**
+ * bpf_loader_untrust_lib() - Remove a library from the trusted set.
+ * @ctx: Loaded context.
+ * @path: As for bpf_loader_trust_lib().
  *
- * Returns: 0 on success, negative errno on failure
+ * Return: 0, also when @path was not in the set, -ENOTSUP without the map,
+ * or another negative errno.
  */
 int bpf_loader_untrust_lib(struct bpf_loader_ctx *ctx, const char *path);
 
@@ -605,19 +550,21 @@ struct bpf_extended_stats {
 	uint64_t instance_stops_lost; /* instance thread stops unrecorded */
 };
 
-/*
- * bpf_loader_get_extended_stats - Get all statistics including new hooks
- * @ctx: Loaded context
- * @stats: Output statistics structure
+/**
+ * bpf_loader_get_extended_stats() - Read the statistics.
+ * @ctx: Loaded context.
+ * @stats: Receives the counters; one that cannot be read is 0.
  *
- * Returns: 0 on success, negative errno on failure
+ * Return: 0, or -EINVAL without a loaded context or the stats map.
  */
 int bpf_loader_get_extended_stats(struct bpf_loader_ctx *ctx,
 				  struct bpf_extended_stats *stats);
 
-/*
- * bpf_loader_cleanup - Unload BPF program and clean up
- * @ctx: Context to clean up
+/**
+ * bpf_loader_cleanup() - Release the object and reset the context.
+ * @ctx: Context to clean up.
+ *
+ * The links stay open, so the attached programs run until this process exits.
  */
 void bpf_loader_cleanup(struct bpf_loader_ctx *ctx);
 
