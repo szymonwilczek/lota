@@ -84,7 +84,7 @@ static int ipc_request_shutdown(void)
 
 /* the agent ends it for its owner or root, so the player needs no sudo */
 static int ipc_request_terminate_protected(uint32_t pid, uint32_t sig,
-					   uint32_t *out_others)
+					   uint32_t *out_others, bool *asked)
 {
 	struct sockaddr_un addr;
 	struct lota_ipc_request req = {
@@ -115,6 +115,7 @@ static int ipc_request_terminate_protected(uint32_t pid, uint32_t sig,
 		close(fd);
 		return ret;
 	}
+	*asked = true;
 
 	ret = lota_write_full(fd, &req, sizeof(req));
 	if (ret == 0)
@@ -224,9 +225,18 @@ int diagnostics_dispatch(struct cli_options *opts, struct lota_config *cfg)
 		uint32_t sig = opts->force_flag ? SIGKILL : SIGTERM;
 		uint32_t others = 0;
 		char line[256];
+		bool asked = false;
 		int tret = ipc_request_terminate_protected(
-			opts->terminate_protected_pid, sig, &others);
+			opts->terminate_protected_pid, sig, &others, &asked);
 
+		if (!asked) {
+			fprintf(stderr,
+				"Cannot reach the agent on %s to end PID %u: "
+				"%s\n",
+				LOTA_IPC_SOCKET_PATH,
+				opts->terminate_protected_pid, strerror(-tret));
+			return 1;
+		}
 		if (tret == -EINVAL) {
 			fprintf(stderr, "PID %u is not a protected process.\n",
 				opts->terminate_protected_pid);
@@ -250,8 +260,9 @@ int diagnostics_dispatch(struct cli_options *opts, struct lota_config *cfg)
 		if (tret == -EACCES) {
 			fprintf(stderr,
 				"The agent refused to end PID %u: it belongs "
-				"to another user, so ending it needs root. Its "
-				"journal names the reason.\n",
+				"to another user, so ending it needs root, or "
+				"this command runs outside the host's PID "
+				"namespace. Its journal names the reason.\n",
 				opts->terminate_protected_pid);
 			return 1;
 		}

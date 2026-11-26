@@ -52,7 +52,8 @@ func main() {
 	runtimeDigest = computeRuntimeProtectDigest(nil, nil)
 
 	// compute token quote nonce using the Go server SDK implementation
-	expectedNonce := server.ComputeTokenQuoteNonce(validUntil, flags, pcrMask, nonce, policyDigest, runtimeDigest, 0, 4242)
+	expectedNonce := server.ComputeTokenQuoteNonce(validUntil, flags,
+		pcrMask, nonce, policyDigest, runtimeDigest, 4242)
 
 	// fake TPMS_ATTEST
 	attestData := buildFakeTPMSAttest(expectedNonce[:], pcrMask, pcrDigest)
@@ -69,7 +70,8 @@ func main() {
 
 	// serialize token
 	tokBytes, err := server.SerializeToken(validUntil, flags, nonce,
-		0x0014, 0x000B, pcrMask, policyDigest, runtimeDigest, 0, 4242, nil, nil, attestData, sig)
+		0x0014, 0x000B, pcrMask, policyDigest, runtimeDigest, 4242, nil,
+		nil, attestData, sig)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "serialize: %v\n", err)
 		os.Exit(1)

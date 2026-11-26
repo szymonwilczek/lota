@@ -609,8 +609,8 @@ static void test_verify_tampered_stopped_ms(EVP_PKEY *key,
 		return;
 	}
 
-	/* a client hiding a stall would clear this field (offset 144) */
-	tokbuf[144] = 0xFF;
+	/* a client hiding a stall would clear this field (offset 136) */
+	tokbuf[136] = 0xFF;
 
 	struct lota_server_claims claims;
 	ret = lota_server_verify_token(tokbuf, tok_written, aik_der, aik_len,
@@ -693,7 +693,7 @@ static void test_verify_mixed_pcr_banks_rejected(EVP_PKEY *key,
 	}
 
 	if (forge_quote_nonce(valid_until, flags, pcr_mask_union, nonce,
-			      policy_digest, runtime_digest, 0, 0,
+			      policy_digest, runtime_digest, 0,
 			      expected_nonce) != 0) {
 		FAIL("expected nonce compute failed");
 		return;
@@ -726,7 +726,6 @@ static void test_verify_mixed_pcr_banks_rejected(EVP_PKEY *key,
 	memcpy(token.policy_digest, policy_digest, sizeof(token.policy_digest));
 	memcpy(token.runtime_protect_digest, runtime_digest,
 	       sizeof(token.runtime_protect_digest));
-	token.runtime_protect_epoch = 0;
 	token.protect_pid_count = 0;
 	token.protected_pids = NULL;
 	token.attest_data = attest;

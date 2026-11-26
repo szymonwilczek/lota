@@ -305,9 +305,9 @@ int main(void)
 				objs[i].content_hashed = (i % 3 == 2);
 			}
 		}
-		ok &= registry_add(&next, 1234, 1000, 0, folded, objs, 40,
+		ok &= registry_add(&next, 1234, 51, 1000, 0, folded, objs, 40,
 				   actors, 30) == 0;
-		ok &= registry_add(&next, 1235, 1000,
+		ok &= registry_add(&next, 1235, 52, 1000,
 				   LOTA_IPC_REGISTRY_HISTORY_LOST |
 					   LOTA_IPC_REGISTRY_FROM_EXEC |
 					   LOTA_IPC_REGISTRY_MEASURED,
@@ -315,8 +315,9 @@ int main(void)
 		registry_replace(&cur, &next);
 		ok &= cur.round == 1 && next.count == 0;
 
-		p = registry_find(&cur, 1234);
-		ok &= p != NULL && registry_find(&cur, 99) == NULL;
+		p = registry_find(&cur, 1234, 51);
+		ok &= p != NULL && registry_find(&cur, 99, 51) == NULL;
+		ok &= registry_find(&cur, 1234, 52) == NULL;
 		while (ok && p && start < p->count + p->actor_count) {
 			struct lota_ipc_registry_page hdr;
 			size_t len = 0, off = sizeof(hdr);
@@ -379,7 +380,7 @@ int main(void)
 						   &len) == -ERANGE;
 			ok &= registry_encode_page(p, cur.round, 0, buf, 100,
 						   &len) == -ENOSPC;
-			p = registry_find(&cur, 1235);
+			p = registry_find(&cur, 1235, 52);
 			ok &= p &&
 			      p->flags == (LOTA_IPC_REGISTRY_HISTORY_LOST |
 					   LOTA_IPC_REGISTRY_FROM_EXEC) &&
@@ -551,10 +552,10 @@ int main(void)
 
 		ok &= registry_digest(flags | LOTA_IPC_REGISTRY_MEASURED, objs,
 				      3, actors, 2, want) == 0;
-		ok &= registry_add(&next, 77, 1000, flags, want, objs, 3,
+		ok &= registry_add(&next, 77, 53, 1000, flags, want, objs, 3,
 				   actors, 2) == 0;
 		registry_replace(&cur, &next);
-		p = registry_find(&cur, 77);
+		p = registry_find(&cur, 77, 53);
 		if (!p)
 			ok = 0;
 		else

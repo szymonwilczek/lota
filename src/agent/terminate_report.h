@@ -20,8 +20,9 @@
  * diagnostics.c words its message from the errno.
  *
  * Return: -EINVAL not protected, -EPERM a target the verb does not end,
- * -ESRCH no such process, -EACCES not the caller's to end, -EIO the signal
- * failed in the agent, -EPROTO any other code.
+ * -ESRCH no such process, -EACCES not the caller's to end or a caller
+ * outside the agent's PID namespace, -EIO the signal failed in the agent,
+ * -EPROTO any other code.
  */
 static inline int terminate_result_errno(uint32_t result)
 {
@@ -42,35 +43,11 @@ static inline int terminate_result_errno(uint32_t result)
 }
 
 /**
- * terminate_others_protected() - Count the protected PIDs other than @target.
- * @pids: The set.
- * @count: Its size.
- * @target: The signalled process.
- *
- * Return: the count.
- */
-static inline uint32_t terminate_others_protected(const uint32_t *pids,
-						  int count, uint32_t target)
-{
-	uint32_t others = 0;
-	int i;
-
-	if (!pids || count <= 0)
-		return 0;
-
-	for (i = 0; i < count; i++) {
-		if (pids[i] != target)
-			others++;
-	}
-
-	return others;
-}
-
-/**
  * terminate_sent_message() - Format the report after the signal went out.
  * @pid: Signalled process.
  * @force: SIGKILL when true, SIGTERM when false.
- * @others: Rest of the protected set, as the agent reported it.
+ * @others: Number of the other protected processes of @pid's instance, as
+ *          the agent reported it.
  * @out: Receives a NUL-terminated sentence without a newline.
  * @cap: Size of @out.
  */
@@ -85,16 +62,17 @@ static inline void terminate_sent_message(uint32_t pid, bool force,
 
 	if (others == 0) {
 		snprintf(out, cap,
-			 "Sent %s to protected PID %u; no other process is "
-			 "protected.",
+			 "Sent %s to protected PID %u; no other process in "
+			 "its process tree is protected.",
 			 sig, pid);
 		return;
 	}
 
 	snprintf(out, cap,
-		 "Sent %s to protected PID %u; %u other process%s "
-		 "still protected.",
-		 sig, pid, others, others == 1 ? " is" : "es are");
+		 "Sent %s to protected PID %u; %u other process%s in "
+		 "its process tree %s still protected.",
+		 sig, pid, others, others == 1 ? "" : "es",
+		 others == 1 ? "is" : "are");
 }
 
 #endif /* LOTA_AGENT_TERMINATE_REPORT_H */

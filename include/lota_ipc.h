@@ -31,10 +31,7 @@ enum lota_ipc_cmd {
 	LOTA_IPC_CMD_GET_STATUS = 0x02, /* Attestation status */
 	LOTA_IPC_CMD_GET_TOKEN = 0x03, /* Signed attestation token */
 	LOTA_IPC_CMD_SUBSCRIBE = 0x04, /* Subscribe to status changes */
-	LOTA_IPC_CMD_PROTECT_PID =
-		0x05, /* Add a protected PID (own PID, or privileged actor) */
-	LOTA_IPC_CMD_UNPROTECT_PID =
-		0x06, /* Remove a protected PID (privileged actor) */
+	LOTA_IPC_CMD_PROTECT_PID = 0x05, /* Protect the calling process */
 	LOTA_IPC_CMD_SHUTDOWN = 0x07, /* Stop the agent (privileged actor) */
 	LOTA_IPC_CMD_SET_PROFILE =
 		0x08, /* Bind this connection to one publisher profile */
@@ -162,10 +159,11 @@ enum lota_ipc_result {
  */
 #define LOTA_STATUS_REENROLLING (1 << 21)
 /*
- * This agent ended a protected process for its owner or root. Set until the
- * agent ends, in the status word and the token alike, so a session ended
- * locally can be told from a process that vanished. A restart shows as
- * AGENT_RESTARTED.
+ * This agent ended a protected process for its owner or root: one protected
+ * for the publisher this connection named, or any one when it named none.
+ * Set until the agent ends, in the status word and the token alike,
+ * so a session ended locally can be told from a process that vanished.
+ * A restart shows as AGENT_RESTARTED.
  */
 #define LOTA_STATUS_PROTECTED_TERMINATED (1 << 10)
 
@@ -216,9 +214,10 @@ struct lota_ipc_status {
  * hostname.
  *
  * Later answers on the connection are that publisher's: GET_TOKEN quotes with
- * their AIK over the processes protected for them, and GET_STATUS reports
- * their verifier's verdict. A connection that never sends this gets
- * the host-wide answers.
+ * their AIK and GET_STATUS reports their verifier's verdict. The name selects
+ * the key and the verdict and does not authenticate the title: a token carries
+ * the processes of the caller's own instance, whichever publisher it names.
+ * A connection that never sends this gets the host-wide verdict.
  */
 struct lota_ipc_set_profile {
 	uint8_t profile_id[32];
@@ -254,7 +253,6 @@ struct lota_ipc_token {
 	uint8_t policy_digest[32]; /* SHA-256 over enforcement startup policy */
 	uint8_t runtime_protect_digest[32]; /* SHA-256 over runtime set */
 	uint32_t protect_pid_count; /* Number of protected PIDs in payload */
-	uint64_t runtime_protect_epoch; /* Monotonic PID-set mutation id */
 	uint16_t pid_list_size; /* Bytes for protected_pids[] */
 	uint16_t runtime_protect_version; /* 1 = PID set + registry digests */
 	uint64_t stopped_ms; /* Time the caller's instance stood stopped */
@@ -398,15 +396,14 @@ struct lota_ipc_attest_sync_response {
 	(sizeof(struct lota_ipc_attest_sync_response) + \
 	 LOTA_IPC_MAX_PROFILES * sizeof(struct lota_ipc_profile_demand))
 
-/* PROTECT_PID / UNPROTECT_PID request payload */
+/* PROTECT_PID request payload; @pid is 0, the agent takes the caller's own */
 struct lota_ipc_pid_request {
 	uint32_t pid;
 } __attribute__((packed));
 
-/* PROTECT_PID / UNPROTECT_PID response payload */
+/* PROTECT_PID response payload */
 struct lota_ipc_policy_update {
 	uint8_t policy_digest[32];
-	uint32_t protect_pid_count;
 	uint32_t _reserved1;
 } __attribute__((packed));
 
@@ -425,7 +422,8 @@ struct lota_ipc_terminate_request {
 struct lota_ipc_terminate_response {
 	uint32_t pid;
 	uint32_t signal;
-	uint32_t other_protect_pid_count; /* protected set minus @pid */
+	/* the other protected processes of @pid's instance */
+	uint32_t other_protect_pid_count;
 	uint32_t _reserved1;
 } __attribute__((packed));
 
@@ -434,7 +432,7 @@ struct lota_ipc_terminate_response {
  *
  * Asks for what the last token round found in @pid, from entry @start on:
  * the code objects, then the actors.
- * Answered for the owner of the process or root.
+ * Answered for the owner of the process calling from its instance.
  */
 struct lota_ipc_registry_request {
 	uint32_t pid;

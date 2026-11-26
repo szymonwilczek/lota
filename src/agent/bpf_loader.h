@@ -451,6 +451,26 @@ int bpf_loader_adopt_instance_member(struct bpf_loader_ctx *ctx, uint32_t pid,
 				     struct bpf_instance_member *member);
 
 /**
+ * bpf_loader_task_instance() - The instance a process belongs to.
+ * @ctx: Loaded context.
+ * @pidfd: The process, as a pidfd.
+ * @pid: Its PID in the agent's PID namespace.
+ * @root_tgid: Set to the TGID of the instance root.
+ * @root_start_ticks: Set to the start time of the root.
+ *
+ * The instance lota_instance holds for @pidfd, or @pid's own when
+ * protected_pids names it under its start time, as the LSM reads it.
+ * The process must still run after its start time is read, so a PID reused
+ * in between is not taken.
+ *
+ * Return: 1 when @pidfd belongs to an instance, 0 when it does not,
+ * or a negative errno.
+ */
+int bpf_loader_task_instance(struct bpf_loader_ctx *ctx, int pidfd,
+			     uint32_t pid, uint32_t *root_tgid,
+			     uint64_t *root_start_ticks);
+
+/**
  * bpf_loader_instance_stopped_ms() - How long @pid's instance stood stopped.
  * @ctx: Loaded context.
  * @pid: Process ID to ask about.

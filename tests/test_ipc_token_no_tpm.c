@@ -30,12 +30,14 @@
 #include <fcntl.h>
 #include <limits.h>
 #include <poll.h>
+#include <sched.h>
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/socket.h>
 #include <sys/un.h>
+#include <sys/wait.h>
 #include <time.h>
 #include <unistd.h>
 
@@ -126,10 +128,13 @@ int bpf_loader_measure_verity_digest(const char *path,
 	return -ENOTSUP;
 }
 
+/* the PID the last PROTECT_PID reached the map with */
+static uint32_t protect_map_pid;
+
 int bpf_loader_protect_pid(struct bpf_loader_ctx *ctx, uint32_t pid)
 {
 	(void)ctx;
-	(void)pid;
+	protect_map_pid = pid;
 	return -ENOTSUP;
 }
 
@@ -158,6 +163,18 @@ int bpf_loader_get_refusal(struct bpf_loader_ctx *ctx, int pidfd,
 	(void)object;
 	(void)len;
 	return -ENOENT;
+}
+
+int bpf_loader_task_instance(struct bpf_loader_ctx *ctx, int pidfd,
+			     uint32_t pid, uint32_t *root_tgid,
+			     uint64_t *root_start_ticks)
+{
+	(void)ctx;
+	(void)pidfd;
+	(void)pid;
+	(void)root_tgid;
+	(void)root_start_ticks;
+	return 0;
 }
 
 int bpf_loader_instance_stopped_ms(struct bpf_loader_ctx *ctx, uint32_t pid,
@@ -500,7 +517,7 @@ static char protect_log[8192];
 static int probe_protect_pid(struct ipc_context *ctx)
 {
 	struct lota_ipc_response resp;
-	struct lota_ipc_pid_request req = { .pid = (uint32_t)getpid() };
+	struct lota_ipc_pid_request req = { .pid = 0 };
 	uint8_t payload[LOTA_IPC_MAX_PAYLOAD];
 	int fd, ret;
 
@@ -566,15 +583,19 @@ static void test_protect_pid_refusal_is_logged(void)
 	PASS();
 }
 
-/* no process has a pid above INT_MAX; a pid_t cast of one is not positive */
-static void test_protect_pid_past_int_max_is_refused(struct ipc_context *ctx)
+/*
+ * The agent protects the connected process only: any PID in the request,
+ * the caller's own included, is refused before the policy checks.
+ */
+static void protect_pid_named(struct ipc_context *ctx, uint32_t pid,
+			      const char *name)
 {
-	struct lota_ipc_pid_request req = { .pid = (uint32_t)INT_MAX + 1 };
+	struct lota_ipc_pid_request req = { .pid = pid };
 	struct lota_ipc_response resp;
 	uint8_t payload[LOTA_IPC_MAX_PAYLOAD];
 	int fd, ret;
 
-	TEST("PROTECT_PID of a pid past INT_MAX is a bad request");
+	TEST(name);
 
 	fd = client_open();
 	if (fd < 0) {
@@ -592,6 +613,93 @@ static void test_protect_pid_past_int_max_is_refused(struct ipc_context *ctx)
 		FAIL("the pid reached the policy checks");
 	else
 		PASS();
+}
+
+static void test_protect_pid_names_no_pid(struct ipc_context *ctx)
+{
+	protect_pid_named(ctx, (uint32_t)getpid(),
+			  "PROTECT_PID naming the caller's own pid is a bad "
+			  "request");
+	protect_pid_named(ctx, 2,
+			  "PROTECT_PID naming another pid is a bad request");
+	protect_pid_named(ctx, (uint32_t)INT_MAX + 1,
+			  "PROTECT_PID of a pid past INT_MAX is a bad request");
+}
+
+/*
+ * A caller in a PID namespace of its own is PID 1 there. The agent reaches the
+ * map with its PID in the agent's namespace, which fork() returned here.
+ */
+static void test_protect_pid_nested_namespace(struct ipc_context *ctx)
+{
+	int pfd[2];
+	pid_t child, grandchild = 0;
+	int status;
+
+	TEST("PROTECT_PID from a nested PID namespace protects the caller");
+
+	if (pipe(pfd) < 0) {
+		FAIL("pipe");
+		return;
+	}
+	child = fork();
+	if (child == 0) {
+		struct lota_ipc_pid_request req = { .pid = 0 };
+		struct lota_ipc_response resp;
+		pid_t gc;
+
+		close(pfd[0]);
+		if (unshare(CLONE_NEWUSER | CLONE_NEWPID) < 0)
+			_exit(77);
+		gc = fork();
+		if (gc == 0) {
+			int fd = client_open();
+
+			if (fd < 0 || getpid() != 1)
+				_exit(1);
+			if (send_request(fd, LOTA_IPC_CMD_PROTECT_PID, &req,
+					 sizeof(req)) < 0)
+				_exit(1);
+			_exit(read(fd, &resp, sizeof(resp)) ==
+					      (ssize_t)sizeof(resp) ?
+				      0 :
+				      1);
+		}
+		if (gc < 0 || write(pfd[1], &gc, sizeof(gc)) != sizeof(gc))
+			_exit(1);
+		_exit(waitpid(gc, &status, 0) == gc && WIFEXITED(status) ?
+			      WEXITSTATUS(status) :
+			      1);
+	}
+	close(pfd[1]);
+	if (child < 0) {
+		close(pfd[0]);
+		FAIL("fork");
+		return;
+	}
+
+	protect_map_pid = 0;
+	g_agent.policy_snapshot_set = 1;
+	for (int i = 0; i < 300; i++) {
+		ipc_process(ctx, 10);
+		if (waitpid(child, &status, WNOHANG) == child)
+			break;
+	}
+	g_agent.policy_snapshot_set = 0;
+	if (read(pfd[0], &grandchild, sizeof(grandchild)) != sizeof(grandchild))
+		grandchild = 0;
+	close(pfd[0]);
+
+	if (WIFEXITED(status) && WEXITSTATUS(status) == 77) {
+		tests_run--;
+		printf("SKIP: no user and PID namespace here\n");
+	} else if (grandchild <= 0 || protect_map_pid == 0) {
+		FAIL("the request never reached the map");
+	} else if (protect_map_pid != (uint32_t)grandchild) {
+		FAIL("the map got a PID other than the caller's");
+	} else {
+		PASS();
+	}
 }
 
 /* The refusal itself: a host with no TPM must never hand out a token */
@@ -881,7 +989,8 @@ int main(void)
 		test_protect_pid_refusal_names_itself();
 		test_protect_pid_refusal_is_logged();
 	}
-	test_protect_pid_past_int_max_is_refused(&ctx);
+	test_protect_pid_names_no_pid(&ctx);
+	test_protect_pid_nested_namespace(&ctx);
 
 	test_boot_evidence_without_tpm(&ctx);
 

@@ -732,6 +732,69 @@ static void test_tpm_lockout_is_distinguishable(void)
 	PASS();
 }
 
+static void server_token_too_many(int client_fd)
+{
+	struct lota_ipc_request req;
+
+	if (read_exact(client_fd, &req, sizeof(req)) < 0)
+		_exit(2);
+	if (req.cmd != LOTA_IPC_CMD_GET_TOKEN)
+		_exit(3);
+	if (send_result(client_fd, LOTA_IPC_ERR_TOO_MANY_PROTECTED_PIDS) < 0)
+		_exit(4);
+
+	usleep(50000);
+}
+
+static void test_process_limit_is_distinguishable(void)
+{
+	struct lota_connect_opts opts = { 0 };
+	struct lota_client *client;
+	struct lota_token token;
+	pid_t server;
+	int ret;
+
+	TEST("too many protected processes says so, not \"agent error\"");
+
+	if (strcmp(lota_strerror(LOTA_ERR_TOO_MANY_PROCESSES),
+		   "Unknown error") == 0) {
+		FAIL("the code has no words of its own");
+		return;
+	}
+
+	server = start_mock_agent(server_token_too_many);
+	if (server < 0) {
+		if (socket_errno_is_sandbox(mock_errno)) {
+			SKIP("no unix sockets in this sandbox");
+			return;
+		}
+		FAIL("could not start the mock agent");
+		return;
+	}
+
+	opts.struct_size = sizeof(opts);
+	opts.socket_path = test_socket;
+	opts.timeout_ms = 2000;
+
+	client = lota_connect_opts(&opts);
+	if (!client) {
+		wait_agent(server);
+		FAIL("could not connect to the mock agent");
+		return;
+	}
+
+	memset(&token, 0, sizeof(token));
+	ret = lota_get_token(client, NULL, &token);
+	lota_disconnect(client);
+	wait_agent(server);
+
+	if (ret != LOTA_ERR_TOO_MANY_PROCESSES) {
+		FAIL("the refusal does not name the process limit");
+		return;
+	}
+	PASS();
+}
+
 typedef void (*scenario_fn)(int client_fd);
 
 static void test_connect_struct_size(void)
@@ -898,6 +961,7 @@ int main(void)
 	test_consent_required_is_distinguishable();
 	test_no_key_slot_is_distinguishable();
 	test_tpm_lockout_is_distinguishable();
+	test_process_limit_is_distinguishable();
 	test_connect_struct_size();
 	test_token_only_publisher_is_distinguishable();
 	test_flag_constants_agree();

@@ -740,6 +740,23 @@ static void test_no_consent_is_said_once(void)
 	      "an agreement in between makes a later refusal said again");
 }
 
+/* A reload keeps what the agent recorded about a publisher's processes. */
+static void test_a_reload_keeps_the_termination_record(void)
+{
+	struct attest_target t[1];
+	size_t n = 0;
+
+	CHECK(attest_targets_build(NULL, "verifier.example", 8443, NULL, 300, t,
+				   1, &n) == 0 &&
+		      n == 1,
+	      "one verifier builds one target");
+	t[0].protected_terminated = true;
+	CHECK(attest_targets_rebuild(NULL, "verifier.example", 8443, NULL, 300,
+				     t, 1, &n) == 0 &&
+		      n == 1 && t[0].protected_terminated,
+	      "the rebuilt target still says a process was ended");
+}
+
 int main(void)
 {
 	printf("=== Attestation target list tests ===\n\n");
@@ -761,6 +778,7 @@ int main(void)
 	test_an_unreadable_cert_confirms_nothing();
 	test_a_lost_key_is_enrolled_again_with_consent();
 	test_no_consent_is_said_once();
+	test_a_reload_keeps_the_termination_record();
 
 	printf("\n%s\n", g_failures ? "FAILURES" : "All tests passed");
 	return g_failures ? 1 : 0;

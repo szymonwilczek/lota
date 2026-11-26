@@ -350,13 +350,13 @@ per-request argument, because a title plays for one publisher: after it,
 ``GET_TOKEN`` quotes with that publisher's AIK and ``GET_STATUS`` answers with
 that publisher's verdict and validity window.
 
-The token carries the processes protected for that publisher: the ones named
-on a connection bound to it and the members of their instances. Its PID list,
-``runtime_protect_digest``, coverage flags and the per-token limit are taken
-over that part of the set, so one publisher's title neither sees another's
-processes nor loses coverage to them. A process named on a connection bound to
-no publisher, or protected by the startup policy, is carried by the host-wide
-answer and, on a host that serves one publisher, by that publisher's token.
+The token carries the processes of the caller's own instance, the one the
+kernel isolates it in. Its PID list, ``runtime_protect_digest``, coverage flags
+and the per-token limit are taken over that part of the set, so one title
+neither sees another instance's processes nor loses coverage to them, whichever
+publisher either one names. The publisher's name selects the AIK and the
+verdict and does not authenticate the title. A caller outside every instance,
+one that is not protected, gets a token of no processes.
 
 Three rules the agent holds to:
 
@@ -417,7 +417,7 @@ its own session, and its owner can end it with an ordinary signal anyway.
 
 The handler applies ``kill(2)``'s own rule -- the owner of the target, or root
 -- and nothing wider. It deliberately does **not** call
-``ipc_client_is_privileged()``, which ``UNPROTECT_PID`` and ``SHUTDOWN`` do:
+``ipc_client_is_privileged()``, which ``SHUTDOWN`` does:
 that gate demands a caller whose executable is on the operator's verity
 allowlist, which is empty on a default install, so requiring it here would
 reproduce the dead end the command exists to end. What keeps the widening
@@ -449,11 +449,18 @@ reaching it. A target that has exited by the time its owner is read, or has
 been reaped by the time the signal is sent, answers
 ``LOTA_IPC_ERR_BAD_REQUEST``.
 
-``LOTA_STATUS_PROTECTED_TERMINATED`` is then set for the rest of the boot. It
-is kept beside ``status_flags`` rather than inside it, because that word is
-republished wholesale on every attestation round; ``ipc_update_status`` folds
-it back in, so the status answer, the token and the D-Bus property carry it
-from one source. That agreement is load-bearing: the anti-cheat heartbeat
+The caller must run in the agent's PID namespace, since ``pid`` is read in it;
+one whose pidfd fdinfo lists more than one ``NSpid`` is refused with
+``LOTA_IPC_ERR_ACCESS_DENIED``.
+
+``LOTA_STATUS_PROTECTED_TERMINATED`` is then set for the rest of the boot: in
+the host's answer, and in the answers of the publisher the target was protected
+for, taken from the owner table before the signal. The host's bit is kept
+beside ``status_flags``, because that word is republished wholesale on every
+attestation round; ``ipc_update_status`` folds it back in. The publisher's bit
+lives on its profile, and ``client_attestation_view`` gives a connection that
+named a publisher that one in place of the host's, so the status answer, the
+token and the notification of one connection carry it from one source. That agreement is load-bearing: the anti-cheat heartbeat
 binds the flags it read from ``GET_STATUS`` into the nonce the token is quoted
 over, so a bit set in one and not the other surfaces as a nonce mismatch.
 
@@ -558,8 +565,9 @@ reordered or rewritten does not hash to the token's value. A list from another
 round does not either, so a relying party that checks the hash needs no further
 pairing; the ``round`` field only keeps the pages of one listing together.
 
-The owner of the process or root may read its registry, the callers that could
-read its ``maps`` themselves. A process the last round did not measure is
+The owner of the process may read its registry from inside the process's
+instance, the callers that could read its ``maps`` themselves; root outside the
+instance is refused too. A process the last round did not measure is
 answered ``LOTA_IPC_ERR_NOT_PROTECTED``.
 
 ``lota_get_registry()`` in ``liblotagaming`` fetches every page and starts over
@@ -640,7 +648,7 @@ value is what ties every other field in the token to the signature:
 
    extraData = SHA256(valid_until || flags || pcr_mask || nonce ||
                       policy_digest || runtime_protect_digest ||
-                      runtime_protect_epoch || stopped_ms)
+                      stopped_ms)
 
 Integers are little-endian. Three implementations must agree on it byte for
 byte: the agent that builds the quote

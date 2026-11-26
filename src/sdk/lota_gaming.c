@@ -333,6 +333,8 @@ static int ipc_result_to_error(uint32_t result)
 		return LOTA_ERR_TPM_LOCKED;
 	case LOTA_IPC_ERR_NOT_PROTECTED:
 		return LOTA_ERR_NOT_PROTECTED;
+	case LOTA_IPC_ERR_TOO_MANY_PROTECTED_PIDS:
+		return LOTA_ERR_TOO_MANY_PROCESSES;
 	case LOTA_IPC_ERR_TPM_FAILURE:
 	case LOTA_IPC_ERR_INTERNAL:
 	default:
@@ -713,7 +715,6 @@ int lota_protect_self(struct lota_client *client)
 		return LOTA_ERR_NOT_CONNECTED;
 
 	memset(&body, 0, sizeof(body));
-	body.pid = (uint32_t)getpid();
 
 	memset(&req, 0, sizeof(req));
 	req.magic = LOTA_IPC_MAGIC;
@@ -861,7 +862,6 @@ int lota_get_token(struct lota_client *client, const uint8_t *nonce,
 	memcpy(token->runtime_protect_digest,
 	       ipc_token_hdr.runtime_protect_digest,
 	       sizeof(token->runtime_protect_digest));
-	token->runtime_protect_epoch = ipc_token_hdr.runtime_protect_epoch;
 	token->runtime_protect_version = ipc_token_hdr.runtime_protect_version;
 	token->stopped_ms = ipc_token_hdr.stopped_ms;
 	token->protect_pid_count = ipc_token_hdr.protect_pid_count;
@@ -1122,7 +1122,6 @@ int lota_token_serialize(const struct lota_token *token, uint8_t *buf,
 	       sizeof(wire.policy_digest));
 	memcpy(wire.runtime_protect_digest, token->runtime_protect_digest,
 	       sizeof(wire.runtime_protect_digest));
-	wire.runtime_protect_epoch = htole64(token->runtime_protect_epoch);
 	wire.protect_pid_count = htole32(token->protect_pid_count);
 	wire.pid_list_size = htole16(
 		(uint16_t)(token->protect_pid_count * sizeof(uint32_t)));
@@ -1650,6 +1649,8 @@ const char *lota_strerror(int error)
 		return "The TPM on this machine is locked out after too many failed authorizations and signs nothing until it is cleared";
 	case LOTA_ERR_NOT_PROTECTED:
 		return "The last token round did not measure that process";
+	case LOTA_ERR_TOO_MANY_PROCESSES:
+		return "More processes are protected than one token lists";
 	default:
 		return "Unknown error";
 	}

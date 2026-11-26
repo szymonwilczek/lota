@@ -318,8 +318,8 @@ Worth being precise about, because it decides what you can build on it:
 
 * Which code objects the process mapped executable since it was protected,
   the unmeasured ones and those it already dropped included.
-  ``lota_get_registry()`` lists them for a protected PID as the last token
-  round found them: size, inode and, where one was taken, the digest; the
+  ``lota_get_registry()`` lists them for a protected PID of the caller's own
+  instance as the last token round found them: size, inode and, where one was taken, the digest; the
   path for an object still mapped, ``LOTA_REGISTRY_OBJECT_UNMAPPED`` and the
   file's name for one that is gone. A refused mapping is listed too.
   ``LOTA_REGISTRY_OBJECT_WRITABLE`` says another process could write the
@@ -357,13 +357,14 @@ Worth being precise about, because it decides what you can build on it:
   launcher, is your policy. The actors are in the same hash, so a list with one
   dropped does not match.
 
-* Whether a protected process was ended through the agent on that host since
-  it booted. The agent relays a termination only for the process's owner or
-  root, and ``LOTA_FLAG_PROTECTED_TERMINATED`` says on every later token that
-  it happened; an ordinary signal ends the process too, without the flag. Ordinarily it means exactly that. Read
-  together with the protected set the token carries, it is also how a session
-  that ended locally is told apart from a process that vanished, which is the
-  case worth a second look if the process that left was yours.
+* Whether a process protected for your publisher was ended through the agent
+  on that host since it booted. The agent relays a termination only for the
+  process's owner or root, and ``LOTA_FLAG_PROTECTED_TERMINATED`` says on every
+  later token of your publisher that it happened; a termination of another
+  publisher's process does not set it there, and an ordinary signal ends the
+  process too, without the flag. Read together with the protected set the
+  token carries, it is how a session that ended locally is told apart from a
+  process that vanished.
 
 * Whether the agent answering is the first of that boot.
   ``LOTA_FLAG_AGENT_RESTARTED`` says an earlier agent ended without a shutdown

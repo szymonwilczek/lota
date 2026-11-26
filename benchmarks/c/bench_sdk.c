@@ -113,7 +113,6 @@ static int build_token(struct sdk_ctx *x)
 		x->tok.policy_digest[i] = (uint8_t)(i * 3);
 	for (size_t i = 0; i < sizeof(x->tok.runtime_protect_digest); i++)
 		x->tok.runtime_protect_digest[i] = (uint8_t)(i * 5);
-	x->tok.runtime_protect_epoch = 42;
 	x->tok.protect_pid_count = 0;
 	x->tok.protected_pids = NULL;
 	/* Serializers refuse version 0 */

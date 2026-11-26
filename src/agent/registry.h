@@ -28,6 +28,7 @@
 
 struct registry_process {
 	uint32_t pid;
+	uint64_t start_ticks; /* of @pid when measured */
 	uint32_t uid; /* owner when measured */
 	uint16_t flags; /* LOTA_IPC_REGISTRY_* */
 	uint8_t registry_digest[32];
@@ -64,6 +65,7 @@ static inline void registry_clear(struct registry *r)
  * registry_add() - Append a copy of one process's lists.
  * @r: The registry.
  * @pid: The process.
+ * @start_ticks: Its start time when measured.
  * @uid: Its owner when measured.
  * @flags: LOTA_IPC_REGISTRY_* other than MEASURED.
  * @digest: The token's entry, or NULL when the round put none there.
@@ -74,12 +76,11 @@ static inline void registry_clear(struct registry *r)
  *
  * Return: 0, -EINVAL or -ENOMEM; on failure @r is unchanged.
  */
-static inline int registry_add(struct registry *r, uint32_t pid, uint32_t uid,
-			       uint16_t flags, const uint8_t *digest,
-			       const struct lota_rt_object_record *objs,
-			       size_t n,
-			       const struct lota_ipc_registry_actor *actors,
-			       size_t n_actors)
+static inline int
+registry_add(struct registry *r, uint32_t pid, uint64_t start_ticks,
+	     uint32_t uid, uint16_t flags, const uint8_t *digest,
+	     const struct lota_rt_object_record *objs, size_t n,
+	     const struct lota_ipc_registry_actor *actors, size_t n_actors)
 {
 	struct registry_process *procs;
 	struct registry_process *p;
@@ -115,6 +116,7 @@ static inline int registry_add(struct registry *r, uint32_t pid, uint32_t uid,
 	p = &r->procs[r->count++];
 	memset(p, 0, sizeof(*p));
 	p->pid = pid;
+	p->start_ticks = start_ticks;
 	p->uid = uid;
 	p->count = n;
 	p->objects = copy;
@@ -144,10 +146,11 @@ static inline void registry_replace(struct registry *cur, struct registry *next)
 }
 
 static inline const struct registry_process *
-registry_find(const struct registry *r, uint32_t pid)
+registry_find(const struct registry *r, uint32_t pid, uint64_t start_ticks)
 {
 	for (size_t i = 0; r && i < r->count; i++) {
-		if (r->procs[i].pid == pid)
+		if (r->procs[i].pid == pid &&
+		    r->procs[i].start_ticks == start_ticks)
 			return &r->procs[i];
 	}
 	return NULL;

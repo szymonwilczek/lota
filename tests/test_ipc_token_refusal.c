@@ -133,6 +133,18 @@ int bpf_loader_get_refusal(struct bpf_loader_ctx *ctx, int pidfd,
 	return -ENOENT;
 }
 
+int bpf_loader_task_instance(struct bpf_loader_ctx *ctx, int pidfd,
+			     uint32_t pid, uint32_t *root_tgid,
+			     uint64_t *root_start_ticks)
+{
+	(void)ctx;
+	(void)pidfd;
+	(void)pid;
+	(void)root_tgid;
+	(void)root_start_ticks;
+	return 0;
+}
+
 int bpf_loader_instance_stopped_ms(struct bpf_loader_ctx *ctx, uint32_t pid,
 				   uint64_t *ms)
 {

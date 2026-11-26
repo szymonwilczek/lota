@@ -69,6 +69,11 @@ enum lota_error {
 	 * protected it, or it exited before the round reached it.
 	 */
 	LOTA_ERR_NOT_PROTECTED = -19,
+	/*
+	 * The caller's instance holds more protected processes than one token
+	 * lists; a token is issued again once enough of them exit.
+	 */
+	LOTA_ERR_TOO_MANY_PROCESSES = -20,
 };
 
 #define LOTA_FLAG_ATTESTED (1 << 0)
@@ -101,11 +106,10 @@ enum lota_error {
 #define LOTA_FLAG_IMAGE_FULLY_MEASURED (1 << 9)
 
 /*
- * A protected process was ended through this agent, for its owner or root. An
- * ordinary signal reaches it as well; this route leaves a record. The flag is
- * host-wide; the protected set the token carries shows which of the publisher's
- * own processes left. Set until the agent ends; a restart shows as
- * LOTA_FLAG_AGENT_RESTARTED.
+ * A protected process was ended through this agent, for its owner or root:
+ * one protected for the publisher the connection named, or any one when it
+ * named none. An ordinary signal reaches it as well; this route leaves a
+ * record. Set until the agent ends; a restart shows as LOTA_FLAG_AGENT_RESTARTED.
  */
 #define LOTA_FLAG_PROTECTED_TERMINATED (1 << 10)
 
@@ -208,7 +212,6 @@ struct lota_token {
 
 	/* SHA-256 over the protected PIDs and their registry digests */
 	uint8_t runtime_protect_digest[32];
-	uint64_t runtime_protect_epoch; /* Monotonic PID-set mutation id */
 	uint16_t runtime_protect_version; /* 1 = PID set + registry digests */
 	uint32_t protect_pid_count;
 	uint32_t *protected_pids; /* heap-allocated canonical list */
@@ -240,14 +243,15 @@ struct lota_connect_opts {
 	/*
 	 * Hex SHA-256 of the publisher's attestation-CA trust anchor
 	 * SubjectPublicKeyInfo. Selects the AIK that signs this connection's
-	 * tokens, the protected processes they carry and the verdict
-	 * lota_is_attested() reports.
+	 * tokens and the verdict lota_is_attested() reports. It does not
+	 * authenticate the title: a token carries the processes of the
+	 * caller's own instance, whichever publisher it names.
 	 *
-	 * With NULL, a single-publisher host answers with its one profile,
-	 * the whole protected set and the host-wide verdict; a host that answers
-	 * for several refuses a token. The connection fails when the agent
-	 * cannot answer for the publisher named: falling back would hand the
-	 * title another publisher's evidence.
+	 * With NULL, a single-publisher host answers with its one profile and
+	 * the host-wide verdict; a host that answers for several refuses a
+	 * token. The connection fails when the agent cannot answer for the
+	 * publisher named: falling back would hand the title another
+	 * publisher's evidence.
 	 */
 	const char *publisher_profile;
 };
@@ -333,9 +337,9 @@ int lota_ping(struct lota_client *client, uint64_t *uptime_sec);
  * lota_protect_self() - Register the calling process as protected.
  * @client: connection from lota_connect().
  *
- * The agent checks that the connection's SO_PEERCRED PID is the target and that
- * its start time still matches, so a recycled PID cannot use a prior
- * registration. No trusted executable is needed: opting in to stricter
+ * The agent protects the process that opened the connection, by its pidfd from
+ * SO_PEERPIDFD, under its PID in the agent's PID namespace; no PID crosses the
+ * socket. No trusted executable is needed: opting in to stricter
  * enforcement is not a privilege escalation. A second call from the same task
  * leaves the runtime PID set alone and, unless rate limited, returns LOTA_OK.
  *
@@ -346,9 +350,10 @@ int lota_ping(struct lota_client *client, uint64_t *uptime_sec);
  * Under strict_mmap a protected task maps only files with an allowed fs-verity
  * digest or a trusted_libs inode.
  *
- * Return: LOTA_OK, LOTA_ERR_ACCESS_DENIED if the PID identity check fails or a
- * tracer already holds the process, LOTA_ERR_RATE_LIMITED if the caller's UID
- * exceeded the rate window, or another negative LOTA_ERR_*.
+ * Return: LOTA_OK, LOTA_ERR_ACCESS_DENIED if the process exited, runs in a PID
+ * namespace outside the agent's or a tracer already holds it,
+ * LOTA_ERR_RATE_LIMITED if the caller's UID exceeded the rate window,
+ * or another negative LOTA_ERR_*.
  */
 int lota_protect_self(struct lota_client *client);
 
@@ -378,7 +383,8 @@ int lota_is_attested(struct lota_client *client);
  *
  * Return: LOTA_OK, LOTA_ERR_NOT_ATTESTED if no valid attestation exists,
  * LOTA_ERR_UNKNOWN_PROFILE if the connection named no publisher on a host that
- * answers for several, or another negative LOTA_ERR_*.
+ * answers for several, LOTA_ERR_TOO_MANY_PROCESSES past the token's process
+ * limit, or another negative LOTA_ERR_*.
  */
 int lota_get_token(struct lota_client *client, const uint8_t *nonce,
 		   struct lota_token *token);
@@ -604,7 +610,7 @@ struct lota_registry {
 /**
  * lota_get_registry() - Fetch what the last token round found in a process.
  * @client: connection from lota_connect().
- * @pid: a protected process the caller owns, any one for root.
+ * @pid: a protected process the caller owns, of the caller's own instance.
  * @out: receives a registry to release with lota_registry_free().
  *
  * Objects the agent could not measure are listed too. The LOTA_REGISTRY_* flags
@@ -615,8 +621,8 @@ struct lota_registry {
  * A relying party checks both before trusting the list.
  *
  * Return: LOTA_OK, LOTA_ERR_NOT_PROTECTED for a process the last round did not
- * measure, LOTA_ERR_ACCESS_DENIED for somebody else's, or another negative
- * LOTA_ERR_*.
+ * measure, LOTA_ERR_ACCESS_DENIED for one of another owner or instance,
+ * or another negative LOTA_ERR_*.
  */
 int lota_get_registry(struct lota_client *client, uint32_t pid,
 		      struct lota_registry **out);

@@ -485,8 +485,8 @@ Active threats
        | ``lota-agent --terminate-protected`` relays ``SIGTERM`` or
          ``SIGKILL`` for a caller ``kill(2)`` would have allowed and leaves a
          record. Every relayed termination is journalled, and the host reports
-         ``PROTECTED_TERMINATED`` in its status word and in every token it
-         issues until it reboots.
+         ``PROTECTED_TERMINATED`` in its status word and in every token of the
+         target's publisher until it reboots.
        | That record ends with the agent. An agent restarted within the boot
          finds PCR 14 already committed, which only a shutdown would have
          spent, and reports ``AGENT_RESTARTED`` until the reboot: a restart

@@ -375,14 +375,15 @@ The agent can also deliver the signal on request, and record that it did::
 
 It answers for whoever ``kill(2)`` would already have allowed -- the owner of
 the process, or root -- so a player ends their own game as themselves, with no
-``sudo``. It reports how many other processes are still protected, not
-counting the one it signalled. Nothing else widens: only ``SIGTERM`` and
+``sudo``. It reports how many other processes in the signalled one's process
+tree are still protected. Nothing else widens: only ``SIGTERM`` and
 ``SIGKILL`` are relayed, a process nobody protected is refused, and the agent
 will not end itself this way.
 
 The exchange is that the host says so. Every relayed termination is journalled
 with the target, its owner and the caller, and the host reports
-``PROTECTED_TERMINATED`` in its status and in every token until it reboots.
+``PROTECTED_TERMINATED`` in its status and in every token of that game's
+publisher until it reboots.
 An agent that ends some other way and is started again in the same boot has
 lost that record, and reports ``AGENT_RESTARTED`` until the reboot instead.
 A publisher then sees a session that was ended on the machine rather than a
