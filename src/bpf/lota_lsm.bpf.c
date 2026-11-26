@@ -218,6 +218,25 @@ struct {
 } instance_stops SEC(".maps");
 
 /*
+ * The last executable mapping refused a process, held on its group leader.
+ * The agent reads it through the caller's pidfd, under the lock: a process
+ * that takes the PID later is another task and has none.
+ */
+struct lota_refusal_entry {
+	struct bpf_spin_lock lock;
+	u32 pad;
+	u64 at_ns;
+	char object[LOTA_MAX_PATH_LEN];
+};
+
+struct {
+	__uint(type, BPF_MAP_TYPE_TASK_STORAGE);
+	__uint(map_flags, BPF_F_NO_PREALLOC);
+	__type(key, int);
+	__type(value, struct lota_refusal_entry);
+} lota_refusal SEC(".maps");
+
+/*
  * Scratch holds what the kernel writes and the key built from it.
  * The kernel fills a struct fsverity_digest -- header, then digest
  * -- so the raw buffer is not itself a key.
@@ -695,6 +714,8 @@ static __always_inline int is_lota_managed_map(struct bpf_map *map)
 		return 1;
 	if (__builtin_memcmp(name, "born_protected",
 			     sizeof("born_protected")) == 0)
+		return 1;
+	if (__builtin_memcmp(name, "lota_refusal", sizeof("lota_refusal")) == 0)
 		return 1;
 	if (__builtin_memcmp(name, "exe_hash_slots",
 			     sizeof("exe_hash_slots")) == 0)
@@ -2023,6 +2044,47 @@ static __always_inline int is_anon_memory_file(struct file *file)
 }
 
 /*
+ * Keep @file as the current process's last refused mapping: its path when
+ * @full_path, which only a sleepable hook resolves, else or failing that its
+ * name. Not an event, so the event budget does not drop it.
+ */
+static __always_inline void note_refusal(struct file *file, int full_path)
+{
+	union {
+		char str[LOTA_MAX_PATH_LEN];
+		u64 align;
+	} object;
+	struct lota_refusal_entry *entry;
+	const unsigned char *name;
+	struct task_struct *task;
+	u64 now = bpf_ktime_get_ns();
+	long ret = -1;
+
+	__builtin_memset(&object, 0, sizeof(object));
+	if (full_path)
+		ret = bpf_d_path((struct path *)&file->f_path, object.str,
+				 sizeof(object.str));
+	if (ret < 0) {
+		name = BPF_CORE_READ(file, f_path.dentry, d_name.name);
+		if (!name || bpf_probe_read_kernel_str(
+				     object.str, sizeof(object.str), name) < 0)
+			return;
+	}
+
+	task = (struct task_struct *)bpf_get_current_task_btf();
+	bpf_rcu_read_lock();
+	entry = bpf_task_storage_get(&lota_refusal, auth_subject_task(task), 0,
+				     BPF_LOCAL_STORAGE_GET_F_CREATE);
+	if (entry) {
+		bpf_spin_lock(&entry->lock);
+		entry->at_ns = now;
+		__builtin_memcpy(entry->object, object.str, sizeof(object.str));
+		bpf_spin_unlock(&entry->lock);
+	}
+	bpf_rcu_read_unlock();
+}
+
+/*
  * Anonymous memory made executable: @file is NULL or an is_anon_memory_file().
  * With block_anon_exec a protected task is refused. A memory file reports only
  * its refusal; allowed, it goes on as a file mapping.
@@ -2083,6 +2145,8 @@ static __always_inline int anon_exec_refused(struct file *file, u32 mode,
 
 	if (blocked) {
 		inc_stat(STAT_ANON_EXEC_BLOCKED);
+		if (file)
+			note_refusal(file, 0);
 		return 1;
 	}
 
@@ -2187,6 +2251,7 @@ int BPF_PROG(lota_mmap_file, struct file *file, unsigned long reqprot,
 
 	if (blocked) {
 		inc_stat(STAT_MMAP_BLOCKED);
+		note_refusal(file, 1);
 		return -EPERM;
 	}
 
@@ -2315,6 +2380,7 @@ int BPF_PROG(lota_file_mprotect, struct vm_area_struct *vma,
 
 	if (blocked) {
 		inc_stat(STAT_MMAP_BLOCKED);
+		note_refusal(file, 0);
 		return -EPERM;
 	}
 

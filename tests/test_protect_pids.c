@@ -138,62 +138,6 @@ static void test_adopt(void)
 	}
 }
 
-static void test_refusals(void)
-{
-	struct protect_refusal_slot table[2];
-	const struct lota_ipc_refusal *r;
-	char longpath[400];
-
-	memset(table, 0, sizeof(table));
-	protect_refusal_record(table, 2, 10, 7, 100, "/opt/game/lib/libdep.so");
-	protect_refusal_record(table, 2, 20, 7, 200, "/opt/other/libx.so");
-
-	r = protect_refusal_find(table, 2, 10, 7);
-	CHECK(r && r->at_ns == 100 &&
-		      strcmp(r->object, "/opt/game/lib/libdep.so") == 0,
-	      "a process finds its own refusal");
-	CHECK(!protect_refusal_find(table, 2, 30, 7),
-	      "a process with no refusal is given none of another's");
-
-	protect_refusal_record(table, 2, 10, 7, 300,
-			       "/opt/game/lib/libdep2.so");
-	r = protect_refusal_find(table, 2, 10, 7);
-	CHECK(r && r->at_ns == 300 &&
-		      strcmp(r->object, "/opt/game/lib/libdep2.so") == 0,
-	      "a later refusal replaces the process's earlier one");
-	r = protect_refusal_find(table, 2, 20, 7);
-	CHECK(r && strcmp(r->object, "/opt/other/libx.so") == 0,
-	      "a refusal leaves another process's alone");
-
-	protect_refusal_record(table, 2, 30, 7, 400, "/opt/third/liby.so");
-	CHECK(!protect_refusal_find(table, 2, 20, 7) &&
-		      protect_refusal_find(table, 2, 10, 7) &&
-		      protect_refusal_find(table, 2, 30, 7),
-	      "a full table gives the oldest refusal's slot to a new process");
-
-	CHECK(!protect_refusal_find(table, 2, 10, 8),
-	      "a later process given the PID finds none of the refusal");
-	protect_refusal_record(table, 2, 10, 8, 450, "/opt/new/libz.so");
-	r = protect_refusal_find(table, 2, 10, 8);
-	CHECK(r && strcmp(r->object, "/opt/new/libz.so") == 0 &&
-		      !protect_refusal_find(table, 2, 10, 7),
-	      "a later process's refusal replaces the earlier one's");
-
-	/* 10 ms ticks; the refusal at 1.234 s of boot is in tick 123 */
-	CHECK(!protect_started_after(100, 10000000, 1234000000) &&
-		      !protect_started_after(123, 10000000, 1234000000),
-	      "the refused process started before or in the refusal's tick");
-	CHECK(protect_started_after(124, 10000000, 1234000000),
-	      "a process started after the refusal is told apart");
-
-	memset(longpath, 'a', sizeof(longpath) - 1);
-	longpath[sizeof(longpath) - 1] = '\0';
-	protect_refusal_record(table, 2, 30, 7, 500, longpath);
-	r = protect_refusal_find(table, 2, 30, 7);
-	CHECK(r && strlen(r->object) == sizeof(r->object) - 1,
-	      "a path longer than the slot is cut and terminated");
-}
-
 int main(void)
 {
 	uint32_t out[8];
@@ -278,7 +222,6 @@ int main(void)
 	}
 
 	test_adopt();
-	test_refusals();
 
 	printf("\n%s\n", g_failures ? "FAILURES" : "All tests passed");
 	return g_failures ? 1 : 0;

@@ -54,6 +54,8 @@ __wrap_ring_buffer__new(int map_fd, ring_buffer_sample_fn sample_cb, void *ctx,
 			const struct ring_buffer_opts *opts);
 int __wrap_bpf_map_get_next_key(int fd, const void *key, void *next_key);
 int __wrap_bpf_map_lookup_elem(int fd, const void *key, void *value);
+int __wrap_bpf_map_lookup_elem_flags(int fd, const void *key, void *value,
+				     __u64 flags);
 int __wrap_bpf_map_delete_elem(int fd, const void *key);
 int __wrap_bpf_map_update_elem(int fd, const void *key, const void *value,
 			       __u64 flags);
@@ -138,6 +140,17 @@ static int g_task_marked;
 static struct lota_exe_hash_slot g_pin_answer;
 static int g_pin_updates;
 
+/* lota_refusal, as the gate lays its value out; one pidfd holds an entry */
+#define FAKE_REFUSAL_FD 11
+static struct {
+	uint32_t lock;
+	uint32_t pad;
+	uint64_t at_ns;
+	char object[256];
+} g_refusal;
+static int g_refusal_pidfd = -1;
+static __u64 g_refusal_flags;
+
 static struct {
 	size_t ksz;
 	size_t vsz;
@@ -197,6 +210,18 @@ int __wrap_bpf_map_lookup_elem(int fd, const void *key, void *value)
 	if (at < 0)
 		return -ENOENT;
 	memcpy(value, g_map.vals[at], g_map.vsz);
+	return 0;
+}
+
+int __wrap_bpf_map_lookup_elem_flags(int fd, const void *key, void *value,
+				     __u64 flags)
+{
+	g_refusal_flags = flags;
+	if (fd != FAKE_REFUSAL_FD || *(const int *)key != g_refusal_pidfd) {
+		errno = ENOENT;
+		return -ENOENT;
+	}
+	memcpy(value, &g_refusal, sizeof(g_refusal));
 	return 0;
 }
 
@@ -387,6 +412,43 @@ static void test_born_protected(void)
 	      "withdrawing protection takes the mark with it");
 }
 
+static void test_refusal(void)
+{
+	struct bpf_loader_ctx ctx;
+	char object[256];
+	char small[8];
+	uint64_t at_ns = 0;
+
+	memset(&ctx, 0, sizeof(ctx));
+	ctx.loaded = true;
+	ctx.refusal_fd = -1;
+	memcpy(object, "untouched", 10);
+	CHECK(bpf_loader_get_refusal(&ctx, 3, &at_ns, object, sizeof(object)) ==
+			      -ENOENT &&
+		      at_ns == 0 && strcmp(object, "untouched") == 0,
+	      "without the map no refusal is named");
+
+	ctx.refusal_fd = FAKE_REFUSAL_FD;
+	g_refusal_pidfd = 5;
+	g_refusal.at_ns = 1234;
+	memset(g_refusal.object, 'a', sizeof(g_refusal.object));
+	CHECK(bpf_loader_get_refusal(&ctx, 4, &at_ns, object, sizeof(object)) ==
+			      -ENOENT &&
+		      at_ns == 0 && strcmp(object, "untouched") == 0,
+	      "another process's pidfd gets none of the refusal");
+
+	CHECK(bpf_loader_get_refusal(&ctx, 5, &at_ns, object, sizeof(object)) ==
+			      0 &&
+		      at_ns == 1234 && strlen(object) == 255 &&
+		      g_refusal_flags == BPF_F_LOCK,
+	      "the refusal is read whole under the lock and terminated");
+
+	CHECK(bpf_loader_get_refusal(&ctx, 5, &at_ns, small, sizeof(small)) ==
+			      0 &&
+		      strcmp(small, "aaaaaaa") == 0,
+	      "a short buffer takes the start of the object");
+}
+
 static int pin_once(struct bpf_loader_ctx *ctx, const char *path,
 		    const struct stat *st, uint32_t guard, uint32_t seen,
 		    uint32_t writers)
@@ -574,6 +636,7 @@ int main(void)
 	test_exec_history_past_first_buffer();
 	test_instance_actors_walk();
 	test_born_protected();
+	test_refusal();
 	test_pin_answer();
 
 	if (g_failures) {

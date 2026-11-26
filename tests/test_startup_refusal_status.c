@@ -39,16 +39,9 @@ const char *mode_to_string(int mode)
 	return "monitor";
 }
 
-/* No socket owner here, so no verdict to drop and no refusal to keep */
+/* No socket owner here, so no verdict to drop */
 void ipc_runtime_coverage_forget(void)
 {
-}
-
-void ipc_note_refusal(uint32_t tgid, uint64_t at_ns, const char *object)
-{
-	(void)tgid;
-	(void)at_ns;
-	(void)object;
 }
 
 /* Secure Boot off: no lockdown, the floor answers -EPERM */

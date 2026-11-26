@@ -1318,6 +1318,7 @@ $(BUILD_DIR)/test_bpf_loader_open_fails_closed: TEST_LDLIBS += \
 	-Wl,--wrap=ring_buffer__new \
 	-Wl,--wrap=bpf_map_get_next_key \
 	-Wl,--wrap=bpf_map_lookup_elem \
+	-Wl,--wrap=bpf_map_lookup_elem_flags \
 	-Wl,--wrap=bpf_map_delete_elem \
 	-Wl,--wrap=bpf_map_update_elem
 
@@ -1460,8 +1461,7 @@ $(BUILD_DIR)/test_profile_id: $(addprefix $(AGENT_DIR)/,profile.c publishers.c e
 	aik_cert.c io_utils.c)
 $(BUILD_DIR)/test_profile_id: TEST_LDLIBS := -lcrypto
 
-$(BUILD_DIR)/test_protect_pids: $(AGENT_DIR)/protect_pids.h \
-	$(INC_DIR)/lota_ipc.h
+$(BUILD_DIR)/test_protect_pids: $(AGENT_DIR)/protect_pids.h
 $(BUILD_DIR)/test_ptrace_policy: $(INC_DIR)/lota.h
 
 $(BUILD_DIR)/test_publisher_profile: $(SDK_DIR)/lota_gaming.c $(VERSION_FILE)
