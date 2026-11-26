@@ -236,12 +236,17 @@ expiry (it re-enrolls once the cert enters its final third of validity, backing
 off when the CA is unreachable). The renewal is automatic whenever an endpoint
 is on disk, so an enrolled host needs no scheduled ``--reenroll``. The same
 guided command stays available as a manual override -- before the certificate
-TTL expires, or after ``--reprovision-aik`` replaces the AIK -- naming only the
-anchor that selects the profile:
+TTL expires, or after ``--reprovision-aik`` replaces the AIK. Alone it
+re-enrolls each publisher whose certificate does not name the key at its
+handle; ``--publisher`` names one, by the ID ``--list-publishers`` prints:
 
 .. code-block:: sh
 
-    sudo lota-agent --reenroll --ca-cert ca.crt
+    sudo lota-agent --reenroll --publisher <id>
+
+The anchor is the one the enrollment record names; the first enrollment
+records it as an absolute path. An anchor moved since is named with
+``--publisher <id> --ca-cert <path>``, and must be that publisher's.
 
 ``--reenroll`` needs the endpoint the first enrollment recorded. With no
 record it points at ``--enroll``; with an unreadable one it names the file,
@@ -260,7 +265,7 @@ the recorded host:
 
 .. code-block:: sh
 
-    sudo lota-agent --reenroll --ca-cert ca.crt \
+    sudo lota-agent --reenroll --publisher <id> \
         --ca-server ca.example --ca-port 8545
 
 The run prints the endpoint it dialled (and the recorded one, when they
@@ -442,7 +447,7 @@ round when they differ:
          certificate was issued over, so every quote would be refused by the
          TPM and each refusal spends a dictionary-attack attempt. No round is
          attempted until they issue a certificate for the key that is here
-         now: lota-agent --reenroll --ca-cert <their anchor>. Publisher: ...
+         now. A TPM clear does this. Publisher: ...
 
 ``--list-publishers`` reports the same state, since it is the surface to check
 first -- everything else it prints survives the key being replaced:
@@ -454,11 +459,16 @@ first -- everything else it prints survives the key being replaced:
       certificate    39566 s of validity left
       BROKEN         the key at that handle is not the key this certificate
                      was issued over, so every quote is refused. Re-enroll
-                     this publisher: lota-agent --reenroll --ca-cert <anchor>
+                     this publisher: lota-agent --reenroll --publisher <id>
 
-The remedy is the one both messages name: re-enroll that publisher, which
-issues a certificate for the key the TPM holds now. The agent picks the change
-up on its next round, with no restart.
+The remedy is to re-enroll that publisher, which issues a certificate for the
+key the TPM holds now. Where consent to the publisher is recorded, the
+attestation loop does it in the same round, with the endpoint, anchor and token
+the enrollment recorded, and reports ``REENROLLING`` in the status word until
+the certificate names the key; a failed attempt is retried with backoff. With
+no consent recorded it says so once, names ``lota-agent --reenroll
+--publisher <id>``, and the publisher stays not attested. The agent picks a
+manual re-enrollment up on its next round, with no restart.
 
 Both this refusal and a TPM authorization failure are said **once** and do not
 shorten the interval. A credential that is wrong is wrong on the next attempt

@@ -144,11 +144,14 @@ void print_usage(const char *prog, const char *default_bpf_path,
 	printf("  --enroll          Enroll the AIK with the attestation CA via\n");
 	printf("                    credential activation and store the issued\n");
 	printf("                    certificate, then exit\n");
-	printf("  --reenroll        Re-enroll using the endpoint saved by the\n");
-	printf("                    last --enroll against the same --ca-cert,\n");
-	printf("                    then exit. --ca-server and --ca-port\n");
-	printf("                    override that endpoint, for a CA that has\n");
-	printf("                    moved since\n");
+	printf("  --reenroll        Re-enroll each publisher whose\n");
+	printf("                    certificate does not name the key at\n");
+	printf("                    its handle, with the endpoint and\n");
+	printf("                    anchor its --enroll recorded, then exit\n");
+	printf("  --publisher ID    With --reenroll: that publisher only.\n");
+	printf("                    --ca-server, --ca-port and --ca-cert\n");
+	printf("                    then override the recorded endpoint\n");
+	printf("                    and anchor, for ones moved since\n");
 	printf("  --ca-server HOST  Attestation CA address (required by "
 	       "--enroll)\n");
 	printf("  --ca-port PORT    Attestation CA port (default: %d)\n",
@@ -224,8 +227,7 @@ void print_usage(const char *prog, const char *default_bpf_path,
 	printf("                    TLS peer (default: system CA store) and\n");
 	printf("                    names the publisher profile the AIK\n");
 	printf("                    certificate and enrollment record live\n");
-	printf("                    in, so --enroll and --reenroll require "
-	       "it\n");
+	printf("                    in, so --enroll requires it\n");
 	printf("  --no-verify-tls   Disable TLS certificate verification "
 	       "(INSECURE)\n");
 	printf("                    Only for development/testing!\n");

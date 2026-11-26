@@ -313,16 +313,22 @@ static inline int enroll_endpoint_port(int recorded_port, int given_port)
 
 /**
  * do_reenroll() - Enroll again with the recorded endpoint: --reenroll.
- * @ca_cert: CA trust anchor; it selects the record.
- * @ca_server: Host overriding the record, or NULL.
- * @ca_port: Port overriding the record, or 0.
+ * @profile_id: Publisher to enroll again, or NULL for each one whose
+ *	certificate does not name the key at its handle.
+ * @ca_server: Host overriding the record, or NULL; needs @profile_id.
+ * @ca_port: Port overriding the record, or 0; needs @profile_id.
+ * @ca_cert: Anchor overriding the record, or NULL; needs @profile_id and
+ *	must name it.
  *
- * TLS, pin and token come from the record. A record that does not load is
- * refused, not enrolled over.
+ * What is not overridden comes from the record, as do TLS, pin and token.
+ * A record that does not load is refused, not enrolled over.
+ * With no @profile_id, a publisher whose key cannot be checked is named,
+ * not enrolled, and makes the exit code 1.
  *
  * Return: exit code 0 or 1.
  */
-int do_reenroll(const char *ca_cert, const char *ca_server, int ca_port);
+int do_reenroll(const char *profile_id, const char *ca_server, int ca_port,
+		const char *ca_cert);
 
 /**
  * enroll_renew_cert() - Renew a profile's certificate from inside the daemon.

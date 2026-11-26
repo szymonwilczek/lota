@@ -950,8 +950,9 @@ static void handle_ping(struct ipc_context *ctx, struct ipc_client *client)
 
 /*
  * The attestation answer this connection gets: the host's, unless it named a
- * publisher. Then that publisher decides ATTESTED and valid_until, and one
- * without a verifier also sets TOKEN_ONLY. The other bits stay the host's.
+ * publisher. Then that publisher decides ATTESTED, REENROLLING and
+ * valid_until, and one without a verifier also sets TOKEN_ONLY.
+ * The other bits stay the host's.
  */
 static void client_attestation_view(const struct ipc_context *ctx,
 				    const struct ipc_client *client,
@@ -962,6 +963,11 @@ static void client_attestation_view(const struct ipc_context *ctx,
 
 	if (!client->profile)
 		return;
+
+	if (client->profile->reenrolling)
+		*flags |= LOTA_STATUS_REENROLLING;
+	else
+		*flags &= ~(uint32_t)LOTA_STATUS_REENROLLING;
 
 	/* never reported to, so this host holds no verdict of theirs */
 	if (client->profile->token_only) {
@@ -2167,6 +2173,11 @@ static void recompute_host_attestation(struct ipc_context *ctx)
 	else
 		flags &= ~(uint32_t)LOTA_STATUS_TOKEN_ONLY;
 
+	if (agg.reenrolling)
+		flags |= LOTA_STATUS_REENROLLING;
+	else
+		flags &= ~(uint32_t)LOTA_STATUS_REENROLLING;
+
 	/* the update lands while this process runs */
 	if (agent_binary_replaced_on_disk())
 		flags |= LOTA_STATUS_UPDATE_PENDING;
@@ -2296,6 +2307,7 @@ static void handle_sync_attest(struct ipc_context *ctx,
 				continue;
 
 			ctx->profiles[j].attested = v.attested != 0;
+			ctx->profiles[j].reenrolling = v.reenrolling != 0;
 			ctx->profiles[j].valid_until = v.valid_until;
 			break;
 		}

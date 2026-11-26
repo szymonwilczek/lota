@@ -94,6 +94,8 @@ int main(void)
 	      "BLOCK_PTRACE is named");
 	CHECK(names(LOTA_FLAG_AGENT_RESTARTED, "AGENT_RESTARTED"),
 	      "AGENT_RESTARTED is named");
+	CHECK(names(LOTA_FLAG_REENROLLING, "REENROLLING"),
+	      "REENROLLING is named");
 	CHECK(names(LOTA_FLAG_EVENTS_LOST, "EVENTS_LOST"),
 	      "EVENTS_LOST is named");
 

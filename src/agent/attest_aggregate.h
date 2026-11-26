@@ -22,6 +22,8 @@ struct attest_aggregate {
 	size_t considered;
 	/* publishers this host reports to at all, token-only ones excluded */
 	size_t reporting;
+	/* a publisher is being enrolled again, whether it reports or not */
+	bool reenrolling;
 };
 
 /**
@@ -48,6 +50,7 @@ static inline void attest_aggregate_compute(const struct attest_target *targets,
 	out->valid_until = 0;
 	out->considered = 0;
 	out->reporting = 0;
+	out->reenrolling = false;
 
 	if (!targets)
 		return;
@@ -59,6 +62,8 @@ static inline void attest_aggregate_compute(const struct attest_target *targets,
 	for (size_t i = 0; i < count; i++) {
 		if (!targets[i].token_only)
 			out->reporting++;
+		if (targets[i].reenrolling)
+			out->reenrolling = true;
 	}
 
 	for (size_t i = 0; i < count; i++) {

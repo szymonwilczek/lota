@@ -913,10 +913,9 @@ int do_reprovision_aik(void)
 		for (size_t i = 0; i < count; i++)
 			if (entries[i].has_aik_handle && entries[i].enrolled)
 				fprintf(stderr,
-					"  lota-agent --reenroll --ca-cert "
-					"<anchor for %s:%d>\n",
-					entries[i].ca_server,
-					entries[i].ca_port);
+					"  lota-agent --reenroll --publisher "
+					"%s\n",
+					entries[i].id);
 	} else {
 		fprintf(stderr,
 			"The previous AIK certificate is now stale -- "

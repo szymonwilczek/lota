@@ -92,9 +92,11 @@ void attest_warn_cert_orphaned(const struct profile_paths *paths,
 		 "enrolled, and a new one takes its place. The certificate "
 		 "stored for this publisher names the key that is gone, so "
 		 "every round will be refused until they issue one for the key "
-		 "that is here now: lota-agent --reenroll --ca-cert <their "
-		 "anchor>. A TPM clear does this. Publisher: %s",
-		 label ? label : "unnamed");
+		 "that is here now. A running attestation loop enrolls again "
+		 "by itself where consent to this publisher is recorded; "
+		 "otherwise: lota-agent --reenroll --publisher %s. A TPM clear "
+		 "does this. Publisher: %s",
+		 paths->id, label ? label : "unnamed");
 }
 
 static uint32_t rand_u32_best_effort(void)
@@ -960,8 +962,8 @@ static int target_key_matches_cert(struct attest_target *t)
 			 "not the key their certificate was issued over, so "
 			 "their verifier would not accept its quotes. No round "
 			 "is attempted until they issue a certificate for the "
-			 "key that is here now: lota-agent --reenroll "
-			 "--ca-cert <their anchor>. Publisher: %s",
+			 "key that is here now. A TPM clear does this. "
+			 "Publisher: %s",
 			 t->label);
 		break;
 	case ATTEST_CERT_MATCHES_AGAIN:
@@ -974,8 +976,8 @@ static int target_key_matches_cert(struct attest_target *t)
 		lota_warn("The AIK certificate stored for %s cannot be read "
 			  "(%s): the key at its handle is not checked against "
 			  "it and it is not renewed. Re-enroll to replace it: "
-			  "lota-agent --reenroll --ca-cert <their anchor>",
-			  t->label, strerror(-ret));
+			  "lota-agent --reenroll --publisher %s",
+			  t->label, strerror(-ret), t->paths.id);
 		break;
 	case ATTEST_CERT_SILENT:
 		break;
@@ -1085,7 +1087,7 @@ static bool enroll_target_if_needed(struct attest_target *t)
 	if (enroll_state_record_present(enroll_rc)) {
 		lota_warn("Enrollment record for publisher %s is unreadable "
 			  "(%s); refusing to enroll over it. Restore %s, or "
-			  "re-enroll deliberately with --reenroll",
+			  "enroll it again with --enroll",
 			  t->paths.id, strerror(-enroll_rc),
 			  t->paths.enroll_state);
 		return false;
@@ -1148,6 +1150,65 @@ static bool enroll_target_if_needed(struct attest_target *t)
 			  t->ca, t->ca_port, strerror(-ret), delay);
 	}
 	return false;
+}
+
+/*
+ * Enroll @t again when its certificate names a key its handle no longer holds.
+ * The recorded endpoint and token are reused: the publisher and the EK are the
+ * ones agreed to before.
+ * Return: 0 once the certificate names the key, else -EKEYREJECTED.
+ */
+static int reenroll_target(struct attest_target *t)
+{
+	uint64_t now_ms = monotonic_ms();
+	time_t agreed = 0;
+	int consent_rc;
+	int delay;
+	int ret;
+
+	consent_rc = profile_consent_time(&t->paths, &agreed);
+	switch (attest_target_reenroll_decide(t, consent_rc, now_ms)) {
+	case ATTEST_REENROLL_REFUSED:
+		if (consent_rc == -ENOENT)
+			lota_warn("Nobody has agreed to answer to publisher "
+				  "%s, so it is not enrolled again unattended: "
+				  "lota-agent --reenroll --publisher %s",
+				  t->label, t->paths.id);
+		else
+			lota_warn("Consent record for publisher %s is "
+				  "unreadable (%s), so it is not enrolled "
+				  "again unattended: lota-agent --reenroll "
+				  "--publisher %s",
+				  t->label, strerror(-consent_rc), t->paths.id);
+		return -EKEYREJECTED;
+	case ATTEST_REENROLL_REFUSED_SILENT:
+	case ATTEST_REENROLL_WAIT:
+		return -EKEYREJECTED;
+	case ATTEST_REENROLL_NOW:
+		break;
+	}
+
+	lota_notice("Re-enrolling the attestation key at this publisher's "
+		    "handle. Publisher: %s",
+		    t->label);
+	ret = enroll_renew_cert(&g_agent.tpm_ctx, &t->paths,
+				t->ca_cert[0] ? t->ca_cert : NULL);
+	if (ret == 0) {
+		ret = bind_target(t);
+		if (ret == 0) {
+			attest_target_reenroll_clear(t);
+			lota_notice("Re-enrolled. Publisher: %s", t->label);
+			return 0;
+		}
+		if (ret != -EKEYREJECTED)
+			return ret;
+		ret = -EKEYREJECTED;
+	}
+
+	delay = attest_target_reenroll_failed(t, now_ms);
+	lota_warn("Re-enrollment failed (%s); retry in %ds. Publisher: %s",
+		  strerror(-ret), delay, t->label);
+	return -EKEYREJECTED;
 }
 
 /*
@@ -1303,17 +1364,22 @@ static int attest_target_round(struct attest_target *t, int skip_verify,
 	}
 
 	ret = bind_target(t);
+	if (ret == -EKEYREJECTED)
+		ret = reenroll_target(t);
+	else if (ret == 0)
+		attest_target_reenroll_clear(t);
 	if (ret == 0)
 		renew_target_cert_if_due(t);
 
 	/*
-	 * A key the certificate does not name stays wrong on retry: no backoff,
-	 * the ordinary interval until the profile is re-enrolled.
+	 * A key the certificate does not name stays wrong on retry:
+	 * the ordinary interval, or the re-enrollment backoff,
+	 * until the profile is re-enrolled.
 	 */
 	if (ret == -EKEYREJECTED) {
 		t->attested = false;
 		t->valid_until = 0;
-		return t->interval;
+		return attest_target_reenroll_wait(t, monotonic_ms());
 	}
 
 	/* Likewise a shared key, until the profile is re-enrolled */
@@ -1359,8 +1425,8 @@ static int attest_target_round(struct attest_target *t, int skip_verify,
 				 "the TPM is not asked again with it, so "
 				 "rounds fail until it changes: lota-agent "
 				 "--reprovision-aik, then lota-agent "
-				 "--reenroll --ca-cert <their anchor>.",
-				 t->label);
+				 "--reenroll --publisher %s.",
+				 t->label, t->paths.id);
 			t->auth_fail_announced = true;
 		}
 		t->attested = false;
@@ -1421,6 +1487,10 @@ static void publish_aggregate_status(const struct attest_target *targets,
 		*status_flags |= LOTA_STATUS_ATTESTED;
 	else
 		*status_flags &= ~LOTA_STATUS_ATTESTED;
+	if (agg.reenrolling)
+		*status_flags |= LOTA_STATUS_REENROLLING;
+	else
+		*status_flags &= ~LOTA_STATUS_REENROLLING;
 
 	flags = reconcile_tpm_lockout(*status_flags);
 

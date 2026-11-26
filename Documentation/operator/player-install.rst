@@ -233,8 +233,8 @@ What the stages do
    stage: the publisher is whoever they buy a title from, so the agent enrolls
    with each publisher the first time a title asks for one. Either way the
    running agent renews the certificate on its own against the endpoint
-   recorded in the profile, and ``lota-agent --reenroll --ca-cert ...`` stays
-   as a manual fallback.
+   recorded in the profile, and ``lota-agent --reenroll`` stays as a manual
+   fallback.
 
    Each publisher's key is derived from that publisher's identity, so the
    certificates they hold carry different public keys and no two of them can

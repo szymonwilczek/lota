@@ -1277,7 +1277,7 @@ static void test_reenroll_dials_what_the_command_line_named(void)
 		return;
 	}
 
-	verb = strstr(buf, "int do_reenroll(");
+	verb = strstr(buf, "static int reenroll_profile(");
 	end = verb ? strstr(verb, "\n}\n") : NULL;
 	if (!verb || !end) {
 		FAIL("could not find the re-enrollment verb");
@@ -1295,6 +1295,33 @@ static void test_reenroll_dials_what_the_command_line_named(void)
 	if (!memmem(verb, span, "enroll_endpoint_source(",
 		    strlen("enroll_endpoint_source("))) {
 		FAIL("the run never says which endpoint it dialled");
+		return;
+	}
+	PASS();
+}
+
+/* An expired certificate is refreshed with the installer's anchor. */
+static void test_installer_reenrolls_with_its_anchor(void)
+{
+	static char buf[262144];
+	const char *verb, *end;
+
+	TEST("installer: --reenroll names the anchor it was given");
+
+	if (!slurp_shipped("installer/stages.c", buf, sizeof(buf))) {
+		FAIL("could not read the installer stages");
+		return;
+	}
+
+	verb = strstr(buf, "\"--reenroll\"");
+	end = verb ? strstr(verb, "NULL };") : NULL;
+	if (!verb || !end) {
+		FAIL("could not find the re-enrollment command");
+		return;
+	}
+	if (!memmem(verb, (size_t)(end - verb), "ctx->opts.ca_cert",
+		    strlen("ctx->opts.ca_cert"))) {
+		FAIL("an anchor moved since enrollment fails the refresh");
 		return;
 	}
 	PASS();
@@ -1335,6 +1362,7 @@ int main(void)
 	test_probe_quotes_the_keys_the_host_attests_with();
 	test_enrollment_reaches_the_ca_before_it_spends_a_key();
 	test_reenroll_dials_what_the_command_line_named();
+	test_installer_reenrolls_with_its_anchor();
 
 	printf("\n=== Results: %d/%d passed ===\n", tests_passed, tests_run);
 	return (tests_passed == tests_run) ? 0 : 1;

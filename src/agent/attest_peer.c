@@ -352,6 +352,7 @@ int attest_peer_sync(struct attest_peer *peer, struct attest_target *targets,
 		peer_id_from_hex(targets[i].paths.id,
 				 verdict[emitted].profile_id);
 		verdict[emitted].attested = targets[i].attested ? 1 : 0;
+		verdict[emitted].reenrolling = targets[i].reenrolling ? 1 : 0;
 		memset(verdict[emitted].reserved, 0,
 		       sizeof(verdict[emitted].reserved));
 		verdict[emitted].valid_until = targets[i].valid_until;

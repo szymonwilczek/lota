@@ -214,7 +214,11 @@ fixed by anything the player does, and a shipped build should never produce
 them. ``NO_AGENT``, ``CONSENT_REQUIRED``, ``UNKNOWN_PROFILE``,
 ``NOT_ATTESTED`` and ``TOKEN_DIR`` are the state of that machine, and each
 has a different thing to tell the player -- install the agent, agree to your
-publisher, wait for the first verdict. ``TPM_LOCKOUT`` is the machine too,
+publisher, wait for the first verdict. ``NOT_ATTESTED`` while the flags
+``lota_get_status()`` returns carry ``LOTA_FLAG_REENROLLING`` is a host whose
+attestation key is gone, as after a TPM clear, and that the agent is enrolling
+with you again on its own: tell the player to wait, not to act.
+``TPM_LOCKOUT`` is the machine too,
 but no retry clears it: the chip signs nothing until its dictionary-attack
 lockout lapses or somebody at the machine clears it, which is what to tell
 the player instead of beating again. ``RATE_LIMITED`` is neither: it means

@@ -681,6 +681,65 @@ static void test_a_request_wakes_the_loop_once(void)
 	      "a session change wakes the loop once too");
 }
 
+/* A lost key is enrolled again only for a publisher somebody agreed to. */
+static void test_a_lost_key_is_enrolled_again_with_consent(void)
+{
+	struct attest_target t;
+	int delay;
+
+	memset(&t, 0, sizeof(t));
+	CHECK(attest_target_reenroll_decide(&t, 0, 1000) ==
+			      ATTEST_REENROLL_NOW &&
+		      t.reenrolling,
+	      "recorded consent enrolls again at once and says so");
+
+	delay = attest_target_reenroll_failed(&t, 1000);
+	CHECK(delay > 0 && attest_target_reenroll_decide(&t, 0, 1001) ==
+				   ATTEST_REENROLL_WAIT,
+	      "a failed attempt waits out its backoff");
+	CHECK(attest_target_reenroll_decide(&t, 0,
+					    1000 + (uint64_t)delay * 1000) ==
+		      ATTEST_REENROLL_NOW,
+	      "the attempt is made again once the backoff lapses");
+	t.interval = 240;
+	CHECK(attest_target_reenroll_wait(&t, 1500) == delay,
+	      "the next round comes when the backoff lapses");
+	CHECK(attest_target_reenroll_failed(&t, 2000) > delay,
+	      "each failure waits longer");
+
+	attest_target_reenroll_clear(&t);
+	CHECK(!t.reenrolling && t.next_reenroll_ms == 0 &&
+		      t.reenroll_backoff == 0,
+	      "a certificate that names the key ends the re-enrollment");
+	CHECK(attest_target_reenroll_wait(&t, 3000) == 240,
+	      "without a backoff the round keeps its interval");
+}
+
+/* Without consent the loop says why once and leaves the host alone. */
+static void test_no_consent_is_said_once(void)
+{
+	struct attest_target t;
+
+	memset(&t, 0, sizeof(t));
+	t.reenrolling = true;
+	CHECK(attest_target_reenroll_decide(&t, -ENOENT, 1000) ==
+			      ATTEST_REENROLL_REFUSED &&
+		      !t.reenrolling,
+	      "no consent refuses and does not report re-enrolling");
+	CHECK(attest_target_reenroll_decide(&t, -ENOENT, 2000) ==
+		      ATTEST_REENROLL_REFUSED_SILENT,
+	      "the refusal is said once");
+	CHECK(attest_target_reenroll_decide(&t, -EIO, 3000) ==
+		      ATTEST_REENROLL_REFUSED_SILENT,
+	      "an unreadable consent record is no consent");
+
+	CHECK(attest_target_reenroll_decide(&t, 0, 4000) ==
+			      ATTEST_REENROLL_NOW &&
+		      attest_target_reenroll_decide(&t, -ENOENT, 5000) ==
+			      ATTEST_REENROLL_REFUSED,
+	      "an agreement in between makes a later refusal said again");
+}
+
 int main(void)
 {
 	printf("=== Attestation target list tests ===\n\n");
@@ -700,6 +759,8 @@ int main(void)
 	test_each_profile_pins_its_own_verifier();
 	test_a_request_wakes_the_loop_once();
 	test_an_unreadable_cert_confirms_nothing();
+	test_a_lost_key_is_enrolled_again_with_consent();
+	test_no_consent_is_said_once();
 
 	printf("\n%s\n", g_failures ? "FAILURES" : "All tests passed");
 	return g_failures ? 1 : 0;

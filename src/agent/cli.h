@@ -36,6 +36,7 @@ struct cli_options {
 	int attest_flag;
 	int enroll_flag;
 	int reenroll_flag; /* --reenroll: reuse the saved endpoint */
+	const char *reenroll_publisher; /* --publisher: the one to re-enroll */
 	int seal_flag;
 	int unseal_flag;
 	int seal_aik_auth_migrate_flag; /* --seal-aik-auth: adopt sealing */
@@ -71,6 +72,7 @@ struct cli_options {
 	bool server_overridden;
 	int server_port;
 	const char *ca_cert_path;
+	bool ca_cert_given; /* --ca-cert typed, not the configured one */
 
 	/* attestation-CA enrollment endpoint (--enroll) */
 	const char *ca_server;
