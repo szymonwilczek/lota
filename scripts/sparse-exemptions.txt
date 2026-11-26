@@ -35,12 +35,10 @@ fuzz/bpf_oracle/fuzz_devt.c|self-comparison|The decode-encode roundtrip asserts 
 # Both warnings stay on everywhere else, so a flexible array nested somewhere
 # it does not belong still fails.
 
-src/agent/hash_verify.c|using sizeof on a flexible structure|sizeof(struct fsverity_digest) is the header size FS_IOC_MEASURE_VERITY writes before the digest bytes, and sizeof of the union around it is the whole allocation. Both are the intended quantities.
-src/agent/hash_verify.c|nested flexible array|struct fsverity_digest is the last member of a union whose other member sizes the buffer. Its flexible array is at the end of the object, which is the shape the ioctl requires.
-src/agent/bpf_loader.c|using sizeof on a flexible structure|The same FS_IOC_MEASURE_VERITY union as hash_verify.c, in the two places the loader measures an object itself.
-src/agent/bpf_loader.c|nested flexible array|The same FS_IOC_MEASURE_VERITY union as hash_verify.c, in the two places the loader measures an object itself.
-src/agent/runtime_image_measure.c|using sizeof on a flexible structure|The same FS_IOC_MEASURE_VERITY union as hash_verify.c, once per object of the runtime image being measured.
-src/agent/runtime_image_measure.c|nested flexible array|The same FS_IOC_MEASURE_VERITY union as hash_verify.c, once per object of the runtime image being measured.
+src/agent/bpf_loader.c|using sizeof on a flexible structure|sizeof(struct fsverity_digest) is the header size FS_IOC_MEASURE_VERITY writes before the digest bytes, and sizeof of the union around it is the whole allocation. Both are the intended quantities.
+src/agent/bpf_loader.c|nested flexible array|struct fsverity_digest is the last member of a union whose other member sizes the buffer. Its flexible array is at the end of the object, which is the shape the ioctl requires.
+src/agent/runtime_image_measure.c|using sizeof on a flexible structure|sizeof(struct fsverity_digest) is the header size FS_IOC_MEASURE_VERITY writes before the digest bytes, and sizeof of the union around it is the whole allocation. Both are the intended quantities.
+src/agent/runtime_image_measure.c|nested flexible array|struct fsverity_digest is the last member of a union whose other member sizes the buffer. Its flexible array is at the end of the object, which is the shape the ioctl requires.
 installer/probe.c|using sizeof on a flexible structure|sizeof(*d) is the struct fsverity_digest header FS_IOC_MEASURE_VERITY writes before the digest, and the byte buffer around it adds room for the digest itself.
 
 # Whole-struct zeroing above sparse's 100 KB copy limit

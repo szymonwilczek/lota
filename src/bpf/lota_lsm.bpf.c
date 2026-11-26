@@ -1995,12 +1995,107 @@ static __always_inline void record_anon_exec(void)
 			    LOTA_INSTANCE_ACTOR_ANON_EXEC);
 }
 
+/*
+ * Memory reached through a file with no name on disk: S_PRIVATE (SysV shm,
+ * a shared anonymous mapping), an unlinked tmpfs or hugetlbfs inode (memfd,
+ * MAP_HUGETLB) or /dev/zero.
+ */
+static __always_inline int is_anon_memory_file(struct file *file)
+{
+	struct inode *inode = BPF_CORE_READ(file, f_inode);
+	unsigned long magic;
+	dev_t rdev;
+
+	if (!inode)
+		return 0;
+
+	if (BPF_CORE_READ(inode, i_flags) & S_PRIVATE)
+		return 1;
+
+	if ((BPF_CORE_READ(inode, i_mode) & S_IFMT) == S_IFCHR) {
+		rdev = BPF_CORE_READ(inode, i_rdev);
+		return lota_dev_major(rdev) == 1 && lota_dev_minor(rdev) == 5;
+	}
+
+	magic = BPF_CORE_READ(inode, i_sb, s_magic);
+	return (magic == LOTA_TMPFS_MAGIC || magic == LOTA_HUGETLBFS_MAGIC) &&
+	       BPF_CORE_READ(inode, __i_nlink) == 0;
+}
+
+/*
+ * Anonymous memory made executable: @file is NULL or an is_anon_memory_file().
+ * With block_anon_exec a protected task is refused. A memory file reports only
+ * its refusal; allowed, it goes on as a file mapping.
+ *
+ * Return: 1 on a refusal, else 0.
+ */
+static __always_inline int anon_exec_refused(struct file *file, u32 mode,
+					     int mprotect)
+{
+	struct lota_exec_event *event = NULL;
+	const unsigned char *name;
+	int blocked = 0;
+	int emit_event;
+	u32 type;
+
+	inc_stat(STAT_ANON_EXEC);
+	record_anon_exec();
+
+	if (mode == LOTA_MODE_ENFORCE && get_config(LOTA_CFG_BLOCK_ANON_EXEC) &&
+	    is_protected_current_task())
+		blocked = 1;
+
+	if (file && !blocked)
+		return 0;
+
+	type = blocked ? LOTA_EVENT_ANON_EXEC_BLOCKED : LOTA_EVENT_ANON_EXEC;
+	emit_event = should_emit_event(mode, blocked, type);
+	if (emit_event)
+		event = bpf_ringbuf_reserve(&events, sizeof(*event), 0);
+	if (event) {
+		__builtin_memset(event, 0, sizeof(*event));
+		event->timestamp_ns = bpf_ktime_get_ns();
+		event->event_type = type;
+		event->tgid = bpf_get_current_pid_tgid() >> 32;
+		event->pid = bpf_get_current_pid_tgid() & 0xFFFFFFFF;
+		event->uid = (u32)(bpf_get_current_uid_gid() & 0xFFFFFFFF);
+
+		bpf_get_current_comm(event->comm, sizeof(event->comm));
+
+		name = file ? BPF_CORE_READ(file, f_path.dentry, d_name.name) :
+			      NULL;
+		if (!name || bpf_probe_read_kernel_str(event->filename,
+						       sizeof(event->filename),
+						       name) < 0) {
+			if (mprotect)
+				__builtin_memcpy(event->filename,
+						 "(anon-mprotect-exec)", 21);
+			else
+				__builtin_memcpy(event->filename, "(anon-exec)",
+						 12);
+		}
+
+		bpf_ringbuf_submit(event, 0);
+		inc_stat(STAT_EVENTS_SENT);
+	} else if (emit_event) {
+		inc_stat(STAT_RINGBUF_DROPS);
+	}
+
+	if (blocked) {
+		inc_stat(STAT_ANON_EXEC_BLOCKED);
+		return 1;
+	}
+
+	return 0;
+}
+
 /* ======================================================================
  * LSM hook: mmap_file
  *
  * In enforce mode, for a protected task: with strict_mmap refuses an
  * executable file mapping that is writable or neither in allow_verity nor
- * a trusted library; with block_anon_exec refuses an anonymous one.
+ * a trusted library; with block_anon_exec refuses an anonymous one or one
+ * of an is_anon_memory_file().
  * ====================================================================== */
 SEC("lsm.s/mmap_file")
 int BPF_PROG(lota_mmap_file, struct file *file, unsigned long reqprot,
@@ -2015,59 +2110,8 @@ int BPF_PROG(lota_mmap_file, struct file *file, unsigned long reqprot,
 	if (!(prot & LOTA_PROT_EXEC))
 		return 0;
 
-	if (!file) {
-		int anon_blocked = 0;
-		int emit_event = 0;
-
-		inc_stat(STAT_ANON_EXEC);
-		record_anon_exec();
-
-		mode = get_mode();
-
-		/* must be NULL: read below even when the event budget
-		 * skips the reserve */
-		struct lota_exec_event *event = NULL;
-
-		if (mode == LOTA_MODE_ENFORCE &&
-		    get_config(LOTA_CFG_BLOCK_ANON_EXEC) &&
-		    is_protected_current_task()) {
-			anon_blocked = 1;
-		}
-
-		emit_event = should_emit_event(
-			mode, anon_blocked,
-			anon_blocked ? LOTA_EVENT_ANON_EXEC_BLOCKED :
-				       LOTA_EVENT_ANON_EXEC);
-		if (emit_event) {
-			event = bpf_ringbuf_reserve(&events, sizeof(*event), 0);
-		}
-		if (event) {
-			__builtin_memset(event, 0, sizeof(*event));
-			event->timestamp_ns = bpf_ktime_get_ns();
-			event->event_type =
-				anon_blocked ? LOTA_EVENT_ANON_EXEC_BLOCKED :
-					       LOTA_EVENT_ANON_EXEC;
-			event->tgid = bpf_get_current_pid_tgid() >> 32;
-			event->pid = bpf_get_current_pid_tgid() & 0xFFFFFFFF;
-			event->uid =
-				(u32)(bpf_get_current_uid_gid() & 0xFFFFFFFF);
-
-			bpf_get_current_comm(event->comm, sizeof(event->comm));
-			__builtin_memcpy(event->filename, "(anon-exec)", 12);
-
-			bpf_ringbuf_submit(event, 0);
-			inc_stat(STAT_EVENTS_SENT);
-		} else if (emit_event) {
-			inc_stat(STAT_RINGBUF_DROPS);
-		}
-
-		if (anon_blocked) {
-			inc_stat(STAT_ANON_EXEC_BLOCKED);
-			return -EPERM;
-		}
-
-		return 0;
-	}
+	if (!file)
+		return anon_exec_refused(NULL, get_mode(), 0) ? -EPERM : 0;
 
 	inc_stat(STAT_MMAP_EXECS);
 
@@ -2079,6 +2123,9 @@ int BPF_PROG(lota_mmap_file, struct file *file, unsigned long reqprot,
 	remember_protected_exec(file);
 
 	mode = get_mode();
+
+	if (is_anon_memory_file(file) && anon_exec_refused(file, mode, 0))
+		return -EPERM;
 
 	if (mode == LOTA_MODE_ENFORCE && get_config(LOTA_CFG_STRICT_MMAP) &&
 	    is_protected_current_task()) {
@@ -2191,53 +2238,8 @@ int BPF_PROG(lota_file_mprotect, struct vm_area_struct *vma,
 	/* a direct read keeps vm_file trusted for the fs-verity kfunc */
 	file = vma->vm_file;
 
-	if (!file || !BPF_CORE_READ(vma, vm_ops) || is_shared_anon_file(file)) {
-		int anon_blocked = 0;
-		int emit_event = 0;
-
-		inc_stat(STAT_ANON_EXEC);
-		record_anon_exec();
-
-		if (mode == LOTA_MODE_ENFORCE &&
-		    get_config(LOTA_CFG_BLOCK_ANON_EXEC) &&
-		    is_protected_current_task())
-			anon_blocked = 1;
-
-		emit_event = should_emit_event(
-			mode, anon_blocked,
-			anon_blocked ? LOTA_EVENT_ANON_EXEC_BLOCKED :
-				       LOTA_EVENT_ANON_EXEC);
-		if (emit_event) {
-			event = bpf_ringbuf_reserve(&events, sizeof(*event), 0);
-		}
-		if (event) {
-			__builtin_memset(event, 0, sizeof(*event));
-			event->timestamp_ns = bpf_ktime_get_ns();
-			event->event_type =
-				anon_blocked ? LOTA_EVENT_ANON_EXEC_BLOCKED :
-					       LOTA_EVENT_ANON_EXEC;
-			event->tgid = bpf_get_current_pid_tgid() >> 32;
-			event->pid = bpf_get_current_pid_tgid() & 0xFFFFFFFF;
-			event->uid =
-				(u32)(bpf_get_current_uid_gid() & 0xFFFFFFFF);
-
-			bpf_get_current_comm(event->comm, sizeof(event->comm));
-			__builtin_memcpy(event->filename,
-					 "(anon-mprotect-exec)", 20);
-
-			bpf_ringbuf_submit(event, 0);
-			inc_stat(STAT_EVENTS_SENT);
-		} else if (emit_event) {
-			inc_stat(STAT_RINGBUF_DROPS);
-		}
-
-		if (anon_blocked) {
-			inc_stat(STAT_ANON_EXEC_BLOCKED);
-			return -EPERM;
-		}
-
-		return 0;
-	}
+	if (!file || !BPF_CORE_READ(vma, vm_ops) || is_shared_anon_file(file))
+		return anon_exec_refused(NULL, mode, 1) ? -EPERM : 0;
 
 	inc_stat(STAT_MMAP_EXECS);
 	vm_flags = BPF_CORE_READ(vma, vm_flags);
@@ -2245,6 +2247,9 @@ int BPF_PROG(lota_file_mprotect, struct vm_area_struct *vma,
 	/* mprotect(PROT_EXEC) maps code too */
 	remember_mapped_exec(file);
 	remember_protected_exec(file);
+
+	if (is_anon_memory_file(file) && anon_exec_refused(file, mode, 1))
+		return -EPERM;
 
 	if (mode == LOTA_MODE_ENFORCE && get_config(LOTA_CFG_STRICT_MMAP) &&
 	    is_protected_current_task()) {

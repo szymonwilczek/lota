@@ -581,7 +581,7 @@ lota_verity_key_from_digest_buf(const void *buf,
  *   EXEC:           filename, hash
  *   MODULE_LOAD:    filename
  *   MMAP_EXEC:      filename, flags
- *   ANON_EXEC:      filename (a fixed label)
+ *   ANON_EXEC:      filename (a fixed label, or a refused memory file's name)
  *   PTRACE:         target_pid, filename (the target's), flags
  *   KILL:           target_pid, signal, filename (a fixed label)
  *   SETUID:         target_uid (new uid)
