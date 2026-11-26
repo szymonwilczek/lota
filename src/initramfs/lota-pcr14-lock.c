@@ -75,6 +75,39 @@ int lota_initramfs_lock_commit(uint8_t out_digest[HASH_SIZE])
 	return ok ? 0 : -EIO;
 }
 
+int lota_initramfs_lock_read_baseline(const char *path, uint8_t out[HASH_SIZE]);
+
+/*
+ * lota_initramfs_lock_read_baseline - load a baseline file into out
+ *
+ * Not static: tests/test_initramfs_lock.c calls it.
+ *
+ * Return: 1 when it holds exactly HASH_SIZE bytes, 0 when it is missing or
+ * any other length, negative errno otherwise.
+ */
+int lota_initramfs_lock_read_baseline(const char *path, uint8_t out[HASH_SIZE])
+{
+	uint8_t buf[HASH_SIZE + 1];
+	int fd = open(path, O_RDONLY | O_CLOEXEC | O_NOFOLLOW);
+	if (fd < 0)
+		return errno == ENOENT ? 0 : -errno;
+	FILE *f = fdopen(fd, "rb");
+	if (!f) {
+		int err = -errno;
+		close(fd);
+		return err;
+	}
+	size_t n = fread(buf, 1, sizeof(buf), f);
+	int err = ferror(f);
+	fclose(f);
+	if (err)
+		return -EIO;
+	if (n != HASH_SIZE)
+		return 0;
+	memcpy(out, buf, HASH_SIZE);
+	return 1;
+}
+
 #ifndef LOTA_INITRAMFS_LOCK_NO_MAIN
 /* extend_over - SHA256(base || commit), PCR14 after extending commit on base */
 static int extend_over(const uint8_t base[HASH_SIZE],
@@ -89,31 +122,6 @@ static int extend_over(const uint8_t base[HASH_SIZE],
 		 EVP_DigestFinal_ex(md, out, NULL) == 1;
 	EVP_MD_CTX_free(md);
 	return ok ? 0 : -EIO;
-}
-
-/*
- * read_saved_baseline - load BASELINE_PATH into out
- *
- * Return: 1 when read, 0 when the file is missing or short, negative errno
- * otherwise.
- */
-static int read_saved_baseline(uint8_t out[HASH_SIZE])
-{
-	int fd = open(BASELINE_PATH, O_RDONLY | O_CLOEXEC | O_NOFOLLOW);
-	if (fd < 0)
-		return errno == ENOENT ? 0 : -errno;
-	FILE *f = fdopen(fd, "rb");
-	if (!f) {
-		int err = -errno;
-		close(fd);
-		return err;
-	}
-	size_t n = fread(out, 1, HASH_SIZE, f);
-	int err = ferror(f);
-	fclose(f);
-	if (err)
-		return -EIO;
-	return n == HASH_SIZE ? 1 : 0;
 }
 
 /*
@@ -274,7 +282,8 @@ int main(int argc, char **argv)
 	}
 
 	uint8_t saved[HASH_SIZE];
-	int have_saved = read_saved_baseline(saved);
+	int have_saved =
+		lota_initramfs_lock_read_baseline(BASELINE_PATH, saved);
 	if (have_saved < 0) {
 		fprintf(stderr,
 			"lota-pcr14-lock: baseline read failed (errno %d)\n",

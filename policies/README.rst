@@ -212,11 +212,12 @@ IMA appraisal needs signatures on the files and a certificate on the ``.ima``
 keyring, supplied by the distribution or by an image pipeline; a stock host has
 neither, and an IMA rule cannot name a path, so a rule loaded over such a host
 refuses its own executables at the next boot. The agent therefore starts on
-a host that appraises nothing, says so in its log, and reports the state
--- ``LOTA_FLAG_KERNEL_APPRAISAL`` in the token and ``FlagIMAAppraisal`` in the
-attestation report -- which is what this knob turns into a refusal. Turn it on
-for a fleet whose images are signed; leave it off for one that runs stock
-distribution hosts, where it would refuse every client.
+a host without the exec appraisal it counts (an ``appraise`` rule on
+``BPRM_CHECK`` or one without ``func=``), says so in its log, and reports the
+state -- ``LOTA_FLAG_KERNEL_APPRAISAL`` in the token and ``FlagIMAAppraisal``
+in the attestation report -- which is what this knob turns into a refusal.
+Turn it on for a fleet whose images are signed; leave it off for one that runs
+stock distribution hosts, where it would refuse every client.
 
 Before a strict deployment
 --------------------------

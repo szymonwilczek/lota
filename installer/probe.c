@@ -23,8 +23,10 @@
 
 #include <linux/fsverity.h>
 
+#include "../include/lota_ima_appraise.h"
 #include "../include/lota_ima_policy_scope.h"
 #include "../include/lota_ima_xattr.h"
+#include "../include/lota_secure_boot.h"
 
 #include <openssl/evp.h>
 #include <openssl/x509.h>
@@ -171,7 +173,6 @@ int probe_file_ima_signed(const char *path)
 #define EFI_GLOBAL_GUID "8be4df61-93ca-11d2-aa0d-00e098032b8c"
 #define EFI_FIRMWARE_DIR "/sys/firmware/efi"
 #define EFIVARS_DIR "/sys/firmware/efi/efivars/"
-#define SECUREBOOT_EFIVAR EFIVARS_DIR "SecureBoot-" EFI_GLOBAL_GUID
 #define SETUPMODE_EFIVAR EFIVARS_DIR "SetupMode-" EFI_GLOBAL_GUID
 #define OSINDICATIONS_SUPPORTED_EFIVAR \
 	EFIVARS_DIR "OsIndicationsSupported-" EFI_GLOBAL_GUID
@@ -246,7 +247,7 @@ int probe_firmware_is_uefi(void)
 
 int probe_secureboot(void)
 {
-	return probe_efivar_flag_at(SECUREBOOT_EFIVAR);
+	return lota_secure_boot_read(LOTA_EFIVARS_DIR);
 }
 
 int probe_secureboot_setup_mode(void)
@@ -440,26 +441,9 @@ void probe_secureboot_guidance(int is_virtual, char *out, size_t cap)
 
 int probe_cmdline_ima_ok(const char *cmdline)
 {
-	char buf[4096];
-	const char *val = "enforce";
-	char *save = NULL;
-	char *tok;
-	size_t len;
-
 	if (!cmdline)
 		return -EINVAL;
-	len = strlen(cmdline);
-	if (len >= sizeof(buf))
-		return -E2BIG;
-	memcpy(buf, cmdline, len + 1);
-
-	/* the kernel keeps the last one; with none, its default enforce */
-	for (tok = strtok_r(buf, " \t", &save); tok;
-	     tok = strtok_r(NULL, " \t", &save)) {
-		if (strncmp(tok, "ima_appraise=", 13) == 0)
-			val = tok + 13;
-	}
-	return strcmp(val, "enforce") == 0 ? 0 : -EPERM;
+	return lota_ima_cmdline_enforce(cmdline) ? 0 : -EPERM;
 }
 
 static int rule_demands_signed_policy(const char *rule)
@@ -517,6 +501,24 @@ int probe_ima_policy_scope(const char *policy_path, int *policy_signed)
 	return found ? PROBE_IMA_SCOPE_EXEC : PROBE_IMA_SCOPE_NONE;
 }
 
+int probe_ima_policy_appraises(const char *policy_path)
+{
+	char line[LOTA_IMA_POLICY_RULE_MAX];
+	FILE *fp;
+	int found = 0;
+
+	if (!policy_path)
+		return -EINVAL;
+	fp = fopen(policy_path, "re");
+	if (!fp)
+		return -errno;
+	while (!found && fgets(line, sizeof(line), fp))
+		found = strncmp(line, "appraise", 8) == 0 &&
+			(line[8] == ' ' || line[8] == '\t' || line[8] == '\n');
+	fclose(fp);
+	return found;
+}
+
 int probe_cmdline_has_token(const char *cmdline, const char *token)
 {
 	char buf[4096];
@@ -537,6 +539,11 @@ int probe_cmdline_has_token(const char *cmdline, const char *token)
 			return 1;
 	}
 	return 0;
+}
+
+int probe_ima_appraise_built(void)
+{
+	return lota_ima_appraise_built(LOTA_VMLINUX_BTF_PATH);
 }
 
 int probe_ima_mode_blocking(int secureboot, const char *cmdline)
@@ -595,14 +602,15 @@ int probe_lockdown_restrictive(void)
 static void read_pcr14_baseline_at(const char *path,
 				   uint8_t out[PROBE_HASH_SIZE])
 {
+	uint8_t buf[PROBE_HASH_SIZE + 1];
 	int fd;
 
 	memset(out, 0, PROBE_HASH_SIZE);
 	fd = open(path, O_RDONLY | O_CLOEXEC);
 	if (fd < 0)
 		return;
-	if (read(fd, out, PROBE_HASH_SIZE) != PROBE_HASH_SIZE)
-		memset(out, 0, PROBE_HASH_SIZE);
+	if (read(fd, buf, sizeof(buf)) == PROBE_HASH_SIZE)
+		memcpy(out, buf, PROBE_HASH_SIZE);
 	close(fd);
 }
 
@@ -1172,12 +1180,78 @@ enum stage_state probe_agent_service_stage(const struct probe_service_state *s,
 	return STAGE_DONE;
 }
 
+enum stage_state probe_cmdline_next_boot_stage(const struct probe_floor *st,
+					       const char *args, char *note,
+					       size_t cap)
+{
+	if (!st || !note)
+		return STAGE_ERROR;
+	if (args) {
+		int ima_cfg = !st->ima_built || probe_cmdline_ima_ok(args) == 0;
+		int sig_cfg =
+			st->sig_ok ||
+			probe_cmdline_has_token(args, "module.sig_enforce=1");
+		int lock_cfg =
+			st->lockdown_ok ||
+			probe_cmdline_has_token(args, "lockdown=integrity");
+
+		if (ima_cfg && !st->ima_ok && st->appraises) {
+			snprintf(
+				note, cap,
+				"The default kernel cmdline puts IMA appraisal "
+				"in enforce, and the loaded IMA policy has "
+				"appraise rules, or cannot be read: the next "
+				"boot would refuse each file they reach "
+				"without a valid signature or hash. Keep the "
+				"booted ima_appraise= mode on it until they "
+				"carry one.");
+			return STAGE_BLOCKED;
+		}
+		if (ima_cfg && sig_cfg && lock_cfg) {
+			snprintf(note, cap,
+				 "kernel cmdline is configured. "
+				 "The floor takes effect on the "
+				 "next boot");
+			return STAGE_REBOOT;
+		}
+	}
+
+	if (!st->ima_ok && st->appraises && st->sig_ok && st->lockdown_ok) {
+		snprintf(note, cap,
+			 "The loaded IMA policy has appraise rules, or cannot "
+			 "be read, and the booted mode refuses nothing they "
+			 "reach. ima_appraise=enforce would refuse, from the "
+			 "next boot, each of those files without a valid "
+			 "signature or hash, so it is not added. Add it once "
+			 "they carry one.");
+		return STAGE_BLOCKED;
+	}
+
+	snprintf(note, cap, "Booted kernel lacks:%s%s%s%s",
+		 st->ima_ok ? "" : " ima_appraise",
+		 st->sig_ok ? "" : " module.sig_enforce",
+		 st->lockdown_ok ? "" : " lockdown",
+		 !st->ima_ok && st->appraises ?
+			 " (ima_appraise=enforce is not added: the loaded "
+			 "IMA policy has appraise rules, or cannot be read)" :
+			 "");
+	return STAGE_PENDING;
+}
+
 enum stage_state probe_ima_scope_stage(const struct probe_ima_scope *s,
 				       char *note, size_t cap)
 {
 	if (!s) {
 		snprintf(note, cap, "The loaded IMA policy could not be read.");
 		return STAGE_ERROR;
+	}
+
+	if (s->no_appraisal) {
+		snprintf(note, cap,
+			 "The booted kernel has no IMA appraisal (its BTF has "
+			 "no ima_appraise_measurement()), so every token says "
+			 "KERNEL_APPRAISAL is clear.");
+		return STAGE_DONE;
 	}
 
 	if (s->scope == PROBE_IMA_SCOPE_EXEC) {

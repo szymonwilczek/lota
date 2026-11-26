@@ -1,10 +1,11 @@
 # SPDX-License-Identifier: MIT
 #
 # LOTA IMA developer baseline, not a production appraisal policy.
-# scripts/lota-dev-bringup.sh tries to load it unless the loaded policy is
-# readable and has a line containing "appraise", dont_appraise included;
-# a failed write only warns. Production signatures and rules come from the
-# distribution or the operator; LOTA signs no executable.
+# scripts/lota-dev-bringup.sh loads it only in ima_appraise=fix, log or off,
+# and only when the loaded policy is readable and has no appraise rule on
+# BPRM_CHECK or with no func=; a failed write only warns. Production
+# signatures and rules come from the distribution or the operator;
+# LOTA signs no executable.
 #
 # The appraise rules reach every exec and every PROT_EXEC mmap outside the
 # filesystems listed in dont_appraise (pseudo filesystems and tmpfs),

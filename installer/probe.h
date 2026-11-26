@@ -37,12 +37,41 @@ enum stage_state probe_agent_service_stage(const struct probe_service_state *s,
 
 #define PROBE_IMA_POLICY_PATH "/sys/kernel/security/ima/policy"
 
+struct probe_floor {
+	int ima_ok;
+	int sig_ok;
+	int lockdown_ok;
+	/* ima_built, and a scope not PROBE_IMA_SCOPE_NONE, unreadable too */
+	int appraised;
+	int secureboot;
+	int ima_built; /* probe_ima_appraise_built() is not 0 */
+	int appraises; /* probe_ima_policy_appraises() is not 0 */
+};
+
+/**
+ * probe_cmdline_next_boot_stage() - Cmdline stage verdict for the next boot.
+ * @st:   booted floor with at least one of ima_ok, sig_ok and lockdown_ok
+ *        clear.
+ * @args: default kernel cmdline from grubby, or NULL when unread.
+ * @note: filled with the reason for the verdict.
+ * @cap:  size of @note.
+ *
+ * Return: STAGE_ERROR when @st or @note is NULL. With @st->appraises set and
+ * @st->ima_ok clear, STAGE_BLOCKED when @args puts IMA appraisal in enforce
+ * or ima_ok is the only one clear. Otherwise STAGE_REBOOT when @args carries
+ * the floor, else STAGE_PENDING.
+ */
+enum stage_state probe_cmdline_next_boot_stage(const struct probe_floor *st,
+					       const char *args, char *note,
+					       size_t cap);
+
 struct probe_ima_scope {
 	int scope; /* enum probe_ima_scope_state, or -errno from the read */
 	int policy_signed; /* policy writes are appraised against a signature */
 	int secureboot;
 	int agent_signed; /* agent binary carries a signed security.ima */
 	int is_root;
+	int no_appraisal; /* probe_ima_appraise_built() returned 0 */
 };
 
 /**
@@ -58,8 +87,8 @@ enum stage_state probe_ima_scope_stage(const struct probe_ima_scope *s,
 				       char *note, size_t cap);
 
 enum probe_ima_scope_state {
-	PROBE_IMA_SCOPE_EXEC = 0, /* a rule reaches an executable */
-	PROBE_IMA_SCOPE_NONE = 1, /* readable, and appraises no executable */
+	PROBE_IMA_SCOPE_EXEC = 0, /* appraise rule on BPRM_CHECK or no func= */
+	PROBE_IMA_SCOPE_NONE = 1, /* readable, and no such rule */
 };
 
 /**
@@ -71,6 +100,15 @@ enum probe_ima_scope_state {
  * Return: enum probe_ima_scope_state, or -errno when the file cannot be read.
  */
 int probe_ima_policy_scope(const char *policy_path, int *policy_signed);
+
+/**
+ * probe_ima_policy_appraises() - Does the loaded IMA policy appraise anything?
+ * @policy_path: policy file.
+ *
+ * Return: 1 when a rule has the appraise action, whatever its func=,
+ * 0 when none has, -errno when the file cannot be read.
+ */
+int probe_ima_policy_appraises(const char *policy_path);
 
 enum probe_verity {
 	PROBE_VERITY_ENABLED = 0,
@@ -153,10 +191,10 @@ int probe_firmware_is_uefi(void);
 int probe_firmware_is_uefi_at(const char *dir);
 
 /**
- * probe_secureboot() - Read the SecureBoot variable.
+ * probe_secureboot() - lota_secure_boot_read() on the booted host.
  *
- * Return: 1 when enabled, 0 when not, -errno on read failure (-ENOENT when
- * the variable is absent).
+ * Return: as for lota_secure_boot_read(), -ENOENT when the SecureBoot
+ * variable is absent.
  */
 int probe_secureboot(void);
 
@@ -228,11 +266,8 @@ int probe_esrt_system_firmware_present_at(const char *base);
  * probe_cmdline_ima_ok() - Whether a cmdline leaves ima_appraise=enforce.
  * @cmdline: kernel command line.
  *
- * The last ima_appraise= token decides; with none the kernel keeps its
- * default, enforce.
- *
- * Return: 0 for enforce, -EPERM otherwise, -EINVAL for NULL,
- * -E2BIG for a cmdline of 4096 bytes or more.
+ * Return: 0 when lota_ima_cmdline_enforce() returns 1, -EPERM otherwise,
+ * -EINVAL for NULL.
  */
 int probe_cmdline_ima_ok(const char *cmdline);
 
@@ -246,9 +281,16 @@ int probe_cmdline_ima_ok(const char *cmdline);
 int probe_cmdline_has_token(const char *cmdline, const char *token);
 
 /**
+ * probe_ima_appraise_built() - lota_ima_appraise_built() on the booted kernel.
+ *
+ * Return: as for lota_ima_appraise_built().
+ */
+int probe_ima_appraise_built(void);
+
+/**
  * probe_ima_mode_blocking() - Nonzero @secureboot, or a cmdline that passes
  * probe_cmdline_ima_ok().
- * @secureboot: probe_secureboot() result.
+ * @secureboot: nonzero when probe_secureboot() returned LOTA_SECURE_BOOT_ON.
  * @cmdline:    kernel command line.
  *
  * Return: 1 when @secureboot is nonzero or @cmdline passes

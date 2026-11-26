@@ -29,7 +29,9 @@
 #include <linux/openat2.h>
 
 #include "../../include/lota.h"
+#include "../../include/lota_ima_appraise.h"
 #include "../../include/lota_ima_policy_scope.h"
+#include "../../include/lota_secure_boot.h"
 #include "bpf_loader.h"
 #include "cgroup_guard.h"
 #include "journal.h"
@@ -440,9 +442,6 @@ int bpf_loader_ima_appraisal_active(const char *cmdline_path,
 {
 	char buf[4096];
 	size_t len = 0;
-	const char *val = NULL;
-	char *tok;
-	char *save = NULL;
 	int read_err = 0;
 	int ret;
 
@@ -462,26 +461,15 @@ int bpf_loader_ima_appraisal_active(const char *cmdline_path,
 		return ret;
 	if (len == 0)
 		return -EIO;
-	if (buf[len - 1] == '\n')
-		buf[len - 1] = '\0';
-
-	/* the kernel keeps the last one; with none, its default enforce */
-	for (tok = strtok_r(buf, " \t", &save); tok;
-	     tok = strtok_r(NULL, " \t", &save)) {
-		if (strncmp(tok, "ima_appraise=", 13) == 0)
-			val = tok + 13;
-	}
-	if (!val)
-		val = "enforce";
-	if (strcmp(val, "enforce") != 0)
+	if (!lota_ima_cmdline_enforce(buf))
 		return -EPERM;
 
 	ret = ima_policy_appraises_exec(policy_path, &read_err);
 	if (ret == -EACCES)
 		/* debug, not warn: asked every round */
-		lota_dbg("IMA appraisal mode is %s but %s could not "
+		lota_dbg("IMA appraisal mode is enforce but %s could not "
 			 "be read (%s), so the scope is unknown",
-			 val, policy_path, strerror(-read_err));
+			 policy_path, strerror(-read_err));
 	return ret;
 }
 
@@ -499,51 +487,13 @@ int bpf_loader_kernel_module_sig_enforced(const char *sig_enforce_path)
 	return -EPERM;
 }
 
-int bpf_loader_secure_boot_judge(const uint8_t *sb, ssize_t sb_len,
-				 const uint8_t *mok, ssize_t mok_len)
-{
-	if (sb_len < 0)
-		return (int)sb_len;
-	if (sb_len < 5)
-		return -EIO;
-	if (sb[4] != 1)
-		return -EPERM;
-	/* shim's insecure mode, honoured by the kernel when not NON_VOLATILE */
-	if (mok_len >= 5 && !(mok[0] & 0x1) && mok[4] == 1)
-		return -EPERM;
-	return 0;
-}
-
-static ssize_t read_efivar(const char *path, uint8_t *buf, size_t cap)
-{
-	ssize_t n;
-	int fd;
-
-	fd = open(path, O_RDONLY | O_CLOEXEC);
-	if (fd < 0)
-		return -errno;
-
-	n = read(fd, buf, cap);
-	if (n < 0)
-		n = -errno;
-	close(fd);
-	return n;
-}
-
 int bpf_loader_secure_boot_enabled(void)
 {
-	static const char sb_path[] =
-		"/sys/firmware/efi/efivars/"
-		"SecureBoot-8be4df61-93ca-11d2-aa0d-00e098032b8c";
-	static const char mok_path[] =
-		"/sys/firmware/efi/efivars/"
-		"MokSBStateRT-605dab50-e046-4300-abb6-3dd810dd8b23";
-	uint8_t sb[5] = { 0 };
-	uint8_t mok[5] = { 0 };
-	ssize_t sb_len = read_efivar(sb_path, sb, sizeof(sb));
-	ssize_t mok_len = read_efivar(mok_path, mok, sizeof(mok));
+	int ret = lota_secure_boot_read(LOTA_EFIVARS_DIR);
 
-	return bpf_loader_secure_boot_judge(sb, sb_len, mok, mok_len);
+	if (ret < 0)
+		return ret;
+	return ret == LOTA_SECURE_BOOT_ON ? 0 : -EPERM;
 }
 
 /*
@@ -597,6 +547,12 @@ static int tpm_device_selinux_label_ok(void)
 
 int bpf_loader_kernel_appraises_exec(void)
 {
+	static int built = -1;
+
+	if (built < 0)
+		built = lota_ima_appraise_built(LOTA_VMLINUX_BTF_PATH) == 1;
+	if (!built)
+		return -EOPNOTSUPP;
 	return bpf_loader_ima_appraisal_active(
 		IMA_CMDLINE_PATH, IMA_POLICY_PATH,
 		bpf_loader_secure_boot_enabled() == 0);
@@ -640,6 +596,8 @@ int bpf_loader_verify_kernel_runtime_hardening(bool allow_mutable_rootfs)
 			  ret == -EPERM ?
 				  "ima_appraise= on the kernel cmdline is not "
 				  "enforce" :
+			  ret == -EOPNOTSUPP ?
+				  "the kernel BTF does not show IMA appraisal" :
 				  "the kernel cmdline could not be read");
 
 	ret = tpm_device_selinux_label_ok();

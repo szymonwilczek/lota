@@ -361,8 +361,8 @@ bool bpf_loader_integrity_config_satisfied(const struct integrity_data *cfg);
 
 /**
  * bpf_loader_ima_appraisal_active() - Do mode and policy appraise exec?
- * @cmdline_path: Kernel cmdline carrying ima_appraise=, the mode. With none
- *	the kernel keeps its default, enforce.
+ * @cmdline_path: Kernel cmdline, read by lota_ima_cmdline_enforce() for the
+ *	mode.
  * @policy_path: Loaded IMA policy carrying the func= rules, the scope.
  * @secureboot: Non-zero when this host booted with Secure Boot on. The kernel
  *	then keeps its built-in mode, enforce, and @cmdline_path is not read.
@@ -375,23 +375,10 @@ int bpf_loader_ima_appraisal_active(const char *cmdline_path,
 				    const char *policy_path, int secureboot);
 
 /**
- * bpf_loader_secure_boot_judge() - Secure Boot state from two efivarfs reads.
- * @sb: SecureBoot variable, 4 bytes of attributes then the value.
- * @sb_len: Bytes read into @sb, or a negative errno.
- * @mok: shim's MokSBStateRT variable, same layout.
- * @mok_len: Bytes read into @mok, or a negative errno.
- *
- * Return: 0 when SecureBoot is 1 and MokSBStateRT does not put shim in
- * insecure mode, -EPERM when either says off, -EIO for a short @sb,
- * or @sb_len.
- */
-int bpf_loader_secure_boot_judge(const uint8_t *sb, ssize_t sb_len,
-				 const uint8_t *mok, ssize_t mok_len);
-
-/**
  * bpf_loader_secure_boot_enabled() - Check the UEFI Secure Boot state.
  *
- * Return: bpf_loader_secure_boot_judge() over the efivarfs variables.
+ * Return: 0 when lota_secure_boot_read() finds Secure Boot on, -EPERM for
+ * any other state, or its negative errno.
  */
 int bpf_loader_secure_boot_enabled(void);
 
@@ -399,9 +386,11 @@ int bpf_loader_secure_boot_enabled(void);
  * bpf_loader_kernel_appraises_exec() - Does this host appraise executables?
  *
  * bpf_loader_ima_appraisal_active() on the booted cmdline, the loaded policy
- * and this host's Secure Boot state.
+ * and this host's Secure Boot state, once lota_ima_appraise_built() finds
+ * appraisal in the booted kernel.
  *
- * Return: as for bpf_loader_ima_appraisal_active().
+ * Return: -EOPNOTSUPP when lota_ima_appraise_built() does not return 1,
+ * otherwise as for bpf_loader_ima_appraisal_active().
  */
 int bpf_loader_kernel_appraises_exec(void);
 

@@ -267,7 +267,7 @@ $(INSTALLER_BIN): $(INSTALLER_SRCS) installer/install.h installer/probe.h \
 		$(AGENT_DIR)/profile.h | $(BUILD_DIR)
 	$(QUIET_CC)
 	$(Q)$(CC) $(CFLAGS) -DLOTA_INSTALL_VERSION=\"$(LOTA_VERSION_STRING)\" \
-		-o $@ $(INSTALLER_SRCS) -pie $(HARDENING_LDFLAGS) -lcrypto
+		-o $@ $(INSTALLER_SRCS) -pie $(HARDENING_LDFLAGS) -lbpf -lcrypto
 
 # No package ships lota-bench.
 LOTA_BENCH_BIN := $(BUILD_DIR)/lota-bench
@@ -1231,7 +1231,7 @@ TEST_INSTALLER := $(addprefix $(BUILD_DIR)/test_, \
 	installer_trust_key \
 )
 $(TEST_INSTALLER): $(TEST_INSTALLER_SRCS)
-$(TEST_INSTALLER): TEST_LDLIBS := -lcrypto
+$(TEST_INSTALLER): TEST_LDLIBS := -lbpf -lcrypto
 
 TEST_IPC := $(addprefix $(BUILD_DIR)/test_, \
 	ipc_attest_time \
@@ -1411,10 +1411,10 @@ $(BUILD_DIR)/test_installer_named_paths: $(INSTALLER_BIN)
 $(BUILD_DIR)/test_installer_named_paths: TEST_CFLAGS := -DLOTA_INSTALL_BIN='"$(INSTALLER_BIN)"'
 
 $(BUILD_DIR)/test_installer_probe: installer/probe.c
-$(BUILD_DIR)/test_installer_probe: TEST_LDLIBS := -lcrypto
+$(BUILD_DIR)/test_installer_probe: TEST_LDLIBS := -lbpf -lcrypto
 
 $(BUILD_DIR)/test_installer_service: installer/probe.c
-$(BUILD_DIR)/test_installer_service: TEST_LDLIBS := -lcrypto
+$(BUILD_DIR)/test_installer_service: TEST_LDLIBS := -lbpf -lcrypto
 
 $(BUILD_DIR)/test_integrity_map_layout: $(TEST_LOADER_SRCS) $(BPF_OBJ) $(LEGACY_BPF_OBJ)
 $(BUILD_DIR)/test_integrity_map_layout: TEST_CFLAGS := -DTREE_BPF_OBJ='"$(BPF_OBJ)"' \
