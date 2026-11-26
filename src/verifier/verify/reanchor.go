@@ -8,10 +8,29 @@ import (
 	"bytes"
 	"crypto/sha256"
 	"errors"
+	"slices"
+	"strings"
 	"time"
 
 	"github.com/szymonwilczek/lota/verifier/types"
 )
+
+// ErrBootEntryRepinRaced is returned by RepinBootEntries when the pinned boot
+// registers are no longer the ones the decision was made against.
+var ErrBootEntryRepinRaced = errors.New(
+	"boot entry re-pin: pinned boot registers moved")
+
+// BootEntryRepinStorer is optionally implemented by baseline stores that can
+// move a client's pinned PCR 1 after its boot entries changed.
+//
+// RepinBootEntries replaces the PCR 1 of the pinned boot from and stores
+// eventLog as the client's boot evidence in one write. The re-anchor rate
+// limit and the LFA state stay as they are. It returns ErrBootEntryRepinRaced
+// when the row no longer holds from.
+type BootEntryRepinStorer interface {
+	RepinBootEntries(clientID string, from BootBaseline,
+		pcr1 [types.HashSize]byte, eventLog []byte, now time.Time) error
+}
 
 // ErrReanchorRateLimited is returned by a store's ArchiveAndReanchor when the
 // client's re-anchor interval has not elapsed.
@@ -173,4 +192,85 @@ func reanchorDecision(in ReanchorInputs) (verdict ReanchorVerdict, reason string
 		return ReanchorLFA, "low-firmware-assurance re-anchor (no firmware version proof)"
 	}
 	return ReanchorAllow, "firmware drift preserves Secure Boot root of trust"
+}
+
+// bootEntryName reports whether name is BootOrder or a Boot#### load option.
+func bootEntryName(name string) bool {
+	if name == "BootOrder" {
+		return true
+	}
+	num, ok := strings.CutPrefix(name, "Boot")
+	if !ok || len(num) != 4 {
+		return false
+	}
+	for _, c := range num {
+		if !strings.ContainsRune("0123456789ABCDEF", c) {
+			return false
+		}
+	}
+	return true
+}
+
+// bootEntryEvent reports whether e measures a boot entry: a boot variable
+// event of the EFI global namespace naming BootOrder or Boot####,
+// whose data hashes to its SHA-256 digest.
+func bootEntryEvent(e *EventLogEntry) bool {
+	if e.EventType != EvEFIVariableBoot &&
+		e.EventType != EvEFIVariableBoot2 {
+		return false
+	}
+	sum := sha256.Sum256(e.EventData)
+	if !bytes.Equal(e.Digests[AlgSHA256], sum[:]) {
+		return false
+	}
+	uv, err := parseUEFIVariableData(e.EventData)
+	if err != nil || uv.VariableName != efiGlobalVariableGUID {
+		return false
+	}
+	return bootEntryName(uv.UnicodeName)
+}
+
+// pcr1Events splits the PCR 1 events of parsed into boot entries and the rest.
+func pcr1Events(parsed *ParsedEventLog) (entries, rest []*EventLogEntry) {
+	for i := range parsed.Entries {
+		e := &parsed.Entries[i]
+		if e.PCRIndex != 1 || e.EventType == EvNoAction {
+			continue
+		}
+		if bootEntryEvent(e) {
+			entries = append(entries, e)
+		} else {
+			rest = append(rest, e)
+		}
+	}
+	return entries, rest
+}
+
+func sameEvent(a, b *EventLogEntry) bool {
+	if a.EventType != b.EventType ||
+		!bytes.Equal(a.EventData, b.EventData) ||
+		len(a.Digests) != len(b.Digests) {
+		return false
+	}
+	for alg, d := range a.Digests {
+		if !bytes.Equal(d, b.Digests[alg]) {
+			return false
+		}
+	}
+	return true
+}
+
+// bootEntryPCR1Change returns nil when PCR 1 moved between the pinned boot's
+// log and this one in boot entries alone: every other PCR 1 event is the one
+// the pinned boot logged, in the same order.
+func bootEntryPCR1Change(pinned, current *ParsedEventLog) error {
+	pe, pr := pcr1Events(pinned)
+	ce, cr := pcr1Events(current)
+	if !slices.EqualFunc(pr, cr, sameEvent) {
+		return errors.New("a PCR 1 event other than a boot entry moved")
+	}
+	if slices.EqualFunc(pe, ce, sameEvent) {
+		return errors.New("no boot entry moved")
+	}
+	return nil
 }

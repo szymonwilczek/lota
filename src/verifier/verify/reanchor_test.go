@@ -5,7 +5,9 @@
 package verify
 
 import (
+	"bytes"
 	"encoding/binary"
+	"log/slog"
 	"testing"
 	"time"
 	"unicode/utf16"
@@ -331,5 +333,249 @@ func TestReanchorDecision_FirmwareFloorUnchangedVersion(t *testing.T) {
 	atFloor.CurrentESRT = &types.ESRTInfo{Present: true, FWVersion: 700, LowestSupported: 700}
 	if _, reason := reanchorDecision(atFloor); reason == floorReason {
 		t.Errorf("at-floor unchanged version must not trip the anti-rollback floor")
+	}
+}
+
+const evPlatformConfigFlags uint32 = 0x0000000A
+
+func bootVar(name string, data []byte) EventLogEntry {
+	return measuredEntry(1, EvEFIVariableBoot,
+		encodeUEFIVariableData(efiGlobalVariableGUID, name, data))
+}
+
+// a boot whose PCR 1 carries the platform flags and the given boot variables
+func bootEntryLog(crtm string, sb byte, flags string,
+	vars ...EventLogEntry,
+) []byte {
+	sbVar := encodeUEFIVariableData(efiGlobalVariableGUID, "SecureBoot",
+		[]byte{sb})
+	entries := []EventLogEntry{
+		measuredEntry(0, 0x00000008, []byte(crtm)),
+		measuredEntry(7, EvEFIVariableDriverConfig, sbVar),
+		separatorEntry(),
+		measuredEntry(1, evPlatformConfigFlags, []byte(flags)),
+	}
+	entries = append(entries, vars...)
+	entries = append(entries,
+		measuredEntry(1, EvSeparator, make([]byte, 4)))
+	return buildTestEventLog(entries)
+}
+
+var (
+	pinnedOrder = []byte{1, 0, 0, 0}
+	movedOrder  = []byte{0, 1, 0, 0}
+)
+
+// the pinned boot's entries, BootOrder replaced by order
+func bootEntries(order []byte) []EventLogEntry {
+	return []EventLogEntry{
+		bootVar("BootOrder", order),
+		bootVar("Boot0000", []byte("linux")),
+		bootVar("Boot0001", []byte("usb")),
+	}
+}
+
+func pinnedBootEntries() []EventLogEntry { return bootEntries(pinnedOrder) }
+
+// the pinned boot's entries and one more
+func addedBootEntry() []EventLogEntry {
+	return append(pinnedBootEntries(),
+		bootVar("Boot0002", []byte("windows")))
+}
+
+func TestBootEntryPCR1Change(t *testing.T) {
+	pinned := mustParse(bootEntryLog("crtm", 1, "flags",
+		pinnedBootEntries()...))
+
+	offDigest := bootEntries(movedOrder)
+	offDigest[0].EventData = encodeUEFIVariableData(efiGlobalVariableGUID,
+		"BootOrder", pinnedOrder)
+	boot2 := bootEntries(movedOrder)
+	boot2[0].EventType = EvEFIVariableBoot2
+	vendor := append(pinnedBootEntries(),
+		measuredEntry(1, EvEFIVariableBoot, encodeUEFIVariableData(
+			[16]byte{1}, "BootOrder", movedOrder)))
+	badName := append(pinnedBootEntries(), bootVar("Boot000x", []byte("x")))
+
+	tests := []struct {
+		name    string
+		flags   string
+		current []EventLogEntry
+		ok      bool
+	}{
+		{"boot order", "flags", bootEntries(movedOrder), true},
+		{"entry added", "flags", addedBootEntry(), true},
+		{"boot2 event", "flags", boot2, true},
+		{"nothing moved", "flags", pinnedBootEntries(), false},
+		{"flags moved", "other", bootEntries(movedOrder), false},
+		{"data off its digest", "flags", offDigest, false},
+		{"vendor namespace", "flags", vendor, false},
+		{"not a boot entry name", "flags", badName, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			current := mustParse(bootEntryLog("crtm", 1, tt.flags,
+				tt.current...))
+			err := bootEntryPCR1Change(pinned, current)
+			if (err == nil) != tt.ok {
+				t.Fatalf("got %v, want ok=%v", err, tt.ok)
+			}
+		})
+	}
+}
+
+type bootEntryCase struct {
+	v      *Verifier
+	id     string
+	pinned BootBaseline
+	boot   BootBaseline
+	report *types.AttestationReport
+	facts  *BootFacts
+}
+
+func bootOfLog(t *testing.T, log []byte) BootBaseline {
+	t.Helper()
+	replay, err := ReplayEventLog(mustParse(log))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return BootBaseline{PCR0: replay.PCRValues[0],
+		PCR1: replay.PCRValues[1], PCR7: replay.PCRValues[7]}
+}
+
+// bootWith moves the case to a report of log
+func (c *bootEntryCase) bootWith(t *testing.T, log []byte) {
+	t.Helper()
+	c.boot = bootOfLog(t, log)
+	c.report = &types.AttestationReport{EventLog: log}
+	c.facts = &BootFacts{Parsed: mustParse(log), SecureBootTrusted: true,
+		SecureBoot: SecureBootState{Found: true, Enabled: true}}
+}
+
+// a client that spent its LFA re-anchor on the pinned boot and boots current
+func newBootEntryCase(t *testing.T, current []byte) *bootEntryCase {
+	t.Helper()
+
+	v := NewVerifier(DefaultConfig(), newCertVerifier(t))
+	policy := DefaultPolicy()
+	policy.Profile = ProfileConsumer
+	policy.RequireSecureBoot = true
+	if err := v.AddPolicy(policy); err != nil {
+		t.Fatalf("AddPolicy: %v", err)
+	}
+
+	pinnedLog := bootEntryLog("crtm", 1, "flags", pinnedBootEntries()...)
+	c := &bootEntryCase{v: v, id: "boot-entry-client",
+		pinned: bootOfLog(t, pinnedLog)}
+	v.baselineStore.(AtomicBaselineStorer).CheckAndUpdateAttestation(c.id,
+		[types.HashSize]byte{1}, fixtureAgentHash(), &c.pinned, false)
+	rs := v.baselineStore.(ReanchorStorer)
+	if err := rs.ArchiveAndReanchor(c.id, c.pinned, pinnedLog, 0, false,
+		true, "lfa", time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	c.bootWith(t, current)
+	return c
+}
+
+func (c *bootEntryCase) try() bool {
+	return c.v.tryReanchor(slog.Default(), c.id, "", &c.pinned, &c.boot,
+		c.report, c.facts)
+}
+
+func (c *bootEntryCase) pinnedNow(t *testing.T) BootBaseline {
+	t.Helper()
+	r := c.v.baselineStore.(BootBaselineReader)
+	b, err := r.GetBootBaseline(c.id)
+	if err != nil || b == nil {
+		t.Fatalf("GetBootBaseline: %v, %v", b, err)
+	}
+	return BootBaseline{PCR0: b.PCR0, PCR1: b.PCR1, PCR7: b.PCR7}
+}
+
+// inside the LFA interval a boot entry change still re-pins, and spends nothing
+func TestTryReanchor_BootEntriesRepinPCR1(t *testing.T) {
+	current := bootEntryLog("crtm", 1, "flags", addedBootEntry()...)
+	c := newBootEntryCase(t, current)
+	rs := c.v.baselineStore.(ReanchorStorer)
+	before := rs.GetReanchorState(c.id)
+
+	if !c.try() {
+		t.Fatal("a boot entry change must re-pin PCR 1")
+	}
+	if got := c.pinnedNow(t); got != c.boot {
+		t.Fatalf("pin %x, want %x", got.PCR1, c.boot.PCR1)
+	}
+	st := rs.GetReanchorState(c.id)
+	if !bytes.Equal(st.EventLogBaseline, current) {
+		t.Fatal("boot evidence did not move with the pin")
+	}
+	if st.ReanchorCount != before.ReanchorCount ||
+		!st.LastReanchorAt.Equal(before.LastReanchorAt) {
+		t.Fatal("the boot entry re-pin spent the re-anchor limit")
+	}
+
+	c.pinned = c.boot
+	c.bootWith(t, bootEntryLog("crtm", 1, "flags", pinnedBootEntries()...))
+	if !c.try() {
+		t.Fatal("a second boot entry change must re-pin too")
+	}
+}
+
+// anything beyond the boot entries takes the firmware road, which the spent
+// LFA interval refuses
+func TestTryReanchor_BootEntriesRefusals(t *testing.T) {
+	offPin := func(c *bootEntryCase) {
+		_ = c.v.baselineStore.(ReanchorStorer).RecordBootEvidence(c.id,
+			bootEntryLog("crtm", 1, "flags"), 0, false)
+	}
+	tests := []struct {
+		name   string
+		crtm   string
+		sb     byte
+		flags  string
+		mutate func(*bootEntryCase)
+	}{
+		{"platform flags moved", "crtm", 1, "other", nil},
+		{"PCR 0 moved", "crtm2", 1, "flags", nil},
+		{"PCR 7 moved", "crtm", 2, "flags", nil},
+		{"log off the pin", "crtm", 1, "flags", offPin},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			c := newBootEntryCase(t, bootEntryLog(tt.crtm, tt.sb,
+				tt.flags, addedBootEntry()...))
+			if tt.mutate != nil {
+				tt.mutate(c)
+			}
+			if c.try() {
+				t.Fatal("re-pinned")
+			}
+			if c.pinnedNow(t) != c.pinned {
+				t.Fatal("refusal moved the pin")
+			}
+		})
+	}
+}
+
+// the row moved after the decision read it: the write refuses
+func TestTryReanchor_BootEntriesRaceRefused(t *testing.T) {
+	c := newBootEntryCase(t, bootEntryLog("crtm", 1, "flags",
+		addedBootEntry()...))
+	other := c.pinned
+	other.PCR1[0] ^= 1
+	rs := c.v.baselineStore.(ReanchorStorer)
+	pinnedLog := rs.GetReanchorState(c.id).EventLogBaseline
+	bs := c.v.baselineStore.(BootEntryRepinStorer)
+	if err := bs.RepinBootEntries(c.id, c.pinned, other.PCR1, nil,
+		time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	_ = rs.RecordBootEvidence(c.id, pinnedLog, 0, false)
+	if c.try() {
+		t.Fatal("re-pinned over a moved row")
+	}
+	if c.pinnedNow(t) != other {
+		t.Fatal("race refusal moved the pin")
 	}
 }

@@ -55,6 +55,10 @@ type BanStore interface {
 
 	// ListBans returns the active bans of every tenant.
 	ListBans() []BanEntry
+
+	// CountBansIn counts the active bans, of tenants only when tenants is
+	// non-nil.
+	CountBansIn(tenants []string) (int, error)
 }
 
 // PaginatedBanLister is implemented by ban stores that page in SQL.

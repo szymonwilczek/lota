@@ -5,6 +5,7 @@
 package server
 
 import (
+	"database/sql"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -24,6 +25,7 @@ type scopedAPIFixture struct {
 	revStore *store.SQLiteRevocationStore
 	banStore *store.SQLiteBanStore
 	auditLog *store.SQLiteAuditLog
+	banDB    *sql.DB
 }
 
 func newScopedAPIFixture(t *testing.T, scopedKeyHash string) *scopedAPIFixture {
@@ -33,7 +35,8 @@ func newScopedAPIFixture(t *testing.T, scopedKeyHash string) *scopedAPIFixture {
 	db := testDB(t)
 	auditLog := store.NewSQLiteAuditLog(db)
 	revStore := store.NewSQLiteRevocationStore(db, auditLog)
-	banStore := store.NewSQLiteBanStore(db, auditLog)
+	banDB := testDB(t)
+	banStore := store.NewSQLiteBanStore(banDB, auditLog)
 
 	cfg := verify.DefaultConfig()
 	cfg.RequireBootEnrollment = false
@@ -71,7 +74,9 @@ func newScopedAPIFixture(t *testing.T, scopedKeyHash string) *scopedAPIFixture {
 	mux := http.NewServeMux()
 	NewAPIHandler(mux, v, srv, auditLog, nil, nil, nil, "", "")
 
-	return &scopedAPIFixture{mux: mux, baseline: baseline, revStore: revStore, banStore: banStore, auditLog: auditLog}
+	return &scopedAPIFixture{mux: mux, baseline: baseline,
+		revStore: revStore, banStore: banStore, auditLog: auditLog,
+		banDB: banDB}
 }
 
 func (f *scopedAPIFixture) do(t *testing.T, method, target, key string) (int, map[string]any) {
@@ -160,6 +165,39 @@ func TestAPITenantScoping_RevocationsAndStats(t *testing.T) {
 	}
 	if rc, _ := stats["registered_clients"].(float64); rc != 1 {
 		t.Fatalf("scoped registered_clients = %v, want 1", stats["registered_clients"])
+	}
+}
+
+func TestAPITenantScoping_StatsCountsBansOfItsTenants(t *testing.T) {
+	f := newScopedAPIFixture(t, keyHashHex("acme-key"))
+
+	for i, tenant := range []string{"acme", "beta", "beta"} {
+		hw := [32]byte{byte(i + 1)}
+		err := f.banStore.BanHardware(tenant, hw,
+			store.RevocationAdmin, "op", "")
+		if err != nil {
+			t.Fatalf("BanHardware(%s): %v", tenant, err)
+		}
+	}
+
+	code, stats := f.do(t, "GET", "/api/v1/stats", "acme-key")
+	if code != http.StatusOK {
+		t.Fatalf("stats: %d", code)
+	}
+	if ab, _ := stats["active_bans"].(float64); ab != 1 {
+		t.Fatalf("scoped active_bans = %v, want 1",
+			stats["active_bans"])
+	}
+}
+
+// A count the store cannot give is an error, not a zero.
+func TestAPITenantScoping_StatsStoreFailureIsAnError(t *testing.T) {
+	f := newScopedAPIFixture(t, keyHashHex("acme-key"))
+	f.banDB.Close()
+
+	code, _ := f.do(t, "GET", "/api/v1/stats", "acme-key")
+	if code != http.StatusInternalServerError {
+		t.Fatalf("scoped stats over a closed store: %d, want 500", code)
 	}
 }
 

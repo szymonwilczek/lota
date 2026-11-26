@@ -6,6 +6,7 @@ package store
 
 import (
 	"errors"
+	"strings"
 	"time"
 )
 
@@ -70,4 +71,30 @@ type RevocationStore interface {
 
 	// ListRevocations returns every active revocation.
 	ListRevocations() []RevocationEntry
+
+	// CountRevocationsIn counts the active revocations,
+	// of tenants only when tenants is non-nil.
+	CountRevocationsIn(tenants []string) (int, error)
+}
+
+// countInTenantsQuery builds a COUNT(*) over table, keeping the rows whose
+// tenant is one of tenants when tenants is non-nil;
+// ph returns the placeholder of the n-th argument.
+func countInTenantsQuery(table string, tenants []string,
+	ph func(n int) string,
+) (q string, args []any) {
+	q = "SELECT COUNT(*) FROM " + table
+	if tenants == nil {
+		return q, nil
+	}
+	if len(tenants) == 0 {
+		return q + " WHERE 0 = 1", nil
+	}
+	args = make([]any, 0, len(tenants))
+	set := make([]string, 0, len(tenants))
+	for _, t := range tenants {
+		args = append(args, t)
+		set = append(set, ph(len(args)))
+	}
+	return q + " WHERE tenant IN (" + strings.Join(set, ", ") + ")", args
 }

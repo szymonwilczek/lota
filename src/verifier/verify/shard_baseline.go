@@ -25,6 +25,7 @@ type baselineShard interface {
 	ReanchorStorer
 	AgentHashRepinStorer
 	PCR14RepinStorer
+	BootEntryRepinStorer
 	KernelHashRecorder
 	MachineKeysRecorder
 	ForcedReanchorStorer
@@ -114,6 +115,19 @@ func (s *ShardedBaselineStore) ListClientsAfter(tenants []string,
 	return merged, nil
 }
 
+// CountClients sums the shards; a client lives on one shard.
+func (s *ShardedBaselineStore) CountClients(tenants []string) (int, error) {
+	total := 0
+	for _, sh := range s.shards {
+		n, err := sh.CountClients(tenants)
+		if err != nil {
+			return 0, err
+		}
+		total += n
+	}
+	return total, nil
+}
+
 func (s *ShardedBaselineStore) Stats() BaselineStats {
 	var agg BaselineStats
 	for _, sh := range s.shards {
@@ -179,6 +193,14 @@ func (s *ShardedBaselineStore) RepinPCR14(clientID string,
 	from, to [types.HashSize]byte, eventLog []byte, now time.Time,
 ) error {
 	return s.shardFor(clientID).RepinPCR14(clientID, from, to, eventLog, now)
+}
+
+func (s *ShardedBaselineStore) RepinBootEntries(clientID string,
+	from BootBaseline, pcr1 [types.HashSize]byte, eventLog []byte,
+	now time.Time,
+) error {
+	return s.shardFor(clientID).RepinBootEntries(clientID, from, pcr1,
+		eventLog, now)
 }
 
 func (s *ShardedBaselineStore) ArchiveAndRepinAgentHash(clientID string,

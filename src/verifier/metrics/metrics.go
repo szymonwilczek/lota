@@ -165,6 +165,7 @@ const (
 	OutcomeStrong            = "strong"
 	OutcomeLFA               = "lfa"
 	OutcomeMOK               = "mok"
+	OutcomeBootEntries       = "boot_entries"
 	OutcomeForced            = "forced"
 	OutcomeEscalate          = "escalate"
 	OutcomeAgentHash         = "agent_hash"
@@ -173,8 +174,9 @@ const (
 
 // every lota_reanchors_total outcome, seeded at zero
 var reanchorOutcomes = []string{
-	OutcomeStrong, OutcomeLFA, OutcomeMOK, OutcomeForced, OutcomeEscalate,
-	OutcomeAgentHash, OutcomeAgentHashEscalate,
+	OutcomeStrong, OutcomeLFA, OutcomeMOK, OutcomeBootEntries,
+	OutcomeForced, OutcomeEscalate, OutcomeAgentHash,
+	OutcomeAgentHashEscalate,
 }
 
 // Export renders the metrics in the Prometheus text exposition format.

@@ -110,6 +110,21 @@ func (s *SQLiteRevocationStore) Unrevoke(clientID, reason, actor, note string) (
 		reason, actor, note)
 }
 
+func (s *SQLiteRevocationStore) CountRevocationsIn(tenants []string) (int,
+	error,
+) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	q, args := countInTenantsQuery("revocations", tenants,
+		func(int) string { return "?" })
+	var n int
+	if err := s.db.QueryRow(q, args...).Scan(&n); err != nil {
+		return 0, err
+	}
+	return n, nil
+}
+
 func (s *SQLiteRevocationStore) ListRevocations() []RevocationEntry {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -337,6 +352,16 @@ func (s *SQLiteBanStore) CountBans() int {
 		return 0
 	}
 	return total
+}
+
+func (s *SQLiteBanStore) CountBansIn(tenants []string) (int, error) {
+	q, args := countInTenantsQuery("hardware_bans", tenants,
+		func(int) string { return "?" })
+	var n int
+	if err := s.db.QueryRow(q, args...).Scan(&n); err != nil {
+		return 0, err
+	}
+	return n, nil
 }
 
 func (s *SQLiteBanStore) CountBansE() (int, error) {

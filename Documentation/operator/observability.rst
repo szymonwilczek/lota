@@ -93,6 +93,8 @@ Metric                                          Type      Meaning
                                                           auto-applied; ``lfa`` also lands in the
                                                           operator review queue), ``mok``
                                                           (PCR 14 re-pinned after a MOK-only
+                                                          change), ``boot_entries`` (PCR 1
+                                                          re-pinned after a boot-entry-only
                                                           change), ``escalate``
                                                           (refused, device blocked until an operator
                                                           acts), ``forced`` (operator-forced via the

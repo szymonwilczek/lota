@@ -1075,6 +1075,78 @@ func checkRepinPCR14(t *testing.T, bs pcr14RepinStore) {
 	}
 }
 
+type bootEntryRepinStore interface {
+	BaselineStorer
+	BootBaselineStorer
+	BootBaselineReader
+	ReanchorStorer
+	BootEntryRepinStorer
+}
+
+func checkRepinBootEntries(t *testing.T, bs bootEntryRepinStore) {
+	t.Helper()
+	from := boot(0xB0, 0xB1, 0xB7)
+	var pcr1 [types.HashSize]byte
+	pcr1[0] = 0xC1
+	log := []byte("evlog-next")
+
+	if bs.RepinBootEntries("c", from, pcr1, log, time.Now()) == nil {
+		t.Fatal("re-pinned a client with no row")
+	}
+	bs.CheckAndUpdate("c", [types.HashSize]byte{0xA1})
+	bs.CheckAndUpdateBootPCRs("c", from)
+	if err := bs.ArchiveAndReanchor("c", from, []byte("evlog"), 0, false,
+		true, "lfa", time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	before := bs.GetReanchorState("c")
+
+	stale := from
+	stale.PCR7[0] ^= 1
+	err := bs.RepinBootEntries("c", stale, pcr1, log, time.Now())
+	if !errors.Is(err, ErrBootEntryRepinRaced) {
+		t.Fatalf("stale registers: got %v, want ErrBootEntryRepinRaced",
+			err)
+	}
+	if err := bs.RepinBootEntries("c", from, pcr1, log,
+		time.Now()); err != nil {
+		t.Fatalf("RepinBootEntries: %v", err)
+	}
+	got, err := bs.GetBootBaseline("c")
+	if err != nil || got == nil {
+		t.Fatalf("GetBootBaseline: %v, %v", got, err)
+	}
+	if got.PCR0 != from.PCR0 || got.PCR1 != pcr1 || got.PCR7 != from.PCR7 {
+		t.Fatalf("pin %x/%x/%x, want PCR 1 alone moved",
+			got.PCR0, got.PCR1, got.PCR7)
+	}
+	st := bs.GetReanchorState("c")
+	if !bytes.Equal(st.EventLogBaseline, log) {
+		t.Fatal("boot evidence not moved")
+	}
+	if st.ReanchorCount != before.ReanchorCount || st.LFA != before.LFA ||
+		!st.LastReanchorAt.Equal(before.LastReanchorAt) {
+		t.Fatal("the re-pin moved the re-anchor state")
+	}
+}
+
+func TestRepinBootEntries_Stores(t *testing.T) {
+	db, err := store.OpenDB(t.TempDir() + "/b.sqlite")
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer db.Close()
+
+	sharded, _ := newShardedMemoryBaselines(2)
+	for name, bs := range map[string]bootEntryRepinStore{
+		"memory":  NewBaselineStore(),
+		"sqlite":  NewSQLiteBaselineStore(db),
+		"sharded": sharded,
+	} {
+		t.Run(name, func(t *testing.T) { checkRepinBootEntries(t, bs) })
+	}
+}
+
 func TestRepinPCR14_Stores(t *testing.T) {
 	db, err := store.OpenDB(t.TempDir() + "/b.sqlite")
 	if err != nil {

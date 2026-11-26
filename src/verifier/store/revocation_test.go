@@ -9,6 +9,7 @@ package store
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -692,6 +693,12 @@ func TestSQLiteRevocationAndBan_ClosedDBIsAnError(t *testing.T) {
 	if err == nil || ok {
 		t.Errorf("IsBanned on a closed db: %v, %v", ok, err)
 	}
+	if _, err := rev.CountRevocationsIn([]string{"acme"}); err == nil {
+		t.Error("CountRevocationsIn on a closed db is not an error")
+	}
+	if _, err := ban.CountBansIn([]string{"acme"}); err == nil {
+		t.Error("CountBansIn on a closed db is not an error")
+	}
 }
 
 func TestSQLiteBanStore_Persistence(t *testing.T) {
@@ -758,6 +765,44 @@ func testRevocationTenant(t *testing.T, s RevocationStore, label string) {
 
 		if err := s.Unrevoke("tenant-rev-client", "appeal upheld", "test-operator", ""); err != nil {
 			t.Fatalf("cleanup unrevoke: %v", err)
+		}
+	})
+
+	t.Run(label+"/CountMatchesTheTenantFilter", func(t *testing.T) {
+		revoked := [][2]string{{"acme", "count-rev-a"},
+			{"beta", "count-rev-b"}}
+		for _, c := range revoked {
+			err := s.Revoke(c[0], c[1], RevocationAdmin, "admin",
+				"")
+			if err != nil {
+				t.Fatalf("Revoke(%s): %v", c[1], err)
+			}
+			defer func() {
+				err := s.Unrevoke(c[1], "appeal upheld",
+					"test-operator", "")
+				if err != nil {
+					t.Errorf("cleanup unrevoke(%s): %v",
+						c[1], err)
+				}
+			}()
+		}
+
+		all := s.ListRevocations()
+		filters := [][]string{nil, {"acme"}, {"acme", "beta"},
+			{"nobody"}, {}}
+		for _, tenants := range filters {
+			want := 0
+			for _, e := range all {
+				if tenants == nil ||
+					slices.Contains(tenants, e.Tenant) {
+					want++
+				}
+			}
+			got, err := s.CountRevocationsIn(tenants)
+			if err != nil || got != want {
+				t.Errorf("CountRevocationsIn(%q) = %d, %v; "+
+					"want %d", tenants, got, err, want)
+			}
 		}
 	})
 }
@@ -854,6 +899,43 @@ func testBanStorePerTenant(t *testing.T, s BanStore, label string) {
 		}
 		if len(seen) != len(tenants) {
 			t.Fatalf("pagination returned %d of %d per-tenant bans", len(seen), len(tenants))
+		}
+	})
+
+	t.Run(label+"/CountMatchesTheTenantFilter", func(t *testing.T) {
+		countHW := [32]byte{0x7E, 0x33}
+		for _, tenant := range []string{"game-a", "game-b"} {
+			err := s.BanHardware(tenant, countHW, RevocationAdmin,
+				"admin", "")
+			if err != nil {
+				t.Fatalf("BanHardware(%s): %v", tenant, err)
+			}
+			defer func() {
+				err := s.UnbanHardware(tenant, countHW,
+					"appeal upheld", "test-operator", "")
+				if err != nil {
+					t.Errorf("cleanup unban(%s): %v",
+						tenant, err)
+				}
+			}()
+		}
+
+		all := s.ListBans()
+		filters := [][]string{nil, {"game-a"}, {"game-a", "game-b"},
+			{"nobody"}, {}}
+		for _, tenants := range filters {
+			want := 0
+			for _, e := range all {
+				if tenants == nil ||
+					slices.Contains(tenants, e.Tenant) {
+					want++
+				}
+			}
+			got, err := s.CountBansIn(tenants)
+			if err != nil || got != want {
+				t.Errorf("CountBansIn(%q) = %d, %v; want %d",
+					tenants, got, err, want)
+			}
 		}
 	})
 }

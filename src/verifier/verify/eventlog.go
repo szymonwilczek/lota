@@ -28,6 +28,7 @@ const (
 	EvEFIVariableBoot         uint32 = 0x80000002
 	EvEFIGPTEvent             uint32 = 0x80000006
 	EvEFIAction               uint32 = 0x80000007
+	EvEFIVariableBoot2        uint32 = 0x8000000C
 )
 
 // TCG hash algorithm IDs

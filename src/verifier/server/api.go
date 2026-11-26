@@ -475,34 +475,28 @@ func (h *APIHandler) handleStats(w http.ResponseWriter, r *http.Request) {
 		resp.TenantScoped = true
 		resp.Tenants = sortedTenantSet(p)
 
-		registered := 0
-		for _, id := range h.verifier.ListClients() {
-			info, found, err := h.verifier.ClientInfo(id)
-			if err != nil {
-				h.writeStoreError(w, err)
-				return
-			}
-			if found && p.AllowsTenant(info.Tenant) {
-				registered++
-			}
+		var err error
+		resp.RegisteredClients, err = h.verifier.CountClients(resp.Tenants)
+		if err != nil {
+			h.writeStoreError(w, err)
+			return
 		}
-		resp.RegisteredClients = registered
 
 		resp.ActiveRevocations = 0
 		if revStore := h.verifier.RevocationStore(); revStore != nil {
-			for _, e := range revStore.ListRevocations() {
-				if p.AllowsTenant(e.Tenant) {
-					resp.ActiveRevocations++
-				}
+			resp.ActiveRevocations, err = revStore.CountRevocationsIn(resp.Tenants)
+			if err != nil {
+				h.writeStoreError(w, err)
+				return
 			}
 		}
 
 		resp.ActiveBans = 0
 		if banStr := h.verifier.BanStore(); banStr != nil {
-			for _, e := range banStr.ListBans() {
-				if p.AllowsTenant(e.Tenant) {
-					resp.ActiveBans++
-				}
+			resp.ActiveBans, err = banStr.CountBansIn(resp.Tenants)
+			if err != nil {
+				h.writeStoreError(w, err)
+				return
 			}
 		}
 

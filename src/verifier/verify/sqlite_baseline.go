@@ -350,6 +350,18 @@ func (s *SQLiteBaselineStore) ListClientsAfter(tenants []string,
 	return scanClientIDs(rows)
 }
 
+func (s *SQLiteBaselineStore) CountClients(tenants []string) (int, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	q, args := countClientsQuery(tenants, func(int) string { return "?" })
+	var n int
+	if err := s.db.QueryRow(q, args...).Scan(&n); err != nil {
+		return 0, err
+	}
+	return n, nil
+}
+
 func (s *SQLiteBaselineStore) Stats() BaselineStats {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -996,6 +1008,35 @@ func (s *SQLiteBaselineStore) RepinPCR14(clientID string,
 	}
 	if n == 0 {
 		return ErrPCR14RepinRaced
+	}
+	return nil
+}
+
+// RepinBootEntries moves the pinned PCR 1 and the boot evidence.
+// The WHERE on the old boot registers is the race guard.
+func (s *SQLiteBaselineStore) RepinBootEntries(clientID string,
+	from BootBaseline, pcr1 [types.HashSize]byte, eventLog []byte,
+	now time.Time,
+) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	res, err := s.db.Exec(
+		`UPDATE baselines SET pcr1 = ?, eventlog_baseline = ?,
+		   boot_last_seen = ?
+		 WHERE client_id = ? AND pcr0 = ? AND pcr1 = ? AND pcr7 = ?`,
+		pcr1[:], eventLog, now.UTC(), clientID,
+		from.PCR0[:], from.PCR1[:], from.PCR7[:],
+	)
+	if err != nil {
+		return err
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if n == 0 {
+		return ErrBootEntryRepinRaced
 	}
 	return nil
 }

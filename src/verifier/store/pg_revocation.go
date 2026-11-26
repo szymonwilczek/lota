@@ -114,6 +114,21 @@ func (s *PostgresRevocationStore) Unrevoke(clientID, reason, actor, note string)
 		reason, actor, note)
 }
 
+func (s *PostgresRevocationStore) CountRevocationsIn(tenants []string) (int,
+	error,
+) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	q, args := countInTenantsQuery("revocations", tenants,
+		func(n int) string { return "$" + strconv.Itoa(n) })
+	var n int
+	if err := s.db.QueryRow(q, args...).Scan(&n); err != nil {
+		return 0, err
+	}
+	return n, nil
+}
+
 func (s *PostgresRevocationStore) ListRevocations() []RevocationEntry {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -344,6 +359,16 @@ func (s *PostgresBanStore) CountBans() int {
 		return 0
 	}
 	return total
+}
+
+func (s *PostgresBanStore) CountBansIn(tenants []string) (int, error) {
+	q, args := countInTenantsQuery("hardware_bans", tenants,
+		func(n int) string { return "$" + strconv.Itoa(n) })
+	var n int
+	if err := s.db.QueryRow(q, args...).Scan(&n); err != nil {
+		return 0, err
+	}
+	return n, nil
 }
 
 func (s *PostgresBanStore) CountBansE() (int, error) {
