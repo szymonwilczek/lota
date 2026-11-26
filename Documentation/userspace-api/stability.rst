@@ -5,356 +5,257 @@
 Public API and ABI surface
 ==========================
 
-LOTA is a framework, so parts of it are surface an integrator builds against
-and the rest is implementation. Only what this page names is public. Anything
-else may change in any release, whatever its linkage says.
+The public surface of LOTA is the set of headers, shared libraries, archives,
+pkg-config modules and one Go module an integrator builds against. This page
+names that set, the rules a change to it follows and the gate that checks
+them. Everything else in the repository is implementation and may change in
+any release.
 
 Installed headers
 =================
 
-``lota-sdk-devel`` installs six headers into ``/usr/include/lota``, and that
-set is the public C API:
+``lota-sdk-devel`` installs headers into ``/usr/include/lota``. The list
+is :ghsrc:`packaging/abi/public-headers.list`.
 
 .. list-table::
    :header-rows: 1
-   :widths: 30 70
+   :widths: 25 75
 
    * - Header
-     - What it declares
+     - Declares
    * - ``lota_gaming.h``
-     - The client API: connect to the agent, query status, fetch and
-       serialize a token, subscribe to events.
+     - The client API of ``liblotagaming.so``: connection to the agent,
+       status, tokens, boot evidence, the registry of a protected process,
+       subscriptions.
    * - ``lota_server.h``
-     - The verification API a game or workload server links: parse and
-       verify a token against an AIK.
+     - The verification API of ``liblotaserver.so``: token and boot evidence
+       verification against an AIK, the registry digest.
    * - ``lota_anticheat.h``
-     - The session and heartbeat layer an anti-cheat provider consumes.
+     - The session and heartbeat API of ``liblota_anticheat.so``.
    * - ``lota_wine_hook.h``
-     - The ``LD_PRELOAD`` hook's state accessors and the paths and names of
-       the files it writes.
+     - The accessors of ``liblota_wine_hook.so``, its environment variables
+       and the names of the files it writes.
    * - ``lota_token.h``
-     - The token struct ``lota_server_parse_token()`` fills.
+     - The wire formats of the token and of the boot evidence.
    * - ``lota_snapshot.h``
-     - The header of the atomic snapshot file, for a reader that parses it
-       rather than calling the SDK.
+     - The header of the snapshot file the Wine hook writes and the
+       anti-cheat SDK reads.
 
-Each must compile on its own against the installed set alone. A public
-header that pulls in one that is not installed builds in tree, where
-everything is under ``-Iinclude``, and fails for the integrator.
+Each header compiles on its own against the installed set. The other headers
+under ``include/`` belong to the agent, the BPF program, the verifier and the
+CA, and are not installed. ``lota_ipc.h`` is one of them: it describes the
+socket protocol between the agent and the gaming SDK built with it, and a
+program that speaks the socket directly depends on that agent build.
 
-How an integrator finds them
-----------------------------
+Libraries and pkg-config modules
+================================
 
-The ``-devel`` package ships a pkg-config module per library --
-``lota-gaming``, ``lota-server``, ``lota-anticheat``, ``lota-wine-hook`` --
-generated from the templates in ``packaging/pkgconfig``:
+.. list-table::
+   :header-rows: 1
+   :widths: 26 22 26 26
+
+   * - Library
+     - Header
+     - pkg-config module
+     - Exported symbols
+   * - ``liblotagaming.so``
+     - ``lota_gaming.h``
+     - ``lota-gaming``
+     - :ghsrc:`src/sdk/liblotagaming.map`
+   * - ``liblotaserver.so``
+     - ``lota_server.h``
+     - ``lota-server``
+     - :ghsrc:`src/sdk/liblotaserver.map`
+   * - ``liblota_anticheat.so``
+     - ``lota_anticheat.h``
+     - ``lota-anticheat``
+     - :ghsrc:`src/sdk/liblota_anticheat.map`
+   * - ``liblota_wine_hook.so``
+     - ``lota_wine_hook.h``
+     - ``lota-wine-hook``
+     - ``LOTA_HOOK_EXPORT``
+
+The modules are generated from :ghsrc:`packaging/pkgconfig` and installed into
+``/usr/lib64/pkgconfig``:
 
 .. code-block:: sh
 
    cc $(pkg-config --cflags lota-anticheat) -o producer producer.c \
       $(pkg-config --libs lota-anticheat)
 
-Each module reports the **ABI** version rather than the release version,
-because the ``.pc`` describes the linkable contract and that is what governs
-it: ``pkg-config --atleast-version=1 lota-gaming`` asks the question an
-integrator means.
+A module reports the ABI version (``1.0.0``), not the release, so
+``pkg-config --atleast-version=1 lota-gaming`` asks for a compatible library.
+Each module computes its prefix from its own location (``${pcfiledir}/../..``),
+so a ``DESTDIR`` install or an unpacked package works without installing into
+``/usr``.
 
-Each resolves its prefix from the file's own location, so the SDK is
-consumable from a staged prefix -- a ``DESTDIR`` install, a container layer,
-an unpacked package in CI -- and not only from ``/usr``. That is also how
-the gate below builds against it without installing anything.
+``liblotagaming.a`` and ``liblotaserver.a`` are built as well. Each holds one
+object, so a program that calls one function links the whole API.
 
-``include/lota_ipc.h`` is deliberately **not** installed. It is the wire
-between the agent and the SDK that ships with it, so a caller that speaks
-the socket directly is pinned to the agent build it compiled against, and
-the protocol changes whenever both sides change together. The gaming SDK
-owns that protocol and offers the same capability behind an ABI that does
-carry a promise. Every other header under ``include/`` is agent, verifier
-or BPF internals.
+Exported symbols
+----------------
 
-Shared-library symbols
-======================
+A shared library exports the functions its header declares, and the Wine
+hook ``dlopen()`` besides (below). Three libraries filter their symbols through
+the linker version script named in the table, with every other symbol ``local``.
+``liblota_anticheat.so`` links the gaming and server objects in, and
+``liblota_wine_hook.so`` the gaming object, so that one file ships; their copies
+stay local, because a second global ``lota_connect()`` in a process that also
+loads ``liblotagaming.so`` would bind each caller to the copy the link order
+picks. A program that calls the gaming or the server API links that library.
 
-Each installed library exports the functions its installed header declares,
-and nothing else. The list lives in a linker version script next to the
-sources it filters:
+The Wine hook defines ``dlopen()`` so that it can report an object the
+runtime gate refused, and callers reach ``dlopen`` through glibc's version
+node. A version script would hide the wrapper behind that node, so the hook
+is compiled with ``-fvisibility=hidden`` and marks each export
+``LOTA_HOOK_EXPORT``. The wrapper returns what the real ``dlopen()``
+returned, with ``dlerror()`` and ``errno`` left as it left them, and is not
+part of the API.
 
-.. list-table::
-   :header-rows: 1
-   :widths: 32 30 38
-
-   * - Library
-     - Header
-     - Version script
-   * - ``liblotagaming.so``
-     - ``include/lota_gaming.h``
-     - ``src/sdk/liblotagaming.map``
-   * - ``liblotaserver.so``
-     - ``include/lota_server.h``
-     - ``src/sdk/liblotaserver.map``
-   * - ``liblota_anticheat.so``
-     - ``include/lota_anticheat.h``
-     - ``src/sdk/liblota_anticheat.map``
-   * - ``liblota_wine_hook.so``
-     - ``include/lota_wine_hook.h``
-     - hidden visibility (``LOTA_HOOK_EXPORT``)
-
-Without a version script every non-static symbol is exported, which makes the
-public surface an accident of which helpers happened to need external linkage.
-It also matters beyond tidiness in two places. ``liblota_anticheat.so`` and
-``liblota_wine_hook.so`` link the gaming and server SDK objects in statically
-so an integrator can ship one file; if those symbols were global, a process
-that also loads ``liblotagaming.so`` would hold two definitions of
-``lota_connect()`` and link order would decide which copy each caller reaches.
-The Wine hook is worse, because it is ``LD_PRELOAD``\ ed and therefore resolves
-before the game's own libraries. An integrator that wants the gaming or the
-token-verification API links that library directly and gets it from there.
-
-``liblota_wine_hook.so`` interposes ``dlopen``, which callers reference through
-glibc's version node (``dlopen@GLIBC_2.34``); a definition under a version
-node of its own would never be reached. It is therefore built with
-``-fvisibility=hidden``, keeping the bundled SDK objects local, and marks each
-export ``LOTA_HOOK_EXPORT``.
-
-The exported ``dlopen`` is not part of the SDK contract: it reports an object
-a runtime gate refused and returns what the real ``dlopen`` returned.
-
-The filter applies to the shared libraries only, and ``liblotagaming.a`` and
-``liblotaserver.a`` need none of it: every function in those sources that no
-header declares is ``static``, so ``nm`` on either archive reports exactly the
-symbols the matching header declares and there is nothing else to pull in. Each
-archive is also a single object file, so a program that calls one function
-links the whole API.
-
-What a static link opts out of is the version information. An archive carries
-no soname and no version node, so nothing in the resulting program records
-which surface it was built against and no later library can satisfy or refuse
-it. That is the ABI guarantee, and it is given up by the form of the link.
+An archive carries no version script: every function in
+:ghsrc:`src/sdk/lota_gaming.c` and :ghsrc:`src/sdk/lota_server.c` that the
+header does not declare is ``static``, which the gate checks. An archive also
+records no soname and no version node, so a statically linked program carries
+no record of the surface it was built against.
 
 Soname and ABI version
 ======================
 
-``LOTA_ABI_MAJOR`` in the top-level ``Makefile`` is the soname major every
-installed library carries, and it is **1**. It tracks the ABI, not the
-release: a 1.x product release does not move it, and it moves on the first
-incompatible change whether or not the release number moves with it.
+``LOTA_ABI_MAJOR`` in the top-level ``Makefile`` is the soname major of every
+installed library; its value is 1 and the full ABI version is
+``LOTA_ABI_MAJOR.0.0``. Both are independent of the release in ``VERSION``.
+A library is installed as ``libX.so.1.0.0``, with the soname ``libX.so.1`` and
+the linker name ``libX.so`` as symlinks to it. The 32-bit Wine hook in
+``/usr/lib`` gets no linker name, because the loader opens it by soname and
+nothing links against it.
 
-A ``.so.0`` soname tells a distribution packager the library may break at
-will, which is the opposite of what a declared surface says. The libraries
-are installed as
-``libX.so.MAJOR.MINOR.PATCH`` with the soname and the unversioned linker name
-as symlinks onto it, so two majors can coexist on a host when one eventually
-arrives.
+Changing the surface
+====================
 
-Adding and removing symbols
----------------------------
+Compatible changes:
 
-Adding a function is a compatible change: declare it in the header and add it
-to a new version node below the current one, for example ``LOTAGAMING_1.1
-{ global: lota_new_call; } LOTAGAMING_1.0;``. A program built against the
-older node keeps running against the newer library.
+* A function is added to the header and to a version node below the current
+  one, for example
+  ``LOTAGAMING_1.1 { global: lota_new_call; } LOTAGAMING_1.0;``. A program
+  built against ``LOTAGAMING_1.0`` keeps running.
+* A member is appended to ``struct lota_connect_opts`` or
+  ``struct lota_ac_config``. Both start with ``size_t struct_size``, which the
+  caller sets to ``sizeof`` of its own copy, and the library reads only the
+  members that size covers. A size below ``LOTA_CONNECT_OPTS_SIZE_MIN`` or
+  ``LOTA_AC_CONFIG_SIZE_MIN`` is refused, zero included.
+* A ``LOTA_FLAG_*`` bit is assigned. A caller tests the bits it knows and
+  ignores the others; comparing the whole word refuses a healthy host, for
+  example one with ``LOTA_FLAG_UPDATE_PENDING`` set.
+* An error code takes the next unused value of ``enum lota_error`` or another
+  error enum. A ``switch`` over the enum keeps a ``default`` arm, and
+  ``lota_strerror()`` returns ``"Unknown error"`` for a code it does not know.
 
-Growing ``struct lota_connect_opts`` instead is an ABI break: an installed
-function takes it, so its layout is frozen.
+Breaking changes bump ``LOTA_ABI_MAJOR``, which changes every soname:
 
-Removing a function, renaming it, or changing its signature or the layout of a
-struct it takes is an ABI break. It bumps ``LOTA_ABI_MAJOR``, which changes
-every soname, and the old library can no longer be replaced in place. Do not
-work around a break by leaving the symbol in the
-version script with different semantics behind it -- that is the one failure a
-version script cannot catch. A struct that moved under an unchanged symbol is
-caught by the layout baseline below.
+* removing or renaming a function, or changing its signature;
+* changing the layout of a struct an installed function takes, other than
+  appending to a struct with ``struct_size``;
+* changing the value or meaning of an enumerator, a ``LOTA_FLAG_*`` bit or
+  another ``LOTA_*`` constant.
 
-Status flags
+A function whose semantics change under an unchanged symbol is also a break.
+No version script detects it.
+
+Release version
+===============
+
+``lota_sdk_version()`` and ``lota_server_sdk_version()`` return the release
+in ``VERSION``, compiled in as ``LOTA_BUILD_VERSION_STRING``. An object built
+without that define fails with ``#error``. The string identifies a build for
+logs and support; its format is not part of the API, so a program matches it
+and does not parse it. Compatibility is the soname and the pkg-config
+version.
+
+The string comes from the calling process, which on a player's machine the
+player controls, so a relying party does not base a trust decision on it. The
+agent build a verifier trusts is set by ``agent_hashes`` in its policy and
+checked against PCR 14.
+
+The ABI gate
 ============
 
-``LOTA_FLAG_*`` in ``lota_gaming.h`` is a bitmask, so a release may define a
-new bit and a program built against an older header keeps working: it reads
-the bits it knows and ignores the rest. The values already assigned never
-change meaning, which is what makes ignoring the unknown ones safe; the layout
-baseline records every one.
+``make check-abi`` runs :ghsrc:`scripts/check-abi.sh`, which compares the
+build with the baseline under :ghsrc:`packaging/abi`:
 
-A caller must therefore test the bits it cares about rather than compare the
-word, and must not treat an unfamiliar bit as a failure. ``LOTA_FLAG_UPDATE_PENDING``
-is the case that makes this concrete: it reports that a package update takes
-effect on the next cold boot, on a session that is attesting perfectly well,
-so a caller that read the whole word as a health check would refuse a healthy
-machine.
+* the exported symbols of each shared library, with their version nodes, and
+  its soname against ``LOTA_ABI_MAJOR``;
+* the symbols of the two archives, and that each holds one object;
+* the header set in ``public-headers.list``, in the ``make install`` rule and
+  in ``packaging/nfpm/lota-sdk-devel.yaml``;
+* in ``types.list``, the size, alignment and member offsets of every public
+  struct, the value of every enumerator and of every ``LOTA_*`` constant, read
+  from a program compiled against the headers.
 
-Which version answers which question
-====================================
+It then stages a prefix with the installed headers, libraries and
+pkg-config modules, compiles each header on its own against it, checks that
+each module reports the ABI version, and compiles and links one call through
+each module. Without ``pkg-config`` the module checks are skipped.
 
-Two different questions get called "the version", and conflating them is how
-a surface ends up stating its version in several places that drift apart.
+``scripts/check-patch`` runs the gate and CI runs it as the ``abi`` job. A
+failure is one of three cases:
 
-**"What may I link against?"** is compatibility, and it is answered by the ABI
-in two places and no others: the soname the loader resolves at run time, and
-the ABI version the pkg-config module reports at build time. Both derive from
-``LOTA_ABI_MAJOR``. No header defines a version macro for this -- a macro
-would be a third statement of the same number with nothing reconciling it, and
-``pkg-config --atleast-version`` already asks the question properly.
+* an accident, such as a helper that lost ``static`` or a header added to one
+  list only: fix the code;
+* an addition: add the function to a version node below the current one,
+  run ``make abi-baseline`` and commit the baseline with the change;
+* a break: the same, with the ``LOTA_ABI_MAJOR`` bump.
 
-**"Which build is this?"** is provenance -- the question an advisory, a
-support ticket, a log line or a reproducible-build check asks.
-``lota_sdk_version()`` and ``lota_server_sdk_version()`` both answer it, both
-return the same string, and that string is the release from the ``VERSION``
-file, injected at build time as ``LOTA_BUILD_VERSION_STRING`` by the objects'
-own Makefile rules, which take ``VERSION`` as a prerequisite so a bump
-recompiles them. There is no fallback value: a translation unit compiled
-without the define fails with ``#error``, because a library reporting
-``unknown`` is worse in an incident than one that refused to build.
+Go module
+=========
 
-The string is **opaque**. Match it, do not parse it; its format carries no
-promise, and a compatibility decision made by parsing it is asking the
-provenance question and reading it as the compatibility answer.
-
-Neither function is an authentication input. ``lota_sdk_version()`` runs
-inside the calling process -- on a player's machine, memory an attacker
-controls -- so a relying party must never decide trust from a version a client
-reports about itself. The build identity that carries weight is the agent
-binary hash pinned in the verifier's policy and committed to PCR 14.
-
-The gate
-========
-
-``make check-abi`` compares the surface against the baseline checked in under
-``packaging/abi``: the exported symbols of each library, the soname each one
-carries against ``LOTA_ABI_MAJOR``, and the installed header set as stated in
-three places that must agree -- ``packaging/abi/public-headers.list``, the
-``make install`` rule, and ``packaging/nfpm/lota-sdk-devel.yaml``.
-
-The layout of the types those headers declare is in the baseline too, in
-``packaging/abi/types.list``: every public struct's size, alignment and member
-offsets, every enumerator's value, and every ``LOTA_*`` constant, string
-constants included. An inserted member, a renumbered enumerator, a renamed
-environment variable or a reassigned ``LOTA_FLAG_*`` bit breaks a program
-without changing a symbol.
-
-The gate generates a program that prints ``sizeof``, ``_Alignof``, ``offsetof``
-and each constant's value, compiled against ``include/``, so padding, alignment
-and ``enum`` width are what the target gives them.
-
-It holds the two static archives to the same baseline, without the version
-nodes an archive cannot carry, and to one object each. The version script
-hides a helper that stops being ``static`` from the shared-library check and
-not from the archive, so this is where such a symbol surfaces -- and it is
-what keeps the account of the archives above true.
-
-It then stages a prefix holding exactly what the packages install and builds
-against it the way an integrator does: every public header on its own, and a
-compile-and-link through each pkg-config module that calls one function from
-the library it names. In tree everything builds with ``-Iinclude`` and
-``-Lbuild``, so a header the package does not ship, or a ``.pc`` naming a
-library that is not there, works in tree and fails for the integrator.
-
-``scripts/check-patch`` runs it on every patch and CI runs it as its own
-``abi`` job, which is what makes it blocking: CI drives selected gates
-directly rather than the whole of ``check-patch``.
-
-When the gate fires, the question is which kind of change it caught:
-
-* **An accident** -- a helper that stopped being static, a header added to
-  the package but not to the list. Fix the code, not the baseline.
-* **A deliberate addition.** Declare it in the header, add it to the version
-  script under a new node, then ``make abi-baseline`` and commit the diff
-  alongside the change.
-* **A deliberate break.** The same, plus the ``LOTA_ABI_MAJOR`` bump and a
-  release note. The baseline diff is the record of what broke.
-
-There is no way to silence the gate for one file, which is deliberate: the
-baseline diff in a patch is exactly the review signal a surface change needs.
-
-Go modules
-==========
-
-The repository is a Go workspace of six modules. **One is public:**
-
-.. code-block:: text
-
-    github.com/szymonwilczek/lota/sdk/server   ->  sdk/server
-
-It is the server-side counterpart of ``liblotaserver.so``: a game or workload
-server imports it to verify an attestation token against an AIK.
-``examples/demo_server`` is the worked example.
-
-The other five -- ``src/verifier``, ``src/attestca``, ``src/crl``,
-``src/fleetctl`` and ``examples/demo_server`` -- are internal to this
-repository's own binaries. They are ordinary Go modules so the workspace can
-build them separately, not an invitation to import them; their exported
-identifiers change without a major bump.
-
-That is enforced by construction rather than by convention. A module is
-fetchable only when its declared path matches its directory in the
-repository, and the internal five declare paths without their ``src/``
-prefix, so ``go get`` cannot resolve any of them. Do not "fix" those paths:
-the mismatch is what keeps the internal surface internal. The public module
-is the one whose path and directory agree, which is why ``sdk/server`` sits
-at the top level rather than under ``src/`` with the C SDK.
-
-Wire protocols
-==============
-
-The libraries are one surface; the messages LOTA's own programs exchange are
-another, and they version separately from both the release and the ABI. Each
-carries its version in the message:
+``github.com/szymonwilczek/lota/sdk/server`` (:ghsrc:`sdk/server`) is the one
+public Go module: the token verification of ``liblotaserver.so`` for a server
+written in Go (:doc:`go-sdk`). The workspace in :ghsrc:`go.work` holds other
+modules, which build the repository's own programs and change without notice:
 
 .. list-table::
    :header-rows: 1
-   :widths: 24 22 54
+   :widths: 40 60
 
-   * - Protocol
-     - Version constant
-     - Rule
-   * - Attestation report
-     - ``LOTA_REPORT_VERSION_MAJOR`` / ``types.ReportVersion``
-     - Exact match. The verifier refuses a report from a wire it was not
-       built to parse rather than guessing at the layout of the message
-       every trust decision rests on, so a layout change is a flag day for
-       the agent fleet and the verifier tier together.
-   * - Enrollment
-     - ``LOTA_ENROLL_VERSION``
-     - Additive and negotiated. One version is in service; it dates the
-       peer, not the frame. The CA answers in the request's version.
-   * - Session token
-     - ``LOTA_TOKEN_VERSION``
-     - Public API, because ``lota_token.h`` is installed and a server links
-       ``lota_server_parse_token()`` against that layout. A change to it is
-       an ABI break like any other struct change.
-   * - Runtime protection
-     - ``LOTA_RUNTIME_PROTECT_V1``
-     - Names the identity a protected PID set commits to. New semantics
-       allocate the next value rather than redefining this one.
+   * - Directory
+     - Module path
+   * - ``src/verifier``
+     - ``github.com/szymonwilczek/lota/verifier``
+   * - ``src/attestca``
+     - ``github.com/szymonwilczek/lota/attestca``
+   * - ``src/crl``
+     - ``github.com/szymonwilczek/lota/crl``
+   * - ``src/fleetctl``
+     - ``github.com/szymonwilczek/lota/fleetctl``
+   * - ``examples/demo_server``
+     - ``github.com/szymonwilczek/lota/examples/demo_server``
+   * - ``examples/ci-gate/gate``
+     - ``github.com/szymonwilczek/lota/examples/ci-gate/gate``
 
-The report and enrollment wires are between LOTA's own programs, so their
-versions constrain which agent, verifier and CA builds interoperate rather
-than what an integrator may link against.
+Wire formats
+============
 
-Error codes are additive
-========================
+The token and boot evidence formats in ``lota_token.h`` and the snapshot
+header in ``lota_snapshot.h`` are installed, so their layout is part of the
+ABI and ``types.list`` records it; ``LOTA_TOKEN_VERSION``,
+``LOTA_BOOT_EVIDENCE_VERSION`` and ``LOTA_SNAPSHOT_VERSION`` name the
+versions. A token protected-set encoding with other semantics takes the next
+``LOTA_RUNTIME_PROTECT_*`` value. The report and enrollment protocols between
+the agent, the verifier and the CA have versions of their own, described in
+:doc:`../admin-guide/protocol-versions`.
 
-``lota_error`` in ``lota_gaming.h`` grows downward: a new condition takes the
-next unused value and the existing ones keep theirs, so a program built against
-an earlier header still reads every code it knew. A caller that switches on the
-enum has to keep a default arm, because a newer agent can return a code the
-program was not compiled against -- ``lota_strerror()`` has words for it either
-way.
+Release promises
+================
 
-What a release promises
-=======================
+From release 1.0 on, within one ``LOTA_ABI_MAJOR``:
 
-From 1.0, within a major release series:
+* a program built against an earlier SDK runs against a later library without
+  recompiling;
+* a public header keeps its declarations, and a struct an installed function
+  takes keeps its layout, apart from appending to a struct with
+  ``struct_size``;
+* the installed header set only grows.
 
-* A program built against an earlier 1.x SDK runs against a later 1.x
-  library without recompiling. Symbols are added under new version nodes,
-  never removed or redefined.
-* A public header keeps its declarations, and a struct an installed
-  function takes keeps its layout. New fields go in new structs.
-* The installed header set only grows.
-* A wire protocol changes only under its own rule above, independently of
-  the release number.
-
-A major bump is what may break each of those, and it must say which in the
-release notes. Nothing outside this page carries a promise: the agent's
-command-line flags, its configuration keys, the verifier's HTTP endpoints
-and its database schema are operator surfaces documented elsewhere, and
-the internals behind any of them may change in a patch release.
+The agent's command line and configuration, the verifier's HTTP API and its
+database schema are operator surfaces with their own pages, and are outside
+these promises.
