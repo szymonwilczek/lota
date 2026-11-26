@@ -16,6 +16,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
+#include <syslog.h>
 #include <unistd.h>
 #include <sys/types.h>
 
@@ -74,16 +75,41 @@ static int parse_mode_strict(const char *value)
 	return -1;
 }
 
-/* Truncates what does not fit. */
-static void set_str(char *dst, size_t dst_size, const char *src)
+/* Leaves @dst unchanged when @src does not fit. */
+static int set_str(char *dst, size_t dst_size, const char *src)
 {
 	size_t len = strlen(src);
 
 	if (len >= dst_size)
-		len = dst_size - 1;
+		return -1;
 
-	memcpy(dst, src, len);
-	dst[len] = '\0';
+	memcpy(dst, src, len + 1);
+	return 0;
+}
+
+static int set_value(char *dst, size_t dst_size, const char *key,
+		     const char *value, const char *filepath, int lineno)
+{
+	if (set_str(dst, dst_size, value) == 0)
+		return 0;
+	fprintf(stderr, "%s:%d: %s is too long (%zu bytes, max %zu)\n",
+		filepath, lineno, key, strlen(value), dst_size - 1);
+	return -1;
+}
+
+int config_log_priority(const char *name)
+{
+	if (!name)
+		return -1;
+	if (strcmp(name, "error") == 0)
+		return LOG_ERR;
+	if (strcmp(name, "warn") == 0)
+		return LOG_WARNING;
+	if (strcmp(name, "info") == 0)
+		return LOG_INFO;
+	if (strcmp(name, "debug") == 0)
+		return LOG_DEBUG;
+	return -1;
 }
 
 static int validate_path_value(const char *key, const char *value,
@@ -92,7 +118,7 @@ static int validate_path_value(const char *key, const char *value,
 	if (!key || !value)
 		return -1;
 
-	/* passes: clears a single-value key, adds an empty list entry */
+	/* passes: clears a single-value key */
 	if (value[0] == '\0')
 		return 0;
 
@@ -119,6 +145,17 @@ static int validate_path_value(const char *key, const char *value,
 	/* the string's shape only: no symlink is resolved */
 
 	return 0;
+}
+
+static int validate_list_value(const char *key, const char *value,
+			       const char *filepath, int lineno)
+{
+	if (value[0] == '\0') {
+		fprintf(stderr, "%s:%d: invalid %s: empty path\n", filepath,
+			lineno, key);
+		return -1;
+	}
+	return validate_path_value(key, value, filepath, lineno);
 }
 
 static int config_validate_file_security(int fd, const char *filepath)
@@ -244,8 +281,8 @@ static int apply_profile_key(struct lota_profile *p, const char *key,
 			     int lineno)
 {
 	if (strcmp(key, "ca") == 0) {
-		set_str(p->ca, sizeof(p->ca), value);
-		return 0;
+		return set_value(p->ca, sizeof(p->ca), key, value, filepath,
+				 lineno);
 	}
 	if (strcmp(key, "ca_port") == 0 || strcmp(key, "ca-port") == 0) {
 		long v;
@@ -262,8 +299,8 @@ static int apply_profile_key(struct lota_profile *p, const char *key,
 		if (validate_path_value("ca_cert", value, filepath, lineno) !=
 		    0)
 			return -1;
-		set_str(p->ca_cert, sizeof(p->ca_cert), value);
-		return 0;
+		return set_value(p->ca_cert, sizeof(p->ca_cert), key, value,
+				 filepath, lineno);
 	}
 	if (strcmp(key, "verifier") == 0) {
 		if (strcmp(value, "none") == 0) {
@@ -272,8 +309,8 @@ static int apply_profile_key(struct lota_profile *p, const char *key,
 			return 0;
 		}
 		p->token_only = false;
-		set_str(p->verifier, sizeof(p->verifier), value);
-		return 0;
+		return set_value(p->verifier, sizeof(p->verifier), key, value,
+				 filepath, lineno);
 	}
 	if (strcmp(key, "verifier_port") == 0 ||
 	    strcmp(key, "verifier-port") == 0) {
@@ -286,6 +323,7 @@ static int apply_profile_key(struct lota_profile *p, const char *key,
 			return -1;
 		}
 		p->verifier_port = (int)v;
+		p->verifier_port_set = true;
 		return 0;
 	}
 	if (strcmp(key, "pin_sha256") == 0 || strcmp(key, "pin-sha256") == 0) {
@@ -298,8 +336,8 @@ static int apply_profile_key(struct lota_profile *p, const char *key,
 				filepath, lineno, value);
 			return -1;
 		}
-		set_str(p->pin_sha256, sizeof(p->pin_sha256), value);
-		return 0;
+		return set_value(p->pin_sha256, sizeof(p->pin_sha256), key,
+				 value, filepath, lineno);
 	}
 	if (strcmp(key, "reporting") == 0) {
 		if (strcmp(value, "session") == 0) {
@@ -408,6 +446,17 @@ static int value_defect(const char *key, const char *value, char *why,
 	return 0;
 }
 
+/*
+ * host:port or [v6]:port; a bare IPv6 literal has two colons or more and
+ * the resolver takes no brackets.
+ */
+static bool host_has_port(const char *host)
+{
+	const char *c = strchr(host, ':');
+
+	return host[0] == '[' || (c && c == strrchr(host, ':'));
+}
+
 int config_profile_defect(const struct lota_profile *p, char *why,
 			  size_t why_cap)
 {
@@ -434,6 +483,13 @@ int config_profile_defect(const struct lota_profile *p, char *why,
 
 	if (value_defect("ca", p->ca, sub, sizeof(sub))) {
 		snprintf(why, why_cap, "the CA host %s", sub);
+		return -EILSEQ;
+	}
+	if (host_has_port(p->ca)) {
+		snprintf(why, why_cap,
+			 "the CA host carries a port after ':' or brackets, "
+			 "which the resolver does not strip; pass the bare "
+			 "host and the port with --ca-port");
 		return -EILSEQ;
 	}
 
@@ -473,6 +529,20 @@ int config_profile_defect(const struct lota_profile *p, char *why,
 	if (!p->token_only && p->verifier[0] &&
 	    value_defect("verifier", p->verifier, sub, sizeof(sub))) {
 		snprintf(why, why_cap, "the verifier host %s", sub);
+		return -EILSEQ;
+	}
+	if (!p->token_only && host_has_port(p->verifier)) {
+		snprintf(why, why_cap,
+			 "the verifier host carries a port after ':' or "
+			 "brackets, which the resolver does not strip; pass "
+			 "the bare host and the port with --port");
+		return -EILSEQ;
+	}
+	if (!p->token_only && strcmp(p->verifier, "none") == 0) {
+		snprintf(why, why_cap,
+			 "the verifier host is none, which the parser reads as "
+			 "no verifier; leave out --server for a publisher who "
+			 "runs none");
 		return -EILSEQ;
 	}
 
@@ -600,8 +670,7 @@ static int validate_profiles(const struct lota_config *cfg,
 			errors++;
 		}
 
-		if (p->token_only &&
-		    p->verifier_port != LOTA_DEFAULT_VERIFIER_PORT) {
+		if (p->token_only && p->verifier_port_set) {
 			fprintf(stderr,
 				"%s: profile '%s' says verifier = none and "
 				"still sets verifier_port\n",
@@ -618,8 +687,8 @@ static int apply_key(struct lota_config *cfg, const char *key,
 		     const char *value, const char *filepath, int lineno)
 {
 	if (strcmp(key, "server") == 0) {
-		set_str(cfg->server, sizeof(cfg->server), value);
-		return 0;
+		return set_value(cfg->server, sizeof(cfg->server), key, value,
+				 filepath, lineno);
 	}
 	if (strcmp(key, "port") == 0) {
 		long v;
@@ -636,8 +705,8 @@ static int apply_key(struct lota_config *cfg, const char *key,
 		if (validate_path_value("ca_cert", value, filepath, lineno) !=
 		    0)
 			return -1;
-		set_str(cfg->ca_cert, sizeof(cfg->ca_cert), value);
-		return 0;
+		return set_value(cfg->ca_cert, sizeof(cfg->ca_cert), key, value,
+				 filepath, lineno);
 	}
 	if (strcmp(key, "no_verify_tls") == 0 ||
 	    strcmp(key, "no-verify-tls") == 0) {
@@ -659,8 +728,8 @@ static int apply_key(struct lota_config *cfg, const char *key,
 				filepath, lineno, value);
 			return -1;
 		}
-		set_str(cfg->pin_sha256, sizeof(cfg->pin_sha256), value);
-		return 0;
+		return set_value(cfg->pin_sha256, sizeof(cfg->pin_sha256), key,
+				 value, filepath, lineno);
 	}
 
 	if (strcmp(key, "allow_verity") == 0 ||
@@ -672,11 +741,13 @@ static int apply_key(struct lota_config *cfg, const char *key,
 			return -1;
 		}
 
-		if (validate_path_value("allow_verity", value, filepath,
+		if (validate_list_value("allow_verity", value, filepath,
 					lineno) != 0)
 			return -1;
-		set_str(cfg->allow_verity[cfg->allow_verity_count],
-			sizeof(cfg->allow_verity[0]), value);
+		if (set_value(cfg->allow_verity[cfg->allow_verity_count],
+			      sizeof(cfg->allow_verity[0]), key, value,
+			      filepath, lineno) != 0)
+			return -1;
 		cfg->allow_verity_count++;
 		return 0;
 	}
@@ -685,8 +756,8 @@ static int apply_key(struct lota_config *cfg, const char *key,
 		if (validate_path_value("bpf_path", value, filepath, lineno) !=
 		    0)
 			return -1;
-		set_str(cfg->bpf_path, sizeof(cfg->bpf_path), value);
-		return 0;
+		return set_value(cfg->bpf_path, sizeof(cfg->bpf_path), key,
+				 value, filepath, lineno);
 	}
 	if (strcmp(key, "mode") == 0) {
 		if (parse_mode_strict(value) != 0) {
@@ -696,8 +767,8 @@ static int apply_key(struct lota_config *cfg, const char *key,
 				filepath, lineno, value);
 			return -1;
 		}
-		set_str(cfg->mode, sizeof(cfg->mode), value);
-		return 0;
+		return set_value(cfg->mode, sizeof(cfg->mode), key, value,
+				 filepath, lineno);
 	}
 	if (strcmp(key, "strict_mmap") == 0 ||
 	    strcmp(key, "strict-mmap") == 0) {
@@ -845,8 +916,8 @@ static int apply_key(struct lota_config *cfg, const char *key,
 		if (validate_path_value("kernel_path", value, filepath,
 					lineno) != 0)
 			return -1;
-		set_str(cfg->kernel_path, sizeof(cfg->kernel_path), value);
-		return 0;
+		return set_value(cfg->kernel_path, sizeof(cfg->kernel_path),
+				 key, value, filepath, lineno);
 	}
 
 	if (strcmp(key, "daemon") == 0) {
@@ -864,8 +935,8 @@ static int apply_key(struct lota_config *cfg, const char *key,
 		if (validate_path_value("pid_file", value, filepath, lineno) !=
 		    0)
 			return -1;
-		set_str(cfg->pid_file, sizeof(cfg->pid_file), value);
-		return 0;
+		return set_value(cfg->pid_file, sizeof(cfg->pid_file), key,
+				 value, filepath, lineno);
 	}
 
 	if (strcmp(key, "signing_key") == 0 ||
@@ -873,16 +944,16 @@ static int apply_key(struct lota_config *cfg, const char *key,
 		if (validate_path_value("signing_key", value, filepath,
 					lineno) != 0)
 			return -1;
-		set_str(cfg->signing_key, sizeof(cfg->signing_key), value);
-		return 0;
+		return set_value(cfg->signing_key, sizeof(cfg->signing_key),
+				 key, value, filepath, lineno);
 	}
 	if (strcmp(key, "policy_pubkey") == 0 ||
 	    strcmp(key, "policy-pubkey") == 0) {
 		if (validate_path_value("policy_pubkey", value, filepath,
 					lineno) != 0)
 			return -1;
-		set_str(cfg->policy_pubkey, sizeof(cfg->policy_pubkey), value);
-		return 0;
+		return set_value(cfg->policy_pubkey, sizeof(cfg->policy_pubkey),
+				 key, value, filepath, lineno);
 	}
 
 	if (strcmp(key, "trust_lib") == 0 || strcmp(key, "trust-lib") == 0) {
@@ -893,11 +964,13 @@ static int apply_key(struct lota_config *cfg, const char *key,
 			return -1;
 		}
 
-		if (validate_path_value("trust_lib", value, filepath, lineno) !=
+		if (validate_list_value("trust_lib", value, filepath, lineno) !=
 		    0)
 			return -1;
-		set_str(cfg->trust_libs[cfg->trust_lib_count],
-			sizeof(cfg->trust_libs[0]), value);
+		if (set_value(cfg->trust_libs[cfg->trust_lib_count],
+			      sizeof(cfg->trust_libs[0]), key, value, filepath,
+			      lineno) != 0)
+			return -1;
 		cfg->trust_lib_count++;
 		return 0;
 	}
@@ -956,8 +1029,15 @@ static int apply_key(struct lota_config *cfg, const char *key,
 	}
 
 	if (strcmp(key, "log_level") == 0 || strcmp(key, "log-level") == 0) {
-		set_str(cfg->log_level, sizeof(cfg->log_level), value);
-		return 0;
+		if (config_log_priority(value) < 0) {
+			fprintf(stderr,
+				"%s:%d: invalid log_level '%s' (valid: "
+				"error/warn/info/debug)\n",
+				filepath, lineno, value);
+			return -1;
+		}
+		return set_value(cfg->log_level, sizeof(cfg->log_level), key,
+				 value, filepath, lineno);
 	}
 
 	return 1;
@@ -1307,37 +1387,6 @@ void config_dump(const struct lota_config *cfg, FILE *fp)
 	}
 }
 
-/*
- * Counts every `[profile` in @text into *out_count, comments included.
- * Returns 1 when one is labelled @name, else 0.
- */
-static int profile_section_scan(const char *text, const char *name,
-				int *out_count)
-{
-	const char *p = text;
-	int count = 0;
-	int found = 0;
-
-	while ((p = strstr(p, "[profile")) != NULL) {
-		const char *q = strchr(p, '"');
-		const char *r = q ? strchr(q + 1, '"') : NULL;
-
-		count++;
-		if (q && r && name) {
-			size_t len = (size_t)(r - q - 1);
-
-			if (len == strlen(name) &&
-			    strncmp(q + 1, name, len) == 0)
-				found = 1;
-		}
-		p += 8;
-	}
-
-	if (out_count)
-		*out_count = count;
-	return found;
-}
-
 static int profile_section_render(const struct lota_profile *p, char *buf,
 				  size_t cap)
 {
@@ -1394,14 +1443,15 @@ static int profile_section_render(const struct lota_profile *p, char *buf,
 	return n;
 }
 
-int config_profile_append_text(const char *existing,
+static int profile_append_text(const char *label, const char *existing,
 			       const struct lota_profile *p, char *out,
 			       size_t out_cap)
 {
+	struct lota_config *cur;
 	char section[1024];
 	size_t existing_len;
-	int count = 0;
 	int rendered;
+	int ret;
 
 	if (!existing || !p || !out || out_cap == 0)
 		return -EINVAL;
@@ -1417,42 +1467,68 @@ int config_profile_append_text(const char *existing,
 		}
 	}
 
-	/*
-	 * "ca_cert = <path>" as a substring of the text counts as the publisher
-	 * being present, under any label: a second section with the anchor
-	 * would resolve to the same profile directory.
-	 */
-	{
-		char probe[PATH_MAX + 64];
-		int n = snprintf(probe, sizeof(probe), "ca_cert = %s",
-				 p->ca_cert);
+	existing_len = strlen(existing);
+	cur = config_new();
+	if (!cur)
+		return -ENOMEM;
+	if (existing_len > 0) {
+		FILE *f = fmemopen((void *)existing, existing_len, "r");
 
-		if (n > 0 && (size_t)n < sizeof(probe) &&
-		    strstr(existing, probe) != NULL) {
-			if (strlen(existing) >= out_cap)
-				return -EOVERFLOW;
-			memcpy(out, existing, strlen(existing) + 1);
-			return 0;
+		if (!f) {
+			ret = -errno;
+			config_free(cur);
+			return ret;
+		}
+		ret = config_load_stream(cur, f, label);
+		fclose(f);
+		if (ret < 0) {
+			config_free(cur);
+			return -EBADMSG;
 		}
 	}
 
-	if (profile_section_scan(existing, p->name, &count))
-		return -EEXIST;
+	/*
+	 * A second section with the same ca_cert would resolve to the same
+	 * profile directory, so the publisher counts as present under any
+	 * label.
+	 */
+	ret = 1;
+	for (int i = 0; i < cur->profile_count && ret == 1; i++)
+		if (strcmp(cur->profiles[i].ca_cert, p->ca_cert) == 0)
+			ret = 0;
+	for (int i = 0; i < cur->profile_count && ret == 1; i++)
+		if (strcmp(cur->profiles[i].name, p->name) == 0)
+			ret = -EEXIST;
+	if (ret == 1 && cur->profile_count >= LOTA_CONFIG_MAX_PROFILES)
+		ret = -E2BIG;
+	config_free(cur);
 
-	if (count >= LOTA_CONFIG_MAX_PROFILES)
-		return -E2BIG;
+	if (ret == 0) {
+		if (existing_len >= out_cap)
+			return -EOVERFLOW;
+		memcpy(out, existing, existing_len + 1);
+		return 0;
+	}
+	if (ret < 0)
+		return ret;
 
 	rendered = profile_section_render(p, section, sizeof(section));
 	if (rendered < 0)
 		return rendered;
 
-	existing_len = strlen(existing);
 	if (existing_len + (size_t)rendered + 1 > out_cap)
 		return -EOVERFLOW;
 
 	memcpy(out, existing, existing_len);
 	memcpy(out + existing_len, section, (size_t)rendered + 1);
 	return 1;
+}
+
+int config_profile_append_text(const char *existing,
+			       const struct lota_profile *p, char *out,
+			       size_t out_cap)
+{
+	return profile_append_text("(text)", existing, p, out, out_cap);
 }
 
 int config_profile_append(const char *path, const struct lota_profile *p)
@@ -1488,7 +1564,7 @@ int config_profile_append(const char *path, const struct lota_profile *p)
 		return -ENOMEM;
 	}
 
-	ret = config_profile_append_text(existing, p, updated, cap);
+	ret = profile_append_text(path, existing, p, updated, cap);
 	free(existing);
 	if (ret <= 0) {
 		free(updated);
@@ -1501,14 +1577,39 @@ int config_profile_append(const char *path, const struct lota_profile *p)
 		return -ENAMETOOLONG;
 	}
 
-	int tmp_flags = O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC;
+	struct stat live;
+	bool have_live = stat(path, &live) == 0;
+
+	if (!have_live && errno != ENOENT) {
+		ret = -errno;
+		free(updated);
+		return ret;
+	}
+	if (unlink(tmp_path) < 0 && errno != ENOENT) {
+		ret = -errno;
+		free(updated);
+		return ret;
+	}
+
+	int tmp_flags = O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC;
 #ifdef O_NOFOLLOW
 	tmp_flags |= O_NOFOLLOW;
 #endif
 
-	fd = open(tmp_path, tmp_flags, 0644);
+	fd = open(tmp_path, tmp_flags, 0600);
 	if (fd < 0) {
 		ret = -errno;
+		free(updated);
+		return ret;
+	}
+
+	ret = have_live ? fchown(fd, live.st_uid, live.st_gid) : 0;
+	if (ret == 0)
+		ret = fchmod(fd, have_live ? live.st_mode & 07777 : 0644);
+	if (ret < 0) {
+		ret = -errno;
+		close(fd);
+		unlink(tmp_path);
 		free(updated);
 		return ret;
 	}
@@ -1556,7 +1657,7 @@ int config_profile_append(const char *path, const struct lota_profile *p)
 				"reading the replacement back.\n",
 				path, path);
 			unlink(tmp_path);
-			return -EBADMSG;
+			return -EPROTO;
 		}
 	}
 

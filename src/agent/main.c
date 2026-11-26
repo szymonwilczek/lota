@@ -722,7 +722,7 @@ int main(int argc, char *argv[])
 	if (pid_fd == -EEXIST) {
 		char busy[512];
 
-		startup_busy_message(*cli_runtime_protect_pid_count() > 0, busy,
+		startup_busy_message(cli_startup_protect_pid_count() > 0, busy,
 				     sizeof(busy));
 		lota_err("%s", busy);
 		rc = LOTA_EXIT_ALREADY_RUNNING;

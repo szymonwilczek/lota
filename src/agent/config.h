@@ -75,6 +75,7 @@ struct lota_profile {
 	 */
 	char verifier[256];
 	int verifier_port;
+	bool verifier_port_set;
 	bool token_only;
 
 	/*
@@ -163,14 +164,19 @@ struct lota_config {
 	struct lota_profile profiles[LOTA_CONFIG_MAX_PROFILES];
 	int profile_count;
 
-	/*
-	 * "error", "warn", "info"; any other non-empty value means debug.
-	 * Only a reload that changes the value applies it.
-	 */
+	/* "error", "warn", "info" or "debug" */
 	char log_level[16];
 };
 
 void config_init(struct lota_config *cfg);
+
+/**
+ * config_log_priority() - Syslog priority of a log_level value.
+ * @name: "error", "warn", "info" or "debug".
+ *
+ * Return: LOG_ERR, LOG_WARNING, LOG_INFO or LOG_DEBUG; -1 for any other name.
+ */
+int config_log_priority(const char *name);
 
 /**
  * config_new() - Allocate a config and apply the defaults.
@@ -287,14 +293,14 @@ int config_profile_defect(const struct lota_profile *p, char *why,
  * @out: Receives @existing unchanged, then the section.
  * @out_cap: Size of @out.
  *
- * @existing is searched as plain text, so a comment counts, and for the ca_cert
- * so do a top-level key and a longer path starting with @p's.
+ * @existing is read with the configuration parser; the profiles it yields are
+ * the ones compared against @p.
  *
  * Return: 1 when the section was appended; 0, with @out holding @existing, when
- * "ca_cert = " and @p's path occur in the text; -EEXIST when "[profile" with
- * the quoted label occurs; -E2BIG when "[profile" occurs
- * LOTA_CONFIG_MAX_PROFILES times or more; -EOVERFLOW when the section or the
- * result does not fit; or the errors of config_profile_defect().
+ * a profile has @p's ca_cert; -EEXIST when a profile has @p's name; -E2BIG
+ * when @existing holds LOTA_CONFIG_MAX_PROFILES profiles; -EBADMSG when
+ * @existing does not parse; -EOVERFLOW when the section or the result does not
+ * fit; -ENOMEM; or the errors of config_profile_defect().
  */
 int config_profile_append_text(const char *existing,
 			       const struct lota_profile *p, char *out,
@@ -307,7 +313,7 @@ int config_profile_append_text(const char *existing,
  *
  * Writes @path.new, reads it back with config_load() and renames it into place.
  *
- * Return: as config_profile_append_text(); -EBADMSG when the read-back fails,
+ * Return: as config_profile_append_text(); -EPROTO when the read-back fails,
  * with @path untouched; or another negative errno.
  */
 int config_profile_append(const char *path, const struct lota_profile *p);

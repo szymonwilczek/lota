@@ -389,6 +389,38 @@ static void test_memlock(void)
 	      "an fdinfo without memlock is refused");
 }
 
+/* A file that fills the buffer to its last byte still fits */
+static void test_memlock_at_buffer_size(void)
+{
+	char dir[] = "/tmp/lota-bench-fdinfo-XXXXXX";
+	char body[4097];
+	uint64_t v = 0;
+	int dirfd;
+
+	if (!mkdtemp(dir)) {
+		CHECK(0, "mkdtemp");
+		return;
+	}
+	dirfd = open(dir, O_RDONLY | O_DIRECTORY | O_CLOEXEC);
+
+	memset(body, ' ', sizeof(body) - 1);
+	memcpy(body, "memlock:\t7\n", 11);
+	body[4095] = '\0';
+	CHECK(dirfd >= 0 && put(dirfd, "3", body) == 0 &&
+		      bench_read_memlock(dirfd, 3, &v) == 0 && v == 7,
+	      "an fdinfo of one byte under the buffer is read");
+
+	body[4095] = ' ';
+	body[4096] = '\0';
+	CHECK(put(dirfd, "3", body) == 0 &&
+		      bench_read_memlock(dirfd, 3, &v) == -EMSGSIZE,
+	      "an fdinfo the size of the buffer is refused");
+
+	unlinkat(dirfd, "3", 0);
+	close(dirfd);
+	rmdir(dir);
+}
+
 static void test_schedule(void)
 {
 	static struct bench_state st;
@@ -426,6 +458,7 @@ int main(void)
 	test_format_protected();
 	test_sanitize();
 	test_memlock();
+	test_memlock_at_buffer_size();
 	test_schedule();
 
 	printf("\n%s: %d failure(s)\n", g_failures ? "FAILED" : "OK",

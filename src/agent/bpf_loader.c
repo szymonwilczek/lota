@@ -37,10 +37,6 @@
 #include "policy_sign.h"
 #include "sb_dev.h"
 
-#ifndef EAUTH
-#define EAUTH 80
-#endif
-
 /* Where the kernel publishes the boot parameters and the loaded IMA policy */
 #define IMA_CMDLINE_PATH "/proc/cmdline"
 #define IMA_POLICY_PATH "/sys/kernel/security/ima/policy"
@@ -841,11 +837,9 @@ static int verify_bpf_object_signature(const char *bpf_obj_path,
 		goto out;
 	}
 
-	nread = fread(sig, 1, POLICY_SIG_SIZE, f);
-	if (nread != POLICY_SIG_SIZE) {
-		ret = -EAUTH;
+	ret = policy_sig_read(fileno(f), sig);
+	if (ret < 0)
 		goto out;
-	}
 
 	ret = policy_verify_buffer(obj_data, obj_len, bpf_pubkey_pem_path, sig);
 	if (ret == 0) {

@@ -1026,11 +1026,18 @@ int do_add_publisher(const char *config_path, const char *name,
 			"--dump-config' names the line -- and run this again.\n",
 			config_path ? config_path : LOTA_CONFIG_DEFAULT_PATH);
 		return 1;
+	case -EPROTO:
+		fprintf(stderr,
+			"ERROR: nothing was written. The section for this "
+			"publisher does not parse when read back, as the "
+			"errors above say; %s is unchanged.\n",
+			config_path ? config_path : LOTA_CONFIG_DEFAULT_PATH);
+		return 1;
 	case -EILSEQ:
 		fprintf(stderr,
-			"ERROR: nothing was written. Pass --publisher-name "
-			"with a label the configuration can hold, or correct "
-			"the value the writer named above.\n");
+			"ERROR: nothing was written. Correct the value the "
+			"writer named above; the label comes from "
+			"--publisher-name.\n");
 		return 1;
 	case -E2BIG:
 		fprintf(stderr,

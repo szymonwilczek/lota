@@ -17,11 +17,6 @@
 #include <unistd.h>
 #include <openssl/types.h>
 
-/* Linux has no EAUTH, and 80 is ELIBBAD there. */
-#ifndef EAUTH
-#define EAUTH 80
-#endif
-
 static uint8_t *read_file_contents(const char *path, size_t *out_len,
 				   int *err_out)
 {
@@ -181,7 +176,9 @@ int policy_sign_generate_keypair(const char *privkey_pem_path,
 		goto out;
 
 	{
-		int pk_fd = open(privkey_pem_path, O_WRONLY | O_CREAT | O_TRUNC,
+		int pk_fd = open(privkey_pem_path,
+				 O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW |
+					 O_CLOEXEC,
 				 0600);
 		if (pk_fd < 0) {
 			ret = -errno;
@@ -191,41 +188,54 @@ int policy_sign_generate_keypair(const char *privkey_pem_path,
 		if (!f) {
 			ret = -errno;
 			close(pk_fd);
-			goto out;
+			goto out_unlink;
 		}
 	}
 
 	if (!PEM_write_PrivateKey(f, pkey, NULL, NULL, 0, NULL, NULL)) {
 		fclose(f);
-		goto out;
+		goto out_unlink;
 	}
-	fclose(f);
+	if (fclose(f) != 0) {
+		ret = -errno;
+		goto out_unlink;
+	}
 	f = NULL;
 
 	{
-		int pub_fd = open(pubkey_pem_path, O_WRONLY | O_CREAT | O_TRUNC,
+		int pub_fd = open(pubkey_pem_path,
+				  O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW |
+					  O_CLOEXEC,
 				  0644);
 		if (pub_fd < 0) {
 			ret = -errno;
-			goto out;
+			goto out_unlink;
 		}
 		f = fdopen(pub_fd, "w");
 		if (!f) {
 			ret = -errno;
 			close(pub_fd);
-			goto out;
+			goto out_unlink_both;
 		}
 	}
 
 	if (!PEM_write_PUBKEY(f, pkey)) {
 		fclose(f);
-		goto out;
+		goto out_unlink_both;
 	}
-	fclose(f);
+	if (fclose(f) != 0) {
+		ret = -errno;
+		goto out_unlink_both;
+	}
 	f = NULL;
 
 	ret = 0;
+	goto out;
 
+out_unlink_both:
+	unlink(pubkey_pem_path);
+out_unlink:
+	unlink(privkey_pem_path);
 out:
 	EVP_PKEY_free(pkey);
 	EVP_PKEY_CTX_free(ctx);
@@ -300,7 +310,7 @@ int policy_verify_buffer(const uint8_t *data, size_t data_len,
 	    1) {
 		ret = 0;
 	} else {
-		ret = -EAUTH;
+		ret = -EKEYREJECTED;
 	}
 
 out:
@@ -353,28 +363,51 @@ int policy_sign_file(const char *file_path, const char *privkey_pem_path,
 	return 0;
 }
 
+int policy_sig_read(int fd, uint8_t sig[POLICY_SIG_SIZE])
+{
+	size_t got = 0;
+	uint8_t extra;
+	ssize_t n;
+
+	while (got < POLICY_SIG_SIZE) {
+		n = read(fd, sig + got, POLICY_SIG_SIZE - got);
+		if (n < 0 && errno == EINTR)
+			continue;
+		if (n < 0)
+			return -errno;
+		if (n == 0)
+			return -EKEYREJECTED;
+		got += (size_t)n;
+	}
+
+	do {
+		n = read(fd, &extra, 1);
+	} while (n < 0 && errno == EINTR);
+	if (n < 0)
+		return -errno;
+	return n == 0 ? 0 : -EKEYREJECTED;
+}
+
 int policy_verify_file(const char *file_path, const char *pubkey_pem_path,
 		       const char *sig_path)
 {
 	uint8_t *data = NULL;
 	size_t data_len = 0;
 	uint8_t sig[POLICY_SIG_SIZE];
-	FILE *f = NULL;
-	size_t nread;
+	int fd;
 	int ret;
 
 	if (!file_path || !pubkey_pem_path || !sig_path)
 		return -EINVAL;
 
-	f = fopen(sig_path, "rb");
-	if (!f)
+	fd = open(sig_path, O_RDONLY | O_CLOEXEC);
+	if (fd < 0)
 		return -errno ? -errno : -ENOENT;
 
-	nread = fread(sig, 1, POLICY_SIG_SIZE, f);
-	fclose(f);
-
-	if (nread != POLICY_SIG_SIZE)
-		return -EAUTH;
+	ret = policy_sig_read(fd, sig);
+	close(fd);
+	if (ret < 0)
+		return ret;
 
 	int read_err = 0;
 	data = read_file_contents(file_path, &data_len, &read_err);

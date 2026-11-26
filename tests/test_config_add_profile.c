@@ -18,6 +18,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
 #include <unistd.h>
 
 #include "../src/agent/config.h"
@@ -245,6 +246,148 @@ int main(void)
 	}
 
 	{
+		/* the file is read the way the agent reads it: only a parsed
+		 * profile names a publisher or takes a slot */
+		const char *bases[] = {
+			"[profile \"old\"]\nca = ca.old.example\n"
+			"ca_cert = /etc/lota/studio-a.pem.old\n"
+			"verifier = v.old.example\n",
+			"# ca_cert = /etc/lota/studio-a.pem\n",
+			"ca_cert = /etc/lota/studio-a.pem\n",
+			"# [profile \"studio-a\"]\n",
+		};
+		static const char *const what[] = {
+			"a longer anchor path is another publisher",
+			"a commented ca_cert is no publisher",
+			"the top-level ca_cert is no publisher",
+			"a commented section takes no name or slot",
+		};
+		char acc[16384];
+		char next[16384];
+		size_t i;
+		int n;
+
+		for (i = 0; i < sizeof(bases) / sizeof(bases[0]); i++) {
+			rc = config_profile_append_text(bases[i], &p, out,
+							sizeof(out));
+			CHECK(rc == 1 && loads_back(out) == 0, what[i]);
+		}
+
+		rc = config_profile_append_text(
+			"[profile \"other\"]\nca=ca.other.example\n"
+			"ca_cert=/etc/lota/studio-a.pem\nverifier=v.example\n",
+			&p, out, sizeof(out));
+		CHECK(rc == 0, "ca_cert= with no spaces names the publisher");
+
+		rc = config_profile_append_text(
+			"[ profile \"studio-a\"]\nca = ca.other.example\n"
+			"ca_cert = /etc/lota/other.pem\nverifier = v.example\n",
+			&p, out, sizeof(out));
+		CHECK(rc == -EEXIST,
+		      "a spaced header still holds the publisher's name");
+
+		acc[0] = '\0';
+		for (n = 0; n < LOTA_CONFIG_MAX_PROFILES; n++) {
+			size_t len = strlen(acc);
+
+			snprintf(acc + len, sizeof(acc) - len,
+				 "[ profile \"p%d\"]\nca = ca.example\n"
+				 "ca_cert = /etc/lota/p%d.pem\n"
+				 "verifier = v.example\n",
+				 n, n);
+		}
+		rc = config_profile_append_text(acc, &p, out, sizeof(out));
+		CHECK(rc == -E2BIG, "spaced headers count toward the cap");
+
+		rc = config_profile_append_text("not a key line\n", &p, out,
+						sizeof(out));
+		CHECK(rc == -EBADMSG, "a text that does not parse is refused");
+
+		/* the shipped example: its commented sections are not
+		 * profiles */
+		{
+			FILE *f = fopen("configs/lota.conf.example", "re");
+			size_t len = 0;
+
+			CHECK(f != NULL, "the example configuration is read");
+			if (f) {
+				len = fread(acc, 1, sizeof(acc) - 1, f);
+				fclose(f);
+			}
+			acc[len] = '\0';
+			for (n = 0; n < 3; n++) {
+				char nm[32];
+				char anchor[64];
+				struct lota_profile e;
+
+				snprintf(nm, sizeof(nm), "publisher-%c",
+					 'a' + n);
+				snprintf(anchor, sizeof(anchor),
+					 "/etc/lota/own-%d.pem", n);
+				e = mkprofile(nm, "ca.example", anchor,
+					      "v.example");
+				rc = config_profile_append_text(acc, &e, next,
+								sizeof(next));
+				if (rc != 1)
+					break;
+				snprintf(acc, sizeof(acc), "%s", next);
+			}
+			CHECK(n == 3 && loads_back(acc) == 0,
+			      "three publishers are added to the example");
+		}
+	}
+
+	{
+		/* a verifier host spelled none is the token-only key to the
+		 * parser, so the writer refuses it with or without a port */
+		static const int ports[] = { 8443, 9000 };
+		struct lota_profile n;
+		size_t i;
+
+		for (i = 0; i < sizeof(ports) / sizeof(ports[0]); i++) {
+			n = mkprofile("studio-n", "ca.studio-n.example",
+				      "/etc/lota/studio-n.pem", "none");
+			n.verifier_port = ports[i];
+			rc = config_profile_append_text("", &n, out,
+							sizeof(out));
+			CHECK(rc == -EILSEQ,
+			      "a verifier host named none is refused");
+		}
+	}
+
+	{
+		/* a port after the host is not split off: it would reach the
+		 * resolver as part of the name */
+		struct lota_profile h;
+
+		h = mkprofile("studio-h", "ca.studio-h.example:9999",
+			      "/etc/lota/studio-h.pem", "v.example");
+		rc = config_profile_append_text("", &h, out, sizeof(out));
+		CHECK(rc == -EILSEQ, "a CA host with a port is refused");
+
+		h = mkprofile("studio-h", "ca.studio-h.example",
+			      "/etc/lota/studio-h.pem", "v.example:9000");
+		rc = config_profile_append_text("", &h, out, sizeof(out));
+		CHECK(rc == -EILSEQ, "a verifier host with a port is refused");
+
+		h = mkprofile("studio-h", "[fd00::1]:9999",
+			      "/etc/lota/studio-h.pem", "fd00::2");
+		rc = config_profile_append_text("", &h, out, sizeof(out));
+		CHECK(rc == -EILSEQ, "a bracketed CA host is refused");
+
+		h = mkprofile("studio-h", "fd00::1", "/etc/lota/studio-h.pem",
+			      "[fd00::2]:9000");
+		rc = config_profile_append_text("", &h, out, sizeof(out));
+		CHECK(rc == -EILSEQ, "a bracketed verifier host is refused");
+
+		h = mkprofile("studio-h", "fd00::1", "/etc/lota/studio-h.pem",
+			      "fd00::2");
+		rc = config_profile_append_text("", &h, out, sizeof(out));
+		CHECK(rc == 1 && loads_back(out) == 0,
+		      "IPv6 literals are written");
+	}
+
+	{
 		char small[64];
 
 		rc = config_profile_append_text("attest_interval = 60\n", &p,
@@ -387,6 +530,41 @@ int main(void)
 			CHECK(rc == 1, "the publisher is appended to the file");
 			CHECK(profiles_in_file(path) == 1,
 			      "the file the writer left holds the publisher");
+
+			/* the replacement keeps the live file's mode and owner,
+			 * and a stale replacement does not stand in the way */
+			{
+				struct lota_profile r = mkprofile(
+					"studio-r", "ca.studio-r.example",
+					"/etc/lota/studio-r.pem",
+					"verifier.studio-r.example");
+				struct lota_profile t = mkprofile(
+					"studio-t", "ca.studio-t.example",
+					"/etc/lota/studio-t.pem",
+					"verifier.studio-t.example");
+				struct stat st;
+
+				CHECK(chmod(path, 0600) == 0,
+				      "the live file is made 0600");
+				rc = config_profile_append(path, &r);
+				CHECK(rc == 1 && stat(path, &st) == 0 &&
+					      (st.st_mode & 07777) == 0600 &&
+					      st.st_uid == geteuid(),
+				      "the replaced file keeps 0600 and owner");
+
+				CHECK(write_file(tmp_path, "stale\n") == 0 &&
+					      chmod(tmp_path, 0664) == 0,
+				      "a stale 0664 .new is staged");
+				rc = config_profile_append(path, &t);
+				CHECK(rc == 1 && profiles_in_file(path) == 3,
+				      "a stale .new does not block it");
+
+				unlink(path);
+				rc = config_profile_append(path, &r);
+				CHECK(rc == 1 && stat(path, &st) == 0 &&
+					      (st.st_mode & 07777) == 0644,
+				      "a file created from nothing is 0644");
+			}
 
 			unlink(path);
 			unlink(tmp_path);

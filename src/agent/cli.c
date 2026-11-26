@@ -19,6 +19,7 @@
 #include "agent.h"
 #include "attest.h"
 #include "config.h"
+#include "journal.h"
 #include "main_utils.h"
 #include "parse_utils.h"
 #include "path_validate.h"
@@ -89,8 +90,10 @@ static int validate_path_arg(const char *key, const char *p)
 {
 	if (!key || !p)
 		return -EINVAL;
-	if (p[0] == '\0')
+	if (p[0] == '\0') {
+		fprintf(stderr, "Invalid %s: empty path\n", key);
 		return -EINVAL;
+	}
 	if (lota_str_has_control(p)) {
 		fprintf(stderr, "Invalid %s: contains control characters\n",
 			key);
@@ -154,6 +157,8 @@ static int load_config_into_options(struct cli_options *opts,
 			strerror(-cfg_ret));
 		return 1;
 	}
+
+	journal_set_level(config_log_priority(cfg->log_level));
 
 	opts->server_addr = cfg->server;
 	opts->server_port = cfg->port;
@@ -246,21 +251,13 @@ static int parse_attest_interval(const char *arg, int *interval)
 		fprintf(stderr, "Invalid interval: %s\n", arg);
 		return -EINVAL;
 	}
-	if (v != 0 && v < MIN_ATTEST_INTERVAL) {
+	if (v != 0 && (v < MIN_ATTEST_INTERVAL || v > MAX_ATTEST_INTERVAL)) {
 		fprintf(stderr,
-			"Warning: interval %ld too low, using "
-			"minimum %d seconds\n",
-			v, MIN_ATTEST_INTERVAL);
-		v = MIN_ATTEST_INTERVAL;
-	}
-	if (v > MAX_ATTEST_INTERVAL) {
-		fprintf(stderr,
-			"Invalid interval: %ld exceeds the "
-			"maximum of %d seconds; beyond it "
-			"a minted token outlives the token "
-			"age the SDK verifiers accept and "
-			"spends their clock skew\n",
-			v, MAX_ATTEST_INTERVAL);
+			"--attest-interval %ld out of range (0 or %d-%d; above "
+			"%d a minted token outlives the token age the SDK "
+			"verifiers accept and spends their clock skew)\n",
+			v, MIN_ATTEST_INTERVAL, MAX_ATTEST_INTERVAL,
+			MAX_ATTEST_INTERVAL);
 		return -EINVAL;
 	}
 
@@ -271,6 +268,9 @@ static int parse_attest_interval(const char *arg, int *interval)
 int cli_parse(int argc, char **argv, struct cli_options *opts,
 	      struct lota_config *cfg)
 {
+	static const char optstring[] =
+		"f:ZticSEaI:s:p:C:KF:b:m:MPJYXR:L:A:dD:G:g:V:k:Q:h";
+	bool pubkey_flag = false;
 	int opt;
 
 	static struct option long_options[] = {
@@ -346,22 +346,22 @@ int cli_parse(int argc, char **argv, struct cli_options *opts,
 	 * the file loads first: the flags below overwrite its values and add to
 	 * its lists
 	 */
-	for (int i = 1; i < argc; i++) {
-		if ((strcmp(argv[i], "--config") == 0 ||
-		     strcmp(argv[i], "-f") == 0) &&
-		    i + 1 < argc) {
-			opts->config_path = argv[++i];
-		}
+	opterr = 0;
+	optind = 0;
+	while ((opt = getopt_long(argc, argv, optstring, long_options, NULL)) !=
+	       -1) {
+		if (opt == 'f')
+			opts->config_path = optarg;
 	}
+	opterr = 1;
+	optind = 0;
 
 	int rc = load_config_into_options(opts, cfg);
 	if (rc != 0)
 		return rc;
 
-	while ((opt = getopt_long(
-			argc, argv,
-			"f:ZticSEaI:s:p:C:KF:b:m:MPJYXR:L:A:dD:G:g:V:k:Q:h",
-			long_options, NULL)) != -1) {
+	while ((opt = getopt_long(argc, argv, optstring, long_options, NULL)) !=
+	       -1) {
 		switch (opt) {
 		case 't':
 			opts->test_tpm_flag = 1;
@@ -584,6 +584,8 @@ int cli_parse(int argc, char **argv, struct cli_options *opts,
 			g_cli_protect_pids[g_cli_protect_pid_count++] = v;
 		} break;
 		case 'L':
+			if (validate_path_arg("trust-lib", optarg) < 0)
+				return 1;
 			if (g_trust_lib_count < LOTA_CONFIG_MAX_LIBS) {
 				if (copy_string_checked(
 					    "trust-lib",
@@ -660,9 +662,9 @@ int cli_parse(int argc, char **argv, struct cli_options *opts,
 			break;
 		case 'Q':
 			opts->policy_pubkey_path = optarg;
+			pubkey_flag = true;
 			break;
 		case 'f':
-			/* the pre-scan reads the two-argument spellings only */
 			break;
 		case 'Z':
 			opts->dump_config_flag = 1;
@@ -674,6 +676,21 @@ int cli_parse(int argc, char **argv, struct cli_options *opts,
 			return (opt == 'h') ? -1 : 1;
 		}
 	}
+
+	if (!pubkey_flag && cfg->policy_pubkey[0] &&
+	    opts->policy_pubkey_path != cfg->policy_pubkey &&
+	    access(cfg->policy_pubkey, R_OK) != 0)
+		fprintf(stderr,
+			"Warning: policy_pubkey %s is not readable: %s\n",
+			cfg->policy_pubkey, strerror(errno));
+
+	if (!opts->policy_pubkey_path)
+		cfg->policy_pubkey[0] = '\0';
+	else if (opts->policy_pubkey_path != cfg->policy_pubkey &&
+		 copy_string_checked("policy_pubkey", cfg->policy_pubkey,
+				     sizeof(cfg->policy_pubkey),
+				     opts->policy_pubkey_path) < 0)
+		return 1;
 
 	return 0;
 }
@@ -775,19 +792,6 @@ int cli_dump_config(struct cli_options *opts, struct lota_config *cfg)
 		}
 	} else {
 		cfg->signing_key[0] = '\0';
-	}
-
-	if (opts->policy_pubkey_path) {
-		if (opts->policy_pubkey_path != cfg->policy_pubkey) {
-			if (copy_string_checked("policy_pubkey",
-						cfg->policy_pubkey,
-						sizeof(cfg->policy_pubkey),
-						opts->policy_pubkey_path) < 0) {
-				return 1;
-			}
-		}
-	} else {
-		cfg->policy_pubkey[0] = '\0';
 	}
 
 	cfg->trust_lib_count = g_trust_lib_count;

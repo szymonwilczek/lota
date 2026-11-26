@@ -12,6 +12,7 @@
 #include <unistd.h>
 #include <stdbool.h>
 #include <stdint.h>
+#include <sys/stat.h>
 
 #include "../../include/lota.h"
 #include "../../include/lota_ipc.h"
@@ -26,10 +27,6 @@
 #include "policy_sign.h"
 #include "sdnotify.h"
 #include "steam_runtime.h"
-
-#ifndef EAUTH
-#define EAUTH 80
-#endif
 
 const char *mode_to_string(int mode)
 {
@@ -209,12 +206,16 @@ void print_usage(const char *prog, const char *default_bpf_path,
 	printf("                    certificate renewal)\n");
 	printf("  --attest-interval SECS\n");
 	printf("                    Continuous attestation interval in seconds\n");
-	printf("                    (default: 0=one-shot, else %d-%d; above "
-	       "%d\n",
-	       MIN_ATTEST_INTERVAL, MAX_ATTEST_INTERVAL, MAX_ATTEST_INTERVAL);
-	printf("                    the minted tokens outlive every relying "
-	       "party's\n");
-	printf("                    freshness window)\n");
+	printf("                    (%d-%d; default 0: one-shot with --server "
+	       "or the\n",
+	       MIN_ATTEST_INTERVAL, MAX_ATTEST_INTERVAL);
+	printf("                    file's server key, %d s with publishers or "
+	       "none\n",
+	       DEFAULT_ATTEST_INTERVAL);
+	printf("                    named; above %d the minted tokens outlive "
+	       "every\n",
+	       MAX_ATTEST_INTERVAL);
+	printf("                    relying party's freshness window)\n");
 	printf("  --server HOST     Verifier server address (default: "
 	       "none)\n");
 	printf("  --port PORT       Verifier server port (default: %d)\n",
@@ -341,6 +342,16 @@ int handle_policy_ops(const struct policy_ops_args *args)
 			 args->gen_signing_key_prefix);
 
 		ret = policy_sign_generate_keypair(priv_path, pub_path);
+		if (ret == -EEXIST) {
+			struct stat st;
+
+			fprintf(stderr,
+				"Failed to generate keypair: %s already "
+				"exists\n",
+				lstat(priv_path, &st) == 0 ? priv_path :
+							     pub_path);
+			return 1;
+		}
 		if (ret < 0) {
 			fprintf(stderr, "Failed to generate keypair: %s\n",
 				strerror(-ret));
@@ -396,7 +407,7 @@ int handle_policy_ops(const struct policy_ops_args *args)
 			printf("Signature valid: %s\n",
 			       args->verify_policy_file);
 			return 0;
-		} else if (ret == -EAUTH) {
+		} else if (ret == -EKEYREJECTED) {
 			fprintf(stderr, "Signature INVALID: %s\n",
 				args->verify_policy_file);
 			return 1;

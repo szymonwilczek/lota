@@ -22,10 +22,6 @@
 #include "sdnotify.h"
 #include "lota.h"
 
-#ifndef EAUTH
-#define EAUTH 80
-#endif
-
 static void copy_path(char dst[PATH_MAX], const char *src)
 {
 	size_t len = strnlen(src, PATH_MAX - 1);
@@ -113,7 +109,7 @@ verify_reload_downgrade_authorization_fd(int config_fd, const char *config_path,
 		lota_err("Refusing ENFORCE mode downgrade on reload: "
 			 "policy_pubkey is not "
 			 "configured");
-		return -EAUTH;
+		return -EKEYREJECTED;
 	}
 
 	sig_path_len = strlen(cfg_path) + 5; /* .sig + NUL */
@@ -143,26 +139,13 @@ verify_reload_downgrade_authorization_fd(int config_fd, const char *config_path,
 		return ret;
 	}
 
-	{
-		ssize_t n = read(sig_fd, sig, sizeof(sig));
-		if (n != (ssize_t)sizeof(sig)) {
-			close(sig_fd);
-			free(cfg_data);
-			free(sig_path);
-			return -EAUTH;
-		}
-
-		{
-			uint8_t extra;
-			if (read(sig_fd, &extra, 1) != 0) {
-				close(sig_fd);
-				free(cfg_data);
-				free(sig_path);
-				return -EAUTH;
-			}
-		}
-	}
+	ret = policy_sig_read(sig_fd, sig);
 	close(sig_fd);
+	if (ret < 0) {
+		free(cfg_data);
+		free(sig_path);
+		return ret;
+	}
 
 	ret = policy_verify_buffer(cfg_data, cfg_len, cfg->policy_pubkey, sig);
 	free(cfg_data);
@@ -188,7 +171,18 @@ static void apply_runtime_flags_transactional(
 	bool old_block_ptrace = *block_ptrace;
 	bool old_strict_modules = *strict_modules;
 	bool old_block_anon_exec = *block_anon_exec;
+	bool want_strict_exec = new_cfg->strict_exec;
+	bool want_strict_modules = new_cfg->strict_modules;
 	bool runtime_flags_failed = false;
+
+	if (*cli_runtime_allow_verity_count() == 0 &&
+	    ((want_strict_exec && !*strict_exec) ||
+	     (want_strict_modules && !*strict_modules))) {
+		lota_warn("Strict exec/modules requested but no allow_verity "
+			  "entries are configured; keeping them off");
+		want_strict_exec = want_strict_exec && *strict_exec;
+		want_strict_modules = want_strict_modules && *strict_modules;
+	}
 
 	if (new_cfg->strict_mmap != *strict_mmap) {
 		if (bpf_loader_set_config(&g_agent.bpf_ctx,
@@ -212,23 +206,22 @@ static void apply_runtime_flags_transactional(
 		}
 	}
 
-	if (!runtime_flags_failed && new_cfg->strict_exec != *strict_exec) {
+	if (!runtime_flags_failed && want_strict_exec != *strict_exec) {
 		if (bpf_loader_set_config(&g_agent.bpf_ctx,
 					  LOTA_CFG_STRICT_EXEC,
-					  new_cfg->strict_exec ? 1 : 0) == 0) {
-			*strict_exec = new_cfg->strict_exec;
+					  want_strict_exec ? 1 : 0) == 0) {
+			*strict_exec = want_strict_exec;
 		} else {
 			lota_err("Failed to apply strict exec on reload");
 			runtime_flags_failed = true;
 		}
 	}
 
-	if (!runtime_flags_failed &&
-	    new_cfg->strict_modules != *strict_modules) {
-		if (bpf_loader_set_config(
-			    &g_agent.bpf_ctx, LOTA_CFG_STRICT_MODULES,
-			    new_cfg->strict_modules ? 1 : 0) == 0) {
-			*strict_modules = new_cfg->strict_modules;
+	if (!runtime_flags_failed && want_strict_modules != *strict_modules) {
+		if (bpf_loader_set_config(&g_agent.bpf_ctx,
+					  LOTA_CFG_STRICT_MODULES,
+					  want_strict_modules ? 1 : 0) == 0) {
+			*strict_modules = want_strict_modules;
 		} else {
 			lota_err("Failed to apply strict modules on reload");
 			runtime_flags_failed = true;
@@ -578,6 +571,49 @@ static void reload_trust_libs(const struct lota_config *new_cfg,
 	free(old_trust_libs);
 }
 
+static void warn_startup_switch(const char *key, bool now, bool next)
+{
+	if (next != now)
+		lota_warn("%s changes on the next start; keeping it %s", key,
+			  now ? "on" : "off");
+}
+
+static void warn_startup_only(const struct lota_config *cfg,
+			      const struct lota_config *new_cfg)
+{
+	warn_startup_switch("bench", cfg->bench, new_cfg->bench);
+	warn_startup_switch("seal_aik_auth", cfg->seal_aik_auth,
+			    new_cfg->seal_aik_auth);
+	warn_startup_switch("seal_aik_auth_strict", cfg->seal_aik_auth_strict,
+			    new_cfg->seal_aik_auth_strict);
+	warn_startup_switch("seal_persistent_primary",
+			    cfg->seal_persistent_primary,
+			    new_cfg->seal_persistent_primary);
+
+	if (strcmp(new_cfg->kernel_path, cfg->kernel_path) != 0)
+		lota_warn("kernel_path changes on the next start; keeping "
+			  "'%s'",
+			  cfg->kernel_path);
+	if (new_cfg->policy_pubkey[0] &&
+	    strcmp(new_cfg->policy_pubkey, cfg->policy_pubkey) != 0)
+		lota_warn("policy_pubkey is read on the next start; verifying "
+			  "with '%s'",
+			  cfg->policy_pubkey);
+	if (new_cfg->aik_handle != cfg->aik_handle)
+		lota_warn("aik_handle changes on the next start; keeping "
+			  "0x%08x",
+			  cfg->aik_handle);
+	if (new_cfg->container_listener_uid_count !=
+		    cfg->container_listener_uid_count ||
+	    memcmp(new_cfg->container_listener_uids,
+		   cfg->container_listener_uids,
+		   (size_t)cfg->container_listener_uid_count *
+			   sizeof(cfg->container_listener_uids[0])) != 0)
+		lota_warn("container_listener_uid changes on the next start; "
+			  "keeping %d entries",
+			  cfg->container_listener_uid_count);
+}
+
 static void sync_config_snapshot(
 	struct lota_config *cfg, const struct lota_config *new_cfg, int mode,
 	bool strict_mmap, bool strict_exec, bool block_ptrace,
@@ -601,13 +637,10 @@ static void sync_config_snapshot(
 	cfg->strict_modules = strict_modules;
 	cfg->block_anon_exec = block_anon_exec;
 	cfg->attest_interval = new_cfg->attest_interval;
-	cfg->aik_handle = new_cfg->aik_handle;
 	cfg->daemon = new_cfg->daemon;
 	memcpy(cfg->pid_file, new_cfg->pid_file, sizeof(cfg->pid_file));
 	memcpy(cfg->signing_key, new_cfg->signing_key,
 	       sizeof(cfg->signing_key));
-	memcpy(cfg->policy_pubkey, new_cfg->policy_pubkey,
-	       sizeof(cfg->policy_pubkey));
 	cfg->trust_lib_count = trust_lib_count;
 	for (int k = 0; k < trust_lib_count; k++) {
 		copy_path(cfg->trust_libs[k], trust_libs[k]);
@@ -704,14 +737,19 @@ int agent_reload_config(const char *config_path, struct lota_config *cfg,
 	close(cfg_fd);
 
 	if (new_mode >= 0 && new_mode != *mode) {
-		if (bpf_loader_set_mode(&g_agent.bpf_ctx, new_mode) == 0) {
-			lota_info("Mode changed: %s -> %s",
-				  mode_to_string(*mode),
-				  mode_to_string(new_mode));
-			*mode = new_mode;
-		} else {
-			lota_err("Failed to apply new mode");
+		int mode_ret = bpf_loader_set_mode(&g_agent.bpf_ctx, new_mode);
+
+		if (mode_ret < 0) {
+			lota_err("Failed to apply new mode: %s; keeping the "
+				 "previous configuration",
+				 strerror(-mode_ret));
+			config_free(new_cfg);
+			sdnotify_ready();
+			return mode_ret;
 		}
+		lota_info("Mode changed: %s -> %s", mode_to_string(*mode),
+			  mode_to_string(new_mode));
+		*mode = new_mode;
 	}
 
 	keep_command_line_switches(new_cfg);
@@ -720,18 +758,9 @@ int agent_reload_config(const char *config_path, struct lota_config *cfg,
 					  block_ptrace, strict_modules,
 					  block_anon_exec);
 
-	if (new_cfg->log_level[0] &&
-	    strcmp(new_cfg->log_level, cfg->log_level) != 0) {
-		int lvl = LOG_DEBUG;
-		if (strcmp(new_cfg->log_level, "error") == 0)
-			lvl = LOG_ERR;
-		else if (strcmp(new_cfg->log_level, "warn") == 0)
-			lvl = LOG_WARNING;
-		else if (strcmp(new_cfg->log_level, "info") == 0)
-			lvl = LOG_INFO;
-		journal_set_level(lvl);
+	journal_set_level(config_log_priority(new_cfg->log_level));
+	if (strcmp(new_cfg->log_level, cfg->log_level) != 0)
 		lota_info("Log level changed to %s", new_cfg->log_level);
-	}
 
 	merge_command_line_state(new_cfg);
 
@@ -741,9 +770,7 @@ int agent_reload_config(const char *config_path, struct lota_config *cfg,
 	reload_trust_libs(new_cfg, trust_libs, trust_lib_count);
 	lota_info("Trusted libs reloaded (%d entries)", *trust_lib_count);
 
-	if (new_cfg->bench != cfg->bench)
-		lota_warn("bench changes on the next start; keeping it %s",
-			  cfg->bench ? "on" : "off");
+	warn_startup_only(cfg, new_cfg);
 
 	if (new_cfg->allow_verity_count != cfg->allow_verity_count) {
 		lota_warn("allow_verity changes require restart; keeping "

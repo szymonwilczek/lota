@@ -183,8 +183,6 @@ int hardening_apply_seccomp(void)
 
 		rc = seccomp_rule_add(ctx, SCMP_ACT_KILL_PROCESS, sc, 0);
 		if (rc < 0) {
-			if (rc == -EOPNOTSUPP || rc == -EDOM || rc == -EINVAL)
-				continue;
 			seccomp_release(ctx);
 			return rc;
 		}

@@ -15,13 +15,57 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
+#include <syslog.h>
 #include <unistd.h>
 #include <stdbool.h>
 
 #include "test.h"
+#include "../src/agent/agent.h"
 #include "../src/agent/attest.h"
+#include "../src/agent/cli.h"
 #include "../src/agent/config.h"
+#include "../src/agent/journal.h"
+#include "../src/agent/main_utils.h"
 #include "../src/agent/policy_pubkey.h"
+#include "../src/agent/tpm.h"
+
+/* What cli.c reaches outside the parser */
+struct agent_globals g_agent;
+
+void journal_set_level(int priority)
+{
+	(void)priority;
+}
+
+int parse_mode(const char *mode_str)
+{
+	if (mode_str && strcmp(mode_str, "enforce") == 0)
+		return LOTA_MODE_ENFORCE;
+	if (mode_str && strcmp(mode_str, "monitor") == 0)
+		return LOTA_MODE_MONITOR;
+	return -1;
+}
+
+void print_usage(const char *prog, const char *default_bpf_path,
+		 int default_verifier_port)
+{
+	(void)prog;
+	(void)default_bpf_path;
+	(void)default_verifier_port;
+}
+
+int tpm_set_kernel_path(struct tpm_context *ctx, const char *path)
+{
+	(void)ctx;
+	(void)path;
+	return 0;
+}
+
+const char *tpm_strerror(int err)
+{
+	(void)err;
+	return "stub";
+}
 
 static char tmpdir[64];
 
@@ -769,6 +813,111 @@ static void test_config_load_invalid_mode(void)
 	PASS();
 }
 
+static void test_config_load_invalid_log_level(void)
+{
+	static const char *const names[] = { "error", "warn", "info", "debug" };
+	static const int prios[] = { LOG_ERR, LOG_WARNING, LOG_INFO,
+				     LOG_DEBUG };
+	struct lota_config cfg;
+	char path[PATH_MAX];
+
+	TEST("config_load refuses an unknown log_level");
+
+	for (size_t i = 0; i < sizeof(names) / sizeof(names[0]); i++) {
+		if (config_log_priority(names[i]) != prios[i]) {
+			FAIL(names[i]);
+			return;
+		}
+	}
+	if (config_log_priority("inof") != -1 ||
+	    config_log_priority("") != -1) {
+		FAIL("an unknown name maps to a priority");
+		return;
+	}
+
+	write_config("loglevel_bad.conf", "log_level = inof\n");
+	config_path("loglevel_bad.conf", path, sizeof(path));
+	config_init(&cfg);
+	if (config_load(&cfg, path) != -EINVAL) {
+		FAIL("log_level = inof loads");
+		return;
+	}
+	if (strcmp(cfg.log_level, "info") != 0) {
+		FAIL("log_level changed on invalid input");
+		return;
+	}
+
+	write_config("loglevel_warn.conf", "log_level = warn\n");
+	config_path("loglevel_warn.conf", path, sizeof(path));
+	config_init(&cfg);
+	if (config_load(&cfg, path) != 0 ||
+	    strcmp(cfg.log_level, "warn") != 0) {
+		FAIL("log_level = warn refused");
+		return;
+	}
+
+	PASS();
+}
+
+static void test_config_load_value_too_long(void)
+{
+	struct lota_config cfg;
+	char path[PATH_MAX];
+	char value[sizeof(cfg.server) + 1];
+	char text[2 * sizeof(value) + 64];
+
+	TEST("config_load refuses a value longer than its field");
+
+	memset(value, 'a', sizeof(cfg.server));
+	value[sizeof(cfg.server)] = '\0';
+	snprintf(text, sizeof(text), "server = %s\n", value);
+	write_config("long_server.conf", text);
+	config_path("long_server.conf", path, sizeof(path));
+	config_init(&cfg);
+	if (config_load(&cfg, path) != -EINVAL) {
+		FAIL("a server one byte too long loads");
+		return;
+	}
+
+	value[sizeof(cfg.server) - 1] = '\0';
+	snprintf(text, sizeof(text), "server = %s\n", value);
+	write_config("long_server.conf", text);
+	config_init(&cfg);
+	if (config_load(&cfg, path) != 0 || strcmp(cfg.server, value) != 0) {
+		FAIL("a server that fits is refused or changed");
+		return;
+	}
+
+	memset(value, 'b', sizeof(cfg.profiles[0].verifier));
+	value[sizeof(cfg.profiles[0].verifier)] = '\0';
+	snprintf(text, sizeof(text),
+		 "[profile \"p\"]\nca = ca.p.example\n"
+		 "ca_cert = /etc/lota/p.pem\nverifier = %s\n",
+		 value);
+	write_config("long_verifier.conf", text);
+	config_path("long_verifier.conf", path, sizeof(path));
+	config_init(&cfg);
+	if (config_load(&cfg, path) != -EINVAL) {
+		FAIL("a profile verifier one byte too long loads");
+		return;
+	}
+
+	value[sizeof(cfg.profiles[0].verifier) - 1] = '\0';
+	snprintf(text, sizeof(text),
+		 "[profile \"p\"]\nca = ca.p.example\n"
+		 "ca_cert = /etc/lota/p.pem\nverifier = %s\n",
+		 value);
+	write_config("long_verifier.conf", text);
+	config_init(&cfg);
+	if (config_load(&cfg, path) != 0 ||
+	    strcmp(cfg.profiles[0].verifier, value) != 0) {
+		FAIL("a profile verifier that fits is refused or changed");
+		return;
+	}
+
+	PASS();
+}
+
 static void test_config_load_whitespace_trimming(void)
 {
 	struct lota_config cfg;
@@ -887,7 +1036,7 @@ static void test_config_load_empty_value(void)
 	char path[PATH_MAX];
 	int ret;
 
-	TEST("config_load allows empty value (clears field)");
+	TEST("config_load clears a field on an empty value, not a list");
 	write_config("emptyval.conf", "ca_cert = /some/path\n"
 				      "ca_cert =\n");
 	config_path("emptyval.conf", path, sizeof(path));
@@ -899,6 +1048,20 @@ static void test_config_load_empty_value(void)
 	}
 	if (cfg.ca_cert[0] != '\0') {
 		FAIL("ca_cert not empty after clear");
+		return;
+	}
+
+	write_config("emptyval_list.conf", "trust_lib =\n");
+	config_path("emptyval_list.conf", path, sizeof(path));
+	config_init(&cfg);
+	if (config_load(&cfg, path) != -EINVAL || cfg.trust_lib_count != 0) {
+		FAIL("an empty trust_lib entry loads");
+		return;
+	}
+	write_config("emptyval_list.conf", "allow_verity =\n");
+	config_init(&cfg);
+	if (config_load(&cfg, path) != -EINVAL || cfg.allow_verity_count != 0) {
+		FAIL("an empty allow_verity entry loads");
 		return;
 	}
 	PASS();
@@ -1226,6 +1389,18 @@ static void test_config_load_profile_incomplete(void)
 	ret = config_load(&cfg, path);
 	if (ret != -EINVAL) {
 		FAIL("a port for a verifier declared absent was accepted");
+		return;
+	}
+	write_config("profile_tokenonly_port.conf",
+		     "[profile \"alpha\"]\n"
+		     "ca = ca.alpha.example\n"
+		     "ca_cert = /etc/lota/alpha.pem\n"
+		     "verifier_port = 8443\n"
+		     "verifier = none\n");
+	config_init(&cfg);
+	ret = config_load(&cfg, path);
+	if (ret != -EINVAL) {
+		FAIL("the default verifier port beside none was accepted");
 		return;
 	}
 	PASS();
@@ -2438,6 +2613,231 @@ static void test_config_load_from_fd(void)
 	PASS();
 }
 
+static int cli_parse_argv(const char *const *args, int n,
+			  struct cli_options *opts, struct lota_config *cfg)
+{
+	char *argv[8];
+
+	for (int i = 0; i < n; i++)
+		argv[i] = (char *)args[i];
+	argv[n] = NULL;
+	config_init(cfg);
+	return cli_parse(n, argv, opts, cfg);
+}
+
+static void test_cli_config_spellings(void)
+{
+	struct cli_options opts;
+	struct lota_config *cfg;
+	char path[PATH_MAX];
+	char joined[PATH_MAX + 16];
+	char fused[PATH_MAX + 8];
+
+	TEST("every --config spelling getopt accepts loads that file");
+
+	write_config("cli_monitor.conf", "mode = monitor\n");
+	config_path("cli_monitor.conf", path, sizeof(path));
+	snprintf(joined, sizeof(joined), "--config=%s", path);
+	snprintf(fused, sizeof(fused), "-f%s", path);
+
+	const char *const forms[][3] = {
+		{ "lota-agent", "--config", path },
+		{ "lota-agent", joined, NULL },
+		{ "lota-agent", fused, NULL },
+		{ "lota-agent", "--conf", path },
+		{ "lota-agent", "-tf", path },
+	};
+
+	cfg = config_new();
+	if (!cfg) {
+		FAIL("out of memory");
+		return;
+	}
+	for (size_t i = 0; i < sizeof(forms) / sizeof(forms[0]); i++) {
+		int n = forms[i][2] ? 3 : 2;
+
+		if (cli_parse_argv(forms[i], n, &opts, cfg) != 0) {
+			FAIL(forms[i][1]);
+			config_free(cfg);
+			return;
+		}
+		if (strcmp(cfg->mode, "monitor") != 0 || !opts.config_path ||
+		    strcmp(opts.config_path, path) != 0) {
+			FAIL(forms[i][1]);
+			config_free(cfg);
+			return;
+		}
+	}
+	config_free(cfg);
+	PASS();
+}
+
+static void test_cli_attest_interval_bounds(void)
+{
+	static const struct {
+		const char *arg;
+		int ret;
+		int interval;
+	} cases[] = {
+		{ "29", 1, 0 },	   { "30", 0, 30 }, { "0", 0, 0 },
+		{ "240", 0, 240 }, { "241", 1, 0 },
+	};
+	struct cli_options opts;
+	struct lota_config *cfg;
+	char path[PATH_MAX];
+
+	TEST("--attest-interval refuses what the file refuses");
+
+	write_config("cli_empty.conf", "");
+	config_path("cli_empty.conf", path, sizeof(path));
+	cfg = config_new();
+	if (!cfg) {
+		FAIL("out of memory");
+		return;
+	}
+	for (size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); i++) {
+		const char *const args[] = { "lota-agent", "--config", path,
+					     "--attest-interval",
+					     cases[i].arg };
+
+		if (cli_parse_argv(args, 5, &opts, cfg) != cases[i].ret ||
+		    (cases[i].ret == 0 &&
+		     opts.attest_interval != cases[i].interval)) {
+			FAIL(cases[i].arg);
+			config_free(cfg);
+			return;
+		}
+	}
+	config_free(cfg);
+	PASS();
+}
+
+static void test_cli_trust_lib_path(void)
+{
+	static const char *const bad[] = { "", "lib/libx.so",
+					   "/usr/lib/../libx.so" };
+	struct cli_options opts;
+	struct lota_config *cfg;
+	char path[PATH_MAX];
+
+	TEST("--trust-lib refuses what --allow-verity refuses");
+
+	write_config("cli_empty.conf", "");
+	config_path("cli_empty.conf", path, sizeof(path));
+	cfg = config_new();
+	if (!cfg) {
+		FAIL("out of memory");
+		return;
+	}
+	for (size_t i = 0; i < sizeof(bad) / sizeof(bad[0]); i++) {
+		const char *const lib[] = { "lota-agent", "--config", path,
+					    "--trust-lib", bad[i] };
+		const char *const verity[] = { "lota-agent", "--config", path,
+					       "--allow-verity", bad[i] };
+
+		if (cli_parse_argv(verity, 5, &opts, cfg) != 1 ||
+		    cli_parse_argv(lib, 5, &opts, cfg) != 1) {
+			FAIL(bad[i]);
+			config_free(cfg);
+			return;
+		}
+	}
+	config_free(cfg);
+	PASS();
+}
+
+static void test_cli_policy_pubkey_unreadable(void)
+{
+	struct cli_options opts;
+	struct lota_config *cfg;
+	char path[PATH_MAX];
+	char log_path[PATH_MAX];
+	char log[512] = "";
+	int saved, fd, rc;
+	bool quiet;
+
+	TEST("an unreadable policy_pubkey is reported with its errno");
+
+	write_config("cli_pubkey.conf",
+		     "policy_pubkey = /nonexistent/named.pub\n");
+	config_path("cli_pubkey.conf", path, sizeof(path));
+	config_path("cli_pubkey.log", log_path, sizeof(log_path));
+	cfg = config_new();
+	saved = dup(STDERR_FILENO);
+	fd = open(log_path, O_RDWR | O_CREAT | O_TRUNC | O_CLOEXEC, 0600);
+	if (!cfg || saved < 0 || fd < 0) {
+		FAIL("setup");
+		config_free(cfg);
+		return;
+	}
+
+	const char *const argv[] = { "lota-agent", "--config", path,
+				     "--policy-pubkey",
+				     "/nonexistent/flag.pub" };
+
+	fflush(stderr);
+	dup2(fd, STDERR_FILENO);
+	rc = cli_parse_argv(argv, 5, &opts, cfg);
+	fflush(stderr);
+	quiet = lseek(fd, 0, SEEK_END) == 0;
+	rc = rc ?: cli_parse_argv(argv, 3, &opts, cfg);
+	fflush(stderr);
+	dup2(saved, STDERR_FILENO);
+	close(saved);
+	if (pread(fd, log, sizeof(log) - 1, 0) < 0)
+		log[0] = '\0';
+	close(fd);
+	unlink(log_path);
+	config_free(cfg);
+
+	if (rc != 0) {
+		FAIL("the configuration is refused");
+		return;
+	}
+	if (!quiet) {
+		FAIL("warned about the file key under --policy-pubkey");
+		return;
+	}
+	if (!strstr(log, "/nonexistent/named.pub") ||
+	    !strstr(log, strerror(ENOENT))) {
+		FAIL(log);
+		return;
+	}
+	PASS();
+}
+
+static void test_cli_policy_pubkey_into_config(void)
+{
+	struct cli_options opts;
+	struct lota_config *cfg;
+	char path[PATH_MAX];
+	char key[PATH_MAX];
+
+	TEST("the key the start resolves is the one the snapshot holds");
+
+	write_config("cli_nokey.conf", "");
+	write_config("cli_flag.pub", "");
+	config_path("cli_nokey.conf", path, sizeof(path));
+	config_path("cli_flag.pub", key, sizeof(key));
+	cfg = config_new();
+	if (!cfg) {
+		FAIL("out of memory");
+		return;
+	}
+
+	const char *const argv[] = { "lota-agent", "--config", path,
+				     "--policy-pubkey", key };
+
+	if (cli_parse_argv(argv, 5, &opts, cfg) != 0) {
+		FAIL("the command line is refused");
+	} else if (strcmp(cfg->policy_pubkey, key) != 0) {
+		FAIL("--policy-pubkey does not reach the snapshot");
+	} else {
+		PASS();
+	}
+	config_free(cfg);
+}
+
 int main(void)
 {
 	printf("=== LOTA Config Parser Tests ===\n\n");
@@ -2471,6 +2871,8 @@ int main(void)
 		test_config_load_invalid_boolean,
 		test_config_load_bench,
 		test_config_load_invalid_mode,
+		test_config_load_invalid_log_level,
+		test_config_load_value_too_long,
 		test_config_load_whitespace_trimming,
 		test_config_load_unknown_keys,
 		test_config_load_malformed_lines,
@@ -2502,6 +2904,11 @@ int main(void)
 		test_policy_pubkey_resolve,
 		test_config_load_mixed_comments,
 		test_config_load_from_fd,
+		test_cli_config_spellings,
+		test_cli_attest_interval_bounds,
+		test_cli_trust_lib_path,
+		test_cli_policy_pubkey_unreadable,
+		test_cli_policy_pubkey_into_config,
 	};
 
 	for (size_t i = 0; i < sizeof(tests) / sizeof(tests[0]); i++)
