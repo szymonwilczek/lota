@@ -71,6 +71,11 @@ type BatchedAttestationLog struct {
 
 	mu  sync.Mutex
 	buf []AttestationRecord
+	// records and events taken by flushes still writing;
+	// abandoned once a timed-out Close has counted them lost
+	inflight       int
+	inflightEvents int
+	abandoned      bool
 
 	wake    chan struct{}
 	closeCh chan struct{}
@@ -256,8 +261,8 @@ func (l *BatchedAttestationLog) Flush() {
 }
 
 // Close stops the worker after a final flush. Records after Close stay in the
-// buffer. Past closeTimeout it counts the buffer plus MaxBatch records as
-// failed and returns ErrCloseTimedOut. Later calls return nil.
+// buffer. Past closeTimeout it counts the buffer and the records still being
+// written as failed and returns ErrCloseTimedOut. Later calls return nil.
 func (l *BatchedAttestationLog) Close() error {
 	if l.closed.Swap(true) {
 		return nil
@@ -274,11 +279,12 @@ func (l *BatchedAttestationLog) Close() error {
 	}
 
 	l.mu.Lock()
-	pending := len(l.buf)
-	pendingEvents := countAttestationEvents(l.buf)
+	pending := len(l.buf) + l.inflight
+	pendingEvents := countAttestationEvents(l.buf) + l.inflightEvents
+	l.abandoned = true
 	l.mu.Unlock()
 
-	lost := int64(pending + l.maxBatch)
+	lost := int64(pending)
 	l.failed.Add(lost)
 	l.eventsLost.Add(int64(pendingEvents))
 	if l.loss != nil {
@@ -338,7 +344,10 @@ func (l *BatchedAttestationLog) flush() {
 		return
 	}
 	batch := l.buf
+	batchEvents := countAttestationEvents(batch)
 	l.buf = make([]AttestationRecord, 0, l.maxBatch)
+	l.inflight += len(batch)
+	l.inflightEvents += batchEvents
 	l.mu.Unlock()
 
 	// the per-record fallback can lose some records and write the rest
@@ -350,7 +359,7 @@ func (l *BatchedAttestationLog) flush() {
 	if l.batcher != nil {
 		if err = l.batcher.RecordBatch(batch); err != nil {
 			lost = len(batch)
-			lostEvents = countAttestationEvents(batch)
+			lostEvents = batchEvents
 		}
 	} else {
 		for i := range batch {
@@ -362,6 +371,16 @@ func (l *BatchedAttestationLog) flush() {
 				}
 			}
 		}
+	}
+
+	l.mu.Lock()
+	l.inflight -= len(batch)
+	l.inflightEvents -= batchEvents
+	abandoned := l.abandoned
+	l.mu.Unlock()
+	if abandoned {
+		// the timed-out Close counted this batch lost
+		return
 	}
 	if lost > 0 {
 		l.failed.Add(int64(lost))

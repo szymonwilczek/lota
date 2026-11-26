@@ -6,9 +6,13 @@ package verify
 
 import (
 	"crypto/sha256"
+	"database/sql"
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"slices"
+	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -108,20 +112,75 @@ type BaselineStorer interface {
 	CheckAndUpdate(clientID string, pcr14 [types.HashSize]byte) (TOFUResult, *ClientBaseline)
 
 	// GetBaseline returns the client's baseline, nil when it has none.
-	GetBaseline(clientID string) *ClientBaseline
+	// A store failure is an error, never a missing baseline.
+	GetBaseline(clientID string) (*ClientBaseline, error)
 
 	// ClearBaseline removes the client's baseline. Archived baselines stay.
 	ClearBaseline(clientID string) error
 
 	ListClients() []string
 
+	// ListClientsAfter returns up to limit clients with a baseline whose ID
+	// sorts after after, in ID order. A non-nil tenants keeps the clients
+	// of those tenants only.
+	ListClientsAfter(tenants []string, after string, limit int) ([]string,
+		error)
+
 	Stats() BaselineStats
 }
 
-// PagedClientLister is implemented by baseline stores that can page
-// the client listing in one query.
-type PagedClientLister interface {
-	ListClientsPage(limit, offset int) ([]string, error)
+// tenantMatches reports whether tenant is in tenants; nil matches every
+// tenant and an empty tenant is DefaultTenant.
+func tenantMatches(tenant string, tenants []string) bool {
+	if tenants == nil {
+		return true
+	}
+	if tenant == "" {
+		tenant = DefaultTenant
+	}
+	return slices.Contains(tenants, tenant)
+}
+
+// clientsAfterQuery builds the SQL of ListClientsAfter;
+// ph returns the placeholder of the n-th argument.
+func clientsAfterQuery(tenants []string, after string, limit int,
+	ph func(n int) string,
+) (q string, args []any) {
+	args = []any{after}
+	q = "SELECT client_id FROM baselines WHERE client_id > " + ph(1)
+	if tenants != nil {
+		set := make([]string, 0, len(tenants)+1)
+		for _, t := range tenants {
+			args = append(args, t)
+			set = append(set, ph(len(args)))
+			if t == DefaultTenant {
+				args = append(args, "")
+				set = append(set, ph(len(args)))
+			}
+		}
+		if len(set) == 0 {
+			q += " AND 0 = 1"
+		} else {
+			q += " AND tenant IN (" + strings.Join(set, ", ") + ")"
+		}
+	}
+	args = append(args, limit)
+	q += " ORDER BY client_id LIMIT " + ph(len(args))
+	return q, args
+}
+
+// scanClientIDs reads the client_id column of rows.
+func scanClientIDs(rows *sql.Rows) ([]string, error) {
+	defer rows.Close()
+	clients := []string{}
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		clients = append(clients, id)
+	}
+	return clients, rows.Err()
 }
 
 // ClientBaseline is the pinned PCR14 and agent hash of a client.
@@ -165,10 +224,10 @@ type BootBaselineStorer interface {
 
 // BootBaselineReader is implemented by baseline stores that read a client's
 // boot baseline without writing it. GetBootBaseline returns nil for a client
-// with none. Under RequireBootEnrollment a stored boot baseline enrolls the
-// client.
+// with none, an error on a store failure. Under RequireBootEnrollment a
+// stored boot baseline enrolls the client.
 type BootBaselineReader interface {
-	GetBootBaseline(clientID string) *BootBaseline
+	GetBootBaseline(clientID string) (*BootBaseline, error)
 }
 
 // TenantStorer is implemented by baseline stores that keep the CA-assigned
@@ -210,10 +269,13 @@ type AttestationOutcome struct {
 // agent hash, PCR14 and boot pins of one attestation under one write lock,
 // so a concurrent attestation cannot pin PCR0, PCR1 and PCR7 between them.
 // A nil boot leaves the boot baseline untouched. Any mismatch writes nothing.
+// With consent, a first boot pin spends the client's forced re-anchor consent
+// in the same transaction; with no consent left it writes nothing and reads
+// TOFUError.
 type AtomicBaselineStorer interface {
 	CheckAndUpdateAttestation(clientID string,
 		pcr14, agentHash [types.HashSize]byte,
-		boot *BootBaseline) AttestationOutcome
+		boot *BootBaseline, consent bool) AttestationOutcome
 }
 
 // ReanchorState is a client's re-anchor bookkeeping: the event log captured
@@ -284,6 +346,20 @@ type AgentHashRepinState struct {
 	LastRepinAt time.Time
 }
 
+// ForcedReanchorStorer is optionally implemented by baseline stores that keep
+// an operator's forced re-anchor as a one-time consent: under
+// RequireBootEnrollment the client's next attestation pins PCR 0/1/7 afresh.
+// The consent outlives ClearBaseline and is spent by the attestation that
+// pins with it.
+type ForcedReanchorStorer interface {
+	// MarkForcedReanchor records the consent for clientID.
+	MarkForcedReanchor(clientID string) error
+	// HasForcedReanchor reports whether clientID holds the consent.
+	HasForcedReanchor(clientID string) (bool, error)
+	// TakeForcedReanchor removes the consent; true when there was one.
+	TakeForcedReanchor(clientID string) (bool, error)
+}
+
 // KernelHashRecorder is optionally implemented by baseline stores that keep
 // the kernel hash a client last reported.
 //
@@ -336,6 +412,7 @@ type BaselineStore struct {
 	tenants       map[string]string          // clientID -> CA-assigned tenant
 	kernelHashes  map[string][types.HashSize]byte
 	machineKeys   map[string][]byte
+	forced        map[string]struct{} // clientID -> forced consent
 }
 
 // NewBaselineStore returns an empty in-memory baseline store.
@@ -347,6 +424,7 @@ func NewBaselineStore() *BaselineStore {
 		tenants:       make(map[string]string),
 		kernelHashes:  make(map[string][types.HashSize]byte),
 		machineKeys:   make(map[string][]byte),
+		forced:        make(map[string]struct{}),
 	}
 }
 
@@ -396,22 +474,23 @@ func (s *BaselineStore) CheckAndUpdate(clientID string, pcr14 [types.HashSize]by
 }
 
 // GetBaseline implements BaselineStorer.
-func (s *BaselineStore) GetBaseline(clientID string) *ClientBaseline {
+func (s *BaselineStore) GetBaseline(clientID string) (*ClientBaseline, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	return s.baselines[clientID]
+	return s.baselines[clientID], nil
 }
 
 // GetBootBaseline implements BootBaselineReader with a copy.
-func (s *BaselineStore) GetBootBaseline(clientID string) *BootBaseline {
+func (s *BaselineStore) GetBootBaseline(clientID string,
+) (*BootBaseline, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	b, ok := s.bootBaselines[clientID]
 	if !ok {
-		return nil
+		return nil, nil
 	}
 	out := *b
-	return &out
+	return &out, nil
 }
 
 // GetReanchorState implements ReanchorStorer. Present is false when the
@@ -461,9 +540,7 @@ func (s *BaselineStore) ArchiveAndReanchor(clientID string, boot BootBaseline,
 	st.ESRTVersion = esrtVersion
 	st.ESRTCapable = st.ESRTCapable || esrtCapable
 	st.LFA = lfa
-	if lfa {
-		st.LFAReviewPending = true
-	}
+	st.LFAReviewPending = lfa
 	st.ReanchorCount++
 	st.LastReanchorAt = now
 	s.reanchor[clientID] = st
@@ -593,8 +670,34 @@ func (s *BaselineStore) ClearBaseline(clientID string) error {
 	delete(s.bootBaselines, clientID)
 	delete(s.reanchor, clientID)
 	delete(s.tenants, clientID)
+	delete(s.kernelHashes, clientID)
 	delete(s.machineKeys, clientID)
 	return nil
+}
+
+// MarkForcedReanchor implements ForcedReanchorStorer.
+func (s *BaselineStore) MarkForcedReanchor(clientID string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.forced[clientID] = struct{}{}
+	return nil
+}
+
+// HasForcedReanchor implements ForcedReanchorStorer.
+func (s *BaselineStore) HasForcedReanchor(clientID string) (bool, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	_, ok := s.forced[clientID]
+	return ok, nil
+}
+
+// TakeForcedReanchor implements ForcedReanchorStorer.
+func (s *BaselineStore) TakeForcedReanchor(clientID string) (bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	_, ok := s.forced[clientID]
+	delete(s.forced, clientID)
+	return ok, nil
 }
 
 // SetClientTenant implements TenantStorer.
@@ -628,6 +731,25 @@ func (s *BaselineStore) ListClients() []string {
 		clients = append(clients, id)
 	}
 	return clients
+}
+
+func (s *BaselineStore) ListClientsAfter(tenants []string, after string,
+	limit int,
+) ([]string, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	clients := []string{}
+	for id := range s.baselines {
+		if id > after && tenantMatches(s.tenants[id], tenants) {
+			clients = append(clients, id)
+		}
+	}
+	sort.Strings(clients)
+	if len(clients) > limit {
+		clients = clients[:limit]
+	}
+	return clients, nil
 }
 
 // BaselineStats counts the clients and dates their first baselines.
@@ -727,16 +849,29 @@ func (s *BaselineStore) CheckAndUpdateBootPCRs(clientID string, boot BootBaselin
 // mutex.
 func (s *BaselineStore) CheckAndUpdateAttestation(clientID string,
 	pcr14, agentHash [types.HashSize]byte,
-	boot *BootBaseline,
+	boot *BootBaseline, consent bool,
 ) AttestationOutcome {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	now := time.Now()
 	outcome := AttestationOutcome{BootProvided: boot != nil, PCR14Result: TOFUError}
+	spent := func() bool {
+		if _, ok := s.forced[clientID]; !ok {
+			outcome.AgentHashResult = TOFUError
+			outcome.PCR14Result = TOFUError
+			outcome.BootResult = TOFUError
+			return false
+		}
+		delete(s.forced, clientID)
+		return true
+	}
 
 	existing, exists := s.baselines[clientID]
 	if !exists {
+		if boot != nil && consent && !spent() {
+			return outcome
+		}
 		b := &ClientBaseline{
 			PCR14:       pcr14,
 			AgentHash:   agentHash,
@@ -790,6 +925,9 @@ func (s *BaselineStore) CheckAndUpdateAttestation(clientID string,
 	if boot != nil {
 		existingBoot, hasBoot := s.bootBaselines[clientID]
 		if !hasBoot {
+			if consent && !spent() {
+				return outcome
+			}
 			outcome.BootResult = TOFUFirstUse
 		} else if existingBoot.PCR0 != boot.PCR0 ||
 			existingBoot.PCR1 != boot.PCR1 ||

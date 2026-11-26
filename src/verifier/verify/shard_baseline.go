@@ -27,6 +27,7 @@ type baselineShard interface {
 	PCR14RepinStorer
 	KernelHashRecorder
 	MachineKeysRecorder
+	ForcedReanchorStorer
 }
 
 // ShardedBaselineStore partitions baseline state across shards.
@@ -65,7 +66,8 @@ func (s *ShardedBaselineStore) CheckAndUpdate(clientID string, pcr14 [types.Hash
 	return s.shardFor(clientID).CheckAndUpdate(clientID, pcr14)
 }
 
-func (s *ShardedBaselineStore) GetBaseline(clientID string) *ClientBaseline {
+func (s *ShardedBaselineStore) GetBaseline(clientID string,
+) (*ClientBaseline, error) {
 	return s.shardFor(clientID).GetBaseline(clientID)
 }
 
@@ -79,6 +81,37 @@ func (s *ShardedBaselineStore) ListClients() []string {
 		all = append(all, sh.ListClients()...)
 	}
 	return all
+}
+
+// ListClientsAfter asks every shard for a page and merges them; a client
+// lives on one shard, so the merge has no duplicates.
+func (s *ShardedBaselineStore) ListClientsAfter(tenants []string,
+	after string, limit int,
+) ([]string, error) {
+	pages := make([][]string, len(s.shards))
+	for i, sh := range s.shards {
+		page, err := sh.ListClientsAfter(tenants, after, limit)
+		if err != nil {
+			return nil, err
+		}
+		pages[i] = page
+	}
+
+	merged := []string{}
+	for len(merged) < limit {
+		best := -1
+		for i, p := range pages {
+			if len(p) > 0 && (best < 0 || p[0] < pages[best][0]) {
+				best = i
+			}
+		}
+		if best < 0 {
+			break
+		}
+		merged = append(merged, pages[best][0])
+		pages[best] = pages[best][1:]
+	}
+	return merged, nil
 }
 
 func (s *ShardedBaselineStore) Stats() BaselineStats {
@@ -101,14 +134,16 @@ func (s *ShardedBaselineStore) CheckAndUpdateBootPCRs(clientID string, boot Boot
 	return s.shardFor(clientID).CheckAndUpdateBootPCRs(clientID, boot)
 }
 
-func (s *ShardedBaselineStore) GetBootBaseline(clientID string) *BootBaseline {
+func (s *ShardedBaselineStore) GetBootBaseline(clientID string,
+) (*BootBaseline, error) {
 	return s.shardFor(clientID).GetBootBaseline(clientID)
 }
 
 func (s *ShardedBaselineStore) CheckAndUpdateAttestation(clientID string,
-	pcr14, agentHash [types.HashSize]byte, boot *BootBaseline,
+	pcr14, agentHash [types.HashSize]byte, boot *BootBaseline, consent bool,
 ) AttestationOutcome {
-	return s.shardFor(clientID).CheckAndUpdateAttestation(clientID, pcr14, agentHash, boot)
+	return s.shardFor(clientID).CheckAndUpdateAttestation(clientID, pcr14,
+		agentHash, boot, consent)
 }
 
 func (s *ShardedBaselineStore) CheckAndUpdateAgentHash(clientID string,
@@ -182,4 +217,18 @@ func (s *ShardedBaselineStore) ListLFAReviewPending() []string {
 
 func (s *ShardedBaselineStore) AcknowledgeLFAReview(clientID string) error {
 	return s.shardFor(clientID).AcknowledgeLFAReview(clientID)
+}
+
+func (s *ShardedBaselineStore) MarkForcedReanchor(clientID string) error {
+	return s.shardFor(clientID).MarkForcedReanchor(clientID)
+}
+
+func (s *ShardedBaselineStore) HasForcedReanchor(clientID string,
+) (bool, error) {
+	return s.shardFor(clientID).HasForcedReanchor(clientID)
+}
+
+func (s *ShardedBaselineStore) TakeForcedReanchor(clientID string,
+) (bool, error) {
+	return s.shardFor(clientID).TakeForcedReanchor(clientID)
 }

@@ -180,6 +180,44 @@ func TestBatchedAttestationLogDropsUnderPressure(t *testing.T) {
 	}
 }
 
+// A Close that times out counts every record not yet written:
+// the buffer and whole batches stuck in the backend, however large.
+// A stuck batch that ends later is not counted again.
+func TestBatchedAttestationLogCloseTimeoutCountsInflight(t *testing.T) {
+	backend := &blockingLog{entered: make(chan struct{}),
+		release: make(chan struct{})}
+	bl := NewBatchedAttestationLog(backend, BatchedAttestationLogConfig{
+		MaxBatch:      10,
+		FlushInterval: time.Hour,
+		CloseTimeout:  50 * time.Millisecond,
+	})
+
+	for range 3 {
+		_ = bl.Record(AttestationRecord{Result: "ok"})
+	}
+	flushed := make(chan struct{})
+	go func() { bl.Flush(); close(flushed) }()
+	<-backend.entered
+	for range 2 {
+		_ = bl.Record(AttestationRecord{Result: "ok"})
+	}
+
+	if err := bl.Close(); !errors.Is(err, ErrCloseTimedOut) {
+		t.Fatalf("Close: %v, want ErrCloseTimedOut", err)
+	}
+	if f := bl.FailedCount(); f != 5 {
+		t.Fatalf("FailedCount = %d, want 5 (3 in flight, 2 queued)",
+			f)
+	}
+
+	close(backend.release)
+	<-flushed
+	<-bl.done
+	if f := bl.FailedCount(); f != 5 {
+		t.Fatalf("FailedCount after the stuck writes = %d, want 5", f)
+	}
+}
+
 // failing backend must not wedge the writer:
 // records are counted as failed and the verify path never sees the error
 func TestBatchedAttestationLogFlushFailureIsBounded(t *testing.T) {

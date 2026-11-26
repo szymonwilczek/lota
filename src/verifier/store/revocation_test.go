@@ -14,6 +14,28 @@ import (
 	"time"
 )
 
+// revokedOf is IsRevoked with a store error failing the test
+func revokedOf(t *testing.T, s RevocationStore, id string,
+) (*RevocationEntry, bool) {
+	t.Helper()
+	e, ok, err := s.IsRevoked(id)
+	if err != nil {
+		t.Fatalf("IsRevoked(%s): %v", id, err)
+	}
+	return e, ok
+}
+
+// bannedOf is IsBanned with a store error failing the test
+func bannedOf(t *testing.T, s BanStore, tenant string, hw [32]byte,
+) (*BanEntry, bool) {
+	t.Helper()
+	e, ok, err := s.IsBanned(tenant, hw)
+	if err != nil {
+		t.Fatalf("IsBanned(%s): %v", tenant, err)
+	}
+	return e, ok
+}
+
 func testRevocationStore(t *testing.T, s RevocationStore, label string) {
 	t.Helper()
 
@@ -23,7 +45,7 @@ func testRevocationStore(t *testing.T, s RevocationStore, label string) {
 			t.Fatalf("Revoke failed: %v", err)
 		}
 
-		entry, revoked := s.IsRevoked("client-1")
+		entry, revoked := revokedOf(t, s, "client-1")
 		if !revoked {
 			t.Fatal("Expected client-1 to be revoked")
 		}
@@ -52,7 +74,7 @@ func testRevocationStore(t *testing.T, s RevocationStore, label string) {
 	})
 
 	t.Run(label+"/NotRevoked", func(t *testing.T) {
-		_, revoked := s.IsRevoked("nonexistent")
+		_, revoked := revokedOf(t, s, "nonexistent")
 		if revoked {
 			t.Fatal("Expected nonexistent client to not be revoked")
 		}
@@ -64,7 +86,7 @@ func testRevocationStore(t *testing.T, s RevocationStore, label string) {
 			t.Fatalf("Unrevoke failed: %v", err)
 		}
 
-		_, revoked := s.IsRevoked("client-1")
+		_, revoked := revokedOf(t, s, "client-1")
 		if revoked {
 			t.Fatal("Expected client-1 to be unrevoked")
 		}
@@ -106,7 +128,7 @@ func testRevocationStore(t *testing.T, s RevocationStore, label string) {
 			if err != nil {
 				t.Errorf("Revoke with reason %q failed: %v", reason, err)
 			}
-			entry, ok := s.IsRevoked(id)
+			entry, ok := revokedOf(t, s, id)
 			if !ok {
 				t.Errorf("Client %s should be revoked", id)
 				continue
@@ -168,7 +190,7 @@ func testBanStore(t *testing.T, s BanStore, label string) {
 			t.Fatalf("BanHardware failed: %v", err)
 		}
 
-		entry, banned := s.IsBanned("default", hwid1)
+		entry, banned := bannedOf(t, s, "default", hwid1)
 		if !banned {
 			t.Fatal("Expected hwid1 to be banned")
 		}
@@ -194,7 +216,7 @@ func testBanStore(t *testing.T, s BanStore, label string) {
 	})
 
 	t.Run(label+"/NotBanned", func(t *testing.T) {
-		_, banned := s.IsBanned("default", [32]byte{0xFF})
+		_, banned := bannedOf(t, s, "default", [32]byte{0xFF})
 		if banned {
 			t.Fatal("Expected unknown hwid to not be banned")
 		}
@@ -206,7 +228,7 @@ func testBanStore(t *testing.T, s BanStore, label string) {
 			t.Fatalf("UnbanHardware failed: %v", err)
 		}
 
-		_, banned := s.IsBanned("default", hwid1)
+		_, banned := bannedOf(t, s, "default", hwid1)
 		if banned {
 			t.Fatal("Expected hwid1 to be unbanned")
 		}
@@ -353,6 +375,85 @@ func TestSQLiteAuditLog(t *testing.T) {
 
 	l := NewSQLiteAuditLog(db)
 	testAuditLog(t, l, "SQLite")
+}
+
+// A failed audit write rolls back the change it records,
+// so a retry finds nothing to collide with and lands both.
+func TestSQLiteEnforcement_AuditFailureRollsBack(t *testing.T) {
+	db, err := OpenDB(t.TempDir() + "/audit-fail.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	audit := NewSQLiteAuditLog(db)
+	rev := NewSQLiteRevocationStore(db, audit)
+	ban := NewSQLiteBanStore(db, audit)
+	hw := [32]byte{0xAD}
+	banned := func(t *testing.T, s BanStore, hw [32]byte) bool {
+		_, ok := bannedOf(t, s, "default", hw)
+		return ok
+	}
+
+	breakAudit := func() {
+		t.Helper()
+		_, err := db.Exec(`CREATE TRIGGER audit_down BEFORE INSERT
+			ON audit_log
+			BEGIN SELECT RAISE(ABORT, 'audit down'); END`)
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	fixAudit := func() {
+		t.Helper()
+		if _, err := db.Exec("DROP TRIGGER audit_down"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	steps := []struct {
+		name string
+		do   func() error
+		held func() bool
+	}{
+		{"revoke", func() error {
+			return rev.Revoke("default", "c1", RevocationCheating,
+				"op", "")
+		}, func() bool { _, ok := revokedOf(t, rev, "c1"); return ok }},
+		{"ban", func() error {
+			return ban.BanHardware("default", hw,
+				RevocationCheating, "op", "")
+		}, func() bool { return banned(t, ban, hw) }},
+		{"unrevoke", func() error {
+			return rev.Unrevoke("c1", "appeal", "op", "")
+		}, func() bool {
+			_, ok := revokedOf(t, rev, "c1")
+			return !ok
+		}},
+		{"unban", func() error {
+			return ban.UnbanHardware("default", hw, "appeal", "op",
+				"")
+		}, func() bool { return !banned(t, ban, hw) }},
+	}
+	for i, st := range steps {
+		breakAudit()
+		if err := st.do(); err == nil {
+			t.Fatalf("%s with the audit down: no error", st.name)
+		}
+		if st.held() {
+			t.Fatalf("%s with the audit down: the change stayed",
+				st.name)
+		}
+		fixAudit()
+		if err := st.do(); err != nil {
+			t.Fatalf("%s retry: %v", st.name, err)
+		}
+		if !st.held() {
+			t.Fatalf("%s retry: the change is missing", st.name)
+		}
+		entries := audit.Query(0)
+		if len(entries) != i+1 || entries[0].Action != st.name {
+			t.Fatalf("%s retry: audit %+v", st.name, entries)
+		}
+	}
 }
 
 func TestFormatParseHardwareID(t *testing.T) {
@@ -563,7 +664,7 @@ func TestSQLiteRevocationStore_Persistence(t *testing.T) {
 	defer db2.Close()
 	s2 := NewSQLiteRevocationStore(db2, nil)
 
-	entry, revoked := s2.IsRevoked("persist-client")
+	entry, revoked := revokedOf(t, s2, "persist-client")
 	if !revoked {
 		t.Fatal("SECURITY: Revocation lost after database reopen!")
 	}
@@ -572,6 +673,25 @@ func TestSQLiteRevocationStore_Persistence(t *testing.T) {
 	}
 
 	t.Log("✓ Revocation persists across database reopens")
+}
+
+// A store that cannot answer is an error, not a clean client.
+func TestSQLiteRevocationAndBan_ClosedDBIsAnError(t *testing.T) {
+	db, err := OpenDB(t.TempDir() + "/closed.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	rev := NewSQLiteRevocationStore(db, nil)
+	ban := NewSQLiteBanStore(db, nil)
+	db.Close()
+
+	if _, ok, err := rev.IsRevoked("client-1"); err == nil || ok {
+		t.Errorf("IsRevoked on a closed db: %v, %v", ok, err)
+	}
+	_, ok, err := ban.IsBanned("default", [32]byte{1})
+	if err == nil || ok {
+		t.Errorf("IsBanned on a closed db: %v, %v", ok, err)
+	}
 }
 
 func TestSQLiteBanStore_Persistence(t *testing.T) {
@@ -599,7 +719,7 @@ func TestSQLiteBanStore_Persistence(t *testing.T) {
 	defer db2.Close()
 	s2 := NewSQLiteBanStore(db2, nil)
 
-	entry, banned := s2.IsBanned("default", hwid)
+	entry, banned := bannedOf(t, s2, "default", hwid)
 	if !banned {
 		t.Fatal("SECURITY: Hardware ban lost after database reopen!")
 	}
@@ -618,7 +738,7 @@ func testRevocationTenant(t *testing.T, s RevocationStore, label string) {
 		if err := s.Revoke("acme", "tenant-rev-client", RevocationAdmin, "admin", ""); err != nil {
 			t.Fatalf("Revoke: %v", err)
 		}
-		entry, revoked := s.IsRevoked("tenant-rev-client")
+		entry, revoked := revokedOf(t, s, "tenant-rev-client")
 		if !revoked {
 			t.Fatal("client not revoked")
 		}
@@ -653,10 +773,10 @@ func testBanStorePerTenant(t *testing.T, s BanStore, label string) {
 		if err := s.BanHardware("game-a", hwid, RevocationCheating, "admin", ""); err != nil {
 			t.Fatalf("BanHardware: %v", err)
 		}
-		if _, banned := s.IsBanned("game-b", hwid); banned {
+		if _, banned := bannedOf(t, s, "game-b", hwid); banned {
 			t.Fatal("ban in game-a must not be visible in game-b")
 		}
-		entry, banned := s.IsBanned("game-a", hwid)
+		entry, banned := bannedOf(t, s, "game-a", hwid)
 		if !banned {
 			t.Fatal("ban not visible in its own tenant")
 		}
@@ -678,10 +798,10 @@ func testBanStorePerTenant(t *testing.T, s BanStore, label string) {
 		if err := s.UnbanHardware("game-a", hwid, "appeal upheld", "test-operator", ""); err != nil {
 			t.Fatalf("UnbanHardware: %v", err)
 		}
-		if _, banned := s.IsBanned("game-a", hwid); banned {
+		if _, banned := bannedOf(t, s, "game-a", hwid); banned {
 			t.Fatal("ban survived unban in game-a")
 		}
-		if _, banned := s.IsBanned("game-b", hwid); !banned {
+		if _, banned := bannedOf(t, s, "game-b", hwid); !banned {
 			t.Fatal("unban in game-a erased the game-b ban")
 		}
 		if err := s.UnbanHardware("game-b", hwid, "appeal upheld", "test-operator", ""); err != nil {

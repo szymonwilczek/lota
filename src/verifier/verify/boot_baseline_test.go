@@ -15,6 +15,39 @@ import (
 	"github.com/szymonwilczek/lota/verifier/types"
 )
 
+// baselineOf reads the client's baseline; a store error fails the test.
+func baselineOf(t *testing.T, s BaselineStorer, id string) *ClientBaseline {
+	t.Helper()
+	b, err := s.GetBaseline(id)
+	if err != nil {
+		t.Fatalf("GetBaseline(%s): %v", id, err)
+	}
+	return b
+}
+
+// bootBaselineOf reads the client's boot baseline; a store error fails
+// the test.
+func bootBaselineOf(t *testing.T, s BootBaselineReader,
+	id string,
+) *BootBaseline {
+	t.Helper()
+	b, err := s.GetBootBaseline(id)
+	if err != nil {
+		t.Fatalf("GetBootBaseline(%s): %v", id, err)
+	}
+	return b
+}
+
+// clientInfoOf reads the client's record; a store error fails the test.
+func clientInfoOf(t *testing.T, v *Verifier, id string) (*ClientInfo, bool) {
+	t.Helper()
+	info, found, err := v.ClientInfo(id)
+	if err != nil {
+		t.Fatalf("ClientInfo(%s): %v", id, err)
+	}
+	return info, found
+}
+
 func boot(pcr0, pcr1, pcr7 byte) BootBaseline {
 	var b BootBaseline
 	for i := range b.PCR0 {
@@ -72,6 +105,10 @@ func TestBootBaseline_MemoryClearBaselineDropsAllState(t *testing.T) {
 	if err := bs.RecordBootEvidence("c3", []byte("event-log"), 7, true); err != nil {
 		t.Fatalf("RecordBootEvidence failed: %v", err)
 	}
+	_, _, err := bs.RecordKernelHash("c3", [types.HashSize]byte{0x09})
+	if err != nil {
+		t.Fatalf("RecordKernelHash failed: %v", err)
+	}
 
 	if err := bs.ClearBaseline("c3"); err != nil {
 		t.Fatalf("ClearBaseline failed: %v", err)
@@ -80,10 +117,10 @@ func TestBootBaseline_MemoryClearBaselineDropsAllState(t *testing.T) {
 	// SQL stores keep all client state in one row, so their DELETE drops
 	// the PCR14 baseline, boot baseline and re-anchor bookkeeping together
 	// in-memory store must match or forced re-anchor leaves stale boot pin behind
-	if bs.GetBaseline("c3") != nil {
+	if baselineOf(t, bs, "c3") != nil {
 		t.Error("PCR14 baseline survived ClearBaseline")
 	}
-	if bs.GetBootBaseline("c3") != nil {
+	if bootBaselineOf(t, bs, "c3") != nil {
 		t.Error("boot baseline survived ClearBaseline")
 	}
 	if st := bs.GetReanchorState("c3"); st.Present {
@@ -92,6 +129,14 @@ func TestBootBaseline_MemoryClearBaselineDropsAllState(t *testing.T) {
 
 	if res, _ := bs.CheckAndUpdateBootPCRs("c3", boot(0x40, 0x41, 0x47)); res != TOFUFirstUse {
 		t.Fatalf("expected TOFUFirstUse after clear, got %v", res)
+	}
+	bs.CheckAndUpdate("c3", pcr14)
+	prev, had, err := bs.RecordKernelHash("c3", [types.HashSize]byte{0x0a})
+	if err != nil {
+		t.Fatalf("RecordKernelHash failed: %v", err)
+	}
+	if had {
+		t.Errorf("kernel hash %x survived ClearBaseline", prev)
 	}
 }
 
@@ -109,7 +154,7 @@ func TestLifecycle_BootBaselineOnlyClient(t *testing.T) {
 	if err := v.ForceReanchor("c9"); err != nil {
 		t.Fatalf("ForceReanchor failed: %v", err)
 	}
-	if bs.GetBootBaseline("c9") != nil {
+	if bootBaselineOf(t, bs, "c9") != nil {
 		t.Error("boot baseline survived forced re-anchor")
 	}
 
@@ -117,7 +162,7 @@ func TestLifecycle_BootBaselineOnlyClient(t *testing.T) {
 	if err := v.DeleteClient("c9"); err != nil {
 		t.Fatalf("DeleteClient failed: %v", err)
 	}
-	if bs.GetBootBaseline("c9") != nil {
+	if bootBaselineOf(t, bs, "c9") != nil {
 		t.Error("boot baseline survived delete")
 	}
 }
@@ -209,12 +254,12 @@ func TestBootBaseline_SQLiteDetectsMismatch(t *testing.T) {
 
 func TestBootBaseline_MemoryGetBootBaselineNilWhenUnpinned(t *testing.T) {
 	bs := NewBaselineStore()
-	if got := bs.GetBootBaseline("never-seen"); got != nil {
+	if got := bootBaselineOf(t, bs, "never-seen"); got != nil {
 		t.Fatalf("expected nil for unpinned client, got %+v", got)
 	}
 
 	bs.CheckAndUpdateBootPCRs("c1", boot(0x10, 0x11, 0x17))
-	got := bs.GetBootBaseline("c1")
+	got := bootBaselineOf(t, bs, "c1")
 	if got == nil {
 		t.Fatal("expected populated baseline after first use")
 	}
@@ -232,7 +277,7 @@ func TestBootBaseline_SQLiteGetBootBaselineNilWhenUnpinned(t *testing.T) {
 	defer db.Close()
 	bs := NewSQLiteBaselineStore(db)
 
-	if got := bs.GetBootBaseline("never-seen"); got != nil {
+	if got := bootBaselineOf(t, bs, "never-seen"); got != nil {
 		t.Fatalf("expected nil for unpinned client, got %+v", got)
 	}
 
@@ -240,11 +285,11 @@ func TestBootBaseline_SQLiteGetBootBaselineNilWhenUnpinned(t *testing.T) {
 	pcr14[0] = 0xCC
 	bs.CheckAndUpdate("c1", pcr14)
 	// row exists but boot columns still NULL -> nil
-	if got := bs.GetBootBaseline("c1"); got != nil {
+	if got := bootBaselineOf(t, bs, "c1"); got != nil {
 		t.Fatalf("expected nil while boot columns NULL, got %+v", got)
 	}
 	bs.CheckAndUpdateBootPCRs("c1", boot(0x30, 0x31, 0x37))
-	got := bs.GetBootBaseline("c1")
+	got := bootBaselineOf(t, bs, "c1")
 	if got == nil {
 		t.Fatal("expected populated baseline after first use")
 	}
@@ -583,14 +628,20 @@ func TestLFAReview_MemoryAndSQLite(t *testing.T) {
 	if len(bs.ListLFAReviewPending()) != 0 {
 		t.Error("review should be cleared after acknowledge (in-memory)")
 	}
-	// strong re-anchor must not leave the client on the review list
-	// (past the LFA interval so the second re-anchor is admitted)
-	if err := bs.ArchiveAndReanchor("c", boot(3, 2, 7), []byte("l"), 800, true, false, "strong",
-		t0.Add(ReanchorMinIntervalLFA+time.Hour)); err != nil {
+	// an unacknowledged LFA re-anchor is cleared by a strong one
+	// (each past the previous interval so it is admitted)
+	t1 := t0.Add(ReanchorMinIntervalLFA + time.Hour)
+	if err := bs.ArchiveAndReanchor("c", boot(3, 2, 7), []byte("l"),
+		0, false, true, "lfa", t1); err != nil {
+		t.Fatal(err)
+	}
+	if err := bs.ArchiveAndReanchor("c", boot(4, 2, 7), []byte("l"),
+		800, true, false, "strong",
+		t1.Add(ReanchorMinIntervalLFA+time.Hour)); err != nil {
 		t.Fatal(err)
 	}
 	if len(bs.ListLFAReviewPending()) != 0 {
-		t.Error("strong re-anchor must not flag for review")
+		t.Error("strong re-anchor must clear the review flag")
 	}
 
 	// SQLite: same contract
@@ -631,22 +682,23 @@ func TestPinnedRegister_MemoryRefusesAMovedPCR14(t *testing.T) {
 	agentHash := [types.HashSize]byte{0xA1}
 	boot := &BootBaseline{PCR0: [types.HashSize]byte{0}, PCR1: [types.HashSize]byte{1}, PCR7: [types.HashSize]byte{7}}
 
-	if o := bs.CheckAndUpdateAttestation("c", pcr14, agentHash, boot); o.PCR14Result != TOFUFirstUse {
+	if o := bs.CheckAndUpdateAttestation("c", pcr14, agentHash, boot, false); o.PCR14Result != TOFUFirstUse {
 		t.Fatalf("first use: pcr14 = %v", o.PCR14Result)
 	}
-	if o := bs.CheckAndUpdateAttestation("c", pcr14, agentHash, boot); o.PCR14Result != TOFUMatch {
+	if o := bs.CheckAndUpdateAttestation("c", pcr14, agentHash, boot, false); o.PCR14Result != TOFUMatch {
 		t.Fatalf("match: pcr14 = %v", o.PCR14Result)
 	}
 
 	moved := [types.HashSize]byte{0x15}
-	o := bs.CheckAndUpdateAttestation("c", moved, agentHash, boot)
+	o := bs.CheckAndUpdateAttestation("c", moved, agentHash, boot, false)
 	if o.PCR14Result != TOFUMismatch {
 		t.Fatalf("moved register: pcr14 = %v, want TOFUMismatch", o.PCR14Result)
 	}
 	if o.AgentHashBaseline == nil || o.AgentHashBaseline.PCR14 != pcr14 {
 		t.Fatal("a refusal has to carry the register the client pinned")
 	}
-	if b := bs.GetBaseline("c"); b == nil || b.PCR14 != pcr14 || b.AttestCount != 2 {
+	if b := baselineOf(t, bs, "c"); b == nil || b.PCR14 != pcr14 ||
+		b.AttestCount != 2 {
 		t.Fatalf("refused round wrote state: %+v", b)
 	}
 }
@@ -663,22 +715,23 @@ func TestPinnedRegister_SQLiteRefusesAMovedPCR14(t *testing.T) {
 	agentHash := [types.HashSize]byte{0xA1}
 	boot := &BootBaseline{PCR0: [types.HashSize]byte{0}, PCR1: [types.HashSize]byte{1}, PCR7: [types.HashSize]byte{7}}
 
-	if o := bs.CheckAndUpdateAttestation("c", pcr14, agentHash, boot); o.PCR14Result != TOFUFirstUse {
+	if o := bs.CheckAndUpdateAttestation("c", pcr14, agentHash, boot, false); o.PCR14Result != TOFUFirstUse {
 		t.Fatalf("first use: pcr14 = %v", o.PCR14Result)
 	}
-	if o := bs.CheckAndUpdateAttestation("c", pcr14, agentHash, boot); o.PCR14Result != TOFUMatch {
+	if o := bs.CheckAndUpdateAttestation("c", pcr14, agentHash, boot, false); o.PCR14Result != TOFUMatch {
 		t.Fatalf("match: pcr14 = %v", o.PCR14Result)
 	}
 
 	moved := [types.HashSize]byte{0x15}
-	o := bs.CheckAndUpdateAttestation("c", moved, agentHash, boot)
+	o := bs.CheckAndUpdateAttestation("c", moved, agentHash, boot, false)
 	if o.PCR14Result != TOFUMismatch {
 		t.Fatalf("moved register: pcr14 = %v, want TOFUMismatch", o.PCR14Result)
 	}
 	if o.AgentHashBaseline == nil || o.AgentHashBaseline.PCR14 != pcr14 {
 		t.Fatal("a refusal has to carry the register the client pinned")
 	}
-	if b := bs.GetBaseline("c"); b == nil || b.PCR14 != pcr14 || b.AttestCount != 2 {
+	if b := baselineOf(t, bs, "c"); b == nil || b.PCR14 != pcr14 ||
+		b.AttestCount != 2 {
 		t.Fatalf("refused round wrote state: %+v", b)
 	}
 }
@@ -778,6 +831,217 @@ func TestVerify_AnchoredBootPinNamesItsAnchor(t *testing.T) {
 	}
 }
 
+// The pin road does not claim a signature: --policy-pubkey is optional.
+func TestBootBaselineRoad_PolicyPinsClaimNoSignature(t *testing.T) {
+	v := NewVerifier(DefaultConfig(), newCertVerifier(t))
+	policy := &PCRPolicy{
+		Name:        "pinned",
+		PCRs:        map[int]string{0: "aa", 1: "bb", 7: "cc"},
+		AgentHashes: []string{"de"},
+	}
+	if err := v.AddPolicy(policy); err != nil {
+		t.Fatalf("AddPolicy: %v", err)
+	}
+
+	got := v.bootBaselineRoad("", nil).allowedBy
+	if got != "policy PCR0/1/7 pins" {
+		t.Fatalf("allowed_by = %q", got)
+	}
+}
+
+func attestOnce(t *testing.T, v *Verifier, clientID string) uint32 {
+	t.Helper()
+
+	challenge, err := v.GenerateChallenge(clientID)
+	if err != nil {
+		t.Fatalf("GenerateChallenge: %v", err)
+	}
+	report := createValidReport(t, clientID, challenge.Nonce,
+		fixturePCR14())
+	result, _ := v.VerifyReportFrom(clientID, "", report)
+	return result.Result
+}
+
+// Under RequireBootEnrollment a forced re-anchor lets the next attestation
+// pin afresh once; a delete forgets the client.
+func TestForceReanchor_ConsentsToOneFirstUsePin(t *testing.T) {
+	var logs bytes.Buffer
+	v := acceptLogVerifier(t, &logs, DefaultPolicy(), true)
+	bs := v.baselineStore.(*BaselineStore)
+	const id = "forced-client"
+	stored := testPseudonym(id) // the store keys the AIK pseudonym
+
+	if got := attestOnce(t, v, id); got != types.VerifyPolicyRequirement {
+		t.Fatalf("unenrolled first use: %d", got)
+	}
+	if err := bs.MarkForcedReanchor(stored); err != nil {
+		t.Fatal(err)
+	}
+	logs.Reset()
+	line := firstUseBootAcceptLine(t, v, &logs, id)
+	if !strings.Contains(line, "operator force-reanchor") {
+		t.Fatalf("the pin does not name the consent:\n%s", line)
+	}
+	if got := attestOnce(t, v, id); got != types.VerifyOK {
+		t.Fatalf("round on the new pin: %d", got)
+	}
+
+	if err := v.ForceReanchor(stored); err != nil {
+		t.Fatalf("ForceReanchor: %v", err)
+	}
+	if got := attestOnce(t, v, id); got != types.VerifyOK {
+		t.Fatalf("round after ForceReanchor: %d", got)
+	}
+
+	// the consent was spent by that round
+	if err := bs.ClearBaseline(stored); err != nil {
+		t.Fatal(err)
+	}
+	if got := attestOnce(t, v, id); got != types.VerifyPolicyRequirement {
+		t.Fatalf("round on a spent consent: %d", got)
+	}
+
+	if err := bs.MarkForcedReanchor(stored); err != nil {
+		t.Fatal(err)
+	}
+	bs.CheckAndUpdate(stored, fixturePCR14())
+	if err := v.DeleteClient(stored); err != nil {
+		t.Fatalf("DeleteClient: %v", err)
+	}
+	if got := attestOnce(t, v, id); got != types.VerifyPolicyRequirement {
+		t.Fatalf("round after DeleteClient: %d", got)
+	}
+}
+
+// A round whose pin does not commit keeps the consent for the next round.
+func TestForceReanchor_FailedPinKeepsTheConsent(t *testing.T) {
+	db, err := store.OpenDB(":memory:")
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer db.Close()
+	bs := NewSQLiteBaselineStore(db)
+
+	cfg := DefaultConfig()
+	cfg.NonceLifetime = 1 * time.Second
+	cfg.RequireBootEnrollment = true
+	cfg.BaselineStore = bs
+	v := NewVerifier(cfg, newCertVerifier(t))
+	if err := v.AddPolicy(DefaultPolicy()); err != nil {
+		t.Fatalf("AddPolicy: %v", err)
+	}
+	const id = "forced-client"
+	stored := testPseudonym(id)
+
+	if err := bs.MarkForcedReanchor(stored); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`CREATE TRIGGER refuse_pin BEFORE INSERT ON
+		baselines BEGIN SELECT RAISE(ABORT, 'refused'); END`); err != nil {
+		t.Fatal(err)
+	}
+	if got := attestOnce(t, v, id); got != types.VerifyInternalError {
+		t.Fatalf("round on a failing store: %d", got)
+	}
+	if ok, err := bs.HasForcedReanchor(stored); err != nil || !ok {
+		t.Fatalf("consent after the failed pin: %v, %v", ok, err)
+	}
+
+	if _, err := db.Exec("DROP TRIGGER refuse_pin"); err != nil {
+		t.Fatal(err)
+	}
+	if got := attestOnce(t, v, id); got != types.VerifyOK {
+		t.Fatalf("round after the store recovered: %d", got)
+	}
+	if ok, err := bs.HasForcedReanchor(stored); err != nil || ok {
+		t.Fatalf("consent after the pin: %v, %v", ok, err)
+	}
+}
+
+// The consent survives ClearBaseline and is taken once.
+func TestForcedReanchor_MemoryAndSQLite(t *testing.T) {
+	db, err := store.OpenDB(":memory:")
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer db.Close()
+
+	for name, fr := range map[string]forcedPinStore{
+		"memory": NewBaselineStore(),
+		"sqlite": NewSQLiteBaselineStore(db),
+		"shard": NewShardedBaselineStore([]BaselineStorer{
+			NewBaselineStore(), NewBaselineStore(),
+		}),
+	} {
+		fr.CheckAndUpdate("c", [types.HashSize]byte{0x14})
+		if err := fr.MarkForcedReanchor("c"); err != nil {
+			t.Fatalf("%s: mark: %v", name, err)
+		}
+		if err := fr.MarkForcedReanchor("c"); err != nil {
+			t.Fatalf("%s: mark twice: %v", name, err)
+		}
+		if err := fr.ClearBaseline("c"); err != nil {
+			t.Fatalf("%s: clear: %v", name, err)
+		}
+		if ok, err := fr.TakeForcedReanchor("c"); err != nil || !ok {
+			t.Fatalf("%s: take: %v, %v", name, ok, err)
+		}
+		if ok, err := fr.TakeForcedReanchor("c"); err != nil || ok {
+			t.Fatalf("%s: second take: %v, %v", name, ok, err)
+		}
+		checkForcedReanchorPin(t, fr)
+	}
+}
+
+type forcedPinStore interface {
+	BaselineStorer
+	BootBaselineReader
+	AtomicBaselineStorer
+	ForcedReanchorStorer
+}
+
+// The first boot pin of a consented round spends the consent in its own
+// transaction: no consent left means no pin, and of two racing rounds one
+// pins.
+func checkForcedReanchorPin(t *testing.T, s forcedPinStore) {
+	t.Helper()
+	var pcr14, agentHash [types.HashSize]byte
+	pcr14[0], agentHash[0] = 0x14, 0xA1
+	bootA := &BootBaseline{PCR0: [types.HashSize]byte{0xA0}}
+	bootB := &BootBaseline{PCR0: [types.HashSize]byte{0xB0}}
+
+	o := s.CheckAndUpdateAttestation("no-consent", pcr14, agentHash, bootA, true)
+	if o.AgentHashResult != TOFUError || o.BootResult != TOFUError {
+		t.Fatalf("pin without a consent: %+v", o)
+	}
+	if b, err := s.GetBootBaseline("no-consent"); err != nil || b != nil {
+		t.Fatalf("pin without a consent wrote %+v, %v", b, err)
+	}
+
+	if err := s.MarkForcedReanchor("racing"); err != nil {
+		t.Fatal(err)
+	}
+	outs := make(chan AttestationOutcome, 2)
+	for _, boot := range []*BootBaseline{bootA, bootB} {
+		go func() {
+			outs <- s.CheckAndUpdateAttestation("racing", pcr14,
+				agentHash, boot, true)
+		}()
+	}
+	pins := 0
+	for range 2 {
+		if o := <-outs; o.BootResult == TOFUFirstUse {
+			pins++
+		}
+	}
+	if pins != 1 {
+		t.Fatalf("%d racing rounds pinned, want 1", pins)
+	}
+	if ok, err := s.HasForcedReanchor("racing"); err != nil || ok {
+		t.Fatalf("consent after the pin: %v, %v", ok, err)
+	}
+}
+
 type pcr14RepinStore interface {
 	BaselineStorer
 	BootBaselineStorer
@@ -803,7 +1067,7 @@ func checkRepinPCR14(t *testing.T, bs pcr14RepinStore) {
 	if err := bs.RepinPCR14("c", from, to, log, time.Now()); err != nil {
 		t.Fatalf("RepinPCR14: %v", err)
 	}
-	if got := bs.GetBaseline("c").PCR14; got != to {
+	if got := baselineOf(t, bs, "c").PCR14; got != to {
 		t.Fatalf("pin not moved: %x", got)
 	}
 	if st := bs.GetReanchorState("c"); !bytes.Equal(st.EventLogBaseline, log) {

@@ -11,6 +11,7 @@ package verify
 
 import (
 	"bytes"
+	"database/sql"
 	"errors"
 	"os"
 	"sync"
@@ -32,7 +33,8 @@ func pgBaselineStore(t *testing.T) *PostgresBaselineStore {
 		t.Fatalf("OpenPostgresDB: %v", err)
 	}
 	t.Cleanup(func() { db.Close() })
-	if _, err := db.Exec("TRUNCATE baselines, used_nonces"); err != nil {
+	_, err = db.Exec("TRUNCATE baselines, used_nonces, forced_reanchors")
+	if err != nil {
 		t.Fatalf("truncate: %v", err)
 	}
 	return NewPostgresBaselineStore(db)
@@ -51,11 +53,11 @@ func TestPostgresBaselineAtomic(t *testing.T) {
 	pcr14, ah := fill(0x14), fill(0xA1)
 	boot := &BootBaseline{PCR0: fill(0), PCR1: fill(1), PCR7: fill(7)}
 
-	o := s.CheckAndUpdateAttestation("c1", pcr14, ah, boot)
+	o := s.CheckAndUpdateAttestation("c1", pcr14, ah, boot, false)
 	if o.AgentHashResult != TOFUFirstUse || o.BootResult != TOFUFirstUse {
 		t.Fatalf("first use: agent=%v boot=%v", o.AgentHashResult, o.BootResult)
 	}
-	o = s.CheckAndUpdateAttestation("c1", pcr14, ah, boot)
+	o = s.CheckAndUpdateAttestation("c1", pcr14, ah, boot, false)
 	if o.AgentHashResult != TOFUMatch || o.BootResult != TOFUMatch {
 		t.Fatalf("match: agent=%v boot=%v", o.AgentHashResult, o.BootResult)
 	}
@@ -63,21 +65,21 @@ func TestPostgresBaselineAtomic(t *testing.T) {
 		t.Fatalf("attest_count = %d, want 2", o.AgentHashBaseline.AttestCount)
 	}
 	// agent_hash drift leaves state unchanged
-	if o = s.CheckAndUpdateAttestation("c1", pcr14, fill(0xBB), boot); o.AgentHashResult != TOFUMismatch {
+	if o = s.CheckAndUpdateAttestation("c1", pcr14, fill(0xBB), boot, false); o.AgentHashResult != TOFUMismatch {
 		t.Fatalf("agent_hash drift: got %v", o.AgentHashResult)
 	}
 
 	// a moved register leaves state unchanged: the pre-lock baseline changed
 	// under the same agent binary, which is what a MOK enrollment does
-	if o = s.CheckAndUpdateAttestation("c1", fill(0x15), ah, boot); o.PCR14Result != TOFUMismatch {
+	if o = s.CheckAndUpdateAttestation("c1", fill(0x15), ah, boot, false); o.PCR14Result != TOFUMismatch {
 		t.Fatalf("pcr14 drift: got %v", o.PCR14Result)
 	}
 	// boot drift leaves state unchanged
 	if o = s.CheckAndUpdateAttestation("c1", pcr14, ah,
-		&BootBaseline{PCR0: fill(9), PCR1: fill(1), PCR7: fill(7)}); o.BootResult != TOFUMismatch {
+		&BootBaseline{PCR0: fill(9), PCR1: fill(1), PCR7: fill(7)}, false); o.BootResult != TOFUMismatch {
 		t.Fatalf("boot drift: got %v", o.BootResult)
 	}
-	if bb := s.GetBootBaseline("c1"); bb == nil || bb.PCR0 != fill(0) {
+	if bb := bootBaselineOf(t, s, "c1"); bb == nil || bb.PCR0 != fill(0) {
 		t.Fatal("GetBootBaseline")
 	}
 
@@ -105,7 +107,7 @@ func TestPostgresBaselineRace(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			o := s.CheckAndUpdateAttestation("race", fill(0x33), fill(0x44), nil)
+			o := s.CheckAndUpdateAttestation("race", fill(0x33), fill(0x44), nil, false)
 			mu.Lock()
 			switch o.AgentHashResult {
 			case TOFUFirstUse:
@@ -164,11 +166,12 @@ func TestPostgresUsedNonce(t *testing.T) {
 }
 
 // TestPostgresBaselineInspection covers the monitoring-facing reads and
-// the operator reset path: GetBaseline, ListClients, Stats, ClearBaseline.
+// the operator reset path: GetBaseline, ListClients, Stats, ClearBaseline,
+// and a closed database read as an error.
 func TestPostgresBaselineInspection(t *testing.T) {
 	s := pgBaselineStore(t)
 
-	if s.GetBaseline("absent") != nil {
+	if baselineOf(t, s, "absent") != nil {
 		t.Fatal("GetBaseline on unknown client should be nil")
 	}
 
@@ -182,7 +185,7 @@ func TestPostgresBaselineInspection(t *testing.T) {
 		t.Fatal("match ins-a")
 	}
 
-	b := s.GetBaseline("ins-a")
+	b := baselineOf(t, s, "ins-a")
 	if b == nil || b.PCR14 != fill(0x14) || b.AttestCount != 2 {
 		t.Fatalf("GetBaseline ins-a: %+v", b)
 	}
@@ -201,17 +204,45 @@ func TestPostgresBaselineInspection(t *testing.T) {
 	}
 
 	s.ClearBaseline("ins-a")
-	if s.GetBaseline("ins-a") != nil {
+	if baselineOf(t, s, "ins-a") != nil {
 		t.Fatal("ClearBaseline left a row behind")
 	}
 	if got := s.ListClients(); len(got) != 1 || got[0] != "ins-b" {
 		t.Fatalf("ListClients after clear: %v", got)
+	}
+
+	// a forced re-anchor consent outlives the row and is taken once
+	if err := s.MarkForcedReanchor("ins-b"); err != nil {
+		t.Fatalf("MarkForcedReanchor: %v", err)
+	}
+	if err := s.MarkForcedReanchor("ins-b"); err != nil {
+		t.Fatalf("MarkForcedReanchor twice: %v", err)
+	}
+	s.ClearBaseline("ins-b")
+	if ok, err := s.TakeForcedReanchor("ins-b"); err != nil || !ok {
+		t.Fatalf("TakeForcedReanchor: %v, %v", ok, err)
+	}
+	if ok, err := s.TakeForcedReanchor("ins-b"); err != nil || ok {
+		t.Fatalf("second TakeForcedReanchor: %v, %v", ok, err)
+	}
+
+	// a store that cannot answer is not a store without the client
+	s.db.Close()
+	if b, err := s.GetBaseline("ins-b"); err == nil {
+		t.Errorf("GetBaseline on a closed db: %+v, no error", b)
+	}
+	if b, err := s.GetBootBaseline("ins-b"); err == nil {
+		t.Errorf("GetBootBaseline on a closed db: %+v, no error", b)
 	}
 }
 
 // TestPostgresBootPCRsPinnedAfterPCR14Row covers the standalone boot-PCR pin:
 // fail-closed before the PCR14 row exists, first use, match, drift,
 // and a row whose boot columns are still unpinned.
+func TestPostgresCursorPaging(t *testing.T) {
+	checkCursorPaging(t, pgBaselineStore(t), 50)
+}
+
 func TestPostgresBootPCRsPinnedAfterPCR14Row(t *testing.T) {
 	s := pgBaselineStore(t)
 	boot := BootBaseline{PCR0: fill(0xA0), PCR1: fill(0xA1), PCR7: fill(0xA7)}
@@ -245,12 +276,16 @@ func TestPostgresBootPCRsPinnedAfterPCR14Row(t *testing.T) {
 	if r, _ := s.CheckAndUpdate("boot-unpinned", fill(0x14)); r != TOFUFirstUse {
 		t.Fatal("PCR14 first use boot-unpinned")
 	}
-	if s.GetBootBaseline("boot-unpinned") != nil {
+	if bootBaselineOf(t, s, "boot-unpinned") != nil {
 		t.Fatal("unpinned row should have no boot baseline yet")
 	}
 	if r, _ := s.CheckAndUpdateBootPCRs("boot-unpinned", boot); r != TOFUFirstUse {
 		t.Fatal("boot pin on an unpinned row should be first use")
 	}
+}
+
+func TestPostgresForcedReanchorPin(t *testing.T) {
+	checkForcedReanchorPin(t, pgBaselineStore(t))
 }
 
 func TestPostgresRepinPCR14(t *testing.T) {
@@ -411,7 +446,9 @@ func TestPostgresAttestationIndependentClientsDoNotSerialize(t *testing.T) {
 		t.Fatalf("begin blocker tx: %v", err)
 	}
 	defer func() {
-		if err := tx.Rollback(); err != nil {
+		// the success path rolled back already
+		err := tx.Rollback()
+		if err != nil && !errors.Is(err, sql.ErrTxDone) {
 			t.Logf("blocker rollback: %v", err)
 		}
 	}()
@@ -423,7 +460,7 @@ func TestPostgresAttestationIndependentClientsDoNotSerialize(t *testing.T) {
 	blockedDone := make(chan struct{})
 	go func() {
 		defer close(blockedDone)
-		s.CheckAndUpdateAttestation("blocked", fill(0x14), fill(0xA1), nil)
+		s.CheckAndUpdateAttestation("blocked", fill(0x14), fill(0xA1), nil, false)
 	}()
 
 	// wait until the store's "blocked" commit is queued on the advisory lock,
@@ -452,7 +489,7 @@ func TestPostgresAttestationIndependentClientsDoNotSerialize(t *testing.T) {
 
 	freeDone := make(chan AttestationOutcome, 1)
 	go func() {
-		freeDone <- s.CheckAndUpdateAttestation("free", fill(0x15), fill(0xA2), nil)
+		freeDone <- s.CheckAndUpdateAttestation("free", fill(0x15), fill(0xA2), nil, false)
 	}()
 
 	select {
@@ -479,7 +516,7 @@ func TestPG_AgentHashRepinArchivesAndRateLimits(t *testing.T) {
 
 	oldHash := fill(0xBB)
 	newHash := fill(0xC7)
-	if r := bs.CheckAndUpdateAttestation(clientID, fill(0x14), oldHash, nil); r.AgentHashResult != TOFUFirstUse {
+	if r := bs.CheckAndUpdateAttestation(clientID, fill(0x14), oldHash, nil, false); r.AgentHashResult != TOFUFirstUse {
 		t.Fatalf("expected TOFUFirstUse, got %v", r.AgentHashResult)
 	}
 
@@ -494,7 +531,7 @@ func TestPG_AgentHashRepinArchivesAndRateLimits(t *testing.T) {
 			st.Present, st.RepinCount)
 	}
 
-	if r := bs.CheckAndUpdateAttestation(clientID, fill(0x15), newHash, nil); r.AgentHashResult != TOFUMatch {
+	if r := bs.CheckAndUpdateAttestation(clientID, fill(0x15), newHash, nil, false); r.AgentHashResult != TOFUMatch {
 		t.Fatalf("expected TOFUMatch after the re-pin, got %v", r.AgentHashResult)
 	}
 
@@ -525,7 +562,8 @@ func TestPG_AgentHashRepinRefusesRowWithNoPinnedHash(t *testing.T) {
 		t.Fatalf("expected ErrAgentHashNotPinned, got %v", err)
 	}
 
-	if b := bs.GetBaseline(clientID); b == nil || b.PCR14 != operatorPCR14 {
+	if b := baselineOf(t, bs, clientID); b == nil ||
+		b.PCR14 != operatorPCR14 {
 		t.Fatal("the operator's PCR 14 pin was replaced by the refused re-pin")
 	}
 }

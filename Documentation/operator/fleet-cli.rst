@@ -64,7 +64,7 @@ Command                                                           API tier
 ================================================================  ========
 ``health``                                                        none
 ``stats``                                                         reader
-``devices list [-limit N] [-offset N]``                           reader
+``devices list [-limit N] [-after ID]``                           reader
 ``devices show <client-id>``                                      reader
 ``revoke <client-id> -reason R -actor A [-note S]``               admin
 ``unrevoke <client-id> -reason R -actor A [-note S]``             admin
@@ -103,11 +103,12 @@ Global ``--json`` prints the raw API response instead of the human
 rendering, for scripting against the full field set.
 
 Exit codes: 0 on success, 1 when the operation fails **or reports a
-negative result** (a degraded ``health``), 2 on a usage error. ``devices list`` and ``reanchor-review list``
-print bare IDs on stdout (page summaries go to stderr), so their output
-pipes cleanly into further tooling. An empty review queue therefore prints
-its count and nothing else: a queue with nothing in it and a command that
-did nothing are not the same answer.
+negative result** (a degraded ``health``), 2 on a usage error.
+``devices list`` and ``reanchor-review list`` print bare IDs on stdout
+(page summaries, and the ``-after`` of the next page, go to stderr), so
+their output pipes cleanly into further tooling. An empty review queue
+therefore prints its count and nothing else: a queue with nothing in it
+and a command that did nothing are not the same answer.
 
 Lifecycle actions
 =================
@@ -116,8 +117,10 @@ Lifecycle actions
 stored PCR14 and boot baselines so the next attestation re-establishes
 trust. Use it after a legitimate platform change (board swap, firmware
 update) that the self-service re-anchor refuses or is not enabled for.
-The action is audited (``reanchor``) and counted in the forced re-anchor
-metric.
+Without ``--allow-tofu-boot-baseline`` the forced re-anchor is the operator's
+consent for the next attestation to pin the PCR 0/1/7 state it reports,
+once; ``delete`` withdraws that consent. The action is audited
+(``reanchor``) and counted in the forced re-anchor metric.
 
 ``delete`` removes the client's verifier-side trust state: the baselines and
 the AIK registration, on every storage backend. The device keeps its

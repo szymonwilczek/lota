@@ -5,6 +5,7 @@
 package store
 
 import (
+	"database/sql"
 	"encoding/hex"
 	"errors"
 	"time"
@@ -44,8 +45,9 @@ type BanStore interface {
 	// BanHardware returns ErrAlreadyBanned when the ban exists.
 	BanHardware(tenant string, hardwareID [32]byte, reason RevocationReason, bannedBy, note string) error
 
-	// IsBanned returns the ban and true, or nil and false.
-	IsBanned(tenant string, hardwareID [32]byte) (*BanEntry, bool)
+	// IsBanned returns the ban and true, nil and false when there is none,
+	// or an error when the store cannot tell.
+	IsBanned(tenant string, hardwareID [32]byte) (*BanEntry, bool, error)
 
 	// UnbanHardware records reason and actor in the audit log. It returns
 	// ErrNotBanned when there is no ban.
@@ -86,6 +88,32 @@ type AuditLog interface {
 
 	// Query returns up to limit entries, newest first; zero returns all.
 	Query(limit int) []AuditEntry
+}
+
+// txAuditLog writes an audit entry inside the caller's transaction.
+type txAuditLog interface {
+	logTx(tx *sql.Tx, tenant, action, targetID, reason, actor,
+		note string) error
+}
+
+// commitAudited writes the audit entry into tx and commits it, so the change
+// and its audit entry land together or not at all. A nil log commits alone.
+func commitAudited(tx *sql.Tx, log AuditLog,
+	tenant, action, targetID, reason, actor, note string,
+) error {
+	if log != nil {
+		tl, ok := log.(txAuditLog)
+		if !ok {
+			return errors.New(
+				"audit log cannot write in a transaction")
+		}
+		err := tl.logTx(tx, tenant, action, targetID, reason, actor,
+			note)
+		if err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
 }
 
 // FormatHardwareID returns hwid as lower-case hex.

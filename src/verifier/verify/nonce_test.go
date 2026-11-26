@@ -137,10 +137,8 @@ func TestNonceStore_OneTimeUse(t *testing.T) {
 }
 
 func TestNonceStore_Expiration(t *testing.T) {
-	t.Log("SECURITY TEST: Nonce expiration (TTL)")
-	t.Log("Prevents use of stale challenges")
-
 	store := newTestNonceStore(100 * time.Millisecond)
+	store.Close() // only the test sweeps
 	challenge, _ := store.GenerateChallenge("binding-1", 0x00004003)
 
 	report := &types.AttestationReport{}
@@ -155,8 +153,26 @@ func TestNonceStore_Expiration(t *testing.T) {
 	if err == nil {
 		t.Fatal("SECURITY: Expired nonce was accepted!")
 	}
+	if got := bindingPending(store, "binding-1"); got != 0 {
+		t.Errorf("binding pending after expiry: got %d, want 0", got)
+	}
 
-	t.Logf("✓ Correctly rejected expired nonce: %v", err)
+	// once the expired entry is gone, a late round is not called a replay
+	for _, sweep := range []bool{false, true} {
+		late, _ := store.GenerateChallenge("binding-1", 0x00004003)
+		r := &types.AttestationReport{}
+		copy(r.TPM.Nonce[:], late.Nonce[:])
+		time.Sleep(150 * time.Millisecond)
+		if sweep {
+			store.cleanup()
+		} else {
+			store.VerifyNonce(r, "binding-1", zeroIdentity)
+		}
+		err = store.VerifyNonce(r, "binding-1", zeroIdentity)
+		if err == nil || err.Error() != "unknown or expired nonce" {
+			t.Errorf("late round (sweep=%v): got %v", sweep, err)
+		}
+	}
 }
 
 func TestNonceStore_UnknownNonce(t *testing.T) {
@@ -620,21 +636,26 @@ func TestNonceStore_RateLimitNotConsumedOnFailedIssue(t *testing.T) {
 	}
 }
 
-func TestNonceStore_ClientPendingTracking(t *testing.T) {
-	t.Log("TEST: Per-client pending count tracking")
+// bindingPending returns the binding's outstanding challenges
+func bindingPending(ns *NonceStore, bindingID string) int {
+	ns.mu.RLock()
+	defer ns.mu.RUnlock()
+	return ns.bindingChallenges[bindingID].pendingCount
+}
 
+func TestNonceStore_BindingPendingTracking(t *testing.T) {
 	store := newTestNonceStore(5 * time.Minute)
-	clientID := "binding-pending"
+	const bindingID = "binding-pending"
 
-	if store.ClientPendingCount(clientID) != 0 {
-		t.Errorf("Initial pending: got %d, want 0", store.ClientPendingCount(clientID))
+	if got := bindingPending(store, bindingID); got != 0 {
+		t.Errorf("Initial pending: got %d, want 0", got)
 	}
 
-	challenge, _ := store.GenerateChallenge(clientID, 0x00004003)
-	store.GenerateChallenge(clientID, 0x00004003)
+	challenge, _ := store.GenerateChallenge(bindingID, 0x00004003)
+	store.GenerateChallenge(bindingID, 0x00004003)
 
-	if store.ClientPendingCount(clientID) != 2 {
-		t.Errorf("After 2 challenges: got %d, want 2", store.ClientPendingCount(clientID))
+	if got := bindingPending(store, bindingID); got != 2 {
+		t.Errorf("After 2 challenges: got %d, want 2", got)
 	}
 
 	// verify one - should decrement
@@ -642,13 +663,12 @@ func TestNonceStore_ClientPendingTracking(t *testing.T) {
 	copy(report.TPM.Nonce[:], challenge.Nonce[:])
 	report.TPM.AttestSize = uint16(len(createMockAttestWithNonce(testBindingNonce(report, challenge.Nonce))))
 	copy(report.TPM.AttestData[:], createMockAttestWithNonce(testBindingNonce(report, challenge.Nonce)))
-	store.VerifyNonce(report, clientID, zeroIdentity)
+	// the identity is not the binding
+	store.VerifyNonce(report, bindingID, "client-identity")
 
-	if store.ClientPendingCount(clientID) != 1 {
-		t.Errorf("After verify: got %d, want 1", store.ClientPendingCount(clientID))
+	if got := bindingPending(store, bindingID); got != 1 {
+		t.Errorf("After verify: got %d, want 1", got)
 	}
-
-	t.Log("✓ Per-client pending count accurately tracks state")
 }
 
 func TestNonceStore_ConcurrentSafety(t *testing.T) {

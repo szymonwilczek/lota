@@ -10,6 +10,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"maps"
 	"os"
@@ -158,30 +159,6 @@ func IsMeasurementEmptyPolicy(policy *PCRPolicy) bool {
 	return len(policy.PCRs) == 0 && len(policy.KernelHashes) == 0 && len(policy.AgentHashes) == 0
 }
 
-func isAllZeroHex(hexDigest string) bool {
-	if hexDigest == "" {
-		return false
-	}
-	for i := 0; i < len(hexDigest); i++ {
-		if hexDigest[i] != '0' {
-			return false
-		}
-	}
-	return true
-}
-
-func validateKernelPins(policy *PCRPolicy) error {
-	if policy == nil {
-		return nil
-	}
-	for _, allowed := range policy.KernelHashes {
-		if isAllZeroHex(strings.TrimSpace(allowed)) {
-			return fmt.Errorf("refusing to load policy '%s': kernel_hashes pins an all-zero kernel hash, which every host with no kernel measurement reports -- the list would admit any kernel on any such machine. Pin the digest the device actually reports, or drop kernel_hashes and rely on the PCR pins", policy.Name)
-		}
-	}
-	return nil
-}
-
 func validatePolicyPCRIndices(policy *PCRPolicy) error {
 	if policy == nil {
 		return errors.New("nil policy")
@@ -195,11 +172,22 @@ func validatePolicyPCRIndices(policy *PCRPolicy) error {
 	return nil
 }
 
-// LoadPolicy reads a YAML policy file and registers it.
+// LoadPolicy reads a YAML policy file of at most PolicyMaxFileSize bytes
+// once and registers it. With a policy public key set, the detached
+// signature in path+".sig" must cover the bytes read.
 func (v *PCRVerifier) LoadPolicy(path string) error {
-	data, err := os.ReadFile(path)
+	f, err := os.Open(path)
 	if err != nil {
 		return fmt.Errorf("failed to read policy file: %w", err)
+	}
+	data, err := io.ReadAll(io.LimitReader(f, PolicyMaxFileSize+1))
+	f.Close()
+	if err != nil {
+		return fmt.Errorf("failed to read policy file: %w", err)
+	}
+	if len(data) > PolicyMaxFileSize {
+		return fmt.Errorf("failed to read policy file: %w",
+			ErrFileTooLarge)
 	}
 
 	v.mu.RLock()
@@ -207,7 +195,12 @@ func (v *PCRVerifier) LoadPolicy(path string) error {
 	v.mu.RUnlock()
 
 	if pubKey != nil {
-		if err := VerifyPolicyFile(path, pubKey); err != nil {
+		sig, err := os.ReadFile(path + ".sig")
+		if err != nil {
+			return fmt.Errorf("policy signature verification "+
+				"failed: read signature file: %w", err)
+		}
+		if err := VerifyPolicySignature(data, sig, pubKey); err != nil {
 			return fmt.Errorf("policy signature verification failed: %w", err)
 		}
 	}
@@ -244,10 +237,7 @@ func validatePolicyDocument(policy *PCRPolicy) error {
 	if err := validatePolicyPCRIndices(policy); err != nil {
 		return err
 	}
-	if err := validateProfile(policy); err != nil {
-		return err
-	}
-	return validateKernelPins(policy)
+	return validateProfile(policy)
 }
 
 // registerPolicy stores a policy under its name; the first one stored becomes

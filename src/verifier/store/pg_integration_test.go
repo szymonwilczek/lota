@@ -171,7 +171,7 @@ func TestPostgresRevocationBanAudit(t *testing.T) {
 	if err := rev.Revoke("default", "c1", RevocationReason("compromised"), "op", "n1"); err != ErrAlreadyRevoked {
 		t.Fatalf("duplicate Revoke: got %v want ErrAlreadyRevoked", err)
 	}
-	if e, ok := rev.IsRevoked("c1"); !ok || e.RevokedBy != "op" {
+	if e, ok := revokedOf(t, rev, "c1"); !ok || e.RevokedBy != "op" {
 		t.Fatal("IsRevoked")
 	}
 	if lr := rev.ListRevocations(); len(lr) != 1 || lr[0].ClientID != "c1" {
@@ -193,7 +193,7 @@ func TestPostgresRevocationBanAudit(t *testing.T) {
 	if err := ban.BanHardware("default", hw, RevocationReason("cheat"), "op", "b1"); err != ErrAlreadyBanned {
 		t.Fatalf("duplicate ban: got %v want ErrAlreadyBanned", err)
 	}
-	if e, ok := ban.IsBanned("default", hw); !ok || e.HardwareID != hw {
+	if e, ok := bannedOf(t, ban, "default", hw); !ok || e.HardwareID != hw {
 		t.Fatal("IsBanned")
 	}
 	if ban.CountBans() != 1 {

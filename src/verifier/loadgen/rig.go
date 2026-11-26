@@ -123,6 +123,11 @@ func loadRig(dir string, agents int) (*synth.Fleet, *rigMeta, error) {
 	if err != nil {
 		return nil, nil, err
 	}
+	// LoadKeyPool skips a damaged block, so a short pool is a damaged one
+	if len(keys) != meta.KeyPool {
+		return nil, nil, fmt.Errorf("AIK key pool damaged: %d of %d "+
+			"keys load; re-run setup", len(keys), meta.KeyPool)
+	}
 
 	fleet, err := synth.NewFleet(ca, agents, keys, meta.Tenant)
 	if err != nil {

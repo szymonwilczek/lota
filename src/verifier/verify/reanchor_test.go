@@ -99,6 +99,8 @@ func TestPCR7Variables_AfterSeparator(t *testing.T) {
 
 func TestReanchorDecision(t *testing.T) {
 	base := pcr7Log(baseVars())
+	withDBT := pcr7Log(append(baseVars(), pcrVar{"dbt", []byte("t")}))
+	withDBR := pcr7Log(append(baseVars(), pcrVar{"dbr", []byte("t")}))
 
 	tests := []struct {
 		name string
@@ -129,6 +131,15 @@ func TestReanchorDecision(t *testing.T) {
 				BaselineEventLog: base,
 				CurrentParsed:    mustParse(pcr7Log(varsWith("dbx", []byte("dbx0+more")))),
 				CurrentESRT:      nil, ESRTCapable: false,
+			},
+			want: ReanchorLFA,
+		},
+		{
+			name: "ESRT first appears = LFA",
+			in: ReanchorInputs{
+				BaselineEventLog: base,
+				CurrentParsed:    mustParse(base),
+				CurrentESRT:      esrt(785), ESRTCapable: false,
 			},
 			want: ReanchorLFA,
 		},
@@ -194,6 +205,28 @@ func TestReanchorDecision(t *testing.T) {
 				CurrentESRT:      esrt(785),
 			},
 			want: ReanchorEscalate,
+		},
+		{
+			name: "PCR 7 variable renamed = escalate",
+			in: ReanchorInputs{
+				BaselineEventLog:    withDBT,
+				CurrentParsed:       mustParse(withDBR),
+				BaselineESRTVersion: 700,
+				CurrentESRT:         esrt(785),
+				ESRTCapable:         true,
+			},
+			want: ReanchorEscalate,
+		},
+		{
+			name: "same PCR 7 names + firmware forward = allow",
+			in: ReanchorInputs{
+				BaselineEventLog:    withDBT,
+				CurrentParsed:       mustParse(withDBT),
+				BaselineESRTVersion: 700,
+				CurrentESRT:         esrt(785),
+				ESRTCapable:         true,
+			},
+			want: ReanchorAllow,
 		},
 		{
 			name: "no baseline event log = escalate (fail-closed)",

@@ -98,11 +98,11 @@ restart, so it refuses to take a decision it would forget.
 Pagination
 ----------
 
-``GET /api/v1/clients`` uses ``limit``/``offset`` (limit default 100,
-maximum 1000; offset above 10000 is a **400**). ``GET /api/v1/bans`` is
-keyset-paged: ``limit`` plus a ``next_id`` cursor returned by the
-previous page; passing ``offset`` there is a **400**. The log endpoints
-take only ``limit``.
+``GET /api/v1/clients`` is keyset-paged: ``limit`` (default 100, maximum
+1000) plus an ``after`` cursor, the ``next`` the previous page returned.
+``GET /api/v1/bans`` is keyset-paged the same way with a ``next_id``
+cursor. Passing ``offset`` to either is a **400**. The log endpoints take
+only ``limit``.
 
 Endpoint summary
 ================
@@ -223,22 +223,25 @@ Device inventory
 GET /api/v1/clients
 -------------------
 
-Reader. Query: ``limit``, ``offset`` (see Pagination). **200**::
+Reader. Query: ``limit``, ``after`` (see Pagination). **200**::
 
    {
      "clients": ["host-0001", "host-0002"],
      "count": 2,
-     "total": 2,
-     "limit": 100,
-     "offset": 0
+     "next": "host-0002"
    }
+
+Clients come in client ID order, those after ``after``. ``next`` is present
+when the page is full: pass it as ``after`` for the following page. A page
+with no ``next`` is the last one.
 
 The list is the durable per-client record -- the baseline every instance of a
 deployment shares -- so behind a load balancer every instance answers it the
-same way, and the answer survives a restart. ``total`` counts that record plus
-the sessions this instance is holding that have no baseline pinned yet; those
-are appended after the record, so a client mid-handshake is listed once and
-only until its first baseline is written.
+same way, and the answer survives a restart. A global key also gets the
+sessions this instance is holding that have no baseline pinned yet, in the
+same ID order, so a client mid-handshake is listed once and only until its
+first baseline is written. A tenant-scoped key gets the durable record of its
+tenants only.
 
 GET /api/v1/clients/{id}
 ------------------------
@@ -258,7 +261,6 @@ register anything with the verifier. ::
      "last_attestation_unix": 1782986400,
      "attestation_count": 7,
      "monotonic_counter": 7,
-     "pending_challenges": 0,
      "pcr14_baseline": "cafe...",
      "first_seen": "2026-06-30T08:00:00Z",
      "first_seen_unix": 1782806400,
@@ -293,23 +295,16 @@ out of band carries the registered identity there instead, beside whatever
 client id it chose.
 
 Everything above is read from the state the deployment shares -- the durable
-per-client record -- except two fields, which are this instance's own:
+per-client record -- except ``monotonic_counter``, which is this instance's
+own: the nonce sequence this process has seen from the client. It is not
+compared against anything, so it gates nothing; it resets when the instance
+restarts and differs between instances at the same moment. It is not a
+replay or reordering indicator for a fleet.
 
-``monotonic_counter``
-   the nonce sequence this process has seen from the client. It is not
-   compared against anything, so it gates nothing; it resets when the instance
-   restarts and differs between instances at the same moment. It is not a
-   replay or reordering indicator for a fleet.
-
-``pending_challenges``
-   the challenges this instance is holding for the client right now. A
-   challenge lives where the connection is, so an instance the client is not
-   talking to reports none.
-
-Behind a load balancer, read either of those from one pinned instance or not
-at all. ``last_attestation``, ``attestation_count``, ``first_seen``,
-``tenant``, ``revoked``, ``pcr14_baseline`` and ``machine_keys`` are the fleet's answer and are
-the same on every instance.
+Behind a load balancer, read it from one pinned instance or not at all.
+``last_attestation``, ``attestation_count``, ``first_seen``, ``tenant``,
+``revoked``, ``pcr14_baseline`` and ``machine_keys`` are the fleet's answer
+and are the same on every instance.
 
 Revocations
 ===========
@@ -422,8 +417,10 @@ POST /api/v1/clients/{id}/reanchor
 ----------------------------------
 
 Admin. The operator-forced re-baseline: drops the client's stored PCR14
-and boot baselines so the next attestation re-establishes trust. The
-AIK registration is untouched. Body: ``reason`` and ``actor`` required,
+and boot baselines so the next attestation re-establishes trust. Without
+``--allow-tofu-boot-baseline`` that attestation may pin the PCR 0/1/7 state
+it reports, once, on this consent; a client delete withdraws it. The AIK
+registration is untouched. Body: ``reason`` and ``actor`` required,
 ``note`` optional. **200**::
 
    {"status": "reanchored", "client_id": "host-0001"}

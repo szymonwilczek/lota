@@ -146,25 +146,25 @@ func TestStats(t *testing.T) {
 
 func TestListClientsPagination(t *testing.T) {
 	c, rec := fakeVerifier(t, http.StatusOK,
-		`{"clients":["a","b"],"count":2,"total":10,"limit":2,"offset":4}`)
+		`{"clients":["a","b"],"count":2,"next":"b"}`)
 
-	page, err := c.ListClients(2, 4)
+	page, err := c.ListClients(2, "0")
 	if err != nil {
 		t.Fatalf("ListClients: %v", err)
 	}
-	if rec.path != "/api/v1/clients" || rec.query != "limit=2&offset=4" {
+	if rec.path != "/api/v1/clients" || rec.query != "after=0&limit=2" {
 		t.Fatalf("request = %s?%s", rec.path, rec.query)
 	}
-	if page.Total != 10 || len(page.Clients) != 2 {
+	if page.Next != "b" || len(page.Clients) != 2 {
 		t.Fatalf("page = %+v", page)
 	}
 }
 
 func TestListClientsDefaultsOmitQuery(t *testing.T) {
 	c, rec := fakeVerifier(t, http.StatusOK,
-		`{"clients":[],"count":0,"total":0,"limit":100,"offset":0}`)
+		`{"clients":[],"count":0}`)
 
-	if _, err := c.ListClients(0, 0); err != nil {
+	if _, err := c.ListClients(0, ""); err != nil {
 		t.Fatalf("ListClients: %v", err)
 	}
 	if rec.query != "" {

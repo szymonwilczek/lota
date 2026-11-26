@@ -273,12 +273,13 @@ func recordedDetail(err error) string {
 type bootBaselineRoad struct {
 	allowedBy string // logged as allowed_by; empty = not authenticated
 	note      string
+	consent   bool // the pin spends a forced re-anchor consent
 }
 
 // bootBaselineRoad resolves the policy roads; the caller checks the store.
 func (v *Verifier) bootBaselineRoad(tenant string, bootFacts *BootFacts) bootBaselineRoad {
 	if v.pcrVerifier.PolicyDeclaresBootPCRsForTenant(tenant) {
-		return bootBaselineRoad{allowedBy: "signed policy PCR0/1/7 pins"}
+		return bootBaselineRoad{allowedBy: "policy PCR0/1/7 pins"}
 	}
 	if v.pcrVerifier.PolicyRequiresSecureBootForTenant(tenant) &&
 		SecureBootAnchored(bootFacts) {
@@ -288,6 +289,33 @@ func (v *Verifier) bootBaselineRoad(tenant string, bootFacts *BootFacts) bootBas
 		}
 	}
 	return bootBaselineRoad{}
+}
+
+// storeBootRoad resolves the store roads: an enrolled boot baseline, else a
+// forced re-anchor consent, which the pin spends.
+func (v *Verifier) storeBootRoad(clientID string) (bootBaselineRoad, error) {
+	enrolled, err := v.hasBootBaseline(clientID)
+	if err != nil {
+		return bootBaselineRoad{}, err
+	}
+	if enrolled {
+		road := bootBaselineRoad{allowedBy: "baseline store enrollment"}
+		return road, nil
+	}
+	fr, ok := v.baselineStore.(ForcedReanchorStorer)
+	if !ok {
+		return bootBaselineRoad{}, nil
+	}
+	forced, err := fr.HasForcedReanchor(clientID)
+	if err != nil || !forced {
+		return bootBaselineRoad{}, err
+	}
+	return bootBaselineRoad{
+		allowedBy: "operator force-reanchor",
+		note: "the operator consented to pin the firmware state " +
+			"this host reported",
+		consent: true,
+	}, nil
 }
 
 // VerifyReportFrom verifies a report and records the address it came from;
@@ -435,7 +463,12 @@ func (v *Verifier) VerifyReportFrom(challengeID, remoteAddr string, reportData [
 
 	// revocation and bans are checked before the nonce is consumed
 	if v.revocationStore != nil {
-		if entry, revoked := v.revocationStore.IsRevoked(clientID); revoked {
+		entry, revoked, err := v.revocationStore.IsRevoked(clientID)
+		if err != nil {
+			return v.refuseOnListError(clog, result,
+				"revocation", err)
+		}
+		if revoked {
 			v.revokedAttests.Add(1)
 			v.metrics.Rejections.Inc("revoked")
 			logging.Security(clog, "attestation rejected: AIK revoked",
@@ -447,7 +480,11 @@ func (v *Verifier) VerifyReportFrom(challengeID, remoteAddr string, reportData [
 
 	// a ban holds in the tenant it was recorded in alone
 	if v.banStore != nil {
-		if entry, banned := v.banStore.IsBanned(tenant, identity); banned {
+		entry, banned, err := v.banStore.IsBanned(tenant, identity)
+		if err != nil {
+			return v.refuseOnListError(clog, result, "ban", err)
+		}
+		if banned {
 			v.bannedAttests.Add(1)
 			v.metrics.Rejections.Inc("banned")
 			logging.Security(clog, "attestation rejected: hardware banned",
@@ -473,12 +510,10 @@ func (v *Verifier) VerifyReportFrom(challengeID, remoteAddr string, reportData [
 	}
 	clog.Debug("signature verified with certificate-authenticated AIK")
 
-	var parsedAttest *TPMSAttest
 	if report.TPM.AttestSize > 0 {
 		attestData := cloneSensitive(report.TPM.AttestData[:report.TPM.AttestSize])
 		defer wipeBytes(attestData)
-		var err error
-		parsedAttest, err = ParseTPMSAttest(attestData)
+		parsedAttest, err := ParseTPMSAttest(attestData)
 		if err != nil {
 			clog.Error("PCR digest verification failed", "error", err)
 			v.metrics.Rejections.Inc("pcr_fail")
@@ -585,13 +620,6 @@ func (v *Verifier) VerifyReportFrom(challengeID, remoteAddr string, reportData [
 		return result, errors.New("FAIL_BASELINE_ERROR: store missing atomic agent_hash/boot pinning")
 	}
 
-	if parsedAttest == nil {
-		clog.Error("FlagBootCommitment set without a TPM quote payload")
-		v.metrics.Rejections.Inc("pcr_fail")
-		result.Result = types.VerifyPCRFail
-		return result, errors.New("FAIL_PCR_FAIL: FlagBootCommitment requires a TPMS_ATTEST payload")
-	}
-
 	// the pre-lock PCR 14 comes from the event log; a forged log fails the
 	// match with the quoted register
 	var pcr14Baseline [types.HashSize]byte
@@ -618,15 +646,22 @@ func (v *Verifier) VerifyReportFrom(challengeID, remoteAddr string, reportData [
 		PCR7: report.TPM.PCRValues[7],
 	}
 
-	// Enrollment gate: a first-use PCR 0/1/7 row needs a policy road or an
-	// enrolled store row while RequireBootEnrollment holds. The road is
-	// resolved with the gate off too: the pin logs it.
+	// Enrollment gate: a first-use PCR 0/1/7 row needs a policy road, an
+	// enrolled store row or an operator's forced re-anchor while
+	// RequireBootEnrollment holds. The road is resolved with the gate off
+	// too: the pin logs it.
 	bootPin := v.bootBaselineRoad(tenant, bootFacts)
 	if bootPin.allowedBy == "" && v.requireBootEnrollment {
-		if reader, ok := v.baselineStore.(BootBaselineReader); ok &&
-			reader.GetBootBaseline(clientID) != nil {
-			bootPin.allowedBy = "baseline store enrollment"
+		road, err := v.storeBootRoad(clientID)
+		if err != nil {
+			clog.Error("boot baseline store error, refusing "+
+				"attestation", "error", err)
+			v.metrics.Rejections.Inc("baseline_error")
+			result.Result = types.VerifyInternalError
+			return result, errors.New(
+				"FAIL_BASELINE_ERROR: baseline store error")
 		}
+		bootPin = road
 	}
 	if bootPin.allowedBy == "" {
 		if v.requireBootEnrollment {
@@ -644,7 +679,8 @@ func (v *Verifier) VerifyReportFrom(challengeID, remoteAddr string, reportData [
 	}
 
 	outcome := atomicStore.CheckAndUpdateAttestation(
-		clientID, pcr14, report.System.AgentHash, bootPtr)
+		clientID, pcr14, report.System.AgentHash, bootPtr,
+		bootPin.consent)
 
 	switch outcome.AgentHashResult {
 	case TOFUFirstUse:
@@ -659,7 +695,8 @@ func (v *Verifier) VerifyReportFrom(challengeID, remoteAddr string, reportData [
 		if v.tryAgentHashRepin(clog, clientID, tenant, pcr14, report) {
 			// the mismatch aborted the transaction; re-run it
 			outcome = atomicStore.CheckAndUpdateAttestation(
-				clientID, pcr14, report.System.AgentHash, bootPtr)
+				clientID, pcr14, report.System.AgentHash, bootPtr,
+				bootPin.consent)
 			if outcome.AgentHashResult != TOFUMatch {
 				logging.Security(clog, "agent_hash re-pin did not settle; refusing",
 					"agent_hash", hex.EncodeToString(report.System.AgentHash[:]))
@@ -713,7 +750,8 @@ func (v *Verifier) VerifyReportFrom(challengeID, remoteAddr string, reportData [
 		if v.tryMOKRepin(clog, clientID, tenant, pinned, pcr14, report, bootFacts) {
 			// the mismatch aborted the transaction; re-run it on the moved pin
 			outcome = atomicStore.CheckAndUpdateAttestation(
-				clientID, pcr14, report.System.AgentHash, bootPtr)
+				clientID, pcr14, report.System.AgentHash, bootPtr,
+				bootPin.consent)
 			if outcome.PCR14Result == TOFUMatch {
 				break
 			}
@@ -955,23 +993,23 @@ func (v *Verifier) Stats() Stats {
 
 // ClientInfo is what the verifier knows about one client.
 type ClientInfo struct {
-	ClientID          string
-	HardwareID        string // hex-encoded
-	Revoked           bool
-	RevocationReason  string
-	LastAttestation   time.Time
-	AttestCount       uint64
-	MonotonicCounter  uint64
-	PendingChallenges int
-	PCR14Baseline     string // hex-encoded
-	FirstSeen         time.Time
-	Tenant            string       // CA-assigned; DefaultTenant when never stamped
-	MachineKeys       *MachineKeys // nil until an attestation recorded them
+	ClientID         string
+	HardwareID       string // hex-encoded
+	Revoked          bool
+	RevocationReason string
+	LastAttestation  time.Time
+	AttestCount      uint64
+	MonotonicCounter uint64
+	PCR14Baseline    string // hex-encoded
+	FirstSeen        time.Time
+	// CA-assigned; DefaultTenant when never stamped
+	Tenant      string
+	MachineKeys *MachineKeys // nil until an attestation recorded them
 }
 
 // ClientInfo returns the client's record; false when it has no baseline and
-// a zero ClientCounter.
-func (v *Verifier) ClientInfo(clientID string) (*ClientInfo, bool) {
+// a zero ClientCounter. A baseline store failure is an error.
+func (v *Verifier) ClientInfo(clientID string) (*ClientInfo, bool, error) {
 	info := &ClientInfo{
 		ClientID: clientID,
 	}
@@ -981,7 +1019,11 @@ func (v *Verifier) ClientInfo(clientID string) (*ClientInfo, bool) {
 	}
 
 	if v.revocationStore != nil {
-		if entry, revoked := v.revocationStore.IsRevoked(clientID); revoked {
+		entry, revoked, err := v.revocationStore.IsRevoked(clientID)
+		if err != nil {
+			return nil, false, err
+		}
+		if revoked {
 			info.Revoked = true
 			info.RevocationReason = string(entry.Reason)
 		}
@@ -989,11 +1031,14 @@ func (v *Verifier) ClientInfo(clientID string) (*ClientInfo, bool) {
 
 	// per-instance nonce state, not comparable across instances
 	info.MonotonicCounter = v.nonceStore.ClientCounter(clientID)
-	info.PendingChallenges = v.nonceStore.ClientPendingCount(clientID)
 
 	// the baseline record is shared; the nonce history is this instance's
+	baseline, err := v.baselineStore.GetBaseline(clientID)
+	if err != nil {
+		return nil, false, err
+	}
 	hasBaseline := false
-	if baseline := v.baselineStore.GetBaseline(clientID); baseline != nil {
+	if baseline != nil {
 		hasBaseline = true
 		info.PCR14Baseline = hex.EncodeToString(baseline.PCR14[:])
 		info.AttestCount = baseline.AttestCount
@@ -1027,10 +1072,10 @@ func (v *Verifier) ClientInfo(clientID string) (*ClientInfo, bool) {
 	}
 
 	if info.MonotonicCounter == 0 && !hasBaseline {
-		return nil, false
+		return nil, false, nil
 	}
 
-	return info, true
+	return info, true, nil
 }
 
 // ListClients returns every known client: the durable baseline record first,
@@ -1056,33 +1101,51 @@ func (v *Verifier) ListClients() []string {
 	return clients
 }
 
-// DurableClientsPage returns one page of the durable client record,
-// ordered by client ID.
-func (v *Verifier) DurableClientsPage(limit, offset int) ([]string, error) {
-	if pager, ok := v.baselineStore.(PagedClientLister); ok {
-		return pager.ListClientsPage(limit, offset)
+// ClientsPage returns up to limit clients whose ID sorts after after,
+// in ID order. A non-nil tenants keeps the durable clients of those
+// tenants; nil also takes the clients only this instance knows.
+func (v *Verifier) ClientsPage(tenants []string, after string, limit int,
+) ([]string, error) {
+	page, err := v.baselineStore.ListClientsAfter(tenants, after, limit)
+	if err != nil || tenants != nil {
+		return page, err
 	}
 
-	all := v.baselineStore.ListClients()
-	sort.Strings(all)
-	if offset >= len(all) {
-		return []string{}, nil
+	var local []string
+	for _, id := range v.nonceStore.ListActiveClients() {
+		if id <= after {
+			continue
+		}
+		durable, err := v.IsDurableClient(id)
+		if err != nil {
+			return nil, err
+		}
+		if !durable {
+			local = append(local, id)
+		}
 	}
-	end := offset + limit
-	if end > len(all) {
-		end = len(all)
+	if len(local) == 0 {
+		return page, nil
 	}
-	return all[offset:end], nil
-}
+	sort.Strings(local)
 
-// CountDurableClients returns the number of clients with a durable record.
-func (v *Verifier) CountDurableClients() int {
-	return v.baselineStore.Stats().TotalClients
+	merged := make([]string, 0, len(page)+len(local))
+	for len(merged) < limit && (len(page) > 0 || len(local) > 0) {
+		if len(local) == 0 || (len(page) > 0 && page[0] < local[0]) {
+			merged = append(merged, page[0])
+			page = page[1:]
+		} else {
+			merged = append(merged, local[0])
+			local = local[1:]
+		}
+	}
+	return merged, nil
 }
 
 // IsDurableClient reports whether the client has a durable record.
-func (v *Verifier) IsDurableClient(clientID string) bool {
-	return v.baselineStore.GetBaseline(clientID) != nil
+func (v *Verifier) IsDurableClient(clientID string) (bool, error) {
+	baseline, err := v.baselineStore.GetBaseline(clientID)
+	return baseline != nil, err
 }
 
 // RevocationStore returns the revocation store, nil when not enforced.
@@ -1148,14 +1211,14 @@ func (v *Verifier) tryReanchor(clog *slog.Logger, clientID, tenant string,
 			if errors.Is(err, ErrReanchorRateLimited) {
 				// a concurrent round re-anchored first
 				logging.Security(clog, "boot baseline re-anchor escalated (rate limit raced)", "reason", reason)
-				v.metrics.Reanchors.Inc("escalate")
+				v.metrics.Reanchors.Inc(metrics.OutcomeEscalate)
 				return false
 			}
 			clog.Warn("re-anchor archive failed", "error", err)
 			return false
 		}
 		logging.Security(clog, "boot baseline re-anchored (strong path)", "reason", reason)
-		v.metrics.Reanchors.Inc("strong")
+		v.metrics.Reanchors.Inc(metrics.OutcomeStrong)
 		return true
 	case ReanchorLFA:
 		// applied at once and flagged, see ListReanchorReview
@@ -1164,20 +1227,32 @@ func (v *Verifier) tryReanchor(clog *slog.Logger, clientID, tenant string,
 			if errors.Is(err, ErrReanchorRateLimited) {
 				// a concurrent round re-anchored first
 				logging.Security(clog, "boot baseline re-anchor escalated (rate limit raced)", "reason", reason)
-				v.metrics.Reanchors.Inc("escalate")
+				v.metrics.Reanchors.Inc(metrics.OutcomeEscalate)
 				return false
 			}
 			clog.Warn("re-anchor archive failed", "error", err)
 			return false
 		}
 		logging.Security(clog, "ALERT: boot baseline re-anchored on the low-firmware-assurance path (operator review recommended)", "reason", reason)
-		v.metrics.Reanchors.Inc("lfa")
+		v.metrics.Reanchors.Inc(metrics.OutcomeLFA)
 		return true
 	default:
 		logging.Security(clog, "boot baseline re-anchor escalated to operator", "reason", reason)
-		v.metrics.Reanchors.Inc("escalate")
+		v.metrics.Reanchors.Inc(metrics.OutcomeEscalate)
 		return false
 	}
+}
+
+// refuseOnListError refuses an attestation whose revocation or ban lookup
+// failed: a store that cannot answer does not clear the client.
+func (v *Verifier) refuseOnListError(clog *slog.Logger,
+	result *types.VerifyResult, list string, err error,
+) (*types.VerifyResult, error) {
+	clog.Error(list+" store error, refusing attestation", "error", err)
+	v.metrics.Rejections.Inc(
+		types.VerifyResultString(types.VerifyInternalError))
+	result.Result = types.VerifyInternalError
+	return result, fmt.Errorf("%s store error", list)
 }
 
 // tryAgentHashRepin moves a mismatched agent_hash pin, with its PCR 14, to the
@@ -1207,13 +1282,13 @@ func (v *Verifier) tryAgentHashRepin(clog *slog.Logger, clientID, tenant string,
 			hex.EncodeToString(report.System.AgentHash[:]),
 			"note",
 			"the row comes from an out-of-band PCR 14 pin; pin this client's agent hash or clear the baseline to re-enroll it")
-		v.metrics.Reanchors.Inc("agent_hash_escalate")
+		v.metrics.Reanchors.Inc(metrics.OutcomeAgentHashEscalate)
 		return false
 	}
 
 	now := time.Now()
-	verdict, refusal := agentHashDecision(report.System.AgentHash,
-		policy.AgentHashes, st.LastRepinAt, now)
+	verdict, refusal := agentHashDecision(policy.AgentHashes,
+		st.LastRepinAt, now)
 
 	if verdict != AgentHashRepin {
 		// an unlisted build already failed the policy gate
@@ -1227,7 +1302,8 @@ func (v *Verifier) tryAgentHashRepin(clog *slog.Logger, clientID, tenant string,
 				st.LastRepinAt.Add(AgentHashRepinMinInterval).UTC().Format(time.RFC3339),
 				"note",
 				"the reported build is on this policy's allow-list; wait for the interval or re-anchor this client")
-			v.metrics.Reanchors.Inc("agent_hash_escalate")
+			v.metrics.Reanchors.Inc(
+				metrics.OutcomeAgentHashEscalate)
 		}
 		return false
 	}
@@ -1237,7 +1313,8 @@ func (v *Verifier) tryAgentHashRepin(clog *slog.Logger, clientID, tenant string,
 		if errors.Is(err, ErrAgentHashRepinRateLimited) {
 			// a concurrent round re-pinned first
 			logging.Security(clog, "agent_hash re-pin escalated (rate limit raced)")
-			v.metrics.Reanchors.Inc("agent_hash_escalate")
+			v.metrics.Reanchors.Inc(
+				metrics.OutcomeAgentHashEscalate)
 			return false
 		}
 		clog.Warn("agent_hash re-pin archive failed", "error", err)
@@ -1248,7 +1325,7 @@ func (v *Verifier) tryAgentHashRepin(clog *slog.Logger, clientID, tenant string,
 		"new_agent_hash", hex.EncodeToString(report.System.AgentHash[:]),
 		"repin_count", st.RepinCount+1,
 		"note", "package update; the outgoing hash is archived and PCR 14 moved with it")
-	v.metrics.Reanchors.Inc("agent_hash")
+	v.metrics.Reanchors.Inc(metrics.OutcomeAgentHash)
 	return true
 }
 
@@ -1270,8 +1347,8 @@ func (v *Verifier) AcknowledgeReanchorReview(clientID string) error {
 	if !ok {
 		return fmt.Errorf("baseline store does not support self-service re-anchor")
 	}
-	if v.baselineStore.GetBaseline(clientID) == nil && !v.hasBootBaseline(clientID) {
-		return ErrUnknownClient
+	if err := v.knownClient(clientID); err != nil {
+		return err
 	}
 	return rs.AcknowledgeLFAReview(clientID)
 }
@@ -1280,30 +1357,65 @@ func (v *Verifier) AcknowledgeReanchorReview(clientID string) error {
 // when the target client has no baseline.
 var ErrUnknownClient = errors.New("unknown client")
 
-func (v *Verifier) hasBootBaseline(clientID string) bool {
+func (v *Verifier) hasBootBaseline(clientID string) (bool, error) {
 	br, ok := v.baselineStore.(BootBaselineReader)
-	return ok && br.GetBootBaseline(clientID) != nil
+	if !ok {
+		return false, nil
+	}
+	boot, err := br.GetBootBaseline(clientID)
+	return boot != nil, err
+}
+
+// knownClient returns ErrUnknownClient for a client with neither baseline,
+// the store error when the store cannot say.
+func (v *Verifier) knownClient(clientID string) error {
+	baseline, err := v.baselineStore.GetBaseline(clientID)
+	if err != nil {
+		return err
+	}
+	if baseline != nil {
+		return nil
+	}
+	boot, err := v.hasBootBaseline(clientID)
+	if err != nil {
+		return err
+	}
+	if !boot {
+		return ErrUnknownClient
+	}
+	return nil
 }
 
 // ForceReanchor clears the client's baseline, so its next attestation pins
-// afresh under the active policy.
+// afresh under the active policy. Under RequireBootEnrollment that
+// attestation passes the enrollment gate once on the operator's consent.
 func (v *Verifier) ForceReanchor(clientID string) error {
 	// the in-memory store keeps the boot baseline apart
-	if v.baselineStore.GetBaseline(clientID) == nil && !v.hasBootBaseline(clientID) {
-		return ErrUnknownClient
+	if err := v.knownClient(clientID); err != nil {
+		return err
+	}
+	if fr, ok := v.baselineStore.(ForcedReanchorStorer); ok {
+		if err := fr.MarkForcedReanchor(clientID); err != nil {
+			return err
+		}
 	}
 	if err := v.baselineStore.ClearBaseline(clientID); err != nil {
 		return err
 	}
-	v.metrics.Reanchors.Inc("forced")
+	v.metrics.Reanchors.Inc(metrics.OutcomeForced)
 	return nil
 }
 
-// DeleteClient clears the client's baseline and its nonce store state.
-// Revocations and bans stay.
+// DeleteClient clears the client's baseline, a forced re-anchor consent and
+// its nonce store state. Revocations and bans stay.
 func (v *Verifier) DeleteClient(clientID string) error {
-	if v.baselineStore.GetBaseline(clientID) == nil && !v.hasBootBaseline(clientID) {
-		return ErrUnknownClient
+	if err := v.knownClient(clientID); err != nil {
+		return err
+	}
+	if fr, ok := v.baselineStore.(ForcedReanchorStorer); ok {
+		if _, err := fr.TakeForcedReanchor(clientID); err != nil {
+			return err
+		}
 	}
 	if err := v.baselineStore.ClearBaseline(clientID); err != nil {
 		return err

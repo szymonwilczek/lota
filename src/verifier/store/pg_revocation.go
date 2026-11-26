@@ -6,6 +6,7 @@ package store
 
 import (
 	"database/sql"
+	"errors"
 	"fmt"
 	"slices"
 	"strconv"
@@ -27,38 +28,43 @@ func NewPostgresRevocationStore(db *sql.DB, auditLog AuditLog) *PostgresRevocati
 	return &PostgresRevocationStore{db: db, auditLog: auditLog}
 }
 
-func (s *PostgresRevocationStore) Revoke(tenant, clientID string, reason RevocationReason, revokedBy, note string) error {
+func (s *PostgresRevocationStore) Revoke(tenant, clientID string, reason RevocationReason, revokedBy, note string) (err error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	var existing string
-	err := s.db.QueryRow("SELECT client_id FROM revocations WHERE client_id = $1", clientID).Scan(&existing)
-	if err == nil {
-		return ErrAlreadyRevoked
-	}
-	if err != sql.ErrNoRows {
+	tx, err := s.db.Begin()
+	if err != nil {
 		return err
 	}
+	defer func() {
+		if err != nil {
+			err = rollbackOnErr(tx, err)
+		}
+	}()
 
-	now := time.Now().UTC()
-	_, err = s.db.Exec(
-		"INSERT INTO revocations (client_id, tenant, reason, revoked_at, revoked_by, note) VALUES ($1, $2, $3, $4, $5, $6)",
-		clientID, tenant, string(reason), now, revokedBy, note,
+	res, err := tx.Exec(
+		"INSERT INTO revocations (client_id, tenant, reason, "+
+			"revoked_at, revoked_by, note) "+
+			"VALUES ($1, $2, $3, $4, $5, $6) "+
+			"ON CONFLICT (client_id) DO NOTHING",
+		clientID, tenant, string(reason), time.Now().UTC(), revokedBy,
+		note,
 	)
 	if err != nil {
 		return err
 	}
-
-	if s.auditLog != nil {
-		if err := s.auditLog.Log(tenant, "revoke", clientID, string(reason), revokedBy, note); err != nil {
-			return err
-		}
+	if n, err := res.RowsAffected(); err != nil {
+		return err
+	} else if n == 0 {
+		return ErrAlreadyRevoked
 	}
 
-	return nil
+	return commitAudited(tx, s.auditLog, tenant, "revoke", clientID,
+		string(reason), revokedBy, note)
 }
 
-func (s *PostgresRevocationStore) IsRevoked(clientID string) (*RevocationEntry, bool) {
+func (s *PostgresRevocationStore) IsRevoked(clientID string,
+) (*RevocationEntry, bool, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
@@ -68,35 +74,44 @@ func (s *PostgresRevocationStore) IsRevoked(clientID string) (*RevocationEntry, 
 		"SELECT client_id, tenant, reason, revoked_at, revoked_by, note FROM revocations WHERE client_id = $1",
 		clientID,
 	).Scan(&entry.ClientID, &entry.Tenant, &reason, &entry.RevokedAt, &entry.RevokedBy, &entry.Note)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, false, nil
+	}
 	if err != nil {
-		return nil, false
+		return nil, false, err
 	}
 
 	entry.Reason = RevocationReason(reason)
-	return &entry, true
+	return &entry, true, nil
 }
 
-func (s *PostgresRevocationStore) Unrevoke(clientID, reason, actor, note string) error {
+func (s *PostgresRevocationStore) Unrevoke(clientID, reason, actor, note string) (err error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if err != nil {
+			err = rollbackOnErr(tx, err)
+		}
+	}()
+
 	// deleted row carries the tenant the audit entry records
 	var tenant string
-	err := s.db.QueryRow("DELETE FROM revocations WHERE client_id = $1 RETURNING tenant", clientID).Scan(&tenant)
-	if err == sql.ErrNoRows {
+	err = tx.QueryRow("DELETE FROM revocations WHERE client_id = $1 "+
+		"RETURNING tenant", clientID).Scan(&tenant)
+	if errors.Is(err, sql.ErrNoRows) {
 		return ErrNotRevoked
 	}
 	if err != nil {
 		return err
 	}
 
-	if s.auditLog != nil {
-		if err := s.auditLog.Log(tenant, "unrevoke", clientID, reason, actor, note); err != nil {
-			return err
-		}
-	}
-
-	return nil
+	return commitAudited(tx, s.auditLog, tenant, "unrevoke", clientID,
+		reason, actor, note)
 }
 
 func (s *PostgresRevocationStore) ListRevocations() []RevocationEntry {
@@ -135,36 +150,40 @@ func NewPostgresBanStore(db *sql.DB, auditLog AuditLog) *PostgresBanStore {
 	return &PostgresBanStore{db: db, auditLog: auditLog}
 }
 
-func (s *PostgresBanStore) BanHardware(tenant string, hardwareID [32]byte, reason RevocationReason, bannedBy, note string) error {
-	var existing []byte
-	err := s.db.QueryRow("SELECT hardware_id FROM hardware_bans WHERE tenant = $1 AND hardware_id = $2",
-		tenant, hardwareID[:]).Scan(&existing)
-	if err == nil {
-		return ErrAlreadyBanned
-	}
-	if err != sql.ErrNoRows {
+func (s *PostgresBanStore) BanHardware(tenant string, hardwareID [32]byte, reason RevocationReason, bannedBy, note string) (err error) {
+	tx, err := s.db.Begin()
+	if err != nil {
 		return err
 	}
+	defer func() {
+		if err != nil {
+			err = rollbackOnErr(tx, err)
+		}
+	}()
 
-	now := time.Now().UTC()
-	_, err = s.db.Exec(
-		"INSERT INTO hardware_bans (tenant, hardware_id, reason, banned_at, banned_by, note) VALUES ($1, $2, $3, $4, $5, $6)",
-		tenant, hardwareID[:], string(reason), now, bannedBy, note,
+	res, err := tx.Exec(
+		"INSERT INTO hardware_bans (tenant, hardware_id, reason, "+
+			"banned_at, banned_by, note) "+
+			"VALUES ($1, $2, $3, $4, $5, $6) "+
+			"ON CONFLICT (tenant, hardware_id) DO NOTHING",
+		tenant, hardwareID[:], string(reason), time.Now().UTC(),
+		bannedBy, note,
 	)
 	if err != nil {
 		return err
 	}
-
-	if s.auditLog != nil {
-		if err := s.auditLog.Log(tenant, "ban", FormatHardwareID(hardwareID), string(reason), bannedBy, note); err != nil {
-			return err
-		}
+	if n, err := res.RowsAffected(); err != nil {
+		return err
+	} else if n == 0 {
+		return ErrAlreadyBanned
 	}
 
-	return nil
+	return commitAudited(tx, s.auditLog, tenant, "ban",
+		FormatHardwareID(hardwareID), string(reason), bannedBy, note)
 }
 
-func (s *PostgresBanStore) IsBanned(tenant string, hardwareID [32]byte) (*BanEntry, bool) {
+func (s *PostgresBanStore) IsBanned(tenant string, hardwareID [32]byte,
+) (*BanEntry, bool, error) {
 	var entry BanEntry
 	var hwid []byte
 	var reason string
@@ -172,20 +191,33 @@ func (s *PostgresBanStore) IsBanned(tenant string, hardwareID [32]byte) (*BanEnt
 		"SELECT tenant, hardware_id, reason, banned_at, banned_by, note FROM hardware_bans WHERE tenant = $1 AND hardware_id = $2",
 		tenant, hardwareID[:],
 	).Scan(&entry.Tenant, &hwid, &reason, &entry.BannedAt, &entry.BannedBy, &entry.Note)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, false, nil
+	}
 	if err != nil {
-		return nil, false
+		return nil, false, err
 	}
 
 	if len(hwid) == 32 {
 		copy(entry.HardwareID[:], hwid)
 	}
 	entry.Reason = RevocationReason(reason)
-	return &entry, true
+	return &entry, true, nil
 }
 
-func (s *PostgresBanStore) UnbanHardware(tenant string, hardwareID [32]byte, reason, actor, note string) error {
-	result, err := s.db.Exec("DELETE FROM hardware_bans WHERE tenant = $1 AND hardware_id = $2",
-		tenant, hardwareID[:])
+func (s *PostgresBanStore) UnbanHardware(tenant string, hardwareID [32]byte, reason, actor, note string) (err error) {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if err != nil {
+			err = rollbackOnErr(tx, err)
+		}
+	}()
+
+	result, err := tx.Exec("DELETE FROM hardware_bans "+
+		"WHERE tenant = $1 AND hardware_id = $2", tenant, hardwareID[:])
 	if err != nil {
 		return err
 	}
@@ -198,13 +230,8 @@ func (s *PostgresBanStore) UnbanHardware(tenant string, hardwareID [32]byte, rea
 		return ErrNotBanned
 	}
 
-	if s.auditLog != nil {
-		if err := s.auditLog.Log(tenant, "unban", FormatHardwareID(hardwareID), reason, actor, note); err != nil {
-			return err
-		}
-	}
-
-	return nil
+	return commitAudited(tx, s.auditLog, tenant, "unban",
+		FormatHardwareID(hardwareID), reason, actor, note)
 }
 
 func (s *PostgresBanStore) ListBans() []BanEntry {
@@ -340,6 +367,18 @@ func NewPostgresAuditLog(db *sql.DB) *PostgresAuditLog {
 func (l *PostgresAuditLog) Log(tenant, action, targetID, reason, actor, note string) error {
 	_, err := l.db.Exec(
 		"INSERT INTO audit_log (timestamp, tenant, action, target_id, reason, actor, note) VALUES ($1, $2, $3, $4, $5, $6, $7)",
+		time.Now().UTC(), tenant, action, targetID, reason, actor, note,
+	)
+	return err
+}
+
+func (l *PostgresAuditLog) logTx(tx *sql.Tx,
+	tenant, action, targetID, reason, actor, note string,
+) error {
+	_, err := tx.Exec(
+		"INSERT INTO audit_log (timestamp, tenant, action, "+
+			"target_id, reason, actor, note) "+
+			"VALUES ($1, $2, $3, $4, $5, $6, $7)",
 		time.Now().UTC(), tenant, action, targetID, reason, actor, note,
 	)
 	return err

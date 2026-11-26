@@ -32,7 +32,6 @@ const (
 	maxJSONBodyBytes = 1 << 20
 	maxJSONDepth     = 64
 	maxJSONTokens    = 32768
-	maxClientOffset  = 10000
 	maxDetailChars   = 2048
 )
 
@@ -211,11 +210,22 @@ func scopedToTenants(p *Principal) bool {
 
 // clientTenant returns the tenant of a client, the default tenant when
 // ClientInfo finds none.
-func (h *APIHandler) clientTenant(clientID string) string {
-	if info, found := h.verifier.ClientInfo(clientID); found {
-		return info.Tenant
+func (h *APIHandler) clientTenant(clientID string) (string, error) {
+	info, found, err := h.verifier.ClientInfo(clientID)
+	if err != nil {
+		return "", err
 	}
-	return verify.DefaultTenant
+	if found {
+		return info.Tenant, nil
+	}
+	return verify.DefaultTenant, nil
+}
+
+// writeStoreError answers a request a store could not serve.
+func (h *APIHandler) writeStoreError(w http.ResponseWriter, err error) {
+	h.log.Error("store read failed", "error", err)
+	writeJSONStatus(w, http.StatusInternalServerError,
+		errorResponse{Error: "database unavailable"})
 }
 
 func withPrincipal(r *http.Request, p *Principal) *http.Request {
@@ -378,28 +388,27 @@ type statsResponse struct {
 	Tenants           []string `json:"tenants,omitempty"`
 }
 
+// clientListResponse is one page of clients; Next is the after cursor of
+// the following page, empty on the last one.
 type clientListResponse struct {
 	Clients []string `json:"clients"`
 	Count   int      `json:"count"`
-	Total   int      `json:"total"`
-	Limit   int      `json:"limit"`
-	Offset  int      `json:"offset"`
+	Next    string   `json:"next,omitempty"`
 }
 
 type clientInfoResponse struct {
-	ClientID          string `json:"client_id"`
-	Tenant            string `json:"tenant"`
-	HardwareID        string `json:"hardware_id,omitempty"`
-	Revoked           bool   `json:"revoked"`
-	RevocationReason  string `json:"revocation_reason,omitempty"`
-	LastAttestation   string `json:"last_attestation,omitempty"`
-	LastAttestUnix    int64  `json:"last_attestation_unix,omitempty"`
-	AttestCount       uint64 `json:"attestation_count"`
-	MonotonicCounter  uint64 `json:"monotonic_counter"`
-	PendingChallenges int    `json:"pending_challenges"`
-	PCR14Baseline     string `json:"pcr14_baseline,omitempty"`
-	FirstSeen         string `json:"first_seen,omitempty"`
-	FirstSeenUnix     int64  `json:"first_seen_unix,omitempty"`
+	ClientID         string `json:"client_id"`
+	Tenant           string `json:"tenant"`
+	HardwareID       string `json:"hardware_id,omitempty"`
+	Revoked          bool   `json:"revoked"`
+	RevocationReason string `json:"revocation_reason,omitempty"`
+	LastAttestation  string `json:"last_attestation,omitempty"`
+	LastAttestUnix   int64  `json:"last_attestation_unix,omitempty"`
+	AttestCount      uint64 `json:"attestation_count"`
+	MonotonicCounter uint64 `json:"monotonic_counter"`
+	PCR14Baseline    string `json:"pcr14_baseline,omitempty"`
+	FirstSeen        string `json:"first_seen,omitempty"`
+	FirstSeenUnix    int64  `json:"first_seen_unix,omitempty"`
 
 	MachineKeys *verify.MachineKeys `json:"machine_keys,omitempty"`
 }
@@ -468,7 +477,12 @@ func (h *APIHandler) handleStats(w http.ResponseWriter, r *http.Request) {
 
 		registered := 0
 		for _, id := range h.verifier.ListClients() {
-			if info, found := h.verifier.ClientInfo(id); found && p.AllowsTenant(info.Tenant) {
+			info, found, err := h.verifier.ClientInfo(id)
+			if err != nil {
+				h.writeStoreError(w, err)
+				return
+			}
+			if found && p.AllowsTenant(info.Tenant) {
 				registered++
 			}
 		}
@@ -519,89 +533,36 @@ func (h *APIHandler) handleListClients(w http.ResponseWriter, r *http.Request) {
 		maxLimit     = 1000
 	)
 
-	limit, offset, err := parsePagination(r, defaultLimit, maxLimit)
-	if err != nil {
-		writeJSONStatus(w, http.StatusBadRequest, errorResponse{Error: err.Error()})
-		return
-	}
-
-	// the store pages the global view only,
-	// so a scoped key pages the filtered list here
-	if p := requestPrincipal(r); scopedToTenants(p) {
-		all := h.verifier.ListClients()
-		visible := make([]string, 0, len(all))
-		for _, id := range all {
-			if info, found := h.verifier.ClientInfo(id); found && p.AllowsTenant(info.Tenant) {
-				visible = append(visible, id)
-			}
-		}
-		sort.Strings(visible)
-
-		page := []string{}
-		if offset < len(visible) {
-			end := offset + limit
-			if end > len(visible) {
-				end = len(visible)
-			}
-			page = visible[offset:end]
-		}
-		writeJSON(w, clientListResponse{
-			Clients: page,
-			Count:   len(page),
-			Total:   len(visible),
-			Limit:   limit,
-			Offset:  offset,
+	q := r.URL.Query()
+	if q.Has("offset") {
+		writeJSONStatus(w, http.StatusBadRequest, errorResponse{
+			Error: "offset pagination is not supported for " +
+				"clients; use the after cursor",
 		})
 		return
 	}
 
-	// clients with a baseline first, then those only this instance knows
-	total := h.verifier.CountDurableClients()
+	limit := defaultLimit
+	parsed, err := strconv.Atoi(q.Get("limit"))
+	if err == nil && parsed > 0 {
+		limit = min(parsed, maxLimit)
+	}
 
-	clients, err := h.verifier.DurableClientsPage(limit, offset)
+	var tenants []string
+	if p := requestPrincipal(r); scopedToTenants(p) {
+		tenants = sortedTenantSet(p)
+	}
+
+	clients, err := h.verifier.ClientsPage(tenants, q.Get("after"), limit)
 	if err != nil {
-		h.log.Error("failed to list clients page", "error", err)
-		writeJSONStatus(w, http.StatusInternalServerError, errorResponse{Error: "database unavailable"})
+		h.writeStoreError(w, err)
 		return
 	}
 
-	instanceOnly := make([]string, 0)
-	for _, id := range h.verifier.ListClients() {
-		if !h.verifier.IsDurableClient(id) {
-			instanceOnly = append(instanceOnly, id)
-		}
+	resp := clientListResponse{Clients: clients, Count: len(clients)}
+	if len(clients) == limit {
+		resp.Next = clients[len(clients)-1]
 	}
-	sort.Strings(instanceOnly)
-	total += len(instanceOnly)
-
-	if len(clients) < limit {
-		instanceOffset := 0
-		if offset > total-len(instanceOnly) {
-			instanceOffset = offset - (total - len(instanceOnly))
-		}
-
-		if instanceOffset < len(instanceOnly) {
-			need := limit - len(clients)
-			end := instanceOffset + need
-			if end > len(instanceOnly) {
-				end = len(instanceOnly)
-			}
-			clients = append(clients, instanceOnly[instanceOffset:end]...)
-		}
-	}
-
-	if clients == nil {
-		clients = []string{}
-	}
-
-	resp := clientListResponse{
-		Clients: clients,
-		Count:   len(clients),
-		Total:   total,
-		Limit:   limit,
-		Offset:  offset,
-	}
-
 	writeJSON(w, resp)
 }
 
@@ -614,7 +575,11 @@ func (h *APIHandler) handleClientInfo(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	info, found := h.verifier.ClientInfo(clientID)
+	info, found, err := h.verifier.ClientInfo(clientID)
+	if err != nil {
+		h.writeStoreError(w, err)
+		return
+	}
 	if !found {
 		writeJSONStatus(w, http.StatusNotFound, errorResponse{Error: "client not found"})
 		return
@@ -626,16 +591,15 @@ func (h *APIHandler) handleClientInfo(w http.ResponseWriter, r *http.Request) {
 	}
 
 	resp := clientInfoResponse{
-		ClientID:          info.ClientID,
-		Tenant:            info.Tenant,
-		HardwareID:        info.HardwareID,
-		Revoked:           info.Revoked,
-		RevocationReason:  info.RevocationReason,
-		AttestCount:       info.AttestCount,
-		MonotonicCounter:  info.MonotonicCounter,
-		PendingChallenges: info.PendingChallenges,
-		PCR14Baseline:     info.PCR14Baseline,
-		MachineKeys:       info.MachineKeys,
+		ClientID:         info.ClientID,
+		Tenant:           info.Tenant,
+		HardwareID:       info.HardwareID,
+		Revoked:          info.Revoked,
+		RevocationReason: info.RevocationReason,
+		AttestCount:      info.AttestCount,
+		MonotonicCounter: info.MonotonicCounter,
+		PCR14Baseline:    info.PCR14Baseline,
+		MachineKeys:      info.MachineKeys,
 	}
 
 	if !info.LastAttestation.IsZero() {
@@ -739,13 +703,18 @@ func (h *APIHandler) handleRevokeClient(w http.ResponseWriter, r *http.Request, 
 		return
 	}
 
-	tenant := h.clientTenant(clientID)
+	tenant, err := h.clientTenant(clientID)
+	if err != nil {
+		h.writeStoreError(w, err)
+		return
+	}
 	if !principalAllowsTenant(requestPrincipal(r), tenant) {
 		writeJSONStatus(w, http.StatusNotFound, errorResponse{Error: "client not found"})
 		return
 	}
 
-	err := revStore.Revoke(tenant, clientID, store.RevocationReason(req.Reason), req.Actor, req.Note)
+	err = revStore.Revoke(tenant, clientID,
+		store.RevocationReason(req.Reason), req.Actor, req.Note)
 	if err != nil {
 		if err == store.ErrAlreadyRevoked {
 			writeJSONStatus(w, http.StatusConflict, errorResponse{Error: "client is already revoked"})
@@ -795,7 +764,11 @@ func (h *APIHandler) handleUnrevokeClient(w http.ResponseWriter, r *http.Request
 
 	// a revocation in another tenant reads as absent
 	if scopedToTenants(requestPrincipal(r)) {
-		entry, revoked := revStore.IsRevoked(clientID)
+		entry, revoked, err := revStore.IsRevoked(clientID)
+		if err != nil {
+			h.writeStoreError(w, err)
+			return
+		}
 		if !revoked || !principalAllowsTenant(requestPrincipal(r), entry.Tenant) {
 			writeJSONStatus(w, http.StatusNotFound, errorResponse{Error: "client is not revoked"})
 			return
@@ -879,33 +852,6 @@ type banListResponse struct {
 	Total  int           `json:"total"`
 	Limit  int           `json:"limit"`
 	NextID string        `json:"next_id,omitempty"`
-}
-
-func parsePagination(r *http.Request, defaultLimit, maxLimit int) (limit, offset int, err error) {
-	limit = defaultLimit
-	offset = 0
-
-	if l := r.URL.Query().Get("limit"); l != "" {
-		if parsed, err := strconv.Atoi(l); err == nil && parsed > 0 {
-			limit = parsed
-		}
-	}
-
-	if o := r.URL.Query().Get("offset"); o != "" {
-		if parsed, err := strconv.Atoi(o); err == nil && parsed >= 0 {
-			offset = parsed
-		}
-	}
-
-	if limit > maxLimit {
-		limit = maxLimit
-	}
-
-	if offset > maxClientOffset {
-		return 0, 0, fmt.Errorf("offset exceeds maximum (%d)", maxClientOffset)
-	}
-
-	return limit, offset, nil
 }
 
 func (h *APIHandler) handleBanHardware(w http.ResponseWriter, r *http.Request) {
@@ -1494,7 +1440,12 @@ func (h *APIHandler) handleReanchorReviewList(w http.ResponseWriter, r *http.Req
 	if p := requestPrincipal(r); scopedToTenants(p) {
 		visible := make([]string, 0, len(clients))
 		for _, id := range clients {
-			if p.AllowsTenant(h.clientTenant(id)) {
+			tenant, err := h.clientTenant(id)
+			if err != nil {
+				h.writeStoreError(w, err)
+				return
+			}
+			if p.AllowsTenant(tenant) {
 				visible = append(visible, id)
 			}
 		}
@@ -1534,7 +1485,11 @@ func (h *APIHandler) handleReanchorReviewAck(w http.ResponseWriter, r *http.Requ
 
 	logID := sanitizeLogField(clientID)
 
-	tenant := h.clientTenant(clientID)
+	tenant, err := h.clientTenant(clientID)
+	if err != nil {
+		h.writeStoreError(w, err)
+		return
+	}
 	if !principalAllowsTenant(requestPrincipal(r), tenant) {
 		writeJSONStatus(w, http.StatusNotFound, errorResponse{Error: "client not found"})
 		return
@@ -1608,7 +1563,11 @@ func (h *APIHandler) handleForceReanchor(w http.ResponseWriter, r *http.Request)
 
 	logID := sanitizeLogField(clientID)
 
-	tenant := h.clientTenant(clientID)
+	tenant, err := h.clientTenant(clientID)
+	if err != nil {
+		h.writeStoreError(w, err)
+		return
+	}
 	if !principalAllowsTenant(requestPrincipal(r), tenant) {
 		writeJSONStatus(w, http.StatusNotFound, errorResponse{Error: "client not found"})
 		return
@@ -1665,7 +1624,11 @@ func (h *APIHandler) handleDeleteClient(w http.ResponseWriter, r *http.Request, 
 	logID := sanitizeLogField(clientID)
 
 	// resolve the tenant before the delete removes the baseline row
-	tenant := h.clientTenant(clientID)
+	tenant, err := h.clientTenant(clientID)
+	if err != nil {
+		h.writeStoreError(w, err)
+		return
+	}
 	if !principalAllowsTenant(requestPrincipal(r), tenant) {
 		writeJSONStatus(w, http.StatusNotFound, errorResponse{Error: "client not found"})
 		return

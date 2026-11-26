@@ -132,6 +132,10 @@ var pgMigrations = []migration{
 
 			CREATE INDEX idx_baseline_archive_client ON baseline_archive(client_id);
 
+			CREATE TABLE forced_reanchors (
+				client_id TEXT PRIMARY KEY
+			);
+
 			CREATE TABLE shard_identity (
 				singleton  BOOLEAN PRIMARY KEY DEFAULT TRUE CHECK (singleton),
 				id         TEXT NOT NULL,

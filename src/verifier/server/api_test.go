@@ -133,18 +133,20 @@ func TestPostBodyRejectsDeepJSONNesting(t *testing.T) {
 	}
 }
 
-func TestListClients_RejectsExcessiveOffset(t *testing.T) {
+func TestListClients_RejectsOffset(t *testing.T) {
 	mux, _ := setupTestAPI(t)
 
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/clients?offset=999999999", nil)
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/clients?offset=0",
+		nil)
 	rr := httptest.NewRecorder()
 
 	mux.ServeHTTP(rr, req)
 	if rr.Code != http.StatusBadRequest {
 		t.Fatalf("expected 400, got %d body=%s", rr.Code, rr.Body.String())
 	}
-	if !strings.Contains(rr.Body.String(), "offset exceeds maximum") {
-		t.Fatalf("expected offset-limit error, got body=%q", rr.Body.String())
+	if !strings.Contains(rr.Body.String(), "use the after cursor") {
+		t.Fatalf("expected the cursor error, got body=%q",
+			rr.Body.String())
 	}
 }
 
@@ -363,7 +365,7 @@ func buildSignedReport(t *testing.T, clientID string, nonce [32]byte, pcr14 [32]
 	copy(bindingReport.System.IOMMU.CmdlineParam[:], []byte("intel_iommu=on"))
 
 	bindingNonce := verify.ComputeAttestationBindingNonce(nonce, bindingReport)
-	attestData := buildTPMSAttest(bindingNonce[:], pcrDigest)
+	attestData := buildTPMSAttest(bindingNonce[:], pcrDigest, 0x00004083)
 
 	hash := sha256.Sum256(attestData)
 	signature, err := rsa.SignPKCS1v15(rand.Reader, key, crypto.SHA256, hash[:])
@@ -552,7 +554,7 @@ func buildMinimalEventLog() []byte {
 }
 
 // builds minimal TPMS_ATTEST with embedded nonce and PCR digest
-func buildTPMSAttest(nonce []byte, pcrDigest []byte) []byte {
+func buildTPMSAttest(nonce, pcrDigest []byte, pcrMask uint32) []byte {
 	buf := make([]byte, 0, 128)
 
 	// Magic: TPM_GENERATED_VALUE
@@ -573,9 +575,9 @@ func buildTPMSAttest(nonce []byte, pcrDigest []byte) []byte {
 	buf = append(buf, 0x00, 0x00, 0x00, 0x01) // count
 	buf = append(buf, 0x00, 0x0b)             // SHA256
 	buf = append(buf, 0x03)                   // sizeofSelect
-	buf = append(buf, 0x03, 0x00, 0x40)       // PCR 0,1,14
-	buf = append(buf, 0x00, 0x20)             // digest size
-	buf = append(buf, pcrDigest[:32]...)      // PCR digest
+	buf = append(buf, byte(pcrMask), byte(pcrMask>>8), byte(pcrMask>>16))
+	buf = append(buf, 0x00, 0x20)        // digest size
+	buf = append(buf, pcrDigest[:32]...) // PCR digest
 
 	return buf
 }
@@ -1141,6 +1143,13 @@ func TestIntegrationAPI_MultipleAttestationsSameClient(t *testing.T) {
 	rec := httptest.NewRecorder()
 	mux.ServeHTTP(rec, req)
 
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(rec.Body.Bytes(), &raw); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if _, ok := raw["pending_challenges"]; ok {
+		t.Error("client info carries a per-client pending_challenges")
+	}
 	var resp clientInfoResponse
 	json.NewDecoder(rec.Body).Decode(&resp)
 
@@ -1152,9 +1161,6 @@ func TestIntegrationAPI_MultipleAttestationsSameClient(t *testing.T) {
 	}
 	if resp.LastAttestation == "" {
 		t.Errorf("Expected non-empty last_attestation for persistent ID")
-	}
-	if resp.PendingChallenges != 0 {
-		t.Errorf("pending_challenges: got %d, want 0 (all consumed)", resp.PendingChallenges)
 	}
 
 	// verify global stats
@@ -1618,7 +1624,7 @@ func TestForceReanchor_ClearsBaselineAndAudits(t *testing.T) {
 	mux, v := setupTestAPIWithKey(t, "test-admin-key")
 	clientID := attestTestClient(t, v, "force-reanchor")
 
-	info, found := v.ClientInfo(clientID)
+	info, found := clientInfoOf(t, v, clientID)
 	if !found || info.PCR14Baseline == "" {
 		t.Fatalf("expected a pinned baseline before re-anchor, got %+v", info)
 	}
@@ -1634,7 +1640,7 @@ func TestForceReanchor_ClearsBaselineAndAudits(t *testing.T) {
 		t.Fatalf("expected 200, got %d: %s", rr.Code, rr.Body.String())
 	}
 
-	info, found = v.ClientInfo(clientID)
+	info, found = clientInfoOf(t, v, clientID)
 	if !found {
 		t.Fatal("client disappeared after re-anchor")
 	}
@@ -1726,7 +1732,7 @@ func TestDeleteClient_RemovesTrustState(t *testing.T) {
 	// nonce-store history (monotonic counter) survives on purpose,
 	// so the client may still be listed
 	// trust material must be gone
-	if info, found := v.ClientInfo(clientID); found {
+	if info, found := clientInfoOf(t, v, clientID); found {
 		if info.PCR14Baseline != "" {
 			t.Errorf("baseline survived delete: %s", info.PCR14Baseline)
 		}
@@ -1769,8 +1775,9 @@ func TestDeleteClient_RevocationSurvives(t *testing.T) {
 
 	// deletion must not shed the revocation:
 	// re-enrolled client with the same identity stays revoked
-	if _, revoked := v.RevocationStore().IsRevoked(clientID); !revoked {
-		t.Error("revocation did not survive client deletion")
+	_, revoked, err := v.RevocationStore().IsRevoked(clientID)
+	if err != nil || !revoked {
+		t.Errorf("revocation did not survive client deletion: %v", err)
 	}
 }
 
@@ -1896,4 +1903,15 @@ func TestMethodRefusalNamesTheMethodsTheEndpointTakes(t *testing.T) {
 			t.Errorf("Allow = %q, missing the %s this path serves", allow, method)
 		}
 	}
+}
+
+// clientInfoOf reads the client's record; a store error fails the test.
+func clientInfoOf(t *testing.T, v *verify.Verifier, id string,
+) (*verify.ClientInfo, bool) {
+	t.Helper()
+	info, found, err := v.ClientInfo(id)
+	if err != nil {
+		t.Fatalf("ClientInfo(%s): %v", id, err)
+	}
+	return info, found
 }

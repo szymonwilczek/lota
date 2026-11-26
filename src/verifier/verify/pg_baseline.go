@@ -19,6 +19,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strconv"
 	"time"
 
 	"github.com/szymonwilczek/lota/verifier/types"
@@ -241,7 +242,8 @@ func (s *PostgresBaselineStore) CheckAndUpdateAgentHash(clientID string,
 	}
 }
 
-func (s *PostgresBaselineStore) GetBaseline(clientID string) *ClientBaseline {
+func (s *PostgresBaselineStore) GetBaseline(clientID string,
+) (*ClientBaseline, error) {
 	var storedPCR14 []byte
 	var firstSeen, lastSeen time.Time
 	var attestCount uint64
@@ -250,8 +252,11 @@ func (s *PostgresBaselineStore) GetBaseline(clientID string) *ClientBaseline {
 		"SELECT pcr14, first_seen, last_seen, attest_count FROM baselines WHERE client_id = $1",
 		clientID,
 	).Scan(&storedPCR14, &firstSeen, &lastSeen, &attestCount)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
 	if err != nil {
-		return nil
+		return nil, err
 	}
 
 	var pcr14 [types.HashSize]byte
@@ -264,12 +269,13 @@ func (s *PostgresBaselineStore) GetBaseline(clientID string) *ClientBaseline {
 		FirstSeen:   firstSeen,
 		LastSeen:    lastSeen,
 		AttestCount: attestCount,
-	}
+	}, nil
 }
 
 // GetBootBaseline implements BootBaselineReader. A row with NULL boot
 // columns has no boot baseline.
-func (s *PostgresBaselineStore) GetBootBaseline(clientID string) *BootBaseline {
+func (s *PostgresBaselineStore) GetBootBaseline(clientID string,
+) (*BootBaseline, error) {
 	var (
 		pcr0, pcr1, pcr7    []byte
 		bootFirst, bootLast sql.NullTime
@@ -278,11 +284,14 @@ func (s *PostgresBaselineStore) GetBootBaseline(clientID string) *BootBaseline {
 		"SELECT pcr0, pcr1, pcr7, boot_first_seen, boot_last_seen FROM baselines WHERE client_id = $1",
 		clientID,
 	).Scan(&pcr0, &pcr1, &pcr7, &bootFirst, &bootLast)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
 	if err != nil {
-		return nil
+		return nil, err
 	}
 	if len(pcr0) == 0 && len(pcr1) == 0 && len(pcr7) == 0 {
-		return nil
+		return nil, nil
 	}
 
 	out := BootBaseline{}
@@ -301,7 +310,7 @@ func (s *PostgresBaselineStore) GetBootBaseline(clientID string) *BootBaseline {
 	if bootLast.Valid {
 		out.LastSeen = bootLast.Time
 	}
-	return &out
+	return &out, nil
 }
 
 func (s *PostgresBaselineStore) ClearBaseline(clientID string) error {
@@ -369,24 +378,16 @@ func (s *PostgresBaselineStore) ListClients() []string {
 	return clients
 }
 
-// ListClientsPage returns one page of client IDs, ordered by client ID.
-func (s *PostgresBaselineStore) ListClientsPage(limit, offset int) ([]string, error) {
-	rows, err := s.db.Query(
-		"SELECT client_id FROM baselines ORDER BY client_id LIMIT $1 OFFSET $2", limit, offset)
+func (s *PostgresBaselineStore) ListClientsAfter(tenants []string,
+	after string, limit int,
+) ([]string, error) {
+	q, args := clientsAfterQuery(tenants, after, limit,
+		func(n int) string { return "$" + strconv.Itoa(n) })
+	rows, err := s.db.Query(q, args...)
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
-
-	clients := []string{}
-	for rows.Next() {
-		var id string
-		if err := rows.Scan(&id); err != nil {
-			return nil, err
-		}
-		clients = append(clients, id)
-	}
-	return clients, rows.Err()
+	return scanClientIDs(rows)
 }
 
 func (s *PostgresBaselineStore) Stats() BaselineStats {
@@ -517,7 +518,7 @@ func (s *PostgresBaselineStore) CheckAndUpdateBootPCRs(clientID string, boot Boo
 // transaction under lockClient. A branch that does not commit rolls back.
 func (s *PostgresBaselineStore) CheckAndUpdateAttestation(clientID string,
 	pcr14, agentHash [types.HashSize]byte,
-	boot *BootBaseline,
+	boot *BootBaseline, consent bool,
 ) AttestationOutcome {
 	ctx := context.Background()
 	outcome := AttestationOutcome{BootProvided: boot != nil, PCR14Result: TOFUError}
@@ -539,6 +540,24 @@ func (s *PostgresBaselineStore) CheckAndUpdateAttestation(clientID string,
 			}
 		}
 	}()
+
+	spent := func() bool {
+		res, err := tx.ExecContext(ctx,
+			"DELETE FROM forced_reanchors WHERE client_id = $1", clientID)
+		var n int64
+		if err == nil {
+			n, err = res.RowsAffected()
+		}
+		if err != nil || n == 0 {
+			slog.Error("attestation tx: forced re-anchor consent not spent",
+				"client_id", clientID, "error", err)
+			outcome.AgentHashResult = TOFUError
+			outcome.PCR14Result = TOFUError
+			outcome.BootResult = TOFUError
+			return false
+		}
+		return true
+	}
 
 	if err := lockClient(ctx, tx, clientID); err != nil {
 		slog.Error("attestation tx: advisory lock failed", "client_id", clientID, "error", err)
@@ -568,6 +587,9 @@ func (s *PostgresBaselineStore) CheckAndUpdateAttestation(clientID string,
 	switch {
 	case err == sql.ErrNoRows:
 		if boot != nil {
+			if consent && !spent() {
+				return outcome
+			}
 			if _, err := tx.ExecContext(ctx, `
 				INSERT INTO baselines (
 					client_id, pcr14, agent_hash, first_seen, last_seen,
@@ -678,6 +700,9 @@ func (s *PostgresBaselineStore) CheckAndUpdateAttestation(clientID string,
 	bootZero := len(storedPCR0) == 0 && len(storedPCR1) == 0 && len(storedPCR7) == 0
 	if boot != nil {
 		if bootZero {
+			if consent && !spent() {
+				return outcome
+			}
 			outcome.BootResult = TOFUFirstUse
 		} else {
 			var storedBoot BootBaseline
@@ -1076,6 +1101,40 @@ func (s *PostgresBaselineStore) AcknowledgeLFAReview(clientID string) error {
 		return ErrNoReviewPending
 	}
 	return nil
+}
+
+// MarkForcedReanchor implements ForcedReanchorStorer.
+func (s *PostgresBaselineStore) MarkForcedReanchor(clientID string) error {
+	_, err := s.db.ExecContext(context.Background(),
+		"INSERT INTO forced_reanchors (client_id) VALUES ($1) "+
+			"ON CONFLICT (client_id) DO NOTHING",
+		clientID)
+	return err
+}
+
+// HasForcedReanchor implements ForcedReanchorStorer.
+func (s *PostgresBaselineStore) HasForcedReanchor(clientID string,
+) (bool, error) {
+	var one int
+	err := s.db.QueryRowContext(context.Background(),
+		"SELECT 1 FROM forced_reanchors WHERE client_id = $1", clientID).
+		Scan(&one)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, nil
+	}
+	return err == nil, err
+}
+
+// TakeForcedReanchor implements ForcedReanchorStorer.
+func (s *PostgresBaselineStore) TakeForcedReanchor(clientID string,
+) (bool, error) {
+	res, err := s.db.ExecContext(context.Background(),
+		"DELETE FROM forced_reanchors WHERE client_id = $1", clientID)
+	if err != nil {
+		return false, err
+	}
+	n, err := res.RowsAffected()
+	return n > 0, err
 }
 
 // RecordKernelHash implements KernelHashRecorder.

@@ -190,7 +190,8 @@ func createValidReportWithEventLog(t *testing.T, clientID string, nonce [32]byte
 	copy(bindingReport.System.IOMMU.CmdlineParam[:], []byte("intel_iommu=on"))
 
 	bindingNonce := ComputeAttestationBindingNonce(nonce, bindingReport)
-	attestData := createTPMSAttestWithNonce(bindingNonce[:], pcrDigest)
+	attestData := createTPMSAttestWithNonce(bindingNonce[:],
+		pcrDigest, pcrMask)
 
 	hash := sha256.Sum256(attestData)
 	signature, err := rsa.SignPKCS1v15(rand.Reader, integrationTestKey, crypto.SHA256, hash[:])
@@ -275,7 +276,7 @@ func createValidReportWithEventLog(t *testing.T, clientID string, nonce [32]byte
 }
 
 // builds minimal TPMS_ATTEST structure with correct PCR digest
-func createTPMSAttestWithNonce(nonce []byte, pcrDigest []byte) []byte {
+func createTPMSAttestWithNonce(nonce, pcrDigest []byte, pcrMask uint32) []byte {
 	buf := make([]byte, 0, 128)
 
 	// Magic: TPM_GENERATED_VALUE
@@ -304,9 +305,9 @@ func createTPMSAttestWithNonce(nonce []byte, pcrDigest []byte) []byte {
 	buf = append(buf, 0x00, 0x00, 0x00, 0x01) // PCR selection count
 	buf = append(buf, 0x00, 0x0b)             // SHA256
 	buf = append(buf, 0x03)                   // sizeofSelect
-	buf = append(buf, 0x03, 0x00, 0x40)       // PCR 0,1,14
-	buf = append(buf, 0x00, 0x20)             // digest size
-	buf = append(buf, pcrDigest[:32]...)      // PCR digest
+	buf = append(buf, byte(pcrMask), byte(pcrMask>>8), byte(pcrMask>>16))
+	buf = append(buf, 0x00, 0x20)        // digest size
+	buf = append(buf, pcrDigest[:32]...) // PCR digest
 
 	return buf
 }
@@ -690,7 +691,8 @@ func createValidReportWithKey(clientID string, nonce [32]byte, pcr14 [32]byte, k
 	bindingReport.System.IOMMU.UnitCount = 2
 	copy(bindingReport.System.IOMMU.CmdlineParam[:], []byte("intel_iommu=on"))
 	bindingNonce := ComputeAttestationBindingNonce(nonce, bindingReport)
-	attestData := createTPMSAttestWithNonce(bindingNonce[:], pcrDigest)
+	attestData := createTPMSAttestWithNonce(bindingNonce[:],
+		pcrDigest, productionPCRMask)
 	hash := sha256.Sum256(attestData)
 	signature, _ := rsa.SignPKCS1v15(rand.Reader, key, crypto.SHA256, hash[:])
 
@@ -985,7 +987,7 @@ func TestClientInfo_BaselineOnlyClientIsFound(t *testing.T) {
 	pcr14[0] = 0x42
 	baselines.CheckAndUpdate("restart-survivor", pcr14)
 
-	info, found := verifier.ClientInfo("restart-survivor")
+	info, found := clientInfoOf(t, verifier, "restart-survivor")
 	if !found {
 		t.Fatal("client with a stored baseline reported as not found")
 	}

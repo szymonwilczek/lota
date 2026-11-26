@@ -165,6 +165,7 @@ func decodeAPIError(resp *http.Response) error {
 // has none and answers "ok".
 type Health struct {
 	Status    string `json:"status"`
+	Mode      string `json:"mode,omitempty"`
 	Uptime    string `json:"uptime"`
 	UptimeSec int64  `json:"uptime_sec"`
 	TLS       struct {
@@ -215,24 +216,24 @@ func (c *Client) Stats() (*Stats, error) {
 	return &s, nil
 }
 
-// ClientPage is one page of the GET /api/v1/clients listing.
+// ClientPage is one page of the GET /api/v1/clients listing. Next is the
+// after cursor of the following page, empty on the last one.
 type ClientPage struct {
 	Clients []string `json:"clients"`
 	Count   int      `json:"count"`
-	Total   int      `json:"total"`
-	Limit   int      `json:"limit"`
-	Offset  int      `json:"offset"`
+	Next    string   `json:"next,omitempty"`
 }
 
-// ListClients fetches one page of registered client IDs.
-// Zero limit and offset defer to the server defaults.
-func (c *Client) ListClients(limit, offset int) (*ClientPage, error) {
+// ListClients fetches up to limit client IDs that sort after after.
+// A zero limit defers to the server default; an empty after starts at
+// the first client.
+func (c *Client) ListClients(limit int, after string) (*ClientPage, error) {
 	q := url.Values{}
+	if after != "" {
+		q.Set("after", after)
+	}
 	if limit > 0 {
 		q.Set("limit", strconv.Itoa(limit))
-	}
-	if offset > 0 {
-		q.Set("offset", strconv.Itoa(offset))
 	}
 
 	var page ClientPage
@@ -244,19 +245,18 @@ func (c *Client) ListClients(limit, offset int) (*ClientPage, error) {
 
 // ClientInfo is the GET /api/v1/clients/{id} response.
 type ClientInfo struct {
-	ClientID          string `json:"client_id"`
-	Tenant            string `json:"tenant,omitempty"`
-	HardwareID        string `json:"hardware_id,omitempty"`
-	Revoked           bool   `json:"revoked"`
-	RevocationReason  string `json:"revocation_reason,omitempty"`
-	LastAttestation   string `json:"last_attestation,omitempty"`
-	LastAttestUnix    int64  `json:"last_attestation_unix,omitempty"`
-	AttestCount       uint64 `json:"attestation_count"`
-	MonotonicCounter  uint64 `json:"monotonic_counter"`
-	PendingChallenges int    `json:"pending_challenges"`
-	PCR14Baseline     string `json:"pcr14_baseline,omitempty"`
-	FirstSeen         string `json:"first_seen,omitempty"`
-	FirstSeenUnix     int64  `json:"first_seen_unix,omitempty"`
+	ClientID         string `json:"client_id"`
+	Tenant           string `json:"tenant,omitempty"`
+	HardwareID       string `json:"hardware_id,omitempty"`
+	Revoked          bool   `json:"revoked"`
+	RevocationReason string `json:"revocation_reason,omitempty"`
+	LastAttestation  string `json:"last_attestation,omitempty"`
+	LastAttestUnix   int64  `json:"last_attestation_unix,omitempty"`
+	AttestCount      uint64 `json:"attestation_count"`
+	MonotonicCounter uint64 `json:"monotonic_counter"`
+	PCR14Baseline    string `json:"pcr14_baseline,omitempty"`
+	FirstSeen        string `json:"first_seen,omitempty"`
+	FirstSeenUnix    int64  `json:"first_seen_unix,omitempty"`
 
 	MachineKeys *MachineKeys `json:"machine_keys,omitempty"`
 }

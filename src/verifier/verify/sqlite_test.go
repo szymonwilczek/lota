@@ -15,6 +15,7 @@ import (
 	"crypto/sha256"
 	"crypto/x509"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"sync"
 	"testing"
@@ -117,14 +118,14 @@ func TestSQLiteBaseline_GetBaseline(t *testing.T) {
 	bs := NewSQLiteBaselineStore(db)
 
 	// non-existent
-	if bs.GetBaseline("nobody") != nil {
+	if baselineOf(t, bs, "nobody") != nil {
 		t.Error("Expected nil for non-existent client")
 	}
 
 	pcr14 := [types.HashSize]byte{0xDE, 0xAD}
 	bs.CheckAndUpdate("get-client", pcr14)
 
-	baseline := bs.GetBaseline("get-client")
+	baseline := baselineOf(t, bs, "get-client")
 	if baseline == nil {
 		t.Fatal("Expected non-nil baseline")
 	}
@@ -133,6 +134,42 @@ func TestSQLiteBaseline_GetBaseline(t *testing.T) {
 	}
 
 	t.Log("✓ Baseline retrieval works")
+}
+
+// A store that cannot answer is not a store without the client.
+func TestSQLiteBaseline_ClosedDBIsAnError(t *testing.T) {
+	db, err := store.OpenDB(":memory:")
+	if err != nil {
+		t.Fatalf("OpenDB failed: %v", err)
+	}
+	bs := NewSQLiteBaselineStore(db)
+	bs.CheckAndUpdate("c", [types.HashSize]byte{0x11})
+
+	cfg := DefaultConfig()
+	cfg.BaselineStore = bs
+	v := NewVerifier(cfg, newCertVerifier(t))
+	db.Close()
+
+	if b, err := bs.GetBaseline("c"); err == nil {
+		t.Errorf("GetBaseline on a closed db: %+v, no error", b)
+	}
+	if b, err := bs.GetBootBaseline("c"); err == nil {
+		t.Errorf("GetBootBaseline on a closed db: %+v, no error", b)
+	}
+	if _, _, err := v.ClientInfo("c"); err == nil {
+		t.Error("ClientInfo on a closed db returned no error")
+	}
+	for name, op := range map[string]func(string) error{
+		"ForceReanchor":             v.ForceReanchor,
+		"DeleteClient":              v.DeleteClient,
+		"AcknowledgeReanchorReview": v.AcknowledgeReanchorReview,
+	} {
+		err := op("c")
+		if err == nil || errors.Is(err, ErrUnknownClient) {
+			t.Errorf("%s on a closed db: %v, want the store error",
+				name, err)
+		}
+	}
 }
 
 func TestSQLiteBaseline_ClearBaseline(t *testing.T) {
@@ -151,7 +188,7 @@ func TestSQLiteBaseline_ClearBaseline(t *testing.T) {
 
 	bs.ClearBaseline("clear-client")
 
-	if bs.GetBaseline("clear-client") != nil {
+	if baselineOf(t, bs, "clear-client") != nil {
 		t.Error("Baseline should be nil after clear")
 	}
 
@@ -186,6 +223,22 @@ func TestSQLiteBaseline_ListClients(t *testing.T) {
 	}
 
 	t.Log("✓ ListClients returns all baseline clients")
+}
+
+func TestSQLiteBaseline_CursorPaging(t *testing.T) {
+	open := func() *SQLiteBaselineStore {
+		db, err := store.OpenDB(":memory:")
+		if err != nil {
+			t.Fatalf("OpenDB failed: %v", err)
+		}
+		t.Cleanup(func() { db.Close() })
+		return NewSQLiteBaselineStore(db)
+	}
+
+	checkCursorPaging(t, open(), 50)
+
+	shards := []BaselineStorer{open(), open(), open()}
+	checkCursorPaging(t, NewShardedBaselineStore(shards), 120)
 }
 
 func TestSQLiteBaseline_Stats(t *testing.T) {
@@ -235,7 +288,7 @@ func TestSQLiteBaseline_Persistence(t *testing.T) {
 	// second instance (simulates restart)
 	bs2 := NewSQLiteBaselineStore(db)
 
-	baseline := bs2.GetBaseline("persist-client")
+	baseline := baselineOf(t, bs2, "persist-client")
 	if baseline == nil {
 		t.Fatal("Baseline lost after 'restart'!")
 	}
@@ -341,11 +394,11 @@ func TestSQLiteAtomicAttestation_ConcurrentSeed(t *testing.T) {
 	start := make(chan struct{})
 	go func() {
 		<-start
-		resCh <- result{out: bs.CheckAndUpdateAttestation(clientID, pcr14, agentHash, bootA)}
+		resCh <- result{out: bs.CheckAndUpdateAttestation(clientID, pcr14, agentHash, bootA, false)}
 	}()
 	go func() {
 		<-start
-		resCh <- result{out: bs.CheckAndUpdateAttestation(clientID, pcr14, agentHash, bootB)}
+		resCh <- result{out: bs.CheckAndUpdateAttestation(clientID, pcr14, agentHash, bootB, false)}
 	}()
 	close(start)
 
@@ -405,7 +458,7 @@ func TestSQLiteAtomicAttestation_RecoversFromBootMismatch(t *testing.T) {
 		rogue.PCR0[i] = 0xEE
 	}
 
-	first := bs.CheckAndUpdateAttestation(clientID, pcr14, agentHash, good)
+	first := bs.CheckAndUpdateAttestation(clientID, pcr14, agentHash, good, false)
 	if first.AgentHashResult != TOFUFirstUse || first.BootResult != TOFUFirstUse {
 		t.Fatalf("seed: %+v", first)
 	}
@@ -413,12 +466,12 @@ func TestSQLiteAtomicAttestation_RecoversFromBootMismatch(t *testing.T) {
 		t.Fatalf("seed attest_count: got %d want 1", first.AgentHashBaseline.AttestCount)
 	}
 
-	bad := bs.CheckAndUpdateAttestation(clientID, pcr14, agentHash, rogue)
+	bad := bs.CheckAndUpdateAttestation(clientID, pcr14, agentHash, rogue, false)
 	if bad.BootResult != TOFUMismatch {
 		t.Fatalf("rogue boot must mismatch: %+v", bad)
 	}
 
-	recovered := bs.CheckAndUpdateAttestation(clientID, pcr14, agentHash, good)
+	recovered := bs.CheckAndUpdateAttestation(clientID, pcr14, agentHash, good, false)
 	if recovered.AgentHashResult != TOFUMatch || recovered.BootResult != TOFUMatch {
 		t.Fatalf("recovery: %+v", recovered)
 	}
@@ -899,7 +952,8 @@ func createSQLiteTestReportWithKey(t testing.TB, clientID string, nonce [32]byte
 	bindingReport.System.IOMMU.UnitCount = 2
 	copy(bindingReport.System.IOMMU.CmdlineParam[:], []byte("intel_iommu=on"))
 	bindingNonce := ComputeAttestationBindingNonce(nonce, bindingReport)
-	attestData := createTPMSAttestWithNonce(bindingNonce[:], pcrDigest)
+	attestData := createTPMSAttestWithNonce(bindingNonce[:],
+		pcrDigest, productionPCRMask)
 	hash := sha256.Sum256(attestData)
 	signature, err := rsa.SignPKCS1v15(rand.Reader, key, crypto.SHA256, hash[:])
 	if err != nil {

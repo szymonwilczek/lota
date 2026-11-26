@@ -162,8 +162,10 @@ func TestEnforcementStoresOutliveTheProcessThatWroteThem(t *testing.T) {
 	}
 	defer reopened.Close()
 	second := sqliteEnforcementStores(reopened, slog.New(slog.NewTextHandler(io.Discard, nil)), metrics.New())
-	if _, banned := second.bans.IsBanned("default", hwid); !banned {
-		t.Error("the ban did not survive a reopen of the state database")
+	_, banned, err := second.bans.IsBanned("default", hwid)
+	if err != nil || !banned {
+		t.Errorf("the ban did not survive a reopen of the state "+
+			"database: %v", err)
 	}
 	if entries := second.audit.Query(10); len(entries) != 1 || entries[0].Action != "ban" {
 		t.Errorf("audit entries after a reopen = %+v, want the ban", entries)
@@ -189,5 +191,37 @@ func TestNoDurableStateInstallsNoEnforcementStore(t *testing.T) {
 	}
 	if none.audit != nil {
 		t.Error("audit log installed for an instance keeping no durable state")
+	}
+}
+
+// A file that already exists takes perm too:
+// a key regenerated over a world-readable copy ends up 0600.
+func TestWritePEMFileTightensAnExistingFile(t *testing.T) {
+	block := &pem.Block{Type: "PRIVATE KEY", Bytes: []byte{1, 2, 3}}
+	dir := t.TempDir()
+
+	for _, tc := range []struct {
+		name string
+		seed bool
+	}{{"existing", true}, {"fresh", false}} {
+		path := filepath.Join(dir, tc.name+".key")
+		if tc.seed {
+			if err := os.WriteFile(path, nil, 0o644); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Chmod(path, 0o644); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if err := writePEMFile(path, 0o600, block); err != nil {
+			t.Fatalf("%s: writePEMFile: %v", tc.name, err)
+		}
+		st, err := os.Stat(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := st.Mode().Perm(); got != 0o600 {
+			t.Errorf("%s: mode %o, want 600", tc.name, got)
+		}
 	}
 }

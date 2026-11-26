@@ -69,10 +69,12 @@ var (
 	ErrEKMissingOID     = errors.New("EK certificate missing TCG TPM 2.0 OID (2.23.133.8.1)")
 	ErrEKKeyType        = errors.New("EK certificate public key is not RSA; enrollment requires an RSA endorsement key (TCG EK template H-1)")
 	ErrEKKeySize        = errors.New("EK certificate RSA key too small")
-	ErrEKWeakKey        = errors.New("EK RSA modulus matches the ROCA (CVE-2017-15361) fingerprint; the private key is recoverable from the public modulus")
 	ErrCANotCA          = errors.New("CA certificate is not a certificate authority")
 	ErrCAKeyMismatch    = errors.New("CA private key does not match CA certificate")
 	ErrUnsupportedCAKey = errors.New("unsupported CA signing key type")
+
+	ErrEKWeakKey = errors.New(
+		"EK RSA modulus carries the ROCA (CVE-2017-15361) fingerprint")
 )
 
 // Issuer verifies EK certificates and mints AIK certificates.

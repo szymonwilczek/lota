@@ -113,6 +113,22 @@ func TestServerFromEnvironment(t *testing.T) {
 	}
 }
 
+func TestHealthShowsReportOnlyMode(t *testing.T) {
+	f := newFakeAPI(t, map[string]string{
+		"GET /health": `{"status":"ok","mode":"reporting",` +
+			`"uptime":"1s","tls":{"listening":false,"address":""}}`,
+	})
+
+	code, out, _ := runCLI(t, noEnv, "-server", f.srv.URL, "health")
+	if code != exitOK || !strings.Contains(out, "mode: reporting") {
+		t.Fatalf("exit = %d, output lacks the mode:\n%s", code, out)
+	}
+	code, out, _ = runCLI(t, noEnv, "-server", f.srv.URL, "-json", "health")
+	if code != exitOK || !strings.Contains(out, `"mode": "reporting"`) {
+		t.Fatalf("exit = %d, JSON lacks the mode:\n%s", code, out)
+	}
+}
+
 func TestAPIKeyFromEnvironment(t *testing.T) {
 	f := newFakeAPI(t, map[string]string{
 		"GET /api/v1/stats": `{}`,
@@ -190,7 +206,7 @@ func TestHealthDegradedExitsNonzero(t *testing.T) {
 func TestDevicesListPrintsIDs(t *testing.T) {
 	f := newFakeAPI(t, map[string]string{
 		"GET /api/v1/clients": `{"clients":["host1","host2"],"count":2,
-			"total":2,"limit":100,"offset":0}`,
+			"next":"host2"}`,
 	})
 
 	code, out, errOut := runCLI(t, noEnv, "-server", f.srv.URL, "devices", "list")
@@ -200,7 +216,7 @@ func TestDevicesListPrintsIDs(t *testing.T) {
 	if out != "host1\nhost2\n" {
 		t.Fatalf("stdout = %q, want bare IDs for scripting", out)
 	}
-	if !strings.Contains(errOut, "2 of 2 clients") {
+	if !strings.Contains(errOut, "2 clients\nnext page: -after host2") {
 		t.Fatalf("stderr = %q, want the page summary", errOut)
 	}
 }

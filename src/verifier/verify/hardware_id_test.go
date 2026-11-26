@@ -99,12 +99,47 @@ func TestClientInfoNamesTheHardwareIdentity(t *testing.T) {
 		t.Fatalf("result = %d, want VerifyOK", result.Result)
 	}
 
-	info, found := verifier.ClientInfo(testPseudonym(clientID))
+	info, found := clientInfoOf(t, verifier, testPseudonym(clientID))
 	if !found {
 		t.Fatal("ClientInfo(pseudonym) not found")
 	}
 	want := store.FormatHardwareID(devicePseudonymHWID(t, clientID))
 	if info.HardwareID != want {
 		t.Fatalf("client record hardware_id = %q, want %q", info.HardwareID, want)
+	}
+}
+
+// A revocation or ban store that cannot answer refuses the round:
+// it does not clear the client.
+func TestIntegration_ListStoreErrorRefusesTheRound(t *testing.T) {
+	const clientID = "list-error-client"
+
+	for _, list := range []string{"revocation", "ban"} {
+		db := testDB(t)
+		cfg := DefaultConfig()
+		cfg.RequireBootEnrollment = false
+		if list == "revocation" {
+			cfg.RevocationStore =
+				store.NewSQLiteRevocationStore(db, nil)
+		} else {
+			cfg.BanStore = store.NewSQLiteBanStore(db, nil)
+		}
+		db.Close()
+
+		v := NewVerifier(cfg, newCertVerifier(t))
+		if err := v.AddPolicy(DefaultPolicy()); err != nil {
+			t.Fatal(err)
+		}
+		challenge, err := v.GenerateChallenge(clientID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		report := createValidReport(t, clientID, challenge.Nonce,
+			fixturePCR14())
+		result, err := v.VerifyReportFrom(clientID, "", report)
+		if result.Result != types.VerifyInternalError || err == nil {
+			t.Fatalf("%s store closed: result %d, err %v",
+				list, result.Result, err)
+		}
 	}
 }

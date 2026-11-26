@@ -112,6 +112,9 @@ func reanchorDecision(in ReanchorInputs) (verdict ReanchorVerdict, reason string
 			return ReanchorEscalate, "firmware version below vendor anti-rollback floor"
 		}
 		switch {
+		case !in.ESRTCapable:
+			// no baseline version to have moved forward from
+			verdict = ReanchorLFA
 		case in.CurrentESRT.FWVersion > in.BaselineESRTVersion:
 			verdict = ReanchorAllow
 		case in.CurrentESRT.FWVersion == in.BaselineESRTVersion:
@@ -156,9 +159,14 @@ func reanchorDecision(in ReanchorInputs) (verdict ReanchorVerdict, reason string
 		}
 	}
 
-	// the number of PCR 7 variables must not change
+	// the set of PCR 7 variable names must not change
 	if len(bv) != len(cv) {
 		return ReanchorEscalate, "PCR 7 variable set changed"
+	}
+	for k := range bv {
+		if _, ok := cv[k]; !ok {
+			return ReanchorEscalate, "PCR 7 variable set changed"
+		}
 	}
 
 	if verdict == ReanchorLFA {
