@@ -83,8 +83,8 @@ static inline void kernel_floor_message(enum lota_kernel_floor which,
 static inline const char *startup_refusal_advice(int err)
 {
 	if (err == -ENOTSUP)
-		return "The line above is a state of this host, not of this "
-		       "configuration: raise it and start again.";
+		return "The line above names a state of this host: raise it "
+		       "and start again.";
 
 	return "Correct the policy and start again.";
 }

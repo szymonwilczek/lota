@@ -80,7 +80,7 @@ type BeginRequest struct {
 	Token      []byte   // empty when absent
 	EKChainDER [][]byte // EK intermediates, empty when absent
 
-	// set by DecodeBegin; EncodeBegin writes the constant Version instead
+	// set by DecodeBegin; EncodeBegin always writes the constant Version
 	Version uint16
 }
 

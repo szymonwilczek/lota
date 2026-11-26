@@ -309,7 +309,7 @@ struct {
 	__type(value, struct lota_mapped_seen);
 } mapped_seen SEC(".maps");
 
-/* see struct lota_exec_history_key; not LRU, a loss is counted instead */
+/* see struct lota_exec_history_key; plain hash, a full map counts a loss */
 struct {
 	__uint(type, BPF_MAP_TYPE_HASH);
 	__uint(max_entries, LOTA_MAX_EXEC_HISTORY);
@@ -335,7 +335,7 @@ struct {
 	__type(value, struct lota_sock_owner);
 } lota_sock_owner SEC(".maps");
 
-/* see struct lota_instance_actor_key; not LRU, a loss is counted instead */
+/* see struct lota_instance_actor_key; plain hash, a full map counts a loss */
 struct {
 	__uint(type, BPF_MAP_TYPE_HASH);
 	__uint(max_entries, LOTA_MAX_INSTANCE_ACTORS);

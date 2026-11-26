@@ -47,8 +47,7 @@ if command -v semodule >/dev/null 2>&1 &&
 fi
 
 # The stage engine is the one place that knows what each stage changes and how
-# to probe whether it is already done, so the hook drives it rather than
-# reimplementing a subset in shell.
+# to probe whether it is already done, so the hook drives it.
 # Its failure is never this transaction's failure:
 # the package is installed either way, and the run says what is left.
 if [ -x /usr/bin/lota-install ]; then

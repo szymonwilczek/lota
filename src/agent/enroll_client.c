@@ -655,8 +655,7 @@ static int resolve_profile(const char *ca_cert, struct profile_paths *paths)
 			"which no certificate on this side changes.\n"
 			"The first profile keeps its slot until it is taken "
 			"back with --forget-publisher.\n"
-			"Name the CA certificate that signs it instead, if "
-			"there is one.\n",
+			"If a CA certificate signs it, name that one.\n",
 			ca_cert);
 
 	return 0;
@@ -834,9 +833,7 @@ static int reenroll_profile(const struct profile_paths *paths,
 			"Restore that file, or enroll again naming the "
 			"endpoint yourself:\n"
 			"  lota-agent --enroll --ca-server <host> --ca-port "
-			"<port> --ca-cert <their anchor>\n"
-			"The attestation key is kept either way; what is "
-			"reissued is the certificate over it.\n");
+			"<port> --ca-cert <their anchor>\n");
 		return 1;
 	}
 
@@ -1339,8 +1336,9 @@ static void print_key_capacity(const struct publisher_entry *entries,
 				unreadable++;
 		if (unreadable)
 			printf("%zu of them %s an enrollment record this "
-			       "build cannot read, so the count above is\n"
-			       "what is stored, not what has been enrolled.\n",
+			       "build cannot read, so the count above\n"
+			       "includes profiles whose enrollment cannot be "
+			       "confirmed.\n",
 			       unreadable, unreadable == 1 ? "holds" : "hold");
 	}
 	if (have_slots)

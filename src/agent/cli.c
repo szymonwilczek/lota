@@ -145,7 +145,7 @@ static int load_config_into_options(struct cli_options *opts,
 			opts->config_path);
 		return 1;
 	} else if (cfg_ret == -EACCES && !opts->config_path) {
-		/* a file named with --config fails below instead */
+		/* a file named with --config fails below */
 		fprintf(stderr,
 			"Cannot read %s: %s. Continuing with defaults; pass "
 			"--config to name a file this user can read.\n",

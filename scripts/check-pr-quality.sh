@@ -40,7 +40,7 @@ added rules from being applied retroactively to historical integration commits.
 
 AI assistant co-author or generator trailers are reported through the
 ai_assisted=true output when GITHUB_OUTPUT is set. They do not fail this
-script; the workflow labels the pull request instead.
+script; the workflow labels the pull request.
 USAGE
 }
 

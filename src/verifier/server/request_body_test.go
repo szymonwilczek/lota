@@ -134,7 +134,8 @@ func TestUnbanRefusesTheTenantAsAQueryParameter(t *testing.T) {
 	if code != http.StatusBadRequest {
 		t.Fatalf("unban with ?tenant=: %d, want 400", code)
 	}
-	if msg, _ := body["error"].(string); !strings.Contains(msg, "body field") {
+	msg, _ := body["error"].(string)
+	if !strings.Contains(msg, "request body") {
 		t.Fatalf("refusal %q must say where the tenant belongs", msg)
 	}
 }

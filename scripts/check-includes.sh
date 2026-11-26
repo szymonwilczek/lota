@@ -20,8 +20,8 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 
 # clang-include-cleaner credits a handful of C/POSIX symbols to the glibc
-# /kernel-uapi implementation headers (bits/, asm-generic/) instead of the
-# public umbrella, so it wrongly reports the public header as unused.
+# /kernel-uapi implementation headers (bits/, asm-generic/), so it wrongly
+# reports the public header as unused.
 # Keep the idiomatic public headers and exempt that fixed set.
 # SDL ships one public <SDL.h>; its SDL_*.h are implementation detail.
 # systemd shuffles symbols between <systemd/sd-bus.h> and its sub-headers

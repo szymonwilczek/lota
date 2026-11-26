@@ -67,14 +67,13 @@ var (
 	logLevel            = flag.String("log-level", "info", "Minimum log level: debug, info, warn, error, security")
 	requireCert         = flag.Bool("require-cert", true, "Require Privacy CA trust anchors at startup: refuses to start without --aik-ca-cert. Reports without a CA-issued AIK certificate are always rejected at verification; disabling this only skips the startup validation (INSECURE: a deployment without a CA root cannot attest any client)")
 	allowTOFUBoot       = flag.Bool("allow-tofu-boot-baseline", false, "INSECURE: allow TOFU first-use of the per-client PCR0/PCR1/PCR7 boot baseline regardless of policy or event-log state. With the default (false), a first-attestation client must be covered by a signed policy that pins PCR0/PCR1/PCR7, be pre-enrolled in the baseline store, or pass the event-log Secure Boot gate of a policy with require_secureboot (the diverse-fleet path); otherwise the report is refused so a host that boots on already-compromised firmware cannot self-pin its tampered baseline.")
-	selfServiceReanchor = flag.Bool("enable-self-service-reanchor", false, "Override every policy's `profile` and force self-service re-anchor on or off. Left unset, each policy decides: profile: consumer enables it, enterprise (and unset) leaves it off. When on, a firmware/Secure Boot PCR drift re-pins the per-device boot baseline automatically if it preserves the Secure Boot root of trust (PK/KEK/db unchanged, dbx append-only, Secure Boot on, firmware version not rolled back), instead of rejecting until an operator clears the row. Only ever takes effect under a policy with require_secureboot.")
+	selfServiceReanchor bool
 	allowPermissive     = flag.Bool("allow-permissive-policy", false, "INSECURE: allow starting with a permissive PCR policy (no PCR values and no kernel/agent hash allowlists)")
-	allowUnpinnedAgent  = flag.Bool("allow-unpinned-agent", false, "INSECURE: allow a diverse-fleet policy (require_secureboot, no raw PCR pins) with empty agent_hashes. The agent self-hash is then TOFU, so a modified non-enforcing agent can pin its own hash and attest while doing no enforcement. Pin the official agent hash (from the signed release) in agent_hashes instead.")
+	allowUnpinnedAgent  bool
 	aikCACerts          stringSliceFlag
 	aikCRLs             stringSliceFlag
 	pgShardDSNs         stringSliceFlag
 	pgDSN               = flag.String("pg-dsn", "", "PostgreSQL DSN for shared multi-instance storage (or LOTA_PG_DSN env); selects the Postgres backend for baseline, nonce, revocation, ban, audit and attestation state. The database must be writable: the verifier applies its schema at startup, so a hot standby is refused. Mutually exclusive with --db.")
-	attestLogWindow     = flag.Duration("attestation-log-window", store.DefaultCollapseWindow, "How long one decision-log row may stand for. A trusted round that repeats what the row standing for that host already says advances it -- last seen, rounds -- instead of writing another row, so the log grows with what happened rather than with how long the fleet stayed up. Refusals, verdict changes and first sightings always get their own row whatever this is set to. Zero writes every round as its own row, which is what a deployment whose retention rule counts rows asks for.")
 	pgMaxOpenConns      = flag.Int("pg-max-open-conns", store.DefaultPGMaxOpenConns, "Maximum open Postgres connections per instance (per shard when sharded). Postgres group-commits concurrent transactions, so a wider pool raises enrollment/attestation burst throughput; keep the value times the instance count under the database's max_connections.")
 	stateDBPath         = flag.String("state-db", "/var/lib/lota/verifier-state.sqlite", "SQLite database an instance without --db or --pg-dsn keeps its durable state in: used nonce history, revocations, hardware bans, the audit log and the attestation decision log; set --allow-insecure-memory-state to keep none of it")
 	scopedKeysFile      = flag.String("api-keys-file", "", "YAML file of scoped monitoring-API keys (entries of key_sha256, role: reader|admin, tenants list or * for all); reloaded on SIGHUP. Environment keys keep working with global scope.")
@@ -82,6 +81,16 @@ var (
 	reportOnly          = flag.Bool("report-only", false, "Serve the monitoring API from a database this instance never writes -- a Postgres hot standby or the primary -- with no attestation listener bound and every state-changing endpoint refused. Requires --http-addr and a Postgres DSN; the schema is verified but never applied, so the reporting load that is not the verifier's can be taken off the primary.")
 	printVersions       = flag.Bool("print-versions", false, "Print the attestation report wire version this binary implements, the schema version it builds each backend up to, and its TLS floor, then exit. The report wire must match the agent fleet's exactly.")
 )
+
+var attestLogWindow = flag.Duration("attestation-log-window",
+	store.DefaultCollapseWindow,
+	"How long one decision-log row may stand for. A trusted "+
+		"round that repeats what the row standing for that host "+
+		"already says updates that row (last seen, rounds) without "+
+		"writing a new one. Refusals, verdict changes and first "+
+		"sightings always get their own row whatever this is set "+
+		"to. Zero writes every round as its own row, which is what "+
+		"a deployment whose retention rule counts rows asks for.")
 
 var errCRLWithoutCARoot = errors.New("--aik-crl requires at least one --aik-ca-cert to verify CRL signatures")
 
@@ -191,9 +200,36 @@ func loadPolicies(logger *slog.Logger, verifier *verify.Verifier, paths []string
 
 func main() {
 	flag.Var(&pgShardDSNs, "pg-shard-dsn", "PostgreSQL shard DSN (or LOTA_PG_SHARD_DSNS as a comma-separated list); may be repeated. Partitions per-client baseline, nonce and session state across the given databases by a stable hash of the key, so the durable write tier scales past one database host. Mutually exclusive with --pg-dsn and --db. Every instance must be given the same shard list in the same order. Enforcement, audit and attestation-log state lives on the first shard.")
-	flag.Var(&policyFiles, "policy", "PCR policy file (YAML); may be repeated. The first one given is the active policy, which every client whose tenant binds no policy of its own is verified against; each further file must bind itself to a tenant with a `tenant:` key, and clients in that tenant are verified against it.")
+	flag.Var(&policyFiles, "policy",
+		"PCR policy file (YAML); may be repeated. The first one "+
+			"given is the active policy, which every client whose "+
+			"tenant binds no policy of its own is verified "+
+			"against; each further file must bind itself to a "+
+			"tenant with a tenant: key, and clients in that "+
+			"tenant are verified against it.")
 	flag.Var(&aikCACerts, "aik-ca-cert", "Trusted attestation-CA root (PEM) the AIK certificate must chain to; may be repeated")
 	flag.Var(&aikCRLs, "aik-crl", "CRL file (PEM or DER) used to revoke compromised AIK certificates; may be repeated. Each CRL must be signed by one of the --aik-ca-cert roots.")
+	flag.BoolVar(&selfServiceReanchor, "enable-self-service-reanchor",
+		false, "Override every policy's profile and force "+
+			"self-service re-anchor on or off. Left unset, each "+
+			"policy decides: profile: consumer enables it, "+
+			"enterprise (and unset) leaves it off. When on, a "+
+			"firmware/Secure Boot PCR drift re-pins the "+
+			"per-device boot baseline automatically if it "+
+			"preserves the Secure Boot root of trust (PK/KEK/db "+
+			"unchanged, dbx append-only, Secure Boot on, "+
+			"firmware version not rolled back). When off, such "+
+			"a drift is rejected until an operator clears the "+
+			"row. Only ever takes effect under a policy with "+
+			"require_secureboot.")
+	flag.BoolVar(&allowUnpinnedAgent, "allow-unpinned-agent", false,
+		"INSECURE: allow a diverse-fleet policy "+
+			"(require_secureboot, no raw PCR pins) with empty "+
+			"agent_hashes. The agent self-hash is then TOFU, so "+
+			"a modified non-enforcing agent can pin its own "+
+			"hash and attest while doing no enforcement. Pin "+
+			"the official agent hash (from the signed release) "+
+			"in agent_hashes.")
 	flag.Parse()
 
 	if *printVersions {
@@ -245,7 +281,7 @@ func main() {
 		if f.Name != "enable-self-service-reanchor" {
 			return
 		}
-		override := *selfServiceReanchor
+		override := selfServiceReanchor
 		verifierCfg.EnableSelfServiceReanchor = &override
 		logger.Info("self-service re-anchor forced from the command line, overriding every policy profile",
 			"enabled", override)
@@ -254,8 +290,8 @@ func main() {
 		logger.Info("self-service re-anchor follows each policy's profile: consumer enables it, enterprise and unset leave it off")
 	}
 	verifierCfg.AllowPermissivePolicy = *allowPermissive
-	verifierCfg.AllowUnpinnedAgent = *allowUnpinnedAgent
-	if *allowUnpinnedAgent {
+	verifierCfg.AllowUnpinnedAgent = allowUnpinnedAgent
+	if allowUnpinnedAgent {
 		logger.Warn("INSECURE: --allow-unpinned-agent is set; a diverse-fleet policy may run with the agent self-hash on TOFU, so a modified non-enforcing agent could pin its own hash and attest without enforcing")
 	}
 

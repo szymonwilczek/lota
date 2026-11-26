@@ -364,12 +364,10 @@ void probe_secureboot_remediation(const char *machine, int is_virtual,
 
 	if (is_virtual == 1) {
 		snprintf(out + used, cap - used,
-			 "This is a virtual machine, where Secure Boot belongs "
-			 "to the VM definition rather than to a menu inside "
-			 "the guest. Give it an OVMF/EDK II image with Secure "
-			 "Boot enabled (libvirt: a q35 machine with SMM and "
-			 "<loader secure='yes'>), boot it once, then re-run "
-			 "lota-install.");
+			 "This is a virtual machine: give it an OVMF/EDK II "
+			 "image with Secure Boot enabled (libvirt: a q35 "
+			 "machine with SMM and <loader secure='yes'>), boot "
+			 "it once, then re-run lota-install.");
 		return;
 	}
 
@@ -389,8 +387,8 @@ void probe_secureboot_remediation(const char *machine, int is_virtual,
 			"straight into firmware setup; this firmware accepts "
 			"that request. If it is refused ('Cannot allocate "
 			"memory' means the EFI variable store is full), reboot "
-			"and enter setup the way the startup screen says "
-			"instead (commonly Del, F2, F10 or Esc, held while the "
+			"and enter setup with the key the startup screen "
+			"names (commonly Del, F2, F10 or Esc, held while the "
 			"vendor logo is up). ");
 	} else {
 		used += (size_t)snprintf(

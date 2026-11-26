@@ -106,7 +106,7 @@ else
     # Replicas without a shared backend split enforcement state; must be refused
     if render --set replicaCount=3 >/dev/null 2>&1; then
         fail=1
-        echo "FAIL: replicaCount 3 with no shared backend renders instead of being refused"
+        echo "FAIL: replicaCount 3 with no shared backend renders"
         echo "  each replica would keep enforcement state the others cannot see"
     fi
 
@@ -115,7 +115,7 @@ else
     if render --set replicaCount=1 --set httpApi.enabled=true \
         >/dev/null 2>&1; then
         fail=1
-        echo "FAIL: httpApi.enabled with no API key renders instead of being refused"
+        echo "FAIL: httpApi.enabled with no API key renders"
         echo "  the verifier refuses the bind and the whole pod crashloops"
     fi
 

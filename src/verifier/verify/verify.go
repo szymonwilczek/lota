@@ -1357,7 +1357,8 @@ func (v *Verifier) tryAgentHashRepin(clog *slog.Logger, clientID, tenant string,
 		// an unlisted build already failed the policy gate
 		if refusal == AgentHashTooSoon {
 			logging.Security(clog,
-				"agent_hash re-pin refused by the per-client interval, not by the allow-list",
+				"agent_hash re-pin refused: the per-client "+
+					"interval has not elapsed",
 				"reported_agent_hash",
 				hex.EncodeToString(report.System.AgentHash[:]),
 				"last_repin_at", st.LastRepinAt.UTC().Format(time.RFC3339),

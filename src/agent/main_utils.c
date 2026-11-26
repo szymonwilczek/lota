@@ -289,14 +289,12 @@ void print_usage(const char *prog, const char *default_bpf_path,
 	printf("                    and the attestation report carry it\n");
 	printf("  --protect-pid PID Seed this daemon's protected set with PID "
 	       "(ptrace\n");
-	printf("                    blocked). A startup option, not a request "
-	       "to a\n");
-	printf("                    daemon that is already running: on a host "
-	       "with\n");
-	printf("                    one up it does nothing. The process has to "
-	       "be\n");
-	printf("                    running when the agent starts, and a pid "
-	       "that\n");
+	printf("                    blocked). Read only at startup: on a host "
+	       "where the\n");
+	printf("                    agent already runs it does nothing. The "
+	       "process has\n");
+	printf("                    to be running when the agent starts, and a "
+	       "pid that\n");
 	printf("                    names none is refused before the boot "
 	       "commitment\n");
 	printf("                    is spent. A process protects itself "
@@ -527,7 +525,7 @@ static int add_listener_for_uid(uint32_t uid, void *user)
 
 /*
  * The socket file goes with the runtime directory logind removed, or under
- * a mount over it, so this releases the slot rather than the file.
+ * a mount over it, so this releases only the slot.
  */
 static void drop_listener_for_uid(uint32_t uid, void *user)
 {

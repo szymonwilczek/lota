@@ -29,8 +29,9 @@ enum ui_result {
 };
 
 /*
- * When set on a struct ui, ui_* calls go through these callbacks instead of
- * stdout.
+ * When set on a struct ui, ui_* output goes through these callbacks
+ * and none to stdout; ui_banner() writes nothing and ui_confirm()
+ * answers yes without asking.
  */
 struct ui_sink {
 	void (*line)(void *ud, const char *text);

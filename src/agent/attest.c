@@ -205,10 +205,9 @@ int export_policy(int mode)
 
 	if (tpm_kernel_path_is_overridden(&g_agent.tpm_ctx)) {
 		fprintf(stderr,
-			"Note: kernel_path does not affect this policy. The "
-			"kernel digest below is the bootloader's measurement "
-			"of the image it loaded, not a hash of any file this "
-			"agent read.\n");
+			"Note: kernel_path does not affect this policy. Its "
+			"kernel digest is the bootloader's measurement of "
+			"the image it loaded, read from the TPM event log.\n");
 	}
 
 	{
@@ -1256,12 +1255,12 @@ static void resolve_target_renew(struct attest_target *t)
 	}
 
 	if (attest_target_should_announce_renew_move(t))
-		lota_warn("%s: the enrollment records %s:%d, which is where "
-			  "renewal dials, not the CA this profile is "
-			  "configured with; run --enroll --ca-server %s "
-			  "--ca-port %d --ca-cert %s to move it",
+		lota_warn("%s: renewal dials %s:%d from the enrollment "
+			  "record, while this profile is configured with "
+			  "%s:%d; run --enroll --ca-server %s --ca-port %d "
+			  "--ca-cert %s to move it",
 			  t->label, t->renew_ca, t->renew_ca_port, t->ca,
-			  t->ca_port, t->ca_cert);
+			  t->ca_port, t->ca, t->ca_port, t->ca_cert);
 }
 
 static void renew_target_cert_if_due(struct attest_target *t)

@@ -109,7 +109,7 @@ static inline const char *terminate_decision_reason(enum terminate_decision d)
 	case TERMINATE_DENY_OWNER:
 		return "the caller does not own that process";
 	case TERMINATE_DENY_AGENT:
-		return "the agent stops with --shutdown, not with this";
+		return "the target is the agent, which stops with --shutdown";
 	}
 	return "refused";
 }

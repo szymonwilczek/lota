@@ -15,8 +15,8 @@
 # processes on the main thread's full stack, and holding them to a daemon's
 # budget would say nothing about what runs on a user's machine.
 #
-# The flags are pinned here rather than taken from CFLAGS so the number a frame
-# is measured at does not move with the build mode.
+# The flags are pinned here, independent of CFLAGS, so the number a frame is
+# measured at does not move with the build mode.
 # The hardening, machine and sanitizer flags change frame sizes; the point of
 # the gate is the shape of the source, not the shape of one build.
 

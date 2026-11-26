@@ -37,9 +37,8 @@ static inline void startup_busy_message(bool asked_protect_pid, char *out,
 	snprintf(out, cap,
 		 "Another instance is already running (PID file locked), so "
 		 "--protect-pid did nothing.\n"
-		 "It is a startup option of the daemon, not a request to the "
-		 "one that is running: it seeds the protected set of the "
-		 "instance it starts.\n"
+		 "It is read only at startup: it seeds the protected set of "
+		 "the instance it starts.\n"
 		 "A process that is already running protects itself through "
 		 "the SDK, with lota_protect_self(), or starts under "
 		 "lota-protect.");

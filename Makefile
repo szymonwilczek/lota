@@ -1997,7 +1997,7 @@ check-bpf-mirror:
 	if [ -n "$$lines" ]; then \
 		echo "ERROR: $(BPF_MIRROR_DIR) cites $(BPF_MIRROR_SRC) by line, which the lock does not pin:"; \
 		echo "$$lines"; \
-		echo "Name the helper or macro instead."; \
+		echo "Cite the helper or macro by name."; \
 		rc=1; \
 	fi; \
 	[ $$rc = 0 ] && echo "bpf-mirror: in sync"; \

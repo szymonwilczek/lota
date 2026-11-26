@@ -192,10 +192,10 @@ Notes for production
   ``ca_port`` the profile is configured with, and a profile whose keys name
   somewhere else is reported once::
 
-     verifier.example:8443: the enrollment records old-ca.example:8444,
-     which is where renewal dials, not the CA this profile is configured
-     with; run --enroll --ca-server ca.example --ca-port 8444 --ca-cert
-     /etc/lota/ca.crt to move it
+     verifier.example:8443: renewal dials old-ca.example:8444 from the
+     enrollment record, while this profile is configured with
+     ca.example:8444; run --enroll --ca-server ca.example --ca-port 8444
+     --ca-cert /etc/lota/ca.crt to move it
 
   ``--reenroll`` reuses it; ``--ca-server``/``--ca-port`` override it for a
   moved CA. Nothing on the host changes until the CA answers.

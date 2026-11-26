@@ -88,8 +88,8 @@ static enum stage_state st_preflight_probe(struct install_ctx *ctx, char *note,
 			snprintf(note, cap,
 				 "This guest booted via UEFI, but its firmware "
 				 "exposes no Secure Boot variable, so the "
-				 "feature is absent from the firmware build "
-				 "rather than switched off. Give the VM a "
+				 "feature is absent from the firmware build. "
+				 "Give the VM a "
 				 "Secure Boot capable firmware -- on libvirt "
 				 "that is an OVMF secboot build with enrolled "
 				 "keys -- and boot it again. The verifier pins "
@@ -99,8 +99,8 @@ static enum stage_state st_preflight_probe(struct install_ctx *ctx, char *note,
 			snprintf(note, cap,
 				 "This host booted via UEFI, but its firmware "
 				 "exposes no Secure Boot variable, so the "
-				 "feature is absent from this firmware build "
-				 "rather than switched off. A firmware update "
+				 "feature is absent from this firmware build. "
+				 "A firmware update "
 				 "from the board vendor is what adds it; there "
 				 "is no setting to change on the running "
 				 "build. The verifier pins the Secure Boot "
@@ -1065,8 +1065,8 @@ static enum stage_state st_enroll_probe(struct install_ctx *ctx, char *note,
 		snprintf(note, cap,
 			 "No attestation CA named, so nothing to enroll with "
 			 "yet. The agent enrolls with each publisher the first "
-			 "time a title asks for one. Pass --ca-server and "
-			 "--ca-cert to enroll here instead.");
+			 "time a title asks for one. With --ca-server and "
+			 "--ca-cert it enrolls here.");
 		return STAGE_DONE;
 	}
 	if (rc < 0) {

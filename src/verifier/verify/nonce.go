@@ -384,7 +384,7 @@ func (ns *NonceStore) consumeLocked(key, bindingID string) {
 }
 
 // DiscardChallenge releases an unanswered challenge and its per-binding slot
-// now rather than at sweep expiry. Only the issuing binding can discard it.
+// at once, before sweep expiry. Only the issuing binding can discard it.
 func (ns *NonceStore) DiscardChallenge(nonce [types.NonceSize]byte, bindingID string) {
 	key := hex.EncodeToString(nonce[:])
 
