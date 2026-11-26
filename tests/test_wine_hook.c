@@ -35,7 +35,24 @@
 #include <sys/wait.h>
 #include <unistd.h>
 
+#include <sys/mman.h>
+
 #include "test.h"
+
+/* the gate's answer to the hook's probe mapping, 0 = the real mmap */
+static int test_mmap_errno;
+
+static void *test_mmap(void *addr, size_t len, int prot, int flags, int fd,
+		       off_t off)
+{
+	if (test_mmap_errno) {
+		errno = test_mmap_errno;
+		return MAP_FAILED;
+	}
+	return mmap(addr, len, prot, flags, fd, off);
+}
+
+#define hook_mmap test_mmap
 #include "../src/sdk/lota_wine_hook.c"
 int lota_protect_main(int argc, char **argv);
 #define main lota_protect_main
@@ -456,6 +473,42 @@ static void test_ensure_token_dir_rejects_symlink(void)
 		return;
 	}
 
+	PASS();
+}
+
+/* a trailing slash makes open() follow the link despite O_NOFOLLOW */
+static void test_token_dir_override_trailing_slash_symlink(void)
+{
+	char target[sizeof(g_hook.token_dir)];
+	char linkpath[sizeof(g_hook.token_dir)];
+	char env[sizeof(g_hook.token_dir) + 2];
+	int ret;
+
+	TEST("a token dir override with a trailing slash is still no symlink");
+
+	snprintf(target, sizeof(target), "%s/slash_real", tmpdir);
+	snprintf(linkpath, sizeof(linkpath), "%s/slash_link", tmpdir);
+	if (mkdir(target, 0700) != 0 || symlink(target, linkpath) != 0) {
+		FAIL("setup");
+		return;
+	}
+	snprintf(env, sizeof(env), "%s//", linkpath);
+	setenv("LOTA_HOOK_TOKEN_DIR", env, 1);
+
+	ret = token_dir_candidate(0);
+	unsetenv("LOTA_HOOK_TOKEN_DIR");
+	if (ret != 0) {
+		FAIL("the override was not offered");
+		return;
+	}
+	g_hook.log_level = HOOK_LOG_SILENT;
+	ret = ensure_token_dir(NULL);
+	g_hook.log_level = HOOK_LOG_WARN;
+
+	if (ret != -ELOOP && ret != -ENOTDIR) {
+		FAIL("the symlink was followed");
+		return;
+	}
 	PASS();
 }
 
@@ -1220,6 +1273,25 @@ static int touch_file(const char *path, const char *body)
 	return 0;
 }
 
+/* an object the loader maps but cannot load: a header and nothing else */
+static int touch_object(const char *path)
+{
+	ElfW(Ehdr) eh = __ehdr_start;
+	int fd = open(path, O_WRONLY | O_CREAT | O_TRUNC, 0600);
+
+	if (fd < 0)
+		return -errno;
+	eh.e_type = ET_DYN;
+	eh.e_phnum = 0;
+	eh.e_shnum = 0;
+	if (write(fd, &eh, sizeof(eh)) != (ssize_t)sizeof(eh)) {
+		close(fd);
+		return -EIO;
+	}
+	close(fd);
+	return 0;
+}
+
 static char offline_status[sizeof(g_hook.status_path)];
 static char offline_token[sizeof(g_hook.token_path)];
 static char offline_snapshot[sizeof(g_hook.snapshot_path)];
@@ -1258,7 +1330,7 @@ static void test_offline_publish_replaces_the_last_good_status(void)
 		return;
 	}
 
-	hook_offline_publish();
+	hook_offline_publish(false);
 
 	if (read_file_contents(offline_status, buf, sizeof(buf)) <= 0) {
 		FAIL("read failed");
@@ -1290,13 +1362,13 @@ static void test_offline_publish_writes_once_per_episode(void)
 	offline_paths("repeat");
 	hook_offline_clear();
 
-	hook_offline_publish();
+	hook_offline_publish(false);
 	if (touch_file(offline_token, "token") != 0) {
 		FAIL("setup failed");
 		return;
 	}
 
-	hook_offline_publish();
+	hook_offline_publish(false);
 
 	if (access(offline_token, F_OK) != 0) {
 		FAIL("the same episode published twice");
@@ -1312,7 +1384,7 @@ static void test_offline_clear_arms_the_next_disconnect(void)
 	offline_paths("rearm");
 	hook_offline_clear();
 
-	hook_offline_publish();
+	hook_offline_publish(false);
 	if (touch_file(offline_token, "token") != 0) {
 		FAIL("setup failed");
 		return;
@@ -1320,10 +1392,84 @@ static void test_offline_clear_arms_the_next_disconnect(void)
 
 	/* what a successful connect does */
 	hook_offline_clear();
-	hook_offline_publish();
+	hook_offline_publish(false);
 
 	if (access(offline_token, F_OK) == 0) {
 		FAIL("the second disconnect never reached the sink");
+		return;
+	}
+	PASS();
+}
+
+/* a refusal or a registration between agents must not revive the cache */
+static void test_a_republish_while_offline_stays_offline(void)
+{
+	struct lota_status status;
+	char buf[1024];
+
+	TEST("offline publish: a republish keeps the agent lost");
+
+	offline_paths("republish");
+	hook_offline_clear();
+
+	memset(&status, 0, sizeof(status));
+	status.flags = LOTA_FLAG_ATTESTED;
+	status.valid_until = 1;
+	hook_cache_status(&status);
+	hook_offline_publish(false);
+	hook_publish_state();
+	hook_offline_clear();
+	atomic_store(&g_hook.have_status, 0);
+
+	if (read_file_contents(offline_status, buf, sizeof(buf)) <= 0) {
+		FAIL("read failed");
+		return;
+	}
+	if (!strstr(buf, "LOTA_OFFLINE=1")) {
+		FAIL("the republish reports the agent as reachable");
+		return;
+	}
+	if (!strstr(buf, "LOTA_ATTESTED=0")) {
+		FAIL("the republish restored the cached verdict");
+		return;
+	}
+	PASS();
+}
+
+/* a publisher refusal is the agent saying no, not an agent gone */
+static void test_a_publisher_refusal_is_not_offline(void)
+{
+	char buf[1024];
+
+	TEST("offline publish: a publisher refusal is no lost agent");
+
+	offline_paths("refused");
+	hook_offline_clear();
+
+	if (touch_file(offline_token, "token") != 0) {
+		FAIL("setup failed");
+		return;
+	}
+	hook_offline_publish(true);
+	hook_publish_state();
+	if (read_file_contents(offline_status, buf, sizeof(buf)) <= 0) {
+		FAIL("read failed");
+		return;
+	}
+	if (!strstr(buf, "LOTA_OFFLINE=0") || !strstr(buf, "LOTA_ATTESTED=0")) {
+		FAIL("the refusal was published as a lost agent");
+		return;
+	}
+	if (access(offline_token, F_OK) == 0) {
+		FAIL("the token survived the refusal");
+		return;
+	}
+
+	hook_offline_publish(false);
+	hook_offline_clear();
+	if (read_file_contents(offline_status, buf, sizeof(buf)) <= 0 ||
+	    !strstr(buf, "LOTA_OFFLINE=1")) {
+		FAIL("an agent lost after the refusal stayed reachable");
 		return;
 	}
 	PASS();
@@ -1788,25 +1934,46 @@ static void test_the_first_refresh_registers(void)
 }
 
 /*
- * Reading dlerror() would consume the caller's message, so the hook judges
- * the object: an existing readable path was refused, an absent one is missing.
+ * Reading dlerror() would consume the caller's message, so the hook maps
+ * the object once more: only a mapping refused with EPERM is the gate.
  */
 static void test_a_gate_refusal_is_told_apart_from_a_missing_file(void)
 {
 	char present[PATH_MAX];
+	char garbage[PATH_MAX];
 	char absent[PATH_MAX];
 
 	TEST("a gate refusal is told apart from a missing file");
 
 	snprintf(present, sizeof(present), "%s/libpresent.so", tmpdir);
+	snprintf(garbage, sizeof(garbage), "%s/libgarbage.so", tmpdir);
 	snprintf(absent, sizeof(absent), "%s/libabsent.so", tmpdir);
-	if (touch_file(present, "not really an ELF") != 0) {
+	if (touch_object(present) != 0 ||
+	    touch_file(garbage, "not really an ELF") != 0) {
 		FAIL("could not create the test object");
 		return;
 	}
 
+	test_mmap_errno = EPERM;
 	if (!hook_refusal_is_gate(present)) {
-		FAIL("an object that is there was refused, not missing");
+		test_mmap_errno = 0;
+		FAIL("an object the gate would not map was not a refusal");
+		return;
+	}
+	if (hook_refusal_is_gate(garbage)) {
+		test_mmap_errno = 0;
+		FAIL("a file that is not an object was blamed on the gate");
+		return;
+	}
+	test_mmap_errno = ENODEV;
+	if (hook_refusal_is_gate(present)) {
+		test_mmap_errno = 0;
+		FAIL("a mapping failure other than EPERM was a refusal");
+		return;
+	}
+	test_mmap_errno = 0;
+	if (hook_refusal_is_gate(present)) {
+		FAIL("an object that maps was blamed on the gate");
 		return;
 	}
 	if (hook_refusal_is_gate(absent)) {
@@ -1823,6 +1990,7 @@ static void test_a_gate_refusal_is_told_apart_from_a_missing_file(void)
 	}
 
 	unlink(present);
+	unlink(garbage);
 	PASS();
 }
 
@@ -1867,7 +2035,57 @@ static void test_the_status_file_names_the_refused_object(void)
 	}
 
 	atomic_store(&g_hook.self_protected, 0);
-	g_hook.refused_object[0] = '\0';
+	g_refusal->object[0] = '\0';
+	PASS();
+}
+
+/* A forked child's refusal survives the parent's next status write. */
+static void test_a_child_refusal_reaches_the_parent_status(void)
+{
+	struct lota_status status;
+	char path[PATH_MAX];
+	char buf[1024];
+	int wstatus;
+	pid_t pid;
+	ssize_t n;
+
+	TEST("a forked child's refusal reaches the parent's status file");
+
+	snprintf(path, sizeof(path), "%s/status_child_refused", tmpdir);
+	snprintf(g_hook.status_path, sizeof(g_hook.status_path), "%s", path);
+	hook_share_refusal();
+
+	pid = fork();
+	if (pid < 0) {
+		FAIL("fork failed");
+		return;
+	}
+	if (pid == 0) {
+		hook_record_refusal("/opt/game/lib/libchild.so");
+		_exit(0);
+	}
+	if (waitpid(pid, &wstatus, 0) != pid || !WIFEXITED(wstatus)) {
+		FAIL("the child did not exit");
+		return;
+	}
+
+	memset(&status, 0, sizeof(status));
+	status.flags = LOTA_FLAG_ATTESTED;
+	if (write_status(&status) != 0) {
+		FAIL("write_status failed");
+		return;
+	}
+	n = read_file_contents(path, buf, sizeof(buf));
+	g_refusal->object[0] = '\0';
+	if (n <= 0) {
+		FAIL("read failed");
+		return;
+	}
+	if (!strstr(buf, "LOTA_REFUSED_OBJECT=/opt/game/lib/libchild.so")) {
+		FAIL("the parent's status dropped the child's refusal");
+		return;
+	}
+
 	PASS();
 }
 
@@ -1881,7 +2099,7 @@ static void test_the_loader_wrapper_hands_back_what_it_got(void)
 
 	g_hook.log_level = HOOK_LOG_SILENT;
 	atomic_store(&g_hook.self_protected, 1);
-	g_hook.refused_object[0] = '\0';
+	g_refusal->object[0] = '\0';
 
 	handle = dlopen("libm.so.6", RTLD_NOW);
 	if (!handle) {
@@ -1890,7 +2108,7 @@ static void test_the_loader_wrapper_hands_back_what_it_got(void)
 		return;
 	}
 	dlclose(handle);
-	if (g_hook.refused_object[0]) {
+	if (g_refusal->object[0]) {
 		atomic_store(&g_hook.self_protected, 0);
 		FAIL("a load that succeeded was recorded as a refusal");
 		return;
@@ -1903,33 +2121,35 @@ static void test_the_loader_wrapper_hands_back_what_it_got(void)
 		FAIL("a load of nothing returned a handle");
 		return;
 	}
-	if (g_hook.refused_object[0]) {
+	if (g_refusal->object[0]) {
 		atomic_store(&g_hook.self_protected, 0);
 		FAIL("a missing file was recorded as a gate refusal");
 		return;
 	}
 
-	/* an object that is there and did not load: what a refusal is */
+	/* an object the gate would not map: what a refusal is */
 	snprintf(broken, sizeof(broken), "%s/libbroken.so", tmpdir);
-	if (touch_file(broken, "not really an ELF") != 0) {
+	if (touch_object(broken) != 0) {
 		atomic_store(&g_hook.self_protected, 0);
 		FAIL("could not create the test object");
 		return;
 	}
+	test_mmap_errno = EPERM;
 	handle = dlopen(broken, RTLD_NOW);
+	test_mmap_errno = 0;
 	atomic_store(&g_hook.self_protected, 0);
 	if (handle) {
 		dlclose(handle);
-		FAIL("a file that is not an object returned a handle");
+		FAIL("an object with no segments returned a handle");
 		return;
 	}
-	if (strcmp(g_hook.refused_object, broken) != 0) {
+	if (strcmp(g_refusal->object, broken) != 0) {
 		FAIL("a failed load of an object that is there went unrecorded");
 		return;
 	}
 
 	unlink(broken);
-	g_hook.refused_object[0] = '\0';
+	g_refusal->object[0] = '\0';
 	PASS();
 }
 
@@ -2022,25 +2242,27 @@ static void test_a_refusal_publishes_itself(void)
 	stop_mock_agent(agent);
 
 	snprintf(broken, sizeof(broken), "%s/libpublish.so", tmpdir);
-	if (touch_file(broken, "not really an ELF") != 0) {
+	if (touch_object(broken) != 0) {
 		atomic_store(&g_hook.self_protected, 0);
 		FAIL("could not create the test object");
 		return;
 	}
 
 	atomic_store(&g_hook.self_protected, 1);
+	test_mmap_errno = EPERM;
 	handle = dlopen(broken, RTLD_NOW);
+	test_mmap_errno = 0;
 	atomic_store(&g_hook.self_protected, 0);
 	if (handle) {
 		dlclose(handle);
 		unlink(broken);
-		FAIL("a file that is not an object returned a handle");
+		FAIL("an object with no segments returned a handle");
 		return;
 	}
 
 	n = read_file_contents(path, buf, sizeof(buf));
 	unlink(broken);
-	g_hook.refused_object[0] = '\0';
+	g_refusal->object[0] = '\0';
 	if (n <= 0) {
 		FAIL("no status file to read");
 		return;
@@ -2153,6 +2375,73 @@ static void test_lota_protect_refused_does_not_start(void)
 	}
 	if (rc != PROTECT_EXIT_REFUSED) {
 		FAIL("the refusal did not exit with 125");
+		return;
+	}
+	PASS();
+}
+
+/* the thread asks again every cycle; the player's log hears it once */
+static void test_a_repeated_registration_refusal_warns_once(void)
+{
+	char logpath[PATH_MAX];
+	char line[256];
+	int saved, fd, warned = 0;
+	pid_t agent;
+	FILE *f;
+
+	TEST("a refused registration asked again warns once");
+
+	mock_protect_result = LOTA_IPC_ERR_ACCESS_DENIED;
+	agent = start_mock_agent();
+	mock_protect_result = LOTA_IPC_OK;
+	if (agent < 0) {
+		if (mock_errno_is_sandbox(mock_agent_errno)) {
+			SKIP("no unix socket in this sandbox");
+			return;
+		}
+		FAIL("mock agent did not start");
+		return;
+	}
+
+	hook_state_for_mock_agent("refused");
+	g_hook.client = hook_connect();
+	if (!g_hook.client) {
+		stop_mock_agent(agent);
+		FAIL("hook did not connect to the mock agent");
+		return;
+	}
+
+	snprintf(logpath, sizeof(logpath), "%s/refused.log", tmpdir);
+	fd = open(logpath, O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0600);
+	fflush(stderr);
+	saved = dup(STDERR_FILENO);
+	if (fd >= 0 && saved >= 0)
+		dup2(fd, STDERR_FILENO);
+	g_hook.log_level = HOOK_LOG_WARN;
+	for (int i = 0; i < 3; i++)
+		hook_register_self();
+	g_hook.log_level = HOOK_LOG_SILENT;
+	fflush(stderr);
+	if (saved >= 0) {
+		dup2(saved, STDERR_FILENO);
+		close(saved);
+	}
+	if (fd >= 0)
+		close(fd);
+
+	lota_disconnect(g_hook.client);
+	g_hook.client = NULL;
+	stop_mock_agent(agent);
+	atomic_store(&g_hook.protect_errno, 0);
+
+	f = fopen(logpath, "r");
+	while (f && fgets(line, sizeof(line), f))
+		warned += strstr(line, "lota_protect_self") != NULL;
+	if (f)
+		fclose(f);
+
+	if (warned != 1) {
+		printf("FAIL: %d warnings\n", warned);
 		return;
 	}
 	PASS();
@@ -2356,6 +2645,7 @@ int main(void)
 	test_ensure_token_dir_exists();
 	test_ensure_token_dir_not_a_dir();
 	test_ensure_token_dir_rejects_symlink();
+	test_token_dir_override_trailing_slash_symlink();
 	test_ensure_token_dir_existing_mode_tightened();
 	test_a_repaired_token_dir_mode_is_reported();
 	test_an_untouched_token_dir_reports_no_repair();
@@ -2380,6 +2670,8 @@ int main(void)
 	test_offline_publish_replaces_the_last_good_status();
 	test_offline_publish_writes_once_per_episode();
 	test_offline_clear_arms_the_next_disconnect();
+	test_a_republish_while_offline_stays_offline();
+	test_a_publisher_refusal_is_not_offline();
 
 	/* process activation policy */
 	test_policy_default_skips_usr_bin();
@@ -2411,6 +2703,7 @@ int main(void)
 	test_the_first_refresh_registers();
 	test_a_gate_refusal_is_told_apart_from_a_missing_file();
 	test_the_status_file_names_the_refused_object();
+	test_a_child_refusal_reaches_the_parent_status();
 	test_the_loader_wrapper_hands_back_what_it_got();
 	test_a_registration_publishes_itself();
 	test_a_refusal_publishes_itself();
@@ -2418,6 +2711,7 @@ int main(void)
 	/* lota-protect: protected before the program's first instruction */
 	test_lota_protect_protects_then_starts();
 	test_lota_protect_refused_does_not_start();
+	test_a_repeated_registration_refusal_warns_once();
 	test_lota_protect_without_agent_starts();
 
 	/* how the refresh thread reads a poll */

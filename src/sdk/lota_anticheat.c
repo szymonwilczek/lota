@@ -12,6 +12,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/auxv.h>
 #include <sys/random.h>
 #include <sys/stat.h>
 #include <time.h>
@@ -255,11 +256,6 @@ static const char *rt_basename(const char *path)
 	return slash ? slash + 1 : path;
 }
 
-static int rt_starts_with(const char *s, const char *prefix)
-{
-	return strncmp(s, prefix, strlen(prefix)) == 0;
-}
-
 static int runtime_measure_update_seg_hdr(EVP_MD_CTX *md, uint64_t vaddr,
 					  uint64_t offset, uint64_t filesz)
 {
@@ -433,26 +429,48 @@ static int rt_resolve_self_exe(char *buf, size_t len)
 	return 0;
 }
 
+/* the loader points the vDSO's program headers into the kernel's image */
+static int rt_is_vdso(const struct dl_phdr_info *info)
+{
+	unsigned long ehdr = getauxval(AT_SYSINFO_EHDR);
+	const ElfW(Ehdr) *eh = (const ElfW(Ehdr) *)ehdr;
+
+	return eh && (const void *)info->dlpi_phdr ==
+			     (const void *)(ehdr + eh->e_phoff);
+}
+
+/*
+ * The kernel hands a dynamic executable its interpreter's base. Run as
+ * "ld.so program", the kernel ran the loader and /proc/self/exe names it.
+ */
+static int rt_started_by_loader(const struct dl_phdr_info *info)
+{
+	for (ElfW(Half) i = 0; i < info->dlpi_phnum; i++) {
+		if (info->dlpi_phdr[i].p_type == PT_INTERP)
+			return getauxval(AT_BASE) == 0;
+	}
+	return 0;
+}
+
 /*
  * Index 0 is the main executable, which glibc lists unnamed.
- * Return: 1 to measure, 0 to skip.
+ * Return: 1 to measure, 0 to skip, -ENOTSUP if its file is unknown.
  */
 static int rt_object_identity(struct dl_phdr_info *info, unsigned index,
 			      const char *self_exe, const char **path_out,
 			      const char **soname_out)
 {
 	if (index == 0) {
+		if (rt_started_by_loader(info))
+			return -ENOTSUP;
 		*path_out = self_exe;
 		*soname_out = rt_basename(self_exe);
 		return 1;
 	}
-	if (!info->dlpi_name || info->dlpi_name[0] == '\0')
+	if (!info->dlpi_name || info->dlpi_name[0] == '\0' || rt_is_vdso(info))
 		return 0;
 
 	const char *base = rt_basename(info->dlpi_name);
-	if (rt_starts_with(base, "linux-vdso") ||
-	    rt_starts_with(base, "linux-gate"))
-		return 0;
 
 	*path_out = info->dlpi_name;
 	*soname_out = base;
@@ -479,7 +497,12 @@ static int rt_collect_cb(struct dl_phdr_info *info, size_t size, void *data)
 
 	(void)size;
 
-	if (!rt_object_identity(info, index, ctx->self_exe, &path, &soname))
+	rc = rt_object_identity(info, index, ctx->self_exe, &path, &soname);
+	if (rc < 0) {
+		ctx->err = rc;
+		return 1;
+	}
+	if (!rc)
 		return 0;
 
 	rc = rt_live_object_digest(info, digest, &has_exec);
@@ -535,6 +558,7 @@ struct rt_list_ctx {
 	unsigned index;
 	const char *self_exe;
 	int stop;
+	int err;
 };
 
 static int rt_list_cb(struct dl_phdr_info *info, size_t size, void *data)
@@ -543,12 +567,18 @@ static int rt_list_cb(struct dl_phdr_info *info, size_t size, void *data)
 	const char *path = NULL;
 	const char *soname = NULL;
 	unsigned index = ctx->index++;
+	int rc;
 
 	(void)size;
 
 	if (ctx->stop)
 		return 1;
-	if (!rt_object_identity(info, index, ctx->self_exe, &path, &soname))
+	rc = rt_object_identity(info, index, ctx->self_exe, &path, &soname);
+	if (rc < 0) {
+		ctx->err = rc;
+		return 1;
+	}
+	if (!rc)
 		return 0;
 
 	if (ctx->fn(path, ctx->user) != 0) {
@@ -577,7 +607,7 @@ int lota_ac_list_runtime_objects(lota_ac_runtime_object_fn fn, void *user)
 	ctx.self_exe = self_exe;
 
 	dl_iterate_phdr(rt_list_cb, &ctx);
-	return ac_ret(0);
+	return ac_ret(ctx.err);
 }
 
 static int pread_full(int fd, void *buf, size_t len, off_t off)
@@ -937,8 +967,10 @@ out:
  *           $XDG_RUNTIME_DIR/lota-hook > /tmp/lota-<uid>
  *
  * The producer's order (src/sdk/lota_wine_hook.c) below cfg->token_dir.
- * The producer skips an empty or unusable $LOTA_HOOK_TOKEN_DIR; here any set
- * value wins. The last two count only if the directory exists.
+ * The producer skips an empty or unusable $LOTA_HOOK_TOKEN_DIR and sets it
+ * to the directory it chose; here any non-empty value wins. An empty
+ * cfg->token_dir skips $LOTA_HOOK_TOKEN_DIR too. The last two count only
+ * if the directory exists.
  * $XDG_RUNTIME_DIR/lota is the agent's: it holds the container socket at
  * root:lota 0750.
  */
@@ -953,7 +985,7 @@ static int resolve_token_dir(const struct lota_ac_config *cfg, char *out,
 	if (!dir)
 		dir = getenv("LOTA_HOOK_TOKEN_DIR");
 
-	if (dir) {
+	if (dir && dir[0]) {
 		if (strlen(dir) >= outlen)
 			return -ENAMETOOLONG;
 		strncpy(out, dir, outlen - 1);
@@ -1085,6 +1117,8 @@ static int ac_error_from_connect(int connect_err)
 		return LOTA_AC_ERR_ACCESS_DENIED;
 	case LOTA_ERR_RATE_LIMITED:
 		return LOTA_AC_ERR_RATE_LIMITED;
+	case LOTA_ERR_INVALID_ARG:
+		return LOTA_AC_ERR_INVALID_ARG;
 	default:
 		return LOTA_AC_ERR_NO_AGENT;
 	}
@@ -1284,6 +1318,10 @@ int lota_ac_tick(struct lota_ac_session *session)
 			}
 			session->lota_flags = 0;
 			session->token_len = 0;
+			session->state = LOTA_AC_STATE_ERROR;
+			ac_fail(sret == -ENOENT ? LOTA_AC_ERR_NO_AGENT :
+						  LOTA_AC_ERR_MALFORMED);
+			return sret;
 		}
 	}
 

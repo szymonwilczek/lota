@@ -77,7 +77,9 @@ extern "C" {
  *   LOTA_FAIL_COUNT    unsigned
  *   LOTA_UPDATED       UNIX_TIMESTAMP (when file was written)
  *   LOTA_PID           hook process PID
- *   LOTA_PROTECTED     1 | 0  (in the protected set)
+ *   LOTA_PROTECTED     1 | 0  (in the protected set; a child forked
+ *                      before then is not, unless the hook activates
+ *                      in its exec)
  *
  * After a gate refused an object:
  *   LOTA_REFUSED_OBJECT  refused path

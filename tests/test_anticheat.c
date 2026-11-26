@@ -5,12 +5,17 @@
  * Copyright (C) 2026 Szymon Wilczek
  */
 
+#include <dlfcn.h>
 #include <errno.h>
 #include <fcntl.h>
+#include <link.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/socket.h>
 #include <sys/stat.h>
+#include <sys/un.h>
+#include <sys/wait.h>
 #include <time.h>
 #include <unistd.h>
 #include <openssl/evp.h>
@@ -26,6 +31,10 @@
 #include "lota_token.h"
 #include "lota_wine_hook.h"
 #include "token_forge.h"
+
+#ifndef LOTA_SDK_LIB_PATH
+#define LOTA_SDK_LIB_PATH "build/liblotagaming.so"
+#endif
 
 static char test_dir[256];
 
@@ -228,6 +237,138 @@ static int expected_runtime_measure_test(uint8_t out[32])
 	free(vec);
 	free(c.paths);
 	return ret;
+}
+
+/* an object is the vDSO by its address, not by a name a file can carry */
+static void test_runtime_measure_counts_a_vdso_named_object(void)
+{
+	char path[512];
+	char cmd[1024];
+	uint8_t before[LOTA_AC_RUNTIME_MEASURE_SIZE];
+	uint8_t after[LOTA_AC_RUNTIME_MEASURE_SIZE];
+	struct rt_path_collect c = {};
+	int listed = 0, vdso = 0;
+	void *h;
+
+	TEST("runtime measure: an object named linux-vdso* is measured");
+
+	snprintf(path, sizeof(path), "%s/linux-vdso-test.so", test_dir);
+	snprintf(cmd, sizeof(cmd), "cp %s %s", LOTA_SDK_LIB_PATH, path);
+	if (system(cmd) != 0 || lota_ac_compute_runtime_measure(before) != 0) {
+		FAIL("setup");
+		return;
+	}
+	h = dlopen(path, RTLD_NOW | RTLD_LOCAL);
+	if (!h) {
+		FAIL(dlerror());
+		return;
+	}
+
+	c.paths = calloc(EXPECTED_RT_MAX_OBJS, LOTA_AC_RUNTIME_PATH_MAX);
+	c.max = EXPECTED_RT_MAX_OBJS;
+	if (c.paths &&
+	    lota_ac_list_runtime_objects(rt_path_collect_cb, &c) == 0)
+		for (size_t i = 0; i < c.count; i++) {
+			listed |= strcmp(c.paths[i], path) == 0;
+			vdso |= strcmp(c.paths[i], "linux-vdso.so.1") == 0;
+		}
+	free(c.paths);
+
+	if (lota_ac_compute_runtime_measure(after) != 0) {
+		FAIL("measure failed");
+	} else if (!listed) {
+		FAIL("the object is not listed");
+	} else if (vdso) {
+		FAIL("the vDSO is listed");
+	} else if (memcmp(before, after, sizeof(before)) == 0) {
+		FAIL("the object left the measure unchanged");
+	} else {
+		PASS();
+	}
+	dlclose(h);
+}
+
+#define LOADER_CHILD_ENV "LOTA_TEST_LOADER_CHILD"
+
+/* the child: 0 if both refuse with -ENOTSUP, 10 if both measure */
+__attribute__((constructor)) static void loader_child(void)
+{
+	uint8_t m[LOTA_AC_RUNTIME_MEASURE_SIZE];
+	struct rt_path_collect c = { .max = EXPECTED_RT_MAX_OBJS };
+	int mret, lret;
+
+	if (!getenv(LOADER_CHILD_ENV))
+		return;
+	c.paths = calloc(EXPECTED_RT_MAX_OBJS, LOTA_AC_RUNTIME_PATH_MAX);
+	if (!c.paths)
+		_exit(1);
+	mret = lota_ac_compute_runtime_measure(m);
+	lret = lota_ac_list_runtime_objects(rt_path_collect_cb, &c);
+	if (mret == -ENOTSUP && lret == -ENOTSUP && c.count == 0)
+		_exit(0);
+	_exit(mret == 0 && lret == 0 && c.count > 0 ? 10 : 1);
+}
+
+static int interp_cb(struct dl_phdr_info *info, size_t size, void *data)
+{
+	(void)size;
+	for (ElfW(Half) i = 0; i < info->dlpi_phnum; i++) {
+		if (info->dlpi_phdr[i].p_type == PT_INTERP) {
+			*(const char **)data =
+				(const char *)(info->dlpi_addr +
+					       info->dlpi_phdr[i].p_vaddr);
+			break;
+		}
+	}
+	return 1;
+}
+
+static int run_loader_child(const char *loader, const char *self)
+{
+	int status;
+	pid_t pid = fork();
+
+	if (pid < 0)
+		return -1;
+	if (pid == 0) {
+		setenv(LOADER_CHILD_ENV, "1", 1);
+		if (loader)
+			execl(loader, loader, self, (char *)NULL);
+		else
+			execl(self, self, (char *)NULL);
+		_exit(127);
+	}
+	if (waitpid(pid, &status, 0) != pid || !WIFEXITED(status))
+		return -1;
+	return WEXITSTATUS(status);
+}
+
+/* run as "ld.so program", /proc/self/exe names the loader, not the title */
+static void test_runtime_measure_refuses_a_loader_start(void)
+{
+	const char *loader = NULL;
+	char self[LOTA_AC_RUNTIME_PATH_MAX];
+	ssize_t n;
+	int direct, through;
+
+	TEST("runtime measure: a start through ld.so is refused");
+
+	dl_iterate_phdr(interp_cb, &loader);
+	n = readlink("/proc/self/exe", self, sizeof(self) - 1);
+	if (!loader || n < 0) {
+		FAIL("setup");
+		return;
+	}
+	self[n] = '\0';
+
+	direct = run_loader_child(NULL, self);
+	through = run_loader_child(loader, self);
+	if (direct != 10)
+		FAIL("a direct start was not measured");
+	else if (through != 0)
+		FAIL("a start through ld.so was not refused");
+	else
+		PASS();
 }
 
 static int build_bound_heartbeat_packet(uint8_t *out, size_t out_cap,
@@ -709,6 +850,62 @@ static void test_state_no_files(void)
 	}
 	if (lota_ac_get_state(s) != LOTA_AC_STATE_ERROR) {
 		FAIL("expected ERROR");
+		lota_ac_shutdown(s);
+		return;
+	}
+	if (lota_ac_last_error() != LOTA_AC_ERR_NO_AGENT) {
+		FAIL("expected LOTA_AC_ERR_NO_AGENT");
+		lota_ac_shutdown(s);
+		return;
+	}
+	if (lota_ac_tick(s) != -ENOENT) {
+		FAIL("tick did not return -ENOENT");
+		lota_ac_shutdown(s);
+		return;
+	}
+	lota_ac_shutdown(s);
+	PASS();
+}
+
+static void test_state_malformed_snapshot(void)
+{
+	static const char junk[] = "not a snapshot";
+	char dir[512], path[600];
+	int fd;
+
+	TEST("state: unreadable snapshot -> ERROR, MALFORMED");
+	snprintf(dir, sizeof(dir), "%s/garbled", test_dir);
+	mkdir(dir, 0700);
+	snprintf(path, sizeof(path), "%s/%s", dir, LOTA_SNAPSHOT_FILE_NAME);
+	fd = open(path, O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0600);
+	if (fd < 0 ||
+	    write(fd, junk, sizeof(junk) - 1) != (ssize_t)(sizeof(junk) - 1)) {
+		if (fd >= 0)
+			close(fd);
+		FAIL("cannot write the snapshot");
+		return;
+	}
+	close(fd);
+
+	struct lota_ac_config cfg = {
+		.struct_size = sizeof(cfg),
+		.provider = LOTA_AC_PROVIDER_EAC,
+		.game_id = "test-garbled",
+		.token_dir = dir,
+	};
+	struct lota_ac_session *s = lota_ac_init(&cfg);
+	if (!s) {
+		FAIL("init failed");
+		return;
+	}
+	if (lota_ac_get_state(s) != LOTA_AC_STATE_ERROR ||
+	    lota_ac_last_error() != LOTA_AC_ERR_MALFORMED) {
+		FAIL("expected ERROR with LOTA_AC_ERR_MALFORMED");
+		lota_ac_shutdown(s);
+		return;
+	}
+	if (lota_ac_tick(s) != -EIO) {
+		FAIL("tick did not return -EIO");
 		lota_ac_shutdown(s);
 		return;
 	}
@@ -1332,6 +1529,54 @@ static void test_last_error_no_agent(void)
 	PASS();
 }
 
+/* the publisher is checked once connected; listening is enough */
+static void test_last_error_bad_publisher(void)
+{
+	struct sockaddr_un addr = { .sun_family = AF_UNIX };
+	struct lota_ac_session *s;
+	int fd;
+
+	TEST("last_error: a malformed publisher is an invalid argument");
+	if (snprintf(addr.sun_path, sizeof(addr.sun_path), "%s/pub.sock",
+		     test_dir) >= (int)sizeof(addr.sun_path)) {
+		FAIL("the socket path does not fit");
+		return;
+	}
+	unlink(addr.sun_path);
+	fd = socket(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0);
+	if (fd < 0 || bind(fd, (struct sockaddr *)&addr, sizeof(addr)) != 0 ||
+	    listen(fd, 1) != 0) {
+		FAIL("cannot listen on a unix socket");
+		if (fd >= 0)
+			close(fd);
+		return;
+	}
+
+	struct lota_ac_config cfg = {
+		.struct_size = sizeof(cfg),
+		.provider = LOTA_AC_PROVIDER_EAC,
+		.game_id = "test-direct",
+		.direct = 1,
+		.socket_path = addr.sun_path,
+		.publisher_profile = "zz",
+	};
+	s = lota_ac_init(&cfg);
+	close(fd);
+	unlink(addr.sun_path);
+
+	if (!s) {
+		FAIL("init returned NULL");
+		return;
+	}
+	if (lota_ac_last_error() != LOTA_AC_ERR_INVALID_ARG) {
+		FAIL("expected LOTA_AC_ERR_INVALID_ARG");
+		lota_ac_shutdown(s);
+		return;
+	}
+	lota_ac_shutdown(s);
+	PASS();
+}
+
 /*
  * A beat that cannot be produced says which half failed.
  * The heartbeat path has ten distinct -EIO returns, and the one word
@@ -1757,9 +2002,8 @@ static void test_integration_wine_artifacts_consumed_by_eac(void)
  * writes -- $XDG_RUNTIME_DIR/lota-hook -- and not in $XDG_RUNTIME_DIR/lota,
  * which belongs to the daemon and holds the container socket.
  */
-static void test_auto_token_dir_is_the_hooks_dir(void)
+static void auto_token_dir_is_the_hooks_dir(const char *env)
 {
-	TEST("auto-detected token dir is the hook's, not the daemon's");
 	char xdg[512];
 	char hookdir[600];
 	char daemondir[600];
@@ -1782,7 +2026,10 @@ static void test_auto_token_dir_is_the_hooks_dir(void)
 	write_mock_snapshot(hookdir, attested_flags);
 
 	setenv("XDG_RUNTIME_DIR", xdg, 1);
-	unsetenv("LOTA_HOOK_TOKEN_DIR");
+	if (env)
+		setenv("LOTA_HOOK_TOKEN_DIR", env, 1);
+	else
+		unsetenv("LOTA_HOOK_TOKEN_DIR");
 
 	struct lota_ac_config cfg = {
 		.struct_size = sizeof(cfg),
@@ -1792,6 +2039,7 @@ static void test_auto_token_dir_is_the_hooks_dir(void)
 	};
 	struct lota_ac_session *s = lota_ac_init(&cfg);
 
+	unsetenv("LOTA_HOOK_TOKEN_DIR");
 	if (saved[0])
 		setenv("XDG_RUNTIME_DIR", saved, 1);
 	else
@@ -1808,6 +2056,19 @@ static void test_auto_token_dir_is_the_hooks_dir(void)
 	}
 	lota_ac_shutdown(s);
 	PASS();
+}
+
+static void test_auto_token_dir_is_the_hooks_dir(void)
+{
+	TEST("auto-detected token dir is the hook's, not the daemon's");
+	auto_token_dir_is_the_hooks_dir(NULL);
+}
+
+/* the hook skips an empty override, so the consumer does too */
+static void test_empty_token_dir_override_is_skipped(void)
+{
+	TEST("an empty LOTA_HOOK_TOKEN_DIR is no override");
+	auto_token_dir_is_the_hooks_dir("");
 }
 
 static void test_integration_eac_detects_agent_death(void)
@@ -1843,8 +2104,8 @@ static void test_integration_eac_detects_agent_death(void)
 		return;
 	}
 
-	if (lota_ac_tick(s) != 0) {
-		FAIL("tick reported error");
+	if (lota_ac_tick(s) != -ENOENT) {
+		FAIL("tick did not report the missing snapshot");
 		lota_ac_shutdown(s);
 		return;
 	}
@@ -2546,6 +2807,7 @@ int main(void)
 	test_state_required_flags();
 	test_state_required_flags_met();
 	test_state_no_files();
+	test_state_malformed_snapshot();
 
 	printf("\nHeartbeat Wire Format:\n");
 	test_heartbeat_game_id_hash_domain_separated();
@@ -2574,6 +2836,7 @@ int main(void)
 	printf("\nWhy a call failed:\n");
 	test_last_error_init_causes();
 	test_last_error_no_agent();
+	test_last_error_bad_publisher();
 	test_last_error_heartbeat_causes();
 	test_last_error_measure_helpers();
 	test_last_error_session_calls();
@@ -2588,6 +2851,7 @@ int main(void)
 	printf("\nIntegration:\n");
 	test_integration_wine_artifacts_consumed_by_eac();
 	test_auto_token_dir_is_the_hooks_dir();
+	test_empty_token_dir_override_is_skipped();
 	test_integration_eac_detects_agent_death();
 	test_integration_eac_detects_attestation_loss();
 
@@ -2604,6 +2868,8 @@ int main(void)
 	test_required_flags_cannot_drop_attested();
 	test_info_agrees_with_state();
 	test_session_id_unique();
+	test_runtime_measure_counts_a_vdso_named_object();
+	test_runtime_measure_refuses_a_loader_start();
 
 	cleanup_test_dir();
 

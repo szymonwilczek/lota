@@ -22,9 +22,11 @@
 
 #include <ctype.h>
 #include <dlfcn.h>
+#include <elf.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <limits.h>
+#include <link.h>
 #include <pthread.h>
 #include <signal.h>
 #include <stdatomic.h>
@@ -32,7 +34,11 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <poll.h>
+#include <sys/eventfd.h>
+#include <sys/mman.h>
 #include <sys/stat.h>
+#include <sys/statvfs.h>
 #include <sys/types.h>
 #include <time.h>
 #include <unistd.h>
@@ -57,6 +63,7 @@ enum hook_log_level {
 static struct {
 	struct lota_client *client;
 	pthread_t thread;
+	int wake_fd;
 	atomic_int running;
 	atomic_int thread_started;
 	int log_level;
@@ -70,17 +77,29 @@ static struct {
 	char snapshot_path[PATH_MAX]; /* atomic snapshot file (flags + token) */
 	char evidence_path[PATH_MAX];
 	pid_t init_pid;
-	char refused_object[256]; /* last object that would not load */
-	time_t refused_at;
 	struct lota_status last_status; /* the last one the agent gave */
 	atomic_int have_status;
 	atomic_int offline_errno; /* the refusal already reported, negated */
 	atomic_int publisher_errno; /* the publisher refusal already reported */
 	atomic_int token_errno; /* the token refusal already reported */
+	atomic_int protect_errno; /* the registration refusal reported */
 	atomic_int self_protected;
-	atomic_int offline_published;
+	atomic_int offline_published; /* HOOK_LOST_* published, or 0 */
 	atomic_int evidence_written; /* the evidence is on disk */
 } g_hook;
+
+/* The last object that would not load. */
+struct hook_refusal {
+	char object[256];
+	time_t at;
+};
+
+static struct hook_refusal g_own_refusal;
+static struct hook_refusal *g_refusal = &g_own_refusal;
+
+/* Why the hook holds no connection: offline, or the agent said no. */
+#define HOOK_LOST_AGENT 1
+#define HOOK_LOST_PUBLISHER 2
 
 /* Guards last_status against the loader thread reading it. */
 static pthread_mutex_t g_status_lock;
@@ -396,6 +415,7 @@ static int parse_log_level(const char *s)
 static int token_dir_candidate(int n)
 {
 	const char *env;
+	size_t len;
 
 	switch (n) {
 	case 0:
@@ -403,6 +423,9 @@ static int token_dir_candidate(int n)
 		if (!env || !env[0])
 			return -ENOENT;
 		snprintf(g_hook.token_dir, sizeof(g_hook.token_dir), "%s", env);
+		len = strlen(g_hook.token_dir);
+		while (len > 1 && g_hook.token_dir[len - 1] == '/')
+			g_hook.token_dir[--len] = '\0';
 		return 0;
 	case 1:
 		env = getenv("XDG_RUNTIME_DIR");
@@ -648,12 +671,12 @@ static int write_status_payload(const struct lota_status *status, int offline)
 	if (len < 0 || (size_t)len >= sizeof(buf))
 		return -ENOMEM;
 
-	if (g_hook.refused_object[0]) {
+	if (g_refusal->object[0]) {
 		int add = snprintf(buf + len, sizeof(buf) - (size_t)len,
 				   "LOTA_REFUSED_OBJECT=%s\n"
 				   "LOTA_REFUSED_AT=%lu\n",
-				   g_hook.refused_object,
-				   (unsigned long)g_hook.refused_at);
+				   g_refusal->object,
+				   (unsigned long)g_refusal->at);
 
 		if (add < 0 || (size_t)(len + add) >= sizeof(buf))
 			return -ENOMEM;
@@ -678,21 +701,29 @@ static void hook_cache_status(const struct lota_status *status)
 	atomic_store(&g_hook.have_status, 1);
 }
 
-/* rewrite the status file from the cache; no-op before the first status */
+/*
+ * Rewrite the status file from the cache, or zeroed while no connection
+ * is held; no-op before the first status.
+ */
 static void hook_publish_state(void)
 {
-	struct lota_status status;
+	struct lota_status status = { 0 };
+	int lost = atomic_load(&g_hook.offline_published);
 	int ret;
 
-	if (!atomic_load(&g_hook.have_status))
-		return;
+	if (lost) {
+		ret = write_status_payload(&status, lost == HOOK_LOST_AGENT);
+	} else {
+		if (!atomic_load(&g_hook.have_status))
+			return;
 
-	pthread_once(&g_status_lock_once, status_lock_init);
-	pthread_mutex_lock(&g_status_lock);
-	status = g_hook.last_status;
-	pthread_mutex_unlock(&g_status_lock);
+		pthread_once(&g_status_lock_once, status_lock_init);
+		pthread_mutex_lock(&g_status_lock);
+		status = g_hook.last_status;
+		pthread_mutex_unlock(&g_status_lock);
 
-	ret = write_status(&status);
+		ret = write_status(&status);
+	}
 	if (ret < 0)
 		LOG_DBG("write_status: %s", strerror(-ret));
 }
@@ -706,24 +737,29 @@ static void drop_token_files(void)
 	atomic_store(&g_hook.evidence_written, 0);
 }
 
-/* LOTA_OFFLINE=1 in the status file, the token files gone */
-static void publish_offline_status(void)
+/* a zeroed status, LOTA_OFFLINE=@offline, the token files gone */
+static void publish_offline_status(int offline)
 {
-	struct lota_status offline = { 0 };
+	struct lota_status zero = { 0 };
 	int ret;
 
-	ret = write_status_payload(&offline, 1);
+	ret = write_status_payload(&zero, offline);
 	if (ret < 0)
 		LOG_WRN("write_status (offline): %s", strerror(-ret));
 	drop_token_files();
 }
 
-/* One OFFLINE per disconnect; hook_offline_clear() re-arms it on connect. */
-static void hook_offline_publish(void)
+/*
+ * One write per disconnect and reason; hook_offline_clear() re-arms it on
+ * connect. @refused: the agent answered and refused the publisher.
+ */
+static void hook_offline_publish(bool refused)
 {
-	if (atomic_exchange(&g_hook.offline_published, 1))
+	int lost = refused ? HOOK_LOST_PUBLISHER : HOOK_LOST_AGENT;
+
+	if (atomic_exchange(&g_hook.offline_published, lost) == lost)
 		return;
-	publish_offline_status();
+	publish_offline_status(lost == HOOK_LOST_AGENT);
 }
 
 static void hook_offline_clear(void)
@@ -742,8 +778,8 @@ static void hook_offline_clear(void)
 static int LOTA_UNUSED write_snapshot(uint32_t flags, const uint8_t *token_wire,
 				      size_t token_size)
 {
-	uint8_t buf[sizeof(struct lota_snapshot_wire_hdr) + 2048];
-	if (!token_wire || token_size == 0 || token_size > 2048)
+	uint8_t buf[LOTA_SNAPSHOT_HEADER_SIZE + LOTA_TOKEN_MAX_SIZE];
+	if (!token_wire || token_size == 0 || token_size > LOTA_TOKEN_MAX_SIZE)
 		return -EINVAL;
 
 	uint8_t *p = buf;
@@ -856,7 +892,7 @@ static void write_boot_evidence(struct lota_client *client)
  */
 static int write_token(struct lota_client *client, uint32_t flags)
 {
-	uint8_t wire[2048];
+	uint8_t wire[LOTA_TOKEN_MAX_SIZE];
 	size_t written = 0;
 	int ret;
 
@@ -972,8 +1008,11 @@ static void hook_report_publisher(int err)
 			g_hook.publisher, lota_strerror(err));
 }
 
-/* warn on the first refusal and each new reason; repeats stay at debug */
-static void hook_report_unreachable(void)
+/*
+ * Warn on the first refusal and each new reason; repeats stay at debug.
+ * Return: true if the agent answered and refused the publisher.
+ */
+static bool hook_report_unreachable(void)
 {
 	char path[PATH_MAX];
 	const char *why;
@@ -983,7 +1022,7 @@ static void hook_report_unreachable(void)
 	err = lota_connect_last_error();
 	if (err != LOTA_OK && err != LOTA_ERR_CONNECTION_FAILED) {
 		hook_report_publisher(err);
-		return;
+		return true;
 	}
 
 	err = hook_probe_socket(path, sizeof(path));
@@ -992,7 +1031,7 @@ static void hook_report_unreachable(void)
 	if (atomic_exchange(&g_hook.offline_errno, err) == err) {
 		LOG_DBG("agent still unreachable at %s: %s", path,
 			strerror(-err));
-		return;
+		return false;
 	}
 
 	if (why)
@@ -1001,6 +1040,7 @@ static void hook_report_unreachable(void)
 	else
 		LOG_WRN("cannot reach the agent at %s: %s", path,
 			strerror(-err));
+	return false;
 }
 
 /* Not 64 hex chars: reported and dropped, the launch goes on unnamed */
@@ -1070,7 +1110,10 @@ static void hook_register_self(void)
 
 	ret = lota_protect_self(g_hook.client);
 	if (ret != LOTA_OK) {
-		LOG_WRN("lota_protect_self: %s", lota_strerror(ret));
+		if (atomic_exchange(&g_hook.protect_errno, ret) == ret)
+			LOG_DBG("lota_protect_self: %s", lota_strerror(ret));
+		else
+			LOG_WRN("lota_protect_self: %s", lota_strerror(ret));
 		return;
 	}
 
@@ -1079,25 +1122,71 @@ static void hook_register_self(void)
 	hook_publish_state();
 }
 
+#ifndef hook_mmap
+#define hook_mmap mmap
+#endif
+
+extern const ElfW(Ehdr) __ehdr_start __attribute__((visibility("hidden")));
+
+/* a shared object of the class and machine the loader maps here */
+static bool hook_object_is_loadable(int fd)
+{
+	ElfW(Ehdr) eh;
+
+	return pread(fd, &eh, sizeof(eh), 0) == (ssize_t)sizeof(eh) &&
+	       memcmp(eh.e_ident, ELFMAG, SELFMAG) == 0 &&
+	       eh.e_ident[EI_CLASS] == __ehdr_start.e_ident[EI_CLASS] &&
+	       eh.e_machine == __ehdr_start.e_machine && eh.e_type == ET_DYN;
+}
+
 /*
  * Was a failed load the gate's refusal? Reading dlerror() would consume
- * the title's message, so judge the object: an existing readable path
- * counts as refused whatever the real error, a bare name never does.
+ * the title's message, so map the object executable once more: the gate
+ * refuses that mapping with EPERM, as does a noexec mount. A file the
+ * loader would not map is not mapped here either. A bare name goes
+ * unchecked: the hook does not know which file the loader picked.
  */
 static bool hook_refusal_is_gate(const char *path)
 {
+	bool refused = false;
+	struct statvfs sv;
+	void *map;
+	int fd;
+
 	if (!path || !strchr(path, '/'))
 		return false;
 
-	return access(path, R_OK) == 0;
+	fd = open(path, O_RDONLY | O_CLOEXEC);
+	if (fd < 0)
+		return false;
+	if (hook_object_is_loadable(fd) && fstatvfs(fd, &sv) == 0 &&
+	    !(sv.f_flag & ST_NOEXEC)) {
+		map = hook_mmap(NULL, 1, PROT_READ | PROT_EXEC, MAP_PRIVATE, fd,
+				0);
+		if (map == MAP_FAILED)
+			refused = errno == EPERM;
+		else
+			munmap(map, 1);
+	}
+	close(fd);
+	return refused;
 }
 
 /* For the status file. */
 static void hook_record_refusal(const char *path)
 {
-	snprintf(g_hook.refused_object, sizeof(g_hook.refused_object), "%s",
-		 path);
-	g_hook.refused_at = time(NULL);
+	snprintf(g_refusal->object, sizeof(g_refusal->object), "%s", path);
+	g_refusal->at = time(NULL);
+}
+
+/* so a forked child's refusal outlives the parent's next status write */
+static void hook_share_refusal(void)
+{
+	void *map = mmap(NULL, sizeof(*g_refusal), PROT_READ | PROT_WRITE,
+			 MAP_SHARED | MAP_ANONYMOUS, -1, 0);
+
+	if (map != MAP_FAILED)
+		g_refusal = map;
 }
 
 /*
@@ -1140,8 +1229,7 @@ static void refresh_once(void)
 	if (!g_hook.client) {
 		g_hook.client = hook_connect();
 		if (!g_hook.client) {
-			hook_report_unreachable();
-			hook_offline_publish();
+			hook_offline_publish(hook_report_unreachable());
 			return;
 		}
 		hook_offline_clear();
@@ -1163,7 +1251,7 @@ static void refresh_once(void)
 		LOG_DBG("get_status: %s -> reconnecting", lota_strerror(ret));
 		lota_disconnect(g_hook.client);
 		g_hook.client = NULL;
-		hook_offline_publish();
+		hook_offline_publish(false);
 		return;
 	}
 
@@ -1193,6 +1281,20 @@ static bool hook_poll_failed(int ret)
 
 /* flags change rarely; every attestation round moves counts and validity */
 #define HOOK_EVENT_MASK (LOTA_EVENT_STATUS | LOTA_EVENT_ATTEST)
+
+/* Return: 1 if @fd is readable, 0 on timeout, -1 once woken to stop. */
+static int hook_wait(int fd, int sec)
+{
+	struct pollfd p[2] = {
+		{ .fd = g_hook.wake_fd, .events = POLLIN },
+		{ .fd = fd, .events = POLLIN },
+	};
+	int ms = sec > INT_MAX / 1000 ? INT_MAX : sec * 1000;
+
+	if (poll(p, fd >= 0 ? 2 : 1, ms) <= 0)
+		return 0;
+	return p[0].revents ? -1 : 1;
+}
 
 static void hook_status_cb(const struct lota_status *status, uint32_t events,
 			   void *user_data)
@@ -1240,10 +1342,11 @@ static void *refresh_thread_fn(void *arg)
 		if (!g_hook.client) {
 			g_hook.client = hook_connect();
 			if (!g_hook.client) {
-				hook_report_unreachable();
+				bool refused = hook_report_unreachable();
+
 				LOG_DBG("retrying in %ds", g_hook.refresh_sec);
-				hook_offline_publish();
-				sleep(g_hook.refresh_sec);
+				hook_offline_publish(refused);
+				hook_wait(-1, g_hook.refresh_sec);
 				continue;
 			}
 			hook_offline_clear();
@@ -1263,9 +1366,14 @@ static void *refresh_thread_fn(void *arg)
 		hook_register_self();
 
 		if (subscribed) {
-			ret = lota_poll_events(g_hook.client, 5000);
+			ret = hook_wait(lota_get_fd(g_hook.client), 5);
+			if (ret > 0)
+				ret = lota_poll_events(g_hook.client, 0);
+			else
+				ret = LOTA_OK;
 		} else {
-			sleep(g_hook.refresh_sec);
+			if (hook_wait(-1, g_hook.refresh_sec) < 0)
+				continue;
 			refresh_once();
 			ret = g_hook.client ? LOTA_OK : LOTA_ERR_NOT_CONNECTED;
 		}
@@ -1279,8 +1387,9 @@ static void *refresh_thread_fn(void *arg)
 				g_hook.client = NULL;
 			}
 			subscribed = false;
+			atomic_store(&g_hook.evidence_written, 0);
 			/* avoid tight loop on persistent failure */
-			sleep(1);
+			hook_wait(-1, 1);
 		} else if (hook_poll_failed(ret)) {
 			LOG_DBG("poll error: %s", lota_strerror(ret));
 		}
@@ -1297,10 +1406,9 @@ static void hook_child_after_fork(void)
 	g_hook.init_pid = 0;
 	/*
 	 * The child starts no refresh thread and registers nothing: it
-	 * carries the protection the parent had at the fork. An exec the
-	 * hook activates in registers it.
+	 * carries the protection the parent had at the fork, and the latch
+	 * with it. An exec the hook activates in registers it.
 	 */
-	atomic_store(&g_hook.self_protected, 0);
 
 	hook_offline_clear();
 }
@@ -1349,13 +1457,14 @@ __attribute__((constructor)) static void lota_wine_hook_init(void)
 	snprintf(g_hook.evidence_path, sizeof(g_hook.evidence_path), "%s/%s",
 		 g_hook.token_dir, LOTA_HOOK_BOOT_EVIDENCE_FILE);
 
-	/* for the consumer's discovery; a preset value stays */
-	setenv(LOTA_HOOK_ENV_TOKEN_DIR, g_hook.token_dir, 0);
+	/* for the consumer's discovery */
+	setenv(LOTA_HOOK_ENV_TOKEN_DIR, g_hook.token_dir, 1);
 
 	LOG_INF("initializing (token_dir=%s, refresh=%ds)", g_hook.token_dir,
 		g_hook.refresh_sec);
 
 	g_hook.init_pid = getpid();
+	hook_share_refusal();
 	pthread_atfork(NULL, NULL, hook_child_after_fork);
 
 	/*
@@ -1363,6 +1472,12 @@ __attribute__((constructor)) static void lota_wine_hook_init(void)
 	 * retries every refresh_sec while the agent is unreachable.
 	 * The constructor does no agent I/O.
 	 */
+	g_hook.wake_fd = eventfd(0, EFD_CLOEXEC);
+	if (g_hook.wake_fd < 0) {
+		LOG_ERR("eventfd: %s", strerror(errno));
+		return;
+	}
+
 	g_hook.running = 1;
 	if (pthread_create(&g_hook.thread, NULL, refresh_thread_fn, NULL) !=
 	    0) {
@@ -1388,6 +1503,7 @@ __attribute__((destructor)) static void lota_wine_hook_fini(void)
 	g_hook.running = 0;
 
 	if (g_hook.thread_started) {
+		eventfd_write(g_hook.wake_fd, 1);
 		pthread_join(g_hook.thread, NULL);
 		g_hook.thread_started = 0;
 	}

@@ -1328,7 +1328,9 @@ $(BUILD_DIR)/test_aik_cert_renew: $(AGENT_DIR)/aik_cert.c $(AGENT_DIR)/io_utils.
 $(BUILD_DIR)/test_aik_cert_renew: TEST_LDLIBS := -lcrypto
 
 $(BUILD_DIR)/test_anticheat: tests/token_forge.c $(TEST_SDK_SRCS) $(VERSION_FILE)
-$(BUILD_DIR)/test_anticheat: TEST_CFLAGS := $(SDK_VERSION_CFLAGS)
+$(BUILD_DIR)/test_anticheat: $(SDK_LIB)
+$(BUILD_DIR)/test_anticheat: TEST_CFLAGS := $(SDK_VERSION_CFLAGS) \
+	-DLOTA_SDK_LIB_PATH='"$(SDK_LIB)"'
 $(BUILD_DIR)/test_anticheat: TEST_LDLIBS := -lcrypto
 
 $(BUILD_DIR)/test_attest_stage: $(addprefix $(AGENT_DIR)/,attest_stage.c net_errno.c tpm_errno.c)
