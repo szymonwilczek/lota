@@ -957,7 +957,7 @@ type Stats struct {
 	UsedNonces        int
 	ActivePolicy      string
 	LoadedPolicies    []string
-	RegisteredClients int
+	RegisteredClients int // clients with a baseline
 	TotalAttestations int64
 	SuccessAttests    int64
 	FailedAttests     int64
@@ -968,13 +968,14 @@ type Stats struct {
 	Uptime            time.Duration
 }
 
-func (v *Verifier) Stats() Stats {
+// Stats counts the clients, revocations and bans of tenants,
+// of all tenants when tenants is nil.
+func (v *Verifier) Stats(tenants []string) (Stats, error) {
 	s := Stats{
 		PendingChallenges: v.nonceStore.PendingCount(),
 		UsedNonces:        v.nonceStore.UsedCount(),
 		ActivePolicy:      v.pcrVerifier.GetActivePolicy(),
 		LoadedPolicies:    v.pcrVerifier.ListPolicies(),
-		RegisteredClients: len(v.ListClients()),
 		TotalAttestations: v.totalAttests.Load(),
 		SuccessAttests:    v.successAttests.Load(),
 		FailedAttests:     v.failedAttests.Load(),
@@ -983,14 +984,25 @@ func (v *Verifier) Stats() Stats {
 		Uptime:            time.Since(v.startTime),
 	}
 
-	if v.revocationStore != nil {
-		s.ActiveRevocations = len(v.revocationStore.ListRevocations())
+	var err error
+	s.RegisteredClients, err = v.baselineStore.CountClients(tenants)
+	if err != nil {
+		return Stats{}, err
+	}
+	if revs := v.revocationStore; revs != nil {
+		s.ActiveRevocations, err = revs.CountRevocationsIn(tenants)
+		if err != nil {
+			return Stats{}, err
+		}
 	}
 	if v.banStore != nil {
-		s.ActiveBans = len(v.banStore.ListBans())
+		s.ActiveBans, err = v.banStore.CountBansIn(tenants)
+		if err != nil {
+			return Stats{}, err
+		}
 	}
 
-	return s
+	return s, nil
 }
 
 // ClientInfo is what the verifier knows about one client.

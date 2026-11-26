@@ -675,7 +675,10 @@ func TestSQLiteIntegration_FullFlow(t *testing.T) {
 	}
 
 	// verify stats
-	stats := verifier.Stats()
+	stats, err := verifier.Stats(nil)
+	if err != nil {
+		t.Fatalf("Stats: %v", err)
+	}
 	if stats.TotalAttestations != 2 {
 		t.Errorf("TotalAttestations: got %d, want 2", stats.TotalAttestations)
 	}
@@ -868,7 +871,10 @@ func TestSQLiteIntegration_ConcurrentAttestations(t *testing.T) {
 		t.Errorf("Concurrent error: %v", err)
 	}
 
-	stats := verifier.Stats()
+	stats, err := verifier.Stats(nil)
+	if err != nil {
+		t.Fatalf("Stats: %v", err)
+	}
 	expected := int64(numClients * 2)
 	if stats.TotalAttestations != expected {
 		t.Errorf("TotalAttestations: got %d, want %d", stats.TotalAttestations, expected)
