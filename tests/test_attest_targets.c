@@ -715,6 +715,43 @@ static void test_a_lost_key_is_enrolled_again_with_consent(void)
 	      "without a backoff the round keeps its interval");
 }
 
+/* A failed enrollment comes back when it said it would. */
+static void test_a_failed_enrollment_returns_on_its_backoff(void)
+{
+	struct attest_target t;
+	int delay;
+
+	memset(&t, 0, sizeof(t));
+	t.interval = 240;
+	CHECK(attest_target_enroll_wait(&t, 1000) == 240,
+	      "with nothing backed off the round keeps its interval");
+
+	delay = attest_target_enroll_failed(&t, 1000);
+	CHECK(delay > 0 && delay < 240 &&
+		      attest_target_enroll_wait(&t, 1000) == delay,
+	      "the next round comes when the enrollment backoff lapses");
+	CHECK(attest_target_enroll_failed(&t, 2000) > delay,
+	      "each failed enrollment waits longer");
+	CHECK(attest_target_enroll_wait(&t, 1000000) == 240,
+	      "a lapsed backoff leaves the interval");
+}
+
+/* A failed renewal is retried in a round, never sooner than it comes. */
+static void test_a_failed_renewal_waits_a_round(void)
+{
+	struct attest_target t;
+
+	memset(&t, 0, sizeof(t));
+	t.interval = 240;
+	CHECK(attest_target_renew_failed(&t, 1000) == 240 &&
+		      t.next_renew_ms == 1000 + 240 * 1000,
+	      "a backoff below the interval waits the interval");
+
+	t.interval = 5;
+	CHECK(attest_target_renew_failed(&t, 1000) > 5,
+	      "a backoff above the interval is kept");
+}
+
 /* Without consent the loop says why once and leaves the host alone. */
 static void test_no_consent_is_said_once(void)
 {
@@ -777,6 +814,8 @@ int main(void)
 	test_a_request_wakes_the_loop_once();
 	test_an_unreadable_cert_confirms_nothing();
 	test_a_lost_key_is_enrolled_again_with_consent();
+	test_a_failed_enrollment_returns_on_its_backoff();
+	test_a_failed_renewal_waits_a_round();
 	test_no_consent_is_said_once();
 	test_a_reload_keeps_the_termination_record();
 

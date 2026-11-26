@@ -152,6 +152,38 @@ check "an unknown reporting mode is refused" test "$rc" -ne 0
 check "nothing is written for an unknown reporting mode" \
       lacks "$conf" 'typo'
 
+# A profile whose anchor moved away may be the publisher being added,
+# so a second profile of the same CA is not appended beside it.
+# Another CA's broken profile names some other publisher and blocks nothing.
+moved_pem=$(anchor moved)
+conf="$WORK_DIR/moved.conf"
+: >"$conf"
+"$AGENT_BIN" --add-publisher ca.moved.example --ca-port 8564 \
+	     --ca-cert "$moved_pem" --publisher-name moved \
+	     --server verifier.moved.example --config "$conf" >/dev/null 2>&1
+mv "$moved_pem" "$WORK_DIR/moved-new.pem"
+before=$(cksum <"$conf")
+
+rc=0
+out=$("$AGENT_BIN" --add-publisher ca.moved.example --ca-port 8564 \
+	           --ca-cert "$WORK_DIR/moved-new.pem" \
+	           --server verifier.moved.example \
+	           --config "$conf" 2>&1) || rc=$?
+check "an unreadable anchor of the same CA is refused" test "$rc" -ne 0
+check "the refusal names the profile and the anchor to point it at" \
+      says "$out" "Profile \"moved\" in $conf names the anchor $moved_pem"
+check "nothing is appended beside it" test "$(cksum <"$conf")" = "$before"
+
+other_pem=$(anchor other)
+rc=0
+out=$("$AGENT_BIN" --add-publisher ca.other.example --ca-port 8564 \
+	           --ca-cert "$other_pem" --publisher-name other \
+	           --server verifier.other.example \
+	           --config "$conf" 2>&1) || rc=$?
+check "another CA's publisher is added beside it" test "$rc" -eq 0
+check "its section is written" has_line "$conf" 'ca = ca.other.example'
+[[ $rc -eq 0 ]] || echo "  reported: $out"
+
 if [[ $failures -ne 0 ]]; then
     echo "FAILURES: $failures"
     exit 1

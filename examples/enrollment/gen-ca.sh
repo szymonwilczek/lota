@@ -6,8 +6,8 @@
 # its device-pseudonym secret and its TLS listener key and certificate.
 # An existing key is kept and a missing certificate is issued again from
 # it; a new key gets a new certificate, and a new ca.key a new tls.crt.
-# An existing pseudonym.key is kept. The EK manufacturer roots are not
-# made here.
+# A tls.crt that ca.crt does not verify is issued again. An existing
+# pseudonym.key is kept. The EK manufacturer roots are not made here.
 
 set -euo pipefail
 
@@ -40,6 +40,10 @@ fi
 # can be replaced without moving any host to a new profile.
 if [ ! -f tls.key ]; then
     openssl genpkey -algorithm EC -pkeyopt ec_paramgen_curve:P-256 -out tls.key
+    rm -f tls.crt
+fi
+if [ -f tls.crt ] &&
+       ! openssl verify -CAfile ca.crt tls.crt >/dev/null 2>&1; then
     rm -f tls.crt
 fi
 if [ ! -f tls.crt ]; then

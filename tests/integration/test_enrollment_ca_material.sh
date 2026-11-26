@@ -147,6 +147,24 @@ lost_certs_come_back() {
 check "a lost anchor and listener certificate come back from their keys" \
       lost_certs_come_back
 
+# A self-signed listener left by an older script, which ca.crt does not
+# verify, is issued again; one that verifies is kept.
+stale_listener_reissued() {
+    local first
+
+    openssl req -x509 -new -key "$CA_DIR/tls.key" -days 1 \
+	    -subj "/CN=lota-attest-ca" -out "$CA_DIR/tls.crt" 2>/dev/null &&
+	! openssl verify -CAfile "$CA_DIR/ca.crt" "$CA_DIR/tls.crt" \
+		>/dev/null 2>&1 &&
+	"$GEN_CA" "$CA_DIR" >/dev/null &&
+	openssl verify -CAfile "$CA_DIR/ca.crt" "$CA_DIR/tls.crt" >/dev/null &&
+	first=$(cksum <"$CA_DIR/tls.crt") &&
+	"$GEN_CA" "$CA_DIR" >/dev/null &&
+	test "$(cksum <"$CA_DIR/tls.crt")" = "$first"
+}
+check "a listener certificate ca.crt does not verify is issued again" \
+      stale_listener_reissued
+
 # A single leaf is issued only from an existing provisioning CA.
 leaf_without_ca_refused() {
     ! OUT_DIR="$WORK_DIR/mtls" "$GEN_CERTS" -server >/dev/null 2>&1 &&

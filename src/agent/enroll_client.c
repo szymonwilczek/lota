@@ -553,9 +553,8 @@ static int run_enrollment(const struct profile_paths *paths, const char *server,
 	printf("Reaching the CA at %s:%d...\n", server, port);
 	ret = ca_session_opens(server, port, ca_cert, skip_verify, pin);
 	if (ret < 0) {
-		fprintf(stderr,
-			"Nothing on this host was changed: no key was created "
-			"or replaced, and no certificate was written.\n");
+		fprintf(stderr, "No key was created or replaced, and no "
+				"certificate was written.\n");
 		net_cleanup();
 		return ret;
 	}
@@ -880,6 +879,11 @@ static int reenroll_profile(const struct profile_paths *paths,
 			     st.has_pin ? st.pin_sha256 : NULL,
 			     st.enroll_token[0] ? st.enroll_token : NULL);
 	OPENSSL_cleanse(&st, sizeof(st));
+	if (ret == -LOTA_ERR_NET_TLS_CERT)
+		fprintf(stderr,
+			"Name the publisher's current anchor: lota-agent "
+			"--reenroll --publisher %s --ca-cert <their anchor>\n",
+			paths->id);
 
 	printf("\n=== Re-enrollment %s ===\n",
 	       ret == 0 ? "Successful" : "Failed");
@@ -1076,12 +1080,16 @@ int do_add_publisher(const char *config_path, const char *name,
 
 	/*
 	 * The writer compares anchor paths; the same key under a second path is
-	 * caught here.
+	 * caught here. A profile of the same CA whose anchor cannot be read may
+	 * be this publisher, so nothing is appended beside it.
 	 */
 	{
+		const char *conf = config_path ? config_path :
+						 LOTA_CONFIG_DEFAULT_PATH;
+		int port = ca_port > 0 ? ca_port : LOTA_DEFAULT_CA_PORT;
 		struct lota_config *existing = config_new();
 		struct profile_paths *other = malloc(sizeof(*other));
-		bool already_configured = false;
+		int done = -1;
 		int i;
 
 		if (!existing || !other) {
@@ -1091,29 +1099,40 @@ int do_add_publisher(const char *config_path, const char *name,
 			return 1;
 		}
 
-		if (config_load(existing,
-				config_path ? config_path :
-					      LOTA_CONFIG_DEFAULT_PATH) == 0) {
-			for (i = 0; i < existing->profile_count; i++) {
-				if (profile_paths_from_anchor(
-					    existing->profiles[i].ca_cert,
-					    other) < 0)
-					continue;
-				if (strcmp(other->id, paths.id) != 0)
-					continue;
+		if (config_load(existing, conf) == 0) {
+			for (i = 0; i < existing->profile_count && done < 0;
+			     i++) {
+				const struct lota_profile *e =
+					&existing->profiles[i];
 
-				printf("Publisher %s is already configured as "
-				       "\"%s\"; nothing to do.\n",
-				       paths.id, existing->profiles[i].name);
-				already_configured = true;
-				break;
+				if (profile_paths_from_anchor(e->ca_cert,
+							      other) < 0) {
+					if (strcmp(e->ca, ca_server) != 0 ||
+					    e->ca_port != port)
+						continue;
+					fprintf(stderr,
+						"Profile \"%s\" in %s names "
+						"the anchor %s, which cannot "
+						"be read; point its ca_cert at "
+						"%s or remove the section, "
+						"then run again.\n",
+						e->name, conf, e->ca_cert,
+						ca_cert);
+					done = 1;
+				} else if (strcmp(other->id, paths.id) == 0) {
+					printf("Publisher %s is already "
+					       "configured as \"%s\"; nothing "
+					       "to do.\n",
+					       paths.id, e->name);
+					done = 0;
+				}
 			}
 		}
 
 		config_free(existing);
 		free(other);
-		if (already_configured)
-			return 0;
+		if (done >= 0)
+			return done;
 	}
 
 	memset(&p, 0, sizeof(p));

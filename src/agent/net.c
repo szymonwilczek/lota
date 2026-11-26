@@ -13,6 +13,7 @@
 #include <netdb.h>
 #include <poll.h>
 #include <signal.h>
+#include <stdio.h>
 #include <string.h>
 #include <sys/epoll.h>
 #include <sys/socket.h>
@@ -187,6 +188,7 @@ int net_context_init(struct net_context *ctx, const char *server, int port,
 		lota_warn("Do NOT use in production.");
 		SSL_CTX_set_verify(ssl_ctx, SSL_VERIFY_NONE, NULL);
 	} else if (ca_cert_path) {
+		snprintf(ctx->anchor, sizeof(ctx->anchor), "%s", ca_cert_path);
 		/* pinned anchor: a CA or the listener's own certificate */
 		if (SSL_CTX_load_verify_locations(ssl_ctx, ca_cert_path,
 						  NULL) != 1) {
@@ -377,9 +379,11 @@ int net_connect(struct net_context *ctx)
 					     SSL_get_verify_result(ssl);
 
 		if (verify_result != X509_V_OK) {
-			lota_err("TLS certificate verification failed: %s "
-				 "(code %ld). "
-				 "Use --ca-cert or --no-verify-tls for testing",
+			lota_err("TLS certificate verification failed for "
+				 "%s:%d against %s: %s (code %ld)",
+				 ctx->server_addr, ctx->server_port,
+				 ctx->anchor[0] ? ctx->anchor :
+						  "the system trust store",
 				 X509_verify_cert_error_string(verify_result),
 				 verify_result);
 			SSL_free(ssl);

@@ -203,6 +203,32 @@ static int connect_verified(const char *anchor_path, X509 *cert, EVP_PKEY *key)
 	return ret;
 }
 
+/* What net_connect() logs to a listener offering @cert, into @out */
+static int connect_logged(const char *anchor_path, X509 *cert, EVP_PKEY *key,
+			  char *out, size_t len)
+{
+	char path[] = "/tmp/lota-tls-log-XXXXXX";
+	int fd = mkstemp(path);
+	int saved = dup(STDERR_FILENO);
+	ssize_t n;
+	int ret;
+
+	if (fd < 0 || saved < 0)
+		return -EIO;
+	fflush(stderr);
+	dup2(fd, STDERR_FILENO);
+	ret = connect_verified(anchor_path, cert, key);
+	fflush(stderr);
+	dup2(saved, STDERR_FILENO);
+	close(saved);
+
+	n = pread(fd, out, len - 1, 0);
+	out[n > 0 ? n : 0] = '\0';
+	close(fd);
+	unlink(path);
+	return ret;
+}
+
 int main(void)
 {
 	EVP_PKEY *ca_key = EVP_EC_gen("P-256");
@@ -259,6 +285,23 @@ int main(void)
 		      -LOTA_ERR_NET_TLS_CERT,
 	      "a listener certificate for another name is a certificate "
 	      "failure, not a failed handshake");
+
+	{
+		char log[2048];
+
+		connect_logged(self_pem, leaf, leaf_key, log, sizeof(log));
+		CHECK(strstr(log, self_pem) != NULL,
+		      "a certificate failure names the anchor it was checked "
+		      "against");
+		CHECK(strstr(log, "--no-verify-tls") == NULL &&
+			      strstr(log, "--ca-cert") == NULL,
+		      "a certificate failure advises no flag");
+
+		connect_logged(NULL, leaf, leaf_key, log, sizeof(log));
+		CHECK(strstr(log, "against the system trust store") != NULL,
+		      "without an anchor the failure names the system trust "
+		      "store");
+	}
 
 	X509_free(ca);
 	X509_free(leaf);
