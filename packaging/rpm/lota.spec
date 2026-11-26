@@ -12,9 +12,10 @@
 # top-level VERSION file (0.9.0-rc1 -> 0.9.0~rc1), so a version bump touches
 # VERSION alone; build through `make srpm`, not rpmbuild on this file.
 
-# Ship the built files byte for byte: the agent binary's fs-verity hash is
-# pinned and the BPF object is signed. Debuginfo extraction and the three strip
-# BRPs each rewrite ELF files, so all four are off; %check verifies both.
+# Ship the built files byte for byte: the agent folds the SHA-256 of its
+# binary into PCR 14 and the verifier pins it, and the BPF object is signed.
+# Debuginfo extraction and the three strip BRPs each rewrite ELF files,
+# so all four are off; %check verifies both.
 %global debug_package %{nil}
 %global __brp_strip %{nil}
 %global __brp_strip_comment_note %{nil}
@@ -146,7 +147,7 @@ fi
 
 %check
 # rpm's strip BRPs rewrite ELF files after %install. The packaged object must
-# still match its signature and the agent binary its pinned fs-verity hash.
+# still match its signature and the agent binary its pinned SHA-256.
 build/lota-agent --verify-policy \
 	%{buildroot}%{_prefix}/lib/lota/lota_lsm.bpf.o \
 	--policy-pubkey %{buildroot}%{_prefix}/lib/lota/enforcement.pub

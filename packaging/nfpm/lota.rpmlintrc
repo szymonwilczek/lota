@@ -7,8 +7,8 @@
 # Do NOT add blanket filters here.
 
 # Binaries ship unstripped on purpose:
-# agent binary is fs-verity-measured and its hash is pinned, so it must ship
-# byte-for-byte as built; stripping would change the hash.
+# agent folds the SHA-256 of its binary into PCR 14 and the verifier pins
+# it, so it must ship byte-for-byte as built; stripping would change the hash.
 # SDK/service binaries follow the same build.
 addFilter("unstripped-binary-or-object")
 
