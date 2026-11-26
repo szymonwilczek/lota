@@ -42,7 +42,8 @@ enum lota_error {
 	/*
 	 * This process's own executable has no measurable identity, so no token
 	 * is issued. The agent's log names the object and why. Another
-	 * protected process without one clears LOTA_FLAG_IMAGE_FULLY_MEASURED.
+	 * process of the token without one clears
+	 * LOTA_FLAG_IMAGE_FULLY_MEASURED.
 	 */
 	LOTA_ERR_UNMEASURABLE_SELF = -14,
 	/* The agent holds no TPM to sign a token with; no retry helps. */
@@ -92,17 +93,19 @@ enum lota_error {
 #define LOTA_FLAG_TOKEN_ONLY (1 << 8)
 
 /*
- * Every file-backed executable mapping of every protected process was measured.
- * Clear when an object could not be measured or nothing is protected.
- * A policy input for the publisher, not a verdict.
+ * Every file-backed executable mapping of every protected process was measured,
+ * in a token of every one it carries. Clear when an object could not be
+ * measured or nothing is protected. A policy input for the publisher,
+ * not a verdict.
  */
 #define LOTA_FLAG_IMAGE_FULLY_MEASURED (1 << 9)
 
 /*
  * A protected process was ended through this agent, for its owner or root. An
- * ordinary signal reaches it as well; this route leaves a record. With the
- * protected set the token carries, a publisher can see which process left. Set
- * until the agent ends; a restart shows as LOTA_FLAG_AGENT_RESTARTED.
+ * ordinary signal reaches it as well; this route leaves a record. The flag is
+ * host-wide; the protected set the token carries shows which of the publisher's
+ * own processes left. Set until the agent ends; a restart shows as
+ * LOTA_FLAG_AGENT_RESTARTED.
  */
 #define LOTA_FLAG_PROTECTED_TERMINATED (1 << 10)
 
@@ -230,13 +233,14 @@ struct lota_connect_opts {
 	/*
 	 * Hex SHA-256 of the publisher's attestation-CA trust anchor
 	 * SubjectPublicKeyInfo. Selects the AIK that signs this connection's
-	 * tokens and the verdict lota_is_attested() reports.
+	 * tokens, the protected processes they carry and the verdict
+	 * lota_is_attested() reports.
 	 *
-	 * With NULL, a single-publisher host answers with its one profile and
-	 * the host-wide verdict; a host that answers for several refuses a
-	 * token. The connection fails when the agent cannot answer for the
-	 * publisher named: falling back would hand the title another
-	 * publisher's evidence.
+	 * With NULL, a single-publisher host answers with its one profile,
+	 * the whole protected set and the host-wide verdict; a host that answers
+	 * for several refuses a token. The connection fails when the agent
+	 * cannot answer for the publisher named: falling back would hand the
+	 * title another publisher's evidence.
 	 */
 	const char *publisher_profile;
 };

@@ -423,9 +423,22 @@ int bpf_loader_verify_kernel_runtime_hardening(bool allow_mutable_rootfs);
 int bpf_loader_protect_pid(struct bpf_loader_ctx *ctx, uint32_t pid);
 
 /**
+ * struct bpf_instance_member - An adopted member and the root it came from.
+ * @start_ticks: Start time of the member.
+ * @root_tgid: Root of its instance.
+ * @root_start_ticks: Start time of the root.
+ */
+struct bpf_instance_member {
+	uint64_t start_ticks;
+	uint32_t root_tgid;
+	uint64_t root_start_ticks;
+};
+
+/**
  * bpf_loader_adopt_instance_member() - Name an instance member in the set.
  * @ctx: Loaded context.
  * @pid: Process ID to ask about.
+ * @member: Filled when @pid is added.
  *
  * A process created by a protected one carries its creator's instance in
  * lota_instance. When @pid does, it is added to protected_pids under its start
@@ -434,7 +447,8 @@ int bpf_loader_protect_pid(struct bpf_loader_ctx *ctx, uint32_t pid);
  *
  * Return: 1 when added, 0 when @pid is not a member, or a negative errno.
  */
-int bpf_loader_adopt_instance_member(struct bpf_loader_ctx *ctx, uint32_t pid);
+int bpf_loader_adopt_instance_member(struct bpf_loader_ctx *ctx, uint32_t pid,
+				     struct bpf_instance_member *member);
 
 /**
  * bpf_loader_instance_stopped_ms() - How long @pid's instance stood stopped.

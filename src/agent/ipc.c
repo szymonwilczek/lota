@@ -1001,6 +1001,17 @@ static struct measure_report_table g_measure_reports;
 /* what the last token round found mapped; IPC thread only */
 static struct registry g_registry;
 
+/*
+ * Who each process of the set is protected for; IPC thread only. An entry
+ * outlives a catch-up only in the set or as the root of one in it, and each
+ * PROTECT_PID catches up before it adds one.
+ */
+static struct protect_owner g_protect_owner_v[2 * LOTA_MAX_PROTECTED_PIDS + 1];
+static struct protect_owners g_protect_owners = {
+	.v = g_protect_owner_v,
+	.cap = sizeof(g_protect_owner_v) / sizeof(g_protect_owner_v[0]),
+};
+
 #define REGISTRY_OBJECTS_MAX LOTA_IPC_REGISTRY_MAX_OBJECTS
 _Static_assert(REGISTRY_OBJECTS_MAX >= LOTA_RUNTIME_IMAGE_MAX_MODULES,
 	       "the registry must hold every object a process is measured with");
@@ -1280,6 +1291,26 @@ static void handle_get_boot_evidence(struct ipc_context *ctx,
 	client->send_offset = 0;
 }
 
+/*
+ * A connection bound to a publisher is answered for the processes protected
+ * for it, and on a host serving one publisher for those protected for none;
+ * one bound to none for the whole set.
+ */
+static bool token_covers_pid(const struct ipc_context *ctx,
+			     const struct ipc_client *client, uint32_t pid)
+{
+	const char *owner = "";
+	uint64_t ticks = 0;
+
+	if (!client->profile)
+		return true;
+	if (read_pid_start_time_ticks((pid_t)pid, &ticks) == 0)
+		owner = protect_owner_publisher(&g_protect_owners, pid, ticks);
+	if (!owner[0])
+		return ctx->profile_count == 1;
+	return strcmp(owner, client->profile->paths.id) == 0;
+}
+
 static void handle_get_token(struct ipc_context *ctx, struct ipc_client *client,
 			     const uint8_t *payload, uint32_t payload_len)
 {
@@ -1293,6 +1324,8 @@ static void handle_get_token(struct ipc_context *ctx, struct ipc_client *client,
 	uint8_t *data_ptr;
 	uint32_t *runtime_pids = NULL;
 	uint32_t runtime_pid_count = 0;
+	uint8_t *in_token = NULL;
+	uint32_t token_pid_count = 0;
 	uint64_t stopped_ms = 0;
 	uint16_t pid_list_size = 0;
 	uint8_t (*registry_digests)[32] = NULL;
@@ -1469,10 +1502,23 @@ static void handle_get_token(struct ipc_context *ctx, struct ipc_client *client,
 	measure_report_retain(&g_measure_reports, runtime_pids,
 			      runtime_pid_count);
 
-	if (runtime_pid_count > LOTA_IPC_TOKEN_MAX_PROTECT_PIDS) {
+	in_token = calloc(runtime_pid_count ? runtime_pid_count : 1,
+			  sizeof(*in_token));
+	if (!in_token) {
+		fail = true;
+		fail_code = LOTA_IPC_ERR_INTERNAL;
+		goto out;
+	}
+	for (uint32_t i = 0; i < runtime_pid_count; i++) {
+		in_token[i] = token_covers_pid(ctx, client, runtime_pids[i]);
+		if (in_token[i])
+			token_pid_count++;
+	}
+
+	if (token_pid_count > LOTA_IPC_TOKEN_MAX_PROTECT_PIDS) {
 		lota_err("runtime protected PID count %u exceeds the per-token "
 			 "limit of %u",
-			 runtime_pid_count,
+			 token_pid_count,
 			 (unsigned)LOTA_IPC_TOKEN_MAX_PROTECT_PIDS);
 		fail = true;
 		fail_code = LOTA_IPC_ERR_TOO_MANY_PROTECTED_PIDS;
@@ -1480,7 +1526,7 @@ static void handle_get_token(struct ipc_context *ctx, struct ipc_client *client,
 	}
 
 	{
-		size_t pid_bytes = (size_t)runtime_pid_count * sizeof(uint32_t);
+		size_t pid_bytes = (size_t)token_pid_count * sizeof(uint32_t);
 		if (pid_bytes > UINT16_MAX) {
 			fail = true;
 			fail_code = LOTA_IPC_ERR_INTERNAL;
@@ -1493,8 +1539,8 @@ static void handle_get_token(struct ipc_context *ctx, struct ipc_client *client,
 	lota_rt_measure_round_begin();
 
 	/*
-	 * Each protected process's registry digest joins the protect digest.
-	 * One that cannot be measured stays a zero digest and clears
+	 * Each process of the token joins the protect digest with its registry
+	 * digest. One that cannot be measured stays a zero digest and clears
 	 * LOTA_STATUS_IMAGE_FULLY_MEASURED; only the caller's own refuses.
 	 */
 	if (runtime_pid_count > 0) {
@@ -1638,10 +1684,11 @@ static void handle_get_token(struct ipc_context *ctx, struct ipc_client *client,
 					lota_warn("%s%s", statement,
 						  held_clause);
 				}
-				image_fully_measured = false;
+				if (in_token[i])
+					image_fully_measured = false;
 				continue;
 			}
-			if (cov.content_hashed > 0)
+			if (cov.content_hashed > 0 && in_token[i])
 				image_content_hashed = true;
 
 			if (cov.unmeasurable > 0) {
@@ -1662,7 +1709,8 @@ static void handle_get_token(struct ipc_context *ctx, struct ipc_client *client,
 					lota_warn("%s%s", statement,
 						  held_clause);
 				}
-				image_fully_measured = false;
+				if (in_token[i])
+					image_fully_measured = false;
 				continue;
 			}
 
@@ -1699,9 +1747,19 @@ static void handle_get_token(struct ipc_context *ctx, struct ipc_client *client,
 
 	registry_replace(&g_registry, &next_registry);
 
+	/* the round measured the whole set; the token keeps its own part */
+	for (uint32_t i = 0, n = 0; i < runtime_pid_count; i++) {
+		if (!in_token[i])
+			continue;
+		runtime_pids[n] = runtime_pids[i];
+		memmove(registry_digests[n], registry_digests[i],
+			sizeof(registry_digests[n]));
+		n++;
+	}
+
 	ret = lota_compute_runtime_protect_digest(runtime_pids,
 						  registry_digests,
-						  runtime_pid_count,
+						  token_pid_count,
 						  runtime_protect_digest);
 	if (ret < 0) {
 		lota_err("runtime protected PID digest computation failed: %s",
@@ -1714,14 +1772,14 @@ static void handle_get_token(struct ipc_context *ctx, struct ipc_client *client,
 	token->flags = lota_status_fold_content_hash(
 		lota_status_fold_coverage(
 			token->flags,
-			lota_coverage_is_full(runtime_pid_count,
+			lota_coverage_is_full(token_pid_count,
 					      image_fully_measured)),
 		image_content_hashed);
 
 	memcpy(token->runtime_protect_digest, runtime_protect_digest,
 	       sizeof(token->runtime_protect_digest));
 	token->runtime_protect_epoch = g_agent.policy_protect_epoch;
-	token->protect_pid_count = runtime_pid_count;
+	token->protect_pid_count = token_pid_count;
 	token->pid_list_size = pid_list_size;
 	token->runtime_protect_version = LOTA_IPC_RUNTIME_PROTECT_V1;
 
@@ -1774,9 +1832,10 @@ static void handle_get_token(struct ipc_context *ctx, struct ipc_client *client,
 		goto out;
 	}
 
-	total_size = LOTA_IPC_TOKEN_HEADER_SIZE + pid_list_size +
-		     registry_list_size + quote.attest_size +
-		     quote.signature_size;
+	total_size =
+		LOTA_IPC_TOKEN_HEADER_SIZE + pid_list_size +
+		(size_t)token_pid_count * LOTA_IPC_TOKEN_REGISTRY_DIGEST_SIZE +
+		quote.attest_size + quote.signature_size;
 	if (total_size > LOTA_IPC_MAX_PAYLOAD) {
 		lota_err("token too large (%zu bytes): too many protected PIDs",
 			 total_size);
@@ -1800,15 +1859,18 @@ static void handle_get_token(struct ipc_context *ctx, struct ipc_client *client,
 
 	data_ptr = client->send_buf + LOTA_IPC_RESPONSE_SIZE +
 		   LOTA_IPC_TOKEN_HEADER_SIZE;
-	for (uint32_t i = 0; i < runtime_pid_count; i++) {
+	for (uint32_t i = 0; i < token_pid_count; i++) {
 		uint8_t pid_le[4];
 		lota__write_le32(pid_le, runtime_pids[i]);
 		memcpy(data_ptr, pid_le, sizeof(pid_le));
 		data_ptr += sizeof(pid_le);
 	}
-	if (registry_list_size > 0 && registry_digests) {
-		memcpy(data_ptr, registry_digests, registry_list_size);
-		data_ptr += registry_list_size;
+	if (token_pid_count > 0) {
+		size_t len = (size_t)token_pid_count *
+			     LOTA_IPC_TOKEN_REGISTRY_DIGEST_SIZE;
+
+		memcpy(data_ptr, registry_digests, len);
+		data_ptr += len;
 	}
 	memcpy(data_ptr, quote.attest_data, quote.attest_size);
 	data_ptr += quote.attest_size;
@@ -1844,6 +1906,7 @@ out:
 		OPENSSL_cleanse(registry_digests, registry_list_size);
 		free(registry_digests);
 	}
+	free(in_token);
 	free(objs);
 	free(hist_keys);
 	free(hist_vals);
@@ -2427,8 +2490,18 @@ static void runtime_protect_reap_exited(void)
 
 static int protect_pid_adopt(uint32_t pid, void *ctx)
 {
+	struct bpf_instance_member m;
+	int ret;
+
 	(void)ctx;
-	return bpf_loader_adopt_instance_member(&g_agent.bpf_ctx, pid);
+	ret = bpf_loader_adopt_instance_member(&g_agent.bpf_ctx, pid, &m);
+	if (ret > 0 &&
+	    protect_owner_note(&g_protect_owners, pid, m.start_ticks,
+			       m.root_tgid, m.root_start_ticks, NULL) < 0)
+		lota_warn("PID %u joins the runtime set for no publisher: "
+			  "owner table full",
+			  pid);
+	return ret;
 }
 
 /* Every running process but the agent, from /proc */
@@ -2544,6 +2617,8 @@ static void runtime_protect_catch_up(void)
 {
 	runtime_protect_reap_exited();
 	runtime_protect_adopt_members();
+	protect_owners_retain(&g_protect_owners, g_agent.policy_protect_pids,
+			      g_agent.policy_protect_pid_count);
 }
 
 static int build_canonical_runtime_pid_list(uint32_t **out_pids,
@@ -2689,6 +2764,23 @@ static int protect_target_untraced(uint32_t pid)
 	return ret;
 }
 
+/* @pid is protected for the publisher @client named */
+static void protect_owner_note_add(const struct ipc_client *client,
+				   uint32_t pid, bool self_target)
+{
+	const char *publisher = client->profile ? client->profile->paths.id :
+						  NULL;
+	uint64_t ticks = client->peer_start_time_ticks;
+
+	if (!self_target && read_pid_start_time_ticks((pid_t)pid, &ticks) < 0)
+		return;
+	if (protect_owner_note(&g_protect_owners, pid, ticks, pid, ticks,
+			       publisher) < 0)
+		lota_warn("PID %u is protected for no publisher: owner table "
+			  "full",
+			  pid);
+}
+
 static void handle_protect_pid_update(struct ipc_context *ctx,
 				      struct ipc_client *client,
 				      const uint8_t *payload,
@@ -2783,6 +2875,8 @@ static void handle_protect_pid_update(struct ipc_context *ctx,
 
 	/* idempotent no-op: return current digest */
 	if ((add && had) || (!add && !had)) {
+		if (add)
+			protect_owner_note_add(client, pid, self_target);
 		resp->magic = LOTA_IPC_MAGIC;
 		resp->version = LOTA_IPC_VERSION;
 		resp->result = LOTA_IPC_OK;
@@ -2886,6 +2980,8 @@ static void handle_protect_pid_update(struct ipc_context *ctx,
 		new_pids = NULL;
 		new_count = 0;
 	}
+	if (add)
+		protect_owner_note_add(client, pid, self_target);
 
 	resp->magic = LOTA_IPC_MAGIC;
 	resp->version = LOTA_IPC_VERSION;

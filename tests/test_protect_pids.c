@@ -138,6 +138,63 @@ static void test_adopt(void)
 	}
 }
 
+#define PUB_A "aaaa"
+#define PUB_B "bbbb"
+
+/* Two titles of two publishers, each with a child the kernel adopted */
+static void test_owners(void)
+{
+	struct protect_owner v[6];
+	struct protect_owners t = { v, 0, 6 };
+	const uint32_t set[] = { 100, 101, 200, 201, 300 };
+
+	protect_owner_note(&t, 100, 1000, 100, 1000, PUB_A);
+	protect_owner_note(&t, 101, 1010, 100, 1000, NULL);
+	protect_owner_note(&t, 200, 2000, 200, 2000, PUB_B);
+	protect_owner_note(&t, 201, 2010, 200, 2000, NULL);
+	protect_owner_note(&t, 300, 3000, 300, 3000, NULL);
+
+	CHECK(strcmp(protect_owner_publisher(&t, 100, 1000), PUB_A) == 0 &&
+		      strcmp(protect_owner_publisher(&t, 200, 2000), PUB_B) ==
+			      0,
+	      "a process named on a publisher's connection is theirs");
+	CHECK(strcmp(protect_owner_publisher(&t, 101, 1010), PUB_A) == 0 &&
+		      strcmp(protect_owner_publisher(&t, 201, 2010), PUB_B) ==
+			      0,
+	      "an adopted member is its instance root's publisher's");
+	CHECK(protect_owner_publisher(&t, 300, 3000)[0] == '\0' &&
+		      protect_owner_publisher(&t, 400, 4000)[0] == '\0',
+	      "a process named for no publisher, or never named, is no one's");
+	CHECK(protect_owner_publisher(&t, 100, 1001)[0] == '\0',
+	      "a later process on the PID is not the earlier one's");
+
+	protect_owner_note(&t, 101, 1010, 101, 1010, PUB_B);
+	CHECK(strcmp(protect_owner_publisher(&t, 101, 1010), PUB_B) == 0,
+	      "a member that names itself for a publisher is that publisher's");
+	protect_owner_note(&t, 100, 1000, 100, 1000, PUB_B);
+	CHECK(strcmp(protect_owner_publisher(&t, 100, 1000), PUB_A) == 0,
+	      "a second name does not move a process to another publisher");
+
+	protect_owner_note(&t, 300, 3001, 300, 3001, PUB_A);
+	CHECK(t.n == 5 && strcmp(protect_owner_publisher(&t, 300, 3001),
+				 PUB_A) == 0,
+	      "a reused PID replaces the entry of the process it outlived");
+
+	protect_owners_retain(&t, set + 1, 4);
+	CHECK(t.n == 5 && strcmp(protect_owner_publisher(&t, 201, 2010),
+				 PUB_B) == 0,
+	      "an exited root stays while a member of it is protected");
+
+	protect_owners_retain(&t, set + 2, 2);
+	CHECK(t.n == 2 && !protect_owner_find(&t, 100, 1000) &&
+		      !protect_owner_find(&t, 101, 1010),
+	      "an entry no protected process needs is dropped");
+
+	t.n = t.cap;
+	CHECK(protect_owner_note(&t, 999, 1, 999, 1, PUB_A) == -ENOSPC,
+	      "a full table refuses an entry");
+}
+
 int main(void)
 {
 	uint32_t out[8];
@@ -222,6 +279,7 @@ int main(void)
 	}
 
 	test_adopt();
+	test_owners();
 
 	printf("\n%s\n", g_failures ? "FAILURES" : "All tests passed");
 	return g_failures ? 1 : 0;

@@ -350,6 +350,14 @@ per-request argument, because a title plays for one publisher: after it,
 ``GET_TOKEN`` quotes with that publisher's AIK and ``GET_STATUS`` answers with
 that publisher's verdict and validity window.
 
+The token carries the processes protected for that publisher: the ones named
+on a connection bound to it and the members of their instances. Its PID list,
+``runtime_protect_digest``, coverage flags and the per-token limit are taken
+over that part of the set, so one publisher's title neither sees another's
+processes nor loses coverage to them. A process named on a connection bound to
+no publisher, or protected by the startup policy, is carried by the host-wide
+answer and, on a host that serves one publisher, by that publisher's token.
+
 Three rules the agent holds to:
 
 * An identity the host has no profile for is **refused**
