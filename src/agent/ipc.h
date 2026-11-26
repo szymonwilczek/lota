@@ -118,6 +118,16 @@ struct ipc_context {
 	uint32_t policy_keys; /* LOTA_STATUS_POLICY_KEYS the daemon holds */
 
 	/*
+	 * The host word last announced, the protected-set epoch and coverage
+	 * forget count it was folded under, and when ipc_status_tick() may fold
+	 * again.
+	 */
+	uint32_t published_flags;
+	uint64_t published_epoch;
+	uint64_t published_forgets;
+	uint64_t status_due_ns;
+
+	/*
 	 * Publisher profiles, borrowed from the caller of ipc_set_profiles().
 	 * Read from the epoll loop's thread, as tpm is.
 	 *
@@ -237,6 +247,29 @@ uint32_t ipc_host_status_flags(const struct ipc_context *ctx);
  * The next read walks the protected set again.
  */
 void ipc_runtime_coverage_forget(void);
+
+/**
+ * ipc_status_timeout_ms() - Time until ipc_status_tick() has work.
+ * @ctx: Server context.
+ * @now_ns: CLOCK_MONOTONIC nanoseconds.
+ *
+ * Return: -1 while the server is not running, or while the protected set is
+ * empty and neither its epoch nor ipc_runtime_coverage_forget() moved since
+ * the last announcement, else the milliseconds left, 0 when due.
+ */
+int ipc_status_timeout_ms(const struct ipc_context *ctx, uint64_t now_ns);
+
+/**
+ * ipc_status_tick() - Announce a status word that moved unannounced.
+ * @ctx: Server context.
+ * @now_ns: CLOCK_MONOTONIC nanoseconds.
+ *
+ * The coverage bits change without a status update: a protected process maps
+ * an object, the protected set changes, or a protected PID exits.
+ * Folds the host word at most once a second and sends StatusChanged and
+ * LOTA_IPC_EVENT_STATUS when it differs from the word last announced.
+ */
+void ipc_status_tick(struct ipc_context *ctx, uint64_t now_ns);
 
 /**
  * ipc_runtime_measure_stats() - Count what the measurement reports left out.

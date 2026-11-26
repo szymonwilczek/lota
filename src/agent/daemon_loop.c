@@ -156,8 +156,15 @@ int agent_run_event_loop(struct agent_loop_ctx *ctx)
 
 	while (*ctx->running) {
 		int timeout = -1;
+		int status_due;
+
+		ipc_status_tick(ctx->ipc_ctx, monotonic_ns());
 		if (ctx->wd_enabled && ctx->wd_usec > 0)
 			timeout = (int)(ctx->wd_usec / 2000);
+		status_due =
+			ipc_status_timeout_ms(ctx->ipc_ctx, monotonic_ns());
+		if (status_due >= 0 && (timeout < 0 || status_due < timeout))
+			timeout = status_due;
 		if (ctx->bench) {
 			int due = bench_timeout_ms(ctx->bench, monotonic_ns());
 

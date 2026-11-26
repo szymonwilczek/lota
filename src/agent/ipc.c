@@ -82,6 +82,9 @@ struct uid_rate {
 };
 
 #define MAX_RATE_ENTRIES 256
+
+/* how often the status word is refolded while it may move unannounced */
+#define IPC_STATUS_TICK_NS (1000ULL * 1000 * 1000)
 static struct uid_rate token_rate_table[MAX_RATE_ENTRIES];
 static int token_rate_count = 0;
 static uint64_t token_last_table_full_warn_sec = 0;
@@ -976,6 +979,7 @@ static void client_attestation_view(const struct ipc_context *ctx,
 /* Cached coverage verdict, dropped on an epoch change or on forget */
 static struct {
 	uint64_t epoch; /* protected-set mutation id it was taken under */
+	uint64_t forgets; /* ipc_runtime_coverage_forget() calls */
 	bool full;
 	bool content_hashed; /* a content hash answered for one of them */
 	bool valid;
@@ -984,6 +988,7 @@ static struct {
 void ipc_runtime_coverage_forget(void)
 {
 	g_coverage.valid = false;
+	g_coverage.forgets++;
 }
 
 /* Last answer reported per protected PID; an unchanged round stays quiet */
@@ -1146,6 +1151,62 @@ uint32_t ipc_host_status_flags(const struct ipc_context *ctx)
 		return 0;
 
 	return runtime_coverage_fold(ctx->status_flags);
+}
+
+/* Announce the host word when it differs from the one last announced */
+static void publish_status(struct ipc_context *ctx)
+{
+	uint32_t flags = ipc_host_status_flags(ctx);
+
+	agent_globals_lock(&g_agent);
+	ctx->published_epoch = g_agent.policy_protect_epoch;
+	agent_globals_unlock(&g_agent);
+	ctx->published_forgets = g_coverage.forgets;
+
+	if (flags == ctx->published_flags)
+		return;
+
+	ctx->published_flags = flags;
+	notify_subscribers(ctx, LOTA_IPC_EVENT_STATUS);
+	dbus_emit_status_changed(ctx->dbus);
+}
+
+/*
+ * The coverage bits may have moved since the last announcement,
+ * or a protected PID may exit, which only a fold notices.
+ */
+static bool status_needs_tick(const struct ipc_context *ctx)
+{
+	uint64_t epoch;
+	int count;
+
+	agent_globals_lock(&g_agent);
+	epoch = g_agent.policy_protect_epoch;
+	count = g_agent.policy_protect_pid_count;
+	agent_globals_unlock(&g_agent);
+
+	return count > 0 || epoch != ctx->published_epoch ||
+	       g_coverage.forgets != ctx->published_forgets;
+}
+
+int ipc_status_timeout_ms(const struct ipc_context *ctx, uint64_t now_ns)
+{
+	if (!ctx->running || !status_needs_tick(ctx))
+		return -1;
+	if (now_ns >= ctx->status_due_ns)
+		return 0;
+
+	return (int)((ctx->status_due_ns - now_ns + 999999) / 1000000);
+}
+
+void ipc_status_tick(struct ipc_context *ctx, uint64_t now_ns)
+{
+	if (!ctx->running || now_ns < ctx->status_due_ns ||
+	    !status_needs_tick(ctx))
+		return;
+
+	ctx->status_due_ns = now_ns + IPC_STATUS_TICK_NS;
+	publish_status(ctx);
 }
 
 static void handle_get_status(struct ipc_context *ctx,
@@ -3044,11 +3105,8 @@ static void handle_terminate_protected(struct ipc_context *ctx,
 	 * vanished.
 	 */
 	ctx->protected_terminated = true;
-	if (!(ctx->status_flags & LOTA_STATUS_PROTECTED_TERMINATED)) {
-		ctx->status_flags |= LOTA_STATUS_PROTECTED_TERMINATED;
-		notify_subscribers(ctx, LOTA_IPC_EVENT_STATUS);
-		dbus_emit_status_changed(ctx->dbus);
-	}
+	ctx->status_flags |= LOTA_STATUS_PROTECTED_TERMINATED;
+	publish_status(ctx);
 
 	resp->magic = LOTA_IPC_MAGIC;
 	resp->version = LOTA_IPC_VERSION;
@@ -3753,8 +3811,6 @@ void ipc_update_status(struct ipc_context *ctx, uint32_t flags,
 	if (!ctx->running)
 		return;
 
-	uint32_t old_flags = ctx->status_flags;
-
 	/* a round publishes this word from scratch */
 	if (ctx->protected_terminated)
 		flags |= LOTA_STATUS_PROTECTED_TERMINATED;
@@ -3768,29 +3824,18 @@ void ipc_update_status(struct ipc_context *ctx, uint32_t flags,
 
 	ctx->status_flags = flags;
 	ctx->valid_until = valid_until;
-
-	if (old_flags != flags) {
-		notify_subscribers(ctx, LOTA_IPC_EVENT_STATUS);
-		dbus_emit_status_changed(ctx->dbus);
-	}
+	publish_status(ctx);
 }
 
 /* Refold the policy bits after the mode or a key changed */
 static void refold_policy(struct ipc_context *ctx)
 {
-	uint32_t flags;
-
 	if (!ctx->running)
 		return;
 
-	flags = lota_status_fold_policy(ctx->status_flags, ctx->mode,
-					ctx->policy_keys);
-	if (flags == ctx->status_flags)
-		return;
-
-	ctx->status_flags = flags;
-	notify_subscribers(ctx, LOTA_IPC_EVENT_STATUS);
-	dbus_emit_status_changed(ctx->dbus);
+	ctx->status_flags = lota_status_fold_policy(
+		ctx->status_flags, ctx->mode, ctx->policy_keys);
+	publish_status(ctx);
 }
 
 void ipc_set_policy(struct ipc_context *ctx, uint32_t keys)
@@ -3815,23 +3860,15 @@ void ipc_record_attestation(struct ipc_context *ctx, bool success)
 void ipc_set_agent_restarted(struct ipc_context *ctx)
 {
 	ctx->agent_restarted = true;
-	if (ctx->status_flags & LOTA_STATUS_AGENT_RESTARTED)
-		return;
-
 	ctx->status_flags |= LOTA_STATUS_AGENT_RESTARTED;
-	notify_subscribers(ctx, LOTA_IPC_EVENT_STATUS);
-	dbus_emit_status_changed(ctx->dbus);
+	publish_status(ctx);
 }
 
 void ipc_set_events_lost(struct ipc_context *ctx)
 {
 	ctx->events_lost = true;
-	if (ctx->status_flags & LOTA_STATUS_EVENTS_LOST)
-		return;
-
 	ctx->status_flags |= LOTA_STATUS_EVENTS_LOST;
-	notify_subscribers(ctx, LOTA_IPC_EVENT_STATUS);
-	dbus_emit_status_changed(ctx->dbus);
+	publish_status(ctx);
 }
 
 void ipc_set_mode(struct ipc_context *ctx, uint8_t mode)

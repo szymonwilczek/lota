@@ -15,9 +15,11 @@
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <signal.h>
 #include <string.h>
 #include <sys/socket.h>
 #include <sys/un.h>
+#include <sys/wait.h>
 #include <time.h>
 #include <unistd.h>
 
@@ -186,9 +188,13 @@ int dbus_process(struct dbus_context *ctx, uint64_t timeout_us)
 	return 0;
 }
 
+/* StatusChanged signals sent */
+static int status_changed;
+
 void dbus_emit_status_changed(struct dbus_context *ctx)
 {
 	(void)ctx;
+	status_changed++;
 }
 
 void dbus_emit_attestation_result(struct dbus_context *ctx, bool success)
@@ -237,17 +243,19 @@ int lota_rt_measure_round_end(size_t *released)
 	return 0;
 }
 
-/* Every PID fully measured; counts the walks */
+/* Every PID but partial_pid fully measured; counts the walks */
 static int coverage_walks;
+static pid_t partial_pid = -1;
 
 int lota_runtime_coverage_pid(pid_t pid,
 			      struct lota_runtime_measure_coverage *cov)
 {
-	(void)pid;
 	coverage_walks++;
 	if (cov) {
 		memset(cov, 0, sizeof(*cov));
 		cov->measured = 4;
+		if (pid == partial_pid)
+			cov->unmeasurable = 1;
 	}
 	return 0;
 }
@@ -417,8 +425,8 @@ static void test_repeat_answers_share_one_walk(struct ipc_context *ctx)
 
 	TEST("repeated status answers cost one walk between them");
 
-	ipc_update_status(ctx, LOTA_STATUS_TPM_OK, 0);
 	coverage_walks = 0;
+	ipc_update_status(ctx, LOTA_STATUS_TPM_OK, 0);
 
 	for (int i = 0; i < 3; i++) {
 		if (read_status(ctx, &st) < 0) {
@@ -527,6 +535,153 @@ static void test_set_change_costs_a_fresh_walk(struct ipc_context *ctx)
 	PASS();
 }
 
+/* Each call one second past the last, so every tick is due */
+static uint64_t tick_now(void)
+{
+	static uint64_t now = 1000ULL * 1000 * 1000;
+
+	now += 1000ULL * 1000 * 1000;
+	return now;
+}
+
+static bool host_fully_measured(struct ipc_context *ctx)
+{
+	return ipc_host_status_flags(ctx) & LOTA_STATUS_IMAGE_FULLY_MEASURED;
+}
+
+/* A mapping bumps no epoch and calls no status update: the tick announces */
+static void test_mapping_loss_is_announced(struct ipc_context *ctx)
+{
+	int before;
+
+	TEST("a protected mapping that ends full coverage is announced");
+
+	ipc_status_tick(ctx, tick_now());
+	if (!host_fully_measured(ctx)) {
+		FAIL("the host is not fully measured to begin with");
+		return;
+	}
+	before = status_changed;
+
+	partial_pid = getpid();
+	ipc_runtime_coverage_forget();
+	ipc_status_tick(ctx, tick_now());
+	partial_pid = -1;
+
+	if (status_changed != before + 1) {
+		FAIL("full coverage was lost without StatusChanged");
+		return;
+	}
+	if (host_fully_measured(ctx)) {
+		FAIL("the announced word still claims full coverage");
+		return;
+	}
+
+	ipc_runtime_coverage_forget();
+	ipc_status_tick(ctx, tick_now());
+	if (status_changed != before + 2) {
+		FAIL("the return to full coverage was not announced");
+		return;
+	}
+
+	PASS();
+}
+
+/* A burst of mappings within one tick costs one walk */
+static void test_mappings_within_a_tick_share_one_walk(struct ipc_context *ctx)
+{
+	uint64_t now = tick_now();
+	int before;
+
+	TEST("mappings within one tick are folded once");
+
+	ipc_status_tick(ctx, now);
+	before = coverage_walks;
+
+	for (int i = 0; i < 5; i++) {
+		ipc_runtime_coverage_forget();
+		ipc_status_tick(ctx, now + 1);
+	}
+	if (coverage_walks != before) {
+		FAIL("a tick that was not due walked the protected set");
+		return;
+	}
+	if (ipc_status_timeout_ms(ctx, now + 1) <= 0) {
+		FAIL("the forgotten verdict is not left for the next tick");
+		return;
+	}
+
+	ipc_status_tick(ctx, tick_now());
+	if (coverage_walks != before + 1) {
+		FAIL("the due tick did not fold the forgotten verdict once");
+		return;
+	}
+
+	PASS();
+}
+
+/* An exited PID is dropped by the fold alone; the tick must run it */
+static void test_protected_exit_is_announced(struct ipc_context *ctx)
+{
+	uint32_t *pids;
+	pid_t child;
+	int before;
+
+	TEST("the exit of a partly measured protected PID is announced");
+
+	child = fork();
+	if (child < 0) {
+		FAIL("fork");
+		return;
+	}
+	if (child == 0) {
+		pause();
+		_exit(0);
+	}
+
+	pids = realloc(g_agent.policy_protect_pids, 2 * sizeof(*pids));
+	if (!pids) {
+		kill(child, SIGKILL);
+		waitpid(child, NULL, 0);
+		FAIL("out of memory");
+		return;
+	}
+	pids[1] = (uint32_t)child;
+	g_agent.policy_protect_pids = pids;
+	g_agent.policy_protect_pid_count = 2;
+	g_agent.policy_protect_epoch += 1;
+	partial_pid = child;
+
+	ipc_status_tick(ctx, tick_now());
+	if (host_fully_measured(ctx)) {
+		FAIL("a partly measured member left the host fully measured");
+		goto out;
+	}
+	before = status_changed;
+
+	kill(child, SIGKILL);
+	waitpid(child, NULL, 0);
+	child = -1;
+
+	ipc_status_tick(ctx, tick_now());
+	if (g_agent.policy_protect_pid_count != 1) {
+		FAIL("the tick did not drop the exited PID");
+		goto out;
+	}
+	if (status_changed != before + 1 || !host_fully_measured(ctx)) {
+		FAIL("the regained full coverage was not announced");
+		goto out;
+	}
+
+	PASS();
+out:
+	if (child > 0) {
+		kill(child, SIGKILL);
+		waitpid(child, NULL, 0);
+	}
+	partial_pid = -1;
+}
+
 int main(void)
 {
 	struct ipc_context ctx;
@@ -560,6 +715,9 @@ int main(void)
 	test_second_caller_pays_nothing(&ctx);
 	test_mapping_change_costs_a_fresh_walk(&ctx);
 	test_set_change_costs_a_fresh_walk(&ctx);
+	test_mapping_loss_is_announced(&ctx);
+	test_mappings_within_a_tick_share_one_walk(&ctx);
+	test_protected_exit_is_announced(&ctx);
 
 	ipc_cleanup(&ctx);
 	unlink(test_socket);

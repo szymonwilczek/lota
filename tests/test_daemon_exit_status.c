@@ -98,19 +98,55 @@ static void test_every_refusing_verdict_needs_an_operator(void)
 }
 
 /*
- * A configuration the operator can correct without rebooting keeps its errno:
- * the boot commitment was never reached, so the unit is free to try again once
- * the file is fixed.
+ * A failure before the commitment that a restart may clear exits 1,
+ * the status Restart=on-failure retries; its errno is in the log.
  */
 static void test_a_correctable_refusal_stays_restartable(void)
 {
 	int rc = lota_daemon_exit_status(-ENOENT, TPM_PCR14_AWAITING_EXTEND);
 
-	TEST("a refusal before the commitment keeps its errno");
+	TEST("a failure before the commitment exits 1");
 	if (rc == LOTA_EXIT_OPERATOR_ACTION)
 		FAIL("a correctable refusal was routed to the operator exit");
-	else if (rc != -ENOENT)
-		FAIL("the errno the daemon returned did not survive");
+	else if (rc != 1)
+		FAIL("the errno leaked into the exit status");
+	else
+		PASS();
+}
+
+/*
+ * The exit status is the low byte: -EKEYREJECTED read as 127,
+ * the shell's "command not found", and -EPERM as 255.
+ */
+static void test_no_errno_reaches_the_exit_status(void)
+{
+	static const int errnos[] = { EKEYREJECTED, EACCES, EPERM,
+				      EBADMSG,	    ENOMEM, EIO };
+	size_t i;
+
+	TEST("every errno exits 1");
+	for (i = 0; i < sizeof(errnos) / sizeof(*errnos); i++) {
+		if (lota_daemon_exit_status(-errnos[i],
+					    TPM_PCR14_AWAITING_EXTEND) != 1) {
+			FAIL(strerror(errnos[i]));
+			return;
+		}
+	}
+	PASS();
+}
+
+/*
+ * The policy, the object's signature and its layout are refused before
+ * the commitment, from files a restart reads again unchanged.
+ */
+static void test_a_refusal_before_the_commitment_needs_an_operator(void)
+{
+	int rc = lota_daemon_exit_status(LOTA_EXIT_OPERATOR_ACTION,
+					 TPM_PCR14_AWAITING_EXTEND);
+
+	TEST("a refusal of the policy or the object exits for an operator");
+	if (rc != LOTA_EXIT_OPERATOR_ACTION)
+		FAIL("the status run_daemon() chose did not survive");
 	else
 		PASS();
 }
@@ -136,8 +172,8 @@ static void test_a_served_daemon_carries_its_own_status(void)
 	if (rc != 0)
 		FAIL("a clean stop did not exit 0");
 	else if (lota_daemon_exit_status(-EBADF, TPM_PCR14_ALREADY_COMMITTED) !=
-		 -EBADF)
-		FAIL("a failed event loop exits 0");
+		 1)
+		FAIL("a failed event loop does not exit 1");
 	else
 		PASS();
 }
@@ -241,6 +277,8 @@ int main(void)
 	test_spent_commitment_needs_an_operator();
 	test_every_refusing_verdict_needs_an_operator();
 	test_a_correctable_refusal_stays_restartable();
+	test_no_errno_reaches_the_exit_status();
+	test_a_refusal_before_the_commitment_needs_an_operator();
 	test_refused_host_configuration_needs_an_operator();
 	test_a_served_daemon_carries_its_own_status();
 	test_the_unit_prevents_restarting_on_that_status();
