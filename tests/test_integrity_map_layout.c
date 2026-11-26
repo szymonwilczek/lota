@@ -16,8 +16,10 @@
  * anywhere the tree builds.
  */
 
+#include <errno.h>
 #include <stdint.h>
 #include <stdio.h>
+#include <sys/resource.h>
 #include <unistd.h>
 
 #include "test.h"
@@ -105,6 +107,35 @@ static void test_an_absent_map_is_refused(void)
 		PASS();
 }
 
+/*
+ * Out of descriptors, the object cannot be opened: the errno says so,
+ * the one a corrupt object never returns.
+ */
+static void test_an_unopened_object_names_its_errno(void)
+{
+	struct rlimit saved, low;
+	int ret;
+
+	TEST("an object that cannot be opened returns the open's errno");
+	if (getrlimit(RLIMIT_NOFILE, &saved) != 0) {
+		FAIL("getrlimit");
+		return;
+	}
+	low = saved;
+	low.rlim_cur = 3;
+	if (setrlimit(RLIMIT_NOFILE, &low) != 0) {
+		FAIL("setrlimit");
+		return;
+	}
+	ret = bpf_loader_check_object_integrity_layout(TREE_BPF_OBJ);
+	setrlimit(RLIMIT_NOFILE, &saved);
+
+	if (ret != -EMFILE)
+		FAIL("descriptor exhaustion did not return -EMFILE");
+	else
+		PASS();
+}
+
 int main(void)
 {
 	printf("=== enforcement object integrity map layout tests ===\n\n");
@@ -113,6 +144,7 @@ int main(void)
 	test_a_wider_value_is_seen_for_what_it_is();
 	test_a_wider_value_is_refused();
 	test_a_matching_object_is_accepted();
+	test_an_unopened_object_names_its_errno();
 	test_an_absent_map_is_refused();
 
 	printf("\n=== %d/%d passed ===\n", tests_passed, tests_run);

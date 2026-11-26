@@ -196,22 +196,32 @@ static int run_daemon(const struct run_daemon_params *params)
 
 	ret = agent_validate_startup_policy(&startup_policy);
 	if (ret < 0) {
+		int status = lota_startup_check_exit_status(ret);
+
 		lota_err("Startup policy refused before the boot commitment "
 			 "was spent; the host keeps the agent it is running "
-			 "and PCR 14 is untouched. %s",
-			 startup_refusal_advice(ret));
-		return LOTA_EXIT_OPERATOR_ACTION;
+			 "and PCR 14 is untouched.%s%s",
+			 status == LOTA_EXIT_OPERATOR_ACTION ? " " : "",
+			 status == LOTA_EXIT_OPERATOR_ACTION ?
+				 startup_refusal_advice(ret) :
+				 "");
+		return status;
 	}
 
 	/* bpf_loader_load() verifies again the bytes it hands the kernel */
 	ret = bpf_loader_verify_object(bpf_path, bpf_pubkey_path);
 	if (ret < 0) {
+		int status = lota_startup_check_exit_status(ret);
+
 		lota_err("Enforcement object %s refused before the boot "
 			 "commitment was spent: %s. The host keeps the agent "
-			 "it is running and PCR 14 is untouched. Re-sign the "
-			 "object for the configured key and start again.",
-			 bpf_path, strerror(-ret));
-		return LOTA_EXIT_OPERATOR_ACTION;
+			 "it is running and PCR 14 is untouched.%s",
+			 bpf_path, strerror(-ret),
+			 status == LOTA_EXIT_OPERATOR_ACTION ?
+				 " Re-sign the object for the configured key "
+				 "and start again." :
+				 "");
+		return status;
 	}
 
 	ret = bpf_loader_check_object_integrity_layout(bpf_path);
@@ -220,7 +230,7 @@ static int run_daemon(const struct run_daemon_params *params)
 			 "commitment was spent. The host keeps the agent it is "
 			 "running and PCR 14 is untouched.",
 			 bpf_path);
-		return LOTA_EXIT_OPERATOR_ACTION;
+		return lota_startup_check_exit_status(ret);
 	}
 
 	wd_enabled = sdnotify_watchdog_enabled(&wd_usec);

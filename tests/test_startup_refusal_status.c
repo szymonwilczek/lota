@@ -4,7 +4,8 @@
  * A kernel floor refusal (lockdown, module signatures, appraisal scope)
  * is a state of the host, so it must leave as -ENOTSUP, the status
  * RestartPreventExitStatus stops on; a bare -EPERM restarts the unit every
- * five seconds. The floor is wrapped, so no result depends on the host.
+ * five seconds. A read a restart may clear keeps its errno. The floor is
+ * wrapped, so no result depends on the host.
  */
 
 #include <errno.h>
@@ -88,6 +89,26 @@ static void test_a_scope_refusal_is_not_a_missing_file(void)
 		PASS();
 }
 
+/* lockdown unreadable: the read, not the host, failed */
+static void test_a_failed_read_is_not_a_refusal(void)
+{
+	struct agent_startup_policy policy = {
+		.mode = LOTA_MODE_MONITOR,
+	};
+	int ret;
+
+	TEST("a floor that could not be read is not refused for good");
+
+	floor_answer = -EIO;
+	floor_calls = 0;
+	ret = agent_validate_startup_policy(&policy);
+
+	if (ret != -EIO)
+		FAIL("a failed read reads as a host below the floor");
+	else
+		PASS();
+}
+
 /* the apply path asks the floor again, after the commitment is spent */
 static void test_the_apply_path_refuses_the_same_way(void)
 {
@@ -138,6 +159,7 @@ int main(void)
 
 	test_validator_refuses_the_host_and_not_the_run();
 	test_a_scope_refusal_is_not_a_missing_file();
+	test_a_failed_read_is_not_a_refusal();
 	test_the_apply_path_refuses_the_same_way();
 	test_a_host_that_meets_the_floor_passes();
 

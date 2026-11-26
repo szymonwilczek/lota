@@ -131,14 +131,18 @@ static EVP_PKEY *load_privkey(const char *path)
 	return pkey;
 }
 
-static EVP_PKEY *load_pubkey(const char *path)
+/* NULL with *@err: the fopen errno, or -EINVAL for a key that is not one */
+static EVP_PKEY *load_pubkey(const char *path, int *err)
 {
 	FILE *f;
 	EVP_PKEY *pkey;
 
 	f = fopen(path, "r");
-	if (!f)
+	if (!f) {
+		*err = errno ? -errno : -ENOENT;
 		return NULL;
+	}
+	*err = -EINVAL;
 
 	pkey = PEM_read_PUBKEY(f, NULL, NULL, NULL);
 	fclose(f);
@@ -289,13 +293,14 @@ int policy_verify_buffer(const uint8_t *data, size_t data_len,
 	EVP_PKEY *pkey = NULL;
 	EVP_MD_CTX *md_ctx = NULL;
 	int ret = -EIO;
+	int err;
 
 	if (!data || !pubkey_pem_path || !sig)
 		return -EINVAL;
 
-	pkey = load_pubkey(pubkey_pem_path);
+	pkey = load_pubkey(pubkey_pem_path, &err);
 	if (!pkey)
-		return -ENOENT;
+		return err;
 
 	md_ctx = EVP_MD_CTX_new();
 	if (!md_ctx) {

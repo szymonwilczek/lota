@@ -4,6 +4,7 @@
  * --ca-cert as a pinned anchor: a CA, a listener certificate that CA issued,
  * or a self-signed listener certificate. A CA-issued leaf in the store needs
  * X509_V_FLAG_PARTIAL_CHAIN, or OpenSSL looks for its unreachable issuer.
+ * A read from a peer silent after the handshake ends at the socket timeout.
  */
 
 #include <errno.h>
@@ -14,7 +15,9 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/socket.h>
+#include <sys/time.h>
 #include <sys/wait.h>
+#include <time.h>
 #include <unistd.h>
 
 #include <openssl/evp.h>
@@ -131,8 +134,11 @@ static int anchor_accepts(const char *anchor_path, X509 *leaf, int *err_out)
 	return rc == 1;
 }
 
-/* A loopback port served by a child that offers @cert in one handshake */
-static int serve_once(X509 *cert, EVP_PKEY *key, pid_t *pid)
+/*
+ * A loopback port served by a child that offers @cert in one handshake,
+ * then stays silent for @hold_sec.
+ */
+static int serve_once(X509 *cert, EVP_PKEY *key, int hold_sec, pid_t *pid)
 {
 	struct sockaddr_in addr;
 	socklen_t len = sizeof(addr);
@@ -168,7 +174,8 @@ static int serve_once(X509 *cert, EVP_PKEY *key, pid_t *pid)
 
 			if (ssl) {
 				SSL_set_fd(ssl, c);
-				SSL_accept(ssl);
+				if (SSL_accept(ssl) == 1 && hold_sec > 0)
+					sleep((unsigned int)hold_sec);
 				SSL_free(ssl);
 			}
 		}
@@ -187,7 +194,7 @@ static int connect_verified(const char *anchor_path, X509 *cert, EVP_PKEY *key)
 {
 	struct net_context ctx;
 	pid_t child;
-	int port = serve_once(cert, key, &child);
+	int port = serve_once(cert, key, 0, &child);
 	int ret = -EINVAL;
 
 	if (port < 0)
@@ -199,6 +206,41 @@ static int connect_verified(const char *anchor_path, X509 *cert, EVP_PKEY *key)
 		ret = net_connect(&ctx);
 		net_context_cleanup(&ctx);
 	}
+	waitpid(child, NULL, 0);
+	return ret;
+}
+
+/*
+ * A read from a listener that completes the handshake and then sends
+ * nothing, with a 1 s receive timeout: the error, and its time in *@ms.
+ */
+static int read_silent(X509 *cert, EVP_PKEY *key, long *ms)
+{
+	struct timeval tv = { .tv_sec = 1, .tv_usec = 0 };
+	struct timespec t0, t1;
+	struct net_context ctx;
+	uint8_t byte;
+	pid_t child;
+	int port = serve_once(cert, key, 5, &child);
+	int ret = -EINVAL;
+
+	*ms = -1;
+	if (port < 0)
+		return -EIO;
+
+	memset(&ctx, 0, sizeof(ctx));
+	if (net_context_init(&ctx, "127.0.0.1", port, NULL, 1, NULL) == 0 &&
+	    net_connect(&ctx) == 0) {
+		setsockopt(ctx.socket_fd, SOL_SOCKET, SO_RCVTIMEO, &tv,
+			   sizeof(tv));
+		clock_gettime(CLOCK_MONOTONIC, &t0);
+		ret = net_read_full(&ctx, &byte, 1);
+		clock_gettime(CLOCK_MONOTONIC, &t1);
+		*ms = (t1.tv_sec - t0.tv_sec) * 1000 +
+		      (t1.tv_nsec - t0.tv_nsec) / 1000000;
+	}
+	net_context_cleanup(&ctx);
+	kill(child, SIGKILL);
 	waitpid(child, NULL, 0);
 	return ret;
 }
@@ -301,6 +343,17 @@ int main(void)
 		CHECK(strstr(log, "against the system trust store") != NULL,
 		      "without an anchor the failure names the system trust "
 		      "store");
+	}
+
+	{
+		long ms;
+		int ret = read_silent(self, self_key, &ms);
+
+		CHECK(ret == -ETIMEDOUT,
+		      "a peer silent after the handshake times the read out");
+		/* SO_RCVTIMEO once, not again in a poll after it */
+		CHECK(ms >= 0 && ms < 5000,
+		      "a silent peer's read ends with the socket timeout");
 	}
 
 	X509_free(ca);

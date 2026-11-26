@@ -1325,9 +1325,20 @@ static bool target_reporting_now(struct attest_target *t)
 	return false;
 }
 
+/* Each step of a round may wait on a peer or the TPM: ping before it */
+static void watchdog_ping(struct watchdog_pace *pace)
+{
+	if (!watchdog_pace_armed(pace))
+		return;
+
+	sdnotify_watchdog_ping();
+	watchdog_pace_mark(pace, monotonic_ms());
+}
+
 /* One round against one target: seconds to wait before its next one */
 static int attest_target_round(struct attest_target *t, int skip_verify,
-			       const uint8_t *pin_sha256)
+			       const uint8_t *pin_sha256,
+			       struct watchdog_pace *pace)
 {
 	time_t now = time(NULL);
 	int ret;
@@ -1337,19 +1348,25 @@ static int attest_target_round(struct attest_target *t, int skip_verify,
 	 * signed with this key, and a title selecting a publisher with no
 	 * session yet reads not attested until enrollment completes.
 	 */
+	watchdog_ping(pace);
 	if (!enroll_target_if_needed(t)) {
 		t->attested = false;
 		t->valid_until = 0;
 		return attest_target_enroll_wait(t, monotonic_ms());
 	}
 
+	watchdog_ping(pace);
 	ret = bind_target(t);
-	if (ret == -EKEYREJECTED)
+	if (ret == -EKEYREJECTED) {
+		watchdog_ping(pace);
 		ret = reenroll_target(t);
-	else if (ret == 0)
+	} else if (ret == 0) {
 		attest_target_reenroll_clear(t);
-	if (ret == 0)
+	}
+	if (ret == 0) {
+		watchdog_ping(pace);
 		renew_target_cert_if_due(t);
+	}
 
 	/*
 	 * A key the certificate does not name stays wrong on retry:
@@ -1376,6 +1393,7 @@ static int attest_target_round(struct attest_target *t, int skip_verify,
 		const uint8_t *pin = t->has_pin ? t->pin_sha256 : pin_sha256;
 
 		lota_dbg("Attestation round starting for %s", t->label);
+		watchdog_ping(pace);
 		ret = attest_once(t->server, t->port,
 				  t->ca_cert[0] ? t->ca_cert : NULL,
 				  skip_verify, pin,
@@ -1686,7 +1704,6 @@ static int continuous_attest_run(const struct lota_config *cfg,
 		uint64_t now_ms = monotonic_ms();
 		uint64_t wake_ms = 0;
 
-		/* before the round: nothing pings inside it */
 		watchdog_keepalive(&pace);
 
 		if (daemon_reload_taken()) {
@@ -1732,7 +1749,7 @@ static int continuous_attest_run(const struct lota_config *cfg,
 				continue;
 
 			wait_sec = attest_target_round(&targets[i], skip_verify,
-						       pin_sha256);
+						       pin_sha256, &pace);
 			targets[i].next_due_ms =
 				monotonic_ms() + (uint64_t)wait_sec * 1000;
 		}

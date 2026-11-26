@@ -79,7 +79,7 @@ int net_transport_error(int ssl_err, int sock_errno)
 	case SSL_ERROR_ZERO_RETURN:
 		return -LOTA_ERR_NET_PEER_CLOSED;
 	case SSL_ERROR_SYSCALL:
-		/* SO_RCVTIMEO/SO_SNDTIMEO expiry arrives as EAGAIN */
+		/* EAGAIN: SO_RCVTIMEO/SO_SNDTIMEO expired */
 		if (sock_errno == EAGAIN || sock_errno == EWOULDBLOCK)
 			return -ETIMEDOUT;
 		if (sock_errno)
@@ -93,12 +93,19 @@ int net_transport_error(int ssl_err, int sock_errno)
 	}
 }
 
-static int ssl_wait(SSL *ssl, int event)
+/*
+ * The socket blocks with SO_RCVTIMEO/SO_SNDTIMEO: EAGAIN is their expiry,
+ * which OpenSSL reports as WANT_READ or WANT_WRITE.
+ * Other wants, such as a signal, wait here for the socket.
+ */
+static int ssl_wait(SSL *ssl, int event, int sock_errno)
 {
 	int fd = SSL_get_fd(ssl);
 	struct pollfd pfd;
 	int ret;
 
+	if (sock_errno == EAGAIN || sock_errno == EWOULDBLOCK)
+		return -ETIMEDOUT;
 	if (fd < 0)
 		return -EINVAL;
 
@@ -533,7 +540,8 @@ int net_recv_challenge(struct net_context *ctx,
 			int ssl_err = SSL_get_error(ctx->ssl, ret);
 			if (ssl_err == SSL_ERROR_WANT_READ ||
 			    ssl_err == SSL_ERROR_WANT_WRITE) {
-				int wait_ret = ssl_wait(ctx->ssl, ssl_err);
+				int wait_ret =
+					ssl_wait(ctx->ssl, ssl_err, errno);
 				if (wait_ret < 0)
 					return wait_ret;
 				continue;
@@ -577,7 +585,8 @@ int net_send_report(struct net_context *ctx, const void *report,
 			int ssl_err = SSL_get_error(ctx->ssl, ret);
 			if (ssl_err == SSL_ERROR_WANT_READ ||
 			    ssl_err == SSL_ERROR_WANT_WRITE) {
-				int wait_ret = ssl_wait(ctx->ssl, ssl_err);
+				int wait_ret =
+					ssl_wait(ctx->ssl, ssl_err, errno);
 				if (wait_ret < 0)
 					return wait_ret;
 				continue;
@@ -605,7 +614,8 @@ int net_recv_result(struct net_context *ctx, struct verifier_result *result)
 			int ssl_err = SSL_get_error(ctx->ssl, ret);
 			if (ssl_err == SSL_ERROR_WANT_READ ||
 			    ssl_err == SSL_ERROR_WANT_WRITE) {
-				int wait_ret = ssl_wait(ctx->ssl, ssl_err);
+				int wait_ret =
+					ssl_wait(ctx->ssl, ssl_err, errno);
 				if (wait_ret < 0)
 					return wait_ret;
 				continue;
@@ -650,7 +660,8 @@ int net_write_all(struct net_context *ctx, const void *buf, size_t len)
 			int ssl_err = SSL_get_error(ctx->ssl, ret);
 			if (ssl_err == SSL_ERROR_WANT_READ ||
 			    ssl_err == SSL_ERROR_WANT_WRITE) {
-				int wait_ret = ssl_wait(ctx->ssl, ssl_err);
+				int wait_ret =
+					ssl_wait(ctx->ssl, ssl_err, errno);
 				if (wait_ret < 0)
 					return wait_ret;
 				continue;
@@ -679,7 +690,8 @@ int net_read_full(struct net_context *ctx, void *buf, size_t len)
 			int ssl_err = SSL_get_error(ctx->ssl, ret);
 			if (ssl_err == SSL_ERROR_WANT_READ ||
 			    ssl_err == SSL_ERROR_WANT_WRITE) {
-				int wait_ret = ssl_wait(ctx->ssl, ssl_err);
+				int wait_ret =
+					ssl_wait(ctx->ssl, ssl_err, errno);
 				if (wait_ret < 0)
 					return wait_ret;
 				continue;

@@ -36,6 +36,7 @@ static void hex_encode_upper(const uint8_t *in, size_t in_len, char *out,
 #include "agent.h"
 #include "bpf_loader.h"
 #include "config.h"
+#include "exit_status.h"
 #include "ipc.h"
 #include "journal.h"
 #include "main_utils.h"
@@ -381,14 +382,22 @@ out:
 }
 
 /*
- * A refusal returns -ENOTSUP, which the unit does not restart on. The check
- * that refused logs which gate is missing.
+ * A refusal returns -ENOTSUP, which the unit does not restart on; a read
+ * a restart may clear keeps its errno. The check that refused logs which
+ * gate is missing.
  */
 static int verify_kernel_floor(const struct agent_startup_policy *policy)
 {
 	int ret = bpf_loader_verify_kernel_runtime_hardening(
 		policy->allow_mutable_rootfs);
 
+	if (ret < 0 &&
+	    lota_startup_check_exit_status(ret) != LOTA_EXIT_OPERATOR_ACTION) {
+		lota_err("Kernel anti-tamper prerequisites could not be "
+			 "checked: %s",
+			 strerror(-ret));
+		return ret;
+	}
 	if (ret < 0) {
 		lota_err(
 			"Kernel anti-tamper prerequisites are not satisfied: %s",
