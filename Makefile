@@ -826,6 +826,8 @@ check-docs-strict:
 		echo "check-docs-strict: sphinx-build not found; install sphinx to build the documentation" >&2; \
 		exit 1; \
 	}
+	$(Q)scripts/check-license-boundary.sh --doc-packages >/dev/null
+	$(Q)tests/integration/test_kerneldoc_warnings.sh >/dev/null
 	$(Q)tmp=$$(mktemp -d) && \
 	trap 'rm -rf "$$tmp"' EXIT && \
 	$(MAKE) -C Documentation html BUILDDIR="$$tmp" \
@@ -1619,6 +1621,16 @@ test-unit: all $(TEST_BINS)
 	@tests/integration/test_dev_bringup_idempotent.sh
 	@tests/integration/test_installer_status_stages.sh
 	@tests/integration/test_package_manifest_lists.sh
+	@if command -v python3 >/dev/null 2>&1; then \
+		tests/integration/test_license_boundary_scripts.sh; \
+	else \
+		echo "SKIP: test_license_boundary_scripts.sh (no python3)"; \
+	fi
+	@if command -v sphinx-build >/dev/null 2>&1; then \
+		tests/integration/test_kerneldoc_warnings.sh; \
+	else \
+		echo "SKIP: test_kerneldoc_warnings.sh (no sphinx-build)"; \
+	fi
 	@if command -v pkg-config >/dev/null 2>&1; then \
 		tests/integration/test_examples_optional_deps.sh; \
 	else \

@@ -129,6 +129,7 @@ reproducible and verified against signed manifests.
    player/index
    process/index
    dev-tools/index
+   doc-guide/index
    admin-guide/index
    agent/index
    verifier/index

@@ -16,6 +16,7 @@ requests there, not against ``main``.
 * :doc:`The license boundary <license-boundary>` -- which zone each path
   belongs to, and the one-way dependency rule the gate enforces.
 * :doc:`Security reporting <security-bugs>`
+* :doc:`Writing LOTA documentation <../doc-guide/index>`
 
 Local tooling:
 

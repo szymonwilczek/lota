@@ -5,10 +5,16 @@ on:
     branches: [main, lota-next]
     paths:
       - 'Documentation/**'
+      - 'scripts/check-license-boundary.sh'
+      - 'include/**'
+      - 'tests/integration/test_kerneldoc_warnings.sh'
       - '.github/workflows/docs.yml'
   pull_request:
     paths:
       - 'Documentation/**'
+      - 'scripts/check-license-boundary.sh'
+      - 'include/**'
+      - 'tests/integration/test_kerneldoc_warnings.sh'
       - '.github/workflows/docs.yml'
 
 permissions:
@@ -39,6 +45,10 @@ jobs:
       - name: Install documentation toolchain
         run: pip install -r Documentation/requirements.txt
 
+      # every documentation package must be permissively licensed
+      - name: Check the documentation toolchain licenses
+        run: scripts/check-license-boundary.sh --doc-packages
+
       # reStructuredText style/markup lint
       # Fails the job on any finding
       - name: Lint reStructuredText
@@ -50,6 +60,10 @@ jobs:
       # This is the authoritative gate
       - name: Build HTML (warnings are errors)
         run: make -C Documentation html
+
+      # every header comment renders clean, and a broken one fails the build
+      - name: Check the kernel-doc directive
+        run: tests/integration/test_kerneldoc_warnings.sh
 
       # Link integrity is informational:
       # external endpoints flap and must not gate a documentation change

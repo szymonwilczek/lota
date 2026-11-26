@@ -85,6 +85,24 @@ intra-project Go import against the module paths declared in the ``go.mod``
 files. A dependency that leaves the tree (libc, libbpf, tss2, third-party Go
 modules) is not the boundary's concern and is ignored.
 
+Scripts are source too: every tracked ``.py``, ``.pl`` and ``.pm`` file and
+every file that starts with a shebang needs a tag. An MIT Python or Perl file
+must not import a GPL-2.0-only module in the tree, resolved next to the
+importing file and then from the repository root. An MIT script must not name
+a GPL-2.0-only script by its path either, since that is how it would run it.
+
+The documentation toolchain is a dependency of the documentation build, so
+every package in ``Documentation/requirements.txt`` must carry a permissive
+license: MIT, BSD, Apache-2.0, ISC or PSF. The gate reads it from the installed
+package's metadata (``License-Expression``, then ``License``, then the
+``License ::`` classifiers) with ``python3``, or with ``$PYTHON`` when set.
+Without the packages installed it prints that they were not checked and passes;
+``--doc-packages`` makes that a failure. ``make check-docs-strict`` and the
+documentation CI job run it that way, after the toolchain is installed.
+
+``tests/integration/test_license_boundary_scripts.sh`` drives these cases on a
+throwaway tree.
+
 ``scripts/check-patch`` runs the gate on every patch, so a violation fails the
 same local check as a formatting or build error, and the ``license-boundary``
 CI job runs it on every push and pull request. The gate needs no compiler or
@@ -106,6 +124,9 @@ build tweak:
   or otherwise kernel-derived.
 * **A new Go module.** No action needed: the gate reads ``go.mod`` files, so a
   new module's imports resolve as soon as it exists.
+* **A documentation package is not permissive.** Drop it from
+  ``Documentation/requirements.txt``; a GPL tool cannot be vendored or run
+  from an MIT script instead.
 
 Packaging carries the same boundary. ``lota-agent`` declares
 ``MIT AND GPL-2.0-only`` because it ships the BPF object alongside MIT
