@@ -41,8 +41,9 @@ cleanup() {
 }
 trap cleanup EXIT
 
-# One "<state> <updated_at_unix>" line per /state request; the last one
-# repeats once exhausted. A new updated_at_unix is a new heartbeat.
+# One "<state> <verdict_seq> <updated_at_unix>" line per /state request;
+# the last one repeats once exhausted.
+# A new verdict_seq or updated_at_unix is a new heartbeat.
 cat >"$WORK_DIR/verdict_server.py" <<'PY'
 import sys
 from http.server import BaseHTTPRequestHandler, HTTPServer
@@ -65,12 +66,12 @@ class Handler(BaseHTTPRequestHandler):
             self.send_error(404)
             return
         line = states[len(served)] if len(served) < len(states) else states[-1]
-        state, at = line.split()
+        state, seq, at = line.split()
         served.append(line)
         with open(sys.argv[2], "a") as log:
             log.write(line + "\n")
         self._json('{"state":"%s","license":"lota-demo-CS2-clone",'
-                   '"updated_at_unix":%s}' % (state, at))
+                   '"updated_at_unix":%s,"verdict_seq":%s}' % (state, at, seq))
 
     def do_POST(self):
         # refuse the nonce handshake; the client stays OFFLINE and polls
@@ -122,8 +123,8 @@ served_count() { grep -c . "$WORK_DIR/$1/served"; }
 freeze_line() { grep 'session terminated after' "$WORK_DIR/$1/stderr"; }
 
 # one UNTRUSTED between TRUSTED ones: absorbed
-run_case one-untrusted 8 "TRUSTED 1" "TRUSTED 2" "UNTRUSTED 3" "TRUSTED 4" \
-         "TRUSTED 5" "TRUSTED 6"
+run_case one-untrusted 8 "TRUSTED 1 1" "TRUSTED 2 2" "UNTRUSTED 3 3" \
+         "TRUSTED 4 4" "TRUSTED 5 5" "TRUSTED 6 6"
 if [[ $(served_count one-untrusted) -lt 4 ]]; then
     echo "[trust-pong] one-untrusted: the client asked for $(served_count one-untrusted) verdicts, too few to judge" >&2
     failures=$((failures + 1))
@@ -136,7 +137,7 @@ else
 fi
 
 # one UNTRUSTED heartbeat polled again and again: absorbed
-run_case one-heartbeat 8 "TRUSTED 1" "UNTRUSTED 2"
+run_case one-heartbeat 8 "TRUSTED 1 1" "UNTRUSTED 2 2"
 if [[ $(served_count one-heartbeat) -lt 4 ]]; then
     echo "[trust-pong] one-heartbeat: too few polls to judge" >&2
     failures=$((failures + 1))
@@ -149,8 +150,8 @@ else
 fi
 
 # two in a row: session ends
-run_case two-untrusted 8 "TRUSTED 1" "UNTRUSTED 2" "UNTRUSTED 3" "TRUSTED 4" \
-         "TRUSTED 5" "TRUSTED 6"
+run_case two-untrusted 8 "TRUSTED 1 1" "UNTRUSTED 2 2" "UNTRUSTED 3 3" \
+         "TRUSTED 4 4" "TRUSTED 5 5" "TRUSTED 6 6"
 if ! freeze_line two-untrusted >/dev/null; then
     echo "[trust-pong] FAIL: two consecutive UNTRUSTED responses did not end the session" >&2
     sed -n '1,20p' "$WORK_DIR/two-untrusted/stderr" >&2
@@ -161,6 +162,31 @@ elif ! freeze_line two-untrusted | grep -q 'after 2 consecutive'; then
     failures=$((failures + 1))
 else
     echo "[trust-pong] ok: two consecutive UNTRUSTED responses end the session"
+fi
+
+# two in a row within one second: session ends
+run_case same-second 8 "TRUSTED 1 1" "UNTRUSTED 2 2" "UNTRUSTED 3 2" \
+         "TRUSTED 4 3" "TRUSTED 5 3"
+if ! freeze_line same-second | grep -q 'after 2 consecutive'; then
+    echo "[trust-pong] FAIL: two UNTRUSTED heartbeats in one second" \
+         "did not end the session" >&2
+    sed -n '1,20p' "$WORK_DIR/same-second/stderr" >&2
+    failures=$((failures + 1))
+else
+    echo "[trust-pong] ok: two UNTRUSTED heartbeats in one second end" \
+         "the session"
+fi
+
+# a restarted server numbers its verdicts from 1 again
+run_case restart 8 "UNTRUSTED 1 10" "PENDING 0 0" "PENDING 0 0" \
+         "UNTRUSTED 1 12"
+if ! freeze_line restart | grep -q 'after 2 consecutive'; then
+    echo "[trust-pong] FAIL: an UNTRUSTED heartbeat after a server restart" \
+         "was not counted" >&2
+    sed -n '1,20p' "$WORK_DIR/restart/stderr" >&2
+    failures=$((failures + 1))
+else
+    echo "[trust-pong] ok: a heartbeat after a server restart is counted"
 fi
 
 if [[ $failures -ne 0 ]]; then

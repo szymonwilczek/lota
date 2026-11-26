@@ -10,6 +10,7 @@ import (
 	"crypto/rsa"
 	"crypto/sha256"
 	"encoding/binary"
+	"encoding/hex"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -544,5 +545,38 @@ func TestState_TrustedCarriesNoReason(t *testing.T) {
 	}
 	if st.Reason != "" {
 		t.Fatalf("reason = %q, want none on a trusted session", st.Reason)
+	}
+}
+
+/* two verdicts in one second share updated_at_unix, not verdict_seq */
+func TestState_VerdictSeqCountsEveryVerdict(t *testing.T) {
+	key, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatalf("rsa: %v", err)
+	}
+	s := newTestServer(t, key)
+	game := s.games[testGameID]
+	hash := hex.EncodeToString(game.gameIDHash[:])
+
+	state := func() stateResponse {
+		url := "/state?game_id=" + testGameID
+		r := httptest.NewRequest(http.MethodGet, url, nil)
+		w := httptest.NewRecorder()
+		s.handleState(w, r)
+		var st stateResponse
+		if err := json.NewDecoder(w.Body).Decode(&st); err != nil {
+			t.Fatalf("decode: %v", err)
+		}
+		return st
+	}
+
+	s.recordVerdictWithLicense("", hash, verdictUntrust, "", "first")
+	first := state()
+	s.recordVerdictWithLicense("", hash, verdictUntrust, "", "second")
+	second := state()
+
+	if first.VerdictSeq == 0 || second.VerdictSeq != first.VerdictSeq+1 {
+		t.Fatalf("verdict_seq = %d then %d, want n then n+1",
+			first.VerdictSeq, second.VerdictSeq)
 	}
 }

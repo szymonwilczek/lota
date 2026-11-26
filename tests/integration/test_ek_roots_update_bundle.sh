@@ -156,6 +156,30 @@ check "a sources line naming a .crt file materializes" test "$rc" -eq 0
 check "the .crt file the manifest names is written" \
 	test -f bundle-crt/vendor-root.crt
 
+# each file the bundle holds comes from one sources line
+printf '%s  ek-roots.manifest  root  %s  Example TPM Root CA\n' \
+	"$root_pin" https://example.invalid/root.der >sources.manifest
+rc=0
+run_update sources.manifest bundle-manifest >manifest.txt 2>&1 || rc=$?
+check "a line naming the manifest is refused" test "$rc" -ne 0
+check "the refusal names the line" \
+	grep -q "manifest's own name" manifest.txt
+check "a refused line writes no manifest" \
+	test ! -e bundle-manifest/ek-roots.manifest
+
+{
+    printf '%s  vendor-root.pem  root  %s  Example TPM Root CA\n' \
+	"$root_pin" https://example.invalid/root.der
+    printf '%s  vendor-root.pem  intermediate  %s  Example TPM Issuing CA\n' \
+	"$int_pin" https://example.invalid/int.der
+} >sources.dup
+rc=0
+run_update sources.dup bundle-dup >dup.txt 2>&1 || rc=$?
+check "two lines naming one file are refused" test "$rc" -ne 0
+check "the refusal names the repeated line" \
+	grep -q "appears on two lines" dup.txt
+check "a repeated file writes no bundle" test ! -e bundle-dup/vendor-root.pem
+
 if [[ $failures -ne 0 ]]; then
     echo "FAILURES: $failures"
     sed -n '1,10p' out.txt 2>/dev/null

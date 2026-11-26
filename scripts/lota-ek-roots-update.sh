@@ -88,6 +88,12 @@ while IFS= read -r line || [ -n "$line" ]; do
 	[[ "$pin" =~ ^[0-9a-f]{64}$ ]] || die "pin for $filename is not a 64-hex SHA-256"
 	[ "$filename" = "$(basename -- "$filename")" ] ||
 		die "filename must be a bare name: $filename"
+	[ "$filename" != "$MANIFEST_NAME" ] ||
+		die "filename is the manifest's own name: $line"
+	for seen in "${written[@]}"; do
+		[ "$seen" != "$filename" ] ||
+			die "filename appears on two lines: $line"
+	done
 
 	case "$class" in
 	"$CLASS_ROOT") roots=$((roots + 1)) ;;

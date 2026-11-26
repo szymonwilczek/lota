@@ -49,6 +49,7 @@ type sessionState struct {
 	lastLicense   string
 	lastReason    string // repeated by /state, empty when trusted
 	updatedAt     time.Time
+	verdictSeq    uint64 // verdicts recorded for a game; 0 for a session
 }
 
 type demoServer struct {
@@ -148,11 +149,12 @@ type heartbeatResponse struct {
 }
 
 type stateResponse struct {
-	GameID    string `json:"game_id"`
-	State     string `json:"state"`
-	License   string `json:"license,omitempty"`
-	Reason    string `json:"reason,omitempty"`
-	UpdatedAt int64  `json:"updated_at_unix"`
+	GameID     string `json:"game_id"`
+	State      string `json:"state"`
+	License    string `json:"license,omitempty"`
+	Reason     string `json:"reason,omitempty"`
+	UpdatedAt  int64  `json:"updated_at_unix"`
+	VerdictSeq uint64 `json:"verdict_seq"`
 }
 
 func (s *demoServer) handleState(w http.ResponseWriter, r *http.Request) {
@@ -181,6 +183,7 @@ func (s *demoServer) handleState(w http.ResponseWriter, r *http.Request) {
 		resp.License = st.lastLicense
 		resp.Reason = st.lastReason
 		resp.UpdatedAt = st.updatedAt.Unix()
+		resp.VerdictSeq = st.verdictSeq
 	} else {
 		resp.State = "PENDING"
 	}

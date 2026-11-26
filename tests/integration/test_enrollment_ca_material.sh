@@ -75,6 +75,15 @@ check "the example generates a listener certificate" test -s "$CA_DIR/tls.crt"
 check "the listener certificate is issued by the CA anchor" \
       openssl verify -CAfile "$CA_DIR/ca.crt" "$CA_DIR/tls.crt"
 
+# OpenSSL 4 takes a leaf without key identifiers whose subject is its
+# issuer and whose key type is the issuer's for self-signed
+subject_differs() {
+    [[ "$(openssl x509 -in "$1" -noout -subject)" != \
+       "$(openssl x509 -in "$2" -noout -subject)" ]]
+}
+check "the listener certificate names a subject other than the CA" \
+      subject_differs "$CA_DIR/tls.crt" "$CA_DIR/ca.crt"
+
 # The verifier revokes AIK certificates through a CRL from this anchor and
 # refuses one from an issuer without cRLSign. openssl verify applies the same
 # rule; the listener certificate stands in for an AIK certificate.

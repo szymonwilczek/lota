@@ -189,10 +189,13 @@ packets.
    {"game_id":"trust-pong","state":"UNTRUSTED",
     "license":"lota-demo-CS2-clone",
     "reason":"token is missing required attestation flags 0x00000200",
-    "updated_at_unix":1750000000}
+    "updated_at_unix":1750000000,"verdict_seq":7}
 
 ``reason`` is the sentence the producer was answered with, so the polling
 client can explain the verdict; it is absent from a trusted one.
+``verdict_seq`` counts the verdicts recorded for the game id, so a client
+tells two verdicts in one second apart; it is 0 while ``PENDING`` and starts
+again from 1 when the server restarts.
 
 Logging
 -------
