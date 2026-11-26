@@ -214,7 +214,8 @@ caller tests them with ``errors.Is``. ``SerializeToken()`` and
      - The signature does not verify, or names an algorithm the package does
        not take.
    * - ``ErrAttestParse``
-     - The ``TPMS_ATTEST`` does not parse, a wrong TPM magic included.
+     - The ``TPMS_ATTEST`` does not parse. A wrong TPM magic also matches
+       ``ErrBadMagic``.
    * - ``ErrNonceFail``
      - The PCR mask, ``extraData`` or nonce differs.
    * - ``ErrExpired``
@@ -223,6 +224,3 @@ caller tests them with ``errors.Is``. ``SerializeToken()`` and
      - The expiry lies beyond the window.
    * - ``ErrBadEvidence``
      - Boot evidence that is malformed or not of the boot the token quotes.
-
-``ErrBadMagic`` is declared and appears only inside the message of
-``ErrAttestParse``.

@@ -367,7 +367,12 @@ int net_connect(struct net_context *ctx)
 	SSL_set_tlsext_host_name(ssl, ctx->server_addr);
 
 	if (!ctx->skip_verify) {
-		if (SSL_set1_host(ssl, ctx->server_addr) != 1) {
+		X509_VERIFY_PARAM *param = SSL_get0_param(ssl);
+		const char *addr = ctx->server_addr;
+
+		/* an IP literal matches IP SANs only */
+		if (X509_VERIFY_PARAM_set1_ip_asc(param, addr) != 1 &&
+		    X509_VERIFY_PARAM_set1_host(param, addr, 0) != 1) {
 			lota_err("Failed to set hostname verification for: %s",
 				 ctx->server_addr);
 			SSL_free(ssl);

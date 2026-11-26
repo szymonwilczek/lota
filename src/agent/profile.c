@@ -65,7 +65,7 @@ static X509 *anchor_read(const char *path)
 static int anchor_spki_sha256(const char *path, uint8_t out[32])
 {
 	unsigned char *der = NULL;
-	X509_PUBKEY *pubkey;
+	const X509_PUBKEY *pubkey;
 	unsigned int md_len = 0;
 	X509 *cert;
 	int der_len;

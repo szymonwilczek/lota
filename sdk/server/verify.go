@@ -191,7 +191,7 @@ func VerifyToken(tokenData []byte, aikPub *rsa.PublicKey, expectedNonce []byte) 
 
 	extraData, quotedPCRMask, pcrDigest, err := parseTPMSAttest(attestData)
 	if err != nil {
-		return nil, fmt.Errorf("%w: %v", ErrAttestParse, err)
+		return nil, fmt.Errorf("%w: %w", ErrAttestParse, err)
 	}
 	if quotedPCRMask != hdr.pcrMask {
 		return nil, fmt.Errorf("%w: pcr_mask header does not match signed quote", ErrNonceFail)

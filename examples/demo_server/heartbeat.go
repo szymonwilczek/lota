@@ -229,8 +229,6 @@ func computeHeartbeatNonce(hdr *lachHeader) [32]byte {
 	var u32 [4]byte
 	binary.LittleEndian.PutUint32(u32[:], hdr.sequence)
 	_, _ = h.Write(u32[:])
-	binary.LittleEndian.PutUint32(u32[:], hdr.lotaFlags)
-	_, _ = h.Write(u32[:])
 	var u64 [8]byte
 	binary.LittleEndian.PutUint64(u64[:], hdr.timestamp)
 	_, _ = h.Write(u64[:])
