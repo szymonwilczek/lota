@@ -20,8 +20,8 @@ CA with the ``pkcs11`` tag:
 The tag is part of what the build depends on, so this rebuilds a tree that was
 already built without it. A containerised CA takes the ``-hsm`` tag of the
 published image instead, which is that build on a base with a loader under it
-(see `Documentation/operator/container-images.rst
-<../../Documentation/operator/container-images.rst>`_).
+(see `Documentation/admin-guide/container-images.rst
+<../../Documentation/admin-guide/container-images.rst>`_).
 
 .. _1-stand-up-the-token-and-the-ca-material:
 
@@ -89,7 +89,7 @@ and the agent refuses the handshake.
 
 A real HSM follows the same steps against its own module and a key generated
 or imported under the operator's key ceremony (see
-`Documentation/operator/production-bringup/index.rst <../../Documentation/operator/production-bringup/index.rst>`_, "CA
+`Documentation/admin-guide/bringup/index.rst <../../Documentation/admin-guide/bringup/index.rst>`_, "CA
 signing key in an HSM").
 
 .. _3-run-the-ca-against-the-token:

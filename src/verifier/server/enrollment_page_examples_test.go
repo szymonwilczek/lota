@@ -28,7 +28,7 @@ import (
 // over TLS trusting only --cacert, shell variables expanded, against the real
 // handlers. The response must match the one the page prints.
 
-const enrollmentPage = "../../../Documentation/operator/production-bringup/ca-enrollment.rst"
+const enrollmentPage = "../../../Documentation/admin-guide/bringup/ca-enrollment.rst"
 
 // code-block language and dedented text
 type rstBlock struct {

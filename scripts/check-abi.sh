@@ -311,7 +311,7 @@ layout_dump() {
 
     printf '# Layout of the public types, as the compiler reports it.\n'
     printf '# Regenerate with `make abi-baseline`; the diff is the review signal.\n'
-    printf '# See Documentation/contributor/development/api-stability.rst\n'
+    printf '# See Documentation/userspace-api/stability.rst\n'
     "$work/dump"
     local rc=$?
     rm -rf "$work"
@@ -461,7 +461,7 @@ fi
 
 if [[ $FAILURES -gt 0 ]]; then
     printf 'ABI: %d problem(s); see %s\n' "$FAILURES" \
-	   "Documentation/contributor/development/api-stability.rst" >&2
+	   "Documentation/userspace-api/stability.rst" >&2
     exit 1
 fi
 

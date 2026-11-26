@@ -15,8 +15,8 @@ This pointer is identical on both branches.
   ``main``.
 * **Developer & testing policy** - test layers, how the fuzzers run, and the
   rules for cutting ``-rc`` release candidates: see
-  `Documentation/contributor/development/index.rst
-  <Documentation/contributor/development/index.rst>`_.
+  `Documentation/dev-tools/index.rst
+  <Documentation/dev-tools/index.rst>`_.
 * **Branch model and release flow:** see
-  `Documentation/contributor/branching.rst
-  <Documentation/contributor/branching.rst>`_.
+  `Documentation/process/branching.rst
+  <Documentation/process/branching.rst>`_.

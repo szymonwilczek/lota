@@ -30,10 +30,10 @@ New contributor or automated assistant
 Development happens on ``lota-next``. Open pull requests there, not against
 ``main``.
 
-* :doc:`Contribution rules <contributor/contributing>`
-* :doc:`Development and testing policy <contributor/development/index>`
-* :doc:`Branch and release flow <contributor/branching>`
-* :doc:`Code of Conduct <contributor/code-of-conduct>`
+* :doc:`Contribution rules <process/contributing>`
+* :doc:`Development and testing policy <dev-tools/index>`
+* :doc:`Branch and release flow <process/branching>`
+* :doc:`Code of Conduct <process/code-of-conduct>`
 * Local patch checks: :ghsrc:`scripts/check-patch`
 * Commit message rewrapper: :ghsrc:`scripts/format-patch`
 
@@ -43,9 +43,9 @@ Operator
 Production operation starts with the bring-up document. The agent
 intentionally fails closed when required gates are missing.
 
-* :doc:`Production bring-up <operator/production-bringup/index>`
-* :doc:`Guided install (lota-install) <operator/player-install>`
-* :doc:`Verifier deployment topologies (HA) <operator/ha-deployment>`
+* :doc:`Production bring-up <admin-guide/bringup/index>`
+* :doc:`Guided install (lota-install) <admin-guide/lota-install>`
+* :doc:`Verifier deployment topologies (HA) <admin-guide/ha-deployment>`
 * PCR policy templates: :ghsrc:`policies/README.rst`
 * SELinux policy: :ghsrc:`selinux/README.rst`
 * EK root bundles: :ghsrc:`configs/ek-roots/README.rst`
@@ -59,10 +59,10 @@ Start with the threat model and the reporting policy. Do not file public
 issues for exploitable vulnerabilities.
 
 * :doc:`Threat model <security/threat-model>`
-* :doc:`Security reporting <security/reporting>`
+* :doc:`Security reporting <process/security-bugs>`
 * :doc:`Reproducible release verification <security/reproducible-builds>`
 * :doc:`Attestation CA signing key <security/ca-key>`
-* :doc:`Production bring-up <operator/production-bringup/index>`
+* :doc:`Production bring-up <admin-guide/bringup/index>`
 * :doc:`Performance evaluation <performance/evaluation>`
 
 TPM or attestation engineer
@@ -74,7 +74,7 @@ commitment.
 
 * :doc:`Threat model <security/threat-model>`
 * :doc:`Attestation CA signing key <security/ca-key>`
-* :doc:`Production bring-up <operator/production-bringup/index>`
+* :doc:`Production bring-up <admin-guide/bringup/index>`
 * Enrollment example: :ghsrc:`examples/enrollment/README.rst`
 * EK root bundles: :ghsrc:`configs/ek-roots/README.rst`
 * PCR policy documentation: :ghsrc:`policies/README.rst`
@@ -86,8 +86,8 @@ The kernel-facing surface lives in the BPF LSM object, loader, runtime
 measurement path, initramfs PCR14 lock, SELinux policy, and the Syzkaller
 harness.
 
-* :doc:`Production bring-up <operator/production-bringup/index>`
-* :doc:`Kernel test policy <contributor/development/index>`
+* :doc:`Production bring-up <admin-guide/bringup/index>`
+* :doc:`Kernel test policy <dev-tools/index>`
 * SELinux policy: :ghsrc:`selinux/README.rst`
 * Syzkaller harness: :ghsrc:`syzkaller/README.rst`
 * Runtime remeasurement example: :ghsrc:`examples/runtime_remeasure/README.rst`
@@ -116,8 +116,8 @@ Packaging must preserve the security contract. Release artifacts are
 reproducible and verified against signed manifests.
 
 * :doc:`Reproducible builds <security/reproducible-builds>`
-* :doc:`Release and branch flow <contributor/branching>`
-* :doc:`Production install gates <operator/production-bringup/index>`
+* :doc:`Release and branch flow <process/branching>`
+* :doc:`Production install gates <admin-guide/bringup/index>`
 * SELinux policy: :ghsrc:`selinux/README.rst`
 * systemd units: :ghsrc:`systemd/`
 * udev rules: :ghsrc:`configs/udev/99-lota-tpm.rules`
@@ -127,7 +127,12 @@ reproducible and verified against signed manifests.
    :hidden:
 
    player/index
-   contributor/index
-   operator/index
+   process/index
+   dev-tools/index
+   admin-guide/index
+   agent/index
+   verifier/index
+   bpf/index
+   userspace-api/index
    security/index
    performance/index

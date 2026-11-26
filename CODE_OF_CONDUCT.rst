@@ -9,8 +9,8 @@ This code applies to project spaces: issues, pull requests, discussions,
 security reports and review comments.
 
 The full Code of Conduct -- scope, expected behavior, enforcement, and
-reporting -- lives in `Documentation/contributor/code-of-conduct.rst
-<Documentation/contributor/code-of-conduct.rst>`_.
+reporting -- lives in `Documentation/process/code-of-conduct.rst
+<Documentation/process/code-of-conduct.rst>`_.
 
 Conduct issues can be reported to ``swilczek.lx@gmail.com``.
 

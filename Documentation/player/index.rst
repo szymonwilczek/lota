@@ -457,7 +457,7 @@ Where to next
 =============
 
 * Every detail of the 13 steps, for somebody who wants to read ahead:
-  :doc:`the guided install reference <../operator/player-install>`.
+  :doc:`the guided install reference <../admin-guide/lota-install>`.
 * What a publisher receives and what they can do with it:
   :ghsrc:`examples/anticheat-integration.rst`.
 * What LOTA is defending against, in full:

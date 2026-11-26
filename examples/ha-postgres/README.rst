@@ -11,7 +11,7 @@ baselined on one instance is known to another, and a revocation or ban on one
 is enforced by all. This example stands two instances up against one
 Postgres so the shared-state behaviour can be observed without a full fleet.
 
-See `Documentation/operator/ha-deployment.rst <../../Documentation/operator/ha-deployment.rst>`_ for the
+See `Documentation/admin-guide/ha-deployment.rst <../../Documentation/admin-guide/ha-deployment.rst>`_ for the
 topology and the shared-state requirements, and
 `examples/enrollment/ <../enrollment>`__ for the CA + attestation ceremony
 this example reuses.
@@ -111,7 +111,7 @@ Two fields of ``GET /api/v1/clients/{id}`` are the answering instance's own and
 differ between the two on purpose: ``pending_challenges``, which counts the
 challenges that instance is holding, and ``monotonic_counter``, the nonce
 sequence it has seen. Everything else is the fleet's answer. See
-`Documentation/operator/monitoring-api.rst <../../Documentation/operator/monitoring-api.rst>`_.
+`Documentation/verifier/monitoring-api.rst <../../Documentation/verifier/monitoring-api.rst>`_.
 
 Production deltas
 -----------------

@@ -140,7 +140,7 @@ main() {
 
     if ((FAILURES != 0)); then
 	printf 'check-test-build-dir: %d line(s) name a directory the build may not have used\n' "$FAILURES" >&2
-	printf 'see Documentation/contributor/development/patch-checks.rst\n' >&2
+	printf 'see Documentation/process/patch-checks.rst\n' >&2
 	return 1
     fi
 

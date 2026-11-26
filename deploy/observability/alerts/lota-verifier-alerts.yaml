@@ -4,7 +4,7 @@
 # Reference Prometheus alert rules for the LOTA verifier.
 #
 # Severity maps to the escalation tiers in the observability guide
-# (Documentation/operator/observability.rst):
+# (Documentation/admin-guide/observability.rst):
 #     warning = L2 (operator triage, no data at risk yet),
 #     critical = L3 (integrity or service impact, act now).
 # Every alert names its runbook section there.
@@ -27,7 +27,7 @@ groups:
             Prometheus cannot scrape {{ $labels.instance }}. Attestation
             state of the fleet is unknown while the verifier is
             unreachable.
-          runbook_url: https://lota.szymon-wilczek.me/operator/observability.html#alert-lotaverifierdown
+          runbook_url: https://lota.szymon-wilczek.me/admin-guide/observability.html#alert-lotaverifierdown
 
       - alert: LotaAttestationStall
         expr: >-
@@ -42,7 +42,7 @@ groups:
             {{ $labels.instance }} has registered clients but received no
             attestation for 30 minutes. Agents are down, unreachable, or
             the attestation port is blocked.
-          runbook_url: https://lota.szymon-wilczek.me/operator/observability.html#alert-lotaattestationstall
+          runbook_url: https://lota.szymon-wilczek.me/admin-guide/observability.html#alert-lotaattestationstall
 
   - name: lota-verifier.integrity
     rules:
@@ -58,7 +58,7 @@ groups:
             {{ $labels.reason }} in the last 5 minutes: a device presented
             PCR or runtime state that does not match its policy or
             baseline. This is the primary tamper signal.
-          runbook_url: https://lota.szymon-wilczek.me/operator/observability.html#alert-lotaintegrityloss
+          runbook_url: https://lota.szymon-wilczek.me/admin-guide/observability.html#alert-lotaintegrityloss
 
       - alert: LotaRevokedDeviceActivity
         expr: >-
@@ -72,7 +72,7 @@ groups:
             contacting {{ $labels.instance }}. Expected briefly after a
             revocation; persistent activity means the operator remediation
             never reached the host.
-          runbook_url: https://lota.szymon-wilczek.me/operator/observability.html#alert-lotarevokeddeviceactivity
+          runbook_url: https://lota.szymon-wilczek.me/admin-guide/observability.html#alert-lotarevokeddeviceactivity
 
       - alert: LotaReplayBurst
         expr: increase(lota_rejections_total{reason="nonce_fail"}[5m]) > 3
@@ -85,7 +85,7 @@ groups:
             nonce reuse or expiry within 5 minutes. Single failures are
             benign retries; a burst points at a replay attempt or a
             badly skewed client clock.
-          runbook_url: https://lota.szymon-wilczek.me/operator/observability.html#alert-lotareplayburst
+          runbook_url: https://lota.szymon-wilczek.me/admin-guide/observability.html#alert-lotareplayburst
 
       - alert: LotaReanchorEscalation
         expr: increase(lota_reanchors_total{outcome="escalate"}[15m]) > 0
@@ -99,7 +99,7 @@ groups:
             acceptance and was refused. The device keeps failing
             attestation until an operator inspects it and either forces
             a re-anchor or revokes it.
-          runbook_url: https://lota.szymon-wilczek.me/operator/observability.html#alert-lotareanchorescalation
+          runbook_url: https://lota.szymon-wilczek.me/admin-guide/observability.html#alert-lotareanchorescalation
 
   - name: lota-verifier.capacity
     rules:
@@ -114,7 +114,7 @@ groups:
             writing the baseline store failed. The verifier is failing
             closed: healthy devices are being refused because the database
             backend is in trouble.
-          runbook_url: https://lota.szymon-wilczek.me/operator/observability.html#alert-lotabaselinestoreerrors
+          runbook_url: https://lota.szymon-wilczek.me/admin-guide/observability.html#alert-lotabaselinestoreerrors
 
       - alert: LotaAttestationFailureRatioHigh
         expr: >-
@@ -130,7 +130,7 @@ groups:
             Sustained fleet-wide failure ratio above 10% for 10 minutes.
             A single tampered device does not move this needle; a policy,
             certificate, or infrastructure problem does.
-          runbook_url: https://lota.szymon-wilczek.me/operator/observability.html#alert-lotaattestationfailureratiohigh
+          runbook_url: https://lota.szymon-wilczek.me/admin-guide/observability.html#alert-lotaattestationfailureratiohigh
 
       - alert: LotaVerifyLatencyP99High
         expr: >-
@@ -146,7 +146,7 @@ groups:
             second for 10 minutes. Usually database pressure or CPU
             saturation; agents start timing out well before latency
             reaches the protocol limits.
-          runbook_url: https://lota.szymon-wilczek.me/operator/observability.html#alert-lotaverifylatencyp99high
+          runbook_url: https://lota.szymon-wilczek.me/admin-guide/observability.html#alert-lotaverifylatencyp99high
 
       - alert: LotaPendingChallengesHigh
         expr: lota_pending_challenges > 1000
@@ -160,7 +160,7 @@ groups:
             attestation challenges. Either a large fleet segment stopped
             mid-handshake or an unauthenticated flood is filling the
             challenge table.
-          runbook_url: https://lota.szymon-wilczek.me/operator/observability.html#alert-lotapendingchallengeshigh
+          runbook_url: https://lota.szymon-wilczek.me/admin-guide/observability.html#alert-lotapendingchallengeshigh
 
       - alert: LotaConnectionErrorBurst
         expr: rate(lota_connection_errors_total[5m]) > 1
@@ -174,7 +174,7 @@ groups:
             second. Malformed traffic on the attestation port: a scanner,
             a protocol-version mismatch after a partial upgrade, or a
             broken load-balancer health check.
-          runbook_url: https://lota.szymon-wilczek.me/operator/observability.html#alert-lotaconnectionerrorburst
+          runbook_url: https://lota.szymon-wilczek.me/admin-guide/observability.html#alert-lotaconnectionerrorburst
 
       - alert: LotaDecisionLogLoss
         expr: >-
@@ -191,4 +191,4 @@ groups:
             or a write did not land. Verdicts are unaffected -- the log
             never gates attestation -- but the audit trail for this
             window is incomplete and the loss is not recoverable.
-          runbook_url: https://lota.szymon-wilczek.me/operator/observability.html#alert-lotadecisionlogloss
+          runbook_url: https://lota.szymon-wilczek.me/admin-guide/observability.html#alert-lotadecisionlogloss

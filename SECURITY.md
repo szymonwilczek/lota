@@ -12,7 +12,7 @@ for `github.com/szymonwilczek/lota`, or the fallback encrypted email channel.
 
 The full security policy - supported versions, reporting channels and GPG
 fingerprint, response targets, disclosure handling, and the security scope -
-lives in [Documentation/security/reporting.rst](Documentation/security/reporting.rst).
+lives in [Documentation/process/security-bugs.rst](Documentation/process/security-bugs.rst).
 
 Do not file public issues for exploitable vulnerabilities until the issue is
 triaged and disclosure is coordinated.

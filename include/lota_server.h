@@ -131,7 +131,7 @@ const char *lota_server_strerror(int error);
  *
  * Opaque: match it, do not parse it. Binary compatibility is the soname and the
  * ABI version pkg-config reports, see
- * Documentation/contributor/development/api-stability.rst.
+ * Documentation/userspace-api/stability.rst.
  *
  * Return: the static string lota_sdk_version() reports for the same release.
  */

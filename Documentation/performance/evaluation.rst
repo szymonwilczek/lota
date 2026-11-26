@@ -290,7 +290,7 @@ Postgres) held the same rate through a ``kill -9`` of one instance
 served by the survivor) and a ~2 s Postgres restart
 (fail-closed rejections inside the window only; all 10 000
 registrations intact). Operator-facing conclusions from these runs are
-in :doc:`the sizing guide <../operator/sizing>`.
+in :doc:`the sizing guide <../admin-guide/sizing>`.
 
 L2 write-tier scaling (measured)
 ======================================
@@ -346,7 +346,7 @@ The linear-to-Nx shard scaling and the one-million-agent envelope
 (16 shards + ~56 stateless instances) are honest arithmetic over these
 measured building blocks; the aggregate on independent storage is not yet
 measured (single-disk rig). A multi-host run will replace the 1.1-2.4x
-figure. The 1M reasoning is in :doc:`the sizing guide <../operator/sizing>`.
+figure. The 1M reasoning is in :doc:`the sizing guide <../admin-guide/sizing>`.
 
 L2 swtpm / L3 kernel (TBA)
 ==========================

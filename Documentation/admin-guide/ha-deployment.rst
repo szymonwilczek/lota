@@ -1,0 +1,250 @@
+.. SPDX-License-Identifier: MIT
+.. Copyright (C) 2026 Szymon Wilczek
+
+==============================
+Verifier deployment topologies
+==============================
+
+The LOTA verifier persists durable identity and enforcement records: AIK
+registrations, per-client baselines, revocations, hardware bans, the audit and
+attestation logs, and used nonces. Where that state lives decides how many
+verifier instances a deployment can run.
+
+This document describes the supported topologies and the shared-state
+requirement of each. It is written for operators standing up a verifier tier
+and for contributors changing the store layer.
+
+Single node (default)
+=====================
+
+One verifier process owns its state. Two equivalent storage layouts exist:
+
+* **File + SQLite.** The used-nonce history and the enforcement state --
+  revocations, hardware bans, the audit log and the attestation decision log
+  -- persist to one SQLite database (``--state-db``, default
+  ``/var/lib/lota/verifier-state.sqlite``). The per-device boot baseline is
+  in-memory, so a restart drops the baselines and the next report from each
+  device re-pins them.
+* **SQLite (production default).** ``--db`` persists all of the above to one
+  SQLite file, the boot baselines included: this is the single-node layout
+  that keeps its baselines and its inventory across a restart.
+
+Verification and storage remain separate choices. ``--require-cert`` and
+``--aik-ca-cert`` configure AIK certificate verification on every backend;
+``--db`` and ``--pg-dsn`` decide where state lives. Neither choice constrains the other.
+
+Single node is the simplest topology and needs no external database. Its
+ceiling is one process: there is no failover, and the in-memory enforcement
+state of the production default is lost on restart.
+
+N instances behind a load balancer (Postgres)
+=============================================
+
+Several stateless verifier instances point at one shared Postgres database,
+selected with ``--pg-dsn`` (or ``LOTA_PG_DSN``, which keeps the connection
+string out of the process argument list). A load balancer fans attestation and
+validation traffic across them; the ``GET /health`` endpoint is the health
+check.
+
+::
+
+    client --> load balancer --> verifier (1) --|
+                             --> verifier (1) --|-->  Postgres (2)
+                             --> verifier (1) --|
+
+    (1) - stateless, identical config
+    (2) - shared enforcement state
+
+With ``--pg-dsn`` the shared database holds the baseline, used-nonce,
+revocation, ban, audit and attestation state.
+The consequences:
+
+* A baseline pinned, a client revoked, or hardware banned on one instance is
+  enforced by every instance. The per-client baseline pin is committed under a
+  transaction-scoped advisory lock, so the firmware/agent_hash TOFU contract
+  holds across instances exactly as it does within one SQLite process.
+* A used nonce recorded on one instance is rejected as replayed on all
+  instances.
+* A client pinned through one instance is listed by every instance, so
+  ``GET /api/v1/clients`` is a fleet inventory, and it survives a restart.
+* ``GET /api/v1/clients/{id}`` answers from the same shared record, including
+  when the client last attested. ``monotonic_counter`` stays this
+  instance's, and :doc:`../verifier/monitoring-api` says what it is worth.
+
+What Postgres adds over ``--db`` is the shared state above, not certificate
+verification: every backend verifies AIK certificates the same way. Run each
+instance with identical policy, CA roots and storage configuration.
+
+Shared-state requirements
+-------------------------
+
+* **One Postgres database, reachable from every instance.** Use TLS to the
+  database (``sslmode=verify-full`` in the DSN) and a dedicated least-privilege
+  role. Each instance opens its own connection pool (``--pg-max-open-conns``,
+  default 20); size Postgres ``max_connections`` for the instance count times
+  the per-instance pool. Postgres group-commits concurrent transactions, so a
+  wider pool raises **enrollment-burst** throughput -- a fleet-wide first-boot
+  or game-launch storm enrolls faster with a larger pool -- up to the
+  ``max_connections`` budget. Raise the pool and ``max_connections`` together;
+  never let ``instances x pool`` exceed ``max_connections``. PostgreSQL ships
+  with ``max_connections = 100``, so the stock server is already short for two
+  instances at a raised pool: budget it before tuning, and count every shard
+  that shares a server. The verifier reads the server's ``max_connections`` at
+  startup and warns when the configured pool exceeds it, or leaves no room for
+  a second instance. The warning is advisory -- behind a connection pooler the
+  backend's limit is not the one that applies -- but a pool below 1 is refused
+  outright, since ``database/sql`` reads 0 as *unlimited*.
+* **Schema migrations are safe to race.** Every instance runs migrations at
+  startup under a Postgres advisory lock, so the schema is created exactly once
+  regardless of start order. Under the same lock each instance checks that the
+  database is the schema its own build applies -- the version, the fingerprint
+  of the migration text, and the tables those migrations create -- and refuses
+  to serve one written by a different build. Run one build across the fleet;
+  :doc:`protocol-versions` says what each refusal means. An instance that only
+  reads (``--report-only``, below) checks the same three markers and applies
+  nothing: it takes no lock, records no fingerprint for a database that carries
+  none, and refuses a database whose schema is behind its own, since the
+  migrations that would close the gap belong to a verifier on the primary.
+* **AIK certificate roots and PCR policy are configuration, not shared state.**
+  Distribute the same ``--aik-ca-cert``, ``--aik-crl``, ``--policy`` and
+  ``--policy-pubkey`` material to every instance through the usual configuration
+  channel; they are not stored in the database.
+* **CA signing key.** The attestation CA is a separate service; its key handling
+  (HSM/PKCS#11 or the dev-only PEM) is covered in
+  :doc:`../security/ca-key`.
+
+Scaling the read path
+---------------------
+
+The monitoring API's listings and lookups are single indexed reads, and their
+volume is far below the attestation path, so a single Postgres node serves them
+comfortably.
+
+**An attesting verifier needs a writable database.** It applies its schema at
+startup and writes on every round, so it refuses to start against a hot
+standby, saying the database is a read-only standby. Point every attesting
+instance at the primary.
+
+**A reporting instance takes the read load off it.** ``--report-only`` serves
+only the monitoring API, from a database it never writes::
+
+   lota-verifier --report-only \
+     --pg-dsn "postgres://…@pg-replica/lota?sslmode=verify-full" \
+     --http-addr 127.0.0.1:8081
+
+* No attestation listener: ``--cert``, ``--key`` and ``--addr`` are unused. A
+  non-loopback monitoring API still requires TLS and an API key.
+* The schema is verified, never applied, so the database may be a hot standby
+  or the primary.
+* Every ``admin`` endpoint (revoke, restore, ban, unban, force re-anchor,
+  acknowledge a re-anchor) answers **503** naming the read-only database,
+  before the key check. ``reader`` endpoints behave as on an attesting
+  instance.
+* ``/health`` answers **200** with ``"mode": "reporting"``.
+* ``--policy`` is ignored, with a warning.
+* With shards, it reads each shard's identity and the pinned shard set but
+  writes neither; pinning is left to attesting instances.
+
+Nothing on the attestation wire depends on which node answered, so a replica is
+a faithful source for these answers. Reporting tools that query Postgres
+directly -- a dashboard, an export, an audit report -- read the same replica
+beside it.
+
+Scaling the write path (database sharding)
+------------------------------------------
+
+A single Postgres database bounds the fleet at its durable-write (WAL fsync)
+rate, and that rate is *shared* by every instance pointed at it -- adding
+verifier instances does not raise it. Past that ceiling, partition the
+per-client write state across several independent databases with
+``--pg-shard-dsn`` (repeatable, or ``LOTA_PG_SHARD_DSNS`` as a
+comma-separated list), mutually exclusive with ``--pg-dsn``::
+
+   lota-verifier \
+     --pg-shard-dsn "postgres://…@pg-shard-0/lota?sslmode=verify-full" \
+     --pg-shard-dsn "postgres://…@pg-shard-1/lota?sslmode=verify-full" \
+     --pg-shard-dsn "postgres://…@pg-shard-2/lota?sslmode=verify-full"
+
+Each per-client baseline and used-nonce record is routed to one shard by a
+stable, process-independent hash of **the client it belongs to**, so a given
+client's writes always land on the same shard and every instance agrees on
+that mapping. Routing on the client is what makes a shard a failure domain:
+a client's baseline and its replay history live together, so losing a shard
+costs that shard's clients and leaves the rest attesting.
+Because independent databases commit in parallel, aggregate durable-write
+throughput scales with the number of shards **when each shard has
+independent storage** (separate database hosts or volumes); shards packed
+onto one disk still serialise on that disk's fsync.
+
+Rules for a sharded deployment:
+
+* **Give every instance the same shard list in the same order.** The shard
+  index is positional; a divergent list would route the same client to
+  different databases on different instances and break replay protection. The verifier enforces this: each shard
+  database carries its own identity and **every shard** pins the
+  fingerprint of the ordered list, so an instance whose list does not
+  reproduce it refuses to start instead of serving a routing its peers
+  disagree with. The pin is read from every shard and all of them must
+  agree, which is what makes a reordering visible: the pin cannot live only
+  in whichever database is listed first, because that is the database a
+  reordering moves. A shard already pinned to another set stops the run.
+  Listing the same database twice is refused for the same reason.
+* **The first shard is the control database.** Fleet-global, read-mostly
+  state -- revocations, hardware bans, the audit trail and the attestation
+  decision log -- lives on shard 0, not on the per-report path.
+* **The decision log holds one row per host, not one per instance.** The
+  writing instance locks the host in the control database, so trusted
+  rounds served by different instances extend one row. See
+  :doc:`observability`.
+* **Size each shard for its slice.** A shard carries ``fleet / shards``
+  clients; size ``max_connections`` on each for the instance count times the
+  per-instance pool, as in the single-database case.
+* **A shard is a failure domain.** Losing one shard fails closed only for the
+  clients it owns (their next attestation errors and retries); the other
+  shards keep serving. Run each shard with its own HA (primary/replica) as
+  you would the single database. A challenge can still be issued while a
+  shard is down -- the used-nonce history is consulted when the client
+  presents itself, which is the first moment its shard is known -- so the
+  refusal an affected client sees names the round, not the challenge. The
+  round is refused: a replay history that cannot be read is not the same
+  as one that holds nothing, and attesting on the local pending map alone
+  would drop the cross-instance guarantee for as long as the shard is away.
+* **Fix the shard count before you enrol the fleet.** The index is
+  ``FNV-1a(key) mod N``, so changing ``N`` re-routes nearly every key.
+  After adding or removing a shard, a client's baseline and its used-nonce
+  history are looked up on a database that does not hold them: every client
+  presents as a first attestation, which the default
+  ``--allow-tofu-boot-baseline=false`` refuses unless a signed policy pins
+  that client's PCR0/1/7, and replay protection covers only the new routing
+  until the history refills.
+  Treat a shard-count change as a fleet-wide re-enrolment in a maintenance
+  window -- migrate the baseline rows to their new shards first, or re-enrol
+  the fleet -- not as a rolling capacity step. Size the shard count for the
+  fleet you expect, not the one you have. The pinned shard set makes this
+  explicit: a changed list is refused at startup until you clear the pin
+  with ``DELETE FROM shard_set;`` on **every** shard, which is the
+  point at which you confirm the migration is done. The same pin is
+  recorded for a single ``--pg-dsn`` database, so switching an existing
+  deployment to a sharded list is caught rather than silently re-routing
+  every client.
+
+Sharding composes with the multi-instance topology above: N stateless
+instances in front of M shard databases. The client-to-verifier load
+balancer needs no shard awareness -- any instance can serve any client
+because all instances share the same shard set.
+
+Choosing a topology
+===================
+
+.. list-table::
+   :header-rows: 1
+   :widths: 50 50
+
+   * - Need
+     - Topology
+   * - Test fleet, single host, no external DB
+     - Single node (file + SQLite)
+   * - Production, single verifier host
+     - Single node (``--db``, ``--require-cert``)
+   * - Production, failover or horizontal scale
+     - N instances + Postgres (``--pg-dsn``, ``--require-cert``)

@@ -95,7 +95,7 @@ carries the gaming and server SDK inside it, so a producer calling only
 ``lota_ac_*`` links one thing; add ``lota-gaming`` or ``lota-server`` when
 the same binary calls those APIs directly. The frozen surface those
 modules describe is in
-``Documentation/contributor/development/api-stability.rst``.
+``Documentation/userspace-api/stability.rst``.
 
 What you must change
 ====================
@@ -167,7 +167,7 @@ host, an Intel PTT firmware TPM, ``lota_get_token()`` measured **48 ms
 median** end to end through the SDK against the running daemon. Treat that as
 the order of magnitude for a consumer laptop; an earlier measurement on the
 same host recorded roughly three times more, and no hardware is promised to
-be fast. :doc:`../Documentation/operator/platform-support` carries the
+be fast. :doc:`../Documentation/agent/tpm` carries the
 numbers and the method.
 
 Three rules follow, and they are the reason the reference beats at 5 seconds:
