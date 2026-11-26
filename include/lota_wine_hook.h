@@ -81,8 +81,10 @@ extern "C" {
  *                      before then is not, unless the hook activates
  *                      in its exec)
  *
- * After a gate refused an object:
- *   LOTA_REFUSED_OBJECT  refused path
+ * After a gate refused an object, the one dlopen() named or a dependency
+ * the loader pulled in:
+ *   LOTA_REFUSED_OBJECT  refused path, or its file name for a memory
+ *                        file or when the agent could not give the path
  *   LOTA_REFUSED_AT      UNIX_TIMESTAMP
  */
 #define LOTA_HOOK_STATUS_FILE "lota-status"

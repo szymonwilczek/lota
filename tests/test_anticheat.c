@@ -9,6 +9,7 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <link.h>
+#include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -26,6 +27,7 @@
 #include "test.h"
 #include "lota_anticheat.h"
 #include "lota_gaming.h"
+#include "lota_ipc.h"
 #include "lota_snapshot.h"
 #include "lota_server.h"
 #include "lota_token.h"
@@ -2443,19 +2445,19 @@ static void test_measure_failure_does_not_render_as_a_verdict(void)
  * Nothing short of this reaches the verdict lota_ac_verify_heartbeat() renders,
  * because everything before it refuses first.
  */
-static int
-build_signed_heartbeat_packet(EVP_PKEY *key, uint8_t *out, size_t out_cap,
-			      size_t *out_len, uint8_t provider,
-			      const char *game_id, uint32_t flags,
-			      uint8_t out_game_hash[LOTA_AC_GAME_HASH_SIZE],
-			      uint8_t out_rm[LOTA_AC_RUNTIME_MEASURE_SIZE])
+static int build_signed_heartbeat_packet(
+	EVP_PKEY *key, uint8_t *out, size_t out_cap, size_t *out_len,
+	uint8_t provider, const char *game_id, uint32_t flags,
+	uint32_t pid_count, uint8_t out_game_hash[LOTA_AC_GAME_HASH_SIZE],
+	uint8_t out_rm[LOTA_AC_RUNTIME_MEASURE_SIZE])
 {
 	uint8_t session_id[LOTA_AC_SESSION_ID_SIZE];
 	uint8_t nonce[32];
-	uint8_t token[2048];
+	uint8_t token[LOTA_TOKEN_MAX_SIZE];
 	uint64_t timestamp = (uint64_t)time(NULL);
 	size_t token_len = 0;
 	size_t total;
+	int ret;
 
 	for (int i = 0; i < (int)sizeof(session_id); i++)
 		session_id[i] = (uint8_t)(0xA0 + i);
@@ -2469,9 +2471,15 @@ build_signed_heartbeat_packet(EVP_PKEY *key, uint8_t *out, size_t out_cap,
 				  LOTA_AC_DOMAIN_VERSION_CURRENT) != 0)
 		return -EIO;
 
-	if (forge_token_sha256(key, timestamp + LOTA_SERVER_MAX_TOKEN_AGE_SEC,
-			       flags, nonce, token, sizeof(token),
-			       &token_len) != LOTA_OK)
+	if (pid_count == 0)
+		ret = forge_token_sha256(
+			key, timestamp + LOTA_SERVER_MAX_TOKEN_AGE_SEC, flags,
+			nonce, token, sizeof(token), &token_len);
+	else
+		ret = forge_token_protected_n(
+			key, timestamp + LOTA_SERVER_MAX_TOKEN_AGE_SEC, flags,
+			nonce, pid_count, token, sizeof(token), &token_len);
+	if (ret != LOTA_OK)
 		return -EIO;
 
 	total = LOTA_AC_HEADER_SIZE + token_len;
@@ -2504,10 +2512,10 @@ build_signed_heartbeat_packet(EVP_PKEY *key, uint8_t *out, size_t out_cap,
  * so a word without LOTA_FLAG_ATTESTED must not reach it however genuine
  * the packet around it is.
  */
-static int verified_state(uint32_t flags, enum lota_ac_state *state,
-			  int *trusted)
+static int verified_state(uint32_t flags, uint32_t pid_count,
+			  enum lota_ac_state *state, int *trusted)
 {
-	uint8_t buf[LOTA_AC_MAX_HEARTBEAT];
+	uint8_t buf[LOTA_AC_HEADER_SIZE + LOTA_TOKEN_MAX_SIZE];
 	uint8_t game_hash[LOTA_AC_GAME_HASH_SIZE];
 	uint8_t rm[LOTA_AC_RUNTIME_MEASURE_SIZE];
 	struct lota_ac_info info;
@@ -2528,8 +2536,8 @@ static int verified_state(uint32_t flags, enum lota_ac_state *state,
 
 	ret = build_signed_heartbeat_packet(key, buf, sizeof(buf), &written,
 					    LOTA_AC_PROVIDER_EAC,
-					    "verified-trust", flags, game_hash,
-					    rm);
+					    "verified-trust", flags, pid_count,
+					    game_hash, rm);
 	if (ret == 0) {
 		ret = lota_ac_verify_heartbeat(buf, written, aik_der, aik_len,
 					       game_hash, rm, &info);
@@ -2553,7 +2561,7 @@ static void test_verified_unattested_host_is_not_trusted(void)
 	TEST("verify: a genuine packet from an unattested host is untrusted");
 
 	/* TPM_OK | IOMMU_OK: the agent is up, nobody has attested it */
-	ret = verified_state(LOTA_FLAG_TPM_OK | LOTA_FLAG_IOMMU_OK, &state,
+	ret = verified_state(LOTA_FLAG_TPM_OK | LOTA_FLAG_IOMMU_OK, 0, &state,
 			     &trusted);
 	if (ret != LOTA_AC_ERR_OK) {
 		printf("(rc=%d) ", ret);
@@ -2577,7 +2585,7 @@ static void test_verified_attested_host_is_trusted(void)
 
 	TEST("verify: a genuine packet from an attested host is trusted");
 
-	ret = verified_state(LOTA_FLAG_ATTESTED | LOTA_FLAG_TPM_OK, &state,
+	ret = verified_state(LOTA_FLAG_ATTESTED | LOTA_FLAG_TPM_OK, 0, &state,
 			     &trusted);
 	if (ret != LOTA_AC_ERR_OK) {
 		printf("(rc=%d) ", ret);
@@ -2589,6 +2597,220 @@ static void test_verified_attested_host_is_trusted(void)
 		FAIL("an attested host did not verify as trusted");
 	else
 		PASS();
+}
+
+static void test_verified_full_protected_set(void)
+{
+	enum lota_ac_state state = LOTA_AC_STATE_IDLE;
+	int trusted = -1;
+	int ret;
+
+	TEST("verify: a token with the full protected set verifies");
+
+	ret = verified_state(LOTA_FLAG_ATTESTED | LOTA_FLAG_TPM_OK,
+			     LOTA_TOKEN_MAX_PROTECT_PIDS, &state, &trusted);
+	if (ret != LOTA_AC_ERR_OK) {
+		printf("(rc=%d) ", ret);
+		FAIL("the packet did not verify");
+	} else if (!trusted || state != LOTA_AC_STATE_TRUSTED) {
+		FAIL("an attested host did not verify as trusted");
+	} else {
+		PASS();
+	}
+}
+
+/* Snapshot holding a token with the full protected set */
+static size_t write_full_set_snapshot(const char *dir, uint32_t flags)
+{
+	static uint8_t buf[LOTA_SNAPSHOT_HEADER_SIZE + LOTA_TOKEN_MAX_SIZE];
+	uint8_t nonce[32] = { 0 };
+	size_t tok_len = 0;
+	EVP_PKEY *key = forge_rsa_key();
+	int ret;
+
+	if (!key)
+		return 0;
+	ret = forge_token_protected_n(key, (uint64_t)time(NULL) + 60, flags,
+				      nonce, LOTA_TOKEN_MAX_PROTECT_PIDS,
+				      buf + LOTA_SNAPSHOT_HEADER_SIZE,
+				      LOTA_TOKEN_MAX_SIZE, &tok_len);
+	EVP_PKEY_free(key);
+	if (ret != LOTA_OK)
+		return 0;
+
+	write_le32(buf + 0, LOTA_SNAPSHOT_MAGIC);
+	write_le16(buf + 4, (uint16_t)LOTA_SNAPSHOT_VERSION);
+	write_le16(buf + 6, 0);
+	write_le32(buf + 8, flags);
+	write_le32(buf + 12, (uint32_t)tok_len);
+	write_test_file(dir, LOTA_SNAPSHOT_FILE_NAME, buf,
+			LOTA_SNAPSHOT_HEADER_SIZE + tok_len);
+	return tok_len;
+}
+
+static void test_file_mode_full_protected_set(void)
+{
+	struct lota_ac_config cfg = {
+		.struct_size = sizeof(cfg),
+		.provider = LOTA_AC_PROVIDER_EAC,
+		.game_id = "test-full-set",
+		.token_dir = test_dir,
+	};
+	struct lota_ac_session *s;
+	size_t tok_len;
+	int ret;
+
+	TEST("file mode: a snapshot with the full protected set is read");
+
+	tok_len = write_full_set_snapshot(test_dir, 0x07);
+	if (tok_len <= 1608) {
+		FAIL("preconditions: the forged token is not above 1608 bytes");
+		return;
+	}
+	s = lota_ac_init(&cfg);
+	if (!s) {
+		FAIL("init returned NULL");
+		return;
+	}
+
+	ret = lota_ac_tick(s);
+	if (ret != 0) {
+		printf("(rc=%d, err=%d) ", ret, lota_ac_last_error());
+		FAIL("the snapshot was refused");
+	} else if (lota_ac_get_state(s) != LOTA_AC_STATE_TRUSTED) {
+		FAIL("expected TRUSTED");
+	} else {
+		PASS();
+	}
+	lota_ac_shutdown(s);
+}
+
+/* Answer GET_STATUS and GET_TOKEN with the full protected set */
+static void full_set_agent_serve(int fd)
+{
+	static uint8_t token[LOTA_IPC_TOKEN_HEADER_SIZE +
+			     LOTA_IPC_TOKEN_MAX_PID_LIST_SIZE +
+			     LOTA_IPC_TOKEN_MAX_REGISTRY_LIST_SIZE + 64 + 256];
+	struct lota_ipc_token_request token_req;
+	struct lota_ipc_response resp = {
+		.magic = LOTA_IPC_MAGIC,
+		.version = LOTA_IPC_VERSION,
+		.result = LOTA_IPC_OK,
+	};
+	struct lota_ipc_status status = { .flags = 0x07 };
+	struct lota_ipc_token hdr = {
+		.valid_until = (uint64_t)time(NULL) + 60,
+		.flags = 0x07,
+		.attest_size = 64,
+		.sig_size = 256,
+		.sig_alg = 0x0014,
+		.hash_alg = 0x000B,
+		.pcr_mask = 0x4001,
+		.protect_pid_count = LOTA_IPC_TOKEN_MAX_PROTECT_PIDS,
+		.pid_list_size = LOTA_IPC_TOKEN_MAX_PID_LIST_SIZE,
+		.runtime_protect_version = LOTA_IPC_RUNTIME_PROTECT_V1,
+	};
+	struct lota_ipc_request req;
+	uint8_t *p;
+
+	while (recv(fd, &req, sizeof(req), MSG_WAITALL) == sizeof(req)) {
+		const void *payload = NULL;
+
+		memset(&token_req, 0, sizeof(token_req));
+		if (req.payload_len == sizeof(token_req) &&
+		    recv(fd, &token_req, sizeof(token_req), MSG_WAITALL) !=
+			    sizeof(token_req))
+			break;
+
+		resp.payload_len = 0;
+		if (req.cmd == LOTA_IPC_CMD_GET_STATUS) {
+			payload = &status;
+			resp.payload_len = sizeof(status);
+		} else if (req.cmd == LOTA_IPC_CMD_GET_TOKEN) {
+			memcpy(hdr.client_nonce, token_req.nonce, 32);
+			memset(token, 0x5A, sizeof(token));
+			memcpy(token, &hdr, sizeof(hdr));
+			p = token + sizeof(hdr);
+			for (uint32_t i = 0;
+			     i < LOTA_IPC_TOKEN_MAX_PROTECT_PIDS; i++, p += 4)
+				write_le32(p, 4242 + i);
+			payload = token;
+			resp.payload_len = sizeof(token);
+		}
+		if (send(fd, &resp, sizeof(resp), MSG_NOSIGNAL) !=
+			    sizeof(resp) ||
+		    (resp.payload_len &&
+		     send(fd, payload, resp.payload_len, MSG_NOSIGNAL) !=
+			     (ssize_t)resp.payload_len))
+			break;
+	}
+}
+
+static void test_direct_mode_full_protected_set(void)
+{
+	struct sockaddr_un addr = { .sun_family = AF_UNIX };
+	uint8_t buf[LOTA_AC_MAX_HEARTBEAT];
+	struct lota_ac_session *s;
+	size_t written = 0;
+	pid_t agent;
+	int ret;
+	int fd;
+
+	TEST("direct mode: a token with the full protected set is sent");
+	if (snprintf(addr.sun_path, sizeof(addr.sun_path), "%s/full.sock",
+		     test_dir) >= (int)sizeof(addr.sun_path)) {
+		FAIL("the socket path does not fit");
+		return;
+	}
+	unlink(addr.sun_path);
+	fd = socket(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0);
+	if (fd < 0 || bind(fd, (struct sockaddr *)&addr, sizeof(addr)) != 0 ||
+	    listen(fd, 1) != 0) {
+		FAIL("cannot listen on a unix socket");
+		if (fd >= 0)
+			close(fd);
+		return;
+	}
+	agent = fork();
+	if (agent == 0) {
+		int c = accept(fd, NULL, NULL);
+
+		if (c >= 0)
+			full_set_agent_serve(c);
+		_exit(0);
+	}
+	close(fd);
+	if (agent < 0) {
+		FAIL("fork");
+		unlink(addr.sun_path);
+		return;
+	}
+
+	struct lota_ac_config cfg = {
+		.struct_size = sizeof(cfg),
+		.provider = LOTA_AC_PROVIDER_EAC,
+		.game_id = "test-full-set",
+		.direct = 1,
+		.socket_path = addr.sun_path,
+	};
+	s = lota_ac_init(&cfg);
+	if (!s) {
+		FAIL("init returned NULL");
+	} else {
+		ret = lota_ac_heartbeat(s, buf, sizeof(buf), &written);
+		if (ret != 0) {
+			printf("(rc=%d, err=%d) ", ret, lota_ac_last_error());
+			FAIL("heartbeat failed");
+		} else if (written <= LOTA_AC_HEADER_SIZE + 1608) {
+			FAIL("the heartbeat does not carry the whole token");
+		} else {
+			PASS();
+		}
+		lota_ac_shutdown(s);
+	}
+	kill(agent, SIGKILL);
+	waitpid(agent, NULL, 0);
+	unlink(addr.sun_path);
 }
 
 /* Boot evidence */
@@ -2861,6 +3083,9 @@ int main(void)
 	test_tick_null();
 	test_verified_unattested_host_is_not_trusted();
 	test_verified_attested_host_is_trusted();
+	test_verified_full_protected_set();
+	test_file_mode_full_protected_set();
+	test_direct_mode_full_protected_set();
 	test_errno_is_not_rendered_as_a_verdict();
 	test_error_codes_sit_outside_the_errno_range();
 	test_measure_failure_does_not_render_as_a_verdict();

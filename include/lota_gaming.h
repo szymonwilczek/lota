@@ -422,6 +422,29 @@ int lota_get_boot_evidence(struct lota_client *client, uint8_t *buf,
 			   size_t buflen, size_t *written);
 
 /**
+ * lota_get_refusal() - The last file the gate refused this process to map.
+ * @client: connection from lota_connect().
+ * @object: receives the file's path as this process sees it, or only its
+ *          name for a memory file (memfd, shared memory, /dev/zero) or when
+ *          the gate could not give the path; "" when there was none.
+ * @len: size of @object; 256 holds any.
+ * @at_ns: receives the CLOCK_MONOTONIC time of the refusal, 0 when there was
+ *         none; may be NULL.
+ *
+ * The agent keeps the last refusal of a process that was protected when the
+ * gate refused it, a dependency the loader pulled in as much as the object
+ * the process asked for, and answers it only to that process. A process
+ * given its PID in the refusal's clock tick, or across a suspend before the
+ * agent read the refusal, is taken for it. A refusal the gate left out of
+ * its events is not kept.
+ *
+ * Return: LOTA_OK, LOTA_ERR_BUFFER_TOO_SMALL when @object cannot hold the
+ * name, or another negative LOTA_ERR_*.
+ */
+int lota_get_refusal(struct lota_client *client, char *object, size_t len,
+		     uint64_t *at_ns);
+
+/**
  * typedef lota_status_callback_fn - Status change callback.
  * @status: current status snapshot.
  * @events: LOTA_EVENT_* that changed.

@@ -319,13 +319,22 @@ int forge_token_protected(EVP_PKEY *key, uint64_t valid_until, uint32_t flags,
 			  const uint8_t nonce[32], uint8_t *tokbuf,
 			  size_t tokbuf_size, size_t *tok_written)
 {
+	return forge_token_protected_n(key, valid_until, flags, nonce, 1,
+				       tokbuf, tokbuf_size, tok_written);
+}
+
+int forge_token_protected_n(EVP_PKEY *key, uint64_t valid_until, uint32_t flags,
+			    const uint8_t nonce[32], uint32_t pid_count,
+			    uint8_t *tokbuf, size_t tokbuf_size,
+			    size_t *tok_written)
+{
 	uint8_t exp_nonce[32];
 	uint8_t runtime_digest[32];
 	uint8_t policy_digest[32] = { 0x11, 0x22, 0x33 };
 	uint8_t pcr_digest[32];
 	uint32_t pcr_mask = 0x4001;
-	uint32_t pids[1] = { 4242 };
-	uint8_t registry_digests[1][32];
+	uint32_t pids[LOTA_TOKEN_MAX_PROTECT_PIDS];
+	uint8_t registry_digests[LOTA_TOKEN_MAX_PROTECT_PIDS][32];
 	struct lota_token token;
 	size_t attest_len = 0;
 	size_t sig_len = 0;
@@ -333,11 +342,16 @@ int forge_token_protected(EVP_PKEY *key, uint64_t valid_until, uint32_t flags,
 	uint8_t *sig;
 	int ret;
 
-	memset(registry_digests[0], 0x5A, sizeof(registry_digests[0]));
+	if (pid_count == 0 || pid_count > LOTA_TOKEN_MAX_PROTECT_PIDS)
+		return LOTA_ERR_INVALID_ARG;
+	for (uint32_t i = 0; i < pid_count; i++) {
+		pids[i] = 4242 + i;
+		memset(registry_digests[i], 0x5A, sizeof(registry_digests[i]));
+	}
 	memset(pcr_digest, 0xDD, sizeof(pcr_digest));
 
 	if (lota_compute_runtime_protect_digest(
-		    pids, (const uint8_t (*)[32])registry_digests, 1,
+		    pids, (const uint8_t (*)[32])registry_digests, pid_count,
 		    runtime_digest) != 0)
 		return LOTA_ERR_INVALID_ARG;
 	if (forge_quote_nonce(valid_until, flags, pcr_mask, nonce,
@@ -367,7 +381,7 @@ int forge_token_protected(EVP_PKEY *key, uint64_t valid_until, uint32_t flags,
 	memcpy(token.runtime_protect_digest, runtime_digest,
 	       sizeof(token.runtime_protect_digest));
 	token.runtime_protect_epoch = 0;
-	token.protect_pid_count = 1;
+	token.protect_pid_count = pid_count;
 	token.protected_pids = pids;
 	token.protected_registry_digests = registry_digests;
 	token.attest_data = attest;

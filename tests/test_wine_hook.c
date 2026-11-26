@@ -25,6 +25,7 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <limits.h>
+#include <pthread.h>
 #include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -35,24 +36,8 @@
 #include <sys/wait.h>
 #include <unistd.h>
 
-#include <sys/mman.h>
-
 #include "test.h"
 
-/* the gate's answer to the hook's probe mapping, 0 = the real mmap */
-static int test_mmap_errno;
-
-static void *test_mmap(void *addr, size_t len, int prot, int flags, int fd,
-		       off_t off)
-{
-	if (test_mmap_errno) {
-		errno = test_mmap_errno;
-		return MAP_FAILED;
-	}
-	return mmap(addr, len, prot, flags, fd, off);
-}
-
-#define hook_mmap test_mmap
 #include "../src/sdk/lota_wine_hook.c"
 int lota_protect_main(int argc, char **argv);
 #define main lota_protect_main
@@ -1273,25 +1258,6 @@ static int touch_file(const char *path, const char *body)
 	return 0;
 }
 
-/* an object the loader maps but cannot load: a header and nothing else */
-static int touch_object(const char *path)
-{
-	ElfW(Ehdr) eh = __ehdr_start;
-	int fd = open(path, O_WRONLY | O_CREAT | O_TRUNC, 0600);
-
-	if (fd < 0)
-		return -errno;
-	eh.e_type = ET_DYN;
-	eh.e_phnum = 0;
-	eh.e_shnum = 0;
-	if (write(fd, &eh, sizeof(eh)) != (ssize_t)sizeof(eh)) {
-		close(fd);
-		return -EIO;
-	}
-	close(fd);
-	return 0;
-}
-
 static char offline_status[sizeof(g_hook.status_path)];
 static char offline_token[sizeof(g_hook.token_path)];
 static char offline_snapshot[sizeof(g_hook.snapshot_path)];
@@ -1585,6 +1551,9 @@ static char mock_socket[104];
 static char mock_cmdlog[PATH_MAX];
 static int mock_agent_errno;
 static uint32_t mock_protect_result = LOTA_IPC_OK;
+/* GET_REFUSAL answers this object, "" for none; stale dates it at boot */
+static char mock_refusal_object[256];
+static int mock_refusal_stale;
 
 static int mock_errno_is_sandbox(int err)
 {
@@ -1668,6 +1637,22 @@ static void mock_agent_serve(int client_fd)
 		if (req.cmd == LOTA_IPC_CMD_PROTECT_PID) {
 			if (mock_send_response(client_fd, mock_protect_result,
 					       NULL, 0) < 0)
+				break;
+			continue;
+		}
+
+		if (req.cmd == LOTA_IPC_CMD_GET_REFUSAL) {
+			struct lota_ipc_refusal r;
+
+			memset(&r, 0, sizeof(r));
+			if (mock_refusal_object[0]) {
+				r.at_ns = mock_refusal_stale ? 1 :
+							       hook_now_ns();
+				snprintf(r.object, sizeof(r.object), "%s",
+					 mock_refusal_object);
+			}
+			if (mock_send_response(client_fd, LOTA_IPC_OK, &r,
+					       sizeof(r)) < 0)
 				break;
 			continue;
 		}
@@ -1933,67 +1918,6 @@ static void test_the_first_refresh_registers(void)
 	PASS();
 }
 
-/*
- * Reading dlerror() would consume the caller's message, so the hook maps
- * the object once more: only a mapping refused with EPERM is the gate.
- */
-static void test_a_gate_refusal_is_told_apart_from_a_missing_file(void)
-{
-	char present[PATH_MAX];
-	char garbage[PATH_MAX];
-	char absent[PATH_MAX];
-
-	TEST("a gate refusal is told apart from a missing file");
-
-	snprintf(present, sizeof(present), "%s/libpresent.so", tmpdir);
-	snprintf(garbage, sizeof(garbage), "%s/libgarbage.so", tmpdir);
-	snprintf(absent, sizeof(absent), "%s/libabsent.so", tmpdir);
-	if (touch_object(present) != 0 ||
-	    touch_file(garbage, "not really an ELF") != 0) {
-		FAIL("could not create the test object");
-		return;
-	}
-
-	test_mmap_errno = EPERM;
-	if (!hook_refusal_is_gate(present)) {
-		test_mmap_errno = 0;
-		FAIL("an object the gate would not map was not a refusal");
-		return;
-	}
-	if (hook_refusal_is_gate(garbage)) {
-		test_mmap_errno = 0;
-		FAIL("a file that is not an object was blamed on the gate");
-		return;
-	}
-	test_mmap_errno = ENODEV;
-	if (hook_refusal_is_gate(present)) {
-		test_mmap_errno = 0;
-		FAIL("a mapping failure other than EPERM was a refusal");
-		return;
-	}
-	test_mmap_errno = 0;
-	if (hook_refusal_is_gate(present)) {
-		FAIL("an object that maps was blamed on the gate");
-		return;
-	}
-	if (hook_refusal_is_gate(absent)) {
-		FAIL("a file that is not there must not be blamed on the gate");
-		return;
-	}
-	if (hook_refusal_is_gate("libfoo.so.1")) {
-		FAIL("a soname the loader never found is not a refusal");
-		return;
-	}
-	if (hook_refusal_is_gate(NULL)) {
-		FAIL("a load of nothing is not a refusal");
-		return;
-	}
-
-	unlink(present);
-	unlink(garbage);
-	PASS();
-}
-
 /* The player's file sink says it happened, not only the agent journal. */
 static void test_the_status_file_names_the_refused_object(void)
 {
@@ -2089,67 +2013,250 @@ static void test_a_child_refusal_reaches_the_parent_status(void)
 	PASS();
 }
 
+#define TORN_WRITERS 4
+#define TORN_ROUNDS 20000
+
+/* one path per writer, each a long run of the writer's own letter */
+static void torn_path(char *buf, size_t len, int writer)
+{
+	size_t off = (size_t)snprintf(buf, len, "/opt/game/lib/");
+
+	memset(buf + off, 'a' + writer, len - off - 1);
+	buf[len - 1] = '\0';
+}
+
+static void *torn_writer(void *arg)
+{
+	char path[200];
+
+	torn_path(path, sizeof(path), (int)(long)arg);
+	for (int i = 0; i < TORN_ROUNDS; i++)
+		hook_record_refusal(path);
+	return NULL;
+}
+
+/* Threads and forked children record at once; the status names one whole. */
+static void test_a_concurrent_refusal_is_never_torn(void)
+{
+	struct lota_status status = { .flags = LOTA_FLAG_ATTESTED };
+	char paths[TORN_WRITERS][200];
+	pthread_t threads[2];
+	pid_t children[2];
+	char path[PATH_MAX];
+	char buf[1024];
+	int torn = 0;
+	int seen = 0;
+
+	TEST("a refusal recorded concurrently reaches the status whole");
+
+	snprintf(path, sizeof(path), "%s/status_torn", tmpdir);
+	snprintf(g_hook.status_path, sizeof(g_hook.status_path), "%s", path);
+	hook_share_refusal();
+	for (int w = 0; w < TORN_WRITERS; w++)
+		torn_path(paths[w], sizeof(paths[w]), w);
+
+	for (int c = 0; c < 2; c++) {
+		children[c] = fork();
+		if (children[c] == 0) {
+			torn_writer((void *)(long)(2 + c));
+			_exit(0);
+		}
+	}
+	for (int t = 0; t < 2; t++)
+		pthread_create(&threads[t], NULL, torn_writer, (void *)(long)t);
+
+	for (int i = 0; i < 2000; i++) {
+		char *line;
+		char *end;
+		int whole = 0;
+
+		if (write_status(&status) != 0 ||
+		    read_file_contents(path, buf, sizeof(buf)) <= 0)
+			continue;
+		line = strstr(buf, "LOTA_REFUSED_OBJECT=");
+		if (!line)
+			continue;
+		line += strlen("LOTA_REFUSED_OBJECT=");
+		end = strchr(line, '\n');
+		if (end)
+			*end = '\0';
+		seen++;
+		for (int w = 0; w < TORN_WRITERS; w++)
+			whole |= strcmp(line, paths[w]) == 0;
+		torn += !whole;
+	}
+
+	for (int t = 0; t < 2; t++)
+		pthread_join(threads[t], NULL);
+	for (int c = 0; c < 2; c++)
+		waitpid(children[c], NULL, 0);
+	g_refusal->object[0] = '\0';
+
+	if (!seen) {
+		FAIL("no status named a refusal");
+		return;
+	}
+	if (torn) {
+		printf("    %d of %d names torn\n", torn, seen);
+		FAIL("the status named a torn refusal");
+		return;
+	}
+	PASS();
+}
+
+/* A child dead inside the lock leaves no half name and no stuck lock. */
+static void test_a_child_dead_in_the_lock_frees_it(void)
+{
+	pid_t pid;
+
+	TEST("a child that died holding the refusal lock does not stop it");
+
+	hook_share_refusal();
+	pid = fork();
+	if (pid == 0) {
+		pthread_mutex_lock(&g_refusal->lock);
+		snprintf(g_refusal->object, sizeof(g_refusal->object),
+			 "/opt/ga");
+		_exit(0);
+	}
+	waitpid(pid, NULL, 0);
+
+	if (hook_refusal_lock() != 0) {
+		FAIL("the lock stayed dead");
+		return;
+	}
+	if (g_refusal->object[0]) {
+		pthread_mutex_unlock(&g_refusal->lock);
+		FAIL("the half written name was kept");
+		return;
+	}
+	pthread_mutex_unlock(&g_refusal->lock);
+
+	hook_record_refusal("/opt/game/lib/libnext.so");
+	if (strcmp(g_refusal->object, "/opt/game/lib/libnext.so") != 0) {
+		FAIL("the next refusal was not recorded");
+		return;
+	}
+	g_refusal->object[0] = '\0';
+	PASS();
+}
+
 /* Nothing the hook does to explain a refusal may change what loads. */
 static void test_the_loader_wrapper_hands_back_what_it_got(void)
 {
-	char broken[PATH_MAX];
+	const char *missing = "/nonexistent/lota-no-such-object.so";
 	void *handle;
+	pid_t agent;
 
 	TEST("the dlopen wrapper hands back what the loader returned");
 
+	mock_refusal_object[0] = '\0';
+	mock_refusal_stale = 0;
+	agent = start_mock_agent();
+	if (agent < 0) {
+		if (mock_errno_is_sandbox(mock_agent_errno)) {
+			SKIP("no unix socket in this sandbox");
+			return;
+		}
+		FAIL("mock agent did not start");
+		return;
+	}
+	hook_state_for_mock_agent("wrapper");
 	g_hook.log_level = HOOK_LOG_SILENT;
 	atomic_store(&g_hook.self_protected, 1);
 	g_refusal->object[0] = '\0';
 
 	handle = dlopen("libm.so.6", RTLD_NOW);
-	if (!handle) {
-		atomic_store(&g_hook.self_protected, 0);
-		SKIP("libm.so.6 is not loadable here");
-		return;
-	}
-	dlclose(handle);
-	if (g_refusal->object[0]) {
-		atomic_store(&g_hook.self_protected, 0);
-		FAIL("a load that succeeded was recorded as a refusal");
-		return;
-	}
-
-	handle = dlopen("/nonexistent/lota-no-such-object.so", RTLD_NOW);
 	if (handle) {
 		dlclose(handle);
-		atomic_store(&g_hook.self_protected, 0);
-		FAIL("a load of nothing returned a handle");
-		return;
-	}
-	if (g_refusal->object[0]) {
-		atomic_store(&g_hook.self_protected, 0);
-		FAIL("a missing file was recorded as a gate refusal");
-		return;
+		if (g_refusal->object[0] ||
+		    mock_cmd_count(LOTA_IPC_CMD_GET_REFUSAL) > 0) {
+			atomic_store(&g_hook.self_protected, 0);
+			stop_mock_agent(agent);
+			FAIL("a load that succeeded was taken for a refusal");
+			return;
+		}
 	}
 
-	/* an object the gate would not map: what a refusal is */
-	snprintf(broken, sizeof(broken), "%s/libbroken.so", tmpdir);
-	if (touch_object(broken) != 0) {
-		atomic_store(&g_hook.self_protected, 0);
-		FAIL("could not create the test object");
-		return;
-	}
-	test_mmap_errno = EPERM;
-	handle = dlopen(broken, RTLD_NOW);
-	test_mmap_errno = 0;
+	handle = dlopen(missing, RTLD_NOW);
+	stop_mock_agent(agent);
 	atomic_store(&g_hook.self_protected, 0);
 	if (handle) {
 		dlclose(handle);
-		FAIL("an object with no segments returned a handle");
+		FAIL("a load of nothing returned a handle");
 		return;
 	}
-	if (strcmp(g_refusal->object, broken) != 0) {
-		FAIL("a failed load of an object that is there went unrecorded");
+	if (mock_cmd_count(LOTA_IPC_CMD_GET_REFUSAL) != 1) {
+		FAIL("a failed load did not ask the agent what was refused");
+		return;
+	}
+	if (g_refusal->object[0]) {
+		FAIL("a failed load the gate did not refuse was recorded");
 		return;
 	}
 
-	unlink(broken);
+	PASS();
+}
+
+/*
+ * The title asks for a trusted object and the gate refuses a dependency
+ * the loader pulls in: the agent names the dependency.
+ */
+static void test_a_refused_dependency_is_named(void)
+{
+	const char *dep = "/opt/game/lib/libdep.so";
+	pid_t agent;
+
+	TEST("a refused dependency is named, not the object asked for");
+
+	snprintf(mock_refusal_object, sizeof(mock_refusal_object), "%s", dep);
+	mock_refusal_stale = 0;
+	agent = start_mock_agent();
+	if (agent < 0) {
+		mock_refusal_object[0] = '\0';
+		if (mock_errno_is_sandbox(mock_agent_errno)) {
+			SKIP("no unix socket in this sandbox");
+			return;
+		}
+		FAIL("mock agent did not start");
+		return;
+	}
+	hook_state_for_mock_agent("dependency");
+	g_hook.log_level = HOOK_LOG_SILENT;
+	atomic_store(&g_hook.self_protected, 1);
 	g_refusal->object[0] = '\0';
+
+	(void)dlopen("/nonexistent/lota-trusted-title.so", RTLD_NOW);
+	stop_mock_agent(agent);
+	if (strcmp(g_refusal->object, dep) != 0) {
+		atomic_store(&g_hook.self_protected, 0);
+		mock_refusal_object[0] = '\0';
+		FAIL("the refused dependency went unnamed");
+		return;
+	}
+
+	/* a refusal from before this load is not its cause */
+	g_refusal->object[0] = '\0';
+	mock_refusal_stale = 1;
+	agent = start_mock_agent();
+	if (agent < 0) {
+		atomic_store(&g_hook.self_protected, 0);
+		mock_refusal_object[0] = '\0';
+		mock_refusal_stale = 0;
+		FAIL("mock agent did not start again");
+		return;
+	}
+	(void)dlopen("/nonexistent/lota-trusted-title.so", RTLD_NOW);
+	stop_mock_agent(agent);
+	atomic_store(&g_hook.self_protected, 0);
+	mock_refusal_object[0] = '\0';
+	mock_refusal_stale = 0;
+	if (g_refusal->object[0]) {
+		g_refusal->object[0] = '\0';
+		FAIL("an earlier refusal was blamed for this load");
+		return;
+	}
+
 	PASS();
 }
 
@@ -2208,17 +2315,21 @@ static void test_a_registration_publishes_itself(void)
 /* likewise a refusal: no agent event follows it */
 static void test_a_refusal_publishes_itself(void)
 {
+	const char *refused = "/opt/game/lib/libpublish.so";
 	pid_t agent;
 	char path[PATH_MAX];
-	char broken[PATH_MAX];
 	char buf[1024];
 	void *handle;
 	ssize_t n;
 
 	TEST("a refusal reaches the status file when the load fails");
 
+	snprintf(mock_refusal_object, sizeof(mock_refusal_object), "%s",
+		 refused);
+	mock_refusal_stale = 0;
 	agent = start_mock_agent();
 	if (agent < 0) {
+		mock_refusal_object[0] = '\0';
 		if (mock_errno_is_sandbox(mock_agent_errno)) {
 			SKIP("no unix socket in this sandbox");
 			return;
@@ -2233,41 +2344,32 @@ static void test_a_refusal_publishes_itself(void)
 	g_hook.client = hook_connect();
 	if (!g_hook.client) {
 		stop_mock_agent(agent);
+		mock_refusal_object[0] = '\0';
 		FAIL("hook did not connect to the mock agent");
 		return;
 	}
 	refresh_once();
 	lota_disconnect(g_hook.client);
 	g_hook.client = NULL;
-	stop_mock_agent(agent);
-
-	snprintf(broken, sizeof(broken), "%s/libpublish.so", tmpdir);
-	if (touch_object(broken) != 0) {
-		atomic_store(&g_hook.self_protected, 0);
-		FAIL("could not create the test object");
-		return;
-	}
 
 	atomic_store(&g_hook.self_protected, 1);
-	test_mmap_errno = EPERM;
-	handle = dlopen(broken, RTLD_NOW);
-	test_mmap_errno = 0;
+	handle = dlopen("/nonexistent/lota-publish.so", RTLD_NOW);
 	atomic_store(&g_hook.self_protected, 0);
+	stop_mock_agent(agent);
+	mock_refusal_object[0] = '\0';
 	if (handle) {
 		dlclose(handle);
-		unlink(broken);
-		FAIL("an object with no segments returned a handle");
+		FAIL("a load of nothing returned a handle");
 		return;
 	}
 
 	n = read_file_contents(path, buf, sizeof(buf));
-	unlink(broken);
 	g_refusal->object[0] = '\0';
 	if (n <= 0) {
 		FAIL("no status file to read");
 		return;
 	}
-	if (!strstr(buf, "LOTA_REFUSED_OBJECT=")) {
+	if (!strstr(buf, "LOTA_REFUSED_OBJECT=/opt/game/lib/libpublish.so")) {
 		FAIL("the sink does not carry the refusal the title just met");
 		return;
 	}
@@ -2701,10 +2803,12 @@ int main(void)
 	test_the_launch_path_registers_the_title();
 	test_the_registration_is_not_repeated();
 	test_the_first_refresh_registers();
-	test_a_gate_refusal_is_told_apart_from_a_missing_file();
 	test_the_status_file_names_the_refused_object();
 	test_a_child_refusal_reaches_the_parent_status();
+	test_a_concurrent_refusal_is_never_torn();
+	test_a_child_dead_in_the_lock_frees_it();
 	test_the_loader_wrapper_hands_back_what_it_got();
+	test_a_refused_dependency_is_named();
 	test_a_registration_publishes_itself();
 	test_a_refusal_publishes_itself();
 

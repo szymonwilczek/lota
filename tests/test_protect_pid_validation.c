@@ -50,9 +50,16 @@ int __wrap_bpf_loader_verify_kernel_runtime_hardening(bool allow_mutable_rootfs)
 	return 0;
 }
 
-/* No socket owner here, so no verdict to drop */
+/* No socket owner here, so no verdict to drop and no refusal to keep */
 void ipc_runtime_coverage_forget(void)
 {
+}
+
+void ipc_note_refusal(uint32_t tgid, uint64_t at_ns, const char *object)
+{
+	(void)tgid;
+	(void)at_ns;
+	(void)object;
 }
 
 /* named by the apply path, which nothing here reaches */

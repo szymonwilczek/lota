@@ -32,6 +32,9 @@
 #include "lota_snapshot.h"
 #include "lota_token.h"
 
+_Static_assert(LOTA_AC_MAX_TOKEN == LOTA_TOKEN_MAX_SIZE,
+	       "LOTA_AC_MAX_TOKEN must match LOTA_TOKEN_MAX_SIZE");
+
 _Static_assert(sizeof(struct lota_ac_heartbeat_wire) == LOTA_AC_HEADER_SIZE,
 	       "heartbeat wire header size must match LOTA_AC_HEADER_SIZE");
 

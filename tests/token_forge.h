@@ -41,6 +41,12 @@ int forge_token_protected(EVP_PKEY *key, uint64_t valid_until, uint32_t flags,
 			  const uint8_t nonce[32], uint8_t *tokbuf,
 			  size_t tokbuf_size, size_t *tok_written);
 
+/* The same with @pid_count protected PIDs, 1 to LOTA_TOKEN_MAX_PROTECT_PIDS */
+int forge_token_protected_n(EVP_PKEY *key, uint64_t valid_until, uint32_t flags,
+			    const uint8_t nonce[32], uint32_t pid_count,
+			    uint8_t *tokbuf, size_t tokbuf_size,
+			    size_t *tok_written);
+
 /*
  * The pieces below build a token by hand, for the tests that need one shaped
  * wrongly on purpose: a signature over the wrong bytes, two PCR banks where

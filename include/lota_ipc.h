@@ -46,6 +46,8 @@ enum lota_ipc_cmd {
 		0x0B, /* Code objects the last measurement found in a process */
 	LOTA_IPC_CMD_GET_BOOT_EVIDENCE =
 		0x0C, /* Quoted PCR values and PCR 7 events (lota_token.h) */
+	LOTA_IPC_CMD_GET_REFUSAL =
+		0x0D, /* The last file the gate refused the caller to map */
 };
 
 /*
@@ -543,6 +545,19 @@ struct lota_ipc_registry_actor {
 	uint32_t kind; /* enum lota_ipc_registry_actor_kind */
 	char comm[16];
 	char owner_comm[16];
+} __attribute__((packed));
+
+/*
+ * GET_REFUSAL response payload
+ *
+ * The last file the gate refused the calling process to map executable
+ * while it was protected, all zero when the agent keeps none.
+ * @object is the file's path, or only its name for a memory file
+ * or when the gate could not give the path; NUL-terminated.
+ */
+struct lota_ipc_refusal {
+	uint64_t at_ns; /* CLOCK_MONOTONIC of the refusal */
+	char object[256];
 } __attribute__((packed));
 
 #endif /* LOTA_IPC_H */

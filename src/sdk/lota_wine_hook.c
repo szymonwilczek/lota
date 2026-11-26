@@ -22,11 +22,9 @@
 
 #include <ctype.h>
 #include <dlfcn.h>
-#include <elf.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <limits.h>
-#include <link.h>
 #include <pthread.h>
 #include <signal.h>
 #include <stdatomic.h>
@@ -38,7 +36,6 @@
 #include <sys/eventfd.h>
 #include <sys/mman.h>
 #include <sys/stat.h>
-#include <sys/statvfs.h>
 #include <sys/types.h>
 #include <time.h>
 #include <unistd.h>
@@ -90,12 +87,37 @@ static struct {
 
 /* The last object that would not load. */
 struct hook_refusal {
+	pthread_mutex_t lock; /* shared by the forked children with the map */
 	char object[256];
 	time_t at;
 };
 
 static struct hook_refusal g_own_refusal;
 static struct hook_refusal *g_refusal = &g_own_refusal;
+static pthread_once_t g_own_refusal_once = PTHREAD_ONCE_INIT;
+
+static void own_refusal_init(void)
+{
+	pthread_mutex_init(&g_own_refusal.lock, NULL);
+}
+
+/*
+ * A child that died holding the lock may have left the object half
+ * written: drop it until the next refusal.
+ */
+static int hook_refusal_lock(void)
+{
+	int ret;
+
+	pthread_once(&g_own_refusal_once, own_refusal_init);
+	ret = pthread_mutex_lock(&g_refusal->lock);
+
+	if (ret == EOWNERDEAD) {
+		g_refusal->object[0] = '\0';
+		ret = pthread_mutex_consistent(&g_refusal->lock);
+	}
+	return ret;
+}
 
 /* Why the hook holds no connection: offline, or the agent said no. */
 #define HOOK_LOST_AGENT 1
@@ -649,7 +671,9 @@ static int atomic_write(const char *path, const void *data, size_t len)
  */
 static int write_status_payload(const struct lota_status *status, int offline)
 {
+	char object[sizeof(g_refusal->object)] = "";
 	char buf[1024];
+	time_t at = 0;
 	int len;
 
 	len = snprintf(buf, sizeof(buf),
@@ -671,12 +695,17 @@ static int write_status_payload(const struct lota_status *status, int offline)
 	if (len < 0 || (size_t)len >= sizeof(buf))
 		return -ENOMEM;
 
-	if (g_refusal->object[0]) {
+	if (hook_refusal_lock() == 0) {
+		memcpy(object, g_refusal->object, sizeof(object));
+		at = g_refusal->at;
+		pthread_mutex_unlock(&g_refusal->lock);
+	}
+
+	if (object[0]) {
 		int add = snprintf(buf + len, sizeof(buf) - (size_t)len,
 				   "LOTA_REFUSED_OBJECT=%s\n"
 				   "LOTA_REFUSED_AT=%lu\n",
-				   g_refusal->object,
-				   (unsigned long)g_refusal->at);
+				   object, (unsigned long)at);
 
 		if (add < 0 || (size_t)(len + add) >= sizeof(buf))
 			return -ENOMEM;
@@ -1122,81 +1151,96 @@ static void hook_register_self(void)
 	hook_publish_state();
 }
 
-#ifndef hook_mmap
-#define hook_mmap mmap
-#endif
-
-extern const ElfW(Ehdr) __ehdr_start __attribute__((visibility("hidden")));
-
-/* a shared object of the class and machine the loader maps here */
-static bool hook_object_is_loadable(int fd)
-{
-	ElfW(Ehdr) eh;
-
-	return pread(fd, &eh, sizeof(eh), 0) == (ssize_t)sizeof(eh) &&
-	       memcmp(eh.e_ident, ELFMAG, SELFMAG) == 0 &&
-	       eh.e_ident[EI_CLASS] == __ehdr_start.e_ident[EI_CLASS] &&
-	       eh.e_machine == __ehdr_start.e_machine && eh.e_type == ET_DYN;
-}
-
-/*
- * Was a failed load the gate's refusal? Reading dlerror() would consume
- * the title's message, so map the object executable once more: the gate
- * refuses that mapping with EPERM, as does a noexec mount. A file the
- * loader would not map is not mapped here either. A bare name goes
- * unchecked: the hook does not know which file the loader picked.
- */
-static bool hook_refusal_is_gate(const char *path)
-{
-	bool refused = false;
-	struct statvfs sv;
-	void *map;
-	int fd;
-
-	if (!path || !strchr(path, '/'))
-		return false;
-
-	fd = open(path, O_RDONLY | O_CLOEXEC);
-	if (fd < 0)
-		return false;
-	if (hook_object_is_loadable(fd) && fstatvfs(fd, &sv) == 0 &&
-	    !(sv.f_flag & ST_NOEXEC)) {
-		map = hook_mmap(NULL, 1, PROT_READ | PROT_EXEC, MAP_PRIVATE, fd,
-				0);
-		if (map == MAP_FAILED)
-			refused = errno == EPERM;
-		else
-			munmap(map, 1);
-	}
-	close(fd);
-	return refused;
-}
-
 /* For the status file. */
 static void hook_record_refusal(const char *path)
 {
+	if (hook_refusal_lock() != 0)
+		return;
 	snprintf(g_refusal->object, sizeof(g_refusal->object), "%s", path);
 	g_refusal->at = time(NULL);
+	pthread_mutex_unlock(&g_refusal->lock);
 }
 
 /* so a forked child's refusal outlives the parent's next status write */
 static void hook_share_refusal(void)
 {
-	void *map = mmap(NULL, sizeof(*g_refusal), PROT_READ | PROT_WRITE,
-			 MAP_SHARED | MAP_ANONYMOUS, -1, 0);
+	struct hook_refusal *map = mmap(NULL, sizeof(*g_refusal),
+					PROT_READ | PROT_WRITE,
+					MAP_SHARED | MAP_ANONYMOUS, -1, 0);
+	pthread_mutexattr_t attr;
 
-	if (map != MAP_FAILED)
-		g_refusal = map;
+	if (map == MAP_FAILED)
+		return;
+	if (pthread_mutexattr_init(&attr) != 0) {
+		munmap(map, sizeof(*map));
+		return;
+	}
+	if (pthread_mutexattr_setpshared(&attr, PTHREAD_PROCESS_SHARED) != 0 ||
+	    pthread_mutexattr_setrobust(&attr, PTHREAD_MUTEX_ROBUST) != 0 ||
+	    pthread_mutex_init(&map->lock, &attr) != 0) {
+		pthread_mutexattr_destroy(&attr);
+		munmap(map, sizeof(*map));
+		return;
+	}
+	pthread_mutexattr_destroy(&attr);
+	g_refusal = map;
+}
+
+static uint64_t hook_now_ns(void)
+{
+	struct timespec ts;
+
+	clock_gettime(CLOCK_MONOTONIC, &ts);
+	return (uint64_t)ts.tv_sec * 1000000000ULL + (uint64_t)ts.tv_nsec;
+}
+
+/*
+ * Ask the agent what the gate refused this process since @since_ns:
+ * the object dlopen() named or a dependency the loader pulled in.
+ * Reading dlerror() would consume the title's message.
+ * A connection of its own: the refresh thread holds the other.
+ */
+static void hook_report_refusal(uint64_t since_ns)
+{
+	char object[sizeof(g_refusal->object)];
+	struct lota_connect_opts opts;
+	struct lota_client *client;
+	uint64_t at_ns = 0;
+	int ret;
+
+	memset(&opts, 0, sizeof(opts));
+	opts.struct_size = sizeof(opts);
+	if (g_hook.socket_path[0])
+		opts.socket_path = g_hook.socket_path;
+	opts.timeout_ms = LOTA_HOOK_CONNECT_TIMEOUT_MS;
+
+	client = lota_connect_opts(&opts);
+	if (!client)
+		return;
+	lota_set_request_timeout(client, LOTA_HOOK_REQUEST_TIMEOUT_MS);
+	ret = lota_get_refusal(client, object, sizeof(object), &at_ns);
+	lota_disconnect(client);
+	if (ret != LOTA_OK || at_ns < since_ns)
+		return;
+
+	hook_record_refusal(object);
+	hook_publish_state();
+	LOG_ERR("%s did not load while this process is in LOTA's protected "
+		"set -- a protected process may map only objects the agent "
+		"allows, so cover this one (fs-verity digest or trusted_libs)",
+		object);
 }
 
 /*
  * Report a gate refusal on stderr and in the status file;
- * the handle and the pending dlerror() are the real dlopen()'s, untouched.
+ * the handle, the pending dlerror() and errno are the real dlopen()'s.
  */
 LOTA_HOOK_EXPORT void *dlopen(const char *file, int mode)
 {
 	static void *(*real_dlopen)(const char *, int);
+	uint64_t since_ns;
 	void *handle;
+	int saved_errno;
 
 	if (!real_dlopen) {
 		real_dlopen = dlsym(RTLD_NEXT, "dlopen");
@@ -1206,17 +1250,14 @@ LOTA_HOOK_EXPORT void *dlopen(const char *file, int mode)
 		}
 	}
 
+	since_ns = hook_now_ns();
 	handle = real_dlopen(file, mode);
 	if (handle || !atomic_load(&g_hook.self_protected))
 		return handle;
 
-	if (hook_refusal_is_gate(file)) {
-		hook_record_refusal(file);
-		hook_publish_state();
-		LOG_ERR("%s did not load while this process is in LOTA's protected set -- a protected process may map only objects the agent allows, so cover this one (fs-verity digest or trusted_libs)",
-			file);
-	}
-
+	saved_errno = errno;
+	hook_report_refusal(since_ns);
+	errno = saved_errno;
 	return handle;
 }
 

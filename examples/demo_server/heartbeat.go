@@ -29,7 +29,7 @@ const (
 	lachSessionIDSize          = 16
 	lachGameHashSize           = 32
 	lachRuntimeMeasSize        = 32
-	lachMaxToken               = 1608
+	lachMaxToken               = verifysdk.TokenMaxSize
 	lachMaxPacket              = lachHeaderSize + lachMaxToken
 
 	heartbeatNonceDomain = "lota-ac-heartbeat:v1\x00"

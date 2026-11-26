@@ -85,6 +85,15 @@ func newSignedHeartbeat(t *testing.T, key *rsa.PrivateKey,
 	mutate func(h *lachHeader),
 ) []byte {
 	t.Helper()
+	return newSignedHeartbeatPIDs(t, key, mutate, 0)
+}
+
+// newSignedHeartbeatPIDs signs a heartbeat whose token lists pidCount
+// protected PIDs.
+func newSignedHeartbeatPIDs(t *testing.T, key *rsa.PrivateKey,
+	mutate func(h *lachHeader), pidCount int,
+) []byte {
+	t.Helper()
 
 	hdr := &lachHeader{
 		magic:         lachMagic,
@@ -106,7 +115,13 @@ func newSignedHeartbeat(t *testing.T, key *rsa.PrivateKey,
 	validUntil := uint64(time.Now().Add(5 * time.Minute).Unix())
 	pcrMask := uint32(0x4001)
 	policyDigest := [32]byte{0xA1, 0xB2, 0xC3}
-	runtimeDigest := verifysdk.ComputeRuntimeProtectDigest(nil, nil)
+	var pids []uint32
+	var digests [][32]byte
+	for i := range pidCount {
+		pids = append(pids, uint32(4242+i))
+		digests = append(digests, [32]byte{0x5A, byte(i)})
+	}
+	runtimeDigest := verifysdk.ComputeRuntimeProtectDigest(pids, digests)
 
 	pcrDigest := make([]byte, 32)
 	for i := range pcrDigest {
@@ -125,7 +140,7 @@ func newSignedHeartbeat(t *testing.T, key *rsa.PrivateKey,
 
 	token, err := verifysdk.SerializeToken(validUntil, hdr.lotaFlags,
 		heartbeatNonce, 0x0014, 0x000B, pcrMask, policyDigest, runtimeDigest,
-		0, 0, nil, nil, attest, sig)
+		0, 0, pids, digests, attest, sig)
 	if err != nil {
 		t.Fatalf("serialize: %v", err)
 	}
@@ -202,6 +217,24 @@ func TestHeartbeat_TrustedPath(t *testing.T) {
 	}
 	if resp.License != testLicense {
 		t.Fatalf("license=%q want %q", resp.License, testLicense)
+	}
+}
+
+func TestHeartbeat_FullProtectedSetIsTrusted(t *testing.T) {
+	key, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatalf("rsa: %v", err)
+	}
+	s := newTestServer(t, key)
+	pkt := newSignedHeartbeatPIDs(t, key, nil, verifysdk.MaxProtectPIDs)
+
+	w := postHeartbeat(s, pkt)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", w.Code, w.Body.String())
+	}
+	resp := decodeVerdict(t, w)
+	if resp.State != verdictTrusted {
+		t.Fatalf("state=%s reason=%s", resp.State, resp.Reason)
 	}
 }
 

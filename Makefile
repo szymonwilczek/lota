@@ -1460,7 +1460,8 @@ $(BUILD_DIR)/test_profile_id: $(addprefix $(AGENT_DIR)/,profile.c publishers.c e
 	aik_cert.c io_utils.c)
 $(BUILD_DIR)/test_profile_id: TEST_LDLIBS := -lcrypto
 
-$(BUILD_DIR)/test_protect_pids: $(AGENT_DIR)/protect_pids.h
+$(BUILD_DIR)/test_protect_pids: $(AGENT_DIR)/protect_pids.h \
+	$(INC_DIR)/lota_ipc.h
 $(BUILD_DIR)/test_ptrace_policy: $(INC_DIR)/lota.h
 
 $(BUILD_DIR)/test_publisher_profile: $(SDK_DIR)/lota_gaming.c $(VERSION_FILE)
