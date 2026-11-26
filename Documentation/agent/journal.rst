@@ -5,49 +5,108 @@
 Agent journal
 =============
 
-What the agent journals about a measurement round
-=================================================
+The agent writes its messages to the systemd journal or to standard error
+(:ghsrc:`src/agent/journal.c`). Token rounds repeat on a timer, so the
+measurement and refusal lines of a round are written only when they differ
+from the last round's.
 
-Every token round measures each protected process, but an fs-verity digest
-does not change while mapped, so the answer rarely differs from the last one.
-The journal carries only answers that differ:
+Where messages go
+=================
 
-- **A first answer is written**, unless every object measured.
-- **A changed answer is written, both ways.** The line ending a run says how
-  many further rounds the replaced answer held.
-- **The sentence is compared**, not the verdict, so a new unmeasurable object
-  mid-session is news.
-- **An answer with no room in the table is written**, not assumed a repeat.
+With ``JOURNAL_STREAM`` or ``INVOCATION_ID`` set, as systemd sets them for
+a unit, every message is a journal entry with these fields:
 
-The sentence names the object's path and role. ``LOTA_RT_REASON_MAX`` and
-``MEASURE_REPORT_STATEMENT_MAX`` must hold a whole path, or two objects cut to
-one prefix compare equal; a new field grows both.
+``MESSAGE``
+  The text, cut at 1023 bytes.
+``PRIORITY``
+  The syslog priority.
+``SYSLOG_IDENTIFIER``
+  ``lota-agent``.
+``CODE_FILE``, ``CODE_LINE``, ``CODE_FUNC``
+  Where the message was written.
 
-A standing answer has no window, unlike a decision-log row: every token
-carries the measured coverage in ``LOTA_FLAG_IMAGE_FULLY_MEASURED``, so a
-quiet journal hides no evidence. Shutdown reports the quiet as
-``Runtime measurement reports: repeated=`` and ``unremembered=``.
+Otherwise a message is one line on standard error,
+``lota-agent: WRN: text``, with ``ERR``, ``WRN``, ``NTC``, ``INF`` or
+``DBG`` for the priority. A daemon started with ``--daemon`` writes to the
+journal once it has detached.
 
-The decision lives in the pure header ``src/agent/measure_report.h``, tested
-both ways: a missing line fails as readily as a repeated one.
+``log_level`` (:doc:`configuration`) drops messages less severe than
+``error``, ``warn``, ``info`` (the default) or ``debug``. A reload applies
+a new value.
 
-What the agent journals about a refused token
-=============================================
+To follow the daemon:
 
-Token requests come on the same timer, and a refusal's cause (no publisher
-named, no TPM) does not move between rounds. A refusal follows the rules
-above: written as a first answer or a change, counted while it stands.
-It differs from the measurement path in three ways:
+.. code-block:: sh
 
-- **The subject is the connection.** The publisher and peer a refusal turns
-  on are bound there, so a reconnect's refusal is a first answer.
-- **The client is refused every round.** Only the line is withheld; tests
-  check the result code each round beside the line count.
-- **Silent refusals stay silent** and are not counted.
+   journalctl -u lota-agent -f
 
-Shutdown reports the quiet as ``Token answer reports: repeated=``.
+Measurement lines
+=================
 
-Both paths share ``src/agent/standing_answer.h``: what is remembered, when a
-round is news, and the clause carrying the ended run's length. Only the
-keying differs: a table swept against the protected set for measurements, a
-connection field for tokens.
+Every token round measures the code each protected process has mapped
+(:doc:`runtime-measurement`). The answer for one process is one of:
+
+* ``runtime image measurement for pid=P covers every object it has
+  mapped``, at ``info``;
+* ``runtime image measurement for pid=P covers M objects and misses U:
+  why``, at ``warn``;
+* ``runtime image measurement failed for pid=P, which is not the caller
+  (pid=C); the token reports partial coverage: why``, at ``warn``: the
+  process is left out of the coverage;
+* ``runtime image measurement failed for the requesting pid=P: why``, at
+  ``error``: the round is refused.
+
+A line is written when the process's answer differs from its last one,
+answer and text compared, so a new unmeasurable object in the same answer
+is written too. The first answer for a process is written unless it is
+full coverage. A line that replaces an answer ends with ``(the previous
+answer held N further rounds)`` when the old one repeated. A process that
+leaves the protected set is forgotten, and its next answer is written as a
+first one.
+
+The agent remembers the answers of up to ``LOTA_IPC_TOKEN_MAX_PROTECT_PIDS``
+processes (:ghsrc:`src/agent/measure_report.h`). An answer for a process
+past that is written every round.
+
+The journal is no record of coverage: every token carries it in
+``LOTA_STATUS_IMAGE_FULLY_MEASURED`` (:doc:`tokens`).
+
+Token refusal lines
+===================
+
+A refused ``GET_TOKEN`` (:doc:`ipc`) follows the same rule, per
+connection: its first refusal is written, a refusal that differs from the
+last one is written, and a repeat is not. A new connection starts with no
+answer. The client gets the error code every round; only the line is
+withheld. A token issued after a refusal that repeated is written as
+``GET_TOKEN for pid=P is answered again (the previous answer held N
+further rounds)``.
+
+The refusals that go through this rule:
+
+* ``rate limited GET_TOKEN for session pid=P uid=U`` and ``rate limited
+  GET_TOKEN for uid=U pid=P``, at ``warn``;
+* ``Refusing GET_TOKEN for pid=P: this agent answers for N publishers and
+  the connection named none. Send SET_PROFILE first``, at ``error``;
+* ``Refusing GET_TOKEN for pid=P: no TPM on this agent, and an unsigned
+  token is not evidence``, at ``error``.
+
+A measurement refusal is held back by the measurement rule.
+``LOTA_IPC_ERR_NOT_ATTESTED`` writes no line, nor does
+``LOTA_IPC_ERR_TPM_LOCKOUT`` once the status carries the lockout; the
+quote that finds the lockout first writes ``tpm_quote failed: why``. Any
+other refusal that writes a line writes it every round.
+
+Shutdown
+========
+
+When the daemon leaves its event loop it writes at ``info`` what the two
+rules did:
+
+.. code-block:: text
+
+   Runtime measurement reports: repeated=R unremembered=U
+   Token answer reports: repeated=T
+
+``repeated`` counts rounds that repeated a written answer, ``unremembered``
+the measurement lines written for a process past the remembered ones.

@@ -5,188 +5,245 @@
 Protected processes
 ===================
 
+A title asks the agent to protect it. The BPF LSM then keeps other
+processes out of its memory and its signals, and every token lists it with
+a digest of the code it mapped (:doc:`tokens`). A protected process and
+every process it starts form an *instance*. The hooks are in
+:ghsrc:`src/bpf/lota_lsm.bpf.c`, the requests in :ghsrc:`src/agent/ipc.c`.
+
+Protecting a process
+====================
+
+``PROTECT_PID`` (:doc:`ipc`), ``lota_protect_self()`` in the SDK,
+protects the process that opened the connection. The PID comes from
+``SO_PEERPIDFD``; the request carries 0 and any other value is
+``LOTA_IPC_ERR_BAD_REQUEST``. The answer is the 32-byte digest of the
+startup enforcement policy. ``protect_pid`` in :doc:`configuration` and
+``--protect-pid`` (:doc:`command-line`) protect a PID from the agent's
+side.
+
+The request is refused with:
+
+* ``LOTA_IPC_ERR_ACCESS_DENIED`` when the caller runs in another PID
+  namespace or has exited, or when it is held by a tracer: protection
+  stops new attaches, not one already there;
+* ``LOTA_IPC_ERR_RATE_LIMITED`` past 60 requests per uid in a minute;
+* ``LOTA_IPC_ERR_NO_ENFORCEMENT`` when the agent applied no startup policy;
+* ``LOTA_IPC_ERR_BAD_REQUEST`` when ``LOTA_MAX_PROTECTED_PIDS`` (1024)
+  processes are protected.
+
+A process already protected gets the same answer again. On a connection
+bound to a publisher (:doc:`ipc`), the process is noted as protected for
+that publisher.
+
+A process created by a protected one is marked before it first runs
+(``lsm/task_alloc``); when the mark cannot be stored the clone fails. A
+protected process held by a tracer outside its instance creates no
+process or thread. The agent adds the children to its protected set when
+it next looks at it. A process leaves the set when it exits.
+
+What protection enforces
+========================
+
+From outside the instance:
+
+* ``ptrace`` access, read or attach, is refused in every mode, and so is
+  an open of a ``/proc/<pid>`` entry that reads the process's memory. The
+  agent's own reads of ``/proc/<pid>/exe`` and ``maps`` pass.
+* A signal that stops the process (``SIGSTOP``, ``SIGTSTP``, ``SIGTTIN``,
+  ``SIGTTOU``) or whose default writes a core file is refused, from
+  ``kill(2)`` and from ``F_SETOWN``. Every other signal passes, so the
+  process can be ended. A signal from the agent, a parent-death signal
+  and one the kernel sends itself are not judged.
+* Its resource limits cannot be changed, but by the agent.
+
+Inside the instance every signal and ``ptrace`` access passes: a
+``wineserver`` drives the processes it hosts with signals. A signal whose
+default writes a core file and that the process does not handle ends the
+whole process group with ``SIGKILL`` (``tp_btf/signal_deliver``), so no
+core file is written.
+
+In ``enforce`` mode, ``strict_mmap`` and ``block_anon_exec``
+(:doc:`configuration`) refuse executable mappings of a protected process
+(:doc:`runtime-measurement`). The program that refuses each is described
+in :doc:`../bpf/index`.
+
+When the agent exits, ``tp_btf/sched_process_exit`` sends ``SIGKILL`` to
+every protected process: nothing the agent vouched for outlives it.
+
+The agent itself
+----------------
+
+Signals to the agent are refused from every process but the agent
+itself; a probe (signal 0) and ``SIGHUP``, its reload, pass. The agent
+stops with ``--shutdown``.
+
+A write to ``cgroup.kill`` or ``cgroup.freeze`` ends or stops a cgroup
+past every signal hook. At startup the loader stores both files of the
+agent's cgroup and of each ancestor in ``guarded_files`` and freezes the
+map, and ``lota_file_open`` refuses a write open of them to all but the
+agent. A move between cgroups has no security
+hook, and a frozen cgroup freezes what enters it, so
+``fentry/cgroup_attach_task`` ends the protected processes and the agent
+before a move of the agent takes effect. A protected process's own cgroup
+is not guarded: killing it ends only that process.
+
 Ending a protected process
 ==========================
 
-``lota_task_kill`` delivers every signal to a protected process and records
-it; a killed title cheats in nothing. It refuses signals to the agent from
-anything but the agent itself, a holder of ``LOTA_TASK_AUTH_ADMIN`` or the
-kernel; that flag is set on the agent's PID before the map is frozen, so
-nothing else on the machine holds it and root is no exception.
-``LOTA_IPC_CMD_TERMINATE_PROTECTED`` ends a protected process on request and
-leaves a record of it.
+``lota-agent --terminate-protected PID`` (:doc:`command-line`) sends
+``TERMINATE_PROTECTED`` (:doc:`ipc`), which sends ``SIGTERM`` or
+``SIGKILL`` to a protected process and records that it did. It applies
+the rule of ``kill(2)``: the caller is root or the real uid of the
+target. The command adds only the record, since the caller could send the
+same signal.
 
-That hook covers signals only. A write to ``cgroup.kill`` kills a whole
-cgroup from cgroup code, past every security hook, and a write to
-``cgroup.freeze`` stops it the same way, so ``lota_file_open`` refuses write
-opens of the files in ``guarded_files``. The loader arms it at startup with
-both files of the agent's cgroup and of its ancestors: an agent killed or
-frozen that way drops enforcement for the rest of the boot while PCR 14 still
-holds the boot commitment. Moving a task between cgroups has no security hook,
-and a cgroup frozen beforehand freezes what enters it, in either hierarchy, so
-no file guard covers a move. ``lota_agent_moved`` on ``cgroup_attach_task``
-therefore ends the protected processes and the agent before the move takes
-effect, as the agent's own exit does. It is an fentry program because the
-tracepoint of that name runs under a spinlock, where signals go through one
-per-CPU slot. A protected process's cgroup is not armed: killing it ends only
-its own session, and its owner can end it with an ordinary signal anyway.
+The decision, in :ghsrc:`src/agent/terminate_policy.h`, runs in this
+order:
 
-The handler applies ``kill(2)``'s own rule -- the owner of the target, or root
--- and nothing wider. It deliberately does **not** call
-``ipc_client_is_privileged()``, which ``SHUTDOWN`` does:
-that gate demands a caller whose executable is on the operator's verity
-allowlist, which is empty on a default install, so requiring it here would
-reproduce the dead end the command exists to end. What keeps the widening
-bounded is that the caller could send the same signal itself; the command
-adds only the record.
+#. PID 1: ``LOTA_IPC_ERR_TARGET_REFUSED``.
+#. The agent itself: ``LOTA_IPC_ERR_TARGET_REFUSED``.
+#. A process not in the protected set: ``LOTA_IPC_ERR_NOT_PROTECTED``.
+#. A signal other than ``SIGTERM`` or ``SIGKILL``:
+   ``LOTA_IPC_ERR_ACCESS_DENIED``.
+#. A caller that is neither root nor the target's real uid:
+   ``LOTA_IPC_ERR_ACCESS_DENIED``.
 
-Four refusals sit around that rule: a signal other than ``SIGTERM`` or
-``SIGKILL``, so the command cannot drive a process that stays in the measured
-set; a target nobody protected, which the caller can already signal; PID 1 and
-PID 0; and the agent itself, whose stopping is ``--shutdown``'s business
-because PCR 14 commits for the whole boot.
+Before it, PID 0 or a PID past ``INT_MAX`` is ``LOTA_IPC_ERR_BAD_REQUEST``,
+and a caller outside the host's PID namespace
+``LOTA_IPC_ERR_ACCESS_DENIED``. The daemon opens a pidfd on the target
+before it reads the owner, and signals through it: a process reaped in
+between is not replaced by one that took its PID, and the request is
+``LOTA_IPC_ERR_BAD_REQUEST``. A refusal is logged as
+``TERMINATE_PROTECTED denied for uid=N pid=M target=T sig=S: why``, a
+signal sent as ``Protected pid=T (uid=U) terminated with signal
+S at the request of uid=N pid=M``.
 
-Each of those answers with its own result code, because the code is all the
-caller gets and the sentence it turns into has to match what happened:
-``LOTA_IPC_ERR_NOT_PROTECTED`` for a process nobody protected;
-``LOTA_IPC_ERR_TARGET_REFUSED`` for a target the
-command does not speak for at all, PID 0, PID 1 and the agent;
-``LOTA_IPC_ERR_ACCESS_DENIED`` for a request that is not this caller's to
-make, which covers both the wrong signal and the wrong owner; and
-``LOTA_IPC_ERR_BAD_REQUEST`` for a target that is not there. Collapsing them
-misdirects: with one code, ending the agent's own PID reads back as a
-permission problem with somebody else's process.
-
-The handler opens a pidfd on the target before reading its owner from
-``/proc``, and sends the signal through that pidfd. A pidfd names the process,
-not the number: once the process is reaped its number can be handed to another
-one, and a signal sent through the pidfd fails with ``ESRCH`` instead of
-reaching it. A target that has exited by the time its owner is read, or has
-been reaped by the time the signal is sent, answers
-``LOTA_IPC_ERR_BAD_REQUEST``.
-
-The caller must run in the agent's PID namespace, since ``pid`` is read in it;
-one whose pidfd fdinfo lists more than one ``NSpid`` is refused with
-``LOTA_IPC_ERR_ACCESS_DENIED``.
-
-``LOTA_STATUS_PROTECTED_TERMINATED`` is then set for the rest of the boot: in
-the host's answer, and in the answers of the publisher the target was protected
-for, taken from the owner table before the signal. The host's bit is kept
-beside ``status_flags``, because that word is republished wholesale on every
-attestation round; ``ipc_update_status`` folds it back in. The publisher's bit
-lives on its profile, and ``client_attestation_view`` gives a connection that
-named a publisher that one in place of the host's, so the status answer, the
-token and the notification of one connection carry it from one source. That agreement is load-bearing: the anti-cheat heartbeat
-binds the flags it read from ``GET_STATUS`` into the nonce the token is quoted
-over, so a bit set in one and not the other surfaces as a nonce mismatch.
-
-The record lives in the agent and ends with it. An agent that starts and finds
-PCR 14 already holding the boot's commitment follows one that ended without a
-shutdown, since only a shutdown spends it, so it sets
-``LOTA_STATUS_AGENT_RESTARTED`` for the rest of the boot the same way. A token
-that dropped ``PROTECTED_TERMINATED`` across a restart carries that bit instead,
-and the register it rests on is not one root can reset.
+The answer repeats the PID and the signal and counts the other protected
+processes of the target's instance. ``LOTA_STATUS_PROTECTED_TERMINATED``
+is then set in the host's status and in the status of the publisher the
+target was protected for, until the agent ends. An agent started again in
+the same boot sets ``LOTA_STATUS_AGENT_RESTARTED`` (:doc:`lifecycle`).
 
 What a protected process mapped
 ===============================
 
-The token carries one registry digest per protected process. ``8192`` bytes hold
-no list of the objects themselves, so ``LOTA_IPC_CMD_GET_REGISTRY`` hands them
-out in pages: every code object the process mapped or mprotected executable
-since it was protected, each with its size, device, inode and, where one was
-taken, its digest.
+A token carries one registry digest per protected process. The list
+behind it is too long for a token, so ``GET_REGISTRY`` (:doc:`ipc`)
+hands it out in pages: ``struct lota_ipc_registry_page`` followed by
+entries, objects first, then actors (:ghsrc:`include/lota_ipc.h`). The
+request names the PID and the index of the first entry; an index past the
+end is ``LOTA_IPC_ERR_BAD_REQUEST``.
 
-Objects still mapped when the token round measured the process carry their
-path. Objects the process had already unmapped carry
-``LOTA_IPC_REGISTRY_ENTRY_UNMAPPED``, the file's name in place of a soname, and
-no path or digest. The kernel records each mapping as it is made
-(``exec_history`` in ``src/bpf/lota_lsm.bpf.c``), a refused one included, so
-an object loaded and dropped between two rounds is still listed. A record the
-kernel could not keep sets ``LOTA_IPC_REGISTRY_HISTORY_LOST`` on every list of
-the round: such a list may lack an object.
+The list is the one the last token round built. A process that round did
+not measure, or a PID that names another process, is
+``LOTA_IPC_ERR_NOT_PROTECTED``. Only the process's owner calling from its
+instance may read it, the caller that could read its ``maps``; root
+outside the instance is ``LOTA_IPC_ERR_ACCESS_DENIED``.
 
-The history starts when protection does. ``LOTA_IPC_REGISTRY_FROM_EXEC`` says
-the process's current image was executed under protection (``born_protected``,
-set by ``lsm/bprm_committed_creds``), so nothing the image mapped predates the
-list. A process protected after it started, or forked from a protected one and
-never executed, lacks the flag; withdrawing protection clears it.
+``lota_get_registry()`` in ``liblotagaming`` fetches every page, and
+starts over when a round replaces the list between two of them.
 
-One measurement holds ``LOTA_RUNTIME_IMAGE_MAX_MODULES`` objects, the first in
-address order. Mappings past them are unmeasured and clear
-``LOTA_STATUS_IMAGE_FULLY_MEASURED``, and ``LOTA_IPC_REGISTRY_TRUNCATED`` says so
-on the list. They have no entry of their own: one the history knows is listed
-as unmapped. A process whose own executable falls past the limit is not
-measured.
+Objects
+-------
 
-A file can change under a mapping without being written again: another process
-holds it open for write, or maps it shared and writable, and stores into the
-pages the protected process runs. The kernel notes, at every executable
-mapping, whether the file had such a writer, and whether it lives in memory
-only (memfd, shm, tmpfs or hugetlbfs), where no file on disk names the code.
-A memfd or shm segment has no name to open, so its fds never count as
-writers: such an object counts as written unless a seal
-(``F_SEAL_WRITE`` or ``F_SEAL_FUTURE_WRITE``) forbade writes when it was
-mapped.
-An object mapped once with a writer carries
-``LOTA_IPC_REGISTRY_ENTRY_WRITABLE``, one backed by memory
-``LOTA_IPC_REGISTRY_ENTRY_MEMORY``, mapped or unmapped alike. A digest taken
-at the round says what the pages held then, not what they held between two
-rounds. Nothing is refused on either flag.
+Every code object the process mapped or made executable since it was
+protected, with its size, device and inode, and a digest where one was
+taken (``road``: fs-verity or content hash, :doc:`runtime-measurement`).
+At most ``LOTA_IPC_REGISTRY_MAX_OBJECTS`` (1024) are listed.
 
-The kernel sees only mappings made under protection. For an older one the
-agent's walk reads the same memory and seal facts off the open file, as they
-stand at the round. A writer of a named file shows only at the mapping itself.
+* An object still mapped at the round carries its path.
+* An object already unmapped carries ``LOTA_IPC_REGISTRY_ENTRY_UNMAPPED``,
+  the file's name in place of a soname, and no path or digest. The kernel
+  records each executable mapping as it is made (``exec_history``), a
+  refused one included, so an object loaded and dropped between two
+  rounds is listed.
+* ``LOTA_IPC_REGISTRY_ENTRY_WRITABLE``: when mapped, the file was open
+  for write or mapped shared and writable elsewhere; for a memfd or shm
+  segment, no ``F_SEAL_WRITE`` or ``F_SEAL_FUTURE_WRITE`` kept it from
+  writes. A digest says what the pages held at the round, not between
+  rounds.
+* ``LOTA_IPC_REGISTRY_ENTRY_MEMORY``: backed by memory only (memfd, shm,
+  tmpfs or hugetlbfs).
 
-After the objects come the actors: every process that reached a process of
-the instance on a road the kernel lets through. An instance is the protected
-process and everything it started. From outside, the road is a unix socket:
-a process connected to a unix stream socket, or sent a datagram to one, owned
-by a process of the instance. The kernel marks a socket with its owner when a
-process of the instance creates, binds or listens on it. From inside, the
-road is one process of the instance reading another (``ptrace`` in read mode),
-attaching to it or writing into it (``ptrace`` attach, ``process_vm_writev``,
-``/proc/<pid>/mem``), or signalling it, as ``wineserver`` does to the title.
-A process of the instance is also listed for itself when it maps anonymous
-memory executable or mprotects it to executable, a refused attempt included:
-such code leaves no object to list, so the entry (``ANON_EXEC``, with
-``owner_tgid`` equal to ``tgid``) says who did it and how many times.
-The kernel records each contact as it is made (``instance_actors`` in
-``src/bpf/lota_lsm.bpf.c``). An actor carries its
-PID, start time, uid, the device and inode of its executable, its command
-name, the owning process and its name, how it reached in and how many times.
-Nothing is refused: the list says who reached in, the relying party decides
-what that means. A record the kernel could not keep, or a list longer than
-``LOTA_IPC_REGISTRY_MAX_ACTORS``, sets ``LOTA_IPC_REGISTRY_ACTORS_LOST``. Indices
-below ``total`` are objects, the next ``actor_total`` are actors, and the pages
-hand them out in that order.
+Neither flag refuses anything. The kernel sees only mappings made under
+protection; for an older one the agent reads the memory and seal facts
+off the open file at the round, and a writer of a named file is not seen.
 
-A token also says how long the caller's instance stood stopped, in
-``stopped_ms``. A frozen cgroup, job control and a ptrace stop all pass through
-``cgroup_enter_frozen()`` and ``cgroup_leave_frozen()`` in the thread that
-stands, so one pair of programs covers the three, and ``instance_stops`` on the
-root task holds the result. The clock runs while at least one thread stands, not
-once per thread, and it is ``bpf_ktime_get_ns()``, which skips a suspend. The
-agent adds the period still open when it reads. Withdrawing protection from a
-root closes its open period and keeps the total, because a thread of an
-unprotected process leaves its stop unseen. The value never falls while the root
-lives.
+Page flags
+----------
 
-The token binds the list. Hashing the page's ``flags``, ``total`` and
-``actor_total`` and every entry in order as ``lota_registry_digest.h`` does
-yields the page's
-``registry_digest``, which is the token's entry for that process while
-``LOTA_IPC_REGISTRY_MEASURED`` is set. Every field of every entry is in the
-hash, the entries without a digest and the actors included, so a list with an entry dropped,
-reordered or rewritten does not hash to the token's value. A list from another
-round does not either, so a relying party that checks the hash needs no further
-pairing; the ``round`` field only keeps the pages of one listing together.
+``LOTA_IPC_REGISTRY_MEASURED``
+  ``registry_digest`` is the token's entry for the process.
 
-The owner of the process may read its registry from inside the process's
-instance, the callers that could read its ``maps`` themselves; root outside the
-instance is refused too. A process the last round did not measure is
-answered ``LOTA_IPC_ERR_NOT_PROTECTED``.
+``LOTA_IPC_REGISTRY_HISTORY_LOST``
+  The kernel could not record a mapping; the list may lack an object.
 
-``lota_get_registry()`` in ``liblotagaming`` fetches every page and starts over
-when a token round replaces the listing between two of them;
-``lota_server_registry_digest()`` in ``liblotaserver`` is the hash, so a
-relying party checks the list without reimplementing it.
+``LOTA_IPC_REGISTRY_ACTORS_LOST``
+  The kernel could not record an actor, or there were more than
+  ``LOTA_IPC_REGISTRY_MAX_ACTORS`` (256).
+
+``LOTA_IPC_REGISTRY_FROM_EXEC``
+  The current image was executed under protection
+  (``lsm/bprm_committed_creds``), so nothing it mapped predates the list.
+  A process protected after it started, or forked from a protected one
+  and not executed since, lacks it.
+
+``LOTA_IPC_REGISTRY_TRUNCATED``
+  The process had more executable mappings than one measurement holds
+  (``LOTA_RUNTIME_IMAGE_MAX_MODULES``, the first in address order). Those
+  past the limit are unmeasured and clear
+  ``LOTA_STATUS_IMAGE_FULLY_MEASURED``; one the history knows is listed
+  as unmapped. A process whose executable falls past the limit is not
+  measured.
+
+Actors
+------
+
+An actor is a process that reached a process of the instance on a road
+the hooks let through (``instance_actors``). ``kind`` says which:
+
+``LOTA_IPC_REGISTRY_ACTOR_CONNECT``, ``LOTA_IPC_REGISTRY_ACTOR_SEND``
+  From outside: a stream or seqpacket connect to, or a datagram sent to, a
+  unix socket a process of the instance created, bound or listens on.
+
+``LOTA_IPC_REGISTRY_ACTOR_PTRACE_READ``
+  From inside: one process of the instance reading another.
+
+``LOTA_IPC_REGISTRY_ACTOR_PTRACE_ATTACH``
+  From inside: one process of the instance attaching to another.
+
+``LOTA_IPC_REGISTRY_ACTOR_SIGNAL``
+  From inside: one process of the instance signalling another.
+
+``LOTA_IPC_REGISTRY_ACTOR_ANON_EXEC``
+  A process of the instance made anonymous memory executable, refused or
+  not; ``owner_tgid`` equals ``tgid``. Such code leaves no object to list.
+
+An actor carries its PID, start time, real uid, the device and inode of
+its executable, its command name, the process it reached and that one's
+name, and how many times. Nothing is refused: the relying party decides
+what an actor means.
+
+The digest
+----------
+
+Hashing the page's ``flags``, ``total`` and ``actor_total`` and every
+entry in order, as :ghsrc:`include/lota_registry_digest.h` does, yields
+``registry_digest``. Every field of every entry is hashed, so a list with
+an entry dropped, reordered or changed, or a list from another round, does
+not match the token. ``round`` only keeps the pages of one listing
+together. ``lota_server_registry_digest()`` in ``liblotaserver`` computes
+the hash (:doc:`../userspace-api/server`).
+
+Stopped time
+============
+
+``stopped_ms`` in a token is how long any thread of the caller's instance
+stood stopped. A frozen cgroup, a job-control stop and a ptrace stop all
+pass through ``cgroup_enter_frozen()`` and ``cgroup_leave_frozen()`` in the
+stopped thread, and ``instance_stops`` on the instance root holds the
+result. The clock runs while at least one thread is stopped, and is
+``bpf_ktime_get_ns()``, which does not count a suspend. The agent adds
+the period still open when it reads. Withdrawing protection from a root
+closes its open period and keeps the total.
