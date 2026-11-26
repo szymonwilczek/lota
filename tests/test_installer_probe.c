@@ -1701,7 +1701,15 @@ static void test_cmdline_next_boot_verdicts(void)
 		{ { .lockdown_ok = 1, .ima_built = 1, .appraises = 1 },
 		  "ro ima_appraise=enforce",
 		  STAGE_BLOCKED,
-		  "puts IMA appraisal in enforce" },
+		  "rerunning the installer adds: module.sig_enforce=1." },
+		{ { .ima_built = 1, .appraises = 1 },
+		  "ro ima_appraise=enforce lockdown=integrity",
+		  STAGE_BLOCKED,
+		  "adds: module.sig_enforce=1." },
+		{ { .ima_built = 1, .appraises = 1 },
+		  "ro ima_appraise=enforce",
+		  STAGE_BLOCKED,
+		  "adds: module.sig_enforce=1 lockdown=integrity." },
 		{ { .sig_ok = 1,
 		    .lockdown_ok = 1,
 		    .ima_built = 1,
@@ -1730,6 +1738,9 @@ static void test_cmdline_next_boot_verdicts(void)
 		  STAGE_PENDING,
 		  "lacks: ima_appraise module" },
 	};
+	static const struct probe_floor sig_in_args = { .lockdown_ok = 1,
+							.ima_built = 1,
+							.appraises = 1 };
 	char note[512];
 	int bad = -1;
 
@@ -1746,6 +1757,18 @@ static void test_cmdline_next_boot_verdicts(void)
 	}
 	if (bad >= 0)
 		FAIL("a floor and cmdline got the wrong verdict");
+	else if (probe_cmdline_next_boot_stage(&cases[0].st, cases[0].args,
+					       note,
+					       sizeof(note)) != STAGE_BLOCKED ||
+		 strstr(note, "rerunning"))
+		FAIL("a blocked floor with nothing missing named an addition");
+	else if (probe_cmdline_next_boot_stage(&sig_in_args,
+					       "ro ima_appraise=enforce "
+					       "module.sig_enforce=1",
+					       note,
+					       sizeof(note)) != STAGE_BLOCKED ||
+		 strstr(note, "rerunning"))
+		FAIL("a parameter on the cmdline was named an addition");
 	else if (probe_cmdline_next_boot_stage(NULL, "ro", note,
 					       sizeof(note)) != STAGE_ERROR)
 		FAIL("a missing floor was not an error");

@@ -166,7 +166,10 @@ EFIVARS="$ROOT/sys/firmware/efi/efivars"
 SB_VAR="$EFIVARS/SecureBoot-8be4df61-93ca-11d2-aa0d-00e098032b8c"
 MOK_VAR="$EFIVARS/MokSBStateRT-605dab50-e046-4300-abb6-3dd810dd8b23"
 SETUP_VAR="$EFIVARS/SetupMode-8be4df61-93ca-11d2-aa0d-00e098032b8c"
-mkdir -p "$(dirname "$IMA_RUNTIME")" "$(dirname "$CMDLINE")" "$EFIVARS"
+VMLINUX_BTF="$ROOT/sys/kernel/btf/vmlinux"
+mkdir -p "$(dirname "$IMA_RUNTIME")" "$(dirname "$CMDLINE")" "$EFIVARS" \
+    "$(dirname "$VMLINUX_BTF")"
+printf 'BTF\0ima_appraise_measurement\0' >"$VMLINUX_BTF"
 no_exec_rules() {
     printf '%s\n' 'dont_appraise fsmagic=0x9fa0' \
         'appraise func=POLICY_CHECK appraise_type=imasig' >"$IMA_RUNTIME"
@@ -178,6 +181,7 @@ loads_policy() {
     says "$out" "loading IMA appraisal policy" &&
         grep -q "^appraise func=BPRM_CHECK" "$IMA_RUNTIME"
 }
+lacks_exec_rule() { ! grep -q "^appraise func=BPRM_CHECK" "$IMA_RUNTIME"; }
 refuses_policy() {
     local out
     no_exec_rules
@@ -203,6 +207,19 @@ rm -f "$MOK_VAR"
 printf '\x06\x00\x00\x00\x01' >"$SETUP_VAR"
 check "setup mode leaves ima_appraise= in force" loads_policy
 rm -f "$SB_VAR" "$MOK_VAR" "$SETUP_VAR"
+printf 'BTF\0ima_measure\0' >"$VMLINUX_BTF"
+printf 'ro quiet\n' >"$CMDLINE"
+no_exec_rules
+ima_out=$(run_bringup) || true
+check "a kernel without IMA appraisal says so" \
+    says "$ima_out" "kernel does not appraise files"
+check "a kernel without IMA appraisal is not said to be in enforce" \
+    denies "$ima_out" "IMA appraisal in enforce"
+printf 'ro ima_appraise=fix\n' >"$CMDLINE"
+no_exec_rules
+ima_out=$(run_bringup) || true
+check "a kernel without IMA appraisal gets no policy" lacks_exec_rule
+printf 'BTF\0ima_appraise_measurement\0' >"$VMLINUX_BTF"
 
 no_exec_rules
 ima_out=$(run_bringup) || true
